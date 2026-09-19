@@ -315,13 +315,18 @@ void test_tiff_roundtrip_and_compression() {
     check(sizes[0] > sizes[1] && sizes[0] > sizes[2], "tiff/compression-sizes",
           "expected none > lzw/zip, got " + num(static_cast<int64_t>(sizes[0])) + "/" +
               num(static_cast<int64_t>(sizes[1])) + "/" + num(static_cast<int64_t>(sizes[2])));
-    {   // uint16
+    {   // uint16 (+ ICC, E5)
         pp::ParamSet params;
         params["compression"] = std::string("lzw");
+        std::string icc_err;
+        const std::string icc = pp::load_target_icc(pp::ColorTarget::AdobeRGB, icc_err);
+        check(!icc.empty(), "tiff/icc/profile-available", icc_err);
+        pp::MetadataPayloads tmeta;
+        tmeta.icc_profile = icc;
         OIIO::ImageBuf buf = make_buf(64, 64, 3, 0.0f);
         auto enc = pp::make_encoder("tiff", "oiio");
         const fs::path out = dir / "rgb16.tif";
-        const pp::EncodeResult r = run_encode(*enc, buf, 16, params, meta, out);
+        const pp::EncodeResult r = run_encode(*enc, buf, 16, params, tmeta, out);
         check(r.error.empty() && r.bytes > 0, "tiff/uint16/encode", r.error);
         OIIO::ImageSpec spec;
         std::string err;
@@ -329,7 +334,15 @@ void test_tiff_roundtrip_and_compression() {
         check(spec.format == OIIO::TypeDesc::UINT16, "tiff/uint16/bitdepth", spec.format.c_str());
         check(spec.width == 64 && spec.height == 64 && spec.nchannels == 3, "tiff/uint16/geometry",
               num(spec.width) + "x" + num(spec.height) + " ch=" + num(spec.nchannels));
-        info("tiff uint16: " + num(static_cast<int64_t>(r.bytes)) + " bytes");
+        const OIIO::ParamValue* iccp = spec.find_attribute("ICCProfile");
+        const size_t icc_n = iccp ? iccp->type().size() : 0;
+        check(iccp != nullptr && iccp->type().basetype == OIIO::TypeDesc::UINT8 &&
+                  icc_n == icc.size() && std::memcmp(iccp->data(), icc.data(), icc_n) == 0,
+              "tiff/icc/readback",
+              "embedded " + num(static_cast<int64_t>(icc_n)) + " of " +
+                  num(static_cast<int64_t>(icc.size())) + " bytes");
+        info("tiff uint16: " + num(static_cast<int64_t>(r.bytes)) + " bytes, ICC " +
+             num(static_cast<int64_t>(icc_n)) + " bytes");
     }
     {   // invalid compression name -> error, never a silent fallback
         pp::ParamSet params;
@@ -593,6 +606,36 @@ void test_heif_and_avif_metadata() {
             check(r.error.empty() && r.bytes > 0,
                   std::string("alpha8/") + fb.second + "/encode", r.error);
         }
+    }
+    {   // E5 for libheif: the ICC profile set on heif_image lands in the file's colr box
+        std::string icc_err;
+        const std::string icc = pp::load_target_icc(pp::ColorTarget::DisplayP3, icc_err);
+        check(!icc.empty(), "heif/icc/profile-available", icc_err);
+        auto enc = pp::make_encoder("heif", "x265");
+        OIIO::ImageBuf buf = make_buf(64, 64, 3, 0.0f);
+        pp::ParamSet params;
+        params["quality"] = int64_t(90);
+        pp::MetadataPayloads imeta = meta;
+        imeta.icc_profile = icc;
+        const fs::path out = dir / "icc.heic";
+        const pp::EncodeResult r = run_encode(*enc, buf, 8, params, imeta, out);
+        check(r.error.empty() && r.bytes > 0, "heif/icc/encode", r.error);
+        heif_context* ctx = heif_context_alloc();
+        heif_error e = ctx ? heif_context_read_from_file(ctx, out.string().c_str(), nullptr)
+                           : heif_error{heif_error_Encoding_error, heif_suberror_Unspecified, "alloc"};
+        heif_image_handle* handle = nullptr;
+        if (e.code == heif_error_Ok) e = heif_context_get_primary_image_handle(ctx, &handle);
+        check(e.code == heif_error_Ok && handle != nullptr, "heif/icc/readback-file",
+              e.code == heif_error_Ok ? "no primary handle" : e.message);
+        if (handle) {
+            const size_t n = heif_image_handle_get_raw_color_profile_size(handle);
+            check(n == icc.size(), "heif/icc/readback-size",
+                  "embedded " + num(static_cast<int64_t>(n)) + " of " +
+                      num(static_cast<int64_t>(icc.size())) + " bytes");
+            info("heif ICC colr box: " + num(static_cast<int64_t>(n)) + " bytes");
+            heif_image_handle_release(handle);
+        }
+        if (ctx) heif_context_free(ctx);
     }
     {   // E9 for libheif: unknown key -> success + warning
         auto enc = pp::make_encoder("heif", "x265");

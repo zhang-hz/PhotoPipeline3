@@ -35,7 +35,7 @@ M1b 按多轮设计-审查循环执行：
 10. **视觉**：Qt 内建样式；`QApplication::setStyle("Fluent")` 尝试设置、失败静默回退（qInfo 记录）；**不自绘非地图控件、不用 QSS 主题文件、不引入图标文件**（文本徽标/Unicode 符号即可）；Mica 属 M3。
 11. **文件归属**：只创建/修改本任务 §4 明列的文件；跨域需求写报告。并行波次**先写完全部源文件再构建**；构建偶发失败（glob 竞态）重试一次再报告。
 12. **构建隔离**：每任务用 `source tools/env.sh && cmake --preset release -B build/m1b-u<n> -DVCPKG_MANIFEST_INSTALL=OFF && cmake --build build/m1b-u<n> -j && ctest --test-dir build/m1b-u<n> --output-on-failure`；`build/release*` 归 U10。
-13. **Git**：`M1b-U<n>: <摘要>`；红构建不提交；只 add 本任务文件；禁 push/rebase/reset。
+13. **Git**：`M1b-U<n>: <摘要>`；红构建不提交；只 add 本任务文件；禁 push/rebase/reset。**波次内禁止 `git commit --amend` 与任何历史改写——一律追加提交**（2026-09-20 W-B 事故：并行 amend 两次把他人提交从分支顶掉，含主对话 docs 提交；内容经 read-tree 复原、零丢失，见 §9 事故记录。教训归主对话：不应在并行波次授权 amend）。
 14. **`TODO(M2)` 标签纪律**照旧；内部不变量 assert，用户输入走错误返回。
 15. **报告 ≤150 行**，按 §7 格式。
 
@@ -361,6 +361,7 @@ private:
 #include <set>
 #include <vector>
 #include "core/pipeline.h"
+#include "ui/thumbnails.h"   // M1b-U4: +1 line vs §2.8 frozen text (Thumbnailer must be declared for AUTOMOC; see report)
 
 namespace pp::ui {
 
@@ -445,6 +446,15 @@ public:
 }  // namespace pp::ui
 ```
 
+**U4 落地口径（主对话批准 2026-09-20，冻结）**：
+- **冻结头 v1.1 勘误**：§2.8 include 区补 `#include "ui/thumbnails.h"`（AUTOMOC 引用 Thumbnailer 必需；同 §2.6 dtor 先例）。上文冻结块已同步该行。
+- `set_thumbnailer(t)` 内部已 connect(ready→apply_thumb) 并自动 `enqueue_pending_thumbs()`——**消费者不得重复连接**；`remove_rows` 后自动 re-enqueue（防行号漂移致在途结果被 stale-guard 丢弃后缩略图永久丢失）。
+- 探测失败行：state=Failed、error=`探测失败：<英文细节>`。
+- `unsupported_count` **按去重路径计数**（v1.1 私有成员补 `std::set<QString> unsupported_paths_`；重复 add 同目录不得重复累计——2026-09-20 裁定）。
+- FileDelegate 细节：第二行灰 #808080、选中行 HighlightedText、失败行第二行显示 ErrorRole、无缩略图画空框、右边界按**可见视口**收口（实测：竖滚动条出现时 option.rect 比可见区宽 14px，冻结公式会裁徽标）。
+- §1.7 口径澄清：core/pipeline.h 传递包含会拉入 OIIO/exiv2 头到 UI TU——合规判定看**无直接 include 编解码库头**。
+- 判"队列空"用 `queue_empty` 信号（`pending()` 含在途任务，clear_pending 后短暂 >0）。
+
 ### 2.9 `src/ui/page_output.h`（U5）
 
 ```cpp
@@ -516,6 +526,16 @@ signals:
 6. `ready_to_start()`：输出根目录为空 → `未设置输出根目录`；非绝对路径 → `输出根目录必须是绝对路径`；否则空串。
 7. heif/avif 内省与位深探测在**格式首次选中时**执行并缓存（进程内静态缓存即可），避免每次重建重复探测。
 8. 所有变化 → `config_changed()`。
+
+**U5 落地口径（主对话批准 2026-09-20，冻结）**：
+- 冻结头无私有段 → 状态存文件内注册表 `std::map<const PageOutput*, unique_ptr<Impl>>`（头零改动，非 v1.1 事项；与 page_run/page_meta 同族方案）。
+- `introspect_backends("avif")` 实测枚举序 = [libaom, svt-av1]，与静态表及 `make_encoder(fmt,"")` 默认（svt-av1）不一致 → **内省表归一为静态表顺序**（否则默认后端/位深集全错）。
+- FormatDef 无 `runtime_introspected` 字段（在 BackendDef）→ `any_of(f.backends, b.runtime_introspected)` 判定 heif/avif。
+- 仅元数据灰字说明实例化于三个组（格式组/全局组[位深+色彩目标]/格式参数组），同显同隐；黄色 alpha 提示可见 = avif ∧ alpha ∧ 位深 10（手动切回 svt-av1 仍显示——警告即语义）；自动预选仅在 `set_batch_has_alpha(true)` 时触发一次，不抢占用户后续选择；仅元数据模式 `config_base().format_id` 保持当前按钮值（引擎元数据模式忽略格式）；信号矩阵：set_out_root/set_metadata_only → config_changed，select_format/restore_last 静默，apply_preset 末尾 format_changed(若变)+config_changed。
+- **ParamForm 重建防串扰**（U5 实测缺陷修复）：旧表单先 removeWidget+hide+setParent(nullptr) 再 deleteLater，否则 findChild 命中已废弃实例。
+- heif/avif 首次选中同步跑 3 次位深探测（~14ms）+ stderr 出 libheif 日志（进程内缓存后不重复；U10 冒烟容忍该噪音）。
+- 实测位深交集（复现 R19）：heif/x265=8,10,12；avif/svt-av1=8,10；avif/libaom=8,10,12。
+- **objectName 全集**：`pp-output-scroll / pp-mode-group / pp-mode-convert / pp-mode-metadata / pp-format-group / pp-format-<id> / pp-format-note / pp-global-group / pp-out-root-edit / pp-browse-button / pp-conflict-combo / pp-color-combo / pp-bitdepth-combo / pp-global-note / pp-param-group / pp-alpha-hint / pp-param-note / pp-param-form / pp-presets-button / pp-settings-button`。
 
 ### 2.10 `src/ui/settings_dialog.h` 与 `src/ui/presets_dialog.h`（U6）
 
@@ -630,6 +650,12 @@ signals:
 
 rules() 装配（冻结）：启用且字段合法才填 time_shift/gps；GPS 勾选但坐标非法 → 忽略 gps 且卡片顶部显示黄色 `GPS 坐标无效` 提示。规则变化 → rules_changed()。
 
+**U7 落地口径（主对话批准 2026-09-20，冻结）**：
+- 时区下拉默认 从=到=UTC+08:00；预览文案 `首文件：<源>` / `→ <结果>`，未启用时 `→ <源>（未启用）`；gps_clear 与 GPS 启用开关相互独立（clear 优先，勾选即 rules().gps_clear=true）；"从选中文件读取坐标"同时回填可选字段（有值才填）；状态栏文案集：`已从选中文件读取坐标` / `选中的文件没有 GPS 信息` / `无法读取选中文件的元数据` / `已从地图选择坐标` / `已勾选清除 GPS：输出将不含 GPS`。
+- **时间预览扫描上限（2026-09-20 裁定）**：最多扫前 **200** 个文件找含时间者；超出显示 `前 200 个文件未找到时间字段`（防千级无时间批次阻塞 GUI 线程；原"逐个直到命中"口径废止；异步化留 TODO(M2)）。
+- MapWidget 事实：`search_finished` 顺序 == 内部 results 顺序（QComboBox index 可直接喂 `search_select(i)`）；offline `run_search` **同步**发 `search_finished({}, "离线模式：搜索不可用")`。
+- **objectName**：time_enable / time_mode / time_tz_from / time_tz_to / time_years…time_seconds / gps_enable / gps_lat / gps_lon / gps_clear / gps_read_button / gps_search_edit / gps_search_results / gps_map（MapWidget）/ tag_* / privacy_strip / mtime_sync / exception_*（已稳定登记）。
+
 ### 2.12 `src/ui/exif_editor.h`（U8）
 
 ```cpp
@@ -671,6 +697,16 @@ private:
 
 确定校验：把全部编辑经 `pp::apply_edits` 打到 `read_metadata` 的副本上，errors 非空 → QMessageBox 列出（保留对话框打开）。源文件**永远只读**——编辑只进 MetadataOverride。result()：exif_edits/xmp_edits = 树中 set/remove 记录；时间/GPS/隐私三态与 ignore_batch。取消 → 不修改。
 
+**U8 落地口径（主对话批准 2026-09-20，冻结）**：
+- **时间"清除"语义**：MetadataOverride（M1a 冻结）无 time_clear 字段 → 实现为 5 个时间标签（EXIF DateTimeOriginal/DateTimeDigitized/DateTime + XMP xmp.CreateDate/ModifyDate）的 remove 编辑；result().exif_edits 含这些记录（引擎语义等价"清除时间"）。
+- `Exif.Photo.MakerNote` 落 Exif 组但**置只读**（防二进制块被文本编辑破坏——MakerNote 保护共识 §3.6 的编辑器侧延伸）。
+- 勾选 ignore_batch → 〔批〕标记清空（批量规则不再作用本文件）；树内值截断 120 字符（完整值在右侧编辑区）。
+- GPS 字段级校验（纬/经度范围、海拔数字、方位角 0–359.99、时间戳 `YYYY:MM:DD HH:MM:SS`）并入确定 errors；"更多字段"收起不写入可选字段；非法 XMP 路径即时弹窗不入树。
+- **`ExifEditor::result()` 遮蔽 `QDialog::result()`**——判 accept 必须写 `dlg.QDialog::result()`（U10 必须遵守）。
+- Exiv2 0.28.8 事实：`ExifKey(uint16_t, group)` 未知编号抛异常 → 添加行即时警告不入树；`apply_edits` 走 registry 类型（类型下拉仅 registry 无类型时 fallback）；LangAlt 取 `toString(0)` 并剥 `lang="x-default" ` 前缀兜底。
+- XMP 页无搜索框（§2.12 仅给 EXIF 列了搜索）——留用户审查轮定夺（U-FIX 候选）。
+- **objectName**：ignore_batch / exif_search / exif_tree / exif_value / exif_value_multi / add_exif_group / add_exif_number / add_exif_type / add_exif_button / xmp_tree / xmp_value / xmp_value_multi / add_xmp_path / add_xmp_button / time_mode / time_method / tz_from / tz_to / time_years…time_seconds / gps_mode / gps_lat / gps_lon / gps_dms / gps_more / gps_alt / gps_dir / gps_ts / privacy_mode / buttons；模态短路 = 动态属性 `pp_exif_editor_suppress_modal`（错误入 `pp_last_validation_errors`）。
+
 ### 2.13 `src/ui/page_run.h`（U9）
 
 ```cpp
@@ -705,6 +741,16 @@ signals:
 ```
 
 行为规格（冻结）：顶部：总进度 QProgressBar（format `第 %v / %m 个`）+ 状态 QLabel（`排队中…` / `进行中 · 完成 N · 失败 M · 跳过 K` / `已取消：完成 N · 取消 C`）+ 吞吐 QLabel（`8.3 MB/s · 平均 120 ms/文件`；运行中由累计 out_bytes / QElapsedTimer 估算，结束用 summary）+ `取消` QPushButton（运行中才启用）。中部 QListView（内部小模型，文件名 + 状态文本着色 §3）。运行中双击行 → tooltip 显示 error。结束：摘要 QGroupBox（成功/失败/跳过/取消/总耗时/吞吐/平均）+ `打开输出目录` + `查看日志` 按钮（发信号）。begin_run 前页面显示引导文案 `点击主界面"开始"运行批处理`。on_event 终态时把 `*ev.result` 的 out_bytes 计入吞吐。
+
+**U9 落地口径（主对话批准 2026-09-19，冻结）**：
+- **idle 进度条隐藏**：构造/reset 后进度条 `setVisible(false)`，begin_run 显示——"第 0 / 1 个" 不得出现。
+- **四态状态文案（第四态冻结）**：`已完成：成功 N · 失败 M · 跳过 K`（end_run 未取消）；其余三态同上。
+- **取消按钮全口径**：enabled ⇔ is_running()（begin_run 启用；end_run/reset 禁用）；点击后**不**自我禁用（cancel 幂等）；G5 锁定期间 MainWindow 可另行禁用。
+- 行文本 = basename；终态 tooltip = error 原文。
+- 吞吐用 `QElapsedTimer::nsecsElapsed()`（ns 分辨率——ms 截断使微批次吞吐恒 0）。
+- begin_run total ≠ names.size() → qWarning 不中断（UI 防御层）。
+- 状态承载 = 本 TU 注册表 `QHash<const PageRun*, RunState*>`（冻结头无成员）；行模型 `pp::ui::detail::PageRunRowModel` 经 `#include "page_run.moc"`。
+- **U10 可依赖 objectName**：`runProgress/runStatus/runThroughput/runCancel/runCenter/runGuide/runList/runSummary/runSummaryText/runOpenOutput/runLogs`。
 
 ### 2.14 `src/ui/mainwindow.h`（U10）
 
@@ -808,6 +854,7 @@ private:
 - 语料已入库：`tests/golden/base/` 16 文件、`edge/`、`meta/`（含损坏负例与 exif_full.jpg）。
 - `pp_core` 消费者必须 whole-archive（CMake 已接线，新 target 不许漏）。
 - **UI 层类进不了 ctest 单测**（U2 实测）：pp_test_* target 只链 pp_core（Qt6::Core 的 include/link），`src/ui/**` 与 mapwidget 的 Qt 部分无法在测试 target 中引用。UI 类的验证通道 = U10 `--ui-smoke`（含冻结断言）+ 各任务 `.cache/tmp` 临时自验程序（不入库）。**禁止**为此改 CMake（名字特例/glob 分叉均不授权）。
+- **手写 g++ 自验必加 `-fPIC`**（U9 实测）：否则 Qt staticMetaObject 生成 copy relocation（`nm -DC` 见本地 `D` 定义）→ `findChild<T*>`/`qobject_cast<T*>` **静默返回 null** 而 `inherits()` 仍真；加 `-fPIC` 后符号变 `U`。CMake 产物无此问题。
 - OIIO 内存读：`ImageInput::open(name_hint, &spec, IOProxy*)` + `Filesystem::IOMemReader`（以实际头文件为准核对，事实纪律）。
 
 ---
@@ -859,7 +906,7 @@ private:
 **U8 ui/exif_editor**
 - 文件：`src/ui/exif_editor.{h,cpp}`。
 - 依赖：metadata.h。规格 §2.12。允许直接调 Exiv2 API（§1.7 例外）。
-- 自验（临时程序，offscreen）：构造于 `meta/exif_full.jpg`，树含 IFD0/Exif 节点 ≥5 项；模拟改一个值 → result().exif_edits 含该键；确定校验 errors=0。
+- 自验（临时程序，offscreen；**语料事实修订 2026-09-20**：`meta/exif_full.jpg` 仅 4 个 IFD0+Exif 标签（+GPS 5 项），全语料无 MakerNote 分组）：以 exif_full.jpg 验证基本树/分组/GPS；以 `base/multi.tif`（IFD0=15，归并桶 "Thumbnail"=15）验证 ≥5 与只读归并组；改一值 → result().exif_edits 含该键；确定校验 errors=0。（U8 已按此口径实测 57/57 通过）
 
 **U9 ui/page_run**
 - 文件：`src/ui/page_run.{h,cpp}`。
@@ -869,6 +916,17 @@ private:
 ### 4.3 W-C（单任务；前置 = W-B 全部完成）
 
 **U10 集成：mainwindow + main.cpp + ui_smoke + CMake 收口**
+
+**W-B 接线备忘（U10 必读——全部来自各任务已批准的落地口径）**：
+- FileListModel：`set_thumbnailer(t)` 内部已 connect(ready→apply_thumb)+自动 enqueue——**勿重复连接**；判缩略图队列空用 `queue_empty` 信号（`pending()` 含在途）；探测失败行模型已按 `探测失败：<英文细节>` 置 Failed。
+- PageOutput：objectName 见 §2.9 落地口径（`pp-format-<id>` 等）；heif/avif 首选同步探测 ~14ms + stderr libheif 日志（冒烟容忍）；MainWindow 负责合并 PageMeta::rules() 到 RunConfig.rules 并填 workers/budget_bytes/flatten_gray/rotate_orientation。
+- PageMeta：`set_map_provider(provider,key,cache_mb)` / `set_batch_files` / `set_selected_files` / `set_exception_summary`；objectName 见 §2.11 落地口径。
+- ExifEditor：判 accept 用 `dlg.QDialog::result()`（result() 被遮蔽）；objectName 见 §2.12 落地口径。
+- PageRun：objectName 见 §2.9 U9 落地口径（runProgress 等 11 个）。
+- PresetsDialog：SaveAs 的 `path()`=空串 → MainWindow 拼 `<presets_dir>/<名>.json`；列表 = `pp::ui::list_presets(pp::platform::presets_dir())`。
+- SettingsDialog：`settings()` = Accepted?编辑值:构造快照；接受后持久化立即 save_settings + log_set_level + PageMeta::set_map_provider。
+- MapWidget：对外坐标一律 WGS-84；冒烟 offline 用 `set_offline(true)`；amap 边界断言见下方 --ui-smoke 规格。
+- Git：**禁 amend**（§1.13）；构建用**全新** `build/release-dev` 目录（规避 AUTOMOC 陈旧）。
 - 文件：`src/ui/mainwindow.{h,cpp}`（重写 M0 桩）、`src/main.cpp`（改）、`tests/ui_smoke.sh`（新）。
 - CMake/CMakePresets（本任务独家授权）：
   1. 删除 `target_compile_definitions(photopipeline PRIVATE PP_M0_SMOKE)` 行；
@@ -958,5 +1016,10 @@ next-needed:
 8. 转码实跑抽验：输出文件可被 OIIO 读回（--dev 或文件管理器）。
 
 ## 9. 迭代任务记录（主对话维护，R2 起追加）
+
+### 9.0 波次事故与处置记录
+
+- **2026-09-20 W-B 并行 amend 撞车**：U6/U9 的 `git commit --amend` 两次把当时 tip 顶掉（受害：U7 首提 `8f29a17`、主对话 docs 提交 `f6e48e2`）。处置：U6 以 `git read-tree 7ae3fe8`+amend 复原出 `16aa5e4`（tree/message 与 U9 原件逐字节一致）；U7 以 `4722fdd` 重提；docs 内容随 amend tree 保留（归属并入后续提交 diff），主对话补提交恢复记录。`git diff 8f29a17 HEAD -- src/` 零删除 → **内容零丢失**，两个 orphan 提交仅 attribution 受损。教训已固化为 §1.13 禁 amend 条款（根因：主对话在并行波次授权了 amend——编排失误，责任在主对话）。
+- 波次收尾核验（主对话执行）：`git ls-files src/ui/` = 22 文件（含 M0 桩 mainwindow.*），各任务文件全部在库。
 
 （空——首轮未开始）

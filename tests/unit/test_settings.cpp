@@ -199,13 +199,28 @@ int main() {
         const pp::AppSettings s = non_defaults();
         const std::string t = pp::settings_to_string(s);
         const char* const keys[] = {"workers=12",   "budget_gb=6",  "flatten_gray=0.25",
-                                    "log_level=debug", "map_provider=amap", "amap_key=KEY-1234-abc",
+                                    "log_level=debug", "map_provider=amap", "amap_key=<set>",
                                     "tile_cache_mb=128", "rotate_orientation=false",
                                     "last_format=avif", "last_preset=/home/u/presets/hdr.json",
                                     "last_out_root=/data/out dir"};
         for (const char* k : keys) {
             check(contains(t, k), std::string("to-string/") + k, "snapshot=" + t);
         }
+        // The web-service key must never reach the log in clear text (main-dialogue ruling).
+        check(!contains(t, "KEY-1234-abc"), "to-string/amap-key-redacted", "snapshot=" + t);
+
+        // No key configured -> the field is reported as empty (not "<set>").
+        pp::AppSettings no_key = s;
+        no_key.amap_key.clear();
+        const std::string t2 = pp::settings_to_string(no_key);
+        check(contains(t2, "amap_key= ") || t2.ends_with("amap_key="),
+              "to-string/amap-key-empty", "snapshot=" + t2);
+        // Redaction is snapshot-only: the file keeps the real value.
+        const fs::path dir = make_temp_dir("settings_redact");
+        const fs::path file = dir / "settings.ini";
+        const std::string err = pp::save_settings(file, s);
+        check(err.empty() && contains(read_all(file), "amap_key=KEY-1234-abc"),
+              "to-string/save-keeps-cleartext", "err=" + err + " raw=" + read_all(file));
     }
 
     if (g_failed == 0) {

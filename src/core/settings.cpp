@@ -85,14 +85,19 @@ std::string format_double(double d) {
 
 // Serialized field list, in a fixed order: used both for saving (values) and for the
 // log snapshot. `key` is exactly the AppSettings field name.
-std::vector<std::pair<std::string, std::string>> settings_pairs(const AppSettings& s) {
+// `redact_secrets` is used by settings_to_string() only: the log snapshot must never carry
+// the amap web-service key in clear text (main-dialogue ruling on the M1b-U1 report), while
+// save_settings() obviously writes the real value.
+std::vector<std::pair<std::string, std::string>> settings_pairs(const AppSettings& s,
+                                                               bool redact_secrets = false) {
     std::vector<std::pair<std::string, std::string>> kv;
     kv.emplace_back("workers", std::to_string(s.workers));
     kv.emplace_back("budget_gb", std::to_string(s.budget_gb));
     kv.emplace_back("flatten_gray", format_double(s.flatten_gray));
     kv.emplace_back("log_level", s.log_level);
     kv.emplace_back("map_provider", s.map_provider);
-    kv.emplace_back("amap_key", s.amap_key);
+    kv.emplace_back("amap_key",
+                    (redact_secrets && !s.amap_key.empty()) ? std::string("<set>") : s.amap_key);
     kv.emplace_back("tile_cache_mb", std::to_string(s.tile_cache_mb));
     kv.emplace_back("rotate_orientation", s.rotate_orientation ? "true" : "false");
     kv.emplace_back("last_format", s.last_format);
@@ -222,7 +227,7 @@ std::string save_settings(const std::filesystem::path& file, const AppSettings& 
 
 std::string settings_to_string(const AppSettings& s) {
     std::string out;
-    for (const auto& [key, value] : settings_pairs(s)) {
+    for (const auto& [key, value] : settings_pairs(s, /*redact_secrets=*/true)) {
         if (!out.empty()) out += ' ';
         out += key;
         out += '=';

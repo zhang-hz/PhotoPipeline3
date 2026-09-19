@@ -278,9 +278,9 @@ pp::EncodeResult run_encode(pp::IEncoder* enc, OIIO::ImageBuf& img, const pp::Pa
         res.error = "make_encoder returned nullptr (registry lookup failed)";
         return res;
     }
-    // EncodeRequest member order (T6b): img, params, tech_id, out_bitdepth, meta,
-    // out_path, cancelled.
-    pp::EncodeRequest req{img, params, tech_id, out_bitdepth, meta, out, {}};
+    // EncodeRequest member order (T6b): img, params, out_bitdepth, meta,
+    // out_path, cancelled, tech_id (additive field appended at the end).
+    pp::EncodeRequest req{img, params, out_bitdepth, meta, out, {}, tech_id};
     return enc->encode(req);
 }
 

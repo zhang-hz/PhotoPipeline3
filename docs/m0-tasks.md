@@ -912,7 +912,7 @@ file(INSTALL "${SOURCE_PATH}/LICENSE" DESTINATION "${CURRENT_PACKAGES_DIR}/share
 
 **Wave3 裁决与实测（主对话维护）**：
 - §10.4/§10.5 designator 矛盾已修复：params.h 的 BackendDef 将 runtime_introspected 前置于 techs（主对话亲自改文件并同步本文档；SUB-B 原样复制无责）。
-- jpegli_* 符号不可链（上游 jpegli-static 为 EXCLUDE_FROM_ALL，compat lib 以 PRIVATE + `-Wl,--exclude-libs=ALL` 隐藏其符号；安装的 libjpeg.so.62 仅 56 个 jpeg_* 动态符号）→ 裁决：overlay port 安装 libjpegli.a（静态直调）+ libjpeg.so（兼容层）并存，port-version 0→1；消费方链接 ${JPEGLI_STATIC} + JPEG::JPEG。
+- jpegli 链接形态定稿（SUB-CD 08a2ac0）：`find_package(libjpeg-turbo CONFIG REQUIRED)` → `libjpeg-turbo::jpegli-static`（STATIC IMPORTED，自带 libhwy.a 链接接口；裸链 libjpegli.a 会缺 24 个 hwy 符号）；`JPEG::JPEG` 继续用 libjpeg.so.62 兼容层（OIIO/tiff 消费者不变）。OIIO 的 JXL 走 module-mode（overlay openimageio 恢复 FindJXL.cmake + 补 hwy/brotli*/jxl_cms/lcms2 静态闭包）。exiv2 xmp → EXIV2_ENABLE_XMP + expat（内置 toolkit）。libheif config 追加确认已编码进 portfile（非手改 installed）。
 - OIIO 构建为 JXL NONE：vcpkg openimageio port 删除了 OIIO 自带 FindJXL.cmake，而 libjxl port 无 CMake config（仅 pkgconfig），CONFIG-only 查找必然失败 → 裁决：overlay openimageio port 恢复 FindJXL.cmake（module-mode 走 libjxl.pc）；若 static triplet 下传递依赖失败，预授权备选：libjxl overlay 补最小 JXLConfig.cmake。
 - OIIO 插件清单无独立 avif：heif 插件覆盖 avif 扩展名（§12.1 已修订）。
 - 待 SUB-CD 复核：libheif-config.cmake 的 AOM find_dependency + fastfeat 链接接口追加**必须编码进 overlay libheif portfile**（若当前只是手改 vcpkg_installed，从零重建 binary cache 时会丢失）。

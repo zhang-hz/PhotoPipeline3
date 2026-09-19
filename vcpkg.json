@@ -1,0 +1,14 @@
+{
+  "name": "photopipeline",
+  "version": "0.1.0",
+  "builtin-baseline": "9e593bb18ea69cc5095e012465dcd675a822ed0d",
+  "dependencies": [
+    { "name": "openimageio", "features": ["jpegxl", "libheif", "webp", "gif", "tools"] },
+    { "name": "libheif", "features": ["hevc", "aom", "svt-av1"] },
+    "libjxl",
+    "libwebp",
+    "lcms",
+    { "name": "exiv2", "features": ["bmff"] },
+    "spdlog"
+  ]
+}

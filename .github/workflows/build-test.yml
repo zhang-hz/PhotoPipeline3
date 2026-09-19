@@ -19,7 +19,7 @@ jobs:
         run: |
           git clone https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
-          git -C "$VCPKG_ROOT" checkout <VCPKG_TAG_PLACEHOLDER>
+          git -C "$VCPKG_ROOT" checkout 2026.07.29
       - name: vcpkg binary cache
         uses: actions/cache@v4
         with:

@@ -1,0 +1,12 @@
+{
+  "name": "libjpeg-turbo",
+  "version": "3.2.0",
+  "port-version": 0,
+  "description": "Intercepted: builds google/jpegli as drop-in libjpeg62 replacement (full-featured).",
+  "dependencies": [
+    "highway",
+    "lcms",
+    { "name": "vcpkg-cmake", "host": true },
+    { "name": "vcpkg-cmake-config", "host": true }
+  ]
+}

@@ -425,7 +425,7 @@ void test_bmp() {
     }
 }
 
-void test_unknown_param_warns() {   // E9
+void test_unknown_param_logged_only() {   // E9 (T7d ruling: log_warn only, no Warning)
     const fs::path dir = out_dir();
     pp::MetadataPayloads meta;
     pp::ParamSet params;
@@ -435,8 +435,11 @@ void test_unknown_param_warns() {   // E9
     auto enc = pp::make_encoder("png", "oiio");
     const pp::EncodeResult r = run_encode(*enc, buf, 8, params, meta, dir / "unknown_param.png");
     check(r.error.empty() && r.bytes > 0, "e9/encode-succeeds", r.error);
-    check(!r.warnings.empty(), "e9/warning-emitted", "expected a warning for the unknown key");
-    if (!r.warnings.empty()) info("e9 unknown param warning: " + r.warnings.front().detail);
+    check(r.warnings.empty(), "e9/no-warning-injected",
+          "unknown parameters must stay out of EncodeResult.warnings (log_warn only), got " +
+              num(static_cast<int64_t>(r.warnings.size())));
+    info("e9: unknown param ignored, warnings=" + num(static_cast<int64_t>(r.warnings.size())) +
+         " (logged only)");
 }
 
 void test_encoder_shared_across_threads() {   // E1
@@ -637,14 +640,16 @@ void test_heif_and_avif_metadata() {
         }
         if (ctx) heif_context_free(ctx);
     }
-    {   // E9 for libheif: unknown key -> success + warning
+    {   // E9 for libheif: unknown key -> success, logged only (no Warning injected)
         auto enc = pp::make_encoder("heif", "x265");
         OIIO::ImageBuf buf = make_buf(64, 64, 3, 0.0f);
         pp::ParamSet params;
         params["not_a_libheif_param"] = int64_t(3);
         const pp::EncodeResult r = run_encode(*enc, buf, 8, params, meta, dir / "heif_unknown.heic");
         check(r.error.empty() && r.bytes > 0, "heif/e9/encode-succeeds", r.error);
-        check(!r.warnings.empty(), "heif/e9/warning-emitted", "expected a warning");
+        check(r.warnings.empty(), "heif/e9/no-warning-injected",
+              "unknown parameters must stay out of EncodeResult.warnings, got " +
+                  num(static_cast<int64_t>(r.warnings.size())));
     }
 }
 
@@ -657,7 +662,7 @@ int main() {
     test_tiff_roundtrip_and_compression();
     test_tiff_tiling();
     test_bmp();
-    test_unknown_param_warns();
+    test_unknown_param_logged_only();
     test_encoder_shared_across_threads();
     test_introspection();
     test_bitdepth_probe();

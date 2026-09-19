@@ -49,6 +49,19 @@ double ms_since(const std::chrono::steady_clock::time_point& t0) {
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 }
 
+// Log-only rendering of a parameter value (run-log fields for E9 notes).
+std::string param_value_text(const ParamValue& v) {
+    if (const bool* b = std::get_if<bool>(&v)) return *b ? "true" : "false";
+    if (const int64_t* i = std::get_if<int64_t>(&v)) return std::to_string(*i);
+    if (const double* d = std::get_if<double>(&v)) {
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%.10g", *d);
+        return buf;
+    }
+    if (const std::string* s = std::get_if<std::string>(&v)) return *s;
+    return "<empty>";
+}
+
 std::string heif_error_text(const heif_error& e) {
     std::string s = (e.message && *e.message) ? e.message : "unspecified libheif error";
     s += " (heif_error code=" + std::to_string(static_cast<int>(e.code)) +
@@ -258,11 +271,18 @@ EncodeResult HeifEncoder::encode(const EncodeRequest& req) {
         res.error = msg;
         return finish();
     };
-    auto note = [&](const std::string& msg) {
+    // E7 metadata failures are the only encode-time warnings: they change what lands in the
+    // output container. E9 (unknown / ignored / forced parameters) is a configuration defect
+    // and is reported through the run log only — never through EncodeResult.warnings
+    // (main-dialogue ruling, §3.8 T6 落地口径 ⑥).
+    auto note_meta = [&](const std::string& msg) {
         log_warn(kStage, kFile, msg, {{"format", format_id_}, {"backend", backend_id_}});
-        // TODO(M2): WarningKind has no "parameter ignored" value, so E9 notes ride on
-        // MetadataDropped; add a dedicated kind (e.g. ParamIgnored) in M2 and re-map.
         res.warnings.push_back(Warning{WarningKind::MetadataDropped, msg});
+    };
+    auto note_param = [&](const std::string& msg, const std::string& key,
+                          const std::string& value) {
+        log_warn(kStage, kFile, msg, {{"format", format_id_}, {"backend", backend_id_},
+                                      {"param", key}, {"value", value}});
     };
 
     try {
@@ -355,25 +375,26 @@ EncodeResult HeifEncoder::encode(const EncodeRequest& req) {
                 recovered = heif_encoder_set_lossless(enc, v ? 1 : 0).code == heif_error_Ok;
             }
             if (!recovered)
-                note("parameter '" + p.key + "' ignored by backend '" + backend_id_ +
-                     "': " + rejected);
+                note_param("parameter ignored by backend: " + rejected, p.key,
+                           param_value_text(it->second));
         }
 
         // E2: all internal threading off. The x265 plugin exposes no "threads" parameter
         // (measured), so for that backend the encoder keeps its default pool (TODO(M2)).
         if (is_known("threads")) {
             const heif_error te = heif_encoder_set_parameter_integer(enc, "threads", 1);
-            if (te.code != heif_error_Ok) note(std::string("could not force threads=1: ") + heif_error_text(te));
+            if (te.code != heif_error_Ok)
+                note_param("could not force threads=1: " + heif_error_text(te), "threads", "1");
         } else {
             log_info(kStage, kFile, "backend exposes no 'threads' parameter; default pool kept",
                      {{"format", format_id_}, {"backend", backend_id_}});
         }
 
-        // E9: unrecognised keys are ignored with a warning (never an error).
+        // E9: unrecognised keys are ignored (never an error) and logged, not warned.
         for (const auto& [key, value] : req.params) {
-            (void)value;
             if (key.rfind("__", 0) == 0) continue;  // reserved keys (§3.4)
-            if (!is_known(key)) note("unrecognised parameter '" + key + "' ignored");
+            if (!is_known(key))
+                note_param("unrecognised parameter ignored", key, param_value_text(value));
         }
 
         // ---- chroma layout ----
@@ -383,11 +404,11 @@ EncodeResult HeifEncoder::encode(const EncodeRequest& req) {
             if (c == "444")      layout = layout_for(heif_chroma_444);
             else if (c == "422") layout = layout_for(heif_chroma_422);
             else if (c == "420") layout = layout_for(heif_chroma_420);
-            else note("unknown chroma value '" + c + "', using 420");
+            else note_param("unknown chroma value, using 420", "chroma", c);
         } else {
             const std::string c = param_str(req.params, "chroma", "");
             if (!c.empty() && c != "420")
-                note("backend '" + backend_id_ + "' exposes no chroma parameter; forced 420");
+                note_param("backend exposes no chroma parameter; forced 420", "chroma", c);
         }
 
         const int bitdepth = req.out_bitdepth;
@@ -510,7 +531,7 @@ EncodeResult HeifEncoder::encode(const EncodeRequest& req) {
             const heif_error ie = heif_image_set_raw_color_profile(
                 img, "prof", req.meta.icc_profile.data(), req.meta.icc_profile.size());
             if (ie.code != heif_error_Ok)
-                note("ICC profile not embedded: " + heif_error_text(ie));
+                note_meta("ICC profile not embedded: " + heif_error_text(ie));
         }
 
         // ---- encode ----
@@ -535,14 +556,14 @@ EncodeResult HeifEncoder::encode(const EncodeRequest& req) {
                                                                  req.meta.exif_blob.data(),
                                                                  static_cast<int>(req.meta.exif_blob.size()));
             if (me.code != heif_error_Ok)
-                note("EXIF metadata dropped: " + heif_error_text(me));
+                note_meta("EXIF metadata dropped: " + heif_error_text(me));
         }
         if (!req.meta.xmp_rdf.empty()) {
             const heif_error me = heif_context_add_XMP_metadata(ctx, handle,
                                                                 req.meta.xmp_rdf.data(),
                                                                 static_cast<int>(req.meta.xmp_rdf.size()));
             if (me.code != heif_error_Ok)
-                note("XMP metadata dropped: " + heif_error_text(me));
+                note_meta("XMP metadata dropped: " + heif_error_text(me));
         }
 
         // ---- write ----

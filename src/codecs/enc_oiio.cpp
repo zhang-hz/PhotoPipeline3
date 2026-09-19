@@ -19,6 +19,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -39,6 +40,19 @@ constexpr std::string_view kFile  = "enc_oiio.cpp";
 
 double ms_since(const std::chrono::steady_clock::time_point& t0) {
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+}
+
+// Log-only rendering of a parameter value (run-log fields for E9 notes).
+std::string param_value_text(const ParamValue& v) {
+    if (const bool* b = std::get_if<bool>(&v)) return *b ? "true" : "false";
+    if (const int64_t* i = std::get_if<int64_t>(&v)) return std::to_string(*i);
+    if (const double* d = std::get_if<double>(&v)) {
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%.10g", *d);
+        return buf;
+    }
+    if (const std::string* s = std::get_if<std::string>(&v)) return *s;
+    return "<empty>";
 }
 
 // OIIO 3.1.14 TIFF writer name table (tiffoutput.cpp:301-338); "deflate" is only an alias
@@ -103,11 +117,13 @@ EncodeResult OiioEncoder::encode(const EncodeRequest& req) {
         res.error = msg;
         return finish();
     };
-    auto note = [&](const std::string& msg) {
-        log_warn(kStage, kFile, msg, {{"format", format_id_}});
-        // TODO(M2): WarningKind has no "parameter ignored"/"value clamped" value, so E9
-        // notes ride on MetadataDropped; add a dedicated kind in M2 and re-map.
-        res.warnings.push_back(Warning{WarningKind::MetadataDropped, msg});
+    // E9 / parameter problems are configuration defects: log them (structured), never turn
+    // them into EncodeResult.warnings — those are reserved for per-image quality or semantic
+    // deviations (main-dialogue ruling, §3.8 T6 落地口径 ⑥).
+    auto note_param = [&](const std::string& msg, const std::string& key,
+                          const std::string& value) {
+        log_warn(kStage, kFile, msg,
+                 {{"format", format_id_}, {"param", key}, {"value", value}});
     };
 
     try {
@@ -150,8 +166,8 @@ EncodeResult OiioEncoder::encode(const EncodeRequest& req) {
             int64_t level = param_int(req.params, "compressionLevel", 6);
             const int clamped = static_cast<int>(std::clamp<int64_t>(level, 0, 9));
             if (clamped != level)
-                note("compressionLevel " + std::to_string(level) + " clamped to " +
-                     std::to_string(clamped));
+                note_param("compressionLevel clamped", "compressionLevel",
+                           std::to_string(level) + " -> " + std::to_string(clamped));
             spec.attribute("compressionLevel", clamped);
         } else if (format_id_ == "tiff") {
             const std::string compression = param_str(req.params, "compression", "lzw");
@@ -197,10 +213,9 @@ EncodeResult OiioEncoder::encode(const EncodeRequest& req) {
         // ---- E9: unknown parameters are ignored with a warning ----
         const std::vector<std::string> known = known_param_keys(format_id_, backend_id_);
         for (const auto& [key, value] : req.params) {
-            (void)value;
             if (key.rfind("__", 0) == 0) continue;  // reserved keys (§3.4)
             if (std::find(known.begin(), known.end(), key) == known.end())
-                note("unrecognised parameter '" + key + "' ignored");
+                note_param("unrecognised parameter ignored", key, param_value_text(value));
         }
 
         // ---- pixels: float32 -> target integer type, one conversion only (R11) ----

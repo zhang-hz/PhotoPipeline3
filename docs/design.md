@@ -415,15 +415,26 @@ CMake 选项 `PP_BUILD_DEV`（Release 关闭）。开启时 `photopipeline --dev
 
 > **M0 已完成（SUB-G 独立审计 9/9 PASS）**：六 Spike 全绿、语料 27 fixture 字节稳定、参数表 78 条编译进库、linkprobe 9/9（双 AVIF 后端运行时在列）、fresh 链路 8.12s（cache 命中）、冷编译 3.86s、ctest 6/6、冻结接口逐字节一致。工程事实与全部 api-deltas 见 docs/m0-tasks.md §17。
 
-**M1 · 全部编码（Linux，底向上 + 鼓点）**
+**M1 · 全部编码（Linux，底向上 + 鼓点）——已按主对话决策拆为两批次**
 
-- 编码顺序：types → params → fsops/logger → decode → color → **编码器一天一个** → metadata → pipeline → scheduler → harness → UI（地图控件最后写、带手动坐标降级路径，卡住不阻塞收口）
-- **鼓点纪律（强制）**：每落一个模块，`--dev` 全语料跑一遍
-- **单测随码走**（是 M1 的组成部分，不是 M2 的作业）；接口（`types.h`/`encoder.h`/`params.h`）第一天冻结，此后不改签名
-- UI 只用成熟模式（QStackedWidget / QAbstractListModel / QDialog）；断言策略：内部不变量全 assert（通道∈{1,2,3,4}、位深∈集合、预算非负）
+> **M1a · 引擎（本批次，执行中）**：core 基础设施 → 参数引擎 → 解码 → 色彩 → 元数据 → 8 编码器 → pipeline/scheduler/`--dev` harness/`pp_verify` → **引擎收口**。**不含 UI**。
+> **M1b · UI（下一批次）**：三页 UI + 文件列表/缩略图 + 参数表单引擎 + 单文件元数据编辑器 + 预设管理 + 运行页 + 设置 + 地图控件 → UI 收口。
+> 批次拆分不改任何接口契约：M1b 只消费 M1a 冻结的 core 接口（含两处加性修订 `EncodeResult.error` / `EncodeRequest.tech_id`）。
+
+**M1a 执行要点（引擎）**
+
+- 顺序：types → params → fsops/logger → decode → color → **编码器逐个** → metadata → pipeline → scheduler → harness（底向上；每步鼓点）
+- **鼓点纪律（强制）**：每落一个模块跑该模块单测；T8 起每次 `--dev` 全语料跑一遍（`release + -DPP_BUILD_DEV=ON`）
+- **单测随码走**（M1 的组成部分，不是 M2 的作业）；接口（`types.h`/`params.h`/`encoder.h` + M1 新增 16 份头）首日冻结
+- **加性修订原则**：接口新增字段一律**追加在结构体末尾**（保持位置式聚合初始化兼容）
+- 静态库自注册必须 whole-archive（`pp_core` 是 STATIC 档案，否则注册表为空）
+- 断言策略：内部不变量全 assert（通道∈{1,2,3,4}、位深∈集合、预算非负）
 - `TODO(M2)` 标签纪律：写码时觉得糙的地方全打标，M2 开工即有 debug 命中清单
 - 取消语义 checklist：像素预算 acquire 处必须检查取消标志（防死锁）
-- **出口准则**：全部模块落库；全语料 `--dev` 零崩溃、8 格式全部出图、日志完整；UI 手动走查通过；`TODO(M2)` 清单归档
+- **M1a 出口准则（引擎侧）**：引擎模块全部落库；27×8 矩阵零崩溃、8 格式出图；8+1 对 smoke 断言 OK；日志完整；单测全绿（含 M0 五条无回归）；仅元数据模式字节级保真（JPEG/PNG/TIFF/WebP）；48MP + 100 文件批规模验证；`TODO(M2)` 清单 + 基线日志归档
+- 实测事实（M0/M1a 累积）见 `docs/m1-tasks.md` §17 与各任务"落地口径"段；风险册见本文档 §10
+
+**M1b 出口准则（UI，下一批次）**：offscreen UI 冒烟绿；手动走查清单全勾（含设置持久化与上次会话恢复、地图选点、断网降级）；参数表单谓词联动正确；运行期锁定与取消可用。
 
 **M2 · Linux debug 收口**
 

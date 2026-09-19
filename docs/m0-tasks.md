@@ -101,7 +101,7 @@ feature 名须对照 `$VCPKG_ROOT/ports/<name>/vcpkg.json` 实际清单核对：
 
 ### VP-2 jpegli 拦截 port（§14.2 模板）
 - 目录：`vcpkg-overlay/libjpeg-turbo/`（**目录名必须是 libjpeg-turbo**——按名遮蔽官方 port 是唯一批准的拦截方式）
-- REF = google/jpegli 最新 stable tag（`git ls-remote --tags https://github.com/google/jpegli` 选最新非 rc）
+- REF = google/jpegli 最新 stable tag——**实测修订（SUB-CD）**：上游从未打 tag/release（ls-remote/tags API 均空），改为 pin main HEAD commit SHA（已钉 `031a0077f5799a6041004267fc12b956c1f52a20`，2026-06-01；vcpkg_from_github 支持 commit SHA，可复现；tarball URL 形如 `https://github.com/google/jpegli/archive/<sha>.tar.gz`）
 - SHA512 = 对该 tag 的 GitHub tarball（`https://github.com/google/jpegli/archive/refs/tags/<tag>.tar.gz`）执行 `curl -L <url> | sha512sum`
 - port manifest 的 `version`/`port-version` 字段：**逐字复制** baseline 处官方 port 的值：`git -C $VCPKG_ROOT show <VCPKG_TAG>:ports/libjpeg-turbo/vcpkg.json`
 - portfile 的 CMake 选项名以 jpegli 仓库实际 CMakeLists/README 为准核对修正（逐条记录 api-deltas）；目标：安装出 libjpeg（libjpeg.so + jpeglib.h 等），与官方 port 用法兼容；**必须同时安装 jpegli 扩展头**（上游路径 `lib/jpegli/encode.h` 等——SUB-B 实测：公开头是它而非 `<jpegli.h>`，jpegli 复用 `jpeg_compress_struct`，`jpegli_set_distance` 三参数，`jpegli_create_compress` 为宏；tools/*.cpp 已按 `__has_include` 三级降级引用）
@@ -817,12 +817,13 @@ PP_MKFIXTURES 默认 build/release/pp_mkfixtures
     "libjxl",
     "libwebp",
     "lcms",
-    "exiv2",
+    { "name": "exiv2", "features": ["bmff"] },
     "spdlog"
   ]
 }
 ```
-（feature 名按 §5 VP-1 规则核对增删；**禁止**添加新依赖项。）
+（feature 名按 §5 VP-1 规则核对增删；**禁止**添加新依赖项。exiv2 的 `bmff` 为主对话裁决加入：设计文档 §8.2 强制项（HEIF/AVIF 元数据读写，R2），Spike C 与 linkprobe exiv2-bmff 依赖它。）
+（SUB-CD 实测 feature 事实：openimageio 用 `jpegxl`（无 libjxl）；`targa` 无 feature（targa 插件永远编译）；libheif 的 `x265`→`hevc`，`libde265` 为无条件依赖；libheif 的 SVT-AV1 CMake 选项为 `WITH_SvtEnc`（非 LIBHEIF_USE_SVT_AV1）。）
 
 ### 14.2 `vcpkg-overlay/libjpeg-turbo/portfile.cmake` + `vcpkg.json`
 `portfile.cmake`：
@@ -885,3 +886,25 @@ file(INSTALL "${SOURCE_PATH}/LICENSE" DESTINATION "${CURRENT_PACKAGES_DIR}/share
 - Wave3：SUB-E（BV）与 SUB-F（PT）并行；SUB-F 开始写 format_tables 前确认 DEPS 已完成（看 vcpkg_installed 存在与 git log）。
 - Wave4：SUB-G（EX）。
 - 任一波 PARTIAL/BLOCKED → 主对话决策后重派或修复，不自动重试超过 1 次。
+
+## 17. Wave2 实测事实速查（SUB-CD 提供；SUB-E/SUB-F/SUB-G 必读）
+
+**安装结果**：vcpkg install 退出码 0（attempt3，1m41s；binary cache 262MB 预热）；`vcpkg_installed/x64-linux/` 就绪。提交 `d7ccd76`。
+
+**依赖版本**：OIIO 3.1.14.0#1 / libheif 1.23.1 / libjxl 0.11.2 / libwebp 1.6.0#2 / lcms 2.19.1#1 / exiv2 0.28.8 / spdlog 1.17.0#1 / x265 4.2 / aom 3.13.3 / svt-av1 4.1.0 / tiff 4.7.2 / highway 1.4.0。
+
+**vcpkg.json 最终形态**：openimageio[jpegxl,libheif,webp,gif,tools] + libheif[hevc,aom,svt-av1] + exiv2[bmff] + libjxl/libwebp/lcms/spdlog。
+
+**libheif 运行时编码器（R4 落地）**：HEVC → 'x265 HEVC encoder (4.2-vcpkg)'；AV1 → 'AOMedia Project AV1 Encoder v3.13.3' + 'SVT-AV1 encoder v4.1.0'（id=svt）。双后端成立。
+
+**SUB-E 机械修正点（授权）**：
+1. CMakeLists.txt：`libheif::libheif` → **`heif`**（libheif 1.23.1 导出的 target 名）。
+2. CMakeLists.txt：pkg_check_modules(WEBP …) 去掉 **libwebpencode**（1.6.0 只装 libwebp/libwebpdecoder/libwebpdemux/libwebpmux/libsharpyuv.pc）。
+3. pp_linkprobe 的 `heif_get_encoder_descriptors` 为 **4 参数自由函数**（SUB-B 已按此适配过，对照安装头核对即可）。
+4. 其余 `TODO(M0-CD)` 注释点逐一对照 vcpkg_installed 头文件核实。
+
+**jpegli 事实**：头文件在 `include/jpegli/{encode,decode,common,types}.h` + `include/lib/jpegli/*` + `include/lib/base/include_jpeglib.h`；libjpeg.so 的 version script 为 `jpeg*`（jpegli_* 符号已导出）；无 libjpeg.pc / CMake config（overlay 已提供 libjpeg-turbo-config.cmake + vcpkg-cmake-wrapper.cmake）；tiff 等消费者链接已验证。
+
+**链接形态**：x64-linux triplet 为 **static**（全部 .a，唯一 .so 是 jpegli 的 libjpeg.so.62）；M1 若需全静态另行决策。
+
+**并发纪律（Wave3）**：SUB-E 与 SUB-F 并行时——SUB-F **不得**运行 cmake/ninja（build/ 目录归 SUB-E），语法自检用 `g++ -std=c++23 -fsyntax-only -Isrc src/core/format_tables.cpp`；两者 git commit 只 add 自己的文件，遇 index.lock 等待 5s 重试。

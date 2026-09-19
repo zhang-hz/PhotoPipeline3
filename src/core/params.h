@@ -33,8 +33,8 @@ struct TechDef {
 
 struct BackendDef {
     std::string id, label;  // e.g. "svt-av1" / "libaom"
-    std::vector<TechDef> techs;
     bool runtime_introspected = false;  // true for libheif-based formats
+    std::vector<TechDef> techs;
 };
 
 struct FormatDef {

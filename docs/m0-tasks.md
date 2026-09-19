@@ -136,7 +136,7 @@ vcpkg install --overlay-ports=vcpkg-overlay --clean-after-build
 ## 7. PARAMS 组（SUB-F，与 SUB-E 并行，但须在 SUB-E 的 BV-1 之后才开始写 format_tables）
 前置：vcpkg_installed 里已有全部头文件（即 DEPS 完成）。
 
-- **PT-1**：逐库核对 `docs/param-catalog.md`（只读）与 `vcpkg_installed/x64-linux/include/` 下真实头文件（jpegli.h、jxl/encoder.h、encode.h(webp)、OpenImageIO 的 png/tiff 输出参数文档/源码头）。然后**只替换** `src/core/format_tables.cpp` 中 `/* PP-PLACEHOLDER */` 段的数据（结构 PP-FROZEN 不动）。允许的修正：范围/默认值/枚举选项与头文件不符 → 以头文件为准。禁止：增删参数（目录里没有而你认为该有的 → 写入 next-needed）；改 key；决定参数去留。libheif/avif 两个格式的 techs 留空、`runtime_introspected=true`。产出 `api-deltas` 完整清单（任务书假设 vs 头文件事实）。
+- **PT-1**：逐库核对 `docs/param-catalog.md`（只读）与 `vcpkg_installed/x64-linux/include/` 下真实头文件（jpegli/encode.h、jxl/encode.h、webp/encode.h、OpenImageIO 的 png/tiff 输出参数文档/源码头）。然后**只替换** `src/core/format_tables.cpp` 中 `/* PP-PLACEHOLDER */` 段的数据（结构 PP-FROZEN 不动）。**designator 顺序强制**：ParamDef 初始化必须按声明序 key→label→type→def→lo→hi→step→choices→advanced→tooltip（visible/locked 不设）；BackendDef 用 .runtime_introspected→.techs 顺序（§10.4 字段已前置——主对话修复）。允许的修正：范围/默认值/枚举选项与头文件不符 → 以头文件为准。禁止：增删参数（目录里没有而你认为该有的 → 写入 next-needed）；改 key；决定参数去留。libheif/avif 两个格式的 techs 留空、`runtime_introspected=true`。产出 `api-deltas` 完整清单（任务书假设 vs 头文件事实）。
 - **PT-2**：核对 `tests/golden/SCHEMA.md` 描述与 §13 一致（你不改 SCHEMA.md，发现不一致 → 报告）。
 - 提交：`M0-PT: format tables frozen against headers`。
 
@@ -281,8 +281,8 @@ struct TechDef {
 
 struct BackendDef {
     std::string id, label;  // e.g. "svt-av1" / "libaom"
-    std::vector<TechDef> techs;
     bool runtime_introspected = false;  // true for libheif-based formats
+    std::vector<TechDef> techs;
 };
 
 struct FormatDef {
@@ -502,6 +502,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(PP_BUILD_DEV "Build dev-only tools" OFF)
+set(CMAKE_AUTOMOC ON)  # Q_OBJECT (mainwindow) — wave3 template fix
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(-Wall -Wextra -Wpedantic)
@@ -722,7 +723,7 @@ echo "OK — source tools/env.sh then: cmake --preset release && cmake --build -
   - `lcms2`：`cmsCreate_sRGBProfile()` 非空；float RGB 往返单像素 |err|≤1e-5；`cmsCloseProfile` 成功。
   - `exiv2`：`Exiv2::versionString()` 非空。
   - `exiv2-bmff`：调用 Exiv2 启用 BMFF 的 API（0.28+ 为 `Exiv2::enableBMFF(true)`；不存在 → FAIL，detail="API missing"）。
-  - `oiio-plugins`：`OIIO::get_string_attribute("format_list")` 必须包含 jpeg, png, tiff, jxl, heif, avif, webp, gif, targa, bmp；缺失名写入 detail。
+  - `oiio-plugins`：`OIIO::get_string_attribute("format_list")` 必须包含 jpeg, png, tiff, jxl, heif, webp, gif, targa, bmp（**修订（SUB-E 实测）**：OIIO 无独立 avif 插件——heif 插件拥有 avif/heic/heif 扩展名，linkprobe 的 heif 项 detail 注明 "covers avif" 即可）；缺失名写入 detail。
   - `jpegli`：`jpegli_create_compress`/`jpegli_set_distance`/`jpegli_destroy_compress` 调用成功（include `<jpegli.h>`；头不存在则 extern "C" 声明同名符号）。
   - `libjxl`：`JxlEncoderVersion() > 0`。
   - `libheif-hevc`：`heif_get_encoder_descriptors(ctx, heif_compression_HEVC, NULL, NULL, 0, &count)` 后 count≥1；detail 打印编码器名。
@@ -908,3 +909,12 @@ file(INSTALL "${SOURCE_PATH}/LICENSE" DESTINATION "${CURRENT_PACKAGES_DIR}/share
 **链接形态**：x64-linux triplet 为 **static**（全部 .a，唯一 .so 是 jpegli 的 libjpeg.so.62）；M1 若需全静态另行决策。
 
 **并发纪律（Wave3）**：SUB-E 与 SUB-F 并行时——SUB-F **不得**运行 cmake/ninja（build/ 目录归 SUB-E），语法自检用 `g++ -std=c++23 -fsyntax-only -Isrc src/core/format_tables.cpp`；两者 git commit 只 add 自己的文件，遇 index.lock 等待 5s 重试。
+
+**Wave3 裁决与实测（主对话维护）**：
+- §10.4/§10.5 designator 矛盾已修复：params.h 的 BackendDef 将 runtime_introspected 前置于 techs（主对话亲自改文件并同步本文档；SUB-B 原样复制无责）。
+- jpegli_* 符号不可链（上游 jpegli-static 为 EXCLUDE_FROM_ALL，compat lib 以 PRIVATE + `-Wl,--exclude-libs=ALL` 隐藏其符号；安装的 libjpeg.so.62 仅 56 个 jpeg_* 动态符号）→ 裁决：overlay port 安装 libjpegli.a（静态直调）+ libjpeg.so（兼容层）并存，port-version 0→1；消费方链接 ${JPEGLI_STATIC} + JPEG::JPEG。
+- OIIO 构建为 JXL NONE：vcpkg openimageio port 删除了 OIIO 自带 FindJXL.cmake，而 libjxl port 无 CMake config（仅 pkgconfig），CONFIG-only 查找必然失败 → 裁决：overlay openimageio port 恢复 FindJXL.cmake（module-mode 走 libjxl.pc）；若 static triplet 下传递依赖失败，预授权备选：libjxl overlay 补最小 JXLConfig.cmake。
+- OIIO 插件清单无独立 avif：heif 插件覆盖 avif 扩展名（§12.1 已修订）。
+- 待 SUB-CD 复核：libheif-config.cmake 的 AOM find_dependency + fastfeat 链接接口追加**必须编码进 overlay libheif portfile**（若当前只是手改 vcpkg_installed，从零重建 binary cache 时会丢失）。
+- SUB-E 已实测：spike e PASS（lcms2 金值 identity_max_err=0，Lab=(100, 7.57e-06, -7.63e-06)）；gen_corpus.sh 的 `--depth` 应为 `-d`（机械修正已做）；CMakeLists 需 `set(CMAKE_AUTOMOC ON)`（已修复入库）；libjxl 0.11 box API 顺序：UseBoxes → AddBox(Exif 内容前置 4 字节 TIFF offset) → CloseBoxes → CloseInput（mkfixtures 已修，R13 事实）；exiv2 port 的 xmp feature 非默认（默认无 XMP toolkit → XmpParser::encode 空 packet）→ vcpkg.json 增 exiv2[xmp]。
+- 参数表裁决（主对话，SUB-F 报告后）：删无后端参数（use_dct4/8/16、TIFF quality/zstd_level、compression 枚举去 zstd/jpeg）；TIFF 枚举收敛 none/lzw/zip/ccittrle/packbits；webp filter_strength 默认 30（与默认 preset=photo 自洽）；responsive→jxl-modular；modular_palette 改 Int modular_palette_colors(-1..4096, def -1)；加 ycbcr/440 枚举与 tiff_tile_width/height；JXL 公共参数保持 vardct+modular 双份（M1 预设层去重）；其余默认值全部保留 catalog 视觉透明档。PT-1b 扩表任务：补齐头文件中有真实后端的参数（webp 13+、jpegli 4、libjxl 其余 frame settings；排除 thread_level——设计规定编码器内部线程全关）。

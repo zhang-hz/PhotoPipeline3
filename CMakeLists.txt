@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(PP_BUILD_DEV "Build dev-only tools" OFF)
+set(CMAKE_AUTOMOC ON)  # Q_OBJECT (mainwindow) — wave3 template fix
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(-Wall -Wextra -Wpedantic)
@@ -25,7 +26,7 @@ find_package(spdlog REQUIRED CONFIG)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LCMS2 REQUIRED IMPORTED_TARGET lcms2)
 pkg_check_modules(LIBJXL REQUIRED IMPORTED_TARGET libjxl)
-pkg_check_modules(WEBP REQUIRED IMPORTED_TARGET libwebp libwebpencode)
+pkg_check_modules(WEBP REQUIRED IMPORTED_TARGET libwebp)
 pkg_check_modules(TIFF4 REQUIRED IMPORTED_TARGET libtiff-4)
 # PP-NOTE: find_package/pkg-config 目标名允许按 vcpkg_installed 实际情况机械修正，逐条记录
 
@@ -38,17 +39,17 @@ target_compile_definitions(photopipeline PRIVATE PP_M0_SMOKE)  # M1 removes
 
 add_executable(pp_linkprobe tools/pp_linkprobe.cpp)
 target_link_libraries(pp_linkprobe PRIVATE
-    OpenImageIO::OpenImageIO JPEG::JPEG PkgConfig::LCMS2 exiv2::exiv2
-    libheif::libheif PkgConfig::LIBJXL PkgConfig::WEBP)
+    OpenImageIO::OpenImageIO JPEG::JPEG PkgConfig::LCMS2 Exiv2::exiv2lib
+    heif PkgConfig::LIBJXL PkgConfig::WEBP)
 
 add_executable(pp_mkfixtures tools/pp_mkfixtures.cpp)
 target_link_libraries(pp_mkfixtures PRIVATE
-    OpenImageIO::OpenImageIO JPEG::JPEG exiv2::exiv2
-    libheif::libheif PkgConfig::LIBJXL PkgConfig::WEBP PkgConfig::TIFF4)
+    OpenImageIO::OpenImageIO JPEG::JPEG Exiv2::exiv2lib
+    heif PkgConfig::LIBJXL PkgConfig::WEBP PkgConfig::TIFF4)
 
 add_executable(pp_spikes tools/pp_spikes.cpp)
 target_link_libraries(pp_spikes PRIVATE
-    OpenImageIO::OpenImageIO PkgConfig::LCMS2 exiv2::exiv2)
+    OpenImageIO::OpenImageIO PkgConfig::LCMS2 Exiv2::exiv2lib)
 
 add_executable(pp_unit tests/unit/test_smoke.cpp)
 target_link_libraries(pp_unit PRIVATE pp_core)

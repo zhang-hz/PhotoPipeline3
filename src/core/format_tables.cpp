@@ -39,12 +39,14 @@ const std::vector<FormatDef>& static_formats() {
                         ParamDef{.key = "chroma", .label = "色度采样",
                                  .type = ParamType::Enum, .def = std::string("444"),
                                  .choices = {{"444", std::string("444")},
+                                             {"440", std::string("440")},
                                              {"422", std::string("422")},
                                              {"420", std::string("420")}},
                                  .advanced = false,
                                  .tooltip = "色度采样（chroma subsampling），按 jpeglib.h:125-126 的 "
-                                            "comp_info[].h_samp_factor/v_samp_factor 设置；参考 CLI 还接受 "
-                                            "440（tools/cjpegli.cc:66）。444=不降采样（视觉透明档）。",
+                                            "comp_info[].h_samp_factor/v_samp_factor 设置；取值 "
+                                            "444/440/422/420 与参考 CLI 一致（tools/cjpegli.cc:66,138）："
+                                            "444=不降采样（视觉透明档）、440=仅垂直方向降采样。",
                                  .visible = {}, .locked = {}},
                         ParamDef{.key = "progressive", .label = "渐进式",
                                  .type = ParamType::Bool, .def = true, .choices = {}, .advanced = false,
@@ -95,6 +97,36 @@ const std::vector<FormatDef>& static_formats() {
                                  .tooltip = "XYB 色彩空间编码（jpegli_set_xyb_mode，jpegli/encode.h:132），"
                                             "实验性；会改变默认量化表与色度下采样并需嵌入 XYB ICC。参考实现"
                                             "默认关闭（lib/extras/enc/jpegli.h:26）。",
+                                 .visible = {}, .locked = {}},
+                        ParamDef{.key = "adaptive_quantization", .label = "自适应量化",
+                                 .type = ParamType::Bool, .def = true, .choices = {}, .advanced = true,
+                                 .tooltip = "自适应量化（jpegli_enable_adaptive_quantization，"
+                                            "jpegli/encode.h:143-146）：按局部图像特性制造更多零系数；"
+                                            "库与参考实现默认启用（lib/extras/enc/jpegli.h:30）。",
+                                 .visible = {}, .locked = {}},
+                        ParamDef{.key = "std_quant_tables", .label = "标准量化表",
+                                 .type = ParamType::Bool, .def = false, .choices = {}, .advanced = true,
+                                 .tooltip = "改用 JPEG 标准 Annex K 量化表"
+                                            "（jpegli_use_standard_quant_tables，jpegli/encode.h:152-157，"
+                                            "无参开关函数）；false=jpegli 自有量化表（参考实现默认，"
+                                            "lib/extras/enc/jpegli.h:31）。",
+                                 .visible = {}, .locked = {}},
+                        ParamDef{.key = "psnr_target", .label = "PSNR 目标",
+                                 .type = ParamType::Float, .def = 0.0, .lo = 0.0, .hi = 100.0,
+                                 .step = 0.5, .choices = {}, .advanced = true,
+                                 .tooltip = "PSNR 目标（jpegli_set_psnr，jpegli/encode.h:125-127）：0=关闭"
+                                            "（默认），>0 启用距离搜索逼近该 PSNR（dB）；tolerance/min/max "
+                                            "取参考默认 0.01/0.1/25.0（lib/jpegli/encode.cc:84-87），"
+                                            "头文件未规定上限（100 为 UI 上限）。",
+                                 .visible = {}, .locked = {}},
+                        ParamDef{.key = "cicp_transfer_function", .label = "CICP 传递函数",
+                                 .type = ParamType::Int, .def = int64_t(2), .lo = 0, .hi = 18,
+                                 .step = 1, .choices = {}, .advanced = true,
+                                 .tooltip = "输入传递函数 CICP/H.273 码（jpegli_set_cicp_transfer_function，"
+                                            "jpegli/encode.h:134-138，须在 jpegli_set_defaults 之前调用）："
+                                            "默认 2=unknown；jpegli 仅对 16=PQ、18=HLG 改变默认量化表"
+                                            "（lib/jpegli/quant.cc:525-526,577-579），其余码值被接受但无"
+                                            "效果（无校验）。",
                                  .visible = {}, .locked = {}},
                     } } } } },
             .bitdepths = {8},
@@ -161,29 +193,74 @@ const std::vector<FormatDef>& static_formats() {
                                                      "jxl/encode.h:205-208）：库以 -1 表示默认（无损=1、"
                                                      "有损=0）；Bool 无法表达 -1，本表取 true（更保真）。",
                                           .visible = {}, .locked = {}},
-                                 ParamDef{.key = "responsive", .label = "响应式渐进",
-                                          .type = ParamType::Bool, .def = false, .choices = {}, .advanced = true,
-                                          .tooltip = "响应式/渐进编码（JXL_ENC_FRAME_SETTING_RESPONSIVE，"
-                                                     "jxl/encode.h:227-230），头文件注明用于 modular 模式；"
-                                                     "库默认 -1（自选）。catalog 将其列于 VarDCT 组。",
+                                 ParamDef{.key = "dots", .label = "点阵生成",
+                                          .type = ParamType::Bool, .def = true, .choices = {},
+                                          .advanced = true,
+                                          .tooltip = "点阵生成（JXL_ENC_FRAME_SETTING_DOTS，"
+                                                     "jxl/encode.h:179-182）：库以 -1 表示默认（编码器自选）；"
+                                                     "Bool 无法表达 -1，本表取 true（不主动关闭编码工具）。",
                                           .visible = {}, .locked = {}},
-                                 ParamDef{.key = "use_dct4", .label = "启用 DCT 4×4 块",
-                                          .type = ParamType::Bool, .def = true, .choices = {}, .advanced = true,
-                                          .tooltip = "DCT 4×4 块开关（DCT block size）。libjxl 0.11.2 的 "
-                                                     "JxlEncoderFrameSettingId 无对应项"
-                                                     "（jxl/encode.h:132-399），M0 保留占位、无后端映射。",
+                                 ParamDef{.key = "patches", .label = "图块复用",
+                                          .type = ParamType::Bool, .def = true, .choices = {},
+                                          .advanced = true,
+                                          .tooltip = "图块/贴片复用（JXL_ENC_FRAME_SETTING_PATCHES，"
+                                                     "jxl/encode.h:184-187）：库以 -1 表示默认（编码器自选）；"
+                                                     "Bool 无法表达 -1，本表取 true。",
                                           .visible = {}, .locked = {}},
-                                 ParamDef{.key = "use_dct8", .label = "启用 DCT 8×8 块",
-                                          .type = ParamType::Bool, .def = true, .choices = {}, .advanced = true,
-                                          .tooltip = "DCT 8×8 块开关（DCT block size）。libjxl 0.11.2 的 "
-                                                     "JxlEncoderFrameSettingId 无对应项"
-                                                     "（jxl/encode.h:132-399），M0 保留占位、无后端映射。",
+                                 ParamDef{.key = "gaborish", .label = "Gaborish 滤波",
+                                          .type = ParamType::Bool, .def = true, .choices = {},
+                                          .advanced = true,
+                                          .tooltip = "Gaborish 滤波器（JXL_ENC_FRAME_SETTING_GABORISH，"
+                                                     "jxl/encode.h:194-197）：库以 -1 表示默认（编码器自选，"
+                                                     "通常启用）；Bool 无法表达 -1，本表取 true。",
                                           .visible = {}, .locked = {}},
-                                 ParamDef{.key = "use_dct16", .label = "启用 DCT 16×16 块",
-                                          .type = ParamType::Bool, .def = true, .choices = {}, .advanced = true,
-                                          .tooltip = "DCT 16×16 块开关（DCT block size）。libjxl 0.11.2 的 "
-                                                     "JxlEncoderFrameSettingId 无对应项"
-                                                     "（jxl/encode.h:132-399），M0 保留占位、无后端映射。",
+                                 ParamDef{.key = "progressive_ac", .label = "AC 渐进（谱进）",
+                                          .type = ParamType::Bool, .def = false, .choices = {},
+                                          .advanced = true,
+                                          .tooltip = "VarDCT AC 系数谱渐进"
+                                                     "（JXL_ENC_FRAME_SETTING_PROGRESSIVE_AC，jxl/encode.h:232-236）："
+                                                     "-1=编码器自选（库默认）、0=关闭、1=开启；只影响解码渐进性，"
+                                                     "不改变最终画质。",
+                                          .visible = {}, .locked = {}},
+                                 ParamDef{.key = "qprogressive_ac", .label = "AC 渐进（量化位）",
+                                          .type = ParamType::Bool, .def = false, .choices = {},
+                                          .advanced = true,
+                                          .tooltip = "VarDCT AC 最低有效位量化渐进"
+                                                     "（JXL_ENC_FRAME_SETTING_QPROGRESSIVE_AC，"
+                                                     "jxl/encode.h:238-242）：-1=编码器自选（库默认）、0=关闭、"
+                                                     "1=开启。",
+                                          .visible = {}, .locked = {}},
+                                 ParamDef{.key = "progressive_dc", .label = "DC 渐进级数",
+                                          .type = ParamType::Int, .def = int64_t(-1), .lo = -1,
+                                          .hi = 2, .step = 1, .choices = {}, .advanced = true,
+                                          .tooltip = "VarDCT DC 低分辨率渐进层"
+                                                     "（JXL_ENC_FRAME_SETTING_PROGRESSIVE_DC，"
+                                                     "jxl/encode.h:244-248）：-1=编码器自选（库默认）、0=关闭、"
+                                                     "1=额外 64×64 层、2=512×512 与 64×64 层。",
+                                          .visible = {}, .locked = {}},
+                                 ParamDef{.key = "resampling", .label = "编码前降采样",
+                                          .type = ParamType::Enum, .def = int64_t(-1),
+                                          .choices = {{"auto", int64_t(-1)},
+                                                      {"1", int64_t(1)},
+                                                      {"2", int64_t(2)},
+                                                      {"4", int64_t(4)},
+                                                      {"8", int64_t(8)}},
+                                          .advanced = true,
+                                          .tooltip = "编码前降采样（JXL_ENC_FRAME_SETTING_RESAMPLING，"
+                                                     "jxl/encode.h:140-146）：-1=编码器自选（库默认，低质量时才"
+                                                     "降采样）、1=不降采样、2/4/8=按倍数降采样并在解码端升采样；"
+                                                     "会降低有效分辨率。VarDCT/Modular 通用。",
+                                          .visible = {}, .locked = {}},
+                                 ParamDef{.key = "group_order", .label = "256×256 组顺序",
+                                          .type = ParamType::Enum, .def = int64_t(-1),
+                                          .choices = {{"auto", int64_t(-1)},
+                                                      {"scanline", int64_t(0)},
+                                                      {"center", int64_t(1)}},
+                                          .advanced = true,
+                                          .tooltip = "256×256 区域在码流中的存放顺序"
+                                                     "（JXL_ENC_FRAME_SETTING_GROUP_ORDER，jxl/encode.h:210-214）："
+                                                     "-1=编码器默认、0=扫描线顺序、1=中心优先（影响渐进渲染），"
+                                                     "不改变画质。VarDCT/Modular 通用。",
                                           .visible = {}, .locked = {}},
                               } },
                     TechDef{ .id = "modular", .label = "Modular", .lossless_capable = true,
@@ -225,14 +302,16 @@ const std::vector<FormatDef>& static_formats() {
                                           .type = ParamType::Enum, .def = std::string("YCoCg"),
                                           .choices = {{"None", std::string("None")},
                                                       {"YCoCg", std::string("YCoCg")},
-                                                      {"XYB", std::string("XYB")}},
+                                                      {"XYB", std::string("XYB")},
+                                                      {"YCbCr", std::string("YCbCr")}},
                                           .advanced = true,
                                           .tooltip = "色彩变换：头文件分属两个选项——"
                                                      "JXL_ENC_FRAME_SETTING_COLOR_TRANSFORM（-1 默认、"
                                                      "0=XYB、1=none、2=YCbCr，jxl/encode.h:272-277）与 "
                                                      "JXL_ENC_FRAME_SETTING_MODULAR_COLOR_SPACE（-1 默认、"
                                                      "0–41=RCT 索引、6=YCoCg，jxl/encode.h:279-286）；"
-                                                     "无损需可逆变换（None 或 YCoCg）。",
+                                                     "XYB/None/YCbCr 走前者，YCoCg 走后者；无损需可逆变换"
+                                                     "（None 或 YCoCg），YCbCr 不做事后变换但声明数据为 YCbCr。",
                                           .visible = {}, .locked = {}},
                                  ParamDef{.key = "modular_group_size", .label = "组尺寸",
                                           .type = ParamType::Int, .def = int64_t(-1), .lo = -1,
@@ -250,16 +329,12 @@ const std::vector<FormatDef>& static_formats() {
                                                      "jxl/encode.h:292-297）：-1=默认；0 zero、1 left、"
                                                      "5 gradient … 15 mix everything。",
                                           .visible = {}, .locked = {}},
-                                 ParamDef{.key = "modular_palette", .label = "调色板",
-                                          .type = ParamType::Enum, .def = std::string("auto"),
-                                          .choices = {{"auto", std::string("auto")},
-                                                      {"off", std::string("off")},
-                                                      {"on", std::string("on")}},
-                                          .advanced = true,
+                                 ParamDef{.key = "modular_palette_colors", .label = "调色板颜色数上限",
+                                          .type = ParamType::Int, .def = int64_t(-1), .lo = -1,
+                                          .hi = 4096, .step = 1, .choices = {}, .advanced = true,
                                           .tooltip = "调色板（JXL_ENC_FRAME_SETTING_PALETTE_COLORS，"
-                                                     "jxl/encode.h:262-265）：头文件为整数——-1=编码器默认、"
-                                                     "0=关闭、>0=颜色数上限；auto→-1、off→0，on 的阈值"
-                                                     "待裁决。",
+                                                     "jxl/encode.h:262-265）：-1=编码器默认、0=关闭、"
+                                                     ">0=调色板颜色数上限（头文件未规定上限，4096 为 UI 上限）。",
                                           .visible = {}, .locked = {}},
                                  ParamDef{.key = "modular_lossy_palette", .label = "有损调色板",
                                           .type = ParamType::Bool, .def = false, .choices = {}, .advanced = true,
@@ -275,6 +350,67 @@ const std::vector<FormatDef>& static_formats() {
                                                      "jxl/encode.h:329-334）：-1=默认（brob box 取 4）、"
                                                      "0 最快 … 11 最慢；头文件注明其服务 JPEG 重压缩与"
                                                      "元数据 box，与 modular 编码无关。",
+                                          .visible = {}, .locked = {}},
+                                 ParamDef{.key = "responsive", .label = "响应式渐进",
+                                          .type = ParamType::Bool, .def = false, .choices = {},
+                                          .advanced = true,
+                                          .tooltip = "Modular 模式的响应式/渐进编码"
+                                                     "（JXL_ENC_FRAME_SETTING_RESPONSIVE，jxl/encode.h:227-230，"
+                                                     "头文件语义为 modular）；库默认 -1（编码器自选），"
+                                                     "Bool 无法表达 -1。",
+                                          .visible = {}, .locked = {}},
+                                 ParamDef{.key = "channel_colors_global_percent", .label = "全局调色板阈值 %",
+                                          .type = ParamType::Int, .def = int64_t(-1), .lo = -1,
+                                          .hi = 100, .step = 1, .choices = {}, .advanced = true,
+                                          .tooltip = "全图通道调色板阈值（JXL_ENC_FRAME_SETTING_"
+                                                     "CHANNEL_COLORS_GLOBAL_PERCENT，jxl/encode.h:250-254）："
+                                                     "-1=编码器默认、0–100=颜色数低于该百分比时启用全局调色板。",
+                                          .visible = {}, .locked = {}},
+                                 ParamDef{.key = "channel_colors_group_percent", .label = "局部调色板阈值 %",
+                                          .type = ParamType::Int, .def = int64_t(-1), .lo = -1,
+                                          .hi = 100, .step = 1, .choices = {}, .advanced = true,
+                                          .tooltip = "每组通道调色板阈值（JXL_ENC_FRAME_SETTING_"
+                                                     "CHANNEL_COLORS_GROUP_PERCENT，jxl/encode.h:256-260）："
+                                                     "-1=编码器默认、0–100=颜色数低于该百分比时启用局部调色板。",
+                                          .visible = {}, .locked = {}},
+                                 ParamDef{.key = "modular_ma_tree_learning_percent", .label = "MA 树学习比例 %",
+                                          .type = ParamType::Int, .def = int64_t(-1), .lo = -1,
+                                          .hi = 200, .step = 1, .choices = {}, .advanced = true,
+                                          .tooltip = "MA 树学习的像素比例（JXL_ENC_FRAME_SETTING_"
+                                                     "MODULAR_MA_TREE_LEARNING_PERCENT，jxl/encode.h:299-303）："
+                                                     "-1=默认（50）、0=不做 MA 且解码更快、100=全部、>100 亦允许"
+                                                     "（更耗内存）。",
+                                          .visible = {}, .locked = {}},
+                                 ParamDef{.key = "modular_nb_prev_channels", .label = "前序通道属性数",
+                                          .type = ParamType::Int, .def = int64_t(-1), .lo = -1,
+                                          .hi = 11, .step = 1, .choices = {}, .advanced = true,
+                                          .tooltip = "参与 MA 树的前序通道数（JXL_ENC_FRAME_SETTING_"
+                                                     "MODULAR_NB_PREV_CHANNELS，jxl/encode.h:305-311）："
+                                                     "-1=默认、0–11 合法；推荐 0–3。",
+                                          .visible = {}, .locked = {}},
+                                 ParamDef{.key = "resampling", .label = "编码前降采样",
+                                          .type = ParamType::Enum, .def = int64_t(-1),
+                                          .choices = {{"auto", int64_t(-1)},
+                                                      {"1", int64_t(1)},
+                                                      {"2", int64_t(2)},
+                                                      {"4", int64_t(4)},
+                                                      {"8", int64_t(8)}},
+                                          .advanced = true,
+                                          .tooltip = "编码前降采样（JXL_ENC_FRAME_SETTING_RESAMPLING，"
+                                                     "jxl/encode.h:140-146）：-1=编码器自选（库默认，低质量时才"
+                                                     "降采样）、1=不降采样、2/4/8=按倍数降采样并在解码端升采样；"
+                                                     "会降低有效分辨率。VarDCT/Modular 通用。",
+                                          .visible = {}, .locked = {}},
+                                 ParamDef{.key = "group_order", .label = "256×256 组顺序",
+                                          .type = ParamType::Enum, .def = int64_t(-1),
+                                          .choices = {{"auto", int64_t(-1)},
+                                                      {"scanline", int64_t(0)},
+                                                      {"center", int64_t(1)}},
+                                          .advanced = true,
+                                          .tooltip = "256×256 区域在码流中的存放顺序"
+                                                     "（JXL_ENC_FRAME_SETTING_GROUP_ORDER，jxl/encode.h:210-214）："
+                                                     "-1=编码器默认、0=扫描线顺序、1=中心优先（影响渐进渲染），"
+                                                     "不改变画质。VarDCT/Modular 通用。",
                                           .visible = {}, .locked = {}},
                               } } } } },
             .bitdepths = {8, 16},
@@ -309,27 +445,16 @@ const std::vector<FormatDef>& static_formats() {
                                           .type = ParamType::Enum, .def = std::string("lzw"),
                                           .choices = {{"none", std::string("none")},
                                                       {"lzw", std::string("lzw")},
-                                                      {"deflate", std::string("deflate")},
-                                                      {"zstd", std::string("zstd")},
-                                                      {"packbits", std::string("packbits")},
-                                                      {"jpeg", std::string("jpeg")}},
+                                                      {"zip", std::string("zip")},
+                                                      {"ccittrle", std::string("ccittrle")},
+                                                      {"packbits", std::string("packbits")}},
                                           .advanced = false,
                                           .tooltip = "压缩方案（OIIO 属性 compression，"
                                                      "src/tiff.imageio/tiffoutput.cpp:660-673）。OIIO 3.1.14.0 "
-                                                     "输出名表为 none/lzw/zip/ccittrle/packbits"
-                                                     "（tiffoutput.cpp:301-338），deflate 需写成 zip；zstd 不在"
-                                                     "名表、jpeg 被 ENABLE_JPEG_COMPRESSION=0 编译掉"
-                                                     "（tiffoutput.cpp:56,312-314），未知名回退 deflate"
-                                                     "（tiffoutput.cpp:339-344）。库默认 zip。",
-                                          .visible = {}, .locked = {}},
-                                 ParamDef{.key = "quality", .label = "质量（仅 jpeg-in-tiff）",
-                                          .type = ParamType::Int, .def = int64_t(90), .lo = 1,
-                                          .hi = 100, .step = 1, .choices = {}, .advanced = true,
-                                          .tooltip = "JPEG-in-TIFF 质量（TIFFTAG_JPEGQUALITY，"
-                                                     "tiffoutput.cpp:704-709，钳制 1–100）。本 OIIO 构建关闭 "
-                                                     "JPEG 压缩（ENABLE_JPEG_COMPRESSION=0，tiffoutput.cpp:56），"
-                                                     "compression=jpeg 会被改写为 zip（tiffoutput.cpp:664-672）："
-                                                     "M0 无后端，待裁决。compression=jpeg 时可见。",
+                                                     "输出名表：none/lzw/zip/ccittrle/packbits"
+                                                     "（tiffoutput.cpp:301-338）；deflate 是 zip 的别名（OIIO 只"
+                                                     "认 zip）；未知名静默回退 deflate（tiffoutput.cpp:339-344）。"
+                                                     "库默认 zip（tiffoutput.cpp:662），本表默认 lzw。",
                                           .visible = {}, .locked = {}},
                                  ParamDef{.key = "deflate_level", .label = "Deflate 级别",
                                           .type = ParamType::Int, .def = int64_t(6), .lo = 1,
@@ -338,15 +463,7 @@ const std::vector<FormatDef>& static_formats() {
                                                      "tiffoutput.cpp:694-702，钳制 1–9）；也可用 "
                                                      "compression=\"zip:9\" 形式（ImageSpec::"
                                                      "decode_compression_metadata，OpenImageIO/imageio.h:756-760）。"
-                                                     "compression=deflate 时可见。",
-                                          .visible = {}, .locked = {}},
-                                 ParamDef{.key = "zstd_level", .label = "ZStd 级别",
-                                          .type = ParamType::Int, .def = int64_t(9), .lo = 1,
-                                          .hi = 22, .step = 1, .choices = {}, .advanced = true,
-                                          .tooltip = "ZStandard 级别。OIIO 3.1.14.0 的 TIFF 输出既无名表项也"
-                                                     "无对应属性（tiffoutput.cpp:301-338 无 zstd；libtiff 侧有 "
-                                                     "COMPRESSION_ZSTD=50000，tiff.h:216）：M0 无后端，待裁决。"
-                                                     "compression=zstd 时可见。",
+                                                     "compression=zip 时可见。",
                                           .visible = {}, .locked = {}},
                                  ParamDef{.key = "predictor", .label = "预测器",
                                           .type = ParamType::Enum, .def = int64_t(2),
@@ -359,6 +476,23 @@ const std::vector<FormatDef>& static_formats() {
                                                      "HORIZONTAL/FLOATINGPOINT=1/2/3，tiff.h:304-306）。OIIO 在 "
                                                      "lzw/deflate 且 8/16bit 时自动使用 horizontal"
                                                      "（tiffoutput.cpp:677-693）。",
+                                          .visible = {}, .locked = {}},
+                                 ParamDef{.key = "tiff_tile_width", .label = "Tile 宽度",
+                                          .type = ParamType::Int, .def = int64_t(0), .lo = 0,
+                                          .hi = 4096, .step = 16, .choices = {}, .advanced = true,
+                                          .tooltip = "TIFF tile 宽度（OIIO 经 ImageSpec::tile_width 设置，"
+                                                     "writer 无 tiff:tilewidth 属性；tiffoutput.cpp:480-487,"
+                                                     "575-577）：0=条带扫描 strip（默认）、>0 时须为 16 的倍数"
+                                                     "且 tile 高同为 16 的倍数，否则 writer 直接报错"
+                                                     "（tiffoutput.cpp:481-485）；4096 为 UI 上限。",
+                                          .visible = {}, .locked = {}},
+                                 ParamDef{.key = "tiff_tile_height", .label = "Tile 高度",
+                                          .type = ParamType::Int, .def = int64_t(0), .lo = 0,
+                                          .hi = 4096, .step = 16, .choices = {}, .advanced = true,
+                                          .tooltip = "TIFF tile 高度（OIIO 经 ImageSpec::tile_height 设置，"
+                                                     "writer 无 tiff:tileheight 属性；tiffoutput.cpp:480-487,"
+                                                     "575-577）：0=条带扫描 strip（默认）、>0 时须与 tile 宽"
+                                                     "同为 16 的倍数（tiffoutput.cpp:481-485）；4096 为 UI 上限。",
                                           .visible = {}, .locked = {}},
                               } } } } },
             .bitdepths = {8, 16},
@@ -414,11 +548,12 @@ const std::vector<FormatDef>& static_formats() {
                                                      "photo 预设 80（src/enc/config_enc.c）。",
                                           .visible = {}, .locked = {}},
                                  ParamDef{.key = "filter_strength", .label = "去噪滤波",
-                                          .type = ParamType::Int, .def = int64_t(20), .lo = 0,
+                                          .type = ParamType::Int, .def = int64_t(30), .lo = 0,
                                           .hi = 100, .step = 1, .choices = {}, .advanced = true,
                                           .tooltip = "去块滤波强度（WebPConfig::filter_strength，"
                                                      "webp/encode.h:114）：0=关闭、100=最强；库默认 60、"
-                                                     "photo 预设 30（src/enc/config_enc.c），catalog 默认 20。",
+                                                     "photo 预设 30（src/enc/config_enc.c）；本表默认 30"
+                                                     "（preset=photo 的生效值），0 时 filter_type 无影响。",
                                           .visible = {}, .locked = {}},
                                  ParamDef{.key = "autofilter", .label = "自动滤波",
                                           .type = ParamType::Bool, .def = false, .choices = {},
@@ -431,6 +566,94 @@ const std::vector<FormatDef>& static_formats() {
                                           .hi = 10, .step = 1, .choices = {}, .advanced = true,
                                           .tooltip = "熵分析通道数（WebPConfig::pass，webp/encode.h:125，"
                                                      "范围 1–10）；库默认 1，增加可略提升压缩率但更慢。",
+                                          .visible = {}, .locked = {}},
+                                 ParamDef{.key = "filter_sharpness", .label = "滤波锐度",
+                                          .type = ParamType::Int, .def = int64_t(0), .lo = 0,
+                                          .hi = 7, .step = 1, .choices = {}, .advanced = true,
+                                          .tooltip = "滤波锐度（WebPConfig::filter_sharpness，webp/encode.h:115，"
+                                                     "0=最锐 … 7=最钝）；库默认 0、photo 预设 3"
+                                                     "（src/enc/config_enc.c）；仅 filter_strength>0 或 "
+                                                     "autofilter 时生效。",
+                                          .visible = {}, .locked = {}},
+                                 ParamDef{.key = "filter_type", .label = "滤波类型（强/简）",
+                                          .type = ParamType::Bool, .def = true, .choices = {},
+                                          .advanced = true,
+                                          .tooltip = "滤波类型（WebPConfig::filter_type，webp/encode.h:116-117）："
+                                                     "false=simple(0)、true=strong(1，U/V 也滤波)；库默认 1；"
+                                                     "仅 filter_strength>0 或 autofilter 时生效。",
+                                          .visible = {}, .locked = {}},
+                                 ParamDef{.key = "segments", .label = "段数",
+                                          .type = ParamType::Int, .def = int64_t(4), .lo = 1,
+                                          .hi = 4, .step = 1, .choices = {}, .advanced = true,
+                                          .tooltip = "最大分段数（WebPConfig::segments，webp/encode.h:112，"
+                                                     "[1..4]）；库默认 4，photo 预设 4、text 预设 2"
+                                                     "（src/enc/config_enc.c）。",
+                                          .visible = {}, .locked = {}},
+                                 ParamDef{.key = "alpha_compression", .label = "Alpha 压缩",
+                                          .type = ParamType::Bool, .def = true, .choices = {},
+                                          .advanced = true,
+                                          .tooltip = "Alpha 平面压缩（WebPConfig::alpha_compression，"
+                                                     "webp/encode.h:119-120）：true=WebP 无损压缩(1)、false=不压缩(0)；"
+                                                     "库默认 1；作用于有损路径的 Alpha 编码（src/enc/alpha_enc.c:385）。",
+                                          .visible = {}, .locked = {}},
+                                 ParamDef{.key = "alpha_filtering", .label = "Alpha 预测滤波",
+                                          .type = ParamType::Int, .def = int64_t(1), .lo = 0,
+                                          .hi = 2, .step = 1, .choices = {}, .advanced = true,
+                                          .tooltip = "Alpha 预测滤波（WebPConfig::alpha_filtering，"
+                                                     "webp/encode.h:121-122）：0=none、1=fast（库默认）、2=best；"
+                                                     "头文件文档值为 0–2（WebPValidateConfig 仅校验 ≥0）。",
+                                          .visible = {}, .locked = {}},
+                                 ParamDef{.key = "alpha_quality", .label = "Alpha 质量",
+                                          .type = ParamType::Int, .def = int64_t(100), .lo = 0,
+                                          .hi = 100, .step = 1, .choices = {}, .advanced = true,
+                                          .tooltip = "Alpha 平面质量（WebPConfig::alpha_quality，"
+                                                     "webp/encode.h:123-124）：0=最小体积 … 100=无损（库默认 100）。",
+                                          .visible = {}, .locked = {}},
+                                 ParamDef{.key = "partitions", .label = "Token 分区数 log2",
+                                          .type = ParamType::Int, .def = int64_t(0), .lo = 0,
+                                          .hi = 3, .step = 1, .choices = {}, .advanced = true,
+                                          .tooltip = "Token 分区数（WebPConfig::partitions，webp/encode.h:131-132，"
+                                                     "log2 值 [0..3]）；库默认 0（更易渐进解码）。",
+                                          .visible = {}, .locked = {}},
+                                 ParamDef{.key = "partition_limit", .label = "分区退化上限",
+                                          .type = ParamType::Int, .def = int64_t(0), .lo = 0,
+                                          .hi = 100, .step = 1, .choices = {}, .advanced = true,
+                                          .tooltip = "为满足 512k 预测模式编码上限允许的质量退化"
+                                                     "（WebPConfig::partition_limit，webp/encode.h:133-135）："
+                                                     "0=不退化（库默认）… 100=最大退化。",
+                                          .visible = {}, .locked = {}},
+                                 ParamDef{.key = "preprocessing", .label = "预处理滤波",
+                                          .type = ParamType::Int, .def = int64_t(0), .lo = 0,
+                                          .hi = 7, .step = 1, .choices = {}, .advanced = true,
+                                          .tooltip = "预处理滤波（WebPConfig::preprocessing，webp/encode.h:129-130）："
+                                                     "0=none（库默认）、1=segment-smooth、2=伪随机抖动，按位组合至 7"
+                                                     "（WebPValidateConfig 允许 0–7）。",
+                                          .visible = {}, .locked = {}},
+                                 ParamDef{.key = "qmin", .label = "最小量化因子",
+                                          .type = ParamType::Int, .def = int64_t(0), .lo = 0,
+                                          .hi = 100, .step = 1, .choices = {}, .advanced = true,
+                                          .tooltip = "量化因子下限（WebPConfig::qmin，webp/encode.h:153）；"
+                                                     "库默认 0，须满足 qmin≤qmax（WebPValidateConfig）。",
+                                          .visible = {}, .locked = {}},
+                                 ParamDef{.key = "qmax", .label = "最大量化因子",
+                                          .type = ParamType::Int, .def = int64_t(100), .lo = 0,
+                                          .hi = 100, .step = 1, .choices = {}, .advanced = true,
+                                          .tooltip = "量化因子上限（WebPConfig::qmax，webp/encode.h:154）；"
+                                                     "库默认 100，须满足 qmin≤qmax（WebPValidateConfig）。",
+                                          .visible = {}, .locked = {}},
+                                 ParamDef{.key = "emulate_jpeg_size", .label = "模拟 JPEG 体积",
+                                          .type = ParamType::Bool, .def = false, .choices = {},
+                                          .advanced = true,
+                                          .tooltip = "重映射压缩参数以贴近同质量 JPEG 体积"
+                                                     "（WebPConfig::emulate_jpeg_size，webp/encode.h:136-139）；"
+                                                     "库默认 false；有损路径。",
+                                          .visible = {}, .locked = {}},
+                                 ParamDef{.key = "low_memory", .label = "低内存模式",
+                                          .type = ParamType::Bool, .def = false, .choices = {},
+                                          .advanced = true,
+                                          .tooltip = "降低内存占用（WebPConfig::low_memory，webp/encode.h:141，"
+                                                     "代价是更多 CPU）；库默认 false；作用于有损 VP8 路径"
+                                                     "（src/enc/webp_enc.c:119）。",
                                           .visible = {}, .locked = {}},
                               } },
                     TechDef{ .id = "lossless", .label = "Lossless", .lossless_capable = true,
@@ -455,6 +678,14 @@ const std::vector<FormatDef>& static_formats() {
                                           .hi = 6, .step = 1, .choices = {}, .advanced = true,
                                           .tooltip = "质量/速度权衡（WebPConfig::method，webp/encode.h:104）："
                                                      "0 最快 … 6 最好；WebPConfigLosslessPreset(6) 亦取 4。",
+                                          .visible = {}, .locked = {}},
+                                 ParamDef{.key = "near_lossless", .label = "近无损强度",
+                                          .type = ParamType::Int, .def = int64_t(100), .lo = 0,
+                                          .hi = 100, .step = 1, .choices = {}, .advanced = true,
+                                          .tooltip = "近无损（WebPConfig::near_lossless，webp/encode.h:143-144）："
+                                                     "0=最大颜色改动 … 100=关闭（库默认 100）；<100 时启用 VP8L "
+                                                     "近无损预处理、输出非严格无损（src/enc/vp8l_enc.c:"
+                                                     "1105-1117,1572-1577）。",
                                           .visible = {}, .locked = {}},
                               } } } } },
             .bitdepths = {8},

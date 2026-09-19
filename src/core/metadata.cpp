@@ -318,6 +318,8 @@ void log_makernote(const Exiv2::ExifData& exif, std::string_view stage) {
 // FileResult.warnings). Every call site passes a mutable plan object (the build_plan() result
 // stored in a local, or a temporary) — never a declared-const object — so writing through the
 // cast is well defined there. Documented in the M1-T5 report as `next-needed` for T8.
+// TODO(M2): give the write paths an explicit warnings out-parameter (or a result struct) so this
+//           const_cast channel can be dropped.
 void push_plan_warning(const MetadataPlan& plan, WarningKind kind, std::string detail) {
     auto& mutable_plan = const_cast<MetadataPlan&>(plan);
     mutable_plan.warnings.push_back(Warning{kind, std::move(detail)});
@@ -659,6 +661,9 @@ std::string write_metadata_exiv2(const std::filesystem::path& out_file, const Me
 
     if (is_png) {
         // R1: PNG eXIf did not land → mirror the key EXIF fields into XMP and rewrite.
+        // TODO(M2): PNG metadata stays unimplemented while exiv2 is built without zlib; either
+        //           enable EXV_HAVE_LIBZ in the vcpkg exiv2 port or write the PNG chunks through
+        //           an OIIO-side writer (see the M1-T5 report, R1).
         Exiv2::XmpData mirrored = plan.xmp;
         const std::size_t mirrored_n = detail_mirror_key_exif_to_xmp(plan.exif, mirrored);
         if (mirrored_n > 0) {

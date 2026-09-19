@@ -29,6 +29,9 @@ struct EncodeResult {
     uint64_t bytes = 0;
     std::vector<Warning> warnings;
     Timing t;
+    // M1 (T7, main-dialogue ruling): non-empty = encode failed (bytes is then 0).
+    // Additive field only; all preceding members and their semantics are unchanged.
+    std::string error;
 };
 
 class IEncoder {

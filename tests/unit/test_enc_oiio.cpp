@@ -517,10 +517,23 @@ void test_bitdepth_probe() {
           "'" + avif_svt + "'");
     check(avif_aom == "8" || avif_aom == "8,10" || avif_aom == "8,10,12", "probe/avif-aom-format",
           "'" + avif_aom + "'");
-    check(avif_svt.find("10") != std::string::npos, "probe/avif-svt-10bit",
-          "expected 10-bit support, got '" + avif_svt + "'");
-    check(avif_aom.find("10") != std::string::npos, "probe/avif-aom-10bit",
-          "expected 10-bit support, got '" + avif_aom + "'");
+    // T7e: after T7b's x265 multilib build every libheif backend must cover 8 and 10 bits, and
+    // at least one of them must expose 12 bits (measured: x265 + libaom). Weaker than pinning
+    // each backend so a future plugin change does not produce a misleading failure.
+    const std::pair<const char*, std::string> depths[] = {{"heif/x265", heif_x265},
+                                                          {"avif/svt-av1", avif_svt},
+                                                          {"avif/libaom", avif_aom}};
+    for (const auto& [name, value] : depths) {
+        check(value.find("8") != std::string::npos, std::string("probe/") + name + "/8bit",
+              "expected 8-bit support, got '" + value + "'");
+        check(value.find("10") != std::string::npos, std::string("probe/") + name + "/10bit",
+              "expected 10-bit support, got '" + value + "'");
+    }
+    check(heif_x265.find("12") != std::string::npos || avif_svt.find("12") != std::string::npos ||
+              avif_aom.find("12") != std::string::npos,
+          "probe/12bit-available", "no libheif backend exposes 12-bit: heif/x265='" + heif_x265 +
+                                       "' avif/svt-av1='" + avif_svt + "' avif/libaom='" + avif_aom +
+                                       "'");
     check(pp::probe_bitdepth_support("png", "oiio").empty(), "probe/non-libheif-empty",
           "png should probe to an empty string");
     // cached second call must agree

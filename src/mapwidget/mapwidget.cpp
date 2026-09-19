@@ -64,6 +64,7 @@ constexpr qint64 kBytesPerMb = 1024 * 1024;
 constexpr int kDefaultCacheMb = 64;      // frozen default byte budget
 constexpr int kRequestTimeoutMs = 8000;  // frozen: request timeout 8 s
 constexpr int kCopyrightPointSize = 6;   // frozen: 6 pt credit label
+constexpr int kSearchZoomFloor = 12;     // ruling 2026-09-19: a search hit zooms to >= 12
 constexpr int kMarkerRadius = 7;
 constexpr int kMarkerArm = 5;
 
@@ -122,8 +123,8 @@ struct MapWidget::Impl {
     };
 
     struct CacheEntry {
-        QByteArray bytes;
         QPixmap pixmap;
+        qint64 footprint = 0;  // decoded bytes charged against the budget
         std::list<TileKey>::iterator lru_pos;
     };
 
@@ -209,7 +210,7 @@ struct MapWidget::Impl {
             lru.pop_back();
             const auto it = cache.find(oldest);
             if (it != cache.end()) {
-                cache_bytes -= it->bytes.size();
+                cache_bytes -= it->footprint;
                 cache.erase(it);
             }
         }
@@ -221,18 +222,22 @@ struct MapWidget::Impl {
             note_failure();  // undecodable payload = failed tile, stays grey
             return;
         }
+        // Ruling 2026-09-19: the cache keeps decoded pixmaps only (the compressed bytes are
+        // dropped after decoding) and the budget is charged for the decoded footprint, so
+        // set_cache_mb() really bounds process memory: 64 MB ~= 256 tiles of 256x256 ARGB32.
+        const qint64 footprint = qint64(pixmap.width()) * qint64(pixmap.height()) * 4;
         const auto existing = cache.find(key);
         if (existing != cache.end()) {
-            cache_bytes -= existing->bytes.size();
+            cache_bytes -= existing->footprint;
             lru.erase(existing->lru_pos);
             cache.erase(existing);
         }
         lru.push_front(key);
         CacheEntry entry;
-        entry.bytes = data;
         entry.pixmap = pixmap;
+        entry.footprint = footprint;
         entry.lru_pos = lru.begin();
-        cache_bytes += data.size();
+        cache_bytes += footprint;
         cache.insert(key, entry);
         evict_to_budget();
     }
@@ -715,7 +720,9 @@ void MapWidget::search_select(int index) {
     }
     const SearchResult result = d.results[size_t(index)];  // WGS-84
     set_marker(result.lat, result.lon);
-    center_on(result.lat, result.lon);
+    // Ruling 2026-09-19: locating a search hit at country-level zoom carries no information,
+    // so raise the zoom to at least kSearchZoomFloor (never lower an already closer view).
+    center_on(result.lat, result.lon, std::max(d.zoom, kSearchZoomFloor));
     emit point_selected(result.lat, result.lon);
 }
 

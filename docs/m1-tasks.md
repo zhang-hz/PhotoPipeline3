@@ -46,6 +46,8 @@
 | | T12 | UI：运行页 + platform/paths + settings.ini | T8 |
 | | T13 | UI：地图控件 + 瓦片提供方 + GCJ-02 | T12 |
 | **W6** | T14 | 收口：UI 手动走查 + offscreen 冒烟 + TODO(M2) 汇总 + M1 报告 | 全部 |
+| **修复** | T5b | 依赖修复：exiv2 打开 zlib/PNG（R1）——feature 优先、overlay 兜底 | T5 | ✅ `6e98ca7`（Path A：port 自带 `png` feature，一行改动 + 17s 重装） |
+| | T7b | 依赖修复：x265 高比特深度（10bit HEIF，R19/"禁止精简"）——同样 feature 优先 | T7 |
 
 ### 2.2 执行编排（主对话控制，执行者只关心自己的任务）
 
@@ -596,7 +598,7 @@ std::string probe_bitdepth_support(std::string_view format_id, std::string_view 
 | E5 | ICC：`meta.icc_profile` 非空则嵌入（jpegli ICC marker / libjxl ICC / libheif nclx+ICC / WebP ICCP chunk / OIIO spec attribute） |
 | E6 | 色彩：不得做任何额外像素处理（无抖动、无锐化、无自动白平衡）；float→整型标准舍入 |
 | E7 | 元数据：JXL 用 box（Exif/xml，**顺序 UseBoxes → AddBox(4 字节 TIFF offset + blob) → CloseBoxes → CloseInput**）；HEIF/AVIF 用 `heif_context_add_exif_metadata`/`add_XMP_metadata`（必须在 `heif_context_write` 前）；JPEG/WebP/PNG/TIFF/BMP 不写 EXIF/XMP（由 §3.7 后写路径负责），但 ICC 由编码器写 |
-| E8 | 失败返回 `EncodeResult` + `error` 供上层；不得抛异常穿透（内部 try/catch） |
+| E8 | 失败返回 `EncodeResult`：**`error` 非空且 `bytes==0`**；不得抛异常穿透（内部 try/catch）〔**M1 加性修订（主对话裁定）**：`EncodeResult` 追加 `std::string error;`——由 T7 执行编辑并独立提交；警告列表**不得**用于表达"编码失败"〕 |
 | E9 | 参数读取一律 `param_int/float/bool/str`，缺失用表内默认；**未识别参数忽略并记 warning**（不报错） |
 
 **参数映射表（T6/T7 必读；键名与 M0 定稿 78 条参数表一致）**
@@ -610,6 +612,13 @@ libwebp（`enc_webp.cpp`）：`WebPConfigInit` → 应用参数 → `WebPValidat
 libheif（`enc_heif.cpp`）：`heif_context_alloc` → `heif_context_get_encoder_for_format(ctx, heif_compression_HEVC|AV1)` → 参数经 `heif_encoder_set_parameter_*`（**键名以运行时内省为准**，不得硬编码猜测）→ `heif_image_create` + `heif_image_add_plane`（Y/Cb/Cr，含 alpha 时加 `heif_channel_Alpha`；位深 8/10 由 plane 位深决定）→ `heif_context_add_exif_metadata`/`add_XMP_metadata` → `heif_context_write`。后端选择：`svt-av1`（`heif_encoder_descriptor_get_id_name` 含 "svt"）与 `libaom`（含 "aom"）。**10bit 探测**：若编码器不支持 10bit plane（`heif_image_add_plane` 失败或编码报错）→ error 明确说明，UI 层据此裁剪位深选项。
 
 OIIO（`enc_oiio.cpp`）：`ImageOutput::create(fmt)` + `ImageSpec`（`set_format` 目标位深类型 UINT8/UINT16；PNG 用 `attribute("compressionLevel", v)`；TIFF 用 `attribute("compression", name)`（M0 实测名表：none/lzw/zip/ccittrle/packbits）+ `attribute("tiff:predictor", int)` + `attribute("tiff:zipquality", v)` + tile 走 `spec.tile_width/tile_height`（**必须 16 的倍数且非 0**，否则上层校验拦截）；BMP 无参数）→ `write_image`。ICC → `spec.attribute("ICCProfile", TypeDesc::UINT8, ...)`。
+
+> **T7 中期裁定（主对话，冻结）**：
+> ① **10bit 能力（R19 初值）**：`heif/x265 = "8"`（x265 为 8bit 构建）；`avif/svt-av1` 与 `avif/libaom = "8,10"`。**静态 `FormatDef.bitdepths` 不改**——运行期以 `probe_bitdepth_support()` 与静态表**取交集**作为可选位深：T8 请求不支持位深 → 明确 error（不静默降档）；T10 UI 隐藏不可用项。x265 高比特深度属"禁止精简依赖"范畴 → 主对话另派 **T7b** 依赖任务尝试恢复（feature 优先、overlay 兜底），T7 只需把探测做准。
+> ② **AVIF 10bit + alpha**：`svt-av1` 编码失败（插件错误）、`libaom` 成功 → 保留双后端，**不做自动后端切换**（用户显式选择优先）；错误串必须点名 `libaom`（如 `"svt-av1 does not support 10-bit with alpha; use backend libaom"`）；T10 在"10bit + 源含 alpha"时预选/提示 libaom。
+> ③ **`introspect_backends` 形态**：每后端一个合成 `TechDef`（`id="runtime"`、`label=heif_encoder_descriptor_get_name()`、`lossless_capable` 取描述符能力、`params` = 运行时 ParamDef 转换、默认值取 live 值）——**批准**。实测参数数：x265=7、svt=10、aom=15。
+> ④ **x265 无线程参数**：libheif 的 x265 插件未暴露 `threads` → E2"编码器内部线程全关"对 HEIF **不可实现**：记 api-delta + `TODO(M2)`，M1 接受 x265 默认线程池。
+> ⑤ EXIF 注入用**裸 TIFF blob**（无需 `Exif\0\0` 前缀），必须在 `heif_context_write` 之前——已实测通过（.heic/.avif 均可读回）。
 
 ### 3.9 `src/core/pipeline.h`（T8）
 
@@ -1000,7 +1009,7 @@ std::vector<std::string> registered_backends(std::string_view format_id);
 - **验收**：`ctest -R "metadata|timeshift"` 全绿。
 
 > **T5 落地口径（主对话确认，冻结）**：
-> ① **PNG 元数据（R1 落定）**：本环境 exiv2 0.28.8 未编译 zlib（`EXV_HAVE_LIBZ` 未定义）→ PNG 未注册为图像类型，EXIF/XMP **均无法写入**；M1 处理 = 输出 PNG 时 `Warning{MetadataDropped, "png metadata dropped: exiv2 has no png support"}`（**非致命**，像素完好），`format_supports_metadata_only("png")` 返回 **false**；主对话已另派 **T5b** 修复 zlib/PNG 支持——成功则本分支自动转为可写路径（T5 的镜像/丢弃分支保留作降级兜底）；
+> ① **PNG 元数据（R1 已闭合，T5b 修复 `6e98ca7`）**：真因是 exiv2 未编译 zlib；`vcpkg.json` 的 exiv2 features 加 `png`（port 自带 `png → zlib` feature，portfile:15 映射 `EXIV2_ENABLE_PNG`；实测 `exv_conf.h:52` 由 `/* #undef EXV_HAVE_LIBZ */` 变为 `#define EXV_HAVE_LIBZ`）→ PNG 已注册为图像类型（探针：写 `Exif.Image.Artist` 后读回一致，文件 461→473 B）。**故 PNG 现在走正常 Exiv2 后写路径**；降级分支（`Warning{MetadataDropped, "png metadata dropped..."}` + 关键字段镜像 XMP）保留作兜底，仅在能力缺失时可达。`format_supports_metadata_only("png")` 应为 **true**（T5c 复核）；exiv2 静态闭包新增 `-lz`，且其 CMake config 自带 `find_dependency(ZLIB)` → 下游无需改 CMake；
 > ② XMP key 归一化：`XmpKey` 只接受**点号**形式（`Xmp.xmp.CreateDate`），冒号形式抛 `Invalid key` → 实现须归一化（两种写法都可输入）；
 > ③ `Exifdatum::setValue` 类型不符**不抛异常**（返回非 0 且清空值）→ 必须检查返回码，失败恢复旧值并记 `errors`；
 > ④ TIFF `clearExifData()` 仍保留 12 个结构标签（否则文件损坏）→ "剥除后 exif/xmp 为空"的断言只在 JPEG/WebP 上成立；
@@ -1043,7 +1052,7 @@ std::vector<std::string> registered_backends(std::string_view format_id);
   - PNG 输入：`read_metadata` 在本构建必返非空 `error`（**不致命**）→ 继续用空元数据走流程，ICC/Orientation 从 T3 的 OIIO spec 取（待 T5b 修复后此条自动失效）；
   - JXL/HEIF/AVIF 注入用 `make_payloads`（`exif_blob` = TIFF blob，JXL 自行加 4 字节 offset 头，§3.8 E7）；
   - `sync_file_mtime(out, plan.datetime_original)`（空串 = 不动，本地时区解释）；
-  - **`format_supports_metadata_only()` 判定**：JPEG/TIFF/WebP = true；PNG 见 T5b 结论（修复前 false）；JXL/HEIF/AVIF = false（JXL 的 box 替换路径**M1 不实现**，记 TODO(M2)——设计 §5.5 列为支持，属 M1 有意收窄）。
+  - **`format_supports_metadata_only()` 判定**：JPEG/TIFF/WebP = true；**PNG = true**（T5b 已修复 zlib/PNG，T5c 复核）；JXL/HEIF/AVIF = false（JXL 的 box 替换路径**M1 不实现**，记 TODO(M2)——设计 §5.5 列为支持，属 M1 有意收窄）。
 - **首次端到端鼓点（M1 第一个大关口）**：
   1. `--dev tests/golden/base/*.png --out .cache/out --format jxl --workers 1` 全绿；
   2. 27 fixture × 8 格式矩阵跑完（`.cache/out/<fmt>/`），**零崩溃**，逐格式统计成功/失败（损坏负例与 CMYK 预期失败）；
@@ -1121,7 +1130,7 @@ std::vector<std::string> registered_backends(std::string_view format_id);
 - D4：M0 遗留 10 处 `TODO(M0-CD)` 注释（`tools/pp_linkprobe.cpp` 4 处、`tools/pp_mkfixtures.cpp` 6 处）→ 核对后删除或改 `TODO(M2)`。
 - D7/R18：`CMakeLists.txt` 的 ccache 探测加可用性回退（探测失败则不设 launcher）→ **归 T14**（§2.3 未授权 T1 做，T1 已确认未做）。
 - app 版本字面量 `"0.1.0"`（logger.cpp）与 `project(... VERSION)` 的同步：M1 手工一致；M2 引入生成版本头（T1 已打 TODO(M2)）。
-- R1 尾巴：**已定位（T5）**——真因不是 eXIf chunk 支持，而是 **exiv2 未编译 zlib** → PNG 未注册为图像类型（EXIF/XMP 全不可写、PNG 仅元数据模式必失败）。T5 已实现降级（`Warning{MetadataDropped}` 非致命 + `format_supports_metadata_only("png")=false`）；**T5b 修复依赖后转为可写路径**，届时由 T14 复核 PNG 元数据往返与仅元数据模式。
+- R1：**已闭合（T5 → T5b）**——真因不是 eXIf chunk，而是 **exiv2 未编译 zlib** → PNG 未注册为图像类型。`vcpkg.json` exiv2 features 加 `png`（port 自带 feature，无需 overlay）→ 探针验证 PNG 元数据写入/读回成功、15/15 测试无回归。T5c 复核降级分支与仅元数据模式后，PNG 全路径恢复；exiv2 config 自带 `find_dependency(ZLIB)`。
 - R11：float→int 双重转换（T5/T6 验收时确认只在 codecs 层转一次）。
 - R13 尾：**已闭合（T3 实测）**——OIIO 3.1.14 对 JXL 源的色彩描述暴露为 `CICP int[4]`（实测 1,13,0,1 = BT.709/sRGB 传递）+ `ICCProfile uint8[536]` + `oiio:ColorSpace="srgb_rec709_scene"`，无 `jxl:*` 属性；M1 的"源 profile 优先级"（嵌入 ICC → 格式原生描述 → 假定 sRGB）据此可实现（CICP⇄lcms2 映射留 M2，M1 用 ICC 优先，无 ICC 时按 `oiio:ColorSpace` 提示 + 假定 sRGB）。
 - R19（新增，T7 产出）：HEIF/AVIF 10bit 实际能力结论。

@@ -110,6 +110,8 @@ JpegliParams read_params(const ParamSet& s) {
 // line. WarningKind (M0 PP-FROZEN types.h) has no "unknown parameter" member and
 // warnings must not carry encoder failures, so the log is the faithful channel;
 // see api-deltas in the report.
+// TODO(M2): expose unknown-parameter warnings through EncodeResult.warnings once
+// types.h gains a matching WarningKind (M0 frozen → needs a main-dialogue ruling).
 void warn_unknown_params(const ParamSet& s) {
     for (const auto& [key, value] : s) {
         (void)value;

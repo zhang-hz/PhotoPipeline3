@@ -239,6 +239,9 @@ private:
 
         // Lossless comes from the reserved key (§3.4); a modular parameter set
         // (built from the modular tech) also selects the Modular path.
+        // TODO(M2): EncodeRequest carries no tech_id, so "Modular" is inferred
+        // from __lossless plus the presence of modular-only keys; give the
+        // encoder interface an explicit tech channel instead.
         const bool lossless = param_bool(params, "__lossless", false);
         bool modular_params = false;
         for (const JxlParamMap& m : kFrameSettings) {

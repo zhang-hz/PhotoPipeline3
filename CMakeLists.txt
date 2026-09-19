@@ -73,6 +73,11 @@ add_executable(photopipeline src/main.cpp ${PP_UI_SOURCES})
 target_link_libraries(photopipeline PRIVATE $<LINK_LIBRARY:WHOLE_ARCHIVE,pp_core>
     Qt6::Widgets Qt6::Network)
 target_compile_definitions(photopipeline PRIVATE PP_M0_SMOKE)  # M1 removes
+# dev harness 接线（M1-T8，§3.15 裁定）：option 已存在但此前无 target 消费 →
+# 发布构建（不带 -DPP_BUILD_DEV=ON）不含 `--dev` 代码路径；鼓点/矩阵/规模用 -DPP_BUILD_DEV=ON。
+if(PP_BUILD_DEV)
+  target_compile_definitions(photopipeline PRIVATE PP_BUILD_DEV)
+endif()
 
 # 5) 既有 M0 target（pp_linkprobe / pp_mkfixtures / pp_spikes / 其 ctest 条目）保持不变
 #    新增工具按需显式 add_executable（T8 加 pp_verify；其它工具不得改动此块）
@@ -102,3 +107,10 @@ add_test(NAME spike_f    COMMAND pp_spikes f --golden-root ${CMAKE_SOURCE_DIR}/t
 set_tests_properties(spike_f PROPERTIES SKIP_RETURN_CODE 77)
 add_test(NAME offscreen  COMMAND ${CMAKE_COMMAND} -E env QT_QPA_PLATFORM=offscreen $<TARGET_FILE:photopipeline>)
 set_tests_properties(offscreen PROPERTIES TIMEOUT 30)
+
+# 8) pp_verify（M1-T8；§2.3 所有者序列 T8 的唯一 target 增量）
+#    断言 tests/golden/SCHEMA.md 的 pixel/metadata/warnings 三态；--selftest 不需语料。
+add_executable(pp_verify tools/pp_verify.cpp)
+# 静态库自注册：whole-archive 拉入编码器 TU（T7c）
+target_link_libraries(pp_verify PRIVATE $<LINK_LIBRARY:WHOLE_ARCHIVE,pp_core>)
+add_test(NAME verify_selftest COMMAND pp_verify --selftest)

@@ -265,6 +265,7 @@ public:
     // pass pp::introspect_backends(fmt.id); for others pass fmt.backends.
     ParamForm(const pp::FormatDef& fmt, std::vector<pp::BackendDef> backends,
               QWidget* parent = nullptr);
+    ~ParamForm();   // M1b-U3: +1 line vs §2.6 frozen text (moc needs a complete Impl; see report)
 
     void set_selection(const FormSelection& sel);   // programmatic (no signal)
     FormSelection selection() const;
@@ -295,6 +296,15 @@ private:
 6. `values()`：工作集去掉 `__` 前缀键的拷贝。`set_values()`：同 key 同类型才应用（int64/double 互不容忍，枚举按 choice value 匹配）；随后重算谓词 + `●`。
 7. 信号：用户操作（下拉/勾选/spin 改值）→ `changed()`；后端/技术/无损被用户改变 → 先 `selection_changed` 再 `changed()`。`set_selection/set_values` 不发信号。
 8. heif/avif（运行时内省后端）：单一 "runtime" 技术 → 技术下拉隐藏；参数全部来自内省 TechDef；`lossless` 复选框按描述符 `lossless_capable` 出现。
+
+**U3 落地口径（主对话批准 2026-09-19，冻结；U5/U10 必读）**：
+- **冻结头修订 v1.1**：§2.6 类体在构造函数后加 `~ParamForm();`（Qt pimpl + moc 硬性要求：moc 的 `qt_incomplete_metaTypeArray` 强制实例化析构，Impl 不完整即编译错；兄弟冻结头均带析构，原 §2.6 为遗漏）。上文冻结块已同步该行，与 `src/ui/paramform.h` 逐字节一致。
+- **无损复选框可见条件（§2.6 条 1 勘误）**：显示 ⇔ **当前后端存在任一 lossless_capable 技术**（原"当前技术 lossless_capable"字面会使 jxl 默认 vardct 时复选框永远不可达，与条 2 矛盾）。
+- **heif/avif 参数默认值来源**：`pp::default_params/apply_locks` 只查静态表（内省格式 techs 为空）→ 生效 backend/tech 与静态表键集合一致时走 `default_params`，否则用调用方传入 BackendDef 的 `TechDef::params` 各自 `def` 建集（内省参数无谓词，`apply_locks` 空转是正确语义）。
+- **取消无损的技术回退**：表单记忆"因勾选无损而自动切走前"的技术，取消时切回（仅撤销自己做的切换；用户手动选技术则清除记忆）。
+- `is_param_visible()` 口径 = 谓词可见 ∧ 高级区搜索过滤（不含折叠未展开/窗口未 show 的屏幕可见性）——U10 冒烟断言在此口径下成立。
+- `set_values` 严格同类型（enum 传 int64 被拒）；`preset_io::param_from_json` 带 schema 时 Float 还原 double → preset 往返无类型损耗（U5 依赖此性质）。
+- 构建事实：并行波次瞬态红时，重试前可删 `<build>/photopipeline_autogen/timestamp` 强制重跑 AUTOMOC（陈旧 timestamp 会漏 moc 新头）。
 
 ### 2.7 `src/ui/thumbnails.h`（U4）
 

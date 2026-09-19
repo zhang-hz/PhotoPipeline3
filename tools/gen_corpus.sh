@@ -30,8 +30,15 @@ fi
 # the task book allows mechanical adaptation of these invocations.
 pattern() {
     local out="$1" channels="$2" chnames="$3" depth="$4" cell="${5:-8}"
+    # TIFF stores a DateTime field that oiiotool otherwise fills with wall-clock time,
+    # which made these fixtures byte-unstable across regenerations (audit D2). Pin it.
+    # `--eraseattrib DateTime` has no effect here; an explicit --attrib does.
+    local stamp=()
+    case "$out" in
+        *.tif) stamp=(--attrib "DateTime" "2024:01:01 00:00:00") ;;
+    esac
     "$OIIOTOOL" --pattern "checker:width=$cell:height=$cell" 64x64 "$channels" \
-        --chnames "$chnames" -d "$depth" -o "$out"
+        --chnames "$chnames" -d "$depth" "${stamp[@]}" -o "$out"
 }
 
 echo "gen_corpus: base/ (OIIOTOOL=$OIIOTOOL)"
@@ -49,9 +56,13 @@ pattern "$GOLDEN_ROOT/base/photo.jpg"   3 "R,G,B"   uint8
 pattern "$GOLDEN_ROOT/base/targa.tga"   3 "R,G,B"   uint8
 pattern "$GOLDEN_ROOT/base/bmp24.bmp"   3 "R,G,B"   uint8
 
-# multi.tif: two subimages.
+# multi.tif: two subimages. The DateTime pin must be applied to EACH subimage before
+# --siappend (an attrib after --siappend only touches the top spec; the subimage
+# timestamps would keep drifting — audit D2).
 "$OIIOTOOL" --pattern checker:width=8:height=8 64x64 3 --chnames R,G,B -d uint8 \
+    --attrib "DateTime" "2024:01:01 00:00:00" \
     --pattern checker:width=4:height=4 32x32 3 --chnames R,G,B -d uint8 \
+    --attrib "DateTime" "2024:01:01 00:00:00" \
     --siappend -o "$GOLDEN_ROOT/base/multi.tif"
 
 # anim.gif: three subimages (animation).

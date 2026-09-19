@@ -16,6 +16,7 @@
 #include <webp/decode.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -23,6 +24,8 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <mutex>
+#include <thread>
 #include <vector>
 
 #include "codecs/encoder.h"
@@ -682,6 +685,53 @@ int main() {
         const std::string text = log.empty() ? std::string() : read_text(log);
         check(text.find("__lossless") == std::string::npos, "e9/reserved_key_excluded",
               "__lossless must not be treated as an unknown parameter");
+    }
+
+    // ------------------- 15) E1: one encoder instance shared by 4 threads --
+    {
+        struct Job {
+            const char* format;
+            const char* backend;
+            const char* tech;
+            const char* ext;
+        };
+        const Job jobs[] = {
+            {"jpeg", "jpegli", "dct", "jpg"},
+            {"jxl", "libjxl", "vardct", "jxl"},
+            {"webp", "libwebp", "lossy", "webp"},
+        };
+        for (const Job& j : jobs) {
+            std::unique_ptr<pp::IEncoder> enc = pp::make_encoder(j.format, j.backend);
+            pp::ParamSet params = params_for(j.format, j.backend, j.tech, false);
+            std::atomic<int> ok{0};
+            std::mutex err_mutex;
+            std::string first_error;
+            std::vector<std::thread> threads;
+            for (int t = 0; t < 4; ++t) {
+                threads.emplace_back([&, t] {
+                    for (int i = 0; i < 2; ++i) {
+                        OIIO::ImageBuf buf = to_buf(rgb);  // per-thread input buffer
+                        const fs::path out = root / ("shared_" + std::to_string(t) + "_" +
+                                                     std::to_string(i) + "." + j.ext);
+                        const pp::EncodeResult res = run_encode(enc.get(), buf, params, out);
+                        if (res.error.empty() && res.bytes > 0) {
+                            ++ok;
+                        } else {
+                            std::lock_guard<std::mutex> lock(err_mutex);
+                            if (first_error.empty()) {
+                                first_error = res.error;
+                            }
+                        }
+                    }
+                });
+            }
+            for (std::thread& th : threads) {
+                th.join();
+            }
+            check(ok.load() == 8, std::string("e1/shared_instance/") + j.format,
+                  std::to_string(ok.load()) + "/8 concurrent encodes succeeded, first error: '" +
+                      first_error + "'");
+        }
     }
 
     pp::log_shutdown();

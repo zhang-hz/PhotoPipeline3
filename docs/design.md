@@ -483,7 +483,7 @@ Windows 构建切换点：**M3**（前三个阶段纯 Linux，用户在 M3 切�
 
 | # | 风险 | 状态 | 缓解 |
 |---|---|---|---|
-| R1 | PNG 的 eXIf chunk 写入（Exiv2 官方矩阵 PNG EXIF="-"） | **开放** | 实现期验证；备选：EXIF 关键字段镜像 XMP + warning |
+| R1 | PNG 的 eXIf chunk 写入（Exiv2 官方矩阵 PNG EXIF="-"） | **已闭合（M1：T5 → T5b → T5c）** | 真因不是 eXIf 支持，而是 **exiv2 未编译 zlib** → PNG 未注册为图像类型；启用 port 自带 `png` feature（→ zlib）后 EXIF（eXIf）+ XMP（iTXt）读写实测通过；仅元数据模式 **IDAT 逐字节一致 + 像素 hash 相等** |
 | R2 | vcpkg feature 缺口：jpegli 必自建 port；libheif svt-av1 feature、OIIO 插件 features、Exiv2 bmff/xmp | **退役（M0 实测）** | 四处缺口全部落地：jpegli 拦截 port（含 libjpegli.a 静态直调层）、libheif[hevc,aom,svt-av1]（overlay 补 feature + WITH_SvtEnc 内置）、OIIO[jpegxl,libheif,webp,gif,tools]（overlay 恢复 FindJXL.cmake + 补静态闭包）、exiv2[bmff,xmp]；linkprobe 9/9 |
 | R3 | jpeg-li 12 位 JPEG | **已关闭** | 查证：仅 8 位输出；16 位源→JPEG 降档警示 |
 | R4 | libheif 插件（x265/SVT/libaom）实际暴露参数面 | **已接受-库面（M0 退役）** | 运行时内省通路实测可用（3 编码器在列）；参数表 heif/avif 走 runtime_introspected |
@@ -492,15 +492,16 @@ Windows 构建切换点：**M3**（前三个阶段纯 Linux，用户在 M3 切�
 | R7 | GCJ-02 逆变换精度 1–2m | 接受 | 照片 GPS 本身米级 |
 | R8 | libheif 动态链接部署（Windows zip / AppImage） | **降级：Linux 段退役（M0 实测）** | x64-linux triplet 实为 static（53 个 .a，唯一 .so=libjpeg.so.62 兼容层）→ Linux 近全静态；仅 Windows 打包段保留本风险 |
 | R9 | 缩略图显示器 ICC | **已决策（复审 S3）** | v1 全平台假定 sRGB；`GetICMProfileW` 留 v1.1；影响面仅缩略图，与转码精度无关 |
-| R10 | Exiv2 无损重写 PNG/TIFF 时压缩数据保真 | **JPEG 段退役（Spike F 双判定 PASS）；PNG/TIFF 段开放** | spike f：SOS 尾字节逐位一致 + 像素 hash 相等；PNG/TIFF 金样断言留 M2 |
-| R11 | OIIO→libheif 编码的 float→int 双重转换损耗 | 低 | 统一在 codecs 层做一次 float→目标位深转换 |
+| R10 | Exiv2 无损重写 PNG/TIFF 时压缩数据保真 | **已闭合（M1）** | 四格式实测：JPEG（SOS 尾字节 + 像素 hash）、PNG（IDAT 拼接逐字节 + 像素 hash）、TIFF（像素 hash）、WebP（VP8L 载荷一致）；M0 Spike F 为 JPEG 段前置证据 |
+| R11 | OIIO→libheif 编码的 float→int 双重转换损耗 | **已闭合（M1）** | float→整型转换仅在 codecs 层发生一次（T7 复核 enc_oiio/enc_heif） |
 | R12 | 双 libjpeg 符号冲突（OIIO ↔ jpegli 导出符号同名） | **已解决（复审 S2）+ M0 实测补证** | jpegli 为唯一 libjpeg：解码实现即 jpegli（损坏 JPG 报错出自 lib/jpegli/decode_marker.cc）；双库并存形态——libjpeg.so.62 兼容层（OIIO/tiff）+ libjpegli.a 直调层（本项目编码器，CMake target libjpeg-turbo::jpegli-static 带 hwy 闭包） |
-| R13 | 无 ICC 的 JXL 源：色彩描述经 OIIO 的暴露方式未验证（G9） | **缩窄（M0）** | JXL box（Exif+xml）写读通路实测 OK（UseBoxes→4 字节 offset 前缀→CloseBoxes）；仅剩"OIIO 色彩编码属性暴露"M1 核对 |
+| R13 | 无 ICC 的 JXL 源：色彩描述经 OIIO 的暴露方式未验证（G9） | **已闭合（M0 缩窄 → M1/T3 定论）** | OIIO 3.1.14 暴露 JXL 色彩描述 = `CICP int[4]` + `ICCProfile uint8[n]` + `oiio:ColorSpace`（无 `jxl:*`）；M1 实现以嵌入 ICC 优先、无 ICC 时日志记录原生描述并按 sRGB 处理（CICP⇄lcms2 映射为 TODO(M2)） |
 | R14 | jpegli 上游无 tag/release（新增，M0 事实） | 已接受 | overlay 钉 main HEAD commit SHA（031a0077）+ SHA512；升级需人工重钉并回归 spike B |
 | R15 | CI 未实跑：ubuntu-24.04/gcc-13 与本机 26.04/gcc-15 组合未验证（新增，D5） | 开放 | GitHub 首跑验证；binary cache 不跨编译器共享；D1 修复后 gen_corpus 行已对齐 |
 | R16 | 语料 TIFF fixture 字节稳定性（新增，D2） | 已解决 | 固定 DateTime=2024:01:01 + 同名同参 → 同机字节稳定；跨机器不保证 → CHECKSUMS 本地生成、不入库 |
 | R17 | exiv2 0.28.8 enableBMFF 已 [[deprecated]]（新增） | 低 | 仅 2 条编译告警，运行时功能正常；M1 升级 Exiv2 时换新 API |
-| R18 | 未 source tools/env.sh 时 ccache 回退只读默认目录 → 构建失败（新增，D7） | 低 | 操作前提见 README/bootstrap（先 source）；M1 加 ccache 可用性探测，探测失败则不设 launcher |
+| R18 | 未 source tools/env.sh 时 ccache 回退只读默认目录 → 构建失败（新增，D7） | **已闭合（M1：T15）** | CMake 增加 ccache 可用性探测（`ccache --version` 失败则不设 launcher） |
+| R19 | HEIF/AVIF 高位深能力：x265 若为 8bit-only 构建即"精简依赖"（新增，M1/T7） | **已闭合（M1：T7b，`201c8a8`）** | overlay `vcpkg-overlay/x265/` 按上游 multilib 方案恢复多比特深度（3 次构建 + `EXTRA_LIB`/`LINKED_*_BIT` 粘合 + `ar -M` 合并）→ 实测 `heif/x265 = 8,10,12`、`avif/libaom = 8,10,12`、`avif/svt-av1 = 8,10`；静态允许集 ∩ 运行期探测（T2b/T7e 已复核） |
 
 ---
 

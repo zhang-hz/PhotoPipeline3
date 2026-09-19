@@ -100,7 +100,14 @@ target_link_libraries(photopipeline PRIVATE pp_core Qt6::Widgets Qt6::Network)
 
 # 5) 既有 M0 target（pp_linkprobe / pp_mkfixtures / pp_spikes / 其 ctest 条目）保持不变
 #    新增工具按需显式 add_executable（T8 加 pp_verify；其它工具不得改动此块）
+
+# 6) 静态库自注册链接（T7c）：编码器 TU 靠静态初始化注册，静态档案按需选取成员
+#    → 不 whole-archive 则 make_encoder 全 nullptr（T7 实测）
+#    适用：photopipeline、pp_test_*（glob 循环）、pp_verify、三个 M0 tool target
+#    target_link_libraries(<target> PRIVATE $<LINK_LIBRARY:WHOLE_ARCHIVE,pp_core>)   # CMake ≥3.24
 ```
+
+**`CMakeLists.txt` 所有者序列（冻结；其余任务一律不得改）**：T1（glob 收编）→ **T7（T7c：whole-archive 链接）** → T8（新增 `pp_verify` target）→ T9（删 `PP_M0_SMOKE` 定义）→ T14（ccache 可用性回退）。
 
 `photopipeline` 现有 `PP_M0_SMOKE` 定时退出宏在 T9 中**删除**（改为 ctest 的 offscreen 冒烟脚本控制超时）。
 
@@ -944,6 +951,8 @@ std::vector<std::string> registered_backends(std::string_view format_id);
 ```
 
 **文件归属（冻结，避免并行冲突）**：T6 创建 `encoder_registry.h` + `encoders.cpp`（`make_encoder` = 查表）+ `enc_jpegli.cpp`/`enc_jxl.cpp`/`enc_webp.cpp`；T7 创建 `enc_heif.cpp`/`enc_oiio.cpp`（各自用宏注册）并**独家实现** `introspect_backends` / `probe_bitdepth_support`（定义在 `enc_heif.cpp`）。**T7 不得编辑 T6 的任何文件**；若 T7 编译时 `encoder_registry.h` 尚不存在 → 等待（每 60s 重试，上限 25 分钟），先写实现。
+
+**静态库链接约束（T7 实测，T7c 修复——对 T8/T10 至关重要）**：`pp_core` 是 STATIC 档案，链接器**按需选取档案成员** → 自注册 TU 若不参与链接，其静态初始化不执行，`make_encoder()` 对所有格式返回 **nullptr**（实测：只有被符号直接引用的 TU 被拉入，如 `enc_heif.cpp` 因 `introspect_backends` 被引用而侥幸进链接）。**修复 = 所有消费 `pp_core` 的可执行目标使用 `$<LINK_LIBRARY:WHOLE_ARCHIVE,pp_core>`**（CMake ≥3.24）；不要用"每文件加锚点符号"的替代方案（T6 已按 T7 建议预留锚点，最终以 whole-archive 为准，锚点可留作冗余但不得作为唯一机制）。
 
 ---
 

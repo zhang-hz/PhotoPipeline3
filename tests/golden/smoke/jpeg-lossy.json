@@ -1,0 +1,10 @@
+{
+  "case": "jpeg-lossy",
+  "input": "base/photo.jpg",
+  "output_format": "jpeg",
+  "assert": {
+    "pixel": { "mode": "psnr", "threshold_db": 35 },
+    "metadata": [],
+    "warnings_contain": []
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "case": "bmp-exact",
+  "input": "base/rgb8.png",
+  "output_format": "bmp",
+  "assert": {
+    "pixel": {
+      "mode": "exact"
+    },
+    "metadata": [],
+    "warnings_contain": [
+      "MetadataDropped"
+    ]
+  }
+}

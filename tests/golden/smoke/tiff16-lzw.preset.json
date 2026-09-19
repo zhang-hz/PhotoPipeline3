@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "name": "smoke tiff16-lzw",
+  "format": "tiff",
+  "backend": "oiio",
+  "tech": "codec",
+  "lossless": false,
+  "bitdepth": 16,
+  "color_target": "keep",
+  "conflict": "overwrite",
+  "params": { "compression": "lzw", "predictor": 2 },
+  "rules": {}
+}

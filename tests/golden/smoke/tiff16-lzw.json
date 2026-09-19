@@ -1,0 +1,10 @@
+{
+  "case": "tiff16-lzw",
+  "input": "base/rgb16.tif",
+  "output_format": "tiff",
+  "assert": {
+    "pixel": { "mode": "exact" },
+    "metadata": [],
+    "warnings_contain": []
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "case": "jxl-lossless",
+  "input": "base/rgb8.png",
+  "output_format": "jxl",
+  "assert": {
+    "pixel": { "mode": "exact" },
+    "metadata": [],
+    "warnings_contain": []
+  }
+}

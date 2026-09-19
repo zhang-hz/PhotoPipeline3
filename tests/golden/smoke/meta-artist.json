@@ -1,0 +1,12 @@
+{
+  "case": "meta-artist",
+  "input": "base/photo.jpg",
+  "output_format": "jpeg",
+  "assert": {
+    "pixel": { "mode": "psnr", "threshold_db": 35 },
+    "metadata": [
+      { "key": "Exif.Image.Artist", "op": "eq", "value": "M1-T8" }
+    ],
+    "warnings_contain": []
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "case": "avif-lossy",
+  "input": "base/rgb8.png",
+  "output_format": "avif",
+  "assert": {
+    "pixel": { "mode": "psnr", "threshold_db": 30 },
+    "metadata": [],
+    "warnings_contain": []
+  }
+}

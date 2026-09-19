@@ -1,0 +1,10 @@
+{
+  "case": "webp-lossless",
+  "input": "base/rgba8.png",
+  "output_format": "webp",
+  "assert": {
+    "pixel": { "mode": "exact" },
+    "metadata": [],
+    "warnings_contain": []
+  }
+}

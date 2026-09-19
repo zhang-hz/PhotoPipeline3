@@ -75,10 +75,14 @@ find_package(libjpeg-turbo CONFIG REQUIRED)
 # PP-NOTE: find_package/pkg-config 目标名允许按 vcpkg_installed 实际情况机械修正，逐条记录
 
 # 2) pp_core：glob 收编 core/decode/codecs（CONFIGURE_DEPENDS → 新增文件自动生效，M1 §2.3）
+#    M1b：paths.cpp（U1，Qt-free 平台路径）与 coord.cpp（U2，纯数学 GCJ-02）编入 pp_core
+#    供单测链接；两者同时从下方 UI glob 剔除。文件未存在时 GLOB 空匹配、REMOVE_ITEM no-op。
 file(GLOB_RECURSE PP_CORE_SOURCES CONFIGURE_DEPENDS
      ${CMAKE_SOURCE_DIR}/src/core/*.cpp
      ${CMAKE_SOURCE_DIR}/src/decode/*.cpp
      ${CMAKE_SOURCE_DIR}/src/codecs/*.cpp
+     ${CMAKE_SOURCE_DIR}/src/platform/paths.cpp
+     ${CMAKE_SOURCE_DIR}/src/mapwidget/coord.cpp
      ${CMAKE_SOURCE_DIR}/src/ui/preset_io.cpp)   # 唯一 Qt 适配层（JSON），UI/harness/测试三处复用
 add_library(pp_core STATIC ${PP_CORE_SOURCES})
 target_include_directories(pp_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
@@ -102,7 +106,8 @@ file(GLOB_RECURSE PP_UI_SOURCES CONFIGURE_DEPENDS
      ${CMAKE_SOURCE_DIR}/src/ui/*.cpp
      ${CMAKE_SOURCE_DIR}/src/mapwidget/*.cpp
      ${CMAKE_SOURCE_DIR}/src/platform/*.cpp)
-list(REMOVE_ITEM PP_UI_SOURCES ${CMAKE_SOURCE_DIR}/src/ui/preset_io.cpp)  # 已在 pp_core，避免重复符号
+list(REMOVE_ITEM PP_UI_SOURCES ${CMAKE_SOURCE_DIR}/src/ui/preset_io.cpp  # 已在 pp_core，避免重复符号
+     ${CMAKE_SOURCE_DIR}/src/platform/paths.cpp ${CMAKE_SOURCE_DIR}/src/mapwidget/coord.cpp)  # M1b：同上
 add_executable(photopipeline src/main.cpp ${PP_UI_SOURCES})
 # 静态库自注册：whole-archive 拉入编码器 TU（T7c）
 target_link_libraries(photopipeline PRIVATE $<LINK_LIBRARY:WHOLE_ARCHIVE,pp_core>

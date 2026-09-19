@@ -50,7 +50,9 @@
 
 > **批次划分（主对话决策）**：**本批次（本轮）= W1–W4 + W6 引擎收口，不做 UI**；W5/W7（T9–T13、T14b）整体归**下一批次**。design.md §9.1 的 M1 相应拆为 **M1a（引擎）** / **M1b（UI）**；本轮结束时把全部 core/codecs 接口冻结清单交下一批次（UI 只消费、不改接口）。
 | **修复** | T5b | 依赖修复：exiv2 打开 zlib/PNG（R1）——feature 优先、overlay 兜底 | T5 | ✅ `6e98ca7`（Path A：port 自带 `png` feature，一行改动 + 17s 重装） |
-| | T7b | 依赖修复：x265 高比特深度（10bit HEIF，R19/"禁止精简"）——同样 feature 优先 | T7 |
+| | T7b | 依赖修复：x265 高比特深度（10bit HEIF，R19/"禁止精简"）——同样 feature 优先 | T7 | ✅ `201c8a8`（Path B：overlay 多库合并，heif/x265 → 8,10,12） |
+| | T2b | 数据扩展：heif/avif 静态位深集 → `{8,10,12}`（默认仍 10，运行期交集收敛） | T7b | 待派 |
+| | T7e | R19 复核：T7b 后重跑位深探测 + 单测 | T7b | 待派 |
 
 ### 2.2 执行编排（主对话控制，执行者只关心自己的任务）
 
@@ -624,7 +626,7 @@ libheif（`enc_heif.cpp`）：`heif_context_alloc` → `heif_context_get_encoder
 OIIO（`enc_oiio.cpp`）：`ImageOutput::create(fmt)` + `ImageSpec`（`set_format` 目标位深类型 UINT8/UINT16；PNG 用 `attribute("compressionLevel", v)`；TIFF 用 `attribute("compression", name)`（M0 实测名表：none/lzw/zip/ccittrle/packbits）+ `attribute("tiff:predictor", int)` + `attribute("tiff:zipquality", v)` + tile 走 `spec.tile_width/tile_height`（**必须 16 的倍数且非 0**，否则上层校验拦截）；BMP 无参数）→ `write_image`。ICC → `spec.attribute("ICCProfile", TypeDesc::UINT8, ...)`。
 
 > **T7 中期裁定（主对话，冻结）**：
-> ① **10bit 能力（R19 初值）**：`heif/x265 = "8"`（x265 为 8bit 构建）；`avif/svt-av1` 与 `avif/libaom = "8,10"`。**静态 `FormatDef.bitdepths` 不改**——运行期以 `probe_bitdepth_support()` 与静态表**取交集**作为可选位深：T8 请求不支持位深 → 明确 error（不静默降档）；T10 UI 隐藏不可用项。x265 高比特深度属"禁止精简依赖"范畴 → 主对话另派 **T7b** 依赖任务尝试恢复（feature 优先、overlay 兜底），T7 只需把探测做准。
+> ① **10bit 能力（R19 定稿）**：`heif/x265 = "8,10,12"`（T7b `201c8a8` 按上游 multilib 方案恢复多比特深度：三次构建 + `EXTRA_LIB`/`LINKED_*_BIT` 粘合 + `ar -M` 合并）、`avif/svt-av1 = "8,10"`、`avif/libaom = "8,10,12"`。**静态 `FormatDef.bitdepths` 不改**——运行期以 `probe_bitdepth_support()` 与静态表**取交集**作为可选位深：T8 请求不支持位深 → 明确 error（不静默降档）；T10 UI 隐藏不可用项。另：主对话裁决把 heif/avif 的**静态允许集**扩为 `{8,10,12}`（T2b 执行；设计 §2.1 草图本就写 `HEIF{8,10,12}`），**默认值仍为 10**（共识 §3.4 高质量档），交集后 svt-av1 自动收敛为 {8,10}；
 > ② **AVIF 10bit + alpha**：`svt-av1` 编码失败（插件错误）、`libaom` 成功 → 保留双后端，**不做自动后端切换**（用户显式选择优先）；错误串必须点名 `libaom`（如 `"svt-av1 does not support 10-bit with alpha; use backend libaom"`）；T10 在"10bit + 源含 alpha"时预选/提示 libaom。
 > ③ **`introspect_backends` 形态**：每后端一个合成 `TechDef`（`id="runtime"`、`label=heif_encoder_descriptor_get_name()`、`lossless_capable` 取描述符能力、`params` = 运行时 ParamDef 转换、默认值取 live 值）——**批准**。实测参数数：x265=7、svt=10、aom=15。
 > ④ **x265 无线程参数**：libheif 的 x265 插件未暴露 `threads` → E2"编码器内部线程全关"对 HEIF **不可实现**：记 api-delta + `TODO(M2)`，M1 接受 x265 默认线程池。
@@ -770,6 +772,8 @@ private:
 ```
 
 **调度语义（冻结）**：worker 从队列按**输入顺序**取件（G14）；`probe → budget.acquire(2×frame) → run_one_file → release`；probe 失败 → 直接 Failed 事件；取消后剩余文件标 Cancelled 并逐个发事件；`results()` 与输入等长（未跑完的是 Cancelled 状态）。
+
+> **T8 落地口径（主对话批准）**：预算的 acquire/release **由 `run_one_file` 内部 RAII 持有**（在 probe 之后、decode 之前取，析构时释放），而非字面写在本类里——语义等价且避免双重扣额/异常泄漏；映射说明见 `scheduler.cpp` 头部注释。probe 失败与仅元数据模式不取预算。
 
 ### 3.11 `src/core/presets.h`（T2）
 
@@ -1169,6 +1173,7 @@ std::vector<std::string> registered_backends(std::string_view format_id);
 - **链接形态**：x64-linux 全静态（唯一 .so = libjpeg.so.62）；构建前必须 `source tools/env.sh`（否则 ccache 只读报错，R18）。
 - **命令**：构建 `cmake --preset release && cmake --build --preset release`；测试 `ctest --preset release`；语料 `bash tools/gen_corpus.sh`（默认路径已修好，D1）。
 - **OIIO 3.1.14 实测（T3）**：`read()` 六参 `chend=0` → 段错误（bt）；CMYK TIFF → 3 通道 + `tiff:ColorSpace="CMYK"`；格式名用 `ImageInput::format_name()`；多页用 `seek_subimage`；ICC 为 `uint8[n]` 数组属性；**JXL 色彩编码暴露 = `CICP int[4]` + `ICCProfile` + `oiio:ColorSpace="srgb_rec709_scene"`，无 `jxl:*` 属性**（R13 尾闭合，见 §8）；GIF 帧 `alpha_channel==4` 越界 quirk；未取 error 的 ImageBuf 析构会打印告警。
+- **位深能力（R19 定稿，T7b `201c8a8` 后）**：`heif/x265 = 8,10,12`、`avif/svt-av1 = 8,10`、`avif/libaom = 8,10,12`；x265 多比特深度依赖 overlay `vcpkg-overlay/x265/`（port-version 1）——**这是唯一不可省的 overlay 依赖**，重建 binary cache 时必须带 `--overlay-ports=vcpkg-overlay`。
 
 ---
 
@@ -1180,7 +1185,7 @@ std::vector<std::string> registered_backends(std::string_view format_id);
 - R1：**已闭合（T5 → T5b）**——真因不是 eXIf chunk，而是 **exiv2 未编译 zlib** → PNG 未注册为图像类型。`vcpkg.json` exiv2 features 加 `png`（port 自带 feature，无需 overlay）→ 探针验证 PNG 元数据写入/读回成功、15/15 测试无回归。T5c 复核降级分支与仅元数据模式后，PNG 全路径恢复；exiv2 config 自带 `find_dependency(ZLIB)`。
 - R11：float→int 双重转换（T5/T6 验收时确认只在 codecs 层转一次）。
 - R13 尾：**已闭合（T3 实测）**——OIIO 3.1.14 对 JXL 源的色彩描述暴露为 `CICP int[4]`（实测 1,13,0,1 = BT.709/sRGB 传递）+ `ICCProfile uint8[536]` + `oiio:ColorSpace="srgb_rec709_scene"`，无 `jxl:*` 属性；M1 的"源 profile 优先级"（嵌入 ICC → 格式原生描述 → 假定 sRGB）据此可实现（CICP⇄lcms2 映射留 M2，M1 用 ICC 优先，无 ICC 时按 `oiio:ColorSpace` 提示 + 假定 sRGB）。
-- R19（新增，T7 产出）：HEIF/AVIF 10bit 实际能力结论。
+- R19（新增，T7 产出，**T7b 后定稿**）：位深能力 = `heif/x265 8,10,12` / `avif/svt-av1 8,10` / `avif/libaom 8,10,12`；x265 多比特深度由 overlay `vcpkg-overlay/x265/` 提供（唯一必需的 overlay 依赖）；运行期与静态集取交集，默认 10。
 
 ---
 

@@ -574,6 +574,7 @@ set_tests_properties(offscreen PROPERTIES TIMEOUT 30)
       "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
       "cacheVariables": {
         "VCPKG_OVERLAY_PORTS": "${sourceDir}/vcpkg-overlay",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
         "CMAKE_PREFIX_PATH": "$env{QT_DIR}"
       }
     },
@@ -768,6 +769,7 @@ PP_MKFIXTURES 默认 build/release/pp_mkfixtures
   - corrupt_trunc.jpg = head -c 300 base/photo.jpg；corrupt_zero.png = 空文件
   - 结尾: (cd GOLDEN_ROOT && find base edge meta -type f | sort | xargs sha256sum > CHECKSUMS)
   - 脚本必须 set -euo pipefail 且可重复执行（幂等覆盖）
+  - **D2 修复（审计后）**：TIFF 生成固定 `--attrib "DateTime" "2024:01:01 00:00:00"`（TIFF writer 默认写当前时间且 `--eraseattrib` 无效）；`Software` 属性随输出路径/参数变化（同名同参跨次稳定）→ 同机字节稳定、跨机器不保证，CHECKSUMS 以本地生成为准
 ```
 
 ### 12.5 `tests/unit/test_smoke.cpp`
@@ -918,4 +920,8 @@ file(INSTALL "${SOURCE_PATH}/LICENSE" DESTINATION "${CURRENT_PACKAGES_DIR}/share
 - 待 SUB-CD 复核：libheif-config.cmake 的 AOM find_dependency + fastfeat 链接接口追加**必须编码进 overlay libheif portfile**（若当前只是手改 vcpkg_installed，从零重建 binary cache 时会丢失）。
 - SUB-E 已实测：spike e PASS（lcms2 金值 identity_max_err=0，Lab=(100, 7.57e-06, -7.63e-06)）；gen_corpus.sh 的 `--depth` 应为 `-d`（机械修正已做）；CMakeLists 需 `set(CMAKE_AUTOMOC ON)`（已修复入库）；libjxl 0.11 box API 顺序：UseBoxes → AddBox(Exif 内容前置 4 字节 TIFF offset) → CloseBoxes → CloseInput（mkfixtures 已修，R13 事实）；exiv2 port 的 xmp feature 非默认（默认无 XMP toolkit → XmpParser::encode 空 packet）→ vcpkg.json 增 exiv2[xmp]。
 - 参数表裁决（主对话，SUB-F 报告后）：删无后端参数（use_dct4/8/16、TIFF quality/zstd_level、compression 枚举去 zstd/jpeg）；TIFF 枚举收敛 none/lzw/zip/ccittrle/packbits；webp filter_strength 默认 30（与默认 preset=photo 自洽）；responsive→jxl-modular；modular_palette 改 Int modular_palette_colors(-1..4096, def -1)；加 ycbcr/440 枚举与 tiff_tile_width/height；JXL 公共参数保持 vardct+modular 双份（M1 预设层去重）；其余默认值全部保留 catalog 视觉透明档。PT-1b 扩表任务：补齐头文件中有真实后端的参数（webp 13+、jpegli 4、libjxl 其余 frame settings；排除 thread_level——设计规定编码器内部线程全关）。
-- PT-1b 完成（提交 43660be）：全表 **78 条 ParamDef / 55 唯一 key**（jpeg 15 | jxl-vardct 15 | jxl-modular 17 | png 1 | tiff 5 | webp-lossy 21 | webp-lossless 4 | bmp/heif/avif 0）。新实测事实：TIFF tiling 走 `ImageSpec::tile_width/height` 而非 tiff:* 属性（强制 16 倍数且非 0）；alpha_filtering 有效域 0-2（非 0-3）；near_lossless 属 lossless 路径（VP8L）；jpegli std_quant_tables 为无参开关、cicp_transfer_function 仅 16=PQ/18=HLG 有效；libjxl 排除项（JPEG 重压缩类、动图 frame_index、流式 buffering、测试用 heuristics）理由见 PT-1b 报告——M0 定稿不再扩。
+- PT-1b 完成（提交 43660be）：全表 **78 条 ParamDef / 68 唯一 key**（订正：SUB-G 实测 68 个不同 key 字符串，原记 55 口径错误；8 个 key 跨 tech/格式复用）（jpeg 15 | jxl-vardct 15 | jxl-modular 17 | png 1 | tiff 5 | webp-lossy 21 | webp-lossless 4 | bmp/heif/avif 0）。新实测事实：TIFF tiling 走 `ImageSpec::tile_width/height` 而非 tiff:* 属性（强制 16 倍数且非 0）；alpha_filtering 有效域 0-2（非 0-3）；near_lossless 属 lossless 路径（VP8L）；jpegli std_quant_tables 为无参开关、cicp_transfer_function 仅 16=PQ/18=HLG 有效；libjxl 排除项（JPEG 重压缩类、动图 frame_index、流式 buffering、测试用 heuristics）理由见 PT-1b 报告——M0 定稿不再扩。
+
+**Wave4 审计结论（SUB-G 独立实跑，主对话复核）**：出口准则 **9/9 PASS**；fresh 链路 **8.12s**（vcpkg cache 恢复 3.38s + configure 0.86s + build 3.87s；`CCACHE_DISABLE=1` 冷编译 3.86s 排除缓存假象）；ctest 6/6（warm 与冷编译产物两次）；6 个冻结件与任务书逐字节一致（types.h/params.h/CMakePresets.json/bootstrap.sh/env.sh.example/SCHEMA.md）。
+缺陷修复（主对话执行）：**D1** = CMakePresets 增 `VCPKG_INSTALLED_DIR=${sourceDir}/vcpkg_installed`（toolchain 默认装 `build/<preset>/vcpkg_installed`，与 gen_corpus.sh/CI/bootstrap 的根目录假设不符——fresh 链路末端与 CI 第 3 步必失败）；**D2** = gen_corpus.sh 的 4 个 TIFF 生成固定 `DateTime=2024:01:01 00:00:00`（writer 写当前时间、`--eraseattrib` 无效；`Software` 属性随路径变化 → 同机字节稳定、跨机器不保证）。
+遗留（不阻塞）：10 处 `TODO(M0-CD)` 注释 M1 清理；CI 未实跑（ubuntu-24.04/gcc-13 组合待 GitHub 首跑）；exiv2 0.28.8 的 enableBMFF 已 deprecated（仅 2 条告警，无功能影响）。

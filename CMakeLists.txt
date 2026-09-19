@@ -57,7 +57,8 @@ file(GLOB PP_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/tests/unit/test_
 foreach(src ${PP_TEST_SOURCES})
   get_filename_component(tname ${src} NAME_WE)          # test_fsops → ctest 名 test_fsops
   add_executable(pp_${tname} ${src})
-  target_link_libraries(pp_${tname} PRIVATE pp_core)
+  # 静态库自注册：whole-archive 拉入编码器 TU（T7c）
+  target_link_libraries(pp_${tname} PRIVATE $<LINK_LIBRARY:WHOLE_ARCHIVE,pp_core>)
   add_test(NAME ${tname} COMMAND pp_${tname})
 endforeach()
 
@@ -68,7 +69,9 @@ file(GLOB_RECURSE PP_UI_SOURCES CONFIGURE_DEPENDS
      ${CMAKE_SOURCE_DIR}/src/platform/*.cpp)
 list(REMOVE_ITEM PP_UI_SOURCES ${CMAKE_SOURCE_DIR}/src/ui/preset_io.cpp)  # 已在 pp_core，避免重复符号
 add_executable(photopipeline src/main.cpp ${PP_UI_SOURCES})
-target_link_libraries(photopipeline PRIVATE pp_core Qt6::Widgets Qt6::Network)
+# 静态库自注册：whole-archive 拉入编码器 TU（T7c）
+target_link_libraries(photopipeline PRIVATE $<LINK_LIBRARY:WHOLE_ARCHIVE,pp_core>
+    Qt6::Widgets Qt6::Network)
 target_compile_definitions(photopipeline PRIVATE PP_M0_SMOKE)  # M1 removes
 
 # 5) 既有 M0 target（pp_linkprobe / pp_mkfixtures / pp_spikes / 其 ctest 条目）保持不变
@@ -86,6 +89,10 @@ target_link_libraries(pp_mkfixtures PRIVATE
 add_executable(pp_spikes tools/pp_spikes.cpp)
 target_link_libraries(pp_spikes PRIVATE
     OpenImageIO::OpenImageIO PkgConfig::LCMS2 Exiv2::exiv2lib)
+# 静态库自注册：whole-archive 拉入编码器 TU（T7c）——M0 tool target 亦为 pp_core 消费者
+target_link_libraries(pp_linkprobe PRIVATE $<LINK_LIBRARY:WHOLE_ARCHIVE,pp_core>)
+target_link_libraries(pp_mkfixtures PRIVATE $<LINK_LIBRARY:WHOLE_ARCHIVE,pp_core>)
+target_link_libraries(pp_spikes PRIVATE $<LINK_LIBRARY:WHOLE_ARCHIVE,pp_core>)
 
 add_test(NAME linkprobe  COMMAND pp_linkprobe)
 add_test(NAME fixtures   COMMAND pp_mkfixtures --verify ${CMAKE_SOURCE_DIR}/tests/golden/meta)

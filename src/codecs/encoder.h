@@ -19,6 +19,8 @@ struct MetadataPayloads {
 struct EncodeRequest {
     OIIO::ImageBuf& img;             // float32, channels {1,2,3,4}
     const ParamSet& params;
+    // M1 (T6b, main-dialogue ruling): explicit tech selection; additive field only.
+    std::string tech_id;   // M1: "vardct"|"modular"|"lossy"|"lossless"|"runtime"|""（空 = 按 lossless 回退推断）
     int out_bitdepth = 8;
     const MetadataPayloads& meta;
     std::filesystem::path out_path;

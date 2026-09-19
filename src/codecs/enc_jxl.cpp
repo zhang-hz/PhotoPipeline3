@@ -239,9 +239,6 @@ private:
 
         // Lossless comes from the reserved key (§3.4); a modular parameter set
         // (built from the modular tech) also selects the Modular path.
-        // TODO(M2): EncodeRequest carries no tech_id, so "Modular" is inferred
-        // from __lossless plus the presence of modular-only keys; give the
-        // encoder interface an explicit tech channel instead.
         const bool lossless = param_bool(params, "__lossless", false);
         bool modular_params = false;
         for (const JxlParamMap& m : kFrameSettings) {
@@ -250,7 +247,23 @@ private:
                 break;
             }
         }
-        const bool modular = lossless || modular_params;
+        // Tech selection (T6b): an explicit EncodeRequest::tech_id wins; empty or
+        // unknown falls back to the previous inference (lossless, or the presence
+        // of modular-only keys). This is what makes lossy Modular expressible.
+        bool modular = false;
+        if (req.tech_id == "modular") {
+            modular = true;
+        } else if (req.tech_id == "vardct") {
+            modular = false;
+        } else {
+            modular = lossless || modular_params;
+        }
+        // libjxl's lossless mode always encodes the Modular path
+        // (JxlEncoderSetFrameLossless overrides the mode), so modular-only
+        // options stay applicable there.
+        if (lossless) {
+            modular = true;
+        }
         const bool has_icc = !req.meta.icc_profile.empty();
         const bool gray = r.channels <= 2;
         const bool alpha = r.channels == 2 || r.channels == 4;

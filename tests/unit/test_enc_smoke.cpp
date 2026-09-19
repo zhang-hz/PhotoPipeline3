@@ -272,13 +272,15 @@ pp::ParamSet params_for(const char* format, const char* backend, const char* tec
 
 pp::EncodeResult run_encode(pp::IEncoder* enc, OIIO::ImageBuf& img, const pp::ParamSet& params,
                             const fs::path& out, const pp::MetadataPayloads& meta = {},
-                            int out_bitdepth = 8) {
+                            int out_bitdepth = 8, const std::string& tech_id = std::string()) {
     if (enc == nullptr) {
         pp::EncodeResult res;
         res.error = "make_encoder returned nullptr (registry lookup failed)";
         return res;
     }
-    pp::EncodeRequest req{img, params, out_bitdepth, meta, out, {}};
+    // EncodeRequest member order (T6b): img, params, tech_id, out_bitdepth, meta,
+    // out_path, cancelled.
+    pp::EncodeRequest req{img, params, tech_id, out_bitdepth, meta, out, {}};
     return enc->encode(req);
 }
 
@@ -734,6 +736,59 @@ int main() {
                   std::to_string(ok.load()) + "/8 concurrent encodes succeeded, first error: '" +
                       first_error + "'");
         }
+    }
+
+    // ---------------- 16) T6b: explicit tech_id selects lossy Modular --
+    {
+        OIIO::ImageBuf buf = to_buf(rgb);
+        std::unique_ptr<pp::IEncoder> enc = pp::make_encoder("jxl", "libjxl");
+        // Lossy Modular is the case the old inference could not express: the
+        // parameter set alone (modular keys + __lossless=false) used to leave the
+        // library on the VarDCT default, so tech_id is now authoritative.
+        pp::ParamSet params = params_for("jxl", "libjxl", "modular", false);
+        params["distance"] = 1.0;
+        const fs::path out = root / "modular_lossy.jxl";
+        const pp::EncodeResult res = run_encode(enc.get(), buf, params, out, {}, 8, "modular");
+        check(res.error.empty() && res.bytes > 0, "tech/modular_lossy/encode", res.error);
+        OIIO::ImageBuf ref = to_buf(rgb);
+        OIIO::ImageBuf got = read_float(out, 3);
+        check(got.spec().width == 64 && got.spec().height == 64 && got.spec().nchannels == 3,
+              "tech/modular_lossy/geometry",
+              "got " + num(got.spec().width) + "x" + num(got.spec().height) + "x" +
+                  num(got.spec().nchannels));
+        const OIIO::ImageBufAlgo::CompareResults cr =
+            OIIO::ImageBufAlgo::compare(ref, got, 0.0f, 0.0f);
+        check(cr.PSNR >= 30.0, "tech/modular_lossy/psnr",
+              "PSNR " + std::to_string(cr.PSNR) + " dB < 30 dB");
+        check(cr.maxerror > 0.0, "tech/modular_lossy/is_lossy",
+              "distance=1.0 produced a bit-exact result (lossless path taken?)");
+        info("jxl tech_id=modular distance=1.0 bytes=" +
+             num(static_cast<long long>(res.bytes)) + " PSNR=" + std::to_string(cr.PSNR) + " dB");
+    }
+
+    // ------------- 17) T6b: empty tech_id keeps the previous fallback --
+    {
+        OIIO::ImageBuf buf = to_buf(rgb);
+        std::unique_ptr<pp::IEncoder> webp = pp::make_encoder("webp", "libwebp");
+        pp::ParamSet wp = params_for("webp", "libwebp", "lossless", true);
+        const fs::path wout = root / "fallback.webp";
+        const pp::EncodeResult wres = run_encode(webp.get(), buf, wp, wout);
+        check(wres.error.empty() && wres.bytes > 0, "tech/empty_fallback/webp", wres.error);
+        const ReadBack wrb = read_back(wout, 3, OIIO::TypeDesc::UINT8);
+        std::string wdetail;
+        check(wrb.ok && same_u8(wrb.u8, rgb.u8, wdetail), "tech/empty_fallback/webp_exact",
+              wdetail);
+
+        OIIO::ImageBuf jbuf = to_buf(rgb);
+        std::unique_ptr<pp::IEncoder> jxl = pp::make_encoder("jxl", "libjxl");
+        pp::ParamSet jp = params_for("jxl", "libjxl", "modular", true);
+        const fs::path jout = root / "fallback.jxl";
+        const pp::EncodeResult jres = run_encode(jxl.get(), jbuf, jp, jout);
+        check(jres.error.empty() && jres.bytes > 0, "tech/empty_fallback/jxl", jres.error);
+        const ReadBack jrb = read_back(jout, 3, OIIO::TypeDesc::UINT8);
+        std::string jdetail;
+        check(jrb.ok && same_u8(jrb.u8, rgb.u8, jdetail), "tech/empty_fallback/jxl_exact",
+              jdetail);
     }
 
     pp::log_shutdown();

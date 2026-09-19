@@ -175,11 +175,14 @@ private:
         }
         warn_unknown_params(params);
 
-        const bool lossless = param_bool(params, "__lossless", false);
+        // Tech selection (T6b): an explicit EncodeRequest::tech_id wins; empty or
+        // unknown falls back to the reserved key __lossless (§3.4/§4.8).
+        const bool lossless = (req.tech_id == "lossless")
+                                  ? true
+                                  : ((req.tech_id == "lossy")
+                                         ? false
+                                         : param_bool(params, "__lossless", false));
         const bool alpha = r.channels == 2 || r.channels == 4;
-        // TODO(M2): the lossy/lossless WebP tech is selected solely by the
-        // reserved key __lossless (T8 must inject it, §3.4/§4.8); an explicit
-        // tech channel on EncodeRequest would remove that hidden dependency.
 
         WebPConfig cfg;
         if (!WebPConfigInit(&cfg)) {

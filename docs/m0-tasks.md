@@ -574,8 +574,8 @@ set_tests_properties(offscreen PROPERTIES TIMEOUT 30)
       "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
       "cacheVariables": {
         "VCPKG_OVERLAY_PORTS": "${sourceDir}/vcpkg-overlay",
-        "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
-        "CMAKE_PREFIX_PATH": "$env{QT_DIR}"
+        "CMAKE_PREFIX_PATH": "$env{QT_DIR}",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed"
       }
     },
     { "name": "release", "inherits": "base",
@@ -925,3 +925,7 @@ file(INSTALL "${SOURCE_PATH}/LICENSE" DESTINATION "${CURRENT_PACKAGES_DIR}/share
 **Wave4 审计结论（SUB-G 独立实跑，主对话复核）**：出口准则 **9/9 PASS**；fresh 链路 **8.12s**（vcpkg cache 恢复 3.38s + configure 0.86s + build 3.87s；`CCACHE_DISABLE=1` 冷编译 3.86s 排除缓存假象）；ctest 6/6（warm 与冷编译产物两次）；6 个冻结件与任务书逐字节一致（types.h/params.h/CMakePresets.json/bootstrap.sh/env.sh.example/SCHEMA.md）。
 缺陷修复（主对话执行）：**D1** = CMakePresets 增 `VCPKG_INSTALLED_DIR=${sourceDir}/vcpkg_installed`（toolchain 默认装 `build/<preset>/vcpkg_installed`，与 gen_corpus.sh/CI/bootstrap 的根目录假设不符——fresh 链路末端与 CI 第 3 步必失败）；**D2** = gen_corpus.sh 的 4 个 TIFF 生成固定 `DateTime=2024:01:01 00:00:00`（writer 写当前时间、`--eraseattrib` 无效；`Software` 属性随路径变化 → 同机字节稳定、跨机器不保证）。
 遗留（不阻塞）：10 处 `TODO(M0-CD)` 注释 M1 清理；CI 未实跑（ubuntu-24.04/gcc-13 组合待 GitHub 首跑）；exiv2 0.28.8 的 enableBMFF 已 deprecated（仅 2 条告警，无功能影响）。
+
+**定向复审（SUB-G 复工，D1/D2 修复后）**：**D1 CLOSED、D2 CLOSED、出口准则 9/9 维持 PASS**——独立实跑 8 步全 rc=0（configure 4.26s 含 cache 恢复 2.9s / build 3.86s / 合计 8.11s）；根安装树 1.6G 且 `build/release/vcpkg_installed` 不存在；3 次 gen_corpus 的 CHECKSUMS 全等且 `git status --porcelain` 0 行（27/27 fixture 与提交版逐字节一致）；multi.tif 双子图 DateTime 四处一致且结构未损（2 subimages 64x64/32x32）。
+新增轻微项：**D6**（presets 键序与 §11.2 代码块不一致——语义等价但违反冻结逐字节一致；主对话已按实际文件同步文档，已闭合）；**D7**（未 `source tools/env.sh` 直接构建时 ccache 回退到只读默认目录 → ninja 报 `ccache: error: Read-only file system`；操作前提是先 source，M1 加 ccache 可用性探测回退或 README 告警 → 登记 R18）。
+复审事件披露：SUB-G 一条命令误含 `mv vcpkg_installed /tmp` 致根安装树被删，已从 binary cache 3.5s 完整重建并复验（38/38 + 6/6 + git 0 行）——仓库提交与工作树未受影响，附带再次证明 fresh 链路可完整复现。

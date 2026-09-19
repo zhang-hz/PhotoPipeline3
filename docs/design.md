@@ -489,6 +489,7 @@ Windows 构建切换点：**M3**（前三个阶段纯 Linux，用户在 M3 切�
 | R15 | CI 未实跑：ubuntu-24.04/gcc-13 与本机 26.04/gcc-15 组合未验证（新增，D5） | 开放 | GitHub 首跑验证；binary cache 不跨编译器共享；D1 修复后 gen_corpus 行已对齐 |
 | R16 | 语料 TIFF fixture 字节稳定性（新增，D2） | 已解决 | 固定 DateTime=2024:01:01 + 同名同参 → 同机字节稳定；跨机器不保证 → CHECKSUMS 本地生成、不入库 |
 | R17 | exiv2 0.28.8 enableBMFF 已 [[deprecated]]（新增） | 低 | 仅 2 条编译告警，运行时功能正常；M1 升级 Exiv2 时换新 API |
+| R18 | 未 source tools/env.sh 时 ccache 回退只读默认目录 → 构建失败（新增，D7） | 低 | 操作前提见 README/bootstrap（先 source）；M1 加 ccache 可用性探测，探测失败则不设 launcher |
 
 ---
 

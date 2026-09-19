@@ -4,6 +4,43 @@
 
 namespace pp {
 
+namespace {
+
+// —— 谓词辅助（M1-T2；规则见 docs/m1-tasks.md §4.2）——
+// 保留键 "__lossless"：无损开关由参数引擎写入 ParamSet（见 src/core/params.cpp）。
+bool is_lossless(const ParamSet& s) { return param_bool(s, "__lossless", false); }
+bool not_lossless(const ParamSet& s) { return !is_lossless(s); }
+
+bool quality_mode_is_distance(const ParamSet& s) {
+    return param_str(s, "quality_mode", "distance") == "distance";
+}
+bool quality_mode_is_quality(const ParamSet& s) {
+    return param_str(s, "quality_mode", "distance") == "quality";
+}
+
+bool compression_is_zip(const ParamSet& s) {
+    return param_str(s, "compression", "lzw") == "zip";
+}
+bool compression_is_lzw_or_zip(const ParamSet& s) {
+    const std::string c = param_str(s, "compression", "lzw");
+    return c == "lzw" || c == "zip";
+}
+
+std::optional<ParamValue> lock_true_when_progressive(const ParamSet& s) {
+    if (param_bool(s, "progressive", true)) return ParamValue{true};
+    return std::nullopt;
+}
+std::optional<ParamValue> lock_zero_when_lossless(const ParamSet& s) {
+    if (is_lossless(s)) return ParamValue{0.0};
+    return std::nullopt;
+}
+std::optional<ParamValue> lock_false_when_lossless(const ParamSet& s) {
+    if (is_lossless(s)) return ParamValue{false};
+    return std::nullopt;
+}
+
+}  // namespace
+
 const std::vector<FormatDef>& static_formats() {
     static const std::vector<FormatDef> fmts = {
         FormatDef{
@@ -28,14 +65,14 @@ const std::vector<FormatDef>& static_formats() {
                                  .tooltip = "Butteraugli 目标距离（jpegli_set_distance，jpegli/encode.h:119）；"
                                             "1.0=视觉透明；jpegli 参考 CLI 推荐 0.5–3.0、允许 0.0–25.0"
                                             "（tools/cjpegli.cc:53）。quality_mode=distance 时可见。",
-                                 .visible = {}, .locked = {}},
+                                 .visible = quality_mode_is_distance, .locked = {}},
                         ParamDef{.key = "quality", .label = "质量",
                                  .type = ParamType::Int, .def = int64_t(90), .lo = 1, .hi = 100,
                                  .step = 1, .choices = {}, .advanced = false,
                                  .tooltip = "libjpeg 兼容质量分（jpegli_set_quality，jpegli/encode.h:51）；"
                                             "jpegli 参考 CLI 默认 90、允许 1–100（tools/cjpegli.cc:118,133）。"
                                             "quality_mode=quality 时可见。",
-                                 .visible = {}, .locked = {}},
+                                 .visible = quality_mode_is_quality, .locked = {}},
                         ParamDef{.key = "chroma", .label = "色度采样",
                                  .type = ParamType::Enum, .def = std::string("444"),
                                  .choices = {{"444", std::string("444")},
@@ -60,7 +97,7 @@ const std::vector<FormatDef>& static_formats() {
                                             "开启（lib/extras/enc/jpegli.h:33），jpegli_set_defaults 置 FALSE"
                                             "（lib/jpegli/encode.cc:65）。关闭后必须同时关闭渐进式"
                                             "（tools/cjpegli.cc:146）。",
-                                 .visible = {}, .locked = {}},
+                                 .visible = {}, .locked = lock_true_when_progressive},
                         ParamDef{.key = "arith_code", .label = "算术编码",
                                  .type = ParamType::Bool, .def = false, .choices = {}, .advanced = true,
                                  .tooltip = "算术编码 arithmetic coding（arith_code，jpeglib.h:368）。本构建 "
@@ -145,14 +182,14 @@ const std::vector<FormatDef>& static_formats() {
                                           .tooltip = "编码努力 effort（JXL_ENC_FRAME_SETTING_EFFORT，"
                                                      "jxl/encode.h:126-132）：1 lightning … 7 squirrel"
                                                      "（库默认）… 10 glacier，不影响解码速度。",
-                                          .visible = {}, .locked = {}},
+                                          .visible = not_lossless, .locked = {}},
                                  ParamDef{.key = "decoding_speed", .label = "解码速度预算",
                                           .type = ParamType::Int, .def = int64_t(0), .lo = 0,
                                           .hi = 4, .step = 1, .choices = {}, .advanced = true,
                                           .tooltip = "解码速度预算（JXL_ENC_FRAME_SETTING_DECODING_SPEED，"
                                                      "jxl/encode.h:134-138）：0=最慢解码但密度最高（库默认）… "
                                                      "4=最快解码。",
-                                          .visible = {}, .locked = {}},
+                                          .visible = not_lossless, .locked = {}},
                                  ParamDef{.key = "codestream_level", .label = "码流级别",
                                           .type = ParamType::Enum, .def = int64_t(10),
                                           .choices = {{"auto", int64_t(-1)},
@@ -163,7 +200,7 @@ const std::vector<FormatDef>& static_formats() {
                                                      "jxl/encode.h:1348-1383）：-1=自动（库默认，按 basic "
                                                      "info 选择）、5=兼容性最广、10=解除限制（CMYK/32bit）；"
                                                      "catalog 默认 10。",
-                                          .visible = {}, .locked = {}},
+                                          .visible = not_lossless, .locked = {}},
                                  ParamDef{.key = "distance", .label = "视觉距离",
                                           .type = ParamType::Float, .def = 1.0, .lo = 0.0,
                                           .hi = 25.0, .step = 0.1, .choices = {}, .advanced = false,
@@ -171,7 +208,7 @@ const std::vector<FormatDef>& static_formats() {
                                                      "jxl/encode.h:1428-1442）：范围 0–25、库默认 1.0、"
                                                      "1.0=视觉无损、推荐 0.5–3.0；0.0 需配合 "
                                                      "JxlEncoderSetFrameLossless 才是真无损。",
-                                          .visible = {}, .locked = {}},
+                                          .visible = not_lossless, .locked = {}},
                                  ParamDef{.key = "photon_noise", .label = "感光噪声模拟 (ISO)",
                                           .type = ParamType::Float, .def = 0.0, .lo = 0.0,
                                           .hi = 6400.0, .step = 100.0, .choices = {}, .advanced = true,
@@ -179,41 +216,41 @@ const std::vector<FormatDef>& static_formats() {
                                                      "（JXL_ENC_FRAME_SETTING_PHOTON_NOISE，"
                                                      "jxl/encode.h:166-171）：100=轻微、3200=明显，库默认 "
                                                      "0；头文件未规定上限，6400 为 UI 上限。",
-                                          .visible = {}, .locked = {}},
+                                          .visible = not_lossless, .locked = {}},
                                  ParamDef{.key = "epf", .label = "边缘保持滤波",
                                           .type = ParamType::Int, .def = int64_t(2), .lo = -1,
                                           .hi = 3, .step = 1, .choices = {}, .advanced = true,
                                           .tooltip = "边缘保持滤波（JXL_ENC_FRAME_SETTING_EPF，"
                                                      "jxl/encode.h:189-192）：-1=编码器自选（库默认）、"
                                                      "0–3=强度；catalog 默认 2。",
-                                          .visible = {}, .locked = {}},
+                                          .visible = not_lossless, .locked = {}},
                                  ParamDef{.key = "keep_invisible", .label = "保留不可见像素",
                                           .type = ParamType::Bool, .def = true, .choices = {}, .advanced = true,
                                           .tooltip = "保留不可见像素 RGB（JXL_ENC_FRAME_SETTING_KEEP_INVISIBLE，"
                                                      "jxl/encode.h:205-208）：库以 -1 表示默认（无损=1、"
                                                      "有损=0）；Bool 无法表达 -1，本表取 true（更保真）。",
-                                          .visible = {}, .locked = {}},
+                                          .visible = not_lossless, .locked = {}},
                                  ParamDef{.key = "dots", .label = "点阵生成",
                                           .type = ParamType::Bool, .def = true, .choices = {},
                                           .advanced = true,
                                           .tooltip = "点阵生成（JXL_ENC_FRAME_SETTING_DOTS，"
                                                      "jxl/encode.h:179-182）：库以 -1 表示默认（编码器自选）；"
                                                      "Bool 无法表达 -1，本表取 true（不主动关闭编码工具）。",
-                                          .visible = {}, .locked = {}},
+                                          .visible = not_lossless, .locked = {}},
                                  ParamDef{.key = "patches", .label = "图块复用",
                                           .type = ParamType::Bool, .def = true, .choices = {},
                                           .advanced = true,
                                           .tooltip = "图块/贴片复用（JXL_ENC_FRAME_SETTING_PATCHES，"
                                                      "jxl/encode.h:184-187）：库以 -1 表示默认（编码器自选）；"
                                                      "Bool 无法表达 -1，本表取 true。",
-                                          .visible = {}, .locked = {}},
+                                          .visible = not_lossless, .locked = {}},
                                  ParamDef{.key = "gaborish", .label = "Gaborish 滤波",
                                           .type = ParamType::Bool, .def = true, .choices = {},
                                           .advanced = true,
                                           .tooltip = "Gaborish 滤波器（JXL_ENC_FRAME_SETTING_GABORISH，"
                                                      "jxl/encode.h:194-197）：库以 -1 表示默认（编码器自选，"
                                                      "通常启用）；Bool 无法表达 -1，本表取 true。",
-                                          .visible = {}, .locked = {}},
+                                          .visible = not_lossless, .locked = {}},
                                  ParamDef{.key = "progressive_ac", .label = "AC 渐进（谱进）",
                                           .type = ParamType::Bool, .def = false, .choices = {},
                                           .advanced = true,
@@ -221,7 +258,7 @@ const std::vector<FormatDef>& static_formats() {
                                                      "（JXL_ENC_FRAME_SETTING_PROGRESSIVE_AC，jxl/encode.h:232-236）："
                                                      "-1=编码器自选（库默认）、0=关闭、1=开启；只影响解码渐进性，"
                                                      "不改变最终画质。",
-                                          .visible = {}, .locked = {}},
+                                          .visible = not_lossless, .locked = {}},
                                  ParamDef{.key = "qprogressive_ac", .label = "AC 渐进（量化位）",
                                           .type = ParamType::Bool, .def = false, .choices = {},
                                           .advanced = true,
@@ -229,7 +266,7 @@ const std::vector<FormatDef>& static_formats() {
                                                      "（JXL_ENC_FRAME_SETTING_QPROGRESSIVE_AC，"
                                                      "jxl/encode.h:238-242）：-1=编码器自选（库默认）、0=关闭、"
                                                      "1=开启。",
-                                          .visible = {}, .locked = {}},
+                                          .visible = not_lossless, .locked = {}},
                                  ParamDef{.key = "progressive_dc", .label = "DC 渐进级数",
                                           .type = ParamType::Int, .def = int64_t(-1), .lo = -1,
                                           .hi = 2, .step = 1, .choices = {}, .advanced = true,
@@ -237,7 +274,7 @@ const std::vector<FormatDef>& static_formats() {
                                                      "（JXL_ENC_FRAME_SETTING_PROGRESSIVE_DC，"
                                                      "jxl/encode.h:244-248）：-1=编码器自选（库默认）、0=关闭、"
                                                      "1=额外 64×64 层、2=512×512 与 64×64 层。",
-                                          .visible = {}, .locked = {}},
+                                          .visible = not_lossless, .locked = {}},
                                  ParamDef{.key = "resampling", .label = "编码前降采样",
                                           .type = ParamType::Enum, .def = int64_t(-1),
                                           .choices = {{"auto", int64_t(-1)},
@@ -250,7 +287,7 @@ const std::vector<FormatDef>& static_formats() {
                                                      "jxl/encode.h:140-146）：-1=编码器自选（库默认，低质量时才"
                                                      "降采样）、1=不降采样、2/4/8=按倍数降采样并在解码端升采样；"
                                                      "会降低有效分辨率。VarDCT/Modular 通用。",
-                                          .visible = {}, .locked = {}},
+                                          .visible = not_lossless, .locked = {}},
                                  ParamDef{.key = "group_order", .label = "256×256 组顺序",
                                           .type = ParamType::Enum, .def = int64_t(-1),
                                           .choices = {{"auto", int64_t(-1)},
@@ -261,7 +298,7 @@ const std::vector<FormatDef>& static_formats() {
                                                      "（JXL_ENC_FRAME_SETTING_GROUP_ORDER，jxl/encode.h:210-214）："
                                                      "-1=编码器默认、0=扫描线顺序、1=中心优先（影响渐进渲染），"
                                                      "不改变画质。VarDCT/Modular 通用。",
-                                          .visible = {}, .locked = {}},
+                                          .visible = not_lossless, .locked = {}},
                               } },
                     TechDef{ .id = "modular", .label = "Modular", .lossless_capable = true,
                              .params = {
@@ -297,7 +334,7 @@ const std::vector<FormatDef>& static_formats() {
                                                      "jxl/encode.h:1428-1442）：0=完全无损（需 "
                                                      "JxlEncoderSetFrameLossless）、>0=有损 Modular；"
                                                      "catalog 上限 15，库允许 0–25。",
-                                          .visible = {}, .locked = {}},
+                                          .visible = {}, .locked = lock_zero_when_lossless},
                                  ParamDef{.key = "color_transform", .label = "色彩变换",
                                           .type = ParamType::Enum, .def = std::string("YCoCg"),
                                           .choices = {{"None", std::string("None")},
@@ -342,7 +379,7 @@ const std::vector<FormatDef>& static_formats() {
                                                      "（JXL_ENC_FRAME_SETTING_LOSSY_PALETTE，"
                                                      "jxl/encode.h:267-270）：-1=默认、0=关闭、1=开启；"
                                                      "有损，无损档保持关闭。",
-                                          .visible = {}, .locked = {}},
+                                          .visible = {}, .locked = lock_false_when_lossless},
                                  ParamDef{.key = "brotli_effort", .label = "Brotli 努力",
                                           .type = ParamType::Int, .def = int64_t(-1), .lo = -1,
                                           .hi = 11, .step = 1, .choices = {}, .advanced = true,
@@ -464,7 +501,7 @@ const std::vector<FormatDef>& static_formats() {
                                                      "compression=\"zip:9\" 形式（ImageSpec::"
                                                      "decode_compression_metadata，OpenImageIO/imageio.h:756-760）。"
                                                      "compression=zip 时可见。",
-                                          .visible = {}, .locked = {}},
+                                          .visible = compression_is_zip, .locked = {}},
                                  ParamDef{.key = "predictor", .label = "预测器",
                                           .type = ParamType::Enum, .def = int64_t(2),
                                           .choices = {{"none", int64_t(1)},
@@ -476,7 +513,7 @@ const std::vector<FormatDef>& static_formats() {
                                                      "HORIZONTAL/FLOATINGPOINT=1/2/3，tiff.h:304-306）。OIIO 在 "
                                                      "lzw/deflate 且 8/16bit 时自动使用 horizontal"
                                                      "（tiffoutput.cpp:677-693）。",
-                                          .visible = {}, .locked = {}},
+                                          .visible = compression_is_lzw_or_zip, .locked = {}},
                                  ParamDef{.key = "tiff_tile_width", .label = "Tile 宽度",
                                           .type = ParamType::Int, .def = int64_t(0), .lo = 0,
                                           .hi = 4096, .step = 16, .choices = {}, .advanced = true,
@@ -672,7 +709,7 @@ const std::vector<FormatDef>& static_formats() {
                                           .tooltip = "保留透明区 RGB 原值（WebPConfig::exact，"
                                                      "webp/encode.h:145-148）：0=丢弃以获得更好压缩（库默认）；"
                                                      "本表取 true（视觉透明档）。",
-                                          .visible = {}, .locked = {}},
+                                          .visible = is_lossless, .locked = {}},
                                  ParamDef{.key = "method", .label = "压缩方法",
                                           .type = ParamType::Int, .def = int64_t(4), .lo = 0,
                                           .hi = 6, .step = 1, .choices = {}, .advanced = true,

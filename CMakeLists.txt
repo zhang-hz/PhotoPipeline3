@@ -12,7 +12,42 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
+# ccache 可用性回退（M1-T15；R18/D7）：只有 ccache 真正可用时才设 launcher，否则整条构建会红。
+# 背景（R18 实测）：未 `source tools/env.sh` 时 CCACHE_DIR 未设、HOME 也不可用 → ccache 把缓存目录
+# 解析到一个只读位置，第一次真正编译就 `ccache: error: Read-only file system` 退出 1，ninja 于是对
+# 每个编译单元报错。回退策略 = 不带 launcher 继续构建（退化为无缓存），而不是让构建失败。
+#
+# 探测分两级（两级都过才设 launcher）：
+#   ① `ccache --version`（成本 ~5ms）：抓"二进制在 PATH 里但根本跑不起来"（缺动态库/架构不符/包装脚本报错）。
+#   ② 让 ccache 真的编译一个空 TU（成本 ~50ms）：**这一级才是 R18 的检测点**。实测 `ccache --version`
+#      在 R18 环境下仍返回 0（`--version` 不碰缓存目录），只有真实编译才会暴露只读缓存目录。
 find_program(PP_CCACHE ccache)
+if(PP_CCACHE)
+    execute_process(COMMAND ${PP_CCACHE} --version
+                    RESULT_VARIABLE PP_CCACHE_RESULT
+                    OUTPUT_QUIET ERROR_QUIET)
+    if(NOT PP_CCACHE_RESULT EQUAL 0)
+        message(STATUS "ccache found at ${PP_CCACHE} but not runnable (exit ${PP_CCACHE_RESULT}); "
+                       "building without compiler launcher")
+        set(PP_CCACHE "")
+    endif()
+endif()
+if(PP_CCACHE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    set(PP_CCACHE_PROBE_SRC "${CMAKE_BINARY_DIR}/pp_ccache_probe.cpp")
+    set(PP_CCACHE_PROBE_OBJ "${CMAKE_BINARY_DIR}/pp_ccache_probe.o")
+    file(WRITE "${PP_CCACHE_PROBE_SRC}" "int pp_ccache_probe() { return 0; }\n")
+    execute_process(COMMAND ${PP_CCACHE} ${CMAKE_CXX_COMPILER} -c ${PP_CCACHE_PROBE_SRC}
+                            -o ${PP_CCACHE_PROBE_OBJ}
+                    RESULT_VARIABLE PP_CCACHE_PROBE_RESULT
+                    OUTPUT_QUIET ERROR_QUIET)
+    file(REMOVE "${PP_CCACHE_PROBE_SRC}" "${PP_CCACHE_PROBE_OBJ}")
+    if(NOT PP_CCACHE_PROBE_RESULT EQUAL 0)
+        message(STATUS "ccache found at ${PP_CCACHE} but its cache directory is unusable "
+                       "(probe compile exit ${PP_CCACHE_PROBE_RESULT}); building without compiler "
+                       "launcher (R18: run `source tools/env.sh` to set CCACHE_DIR)")
+        set(PP_CCACHE "")
+    endif()
+endif()
 if(PP_CCACHE)
     set(CMAKE_CXX_COMPILER_LAUNCHER ${PP_CCACHE})
 endif()

@@ -28,7 +28,6 @@
 
 // jpegli: the task book assumes <jpegli.h>; google/jpegli installs its public encoder
 // API as jpegli/encode.h, built on libjpeg's jpeg_compress_struct.
-// TODO(M0-CD): verify against installed headers.
 #if __has_include(<jpegli/encode.h>)
 #include <jpegli/encode.h>
 #elif __has_include(<jpegli.h>)
@@ -122,10 +121,9 @@ Exiv2::ExifData standard_exif() {
 }
 
 // Contract §12.2 freezes `ExifData::copy(&buf, &size, Exiv2::littleEndian)`; Exiv2 0.28.x
-// has no such overload (only Exifdatum::copy(byte*, ByteOrder)).
-// TODO(M0-CD): verify against installed headers - mechanically adapted to the documented
-// serializer ExifParser::encode(Blob&, ByteOrder, ExifData&), which yields the same raw
-// TIFF/Exif blob expected by libheif and by the JPEG XL "Exif" box.
+// has no such overload (only Exifdatum::copy(byte*, ByteOrder)). Mechanically adapted to the
+// installed serializer ExifParser::encode(Blob&, ByteOrder, ExifData&), which yields the same
+// raw TIFF/Exif blob expected by libheif and by the JPEG XL "Exif" box.
 std::string exif_blob(Exiv2::ExifData& exif) {
     Exiv2::Blob blob;
     Exiv2::ExifParser::encode(blob, Exiv2::littleEndian, exif);
@@ -138,7 +136,7 @@ std::string xmp_packet() {
     xmp["Xmp.xmp.CreatorTool"] = "PhotoPipeline-M0";
     std::string packet;
     Exiv2::XmpParser::initialize();
-    // TODO(M0-CD): verify against installed headers (Exiv2 0.28 returns int here).
+    // Exiv2 0.28 API: XmpParser::encode(packet, xmp) returns int (verified).
     Exiv2::XmpParser::encode(packet, xmp);
     return packet;
 }
@@ -238,7 +236,7 @@ bool write_jpegli_jpeg(const fs::path& path, const std::vector<uint8_t>& rgb, in
     cinfo.in_color_space = JCS_RGB;
     jpegli_set_defaults(&cinfo);
     jpegli_set_colorspace(&cinfo, JCS_YCbCr);
-    // TODO(M0-CD): verify against installed headers (3-argument set_distance).
+    // Installed jpegli API: 3-argument jpegli_set_distance(cinfo, float, force_baseline).
     jpegli_set_distance(&cinfo, distance, FALSE);
     // 4:4:4 - no chroma downsampling.
     for (int c = 0; c < 3 && cinfo.comp_info != nullptr; ++c) {
@@ -311,9 +309,9 @@ struct HeifChoice {
 
 std::vector<HeifChoice> heif_choices(heif_compression_format fmt) {
     std::vector<HeifChoice> out;
-    // TODO(M0-CD): verify against installed headers; libheif exposes the 4-argument
-    // heif_get_encoder_descriptors(format, name, out, count) free function, not the
-    // 6-argument context form assumed by the task book.
+    // libheif exposes the 4-argument free function
+    // heif_get_encoder_descriptors(format, name, out, count), not the 6-argument context form
+    // assumed by the task book (verified against the installed headers).
     int count = heif_get_encoder_descriptors(fmt, nullptr, nullptr, 0);
     if (count <= 0) {
         return out;
@@ -662,7 +660,7 @@ int cmd_verify(const fs::path& dir) {
         }
         return 77;
     }
-    // TODO(M0-CD): verify against installed headers (Exiv2 >= 0.28 API).
+    // Exiv2 >= 0.28 API (verified against the installed headers).
     Exiv2::enableBMFF(true);
 
     // exif_full.jpg: DateTimeOriginal + Artist + GPS round-trip.

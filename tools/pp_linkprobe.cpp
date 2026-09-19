@@ -27,7 +27,6 @@
 
 // jpegli: the task book assumes <jpegli.h>; google/jpegli installs its public encoder
 // API as jpegli/encode.h, built on libjpeg's jpeg_compress_struct.
-// TODO(M0-CD): verify against installed headers.
 #if __has_include(<jpegli/encode.h>)
 #include <jpegli/encode.h>
 #define PP_JPEGLI_HEADER "jpegli/encode.h"
@@ -146,7 +145,7 @@ void check_exiv2() {
 
 void check_exiv2_bmff() {
 #if defined(EXIV2_TEST_VERSION) && EXIV2_TEST_VERSION(0, 28, 0)
-    // TODO(M0-CD): verify against installed headers (Exiv2 >= 0.28 API).
+    // Exiv2 >= 0.28 API (verified against the installed headers).
     const bool ok = Exiv2::enableBMFF(true);
     report("exiv2-bmff", ok, ok ? "enableBMFF(true)=1" : "enableBMFF(true)=0");
 #else
@@ -199,8 +198,8 @@ void check_jpegli() {
     cinfo.err = jpeg_std_error(&jerr);
     jpegli_create_compress(&cinfo);
     jpegli_set_defaults(&cinfo);
-    // TODO(M0-CD): verify against installed headers (jpegli's set_distance takes a
-    // force_baseline argument, unlike the 1-argument form assumed by the task book).
+    // Installed jpegli API: jpegli_set_distance(cinfo, float, force_baseline) — the 3-argument
+    // form, not the 1-argument form assumed by the task book.
     jpegli_set_distance(&cinfo, 1.0f, FALSE);
     jpegli_destroy_compress(&cinfo);
     report("jpegli", true, std::string("create/set_distance/destroy ok via ") + PP_JPEGLI_HEADER);
@@ -213,9 +212,9 @@ void check_libjxl() {
 
 std::vector<std::string> heif_encoder_names(heif_compression_format fmt) {
     std::vector<std::string> names;
-    // TODO(M0-CD): verify against installed headers; libheif >= 1.4 exposes the
-    // 4-argument heif_get_encoder_descriptors(format, name, out, count) free function,
-    // not the 6-argument context form assumed by the task book.
+    // libheif >= 1.4 exposes the 4-argument free function
+    // heif_get_encoder_descriptors(format, name, out, count), not the 6-argument context form
+    // assumed by the task book (verified against the installed headers).
     int count = heif_get_encoder_descriptors(fmt, nullptr, nullptr, 0);
     if (count <= 0) {
         return names;

@@ -7,7 +7,8 @@
 # tests/golden/smoke/<case>.json (SCHEMA.md).
 #
 # usage: bash tests/golden/smoke.sh [BUILD_DIR]
-#   PP_BIN      default <BUILD_DIR>/photopipeline   (must be configured with -DPP_BUILD_DEV=ON)
+#   BUILD_DIR   default <repo>/build/release   (must be configured with -DPP_BUILD_DEV=ON)
+#   PP_BIN      default <BUILD_DIR>/photopipeline
 #   PP_VERIFY   default <BUILD_DIR>/pp_verify
 #   OUT_ROOT    default <repo>/.cache/out-smoke
 # exit code = number of failed cases (0 = all OK)
@@ -15,7 +16,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-BUILD="${1:-${BUILD_DIR:-$ROOT/build/m1-t8}}"
+BUILD="${1:-${BUILD_DIR:-$ROOT/build/release}}"
 PP_BIN="${PP_BIN:-$BUILD/photopipeline}"
 PP_VERIFY="${PP_VERIFY:-$BUILD/pp_verify}"
 GOLDEN="$ROOT/tests/golden"
@@ -23,10 +24,14 @@ OUT_ROOT="${OUT_ROOT:-$ROOT/.cache/out-smoke}"
 
 if [ ! -x "$PP_BIN" ]; then
     echo "smoke: photopipeline not executable: $PP_BIN" >&2
+    echo "smoke: build directory '$BUILD' has no dev harness binary;" >&2
+    echo "smoke: configure it with -DPP_BUILD_DEV=ON (a plain release build has no --dev)." >&2
+    echo "用法: bash tests/golden/smoke.sh [BUILD_DIR]" >&2
     exit 2
 fi
 if [ ! -x "$PP_VERIFY" ]; then
     echo "smoke: pp_verify not executable: $PP_VERIFY" >&2
+    echo "用法: bash tests/golden/smoke.sh [BUILD_DIR]" >&2
     exit 2
 fi
 if [ ! -d "$GOLDEN/base" ]; then

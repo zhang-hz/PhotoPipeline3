@@ -670,6 +670,19 @@ int main(int argc, char** argv) {
             return run_dev(argc, argv);
         }
     }
+#else
+    // M1-T15: a release build contains no dev harness. This must happen *before* QApplication
+    // is constructed: Qt6 silently ignores unknown long options (T14 measured `--dev` → exit 0
+    // with empty stdout/stderr), so without this check a release binary would just start the
+    // GUI. Report the missing harness and fail with a non-zero exit code instead.
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--dev") == 0) {
+            std::fprintf(
+                stderr,
+                "photopipeline: dev harness not built (rebuild with -DPP_BUILD_DEV=ON)\n");
+            return 2;
+        }
+    }
 #endif
 
     QApplication app(argc, argv);

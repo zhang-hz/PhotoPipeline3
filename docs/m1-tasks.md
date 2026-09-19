@@ -51,8 +51,9 @@
 > **批次划分（主对话决策）**：**本批次（本轮）= W1–W4 + W6 引擎收口，不做 UI**；W5/W7（T9–T13、T14b）整体归**下一批次**。design.md §9.1 的 M1 相应拆为 **M1a（引擎）** / **M1b（UI）**；本轮结束时把全部 core/codecs 接口冻结清单交下一批次（UI 只消费、不改接口）。
 | **修复** | T5b | 依赖修复：exiv2 打开 zlib/PNG（R1）——feature 优先、overlay 兜底 | T5 | ✅ `6e98ca7`（Path A：port 自带 `png` feature，一行改动 + 17s 重装） |
 | | T7b | 依赖修复：x265 高比特深度（10bit HEIF，R19/"禁止精简"）——同样 feature 优先 | T7 | ✅ `201c8a8`（Path B：overlay 多库合并，heif/x265 → 8,10,12） |
-| | T2b | 数据扩展：heif/avif 静态位深集 → `{8,10,12}`（默认仍 10，运行期交集收敛） | T7b | 待派 |
-| | T7e | R19 复核：T7b 后重跑位深探测 + 单测 | T7b | 待派 |
+| | T2b | 数据扩展：heif/avif 静态位深集 → `{8,10,12}`（默认仍 10，运行期交集收敛） | T7b | ✅ `c9d1adb` |
+| | T7e | R19 复核：T7b 后重跑位深探测 + 单测（断言收紧为回归式） | T7b | ✅ `a2b1218` |
+| | T15 | 收尾清理：ccache 可用性回退（两级探测）、`TODO(M0-CD)` 清零、`smoke.sh` 默认目录、release 下显式拒绝 `--dev` | T14 | ✅ `0852cbc` |
 
 ### 2.2 执行编排（主对话控制，执行者只关心自己的任务）
 
@@ -112,7 +113,7 @@ target_link_libraries(photopipeline PRIVATE pp_core Qt6::Widgets Qt6::Network)
 #    target_link_libraries(<target> PRIVATE $<LINK_LIBRARY:WHOLE_ARCHIVE,pp_core>)   # CMake ≥3.24
 ```
 
-**`CMakeLists.txt` 所有者序列（冻结；其余任务一律不得改）**：T1（glob 收编）→ **T7（T7c：whole-archive 链接）** → T8（新增 `pp_verify` target）→ T9（删 `PP_M0_SMOKE` 定义）→ T14（ccache 可用性回退）。
+**`CMakeLists.txt` 所有者序列（冻结；其余任务一律不得改）**：T1（glob 收编）→ **T7（T7c：whole-archive 链接）** → T8（新增 `pp_verify` target + `PP_BUILD_DEV` 接线）→ **T15（ccache 两级可用性回退，R18）** → T9（删 `PP_M0_SMOKE` 定义，下一批次）。**`CMakePresets.json`**：T1 后未再改；下一批次由 T9 增 `release-dev` 预设（release + `PP_BUILD_DEV=ON`），使 `tests/golden/smoke.sh` 默认目录即可用。
 
 `photopipeline` 现有 `PP_M0_SMOKE` 定时退出宏在 T9 中**删除**（改为 ctest 的 offscreen 冒烟脚本控制超时）。
 
@@ -1218,7 +1219,7 @@ next-needed:
 - W2：T3、T4、T5 并行（三者互不依赖；T5 最大，可单独给最长时限）。
 - W3：T6、T7 并行（都只依赖 §3.5/§3.6 头文件）。
 - W4：T8 单任务——**M1 的关键集成点**，首次端到端；若红，主对话决策后派修复轮，不得跳过。
-- **本批次（本轮）**：W1（T1/T2）→ W2（T3/T4/T5）→ W3（T6/T7）→ W4（T8）→ W6（T14 引擎收口）；修复任务 T5b/T6b/T7b/T7d 按需插入，不占波次。
-- **下一批次**：W5（T9–T13 UI 并行；CMakeLists 由 T9 删 `PP_M0_SMOKE`，所有者序列见 §2.3）→ W7（T14b UI 收口）。
+- **本批次（本轮）**：W1（T1/T2）→ W2（T3/T4/T5）→ W3（T6/T7）→ W4（T8）→ W6（T14 引擎收口）；修复任务 T5b/T5c/T6b/T7b/T7d/T2b/T7e/T15 按需插入，不占波次。**状态：全部完成，出口准则 8/8 PASS**——交付报告见 `docs/m1-report.md`，基线证据在 `.cache/m1-baseline/`（gitignored）。
+- **下一批次（M1b）**：W5（T9–T13 UI 并行；T9 负责 CMakePresets 增 `release-dev`、删 `PP_M0_SMOKE`）→ W7（T14b UI 收口）。启动条件与接口基线见 `docs/m1-report.md` §4/§8。
 - 任一波 PARTIAL/BLOCKED → 主对话裁决后重派或修复，同类错误 3 次即 STOP。
 - 每个 subagent 提示词必须包含：本任务 ID、必读章节（§1 纪律 + 本文档对应任务节 + §3 冻结接口 + §7 事实 + §9 报告格式）、禁止事项（docs/ 只读、PP-FROZEN 逐字节、禁 subagent、禁改依赖与构建基础设施、不碰他人文件域）。

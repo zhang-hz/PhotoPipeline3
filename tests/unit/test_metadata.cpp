@@ -24,14 +24,16 @@
 
 #include "core/logger.h"
 #include "core/metadata.h"
+#include "core/pipeline.h"  // frozen format_supports_metadata_only() (weak fallback in metadata.cpp)
 
 namespace fs = std::filesystem;
 
 namespace pp {
-// Internal helper of src/core/metadata.cpp (R1 mirror fallback). Deliberately outside the frozen
-// header: it only exists so the fallback logic keeps test coverage in a build where Exiv2 cannot
-// open PNG at all.
+// Internal helpers of src/core/metadata.cpp. Deliberately outside the frozen header: the mirror
+// fallback keeps R1 coverage in a build where Exiv2 cannot open PNG at all, and the capability
+// probe is what T8's format_supports_metadata_only() should delegate to.
 std::size_t detail_mirror_key_exif_to_xmp(const Exiv2::ExifData& exif, Exiv2::XmpData& xmp);
+bool detail_metadata_only_supported(std::string_view format_id);
 }  // namespace pp
 
 namespace {
@@ -685,6 +687,27 @@ std::string riff_payload(const fs::path& p) {
     return out;
 }
 
+// PNG: concatenated IDAT payload bytes — the PNG equivalent of the JPEG "SOS tail" criterion.
+std::string png_idat(const fs::path& p) {
+    const std::vector<uint8_t> b = read_bytes(p);
+    static const unsigned char kSig[8] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
+    if (b.size() < 8 || std::memcmp(b.data(), kSig, 8) != 0) return {};
+    const auto be32 = [&b](std::size_t o) {
+        return (static_cast<uint32_t>(b[o]) << 24) | (static_cast<uint32_t>(b[o + 1]) << 16) |
+               (static_cast<uint32_t>(b[o + 2]) << 8) | static_cast<uint32_t>(b[o + 3]);
+    };
+    std::string out;
+    std::size_t pos = 8;
+    while (pos + 12 <= b.size()) {
+        const uint32_t len = be32(pos);
+        const std::string type(reinterpret_cast<const char*>(b.data() + pos + 4), 4);
+        const std::size_t end = std::min(b.size(), pos + 12 + static_cast<std::size_t>(len));
+        if (type == "IDAT") out.append(reinterpret_cast<const char*>(b.data() + pos + 8), end - (pos + 8));
+        pos = end;
+    }
+    return out;
+}
+
 void test_metadata_only(const fs::path& tmp) {
     const fs::path src = corpus() / "meta" / "exif_full.jpg";
     const fs::path out = tmp / "metadata_only.jpg";
@@ -720,9 +743,39 @@ void test_metadata_only(const fs::path& tmp) {
     check(back.has_gps, "meta-only/gps-preserved", "GPS was lost");
 }
 
-// Same rewrite path for the other two containers that Exiv2 can write in this build: the
-// compressed payload must survive byte for byte (WebP chunk level) / pixel for pixel (TIFF).
+// Same rewrite path for the other containers Exiv2 can write now (PNG/WebP/TIFF): the coded
+// payload must survive byte for byte (PNG IDAT / WebP VP8L chunk level; TIFF is checked by pixel
+// hash because Exiv2 relocates the strips when the IFD grows).
 void test_metadata_only_other_containers(const fs::path& tmp) {
+    {
+        const fs::path src = corpus() / "base" / "rgb8.png";
+        const fs::path out = tmp / "metadata_only.png";
+        const pp::SourceMeta meta = pp::read_metadata(src);
+        if (!meta.error.empty()) {
+            fail("meta-only/png/read", meta.error);
+        } else {
+            pp::BatchRules rules;
+            rules.exif_edits.push_back(pp::TagEdit{"Exif.Image.Artist", std::string("M1-T5"), false});
+            rules.xmp_edits.push_back(pp::TagEdit{"Xmp.dc.title", std::string("png meta-only"), false});
+            const pp::MetadataPlan plan = pp::build_plan(meta, rules, std::nullopt);
+            const std::string err = pp::rewrite_metadata_only(src, out, plan, pp::make_payloads(plan));
+            check(err.empty(), "meta-only/png/rewrite", err);
+            const std::string idat_src = png_idat(src);
+            const std::string idat_out = png_idat(out);
+            check(!idat_src.empty() && idat_src == idat_out, "meta-only/png/idat-identical",
+                  "IDAT payload differs (src=" + std::to_string(idat_src.size()) +
+                      " out=" + std::to_string(idat_out.size()) + " bytes)");
+            check(pixel_hash(src) == pixel_hash(out), "meta-only/png/pixel-hash", "pixels changed");
+            const pp::SourceMeta back = pp::read_metadata(out);
+            check(exif_str(back.exif, "Exif.Image.Artist") == "M1-T5", "meta-only/png/artist-written",
+                  show(exif_str(back.exif, "Exif.Image.Artist")));
+            check(xmp_str(back.xmp, "Xmp.dc.title").find("png meta-only") != std::string::npos,
+                  "meta-only/png/xmp-written", show(xmp_str(back.xmp, "Xmp.dc.title")));
+            std::printf("info meta-only png: idat_src=%zu idat_out=%zu idat_equal=%d pixel_hash_equal=%d\n",
+                        idat_src.size(), idat_out.size(), (int)(idat_src == idat_out),
+                        (int)(pixel_hash(src) == pixel_hash(out)));
+        }
+    }
     {
         const fs::path src = corpus() / "meta" / "webp_lossless.webp";
         const fs::path out = tmp / "metadata_only.webp";
@@ -762,6 +815,9 @@ void test_metadata_only_other_containers(const fs::path& tmp) {
 }
 
 void test_png_r1(const fs::path& tmp) {
+    // R1 (closed by M1-T5b: the exiv2 port now builds with its "png" feature → zlib).
+    // PNG uses the same post-encode Exiv2 path as JPEG/TIFF/WebP; the mirror/drop fallback in
+    // write_metadata_exiv2() stays as a safety net for a build without PNG support.
     const fs::path src = corpus() / "base" / "rgb8.png";
     const fs::path out = tmp / "r1.png";
     check(copy_fixture(src, out), "r1/png/copy", out.string());
@@ -770,6 +826,7 @@ void test_png_r1(const fs::path& tmp) {
     const pp::SourceMeta meta = pp::read_metadata(corpus() / "meta" / "exif_full.jpg");
     pp::BatchRules rules;
     rules.exif_edits.push_back(pp::TagEdit{"Exif.Image.Artist", std::string("M1-T5"), false});
+    rules.xmp_edits.push_back(pp::TagEdit{"Xmp.dc.title", std::string("png r1"), false});
     pp::MetadataPlan plan = pp::build_plan(meta, rules, std::nullopt);
     const std::string err = pp::write_metadata_exiv2(out, plan, pp::make_payloads(plan));
 
@@ -778,14 +835,27 @@ void test_png_r1(const fs::path& tmp) {
 
     const bool writable = exiv2_supports(out);
     if (writable) {
+        // success path: EXIF *and* XMP land, and no downgrade warning may be produced
         const pp::SourceMeta back = pp::read_metadata(out);
-        const bool landed = !exif_str(back.exif, "Exif.Image.Artist").empty();
-        // Either the eXIf chunk round-trips, or the fallback mirrored it into XMP + warned.
-        check(landed || has_warning(plan, pp::WarningKind::MetadataDropped), "r1/png/landed-or-warned",
-              "neither EXIF landed nor a MetadataDropped warning was produced");
-        std::printf("info R1 png exif: writable=%d exif_landed=%d xmp_title=%s\n", 1, landed ? 1 : 0,
-                    show(xmp_str(back.xmp, "Xmp.tiff.Artist")).c_str());
+        check(back.error.empty(), "r1/png/readback", back.error);
+        check(exif_str(back.exif, "Exif.Image.Artist") == "M1-T5", "r1/png/exif-artist",
+              show(exif_str(back.exif, "Exif.Image.Artist")));
+        check(exif_str(back.exif, "Exif.Photo.DateTimeOriginal") == "2024:03:01 10:00:00",
+              "r1/png/exif-time", show(exif_str(back.exif, "Exif.Photo.DateTimeOriginal")));
+        check(back.has_gps &&
+                  std::fabs(dms_to_degrees(back.exif, "Exif.GPSInfo.GPSLatitude") - 31.2304) < 1e-6,
+              "r1/png/exif-gps", num(dms_to_degrees(back.exif, "Exif.GPSInfo.GPSLatitude")));
+        check(xmp_str(back.xmp, "Xmp.dc.title").find("png r1") != std::string::npos,
+              "r1/png/xmp-title", show(xmp_str(back.xmp, "Xmp.dc.title")));
+        check(!has_warning(plan, pp::WarningKind::MetadataDropped), "r1/png/no-drop-warning",
+              show(warning_detail(plan, pp::WarningKind::MetadataDropped)));
+        std::printf("info R1 png exif: writable=1 artist=%s time=%s gps=%s xmp_title=%s warnings=%zu\n",
+                    show(exif_str(back.exif, "Exif.Image.Artist")).c_str(),
+                    show(exif_str(back.exif, "Exif.Photo.DateTimeOriginal")).c_str(),
+                    num(dms_to_degrees(back.exif, "Exif.GPSInfo.GPSLatitude")).c_str(),
+                    show(xmp_str(back.xmp, "Xmp.dc.title")).c_str(), plan.warnings.size());
     } else {
+        // fallback path — only reachable when exiv2 has no png support (EXV_HAVE_LIBZ undefined)
         check(has_warning(plan, pp::WarningKind::MetadataDropped), "r1/png/dropped-warning",
               "expected Warning{MetadataDropped} for a PNG output");
         check(warning_detail(plan, pp::WarningKind::MetadataDropped).find("png") != std::string::npos,
@@ -794,6 +864,39 @@ void test_png_r1(const fs::path& tmp) {
         std::printf("info R1 png exif: writable=0 dropped_detail=%s\n",
                     show(warning_detail(plan, pp::WarningKind::MetadataDropped)).c_str());
     }
+}
+
+// The metadata-only capability must now include PNG; the probe is a runtime check so a future
+// exiv2 build without a format handler degrades automatically (T8 delegates to it).
+void test_metadata_only_capability() {
+    check(pp::detail_metadata_only_supported("jpeg"), "capability/jpeg", "expected true");
+    check(pp::detail_metadata_only_supported("png"), "capability/png", "expected true (R1 closed)");
+    check(pp::detail_metadata_only_supported("tiff"), "capability/tiff", "expected true");
+    check(pp::detail_metadata_only_supported("webp"), "capability/webp", "expected true");
+    check(!pp::detail_metadata_only_supported("heif"), "capability/heif", "expected false");
+    check(!pp::detail_metadata_only_supported("avif"), "capability/avif", "expected false");
+    check(!pp::detail_metadata_only_supported("jxl"), "capability/jxl", "expected false");
+    check(!pp::detail_metadata_only_supported("bmp"), "capability/bmp", "expected false");
+    check(!pp::detail_metadata_only_supported("nonsense"), "capability/unknown", "expected false");
+    std::printf("info metadata-only capability: jpeg=%d png=%d tiff=%d webp=%d heif=%d avif=%d jxl=%d "
+                "bmp=%d\n",
+                (int)pp::detail_metadata_only_supported("jpeg"),
+                (int)pp::detail_metadata_only_supported("png"),
+                (int)pp::detail_metadata_only_supported("tiff"),
+                (int)pp::detail_metadata_only_supported("webp"),
+                (int)pp::detail_metadata_only_supported("heif"),
+                (int)pp::detail_metadata_only_supported("avif"),
+                (int)pp::detail_metadata_only_supported("jxl"),
+                (int)pp::detail_metadata_only_supported("bmp"));
+
+    // frozen predicate (§3.9): must agree for the metadata-only formats
+    check(pp::format_supports_metadata_only("png"), "capability/frozen-api/png", "expected true");
+    check(pp::format_supports_metadata_only("jpeg") && pp::format_supports_metadata_only("tiff") &&
+              pp::format_supports_metadata_only("webp"),
+          "capability/frozen-api/others", "expected true for jpeg/tiff/webp");
+    check(!pp::format_supports_metadata_only("heif") && !pp::format_supports_metadata_only("avif") &&
+              !pp::format_supports_metadata_only("jxl") && !pp::format_supports_metadata_only("bmp"),
+          "capability/frozen-api/unsupported", "expected false for heif/avif/jxl/bmp");
 }
 
 void test_mirror_helper() {
@@ -959,6 +1062,7 @@ int main() {
     test_metadata_only(tmp);
     test_metadata_only_other_containers(tmp);
     test_png_r1(tmp);
+    test_metadata_only_capability();
     test_mirror_helper();
     test_post_write_formats(tmp);
     test_makernote(tmp);

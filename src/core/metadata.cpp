@@ -34,6 +34,7 @@
 #include <utility>
 
 #include "core/logger.h"
+#include "core/pipeline.h"  // frozen declaration of format_supports_metadata_only()
 
 namespace pp {
 namespace {
@@ -439,6 +440,11 @@ int apply_time_shift(Exiv2::ExifData& exif, Exiv2::XmpData& xmp, const TimeShift
 // container cannot carry into XMP. Outside the frozen interface; the unit test declares it too.
 std::size_t detail_mirror_key_exif_to_xmp(const Exiv2::ExifData& exif, Exiv2::XmpData& xmp);
 
+// Runtime metadata-only capability probe (defined next to write_metadata_exiv2). Outside the
+// frozen interface: T8's format_supports_metadata_only() should delegate to it; the unit test
+// declares it too.
+bool detail_metadata_only_supported(std::string_view format_id);
+
 // ===========================================================================
 // pure helpers (§3.7 "可单测纯函数")
 // ===========================================================================
@@ -660,10 +666,11 @@ std::string write_metadata_exiv2(const std::filesystem::path& out_file, const Me
     if (err.empty() && (!is_png || key_exif_landed(out_file, plan.exif))) return {};
 
     if (is_png) {
-        // R1: PNG eXIf did not land → mirror the key EXIF fields into XMP and rewrite.
-        // TODO(M2): PNG metadata stays unimplemented while exiv2 is built without zlib; either
-        //           enable EXV_HAVE_LIBZ in the vcpkg exiv2 port or write the PNG chunks through
-        //           an OIIO-side writer (see the M1-T5 report, R1).
+        // R1 fallback, kept as a safety net: this branch is only reachable when the exiv2 build
+        // has no PNG support (EXV_HAVE_LIBZ undefined → PNG is not a registered image type) or
+        // when a PNG eXIf chunk write is silently dropped. With the current vcpkg exiv2 port
+        // (features bmff,xmp,png → zlib) PNG is writable and the normal path above succeeds —
+        // verified by the r1/png/* cases in tests/unit/test_metadata.cpp (R1 CLOSED).
         Exiv2::XmpData mirrored = plan.xmp;
         const std::size_t mirrored_n = detail_mirror_key_exif_to_xmp(plan.exif, mirrored);
         if (mirrored_n > 0) {
@@ -677,15 +684,67 @@ std::string write_metadata_exiv2(const std::filesystem::path& out_file, const Me
         }
     }
 
-    // Metadata-only loss: keep the pixel output, report it (§5.2 BMP policy; R1 for PNG).
-    std::string detail = is_png
-                             ? std::string("png metadata dropped: exiv2 has no png support "
-                                           "(EXV_HAVE_LIBZ undefined)")
-                             : "metadata dropped: " + err;
+    // Metadata-only loss: keep the pixel output, report it (§5.2 BMP policy; R1 fallback for PNG).
+    std::string detail = is_png ? "png metadata dropped: " + err : "metadata dropped: " + err;
     log_error("MetaWrite", "metadata.cpp", detail.c_str());
     push_plan_warning(plan, WarningKind::MetadataDropped, std::move(detail));
     return {};
 }
+
+// ---------------------------------------------------------------------------
+// metadata-only capability (runtime probe; not part of the frozen interface)
+// ---------------------------------------------------------------------------
+
+bool detail_metadata_only_supported(std::string_view format_id) {
+    // v1 policy (§5.5): only containers Exiv2 can rewrite losslessly are metadata-only capable.
+    // The container itself is probed at runtime with Exiv2's own type detection, so a future
+    // exiv2 build that loses a format handler (e.g. no zlib → no PNG) degrades automatically
+    // instead of failing per file. T8's format_supports_metadata_only() should delegate here.
+    struct Sample {
+        std::string_view id;
+        const unsigned char* sig;
+        std::size_t size;
+    };
+    // Structurally complete minimal headers: Exiv2's type detection reads beyond the bare magic
+    // (chunk headers / IFD offset), so truncated magics are not enough.
+    static const unsigned char kJpeg[] = {0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46,
+                                          0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01};
+    static const unsigned char kPng[] = {  // signature + full IHDR chunk (1x1 RGBA8)
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
+        0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+        0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89};
+    static const unsigned char kTiff[] = {  // "II*\0", IFD at 8 with one ImageWidth entry
+        0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x01, 0x03, 0x00,
+        0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    static const unsigned char kWebp[] = {  // RIFF/WEBP + minimal VP8X chunk
+        0x52, 0x49, 0x46, 0x46, 0x16, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50, 0x56, 0x50,
+        0x38, 0x58, 0x0A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00};
+    static const Sample kSamples[] = {{"jpeg", kJpeg, sizeof(kJpeg)},
+                                      {"png", kPng, sizeof(kPng)},
+                                      {"tiff", kTiff, sizeof(kTiff)},
+                                      {"webp", kWebp, sizeof(kWebp)}};
+    for (const Sample& s : kSamples) {
+        if (format_id != s.id) continue;
+        try {
+            return Exiv2::ImageFactory::getType(s.sig, s.size) != Exiv2::ImageType::none;
+        } catch (...) {
+            return false;
+        }
+    }
+    return false;  // bmp/heif/avif/jxl and anything else: no lossless metadata rewrite in v1
+}
+
+// The frozen predicate is declared in core/pipeline.h and owned by T8's pipeline.cpp. Until that
+// lands this weak definition keeps callers/tests linkable; a strong definition in pipeline.cpp
+// takes precedence (ELF weak-symbol semantics), so T8 stays the owner. Omitted on non-GNU
+// toolchains so a missing T8 implementation surfaces as a link error instead of silently working.
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((weak))
+bool format_supports_metadata_only(std::string_view format_id) {
+    return detail_metadata_only_supported(format_id);
+}
+#endif
 
 // ===========================================================================
 // metadata-only mode (same container, zero re-encode)

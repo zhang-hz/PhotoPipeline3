@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // PhotoPipeline — unit tests: parameter engine (M1-T2)
 // 手写断言；失败打印 "FAIL <case>: <detail>"，main 返回失败数。
+#include <algorithm>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -394,6 +395,28 @@ int main() {
         mixed["__lossless"] = true;
         mixed["effort"] = int64_t(7);
         check(snapshot_params(mixed) == "effort=7", c, "[" + snapshot_params(mixed) + "]");
+    }
+
+    // 13) 静态位深允许集（M1-T2b：heif/avif = {8,10,12}；表只表达"允许集"，默认位深由调用方选）
+    {
+        const std::string c = "bitdepth-sets";
+        for (const char* id : {"heif", "avif"}) {
+            const FormatDef* f = find_format(id);
+            check(f != nullptr, c, std::string(id) + " not found");
+            if (f) {
+                for (const int d : {8, 10, 12})
+                    check(std::find(f->bitdepths.begin(), f->bitdepths.end(), d) != f->bitdepths.end(), c,
+                          std::string(id) + " must allow bitdepth " + std::to_string(d));
+                check(f->bitdepths.size() == 3, c,
+                      std::string(id) + " bitdepth set size = " + std::to_string(f->bitdepths.size()));
+            }
+        }
+        const FormatDef* jpeg = find_format("jpeg");
+        check(jpeg && std::find(jpeg->bitdepths.begin(), jpeg->bitdepths.end(), 12) == jpeg->bitdepths.end(),
+              c, "jpeg must not allow 12-bit output");
+        const FormatDef* png = find_format("png");
+        check(png && std::find(png->bitdepths.begin(), png->bitdepths.end(), 10) == png->bitdepths.end(),
+              c, "png must not allow 10-bit output");
     }
 
     if (g_fail == 0) std::printf("test_params: OK\n");

@@ -378,7 +378,8 @@ int main() {
         bad.version = 2;
         check(validate_preset(bad).find("version") != std::string::npos, c, "bad version must fail");
 
-        // heif/avif：运行时内省参数 → 静态校验跳过技术/参数，位深仍校验
+        // heif/avif：运行时内省参数 → 静态校验跳过技术/参数；位深按静态允许集校验（M1-T2b：
+        // heif/avif = {8,10,12}，默认位深由调用方选，不在表内）
         PresetData h;
         h.name = "heif";
         h.format_id = "heif";
@@ -386,8 +387,30 @@ int main() {
         h.tech_id = "x265-main";
         h.out_bitdepth = 10;
         check(validate_preset(h).empty(), c, "runtime-introspected preset should pass: " + validate_preset(h));
-        h.out_bitdepth = 12;
-        check(!validate_preset(h).empty(), c, "heif bitdepth 12 must fail");
+        for (const int d : {8, 10, 12}) {
+            h.out_bitdepth = d;
+            check(validate_preset(h).empty(), c,
+                  "heif bitdepth " + std::to_string(d) + " must pass: " + validate_preset(h));
+        }
+        PresetData a;
+        a.name = "avif";
+        a.format_id = "avif";
+        a.backend_id = "libaom";
+        a.out_bitdepth = 12;
+        check(validate_preset(a).empty(), c, "avif bitdepth 12 must pass: " + validate_preset(a));
+        a.backend_id = "svt-av1";
+        check(validate_preset(a).empty(), c,
+              "avif/svt-av1 bitdepth 12 is in the static allowed set (runtime probe intersects): " +
+                  validate_preset(a));
+        h.out_bitdepth = 16;
+        check(validate_preset(h).find("bitdepth") != std::string::npos, c, "heif bitdepth 16 must fail");
+        PresetData j;
+        j.name = "jpeg";
+        j.format_id = "jpeg";
+        j.backend_id = "jpegli";
+        j.tech_id = "dct";
+        j.out_bitdepth = 12;
+        check(validate_preset(j).find("bitdepth") != std::string::npos, c, "jpeg bitdepth 12 must fail");
     }
 
     // 6) normalize_preset：补齐后端/技术/参数 + 应用锁定

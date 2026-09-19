@@ -742,7 +742,7 @@ const std::vector<FormatDef>& static_formats() {
             .backends = { BackendDef{
                 .id = "x265", .label = "x265", .runtime_introspected = true,
                 .techs = {} } },
-            .bitdepths = {8, 10},
+            .bitdepths = {8, 10, 12},
             .supports_alpha = true, .supports_gray = false,
             .meta_path = "libheif" },
         FormatDef{
@@ -752,7 +752,7 @@ const std::vector<FormatDef>& static_formats() {
                             .techs = {} },
                 BackendDef{ .id = "libaom", .label = "libaom", .runtime_introspected = true,
                             .techs = {} } },
-            .bitdepths = {8, 10},
+            .bitdepths = {8, 10, 12},
             .supports_alpha = true, .supports_gray = false,
             .meta_path = "libheif" },
     };

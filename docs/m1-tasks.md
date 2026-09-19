@@ -356,6 +356,16 @@ std::string icc_from_spec(const OIIO::ImageSpec& spec);
 }  // namespace pp
 ```
 
+> **落地修订（T3 实测，主对话批准；T6/T7/T8 必读）**：
+> ① `ImageBuf::read(0,0,0,0,TypeFloat)` 在 OIIO 3.1.14 **会 SIGSEGV**（六参重载 `chend=0` 非法）→ 正确形式 `read(0,0,0,nch,true,TypeDesc::FLOAT)`（imagebuf.h:538 四参 / :560 六参，`chend` 必须 >0）；
+> ② CMYK 检测：OIIO 把 separated(CMYK) **读成 3 通道**，仅留属性 `tiff:ColorSpace=="CMYK"`（string）或 `tiff:PhotometricInterpretation==5`（int）→ 两者任一命中即报错，错误串固定 `"CMYK input is not supported"`；
+> ③ ICC 是**数组属性**：须无类型 `find_attribute("ICCProfile")` + `type().basetype==UINT8`（实测 `uint8[536]`），标量查询会 MISS；
+> ④ 多页判定用 `ImageInput::seek_subimage(1,0)`（`ImageSpec` 无 `nsubimages` 成员）；
+> ⑤ `ImageInfo.format` 取 `ImageInput::format_name()`（`ImageSpec::format` 是像素 `TypeDesc`）；
+> ⑥ `has_alpha = alpha_channel >= 0 || channels ∈ {2,4}`（GIF 存在 `alpha_channel == 4` 越界索引的 quirk）——**T8 的 flatten / GrayToRgb 判定以此为准**；
+> ⑦ ImageBuf 若存在未取走的 error，析构会向 stderr 打印告警 → 失败路径必须 `buf.geterror()`；
+> ⑧ 非 {1,2,3,4} 通道数**只在 `decode_float` 报错**（probe 仍如实报告 channels），T8 无需在 probe 阶段拦截。
+
 ### 3.6 `src/core/colormanager.h`（T4）
 
 ```cpp
@@ -409,6 +419,13 @@ std::string load_target_icc(ColorTarget t, std::string& err);  // sRGB → 空�
 ```
 
 > **ICC 获取方式（主对话裁定）**：P3 与 AdobeRGB 目标 profile **由 lcms2 在内存中生成**（`cmsCreateRGBProfile`：D65 白点 + 标准原色 + Display P3 用 sRGB TRC / AdobeRGB 用 gamma 2.19921875，并写 profile description tag），不下载、不随仓库分发二进制 ICC——彻底规避再分发许可问题且保持离线可构建。`assets/icc/README.md` 记录该决策与生成参数；若将来需要外部 ICC，再走"来源注明"路径。`load_target_icc` 签名不变（实现改为生成 + 缓存）。sRGB 目标仍用 lcms2 内建 `cmsCreate_sRGBProfile()`。
+>
+> **T4 落地口径（主对话确认，冻结）**：
+> ① lcms2 2.19.1 **无 float 平面格式**（仅 8/16 位 PLANAR）→ 模块侧按通道平面读写、调用前交错为 `TYPE_GRAY_FLT`/`TYPE_RGB_FLT`（语义不变）；
+> ② **规范化源规则**：源 ICC 与目标 ICC 字节相同时复用同一 lcms2 句柄 → sRGB→sRGB 恒等实测为**精确 0**（走字节往返副本会引入 ~1.8e-4 暗部串扰；§3.6 的 ≤1e-5 硬指标以此满足）；第三方 sRGB ICC（字节不同）无法塌缩，暗部 ≤1.8e-4 → 已记 TODO(M2)；
+> ③ `load_target_icc` 对**三个彩色目标均返回嵌入用字节**（sRGB = 内建 profile 的序列化字节），符合共识 §3.5"始终嵌入"；KeepOriginal + 源有 ICC → 源 ICC 原样；源无 ICC → 空；
+> ④ 1ch/2ch 源在 `target != KeepOriginal` 时**已由本模块升维**为 RGB/RGBA（灰+α → RGBA）——调用方**不得二次升维**；
+> ⑤ 头注释里的 `assets/icc/*.icc` 文件名保留为未来外部 ICC 的路径说明，当前实现为内存生成（仅注释措辞，已裁定不改头文件）。
 
 **数值契约**：sRGB→sRGB float 恒等 ≤1e-5；sRGB 白 → Lab D50：L∈[99.5,100.5]（M0 Spike E 已证）；意图固定 `INTENT_RELATIVE_COLORIMETRIC | cmsFLAGS_BLACKPOINTCOMPENSATION`。
 
@@ -885,6 +902,40 @@ pp_verify <expected.json> <actual_output> [--selftest]
 输出：`VERIFY <case> OK|FAIL <detail>`；退出码 = FAIL 数
 ```
 
+### 3.17 `src/codecs/encoder_registry.h`（内部头，T6 创建；T7 只使用，不得修改）
+
+> 目的：消除 T6/T7 对 `encoders.cpp` 的并行写冲突——**每个编码器在自己的 .cpp 里静态自注册**，工厂只查表。
+
+```cpp
+// PP-FROZEN(interface): 内部注册表（T6 创建；T7 只 include + 用宏，不得改动本文件）
+#pragma once
+#include <memory>
+#include <string>
+#include <string_view>
+#include <vector>
+#include "codecs/encoder.h"
+
+namespace pp {
+
+using EncoderFactory = std::unique_ptr<IEncoder> (*)();
+
+// 注册；同一 (format, backend) 重复注册 → 返回 false 且不覆盖先注册者
+bool register_encoder(std::string_view format_id, std::string_view backend_id, EncoderFactory f);
+
+// backend_id 为空 → 返回该格式首个注册项；未注册 → nullptr
+std::unique_ptr<IEncoder> create_registered_encoder(std::string_view format_id,
+                                                    std::string_view backend_id);
+std::vector<std::string> registered_backends(std::string_view format_id);
+
+// 静态注册助手（.cpp 文件作用域使用；fn 形如 std::unique_ptr<IEncoder> make_xxx()）
+#define PP_REGISTER_ENCODER(format_id, backend_id, fn) \
+    namespace { const bool pp_reg_##fn = ::pp::register_encoder((format_id), (backend_id), &(fn)); }
+
+}  // namespace pp
+```
+
+**文件归属（冻结，避免并行冲突）**：T6 创建 `encoder_registry.h` + `encoders.cpp`（`make_encoder` = 查表）+ `enc_jpegli.cpp`/`enc_jxl.cpp`/`enc_webp.cpp`；T7 创建 `enc_heif.cpp`/`enc_oiio.cpp`（各自用宏注册）并**独家实现** `introspect_backends` / `probe_bitdepth_support`（定义在 `enc_heif.cpp`）。**T7 不得编辑 T6 的任何文件**；若 T7 编译时 `encoder_registry.h` 尚不存在 → 等待（每 60s 重试，上限 25 分钟），先写实现。
+
 ---
 
 ## 4. 各任务详细规格
@@ -948,6 +999,16 @@ pp_verify <expected.json> <actual_output> [--selftest]
 - **单测**：时间偏移 12 例（含跨月/跨年/闰年/负偏移/非法串）；时区语义 4 例（+08→+09 等 + OffsetTime 字符串）；GPS 写入读回（经纬度 DMS 换算误差 <1e-6 度）；隐私剥除后 exif/xmp 为空；编辑 set/del/非法 key；build_plan 合成矩阵（规则⊕例外三态：继承/覆盖/清除）；strip → has_time=false；payloads 非空且 EXIF blob 以 "II*\0" 开头；仅元数据模式往返（压缩尾字节一致）。
 - **验收**：`ctest -R "metadata|timeshift"` 全绿。
 
+> **T5 落地口径（主对话确认，冻结）**：
+> ① **PNG 元数据（R1 落定）**：本环境 exiv2 0.28.8 未编译 zlib（`EXV_HAVE_LIBZ` 未定义）→ PNG 未注册为图像类型，EXIF/XMP **均无法写入**；M1 处理 = 输出 PNG 时 `Warning{MetadataDropped, "png metadata dropped: exiv2 has no png support"}`（**非致命**，像素完好），`format_supports_metadata_only("png")` 返回 **false**；主对话已另派 **T5b** 修复 zlib/PNG 支持——成功则本分支自动转为可写路径（T5 的镜像/丢弃分支保留作降级兜底）；
+> ② XMP key 归一化：`XmpKey` 只接受**点号**形式（`Xmp.xmp.CreateDate`），冒号形式抛 `Invalid key` → 实现须归一化（两种写法都可输入）；
+> ③ `Exifdatum::setValue` 类型不符**不抛异常**（返回非 0 且清空值）→ 必须检查返回码，失败恢复旧值并记 `errors`；
+> ④ TIFF `clearExifData()` 仍保留 12 个结构标签（否则文件损坏）→ "剥除后 exif/xmp 为空"的断言只在 JPEG/WebP 上成立；
+> ⑤ WebP 重写会新增必需的 `VP8X` chunk，`VP8L` 载荷字节完全一致（元数据模式 WebP 的保真依据）；
+> ⑥ 时区语义模式下，XMP 日期若**自带显式偏移**则以该偏移为准（无偏移才用 `from_offset_min`），改写墙钟并把偏移写为 `to_offset_min`；Delta 模式保留小数秒与时区后缀不变；
+> ⑦ `write_metadata_exiv2` / `rewrite_metadata_only` 的 `plan` 参数须传**非 const 对象**（warnings 经 `plan.warnings` 回传；冻结签名所致，已记 TODO(M2)）；
+> ⑧ 实测通过项：仅元数据模式 JPEG（SOS 后字节一致 + 像素 hash 相等）/ WebP（VP8L 字节一致）/ TIFF（像素 hash 相等）；BMFF（HEIF/AVIF/JXL）写入抛 "not supported"（印证 §5.2 路径 B/C）。
+
 ### 4.6 T6 编码器（jpegli / libjxl / libwebp）
 
 - **文件**：`src/codecs/enc_jpegli.cpp`、`src/codecs/enc_jxl.cpp`、`src/codecs/enc_webp.cpp`、`src/codecs/encoders.cpp`（工厂，先只注册这三个）、`tests/unit/test_enc_smoke.cpp`
@@ -968,7 +1029,21 @@ pp_verify <expected.json> <actual_output> [--selftest]
 ### 4.8 T8 pipeline + scheduler + harness + 首次端到端鼓点
 
 - **文件**：`src/core/pipeline.{h,cpp}`、`src/core/scheduler.{h,cpp}`、`tools/pp_verify.cpp`、`tests/unit/test_pipeline_contract.cpp`、`tests/unit/test_scheduler_contract.cpp`、`tests/golden/smoke/*.json`（8 对断言）、`tests/golden/smoke.sh`
-- **要点**：按 §3.9/§3.10 冻结语义；`--dev` 按 §3.15；`pp_verify` 按 §3.16；`main.cpp` 增加 `--dev` 分支（`PP_BUILD_DEV` 保护）；**构造有效参数集时注入保留键 `__lossless = cfg.lossless`**（§3.4 保留键约定）；日志中 lossless 写独立字段、参数快照不含 `__` 键。
+- **要点**：按 §3.9/§3.10 冻结语义；`--dev` 按 §3.15；`pp_verify` 按 §3.16；`main.cpp` 增加 `--dev` 分支（`PP_BUILD_DEV` 保护）；**构造有效参数集时注入保留键 `__lossless = cfg.lossless`**（§3.4 保留键约定）；日志中 lossless 写独立字段、参数快照不含 `__` 键；**并在 `main()` 中调用 `pp::set_qt_version_string(qVersion())`**（§3.1 落地修订，否则运行头日志缺 `qt` 项）。
+- **灰度 / ICC 编排规则（主对话冻结，T8 必读）**：
+  - `src_is_gray = channels ∈ {1,2}`；
+  - 若 `src_is_gray && !format.supports_gray` → 追加 `Warning{GrayToRgbEncoded}`，**且当 `color_target == KeepOriginal` 时以 `SRGB` 作为有效目标调用 `ColorManager::transform`**（灰度像素不能进 WebP/HEIF/AVIF）；
+  - `format.supports_gray && color_target == KeepOriginal` → **不调用** `transform`（原生灰度保留，不产 warning）；
+  - 嵌入用 ICC 一律取 `ColorOutcome::icc_to_embed`（三个彩色目标均非空；KeepOriginal 且源有 ICC = 源 ICC；源无 ICC = 空 → 不嵌）；
+  - `alpha` 合成（flatten）判定用 `§3.5 落地修订 ⑥` 的 `has_alpha` 语义；目标 `supports_alpha == false` 且有 alpha → 合成底色 + `Warning{AlphaFlattened}`；
+  - 源色彩描述回退链（R13 尾，T3 已给事实）：嵌入 ICC → OIIO `CICP`/`oiio:ColorSpace`（**M1 仅日志记录，不做 CICP⇄lcms2 映射**）→ 假定 sRGB（Warning）。
+- **元数据集成约定（T5 交付，T8 必读）**：
+  - `write_metadata_exiv2(out, plan, payloads)` 传**非 const** `plan`；调用后把 `plan.warnings` 并入 `FileResult.warnings`；元数据写失败**非致命**（返回空串 + `Warning{MetadataDropped}`）；
+  - BMP 输出的 `Warning{MetadataDropped}` 由 **pipeline** 添加（T5 静默跳过，避免重复）；
+  - PNG 输入：`read_metadata` 在本构建必返非空 `error`（**不致命**）→ 继续用空元数据走流程，ICC/Orientation 从 T3 的 OIIO spec 取（待 T5b 修复后此条自动失效）；
+  - JXL/HEIF/AVIF 注入用 `make_payloads`（`exif_blob` = TIFF blob，JXL 自行加 4 字节 offset 头，§3.8 E7）；
+  - `sync_file_mtime(out, plan.datetime_original)`（空串 = 不动，本地时区解释）；
+  - **`format_supports_metadata_only()` 判定**：JPEG/TIFF/WebP = true；PNG 见 T5b 结论（修复前 false）；JXL/HEIF/AVIF = false（JXL 的 box 替换路径**M1 不实现**，记 TODO(M2)——设计 §5.5 列为支持，属 M1 有意收窄）。
 - **首次端到端鼓点（M1 第一个大关口）**：
   1. `--dev tests/golden/base/*.png --out .cache/out --format jxl --workers 1` 全绿；
   2. 27 fixture × 8 格式矩阵跑完（`.cache/out/<fmt>/`），**零崩溃**，逐格式统计成功/失败（损坏负例与 CMYK 预期失败）；
@@ -1037,6 +1112,7 @@ pp_verify <expected.json> <actual_output> [--selftest]
 - **lcms2 2.19.1**：`cmsD50_xyY()` 是**函数**（要加括号）；意图固定 RELATIVE_COLORIMETRIC + BPC。
 - **链接形态**：x64-linux 全静态（唯一 .so = libjpeg.so.62）；构建前必须 `source tools/env.sh`（否则 ccache 只读报错，R18）。
 - **命令**：构建 `cmake --preset release && cmake --build --preset release`；测试 `ctest --preset release`；语料 `bash tools/gen_corpus.sh`（默认路径已修好，D1）。
+- **OIIO 3.1.14 实测（T3）**：`read()` 六参 `chend=0` → 段错误（bt）；CMYK TIFF → 3 通道 + `tiff:ColorSpace="CMYK"`；格式名用 `ImageInput::format_name()`；多页用 `seek_subimage`；ICC 为 `uint8[n]` 数组属性；**JXL 色彩编码暴露 = `CICP int[4]` + `ICCProfile` + `oiio:ColorSpace="srgb_rec709_scene"`，无 `jxl:*` 属性**（R13 尾闭合，见 §8）；GIF 帧 `alpha_channel==4` 越界 quirk；未取 error 的 ImageBuf 析构会打印告警。
 
 ---
 
@@ -1045,9 +1121,9 @@ pp_verify <expected.json> <actual_output> [--selftest]
 - D4：M0 遗留 10 处 `TODO(M0-CD)` 注释（`tools/pp_linkprobe.cpp` 4 处、`tools/pp_mkfixtures.cpp` 6 处）→ 核对后删除或改 `TODO(M2)`。
 - D7/R18：`CMakeLists.txt` 的 ccache 探测加可用性回退（探测失败则不设 launcher）→ **归 T14**（§2.3 未授权 T1 做，T1 已确认未做）。
 - app 版本字面量 `"0.1.0"`（logger.cpp）与 `project(... VERSION)` 的同步：M1 手工一致；M2 引入生成版本头（T1 已打 TODO(M2)）。
-- R1 尾巴：PNG eXIf（T5 验证点）。
+- R1 尾巴：**已定位（T5）**——真因不是 eXIf chunk 支持，而是 **exiv2 未编译 zlib** → PNG 未注册为图像类型（EXIF/XMP 全不可写、PNG 仅元数据模式必失败）。T5 已实现降级（`Warning{MetadataDropped}` 非致命 + `format_supports_metadata_only("png")=false`）；**T5b 修复依赖后转为可写路径**，届时由 T14 复核 PNG 元数据往返与仅元数据模式。
 - R11：float→int 双重转换（T5/T6 验收时确认只在 codecs 层转一次）。
-- R13 尾：OIIO 对 JXL 色彩编码属性的暴露（T3 probe 时 `oiiotool --info -v` 与 OIIO 属性核对，记录结论）。
+- R13 尾：**已闭合（T3 实测）**——OIIO 3.1.14 对 JXL 源的色彩描述暴露为 `CICP int[4]`（实测 1,13,0,1 = BT.709/sRGB 传递）+ `ICCProfile uint8[536]` + `oiio:ColorSpace="srgb_rec709_scene"`，无 `jxl:*` 属性；M1 的"源 profile 优先级"（嵌入 ICC → 格式原生描述 → 假定 sRGB）据此可实现（CICP⇄lcms2 映射留 M2，M1 用 ICC 优先，无 ICC 时按 `oiio:ColorSpace` 提示 + 假定 sRGB）。
 - R19（新增，T7 产出）：HEIF/AVIF 10bit 实际能力结论。
 
 ---

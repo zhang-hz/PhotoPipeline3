@@ -40,12 +40,15 @@
 | **W3** | T6 | 编码器：jpegli(JPEG) + libjxl(JXL) + libwebp(WebP) | T3,T4 |
 | | T7 | 编码器：libheif(HEIF/AVIF) + OIIO(PNG/TIFF/BMP) + 10bit 能力探测 | T3,T4 |
 | **W4** | T8 | pipeline + scheduler + `--dev` harness + `pp_verify` + **首次端到端全语料鼓点** | T2–T7 |
-| **W5** | T9 | UI：主窗口三区 + 文件列表模型 + 缩略图 | T8 |
+| **W6（本批次）** | T14 | **引擎收口**：全量复验（ctest / smoke / 27×8 矩阵 / 48MP+100批）+ TODO(M2) 汇总 + 基线归档 + 引擎侧出口准则 | T1–T8、T5b、T6b、T7b、T7d |
+| **W5（下一批次）** | T9 | UI：主窗口三区 + 文件列表模型 + 缩略图 | T8 |
 | | T10 | UI：参数表单引擎 + 输出页 + 设置对话框 | T8 |
 | | T11 | UI：元数据页 + 单文件元数据编辑器 + 预设管理 | T8 |
 | | T12 | UI：运行页 + platform/paths + settings.ini | T8 |
 | | T13 | UI：地图控件 + 瓦片提供方 + GCJ-02 | T12 |
-| **W6** | T14 | 收口：UI 手动走查 + offscreen 冒烟 + TODO(M2) 汇总 + M1 报告 | 全部 |
+| **W7（下一批次）** | T14b | **UI 收口**：offscreen 冒烟 + UI 走查 + 出口准则（UI 侧） | T9–T13 |
+
+> **批次划分（主对话决策）**：**本批次（本轮）= W1–W4 + W6 引擎收口，不做 UI**；W5/W7（T9–T13、T14b）整体归**下一批次**。design.md §9.1 的 M1 相应拆为 **M1a（引擎）** / **M1b（UI）**；本轮结束时把全部 core/codecs 接口冻结清单交下一批次（UI 只消费、不改接口）。
 | **修复** | T5b | 依赖修复：exiv2 打开 zlib/PNG（R1）——feature 优先、overlay 兜底 | T5 | ✅ `6e98ca7`（Path A：port 自带 `png` feature，一行改动 + 17s 重装） |
 | | T7b | 依赖修复：x265 高比特深度（10bit HEIF，R19/"禁止精简"）——同样 feature 优先 | T7 |
 
@@ -627,6 +630,14 @@ OIIO（`enc_oiio.cpp`）：`ImageOutput::create(fmt)` + `ImageSpec`（`set_forma
 > ④ **x265 无线程参数**：libheif 的 x265 插件未暴露 `threads` → E2"编码器内部线程全关"对 HEIF **不可实现**：记 api-delta + `TODO(M2)`，M1 接受 x265 默认线程池。
 > ⑤ EXIF 注入用**裸 TIFF blob**（无需 `Exif\0\0` 前缀），必须在 `heif_context_write` 之前——已实测通过（.heic/.avif 均可读回）。
 
+> **T6 落地口径（主对话确认，冻结）**：
+> ① `src/codecs/encoders.h` 由 T6 逐字节创建（§3.8 代码块），**后续任务不得重写**（T7 只 include）；
+> ② **`EncodeRequest` 追加 `std::string tech_id;`**（M1 第二次加性修订，**T6b 执行**）——此前 JXL 只能靠 `__lossless` + modular 专属键推断技术，既脆又无法表达"有损 modular"；编码器应**优先用 `tech_id`**，`__lossless` 仅作回退。T8 必须传 `cfg.tech_id`。**加性修订一律追加在结构体末尾**（保持位置式聚合初始化兼容；首版误插在第 3 位导致既有 `{buf, params, bitdepth, meta, out, {}}` 编译失败，已纠正）；
+> ③ jpegli API 实测：`jpegli_enable_adaptive_quantization(cinfo,bool)`（**非** `set_*`）、`jpegli_use_standard_quant_tables(cinfo)` **无参**、`jpegli_write_icc_profile(cinfo,JOCTET*,uint)`、`jpegli_mem_dest(cinfo,uchar**,ulong*)`；**顺序约束**：`xyb_mode`/`cicp_transfer_function`/`std_quant_tables` 必须在 `jpegli_set_defaults` **之前**，`distance` 在其**之后**；无 `jpegli_set_optimize_coding` → 直接写 `cinfo.optimize_coding`；
+> ④ libjxl：`codestream_level` 是**编码器级** `JxlEncoderSetCodestreamLevel(enc,int)`（非 frame setting，须在编码开始前）；`JxlExtraChannelInfo` 字段名 `alpha_premultiplied`（非 `alpha_associated`）；三态参数的"库默认" = **不调用该 setting**（显式传 −1 会被部分 setting 直接拒绝，实测 `channel_colors_global_percent`）；
+> ⑤ **OIIO 的 WebP 读取对含 alpha 文件返回预乘 RGB**（实测文件内 `(4,0,142,253)` → OIIO 读出 `(4,0,141,253)`）→ WebP alpha 的**逐位断言必须走 libwebp 解码**，OIIO 只用于几何/平面断言（**T8 金样必读**）；
+> ⑥ E9"未识别参数"用 `log_warn` 记录，**不扩展 `WarningKind`**：warnings 的语义是"影响输出的逐图像质量/语义偏差"，未知参数属**配置缺陷**（应由 T10 预设校验 + 运行日志暴露，M2 可加 preset 键校验）。
+
 ### 3.9 `src/core/pipeline.h`（T8）
 
 ```cpp
@@ -713,7 +724,7 @@ bool format_supports_metadata_only(std::string_view format_id);
 }  // namespace pp
 ```
 
-### 3.10 `src/core/scheduler.h`（T8）
+### 3.10 `src/core/scheduler.h`（T8；**由 T8 创建**——T2 仅落地了 pipeline.h，`scheduler.h` 需按本节逐字节创建）
 
 ```cpp
 // PP-FROZEN(file)
@@ -903,11 +914,21 @@ photopipeline --dev <input...> --out <dir> [options]
   --conflict POLICY      skip|overwrite|rename（dev 默认 overwrite，保证幂等重跑）
   --metadata-only        仅元数据模式
   --preset FILE          载入预设 JSON（命令行选项优先）
+  --param KEY=VALUE      覆盖单个参数（可多次；KEY 为参数表 key，VALUE 按该参数类型解析）
+  --meta KEY=VALUE       写入/覆盖元数据标签（可多次；KEY 为 Exiv2 全名，如 Exif.Image.Artist；等价于批量规则的一条 exif_edits 项）
   --workers N            并发 worker 数（默认物理核数；dev 用 1 便于日志对照）
   --base DIR             镜像路径基准目录（可多次；默认各输入文件所在目录）
   --log-level LVL        trace|debug|info|warn|error
 退出码 = 失败文件数（0=全部成功）；stdout 末尾打印汇总表（成功/失败/跳过/取消、总耗时、吞吐 MB/s）
 ```
+
+> **构建开关与鼓点（主对话裁定，T8 执行）**：`--dev` 分支由 `PP_BUILD_DEV` 宏保护（设计 §8.6：**发布构建不含该代码路径**）。M0 遗留缺口：`option(PP_BUILD_DEV …)` 存在但**无任何 target 消费**（`grep -rn PP_BUILD_DEV` 只命中 CMakePresets 与 option 行），故必须补接线——在 §2.3 允许的 CMake 改动内加入：
+> ```cmake
+> if(PP_BUILD_DEV)
+>   target_compile_definitions(photopipeline PRIVATE PP_BUILD_DEV)
+> endif()
+> ```
+> **鼓点 / 27×8 矩阵 / 规模验证**一律用 `cmake --preset release -B build/m1-t8 -DPP_BUILD_DEV=ON`（优化 + 含 harness）；**T14 另需验证不带该覆盖的纯 release 构建中 `--dev` 不可用**（证发布路径确实不含 dev 代码）。
 
 ### 3.16 `tools/pp_verify`（T8；冻结）
 
@@ -1031,7 +1052,7 @@ std::vector<std::string> registered_backends(std::string_view format_id);
 ### 4.6 T6 编码器（jpegli / libjxl / libwebp）
 
 - **文件**：`src/codecs/enc_jpegli.cpp`、`src/codecs/enc_jxl.cpp`、`src/codecs/enc_webp.cpp`、`src/codecs/encoders.cpp`（工厂，先只注册这三个）、`tests/unit/test_enc_smoke.cpp`
-- **要点**：严格按 §3.8 的共同契约与参数映射表；E2 线程全关；E7 元数据（JXL box 顺序）；E9 未识别参数 warning。
+- **要点**：严格按 §3.8 的共同契约与参数映射表；E2 线程全关；E7 元数据（JXL box 顺序）；E9 未识别参数 warning（`log_warn`，不进 `EncodeResult.warnings`）；**技术选择优先读 `EncodeRequest::tech_id`**（T6b 起可用，`__lossless` 仅回退）。
 - **单测**（用合成 ImageBuf，不经文件）：RGB float 64×64 → JPEG/JXL/WebP 编码成功且字节数 >0；JXL 无损（lossless=true, modular）→ 回读逐位相等（用 OIIO 读回比对，容差 0）；JPEG distance=1.0 → 回读 PSNR ≥ 35dB；WebP lossless → 逐位相等；4 通道（alpha）→ JXL/WebP 保留 alpha；gray 1 通道 → JPEG 成功、WebP 走 RGB 转换由上层负责（此处传 3 通道）；arith_code=true → JPEG 返回错误串包含 "arith_code"；未识别参数 key → 仍成功且有 warning。
 - **验收**：`ctest -R enc_smoke` 全绿。
 
@@ -1072,7 +1093,7 @@ std::vector<std::string> registered_backends(std::string_view format_id);
   5. **规模验证（共识 §3.8：10–1000 张/批、≤50MP）**：8000×6000（48MP）合成图跑一遍（验证像素预算 acquire/release 与 2× 峰值路径，`--workers 2`）；把 `base/rgb8.png` 复制 100 份到 `.cache/tmp/batch100/` 并发跑完，计数与输出数一致。
 - **验收**：上述 4 条全绿 + `ctest` 全绿（含 verify_selftest）。
 
-### 4.9 T9–T13 UI（W5，五任务并行）
+### 4.9 T9–T13 UI（**下一批次**，五任务并行；本批次不实施）
 
 **共同纪律**：UI 只用成熟模式（`QStackedWidget` / `QAbstractListModel` + `QSortFilterProxyModel` / `QDialog` / `QFormLayout`）；**UI 不直接接触图像库**（只经 core 接口）；worker 事件经 `QMetaObject::invokeMethod(..., Qt::QueuedConnection)` 转发到 GUI 线程；所有用户可见文本 `tr()` 包装（i18n 预留）；配色用 Qt 6.8 内建 Fluent 风格，不做自绘（Mica 属 M3）。
 
@@ -1084,11 +1105,15 @@ std::vector<std::string> registered_backends(std::string_view format_id);
 | **T12** | `ui/page_run.{h,cpp}`、`platform/paths.{h,cpp}`、`core/settings.{h,cpp}` | 运行页：总进度 + 每文件状态（12 态映射）+ 实时吞吐 + 取消 + 完成后"打开输出目录/查看日志"；`paths` 与 `settings` 按 §3.13/§3.14（含**记住上次会话**三键读写）；设置对话框的持久化归本任务（T10 只做 UI，读写由本任务提供函数）。 |
 | **T13** | `mapwidget/mapwidget.{h,cpp}`、`mapwidget/providers.{h,cpp}`、`mapwidget/coord.{h,cpp}`、`tests/unit/test_gcj02.cpp` | 自绘 slippy 地图（`QWidget::paintEvent` 贴瓦片）：滚轮缩放、拖拽平移、点击选点（十字标 + 坐标回调）；瓦片源：OSM `https://tile.openstreetmap.org/{z}/{x}/{y}.png`（**须设 User-Agent**，遵守 OSM 政策）/ 高德 `https://webrd0{1..4}.is.autonavi.com/appmaptile?...`（用户 key 可选，坐标 GCJ-02）；搜索：Nominatim `https://nominatim.openstreetmap.org/search?format=json&q=`（UA 必设）/ 高德 Web 服务（key）；内存 LRU（默认 64MB，设置可调）+ 断网降级为手动坐标输入；`coord`：WGS-84↔GCJ-02 公开迭代算法（正逆变换），单测：北京/上海/广州已知点往返误差 <1e-6 度（内部一致性）、GCJ→WGS 偏移量级 300–600m 合理。 |
 
-### 4.10 T14 收口
+### 4.10 T14 引擎收口（**本批次**）
 
-- **内容**：① `QT_QPA_PLATFORM=offscreen` 全 UI 冒烟脚本进 CI（`tests/ui_smoke.sh`：启动 → 收集文件 → 切三页 → 关闭，退出码 0）；② UI 手动走查逐项执行并记录（三页流转、参数谓词联动、批量规则预览、例外徽标、仅元数据模式置灰项、运行页状态、取消响应、设置持久化与**上次会话恢复**、地图选点回填、断网降级）；③ `TODO(M2)` 全仓扫描汇总（`grep -rn "TODO(M2)"`）；④ M1 出口准则逐项核验 + `--dev` 全语料日志归档到 `.cache/m1-baseline/`；⑤ **`README.md` 更新**（M1 新增内容：`--dev` 用法、`pp_verify`、UI 使用、测试命令、docs 链接含 m1-tasks）。
-  **docs/ 只读**：走查清单与 M1 报告正文写入 T14 的 §9 报告，由主对话落盘 `docs/m1-report.md` / `docs/m1-walkthrough.md`；T14 不得写 docs/。
-- **验收**：M1 出口准则（§6）逐项 PASS。
+- **内容**：① 全量复验：`ctest --test-dir build/m1-t8 --output-on-failure` 全绿、`bash tests/golden/smoke.sh`（8+1 对）全 OK、27×8 格式矩阵零崩溃（损坏负例/CMYK 预期失败）、48MP 与 100 文件批规模验证；② **`TODO(M2)` 全仓扫描汇总**（`grep -rn "TODO(M2)"`，按模块分组，附一句影响面）；③ `--dev` 全语料运行日志 + 参数快照归档到 `.cache/m1-baseline/`；④ **引擎侧出口准则逐项核验**（§6 批次 1 表）；⑤ `README.md` 更新（`--dev` 用法、`pp_verify`、测试命令、docs 链接；**UI 章节留待下一批次**）；⑥ 输出「**UI 批次启动前的接口冻结清单**」：列出 UI 将消费的全部 core 接口（文件 + 函数签名摘要）与两处加性修订（`EncodeResult.error`、`EncodeRequest.tech_id`）现状。
+- **docs/ 只读**：报告正文写入 T14 的 §9 报告，由主对话落盘 `docs/m1-report.md`；T14 不得写 docs/。
+- **验收**：§6 批次 1 表逐项 PASS。
+
+### 4.11 T14b UI 收口（**下一批次**）
+
+- **内容**：① `QT_QPA_PLATFORM=offscreen` 全 UI 冒烟脚本（`tests/ui_smoke.sh`：启动 → 收集文件 → 切三页 → 关闭，退出码 0）进 CI；② UI 手动走查逐项记录（三页流转、参数谓词联动、批量规则预览、例外徽标、仅元数据模式置灰项、运行页状态、取消响应、设置持久化与**上次会话恢复**、地图选点回填、断网降级）；③ §6 批次 2 表核验；④ 报告 → 主对话落盘 `docs/m1-walkthrough.md`。
 
 ---
 
@@ -1107,18 +1132,29 @@ std::vector<std::string> registered_backends(std::string_view format_id);
 
 ---
 
-## 6. M1 出口准则（T14 逐项核验）
+## 6. M1 出口准则（T14 / T14b 逐项核验）
+
+**批次 1 — 引擎侧（T14 核验，本轮）**
 
 | # | 准则 | 证据 |
 |---|---|---|
-| 1 | 全部模块落库（core/decode/codecs/ui 无空实现、无 `TODO(M1)`） | 文件清单 + grep |
+| 1 | 全部引擎模块落库（core / decode / codecs 无空实现、无 `TODO(M1)`；UI 除外） | 文件清单 + grep |
 | 2 | 全语料 `--dev` 零崩溃、8 格式全部出图 | 27×8 矩阵结果表 |
-| 3 | 8 对 smoke 金样断言全 OK | `pp_verify` 输出 |
+| 3 | 8+1 对 smoke 金样断言全 OK | `tests/golden/smoke.sh` + `pp_verify` 输出 |
 | 4 | 日志完整（运行头版本+参数快照 / 每文件分段耗时 / 警告 / 汇总） | 一份完整日志样本 + 字段核对 |
-| 5 | 单测全绿（≥10 个测试可执行） | `ctest` 输出 |
-| 6 | UI offscreen 冒烟绿 + 手动走查清单全勾 | `tests/ui_smoke.sh` + `docs/m1-walkthrough.md` |
-| 7 | 仅元数据模式字节级保真（JPEG/PNG/TIFF/WebP 各 1 例） | 压缩尾字节一致 + 像素 hash |
-| 8 | `TODO(M2)` 清单归档 | 报告清单 |
+| 5 | 单测全绿（全部测试可执行；含 M0 五条无回归） | `ctest` 输出 |
+| 6 | 仅元数据模式字节级保真（JPEG SOS / PNG IDAT / TIFF 像素 hash / WebP VP8L） | 压缩数据一致 + 像素 hash |
+| 7 | 规模验证（48MP 预算路径 + 100 文件批并发计数） | `--dev` 输出表 |
+| 8 | `TODO(M2)` 清单归档 + `--dev` 基线日志归档 | 报告清单 + `.cache/m1-baseline/` |
+
+**批次 2 — UI 侧（T14b 核验，下一批次）**
+
+| # | 准则 | 证据 |
+|---|---|---|
+| 9 | UI offscreen 冒烟绿 | `tests/ui_smoke.sh` |
+| 10 | UI 手动走查清单全勾（含设置持久化与上次会话恢复、地图选点、断网降级） | `docs/m1-walkthrough.md` |
+| 11 | 参数表单谓词联动正确（无损锁定 / 技术互斥 / 后端切换） | 走查记录 + 截图式描述 |
+| 12 | 运行期锁定与取消可用（G5） | 走查记录 |
 
 ---
 
@@ -1177,7 +1213,7 @@ next-needed:
 - W2：T3、T4、T5 并行（三者互不依赖；T5 最大，可单独给最长时限）。
 - W3：T6、T7 并行（都只依赖 §3.5/§3.6 头文件）。
 - W4：T8 单任务——**M1 的关键集成点**，首次端到端；若红，主对话决策后派修复轮，不得跳过。
-- W5：T9–T13 并行；CMakeLists 由 T9 独家登记（其余任务提交源文件并在报告中列出需要登记的清单）。
-- W6：T14 收口。
+- **本批次（本轮）**：W1（T1/T2）→ W2（T3/T4/T5）→ W3（T6/T7）→ W4（T8）→ W6（T14 引擎收口）；修复任务 T5b/T6b/T7b/T7d 按需插入，不占波次。
+- **下一批次**：W5（T9–T13 UI 并行；CMakeLists 由 T9 删 `PP_M0_SMOKE`，所有者序列见 §2.3）→ W7（T14b UI 收口）。
 - 任一波 PARTIAL/BLOCKED → 主对话裁决后重派或修复，同类错误 3 次即 STOP。
 - 每个 subagent 提示词必须包含：本任务 ID、必读章节（§1 纪律 + 本文档对应任务节 + §3 冻结接口 + §7 事实 + §9 报告格式）、禁止事项（docs/ 只读、PP-FROZEN 逐字节、禁 subagent、禁改依赖与构建基础设施、不碰他人文件域）。

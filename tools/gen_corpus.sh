@@ -31,7 +31,7 @@ fi
 pattern() {
     local out="$1" channels="$2" chnames="$3" depth="$4" cell="${5:-8}"
     "$OIIOTOOL" --pattern "checker:width=$cell:height=$cell" 64x64 "$channels" \
-        --chnames "$chnames" --depth "$depth" -o "$out"
+        --chnames "$chnames" -d "$depth" -o "$out"
 }
 
 echo "gen_corpus: base/ (OIIOTOOL=$OIIOTOOL)"
@@ -50,20 +50,20 @@ pattern "$GOLDEN_ROOT/base/targa.tga"   3 "R,G,B"   uint8
 pattern "$GOLDEN_ROOT/base/bmp24.bmp"   3 "R,G,B"   uint8
 
 # multi.tif: two subimages.
-"$OIIOTOOL" --pattern checker:width=8:height=8 64x64 3 --chnames R,G,B --depth uint8 \
-    --pattern checker:width=4:height=4 32x32 3 --chnames R,G,B --depth uint8 \
+"$OIIOTOOL" --pattern checker:width=8:height=8 64x64 3 --chnames R,G,B -d uint8 \
+    --pattern checker:width=4:height=4 32x32 3 --chnames R,G,B -d uint8 \
     --siappend -o "$GOLDEN_ROOT/base/multi.tif"
 
 # anim.gif: three subimages (animation).
-"$OIIOTOOL" --pattern checker:width=8:height=8 64x64 3 --chnames R,G,B --depth uint8 \
-    --pattern checker:width=4:height=4 64x64 3 --chnames R,G,B --depth uint8 \
-    --pattern checker:width=2:height=2 64x64 3 --chnames R,G,B --depth uint8 \
+"$OIIOTOOL" --pattern checker:width=8:height=8 64x64 3 --chnames R,G,B -d uint8 \
+    --pattern checker:width=4:height=4 64x64 3 --chnames R,G,B -d uint8 \
+    --pattern checker:width=2:height=2 64x64 3 --chnames R,G,B -d uint8 \
     --siappend --siappend -o "$GOLDEN_ROOT/base/anim.gif"
 
 # jxl8.jxl: written by oiiotool; if the jxl output plugin is unavailable the fixture is
 # appended from pp_mkfixtures instead (which path was used is reported below).
 JXL_VIA="oiiotool"
-if ! "$OIIOTOOL" --pattern checker:width=8:height=8 64x64 3 --chnames R,G,B --depth uint8 \
+if ! "$OIIOTOOL" --pattern checker:width=8:height=8 64x64 3 --chnames R,G,B -d uint8 \
         -o "$GOLDEN_ROOT/base/jxl8.jxl" 2>/dev/null; then
     JXL_VIA="pp_mkfixtures(meta/jxl_exif.jxl)"
 fi

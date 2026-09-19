@@ -28,6 +28,12 @@ pkg_check_modules(LCMS2 REQUIRED IMPORTED_TARGET lcms2)
 pkg_check_modules(LIBJXL REQUIRED IMPORTED_TARGET libjxl)
 pkg_check_modules(WEBP REQUIRED IMPORTED_TARGET libwebp)
 pkg_check_modules(TIFF4 REQUIRED IMPORTED_TARGET libtiff-4)
+# jpegli public C API (jpegli_*): upstream builds it into the EXCLUDE_FROM_ALL
+# jpegli-static target, and the compat libjpeg.so hides those symbols via
+# -Wl,--exclude-libs=ALL, so the overlay port installs the archive as libjpegli.a
+# and exports it from its CONFIG package (with the required libhwy link interface).
+# wave3 ruling: consumers link libjpeg-turbo::jpegli-static + JPEG::JPEG.
+find_package(libjpeg-turbo CONFIG REQUIRED)
 # PP-NOTE: find_package/pkg-config 目标名允许按 vcpkg_installed 实际情况机械修正，逐条记录
 
 add_library(pp_core STATIC src/core/format_tables.cpp)
@@ -40,12 +46,12 @@ target_compile_definitions(photopipeline PRIVATE PP_M0_SMOKE)  # M1 removes
 add_executable(pp_linkprobe tools/pp_linkprobe.cpp)
 target_link_libraries(pp_linkprobe PRIVATE
     OpenImageIO::OpenImageIO JPEG::JPEG PkgConfig::LCMS2 Exiv2::exiv2lib
-    heif PkgConfig::LIBJXL PkgConfig::WEBP)
+    heif PkgConfig::LIBJXL PkgConfig::WEBP libjpeg-turbo::jpegli-static)
 
 add_executable(pp_mkfixtures tools/pp_mkfixtures.cpp)
 target_link_libraries(pp_mkfixtures PRIVATE
     OpenImageIO::OpenImageIO JPEG::JPEG Exiv2::exiv2lib
-    heif PkgConfig::LIBJXL PkgConfig::WEBP PkgConfig::TIFF4)
+    heif PkgConfig::LIBJXL PkgConfig::WEBP PkgConfig::TIFF4 libjpeg-turbo::jpegli-static)
 
 add_executable(pp_spikes tools/pp_spikes.cpp)
 target_link_libraries(pp_spikes PRIVATE

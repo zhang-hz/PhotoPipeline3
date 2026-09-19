@@ -162,20 +162,33 @@ void check_oiio_plugins() {
     for (const std::string& h : have) {
         have_lc.push_back(lower_copy(h));
     }
+    // §12.1 r3 (SUB-E field fact): OIIO has no separate avif plugin — its heif plugin owns
+    // the avif/heic/heif extensions, so "avif" is not an OIIO format name and is not required.
     const std::vector<std::string> want = {"jpeg", "png", "tiff", "jxl", "heif",
-                                          "avif", "webp", "gif", "targa", "bmp"};
+                                           "webp", "gif", "targa", "bmp"};
+    // Mechanical adaptation (§12.1 last line): OIIO >= 3.x registers the JPEG XL plugin
+    // under the format NAME "jpegxl" (its file extension is "jxl"); older OIIO used "jxl".
+    // The judging criterion is unchanged: JPEG XL support must be present.
+    const auto present = [&have_lc](const std::string& w) {
+        if (std::find(have_lc.begin(), have_lc.end(), w) != have_lc.end()) {
+            return true;
+        }
+        return w == "jxl" && std::find(have_lc.begin(), have_lc.end(), "jpegxl") != have_lc.end();
+    };
     std::string missing;
     for (const std::string& w : want) {
-        if (std::find(have_lc.begin(), have_lc.end(), w) == have_lc.end()) {
+        if (!present(w)) {
             if (!missing.empty()) {
                 missing += ",";
             }
             missing += w;
         }
     }
-    const std::string detail = missing.empty()
-                                   ? ("required=" + std::to_string(want.size()) + " all present")
-                                   : ("missing=" + missing);
+    const std::string detail =
+        missing.empty()
+            ? ("required=" + std::to_string(want.size()) +
+               " all present (jxl=plugin \"jpegxl\"; heif covers avif)")
+            : ("missing=" + missing);
     report("oiio-plugins", missing.empty(), detail);
 }
 

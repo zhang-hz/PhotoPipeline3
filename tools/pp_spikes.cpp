@@ -90,7 +90,7 @@ bool spike_e(std::string& err) {
     }
 
     // (2) sRGB white -> Lab (D50) must be L in [99.5,100.5] and |a|,|b| <= 1.
-    cmsHPROFILE lab = cmsCreateLab4Profile(cmsD50_xyY);
+    cmsHPROFILE lab = cmsCreateLab4Profile(cmsD50_xyY());
     if (lab == nullptr) {
         cmsCloseProfile(srgb);
         err = "cmsCreateLab4Profile(D50) returned null";
@@ -123,8 +123,11 @@ bool spike_e(std::string& err) {
 // Spike f: Exiv2 lossless metadata rewrite fidelity (R10).
 bool spike_f(const fs::path& golden_root, std::string& err) {
     const fs::path src = golden_root / "meta" / "exif_full.jpg";
-    const fs::path tmp = "/tmp/pp_spike_f.jpg";  // contract-frozen scratch path
+    // Repo-local scratch path (task book §12.3 r2: replaced the former /tmp path).
+    const fs::path tmp = ".cache/tmp/pp_spike_f.jpg";
     std::error_code ec;
+    fs::create_directories(tmp.parent_path(), ec);
+    ec.clear();
     fs::copy_file(src, tmp, fs::copy_options::overwrite_existing, ec);
     if (ec) {
         err = "copy to " + tmp.string() + " failed: " + ec.message();

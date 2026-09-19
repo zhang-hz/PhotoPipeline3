@@ -434,6 +434,10 @@ bool write_jxl(const fs::path& path, const std::vector<uint8_t>& rgb, int w, int
         return false;
     }
     JxlEncoderUseContainer(enc, JXL_TRUE);  // required before adding Exif/xml boxes
+    // libjxl >= 0.11: the encoder assumes no metadata boxes by default; JxlEncoderUseBoxes
+    // must be called (before encoding starts) or every JxlEncoderAddBox returns
+    // JXL_ENC_ERROR, and JxlEncoderCloseBoxes is required at the end (jxl/encode.h:989-1075).
+    JxlEncoderUseBoxes(enc);
     JxlBasicInfo info;
     JxlEncoderInitBasicInfo(&info);
     info.xsize = static_cast<uint32_t>(w);
@@ -460,13 +464,17 @@ bool write_jxl(const fs::path& path, const std::vector<uint8_t>& rgb, int w, int
     if (st == JXL_ENC_SUCCESS) {
         st = JxlEncoderSetFrameDistance(fs, 1.0f);
     }
+    std::string exif_box;
     const JxlPixelFormat pf = {3, JXL_TYPE_UINT8, JXL_LITTLE_ENDIAN, 0};
     if (st == JXL_ENC_SUCCESS) {
         st = JxlEncoderAddImageFrame(fs, &pf, rgb.data(), rgb.size());
     }
     if (st == JXL_ENC_SUCCESS && !exif.empty()) {
-        st = JxlEncoderAddBox(enc, "Exif", reinterpret_cast<const uint8_t*>(exif.data()),
-                              exif.size(), JXL_FALSE);
+        // jxl/encode.h:1024-1027: the "Exif" box contents must be prepended by a 4-byte
+        // TIFF header offset (4 zero bytes = tiff header follows immediately).
+        exif_box = std::string(4, '\0') + exif;
+        st = JxlEncoderAddBox(enc, "Exif", reinterpret_cast<const uint8_t*>(exif_box.data()),
+                              exif_box.size(), JXL_FALSE);
     }
     if (st == JXL_ENC_SUCCESS && !xmp.empty()) {
         st = JxlEncoderAddBox(enc, "xml ", reinterpret_cast<const uint8_t*>(xmp.data()),
@@ -477,6 +485,7 @@ bool write_jxl(const fs::path& path, const std::vector<uint8_t>& rgb, int w, int
         err = "jxl encode setup failed";
         return false;
     }
+    JxlEncoderCloseBoxes(enc);  // libjxl >= 0.11: required after the last AddBox call
     JxlEncoderCloseInput(enc);
 
     std::vector<uint8_t> out(1u << 16);

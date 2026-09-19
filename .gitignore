@@ -1,0 +1,11 @@
+build/
+vcpkg/
+vcpkg_installed/
+.toolchain/
+.cache/
+tools/env.sh
+aqtinstall.log
+compile_commands.json
+*.user
+tests/golden/real/
+tests/golden/CHECKSUMS

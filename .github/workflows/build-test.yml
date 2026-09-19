@@ -1,0 +1,33 @@
+name: build-test
+on: [push, pull_request]
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    env:
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+      QT_DIR: ${{ github.workspace }}/Qt/6.8.3/gcc_64
+      VCPKG_DEFAULT_BINARY_CACHE: ~/.cache/vcpkg-binary
+    steps:
+      - uses: actions/checkout@v4
+      - name: apt deps
+        run: sudo apt-get update && sudo apt-get install -y ninja-build ccache pkg-config python3-pip
+      - name: Qt via aqtinstall
+        run: |
+          pip3 install aqtinstall
+          aqt install-qt linux desktop 6.8.3 linux_gcc_64 -O "$GITHUB_WORKSPACE/Qt"
+      - name: vcpkg pinned
+        run: |
+          git clone https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+          git -C "$VCPKG_ROOT" checkout <VCPKG_TAG_PLACEHOLDER>
+      - name: vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg-binary
+          key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}
+      - name: build + corpus + test
+        run: |
+          cmake --preset release
+          cmake --build --preset release
+          bash tools/gen_corpus.sh
+          ctest --preset release

@@ -1,0 +1,3 @@
+Checks: 'bugprone-*,performance-*,modernize-*,readability-*,-modernize-use-trailing-return-type,-readability-identifier-length'
+WarningsAsErrors: ''
+HeaderFilterRegex: 'src/.*'

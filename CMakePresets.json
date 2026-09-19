@@ -1,0 +1,38 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 28, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base", "hidden": true, "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "VCPKG_OVERLAY_PORTS": "${sourceDir}/vcpkg-overlay",
+        "CMAKE_PREFIX_PATH": "$env{QT_DIR}"
+      }
+    },
+    { "name": "release", "inherits": "base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" } },
+    { "name": "dev", "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "PP_BUILD_DEV": "ON",
+        "CMAKE_CXX_FLAGS_DEBUG": "-g -fsanitize=address,undefined -fno-omit-frame-pointer"
+      } },
+    { "name": "tsan", "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "PP_BUILD_DEV": "ON",
+        "CMAKE_CXX_FLAGS_DEBUG": "-g -fsanitize=thread"
+      } }
+  ],
+  "buildPresets": [
+    { "name": "release", "configurePreset": "release" },
+    { "name": "dev", "configurePreset": "dev" },
+    { "name": "tsan", "configurePreset": "tsan" }
+  ],
+  "testPresets": [
+    { "name": "release", "configurePreset": "release",
+      "output": { "outputOnFailure": true } }
+  ]
+}

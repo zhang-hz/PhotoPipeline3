@@ -4,7 +4,7 @@
 // Contract: docs/m1-tasks.md §3.8 (E1–E9 + parameter mapping tables) / §3.17
 // (registry) / §4.6 (unit-test list). All images are synthesised in memory
 // (64x64 float32 ImageBuf) — no input files are used; only the encoder outputs
-// are written, under <cwd>/.pp_test_tmp/enc_smoke (not the repository).
+// are written, under <cwd>/.cache/tmp/m1-t6/enc_smoke (§1.8, gitignored).
 // Every failure prints "FAIL <case>: <detail>"; main() returns the failure count.
 
 #include <lcms2.h>
@@ -302,7 +302,9 @@ bool same_u8(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b, std::
 
 int main() {
     std::error_code ec;
-    const fs::path root = fs::current_path(ec) / ".pp_test_tmp" / "enc_smoke";
+    // §1.8: throw-away artefacts live under .cache/tmp (gitignored), so the
+    // repository stays clean even when the binary is run from the repo root.
+    const fs::path root = fs::current_path(ec) / ".cache" / "tmp" / "m1-t6" / "enc_smoke";
     fs::remove_all(root, ec);
     fs::create_directories(root, ec);
     pp::log_init(root / "log", pp::LogLevel::Warn);

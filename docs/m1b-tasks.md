@@ -569,8 +569,18 @@ public:
 SettingsDialog 规格：QTabWidget 三页。
 - **运行**：`并发 worker 数` QSpinBox(0..64，特殊值显示 `自动（物理核数）`)；`内存预算 (GB)` QSpinBox(0..64，0 显示 `自动`）；`alpha 合成底色` QSlider(0..100) + 实时色块 QLabel（背景灰度 = 值）+ 文案 `黑 ←→ 白`；`按 EXIF 方向旋转` QCheckBox（rotate_orientation，默认开）。
 - **地图**：`底图提供方` QComboBox（`OpenStreetMap（内置）`/`高德地图`）；`高德 Web 服务 Key` QLineEdit（password echo）；`瓦片缓存 (MB)` QSpinBox(16..512)；`日志级别` QComboBox（trace/debug/info/warn/error）。
-- **关于**：`PhotoPipeline 0.1.0` + `pp::library_versions()` 逐行清单（QPlainTextOutput 只读）+ 许可说明静态文本：`本程序 GPL-3.0-or-later。所用库：Exiv2/x265 (GPLv2+)、libheif (LGPLv3)、Qt (LGPLv3)、OIIO (Apache-2.0)、libjxl/libwebp/SVT-AV1/libaom (BSD)、lcms2/spdlog (MIT)。`
+- **关于**：`PhotoPipeline 0.1.0` + `pp::library_versions()` 逐行清单（QPlainTextEdit 只读）+ 许可说明静态文本：`本程序 GPL-3.0-or-later。所用库：Exiv2/x265 (GPLv2+)、libheif (LGPLv3)、Qt (LGPLv3)、OIIO (Apache-2.0)、libjxl/libwebp/SVT-AV1/libaom (BSD)、lcms2/spdlog (MIT)。`
 - 按钮：`确定`/`取消`；`settings()` 返回编辑值（仅确定路径）。
+
+**U6 落地口径（主对话批准 2026-09-19，冻结）**：
+- 笔误更正：关于页清单控件 = `QPlainTextEdit` + `setReadOnly(true)`（Qt6 无 QPlainTextOutput）。
+- `settings()` 语义 = `result()==Accepted ? 编辑值 : 构造快照`（未 exec 直接调用安全；冻结头注释 "(OK or Apply)" 措辞偏宽，无 Apply 按钮，以本条为准）。
+- 冻结头无私有成员 → 状态承载契约：可编辑字段读子控件 objectName（`workers/budget_gb/flatten_gray/flatten_preview/rotate_orientation/map_provider/amap_key/tile_cache_mb/log_level/preset_list/preset_name/btn_*`）；last_* 与取消回填存 dynamic property `pp_orig_*`；PresetsDialog 返回值存 `pp_action/pp_name/pp_path`。U10 冒烟与 U-FIX 可依赖此契约。
+- 名称清洗 = 剔除 `[^A-Za-z0-9_\- ]` 后 `QString::simplified()`（折叠空白+去首尾）；空名判定同口径。
+- 按钮使能（2026-09-19 裁定）：**载入 = 列表有选中**（预设路径本就是合法文件，与名称清洗无关——否则纯中文名预设无法载入）；另存为 = 清洗名非空；删除 = 有选中。
+- `path()`：Load/Delete = 列表项路径；SaveAs = 空串（目录拼接归 MainWindow）。
+- INI 越界值由控件钳制（workers/budget 0..64、tile_cache 16..512）；非法 log_level（含第 6 档 critical）→ info（与 main.cpp 5 档口径一致）。
+- **AUTOMOC 陈旧（波次构建事实）**：新 glob 文件含 `#include "*.moc"`（cpp 内 Q_OBJECT 类）时，共享 build 目录首次构建会在 .ddi 扫描边报缺 .moc——重试前 `rm -rf <build>/photopipeline_autogen`；U10 用全新 `build/release-dev` 目录规避。
 
 PresetsDialog 规格：QListWidget（预设名，单选）+ `名称` QLineEdit（保存用，选中列表项时带出）+ 按钮行 `载入`/`另存为`/`删除`/`关闭`。删除需 QMessageBox::question 确认。保存名清洗：仅保留 `[A-Za-z0-9_\- ]`，其余剔除，空 → 载入/另存为按钮禁用。文件名 = `<名>.json`（路径由 MainWindow 用 presets_dir 拼接；对话框只回名字与列表路径）。
 

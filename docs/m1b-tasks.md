@@ -91,6 +91,14 @@ ThumbOutcome make_thumbnail(const std::filesystem::path& src, int target_long_ed
 - `settings.cpp`：极简 INI，`key=value`、`#` 注释、未知键**原样写回**；缺文件 → 全默认值不报错；保存原子（先写 `<file>.tmp` 再 rename）。
 - `paths.cpp`：`executable_dir()` 用 `/proc/self/exe`（Linux）；可写探测 = 在 exe 目录尝试创建 `.pp-write-test` 文件后删除；结果**进程内缓存**；data_dir/prestes_dir/logs_dir 首次调用时 `create_directories`（失败回退 XDG，再失败返回空 path 由调用方处理）。
 
+**U1 落地口径（主对话批准 2026-09-19，冻结；U6/U10 必读）**：
+- INI 键名 = AppSettings 字段名 snake_case：`workers/budget_gb/flatten_gray/log_level/map_provider/amap_key/tile_cache_mb/rotate_orientation/last_format/last_preset/last_out_root`；布尔 `true/false`；浮点 `%.10g`。
+- `settings_to_string` 格式 `k=v k=v` 空格分隔；**`amap_key` 脱敏**：非空 → `amap_key=<set>`，空 → `amap_key=`（日志不落明文密钥）。
+- `data_dir()` 极端失败返回空 path：调用方处理（`load_settings` 空路径 → 全默认；`log_init` → core logger 既有 stderr 降级）。
+- 内嵌预览条目尺寸未知（width/height==0）→ 跳过该条走全解码。
+- 落地事实：OIIO `ImageBufAlgo::resample` 无 filter 参数（bilinear/nearest 二选一，用 bilinear）；Exiv2 `getPreviewProperties()` 按面积升序、尺寸由 Loader 填充（无需解码判尺寸）。
+- `paths` Windows 分支与 `thumbs` 大图全量 float32 解码均 TODO(M2)/M3。
+
 ### 2.3 `src/mapwidget/coord.h`（U2）
 
 ```cpp
@@ -220,6 +228,14 @@ private:
 - offline：不发任何网络请求；`run_search` → `search_finished({}, tr("离线模式：搜索不可用"))`。
 - 搜索：`run_search` → GET（amap 无 key → `search_finished({}, tr("使用高德搜索需要先在设置中填写 Key"))`）→ `parse_search` → `search_finished(标题列表, err)`；`search_select(i)` → 定位 + set_marker + `point_selected`。搜索结果列表 UI **不在本控件内**（由嵌入方 PageMeta 承载）。
 - 断网（请求失败/超时 8s）：对应瓦片保留灰底；连续失败 ≥3 → 底部提示条 "地图离线（可手动输入坐标）"（QLabel overlay，不弹窗）。
+
+**U2 落地口径（主对话批准 2026-09-19，冻结）**：
+- `set_offline(true)` **立即**显示同一底部提示条；连续失败 ≥3 亦触发。
+- `search_select(i)`：`center_on(lat, lon, max(当前 zoom, 12))`——搜索选点至少街区级缩放。
+- **LRU 预算口径（内存正确性）**：缓存条目只存 QPixmap（解码后丢弃 QByteArray）；字节预算按 `width*height*4` 累计（目的在界不在精）。
+- 外观冻结值：底灰 `#e9e9e9`、网格 `#d2d2d2`、标记十字 `#d02222`、版权标签白底 α190（用户审查轮可改）。
+- 未知 provider id → `set_provider` 忽略不切换；provider 切换时中心点经 datum 往返（WGS 中转）保持地理位置；webrd 轮换计数器进程级（`tile_url` 为 const 的冻结签名约束）。
+- providers 中文串经 `QCoreApplication::translate("pp::map", …)`（TileProvider 非 QObject）；事件处理经 pimpl 内嵌 QObject 事件过滤器（冻结头无事件覆写声明所致）。
 
 ### 2.6 `src/ui/paramform.h`（U3）
 
@@ -840,7 +856,7 @@ private:
   3. 新增：`if(PP_BUILD_DEV) add_test(NAME ui_smoke COMMAND ${CMAKE_COMMAND} -E env QT_QPA_PLATFORM=offscreen bash ${CMAKE_SOURCE_DIR}/tests/ui_smoke.sh ${CMAKE_BINARY_DIR}) endif()` + `set_tests_properties(ui_smoke PROPERTIES TIMEOUT 180)`；
   4. `CMakePresets.json`：增 `release-dev`（inherits release，`PP_BUILD_DEV: ON`，binaryDir 走默认 `${sourceDir}/build/release-dev`）+ 对应 build/test preset。
 - main.cpp 改动（冻结顺序）：GUI 路径 = `set_qt_version_string` → QApplication → setStyle("Fluent") 尝试（失败 qInfo）→ `pp::platform::data_dir()` → `load_settings(settings_file())` → 日志级别解析（非法回退 info）→ `log_init(logs_dir(), level)` → `MainWindow w(settings)` → show → exec → `log_shutdown()`。删除 `#ifdef PP_M0_SMOKE` 块。`PP_BUILD_DEV` 下增 `--ui-smoke` 分支（须在 QApplication 之前拦截参数，同 --dev 模式）。
-- **--ui-smoke 规格（冻结）**：`photopipeline --ui-smoke [--inputs DIR] [--shots DIR]`（缺省 inputs = `<仓库根>/tests/golden/base`，从可执行文件向上找 `.git`/`CMakeLists.txt` 定位仓库根；找不到 → stderr 报错退出 1）。流程：MainWindow(settings 默认) → resize(1440,900) → show → set_offline_maps(true) → add_paths(inputs) → 等缩略图队列空（QTimer 轮询 queue_empty，上限 10s）→ grab `01-meta.png` → 切页2 → `02-output.png` → select_format("avif") 等 300ms → `02b-output-avif.png` → 还原 jxl → 切页3 → `03-run.png` → **实跑**：out_root=`.cache/tmp/ui-smoke-out`（jxl，全量输入文件，conflict=overwrite）开始 → 轮询完成（上限 60s）→ `03b-run-done.png` → 对话框三连（构造→show→processEvents→grab→close，不 exec）：SettingsDialog `04-settings.png`、ExifEditor(首行文件) `05-exif-editor.png`、PresetsDialog(空列表) `06-presets.png` → stdout 末行 `UI-SMOKE OK shots=N pages=3` → 退出码 0。任何异常 → `UI-SMOKE FAIL <原因>` stderr + 退出码 1。**谓词断言**（顺带，失败即 FAIL）：jxl+无损 → selection.tech=="modular" 且 values() 含 distance==0.0（double）；jpeg quality_mode=="quality" → is_param_visible("quality") 且 !is_param_visible("distance")；tiff compression=="none" → !is_param_visible("deflate_level")。**地图断言**（失败即 FAIL）：切页 1 后 `MainWindow::findChild<pp::map::MapWidget*>()` 非空且 `grab()` 返回非空 QImage（offline 模式，全流程不得发出任何网络请求）。--shots 未给 → 只跑不存图（CI 模式）。
+- **--ui-smoke 规格（冻结）**：`photopipeline --ui-smoke [--inputs DIR] [--shots DIR]`（缺省 inputs = `<仓库根>/tests/golden/base`，从可执行文件向上找 `.git`/`CMakeLists.txt` 定位仓库根；找不到 → stderr 报错退出 1）。流程：MainWindow(settings 默认) → resize(1440,900) → show → set_offline_maps(true) → add_paths(inputs) → 等缩略图队列空（QTimer 轮询 queue_empty，上限 10s）→ grab `01-meta.png` → 切页2 → `02-output.png` → select_format("avif") 等 300ms → `02b-output-avif.png` → 还原 jxl → 切页3 → `03-run.png` → **实跑**：out_root=`.cache/tmp/ui-smoke-out`（jxl，全量输入文件，conflict=overwrite）开始 → 轮询完成（上限 60s）→ `03b-run-done.png` → 对话框三连（构造→show→processEvents→grab→close，不 exec）：SettingsDialog `04-settings.png`、ExifEditor(首行文件) `05-exif-editor.png`、PresetsDialog(空列表) `06-presets.png` → stdout 末行 `UI-SMOKE OK shots=N pages=3` → 退出码 0。任何异常 → `UI-SMOKE FAIL <原因>` stderr + 退出码 1。**谓词断言**（顺带，失败即 FAIL）：jxl+无损 → selection.tech=="modular" 且 values() 含 distance==0.0（double）；jpeg quality_mode=="quality" → is_param_visible("quality") 且 !is_param_visible("distance")；tiff compression=="none" → !is_param_visible("deflate_level")。**地图断言**（失败即 FAIL）：切页 1 后 `MainWindow::findChild<pp::map::MapWidget*>()` 非空且 `grab()` 返回非空 QImage（offline 模式，全流程不得发出任何网络请求）；**边界转换断言**：对该控件 `set_provider("amap")` → `center_on(39.9042, 116.4074, 10)` → 模拟点击中心（`QTest::mouseClick` 或等价 QMouseEvent 直发）→ 收到的 `point_selected` 距 (39.9042, 116.4074) < 0.001°（漏做 GCJ↔WGS 边界转换的偏差 ~0.006°/≈600m，必被抓住）；随后恢复 `set_provider(settings 的 map_provider)`。--shots 未给 → 只跑不存图（CI 模式）。
 - `tests/ui_smoke.sh`：`#!/usr/bin/env bash; set -euo pipefail`；参数1=BUILD_DIR（默认 `build/release-dev`）；`QT_QPA_PLATFORM=offscreen "$BUILD_DIR/photopipeline" --ui-smoke --inputs "$(dirname "$0")/../golden/base"`；tail 校验输出含 `UI-SMOKE OK`；echo `UI-SMOKE pass`。
 - 构建/验证（本任务专属）：`cmake --preset release-dev -DVCPKG_MANIFEST_INSTALL=OFF && cmake --build --preset release-dev -j` → `ctest --test-dir build/release-dev --output-on-failure` 全绿（旧 20 条 - offscreen + 新 thumbs/settings/paths/gcj02/ui_smoke）→ `--ui-smoke --shots .cache/ui-review` 产出 7 张 PNG 并报告路径。
 - Git：分两次提交 `M1b-U10: integration` / `M1b-U10: ui smoke + presets`。

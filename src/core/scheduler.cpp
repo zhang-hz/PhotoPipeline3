@@ -288,8 +288,11 @@ bool Scheduler::running() const { return impl_->running.load(); }
 const std::vector<FileResult>& Scheduler::results() const { return impl_->results; }
 
 RunSummary Scheduler::summary() const {
-    const Impl& d = *impl_;
+    Impl& d = *impl_;
     RunSummary s;
+    // The UI polls summary() while the batch runs, so the result slots must be read under the
+    // same mutex the workers store them with (results() itself is documented as wait()-only).
+    std::lock_guard<std::mutex> lk(d.mu);
     s.total = d.results.size();
     for (const FileResult& r : d.results) {
         if (r.ok) {
@@ -303,12 +306,7 @@ RunSummary Scheduler::summary() const {
         }
         s.out_bytes += r.out_bytes;
     }
-    double ms = 0;
-    {
-        std::lock_guard<std::mutex> lk(d.mu);
-        ms = d.elapsed_ms;
-    }
-    if (ms <= 0) ms = ms_since(d.t_start);
+    const double ms = d.elapsed_ms > 0 ? d.elapsed_ms : ms_since(d.t_start);
     s.total_ms = ms;
     s.avg_file_ms = s.total > 0 ? ms / static_cast<double>(s.total) : 0.0;
     s.throughput_mb_s =

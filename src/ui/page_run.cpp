@@ -180,7 +180,7 @@ struct RunState {
     std::size_t total = 0, terminal = 0;
     std::size_t ok = 0, failed = 0, skipped = 0, cancelled = 0;
     std::uint64_t out_bytes = 0;
-    bool running = false, cancel_requested = false;
+    bool running = false, finished = false, cancel_requested = false;
     QElapsedTimer clock;
     QString out_root;
 };
@@ -198,8 +198,14 @@ QString status_text(const RunState& s) {
             .arg(static_cast<qulonglong>(s.ok))
             .arg(static_cast<qulonglong>(s.cancelled));
     }
-    if (s.running || s.total > 0) {
+    if (s.running) {
         return PageRun::tr("进行中 · 完成 %1 · 失败 %2 · 跳过 %3")
+            .arg(static_cast<qulonglong>(s.ok))
+            .arg(static_cast<qulonglong>(s.failed))
+            .arg(static_cast<qulonglong>(s.skipped));
+    }
+    if (s.finished) {
+        return PageRun::tr("已完成：成功 %1 · 失败 %2 · 跳过 %3")
             .arg(static_cast<qulonglong>(s.ok))
             .arg(static_cast<qulonglong>(s.failed))
             .arg(static_cast<qulonglong>(s.skipped));
@@ -349,6 +355,7 @@ void PageRun::begin_run(std::size_t total, const QStringList& names) {
     }
     s->progress->setRange(0, static_cast<int>(total));
     s->progress->setValue(0);
+    s->progress->setVisible(true);   // idle 隐藏，运行中显示
     s->cancel->setEnabled(true);
     s->center->setCurrentWidget(s->view);
     s->summary_box->setVisible(false);
@@ -383,6 +390,7 @@ void PageRun::end_run(const pp::RunSummary& sum, const QString& out_root) {
     if (!s) return;
     s->tick->stop();
     s->running = false;
+    s->finished = true;
     s->cancel->setEnabled(false);
     s->total = sum.total;
     s->ok = sum.ok;
@@ -419,6 +427,7 @@ void PageRun::reset() {
     s->tick->stop();
     s->clock.invalidate();
     s->running = false;
+    s->finished = false;
     s->cancel_requested = false;
     s->total = s->terminal = 0;
     s->ok = s->failed = s->skipped = s->cancelled = 0;
@@ -427,6 +436,7 @@ void PageRun::reset() {
     s->model->set_rows(QStringList());
     s->progress->setRange(0, 1);
     s->progress->setValue(0);
+    s->progress->setVisible(false);  // idle：不显示误导性的「第 0 / 1 个」
     s->cancel->setEnabled(false);
     s->throughput->clear();
     s->summary_text->clear();

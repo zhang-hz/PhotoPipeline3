@@ -8,7 +8,7 @@
     "libjxl",
     "libwebp",
     "lcms",
-    { "name": "exiv2", "features": ["bmff"] },
+    { "name": "exiv2", "features": ["bmff", "xmp"] },
     "spdlog"
   ]
 }

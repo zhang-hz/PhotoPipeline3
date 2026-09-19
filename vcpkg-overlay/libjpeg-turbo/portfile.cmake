@@ -60,6 +60,24 @@ vcpkg_cmake_install()
 vcpkg_copy_pdbs()
 vcpkg_fixup_pkgconfig()
 
+# jpegli 的公共 C API 静态库：上游没有 install 规则且 jpegli-static 是
+# EXCLUDE_FROM_ALL，这里显式构建（rel+dbg）后按 libjpegli.a 安装，供需要
+# jpegli_* 符号（而非仅 libjpeg 兼容导出层）的消费方链接使用。
+vcpkg_cmake_build(TARGET jpegli-static)
+set(_jpegli_static_rel "${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-rel/lib/libjpegli-static.a")
+set(_jpegli_static_dbg "${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-dbg/lib/libjpegli-static.a")
+if(NOT EXISTS "${_jpegli_static_rel}" OR NOT EXISTS "${_jpegli_static_dbg}")
+    message(FATAL_ERROR
+        "jpegli-static archive missing (check upstream target/output name): "
+        "'${_jpegli_static_rel}' / '${_jpegli_static_dbg}'")
+endif()
+file(INSTALL "${_jpegli_static_rel}"
+    DESTINATION "${CURRENT_PACKAGES_DIR}/lib" RENAME libjpegli.a)
+file(INSTALL "${_jpegli_static_dbg}"
+    DESTINATION "${CURRENT_PACKAGES_DIR}/debug/lib" RENAME libjpegli.a)
+unset(_jpegli_static_rel)
+unset(_jpegli_static_dbg)
+
 # jpegli 扩展头（公开 C API，上游路径 lib/jpegli/{encode,decode,common,types}.h）。
 # encode.h/decode.h 内部以 "lib/jpegli/..."、"lib/base/include_jpeglib.h" 引用，
 # 故同时安装 include/lib/ 前缀树；再补一份 <jpegli/encode.h> 形式

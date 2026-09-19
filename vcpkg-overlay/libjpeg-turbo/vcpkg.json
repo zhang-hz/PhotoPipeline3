@@ -1,7 +1,7 @@
 {
   "name": "libjpeg-turbo",
   "version": "3.2.0",
-  "port-version": 0,
+  "port-version": 1,
   "description": "Intercepted: builds google/jpegli as drop-in libjpeg62 replacement (full-featured).",
   "dependencies": [
     "highway",

@@ -105,6 +105,8 @@ EncodeResult OiioEncoder::encode(const EncodeRequest& req) {
     };
     auto note = [&](const std::string& msg) {
         log_warn(kStage, kFile, msg, {{"format", format_id_}});
+        // TODO(M2): WarningKind has no "parameter ignored"/"value clamped" value, so E9
+        // notes ride on MetadataDropped; add a dedicated kind in M2 and re-map.
         res.warnings.push_back(Warning{WarningKind::MetadataDropped, msg});
     };
 
@@ -257,9 +259,9 @@ PP_REGISTER_ENCODER("bmp", "oiio", make_bmp);
 
 }  // namespace
 
-// Link anchor: pp_core is a static archive, so this TU (and therefore its static
-// registration above) is only pulled into a binary when something references a symbol
-// defined here. Consumers that need the OIIO encoders should call this no-op.
-// TODO(M2): drop once pp_core is linked with whole-archive (see M1-T7 report next-needed).
+// Link anchor: pp_core is linked with $<LINK_LIBRARY:WHOLE_ARCHIVE> by every consumer
+// (T7c ruling), so this TU is pulled in anyway; the anchor is kept as a redundant safety
+// net for any future target that forgets it.
+// TODO(M2): drop the anchors once the whole-archive link is the only supported form.
 void t7_encoder_link_anchor_oiio() {}
 }  // namespace pp

@@ -1025,7 +1025,8 @@ std::vector<std::string> registered_backends(std::string_view format_id);
 > ⑤ WebP 重写会新增必需的 `VP8X` chunk，`VP8L` 载荷字节完全一致（元数据模式 WebP 的保真依据）；
 > ⑥ 时区语义模式下，XMP 日期若**自带显式偏移**则以该偏移为准（无偏移才用 `from_offset_min`），改写墙钟并把偏移写为 `to_offset_min`；Delta 模式保留小数秒与时区后缀不变；
 > ⑦ `write_metadata_exiv2` / `rewrite_metadata_only` 的 `plan` 参数须传**非 const 对象**（warnings 经 `plan.warnings` 回传；冻结签名所致，已记 TODO(M2)）；
-> ⑧ 实测通过项：仅元数据模式 JPEG（SOS 后字节一致 + 像素 hash 相等）/ WebP（VP8L 字节一致）/ TIFF（像素 hash 相等）；BMFF（HEIF/AVIF/JXL）写入抛 "not supported"（印证 §5.2 路径 B/C）。
+> ⑧ 实测通过项：仅元数据模式 JPEG（SOS 后字节一致 + 像素 hash 相等）/ WebP（VP8L 字节一致）/ TIFF（像素 hash 相等）/ **PNG（IDAT 拼接逐字节一致 + 像素 hash 相等，T5c 新增）**；BMFF（HEIF/AVIF/JXL）写入抛 "not supported"（印证 §5.2 路径 B/C）。
+> ⑨ **PNG 正常路径现在零 warning**（`MetadataDropped` 仅在能力缺失/异常降级时出现）——T8/T14 的出口准则 7 的 PNG 例可直接断言 IDAT + 像素 hash。
 
 ### 4.6 T6 编码器（jpegli / libjxl / libwebp）
 
@@ -1062,6 +1063,7 @@ std::vector<std::string> registered_backends(std::string_view format_id);
   - JXL/HEIF/AVIF 注入用 `make_payloads`（`exif_blob` = TIFF blob，JXL 自行加 4 字节 offset 头，§3.8 E7）；
   - `sync_file_mtime(out, plan.datetime_original)`（空串 = 不动，本地时区解释）；
   - **`format_supports_metadata_only()` 判定**：JPEG/TIFF/WebP = true；**PNG = true**（T5b 已修复 zlib/PNG，T5c 复核）；JXL/HEIF/AVIF = false（JXL 的 box 替换路径**M1 不实现**，记 TODO(M2)——设计 §5.5 列为支持，属 M1 有意收窄）。
+  - **能力探测与符号安排（T5c 交付，T8 注意）**：判定由运行期探测函数 `pp::detail_metadata_only_supported(format_id)` 给出（用**结构完整的最小头部样本**探测 Exiv2 类型注册：PNG 需完整 IHDR+CRC、TIFF 需 1 个 IFD 条目、WebP 需 VP8X chunk、JPEG 需 SOI/APP0——仅魔数字节会返回 `none`）；该函数同时以 **weak 定义**补齐冻结谓词 `pp::format_supports_metadata_only()`，**T8 在 pipeline.cpp 给出强定义即自动覆盖**（T8 仍是所有者；建议直接 `return pp::detail_metadata_only_supported(id);`）。实测能力矩阵：`jpeg=1 png=1 tiff=1 webp=1 heif=0 avif=0 jxl=0 bmp=0`。
 - **首次端到端鼓点（M1 第一个大关口）**：
   1. `--dev tests/golden/base/*.png --out .cache/out --format jxl --workers 1` 全绿；
   2. 27 fixture × 8 格式矩阵跑完（`.cache/out/<fmt>/`），**零崩溃**，逐格式统计成功/失败（损坏负例与 CMYK 预期失败）；

@@ -33,8 +33,12 @@
 #     缺失条目列名规则见该脚本头注释。缺许可的真实 port 只告警不失败（须在报告里列名处置）。
 #   * 打包器: tools/bin/appimagetool-x86_64.AppImage（入库 + 旁置 .sha512），
 #     运行方式 APPIMAGE_EXTRACT_AND_RUN=1（不依赖 FUSE）。
-#   * 幂等: AppDir 与同名产物先删后建，可重复重跑（结构一致）；不承诺字节可复现
-#     （squashfs 超级块时间戳/mtime 参与，T11 实测同结构不同 sha，按现状接受）。
+#   * type2 runtime（M2-T11d）: appimagetool 默认从 GitHub `continuous` 渠道**在线下载**
+#     runtime（§1.7 禁网络 + continuous 漂移 → 同日不同产物），故 runtime 也入库:
+#     tools/bin/type2-runtime-x86_64（+ 旁置 .sha512），打包固定用 `--runtime-file` 指向它。
+#     校验失败/文件缺失 → exit 2 硬失败，**不静默回退到网络下载**。
+#   * 幂等: AppDir 与同名产物先删后建，可重复重跑（结构一致）；runtime 固定后产物仅剩
+#     squashfs 超级块时间戳/mtime 的非确定性（不承诺字节可复现）。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -44,10 +48,18 @@ BUILD_DIR="${PP_BUILD_DIR:-$ROOT/build/m2-release}"
 BIN="$BUILD_DIR/photopipeline"
 TOOL="$ROOT/tools/bin/appimagetool-x86_64.AppImage"
 TOOL_SHA="$TOOL.sha512"
+RUNTIME="$ROOT/tools/bin/type2-runtime-x86_64"
+RUNTIME_SHA="$RUNTIME.sha512"
 DESKTOP_SRC="$ROOT/share/applications/photopipeline.desktop"
 ICON_SRC="$ROOT/share/icons/hicolor/256x256/apps/photopipeline.png"
 
 die() { echo "make_appimage: $*" >&2; exit 1; }
+# 入库 runtime 缺失/损坏 = 硬失败（exit 2）：绝不让 appimagetool 回退到在线下载 runtime
+die_runtime() {
+    echo "make_appimage: $*" >&2
+    echo "make_appimage: exit 2 — 拒绝回退到网络下载 runtime（§1.7 打包不得依赖网络）；请恢复入库资产 tools/bin/type2-runtime-x86_64{,.sha512}" >&2
+    exit 2
+}
 note() { echo "make_appimage: $*"; }
 
 [ -x "$BIN" ] || die "release 产物缺失: $BIN（先 cmake --preset release -B ${BUILD_DIR#"$ROOT"/} && cmake --build ${BUILD_DIR#"$ROOT"/} -j）"
@@ -58,6 +70,12 @@ note() { echo "make_appimage: $*"; }
 
 note "校验打包器 SHA512"
 ( cd "$ROOT" && sha512sum -c "${TOOL_SHA#"$ROOT"/}" >/dev/null ) || die "打包器 SHA512 校验失败"
+
+# ---- type2 runtime 前置校验（M2-T11d；失败即 exit 2，不联网） ----
+[ -f "$RUNTIME" ] || die_runtime "type2 runtime 入库文件缺失: $RUNTIME"
+[ -f "$RUNTIME_SHA" ] || die_runtime "type2 runtime SHA512 旁置文件缺失: $RUNTIME_SHA"
+note "校验 type2 runtime SHA512（--runtime-file，离线打包）"
+( cd "$ROOT" && sha512sum -c "${RUNTIME_SHA#"$ROOT"/}" >/dev/null ) || die_runtime "type2 runtime SHA512 校验失败: $RUNTIME"
 
 # ---- 版本（单源：产物 --version） ----
 VERSION="$("$BIN" --version | awk 'NR==1 && $1=="PhotoPipeline" {print $2}')"
@@ -192,9 +210,9 @@ grep -qx 'Icon=photopipeline' "$APPDIR/usr/share/applications/photopipeline.desk
 [ "$LIC_COUNT" -ge 30 ] || die "许可文本数不足（烟测 ④）: $LIC_COUNT < 30"
 note "烟测 ④ 前置: usr/share/licenses/ 存在，copyright 文件 $LIC_COUNT 个（≥30 ✓）"
 
-# ---- 打包 ----
-note "appimagetool → $APPIMAGE"
-ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" --no-appstream "$APPDIR" "$APPIMAGE"
+# ---- 打包（--runtime-file = 入库 runtime，离线，M2-T11d） ----
+note "appimagetool → $APPIMAGE（--runtime-file=$RUNTIME）"
+ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" --no-appstream --runtime-file "$RUNTIME" "$APPDIR" "$APPIMAGE"
 [ -x "$APPIMAGE" ] || die "打包失败：$APPIMAGE 不存在"
 
 # ---- 烟测 ④ 产物内验证：从打好的 AppImage 解包确认许可目录确实在产物里 ----

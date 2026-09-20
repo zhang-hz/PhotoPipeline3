@@ -79,6 +79,12 @@ constexpr int kPreviewScanCap = 200;
 // 超出上限未命中时的冻结文案（tr 模板见 refresh_time_preview）
 constexpr const char* kPreviewCapText = QT_TR_NOOP("前 200 个文件未找到时间字段");
 
+// §9.1 FIX2：GPS 卡控件禁用时清空占位文本（Qt 占位色不随 setEnabled 变化，像素实测
+// ink 与启用态相同 → 会被误认为可编辑）；启用时恢复原始文案（不新造文案）。
+constexpr const char* kLatPlaceholder = QT_TR_NOOP("例如 31.230400");
+constexpr const char* kLonPlaceholder = QT_TR_NOOP("例如 121.473700");
+constexpr const char* kSearchPlaceholder = QT_TR_NOOP("搜索地点");
+
 // ---------------------------------------------------------------------------
 // DMS 格式化（§3.2：31°13'49.4"N 121°28'25.3"E，度分秒一位小数）
 // ---------------------------------------------------------------------------
@@ -460,6 +466,10 @@ void refresh_gps_inputs(MetaState* st) {
     st->search_btn->setEnabled(card_on);
     st->search_results->setEnabled(card_on);
     st->read_gps->setEnabled(coords && !st->selected_files.isEmpty());
+    // §9.1 FIX2：占位文本跟随各框自身可用性（lat/lon 另受 "清除 GPS" 影响）
+    st->lat->setPlaceholderText(coords ? PageMeta::tr(kLatPlaceholder) : QString());
+    st->lon->setPlaceholderText(coords ? PageMeta::tr(kLonPlaceholder) : QString());
+    st->search_edit->setPlaceholderText(card_on ? PageMeta::tr(kSearchPlaceholder) : QString());
     if (locked) {
         st->gps_status->setText(PageMeta::tr("已勾选清除 GPS：输出将不含 GPS"));
         st->map->clear_marker();
@@ -787,7 +797,7 @@ QWidget* build_gps_card(MetaState* st, QWidget* parent) {
     st->lat = new QLineEdit(card);
     st->lat->setObjectName(QStringLiteral("gps_lat"));
     st->lat->setValidator(new QDoubleValidator(-90.0, 90.0, 6, st->lat));
-    st->lat->setPlaceholderText(PageMeta::tr("例如 31.230400"));
+    st->lat->setPlaceholderText(PageMeta::tr(kLatPlaceholder));
     lat_row->addWidget(st->lat, 1);
     v->addLayout(lat_row);
 
@@ -796,7 +806,7 @@ QWidget* build_gps_card(MetaState* st, QWidget* parent) {
     st->lon = new QLineEdit(card);
     st->lon->setObjectName(QStringLiteral("gps_lon"));
     st->lon->setValidator(new QDoubleValidator(-180.0, 180.0, 6, st->lon));
-    st->lon->setPlaceholderText(PageMeta::tr("例如 121.473700"));
+    st->lon->setPlaceholderText(PageMeta::tr(kLonPlaceholder));
     lon_row->addWidget(st->lon, 1);
     v->addLayout(lon_row);
 
@@ -853,7 +863,7 @@ QWidget* build_gps_card(MetaState* st, QWidget* parent) {
     auto* search_row = new QHBoxLayout();
     st->search_edit = new QLineEdit(card);
     st->search_edit->setObjectName(QStringLiteral("gps_search_edit"));
-    st->search_edit->setPlaceholderText(PageMeta::tr("搜索地点"));
+    st->search_edit->setPlaceholderText(PageMeta::tr(kSearchPlaceholder));
     st->search_btn = new QPushButton(PageMeta::tr("搜索"), card);
     st->search_btn->setObjectName(QStringLiteral("gps_search_button"));
     st->search_results = new QComboBox(card);

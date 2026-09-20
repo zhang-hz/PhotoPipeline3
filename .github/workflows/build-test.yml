@@ -535,13 +535,9 @@ jobs:
         run: |
           set +e
           LOG="$RUNNER_TEMP/appimage-start.log"
-          # runner 目录预置（M2-T27 发现，AppRun 侧缺陷的真修复待裁定）：AppRun 无终端分支把
-          # stderr 写入 `${XDG_CACHE_HOME:-$HOME/.cache}/PhotoPipeline-appimage.log`，干净 runner
-          # 无 `~/.cache` 时该行的 `: >"$LOG" 2>/dev/null || LOG=/dev/null` 会在 dash 下直接退出
-          # （`:` 是 POSIX 特殊内建，重定向失败即终止 shell，退出码 2），兜底分支不会执行 ⇒ 产物
-          # 在缺 `~/.cache` 的账户上**无法启动**（本机复现：HOME=<无 .cache 的目录> 启动 → rc=2）。
-          # 这里按 AppRun 的目录约定预置它，保证本步测的是产物本身而非 runner 的目录缺失。
-          mkdir -p "${XDG_CACHE_HOME:-$HOME/.cache}"
+          # 本步刻意**不**预建 `$HOME/.cache`：M2-T27 的 AppRun 缺陷（缺/不可写日志目录时静默
+          # 退出）正是这个"干净目标机"语义抓到的，预建目录会掩盖回归。修复后产物无此依赖
+          # （AppRun 自建目录 + 不可写即回退 /dev/null）。
           echo "== ① --version"
           env -u DISPLAY -u WAYLAND_DISPLAY QT_QPA_PLATFORM=offscreen \
             "$APPIMAGE" --version > "$RUNNER_TEMP/appimage-version.log" 2>&1

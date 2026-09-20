@@ -281,13 +281,27 @@ cat > "$APPDIR/AppRun" <<'APPRUN'
 #   取舍: 弹窗（zenity → xmessage，取第一个可用者）是双击场景**用户唯一可见**的通道，
 #   日志（$HOME/.cache/PhotoPipeline-appimage.log）保证任何情况下都留下可回传的证据；
 #   两者互为兜底、代价仅几行 sh，故同时保留；弹窗程序不可用或 PP_NO_GUI_POPUP=1 时不弹窗。
+#   M2-T27 修正（日志目录缺失/不可写 ⇒ 产物静默退出）: 目录与写入两侧都容错，写日志失败一律
+#   回退 /dev/null 且**不影响启动**（dash 特殊内建陷阱，详见下方 LOG_DIR/LOG 段注释）。
 cd "$APPDIR" || exit 1
 export LD_LIBRARY_PATH="$APPDIR/usr/lib"
 export QT_PLUGIN_PATH="$APPDIR/usr/lib/qt-plugins"
 export OIIO_LIBRARY_PATH="$APPDIR/usr/lib/oiio-plugins"
 # QT_QPA_PLATFORM_PLATFORM_PATH 不设（§2.9）
 
-LOG="${XDG_CACHE_HOME:-$HOME/.cache}/PhotoPipeline-appimage.log"
+LOG_DIR="${XDG_CACHE_HOME:-$HOME/.cache}"
+LOG="$LOG_DIR/PhotoPipeline-appimage.log"
+
+# M2-T27 修正（干净账户无 ~/.cache ⇒ 产物**静默退出**，即 T18 要消灭的场景）:
+# 日志「先建目录、再探测可写」，任一失败即回退 /dev/null，且**绝不允许**写日志失败终止 AppRun。
+# 修复前的 `: >"$LOG" 2>/dev/null || LOG=/dev/null` 在本机（有 ~/.cache）永不触发，但干净账户下
+# 必然失败: `:` 是 POSIX **特殊内建**，其重定向失败会**直接退出 shell（退出码 2）**，`||` 兜底
+# 永远不执行（dash/Ubuntu runner 实测；本机复现 `HOME=<无 .cache 目录>` → rc=2 + 无窗口）。
+# 故: ①`mkdir -p` 失败忽略；②写探测改用**非特殊内建** `printf`（重定向失败只返回非零，`||` 才
+# 生效）；③再探 `-w`，不可写即定死 /dev/null（只读 HOME / 满了的磁盘同理）。
+mkdir -p "$LOG_DIR" 2>/dev/null || true
+printf '' >"$LOG" 2>/dev/null || LOG=/dev/null
+[ -w "$LOG" ] || LOG=/dev/null
 
 # 缺库 → 发行版包名提示。随包已含 libQt6*/libxcb-*/libxkbcommon-x11/libX11-xcb，此处只列
 # **刻意不随包**的系统项: GL/EGL 驱动栈、glibc 家族、单副本不变式库（libX11/libxcb 核心）、
@@ -355,7 +369,8 @@ if [ -t 0 ] && [ -t 2 ]; then
     exec usr/bin/photopipeline "$@"          # 终端场景: 原样透明（§2.9）
 fi
 # 无终端（双击/桌面启动器）: stderr → 日志；启动即失败 → 弹窗（不静默）
-: >"$LOG" 2>/dev/null || LOG=/dev/null
+# M2-T27: 截断同样走非特殊内建 + 兜底（探测后目录被删/不可写也不致命）。
+printf '' >"$LOG" 2>/dev/null || LOG=/dev/null
 T0="$(date +%s 2>/dev/null || echo 0)"
 usr/bin/photopipeline "$@" 2>>"$LOG" &
 CHILD=$!

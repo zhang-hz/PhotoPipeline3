@@ -28,6 +28,8 @@
 //   - 预览上行 "首文件：<源值>"、下行 "→ <结果值>"；未启用 → "→ （未启用）"。
 //   - 清除 GPS 勾选优先于坐标（与 gps 互斥），且不依赖 "启用" 开关。
 //   - "从选中文件读取坐标" 一并回填可选字段（海拔/方位角/时间戳），有值才填。
+//   - 时间预览源扫描上限 200（§2.11 U7 落地口径 2026-09-20 冻结）：前 200 个文件内
+//     未找到时间字段 → "前 200 个文件未找到时间字段"，停止扫描。
 #include "ui/page_meta.h"
 
 #include <QAction>
@@ -68,6 +70,11 @@ namespace {
 // 经动态属性从 PageMeta* 取回（O(1)，随父对象析构）。
 constexpr const char* kStateProperty = "pp_meta_state";
 constexpr const char* kStateObjectName = "pp_meta_state";
+
+// §2.11 U7 落地口径（2026-09-20 冻结）：时间预览源扫描上限（防千级无时间批次阻塞）
+constexpr int kPreviewScanCap = 200;
+// 超出上限未命中时的冻结文案（tr 模板见 refresh_time_preview）
+constexpr const char* kPreviewCapText = QT_TR_NOOP("前 200 个文件未找到时间字段");
 
 // ---------------------------------------------------------------------------
 // DMS 格式化（§3.2：31°13'49.4"N 121°28'25.3"E，度分秒一位小数）
@@ -261,6 +268,7 @@ struct MetaState : QObject {
     QStringList selected_files;
     std::string preview_src;   // 首个含时间文件的 "YYYY:MM:DD HH:MM:SS"
     QString preview_path;      // 该文件路径（tooltip）
+    bool preview_capped = false;  // 前 kPreviewScanCap 个文件内未找到时间字段
 };
 
 MetaState* state_of(const PageMeta* page) {
@@ -330,9 +338,17 @@ void notify_rules_changed(MetaState* st) {
 void rescan_preview_source(MetaState* st) {
     st->preview_src.clear();
     st->preview_path.clear();
-    // TODO(M2): 该扫描在 GUI 线程同步执行（§2.11 冻结口径 "第一个含时间文件"）；
-    // 正常批次首文件即命中，超大且全无时间字段的批次需异步化。
+    st->preview_capped = false;
+    // §2.11 U7 落地口径（2026-09-20 冻结）：最多扫前 kPreviewScanCap 个文件找含时间者；
+    // 超出 → 预览显示 "前 200 个文件未找到时间字段"（防千级无时间批次阻塞 GUI 线程）。
+    // TODO(M2): 该扫描仍在 GUI 线程同步执行，异步化留 M2。
+    int scanned = 0;
     for (const QString& path : st->batch_files) {
+        if (scanned >= kPreviewScanCap) {
+            st->preview_capped = true;
+            return;
+        }
+        ++scanned;
         const pp::SourceMeta meta = pp::read_metadata(std::filesystem::path(path.toStdString()));
         const std::string dt = pp::effective_datetime(meta.exif, meta.xmp);
         if (!dt.empty()) {
@@ -369,7 +385,8 @@ void refresh_time_preview(MetaState* st) {
         return;
     }
     if (st->preview_src.empty()) {
-        st->preview_before->setText(PageMeta::tr("首文件无时间字段"));
+        st->preview_before->setText(st->preview_capped ? PageMeta::tr(kPreviewCapText)
+                                                       : PageMeta::tr("首文件无时间字段"));
         st->preview_after->clear();
         st->preview_before->setToolTip(QString());
         return;
@@ -642,11 +659,15 @@ QWidget* build_time_card(MetaState* st, QWidget* parent) {
     dh->setContentsMargins(0, 0, 0, 0);
     const std::array<QString, 6> names = {PageMeta::tr("年"), PageMeta::tr("月"), PageMeta::tr("日"),
                                          PageMeta::tr("时"), PageMeta::tr("分"), PageMeta::tr("秒")};
+    const std::array<QString, 6> kDeltaNames = {
+        QStringLiteral("time_years"), QStringLiteral("time_months"), QStringLiteral("time_days"),
+        QStringLiteral("time_hours"), QStringLiteral("time_minutes"), QStringLiteral("time_seconds")};
     for (int i = 0; i < 6; ++i) {
         auto* box = new QVBoxLayout();
         box->addWidget(new QLabel(names[std::size_t(i)], st->delta_row));
         st->delta[i] = new QSpinBox(st->delta_row);
-        st->delta[i]->setObjectName(QStringLiteral("time_delta_%1").arg(i));
+        // §2.11 U7 落地口径冻结的 objectName 契约：time_years…time_seconds
+        st->delta[i]->setObjectName(kDeltaNames[std::size_t(i)]);
         st->delta[i]->setRange(-9999, 9999);
         st->delta[i]->setValue(0);
         box->addWidget(st->delta[i]);

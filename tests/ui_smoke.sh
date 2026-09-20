@@ -3,7 +3,7 @@
 # PhotoPipeline — M1b-U10 offscreen UI smoke（ctest 名 ui_smoke，由 CMake 在 PP_BUILD_DEV 下注册）
 #
 # 用法: tests/ui_smoke.sh [BUILD_DIR]      # 默认 build/release-dev
-# 退出码: 0 = 冻结断言全过（末行 `UI-SMOKE OK shots=7 pages=3`）；
+# 退出码: 0 = 冻结断言全过（末行 `UI-SMOKE OK shots=8 pages=3`，§4.3 冻结 8 张）；
 #         2 = 用法/二进制缺失；其余 = photopipeline --ui-smoke 的退出码透传。
 set -euo pipefail
 
@@ -38,8 +38,8 @@ if [[ "$STATUS" -ne 0 ]]; then
   echo "ui_smoke: FAIL (photopipeline --ui-smoke exit $STATUS)" >&2
   exit "$STATUS"
 fi
-if ! grep -q '^UI-SMOKE OK shots=7 pages=3$' "$LOG"; then
-  echo "ui_smoke: FAIL (missing frozen success line 'UI-SMOKE OK shots=7 pages=3')" >&2
+if ! grep -q '^UI-SMOKE OK shots=8 pages=3$' "$LOG"; then
+  echo "ui_smoke: FAIL (missing frozen success line 'UI-SMOKE OK shots=8 pages=3')" >&2
   exit 1
 fi
 echo "UI-SMOKE pass"

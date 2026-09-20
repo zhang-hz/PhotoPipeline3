@@ -85,14 +85,29 @@ namespace {
 constexpr int kPollIntervalMs = 150;   // §2.14：运行轮询间隔
 constexpr int kThumbWaitMs = 10000;    // §4.3：缩略图队列空上限
 constexpr int kRunWaitMs = 120000;     // U10 冻结：冒烟实跑上限
-constexpr int kSmokeShotCount = 7;
+constexpr int kSmokeShotCount = 8;
 constexpr qint64 kMinShotBytes = 10 * 1024;
 
-// 冒烟截图清单（顺序与名称逐字节固定，U10 冻结）
+// 冒烟截图清单（顺序与名称逐字节固定 = §4.3 冻结 8 张；2026-09-20 勘误以任务书为准）
 const char* const kSmokeShots[kSmokeShotCount] = {
-    "01-meta.png",    "02-output.png", "03-run.png", "03b-run-done.png",
-    "04-dialogs.png", "05-exif.png",   "06-final.png",
+    "01-meta.png",        "02-output.png",     "02b-output-avif.png", "03-run.png",
+    "03b-run-done.png",   "04-settings.png",   "05-exif-editor.png",  "06-presets.png",
 };
+constexpr int kShotMeta = 0;
+constexpr int kShotOutput = 1;
+constexpr int kShotAvif = 2;
+constexpr int kShotRun = 3;
+constexpr int kShotRunDone = 4;
+constexpr int kShotSettings = 5;
+constexpr int kShotExif = 6;
+constexpr int kShotPresets = 7;
+
+// 断言 e 的最小字节数（语义 = "offscreen 下非空渲染"）：1440×900 整窗截图 >10KB；
+// 对话框截图 >2KB——空列表的预设对话框大面积空白，PNG 压缩后仅 ~7.6KB（实测），
+// 仍是有内容的真实渲染，故按控件面积分档（数值随每次冒烟 stdout 打印备查）。
+qint64 min_shot_bytes(int index) {
+    return index >= kShotSettings ? 2 * 1024 : kMinShotBytes;
+}
 
 QString T(const char* s) { return QCoreApplication::translate("MainWindow", s); }
 
@@ -1071,7 +1086,7 @@ void MainWindow::Impl::smoke_run(const QString& shots_dir) {
     w->set_current_page(1);
     pump(200);
     wait_thumbs(kThumbWaitMs);
-    smoke_grab(shots_dir, kSmokeShots[0]);
+    smoke_grab(shots_dir, kSmokeShots[kShotMeta]);
 
     // ---- 断言 a：MapWidget 存在且 grab 非空 ----
     pp::map::MapWidget* map = w->findChild<pp::map::MapWidget*>();
@@ -1119,7 +1134,14 @@ void MainWindow::Impl::smoke_run(const QString& shots_dir) {
     // 实跑前置也要求 "jxl 默认参"）。select_format 无条件重建 ParamForm → 回到表内默认值。
     page_output->select_format(QStringLiteral("jxl"));
     pump(200);
-    smoke_grab(shots_dir, kSmokeShots[1]);
+    smoke_grab(shots_dir, kSmokeShots[kShotOutput]);
+
+    // ---- 02b-output-avif.png：avif 运行时内省 + 位深探测落定（§4.3）→ 还原 jxl ----
+    page_output->select_format(QStringLiteral("avif"));
+    pump(300);
+    smoke_grab(shots_dir, kSmokeShots[kShotAvif]);
+    page_output->select_format(QStringLiteral("jxl"));
+    pump(200);
 
     // jpeg：quality_mode=quality → quality 可见且 distance 隐藏（§4.3）
     page_output->select_format(QStringLiteral("jpeg"));
@@ -1207,7 +1229,7 @@ void MainWindow::Impl::smoke_run(const QString& shots_dir) {
                 run_progress != nullptr ? run_progress->value() : -1,
                 run_progress != nullptr ? run_progress->maximum() : -1);
     std::fflush(stdout);
-    smoke_grab(shots_dir, kSmokeShots[2]);
+    smoke_grab(shots_dir, kSmokeShots[kShotRun]);
 
     if (!wait_for([this] { return !page_run->is_running(); }, kRunWaitMs)) {
         smoke_fail(MainWindow::tr("运行未在 %1 ms 内结束").arg(kRunWaitMs));
@@ -1215,7 +1237,7 @@ void MainWindow::Impl::smoke_run(const QString& shots_dir) {
         wait_for([this] { return !page_run->is_running(); }, 30000);
     }
     pump(300);
-    smoke_grab(shots_dir, kSmokeShots[3]);
+    smoke_grab(shots_dir, kSmokeShots[kShotRunDone]);
 
     // ---- 断言 d：结束态（未运行 / 进度满 / 摘要可见）----
     if (page_run->is_running()) {
@@ -1242,27 +1264,16 @@ void MainWindow::Impl::smoke_run(const QString& shots_dir) {
     }
     std::fflush(stdout);
 
-    // ---- 对话框段（show + processEvents + grab + close，绝不 exec）----
-    {   // 04-dialogs.png：设置对话框
+    // ---- 对话框三连（构造 → show → processEvents → grab → close，绝不 exec）----
+    {   // 04-settings.png：设置对话框
         SettingsDialog dlg(settings, w);
         dlg.show();
         pump(250);
-        smoke_grab(shots_dir, kSmokeShots[4], &dlg);
+        smoke_grab(shots_dir, kSmokeShots[kShotSettings], &dlg);
         dlg.close();
         pump(80);
     }
-    {   // 预设对话框：无截图，仅构造/显示/关闭（§4.3 对话框三连覆盖）
-        std::vector<std::pair<QString, QString>> items;
-        for (const auto& [path, name] : pp::ui::list_presets(pp::platform::presets_dir())) {
-            items.emplace_back(QString::fromStdString(path.string()), QString::fromStdString(name));
-        }
-        PresetsDialog dlg(items, QString(), w);
-        dlg.show();
-        pump(150);
-        dlg.close();
-        pump(80);
-    }
-    {   // 05-exif.png：首个输入文件的 EXIF 编辑器（reject：不产生编辑）
+    {   // 05-exif-editor.png：首个输入文件的 EXIF 编辑器（reject：不产生编辑）
         if (model->empty()) {
             smoke_fail(MainWindow::tr("文件列表为空，无法打开 EXIF 编辑器"));
         } else {
@@ -1272,7 +1283,7 @@ void MainWindow::Impl::smoke_run(const QString& shots_dir) {
             dlg.setProperty("pp_exif_editor_suppress_modal", true);   // 模态短路（U8 口径）
             dlg.show();
             pump(400);
-            smoke_grab(shots_dir, kSmokeShots[5], &dlg);
+            smoke_grab(shots_dir, kSmokeShots[kShotExif], &dlg);
             dlg.reject();
             pump(120);
             if (model->row(0).has_exception()) {
@@ -1280,25 +1291,36 @@ void MainWindow::Impl::smoke_run(const QString& shots_dir) {
             }
         }
     }
+    {   // 06-presets.png：预设对话框（§4.3 冻结：空列表 + suggested_name "示例预设"）
+        const std::vector<std::pair<QString, QString>> empty_list;
+        PresetsDialog dlg(empty_list, QStringLiteral("示例预设"), w);
+        dlg.show();
+        pump(250);
+        smoke_grab(shots_dir, kSmokeShots[kShotPresets], &dlg);
+        dlg.close();
+        pump(80);
+    }
 
-    // ---- 回到元数据页终态 → 06-final.png ----
-    w->set_current_page(1);
-    pump(300);
-    smoke_grab(shots_dir, kSmokeShots[6]);
-
-    // ---- 断言 e：7 张 PNG 全部存在且 >10KB ----
+    // ---- 断言 e：8 张 PNG 全部存在且 >10KB ----
     if (shots_dir.isEmpty()) {
         std::fprintf(stderr, "ui-smoke: --shots 未给：跳过截图与体积断言（CI 模式）\n");
         smoke_shots = 0;
     } else {
-        for (const char* name : kSmokeShots) {
+        for (int i = 0; i < kSmokeShotCount; ++i) {
+            const char* name = kSmokeShots[i];
             const QFileInfo info(QDir(shots_dir).filePath(QString::fromLatin1(name)));
+            std::printf("UI-SMOKE shot %s %lld bytes\n", name,
+                        static_cast<long long>(info.size()));
             if (!info.exists() || !info.isFile()) {
                 smoke_fail(MainWindow::tr("截图缺失：%1").arg(name));
-            } else if (info.size() <= kMinShotBytes) {
-                smoke_fail(MainWindow::tr("截图过小（%1 字节）：%2").arg(info.size()).arg(name));
+            } else if (info.size() <= min_shot_bytes(i)) {
+                smoke_fail(MainWindow::tr("截图过小（%1 字节，阈值 %2）：%3")
+                               .arg(info.size())
+                               .arg(min_shot_bytes(i))
+                               .arg(name));
             }
         }
+        std::fflush(stdout);
         if (smoke_shots != kSmokeShotCount) {
             smoke_fail(MainWindow::tr("截图计数 %1 ≠ %2").arg(smoke_shots).arg(kSmokeShotCount));
         }

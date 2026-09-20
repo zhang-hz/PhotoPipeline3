@@ -44,4 +44,35 @@ private:
 // 目标 ICC 加载（assets/icc/ 下文件名固定）："DisplayP3.icc" / "AdobeRGB1998.icc"
 std::string load_target_icc(ColorTarget t, std::string& err);  // sRGB → 空串（内建）
 
+// —— M2-T6 §2.8：CICP（H.273）→ 源色彩描述最小映射（冻结枚举） ——
+// 无嵌入 ICC 的 JXL 源：OIIO 以 `CICP int[4]` 暴露格式原生描述
+// (primaries, transfer, matrix, full_range)；按 §2.8 **仅前两元参与映射**。
+struct Cicp {
+    int primaries  = 2;   // H.273 ColourPrimaries（2 = unspecified）
+    int transfer   = 2;   // H.273 TransferCharacteristics（2 = unspecified）
+    int matrix     = 2;   // 不参与映射（冻结口径）
+    int full_range = 1;   // 不参与映射（冻结口径）
+};
+
+// §2.8 冻结枚举：恰好这四个已列组合可识别，其余（含 PQ 16 / HLG 18）一律未支持。
+enum class CicpSource {
+    Srgb,               // (1,13)  sRGB：显式，行为同 M1（src_icc 留空 → 既有假定路径）
+    DisplayP3,          // (12,13) Display P3（D65，sRGB TRC）
+    DisplayP3Gamma22,   // (12,1)  Display P3（D65，gamma 2.2）
+    Bt2020Linear,       // (9,8)   BT.2020 linear
+    Bt2020SrgbTrc,      // (9,13)  BT.2020 sRGB-TRC
+    Unsupported,        // 未列组合：维持 sRGB 假定（不构造 profile）
+};
+
+struct CicpMapping {
+    CicpSource source = CicpSource::Unsupported;
+    std::string name;      // 命中时的 profile 名（"sRGB"/"Display P3"/"BT.2020 linear"/…）
+    std::string src_icc;   // 源 ICC 字节；sRGB（lcms2 内建）与未支持为空 → ColorManager 假定 sRGB
+    std::string log_line;  // 冻结日志文本：命中 `CICP (<p>,<t>) → <profile 名>`；未支持见 §2.8
+    bool recognized() const { return source != CicpSource::Unsupported; }
+};
+
+// 纯函数（可单测）：§2.8 冻结枚举逐对判定，无其它组合；matrix/full_range 不参与。
+CicpMapping map_cicp_source(const Cicp& cicp);
+
 }  // namespace pp

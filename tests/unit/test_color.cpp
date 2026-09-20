@@ -6,6 +6,7 @@
 // Every failure prints "FAIL <case>: <detail>"; main() returns the failure count.
 
 #include <lcms2.h>
+#include <lcms2_plugin.h>  // _cmsMAT3inverse/_cmsMAT3eval: white-point round trip (M2-T6)
 
 #include <OpenImageIO/imagebuf.h>
 #include <OpenImageIO/imageio.h>
@@ -590,6 +591,224 @@ void test_concurrent_transforms() {
     cm().clear_cache();
 }
 
+// ------------------------------------------------- M2-T6 CICP mapping (§2.8) --
+
+// Round-trip facts of a serialized profile: the white point recovered from the stored
+// chromatic-adaptation (chad) matrix — lcms2 adapts colourants and mediaWhitePointTag to
+// the D50 PCS by design, so the original white point is exactly chad^-1 * D50 — plus the
+// PrimaryChromaticities tag and the red TRC evaluated at 0.5.
+struct ProfileFacts {
+    bool rgb = false;
+    bool chad = false;
+    double wx = 0, wy = 0;
+    double rx = 0, ry = 0, gx = 0, gy = 0, bx = 0, by = 0;
+    double trc_at_half = -1.0;
+};
+
+bool profile_facts(const std::string& bytes, ProfileFacts& f) {
+    cmsHPROFILE p = cmsOpenProfileFromMem(bytes.data(), cmsUInt32Number(bytes.size()));
+    if (p == nullptr) return false;
+    f.rgb = (cmsGetColorSpace(p) == cmsSigRgbData);
+    const auto* chad = static_cast<const cmsMAT3*>(cmsReadTag(p, cmsSigChromaticAdaptationTag));
+    if (chad != nullptr) {
+        cmsMAT3 inv;
+        if (_cmsMAT3inverse(chad, &inv)) {
+            const cmsCIEXYZ* d50 = cmsD50_XYZ();
+            cmsVEC3 in, out;
+            in.n[0] = d50->X;
+            in.n[1] = d50->Y;
+            in.n[2] = d50->Z;
+            _cmsMAT3eval(&out, &inv, &in);
+            const double sum = out.n[0] + out.n[1] + out.n[2];
+            if (sum > 0.0) {
+                f.chad = true;
+                f.wx = out.n[0] / sum;
+                f.wy = out.n[1] / sum;
+            }
+        }
+    }
+    const auto* ch = static_cast<const cmsCIExyYTRIPLE*>(cmsReadTag(p, cmsSigChromaticityTag));
+    if (ch != nullptr) {
+        f.rx = ch->Red.x;   f.ry = ch->Red.y;
+        f.gx = ch->Green.x; f.gy = ch->Green.y;
+        f.bx = ch->Blue.x;  f.by = ch->Blue.y;
+    }
+    const auto* trc = static_cast<const cmsToneCurve*>(cmsReadTag(p, cmsSigRedTRCTag));
+    if (trc != nullptr) {
+        f.trc_at_half = cmsEvalToneCurveFloat(const_cast<cmsToneCurve*>(trc), 0.5f);
+    }
+    cmsCloseProfile(p);
+    return true;
+}
+
+std::string cicp_tag(int p, int t) {
+    return "cicp/" + std::to_string(p) + "," + std::to_string(t);
+}
+
+// §2.8 frozen enumeration: exactly (1,13) (12,13) (12,1) (9,8) (9,13) are mapped. The
+// constructed source profiles are serialized and re-read with lcms2 (round trip) and the
+// primaries / D65 white point must match the standard values within 2/255; the TRC must
+// distinguish sRGB (13) from gamma 2.2 (1) and from linear (8).
+void test_cicp_mapping() {
+    const double tol = 2.0 / 255.0;  // T6 §4: primaries/white point tolerance <= 2/255
+    const double d65x = 0.3127, d65y = 0.3290;
+    const double srgb_trc_half = 0.21404;   // IEC 61966-2.1 EOTF(0.5)
+    const double gamma22_half = 0.21764;    // 0.5^2.2
+    constexpr double kNoPrimaries = 0.0;    // sRGB: lcms2 built-in, no generated profile
+
+    const struct {
+        int primaries, transfer;
+        pp::CicpSource source;
+        const char* name;
+        bool has_icc;
+        double rx, ry, gx, gy, bx, by, trc;
+    } cases[] = {
+        {1, 13, pp::CicpSource::Srgb, "sRGB", false,
+         kNoPrimaries, 0, 0, 0, 0, 0, 0},
+        {12, 13, pp::CicpSource::DisplayP3, "Display P3", true,
+         0.680, 0.320, 0.265, 0.690, 0.150, 0.060, srgb_trc_half},
+        {12, 1, pp::CicpSource::DisplayP3Gamma22, "Display P3", true,
+         0.680, 0.320, 0.265, 0.690, 0.150, 0.060, gamma22_half},
+        {9, 8, pp::CicpSource::Bt2020Linear, "BT.2020 linear", true,
+         0.708, 0.292, 0.170, 0.797, 0.131, 0.046, 0.5},
+        {9, 13, pp::CicpSource::Bt2020SrgbTrc, "BT.2020 sRGB-TRC", true,
+         0.708, 0.292, 0.170, 0.797, 0.131, 0.046, srgb_trc_half},
+    };
+
+    for (const auto& c : cases) {
+        pp::Cicp cicp;
+        cicp.primaries = c.primaries;
+        cicp.transfer = c.transfer;
+        const pp::CicpMapping m = pp::map_cicp_source(cicp);
+        const std::string tag = cicp_tag(c.primaries, c.transfer);
+        const std::string want_log = "CICP (" + std::to_string(c.primaries) + "," +
+                                     std::to_string(c.transfer) + ") → " + c.name;
+        check(m.recognized(), tag + "-recognized", "pair not recognized");
+        check(m.source == c.source, tag + "-source", "wrong CicpSource value");
+        check(m.name == std::string(c.name), tag + "-name", m.name);
+        check(m.log_line == want_log, tag + "-log-verbatim", m.log_line);
+        check(m.src_icc.empty() != c.has_icc, tag + "-icc-presence",
+              "src_icc " + std::to_string(m.src_icc.size()) + "B (has_icc=" +
+                  (c.has_icc ? "true" : "false") + ")");
+        if (!c.has_icc) continue;  // (1,13): empty src_icc is the M1 assumed-sRGB behaviour
+        ProfileFacts f;
+        check(profile_facts(m.src_icc, f), tag + "-parse", "cmsOpenProfileFromMem failed");
+        check(f.rgb, tag + "-rgb", "generated profile is not RGB");
+        check(std::fabs(f.wx - d65x) <= tol && std::fabs(f.wy - d65y) <= tol,
+              tag + "-whitepoint-d65",
+              "xy=(" + fnum(f.wx) + "," + fnum(f.wy) + ")");
+        check(std::fabs(f.rx - c.rx) <= tol && std::fabs(f.ry - c.ry) <= tol, tag + "-red",
+              "xy=(" + fnum(f.rx) + "," + fnum(f.ry) + ") want (" + fnum(c.rx) + "," +
+                  fnum(c.ry) + ")");
+        check(std::fabs(f.gx - c.gx) <= tol && std::fabs(f.gy - c.gy) <= tol, tag + "-green",
+              "xy=(" + fnum(f.gx) + "," + fnum(f.gy) + ") want (" + fnum(c.gx) + "," +
+                  fnum(c.gy) + ")");
+        check(std::fabs(f.bx - c.bx) <= tol && std::fabs(f.by - c.by) <= tol, tag + "-blue",
+              "xy=(" + fnum(f.bx) + "," + fnum(f.by) + ") want (" + fnum(c.bx) + "," +
+                  fnum(c.by) + ")");
+        check(std::fabs(f.trc_at_half - c.trc) <= tol, tag + "-trc-at-0.5",
+              "EOTF(0.5)=" + fnum(f.trc_at_half) + " want ~" + fnum(c.trc));
+        info(tag + " -> " + m.name + " white=(" + fnum(f.wx) + "," + fnum(f.wy) + ") prim=(" +
+             fnum(f.rx) + "," + fnum(f.ry) + ")/(" + fnum(f.gx) + "," + fnum(f.gy) + ")/(" +
+             fnum(f.bx) + "," + fnum(f.by) + ") trc(0.5)=" + fnum(f.trc_at_half) + " icc=" +
+             std::to_string(m.src_icc.size()) + "B");
+    }
+
+    // The generated profiles must be usable as a *source* in the real transform path:
+    // 0.5 neutral is TRC-only (D65 both sides). BT.2020 linear 0.5 -> sRGB ~0.7354.
+    {
+        pp::Cicp lin;
+        lin.primaries = 9;
+        lin.transfer = 8;
+        OIIO::ImageBuf buf = make_buf(1, 1, 3, {0.5f, 0.5f, 0.5f});
+        cm().clear_cache();
+        const pp::ColorOutcome oc =
+            cm().transform(buf, pp::map_cicp_source(lin).src_icc, false, pp::ColorTarget::SRGB);
+        check(oc.error.empty(), "cicp/9,8-transform-error", oc.error);
+        const std::vector<float> out = get_all(buf);
+        info("cicp/9,8 source profile (BT.2020 linear) 0.5 -> sRGB = " + fnum(out[0]) +
+             " (expected ~0.7354)");
+        check(std::fabs(double(out[0]) - 0.7354) <= 2e-3, "cicp/9,8-linear-0.5-to-srgb",
+              "v=" + fnum(out[0]) + " (expected ~0.7354)");
+        check(std::fabs(double(out[0]) - double(out[1])) <= 1e-5 &&
+                  std::fabs(double(out[1]) - double(out[2])) <= 1e-5,
+              "cicp/9,8-neutral", "spread!=0");
+        check(oc.src_desc == "ICC(BT.2020 linear)", "cicp/9,8-src-desc", oc.src_desc);
+    }
+    {
+        pp::Cicp p3;
+        p3.primaries = 12;
+        p3.transfer = 13;
+        OIIO::ImageBuf buf = make_buf(1, 1, 3, {0.5f, 0.5f, 0.5f});
+        cm().clear_cache();
+        const pp::ColorOutcome oc =
+            cm().transform(buf, pp::map_cicp_source(p3).src_icc, false, pp::ColorTarget::SRGB);
+        check(oc.error.empty(), "cicp/12,13-transform-error", oc.error);
+        const std::vector<float> out = get_all(buf);
+        info("cicp/12,13 source profile (Display P3, sRGB TRC) 0.5 -> sRGB = " + fnum(out[0]) +
+             " (expected ~0.5)");
+        check(std::fabs(double(out[0]) - 0.5) <= 2e-3, "cicp/12,13-srgb-trc-identity",
+              "v=" + fnum(out[0]) + " (expected ~0.5)");
+        check(oc.src_desc == "ICC(Display P3)", "cicp/12,13-src-desc", oc.src_desc);
+        cm().clear_cache();
+    }
+
+    // PQ(16) / HLG(18) and every other unlisted pair: not recognized, no profile bytes
+    // (-> ColorManager's M1 assumed-sRGB branch) and the §2.8 log text verbatim.
+    const struct {
+        int p, t;
+        const char* log;
+    } misses[] = {
+        {9, 16, "CICP transfer 16 未支持，按 sRGB 处理"},
+        {9, 18, "CICP transfer 18 未支持，按 sRGB 处理"},
+        {12, 16, "CICP transfer 16 未支持，按 sRGB 处理"},
+        {12, 18, "CICP transfer 18 未支持，按 sRGB 处理"},
+        {1, 8, "CICP transfer 8 未支持，按 sRGB 处理"},
+        {9, 1, "CICP transfer 1 未支持，按 sRGB 处理"},
+        {11, 13, "CICP transfer 13 未支持，按 sRGB 处理"},
+    };
+    for (const auto& c : misses) {
+        pp::Cicp cicp;
+        cicp.primaries = c.p;
+        cicp.transfer = c.t;
+        const pp::CicpMapping m = pp::map_cicp_source(cicp);
+        const std::string tag = cicp_tag(c.p, c.t);
+        check(!m.recognized(), tag + "-not-recognized", "unlisted pair was mapped");
+        check(m.source == pp::CicpSource::Unsupported, tag + "-unsupported",
+              "wrong CicpSource value");
+        check(m.name.empty(), tag + "-no-name", m.name);
+        check(m.src_icc.empty(), tag + "-srgb-branch",
+              "src_icc=" + std::to_string(m.src_icc.size()) + "B (must stay empty)");
+        check(m.log_line == std::string(c.log), tag + "-log-verbatim", m.log_line);
+    }
+
+    // §2.8: only the first two elements take part — matrix/full_range never change the result.
+    const int quad[][2] = {{9, 13}, {12, 1}, {12, 13}, {9, 8}, {9, 16}, {5, 5}};
+    for (const auto& pr : quad) {
+        pp::Cicp base;
+        base.primaries = pr[0];
+        base.transfer = pr[1];
+        const pp::CicpMapping ref = pp::map_cicp_source(base);
+        const std::string tag = cicp_tag(pr[0], pr[1]);
+        for (int matrix : {0, 1, 2}) {
+            for (int full_range : {0, 1}) {
+                pp::Cicp v = base;
+                v.matrix = matrix;
+                v.full_range = full_range;
+                const pp::CicpMapping got = pp::map_cicp_source(v);
+                check(got.source == ref.source && got.name == ref.name &&
+                          got.src_icc == ref.src_icc && got.log_line == ref.log_line,
+                      tag + "-matrix-fullrange-ignored",
+                      "matrix=" + std::to_string(matrix) + " full_range=" +
+                          std::to_string(full_range) + " changed the mapping");
+            }
+        }
+        // Repeated calls are stable (generated-profile cache).
+        check(pp::map_cicp_source(base).src_icc == ref.src_icc, tag + "-stable-bytes",
+              "src_icc differs between calls");
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -604,6 +823,7 @@ int main() {
     test_keep_original();
     test_transform_cache();
     test_target_profile_generation();
+    test_cicp_mapping();
     test_errors();
     test_concurrent_transforms();
 

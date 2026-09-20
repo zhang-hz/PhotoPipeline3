@@ -63,12 +63,35 @@ constexpr TargetSpec kP3Spec{"Display P3", 0.680, 0.320, 0.265, 0.690, 0.150, 0.
 constexpr TargetSpec kAdobeSpec{"Adobe RGB (1998)", 0.640, 0.330, 0.210, 0.710,
                                 0.150, 0.060, 2.19921875};
 
+// M2-T6 §2.8 — source descriptions of the frozen CICP enumeration. Same D65 white
+// point and the same cmsCreateRGBProfile builder as the targets above; these are
+// *source* profiles for ICC-less JXL files. (12,13) reuses kP3Spec verbatim.
+constexpr TargetSpec kP3Gamma22Spec{"Display P3", 0.680, 0.320, 0.265, 0.690, 0.150, 0.060, 2.2};
+constexpr TargetSpec kBt2020LinearSpec{"BT.2020 linear", 0.708, 0.292, 0.170, 0.797,
+                                       0.131, 0.046, 1.0};
+constexpr TargetSpec kBt2020SrgbSpec{"BT.2020 sRGB-TRC", 0.708, 0.292, 0.170, 0.797,
+                                     0.131, 0.046, 0.0};
+
 const TargetSpec* target_spec(ColorTarget t) {
     switch (t) {
     case ColorTarget::DisplayP3: return &kP3Spec;
     case ColorTarget::AdobeRGB:  return &kAdobeSpec;
     case ColorTarget::SRGB:
     case ColorTarget::KeepOriginal: break;
+    }
+    return nullptr;
+}
+
+// M2-T6 §2.8: the source-profile spec behind every recognized CICP pair (nullptr for
+// Srgb — lcms2's built-in — and for Unsupported, which never gets a profile).
+const TargetSpec* cicp_profile_spec(CicpSource s) {
+    switch (s) {
+    case CicpSource::DisplayP3:        return &kP3Spec;
+    case CicpSource::DisplayP3Gamma22: return &kP3Gamma22Spec;
+    case CicpSource::Bt2020Linear:     return &kBt2020LinearSpec;
+    case CicpSource::Bt2020SrgbTrc:    return &kBt2020SrgbSpec;
+    case CicpSource::Srgb:
+    case CicpSource::Unsupported:      break;
     }
     return nullptr;
 }
@@ -126,6 +149,10 @@ std::string serialize_profile(cmsHPROFILE p) {
 
 // Generated-profile byte cache (target -> ICC bytes). Shared by transform() and
 // load_target_icc(); the singleton caches its transforms, not its bytes.
+// M2-T6: the same map also holds the CICP source profiles under keys >= kCicpCacheBase
+// so they cannot collide with the ColorTarget enumerators (0..3).
+constexpr int kCicpCacheBase = 100;
+
 std::mutex& generated_mutex() {
     static std::mutex m;
     return m;
@@ -177,6 +204,30 @@ std::string target_icc_bytes(ColorTarget t, std::string& err) {
 
     std::lock_guard<std::mutex> lock(generated_mutex());
     generated_cache()[static_cast<int>(t)] = bytes;
+    return bytes;
+}
+
+// M2-T6 §2.8: serialized source profile for a recognized CICP pair. Cached like the
+// target profiles (same mutex/map); Srgb (lcms2 built-in) and Unsupported have none,
+// so an empty result is not an error here — it *is* the sRGB-assumption branch.
+std::string cicp_source_icc(CicpSource s) {
+    if (cicp_profile_spec(s) == nullptr) return {};
+    const int key = kCicpCacheBase + static_cast<int>(s);
+    {
+        std::lock_guard<std::mutex> lock(generated_mutex());
+        auto& cache = generated_cache();
+        auto it = cache.find(key);
+        if (it != cache.end()) return it->second;
+    }
+
+    cmsHPROFILE p = make_target_profile(*cicp_profile_spec(s));
+    if (p == nullptr) return {};
+    std::string bytes = serialize_profile(p);
+    cmsCloseProfile(p);
+    if (bytes.empty()) return {};
+
+    std::lock_guard<std::mutex> lock(generated_mutex());
+    generated_cache()[key] = bytes;
     return bytes;
 }
 
@@ -448,6 +499,38 @@ std::string load_target_icc(ColorTarget t, std::string& err) {
     // reported as "nothing to load from assets/icc" (§3.6).
     if (t == ColorTarget::SRGB || t == ColorTarget::KeepOriginal) return {};
     return target_icc_bytes(t, err);
+}
+
+// ---------------------------------------------------------------------------
+// M2-T6 §2.8 — CICP (H.273) → source description (frozen enumeration)
+// ---------------------------------------------------------------------------
+
+CicpMapping map_cicp_source(const Cicp& cicp) {
+    // Hit line is frozen as `CICP (<p>,<t>) → <profile 名>`; the miss text is the
+    // §2.8 sentence and reports the transfer value only.
+    const auto hit = [&cicp](CicpSource s, const char* name) {
+        CicpMapping m;
+        m.source = s;
+        m.name = name;
+        m.src_icc = cicp_source_icc(s);
+        m.log_line = "CICP (" + std::to_string(cicp.primaries) + "," +
+                     std::to_string(cicp.transfer) + ") → " + name;
+        return m;
+    };
+
+    // Exactly the four listed pairs; matrix/full_range deliberately do not participate.
+    if (cicp.primaries == 1 && cicp.transfer == 13) return hit(CicpSource::Srgb, "sRGB");
+    if (cicp.primaries == 12 && cicp.transfer == 13) return hit(CicpSource::DisplayP3, "Display P3");
+    if (cicp.primaries == 12 && cicp.transfer == 1)
+        return hit(CicpSource::DisplayP3Gamma22, "Display P3");
+    if (cicp.primaries == 9 && cicp.transfer == 8)
+        return hit(CicpSource::Bt2020Linear, "BT.2020 linear");
+    if (cicp.primaries == 9 && cicp.transfer == 13)
+        return hit(CicpSource::Bt2020SrgbTrc, "BT.2020 sRGB-TRC");
+
+    CicpMapping miss;  // source stays Unsupported, src_icc stays empty -> assumed sRGB (M1)
+    miss.log_line = "CICP transfer " + std::to_string(cicp.transfer) + " 未支持，按 sRGB 处理";
+    return miss;
 }
 
 struct ColorManager::Impl {

@@ -266,9 +266,42 @@ FileResult run_one_file(FileEntry& fe, const RunConfig& cfg, IEncoder* enc, Pixe
                      {{"src", fe.src.string()}, {"error", srcmeta.error}});
         }
         if (src_icc.empty()) src_icc = srcmeta.icc;  // R13 chain: embedded ICC first
-        // TODO(M2): R13's middle step (OIIO CICP / oiio:ColorSpace → lcms2 profile) is log-only
-        // in M1: a source without an embedded ICC is assumed sRGB (Warning via ColorManager when
-        // a transform runs). Implement the CICP⇄lcms2 mapping together with the UI color page.
+        // ---- R13 middle step (issue #7, implemented in M2-T6 §2.8): CICP → source profile ----
+        // A JXL file that carries a native colour encoding instead of an embedded ICC exposes
+        // `CICP int[4]` — libjxl only reports an encoded profile when the data profile is not
+        // an ICC. OIIO 3.1.14 *always* publishes an ICCProfile for JXL (it synthesizes one
+        // from the very same CICP), so CICP presence — not an empty src_icc — is what marks a
+        // source without an ICC of its own. The frozen §2.8 enumeration maps the first two
+        // elements: a mapped colour pair installs the lcms2 profile built by ColorManager and
+        // logs `CICP (<p>,<t>) → <profile 名>`. (1,13) and every unlisted pair (PQ 16 /
+        // HLG 18) keep the source description already resolved above — the frozen log line is
+        // still emitted, and the pixels stay on the ICC OIIO derived from the same CICP
+        // (§2.8 "维持现状": forcing the sRGB assumption here would visibly darken PQ/HLG
+        // sources, which are currently interpreted correctly). Grayscale sources keep their
+        // own gray-sRGB assumption (the constructed profiles are RGB).
+        if (spec != nullptr && fe.info.channels >= 3 &&
+            (fe.info.format == "jpegxl" || fe.info.format == "jxl")) {
+            const OIIO::ParamValue* pv = spec->find_attribute("CICP");
+            const bool cicp_ok = (pv != nullptr) &&
+                                 (pv->type().basetype == OIIO::TypeDesc::INT) &&
+                                 (pv->type().basevalues() * std::size_t(pv->nvalues()) >= 4);
+            if (cicp_ok) {
+                Cicp cicp;
+                cicp.primaries = pv->get<int>(0);
+                cicp.transfer = pv->get<int>(1);
+                cicp.matrix = pv->get<int>(2);      // not part of the mapping (§2.8)
+                cicp.full_range = pv->get<int>(3);  // not part of the mapping (§2.8)
+                const CicpMapping mapped = map_cicp_source(cicp);
+                if (mapped.recognized()) {
+                    log_info(kStage, kFile, mapped.log_line, {{"src", fe.src.string()}});
+                } else {
+                    log_warn(kStage, kFile, mapped.log_line, {{"src", fe.src.string()}});
+                }
+                // sRGB (lcms2 built-in) and unsupported pairs leave src_icc untouched; only
+                // the constructed P3 / BT.2020 profiles become the source description.
+                if (!mapped.src_icc.empty()) src_icc = mapped.src_icc;
+            }
+        }
         log_debug(kStage, kFile, "probe done",
                   {{"src", fe.src.string()},
                    {"size", std::to_string(fe.info.width) + "x" + std::to_string(fe.info.height)},

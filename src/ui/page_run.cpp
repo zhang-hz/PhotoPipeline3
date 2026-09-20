@@ -16,6 +16,7 @@
 #include <QHBoxLayout>
 #include <QHash>
 #include <QLabel>
+#include <QLayout>
 #include <QListView>
 #include <QModelIndex>
 #include <QPalette>
@@ -214,9 +215,27 @@ QString status_text(const RunState& s) {
     return PageRun::tr("排队中…");
 }
 
+// ---------------------------------------------------------------- 文案写入（M2-T22）
+// QLabel 默认不省略号：文字超出自身 rect 就被硬裁切（画到一半的字形直接切掉）。而
+// setText() → updateGeometry() 只**投递** LayoutRequest，布局要到下一个事件循环回合才重算，
+// 所以"改文案"与"抓帧"落在同一回合时，QLabel 仍是旧几何：M2-T22 像素终审在 03-run.png
+// 实测 runStatus width=189 < sizeHint=195（同一行 spacer 还空着 464px，不是空间不足），
+// 末尾 "0" 被切掉右半边（墨迹止于 x=830=641+189）。
+// 这里在文案变化后同步激活本页根布局 —— 这是唯一能消除"陈旧几何"的手段：给 QLabel 设
+// QSizePolicy/minimumWidth 无用，因为 QLabel（非 wordWrap）的 minimumSizeHint() 本来就
+// 等于 sizeHint()（实测 minHint=sizeHint=195），布局并没有压它，只是还没来得及重排。
+// 同步激活保证任意时刻（含同一回合内 grab）width() ≥ fontMetrics().horizontalAdvance(text())。
+void set_label_text(QLabel* label, const QString& text) {
+    if (label->text() == text) return;   // 文案未变：不触发多余的布局回合（500ms tick 高频路径）
+    label->setText(text);
+    QWidget* page = label->parentWidget();
+    QLayout* layout = page != nullptr ? page->layout() : nullptr;
+    if (layout != nullptr) layout->activate();
+}
+
 // 运行中：累计 out_bytes / QElapsedTimer（ns 分辨率，避免毫秒截断成 0 的除零退化）
 void refresh_labels(const RunState& s) {
-    s.status->setText(status_text(s));
+    set_label_text(s.status, status_text(s));
     const double ms = s.clock.isValid() ? static_cast<double>(s.clock.nsecsElapsed()) / 1.0e6 : 0.0;
     const double mb_s = ms > 0.0
         ? (static_cast<double>(s.out_bytes) / 1.0e6) / (ms / 1000.0)
@@ -224,7 +243,7 @@ void refresh_labels(const RunState& s) {
     const double avg_ms = (s.terminal > 0 && ms > 0.0)
         ? ms / static_cast<double>(s.terminal)
         : 0.0;
-    s.throughput->setText(format_throughput(mb_s, avg_ms));
+    set_label_text(s.throughput, format_throughput(mb_s, avg_ms));
 }
 
 void build_ui(PageRun* page, RunState* s) {
@@ -412,8 +431,8 @@ void PageRun::end_run(const pp::RunSummary& sum, const QString& out_root) {
 
     s->progress->setRange(0, static_cast<int>(sum.total));
     s->progress->setValue(static_cast<int>(s->terminal));
-    s->status->setText(status_text(*s));
-    s->throughput->setText(format_throughput(sum.throughput_mb_s, sum.avg_file_ms));
+    set_label_text(s->status, status_text(*s));
+    set_label_text(s->throughput, format_throughput(sum.throughput_mb_s, sum.avg_file_ms));
 
     QStringList lines;
     lines << PageRun::tr("成功：%1").arg(static_cast<qulonglong>(sum.ok));
@@ -447,13 +466,13 @@ void PageRun::reset() {
     s->progress->setVisible(false);  // idle：不显示误导性的「第 0 / 1 个」
     s->cancel->setEnabled(false);
     s->cancel->setVisible(false);    // visible ∧ enabled ⇔ is_running()
-    s->throughput->clear();
+    set_label_text(s->throughput, QString());
     s->summary_text->clear();
     s->summary_box->setVisible(false);
     s->open_out->setEnabled(false);
     s->open_logs->setEnabled(false);
     s->center->setCurrentWidget(s->guide);
-    s->status->setText(status_text(*s));  // 排队中…
+    set_label_text(s->status, status_text(*s));  // 排队中…
 }
 
 bool PageRun::is_running() const {

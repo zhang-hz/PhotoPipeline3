@@ -9,3 +9,4 @@ compile_commands.json
 *.user
 tests/golden/real/
 tests/golden/CHECKSUMS
+/dist/

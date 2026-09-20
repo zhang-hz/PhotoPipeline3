@@ -486,11 +486,15 @@ struct Impl {
             const bool on = (QLatin1String(kFormats[i].id) == current_format_id);
             format_button[i]->setChecked(on);
             // §9.1 [低]：选中态加强（边框 + 加粗 + 底色）；仅本控件样式，非主题文件
+            // M2-T7 #28a：未选中态加浅边框（可点性提示）。R1 用的 palette(mid) 在默认
+            // 主题下实测 #B8B8B8，与按钮底色 #EFEFEF 对比偏弱（Δ55）；这里取
+            // palette(dark)（同一族、随主题走、实测 #9F9F9F，Δ80）作"浅边框"，仍是浅灰，
+            // 选中态字符串逐字节不变。
             format_button[i]->setStyleSheet(
                 on ? QStringLiteral("QToolButton { border: 2px solid palette(highlight);"
                                     " border-radius: 3px; padding: 2px 6px; font-weight: bold;"
                                     " background: palette(alternate-base); }")
-                   : QStringLiteral("QToolButton { border: 1px solid palette(mid);"
+                   : QStringLiteral("QToolButton { border: 1px solid palette(dark);"
                                     " border-radius: 3px; padding: 3px 7px;"
                                     " background: palette(button); }"));
         }

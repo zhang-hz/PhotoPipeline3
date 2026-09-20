@@ -33,6 +33,14 @@
 //   - §9.1 U7 修正（2026-09-20）：时间偏移/GPS 卡 "启用" 未勾选 → 卡内其余控件
 //     setEnabled(false)（"清除 GPS" 复选框语义独立、始终可用；地图控件不受限）；
 //     rules()/apply_rules 语义不变（未启用=不出规则），仅控件可用性变化。
+//   - M2-T7（#22）：扫描移出 GUI 线程 —— `QtConcurrent::run` 在全局线程池执行"扫前
+//     kPreviewScanCap 个文件找含时间者"，`QFutureWatcher` 在 GUI 线程回填标签。
+//     worker 只捕获 QStringList 值拷贝，不触碰任何 GUI 状态；每次请求 +1 序号，
+//     结果回填前校验序号（旧批次/旧请求的结果一律作废，不得乱序回填）。
+//     扫描在途时预览两行留空（不显示上一批的陈旧文本，也不预报未定论文案）；
+//     上限 200 与全部冻结文案（含 "前 200 个文件未找到时间字段"）逐字不变。
+//     自验钩子（动态属性，供 .cache/tmp 自验程序读；非用户可见）：
+//     pp_preview_pending / pp_preview_generation / pp_preview_stale_dropped。
 #include "ui/page_meta.h"
 
 #include <QAction>
@@ -40,6 +48,8 @@
 #include <QComboBox>
 #include <QDoubleValidator>
 #include <QFormLayout>
+#include <QFuture>
+#include <QFutureWatcher>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -53,6 +63,7 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QVariant>
+#include <QtConcurrent/QtConcurrentRun>
 
 #include <algorithm>
 #include <array>
@@ -278,6 +289,10 @@ struct MetaState : QObject {
     std::string preview_src;   // 首个含时间文件的 "YYYY:MM:DD HH:MM:SS"
     QString preview_path;      // 该文件路径（tooltip）
     bool preview_capped = false;  // 前 kPreviewScanCap 个文件内未找到时间字段
+    // M2-T7 #22：异步扫描的序号守卫与在途标志（worker 不触碰本结构，只读值拷贝）
+    quint64 preview_generation = 0;   // 每次 set_batch_files +1；回填前校验
+    bool preview_pending = false;     // 扫描在途（预览两行留空）
+    int preview_stale_dropped = 0;    // 序号过期被丢弃的结果数（自验钩子）
 };
 
 MetaState* state_of(const PageMeta* page) {
@@ -344,28 +359,74 @@ void notify_rules_changed(MetaState* st) {
 // 预览 / 提示刷新
 // ---------------------------------------------------------------------------
 
-void rescan_preview_source(MetaState* st) {
+// M2-T7 #22：worker 结果（值语义；跨线程传递，不含任何 GUI 指针）
+struct PreviewScanResult {
+    bool found = false;
+    std::string src;   // "YYYY:MM:DD HH:MM:SS"
+    QString path;
+    bool capped = false;
+};
+
+// M2-T7 #22：worker 体（全局线程池线程执行；只读入参值拷贝，不触碰 GUI 状态）。
+// 扫描上限 kPreviewScanCap 与文案口径（2026-09-20 冻结）逐字不变：
+//   前 200 个文件内命中 → found；未命中且批内还有第 201 个 → capped。
+PreviewScanResult scan_preview_source(const QStringList& files) {
+    PreviewScanResult out;
+    const int limit = std::min(static_cast<int>(files.size()), kPreviewScanCap);
+    for (int i = 0; i < limit; ++i) {
+        const pp::SourceMeta meta =
+            pp::read_metadata(std::filesystem::path(files.at(i).toStdString()));
+        const std::string dt = pp::effective_datetime(meta.exif, meta.xmp);
+        if (!dt.empty()) {
+            out.found = true;
+            out.src = dt;
+            out.path = files.at(i);
+            return out;
+        }
+    }
+    out.capped = files.size() > kPreviewScanCap;
+    return out;
+}
+
+// 序号过期 → 丢弃（不得乱序回填）；序号匹配 → 回填并刷新标签。
+void refresh_time_preview(MetaState* st);   // 定义见下（request/apply 都要用）
+void apply_preview_result(MetaState* st, quint64 generation, const PreviewScanResult& r) {
+    if (generation != st->preview_generation) {
+        ++st->preview_stale_dropped;
+        st->setProperty("pp_preview_stale_dropped", st->preview_stale_dropped);
+        return;
+    }
+    st->preview_pending = false;
+    st->preview_src = r.src;
+    st->preview_path = r.path;
+    st->preview_capped = r.capped;
+    st->setProperty("pp_preview_pending", false);
+    refresh_time_preview(st);
+}
+
+// M2-T7 #22：发起异步扫描（GUI 线程只做值拷贝 + 挂 watcher，立即返回）。
+// 每个请求一个 watcher（各自只盯自己的 future，finished 必对应自身结果），
+// 旧请求的 watcher 在结果被丢弃后 deleteLater。
+void request_preview_scan(MetaState* st) {
     st->preview_src.clear();
     st->preview_path.clear();
     st->preview_capped = false;
-    // §2.11 U7 落地口径（2026-09-20 冻结）：最多扫前 kPreviewScanCap 个文件找含时间者；
-    // 超出 → 预览显示 "前 200 个文件未找到时间字段"（防千级无时间批次阻塞 GUI 线程）。
-    // TODO(M2): 该扫描仍在 GUI 线程同步执行，异步化留 M2。
-    int scanned = 0;
-    for (const QString& path : st->batch_files) {
-        if (scanned >= kPreviewScanCap) {
-            st->preview_capped = true;
-            return;
-        }
-        ++scanned;
-        const pp::SourceMeta meta = pp::read_metadata(std::filesystem::path(path.toStdString()));
-        const std::string dt = pp::effective_datetime(meta.exif, meta.xmp);
-        if (!dt.empty()) {
-            st->preview_src = dt;
-            st->preview_path = path;
-            return;
-        }
+    const quint64 generation = ++st->preview_generation;
+    st->preview_pending = !st->batch_files.isEmpty();
+    st->setProperty("pp_preview_generation", qulonglong(generation));
+    st->setProperty("pp_preview_pending", st->preview_pending);
+    if (!st->preview_pending) {
+        return;   // 空批：无扫描，预览回到 "无文件"
     }
+    const QStringList files = st->batch_files;   // 值拷贝：worker 不读 st
+    auto* watcher = new QFutureWatcher<PreviewScanResult>(st);
+    QObject::connect(watcher, &QFutureWatcher<PreviewScanResult>::finished, st,
+                     [st, watcher, generation] {
+                         const PreviewScanResult r = watcher->future().result();
+                         watcher->deleteLater();
+                         apply_preview_result(st, generation, r);
+                     });
+    watcher->setFuture(QtConcurrent::run([files] { return scan_preview_source(files); }));
 }
 
 pp::TimeShift current_time_shift(const MetaState* st) {
@@ -389,6 +450,14 @@ pp::TimeShift current_time_shift(const MetaState* st) {
 void refresh_time_preview(MetaState* st) {
     if (st->batch_files.isEmpty()) {
         st->preview_before->setText(PageMeta::tr("无文件"));
+        st->preview_after->clear();
+        st->preview_before->setToolTip(QString());
+        return;
+    }
+    if (st->preview_pending) {
+        // M2-T7 #22：扫描在途 → 两行留空。既不显示上一批的陈旧结果（会被误读成新批次
+        // 的预览），也不预报未定论文案；worker 结果一到（序号校验通过）立即回填。
+        st->preview_before->clear();
         st->preview_after->clear();
         st->preview_before->setToolTip(QString());
         return;
@@ -1095,7 +1164,9 @@ void PageMeta::apply_rules(const pp::BatchRules& r) { apply_state(state_of(this)
 void PageMeta::set_batch_files(const QStringList& paths) {
     MetaState* st = state_of(this);
     st->batch_files = paths;
-    rescan_preview_source(st);
+    // M2-T7 #22：扫描异步化（QtConcurrent 线程池 + QFutureWatcher 回填，序号守卫）；
+    // 新批次立即作废旧请求的结果，预览在扫描在途时留空。
+    request_preview_scan(st);
     refresh_time_preview(st);
 }
 

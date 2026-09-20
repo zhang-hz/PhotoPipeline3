@@ -36,6 +36,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <utility>
 
 #include "core/logger.h"
@@ -94,6 +95,25 @@ int gray_to_slider(double g) {
     const double clamped = std::clamp(g, 0.0, 1.0);
     return static_cast<int>(std::lround(clamped * kSliderMax));
 }
+
+// M2-T7 #28c：首次 show 后把对话框高度贴合当前页（构造期页几何未落定，
+// 增量法在 show 之后才可靠）。冻结头无成员/槽位 → 用局部事件过滤器承载。
+class FitOnShow : public QObject {
+public:
+    FitOnShow(QObject* parent, std::function<void()> fit)
+        : QObject(parent), fit_(std::move(fit)) {}
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (event->type() == QEvent::Show && fit_) {
+            fit_();
+        }
+        return QObject::eventFilter(watched, event);
+    }
+
+private:
+    std::function<void()> fit_;
+};
 
 pp::AppSettings original_values(const QObject* o) {
     pp::AppSettings s;
@@ -271,6 +291,34 @@ SettingsDialog::SettingsDialog(const pp::AppSettings& current, QWidget* parent)
     // §9.1 U6-FIX（尺寸贴合内容）：固定 520×420 会在运行页留下 ~260px 空白；
     // 改为按布局 sizeHint 收缩（三页取最高者，About 页高度已按 §9.1 收敛）
     adjustSize();
+
+    // M2-T7 #28c：QTabWidget::sizeHint() 取三页最高者 → 矮页下方仍留白。
+    // 按**当前页** sizeHint 增量式贴合：切换页签时把对话框高度整体加减
+    // (当前页 sizeHint − 当前页已分配高度)——高页变高、矮页变矮，页内控件不裁切
+    // （增量法不依赖 tabbar/按钮盒/边距的具体数值，样式无关）。
+    const auto fit_height_to_page = [this, tabs] {
+        QWidget* page = tabs->currentWidget();
+        if (page == nullptr) {
+            return;
+        }
+        // 增量法 + 迭代收敛：一次 resize 后页几何才更新，故最多再校正 2 轮
+        // （每轮 delta == 0 即停；触到 minimumSizeHint 时也不会无限循环）。
+        for (int pass = 0; pass < 3; ++pass) {
+            if (QLayout* lay = layout()) {
+                lay->activate();   // 让新页先拿到已分配高度
+            }
+            const int delta = page->sizeHint().height() - page->height();
+            if (delta == 0) {
+                break;
+            }
+            resize(width(), height() + delta);
+        }
+    };
+    connect(tabs, &QTabWidget::currentChanged, this,
+            [fit_height_to_page](int) { fit_height_to_page(); });
+    fit_height_to_page();
+    // 构造期（未 show）页几何尚未落定，增量法可能算错；首次 show 后再贴合一次。
+    installEventFilter(new FitOnShow(this, fit_height_to_page));
 }
 
 pp::AppSettings SettingsDialog::settings() const {

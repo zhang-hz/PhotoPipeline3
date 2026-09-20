@@ -314,6 +314,11 @@ struct ParamForm::Impl {
         adv_search->setPlaceholderText(ParamForm::tr("搜索参数…"));
         adv_search->setClearButtonEnabled(true);
         // §9.1：搜索框与相邻参数控件同列同宽（空标签占位 → 落在字段列，不拉满整行）
+        // M2-T7 #28b（实测复核后裁定不改布局）：搜索框过滤的就是高级参数行，其左边界与
+        // 这些行的编辑器字段列严格相等（自验实测 jxl 134/134、jpeg 115/115、webp 132/132、
+        // tiff 79/79，d=0）；与上一层"核心参数"表单字段列的差值（jxl 60px）来自另一个
+        // QFormLayout 的标签列宽，且随格式在 -79..+60px 浮动——按它对齐会让搜索框随格式
+        // 漂移、并与所过滤的行错列。等式由 .cache/tmp/m2t7-selftest 断言锁死。
         adv_form->addRow(QString(), adv_search);
         adv_area->setVisible(false);
         adv_outer->addWidget(adv_area);

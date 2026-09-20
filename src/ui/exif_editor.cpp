@@ -22,6 +22,8 @@
 //     QMessageBox 改为把内容写进动态属性（"pp_last_validation_errors" / "pp_last_warning"），
 //     offscreen 自验程序据此断言“校验失败不 accept”，不会阻塞在模态框上。
 //   * 对象名（objectName）供 --ui-smoke / .cache/tmp 自验程序查找控件。
+//   * M2-T7 #29：XMP 页增设搜索框（objectName `xmp_search`），过滤逻辑与 EXIF 页
+//     `exif_search` 同构（命中可见 / 非命中隐藏 / 组内无命中 → 组隐藏 / 清空恢复）。
 #include "ui/exif_editor.h"
 
 #include <QAbstractItemView>
@@ -264,6 +266,7 @@ struct ExifEditor::Impl {
     QComboBox* exif_type = nullptr;
 
     // XMP 页
+    QLineEdit* xmp_search = nullptr;   // M2-T7 #29（objectName `xmp_search`）
     QTreeWidget* xmp_tree = nullptr;
     std::map<std::string, QTreeWidgetItem*> xmp_groups;
     ValuePane xmp_pane;
@@ -315,6 +318,7 @@ struct ExifEditor::Impl {
     void refresh_all_rows();
 
     void apply_exif_filter();
+    void apply_xmp_filter();   // M2-T7 #29：与 apply_exif_filter 同构（仅作用 is_xmp 行）
     void add_exif_by_number();
     void add_xmp_by_path();
     Exiv2::TypeId type_from_combo() const;
@@ -689,6 +693,33 @@ void ExifEditor::Impl::apply_exif_filter() {
     }
 }
 
+// M2-T7 #29：XMP 页搜索（与 apply_exif_filter 同构：命中可见 / 非命中隐藏 /
+// 组内无命中 → 组隐藏；空搜索串 → 全部恢复）。XMP 树的顶层项即命名空间分组。
+void ExifEditor::Impl::apply_xmp_filter() {
+    const QString needle = xmp_search->text().trimmed();
+    for (auto& [key, row] : rows) {
+        (void)key;
+        if (!row.is_xmp || !row.item) continue;
+        row.item->setHidden(!needle.isEmpty() &&
+                            !row.item->text(0).contains(needle, Qt::CaseInsensitive));
+    }
+    std::function<bool(QTreeWidgetItem*)> node_visible = [&](QTreeWidgetItem* node) -> bool {
+        bool any = false;
+        for (int i = 0; i < node->childCount(); ++i) {
+            QTreeWidgetItem* child = node->child(i);
+            const bool vis = (child->data(0, kNodeRole).toInt() == kLeaf) ? !child->isHidden()
+                                                                          : node_visible(child);
+            child->setHidden(!vis);
+            if (vis) any = true;
+        }
+        return any;
+    };
+    for (int i = 0; i < xmp_tree->topLevelItemCount(); ++i) {
+        QTreeWidgetItem* node = xmp_tree->topLevelItem(i);
+        node->setHidden(!node_visible(node));
+    }
+}
+
 // —— 按编号 / 路径添加 ——
 
 Exiv2::TypeId ExifEditor::Impl::type_from_combo() const {
@@ -826,13 +857,23 @@ QWidget* ExifEditor::Impl::make_xmp_tab() {
     auto* v = new QVBoxLayout(page);
 
     auto* split = new QSplitter(Qt::Horizontal);
+    auto* left = new QWidget();
+    auto* lv = new QVBoxLayout(left);
+    lv->setContentsMargins(0, 0, 0, 0);
+    // M2-T7 #29：XMP 页搜索框（与 EXIF 页 exif_search 同构；objectName `xmp_search`）
+    xmp_search = new QLineEdit();
+    xmp_search->setObjectName(QStringLiteral("xmp_search"));
+    xmp_search->setPlaceholderText(T("搜索标签名 / 键 / 值"));
+    xmp_search->setClearButtonEnabled(true);
+    lv->addWidget(xmp_search);
     xmp_tree = new QTreeWidget();
     xmp_tree->setObjectName(QStringLiteral("xmp_tree"));
     xmp_tree->setHeaderLabels(QStringList{T("属性")});
     xmp_tree->setUniformRowHeights(true);
     xmp_tree->setAlternatingRowColors(true);
     xmp_tree->setSelectionMode(QAbstractItemView::SingleSelection);
-    split->addWidget(xmp_tree);
+    lv->addWidget(xmp_tree, 1);
+    split->addWidget(left);
 
     xmp_pane.is_xmp = true;
     split->addWidget(make_value_pane(xmp_pane, QStringLiteral("xmp")));
@@ -852,6 +893,9 @@ QWidget* ExifEditor::Impl::make_xmp_tab() {
 
     QObject::connect(add_button, &QPushButton::clicked, q, [this] { add_xmp_by_path(); });
     QObject::connect(xmp_path, &QLineEdit::returnPressed, q, [this] { add_xmp_by_path(); });
+    // M2-T7 #29：XMP 搜索过滤（与 exif_search 同构）
+    QObject::connect(xmp_search, &QLineEdit::textChanged, q,
+                     [this](const QString&) { apply_xmp_filter(); });
     // 同 EXIF 页：selectionModel::currentChanged（含程序化 setCurrentIndex）
     QObject::connect(xmp_tree->selectionModel(), &QItemSelectionModel::currentChanged, q,
                      [this](const QModelIndex& cur, const QModelIndex&) {

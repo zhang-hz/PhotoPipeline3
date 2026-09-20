@@ -149,12 +149,20 @@ PresetsDialog::PresetsDialog(const std::vector<std::pair<QString, QString>>& pre
     }
 
     // §9.1 U6-FIX：空列表灰字提示（列表非空时隐藏）；灰字走 palette（全仓同款做法）
-    auto* empty_hint = new QLabel(tr("暂无预设——输入名称后点\"另存为\"创建"), this);
+    // M2-T7 §3 #28d：提示直接建在列表 viewport 上（列表区内部），居中、随列表尺寸自适应；
+    // 文案与 objectName 不变；列表非空时由 update_empty_hint 隐藏。
+    auto* empty_hint = new QLabel(tr("暂无预设——输入名称后点\"另存为\"创建"), list->viewport());
     empty_hint->setObjectName(QLatin1String(kEmptyHint));
     QPalette hint_pal = empty_hint->palette();
     hint_pal.setColor(QPalette::WindowText, QColor(0x80, 0x80, 0x80));
     empty_hint->setPalette(hint_pal);
     empty_hint->setWordWrap(true);
+    empty_hint->setAlignment(Qt::AlignCenter);
+    auto* overlay = new QVBoxLayout(list->viewport());
+    overlay->setContentsMargins(6, 6, 6, 6);
+    overlay->addStretch(1);
+    overlay->addWidget(empty_hint);
+    overlay->addStretch(1);
 
     auto* name_edit = new QLineEdit(this);
     name_edit->setObjectName(QLatin1String(kName));
@@ -180,8 +188,7 @@ PresetsDialog::PresetsDialog(const std::vector<std::pair<QString, QString>>& pre
     button_row->addWidget(close_btn);
 
     auto* root = new QVBoxLayout(this);
-    root->addWidget(empty_hint);      // §9.1 U6-FIX：提示在列表区上方
-    root->addWidget(list, 1);
+    root->addWidget(list, 1);        // §9.1 U6-FIX + M2-T7 #28d：空态提示已移入列表区内部
     root->addLayout(form);
     root->addLayout(button_row);
 

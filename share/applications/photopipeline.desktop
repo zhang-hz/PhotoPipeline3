@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=PhotoPipeline
+Comment=批量像素级转码器 + 元数据手术台
+Exec=photopipeline
+Icon=photopipeline
+Terminal=false
+Categories=Graphics;Photography;

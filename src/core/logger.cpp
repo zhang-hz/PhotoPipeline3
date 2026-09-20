@@ -12,6 +12,7 @@
 //   * never initialized / sink open failure / any internal error -> stderr, never throws
 
 #include "core/logger.h"
+#include "core/version.h"
 
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/spdlog.h>
@@ -51,9 +52,10 @@
 namespace pp {
 namespace {
 
-// Keep in sync with project(PhotoPipeline VERSION x.y.z) in CMakeLists.txt.
-// §2.3 does not authorize extra target_compile_definitions, so the version is inlined here.
-constexpr const char* kAppVersion = "0.1.0";
+// M2-T11 §2.2 版本单源：app 版本取自生成的 core/version.h，唯一来源 = 顶层
+// project(PhotoPipeline VERSION …)。T3 的内联字面量随之删除——当时顾虑的
+// target_compile_definitions 已由 configure_file 生成头替代（无需额外编译定义）。
+constexpr const char* kAppVersion = PP_VERSION_STRING;
 
 // jpegli exposes no version API (only jpeg_* compatibility macros); the overlay pins the
 // upstream commit, see vcpkg-overlay/libjpeg-turbo/portfile.cmake REF.

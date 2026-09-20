@@ -8,6 +8,14 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(PP_BUILD_DEV "Build dev-only tools" OFF)
 set(CMAKE_AUTOMOC ON)  # Q_OBJECT (mainwindow) — wave3 template fix
 
+# 版本单源（M2-T11 §2.2）：版本号唯一定义点 = 上面的 project(PhotoPipeline VERSION …)。
+# cmake/version.h.in 用 @…@ 占位（@ONLY → 不碰任何 ${} 字面量）生成到构建目录，
+# 源码树零污染；生成头经 pp_core 的 PUBLIC include 目录传播给全部消费者，
+# 代码统一 `#include "core/version.h"`。
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/gen/core")
+configure_file("${CMAKE_SOURCE_DIR}/cmake/version.h.in"
+               "${CMAKE_BINARY_DIR}/gen/core/version.h" @ONLY)
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
@@ -85,7 +93,8 @@ file(GLOB_RECURSE PP_CORE_SOURCES CONFIGURE_DEPENDS
      ${CMAKE_SOURCE_DIR}/src/mapwidget/coord.cpp
      ${CMAKE_SOURCE_DIR}/src/ui/preset_io.cpp)   # 唯一 Qt 适配层（JSON），UI/harness/测试三处复用
 add_library(pp_core STATIC ${PP_CORE_SOURCES})
-target_include_directories(pp_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
+# M2-T11 §2.2：生成的 core/version.h（构建目录）随 src 一并 PUBLIC 传播
+target_include_directories(pp_core PUBLIC ${CMAKE_SOURCE_DIR}/src ${CMAKE_BINARY_DIR}/gen)
 target_link_libraries(pp_core PUBLIC OpenImageIO::OpenImageIO JPEG::JPEG
     libjpeg-turbo::jpegli-static Exiv2::exiv2lib heif PkgConfig::LIBJXL
     PkgConfig::WEBP PkgConfig::LCMS2 PkgConfig::TIFF4 spdlog::spdlog Qt6::Core)

@@ -12,6 +12,11 @@
 //      log_shutdown). The M0 `PP_M0_SMOKE` timed exit is gone; `tests/ui_smoke.sh` replaces it.
 //   4. M2-T3 (§2.3): `pp::level_from_env_or()` is the single PP_LOG_LEVEL entry point, called at
 //      start-up by the GUI, `--dev` and `--ui-smoke` paths before the level is used.
+//   5. M2-T11 (§2.1/§2.2): `--version` prints the frozen single line `PhotoPipeline <version>`
+//      from the generated core/version.h (PP_VERSION_STRING) and exits 0, in *every* build
+//      (no PP_BUILD_DEV gate); it is handled before QApplication, but only when no
+//      `--dev`/`--ui-smoke` switch is present, so both harnesses keep their exact behaviour
+//      (including their unknown-option exit 2) and unknown arguments still start the GUI.
 
 #include <QApplication>
 #include <QDebug>
@@ -41,6 +46,7 @@
 #include "core/fsops.h"
 #include "core/logger.h"
 #include "core/params.h"
+#include "core/version.h"
 #include "core/pipeline.h"
 #include "core/presets.h"
 #include "core/scheduler.h"
@@ -786,6 +792,24 @@ int run_ui_smoke(int argc, char** argv) {
 #endif  // PP_BUILD_DEV
 
 int main(int argc, char** argv) {
+    // M2-T11 §2.1（冻结）：--version 非 dev 门控、所有构建可用；stdout 单行 + 退出码 0。
+    // 在任何其它参数处理与 QApplication 构造之前返回。优先级取最保守口径：只要 argv 里出现
+    // --dev/--ui-smoke，就走原有分支（未知参数在 dev harness 内仍是 exit 2 的用法错误），
+    // 因此 --dev/--ui-smoke 的既有行为**逐字节**不变；纯 `--version` 才短路为版本输出。
+    bool has_dev_switch = false;
+    bool has_version = false;
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--dev") == 0 || std::strcmp(argv[i], "--ui-smoke") == 0) {
+            has_dev_switch = true;
+        } else if (std::strcmp(argv[i], "--version") == 0) {
+            has_version = true;
+        }
+    }
+    if (has_version && !has_dev_switch) {
+        std::printf("PhotoPipeline %s\n", PP_VERSION_STRING);
+        return 0;
+    }
+
     // §3.1: core has no Qt dependency; the version string is injected here (before log_init).
     pp::set_qt_version_string(qVersion());
 

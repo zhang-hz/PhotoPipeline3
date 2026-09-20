@@ -40,6 +40,7 @@
 #include <utility>
 
 #include "core/logger.h"
+#include "core/version.h"
 
 namespace pp::ui {
 namespace {
@@ -244,7 +245,9 @@ SettingsDialog::SettingsDialog(const pp::AppSettings& current, QWidget* parent)
     auto* page_about = new QWidget(tabs);
     auto* vbox_about = new QVBoxLayout(page_about);
 
-    auto* version = new QLabel(tr("PhotoPipeline 0.1.0"), page_about);
+    // M2-T11 §2.2：版本号唯一来源 = 生成的 core/version.h（PP_VERSION_STRING），不再硬编码。
+    auto* version = new QLabel(tr("PhotoPipeline %1").arg(QLatin1String(PP_VERSION_STRING)),
+                               page_about);
     QFont version_font = version->font();
     version_font.setBold(true);
     version->setFont(version_font);

@@ -91,20 +91,37 @@ std::vector<std::string> cross_validate(const ParamSet& values,
 
 规则（全部，不得增删）：
 - format=webp 且 tech=lossy：`qmin > qmax` → `qmin 不能大于 qmax`
-- format=jpeg：`progressive==true && optimize_coding==true` → `progressive 与 optimize_coding 不能同时启用`
+- format=jpeg：`progressive==true && optimize_coding==false` → `启用渐进式时必须启用哈夫曼表优化`
 - 其余组合 → 空。
+
+> **勘误（2026-09-20，原条件写反）**：真实约束来自 jpegli 上游，而非"二者互斥"。依据：
+> jpegli 源码树 `tools/cjpegli.cc:146` 要求 `progressive_level>0 && !optimize_coding` 必须改配
+> `--fixed_code` 且 `-p 0`（否则报 `--fixed_code must be used together with -p 0`）；
+> `src/codecs/enc_jpegli.cpp:304` 为 `optimize_coding = (progressive || optimize_coding)`；
+> `src/core/format_tables.cpp` 的 jpeg 默认值（`progressive=true`、`optimize_coding=true`）与
+> `lock_true_when_progressive`（同文件 :29）锁定谓词共同印证 **(true,true) 才是规范态、
+> (true,false) 非法**。落地实装 = `src/core/params.cpp:313-324`（消息逐字同上句；jpeg 两默认值
+> 天然不误报）。
 
 ParamForm：值变化时调用；非空 → 参数组底部红字 QLabel（objectName `pp-cross-error`，#D02222）逐条换行显示；空 → 隐藏。MainWindow `on_start` 前再调一次，非空 → `QMessageBox::warning` 列出并阻止。`--dev`：cross_validate 非空 → 该文件失败，error=首条消息。
 
 ### 2.8 CICP→色彩最小映射（pipeline/colormanager，冻结枚举）
 
-无 ICC 的 JXL 源，`CICP int[4]` = (primaries, transfer, matrix, full_range)，仅前两元参与：
+**`CICP` 属性在场的 JXL 源**（2026-09-20 条件订正；原措辞"无 ICC 的 JXL 源"见下方事实说明），
+`CICP int[4]` = (primaries, transfer, matrix, full_range)，仅前两元参与：
 - (1,13) → sRGB（显式，行为同现状）
 - (12,13) / (12,1) → Display P3（D65，sRGB TRC / gamma2.2）
 - (9,8) → BT.2020 linear
 - (9,13) → BT.2020 sRGB-TRC
 - (16,*)/(18,*)（PQ/HLG）及其它未列组合 → 维持现状（sRGB + 日志 `CICP transfer <n> 未支持，按 sRGB 处理`）。
 - 实现：`cmsCreateRGBProfile`（primaries 白点/原色 + 参数化 TRC）构造 P3/2020 描述；嵌入 ICC 输出路径不变（ColorManager 既有机制）。金样容差断言护回归。
+
+> **事实与触发条件订正（2026-09-20）**：OIIO 3.1.14 对 JXL **恒**提供 `ICCProfile` —— libjxl 由
+> codestream 的色彩编码合成 ICC 后发布，故"无 ICC"在 JXL 上**不可观测**（`tests/golden/base/jxl8.jxl`
+> 文件本体 222 字节，`ICCProfile` 属性报 536 字节）。触发条件因此改为"`CICP` 属性在场"，落地实装见
+> `pipeline.cpp:282-304`（注释逐字记录同一条事实）。
+> **PQ(16)/HLG(18) 与未列组合维持现状**（仅记日志、像素沿用 libjxl/OIIO 合成的 ICC）：实测若在此
+> 强制落 sRGB，PQ 中灰会 0.5020 → 0.6024（Max/RMS error 0.1004 ≈ 25.6/255），属可见劣化，故不动。
 
 ### 2.9 AppImage 组装（`tools/make_appimage.sh`，规则冻结）
 
@@ -114,6 +131,41 @@ ParamForm：值变化时调用；非空 → 参数组底部红字 QLabel（objec
 - 打包：`tools/bin/appimagetool-x86_64.AppImage`（入库，SHA512 旁置 `.sha512`；运行方式 `APPIMAGE_EXTRACT_AND_RUN=1`）→ `dist/PhotoPipeline-0.1.0-x86_64.AppImage`。
 - **烟测（本任务内跑）**：① `--version` 输出 §2.1 文本退出 0；② `ldd` AppDir 内二进制无 "not found"；③ desktop/icon/AppRun 存在且 Exec/Icon 与冻结文本一致。GUI 实启验证归主对话（真机）。
 - 便携模式语义不变（§8.5：AppImage 挂载点只读 → 自动回退 XDG 数据目录）。
+
+**落地口径（2026-09-20 实装补充；T11a/T11b/T11c/T11d/T18）**
+
+- **AppRun 的实际扩展**（T18；冻结项全部保留：`cd "$APPDIR"`、三 export `LD_LIBRARY_PATH` /
+  `QT_PLUGIN_PATH` / `OIIO_LIBRARY_PATH`、**不设** `QT_QPA_PLATFORM_PLATFORM_PATH`、终端场景
+  `exec usr/bin/photopipeline "$@"`）：
+  ① **启动前缺库自检** —— 逐 ELF `ldd | awk '/=> not found/'`，命中即按 soname 打印
+  Debian/Ubuntu + Fedora 包名（`libgl1`/`libegl1`/`libxcb1`/`libxcb-cursor0`…）并 `exit 3`；
+  ② **stderr + 日志兜底** —— 无终端（双击/启动器）时 stderr 写
+  `$HOME/.cache/PhotoPipeline-appimage.log`，任何失败都留可回传证据；
+  ③ **有界失败弹窗** —— 无终端且**≤15s 非零退出**才弹（143/130/129 = 外部 TERM/INT/HUP 不算
+  启动失败、不弹）；T18 原链为 `zenity → kdialog → xmessage`，**T24 改为 `zenity → xmessage`
+  且每个弹窗自带 60 秒超时**（T19 实测无界弹窗在"有 DISPLAY + 装了 zenity/xmessage"的桌面上
+  挂死 >25s；`kdialog --error` 无超时参数，故退出弹窗链）；弹窗不可用时不阻塞启动。
+  ④ **`PP_NO_GUI_POPUP=1`（T24）**：**完全不弹窗**（stderr 与日志照旧写），供自动化/脚本调用者
+  立即拿到非零退出码。
+- **插件清单含 `tls/`**（T11b 裁定加入）：Qt 6.8 的 `libqopensslbackend.so` / `libqcertonlybackend.so`
+  运行期 **dlopen 系统 `libssl.so.3` / `libcrypto.so.3`**（插件自身不链接 OpenSSL）⇒ OpenSSL 属
+  系统白名单、不随包，目标机需 `libssl3`。
+- **随包库清单**（本机打包实测，脚本末行自报 `usr/lib 共 26 个 .so`）：7 × `libQt6*`
+  （Core/DBus/Gui/Network/Svg/Widgets/XcbQpa）+ 3 × `libicu*` + `libjpeg.so.62` + 13 × `libxcb-*`
+  + `libxkbcommon-x11.so.0` + `libX11-xcb.so.1`。
+- **"绝不放行"清单**（`NEVER_BUNDLE`，命中即硬失败）：GL/EGL/GLX 驱动栈
+  （`libGL`/`libEGL`/`libGLX`/`libOpenGL`/`libGLdispatch`/`libdrm`/`libgbm`）、**单副本不变式**库
+  （`libX11.so.6`/`libxcb.so.1`/`libxkbcommon.so.0`/`libXau`/`libXdmcp`/`libICE`/`libSM`/
+  `libglib-2.0`/`libdbus-1`）、glibc/libstdc++/libgcc 家族、glib/dbus/字体/krb5。
+- **`libQt6*` 硬门禁**：必须来自 Qt 工具链（B 类 = `libQt6*` 解析到 AppDir 之外即失败；T18 的
+  "双击无响应"根因正是插件 `libQt6XcbQpa`/`libQt6Svg` 解析到系统 Qt 6.10）；并有**逐字节 cmp
+  溯源断言**。
+- **闭包检查覆盖全部 36 个 ELF**（主二进制 + `usr/lib` + 全部插件）：A 类 = 文件缺失
+  （`=> not found`）/ B 类 = 来源在包外（`libQt6*` 外泄）；结果写入
+  `<OUT_DIR>/PhotoPipeline-<version>-deps.txt`（含目标机系统要求 soname 清单，供 README 取证）。
+- **烟测扩展**：脚本内置四项（① 打包前 `ldd` 自检 ② AppRun/desktop/结构断言 ③ T18 闭包硬门禁
+  ④ 产物内 `usr/share/licenses/` 的 40 份 `copyright` + 本项目 `LICENSE`），CI appimage job 另加
+  "产物启动烟测"（offscreen 启动 6s 存活 + 日志无插件加载失败特征）。
 
 ## 3. TODO(M2) 处置表（权威裁定，30 项）
 
@@ -149,6 +201,14 @@ ParamForm：值变化时调用；非空 → 参数组底部红字 QLabel（objec
 | 28 | m1b-report §7.1-4 | UI 观感 4 项（按钮可点性/搜索框左界/设置页留白/空态位置） | **修复**→T7 |
 | 29 | m1b-report §7.5 | XMP 页无搜索框 | **修复**→T7（与 EXIF 页同构，objectName `xmp_search`） |
 | 30 | m1b-report §7.5 | Scheduler 双日志 | 同 #27→T2 |
+
+**落地结果（2026-09-20）**：30 项**全部处置完毕** —— **非弃权 19 项 = 修复 17 项**（#1/#2/#5/#6/
+#7/#8/#14/#16/#22/#23/#24/#25/#26/#27/#28/#29/#30）**+ 重分类 M3 2 项**（#15 pixelbudget 内存探针、
+#21 paths Windows 分支，改 `TODO(M3)`）；**弃权 11 项**改 `NOTE(perf/limit/design/fact/upstream)`
+注释留档（#3/#4/#9/#10/#11/#12/#13/#17/#18/#19/#20）。
+`grep -rn "TODO(M2)" src/ tests/ tools/` = **0**（退出码 1，无输出）。表内行号为**裁定当时**的锚点，
+经 M2 多轮修改后已漂移；复核一律**按内容匹配**（如 `TODO(M3)` 现落 `src/core/pixelbudget.cpp:24`
+与 `src/platform/paths.cpp:14`）。
 
 ## 4. 任务规格
 
@@ -248,22 +308,48 @@ ParamForm：值变化时调用；非空 → 参数组底部红字 QLabel（objec
 - **W3c**（并行）：T10（CI）、T12（收口扫尾）。依赖 T8/T9/T11 全部。
 - 收口（主对话）：全量验证、README/CHANGELOG/report 落盘、`git tag v0.1.0`（用户确认后）。
 
+**波次与编排变更（2026-09-20 实际执行记录）**
+
+- **`pipeline.cpp` 三方争用串行化**：T5（交叉约束 `--dev` 校验）、T6（CICP 接入）、T13（anchor
+  清理，另与 T11 争 `CMakeLists.txt`）都要改 `pipeline.cpp`。原书 W2 并行的 T5 因此后移，实际提交序
+  = **T13→W2、T5→W3a、T6→W3b**；T4（同样改 `pipeline.cpp`）在 W2 早段独占该文件。
+- **临时加派任务**（原 §4 未列，均为执行中用户/主对话裁定加派）：T15（vcpkg overlay 安装
+  `jerror.h`，修干净环境 libtiff 构建；`f5354dd`）、T16/T16b（ui_smoke 顺序无关化；
+  `c61bdd8`/`088e591`）、T17（发行文档落盘：CHANGELOG 0.1.0 + README 发行/开发工具章节；`7d83ede`）、
+  T18（AppImage GUI 依赖闭包修复；`0219105`）、T19（CI 重构；`4b27c92`/`27c9a29`/`48a0190`/`a63acff`）、
+  T21a/T21b/T21b2/T21c（UI 截图重出与视觉复核；T21c = `c5342d2`）、T22（运行页状态行截断；
+  `9adf5b8`）、T24（AppRun 失败弹窗 60 秒超时 + `PP_NO_GUI_POPUP` 开关；`tools/make_appimage.sh`，
+  与 T25 同期落盘）、T25（文档收口 = 本次订正）。**T20 编号未使用**（原书与执行中均无）。
+- W3c 实际含三组工作：T12（TODO 归零 + 文档草案）、T17（发行文档终稿）、T19（CI 重构）。
+
 ## 7. 报告格式（沿用 M1b §7，≤150 行）
 
 status/task/tasks-done/tasks-skipped/api-deltas/artifacts/frozen-check/build/selftest/commits/next-needed。 sanitizer 发现须含：复现命令、报告摘要（去重后）、修复说明、复跑结果。
 
 ## 8. 出口准则（M2 收口核验）
 
-1. 金样断言级 ≥11 对全绿（本地）。
-2. ASan/UBSan 全语料矩阵干净；TSan 并发路径干净。
-3. offscreen ui_smoke 绿（本地 + CI job）。
-4. AppImage 产出 + 烟测三断言绿（本地 + CI job + artifact）。
-5. `grep -rn "TODO(M2)" src/ tests/ tools/` 归零（§3 表全处置）。
-6. 回归基线入库，双跑零 diff。
-7. CI 全绿（R15 闭合：真实首跑通过）。
-8. 版本单源生效（--version/关于页一致）；CHANGELOG + README 发行章节落盘；GPL 自查通过。
-9. ctest 无回归（23 release / 24 release-dev + 本批新增）。
-10. UI 观感 5 项修复经截图差分复核生效。
+**2026-09-20 逐条勾选**（每条一行证据）：
+
+1. ✅ 金样断言级 ≥11 对全绿（本地）。
+   - 证据：`bash tests/golden/smoke.sh build/release-dev` → `SMOKE total=16 pass=16 fail=0`（16 ≥ 11）；CI `linux` job 同跑（run `35520031504` 起）。
+2. ✅ ASan/UBSan 全语料矩阵干净；TSan 并发路径干净。
+   - 证据：144 个日志 `grep -E "ERROR: (Address|Leak|Memory)Sanitizer|runtime error:"` **0 命中**，且通道活性双向对照（注入泄漏/UBSan 对照可复现）+ live heap 四档文件数**逐字节相等**（`.cache/m2-t1/SUMMARY.md`，`6999878`）；TSan 并发路径 0 WARNING，`tools/tsan.supp` 每条规则附 happens-before 论证与阳性对照（`6f1a1c5`/`972f115`）。
+3. ✅ offscreen ui_smoke 绿（本地 + CI job）。
+   - 证据：本地 `ctest -R ui_smoke` 绿、末行 `UI-SMOKE OK shots=8 pages=3`；CI run `35520031504` **首次在 CI 拿到该冻结行**（`ui-smoke` job 全绿，`48a0190` 记录）。
+4. ✅ AppImage 产出 + 烟测三断言绿（本地 + CI job + artifact）。
+   - 证据：本地 `tools/make_appimage.sh dist` 四项内置烟测 PASS + 闭包门禁 PASS，产物 `dist/PhotoPipeline-0.1.0-x86_64.AppImage`（52,464,120 B）；CI run `35520386390` `appimage` job 2m4s 绿 + `PhotoPipeline-AppImage` artifact 已上传（`a63acff` 记录）。"三断言"已扩展为四项内置 + 产物启动烟测（§2.9 落地口径）。
+5. ✅ `grep -rn "TODO(M2)" src/ tests/ tools/` 归零（§3 表全处置）。
+   - 证据：实测无输出、退出码 **1**（§3 落地结果：非弃权 19 = 修复 17 + 重分类 M3 2，弃权 11）。
+6. ✅ 回归基线入库，双跑零 diff。
+   - 证据：`tools/baseline/golden.log`（178,544 B）随 `35f3c59` 入库，`tools/regression.sh` 规范化后连跑两次零 diff；注入一处日志变化 → diff 恰好一行（敏感性）。
+7. ✅ CI 全绿（R15 闭合：真实首跑通过）。
+   - 证据：run `35520386390` 四 job 全绿（`linux` 1m52s / `ui-smoke` 2m21s / `appimage` 2m4s / `cache-gc` 7s）；`a63acff` 补齐 Qt 缓存 save 步后 `gh cache list` 的 `qt-*` 条目非空。首跑 = `35512612876`。
+8. ✅ 版本单源生效（--version/关于页一致）；CHANGELOG + README 发行章节落盘；GPL 自查通过。
+   - 证据：`--version` → `PhotoPipeline 0.1.0`、关于页同引 `PP_VERSION_STRING`（`5ddc741`）；CHANGELOG/README 发行章节随 `7d83ede` 落盘 + 本次 T25 订正；GPL 自查 = `LICENSE` 在库 + 关于页许可清单 + 产物内 40 个 port `copyright` 与本项目 `LICENSE`（打包烟测 ④ 逐项校验）+ 源码 offer = 仓库 URL。
+9. ✅ ctest 无回归（23 release / 24 release-dev + 本批新增）。
+   - 证据：`ctest --preset release -N` = **23**、`ctest --preset release-dev -N` = **24**（23 引擎 + `ui_smoke`），全绿（T21c 记录 24/24，7.62 s）。
+10. ✅ UI 观感 5 项修复经截图差分复核生效。
+    - 证据：8 张审查截图重出 + 逐张内容复核（`.cache/t21-report.md`、`.cache/t21c-report.md`）：未选中格式按钮 1px 描边（02-output 裁片）、搜索框列对齐（高级组展开 x=763，13/13 字段 d=0）、设置页贴合内容（底部留白 17 px / 11 px）、预设空态移入列表区（06-presets）、XMP 搜索框（T7 实装）；审查集与 CI 复跑隔离（`c5342d2`）。
 
 ## 9. 迭代记录（主对话维护）
 
@@ -283,3 +369,85 @@ status/task/tasks-done/tasks-skipped/api-deltas/artifacts/frozen-check/build/sel
 | 10 | UI 观感 | **5 项全修**（含 XMP 搜索框） |
 
 远端：`https://github.com/zhang-hz/PhotoPipeline3`（public，main 已推送 `ab5a88a`；账号 `zhang-hz`）。首次 CI run = `35512612876`（build-test，R15 首跑，进行中）。注：账号下已存在旧仓库 `zhang-hz/photopipeline`（WPF/C# 血统，与本项目无关），**未触碰**。
+
+### 9.1 R1 修正批次（CI 首跑 → 七根因，全部为环境/打包类）
+
+CI 首跑 run `35512612876` 起连续 7 轮红灯，根因按暴露顺序：
+
+| # | 红灯根因 | 性质 | 修复提交 |
+|---|---|---|---|
+| 1 | job 级 `env` 里写 `~`（该上下文无 runner context，`~` 不展开）→ 缓存/工具路径失效 | CI 配置 | `5d828e8` |
+| 2 | `nasm` 缺失 → svt-av1 / aom / libwebp BUILD_FAILED（run `35513359184`） | 干净环境缺构建工具 | `cb5795b` |
+| 3 | `jerror.h` 缺失 → 干净环境 libtiff 构建失败 | vcpkg overlay | `f5354dd` |
+| 4 | release `libjpeg.pc` 缺失（`libtiff-4.pc` `Requires: libjpeg`，本机被系统 libjpeg-turbo8-dev 掩盖） | vcpkg overlay | `d837194` |
+| 5 | debug `libjpeg.pc` 缺失（vcpkg DEBUG 的 pkgconfig 检查只搜 `debug/lib/pkgconfig`） | vcpkg overlay | `8cc8039` |
+| 6 | OpenGL dev 包缺失 → Qt6Gui WrapOpenGL / CMake FindOpenGL 失败（run `35517286929`） | 干净环境缺 apt 包 | `fb86cef` |
+| 7 | `libEGL.so.1` 缺失 → `undefined reference to eglGetCurrentContext` 等 19 个符号（run `35519174344`） | 干净环境缺 apt 包 | `4b27c92`（依赖清单一次补齐） |
+
+**结论**：七根因**全部是"本机有、干净 runner 无"的环境/打包类**（vcpkg overlay 产物 + pkgconfig 安装位置 + apt 包），**零 gcc-13 代码问题** —— 首轮 `linux` job 的 ctest 23/23 即全绿（run `35520031504`），本批未因编译器差异改任何行为语义（§1.4 允许修复面内）。
+
+### 9.2 收口记录（W1/W2/W3 任务结果）
+
+| 任务 | 结果要点 | 提交 |
+|---|---|---|
+| T1 | ASan/UBSan 全语料 3 轮 + 补充轴：**零发现**；通道活性**双向对照**（注入泄漏/UBSan 可复现 + 对照抑制文件不掩盖）；**live heap 四档文件数逐字节相等**（增长性泄漏 = 0） | `6999878` |
+| T2 | TSan 并发路径**真实竞争 0**；OIIO/Qt 两个纯复现器 + 阳性对照证明抑制不是"关检测"；#25 握手确定化、#27/#30 budget 日志守卫 | `6f1a1c5`/`972f115` |
+| T3 | `PP_LOG_LEVEL` 启动期一次性覆盖（非法值 stderr 忽略）+ 16 MiB 上限（尾部 8 MiB） | `241e823` |
+| T4 | 警告通道贯通：`write_metadata_exiv2` 加性出参 + pipeline 合并去重进 `EncodeResult.warnings`（既有 `plan.warnings` 不变） | `8bab12e` |
+| T5 | `cross_validate`（webp qmin/qmax、jpeg 渐进式②）+ 未知参数报告；ParamForm 红字 + on_start 阻断 | `88cd36a` |
+| T6 | CICP 最小映射（sRGB / Display P3 / BT.2020×2）；**PQ/HLG 维持现状**（见 §2.8 事实订正） | `14b111a` |
+| T7 | UI 观感 4 项 + XMP 搜索框 + 时间预览异步化（序号守卫防乱序回填） | `6c338a3` |
+| T7b | 色彩目标字面量去重（复用 core helper，#24） | `32060bf` |
+| T8 | 金样升级为 **16 对断言级**（像素 + 元数据值 + warnings）+ `pp_verify` 元数据文本化规范化 | `8caf8ea`/`97a440a` |
+| T9 | 全语料回归基线入库，**双跑零 diff** + 敏感性（注入一行 → diff 一行） | `35f3c59` |
+| T11/T11b/T11c/T11d | 版本单源 + `--version` + 图标/desktop；AppImage 打包脚本 + TLS 后端；随附 40 port 许可；type2 runtime 入库 + 全程离线 | `5ddc741`/`91b14f0`/`a908ed0`/`466ade3`/`bdfee54` |
+| T12 | TODO(M2) **归零**（11 弃权改 NOTE + 2 重分类 M3）；发行文档草案入 `docs/m2-drafts/` | `08c9a0c`/`91bbeef` |
+| T13 | 自注册统一为 whole-archive 形态、删除 anchor（`nm` 证明注册符号唯一） | `9b484bc` |
+| T14 | locale 安全路径层（`QString::fromLocal8Bit/toLocal8Bit` 等价），非 UTF-8 路径往返一致 | `8ec8a68` |
+| T16/T16b | ui_smoke fixture 确定性 + 断言顺序无关化（集合排序） | `c61bdd8`/`088e591` |
+| T17 | 发行文档落盘（CHANGELOG 0.1.0 + README 发行/开发工具章节） | `7d83ede` |
+| T18 | AppImage 插件依赖闭包修复（A/B 两类硬门禁；双击无响应消除） | `0219105` |
+| T21c | 审查截图目录隔离（`.cache/ui-smoke-ci` vs `.cache/ui-review`）+ 预设名可用性修复 | `c5342d2` |
+| T22 | 运行页顶部状态行裁切修复（布局激活同步） | `9adf5b8` |
+
+### 9.3 宿主故障事故（2026-09-20）
+
+- **现象**：`spawn systemd-run ENOENT` → **全局 shell 中断**（并行波次的多路任务命令同时失败）。
+- **根因**：部署的 `runnerCommand` 指向自定义沙箱 runner，该 runner **不可解析**（不在 PATH）；且该 runner 选择在**提供方生命周期内被缓存** ⇒ 即使改回配置，也**必须重启 DSH** 才生效。
+- **处置**：四路在跑任务**冻结保全**（不提交半成品、不放弃工作树），恢复后 resume 续跑。
+- **教训**：长任务应定期产出可恢复证据（落盘报告/日志 + 明确断点）。本次**零损失**（全部证据与提交完整）。
+
+### 9.4 CI 重构结果（T19）
+
+- **系统依赖清单化**：`tools/ci-system-deps.txt` = **64 个 apt 包**（T19 首版 57 + 首轮 CI 闭包差异补 7：libbsd0/libcap2/libgcrypt20/libgpg-error0/liblz4-1/liblzma5/libmd0），三个 job 与 `warm-cache.yml` 共用同一清单；`tools/ci-check-deps.sh` 做 soname 级覆盖自检（CI **61/61**、未覆盖 0；本机 55/55；负向测试删 3 包 → 精确报出 3 项）。
+- **缓存**：**三类** —— Qt 工具链（`qt-6.8.3-gcc_64-<os>-<arch>`）、ccache（`ccache-<os>-<hash>-<run_id>`，restore 全 job / save 仅 `linux`）、vcpkg 二进制缓存（key 方案**逐字保留**）；`tools/ci-cache-gc.sh` 由独立 job 清理 `vcpkg-*`/`ccache-*`（保留最新 8 个 / 7 天，`qt-*` 永不触碰，幂等且失败不红 job）。
+- **拓扑**：三构建 job（`linux` / `ui-smoke` / `appimage`）+ `cache-gc`（`needs: [linux, ui-smoke, appimage]`）+ concurrency（cancel-in-progress）+ 每 job `timeout-minutes: 60` + 每 job `$GITHUB_STEP_SUMMARY`；`warm-cache.yml`（`workflow_dispatch` + 每周日 03:17 UTC cron）按同一 key 方案播种。
+- **实测**：整轮 20–35 min → **2–3.5 min**（run `35520386390`：linux 1m52s / ui-smoke 2m21s / appimage 2m4s / cache-gc 7s）；vcpkg install 冷 ≈34 min → 热 **11–14 s**；release build 111.2 s → **17.7 s**（ccache 命中率 73.93%）；**历史首次**在 CI 拿到 `UI-SMOKE OK shots=8 pages=3` 与 AppImage artifact。
+- **提交**：`4b27c92`（重构主体）/`27c9a29`（播种 workflow）/`48a0190`（首轮两处红灯：deps `realpath` 规范化 + AppImage 构建目录对齐）/`a63acff`（补 Qt 缓存 save 步，此前只有 restore）。
+
+### 9.5 截图确定性事实（T21a/T21b/T21b2/T21c）
+
+- **同平台内 6/6 逐字节确定**：01/02/02b/04/05/06 三跑（正式 ×2 + 探针）sha256 全等。
+- **跨平台必然不同**（**禁止跨平台字节断言**）：平台主题不同 —— 真实平台 = GTK3/Yaru，offscreen = 无主题 Fusion；同一 02-output 强调色 `#e95420`（Yaru）vs `#308cc6`（Fusion），且 offscreen 输出 RGB、真实平台 RGBA。
+- `03-run` / `03b-run-done` 含**计时抖动**（进度 14–16/16、速度行文字），**不参与字节相等性断言**。
+- **目录隔离**：CI/ctest 固定写 `.cache/ui-smoke-ci`（offscreen），人工审查集固定 `.cache/ui-review`（真实平台、显式 `--shots`），二者互不覆盖（`c5342d2`）。
+
+### 9.6 用户四项裁决（2026-09-20）
+
+1. **发行产物取 CI 构建**（ubuntu-24.04 runner，glibc 基线 **≥ 2.39**）；本机 26.04 自建产物（glibc ≥ 2.43）只作开发验证，不作出厂附件。
+2. **必须随附第三方许可**：40 个 port 的 `copyright` 文本 + 本项目 `LICENSE`（`tools/collect_licenses.sh` 汇总，产物内解包校验）。
+3. **LGPL 静态链接**（Qt 等）以"**完整源码可得 + 文档化可复现构建**"为合规基础（源码 offer = 仓库 URL + 对应 tag）。
+4. **14 个 `PP-FROZEN` 头的 SPDX 补标归 M3**（本批不动冻结头）。
+
+### 9.7 M3 候选清单（汇总）
+
+- **Windows bring-up**：含 `TODO(M3)` 2 项 —— `src/core/pixelbudget.cpp:24` 内存探针、`src/platform/paths.cpp:14` Windows 数据目录分支。
+- **14 个 `PP-FROZEN` 头补 SPDX**（清单见 §9.6-4：`src/codecs/*.h`、`src/core/*.h`、`src/decode/oiio_reader.h`、`src/platform/paths.h`、`src/ui/preset_io.h`）。
+- 内省参数的**中文标签与后端短名**（当前沿用后端英文名）。
+- `QDir` → `std::filesystem` 的其余 QString 边界（model/dialog 层保留 `filesystem::path`）。
+- `tools/gen_corpus.sh` **跨路径字节幂等**（OIIO 写入的 `Software` 属性随版本/路径变化）。
+- vcpkg 二进制缓存"三份 → 单写者"。
+- `appimage` job 复用构建产物（避免与 `linux` job 重复编译）。
+- **xvfb 真 X GUI 烟测**（当前 GUI 烟测 = offscreen + 产物启动存活）。
+- GitHub Actions 升 v5（checkout / cache / upload-artifact）。
+- **已完成、无需再列**：Scheduler `wait()` 双 budget 日志（T2 已加守卫）、时间预览异步化（T7 已完成）。

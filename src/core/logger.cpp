@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // PhotoPipeline M1-T1 — logger implementation.
 //
-// Contract: docs/m1-tasks.md §3.1 (PP-FROZEN) / §4.1.
+// Contract: docs/m1-tasks.md §3.1 (PP-FROZEN) / §4.1 + docs/m2-tasks.md §2.3/§2.4 (M2-T3).
 //   * spdlog basic_file_sink (non-rotating), 20 newest run-*.log files kept by hand
-//   * level overridable through PP_LOG_LEVEL (case-insensitive)
+//   * level overridable through PP_LOG_LEVEL (case-insensitive); §2.3 adds the explicit
+//     startup entry point level_from_env_or() (invalid value -> one stderr line)
+//   * §2.4 single-file size cap: > 16 MiB -> frozen note line + last 8 MiB kept, checked on
+//     the write path (accounted bytes, no whole-file read-back); the 20-file rule is untouched
 //   * line format: HH:MM:SS.mmm [lvl] [tid] [stage] [file] message {k=v k=v}
 //   * warn and above flush immediately
 //   * never initialized / sink open failure / any internal error -> stderr, never throws
@@ -25,10 +28,13 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
 #include <exception>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <mutex>
 #include <string>
@@ -55,10 +61,23 @@ constexpr const char* kJpegliCommit = "031a0077";
 
 constexpr std::size_t kKeepRunFiles = 20;
 
+// M2-T3 §2.4 frozen size cap.
+constexpr std::uintmax_t kSizeCapBytes = 16u * 1024u * 1024u;  // 16 MiB
+constexpr std::uintmax_t kTailBytes = 8u * 1024u * 1024u;      // 8 MiB
+constexpr const char* kTruncateNote = "[note] log truncated (size cap 16MiB, tail kept 8MiB)\n";
+// Upper bound of the spdlog pattern overhead around the rendered body
+// ("HH:MM:SS.mmm [level] [tid] " + '\n'): timestamp 12 + brackets/level 12 + tid <= 20 + 3.
+constexpr std::size_t kLineOverhead = 64;
+
+constexpr const char* kLogPattern = "%H:%M:%S.%e [%l] [%t] %v";
+
 std::mutex g_mu;
 std::shared_ptr<spdlog::logger> g_logger;  // null -> stderr fallback
 LogLevel g_level = LogLevel::Info;
 std::string g_qt_version;
+// §2.4 accounting: active run file and its accounted size (guarded by g_mu).
+std::filesystem::path g_log_path;  // empty -> no file sink
+std::uintmax_t g_log_bytes = 0;
 
 spdlog::level::level_enum to_spdlog(LogLevel lv) noexcept {
     switch (lv) {
@@ -204,8 +223,8 @@ void write_stderr(LogLevel lv, const std::string& body) noexcept {
 
 // Delete the oldest run-*.log files so that at most kKeepRunFiles remain (errors ignored).
 void prune_old_runs(const std::filesystem::path& dir) noexcept {
-    // TODO(M2): add a size-based cap on top of the 20-file rule; one large batch log can
-    // already be several MB and 20 of them may be unwanted on small disks.
+    // NOTE(cap): the size rule of M2 §2.4 is enforced on the write path
+    // (enforce_size_cap_locked), not here: the 20-file rule is unchanged and independent.
     try {
         using Entry = std::pair<std::filesystem::file_time_type, std::filesystem::path>;
         std::vector<Entry> files;
@@ -245,6 +264,78 @@ void prune_old_runs(const std::filesystem::path& dir) noexcept {
         }
     } catch (...) {
         // retention must never break logging
+    }
+}
+
+// File sink construction shared by log_init and the §2.4 rewrite path (append mode, as M1a).
+std::shared_ptr<spdlog::logger> make_file_logger(const std::filesystem::path& file,
+                                                 spdlog::level::level_enum lv) {
+    auto sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(file.string(), false);
+    auto lg = std::make_shared<spdlog::logger>("pp", std::move(sink));
+    lg->set_pattern(kLogPattern);
+    lg->set_level(lv);
+    return lg;
+}
+
+// §2.4: called with g_mu held, immediately before writing `incoming` bytes.
+// Accounting is done from the bytes we hand to the sink (plus a fixed upper bound of the
+// pattern prefix), so the decision never reads the file back. When the cap is crossed the file
+// is rewritten as the frozen note line plus the last kTailBytes (only that window is read), and
+// a fresh sink is opened on the same path. Best effort: any failure keeps the old logger.
+std::shared_ptr<spdlog::logger> enforce_size_cap_locked(std::shared_ptr<spdlog::logger> lg,
+                                                        std::size_t incoming) noexcept {
+    if (g_log_path.empty() || g_log_bytes + incoming <= kSizeCapBytes) {
+        return lg;
+    }
+    try {
+        lg->flush();
+        std::error_code ec;
+        const std::uintmax_t size = std::filesystem::file_size(g_log_path, ec);
+        if (ec || size <= kTailBytes) {
+            return lg;
+        }
+        const std::uintmax_t from = size - kTailBytes;
+        std::string tail;
+        {
+            std::ifstream in(g_log_path, std::ios::binary);
+            if (!in) {
+                return lg;
+            }
+            in.seekg(static_cast<std::streamoff>(from), std::ios::beg);
+            if (!in) {
+                return lg;
+            }
+            tail.resize(static_cast<std::size_t>(size - from));
+            in.read(tail.data(), static_cast<std::streamsize>(tail.size()));
+            tail.resize(static_cast<std::size_t>(in.gcount()));
+        }
+        if (from > 0) {
+            // Start at a line boundary inside the kept window (the note line is the only
+            // synthetic line; everything after it stays well-formed).
+            const std::size_t nl = tail.find('\n');
+            if (nl != std::string::npos) {
+                tail.erase(0, nl + 1);
+            }
+        }
+        std::string rewritten = kTruncateNote;
+        rewritten += tail;
+        {
+            std::ofstream out(g_log_path, std::ios::binary | std::ios::trunc);
+            if (!out) {
+                return lg;
+            }
+            out.write(rewritten.data(), static_cast<std::streamsize>(rewritten.size()));
+            out.flush();
+            if (!out) {
+                return lg;
+            }
+        }
+        auto fresh = make_file_logger(g_log_path, lg->level());
+        g_logger = fresh;
+        g_log_bytes = rewritten.size();
+        return fresh;
+    } catch (...) {
+        return lg;
     }
 }
 
@@ -340,15 +431,11 @@ void log_init(const std::filesystem::path& log_dir, LogLevel min_level) {
         std::error_code ec;
         std::filesystem::create_directories(log_dir, ec);
         const bool dir_ok = std::filesystem::is_directory(log_dir, ec);
+        std::filesystem::path file;
         if (dir_ok) {
-            const std::filesystem::path file =
-                log_dir / ("run-" + timestamp_now(true) + ".log");
+            file = log_dir / ("run-" + timestamp_now(true) + ".log");
             try {
-                auto sink =
-                    std::make_shared<spdlog::sinks::basic_file_sink_mt>(file.string(), false);
-                lg = std::make_shared<spdlog::logger>("pp", std::move(sink));
-                lg->set_pattern("%H:%M:%S.%e [%l] [%t] %v");
-                lg->set_level(to_spdlog(lv));
+                lg = make_file_logger(file, to_spdlog(lv));
             } catch (const std::exception& e) {
                 lg.reset();
                 std::fprintf(stderr, "log_init: cannot open '%s' (%s); logging to stderr\n",
@@ -367,6 +454,15 @@ void log_init(const std::filesystem::path& log_dir, LogLevel min_level) {
             std::lock_guard<std::mutex> lk(g_mu);
             g_logger = lg;
             g_level = lv;
+            g_log_path = lg ? file : std::filesystem::path();
+            g_log_bytes = 0;  // §2.4 accounting starts from the on-disk size (append mode)
+            if (lg) {
+                std::error_code sec;
+                const std::uintmax_t existing = std::filesystem::file_size(file, sec);
+                if (!sec) {
+                    g_log_bytes = existing;
+                }
+            }
         }
 
         if (lg) {
@@ -375,6 +471,8 @@ void log_init(const std::filesystem::path& log_dir, LogLevel min_level) {
     } catch (...) {
         std::lock_guard<std::mutex> lk(g_mu);
         g_logger.reset();
+        g_log_path.clear();
+        g_log_bytes = 0;
     }
 }
 
@@ -384,6 +482,8 @@ void log_shutdown() {
         std::lock_guard<std::mutex> lk(g_mu);
         lg = std::move(g_logger);
         g_logger.reset();
+        g_log_path.clear();
+        g_log_bytes = 0;
     }
     if (lg) {
         try {
@@ -414,6 +514,22 @@ LogLevel log_level() {
     return g_level;
 }
 
+// M2-T3 §2.3: the frozen startup entry point. Read once per call; main.cpp calls it exactly once
+// at start-up, so a later change of the variable does not follow the running process.
+LogLevel level_from_env_or(LogLevel fallback) {
+    const char* env = std::getenv("PP_LOG_LEVEL");
+    if (env == nullptr) {
+        return fallback;
+    }
+    LogLevel lv = fallback;
+    if (parse_level(env, lv)) {
+        return lv;
+    }
+    std::fprintf(stderr, "PP_LOG_LEVEL 无效：\"%s\"，已忽略\n", env);  // §2.3 frozen text
+    std::fflush(stderr);
+    return fallback;
+}
+
 void log_write(LogLevel lv, std::string_view stage, std::string_view file, std::string_view msg,
                LogFields fields) noexcept {
     try {
@@ -428,14 +544,21 @@ void log_write(LogLevel lv, std::string_view stage, std::string_view file, std::
             return;
         }
         const std::string body = render_body(stage, file, msg, fields);
-        if (lg) {
-            lg->log(to_spdlog(lv), "{}", body);
-            if (static_cast<int>(lv) >= static_cast<int>(LogLevel::Warn)) {
-                lg->flush();
-            }
-        } else {
+        if (!lg) {
             write_stderr(lv, body);
+            return;
         }
+        // §2.4: the cap check and the write share the lock. Truncation rewrites the file and
+        // swaps in a fresh sink, which must not interleave with another thread's write; the
+        // sink itself serialises writes anyway, so this adds no new contention.
+        std::lock_guard<std::mutex> lk(g_mu);
+        const std::size_t incoming = body.size() + kLineOverhead;
+        lg = enforce_size_cap_locked(std::move(lg), incoming);
+        lg->log(to_spdlog(lv), "{}", body);
+        if (static_cast<int>(lv) >= static_cast<int>(LogLevel::Warn)) {
+            lg->flush();
+        }
+        g_log_bytes += incoming;
     } catch (...) {
         // logging never propagates exceptions
     }

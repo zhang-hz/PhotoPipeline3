@@ -40,4 +40,11 @@ std::vector<std::pair<std::string, std::string>> library_versions();
 // 注入后 library_versions() 增加 "qt" 项；未注入则不输出该项
 void set_qt_version_string(std::string version);
 
+// PP-FROZEN(block): M2-T3 新增声明（§2.3 PP_LOG_LEVEL 启动期一次性解析；既有签名零变动）
+// 读 PP_LOG_LEVEL（大小写不敏感）：trace|debug|info|warn|error（另接受上方 M1a 冻结注释已
+// 文档化的 critical）→ 返回覆盖后的级别；未设置 → 原样返回 fallback，行为与 M1a 完全一致。
+// 非法值 → stderr 一行 `PP_LOG_LEVEL 无效："<原值>"，已忽略`，返回 fallback。
+// 调用点：main.cpp 在 load_settings/参数解析之后、log_init 之前（GUI 与 --dev/--ui-smoke 共用）。
+LogLevel level_from_env_or(LogLevel fallback);
+
 }  // namespace pp

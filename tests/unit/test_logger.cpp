@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // PhotoPipeline M1-T1 — logger unit tests (hand-written assertions).
 //
-// Contract: docs/m1-tasks.md §3.1 (PP-FROZEN) / §4.1.
+// Contract: docs/m1-tasks.md §3.1 (PP-FROZEN) / §4.1 + docs/m2-tasks.md §2.3/§2.4 (M2-T3).
 // Every failure prints "FAIL <case>: <detail>"; main() returns the number of failures.
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <regex>
@@ -332,6 +334,123 @@ int main() {
         const std::string text = files.empty() ? std::string() : read_file(files.front());
         check(files.size() == 1 && contains(text, "reinit-line"), "reinit/after-shutdown",
               "files=" + std::to_string(files.size()) + " text='" + text + "'");
+    }
+
+    // ---- J. §2.3 level_from_env_or(): the frozen start-up PP_LOG_LEVEL entry point ----
+    {
+        ::setenv("PP_LOG_LEVEL", "DeBuG", 1);
+        pp::LogLevel lv = pp::LogLevel::Error;
+        const std::string captured = capture_stderr(tmp, "env-or-valid", [&lv] {
+            lv = pp::level_from_env_or(pp::LogLevel::Error);
+        });
+        check(lv == pp::LogLevel::Debug, "env-or/valid-override",
+              "expected Debug, got " + std::to_string(static_cast<int>(lv)));
+        check(captured.empty(), "env-or/valid-silent", "unexpected stderr: '" + captured + "'");
+    }
+    {
+        // End-to-end through the frozen main() sequence: base level → env → log_init.
+        const fs::path dir = tmp / "env-or-e2e";
+        ::setenv("PP_LOG_LEVEL", "debug", 1);
+        const pp::LogLevel lv = pp::level_from_env_or(pp::LogLevel::Info);
+        pp::log_init(dir, lv);
+        pp::log_debug("stage", "file.cpp", "env-or-debug-line");
+        pp::log_shutdown();
+        const std::vector<fs::path> files = run_files(dir);
+        const std::string text = files.empty() ? std::string() : read_file(files.front());
+        check(lv == pp::LogLevel::Debug, "env-or/e2e-level", "expected Debug");
+        check(contains(text, "env-or-debug-line"), "env-or/e2e-debug-written",
+              "log text: '" + text + "'");
+    }
+    {
+        // Invalid value → exactly the frozen stderr line; the fallback level wins.
+        ::setenv("PP_LOG_LEVEL", "not-a-level", 1);
+        pp::LogLevel lv = pp::LogLevel::Warn;
+        const std::string captured = capture_stderr(tmp, "env-or-invalid", [&lv] {
+            lv = pp::level_from_env_or(pp::LogLevel::Warn);
+        });
+        check(lv == pp::LogLevel::Warn, "env-or/invalid-fallback",
+              "expected Warn, got " + std::to_string(static_cast<int>(lv)));
+        check(captured == "PP_LOG_LEVEL 无效：\"not-a-level\"，已忽略\n", "env-or/invalid-message",
+              "captured stderr: '" + captured + "'");
+    }
+    {
+        // Set-but-empty counts as invalid: one message carrying the empty original value.
+        ::setenv("PP_LOG_LEVEL", "", 1);
+        pp::LogLevel lv = pp::LogLevel::Trace;
+        const std::string captured = capture_stderr(tmp, "env-or-empty", [&lv] {
+            lv = pp::level_from_env_or(pp::LogLevel::Trace);
+        });
+        check(lv == pp::LogLevel::Trace, "env-or/empty-fallback", "expected the fallback level");
+        check(captured == "PP_LOG_LEVEL 无效：\"\"，已忽略\n", "env-or/empty-message",
+              "captured stderr: '" + captured + "'");
+    }
+    {
+        // Unset → fallback and no output at all (M1a behaviour, byte-identical).
+        ::unsetenv("PP_LOG_LEVEL");
+        pp::LogLevel lv = pp::LogLevel::Error;
+        const std::string captured = capture_stderr(tmp, "env-or-unset", [&lv] {
+            lv = pp::level_from_env_or(pp::LogLevel::Error);
+        });
+        check(lv == pp::LogLevel::Error, "env-or/unset-fallback",
+              "expected Error, got " + std::to_string(static_cast<int>(lv)));
+        check(captured.empty(), "env-or/unset-silent", "unexpected stderr: '" + captured + "'");
+    }
+
+    // ---- K. §2.4 size cap: > 16 MiB → frozen note line + last 8 MiB kept ----
+    {
+        const fs::path dir = tmp / "size-cap";
+        const std::string pad(4096, 'x');
+        const int lines = 4100;  // ~17 MiB of lines: the cap must trigger exactly once
+        pp::log_init(dir, pp::LogLevel::Info);
+        for (int i = 0; i < lines; ++i) {
+            char idx[32];
+            std::snprintf(idx, sizeof(idx), "cap-probe-%05d", i);
+            pp::log_info("cap", "logger_test.cpp", std::string(idx) + " " + pad);
+        }
+        pp::log_shutdown();
+        const std::vector<fs::path> files = run_files(dir);
+        check(files.size() == 1, "cap/one-run-file", "got " + std::to_string(files.size()));
+        const std::string text = files.empty() ? std::string() : read_file(files.front());
+        std::error_code sec;
+        const std::uintmax_t size = files.empty() ? 0 : fs::file_size(files.front(), sec);
+        const std::string note = "[note] log truncated (size cap 16MiB, tail kept 8MiB)\n";
+        check(text.rfind(note, 0) == 0, "cap/note-at-head",
+              "first line: '" + text.substr(0, note.size() + 8) + "'");
+        check(contains(text, "cap-probe-04099"), "cap/newest-kept", "newest probe line missing");
+        check(!contains(text, "cap-probe-00000"), "cap/oldest-dropped",
+              "oldest probe line survived truncation");
+        check(size > 8u * 1024u * 1024u, "cap/tail-quota",
+              "size " + std::to_string(size) + " should have kept the 8 MiB tail");
+        check(size < 16u * 1024u * 1024u, "cap/under-cap",
+              "size " + std::to_string(size) + " should stay well under 16 MiB");
+        check(!text.empty() && text.back() == '\n', "cap/last-line-complete",
+              "log must end with a newline");
+        // The kept window starts at a line boundary: the note is followed by a normal line.
+        const std::regex first_kept(
+            R"(^[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} \[info\] \[[0-9]+\] \[cap\] \[logger_test\.cpp\] cap-probe-[0-9]{5} )");
+        std::istringstream in(text);
+        std::string line1, line2;
+        std::getline(in, line1);
+        std::getline(in, line2);
+        check(line1 == "[note] log truncated (size cap 16MiB, tail kept 8MiB)",
+              "cap/note-exact", "note line: '" + line1 + "'");
+        check(std::regex_search(line2, first_kept), "cap/tail-line-aligned",
+              "second line: '" + line2.substr(0, 96) + "'");
+    }
+    {
+        // Below the cap the file is untouched: no note line, content intact.
+        const fs::path dir = tmp / "size-cap-under";
+        const std::string pad(4096, 'x');
+        pp::log_init(dir, pp::LogLevel::Info);
+        for (int i = 0; i < 300; ++i) {  // ~1.2 MiB
+            pp::log_info("cap", "logger_test.cpp", "under-probe " + pad);
+        }
+        pp::log_shutdown();
+        const std::vector<fs::path> files = run_files(dir);
+        const std::string text = files.empty() ? std::string() : read_file(files.front());
+        check(!contains(text, "[note] log truncated"), "cap/no-false-trigger",
+              "truncation note present below the cap");
+        check(contains(text, "under-probe"), "cap/under-written", "log text empty");
     }
 
     if (g_failed == 0) {

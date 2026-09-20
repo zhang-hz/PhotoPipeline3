@@ -10,6 +10,8 @@
 //   3. M1b-U10: the `--ui-smoke` scripted walk (§4.3) and the GUI start-up order frozen there
 //      (style attempt → data_dir → load_settings → log level → log_init → MainWindow → exec →
 //      log_shutdown). The M0 `PP_M0_SMOKE` timed exit is gone; `tests/ui_smoke.sh` replaces it.
+//   4. M2-T3 (§2.3): `pp::level_from_env_or()` is the single PP_LOG_LEVEL entry point, called at
+//      start-up by the GUI, `--dev` and `--ui-smoke` paths before the level is used.
 
 #include <QApplication>
 #include <QDebug>
@@ -426,6 +428,9 @@ int run_dev(int argc, char** argv) {
         std::fprintf(stderr, "photopipeline --dev: invalid --log-level '%s'\n", o.log_level.c_str());
         return 2;
     }
+    // M2-T3 §2.3：PP_LOG_LEVEL 在启动期一次性覆盖（非法值 → stderr 提示并沿用上面的值）。
+    // 与 GUI 路径共用 pp::level_from_env_or()，故 --dev/--ui-smoke 同样生效。
+    level = pp::level_from_env_or(level);
     pp::ConflictPolicy conflict = pp::ConflictPolicy::Overwrite;
     if (!parse_conflict(o.conflict, conflict)) {
         std::fprintf(stderr, "photopipeline --dev: invalid --conflict '%s'\n", o.conflict.c_str());
@@ -757,7 +762,10 @@ int run_ui_smoke(int argc, char** argv) {
         return 1;
     }
 
-    // 冒烟分支不走磁盘 settings/log：默认 AppSettings；日志自然走 stderr（§4.3）
+    // 冒烟分支不走磁盘 settings/log：默认 AppSettings；日志自然走 stderr（§4.3）。
+    // M2-T3 §2.3：PP_LOG_LEVEL 亦作用于 --ui-smoke——此处只影响 stderr 过滤；未设置时
+    // level_from_env_or(Info) 与默认级别相同，输出与现状逐字节一致。
+    pp::log_set_level(pp::level_from_env_or(pp::LogLevel::Info));
     QApplication app(argc, argv);
     pp::ui::MainWindow w(pp::AppSettings{});
     w.resize(1440, 900);
@@ -815,6 +823,9 @@ int main(int argc, char** argv) {
     pp::AppSettings settings = pp::load_settings(pp::platform::settings_file());
     pp::LogLevel level = pp::LogLevel::Info;
     if (!log_level_from_text(settings.log_level, level)) level = pp::LogLevel::Info;
+    // M2-T3 §2.3：环境变量在启动期一次性覆盖 settings.log_level（非法值 → stderr 一行提示，
+    // 沿用 settings 值；未设置 → 与 M1b 行为完全一致）。GUI 与 --dev/--ui-smoke 同一入口。
+    level = pp::level_from_env_or(level);
     pp::log_init(pp::platform::logs_dir(), level);
     pp::ui::MainWindow w(settings);
     w.show();

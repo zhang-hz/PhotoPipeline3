@@ -19,7 +19,11 @@ jobs:
       - name: apt deps
         # nasm: svt-av1 / aom / libwebp 等 x86 SIMD 端口经 vcpkg_find_acquire_program(NASM)
         # 要求系统提供 nasm（vcpkg-tool 不再自动下载构建工具，缺失即 BUILD_FAILED → 35513359184）。
-        run: sudo apt-get update && sudo apt-get install -y ninja-build ccache pkg-config python3-pip nasm
+        # libgl/glx/opengl-dev: Qt6Gui 的 find_dependency(WrapOpenGL) 需要 CMake FindOpenGL 的
+        # OPENGL_INCLUDE_DIR / OPENGL_opengl_LIBRARY / OPENGL_glx_LIBRARY 三个变量，缺失即
+        # Qt6Gui→Qt6Widgets→Qt6 逐级 NOT FOUND（CMakeLists.txt:66，run 35517286929）。
+        # 三包与三变量一一对应：libgl-dev=GL/gl.h、libopengl-dev=libOpenGL.so、libglx-dev=libGLX.so。
+        run: sudo apt-get update && sudo apt-get install -y ninja-build ccache pkg-config python3-pip nasm libgl-dev libglx-dev libopengl-dev
       - name: Qt via aqtinstall
         run: |
           pip3 install aqtinstall
@@ -42,8 +46,13 @@ jobs:
         with:
           path: ${{ github.workspace }}/.cache/vcpkg-binary
           key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          # 顺序：先具体 hash 前缀，后宽前缀 vcpkg-。
+          # 宽前缀让"改了 overlay/manifest ⇒ hash 变"时仍能复用旧缓存：vcpkg 二进制缓存按
+          # ABI 内容寻址，ABI 已变的条目自然不命中，故跨 overlay 版本复用是安全的（ABI 含
+          # portfile 内容，T15 与本轮的 overlay 修改都会让对应端口自然失效、其余端口照常复用）。
           restore-keys: |
             vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-
+            vcpkg-
       - name: build + corpus + test
         run: |
           cmake --preset release
@@ -74,7 +83,11 @@ jobs:
       - name: apt deps
         # nasm: svt-av1 / aom / libwebp 等 x86 SIMD 端口经 vcpkg_find_acquire_program(NASM)
         # 要求系统提供 nasm（vcpkg-tool 不再自动下载构建工具，缺失即 BUILD_FAILED → 35513359184）。
-        run: sudo apt-get update && sudo apt-get install -y ninja-build ccache pkg-config python3-pip nasm
+        # libgl/glx/opengl-dev: Qt6Gui 的 find_dependency(WrapOpenGL) 需要 CMake FindOpenGL 的
+        # OPENGL_INCLUDE_DIR / OPENGL_opengl_LIBRARY / OPENGL_glx_LIBRARY 三个变量，缺失即
+        # Qt6Gui→Qt6Widgets→Qt6 逐级 NOT FOUND（CMakeLists.txt:66，run 35517286929）。
+        # 三包与三变量一一对应：libgl-dev=GL/gl.h、libopengl-dev=libOpenGL.so、libglx-dev=libGLX.so。
+        run: sudo apt-get update && sudo apt-get install -y ninja-build ccache pkg-config python3-pip nasm libgl-dev libglx-dev libopengl-dev
       - name: Qt via aqtinstall
         run: |
           pip3 install aqtinstall
@@ -96,8 +109,13 @@ jobs:
         with:
           path: ${{ github.workspace }}/.cache/vcpkg-binary
           key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          # 顺序：先具体 hash 前缀，后宽前缀 vcpkg-。
+          # 宽前缀让"改了 overlay/manifest ⇒ hash 变"时仍能复用旧缓存：vcpkg 二进制缓存按
+          # ABI 内容寻址，ABI 已变的条目自然不命中，故跨 overlay 版本复用是安全的（ABI 含
+          # portfile 内容，T15 与本轮的 overlay 修改都会让对应端口自然失效、其余端口照常复用）。
           restore-keys: |
             vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-
+            vcpkg-
       - name: build release-dev + ui smoke
         # ui_smoke 经 tests/golden/base --inputs 自测（39 文件已入库），无需 gen_corpus；
         # QT_QPA_PLATFORM=offscreen 由 CMake add_test 注入，无需 xvfb。

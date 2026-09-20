@@ -179,7 +179,7 @@ M1b 已就 `ParamForm` 析构、`thumbnails.h` AUTOMOC 引用 + `unsupported_pat
 - **vcpkg**：冷装 ≈ **34 min** → 热缓存 `Restored 41 package(s) … in 5.4 s`，configure 步 **11.2–14.3 s**（linux 14.3 s / appimage 11.2 s，run `35520615242`）；release build 111.2 s → 17.7 s。
 - **依赖覆盖自检 + 拓扑**：清单 64 包（T19 首版 57 + 首轮闭包差异 7）；soname 72（随包/loader 11、需系统 61）；**已覆盖 61/61、未覆盖 0**；负向测试删 3 包精确报 3 项。三构建 job（`linux` 含 ctest release + 金样 16 / `ui-smoke` / `appimage`）+ `cache-gc`（`needs: [linux, ui-smoke, appimage]`）+ concurrency(cancel-in-progress) + 每 job timeout 60 min + 每 job `$GITHUB_STEP_SUMMARY`；`warm-cache.yml`（`workflow_dispatch` + 每周日 03:17 UTC）按同一 key 方案播种（run `35520773894`，1m47s）。
 - **AppImage artifact**：`PhotoPipeline-AppImage`（zip 50,328,849 B，artifact ID 10608730168）；产物指纹 `PhotoPipeline-0.1.0-x86_64.AppImage` **50,944,504 B**、sha256 `21ba18e0480e0a2b5f920518ee51dbd8f41a03719a2aea5fa440d743b8cc4c3b`、目标机系统要求 46 条 soname；产物启动烟测（offscreen 6 s 存活）PASS。
-- **未覆盖**：`9adf5b8`（T22）撰写时**尚未推送**（`git log origin/main..HEAD` 显示 1 个提交）⇒ 上表全绿结论对应 `a63acff`；T22/T25/T26 的推送与再跑一轮见文末待办。
+- **未覆盖**：本报告撰写时（HEAD = `9adf5b8`）`origin/main` = `a63acff`，即 T22 及之后的文档/报告提交**均未推送** ⇒ 上表全绿结论对应 `a63acff`；推送与再跑一轮见文末待办。
 
 ## 6. R2 迭代记录（发现 → 裁定 → 修复 → 复测）
 
@@ -312,6 +312,6 @@ gh run list --workflow=build-test.yml --limit 5
 3. **§2.8 PQ/HLG 附注口径**：任务提示中的“**25.6/255**”与任务书 §2.8 订正注一致（Max/RMS error 0.1004），但仓库内**无该数字的原始日志**；本报告同时给出可复算证据（`.cache/tmp/m2-t6/ev2|ev3` 逐像素 max|Δ|=0）。另 gray 组实测恒定 **26/255** 差异（疑似灰度升维路径），归因未在源码/日志中固化 → 若需写进 §2.8 请裁定归因或补测。
 4. **T24 未落盘**：AppRun 弹窗超时 + `PP_NO_GUI_POPUP`（`/tmp/pp-t24` 在跑）在本报告撰写时未提交；本报告**不记为已实装**。落盘后需补跑 `appimage` job 并在 §2.9/本报告 §8-13 更新。
 5. **T20/T23 编号未使用**（§9.1/§9.6 记录一致），本报告按“未使用”列示；若主对话另有分配请补录。
-6. **CI 覆盖边界**：撰写时 `9adf5b8`（T22）**未推送**，CI 全绿结论对应 `a63acff`；T25 文档提交 + T22 + 本报告（T26）推送后建议再跑一轮并回填 run id。
+6. **CI 覆盖边界**：撰写时 HEAD = `9adf5b8`（T22）且 `origin/main` = `a63acff`，T22 之后的提交均未推送 ⇒ CI 全绿结论对应 `a63acff`；推送后建议再跑一轮并回填 run id。
 7. **产物 sha256 双份**：本机 52,464,120 B / `faa73d0b…`（glibc ≥ 2.43，仅开发验证）与 CI 50,944,504 B / `21ba18e0…`（glibc ≥ 2.39，出厂附件）**必然不同**（AppImage 非字节可复现）——若发行说明要写单一 sha256，请确认取 CI 一份。
 8. **`libiconv` 许可缺失**：真实 port 但 vcpkg 未提供许可文本（打包只告警）。本报告按“列名处置”记录；是否需要在 README 发行章节显式声明请裁定。

@@ -49,6 +49,10 @@ namespace {
 constexpr std::string_view kStage = "scheduler";
 constexpr std::string_view kFile = "scheduler.cpp";
 
+// #27/#30 (docs/m2-tasks.md §3, m1b-report §7.5): a run shorter than this is not worth a budget
+// line. Purely a logging threshold — no counting/summary semantics depend on it.
+constexpr double kBudgetReportMinMs = 1000.0;
+
 using Clock = std::chrono::steady_clock;
 
 double ms_since(const Clock::time_point& t0) {
@@ -270,12 +274,18 @@ void Scheduler::wait() {
         if (t.joinable()) t.join();
     }
     d.pool.clear();
+    bool finished_run = false;
+    double elapsed_ms = 0;
     {
         std::lock_guard<std::mutex> lk(d.mu);
-        if (d.elapsed_ms == 0 && d.running.load()) d.elapsed_ms = ms_since(d.t_start);
+        finished_run = d.running.exchange(false);
+        if (d.elapsed_ms == 0 && finished_run) d.elapsed_ms = ms_since(d.t_start);
+        elapsed_ms = d.elapsed_ms;
     }
-    d.running.store(false);
-    if (d.budget) {
+    // #27/#30: report at most once per run — the UI calls wait() explicitly and ~Scheduler calls
+    // it again (cancel + wait), so the second call must not repeat the line — and only for runs
+    // long enough to make the numbers meaningful (elapsed < 1 s: no report). Logging only.
+    if (d.budget && finished_run && elapsed_ms >= kBudgetReportMinMs) {
         log_info(kStage, kFile, "budget report",
                  {{"capacity_bytes", std::to_string(d.budget->capacity())},
                   {"peak_bytes", std::to_string(d.budget->peak())},

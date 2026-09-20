@@ -1,0 +1,137 @@
+# PhotoPipeline — M2-T2 ThreadSanitizer suppressions (thread sanitizer only).
+#
+# Exact invocation used for every M2-T2 TSan run (also encoded in the `tsan` test preset):
+#   TSAN_OPTIONS="halt_on_error=0:second_deadlock_stack=1:ignore_interceptors_accesses=1
+#                 :suppressions=<repo>/tools/tsan.supp:print_suppressions=1"
+#   ctest --test-dir build/m2-t2 --output-on-failure        # 24/24, 0 reports
+#
+# SYNTAX FACTS (verified with the positive control .cache/tmp/m2-t2/race_control.cpp):
+#   * a line is `type:pattern`; everything after the colon is the pattern, so INLINE COMMENTS ARE
+#     NOT SUPPORTED (they become part of the pattern and then never match) — every argument below
+#     sits on its own comment line above its entry;
+#   * the pattern is matched as a SUBSTRING of the DEMANGLED function name (mangled-name patterns
+#     never match); `race_top:` matches only the top frame, `race:` any frame of either stack.
+#
+# ===========================================================================================
+# ROOT CAUSE OF EVERY SUPPRESSED REPORT: UNINSTRUMENTED THIRD-PARTY CODE
+# ===========================================================================================
+# The vcpkg debug static libraries (OpenImageIO, zlib, libtiff, …) and the prebuilt Qt/GLib DSOs
+# are compiled WITHOUT `-fsanitize=thread`. TSan's happens-before tracking cannot see the
+# acquire/release pairs they perform with their own primitives: an instrumented build lowers
+# those to `__tsan_acquire`/`__tsan_release` calls, while the binaries contain the bare
+# instructions. The locks still order the accesses correctly at run time; TSan records no edge
+# and reports the pair. Local evidence (objdump on build/m2-t2 binaries, demangled for reading):
+#   * OIIO spin lock: `OpenImageIO::v3_1::spin_mutex::try_lock` is a raw `xchg %dl,(%rax)` with
+#     no TSan callback; `spin_mutex::lock()` spins on it.
+#   * ustring table: `TableRepMap<256,4096>::lookup` enters through
+#     `spin_rw_mutex::read_lock_guard::read_lock_guard`, `TableRepMap<256,4096>::insert` through
+#     `spin_rw_mutex::write_lock_guard::write_lock_guard`.
+#   * thread-pool thread-id map: `thread_pool::Impl::register_worker` holds
+#     `spin_mutex::lock_guard` around `tsl::robin_map<std::thread::id,int>::operator[]`.
+#   * thread-pool job queue: `pvt::ThreadsafeQueue<std::function<void(int)>*>::push` holds
+#     `std::unique_lock<spin_mutex>` across the deque push; the worker's `pop` takes the same
+#     spin_mutex — that release/acquire edge covers the queued `std::function` and the
+#     `std::packaged_task` control block it owns.
+#
+# Independent reproduction (PhotoPipeline threading is not involved):
+#   .cache/m2-t2-tsan/oiio_single.log — ONE application thread, concurrency only from OIIO's own
+#   default thread pool, still reports the same families; .cache/m2-t2-tsan/oiio_only.log — two
+#   app threads and ZERO PhotoPipeline TUs, same result.
+#
+# WHY `ignore_interceptors_accesses=1` IS PART OF THE INVOCATION (and what it does NOT hide):
+#   The Qt/GLib/allocator reports observed without it are pairs of *interceptor-internal*
+#   accesses: TSan's malloc/realloc/free/write interceptors model allocator and file-descriptor
+#   bookkeeping as memory writes, and Qt's own pool/runnable handoff (QAtomicPointer, QArrayData
+#   refcounts inside the uninstrumented DSO) provides no visible edge for them. The flag drops
+#   those interceptor-side accesses; it does not touch access instrumentation of application or
+#   library code. Proof that real races are still caught with the flag enabled (both controls in
+#   .cache/m2-t2-tsan/): race_control.log — direct racy ++ on a non-atomic pp global, 1 report;
+#   race_control2.log — memcpy-mediated race (writer memcpy vs. reader), 1 report.
+#
+# POSITIVE CONTROL FOR THIS FILE (it is not a blanket race-detection disable):
+#   .cache/m2-t2-tsan/race_control.log and race_control2.log still report with this file loaded,
+#   because no suppressed library frame appears in their stacks.
+#
+# HIT COUNTS in the M2-T2 verification set (print_suppressions=1): see the M2-T2 report §TSan.
+#   Active entries: `std::packaged_task` (343 enc_oiio / 36 scheduler / 18 thumbs / 10 pipeline)
+#   and `OpenImageIO::v3_1::thread_pool` (172 / 18 / 10 / 5); every other entry is marked
+#   DORMANT — 0 hits in the final configuration, kept because the identical pairs were observed
+#   in the pre-flag baseline logs (.cache/m2-t2-tsan/base-*.log, oiio_only.log) and may reappear
+#   with different timing on other machines (CI).
+
+# --- ACTIVE: OIIO default thread pool (queue, registry, pool state) -------------------------
+# HB argument: the pool's job queue, thread-id registry and running state are all mutated under
+# the pool's spin_mutex (ThreadsafeQueue::push/pop use std::unique_lock<spin_mutex>;
+# Impl::register_worker/run_one_task/resize/stop/init take spin_mutex::lock_guard). The
+# producer's unlock publishes the queued std::function, the pooled bookkeeping and the task
+# control block; the worker's lock acquires them.
+race:OpenImageIO::v3_1::thread_pool
+# HB argument: refcount/control block of the std::packaged_task that thread_pool::push creates
+# for every job and the worker destroys after running it — same queue spin_mutex edge. TSan's
+# top frame is usually operator new/delete or ~__shared_count, so match any frame.
+# PhotoPipeline TUs never name std::packaged_task / std::future (verified by grep), so this
+# cannot hide an application-data race.
+race:std::packaged_task
+
+# --- DORMANT VARIANTS OF THE SAME TWO FAMILIES (0 hits in the final run set) ----------------
+# HB argument: allocator frame of the packaged_task control block (the allocator's template
+# argument names the type), reached only under the pool spin_mutex.
+race:std::__new_allocator<std::_Sp_counted_ptr_inplace<std::packaged_task
+# HB argument: in-place control block of that same packaged_task, freed by the worker after the
+# queue pop.
+race:std::_Sp_counted_ptr_inplace<std::packaged_task
+# HB argument: std::future shared state (`_Task_state`) of a pool task: allocated by the producer,
+# read/updated by the worker. libstdc++ guards it with its own recursive mutex, but the publish
+# edge from push() into the queue is the pool spin_mutex above. PhotoPipeline uses no std::future.
+race:std::__future_base::_Task_state
+# HB argument: OIIO parallel_image task callables — the 5-arg (id + ROI range) form, its 4-arg
+# bound form and the ROI-carrying form; all are std::function objects queued through the pool
+# spin_mutex. Those exact signatures are OIIO's; PhotoPipeline declares none of them.
+race:std::function<void (int, long, long, long, long)>
+race:std::function<void (long, long, long, long)>
+race:std::function<void (OpenImageIO::v3_1::ROI)>
+# HB argument: parallel_image dispatcher owning those callables.
+race:OpenImageIO::v3_1::ImageBufAlgo::parallel_image
+
+# --- DORMANT: OIIO global ustring interning table ------------------------------------------
+# HB argument: writers mutate the bucket under spin_rw_mutex::write_lock_guard and release the
+# rw-lock word when the guard dies; readers take spin_rw_mutex::read_lock_guard before touching
+# the bucket, so release-on-unlock / acquire-on-lock orders bucket bytes and TableRep payload.
+race:TableRepMap
+# HB argument: same rw-lock, non-template path (ustring::make_unique inserting; TableRep ctor
+# filling the string payload); the racing access may be the strncmp/memcpy interceptor above it.
+race:OpenImageIO::v3_1::ustring
+
+# --- DORMANT: OIIO thread-id robin_map nodes ------------------------------------------------
+# HB argument: every access to `tsl::robin_map<std::thread::id,int>` in the pool happens while
+# holding the pool spin_mutex (see Impl::register_worker disassembly); unlock publishes the node
+# writes, the next lock acquires them.
+race:tsl::detail_robin_hash
+# HB argument: node de/allocation frame of that same robin_map, reached only under the spin_mutex.
+race:std::__new_allocator<tsl::detail_robin_hash
+# HB argument: robin_map bucket relocation/move under the pool spin_mutex.
+race:std::swap<std::thread::id>
+# HB argument: robin_map key comparison under the pool spin_mutex.
+race:std::equal_to<int>::operator()
+
+# --- DORMANT: OIIO ImageBuf / ImageSpec handoff into pool tasks ------------------------------
+# HB argument: an ImageBuf/ImageSpec handed to a pool task is published by the queue spin_mutex
+# plus ImageBufImpl's own atomic refcount, so payload/refcount/spec scalars read by the worker
+# are ordered — but both synchronisation sources live in the uninstrumented archive.
+race:OpenImageIO::v3_1::ImageBufImpl
+# HB argument: ImageBuf lifetime (impl_deleter) after the last pool task dropped its reference.
+race:OpenImageIO::v3_1::ImageBuf
+# HB argument: pixel copy inside a pool task over a buffer published as above; the racing access
+# is usually the memcpy/memset interceptor, hence any-frame matching.
+race:OpenImageIO::v3_1::copy_image
+# HB argument: `interppixel<float>()` — OIIO's own interpolation helper inside
+# ImageBufAlgo::resample, run by a pool worker on a buffer published through the queue spin_mutex;
+# the paired free is the OIIO pixel buffer (std::unique_ptr<char[]>, OIIO-only storage) released
+# by the calling thread after the synchronous resample returned. Cross-checked with the ASan+UBSan
+# dev build (build/m2-t1/pp_test_thumbs ×3, ASAN_OPTIONS=detect_leaks=1): zero
+# heap-use-after-free reports, i.e. the buffer is genuinely not used after it is freed.
+race:interppixel
+# HB argument: OIIO string_view constructed over a pooled spec's std::string.
+race:OpenImageIO::v3_1::basic_string_view
+# HB argument: TypeDesc/ImageSpec scalar readers of a pooled spec (elementsize/size/channel_bytes).
+race:OpenImageIO::v3_1::TypeDesc

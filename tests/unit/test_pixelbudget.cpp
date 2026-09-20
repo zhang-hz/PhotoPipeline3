@@ -80,19 +80,45 @@ int main() {
     }
 
     // ---- blocked until released ----
-    // TODO(M2): replace the sleep-based handshakes with a deterministic readiness signal
-    // if these timing assumptions ever flake on a heavily loaded machine.
+    // M2-T2 (#25): deterministic handshake instead of a 300 ms sleep. The cancel predicate is
+    // consulted from inside PixelBudget::acquire() with the pool mutex held, and only after the
+    // request turned out to be unsatisfiable -> observing it proves the worker is parked in
+    // acquire() while the pool is still full (no timing assumption). The bounded wait keeps a
+    // regression from hanging the test: on timeout the predicate is flipped so acquire() returns
+    // and both the handshake and the wake assertions fail loudly.
     {
         pp::PixelBudget b(100);
         check(b.acquire(100, nullptr), "block/fill", "expected true");
+
+        std::mutex mu;
+        std::condition_variable cv;
+        bool in_acquire = false;   // guarded by mu
+        std::atomic<bool> abort{false};
         std::atomic<bool> acquired{false};
-        std::thread t([&b, &acquired] {
-            if (b.acquire(40, nullptr)) {
+
+        std::thread t([&b, &mu, &cv, &in_acquire, &abort, &acquired] {
+            const bool got = b.acquire(40, [&mu, &cv, &in_acquire, &abort] {
+                {
+                    std::lock_guard<std::mutex> lk(mu);
+                    in_acquire = true;
+                }
+                cv.notify_one();
+                return abort.load();   // always false unless the test timed out
+            });
+            if (got) {
                 acquired.store(true);
                 b.release(40);
             }
         });
-        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+        bool entered = false;
+        {
+            std::unique_lock<std::mutex> lk(mu);
+            entered = cv.wait_for(lk, std::chrono::seconds(10), [&] { return in_acquire; });
+        }
+        if (!entered) abort.store(true);   // release the worker so t.join() cannot hang
+        check(entered, "block/handshake",
+              "acquire(40) never entered the wait path of a full pool");
         check(!acquired.load(), "block/still-waiting",
               "acquire(40) must not succeed while the pool is full");
         b.release(60);
@@ -137,16 +163,33 @@ int main() {
     }
 
     // ---- cancel while blocked returns false without taking quota ----
+    // M2-T2 (#25, same sleep handshake): the predicate being called proves acquire(50) is in its
+    // wait path with the pool full, so the cancel flag is set *while blocked* deterministically.
     {
         pp::PixelBudget b(100);
         check(b.acquire(100, nullptr), "cancel/fill", "expected true");
         std::atomic<bool> cancel{false};
         std::atomic<int> result{-1};
-        std::thread t([&b, &cancel, &result] {
-            const bool got = b.acquire(50, [&cancel] { return cancel.load(); });
+        std::mutex mu;
+        std::condition_variable cv;
+        bool in_acquire = false;   // guarded by mu
+        std::thread t([&b, &cancel, &result, &mu, &cv, &in_acquire] {
+            const bool got = b.acquire(50, [&cancel, &mu, &cv, &in_acquire] {
+                {
+                    std::lock_guard<std::mutex> lk(mu);
+                    in_acquire = true;
+                }
+                cv.notify_one();
+                return cancel.load();
+            });
             result.store(got ? 1 : 0);
         });
-        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        bool entered = false;
+        {
+            std::unique_lock<std::mutex> lk(mu);
+            entered = cv.wait_for(lk, std::chrono::seconds(10), [&] { return in_acquire; });
+        }
+        check(entered, "cancel/handshake", "acquire(50) never reached the wait path");
         cancel.store(true);
         t.join();
         check(result.load() == 0, "cancel/returns-false",

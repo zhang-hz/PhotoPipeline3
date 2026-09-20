@@ -190,7 +190,7 @@ M1b 已就 `ParamForm` 析构、`thumbnails.h` AUTOMOC 引用 + `unsupported_pat
 - **依赖覆盖自检 + 拓扑**：清单 64 包（T19 首版 57 + 首轮闭包差异 7）；soname 72（随包/loader 11、需系统 61）；**已覆盖 61/61、未覆盖 0**；负向测试删 3 包精确报 3 项。三构建 job（`linux` 含 ctest release + 金样 16 / `ui-smoke` / `appimage`）+ `cache-gc`（`needs: [linux, ui-smoke, appimage]`）+ concurrency(cancel-in-progress) + 每 job timeout 60 min + 每 job `$GITHUB_STEP_SUMMARY`；`warm-cache.yml`（`workflow_dispatch` + 每周日 03:17 UTC）按同一 key 方案播种（run `35520773894`，1m47s）。
 - **AppImage artifact（出厂口径，T27 终轮）**：`PhotoPipeline-AppImage`（zip **50,325,830 B**，artifact ID `10609041248`，run `35521800777`）；产物指纹 `PhotoPipeline-0.1.0-x86_64.AppImage` **50,940,408 B**、sha256 **`514ecf44658e428008b2db6fd970270075a5aee7510e9c1bd280fc0d1b26a244`**、目标机系统要求 **46 条 soname**（glibc 基线 ≥ 2.39）；产物启动烟测（`--version` → `PhotoPipeline 0.1.0` + offscreen 6 s 存活）**PASS**。（上一轮 a63acff 的旧值 50,944,504 B / `21ba18e0…` 已作废：AppImage 非字节可复现，且 T27 改了 AppRun。）
 - **推送与覆盖边界（T27 闭合）**：T22 之后的全部提交（T24/T25/T26/T27）**已推送**，`origin/main` = `d1b5fb7`；上表 CI 结论**即本轮实况**（run `35521800777`，head = 推送后的树），取代此前"撰写时未推送、结论对应 `a63acff`"的过渡说明。同一轮之前 `run 35521513855` 曾红在 `appimage` job（产物缺陷，非环境）→ 修复见 §6.5。
-- **引用口径**：CI 产物指纹一律以 **(run id, head sha, sha256) 三元组**引用（AppImage 非字节可复现，且 head 一变 sha256 必变）：本报告 = run `35521800777` / head `d1b5fb7` / `514ecf44…`。本报告自身的文档提交轮不影响产物内容，但会产出不同 sha256，故不用于引用。
+- **引用口径**：CI 产物指纹一律以 **(run id, head sha, sha256) 三元组**引用：本报告 = run `35521800777` / head `d1b5fb7` / `514ecf44…`（即**最后一次影响产物内容**的提交）。**非字节可复现实测**：紧随其后的文档提交轮（run `35522192917` / head `680bb92`，四 job 同样全绿：`linux` 1m23s / `ui-smoke` 2m03s / `appimage` 1m36s / `cache-gc` 5s，冻结行与 `SMOKE total=16 pass=16 fail=0` 均再次取得）产出 sha256 `50003819…` —— 源码相同、仅文档差异即得不同指纹，故任何产物引用必须带 run/head（§8-10）。
 
 ## 6. R2 迭代记录（发现 → 裁定 → 修复 → 复测）
 
@@ -253,7 +253,7 @@ M1b 已就 `ParamForm` 析构、`thumbnails.h` AUTOMOC 引用 + `unsupported_pat
 7. **`appimage` job 复用构建产物**：当前与 `linux` job 重复编译 release —— 影响：约 14 s/轮的重复成本；建议用 artifact 传递构建树。
 8. **`appimage-gui-smoke.sh` 依赖 X 工具**：当前 GUI 烟测 = offscreen + 产物启动存活，真窗口烟测需 xvfb/xprop —— 影响：CI 未覆盖“窗口真出现”；建议 M3 加 xvfb 真 X 烟测 job。
 9. **GitHub Actions 升 v5**（checkout/cache/upload-artifact）：当前 v4 被 runner 强制运行于 Node 24 并告警 —— 影响：未来可能失效；建议 M3 一次性升级。
-10. **AppImage 非字节可复现**：squashfs 超级块时间戳/mtime 非确定 —— 影响：同源不可复算 sha256（本机 vs CI 产物 sha256 必然不同）；建议仅承诺结构一致 + 依赖清单一致。
+10. **AppImage 非字节可复现**：squashfs 超级块时间戳/mtime 非确定 —— 影响：同源不可复算 sha256（本机 vs CI 产物 sha256 必然不同；T27 实测同一源码的相邻两轮 CI 产物亦不同：`514ecf44…` vs `50003819…`）；建议仅承诺结构一致 + 依赖清单一致，且**产物引用一律带 (run id, head sha) 三元组**（§5⑦）。
 11. **xcb 系统依赖与 `libxcb` 最低版本**：目标机需清单内的 xcb/X11/GL 包与 `libssl3` —— 影响：缺包时启动失败；已由 AppRun 缺库自检 + 包名提示兜底（T18）；建议 README 系统要求继续随产物 `deps.txt` 同步。
 12. **Wayland 会话经 XWayland 属预期**：AppRun 不设 `QT_QPA_PLATFORM_PLATFORM_PATH`，真实平台走 `wayland;xcb` 回退 —— 影响：非缺陷；建议在 README「便携模式」补一句说明。
 13. ~~**T24（AppRun 有界失败弹窗 + `PP_NO_GUI_POPUP`）收口时未落盘**~~ —— **已修复/已落盘**：`aeba18c`（弹窗超时 60 s、`kdialog` 不入链、`PP_NO_GUI_POPUP=1` 零弹窗），T27 已解包产物内 AppRun 逐条复核与 `docs/m2-tasks.md` §2.9 落地口径④一致（§5⑥）。

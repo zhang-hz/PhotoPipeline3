@@ -7,14 +7,19 @@
 //   2. the frozen dev harness `--dev` (§3.15), guarded by PP_BUILD_DEV. The macro is wired in
 //      CMakeLists.txt (`if(PP_BUILD_DEV) target_compile_definitions(photopipeline PRIVATE
 //      PP_BUILD_DEV) endif()`), so a plain release build contains no dev code path.
-// The PP_M0_SMOKE timed exit below is a deliberate M1 leftover owned by T9 (next batch).
+//   3. M1b-U10: the `--ui-smoke` scripted walk (§4.3) and the GUI start-up order frozen there
+//      (style attempt → data_dir → load_settings → log level → log_init → MainWindow → exec →
+//      log_shutdown). The M0 `PP_M0_SMOKE` timed exit is gone; `tests/ui_smoke.sh` replaces it.
 
 #include <QApplication>
+#include <QDebug>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QString>
-#include <QTimer>
+#include <QStringList>
+#include <QVariant>
 
 #include <algorithm>
 #include <atomic>
@@ -37,11 +42,27 @@
 #include "core/pipeline.h"
 #include "core/presets.h"
 #include "core/scheduler.h"
+#include "core/settings.h"
 #include "core/types.h"
+#include "platform/paths.h"
 #include "ui/mainwindow.h"
 #include "ui/preset_io.h"
 
 namespace fs = std::filesystem;
+
+namespace {
+
+// 设置文件里的日志级别（5 档）；非法 → 调用方回退 info（§4.3 冻结顺序）
+bool log_level_from_text(std::string_view s, pp::LogLevel& out) {
+    if (s == "trace") { out = pp::LogLevel::Trace; return true; }
+    if (s == "debug") { out = pp::LogLevel::Debug; return true; }
+    if (s == "info") { out = pp::LogLevel::Info; return true; }
+    if (s == "warn") { out = pp::LogLevel::Warn; return true; }
+    if (s == "error") { out = pp::LogLevel::Error; return true; }
+    return false;
+}
+
+}  // namespace
 
 #ifdef PP_BUILD_DEV
 namespace {
@@ -658,6 +679,102 @@ int run_dev(int argc, char** argv) {
 }
 
 }  // namespace
+
+// ---------------------------------------------------------------------------
+// --ui-smoke（§4.3 冻结）：参数在 QApplication 之前解析，同 --dev 惯例
+// ---------------------------------------------------------------------------
+
+namespace {
+
+const char* kUiSmokeUsage =
+    "usage: photopipeline --ui-smoke [--inputs DIR] [--shots DIR]\n"
+    "  --inputs DIR   input directory (default <repo>/tests/golden/base)\n"
+    "  --shots DIR    screenshot directory (default .cache/ui-review; empty = do not save)\n"
+    "exit code 0 = all frozen assertions passed; 1 = smoke failure; 2 = usage/argument error\n";
+
+// 可执行文件目录（Linux：/proc/self/exe；失败回退 argv[0]）
+fs::path executable_directory(const char* argv0) {
+    std::error_code ec;
+    const fs::path exe = fs::read_symlink("/proc/self/exe", ec);
+    if (!ec && !exe.empty()) return exe.parent_path();
+    const fs::path arg = fs::absolute(fs::path(argv0 != nullptr ? argv0 : ""), ec);
+    return arg.parent_path();
+}
+
+// 从可执行文件向上找仓库根：含 .git 或 CMakeLists.txt 的最近目录
+std::string find_repo_root(const char* argv0) {
+    std::error_code ec;
+    fs::path dir = executable_directory(argv0);
+    for (int i = 0; i < 8 && !dir.empty(); ++i) {
+        if (fs::exists(dir / ".git", ec) || fs::exists(dir / "CMakeLists.txt", ec)) {
+            return dir.string();
+        }
+        const fs::path up = dir.parent_path();
+        if (up == dir) break;
+        dir = up;
+    }
+    return {};
+}
+
+int run_ui_smoke(int argc, char** argv) {
+    QString inputs;
+    QString shots = QStringLiteral(".cache/ui-review");
+    for (int i = 1; i < argc; ++i) {
+        const std::string_view a = argv[i];
+        if (a == "--ui-smoke") continue;
+        if (a == "--inputs" || a == "--shots") {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "photopipeline --ui-smoke: %s requires a value\n%s",
+                             std::string(a).c_str(), kUiSmokeUsage);
+                return 2;
+            }
+            const QString value = QString::fromLocal8Bit(argv[++i]);
+            if (a == "--inputs") {
+                inputs = value;
+            } else {
+                shots = value;
+            }
+            continue;
+        }
+        std::fprintf(stderr, "photopipeline --ui-smoke: unknown option '%s'\n%s",
+                     std::string(a).c_str(), kUiSmokeUsage);
+        return 2;
+    }
+    if (inputs.isEmpty()) {
+        const std::string root = find_repo_root(argv[0]);
+        if (root.empty()) {
+            std::fprintf(stderr,
+                         "photopipeline --ui-smoke: cannot locate the repository root (searched "
+                         "upward from the executable directory for .git/CMakeLists.txt); pass "
+                         "--inputs DIR\n");
+            return 1;
+        }
+        inputs = QString::fromStdString((fs::path(root) / "tests/golden/base").string());
+    }
+    if (!QFileInfo::exists(inputs)) {
+        std::fprintf(stderr, "photopipeline --ui-smoke: input directory does not exist: %s\n",
+                     inputs.toLocal8Bit().constData());
+        return 1;
+    }
+
+    // 冒烟分支不走磁盘 settings/log：默认 AppSettings；日志自然走 stderr（§4.3）
+    QApplication app(argc, argv);
+    pp::ui::MainWindow w(pp::AppSettings{});
+    w.resize(1440, 900);
+    w.show();
+    w.set_offline_maps(true);
+    w.add_paths(QStringList{inputs});
+    w.ui_smoke_walk(shots);   // walk 内部自跑事件循环并写 pp_ui_smoke_exit
+
+    const QVariant ran = w.property("pp_ui_smoke_ran");
+    if (!ran.isValid() || !ran.toBool()) {
+        std::fprintf(stderr, "photopipeline --ui-smoke: walk did not run\n");
+        return 1;
+    }
+    return w.property("pp_ui_smoke_exit").toInt();
+}
+
+}  // namespace
 #endif  // PP_BUILD_DEV
 
 int main(int argc, char** argv) {
@@ -669,6 +786,9 @@ int main(int argc, char** argv) {
         if (std::strcmp(argv[i], "--dev") == 0) {
             return run_dev(argc, argv);
         }
+        if (std::strcmp(argv[i], "--ui-smoke") == 0) {
+            return run_ui_smoke(argc, argv);
+        }
     }
 #else
     // M1-T15: a release build contains no dev harness. This must happen *before* QApplication
@@ -676,7 +796,7 @@ int main(int argc, char** argv) {
     // with empty stdout/stderr), so without this check a release binary would just start the
     // GUI. Report the missing harness and fail with a non-zero exit code instead.
     for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--dev") == 0) {
+        if (std::strcmp(argv[i], "--dev") == 0 || std::strcmp(argv[i], "--ui-smoke") == 0) {
             std::fprintf(
                 stderr,
                 "photopipeline: dev harness not built (rebuild with -DPP_BUILD_DEV=ON)\n");
@@ -685,11 +805,20 @@ int main(int argc, char** argv) {
     }
 #endif
 
+    // §4.3 冻结启动顺序：style 尝试 → data_dir → load_settings → 日志级别 → log_init →
+    //                    MainWindow(settings) → show → exec → log_shutdown
     QApplication app(argc, argv);
-    pp::ui::MainWindow w;
+    if (QApplication::setStyle(QStringLiteral("Fluent")) == nullptr) {
+        qInfo("PhotoPipeline: style 'Fluent' unavailable; keeping the default style");
+    }
+    pp::platform::data_dir();   // 确保便携/回退目录存在（结果缓存）
+    pp::AppSettings settings = pp::load_settings(pp::platform::settings_file());
+    pp::LogLevel level = pp::LogLevel::Info;
+    if (!log_level_from_text(settings.log_level, level)) level = pp::LogLevel::Info;
+    pp::log_init(pp::platform::logs_dir(), level);
+    pp::ui::MainWindow w(settings);
     w.show();
-#ifdef PP_M0_SMOKE
-    QTimer::singleShot(2000, &app, &QApplication::quit);  // M1 removes this (T9)
-#endif
-    return app.exec();
+    const int code = app.exec();
+    pp::log_shutdown();
+    return code;
 }

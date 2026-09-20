@@ -14,6 +14,8 @@
     },
     { "name": "release", "inherits": "base",
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" } },
+    { "name": "release-dev", "inherits": "release",
+      "cacheVariables": { "PP_BUILD_DEV": "ON" } },
     { "name": "dev", "inherits": "base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
@@ -29,11 +31,14 @@
   ],
   "buildPresets": [
     { "name": "release", "configurePreset": "release" },
+    { "name": "release-dev", "configurePreset": "release-dev" },
     { "name": "dev", "configurePreset": "dev" },
     { "name": "tsan", "configurePreset": "tsan" }
   ],
   "testPresets": [
     { "name": "release", "configurePreset": "release",
+      "output": { "outputOnFailure": true } },
+    { "name": "release-dev", "configurePreset": "release-dev",
       "output": { "outputOnFailure": true } }
   ]
 }

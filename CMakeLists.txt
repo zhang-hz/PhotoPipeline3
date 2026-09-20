@@ -112,11 +112,14 @@ add_executable(photopipeline src/main.cpp ${PP_UI_SOURCES})
 # 静态库自注册：whole-archive 拉入编码器 TU（T7c）
 target_link_libraries(photopipeline PRIVATE $<LINK_LIBRARY:WHOLE_ARCHIVE,pp_core>
     Qt6::Widgets Qt6::Network)
-target_compile_definitions(photopipeline PRIVATE PP_M0_SMOKE)  # M1 removes
 # dev harness 接线（M1-T8，§3.15 裁定）：option 已存在但此前无 target 消费 →
 # 发布构建（不带 -DPP_BUILD_DEV=ON）不含 `--dev` 代码路径；鼓点/矩阵/规模用 -DPP_BUILD_DEV=ON。
 if(PP_BUILD_DEV)
   target_compile_definitions(photopipeline PRIVATE PP_BUILD_DEV)
+  # M1b-U10：UI 冒烟取代 M0 的 PP_M0_SMOKE 定时退出桩。走脚本以便同时校验冻结成功末行
+  # `UI-SMOKE OK shots=7 pages=3`；offscreen 平台由测试环境注入。
+  add_test(NAME ui_smoke COMMAND ${CMAKE_COMMAND} -E env QT_QPA_PLATFORM=offscreen bash ${CMAKE_SOURCE_DIR}/tests/ui_smoke.sh ${CMAKE_BINARY_DIR})
+  set_tests_properties(ui_smoke PROPERTIES TIMEOUT 240)
 endif()
 
 # 5) 既有 M0 target（pp_linkprobe / pp_mkfixtures / pp_spikes / 其 ctest 条目）保持不变
@@ -145,8 +148,6 @@ set_tests_properties(fixtures PROPERTIES SKIP_RETURN_CODE 77)
 add_test(NAME spike_e    COMMAND pp_spikes e)
 add_test(NAME spike_f    COMMAND pp_spikes f --golden-root ${CMAKE_SOURCE_DIR}/tests/golden)
 set_tests_properties(spike_f PROPERTIES SKIP_RETURN_CODE 77)
-add_test(NAME offscreen  COMMAND ${CMAKE_COMMAND} -E env QT_QPA_PLATFORM=offscreen $<TARGET_FILE:photopipeline>)
-set_tests_properties(offscreen PROPERTIES TIMEOUT 30)
 
 # 8) pp_verify（M1-T8；§2.3 所有者序列 T8 的唯一 target 增量）
 #    断言 tests/golden/SCHEMA.md 的 pixel/metadata/warnings 三态；--selftest 不需语料。

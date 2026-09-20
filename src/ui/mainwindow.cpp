@@ -1482,9 +1482,12 @@ void MainWindow::Impl::smoke_run(const QString& shots_dir) {
             }
         }
     }
-    {   // 06-presets.png：预设对话框（§4.3 冻结：空列表 + suggested_name "示例预设"）
+    {   // 06-presets.png：预设对话框（§4.3 冻结：空列表 + suggested_name "sample"）
+        // M2-T21c：示例名必须是能通过 sanitize_name 的 ASCII（U6 冻结口径 `[A-Za-z0-9_\- ]`）。
+        // 旧值 "示例预设" 被清洗成空串 → has_name=false →"另存为"灰化，截图里"框内有名字却
+        // 按不动"，与空态提示"输入名称后点\"另存为\"创建"自相矛盾。
         const std::vector<std::pair<QString, QString>> empty_list;
-        PresetsDialog dlg(empty_list, QStringLiteral("示例预设"), w);
+        PresetsDialog dlg(empty_list, QStringLiteral("sample"), w);
         dlg.show();
         pump(250);
         smoke_grab(shots_dir, kSmokeShots[kShotPresets], &dlg);

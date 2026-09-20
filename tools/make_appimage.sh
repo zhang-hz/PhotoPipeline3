@@ -274,9 +274,13 @@ cat > "$APPDIR/AppRun" <<'APPRUN'
 #   M2-T18 增补（双击无响应缺陷）: ①启动前依赖自检 → 缺库时 stderr 明确报错并给出
 #   发行版包名；②无终端（文件管理器双击/桌面启动器 stderr 被丢弃）时把 stderr 写入
 #   日志，且启动即失败（≤15s 非零退出）时弹窗提示。
-#   取舍: 弹窗（zenity→kdialog→xmessage 依次尝试）是双击场景**用户唯一可见**的通道，
+#   M2-T24 增补（T19 实测: 弹窗在「有 DISPLAY + 装了 zenity/xmessage」的桌面上挂死 >25s）:
+#   M2-T18 的弹窗是**无界阻塞**的，自动化/脚本调用者（非终端）会被一直拖住，故加两条规则:
+#   ①**超时** —— 每个弹窗程序都自带 60 秒自动消失（zenity --timeout=60；xmessage -timeout 60）；
+#   ②**开关** —— 环境变量 PP_NO_GUI_POPUP=1 → **完全不弹窗**（日志照旧写），供自动化使用。
+#   取舍: 弹窗（zenity → xmessage，取第一个可用者）是双击场景**用户唯一可见**的通道，
 #   日志（$HOME/.cache/PhotoPipeline-appimage.log）保证任何情况下都留下可回传的证据；
-#   两者互为兜底、代价仅几行 sh，故同时保留；弹窗不可用时不阻塞启动。
+#   两者互为兜底、代价仅几行 sh，故同时保留；弹窗程序不可用或 PP_NO_GUI_POPUP=1 时不弹窗。
 cd "$APPDIR" || exit 1
 export LD_LIBRARY_PATH="$APPDIR/usr/lib"
 export QT_PLUGIN_PATH="$APPDIR/usr/lib/qt-plugins"
@@ -311,12 +315,21 @@ report_failure() {  # $1 = 摘要（可多行）
     printf 'PhotoPipeline: %s\n' "$1" >&2
     printf '\n[%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$1" >>"$LOG" 2>/dev/null
     [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || return 0
+    # M2-T24 自动化开关: =1 → 零弹窗（上面已写 stderr 与日志，调用者可立即拿到非零退出码）
+    [ "${PP_NO_GUI_POPUP:-}" = "1" ] && return 0
     msg="$1
 
 日志文件: $LOG"
-    command -v zenity  >/dev/null 2>&1 && zenity --error --no-wrap --title="PhotoPipeline 启动失败" --text="$msg" 2>/dev/null && return 0
-    command -v kdialog >/dev/null 2>&1 && kdialog --error "$msg" 2>/dev/null && return 0
-    command -v xmessage >/dev/null 2>&1 && xmessage -center "PhotoPipeline 启动失败 — $msg" 2>/dev/null && return 0
+    # M2-T24 超时: 每个弹窗程序都必须**自带 60 秒超时**（超时自动消失，绝不无限阻塞）。
+    # 只取「第一个可用者」，不再按退出码链式尝试下一个 —— zenity 超时退出的码是 5（非 0），
+    # 若沿用旧的 `&& return 0` 链式写法会二次弹窗、总时长翻倍（>60s），违背本项要求。
+    # kdialog 的 --error 无超时参数（--passivepopup 是通知气泡、非错误确认框，语义不同），
+    # 故不参与弹窗链，KDE 桌面同样落 xmessage -timeout 60（x11-utils 常备）。
+    if command -v zenity >/dev/null 2>&1; then
+        zenity --error --no-wrap --timeout=60 --title="PhotoPipeline 启动失败" --text="$msg" 2>/dev/null
+    elif command -v xmessage >/dev/null 2>&1; then
+        xmessage -center -timeout 60 "PhotoPipeline 启动失败 — $msg" 2>/dev/null
+    fi
     return 0
 }
 
@@ -351,7 +364,8 @@ wait "$CHILD"
 RC=$?
 T1="$(date +%s 2>/dev/null || echo 0)"
 # 143/130/129 = 被外部 TERM/INT/HUP 结束（会话注销、用户 kill）→ 不算启动失败，不弹窗；
-# 其余非零（含 134=SIGABRT、139=SIGSEGV 等启动即崩）且 ≤15s 退出 → 弹窗（不静默）
+# 其余非零（含 134=SIGABRT、139=SIGSEGV 等启动即崩）且 ≤15s 退出 → 弹窗（不静默）；
+# 弹窗本身受 M2-T24 两条规则约束: 60 秒超时自动消失、PP_NO_GUI_POPUP=1 时完全不弹。
 case "$RC" in
     0|143|130|129) : ;;
     *)

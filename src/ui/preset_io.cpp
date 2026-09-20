@@ -23,6 +23,7 @@
 #include <utility>
 #include <vector>
 
+#include "core/colormanager.h"  // pp::to_string/parse_color_target（color target 唯一映射源）
 #include "core/params.h"
 
 namespace pp::ui {
@@ -150,26 +151,9 @@ bool has_json_suffix(const std::string& name) {
     return true;
 }
 
-// —— ColorTarget / ConflictPolicy 与 JSON 字符串的映射（§3.6 / §3.15）——
-// TODO(M2): T4 的 pp::to_string/parse_color_target 落库后改用之（避免两处字面量）
-const char* color_target_name(ColorTarget t) {
-    switch (t) {
-        case ColorTarget::KeepOriginal: return "keep";
-        case ColorTarget::SRGB: return "srgb";
-        case ColorTarget::DisplayP3: return "p3";
-        case ColorTarget::AdobeRGB: return "adobergb";
-    }
-    return "keep";
-}
-
-bool parse_color_target_name(const std::string& s, ColorTarget& out) {
-    if (s == "keep") { out = ColorTarget::KeepOriginal; return true; }
-    if (s == "srgb") { out = ColorTarget::SRGB; return true; }
-    if (s == "p3") { out = ColorTarget::DisplayP3; return true; }
-    if (s == "adobergb") { out = ColorTarget::AdobeRGB; return true; }
-    return false;
-}
-
+// —— ConflictPolicy 与 JSON 字符串的映射（§3.6 / §3.15）——
+// color target 的映射**不再在本文件重复**：统一走 core 的 pp::to_string / pp::parse_color_target
+// （src/core/colormanager.h；M2-T7b 销账 #24 的重复字面量）。
 const char* conflict_name(ConflictPolicy c) {
     switch (c) {
         case ConflictPolicy::Skip: return "skip";
@@ -383,7 +367,7 @@ std::string save_preset(const std::filesystem::path& file, const PresetData& p) 
     root.insert(QStringLiteral("tech"), qs(p.tech_id));
     root.insert(QStringLiteral("lossless"), p.lossless);
     root.insert(QStringLiteral("bitdepth"), p.out_bitdepth);
-    root.insert(QStringLiteral("color_target"), QString::fromLatin1(color_target_name(p.color_target)));
+    root.insert(QStringLiteral("color_target"), qs(pp::to_string(p.color_target)));
     root.insert(QStringLiteral("conflict"), QString::fromLatin1(conflict_name(p.conflict)));
 
     QJsonObject params;
@@ -459,8 +443,10 @@ std::string load_preset(const std::filesystem::path& file, PresetData& out) {
     p.lossless = root.value(QStringLiteral("lossless")).toBool(false);
     p.out_bitdepth = static_cast<int>(root.value(QStringLiteral("bitdepth")).toInteger(8));
 
-    const std::string color = utf8(root.value(QStringLiteral("color_target")).toString(QStringLiteral("keep")));
-    if (!parse_color_target_name(color, p.color_target))
+    // 缺省 color_target = keep（取值同样经 core 映射取得，本文件不持有该字面量）
+    const std::string color = utf8(root.value(QStringLiteral("color_target"))
+                                       .toString(qs(pp::to_string(ColorTarget::KeepOriginal))));
+    if (!pp::parse_color_target(color, p.color_target))
         return "invalid color_target '" + color + "' in '" + display_path(file) + "'";
     const std::string conflict = utf8(root.value(QStringLiteral("conflict")).toString(QStringLiteral("rename")));
     if (!parse_conflict_name(conflict, p.conflict))

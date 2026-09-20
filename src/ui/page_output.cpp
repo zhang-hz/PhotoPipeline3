@@ -12,6 +12,8 @@
 //  * ParamForm is embedded verbatim (U3 landing canon): set_selection/set_values
 //    are signal-free, only user actions emit selection_changed/changed.
 //  * run path / rules assembly is out of scope here (§2.9 RunConfig skeleton).
+//  * §9.1 [高]：avif+alpha 预选改为**触发条件求值**（进入 avif / alpha / 位深 / 后端变化时求值），
+//    用户手动改后端 → user_backend_override（set_batch_has_alpha 清除），不再抢占用户选择。
 
 #include "ui/page_output.h"
 
@@ -216,6 +218,9 @@ struct Impl {
     QString current_format_id = QStringLiteral("jxl");
     bool metadata_only = false;
     bool batch_has_alpha = false;
+    // §9.1 [高]：avif+alpha 预选状态
+    bool user_backend_override = false;   // 用户手动改过后端（set_batch_has_alpha 时清除）
+    std::string last_backend;             // 最近一次已知后端（区分用户手动改动）
 
     // 模式
     QRadioButton* mode_convert = nullptr;
@@ -256,6 +261,8 @@ struct Impl {
     std::string backend_id() const {
         return param_form ? param_form->selection().backend : std::string();
     }
+
+    void remember_backend() { last_backend = backend_id(); }
 
     int bitdepth() const {
         return bitdepth_combo ? bitdepth_combo->currentData().toInt() : 0;
@@ -313,9 +320,13 @@ struct Impl {
     void build_format_group(QWidget* parent, QVBoxLayout* v) {
         format_group = new QGroupBox(PageOutput::tr("输出格式"), parent);
         format_group->setObjectName(QStringLiteral("pp-format-group"));
+        // 与 模式/全局/格式参数 同构：QGroupBox + 内嵌内容，按钮与组框留白一致
         auto* box = new QVBoxLayout(format_group);
+        box->setContentsMargins(9, 9, 9, 9);
+        box->setSpacing(6);
         auto* grid = new QGridLayout();
-        grid->setSpacing(4);
+        grid->setContentsMargins(0, 0, 0, 0);
+        grid->setSpacing(6);
         format_buttons = new QButtonGroup(q);
         format_buttons->setExclusive(true);
         for (int i = 0; i < kFormatCount; ++i) {
@@ -325,6 +336,7 @@ struct Impl {
             button->setCheckable(true);
             button->setToolButtonStyle(Qt::ToolButtonTextOnly);
             button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+            button->setMinimumHeight(24);
             format_buttons->addButton(button, i);
             grid->addWidget(button, i / kFormatColumns, i % kFormatColumns);
             format_button[i] = button;
@@ -395,7 +407,7 @@ struct Impl {
         param_layout = new QVBoxLayout(param_group);
 
         alpha_hint = yellow_hint(
-            PageOutput::tr("10bit + 源含 alpha：已选择 libaom 后端（SVT-AV1 不支持该组合）"),
+            PageOutput::tr("10 位 + 含 alpha：已选择 libaom 后端（SVT-AV1 不支持该组合）"),
             param_group);
         alpha_hint->setObjectName(QStringLiteral("pp-alpha-hint"));
         alpha_hint->setWordWrap(true);
@@ -450,6 +462,7 @@ struct Impl {
         QObject::connect(color_combo, &QComboBox::currentIndexChanged, q,
                          [this](int) { emit q->config_changed(); });
         QObject::connect(bitdepth_combo, &QComboBox::currentIndexChanged, q, [this](int) {
+            evaluate_avif_alpha_preselect();   // §9.1：位深变化使条件成立 → 求值
             update_alpha_hint();
             emit q->config_changed();
         });
@@ -469,8 +482,18 @@ struct Impl {
 
     void sync_format_buttons() {
         const QSignalBlocker blocker(format_buttons);
-        for (int i = 0; i < kFormatCount; ++i)
-            format_button[i]->setChecked(QLatin1String(kFormats[i].id) == current_format_id);
+        for (int i = 0; i < kFormatCount; ++i) {
+            const bool on = (QLatin1String(kFormats[i].id) == current_format_id);
+            format_button[i]->setChecked(on);
+            // §9.1 [低]：选中态加强（边框 + 加粗 + 底色）；仅本控件样式，非主题文件
+            format_button[i]->setStyleSheet(
+                on ? QStringLiteral("QToolButton { border: 2px solid palette(highlight);"
+                                    " border-radius: 3px; padding: 2px 6px; font-weight: bold;"
+                                    " background: palette(alternate-base); }")
+                   : QStringLiteral("QToolButton { border: 1px solid palette(mid);"
+                                    " border-radius: 3px; padding: 3px 7px;"
+                                    " background: palette(button); }"));
+        }
     }
 
     void rebuild_param_form() {
@@ -494,12 +517,19 @@ struct Impl {
         QObject::connect(param_form, &ParamForm::changed, q,
                          [this] { emit q->config_changed(); });
         param_form->setEnabled(!metadata_only);   // 组已置灰；此处保证重建后状态一致
+        remember_backend();
     }
 
     // 用户改后端/技术/无损（avif 后端变化 → 位深集合重算）；config_changed 由紧随
     // 其后的 ParamForm::changed 发出（§2.6 条 7 顺序保证）。
     void on_param_selection_changed() {
+        const std::string now = backend_id();
+        if (now != last_backend) {
+            user_backend_override = true;   // §9.1：用户手动改后端 → 之后不再自动抢占
+            last_backend = now;
+        }
         set_bitdepth_options(-1, /*keep_if_valid=*/true);
+        evaluate_avif_alpha_preselect();    // 后端/位深变化可能使预选条件成立
         update_alpha_hint();
     }
 
@@ -511,6 +541,8 @@ struct Impl {
         sync_format_buttons();
         rebuild_param_form();
         set_bitdepth_options(-1, /*keep_if_valid=*/false);   // 逐格式默认值
+        remember_backend();
+        evaluate_avif_alpha_preselect();   // §9.1：进入 avif 即求值
         update_alpha_hint();
         if (emit_signals && changed) {
             emit q->format_changed(current_format_id);   // 先 format_changed
@@ -561,10 +593,12 @@ struct Impl {
         alpha_hint->setVisible(show);
     }
 
-    // §2.9.3：仅在 set_batch_has_alpha(true) 时预选，用户改回不阻止、也不重复抢占。
-    bool maybe_preselect_avif_alpha() {
-        if (!param_form || !batch_has_alpha || current_format_id != QLatin1String("avif"))
-            return false;
+    // §9.1 [高]：**触发条件求值**（不再依赖 set_batch_has_alpha 单点触发）。
+    // 条件：avif ∧ batch_has_alpha ∧ 位深==10 ∧ 后端==svt-av1 ∧ 用户未手动改过后端。
+    // 调用点：进入 avif、后端/位深变化、alpha 变化、apply_preset 落值后。
+    bool evaluate_avif_alpha_preselect() {
+        if (!param_form || user_backend_override) return false;
+        if (!batch_has_alpha || current_format_id != QLatin1String("avif")) return false;
         if (bitdepth() != 10) return false;
         const FormSelection sel = param_form->selection();
         if (sel.backend != "svt-av1") return false;
@@ -573,6 +607,7 @@ struct Impl {
         FormSelection next = sel;
         next.backend = "libaom";
         param_form->set_selection(next);   // 程序化：不发信号（U3 落地口径）
+        remember_backend();
         set_bitdepth_options(-1, /*keep_if_valid=*/true);
         return true;
     }
@@ -687,14 +722,12 @@ void PageOutput::set_out_root(const QString& dir) {
 
 void PageOutput::set_batch_has_alpha(bool has) {
     Impl* impl_ = impl_of(this);
-    if (impl_->batch_has_alpha == has) {
-        impl_->update_alpha_hint();
-        return;
-    }
+    impl_->user_backend_override = false;   // §9.1：本入口清除用户手动覆盖
+    const bool state_changed = (impl_->batch_has_alpha != has);
     impl_->batch_has_alpha = has;
-    const bool switched = impl_->maybe_preselect_avif_alpha();
+    const bool switched = impl_->evaluate_avif_alpha_preselect();
     impl_->update_alpha_hint();
-    if (switched) emit config_changed();
+    if (state_changed || switched) emit config_changed();
 }
 
 void PageOutput::apply_preset(const pp::PresetData& p) {
@@ -717,6 +750,8 @@ void PageOutput::apply_preset(const pp::PresetData& p) {
     impl_->set_bitdepth_options(preset.out_bitdepth, /*keep_if_valid=*/false);
     impl_->set_color_target_value(preset.color_target);
     impl_->set_conflict_value(preset.conflict);
+    impl_->remember_backend();
+    impl_->evaluate_avif_alpha_preselect();   // §9.1：预设落值后同样求值
     impl_->update_alpha_hint();
     if (format_changed_now) emit format_changed(impl_->current_format_id);
     emit config_changed();

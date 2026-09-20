@@ -76,6 +76,7 @@ signals:
 private:
     std::vector<FileRow> rows_;
     std::set<QString> known_paths_;         // lexically_normal strings
+    std::set<QString> unsupported_paths_;   // M1b v1.1: dedup unsupported counts (2026-09-20 ruling)
     std::size_t unsupported_ = 0;
     Thumbnailer* thumbs_ = nullptr;
 };

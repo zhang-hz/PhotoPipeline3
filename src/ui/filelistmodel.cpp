@@ -3,7 +3,8 @@
 //
 // 规格落地（docs/m1b-tasks.md §2.8 + §3.1）：
 //   - add_paths：文件与/或目录；目录递归自走；支持扩展名 = pp::input_extensions()
-//     大小写不敏感；点文件/点目录跳过；不支持的普通文件只计数不入列；
+//     大小写不敏感；点文件/点目录跳过；不支持的普通文件只计数不入列（§2.8 v1.1：
+//     按 lexically_normal 路径去重，重复 add 不重复累计；clear() 同时归零集合与计数）；
 //     lexically_normal 去重；新增行入缩略图队列（endInsertRows 之后行号才有效）
 //   - StateTextRole 文本与徽标颜色共用本 TU 的 §3.1 十二态表（唯一来源）
 //   - apply_thumb stale-guard：row 越界或 path 不匹配 → 丢弃（删行/清空后的在途结果）
@@ -30,6 +31,7 @@
 #include <cctype>
 #include <cstddef>
 #include <filesystem>
+#include <set>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -91,9 +93,13 @@ bool is_supported_ext(const std::filesystem::path& p) {
     return std::find(exts.begin(), exts.end(), ext) != exts.end();
 }
 
-// 单个输入项 → 候选文件（目录递归；点文件/点目录跳过；不支持者只计数）
+// 单个输入项 → 候选文件（目录递归；点文件/点目录跳过；不支持者按去重路径计数，v1.1）
 void collect_from(const std::filesystem::path& input, std::vector<std::filesystem::path>& files,
-                  std::size_t& unsupported) {
+                  std::set<QString>& unsupported_seen, std::size_t& unsupported) {
+    // 不支持文件：仅首次遇到（自上次 clear 以来）才计数（§2.8 v1.1 裁定）
+    const auto count_unsupported = [&](const std::filesystem::path& p) {
+        if (unsupported_seen.insert(fs_string(p.lexically_normal())).second) ++unsupported;
+    };
     std::error_code ec;
     if (std::filesystem::is_directory(input, ec)) {
         std::filesystem::recursive_directory_iterator it(
@@ -114,7 +120,7 @@ void collect_from(const std::filesystem::path& input, std::vector<std::filesyste
             if (is_supported_ext(p)) {
                 files.push_back(p.lexically_normal());
             } else {
-                ++unsupported;   // 不支持：计数但不入列
+                count_unsupported(p);   // 不支持：计数但不入列
             }
         }
         return;
@@ -123,7 +129,7 @@ void collect_from(const std::filesystem::path& input, std::vector<std::filesyste
         if (is_supported_ext(input)) {
             files.push_back(input.lexically_normal());
         } else {
-            ++unsupported;
+            count_unsupported(input);
         }
     }
     // 不存在/非普通文件 → 忽略（冻结接口无错误通道；unsupported_count 只统计普通文件）
@@ -179,7 +185,7 @@ void FileListModel::add_paths(const QStringList& paths) {
     std::size_t unsupported = 0;
     for (const QString& p : paths) {
         if (p.isEmpty()) continue;
-        collect_from(fs_path(p), files, unsupported);
+        collect_from(fs_path(p), files, unsupported_paths_, unsupported);
     }
 
     // 去重：已入列（known_paths_）与本批次内重复都跳过
@@ -247,6 +253,7 @@ void FileListModel::clear() {
     beginResetModel();
     rows_.clear();
     known_paths_.clear();
+    unsupported_paths_.clear();   // v1.1：去重集合与计数一起归零
     unsupported_ = 0;
     endResetModel();
     if (changed) emit content_changed();

@@ -191,7 +191,7 @@ M1b 已就 `ParamForm` 析构、`thumbnails.h` AUTOMOC 引用 + `unsupported_pat
 ### 6.2 T18：AppImage 双击无响应
 
 - **发现**：AppImage 双击无反应、终端启动才见 `Could not load the Qt platform plugin "xcb"`（exit 134）；根因 = 打包只对主二进制做依赖闭包，插件 `libQt6XcbQpa`/`libQt6Svg` 解析到**系统 Qt 6.10** 而随包 Qt 是 6.8.3 ⇒ `version 'Qt_6.10' not found`（B 类缺陷，旧烟测测不出）。
-- **裁定 → 修复**：闭包输入扩为「主二进制 + 全部插件源 ELF」，解析路径加 Qt 工具链 lib 目录，插件 X11 支持库纳入随包；打包期对每个 ELF 做 A/B 硬门禁 → `0219105`（新增 `tools/appimage-check-closure.sh`、`tools/appimage-gui-smoke.sh`；`make_appimage.sh` +434/-10）。
+- **裁定 → 修复**：闭包输入扩为「主二进制 + 全部插件源 ELF」，解析路径加 Qt 工具链 lib 目录，插件 X11 支持库纳入随包；打包期对每个 ELF 做 A/B 硬门禁 → `0219105`（新增 `tools/appimage-check-closure.sh` +117、`tools/appimage-gui-smoke.sh` +122；`tools/make_appimage.sh` +195/-10；合计 3 files +434/-10）。
 - **复测**：闭包门禁 A/B 无命中；`appimage-gui-smoke.sh` 实启 PASS（2560×1600 窗口 + 截图）；CI `appimage` job 加“产物启动烟测”后持续绿。
 
 ### 6.3 T21 系列：截图复核与基线隔离

@@ -18,6 +18,7 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
+#include <QByteArray>
 #include <QCoreApplication>
 #include <QDesktopServices>
 #include <QDir>
@@ -960,13 +961,69 @@ void MainWindow::Impl::remove_selected() {
     model->remove_rows(rows);
 }
 
+namespace {
+
+// §M2-T16b(c')：logs_dir() 来自平台字节层，可能含**非 UTF-8 字节**；Qt6 的 QString 恒为
+// UTF-8 语义，QString::fromStdString(dir.string()) 会把非法序列替换成 U+FFFD →
+// QDir::entryInfoList 直接丢掉全部条目，QUrl 也会指向被改写后的假路径（T14 报告实测）。故：
+//   * 枚举一律走 std::filesystem::directory_iterator（目录项名保留原始字节）；
+//   * 只有交给 QDesktopServices 时才需要 QString：先做 UTF-8 往返校验，合法 → fromLocalFile；
+//     非法 → stderr 明确提示（不静默失败）。
+bool bytes_are_valid_utf8(const std::string& bytes) {
+    const QByteArray raw(bytes.data(), static_cast<int>(bytes.size()));
+    return QString::fromUtf8(raw).toUtf8() == raw;
+}
+
+void open_local_path_bytes(const std::filesystem::path& p, const char* what) {
+    const std::string bytes = p.string();
+    if (!bytes_are_valid_utf8(bytes)) {
+        std::fprintf(stderr,
+                     "ui: cannot open %s: path contains non-UTF-8 bytes; open it from a shell "
+                     "instead (raw: %s)\n",
+                     what, bytes.c_str());
+        std::fflush(stderr);
+        return;
+    }
+    QDesktopServices::openUrl(
+        QUrl::fromLocalFile(QString::fromUtf8(bytes.data(), static_cast<int>(bytes.size()))));
+}
+
+// 最新 run-*.log：mtime 新者优先；同 mtime 取名字字典序小者（与 QDir::Time 同口径）。
+// 无匹配 → 空 path（调用方退回目录本身）。字节级匹配：非 UTF-8 文件名同样命中。
+std::filesystem::path newest_run_log(const std::filesystem::path& dir) {
+    std::filesystem::path newest;
+    std::filesystem::file_time_type newest_time{};
+    std::error_code ec;
+    for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+        std::error_code fec;
+        if (!it->is_regular_file(fec) || fec) continue;
+        const std::string name = it->path().filename().string();
+        if (name.size() < 8 || name.compare(0, 4, "run-") != 0 ||
+            name.compare(name.size() - 4, 4, ".log") != 0) {
+            continue;
+        }
+        const std::filesystem::file_time_type t = it->last_write_time(fec);
+        if (fec) continue;
+        if (newest.empty() || t > newest_time ||
+            (t == newest_time && name < newest.filename().string())) {
+            newest = it->path();
+            newest_time = t;
+        }
+    }
+    return newest;
+}
+
+}  // namespace
+
 void MainWindow::Impl::open_logs() {
     const std::filesystem::path dir = pp::platform::logs_dir();
-    const QDir qdir(QString::fromStdString(dir.string()));
-    const QFileInfoList files =
-        qdir.entryInfoList(QStringList{QStringLiteral("run-*.log")}, QDir::Files, QDir::Time);
-    const QString target = files.isEmpty() ? qdir.absolutePath() : files.front().absoluteFilePath();
-    QDesktopServices::openUrl(QUrl::fromLocalFile(target));
+    if (dir.empty()) {
+        std::fprintf(stderr, "ui: cannot open logs: data_dir()/logs is unavailable (empty path)\n");
+        std::fflush(stderr);
+        return;
+    }
+    const std::filesystem::path newest = newest_run_log(dir);
+    open_local_path_bytes(newest.empty() ? dir : newest, "logs");
 }
 
 void MainWindow::Impl::handle_file_event(const pp::FileEvent& ev) {
@@ -1342,6 +1399,7 @@ void MainWindow::Impl::smoke_run(const QString& shots_dir) {
                            .arg(smoke_exif_fixture_names()));
         } else {
             const pp::FileEntry& entry = *fixture;
+            const bool fixture_had_exception = entry.exception.has_value();
             // 诊断行（新增，不改冻结末行）：CI 日志据此核对本次实际使用的 fixture
             std::printf("UI-SMOKE exif-fixture=%s\n",
                         qUtf8Printable(smoke_fixture_label(entry.src, repo_root())));
@@ -1392,7 +1450,20 @@ void MainWindow::Impl::smoke_run(const QString& shots_dir) {
             smoke_grab(shots_dir, kSmokeShots[kShotExif], &dlg);
             dlg.reject();
             pump(120);
-            if (model->row(0).has_exception()) {
+            // §M2-T16b：断言绑定到本 fixture 行（不再引用 row(0)，与输入顺序彻底解耦）：
+            // reject 只能不改变该行的例外状态。
+            bool fixture_found = false;
+            bool fixture_exception_now = false;
+            for (std::size_t i = 0; i < model->size(); ++i) {
+                if (model->row(i).entry.src == entry.src) {
+                    fixture_exception_now = model->row(i).has_exception();
+                    fixture_found = true;
+                    break;
+                }
+            }
+            if (!fixture_found) {
+                smoke_fail(MainWindow::tr("EXIF 编辑器：reject 后 fixture 行从列表消失"));
+            } else if (fixture_exception_now != fixture_had_exception) {
                 smoke_fail(MainWindow::tr("EXIF 编辑器 reject 后产生了例外"));
             }
         }

@@ -6,6 +6,7 @@
 //     大小写不敏感；点文件/点目录跳过；不支持的普通文件只计数不入列（§2.8 v1.1：
 //     按 lexically_normal 路径去重，重复 add 不重复累计；clear() 同时归零集合与计数）；
 //     lexically_normal 去重；新增行入缩略图队列（endInsertRows 之后行号才有效）
+//   - M2-T16b：每个 add_paths 批次内按路径字典序排序（跨批次仍为追加语义）
 //   - StateTextRole 文本与徽标颜色共用本 TU 的 §3.1 十二态表（唯一来源）
 //   - apply_thumb stale-guard：row 越界或 path 不匹配 → 丢弃（删行/清空后的在途结果）
 //   - entries()：FileEntry 值语义深拷贝（src/base_dir/exception）供 Scheduler
@@ -187,6 +188,13 @@ void FileListModel::add_paths(const QStringList& paths) {
         if (p.isEmpty()) continue;
         collect_from(fs_path(p), files, unsupported_paths_, unsupported);
     }
+
+    // M2-T16b：批次内按路径字典序排序后再追加 —— UI 行序不再依赖 readdir 顺序（可预测，并使
+    // 01-meta.png 等截图 / T9 回归基线确定化）。跨批次仍是追加语义：多次 add 的先后顺序保留。
+    std::sort(files.begin(), files.end(),
+              [](const std::filesystem::path& a, const std::filesystem::path& b) {
+                  return a.string() < b.string();
+              });
 
     // 去重：已入列（known_paths_）与本批次内重复都跳过
     std::vector<std::filesystem::path> fresh;

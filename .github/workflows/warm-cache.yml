@@ -1,0 +1,191 @@
+name: warm-cache
+# PhotoPipeline — 缓存播种（M2-T19 ⑤）
+#
+# 用途: 当 **vcpkg.json / vcpkg-overlay/** / Qt 版本 / CMakeLists.txt 发生变化**（缓存 key 或
+# ABI 失效）后，用一次性的长跑把三类缓存按 build-test.yml 的**同一 key 方案**重新预热，
+# 之后日常 CI 只消费、不再承担冷构建（冷 vcpkg 全量构建 ≈34 min）。
+#
+# 触发:
+#   * workflow_dispatch —— 手动（改 overlay/Qt 版本后立刻预热）
+#   * schedule 每周日 03:17 UTC —— 兜底（防止缓存被 7 天规则清掉后首个日常轮次挨冷构建）
+#   **刻意不加 push 触发**：日常 push 由 build-test.yml 消费缓存，播种只在需要时显式跑。
+#
+# 与 build-test.yml 的关系: 准备块逐字同源（apt 清单 / Qt 缓存 key / vcpkg key / ccache key），
+# 差别只有 ① 单 job（不并行，避免三个 job 同时冷构建抢 CPU）② 编译 **release + release-dev**
+# 两个预设（正好等于 linux job 的 ccache 内容，见 build-test.yml 的 ccache key 注释）。
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * 0'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: write
+
+env:
+  VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+  QT_DIR: ${{ github.workspace }}/Qt/6.8.3/gcc_64
+  VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg-binary
+  CCACHE_DIR: ${{ github.workspace }}/.cache/ccache
+  CCACHE_MAXSIZE: 2G
+  CCACHE_BASEDIR: ${{ github.workspace }}
+  CCACHE_SLOPPINESS: pch_defines,time_macros,include_file_mtime
+  QT_VERSION: 6.8.3
+  VCPKG_TAG: 2026.07.29
+  APPIMAGE_EXTRACT_AND_RUN: "1"
+
+jobs:
+  warm:
+    runs-on: ubuntu-24.04
+    # 冷路径估算: vcpkg 二进制缓存空 ⇒ 41 个端口全量构建 ≈34 min，加 Qt 安装 ≈3 min、
+    # 两棵构建树 ≈6 min、依赖自检 <1 min ⇒ ≈45 min。60 min 上限足够且与 build-test 对齐。
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: apt 系统依赖（tools/ci-system-deps.txt）
+        run: bash tools/ci-install-deps.sh
+
+      - name: Qt ${{ env.QT_VERSION }} 缓存（restore）
+        id: qt-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/Qt/6.8.3/gcc_64
+          key: qt-6.8.3-gcc_64-${{ runner.os }}-${{ runner.arch }}
+          restore-keys: qt-6.8.3-
+
+      - name: Qt ${{ env.QT_VERSION }} via aqtinstall
+        if: steps.qt-cache.outputs.cache-hit != 'true'
+        run: |
+          pip3 install aqtinstall
+          aqt install-qt linux desktop "$QT_VERSION" linux_gcc_64 -O "$GITHUB_WORKSPACE/Qt"
+
+      - name: Qt 就绪断言
+        run: |
+          test -f "$QT_DIR/lib/libQt6Core.so.6" || { echo "::error::Qt 缺失: $QT_DIR"; exit 1; }
+          echo "Qt $(du -sh "$QT_DIR" | cut -f1) @ $QT_DIR"
+          ls -1 "$QT_DIR/plugins/platforms/libqoffscreen.so" "$QT_DIR/plugins/platforms/libqxcb.so"
+
+      - name: vcpkg ${{ env.VCPKG_TAG }}（pinned）
+        run: |
+          git clone https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
+          git -C "$VCPKG_ROOT" checkout "$VCPKG_TAG"
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+
+      - name: 缓存目录预建
+        run: mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE" "$CCACHE_DIR"
+
+      - name: vcpkg binary cache（restore）
+        id: vcpkg-cache
+        # key 末段含 github.job：播种 job 名是 warm ⇒ 与本轮 build-test 的三个 job 不冲突，
+        # 但 restore-keys 的宽前缀 vcpkg- 让播种**消费**已有热缓存，save 又产出**最新**条目
+        # （滚动 key 语义）供下一轮日常 CI 复用。
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.cache/vcpkg-binary
+          key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-
+            vcpkg-
+
+      - name: ccache（restore）
+        id: ccache-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.cache/ccache
+          key: ccache-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/**', 'CMakePresets.json') }}-${{ github.run_id }}
+          restore-keys: ccache-${{ runner.os }}-
+
+      - name: configure + build release
+        run: |
+          T0=$(date +%s)
+          cmake --preset release
+          T1=$(date +%s)
+          cmake --build --preset release
+          T2=$(date +%s)
+          ctest --preset release
+          T3=$(date +%s)
+          {
+            echo -e "configure release\t$(( T1 - T0 ))"
+            echo -e "build release\t$(( T2 - T1 ))"
+            echo -e "ctest release\t$(( T3 - T2 ))"
+          } >> "$RUNNER_TEMP/pp-steps.tsv"
+
+      - name: configure + build release-dev
+        run: |
+          T0=$(date +%s)
+          cmake --preset release-dev
+          T1=$(date +%s)
+          cmake --build --preset release-dev
+          T2=$(date +%s)
+          ctest --preset release-dev
+          T3=$(date +%s)
+          {
+            echo -e "configure release-dev\t$(( T1 - T0 ))"
+            echo -e "build release-dev\t$(( T2 - T1 ))"
+            echo -e "ctest release-dev (含 ui_smoke)\t$(( T3 - T2 ))"
+          } >> "$RUNNER_TEMP/pp-steps.tsv"
+
+      - name: 系统依赖覆盖自检（播种后环境同样必须是 0 未覆盖）
+        run: bash tools/ci-check-deps.sh build/release
+
+      - name: ccache 统计
+        if: always()
+        run: |
+          set +e
+          ccache -s > "$RUNNER_TEMP/ccache.txt" 2>&1
+          echo "---- ccache -s -v ----" >> "$RUNNER_TEMP/ccache.txt"
+          ccache -s -v 2>&1 | grep -E "cache hit|cache miss|Cacheable calls" >> "$RUNNER_TEMP/ccache.txt"
+          cat "$RUNNER_TEMP/ccache.txt"
+
+      - name: vcpkg binary cache（save）
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.cache/vcpkg-binary
+          key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: ccache（save）
+        # 播种 job 独占 ccache 的保存权（build-test.yml 里是 linux job）；key 完全相同
+        # ⇒ 下一次日常 CI 用 restore-keys: ccache-<os>- 直接拿到这份"release+release-dev 全集"。
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.cache/ccache
+          key: ccache-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/**', 'CMakePresets.json') }}-${{ github.run_id }}
+
+      - name: 汇总 → $GITHUB_STEP_SUMMARY
+        if: always()
+        env:
+          QT_HIT: ${{ steps.qt-cache.outputs.cache-hit }}
+          VCPKG_HIT: ${{ steps.vcpkg-cache.outputs.cache-hit }}
+          CCACHE_HIT: ${{ steps.ccache-cache.outputs.cache-hit }}
+        run: |
+          set +e
+          {
+            echo "## warm-cache（播种）汇总"
+            echo ""
+            echo "| 项目 | 值 |"
+            echo "| --- | --- |"
+            echo "| 触发 | ${GITHUB_EVENT_NAME} |"
+            echo "| Qt 缓存精确命中 | ${QT_HIT:-false} |"
+            echo "| vcpkg 二进制缓存精确命中 | ${VCPKG_HIT:-false} |"
+            echo "| ccache 缓存精确命中 | ${CCACHE_HIT:-false} |"
+            echo ""
+            echo "| 阶段 | 秒 |"
+            echo "| --- | --- |"
+            awk -F'\t' '{printf "| %s | %s |\n", $1, $2}' "$RUNNER_TEMP/pp-steps.tsv" 2>/dev/null
+            echo ""
+            echo "<details><summary>ccache -s</summary>"
+            echo ""
+            echo '```'
+            head -30 "$RUNNER_TEMP/ccache.txt" 2>/dev/null
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"

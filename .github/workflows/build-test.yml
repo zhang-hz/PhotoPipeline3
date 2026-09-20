@@ -6,9 +6,11 @@ jobs:
     env:
       VCPKG_ROOT: ${{ github.workspace }}/vcpkg
       QT_DIR: ${{ github.workspace }}/Qt/6.8.3/gcc_64
-      # 必须绝对路径：env 值里的 `~` 不经过 shell，不会被展开（首跑 35512612876 根因）。
-      # 选 runner.temp 而非 workspace：缓存生命周期与工作树解耦（checkout 默认 clean:true 会 git clean -ffdx）。
-      VCPKG_DEFAULT_BINARY_CACHE: ${{ runner.temp }}/vcpkg-binary-cache
+      # 必须绝对路径：env 值不经过 shell，`~` 不会展开（首跑 35512612876 根因）。
+      # 用 github.workspace 而非 runner.temp：job 级 env 只允许 github/needs/strategy/matrix/vars/secrets/inputs
+      # （runner context 不可用，见 Actions Context availability）；此式与 tools/env.sh 的本地缓存布局一致。
+      # 下方 `vcpkg binary cache` 的 path 必须与本值保持一致。
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg-binary
     steps:
       - uses: actions/checkout@v4
       - name: apt deps
@@ -28,7 +30,7 @@ jobs:
       - name: vcpkg binary cache
         uses: actions/cache@v4
         with:
-          path: ${{ runner.temp }}/vcpkg-binary-cache
+          path: ${{ github.workspace }}/.cache/vcpkg-binary
           key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}
       - name: build + corpus + test
         run: |
@@ -43,7 +45,7 @@ jobs:
     env:
       VCPKG_ROOT: ${{ github.workspace }}/vcpkg
       QT_DIR: ${{ github.workspace }}/Qt/6.8.3/gcc_64
-      VCPKG_DEFAULT_BINARY_CACHE: ${{ runner.temp }}/vcpkg-binary-cache
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg-binary
     steps:
       - uses: actions/checkout@v4
       - name: apt deps
@@ -62,10 +64,10 @@ jobs:
       - name: vcpkg binary cache
         uses: actions/cache@v4
         with:
-          path: ${{ runner.temp }}/vcpkg-binary-cache
+          path: ${{ github.workspace }}/.cache/vcpkg-binary
           key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}
       - name: build release-dev + ui smoke
-        # ui_smoke 自测通过 tests/golden/base --inputs（39 文件已入库），无需 gen_corpus；
+        # ui_smoke 经 tests/golden/base --inputs 自测（39 文件已入库），无需 gen_corpus；
         # QT_QPA_PLATFORM=offscreen 由 CMake add_test 注入，无需 xvfb。
         run: |
           cmake --preset release-dev

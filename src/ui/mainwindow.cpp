@@ -49,6 +49,7 @@
 #include <QThread>
 #include <QTimer>
 #include <QToolBar>
+#include <QTreeWidget>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QVariant>
@@ -428,7 +429,7 @@ void MainWindow::build_ui() {
     d.stack->addWidget(d.page_run);      // 页 3 运行
     splitter->addWidget(d.stack);
 
-    // ---- 底部：状态摘要 + stretch + 开始/取消 ----
+    // ---- 底部：状态摘要 + stretch + 开始（运行中禁用；取消只在运行页）----
     auto* bottom = new QHBoxLayout();
     d.status = new QLabel(tr("没有文件"), central);
     d.status->setObjectName(QStringLiteral("pp-status"));
@@ -470,13 +471,8 @@ void MainWindow::wire() {
     });
     connect(d.view->selectionModel(), &QItemSelectionModel::selectionChanged, this,
             [this] { impl_->sync_selection(); });
-    connect(d.start, &QPushButton::clicked, this, [this] {
-        if (impl_->running) {
-            on_cancel();
-        } else {
-            on_start();
-        }
-    });
+    // G5（2026-09-20 R1 修订）：底栏开始按钮运行中保持"开始"且禁用 → 取消唯一入口 = 运行页
+    connect(d.start, &QPushButton::clicked, this, &MainWindow::on_start);
 
     connect(d.model, &FileListModel::content_changed, this,
             [this] { impl_->on_content_changed(); });
@@ -687,9 +683,10 @@ void MainWindow::refresh_status() {
     d.unsupported->setText(unsupported > 0 ? tr("（%1 个不支持）").arg(unsupported) : QString());
     d.unsupported->setVisible(unsupported > 0);
 
+    // G5（2026-09-20 R1 修订）：底栏按钮恒为"开始"；运行中禁用（取消只在运行页）
     const bool can_start = !d.running && count > 0 && reason.isEmpty();
-    d.start->setText(d.running ? tr("取消") : tr("开始"));
-    d.start->setEnabled(d.running || can_start);
+    d.start->setText(tr("开始"));
+    d.start->setEnabled(can_start);
     const bool has_selection = d.view->selectionModel() != nullptr &&
                                !d.view->selectionModel()->selectedIndexes().isEmpty();
     d.remove_sel->setEnabled(!d.running && has_selection);
@@ -1283,6 +1280,44 @@ void MainWindow::Impl::smoke_run(const QString& shots_dir) {
             dlg.setProperty("pp_exif_editor_suppress_modal", true);   // 模态短路（U8 口径）
             dlg.show();
             pump(400);
+            // §9.1 U10-FIX：先程序化选中一个叶子标签（IFD0 下首个），使右值区有键名+值再 grab
+            // （U8 挂在 selectionModel 的 currentChanged 上，setCurrentItem 同样触发）
+            if (QTreeWidget* tree = dlg.findChild<QTreeWidget*>(QStringLiteral("exif_tree"))) {
+                QTreeWidgetItem* group = nullptr;
+                for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+                    QTreeWidgetItem* node = tree->topLevelItem(i);
+                    if (node != nullptr && node->text(0) == QStringLiteral("IFD0")) {
+                        group = node;
+                        break;
+                    }
+                }
+                if (group == nullptr && tree->topLevelItemCount() > 0) {
+                    group = tree->topLevelItem(0);
+                }
+                QTreeWidgetItem* leaf = nullptr;
+                if (group != nullptr) {
+                    tree->expandItem(group);
+                    for (int i = 0; i < group->childCount(); ++i) {
+                        QTreeWidgetItem* child = group->child(i);
+                        if (child != nullptr && child->childCount() == 0) {
+                            leaf = child;
+                            break;
+                        }
+                    }
+                }
+                if (leaf == nullptr) {
+                    smoke_fail(MainWindow::tr("EXIF 编辑器：IFD0 下找不到叶子标签，右值区将为空"));
+                } else {
+                    tree->setCurrentItem(leaf);
+                    pump(200);
+                    std::printf("UI-SMOKE 05-exif-editor selection: %s\n",
+                                qUtf8Printable(leaf->text(0)));
+                    std::fflush(stdout);
+                }
+            } else {
+                smoke_fail(MainWindow::tr("EXIF 编辑器缺少 exif_tree 控件"));
+            }
+            pump(150);
             smoke_grab(shots_dir, kSmokeShots[kShotExif], &dlg);
             dlg.reject();
             pump(120);

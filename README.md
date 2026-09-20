@@ -2,7 +2,7 @@
 
 批量像素级转码器 + 元数据手术台（batch pixel-level transcoder with metadata surgery），GPL-3.0-or-later。
 
-M0 交付仓库骨架、冻结接口、链接探针与金标语料。**M1a 交付全部编码引擎**：core 基础设施（logger / fsops / 像素预算 / 参数引擎 / 预设）、解码层、色彩层、元数据层、8 个编码器、调度器与 `--dev` 命令行 harness。**M1b 交付完整桌面 UI**：三页主窗口（元数据规则 / 输出配置 / 运行监控）、异步缩略图文件列表、内嵌地图选点、参数表单引擎、单文件 EXIF/XMP 编辑器、设置与预设对话框，以及 `--ui-smoke` 无头走查。**M2 完成 Linux 发行收口**：`--version` 版本单源、AppImage 打包（含离线打包与许可随附）、金样断言级 16 对、回归基线、ASan/UBSan/TSan 清扫、CI 构建/测试与 offscreen UI 冒烟（AppImage job 见 M2 报告）。
+M0 交付仓库骨架、冻结接口、链接探针与金标语料。**M1a 交付全部编码引擎**：core 基础设施（logger / fsops / 像素预算 / 参数引擎 / 预设）、解码层、色彩层、元数据层、8 个编码器、调度器与 `--dev` 命令行 harness。**M1b 交付完整桌面 UI**：三页主窗口（元数据规则 / 输出配置 / 运行监控）、异步缩略图文件列表、内嵌地图选点、参数表单引擎、单文件 EXIF/XMP 编辑器、设置与预设对话框，以及 `--ui-smoke` 无头走查。**M2 完成 Linux 发行收口**：`--version` 版本单源、AppImage 打包（含离线打包与许可随附）、金样断言级 16 对、回归基线、ASan/UBSan/TSan 清扫，以及持续集成——`build-test.yml` 的**四个 job**（`linux` / `ui-smoke` / `appimage` / `cache-gc`）与缓存播种 workflow `warm-cache.yml`。
 
 ## 构建（四步）
 
@@ -68,7 +68,7 @@ build/m1-dev/photopipeline --dev tests/golden/meta/exif_full.jpg --out .cache/ou
 | 工具 | 用途 |
 |---|---|
 | `pp_verify <expected.json> <actual_output> [--selftest]` | 按 `tests/golden/SCHEMA.md` 断言 `pixel.mode`（exact / psnr+threshold_db）、`metadata[]`、`warnings_contain[]`。输出 `VERIFY <case> OK\|FAIL <detail>`，退出码 = FAIL 数；`--selftest` 用内存样本自检（不需要语料，已进 ctest） |
-| `tests/golden/smoke.sh [BUILD_DIR]` | 8 对转码 + 1 对元数据的金样冒烟：逐例跑 `photopipeline --dev` 并用 `pp_verify` 断言。脚本内的默认 `BUILD_DIR` 指向历史构建目录，**请显式传入自己的构建目录**（或用 `PP_BIN` / `PP_VERIFY` / `OUT_ROOT` 覆盖）；输出 `SMOKE total=9 pass=9 fail=0`，退出码 = 失败例数 |
+| `tests/golden/smoke.sh [BUILD_DIR]` | **16 对断言级**金样冒烟（M1 冒烟级 9 对 → M2 断言级 16 对），逐例跑 `photopipeline --dev` 并用 `pp_verify` 断言像素 + 元数据值 + warnings 三面。脚本内的默认 `BUILD_DIR` 指向 `build/release`，**请显式传入自己的构建目录**（或用 `PP_BIN` / `PP_VERIFY` / `OUT_ROOT` 覆盖）；输出 `SMOKE total=16 pass=16 fail=0`，退出码 = 失败例数 |
 
 ### 测试命令
 
@@ -79,7 +79,7 @@ ctest --test-dir build/release --output-on-failure
 # 金标语料（27 fixture，幂等；PP_MKFIXTURES= 指向本次构建的 pp_mkfixtures）
 PP_MKFIXTURES=build/release/pp_mkfixtures bash tools/gen_corpus.sh
 
-# 8+1 对金样冒烟（需 PP_BUILD_DEV=ON 的构建，脚本走 --dev）
+# 16 对断言级金样（M1 冒烟级 9 对 → M2 断言级 16 对；需 PP_BUILD_DEV=ON 的构建，脚本走 --dev）
 bash tests/golden/smoke.sh build/m1-dev
 ```
 
@@ -93,6 +93,20 @@ bash tests/golden/smoke.sh build/m1-dev
 | `tests/golden/smoke.sh` | 金样冒烟：**16 对断言级**用例（像素 + 元数据值 + warnings） |
 | `photopipeline --ui-smoke` | 无头 UI 走查：三页遍历 + 参数谓词/地图边界断言 + 真实转码，产出 8 张截图 |
 | `tools/make_appimage.sh` | 打包 AppImage（离线、可重复重跑；内置四项烟测） |
+| `tools/ci-system-deps.txt` | CI/构建机系统依赖**单一事实来源**（64 个 apt 包，行尾注释格式；`linux` / `ui-smoke` / `appimage` 三 job 与 `warm-cache.yml` 共用同一清单） |
+| `tools/ci-install-deps.sh` | 按清单安装依赖；发行版改名容错（本发行版不存在的包只打 `::warning::`，不整体失败），真正的安全网是 soname 级自检 |
+| `tools/ci-check-deps.sh [BUILD_DIR]` | **覆盖自检**：从构建产物派生全部 `DT_NEEDED` soname，断言每个都由清单包提供；未覆盖项必须 0（退出码 0 = 全覆盖 / 1 = 有未覆盖 / 2 = 用法环境错误） |
+| `tools/ci-cache-gc.sh` | Actions 缓存清理：`vcpkg-*` / `ccache-*` 保留最新 8 个且 7 天内，`qt-*` 永不触碰；幂等，任何失败都不把 job 弄红 |
+
+### CI 依赖与缓存
+
+```bash
+bash tools/ci-install-deps.sh                    # 装 tools/ci-system-deps.txt 全部包（幂等；PP_APT_DRY_RUN=1 只打印）
+bash tools/ci-check-deps.sh build/release        # soname 级覆盖自检（未覆盖项必须 0；见上表）
+PP_GC_DRY_RUN=1 bash tools/ci-cache-gc.sh        # 预览缓存清理（CI 由 cache-gc job 真删）
+gh workflow run warm-cache.yml                   # 缓存播种：改 vcpkg.json / overlay / Qt 版本后预热
+                                                 # （workflow_dispatch；每周日 03:17 UTC 另有定时兜底）
+```
 
 ### `tools/regression.sh` — 全语料回归基线
 
@@ -253,9 +267,10 @@ chmod +x PhotoPipeline-0.1.0-x86_64.AppImage
 ### 系统要求
 
 - **平台**：Linux x86_64（本版单一发行平台；Windows / macOS 未发行）
-- **glibc**：发行附件基线 ≥ 2.39（ubuntu-24.04 打包机）。注意：本机 Ubuntu 26.04 打包的产物实测要求
-  `GLIBC_2.43`（`objdump -T` 最大符号版本），该产物只适用于 glibc ≥ 2.43 的目标机；发布附件应取
-  glibc 基线更低的打包产物
+- **glibc**：**官方发行产物由 CI 构建**（`appimage` job，ubuntu-24.04 runner），基线 **≥ 2.39**
+  （noble 自带 glibc，`objdump -T` 最大符号版本）；**本地自建产物取决于本机 glibc** —— 例如在
+  Ubuntu 26.04 上打包，实测要求 `GLIBC_2.43`，该产物只适用于 glibc ≥ 2.43 的目标机。两句都成立：
+  取发行附件请认 CI 产物，本地打包件按本机 glibc 自用
 - **系统库**（不在 AppImage 内，需目标机提供）：
   - `libssl3`：Qt 6.8 的 TLS 后端插件（`libqopensslbackend.so`）运行期 dlopen `libssl.so.3` /
     `libcrypto.so.3`；缺失时 `QNetworkAccessManager` 报 `No functional TLS backend was found`，
@@ -263,10 +278,23 @@ chmod +x PhotoPipeline-0.1.0-x86_64.AppImage
   - xcb/X11 相关包：`libxcb1`、`libxcb-cursor0`、`libxcb-icccm4`、`libxcb-image0`、`libxcb-keysyms1`、
     `libxcb-randr0`、`libxcb-render-util0`、`libxcb-shape0`、`libxcb-sync1`、`libxcb-xfixes0`、
     `libxcb-xinput0`、`libxcb-xkb1`、`libxkbcommon-x11-0`、`libX11-6`、`libX11-xcb1`、`libSM6`、`libICE6`
-  - OpenGL/EGL：`libGL1`、`libEGL1`（Qt xcb 平台插件）
+  - **X11 / xcb / xkbcommon 核心库的版本下限提示**：随包的 `libxcb-*.so*` / `libxkbcommon-x11` /
+    `libX11-xcb` 链接的是**目标机**`libxcb.so.1` / `libxkbcommon.so.0` / `libX11.so.6`（单副本
+    不变式库，刻意不随包）。这些扩展库引用的是**无符号版本节点**的 `xcb_*` 符号，系统 `libxcb.so.1`
+    过旧时失败发生在 **dlopen 期**（`undefined symbol: xcb_…`），**`ldd` 与打包期闭包检查都查不出符号
+    级缺失** —— 目标机 libxcb 不低于打包机版本即可：CI 发行产物打包机 = ubuntu-24.04（`libxcb1` 1.15），
+    开发机 26.04（1.17），两者均实测可用
+  - OpenGL/EGL：`libGL1`、`libEGL1` —— Qt **xcb 平台插件的 `DT_NEEDED`**（非可选）；缺失时 AppRun
+    的启动前自检会指名报出 `libGL.so.1` / `libEGL.so.1` 与对应发行版包名并以退出码 3 结束
   - 字体与基础库：`libfontconfig1`、`libfreetype6`、`libdbus-1-3`、`libglib2.0-0`、`libxkbcommon0`
   - Ubuntu 24.04 一行：
     `sudo apt install libssl3 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxkbcommon-x11-0 libgl1 libegl1 libfontconfig1 libdbus-1-3`
+  - **Wayland 会话**：AppImage 内只随包 `offscreen` / `xcb` 两个平台插件（**无原生 wayland 插件**），
+    因此在 Wayland 桌面下经 **XWayland** 回退运行 —— Qt 会先打印一行 wayland 插件缺失警告、随后
+    正常回退到 xcb，**非缺陷**；如需静默可显式 `QT_QPA_PLATFORM=xcb`（无 XWayland 的纯 Wayland
+    环境可改用 `QT_QPA_PLATFORM=offscreen` 无头运行）。
+  - **完整 soname 清单**：打包时产出 `dist/PhotoPipeline-0.1.0-deps.txt`（**本机实测**：闭包检查
+    覆盖全部 **36 个 ELF**、逐项列出目标机系统要求 40 条 soname；CI 产物同法生成，条数见 job 摘要）。
 - **磁盘**：AppImage 约 50 MiB；另需输出目录与地图瓦片缓存（数据目录内）空间
 
 ### 源码与许可

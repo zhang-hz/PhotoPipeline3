@@ -2,9 +2,7 @@
 
 批量像素级转码器 + 元数据手术台（batch pixel-level transcoder with metadata surgery），GPL-3.0-or-later。
 
-M0 交付仓库骨架、冻结接口、链接探针与金标语料。**M1a（本批次）交付全部编码引擎**：core 基础设施（logger / fsops / 像素预算 / 参数引擎 / 预设）、解码层、色彩层、元数据层、8 个编码器、调度器与 `--dev` 命令行 harness。
-
-> **TODO: UI 章节待下一批次**（M1b / T9–T13）——UI 目前仍是 M0 的空窗口（offscreen 冒烟用），下一批次落地三页 UI 后在此补 UI 用法、走查与截图说明。
+M0 交付仓库骨架、冻结接口、链接探针与金标语料。**M1a 交付全部编码引擎**：core 基础设施（logger / fsops / 像素预算 / 参数引擎 / 预设）、解码层、色彩层、元数据层、8 个编码器、调度器与 `--dev` 命令行 harness。**M1b 交付完整桌面 UI**：三页主窗口（元数据规则 / 输出配置 / 运行监控）、异步缩略图文件列表、内嵌地图选点、参数表单引擎、单文件 EXIF/XMP 编辑器、设置与预设对话框，以及 `--ui-smoke` 无头走查。
 
 ## 构建（四步）
 
@@ -75,7 +73,7 @@ build/m1-dev/photopipeline --dev tests/golden/meta/exif_full.jpg --out .cache/ou
 ### 测试命令
 
 ```bash
-# 单测 + M0 工具 + offscreen 冒烟（共 20 条 ctest 条目）
+# 单测 + M0 工具 + 金样自检（release 树共 23 条 ctest 条目）
 ctest --test-dir build/release --output-on-failure
 
 # 金标语料（27 fixture，幂等；PP_MKFIXTURES= 指向本次构建的 pp_mkfixtures）
@@ -84,6 +82,41 @@ PP_MKFIXTURES=build/release/pp_mkfixtures bash tools/gen_corpus.sh
 # 8+1 对金样冒烟（需 PP_BUILD_DEV=ON 的构建，脚本走 --dev）
 bash tests/golden/smoke.sh build/m1-dev
 ```
+
+## M1b 桌面 UI
+
+### 构建与运行
+
+```bash
+source tools/env.sh
+cmake --preset release && cmake --build --preset release
+./build/release/photopipeline
+```
+
+功能速览（冻结文案与行为详见 [docs/m1b-tasks.md](docs/m1b-tasks.md) §2–§3）：
+
+- **文件面板**：拖放或按钮添加（目录递归收集）、异步缩略图、按文件名搜索、十二态状态徽标、不支持文件计数
+- **① 元数据页**：时间偏移（Δ 六字段 / 时区语义，首文件前后预览）、GPS（经纬度 + DMS 实时 + 内嵌地图选点 + 从选中文件读取 + 清除）、标签修改（Exif/Xmp 分流）、隐私剥除、mtime 同步、单文件例外列表
+- **② 输出页**：转码 / 仅元数据、8 格式 ×（后端 × 技术）参数表单（无损锁定、谓词显隐、位深运行时探测）、色彩目标、同名冲突策略、预设按钮
+- **③ 运行页**：进度条 / 吞吐 / 逐文件状态着色、取消（幂等）、结束摘要 + 打开输出目录 / 查看日志
+- **双击文件** → 单文件编辑器：EXIF 树（IFD0/Exif/GPS/只读 MakerNote）、XMP、时间/GPS/隐私三态覆盖、忽略批量规则（源文件永远只读）
+- **设置**（worker / 内存预算 / 展平底色 / 旋转 / 地图提供方 / 瓦片缓存 / 日志级别）与**预设**（JSON，`预设管理` 对话框）持久化于平台配置目录
+
+地图支持 OSM（WGS-84）与高德（GCJ-02，坐标自动边界转换）双提供方；高德需在设置中填 Web 服务 Key。
+
+### 无头 UI 冒烟（`--ui-smoke`，需 `PP_BUILD_DEV=ON`）
+
+```bash
+source tools/env.sh
+cmake --preset release-dev -B build/release-dev -DVCPKG_MANIFEST_INSTALL=OFF
+cmake --build build/release-dev -j
+ctest --test-dir build/release-dev --output-on-failure    # 24 条 = 23 引擎 + ui_smoke
+# 或手动跑（offscreen，产出 8 张走查截图）：
+QT_QPA_PLATFORM=offscreen ./build/release-dev/photopipeline \
+    --ui-smoke --inputs tests/golden/base --shots .cache/ui-review
+```
+
+脚本化走查覆盖：三页遍历截图（01-meta / 02-output / 02b-output-avif / 03-run / 03b-run-done / 04-settings / 05-exif-editor / 06-presets）、参数谓词断言（jxl 无损→modular+distance 0、jpeg quality 显隐、tiff 压缩联动）、地图 GCJ↔WGS 边界断言（点击偏差 <0.001°）、16 文件真实转码运行；成功 stdout 末行 `UI-SMOKE OK shots=8 pages=3`。ctest 入口 `tests/ui_smoke.sh <build_dir>`。
 
 ## M0 工具
 
@@ -100,7 +133,9 @@ bash tests/golden/smoke.sh build/m1-dev
 - [docs/param-catalog.md](docs/param-catalog.md) — 参数目录（编码器参数语义来源）
 - [docs/brainstorm-consensus.md](docs/brainstorm-consensus.md) — 共识记录
 - [docs/m0-tasks.md](docs/m0-tasks.md) — M0 任务书（执行依据 / 冻结契约）
-- [docs/m1-tasks.md](docs/m1-tasks.md) — M1 任务书（界面冻结清单 / 批次划分 / 出口准则；M1a 引擎 = 本批次）
+- [docs/m1-tasks.md](docs/m1-tasks.md) — M1 任务书（界面冻结清单 / 批次划分 / 出口准则；M1a 引擎）
+- [docs/m1b-tasks.md](docs/m1b-tasks.md) — M1b 任务书（UI 冻结头 / 全局规格 / 落地口径与裁定记录；M1b 界面）
+- [docs/m1b-report.md](docs/m1b-report.md) — M1b 收口报告（任务/裁定/事故/验收证据）
 
 ## 许可
 

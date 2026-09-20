@@ -751,7 +751,7 @@ signals:
 - 吞吐用 `QElapsedTimer::nsecsElapsed()`（ns 分辨率——ms 截断使微批次吞吐恒 0）。
 - begin_run total ≠ names.size() → qWarning 不中断（UI 防御层）。
 - 状态承载 = 本 TU 注册表 `QHash<const PageRun*, RunState*>`（冻结头无成员）；行模型 `pp::ui::detail::PageRunRowModel` 经 `#include "page_run.moc"`。
-- **U10 可依赖 objectName**：`runProgress/runStatus/runThroughput/runCancel/runCenter/runGuide/runList/runSummary/runSummaryText/runOpenOutput/runLogs`。
+- **U10 可依赖 objectName**：`runProgress/runStatus/runThroughput/runCancel/runCenter/runGuide/runList/runSummary/runSummaryText/runOpenOutput/runOpenLogs`（2026-09-20 勘误：日志按钮实为 `runOpenLogs`，原文 `runLogs` 与 U9 落地代码不一致；无消费者，文档对齐代码）。
 
 ### 2.14 `src/ui/mainwindow.h`（U10）
 
@@ -1046,5 +1046,15 @@ next-needed:
 - **U9 page_run**：[高→修订] 取消按钮 visible ∧ enabled ⇔ is_running()（§2.13 已修订——end_run/reset 隐藏，消除完成态"仍可取消"观感）；[中] 摘要行冒号全角（`成功：16`、`总耗时：172 ms` 等——与冻结文本标点体系统一）。
 - **U10 mainwindow**：[高→修订] G5 底栏按钮运行中保持"开始"禁用（§2.14 已修订，不再变第二个"取消"）；[中] 底栏状态冒号全角（`冲突：覆盖`——冻结模板本就是全角，代码对齐）；走查 05-exif-editor 截图前先选中一个叶子标签（如 IFD0 下首个）使右值区有内容；全部修正落盘后重出 8 张截图。
 - 全局标点裁定：**用户可见文案冒号一律全角"："**（既有冻结文本已是全角，代码对齐；后续新文案遵守）。
+
+### 9.2 收口记录（U-FIN，2026-09-20）
+
+- ① ctest `build/release-dev` **24/24**（ui_smoke 7.55s）；release 树 23/23；真实平台冒烟 `UI-SMOKE OK shots=8 pages=3`，8 张截图 `.cache/ui-review/`。
+- ② §8 走查 **8/8 PASS**（43 断言；含联网瓦片真实抓取与选点回填；记录见 `docs/m1b-report.md` §5 与 `.cache/tmp/u-fin/`）。
+- ③ README UI 章节落盘（构建/运行/功能速览/无头冒烟/截图说明；过时 ctest 计数同步修正）。
+- ④ `docs/m1b-report.md` 落盘（任务/裁定/事故/出口准则/走查/已知问题/M1 总结）。
+- 走查随记裁定：jxl+overwrite 下 base 语料 16→13 唯一输出（同 stem .png/.tif 合并）＝冲突策略正确行为，记档不改；objectName `runLogs`→`runOpenLogs` 文档对齐（本节上文已勘误）。
+- R1 用户审查结论：直接进入收口，未提出追加修正（§6 已知问题 6 项全部 [低] 级或引擎侧，移交 M2 候选清单）。
+- **M1 阶段（M1a 引擎 + M1b 界面）全部目标完成。**
 
 （空——首轮未开始）

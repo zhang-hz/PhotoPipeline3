@@ -941,6 +941,7 @@ private:
 
 **U10 落地口径（主对话批准 2026-09-20，冻结）**：
 - 走查退出码通道：`ui_smoke_walk` 冻结签名返回 void → 结果经动态属性 `pp_ui_smoke_ran` / `pp_ui_smoke_exit` 交 main.cpp（头零改动）。
+- 截图字节数断言按面积分档（2026-09-20 批准）：整窗 >10KB、对话框 >2KB（语义"非空渲染"；offscreen 空列表对话框 420×360 合法压缩至 ~7.6KB）；各图字节数打印 stdout 备查。
 - inputs 缺省 = 从可执行文件向上找 `.git`/`CMakeLists.txt` 定位仓库根；找不到 → stderr + exit 1；未知子参/缺值 → usage + exit 2；release 构建（PP_BUILD_DEV=OFF）对 `--ui-smoke` 报 "dev harness not built" + exit 2（与 `--dev` 同口径）。
 - 断言集落地 = §4.3 冻结版（jxl 无损 modular+distance==0.0；jpeg quality_mode==quality 时 quality 可见 ∧ distance 隐藏；tiff compression==none 时 deflate_level 隐藏——键名 `compression`，无 `compressor`）。
 - Fluent 样式 Qt 6.8.3 不存在 → stderr qInfo 一行 + 默认样式（符合静默回退设计）。

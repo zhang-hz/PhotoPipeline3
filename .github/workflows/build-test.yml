@@ -6,7 +6,9 @@ jobs:
     env:
       VCPKG_ROOT: ${{ github.workspace }}/vcpkg
       QT_DIR: ${{ github.workspace }}/Qt/6.8.3/gcc_64
-      VCPKG_DEFAULT_BINARY_CACHE: ~/.cache/vcpkg-binary
+      # 必须绝对路径：env 值里的 `~` 不经过 shell，不会被展开（首跑 35512612876 根因）。
+      # 选 runner.temp 而非 workspace：缓存生命周期与工作树解耦（checkout 默认 clean:true 会 git clean -ffdx）。
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ runner.temp }}/vcpkg-binary-cache
     steps:
       - uses: actions/checkout@v4
       - name: apt deps
@@ -20,10 +22,13 @@ jobs:
           git clone https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
           git -C "$VCPKG_ROOT" checkout 2026.07.29
+      - name: vcpkg binary cache dir
+        # vcpkg 不创建该目录：缺失即 FATAL_ERROR（本地实测，见 M2-T10a 报告）
+        run: mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
       - name: vcpkg binary cache
         uses: actions/cache@v4
         with:
-          path: ~/.cache/vcpkg-binary
+          path: ${{ runner.temp }}/vcpkg-binary-cache
           key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}
       - name: build + corpus + test
         run: |
@@ -31,3 +36,38 @@ jobs:
           cmake --build --preset release
           bash tools/gen_corpus.sh
           ctest --preset release
+
+  ui-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+      QT_DIR: ${{ github.workspace }}/Qt/6.8.3/gcc_64
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ runner.temp }}/vcpkg-binary-cache
+    steps:
+      - uses: actions/checkout@v4
+      - name: apt deps
+        run: sudo apt-get update && sudo apt-get install -y ninja-build ccache pkg-config python3-pip
+      - name: Qt via aqtinstall
+        run: |
+          pip3 install aqtinstall
+          aqt install-qt linux desktop 6.8.3 linux_gcc_64 -O "$GITHUB_WORKSPACE/Qt"
+      - name: vcpkg pinned
+        run: |
+          git clone https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+          git -C "$VCPKG_ROOT" checkout 2026.07.29
+      - name: vcpkg binary cache dir
+        run: mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
+      - name: vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/vcpkg-binary-cache
+          key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}
+      - name: build release-dev + ui smoke
+        # ui_smoke 自测通过 tests/golden/base --inputs（39 文件已入库），无需 gen_corpus；
+        # QT_QPA_PLATFORM=offscreen 由 CMake add_test 注入，无需 xvfb。
+        run: |
+          cmake --preset release-dev
+          cmake --build --preset release-dev
+          ctest --preset release-dev -R ui_smoke --output-on-failure

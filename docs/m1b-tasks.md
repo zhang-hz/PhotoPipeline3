@@ -746,7 +746,7 @@ signals:
 **U9 落地口径（主对话批准 2026-09-19，冻结）**：
 - **idle 进度条隐藏**：构造/reset 后进度条 `setVisible(false)`，begin_run 显示——"第 0 / 1 个" 不得出现。
 - **四态状态文案（第四态冻结）**：`已完成：成功 N · 失败 M · 跳过 K`（end_run 未取消）；其余三态同上。
-- **取消按钮全口径**：enabled ⇔ is_running()（begin_run 启用；end_run/reset 禁用）；点击后**不**自我禁用（cancel 幂等）；G5 锁定期间 MainWindow 可另行禁用。
+- **取消按钮全口径（2026-09-20 R1 修订）**：**visible ∧ enabled ⇔ is_running()**（begin_run 显示+启用；end_run/reset 隐藏——非运行态不显示该按钮，避免完成态残留"可取消"观感）；点击后**不**自我禁用（cancel 幂等）。
 - 行文本 = basename；终态 tooltip = error 原文。
 - 吞吐用 `QElapsedTimer::nsecsElapsed()`（ns 分辨率——ms 截断使微批次吞吐恒 0）。
 - begin_run total ≠ names.size() → qWarning 不中断（UI 防御层）。
@@ -805,9 +805,9 @@ private:
 ```
 
 行为规格（冻结）：
-- **布局**：默认 1280×800，min 1024×680，标题 `PhotoPipeline`。顶部 QToolBar（非可移动）：左侧 3 个 checkable QAction（`① 元数据` `② 输出` `③ 运行`，QActionGroup 互斥）→ 切 QStackedWidget 页；右侧 `设置…` QAction。中部 QSplitter(Horizontal)：左 = 文件面板（见下），右 = QStackedWidget(3 页)。底部 QHBox：状态摘要 QLabel（`16 个文件 · JPEG XL → /home/x/out · 冲突：自动加序号`，配置无效时显示原因并红字）+ stretch + `开始` QPushButton（default，运行中变 `取消`）。
+- **布局**：默认 1280×800，min 1024×680，标题 `PhotoPipeline`。顶部 QToolBar（非可移动）：左侧 3 个 checkable QAction（`① 元数据` `② 输出` `③ 运行`，QActionGroup 互斥）→ 切 QStackedWidget 页；右侧 `设置…` QAction。中部 QSplitter(Horizontal)：左 = 文件面板（见下），右 = QStackedWidget(3 页)。底部 QHBox：状态摘要 QLabel（`16 个文件 · JPEG XL → /home/x/out · 冲突：自动加序号`，配置无效时显示原因并红字）+ stretch + `开始` QPushButton（default；**运行中保持 `开始` 且禁用——取消唯一入口 = 运行页取消按钮，2026-09-20 R1 修订避免同屏双取消**）。
 - **文件面板**（左，初始宽 320，Splitter 可调）：标题行 `文件` + 计数 QLabel；按钮行 `添加文件…`（QFileDialog 多选）/`添加文件夹…`/`移除所选`/`清空`；`搜索` QLineEdit（placeholder `搜索文件名…`）过滤 QListView；QListView(FileListModel + QSortFilterProxyModel(NameRole contains) + FileDelegate)。窗口整体 acceptDrops，dropAccept → add_paths。双击行 → open_exif_editor_row。`unsupported_count>0` → 标题行右侧黄字 `（N 个不支持）`。
-- **开始**（on_start）：校验 = 文件非空 + PageOutput::ready_to_start 空 + 未运行中。构造 RunConfig：PageOutput::config_base() + PageMeta::rules() + settings(workers/budget_bytes=GB*2^30 或 0/flatten_gray/rotate_orientation)。仅元数据：按扩展名预检（.jpg/.jpeg/.png/.tif/.tiff/.webp 之外 → QMessageBox::warning 列出并确认继续）。Scheduler(cfg, model->entries())；event 回调：`QMetaObject::invokeMethod(this, [拷贝]{ ... }, Qt::QueuedConnection)` —— **在回调内立即按值拷贝 FileResult**（指针仅发射瞬间有效，slots 收 FileEvent 拷贝 + FileResult 拷贝）。start() 后 lock_for_run(true)（nav/左面板/第 1、2 页禁用，stack 锁到运行页，开始→取消），PageRun::begin_run；QTimer(150ms) 轮询**终态事件计数 == 本批文件数**（**U10 实测事实，冻结口径修订 2026-09-20**：`Scheduler::running()` 只在 `wait()` 内清零、worker `finish()` 不清零——轮询 `!running()` 永不触发；`finish()` 对每文件恰发一次终态事件，取消路径亦然）→ on_scheduler_done → wait() → sendPostedEvents（排空在途 QueuedConnection MetaCall）→ summary → PageRun::end_run → 恢复 UI + refresh_status。
+- **开始**（on_start）：校验 = 文件非空 + PageOutput::ready_to_start 空 + 未运行中。构造 RunConfig：PageOutput::config_base() + PageMeta::rules() + settings(workers/budget_bytes=GB*2^30 或 0/flatten_gray/rotate_orientation)。仅元数据：按扩展名预检（.jpg/.jpeg/.png/.tif/.tiff/.webp 之外 → QMessageBox::warning 列出并确认继续）。Scheduler(cfg, model->entries())；event 回调：`QMetaObject::invokeMethod(this, [拷贝]{ ... }, Qt::QueuedConnection)` —— **在回调内立即按值拷贝 FileResult**（指针仅发射瞬间有效，slots 收 FileEvent 拷贝 + FileResult 拷贝）。start() 后 lock_for_run(true)（nav/左面板/第 1、2 页禁用，stack 锁到运行页，底栏开始按钮禁用——取消归运行页），PageRun::begin_run；QTimer(150ms) 轮询**终态事件计数 == 本批文件数**（**U10 实测事实，冻结口径修订 2026-09-20**：`Scheduler::running()` 只在 `wait()` 内清零、worker `finish()` 不清零——轮询 `!running()` 永不触发；`finish()` 对每文件恰发一次终态事件，取消路径亦然）→ on_scheduler_done → wait() → sendPostedEvents（排空在途 QueuedConnection MetaCall）→ summary → PageRun::end_run → 恢复 UI + refresh_status。
 - **取消**：sched->cancel()（进行中文件跑完）；剩余文件收 Cancelled 事件。
 - **事件分发**：状态事件 → FileListModel::set_state + PageRun::on_event；终态 → 计数。
 - **设置对话框**：SettingsDialog(current) → OK → 保存 settings_、log_set_level、PageMeta::set_map_provider；`设置持久化`：立即 save_settings。
@@ -1032,5 +1032,19 @@ next-needed:
 
 - **2026-09-20 W-B 并行 amend 撞车**：U6/U9 的 `git commit --amend` 两次把当时 tip 顶掉（受害：U7 首提 `8f29a17`、主对话 docs 提交 `f6e48e2`）。处置：U6 以 `git read-tree 7ae3fe8`+amend 复原出 `16aa5e4`（tree/message 与 U9 原件逐字节一致）；U7 以 `4722fdd` 重提；docs 内容随 amend tree 保留（归属并入后续提交 diff），主对话补提交恢复记录。`git diff 8f29a17 HEAD -- src/` 零删除 → **内容零丢失**，两个 orphan 提交仅 attribution 受损。教训已固化为 §1.13 禁 amend 条款（根因：主对话在并行波次授权了 amend——编排失误，责任在主对话）。
 - 波次收尾核验（主对话执行）：`git ls-files src/ui/` = 22 文件（含 M0 桩 mainwindow.*），各任务文件全部在库。
+
+### 9.1 R1 预审修正批次（2026-09-20，视觉审查后、用户审查前；主对话裁定）
+
+视觉审查（8 张截图，高 3/中 22/低 20）+ 主对话事实核查后的裁定。**已排除的误报**：① 04 设置页"缺控件"——§2.10 冻结规格就是 4 行（worker/预算/底色滑块/旋转复选），审查提示预期写错；② 01 缩略图"灰白棋盘格"——语料本身即黑白棋盘格测试图（rgb8.png 像素实测 0/255 交替），缩略图忠实渲染；③ 03-run"状态自相矛盾/无混合行态"——16 文件 150ms 跑完的截图时点伪影；④ 文件列表格式短名（JPEGXL/TARGA）vs 输出页按钮文案——两表面各自冻结，不改。
+
+**修正项（各任务域）**：
+- **U3 paramform**：[高] 参数行的 `lossless` 键**一律不渲染为行**（专属"无损"复选框拥有该参数；webp/heif/avif 的行计数各 -1，自验同步改）；[低] "搜索参数…" 输入框宽度与相邻字段一致（勿拉满整行）；[低] "高级参数"组标题与搜索框间距收紧。
+- **U5 page_output**：[高] avif 自动预选**改为触发条件求值**：进入 avif（或 alpha/位深/后端变化使条件成立）时，若 avif ∧ batch_has_alpha ∧ 位深==10 ∧ 后端==svt-av1 ∧ **用户未手动改过后端** → 自动切 libaom；用户手动改后端置 user_override（set_batch_has_alpha 时清除）——修复"提示说已选 libaom 但下拉显示 SVT-AV1"；[中] 警告文案改 `10 位 + 含 alpha：已选择 libaom 后端（SVT-AV1 不支持该组合）`；[中] "输出格式"改为与 模式/全局/格式参数 一致的 QGroupBox（标题"输出格式"）；[低] 选中格式按钮加强可视态（边框+粗体或加深底色）。
+- **U6 dialogs**：[中] SettingsDialog 尺寸贴合内容（消除 420 高度下 ~260px 空白）；[中] PresetsDialog 加 windowTitle `预设管理`，列表为空时显示灰字提示 `暂无预设——输入名称后点"另存为"创建`。
+- **U7 page_meta**：[中] 卡片"启用"未勾选时卡内其余控件 setEnabled(false)（时间偏移/GPS/标签修改三卡；勾选恢复）。
+- **U8 exif_editor**：[中] 页签文案回冻结文本 `时间 / GPS`（代码现为"时间 GPS"，系偏离）；[中] 树选中 → 右值区联动改挂 `currentChanged`（程序化选中也要同步；核实鼠标点击路径）；[低] 右值区纵向填充（编辑控件 expanding 或加 stretch，消除大片空白）。
+- **U9 page_run**：[高→修订] 取消按钮 visible ∧ enabled ⇔ is_running()（§2.13 已修订——end_run/reset 隐藏，消除完成态"仍可取消"观感）；[中] 摘要行冒号全角（`成功：16`、`总耗时：172 ms` 等——与冻结文本标点体系统一）。
+- **U10 mainwindow**：[高→修订] G5 底栏按钮运行中保持"开始"禁用（§2.14 已修订，不再变第二个"取消"）；[中] 底栏状态冒号全角（`冲突：覆盖`——冻结模板本就是全角，代码对齐）；走查 05-exif-editor 截图前先选中一个叶子标签（如 IFD0 下首个）使右值区有内容；全部修正落盘后重出 8 张截图。
+- 全局标点裁定：**用户可见文案冒号一律全角"："**（既有冻结文本已是全角，代码对齐；后续新文案遵守）。
 
 （空——首轮未开始）

@@ -3,6 +3,9 @@ on: [push, pull_request]
 jobs:
   linux:
     runs-on: ubuntu-24.04
+    # 显式上限：冷缓存 vcpkg 全量构建 + Qt/OIIO/exiv2/jpegli 编译远超默认预期，
+    # 默认 360min 过于宽松，统一与 ui-smoke 对齐为 180。
+    timeout-minutes: 180
     env:
       VCPKG_ROOT: ${{ github.workspace }}/vcpkg
       QT_DIR: ${{ github.workspace }}/Qt/6.8.3/gcc_64
@@ -22,8 +25,10 @@ jobs:
       - name: vcpkg pinned
         run: |
           git clone https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
-          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+          # R4: checkout 必须早于 bootstrap —— 否则 bootstrap 从 master 源码编译出
+          # 非 pinned 的 vcpkg 工具二进制，而 ports 树已是 pinned（工具/ports 版本不一致）。
           git -C "$VCPKG_ROOT" checkout 2026.07.29
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
       - name: vcpkg binary cache dir
         # vcpkg 不创建该目录：缺失即 FATAL_ERROR（本地实测，见 M2-T10a 报告）
         run: mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
@@ -41,7 +46,8 @@ jobs:
 
   ui-smoke:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # 60 → 180：冷缓存 vcpkg 全量构建可能 >60min 被杀（M2-T10a 预授权提额）。
+    timeout-minutes: 180
     env:
       VCPKG_ROOT: ${{ github.workspace }}/vcpkg
       QT_DIR: ${{ github.workspace }}/Qt/6.8.3/gcc_64
@@ -57,8 +63,10 @@ jobs:
       - name: vcpkg pinned
         run: |
           git clone https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
-          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+          # R4: checkout 必须早于 bootstrap —— 否则 bootstrap 从 master 源码编译出
+          # 非 pinned 的 vcpkg 工具二进制，而 ports 树已是 pinned（工具/ports 版本不一致）。
           git -C "$VCPKG_ROOT" checkout 2026.07.29
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
       - name: vcpkg binary cache dir
         run: mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
       - name: vcpkg binary cache

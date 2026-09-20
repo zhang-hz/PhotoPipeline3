@@ -102,6 +102,18 @@ libssl3t64          # libssl.so.3 libcrypto.so.3 ← Qt tls 插件运行期 dlop
 # 注: libssl3t64 = Ubuntu 24.04(noble)/26.04 的 time_t-64 过渡包名；旧发行版叫 libssl3。
 #     本包只影响 QNetworkAccessManager 的 TLS 后端，不影响构建与离线测试；缺失时
 #     tools/ci-install-deps.sh 只告警（见该脚本容错逻辑）。
+
+# ── 运行期：Ubuntu 24.04(noble) CI runner 上由 libsystemd / libX11 / libxcb 传递引入 ──
+# 本机 26.04 的闭包里没有这些条目 —— 它们是 soname 覆盖自检（run 35520031504 首轮）在
+# **CI 闭包**上抓出来的差异。全部本来就是 runner 基础镜像的一部分（apt 是 no-op），显式列出
+# 是为了让"清单 = 系统要求全集"这句话可被工具验证，而不是靠印象。
+libbsd0             # libbsd.so.0        ← libX11/libxcb 在 noble 上的传递依赖
+libcap2             # libcap.so.2        ← libsystemd
+libgcrypt20         # libgcrypt.so.20    ← libsystemd
+libgpg-error0       # libgpg-error.so.0  ← libgcrypt
+liblz4-1            # liblz4.so.1        ← libsystemd
+liblzma5            # liblzma.so.5       ← libsystemd
+libmd0              # libmd.so.0         ← libbsd
 #
 # ── 隐式覆盖（刻意**不**列入 apt 安装清单） ──────────────────────────────────
 # libc6       提供 libc.so.6 libdl.so.2 libm.so.6 libmvec.so.1 libpthread.so.0 libresolv.so.2 librt.so.1

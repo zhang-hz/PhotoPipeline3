@@ -482,6 +482,10 @@ jobs:
         # 脚本内置**四项烟测**，任一失败即非零退出：① 打包前 ldd 自检（无 not found）
         # ② AppRun/desktop/结构断言 ③ M2-T18 依赖闭包硬门禁（A=not found、B=libQt6* 外泄）
         # ④ 产物内 usr/share/licenses 的 40 份 copyright。打包**全程离线**（appimagetool 已入库）。
+        # PP_BUILD_DIR: make_appimage.sh 的默认产物目录是 build/m2-release（本地约定），
+        # 而 CI 的 release 预设落在 build/release ⇒ 用脚本文档化的 env 覆盖对齐，不改脚本。
+        env:
+          PP_BUILD_DIR: build/release
         run: |
           T0=$(date +%s)
           set -o pipefail

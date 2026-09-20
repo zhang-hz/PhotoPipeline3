@@ -155,6 +155,13 @@ for s in "${!SONAME_PATH[@]}"; do
 done
 
 # ── 3. soname → 提供包（ldconfig -p 给路径，dpkg -S 反查包名） ────────────────────
+# canon: Ubuntu 是 merged-usr（/lib -> usr/lib），而 ldconfig -p 在 24.04 上按
+# /etc/ld.so.conf.d 里的 **/lib/x86_64-linux-gnu** 原样打印路径，dpkg 数据库里记的却是
+# **/usr/lib/x86_64-linux-gnu** ⇒ 不做 realpath 规范化，dpkg -S 会对**每一个** soname 报
+# "没有找到相匹配的路径"（run 35520031504 实测：61/61 假阳性）。规范化同时把
+# libEGL.so.1 → libEGL.so.1.1.0（dpkg -S 同样接受）。
+canon() { realpath -m -- "$1" 2>/dev/null || printf '%s\n' "$1"; }
+
 declare -A LDCONFIG_PATH=()
 while read -r soname path; do
     [ -n "$soname" ] || continue
@@ -166,13 +173,13 @@ declare -A DPKG_OWNER=(); PATHS=()
 for s in "${!SYS_SONAMES[@]}"; do
     p="${SYS_SONAMES[$s]}"
     [ "$p" = "@MISSING@" ] && p="${LDCONFIG_PATH[$s]:-}"
-    [ -n "$p" ] && PATHS+=("$p")
+    [ -n "$p" ] && PATHS+=("$(canon "$p")")
 done
 if [ "${#PATHS[@]}" -gt 0 ]; then
     # dpkg -S 接受多路径；未命中的路径写 stderr 且退出码非 0，故忽略退出码。
     while IFS=$'\t' read -r pkg path; do
         pkg="${pkg%%:*}"                       # 去掉 :amd64 架构限定
-        DPKG_OWNER["$path"]="$pkg"
+        DPKG_OWNER["$(canon "$path")"]="$pkg"
     done < <(dpkg -S "${PATHS[@]}" 2>/dev/null | sed -n 's|^\([^:]*\(:[a-zA-Z0-9]*\)\?\): \(/.*\)$|\1\t\3|p')
 fi
 
@@ -183,7 +190,7 @@ while IFS= read -r s; do
     p="${SYS_SONAMES[$s]}"
     [ "$p" = "@MISSING@" ] && p="${LDCONFIG_PATH[$s]:-}"
     owner=""
-    [ -n "$p" ] && owner="${DPKG_OWNER[$p]:-}"
+    [ -n "$p" ] && owner="${DPKG_OWNER[$(canon "$p")]:-}"
     if [ -n "$owner" ] && { in_manifest "$owner" || in_base_pkgs "$owner"; }; then
         COVERED_N=$((COVERED_N + 1))
         USED_PKGS="$USED_PKGS$owner "
@@ -193,7 +200,7 @@ while IFS= read -r s; do
     if [ -n "$owner" ]; then
         UNCOVERED+=("$s"$'\t'"$p"$'\t'"包 $owner 未列入 $MANIFEST"$'\t'"$owner")
     elif [ -n "$p" ]; then
-        UNCOVERED+=("$s"$'\t'"$p"$'\t'"该路径不属于任何 dpkg 包（私有/手工安装）"$'\t'"")
+        UNCOVERED+=("$s"$'\t'"$p"$'\t'"该路径不属于任何 dpkg 包（私有/手工安装；已 realpath 规范化）"$'\t'"")
     else
         UNCOVERED+=("$s"$'\t'"-"$'\t'"本机未安装（ldd 报 not found 且 ldconfig -p 查不到）"$'\t'"")
     fi

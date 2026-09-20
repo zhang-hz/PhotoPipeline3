@@ -27,6 +27,10 @@
 #     `qt.network.ssl: No functional TLS backend was found`，在线地图瓦片/经纬度反查失效。
 #   * OIIO 插件: 本仓库 OIIO 为静态构建（插件内建），脚本按候选路径探测，存在则整拷到
 #     usr/lib/oiio-plugins；否则建空目录 + 提示（AppRun 始终导出 OIIO_LIBRARY_PATH）。
+#   * 第三方许可（M2-T11c，GPL/LGPL 分发合规）: 由 tools/collect_licenses.sh 汇总
+#     vcpkg 已装 port 的许可文本 → usr/share/licenses/<port>/copyright（目录名 = port 名，
+#     便于溯源），本项目许可 → usr/share/licenses/PhotoPipeline/LICENSE；取文件规则、
+#     缺失条目列名规则见该脚本头注释。缺许可的真实 port 只告警不失败（须在报告里列名处置）。
 #   * 打包器: tools/bin/appimagetool-x86_64.AppImage（入库 + 旁置 .sha512），
 #     运行方式 APPIMAGE_EXTRACT_AND_RUN=1（不依赖 FUSE）。
 #   * 幂等: AppDir 与同名产物先删后建，可重复重跑（结构一致）；不承诺字节可复现
@@ -154,6 +158,12 @@ cp -f "$DESKTOP_SRC" "$APPDIR/photopipeline.desktop"
 cp -f "$ICON_SRC" "$APPDIR/photopipeline.png"
 cp -f "$ICON_SRC" "$APPDIR/.DirIcon"
 
+# ---- 第三方许可文本汇总（M2-T11c；规则见 tools/collect_licenses.sh 头注释） ----
+note "许可汇总 → usr/share/licenses/（规则: tools/collect_licenses.sh）"
+bash "$ROOT/tools/collect_licenses.sh" "$APPDIR"
+LIC_DIR="$APPDIR/usr/share/licenses"
+LIC_COUNT="$(find "$LIC_DIR" -mindepth 2 -maxdepth 2 -type f -name copyright | wc -l)"
+
 # ---- AppRun（§2.9 冻结内容） ----
 cat > "$APPDIR/AppRun" <<'APPRUN'
 #!/bin/sh
@@ -176,11 +186,29 @@ grep -qx 'Exec=photopipeline' "$APPDIR/usr/share/applications/photopipeline.desk
     || die "desktop Exec 与冻结文本不一致"
 grep -qx 'Icon=photopipeline' "$APPDIR/usr/share/applications/photopipeline.desktop" \
     || die "desktop Icon 与冻结文本不一致"
+# 烟测 ④ 前置（产物内验证见打包后）
+[ -d "$LIC_DIR" ] || die "许可目录缺失: usr/share/licenses"
+[ -f "$LIC_DIR/PhotoPipeline/LICENSE" ] || die "本项目 LICENSE 未随包: usr/share/licenses/PhotoPipeline/LICENSE"
+[ "$LIC_COUNT" -ge 30 ] || die "许可文本数不足（烟测 ④）: $LIC_COUNT < 30"
+note "烟测 ④ 前置: usr/share/licenses/ 存在，copyright 文件 $LIC_COUNT 个（≥30 ✓）"
 
 # ---- 打包 ----
 note "appimagetool → $APPIMAGE"
 ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" --no-appstream "$APPDIR" "$APPIMAGE"
 [ -x "$APPIMAGE" ] || die "打包失败：$APPIMAGE 不存在"
+
+# ---- 烟测 ④ 产物内验证：从打好的 AppImage 解包确认许可目录确实在产物里 ----
+EXTRACT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/pp-appimage-verify.XXXXXX")"
+trap 'rm -rf "$EXTRACT_DIR"' EXIT
+( cd "$EXTRACT_DIR" && APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGE" --appimage-extract 'usr/share/licenses/*' >/dev/null ) \
+    || die "从产物解包 usr/share/licenses/ 失败: $APPIMAGE"
+PKG_LIC="$EXTRACT_DIR/squashfs-root/usr/share/licenses"
+PKG_COUNT="$(find "$PKG_LIC" -mindepth 2 -maxdepth 2 -type f -name copyright 2>/dev/null | wc -l)"
+[ "$PKG_COUNT" -ge 30 ] || die "产物内许可文本数不足（烟测 ④）: $PKG_COUNT < 30"
+[ -f "$PKG_LIC/PhotoPipeline/LICENSE" ] || die "产物内缺 usr/share/licenses/PhotoPipeline/LICENSE"
+note "烟测 ④: 产物内 usr/share/licenses/ = $PKG_COUNT 个 copyright（≥30 ✓）+ PhotoPipeline/LICENSE ✓"
+note "  产物内示例: $(find "$PKG_LIC" -mindepth 2 -maxdepth 2 -type f -name copyright | LC_ALL=C sort | sed -n '1p' | sed "s#^$EXTRACT_DIR/##")"
+note "  产物内示例: squashfs-root/usr/share/licenses/PhotoPipeline/LICENSE"
 
 note "结构清单:"
 ( cd "$APPDIR" && find . -maxdepth 3 -mindepth 1 \( -type d -o -type f -o -type l \) | sort | sed 's/^/  /' )

@@ -20,12 +20,17 @@
 #       系统前缀（跳过，交给目标机）: /lib/ /lib64/ /usr/lib/ /usr/lib32/ /usr/lib64/
 #       其余（Qt 工具链、vcpkg_installed、$HOME 等）→ 拷入 usr/lib，文件名 = 被引用的 soname。
 #   * Qt 插件: usr/lib/qt-plugins/{platforms/libqoffscreen.so, platforms/libqxcb.so,
-#     imageformats/, iconengines/, styles/}；工具链缺某个目录/文件 → 跳过并提示（不视为失败）。
+#     imageformats/, iconengines/, styles/, tls/}；工具链缺某个目录/文件 → 跳过并提示（不视为失败）。
+#     tls/（M2-T11b 裁定加入）= Qt 6.8 的 libqopensslbackend.so / libqcertonlybackend.so：运行期
+#     **dlopen 系统 libssl.so.3 / libcrypto.so.3**（插件本身不链接 OpenSSL），故 OpenSSL 属系统
+#     白名单、**不**随包（目标机需 libssl3）；缺它时 QNetworkAccessManager 报
+#     `qt.network.ssl: No functional TLS backend was found`，在线地图瓦片/经纬度反查失效。
 #   * OIIO 插件: 本仓库 OIIO 为静态构建（插件内建），脚本按候选路径探测，存在则整拷到
 #     usr/lib/oiio-plugins；否则建空目录 + 提示（AppRun 始终导出 OIIO_LIBRARY_PATH）。
 #   * 打包器: tools/bin/appimagetool-x86_64.AppImage（入库 + 旁置 .sha512），
 #     运行方式 APPIMAGE_EXTRACT_AND_RUN=1（不依赖 FUSE）。
-#   * 幂等: AppDir 与同名产物先删后建；重复运行字节级可复现（gzip 打包，无时间戳参与命名）。
+#   * 幂等: AppDir 与同名产物先删后建，可重复重跑（结构一致）；不承诺字节可复现
+#     （squashfs 超级块时间戳/mtime 参与，T11 实测同结构不同 sha，按现状接受）。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -109,7 +114,7 @@ for p in platforms/libqoffscreen.so platforms/libqxcb.so; do
         note "提示: Qt 插件缺失（跳过）: $p"
     fi
 done
-for d in imageformats iconengines styles; do
+for d in imageformats iconengines styles tls; do
     if [ -d "$QT_PLUGIN_SRC/$d" ]; then
         mkdir -p "$QTP/$d"
         cp -aLf "$QT_PLUGIN_SRC/$d/." "$QTP/$d/"

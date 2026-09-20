@@ -31,6 +31,17 @@ file(COPY
     DESTINATION "${SOURCE_PATH}/third_party/libjpeg-turbo"
 )
 
+# jerror.h 是 libjpeg 兼容公开头之一，但 jpegli 上游对它没有任何规则：
+# lib/jpegli.cmake 只 configure_file jconfig.h.in / jpeglib.h / jmorecfg.h 到
+# build 的 include/jpegli/，再 install(DIRECTORY ... include/jpegli/[去尾斜杠])
+# 把这三个头铺到 ${INCLUDEDIR}（无 jerror.h）。而 libtiff 的 tif_jpeg.c 无条件
+# #include "jerror.h" ⇒ 干净环境必然 fatal error: jerror.h: No such file or
+# directory（开发机曾靠 /usr/include/jerror.h 侥幸编过，属未声明的隐式依赖）。
+# 从同一 pinned libjpeg-turbo 源（上方 REF 8ecba364…）取 jerror.h，与 jpeglib.h
+# 同 tree、同目录安装，保证 ABI/API 配对；不得改用系统头。
+file(INSTALL "${JPEGTURBO_SOURCE_PATH}/jerror.h"
+    DESTINATION "${CURRENT_PACKAGES_DIR}/include")
+
 # 关闭测试/工具/文档/可选后端；只产出 libjpeg 兼容共享库 + 公开头。
 # 选项名均取自上游 CMakeLists.txt 的 CACHE 变量定义。
 vcpkg_cmake_configure(

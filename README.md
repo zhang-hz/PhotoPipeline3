@@ -294,7 +294,8 @@ chmod +x PhotoPipeline-0.1.0-x86_64.AppImage
     正常回退到 xcb，**非缺陷**；如需静默可显式 `QT_QPA_PLATFORM=xcb`（无 XWayland 的纯 Wayland
     环境可改用 `QT_QPA_PLATFORM=offscreen` 无头运行）。
   - **完整 soname 清单**：打包时产出 `dist/PhotoPipeline-0.1.0-deps.txt`（**本机实测**：闭包检查
-    覆盖全部 **36 个 ELF**、逐项列出目标机系统要求 40 条 soname；CI 产物同法生成，条数见 job 摘要）。
+    覆盖全部 **36 个 ELF**、逐项列出目标机系统要求 **本机 40 条 / CI 46 条** soname —— 条数差异来自
+    打包基础镜像的依赖闭包不同（本机 Ubuntu 26.04 vs CI ubuntu-24.04），非笔误；CI 产物清单见 job 摘要）。
 - **磁盘**：AppImage 约 50 MiB；另需输出目录与地图瓦片缓存（数据目录内）空间
 
 ### 源码与许可

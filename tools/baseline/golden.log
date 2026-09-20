@@ -1,0 +1,1636 @@
+# ===========================================================================
+# PhotoPipeline M2-T9 regression baseline — normalized full-corpus --dev log
+# (docs/design.md §8.4; docs/m2-tasks.md §4 T9, exit criterion §8.6)
+#
+# matrix: 8 formats x 27 corpus inputs (base 16 + edge 4 + meta 7)
+#         + metadata-only (--metadata-only) x 4 formats x base 16
+# run shape: photopipeline --dev <corpus...> --out .cache/regression/out-<run> \
+#            --base tests/golden --conflict overwrite --workers 1
+# prem.: workers=1, fixed+wiped out dirs, idempotent re-run (see tools/regression.sh)
+# norm.: timestamps/tid/*_ms/throughput/capacity+budget bytes -> placeholders;
+#        <repo> prefix, 0x<addr>, <tmp> segments; elapsed-conditional
+#        "budget report" lines dropped; stdout ms column -> <ms>
+# regenerate: bash tools/regression.sh <build_dir> --update
+# ===========================================================================
+### run full-jpeg rc=4 args=--format jpeg
+[info] [tid] [run] [main.cpp] run start {format=jpeg backend="" tech="" lossless=false bitdepth=8 color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-jpeg params="adaptive_quantization=true arith_code=false chroma=444 cicp_transfer_function=2 dct_method=0 distance=1 optimize_coding=true progressive=true psnr_target=0 quality=90 quality_mode=distance restart_in_rows=0 smoothing_factor=0 std_quant_tables=false xyb_mode=false"}
+[info] [tid] [run] [main.cpp] version {lib=app version=0.1.0}
+[info] [tid] [run] [main.cpp] version {lib=qt version=6.8.3}
+[info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.14.0}
+[info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
+[info] [tid] [run] [main.cpp] version {lib=libjxl version=0x00002afa}
+[info] [tid] [run] [main.cpp] version {lib=libheif version=1.23.1}
+[info] [tid] [run] [main.cpp] version {lib=exiv2 version=0.28.8}
+[info] [tid] [run] [main.cpp] version {lib=lcms2 version=2190}
+[info] [tid] [run] [main.cpp] version {lib=webp version=1.6.0}
+[info] [tid] [run] [main.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
+[info] [tid] [run] [main.cpp] version {lib=x265 version="x265 HEVC encoder (4.2-vcpkg)"}
+[info] [tid] [run] [main.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.1.0"}
+[info] [tid] [run] [main.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.13.3"}
+[info] [tid] [scheduler] [scheduler.cpp] start {files=27 workers=1 budget_bytes=<bytes> format=jpeg mode=transcode}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/anim.gif need_bytes=131072 capacity_bytes=<bytes> used_bytes=131072 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/anim.gif out=.cache/regression/out-full-jpeg/base/anim.jpg bytes=513 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=2}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/anim.gif detail="multipage or animated input: only the first page was decoded"}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/anim.gif detail="alpha composited onto background 1 for format 'jpeg'"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/bmp24.bmp need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/bmp24.bmp out=.cache/regression/out-full-jpeg/base/bmp24.jpg bytes=513 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/gray16.png need_bytes=32768 capacity_bytes=<bytes> used_bytes=32768 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/gray16.png out=.cache/regression/out-full-jpeg/base/gray16.jpg bytes=270 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/gray16.png detail="source bit depth 16 -> output bit depth 8"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/gray16.tif need_bytes=32768 capacity_bytes=<bytes> used_bytes=32768 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/gray16.tif out=.cache/regression/out-full-jpeg/base/gray16.jpg bytes=270 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/gray16.tif detail="source bit depth 16 -> output bit depth 8"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/gray8.png need_bytes=32768 capacity_bytes=<bytes> used_bytes=32768 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/gray8.png out=.cache/regression/out-full-jpeg/base/gray8.jpg bytes=270 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/graya8.png need_bytes=65536 capacity_bytes=<bytes> used_bytes=65536 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/graya8.png out=.cache/regression/out-full-jpeg/base/graya8.jpg bytes=191 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/graya8.png detail="alpha composited onto background 1 for format 'jpeg'"}
+[info] [tid] [pipeline] [pipeline.cpp] CICP (1,13) → sRGB {src=tests/golden/base/jxl8.jxl}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/jxl8.jxl need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/jxl8.jxl out=.cache/regression/out-full-jpeg/base/jxl8.jpg bytes=1067 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/multi.tif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/multi.tif out=.cache/regression/out-full-jpeg/base/multi.jpg bytes=513 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/multi.tif detail="multipage or animated input: only the first page was decoded"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/photo.jpg need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/photo.jpg out=.cache/regression/out-full-jpeg/base/photo.jpg bytes=513 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb16.png need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb16.png out=.cache/regression/out-full-jpeg/base/rgb16.jpg bytes=513 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/rgb16.png detail="source bit depth 16 -> output bit depth 8"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb16.tif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb16.tif out=.cache/regression/out-full-jpeg/base/rgb16.jpg bytes=513 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/rgb16.tif detail="source bit depth 16 -> output bit depth 8"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb8.png need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb8.png out=.cache/regression/out-full-jpeg/base/rgb8.jpg bytes=513 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb8.tif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb8.tif out=.cache/regression/out-full-jpeg/base/rgb8.jpg bytes=513 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgba16.png need_bytes=131072 capacity_bytes=<bytes> used_bytes=131072 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgba16.png out=.cache/regression/out-full-jpeg/base/rgba16.jpg bytes=435 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=2}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/rgba16.png detail="alpha composited onto background 1 for format 'jpeg'"}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/rgba16.png detail="source bit depth 16 -> output bit depth 8"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgba8.png need_bytes=131072 capacity_bytes=<bytes> used_bytes=131072 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgba8.png out=.cache/regression/out-full-jpeg/base/rgba8.jpg bytes=435 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/rgba8.png detail="alpha composited onto background 1 for format 'jpeg'"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/targa.tga need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/targa.tga out=.cache/regression/out-full-jpeg/base/targa.jpg bytes=513 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/edge/测试📸unicode.png need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/edge/测试📸unicode.png out=.cache/regression/out-full-jpeg/edge/测试📸unicode.jpg bytes=513 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/avif_exif.avif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/avif_exif.avif out=.cache/regression/out-full-jpeg/meta/avif_exif.jpg bytes=952 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/exif_full.jpg need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/exif_full.jpg out=.cache/regression/out-full-jpeg/meta/exif_full.jpg bytes=957 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/heif_exif.heic need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/heif_exif.heic out=.cache/regression/out-full-jpeg/meta/heif_exif.jpg bytes=968 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] CICP (1,13) → sRGB {src=tests/golden/meta/jxl_exif.jxl}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/jxl_exif.jxl need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/jxl_exif.jxl out=.cache/regression/out-full-jpeg/meta/jxl_exif.jpg bytes=1499 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/webp_lossless.webp need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/webp_lossless.webp out=.cache/regression/out-full-jpeg/meta/webp_lossless.jpg bytes=957 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/webp_lossy.webp need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/webp_lossy.webp out=.cache/regression/out-full-jpeg/meta/webp_lossy.jpg bytes=897 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [run] [main.cpp] run summary {files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=14298 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
+photopipeline --dev
+  format=jpeg backend=(first) tech=(first) lossless=false bitdepth=8 color=keep conflict=overwrite
+  out=.cache/regression/out-full-jpeg workers=1 files=27 metadata_only=false params=[adaptive_quantization=true arith_code=false chroma=444 cicp_transfer_function=2 dct_method=0 distance=1 optimize_coding=true progressive=true psnr_target=0 quality=90 quality_mode=distance restart_in_rows=0 smoothing_factor=0 std_quant_tables=false xyb_mode=false]
+
+file                                           state          bytes        ms  warnings
+tests/golden/base/anim.gif ok 513 <ms> MultipageTruncated,AlphaFlattened
+tests/golden/base/bmp24.bmp ok 513 <ms>
+tests/golden/base/gray16.png ok 270 <ms> DepthDowngrade
+tests/golden/base/gray16.tif ok 270 <ms> DepthDowngrade
+tests/golden/base/gray8.png ok 270 <ms>
+tests/golden/base/graya8.png ok 191 <ms> AlphaFlattened
+tests/golden/base/jxl8.jxl ok 1067 <ms>
+tests/golden/base/multi.tif ok 513 <ms> MultipageTruncated
+tests/golden/base/photo.jpg ok 513 <ms>
+tests/golden/base/rgb16.png ok 513 <ms> DepthDowngrade
+tests/golden/base/rgb16.tif ok 513 <ms> DepthDowngrade
+tests/golden/base/rgb8.png ok 513 <ms>
+tests/golden/base/rgb8.tif ok 513 <ms>
+tests/golden/base/rgba16.png ok 435 <ms> AlphaFlattened,DepthDowngrade
+tests/golden/base/rgba8.png ok 435 <ms> AlphaFlattened
+tests/golden/base/targa.tga ok 513 <ms>
+tests/golden/edge/cmyk.tif failed 0 <ms>
+    error: probe failed: CMYK input is not supported
+tests/golden/edge/corrupt_trunc.jpg failed 0 <ms>
+    error: probe failed: JPEG error: ./lib/jpegli/decode_marker.cc:316: Invalid total_count: 1231 ("tests/golden/edge/corrupt_trunc.jpg")
+tests/golden/edge/corrupt_zero.png failed 0 <ms>
+    error: probe failed: Not a PNG file
+tests/golden/edge/测试📸unicode.png ok 513 <ms>
+tests/golden/meta/avif_exif.avif ok 952 <ms>
+tests/golden/meta/cmyk.tif failed 0 <ms>
+    error: probe failed: CMYK input is not supported
+tests/golden/meta/exif_full.jpg ok 957 <ms>
+tests/golden/meta/heif_exif.heic ok 968 <ms>
+tests/golden/meta/jxl_exif.jxl ok 1499 <ms>
+tests/golden/meta/webp_lossless.webp ok 957 <ms>
+tests/golden/meta/webp_lossy.webp ok 897 <ms>
+
+SUMMARY files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=14298 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>
+EXIT 4 (failed files)
+### run full-jxl rc=4 args=--format jxl
+[info] [tid] [run] [main.cpp] run start {format=jxl backend="" tech="" lossless=false bitdepth=16 color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-jxl params="codestream_level=10 decoding_speed=0 distance=1 dots=true effort=7 epf=2 gaborish=true group_order=-1 keep_invisible=true patches=true photon_noise=0 progressive_ac=false progressive_dc=-1 qprogressive_ac=false resampling=-1"}
+[info] [tid] [run] [main.cpp] version {lib=app version=0.1.0}
+[info] [tid] [run] [main.cpp] version {lib=qt version=6.8.3}
+[info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.14.0}
+[info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
+[info] [tid] [run] [main.cpp] version {lib=libjxl version=0x00002afa}
+[info] [tid] [run] [main.cpp] version {lib=libheif version=1.23.1}
+[info] [tid] [run] [main.cpp] version {lib=exiv2 version=0.28.8}
+[info] [tid] [run] [main.cpp] version {lib=lcms2 version=2190}
+[info] [tid] [run] [main.cpp] version {lib=webp version=1.6.0}
+[info] [tid] [run] [main.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
+[info] [tid] [run] [main.cpp] version {lib=x265 version="x265 HEVC encoder (4.2-vcpkg)"}
+[info] [tid] [run] [main.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.1.0"}
+[info] [tid] [run] [main.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.13.3"}
+[info] [tid] [scheduler] [scheduler.cpp] start {files=27 workers=1 budget_bytes=<bytes> format=jxl mode=transcode}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/anim.gif need_bytes=131072 capacity_bytes=<bytes> used_bytes=131072 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/anim.gif out=.cache/regression/out-full-jxl/base/anim.jxl bytes=837 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/anim.gif detail="multipage or animated input: only the first page was decoded"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/bmp24.bmp need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/bmp24.bmp out=.cache/regression/out-full-jxl/base/bmp24.jxl bytes=821 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/gray16.png need_bytes=32768 capacity_bytes=<bytes> used_bytes=32768 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/gray16.png out=.cache/regression/out-full-jxl/base/gray16.jxl bytes=925 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/gray16.tif need_bytes=32768 capacity_bytes=<bytes> used_bytes=32768 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/gray16.tif out=.cache/regression/out-full-jxl/base/gray16.jxl bytes=1065 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/gray8.png need_bytes=32768 capacity_bytes=<bytes> used_bytes=32768 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/gray8.png out=.cache/regression/out-full-jxl/base/gray8.jxl bytes=925 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/graya8.png need_bytes=65536 capacity_bytes=<bytes> used_bytes=65536 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/graya8.png out=.cache/regression/out-full-jxl/base/graya8.jxl bytes=976 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] CICP (1,13) → sRGB {src=tests/golden/base/jxl8.jxl}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/jxl8.jxl need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/jxl8.jxl out=.cache/regression/out-full-jxl/base/jxl8.jxl bytes=1600 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/multi.tif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/multi.tif out=.cache/regression/out-full-jxl/base/multi.jxl bytes=1431 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/multi.tif detail="multipage or animated input: only the first page was decoded"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/photo.jpg need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/photo.jpg out=.cache/regression/out-full-jxl/base/photo.jxl bytes=923 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb16.png need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb16.png out=.cache/regression/out-full-jxl/base/rgb16.jxl bytes=923 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb16.tif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb16.tif out=.cache/regression/out-full-jxl/base/rgb16.jxl bytes=1075 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb8.png need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb8.png out=.cache/regression/out-full-jxl/base/rgb8.jxl bytes=923 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb8.tif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb8.tif out=.cache/regression/out-full-jxl/base/rgb8.jxl bytes=1075 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgba16.png need_bytes=131072 capacity_bytes=<bytes> used_bytes=131072 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgba16.png out=.cache/regression/out-full-jxl/base/rgba16.jxl bytes=974 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgba8.png need_bytes=131072 capacity_bytes=<bytes> used_bytes=131072 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgba8.png out=.cache/regression/out-full-jxl/base/rgba8.jxl bytes=974 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/targa.tga need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/targa.tga out=.cache/regression/out-full-jxl/base/targa.jxl bytes=821 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/edge/测试📸unicode.png need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/edge/测试📸unicode.png out=.cache/regression/out-full-jxl/edge/测试📸unicode.jxl bytes=923 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/avif_exif.avif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/avif_exif.avif out=.cache/regression/out-full-jxl/meta/avif_exif.jxl bytes=581 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/exif_full.jpg need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/exif_full.jpg out=.cache/regression/out-full-jxl/meta/exif_full.jxl bytes=592 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/heif_exif.heic need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/heif_exif.heic out=.cache/regression/out-full-jxl/meta/heif_exif.jxl bytes=562 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] CICP (1,13) → sRGB {src=tests/golden/meta/jxl_exif.jxl}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/jxl_exif.jxl need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/jxl_exif.jxl out=.cache/regression/out-full-jxl/meta/jxl_exif.jxl bytes=3509 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/webp_lossless.webp need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/webp_lossless.webp out=.cache/regression/out-full-jxl/meta/webp_lossless.jxl bytes=341 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/webp_lossy.webp need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/webp_lossy.webp out=.cache/regression/out-full-jxl/meta/webp_lossy.jxl bytes=429 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [run] [main.cpp] run summary {files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=23205 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
+photopipeline --dev
+  format=jxl backend=(first) tech=(first) lossless=false bitdepth=16 color=keep conflict=overwrite
+  out=.cache/regression/out-full-jxl workers=1 files=27 metadata_only=false params=[codestream_level=10 decoding_speed=0 distance=1 dots=true effort=7 epf=2 gaborish=true group_order=-1 keep_invisible=true patches=true photon_noise=0 progressive_ac=false progressive_dc=-1 qprogressive_ac=false resampling=-1]
+
+file                                           state          bytes        ms  warnings
+tests/golden/base/anim.gif ok 837 <ms> MultipageTruncated
+tests/golden/base/bmp24.bmp ok 821 <ms>
+tests/golden/base/gray16.png ok 925 <ms>
+tests/golden/base/gray16.tif ok 1065 <ms>
+tests/golden/base/gray8.png ok 925 <ms>
+tests/golden/base/graya8.png ok 976 <ms>
+tests/golden/base/jxl8.jxl ok 1600 <ms>
+tests/golden/base/multi.tif ok 1431 <ms> MultipageTruncated
+tests/golden/base/photo.jpg ok 923 <ms>
+tests/golden/base/rgb16.png ok 923 <ms>
+tests/golden/base/rgb16.tif ok 1075 <ms>
+tests/golden/base/rgb8.png ok 923 <ms>
+tests/golden/base/rgb8.tif ok 1075 <ms>
+tests/golden/base/rgba16.png ok 974 <ms>
+tests/golden/base/rgba8.png ok 974 <ms>
+tests/golden/base/targa.tga ok 821 <ms>
+tests/golden/edge/cmyk.tif failed 0 <ms>
+    error: probe failed: CMYK input is not supported
+tests/golden/edge/corrupt_trunc.jpg failed 0 <ms>
+    error: probe failed: JPEG error: ./lib/jpegli/decode_marker.cc:316: Invalid total_count: 1231 ("tests/golden/edge/corrupt_trunc.jpg")
+tests/golden/edge/corrupt_zero.png failed 0 <ms>
+    error: probe failed: Not a PNG file
+tests/golden/edge/测试📸unicode.png ok 923 <ms>
+tests/golden/meta/avif_exif.avif ok 581 <ms>
+tests/golden/meta/cmyk.tif failed 0 <ms>
+    error: probe failed: CMYK input is not supported
+tests/golden/meta/exif_full.jpg ok 592 <ms>
+tests/golden/meta/heif_exif.heic ok 562 <ms>
+tests/golden/meta/jxl_exif.jxl ok 3509 <ms>
+tests/golden/meta/webp_lossless.webp ok 341 <ms>
+tests/golden/meta/webp_lossy.webp ok 429 <ms>
+
+SUMMARY files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=23205 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>
+EXIT 4 (failed files)
+### run full-png rc=4 args=--format png
+[info] [tid] [run] [main.cpp] run start {format=png backend="" tech="" lossless=false bitdepth=16 color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-png params=compressionLevel=6}
+[info] [tid] [run] [main.cpp] version {lib=app version=0.1.0}
+[info] [tid] [run] [main.cpp] version {lib=qt version=6.8.3}
+[info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.14.0}
+[info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
+[info] [tid] [run] [main.cpp] version {lib=libjxl version=0x00002afa}
+[info] [tid] [run] [main.cpp] version {lib=libheif version=1.23.1}
+[info] [tid] [run] [main.cpp] version {lib=exiv2 version=0.28.8}
+[info] [tid] [run] [main.cpp] version {lib=lcms2 version=2190}
+[info] [tid] [run] [main.cpp] version {lib=webp version=1.6.0}
+[info] [tid] [run] [main.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
+[info] [tid] [run] [main.cpp] version {lib=x265 version="x265 HEVC encoder (4.2-vcpkg)"}
+[info] [tid] [run] [main.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.1.0"}
+[info] [tid] [run] [main.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.13.3"}
+[info] [tid] [scheduler] [scheduler.cpp] start {files=27 workers=1 budget_bytes=<bytes> format=png mode=transcode}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/anim.gif need_bytes=131072 capacity_bytes=<bytes> used_bytes=131072 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/anim.gif out=.cache/regression/out-full-png/base/anim.png bytes=399 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/anim.gif detail="multipage or animated input: only the first page was decoded"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/bmp24.bmp need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/bmp24.bmp out=.cache/regression/out-full-png/base/bmp24.png bytes=379 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/gray16.png need_bytes=32768 capacity_bytes=<bytes> used_bytes=32768 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/gray16.png out=.cache/regression/out-full-png/base/gray16.png bytes=262 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/gray16.tif need_bytes=32768 capacity_bytes=<bytes> used_bytes=32768 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/gray16.tif out=.cache/regression/out-full-png/base/gray16.png bytes=262 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/gray8.png need_bytes=32768 capacity_bytes=<bytes> used_bytes=32768 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/gray8.png out=.cache/regression/out-full-png/base/gray8.png bytes=262 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/graya8.png need_bytes=65536 capacity_bytes=<bytes> used_bytes=65536 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/graya8.png out=.cache/regression/out-full-png/base/graya8.png bytes=362 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] CICP (1,13) → sRGB {src=tests/golden/base/jxl8.jxl}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/jxl8.jxl need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/jxl8.jxl out=.cache/regression/out-full-png/base/jxl8.png bytes=746 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/multi.tif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/multi.tif out=.cache/regression/out-full-png/base/multi.png bytes=379 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/multi.tif detail="multipage or animated input: only the first page was decoded"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/photo.jpg need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/photo.jpg out=.cache/regression/out-full-png/base/photo.png bytes=379 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb16.png need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb16.png out=.cache/regression/out-full-png/base/rgb16.png bytes=379 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb16.tif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb16.tif out=.cache/regression/out-full-png/base/rgb16.png bytes=379 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb8.png need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb8.png out=.cache/regression/out-full-png/base/rgb8.png bytes=379 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb8.tif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb8.tif out=.cache/regression/out-full-png/base/rgb8.png bytes=379 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgba16.png need_bytes=131072 capacity_bytes=<bytes> used_bytes=131072 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgba16.png out=.cache/regression/out-full-png/base/rgba16.png bytes=395 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgba8.png need_bytes=131072 capacity_bytes=<bytes> used_bytes=131072 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgba8.png out=.cache/regression/out-full-png/base/rgba8.png bytes=395 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/targa.tga need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/targa.tga out=.cache/regression/out-full-png/base/targa.png bytes=379 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/edge/测试📸unicode.png need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/edge/测试📸unicode.png out=.cache/regression/out-full-png/edge/测试📸unicode.png bytes=379 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/avif_exif.avif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/avif_exif.avif out=.cache/regression/out-full-png/meta/avif_exif.png bytes=5084 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/exif_full.jpg need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/exif_full.jpg out=.cache/regression/out-full-png/meta/exif_full.png bytes=2775 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/heif_exif.heic need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/heif_exif.heic out=.cache/regression/out-full-png/meta/heif_exif.png bytes=4966 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] CICP (1,13) → sRGB {src=tests/golden/meta/jxl_exif.jxl}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/jxl_exif.jxl need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/jxl_exif.jxl out=.cache/regression/out-full-png/meta/jxl_exif.png bytes=2832 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/webp_lossless.webp need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/webp_lossless.webp out=.cache/regression/out-full-png/meta/webp_lossless.png bytes=328 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/webp_lossy.webp need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/webp_lossy.webp out=.cache/regression/out-full-png/meta/webp_lossy.png bytes=5042 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [run] [main.cpp] run summary {files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=27521 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
+photopipeline --dev
+  format=png backend=(first) tech=(first) lossless=false bitdepth=16 color=keep conflict=overwrite
+  out=.cache/regression/out-full-png workers=1 files=27 metadata_only=false params=[compressionLevel=6]
+
+file                                           state          bytes        ms  warnings
+tests/golden/base/anim.gif ok 399 <ms> MultipageTruncated
+tests/golden/base/bmp24.bmp ok 379 <ms>
+tests/golden/base/gray16.png ok 262 <ms>
+tests/golden/base/gray16.tif ok 262 <ms>
+tests/golden/base/gray8.png ok 262 <ms>
+tests/golden/base/graya8.png ok 362 <ms>
+tests/golden/base/jxl8.jxl ok 746 <ms>
+tests/golden/base/multi.tif ok 379 <ms> MultipageTruncated
+tests/golden/base/photo.jpg ok 379 <ms>
+tests/golden/base/rgb16.png ok 379 <ms>
+tests/golden/base/rgb16.tif ok 379 <ms>
+tests/golden/base/rgb8.png ok 379 <ms>
+tests/golden/base/rgb8.tif ok 379 <ms>
+tests/golden/base/rgba16.png ok 395 <ms>
+tests/golden/base/rgba8.png ok 395 <ms>
+tests/golden/base/targa.tga ok 379 <ms>
+tests/golden/edge/cmyk.tif failed 0 <ms>
+    error: probe failed: CMYK input is not supported
+tests/golden/edge/corrupt_trunc.jpg failed 0 <ms>
+    error: probe failed: JPEG error: ./lib/jpegli/decode_marker.cc:316: Invalid total_count: 1231 ("tests/golden/edge/corrupt_trunc.jpg")
+tests/golden/edge/corrupt_zero.png failed 0 <ms>
+    error: probe failed: Not a PNG file
+tests/golden/edge/测试📸unicode.png ok 379 <ms>
+tests/golden/meta/avif_exif.avif ok 5084 <ms>
+tests/golden/meta/cmyk.tif failed 0 <ms>
+    error: probe failed: CMYK input is not supported
+tests/golden/meta/exif_full.jpg ok 2775 <ms>
+tests/golden/meta/heif_exif.heic ok 4966 <ms>
+tests/golden/meta/jxl_exif.jxl ok 2832 <ms>
+tests/golden/meta/webp_lossless.webp ok 328 <ms>
+tests/golden/meta/webp_lossy.webp ok 5042 <ms>
+
+SUMMARY files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=27521 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>
+EXIT 4 (failed files)
+### run full-tiff rc=4 args=--format tiff
+[info] [tid] [run] [main.cpp] run start {format=tiff backend="" tech="" lossless=false bitdepth=16 color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-tiff params="compression=lzw deflate_level=6 predictor=2 tiff_tile_height=0 tiff_tile_width=0"}
+[info] [tid] [run] [main.cpp] version {lib=app version=0.1.0}
+[info] [tid] [run] [main.cpp] version {lib=qt version=6.8.3}
+[info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.14.0}
+[info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
+[info] [tid] [run] [main.cpp] version {lib=libjxl version=0x00002afa}
+[info] [tid] [run] [main.cpp] version {lib=libheif version=1.23.1}
+[info] [tid] [run] [main.cpp] version {lib=exiv2 version=0.28.8}
+[info] [tid] [run] [main.cpp] version {lib=lcms2 version=2190}
+[info] [tid] [run] [main.cpp] version {lib=webp version=1.6.0}
+[info] [tid] [run] [main.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
+[info] [tid] [run] [main.cpp] version {lib=x265 version="x265 HEVC encoder (4.2-vcpkg)"}
+[info] [tid] [run] [main.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.1.0"}
+[info] [tid] [run] [main.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.13.3"}
+[info] [tid] [scheduler] [scheduler.cpp] start {files=27 workers=1 budget_bytes=<bytes> format=tiff mode=transcode}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/anim.gif need_bytes=131072 capacity_bytes=<bytes> used_bytes=131072 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/anim.gif out=.cache/regression/out-full-tiff/base/anim.tif bytes=1634 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/anim.gif detail="multipage or animated input: only the first page was decoded"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/bmp24.bmp need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/bmp24.bmp out=.cache/regression/out-full-tiff/base/bmp24.tif bytes=1532 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/gray16.png need_bytes=32768 capacity_bytes=<bytes> used_bytes=32768 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/gray16.png out=.cache/regression/out-full-tiff/base/gray16.tif bytes=928 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/gray16.tif need_bytes=32768 capacity_bytes=<bytes> used_bytes=32768 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/gray16.tif out=.cache/regression/out-full-tiff/base/gray16.tif bytes=928 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/gray8.png need_bytes=32768 capacity_bytes=<bytes> used_bytes=32768 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/gray8.png out=.cache/regression/out-full-tiff/base/gray8.tif bytes=928 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/graya8.png need_bytes=65536 capacity_bytes=<bytes> used_bytes=65536 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/graya8.png out=.cache/regression/out-full-tiff/base/graya8.tif bytes=1330 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] CICP (1,13) → sRGB {src=tests/golden/base/jxl8.jxl}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/jxl8.jxl need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/jxl8.jxl out=.cache/regression/out-full-tiff/base/jxl8.tif bytes=2080 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/multi.tif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/multi.tif out=.cache/regression/out-full-tiff/base/multi.tif bytes=1532 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/multi.tif detail="multipage or animated input: only the first page was decoded"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/photo.jpg need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/photo.jpg out=.cache/regression/out-full-tiff/base/photo.tif bytes=1532 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb16.png need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb16.png out=.cache/regression/out-full-tiff/base/rgb16.tif bytes=1532 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb16.tif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb16.tif out=.cache/regression/out-full-tiff/base/rgb16.tif bytes=1532 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb8.png need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb8.png out=.cache/regression/out-full-tiff/base/rgb8.tif bytes=1532 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb8.tif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb8.tif out=.cache/regression/out-full-tiff/base/rgb8.tif bytes=1532 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgba16.png need_bytes=131072 capacity_bytes=<bytes> used_bytes=131072 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgba16.png out=.cache/regression/out-full-tiff/base/rgba16.tif bytes=1590 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgba8.png need_bytes=131072 capacity_bytes=<bytes> used_bytes=131072 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgba8.png out=.cache/regression/out-full-tiff/base/rgba8.tif bytes=1590 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/targa.tga need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/targa.tga out=.cache/regression/out-full-tiff/base/targa.tif bytes=1532 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/edge/测试📸unicode.png need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/edge/测试📸unicode.png out=.cache/regression/out-full-tiff/edge/测试📸unicode.tif bytes=1532 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/avif_exif.avif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/avif_exif.avif out=.cache/regression/out-full-tiff/meta/avif_exif.tif bytes=6197 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/exif_full.jpg need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/exif_full.jpg out=.cache/regression/out-full-tiff/meta/exif_full.tif bytes=4804 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/heif_exif.heic need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/heif_exif.heic out=.cache/regression/out-full-tiff/meta/heif_exif.tif bytes=5900 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] CICP (1,13) → sRGB {src=tests/golden/meta/jxl_exif.jxl}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/jxl_exif.jxl need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/jxl_exif.jxl out=.cache/regression/out-full-tiff/meta/jxl_exif.tif bytes=4724 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/webp_lossless.webp need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/webp_lossless.webp out=.cache/regression/out-full-tiff/meta/webp_lossless.tif bytes=1536 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/webp_lossy.webp need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/webp_lossy.webp out=.cache/regression/out-full-tiff/meta/webp_lossy.tif bytes=6611 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [run] [main.cpp] run summary {files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=54568 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
+photopipeline --dev
+  format=tiff backend=(first) tech=(first) lossless=false bitdepth=16 color=keep conflict=overwrite
+  out=.cache/regression/out-full-tiff workers=1 files=27 metadata_only=false params=[compression=lzw deflate_level=6 predictor=2 tiff_tile_height=0 tiff_tile_width=0]
+
+file                                           state          bytes        ms  warnings
+tests/golden/base/anim.gif ok 1634 <ms> MultipageTruncated
+tests/golden/base/bmp24.bmp ok 1532 <ms>
+tests/golden/base/gray16.png ok 928 <ms>
+tests/golden/base/gray16.tif ok 928 <ms>
+tests/golden/base/gray8.png ok 928 <ms>
+tests/golden/base/graya8.png ok 1330 <ms>
+tests/golden/base/jxl8.jxl ok 2080 <ms>
+tests/golden/base/multi.tif ok 1532 <ms> MultipageTruncated
+tests/golden/base/photo.jpg ok 1532 <ms>
+tests/golden/base/rgb16.png ok 1532 <ms>
+tests/golden/base/rgb16.tif ok 1532 <ms>
+tests/golden/base/rgb8.png ok 1532 <ms>
+tests/golden/base/rgb8.tif ok 1532 <ms>
+tests/golden/base/rgba16.png ok 1590 <ms>
+tests/golden/base/rgba8.png ok 1590 <ms>
+tests/golden/base/targa.tga ok 1532 <ms>
+tests/golden/edge/cmyk.tif failed 0 <ms>
+    error: probe failed: CMYK input is not supported
+tests/golden/edge/corrupt_trunc.jpg failed 0 <ms>
+    error: probe failed: JPEG error: ./lib/jpegli/decode_marker.cc:316: Invalid total_count: 1231 ("tests/golden/edge/corrupt_trunc.jpg")
+tests/golden/edge/corrupt_zero.png failed 0 <ms>
+    error: probe failed: Not a PNG file
+tests/golden/edge/测试📸unicode.png ok 1532 <ms>
+tests/golden/meta/avif_exif.avif ok 6197 <ms>
+tests/golden/meta/cmyk.tif failed 0 <ms>
+    error: probe failed: CMYK input is not supported
+tests/golden/meta/exif_full.jpg ok 4804 <ms>
+tests/golden/meta/heif_exif.heic ok 5900 <ms>
+tests/golden/meta/jxl_exif.jxl ok 4724 <ms>
+tests/golden/meta/webp_lossless.webp ok 1536 <ms>
+tests/golden/meta/webp_lossy.webp ok 6611 <ms>
+
+SUMMARY files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=54568 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>
+EXIT 4 (failed files)
+### run full-webp rc=4 args=--format webp
+[info] [tid] [run] [main.cpp] run start {format=webp backend="" tech="" lossless=false bitdepth=8 color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-webp params="alpha_compression=true alpha_filtering=1 alpha_quality=100 autofilter=false emulate_jpeg_size=false filter_sharpness=0 filter_strength=30 filter_type=true low_memory=false method=4 partition_limit=0 partitions=0 pass=1 preprocessing=0 preset=2 qmax=100 qmin=0 quality=90 segments=4 sharp_yuv=true sns_strength=50"}
+[info] [tid] [run] [main.cpp] version {lib=app version=0.1.0}
+[info] [tid] [run] [main.cpp] version {lib=qt version=6.8.3}
+[info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.14.0}
+[info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
+[info] [tid] [run] [main.cpp] version {lib=libjxl version=0x00002afa}
+[info] [tid] [run] [main.cpp] version {lib=libheif version=1.23.1}
+[info] [tid] [run] [main.cpp] version {lib=exiv2 version=0.28.8}
+[info] [tid] [run] [main.cpp] version {lib=lcms2 version=2190}
+[info] [tid] [run] [main.cpp] version {lib=webp version=1.6.0}
+[info] [tid] [run] [main.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
+[info] [tid] [run] [main.cpp] version {lib=x265 version="x265 HEVC encoder (4.2-vcpkg)"}
+[info] [tid] [run] [main.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.1.0"}
+[info] [tid] [run] [main.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.13.3"}
+[info] [tid] [scheduler] [scheduler.cpp] start {files=27 workers=1 budget_bytes=<bytes> format=webp mode=transcode}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/anim.gif need_bytes=131072 capacity_bytes=<bytes> used_bytes=131072 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/anim.gif out=.cache/regression/out-full-webp/base/anim.webp bytes=108 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/anim.gif detail="multipage or animated input: only the first page was decoded"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/bmp24.bmp need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/bmp24.bmp out=.cache/regression/out-full-webp/base/bmp24.webp bytes=108 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/gray16.png need_bytes=32768 capacity_bytes=<bytes> used_bytes=32768 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/gray16.png out=.cache/regression/out-full-webp/base/gray16.webp bytes=722 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=2}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/gray16.png detail="grayscale source encoded as RGB for format 'webp'"}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/gray16.png detail="source bit depth 16 -> output bit depth 8"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/gray16.tif need_bytes=32768 capacity_bytes=<bytes> used_bytes=32768 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/gray16.tif out=.cache/regression/out-full-webp/base/gray16.webp bytes=722 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=2}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/gray16.tif detail="grayscale source encoded as RGB for format 'webp'"}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/gray16.tif detail="source bit depth 16 -> output bit depth 8"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/gray8.png need_bytes=32768 capacity_bytes=<bytes> used_bytes=32768 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/gray8.png out=.cache/regression/out-full-webp/base/gray8.webp bytes=722 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/gray8.png detail="grayscale source encoded as RGB for format 'webp'"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/graya8.png need_bytes=65536 capacity_bytes=<bytes> used_bytes=65536 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/graya8.png out=.cache/regression/out-full-webp/base/graya8.webp bytes=764 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/graya8.png detail="grayscale source encoded as RGB for format 'webp'"}
+[info] [tid] [pipeline] [pipeline.cpp] CICP (1,13) → sRGB {src=tests/golden/base/jxl8.jxl}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/jxl8.jxl need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/jxl8.jxl out=.cache/regression/out-full-webp/base/jxl8.webp bytes=670 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/multi.tif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/multi.tif out=.cache/regression/out-full-webp/base/multi.webp bytes=108 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/multi.tif detail="multipage or animated input: only the first page was decoded"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/photo.jpg need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/photo.jpg out=.cache/regression/out-full-webp/base/photo.webp bytes=108 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb16.png need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb16.png out=.cache/regression/out-full-webp/base/rgb16.webp bytes=108 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/rgb16.png detail="source bit depth 16 -> output bit depth 8"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb16.tif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb16.tif out=.cache/regression/out-full-webp/base/rgb16.webp bytes=108 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/rgb16.tif detail="source bit depth 16 -> output bit depth 8"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb8.png need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb8.png out=.cache/regression/out-full-webp/base/rgb8.webp bytes=108 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb8.tif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb8.tif out=.cache/regression/out-full-webp/base/rgb8.webp bytes=108 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgba16.png need_bytes=131072 capacity_bytes=<bytes> used_bytes=131072 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgba16.png out=.cache/regression/out-full-webp/base/rgba16.webp bytes=168 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/rgba16.png detail="source bit depth 16 -> output bit depth 8"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgba8.png need_bytes=131072 capacity_bytes=<bytes> used_bytes=131072 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgba8.png out=.cache/regression/out-full-webp/base/rgba8.webp bytes=168 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/targa.tga need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/targa.tga out=.cache/regression/out-full-webp/base/targa.webp bytes=108 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/edge/测试📸unicode.png need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/edge/测试📸unicode.png out=.cache/regression/out-full-webp/edge/测试📸unicode.webp bytes=108 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/avif_exif.avif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/avif_exif.avif out=.cache/regression/out-full-webp/meta/avif_exif.webp bytes=348 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/exif_full.jpg need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/exif_full.jpg out=.cache/regression/out-full-webp/meta/exif_full.webp bytes=340 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/heif_exif.heic need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/heif_exif.heic out=.cache/regression/out-full-webp/meta/heif_exif.webp bytes=352 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] CICP (1,13) → sRGB {src=tests/golden/meta/jxl_exif.jxl}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/jxl_exif.jxl need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/jxl_exif.jxl out=.cache/regression/out-full-webp/meta/jxl_exif.webp bytes=898 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/webp_lossless.webp need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/webp_lossless.webp out=.cache/regression/out-full-webp/meta/webp_lossless.webp bytes=324 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/webp_lossy.webp need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/webp_lossy.webp out=.cache/regression/out-full-webp/meta/webp_lossy.webp bytes=324 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [run] [main.cpp] run summary {files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=7602 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
+photopipeline --dev
+  format=webp backend=(first) tech=(first) lossless=false bitdepth=8 color=keep conflict=overwrite
+  out=.cache/regression/out-full-webp workers=1 files=27 metadata_only=false params=[alpha_compression=true alpha_filtering=1 alpha_quality=100 autofilter=false emulate_jpeg_size=false filter_sharpness=0 filter_strength=30 filter_type=true low_memory=false method=4 partition_limit=0 partitions=0 pass=1 preprocessing=0 preset=2 qmax=100 qmin=0 quality=90 segments=4 sharp_yuv=true sns_strength=50]
+
+file                                           state          bytes        ms  warnings
+tests/golden/base/anim.gif ok 108 <ms> MultipageTruncated
+tests/golden/base/bmp24.bmp ok 108 <ms>
+tests/golden/base/gray16.png ok 722 <ms> GrayToRgbEncoded,DepthDowngrade
+tests/golden/base/gray16.tif ok 722 <ms> GrayToRgbEncoded,DepthDowngrade
+tests/golden/base/gray8.png ok 722 <ms> GrayToRgbEncoded
+tests/golden/base/graya8.png ok 764 <ms> GrayToRgbEncoded
+tests/golden/base/jxl8.jxl ok 670 <ms>
+tests/golden/base/multi.tif ok 108 <ms> MultipageTruncated
+tests/golden/base/photo.jpg ok 108 <ms>
+tests/golden/base/rgb16.png ok 108 <ms> DepthDowngrade
+tests/golden/base/rgb16.tif ok 108 <ms> DepthDowngrade
+tests/golden/base/rgb8.png ok 108 <ms>
+tests/golden/base/rgb8.tif ok 108 <ms>
+tests/golden/base/rgba16.png ok 168 <ms> DepthDowngrade
+tests/golden/base/rgba8.png ok 168 <ms>
+tests/golden/base/targa.tga ok 108 <ms>
+tests/golden/edge/cmyk.tif failed 0 <ms>
+    error: probe failed: CMYK input is not supported
+tests/golden/edge/corrupt_trunc.jpg failed 0 <ms>
+    error: probe failed: JPEG error: ./lib/jpegli/decode_marker.cc:316: Invalid total_count: 1231 ("tests/golden/edge/corrupt_trunc.jpg")
+tests/golden/edge/corrupt_zero.png failed 0 <ms>
+    error: probe failed: Not a PNG file
+tests/golden/edge/测试📸unicode.png ok 108 <ms>
+tests/golden/meta/avif_exif.avif ok 348 <ms>
+tests/golden/meta/cmyk.tif failed 0 <ms>
+    error: probe failed: CMYK input is not supported
+tests/golden/meta/exif_full.jpg ok 340 <ms>
+tests/golden/meta/heif_exif.heic ok 352 <ms>
+tests/golden/meta/jxl_exif.jxl ok 898 <ms>
+tests/golden/meta/webp_lossless.webp ok 324 <ms>
+tests/golden/meta/webp_lossy.webp ok 324 <ms>
+
+SUMMARY files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=7602 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>
+EXIT 4 (failed files)
+### run full-bmp rc=4 args=--format bmp
+[info] [tid] [run] [main.cpp] run start {format=bmp backend="" tech="" lossless=false bitdepth=24 color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-bmp params=""}
+[info] [tid] [run] [main.cpp] version {lib=app version=0.1.0}
+[info] [tid] [run] [main.cpp] version {lib=qt version=6.8.3}
+[info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.14.0}
+[info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
+[info] [tid] [run] [main.cpp] version {lib=libjxl version=0x00002afa}
+[info] [tid] [run] [main.cpp] version {lib=libheif version=1.23.1}
+[info] [tid] [run] [main.cpp] version {lib=exiv2 version=0.28.8}
+[info] [tid] [run] [main.cpp] version {lib=lcms2 version=2190}
+[info] [tid] [run] [main.cpp] version {lib=webp version=1.6.0}
+[info] [tid] [run] [main.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
+[info] [tid] [run] [main.cpp] version {lib=x265 version="x265 HEVC encoder (4.2-vcpkg)"}
+[info] [tid] [run] [main.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.1.0"}
+[info] [tid] [run] [main.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.13.3"}
+[info] [tid] [scheduler] [scheduler.cpp] start {files=27 workers=1 budget_bytes=<bytes> format=bmp mode=transcode}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/anim.gif need_bytes=131072 capacity_bytes=<bytes> used_bytes=131072 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/anim.gif out=.cache/regression/out-full-bmp/base/anim.bmp bytes=12342 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=3}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/anim.gif detail="multipage or animated input: only the first page was decoded"}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/anim.gif detail="alpha composited onto background 1 for format 'bmp'"}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/anim.gif detail="bmp output carries no metadata container"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/bmp24.bmp need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/bmp24.bmp out=.cache/regression/out-full-bmp/base/bmp24.bmp bytes=12342 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/bmp24.bmp detail="bmp output carries no metadata container"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/gray16.png need_bytes=32768 capacity_bytes=<bytes> used_bytes=32768 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/gray16.png out=.cache/regression/out-full-bmp/base/gray16.bmp bytes=5174 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/gray16.png detail="bmp output carries no metadata container"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/gray16.tif need_bytes=32768 capacity_bytes=<bytes> used_bytes=32768 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/gray16.tif out=.cache/regression/out-full-bmp/base/gray16.bmp bytes=5174 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/gray16.tif detail="bmp output carries no metadata container"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/gray8.png need_bytes=32768 capacity_bytes=<bytes> used_bytes=32768 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/gray8.png out=.cache/regression/out-full-bmp/base/gray8.bmp bytes=5174 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/gray8.png detail="bmp output carries no metadata container"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/graya8.png need_bytes=65536 capacity_bytes=<bytes> used_bytes=65536 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/graya8.png out=.cache/regression/out-full-bmp/base/graya8.bmp bytes=5174 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=2}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/graya8.png detail="alpha composited onto background 1 for format 'bmp'"}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/graya8.png detail="bmp output carries no metadata container"}
+[info] [tid] [pipeline] [pipeline.cpp] CICP (1,13) → sRGB {src=tests/golden/base/jxl8.jxl}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/jxl8.jxl need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/jxl8.jxl out=.cache/regression/out-full-bmp/base/jxl8.bmp bytes=12342 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/jxl8.jxl detail="bmp output carries no metadata container"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/multi.tif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/multi.tif out=.cache/regression/out-full-bmp/base/multi.bmp bytes=12342 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=2}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/multi.tif detail="multipage or animated input: only the first page was decoded"}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/multi.tif detail="bmp output carries no metadata container"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/photo.jpg need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/photo.jpg out=.cache/regression/out-full-bmp/base/photo.bmp bytes=12342 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/photo.jpg detail="bmp output carries no metadata container"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb16.png need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb16.png out=.cache/regression/out-full-bmp/base/rgb16.bmp bytes=12342 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/rgb16.png detail="bmp output carries no metadata container"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb16.tif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb16.tif out=.cache/regression/out-full-bmp/base/rgb16.bmp bytes=12342 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/rgb16.tif detail="bmp output carries no metadata container"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb8.png need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb8.png out=.cache/regression/out-full-bmp/base/rgb8.bmp bytes=12342 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/rgb8.png detail="bmp output carries no metadata container"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb8.tif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb8.tif out=.cache/regression/out-full-bmp/base/rgb8.bmp bytes=12342 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/rgb8.tif detail="bmp output carries no metadata container"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgba16.png need_bytes=131072 capacity_bytes=<bytes> used_bytes=131072 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgba16.png out=.cache/regression/out-full-bmp/base/rgba16.bmp bytes=12342 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=2}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/rgba16.png detail="alpha composited onto background 1 for format 'bmp'"}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/rgba16.png detail="bmp output carries no metadata container"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgba8.png need_bytes=131072 capacity_bytes=<bytes> used_bytes=131072 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgba8.png out=.cache/regression/out-full-bmp/base/rgba8.bmp bytes=12342 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=2}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/rgba8.png detail="alpha composited onto background 1 for format 'bmp'"}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/rgba8.png detail="bmp output carries no metadata container"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/targa.tga need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/targa.tga out=.cache/regression/out-full-bmp/base/targa.bmp bytes=12342 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/targa.tga detail="bmp output carries no metadata container"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/edge/测试📸unicode.png need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/edge/测试📸unicode.png out=.cache/regression/out-full-bmp/edge/测试📸unicode.bmp bytes=12342 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/edge/测试📸unicode.png detail="bmp output carries no metadata container"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/avif_exif.avif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/avif_exif.avif out=.cache/regression/out-full-bmp/meta/avif_exif.bmp bytes=12342 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/meta/avif_exif.avif detail="bmp output carries no metadata container"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/exif_full.jpg need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/exif_full.jpg out=.cache/regression/out-full-bmp/meta/exif_full.bmp bytes=12342 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/meta/exif_full.jpg detail="bmp output carries no metadata container"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/heif_exif.heic need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/heif_exif.heic out=.cache/regression/out-full-bmp/meta/heif_exif.bmp bytes=12342 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/meta/heif_exif.heic detail="bmp output carries no metadata container"}
+[info] [tid] [pipeline] [pipeline.cpp] CICP (1,13) → sRGB {src=tests/golden/meta/jxl_exif.jxl}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/jxl_exif.jxl need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/jxl_exif.jxl out=.cache/regression/out-full-bmp/meta/jxl_exif.bmp bytes=12342 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/meta/jxl_exif.jxl detail="bmp output carries no metadata container"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/webp_lossless.webp need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/webp_lossless.webp out=.cache/regression/out-full-bmp/meta/webp_lossless.bmp bytes=12342 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/meta/webp_lossless.webp detail="bmp output carries no metadata container"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/webp_lossy.webp need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/webp_lossy.webp out=.cache/regression/out-full-bmp/meta/webp_lossy.bmp bytes=12342 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/meta/webp_lossy.webp detail="bmp output carries no metadata container"}
+[info] [tid] [run] [main.cpp] run summary {files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=255194 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
+photopipeline --dev
+  format=bmp backend=(first) tech=(first) lossless=false bitdepth=24 color=keep conflict=overwrite
+  out=.cache/regression/out-full-bmp workers=1 files=27 metadata_only=false params=[]
+
+file                                           state          bytes        ms  warnings
+tests/golden/base/anim.gif ok 12342 <ms> MultipageTruncated,AlphaFlattened,MetadataDropped
+tests/golden/base/bmp24.bmp ok 12342 <ms> MetadataDropped
+tests/golden/base/gray16.png ok 5174 <ms> MetadataDropped
+tests/golden/base/gray16.tif ok 5174 <ms> MetadataDropped
+tests/golden/base/gray8.png ok 5174 <ms> MetadataDropped
+tests/golden/base/graya8.png ok 5174 <ms> AlphaFlattened,MetadataDropped
+tests/golden/base/jxl8.jxl ok 12342 <ms> MetadataDropped
+tests/golden/base/multi.tif ok 12342 <ms> MultipageTruncated,MetadataDropped
+tests/golden/base/photo.jpg ok 12342 <ms> MetadataDropped
+tests/golden/base/rgb16.png ok 12342 <ms> MetadataDropped
+tests/golden/base/rgb16.tif ok 12342 <ms> MetadataDropped
+tests/golden/base/rgb8.png ok 12342 <ms> MetadataDropped
+tests/golden/base/rgb8.tif ok 12342 <ms> MetadataDropped
+tests/golden/base/rgba16.png ok 12342 <ms> AlphaFlattened,MetadataDropped
+tests/golden/base/rgba8.png ok 12342 <ms> AlphaFlattened,MetadataDropped
+tests/golden/base/targa.tga ok 12342 <ms> MetadataDropped
+tests/golden/edge/cmyk.tif failed 0 <ms>
+    error: probe failed: CMYK input is not supported
+tests/golden/edge/corrupt_trunc.jpg failed 0 <ms>
+    error: probe failed: JPEG error: ./lib/jpegli/decode_marker.cc:316: Invalid total_count: 1231 ("tests/golden/edge/corrupt_trunc.jpg")
+tests/golden/edge/corrupt_zero.png failed 0 <ms>
+    error: probe failed: Not a PNG file
+tests/golden/edge/测试📸unicode.png ok 12342 <ms> MetadataDropped
+tests/golden/meta/avif_exif.avif ok 12342 <ms> MetadataDropped
+tests/golden/meta/cmyk.tif failed 0 <ms>
+    error: probe failed: CMYK input is not supported
+tests/golden/meta/exif_full.jpg ok 12342 <ms> MetadataDropped
+tests/golden/meta/heif_exif.heic ok 12342 <ms> MetadataDropped
+tests/golden/meta/jxl_exif.jxl ok 12342 <ms> MetadataDropped
+tests/golden/meta/webp_lossless.webp ok 12342 <ms> MetadataDropped
+tests/golden/meta/webp_lossy.webp ok 12342 <ms> MetadataDropped
+
+SUMMARY files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=255194 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>
+EXIT 4 (failed files)
+### run full-heif rc=4 args=--format heif
+[info] [tid] [encode] [enc_heif.cpp] bit depth probe {format=heif backend="" supported=8,10,12 unsupported=""}
+[info] [tid] [run] [main.cpp] run start {format=heif backend="" tech="" lossless=false bitdepth=10 color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-heif params=""}
+[info] [tid] [run] [main.cpp] version {lib=app version=0.1.0}
+[info] [tid] [run] [main.cpp] version {lib=qt version=6.8.3}
+[info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.14.0}
+[info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
+[info] [tid] [run] [main.cpp] version {lib=libjxl version=0x00002afa}
+[info] [tid] [run] [main.cpp] version {lib=libheif version=1.23.1}
+[info] [tid] [run] [main.cpp] version {lib=exiv2 version=0.28.8}
+[info] [tid] [run] [main.cpp] version {lib=lcms2 version=2190}
+[info] [tid] [run] [main.cpp] version {lib=webp version=1.6.0}
+[info] [tid] [run] [main.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
+[info] [tid] [run] [main.cpp] version {lib=x265 version="x265 HEVC encoder (4.2-vcpkg)"}
+[info] [tid] [run] [main.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.1.0"}
+[info] [tid] [run] [main.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.13.3"}
+[info] [tid] [scheduler] [scheduler.cpp] start {files=27 workers=1 budget_bytes=<bytes> format=heif mode=transcode}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/anim.gif need_bytes=131072 capacity_bytes=<bytes> used_bytes=131072 peak_bytes=131072}
+[info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/anim.gif out=.cache/regression/out-full-heif/base/anim.heic bytes=796 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/anim.gif detail="multipage or animated input: only the first page was decoded"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/bmp24.bmp need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/bmp24.bmp out=.cache/regression/out-full-heif/base/bmp24.heic bytes=537 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/gray16.png need_bytes=32768 capacity_bytes=<bytes> used_bytes=32768 peak_bytes=131072}
+[info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/gray16.png out=.cache/regression/out-full-heif/base/gray16.heic bytes=1297 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=2}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/gray16.png detail="grayscale source encoded as RGB for format 'heif'"}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/gray16.png detail="source bit depth 16 -> output bit depth 10"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/gray16.tif need_bytes=32768 capacity_bytes=<bytes> used_bytes=32768 peak_bytes=131072}
+[info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/gray16.tif out=.cache/regression/out-full-heif/base/gray16.heic bytes=1437 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=2}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/gray16.tif detail="grayscale source encoded as RGB for format 'heif'"}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/gray16.tif detail="source bit depth 16 -> output bit depth 10"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/gray8.png need_bytes=32768 capacity_bytes=<bytes> used_bytes=32768 peak_bytes=131072}
+[info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/gray8.png out=.cache/regression/out-full-heif/base/gray8.heic bytes=1297 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/gray8.png detail="grayscale source encoded as RGB for format 'heif'"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/graya8.png need_bytes=65536 capacity_bytes=<bytes> used_bytes=65536 peak_bytes=131072}
+[info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/graya8.png out=.cache/regression/out-full-heif/base/graya8.heic bytes=1701 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/graya8.png detail="grayscale source encoded as RGB for format 'heif'"}
+[info] [tid] [pipeline] [pipeline.cpp] CICP (1,13) → sRGB {src=tests/golden/base/jxl8.jxl}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/jxl8.jxl need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/jxl8.jxl out=.cache/regression/out-full-heif/base/jxl8.heic bytes=1245 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/multi.tif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/multi.tif out=.cache/regression/out-full-heif/base/multi.heic bytes=1204 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/multi.tif detail="multipage or animated input: only the first page was decoded"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/photo.jpg need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/photo.jpg out=.cache/regression/out-full-heif/base/photo.heic bytes=696 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb16.png need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb16.png out=.cache/regression/out-full-heif/base/rgb16.heic bytes=696 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/rgb16.png detail="source bit depth 16 -> output bit depth 10"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb16.tif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb16.tif out=.cache/regression/out-full-heif/base/rgb16.heic bytes=848 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/rgb16.tif detail="source bit depth 16 -> output bit depth 10"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb8.png need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb8.png out=.cache/regression/out-full-heif/base/rgb8.heic bytes=696 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb8.tif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb8.tif out=.cache/regression/out-full-heif/base/rgb8.heic bytes=848 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgba16.png need_bytes=131072 capacity_bytes=<bytes> used_bytes=131072 peak_bytes=131072}
+[info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgba16.png out=.cache/regression/out-full-heif/base/rgba16.heic bytes=1100 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/rgba16.png detail="source bit depth 16 -> output bit depth 10"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgba8.png need_bytes=131072 capacity_bytes=<bytes> used_bytes=131072 peak_bytes=131072}
+[info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgba8.png out=.cache/regression/out-full-heif/base/rgba8.heic bytes=1100 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/targa.tga need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/targa.tga out=.cache/regression/out-full-heif/base/targa.heic bytes=537 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/edge/测试📸unicode.png need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/edge/测试📸unicode.png out=.cache/regression/out-full-heif/edge/测试📸unicode.heic bytes=696 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/avif_exif.avif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/avif_exif.avif out=.cache/regression/out-full-heif/meta/avif_exif.heic bytes=733 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/exif_full.jpg need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/exif_full.jpg out=.cache/regression/out-full-heif/meta/exif_full.heic bytes=734 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/heif_exif.heic need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/heif_exif.heic out=.cache/regression/out-full-heif/meta/heif_exif.heic bytes=728 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] CICP (1,13) → sRGB {src=tests/golden/meta/jxl_exif.jxl}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/jxl_exif.jxl need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/jxl_exif.jxl out=.cache/regression/out-full-heif/meta/jxl_exif.heic bytes=3965 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/webp_lossless.webp need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/webp_lossless.webp out=.cache/regression/out-full-heif/meta/webp_lossless.heic bytes=463 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/webp_lossy.webp need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/webp_lossy.webp out=.cache/regression/out-full-heif/meta/webp_lossy.heic bytes=472 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [run] [main.cpp] run summary {files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=23826 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
+photopipeline --dev
+  format=heif backend=(first) tech=(first) lossless=false bitdepth=10 color=keep conflict=overwrite
+  out=.cache/regression/out-full-heif workers=1 files=27 metadata_only=false params=[]
+
+file                                           state          bytes        ms  warnings
+tests/golden/base/anim.gif ok 796 <ms> MultipageTruncated
+tests/golden/base/bmp24.bmp ok 537 <ms>
+tests/golden/base/gray16.png ok 1297 <ms> GrayToRgbEncoded,DepthDowngrade
+tests/golden/base/gray16.tif ok 1437 <ms> GrayToRgbEncoded,DepthDowngrade
+tests/golden/base/gray8.png ok 1297 <ms> GrayToRgbEncoded
+tests/golden/base/graya8.png ok 1701 <ms> GrayToRgbEncoded
+tests/golden/base/jxl8.jxl ok 1245 <ms>
+tests/golden/base/multi.tif ok 1204 <ms> MultipageTruncated
+tests/golden/base/photo.jpg ok 696 <ms>
+tests/golden/base/rgb16.png ok 696 <ms> DepthDowngrade
+tests/golden/base/rgb16.tif ok 848 <ms> DepthDowngrade
+tests/golden/base/rgb8.png ok 696 <ms>
+tests/golden/base/rgb8.tif ok 848 <ms>
+tests/golden/base/rgba16.png ok 1100 <ms> DepthDowngrade
+tests/golden/base/rgba8.png ok 1100 <ms>
+tests/golden/base/targa.tga ok 537 <ms>
+tests/golden/edge/cmyk.tif failed 0 <ms>
+    error: probe failed: CMYK input is not supported
+tests/golden/edge/corrupt_trunc.jpg failed 0 <ms>
+    error: probe failed: JPEG error: ./lib/jpegli/decode_marker.cc:316: Invalid total_count: 1231 ("tests/golden/edge/corrupt_trunc.jpg")
+tests/golden/edge/corrupt_zero.png failed 0 <ms>
+    error: probe failed: Not a PNG file
+tests/golden/edge/测试📸unicode.png ok 696 <ms>
+tests/golden/meta/avif_exif.avif ok 733 <ms>
+tests/golden/meta/cmyk.tif failed 0 <ms>
+    error: probe failed: CMYK input is not supported
+tests/golden/meta/exif_full.jpg ok 734 <ms>
+tests/golden/meta/heif_exif.heic ok 728 <ms>
+tests/golden/meta/jxl_exif.jxl ok 3965 <ms>
+tests/golden/meta/webp_lossless.webp ok 463 <ms>
+tests/golden/meta/webp_lossy.webp ok 472 <ms>
+
+SUMMARY files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=23826 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>
+EXIT 4 (failed files)
+### run full-avif rc=8 args=--format avif
+[info] [tid] [encode] [enc_heif.cpp] bit depth probe {format=avif backend="" supported=8,10,12 unsupported=""}
+[info] [tid] [run] [main.cpp] run start {format=avif backend="" tech="" lossless=false bitdepth=10 color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-avif params=""}
+[info] [tid] [run] [main.cpp] version {lib=app version=0.1.0}
+[info] [tid] [run] [main.cpp] version {lib=qt version=6.8.3}
+[info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.14.0}
+[info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
+[info] [tid] [run] [main.cpp] version {lib=libjxl version=0x00002afa}
+[info] [tid] [run] [main.cpp] version {lib=libheif version=1.23.1}
+[info] [tid] [run] [main.cpp] version {lib=exiv2 version=0.28.8}
+[info] [tid] [run] [main.cpp] version {lib=lcms2 version=2190}
+[info] [tid] [run] [main.cpp] version {lib=webp version=1.6.0}
+[info] [tid] [run] [main.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
+[info] [tid] [run] [main.cpp] version {lib=x265 version="x265 HEVC encoder (4.2-vcpkg)"}
+[info] [tid] [run] [main.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.1.0"}
+[info] [tid] [run] [main.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.13.3"}
+[info] [tid] [scheduler] [scheduler.cpp] start {files=27 workers=1 budget_bytes=<bytes> format=avif mode=transcode}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/anim.gif need_bytes=131072 capacity_bytes=<bytes> used_bytes=131072 peak_bytes=131072}
+[error] [tid] [encode] [enc_heif.cpp] encode failed {format=avif backend=svt-av1 error="svt-av1 does not support 10-bit with alpha; use backend libaom"}
+[error] [tid] [pipeline] [pipeline.cpp] encode failed: svt-av1 does not support 10-bit with alpha; use backend libaom {src=tests/golden/base/anim.gif}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/bmp24.bmp need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/bmp24.bmp out=.cache/regression/out-full-avif/base/bmp24.avif bytes=433 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/gray16.png need_bytes=32768 capacity_bytes=<bytes> used_bytes=32768 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/gray16.png out=.cache/regression/out-full-avif/base/gray16.avif bytes=1193 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=2}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/gray16.png detail="grayscale source encoded as RGB for format 'avif'"}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/gray16.png detail="source bit depth 16 -> output bit depth 10"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/gray16.tif need_bytes=32768 capacity_bytes=<bytes> used_bytes=32768 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/gray16.tif out=.cache/regression/out-full-avif/base/gray16.avif bytes=1333 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=2}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/gray16.tif detail="grayscale source encoded as RGB for format 'avif'"}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/gray16.tif detail="source bit depth 16 -> output bit depth 10"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/gray8.png need_bytes=32768 capacity_bytes=<bytes> used_bytes=32768 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/gray8.png out=.cache/regression/out-full-avif/base/gray8.avif bytes=1193 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/gray8.png detail="grayscale source encoded as RGB for format 'avif'"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/graya8.png need_bytes=65536 capacity_bytes=<bytes> used_bytes=65536 peak_bytes=131072}
+[error] [tid] [encode] [enc_heif.cpp] encode failed {format=avif backend=svt-av1 error="svt-av1 does not support 10-bit with alpha; use backend libaom"}
+[error] [tid] [pipeline] [pipeline.cpp] encode failed: svt-av1 does not support 10-bit with alpha; use backend libaom {src=tests/golden/base/graya8.png}
+[info] [tid] [pipeline] [pipeline.cpp] CICP (1,13) → sRGB {src=tests/golden/base/jxl8.jxl}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/jxl8.jxl need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/jxl8.jxl out=.cache/regression/out-full-avif/base/jxl8.avif bytes=1141 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/multi.tif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/multi.tif out=.cache/regression/out-full-avif/base/multi.avif bytes=1100 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/multi.tif detail="multipage or animated input: only the first page was decoded"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/photo.jpg need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/photo.jpg out=.cache/regression/out-full-avif/base/photo.avif bytes=592 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb16.png need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb16.png out=.cache/regression/out-full-avif/base/rgb16.avif bytes=592 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/rgb16.png detail="source bit depth 16 -> output bit depth 10"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb16.tif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb16.tif out=.cache/regression/out-full-avif/base/rgb16.avif bytes=744 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/rgb16.tif detail="source bit depth 16 -> output bit depth 10"}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb8.png need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb8.png out=.cache/regression/out-full-avif/base/rgb8.avif bytes=592 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb8.tif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb8.tif out=.cache/regression/out-full-avif/base/rgb8.avif bytes=744 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgba16.png need_bytes=131072 capacity_bytes=<bytes> used_bytes=131072 peak_bytes=131072}
+[error] [tid] [encode] [enc_heif.cpp] encode failed {format=avif backend=svt-av1 error="svt-av1 does not support 10-bit with alpha; use backend libaom"}
+[error] [tid] [pipeline] [pipeline.cpp] encode failed: svt-av1 does not support 10-bit with alpha; use backend libaom {src=tests/golden/base/rgba16.png}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgba8.png need_bytes=131072 capacity_bytes=<bytes> used_bytes=131072 peak_bytes=131072}
+[error] [tid] [encode] [enc_heif.cpp] encode failed {format=avif backend=svt-av1 error="svt-av1 does not support 10-bit with alpha; use backend libaom"}
+[error] [tid] [pipeline] [pipeline.cpp] encode failed: svt-av1 does not support 10-bit with alpha; use backend libaom {src=tests/golden/base/rgba8.png}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/targa.tga need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/targa.tga out=.cache/regression/out-full-avif/base/targa.avif bytes=433 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/edge/测试📸unicode.png need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/edge/测试📸unicode.png out=.cache/regression/out-full-avif/edge/测试📸unicode.avif bytes=592 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/avif_exif.avif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/avif_exif.avif out=.cache/regression/out-full-avif/meta/avif_exif.avif bytes=587 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/exif_full.jpg need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/exif_full.jpg out=.cache/regression/out-full-avif/meta/exif_full.avif bytes=588 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/heif_exif.heic need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/heif_exif.heic out=.cache/regression/out-full-avif/meta/heif_exif.avif bytes=587 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] CICP (1,13) → sRGB {src=tests/golden/meta/jxl_exif.jxl}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/jxl_exif.jxl need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/jxl_exif.jxl out=.cache/regression/out-full-avif/meta/jxl_exif.avif bytes=3820 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/webp_lossless.webp need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/webp_lossless.webp out=.cache/regression/out-full-avif/meta/webp_lossless.avif bytes=318 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/webp_lossy.webp need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
+[info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/webp_lossy.webp out=.cache/regression/out-full-avif/meta/webp_lossy.avif bytes=318 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [run] [main.cpp] run summary {files=27 ok=19 failed=8 skipped=0 cancelled=0 bytes=16900 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [version]:	SVT-AV1 Encoder Lib v4.1.0
+Svt[info]: SVT [build]  :	GCC 15.2.0	 64 bit
+Svt[info]: -------------------------------------------
+Svt[warn]: Preset M12 is mapped to M9.
+Svt[warn]: Screen-content detection is disabled for all-intra coding; forcing NSC path
+Svt[warn]: If you are using tiles with the intent of increasing the decoder speed, please also consider using --fast-decode 1 or 2, especially if the intended decoder is running with limited multi-threading capabilities.
+Svt[warn]: TPL is disabled for all-intra coding
+Svt[info]: Level of Parallelism: 1
+Svt[info]: Number of PPCS 4
+Svt[info]: [asm level on system : up to avx2]
+Svt[info]: [asm level selected : up to avx2]
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [config]: main profile	tier (auto)	level (auto)
+Svt[info]: SVT [config]: width / height / fps numerator / fps denominator 		: 64 / 64 / 1 / 25
+Svt[info]: SVT [config]: bit-depth / color format 					: 10 / YUV420
+Svt[info]: SVT [config]: preset / tune / pred struct 					: 9 / PSNR / all intra
+Svt[info]: SVT [config]: gop size / mini-gop size / key-frame type 			: 1 / 4 / key frame
+Svt[info]: SVT [config]: BRC mode / CQP Assignment 					: CQP / 32.00 
+Svt[info]: SVT [config]: AQ mode / Variance Boost 					: 2 / 0
+Svt[info]: SVT [config]: sharpness / luminance-based QP bias 				: 0 / 0
+Svt[info]: SVT [config]: QP scale compress strength 					: 0
+Svt[info]: -------------------------------------------
+photopipeline --dev
+  format=avif backend=(first) tech=(first) lossless=false bitdepth=10 color=keep conflict=overwrite
+  out=.cache/regression/out-full-avif workers=1 files=27 metadata_only=false params=[]
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [version]:	SVT-AV1 Encoder Lib v4.1.0
+Svt[info]: SVT [build]  :	GCC 15.2.0	 64 bit
+Svt[info]: -------------------------------------------
+Svt[warn]: Preset M12 is mapped to M9.
+Svt[warn]: Screen-content detection is disabled for all-intra coding; forcing NSC path
+Svt[warn]: If you are using tiles with the intent of increasing the decoder speed, please also consider using --fast-decode 1 or 2, especially if the intended decoder is running with limited multi-threading capabilities.
+Svt[warn]: TPL is disabled for all-intra coding
+Svt[info]: Level of Parallelism: 1
+Svt[info]: Number of PPCS 4
+Svt[info]: [asm level on system : up to avx2]
+Svt[info]: [asm level selected : up to avx2]
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [config]: main profile	tier (auto)	level (auto)
+Svt[info]: SVT [config]: width / height / fps numerator / fps denominator 		: 64 / 64 / 1 / 25
+Svt[info]: SVT [config]: bit-depth / color format 					: 10 / YUV420
+Svt[info]: SVT [config]: preset / tune / pred struct 					: 9 / PSNR / all intra
+Svt[info]: SVT [config]: gop size / mini-gop size / key-frame type 			: 1 / 4 / key frame
+Svt[info]: SVT [config]: BRC mode / CQP Assignment 					: CQP / 32.00 
+Svt[info]: SVT [config]: AQ mode / Variance Boost 					: 2 / 0
+Svt[info]: SVT [config]: sharpness / luminance-based QP bias 				: 0 / 0
+Svt[info]: SVT [config]: QP scale compress strength 					: 0
+Svt[info]: -------------------------------------------
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [version]:	SVT-AV1 Encoder Lib v4.1.0
+Svt[info]: SVT [build]  :	GCC 15.2.0	 64 bit
+Svt[info]: -------------------------------------------
+Svt[warn]: Preset M12 is mapped to M9.
+Svt[warn]: Screen-content detection is disabled for all-intra coding; forcing NSC path
+Svt[warn]: If you are using tiles with the intent of increasing the decoder speed, please also consider using --fast-decode 1 or 2, especially if the intended decoder is running with limited multi-threading capabilities.
+Svt[warn]: TPL is disabled for all-intra coding
+Svt[info]: Level of Parallelism: 1
+Svt[info]: Number of PPCS 4
+Svt[info]: [asm level on system : up to avx2]
+Svt[info]: [asm level selected : up to avx2]
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [config]: main profile	tier (auto)	level (auto)
+Svt[info]: SVT [config]: width / height / fps numerator / fps denominator 		: 64 / 64 / 1 / 25
+Svt[info]: SVT [config]: bit-depth / color format 					: 10 / YUV420
+Svt[info]: SVT [config]: preset / tune / pred struct 					: 9 / PSNR / all intra
+Svt[info]: SVT [config]: gop size / mini-gop size / key-frame type 			: 1 / 4 / key frame
+Svt[info]: SVT [config]: BRC mode / CQP Assignment 					: CQP / 32.00 
+Svt[info]: SVT [config]: AQ mode / Variance Boost 					: 2 / 0
+Svt[info]: SVT [config]: sharpness / luminance-based QP bias 				: 0 / 0
+Svt[info]: SVT [config]: QP scale compress strength 					: 0
+Svt[info]: -------------------------------------------
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [version]:	SVT-AV1 Encoder Lib v4.1.0
+Svt[info]: SVT [build]  :	GCC 15.2.0	 64 bit
+Svt[info]: -------------------------------------------
+Svt[warn]: Preset M12 is mapped to M9.
+Svt[warn]: Screen-content detection is disabled for all-intra coding; forcing NSC path
+Svt[warn]: If you are using tiles with the intent of increasing the decoder speed, please also consider using --fast-decode 1 or 2, especially if the intended decoder is running with limited multi-threading capabilities.
+Svt[warn]: TPL is disabled for all-intra coding
+Svt[info]: Level of Parallelism: 1
+Svt[info]: Number of PPCS 4
+Svt[info]: [asm level on system : up to avx2]
+Svt[info]: [asm level selected : up to avx2]
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [config]: main profile	tier (auto)	level (auto)
+Svt[info]: SVT [config]: width / height / fps numerator / fps denominator 		: 64 / 64 / 1 / 25
+Svt[info]: SVT [config]: bit-depth / color format 					: 10 / YUV420
+Svt[info]: SVT [config]: preset / tune / pred struct 					: 9 / PSNR / all intra
+Svt[info]: SVT [config]: gop size / mini-gop size / key-frame type 			: 1 / 4 / key frame
+Svt[info]: SVT [config]: BRC mode / CQP Assignment 					: CQP / 32.00 
+Svt[info]: SVT [config]: AQ mode / Variance Boost 					: 2 / 0
+Svt[info]: SVT [config]: sharpness / luminance-based QP bias 				: 0 / 0
+Svt[info]: SVT [config]: QP scale compress strength 					: 0
+Svt[info]: -------------------------------------------
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [version]:	SVT-AV1 Encoder Lib v4.1.0
+Svt[info]: SVT [build]  :	GCC 15.2.0	 64 bit
+Svt[info]: -------------------------------------------
+Svt[warn]: Preset M12 is mapped to M9.
+Svt[warn]: Screen-content detection is disabled for all-intra coding; forcing NSC path
+Svt[warn]: If you are using tiles with the intent of increasing the decoder speed, please also consider using --fast-decode 1 or 2, especially if the intended decoder is running with limited multi-threading capabilities.
+Svt[warn]: TPL is disabled for all-intra coding
+Svt[info]: Level of Parallelism: 1
+Svt[info]: Number of PPCS 4
+Svt[info]: [asm level on system : up to avx2]
+Svt[info]: [asm level selected : up to avx2]
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [config]: main profile	tier (auto)	level (auto)
+Svt[info]: SVT [config]: width / height / fps numerator / fps denominator 		: 64 / 64 / 1 / 25
+Svt[info]: SVT [config]: bit-depth / color format 					: 10 / YUV420
+Svt[info]: SVT [config]: preset / tune / pred struct 					: 9 / PSNR / all intra
+Svt[info]: SVT [config]: gop size / mini-gop size / key-frame type 			: 1 / 4 / key frame
+Svt[info]: SVT [config]: BRC mode / CQP Assignment 					: CQP / 32.00 
+Svt[info]: SVT [config]: AQ mode / Variance Boost 					: 2 / 0
+Svt[info]: SVT [config]: sharpness / luminance-based QP bias 				: 0 / 0
+Svt[info]: SVT [config]: QP scale compress strength 					: 0
+Svt[info]: -------------------------------------------
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [version]:	SVT-AV1 Encoder Lib v4.1.0
+Svt[info]: SVT [build]  :	GCC 15.2.0	 64 bit
+Svt[info]: -------------------------------------------
+Svt[warn]: Preset M12 is mapped to M9.
+Svt[warn]: Screen-content detection is disabled for all-intra coding; forcing NSC path
+Svt[warn]: If you are using tiles with the intent of increasing the decoder speed, please also consider using --fast-decode 1 or 2, especially if the intended decoder is running with limited multi-threading capabilities.
+Svt[warn]: TPL is disabled for all-intra coding
+Svt[info]: Level of Parallelism: 1
+Svt[info]: Number of PPCS 4
+Svt[info]: [asm level on system : up to avx2]
+Svt[info]: [asm level selected : up to avx2]
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [config]: main profile	tier (auto)	level (auto)
+Svt[info]: SVT [config]: width / height / fps numerator / fps denominator 		: 64 / 64 / 1 / 25
+Svt[info]: SVT [config]: bit-depth / color format 					: 10 / YUV420
+Svt[info]: SVT [config]: preset / tune / pred struct 					: 9 / PSNR / all intra
+Svt[info]: SVT [config]: gop size / mini-gop size / key-frame type 			: 1 / 4 / key frame
+Svt[info]: SVT [config]: BRC mode / CQP Assignment 					: CQP / 32.00 
+Svt[info]: SVT [config]: AQ mode / Variance Boost 					: 2 / 0
+Svt[info]: SVT [config]: sharpness / luminance-based QP bias 				: 0 / 0
+Svt[info]: SVT [config]: QP scale compress strength 					: 0
+Svt[info]: -------------------------------------------
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [version]:	SVT-AV1 Encoder Lib v4.1.0
+Svt[info]: SVT [build]  :	GCC 15.2.0	 64 bit
+Svt[info]: -------------------------------------------
+Svt[warn]: Preset M12 is mapped to M9.
+Svt[warn]: Screen-content detection is disabled for all-intra coding; forcing NSC path
+Svt[warn]: If you are using tiles with the intent of increasing the decoder speed, please also consider using --fast-decode 1 or 2, especially if the intended decoder is running with limited multi-threading capabilities.
+Svt[warn]: TPL is disabled for all-intra coding
+Svt[info]: Level of Parallelism: 1
+Svt[info]: Number of PPCS 4
+Svt[info]: [asm level on system : up to avx2]
+Svt[info]: [asm level selected : up to avx2]
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [config]: main profile	tier (auto)	level (auto)
+Svt[info]: SVT [config]: width / height / fps numerator / fps denominator 		: 64 / 64 / 1 / 25
+Svt[info]: SVT [config]: bit-depth / color format 					: 10 / YUV420
+Svt[info]: SVT [config]: preset / tune / pred struct 					: 9 / PSNR / all intra
+Svt[info]: SVT [config]: gop size / mini-gop size / key-frame type 			: 1 / 4 / key frame
+Svt[info]: SVT [config]: BRC mode / CQP Assignment 					: CQP / 32.00 
+Svt[info]: SVT [config]: AQ mode / Variance Boost 					: 2 / 0
+Svt[info]: SVT [config]: sharpness / luminance-based QP bias 				: 0 / 0
+Svt[info]: SVT [config]: QP scale compress strength 					: 0
+Svt[info]: -------------------------------------------
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [version]:	SVT-AV1 Encoder Lib v4.1.0
+Svt[info]: SVT [build]  :	GCC 15.2.0	 64 bit
+Svt[info]: -------------------------------------------
+Svt[warn]: Preset M12 is mapped to M9.
+Svt[warn]: Screen-content detection is disabled for all-intra coding; forcing NSC path
+Svt[warn]: If you are using tiles with the intent of increasing the decoder speed, please also consider using --fast-decode 1 or 2, especially if the intended decoder is running with limited multi-threading capabilities.
+Svt[warn]: TPL is disabled for all-intra coding
+Svt[info]: Level of Parallelism: 1
+Svt[info]: Number of PPCS 4
+Svt[info]: [asm level on system : up to avx2]
+Svt[info]: [asm level selected : up to avx2]
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [config]: main profile	tier (auto)	level (auto)
+Svt[info]: SVT [config]: width / height / fps numerator / fps denominator 		: 64 / 64 / 1 / 25
+Svt[info]: SVT [config]: bit-depth / color format 					: 10 / YUV420
+Svt[info]: SVT [config]: preset / tune / pred struct 					: 9 / PSNR / all intra
+Svt[info]: SVT [config]: gop size / mini-gop size / key-frame type 			: 1 / 4 / key frame
+Svt[info]: SVT [config]: BRC mode / CQP Assignment 					: CQP / 32.00 
+Svt[info]: SVT [config]: AQ mode / Variance Boost 					: 2 / 0
+Svt[info]: SVT [config]: sharpness / luminance-based QP bias 				: 0 / 0
+Svt[info]: SVT [config]: QP scale compress strength 					: 0
+Svt[info]: -------------------------------------------
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [version]:	SVT-AV1 Encoder Lib v4.1.0
+Svt[info]: SVT [build]  :	GCC 15.2.0	 64 bit
+Svt[info]: -------------------------------------------
+Svt[warn]: Preset M12 is mapped to M9.
+Svt[warn]: Screen-content detection is disabled for all-intra coding; forcing NSC path
+Svt[warn]: If you are using tiles with the intent of increasing the decoder speed, please also consider using --fast-decode 1 or 2, especially if the intended decoder is running with limited multi-threading capabilities.
+Svt[warn]: TPL is disabled for all-intra coding
+Svt[info]: Level of Parallelism: 1
+Svt[info]: Number of PPCS 4
+Svt[info]: [asm level on system : up to avx2]
+Svt[info]: [asm level selected : up to avx2]
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [config]: main profile	tier (auto)	level (auto)
+Svt[info]: SVT [config]: width / height / fps numerator / fps denominator 		: 64 / 64 / 1 / 25
+Svt[info]: SVT [config]: bit-depth / color format 					: 10 / YUV420
+Svt[info]: SVT [config]: preset / tune / pred struct 					: 9 / PSNR / all intra
+Svt[info]: SVT [config]: gop size / mini-gop size / key-frame type 			: 1 / 4 / key frame
+Svt[info]: SVT [config]: BRC mode / CQP Assignment 					: CQP / 32.00 
+Svt[info]: SVT [config]: AQ mode / Variance Boost 					: 2 / 0
+Svt[info]: SVT [config]: sharpness / luminance-based QP bias 				: 0 / 0
+Svt[info]: SVT [config]: QP scale compress strength 					: 0
+Svt[info]: -------------------------------------------
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [version]:	SVT-AV1 Encoder Lib v4.1.0
+Svt[info]: SVT [build]  :	GCC 15.2.0	 64 bit
+Svt[info]: -------------------------------------------
+Svt[warn]: Preset M12 is mapped to M9.
+Svt[warn]: Screen-content detection is disabled for all-intra coding; forcing NSC path
+Svt[warn]: If you are using tiles with the intent of increasing the decoder speed, please also consider using --fast-decode 1 or 2, especially if the intended decoder is running with limited multi-threading capabilities.
+Svt[warn]: TPL is disabled for all-intra coding
+Svt[info]: Level of Parallelism: 1
+Svt[info]: Number of PPCS 4
+Svt[info]: [asm level on system : up to avx2]
+Svt[info]: [asm level selected : up to avx2]
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [config]: main profile	tier (auto)	level (auto)
+Svt[info]: SVT [config]: width / height / fps numerator / fps denominator 		: 64 / 64 / 1 / 25
+Svt[info]: SVT [config]: bit-depth / color format 					: 10 / YUV420
+Svt[info]: SVT [config]: preset / tune / pred struct 					: 9 / PSNR / all intra
+Svt[info]: SVT [config]: gop size / mini-gop size / key-frame type 			: 1 / 4 / key frame
+Svt[info]: SVT [config]: BRC mode / CQP Assignment 					: CQP / 32.00 
+Svt[info]: SVT [config]: AQ mode / Variance Boost 					: 2 / 0
+Svt[info]: SVT [config]: sharpness / luminance-based QP bias 				: 0 / 0
+Svt[info]: SVT [config]: QP scale compress strength 					: 0
+Svt[info]: -------------------------------------------
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [version]:	SVT-AV1 Encoder Lib v4.1.0
+Svt[info]: SVT [build]  :	GCC 15.2.0	 64 bit
+Svt[info]: -------------------------------------------
+Svt[warn]: Preset M12 is mapped to M9.
+Svt[warn]: Screen-content detection is disabled for all-intra coding; forcing NSC path
+Svt[warn]: If you are using tiles with the intent of increasing the decoder speed, please also consider using --fast-decode 1 or 2, especially if the intended decoder is running with limited multi-threading capabilities.
+Svt[warn]: TPL is disabled for all-intra coding
+Svt[info]: Level of Parallelism: 1
+Svt[info]: Number of PPCS 4
+Svt[info]: [asm level on system : up to avx2]
+Svt[info]: [asm level selected : up to avx2]
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [config]: main profile	tier (auto)	level (auto)
+Svt[info]: SVT [config]: width / height / fps numerator / fps denominator 		: 64 / 64 / 1 / 25
+Svt[info]: SVT [config]: bit-depth / color format 					: 10 / YUV420
+Svt[info]: SVT [config]: preset / tune / pred struct 					: 9 / PSNR / all intra
+Svt[info]: SVT [config]: gop size / mini-gop size / key-frame type 			: 1 / 4 / key frame
+Svt[info]: SVT [config]: BRC mode / CQP Assignment 					: CQP / 32.00 
+Svt[info]: SVT [config]: AQ mode / Variance Boost 					: 2 / 0
+Svt[info]: SVT [config]: sharpness / luminance-based QP bias 				: 0 / 0
+Svt[info]: SVT [config]: QP scale compress strength 					: 0
+Svt[info]: -------------------------------------------
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [version]:	SVT-AV1 Encoder Lib v4.1.0
+Svt[info]: SVT [build]  :	GCC 15.2.0	 64 bit
+Svt[info]: -------------------------------------------
+Svt[warn]: Preset M12 is mapped to M9.
+Svt[warn]: Screen-content detection is disabled for all-intra coding; forcing NSC path
+Svt[warn]: If you are using tiles with the intent of increasing the decoder speed, please also consider using --fast-decode 1 or 2, especially if the intended decoder is running with limited multi-threading capabilities.
+Svt[warn]: TPL is disabled for all-intra coding
+Svt[info]: Level of Parallelism: 1
+Svt[info]: Number of PPCS 4
+Svt[info]: [asm level on system : up to avx2]
+Svt[info]: [asm level selected : up to avx2]
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [config]: main profile	tier (auto)	level (auto)
+Svt[info]: SVT [config]: width / height / fps numerator / fps denominator 		: 64 / 64 / 1 / 25
+Svt[info]: SVT [config]: bit-depth / color format 					: 10 / YUV420
+Svt[info]: SVT [config]: preset / tune / pred struct 					: 9 / PSNR / all intra
+Svt[info]: SVT [config]: gop size / mini-gop size / key-frame type 			: 1 / 4 / key frame
+Svt[info]: SVT [config]: BRC mode / CQP Assignment 					: CQP / 32.00 
+Svt[info]: SVT [config]: AQ mode / Variance Boost 					: 2 / 0
+Svt[info]: SVT [config]: sharpness / luminance-based QP bias 				: 0 / 0
+Svt[info]: SVT [config]: QP scale compress strength 					: 0
+Svt[info]: -------------------------------------------
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [version]:	SVT-AV1 Encoder Lib v4.1.0
+Svt[info]: SVT [build]  :	GCC 15.2.0	 64 bit
+Svt[info]: -------------------------------------------
+Svt[warn]: Preset M12 is mapped to M9.
+Svt[warn]: Screen-content detection is disabled for all-intra coding; forcing NSC path
+Svt[warn]: If you are using tiles with the intent of increasing the decoder speed, please also consider using --fast-decode 1 or 2, especially if the intended decoder is running with limited multi-threading capabilities.
+Svt[warn]: TPL is disabled for all-intra coding
+Svt[info]: Level of Parallelism: 1
+Svt[info]: Number of PPCS 4
+Svt[info]: [asm level on system : up to avx2]
+Svt[info]: [asm level selected : up to avx2]
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [config]: main profile	tier (auto)	level (auto)
+Svt[info]: SVT [config]: width / height / fps numerator / fps denominator 		: 64 / 64 / 1 / 25
+Svt[info]: SVT [config]: bit-depth / color format 					: 10 / YUV420
+Svt[info]: SVT [config]: preset / tune / pred struct 					: 9 / PSNR / all intra
+Svt[info]: SVT [config]: gop size / mini-gop size / key-frame type 			: 1 / 4 / key frame
+Svt[info]: SVT [config]: BRC mode / CQP Assignment 					: CQP / 32.00 
+Svt[info]: SVT [config]: AQ mode / Variance Boost 					: 2 / 0
+Svt[info]: SVT [config]: sharpness / luminance-based QP bias 				: 0 / 0
+Svt[info]: SVT [config]: QP scale compress strength 					: 0
+Svt[info]: -------------------------------------------
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [version]:	SVT-AV1 Encoder Lib v4.1.0
+Svt[info]: SVT [build]  :	GCC 15.2.0	 64 bit
+Svt[info]: -------------------------------------------
+Svt[warn]: Preset M12 is mapped to M9.
+Svt[warn]: Screen-content detection is disabled for all-intra coding; forcing NSC path
+Svt[warn]: If you are using tiles with the intent of increasing the decoder speed, please also consider using --fast-decode 1 or 2, especially if the intended decoder is running with limited multi-threading capabilities.
+Svt[warn]: TPL is disabled for all-intra coding
+Svt[info]: Level of Parallelism: 1
+Svt[info]: Number of PPCS 4
+Svt[info]: [asm level on system : up to avx2]
+Svt[info]: [asm level selected : up to avx2]
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [config]: main profile	tier (auto)	level (auto)
+Svt[info]: SVT [config]: width / height / fps numerator / fps denominator 		: 64 / 64 / 1 / 25
+Svt[info]: SVT [config]: bit-depth / color format 					: 10 / YUV420
+Svt[info]: SVT [config]: preset / tune / pred struct 					: 9 / PSNR / all intra
+Svt[info]: SVT [config]: gop size / mini-gop size / key-frame type 			: 1 / 4 / key frame
+Svt[info]: SVT [config]: BRC mode / CQP Assignment 					: CQP / 32.00 
+Svt[info]: SVT [config]: AQ mode / Variance Boost 					: 2 / 0
+Svt[info]: SVT [config]: sharpness / luminance-based QP bias 				: 0 / 0
+Svt[info]: SVT [config]: QP scale compress strength 					: 0
+Svt[info]: -------------------------------------------
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [version]:	SVT-AV1 Encoder Lib v4.1.0
+Svt[info]: SVT [build]  :	GCC 15.2.0	 64 bit
+Svt[info]: -------------------------------------------
+Svt[warn]: Preset M12 is mapped to M9.
+Svt[warn]: Screen-content detection is disabled for all-intra coding; forcing NSC path
+Svt[warn]: If you are using tiles with the intent of increasing the decoder speed, please also consider using --fast-decode 1 or 2, especially if the intended decoder is running with limited multi-threading capabilities.
+Svt[warn]: TPL is disabled for all-intra coding
+Svt[info]: Level of Parallelism: 1
+Svt[info]: Number of PPCS 4
+Svt[info]: [asm level on system : up to avx2]
+Svt[info]: [asm level selected : up to avx2]
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [config]: main profile	tier (auto)	level (auto)
+Svt[info]: SVT [config]: width / height / fps numerator / fps denominator 		: 64 / 64 / 1 / 25
+Svt[info]: SVT [config]: bit-depth / color format 					: 10 / YUV420
+Svt[info]: SVT [config]: preset / tune / pred struct 					: 9 / PSNR / all intra
+Svt[info]: SVT [config]: gop size / mini-gop size / key-frame type 			: 1 / 4 / key frame
+Svt[info]: SVT [config]: BRC mode / CQP Assignment 					: CQP / 32.00 
+Svt[info]: SVT [config]: AQ mode / Variance Boost 					: 2 / 0
+Svt[info]: SVT [config]: sharpness / luminance-based QP bias 				: 0 / 0
+Svt[info]: SVT [config]: QP scale compress strength 					: 0
+Svt[info]: -------------------------------------------
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [version]:	SVT-AV1 Encoder Lib v4.1.0
+Svt[info]: SVT [build]  :	GCC 15.2.0	 64 bit
+Svt[info]: -------------------------------------------
+Svt[warn]: Preset M12 is mapped to M9.
+Svt[warn]: Screen-content detection is disabled for all-intra coding; forcing NSC path
+Svt[warn]: If you are using tiles with the intent of increasing the decoder speed, please also consider using --fast-decode 1 or 2, especially if the intended decoder is running with limited multi-threading capabilities.
+Svt[warn]: TPL is disabled for all-intra coding
+Svt[info]: Level of Parallelism: 1
+Svt[info]: Number of PPCS 4
+Svt[info]: [asm level on system : up to avx2]
+Svt[info]: [asm level selected : up to avx2]
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [config]: main profile	tier (auto)	level (auto)
+Svt[info]: SVT [config]: width / height / fps numerator / fps denominator 		: 64 / 64 / 1 / 25
+Svt[info]: SVT [config]: bit-depth / color format 					: 10 / YUV420
+Svt[info]: SVT [config]: preset / tune / pred struct 					: 9 / PSNR / all intra
+Svt[info]: SVT [config]: gop size / mini-gop size / key-frame type 			: 1 / 4 / key frame
+Svt[info]: SVT [config]: BRC mode / CQP Assignment 					: CQP / 32.00 
+Svt[info]: SVT [config]: AQ mode / Variance Boost 					: 2 / 0
+Svt[info]: SVT [config]: sharpness / luminance-based QP bias 				: 0 / 0
+Svt[info]: SVT [config]: QP scale compress strength 					: 0
+Svt[info]: -------------------------------------------
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [version]:	SVT-AV1 Encoder Lib v4.1.0
+Svt[info]: SVT [build]  :	GCC 15.2.0	 64 bit
+Svt[info]: -------------------------------------------
+Svt[warn]: Preset M12 is mapped to M9.
+Svt[warn]: Screen-content detection is disabled for all-intra coding; forcing NSC path
+Svt[warn]: If you are using tiles with the intent of increasing the decoder speed, please also consider using --fast-decode 1 or 2, especially if the intended decoder is running with limited multi-threading capabilities.
+Svt[warn]: TPL is disabled for all-intra coding
+Svt[info]: Level of Parallelism: 1
+Svt[info]: Number of PPCS 4
+Svt[info]: [asm level on system : up to avx2]
+Svt[info]: [asm level selected : up to avx2]
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [config]: main profile	tier (auto)	level (auto)
+Svt[info]: SVT [config]: width / height / fps numerator / fps denominator 		: 64 / 64 / 1 / 25
+Svt[info]: SVT [config]: bit-depth / color format 					: 10 / YUV420
+Svt[info]: SVT [config]: preset / tune / pred struct 					: 9 / PSNR / all intra
+Svt[info]: SVT [config]: gop size / mini-gop size / key-frame type 			: 1 / 4 / key frame
+Svt[info]: SVT [config]: BRC mode / CQP Assignment 					: CQP / 32.00 
+Svt[info]: SVT [config]: AQ mode / Variance Boost 					: 2 / 0
+Svt[info]: SVT [config]: sharpness / luminance-based QP bias 				: 0 / 0
+Svt[info]: SVT [config]: QP scale compress strength 					: 0
+Svt[info]: -------------------------------------------
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [version]:	SVT-AV1 Encoder Lib v4.1.0
+Svt[info]: SVT [build]  :	GCC 15.2.0	 64 bit
+Svt[info]: -------------------------------------------
+Svt[warn]: Preset M12 is mapped to M9.
+Svt[warn]: Screen-content detection is disabled for all-intra coding; forcing NSC path
+Svt[warn]: If you are using tiles with the intent of increasing the decoder speed, please also consider using --fast-decode 1 or 2, especially if the intended decoder is running with limited multi-threading capabilities.
+Svt[warn]: TPL is disabled for all-intra coding
+Svt[info]: Level of Parallelism: 1
+Svt[info]: Number of PPCS 4
+Svt[info]: [asm level on system : up to avx2]
+Svt[info]: [asm level selected : up to avx2]
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [config]: main profile	tier (auto)	level (auto)
+Svt[info]: SVT [config]: width / height / fps numerator / fps denominator 		: 64 / 64 / 1 / 25
+Svt[info]: SVT [config]: bit-depth / color format 					: 10 / YUV420
+Svt[info]: SVT [config]: preset / tune / pred struct 					: 9 / PSNR / all intra
+Svt[info]: SVT [config]: gop size / mini-gop size / key-frame type 			: 1 / 4 / key frame
+Svt[info]: SVT [config]: BRC mode / CQP Assignment 					: CQP / 32.00 
+Svt[info]: SVT [config]: AQ mode / Variance Boost 					: 2 / 0
+Svt[info]: SVT [config]: sharpness / luminance-based QP bias 				: 0 / 0
+Svt[info]: SVT [config]: QP scale compress strength 					: 0
+Svt[info]: -------------------------------------------
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [version]:	SVT-AV1 Encoder Lib v4.1.0
+Svt[info]: SVT [build]  :	GCC 15.2.0	 64 bit
+Svt[info]: -------------------------------------------
+Svt[warn]: Preset M12 is mapped to M9.
+Svt[warn]: Screen-content detection is disabled for all-intra coding; forcing NSC path
+Svt[warn]: If you are using tiles with the intent of increasing the decoder speed, please also consider using --fast-decode 1 or 2, especially if the intended decoder is running with limited multi-threading capabilities.
+Svt[warn]: TPL is disabled for all-intra coding
+Svt[info]: Level of Parallelism: 1
+Svt[info]: Number of PPCS 4
+Svt[info]: [asm level on system : up to avx2]
+Svt[info]: [asm level selected : up to avx2]
+Svt[info]: -------------------------------------------
+Svt[info]: SVT [config]: main profile	tier (auto)	level (auto)
+Svt[info]: SVT [config]: width / height / fps numerator / fps denominator 		: 64 / 64 / 1 / 25
+Svt[info]: SVT [config]: bit-depth / color format 					: 10 / YUV420
+Svt[info]: SVT [config]: preset / tune / pred struct 					: 9 / PSNR / all intra
+Svt[info]: SVT [config]: gop size / mini-gop size / key-frame type 			: 1 / 4 / key frame
+Svt[info]: SVT [config]: BRC mode / CQP Assignment 					: CQP / 32.00 
+Svt[info]: SVT [config]: AQ mode / Variance Boost 					: 2 / 0
+Svt[info]: SVT [config]: sharpness / luminance-based QP bias 				: 0 / 0
+Svt[info]: SVT [config]: QP scale compress strength 					: 0
+Svt[info]: -------------------------------------------
+
+file                                           state          bytes        ms  warnings
+tests/golden/base/anim.gif failed 0 <ms> MultipageTruncated
+    error: encode failed: svt-av1 does not support 10-bit with alpha; use backend libaom
+tests/golden/base/bmp24.bmp ok 433 <ms>
+tests/golden/base/gray16.png ok 1193 <ms> GrayToRgbEncoded,DepthDowngrade
+tests/golden/base/gray16.tif ok 1333 <ms> GrayToRgbEncoded,DepthDowngrade
+tests/golden/base/gray8.png ok 1193 <ms> GrayToRgbEncoded
+tests/golden/base/graya8.png failed 0 <ms> GrayToRgbEncoded
+    error: encode failed: svt-av1 does not support 10-bit with alpha; use backend libaom
+tests/golden/base/jxl8.jxl ok 1141 <ms>
+tests/golden/base/multi.tif ok 1100 <ms> MultipageTruncated
+tests/golden/base/photo.jpg ok 592 <ms>
+tests/golden/base/rgb16.png ok 592 <ms> DepthDowngrade
+tests/golden/base/rgb16.tif ok 744 <ms> DepthDowngrade
+tests/golden/base/rgb8.png ok 592 <ms>
+tests/golden/base/rgb8.tif ok 744 <ms>
+tests/golden/base/rgba16.png failed 0 <ms> DepthDowngrade
+    error: encode failed: svt-av1 does not support 10-bit with alpha; use backend libaom
+tests/golden/base/rgba8.png failed 0 <ms>
+    error: encode failed: svt-av1 does not support 10-bit with alpha; use backend libaom
+tests/golden/base/targa.tga ok 433 <ms>
+tests/golden/edge/cmyk.tif failed 0 <ms>
+    error: probe failed: CMYK input is not supported
+tests/golden/edge/corrupt_trunc.jpg failed 0 <ms>
+    error: probe failed: JPEG error: ./lib/jpegli/decode_marker.cc:316: Invalid total_count: 1231 ("tests/golden/edge/corrupt_trunc.jpg")
+tests/golden/edge/corrupt_zero.png failed 0 <ms>
+    error: probe failed: Not a PNG file
+tests/golden/edge/测试📸unicode.png ok 592 <ms>
+tests/golden/meta/avif_exif.avif ok 587 <ms>
+tests/golden/meta/cmyk.tif failed 0 <ms>
+    error: probe failed: CMYK input is not supported
+tests/golden/meta/exif_full.jpg ok 588 <ms>
+tests/golden/meta/heif_exif.heic ok 587 <ms>
+tests/golden/meta/jxl_exif.jxl ok 3820 <ms>
+tests/golden/meta/webp_lossless.webp ok 318 <ms>
+tests/golden/meta/webp_lossy.webp ok 318 <ms>
+
+SUMMARY files=27 ok=19 failed=8 skipped=0 cancelled=0 bytes=16900 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>
+EXIT 8 (failed files)
+### run meta-jpeg rc=4 args=--format jpeg
+[info] [tid] [run] [main.cpp] run start {format=jpeg backend="" tech="" lossless=false bitdepth=8 color=keep conflict=overwrite workers=1 files=16 metadata_only=true out=.cache/regression/out-meta-jpeg params="adaptive_quantization=true arith_code=false chroma=444 cicp_transfer_function=2 dct_method=0 distance=1 optimize_coding=true progressive=true psnr_target=0 quality=90 quality_mode=distance restart_in_rows=0 smoothing_factor=0 std_quant_tables=false xyb_mode=false"}
+[info] [tid] [run] [main.cpp] version {lib=app version=0.1.0}
+[info] [tid] [run] [main.cpp] version {lib=qt version=6.8.3}
+[info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.14.0}
+[info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
+[info] [tid] [run] [main.cpp] version {lib=libjxl version=0x00002afa}
+[info] [tid] [run] [main.cpp] version {lib=libheif version=1.23.1}
+[info] [tid] [run] [main.cpp] version {lib=exiv2 version=0.28.8}
+[info] [tid] [run] [main.cpp] version {lib=lcms2 version=2190}
+[info] [tid] [run] [main.cpp] version {lib=webp version=1.6.0}
+[info] [tid] [run] [main.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
+[info] [tid] [run] [main.cpp] version {lib=x265 version="x265 HEVC encoder (4.2-vcpkg)"}
+[info] [tid] [run] [main.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.1.0"}
+[info] [tid] [run] [main.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.13.3"}
+[info] [tid] [scheduler] [scheduler.cpp] start {files=16 workers=1 budget_bytes=<bytes> format=jpeg mode=metadata-only}
+[error] [tid] [pipeline] [pipeline.cpp] metadata-only rewrite failed: exiv2: Writing to GIF images is not supported {src=tests/golden/base/anim.gif}
+[error] [tid] [pipeline] [pipeline.cpp] metadata-only rewrite failed: exiv2: Writing to BMP images is not supported {src=tests/golden/base/bmp24.bmp}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/gray16.png out=.cache/regression/out-meta-jpeg/base/gray16.png bytes=422 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/gray16.tif out=.cache/regression/out-meta-jpeg/base/gray16.tif bytes=408 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/gray8.png out=.cache/regression/out-meta-jpeg/base/gray8.png bytes=412 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/graya8.png out=.cache/regression/out-meta-jpeg/base/graya8.png bytes=422 metawrite_ms=<ms> warnings=0}
+[error] [tid] [pipeline] [pipeline.cpp] metadata-only rewrite failed: exiv2: Setting Exif metadata in BMFF images is not supported {src=tests/golden/base/jxl8.jxl}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/multi.tif out=.cache/regression/out-meta-jpeg/base/multi.tif bytes=826 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/photo.jpg out=.cache/regression/out-meta-jpeg/base/photo.jpg bytes=839 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/rgb16.png out=.cache/regression/out-meta-jpeg/base/rgb16.png bytes=539 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/rgb16.tif out=.cache/regression/out-meta-jpeg/base/rgb16.tif bytes=586 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/rgb8.png out=.cache/regression/out-meta-jpeg/base/rgb8.png bytes=461 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/rgb8.tif out=.cache/regression/out-meta-jpeg/base/rgb8.tif bytes=470 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/rgba16.png out=.cache/regression/out-meta-jpeg/base/rgba16.png bytes=555 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/rgba8.png out=.cache/regression/out-meta-jpeg/base/rgba8.png bytes=522 metawrite_ms=<ms> warnings=0}
+[error] [tid] [pipeline] [pipeline.cpp] metadata-only rewrite failed: exiv2: Writing to TGA images is not supported {src=tests/golden/base/targa.tga}
+[info] [tid] [run] [main.cpp] run summary {files=16 ok=12 failed=4 skipped=0 cancelled=0 bytes=6462 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
+photopipeline --dev
+  format=jpeg backend=(first) tech=(first) lossless=false bitdepth=8 color=keep conflict=overwrite
+  out=.cache/regression/out-meta-jpeg workers=1 files=16 metadata_only=true params=[adaptive_quantization=true arith_code=false chroma=444 cicp_transfer_function=2 dct_method=0 distance=1 optimize_coding=true progressive=true psnr_target=0 quality=90 quality_mode=distance restart_in_rows=0 smoothing_factor=0 std_quant_tables=false xyb_mode=false]
+
+file                                           state          bytes        ms  warnings
+tests/golden/base/anim.gif failed 0 <ms>
+    error: metadata-only rewrite failed: exiv2: Writing to GIF images is not supported
+tests/golden/base/bmp24.bmp failed 0 <ms>
+    error: metadata-only rewrite failed: exiv2: Writing to BMP images is not supported
+tests/golden/base/gray16.png ok 422 <ms>
+tests/golden/base/gray16.tif ok 408 <ms>
+tests/golden/base/gray8.png ok 412 <ms>
+tests/golden/base/graya8.png ok 422 <ms>
+tests/golden/base/jxl8.jxl failed 0 <ms>
+    error: metadata-only rewrite failed: exiv2: Setting Exif metadata in BMFF images is not supported
+tests/golden/base/multi.tif ok 826 <ms>
+tests/golden/base/photo.jpg ok 839 <ms>
+tests/golden/base/rgb16.png ok 539 <ms>
+tests/golden/base/rgb16.tif ok 586 <ms>
+tests/golden/base/rgb8.png ok 461 <ms>
+tests/golden/base/rgb8.tif ok 470 <ms>
+tests/golden/base/rgba16.png ok 555 <ms>
+tests/golden/base/rgba8.png ok 522 <ms>
+tests/golden/base/targa.tga failed 0 <ms>
+    error: metadata-only rewrite failed: exiv2: Writing to TGA images is not supported
+
+SUMMARY files=16 ok=12 failed=4 skipped=0 cancelled=0 bytes=6462 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>
+EXIT 4 (failed files)
+### run meta-png rc=4 args=--format png
+[info] [tid] [run] [main.cpp] run start {format=png backend="" tech="" lossless=false bitdepth=16 color=keep conflict=overwrite workers=1 files=16 metadata_only=true out=.cache/regression/out-meta-png params=compressionLevel=6}
+[info] [tid] [run] [main.cpp] version {lib=app version=0.1.0}
+[info] [tid] [run] [main.cpp] version {lib=qt version=6.8.3}
+[info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.14.0}
+[info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
+[info] [tid] [run] [main.cpp] version {lib=libjxl version=0x00002afa}
+[info] [tid] [run] [main.cpp] version {lib=libheif version=1.23.1}
+[info] [tid] [run] [main.cpp] version {lib=exiv2 version=0.28.8}
+[info] [tid] [run] [main.cpp] version {lib=lcms2 version=2190}
+[info] [tid] [run] [main.cpp] version {lib=webp version=1.6.0}
+[info] [tid] [run] [main.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
+[info] [tid] [run] [main.cpp] version {lib=x265 version="x265 HEVC encoder (4.2-vcpkg)"}
+[info] [tid] [run] [main.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.1.0"}
+[info] [tid] [run] [main.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.13.3"}
+[info] [tid] [scheduler] [scheduler.cpp] start {files=16 workers=1 budget_bytes=<bytes> format=png mode=metadata-only}
+[error] [tid] [pipeline] [pipeline.cpp] metadata-only rewrite failed: exiv2: Writing to GIF images is not supported {src=tests/golden/base/anim.gif}
+[error] [tid] [pipeline] [pipeline.cpp] metadata-only rewrite failed: exiv2: Writing to BMP images is not supported {src=tests/golden/base/bmp24.bmp}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/gray16.png out=.cache/regression/out-meta-png/base/gray16.png bytes=422 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/gray16.tif out=.cache/regression/out-meta-png/base/gray16.tif bytes=408 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/gray8.png out=.cache/regression/out-meta-png/base/gray8.png bytes=412 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/graya8.png out=.cache/regression/out-meta-png/base/graya8.png bytes=422 metawrite_ms=<ms> warnings=0}
+[error] [tid] [pipeline] [pipeline.cpp] metadata-only rewrite failed: exiv2: Setting Exif metadata in BMFF images is not supported {src=tests/golden/base/jxl8.jxl}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/multi.tif out=.cache/regression/out-meta-png/base/multi.tif bytes=826 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/photo.jpg out=.cache/regression/out-meta-png/base/photo.jpg bytes=839 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/rgb16.png out=.cache/regression/out-meta-png/base/rgb16.png bytes=539 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/rgb16.tif out=.cache/regression/out-meta-png/base/rgb16.tif bytes=586 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/rgb8.png out=.cache/regression/out-meta-png/base/rgb8.png bytes=461 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/rgb8.tif out=.cache/regression/out-meta-png/base/rgb8.tif bytes=470 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/rgba16.png out=.cache/regression/out-meta-png/base/rgba16.png bytes=555 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/rgba8.png out=.cache/regression/out-meta-png/base/rgba8.png bytes=522 metawrite_ms=<ms> warnings=0}
+[error] [tid] [pipeline] [pipeline.cpp] metadata-only rewrite failed: exiv2: Writing to TGA images is not supported {src=tests/golden/base/targa.tga}
+[info] [tid] [run] [main.cpp] run summary {files=16 ok=12 failed=4 skipped=0 cancelled=0 bytes=6462 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
+photopipeline --dev
+  format=png backend=(first) tech=(first) lossless=false bitdepth=16 color=keep conflict=overwrite
+  out=.cache/regression/out-meta-png workers=1 files=16 metadata_only=true params=[compressionLevel=6]
+
+file                                           state          bytes        ms  warnings
+tests/golden/base/anim.gif failed 0 <ms>
+    error: metadata-only rewrite failed: exiv2: Writing to GIF images is not supported
+tests/golden/base/bmp24.bmp failed 0 <ms>
+    error: metadata-only rewrite failed: exiv2: Writing to BMP images is not supported
+tests/golden/base/gray16.png ok 422 <ms>
+tests/golden/base/gray16.tif ok 408 <ms>
+tests/golden/base/gray8.png ok 412 <ms>
+tests/golden/base/graya8.png ok 422 <ms>
+tests/golden/base/jxl8.jxl failed 0 <ms>
+    error: metadata-only rewrite failed: exiv2: Setting Exif metadata in BMFF images is not supported
+tests/golden/base/multi.tif ok 826 <ms>
+tests/golden/base/photo.jpg ok 839 <ms>
+tests/golden/base/rgb16.png ok 539 <ms>
+tests/golden/base/rgb16.tif ok 586 <ms>
+tests/golden/base/rgb8.png ok 461 <ms>
+tests/golden/base/rgb8.tif ok 470 <ms>
+tests/golden/base/rgba16.png ok 555 <ms>
+tests/golden/base/rgba8.png ok 522 <ms>
+tests/golden/base/targa.tga failed 0 <ms>
+    error: metadata-only rewrite failed: exiv2: Writing to TGA images is not supported
+
+SUMMARY files=16 ok=12 failed=4 skipped=0 cancelled=0 bytes=6462 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>
+EXIT 4 (failed files)
+### run meta-tiff rc=4 args=--format tiff
+[info] [tid] [run] [main.cpp] run start {format=tiff backend="" tech="" lossless=false bitdepth=16 color=keep conflict=overwrite workers=1 files=16 metadata_only=true out=.cache/regression/out-meta-tiff params="compression=lzw deflate_level=6 predictor=2 tiff_tile_height=0 tiff_tile_width=0"}
+[info] [tid] [run] [main.cpp] version {lib=app version=0.1.0}
+[info] [tid] [run] [main.cpp] version {lib=qt version=6.8.3}
+[info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.14.0}
+[info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
+[info] [tid] [run] [main.cpp] version {lib=libjxl version=0x00002afa}
+[info] [tid] [run] [main.cpp] version {lib=libheif version=1.23.1}
+[info] [tid] [run] [main.cpp] version {lib=exiv2 version=0.28.8}
+[info] [tid] [run] [main.cpp] version {lib=lcms2 version=2190}
+[info] [tid] [run] [main.cpp] version {lib=webp version=1.6.0}
+[info] [tid] [run] [main.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
+[info] [tid] [run] [main.cpp] version {lib=x265 version="x265 HEVC encoder (4.2-vcpkg)"}
+[info] [tid] [run] [main.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.1.0"}
+[info] [tid] [run] [main.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.13.3"}
+[info] [tid] [scheduler] [scheduler.cpp] start {files=16 workers=1 budget_bytes=<bytes> format=tiff mode=metadata-only}
+[error] [tid] [pipeline] [pipeline.cpp] metadata-only rewrite failed: exiv2: Writing to GIF images is not supported {src=tests/golden/base/anim.gif}
+[error] [tid] [pipeline] [pipeline.cpp] metadata-only rewrite failed: exiv2: Writing to BMP images is not supported {src=tests/golden/base/bmp24.bmp}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/gray16.png out=.cache/regression/out-meta-tiff/base/gray16.png bytes=422 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/gray16.tif out=.cache/regression/out-meta-tiff/base/gray16.tif bytes=408 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/gray8.png out=.cache/regression/out-meta-tiff/base/gray8.png bytes=412 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/graya8.png out=.cache/regression/out-meta-tiff/base/graya8.png bytes=422 metawrite_ms=<ms> warnings=0}
+[error] [tid] [pipeline] [pipeline.cpp] metadata-only rewrite failed: exiv2: Setting Exif metadata in BMFF images is not supported {src=tests/golden/base/jxl8.jxl}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/multi.tif out=.cache/regression/out-meta-tiff/base/multi.tif bytes=826 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/photo.jpg out=.cache/regression/out-meta-tiff/base/photo.jpg bytes=839 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/rgb16.png out=.cache/regression/out-meta-tiff/base/rgb16.png bytes=539 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/rgb16.tif out=.cache/regression/out-meta-tiff/base/rgb16.tif bytes=586 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/rgb8.png out=.cache/regression/out-meta-tiff/base/rgb8.png bytes=461 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/rgb8.tif out=.cache/regression/out-meta-tiff/base/rgb8.tif bytes=470 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/rgba16.png out=.cache/regression/out-meta-tiff/base/rgba16.png bytes=555 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/rgba8.png out=.cache/regression/out-meta-tiff/base/rgba8.png bytes=522 metawrite_ms=<ms> warnings=0}
+[error] [tid] [pipeline] [pipeline.cpp] metadata-only rewrite failed: exiv2: Writing to TGA images is not supported {src=tests/golden/base/targa.tga}
+[info] [tid] [run] [main.cpp] run summary {files=16 ok=12 failed=4 skipped=0 cancelled=0 bytes=6462 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
+photopipeline --dev
+  format=tiff backend=(first) tech=(first) lossless=false bitdepth=16 color=keep conflict=overwrite
+  out=.cache/regression/out-meta-tiff workers=1 files=16 metadata_only=true params=[compression=lzw deflate_level=6 predictor=2 tiff_tile_height=0 tiff_tile_width=0]
+
+file                                           state          bytes        ms  warnings
+tests/golden/base/anim.gif failed 0 <ms>
+    error: metadata-only rewrite failed: exiv2: Writing to GIF images is not supported
+tests/golden/base/bmp24.bmp failed 0 <ms>
+    error: metadata-only rewrite failed: exiv2: Writing to BMP images is not supported
+tests/golden/base/gray16.png ok 422 <ms>
+tests/golden/base/gray16.tif ok 408 <ms>
+tests/golden/base/gray8.png ok 412 <ms>
+tests/golden/base/graya8.png ok 422 <ms>
+tests/golden/base/jxl8.jxl failed 0 <ms>
+    error: metadata-only rewrite failed: exiv2: Setting Exif metadata in BMFF images is not supported
+tests/golden/base/multi.tif ok 826 <ms>
+tests/golden/base/photo.jpg ok 839 <ms>
+tests/golden/base/rgb16.png ok 539 <ms>
+tests/golden/base/rgb16.tif ok 586 <ms>
+tests/golden/base/rgb8.png ok 461 <ms>
+tests/golden/base/rgb8.tif ok 470 <ms>
+tests/golden/base/rgba16.png ok 555 <ms>
+tests/golden/base/rgba8.png ok 522 <ms>
+tests/golden/base/targa.tga failed 0 <ms>
+    error: metadata-only rewrite failed: exiv2: Writing to TGA images is not supported
+
+SUMMARY files=16 ok=12 failed=4 skipped=0 cancelled=0 bytes=6462 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>
+EXIT 4 (failed files)
+### run meta-webp rc=4 args=--format webp
+[info] [tid] [run] [main.cpp] run start {format=webp backend="" tech="" lossless=false bitdepth=8 color=keep conflict=overwrite workers=1 files=16 metadata_only=true out=.cache/regression/out-meta-webp params="alpha_compression=true alpha_filtering=1 alpha_quality=100 autofilter=false emulate_jpeg_size=false filter_sharpness=0 filter_strength=30 filter_type=true low_memory=false method=4 partition_limit=0 partitions=0 pass=1 preprocessing=0 preset=2 qmax=100 qmin=0 quality=90 segments=4 sharp_yuv=true sns_strength=50"}
+[info] [tid] [run] [main.cpp] version {lib=app version=0.1.0}
+[info] [tid] [run] [main.cpp] version {lib=qt version=6.8.3}
+[info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.14.0}
+[info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
+[info] [tid] [run] [main.cpp] version {lib=libjxl version=0x00002afa}
+[info] [tid] [run] [main.cpp] version {lib=libheif version=1.23.1}
+[info] [tid] [run] [main.cpp] version {lib=exiv2 version=0.28.8}
+[info] [tid] [run] [main.cpp] version {lib=lcms2 version=2190}
+[info] [tid] [run] [main.cpp] version {lib=webp version=1.6.0}
+[info] [tid] [run] [main.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
+[info] [tid] [run] [main.cpp] version {lib=x265 version="x265 HEVC encoder (4.2-vcpkg)"}
+[info] [tid] [run] [main.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.1.0"}
+[info] [tid] [run] [main.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.13.3"}
+[info] [tid] [scheduler] [scheduler.cpp] start {files=16 workers=1 budget_bytes=<bytes> format=webp mode=metadata-only}
+[error] [tid] [pipeline] [pipeline.cpp] metadata-only rewrite failed: exiv2: Writing to GIF images is not supported {src=tests/golden/base/anim.gif}
+[error] [tid] [pipeline] [pipeline.cpp] metadata-only rewrite failed: exiv2: Writing to BMP images is not supported {src=tests/golden/base/bmp24.bmp}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/gray16.png out=.cache/regression/out-meta-webp/base/gray16.png bytes=422 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/gray16.tif out=.cache/regression/out-meta-webp/base/gray16.tif bytes=408 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/gray8.png out=.cache/regression/out-meta-webp/base/gray8.png bytes=412 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/graya8.png out=.cache/regression/out-meta-webp/base/graya8.png bytes=422 metawrite_ms=<ms> warnings=0}
+[error] [tid] [pipeline] [pipeline.cpp] metadata-only rewrite failed: exiv2: Setting Exif metadata in BMFF images is not supported {src=tests/golden/base/jxl8.jxl}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/multi.tif out=.cache/regression/out-meta-webp/base/multi.tif bytes=826 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/photo.jpg out=.cache/regression/out-meta-webp/base/photo.jpg bytes=839 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/rgb16.png out=.cache/regression/out-meta-webp/base/rgb16.png bytes=539 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/rgb16.tif out=.cache/regression/out-meta-webp/base/rgb16.tif bytes=586 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/rgb8.png out=.cache/regression/out-meta-webp/base/rgb8.png bytes=461 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/rgb8.tif out=.cache/regression/out-meta-webp/base/rgb8.tif bytes=470 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/rgba16.png out=.cache/regression/out-meta-webp/base/rgba16.png bytes=555 metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] metadata-only done {src=tests/golden/base/rgba8.png out=.cache/regression/out-meta-webp/base/rgba8.png bytes=522 metawrite_ms=<ms> warnings=0}
+[error] [tid] [pipeline] [pipeline.cpp] metadata-only rewrite failed: exiv2: Writing to TGA images is not supported {src=tests/golden/base/targa.tga}
+[info] [tid] [run] [main.cpp] run summary {files=16 ok=12 failed=4 skipped=0 cancelled=0 bytes=6462 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
+photopipeline --dev
+  format=webp backend=(first) tech=(first) lossless=false bitdepth=8 color=keep conflict=overwrite
+  out=.cache/regression/out-meta-webp workers=1 files=16 metadata_only=true params=[alpha_compression=true alpha_filtering=1 alpha_quality=100 autofilter=false emulate_jpeg_size=false filter_sharpness=0 filter_strength=30 filter_type=true low_memory=false method=4 partition_limit=0 partitions=0 pass=1 preprocessing=0 preset=2 qmax=100 qmin=0 quality=90 segments=4 sharp_yuv=true sns_strength=50]
+
+file                                           state          bytes        ms  warnings
+tests/golden/base/anim.gif failed 0 <ms>
+    error: metadata-only rewrite failed: exiv2: Writing to GIF images is not supported
+tests/golden/base/bmp24.bmp failed 0 <ms>
+    error: metadata-only rewrite failed: exiv2: Writing to BMP images is not supported
+tests/golden/base/gray16.png ok 422 <ms>
+tests/golden/base/gray16.tif ok 408 <ms>
+tests/golden/base/gray8.png ok 412 <ms>
+tests/golden/base/graya8.png ok 422 <ms>
+tests/golden/base/jxl8.jxl failed 0 <ms>
+    error: metadata-only rewrite failed: exiv2: Setting Exif metadata in BMFF images is not supported
+tests/golden/base/multi.tif ok 826 <ms>
+tests/golden/base/photo.jpg ok 839 <ms>
+tests/golden/base/rgb16.png ok 539 <ms>
+tests/golden/base/rgb16.tif ok 586 <ms>
+tests/golden/base/rgb8.png ok 461 <ms>
+tests/golden/base/rgb8.tif ok 470 <ms>
+tests/golden/base/rgba16.png ok 555 <ms>
+tests/golden/base/rgba8.png ok 522 <ms>
+tests/golden/base/targa.tga failed 0 <ms>
+    error: metadata-only rewrite failed: exiv2: Writing to TGA images is not supported
+
+SUMMARY files=16 ok=12 failed=4 skipped=0 cancelled=0 bytes=6462 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>
+EXIT 4 (failed files)

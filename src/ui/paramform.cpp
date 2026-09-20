@@ -46,6 +46,9 @@ namespace {
 
 // 保留键（m1-tasks §3.4）：随工作集传递，但不序列化、不显示、不出现在 values()
 constexpr const char* kLosslessKey = "__lossless";
+// §9.1 U3：参数表中名为 "lossless" 的参数（内省 heif/avif 暴露）不渲染为行——顶部"无损"
+// 复选框独占该参数（值随复选框同步写入工作集，编码器仍从参数集读它）。
+constexpr const char* kLosslessParamKey = "lossless";
 
 bool is_reserved_key(const std::string& key) { return key.rfind("__", 0) == 0; }
 
@@ -299,16 +302,19 @@ struct ParamForm::Impl {
         adv_group->setCheckable(true);
         adv_group->setChecked(false);   // collapsed 起始
         auto* adv_outer = new QVBoxLayout(adv_group);
-        adv_search = new QLineEdit(adv_group);
-        adv_search->setObjectName(QStringLiteral("pp-advanced-search"));
-        adv_search->setPlaceholderText(ParamForm::tr("搜索参数…"));
-        adv_search->setClearButtonEnabled(true);
-        adv_outer->addWidget(adv_search);
+        adv_outer->setContentsMargins(2, 0, 2, 2);   // §9.1：标题↔搜索框间距收紧
+        adv_outer->setSpacing(2);
         adv_area = new QWidget(adv_group);
         adv_area->setObjectName(QStringLiteral("pp-advanced-area"));
         adv_form = new QFormLayout(adv_area);
         adv_form->setContentsMargins(0, 0, 0, 0);
         adv_form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        adv_search = new QLineEdit(adv_area);
+        adv_search->setObjectName(QStringLiteral("pp-advanced-search"));
+        adv_search->setPlaceholderText(ParamForm::tr("搜索参数…"));
+        adv_search->setClearButtonEnabled(true);
+        // §9.1：搜索框与相邻参数控件同列同宽（空标签占位 → 落在字段列，不拉满整行）
+        adv_form->addRow(QString(), adv_search);
         adv_area->setVisible(false);
         adv_outer->addWidget(adv_area);
         QObject::connect(adv_group, &QGroupBox::toggled, adv_area, &QWidget::setVisible);
@@ -317,8 +323,12 @@ struct ParamForm::Impl {
             update_row_states();   // 过滤只影响视图，不是值变化 → 不发信号
         });
 
-        if (const pp::TechDef* t = tech())
-            for (const pp::ParamDef& p : t->params) add_row(p);
+        if (const pp::TechDef* t = tech()) {
+            for (const pp::ParamDef& p : t->params) {
+                if (p.key == kLosslessParamKey) continue;   // §9.1：由顶部"无损"复选框独占
+                add_row(p);
+            }
+        }
 
         root->addWidget(core_area);
         root->addWidget(adv_group);
@@ -452,6 +462,9 @@ struct ParamForm::Impl {
     // 条 4：谓词重算 —— apply_locks → 强制值写回 → 控件同步 → 可见性/●
     void refresh() {
         values[kLosslessKey] = sel.lossless;
+        // §9.1：名为 "lossless" 的参数没有行，其值由顶部"无损"复选框独占（heif/avif 内省参数）
+        if (const pp::TechDef* t = tech(); t && find_param(*t, kLosslessParamKey))
+            values[kLosslessParamKey] = sel.lossless;
         pp::apply_locks(*fmt, sel.backend, sel.tech, sel.lossless, values);
         for (Row& r : rows) {
             const std::optional<pp::ParamValue> forced = pp::eval_lock(*r.def, values);

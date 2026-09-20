@@ -189,6 +189,19 @@ jobs:
           ccache -s -v 2>&1 | grep -E "cache hit|cache miss|Cacheable calls" >> "$RUNNER_TEMP/ccache.txt"
           cat "$RUNNER_TEMP/ccache.txt"
 
+      - name: Qt ${{ env.QT_VERSION }} 缓存（save，仅 linux job 保存一次）
+        # ⚠ 必须成对: 只有 restore 没有 save ⇒ 缓存永远不会被写入（本轮首跑的实测教训：
+        #   run 35520386390 里 qt-* 条目数为 0，三个 job 每次都在重装 Qt）。
+        # 单写者（linux job）+ 仅在**未命中**时保存: 三个 job 的 Qt 内容完全相同，
+        # 让三个 job 都保存只会在同一 key 上撞 409；单写者既确定又无噪声。
+        # if: always() ⇒ 即使后面的构建/测试失败，已经装好的 Qt 也照样入缓存（内容与构建无关）。
+        if: always() && steps.qt-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/Qt/6.8.3/gcc_64
+          key: qt-6.8.3-gcc_64-${{ runner.os }}-${{ runner.arch }}
+
       - name: vcpkg binary cache（save）
         # if: always() —— 失败运行也保存已建好的端口：actions/cache v4 的 post 步是
         # post-if: success()，job 失败即不保存，会导致每次红灯都全冷重建 41 个端口。

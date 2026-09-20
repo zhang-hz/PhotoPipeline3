@@ -142,6 +142,16 @@ jobs:
           ccache -s -v 2>&1 | grep -E "cache hit|cache miss|Cacheable calls" >> "$RUNNER_TEMP/ccache.txt"
           cat "$RUNNER_TEMP/ccache.txt"
 
+      - name: Qt ${{ env.QT_VERSION }} 缓存（save）
+        # 与 build-test.yml 的 linux job 同一 key（该 workflow 里的唯一写者）。播种时若 Qt 也
+        # 失效（版本变更），这一步负责把新装的 Qt 入缓存，避免之后每个 job 各装一次。
+        if: always() && steps.qt-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/Qt/6.8.3/gcc_64
+          key: qt-6.8.3-gcc_64-${{ runner.os }}-${{ runner.arch }}
+
       - name: vcpkg binary cache（save）
         if: always()
         continue-on-error: true

@@ -34,17 +34,32 @@ jobs:
       - name: vcpkg binary cache dir
         # vcpkg 不创建该目录：缺失即 FATAL_ERROR（本地实测，见 M2-T10a 报告）
         run: mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
-      - name: vcpkg binary cache
-        uses: actions/cache@v4
+      - name: vcpkg binary cache (restore)
+        # 滚动 key + restore-keys 前缀：每次运行都命中上一轮最新缓存并继续增长；
+        # 固定的精确 key 会"首次保存即冻结半成品、之后永远命中不再更新"（旧方案缺陷）。
+        # key 末段含 job/run_id/run_attempt：① 两个 job 不争抢同一 key ② re-run 也能重新保存。
+        uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/.cache/vcpkg-binary
-          key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}
+          key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-
       - name: build + corpus + test
         run: |
           cmake --preset release
           cmake --build --preset release
           bash tools/gen_corpus.sh
           ctest --preset release
+      - name: vcpkg binary cache (save)
+        # if: always() —— 失败运行也保存已建好的端口。actions/cache v4 的 post 步是
+        # post-if: success()，job 失败即不保存，导致每次红灯都全冷重建 41 个端口。
+        # continue-on-error —— 缓存服务异常不得把已通过的 job 弄红。
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.cache/vcpkg-binary
+          key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   ui-smoke:
     runs-on: ubuntu-24.04
@@ -73,11 +88,16 @@ jobs:
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
       - name: vcpkg binary cache dir
         run: mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
-      - name: vcpkg binary cache
-        uses: actions/cache@v4
+      - name: vcpkg binary cache (restore)
+        # 滚动 key + restore-keys 前缀：每次运行都命中上一轮最新缓存并继续增长；
+        # 固定的精确 key 会"首次保存即冻结半成品、之后永远命中不再更新"（旧方案缺陷）。
+        # key 末段含 job/run_id/run_attempt：① 两个 job 不争抢同一 key ② re-run 也能重新保存。
+        uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/.cache/vcpkg-binary
-          key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}
+          key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-
       - name: build release-dev + ui smoke
         # ui_smoke 经 tests/golden/base --inputs 自测（39 文件已入库），无需 gen_corpus；
         # QT_QPA_PLATFORM=offscreen 由 CMake add_test 注入，无需 xvfb。
@@ -85,3 +105,11 @@ jobs:
           cmake --preset release-dev
           cmake --build --preset release-dev
           ctest --preset release-dev -R ui_smoke --output-on-failure
+      - name: vcpkg binary cache (save)
+        # if: always() —— 失败运行也保存已建好的端口（见 linux job 同名步骤说明）。
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.cache/vcpkg-binary
+          key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}

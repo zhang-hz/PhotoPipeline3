@@ -1,0 +1,111 @@
+# PhotoPipeline — CI/构建机 系统依赖清单（M2-T19）
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# 单一事实来源：`build-test.yml` 的三个 job 与 `warm-cache.yml` 播种 workflow 全部消费本文件，
+# 不再各自内联 `apt-get install` 列表 —— "每轮 CI 只暴露一个缺包" 的结构性根因就是列表分散。
+#
+# 消费方式（三种等价，推荐第一种）：
+#   bash tools/ci-install-deps.sh
+#   sudo apt-get install -y $(sed -e 's/#.*//' tools/ci-system-deps.txt | tr '\n' ' ')
+#   ⚠ 不要写 `grep -v '^#' tools/ci-system-deps.txt | tr '\n' ' '`：本文件是**行尾注释**格式，
+#     那样会把 `#` 与注释文字当成包名喂给 apt（`E: Unable to locate package #`），必须先剥注释。
+#
+# 覆盖自检（本地/CI 皆可跑，未覆盖项必须为 0）：
+#   bash tools/ci-check-deps.sh build/release-dev
+#
+# 清单怎么来的（M2-T19 ① 的系统化推导，不是逐个试错）：
+#   1. 对**随包 ELF 全集的传递闭包**取 DT_NEEDED soname：
+#        ldd 的输入 = 构建树全部可执行/共享库 + vcpkg_installed/**/*.so*
+#                    + Qt 工具链中**实际随 AppImage 分发**的插件
+#                      （platforms/libqoffscreen.so、platforms/libqxcb.so、
+#                        imageformats/、iconengines/、styles/、tls/）
+#        （刻意**不含** Qt 的 wayland/eglfs/linuxfb/vnc/qml/sql 等插件与库：它们不在分发集里，
+#          收进来会引入 libwayland-*/libdrm/libmysqlclient/libpq 等无关包。）
+#   2. `ldconfig -p` 把 soname 解析到 /usr/lib/x86_64-linux-gnu/<soname>，`dpkg -S` 反查所属包。
+#   3. 去掉基础包（libc6 / libstdc++6 / libgcc-s1 —— 见文件末"隐式覆盖"说明）。
+#   4. 再加上链接期需要的 -dev 包（提供 .so 符号链接与头文件）与构建工具。
+#   本清单在 Ubuntu 24.04（CI runner）与 26.04（本机）上都成立；发行版改名由
+#   tools/ci-install-deps.sh 的"本发行版不存在的包"容错 + tools/ci-check-deps.sh 的
+#   soname 级硬断言共同兜住（改名可以容忍，缺 soname 一定会红）。
+#
+# 历史教训（每一项都曾让 CI 红一整轮，故列入清单并注明根因）：
+#   nasm          → svt-av1 / aom / libwebp 的 x86 SIMD 端口 BUILD_FAILED（run 35513359184）
+#   libgl-dev     → CMake FindOpenGL 缺 OPENGL_INCLUDE_DIR（run 35517286929）
+#   libglx-dev    → 缺 OPENGL_glx_LIBRARY（同上）
+#   libopengl-dev → 缺 OPENGL_opengl_LIBRARY（同上）
+#   libegl1       → libQt6Gui.so.6 的 NEEDED libEGL.so.1 不在 ld 搜索路径 ⇒
+#                   `undefined reference to eglGetCurrentContext` 等 19 个符号（run 35519174344）
+
+# ── 构建 / 测试工具 ────────────────────────────────────────────────────────────
+ccache              # 编译缓存（CMakeLists.txt:32 探测后设 CMAKE_CXX_COMPILER_LAUNCHER）
+ninja-build         # CMakePresets.json 固定 Ninja 生成器
+pkg-config          # pkg_check_modules(LCMS2 / LIBJXL / WEBP / TIFF4)
+python3-pip         # pip3 install aqtinstall（装 Qt 6.8.3）
+nasm                # vcpkg 端口 x86 SIMD 汇编器（缺失即端口 BUILD_FAILED）
+curl                # vcpkg bootstrap 取 vcpkg-tool 预编译包 / 端口源码下载
+unzip               # vcpkg 端口源码解包（.zip 归档）
+zip                 # vcpkg 端口源码打包工具链（vcpkg 要求 PATH 中存在）
+
+# ── 链接期 -dev（提供 .so 符号链接与头文件） ──────────────────────────────────
+libgl-dev           # GL/gl.h + libGL.so      → FindOpenGL OPENGL_INCLUDE_DIR / OPENGL_gl_LIBRARY
+libglx-dev          # libGLX.so               → FindOpenGL OPENGL_glx_LIBRARY（Qt6Gui→WrapOpenGL）
+libopengl-dev       # libOpenGL.so            → FindOpenGL OPENGL_opengl_LIBRARY（同上）
+libegl-dev          # libEGL.so + EGL 头文件  → 链接期显式 -lEGL 的兜底（本轮根因是运行库缺失）
+
+# ── 运行期：AppDir 依赖闭包（47 个 soname） ───────────────────────────────────
+# 每条 = 包名 + 该包提供的 soname（由 tools/ci-check-deps.sh 反查得到）。
+libegl1             # libEGL.so.1        ← libQt6Gui NEEDED；本轮 CI 红灯的直接根因
+libgl1              # libGL.so.1
+libglx0             # libGLX.so.0
+libglvnd0           # libGLdispatch.so.0
+libopengl0          # libOpenGL.so.0
+libx11-6            # libX11.so.6
+libx11-xcb1         # libX11-xcb.so.1    ← Qt xcb 平台插件
+libxau6             # libXau.so.6
+libxdmcp6           # libXdmcp.so.6
+libxcb1             # libxcb.so.1
+libxcb-cursor0      # libxcb-cursor.so.0     ← Qt6 起 xcb 插件硬依赖（M2-T18 目标机缺库同源）
+libxcb-icccm4       # libxcb-icccm.so.4
+libxcb-image0       # libxcb-image.so.0
+libxcb-keysyms1     # libxcb-keysyms.so.1
+libxcb-randr0       # libxcb-randr.so.0
+libxcb-render0      # libxcb-render.so.0
+libxcb-render-util0 # libxcb-render-util.so.0
+libxcb-shape0       # libxcb-shape.so.0
+libxcb-shm0         # libxcb-shm.so.0
+libxcb-sync1        # libxcb-sync.so.1
+libxcb-util1        # libxcb-util.so.1
+libxcb-xfixes0      # libxcb-xfixes.so.0
+libxcb-xkb1         # libxcb-xkb.so.1
+libxkbcommon0       # libxkbcommon.so.0
+libxkbcommon-x11-0  # libxkbcommon-x11.so.0  ← Qt xcb 平台插件
+libdbus-1-3         # libdbus-1.so.3     ← Qt6DBus / QDBus 平台主题
+libglib2.0-0t64     # libglib-2.0.so.0 libgthread-2.0.so.0
+libfontconfig1      # libfontconfig.so.1
+libfreetype6        # libfreetype.so.6
+libexpat1           # libexpat.so.1
+libpng16-16t64      # libpng16.so.16
+libbz2-1.0          # libbz2.so.1.0
+libbrotli1          # libbrotlicommon.so.1 libbrotlidec.so.1
+libzstd1            # libzstd.so.1
+zlib1g              # libz.so.1
+libsystemd0         # libsystemd.so.0
+libgssapi-krb5-2    # libgssapi_krb5.so.2
+libkrb5-3           # libkrb5.so.3
+libk5crypto3        # libk5crypto.so.3
+libkrb5support0     # libkrb5support.so.0
+libcom-err2         # libcom_err.so.2
+libkeyutils1        # libkeyutils.so.1
+libatomic1          # libatomic.so.1
+libpcre2-8-0        # libpcre2-8.so.0
+libssl3t64          # libssl.so.3 libcrypto.so.3 ← Qt tls 插件运行期 dlopen（AppRun pkg_hint 同项）
+# 注: libssl3t64 = Ubuntu 24.04(noble)/26.04 的 time_t-64 过渡包名；旧发行版叫 libssl3。
+#     本包只影响 QNetworkAccessManager 的 TLS 后端，不影响构建与离线测试；缺失时
+#     tools/ci-install-deps.sh 只告警（见该脚本容错逻辑）。
+#
+# ── 隐式覆盖（刻意**不**列入 apt 安装清单） ──────────────────────────────────
+# libc6       提供 libc.so.6 libdl.so.2 libm.so.6 libmvec.so.1 libpthread.so.0 libresolv.so.2 librt.so.1
+# libstdc++6  提供 libstdc++.so.6
+# libgcc-s1   提供 libgcc_s.so.1
+# 理由: 三者是任何 Debian/Ubuntu 用户态的最小构成（apt/dpkg 本身依赖它们），显式安装是噪声；
+#       tools/ci-check-deps.sh 用内置 BASE_PKGS 把它们视为已覆盖，其余 soname 一律要求显式列出。

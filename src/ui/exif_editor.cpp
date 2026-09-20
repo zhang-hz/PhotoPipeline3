@@ -36,8 +36,10 @@
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QItemSelectionModel>
 #include <QLabel>
 #include <QLineEdit>
+#include <QModelIndex>
 #include <QLocale>
 #include <QMessageBox>
 #include <QPalette>
@@ -301,7 +303,7 @@ struct ExifEditor::Impl {
     void ensure_row(const std::string& key, bool is_xmp, Exiv2::TypeId chosen);
     QTreeWidgetItem* group_parent(const std::string& key, bool is_xmp);
 
-    void on_tree_selection(ValuePane& vp, QTreeWidgetItem* item);
+    void on_index_selection(ValuePane& vp, const QModelIndex& idx);
     void show_row(ValuePane& vp, const std::string& key);
     void clear_pane(ValuePane& vp);
     void commit(ValuePane& vp, const QString& text);
@@ -335,6 +337,7 @@ QWidget* ExifEditor::Impl::make_value_pane(ValuePane& vp, const QString& name) {
     auto* v = new QVBoxLayout(box);
 
     vp.title = new QLabel();
+    vp.title->setObjectName(name + QStringLiteral("_value_title"));
     QFont bold = vp.title->font();
     bold.setBold(true);
     vp.title->setFont(bold);
@@ -347,14 +350,17 @@ QWidget* ExifEditor::Impl::make_value_pane(ValuePane& vp, const QString& name) {
     vp.type->setPalette(gray);
     v->addWidget(vp.type);
 
+    // 值编辑区纵向填满右半区（单行 QLineEdit 也设 Expanding：下半部不留大片空白）
     vp.line = new QLineEdit();
     vp.line->setObjectName(name + QStringLiteral("_value"));
     vp.line->setClearButtonEnabled(true);
-    v->addWidget(vp.line);
+    vp.line->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    v->addWidget(vp.line, 1);
 
     vp.multi = new QPlainTextEdit();
     vp.multi->setObjectName(name + QStringLiteral("_value_multi"));
     vp.multi->setMinimumHeight(140);
+    vp.multi->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     vp.multi->setVisible(false);
     v->addWidget(vp.multi, 1);
 
@@ -364,7 +370,6 @@ QWidget* ExifEditor::Impl::make_value_pane(ValuePane& vp, const QString& name) {
     note_pal.setColor(QPalette::WindowText, QColor(0x80, 0x80, 0x80));
     vp.note->setPalette(note_pal);
     v->addWidget(vp.note);
-    v->addStretch(1);
 
     // textChanged（而不是 textEdited）：程序化 setText 也能触发提交，自验/集成可直接注入值
     QObject::connect(vp.line, &QLineEdit::textChanged, q,
@@ -651,12 +656,12 @@ void ExifEditor::Impl::ensure_row(const std::string& key, bool is_xmp, Exiv2::Ty
 
 // —— 选择 / 过滤 ——
 
-void ExifEditor::Impl::on_tree_selection(ValuePane& vp, QTreeWidgetItem* item) {
-    if (!item || item->data(0, kNodeRole).toInt() != kLeaf) {
+void ExifEditor::Impl::on_index_selection(ValuePane& vp, const QModelIndex& idx) {
+    if (!idx.isValid() || idx.data(kNodeRole).toInt() != kLeaf) {
         clear_pane(vp);
         return;
     }
-    show_row(vp, item->data(0, kKeyRole).toString().toStdString());
+    show_row(vp, idx.data(kKeyRole).toString().toStdString());
 }
 
 void ExifEditor::Impl::apply_exif_filter() {
@@ -805,9 +810,11 @@ QWidget* ExifEditor::Impl::make_exif_tab() {
 
     QObject::connect(add_button, &QPushButton::clicked, q, [this] { add_exif_by_number(); });
     QObject::connect(exif_number, &QLineEdit::returnPressed, q, [this] { add_exif_by_number(); });
-    QObject::connect(exif_tree, &QTreeWidget::currentItemChanged, q,
-                     [this](QTreeWidgetItem* cur, QTreeWidgetItem*) {
-                         on_tree_selection(exif_pane, cur);
+    // 选中 → 右值区：挂 selectionModel 的 currentChanged（用户点击与程序化
+    // setCurrentItem/setCurrentIndex 都会同步；currentItemChanged 覆盖不到后者）
+    QObject::connect(exif_tree->selectionModel(), &QItemSelectionModel::currentChanged, q,
+                     [this](const QModelIndex& cur, const QModelIndex&) {
+                         on_index_selection(exif_pane, cur);
                      });
     QObject::connect(exif_search, &QLineEdit::textChanged, q,
                      [this](const QString&) { apply_exif_filter(); });
@@ -845,9 +852,10 @@ QWidget* ExifEditor::Impl::make_xmp_tab() {
 
     QObject::connect(add_button, &QPushButton::clicked, q, [this] { add_xmp_by_path(); });
     QObject::connect(xmp_path, &QLineEdit::returnPressed, q, [this] { add_xmp_by_path(); });
-    QObject::connect(xmp_tree, &QTreeWidget::currentItemChanged, q,
-                     [this](QTreeWidgetItem* cur, QTreeWidgetItem*) {
-                         on_tree_selection(xmp_pane, cur);
+    // 同 EXIF 页：selectionModel::currentChanged（含程序化 setCurrentIndex）
+    QObject::connect(xmp_tree->selectionModel(), &QItemSelectionModel::currentChanged, q,
+                     [this](const QModelIndex& cur, const QModelIndex&) {
+                         on_index_selection(xmp_pane, cur);
                      });
     return page;
 }
@@ -1111,7 +1119,7 @@ void ExifEditor::Impl::build() {
     tabs->setObjectName(QStringLiteral("tabs"));
     tabs->addTab(make_exif_tab(), T("EXIF"));
     tabs->addTab(make_xmp_tab(), T("XMP"));
-    tabs->addTab(make_time_gps_tab(), T("时间 GPS"));
+    tabs->addTab(make_time_gps_tab(), T("时间 / GPS"));
     root->addWidget(tabs, 1);
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);

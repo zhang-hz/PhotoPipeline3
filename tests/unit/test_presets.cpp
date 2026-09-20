@@ -18,6 +18,7 @@
 
 #include "core/params.h"
 #include "core/presets.h"
+#include "core/settings.h"  // M2-T14: settings INI 路径的字节往返
 #include "ui/preset_io.h"
 
 namespace {
@@ -122,14 +123,12 @@ void write_file(const std::filesystem::path& p, const std::string& s) {
     out << s;
 }
 
+// M2-T14：路径按字节读取（不经 QString）—— 否则含非 UTF-8 字节的路径在测试里也会失真。
 QJsonObject parse_object(const std::filesystem::path& p, const std::string& c) {
-    QFile f(QString::fromStdString(p.string()));
-    if (!f.open(QIODevice::ReadOnly)) {
-        fail(c, "cannot open " + p.string());
-        return {};
-    }
+    const std::string s = read_file(p);
     QJsonParseError e{};
-    const QJsonDocument d = QJsonDocument::fromJson(f.readAll(), &e);
+    const QJsonDocument d =
+        QJsonDocument::fromJson(QByteArray(s.data(), static_cast<qsizetype>(s.size())), &e);
     if (e.error != QJsonParseError::NoError || !d.isObject()) {
         fail(c, "not a JSON object: " + p.string());
         return {};
@@ -340,6 +339,24 @@ int main() {
         for (const auto& [path, name] : list) names += (names.empty() ? "" : ",") + name;
         check(names == "Alpha,Mike,Zeta,bad", c, "order [" + names + "]");
         check(ui::list_presets(root / "does-not-exist").empty(), c, "missing dir → empty list");
+
+        // M2-T14 换掉 QDir 实现后钉住旧语义：隐藏文件不列、*.json 大小写不敏感、目录不列、
+        // 不可读文件不列（实测 QDir::entryInfoList("*.json", Files|Readable) 的既有行为）
+        const fs::path parity_dir = fresh_dir(root, "list-parity");
+        write_file(parity_dir / "a.json", R"({"version":1,"name":"A","format":"jxl"})");
+        write_file(parity_dir / "upper.JSON", R"({"version":1,"name":"Upper","format":"jxl"})");
+        write_file(parity_dir / "b.tar.json", R"({"version":1,"name":"Tar","format":"jxl"})");
+        write_file(parity_dir / ".hidden.json", R"({"version":1,"name":"Hidden","format":"jxl"})");
+        write_file(parity_dir / "notes.txt", "ignore");
+        fs::create_directories(parity_dir / "sub.json", ec);
+        if (::getuid() != 0) {  // root 无视读权限，两套实现都会列出
+            write_file(parity_dir / "noread.json", R"({"version":1,"name":"NoRead","format":"jxl"})");
+            fs::permissions(parity_dir / "noread.json", fs::perms::none, ec);
+        }
+        std::string got;
+        for (const auto& [path, name] : ui::list_presets(parity_dir))
+            got += (got.empty() ? "" : ",") + name;
+        check(got == "A,Tar,Upper", c, "listing parity (hidden/case/dir/readable): [" + got + "]");
     }
 
     // 5) validate_preset：格式/后端/技术/位深/参数/版本
@@ -470,6 +487,77 @@ int main() {
         check(m.version == 1 && m.out_bitdepth == 8 && m.color_target == ColorTarget::KeepOriginal &&
                   m.conflict == ConflictPolicy::Rename && m.params.empty(),
               c, "minimal preset defaults");
+        // M2-T14：目录不是合法预设文件 —— 必须返回错误而不得抛异常（libstdc++ 的 ifstream
+        // 读目录会抛 std::ios_base::failure），也不得留下 <dir>.tmp 兄弟文件
+        const fs::path as_dir = fresh_dir(root, "io-dir");
+        PresetData dout;
+        dout.name = "untouched";
+        check(!ui::load_preset(as_dir, dout).empty(), c, "directory must not load as a preset");
+        check(dout.name == "untouched", c, "failed load must not modify out (dir)");
+        check(!ui::save_preset(as_dir, p).empty(), c, "directory must not be a preset target");
+        check(!fs::exists(fs::path(as_dir.string() + ".tmp")), c, "stray <dir>.tmp created");
+    }
+
+    // 8) M2-T14（#23）：非 UTF-8 字节路径 / UTF-8 非 ASCII 路径往返
+    //    Qt6/Linux 的 QString 文件名一律按 UTF-8 编码、解码严格（非法字节 → U+FFFD），
+    //    所以下面的原始字节路径是"经 QString 的旧实现必然失败、字节层实现必须往返"的判据。
+    {
+        const std::string c = "locale-safe-path";
+        // 0xE9 单独出现不是合法 UTF-8 序列 → 目录名 "caf<E9>"、文件名 "p<E9>.json"
+        const fs::path raw_dir = fresh_dir(root, "caf\xE9");
+        const fs::path raw_file = raw_dir / "p\xE9.json";
+        const std::string raw_bytes = raw_file.string();
+        {
+            const QString via_utf8 =
+                QString::fromUtf8(raw_bytes.data(), static_cast<qsizetype>(raw_bytes.size()));
+            check(via_utf8.contains(QChar::ReplacementCharacter), c,
+                  "precondition: path must contain non-UTF-8 bytes");
+        }
+
+        const PresetData p = make_delta_preset();
+        const std::string serr = ui::save_preset(raw_file, p);
+        check(serr.empty(), c, "save into non-UTF-8 byte path: " + serr);
+        check(fs::exists(raw_file), c, "no file at byte path " + raw_bytes);
+        PresetData q;
+        const std::string lerr = ui::load_preset(raw_file, q);
+        check(lerr.empty(), c, "load from non-UTF-8 byte path: " + lerr);
+        check(diff_preset(p, q).empty(), c, "byte-path round-trip diff: " + diff_preset(p, q));
+        check(parse_object(raw_file, c).value("name").toString().toStdString() == p.name, c,
+              "byte-path JSON content");
+
+        // list_presets：返回的路径必须是原字节串（不得经 QString 再编码）
+        const auto list = ui::list_presets(raw_dir);
+        check(list.size() == 1, c, "list size " + std::to_string(list.size()));
+        if (list.size() == 1) {
+            check(list[0].first.string() == raw_bytes, c,
+                  "listed path bytes changed: " + list[0].first.string());
+            PresetData r;
+            check(ui::load_preset(list[0].first, r).empty(), c, "load via listed path");
+            check(diff_preset(p, r).empty(), c, "listed-path round-trip diff");
+        }
+
+        // settings INI：同一条路径边界的字节往返（M2-T14 覆盖项）
+        const fs::path ini = raw_dir / "settings.ini";
+        AppSettings s;
+        s.workers = 7;
+        s.log_level = "debug";
+        s.last_preset = raw_bytes;
+        const std::string inierr = save_settings(ini, s);
+        check(inierr.empty(), c, "settings save: " + inierr);
+        const AppSettings s2 = load_settings(ini);
+        check(s2.workers == 7 && s2.log_level == "debug" && s2.last_preset == raw_bytes, c,
+              "settings byte-path round trip");
+
+        // 回归：合法 UTF-8 的非 ASCII 路径行为不变
+        const fs::path utf8_dir = fresh_dir(root, "预设📸");
+        const fs::path utf8_file = utf8_dir / "预设.json";
+        check(ui::save_preset(utf8_file, p).empty(), c, "save into UTF-8 non-ASCII path");
+        PresetData u;
+        check(ui::load_preset(utf8_file, u).empty(), c, "load from UTF-8 non-ASCII path");
+        check(diff_preset(p, u).empty(), c, "UTF-8 path round-trip diff");
+        const auto ulist = ui::list_presets(utf8_dir);
+        check(ulist.size() == 1 && ulist[0].first.string() == utf8_file.string(), c,
+              "UTF-8 path listing bytes");
     }
 
     fs::remove_all(root, ec);

@@ -19,6 +19,32 @@
 #       探测命令 = ldd <elf> | awk '/=>/ {print $3} /^[[:space:]]*\// {print $1}'
 #       系统前缀（跳过，交给目标机）: /lib/ /lib64/ /usr/lib/ /usr/lib32/ /usr/lib64/
 #       其余（Qt 工具链、vcpkg_installed、$HOME 等）→ 拷入 usr/lib，文件名 = 被引用的 soname。
+#   * **插件依赖闭包（M2-T18 缺陷修复）**: 旧实现只对主二进制做闭包，插件的依赖从未纳入，
+#     导致 GUI 双击无响应。两类后果（诊断工具 tools/appimage-check-closure.sh）:
+#       A) not found —— 目标机缺库（libxcb-cursor0 等）。
+#       B) **交叉版本 ABI 冲突** —— 插件的 libQt6* 依赖解析到目标机**系统 Qt**
+#          （本机系统 Qt 6.10 的 libQt6XcbQpa.so.6 / libQt6Svg.so.6）而随包 Qt 是 6.8.3，
+#          运行期报 `libQt6Core.so.6: version 'Qt_6.10' not found` → xcb 插件加载失败
+#          → `Could not load the Qt platform plugin "xcb"` → 进程 exit 134（双击无响应、
+#          从终端启动才看得到）。**只跑主二进制的旧烟测测不出 B 类**。
+#     修复 = ①闭包输入扩为「主二进制 + 全部插件源 ELF」，②解析路径加 Qt 工具链 lib 目录
+#     （保证 libQt6* 命中随包 Qt 而非系统 Qt），③把插件的 X11 支持库纳入随包。
+#     打包期用 tools/appimage-check-closure.sh 对 AppDir 内**每一个** ELF 做硬门禁
+#     （A/B 任一命中即失败），并把「目标机系统要求清单」写入
+#     <OUT_DIR>/PhotoPipeline-<version>-deps.txt（供 README 系统要求章节取证）。
+#   * 随包 / 不随包策略（M2-T18 定，逐类理由）:
+#       BUNDLE_ALWAYS（白名单豁免，必须随包）: libQt6*（必须来自 Qt 工具链，绝不允许
+#         系统 Qt 顶替）、libxcb-*.so*（Qt xcb 插件专属扩展库，体积小、ABI 稳定、目标机
+#         常缺）、libxkbcommon-x11.so*、libX11-xcb.so*。
+#       NEVER_BUNDLE（绝不随包，硬断言）: glibc/loader 家族（libc/libm/libdl/libpthread/
+#         libgcc_s/libstdc++ 等，必须与宿主一致）、GL/EGL/GLX 驱动栈（libGL/libEGL/libGLX/
+#         libOpenGL/libGLdispatch/libdrm/libgbm，须用厂商驱动）、**单副本不变式**库
+#         （libX11.so.6 / libxcb.so.1 / libxkbcommon.so.0 / libXau / libXdmcp / libICE /
+#         libSM / libglib-2.0 / libdbus-1）：一旦同时存在系统与随包两份，系统 libX11 与
+#         随包 libxcb-* 会各自拉住不同副本 → 同进程两份 X 连接状态，禁止。
+#         随之包内的 libxcb-*.so* 链接的是**系统** libxcb.so.1（单一副本），符合预期。
+#       GL 栈不随包 → 目标机需 libgl1/libegl1（Debian/Ubuntu）或 mesa-libGL/mesa-libEGL
+#         （Fedora）；AppRun 启动前检测并在 stderr/弹窗/日志明确报错（不静默）。
 #   * Qt 插件: usr/lib/qt-plugins/{platforms/libqoffscreen.so, platforms/libqxcb.so,
 #     imageformats/, iconengines/, styles/, tls/}；工具链缺某个目录/文件 → 跳过并提示（不视为失败）。
 #     tls/（M2-T11b 裁定加入）= Qt 6.8 的 libqopensslbackend.so / libqcertonlybackend.so：运行期
@@ -100,38 +126,79 @@ mkdir -p "$OUT_DIR" "$APPDIR/usr/bin" "$APPDIR/usr/lib"
 
 install -m 755 "$BIN" "$APPDIR/usr/bin/photopipeline"
 
-# ---- 非系统 .so 递归闭包（白名单规则见文件头） ----
+# ---- 非系统 .so 递归闭包（白名单规则 + BUNDLE_ALWAYS/NEVER_BUNDLE 见文件头） ----
 shopt -s nullglob
 declare -A SEEN=()
+QT_LIB_DIR_REAL="$(cd "$QT_LIB_DIR" && pwd -P)"
+APPDIR_LIB_REAL="$(cd "$APPDIR/usr/lib" && pwd -P)"
+# 解析路径: 随包 usr/lib 优先，其次 Qt 工具链 lib。
+# 后者是 M2-T18 的关键: 插件源码树里 $ORIGIN/../../lib 在 AppDir 布局下（qt-plugins/platforms/
+# ../../lib = usr/lib/lib，不存在）失效，若不显式给出工具链 lib 目录，ldd 会把 libQt6XcbQpa.so.6
+# 解析到**系统 Qt**（B 类缺陷）并被系统前缀白名单跳过。
+RESOLVE_PATH="$APPDIR/usr/lib:$QT_LIB_DIR"
+
+# BUNDLE_ALWAYS: 命中即视为「必须随包」，不受系统前缀白名单约束
+is_bundle_always() {
+    case "$1" in
+        libQt6*.so*|libxcb-*.so*|libxkbcommon-x11.so*|libX11-xcb.so*) return 0 ;;
+    esac
+    return 1
+}
+# NEVER_BUNDLE: 绝不随包（ABI/驱动/单副本不变式）；命中即硬失败（防回归）
+is_never_bundle() {
+    case "$1" in
+        libc.so*|libm.so*|libmvec.so*|libdl.so*|libpthread.so*|librt.so*|libresolv.so*|ld-linux*|libgcc_s.so*|libstdc++.so*|\
+        libGL.so*|libEGL.so*|libGLX.so*|libOpenGL.so*|libGLdispatch.so*|libdrm.so*|libgbm.so*|libvulkan.so*|\
+        libX11.so*|libxcb.so*|libxkbcommon.so*|libXau.so*|libXdmcp.so*|libXext.so*|libICE.so*|libSM.so*|\
+        libglib-2.0.so*|libgthread-2.0.so*|libgobject-2.0.so*|libgio-2.0.so*|libdbus-1.so*|libsystemd.so*|libudev.so*)
+            return 0 ;;
+    esac
+    return 1
+}
 copy_closure() {  # usage: copy_closure <elf>...
     local -a queue=("$@")
-    local elf lib name
+    local elf lib name lib_dir
     while [ "${#queue[@]}" -gt 0 ]; do
         elf="${queue[0]}"
         queue=("${queue[@]:1}")
         while IFS= read -r lib; do
             [ -n "$lib" ] && [ -e "$lib" ] || continue
-            case "$lib" in
-                /lib/*|/lib64/*|/usr/lib/*|/usr/lib32/*|/usr/lib64/*) continue ;;  # 系统白名单
-            esac
             name="$(basename "$lib")"
+            if is_never_bundle "$name"; then
+                continue   # 交给目标机（系统要求，写入 -deps.txt）
+            fi
+            case "$lib" in
+                /lib/*|/lib64/*|/usr/lib/*|/usr/lib32/*|/usr/lib64/*)
+                    is_bundle_always "$name" || continue ;;  # 系统白名单（BUNDLE_ALWAYS 例外）
+            esac
+            # libQt6* 只允许来自 Qt 工具链（或已由工具链拷入的随包副本 usr/lib）:
+            # 命中目标机系统 Qt = B 类交叉版本冲突，硬失败
+            if [[ "$name" == libQt6* ]]; then
+                lib_dir="$(cd "$(dirname "$lib")" && pwd -P)"
+                [ "$lib_dir" = "$QT_LIB_DIR_REAL" ] || [ "$lib_dir" = "$APPDIR_LIB_REAL" ] \
+                    || die "libQt6 依赖未解析到 Qt 工具链: $name -> $lib
+  期望目录: $QT_LIB_DIR_REAL（或随包副本 $APPDIR_LIB_REAL）
+  这会造成随包 Qt 与系统 Qt 交叉版本冲突（M2-T18 缺陷类），拒绝打包。"
+            fi
             [ -n "${SEEN[$name]:-}" ] && continue
             SEEN[$name]=1
             cp -Lf "$lib" "$APPDIR/usr/lib/$name"
             queue+=("$lib")
-        done < <(LD_LIBRARY_PATH="$APPDIR/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+        done < <(LD_LIBRARY_PATH="$RESOLVE_PATH${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
                  ldd "$elf" 2>/dev/null | awk '/=>/ {print $3} /^[[:space:]]*\// {print $1}')
     done
 }
 
 copy_closure "$APPDIR/usr/bin/photopipeline"
 
-# ---- Qt 插件（§2.9 冻结清单） ----
+# ---- Qt 插件（§2.9 冻结清单）；M2-T18: 用**工具链源路径**作闭包输入 ----
 QTP="$APPDIR/usr/lib/qt-plugins"
 mkdir -p "$QTP/platforms"
+PLUGIN_SRCS=()
 for p in platforms/libqoffscreen.so platforms/libqxcb.so; do
     if [ -f "$QT_PLUGIN_SRC/$p" ]; then
         cp -Lf "$QT_PLUGIN_SRC/$p" "$QTP/$p"
+        PLUGIN_SRCS+=("$QT_PLUGIN_SRC/$p")
     else
         note "提示: Qt 插件缺失（跳过）: $p"
     fi
@@ -140,13 +207,29 @@ for d in imageformats iconengines styles tls; do
     if [ -d "$QT_PLUGIN_SRC/$d" ]; then
         mkdir -p "$QTP/$d"
         cp -aLf "$QT_PLUGIN_SRC/$d/." "$QTP/$d/"
+        for f in "$QT_PLUGIN_SRC/$d"/*.so; do
+            [ -f "$f" ] && PLUGIN_SRCS+=("$f")
+        done
     else
         note "提示: Qt 插件目录不存在（跳过）: $d/"
     fi
 done
-# 插件自身可能引入 qt-plugins 之外的 Qt 库（如 Svg/DBus）→ 再走一遍闭包
+# 插件自身依赖（libQt6XcbQpa/libQt6Svg/libxcb-*/libxkbcommon-x11 …）+ 它们带出的 Qt 库
+# 一并纳入闭包（libqsvg/libqsvgicon 也会拉进 libQt6Svg，M2-T18 一并修复）
+[ "${#PLUGIN_SRCS[@]}" -gt 0 ] && copy_closure "${PLUGIN_SRCS[@]}"
+# 再对「拷入 AppDir 后」的插件复跑一遍（幂等；捕获 $ORIGIN 布局差异）
 plugin_elfs=("$QTP"/platforms/*.so "$QTP"/imageformats/*.so "$QTP"/iconengines/*.so "$QTP"/styles/*.so)
 [ "${#plugin_elfs[@]}" -gt 0 ] && copy_closure "${plugin_elfs[@]}"
+[ "${#PLUGIN_SRCS[@]}" -gt 0 ] && note "插件依赖闭包: 输入 ${#PLUGIN_SRCS[@]} 个插件 ELF，usr/lib 现有 $(find "$APPDIR/usr/lib" -maxdepth 1 -name '*.so*' | wc -l) 个 .so"
+
+# ---- 随包 Qt 溯源断言（M2-T18）: usr/lib/libQt6*.so.* 必须与 Qt 工具链逐一字节一致 ----
+# 防止「系统 Qt 被误拷进随包」这一类回归（B 类缺陷的根因），比路径判断更硬。
+for f in "$APPDIR/usr/lib"/libQt6*.so.*; do
+    [ -e "$f" ] || continue
+    n="$(basename "$f")"
+    [ -f "$QT_LIB_DIR/$n" ] || die "随包 Qt 库在工具链中不存在（来源可疑）: $n"
+    cmp -s "$f" "$QT_LIB_DIR/$n" || die "随包 Qt 库与 Qt 工具链不一致（疑似系统 Qt 混入）: $n ← $QT_LIB_DIR/$n"
+done
 
 # ---- OIIO 插件目录（静态 OIIO → 通常不存在；探测候选，存在则整拷） ----
 OIIO_PLUGINS="$APPDIR/usr/lib/oiio-plugins"
@@ -182,16 +265,103 @@ bash "$ROOT/tools/collect_licenses.sh" "$APPDIR"
 LIC_DIR="$APPDIR/usr/share/licenses"
 LIC_COUNT="$(find "$LIC_DIR" -mindepth 2 -maxdepth 2 -type f -name copyright | wc -l)"
 
-# ---- AppRun（§2.9 冻结内容） ----
+# ---- AppRun（§2.9 冻结内容 + M2-T18 增补） ----
 cat > "$APPDIR/AppRun" <<'APPRUN'
 #!/bin/sh
-# AppRun — PhotoPipeline AppImage 入口（M2-T11；docs/m2-tasks.md §2.9 冻结）
+# AppRun — PhotoPipeline AppImage 入口
+#   §2.9 冻结项（不改）: cd "$APPDIR"；导出 LD_LIBRARY_PATH / QT_PLUGIN_PATH /
+#   OIIO_LIBRARY_PATH；QT_QPA_PLATFORM_PLATFORM_PATH 不设；终端场景 exec 主程序。
+#   M2-T18 增补（双击无响应缺陷）: ①启动前依赖自检 → 缺库时 stderr 明确报错并给出
+#   发行版包名；②无终端（文件管理器双击/桌面启动器 stderr 被丢弃）时把 stderr 写入
+#   日志，且启动即失败（≤15s 非零退出）时弹窗提示。
+#   取舍: 弹窗（zenity→kdialog→xmessage 依次尝试）是双击场景**用户唯一可见**的通道，
+#   日志（$HOME/.cache/PhotoPipeline-appimage.log）保证任何情况下都留下可回传的证据；
+#   两者互为兜底、代价仅几行 sh，故同时保留；弹窗不可用时不阻塞启动。
 cd "$APPDIR" || exit 1
 export LD_LIBRARY_PATH="$APPDIR/usr/lib"
 export QT_PLUGIN_PATH="$APPDIR/usr/lib/qt-plugins"
 export OIIO_LIBRARY_PATH="$APPDIR/usr/lib/oiio-plugins"
 # QT_QPA_PLATFORM_PLATFORM_PATH 不设（§2.9）
-exec usr/bin/photopipeline "$@"
+
+LOG="${XDG_CACHE_HOME:-$HOME/.cache}/PhotoPipeline-appimage.log"
+
+# 缺库 → 发行版包名提示。随包已含 libQt6*/libxcb-*/libxkbcommon-x11/libX11-xcb，此处只列
+# **刻意不随包**的系统项: GL/EGL 驱动栈、glibc 家族、单副本不变式库（libX11/libxcb 核心）、
+# 字体栈、dbus/glib（理由见 tools/make_appimage.sh 文件头）。
+pkg_hint() {
+    case "$1" in
+        libGL.so.1|libGLX.so.0|libOpenGL.so.0|libGLdispatch.so.0) echo "Debian/Ubuntu: libgl1 ｜ Fedora: mesa-libGL/glx-utils" ;;
+        libEGL.so.1)                    echo "Debian/Ubuntu: libegl1 ｜ Fedora: mesa-libEGL" ;;
+        libX11.so.6)                    echo "Debian/Ubuntu: libx11-6 ｜ Fedora: libX11" ;;
+        libxcb.so.1)                    echo "Debian/Ubuntu: libxcb1 ｜ Fedora: libxcb" ;;
+        libxkbcommon.so.0)              echo "Debian/Ubuntu: libxkbcommon0 ｜ Fedora: libxkbcommon" ;;
+        libxcb-cursor.so.0)             echo "Debian/Ubuntu: libxcb-cursor0 ｜ Fedora: xcb-util-cursor" ;;
+        libxkbcommon-x11.so.0)          echo "Debian/Ubuntu: libxkbcommon-x11-0 ｜ Fedora: libxkbcommon-x11" ;;
+        libX11-xcb.so.1)                echo "Debian/Ubuntu: libx11-xcb1 ｜ Fedora: libX11-xcb" ;;
+        libdbus-1.so.3)                 echo "Debian/Ubuntu: libdbus-1-3 ｜ Fedora: dbus-libs" ;;
+        libglib-2.0.so.0)               echo "Debian/Ubuntu: libglib2.0-0 ｜ Fedora: glib2" ;;
+        libfontconfig.so.1)             echo "Debian/Ubuntu: libfontconfig1 ｜ Fedora: fontconfig" ;;
+        libfreetype.so.6)               echo "Debian/Ubuntu: libfreetype6 ｜ Fedora: freetype" ;;
+        libstdc++.so.6)                 echo "Debian/Ubuntu: libstdc++6 ｜ Fedora: libstdc++" ;;
+        *)                              echo "发行版对应包: 用 ldconfig -p | grep $(printf '%s' "$1" | sed 's/\.so.*//') 定位" ;;
+    esac
+}
+
+report_failure() {  # $1 = 摘要（可多行）
+    printf 'PhotoPipeline: %s\n' "$1" >&2
+    printf '\n[%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$1" >>"$LOG" 2>/dev/null
+    [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || return 0
+    msg="$1
+
+日志文件: $LOG"
+    command -v zenity  >/dev/null 2>&1 && zenity --error --no-wrap --title="PhotoPipeline 启动失败" --text="$msg" 2>/dev/null && return 0
+    command -v kdialog >/dev/null 2>&1 && kdialog --error "$msg" 2>/dev/null && return 0
+    command -v xmessage >/dev/null 2>&1 && xmessage -center "PhotoPipeline 启动失败 — $msg" 2>/dev/null && return 0
+    return 0
+}
+
+# ---- ① 启动前依赖自检（ldd 缺失则跳过，不阻塞启动） ----
+if command -v ldd >/dev/null 2>&1; then
+    missing="$(for f in usr/bin/photopipeline usr/lib/*.so usr/lib/*.so.* usr/lib/qt-plugins/*/*.so; do
+                   [ -e "$f" ] || continue
+                   ldd "$f" 2>/dev/null | awk '/=> not found/ {print $1}'
+               done | LC_ALL=C sort -u)"
+    if [ -n "$missing" ]; then
+        detail="$(printf '%s\n' "$missing" | while IFS= read -r lib; do
+                      printf '  %s  →  %s\n' "$lib" "$(pkg_hint "$lib")"
+                  done)"
+        report_failure "缺少运行期系统库，无法启动（AppImage 已自带 Qt 与 libxcb-* 等插件依赖）:
+$detail
+安装上列包后重试；本机已安装清单可用 ldconfig -p 核对。"
+        exit 3
+    fi
+fi
+
+# ---- ② 启动 ----
+if [ -t 0 ] && [ -t 2 ]; then
+    exec usr/bin/photopipeline "$@"          # 终端场景: 原样透明（§2.9）
+fi
+# 无终端（双击/桌面启动器）: stderr → 日志；启动即失败 → 弹窗（不静默）
+: >"$LOG" 2>/dev/null || LOG=/dev/null
+T0="$(date +%s 2>/dev/null || echo 0)"
+usr/bin/photopipeline "$@" 2>>"$LOG" &
+CHILD=$!
+trap 'kill -TERM "$CHILD" 2>/dev/null' INT TERM HUP
+wait "$CHILD"
+RC=$?
+T1="$(date +%s 2>/dev/null || echo 0)"
+# 143/130/129 = 被外部 TERM/INT/HUP 结束（会话注销、用户 kill）→ 不算启动失败，不弹窗；
+# 其余非零（含 134=SIGABRT、139=SIGSEGV 等启动即崩）且 ≤15s 退出 → 弹窗（不静默）
+case "$RC" in
+    0|143|130|129) : ;;
+    *)
+        if [ "$((T1 - T0))" -le 15 ]; then
+            report_failure "启动失败（退出码 $RC，$((T1 - T0)) 秒内退出）:
+$(tail -n 12 "$LOG" 2>/dev/null)"
+        fi
+        ;;
+esac
+exit "$RC"
 APPRUN
 chmod 755 "$APPDIR/AppRun"
 
@@ -199,6 +369,21 @@ chmod 755 "$APPDIR/AppRun"
 missing="$(LD_LIBRARY_PATH="$APPDIR/usr/lib" ldd "$APPDIR/usr/bin/photopipeline" | grep 'not found' || true)"
 [ -z "$missing" ] || die "AppDir 二进制存在未解析依赖:
 $missing"
+
+# ---- M2-T18 依赖闭包硬门禁：AppDir 内**每一个** ELF（主二进制 + usr/lib + 全部插件） ----
+# A 类 not found（目标机缺库）/ B 类 libQt6* 解析到包外（随包 Qt 与系统 Qt 交叉版本冲突）
+# 任一命中即失败 —— 这正是「GUI 双击无响应」缺陷的通用检出手段。
+DEPS_TXT="$OUT_DIR/PhotoPipeline-${VERSION}-deps.txt"
+if ! CLOSURE_OUT="$(bash "$ROOT/tools/appimage-check-closure.sh" "$APPDIR" 2>&1)"; then
+    printf '%s\n' "$CLOSURE_OUT" >&2
+    die "依赖闭包门禁失败（A=not found 或 B=libQt6* 外泄，见上）: $APPDIR"
+fi
+printf '%s\n' "$CLOSURE_OUT" >"$DEPS_TXT"
+note "闭包门禁 PASS: 全部 ELF 无 not found、libQt6* 全部来自随包 Qt（$QT_LIB_DIR）"
+note "  $(printf '%s\n' "$CLOSURE_OUT" | grep '① \[FAIL-A\]')"
+note "  $(printf '%s\n' "$CLOSURE_OUT" | grep '② \[FAIL-B\]')"
+note "  $(printf '%s\n' "$CLOSURE_OUT" | grep '③ \[SYS\]')"
+note "目标机系统要求清单（供 README）→ $DEPS_TXT"
 [ -f "$APPDIR/AppRun" ] || die "AppRun 缺失"
 grep -qx 'Exec=photopipeline' "$APPDIR/usr/share/applications/photopipeline.desktop" \
     || die "desktop Exec 与冻结文本不一致"

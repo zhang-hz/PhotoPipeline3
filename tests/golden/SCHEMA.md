@@ -25,10 +25,10 @@
 |---|---|---|
 | unsignedRational / signedRational | 约分到最简 `num/den`；`den == 1` → 整数形式；多元素以 `, ` 连接 | `28/10` → `14/5`；`4944/100` → `1236/25`；`31/1` → `31` |
 | asciiString | 去尾部 NUL 与首尾空白（字节原样保留，UTF-8 不转码） | `"  padded\0\0"` → `padded`；`N` → `N` |
-| 数组（count > 1） | 逐元素渲染后以 `, ` 连接 | `16 16 16` → `16, 16, 16`；`2.3.0.0`(GPSVersionID) → `2, 3, 0, 0` |
+| 数组（元素型类型 count > 1） | 逐元素渲染后以 `, ` 连接；**仅限数值型与 XMP 集合型**（xmpBag/xmpSeq/xmpAlt/langAlt）——字符串型（asciiString/IPTC string/comment/xmpText/date/time）的 `count()` 是字节长度，按标量处理 | `16 16 16` → `16, 16, 16`；`2.3.0.0`(GPSVersionID) → `2, 3, 0, 0`；xmpText `PhotoPipeline-M0` 保持单值（不重复 16 次） |
 | undefined（二进制） | `0x` + 小写十六进制；超过 64 个十六进制字符截断并加 `...` | `48 50 51 50` → `0x30323332` |
 | 其余（Short/Long/Signed/Date 等，标量） | 沿用 Exiv2 既有文本（`print()`） | `top, left`；`300`；`2024:01:01 00:00:00` |
-| XMP | 同一渲染器（xmpText 视作文本；langAlt/xmpBag/xmpSeq 按元素） | `lang="x-default" …` |
+| XMP | 同一渲染器：xmpText 等字符串型是标量，xmpBag/xmpSeq/xmpAlt/langAlt 按元素 | `PhotoPipeline-M0`；`alpha, beta`；`lang="x-default" …` |
 
 退化守卫（规则未定义、语料无实例）：`den == 0` 原样输出 `num/0`，不做约分。
 `--selftest` 覆盖上表每一类（含 40 字节 undefined 的截断样例）。

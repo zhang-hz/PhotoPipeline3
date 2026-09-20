@@ -265,6 +265,42 @@ std::string binary_hex(const Exiv2::Value& v) {
     return "0x" + hex;
 }
 
+// Value::count() means "number of elements" only for the numeric types and the XMP collection
+// types; for the string-like types (asciiString/string/comment/xmpText/date/time) it is the
+// *byte length*, so a 16-character XMP text must not be mistaken for a 16-element array (found
+// while probing Xmp.xmp.CreatorTool; locked by the normalize-xmp-* selftest probes).
+bool has_element_count(Exiv2::TypeId t) {
+    switch (t) {
+        case Exiv2::unsignedByte:
+        case Exiv2::unsignedShort:
+        case Exiv2::unsignedLong:
+        case Exiv2::unsignedRational:
+        case Exiv2::signedByte:
+        case Exiv2::signedShort:
+        case Exiv2::signedLong:
+        case Exiv2::signedRational:
+        case Exiv2::tiffFloat:
+        case Exiv2::tiffDouble:
+        case Exiv2::tiffIfd:
+        case Exiv2::unsignedLongLong:
+        case Exiv2::signedLongLong:
+        case Exiv2::tiffIfd8:
+        case Exiv2::xmpAlt:
+        case Exiv2::xmpBag:
+        case Exiv2::xmpSeq:
+        case Exiv2::langAlt:
+            return true;
+        default:
+            return false;
+    }
+}
+
+std::string scalar_text(const Exiv2::Metadatum& d, Exiv2::ExifData* exif) {
+    std::string printed = d.print(exif);
+    if (printed.empty()) printed = d.toString();
+    return printed;
+}
+
 std::string normalize_value_text(const Exiv2::Metadatum& d, Exiv2::ExifData* exif) {
     const Exiv2::Value& v = d.value();
     switch (d.typeId()) {
@@ -285,17 +321,19 @@ std::string normalize_value_text(const Exiv2::Metadatum& d, Exiv2::ExifData* exi
         default:
             break;
     }
-    if (v.count() > 1) {  // arrays: element text joined with ", "
+    if (has_element_count(d.typeId()) && v.count() > 1) {  // arrays: elements joined with ", "
         std::string out;
-        for (std::size_t i = 0; i < v.count(); ++i) {
-            if (!out.empty()) out += ", ";
-            out += v.toString(i);
+        try {
+            for (std::size_t i = 0; i < v.count(); ++i) {
+                if (!out.empty()) out += ", ";
+                out += v.toString(i);
+            }
+            return out;
+        } catch (const std::exception&) {
+            return scalar_text(d, exif);  // a rendering quirk must not become a hard error
         }
-        return out;
     }
-    std::string printed = d.print(exif);
-    if (printed.empty()) printed = d.toString();
-    return printed;
+    return scalar_text(d, exif);
 }
 
 bool metadata_lookup(Exiv2::ExifData& exif, Exiv2::XmpData& xmp, const std::string& key,
@@ -562,6 +600,11 @@ int selftest() {
         exif["Exif.Photo.ExifVersion"].setValue(&version_bytes);  // undefined, <= 64 hex digits
         exif["Exif.Photo.MakerNote"].setValue(&maker_bytes);
         img->setExifData(exif);
+        Exiv2::XmpData xmp = img->xmpData();
+        xmp["Xmp.xmp.CreatorTool"] = "PhotoPipeline-M2-T8";  // xmpText: count() is a byte length
+        xmp["Xmp.dc.subject"] = "alpha";                     // xmpBag: ", " joined items
+        xmp["Xmp.dc.subject"] = "beta";
+        img->setXmpData(xmp);
         img->writeMetadata();
     } catch (const std::exception& e) {
         std::printf("VERIFY selftest FAIL writing metadata sample: %s\n", e.what());
@@ -665,6 +708,13 @@ int selftest() {
          m_png, true},
         {"normalize-rational-raw-text-rejected",
          make_exp("a.png", nullptr, 0, meta_eq("Exif.Photo.FNumber", "F2.8"), {}), m_png, false},
+        // XMP: text values must stay scalar (count() is a byte length), collections join items.
+        {"normalize-xmp-text-scalar",
+         make_exp("a.png", nullptr, 0,
+                  meta_eq("Xmp.xmp.CreatorTool", "PhotoPipeline-M2-T8"), {}),
+         m_png, true},
+        {"normalize-xmp-bag-join",
+         make_exp("a.png", nullptr, 0, meta_eq("Xmp.dc.subject", "alpha, beta"), {}), m_png, true},
     };
 
     int failures = 0;

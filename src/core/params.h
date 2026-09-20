@@ -86,4 +86,10 @@ std::vector<std::string> fill_defaults(const FormatDef& f, const std::string& ba
 // 参数快照（日志用）："key=value key=value"（按 key 字典序，value 统一字符串化）
 std::string snapshot_params(const ParamSet& s);
 
+// M2-T5: cross-field constraints the per-key predicates cannot express.
+// Empty result = OK. Messages are user-facing (frozen texts).
+std::vector<std::string> cross_validate(const ParamSet& values,
+                                        const std::string& format_id,
+                                        const std::string& tech_id);
+
 }  // namespace pp

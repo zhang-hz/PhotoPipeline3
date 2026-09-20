@@ -121,6 +121,7 @@ struct ParamForm::Impl {
     QWidget* adv_area = nullptr;
     QFormLayout* adv_form = nullptr;
     QLineEdit* adv_search = nullptr;
+    QLabel* cross_error = nullptr;   // §2.7：交叉参数约束红字区（参数组底部）
 
     struct Row {
         const pp::ParamDef* def = nullptr;   // 指向生效 TechDef 的 ParamDef（生命周期 >= 本控件）
@@ -144,6 +145,7 @@ struct ParamForm::Impl {
         root->setContentsMargins(0, 0, 0, 0);
         root->setSpacing(6);
         build_selectors();
+        build_cross_error();
 
         sel.backend = backends.empty() ? std::string() : backends.front().id;
         const pp::TechDef* t = tech();
@@ -280,6 +282,17 @@ struct ParamForm::Impl {
 
     // ---------------------------------------------------------------- 行构建
 
+    // §2.7：参数组底部的红字交叉校验区（objectName pp-cross-error，#D02222）。
+    // 只创建一次；build_rows() 每次重建控件后把它移回布局末尾。
+    void build_cross_error() {
+        cross_error = new QLabel(q);
+        cross_error->setObjectName(QStringLiteral("pp-cross-error"));
+        cross_error->setStyleSheet(QStringLiteral("color: #D02222;"));
+        cross_error->setTextFormat(Qt::PlainText);
+        cross_error->setWordWrap(true);
+        cross_error->setVisible(false);
+    }
+
     void build_rows() {
         rows.clear();
         delete core_area;
@@ -337,6 +350,9 @@ struct ParamForm::Impl {
 
         root->addWidget(core_area);
         root->addWidget(adv_group);
+        // §2.7：跨格式/技术重建后，红字区恒为参数组最后一行
+        root->removeWidget(cross_error);
+        root->addWidget(cross_error);
     }
 
     void add_row(const pp::ParamDef& p) {
@@ -479,6 +495,21 @@ struct ParamForm::Impl {
         sync_widgets();
         update_row_states();
         update_selectors();
+        update_cross_error();
+    }
+
+    // §2.7：值变化时求值交叉约束；非空 → 红字逐条换行，空 → 隐藏。
+    // 输入是 refresh() 已应用锁定后的工作集（= 真正会下发给编码器的值）。
+    void update_cross_error() {
+        if (!cross_error) return;
+        const std::vector<std::string> msgs = pp::cross_validate(values, fmt->id, sel.tech);
+        QString text;
+        for (const std::string& m : msgs) {
+            if (!text.isEmpty()) text += QLatin1Char('\n');
+            text += QString::fromStdString(m);
+        }
+        cross_error->setText(text);
+        cross_error->setVisible(!msgs.empty());
     }
 
     void sync_widgets() {

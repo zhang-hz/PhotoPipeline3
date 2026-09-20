@@ -177,6 +177,17 @@ void merge_writer_warnings(std::vector<Warning>& dst, const std::vector<std::str
     }
 }
 
+// M2-T5 §2.7 (--dev 校验调用点): cross-field constraints the per-key predicates cannot
+// express. The GUI and the `--dev` harness both block earlier, but run_one_file /
+// run_metadata_only are the single-file entry points — the guard here keeps the per-file
+// verdict (error = first message) identical for every caller, and the dev harness counts
+// the failed file into its exit code. Empty first message = OK.
+std::string first_cross_error(const RunConfig& cfg) {
+    const std::vector<std::string> msgs =
+        cross_validate(cfg.params, cfg.format_id, cfg.tech_id);
+    return msgs.empty() ? std::string() : msgs.front();
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -231,6 +242,10 @@ FileResult run_one_file(FileEntry& fe, const RunConfig& cfg, IEncoder* enc, Pixe
     };
 
     try {
+        // ---- cross-field parameter constraints (§2.7, M2-T5): fail with the first message ----
+        if (const std::string cross_err = first_cross_error(cfg); !cross_err.empty())
+            return fail(cross_err);
+
         // ---- probe (§5.1): spec only, no pixels ----
         stage(FileState::Probing);
         ProbeOutcome po = probe_file(fe.src);
@@ -545,6 +560,10 @@ FileResult run_metadata_only(FileEntry& fe, const RunConfig& cfg,
     };
 
     try {
+        // M2-T5 §2.7：交叉参数约束（仅元数据路径同样是"该文件失败，error=首条消息"）
+        if (const std::string cross_err = first_cross_error(cfg); !cross_err.empty())
+            return fail(cross_err);
+
         stage(FileState::Probing);
         ProbeOutcome po = probe_file(fe.src);
         fe.probe_done = true;

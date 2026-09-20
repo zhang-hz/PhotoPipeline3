@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "codecs/encoders.h"
 #include "core/params.h"
 
 namespace {
@@ -417,6 +418,138 @@ int main() {
         const FormatDef* png = find_format("png");
         check(png && std::find(png->bitdepths.begin(), png->bitdepths.end(), 10) == png->bitdepths.end(),
               c, "png must not allow 10-bit output");
+    }
+
+    // 14) cross_validate 规则①（M2-T5 §2.7）：webp + lossy 的 qmin ≤ qmax
+    {
+        const std::string c = "cross-webp-qmin-qmax";
+        const Slot w = slot("webp", "libwebp", "lossy");
+        ParamSet s = default_params(*w.f, "libwebp", "lossy", false);
+        s["qmin"] = int64_t(90);
+        s["qmax"] = int64_t(100);
+        std::vector<std::string> m = cross_validate(s, "webp", "lossy");
+        check(m.empty(), c, "qmin<qmax 不应报，[" + join(m) + "]");
+        s["qmin"] = int64_t(100);
+        check(cross_validate(s, "webp", "lossy").empty(), c, "qmin==qmax 不算违规");
+        s["qmin"] = int64_t(100);
+        s["qmax"] = int64_t(50);
+        m = cross_validate(s, "webp", "lossy");
+        check(m.size() == 1 && m[0] == "qmin 不能大于 qmax", c, "正例失败，[" + join(m) + "]");
+        // tech 传递：tech_id 空 = 首选技术（webp 首选 = lossy）→ 规则照样生效
+        m = cross_validate(s, "webp", "");
+        check(m.size() == 1 && m[0] == "qmin 不能大于 qmax", c,
+              "空 tech 应解析为首选 lossy，[" + join(m) + "]");
+        // lossless 技术不适用（§2.7 冻结为 "webp 且 lossy"）
+        m = cross_validate(s, "webp", "lossless");
+        check(m.empty(), c, "lossless 不应报 qmin/qmax，[" + join(m) + "]");
+        // 缺键 → 无法判定（缺失=默认值，归 fill_defaults/validate_params）
+        ParamSet partial = default_params(*w.f, "libwebp", "lossy", false);
+        partial.erase("qmax");
+        partial["qmin"] = int64_t(100);
+        check(cross_validate(partial, "webp", "lossy").empty(), c, "缺 qmax 不应报");
+    }
+
+    // 15) cross_validate 规则②（M2-T5 §2.7 父裁定订正）：jpeg progressive ⇒ optimize_coding
+    {
+        const std::string c = "cross-jpeg-progressive";
+        const Slot j = slot("jpeg", "jpegli", "dct");
+        const ParamSet def = default_params(*j.f, "jpegli", "dct", false);
+        const bool def_both_true = param_bool(def, "progressive", false) &&
+                                   param_bool(def, "optimize_coding", false);
+        check(def_both_true, c, "前提失败：jpeg 默认值应为 (progressive=true, optimize_coding=true)");
+        // 关键防误报回归：默认态经 cross_validate 必须为空（§4 T5）
+        std::vector<std::string> m = cross_validate(def, "jpeg", "dct");
+        check(m.empty(), c, "jpeg 默认态不得报，[" + join(m) + "]");
+        // 正例：(true,false)
+        ParamSet s = def;
+        s["optimize_coding"] = false;
+        m = cross_validate(s, "jpeg", "dct");
+        check(m.size() == 1 && m[0] == "启用渐进式时必须启用哈夫曼表优化", c,
+              "正例失败，[" + join(m) + "]");
+        // 负例：(false,false) / (false,true) / 缺键
+        s["progressive"] = false;
+        check(cross_validate(s, "jpeg", "dct").empty(), c, "(false,false) 不应报");
+        s["optimize_coding"] = true;
+        check(cross_validate(s, "jpeg", "dct").empty(), c, "(false,true) 不应报");
+        ParamSet missing = def;
+        missing.erase("progressive");
+        check(cross_validate(missing, "jpeg", "dct").empty(), c, "缺 progressive 不应报");
+        ParamSet missing2 = def;
+        missing2["optimize_coding"] = false;
+        missing2.erase("progressive");
+        check(cross_validate(missing2, "jpeg", "dct").empty(), c, "缺 progressive 不应报（即使 optimize=false）");
+        // 空集（pipeline 契约测试的既有调用形态）不得报
+        check(cross_validate(ParamSet{}, "jpeg", "").empty(), c, "空参数集不应报");
+    }
+
+    // 16) cross_validate 规则③（M2-T5 父裁定新增）：未知参数 = 该 format 全部技术键并集之外
+    {
+        const std::string c = "cross-unknown-params";
+        // 跨技术防误报①：jxl modular 的工作集里塞入"仅 vardct 声明"的键 → 必须为空
+        const Slot jm = slot("jxl", "libjxl", "modular");
+        const Slot jv = slot("jxl", "libjxl", "vardct");
+        check(param_of(*jm.t, "epf") == nullptr && param_of(*jv.t, "epf") != nullptr, c,
+              "前提失败：epf 应只由 vardct 声明");
+        ParamSet cross = default_params(*jm.f, "libjxl", "modular", false);
+        cross["epf"] = int64_t(3);            // 人为塞入的"仅另一技术声明"的键
+        cross["photon_noise"] = 0.01;
+        std::vector<std::string> m = cross_validate(cross, "jxl", "modular");
+        check(m.empty(), c, "跨技术键不得误报，[" + join(m) + "]");
+        // 跨技术防误报②：webp lossy 的工作集里塞入"仅 lossless 声明"的 exact
+        const Slot wl = slot("webp", "libwebp", "lossy");
+        check(param_of(*wl.t, "exact") == nullptr, c, "前提失败：lossy 不应声明 exact");
+        ParamSet cross2 = default_params(*wl.f, "libwebp", "lossy", false);
+        cross2["exact"] = true;
+        check(cross_validate(cross2, "webp", "lossy").empty(), c,
+              "同 format 其它技术的键不得误报，[" + join(cross_validate(cross2, "webp", "lossy")) + "]");
+        // 真未知键：单条
+        ParamSet u = default_params(*slot("jpeg", "jpegli", "dct").f, "jpegli", "dct", false);
+        u["bogus"] = std::string("1");
+        m = cross_validate(u, "jpeg", "dct");
+        check(m.size() == 1 && m[0] == "未知参数：bogus", c, "[" + join(m) + "]");
+        // 多条 → 按字典序稳定（ParamSet=std::map）
+        u["zzz"] = int64_t(1);
+        u["aaa"] = std::string("x");
+        u["mmm"] = true;
+        m = cross_validate(u, "jpeg", "dct");
+        const bool sorted = m.size() == 4 && m[0] == "未知参数：aaa" && m[1] == "未知参数：bogus" &&
+                            m[2] == "未知参数：mmm" && m[3] == "未知参数：zzz";
+        check(sorted, c, "字典序/条数不符，[" + join(m) + "]");
+        check(cross_validate(u, "jpeg", "dct") == m, c, "同一集合重复调用应稳定");
+        // 保留键（"__" 前缀）不参与判定
+        u["__lossless"] = true;
+        u["__anything"] = int64_t(1);
+        check(cross_validate(u, "jpeg", "dct") == m, c, "保留键不得判为未知，[" + join(cross_validate(u, "jpeg", "dct")) + "]");
+        // 默认集（无残留）→ 空
+        check(cross_validate(default_params(*slot("png", "oiio", "deflate").f, "oiio", "deflate", true),
+                             "png", "deflate")
+                  .empty(),
+              c, "默认集不应报");
+        // 未知 format：无法判定 → 不报（格式名校验归 validate_params）
+        check(cross_validate(u, "nope", "x").empty(), c, "未知 format 不应判未知参数");
+        // 未知 backend/tech 但 format 合法：仍按该 format 的并集判定
+        check(cross_validate(cross, "jxl", "bogus-tech").empty(), c,
+              "未知 tech 不改变键并集判定");
+    }
+
+    // 17) cross_validate 规则③ + libheif 运行时内省（heif/avif 静态表无技术）
+    {
+        const std::string c = "cross-heif-introspection";
+        const std::vector<BackendDef> live = introspect_backends("heif");
+        const bool have_live = !live.empty() && !live.front().techs.empty() &&
+                               !live.front().techs.front().params.empty();
+        if (!have_live) {
+            std::printf("test_params: NOTE heif introspection unavailable — "
+                        "cross_validate heif case skipped\n");
+        } else {
+            ParamSet s;
+            for (const ParamDef& p : live.front().techs.front().params) s[p.key] = p.def;
+            std::vector<std::string> m = cross_validate(s, "heif", "runtime");
+            check(m.empty(), c, "内省声明的键不得判未知，[" + join(m) + "]");
+            s["zz_bogus_key"] = int64_t(1);
+            m = cross_validate(s, "heif", "runtime");
+            check(m.size() == 1 && m[0] == "未知参数：zz_bogus_key", c, "[" + join(m) + "]");
+        }
     }
 
     if (g_fail == 0) std::printf("test_params: OK\n");

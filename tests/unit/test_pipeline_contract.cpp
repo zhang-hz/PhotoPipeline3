@@ -512,6 +512,46 @@ int main() {
         std::printf("info meta-write-fail: warnings=%zu detail=%s\n", r.warnings.size(), detail.c_str());
     }
 
+    // ---- U. cross-field parameter constraints → per-file failure, error = first message (M2-T5) ----
+    // run_one_file / run_metadata_only are the single-file entry points the `--dev` harness drives;
+    // the guard is evaluated on the params as handed in (callers that normalize via apply_locks,
+    // e.g. the GUI and main.cpp, never reach this state — this covers the engine boundary).
+    {
+        RunSpec s;
+        s.format = "jpeg";
+        s.bitdepth = 8;
+        s.params = pp::default_params(*pp::find_format("jpeg"), "jpegli", "dct", false);
+        s.params["optimize_coding"] = false;   // progressive defaults to true → illegal pair
+        const pp::FileResult r = run_spec(base / "rgb8.png", corpus, tmp / "cross-jpeg", s);
+        check(!r.ok && r.error == "启用渐进式时必须启用哈夫曼表优化", "cross-param/jpeg",
+              "error=[" + r.error + "]");
+        std::error_code ec;
+        check(!fs::exists(tmp / "cross-jpeg" / "base" / "rgb8.jpg", ec), "cross-param/no-output",
+              "output was written despite a cross-field violation");
+
+        RunSpec u = s;
+        u.params = pp::default_params(*pp::find_format("jpeg"), "jpegli", "dct", false);
+        u.params["bogus"] = std::string("1");
+        const pp::FileResult ru = run_spec(base / "rgb8.png", corpus, tmp / "cross-unknown", u);
+        check(!ru.ok && ru.error == "未知参数：bogus", "cross-param/unknown", "error=[" + ru.error + "]");
+
+        // metadata-only path goes through the same guard
+        RunSpec m;
+        m.format = "jpeg";
+        m.metadata_only = true;
+        m.params = u.params;
+        const pp::FileResult rm = run_spec(base / "rgb8.png", corpus, tmp / "cross-meta", m);
+        check(!rm.ok && rm.error == "未知参数：bogus", "cross-param/metadata-only",
+              "error=[" + rm.error + "]");
+
+        // clean defaults (the golden-smoke shape) must pass through untouched
+        RunSpec clean;
+        clean.format = "jpeg";
+        clean.params = pp::default_params(*pp::find_format("jpeg"), "jpegli", "dct", false);
+        const pp::FileResult rc = run_spec(base / "rgb8.png", corpus, tmp / "cross-clean", clean);
+        check(rc.ok, "cross-param/defaults-clean", rc.error);
+    }
+
     if (g_failed == 0) {
         std::printf("test_pipeline_contract: all checks passed\n");
     } else {

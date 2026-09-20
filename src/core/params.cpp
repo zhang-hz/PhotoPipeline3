@@ -13,11 +13,19 @@
 
 #include <algorithm>
 #include <charconv>
+#include <map>
+#include <mutex>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace pp {
+
+// codecs/encoders.h:18 —— libheif 运行时内省（heif/avif 的参数只存在于编码器插件里）。
+// 按 pipeline.cpp 既有惯例做局部声明：core 不 include codecs 头，符号由 pp_core 在链接期解析。
+std::vector<BackendDef> introspect_backends(std::string_view format_id);
+
 namespace {
 
 constexpr std::string_view kLosslessKey = "__lossless";
@@ -102,6 +110,60 @@ std::string validate_one(const ParamDef& p, const ParamValue& v) {
         }
     }
     return {};
+}
+
+// ---------------------------------------------------------------------------
+// M2-T5 §2.7：cross_validate 的静态表 + 运行时内省键并集
+// ---------------------------------------------------------------------------
+
+// "该 format 全部技术声明的参数键并集"（未知参数判定的唯一依据）：
+//   * 静态表：**全部** backend × **全部** tech —— 同 format 其它技术声明的键因此合法
+//     （切技术/载入预设的残留键不得判未知，M2-T5 父裁定的关键防误报点）；
+//   * libheif 系（heif/avif）：静态表 techs 为空，键只能来自 introspect_backends()。
+struct DeclaredKeys {
+    bool determinable = false;  // false = 无法判定 → 跳过未知参数规则（防误报）
+    std::set<std::string> keys;
+};
+
+DeclaredKeys compute_declared_keys(std::string_view format_id) {
+    DeclaredKeys out;
+    const FormatDef* f = find_format(format_id);
+    if (!f) return out;  // 未知 format：格式名校验归 validate_params，这里不判
+    bool needs_introspection = false;
+    for (const BackendDef& b : f->backends) {
+        if (b.runtime_introspected && b.techs.empty()) needs_introspection = true;
+        for (const TechDef& t : b.techs)
+            for (const ParamDef& p : t.params) out.keys.insert(p.key);
+    }
+    if (needs_introspection) {
+        const std::vector<BackendDef> live = introspect_backends(format_id);
+        if (live.empty()) return out;  // 内省不可用（无编码器插件）→ 无法判定，宁可不报
+        for (const BackendDef& b : live)
+            for (const TechDef& t : b.techs)
+                for (const ParamDef& p : t.params) out.keys.insert(p.key);
+    }
+    out.determinable = true;
+    return out;
+}
+
+// 进程内缓存：内省会实例化 libheif 编码器，代价远高于一次 map 查找；结果对同一进程稳定。
+const DeclaredKeys& declared_keys(std::string_view format_id) {
+    static std::mutex m;
+    static std::map<std::string, DeclaredKeys> cache;
+    const std::lock_guard<std::mutex> lock(m);
+    auto it = cache.find(std::string(format_id));
+    if (it == cache.end())
+        it = cache.emplace(std::string(format_id), compute_declared_keys(format_id)).first;
+    return it->second;  // std::map 节点地址稳定；插入后不再改写 → 并发只读安全
+}
+
+// tech_id 空 = 首选技术（find_backend/find_tech 的既有约定：空 → 第一个）。
+std::string effective_tech_id(const std::string& format_id, const std::string& tech_id) {
+    if (!tech_id.empty()) return tech_id;
+    const FormatDef* f = find_format(format_id);
+    const BackendDef* b = f ? find_backend(*f, "") : nullptr;
+    const TechDef* t = b ? find_tech(*b, "") : nullptr;
+    return t ? t->id : std::string();
 }
 
 }  // namespace
@@ -230,9 +292,50 @@ std::string validate_params(const FormatDef& f, const std::string& backend_id,
         if ((w > 0) != (h > 0))
             return "param 'tiff_tile_width'/'tiff_tile_height': both must be > 0 (tiled) or 0 (strips)";
     }
-    // TODO(M2): 交叉参数约束（如 WebP qmin≤qmax、jpegli progressive 与 optimize_coding 的
-    // 互斥提示）目前分别由编码器（WebPValidateConfig）与 UI 谓词负责，未在此集中校验。
     return {};
+}
+
+// ---------------------------------------------------------------------------
+// M2-T5 §2.7：交叉参数约束（#16 销账；per-key 谓词表达不了的跨字段规则）
+// ---------------------------------------------------------------------------
+std::vector<std::string> cross_validate(const ParamSet& values, const std::string& format_id,
+                                        const std::string& tech_id) {
+    std::vector<std::string> out;
+
+    // 规则① webp + lossy：qmin ≤ qmax（与 WebPValidateConfig 同名约束一致）。
+    // 两键缺一 → 无法判定（缺失=默认值，由 fill_defaults/validate_params 负责）。
+    if (format_id == "webp" && effective_tech_id(format_id, tech_id) == "lossy" &&
+        values.count("qmin") != 0 && values.count("qmax") != 0) {
+        if (param_int(values, "qmin", 0) > param_int(values, "qmax", 0))
+            out.push_back("qmin 不能大于 qmax");
+    }
+
+    // 规则② jpeg：启用渐进式时必须启用哈夫曼表优化。
+    // M2-T5 父裁定订正（§2.7 原文条件写反）：真实约束来自 jpegli ——
+    //   tools/cjpegli.cc:146 `progressive_level > 0 && !optimize_coding` → 报
+    //   "--fixed_code must be used together with -p 0"；
+    //   enc_jpegli.cpp:304 `cinfo.optimize_coding = (progressive || optimize_coding)`
+    //   ⇒ (true,true) 是规范化态、(true,false) 才是非法态。
+    // 因此 jpeg 两参数默认值（true/true，format_tables.cpp:88-100）天然不报（§4 T5）。
+    if (format_id == "jpeg" && values.count("progressive") != 0 &&
+        values.count("optimize_coding") != 0 && param_bool(values, "progressive", false) &&
+        !param_bool(values, "optimize_coding", true)) {
+        out.push_back("启用渐进式时必须启用哈夫曼表优化");
+    }
+
+    // 规则③ 未知参数（M2-T5 父裁定新增）：该 format 全部技术声明的键并集之外的键。
+    //   * 保留键（"__" 前缀，如 __lossless）是引擎内部键，不参与判定；
+    //   * ParamSet 是 std::map → 迭代即字典序，多条消息天然稳定排序；
+    //   * 该 format 任何技术都不认识的键才是未知（跨技术残留键在并集内 → 不报）。
+    const DeclaredKeys& declared = declared_keys(format_id);
+    if (declared.determinable) {
+        for (const auto& [key, value] : values) {
+            (void)value;
+            if (key.rfind("__", 0) == 0) continue;
+            if (declared.keys.find(key) == declared.keys.end()) out.push_back("未知参数：" + key);
+        }
+    }
+    return out;
 }
 
 std::vector<std::string> fill_defaults(const FormatDef& f, const std::string& backend_id,

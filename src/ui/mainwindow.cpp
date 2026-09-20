@@ -620,6 +620,20 @@ void MainWindow::on_start() {
     cfg.flatten_gray = d.settings.flatten_gray;
     cfg.rotate_orientation = d.settings.rotate_orientation;
 
+    // M2-T5 §2.7：交叉参数约束的最后闸门。ParamForm 已实时红字提示，这里对真正要下发的
+    // 配置再校验一次；非空 → 列出全部消息并阻止开始（不进入 lock_for_run/Scheduler）。
+    {
+        const std::vector<std::string> cross =
+            pp::cross_validate(cfg.params, cfg.format_id, cfg.tech_id);
+        if (!cross.empty()) {
+            QStringList lines;
+            lines.reserve(static_cast<int>(cross.size()));
+            for (const std::string& msg : cross) lines << QString::fromStdString(msg);
+            QMessageBox::warning(this, tr("无法开始"), lines.join(QLatin1Char('\n')));
+            return;
+        }
+    }
+
     if (cfg.metadata_only) {
         QStringList bad;
         for (std::size_t i = 0; i < d.model->size(); ++i) {

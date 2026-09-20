@@ -21,6 +21,7 @@
 #include <QPalette>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QSizePolicy>
 #include <QStackedWidget>
 #include <QString>
 #include <QStringList>
@@ -243,6 +244,11 @@ void build_ui(PageRun* page, RunState* s) {
     s->cancel = new QPushButton(PageRun::tr("取消"), page);
     s->cancel->setObjectName(QStringLiteral("runCancel"));
     s->cancel->setEnabled(false);
+    s->cancel->setVisible(false);   // visible ∧ enabled ⇔ is_running()
+    // 隐藏时保留槽位：顶栏其余控件不因按钮显隐而重排（进度条占 stretch 侧）
+    QSizePolicy cancel_policy = s->cancel->sizePolicy();
+    cancel_policy.setRetainSizeWhenHidden(true);
+    s->cancel->setSizePolicy(cancel_policy);
     top->addWidget(s->cancel);
     root->addLayout(top);
 
@@ -356,7 +362,8 @@ void PageRun::begin_run(std::size_t total, const QStringList& names) {
     s->progress->setRange(0, static_cast<int>(total));
     s->progress->setValue(0);
     s->progress->setVisible(true);   // idle 隐藏，运行中显示
-    s->cancel->setEnabled(true);
+    s->cancel->setEnabled(true);     // visible ∧ enabled ⇔ is_running()
+    s->cancel->setVisible(true);
     s->center->setCurrentWidget(s->view);
     s->summary_box->setVisible(false);
     s->clock.start();
@@ -392,6 +399,7 @@ void PageRun::end_run(const pp::RunSummary& sum, const QString& out_root) {
     s->running = false;
     s->finished = true;
     s->cancel->setEnabled(false);
+    s->cancel->setVisible(false);    // 完成态不残留「可取消」观感
     s->total = sum.total;
     s->ok = sum.ok;
     s->failed = sum.failed;
@@ -438,6 +446,7 @@ void PageRun::reset() {
     s->progress->setValue(0);
     s->progress->setVisible(false);  // idle：不显示误导性的「第 0 / 1 个」
     s->cancel->setEnabled(false);
+    s->cancel->setVisible(false);    // visible ∧ enabled ⇔ is_running()
     s->throughput->clear();
     s->summary_text->clear();
     s->summary_box->setVisible(false);

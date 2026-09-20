@@ -103,6 +103,66 @@ constexpr int kShotSettings = 5;
 constexpr int kShotExif = 6;
 constexpr int kShotPresets = 7;
 
+// ---------------------------------------------------------------------------
+// §M2-T16：走查 EXIF 编辑器 fixture 的确定性选取（消除对目录枚举顺序的依赖）
+// ---------------------------------------------------------------------------
+// 走查原先用 model->row(0)（“首个输入文件”）构造 EXIF 编辑器，而输入列表来自
+// FileListModel::add_paths → std::filesystem::recursive_directory_iterator（readdir 顺序
+// 未定义）：仓库工作树首个是 gray16.png（含 IFD0）→ 通过；`git archive` 导出的干净树
+// 首个是 targa.tga（无 EXIF）→ “IFD0 下找不到叶子标签”必红（CI 每次全新 checkout）。
+// 现口径：entries() 的路径**先按字典序排序**（排序结果与 readdir 顺序无关；同名候选也因此
+// 定序），再按下面的**固定候选优先级**取第一个存在者；候选全不存在 → UI-SMOKE FAIL，不静默跳过。
+// 候选 = 实测含 IFD0 叶子（Exif.Image.*）的 tests/golden/base 语料（exiv2 探针逐文件实测，
+// 见 M2-T16 报告；每个候选取首个 IFD0 叶子的值均非空）：
+//   photo.jpg  Exif.Image.Software（1 个 IFD0 叶子，规范 JPEG EXIF 载体）
+//   gray16.tif / multi.tif / rgb8.tif / rgb16.tif  Exif.Image.ImageWidth=64（各 15 个 IFD0 叶子）
+//   rgb8.png / gray16.png / gray8.png / graya8.png / rgba8.png / rgb16.png / rgba16.png
+//              Exif.Image.Software（各 1 个 IFD0 叶子）
+//   jxl8.jxl   Exif.Image.Software（1 个 IFD0 叶子）
+// 实测**无 EXIF**（0 个 Exif.Image.*）因而不作候选：anim.gif / bmp24.bmp / targa.tga。
+const char* const kSmokeExifFixtures[] = {
+    "photo.jpg",  "gray16.tif", "multi.tif",  "rgb8.tif",  "rgb16.tif", "rgb8.png",
+    "gray16.png", "gray8.png",  "graya8.png", "rgba8.png", "rgb16.png", "rgba16.png",
+    "jxl8.jxl",
+};
+
+// 候选清单文本（仅用于失败信息，便于定位语料不合规）
+QString smoke_exif_fixture_names() {
+    QStringList names;
+    for (const char* f : kSmokeExifFixtures) names << QString::fromLatin1(f);
+    return names.join(QLatin1String(" / "));
+}
+
+// 选取 EXIF fixture：entries 路径字典序排序 → 按 kSmokeExifFixtures 固定优先级取第一个存在者。
+// 返回 nullopt = 一个候选都没有（调用方必须 UI-SMOKE FAIL）。
+std::optional<pp::FileEntry> pick_smoke_exif_fixture(const std::vector<pp::FileEntry>& entries) {
+    std::vector<pp::FileEntry> sorted = entries;   // 值语义拷贝（src/base_dir/exception）
+    std::sort(sorted.begin(), sorted.end(),
+              [](const pp::FileEntry& a, const pp::FileEntry& b) {
+                  return a.src.string() < b.src.string();   // 字典序：与 readdir 顺序无关
+              });
+    for (const char* candidate : kSmokeExifFixtures) {
+        const std::filesystem::path name(candidate);
+        for (const pp::FileEntry& e : sorted) {
+            if (e.src.filename() != name) continue;
+            std::error_code ec;
+            if (!std::filesystem::is_regular_file(e.src, ec) || ec) continue;   // 枚举后被移走
+            return e;
+        }
+    }
+    return std::nullopt;
+}
+
+// 诊断用路径标签：优先仓库根相对路径（CI 日志可核对），树外语料（如 /tmp 隔离树）退回文件名。
+QString smoke_fixture_label(const std::filesystem::path& p, const QString& repo_root_path) {
+    const QString abs = QDir::cleanPath(QString::fromStdString(p.string()));
+    if (!repo_root_path.isEmpty()) {
+        const QString rel = QDir(repo_root_path).relativeFilePath(abs);
+        if (!rel.startsWith(QLatin1String("..")) && !QDir::isAbsolutePath(rel)) return rel;
+    }
+    return QString::fromStdString(p.filename().string());
+}
+
 // 断言 e 的最小字节数（语义 = "offscreen 下非空渲染"）：1440×900 整窗截图 >10KB；
 // 对话框截图 >2KB——空列表的预设对话框大面积空白，PNG 压缩后仅 ~7.6KB（实测），
 // 仍是有内容的真实渲染，故按控件面积分档（数值随每次冒烟 stdout 打印备查）。
@@ -1270,13 +1330,24 @@ void MainWindow::Impl::smoke_run(const QString& shots_dir) {
         dlg.close();
         pump(80);
     }
-    {   // 05-exif-editor.png：首个输入文件的 EXIF 编辑器（reject：不产生编辑）
+    {   // 05-exif-editor.png：确定性 fixture 的 EXIF 编辑器（reject：不产生编辑）
+        // §M2-T16：不再取 model->row(0)——那依赖 readdir 顺序（CI 干净 checkout 必红）。
+        const std::optional<pp::FileEntry> fixture = pick_smoke_exif_fixture(model->entries());
         if (model->empty()) {
             smoke_fail(MainWindow::tr("文件列表为空，无法打开 EXIF 编辑器"));
+        } else if (!fixture.has_value()) {
+            smoke_fail(MainWindow::tr("EXIF 编辑器：语料中没有含 IFD0 叶子的候选 fixture"
+                                      "（已枚举 %1 个文件；候选：%2）")
+                           .arg(static_cast<int>(model->size()))
+                           .arg(smoke_exif_fixture_names()));
         } else {
-            const FileRow& row = model->row(0);
-            ExifEditor dlg(QString::fromStdString(row.entry.src.string()), page_meta->rules(),
-                           row.entry.exception, w);
+            const pp::FileEntry& entry = *fixture;
+            // 诊断行（新增，不改冻结末行）：CI 日志据此核对本次实际使用的 fixture
+            std::printf("UI-SMOKE exif-fixture=%s\n",
+                        qUtf8Printable(smoke_fixture_label(entry.src, repo_root())));
+            std::fflush(stdout);
+            ExifEditor dlg(QString::fromStdString(entry.src.string()), page_meta->rules(),
+                           entry.exception, w);
             dlg.setProperty("pp_exif_editor_suppress_modal", true);   // 模态短路（U8 口径）
             dlg.show();
             pump(400);

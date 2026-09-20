@@ -69,6 +69,34 @@ vcpkg_cmake_configure(
 )
 vcpkg_cmake_install()
 vcpkg_copy_pdbs()
+
+# libjpeg.pc —— 第二处同类漏装（T15 修的是 jerror.h，同一 overlay、同一成因）。
+# jpegli 上游只安装 libjpegli_threads.pc / libjpegli_cms.pc，从不提供 pkg-config
+# 名 `libjpeg`；而消费方的 .pc 明确依赖该名字：
+#     libtiff-4.pc:  Requires: zlib libjpeg liblzma
+# 缺失时 post-build 的 vcpkg_fixup_pkgconfig() 执行 `pkg-config --exists libtiff-4`
+# 报 "Package 'libjpeg', required by 'libtiff-4', not found" ⇒ tiff BUILD_FAILED
+# （干净环境复现于 run 35515254028；注意此时 tiff 本体 dbg+rel 均已编译成功，
+# 失败点已从编译后移到 .pc 校验）。开发机同样被系统包掩盖：
+# /usr/lib/x86_64-linux-gnu/pkgconfig/libjpeg.pc 由 libjpeg-turbo8-dev 提供。
+# 字段取自同一 pinned libjpeg-turbo 源的 release/libjpeg.pc.in（与 T15 的 jerror.h
+# 同 tree、同 REF 8ecba364…），仅把 prefix 写成 vcpkg 可重定位形式并交由
+# 下方 vcpkg_fixup_pkgconfig() 校验（这正是该函数为官方 port 产出的形态）。
+# Version 取本 port 自身声明的 3.2.0（vcpkg.json），与官方 libjpeg-turbo 口径一致。
+# 不得改用系统 libjpeg.pc：那是未声明隐式依赖，且 2.1.5 与实际 ABI（62.3.0）不符。
+file(WRITE "${CURRENT_PACKAGES_DIR}/lib/pkgconfig/libjpeg.pc" [=[
+prefix=${pcfiledir}/../..
+exec_prefix=${prefix}
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: libjpeg
+Description: A SIMD-accelerated JPEG codec that provides the libjpeg API
+Version: 3.2.0
+Libs: -L${libdir} -ljpeg
+Cflags: -I${includedir}
+]=])
+
 vcpkg_fixup_pkgconfig()
 
 # jpegli 的公共 C API 静态库：上游没有 install 规则且 jpegli-static 是

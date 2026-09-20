@@ -274,9 +274,8 @@ PP_REGISTER_ENCODER("bmp", "oiio", make_bmp);
 
 }  // namespace
 
-// Link anchor: pp_core is linked with $<LINK_LIBRARY:WHOLE_ARCHIVE> by every consumer
-// (T7c ruling), so this TU is pulled in anyway; the anchor is kept as a redundant safety
-// net for any future target that forgets it.
-// TODO(M2): drop the anchors once the whole-archive link is the only supported form.
-void t7_encoder_link_anchor_oiio() {}
+// No link anchor here (M2-T13): self-registration is guaranteed by the link form, not by
+// a referenced symbol — every consumer links pp_core whole-archive via the
+// pp_core_registered interface target (CMakeLists §2b), so this TU's PP_REGISTER_ENCODER
+// initialiser always runs.
 }  // namespace pp

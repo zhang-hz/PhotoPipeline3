@@ -90,14 +90,22 @@ target_link_libraries(pp_core PUBLIC OpenImageIO::OpenImageIO JPEG::JPEG
     libjpeg-turbo::jpegli-static Exiv2::exiv2lib heif PkgConfig::LIBJXL
     PkgConfig::WEBP PkgConfig::LCMS2 PkgConfig::TIFF4 spdlog::spdlog Qt6::Core)
 
+# 2b) 静态库自注册的唯一链接形态（M2-T13）。pp_core 是 STATIC 库，编码器 TU 里的
+#     PP_REGISTER_ENCODER 静态初始化器只有在归档成员被拉入时才会运行；因此每个
+#     pp_core 消费者一律通过本 INTERFACE 目标链接 —— whole-archive 只在此处定义
+#     一次（T7c 裁定的固化），新 target 无从遗漏，也不再需要任何空函数"链接锚点"
+#     （T13 已删除 enc_oiio.cpp / enc_heif.cpp 的 anchor）。
+add_library(pp_core_registered INTERFACE)
+target_link_libraries(pp_core_registered INTERFACE $<LINK_LIBRARY:WHOLE_ARCHIVE,pp_core>)
+
 # 3) 单测：glob tests/unit/test_*.cpp，每个文件一个 target + ctest 条目（M1 §2.3）
 #    取代 M0 的 add_executable(pp_unit …) 与 add_test(NAME unit …)（test_smoke.cpp 自动收编）
 file(GLOB PP_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/tests/unit/test_*.cpp)
 foreach(src ${PP_TEST_SOURCES})
   get_filename_component(tname ${src} NAME_WE)          # test_fsops → ctest 名 test_fsops
   add_executable(pp_${tname} ${src})
-  # 静态库自注册：whole-archive 拉入编码器 TU（T7c）
-  target_link_libraries(pp_${tname} PRIVATE $<LINK_LIBRARY:WHOLE_ARCHIVE,pp_core>)
+  # 静态库自注册：唯一链接形态（M2-T13）= pp_core_registered
+  target_link_libraries(pp_${tname} PRIVATE pp_core_registered)
   add_test(NAME ${tname} COMMAND pp_${tname})
 endforeach()
 
@@ -109,8 +117,8 @@ file(GLOB_RECURSE PP_UI_SOURCES CONFIGURE_DEPENDS
 list(REMOVE_ITEM PP_UI_SOURCES ${CMAKE_SOURCE_DIR}/src/ui/preset_io.cpp  # 已在 pp_core，避免重复符号
      ${CMAKE_SOURCE_DIR}/src/platform/paths.cpp ${CMAKE_SOURCE_DIR}/src/mapwidget/coord.cpp)  # M1b：同上
 add_executable(photopipeline src/main.cpp ${PP_UI_SOURCES})
-# 静态库自注册：whole-archive 拉入编码器 TU（T7c）
-target_link_libraries(photopipeline PRIVATE $<LINK_LIBRARY:WHOLE_ARCHIVE,pp_core>
+# 静态库自注册：唯一链接形态（M2-T13）= pp_core_registered
+target_link_libraries(photopipeline PRIVATE pp_core_registered
     Qt6::Widgets Qt6::Network)
 # dev harness 接线（M1-T8，§3.15 裁定）：option 已存在但此前无 target 消费 →
 # 发布构建（不带 -DPP_BUILD_DEV=ON）不含 `--dev` 代码路径；鼓点/矩阵/规模用 -DPP_BUILD_DEV=ON。
@@ -137,10 +145,10 @@ target_link_libraries(pp_mkfixtures PRIVATE
 add_executable(pp_spikes tools/pp_spikes.cpp)
 target_link_libraries(pp_spikes PRIVATE
     OpenImageIO::OpenImageIO PkgConfig::LCMS2 Exiv2::exiv2lib)
-# 静态库自注册：whole-archive 拉入编码器 TU（T7c）——M0 tool target 亦为 pp_core 消费者
-target_link_libraries(pp_linkprobe PRIVATE $<LINK_LIBRARY:WHOLE_ARCHIVE,pp_core>)
-target_link_libraries(pp_mkfixtures PRIVATE $<LINK_LIBRARY:WHOLE_ARCHIVE,pp_core>)
-target_link_libraries(pp_spikes PRIVATE $<LINK_LIBRARY:WHOLE_ARCHIVE,pp_core>)
+# 静态库自注册：唯一链接形态（M2-T13）= pp_core_registered —— M0 tool target 亦为 pp_core 消费者
+target_link_libraries(pp_linkprobe PRIVATE pp_core_registered)
+target_link_libraries(pp_mkfixtures PRIVATE pp_core_registered)
+target_link_libraries(pp_spikes PRIVATE pp_core_registered)
 
 add_test(NAME linkprobe  COMMAND pp_linkprobe)
 add_test(NAME fixtures   COMMAND pp_mkfixtures --verify ${CMAKE_SOURCE_DIR}/tests/golden/meta)
@@ -152,6 +160,6 @@ set_tests_properties(spike_f PROPERTIES SKIP_RETURN_CODE 77)
 # 8) pp_verify（M1-T8；§2.3 所有者序列 T8 的唯一 target 增量）
 #    断言 tests/golden/SCHEMA.md 的 pixel/metadata/warnings 三态；--selftest 不需语料。
 add_executable(pp_verify tools/pp_verify.cpp)
-# 静态库自注册：whole-archive 拉入编码器 TU（T7c）
-target_link_libraries(pp_verify PRIVATE $<LINK_LIBRARY:WHOLE_ARCHIVE,pp_core>)
+# 静态库自注册：唯一链接形态（M2-T13）= pp_core_registered
+target_link_libraries(pp_verify PRIVATE pp_core_registered)
 add_test(NAME verify_selftest COMMAND pp_verify --selftest)

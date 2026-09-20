@@ -625,12 +625,10 @@ PP_REGISTER_ENCODER("heif", "x265", make_heif_x265);
 PP_REGISTER_ENCODER("avif", "svt-av1", make_avif_svt);
 PP_REGISTER_ENCODER("avif", "libaom", make_avif_aom);
 
-// Link anchors: pp_core is linked with $<LINK_LIBRARY:WHOLE_ARCHIVE> by every consumer
-// (T7c ruling) so both T7 TUs register unconditionally; the anchors are kept as a
-// redundant safety net and also keep the two T7 TUs together in any ad-hoc link.
-// TODO(M2): drop the anchors once the whole-archive link is the only supported form.
-void t7_encoder_link_anchor_oiio();  // defined in enc_oiio.cpp
-void t7_encoder_link_anchor_heif() { t7_encoder_link_anchor_oiio(); }
+// No link anchors here (M2-T13): self-registration is guaranteed by the link form, not by
+// referenced symbols — every consumer links pp_core whole-archive via the
+// pp_core_registered interface target (CMakeLists §2b), so both T7 TUs register
+// unconditionally.
 
 namespace {
 

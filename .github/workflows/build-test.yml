@@ -17,7 +17,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: apt deps
-        run: sudo apt-get update && sudo apt-get install -y ninja-build ccache pkg-config python3-pip
+        # nasm: svt-av1 / aom / libwebp 等 x86 SIMD 端口经 vcpkg_find_acquire_program(NASM)
+        # 要求系统提供 nasm（vcpkg-tool 不再自动下载构建工具，缺失即 BUILD_FAILED → 35513359184）。
+        run: sudo apt-get update && sudo apt-get install -y ninja-build ccache pkg-config python3-pip nasm
       - name: Qt via aqtinstall
         run: |
           pip3 install aqtinstall
@@ -55,7 +57,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: apt deps
-        run: sudo apt-get update && sudo apt-get install -y ninja-build ccache pkg-config python3-pip
+        # nasm: svt-av1 / aom / libwebp 等 x86 SIMD 端口经 vcpkg_find_acquire_program(NASM)
+        # 要求系统提供 nasm（vcpkg-tool 不再自动下载构建工具，缺失即 BUILD_FAILED → 35513359184）。
+        run: sudo apt-get update && sudo apt-get install -y ninja-build ccache pkg-config python3-pip nasm
       - name: Qt via aqtinstall
         run: |
           pip3 install aqtinstall

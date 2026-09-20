@@ -119,11 +119,11 @@ ParamForm：值变化时调用；非空 → 参数组底部红字 QLabel（objec
 
 | # | 位置 | 摘要 | 处置 → 任务 |
 |---|---|---|---|
-| 1 | enc_oiio.cpp:280 | whole-archive anchor 去除 | 弃权→NOTE(build)：构建形态依赖，非缺陷 |
+| 1 | enc_oiio.cpp:280 | whole-archive anchor 去除 | **修复**→T13（用户裁定提升） |
 | 2 | enc_jpegli.cpp:113 | 未知参数暴露进 warnings | **修复**→T4 |
-| 3 | enc_heif.cpp:383 | svt-av1 默认线程池 | 弃权→NOTE(perf)：实测定格，无更优解 |
-| 4 | enc_heif.cpp:426 | x265alpha 警告噪音重探 | 弃权→NOTE(upstream)：依赖上游修复 |
-| 5 | enc_heif.cpp:631 | anchor（同#1） | 弃权→NOTE(build) |
+| 3 | enc_heif.cpp:383 | svt-av1 默认线程池 | 弃权→NOTE(perf)：实测定格，无更优解（用户确认） |
+| 4 | enc_heif.cpp:426 | x265alpha 警告噪音重探 | 弃权→NOTE(upstream)：依赖上游修复（用户确认） |
+| 5 | enc_heif.cpp:631 | anchor（同#1） | **修复**→T13（与 #1 同源） |
 | 6 | metadata.cpp:322 | 写路径显式 warnings 出参 | **修复**→T4 |
 | 7 | pipeline.cpp:239 | R13 CICP→lcms2 映射 log-only | **修复（最小集）**→T6（§2.8） |
 | 8 | pipeline.cpp:450 | write_metadata 失败仅进 plan.warnings | **修复**→T4 |
@@ -141,7 +141,7 @@ ParamForm：值变化时调用；非空 → 参数组底部红字 QLabel（objec
 | 20 | colormanager.cpp:599 | gray 提升 RGB(A) | 弃权→NOTE(design) |
 | 21 | paths.cpp:14 | Windows 分支 | **重分类 TODO(M3)**→T12 |
 | 22 | page_meta.cpp:353 | 时间预览 GUI 同步 | **修复**→T7（异步化） |
-| 23 | preset_io.cpp:31 | 非 UTF-8 locale 路径 | 弃权→NOTE(limit)：现代 Linux UTF-8 |
+| 23 | preset_io.cpp:31 | 非 UTF-8 locale 路径 | **修复**→T14（用户裁定提升） |
 | 24 | preset_io.cpp:38 | 复用 pp::to_string 等 | **修复**→T7（去重字面量） |
 | 25 | test_pixelbudget.cpp:83 | sleep 握手→确定性信号 | **修复**→T2（TSan 前置） |
 | 26 | pp_verify.cpp:222 | 有理数文本化不稳定 | **修复**→T8（断言级金样依赖） |
@@ -214,11 +214,23 @@ ParamForm：值变化时调用；非空 → 参数组底部红字 QLabel（objec
 - 内容：① #15/#21 重分类 TODO(M3)；② 全仓 `grep -rn "TODO(M2)"` 归零验证（§3 表 30 项全处置）；③ CHANGELOG.md 0.1.0 条目（格式：版本/日期/三段——新增/修复/已知问题；内容从 m1/m1b/m2 报告提炼，**草案**提交主对话终审）；④ README 发行章节草案（AppImage 下载使用/便携模式/系统要求/源码与许可）；⑤ GPL 自查清单（LICENSE 在库、About 页许可清单在、第三方许可文本：vcpkg_installed 各库 license 文件路径清单、源码 offer=repo URL）；⑥ m2-report 素材汇总（各任务报告归并，主对话终稿）。
 - 注意：CHANGELOG/README 草案写 `docs/m2-drafts/` 下，README 正文与 CHANGELOG.md 终稿由主对话落盘。
 
+**T13 whole-archive anchor 清理**（W2；用户裁定提升 #1/#5）
+- 域：`CMakeLists.txt`（**仅链接段**——与 T11 的 version.h 段不重叠：T13 在 W2、T11 在 W3a，波次天然隔离）、`src/codecs/enc_oiio.cpp`、`src/codecs/enc_heif.cpp`（仅锚点相关行）。
+- 内容：把静态库自注册锚点（`--whole-archive` 依赖的强制拉入符号）统一到单一链接形态：pp_core 及其注册 TU 一律以 whole-archive 链接，删除 `enc_oiio.cpp:280`/`enc_heif.cpp:631` 的 anchor 定义与注释，验证注册表非空（运行期 `--dev` 全格式可用 + linkprobe 9/9）。
+- 约束：不得改变任何编码行为；`pp_linkprobe` 与金样 9/9 必须无回归；若发现 whole-archive 形态在某个 target（pp_test_*、pp_verify、pp_spikes、photopipeline）不可行 → 停下报告，不得局部妥协。
+- 自验：`ctest` 全绿 + `pp_linkprobe` 9/9 + `--dev` 全格式跑通 + `nm` 证明注册符号存在且唯一。
+
+**T14 非 UTF-8 locale 路径层**（W3a；用户裁定提升 #23）
+- 域：`src/ui/preset_io.cpp`、`src/platform/paths.{h,cpp}`（按需）、`src/core/settings.{h,cpp}`（按需；h 仅加性）。
+- 内容：`std::filesystem::path` 与 QString 的转换统一走显式 locale 安全层（`QString::fromLocal8Bit/toLocal8Bit` 或 `QFile::encodeName` 等价），消除"字节串即 UTF-8"的隐式假设；覆盖 preset 保存/载入、settings INI 路径、日志目录路径。附单测：构造含非 ASCII 字节的路径（`LANG=C` 环境下）验证往返一致。
+- 约束：既有 UTF-8 路径行为零回归；`data_dir()` 探测语义（§2.2 U1 落地口径）不变。
+- 自验：新增单测 + 全量 ctest + 一条 `LC_ALL=C` 下的 preset 往返自验。
+
 ## 5. CMake / CI / 资产 owner 表
 
 | 资产 | owner | 说明 |
 |---|---|---|
-| CMakeLists.txt | T11（version.h.in/configure_file） | T2 仅 CMakePresets.json（tsan build/test preset） |
+| CMakeLists.txt | T13（链接段：anchor 统一）+ T11（version.h configure_file 段） | 波次隔离：T13=W2、T11=W3a，互不重叠 |
 | CMakePresets.json | T2 | 其余任务不动 |
 | .github/workflows | T10 | — |
 | tools/bin/appimagetool + sha512 | T11 | 唯一授权网络获取 |
@@ -230,8 +242,8 @@ ParamForm：值变化时调用；非空 → 参数组底部红字 QLabel（objec
 ## 6. 波次与依赖
 
 - **W1**（并行）：T1（ASan/UBSan）、T2（TSan+并发）、T3（日志）。
-- **W2**（并行）：T4（警告贯通）、T5（交叉约束）、T7（UI 观感+异步）。依赖 W1 落定（干净基线）。
-- **W3a**（并行）：T6（CICP）、T11（版本+AppImage）。依赖 W2。
+- **W2**（并行）：T4（警告贯通）、T5（交叉约束）、T7（UI 观感+异步）、T13（anchor 统一）。依赖 W1 落定（干净基线）。
+- **W3a**（并行）：T6（CICP）、T11（版本+AppImage）、T14（locale 路径层）。依赖 W2。
 - **W3b**（并行）：T8（金样断言级）、T9（回归基线）。依赖 T4/T5/T6（行为终态）。
 - **W3c**（并行）：T10（CI）、T12（收口扫尾）。依赖 T8/T9/T11 全部。
 - 收口（主对话）：全量验证、README/CHANGELOG/report 落盘、`git tag v0.1.0`（用户确认后）。
@@ -255,4 +267,19 @@ status/task/tasks-done/tasks-skipped/api-deltas/artifacts/frozen-check/build/sel
 
 ## 9. 迭代记录（主对话维护）
 
-（空——R 轮裁定与事故记录追加于此）
+### 9.0 启动决策记录（2026-09-20，用户批量交互裁决）
+
+| # | 决策点 | 裁决 |
+|---|---|---|
+| 1 | 发行平台范围 | **Linux 单平台**（AppImage）；Windows 归 M3 |
+| 2 | 发行产物 | **AppImage 单一产物** |
+| 3 | 版本号 | **0.1.0** |
+| 4 | TODO 处置 | 30 项中 **2 项提升为修复**（#1/#5 anchor→T13、#23 locale 路径层→T14），**11 项确认弃权**（改 NOTE 注释留档），其余 17 项按原裁定修复/重分类 |
+| 5 | appimagetool | **二进制入库** `tools/bin/`（+SHA512 旁置） |
+| 6 | 应用图标 | **生成的 9 色块图标**（§2.5 参数冻结） |
+| 7 | CHANGELOG 语言 | **中文** |
+| 8 | sanitizer 策略 | **全语料矩阵 + 可论证抑制**（tools/lsan.supp） |
+| 9 | CI 首跑 | **主对话推送 GitHub 并盯首跑到绿**（R15 闭合） |
+| 10 | UI 观感 | **5 项全修**（含 XMP 搜索框） |
+
+远端：`https://github.com/zhang-hz/PhotoPipeline3`（public，main 已推送 `ab5a88a`；账号 `zhang-hz`）。首次 CI run = `35512612876`（build-test，R15 首跑，进行中）。注：账号下已存在旧仓库 `zhang-hz/photopipeline`（WPF/C# 血统，与本项目无关），**未触碰**。

@@ -132,6 +132,8 @@ struct RunSpec {
     bool metadata_only = false;
     pp::PixelBudget* budget = nullptr;
     bool cancelled = false;
+    // M2-T4: per-stage hook; the metadata-write-failure case sabotages the container at Writing.
+    std::function<void(pp::FileState)> on_stage;
 };
 
 pp::FileResult run_spec(const fs::path& src, const fs::path& base, const fs::path& out_root,
@@ -161,7 +163,7 @@ pp::FileResult run_spec(const fs::path& src, const fs::path& base, const fs::pat
     std::unique_ptr<pp::IEncoder> enc = pp::make_encoder(cfg.format_id, cfg.backend_id);
     pp::PixelBudget local_budget(pp::PixelBudget::default_capacity_bytes());
     return pp::run_one_file(fe, cfg, enc.get(), s.budget != nullptr ? s.budget : &local_budget, {},
-                            cancelled, nullptr);
+                            cancelled, s.on_stage);
 }
 
 bool write_oriented_tiff(const fs::path& p, int w, int h, int orientation) {
@@ -468,6 +470,46 @@ int main() {
         check(rs.ok, "color/srgb-ok", rs.error);
         check(has_warning(rs, pp::WarningKind::NoIccAssumeSrgb), "color/srgb-warning",
               "NoIccAssumeSrgb missing for an ICC-less source");
+    }
+
+    // ---- T. metadata write failure → file-level warning via the explicit writer channel (M2-T4) ----
+    {
+        RunSpec s;
+        s.format = "jpeg";
+        s.bitdepth = 8;
+        pp::TagEdit e;
+        e.key = "Exif.Image.Artist";
+        e.value = std::string("M2-T4");
+        s.rules.exif_edits.push_back(e);  // non-empty plan: the writer really runs
+
+        // Sabotage the freshly encoded container at the Writing stage (the pipeline calls on_stage
+        // before write_metadata_exiv2): replacing the output file with a directory makes every
+        // Exiv2 open/write attempt fail deterministically, without relying on permissions.
+        const fs::path sabotage = tmp / "meta-write-fail" / "base" / "rgb8.jpg";
+        s.on_stage = [sabotage](pp::FileState st) {
+            if (st != pp::FileState::Writing) return;
+            std::error_code ec;
+            fs::remove(sabotage, ec);
+            fs::create_directory(sabotage, ec);
+        };
+        const pp::FileResult r = run_spec(base / "rgb8.png", corpus, tmp / "meta-write-fail", s);
+
+        check(r.ok, "meta-write-fail/non-fatal", r.error);
+        std::size_t dropped = 0;
+        std::string detail;
+        for (const pp::Warning& w : r.warnings) {
+            if (w.kind == pp::WarningKind::MetadataDropped) {
+                ++dropped;
+                detail = w.detail;
+            }
+        }
+        // Exactly one: the legacy plan.warnings entry and the writer's explicit message must be
+        // merged with dedup, never shown twice.
+        check(dropped == 1, "meta-write-fail/warning-count",
+              "expected exactly 1 MetadataDropped, got " + std::to_string(dropped));
+        check(detail.find("metadata dropped") != std::string::npos, "meta-write-fail/detail",
+              "writer detail missing, got '" + detail + "'");
+        std::printf("info meta-write-fail: warnings=%zu detail=%s\n", r.warnings.size(), detail.c_str());
     }
 
     if (g_failed == 0) {

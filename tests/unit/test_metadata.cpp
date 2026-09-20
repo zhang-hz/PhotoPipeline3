@@ -966,6 +966,59 @@ void test_post_write_formats(const fs::path& tmp) {
     }
 }
 
+// M2-T4 (#6): the additive warnings out-parameter of write_metadata_exiv2().
+// Contract: the explicit channel carries byte-identical detail strings to the legacy
+// plan.warnings push (so the pipeline's merge-dedup collapses the pair), it stays silent on the
+// success path, and the 3-argument M1 form still compiles/behaves unchanged (used by
+// test_post_write_formats/test_png_r1 above).
+void test_write_warnings_out_param(const fs::path& tmp) {
+    const pp::SourceMeta meta = pp::read_metadata(corpus() / "meta" / "exif_full.jpg");
+    pp::BatchRules rules;
+    rules.exif_edits.push_back(pp::TagEdit{"Exif.Image.Artist", std::string("M2-T4"), false});
+    pp::MetadataPlan plan = pp::build_plan(meta, rules, std::nullopt);  // mutable: plan.warnings channel
+    const pp::Payloads pl = pp::make_payloads(plan);
+
+    // Failure case: the post-encode Exiv2 write cannot open its container → metadata loss stays
+    // non-fatal, but the message must arrive through the explicit out-parameter *and* the legacy
+    // plan.warnings channel.
+    const fs::path missing = tmp / "no-such-dir" / "out.jpg";
+    std::vector<std::string> got;
+    const std::string err = pp::write_metadata_exiv2(missing, plan, pl, &got);
+    check(err.empty(), "write-warnings/non-fatal", "metadata loss must stay non-fatal: " + err);
+    check(got.size() == 1, "write-warnings/out-param-count",
+          "expected exactly one writer message, got " + std::to_string(got.size()));
+    check(plan.warnings.size() == got.size(), "write-warnings/frozen-plan-channel",
+          "plan.warnings production changed: size " + std::to_string(plan.warnings.size()) +
+              " vs out-param " + std::to_string(got.size()));
+    if (got.empty() || plan.warnings.empty()) {
+        fail("write-warnings/detail", "no writer message produced");
+    } else {
+        check(got.front() == plan.warnings.front().detail, "write-warnings/identical-detail",
+              show(got.front()) + " vs " + show(plan.warnings.front().detail));
+        check(plan.warnings.front().kind == pp::WarningKind::MetadataDropped,
+              "write-warnings/kind", "expected MetadataDropped");
+        check(got.front().find("metadata dropped") != std::string::npos, "write-warnings/detail",
+              show(got.front()));
+    }
+
+    // Success path: the out-parameter stays empty (no invented warnings).
+    const fs::path ok_out = tmp / "write-warnings-ok.jpg";
+    if (!copy_fixture(corpus() / "base" / "photo.jpg", ok_out)) {
+        fail("write-warnings/copy", ok_out.string());
+        return;
+    }
+    pp::MetadataPlan plan2 = pp::build_plan(pp::read_metadata(ok_out), rules, std::nullopt);
+    std::vector<std::string> got2;
+    const std::string err2 =
+        pp::write_metadata_exiv2(ok_out, plan2, pp::make_payloads(plan2), &got2);
+    check(err2.empty(), "write-warnings/success-no-error", err2);
+    check(got2.empty(), "write-warnings/success-silent",
+          "unexpected writer message: " + (got2.empty() ? std::string() : show(got2.front())));
+
+    std::printf("info write-warnings: failure_detail=%s warnings=%zu\n",
+                (got.empty() ? std::string("<none>") : show(got.front())).c_str(), plan.warnings.size());
+}
+
 // §4.5 / consensus §3.6: MakerNote bytes are carried across containers verbatim, never parsed or
 // edited, and the layer only reports "Makernote present, N bytes" in the log.
 void test_makernote(const fs::path& tmp) {
@@ -1065,6 +1118,7 @@ int main() {
     test_metadata_only_capability();
     test_mirror_helper();
     test_post_write_formats(tmp);
+    test_write_warnings_out_param(tmp);
     test_makernote(tmp);
     test_mtime(tmp);
 

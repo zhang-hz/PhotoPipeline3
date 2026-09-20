@@ -79,8 +79,11 @@ Payloads make_payloads(const MetadataPlan& plan);
 // —— 写入路径 ——
 // 路径 A（JPEG/PNG/TIFF/WebP）：编码完成后 Exiv2 后写；返回空串=成功
 // PNG 的 eXIf 若写入失败（R1）→ 关键 EXIF 字段镜像到 XMP + Warning{MetadataDropped}
+// M2-T4（加性）：`out_warnings` 为可选出参（默认 nullptr），承载写路径的失败/降级消息，
+// 文案与既有 plan.warnings 逐字节一致；既有 3 参调用点无需改动即可编译且行为不变。
 std::string write_metadata_exiv2(const std::filesystem::path& out_file,
-                                 const MetadataPlan& plan, const Payloads& payloads);
+                                 const MetadataPlan& plan, const Payloads& payloads,
+                                 std::vector<std::string>* out_warnings = nullptr);
 
 // 路径 B/C（HEIF/AVIF/JXL）：编码器内注入，本函数只负责给编码器提供载荷 → 见 §3.8
 

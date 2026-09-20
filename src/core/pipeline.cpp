@@ -162,6 +162,21 @@ void merge_warnings(std::vector<Warning>& dst, const std::vector<Warning>& src) 
     dst.insert(dst.end(), src.begin(), src.end());
 }
 
+// M2-T4 (#8): the metadata writer reports its failure/degradation messages through an explicit
+// out-parameter as well. Merge them into the file warnings, dropping the messages the legacy
+// plan.warnings channel already contributed (identical kind + detail) so the dual channel is
+// never visible twice. New-only: nothing already in `dst` is removed or reordered.
+void merge_writer_warnings(std::vector<Warning>& dst, const std::vector<std::string>& details) {
+    for (const std::string& detail : details) {
+        const bool duplicate = std::any_of(dst.begin(), dst.end(), [&detail](const Warning& w) {
+            return w.kind == WarningKind::MetadataDropped && w.detail == detail;
+        });
+        if (!duplicate) {
+            dst.push_back(Warning{WarningKind::MetadataDropped, detail});
+        }
+    }
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -443,13 +458,17 @@ FileResult run_one_file(FileEntry& fe, const RunConfig& cfg, IEncoder* enc, Pixe
         stage(FileState::Writing);
         t0 = Clock::now();
         std::string meta_err;
+        // M2-T4 (#6/#8): the writer's explicit failure/degradation channel; plan.warnings below
+        // stays byte-identical to M1 (semantic freeze) — the two are merged with dedup.
+        std::vector<std::string> writer_warnings;
         if (fmt->meta_path == "exiv2") {
-            meta_err = write_metadata_exiv2(res.out, meta_plan, payloads);
+            meta_err = write_metadata_exiv2(res.out, meta_plan, payloads, &writer_warnings);
         }
-        merge_warnings(res.warnings, meta_plan.warnings);  // incl. warnings pushed by the writer
-        // TODO(M2): write_metadata_exiv2() reports failures exclusively through plan.warnings
-        // (it always returns an empty string today), so this branch is defensive; a future
-        // revision should return the error string (frozen signature already allows it).
+        merge_warnings(res.warnings, meta_plan.warnings);  // legacy channel (frozen content)
+        merge_writer_warnings(res.warnings, writer_warnings);
+        // Defensive branch: write_metadata_exiv2() reports through the channels above and always
+        // returns an empty string today, so meta_err is normally empty; a future revision may
+        // return the error string (the frozen signature already allows it).
         if (!meta_err.empty()) {
             res.warnings.push_back(Warning{WarningKind::MetadataDropped, meta_err});
             log_warn(kStage, kFile, "metadata write failed (non-fatal)",

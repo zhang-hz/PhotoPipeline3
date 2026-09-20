@@ -106,12 +106,12 @@ JpegliParams read_params(const ParamSet& s) {
     return p;
 }
 
-// E9: unrecognised keys are ignored (never fatal) and recorded as a warning log
-// line. WarningKind (M0 PP-FROZEN types.h) has no "unknown parameter" member and
-// warnings must not carry encoder failures, so the log is the faithful channel;
-// see api-deltas in the report.
-// TODO(M2): expose unknown-parameter warnings through EncodeResult.warnings once
-// types.h gains a matching WarningKind (M0 frozen → needs a main-dialogue ruling).
+// E9: unrecognised keys are ignored (never fatal) and recorded as a warning log line.
+// M2-T4 NOTE(design): the user-visible report for an unknown *configuration* key belongs to the
+// configuration-validation channel (§2.7 cross_validate, M2-T5), not to EncodeResult.warnings —
+// WarningKind (M0 PP-FROZEN types.h) carries per-file processing facts and, per the M1 ruling,
+// deliberately has no "configuration defect" member. This log line stays as the encoder-side
+// evidence; see api-deltas in the M2-T4 report.
 void warn_unknown_params(const ParamSet& s) {
     for (const auto& [key, value] : s) {
         (void)value;

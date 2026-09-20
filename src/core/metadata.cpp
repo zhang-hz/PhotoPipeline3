@@ -319,11 +319,21 @@ void log_makernote(const Exiv2::ExifData& exif, std::string_view stage) {
 // FileResult.warnings). Every call site passes a mutable plan object (the build_plan() result
 // stored in a local, or a temporary) — never a declared-const object — so writing through the
 // cast is well defined there. Documented in the M1-T5 report as `next-needed` for T8.
-// TODO(M2): give the write paths an explicit warnings out-parameter (or a result struct) so this
-//           const_cast channel can be dropped.
+// M2-T4 RESOLUTION: write_metadata_exiv2() now also takes an explicit `out_warnings`
+// out-parameter (see note_write_warning below), which is the supported channel for callers.
+// The plan.warnings push is kept verbatim as the backward-compatibility channel — M2-T4 freezes
+// its production and content ("new channel adds, never removes"), so both stay in lockstep.
 void push_plan_warning(const MetadataPlan& plan, WarningKind kind, std::string detail) {
     auto& mutable_plan = const_cast<MetadataPlan&>(plan);
     mutable_plan.warnings.push_back(Warning{kind, std::move(detail)});
+}
+
+// M2-T4 (#6): report a write-path failure/degradation through *both* channels with a
+// byte-identical detail string, so the pipeline can merge them and drop the duplicate.
+void note_write_warning(const MetadataPlan& plan, std::vector<std::string>* out_warnings,
+                        WarningKind kind, const std::string& detail) {
+    if (out_warnings != nullptr) out_warnings->push_back(detail);
+    push_plan_warning(plan, kind, detail);
 }
 
 // Exiv2 read/modify/write in one place; empty containers => remove that metadata section.
@@ -648,7 +658,8 @@ Payloads make_payloads(const MetadataPlan& plan) {
 // ===========================================================================
 
 std::string write_metadata_exiv2(const std::filesystem::path& out_file, const MetadataPlan& plan,
-                                 const Payloads& payloads) {
+                                 const Payloads& payloads,
+                                 std::vector<std::string>* out_warnings) {
     (void)payloads;  // 后写路径把容器直接交给 Exiv2；payloads 服务于 JXL/HEIF 注入路径（§3.8）
     const std::string ext = lower_copy(out_file.extension().string());
     const bool is_png = (ext == ".png");
@@ -677,7 +688,8 @@ std::string write_metadata_exiv2(const std::filesystem::path& out_file, const Me
             const std::string err2 = exiv2_apply(out_file, nullptr, &mirrored);
             if (err2.empty()) {
                 log_warn("MetaWrite", "metadata.cpp", "png exif mirrored to xmp");
-                push_plan_warning(plan, WarningKind::MetadataDropped, "png exif mirrored to xmp");
+                note_write_warning(plan, out_warnings, WarningKind::MetadataDropped,
+                                   "png exif mirrored to xmp");
                 return {};
             }
             err = err2;
@@ -687,7 +699,7 @@ std::string write_metadata_exiv2(const std::filesystem::path& out_file, const Me
     // Metadata-only loss: keep the pixel output, report it (§5.2 BMP policy; R1 fallback for PNG).
     std::string detail = is_png ? "png metadata dropped: " + err : "metadata dropped: " + err;
     log_error("MetaWrite", "metadata.cpp", detail.c_str());
-    push_plan_warning(plan, WarningKind::MetadataDropped, std::move(detail));
+    note_write_warning(plan, out_warnings, WarningKind::MetadataDropped, detail);
     return {};
 }
 

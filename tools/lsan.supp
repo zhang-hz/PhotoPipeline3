@@ -1,0 +1,39 @@
+# PhotoPipeline M2-T1 — LeakSanitizer suppressions.
+#
+# Consumed through the environment (nothing in CMakeLists points at it, so the
+# dev/CI command line owns the wiring):
+#
+#   LSAN_OPTIONS="suppressions=$PWD/tools/lsan.supp:print_suppressions=0" \
+#   ASAN_OPTIONS="detect_leaks=1:halt_on_error=0" \
+#   UBSAN_OPTIONS="print_stacktrace=1" \
+#   build/m2-t1/photopipeline --dev tests/golden/base/* --out /tmp/out --format jxl --workers 2
+#
+# Verdict for M2-T1: NO ACTIVE SUPPRESSION RULES. This file is intentionally
+# comment-only. The whole-corpus ASan/UBSan matrix (base x 8 formats, metadata-only
+# x 4 formats, edge/ and meta/ negative corpora x 8 formats, plus the supplementary
+# option-axis sweep) produced zero LeakSanitizer reports, so there is nothing to
+# suppress and adding rules here would only mask future regressions.
+#
+# Why the anticipated third-party static-lifetime allocations do not need rules:
+# lcms2 (cmsCreate_sRGBProfile / cmsCreateRGBProfile / cmsBuildParametricToneCurve
+# caches), OpenImageIO (plugin/attribute registries), Exiv2 (XmpParser registry) and
+# libheif (encoder descriptors) all keep their one-shot allocations reachable from
+# live globals until process exit. LSan only reports *unreachable* blocks, so these
+# process-lifetime singletons are not reported and are accepted as static lifetime
+# (M2 task book §4 T1 leak policy). The two in-tree process-lifetime owners are
+# pp::ColorManager::Impl (src/core/colormanager.cpp, deliberate per its NOTE) and the
+# generated-ICC byte cache; both stay reachable through their function-local statics.
+#
+# Rule format when one is ever genuinely needed (LSan "leak:" matcher, matched
+# against the allocation stack's function/module names), one rule per line with a
+# comment stating the evidence that the allocation is a one-shot static:
+#   leak:<function or library>
+#
+# Reproduce the clean result:
+#   bash .cache/tmp/m2t1_matrix.sh <label> build/m2-t1     # required matrix
+#   bash .cache/tmp/m2t1_supp.sh   <label> build/m2-t1     # supplementary axes
+# and confirm the sanitizer channel is live (control must report, then be silent):
+#   LD_PRELOAD=.cache/tmp/leakctl.so \
+#   ASAN_OPTIONS=detect_leaks=1:verify_asan_link_order=0 \
+#   build/m2-t1/photopipeline --dev tests/golden/base/rgb8.png --out /tmp/probe \
+#   --format png --workers 2      # => "ERROR: LeakSanitizer: detected memory leaks"

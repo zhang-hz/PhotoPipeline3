@@ -73,6 +73,10 @@ constexpr int kBudgetMax = 64;          // §2.10：QSpinBox(0..64)
 constexpr int kTileCacheMin = 16;       // §2.10：QSpinBox(16..512)
 constexpr int kTileCacheMax = 512;
 constexpr int kSliderMax = 100;         // §2.10：QSlider(0..100) → flatten_gray = v/100
+// §9.1 U6-FIX：关于页版本清单可见行数钳制（对话框尺寸贴合内容）
+constexpr int kVersionRowsMin = 3;
+constexpr int kVersionRowsMax = 6;
+constexpr int kVersionRowsPad = 8;
 
 // 日志级别 5 档（§2.10 冻结；LogLevel 的第 6 档 critical 不出现，值非法 → 回退 info，
 // 与 main.cpp 的 parse_log_level 一致）。itemData = 落盘值，itemText = 展示文案。
@@ -235,6 +239,12 @@ SettingsDialog::SettingsDialog(const pp::AppSettings& current, QWidget* parent)
     auto* versions = new QPlainTextEdit(version_lines.join(QLatin1Char('\n')), page_about);
     versions->setObjectName(kLibraryVersions);
     versions->setReadOnly(true);                             // §2.10：只读清单
+    // §9.1 U6-FIX（尺寸贴合内容）：不要 QPlainTextEdit 默认 192px 的 sizeHint——版本清单
+    // 最多占 rows 行高度，超出部分滚动（内容不裁切，可滚动查看）
+    const int version_rows =
+        std::clamp(static_cast<int>(version_lines.size()), kVersionRowsMin, kVersionRowsMax);
+    versions->setMaximumHeight(versions->fontMetrics().lineSpacing() * version_rows +
+                               2 * versions->frameWidth() + kVersionRowsPad);
     vbox_about->addWidget(versions, 1);
 
     auto* license = new QLabel(
@@ -258,7 +268,9 @@ SettingsDialog::SettingsDialog(const pp::AppSettings& current, QWidget* parent)
     root->addWidget(tabs, 1);
     root->addWidget(buttons);
 
-    resize(520, 420);
+    // §9.1 U6-FIX（尺寸贴合内容）：固定 520×420 会在运行页留下 ~260px 空白；
+    // 改为按布局 sizeHint 收缩（三页取最高者，About 页高度已按 §9.1 收敛）
+    adjustSize();
 }
 
 pp::AppSettings SettingsDialog::settings() const {

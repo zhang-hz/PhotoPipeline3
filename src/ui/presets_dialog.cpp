@@ -15,15 +15,20 @@
 //     MainWindow（§2.10 明确分组）；name() 已按 [A-Za-z0-9_\- ] 清洗。
 //   - 清洗在“取名字”时做（不在按键时拦截），并折叠连续空格 / 去首尾空白
 //     （QString::simplified）→ 例："My 预设 #1" → "My 1"；清洗后为空只禁用“另存为”。
+//   - §9.1 U6-FIX：标题 `预设管理`；列表为空时显示灰字提示（objectName
+//     `preset_empty_hint`，非空隐藏，提示在列表区上方）。
 #include "ui/presets_dialog.h"
 
 #include <QAbstractItemView>
+#include <QColor>
 #include <QFormLayout>
 #include <QHBoxLayout>
+#include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QListWidgetItem>
 #include <QMessageBox>
+#include <QPalette>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QVBoxLayout>
@@ -34,6 +39,7 @@ namespace {
 // objectName（自验 / U10 --ui-smoke / 走查定位用）
 constexpr const char* kList = "preset_list";
 constexpr const char* kName = "preset_name";
+constexpr const char* kEmptyHint = "preset_empty_hint";   // §9.1 U6-FIX
 constexpr const char* kLoad = "btn_load";
 constexpr const char* kSaveAs = "btn_saveas";
 constexpr const char* kDelete = "btn_delete";
@@ -60,6 +66,14 @@ QString sanitize_name(const QString& in) {
     QString s = in;
     s.remove(disallowed);
     return s.simplified();
+}
+
+// §9.1 U6-FIX：空列表提示可见性（列表为空才显示）
+void update_empty_hint(const QDialog* dlg) {
+    QListWidget* list = list_of(dlg);
+    auto* hint = dlg->findChild<QLabel*>(QLatin1String(kEmptyHint));
+    if (list == nullptr || hint == nullptr) return;
+    hint->setVisible(list->count() == 0);
 }
 
 // 按钮可用性（主对话 2026-09-19 裁定；§2.10 更新版）：
@@ -121,7 +135,7 @@ void do_delete(PresetsDialog* dlg) {
 PresetsDialog::PresetsDialog(const std::vector<std::pair<QString, QString>>& presets,
                              const QString& suggested_name, QWidget* parent)
     : QDialog(parent) {
-    setWindowTitle(tr("预设"));
+    setWindowTitle(tr("预设管理"));      // §9.1 U6-FIX：标题由“预设”改“预设管理”
     setProperty(kPropAction, static_cast<int>(Action::None));
     setProperty(kPropName, QString());
     setProperty(kPropPath, QString());
@@ -133,6 +147,14 @@ PresetsDialog::PresetsDialog(const std::vector<std::pair<QString, QString>>& pre
         auto* item = new QListWidgetItem(entry.second, list);
         item->setData(Qt::UserRole, entry.first);
     }
+
+    // §9.1 U6-FIX：空列表灰字提示（列表非空时隐藏）；灰字走 palette（全仓同款做法）
+    auto* empty_hint = new QLabel(tr("暂无预设——输入名称后点\"另存为\"创建"), this);
+    empty_hint->setObjectName(QLatin1String(kEmptyHint));
+    QPalette hint_pal = empty_hint->palette();
+    hint_pal.setColor(QPalette::WindowText, QColor(0x80, 0x80, 0x80));
+    empty_hint->setPalette(hint_pal);
+    empty_hint->setWordWrap(true);
 
     auto* name_edit = new QLineEdit(this);
     name_edit->setObjectName(QLatin1String(kName));
@@ -158,6 +180,7 @@ PresetsDialog::PresetsDialog(const std::vector<std::pair<QString, QString>>& pre
     button_row->addWidget(close_btn);
 
     auto* root = new QVBoxLayout(this);
+    root->addWidget(empty_hint);      // §9.1 U6-FIX：提示在列表区上方
     root->addWidget(list, 1);
     root->addLayout(form);
     root->addLayout(button_row);
@@ -176,6 +199,7 @@ PresetsDialog::PresetsDialog(const std::vector<std::pair<QString, QString>>& pre
     connect(delete_btn, &QPushButton::clicked, this, [this] { do_delete(this); });
     connect(close_btn, &QPushButton::clicked, this, &QDialog::reject);
 
+    update_empty_hint(this);          // §9.1 U6-FIX：空列表才显示灰字提示
     refresh_buttons(this);
     resize(420, 360);
 }

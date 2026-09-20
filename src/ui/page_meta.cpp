@@ -30,6 +30,9 @@
 //   - "从选中文件读取坐标" 一并回填可选字段（海拔/方位角/时间戳），有值才填。
 //   - 时间预览源扫描上限 200（§2.11 U7 落地口径 2026-09-20 冻结）：前 200 个文件内
 //     未找到时间字段 → "前 200 个文件未找到时间字段"，停止扫描。
+//   - §9.1 U7 修正（2026-09-20）：时间偏移/GPS 卡 "启用" 未勾选 → 卡内其余控件
+//     setEnabled(false)（"清除 GPS" 复选框语义独立、始终可用；地图控件不受限）；
+//     rules()/apply_rules 语义不变（未启用=不出规则），仅控件可用性变化。
 #include "ui/page_meta.h"
 
 #include <QAction>
@@ -429,15 +432,34 @@ void refresh_gps_warning(MetaState* st) {
     st->gps_warn->setVisible(show);
 }
 
-// 清除 GPS 勾选 → 坐标输入禁用；"读取坐标" 同时要求有选中文件
+// §9.1 U7 修正：卡片 "启用" 未勾选 → 卡内其余控件禁用（rules() 语义不变）。
+void refresh_time_inputs(MetaState* st) {
+    const bool on = st->time_enable->isChecked();
+    st->time_mode->setEnabled(on);
+    for (QSpinBox* spin : st->delta) {
+        spin->setEnabled(on);
+    }
+    st->tz_from->setEnabled(on);
+    st->tz_to->setEnabled(on);
+}
+
+// 坐标/搜索控件可用性 = GPS "启用" ∧ ¬"清除 GPS"；"清除 GPS" 复选框自身始终可用
+// （语义独立）；"读取坐标" 另需有选中文件。地图控件不受限（点图回填会自行勾选启用）。
 void refresh_gps_inputs(MetaState* st) {
+    const bool card_on = st->gps_enable->isChecked();
     const bool locked = st->gps_clear->isChecked();
-    st->lat->setEnabled(!locked);
-    st->lon->setEnabled(!locked);
-    st->alt->setEnabled(!locked);
-    st->dir->setEnabled(!locked);
-    st->ts->setEnabled(!locked);
-    st->read_gps->setEnabled(!locked && !st->selected_files.isEmpty());
+    const bool coords = card_on && !locked;
+    st->lat->setEnabled(coords);
+    st->lon->setEnabled(coords);
+    st->more_toggle->setEnabled(card_on);
+    st->more_fields->setEnabled(coords);
+    st->alt->setEnabled(coords);
+    st->dir->setEnabled(coords);
+    st->ts->setEnabled(coords);
+    st->search_edit->setEnabled(card_on);
+    st->search_btn->setEnabled(card_on);
+    st->search_results->setEnabled(card_on);
+    st->read_gps->setEnabled(coords && !st->selected_files.isEmpty());
     if (locked) {
         st->gps_status->setText(PageMeta::tr("已勾选清除 GPS：输出将不含 GPS"));
         st->map->clear_marker();
@@ -448,6 +470,7 @@ void refresh_all(MetaState* st) {
     refresh_time_preview(st);
     refresh_dms(st);
     refresh_gps_warning(st);
+    refresh_time_inputs(st);
     refresh_gps_inputs(st);
 }
 
@@ -707,6 +730,7 @@ QWidget* build_time_card(MetaState* st, QWidget* parent) {
 
     QObject::connect(st->time_enable, &QCheckBox::toggled, st, [st](bool) {
         if (!st->loading) {
+            refresh_time_inputs(st);   // §9.1：未启用 → 卡内控件禁用
             refresh_time_preview(st);
             notify_rules_changed(st);
         }
@@ -863,6 +887,7 @@ QWidget* build_gps_card(MetaState* st, QWidget* parent) {
     }
     QObject::connect(st->gps_enable, &QCheckBox::toggled, st, [st](bool) {
         if (!st->loading) {
+            refresh_gps_inputs(st);    // §9.1：未启用 → 卡内控件禁用（清除 GPS 除外）
             refresh_gps_warning(st);
             notify_rules_changed(st);
         }

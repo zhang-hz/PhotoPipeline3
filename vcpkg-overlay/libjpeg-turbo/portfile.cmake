@@ -84,7 +84,17 @@ vcpkg_copy_pdbs()
 # 下方 vcpkg_fixup_pkgconfig() 校验（这正是该函数为官方 port 产出的形态）。
 # Version 取本 port 自身声明的 3.2.0（vcpkg.json），与官方 libjpeg-turbo 口径一致。
 # 不得改用系统 libjpeg.pc：那是未声明隐式依赖，且 2.1.5 与实际 ABI（62.3.0）不符。
-file(WRITE "${CURRENT_PACKAGES_DIR}/lib/pkgconfig/libjpeg.pc" [=[
+# 必须同时提供 debug 副本：vcpkg_fixup_pkgconfig 按 RELEASE、DEBUG 两轮"先修后校验"，
+# 而 DEBUG 轮的 PKG_CONFIG_PATH 只含 <prefix>/share/pkgconfig 与
+# <prefix>/debug/lib/pkgconfig，**不含** release 的 lib/pkgconfig
+# （见 z_vcpkg_setup_pkgconfig_path.cmake）。只装 release 时 release 校验通过、
+# debug 校验仍报 libjpeg not found（run 35516282485 实测）。
+# 同一份内容置于两处都正确：fixup 会把 prefix 行重写为 ${pcfiledir}/<相对路径>，
+# 并对 DEBUG 追加 ${prefix}/debug→${prefix}、${prefix}/include→${prefix}/../include，
+# 于是 debug 副本自动解析为 libdir=<pkg>/debug/lib、includedir=<pkg>/include。
+file(MAKE_DIRECTORY "${CURRENT_PACKAGES_DIR}/lib/pkgconfig"
+                    "${CURRENT_PACKAGES_DIR}/debug/lib/pkgconfig")
+set(_libjpeg_pc_contents [=[
 prefix=${pcfiledir}/../..
 exec_prefix=${prefix}
 libdir=${prefix}/lib
@@ -96,6 +106,9 @@ Version: 3.2.0
 Libs: -L${libdir} -ljpeg
 Cflags: -I${includedir}
 ]=])
+file(WRITE "${CURRENT_PACKAGES_DIR}/lib/pkgconfig/libjpeg.pc" "${_libjpeg_pc_contents}")
+file(WRITE "${CURRENT_PACKAGES_DIR}/debug/lib/pkgconfig/libjpeg.pc" "${_libjpeg_pc_contents}")
+unset(_libjpeg_pc_contents)
 
 vcpkg_fixup_pkgconfig()
 

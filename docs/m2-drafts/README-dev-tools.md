@@ -73,7 +73,7 @@ bash tests/golden/smoke.sh <build_dir>      # 须为 -DPP_BUILD_DEV=ON 的构建
 ### `--ui-smoke` — 无头 UI 走查
 
 ```bash
-QT_QPA_PLATFORM=offscreen build/m2-t12/photopipeline \
+QT_QPA_PLATFORM=offscreen build/release-dev/photopipeline \
     --ui-smoke --inputs tests/golden/base --shots .cache/ui-review
 # ctest 入口：tests/ui_smoke.sh <build_dir>（ctest -R ui_smoke）
 ```

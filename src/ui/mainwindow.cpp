@@ -1115,6 +1115,10 @@ void MainWindow::Impl::smoke_run(const QString& shots_dir) {
         form->set_selection(FormSelection{});   // 还原首个后端/技术
         pump(120);
     }
+    // 复位 jxl 默认参数（上面的无损断言把 distance 锁到 0.0；保留了截图就不是默认态，
+    // 实跑前置也要求 "jxl 默认参"）。select_format 无条件重建 ParamForm → 回到表内默认值。
+    page_output->select_format(QStringLiteral("jxl"));
+    pump(200);
     smoke_grab(shots_dir, kSmokeShots[1]);
 
     // jpeg：quality_mode=quality → quality 可见且 distance 隐藏（§4.3）

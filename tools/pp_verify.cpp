@@ -4,7 +4,8 @@
 //
 //   pp_verify <expected.json> <actual_output> [--selftest]
 //     pixel.mode      "exact" (bit-exact after decoding both sides) | "psnr" (+ threshold_db)
-//     metadata[]      {key, op: eq|exists|absent, value}
+//     metadata[]      {key, op: eq|exists|absent, value} — values are rendered by the frozen
+//                     normalisation of M2-T8 (see normalize_value_text below / SCHEMA.md)
 //     warnings_contain[]  WarningKind names, read from the <actual_output>.pp.json sidecar
 //                         written by `photopipeline --dev` (a decoded image cannot carry them)
 //   output:  `VERIFY <case> OK|FAIL <detail>`; exit code = number of FAILs
@@ -28,6 +29,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -202,6 +204,100 @@ std::string xmp_key_normalized(const std::string& key) {
     return k;
 }
 
+// --- M2-T8 (#26 landed): stable text rendering of metadata values ------------
+// expected.json compares *text*, so the rendering must be identical across runs, hosts and
+// Exiv2 builds. Frozen rules (docs/m2-tasks.md §4 T8 ①):
+//   * rationals            → lowest terms "num/den"; den == 1 → integer form
+//   * ASCII                → trailing NULs and leading/trailing whitespace stripped
+//   * arrays (> 1 element) → elements joined with ", "
+//   * undefined (binary)   → "0x" + lowercase hex, truncated past 64 hex digits + "..."
+//   * every other type     → Exiv2's own text (Exifdatum::print)
+// The rules are deliberately applied per *element type*: a rational array is reduced element
+// wise, an undefined value is hex-dumped, an ASCII value is trimmed, and any other multi-element
+// value is joined. Scalar values of the remaining types keep Exiv2's rendering, which is where
+// the human-readable forms ("2.3.0.0", "F2.8", "YYYY:MM:DD HH:MM:SS") come from.
+bool ascii_blank(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
+}
+
+std::string trim_ascii_text(const std::string& in) {
+    std::size_t end = in.size();
+    while (end > 0 && in[end - 1] == '\0') --end;
+    std::size_t begin = 0;
+    while (begin < end && ascii_blank(in[begin])) ++begin;
+    while (end > begin && ascii_blank(in[end - 1])) --end;
+    return in.substr(begin, end - begin);
+}
+
+std::string reduce_rational(int64_t num, int64_t den) {
+    // Degenerate guard: Exif allows 0/0 (e.g. unknown GPS values). No corpus instance (T8
+    // report), rules do not define it — keep the raw pair instead of dividing by zero.
+    if (den == 0) return std::to_string(num) + "/0";
+    uint64_t a = num < 0 ? 0u - static_cast<uint64_t>(num) : static_cast<uint64_t>(num);
+    uint64_t b = den < 0 ? 0u - static_cast<uint64_t>(den) : static_cast<uint64_t>(den);
+    while (b != 0) {
+        const uint64_t t = a % b;
+        a = b;
+        b = t;
+    }
+    const int64_t g = static_cast<int64_t>(a == 0 ? 1 : a);
+    int64_t n = num / g;
+    int64_t d = den / g;
+    if (d < 0) {
+        n = -n;
+        d = -d;
+    }
+    if (d == 1) return std::to_string(n);
+    return std::to_string(n) + "/" + std::to_string(d);
+}
+
+std::string binary_hex(const Exiv2::Value& v) {
+    std::vector<Exiv2::byte> raw(v.size());
+    if (!raw.empty()) v.copy(raw.data(), Exiv2::invalidByteOrder);
+    static const char* kDigits = "0123456789abcdef";
+    std::string hex;
+    hex.reserve(raw.size() * 2);
+    for (const Exiv2::byte b : raw) {
+        hex += kDigits[b >> 4];
+        hex += kDigits[b & 0x0f];
+    }
+    if (hex.size() > 64) hex = hex.substr(0, 64) + "...";
+    return "0x" + hex;
+}
+
+std::string normalize_value_text(const Exiv2::Metadatum& d, Exiv2::ExifData* exif) {
+    const Exiv2::Value& v = d.value();
+    switch (d.typeId()) {
+        case Exiv2::unsignedRational:
+        case Exiv2::signedRational: {
+            std::string out;
+            for (std::size_t i = 0; i < v.count(); ++i) {
+                const Exiv2::Rational r = v.toRational(i);
+                if (!out.empty()) out += ", ";
+                out += reduce_rational(r.first, r.second);
+            }
+            return out;
+        }
+        case Exiv2::asciiString:
+            return trim_ascii_text(d.toString());
+        case Exiv2::undefined:
+            return binary_hex(v);
+        default:
+            break;
+    }
+    if (v.count() > 1) {  // arrays: element text joined with ", "
+        std::string out;
+        for (std::size_t i = 0; i < v.count(); ++i) {
+            if (!out.empty()) out += ", ";
+            out += v.toString(i);
+        }
+        return out;
+    }
+    std::string printed = d.print(exif);
+    if (printed.empty()) printed = d.toString();
+    return printed;
+}
+
 bool metadata_lookup(Exiv2::ExifData& exif, Exiv2::XmpData& xmp, const std::string& key,
                      bool& present, std::string& value, std::string& err) {
     present = false;
@@ -212,18 +308,14 @@ bool metadata_lookup(Exiv2::ExifData& exif, Exiv2::XmpData& xmp, const std::stri
             const auto it = xmp.findKey(xk);
             if (it == xmp.end()) return true;
             present = true;
-            value = it->toString();
+            value = normalize_value_text(*it, nullptr);
             return true;
         }
         const Exiv2::ExifKey ek(key);
         const auto it = exif.findKey(ek);
         if (it == exif.end()) return true;
         present = true;
-        // TODO(M2): print() renders values through Exiv2's own formatting (e.g. rationals as
-        // "1/125", dates as "YYYY:MM:DD HH:MM:SS"); golden expectations therefore have to use
-        // that rendering. Add a typed/normalised comparison mode once the UI editor needs it.
-        value = it->print(&exif);
-        if (value.empty()) value = it->toString();
+        value = normalize_value_text(*it, &exif);
         return true;
     } catch (const std::exception& e) {
         err = std::string("metadata key '") + key + "': " + e.what();
@@ -444,12 +536,31 @@ int selftest() {
         return 1;
     }
 
-    // metadata sample
+    // metadata sample: one tag per normalisation class of M2-T8 (#26) so that --selftest locks
+    // the frozen rules (docs/m2-tasks.md §4 T8 ①) alongside the assertion modes.
     try {
         Exiv2::Image::UniquePtr img = Exiv2::ImageFactory::open(m_png.string());
         img->readMetadata();
         Exiv2::ExifData exif = img->exifData();
-        exif["Exif.Image.Artist"] = "M1-T8";
+        exif["Exif.Image.Artist"] = "M1-T8";              // asciiString, scalar
+        exif["Exif.Image.ImageDescription"] = "  padded M2-T8  ";  // asciiString, trimmed
+        exif["Exif.Photo.FNumber"] = "28/10";             // unsignedRational -> 14/5
+        exif["Exif.Photo.BrightnessValue"] = "-6/4";      // signedRational -> -3/2
+        exif["Exif.Image.XResolution"] = "300/1";         // unsignedRational, den == 1
+        exif["Exif.Image.YCbCrSubSampling"] = "2 1";      // unsignedShort array
+        auto undefined_value = [](const std::vector<Exiv2::byte>& bytes) {
+            Exiv2::DataValue dv(Exiv2::undefined);
+            dv.read(bytes.data(), bytes.size(), Exiv2::invalidByteOrder);
+            return dv;
+        };
+        const Exiv2::DataValue version_bytes = undefined_value({'0', '2', '3', '2'});
+        std::vector<Exiv2::byte> long_binary(40);         // undefined, > 64 hex digits
+        for (std::size_t i = 0; i < long_binary.size(); ++i) {
+            long_binary[i] = static_cast<Exiv2::byte>(i + 1);
+        }
+        const Exiv2::DataValue maker_bytes = undefined_value(long_binary);
+        exif["Exif.Photo.ExifVersion"].setValue(&version_bytes);  // undefined, <= 64 hex digits
+        exif["Exif.Photo.MakerNote"].setValue(&maker_bytes);
         img->setExifData(exif);
         img->writeMetadata();
     } catch (const std::exception& e) {
@@ -468,8 +579,10 @@ int selftest() {
     auto make_exp = [](const char* input, const char* mode, double threshold,
                        const QJsonArray& metadata, const QJsonArray& warnings) {
         QJsonObject pixel;
-        pixel["mode"] = mode;
-        if (std::strcmp(mode, "psnr") == 0) pixel["threshold_db"] = threshold;
+        if (mode != nullptr && *mode != '\0') {  // empty mode = no pixel assertion
+            pixel["mode"] = mode;
+            if (std::strcmp(mode, "psnr") == 0) pixel["threshold_db"] = threshold;
+        }
         QJsonObject a;
         a["pixel"] = pixel;
         a["metadata"] = metadata;
@@ -526,6 +639,32 @@ int selftest() {
          make_exp("a.png", "exact", 0, meta_op("Exif.Image.Software", "absent"), {}), m_png, true},
         {"warnings-pass", make_exp("a.png", "exact", 0, {}, warns("AlphaFlattened")), b_png, true},
         {"warnings-fail", make_exp("a.png", "exact", 0, {}, warns("DepthDowngrade")), b_png, false},
+        // M2-T8 (#26): one probe per frozen normalisation class.
+        {"normalize-ascii-trim",
+         make_exp("a.png", nullptr, 0, meta_eq("Exif.Image.ImageDescription", "padded M2-T8"), {}),
+         m_png, true},
+        {"normalize-rational-reduced",
+         make_exp("a.png", nullptr, 0, meta_eq("Exif.Photo.FNumber", "14/5"), {}), m_png, true},
+        {"normalize-signed-rational",
+         make_exp("a.png", nullptr, 0, meta_eq("Exif.Photo.BrightnessValue", "-3/2"), {}),
+         m_png, true},
+        {"normalize-rational-den1",
+         make_exp("a.png", nullptr, 0, meta_eq("Exif.Image.XResolution", "300"), {}), m_png, true},
+        {"normalize-array-join",
+         make_exp("a.png", nullptr, 0,
+                  meta_eq("Exif.Image.YCbCrSubSampling", "2, 1"), {}),
+         m_png, true},
+        {"normalize-undefined-hex",
+         make_exp("a.png", nullptr, 0, meta_eq("Exif.Photo.ExifVersion", "0x30323332"), {}),
+         m_png, true},
+        {"normalize-hex-truncated",
+         make_exp("a.png", nullptr, 0,
+                  meta_eq("Exif.Photo.MakerNote",
+                          "0x0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20..."),
+                  {}),
+         m_png, true},
+        {"normalize-rational-raw-text-rejected",
+         make_exp("a.png", nullptr, 0, meta_eq("Exif.Photo.FNumber", "F2.8"), {}), m_png, false},
     };
 
     int failures = 0;
@@ -538,8 +677,25 @@ int selftest() {
                     behaves ? "OK" : "FAIL", p.expect_ok ? "OK" : "FAIL", ok ? "OK" : "FAIL",
                     detail.empty() ? "" : " ", detail.c_str());
     }
+
+    // M2-T8 (#26): direct probes of the frozen normalisation rules. The corpus cannot express
+    // trailing NULs or den == 0, so the helpers are exercised here too.
+    auto text_probe = [&failures](const char* label, const std::string& got, const char* want) {
+        const bool ok = got == want;
+        if (!ok) ++failures;
+        std::printf("VERIFY selftest %-22s %s (got '%s', want '%s')\n", label, ok ? "OK" : "FAIL",
+                    got.c_str(), want);
+    };
+    text_probe("normalize-ascii-nul-trim", trim_ascii_text(std::string("  padded\0\0", 10)),
+               "padded");
+    text_probe("normalize-rational-reduce", reduce_rational(28, 10), "14/5");
+    text_probe("normalize-rational-int", reduce_rational(300, 1), "300");
+    text_probe("normalize-rational-negative", reduce_rational(6, -4), "-3/2");
+    text_probe("normalize-rational-zero", reduce_rational(0, 5), "0");
+    text_probe("normalize-rational-den0-guard", reduce_rational(7, 0), "7/0");
+
     std::printf("VERIFY selftest %s (%zu probes, %d unexpected)\n", failures == 0 ? "OK" : "FAIL",
-                probes.size(), failures);
+                probes.size() + 6, failures);
     return failures;
 }
 

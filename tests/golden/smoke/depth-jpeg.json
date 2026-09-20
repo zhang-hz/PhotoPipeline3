@@ -1,6 +1,6 @@
 {
-  "case": "jpeg-lossy",
-  "input": "base/photo.jpg",
+  "case": "depth-jpeg",
+  "input": "base/rgb16.png",
   "output_format": "jpeg",
   "assert": {
     "pixel": {
@@ -11,9 +11,11 @@
       {
         "key": "Exif.Image.Artist",
         "op": "eq",
-        "value": "M2-T8-jpeg"
+        "value": "M2-T8-depth"
       }
     ],
-    "warnings_contain": []
+    "warnings_contain": [
+      "DepthDowngrade"
+    ]
   }
 }

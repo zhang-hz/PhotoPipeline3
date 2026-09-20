@@ -1,0 +1,28 @@
+{
+  "case": "metaonly-jpeg",
+  "input": "meta/exif_full.jpg",
+  "output_format": "jpeg",
+  "assert": {
+    "pixel": {
+      "mode": "exact"
+    },
+    "metadata": [
+      {
+        "key": "Exif.Image.Artist",
+        "op": "eq",
+        "value": "M2-T8-only"
+      },
+      {
+        "key": "Exif.Photo.DateTimeOriginal",
+        "op": "eq",
+        "value": "2024:03:01 10:00:00"
+      },
+      {
+        "key": "Exif.GPSInfo.GPSLatitude",
+        "op": "eq",
+        "value": "31, 13, 1236/25"
+      }
+    ],
+    "warnings_contain": []
+  }
+}

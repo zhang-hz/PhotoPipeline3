@@ -3,8 +3,17 @@
   "input": "base/rgb8.png",
   "output_format": "heif",
   "assert": {
-    "pixel": { "mode": "psnr", "threshold_db": 30 },
-    "metadata": [],
+    "pixel": {
+      "mode": "psnr",
+      "threshold_db": 30
+    },
+    "metadata": [
+      {
+        "key": "Exif.Image.Artist",
+        "op": "eq",
+        "value": "M2-T8-heif"
+      }
+    ],
     "warnings_contain": []
   }
 }

@@ -3,8 +3,26 @@
   "input": "base/rgb16.tif",
   "output_format": "tiff",
   "assert": {
-    "pixel": { "mode": "exact" },
-    "metadata": [],
+    "pixel": {
+      "mode": "exact"
+    },
+    "metadata": [
+      {
+        "key": "Exif.Image.Artist",
+        "op": "eq",
+        "value": "M2-T8-tiff16"
+      },
+      {
+        "key": "Exif.Image.DateTime",
+        "op": "eq",
+        "value": "2024:01:01 00:00:00"
+      },
+      {
+        "key": "Exif.Image.BitsPerSample",
+        "op": "eq",
+        "value": "16, 16, 16"
+      }
+    ],
     "warnings_contain": []
   }
 }

@@ -3,8 +3,16 @@
   "input": "base/rgba8.png",
   "output_format": "webp",
   "assert": {
-    "pixel": { "mode": "exact" },
-    "metadata": [],
+    "pixel": {
+      "mode": "exact"
+    },
+    "metadata": [
+      {
+        "key": "Exif.Image.Artist",
+        "op": "eq",
+        "value": "M2-T8-webp"
+      }
+    ],
     "warnings_contain": []
   }
 }

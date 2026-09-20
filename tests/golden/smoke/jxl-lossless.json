@@ -3,8 +3,16 @@
   "input": "base/rgb8.png",
   "output_format": "jxl",
   "assert": {
-    "pixel": { "mode": "exact" },
-    "metadata": [],
+    "pixel": {
+      "mode": "exact"
+    },
+    "metadata": [
+      {
+        "key": "Exif.Image.Artist",
+        "op": "eq",
+        "value": "M2-T8-jxl"
+      }
+    ],
     "warnings_contain": []
   }
 }

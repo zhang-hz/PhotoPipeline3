@@ -3,8 +3,16 @@
   "input": "base/rgb16.png",
   "output_format": "png",
   "assert": {
-    "pixel": { "mode": "exact" },
-    "metadata": [],
+    "pixel": {
+      "mode": "exact"
+    },
+    "metadata": [
+      {
+        "key": "Exif.Image.Artist",
+        "op": "eq",
+        "value": "M2-T8-png16"
+      }
+    ],
     "warnings_contain": []
   }
 }

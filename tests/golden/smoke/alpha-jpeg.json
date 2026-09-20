@@ -1,0 +1,18 @@
+{
+  "case": "alpha-jpeg",
+  "input": "base/rgba8.png",
+  "output_format": "jpeg",
+  "assert": {
+    "pixel": {},
+    "metadata": [
+      {
+        "key": "Exif.Image.Artist",
+        "op": "eq",
+        "value": "M2-T8-alpha"
+      }
+    ],
+    "warnings_contain": [
+      "AlphaFlattened"
+    ]
+  }
+}

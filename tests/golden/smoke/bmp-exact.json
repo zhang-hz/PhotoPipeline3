@@ -3,12 +3,10 @@
   "input": "base/rgb8.png",
   "output_format": "bmp",
   "assert": {
-    "pixel": {
-      "mode": "exact"
-    },
-    "metadata": [],
-    "warnings_contain": [
-      "MetadataDropped"
-    ]
+    "pixel": { "mode": "exact" },
+    "metadata": [
+      { "key": "Exif.Image.Artist", "op": "absent" }
+    ],
+    "warnings_contain": [ "MetadataDropped" ]
   }
 }

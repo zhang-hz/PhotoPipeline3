@@ -1,0 +1,44 @@
+{
+  "case": "exif-roundtrip",
+  "input": "meta/exif_full.jpg",
+  "output_format": "jpeg",
+  "assert": {
+    "pixel": {
+      "mode": "psnr",
+      "threshold_db": 35
+    },
+    "metadata": [
+      {
+        "key": "Exif.Image.Artist",
+        "op": "eq",
+        "value": "M0"
+      },
+      {
+        "key": "Exif.Photo.DateTimeOriginal",
+        "op": "eq",
+        "value": "2024:03:01 10:00:00"
+      },
+      {
+        "key": "Exif.GPSInfo.GPSLatitudeRef",
+        "op": "eq",
+        "value": "N"
+      },
+      {
+        "key": "Exif.GPSInfo.GPSLatitude",
+        "op": "eq",
+        "value": "31, 13, 1236/25"
+      },
+      {
+        "key": "Exif.GPSInfo.GPSLongitude",
+        "op": "eq",
+        "value": "121, 28, 633/25"
+      },
+      {
+        "key": "Exif.GPSInfo.GPSVersionID",
+        "op": "eq",
+        "value": "2, 3, 0, 0"
+      }
+    ],
+    "warnings_contain": []
+  }
+}

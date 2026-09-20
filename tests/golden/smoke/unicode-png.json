@@ -1,17 +1,16 @@
 {
-  "case": "avif-lossy",
-  "input": "base/rgb8.png",
-  "output_format": "avif",
+  "case": "unicode-png",
+  "input": "edge/测试📸unicode.png",
+  "output_format": "png",
   "assert": {
     "pixel": {
-      "mode": "psnr",
-      "threshold_db": 30
+      "mode": "exact"
     },
     "metadata": [
       {
         "key": "Exif.Image.Artist",
         "op": "eq",
-        "value": "M2-T8-avif"
+        "value": "路径📸测试"
       }
     ],
     "warnings_contain": []

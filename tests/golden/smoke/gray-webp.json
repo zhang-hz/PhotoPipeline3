@@ -1,0 +1,18 @@
+{
+  "case": "gray-webp",
+  "input": "base/gray8.png",
+  "output_format": "webp",
+  "assert": {
+    "pixel": {},
+    "metadata": [
+      {
+        "key": "Exif.Image.Artist",
+        "op": "eq",
+        "value": "M2-T8-gray"
+      }
+    ],
+    "warnings_contain": [
+      "GrayToRgbEncoded"
+    ]
+  }
+}

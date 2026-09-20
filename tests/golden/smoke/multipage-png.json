@@ -1,0 +1,20 @@
+{
+  "case": "multipage-png",
+  "input": "base/multi.tif",
+  "output_format": "png",
+  "assert": {
+    "pixel": {
+      "mode": "exact"
+    },
+    "metadata": [
+      {
+        "key": "Exif.Image.DateTime",
+        "op": "eq",
+        "value": "2024:01:01 00:00:00"
+      }
+    ],
+    "warnings_contain": [
+      "MultipageTruncated"
+    ]
+  }
+}

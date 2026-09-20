@@ -10,3 +10,4 @@ compile_commands.json
 tests/golden/real/
 tests/golden/CHECKSUMS
 /dist/
+.pp_test_tmp/

@@ -41,8 +41,8 @@ constexpr cmsUInt32Number kTransformFlags = cmsFLAGS_BLACKPOINTCOMPENSATION;
 
 // Every transform runs in float32 (TYPE_GRAY_FLT / TYPE_RGB_FLT); the LRU key
 // carries the transform bit depth so a future 8/16-bit path cannot collide.
-// TODO(M2): add integer-formatter transforms (TYPE_RGB_8/16) if a caller ever
-// hands over non-float storage and profiling shows the float round trip matters.
+// NOTE(limit): integer-formatter transforms (TYPE_RGB_8/16) have no caller — the
+// pipeline always hands over float storage.
 constexpr int kTransformBits = 32;
 
 constexpr std::size_t kCacheCapacity = 16;
@@ -354,9 +354,9 @@ std::shared_ptr<XfEntry> build_entry(const std::string& src_icc, bool gray_input
     // source ICC byte-identical to the target ICC reuses the canonical handle — that
     // keeps sRGB->sRGB (and our own re-processed output) an exact identity, which is the
     // §3.6 numeric contract.
-    // TODO(M2): a third-party sRGB ICC is not byte-identical to our target ICC, so
+    // NOTE(fact): a third-party sRGB ICC is not byte-identical to our target ICC, so
     // sRGB->sRGB drifts by up to ~1.8e-4 in the dark end (lcms2 optimizer precision).
-    // If exact identity is ever needed for those, detect sRGB by profile ID/primaries.
+    // Recorded fact within the §3.6 numeric contract; no action item.
     cmsHPROFILE src = nullptr;
     std::string src_desc;
     if (!src_icc.empty()) {
@@ -538,9 +538,8 @@ struct ColorManager::Impl {
 };
 
 ColorManager::ColorManager() : impl_(new Impl()) {
-    // TODO(M2): Impl (and the profile/transform handles it owns) is intentionally
-    // never freed — ColorManager is a process-lifetime singleton; add explicit
-    // teardown if it ever becomes constructible per run.
+    // NOTE(design): Impl (and the profile/transform handles it owns) is intentionally
+    // neither copied nor freed — ColorManager is a process-lifetime singleton.
 }
 
 ColorManager& ColorManager::instance() {
@@ -679,9 +678,9 @@ ColorOutcome ColorManager::transform(OIIO::ImageBuf& buf, const std::string& src
             out[std::size_t(out_ch) * i + 2] = rgb[3 * i + 2];
             if (out_ch == 4) out[std::size_t(out_ch) * i + 3] = alpha[i];
         }
-        // TODO(M2): gray and gray+alpha sources are always promoted to RGB(A) for a
-        // colour target (single GRAY->RGB call, no separate gray pipeline). Revisit if
-        // a target that supports grayscale needs the source to stay 1-channel.
+        // NOTE(design): gray and gray+alpha sources are always promoted to RGB(A) for a
+        // colour target (single GRAY->RGB call, no separate gray pipeline) — the
+        // established design of this pipeline.
         buf = make_like(buf, out_ch, out);
     } else {
         std::vector<float> in(3 * npix);

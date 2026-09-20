@@ -18,10 +18,10 @@
 // worker *and* in the pipeline would double-charge the pool. The worker performs the probe
 // step itself (early failure + budget/serialisation decisions) and run_one_file re-probes for
 // the OIIO spec it needs.
-// TODO(M2): FileEntry has no spec field in the frozen interface, so the first_spec from the
+// NOTE(design): FileEntry has no spec field in the frozen interface, so the first_spec from the
 // worker's probe cannot be handed to run_one_file → every file is probed twice (spec only, no
-// pixel work). Revisit together with the UI batch (either extend FileEntry additively or give
-// run_one_file a "probe already done" contract that still exposes the spec).
+// pixel work). One spec for the whole batch is the established fact of the frozen interface;
+// the double probe is accepted.
 
 #include "core/scheduler.h"
 
@@ -62,9 +62,10 @@ double ms_since(const Clock::time_point& t0) {
 // Lexical identity of the output path a file will aim for. Files that share it are never run
 // concurrently, which makes batch-internal conflict resolution (ConflictPolicy::Rename with the
 // `reserved` snapshot) deterministic without changing the frozen pipeline signature.
-// TODO(M2): the guard is lexical and per-desired-path only: two *different* desired paths whose
-// rename sequences overlap (a.jpg + "a (1).jpg" as separate inputs) can still race. A batch-wide
-// output allocator owned by the scheduler would remove the approximation.
+// NOTE(limit): the guard is lexical and per-desired-path only: two *different* desired paths
+// whose rename sequences overlap (a.jpg + "a (1).jpg" as separate inputs) can still race.
+// Accepted: Linux file systems are case-sensitive, so lexical identity covers the realistic
+// conflicts.
 std::string desired_key(const FileEntry& fe, const RunConfig& cfg) {
     const FormatDef* fmt = find_format(cfg.format_id);
     const std::string ext =

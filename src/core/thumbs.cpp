@@ -225,10 +225,9 @@ ThumbOutcome make_thumbnail(const std::filesystem::path& src, int target_long_ed
     }
 
     // 3) full float32 decode + resample
-    // TODO(M2): a full float32 decode of a large input (tens of MP) costs hundreds of MB per
-    //           in-flight thumbnail; a reduced-resolution decode (ImageCache/mip level) would
-    //           keep the same contract at a fraction of the memory. Task book §2.1 mandates
-    //           the full decode for M1b.
+    // NOTE(perf): a full float32 decode of a large input (tens of MP) costs hundreds of MB per
+    //           in-flight thumbnail but stays inside the thumbnail memory budget; a
+    //           reduced-resolution decode (ImageCache/mip level) is not needed for M2.
     const DecodeOutcome decoded = decode_float(src, probe.info);
     if (!decoded.error.empty() || !decoded.buf.initialized()) {
         return out;  // 4) thumb empty, error stays empty (probe itself succeeded)

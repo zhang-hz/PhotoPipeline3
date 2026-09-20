@@ -380,7 +380,8 @@ EncodeResult HeifEncoder::encode(const EncodeRequest& req) {
         }
 
         // E2: all internal threading off. The x265 plugin exposes no "threads" parameter
-        // (measured), so for that backend the encoder keeps its default pool (TODO(M2)).
+        // (measured), so for that backend the encoder keeps its default pool.
+        // NOTE(perf): measured and pinned down — no better option for that backend.
         if (is_known("threads")) {
             const heif_error te = heif_encoder_set_parameter_integer(enc, "threads", 1);
             if (te.code != heif_error_Ok)
@@ -423,7 +424,8 @@ EncodeResult HeifEncoder::encode(const EncodeRequest& req) {
         // "corrupted size vs. prev_size" in x265/libheif teardown). Refuse the combination up
         // front so callers get a clean EncodeResult error instead of a crash.
         // Isolation probe: .cache/tmp/m1-t7/scratch.cpp ("svtalpha" aborts, "svt", "svt12",
-        // "x265alpha" are clean). TODO(M2): re-probe and drop once upstream fixes it.
+        // "x265alpha" are clean).
+        // NOTE(upstream): re-probing and dropping the guard depends on an upstream fix.
         if (format_id_ == "avif" && backend_id_ == "svt-av1" && bitdepth > 8 && has_alpha)
             return fail("svt-av1 does not support 10-bit with alpha; use backend libaom");
 

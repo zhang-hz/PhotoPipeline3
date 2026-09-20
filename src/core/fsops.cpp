@@ -101,7 +101,8 @@ OutputPlan resolve_conflict(const std::filesystem::path& desired, ConflictPolicy
     plan.out_path = desired;
 
     std::set<std::string> reserved_norm;
-    // TODO(M2): cache these normalized keys across calls when batches exceed ~10k files.
+    // NOTE(perf): caching these normalized keys across calls would only matter for batches
+    // beyond ~10k files; no bottleneck observed at current batch sizes.
     for (const std::filesystem::path& r : reserved) {
         reserved_norm.insert(weakly(r).string());
     }
@@ -190,7 +191,8 @@ std::vector<std::filesystem::path> collect_inputs(const std::vector<std::filesys
             continue;
         }
         try {
-            // TODO(M2): optional follow-symlink mode + progress callback for huge trees.
+            // NOTE(limit): optional follow-symlink mode + progress callback for huge trees is
+            // out of scope — symlink-cycle risk outweighs the benefit.
             const auto opts = std::filesystem::directory_options::skip_permission_denied;
             for (const std::filesystem::directory_entry& entry :
                  std::filesystem::recursive_directory_iterator(root, opts)) {

@@ -11,7 +11,7 @@
 //   4. data_dir(), `<data>/presets`, `<data>/logs` are created on first use; if creation
 //      fails in both branches, data_dir() returns an empty path for the caller to handle.
 //
-// TODO(M2): Windows branch (%APPDATA%/PhotoPipeline, §3.13 header comment) — the M1b
+// TODO(M3): Windows branch (%APPDATA%/PhotoPipeline, §3.13 header comment) — the M1b
 //           target platform is Linux only.
 
 #include "platform/paths.h"

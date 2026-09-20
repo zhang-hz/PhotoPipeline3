@@ -21,7 +21,7 @@ namespace {
 
 // Physical memory currently available for new work. Returns 0 when unknown.
 uint64_t available_memory_bytes() {
-    // TODO(M2): Windows/macOS probes (GlobalMemoryStatusEx / host_statistics64) — M1 ships
+    // TODO(M3): Windows/macOS probes (GlobalMemoryStatusEx / host_statistics64) — M1 ships
     // the Linux path plus a sysconf fallback; other platforms use the 8 GB ceiling.
 #if defined(__linux__)
     // MemAvailable is the kernel's own estimate (free + reclaimable page cache).

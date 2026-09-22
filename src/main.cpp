@@ -27,6 +27,8 @@
 #include <QString>
 #include <QStringList>
 #include <QVariant>
+#include <QGuiApplication>
+#include <QStyleHints>
 
 #include <algorithm>
 #include <atomic>
@@ -35,6 +37,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include <fstream>
 #include <string>
 #include <string_view>
@@ -52,6 +57,7 @@
 #include "core/scheduler.h"
 #include "core/settings.h"
 #include "core/types.h"
+#include "platform/mica.h"
 #include "platform/paths.h"
 #include "ui/mainwindow.h"
 #include "ui/preset_io.h"
@@ -703,11 +709,12 @@ const char* kUiSmokeUsage =
     "  --shots DIR    screenshot directory (default .cache/ui-review; empty = do not save)\n"
     "exit code 0 = all frozen assertions passed; 1 = smoke failure; 2 = usage/argument error\n";
 
-// 可执行文件目录（Linux：/proc/self/exe；失败回退 argv[0]）
+// 可执行文件目录：复用 pp::platform::executable_dir()（Linux 读 /proc/self/exe，
+// Windows 读 GetModuleFileNameW —— M3 单一实现，不再各自探测）；空结果回退 argv[0]。
 fs::path executable_directory(const char* argv0) {
+    const fs::path exe_dir = pp::platform::executable_dir();
+    if (!exe_dir.empty()) return exe_dir;
     std::error_code ec;
-    const fs::path exe = fs::read_symlink("/proc/self/exe", ec);
-    if (!ec && !exe.empty()) return exe.parent_path();
     const fs::path arg = fs::absolute(fs::path(argv0 != nullptr ? argv0 : ""), ec);
     return arg.parent_path();
 }
@@ -791,7 +798,47 @@ int run_ui_smoke(int argc, char** argv) {
 }  // namespace
 #endif  // PP_BUILD_DEV
 
+#ifdef _WIN32
+namespace {
+// M3-D5 (v2.0): 句柄是否为"捕获型"（管道/文件重定向）。这类句柄必须原样保留——
+// CONOUT$ 会窃走它们，破坏 ctest / subprocess / shell 重定向的冻结行捕获。
+bool std_handle_is_captured(DWORD which) {
+    const HANDLE h = ::GetStdHandle(which);
+    if (h == nullptr || h == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    const DWORD type = ::GetFileType(h);
+    return type == FILE_TYPE_PIPE || type == FILE_TYPE_DISK;
+}
+}  // namespace
+#endif
+
 int main(int argc, char** argv) {
+#ifdef _WIN32
+    // M3-D5 (v2.0，取代 v1.4): 判据由"句柄是否有效"改为"句柄是否捕获型"。
+    // 捕获型（管道/文件重定向：ctest、tests/*.py 的 subprocess、shell 重定向）原样保留，
+    // CONOUT$ 绝不接管；其余情形（句柄缺失，或为 console 型句柄却未附加控制台——
+    // pwsh 直调、tools/env.py run 实测静默 0 字节）挂接父控制台，并只重开未被捕获的流。
+    const bool out_captured = std_handle_is_captured(STD_OUTPUT_HANDLE);
+    const bool err_captured = std_handle_is_captured(STD_ERROR_HANDLE);
+    if (!out_captured || !err_captured) {
+        const bool attached_now = ::AttachConsole(ATTACH_PARENT_PROCESS) != 0;
+        if (attached_now || ::GetConsoleWindow() != nullptr) {
+            if (!out_captured) {
+                FILE* out = nullptr;
+                freopen_s(&out, "CONOUT$", "w", stdout);
+            }
+            if (!err_captured) {
+                FILE* err = nullptr;
+                freopen_s(&err, "CONOUT$", "w", stderr);
+            }
+            if (attached_now) {
+                // 仅在自己挂接时改控制台出口代码页，避免污染父 shell 的共享控制台状态。
+                ::SetConsoleOutputCP(CP_UTF8);
+            }
+        }
+    }
+#endif
     // M2-T11 §2.1（冻结）：--version 非 dev 门控、所有构建可用；stdout 单行 + 退出码 0。
     // 在任何其它参数处理与 QApplication 构造之前返回。优先级取最保守口径：只要 argv 里出现
     // --dev/--ui-smoke，就走原有分支（未知参数在 dev harness 内仍是 exit 2 的用法错误），
@@ -853,6 +900,11 @@ int main(int argc, char** argv) {
     pp::log_init(pp::platform::logs_dir(), level);
     pp::ui::MainWindow w(settings);
     w.show();
+    // M3-D6: Mica + 深色标题栏（非 Windows 平台在 mica.cpp 内为空操作）。
+    // v1 口径：启动期跟随一次系统深浅色；运行期主题切换监听留后续。
+    pp::platform::apply_window_backdrop(
+        reinterpret_cast<void*>(w.winId()),
+        QGuiApplication::styleHints()->colorScheme() == Qt::ColorScheme::Dark);
     const int code = app.exec();
     pp::log_shutdown();
     return code;

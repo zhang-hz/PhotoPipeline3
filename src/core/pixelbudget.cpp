@@ -12,7 +12,9 @@
 #include <fstream>
 #include <string>
 
-#if defined(__unix__) || defined(__APPLE__)
+#ifdef _WIN32
+#include <windows.h>
+#elif defined(__unix__) || defined(__APPLE__)
 #include <unistd.h>
 #endif
 
@@ -21,9 +23,16 @@ namespace {
 
 // Physical memory currently available for new work. Returns 0 when unknown.
 uint64_t available_memory_bytes() {
-    // TODO(M3): Windows/macOS probes (GlobalMemoryStatusEx / host_statistics64) — M1 ships
-    // the Linux path plus a sysconf fallback; other platforms use the 8 GB ceiling.
-#if defined(__linux__)
+    // M3（裁定 #15 销账）：Windows = GlobalMemoryStatusEx.ullAvailPhys；
+    // macOS 探针仍留空（回退 8 GB 上限），Linux 路径不变。
+#ifdef _WIN32
+    MEMORYSTATUSEX st{};
+    st.dwLength = sizeof(st);
+    if (::GlobalMemoryStatusEx(&st)) {
+        return st.ullAvailPhys;
+    }
+    return 0;
+#elif defined(__linux__)
     // MemAvailable is the kernel's own estimate (free + reclaimable page cache).
     std::ifstream f("/proc/meminfo");
     std::string key;

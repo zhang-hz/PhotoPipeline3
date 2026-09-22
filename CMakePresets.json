@@ -5,10 +5,9 @@
     {
       "name": "base", "hidden": true, "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/${presetName}",
-      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "toolchainFile": "${sourceDir}/vcpkg/scripts/buildsystems/vcpkg.cmake",
       "cacheVariables": {
         "VCPKG_OVERLAY_PORTS": "${sourceDir}/vcpkg-overlay",
-        "CMAKE_PREFIX_PATH": "$env{QT_DIR}",
         "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed"
       }
     },
@@ -17,12 +16,14 @@
     { "name": "release-dev", "inherits": "release",
       "cacheVariables": { "PP_BUILD_DEV": "ON" } },
     { "name": "dev", "inherits": "base",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "PP_BUILD_DEV": "ON",
         "CMAKE_CXX_FLAGS_DEBUG": "-g -fsanitize=address,undefined -fno-omit-frame-pointer"
       } },
     { "name": "tsan", "inherits": "base",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "PP_BUILD_DEV": "ON",

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity type="win32" name="PhotoPipeline.PhotoPipeline" version="@PROJECT_VERSION_MAJOR@.@PROJECT_VERSION_MINOR@.@PROJECT_VERSION_PATCH@.0" processorArchitecture="*"/>
+  <description>PhotoPipeline - batch pixel-level transcoder with metadata surgery</description>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings xmlns:ws2019="http://schemas.microsoft.com/SMI/2019/WindowsSettings">
+      <!-- M3-D2 裁定：进程代码页 UTF-8。argv/getenv/fopen/path::string() 与 Linux
+           "路径=UTF-8 字节" 语义对齐，跨平台单一代码路径的基石。要求 Win10 1903+。 -->
+      <ws2019:activeCodePage>UTF-8</ws2019:activeCodePage>
+    </windowsSettings>
+  </application>
+</assembly>

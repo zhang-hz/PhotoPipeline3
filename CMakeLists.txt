@@ -16,8 +16,43 @@ file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/gen/core")
 configure_file("${CMAKE_SOURCE_DIR}/cmake/version.h.in"
                "${CMAKE_BINARY_DIR}/gen/core/version.h" @ONLY)
 
+# M3: Qt 前缀自包含（presets 不再依赖 $env{QT_DIR}）。env QT_DIR 优先；否则用仓库内
+# aqt 布局（QT_VERSION 单源 = tools/versions.env；平台分派 arch 目录）。
+file(READ "${CMAKE_SOURCE_DIR}/tools/versions.env" _pp_versions_env)
+string(REGEX MATCH "QT_VERSION=([0-9][0-9.]*)" _pp_qt_version_match "${_pp_versions_env}")
+if(NOT CMAKE_MATCH_1)
+    message(FATAL_ERROR "QT_VERSION not found in tools/versions.env")
+endif()
+set(_pp_qt_version "${CMAKE_MATCH_1}")
+if(DEFINED ENV{QT_DIR} AND NOT "$ENV{QT_DIR}" STREQUAL "")
+    set(QT_DIR "$ENV{QT_DIR}" CACHE PATH "Qt installation prefix")
+else()
+    if(WIN32)
+        set(_pp_qt_arch "msvc2022_64")
+    else()
+        set(_pp_qt_arch "gcc_64")
+    endif()
+    set(QT_DIR "${CMAKE_SOURCE_DIR}/.toolchain/Qt/${_pp_qt_version}/${_pp_qt_arch}"
+        CACHE PATH "Qt installation prefix (repo-local aqt layout)")
+    unset(_pp_qt_arch)
+endif()
+list(PREPEND CMAKE_PREFIX_PATH "${QT_DIR}")
+unset(_pp_versions_env)
+unset(_pp_qt_version_match)
+unset(_pp_qt_version)
+
+# M3-D2: Windows 应用清单（activeCodePage=UTF-8）随版本号生成后嵌入可执行文件。
+configure_file("${CMAKE_SOURCE_DIR}/cmake/photopipeline.manifest.in"
+               "${CMAKE_BINARY_DIR}/gen/photopipeline.manifest" @ONLY)
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(-Wall -Wextra -Wpedantic)
+elseif(MSVC)
+    # M3-D2: /utf-8 = 源码与执行字符集均为 UTF-8（与清单 activeCodePage 配对）。
+    # /external:anglebrackets + /external:W0 = 尖括号包含的系统头（Qt/OIIO/STL）
+    # 不参与 /W4 告警；/permissive- = 标准符合模式；NOMINMAX = 禁用 windows.h 的
+    # min/max 宏（与 std::min/max 共存）。
+    add_compile_options(/utf-8 /W4 /permissive- /external:anglebrackets /external:W0 /DNOMINMAX)
 endif()
 
 # ccache 可用性回退（M1-T15；R18/D7）：只有 ccache 真正可用时才设 launcher，否则整条构建会红。
@@ -73,7 +108,10 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(LCMS2 REQUIRED IMPORTED_TARGET lcms2)
 pkg_check_modules(LIBJXL REQUIRED IMPORTED_TARGET libjxl)
 pkg_check_modules(WEBP REQUIRED IMPORTED_TARGET libwebp)
+pkg_check_modules(WEBPMUX REQUIRED IMPORTED_TARGET libwebpmux)  # M3-W4a v1.8: enc_webp 的 ICCP mux API（WebPMux*）
 pkg_check_modules(TIFF4 REQUIRED IMPORTED_TARGET libtiff-4)
+# M3-W3: 共享脚本 Python 单实现后，ui_smoke 的 ctest 接线改走解释器。
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
 # jpegli public C API (jpegli_*): upstream builds it into the EXCLUDE_FROM_ALL
 # jpegli-static target, and the compat libjpeg.so hides those symbols via
 # -Wl,--exclude-libs=ALL, so the overlay port installs the archive as libjpegli.a
@@ -97,7 +135,7 @@ add_library(pp_core STATIC ${PP_CORE_SOURCES})
 target_include_directories(pp_core PUBLIC ${CMAKE_SOURCE_DIR}/src ${CMAKE_BINARY_DIR}/gen)
 target_link_libraries(pp_core PUBLIC OpenImageIO::OpenImageIO JPEG::JPEG
     libjpeg-turbo::jpegli-static Exiv2::exiv2lib heif PkgConfig::LIBJXL
-    PkgConfig::WEBP PkgConfig::LCMS2 PkgConfig::TIFF4 spdlog::spdlog Qt6::Core)
+    PkgConfig::WEBP PkgConfig::WEBPMUX PkgConfig::LCMS2 PkgConfig::TIFF4 spdlog::spdlog Qt6::Core)
 
 # 2b) 静态库自注册的唯一链接形态（M2-T13）。pp_core 是 STATIC 库，编码器 TU 里的
 #     PP_REGISTER_ENCODER 静态初始化器只有在归档成员被拉入时才会运行；因此每个
@@ -113,6 +151,13 @@ file(GLOB PP_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/tests/unit/test_
 foreach(src ${PP_TEST_SOURCES})
   get_filename_component(tname ${src} NAME_WE)          # test_fsops → ctest 名 test_fsops
   add_executable(pp_${tname} ${src})
+  if(WIN32)
+    # M3 v1.9（D2 单一 UTF-8 世界）：测试二进制同样嵌入应用清单。否则进程 ACP 跟随系统
+    # 区域（本机 GBK），tests/golden 的 📸 等字符经宽→窄转换失败 → 未捕获异常 → abort
+    # （实测 0xc0000409 / FAST_FAIL_FATAL_APP_EXIT）。清单使进程 ACP=UTF-8，与 Linux 的
+    # UTF-8 字节语义对齐。
+    target_sources(pp_${tname} PRIVATE ${CMAKE_BINARY_DIR}/gen/photopipeline.manifest)
+  endif()
   # 静态库自注册：唯一链接形态（M2-T13）= pp_core_registered
   target_link_libraries(pp_${tname} PRIVATE pp_core_registered)
   add_test(NAME ${tname} COMMAND pp_${tname})
@@ -126,6 +171,14 @@ file(GLOB_RECURSE PP_UI_SOURCES CONFIGURE_DEPENDS
 list(REMOVE_ITEM PP_UI_SOURCES ${CMAKE_SOURCE_DIR}/src/ui/preset_io.cpp  # 已在 pp_core，避免重复符号
      ${CMAKE_SOURCE_DIR}/src/platform/paths.cpp ${CMAKE_SOURCE_DIR}/src/mapwidget/coord.cpp)  # M1b：同上
 add_executable(photopipeline src/main.cpp ${PP_UI_SOURCES})
+if(WIN32)
+    # M3-D2/D5/D6: 嵌入应用清单（UTF-8 代码页）；GUI 子系统（双击无控制台，
+    # --version/--dev/--ui-smoke 由 main.cpp 的 AttachConsole 挂接父控制台）；
+    # mica.cpp 需要 dwmapi（DwmSetWindowAttribute）。
+    target_sources(photopipeline PRIVATE ${CMAKE_BINARY_DIR}/gen/photopipeline.manifest)
+    set_target_properties(photopipeline PROPERTIES WIN32_EXECUTABLE TRUE)
+    target_link_libraries(photopipeline PRIVATE dwmapi)
+endif()
 # 静态库自注册：唯一链接形态（M2-T13）= pp_core_registered
 target_link_libraries(photopipeline PRIVATE pp_core_registered
     Qt6::Widgets Qt6::Network)
@@ -135,7 +188,7 @@ if(PP_BUILD_DEV)
   target_compile_definitions(photopipeline PRIVATE PP_BUILD_DEV)
   # M1b-U10：UI 冒烟取代 M0 的 PP_M0_SMOKE 定时退出桩。走脚本以便同时校验冻结成功末行
   # `UI-SMOKE OK shots=7 pages=3`；offscreen 平台由测试环境注入。
-  add_test(NAME ui_smoke COMMAND ${CMAKE_COMMAND} -E env QT_QPA_PLATFORM=offscreen bash ${CMAKE_SOURCE_DIR}/tests/ui_smoke.sh ${CMAKE_BINARY_DIR})
+  add_test(NAME ui_smoke COMMAND ${CMAKE_COMMAND} -E env QT_QPA_PLATFORM=offscreen ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/ui_smoke.py ${CMAKE_BINARY_DIR})
   set_tests_properties(ui_smoke PROPERTIES TIMEOUT 240)
 endif()
 
@@ -172,3 +225,11 @@ add_executable(pp_verify tools/pp_verify.cpp)
 # 静态库自注册：唯一链接形态（M2-T13）= pp_core_registered
 target_link_libraries(pp_verify PRIVATE pp_core_registered)
 add_test(NAME verify_selftest COMMAND pp_verify --selftest)
+
+# M3 v1.9（D2）：工具二进制同样嵌入 UTF-8 清单（同上；pp_mkfixtures/pp_verify/spike_f
+# 均遍历含非 ASCII 文件名的 tests/golden）。
+if(WIN32)
+  foreach(pp_tool pp_linkprobe pp_mkfixtures pp_spikes pp_verify)
+    target_sources(${pp_tool} PRIVATE ${CMAKE_BINARY_DIR}/gen/photopipeline.manifest)
+  endforeach()
+endif()

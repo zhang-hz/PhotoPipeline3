@@ -10,5 +10,6 @@
     "lcms",
     { "name": "exiv2", "features": ["bmff", "xmp", "png"] },
     "spdlog"
+    , { "name": "pkgconf", "platform": "windows" }
   ]
 }

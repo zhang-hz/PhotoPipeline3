@@ -57,10 +57,20 @@ string(COMPARE EQUAL "${VCPKG_LIBRARY_LINKAGE}" "dynamic" ENABLE_SHARED)
 #   combine : ar -M  CREATE libx265.a  ADDLIB 8bit  ADDLIB 10bit  ADDLIB 12bit
 # ===========================================================================
 set(X265_MULTILIB ON)
-if(NOT VCPKG_LIBRARY_LINKAGE STREQUAL "static")
-    # A shared build links the extra archives directly (source/CMakeLists.txt:1069)
-    # and therefore already carries every depth.
+if(NOT VCPKG_LIBRARY_LINKAGE STREQUAL "static" AND NOT VCPKG_TARGET_IS_WINDOWS)
+    # Non-Windows shared builds: upstream multilib only covers static; the pinned
+    # x64-linux triplet is static anyway (Linux behaviour unchanged).
+    # Windows shared builds DO run multilib: upstream x265-shared links the depth
+    # archives directly via EXTRA_LIB (source/CMakeLists.txt, x265-shared target),
+    # producing a single libx265.dll with all depths.
     set(X265_MULTILIB OFF)
+endif()
+# Depth-archive output name per toolchain: MSVC keeps the target name
+# (x265-static.lib, no `lib` prefix); GCC produces libx265.a (OUTPUT_NAME x265).
+if(VCPKG_TARGET_IS_WINDOWS)
+    set(X265_DEPTH_LIB "x265-static.lib")
+else()
+    set(X265_DEPTH_LIB "libx265.a")
 endif()
 
 set(X265_LINKED_OPTIONS_RELEASE "")
@@ -116,16 +126,20 @@ if(X265_MULTILIB)
     endforeach()
     # The 8-bit build needs both extra archives on -DEXTRA_LIB so that
     # source/encoder/CMakeLists.txt:14-23 compiles the multi-depth dispatch glue.
+    # M3 v1.2: EXTRA_LIB 的 `;` 必须写成 `\;` —— OPTIONS 经 execute_process 展开时，
+    # 裸 `;` 会把值拆成两个 argv（12bit 档丢失 → LNK2019，x64-windows 实证）；
+    # `\;` 使整串保持单 argv，cmake -D 收到含 `;` 的单值后存为两条目列表
+    # （与上游 build/linux/multilib.sh 的 shell 引号语义一致）。
     if(NOT DEFINED VCPKG_BUILD_TYPE OR "${VCPKG_BUILD_TYPE}" STREQUAL "release")
         list(APPEND X265_LINKED_OPTIONS_RELEASE
-            "-DEXTRA_LIB=${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-rel-10bit/libx265.a;${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-rel-12bit/libx265.a"
+            "-DEXTRA_LIB=${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-rel-10bit/${X265_DEPTH_LIB}\\;${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-rel-12bit/${X265_DEPTH_LIB}"
             -DLINKED_10BIT=ON
             -DLINKED_12BIT=ON
         )
     endif()
     if(NOT DEFINED VCPKG_BUILD_TYPE OR "${VCPKG_BUILD_TYPE}" STREQUAL "debug")
         list(APPEND X265_LINKED_OPTIONS_DEBUG
-            "-DEXTRA_LIB=${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-dbg-10bit/libx265.a;${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-dbg-12bit/libx265.a"
+            "-DEXTRA_LIB=${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-dbg-10bit/${X265_DEPTH_LIB}\\;${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-dbg-12bit/${X265_DEPTH_LIB}"
             -DLINKED_10BIT=ON
             -DLINKED_12BIT=ON
         )
@@ -157,7 +171,10 @@ vcpkg_fixup_pkgconfig()
 # (last step of upstream build/linux/multilib.sh). The 8-bit archive carries the
 # dispatch glue, the 10/12-bit archives carry the namespaced codec APIs
 # (x265_10bit::x265_api_get / x265_12bit::x265_api_get).
-if(X265_MULTILIB)
+# M3 (Windows dynamic): the shared 8-bit build links the depth archives directly
+# via EXTRA_LIB at DLL link time, so the GNU-ar MRI merge below only applies to
+# static installs (Linux); Windows dynamic needs no archive merge.
+if(X265_MULTILIB AND VCPKG_LIBRARY_LINKAGE STREQUAL "static")
     find_program(X265_AR NAMES ar REQUIRED)
     foreach(_x265_cfg IN ITEMS release debug)
         if(DEFINED VCPKG_BUILD_TYPE AND NOT "${VCPKG_BUILD_TYPE}" STREQUAL "${_x265_cfg}")

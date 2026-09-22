@@ -6,11 +6,21 @@
 #    GitHub tags/releases API 均为空数组)，故钉死 main HEAD 的 commit SHA
 #   (031a0077f5799a6041004267fc12b956c1f52a20, 2026-06-01) + 下方 SHA512，
 #   仍为不可变、可复现的引用。
+# M3 v1.3: upstream jpegli gates the libjpeg-ABI wrapper behind NOT WIN32 and
+# builds it with GNU-only link machinery (version script / --exclude-libs).
+# The Windows-only patch lifts the gate and builds the wrapper as a STATIC
+# archive instead. Applied only on Windows — the Linux source tree and build
+# stay byte-identical.
+set(JPEG_PATCHES "")
+if(VCPKG_TARGET_IS_WINDOWS)
+    list(APPEND JPEG_PATCHES jpegli-win32-static-compat.patch)
+endif()
 vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO google/jpegli
     REF "031a0077f5799a6041004267fc12b956c1f52a20"
     SHA512 4d57baf7ff88a2a40f46dc0c4fe121df1455064ad36c3a6a479e6536f02c9e436088fb15462336f65bc5c7c6dda54bb740e1c05744399c834aa88a36c6635db9
+    PATCHES ${JPEG_PATCHES}
 )
 
 # jpegli 的 CMake 无条件 configure_file() 需要
@@ -30,6 +40,24 @@ file(COPY
     "${JPEGTURBO_SOURCE_PATH}/jmorecfg.h"
     DESTINATION "${SOURCE_PATH}/third_party/libjpeg-turbo"
 )
+
+# M3 v1.3a: MSVC needs libjpeg-turbo's Windows config template. Upstream's own
+# CMakeLists selects win/jconfig.h.in on WIN32 (CMakeLists.txt:546) because that
+# template supplies `boolean`/`INT16`/`INT32` and defines HAVE_BOOLEAN + XMD_H so
+# jmorecfg.h does not clash with rpcndr.h/basetsd.h. jpegli hardcodes the
+# portable template, so on MSVC any consumer that has already seen rpcndr.h's
+# `boolean` fails with C2371 in jmorecfg.h (tiff's tif_jpeg.c hit exactly that).
+# Copy the OS-correct template into the submodule slot on Windows only — the
+# Linux source tree and build stay byte-identical.
+if(VCPKG_TARGET_IS_WINDOWS)
+    # file(COPY) preserves timestamps and does not replace a destination whose
+    # timestamp is equal, so remove first: the portable template placed by the
+    # copy above carries the very same tarball timestamp as win/jconfig.h.in.
+    # (v4 实证: 直接 COPY 后 third_party/libjpeg-turbo/jconfig.h.in 仍是便携模板.)
+    file(REMOVE "${SOURCE_PATH}/third_party/libjpeg-turbo/jconfig.h.in")
+    file(COPY "${JPEGTURBO_SOURCE_PATH}/win/jconfig.h.in"
+        DESTINATION "${SOURCE_PATH}/third_party/libjpeg-turbo")
+endif()
 
 # jerror.h 是 libjpeg 兼容公开头之一，但 jpegli 上游对它没有任何规则：
 # lib/jpegli.cmake 只 configure_file jconfig.h.in / jpeglib.h / jmorecfg.h 到
@@ -116,19 +144,41 @@ vcpkg_fixup_pkgconfig()
 # EXCLUDE_FROM_ALL，这里显式构建（rel+dbg）后按 libjpegli.a 安装，供需要
 # jpegli_* 符号（而非仅 libjpeg 兼容导出层）的消费方链接使用。
 vcpkg_cmake_build(TARGET jpegli-static)
-set(_jpegli_static_rel "${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-rel/lib/libjpegli-static.a")
-set(_jpegli_static_dbg "${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-dbg/lib/libjpegli-static.a")
-if(NOT EXISTS "${_jpegli_static_rel}" OR NOT EXISTS "${_jpegli_static_dbg}")
+# M3: output artifact names per toolchain — MSVC keeps the target name
+# (jpegli-static.lib, no `lib` prefix); GCC produces libjpegli-static.a.
+# The installed name follows the same convention so that
+# libjpeg-turbo-config.cmake can look both up per platform.
+if(VCPKG_TARGET_IS_WINDOWS)
+    set(_jpegli_built_name "jpegli-static.lib")
+    set(_jpegli_installed_name "jpegli-static.lib")
+else()
+    set(_jpegli_built_name "libjpegli-static.a")
+    set(_jpegli_installed_name "libjpegli.a")
+endif()
+set(_jpegli_static_rel "${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-rel/lib/${_jpegli_built_name}")
+set(_jpegli_static_dbg "${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-dbg/lib/${_jpegli_built_name}")
+if(NOT EXISTS "${_jpegli_static_rel}")
+    file(GLOB _jpegli_rel_listing "${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-rel/lib/*")
     message(FATAL_ERROR
-        "jpegli-static archive missing (check upstream target/output name): "
-        "'${_jpegli_static_rel}' / '${_jpegli_static_dbg}'")
+        "jpegli-static release archive missing (expected '${_jpegli_static_rel}'); "
+        "build-tree lib contents: ${_jpegli_rel_listing}")
+endif()
+if(NOT EXISTS "${_jpegli_static_dbg}")
+    file(GLOB _jpegli_dbg_listing "${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-dbg/lib/*")
+    message(FATAL_ERROR
+        "jpegli-static debug archive missing (expected '${_jpegli_static_dbg}'); "
+        "build-tree lib contents: ${_jpegli_dbg_listing}")
 endif()
 file(INSTALL "${_jpegli_static_rel}"
-    DESTINATION "${CURRENT_PACKAGES_DIR}/lib" RENAME libjpegli.a)
+    DESTINATION "${CURRENT_PACKAGES_DIR}/lib" RENAME "${_jpegli_installed_name}")
 file(INSTALL "${_jpegli_static_dbg}"
-    DESTINATION "${CURRENT_PACKAGES_DIR}/debug/lib" RENAME libjpegli.a)
+    DESTINATION "${CURRENT_PACKAGES_DIR}/debug/lib" RENAME "${_jpegli_installed_name}")
+unset(_jpegli_built_name)
+unset(_jpegli_installed_name)
 unset(_jpegli_static_rel)
 unset(_jpegli_static_dbg)
+unset(_jpegli_rel_listing)
+unset(_jpegli_dbg_listing)
 
 # jpegli 扩展头（公开 C API，上游路径 lib/jpegli/{encode,decode,common,types}.h）。
 # encode.h/decode.h 内部以 "lib/jpegli/..."、"lib/base/include_jpeglib.h" 引用，

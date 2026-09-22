@@ -1,0 +1,41 @@
+diff --git a/lib/jpegli.cmake b/lib/jpegli.cmake
+index e2a4c26..4c474bc 100644
+--- a/lib/jpegli.cmake
++++ b/lib/jpegli.cmake
+@@ -106,7 +106,7 @@ endif()
+ # Build libjpeg.so that links to libjpeg-static
+ #
+ 
+-if (JPEGLI_ENABLE_JPEGLI_LIBJPEG AND NOT APPLE AND NOT WIN32 AND NOT EMSCRIPTEN)
++if (JPEGLI_ENABLE_JPEGLI_LIBJPEG AND NOT APPLE AND NOT EMSCRIPTEN)
+ add_library(jpegli-libjpeg-obj OBJECT "${JPEGLI_INTERNAL_JPEGLI_WRAPPER_SOURCES}")
+ target_compile_options(jpegli-libjpeg-obj PRIVATE ${JPEGLI_INTERNAL_FLAGS})
+ target_compile_options(jpegli-libjpeg-obj PUBLIC ${JPEGLI_COVERAGE_FLAGS})
+@@ -120,6 +120,22 @@ target_compile_definitions(jpegli-libjpeg-obj PUBLIC
+ )
+ set(JPEGLI_LIBJPEG_INTERNAL_OBJECTS $<TARGET_OBJECTS:jpegli-libjpeg-obj>)
+ 
++if (WIN32)
++  # PhotoPipeline M3 overlay patch: upstream excludes the libjpeg-ABI wrapper
++  # from WIN32 and the shared build below relies on GNU-only link machinery
++  # (version script, --exclude-libs). Build the wrapper as a STATIC archive
++  # instead; the jpegli-static+hwy closure is provided to consumers by the
++  # port's CMake config package.
++  add_library(jpeg STATIC ${JPEGLI_LIBJPEG_INTERNAL_OBJECTS})
++  target_link_libraries(jpeg PRIVATE jpegli-static)
++  if (JPEGLI_INSTALL_JPEGLI_LIBJPEG)
++    install(TARGETS jpeg
++      ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
++    install(
++      DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/include/jpegli/"
++      DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
++  endif()
++else()
+ file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/jpegli)
+ add_library(jpeg SHARED ${JPEGLI_LIBJPEG_INTERNAL_OBJECTS})
+ target_link_libraries(jpeg PUBLIC ${JPEGLI_COVERAGE_FLAGS})
+@@ -155,3 +171,4 @@ if(LINKER_SUPPORT_EXCLUDE_LIBS)
+     LINK_FLAGS " ${LINKER_EXCLUDE_LIBS_FLAG}")
+ endif()
+ endif()
++endif()

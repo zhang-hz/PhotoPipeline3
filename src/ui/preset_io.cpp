@@ -111,7 +111,13 @@ std::string errno_text() {
 // 这类真实读错误上会抛 std::ios_base::failure（复现：ifstream 打开目录 → terminate/SIGABRT），
 // 本层按返回值报错、不抛异常。目录由调用方先行拦截（与 QFile 语义一致）。
 std::string read_file_bytes(const std::filesystem::path& file, std::string& out) {
+#if defined(_WIN32)
+    // M3：fs::path::c_str() 在 Windows 为 wchar_t*；原生宽字符打开，正确性不依赖
+    // 进程 ANSI 代码页（非 ASCII 预设名在任意宿主/测试二进制下一致）。POSIX 保持字节路径。
+    std::FILE* f = ::_wfopen(file.c_str(), L"rb");
+#else
     std::FILE* f = std::fopen(file.c_str(), "rb");
+#endif
     if (f == nullptr) return "cannot open '" + display_path(file) + "' for reading";
     std::string bytes;
     char buf[64 * 1024];

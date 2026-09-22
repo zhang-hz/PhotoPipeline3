@@ -14,6 +14,7 @@
 #include "core/logger.h"
 #include "core/version.h"
 
+#include <spdlog/pattern_formatter.h>
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/spdlog.h>
 
@@ -274,7 +275,11 @@ std::shared_ptr<spdlog::logger> make_file_logger(const std::filesystem::path& fi
                                                  spdlog::level::level_enum lv) {
     auto sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(file.string(), false);
     auto lg = std::make_shared<spdlog::logger>("pp", std::move(sink));
-    lg->set_pattern(kLogPattern);
+    // M3 v1.9：显式给定 eol="\n"。spdlog 默认 eol 在 Windows 为 "\r\n"（os::default_eol），
+    // 使日志行尾与 Linux 不一致（冻结行格式按 LF 锚定；getline 保留 \r 会让 $ 失配）。
+    // 日志文件跨平台逐字节同格式；控制台/stderr 仍由 CRT 文本模式按平台惯例处理。
+    lg->set_formatter(std::make_unique<spdlog::pattern_formatter>(
+        kLogPattern, spdlog::pattern_time_type::local, "\n"));
     lg->set_level(lv);
     return lg;
 }

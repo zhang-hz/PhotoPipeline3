@@ -362,13 +362,13 @@ status/task/tasks-done/tasks-skipped/api-deltas/artifacts/frozen-check/build/sel
 3. ✅ offscreen ui_smoke 绿（本地 + CI job）。
    - 证据：本地 `ctest -R ui_smoke` 绿、末行 `UI-SMOKE OK shots=8 pages=3`；CI run `35520031504` **首次在 CI 拿到该冻结行**（`ui-smoke` job 全绿，`48a0190` 记录）。
 4. ✅ AppImage 产出 + 烟测三断言绿（本地 + CI job + artifact）。
-   - 证据：本地 `tools/make_appimage.sh dist` 四项内置烟测 PASS + 闭包门禁 PASS，产物 `dist/PhotoPipeline-0.1.0-x86_64.AppImage`（**52,468,216 B**，T27 重建 = AppRun 修复后）；CI 终轮 run `35521800777`（head `d1b5fb7`）`appimage` job 1m37s 绿 + `PhotoPipeline-AppImage` artifact 已上传（产物 **50,940,408 B** / sha256 `514ecf44…`）。"三断言"已扩展为四项内置 + 产物启动烟测（§2.9 落地口径）。
+   - 证据：本地 `tools/make_appimage.sh dist` 四项内置烟测 PASS + 闭包门禁 PASS，产物 `dist/PhotoPipeline-0.1.0-x86_64.AppImage`（**52,468,216 B**，T27 重建 = AppRun 修复后）；CI 终轮 run `35521800777`（head `d1b5fb7`）`appimage` job 1m37s 绿 + `PhotoPipeline-AppImage` artifact 已上传（产物 **50,940,408 B** / sha256 `514ecf44…`，T27 轮次值 = **非发布附件；见 `docs/m2-report.md` §9 发行口径**）。"三断言"已扩展为四项内置 + 产物启动烟测（§2.9 落地口径）。
 5. ✅ `grep -rn "TODO(M2)" src/ tests/ tools/` 归零（§3 表全处置）。
    - 证据：实测无输出、退出码 **1**（§3 落地结果：非弃权 19 = 修复 17 + 重分类 M3 2，弃权 11）。
 6. ✅ 回归基线入库，双跑零 diff。
    - 证据：`tools/baseline/golden.log`（178,544 B）随 `35f3c59` 入库，`tools/regression.sh` 规范化后连跑两次零 diff（T27 复跑：`normalized 1636 lines vs baseline 1636 lines` + `zero diff`，且两份文件 sha256 相同 `092e3dee…`）；**敏感性 = 注入受控变化 → diff 命中预期形状、非预期行 = 0**（移除 1 个语料输入 27→26 → `1620 vs 1636` 行 + `DIFF FOUND (384 lines)`；**T27 字面单行注入**：只改一行 → `diff` 恰好 1 行，`.cache/m2-t27-single-line.log`）。
 7. ✅ CI 全绿（R15 闭合：真实首跑通过）。
-   - 证据：**终轮 run `35521800777`（head `d1b5fb7`，T27 推送后）四 job 全绿（`linux` 1m32s / `ui-smoke` 1m45s / `appimage` 1m37s / `cache-gc` 9s）**，取证原文 `UI-SMOKE OK shots=8 pages=3`（ctest 1/1，5.85 s）+ `100% tests passed, 0 tests failed out of 23`（2.17 s）+ `SMOKE total=16 pass=16 fail=0`；artifact `PhotoPipeline-AppImage` = 产物 50,940,408 B / sha256 `514ecf44658e428008b2db6fd970270075a5aee7510e9c1bd280fc0d1b26a244` / 46 条 soname。紧随其后的**文档回填轮 run `35522192917`（head `680bb92`）四 job 同样全绿**（`linux` 1m23s / `ui-smoke` 2m03s / `appimage` 1m36s / `cache-gc` 5s），其产物 sha256 `50003819…` 与上轮不同 = AppImage 非字节可复现（引用须带 run/head）。`a63acff` 补齐 Qt 缓存 save 步后 `gh cache list` 的 `qt-*` 条目非空。首绿 = `35520386390`，首跑 = `35512612876`。
+   - 证据：**终轮 run `35521800777`（head `d1b5fb7`，T27 推送后）四 job 全绿（`linux` 1m32s / `ui-smoke` 1m45s / `appimage` 1m37s / `cache-gc` 9s）**，取证原文 `UI-SMOKE OK shots=8 pages=3`（ctest 1/1，5.85 s）+ `100% tests passed, 0 tests failed out of 23`（2.17 s）+ `SMOKE total=16 pass=16 fail=0`；artifact `PhotoPipeline-AppImage` = 产物 50,940,408 B / sha256 `514ecf44658e428008b2db6fd970270075a5aee7510e9c1bd280fc0d1b26a244` / 46 条 soname（T27 轮次值 = **非发布附件；见 `docs/m2-report.md` §9 发行口径**；发行附件 = run `35522357702` / head `4fb64c3` / `31f75c48…`）。紧随其后的**文档回填轮 run `35522192917`（head `680bb92`）四 job 同样全绿**（`linux` 1m23s / `ui-smoke` 2m03s / `appimage` 1m36s / `cache-gc` 5s），其产物 sha256 `50003819…` 与上轮不同 = AppImage 非字节可复现（引用须带 run/head/sha256；该值同样**非发布附件**）。`a63acff` 补齐 Qt 缓存 save 步后 `gh cache list` 的 `qt-*` 条目非空。首绿 = `35520386390`，首跑 = `35512612876`。
 8. ✅ 版本单源生效（--version/关于页一致）；CHANGELOG + README 发行章节落盘；GPL 自查通过。
    - 证据：`--version` → `PhotoPipeline 0.1.0`、关于页同引 `PP_VERSION_STRING`（`5ddc741`）；CHANGELOG/README 发行章节随 `7d83ede` 落盘 + 本次 T25 订正；GPL 自查 = `LICENSE` 在库 + 关于页许可清单 + 产物内 40 个 port `copyright` 与本项目 `LICENSE`（打包烟测 ④ 逐项校验）+ 源码 offer = 仓库 URL。
 9. ✅ ctest 无回归（23 release / 24 release-dev + 本批新增）。
@@ -434,6 +434,8 @@ CI 首跑 run `35512612876` 起连续 7 轮红灯，根因按暴露顺序：
 | T18 | AppImage 插件依赖闭包修复（A/B 两类硬门禁；双击无响应消除） | `0219105` |
 | T21c | 审查截图目录隔离（`.cache/ui-smoke-ci` vs `.cache/ui-review`）+ 预设名可用性修复 | `c5342d2` |
 | T22 | 运行页顶部状态行裁切修复（布局激活同步） | `9adf5b8` |
+| T28 | **GitHub Release 发布**（`v0.1.0`；无仓库代码变更）：Release <https://github.com/zhang-hz/PhotoPipeline3/releases/tag/v0.1.0>（release id 393729954，`draft=false` / `prerelease=false`，name `PhotoPipeline 0.1.0`）；**唯一 asset** = `PhotoPipeline-0.1.0-x86_64.AppImage` **50,940,408 B** / sha256 `31f75c48…`（64 位见 `docs/m2-report.md` §9）；附件取自 run `35522357702`（head `4fb64c3`，headBranch `main`）的 `PhotoPipeline-AppImage` artifact（zip 50,325,837 B / digest `6442ef17…`）；取证 = 回下载 `cmp` **IDENTICAL**（sha256 复算一致）+ 发布件实跑 `--version` = `PhotoPipeline 0.1.0` | — |
+| T29 | 发行记录与文档一致性收尾（**仅文档**：`docs/m2-report.md` / `docs/m2-tasks.md` / `README.md` / `CHANGELOG.md`）：出厂口径改以**已发布 Release** 为准；**引用口径 = `(run id, head sha, sha256)` 三元组**；非发布附件的旧轮次值一律紧邻标注「非发布附件；见 §9 发行口径」；**同 commit 两轮 run 产物各异实测**：run `35522357702`（headBranch `main`）vs run `35546035069`（headBranch `v0.1.0`），同为 head `4fb64c3`、两轮四 job 全绿，但 artifact zip digest/体积不同（`6442ef17…`/50,325,837 B vs `9ff3430e…`/50,325,836 B） | — |
 
 ### 9.3 宿主故障事故（2026-09-20）
 
@@ -477,4 +479,6 @@ CI 首跑 run `35512612876` 起连续 7 轮红灯，根因按暴露顺序：
 - **gray 路径 26/255 位移归因**（T27 新增候选）：灰度 PQ 源升维后 `pq-gray` vs `plain-gray` 恒定差 26/255（0.50196 → 0.60392）；T27 已把该位移与 PQ→sRGB 转换对上号（lcms2 预测 0.60240，残差 0.39/255 疑来自 gray→RGB 的 profile 构造），但**归因需专项测试**（见 §2.8 订正注、`docs/m2-report.md` §3.3/§8-16）。
 - **HDR（PQ/HLG）正确映射**（T27 新增候选）：当前 (16,*)/(18,*) 分支不安装 CICP 派生 profile、沿用既有 ICC 路径；如需正确的 HDR→SDR tone mapping，须单独立项（证据 `.cache/m2-t27-pq-shift.log`）。
 - GitHub Actions 升 v5（checkout / cache / upload-artifact）。
+- **发行自动化**（T29 新增候选）：以 **tag 触发的 run 作为唯一发行来源**并自动 `gh release upload`，避免"同一 commit 多轮 run 产物指纹不同 + 人工取件"的歧义（实例：run `35522357702` vs `35546035069`，同 head `4fb64c3`）。
+- **`on: push` 重复触发去重**（T29 新增候选）：`build-test.yml` 的 `on: [push, pull_request]` 在 tag 推送与 main push 时会为**同一 commit 重复触发**（`35522357702` main / `35546035069` v0.1.0）；建议加 `if` 条件或拆 tag 专用 workflow（发行自动化落地时一并处理）。
 - **已完成、无需再列**：Scheduler `wait()` 双 budget 日志（T2 已加守卫）、时间预览异步化（T7 已完成）。

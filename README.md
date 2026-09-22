@@ -238,10 +238,12 @@ QT_QPA_PLATFORM=offscreen ./build/release-dev/photopipeline \
 
 发行产物为单一 AppImage（Linux x86_64）；自包含 Qt6、8 个编码器、OIIO、色彩与元数据运行库，免安装。
 
+预编译 AppImage 见 [Releases](https://github.com/zhang-hz/PhotoPipeline3/releases/tag/v0.1.0)（v0.1.0，sha256 以 release 页与下方说明为准）
+
 ### 下载与运行
 
 ```bash
-# 1) 取得产物：发行页附件，或本地打包产物 dist/
+# 1) 取得产物：Release 附件（首选），或本地打包产物 dist/
 #    PhotoPipeline-0.1.0-x86_64.AppImage（约 50 MiB）
 chmod +x PhotoPipeline-0.1.0-x86_64.AppImage
 
@@ -250,6 +252,11 @@ chmod +x PhotoPipeline-0.1.0-x86_64.AppImage
 ./PhotoPipeline-0.1.0-x86_64.AppImage --version  # → PhotoPipeline 0.1.0
 ```
 
+- **取件优先级（v0.1.0 起）**：**首选** [Release 附件](https://github.com/zhang-hz/PhotoPipeline3/releases/tag/v0.1.0)
+  `PhotoPipeline-0.1.0-x86_64.AppImage`（**50,940,408 B**，sha256 `31f75c48052be34a…`，
+  完整校验值以 Release 页为准）；**次选** GitHub Actions 的 `PhotoPipeline-AppImage` artifact
+  （**需登录 GitHub**，且属更早轮次的历史产物，sha256 与 Release 附件不同）；本地打包产物见
+  「开发工具（M2）」。
 - AppImage 类型 2：正常挂载运行需要 FUSE（`libfuse2`）。目标机无 FUSE 时改用
   `./PhotoPipeline-0.1.0-x86_64.AppImage --appimage-extract-and-run`（等价环境变量
   `APPIMAGE_EXTRACT_AND_RUN=1`）。
@@ -270,7 +277,7 @@ chmod +x PhotoPipeline-0.1.0-x86_64.AppImage
 - **glibc**：**官方发行产物由 CI 构建**（`appimage` job，ubuntu-24.04 runner），基线 **≥ 2.39**
   （noble 自带 glibc，`objdump -T` 最大符号版本）；**本地自建产物取决于本机 glibc** —— 例如在
   Ubuntu 26.04 上打包，实测要求 `GLIBC_2.43`，该产物只适用于 glibc ≥ 2.43 的目标机。两句都成立：
-  取发行附件请认 CI 产物，本地打包件按本机 glibc 自用
+  取发行附件请认 **Release 附件**（v0.1.0 = CI 构建，见章首下载入口）；本地打包件按本机 glibc 自用
 - **系统库**（不在 AppImage 内，需目标机提供）：
   - `libssl3`：Qt 6.8 的 TLS 后端插件（`libqopensslbackend.so`）运行期 dlopen `libssl.so.3` /
     `libcrypto.so.3`；缺失时 `QNetworkAccessManager` 报 `No functional TLS backend was found`，

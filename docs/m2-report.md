@@ -49,8 +49,10 @@ M2 目标：在 M1a（引擎）/M1b（界面）行为冻结的基础上完成 **
 | 收口 | T25 | 文档收口（`docs/m2-tasks.md` §9 订正 + README/CHANGELOG 终稿） | `b58a29a` `160d206` | 主对话工作区，非本报告文件域 |
 | 收口 | T26 | **本报告**（`docs/m2-report.md`） | `5a946b0` `b98a325` `387de62` | 全部数字附来源 |
 | 收口 | T27 | 终轮推送 + CI 验证 + 八项裁定落盘（**本报告 CI 数字取自本轮**） | `fd06bb3` `b3774fa` `d1b5fb7` | run `35521800777` 四 job 全绿；AppRun 缺 `~/.cache` 静默退出缺陷修复（§6.5）；PQ/HLG 原始日志（§3.3）与单行敏感性实验（§5③）补齐 |
+| 收口 | T28 | **GitHub Release 发布**（`v0.1.0`；无仓库代码变更） | — | Release <https://github.com/zhang-hz/PhotoPipeline3/releases/tag/v0.1.0>（id 393729954，draft=false / prerelease=false）；唯一 asset `PhotoPipeline-0.1.0-x86_64.AppImage` **50,940,408 B** / sha256 `31f75c48…`，取自 run `35522357702`（head `4fb64c3`，headBranch `main`）；回下载 `cmp` IDENTICAL + 发布件实跑 `--version` = `PhotoPipeline 0.1.0`（§5⑦、§9） |
+| 收口 | T29 | 发行记录与文档一致性收尾（**仅文档**：本报告 + `docs/m2-tasks.md` + `README.md` + `CHANGELOG.md`；提交信息 `M2-T29: release record consistency (GitHub Release v0.1.0)`） | — | 出厂口径改以**已发布 Release** 为准（§9）；旧 run 值一律紧邻标注"非发布附件；见 §9 发行口径"；引用口径 = `(run, head, sha256)` 三元组；§8-10 补同 commit 两轮 run 差异（`35522357702` vs `35546035069`） |
 
-编排变更（实际执行，`docs/m2-tasks.md` §6）：`pipeline.cpp` 三方争用串行化 → T13 留 W2、**T5 后移 W3a、T6 后移 W3b**；T4 在 W2 早段独占该文件。**T20/T23 编号未使用**（原书与执行中均无）。
+编排变更（实际执行，`docs/m2-tasks.md` §6）：`pipeline.cpp` 三方争用串行化 → T13 留 W2、**T5 后移 W3a、T6 后移 W3b**；T4 在 W2 早段独占该文件。**T20/T23 编号未使用**（原书与执行中均无）。**T27–T29 为收口尾段**：T27 = 终轮推送 + CI 取证 + 八项裁定落盘；T28 = 发行发布（GitHub Release `v0.1.0`，无仓库代码变更）；T29 = 发行记录与文档一致性收尾（仅文档，本任务）。
 
 ## 3. 规格裁定与冻结文本订正
 
@@ -173,7 +175,7 @@ M1b 已就 `ParamForm` 析构、`thumbnails.h` AUTOMOC 引用 + `unsupported_pat
 
 ### ⑥ AppImage
 
-- **本地产物（开发验证用，`不作附件`）**：`dist/PhotoPipeline-0.1.0-x86_64.AppImage`，**52,468,216 B**，sha256 `1b01f16511f230d0f24cc941f8e8a8066cc56e89c66cafd18140d54bb71afb96`（T27 重建，含 AppRun 修复；`dist/` 按 §2.9 忽略，不入库）。**出厂口径 = CI 产物**，见 §5⑦/§9。
+- **本地产物（开发验证用，`不作附件`）**：`dist/PhotoPipeline-0.1.0-x86_64.AppImage`，**52,468,216 B**，sha256 `1b01f16511f230d0f24cc941f8e8a8066cc56e89c66cafd18140d54bb71afb96`（T27 重建，含 AppRun 修复；`dist/` 按 §2.9 忽略，不入库）。**出厂口径 = 已发布 Release 附件（`31f75c48…`，其本身即 CI 构建）**，见 §5⑦/§9。
 - **闭包门禁 A/B**（`tools/appimage-check-closure.sh`，36 个 ELF：主二进制 + `usr/lib` + 全部插件）：① `[FAIL-A] not found` = 无；② `[FAIL-B] libQt6* 解析到 AppDir 之外` = 无；结论 **PASS**；目标机系统要求 **本机 40 条 soname / CI 46 条**（差异来源 = **打包基础镜像不同**：本机 Ubuntu 26.04 vs CI ubuntu-24.04 的依赖闭包差异；两值并列即为口径，非笔误），本机清单写入 `dist/PhotoPipeline-0.1.0-deps.txt`。
 - **AppRun 日志目录鲁棒性（T27 修复，目标机三情形实测）**：证据 = `.cache/m2-t27-apprun-fix.log`。① `HOME=/tmp/pp-nohome`（无 `.cache`）→ `--version` 输出 `PhotoPipeline 0.1.0`、**exit 0**（修复前 rc=2 静默退出），并自动建出 `.cache/`；② `HOME=/proc`（不可写）→ 仍 **exit 0**（探测失败即定死 `/dev/null`，仅一行非致命 stderr）；③ 正常 `HOME` → 日志照常写入（`--version` 路径截断日志使 sha256 变化；无 DISPLAY 启动失败时写入 **1059 B** 真实 stderr）。解包产物内 AppRun 同时复核 T24 四项（`zenity --timeout=60` / `xmessage -timeout 60` / 无 `kdialog` 弹窗调用 / `PP_NO_GUI_POPUP=1` 直接返回）逐条在位。修复提交 `b3774fa`，详见 §6.5。
 - **随包库 26 个 `.so`**：7 × `libQt6*`（Core/DBus/Gui/Network/Svg/Widgets/XcbQpa）+ 3 × `libicu*` + `libjpeg.so.62` + 13 × `libxcb-*` + `libxkbcommon-x11.so.0` + `libX11-xcb.so.1`；插件 `qt-plugins/` = platforms(offscreen,xcb) + imageformats/svg/gif/ico/jpeg + iconengines + tls(openssl,certonly)。
@@ -188,9 +190,10 @@ M1b 已就 `ParamForm` 析构、`thumbnails.h` AUTOMOC 引用 + `unsupported_pat
 - **ccache**：热缓存轮 `Cacheable calls 856/856 (100.0%)`、`Hits 770/856 (89.95%)`、`Misses 86/856 (10.05%)`（run `35521800777`；首轮 326/326、Hits 241/326 = 73.93%、direct 228/241 = 94.61%），缓存占用 0.24%（上限 2 GB）。
 - **vcpkg**：冷装 ≈ **34 min** → 热缓存 `Restored 41 package(s) … in 5.4 s`，configure 步 **3.2–14.3 s**（run `35521800777` 的 release-dev configure 3.2 s；run `35520615242` linux 14.3 s / appimage 11.2 s）；release build 111.2 s → 17.7 s。
 - **依赖覆盖自检 + 拓扑**：清单 64 包（T19 首版 57 + 首轮闭包差异 7）；soname 72（随包/loader 11、需系统 61）；**已覆盖 61/61、未覆盖 0**；负向测试删 3 包精确报 3 项。三构建 job（`linux` 含 ctest release + 金样 16 / `ui-smoke` / `appimage`）+ `cache-gc`（`needs: [linux, ui-smoke, appimage]`）+ concurrency(cancel-in-progress) + 每 job timeout 60 min + 每 job `$GITHUB_STEP_SUMMARY`；`warm-cache.yml`（`workflow_dispatch` + 每周日 03:17 UTC）按同一 key 方案播种（run `35520773894`，1m47s）。
-- **AppImage artifact（出厂口径，T27 终轮）**：`PhotoPipeline-AppImage`（zip **50,325,830 B**，artifact ID `10609041248`，run `35521800777`）；产物指纹 `PhotoPipeline-0.1.0-x86_64.AppImage` **50,940,408 B**、sha256 **`514ecf44658e428008b2db6fd970270075a5aee7510e9c1bd280fc0d1b26a244`**、目标机系统要求 **46 条 soname**（glibc 基线 ≥ 2.39）；产物启动烟测（`--version` → `PhotoPipeline 0.1.0` + offscreen 6 s 存活）**PASS**。（上一轮 a63acff 的旧值 50,944,504 B / `21ba18e0…` 已作废：AppImage 非字节可复现，且 T27 改了 AppRun。）
+- **AppImage artifact（T27 终轮；非发布附件，见 §9 发行口径）**：`PhotoPipeline-AppImage`（zip **50,325,830 B**，artifact ID `10609041248`，run `35521800777`）；产物指纹 `PhotoPipeline-0.1.0-x86_64.AppImage` **50,940,408 B**、sha256 **`514ecf44658e428008b2db6fd970270075a5aee7510e9c1bd280fc0d1b26a244`**、目标机系统要求 **46 条 soname**（glibc 基线 ≥ 2.39）；产物启动烟测（`--version` → `PhotoPipeline 0.1.0` + offscreen 6 s 存活）**PASS**。（上一轮 a63acff 的旧值 50,944,504 B / `21ba18e0…` 已作废：AppImage 非字节可复现，且 T27 改了 AppRun。）
+- **发行发布（T28）**：**GitHub Release 已发布** —— <https://github.com/zhang-hz/PhotoPipeline3/releases/tag/v0.1.0>（tag `v0.1.0`，release id 393729954，`draft=false` / `prerelease=false`，name `PhotoPipeline 0.1.0`）；**唯一 asset** = `PhotoPipeline-0.1.0-x86_64.AppImage`，**50,940,408 B**，sha256 **`31f75c48052be34a2bf54508ea9df52fdc6331b0da1205c6359147566756e60b`**；取件来源 = run `35522357702`（head `4fb64c3`，headBranch `main`，四 job 全 success）的 `PhotoPipeline-AppImage` artifact（zip 50,325,837 B / digest `6442ef17…`）。**发布取证**：附件回下载后与上传件 `cmp` = **IDENTICAL**（sha256 复算一致）+ 发布件实跑 `--version` → `PhotoPipeline 0.1.0`。**引用口径**：同一 commit 的多次 run 产物指纹各异（§8-10）⇒ 任何产物引用一律带 **(run id, head sha, sha256) 三元组**。
 - **推送与覆盖边界（T27 闭合）**：T22 之后的全部提交（T24/T25/T26/T27）**已推送**，`origin/main` = `d1b5fb7`；上表 CI 结论**即本轮实况**（run `35521800777`，head = 推送后的树），取代此前"撰写时未推送、结论对应 `a63acff`"的过渡说明。同一轮之前 `run 35521513855` 曾红在 `appimage` job（产物缺陷，非环境）→ 修复见 §6.5。
-- **引用口径**：CI 产物指纹一律以 **(run id, head sha, sha256) 三元组**引用：本报告 = run `35521800777` / head `d1b5fb7` / `514ecf44…`（即**最后一次影响产物内容**的提交）。**非字节可复现实测**：紧随其后的文档提交轮（run `35522192917` / head `680bb92`，四 job 同样全绿：`linux` 1m23s / `ui-smoke` 2m03s / `appimage` 1m36s / `cache-gc` 5s，冻结行与 `SMOKE total=16 pass=16 fail=0` 均再次取得）产出 sha256 `50003819…` —— 源码相同、仅文档差异即得不同指纹，故任何产物引用必须带 run/head（§8-10）。
+- **引用口径**：CI 产物指纹一律以 **(run id, head sha, sha256) 三元组**引用。**发行件 = run `35522357702` / head `4fb64c3` / `31f75c48…`**（§9 出厂口径）。历史轮次示例（**非发布附件；见 §9 发行口径**）：run `35521800777` / head `d1b5fb7` / `514ecf44…`（T27 终轮，**最后一次影响产物内容**的提交）与紧随其后的文档提交轮（run `35522192917` / head `680bb92`，四 job 同样全绿：`linux` 1m23s / `ui-smoke` 2m03s / `appimage` 1m36s / `cache-gc` 5s，冻结行与 `SMOKE total=16 pass=16 fail=0` 均再次取得）产出 sha256 `50003819…` —— 源码相同、仅文档差异即得不同指纹，故任何产物引用必须带 run/head/sha256（§8-10）。
 
 ## 6. R2 迭代记录（发现 → 裁定 → 修复 → 复测）
 
@@ -225,7 +228,7 @@ M1b 已就 `ParamForm` 析构、`thumbnails.h` AUTOMOC 引用 + `unsupported_pat
 - **影响**：这正是 T18 要消灭的"双击无响应"场景 —— 无 `~/.cache` 的账户上双击产物 = **静默退出**（无窗口、无日志）。
 - **裁定与修复**：主对话授权把文件域扩到 `tools/make_appimage.sh`（仅 AppRun 生成段）：日志目录改为「**先建目录、再探可写**」，写探测改用**非特殊内建** `printf`，任一失败即把 `LOG` 定死 `/dev/null`，且**绝不允许**写日志失败终止 AppRun（`b3774fa`）。同一轮**删除** CI 里临时预建 `$HOME/.cache` 的绕行（`fd06bb3` → `d1b5fb7`），保留"干净目标机"语义作为回归守卫。
 - **复测（三类目标机情形，证据 `.cache/m2-t27-apprun-fix.log`）**：① `HOME=/tmp/pp-nohome`（无 `.cache`）→ `PhotoPipeline 0.1.0`、**exit 0**，并自动建出 `.cache/`；② `HOME=/proc`（不可写）→ **exit 0**（回退 `/dev/null`，仅一行非致命 stderr）；③ 正常 `HOME` → 日志写入 **1059 B** 真实 stderr（无 DISPLAY 启动失败路径），`--version` 路径截断日志使 sha256 变化。
-- **CI 复验**：run `35521800777`（head `d1b5fb7`）`appimage` job **绿**（1m37s），产物 `50,940,408 B` / sha256 `514ecf44…`。
+- **CI 复验**：run `35521800777`（head `d1b5fb7`）`appimage` job **绿**（1m37s），产物 `50,940,408 B` / sha256 `514ecf44…`（历史轮次值，**非发布附件；见 §9 发行口径**）。
 
 ## 7. 出口准则核对表（§8 十条）
 
@@ -234,7 +237,7 @@ M1b 已就 `ParamForm` 析构、`thumbnails.h` AUTOMOC 引用 + `unsupported_pat
 | 1 | 金样断言级 ≥ 11 对全绿（本地） | `SMOKE total=16 pass=16 fail=0`（本地 + CI linux job） | ✅ |
 | 2 | ASan/UBSan 全语料矩阵干净；TSan 并发路径干净 | 144 日志 0 命中 + 通道活性双向对照 + live heap 四档相等；TSan 0 报告 + 22 条论证规则 + 阳性对照 | ✅ |
 | 3 | offscreen `ui_smoke` 绿（本地 + CI job） | 本地 ctest 24/24；CI `ui-smoke` job 全绿并取到 `UI-SMOKE OK shots=8 pages=3` | ✅ |
-| 4 | AppImage 产出 + 烟测三断言绿（本地 + CI job + artifact） | 本地四项内置烟测 + 闭包门禁 PASS（**52,468,216 B**，T27 重建）；CI `appimage` job 绿（1m37s）+ `PhotoPipeline-AppImage` artifact（产物 **50,940,408 B** / sha256 `514ecf44…`） | ✅ |
+| 4 | AppImage 产出 + 烟测三断言绿（本地 + CI job + artifact） | 本地四项内置烟测 + 闭包门禁 PASS（**52,468,216 B**，T27 重建）；CI `appimage` job 绿（1m37s）+ `PhotoPipeline-AppImage` artifact（产物 **50,940,408 B** / sha256 `514ecf44…`，T27 轮次值，**非发布附件；见 §9 发行口径**）；发行件 = Release 附件 `31f75c48…`（§5⑦/§9） | ✅ |
 | 5 | `grep -rn "TODO(M2)" src/ tests/ tools/` 归零 | 实测无输出（退出码 1）；30 项全处置（17 修复 + 2 M3 + 11 弃权） | ✅ |
 | 6 | 回归基线入库，双跑零 diff | `tools/baseline/golden.log` 1636 行入库；连跑零 diff；注入敏感性成立 | ✅ |
 | 7 | CI 全绿（R15 闭合） | 首绿 run `35520386390`；**终轮 run `35521800777`（head `d1b5fb7`）四 job 全 success**（`linux` 1m32s / `ui-smoke` 1m45s / `appimage` 1m37s / `cache-gc` 9s） | ✅ |
@@ -253,7 +256,7 @@ M1b 已就 `ParamForm` 析构、`thumbnails.h` AUTOMOC 引用 + `unsupported_pat
 7. **`appimage` job 复用构建产物**：当前与 `linux` job 重复编译 release —— 影响：约 14 s/轮的重复成本；建议用 artifact 传递构建树。
 8. **`appimage-gui-smoke.sh` 依赖 X 工具**：当前 GUI 烟测 = offscreen + 产物启动存活，真窗口烟测需 xvfb/xprop —— 影响：CI 未覆盖“窗口真出现”；建议 M3 加 xvfb 真 X 烟测 job。
 9. **GitHub Actions 升 v5**（checkout/cache/upload-artifact）：当前 v4 被 runner 强制运行于 Node 24 并告警 —— 影响：未来可能失效；建议 M3 一次性升级。
-10. **AppImage 非字节可复现**：squashfs 超级块时间戳/mtime 非确定 —— 影响：同源不可复算 sha256（本机 vs CI 产物 sha256 必然不同；T27 实测同一源码的相邻两轮 CI 产物亦不同：`514ecf44…` vs `50003819…`）；建议仅承诺结构一致 + 依赖清单一致，且**产物引用一律带 (run id, head sha) 三元组**（§5⑦）。
+10. **AppImage 非字节可复现**：squashfs 超级块时间戳/mtime 非确定 —— 影响：同源不可复算 sha256（本机 vs CI 产物 sha256 必然不同；T27 实测同一源码的相邻两轮 CI 产物亦不同：`514ecf44…` vs `50003819…`；**T28 发行前后又实测同一 commit `4fb64c3` 的两轮 run 产物亦不同：run `35522357702`（headBranch `main`）vs run `35546035069`（headBranch `v0.1.0`），两轮四 job 全绿但 artifact zip digest/体积各异（`6442ef17…`/50,325,837 B vs `9ff3430e…`/50,325,836 B），故产物引用一律带三元组**；以上均为历史轮次值，**非发布附件；见 §9 发行口径**）；建议仅承诺结构一致 + 依赖清单一致，且**产物引用一律带 (run id, head sha, sha256) 三元组**（§5⑦）。
 11. **xcb 系统依赖与 `libxcb` 最低版本**：目标机需清单内的 xcb/X11/GL 包与 `libssl3` —— 影响：缺包时启动失败；已由 AppRun 缺库自检 + 包名提示兜底（T18）；建议 README 系统要求继续随产物 `deps.txt` 同步。
 12. **Wayland 会话经 XWayland 属预期**：AppRun 不设 `QT_QPA_PLATFORM_PLATFORM_PATH`，真实平台走 `wayland;xcb` 回退 —— 影响：非缺陷；建议在 README「便携模式」补一句说明。
 13. ~~**T24（AppRun 有界失败弹窗 + `PP_NO_GUI_POPUP`）收口时未落盘**~~ —— **已修复/已落盘**：`aeba18c`（弹窗超时 60 s、`kdialog` 不入链、`PP_NO_GUI_POPUP=1` 零弹窗），T27 已解包产物内 AppRun 逐条复核与 `docs/m2-tasks.md` §2.9 落地口径④一致（§5⑥）。
@@ -273,9 +276,10 @@ M1b 已就 `ParamForm` 析构、`thumbnails.h` AUTOMOC 引用 + `unsupported_pat
 - **仓库与规模**：<https://github.com/zhang-hz/PhotoPipeline3>（public，账号 `zhang-hz`；首次推送 `ab5a88a`）；累计提交 **152**（`git rev-list --count HEAD`，HEAD = `d1b5fb7`）；M2 提交数 52 = `git rev-list --count ab5a88a^..d1b5fb7`。
 - **测试规模**：ctest **24**（release-dev）/ 23（release）；金样 **16** 对；单测可执行 **18** 个 + `ui_smoke`/`linkprobe`/`fixtures`/`spike_e`/`spike_f`/`verify_selftest`。
 - **冻结契约**：**31 个 `PP-FROZEN` 头**（M1a 15 + M1b 16）+ 1 个结构标记文件（`src/core/format_tables.cpp`），与任务书逐字节一致。
-- **发行产物**（T27 终轮实况；AppImage 非字节可复现，故任何后续提交都会产出不同 sha256 ⇒ 引用时必须连 run id/head 一起引用）：
-  - 出厂口径 = **CI 产物**（run `35521800777`，head `d1b5fb7`，ubuntu-24.04 / glibc ≥ 2.39）：`PhotoPipeline-0.1.0-x86_64.AppImage` **50,940,408 B**，sha256 **`514ecf44658e428008b2db6fd970270075a5aee7510e9c1bd280fc0d1b26a244`**（artifact `PhotoPipeline-AppImage` 50,325,830 B / ID `10609041248`，**46 条**系统 soname）。
-  - 本机开发产物（Ubuntu 26.04 / glibc ≥ 2.43，**不作附件**）：**52,468,216 B**，sha256 `1b01f16511f230d0f24cc941f8e8a8066cc56e89c66cafd18140d54bb71afb96`（**40 条**系统 soname；条数差异来源 = 打包基础镜像闭包差异，本机 26.04 vs CI 24.04）。
+- **发行产物**（AppImage 非字节可复现，故任何后续提交都会产出不同 sha256 ⇒ 引用时必须连 `(run id, head sha, sha256)` 一起引用）：
+  - **出厂口径 = 已发布 GitHub Release（T28）**：Release <https://github.com/zhang-hz/PhotoPipeline3/releases/tag/v0.1.0>（tag `v0.1.0` → commit `4fb64c3`；release id 393729954，`draft=false` / `prerelease=false`，name `PhotoPipeline 0.1.0`）；唯一 asset = `PhotoPipeline-0.1.0-x86_64.AppImage`，**50,940,408 B**（`50940408`），sha256 **`31f75c48052be34a2bf54508ea9df52fdc6331b0da1205c6359147566756e60b`**；来源 run **`35522357702`**（head **`4fb64c3`**，headBranch `main`，ubuntu-24.04 / glibc ≥ 2.39）的 `PhotoPipeline-AppImage` artifact（zip 50,325,837 B / digest `6442ef17…`，**46 条**系统 soname）；回下载 `cmp` IDENTICAL + 发布件实跑 `--version` = `PhotoPipeline 0.1.0`（§5⑦）。校验命令：`gh release view v0.1.0 --json url,assets,tagName`（体积/sha256 与本节逐字一致）。
+  - 历史轮次 CI 产物（**非发布附件；见 §9 发行口径**）：run `35521800777` / head `d1b5fb7` / `514ecf44…`（T27 终轮，artifact zip 50,325,830 B / ID `10609041248`）与 run `35522192917` / head `680bb92` / `50003819…`；同 commit 两轮 run 亦不同：run `35522357702`（`main`）vs run `35546035069`（head `v0.1.0`，artifact zip 50,325,836 B / digest `9ff3430e…`）（§8-10）。
+  - 本机开发产物（Ubuntu 26.04 / glibc ≥ 2.43，**仅开发验证、不作附件**）：**52,468,216 B**，sha256 `1b01f16511f230d0f24cc941f8e8a8066cc56e89c66cafd18140d54bb71afb96`（**40 条**系统 soname；条数差异来源 = 打包基础镜像闭包差异，本机 26.04 vs CI 24.04）。
 - **许可**：GPL-3.0-or-later；第三方 40 port 许可文本 + 本项目 LICENSE 随产物分发；源码 offer = 仓库 URL + 对应 tag。
 
 ## 10. 附录
@@ -345,8 +349,8 @@ bash .cache/m2-t27-pq-shift.sh       # PQ/HLG 强制 sRGB 位移：中灰补丁 
 | 3 | §2.8 PQ/HLG **补原始日志**；gray 组 26/255 标为**已知未归因**并入 M3 候选 | 本报告 §3.3 + §8-16；`docs/m2-tasks.md` §2.8 订正注 + §9.7 | `.cache/m2-t27-pq-shift.log`（lcms2 **2190** = pipeline 同库 + `INTENT_RELATIVE_COLORIMETRIC`）：PQ 0.5020 → **0.60240**（Δ +0.10043 = **25.61/255**）、HLG 0.5020 → **0.39713**（Δ −26.73/255）；ramp 四源对照；gray 组 0.50196 → 0.60392 |
 | 4 | T24 状态回填为**已落盘** | 本报告 §2 表 T24 行 + §5⑥ + §8-13；`docs/m2-tasks.md` §2.9④；`CHANGELOG.md` | `aeba18c`；要点：修复前挂死 **25 s** → `--timeout=60` 后 **61.8 s 自行退出**；`PP_NO_GUI_POPUP=1` **1.31 s 零弹窗**；解包产物内 AppRun 逐条复核（zenity 60 s / xmessage 60 s / 无 kdialog / 开关在位） |
 | 5 | T20/T23 编号未使用 | `docs/m2-tasks.md` §6（新增同句）+ 本报告 §2 编排变更段（原有） | 两处均写明"**T20/T23 编号未使用**" |
-| 6 | CI 覆盖边界回填（终轮 run/head/四 job 耗时/artifact sha256），删"撰写时未推送"过渡说明 | 本报告 §5⑦、§7-7、§9；`docs/m2-tasks.md` §8-7 | run **`35521800777`**（head **`d1b5fb7`**）：`linux` 1m32s / `ui-smoke` 1m45s / `appimage` 1m37s / `cache-gc` 9s；原文 `UI-SMOKE OK shots=8 pages=3` + `100% tests passed … out of 23` + `SMOKE total=16 pass=16 fail=0`；artifact 产物 **50,940,408 B** / sha256 **`514ecf44…`** |
-| 7 | 发行 sha256 **单一化 = CI 产物**；本机产物只作开发验证（标注不作附件） | 本报告 §5⑥（本机）/§5⑦（CI）/§9；README「系统要求」（CI 出厂 + 本机自用，无 sha 值）；`CHANGELOG.md`（无 sha 值） | 出厂 = CI `514ecf44658e428008b2db6fd970270075a5aee7510e9c1bd280fc0d1b26a244`；本机 = `1b01f165…`（"不作附件"）；三处无第三份 sha256 |
+| 6 | CI 覆盖边界回填（终轮 run/head/四 job 耗时/artifact sha256），删"撰写时未推送"过渡说明 | 本报告 §5⑦、§7-7、§9；`docs/m2-tasks.md` §8-7 | run **`35521800777`**（head **`d1b5fb7`**）：`linux` 1m32s / `ui-smoke` 1m45s / `appimage` 1m37s / `cache-gc` 9s；原文 `UI-SMOKE OK shots=8 pages=3` + `100% tests passed … out of 23` + `SMOKE total=16 pass=16 fail=0`；artifact 产物 **50,940,408 B** / sha256 **`514ecf44…`**（历史轮次值，**非发布附件；见 §9 发行口径**） |
+| 7 | 发行 sha256 **单一化 = CI 产物**；本机产物只作开发验证（标注不作附件） | 本报告 §5⑥（本机）/§5⑦（CI + T28 发行）/§9；README「发行版（AppImage）」（Release 附件优先，sha256 前缀 + 指向 Release 页）；`CHANGELOG.md`（sha256 前 16 位 + 指向 Release 页） | **T28 细化口径：出厂 = 已发布 Release 附件 `31f75c48052be34a2bf54508ea9df52fdc6331b0da1205c6359147566756e60b`（源自 CI run `35522357702` / head `4fb64c3`）**；本机 = `1b01f165…`（"不作附件"）；T27 轮次 CI 值 `514ecf44…` 及 `680bb92` 轮 `50003819…` 均为历史轮次值，**非发布附件；见 §9 发行口径**；文档侧第三份 sha256 仍不存在 |
 | 8 | `libiconv` 声明 | `README.md` 许可章节（原有，T27 逐字核对）；本报告 §5⑥ + §8-15 **同句引用** | "AppImage 内 `libiconv` 未随附许可文本：该 port 在 x86_64-linux 不产出库文件，`iconv*` 由系统 glibc 提供，本发行未分发其代码" |
 | 9 | 附带修正：本机 40 / CI 46 条 soname 的差异来源 | 本报告 §5⑥ + §9（统一为"本机 40 / CI 46"两值并列） | 差异来源 = 打包基础镜像闭包不同（本机 Ubuntu 26.04 vs CI ubuntu-24.04），非笔误 |
 

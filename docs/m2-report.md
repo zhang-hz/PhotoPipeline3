@@ -2,8 +2,8 @@
 
 - **状态**：SUCCESS —— 出口准则 §8 十条全部满足；R15（CI 真实首跑）闭合；**T27 终轮 CI 四 job 全绿**（run `35521800777`，head `d1b5fb7`），本报告全部 CI 数字已按该轮实况回填。
 - **执行依据**：`docs/m2-tasks.md` v1.0（`ab5a88a`）+ §9.1–§9.7 落地记录（T25 订正 + T27 终轮回填）。
-- **周期**：任务书 `ab5a88a`（2026-09-20）→ 报告 `9adf5b8`（T26）→ **T27 终轮 `d1b5fb7`**（推送 + CI 取证 + 裁定落盘）；基线 = M1b 收口 `b97eff2`。
-- **批次提交**：`ab5a88a^..d1b5fb7` 共 **52** 个提交（`git rev-list --count`；全部追加式，无 amend/rebase/reset；T27 的文档回填轮另计 1 次提交）。
+- **周期**：任务书 `ab5a88a`（2026-09-20）→ 报告 `9adf5b8`（T26）→ **T27 终轮 `d1b5fb7`**（推送 + CI 取证 + 裁定落盘）；基线 = M1b 收口 `b97eff2`；**计数稳定锚点 = 发行提交 `4fb64c3`（tag `v0.1.0`）**。
+- **批次提交（冻结口径，T30）**：**截至发行提交 `4fb64c3`（tag `v0.1.0`）：累计提交 155、M2 批次提交 55**（`git rev-list --count 4fb64c3` = 155；`git rev-list --count ab5a88a^..4fb64c3` = 55）。全部提交追加式，无 amend/rebase/reset。**不再按会随文档轮漂移的 HEAD 记数**：`4fb64c3` 之后仅 T29/T30 文档提交，不影响发行产物与 tag。
 - **纪律**：subagent = deepseek-flash（max），主对话独占裁定与文档；禁二次下发；pathspec 提交。
 
 ## 1. 概述
@@ -192,7 +192,7 @@ M1b 已就 `ParamForm` 析构、`thumbnails.h` AUTOMOC 引用 + `unsupported_pat
 - **依赖覆盖自检 + 拓扑**：清单 64 包（T19 首版 57 + 首轮闭包差异 7）；soname 72（随包/loader 11、需系统 61）；**已覆盖 61/61、未覆盖 0**；负向测试删 3 包精确报 3 项。三构建 job（`linux` 含 ctest release + 金样 16 / `ui-smoke` / `appimage`）+ `cache-gc`（`needs: [linux, ui-smoke, appimage]`）+ concurrency(cancel-in-progress) + 每 job timeout 60 min + 每 job `$GITHUB_STEP_SUMMARY`；`warm-cache.yml`（`workflow_dispatch` + 每周日 03:17 UTC）按同一 key 方案播种（run `35520773894`，1m47s）。
 - **AppImage artifact（T27 终轮；非发布附件，见 §9 发行口径）**：`PhotoPipeline-AppImage`（zip **50,325,830 B**，artifact ID `10609041248`，run `35521800777`）；产物指纹 `PhotoPipeline-0.1.0-x86_64.AppImage` **50,940,408 B**、sha256 **`514ecf44658e428008b2db6fd970270075a5aee7510e9c1bd280fc0d1b26a244`**、目标机系统要求 **46 条 soname**（glibc 基线 ≥ 2.39）；产物启动烟测（`--version` → `PhotoPipeline 0.1.0` + offscreen 6 s 存活）**PASS**。（上一轮 a63acff 的旧值 50,944,504 B / `21ba18e0…` 已作废：AppImage 非字节可复现，且 T27 改了 AppRun。）
 - **发行发布（T28）**：**GitHub Release 已发布** —— <https://github.com/zhang-hz/PhotoPipeline3/releases/tag/v0.1.0>（tag `v0.1.0`，release id 393729954，`draft=false` / `prerelease=false`，name `PhotoPipeline 0.1.0`）；**唯一 asset** = `PhotoPipeline-0.1.0-x86_64.AppImage`，**50,940,408 B**，sha256 **`31f75c48052be34a2bf54508ea9df52fdc6331b0da1205c6359147566756e60b`**；取件来源 = run `35522357702`（head `4fb64c3`，headBranch `main`，四 job 全 success）的 `PhotoPipeline-AppImage` artifact（zip 50,325,837 B / digest `6442ef17…`）。**发布取证**：附件回下载后与上传件 `cmp` = **IDENTICAL**（sha256 复算一致）+ 发布件实跑 `--version` → `PhotoPipeline 0.1.0`。**引用口径**：同一 commit 的多次 run 产物指纹各异（§8-10）⇒ 任何产物引用一律带 **(run id, head sha, sha256) 三元组**。
-- **推送与覆盖边界（T27 闭合）**：T22 之后的全部提交（T24/T25/T26/T27）**已推送**，`origin/main` = `d1b5fb7`；上表 CI 结论**即本轮实况**（run `35521800777`，head = 推送后的树），取代此前"撰写时未推送、结论对应 `a63acff`"的过渡说明。同一轮之前 `run 35521513855` 曾红在 `appimage` job（产物缺陷，非环境）→ 修复见 §6.5。
+- **推送与覆盖边界（T27 闭合；计数锚点见 §1/§9）**：T22 之后的全部提交（T24/T25/T26/T27）**已推送**，T27 轮 `origin/main` = `d1b5fb7`；上表 CI 结论**即该轮实况**（run `35521800777`，head = 推送后的树），取代此前"撰写时未推送、结论对应 `a63acff`"的过渡说明。**发行提交 `4fb64c3` 与后续文档提交均已推送**（`origin/main` 最终状态见 §5⑦ T30 终轮记录）。同一轮之前 `run 35521513855` 曾红在 `appimage` job（产物缺陷，非环境）→ 修复见 §6.5。
 - **引用口径**：CI 产物指纹一律以 **(run id, head sha, sha256) 三元组**引用。**发行件 = run `35522357702` / head `4fb64c3` / `31f75c48…`**（§9 出厂口径）。历史轮次示例（**非发布附件；见 §9 发行口径**）：run `35521800777` / head `d1b5fb7` / `514ecf44…`（T27 终轮，**最后一次影响产物内容**的提交）与紧随其后的文档提交轮（run `35522192917` / head `680bb92`，四 job 同样全绿：`linux` 1m23s / `ui-smoke` 2m03s / `appimage` 1m36s / `cache-gc` 5s，冻结行与 `SMOKE total=16 pass=16 fail=0` 均再次取得）产出 sha256 `50003819…` —— 源码相同、仅文档差异即得不同指纹，故任何产物引用必须带 run/head/sha256（§8-10）。
 
 ## 6. R2 迭代记录（发现 → 裁定 → 修复 → 复测）
@@ -271,9 +271,11 @@ M1b 已就 `ParamForm` 析构、`thumbnails.h` AUTOMOC 引用 + `unsupported_pat
 | M0 | 骨架/冻结接口/语料/构建引导 | 19 | 设计文档、任务书、vcpkg 清单 + jpegli overlay、27 fixture 语料 | `6792826` 等（首提交 `75fca98`） |
 | M1a | 引擎（core/decode/codecs/pipeline/scheduler/dev harness） | 40 | 8 编码器、色彩管理、Exif 无损重写、`--dev`、金样 9 对、15 冻结头 | `e4fe158` |
 | M1b | 界面（三页主窗口/参数表单/地图/编辑器/设置预设/UI 冒烟） | 40 | `--ui-smoke` 走查 8/8、16 冻结头、UI 自验 1000 断言 | `b97eff2` |
-| **M2** | **Linux debug 收口 + 发行状态** | **52** | **sanitizer 全清、回归基线、金样 16 对、AppImage + 许可、CI 四 job 全绿** | **`d1b5fb7`**（T24–T27 追加轮；报告轮 `9adf5b8`） |
+| **M2** | **Linux debug 收口 + 发行状态** | **55** | **sanitizer 全清、回归基线、金样 16 对、AppImage + 许可、CI 四 job 全绿、GitHub Release v0.1.0** | **`4fb64c3`**（**发行提交**，tag `v0.1.0`；T24–T27 追加轮，报告轮 `9adf5b8`；其后仅 T29/T30 文档提交） |
 
-- **仓库与规模**：<https://github.com/zhang-hz/PhotoPipeline3>（public，账号 `zhang-hz`；首次推送 `ab5a88a`）；累计提交 **152**（`git rev-list --count HEAD`，HEAD = `d1b5fb7`）；M2 提交数 52 = `git rev-list --count ab5a88a^..d1b5fb7`。
+> **计数口径（T30 冻结）**：**M2 行 = 55**，以**发行提交 `4fb64c3`（tag `v0.1.0`）**为锚点实测（`git rev-list --count ab5a88a^..4fb64c3`）。M0/M1a/M1b 行沿用各批报告轮的记录值（其记数边界与本锚点不同）；按同一锚点实测的边界计数为 M0 **16** / M1a **44** / M1b **40** / M2 **55**，合计 **155**（= `git rev-list --count 4fb64c3`）。本批不追溯改写早期报告，差异在此标注。
+
+- **仓库与规模**：<https://github.com/zhang-hz/PhotoPipeline3>（public，账号 `zhang-hz`；首次推送 `ab5a88a`）；**截至发行提交 `4fb64c3`（tag `v0.1.0`）：累计提交 155、M2 批次提交 55**（`git rev-list --count 4fb64c3` = 155；`git rev-list --count ab5a88a^..4fb64c3` = 55；不再以 HEAD 记数，`4fb64c3` 之后仅文档提交，不影响发行产物与 tag）。
 - **测试规模**：ctest **24**（release-dev）/ 23（release）；金样 **16** 对；单测可执行 **18** 个 + `ui_smoke`/`linkprobe`/`fixtures`/`spike_e`/`spike_f`/`verify_selftest`。
 - **冻结契约**：**31 个 `PP-FROZEN` 头**（M1a 15 + M1b 16）+ 1 个结构标记文件（`src/core/format_tables.cpp`），与任务书逐字节一致。
 - **发行产物**（AppImage 非字节可复现，故任何后续提交都会产出不同 sha256 ⇒ 引用时必须连 `(run id, head sha, sha256)` 一起引用）：

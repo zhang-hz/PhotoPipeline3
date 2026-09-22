@@ -4,6 +4,7 @@
 
 用法:
   python tools/collect_licenses.py <APPDIR>      # AppDir 根（绝对或相对当前目录）
+  python tools/collect_licenses.py <APPDIR> [--dest <目录>]   # --dest 缺省 = <APPDIR>/usr/share/licenses
 env 覆盖:
   PP_VCPKG_SHARE  vcpkg 已安装 port 的 share 根
                   （默认 <repo>/vcpkg_installed/<triplet>/share；
@@ -78,15 +79,25 @@ def sort_list(items):
 
 
 def main(argv):
+    argv = list(argv)
+    dest_override = ''
+    if '--dest' in argv:
+        k = argv.index('--dest')
+        if k + 1 >= len(argv):
+            die('用法: tools/collect_licenses.py <APPDIR> [--dest <目录>]（--dest 缺参数）')
+        dest_override = argv[k + 1]
+        del argv[k:k + 2]
     appdir = argv[0] if argv else ''
     if not appdir:
-        die('用法: tools/collect_licenses.sh <APPDIR>（AppDir 根）')
+        die('用法: tools/collect_licenses.py <APPDIR>（AppDir 根）')
     if not os.path.isabs(appdir):
         appdir = os.getcwd() + '/' + appdir
     share = os.environ.get('PP_VCPKG_SHARE') or os.path.join(
         ROOT, 'vcpkg_installed', TRIPLET, 'share')
     root_license = os.path.join(ROOT, 'LICENSE')
-    dest = appdir + '/usr/share/licenses'
+    if dest_override and not os.path.isabs(dest_override):
+        dest_override = os.getcwd() + '/' + dest_override
+    dest = dest_override or (appdir + '/usr/share/licenses')
 
     if not os.path.isdir(appdir):
         die('AppDir 不存在: {}'.format(appdir))

@@ -43,7 +43,7 @@ env:
 jobs:
   # ────────────────────────────────────────────────────────────────────────────
   # linux: release 构建 + ctest 全部 23 条 + 16 对金样
-  # 注: 金样 driver（tests/golden/smoke.sh）走 `photopipeline --dev`，而 `--dev` 只在
+  # 注: 金样 driver（tests/golden/smoke.py）走 `photopipeline --dev`，而 `--dev` 只在
   #     PP_BUILD_DEV=ON 时编译（CMakeLists.txt:134）⇒ 本 job 除 release 外还需要一棵
   #     release-dev 构建树（同一 CMAKE_BUILD_TYPE=Release，仅 photopipeline 多一个宏）。
   #     为避免重复编译 130 个 target，只构建金样真正需要的两个二进制。
@@ -126,7 +126,7 @@ jobs:
 
       - name: 语料存在性断言（不重新生成）
         # 语料已入库（tests/golden/**: base 16 文件 + smoke 断言 17 个 json）。历史 workflow 每轮跑
-        # tools/gen_corpus.sh 纯属浪费（且依赖 vcpkg 产物）；这里只做廉价断言，不重新生成。
+        # tools/gen_corpus.py 纯属浪费（且依赖 vcpkg 产物）；这里只做廉价断言，不重新生成。
         run: |
           n=$(git ls-files tests/golden/base | wc -l)
           m=$(git ls-files tests/golden/smoke | grep -c '\.json$')
@@ -173,11 +173,11 @@ jobs:
           cmake --build build/release-dev --target photopipeline pp_verify
           echo -e "build release-dev 子集(photopipeline,pp_verify)\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
 
-      - name: 金样 16 对（bash tests/golden/smoke.sh）
+      - name: 金样 16 对（python3 tests/golden/smoke.py）
         run: |
           T0=$(date +%s)
           set -o pipefail
-          bash tests/golden/smoke.sh build/release-dev 2>&1 | tee "$RUNNER_TEMP/golden.log"
+          python3 tests/golden/smoke.py build/release-dev 2>&1 | tee "$RUNNER_TEMP/golden.log"
           echo -e "golden smoke (16 对)\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
 
       - name: ccache 统计

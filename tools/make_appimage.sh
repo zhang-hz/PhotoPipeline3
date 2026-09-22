@@ -53,7 +53,7 @@
 #     `qt.network.ssl: No functional TLS backend was found`，在线地图瓦片/经纬度反查失效。
 #   * OIIO 插件: 本仓库 OIIO 为静态构建（插件内建），脚本按候选路径探测，存在则整拷到
 #     usr/lib/oiio-plugins；否则建空目录 + 提示（AppRun 始终导出 OIIO_LIBRARY_PATH）。
-#   * 第三方许可（M2-T11c，GPL/LGPL 分发合规）: 由 tools/collect_licenses.sh 汇总
+#   * 第三方许可（M2-T11c，GPL/LGPL 分发合规）: 由 tools/collect_licenses.py 汇总
 #     vcpkg 已装 port 的许可文本 → usr/share/licenses/<port>/copyright（目录名 = port 名，
 #     便于溯源），本项目许可 → usr/share/licenses/PhotoPipeline/LICENSE；取文件规则、
 #     缺失条目列名规则见该脚本头注释。缺许可的真实 port 只告警不失败（须在报告里列名处置）。
@@ -259,9 +259,9 @@ cp -f "$DESKTOP_SRC" "$APPDIR/photopipeline.desktop"
 cp -f "$ICON_SRC" "$APPDIR/photopipeline.png"
 cp -f "$ICON_SRC" "$APPDIR/.DirIcon"
 
-# ---- 第三方许可文本汇总（M2-T11c；规则见 tools/collect_licenses.sh 头注释） ----
-note "许可汇总 → usr/share/licenses/（规则: tools/collect_licenses.sh）"
-bash "$ROOT/tools/collect_licenses.sh" "$APPDIR"
+# ---- 第三方许可文本汇总（M2-T11c；规则见 tools/collect_licenses.py 头注释） ----
+note "许可汇总 → usr/share/licenses/（规则: tools/collect_licenses.py）"
+python3 "$ROOT/tools/collect_licenses.py" "$APPDIR"
 LIC_DIR="$APPDIR/usr/share/licenses"
 LIC_COUNT="$(find "$LIC_DIR" -mindepth 2 -maxdepth 2 -type f -name copyright | wc -l)"
 

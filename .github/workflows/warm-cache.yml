@@ -11,8 +11,10 @@ name: warm-cache
 #   **刻意不加 push 触发**：日常 push 由 build-test.yml 消费缓存，播种只在需要时显式跑。
 #
 # 与 build-test.yml 的关系: 准备块逐字同源（apt 清单 / Qt 缓存 key / vcpkg key / ccache key），
-# 差别只有 ① 单 job（不并行，避免三个 job 同时冷构建抢 CPU）② 编译 **release + release-dev**
-# 两个预设（正好等于 linux job 的 ccache 内容，见 build-test.yml 的 ccache key 注释）。
+# 差别只有 ① 逐平台单 job（Linux 与 Windows 各一个，不并行三个 job 抢 CPU）
+# ② 编译 **release + release-dev** 两个预设（正好等于 linux job 的 ccache 内容，见 build-test.yml
+# 的 ccache key 注释）③ M3-T11 增 warm-windows（Windows：Qt win64_msvc2022_64 + vcpkgwin- 缓存，
+# 无 ccache / 无语料断言 / 无 ci-check-deps.sh —— 后两者均为 Linux-ELF 专属）。
 on:
   workflow_dispatch:
   schedule:
@@ -39,6 +41,143 @@ env:
   APPIMAGE_EXTRACT_AND_RUN: "1"
 
 jobs:
+  # ────────────────────────────────────────────────────────────────────────────
+  # warm-windows（M3-T11）：Windows 侧缓存播种 —— Qt（win64_msvc2022_64）+ vcpkg 二进制缓存
+  # （vcpkgwin- 前缀，与 Linux 的 vcpkg- 严格分离）。无 ccache（MSVC 无 ccache），
+  # 无语料断言、无 ci-check-deps.sh（两者均为 Linux/ELF 专属）。
+  # ────────────────────────────────────────────────────────────────────────────
+  warm-windows:
+    runs-on: windows-2025
+    # 冷路径估算: vcpkg 41 port Windows 全量构建 ≈25–40 min，加 Qt 安装 ≈3 min、两棵树 ≈10 min
+    # ⇒ 120 min 上限与 build-test.yml 的 windows job 对齐。
+    timeout-minutes: 120
+    env:
+      QT_DIR: ${{ github.workspace }}/Qt/6.8.3/msvc2022_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Qt ${{ env.QT_VERSION }} 缓存（restore）
+        id: qt-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/Qt/6.8.3/msvc2022_64
+          key: qt-6.8.3-win64_msvc2022_64-${{ runner.os }}-${{ runner.arch }}
+          restore-keys: qt-6.8.3-win64_msvc2022_64-
+
+      - name: Qt ${{ env.QT_VERSION }} via aqtinstall
+        if: steps.qt-cache.outputs.cache-hit != 'true'
+        run: |
+          python -m pip install --upgrade aqtinstall
+          python -m aqt install-qt windows desktop "$env:QT_VERSION" win64_msvc2022_64 -O "$env:GITHUB_WORKSPACE/Qt"
+
+      - name: Qt 就绪断言
+        run: |
+          $paths = @(
+            "$env:QT_DIR\bin\Qt6Core.dll",
+            "$env:QT_DIR\plugins\platforms\qwindows.dll",
+            "$env:QT_DIR\plugins\platforms\qoffscreen.dll"
+          )
+          $missing = @($paths | Where-Object { -not (Test-Path $_) })
+          if ($missing.Count -gt 0) { Write-Error "Qt 缺失: $($missing -join ', ')"; exit 1 }
+          Write-Output "Qt OK @ $env:QT_DIR"
+
+      - name: vcpkg ${{ env.VCPKG_TAG }}（pinned）
+        run: |
+          git clone https://github.com/microsoft/vcpkg "$env:VCPKG_ROOT"
+          git -C "$env:VCPKG_ROOT" checkout "$env:VCPKG_TAG"
+          & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
+
+      - name: 缓存目录预建
+        # vcpkg 不创建二进制缓存目录：缺失即 FATAL_ERROR，必须早于 restore。
+        run: New-Item -ItemType Directory -Force -Path "$env:VCPKG_DEFAULT_BINARY_CACHE" | Out-Null
+
+      - name: vcpkg binary cache（restore）
+        id: vcpkg-cache
+        # 播种 job 名是 warm-windows ⇒ 与 build-test 的 windows/winzip 不冲突；宽前缀 vcpkgwin-
+        # 让播种**消费**已有热缓存，save 又产出**最新**条目（滚动 key 语义）供下一轮日常 CI 复用。
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.cache/vcpkg-binary
+          key: vcpkgwin-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            vcpkgwin-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-
+            vcpkgwin-
+
+      - name: configure + build + ctest release
+        run: |
+          $T0 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+          python tools/env.py run -- cmake --preset release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $T1 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+          python tools/env.py run -- cmake --build --preset release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $T2 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+          python tools/env.py run -- ctest --preset release --output-on-failure
+          $rc = $LASTEXITCODE
+          $T3 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+          Add-Content "$env:RUNNER_TEMP\pp-steps.tsv" "configure release`t$($T1 - $T0)"
+          Add-Content "$env:RUNNER_TEMP\pp-steps.tsv" "build release`t$($T2 - $T1)"
+          Add-Content "$env:RUNNER_TEMP\pp-steps.tsv" "ctest release`t$($T3 - $T2)"
+          if ($rc -ne 0) { exit $rc }
+
+      - name: configure + build + ctest release-dev（含 ui_smoke）
+        run: |
+          $T0 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+          python tools/env.py run -- cmake --preset release-dev
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $T1 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+          python tools/env.py run -- cmake --build --preset release-dev
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $T2 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+          python tools/env.py run -- ctest --preset release-dev --output-on-failure
+          $rc = $LASTEXITCODE
+          $T3 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+          Add-Content "$env:RUNNER_TEMP\pp-steps.tsv" "configure release-dev`t$($T1 - $T0)"
+          Add-Content "$env:RUNNER_TEMP\pp-steps.tsv" "build release-dev`t$($T2 - $T1)"
+          Add-Content "$env:RUNNER_TEMP\pp-steps.tsv" "ctest release-dev (含 ui_smoke)`t$($T3 - $T2)"
+          if ($rc -ne 0) { exit $rc }
+
+      - name: vcpkg binary cache（save）
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.cache/vcpkg-binary
+          key: vcpkgwin-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Qt ${{ env.QT_VERSION }} 缓存（save）
+        # 与 build-test.yml 的 windows job 同一 key（该 workflow 里的唯一写者）。播种时若 Qt 也
+        # 失效（版本变更），这一步负责把新装的 Qt 入缓存，避免之后每个 job 各装一次。
+        if: always() && steps.qt-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/Qt/6.8.3/msvc2022_64
+          key: qt-6.8.3-win64_msvc2022_64-${{ runner.os }}-${{ runner.arch }}
+
+      - name: 汇总 → $GITHUB_STEP_SUMMARY
+        if: always()
+        env:
+          QT_HIT: ${{ steps.qt-cache.outputs.cache-hit }}
+          VCPKG_HIT: ${{ steps.vcpkg-cache.outputs.cache-hit }}
+        run: |
+          $lines = @()
+          $lines += "## warm-windows（播种）汇总"
+          $lines += ""
+          $lines += "| 项目 | 值 |"
+          $lines += "| --- | --- |"
+          $lines += "| 触发 | $($env:GITHUB_EVENT_NAME) |"
+          $lines += "| Qt 缓存精确命中 | $($env:QT_HIT) |"
+          $lines += "| vcpkg 二进制缓存精确命中 | $($env:VCPKG_HIT) |"
+          $lines += ""
+          $lines += "| 阶段 | 秒 |"
+          $lines += "| --- | --- |"
+          if (Test-Path "$env:RUNNER_TEMP\pp-steps.tsv") {
+            Import-Csv -Path "$env:RUNNER_TEMP\pp-steps.tsv" -Delimiter "`t" -Header step,sec |
+              ForEach-Object { $lines += "| $($_.step) | $($_.sec) |" }
+          }
+          $lines | Add-Content "$env:GITHUB_STEP_SUMMARY"
+
   warm:
     runs-on: ubuntu-24.04
     # 冷路径估算: vcpkg 二进制缓存空 ⇒ 41 个端口全量构建 ≈34 min，加 Qt 安装 ≈3 min、
@@ -56,7 +195,7 @@ jobs:
         with:
           path: ${{ github.workspace }}/Qt/6.8.3/gcc_64
           key: qt-6.8.3-gcc_64-${{ runner.os }}-${{ runner.arch }}
-          restore-keys: qt-6.8.3-
+          restore-keys: qt-6.8.3-gcc_64-
 
       - name: Qt ${{ env.QT_VERSION }} via aqtinstall
         if: steps.qt-cache.outputs.cache-hit != 'true'

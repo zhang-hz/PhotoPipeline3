@@ -16,6 +16,7 @@
 //   * JPEG/TIFF/WebP support full EXIF+XMP read/write; BMFF (HEIF/AVIF/JXL) is read-only
 //     ("Setting Exif metadata in BMFF images is not supported") — hence write path B/C.
 
+#include "core/filetime.h"
 #include "core/metadata.h"
 
 #include <algorithm>
@@ -793,14 +794,8 @@ std::string sync_file_mtime(const std::filesystem::path& out, const std::string&
     if (secs == static_cast<std::time_t>(-1)) return "mktime failed for '" + exif_datetime + "'";
     const auto sys = std::chrono::system_clock::from_time_t(secs);
     std::error_code ec;
-#if defined(_WIN32)
-        // M3：MSVC STL 的 file_clock 只提供 LWG 3694 的 utc 对（无 from_sys；clock_cast
-        // 亦不受理 file_clock 目标——本机探针实证），经 utc 中转，与 POSIX 分支同瞬点。
         const auto mtime_ft =
-            std::chrono::file_clock::from_utc(std::chrono::utc_clock::from_sys(sys));
-#else
-        const auto mtime_ft = std::filesystem::file_time_type::clock::from_sys(sys);
-#endif
+            pp::file_time_from_sys<std::filesystem::file_time_type::clock>(sys);
         std::filesystem::last_write_time(out, mtime_ft, ec);
     if (ec) return "set mtime failed: " + ec.message();
     return {};

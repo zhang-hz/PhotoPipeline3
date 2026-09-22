@@ -22,6 +22,7 @@
 #include <string>
 #include <vector>
 
+#include "core/filetime.h"
 #include "core/logger.h"
 #include "core/metadata.h"
 #include "core/pipeline.h"  // frozen format_supports_metadata_only() (weak fallback in metadata.cpp)
@@ -1085,14 +1086,8 @@ void test_mtime(const fs::path& tmp) {
     tm.tm_sec = 0;
     tm.tm_isdst = -1;
     const std::time_t want = std::mktime(&tm);
-#if defined(_WIN32)
-    // M3：MSVC file_clock 仅提供 utc 对（LWG 3694）；经 utc 中转，与 POSIX 分支同瞬点。
-    const auto want_ft = std::chrono::file_clock::from_utc(
-        std::chrono::utc_clock::from_sys(std::chrono::system_clock::from_time_t(want)));
-#else
-    const auto want_ft =
-        fs::file_time_type::clock::from_sys(std::chrono::system_clock::from_time_t(want));
-#endif
+    const auto want_ft = pp::file_time_from_sys<fs::file_time_type::clock>(
+        std::chrono::system_clock::from_time_t(want));
     check(fs::last_write_time(f) == want_ft, "mtime/value", "last_write_time differs from EXIF time");
 
     check(!pp::sync_file_mtime(f, "2024-03-01 10:00:00").empty(), "mtime/invalid-format", "");

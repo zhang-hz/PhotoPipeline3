@@ -21,8 +21,10 @@
 
 #include "core/logger.h"
 
-#if defined(__unix__) || defined(__APPLE__)
-#include <unistd.h>
+#include "env_compat.h"  // M3 v1.5: POSIX env API 薄垫层（单实现）
+
+#if defined(_WIN32)
+#include <io.h>  // M3 v1.9: _dup/_dup2/_close（capture_stderr 的 Windows CRT 实现）
 #endif
 
 namespace fs = std::filesystem;
@@ -102,6 +104,26 @@ std::string capture_stderr(const fs::path& tmp, const std::string& tag, Fn&& fn)
     ::dup2(saved, STDERR_FILENO);
     ::close(saved);
     return read_file(file);
+#elif defined(_WIN32)
+    // M3 v1.9：Windows CRT 等价物（_dup/_dup2/_close）；捕获文件以二进制模式打开，
+    // 使 stderr 的 "\n" 不被翻译为 "\r\n"，与 POSIX 分支逐字可比。
+    const fs::path file = tmp / ("stderr-" + tag + ".txt");
+    std::fflush(stderr);
+    const int saved = ::_dup(2);  // STDERR_FILENO == 2（Windows CRT）
+    if (saved < 0) {
+        fn();
+        return std::string();
+    }
+    if (std::freopen(file.string().c_str(), "wb", stderr) == nullptr) {
+        ::_close(saved);
+        fn();
+        return std::string();
+    }
+    fn();
+    std::fflush(stderr);
+    ::_dup2(saved, 2);
+    ::_close(saved);
+    return read_file(file);
 #else
     (void)tmp;
     (void)tag;
@@ -122,7 +144,7 @@ std::string versions_dump(const std::vector<std::pair<std::string, std::string>>
 
 int main() {
     const fs::path tmp = make_temp_dir("test_logger");
-    ::unsetenv("PP_LOG_LEVEL");
+    pptest::unsetenv("PP_LOG_LEVEL");
 
     // ---- A. uninitialized: log_write goes to stderr and never crashes ----
     {
@@ -157,7 +179,7 @@ int main() {
     // ---- C. PP_LOG_LEVEL overrides the programmatic minimum (case-insensitive) ----
     {
         const fs::path dir = tmp / "env-debug";
-        ::setenv("PP_LOG_LEVEL", "debug", 1);
+        pptest::setenv("PP_LOG_LEVEL", "debug");
         pp::log_init(dir, pp::LogLevel::Info);
         check(pp::log_level() == pp::LogLevel::Debug, "env/debug-override",
               "expected Debug, got " + std::to_string(static_cast<int>(pp::log_level())));
@@ -169,7 +191,7 @@ int main() {
     }
     {
         const fs::path dir = tmp / "env-mixed";
-        ::setenv("PP_LOG_LEVEL", "WaRn", 1);  // mixed case must be accepted
+        pptest::setenv("PP_LOG_LEVEL", "WaRn");  // mixed case must be accepted
         pp::log_init(dir, pp::LogLevel::Trace);
         check(pp::log_level() == pp::LogLevel::Warn, "env/case-insensitive",
               "expected Warn, got " + std::to_string(static_cast<int>(pp::log_level())));
@@ -184,12 +206,12 @@ int main() {
     }
     {
         const fs::path dir = tmp / "env-bogus";
-        ::setenv("PP_LOG_LEVEL", "not-a-level", 1);
+        pptest::setenv("PP_LOG_LEVEL", "not-a-level");
         pp::log_init(dir, pp::LogLevel::Error);
         check(pp::log_level() == pp::LogLevel::Error, "env/unknown-ignored",
               "expected the programmatic Error level to win");
         pp::log_shutdown();
-        ::unsetenv("PP_LOG_LEVEL");
+        pptest::unsetenv("PP_LOG_LEVEL");
     }
 
     // ---- D. line format: HH:MM:SS.mmm [lvl] [tid] [stage] [file] message {k=v k=v} ----
@@ -338,7 +360,7 @@ int main() {
 
     // ---- J. §2.3 level_from_env_or(): the frozen start-up PP_LOG_LEVEL entry point ----
     {
-        ::setenv("PP_LOG_LEVEL", "DeBuG", 1);
+        pptest::setenv("PP_LOG_LEVEL", "DeBuG");
         pp::LogLevel lv = pp::LogLevel::Error;
         const std::string captured = capture_stderr(tmp, "env-or-valid", [&lv] {
             lv = pp::level_from_env_or(pp::LogLevel::Error);
@@ -350,7 +372,7 @@ int main() {
     {
         // End-to-end through the frozen main() sequence: base level → env → log_init.
         const fs::path dir = tmp / "env-or-e2e";
-        ::setenv("PP_LOG_LEVEL", "debug", 1);
+        pptest::setenv("PP_LOG_LEVEL", "debug");
         const pp::LogLevel lv = pp::level_from_env_or(pp::LogLevel::Info);
         pp::log_init(dir, lv);
         pp::log_debug("stage", "file.cpp", "env-or-debug-line");
@@ -363,7 +385,7 @@ int main() {
     }
     {
         // Invalid value → exactly the frozen stderr line; the fallback level wins.
-        ::setenv("PP_LOG_LEVEL", "not-a-level", 1);
+        pptest::setenv("PP_LOG_LEVEL", "not-a-level");
         pp::LogLevel lv = pp::LogLevel::Warn;
         const std::string captured = capture_stderr(tmp, "env-or-invalid", [&lv] {
             lv = pp::level_from_env_or(pp::LogLevel::Warn);
@@ -375,18 +397,26 @@ int main() {
     }
     {
         // Set-but-empty counts as invalid: one message carrying the empty original value.
-        ::setenv("PP_LOG_LEVEL", "", 1);
+        // M3（Windows）："存在但为空"经 UCRT 公开 API 不可表达（_putenv_s(name, "") 即
+        // 删除，见 env_compat.h 注记与探针记录）；Windows 下等效 unset 语义（回退级别 +
+        // 无输出），POSIX 断言保持逐字节不变（Linux CI 持续覆盖 *v=='\0' 分支）。
+        pptest::setenv("PP_LOG_LEVEL", "");
         pp::LogLevel lv = pp::LogLevel::Trace;
         const std::string captured = capture_stderr(tmp, "env-or-empty", [&lv] {
             lv = pp::level_from_env_or(pp::LogLevel::Trace);
         });
         check(lv == pp::LogLevel::Trace, "env-or/empty-fallback", "expected the fallback level");
+#ifdef _WIN32
+        check(captured.empty(), "env-or/empty-silent-win",
+              "unexpected stderr: '" + captured + "'");
+#else
         check(captured == "PP_LOG_LEVEL 无效：\"\"，已忽略\n", "env-or/empty-message",
               "captured stderr: '" + captured + "'");
+#endif
     }
     {
         // Unset → fallback and no output at all (M1a behaviour, byte-identical).
-        ::unsetenv("PP_LOG_LEVEL");
+        pptest::unsetenv("PP_LOG_LEVEL");
         pp::LogLevel lv = pp::LogLevel::Error;
         const std::string captured = capture_stderr(tmp, "env-or-unset", [&lv] {
             lv = pp::level_from_env_or(pp::LogLevel::Error);

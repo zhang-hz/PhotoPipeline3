@@ -13,12 +13,12 @@
 #include <fstream>
 #include <string>
 #include <system_error>
-#include <unistd.h>
 #include <vector>
 
 #include "core/params.h"
 #include "core/presets.h"
 #include "core/settings.h"  // M2-T14: settings INI 路径的字节往返
+#include "env_compat.h"  // M3 v1.5: getpid 薄垫层
 #include "ui/preset_io.h"
 
 namespace {
@@ -194,7 +194,7 @@ int main() {
     namespace fs = std::filesystem;
 
     const fs::path root = fs::current_path() / ".cache" / "tmp" /
-                          ("m1t2_presets_" + std::to_string(static_cast<long>(::getpid())));
+                          ("m1t2_presets_" + std::to_string(pptest::getpid()));
     std::error_code ec;
     fs::remove_all(root, ec);
     fs::create_directories(root, ec);
@@ -349,10 +349,15 @@ int main() {
         write_file(parity_dir / ".hidden.json", R"({"version":1,"name":"Hidden","format":"jxl"})");
         write_file(parity_dir / "notes.txt", "ignore");
         fs::create_directories(parity_dir / "sub.json", ec);
+        // M3（Windows）："不可读文件不列出"的前提在 Windows 不可构造——fs::perms::none
+        // 仅映射只读属性（读取不受影响），与 Linux 下 root 情形同类；故该 fixture 仅
+        // POSIX 非 root 创建，期望集 "A,Tar,Upper" 在两平台一致成立。
+#if !defined(_WIN32)
         if (::getuid() != 0) {  // root 无视读权限，两套实现都会列出
             write_file(parity_dir / "noread.json", R"({"version":1,"name":"NoRead","format":"jxl"})");
             fs::permissions(parity_dir / "noread.json", fs::perms::none, ec);
         }
+#endif
         std::string got;
         for (const auto& [path, name] : ui::list_presets(parity_dir))
             got += (got.empty() ? "" : ",") + name;
@@ -503,6 +508,11 @@ int main() {
     //    所以下面的原始字节路径是"经 QString 的旧实现必然失败、字节层实现必须往返"的判据。
     {
         const std::string c = "locale-safe-path";
+        const PresetData p = make_delta_preset();
+#if !defined(_WIN32)
+        // M3 v1.9：原始非 UTF-8 字节路径（孤立 0xE9）在 Windows 上不可表示——路径为 UTF-16，
+        // 非法 UTF-8 序列无法构造/往返；该判据仅在字节路径语义的 POSIX 上成立（同 noread
+        // fixture 先例）。下方"合法 UTF-8 非 ASCII 路径"回归段两平台均保留并生效。
         // 0xE9 单独出现不是合法 UTF-8 序列 → 目录名 "caf<E9>"、文件名 "p<E9>.json"
         const fs::path raw_dir = fresh_dir(root, "caf\xE9");
         const fs::path raw_file = raw_dir / "p\xE9.json";
@@ -514,7 +524,6 @@ int main() {
                   "precondition: path must contain non-UTF-8 bytes");
         }
 
-        const PresetData p = make_delta_preset();
         const std::string serr = ui::save_preset(raw_file, p);
         check(serr.empty(), c, "save into non-UTF-8 byte path: " + serr);
         check(fs::exists(raw_file), c, "no file at byte path " + raw_bytes);
@@ -547,6 +556,7 @@ int main() {
         const AppSettings s2 = load_settings(ini);
         check(s2.workers == 7 && s2.log_level == "debug" && s2.last_preset == raw_bytes, c,
               "settings byte-path round trip");
+#endif  // !defined(_WIN32)
 
         // 回归：合法 UTF-8 的非 ASCII 路径行为不变
         const fs::path utf8_dir = fresh_dir(root, "预设📸");

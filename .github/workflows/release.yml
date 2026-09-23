@@ -326,6 +326,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
+      # tag 运行需要完整提交/tag 历史：gh release create --generate-notes 依赖 git 仓库
+      # 上下文（run #1 实测缺失即报 `failed to run git: fatal: not a git repository`）。
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: 下载两个平台的发行产物（合并到 dist-release/）
         uses: actions/download-artifact@v4
         with:
@@ -352,5 +358,6 @@ jobs:
             dist-release/PhotoPipeline-*-x86_64.AppImage \
             dist-release/PhotoPipeline-*-deps.txt \
             dist-release/PhotoPipeline-*-win64.zip \
+            --repo "$GITHUB_REPOSITORY" \
             --title "PhotoPipeline $VER" \
             --generate-notes

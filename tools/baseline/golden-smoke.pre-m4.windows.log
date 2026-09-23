@@ -1,0 +1,22 @@
+# PhotoPipeline M4-W0-G-C 金样 16 对结果快照（升级前基线 · Windows / MSVC）
+# 生成日期: 2026-09-23 · git commit: f73d86051c0f34c28587a81aad7d5ed53f5bd04b (main, 无源码改动)
+# 生成命令: python tools/env.py run -- python tests/golden/smoke.py build/release-dev
+# 退出码: 0 (16/16 PASS) —— 以下为 smoke.py stdout 原样
+case             result   detail
+jpeg-lossy       PASS     VERIFY jpeg-lossy OK
+jxl-lossless     PASS     VERIFY jxl-lossless OK
+png16-lossless   PASS     VERIFY png16-lossless OK
+tiff16-lzw       PASS     VERIFY tiff16-lzw OK
+webp-lossless    PASS     VERIFY webp-lossless OK
+heif-lossy       PASS     VERIFY heif-lossy OK
+avif-lossy       PASS     VERIFY avif-lossy OK
+bmp-exact        PASS     VERIFY bmp-exact OK
+meta-artist      PASS     VERIFY meta-artist OK
+gray-webp        PASS     VERIFY gray-webp OK
+alpha-jpeg       PASS     VERIFY alpha-jpeg OK
+depth-jpeg       PASS     VERIFY depth-jpeg OK
+multipage-png    PASS     VERIFY multipage-png OK
+unicode-png      PASS     VERIFY unicode-png OK
+exif-roundtrip   PASS     VERIFY exif-roundtrip OK
+metaonly-jpeg    PASS     VERIFY metaonly-jpeg OK
+SMOKE total=16 pass=16 fail=0 (out: C:\Data\Code\PhotoPipeline3\.cache\out-smoke)

@@ -32,7 +32,7 @@ W5 出口（`docs/m3-tasks.md:185` 原文）：
 | 5 | `--version` 冻结行 + 句柄可见性 | ✅ `PhotoPipeline 0.2.0`（管道/文件句柄；console 型未附加句柄亦可见，见 §4） | 同上 |
 | 6 | Windows 打包（zip 解压即用） | ✅ `PhotoPipeline-0.2.0-win64.zip`（32,782,738 B / 108 条目；五项门禁 + 产物内复核） | 同上 |
 | 7 | 许可随附 | ✅ `licenses/` 39 个 port `copyright` + 本项目 `LICENSE`（写盘前与 zip 内各校验一次） | 同上 |
-| 8 | CI：windows/winzip job + tag 发行自动化 | 已落地（`build-test.yml` / `warm-cache.yml` / `release.yml`） | ✅ run #22 **六 job 全绿**（详见 §5.6）；`release.yml` 的 tag 自动化尚无 tag 触发记录 |
+| 8 | CI：windows/winzip job + tag 发行自动化 | 已落地（`build-test.yml` / `warm-cache.yml` / `release.yml`） | ✅ **已达成**：build-test run #24（head `adde7a1`）**六 job 全绿**；release run #2（id `35853348711`）三 job 全绿并**已发布 Release `v0.2.0`**（AppImage 50940408 B / deps.txt 2397 B / win64.zip 31769308 B）—— 详见 §5.6 与 §5.7 |
 | 9 | `TODO(M3)` 归零 | ✅ `paths.cpp` / `pixelbudget.cpp` 两处随 T4 清零（commit `1c7de35`） | — |
 | 10 | 14 个 PP-FROZEN 头 SPDX | ✅ 补齐，`PP-FROZEN` 文件 **63/63** 均带 SPDX（src 内 SPDX 文件 55 → 69） | — |
 
@@ -215,6 +215,46 @@ make_winzip: 产物: C:\Data\Code\PhotoPipeline3\dist\PhotoPipeline-0.2.0-win64.
 
 > 说明：`windows` job 的 UI 覆盖由 `winzip` job 的 E-2（冻结行 `UI-SMOKE OK shots=8 pages=3`）承担，故 windows job 只跑 `ctest release`（23）与金样 16（**不**全量构建 release-dev：Windows 上约多 8–12 min 而无额外判据）。
 
+### 5.7 发行（tag → Release）
+
+**首轮（红，release run #1）**：id `35850988714`，head = tag 首次指向的 `6321517`（提交 `d5be7dd`）——
+`appimage` success、`winzip` success、**`publish` failure**。失败**仅在发布动作**：tag↔版本断言步为
+success（`tag=v0.2.0 版本一致: appimage=0.2.0 winzip=0.2.0`，两平台产物均已构建成功），日志末行逐字：
+```
+failed to run git: fatal: not a git repository (or any of the parent directories): .git
+##[error]Process completed with exit code 1.
+```
+**真因**：`publish` job 只有 `download-artifact`，**缺 `actions/checkout`**，而
+`gh release create --generate-notes` 需要 git 仓库上下文（生成 notes 要读提交/tag 历史）。
+
+**修复（T11c，提交 `adde7a1`）**：`publish` 增 `actions/checkout@v4`（`fetch-depth: 0`，取全量提交/tag
+历史）**+** `gh release create … --repo "$GITHUB_REPOSITORY"`（显式定位仓库，防回归）。
+
+**发行前最终 build-test 轮（run #24，head `adde7a1`）**：**六 job 全绿** —— linux 1.8 / appimage 1.8 /
+ui-smoke 3.2 / winzip 8.6 / windows 11.8 / cache-gc 0.1 min。（§5.6 记录的 #22 是 T11b 后的首轮全绿；
+#24 是 tag 最终指向提交上的最终轮。）
+
+**release run #2（绿）**：id `35853348711`，head `adde7a1` —— **三 job 全绿**（`appimage` 1.6 min /
+`winzip` / `publish` **success**）⇒ **Release 已发布**：
+
+| 项 | 值 |
+|---|---|
+| tag / name | `v0.2.0` / `PhotoPipeline 0.2.0` |
+| published | `2026-09-23T11:24:10Z` |
+| 资产 1 | `PhotoPipeline-0.2.0-x86_64.AppImage` **50940408 B** |
+| 资产 2 | `PhotoPipeline-0.2.0-deps.txt` **2397 B** |
+| 资产 3 | `PhotoPipeline-0.2.0-win64.zip` **31769308 B** |
+| notes | 由 `--generate-notes` 生成（首行 `**Full Changelog**: …/compare/v0.1.0...v0.2.0`） |
+
+**tag 移动（透明记档）**：`v0.2.0` 由 `6321517`（提交 `d5be7dd`）移到 `29866b8`（提交 `adde7a1`），
+强推输出逐字：
+```
++ 6321517...29866b8 v0.2.0 -> v0.2.0 (forced update)
+```
+**移动理由与无损性**：首次 tag **未发布任何 Release、未产出任何资产**（release run #1 的 `publish`
+失败），且新指向的提交 `adde7a1` 已通过 build-test（run #24 六 job 全绿）⇒ 移动不改变任何已发布内容。
+**处置纪律**（见 §7.1 第 11 行）：发行 tag 只允许在"未发布任何资产"前提下移动；一旦发布即不得再移动。
+
 ---
 
 ## 6. 铁律六审计：单实现 vs 机制分派点
@@ -256,6 +296,7 @@ make_winzip: 产物: C:\Data\Code\PhotoPipeline3\dist\PhotoPipeline-0.2.0-win64.
 | 8 | **D3"六件"与实删 7 个 bash 文件的调和** | D3 列的六件 = bootstrap / gen_corpus / smoke / ui_smoke / regression / collect_licenses | 第 7 个删除项是 `tools/env.sh.example`（**模板示例**，其职责被 `env.py` 的生成/注入逻辑取代，不计入 D3 的"六件脚本"）；两者不矛盾 |
 | 9 | **仓库根意外文件 `8s`（自查已删）** | W5b 首版只读回退测试脚本因 PowerShell 变量插值 + 控制台编码问题被误解析，`Start-Sleep -Seconds 8` 一类片段把脚本正文写进了仓库根的文件 `8s`（3018 B，`git status` 报 `?? 8s`） | 用 ASCII-only 重写脚本后复核并 `Remove-Item 8s`；`git status` 已无该条目。教训：跨平台/中文脚本一律 ASCII 输出 + `${env:VAR}` 花括号形式 |
 | 10 | **推送时机取消在飞冷构建（流程，非代码）** | 第二次推送（`342f1dc`）触发 `build-test.yml` 的 `concurrency: cancel-in-progress: true`，把 run #20（`5210ee2`）**取消**——那正是一轮 Windows 冷构建，其缓存播种随之丢失，直接导致 run #21 仍需冷装（49.9 min） | **处置**：① 缓存转热后取消代价可忽略（稳态 8–9 min），保留 `cancel-in-progress`；② 纪律：在昂贵冷构建在飞期间不得推送，先等其结束（本轮已按此执行） |
+| 11 | **tag 移动（发行流程，非代码）** | `v0.2.0` 首次指向 `d5be7dd`（`6321517`），因 `publish` 缺 git 上下文失败（release run #1）；修复提交 `adde7a1` 通过 build-test 后把 tag 强推至 `29866b8`（`+ 6321517...29866b8 v0.2.0 -> v0.2.0 (forced update)`） | **无损**依据 = 首次 tag **未发布 Release / 未产出资产**；**处置纪律** = 发行 tag 只允许在"未发布任何资产"前提下移动，**一旦发布即不得再移动**（详见 §5.7） |
 
 ### 7.2 无法在库内证实的项（**不圆场**）
 
@@ -311,6 +352,7 @@ make_winzip: 产物: C:\Data\Code\PhotoPipeline3\dist\PhotoPipeline-0.2.0-win64.
 | 8 | **M2 遗留转入 M4**：HDR/PQ 输出色彩、gray 26/255 舍入事实、内省参数中文标签 | 见 `docs/m2-report.md` §9/§10 | M4 候选池 |
 | 9 | **回归基线头部两行仍引用 `tools/regression.sh`（冻结，M3 保留）** | `tools/regression.py:185/:189` 属 `HEADER`，写入 `current.log` 后与 `tools/baseline/golden.log` 整体 diff；该基线 `:9/:13` 逐字含这两行（`regression.py:73` 自述即为此设计） | **M4 处置（用户裁定原文）**：修需在 Linux 上 `python tools/regression.py <build> --update` 重生成基线后，同步改 `tools/regression.py` 的 `HEADER` 两行；**当前保留以保证与冻结基线逐字可比**（改字符串会把 `zero diff` 变成 `DIFF FOUND` = 行为变化） |
 | 10 | **`.gitignore:6` 的 `tools/env.sh` 条目** | `env.sh` 已不再生成（W3），该忽略条目成历史遗留；但它**不是**"指示运行已删除脚本"，且保留可防止"本地按旧文档重建 env.sh 后误提交" | 建议保留（W5d 分类：非 (a)/(b)/(c)，属陈旧但无害）；如要求彻底清理需你确认（删除会让将来本地重建的 `env.sh` 进入 `git status`） |
+| 11 | **发行流程可加固（M4 候选）** | 本轮 release run #1 的 `publish` 因缺 git 上下文失败（`failed to run git: fatal: not a git repository`），暴露"发布动作无前置状态探测"：重复触发/已存在 Release 时只能靠 `gh` 报错终止 | 建议二选一或并用：① `publish` 步前置 `gh release view "$TAG"` 探测，命中即**显式**失败并给出"该 tag 已有 Release"的明确信息（避免把"重复发布"与"缺 git 上下文"两类错误混在一条 `gh` 报错里）；② 在 `publish` 内对下载到的两个产物各跑一次 `--version`/结构断言（tag 上的最终产物级校验，不依赖构建 job 的结论） |
 
 ---
 

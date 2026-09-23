@@ -25,19 +25,20 @@ W5 出口（`docs/m3-tasks.md:185` 原文）：
 
 | # | 出口项 | 本机状态（本报告实测） | CI 状态 |
 |---|---|---|---|
-| 1 | Windows release/release-dev 构建通过 | ✅ `cmake --preset release` / `release-dev` 均 exit 0 | <!-- CI-RUNS: 待最终轮补 --> |
+| 1 | Windows release/release-dev 构建通过 | ✅ `cmake --preset release` / `release-dev` 均 exit 0 | ✅ run #22 `windows` job success（8.2 min；冷装已由 #21 买断） |
 | 2 | ctest（Windows） | ✅ release **23/23**、release-dev **24/24**（含 `ui_smoke`） | 同上 |
 | 3 | 金样 16 对 | ✅ `SMOKE total=16 pass=16 fail=0` | 同上 |
 | 4 | UI 冒烟 8 截图 / 3 页 | ✅ `UI-SMOKE OK shots=8 pages=3` + `UI-SMOKE pass` | 同上 |
 | 5 | `--version` 冻结行 + 句柄可见性 | ✅ `PhotoPipeline 0.2.0`（管道/文件句柄；console 型未附加句柄亦可见，见 §4） | 同上 |
 | 6 | Windows 打包（zip 解压即用） | ✅ `PhotoPipeline-0.2.0-win64.zip`（32,782,738 B / 108 条目；五项门禁 + 产物内复核） | 同上 |
 | 7 | 许可随附 | ✅ `licenses/` 39 个 port `copyright` + 本项目 `LICENSE`（写盘前与 zip 内各校验一次） | 同上 |
-| 8 | CI：windows/winzip job + tag 发行自动化 | 已落地（`build-test.yml` / `warm-cache.yml` / `release.yml`），**未推送** | <!-- CI-RUNS: 待最终轮补 --> |
+| 8 | CI：windows/winzip job + tag 发行自动化 | 已落地（`build-test.yml` / `warm-cache.yml` / `release.yml`） | ✅ run #22 **六 job 全绿**（详见 §5.6）；`release.yml` 的 tag 自动化尚无 tag 触发记录 |
 | 9 | `TODO(M3)` 归零 | ✅ `paths.cpp` / `pixelbudget.cpp` 两处随 T4 清零（commit `1c7de35`） | — |
 | 10 | 14 个 PP-FROZEN 头 SPDX | ✅ 补齐，`PP-FROZEN` 文件 **63/63** 均带 SPDX（src 内 SPDX 文件 55 → 69） | — |
 
-> **CI 段说明**：本报告的 CI 证据留**明确占位** `<!-- CI-RUNS: 待最终轮补 -->`。本机无法执行
-> 托管 runner；推送与最终 run id / 结论由主对话回填（写入本节表格与 §5）。
+> **CI 段收敛**：本报告 CI 证据已由主对话回填 —— **最终轮 run #22（id `35848888594`，head `f7b0579`）六 job
+> 全绿**；**首轮 run #21（head `342f1dc`）红**并已定位根因（同一机制的两个表现），由 T11b 消除。
+> 逐 job 耗时、逐字冻结行与首轮失败分析见 **§5.6**。
 
 ---
 
@@ -193,9 +194,26 @@ make_winzip: 产物: C:\Data\Code\PhotoPipeline3\dist\PhotoPipeline-0.2.0-win64.
 
 ### 5.6 CI
 
-<!-- CI-RUNS: 待最终轮补 -->
+**最终轮（绿）**：run #22 / id `35848888594` / head `f7b0579` / 2026-09-23T10:27:24Z → 10:36:59Z（9.5 min），六 job 全绿：
 
-（占位内容：最终轮 run id / 各 job 耗时 / 冻结行原文 / artifact 指纹，由主对话回填。）
+| job | 结论 | 耗时 | 关键证据（逐字） |
+|---|---|---|---|
+| linux | success | 2.3 min | `100% tests passed, 0 tests failed out of 23`；`SMOKE total=16 pass=16 fail=0` |
+| ui-smoke | success | 2.9 min | `UI-SMOKE OK shots=8 pages=3`（`ctest -R ui_smoke`） |
+| appimage | success | 3.4 min | 四项内置烟测 + 产物启动烟测；artifact `PhotoPipeline-AppImage` |
+| windows | success | 8.2 min | `100% tests passed out of 23`；`SMOKE total=16 pass=16 fail=0 (out: D:\a\PhotoPipeline3\PhotoPipeline3\.cache\out-smoke)` |
+| winzip | success | 9.4 min | 门禁 A/B/C/D 与 E-1/E-2 全过；`UI-SMOKE OK shots=8 pages=3`；指纹 `ZIP_SIZE=31769308` / `ZIP_ENTRIES=108` / `ZIP_SHA256=e89eb6d4430acc1a9982389d2f97b47d24362012a81051316e27b6dbe870ad37`；artifact `PhotoPipeline-win64` |
+| cache-gc | success | 0.1 min | 缓存清理（保留最新 8 / 7 天） |
+
+**首轮（红）与根因**：run #21 / head `342f1dc` —— `linux`/`ui-smoke`/`appimage` success（10.8 / 10.6 / 8.9 min），`winzip` **failure**，`windows` **cancelled**（`timeout-minutes: 120` 顶格）。
+
+- `windows`：`configure release` 49.9 min（Windows 首次冷装 41 个 port）→ `build release` 4.0 min → `ctest release` **挂起 66 min**（日志 `Start 13: test_presets` 之后无任何输出；前 12 个测试均 <1 s 通过）。
+- `winzip`：`configure` 47.9 min → `build` 4.0 min → release-dev 子集 3.0 min → 打包步 **6 秒失败**：`make_winzip: 无法从 'D:\a\...\build\release\photopipeline.exe --version' 读取版本号（输出: ''）`。
+- **同一根因**：Windows 上只有 `photopipeline.exe` 走 applocal 部署，**测试二进制与构建树 exe 取不到 Qt DLL**（此前依赖调用者 PATH）。`pp_test_presets.exe` 是 ctest 序列中**第一个依赖 Qt 的测试**，加载器缺 DLL 的错误对话框在无人值守的 runner 会话中得不到确认 ⇒ 挂死；`make_winzip` 探测构建树 exe 时同样缺 DLL ⇒ 空输出。故两者不是两个缺陷，而是同一机制的两个表现。
+- **重新设计（T11b，`ee0a899`）**：① 每个测试 `TIMEOUT 120`（三个 testPreset 的 `execution.timeout` + 逐条 `TIMEOUT` 属性，23/23 全覆盖）；② 三个 Windows job 显式经 `GITHUB_PATH` 注入 `$env:QT_DIR\bin`（根因由此消除）；③ `make_winzip` 版本探测移到 staging 之后（Qt/vcpkg/CRT 就位，零 PATH 依赖），并给全部 6 个子进程注入 `qt_bin`，失败消息带 rc/stdout/stderr；④ Windows job 上限 120 → 60 min；⑤ `test_presets` 增逐用例 stderr 进度（同类挂起的定位手段，①为兜底）。
+- **成本对账**：冷装成本已由 #21 的 `vcpkg (save)`（与 Qt save）买断 ⇒ #22 的 Windows `configure` 回落至分钟级；`windows` 8.2 min / `winzip` 9.4 min 即稳态耗时（对照 Linux 2–3 min）。
+
+> 说明：`windows` job 的 UI 覆盖由 `winzip` job 的 E-2（冻结行 `UI-SMOKE OK shots=8 pages=3`）承担，故 windows job 只跑 `ctest release`（23）与金样 16（**不**全量构建 release-dev：Windows 上约多 8–12 min 而无额外判据）。
 
 ---
 
@@ -237,6 +255,7 @@ make_winzip: 产物: C:\Data\Code\PhotoPipeline3\dist\PhotoPipeline-0.2.0-win64.
 | 7 | **W3 偏差 8 处** | ⑥ 保留 `CC`/`CXX` 未移植进 `env.py`（判定 **keep-as-is**）；⑦ `env.py` 的环境变量无条件赋值（判定 **keep-as-is**）；⑧ `.pyc` 清理（判定 **acknowledged**，无害） | ①–⑤ 当时裁定为"设计不变的机械性偏差，**批准**"，**留存记录未逐条列名**（本报告照此表述，不编造条目内容）；⑥⑦⑧ 如上 |
 | 8 | **D3"六件"与实删 7 个 bash 文件的调和** | D3 列的六件 = bootstrap / gen_corpus / smoke / ui_smoke / regression / collect_licenses | 第 7 个删除项是 `tools/env.sh.example`（**模板示例**，其职责被 `env.py` 的生成/注入逻辑取代，不计入 D3 的"六件脚本"）；两者不矛盾 |
 | 9 | **仓库根意外文件 `8s`（自查已删）** | W5b 首版只读回退测试脚本因 PowerShell 变量插值 + 控制台编码问题被误解析，`Start-Sleep -Seconds 8` 一类片段把脚本正文写进了仓库根的文件 `8s`（3018 B，`git status` 报 `?? 8s`） | 用 ASCII-only 重写脚本后复核并 `Remove-Item 8s`；`git status` 已无该条目。教训：跨平台/中文脚本一律 ASCII 输出 + `${env:VAR}` 花括号形式 |
+| 10 | **推送时机取消在飞冷构建（流程，非代码）** | 第二次推送（`342f1dc`）触发 `build-test.yml` 的 `concurrency: cancel-in-progress: true`，把 run #20（`5210ee2`）**取消**——那正是一轮 Windows 冷构建，其缓存播种随之丢失，直接导致 run #21 仍需冷装（49.9 min） | **处置**：① 缓存转热后取消代价可忽略（稳态 8–9 min），保留 `cancel-in-progress`；② 纪律：在昂贵冷构建在飞期间不得推送，先等其结束（本轮已按此执行） |
 
 ### 7.2 无法在库内证实的项（**不圆场**）
 

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(PhotoPipeline VERSION 0.1.0 LANGUAGES C CXX)
+project(PhotoPipeline VERSION 0.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -56,7 +56,8 @@ elseif(MSVC)
 endif()
 
 # ccache 可用性回退（M1-T15；R18/D7）：只有 ccache 真正可用时才设 launcher，否则整条构建会红。
-# 背景（R18 实测）：未 `source tools/env.sh` 时 CCACHE_DIR 未设、HOME 也不可用 → ccache 把缓存目录
+# 背景（R18 实测）：未注入工具链环境（原 `source tools/env.sh`，M3-W3 起为
+# `python tools/env.py run -- …`）时 CCACHE_DIR 未设、HOME 也不可用 → ccache 把缓存目录
 # 解析到一个只读位置，第一次真正编译就 `ccache: error: Read-only file system` 退出 1，ninja 于是对
 # 每个编译单元报错。回退策略 = 不带 launcher 继续构建（退化为无缓存），而不是让构建失败。
 #
@@ -87,7 +88,7 @@ if(PP_CCACHE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     if(NOT PP_CCACHE_PROBE_RESULT EQUAL 0)
         message(STATUS "ccache found at ${PP_CCACHE} but its cache directory is unusable "
                        "(probe compile exit ${PP_CCACHE_PROBE_RESULT}); building without compiler "
-                       "launcher (R18: run `source tools/env.sh` to set CCACHE_DIR)")
+                       "launcher (R18: run `python tools/env.py run -- ...` to set CCACHE_DIR)")
         set(PP_CCACHE "")
     endif()
 endif()
@@ -161,6 +162,10 @@ foreach(src ${PP_TEST_SOURCES})
   # 静态库自注册：唯一链接形态（M2-T13）= pp_core_registered
   target_link_libraries(pp_${tname} PRIVATE pp_core_registered)
   add_test(NAME ${tname} COMMAND pp_${tname})
+  # M3-T11b：测试超时兜底（与 CMakePresets 的 execution.timeout=120 双保险）。
+  # 单个挂起用例由"吃掉整个 CI job"变为"2 分钟内失败并点名"（run #21 的 windows job
+  # 曾因 test_presets 挂起 66 min 而触顶取消）。
+  set_tests_properties(${tname} PROPERTIES TIMEOUT 120)
 endforeach()
 
 # 4) UI 可执行：glob ui/mapwidget/platform（M1 §2.3）
@@ -218,6 +223,8 @@ set_tests_properties(fixtures PROPERTIES SKIP_RETURN_CODE 77)
 add_test(NAME spike_e    COMMAND pp_spikes e)
 add_test(NAME spike_f    COMMAND pp_spikes f --golden-root ${CMAKE_SOURCE_DIR}/tests/golden)
 set_tests_properties(spike_f PROPERTIES SKIP_RETURN_CODE 77)
+# M3-T11b：M0 工具条目同样加超时兜底（SKIP_RETURN_CODE 已在上面单独设置，互不覆盖）
+set_tests_properties(linkprobe fixtures spike_e spike_f PROPERTIES TIMEOUT 120)
 
 # 8) pp_verify（M1-T8；§2.3 所有者序列 T8 的唯一 target 增量）
 #    断言 tests/golden/SCHEMA.md 的 pixel/metadata/warnings 三态；--selftest 不需语料。
@@ -225,6 +232,8 @@ add_executable(pp_verify tools/pp_verify.cpp)
 # 静态库自注册：唯一链接形态（M2-T13）= pp_core_registered
 target_link_libraries(pp_verify PRIVATE pp_core_registered)
 add_test(NAME verify_selftest COMMAND pp_verify --selftest)
+# M3-T11b：与其余条目统一（23 个 ctest 条目全部带 TIMEOUT 120 属性）
+set_tests_properties(verify_selftest PROPERTIES TIMEOUT 120)
 
 # M3 v1.9（D2）：工具二进制同样嵌入 UTF-8 清单（同上；pp_mkfixtures/pp_verify/spike_f
 # 均遍历含非 ASCII 文件名的 tests/golden）。

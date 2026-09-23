@@ -34,6 +34,13 @@ void check(bool ok, const std::string& c, const std::string& d) {
     if (!ok) fail(c, d);
 }
 
+// M3-T11b 诊断：在每个用例块开头把用例名写到 stderr（无缓冲，挂起时最后一行即挂起处）。
+// 与判定输出（stdout 的 FAIL/OK 行）分离：不改任何断言、输出行与退出码。
+void case_begin(const char* name) {
+    std::fprintf(stderr, "CASE %s\n", name);
+    std::fflush(stderr);
+}
+
 bool contains(const std::vector<std::string>& v, const std::string& s) {
     for (const std::string& x : v)
         if (x == s) return true;
@@ -200,6 +207,7 @@ int main() {
     fs::create_directories(root, ec);
 
     // 1) 预设往返：unicode name + rules 各字段（delta）
+    case_begin("1) 预设往返：unicode name + rules 各字段（delta）");
     {
         const std::string c = "roundtrip-delta";
         const PresetData p = make_delta_preset();
@@ -261,6 +269,7 @@ int main() {
     }
 
     // 2) 预设往返：时区语义 TimeShift + gps 缺省 + gps_clear
+    case_begin("2) 预设往返：时区语义 TimeShift + gps 缺省 + gps_clear");
     {
         const std::string c = "roundtrip-timezone";
         PresetData p;
@@ -298,6 +307,7 @@ int main() {
     }
 
     // 3) 保留键不落盘（顶层 lossless 表达）
+    case_begin("3) 保留键不落盘（顶层 lossless 表达）");
     {
         const std::string c = "reserved-key";
         PresetData p;
@@ -318,6 +328,7 @@ int main() {
     }
 
     // 4) list_presets：*.json 扫描 + 按名排序（无效 JSON 用文件名主干）
+    case_begin("4) list_presets：*.json 扫描 + 按名排序（无效 JSON 用文件名主干）");
     {
         const std::string c = "list-presets";
         const fs::path dir = fresh_dir(root, "list");
@@ -365,6 +376,7 @@ int main() {
     }
 
     // 5) validate_preset：格式/后端/技术/位深/参数/版本
+    case_begin("5) validate_preset：格式/后端/技术/位深/参数/版本");
     {
         const std::string c = "validate-preset";
         PresetData p;
@@ -436,6 +448,7 @@ int main() {
     }
 
     // 6) normalize_preset：补齐后端/技术/参数 + 应用锁定
+    case_begin("6) normalize_preset：补齐后端/技术/参数 + 应用锁定");
     {
         const std::string c = "normalize-preset";
         PresetData p;
@@ -461,6 +474,7 @@ int main() {
     }
 
     // 7) I/O 错误路径
+    case_begin("7) I/O 错误路径");
     {
         const std::string c = "io-errors";
         const PresetData p = make_delta_preset();
@@ -504,6 +518,7 @@ int main() {
     }
 
     // 8) M2-T14（#23）：非 UTF-8 字节路径 / UTF-8 非 ASCII 路径往返
+    case_begin("8) M2-T14（#23）：非 UTF-8 字节路径 / UTF-8 非 ASCII 路径往返");
     //    Qt6/Linux 的 QString 文件名一律按 UTF-8 编码、解码严格（非法字节 → U+FFFD），
     //    所以下面的原始字节路径是"经 QString 的旧实现必然失败、字节层实现必须往返"的判据。
     {
@@ -570,6 +585,7 @@ int main() {
               "UTF-8 path listing bytes");
     }
 
+    case_begin("9) 收尾（清理 + 汇总）");
     fs::remove_all(root, ec);
     if (g_fail == 0) std::printf("test_presets: OK\n");
     else std::printf("test_presets: %d failure(s)\n", g_fail);

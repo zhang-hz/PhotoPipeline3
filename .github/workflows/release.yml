@@ -45,7 +45,7 @@ jobs:
   # ────────────────────────────────────────────────────────────────────────────
   appimage:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 60         # M3-T11b（原 90）：与 build-test 的 appimage job 同口径
     steps:
       - uses: actions/checkout@v4
 
@@ -205,7 +205,7 @@ jobs:
   # ────────────────────────────────────────────────────────────────────────────
   winzip:
     runs-on: windows-2025
-    timeout-minutes: 120
+    timeout-minutes: 60         # M3-T11b（原 120）：与 build-test 的 winzip job 同口径
     env:
       QT_DIR: ${{ github.workspace }}/Qt/6.8.3/msvc2022_64
     steps:
@@ -235,6 +235,12 @@ jobs:
           $missing = @($paths | Where-Object { -not (Test-Path $_) })
           if ($missing.Count -gt 0) { Write-Error "Qt 缺失: $($missing -join ', ')"; exit 1 }
           Write-Output "Qt OK @ $env:QT_DIR"
+
+      - name: Qt bin 注入 PATH（供任何启动 exe 的步骤使用）
+        # M3-T11b：不依赖 env.py 的注入行为；GITHUB_PATH 对后续所有步骤生效。
+        run: |
+          "$env:QT_DIR\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          Write-Output "added: $env:QT_DIR\bin"
 
       - name: vcpkg ${{ env.VCPKG_TAG }}（pinned）
         run: |

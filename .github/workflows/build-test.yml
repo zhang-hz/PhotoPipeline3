@@ -173,7 +173,7 @@ jobs:
           echo -e "configure release-dev\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
 
       - name: build release-dev 目标子集（photopipeline + pp_verify）
-        # 金样 driver 只需要这两个二进制（smoke.sh 用 PP_BIN/PP_VERIFY）；全量 release-dev 由并行
+        # 金样 driver 只需要这两个二进制（smoke.py 用 PP_BIN/PP_VERIFY）；全量 release-dev 由并行
         # 的 ui-smoke job 负责，故此处只构建子集（首次冷 ccache 时省 ~1.5 min）。
         run: |
           T0=$(date +%s)
@@ -354,7 +354,7 @@ jobs:
           echo -e "ctest -R ui_smoke\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
 
       - name: UI-SMOKE 冻结行取证（原文入 summary）
-        # tests/ui_smoke.sh 把 harness 输出 tee 到临时文件、成功时只回显 "UI-SMOKE pass"，
+        # tests/ui_smoke.py 把 harness 输出 tee 到临时文件、成功时只回显 "UI-SMOKE pass"，
         # 故这里直接跑一次 harness 本体，把冻结末行 `UI-SMOKE OK shots=8 pages=3` **原文** 取到
         # summary 里（ctest 仍是权威门禁，本步是取证 + 同一冻结断言的复述）。
         run: |
@@ -623,7 +623,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ────────────────────────────────────────────────────────────────────────────
-  # windows: release + release-dev 两棵构建树 + ctest（23/24，含 offscreen ui_smoke）+ 金样 16
+  # windows: release ctest 23 + release-dev 子集金样 16（ui_smoke 覆盖由 winzip job 的 E-2 承担）
   # 注: `tools/env.py run --` 是 M3-T7 的 vcvars 注入入口（为 CI 无人值守设计）：它在子进程里
   #     准备 cl/ninja/cmake(venv)/Qt bin/PATH 后再执行命令。apt 与 ccache 无 Windows 对应物
   #     （runner 自带 nasm/7z/python/cmake/ninja；MSVC 无 ccache，CMakeLists 的探测已排除 MSVC）。
@@ -633,7 +633,8 @@ jobs:
   # ────────────────────────────────────────────────────────────────────────────
   windows:
     runs-on: windows-2025
-    timeout-minutes: 120        # 冷路径：vcpkg 41 port Windows 冷构建 ≈25–40 min + Qt ≈3 min + 两棵树 ≈10 min
+    timeout-minutes: 60         # M3-T11b：60 min（原 120）。冷路径 configure ≈50 min + build ≈4 min；
+                                # 单个挂起测试已由 preset/CMake 的 120 s 超时兜底并点名，无需整 job 余量
     env:
       QT_DIR: ${{ github.workspace }}/Qt/6.8.3/msvc2022_64
     steps:
@@ -668,6 +669,12 @@ jobs:
           $missing = @($paths | Where-Object { -not (Test-Path $_) })
           if ($missing.Count -gt 0) { Write-Error "Qt 缺失: $($missing -join ', ')"; exit 1 }
           Write-Output "Qt OK @ $env:QT_DIR"
+
+      - name: Qt bin 注入 PATH（供任何启动 exe 的步骤使用）
+        # M3-T11b：不依赖 env.py 的注入行为；GITHUB_PATH 对后续所有步骤生效。
+        run: |
+          "$env:QT_DIR\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          Write-Output "added: $env:QT_DIR\bin"
 
       - name: vcpkg ${{ env.VCPKG_TAG }}（pinned）
         run: |
@@ -809,7 +816,7 @@ jobs:
   # ────────────────────────────────────────────────────────────────────────────
   winzip:
     runs-on: windows-2025
-    timeout-minutes: 120
+    timeout-minutes: 60         # M3-T11b（原 120）：与 windows job 同口径
     env:
       QT_DIR: ${{ github.workspace }}/Qt/6.8.3/msvc2022_64
     steps:
@@ -840,6 +847,12 @@ jobs:
           $missing = @($paths | Where-Object { -not (Test-Path $_) })
           if ($missing.Count -gt 0) { Write-Error "Qt 缺失: $($missing -join ', ')"; exit 1 }
           Write-Output "Qt OK @ $env:QT_DIR"
+
+      - name: Qt bin 注入 PATH（供任何启动 exe 的步骤使用）
+        # M3-T11b：不依赖 env.py 的注入行为；GITHUB_PATH 对后续所有步骤生效。
+        run: |
+          "$env:QT_DIR\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          Write-Output "added: $env:QT_DIR\bin"
 
       - name: vcpkg ${{ env.VCPKG_TAG }}（pinned）
         run: |

@@ -36,7 +36,8 @@ env 覆盖:
 退出码: 0 成功；1 任一硬门禁失败；2 输入资产缺失（构建产物 / windeployqt）。
 
 设计要点（对齐 tools/make_appimage.sh 的 §2.9 口径）:
-  * 版本号唯一来源 = 产物自身 `--version`（脚本不硬编码版本）。
+  * 版本号唯一来源 = 产物自身 `--version`；M3-T11b 起**对 staging 内的 exe** 探测（Qt/vcpkg/CRT
+    已就位，零调用者-PATH 依赖），且本脚本派生的每个子进程都显式注入 `qt_bin` 到 PATH 最前。
   * zip 条目按路径排序写入（确定性顺序）；只写 OUT_DIR 与临时目录。
   * windeployqt 参数: --release --no-translations --no-system-d3d-compiler --no-opengl-sw
     （本应用为 QWidget/QPainter，不需要 OpenGL 软件回退）。
@@ -210,6 +211,18 @@ def structure_lines(staging, maxdepth=3):
     return sorted(lines)
 
 
+def child_env(qt_bin):
+    """M3-T11b：本脚本派生的**每个**子进程都显式获得 Qt bin 在 PATH 最前。
+
+    这样"启动 photopipeline.exe 需要 Qt6*.dll"就不再依赖调用者（CI 无 env.py 注入时
+    曾导致版本探测读到空输出 → run #21 的 winzip job 失败），依赖变成显式且自包含。
+    """
+    env = os.environ.copy()
+    existing = env.get('PATH', '')
+    env['PATH'] = qt_bin + os.pathsep + existing if existing else qt_bin
+    return env
+
+
 def resolve_crt_dir():
     """定位微软文档化的 app-local 部署单元 Microsoft.VC*.CRT（R1）。
 
@@ -326,18 +339,11 @@ def main(argv):
     if not windeployqt:
         die('windeployqt 未找到（--windeployqt 未给、PATH 无、$QT_DIR/bin 无）；'
             '请用 python tools/env.py run -- python tools/make_winzip.py 以获得 Qt bin 在 PATH', 2)
+    # M3-T11b：Qt bin 由本脚本**显式**注入每个子进程的 PATH（不再依赖调用者的 PATH）。
+    qt_bin = os.path.dirname(os.path.abspath(windeployqt))
+    note('build={} windeployqt={}'.format(build_dir, windeployqt))
 
-    # ---- 2) 版本（单源：产物 --version） ----
-    probe = subprocess.run([binary, '--version'], cwd=build_dir, stdout=subprocess.PIPE,
-                           stderr=subprocess.STDOUT)
-    first_line = probe.stdout.decode('utf-8', 'replace').splitlines()[0] if probe.stdout else ''
-    fields = first_line.split()
-    version = fields[1] if len(fields) >= 2 and fields[0] == 'PhotoPipeline' else ''
-    if not version:
-        die("无法从 '{} --version' 读取版本号（输出: {!r}）".format(binary, first_line))
-    note('版本={} build={} windeployqt={}'.format(version, build_dir, windeployqt))
-
-    # ---- 3) 幂等：先删后建 staging ----
+    # ---- 2) 幂等：先删后建 staging ----
     staging = os.path.join(out_dir, 'PhotoPipeline')
     shutil.rmtree(staging, ignore_errors=True)
     os.makedirs(staging, exist_ok=True)
@@ -355,7 +361,8 @@ def main(argv):
     command = [windeployqt, '--release', '--no-translations', '--no-system-d3d-compiler',
                '--no-opengl-sw', '--dir', staging,
                os.path.join(staging, 'photopipeline.exe')]
-    deploy = subprocess.run(command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    deploy = subprocess.run(command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            env=child_env(qt_bin))
     deploy_out = deploy.stdout.decode('utf-8', 'replace')
     if deploy.returncode != 0:
         sys.stdout.write(deploy_out)
@@ -383,8 +390,22 @@ def main(argv):
             os.remove(redundant)
             note('剔除冗余产物: {}（{} bytes）'.format(name, size))
 
+    # ---- 6b) 版本（单源：**staging 内**产物 --version；M3-T11b 零 PATH 依赖） ----
+    # 探测对象是 staging 里的 exe：Qt / vcpkg / CRT 全部已在同目录就位，故不依赖调用者 PATH
+    # （旧实现探测构建树 exe，那里没有 Qt6*.dll → CI 下输出为空而失败，run #21 真因）。
+    staging_exe = os.path.join(staging, 'photopipeline.exe')
+    probe = subprocess.run([staging_exe, '--version'], cwd=staging, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace',
+                           env=child_env(qt_bin))
+    first_line = probe.stdout.splitlines()[0] if probe.stdout else ''
+    fields = first_line.split()
+    version = fields[1] if len(fields) >= 2 and fields[0] == 'PhotoPipeline' else ''
+    if not version:
+        die("无法从 '{} --version' 读取版本号（rc={}，stdout={!r}，stderr={!r}）".format(
+            staging_exe, probe.returncode, probe.stdout, probe.stderr))
+    note('版本={}'.format(version))
+
     # ---- 6) 显式补拷 platforms/qoffscreen.dll（烟测 E-2 用；缺失只提示） ----
-    qt_bin = os.path.dirname(os.path.abspath(windeployqt))
     qt_root = os.path.dirname(qt_bin)
     qoffscreen_src = os.path.join(qt_root, 'plugins', 'platforms', 'qoffscreen.dll')
     qoffscreen_dst = os.path.join(staging, 'platforms', 'qoffscreen.dll')
@@ -471,7 +492,7 @@ def main(argv):
     # ---- 10) 断言 D（写盘前）：许可汇总 ----
     licenses_dir = os.path.join(staging, 'licenses')
     license_rc = subprocess.call([sys.executable, os.path.join(ROOT, 'tools', 'collect_licenses.py'),
-                                  staging, '--dest', licenses_dir])
+                                  staging, '--dest', licenses_dir], env=child_env(qt_bin))
     if license_rc != 0:
         die('许可汇总失败（collect_licenses.py exit {}）'.format(license_rc))
     license_count = check_licenses(staging, '写盘前')
@@ -480,7 +501,8 @@ def main(argv):
 
     # ---- 11) 烟测 E-1：staging 内 exe --version ----
     smoke = subprocess.run([os.path.join(staging, 'photopipeline.exe'), '--version'], cwd=staging,
-                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           env=child_env(qt_bin))
     smoke_out = smoke.stdout.decode('utf-8', 'replace')
     smoke_line = smoke_out.splitlines()[0] if smoke_out.splitlines() else ''
     if smoke.returncode != 0:
@@ -498,7 +520,7 @@ def main(argv):
         shots_dir = tempfile.mkdtemp(prefix='pp-winzip-shots-')
         try:
             shutil.copy2(smoke_exe, dev_smoke)
-            env = os.environ.copy()
+            env = child_env(qt_bin)
             env['QT_QPA_PLATFORM'] = 'offscreen'
             walk = subprocess.run(
                 [dev_smoke, '--ui-smoke', '--inputs', os.path.join(ROOT, 'tests', 'golden', 'base'),
@@ -549,7 +571,8 @@ def main(argv):
             archive.extractall(extract_dir)
         packaged_exe = os.path.join(extract_dir, 'PhotoPipeline', 'photopipeline.exe')
         packaged = subprocess.run([packaged_exe, '--version'], cwd=os.path.dirname(packaged_exe),
-                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                  env=child_env(qt_bin))
         packaged_line = packaged.stdout.decode('utf-8', 'replace').splitlines()
         packaged_line = packaged_line[0] if packaged_line else ''
         if packaged.returncode != 0 or not VERSION_RE.match(packaged_line):

@@ -30,7 +30,7 @@ namespace {
 
 int g_failed = 0;
 
-void check(bool ok, const std::string& case_name, const std::string& detail) {
+void check(bool ok, const std::string &case_name, const std::string &detail) {
     if (!ok) {
         ++g_failed;
         std::printf("FAIL %s: %s\n", case_name.c_str(), detail.c_str());
@@ -41,14 +41,16 @@ fs::path find_corpus() {
     std::error_code ec;
     fs::path p = fs::current_path(ec);
     for (int i = 0; i < 8 && !p.empty(); ++i) {
-        if (fs::is_directory(p / "tests" / "golden", ec)) return p / "tests" / "golden";
-        if (!p.has_parent_path() || p.parent_path() == p) break;
+        if (fs::is_directory(p / "tests" / "golden", ec))
+            return p / "tests" / "golden";
+        if (!p.has_parent_path() || p.parent_path() == p)
+            break;
         p = p.parent_path();
     }
     return {};
 }
 
-fs::path make_temp_dir(const std::string& name) {
+fs::path make_temp_dir(const std::string &name) {
     std::error_code ec;
     const fs::path d = fs::current_path(ec) / ".pp_test_tmp" / name;
     fs::remove_all(d, ec);
@@ -56,9 +58,10 @@ fs::path make_temp_dir(const std::string& name) {
     return d;
 }
 
-bool has_warning(const pp::FileResult& r, pp::WarningKind k) {
-    for (const pp::Warning& w : r.warnings) {
-        if (w.kind == k) return true;
+bool has_warning(const pp::FileResult &r, pp::WarningKind k) {
+    for (const pp::Warning &w : r.warnings) {
+        if (w.kind == k)
+            return true;
     }
     return false;
 }
@@ -68,10 +71,11 @@ struct OutInfo {
     int width = 0, height = 0, channels = 0, bitdepth = 0;
 };
 
-OutInfo read_info(const fs::path& p) {
+OutInfo read_info(const fs::path &p) {
     OutInfo o;
     auto in = OIIO::ImageInput::open(p.string());
-    if (!in) return o;
+    if (!in)
+        return o;
     const OIIO::ImageSpec spec = in->spec();
     o.width = spec.width;
     o.height = spec.height;
@@ -82,21 +86,23 @@ OutInfo read_info(const fs::path& p) {
     return o;
 }
 
-std::vector<float> read_pixels(const fs::path& p, int& w, int& h, int& ch) {
+std::vector<float> read_pixels(const fs::path &p, int &w, int &h, int &ch) {
     std::vector<float> px;
     auto in = OIIO::ImageInput::open(p.string());
-    if (!in) return px;
+    if (!in)
+        return px;
     const OIIO::ImageSpec spec = in->spec();
     w = spec.width;
     h = spec.height;
     ch = spec.nchannels;
     px.assign(static_cast<std::size_t>(w) * h * ch, 0.0f);
-    if (!in->read_image(0, 0, 0, ch, OIIO::TypeDesc::FLOAT, px.data())) px.clear();
+    if (!in->read_image(0, 0, 0, ch, OIIO::TypeDesc::FLOAT, px.data()))
+        px.clear();
     in->close();
     return px;
 }
 
-bool same_pixels(const fs::path& a, const fs::path& b, std::string& detail) {
+bool same_pixels(const fs::path &a, const fs::path &b, std::string &detail) {
     int aw = 0, ah = 0, ac = 0, bw = 0, bh = 0, bc = 0;
     const std::vector<float> ap = read_pixels(a, aw, ah, ac);
     const std::vector<float> bp = read_pixels(b, bw, bh, bc);
@@ -110,7 +116,8 @@ bool same_pixels(const fs::path& a, const fs::path& b, std::string& detail) {
     }
     std::size_t diff = 0;
     for (std::size_t i = 0; i < ap.size(); ++i) {
-        if (std::lround(ap[i] * 65535.0f) != std::lround(bp[i] * 65535.0f)) ++diff;
+        if (std::lround(ap[i] * 65535.0f) != std::lround(bp[i] * 65535.0f))
+            ++diff;
     }
     detail = std::to_string(diff) + " of " + std::to_string(ap.size()) + " samples differ";
     return diff == 0;
@@ -130,14 +137,14 @@ struct RunSpec {
     double flatten = 1.0;
     pp::BatchRules rules;
     bool metadata_only = false;
-    pp::PixelBudget* budget = nullptr;
+    pp::PixelBudget *budget = nullptr;
     bool cancelled = false;
     // M2-T4: per-stage hook; the metadata-write-failure case sabotages the container at Writing.
     std::function<void(pp::FileState)> on_stage;
 };
 
-pp::FileResult run_spec(const fs::path& src, const fs::path& base, const fs::path& out_root,
-                        const RunSpec& s) {
+pp::FileResult run_spec(const fs::path &src, const fs::path &base, const fs::path &out_root,
+                        const RunSpec &s) {
     pp::FileEntry fe;
     fe.src = src;
     fe.base_dir = base;
@@ -155,8 +162,8 @@ pp::FileResult run_spec(const fs::path& src, const fs::path& base, const fs::pat
     cfg.flatten_gray = s.flatten;
     cfg.rules = s.rules;
     cfg.metadata_only = s.metadata_only;
-    const std::function<bool()> cancelled = s.cancelled ? std::function<bool()>([] { return true; })
-                                                        : std::function<bool()>();
+    const std::function<bool()> cancelled =
+        s.cancelled ? std::function<bool()>([] { return true; }) : std::function<bool()>();
     if (s.metadata_only) {
         return pp::run_metadata_only(fe, cfg, {}, cancelled, nullptr);
     }
@@ -166,13 +173,16 @@ pp::FileResult run_spec(const fs::path& src, const fs::path& base, const fs::pat
                             cancelled, s.on_stage);
 }
 
-bool write_oriented_tiff(const fs::path& p, int w, int h, int orientation) {
+bool write_oriented_tiff(const fs::path &p, int w, int h, int orientation) {
     auto out = OIIO::ImageOutput::create(p.string());
-    if (!out) return false;
+    if (!out)
+        return false;
     OIIO::ImageSpec spec(w, h, 3, OIIO::TypeDesc::UINT8);
     spec.channelnames = {"R", "G", "B"};
-    if (orientation > 1) spec.attribute("Orientation", orientation);
-    if (!out->open(p.string(), spec)) return false;
+    if (orientation > 1)
+        spec.attribute("Orientation", orientation);
+    if (!out->open(p.string(), spec))
+        return false;
     std::vector<unsigned char> px(static_cast<std::size_t>(w) * h * 3);
     for (int y = 0; y < h; ++y) {
         for (int x = 0; x < w; ++x) {
@@ -187,20 +197,21 @@ bool write_oriented_tiff(const fs::path& p, int w, int h, int orientation) {
     return ok;
 }
 
-std::string read_exif_artist(const fs::path& p) {
+std::string read_exif_artist(const fs::path &p) {
     try {
         Exiv2::Image::UniquePtr img = Exiv2::ImageFactory::open(p.string());
         img->readMetadata();
         const Exiv2::ExifData exif = img->exifData();
         const auto it = exif.findKey(Exiv2::ExifKey("Exif.Image.Artist"));
-        if (it == exif.end()) return {};
+        if (it == exif.end())
+            return {};
         return it->print(&exif);
-    } catch (const std::exception& e) {
+    } catch (const std::exception &e) {
         return std::string("error: ") + e.what();
     }
 }
 
-}  // namespace
+} // namespace
 
 int main() {
     const fs::path corpus = find_corpus();
@@ -218,8 +229,8 @@ int main() {
         s.format = "jpeg";
         const pp::FileResult r = run_spec(base / "rgb8.png", corpus, tmp / "mirror", s);
         check(r.ok, "mirror/ok", r.error);
-        check(r.out == tmp / "mirror" / "base" / "rgb8.jpg",
-              "mirror/path", "got " + r.out.string());
+        check(r.out == tmp / "mirror" / "base" / "rgb8.jpg", "mirror/path",
+              "got " + r.out.string());
         check(read_info(r.out).ok, "mirror/readable", r.out.string());
     }
 
@@ -346,7 +357,7 @@ int main() {
     // ---- L/M. pixel budget: over-capacity fails fast, normal runs release ----
     {
         const uint64_t frame = pp::PixelBudget::frame_bytes(64, 64, 3);
-        pp::PixelBudget tight(frame);  // needs 2×frame
+        pp::PixelBudget tight(frame); // needs 2×frame
         RunSpec s;
         s.format = "jpeg";
         s.bitdepth = 8;
@@ -354,8 +365,7 @@ int main() {
         const pp::FileResult r = run_spec(base / "rgb8.png", corpus, tmp / "budget-tight", s);
         check(!r.ok && r.error.find("pixel budget") != std::string::npos, "budget/over-capacity",
               r.error);
-        check(tight.used() == 0, "budget/not-consumed",
-              "used=" + std::to_string(tight.used()));
+        check(tight.used() == 0, "budget/not-consumed", "used=" + std::to_string(tight.used()));
 
         pp::PixelBudget wide(64ull * 1024 * 1024);
         RunSpec s2;
@@ -445,8 +455,8 @@ int main() {
         RunSpec s;
         s.format = "nope";
         const pp::FileResult r = run_spec(base / "rgb8.png", corpus, tmp / "unknown-fmt", s);
-        check(!r.ok && r.error.find("unknown output format") != std::string::npos,
-              "unknown-format", r.error);
+        check(!r.ok && r.error.find("unknown output format") != std::string::npos, "unknown-format",
+              r.error);
 
         RunSpec s2;
         s2.format = "jpeg";
@@ -472,7 +482,8 @@ int main() {
               "NoIccAssumeSrgb missing for an ICC-less source");
     }
 
-    // ---- T. metadata write failure → file-level warning via the explicit writer channel (M2-T4) ----
+    // ---- T. metadata write failure → file-level warning via the explicit writer channel (M2-T4)
+    // ----
     {
         RunSpec s;
         s.format = "jpeg";
@@ -480,14 +491,15 @@ int main() {
         pp::TagEdit e;
         e.key = "Exif.Image.Artist";
         e.value = std::string("M2-T4");
-        s.rules.exif_edits.push_back(e);  // non-empty plan: the writer really runs
+        s.rules.exif_edits.push_back(e); // non-empty plan: the writer really runs
 
         // Sabotage the freshly encoded container at the Writing stage (the pipeline calls on_stage
         // before write_metadata_exiv2): replacing the output file with a directory makes every
         // Exiv2 open/write attempt fail deterministically, without relying on permissions.
         const fs::path sabotage = tmp / "meta-write-fail" / "base" / "rgb8.jpg";
         s.on_stage = [sabotage](pp::FileState st) {
-            if (st != pp::FileState::Writing) return;
+            if (st != pp::FileState::Writing)
+                return;
             std::error_code ec;
             fs::remove(sabotage, ec);
             fs::create_directory(sabotage, ec);
@@ -497,7 +509,7 @@ int main() {
         check(r.ok, "meta-write-fail/non-fatal", r.error);
         std::size_t dropped = 0;
         std::string detail;
-        for (const pp::Warning& w : r.warnings) {
+        for (const pp::Warning &w : r.warnings) {
             if (w.kind == pp::WarningKind::MetadataDropped) {
                 ++dropped;
                 detail = w.detail;
@@ -509,19 +521,21 @@ int main() {
               "expected exactly 1 MetadataDropped, got " + std::to_string(dropped));
         check(detail.find("metadata dropped") != std::string::npos, "meta-write-fail/detail",
               "writer detail missing, got '" + detail + "'");
-        std::printf("info meta-write-fail: warnings=%zu detail=%s\n", r.warnings.size(), detail.c_str());
+        std::printf("info meta-write-fail: warnings=%zu detail=%s\n", r.warnings.size(),
+                    detail.c_str());
     }
 
-    // ---- U. cross-field parameter constraints → per-file failure, error = first message (M2-T5) ----
-    // run_one_file / run_metadata_only are the single-file entry points the `--dev` harness drives;
-    // the guard is evaluated on the params as handed in (callers that normalize via apply_locks,
-    // e.g. the GUI and main.cpp, never reach this state — this covers the engine boundary).
+    // ---- U. cross-field parameter constraints → per-file failure, error = first message (M2-T5)
+    // ---- run_one_file / run_metadata_only are the single-file entry points the `--dev` harness
+    // drives; the guard is evaluated on the params as handed in (callers that normalize via
+    // apply_locks, e.g. the GUI and main.cpp, never reach this state — this covers the engine
+    // boundary).
     {
         RunSpec s;
         s.format = "jpeg";
         s.bitdepth = 8;
         s.params = pp::default_params(*pp::find_format("jpeg"), "jpegli", "dct", false);
-        s.params["optimize_coding"] = false;   // progressive defaults to true → illegal pair
+        s.params["optimize_coding"] = false; // progressive defaults to true → illegal pair
         const pp::FileResult r = run_spec(base / "rgb8.png", corpus, tmp / "cross-jpeg", s);
         check(!r.ok && r.error == "启用渐进式时必须启用哈夫曼表优化", "cross-param/jpeg",
               "error=[" + r.error + "]");
@@ -533,7 +547,8 @@ int main() {
         u.params = pp::default_params(*pp::find_format("jpeg"), "jpegli", "dct", false);
         u.params["bogus"] = std::string("1");
         const pp::FileResult ru = run_spec(base / "rgb8.png", corpus, tmp / "cross-unknown", u);
-        check(!ru.ok && ru.error == "未知参数：bogus", "cross-param/unknown", "error=[" + ru.error + "]");
+        check(!ru.ok && ru.error == "未知参数：bogus", "cross-param/unknown",
+              "error=[" + ru.error + "]");
 
         // metadata-only path goes through the same guard
         RunSpec m;

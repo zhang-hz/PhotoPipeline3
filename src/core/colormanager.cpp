@@ -33,7 +33,7 @@
 namespace pp {
 namespace {
 
-constexpr const char* kLogFile = "colormanager.cpp";
+constexpr const char *kLogFile = "colormanager.cpp";
 
 // Fixed intent/flags (§3.6 numeric contract).
 constexpr int kIntent = INTENT_RELATIVE_COLORIMETRIC;
@@ -52,66 +52,76 @@ constexpr std::size_t kCacheCapacity = 16;
 // ---------------------------------------------------------------------------
 
 struct TargetSpec {
-    const char* desc;
+    const char *desc;
     double rx, ry, gx, gy, bx, by;
-    double gamma;  // 0 => IEC 61966-2.1 (sRGB) parametric TRC
+    double gamma; // 0 => IEC 61966-2.1 (sRGB) parametric TRC
 };
 
 // Standard primaries (§3.6 ICC ruling). White point is D65 for both, exactly as
 // lcms2's own cmsCreate_sRGBProfileTHR uses ({0.3127, 0.3290, 1.0}).
 constexpr TargetSpec kP3Spec{"Display P3", 0.680, 0.320, 0.265, 0.690, 0.150, 0.060, 0.0};
-constexpr TargetSpec kAdobeSpec{"Adobe RGB (1998)", 0.640, 0.330, 0.210, 0.710,
-                                0.150, 0.060, 2.19921875};
+constexpr TargetSpec kAdobeSpec{"Adobe RGB (1998)", 0.640, 0.330, 0.210, 0.710, 0.150, 0.060,
+                                2.19921875};
 
 // M2-T6 §2.8 — source descriptions of the frozen CICP enumeration. Same D65 white
 // point and the same cmsCreateRGBProfile builder as the targets above; these are
 // *source* profiles for ICC-less JXL files. (12,13) reuses kP3Spec verbatim.
 constexpr TargetSpec kP3Gamma22Spec{"Display P3", 0.680, 0.320, 0.265, 0.690, 0.150, 0.060, 2.2};
-constexpr TargetSpec kBt2020LinearSpec{"BT.2020 linear", 0.708, 0.292, 0.170, 0.797,
-                                       0.131, 0.046, 1.0};
-constexpr TargetSpec kBt2020SrgbSpec{"BT.2020 sRGB-TRC", 0.708, 0.292, 0.170, 0.797,
-                                     0.131, 0.046, 0.0};
+constexpr TargetSpec kBt2020LinearSpec{
+    "BT.2020 linear", 0.708, 0.292, 0.170, 0.797, 0.131, 0.046, 1.0};
+constexpr TargetSpec kBt2020SrgbSpec{
+    "BT.2020 sRGB-TRC", 0.708, 0.292, 0.170, 0.797, 0.131, 0.046, 0.0};
 
-const TargetSpec* target_spec(ColorTarget t) {
+const TargetSpec *target_spec(ColorTarget t) {
     switch (t) {
-    case ColorTarget::DisplayP3: return &kP3Spec;
-    case ColorTarget::AdobeRGB:  return &kAdobeSpec;
+    case ColorTarget::DisplayP3:
+        return &kP3Spec;
+    case ColorTarget::AdobeRGB:
+        return &kAdobeSpec;
     case ColorTarget::SRGB:
-    case ColorTarget::KeepOriginal: break;
+    case ColorTarget::KeepOriginal:
+        break;
     }
     return nullptr;
 }
 
 // M2-T6 §2.8: the source-profile spec behind every recognized CICP pair (nullptr for
 // Srgb — lcms2's built-in — and for Unsupported, which never gets a profile).
-const TargetSpec* cicp_profile_spec(CicpSource s) {
+const TargetSpec *cicp_profile_spec(CicpSource s) {
     switch (s) {
-    case CicpSource::DisplayP3:        return &kP3Spec;
-    case CicpSource::DisplayP3Gamma22: return &kP3Gamma22Spec;
-    case CicpSource::Bt2020Linear:     return &kBt2020LinearSpec;
-    case CicpSource::Bt2020SrgbTrc:    return &kBt2020SrgbSpec;
+    case CicpSource::DisplayP3:
+        return &kP3Spec;
+    case CicpSource::DisplayP3Gamma22:
+        return &kP3Gamma22Spec;
+    case CicpSource::Bt2020Linear:
+        return &kBt2020LinearSpec;
+    case CicpSource::Bt2020SrgbTrc:
+        return &kBt2020SrgbSpec;
     case CicpSource::Srgb:
-    case CicpSource::Unsupported:      break;
+    case CicpSource::Unsupported:
+        break;
     }
     return nullptr;
 }
 
 // IEC 61966-2.1 (sRGB) parametric curve, same parameters lcms2 uses internally.
-cmsToneCurve* build_srgb_trc() {
+cmsToneCurve *build_srgb_trc() {
     const cmsFloat64Number p[5] = {2.4, 1.0 / 1.055, 0.055 / 1.055, 1.0 / 12.92, 0.04045};
     return cmsBuildParametricToneCurve(nullptr, 4, p);
 }
 
-cmsHPROFILE make_target_profile(const TargetSpec& s) {
+cmsHPROFILE make_target_profile(const TargetSpec &s) {
     const cmsCIExyY d65{0.3127, 0.3290, 1.0};
     const cmsCIExyYTRIPLE prim{{s.rx, s.ry, 1.0}, {s.gx, s.gy, 1.0}, {s.bx, s.by, 1.0}};
-    cmsToneCurve* trc = (s.gamma > 0.0) ? cmsBuildGamma(nullptr, s.gamma) : build_srgb_trc();
-    if (trc == nullptr) return nullptr;
-    cmsToneCurve* trio[3] = {trc, trc, trc};
+    cmsToneCurve *trc = (s.gamma > 0.0) ? cmsBuildGamma(nullptr, s.gamma) : build_srgb_trc();
+    if (trc == nullptr)
+        return nullptr;
+    cmsToneCurve *trio[3] = {trc, trc, trc};
     cmsHPROFILE p = cmsCreateRGBProfile(&d65, &prim, trio);
-    cmsFreeToneCurve(trc);  // profile keeps its own copy of the curve data
-    if (p == nullptr) return nullptr;
-    cmsMLU* mlu = cmsMLUalloc(nullptr, 1);
+    cmsFreeToneCurve(trc); // profile keeps its own copy of the curve data
+    if (p == nullptr)
+        return nullptr;
+    cmsMLU *mlu = cmsMLUalloc(nullptr, 1);
     if (mlu == nullptr) {
         cmsCloseProfile(p);
         return nullptr;
@@ -130,8 +140,9 @@ cmsHPROFILE make_target_profile(const TargetSpec& s) {
 // used when a grayscale source carries no ICC.
 cmsHPROFILE make_gray_srgb_profile() {
     const cmsCIExyY d65{0.3127, 0.3290, 1.0};
-    cmsToneCurve* trc = build_srgb_trc();
-    if (trc == nullptr) return nullptr;
+    cmsToneCurve *trc = build_srgb_trc();
+    if (trc == nullptr)
+        return nullptr;
     cmsHPROFILE p = cmsCreateGrayProfile(&d65, trc);
     cmsFreeToneCurve(trc);
     return p;
@@ -139,10 +150,12 @@ cmsHPROFILE make_gray_srgb_profile() {
 
 std::string serialize_profile(cmsHPROFILE p) {
     cmsUInt32Number need = 0;
-    if (!cmsSaveProfileToMem(p, nullptr, &need) || need == 0) return {};
+    if (!cmsSaveProfileToMem(p, nullptr, &need) || need == 0)
+        return {};
     std::string out(need, '\0');
     cmsUInt32Number written = need;
-    if (!cmsSaveProfileToMem(p, out.data(), &written) || written == 0) return {};
+    if (!cmsSaveProfileToMem(p, out.data(), &written) || written == 0)
+        return {};
     out.resize(written <= need ? written : need);
     return out;
 }
@@ -153,25 +166,27 @@ std::string serialize_profile(cmsHPROFILE p) {
 // so they cannot collide with the ColorTarget enumerators (0..3).
 constexpr int kCicpCacheBase = 100;
 
-std::mutex& generated_mutex() {
+std::mutex &generated_mutex() {
     static std::mutex m;
     return m;
 }
-std::unordered_map<int, std::string>& generated_cache() {
+std::unordered_map<int, std::string> &generated_cache() {
     static std::unordered_map<int, std::string> c;
     return c;
 }
 
 // ICC bytes of a *colour* target (SRGB = serialized lcms2 built-in). KeepOriginal
 // yields an empty string. Empty result + non-empty err means failure.
-std::string target_icc_bytes(ColorTarget t, std::string& err) {
+std::string target_icc_bytes(ColorTarget t, std::string &err) {
     err.clear();
-    if (t == ColorTarget::KeepOriginal) return {};
+    if (t == ColorTarget::KeepOriginal)
+        return {};
     {
         std::lock_guard<std::mutex> lock(generated_mutex());
-        auto& cache = generated_cache();
+        auto &cache = generated_cache();
         auto it = cache.find(static_cast<int>(t));
-        if (it != cache.end()) return it->second;
+        if (it != cache.end())
+            return it->second;
     }
 
     std::string bytes;
@@ -184,7 +199,7 @@ std::string target_icc_bytes(ColorTarget t, std::string& err) {
         bytes = serialize_profile(p);
         cmsCloseProfile(p);
     } else {
-        const TargetSpec* s = target_spec(t);
+        const TargetSpec *s = target_spec(t);
         if (s == nullptr) {
             err = "unsupported colour target";
             return {};
@@ -211,20 +226,24 @@ std::string target_icc_bytes(ColorTarget t, std::string& err) {
 // target profiles (same mutex/map); Srgb (lcms2 built-in) and Unsupported have none,
 // so an empty result is not an error here — it *is* the sRGB-assumption branch.
 std::string cicp_source_icc(CicpSource s) {
-    if (cicp_profile_spec(s) == nullptr) return {};
+    if (cicp_profile_spec(s) == nullptr)
+        return {};
     const int key = kCicpCacheBase + static_cast<int>(s);
     {
         std::lock_guard<std::mutex> lock(generated_mutex());
-        auto& cache = generated_cache();
+        auto &cache = generated_cache();
         auto it = cache.find(key);
-        if (it != cache.end()) return it->second;
+        if (it != cache.end())
+            return it->second;
     }
 
     cmsHPROFILE p = make_target_profile(*cicp_profile_spec(s));
-    if (p == nullptr) return {};
+    if (p == nullptr)
+        return {};
     std::string bytes = serialize_profile(p);
     cmsCloseProfile(p);
-    if (bytes.empty()) return {};
+    if (bytes.empty())
+        return {};
 
     std::lock_guard<std::mutex> lock(generated_mutex());
     generated_cache()[key] = bytes;
@@ -239,7 +258,8 @@ std::string fourcc_string(cmsColorSpaceSignature cs) {
     char s[5] = {static_cast<char>((cs >> 24) & 0xff), static_cast<char>((cs >> 16) & 0xff),
                  static_cast<char>((cs >> 8) & 0xff), static_cast<char>(cs & 0xff), '\0'};
     std::string out(s);
-    while (!out.empty() && out.back() == ' ') out.pop_back();
+    while (!out.empty() && out.back() == ' ')
+        out.pop_back();
     return out.empty() ? std::string("unknown") : out;
 }
 
@@ -248,13 +268,15 @@ std::string icc_label(cmsHPROFILE p) {
     const cmsUInt32Number n =
         cmsGetProfileInfoASCII(p, cmsInfoDescription, "en", "US", buf, sizeof(buf) - 1);
     std::string desc = (n > 0) ? std::string(buf) : std::string();
-    if (desc.empty()) desc = fourcc_string(cmsGetColorSpace(p));
+    if (desc.empty())
+        desc = fourcc_string(cmsGetColorSpace(p));
     return "ICC(" + desc + ")";
 }
 
-std::string icc_bytes_label(const std::string& bytes) {
+std::string icc_bytes_label(const std::string &bytes) {
     cmsHPROFILE p = cmsOpenProfileFromMem(bytes.data(), static_cast<cmsUInt32Number>(bytes.size()));
-    if (p == nullptr) return "ICC(unreadable)";
+    if (p == nullptr)
+        return "ICC(unreadable)";
     std::string label = icc_label(p);
     cmsCloseProfile(p);
     return label;
@@ -269,7 +291,8 @@ struct XfEntry {
     cmsHTRANSFORM xf = nullptr;
     std::string src_desc, dst_desc;
     ~XfEntry() {
-        if (xf != nullptr) cmsDeleteTransform(xf);
+        if (xf != nullptr)
+            cmsDeleteTransform(xf);
     }
 };
 
@@ -280,22 +303,23 @@ struct XfEntry {
 // one handle across threads is safe.
 class TransformCache {
 public:
-    std::shared_ptr<XfEntry> get(const std::string& key) {
+    std::shared_ptr<XfEntry> get(const std::string &key) {
         std::lock_guard<std::mutex> lock(mu_);
         auto it = index_.find(key);
-        if (it == index_.end()) return nullptr;
-        lru_.splice(lru_.begin(), lru_, it->second);  // move to front (MRU)
+        if (it == index_.end())
+            return nullptr;
+        lru_.splice(lru_.begin(), lru_, it->second); // move to front (MRU)
         return *it->second;
     }
 
-    void put(const std::string& key, std::shared_ptr<XfEntry> entry) {
+    void put(const std::string &key, std::shared_ptr<XfEntry> entry) {
         std::lock_guard<std::mutex> lock(mu_);
         auto it = index_.find(key);
         if (it != index_.end()) {
             lru_.erase(it->second);
             index_.erase(it);
         }
-        entry->key = key;  // eviction needs the key to drop the index entry
+        entry->key = key; // eviction needs the key to drop the index entry
         lru_.push_front(std::move(entry));
         index_[key] = lru_.begin();
         while (lru_.size() > kCacheCapacity) {
@@ -318,12 +342,12 @@ public:
 
 private:
     mutable std::mutex mu_;
-    std::list<std::shared_ptr<XfEntry>> lru_;  // front == most recently used
+    std::list<std::shared_ptr<XfEntry>> lru_; // front == most recently used
     std::unordered_map<std::string, std::list<std::shared_ptr<XfEntry>>::iterator> index_;
 };
 
-std::shared_ptr<XfEntry> build_entry(const std::string& src_icc, bool gray_input, ColorTarget target,
-                                     std::string& err) {
+std::shared_ptr<XfEntry> build_entry(const std::string &src_icc, bool gray_input,
+                                     ColorTarget target, std::string &err) {
     // Destination first: its bytes are also needed for the canonical-source rule below.
     std::string dst_err;
     std::string dst_bytes;
@@ -332,14 +356,16 @@ std::shared_ptr<XfEntry> build_entry(const std::string& src_icc, bool gray_input
     if (target == ColorTarget::SRGB) {
         dst = cmsCreate_sRGBProfile();
         dst_desc = "sRGB";
-        if (dst != nullptr) dst_bytes = serialize_profile(dst);
+        if (dst != nullptr)
+            dst_bytes = serialize_profile(dst);
     } else {
         dst_bytes = target_icc_bytes(target, dst_err);
         if (!dst_bytes.empty()) {
             dst = cmsOpenProfileFromMem(dst_bytes.data(),
                                         static_cast<cmsUInt32Number>(dst_bytes.size()));
         }
-        if (dst != nullptr) dst_desc = icc_label(dst);
+        if (dst != nullptr)
+            dst_desc = icc_label(dst);
     }
     if (dst == nullptr) {
         err = dst_err.empty() ? std::string("cannot create target profile for ") + to_string(target)
@@ -360,17 +386,17 @@ std::shared_ptr<XfEntry> build_entry(const std::string& src_icc, bool gray_input
     cmsHPROFILE src = nullptr;
     std::string src_desc;
     if (!src_icc.empty()) {
-        const bool canonical = !dst_bytes.empty() &&
-                               OIIO::SHA1::digest(src_icc.data(), src_icc.size()) ==
-                                   OIIO::SHA1::digest(dst_bytes.data(), dst_bytes.size());
+        const bool canonical =
+            !dst_bytes.empty() && OIIO::SHA1::digest(src_icc.data(), src_icc.size()) ==
+                                      OIIO::SHA1::digest(dst_bytes.data(), dst_bytes.size());
         if (canonical) {
             src = (target == ColorTarget::SRGB)
                       ? cmsCreate_sRGBProfile()
                       : cmsOpenProfileFromMem(dst_bytes.data(),
                                               static_cast<cmsUInt32Number>(dst_bytes.size()));
         } else {
-            src = cmsOpenProfileFromMem(src_icc.data(),
-                                        static_cast<cmsUInt32Number>(src_icc.size()));
+            src =
+                cmsOpenProfileFromMem(src_icc.data(), static_cast<cmsUInt32Number>(src_icc.size()));
         }
         if (src == nullptr) {
             cmsCloseProfile(dst);
@@ -397,7 +423,8 @@ std::shared_ptr<XfEntry> build_entry(const std::string& src_icc, bool gray_input
     }
 
     const cmsUInt32Number in_type = gray_input ? TYPE_GRAY_FLT : TYPE_RGB_FLT;
-    cmsHTRANSFORM xf = cmsCreateTransform(src, in_type, dst, TYPE_RGB_FLT, kIntent, kTransformFlags);
+    cmsHTRANSFORM xf =
+        cmsCreateTransform(src, in_type, dst, TYPE_RGB_FLT, kIntent, kTransformFlags);
     cmsCloseProfile(src);
     cmsCloseProfile(dst);
     if (xf == nullptr) {
@@ -416,31 +443,31 @@ std::shared_ptr<XfEntry> build_entry(const std::string& src_icc, bool gray_input
 // ImageBuf channel-plane helpers
 // ---------------------------------------------------------------------------
 
-OIIO::ROI plane_roi(const OIIO::ImageSpec& spec, int chbegin, int chend) {
+OIIO::ROI plane_roi(const OIIO::ImageSpec &spec, int chbegin, int chend) {
     return OIIO::ROI(spec.x, spec.x + spec.width, spec.y, spec.y + spec.height, 0, 1, chbegin,
                      chend);
 }
 
-bool read_planes(const OIIO::ImageBuf& buf, int chbegin, int chend, float* dst) {
-    const OIIO::ImageSpec& spec = buf.spec();
+bool read_planes(const OIIO::ImageBuf &buf, int chbegin, int chend, float *dst) {
+    const OIIO::ImageSpec &spec = buf.spec();
     const std::size_t n =
         std::size_t(spec.width) * std::size_t(spec.height) * std::size_t(chend - chbegin);
-    return buf.get_pixels(plane_roi(spec, chbegin, chend), OIIO::TypeFloat,
-                          OIIO::span<std::byte>(reinterpret_cast<std::byte*>(dst),
-                                                n * sizeof(float)));
+    return buf.get_pixels(
+        plane_roi(spec, chbegin, chend), OIIO::TypeFloat,
+        OIIO::span<std::byte>(reinterpret_cast<std::byte *>(dst), n * sizeof(float)));
 }
 
-bool write_planes(OIIO::ImageBuf& buf, int chbegin, int chend, const float* src) {
-    const OIIO::ImageSpec& spec = buf.spec();
+bool write_planes(OIIO::ImageBuf &buf, int chbegin, int chend, const float *src) {
+    const OIIO::ImageSpec &spec = buf.spec();
     const std::size_t n =
         std::size_t(spec.width) * std::size_t(spec.height) * std::size_t(chend - chbegin);
-    return buf.set_pixels(plane_roi(spec, chbegin, chend), OIIO::TypeFloat,
-                          OIIO::span<const std::byte>(reinterpret_cast<const std::byte*>(src),
-                                                      n * sizeof(float)));
+    return buf.set_pixels(
+        plane_roi(spec, chbegin, chend), OIIO::TypeFloat,
+        OIIO::span<const std::byte>(reinterpret_cast<const std::byte *>(src), n * sizeof(float)));
 }
 
 // New float buffer with a different channel count, same window/attributes.
-OIIO::ImageBuf make_like(const OIIO::ImageBuf& src, int out_ch, const std::vector<float>& data) {
+OIIO::ImageBuf make_like(const OIIO::ImageBuf &src, int out_ch, const std::vector<float> &data) {
     OIIO::ImageSpec spec = src.spec();
     spec.nchannels = out_ch;
     spec.channelnames = (out_ch == 4) ? std::vector<std::string>{"R", "G", "B", "A"}
@@ -452,12 +479,12 @@ OIIO::ImageBuf make_like(const OIIO::ImageBuf& src, int out_ch, const std::vecto
     OIIO::ImageBuf out(spec);
     const std::size_t n = std::size_t(spec.width) * std::size_t(spec.height) * std::size_t(out_ch);
     out.set_pixels(plane_roi(spec, 0, out_ch), OIIO::TypeFloat,
-                   OIIO::span<const std::byte>(reinterpret_cast<const std::byte*>(data.data()),
+                   OIIO::span<const std::byte>(reinterpret_cast<const std::byte *>(data.data()),
                                                n * sizeof(float)));
     return out;
 }
 
-}  // namespace
+} // namespace
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -465,15 +492,19 @@ OIIO::ImageBuf make_like(const OIIO::ImageBuf& src, int out_ch, const std::vecto
 
 std::string to_string(ColorTarget t) {
     switch (t) {
-    case ColorTarget::KeepOriginal: return "keep";
-    case ColorTarget::SRGB:         return "srgb";
-    case ColorTarget::DisplayP3:    return "p3";
-    case ColorTarget::AdobeRGB:     return "adobergb";
+    case ColorTarget::KeepOriginal:
+        return "keep";
+    case ColorTarget::SRGB:
+        return "srgb";
+    case ColorTarget::DisplayP3:
+        return "p3";
+    case ColorTarget::AdobeRGB:
+        return "adobergb";
     }
     return "keep";
 }
 
-bool parse_color_target(std::string_view s, ColorTarget& out) {
+bool parse_color_target(std::string_view s, ColorTarget &out) {
     if (s == "keep") {
         out = ColorTarget::KeepOriginal;
         return true;
@@ -493,11 +524,12 @@ bool parse_color_target(std::string_view s, ColorTarget& out) {
     return false;
 }
 
-std::string load_target_icc(ColorTarget t, std::string& err) {
+std::string load_target_icc(ColorTarget t, std::string &err) {
     err.clear();
     // sRGB has an lcms2 built-in and KeepOriginal has no target at all; both are
     // reported as "nothing to load from assets/icc" (§3.6).
-    if (t == ColorTarget::SRGB || t == ColorTarget::KeepOriginal) return {};
+    if (t == ColorTarget::SRGB || t == ColorTarget::KeepOriginal)
+        return {};
     return target_icc_bytes(t, err);
 }
 
@@ -505,10 +537,10 @@ std::string load_target_icc(ColorTarget t, std::string& err) {
 // M2-T6 §2.8 — CICP (H.273) → source description (frozen enumeration)
 // ---------------------------------------------------------------------------
 
-CicpMapping map_cicp_source(const Cicp& cicp) {
+CicpMapping map_cicp_source(const Cicp &cicp) {
     // Hit line is frozen as `CICP (<p>,<t>) → <profile 名>`; the miss text is the
     // §2.8 sentence and reports the transfer value only.
-    const auto hit = [&cicp](CicpSource s, const char* name) {
+    const auto hit = [&cicp](CicpSource s, const char *name) {
         CicpMapping m;
         m.source = s;
         m.name = name;
@@ -519,8 +551,10 @@ CicpMapping map_cicp_source(const Cicp& cicp) {
     };
 
     // Exactly the four listed pairs; matrix/full_range deliberately do not participate.
-    if (cicp.primaries == 1 && cicp.transfer == 13) return hit(CicpSource::Srgb, "sRGB");
-    if (cicp.primaries == 12 && cicp.transfer == 13) return hit(CicpSource::DisplayP3, "Display P3");
+    if (cicp.primaries == 1 && cicp.transfer == 13)
+        return hit(CicpSource::Srgb, "sRGB");
+    if (cicp.primaries == 12 && cicp.transfer == 13)
+        return hit(CicpSource::DisplayP3, "Display P3");
     if (cicp.primaries == 12 && cicp.transfer == 1)
         return hit(CicpSource::DisplayP3Gamma22, "Display P3");
     if (cicp.primaries == 9 && cicp.transfer == 8)
@@ -528,7 +562,7 @@ CicpMapping map_cicp_source(const Cicp& cicp) {
     if (cicp.primaries == 9 && cicp.transfer == 13)
         return hit(CicpSource::Bt2020SrgbTrc, "BT.2020 sRGB-TRC");
 
-    CicpMapping miss;  // source stays Unsupported, src_icc stays empty -> assumed sRGB (M1)
+    CicpMapping miss; // source stays Unsupported, src_icc stays empty -> assumed sRGB (M1)
     miss.log_line = "CICP transfer " + std::to_string(cicp.transfer) + " 未支持，按 sRGB 处理";
     return miss;
 }
@@ -542,7 +576,7 @@ ColorManager::ColorManager() : impl_(new Impl()) {
     // neither copied nor freed — ColorManager is a process-lifetime singleton.
 }
 
-ColorManager& ColorManager::instance() {
+ColorManager &ColorManager::instance() {
     static ColorManager inst;
     return inst;
 }
@@ -551,10 +585,10 @@ void ColorManager::clear_cache() { impl_->cache.clear(); }
 
 std::size_t ColorManager::cache_size() const { return impl_->cache.size(); }
 
-ColorOutcome ColorManager::transform(OIIO::ImageBuf& buf, const std::string& src_icc,
+ColorOutcome ColorManager::transform(OIIO::ImageBuf &buf, const std::string &src_icc,
                                      bool src_is_gray, ColorTarget target) {
     ColorOutcome oc;
-    const OIIO::ImageSpec& spec = buf.spec();
+    const OIIO::ImageSpec &spec = buf.spec();
     const int nch = spec.nchannels;
     const int w = spec.width, h = spec.height;
 
@@ -602,8 +636,9 @@ ColorOutcome ColorManager::transform(OIIO::ImageBuf& buf, const std::string& src
 
     // ---- transform cache: (source ICC SHA1 | assumed kind, target, in-channels, bitdepth) ----
     const std::string src_key =
-        src_icc.empty() ? (gray_input ? std::string("assumed:gray-srgb") : std::string("assumed:srgb"))
-                        : "icc:" + OIIO::SHA1::digest(src_icc.data(), src_icc.size());
+        src_icc.empty()
+            ? (gray_input ? std::string("assumed:gray-srgb") : std::string("assumed:srgb"))
+            : "icc:" + OIIO::SHA1::digest(src_icc.data(), src_icc.size());
     const std::string key = src_key + "|" + std::to_string(static_cast<int>(target)) + "|" +
                             std::to_string(color_in) + "|" + std::to_string(kTransformBits);
 
@@ -668,7 +703,7 @@ ColorOutcome ColorManager::transform(OIIO::ImageBuf& buf, const std::string& src
             }
         }
 
-        std::vector<float> rgb(3 * npix);  // single GRAY_FLT -> RGB_FLT call
+        std::vector<float> rgb(3 * npix); // single GRAY_FLT -> RGB_FLT call
         cmsDoTransform(entry->xf, gray.data(), rgb.data(), count);
 
         std::vector<float> out(std::size_t(out_ch) * npix);
@@ -676,7 +711,8 @@ ColorOutcome ColorManager::transform(OIIO::ImageBuf& buf, const std::string& src
             out[std::size_t(out_ch) * i + 0] = rgb[3 * i + 0];
             out[std::size_t(out_ch) * i + 1] = rgb[3 * i + 1];
             out[std::size_t(out_ch) * i + 2] = rgb[3 * i + 2];
-            if (out_ch == 4) out[std::size_t(out_ch) * i + 3] = alpha[i];
+            if (out_ch == 4)
+                out[std::size_t(out_ch) * i + 3] = alpha[i];
         }
         // NOTE(design): gray and gray+alpha sources are always promoted to RGB(A) for a
         // colour target (single GRAY->RGB call, no separate gray pipeline) — the
@@ -698,4 +734,4 @@ ColorOutcome ColorManager::transform(OIIO::ImageBuf& buf, const std::string& src
     return oc;
 }
 
-}  // namespace pp
+} // namespace pp

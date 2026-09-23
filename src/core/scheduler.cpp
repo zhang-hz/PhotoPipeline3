@@ -55,7 +55,7 @@ constexpr double kBudgetReportMinMs = 1000.0;
 
 using Clock = std::chrono::steady_clock;
 
-double ms_since(const Clock::time_point& t0) {
+double ms_since(const Clock::time_point &t0) {
     return std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
 }
 
@@ -66,14 +66,14 @@ double ms_since(const Clock::time_point& t0) {
 // whose rename sequences overlap (a.jpg + "a (1).jpg" as separate inputs) can still race.
 // Accepted: Linux file systems are case-sensitive, so lexical identity covers the realistic
 // conflicts.
-std::string desired_key(const FileEntry& fe, const RunConfig& cfg) {
-    const FormatDef* fmt = find_format(cfg.format_id);
+std::string desired_key(const FileEntry &fe, const RunConfig &cfg) {
+    const FormatDef *fmt = find_format(cfg.format_id);
     const std::string ext =
         cfg.metadata_only ? fe.src.extension().string() : (fmt ? fmt->ext : std::string());
     return mirror_path(fe.src, fe.base_dir, cfg.out_root, ext).string();
 }
 
-}  // namespace
+} // namespace
 
 // ---------------------------------------------------------------------------
 // Impl
@@ -90,20 +90,21 @@ struct Scheduler::Impl {
     std::atomic<std::size_t> next{0};
 
     std::vector<std::thread> pool;
-    EventCb cb;  // guarded by mu
+    EventCb cb; // guarded by mu
 
     std::unique_ptr<IEncoder> enc;
     std::unique_ptr<PixelBudget> budget;
 
-    std::vector<std::filesystem::path> reserved;  // guarded by mu
-    std::multiset<std::string> inflight;          // guarded by mu
+    std::vector<std::filesystem::path> reserved; // guarded by mu
+    std::multiset<std::string> inflight;         // guarded by mu
 
     Clock::time_point t_start{};
-    double elapsed_ms = 0;  // guarded by mu (set by wait())
+    double elapsed_ms = 0; // guarded by mu (set by wait())
 
     Impl(RunConfig c, std::vector<FileEntry> f) : cfg(std::move(c)), files(std::move(f)) {
         results.resize(files.size());
-        for (std::size_t i = 0; i < files.size(); ++i) results[i].src = files[i].src;
+        for (std::size_t i = 0; i < files.size(); ++i)
+            results[i].src = files[i].src;
     }
 
     EventCb callback_copy() {
@@ -113,7 +114,8 @@ struct Scheduler::Impl {
 
     void emit_stage(std::size_t i, FileState s) {
         const EventCb c = callback_copy();
-        if (c) c(FileEvent{i, s, nullptr});
+        if (c)
+            c(FileEvent{i, s, nullptr});
     }
 
     // Stores the terminal result and emits the terminal event (pointer into results()).
@@ -128,7 +130,8 @@ struct Scheduler::Impl {
             results[i] = std::move(r);
             c = cb;
         }
-        if (c) c(FileEvent{i, state, &results[i]});
+        if (c)
+            c(FileEvent{i, state, &results[i]});
     }
 
     void worker();
@@ -137,9 +140,10 @@ struct Scheduler::Impl {
 void Scheduler::Impl::worker() {
     for (;;) {
         const std::size_t i = next.fetch_add(1, std::memory_order_relaxed);
-        if (i >= files.size()) break;
+        if (i >= files.size())
+            break;
 
-        FileEntry& fe = files[i];
+        FileEntry &fe = files[i];
         if (cancelled.load()) {
             FileResult r;
             r.src = fe.src;
@@ -167,9 +171,7 @@ void Scheduler::Impl::worker() {
         const std::string key = desired_key(fe, cfg);
         {
             std::unique_lock<std::mutex> lk(mu);
-            cv.wait(lk, [&] {
-                return cancelled.load() || inflight.find(key) == inflight.end();
-            });
+            cv.wait(lk, [&] { return cancelled.load() || inflight.find(key) == inflight.end(); });
             if (cancelled.load()) {
                 lk.unlock();
                 FileResult r;
@@ -190,15 +192,16 @@ void Scheduler::Impl::worker() {
         FileResult r;
         try {
             if (cfg.metadata_only) {
-                r = run_metadata_only(fe, cfg, reserved_snapshot,
-                                      [this] { return cancelled.load(); },
-                                      [this, i](FileState s) { emit_stage(i, s); });
+                r = run_metadata_only(
+                    fe, cfg, reserved_snapshot, [this] { return cancelled.load(); },
+                    [this, i](FileState s) { emit_stage(i, s); });
             } else {
-                r = run_one_file(fe, cfg, enc.get(), budget.get(), reserved_snapshot,
-                                 [this] { return cancelled.load(); },
-                                 [this, i](FileState s) { emit_stage(i, s); });
+                r = run_one_file(
+                    fe, cfg, enc.get(), budget.get(), reserved_snapshot,
+                    [this] { return cancelled.load(); },
+                    [this, i](FileState s) { emit_stage(i, s); });
             }
-        } catch (const std::exception& e) {
+        } catch (const std::exception &e) {
             r = FileResult{};
             r.src = fe.src;
             r.error = std::string("worker: unexpected exception: ") + e.what();
@@ -211,8 +214,10 @@ void Scheduler::Impl::worker() {
         {
             std::lock_guard<std::mutex> lk(mu);
             const auto it = inflight.find(key);
-            if (it != inflight.end()) inflight.erase(it);
-            if (!r.out.empty()) reserved.push_back(r.out);
+            if (it != inflight.end())
+                inflight.erase(it);
+            if (!r.out.empty())
+                reserved.push_back(r.out);
         }
         cv.notify_all();
         finish(i, std::move(r));
@@ -236,9 +241,10 @@ void Scheduler::set_event_callback(EventCb cb) {
 }
 
 void Scheduler::start() {
-    Impl& d = *impl_;
+    Impl &d = *impl_;
     bool expected = false;
-    if (!d.running.compare_exchange_strong(expected, true)) return;  // idempotent
+    if (!d.running.compare_exchange_strong(expected, true))
+        return; // idempotent
 
     d.t_start = Clock::now();
     d.enc = make_encoder(d.cfg.format_id, d.cfg.backend_id);
@@ -255,24 +261,27 @@ void Scheduler::start() {
               {"format", d.cfg.format_id},
               {"mode", d.cfg.metadata_only ? "metadata-only" : "transcode"}});
 
-    int n = d.cfg.workers > 0 ? d.cfg.workers
-                              : static_cast<int>(std::thread::hardware_concurrency());
-    if (n <= 0) n = 1;
+    int n =
+        d.cfg.workers > 0 ? d.cfg.workers : static_cast<int>(std::thread::hardware_concurrency());
+    if (n <= 0)
+        n = 1;
     if (static_cast<std::size_t>(n) > d.files.size()) {
         n = static_cast<int>(std::max<std::size_t>(1, d.files.size()));
     }
-    for (int i = 0; i < n; ++i) d.pool.emplace_back([this] { impl_->worker(); });
+    for (int i = 0; i < n; ++i)
+        d.pool.emplace_back([this] { impl_->worker(); });
 }
 
 void Scheduler::cancel() {
     impl_->cancelled.store(true);
-    impl_->cv.notify_all();  // wake workers blocked on the output-target serialisation
+    impl_->cv.notify_all(); // wake workers blocked on the output-target serialisation
 }
 
 void Scheduler::wait() {
-    Impl& d = *impl_;
-    for (std::thread& t : d.pool) {
-        if (t.joinable()) t.join();
+    Impl &d = *impl_;
+    for (std::thread &t : d.pool) {
+        if (t.joinable())
+            t.join();
     }
     d.pool.clear();
     bool finished_run = false;
@@ -280,7 +289,8 @@ void Scheduler::wait() {
     {
         std::lock_guard<std::mutex> lk(d.mu);
         finished_run = d.running.exchange(false);
-        if (d.elapsed_ms == 0 && finished_run) d.elapsed_ms = ms_since(d.t_start);
+        if (d.elapsed_ms == 0 && finished_run)
+            d.elapsed_ms = ms_since(d.t_start);
         elapsed_ms = d.elapsed_ms;
     }
     // #27/#30: report at most once per run — the UI calls wait() explicitly and ~Scheduler calls
@@ -296,16 +306,16 @@ void Scheduler::wait() {
 
 bool Scheduler::running() const { return impl_->running.load(); }
 
-const std::vector<FileResult>& Scheduler::results() const { return impl_->results; }
+const std::vector<FileResult> &Scheduler::results() const { return impl_->results; }
 
 RunSummary Scheduler::summary() const {
-    Impl& d = *impl_;
+    Impl &d = *impl_;
     RunSummary s;
     // The UI polls summary() while the batch runs, so the result slots must be read under the
     // same mutex the workers store them with (results() itself is documented as wait()-only).
     std::lock_guard<std::mutex> lk(d.mu);
     s.total = d.results.size();
-    for (const FileResult& r : d.results) {
+    for (const FileResult &r : d.results) {
         if (r.ok) {
             ++s.ok;
         } else if (r.skipped) {
@@ -320,9 +330,8 @@ RunSummary Scheduler::summary() const {
     const double ms = d.elapsed_ms > 0 ? d.elapsed_ms : ms_since(d.t_start);
     s.total_ms = ms;
     s.avg_file_ms = s.total > 0 ? ms / static_cast<double>(s.total) : 0.0;
-    s.throughput_mb_s =
-        ms > 0 ? (static_cast<double>(s.out_bytes) / 1.0e6) / (ms / 1000.0) : 0.0;
+    s.throughput_mb_s = ms > 0 ? (static_cast<double>(s.out_bytes) / 1.0e6) / (ms / 1000.0) : 0.0;
     return s;
 }
 
-}  // namespace pp
+} // namespace pp

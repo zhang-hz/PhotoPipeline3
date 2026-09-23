@@ -36,22 +36,25 @@ namespace pp {
 namespace {
 
 constexpr std::string_view kStage = "encode";
-constexpr std::string_view kFile  = "enc_oiio.cpp";
+constexpr std::string_view kFile = "enc_oiio.cpp";
 
-double ms_since(const std::chrono::steady_clock::time_point& t0) {
+double ms_since(const std::chrono::steady_clock::time_point &t0) {
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 }
 
 // Log-only rendering of a parameter value (run-log fields for E9 notes).
-std::string param_value_text(const ParamValue& v) {
-    if (const bool* b = std::get_if<bool>(&v)) return *b ? "true" : "false";
-    if (const int64_t* i = std::get_if<int64_t>(&v)) return std::to_string(*i);
-    if (const double* d = std::get_if<double>(&v)) {
+std::string param_value_text(const ParamValue &v) {
+    if (const bool *b = std::get_if<bool>(&v))
+        return *b ? "true" : "false";
+    if (const int64_t *i = std::get_if<int64_t>(&v))
+        return std::to_string(*i);
+    if (const double *d = std::get_if<double>(&v)) {
         char buf[32];
         std::snprintf(buf, sizeof(buf), "%.10g", *d);
         return buf;
     }
-    if (const std::string* s = std::get_if<std::string>(&v)) return *s;
+    if (const std::string *s = std::get_if<std::string>(&v))
+        return *s;
     return "<empty>";
 }
 
@@ -72,13 +75,17 @@ int quantize(float v, int maxv) {
 // Parameter keys declared by the static format table for (format, backend) -> E9 detection.
 std::vector<std::string> known_param_keys(std::string_view format_id, std::string_view backend_id) {
     std::vector<std::string> keys;
-    const FormatDef* f = find_format(format_id);
-    if (!f) return keys;
-    const BackendDef* b = find_backend(*f, backend_id);
-    if (!b) return keys;
-    const TechDef* t = find_tech(*b, "");
-    if (!t) return keys;
-    for (const ParamDef& p : t->params) keys.push_back(p.key);
+    const FormatDef *f = find_format(format_id);
+    if (!f)
+        return keys;
+    const BackendDef *b = find_backend(*f, backend_id);
+    if (!b)
+        return keys;
+    const TechDef *t = find_tech(*b, "");
+    if (!t)
+        return keys;
+    for (const ParamDef &p : t->params)
+        keys.push_back(p.key);
     return keys;
 }
 
@@ -87,14 +94,14 @@ public:
     OiioEncoder(std::string format_id, std::string backend_id)
         : format_id_(std::move(format_id)), backend_id_(std::move(backend_id)) {}
 
-    const FormatDef& format() const override {
-        const FormatDef* f = find_format(format_id_);
+    const FormatDef &format() const override {
+        const FormatDef *f = find_format(format_id_);
         assert(f != nullptr);
         static const FormatDef kFallback{};
         return f ? *f : kFallback;
     }
 
-    EncodeResult encode(const EncodeRequest& req) override;
+    EncodeResult encode(const EncodeRequest &req) override;
 
 private:
     // E1: immutable -> safe to share one instance across worker threads.
@@ -102,15 +109,15 @@ private:
     const std::string backend_id_;
 };
 
-EncodeResult OiioEncoder::encode(const EncodeRequest& req) {
+EncodeResult OiioEncoder::encode(const EncodeRequest &req) {
     EncodeResult res;
     const auto t0 = std::chrono::steady_clock::now();
     auto finish = [&]() {
         res.t.encode_ms = ms_since(t0);
-        res.t.total_ms  = res.t.encode_ms;
+        res.t.total_ms = res.t.encode_ms;
         return res;
     };
-    auto fail = [&](const std::string& msg) {
+    auto fail = [&](const std::string &msg) {
         log_error(kStage, kFile, "encode failed",
                   {{"format", format_id_}, {"error", msg}, {"path", req.out_path.string()}});
         res.bytes = 0;
@@ -120,16 +127,15 @@ EncodeResult OiioEncoder::encode(const EncodeRequest& req) {
     // E9 / parameter problems are configuration defects: log them (structured), never turn
     // them into EncodeResult.warnings — those are reserved for per-image quality or semantic
     // deviations (main-dialogue ruling, §3.8 T6 落地口径 ⑥).
-    auto note_param = [&](const std::string& msg, const std::string& key,
-                          const std::string& value) {
-        log_warn(kStage, kFile, msg,
-                 {{"format", format_id_}, {"param", key}, {"value", value}});
+    auto note_param = [&](const std::string &msg, const std::string &key,
+                          const std::string &value) {
+        log_warn(kStage, kFile, msg, {{"format", format_id_}, {"param", key}, {"value", value}});
     };
 
     try {
         if (!req.img.initialized() || req.img.spec().width <= 0 || req.img.spec().height <= 0)
             return fail("empty input image");
-        const OIIO::ImageSpec& ispec = req.img.spec();
+        const OIIO::ImageSpec &ispec = req.img.spec();
         const int w = ispec.width, h = ispec.height, nch = ispec.nchannels;
         assert(w > 0 && h > 0);
         assert(nch >= 1 && nch <= 4);
@@ -144,8 +150,10 @@ EncodeResult OiioEncoder::encode(const EncodeRequest& req) {
                             " (expected 24)");
             out_type = OIIO::TypeDesc::UINT8;
         } else {
-            if (req.out_bitdepth == 8)       out_type = OIIO::TypeDesc::UINT8;
-            else if (req.out_bitdepth == 16) out_type = OIIO::TypeDesc::UINT16;
+            if (req.out_bitdepth == 8)
+                out_type = OIIO::TypeDesc::UINT8;
+            else if (req.out_bitdepth == 16)
+                out_type = OIIO::TypeDesc::UINT16;
             else
                 return fail(format_id_ + ": unsupported bitdepth " +
                             std::to_string(req.out_bitdepth) + " (expected 8 or 16)");
@@ -155,10 +163,20 @@ EncodeResult OiioEncoder::encode(const EncodeRequest& req) {
 
         OIIO::ImageSpec spec(w, h, nch, out_type);
         switch (nch) {
-            case 1: spec.channelnames = {"Y"}; break;
-            case 2: spec.channelnames = {"Y", "A"}; spec.alpha_channel = 1; break;
-            case 3: spec.channelnames = {"R", "G", "B"}; break;
-            default: spec.channelnames = {"R", "G", "B", "A"}; spec.alpha_channel = 3; break;
+        case 1:
+            spec.channelnames = {"Y"};
+            break;
+        case 2:
+            spec.channelnames = {"Y", "A"};
+            spec.alpha_channel = 1;
+            break;
+        case 3:
+            spec.channelnames = {"R", "G", "B"};
+            break;
+        default:
+            spec.channelnames = {"R", "G", "B", "A"};
+            spec.alpha_channel = 3;
+            break;
         }
 
         // ---- format parameters ----
@@ -187,8 +205,8 @@ EncodeResult OiioEncoder::encode(const EncodeRequest& req) {
             const int64_t th = param_int(req.params, "tiff_tile_height", 0);
             if ((tw > 0) != (th > 0))
                 return fail("tiff: tile width and height must both be > 0 (tiled) or both be 0 "
-                            "(strips); got width=" + std::to_string(tw) +
-                            " height=" + std::to_string(th));
+                            "(strips); got width=" +
+                            std::to_string(tw) + " height=" + std::to_string(th));
             if (tw > 0) {
                 if (tw % 16 != 0)
                     return fail("tiff: tile width " + std::to_string(tw) +
@@ -196,7 +214,7 @@ EncodeResult OiioEncoder::encode(const EncodeRequest& req) {
                 if (th % 16 != 0)
                     return fail("tiff: tile height " + std::to_string(th) +
                                 " must be a positive multiple of 16");
-                spec.tile_width  = static_cast<int>(tw);
+                spec.tile_width = static_cast<int>(tw);
                 spec.tile_height = static_cast<int>(th);
             }
         }
@@ -205,15 +223,17 @@ EncodeResult OiioEncoder::encode(const EncodeRequest& req) {
         // ---- ICC (E5); EXIF/XMP deliberately not written here (E7) ----
         if (!req.meta.icc_profile.empty()) {
             const size_t n = req.meta.icc_profile.size();
-            spec.attribute("ICCProfile", OIIO::TypeDesc(OIIO::TypeDesc::UINT8, static_cast<int>(n)),
-                           OIIO::cspan<std::byte>(
-                               reinterpret_cast<const std::byte*>(req.meta.icc_profile.data()), n));
+            spec.attribute(
+                "ICCProfile", OIIO::TypeDesc(OIIO::TypeDesc::UINT8, static_cast<int>(n)),
+                OIIO::cspan<std::byte>(
+                    reinterpret_cast<const std::byte *>(req.meta.icc_profile.data()), n));
         }
 
         // ---- E9: unknown parameters are ignored with a warning ----
         const std::vector<std::string> known = known_param_keys(format_id_, backend_id_);
-        for (const auto& [key, value] : req.params) {
-            if (key.rfind("__", 0) == 0) continue;  // reserved keys (§3.4)
+        for (const auto &[key, value] : req.params) {
+            if (key.rfind("__", 0) == 0)
+                continue; // reserved keys (§3.4)
             if (std::find(known.begin(), known.end(), key) == known.end())
                 note_param("unrecognised parameter ignored", key, param_value_text(value));
         }
@@ -223,18 +243,22 @@ EncodeResult OiioEncoder::encode(const EncodeRequest& req) {
         for (OIIO::ImageBuf::ConstIterator<float> it(req.img); !it.done(); ++it) {
             const int x = it.x() - ispec.x;
             const int y = it.y() - ispec.y;
-            if (x < 0 || y < 0 || x >= w || y >= h) continue;
-            uint8_t* dst = pixels.data() + (static_cast<size_t>(y) * w + x) * nch * bps;
+            if (x < 0 || y < 0 || x >= w || y >= h)
+                continue;
+            uint8_t *dst = pixels.data() + (static_cast<size_t>(y) * w + x) * nch * bps;
             for (int c = 0; c < nch; c++) {
                 const int q = quantize(it[c], maxv);
-                if (bps == 1) dst[c] = static_cast<uint8_t>(q);
-                else reinterpret_cast<uint16_t*>(dst)[c] = static_cast<uint16_t>(q);
+                if (bps == 1)
+                    dst[c] = static_cast<uint8_t>(q);
+                else
+                    reinterpret_cast<uint16_t *>(dst)[c] = static_cast<uint16_t>(q);
             }
         }
 
         // ---- write through OIIO ----
         std::unique_ptr<OIIO::ImageOutput> out = OIIO::ImageOutput::create(format_id_);
-        if (!out) return fail("OpenImageIO has no output plugin for '" + format_id_ + "'");
+        if (!out)
+            return fail("OpenImageIO has no output plugin for '" + format_id_ + "'");
         if (!out->open(req.out_path.string(), spec))
             return fail("OIIO open failed for " + req.out_path.string() + ": " + out->geterror());
         const OIIO::stride_t xstride = static_cast<OIIO::stride_t>(nch) * bps;
@@ -251,20 +275,22 @@ EncodeResult OiioEncoder::encode(const EncodeRequest& req) {
             return fail("output file missing or empty: " + req.out_path.string());
         res.bytes = bytes;
         log_debug(kStage, kFile, "encoded",
-                  {{"format", format_id_}, {"size", std::to_string(w) + "x" + std::to_string(h)},
-                   {"channels", std::to_string(nch)}, {"bitdepth", std::to_string(bps * 8)},
+                  {{"format", format_id_},
+                   {"size", std::to_string(w) + "x" + std::to_string(h)},
+                   {"channels", std::to_string(nch)},
+                   {"bitdepth", std::to_string(bps * 8)},
                    {"bytes", std::to_string(res.bytes)}});
         return finish();
-    } catch (const std::exception& ex) {
+    } catch (const std::exception &ex) {
         return fail(std::string("exception: ") + ex.what());
     } catch (...) {
         return fail("unknown exception");
     }
 }
 
-std::unique_ptr<IEncoder> make_png()  { return std::make_unique<OiioEncoder>("png", "oiio"); }
+std::unique_ptr<IEncoder> make_png() { return std::make_unique<OiioEncoder>("png", "oiio"); }
 std::unique_ptr<IEncoder> make_tiff() { return std::make_unique<OiioEncoder>("tiff", "oiio"); }
-std::unique_ptr<IEncoder> make_bmp()  { return std::make_unique<OiioEncoder>("bmp", "oiio"); }
+std::unique_ptr<IEncoder> make_bmp() { return std::make_unique<OiioEncoder>("bmp", "oiio"); }
 
 // Static self-registration (§3.17); factories live in this anonymous namespace, so the
 // macro must be expanded inside namespace pp for the pasted name to resolve.
@@ -272,10 +298,10 @@ PP_REGISTER_ENCODER("png", "oiio", make_png);
 PP_REGISTER_ENCODER("tiff", "oiio", make_tiff);
 PP_REGISTER_ENCODER("bmp", "oiio", make_bmp);
 
-}  // namespace
+} // namespace
 
 // No link anchor here (M2-T13): self-registration is guaranteed by the link form, not by
 // a referenced symbol — every consumer links pp_core whole-archive via the
 // pp_core_registered interface target (CMakeLists §2b), so this TU's PP_REGISTER_ENCODER
 // initialiser always runs.
-}  // namespace pp
+} // namespace pp

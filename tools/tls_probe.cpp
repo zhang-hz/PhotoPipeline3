@@ -22,7 +22,7 @@
 
 #include <cstdio>
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
     QCoreApplication app(argc, argv);
     const QUrl url(argc > 1 ? QString::fromLocal8Bit(argv[1])
                             : QStringLiteral("https://tile.openstreetmap.org/0/0/0.png"));
@@ -31,11 +31,11 @@ int main(int argc, char** argv) {
     QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::UserAgentHeader,
                       QStringLiteral("PhotoPipeline/0.1.0 TLS probe (M2-T11b)"));
-    QNetworkReply* reply = nam.get(request);
+    QNetworkReply *reply = nam.get(request);
 
     // 用户可读的 TTY/stdout 进度：插件加载与握手失败会在这里显形
-    QObject::connect(reply, &QNetworkReply::sslErrors, [](const QList<QSslError>& errors) {
-        for (const QSslError& e : errors) {
+    QObject::connect(reply, &QNetworkReply::sslErrors, [](const QList<QSslError> &errors) {
+        for (const QSslError &e : errors) {
             std::printf("ssl_error: %s\n", e.errorString().toUtf8().constData());
         }
     });
@@ -49,8 +49,8 @@ int main(int argc, char** argv) {
                     static_cast<long long>(body.size()), png_magic ? "yes" : "no");
         std::printf("probe reply_error=%d (%s)\n", static_cast<int>(reply->error()),
                     reply->errorString().toUtf8().constData());
-        const bool ok = reply->error() == QNetworkReply::NoError && status == 200 &&
-                        png_magic && !body.isEmpty();
+        const bool ok = reply->error() == QNetworkReply::NoError && status == 200 && png_magic &&
+                        !body.isEmpty();
         std::printf("TLS-PROBE %s\n", ok ? "OK" : "FAIL");
         app.exit(ok ? 0 : 1);
     });

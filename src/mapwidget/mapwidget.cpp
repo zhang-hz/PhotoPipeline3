@@ -55,16 +55,16 @@ namespace {
 constexpr int kTileSize = 256;
 constexpr int kMinZoom = 2;
 constexpr int kMaxZoom = 18;
-constexpr int kMaxConcurrentFetches = 4;    // frozen: concurrency <= 4
-constexpr int kFailureBannerThreshold = 3;  // frozen: >= 3 consecutive failures -> banner
-constexpr double kClickThresholdPx = 4.0;   // frozen: press/release displacement < 4 px = click
+constexpr int kMaxConcurrentFetches = 4;   // frozen: concurrency <= 4
+constexpr int kFailureBannerThreshold = 3; // frozen: >= 3 consecutive failures -> banner
+constexpr double kClickThresholdPx = 4.0;  // frozen: press/release displacement < 4 px = click
 constexpr double kMaxMercatorLat = 85.05112877980659;
 constexpr double kPi = 3.14159265358979323846;
 constexpr qint64 kBytesPerMb = 1024 * 1024;
-constexpr int kDefaultCacheMb = 64;      // frozen default byte budget
-constexpr int kRequestTimeoutMs = 8000;  // frozen: request timeout 8 s
-constexpr int kCopyrightPointSize = 6;   // frozen: 6 pt credit label
-constexpr int kSearchZoomFloor = 12;     // ruling 2026-09-19: a search hit zooms to >= 12
+constexpr int kDefaultCacheMb = 64;     // frozen default byte budget
+constexpr int kRequestTimeoutMs = 8000; // frozen: request timeout 8 s
+constexpr int kCopyrightPointSize = 6;  // frozen: 6 pt credit label
+constexpr int kSearchZoomFloor = 12;    // ruling 2026-09-19: a search hit zooms to >= 12
 constexpr int kMarkerRadius = 7;
 constexpr int kMarkerArm = 5;
 
@@ -90,7 +90,7 @@ std::pair<double, double> world_to_latlon(QPointF world, int zoom) {
     return {std::atan(std::sinh(n)) * 180.0 / kPi, world.x() / span * 360.0 - 180.0};
 }
 
-}  // namespace
+} // namespace
 
 // Tile cache key. Declared at namespace scope (not in the anonymous namespace) so that QHash
 // finds qHash() by argument-dependent lookup; it stays private to this translation unit.
@@ -101,11 +101,11 @@ struct TileKey {
     int y = 0;
 };
 
-inline bool operator==(const TileKey& a, const TileKey& b) {
+inline bool operator==(const TileKey &a, const TileKey &b) {
     return a.zoom == b.zoom && a.x == b.x && a.y == b.y && a.provider == b.provider;
 }
 
-inline size_t qHash(const TileKey& k, size_t seed = 0) {
+inline size_t qHash(const TileKey &k, size_t seed = 0) {
     size_t h = qHash(k.provider, seed);
     h = h * 1000003u + size_t(k.zoom);
     h = h * 1000003u + size_t(k.x);
@@ -115,7 +115,7 @@ inline size_t qHash(const TileKey& k, size_t seed = 0) {
 
 struct MapWidget::Impl {
     struct PendingTile {
-        QNetworkReply* reply = nullptr;
+        QNetworkReply *reply = nullptr;
         QString provider;
         int zoom = 0;
         int x = 0;
@@ -124,34 +124,34 @@ struct MapWidget::Impl {
 
     struct CacheEntry {
         QPixmap pixmap;
-        qint64 footprint = 0;  // decoded bytes charged against the budget
+        qint64 footprint = 0; // decoded bytes charged against the budget
         std::list<TileKey>::iterator lru_pos;
     };
 
     // Receives the QWidget events the frozen header cannot declare overrides for.
     struct EventFilter : QObject {
-        explicit EventFilter(Impl* owner) : QObject(owner->q), impl(owner) {}
-        bool eventFilter(QObject* watched, QEvent* event) override;
-        Impl* impl = nullptr;
+        explicit EventFilter(Impl *owner) : QObject(owner->q), impl(owner) {}
+        bool eventFilter(QObject *watched, QEvent *event) override;
+        Impl *impl = nullptr;
     };
 
-    MapWidget* q = nullptr;
-    const TileProvider* provider = nullptr;
+    MapWidget *q = nullptr;
+    const TileProvider *provider = nullptr;
     QString amap_key;
     bool offline = false;
 
-    double center_lat = 35.0;  // datum of the active provider
+    double center_lat = 35.0; // datum of the active provider
     double center_lon = 105.0;
     int zoom = 4;
 
     bool marker_set = false;
-    double marker_lat = 0.0;  // WGS-84
+    double marker_lat = 0.0; // WGS-84
     double marker_lon = 0.0;
 
-    QNetworkAccessManager* nam = nullptr;
-    QNetworkReply* search_reply = nullptr;
-    QLabel* banner = nullptr;
-    EventFilter* filter = nullptr;
+    QNetworkAccessManager *nam = nullptr;
+    QNetworkReply *search_reply = nullptr;
+    QLabel *banner = nullptr;
+    EventFilter *filter = nullptr;
 
     QPoint press_pos;
     QPoint last_drag_pos;
@@ -160,7 +160,7 @@ struct MapWidget::Impl {
     int consecutive_failures = 0;
 
     std::vector<PendingTile> pending;
-    std::list<TileKey> lru;  // front = most recently used
+    std::list<TileKey> lru; // front = most recently used
     QHash<TileKey, CacheEntry> cache;
     qint64 cache_bytes = 0;
     qint64 cache_budget = qint64(kDefaultCacheMb) * kBytesPerMb;
@@ -194,12 +194,12 @@ struct MapWidget::Impl {
     }
 
     // ---- tile cache (LRU, byte budget) ------------------------------------------
-    const QPixmap* find_tile(const TileKey& key) {
+    const QPixmap *find_tile(const TileKey &key) {
         const auto it = cache.find(key);
         if (it == cache.end()) {
             return nullptr;
         }
-        lru.splice(lru.begin(), lru, it->lru_pos);  // touch: move to most-recently-used
+        lru.splice(lru.begin(), lru, it->lru_pos); // touch: move to most-recently-used
         it->lru_pos = lru.begin();
         return &it->pixmap;
     }
@@ -216,10 +216,10 @@ struct MapWidget::Impl {
         }
     }
 
-    void insert_tile(const TileKey& key, const QByteArray& data) {
+    void insert_tile(const TileKey &key, const QByteArray &data) {
         QPixmap pixmap;
         if (!pixmap.loadFromData(data)) {
-            note_failure();  // undecodable payload = failed tile, stays grey
+            note_failure(); // undecodable payload = failed tile, stays grey
             return;
         }
         // Ruling 2026-09-19: the cache keeps decoded pixmaps only (the compressed bytes are
@@ -243,8 +243,8 @@ struct MapWidget::Impl {
     }
 
     // ---- fetching ---------------------------------------------------------------
-    bool is_pending(const TileKey& key) const {
-        for (const PendingTile& t : pending) {
+    bool is_pending(const TileKey &key) const {
+        for (const PendingTile &t : pending) {
             if (t.zoom == key.zoom && t.x == key.x && t.y == key.y && t.provider == key.provider) {
                 return true;
             }
@@ -252,29 +252,30 @@ struct MapWidget::Impl {
         return false;
     }
 
-    void request_tile(const TileKey& key) {
+    void request_tile(const TileKey &key) {
         if (offline || provider == nullptr || nam == nullptr) {
-            return;  // frozen: offline sends no request at all
+            return; // frozen: offline sends no request at all
         }
         if (pending.size() >= size_t(kMaxConcurrentFetches) || is_pending(key)) {
             return;
         }
-        const TileProvider* const owner = provider_by_id(key.provider);
+        const TileProvider *const owner = provider_by_id(key.provider);
         if (owner == nullptr) {
             return;
         }
         QNetworkRequest request(owner->tile_url(key.zoom, key.x, key.y));
         request.setRawHeader("User-Agent", owner->user_agent().toUtf8());
         request.setTransferTimeout(std::chrono::milliseconds(kRequestTimeoutMs));
-        QNetworkReply* const reply = nam->get(request);
+        QNetworkReply *const reply = nam->get(request);
         pending.push_back(PendingTile{reply, key.provider, key.zoom, key.x, key.y});
         notify_pending();
-        QObject::connect(reply, &QNetworkReply::finished, q, [this, reply] { on_tile_finished(reply); });
+        QObject::connect(reply, &QNetworkReply::finished, q,
+                         [this, reply] { on_tile_finished(reply); });
     }
 
-    void on_tile_finished(QNetworkReply* reply) {
+    void on_tile_finished(QNetworkReply *reply) {
         const auto it = std::find_if(pending.begin(), pending.end(),
-                                     [reply](const PendingTile& t) { return t.reply == reply; });
+                                     [reply](const PendingTile &t) { return t.reply == reply; });
         if (it == pending.end()) {
             reply->deleteLater();
             return;
@@ -335,24 +336,24 @@ struct MapWidget::Impl {
     // ---- search -----------------------------------------------------------------
     void abort_search() {
         if (search_reply != nullptr) {
-            QNetworkReply* const reply = search_reply;
+            QNetworkReply *const reply = search_reply;
             search_reply = nullptr;
             reply->abort();
         }
     }
 
     void abort_fetches() {
-        const std::vector<QNetworkReply*> in_flight = [this] {
-            std::vector<QNetworkReply*> v;
+        const std::vector<QNetworkReply *> in_flight = [this] {
+            std::vector<QNetworkReply *> v;
             v.reserve(pending.size());
-            for (const PendingTile& t : pending) {
+            for (const PendingTile &t : pending) {
                 v.push_back(t.reply);
             }
             return v;
         }();
-        for (QNetworkReply* const reply : in_flight) {
+        for (QNetworkReply *const reply : in_flight) {
             if (reply != nullptr) {
-                reply->abort();  // finished() handler removes the pending entry
+                reply->abort(); // finished() handler removes the pending entry
             }
         }
     }
@@ -360,33 +361,33 @@ struct MapWidget::Impl {
     // ---- event handling (invoked by EventFilter) ---------------------------------
     void on_paint();
     void on_resize();
-    bool on_mouse_press(QMouseEvent* event);
-    bool on_mouse_move(QMouseEvent* event);
-    bool on_mouse_release(QMouseEvent* event);
-    bool on_wheel(QWheelEvent* event);
+    bool on_mouse_press(QMouseEvent *event);
+    bool on_mouse_move(QMouseEvent *event);
+    bool on_mouse_release(QMouseEvent *event);
+    bool on_wheel(QWheelEvent *event);
 };
 
-bool MapWidget::Impl::EventFilter::eventFilter(QObject* watched, QEvent* event) {
+bool MapWidget::Impl::EventFilter::eventFilter(QObject *watched, QEvent *event) {
     if (impl == nullptr || watched != impl->q || event == nullptr) {
         return QObject::eventFilter(watched, event);
     }
     switch (event->type()) {
-        case QEvent::Paint:
-            impl->on_paint();
-            return false;  // drawing is done; the default (empty) QWidget handler may still run
-        case QEvent::Resize:
-            impl->on_resize();
-            return false;
-        case QEvent::MouseButtonPress:
-            return impl->on_mouse_press(static_cast<QMouseEvent*>(event));
-        case QEvent::MouseMove:
-            return impl->on_mouse_move(static_cast<QMouseEvent*>(event));
-        case QEvent::MouseButtonRelease:
-            return impl->on_mouse_release(static_cast<QMouseEvent*>(event));
-        case QEvent::Wheel:
-            return impl->on_wheel(static_cast<QWheelEvent*>(event));
-        default:
-            return QObject::eventFilter(watched, event);
+    case QEvent::Paint:
+        impl->on_paint();
+        return false; // drawing is done; the default (empty) QWidget handler may still run
+    case QEvent::Resize:
+        impl->on_resize();
+        return false;
+    case QEvent::MouseButtonPress:
+        return impl->on_mouse_press(static_cast<QMouseEvent *>(event));
+    case QEvent::MouseMove:
+        return impl->on_mouse_move(static_cast<QMouseEvent *>(event));
+    case QEvent::MouseButtonRelease:
+        return impl->on_mouse_release(static_cast<QMouseEvent *>(event));
+    case QEvent::Wheel:
+        return impl->on_wheel(static_cast<QWheelEvent *>(event));
+    default:
+        return QObject::eventFilter(watched, event);
     }
 }
 
@@ -424,16 +425,16 @@ void MapWidget::Impl::on_paint() {
         const int y1 = int(std::floor((top + h - 1) / kTileSize));
         for (int ty = y0; ty <= y1; ++ty) {
             if (ty < 0 || ty >= tile_count) {
-                continue;  // no vertical wrap on a slippy map
+                continue; // no vertical wrap on a slippy map
             }
             for (int tx = x0; tx <= x1; ++tx) {
                 const TileKey key{provider->id, zoom, wrap_tile_x(tx, tile_count), ty};
                 const int sx = int(std::lround(tx * double(kTileSize) - left));
                 const int sy = int(std::lround(ty * double(kTileSize) - top));
-                if (const QPixmap* const tile = find_tile(key)) {
+                if (const QPixmap *const tile = find_tile(key)) {
                     painter.drawPixmap(sx, sy, kTileSize, kTileSize, *tile);
                 } else {
-                    request_tile(key);  // no-op when offline / already pending / 4 in flight
+                    request_tile(key); // no-op when offline / already pending / 4 in flight
                 }
             }
         }
@@ -468,7 +469,7 @@ void MapWidget::Impl::on_paint() {
     painter.drawText(box, Qt::AlignCenter, credit);
 }
 
-bool MapWidget::Impl::on_mouse_press(QMouseEvent* event) {
+bool MapWidget::Impl::on_mouse_press(QMouseEvent *event) {
     if (event->button() != Qt::LeftButton) {
         return false;
     }
@@ -479,7 +480,7 @@ bool MapWidget::Impl::on_mouse_press(QMouseEvent* event) {
     return true;
 }
 
-bool MapWidget::Impl::on_mouse_move(QMouseEvent* event) {
+bool MapWidget::Impl::on_mouse_move(QMouseEvent *event) {
     if (!pressed || !(event->buttons() & Qt::LeftButton)) {
         return false;
     }
@@ -505,7 +506,7 @@ bool MapWidget::Impl::on_mouse_move(QMouseEvent* event) {
     return true;
 }
 
-bool MapWidget::Impl::on_mouse_release(QMouseEvent* event) {
+bool MapWidget::Impl::on_mouse_release(QMouseEvent *event) {
     if (event->button() != Qt::LeftButton || !pressed) {
         return false;
     }
@@ -515,7 +516,8 @@ bool MapWidget::Impl::on_mouse_release(QMouseEvent* event) {
     pressed = false;
     dragging = false;
     if (!was_drag && moved < kClickThresholdPx) {
-        const std::pair<double, double> datum = world_to_latlon(screen_to_world(QPointF(pos)), zoom);
+        const std::pair<double, double> datum =
+            world_to_latlon(screen_to_world(QPointF(pos)), zoom);
         const std::pair<double, double> wgs = datum_to_wgs(datum.first, datum.second);
         marker_set = true;
         marker_lat = wgs.first;
@@ -526,7 +528,7 @@ bool MapWidget::Impl::on_mouse_release(QMouseEvent* event) {
     return true;
 }
 
-bool MapWidget::Impl::on_wheel(QWheelEvent* event) {
+bool MapWidget::Impl::on_wheel(QWheelEvent *event) {
     const int dy = event->angleDelta().y();
     if (dy == 0) {
         return false;
@@ -548,8 +550,8 @@ bool MapWidget::Impl::on_wheel(QWheelEvent* event) {
     return true;
 }
 
-MapWidget::MapWidget(QWidget* parent) : QWidget(parent), impl_(std::make_unique<Impl>()) {
-    Impl& d = *impl_;
+MapWidget::MapWidget(QWidget *parent) : QWidget(parent), impl_(std::make_unique<Impl>()) {
+    Impl &d = *impl_;
     d.q = this;
     d.provider = provider_by_id(QStringLiteral("osm"));
     d.nam = new QNetworkAccessManager(this);
@@ -572,10 +574,10 @@ MapWidget::MapWidget(QWidget* parent) : QWidget(parent), impl_(std::make_unique<
 }
 
 MapWidget::~MapWidget() {
-    Impl& d = *impl_;
-    for (const Impl::PendingTile& t : d.pending) {
+    Impl &d = *impl_;
+    for (const Impl::PendingTile &t : d.pending) {
         if (t.reply != nullptr) {
-            t.reply->disconnect();  // never re-enter the handler while tearing down
+            t.reply->disconnect(); // never re-enter the handler while tearing down
             t.reply->abort();
             t.reply->deleteLater();
         }
@@ -589,11 +591,11 @@ MapWidget::~MapWidget() {
     }
 }
 
-void MapWidget::set_provider(const QString& id) {
-    Impl& d = *impl_;
-    const TileProvider* const next = provider_by_id(id);
+void MapWidget::set_provider(const QString &id) {
+    Impl &d = *impl_;
+    const TileProvider *const next = provider_by_id(id);
     if (next == nullptr || next == d.provider) {
-        return;  // unknown id: keep the current provider (no invented fallback)
+        return; // unknown id: keep the current provider (no invented fallback)
     }
     const std::pair<double, double> wgs = d.datum_to_wgs(d.center_lat, d.center_lon);
     d.provider = next;
@@ -603,17 +605,17 @@ void MapWidget::set_provider(const QString& id) {
     update();
 }
 
-void MapWidget::set_amap_key(const QString& key) { impl_->amap_key = key; }
+void MapWidget::set_amap_key(const QString &key) { impl_->amap_key = key; }
 
 void MapWidget::set_cache_mb(int mb) {
-    Impl& d = *impl_;
+    Impl &d = *impl_;
     d.cache_budget = qint64(std::max(0, mb)) * kBytesPerMb;
     d.evict_to_budget();
     update();
 }
 
 void MapWidget::set_offline(bool off) {
-    Impl& d = *impl_;
+    Impl &d = *impl_;
     if (d.offline == off) {
         return;
     }
@@ -621,7 +623,7 @@ void MapWidget::set_offline(bool off) {
     if (off) {
         d.abort_search();
         d.abort_fetches();
-        d.set_banner_visible(true);  // offline degradation notice (design §6.5 / walkthrough §8.3)
+        d.set_banner_visible(true); // offline degradation notice (design §6.5 / walkthrough §8.3)
     } else {
         d.consecutive_failures = 0;
         d.set_banner_visible(false);
@@ -630,7 +632,7 @@ void MapWidget::set_offline(bool off) {
 }
 
 void MapWidget::set_marker(double lat, double lon) {
-    Impl& d = *impl_;
+    Impl &d = *impl_;
     d.marker_set = true;
     d.marker_lat = lat;
     d.marker_lon = lon;
@@ -638,7 +640,7 @@ void MapWidget::set_marker(double lat, double lon) {
 }
 
 void MapWidget::clear_marker() {
-    Impl& d = *impl_;
+    Impl &d = *impl_;
     d.marker_set = false;
     update();
 }
@@ -650,7 +652,7 @@ double MapWidget::marker_lat() const { return impl_->marker_lat; }
 double MapWidget::marker_lon() const { return impl_->marker_lon; }
 
 void MapWidget::center_on(double lat, double lon, int zoom) {
-    Impl& d = *impl_;
+    Impl &d = *impl_;
     const std::pair<double, double> datum = d.wgs_to_datum(lat, lon);
     d.center_lat = clamp_lat(datum.first);
     d.center_lon = datum.second;
@@ -660,8 +662,8 @@ void MapWidget::center_on(double lat, double lon, int zoom) {
     update();
 }
 
-void MapWidget::run_search(const QString& query) {
-    Impl& d = *impl_;
+void MapWidget::run_search(const QString &query) {
+    Impl &d = *impl_;
     d.results.clear();
     if (d.offline) {
         emit search_finished({}, tr("离线模式：搜索不可用"));
@@ -678,10 +680,10 @@ void MapWidget::run_search(const QString& query) {
     request.setTransferTimeout(std::chrono::milliseconds(kRequestTimeoutMs));
 
     d.abort_search();
-    QNetworkReply* const reply = d.nam->get(request);
+    QNetworkReply *const reply = d.nam->get(request);
     d.search_reply = reply;
     QObject::connect(reply, &QNetworkReply::finished, this, [this, reply, provider_id] {
-        Impl& dd = *impl_;
+        Impl &dd = *impl_;
         const QByteArray body = reply->readAll();
         const QNetworkReply::NetworkError error = reply->error();
         const QString error_string = reply->errorString();
@@ -706,7 +708,7 @@ void MapWidget::run_search(const QString& query) {
         dd.results = parsed;
         QStringList titles;
         titles.reserve(int(parsed.size()));
-        for (const SearchResult& result : parsed) {
+        for (const SearchResult &result : parsed) {
             titles << result.title;
         }
         emit search_finished(titles, QString());
@@ -714,11 +716,11 @@ void MapWidget::run_search(const QString& query) {
 }
 
 void MapWidget::search_select(int index) {
-    Impl& d = *impl_;
+    Impl &d = *impl_;
     if (index < 0 || index >= int(d.results.size())) {
         return;
     }
-    const SearchResult result = d.results[size_t(index)];  // WGS-84
+    const SearchResult result = d.results[size_t(index)]; // WGS-84
     set_marker(result.lat, result.lon);
     // Ruling 2026-09-19: locating a search hit at country-level zoom carries no information,
     // so raise the zoom to at least kSearchZoomFloor (never lower an already closer view).
@@ -726,4 +728,4 @@ void MapWidget::search_select(int index) {
     emit point_selected(result.lat, result.lon);
 }
 
-}  // namespace pp::map
+} // namespace pp::map

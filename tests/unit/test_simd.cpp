@@ -30,14 +30,14 @@ namespace {
 
 int g_failed = 0;
 
-void check(bool ok, const std::string& case_name, const std::string& detail) {
+void check(bool ok, const std::string &case_name, const std::string &detail) {
     if (!ok) {
         ++g_failed;
         std::printf("FAIL %s: %s\n", case_name.c_str(), detail.c_str());
     }
 }
 
-}  // namespace
+} // namespace
 
 int main() {
     // ① 编译期基线：能编译到这里就说明 __AVX2__ 成立（上面的 #error 是闸门）。

@@ -21,10 +21,10 @@
 
 #include "core/logger.h"
 
-#include "env_compat.h"  // M3 v1.5: POSIX env API 薄垫层（单实现）
+#include "env_compat.h" // M3 v1.5: POSIX env API 薄垫层（单实现）
 
 #if defined(_WIN32)
-#include <io.h>  // M3 v1.9: _dup/_dup2/_close（capture_stderr 的 Windows CRT 实现）
+#include <io.h> // M3 v1.9: _dup/_dup2/_close（capture_stderr 的 Windows CRT 实现）
 #endif
 
 namespace fs = std::filesystem;
@@ -33,14 +33,14 @@ namespace {
 
 int g_failed = 0;
 
-void check(bool ok, const std::string& case_name, const std::string& detail) {
+void check(bool ok, const std::string &case_name, const std::string &detail) {
     if (!ok) {
         ++g_failed;
         std::printf("FAIL %s: %s\n", case_name.c_str(), detail.c_str());
     }
 }
 
-fs::path make_temp_dir(const std::string& name) {
+fs::path make_temp_dir(const std::string &name) {
     std::error_code ec;
     const fs::path d = fs::current_path(ec) / ".pp_test_tmp" / name;
     fs::remove_all(d, ec);
@@ -48,28 +48,28 @@ fs::path make_temp_dir(const std::string& name) {
     return d;
 }
 
-std::string read_file(const fs::path& p) {
+std::string read_file(const fs::path &p) {
     std::ifstream f(p, std::ios::binary);
     std::ostringstream ss;
     ss << f.rdbuf();
     return ss.str();
 }
 
-bool contains(const std::string& hay, const std::string& needle) {
+bool contains(const std::string &hay, const std::string &needle) {
     return hay.find(needle) != std::string::npos;
 }
 
-void write_file(const fs::path& p, const std::string& text) {
+void write_file(const fs::path &p, const std::string &text) {
     std::error_code ec;
     fs::create_directories(p.parent_path(), ec);
     std::ofstream f(p, std::ios::binary);
     f << text;
 }
 
-std::vector<fs::path> run_files(const fs::path& dir) {
+std::vector<fs::path> run_files(const fs::path &dir) {
     std::vector<fs::path> out;
     std::error_code ec;
-    for (const fs::directory_entry& e : fs::directory_iterator(dir, ec)) {
+    for (const fs::directory_entry &e : fs::directory_iterator(dir, ec)) {
         std::error_code sec;
         if (!e.is_regular_file(sec)) {
             continue;
@@ -85,7 +85,7 @@ std::vector<fs::path> run_files(const fs::path& dir) {
 
 // Run one callable with stderr redirected to a file; returns the captured text.
 template <typename Fn>
-std::string capture_stderr(const fs::path& tmp, const std::string& tag, Fn&& fn) {
+std::string capture_stderr(const fs::path &tmp, const std::string &tag, Fn &&fn) {
 #if defined(__unix__) || defined(__APPLE__)
     const fs::path file = tmp / ("stderr-" + tag + ".txt");
     std::fflush(stderr);
@@ -109,7 +109,7 @@ std::string capture_stderr(const fs::path& tmp, const std::string& tag, Fn&& fn)
     // 使 stderr 的 "\n" 不被翻译为 "\r\n"，与 POSIX 分支逐字可比。
     const fs::path file = tmp / ("stderr-" + tag + ".txt");
     std::fflush(stderr);
-    const int saved = ::_dup(2);  // STDERR_FILENO == 2（Windows CRT）
+    const int saved = ::_dup(2); // STDERR_FILENO == 2（Windows CRT）
     if (saved < 0) {
         fn();
         return std::string();
@@ -132,15 +132,15 @@ std::string capture_stderr(const fs::path& tmp, const std::string& tag, Fn&& fn)
 #endif
 }
 
-std::string versions_dump(const std::vector<std::pair<std::string, std::string>>& v) {
+std::string versions_dump(const std::vector<std::pair<std::string, std::string>> &v) {
     std::string out;
-    for (const auto& kv : v) {
+    for (const auto &kv : v) {
         out += " " + kv.first + "=" + kv.second;
     }
     return out;
 }
 
-}  // namespace
+} // namespace
 
 int main() {
     const fs::path tmp = make_temp_dir("test_logger");
@@ -191,7 +191,7 @@ int main() {
     }
     {
         const fs::path dir = tmp / "env-mixed";
-        pptest::setenv("PP_LOG_LEVEL", "WaRn");  // mixed case must be accepted
+        pptest::setenv("PP_LOG_LEVEL", "WaRn"); // mixed case must be accepted
         pp::log_init(dir, pp::LogLevel::Trace);
         check(pp::log_level() == pp::LogLevel::Warn, "env/case-insensitive",
               "expected Warn, got " + std::to_string(static_cast<int>(pp::log_level())));
@@ -281,7 +281,7 @@ int main() {
               "expect 20 run files, got " + std::to_string(files.size()));
         int kept_synthetic = 0;
         bool current_present = false;
-        for (const fs::path& f : files) {
+        for (const fs::path &f : files) {
             const std::string name = f.filename().string();
             if (std::find(synthetic.begin(), synthetic.end(), name) != synthetic.end()) {
                 ++kept_synthetic;
@@ -290,8 +290,7 @@ int main() {
             }
         }
         check(kept_synthetic == 19, "retention/oldest-dropped",
-              "expect 19 old files + current, kept_synthetic=" +
-                  std::to_string(kept_synthetic));
+              "expect 19 old files + current, kept_synthetic=" + std::to_string(kept_synthetic));
         check(current_present, "retention/current-kept", "current run file was pruned");
         for (int i = 0; i < 6; ++i) {
             check(!fs::exists(dir / synthetic[static_cast<std::size_t>(i)]),
@@ -306,8 +305,8 @@ int main() {
         pp::log_init(dir, pp::LogLevel::Info);
         pp::log_info("stage", "file.cpp", "before-shutdown");
         pp::log_shutdown();
-        pp::log_shutdown();  // second call must be a no-op
-        pp::log_shutdown();  // and a third
+        pp::log_shutdown(); // second call must be a no-op
+        pp::log_shutdown(); // and a third
         const std::string captured = capture_stderr(tmp, "after-shutdown", [] {
             pp::log_info("stage", "file.cpp", "after-shutdown-probe");
         });
@@ -324,7 +323,7 @@ int main() {
     {
         const std::vector<std::pair<std::string, std::string>> before = pp::library_versions();
         bool qt_before = false;
-        for (const auto& kv : before) {
+        for (const auto &kv : before) {
             qt_before = qt_before || kv.first == "qt";
         }
         check(!qt_before, "versions/qt-absent-before-injection",
@@ -333,11 +332,11 @@ int main() {
         pp::set_qt_version_string("6.8.3");
         const std::vector<std::pair<std::string, std::string>> v = pp::library_versions();
         std::printf("library_versions:%s\n", versions_dump(v).c_str());
-        const std::vector<std::string> required = {"app",  "qt",    "oiio",  "jpegli", "libjxl",
-                                                   "libheif", "exiv2", "lcms2", "webp",  "tiff"};
-        for (const std::string& key : required) {
+        const std::vector<std::string> required = {"app",     "qt",    "oiio",  "jpegli", "libjxl",
+                                                   "libheif", "exiv2", "lcms2", "webp",   "tiff"};
+        for (const std::string &key : required) {
             bool found = false;
-            for (const auto& kv : v) {
+            for (const auto &kv : v) {
                 if (kv.first == key) {
                     found = !kv.second.empty();
                 }
@@ -362,9 +361,8 @@ int main() {
     {
         pptest::setenv("PP_LOG_LEVEL", "DeBuG");
         pp::LogLevel lv = pp::LogLevel::Error;
-        const std::string captured = capture_stderr(tmp, "env-or-valid", [&lv] {
-            lv = pp::level_from_env_or(pp::LogLevel::Error);
-        });
+        const std::string captured = capture_stderr(
+            tmp, "env-or-valid", [&lv] { lv = pp::level_from_env_or(pp::LogLevel::Error); });
         check(lv == pp::LogLevel::Debug, "env-or/valid-override",
               "expected Debug, got " + std::to_string(static_cast<int>(lv)));
         check(captured.empty(), "env-or/valid-silent", "unexpected stderr: '" + captured + "'");
@@ -387,9 +385,8 @@ int main() {
         // Invalid value → exactly the frozen stderr line; the fallback level wins.
         pptest::setenv("PP_LOG_LEVEL", "not-a-level");
         pp::LogLevel lv = pp::LogLevel::Warn;
-        const std::string captured = capture_stderr(tmp, "env-or-invalid", [&lv] {
-            lv = pp::level_from_env_or(pp::LogLevel::Warn);
-        });
+        const std::string captured = capture_stderr(
+            tmp, "env-or-invalid", [&lv] { lv = pp::level_from_env_or(pp::LogLevel::Warn); });
         check(lv == pp::LogLevel::Warn, "env-or/invalid-fallback",
               "expected Warn, got " + std::to_string(static_cast<int>(lv)));
         check(captured == "PP_LOG_LEVEL 无效：\"not-a-level\"，已忽略\n", "env-or/invalid-message",
@@ -402,13 +399,11 @@ int main() {
         // 无输出），POSIX 断言保持逐字节不变（Linux CI 持续覆盖 *v=='\0' 分支）。
         pptest::setenv("PP_LOG_LEVEL", "");
         pp::LogLevel lv = pp::LogLevel::Trace;
-        const std::string captured = capture_stderr(tmp, "env-or-empty", [&lv] {
-            lv = pp::level_from_env_or(pp::LogLevel::Trace);
-        });
+        const std::string captured = capture_stderr(
+            tmp, "env-or-empty", [&lv] { lv = pp::level_from_env_or(pp::LogLevel::Trace); });
         check(lv == pp::LogLevel::Trace, "env-or/empty-fallback", "expected the fallback level");
 #ifdef _WIN32
-        check(captured.empty(), "env-or/empty-silent-win",
-              "unexpected stderr: '" + captured + "'");
+        check(captured.empty(), "env-or/empty-silent-win", "unexpected stderr: '" + captured + "'");
 #else
         check(captured == "PP_LOG_LEVEL 无效：\"\"，已忽略\n", "env-or/empty-message",
               "captured stderr: '" + captured + "'");
@@ -418,9 +413,8 @@ int main() {
         // Unset → fallback and no output at all (M1a behaviour, byte-identical).
         pptest::unsetenv("PP_LOG_LEVEL");
         pp::LogLevel lv = pp::LogLevel::Error;
-        const std::string captured = capture_stderr(tmp, "env-or-unset", [&lv] {
-            lv = pp::level_from_env_or(pp::LogLevel::Error);
-        });
+        const std::string captured = capture_stderr(
+            tmp, "env-or-unset", [&lv] { lv = pp::level_from_env_or(pp::LogLevel::Error); });
         check(lv == pp::LogLevel::Error, "env-or/unset-fallback",
               "expected Error, got " + std::to_string(static_cast<int>(lv)));
         check(captured.empty(), "env-or/unset-silent", "unexpected stderr: '" + captured + "'");
@@ -430,7 +424,7 @@ int main() {
     {
         const fs::path dir = tmp / "size-cap";
         const std::string pad(4096, 'x');
-        const int lines = 4100;  // ~17 MiB of lines: the cap must trigger exactly once
+        const int lines = 4100; // ~17 MiB of lines: the cap must trigger exactly once
         pp::log_init(dir, pp::LogLevel::Info);
         for (int i = 0; i < lines; ++i) {
             char idx[32];
@@ -462,8 +456,8 @@ int main() {
         std::string line1, line2;
         std::getline(in, line1);
         std::getline(in, line2);
-        check(line1 == "[note] log truncated (size cap 16MiB, tail kept 8MiB)",
-              "cap/note-exact", "note line: '" + line1 + "'");
+        check(line1 == "[note] log truncated (size cap 16MiB, tail kept 8MiB)", "cap/note-exact",
+              "note line: '" + line1 + "'");
         check(std::regex_search(line2, first_kept), "cap/tail-line-aligned",
               "second line: '" + line2.substr(0, 96) + "'");
     }
@@ -472,7 +466,7 @@ int main() {
         const fs::path dir = tmp / "size-cap-under";
         const std::string pad(4096, 'x');
         pp::log_init(dir, pp::LogLevel::Info);
-        for (int i = 0; i < 300; ++i) {  // ~1.2 MiB
+        for (int i = 0; i < 300; ++i) { // ~1.2 MiB
             pp::log_info("cap", "logger_test.cpp", "under-probe " + pad);
         }
         pp::log_shutdown();

@@ -1,7 +1,8 @@
 // PP-FROZEN(file)
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// PP-THAWED(0.3.0-M4-D20) —— 解冻裁定表 §3.6 行 `core/settings.h`（依据 docs/v0.3.0-design.md §3.6）
+// PP-THAWED(0.3.0-M4-D20) —— 解冻裁定表 §3.6 行 `core/settings.h`（依据 docs/v0.3.0-design.md
+// §3.6）
 //   裁定原文（本行为逐字抄录；行首 "// " 为注释包装）：
 // clang-format off
 // | `core/settings.h` | `AppSettings` 追加：`stagger_ms`、`thread_budget`、`split_by_format`、`output_template`、`class_file`（默认 `data_dir()/classes.json`） |
@@ -32,23 +33,23 @@ namespace pp {
 //   T15 落地时补 include（0.3.0 的 settings.h 首次引入 path 类型默认值）。
 //   联动（§9.3 设置对话框追加）：交错启动 ms（0–2000）、线程预算（0=自动）、分文件夹默认结构。
 struct AppSettings {
-    int workers = 0;                 // 0=物理核数
-    int budget_gb = 0;               // 0=自动 min(RAM×50%, 8GB)
-    double flatten_gray = 1.0;       // alpha 合成底色
+    int workers = 0;           // 0=物理核数
+    int budget_gb = 0;         // 0=自动 min(RAM×50%, 8GB)
+    double flatten_gray = 1.0; // alpha 合成底色
     std::string log_level = "info";
-    std::string map_provider = "osm";    // "osm" | "amap"
+    std::string map_provider = "osm"; // "osm" | "amap"
     std::string amap_key;
     int tile_cache_mb = 64;
     bool rotate_orientation = true;
     // 记住上次会话（共识 §3.9）
     std::string last_format = "jxl";
-    std::string last_preset;             // 预设文件路径（可空）
-    std::string last_out_root;           // 上次输出根目录（可空）
+    std::string last_preset;   // 预设文件路径（可空）
+    std::string last_out_root; // 上次输出根目录（可空）
 };
 
 // 极简 INI：`key=value` 单层，`#` 注释；未知键保留原样写回（向前兼容）
-AppSettings load_settings(const std::filesystem::path& file);
-std::string save_settings(const std::filesystem::path& file, const AppSettings& s);
-std::string settings_to_string(const AppSettings& s);   // 日志快照用
+AppSettings load_settings(const std::filesystem::path &file);
+std::string save_settings(const std::filesystem::path &file, const AppSettings &s);
+std::string settings_to_string(const AppSettings &s); // 日志快照用
 
-}  // namespace pp
+} // namespace pp

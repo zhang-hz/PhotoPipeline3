@@ -1,0 +1,621 @@
+name: pr-fast
+# ═══════════════════════════════════════════════════════════════════════════════
+# PhotoPipeline — PR 快速道（M4-W0-T4；D14 快慢道的第一道）
+#   依据: docs/v0.3.0-design.md §12（§12.1 拓扑 / §12.2 质量门禁 / §12.3 job 预算 /
+#         §12.4 缓存与冷启动纪律 / §12.5 Windows-first 与超时双保险）
+#         + docs/m4-tasks.md §3 W0-T4（本任务行）
+#
+#   拓扑（与设计 §12.1 逐字对应；job 结论即 gate，另有汇总 job gate 供分支保护单勾选）:
+#     fmt ─┬→ build-unit-windows ─┬→ golden-subset ─→ gate
+#          └→ build-unit-linux  ─┘
+#
+#   ── job 预算表（设计 §12.3；硬顶 = 每 job timeout-minutes: 20）─────────────────
+#     | job                | 预算   | 内容                                             |
+#     | fmt                | 1 min  | clang-format --dry-run -Werror 全源 0 diff        |
+#     | build-unit-windows | 10 min | windows-2025：configure/build/ctest --preset release |
+#     | build-unit-linux   | 8 min  | ubuntu-24.04：同上（apt 依赖 + ccache）             |
+#     | golden-subset      | 4 min  | 金样子集 7/16 对（release-dev：photopipeline+pp_verify）|
+#   整轮 wall ≈ fmt 1 + max(win 10, linux 8) + golden 4 ≈ 15 min（设计目标 ≤10 / 硬 ≤20；
+#   超预算处置 = 拆 job / 砍步骤，**禁止放宽时限** —— 任务书 §5-5）。
+#   ★ 实跑 wall-clock 以**首个 PR 的 CI** 为准：GitHub 侧 runner 速度/apt/网络本地无法实测
+#     （M3 的预算表同样以线上实测校准）；本文件只钉住"预算表 + 硬顶"。
+#
+#   ── 与 build-test.yml（M3 主干道）的关系 ─────────────────────────────────────
+#     * 同源: 缓存键方案（vcpkg-/vcpkgwin-/qt-/ccache- 前缀分离 + Qt 单写者）、准备块步骤形态、
+#       Windows 一律经 tools/env.py run -- 注入（vcvars）、Qt bin → GITHUB_PATH（T11b 教训）、
+#       测试超时双保险（CMakePresets execution.timeout=120s + CMakeLists 的 TIMEOUT 120 属性）。
+#     * 本道只跑**门禁子集**: 全量 ctest + 金样子集；不打包、不跑 ui-smoke、不跑 sanitizer
+#       （那些是 main-full / nightly / release 的事，W4-T16 收口）。
+#     * 缓存写入者仍是 build-test.yml / warm-cache.yml：本道**只 restore 不 save**
+#       （① 避免同一 key 上多写者撞 409 ② 不把 PR 侧中间产物写进主干缓存 ③ 省时间）。
+#       跨 workflow 可见性: PR 运行可 restore 基线分支（main）已保存的缓存 —— 正是本道所需。
+#
+#   ── 冷启动纪律（设计 §12.4 / R24）───────────────────────────────────────────
+#     * vcpkg 二进制缓存键**追加 triplet 文件哈希**（triplets/**.cmake = AVX2 flags 定义处）
+#       ⇒ flags/ABI 变更时缓存键自动失效，不会拿旧 ABI 的二进制糊弄构建。
+#     * 缓存缺失 ⇒ **早失败**并指路 warm-cache.yml：日常流水线严禁触发冷构建（~40 min，
+#       直接击穿 20 min 硬顶）。播种 = Actions → warm-cache → Run workflow（workflow_dispatch）。
+#     * Qt 同口径：本道只从缓存取 Qt（单写者），缺失即早失败（**不再 aqt 兜底** —— M4-T2 实测
+#       Qt 6.11.2 在 download.qt.io 缺 qt6_6112/Updates.xml，aqt 3.3.0 无法定位版本；
+#       播种通道的修复属 W4-T16 的 CI 收口面）。
+on:
+  pull_request:
+
+# 同一 PR 的新推送立即取消仍在跑的旧轮次（M3 口径逐字保留）。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# 本工作流不需要写权限：只读 checkout + 缓存 restore（缓存服务走 runtime token，无需显式授权）。
+permissions:
+  contents: read
+
+env:
+  # job 级 env 无 runner 上下文 ⇒ 绝对路径一律 github.workspace（不能写 `~`）。
+  VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+  # vcpkg 二进制缓存目录：**必须**与 restore 的 path 完全一致，且 vcpkg 不创建它
+  # （缺失即 FATAL_ERROR ⇒ 每个 job 都有"缓存目录预建"步）。
+  VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg-binary
+  CCACHE_DIR: ${{ github.workspace }}/.cache/ccache
+  CCACHE_MAXSIZE: 2G
+  CCACHE_BASEDIR: ${{ github.workspace }}
+  CCACHE_SLOPPINESS: pch_defines,time_macros,include_file_mtime
+  # 依赖版本单源 = tools/versions.env（M4-T2 升级后：Qt 6.11.2 / vcpkg tag 2026.07.29）。
+  # 这里写常量是为了让缓存 key 用得上 `env` 上下文；**每个 job 第一步做单源一致性断言**
+  # （drift = 直接红，绝不让本道悄悄跑在过时依赖上）。
+  QT_VERSION: 6.11.2
+  VCPKG_TAG: 2026.07.29
+  # 格式门禁版本（与仓库钉版 tools/bin/clang-format-* 同版本；tools/ci-format.sh 会复核）。
+  PP_FMT_VERSION: 23.1.1
+  # vcpkg 二进制缓存"已播种"判据：还原到的 archive 数 ≥ 此值才算暖（本地全量 ≈41 port）。
+  # 0 = 缓存整体缺失（典型：7 天过期后首跑）→ 早失败，别等 configure 里的冷构建。
+  PP_VCPKG_WARM_MIN: "20"
+  # 金样子集（设计 §12.2 表"金样"行: PR 用子集；本道取 7/16 对，覆盖多格式 + 元数据路径）。
+  #   jpeg-lossy   → JPEG/jpegli（有损基线 + Artist 元数据值断言）
+  #   jxl-lossless → JXL/modular（无损失 + 元数据）
+  #   webp-lossless→ WebP（alpha 保留路径 + 元数据）
+  #   heif-lossy   → HEIF/x265（重量级编码器 + 元数据）
+  #   alpha-jpeg   → RGBA→JPEG 的 flatten 编排（alpha 丢弃路径 + 元数据）
+  #   exif-roundtrip → 完整 EXIF 往返（相机/镜头/时间/GPS 写路径）
+  #   metaonly-jpeg  → 仅元数据模式（--metadata-only 分支）
+  PP_GOLDEN_CASES: jpeg-lossy,jxl-lossless,webp-lossless,heif-lossy,alpha-jpeg,exif-roundtrip,metaonly-jpeg
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────────────
+  # fmt（预算 1 min）: D15 格式门禁 —— clang-format --dry-run -Werror 全源 0 diff
+  #   判据实现 = tools/ci-format.sh（本地与 CI 逐字同一命令：仓库钉版 clang-format 二进制，
+  #   Linux 侧 tools/bin/clang-format-linux-x86_64，版本与本地 Windows 侧 win64 同版本 23.1.1）。
+  # ────────────────────────────────────────────────────────────────────────────
+  fmt:
+    name: fmt（clang-format 全源 0 diff）
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20         # 硬顶（预算 1 min）
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 格式门禁（D15：--dry-run -Werror 全源 0 diff）
+        # 全源 = git 跟踪的 src/** tests/** tools/** 下 C/C++ 源，风格源 = 根 .clang-format。
+        # 有 diff ⇒ 退 1 并逐文件点名（前 40 行）；本地复现/修复: bash tools/ci-format.sh [--write]。
+        run: |
+          set -o pipefail
+          T0=$(date +%s)
+          bash tools/ci-format.sh 2>&1 | tee "$RUNNER_TEMP/fmt.log"
+          echo -e "fmt (clang-format 全源)\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
+
+      - name: 汇总 → $GITHUB_STEP_SUMMARY
+        if: always()
+        run: |
+          {
+            echo "## fmt job 汇总（预算 1 min / 硬顶 20 min）"
+            echo ""
+            echo "| 项目 | 值 |"
+            echo "| --- | --- |"
+            echo "| 判据 | \`clang-format --dry-run -Werror\` 全源 0 diff（D15）|"
+            echo "| 工具 | clang-format ${PP_FMT_VERSION}（tools/bin 钉版，版本不符即红）|"
+            echo "| run | ${GITHUB_RUN_ID} #${GITHUB_RUN_ATTEMPT} |"
+            echo ""
+            echo "| 阶段 | 秒 |"
+            echo "| --- | --- |"
+            awk -F'\t' '{printf "| %s | %s |\n", $1, $2}' "$RUNNER_TEMP/pp-steps.tsv" 2>/dev/null
+            echo ""
+            echo '```'
+            tail -20 "$RUNNER_TEMP/fmt.log" 2>/dev/null
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # build-unit-windows（预算 10 min）: windows-2025
+  #   步骤形态逐条对齐 build-test.yml 的 windows job（准备块 + configure/build/ctest），
+  #   去掉：金样 16 对（→ 独立 golden-subset job）、winzip 打包、release-dev 全量。
+  #   Windows 侧命令行一律 `python tools/env.py run -- <命令>`（vcvars 注入；M3-T7 教训）。
+  # ────────────────────────────────────────────────────────────────────────────
+  build-unit-windows:
+    name: build+unit（windows-2025）
+    runs-on: windows-2025
+    timeout-minutes: 20         # 硬顶（预算 10 min）
+    needs: fmt                  # 拓扑: fmt 门禁在前（设计 §12.1）；格式红 ⇒ 不浪费 10 min runner
+    env:
+      QT_DIR: ${{ github.workspace }}/Qt/6.11.2/msvc2022_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 依赖单源一致性断言（tools/versions.env）
+        # workflow env 里的 QT_VERSION / VCPKG_TAG 必须与单源一致：不一致 = 本道跑在
+        # 过时依赖上（且缓存键会静默偏离）⇒ 直接红。
+        run: |
+          $lines = Get-Content tools/versions.env
+          foreach ($kv in @("QT_VERSION=$env:QT_VERSION", "VCPKG_TAG=$env:VCPKG_TAG")) {
+            if ($lines -notcontains $kv) { Write-Error "单源不一致: tools/versions.env 中找不到行 '$kv'"; exit 1 }
+          }
+          Write-Output "versions.env OK: QT_VERSION=$env:QT_VERSION VCPKG_TAG=$env:VCPKG_TAG"
+
+      - name: Qt ${{ env.QT_VERSION }} 缓存（restore，单写者=build-test/warm-cache）
+        id: qt-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/Qt/6.11.2/msvc2022_64
+          # 精确 key（不含 run_id）：Qt 版本/平台/架构变才失效；前缀含 win64_msvc2022_64
+          # ⇒ 与 Linux 的 qt-<ver>-gcc_64- 严格分离（防跨平台串味）。key 方案与 build-test.yml 同源。
+          key: qt-${{ env.QT_VERSION }}-win64_msvc2022_64-${{ runner.os }}-${{ runner.arch }}
+          restore-keys: qt-${{ env.QT_VERSION }}-win64_msvc2022_64-
+
+      - name: Qt 就绪断言（缺失 ⇒ 早失败，指路 warm-cache）
+        # restore-keys 前缀命中时 cache-hit 为空但文件已恢复 ⇒ 断言以**文件存在**为准。
+        # 本道不做 aqt 兜底（M4-T2：Qt 6.11.2 镜像缺 Updates.xml，aqt 无法定位）：
+        # 缺 Qt = 未播种 ⇒ 立刻红，别把 10 min 预算浪费在一次必然失败的上游下载上。
+        run: |
+          $paths = @(
+            "$env:QT_DIR\bin\Qt6Core.dll",
+            "$env:QT_DIR\plugins\platforms\qwindows.dll",
+            "$env:QT_DIR\plugins\platforms\qoffscreen.dll"
+          )
+          $missing = @($paths | Where-Object { -not (Test-Path $_) })
+          if ($missing.Count -gt 0) {
+            Write-Error "Qt 缺失（未播种）: $($missing -join ', ')"
+            Write-Error "→ 先跑 Actions → warm-cache → Run workflow 播种 Qt $env:QT_VERSION / win64_msvc2022_64（设计 §12.4）"
+            exit 1
+          }
+          Write-Output "Qt OK @ $env:QT_DIR"
+
+      - name: Qt bin 注入 PATH（供任何启动 exe 的步骤使用）
+        # M3-T11b：不依赖 env.py 的注入行为；GITHUB_PATH 对后续所有步骤生效。
+        run: |
+          "$env:QT_DIR\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          Write-Output "added: $env:QT_DIR\bin"
+
+      - name: vcpkg ${{ env.VCPKG_TAG }}（pinned）
+        run: |
+          git clone https://github.com/microsoft/vcpkg "$env:VCPKG_ROOT"
+          # checkout 必须早于 bootstrap —— 否则 bootstrap 从 master 源码编译出非 pinned 的
+          # vcpkg 工具二进制，而 ports 树已是 pinned（工具/ports 版本不一致，R4 教训）。
+          git -C "$env:VCPKG_ROOT" checkout "$env:VCPKG_TAG"
+          & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
+
+      - name: 缓存目录预建
+        # vcpkg 不创建二进制缓存目录：缺失即 FATAL_ERROR。必须早于 restore（cache miss 不会建目录）。
+        run: New-Item -ItemType Directory -Force -Path "$env:VCPKG_DEFAULT_BINARY_CACHE" | Out-Null
+
+      - name: vcpkg binary cache（restore）
+        id: vcpkg-cache
+        # ★ key 前缀必须是 vcpkgwin-（与 Linux 的 vcpkg- 严格分离）+ 滚动 key 语义逐字沿用 M3：
+        #   精确 key 含 hash/job/run_id/run_attempt ⇒ ① 每轮都能保存新条目 ② 各 job 不争抢同一 key
+        #   ③ 宽前缀 vcpkgwin- 让"改了 manifest/overlay/triplet ⇒ hash 变"时仍能复用旧缓存
+        #   （二进制缓存按 ABI 内容寻址，ABI 已变的条目自然不命中）。
+        #   0.3.0 追加：`${{ hashFiles('triplets/**') }}` —— AVX2 flags 变更 ⇒ 缓存键自动失效（§12.4）。
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.cache/vcpkg-binary
+          key: vcpkgwin-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            vcpkgwin-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-
+            vcpkgwin-
+
+      - name: vcpkg 缓存暖度断言（miss ⇒ 早失败，指路 warm-cache）
+        # 设计 §12.4：日常流水线严禁触发冷构建（≈40 min，击穿 20 min 硬顶）。
+        # 判据 = 还原到的 archive 数（冷 = 0）。注意：本断言只能识别"缓存整体缺失"；
+        # 若缓存存在但都是**旧 ABI**（刚改 triplet/flags 且未重新播种），冷构建会在 configure
+        # 暴露（build-test.yml 口径："configure 含 vcpkg install = 缓存是否命中的直接体现"）。
+        run: |
+          $n = @(Get-ChildItem -Recurse -File "$env:VCPKG_DEFAULT_BINARY_CACHE" -Filter *.zip -ErrorAction SilentlyContinue).Count
+          Write-Output "vcpkg binary cache archives = $n（判据 ≥ $env:PP_VCPKG_WARM_MIN）"
+          if ($n -lt [int]$env:PP_VCPKG_WARM_MIN) {
+            Write-Error "vcpkg 二进制缓存未播种（archive=$n）—— 继续跑就是冷构建（≈40 min），直接击穿硬顶。"
+            Write-Error "→ 先跑 Actions → warm-cache → Run workflow（workflow_dispatch）播种；"
+            Write-Error "  若刚变更 triplet/AVX2 flags，旧 ABI 条目不会命中，必须重新播种（设计 §12.4 / R24）。"
+            exit 1
+          }
+
+      - name: 语料存在性断言（不重新生成）
+        # 语义与 build-test.yml 逐字等价：语料已入库，每轮重新生成纯属浪费（且依赖 vcpkg 产物）。
+        run: |
+          $n = @(git ls-files tests/golden/base).Count
+          $m = @(git ls-files tests/golden/smoke | Where-Object { $_ -like '*.json' }).Count
+          if ($n -lt 16) { Write-Error "语料缺失: tests/golden/base = $n 个（期望 ≥16）"; exit 1 }
+          if ($m -lt 16) { Write-Error "金样断言缺失: tests/golden/smoke/*.json = $m 个（期望 ≥16）"; exit 1 }
+          Write-Output "语料 OK: base=$n 文件、smoke 断言=$m 个（均已入库，未重新生成）"
+
+      - name: configure release（含 vcpkg install —— 缓存是否命中的直接体现）
+        run: |
+          $T0 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+          python tools/env.py run -- cmake --preset release
+          $rc = $LASTEXITCODE
+          Add-Content "$env:RUNNER_TEMP\pp-steps.tsv" "configure release`t$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $T0)"
+          if ($rc -ne 0) { exit $rc }
+
+      - name: build release
+        run: |
+          $T0 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+          python tools/env.py run -- cmake --build --preset release
+          $rc = $LASTEXITCODE
+          Add-Content "$env:RUNNER_TEMP\pp-steps.tsv" "build release`t$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $T0)"
+          if ($rc -ne 0) { exit $rc }
+
+      - name: ctest release（超时双保险：preset 120s + CMake TIMEOUT 120）
+        run: |
+          $T0 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+          python tools/env.py run -- ctest --preset release --output-on-failure 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\ctest-release.log"
+          $rc = $LASTEXITCODE
+          Add-Content "$env:RUNNER_TEMP\pp-steps.tsv" "ctest release`t$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $T0)"
+          if ($rc -ne 0) { exit $rc }
+
+      - name: 汇总 → $GITHUB_STEP_SUMMARY
+        if: always()
+        env:
+          QT_HIT: ${{ steps.qt-cache.outputs.cache-hit }}
+          VCPKG_HIT: ${{ steps.vcpkg-cache.outputs.cache-hit }}
+        run: |
+          $lines = @()
+          $lines += "## build-unit-windows job 汇总（预算 10 min / 硬顶 20 min）"
+          $lines += ""
+          $lines += "| 项目 | 值 |"
+          $lines += "| --- | --- |"
+          $lines += "| Qt 缓存精确命中 | $($env:QT_HIT) |"
+          $lines += "| vcpkg 二进制缓存精确命中 | $($env:VCPKG_HIT)（滚动 key 恒为空属正常，暖度判据见 archive 数）|"
+          $lines += "| run | $($env:GITHUB_RUN_ID) #$($env:GITHUB_RUN_ATTEMPT) |"
+          $lines += ""
+          $lines += "| 阶段 | 秒 |"
+          $lines += "| --- | --- |"
+          if (Test-Path "$env:RUNNER_TEMP\pp-steps.tsv") {
+            Import-Csv -Path "$env:RUNNER_TEMP\pp-steps.tsv" -Delimiter "`t" -Header step,sec |
+              ForEach-Object { $lines += "| $($_.step) | $($_.sec) |" }
+          }
+          $lines += ""
+          $ctestLine = (Get-Content "$env:RUNNER_TEMP\ctest-release.log" -ErrorAction SilentlyContinue |
+                        Where-Object { $_ -match '^[0-9]+% tests passed' } | Select-Object -Last 1)
+          $lines += "**ctest 汇总**: $ctestLine"
+          $lines | Add-Content "$env:GITHUB_STEP_SUMMARY"
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # build-unit-linux（预算 8 min）: ubuntu-24.04
+  #   步骤形态逐条对齐 build-test.yml 的 linux job（准备块 + configure/build/ctest），
+  #   去掉：金样 16 对 + release-dev 树 + soname 覆盖自检（前者→ golden-subset job；
+  #   后两者属 main-full 的 linux 全量 job —— 本道不重复烧时间）。
+  # ────────────────────────────────────────────────────────────────────────────
+  build-unit-linux:
+    name: build+unit（ubuntu-24.04）
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20         # 硬顶（预算 8 min）
+    needs: fmt                  # 拓扑: fmt 门禁在前（设计 §12.1）
+    env:
+      QT_DIR: ${{ github.workspace }}/Qt/6.11.2/gcc_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 依赖单源一致性断言（tools/versions.env）
+        run: |
+          for kv in "QT_VERSION=$QT_VERSION" "VCPKG_TAG=$VCPKG_TAG"; do
+            grep -qxF "$kv" tools/versions.env || { echo "::error::单源不一致: tools/versions.env 中找不到 '$kv'"; exit 1; }
+          done
+          echo "versions.env OK: QT_VERSION=$QT_VERSION VCPKG_TAG=$VCPKG_TAG"
+
+      - name: apt 系统依赖（tools/ci-system-deps.txt）
+        run: bash tools/ci-install-deps.sh
+
+      - name: Qt ${{ env.QT_VERSION }} 缓存（restore，单写者=build-test/warm-cache）
+        id: qt-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/Qt/6.11.2/gcc_64
+          key: qt-${{ env.QT_VERSION }}-gcc_64-${{ runner.os }}-${{ runner.arch }}
+          restore-keys: qt-${{ env.QT_VERSION }}-gcc_64-
+
+      - name: Qt 就绪断言（缺失 ⇒ 早失败，指路 warm-cache）
+        # 本道不做 aqt 兜底（理由同 windows job：M4-T2 实测 6.11.2 无法用 aqt 定位）。
+        run: |
+          test -f "$QT_DIR/lib/libQt6Core.so.6" || {
+            echo "::error::Qt 缺失（未播种）: $QT_DIR"
+            echo "::error::→ 先跑 Actions → warm-cache → Run workflow 播种 Qt $QT_VERSION / linux_gcc_64（设计 §12.4）"
+            exit 1
+          }
+          echo "Qt OK @ $QT_DIR"
+
+      - name: vcpkg ${{ env.VCPKG_TAG }}（pinned）
+        run: |
+          git clone https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
+          # checkout 必须早于 bootstrap（理由见 build-test.yml：工具/ports 版本必须一致）。
+          git -C "$VCPKG_ROOT" checkout "$VCPKG_TAG"
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+
+      - name: 缓存目录预建
+        run: mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE" "$CCACHE_DIR"
+
+      - name: vcpkg binary cache（restore）
+        id: vcpkg-cache
+        # key 语义同 Windows 侧（前缀 vcpkg- 与 vcpkgwin- 严格分离）；0.3.0 追加 triplet 文件哈希。
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.cache/vcpkg-binary
+          key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-
+            vcpkg-
+
+      - name: vcpkg 缓存暖度断言（miss ⇒ 早失败，指路 warm-cache）
+        run: |
+          n=$(find "$VCPKG_DEFAULT_BINARY_CACHE" -type f -name '*.zip' 2>/dev/null | wc -l)
+          echo "vcpkg binary cache archives = $n（判据 ≥ $PP_VCPKG_WARM_MIN）"
+          if [ "$n" -lt "$PP_VCPKG_WARM_MIN" ]; then
+            echo "::error::vcpkg 二进制缓存未播种（archive=$n）—— 继续跑就是冷构建（≈40 min），直接击穿硬顶。"
+            echo "::error::→ 先跑 Actions → warm-cache → Run workflow（workflow_dispatch）播种；"
+            echo "::error::  若刚变更 triplet/AVX2 flags，旧 ABI 条目不会命中，必须重新播种（设计 §12.4 / R24）。"
+            exit 1
+          fi
+
+      - name: ccache（restore）
+        id: ccache-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.cache/ccache
+          # key 语义同 build-test.yml（滚动 key + 宽前缀）；0.3.0 追加 triplet 哈希
+          # （triplets/** 与 cmake/** 一起进 key：flags 定义变更 ⇒ 编译产物缓存口径变更）。
+          # **不含 github.job**：ccache 内容与 job 基本无关，且本道只 restore（写者是 build-test.yml）。
+          key: ccache-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/**', 'CMakePresets.json') }}-${{ hashFiles('cmake/**', 'triplets/**') }}-${{ github.run_id }}
+          restore-keys: ccache-${{ runner.os }}-
+
+      - name: 语料存在性断言（不重新生成）
+        run: |
+          n=$(git ls-files tests/golden/base | wc -l)
+          m=$(git ls-files tests/golden/smoke | grep -c '\.json$')
+          [ "$n" -ge 16 ] || { echo "::error::语料缺失: tests/golden/base = $n 个（期望 ≥16）"; exit 1; }
+          [ "$m" -ge 16 ] || { echo "::error::金样断言缺失: tests/golden/smoke/*.json = $m 个（期望 ≥16）"; exit 1; }
+          echo "语料 OK: base=$n 文件、smoke 断言=$m 个（均已入库，未重新生成）"
+
+      - name: configure release（含 vcpkg install —— 缓存是否命中的直接体现）
+        run: |
+          T0=$(date +%s)
+          cmake --preset release
+          echo -e "configure release\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
+
+      - name: build release
+        run: |
+          T0=$(date +%s)
+          cmake --build --preset release
+          echo -e "build release\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
+
+      - name: ctest release（超时双保险：preset 120s + CMake TIMEOUT 120）
+        run: |
+          set -o pipefail
+          T0=$(date +%s)
+          ctest --preset release 2>&1 | tee "$RUNNER_TEMP/ctest-release.log"
+          echo -e "ctest release\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
+
+      - name: ccache 统计
+        if: always()
+        run: |
+          set +e
+          ccache -s > "$RUNNER_TEMP/ccache.txt" 2>&1
+          head -20 "$RUNNER_TEMP/ccache.txt"
+
+      - name: 汇总 → $GITHUB_STEP_SUMMARY
+        if: always()
+        env:
+          QT_HIT: ${{ steps.qt-cache.outputs.cache-hit }}
+          VCPKG_HIT: ${{ steps.vcpkg-cache.outputs.cache-hit }}
+          CCACHE_HIT: ${{ steps.ccache-cache.outputs.cache-hit }}
+        run: |
+          set +e
+          {
+            echo "## build-unit-linux job 汇总（预算 8 min / 硬顶 20 min）"
+            echo ""
+            echo "| 项目 | 值 |"
+            echo "| --- | --- |"
+            echo "| Qt 缓存精确命中 | ${QT_HIT:-false} |"
+            echo "| vcpkg 二进制缓存精确命中 | ${VCPKG_HIT:-false}（滚动 key 恒为空属正常，暖度判据见 archive 数）|"
+            echo "| ccache 缓存精确命中 | ${CCACHE_HIT:-false} |"
+            echo "| run | ${GITHUB_RUN_ID} #${GITHUB_RUN_ATTEMPT} |"
+            echo ""
+            echo "| 阶段 | 秒 |"
+            echo "| --- | --- |"
+            awk -F'\t' '{printf "| %s | %s |\n", $1, $2}' "$RUNNER_TEMP/pp-steps.tsv" 2>/dev/null
+            echo ""
+            echo "**ctest 汇总**: $(grep -E '^[0-9]+% tests passed' "$RUNNER_TEMP/ctest-release.log" 2>/dev/null | tail -1)"
+            echo ""
+            echo "<details><summary>ccache -s</summary>"
+            echo ""
+            echo '```'
+            head -20 "$RUNNER_TEMP/ccache.txt" 2>/dev/null
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # golden-subset（预算 4 min）: 金样子集（设计 §12.2 表"金样"行 → PR 用子集）
+  #   平台选择: ubuntu-24.04（理由：金样需要 release-dev 的 `--dev` harness，Windows 侧无 ccache
+  #   ⇒ 单这一棵树的构建就吃掉整个 4 min 预算；Linux 侧 ccache 暖命中后两棵树的子集构建 ≈1 min。
+  #   Windows 全量金样仍在 main-full（build-test.yml 的 windows job 跑 16 对），本道不重复。）
+  #   用例筛选开关 = tests/golden/smoke.py --cases（M4-T4 新增；默认不带 = 全量 16 对，零变化）。
+  # ────────────────────────────────────────────────────────────────────────────
+  golden-subset:
+    name: golden-subset（金样 7/16 对）
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20         # 硬顶（预算 4 min）
+    needs: [build-unit-windows, build-unit-linux]   # 与设计 §12.1 的 DAG 一致（两侧构建绿才跑金样）
+    env:
+      QT_DIR: ${{ github.workspace }}/Qt/6.11.2/gcc_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: apt 系统依赖（tools/ci-system-deps.txt）
+        run: bash tools/ci-install-deps.sh
+
+      - name: Qt ${{ env.QT_VERSION }} 缓存（restore，单写者=build-test/warm-cache）
+        id: qt-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/Qt/6.11.2/gcc_64
+          key: qt-${{ env.QT_VERSION }}-gcc_64-${{ runner.os }}-${{ runner.arch }}
+          restore-keys: qt-${{ env.QT_VERSION }}-gcc_64-
+
+      - name: Qt 就绪断言（缺失 ⇒ 早失败，指路 warm-cache）
+        run: |
+          test -f "$QT_DIR/lib/libQt6Core.so.6" || {
+            echo "::error::Qt 缺失（未播种）: $QT_DIR"
+            echo "::error::→ 先跑 Actions → warm-cache → Run workflow 播种 Qt $QT_VERSION / linux_gcc_64（设计 §12.4）"
+            exit 1
+          }
+          echo "Qt OK @ $QT_DIR"
+          # offscreen 平台插件是金样用的 photopipeline --dev 起 GUI 栈的前提（同 ui-smoke 口径）。
+          ls -1 "$QT_DIR/plugins/platforms/libqoffscreen.so"
+
+      - name: vcpkg ${{ env.VCPKG_TAG }}（pinned）
+        run: |
+          git clone https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
+          git -C "$VCPKG_ROOT" checkout "$VCPKG_TAG"
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+
+      - name: 缓存目录预建
+        run: mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE" "$CCACHE_DIR"
+
+      - name: vcpkg binary cache（restore）
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.cache/vcpkg-binary
+          key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-
+            vcpkg-
+
+      - name: vcpkg 缓存暖度断言（miss ⇒ 早失败，指路 warm-cache）
+        run: |
+          n=$(find "$VCPKG_DEFAULT_BINARY_CACHE" -type f -name '*.zip' 2>/dev/null | wc -l)
+          echo "vcpkg binary cache archives = $n（判据 ≥ $PP_VCPKG_WARM_MIN）"
+          if [ "$n" -lt "$PP_VCPKG_WARM_MIN" ]; then
+            echo "::error::vcpkg 二进制缓存未播种（archive=$n）—— 继续跑就是冷构建（≈40 min），直接击穿硬顶。"
+            echo "::error::→ 先跑 Actions → warm-cache → Run workflow（workflow_dispatch）播种（设计 §12.4）。"
+            exit 1
+          fi
+
+      - name: ccache（restore）
+        id: ccache-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.cache/ccache
+          key: ccache-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/**', 'CMakePresets.json') }}-${{ hashFiles('cmake/**', 'triplets/**') }}-${{ github.run_id }}
+          restore-keys: ccache-${{ runner.os }}-
+
+      - name: configure release-dev（金样需要 PP_BUILD_DEV 的 --dev harness）
+        run: |
+          T0=$(date +%s)
+          cmake --preset release-dev
+          echo -e "configure release-dev\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
+
+      - name: build release-dev 目标子集（photopipeline + pp_verify）
+        # 金样 driver 只需要这两个二进制（smoke.py 用 PP_BIN/PP_VERIFY）；全量 release-dev
+        # 与 ui-smoke 属 main-full，本道不构建。
+        run: |
+          T0=$(date +%s)
+          cmake --build build/release-dev --target photopipeline pp_verify
+          echo -e "build release-dev 子集(photopipeline,pp_verify)\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
+
+      - name: 金样子集 ${{ env.PP_GOLDEN_CASES }}（python3 tests/golden/smoke.py --cases）
+        run: |
+          set -o pipefail
+          T0=$(date +%s)
+          python3 tests/golden/smoke.py build/release-dev --cases "$PP_GOLDEN_CASES" 2>&1 | tee "$RUNNER_TEMP/golden.log"
+          echo -e "golden subset\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
+
+      - name: 子集完整性断言（冻结行必须逐字来自 smoke.py）
+        # 断言口径（防"子集悄悄变空 → 假绿"）：冻结行 SMOKE total=N 的 N 必须等于请求的对数，
+        # 且 fail=0、退出码 0（退出码=失败例数，见 smoke.py 头注释）。
+        run: |
+          set +e
+          line=$(grep -E '^SMOKE total=' "$RUNNER_TEMP/golden.log" | tail -1)
+          want=$(printf '%s' "$PP_GOLDEN_CASES" | tr ',' '\n' | grep -c .)
+          echo "冻结行: $line（期望 total=$want pass=$want fail=0）"
+          echo "$line" | grep -qE "^SMOKE total=$want pass=$want fail=0 " || {
+            echo "::error::金样子集口径不符（期望 total=$want pass=$want fail=0）: $line"
+            exit 1
+          }
+
+      - name: 汇总 → $GITHUB_STEP_SUMMARY
+        if: always()
+        env:
+          QT_HIT: ${{ steps.qt-cache.outputs.cache-hit }}
+          VCPKG_HIT: ${{ steps.vcpkg-cache.outputs.cache-hit }}
+          CCACHE_HIT: ${{ steps.ccache-cache.outputs.cache-hit }}
+        run: |
+          set +e
+          {
+            echo "## golden-subset job 汇总（预算 4 min / 硬顶 20 min）"
+            echo ""
+            echo "| 项目 | 值 |"
+            echo "| --- | --- |"
+            echo "| 子集 | \`${PP_GOLDEN_CASES}\` |"
+            echo "| Qt 缓存精确命中 | ${QT_HIT:-false} |"
+            echo "| vcpkg 二进制缓存精确命中 | ${VCPKG_HIT:-false} |"
+            echo "| ccache 缓存精确命中 | ${CCACHE_HIT:-false} |"
+            echo "| run | ${GITHUB_RUN_ID} #${GITHUB_RUN_ATTEMPT} |"
+            echo ""
+            echo "| 阶段 | 秒 |"
+            echo "| --- | --- |"
+            awk -F'\t' '{printf "| %s | %s |\n", $1, $2}' "$RUNNER_TEMP/pp-steps.tsv" 2>/dev/null
+            echo ""
+            echo "**金样汇总**: $(grep -E '^SMOKE total=' "$RUNNER_TEMP/golden.log" 2>/dev/null | tail -1)"
+            echo ""
+            echo "<details><summary>金样明细</summary>"
+            echo ""
+            echo '```'
+            cat "$RUNNER_TEMP/golden.log" 2>/dev/null
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # gate: 汇总 job（设计 §12.1 拓扑末端的 gate）
+  #   目的 = 分支保护只需勾选**一个**必过检查；本 job 不做任何构建，只汇总四道 job 的结论。
+  #   注意: 上游 job 失败时 needs 使本 job 被跳过（skip ≠ fail）—— 分支保护请把
+  #   fmt / build-unit-windows / build-unit-linux / golden-subset 一并设为 required（或直接
+  #   勾选本 job + 上游，GitHub 对 skipped 的 required check 计为未通过）。
+  # ────────────────────────────────────────────────────────────────────────────
+  gate:
+    name: gate（快道总闸）
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20         # 硬顶（本 job ≈10 s，不占关键路径）
+    needs: [fmt, build-unit-windows, build-unit-linux, golden-subset]
+    if: always()
+    steps:
+      - name: 汇总四道 job 结论
+        env:
+          R_FMT: ${{ needs.fmt.result }}
+          R_WIN: ${{ needs.build-unit-windows.result }}
+          R_LINUX: ${{ needs.build-unit-linux.result }}
+          R_GOLDEN: ${{ needs.golden-subset.result }}
+        run: |
+          set +e
+          {
+            echo "## pr-fast gate（预算合计 fmt 1 + win 10 + linux 8 + golden 4 min；整轮硬 ≤20 min）"
+            echo ""
+            echo "| job | 结论 | 预算 |"
+            echo "| --- | --- | --- |"
+            echo "| fmt | ${R_FMT} | 1 min |"
+            echo "| build-unit-windows | ${R_WIN} | 10 min |"
+            echo "| build-unit-linux | ${R_LINUX} | 8 min |"
+            echo "| golden-subset | ${R_GOLDEN} | 4 min |"
+            echo ""
+            echo "run: ${GITHUB_RUN_ID} #${GITHUB_RUN_ATTEMPT} ｜ 实跑 wall-clock 见各 job 的阶段耗时分表（首个 PR 起校准）"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for r in "$R_FMT" "$R_WIN" "$R_LINUX" "$R_GOLDEN"; do
+            [ "$r" = "success" ] || { echo "::error::快道未全绿（$r）—— 见各 job 汇总"; exit 1; }
+          done
+          echo "pr-fast gate OK"

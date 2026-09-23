@@ -17,7 +17,7 @@ namespace {
 
 int g_failed = 0;
 
-void check(bool ok, const std::string& what) {
+void check(bool ok, const std::string &what) {
     if (!ok) {
         ++g_failed;
         std::printf("ASSERT FAILED: %s\n", what.c_str());
@@ -25,7 +25,7 @@ void check(bool ok, const std::string& what) {
 }
 
 template <typename T>
-bool holds_value(const pp::ParamSet& ps, const std::string& key, const T& expect) {
+bool holds_value(const pp::ParamSet &ps, const std::string &key, const T &expect) {
     const auto it = ps.find(key);
     if (it == ps.end() || !std::holds_alternative<T>(it->second)) {
         return false;
@@ -33,25 +33,28 @@ bool holds_value(const pp::ParamSet& ps, const std::string& key, const T& expect
     return std::get<T>(it->second) == expect;
 }
 
-}  // namespace
+} // namespace
 
 int main() {
     // 1. static_formats(): exactly the 8 frozen formats.
-    const std::vector<pp::FormatDef>& fmts = pp::static_formats();
-    check(fmts.size() == 8, "static_formats().size() == 8 (got " + std::to_string(fmts.size()) + ")");
+    const std::vector<pp::FormatDef> &fmts = pp::static_formats();
+    check(fmts.size() == 8,
+          "static_formats().size() == 8 (got " + std::to_string(fmts.size()) + ")");
     std::set<std::string> ids;
-    for (const pp::FormatDef& f : fmts) {
+    for (const pp::FormatDef &f : fmts) {
         ids.insert(f.id);
     }
-    const std::set<std::string> want = {"jpeg", "jxl", "png", "tiff", "webp", "bmp", "heif", "avif"};
+    const std::set<std::string> want = {"jpeg", "jxl", "png",  "tiff",
+                                        "webp", "bmp", "heif", "avif"};
     check(ids == want, "format id set == {jpeg,jxl,png,tiff,webp,bmp,heif,avif}");
 
     // 2. every format has bitdepths and a known meta_path.
-    for (const pp::FormatDef& f : fmts) {
+    for (const pp::FormatDef &f : fmts) {
         check(!f.bitdepths.empty(), f.id + ".bitdepths non-empty");
         const bool meta_ok = f.meta_path == "exiv2" || f.meta_path == "libheif" ||
                              f.meta_path == "jxl-box" || f.meta_path == "none";
-        check(meta_ok, f.id + ".meta_path in {exiv2,libheif,jxl-box,none} (got " + f.meta_path + ")");
+        check(meta_ok,
+              f.id + ".meta_path in {exiv2,libheif,jxl-box,none} (got " + f.meta_path + ")");
     }
 
     // 3. ParamSet / ParamValue round-trip.

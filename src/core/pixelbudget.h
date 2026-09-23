@@ -24,16 +24,16 @@ public:
 
     // 阻塞直到可用；期间每秒检查一次 cancelled（true → 返回 false，不扣额）
     // bytes > capacity → 直接返回 false（调用方报错，不得死等）
-    bool acquire(uint64_t bytes, const std::function<bool()>& cancelled);
+    bool acquire(uint64_t bytes, const std::function<bool()> &cancelled);
     void release(uint64_t bytes);
 
     uint64_t capacity() const;
-    uint64_t used() const;      // 已占用
-    uint64_t peak() const;      // 历史峰值（日志用）
+    uint64_t used() const; // 已占用
+    uint64_t peak() const; // 历史峰值（日志用）
 
     // float32 帧字节数 = w * h * channels * 4；旋转/合成峰值为 2×（G2）
     static uint64_t frame_bytes(int w, int h, int channels);
-    static uint64_t default_capacity_bytes();  // min(可用RAM×50%, 8GB)
+    static uint64_t default_capacity_bytes(); // min(可用RAM×50%, 8GB)
 
 private:
     mutable std::mutex mu_;
@@ -41,4 +41,4 @@ private:
     uint64_t capacity_, used_ = 0, peak_ = 0;
 };
 
-}  // namespace pp
+} // namespace pp

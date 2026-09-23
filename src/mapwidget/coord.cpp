@@ -18,8 +18,8 @@ namespace {
 constexpr double kPi = 3.14159265358979323846;
 
 // Krasovsky 1940 ellipsoid (the datum GCJ-02 is defined on).
-constexpr double kAxis = 6378245.0;                        // semi-major axis [m]
-constexpr double kEccentricity2 = 0.00669342162296594323;  // first eccentricity squared
+constexpr double kAxis = 6378245.0;                       // semi-major axis [m]
+constexpr double kEccentricity2 = 0.00669342162296594323; // first eccentricity squared
 
 constexpr int kMaxInverseIterations = 10;
 constexpr double kInverseToleranceDeg = 1e-13;
@@ -30,7 +30,8 @@ bool out_of_china(double lat, double lon) {
 }
 
 double transform_lat(double x, double y) {
-    double ret = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * std::sqrt(std::fabs(x));
+    double ret =
+        -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * std::sqrt(std::fabs(x));
     ret += (20.0 * std::sin(6.0 * x * kPi) + 20.0 * std::sin(2.0 * x * kPi)) * 2.0 / 3.0;
     ret += (20.0 * std::sin(y * kPi) + 40.0 * std::sin(y / 3.0 * kPi)) * 2.0 / 3.0;
     ret += (160.0 * std::sin(y / 12.0 * kPi) + 320.0 * std::sin(y * kPi / 30.0)) * 2.0 / 3.0;
@@ -45,7 +46,7 @@ double transform_lon(double x, double y) {
     return ret;
 }
 
-}  // namespace
+} // namespace
 
 std::pair<double, double> wgs84_to_gcj02(double lat, double lon) {
     if (out_of_china(lat, lon)) {
@@ -61,7 +62,8 @@ std::pair<double, double> wgs84_to_gcj02(double lat, double lon) {
 
     // Offset in degrees: transform() yields metres, the divisors are the meridian /
     // prime-vertical radii of curvature at this latitude times pi (metres per 180 deg).
-    const double lat_deg = (d_lat * 180.0) / ((kAxis * (1.0 - kEccentricity2)) / (magic * sqrt_magic) * kPi);
+    const double lat_deg =
+        (d_lat * 180.0) / ((kAxis * (1.0 - kEccentricity2)) / (magic * sqrt_magic) * kPi);
     const double lon_deg = (d_lon * 180.0) / (kAxis / sqrt_magic * std::cos(rad_lat) * kPi);
     return {lat + lat_deg, lon + lon_deg};
 }
@@ -88,4 +90,4 @@ std::pair<double, double> gcj02_to_wgs84(double lat, double lon) {
     return {w_lat, w_lon};
 }
 
-}  // namespace pp::map
+} // namespace pp::map

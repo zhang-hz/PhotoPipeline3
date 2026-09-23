@@ -17,7 +17,7 @@ namespace {
 
 int g_failed = 0;
 
-void check(bool ok, const std::string& case_name, const std::string& detail) {
+void check(bool ok, const std::string &case_name, const std::string &detail) {
     if (!ok) {
         ++g_failed;
         std::printf("FAIL %s: %s\n", case_name.c_str(), detail.c_str());
@@ -28,7 +28,7 @@ std::string num(unsigned long long v) { return std::to_string(v); }
 
 constexpr unsigned long long kGiB = 1024ull * 1024 * 1024;
 
-}  // namespace
+} // namespace
 
 int main() {
     // ---- capacity / frame_bytes / default_capacity ----
@@ -92,7 +92,7 @@ int main() {
 
         std::mutex mu;
         std::condition_variable cv;
-        bool in_acquire = false;   // guarded by mu
+        bool in_acquire = false; // guarded by mu
         std::atomic<bool> abort{false};
         std::atomic<bool> acquired{false};
 
@@ -103,7 +103,7 @@ int main() {
                     in_acquire = true;
                 }
                 cv.notify_one();
-                return abort.load();   // always false unless the test timed out
+                return abort.load(); // always false unless the test timed out
             });
             if (got) {
                 acquired.store(true);
@@ -116,9 +116,9 @@ int main() {
             std::unique_lock<std::mutex> lk(mu);
             entered = cv.wait_for(lk, std::chrono::seconds(10), [&] { return in_acquire; });
         }
-        if (!entered) abort.store(true);   // release the worker so t.join() cannot hang
-        check(entered, "block/handshake",
-              "acquire(40) never entered the wait path of a full pool");
+        if (!entered)
+            abort.store(true); // release the worker so t.join() cannot hang
+        check(entered, "block/handshake", "acquire(40) never entered the wait path of a full pool");
         check(!acquired.load(), "block/still-waiting",
               "acquire(40) must not succeed while the pool is full");
         b.release(60);
@@ -153,7 +153,7 @@ int main() {
                 done.fetch_add(1);
             });
         }
-        for (std::thread& t : threads) {
+        for (std::thread &t : threads) {
             t.join();
         }
         check(!over.load(), "concurrent/no-overcommit", "used() exceeded capacity");
@@ -172,7 +172,7 @@ int main() {
         std::atomic<int> result{-1};
         std::mutex mu;
         std::condition_variable cv;
-        bool in_acquire = false;   // guarded by mu
+        bool in_acquire = false; // guarded by mu
         std::thread t([&b, &cancel, &result, &mu, &cv, &in_acquire] {
             const bool got = b.acquire(50, [&cancel, &mu, &cv, &in_acquire] {
                 {

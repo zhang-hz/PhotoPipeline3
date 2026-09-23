@@ -25,8 +25,8 @@
 #include "core/filetime.h"
 #include "core/logger.h"
 #include "core/metadata.h"
-#include "core/pipeline.h"  // frozen format_supports_metadata_only() (weak fallback in metadata.cpp)
-#include "env_compat.h"  // M3 v1.5: POSIX env API 薄垫层
+#include "core/pipeline.h" // frozen format_supports_metadata_only() (weak fallback in metadata.cpp)
+#include "env_compat.h"    // M3 v1.5: POSIX env API 薄垫层
 
 namespace fs = std::filesystem;
 
@@ -34,24 +34,25 @@ namespace pp {
 // Internal helpers of src/core/metadata.cpp. Deliberately outside the frozen header: the mirror
 // fallback keeps R1 coverage in a build where Exiv2 cannot open PNG at all, and the capability
 // probe is what T8's format_supports_metadata_only() should delegate to.
-std::size_t detail_mirror_key_exif_to_xmp(const Exiv2::ExifData& exif, Exiv2::XmpData& xmp);
+std::size_t detail_mirror_key_exif_to_xmp(const Exiv2::ExifData &exif, Exiv2::XmpData &xmp);
 bool detail_metadata_only_supported(std::string_view format_id);
-}  // namespace pp
+} // namespace pp
 
 namespace {
 
 int g_failed = 0;
 
-void fail(const std::string& c, const std::string& d) {
+void fail(const std::string &c, const std::string &d) {
     std::printf("FAIL %s: %s\n", c.c_str(), d.c_str());
     ++g_failed;
 }
 
-void check(bool ok, const std::string& c, const std::string& d) {
-    if (!ok) fail(c, d);
+void check(bool ok, const std::string &c, const std::string &d) {
+    if (!ok)
+        fail(c, d);
 }
 
-std::string show(const std::string& s) { return "'" + s + "'"; }
+std::string show(const std::string &s) { return "'" + s + "'"; }
 std::string num(double v) {
     char buf[32];
     std::snprintf(buf, sizeof(buf), "%.10g", v);
@@ -64,8 +65,10 @@ fs::path repo_root() {
     std::error_code ec;
     fs::path p = fs::current_path(ec);
     for (int i = 0; i < 8 && !p.empty(); ++i) {
-        if (fs::is_directory(p / "tests" / "golden", ec)) return p;
-        if (!p.has_parent_path() || p.parent_path() == p) break;
+        if (fs::is_directory(p / "tests" / "golden", ec))
+            return p;
+        if (!p.has_parent_path() || p.parent_path() == p)
+            break;
         p = p.parent_path();
     }
     return {};
@@ -73,7 +76,7 @@ fs::path repo_root() {
 
 fs::path corpus() { return repo_root() / "tests" / "golden"; }
 
-fs::path tmp_dir(const std::string& name) {
+fs::path tmp_dir(const std::string &name) {
     std::error_code ec;
     const fs::path d = repo_root() / ".cache" / "tmp" / "m1-t5" / name;
     fs::remove_all(d, ec);
@@ -81,7 +84,7 @@ fs::path tmp_dir(const std::string& name) {
     return d;
 }
 
-bool copy_fixture(const fs::path& from, const fs::path& to) {
+bool copy_fixture(const fs::path &from, const fs::path &to) {
     std::error_code ec;
     fs::create_directories(to.parent_path(), ec);
     ec.clear();
@@ -91,43 +94,49 @@ bool copy_fixture(const fs::path& from, const fs::path& to) {
 
 // ------------------------------------------------------------------ exiv2 helpers
 
-std::string exif_str(const Exiv2::ExifData& d, const char* key) {
+std::string exif_str(const Exiv2::ExifData &d, const char *key) {
     auto it = d.findKey(Exiv2::ExifKey(key));
-    if (it == d.end()) return {};
+    if (it == d.end())
+        return {};
     std::string v = it->toString();
-    while (!v.empty() && v.back() == '\0') v.pop_back();
+    while (!v.empty() && v.back() == '\0')
+        v.pop_back();
     return v;
 }
 
-std::string xmp_str(const Exiv2::XmpData& d, const char* key) {
+std::string xmp_str(const Exiv2::XmpData &d, const char *key) {
     auto it = d.findKey(Exiv2::XmpKey(key));
-    if (it == d.end()) return {};
+    if (it == d.end())
+        return {};
     std::string v = it->toString();
-    while (!v.empty() && v.back() == '\0') v.pop_back();
+    while (!v.empty() && v.back() == '\0')
+        v.pop_back();
     return v;
 }
 
-bool has_exif(const Exiv2::ExifData& d, const char* key) {
+bool has_exif(const Exiv2::ExifData &d, const char *key) {
     return d.findKey(Exiv2::ExifKey(key)) != d.end();
 }
-bool has_xmp(const Exiv2::XmpData& d, const char* key) {
+bool has_xmp(const Exiv2::XmpData &d, const char *key) {
     return d.findKey(Exiv2::XmpKey(key)) != d.end();
 }
 
-double rational_at(const Exiv2::ExifData& d, const char* key, std::size_t n) {
+double rational_at(const Exiv2::ExifData &d, const char *key, std::size_t n) {
     auto it = d.findKey(Exiv2::ExifKey(key));
-    if (it == d.end()) return std::nan("");
+    if (it == d.end())
+        return std::nan("");
     const Exiv2::Rational r = it->value().toRational(n);
-    if (r.second == 0) return std::nan("");
+    if (r.second == 0)
+        return std::nan("");
     return static_cast<double>(r.first) / static_cast<double>(r.second);
 }
 
 // deg + min/60 + sec/3600 from the three EXIF rationals.
-double dms_to_degrees(const Exiv2::ExifData& d, const char* key) {
+double dms_to_degrees(const Exiv2::ExifData &d, const char *key) {
     return rational_at(d, key, 0) + rational_at(d, key, 1) / 60.0 + rational_at(d, key, 2) / 3600.0;
 }
 
-bool exiv2_supports(const fs::path& p) {
+bool exiv2_supports(const fs::path &p) {
     try {
         return Exiv2::ImageFactory::getType(p.string()) != Exiv2::ImageType::none;
     } catch (...) {
@@ -137,21 +146,22 @@ bool exiv2_supports(const fs::path& p) {
 
 // ------------------------------------------------------------------ byte / pixel helpers
 
-std::vector<uint8_t> read_bytes(const fs::path& p) {
+std::vector<uint8_t> read_bytes(const fs::path &p) {
     std::ifstream in(p, std::ios::binary);
     return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
 }
 
 // First SOS marker (0xFF 0xDA) — JPEG entropy data is byte-stuffed, so the first hit is the
 // scan header. Same method as M0 Spike F (docs/m0-tasks.md §12.3).
-std::size_t find_sos(const std::vector<uint8_t>& data) {
+std::size_t find_sos(const std::vector<uint8_t> &data) {
     for (std::size_t i = 0; i + 1 < data.size(); ++i) {
-        if (data[i] == 0xFF && data[i + 1] == 0xDA) return i;
+        if (data[i] == 0xFF && data[i + 1] == 0xDA)
+            return i;
     }
     return std::string::npos;
 }
 
-std::string pixel_hash(const fs::path& p) {
+std::string pixel_hash(const fs::path &p) {
     try {
         return OIIO::ImageBufAlgo::computePixelHashSHA1(OIIO::ImageBuf(p.string()));
     } catch (...) {
@@ -174,16 +184,18 @@ pp::TimeShift delta(int years = 0, int months = 0, int days = 0, int hours = 0, 
     return s;
 }
 
-bool has_warning(const pp::MetadataPlan& p, pp::WarningKind k) {
-    for (const pp::Warning& w : p.warnings) {
-        if (w.kind == k) return true;
+bool has_warning(const pp::MetadataPlan &p, pp::WarningKind k) {
+    for (const pp::Warning &w : p.warnings) {
+        if (w.kind == k)
+            return true;
     }
     return false;
 }
 
-std::string warning_detail(const pp::MetadataPlan& p, pp::WarningKind k) {
-    for (const pp::Warning& w : p.warnings) {
-        if (w.kind == k) return w.detail;
+std::string warning_detail(const pp::MetadataPlan &p, pp::WarningKind k) {
+    for (const pp::Warning &w : p.warnings) {
+        if (w.kind == k)
+            return w.detail;
     }
     return {};
 }
@@ -192,7 +204,7 @@ std::string warning_detail(const pp::MetadataPlan& p, pp::WarningKind k) {
 // cases
 // ===========================================================================
 
-void test_read_metadata(const fs::path& tmp) {
+void test_read_metadata(const fs::path &tmp) {
     const fs::path jpg = corpus() / "meta" / "exif_full.jpg";
     const pp::SourceMeta src = pp::read_metadata(jpg);
     check(src.error.empty(), "read/jpg/no-error", src.error);
@@ -278,7 +290,8 @@ void test_gps() {
           "gps/south-roundtrip", num(dms_to_degrees(south, "Exif.GPSInfo.GPSLatitude")));
     check(std::fabs(dms_to_degrees(south, "Exif.GPSInfo.GPSLongitude") - 70.6693) < 1e-6,
           "gps/west-roundtrip", num(dms_to_degrees(south, "Exif.GPSInfo.GPSLongitude")));
-    check(!has_exif(south, "Exif.GPSInfo.GPSAltitude") && !has_exif(south, "Exif.GPSInfo.GPSImgDirection") &&
+    check(!has_exif(south, "Exif.GPSInfo.GPSAltitude") &&
+              !has_exif(south, "Exif.GPSInfo.GPSImgDirection") &&
               !has_exif(south, "Exif.GPSInfo.GPSDateStamp"),
           "gps/optionals-absent", "no optional tags may be written");
 
@@ -293,18 +306,19 @@ void test_gps() {
     pp::clear_gps(exif);
     long gps_left = 0;
     for (auto it = exif.begin(); it != exif.end(); ++it) {
-        if (it->key().rfind("Exif.GPSInfo.", 0) == 0) ++gps_left;
+        if (it->key().rfind("Exif.GPSInfo.", 0) == 0)
+            ++gps_left;
     }
     check(gps_left == 0, "gps/clear", std::to_string(gps_left) + " GPS tag(s) left");
 }
 
-void test_privacy(const fs::path& tmp) {
+void test_privacy(const fs::path &tmp) {
     const fs::path jpg = corpus() / "meta" / "exif_full.jpg";
     const pp::SourceMeta src = pp::read_metadata(jpg);
 
     pp::BatchRules rules;
     rules.strip_privacy = true;
-    rules.time_shift = delta(0, 0, 0, 1);  // must be ignored: strip wins
+    rules.time_shift = delta(0, 0, 0, 1); // must be ignored: strip wins
     pp::GpsData g;
     g.lat = 1.0;
     g.lon = 2.0;
@@ -313,8 +327,10 @@ void test_privacy(const fs::path& tmp) {
     rules.xmp_edits.push_back(pp::TagEdit{"Xmp.dc.title", std::string("X"), false});
 
     const pp::MetadataPlan plan = pp::build_plan(src, rules, std::nullopt);
-    check(plan.exif.empty(), "privacy/plan-exif-empty", std::to_string(plan.exif.count()) + " tag(s)");
-    check(plan.xmp.empty(), "privacy/plan-xmp-empty", std::to_string(plan.xmp.count()) + " prop(s)");
+    check(plan.exif.empty(), "privacy/plan-exif-empty",
+          std::to_string(plan.exif.count()) + " tag(s)");
+    check(plan.xmp.empty(), "privacy/plan-xmp-empty",
+          std::to_string(plan.xmp.count()) + " prop(s)");
     check(!plan.has_time && plan.datetime_original.empty(), "privacy/no-time",
           show(plan.datetime_original));
 
@@ -339,7 +355,8 @@ void test_privacy(const fs::path& tmp) {
     pp::MetadataOverride strip;
     strip.strip_privacy = true;
     const pp::MetadataPlan stripped = pp::build_plan(src, pp::BatchRules{}, strip);
-    check(stripped.exif.empty() && stripped.xmp.empty(), "privacy/override-true", "strip not applied");
+    check(stripped.exif.empty() && stripped.xmp.empty(), "privacy/override-true",
+          "strip not applied");
 }
 
 void test_edits() {
@@ -349,7 +366,8 @@ void test_edits() {
 
     std::vector<pp::TagEdit> ee;
     ee.push_back(pp::TagEdit{"Exif.Image.Artist", std::string("Zhang"), false});
-    ee.push_back(pp::TagEdit{"Exif.Photo.DateTimeOriginal", std::string("2024:03:01 10:00:00"), false});
+    ee.push_back(
+        pp::TagEdit{"Exif.Photo.DateTimeOriginal", std::string("2024:03:01 10:00:00"), false});
     std::vector<pp::TagEdit> xe;
     xe.push_back(pp::TagEdit{"Xmp.dc.title", std::string("demo"), false});
     xe.push_back(pp::TagEdit{"Xmp.xmp:CreateDate", std::string("2024-03-01T10:00:00"), false});
@@ -357,7 +375,8 @@ void test_edits() {
     check(errors.empty(), "edit/set-no-errors", errors.empty() ? "" : errors[0]);
     check(exif_str(exif, "Exif.Image.Artist") == "Zhang", "edit/set-exif",
           show(exif_str(exif, "Exif.Image.Artist")));
-    check(exif_str(exif, "Exif.Photo.DateTimeOriginal") == "2024:03:01 10:00:00", "edit/set-exif-time", "");
+    check(exif_str(exif, "Exif.Photo.DateTimeOriginal") == "2024:03:01 10:00:00",
+          "edit/set-exif-time", "");
     check(xmp_str(xmp, "Xmp.dc.title").find("demo") != std::string::npos, "edit/set-xmp-langalt",
           show(xmp_str(xmp, "Xmp.dc.title")));
     check(has_xmp(xmp, "Xmp.xmp.CreateDate"), "edit/xmp-colon-key-normalized",
@@ -392,19 +411,21 @@ void test_edits() {
     errors.clear();
     std::vector<pp::TagEdit> wrong{pp::TagEdit{"Xmp.dc.title", std::string("x"), false}};
     pp::apply_edits(exif, xmp, wrong, {}, errors);
-    check(errors.size() == 1, "edit/wrong-container",
-          "an Xmp key in exif_edits must be rejected");
+    check(errors.size() == 1, "edit/wrong-container", "an Xmp key in exif_edits must be rejected");
     errors.clear();
     std::vector<pp::TagEdit> empty_key{pp::TagEdit{"", std::string("x"), false}};
     pp::apply_edits(exif, xmp, empty_key, {}, errors);
     check(errors.size() == 1, "edit/empty-key", "expected 1 error");
 
     errors.clear();
-    std::vector<pp::TagEdit> type_set{pp::TagEdit{"Exif.Image.Orientation", std::string("6"), false}};
+    std::vector<pp::TagEdit> type_set{
+        pp::TagEdit{"Exif.Image.Orientation", std::string("6"), false}};
     pp::apply_edits(exif, xmp, type_set, {}, errors);
-    check(errors.empty() && exif_str(exif, "Exif.Image.Orientation") == "6", "edit/set-numeric", "");
+    check(errors.empty() && exif_str(exif, "Exif.Image.Orientation") == "6", "edit/set-numeric",
+          "");
     errors.clear();
-    std::vector<pp::TagEdit> type_bad{pp::TagEdit{"Exif.Image.Orientation", std::string("abc"), false}};
+    std::vector<pp::TagEdit> type_bad{
+        pp::TagEdit{"Exif.Image.Orientation", std::string("abc"), false}};
     pp::apply_edits(exif, xmp, type_bad, {}, errors);
     check(errors.size() == 1, "edit/type-mismatch",
           "expected 1 error, got " + std::to_string(errors.size()));
@@ -412,7 +433,8 @@ void test_edits() {
           show(exif_str(exif, "Exif.Image.Orientation")));
 
     errors.clear();
-    std::vector<pp::TagEdit> type_new{pp::TagEdit{"Exif.Image.YCbCrPositioning", std::string("zz"), false}};
+    std::vector<pp::TagEdit> type_new{
+        pp::TagEdit{"Exif.Image.YCbCrPositioning", std::string("zz"), false}};
     pp::apply_edits(exif, xmp, type_new, {}, errors);
     check(errors.size() == 1 && !has_exif(exif, "Exif.Image.YCbCrPositioning"),
           "edit/type-mismatch-new-tag-dropped",
@@ -421,10 +443,10 @@ void test_edits() {
 
 void test_build_plan() {
     const pp::SourceMeta src = pp::read_metadata(corpus() / "meta" / "exif_full.jpg");
-    const char* kDto = "Exif.Photo.DateTimeOriginal";
+    const char *kDto = "Exif.Photo.DateTimeOriginal";
 
     pp::BatchRules rules;
-    rules.time_shift = delta(0, 0, 0, 1);  // +1h
+    rules.time_shift = delta(0, 0, 0, 1); // +1h
     pp::GpsData g;
     g.lat = 1.5;
     g.lon = 2.5;
@@ -454,19 +476,21 @@ void test_build_plan() {
 
     // ---- override: per-item replacement, not accumulation ----
     pp::MetadataOverride ex;
-    ex.time_shift = delta(0, 0, 0, 2);  // replaces +1h (10:00 -> 12:00)
-    ex.gps_clear = true;                // clears the batch GPS and the source GPS
+    ex.time_shift = delta(0, 0, 0, 2); // replaces +1h (10:00 -> 12:00)
+    ex.gps_clear = true;               // clears the batch GPS and the source GPS
     ex.exif_edits.push_back(pp::TagEdit{"Exif.Image.Artist", std::string("EX"), false});
     const pp::MetadataPlan p3 = pp::build_plan(src, rules, ex);
     check(exif_str(p3.exif, kDto) == "2024:03:01 12:00:00", "plan/override/time",
           show(exif_str(p3.exif, kDto)));
     check(exif_str(p3.exif, "Exif.Image.Artist") == "EX", "plan/override/edit-wins",
           show(exif_str(p3.exif, "Exif.Image.Artist")));
-    check(!has_exif(p3.exif, "Exif.GPSInfo.GPSLatitude") && !has_exif(p3.exif, "Exif.GPSInfo.GPSLatitudeRef"),
+    check(!has_exif(p3.exif, "Exif.GPSInfo.GPSLatitude") &&
+              !has_exif(p3.exif, "Exif.GPSInfo.GPSLatitudeRef"),
           "plan/override/gps-clear", "GPS must be gone");
     check(xmp_str(p3.xmp, "Xmp.dc.title").find("BATCH") != std::string::npos,
           "plan/override/untouched-xmp", "xmp edits were not overridden");
-    check(p3.has_time && p3.datetime_original == "2024:03:01 12:00:00", "plan/override/effective", "");
+    check(p3.has_time && p3.datetime_original == "2024:03:01 12:00:00", "plan/override/effective",
+          "");
 
     // ---- ignore_batch: the batch rules disappear, the source survives ----
     pp::MetadataOverride ign;
@@ -549,11 +573,11 @@ void test_build_plan() {
           "plan/noop-shift", "a no-op shift must not touch anything");
 
     // ---- XMP dates are shifted too (only when present) ----
-    pp::SourceMeta xs;  // EXIF-empty source: the XMP dates are the only time fields
+    pp::SourceMeta xs; // EXIF-empty source: the XMP dates are the only time fields
     xs.xmp["Xmp.xmp.CreateDate"] = "2024-03-01T10:00:00.250+08:00";
     xs.xmp["Xmp.xmp.ModifyDate"] = "2024-03-02T00:30:00Z";
 
-    const pp::MetadataPlan q1 = pp::build_plan(xs, rules, std::nullopt);  // delta +1h
+    const pp::MetadataPlan q1 = pp::build_plan(xs, rules, std::nullopt); // delta +1h
     check(xmp_str(q1.xmp, "Xmp.xmp.CreateDate") == "2024-03-01T11:00:00.250+08:00",
           "plan/xmp-delta/create", show(xmp_str(q1.xmp, "Xmp.xmp.CreateDate")));
     check(xmp_str(q1.xmp, "Xmp.xmp.ModifyDate") == "2024-03-02T01:30:00Z", "plan/xmp-delta/modify",
@@ -563,11 +587,11 @@ void test_build_plan() {
     check(q1.has_time && q1.datetime_original == "2024:03:01 11:00:00", "plan/xmp-delta/effective",
           show(q1.datetime_original));
 
-    const pp::MetadataPlan q2 = pp::build_plan(xs, tz, std::nullopt);  // +08 -> +09
+    const pp::MetadataPlan q2 = pp::build_plan(xs, tz, std::nullopt); // +08 -> +09
     check(xmp_str(q2.xmp, "Xmp.xmp.CreateDate") == "2024-03-01T11:00:00.250+09:00",
           "plan/xmp-tz/create", show(xmp_str(q2.xmp, "Xmp.xmp.CreateDate")));
-    check(xmp_str(q2.xmp, "Xmp.xmp.ModifyDate") == "2024-03-02T09:30:00+09:00", "plan/xmp-tz/modify",
-          show(xmp_str(q2.xmp, "Xmp.xmp.ModifyDate")));
+    check(xmp_str(q2.xmp, "Xmp.xmp.ModifyDate") == "2024-03-02T09:30:00+09:00",
+          "plan/xmp-tz/modify", show(xmp_str(q2.xmp, "Xmp.xmp.ModifyDate")));
 }
 
 void test_payloads() {
@@ -582,10 +606,9 @@ void test_payloads() {
     const std::string mm("MM\0*", 4);
     check(!pl.exif_blob.empty(), "payload/exif-non-empty", "expected a TIFF blob");
     check(pl.exif_blob.compare(0, 4, ii) == 0 || pl.exif_blob.compare(0, 4, mm) == 0,
-          "payload/exif-tiff-header",
-          "prefix bytes differ from II*\\0 / MM\\0*");
+          "payload/exif-tiff-header", "prefix bytes differ from II*\\0 / MM\\0*");
     Exiv2::ExifData back;
-    Exiv2::ExifParser::decode(back, reinterpret_cast<const Exiv2::byte*>(pl.exif_blob.data()),
+    Exiv2::ExifParser::decode(back, reinterpret_cast<const Exiv2::byte *>(pl.exif_blob.data()),
                               pl.exif_blob.size());
     check(exif_str(back, "Exif.Image.Artist") == "BATCH", "payload/exif-decode-roundtrip",
           show(exif_str(back, "Exif.Image.Artist")));
@@ -668,9 +691,10 @@ void test_effective_datetime() {
 // WebP/RIFF: concatenation of the image payload chunks. Exiv2 legitimately adds a VP8X
 // extended-format header once metadata is present, so container/metadata chunks (VP8X, EXIF,
 // XMP , ICCP) are excluded and only the coded image (and animation) chunks are compared.
-std::string riff_payload(const fs::path& p) {
+std::string riff_payload(const fs::path &p) {
     const std::vector<uint8_t> b = read_bytes(p);
-    if (b.size() < 12 || std::memcmp(b.data(), "RIFF", 4) != 0) return {};
+    if (b.size() < 12 || std::memcmp(b.data(), "RIFF", 4) != 0)
+        return {};
     const auto u32 = [&b](std::size_t o) {
         return static_cast<uint32_t>(b[o]) | (static_cast<uint32_t>(b[o + 1]) << 8) |
                (static_cast<uint32_t>(b[o + 2]) << 16) | (static_cast<uint32_t>(b[o + 3]) << 24);
@@ -678,22 +702,23 @@ std::string riff_payload(const fs::path& p) {
     std::string out;
     std::size_t pos = 12;
     while (pos + 8 <= b.size()) {
-        const std::string id(reinterpret_cast<const char*>(b.data() + pos), 4);
+        const std::string id(reinterpret_cast<const char *>(b.data() + pos), 4);
         const uint32_t sz = u32(pos + 4);
         const std::size_t end = std::min(b.size(), pos + 8 + sz);
         if (id == "VP8 " || id == "VP8L" || id == "ALPH" || id == "ANIM" || id == "ANMF") {
-            out.append(reinterpret_cast<const char*>(b.data() + pos), end - pos);
+            out.append(reinterpret_cast<const char *>(b.data() + pos), end - pos);
         }
-        pos = end + (sz & 1u);  // RIFF chunks are word aligned
+        pos = end + (sz & 1u); // RIFF chunks are word aligned
     }
     return out;
 }
 
 // PNG: concatenated IDAT payload bytes — the PNG equivalent of the JPEG "SOS tail" criterion.
-std::string png_idat(const fs::path& p) {
+std::string png_idat(const fs::path &p) {
     const std::vector<uint8_t> b = read_bytes(p);
     static const unsigned char kSig[8] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
-    if (b.size() < 8 || std::memcmp(b.data(), kSig, 8) != 0) return {};
+    if (b.size() < 8 || std::memcmp(b.data(), kSig, 8) != 0)
+        return {};
     const auto be32 = [&b](std::size_t o) {
         return (static_cast<uint32_t>(b[o]) << 24) | (static_cast<uint32_t>(b[o + 1]) << 16) |
                (static_cast<uint32_t>(b[o + 2]) << 8) | static_cast<uint32_t>(b[o + 3]);
@@ -702,15 +727,16 @@ std::string png_idat(const fs::path& p) {
     std::size_t pos = 8;
     while (pos + 12 <= b.size()) {
         const uint32_t len = be32(pos);
-        const std::string type(reinterpret_cast<const char*>(b.data() + pos + 4), 4);
+        const std::string type(reinterpret_cast<const char *>(b.data() + pos + 4), 4);
         const std::size_t end = std::min(b.size(), pos + 12 + static_cast<std::size_t>(len));
-        if (type == "IDAT") out.append(reinterpret_cast<const char*>(b.data() + pos + 8), end - (pos + 8));
+        if (type == "IDAT")
+            out.append(reinterpret_cast<const char *>(b.data() + pos + 8), end - (pos + 8));
         pos = end;
     }
     return out;
 }
 
-void test_metadata_only(const fs::path& tmp) {
+void test_metadata_only(const fs::path &tmp) {
     const fs::path src = corpus() / "meta" / "exif_full.jpg";
     const fs::path out = tmp / "metadata_only.jpg";
     const pp::SourceMeta meta = pp::read_metadata(src);
@@ -748,7 +774,7 @@ void test_metadata_only(const fs::path& tmp) {
 // Same rewrite path for the other containers Exiv2 can write now (PNG/WebP/TIFF): the coded
 // payload must survive byte for byte (PNG IDAT / WebP VP8L chunk level; TIFF is checked by pixel
 // hash because Exiv2 relocates the strips when the IFD grows).
-void test_metadata_only_other_containers(const fs::path& tmp) {
+void test_metadata_only_other_containers(const fs::path &tmp) {
     {
         const fs::path src = corpus() / "base" / "rgb8.png";
         const fs::path out = tmp / "metadata_only.png";
@@ -757,10 +783,13 @@ void test_metadata_only_other_containers(const fs::path& tmp) {
             fail("meta-only/png/read", meta.error);
         } else {
             pp::BatchRules rules;
-            rules.exif_edits.push_back(pp::TagEdit{"Exif.Image.Artist", std::string("M1-T5"), false});
-            rules.xmp_edits.push_back(pp::TagEdit{"Xmp.dc.title", std::string("png meta-only"), false});
+            rules.exif_edits.push_back(
+                pp::TagEdit{"Exif.Image.Artist", std::string("M1-T5"), false});
+            rules.xmp_edits.push_back(
+                pp::TagEdit{"Xmp.dc.title", std::string("png meta-only"), false});
             const pp::MetadataPlan plan = pp::build_plan(meta, rules, std::nullopt);
-            const std::string err = pp::rewrite_metadata_only(src, out, plan, pp::make_payloads(plan));
+            const std::string err =
+                pp::rewrite_metadata_only(src, out, plan, pp::make_payloads(plan));
             check(err.empty(), "meta-only/png/rewrite", err);
             const std::string idat_src = png_idat(src);
             const std::string idat_out = png_idat(out);
@@ -769,13 +798,14 @@ void test_metadata_only_other_containers(const fs::path& tmp) {
                       " out=" + std::to_string(idat_out.size()) + " bytes)");
             check(pixel_hash(src) == pixel_hash(out), "meta-only/png/pixel-hash", "pixels changed");
             const pp::SourceMeta back = pp::read_metadata(out);
-            check(exif_str(back.exif, "Exif.Image.Artist") == "M1-T5", "meta-only/png/artist-written",
-                  show(exif_str(back.exif, "Exif.Image.Artist")));
+            check(exif_str(back.exif, "Exif.Image.Artist") == "M1-T5",
+                  "meta-only/png/artist-written", show(exif_str(back.exif, "Exif.Image.Artist")));
             check(xmp_str(back.xmp, "Xmp.dc.title").find("png meta-only") != std::string::npos,
                   "meta-only/png/xmp-written", show(xmp_str(back.xmp, "Xmp.dc.title")));
-            std::printf("info meta-only png: idat_src=%zu idat_out=%zu idat_equal=%d pixel_hash_equal=%d\n",
-                        idat_src.size(), idat_out.size(), (int)(idat_src == idat_out),
-                        (int)(pixel_hash(src) == pixel_hash(out)));
+            std::printf(
+                "info meta-only png: idat_src=%zu idat_out=%zu idat_equal=%d pixel_hash_equal=%d\n",
+                idat_src.size(), idat_out.size(), (int)(idat_src == idat_out),
+                (int)(pixel_hash(src) == pixel_hash(out)));
         }
     }
     {
@@ -786,11 +816,14 @@ void test_metadata_only_other_containers(const fs::path& tmp) {
             fail("meta-only/webp/read", meta.error);
         } else {
             pp::BatchRules rules;
-            rules.exif_edits.push_back(pp::TagEdit{"Exif.Image.Artist", std::string("M1-T5"), false});
+            rules.exif_edits.push_back(
+                pp::TagEdit{"Exif.Image.Artist", std::string("M1-T5"), false});
             const pp::MetadataPlan plan = pp::build_plan(meta, rules, std::nullopt);
-            const std::string err = pp::rewrite_metadata_only(src, out, plan, pp::make_payloads(plan));
+            const std::string err =
+                pp::rewrite_metadata_only(src, out, plan, pp::make_payloads(plan));
             check(err.empty(), "meta-only/webp/rewrite", err);
-            check(pixel_hash(src) == pixel_hash(out), "meta-only/webp/pixel-hash", "pixels changed");
+            check(pixel_hash(src) == pixel_hash(out), "meta-only/webp/pixel-hash",
+                  "pixels changed");
             check(!riff_payload(src).empty() && riff_payload(src) == riff_payload(out),
                   "meta-only/webp/payload-identical", "RIFF payload chunks changed");
             check(exif_str(pp::read_metadata(out).exif, "Exif.Image.Artist") == "M1-T5",
@@ -805,9 +838,11 @@ void test_metadata_only_other_containers(const fs::path& tmp) {
             fail("meta-only/tif/read", meta.error);
         } else {
             pp::BatchRules rules;
-            rules.exif_edits.push_back(pp::TagEdit{"Exif.Image.Artist", std::string("M1-T5"), false});
+            rules.exif_edits.push_back(
+                pp::TagEdit{"Exif.Image.Artist", std::string("M1-T5"), false});
             const pp::MetadataPlan plan = pp::build_plan(meta, rules, std::nullopt);
-            const std::string err = pp::rewrite_metadata_only(src, out, plan, pp::make_payloads(plan));
+            const std::string err =
+                pp::rewrite_metadata_only(src, out, plan, pp::make_payloads(plan));
             check(err.empty(), "meta-only/tif/rewrite", err);
             check(pixel_hash(src) == pixel_hash(out), "meta-only/tif/pixel-hash", "pixels changed");
             check(exif_str(pp::read_metadata(out).exif, "Exif.Image.Artist") == "M1-T5",
@@ -816,7 +851,7 @@ void test_metadata_only_other_containers(const fs::path& tmp) {
     }
 }
 
-void test_png_r1(const fs::path& tmp) {
+void test_png_r1(const fs::path &tmp) {
     // R1 (closed by M1-T5b: the exiv2 port now builds with its "png" feature → zlib).
     // PNG uses the same post-encode Exiv2 path as JPEG/TIFF/WebP; the mirror/drop fallback in
     // write_metadata_exiv2() stays as a safety net for a build without PNG support.
@@ -851,18 +886,19 @@ void test_png_r1(const fs::path& tmp) {
               "r1/png/xmp-title", show(xmp_str(back.xmp, "Xmp.dc.title")));
         check(!has_warning(plan, pp::WarningKind::MetadataDropped), "r1/png/no-drop-warning",
               show(warning_detail(plan, pp::WarningKind::MetadataDropped)));
-        std::printf("info R1 png exif: writable=1 artist=%s time=%s gps=%s xmp_title=%s warnings=%zu\n",
-                    show(exif_str(back.exif, "Exif.Image.Artist")).c_str(),
-                    show(exif_str(back.exif, "Exif.Photo.DateTimeOriginal")).c_str(),
-                    num(dms_to_degrees(back.exif, "Exif.GPSInfo.GPSLatitude")).c_str(),
-                    show(xmp_str(back.xmp, "Xmp.dc.title")).c_str(), plan.warnings.size());
+        std::printf(
+            "info R1 png exif: writable=1 artist=%s time=%s gps=%s xmp_title=%s warnings=%zu\n",
+            show(exif_str(back.exif, "Exif.Image.Artist")).c_str(),
+            show(exif_str(back.exif, "Exif.Photo.DateTimeOriginal")).c_str(),
+            num(dms_to_degrees(back.exif, "Exif.GPSInfo.GPSLatitude")).c_str(),
+            show(xmp_str(back.xmp, "Xmp.dc.title")).c_str(), plan.warnings.size());
     } else {
         // fallback path — only reachable when exiv2 has no png support (EXV_HAVE_LIBZ undefined)
         check(has_warning(plan, pp::WarningKind::MetadataDropped), "r1/png/dropped-warning",
               "expected Warning{MetadataDropped} for a PNG output");
-        check(warning_detail(plan, pp::WarningKind::MetadataDropped).find("png") != std::string::npos,
-              "r1/png/warning-detail",
-              show(warning_detail(plan, pp::WarningKind::MetadataDropped)));
+        check(
+            warning_detail(plan, pp::WarningKind::MetadataDropped).find("png") != std::string::npos,
+            "r1/png/warning-detail", show(warning_detail(plan, pp::WarningKind::MetadataDropped)));
         std::printf("info R1 png exif: writable=0 dropped_detail=%s\n",
                     show(warning_detail(plan, pp::WarningKind::MetadataDropped)).c_str());
     }
@@ -880,25 +916,27 @@ void test_metadata_only_capability() {
     check(!pp::detail_metadata_only_supported("jxl"), "capability/jxl", "expected false");
     check(!pp::detail_metadata_only_supported("bmp"), "capability/bmp", "expected false");
     check(!pp::detail_metadata_only_supported("nonsense"), "capability/unknown", "expected false");
-    std::printf("info metadata-only capability: jpeg=%d png=%d tiff=%d webp=%d heif=%d avif=%d jxl=%d "
-                "bmp=%d\n",
-                (int)pp::detail_metadata_only_supported("jpeg"),
-                (int)pp::detail_metadata_only_supported("png"),
-                (int)pp::detail_metadata_only_supported("tiff"),
-                (int)pp::detail_metadata_only_supported("webp"),
-                (int)pp::detail_metadata_only_supported("heif"),
-                (int)pp::detail_metadata_only_supported("avif"),
-                (int)pp::detail_metadata_only_supported("jxl"),
-                (int)pp::detail_metadata_only_supported("bmp"));
+    std::printf(
+        "info metadata-only capability: jpeg=%d png=%d tiff=%d webp=%d heif=%d avif=%d jxl=%d "
+        "bmp=%d\n",
+        (int)pp::detail_metadata_only_supported("jpeg"),
+        (int)pp::detail_metadata_only_supported("png"),
+        (int)pp::detail_metadata_only_supported("tiff"),
+        (int)pp::detail_metadata_only_supported("webp"),
+        (int)pp::detail_metadata_only_supported("heif"),
+        (int)pp::detail_metadata_only_supported("avif"),
+        (int)pp::detail_metadata_only_supported("jxl"),
+        (int)pp::detail_metadata_only_supported("bmp"));
 
     // frozen predicate (§3.9): must agree for the metadata-only formats
     check(pp::format_supports_metadata_only("png"), "capability/frozen-api/png", "expected true");
     check(pp::format_supports_metadata_only("jpeg") && pp::format_supports_metadata_only("tiff") &&
               pp::format_supports_metadata_only("webp"),
           "capability/frozen-api/others", "expected true for jpeg/tiff/webp");
-    check(!pp::format_supports_metadata_only("heif") && !pp::format_supports_metadata_only("avif") &&
-              !pp::format_supports_metadata_only("jxl") && !pp::format_supports_metadata_only("bmp"),
-          "capability/frozen-api/unsupported", "expected false for heif/avif/jxl/bmp");
+    check(
+        !pp::format_supports_metadata_only("heif") && !pp::format_supports_metadata_only("avif") &&
+            !pp::format_supports_metadata_only("jxl") && !pp::format_supports_metadata_only("bmp"),
+        "capability/frozen-api/unsupported", "expected false for heif/avif/jxl/bmp");
 }
 
 void test_mirror_helper() {
@@ -925,17 +963,18 @@ void test_mirror_helper() {
           "mirror/encode-decode", show(xmp_str(back, "Xmp.exif.GPSLatitude")));
 }
 
-void test_post_write_formats(const fs::path& tmp) {
+void test_post_write_formats(const fs::path &tmp) {
     const pp::SourceMeta meta = pp::read_metadata(corpus() / "meta" / "exif_full.jpg");
-    pp::MetadataPlan plan = pp::build_plan(meta, pp::BatchRules{}, std::nullopt);  // mutable: see push_plan_warning()
+    pp::MetadataPlan plan =
+        pp::build_plan(meta, pp::BatchRules{}, std::nullopt); // mutable: see push_plan_warning()
     const pp::Payloads pl = pp::make_payloads(plan);
 
     struct Case {
-        const char* fixture;
-        const char* name;
+        const char *fixture;
+        const char *name;
     };
     const Case cases[] = {{"base/rgb16.tif", "out.tif"}, {"meta/webp_lossless.webp", "out.webp"}};
-    for (const Case& c : cases) {
+    for (const Case &c : cases) {
         const fs::path in = corpus() / c.fixture;
         const fs::path out = tmp / c.name;
         if (!copy_fixture(in, out)) {
@@ -973,11 +1012,12 @@ void test_post_write_formats(const fs::path& tmp) {
 // plan.warnings push (so the pipeline's merge-dedup collapses the pair), it stays silent on the
 // success path, and the 3-argument M1 form still compiles/behaves unchanged (used by
 // test_post_write_formats/test_png_r1 above).
-void test_write_warnings_out_param(const fs::path& tmp) {
+void test_write_warnings_out_param(const fs::path &tmp) {
     const pp::SourceMeta meta = pp::read_metadata(corpus() / "meta" / "exif_full.jpg");
     pp::BatchRules rules;
     rules.exif_edits.push_back(pp::TagEdit{"Exif.Image.Artist", std::string("M2-T4"), false});
-    pp::MetadataPlan plan = pp::build_plan(meta, rules, std::nullopt);  // mutable: plan.warnings channel
+    pp::MetadataPlan plan =
+        pp::build_plan(meta, rules, std::nullopt); // mutable: plan.warnings channel
     const pp::Payloads pl = pp::make_payloads(plan);
 
     // Failure case: the post-encode Exiv2 write cannot open its container → metadata loss stays
@@ -997,8 +1037,8 @@ void test_write_warnings_out_param(const fs::path& tmp) {
     } else {
         check(got.front() == plan.warnings.front().detail, "write-warnings/identical-detail",
               show(got.front()) + " vs " + show(plan.warnings.front().detail));
-        check(plan.warnings.front().kind == pp::WarningKind::MetadataDropped,
-              "write-warnings/kind", "expected MetadataDropped");
+        check(plan.warnings.front().kind == pp::WarningKind::MetadataDropped, "write-warnings/kind",
+              "expected MetadataDropped");
         check(got.front().find("metadata dropped") != std::string::npos, "write-warnings/detail",
               show(got.front()));
     }
@@ -1018,22 +1058,24 @@ void test_write_warnings_out_param(const fs::path& tmp) {
           "unexpected writer message: " + (got2.empty() ? std::string() : show(got2.front())));
 
     std::printf("info write-warnings: failure_detail=%s warnings=%zu\n",
-                (got.empty() ? std::string("<none>") : show(got.front())).c_str(), plan.warnings.size());
+                (got.empty() ? std::string("<none>") : show(got.front())).c_str(),
+                plan.warnings.size());
 }
 
 // §4.5 / consensus §3.6: MakerNote bytes are carried across containers verbatim, never parsed or
 // edited, and the layer only reports "Makernote present, N bytes" in the log.
-void test_makernote(const fs::path& tmp) {
+void test_makernote(const fs::path &tmp) {
     const fs::path src = corpus() / "meta" / "exif_full.jpg";
     const fs::path out = tmp / "makernote.jpg";
     pp::SourceMeta meta = pp::read_metadata(src);
     const std::string bytes("\x4d\x4d\x00\x2a\x00\x07\xff", 7);
     Exiv2::Value::UniquePtr v = Exiv2::Value::create(Exiv2::undefined);
-    v->read(reinterpret_cast<const Exiv2::byte*>(bytes.data()), bytes.size(), Exiv2::invalidByteOrder);
+    v->read(reinterpret_cast<const Exiv2::byte *>(bytes.data()), bytes.size(),
+            Exiv2::invalidByteOrder);
     meta.exif.add(Exiv2::ExifKey("Exif.Photo.MakerNote"), v.get());
 
     const fs::path logs = tmp / "logs";
-    pptest::unsetenv("PP_LOG_LEVEL");  // the test asserts an info line
+    pptest::unsetenv("PP_LOG_LEVEL"); // the test asserts an info line
     pp::log_init(logs, pp::LogLevel::Info);
     const pp::MetadataPlan plan = pp::build_plan(meta, pp::BatchRules{}, std::nullopt);
     const std::string err = pp::rewrite_metadata_only(src, out, plan, pp::make_payloads(plan));
@@ -1047,7 +1089,8 @@ void test_makernote(const fs::path& tmp) {
     if (it != back.exif.end() && it->size() == bytes.size()) {
         same = true;
         for (std::size_t i = 0; i < bytes.size(); ++i) {
-            if (it->value().toInt64(i) != static_cast<unsigned char>(bytes[i])) same = false;
+            if (it->value().toInt64(i) != static_cast<unsigned char>(bytes[i]))
+                same = false;
         }
     }
     check(same, "makernote/bytes-preserved",
@@ -1056,16 +1099,19 @@ void test_makernote(const fs::path& tmp) {
     // the info line was logged
     bool logged = false;
     std::error_code ec;
-    for (const fs::directory_iterator::value_type& e : fs::directory_iterator(logs, ec)) {
-        if (!e.is_regular_file()) continue;
+    for (const fs::directory_iterator::value_type &e : fs::directory_iterator(logs, ec)) {
+        if (!e.is_regular_file())
+            continue;
         std::ifstream in(e.path(), std::ios::binary);
-        const std::string text{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
-        if (text.find("Makernote present, 7 bytes") != std::string::npos) logged = true;
+        const std::string text{std::istreambuf_iterator<char>(in),
+                               std::istreambuf_iterator<char>()};
+        if (text.find("Makernote present, 7 bytes") != std::string::npos)
+            logged = true;
     }
     check(logged, "makernote/logged", "no 'Makernote present, 7 bytes' line in " + logs.string());
 }
 
-void test_mtime(const fs::path& tmp) {
+void test_mtime(const fs::path &tmp) {
     const fs::path f = tmp / "mtime.bin";
     {
         std::ofstream out(f, std::ios::binary);
@@ -1088,16 +1134,17 @@ void test_mtime(const fs::path& tmp) {
     const std::time_t want = std::mktime(&tm);
     const auto want_ft = pp::file_time_from_sys<fs::file_time_type::clock>(
         std::chrono::system_clock::from_time_t(want));
-    check(fs::last_write_time(f) == want_ft, "mtime/value", "last_write_time differs from EXIF time");
+    check(fs::last_write_time(f) == want_ft, "mtime/value",
+          "last_write_time differs from EXIF time");
 
     check(!pp::sync_file_mtime(f, "2024-03-01 10:00:00").empty(), "mtime/invalid-format", "");
     check(!pp::sync_file_mtime(f, "2023:02:29 10:00:00").empty(), "mtime/invalid-date", "");
 }
 
-}  // namespace
+} // namespace
 
 int main() {
-    std::setvbuf(stdout, nullptr, _IONBF, 0);  // keep partial output if a library aborts
+    std::setvbuf(stdout, nullptr, _IONBF, 0); // keep partial output if a library aborts
     const fs::path root = repo_root();
     if (root.empty()) {
         std::printf("FAIL setup: repository root (tests/golden) not found from %s\n",

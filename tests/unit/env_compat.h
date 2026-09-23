@@ -8,15 +8,15 @@
 #pragma once
 
 #if defined(_WIN32)
-#include <cstdlib>    // _putenv_s
-#include <process.h>  // _getpid
+#include <cstdlib>   // _putenv_s
+#include <process.h> // _getpid
 #else
 #include <unistd.h>
 #endif
 
 namespace pptest {
 
-inline void setenv(const char* name, const char* value) {
+inline void setenv(const char *name, const char *value) {
 #if defined(_WIN32)
     ::_putenv_s(name, value);
 #else
@@ -24,7 +24,7 @@ inline void setenv(const char* name, const char* value) {
 #endif
 }
 
-inline void unsetenv(const char* name) {
+inline void unsetenv(const char *name) {
 #if defined(_WIN32)
     ::_putenv_s(name, "");
 #else
@@ -40,4 +40,4 @@ inline long getpid() {
 #endif
 }
 
-}  // namespace pptest
+} // namespace pptest

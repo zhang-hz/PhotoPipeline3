@@ -6,7 +6,7 @@
 // Every failure prints "FAIL <case>: <detail>"; main() returns the failure count.
 
 #include <lcms2.h>
-#include <lcms2_plugin.h>  // _cmsMAT3inverse/_cmsMAT3eval: white-point round trip (M2-T6)
+#include <lcms2_plugin.h> // _cmsMAT3inverse/_cmsMAT3eval: white-point round trip (M2-T6)
 
 #include <OpenImageIO/imagebuf.h>
 #include <OpenImageIO/imageio.h>
@@ -27,7 +27,7 @@ namespace {
 int g_failed = 0;
 int g_checks = 0;
 
-void check(bool ok, const std::string& case_name, const std::string& detail) {
+void check(bool ok, const std::string &case_name, const std::string &detail) {
     ++g_checks;
     if (!ok) {
         ++g_failed;
@@ -37,7 +37,7 @@ void check(bool ok, const std::string& case_name, const std::string& detail) {
 }
 
 // Measured values kept in the test output as evidence for the task report.
-void info(const std::string& text) {
+void info(const std::string &text) {
     std::printf("info %s\n", text.c_str());
     std::fflush(stdout);
 }
@@ -50,47 +50,46 @@ std::string fnum(double v) {
 
 // ---------------------------------------------------------------- fixtures --
 
-OIIO::ImageBuf make_buf(int w, int h, int nch, const std::vector<float>& px) {
+OIIO::ImageBuf make_buf(int w, int h, int nch, const std::vector<float> &px) {
     OIIO::ImageSpec spec(w, h, nch, OIIO::TypeFloat);
     OIIO::ImageBuf buf(spec);
     OIIO::ROI roi(0, w, 0, h, 0, 1, 0, nch);
     buf.set_pixels(roi, OIIO::TypeFloat,
-                   OIIO::span<const std::byte>(
-                       reinterpret_cast<const std::byte*>(px.data()), px.size() * sizeof(float)));
+                   OIIO::span<const std::byte>(reinterpret_cast<const std::byte *>(px.data()),
+                                               px.size() * sizeof(float)));
     return buf;
 }
 
-std::vector<float> get_all(const OIIO::ImageBuf& buf) {
-    const OIIO::ImageSpec& s = buf.spec();
-    std::vector<float> out(std::size_t(s.width) * std::size_t(s.height) *
-                           std::size_t(s.nchannels));
+std::vector<float> get_all(const OIIO::ImageBuf &buf) {
+    const OIIO::ImageSpec &s = buf.spec();
+    std::vector<float> out(std::size_t(s.width) * std::size_t(s.height) * std::size_t(s.nchannels));
     OIIO::ROI roi(0, s.width, 0, s.height, 0, 1, 0, s.nchannels);
-    const bool ok = buf.get_pixels(
-        roi, OIIO::TypeFloat,
-        OIIO::span<std::byte>(reinterpret_cast<std::byte*>(out.data()),
-                              out.size() * sizeof(float)));
+    const bool ok = buf.get_pixels(roi, OIIO::TypeFloat,
+                                   OIIO::span<std::byte>(reinterpret_cast<std::byte *>(out.data()),
+                                                         out.size() * sizeof(float)));
     check(ok, "fixture/get_pixels", "ImageBuf::get_pixels failed");
     return out;
 }
 
 // Thread-safe variant of get_all(): no assertions (used inside worker threads).
-std::vector<float> get_all_quiet(const OIIO::ImageBuf& buf) {
-    const OIIO::ImageSpec& s = buf.spec();
-    std::vector<float> out(std::size_t(s.width) * std::size_t(s.height) *
-                           std::size_t(s.nchannels));
+std::vector<float> get_all_quiet(const OIIO::ImageBuf &buf) {
+    const OIIO::ImageSpec &s = buf.spec();
+    std::vector<float> out(std::size_t(s.width) * std::size_t(s.height) * std::size_t(s.nchannels));
     OIIO::ROI roi(0, s.width, 0, s.height, 0, 1, 0, s.nchannels);
     buf.get_pixels(roi, OIIO::TypeFloat,
-                   OIIO::span<std::byte>(reinterpret_cast<std::byte*>(out.data()),
+                   OIIO::span<std::byte>(reinterpret_cast<std::byte *>(out.data()),
                                          out.size() * sizeof(float)));
     return out;
 }
 
 std::string serialize(cmsHPROFILE p) {
     cmsUInt32Number need = 0;
-    if (!cmsSaveProfileToMem(p, nullptr, &need) || need == 0) return {};
+    if (!cmsSaveProfileToMem(p, nullptr, &need) || need == 0)
+        return {};
     std::string out(need, '\0');
     cmsUInt32Number written = need;
-    if (!cmsSaveProfileToMem(p, out.data(), &written) || written == 0) return {};
+    if (!cmsSaveProfileToMem(p, out.data(), &written) || written == 0)
+        return {};
     out.resize(written <= need ? written : need);
     return out;
 }
@@ -99,7 +98,8 @@ std::string srgb_icc_bytes() {
     cmsHPROFILE p = cmsCreate_sRGBProfile();
     check(p != nullptr, "fixture/srgb-profile", "cmsCreate_sRGBProfile returned null");
     std::string b = serialize(p);
-    if (p) cmsCloseProfile(p);
+    if (p)
+        cmsCloseProfile(p);
     check(!b.empty(), "fixture/srgb-serialize", "cmsSaveProfileToMem produced no bytes");
     return b;
 }
@@ -108,31 +108,34 @@ std::string srgb_icc_bytes() {
 // profile; gamma differences also give us cheap distinct cache keys).
 std::string gray_icc_bytes(double gamma) {
     const cmsCIExyY d65{0.3127, 0.3290, 1.0};
-    cmsToneCurve* trc = cmsBuildGamma(nullptr, gamma);
+    cmsToneCurve *trc = cmsBuildGamma(nullptr, gamma);
     cmsHPROFILE p = trc ? cmsCreateGrayProfile(&d65, trc) : nullptr;
-    if (trc) cmsFreeToneCurve(trc);
+    if (trc)
+        cmsFreeToneCurve(trc);
     check(p != nullptr, "fixture/gray-profile", "cmsCreateGrayProfile returned null");
     std::string b = serialize(p);
-    if (p) cmsCloseProfile(p);
+    if (p)
+        cmsCloseProfile(p);
     return b;
 }
 
 bool same_bits(float a, float b) { return std::memcmp(&a, &b, sizeof(float)) == 0; }
 
-bool has_warning(const pp::ColorOutcome& oc, pp::WarningKind kind) {
-    for (const auto& w : oc.warnings)
-        if (w.kind == kind) return true;
+bool has_warning(const pp::ColorOutcome &oc, pp::WarningKind kind) {
+    for (const auto &w : oc.warnings)
+        if (w.kind == kind)
+            return true;
     return false;
 }
 
-double max_abs_diff(const std::vector<float>& a, const std::vector<float>& b) {
+double max_abs_diff(const std::vector<float> &a, const std::vector<float> &b) {
     double m = 0.0;
     for (std::size_t i = 0; i < a.size() && i < b.size(); ++i)
         m = std::max(m, std::fabs(double(a[i]) - double(b[i])));
     return m;
 }
 
-pp::ColorManager& cm() { return pp::ColorManager::instance(); }
+pp::ColorManager &cm() { return pp::ColorManager::instance(); }
 
 // ------------------------------------------------------------------- cases --
 
@@ -148,7 +151,8 @@ void test_enum_strings() {
           pp::to_string(ColorTarget::AdobeRGB));
 
     ColorTarget t = ColorTarget::SRGB;
-    check(pp::parse_color_target("keep", t) && t == ColorTarget::KeepOriginal, "enum/parse-keep", "");
+    check(pp::parse_color_target("keep", t) && t == ColorTarget::KeepOriginal, "enum/parse-keep",
+          "");
     check(pp::parse_color_target("srgb", t) && t == ColorTarget::SRGB, "enum/parse-srgb", "");
     check(pp::parse_color_target("p3", t) && t == ColorTarget::DisplayP3, "enum/parse-p3", "");
     check(pp::parse_color_target("adobergb", t) && t == ColorTarget::AdobeRGB,
@@ -160,9 +164,8 @@ void test_enum_strings() {
 
 void test_srgb_to_srgb_identity() {
     const std::string icc = srgb_icc_bytes();
-    const std::vector<float> px = {0.0f,   0.0f,   0.0f,   0.25f,  0.5f,   0.75f,
-                                   0.5f,   0.5f,   0.5f,   1.0f,   1.0f,   1.0f,
-                                   0.9f,   0.1f,   0.33f,  0.017f, 0.404f, 0.777f};
+    const std::vector<float> px = {0.0f, 0.0f, 0.0f, 0.25f, 0.5f, 0.75f, 0.5f,   0.5f,   0.5f,
+                                   1.0f, 1.0f, 1.0f, 0.9f,  0.1f, 0.33f, 0.017f, 0.404f, 0.777f};
     OIIO::ImageBuf buf = make_buf(6, 1, 3, px);
     cm().clear_cache();
     const pp::ColorOutcome oc = cm().transform(buf, icc, false, pp::ColorTarget::SRGB);
@@ -200,12 +203,12 @@ void test_white_to_p3_and_adobergb() {
     const std::string icc = srgb_icc_bytes();
     const struct {
         pp::ColorTarget target;
-        const char* name;
-        const char* dst_desc;
+        const char *name;
+        const char *dst_desc;
     } cases[] = {{pp::ColorTarget::DisplayP3, "p3", "ICC(Display P3)"},
                  {pp::ColorTarget::AdobeRGB, "adobergb", "ICC(Adobe RGB (1998))"}};
 
-    for (const auto& c : cases) {
+    for (const auto &c : cases) {
         OIIO::ImageBuf buf = make_buf(2, 1, 3, {1.0f, 1.0f, 1.0f, 0.5f, 0.5f, 0.5f});
         cm().clear_cache();
         const pp::ColorOutcome oc = cm().transform(buf, icc, false, c.target);
@@ -241,16 +244,20 @@ void test_lab_d50_golden() {
     check(xf != nullptr, "lab/transform", "cmsCreateTransform(sRGB->Lab D50) failed");
     const float white[3] = {1.0f, 1.0f, 1.0f};
     double lab_out[3] = {0.0, 0.0, 0.0};
-    if (xf) cmsDoTransform(xf, white, lab_out, 1);
+    if (xf)
+        cmsDoTransform(xf, white, lab_out, 1);
     const std::string vals =
         "Lab=(" + fnum(lab_out[0]) + "," + fnum(lab_out[1]) + "," + fnum(lab_out[2]) + ")";
     info("D50 golden " + vals + " (M0 spike e: (100, 7.57e-06, -7.63e-06))");
     check(lab_out[0] >= 99.5 && lab_out[0] <= 100.5, "lab/L-in-[99.5,100.5]", vals);
     check(std::fabs(lab_out[1] - 7.57e-06) <= 1e-4, "lab/a-golden", vals);
     check(std::fabs(lab_out[2] - (-7.63e-06)) <= 1e-4, "lab/b-golden", vals);
-    if (xf) cmsDeleteTransform(xf);
-    if (lab) cmsCloseProfile(lab);
-    if (srgb) cmsCloseProfile(srgb);
+    if (xf)
+        cmsDeleteTransform(xf);
+    if (lab)
+        cmsCloseProfile(lab);
+    if (srgb)
+        cmsCloseProfile(srgb);
 }
 
 void test_gray_to_rgb() {
@@ -327,8 +334,8 @@ void test_gray_alpha() {
     check(out.size() == 8, "graya/out-size", std::to_string(out.size()));
     for (int i = 0; i < 2; ++i) {
         check(same_bits(out[4 * i + 3], px[2 * i + 1]), "graya/alpha-bit-exact",
-              "pixel " + std::to_string(i) + " alpha " + fnum(out[4 * i + 3]) + " != " +
-                  fnum(px[2 * i + 1]));
+              "pixel " + std::to_string(i) + " alpha " + fnum(out[4 * i + 3]) +
+                  " != " + fnum(px[2 * i + 1]));
         check(std::fabs(double(out[4 * i]) - double(px[2 * i])) <= 2e-3, "graya/gray-value",
               "pixel " + std::to_string(i) + " gray " + fnum(out[4 * i]));
     }
@@ -336,8 +343,8 @@ void test_gray_alpha() {
 
 void test_rgba_alpha_bit_exact() {
     const std::string icc = srgb_icc_bytes();
-    const std::vector<float> px = {1.0f,  1.0f,  1.0f,  1.0f,   0.25f, 0.5f,
-                                   0.75f, 0.125f, 0.0f, 0.0f,   0.0f,  0.0f};
+    const std::vector<float> px = {1.0f,  1.0f,   1.0f, 1.0f, 0.25f, 0.5f,
+                                   0.75f, 0.125f, 0.0f, 0.0f, 0.0f,  0.0f};
     OIIO::ImageBuf buf = make_buf(3, 1, 4, px);
     cm().clear_cache();
     const pp::ColorOutcome oc = cm().transform(buf, icc, false, pp::ColorTarget::DisplayP3);
@@ -346,8 +353,8 @@ void test_rgba_alpha_bit_exact() {
     const std::vector<float> out = get_all(buf);
     for (int i = 0; i < 3; ++i) {
         check(same_bits(out[4 * i + 3], px[4 * i + 3]), "rgba/alpha-bit-exact",
-              "pixel " + std::to_string(i) + " alpha " + fnum(out[4 * i + 3]) + " != " +
-                  fnum(px[4 * i + 3]));
+              "pixel " + std::to_string(i) + " alpha " + fnum(out[4 * i + 3]) +
+                  " != " + fnum(px[4 * i + 3]));
     }
     check(out[0] > 0.99 && out[1] > 0.99 && out[2] > 0.99, "rgba/white-converted",
           "(" + fnum(out[0]) + "," + fnum(out[1]) + "," + fnum(out[2]) + ")");
@@ -383,8 +390,8 @@ void test_keep_original() {
               "unexpected warning count " + std::to_string(oc.warnings.size()));
         check(oc.src_desc == "assumed sRGB", "keep-noicc/src-desc", oc.src_desc);
         const std::vector<float> out = get_all(buf);
-        check(out.size() == px.size() && max_abs_diff(px, out) == 0.0, "keep-noicc/pixels-untouched",
-              "max_err=" + fnum(max_abs_diff(px, out)));
+        check(out.size() == px.size() && max_abs_diff(px, out) == 0.0,
+              "keep-noicc/pixels-untouched", "max_err=" + fnum(max_abs_diff(px, out)));
     }
     // (c) grayscale stays grayscale under KeepOriginal (no up-conversion).
     {
@@ -407,8 +414,7 @@ void test_transform_cache() {
 
     OIIO::ImageBuf b = make_buf(2, 1, 3, {0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f});
     check(cm().transform(b, icc, false, pp::ColorTarget::SRGB).error.empty(), "cache/call-b", "");
-    check(cm().cache_size() == 1, "cache/same-key-no-growth",
-          std::to_string(cm().cache_size()));
+    check(cm().cache_size() == 1, "cache/same-key-no-growth", std::to_string(cm().cache_size()));
 
     // 4-channel input shares the very same RGB transform (alpha never reaches lcms2).
     OIIO::ImageBuf c = make_buf(1, 1, 4, {0.1f, 0.2f, 0.3f, 0.4f});
@@ -454,12 +460,12 @@ void test_target_profile_generation() {
 
     const struct {
         pp::ColorTarget target;
-        const char* desc;
-        double trc_at_half;  // EOTF(0.5): sRGB ~0.21404, gamma 2.19921875 ~0.21774
+        const char *desc;
+        double trc_at_half; // EOTF(0.5): sRGB ~0.21404, gamma 2.19921875 ~0.21774
     } cases[] = {{pp::ColorTarget::DisplayP3, "Display P3", 0.21404},
                  {pp::ColorTarget::AdobeRGB, "Adobe RGB (1998)", 0.21774}};
 
-    for (const auto& c : cases) {
+    for (const auto &c : cases) {
         const std::string tag = std::string("profile/") + c.desc;
         const std::string bytes = pp::load_target_icc(c.target, err);
         check(err.empty(), tag + "-err", err);
@@ -467,7 +473,8 @@ void test_target_profile_generation() {
 
         cmsHPROFILE p = cmsOpenProfileFromMem(bytes.data(), cmsUInt32Number(bytes.size()));
         check(p != nullptr, tag + "-parse", "cmsOpenProfileFromMem failed");
-        if (!p) continue;
+        if (!p)
+            continue;
         check(cmsGetColorSpace(p) == cmsSigRgbData, tag + "-colorspace",
               "not RGB (" + std::to_string(int(cmsGetColorSpace(p))) + ")");
 
@@ -475,20 +482,24 @@ void test_target_profile_generation() {
         cmsGetProfileInfoASCII(p, cmsInfoDescription, "en", "US", desc, sizeof(desc) - 1);
         check(std::string(desc) == c.desc, tag + "-description", std::string(desc));
 
-        const auto* chroma = static_cast<const cmsCIExyYTRIPLE*>(cmsReadTag(p, cmsSigChromaticityTag));
+        const auto *chroma =
+            static_cast<const cmsCIExyYTRIPLE *>(cmsReadTag(p, cmsSigChromaticityTag));
         check(chroma != nullptr, tag + "-chromaticity", "tag missing");
         if (chroma) {
-            check(std::fabs(chroma->Red.x - (c.target == pp::ColorTarget::DisplayP3 ? 0.680 : 0.640)) <
-                      1e-4, tag + "-red-x", fnum(chroma->Red.x));
-            check(std::fabs(chroma->Green.y - (c.target == pp::ColorTarget::DisplayP3 ? 0.690 : 0.710)) <
-                      1e-4, tag + "-green-y", fnum(chroma->Green.y));
-            check(std::fabs(chroma->Blue.x - 0.150) < 1e-4 && std::fabs(chroma->Blue.y - 0.060) < 1e-4,
+            check(std::fabs(chroma->Red.x -
+                            (c.target == pp::ColorTarget::DisplayP3 ? 0.680 : 0.640)) < 1e-4,
+                  tag + "-red-x", fnum(chroma->Red.x));
+            check(std::fabs(chroma->Green.y -
+                            (c.target == pp::ColorTarget::DisplayP3 ? 0.690 : 0.710)) < 1e-4,
+                  tag + "-green-y", fnum(chroma->Green.y));
+            check(std::fabs(chroma->Blue.x - 0.150) < 1e-4 &&
+                      std::fabs(chroma->Blue.y - 0.060) < 1e-4,
                   tag + "-blue-xy", fnum(chroma->Blue.x) + "," + fnum(chroma->Blue.y));
         }
-        const auto* trc = static_cast<const cmsToneCurve*>(cmsReadTag(p, cmsSigRedTRCTag));
+        const auto *trc = static_cast<const cmsToneCurve *>(cmsReadTag(p, cmsSigRedTRCTag));
         check(trc != nullptr, tag + "-trc", "red TRC tag missing");
         if (trc) {
-            const double v = cmsEvalToneCurveFloat(const_cast<cmsToneCurve*>(trc), 0.5f);
+            const double v = cmsEvalToneCurveFloat(const_cast<cmsToneCurve *>(trc), 0.5f);
             check(std::fabs(v - c.trc_at_half) < 0.0015, tag + "-trc-at-0.5",
                   "EOTF(0.5)=" + fnum(v) + " expected ~" + fnum(c.trc_at_half));
         }
@@ -500,7 +511,8 @@ void test_target_profile_generation() {
                              : cmsOpenProfileFromMem(again.data(), cmsUInt32Number(again.size()));
         check(p2 != nullptr && cmsGetColorSpace(p2) == cmsSigRgbData, tag + "-reparse",
               "re-parsed profile is not RGB");
-        if (p2) cmsCloseProfile(p2);
+        if (p2)
+            cmsCloseProfile(p2);
         cmsCloseProfile(p);
 
         // load_target_icc is generated once and cached (identical bytes).
@@ -514,8 +526,8 @@ void test_errors() {
     // Unparsable source ICC: error, pixels untouched, no cache entry.
     const std::vector<float> px = {0.1f, 0.2f, 0.3f};
     OIIO::ImageBuf buf = make_buf(1, 1, 3, px);
-    const pp::ColorOutcome oc =
-        cm().transform(buf, std::string("\x01\x02\x03\x04not-an-icc"), false, pp::ColorTarget::SRGB);
+    const pp::ColorOutcome oc = cm().transform(buf, std::string("\x01\x02\x03\x04not-an-icc"),
+                                               false, pp::ColorTarget::SRGB);
     check(!oc.error.empty(), "error/bad-icc", "no error for garbage ICC bytes");
     check(cm().cache_size() == 0, "error/bad-icc-no-cache",
           "cache grew to " + std::to_string(cm().cache_size()));
@@ -557,9 +569,9 @@ void test_concurrent_transforms() {
                 }
                 OIIO::ImageBuf buf = make_buf(kPixels, 1, 3, px);
                 const pp::ColorTarget target =
-                    (i % 3 == 0) ? pp::ColorTarget::SRGB
-                                 : ((i % 3 == 1) ? pp::ColorTarget::DisplayP3
-                                                 : pp::ColorTarget::AdobeRGB);
+                    (i % 3 == 0)
+                        ? pp::ColorTarget::SRGB
+                        : ((i % 3 == 1) ? pp::ColorTarget::DisplayP3 : pp::ColorTarget::AdobeRGB);
                 const pp::ColorOutcome oc = cm().transform(buf, icc, false, target);
                 if (!oc.error.empty()) {
                     ++errors;
@@ -573,19 +585,21 @@ void test_concurrent_transforms() {
                 if (target == pp::ColorTarget::SRGB) {
                     // canonical sRGB source -> exact identity
                     for (std::size_t k = 0; k < px.size(); ++k)
-                        if (std::fabs(double(out[k]) - double(px[k])) > 1e-5) ++wrong;
+                        if (std::fabs(double(out[k]) - double(px[k])) > 1e-5)
+                            ++wrong;
                 } else {
                     for (float o : out)
-                        if (!std::isfinite(o) || o < -0.01f || o > 1.01f) ++wrong;
+                        if (!std::isfinite(o) || o < -0.01f || o > 1.01f)
+                            ++wrong;
                 }
             }
         });
     }
-    for (auto& th : pool) th.join();
+    for (auto &th : pool)
+        th.join();
     check(errors.load() == 0, "concurrent/errors", std::to_string(errors.load()));
     check(wrong.load() == 0, "concurrent/pixel-values", std::to_string(wrong.load()));
-    check(cm().cache_size() <= 16, "concurrent/cache-capacity",
-          std::to_string(cm().cache_size()));
+    check(cm().cache_size() <= 16, "concurrent/cache-capacity", std::to_string(cm().cache_size()));
     info("concurrent: " + std::to_string(kThreads) + " threads x " + std::to_string(kIters) +
          " transforms, cache_size=" + std::to_string(cm().cache_size()));
     cm().clear_cache();
@@ -605,15 +619,16 @@ struct ProfileFacts {
     double trc_at_half = -1.0;
 };
 
-bool profile_facts(const std::string& bytes, ProfileFacts& f) {
+bool profile_facts(const std::string &bytes, ProfileFacts &f) {
     cmsHPROFILE p = cmsOpenProfileFromMem(bytes.data(), cmsUInt32Number(bytes.size()));
-    if (p == nullptr) return false;
+    if (p == nullptr)
+        return false;
     f.rgb = (cmsGetColorSpace(p) == cmsSigRgbData);
-    const auto* chad = static_cast<const cmsMAT3*>(cmsReadTag(p, cmsSigChromaticAdaptationTag));
+    const auto *chad = static_cast<const cmsMAT3 *>(cmsReadTag(p, cmsSigChromaticAdaptationTag));
     if (chad != nullptr) {
         cmsMAT3 inv;
         if (_cmsMAT3inverse(chad, &inv)) {
-            const cmsCIEXYZ* d50 = cmsD50_XYZ();
+            const cmsCIEXYZ *d50 = cmsD50_XYZ();
             cmsVEC3 in, out;
             in.n[0] = d50->X;
             in.n[1] = d50->Y;
@@ -627,55 +642,55 @@ bool profile_facts(const std::string& bytes, ProfileFacts& f) {
             }
         }
     }
-    const auto* ch = static_cast<const cmsCIExyYTRIPLE*>(cmsReadTag(p, cmsSigChromaticityTag));
+    const auto *ch = static_cast<const cmsCIExyYTRIPLE *>(cmsReadTag(p, cmsSigChromaticityTag));
     if (ch != nullptr) {
-        f.rx = ch->Red.x;   f.ry = ch->Red.y;
-        f.gx = ch->Green.x; f.gy = ch->Green.y;
-        f.bx = ch->Blue.x;  f.by = ch->Blue.y;
+        f.rx = ch->Red.x;
+        f.ry = ch->Red.y;
+        f.gx = ch->Green.x;
+        f.gy = ch->Green.y;
+        f.bx = ch->Blue.x;
+        f.by = ch->Blue.y;
     }
-    const auto* trc = static_cast<const cmsToneCurve*>(cmsReadTag(p, cmsSigRedTRCTag));
+    const auto *trc = static_cast<const cmsToneCurve *>(cmsReadTag(p, cmsSigRedTRCTag));
     if (trc != nullptr) {
-        f.trc_at_half = cmsEvalToneCurveFloat(const_cast<cmsToneCurve*>(trc), 0.5f);
+        f.trc_at_half = cmsEvalToneCurveFloat(const_cast<cmsToneCurve *>(trc), 0.5f);
     }
     cmsCloseProfile(p);
     return true;
 }
 
-std::string cicp_tag(int p, int t) {
-    return "cicp/" + std::to_string(p) + "," + std::to_string(t);
-}
+std::string cicp_tag(int p, int t) { return "cicp/" + std::to_string(p) + "," + std::to_string(t); }
 
 // §2.8 frozen enumeration: exactly (1,13) (12,13) (12,1) (9,8) (9,13) are mapped. The
 // constructed source profiles are serialized and re-read with lcms2 (round trip) and the
 // primaries / D65 white point must match the standard values within 2/255; the TRC must
 // distinguish sRGB (13) from gamma 2.2 (1) and from linear (8).
 void test_cicp_mapping() {
-    const double tol = 2.0 / 255.0;  // T6 §4: primaries/white point tolerance <= 2/255
+    const double tol = 2.0 / 255.0; // T6 §4: primaries/white point tolerance <= 2/255
     const double d65x = 0.3127, d65y = 0.3290;
-    const double srgb_trc_half = 0.21404;   // IEC 61966-2.1 EOTF(0.5)
-    const double gamma22_half = 0.21764;    // 0.5^2.2
-    constexpr double kNoPrimaries = 0.0;    // sRGB: lcms2 built-in, no generated profile
+    const double srgb_trc_half = 0.21404; // IEC 61966-2.1 EOTF(0.5)
+    const double gamma22_half = 0.21764;  // 0.5^2.2
+    constexpr double kNoPrimaries = 0.0;  // sRGB: lcms2 built-in, no generated profile
 
     const struct {
         int primaries, transfer;
         pp::CicpSource source;
-        const char* name;
+        const char *name;
         bool has_icc;
         double rx, ry, gx, gy, bx, by, trc;
     } cases[] = {
-        {1, 13, pp::CicpSource::Srgb, "sRGB", false,
-         kNoPrimaries, 0, 0, 0, 0, 0, 0},
-        {12, 13, pp::CicpSource::DisplayP3, "Display P3", true,
-         0.680, 0.320, 0.265, 0.690, 0.150, 0.060, srgb_trc_half},
-        {12, 1, pp::CicpSource::DisplayP3Gamma22, "Display P3", true,
-         0.680, 0.320, 0.265, 0.690, 0.150, 0.060, gamma22_half},
-        {9, 8, pp::CicpSource::Bt2020Linear, "BT.2020 linear", true,
-         0.708, 0.292, 0.170, 0.797, 0.131, 0.046, 0.5},
-        {9, 13, pp::CicpSource::Bt2020SrgbTrc, "BT.2020 sRGB-TRC", true,
-         0.708, 0.292, 0.170, 0.797, 0.131, 0.046, srgb_trc_half},
+        {1, 13, pp::CicpSource::Srgb, "sRGB", false, kNoPrimaries, 0, 0, 0, 0, 0, 0},
+        {12, 13, pp::CicpSource::DisplayP3, "Display P3", true, 0.680, 0.320, 0.265, 0.690, 0.150,
+         0.060, srgb_trc_half},
+        {12, 1, pp::CicpSource::DisplayP3Gamma22, "Display P3", true, 0.680, 0.320, 0.265, 0.690,
+         0.150, 0.060, gamma22_half},
+        {9, 8, pp::CicpSource::Bt2020Linear, "BT.2020 linear", true, 0.708, 0.292, 0.170, 0.797,
+         0.131, 0.046, 0.5},
+        {9, 13, pp::CicpSource::Bt2020SrgbTrc, "BT.2020 sRGB-TRC", true, 0.708, 0.292, 0.170, 0.797,
+         0.131, 0.046, srgb_trc_half},
     };
 
-    for (const auto& c : cases) {
+    for (const auto &c : cases) {
         pp::Cicp cicp;
         cicp.primaries = c.primaries;
         cicp.transfer = c.transfer;
@@ -688,30 +703,30 @@ void test_cicp_mapping() {
         check(m.name == std::string(c.name), tag + "-name", m.name);
         check(m.log_line == want_log, tag + "-log-verbatim", m.log_line);
         check(m.src_icc.empty() != c.has_icc, tag + "-icc-presence",
-              "src_icc " + std::to_string(m.src_icc.size()) + "B (has_icc=" +
-                  (c.has_icc ? "true" : "false") + ")");
-        if (!c.has_icc) continue;  // (1,13): empty src_icc is the M1 assumed-sRGB behaviour
+              "src_icc " + std::to_string(m.src_icc.size()) +
+                  "B (has_icc=" + (c.has_icc ? "true" : "false") + ")");
+        if (!c.has_icc)
+            continue; // (1,13): empty src_icc is the M1 assumed-sRGB behaviour
         ProfileFacts f;
         check(profile_facts(m.src_icc, f), tag + "-parse", "cmsOpenProfileFromMem failed");
         check(f.rgb, tag + "-rgb", "generated profile is not RGB");
         check(std::fabs(f.wx - d65x) <= tol && std::fabs(f.wy - d65y) <= tol,
-              tag + "-whitepoint-d65",
-              "xy=(" + fnum(f.wx) + "," + fnum(f.wy) + ")");
+              tag + "-whitepoint-d65", "xy=(" + fnum(f.wx) + "," + fnum(f.wy) + ")");
         check(std::fabs(f.rx - c.rx) <= tol && std::fabs(f.ry - c.ry) <= tol, tag + "-red",
-              "xy=(" + fnum(f.rx) + "," + fnum(f.ry) + ") want (" + fnum(c.rx) + "," +
-                  fnum(c.ry) + ")");
+              "xy=(" + fnum(f.rx) + "," + fnum(f.ry) + ") want (" + fnum(c.rx) + "," + fnum(c.ry) +
+                  ")");
         check(std::fabs(f.gx - c.gx) <= tol && std::fabs(f.gy - c.gy) <= tol, tag + "-green",
-              "xy=(" + fnum(f.gx) + "," + fnum(f.gy) + ") want (" + fnum(c.gx) + "," +
-                  fnum(c.gy) + ")");
+              "xy=(" + fnum(f.gx) + "," + fnum(f.gy) + ") want (" + fnum(c.gx) + "," + fnum(c.gy) +
+                  ")");
         check(std::fabs(f.bx - c.bx) <= tol && std::fabs(f.by - c.by) <= tol, tag + "-blue",
-              "xy=(" + fnum(f.bx) + "," + fnum(f.by) + ") want (" + fnum(c.bx) + "," +
-                  fnum(c.by) + ")");
+              "xy=(" + fnum(f.bx) + "," + fnum(f.by) + ") want (" + fnum(c.bx) + "," + fnum(c.by) +
+                  ")");
         check(std::fabs(f.trc_at_half - c.trc) <= tol, tag + "-trc-at-0.5",
               "EOTF(0.5)=" + fnum(f.trc_at_half) + " want ~" + fnum(c.trc));
         info(tag + " -> " + m.name + " white=(" + fnum(f.wx) + "," + fnum(f.wy) + ") prim=(" +
              fnum(f.rx) + "," + fnum(f.ry) + ")/(" + fnum(f.gx) + "," + fnum(f.gy) + ")/(" +
-             fnum(f.bx) + "," + fnum(f.by) + ") trc(0.5)=" + fnum(f.trc_at_half) + " icc=" +
-             std::to_string(m.src_icc.size()) + "B");
+             fnum(f.bx) + "," + fnum(f.by) + ") trc(0.5)=" + fnum(f.trc_at_half) +
+             " icc=" + std::to_string(m.src_icc.size()) + "B");
     }
 
     // The generated profiles must be usable as a *source* in the real transform path:
@@ -757,7 +772,7 @@ void test_cicp_mapping() {
     // (-> ColorManager's M1 assumed-sRGB branch) and the §2.8 log text verbatim.
     const struct {
         int p, t;
-        const char* log;
+        const char *log;
     } misses[] = {
         {9, 16, "CICP transfer 16 未支持，按 sRGB 处理"},
         {9, 18, "CICP transfer 18 未支持，按 sRGB 处理"},
@@ -767,7 +782,7 @@ void test_cicp_mapping() {
         {9, 1, "CICP transfer 1 未支持，按 sRGB 处理"},
         {11, 13, "CICP transfer 13 未支持，按 sRGB 处理"},
     };
-    for (const auto& c : misses) {
+    for (const auto &c : misses) {
         pp::Cicp cicp;
         cicp.primaries = c.p;
         cicp.transfer = c.t;
@@ -784,7 +799,7 @@ void test_cicp_mapping() {
 
     // §2.8: only the first two elements take part — matrix/full_range never change the result.
     const int quad[][2] = {{9, 13}, {12, 1}, {12, 13}, {9, 8}, {9, 16}, {5, 5}};
-    for (const auto& pr : quad) {
+    for (const auto &pr : quad) {
         pp::Cicp base;
         base.primaries = pr[0];
         base.transfer = pr[1];
@@ -799,8 +814,8 @@ void test_cicp_mapping() {
                 check(got.source == ref.source && got.name == ref.name &&
                           got.src_icc == ref.src_icc && got.log_line == ref.log_line,
                       tag + "-matrix-fullrange-ignored",
-                      "matrix=" + std::to_string(matrix) + " full_range=" +
-                          std::to_string(full_range) + " changed the mapping");
+                      "matrix=" + std::to_string(matrix) +
+                          " full_range=" + std::to_string(full_range) + " changed the mapping");
             }
         }
         // Repeated calls are stable (generated-profile cache).
@@ -809,7 +824,7 @@ void test_cicp_mapping() {
     }
 }
 
-}  // namespace
+} // namespace
 
 int main() {
     test_enum_strings();

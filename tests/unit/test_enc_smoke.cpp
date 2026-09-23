@@ -22,9 +22,9 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <sstream>
 #include <string>
-#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -42,7 +42,7 @@ namespace {
 int g_failed = 0;
 int g_checks = 0;
 
-void check(bool ok, const std::string& case_name, const std::string& detail) {
+void check(bool ok, const std::string &case_name, const std::string &detail) {
     ++g_checks;
     if (!ok) {
         ++g_failed;
@@ -52,7 +52,7 @@ void check(bool ok, const std::string& case_name, const std::string& detail) {
 }
 
 // Measured values kept in the test output as evidence for the task report.
-void info(const std::string& text) {
+void info(const std::string &text) {
     std::printf("info %s\n", text.c_str());
     std::fflush(stdout);
 }
@@ -64,9 +64,9 @@ std::string num(long long v) { return std::to_string(v); }
 // can be compared byte for byte; the pattern is smooth enough for the PSNR case.
 struct Image {
     int width = 64, height = 64, channels = 3;
-    std::vector<uint8_t> u8;     // ground truth (8-bit)
-    std::vector<uint16_t> u16;   // ground truth (16-bit view: u8 * 257)
-    std::vector<float> f;        // what the encoder is handed
+    std::vector<uint8_t> u8;   // ground truth (8-bit)
+    std::vector<uint16_t> u16; // ground truth (16-bit view: u8 * 257)
+    std::vector<float> f;      // what the encoder is handed
 };
 
 Image make_image(int w, int h, int channels) {
@@ -86,8 +86,7 @@ Image make_image(int w, int h, int channels) {
             uint8_t c[4] = {0, 0, 0, 255};
             c[0] = static_cast<uint8_t>((x * 255) / std::max(1, w - 1));
             c[1] = static_cast<uint8_t>((y * 255) / std::max(1, h - 1));
-            c[2] = static_cast<uint8_t>(
-                128 + static_cast<int>(100.0 * std::sin(0.15 * (x + y))));
+            c[2] = static_cast<uint8_t>(128 + static_cast<int>(100.0 * std::sin(0.15 * (x + y))));
             if (channels >= 4) {
                 c[3] = static_cast<uint8_t>(255 - ((x * 255) / std::max(1, w - 1)) / 2);
             }
@@ -102,14 +101,13 @@ Image make_image(int w, int h, int channels) {
     return img;
 }
 
-OIIO::ImageBuf to_buf(const Image& img) {
+OIIO::ImageBuf to_buf(const Image &img) {
     OIIO::ImageSpec spec(img.width, img.height, img.channels, OIIO::TypeFloat);
     OIIO::ImageBuf buf(spec);
     OIIO::ROI roi(0, img.width, 0, img.height, 0, 1, 0, img.channels);
     buf.set_pixels(roi, OIIO::TypeFloat,
-                   OIIO::span<const std::byte>(
-                       reinterpret_cast<const std::byte*>(img.f.data()),
-                       img.f.size() * sizeof(float)));
+                   OIIO::span<const std::byte>(reinterpret_cast<const std::byte *>(img.f.data()),
+                                               img.f.size() * sizeof(float)));
     return buf;
 }
 
@@ -122,7 +120,7 @@ struct ReadBack {
     std::vector<uint16_t> u16;
 };
 
-ReadBack read_back(const fs::path& p, int want_channels, const OIIO::TypeDesc& type) {
+ReadBack read_back(const fs::path &p, int want_channels, const OIIO::TypeDesc &type) {
     ReadBack rb;
     OIIO::ImageBuf buf(p.string());
     if (!buf.read(0, 0, 0, want_channels, true, type)) {
@@ -132,7 +130,7 @@ ReadBack read_back(const fs::path& p, int want_channels, const OIIO::TypeDesc& t
         }
         return rb;
     }
-    const OIIO::ImageSpec& s = buf.spec();
+    const OIIO::ImageSpec &s = buf.spec();
     rb.width = s.width;
     rb.height = s.height;
     rb.channels = s.nchannels;
@@ -142,16 +140,16 @@ ReadBack read_back(const fs::path& p, int want_channels, const OIIO::TypeDesc& t
     if (type == OIIO::TypeDesc::UINT16) {
         rb.u16.assign(n, 0);
         if (!buf.get_pixels(roi, OIIO::TypeDesc::UINT16,
-                            OIIO::span<std::byte>(reinterpret_cast<std::byte*>(rb.u16.data()),
+                            OIIO::span<std::byte>(reinterpret_cast<std::byte *>(rb.u16.data()),
                                                   rb.u16.size() * sizeof(uint16_t)))) {
             rb.error = buf.geterror();
             return rb;
         }
     } else {
         rb.u8.assign(n, 0);
-        if (!buf.get_pixels(roi, type,
-                            OIIO::span<std::byte>(reinterpret_cast<std::byte*>(rb.u8.data()),
-                                                  rb.u8.size()))) {
+        if (!buf.get_pixels(
+                roi, type,
+                OIIO::span<std::byte>(reinterpret_cast<std::byte *>(rb.u8.data()), rb.u8.size()))) {
             rb.error = buf.geterror();
             return rb;
         }
@@ -160,7 +158,7 @@ ReadBack read_back(const fs::path& p, int want_channels, const OIIO::TypeDesc& t
     return rb;
 }
 
-OIIO::ImageBuf read_float(const fs::path& p, int want_channels) {
+OIIO::ImageBuf read_float(const fs::path &p, int want_channels) {
     OIIO::ImageBuf buf(p.string());
     buf.read(0, 0, 0, want_channels, true, OIIO::TypeDesc::FLOAT);
     return buf;
@@ -175,7 +173,7 @@ struct WebpDecoded {
     std::vector<uint8_t> rgba;
 };
 
-WebpDecoded decode_webp_rgba(const fs::path& p) {
+WebpDecoded decode_webp_rgba(const fs::path &p) {
     WebpDecoded out;
     std::ifstream f(p, std::ios::binary);
     if (!f) {
@@ -187,7 +185,8 @@ WebpDecoded decode_webp_rgba(const fs::path& p) {
     const std::string bytes = ss.str();
     int w = 0;
     int h = 0;
-    uint8_t* dec = WebPDecodeRGBA(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size(), &w, &h);
+    uint8_t *dec =
+        WebPDecodeRGBA(reinterpret_cast<const uint8_t *>(bytes.data()), bytes.size(), &w, &h);
     if (dec == nullptr) {
         out.error = "WebPDecodeRGBA failed";
         return out;
@@ -201,16 +200,16 @@ WebpDecoded decode_webp_rgba(const fs::path& p) {
     return out;
 }
 
-std::string icc_of(const fs::path& p) {
+std::string icc_of(const fs::path &p) {
     OIIO::ImageBuf buf;
     if (!buf.init_spec(p.string(), 0, 0)) {
         return {};
     }
-    const OIIO::ParamValue* pv = buf.spec().find_attribute("ICCProfile");
+    const OIIO::ParamValue *pv = buf.spec().find_attribute("ICCProfile");
     if (pv == nullptr || pv->type().basetype != OIIO::TypeDesc::UINT8 || pv->datasize() <= 0) {
         return {};
     }
-    return std::string(static_cast<const char*>(pv->data()),
+    return std::string(static_cast<const char *>(pv->data()),
                        static_cast<std::size_t>(pv->datasize()));
 }
 
@@ -235,7 +234,7 @@ std::string srgb_icc_bytes() {
     return out;
 }
 
-std::string read_text(const fs::path& p) {
+std::string read_text(const fs::path &p) {
     std::ifstream f(p, std::ios::binary);
     std::ostringstream ss;
     ss << f.rdbuf();
@@ -243,11 +242,11 @@ std::string read_text(const fs::path& p) {
 }
 
 // Newest run-*.log inside dir (logger keeps up to 20, so sort by mtime).
-fs::path newest_log(const fs::path& dir) {
+fs::path newest_log(const fs::path &dir) {
     std::error_code ec;
     fs::path best;
     fs::file_time_type best_t{};
-    for (const fs::directory_entry& e : fs::directory_iterator(dir, ec)) {
+    for (const fs::directory_entry &e : fs::directory_iterator(dir, ec)) {
         if (!e.is_regular_file(ec) || e.path().extension() != ".log") {
             continue;
         }
@@ -261,8 +260,8 @@ fs::path newest_log(const fs::path& dir) {
 }
 
 // --------------------------------------------------------------- parameters --
-pp::ParamSet params_for(const char* format, const char* backend, const char* tech, bool lossless) {
-    const pp::FormatDef* f = pp::find_format(format);
+pp::ParamSet params_for(const char *format, const char *backend, const char *tech, bool lossless) {
+    const pp::FormatDef *f = pp::find_format(format);
     check(f != nullptr, std::string("params/find_format/") + format, "format table lookup failed");
     if (f == nullptr) {
         return {};
@@ -270,9 +269,9 @@ pp::ParamSet params_for(const char* format, const char* backend, const char* tec
     return pp::default_params(*f, backend, tech, lossless);
 }
 
-pp::EncodeResult run_encode(pp::IEncoder* enc, OIIO::ImageBuf& img, const pp::ParamSet& params,
-                            const fs::path& out, const pp::MetadataPayloads& meta = {},
-                            int out_bitdepth = 8, const std::string& tech_id = std::string()) {
+pp::EncodeResult run_encode(pp::IEncoder *enc, OIIO::ImageBuf &img, const pp::ParamSet &params,
+                            const fs::path &out, const pp::MetadataPayloads &meta = {},
+                            int out_bitdepth = 8, const std::string &tech_id = std::string()) {
     if (enc == nullptr) {
         pp::EncodeResult res;
         res.error = "make_encoder returned nullptr (registry lookup failed)";
@@ -284,7 +283,7 @@ pp::EncodeResult run_encode(pp::IEncoder* enc, OIIO::ImageBuf& img, const pp::Pa
     return enc->encode(req);
 }
 
-bool same_u8(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b, std::string& detail) {
+bool same_u8(const std::vector<uint8_t> &a, const std::vector<uint8_t> &b, std::string &detail) {
     if (a.size() != b.size()) {
         detail = "size mismatch " + num(static_cast<long long>(a.size())) + " vs " +
                  num(static_cast<long long>(b.size()));
@@ -300,7 +299,7 @@ bool same_u8(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b, std::
     return true;
 }
 
-}  // namespace
+} // namespace
 
 int main() {
     std::error_code ec;
@@ -316,9 +315,11 @@ int main() {
         std::unique_ptr<pp::IEncoder> jpeg = pp::make_encoder("jpeg", "jpegli");
         std::unique_ptr<pp::IEncoder> jxl = pp::make_encoder("jxl", "libjxl");
         std::unique_ptr<pp::IEncoder> webp = pp::make_encoder("webp", "libwebp");
-        check(jpeg != nullptr, "registry/make_encoder/jpeg", "make_encoder(jpeg,jpegli) == nullptr");
+        check(jpeg != nullptr, "registry/make_encoder/jpeg",
+              "make_encoder(jpeg,jpegli) == nullptr");
         check(jxl != nullptr, "registry/make_encoder/jxl", "make_encoder(jxl,libjxl) == nullptr");
-        check(webp != nullptr, "registry/make_encoder/webp", "make_encoder(webp,libwebp) == nullptr");
+        check(webp != nullptr, "registry/make_encoder/webp",
+              "make_encoder(webp,libwebp) == nullptr");
         if (jpeg) {
             check(jpeg->format().id == "jpeg", "registry/format/jpeg", jpeg->format().id);
         }
@@ -349,18 +350,18 @@ int main() {
     // ------------------------------------------- 1) three formats encode OK --
     {
         struct Case {
-            const char* name;
-            const char* format;
-            const char* backend;
-            const char* tech;
-            const char* ext;
+            const char *name;
+            const char *format;
+            const char *backend;
+            const char *tech;
+            const char *ext;
         };
         const Case cases[] = {
             {"jpeg", "jpeg", "jpegli", "dct", "jpg"},
             {"jxl", "jxl", "libjxl", "vardct", "jxl"},
             {"webp", "webp", "libwebp", "lossy", "webp"},
         };
-        for (const Case& c : cases) {
+        for (const Case &c : cases) {
             OIIO::ImageBuf buf = to_buf(rgb);
             std::unique_ptr<pp::IEncoder> enc = pp::make_encoder(c.format, c.backend);
             pp::ParamSet params = params_for(c.format, c.backend, c.tech, false);
@@ -371,7 +372,8 @@ int main() {
             check(res.bytes > 0, tag, "bytes == 0");
             check(fs::exists(out, ec) && fs::file_size(out, ec) == res.bytes, tag,
                   "output file missing or size != result.bytes");
-            info(std::string(c.name) + " rgb 64x64 bytes=" + num(static_cast<long long>(res.bytes)) +
+            info(std::string(c.name) +
+                 " rgb 64x64 bytes=" + num(static_cast<long long>(res.bytes)) +
                  " encode_ms=" + std::to_string(res.t.encode_ms));
         }
     }
@@ -394,8 +396,8 @@ int main() {
         check(r_low.error.empty() && r_high.error.empty(), "jpeg/quality_mode",
               "quality path failed: " + r_low.error + r_high.error);
         check(r_low.bytes > 0 && r_low.bytes < r_high.bytes, "jpeg/quality_effect",
-              "quality=30 (" + num(static_cast<long long>(r_low.bytes)) + ") must be smaller than q95 (" +
-                  num(static_cast<long long>(r_high.bytes)) + ")");
+              "quality=30 (" + num(static_cast<long long>(r_low.bytes)) +
+                  ") must be smaller than q95 (" + num(static_cast<long long>(r_high.bytes)) + ")");
 
         OIIO::ImageBuf d1 = to_buf(rgb);
         OIIO::ImageBuf d3 = to_buf(rgb);
@@ -472,17 +474,17 @@ int main() {
     {
         const Image rgba = make_image(64, 64, 4);
         struct Case {
-            const char* name;
-            const char* format;
-            const char* backend;
-            const char* tech;
-            const char* ext;
+            const char *name;
+            const char *format;
+            const char *backend;
+            const char *tech;
+            const char *ext;
         };
         const Case cases[] = {
             {"jxl", "jxl", "libjxl", "modular", "jxl"},
             {"webp", "webp", "libwebp", "lossless", "webp"},
         };
-        for (const Case& c : cases) {
+        for (const Case &c : cases) {
             OIIO::ImageBuf buf = to_buf(rgba);
             std::unique_ptr<pp::IEncoder> enc = pp::make_encoder(c.format, c.backend);
             pp::ParamSet params = params_for(c.format, c.backend, c.tech, true);
@@ -549,7 +551,8 @@ int main() {
         pp::ParamSet params = params_for("jpeg", "jpegli", "dct", false);
         params["arith_code"] = true;
         const pp::EncodeResult res = run_encode(enc.get(), buf, params, root / "arith.jpg");
-        check(res.bytes == 0 && res.error.find("arith_code") != std::string::npos, "jpeg/arith_code",
+        check(res.bytes == 0 && res.error.find("arith_code") != std::string::npos,
+              "jpeg/arith_code",
               "expected error containing 'arith_code', got bytes=" +
                   num(static_cast<long long>(res.bytes)) + " error='" + res.error + "'");
         info("jpeg arith_code error='" + res.error + "'");
@@ -590,7 +593,7 @@ int main() {
         params["totally_unknown_key"] = int64_t(7);
         const pp::EncodeResult res = run_encode(enc.get(), buf, params, root / "unknown_param.jpg");
         check(res.error.empty() && res.bytes > 0, "e9/unknown_key/still_succeeds", res.error);
-        pp::log_shutdown();  // flush before scanning the log file
+        pp::log_shutdown(); // flush before scanning the log file
         const fs::path log = newest_log(root / "log");
         const std::string text = log.empty() ? std::string() : read_text(log);
         check(text.find("unknown parameter ignored") != std::string::npos &&
@@ -609,18 +612,18 @@ int main() {
             pp::MetadataPayloads meta;
             meta.icc_profile = icc;
             struct Case {
-                const char* name;
-                const char* format;
-                const char* backend;
-                const char* tech;
-                const char* ext;
+                const char *name;
+                const char *format;
+                const char *backend;
+                const char *tech;
+                const char *ext;
             };
             const Case cases[] = {
                 {"jpeg", "jpeg", "jpegli", "dct", "jpg"},
                 {"jxl", "jxl", "libjxl", "modular", "jxl"},
                 {"webp", "webp", "libwebp", "lossless", "webp"},
             };
-            for (const Case& c : cases) {
+            for (const Case &c : cases) {
                 OIIO::ImageBuf buf = to_buf(rgb);
                 std::unique_ptr<pp::IEncoder> enc = pp::make_encoder(c.format, c.backend);
                 pp::ParamSet params = params_for(c.format, c.backend, c.tech, true);
@@ -666,8 +669,7 @@ int main() {
         }
         const pp::SourceMeta read = pp::read_metadata(out);
         const auto it = read.exif.findKey(Exiv2::ExifKey("Exif.Photo.DateTimeOriginal"));
-        check(it != read.exif.end() &&
-                  it->toString() == "2024:03:01 10:00:00",
+        check(it != read.exif.end() && it->toString() == "2024:03:01 10:00:00",
               "jxl/box/exif_roundtrip",
               "DateTimeOriginal not read back (read error: '" + read.error + "')");
         // Pixels must still be intact with boxes present.
@@ -680,8 +682,8 @@ int main() {
     {
         OIIO::ImageBuf buf = to_buf(rgb);
         std::unique_ptr<pp::IEncoder> enc = pp::make_encoder("jpeg", "jpegli");
-        pp::ParamSet sparse;                       // param_* fallbacks; no __lossless key
-        sparse["distance"] = 1.0;                  // Float
+        pp::ParamSet sparse;      // param_* fallbacks; no __lossless key
+        sparse["distance"] = 1.0; // Float
         const pp::EncodeResult res = run_encode(enc.get(), buf, sparse, root / "sparse.jpg");
         check(res.error.empty() && res.bytes > 0, "e9/sparse_params", res.error);
         // Reserved keys are never reported as unknown parameters.
@@ -694,17 +696,17 @@ int main() {
     // ------------------- 15) E1: one encoder instance shared by 4 threads --
     {
         struct Job {
-            const char* format;
-            const char* backend;
-            const char* tech;
-            const char* ext;
+            const char *format;
+            const char *backend;
+            const char *tech;
+            const char *ext;
         };
         const Job jobs[] = {
             {"jpeg", "jpegli", "dct", "jpg"},
             {"jxl", "libjxl", "vardct", "jxl"},
             {"webp", "libwebp", "lossy", "webp"},
         };
-        for (const Job& j : jobs) {
+        for (const Job &j : jobs) {
             std::unique_ptr<pp::IEncoder> enc = pp::make_encoder(j.format, j.backend);
             pp::ParamSet params = params_for(j.format, j.backend, j.tech, false);
             std::atomic<int> ok{0};
@@ -714,7 +716,7 @@ int main() {
             for (int t = 0; t < 4; ++t) {
                 threads.emplace_back([&, t] {
                     for (int i = 0; i < 2; ++i) {
-                        OIIO::ImageBuf buf = to_buf(rgb);  // per-thread input buffer
+                        OIIO::ImageBuf buf = to_buf(rgb); // per-thread input buffer
                         const fs::path out = root / ("shared_" + std::to_string(t) + "_" +
                                                      std::to_string(i) + "." + j.ext);
                         const pp::EncodeResult res = run_encode(enc.get(), buf, params, out);
@@ -729,7 +731,7 @@ int main() {
                     }
                 });
             }
-            for (std::thread& th : threads) {
+            for (std::thread &th : threads) {
                 th.join();
             }
             check(ok.load() == 8, std::string("e1/shared_instance/") + j.format,
@@ -762,8 +764,8 @@ int main() {
               "PSNR " + std::to_string(cr.PSNR) + " dB < 30 dB");
         check(cr.maxerror > 0.0, "tech/modular_lossy/is_lossy",
               "distance=1.0 produced a bit-exact result (lossless path taken?)");
-        info("jxl tech_id=modular distance=1.0 bytes=" +
-             num(static_cast<long long>(res.bytes)) + " PSNR=" + std::to_string(cr.PSNR) + " dB");
+        info("jxl tech_id=modular distance=1.0 bytes=" + num(static_cast<long long>(res.bytes)) +
+             " PSNR=" + std::to_string(cr.PSNR) + " dB");
     }
 
     // ------------- 17) T6b: empty tech_id keeps the previous fallback --
@@ -787,8 +789,7 @@ int main() {
         check(jres.error.empty() && jres.bytes > 0, "tech/empty_fallback/jxl", jres.error);
         const ReadBack jrb = read_back(jout, 3, OIIO::TypeDesc::UINT8);
         std::string jdetail;
-        check(jrb.ok && same_u8(jrb.u8, rgb.u8, jdetail), "tech/empty_fallback/jxl_exact",
-              jdetail);
+        check(jrb.ok && same_u8(jrb.u8, rgb.u8, jdetail), "tech/empty_fallback/jxl_exact", jdetail);
     }
 
     pp::log_shutdown();

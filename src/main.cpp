@@ -21,14 +21,14 @@
 #include <QApplication>
 #include <QDebug>
 #include <QFileInfo>
+#include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QString>
 #include <QStringList>
-#include <QVariant>
-#include <QGuiApplication>
 #include <QStyleHints>
+#include <QVariant>
 
 #include <algorithm>
 #include <atomic>
@@ -51,12 +51,12 @@
 #include "core/fsops.h"
 #include "core/logger.h"
 #include "core/params.h"
-#include "core/version.h"
 #include "core/pipeline.h"
 #include "core/presets.h"
 #include "core/scheduler.h"
 #include "core/settings.h"
 #include "core/types.h"
+#include "core/version.h"
 #include "platform/mica.h"
 #include "platform/paths.h"
 #include "ui/mainwindow.h"
@@ -67,16 +67,31 @@ namespace fs = std::filesystem;
 namespace {
 
 // 设置文件里的日志级别（5 档）；非法 → 调用方回退 info（§4.3 冻结顺序）
-bool log_level_from_text(std::string_view s, pp::LogLevel& out) {
-    if (s == "trace") { out = pp::LogLevel::Trace; return true; }
-    if (s == "debug") { out = pp::LogLevel::Debug; return true; }
-    if (s == "info") { out = pp::LogLevel::Info; return true; }
-    if (s == "warn") { out = pp::LogLevel::Warn; return true; }
-    if (s == "error") { out = pp::LogLevel::Error; return true; }
+bool log_level_from_text(std::string_view s, pp::LogLevel &out) {
+    if (s == "trace") {
+        out = pp::LogLevel::Trace;
+        return true;
+    }
+    if (s == "debug") {
+        out = pp::LogLevel::Debug;
+        return true;
+    }
+    if (s == "info") {
+        out = pp::LogLevel::Info;
+        return true;
+    }
+    if (s == "warn") {
+        out = pp::LogLevel::Warn;
+        return true;
+    }
+    if (s == "error") {
+        out = pp::LogLevel::Error;
+        return true;
+    }
     return false;
 }
 
-}  // namespace
+} // namespace
 
 #ifdef PP_BUILD_DEV
 namespace {
@@ -85,7 +100,7 @@ namespace {
 // --dev harness (§3.15)
 // ---------------------------------------------------------------------------
 
-const char* kDevUsage =
+const char *kDevUsage =
     "usage: photopipeline --dev <input...> --out <dir> [options]\n"
     "  --out DIR               output root (required)\n"
     "  --format ID             jpeg|jxl|png|tiff|webp|bmp|heif|avif (default jxl)\n"
@@ -123,57 +138,81 @@ struct DevOptions {
     std::vector<std::pair<std::string, std::string>> params, metas;
 };
 
-std::string value_text(const pp::ParamValue& v) {
-    if (const bool* b = std::get_if<bool>(&v)) return *b ? "true" : "false";
-    if (const int64_t* i = std::get_if<int64_t>(&v)) return std::to_string(*i);
-    if (const double* d = std::get_if<double>(&v)) {
+std::string value_text(const pp::ParamValue &v) {
+    if (const bool *b = std::get_if<bool>(&v))
+        return *b ? "true" : "false";
+    if (const int64_t *i = std::get_if<int64_t>(&v))
+        return std::to_string(*i);
+    if (const double *d = std::get_if<double>(&v)) {
         char buf[40];
         std::snprintf(buf, sizeof(buf), "%.10g", *d);
         return buf;
     }
-    if (const std::string* s = std::get_if<std::string>(&v)) return *s;
+    if (const std::string *s = std::get_if<std::string>(&v))
+        return *s;
     return {};
 }
 
-const char* warning_name(pp::WarningKind k) {
+const char *warning_name(pp::WarningKind k) {
     switch (k) {
-        case pp::WarningKind::DepthDowngrade: return "DepthDowngrade";
-        case pp::WarningKind::LossyFromLossless: return "LossyFromLossless";
-        case pp::WarningKind::MultipageTruncated: return "MultipageTruncated";
-        case pp::WarningKind::AlphaFlattened: return "AlphaFlattened";
-        case pp::WarningKind::NoIccAssumeSrgb: return "NoIccAssumeSrgb";
-        case pp::WarningKind::MetadataDropped: return "MetadataDropped";
-        case pp::WarningKind::TimeFieldMissing: return "TimeFieldMissing";
-        case pp::WarningKind::GrayToRgbEncoded: return "GrayToRgbEncoded";
+    case pp::WarningKind::DepthDowngrade:
+        return "DepthDowngrade";
+    case pp::WarningKind::LossyFromLossless:
+        return "LossyFromLossless";
+    case pp::WarningKind::MultipageTruncated:
+        return "MultipageTruncated";
+    case pp::WarningKind::AlphaFlattened:
+        return "AlphaFlattened";
+    case pp::WarningKind::NoIccAssumeSrgb:
+        return "NoIccAssumeSrgb";
+    case pp::WarningKind::MetadataDropped:
+        return "MetadataDropped";
+    case pp::WarningKind::TimeFieldMissing:
+        return "TimeFieldMissing";
+    case pp::WarningKind::GrayToRgbEncoded:
+        return "GrayToRgbEncoded";
     }
     return "Unknown";
 }
 
 int default_bitdepth(std::string_view format) {
-    if (format == "jpeg") return 8;
-    if (format == "jxl") return 16;
-    if (format == "png") return 16;
-    if (format == "tiff") return 16;
-    if (format == "webp") return 8;
-    if (format == "bmp") return 24;
-    if (format == "heif" || format == "avif") return 10;
+    if (format == "jpeg")
+        return 8;
+    if (format == "jxl")
+        return 16;
+    if (format == "png")
+        return 16;
+    if (format == "tiff")
+        return 16;
+    if (format == "webp")
+        return 8;
+    if (format == "bmp")
+        return 24;
+    if (format == "heif" || format == "avif")
+        return 10;
     return 8;
 }
 
-bool parse_bool_text(std::string_view s, bool& out) {
-    if (s == "true" || s == "1" || s == "yes" || s == "on") { out = true; return true; }
-    if (s == "false" || s == "0" || s == "no" || s == "off") { out = false; return true; }
+bool parse_bool_text(std::string_view s, bool &out) {
+    if (s == "true" || s == "1" || s == "yes" || s == "on") {
+        out = true;
+        return true;
+    }
+    if (s == "false" || s == "0" || s == "no" || s == "off") {
+        out = false;
+        return true;
+    }
     return false;
 }
 
-bool parse_int_text(std::string_view s, int64_t& out) {
-    const char* b = s.data();
-    const char* e = s.data() + s.size();
+bool parse_int_text(std::string_view s, int64_t &out) {
+    const char *b = s.data();
+    const char *e = s.data() + s.size();
     const std::from_chars_result r = std::from_chars(b, e, out);
     return r.ec == std::errc() && r.ptr == e;
 }
 
-bool parse_double_text(std::string_view s, double& out) {
+bool parse_double_text(std::string_view s, double &out) {
     try {
         const std::string tmp(s);
         std::size_t used = 0;
@@ -184,16 +223,17 @@ bool parse_double_text(std::string_view s, double& out) {
     }
 }
 
-bool split_kv(std::string_view arg, std::string& key, std::string& value) {
+bool split_kv(std::string_view arg, std::string &key, std::string &value) {
     const std::size_t eq = arg.find('=');
-    if (eq == std::string_view::npos || eq == 0) return false;
+    if (eq == std::string_view::npos || eq == 0)
+        return false;
     key.assign(arg.substr(0, eq));
     value.assign(arg.substr(eq + 1));
     return true;
 }
 
-bool parse_dev_options(int argc, char** argv, DevOptions& o, std::string& err) {
-    auto need = [&](int& i, const char* opt) -> const char* {
+bool parse_dev_options(int argc, char **argv, DevOptions &o, std::string &err) {
+    auto need = [&](int &i, const char *opt) -> const char * {
         if (i + 1 >= argc) {
             err = std::string(opt) + " requires a value";
             return nullptr;
@@ -202,58 +242,110 @@ bool parse_dev_options(int argc, char** argv, DevOptions& o, std::string& err) {
     };
     for (int i = 1; i < argc; ++i) {
         const std::string_view a = argv[i];
-        if (a == "--dev") continue;
-        if (a == "-h" || a == "--help") { o.help = true; return true; }
+        if (a == "--dev")
+            continue;
+        if (a == "-h" || a == "--help") {
+            o.help = true;
+            return true;
+        }
         if (a == "--out") {
-            const char* v = need(i, "--out"); if (!v) return false;
-            o.out_root = v; o.out_set = true;
+            const char *v = need(i, "--out");
+            if (!v)
+                return false;
+            o.out_root = v;
+            o.out_set = true;
         } else if (a == "--format") {
-            const char* v = need(i, "--format"); if (!v) return false;
-            o.format = v; o.has_format = true;
+            const char *v = need(i, "--format");
+            if (!v)
+                return false;
+            o.format = v;
+            o.has_format = true;
         } else if (a == "--backend") {
-            const char* v = need(i, "--backend"); if (!v) return false;
-            o.backend = v; o.has_backend = true;
+            const char *v = need(i, "--backend");
+            if (!v)
+                return false;
+            o.backend = v;
+            o.has_backend = true;
         } else if (a == "--tech") {
-            const char* v = need(i, "--tech"); if (!v) return false;
-            o.tech = v; o.has_tech = true;
+            const char *v = need(i, "--tech");
+            if (!v)
+                return false;
+            o.tech = v;
+            o.has_tech = true;
         } else if (a == "--lossless") {
-            o.lossless = true; o.has_lossless = true;
+            o.lossless = true;
+            o.has_lossless = true;
         } else if (a == "--bitdepth") {
-            const char* v = need(i, "--bitdepth"); if (!v) return false;
+            const char *v = need(i, "--bitdepth");
+            if (!v)
+                return false;
             int64_t n = 0;
-            if (!parse_int_text(v, n) || n <= 0) { err = "invalid --bitdepth value"; return false; }
-            o.bitdepth = static_cast<int>(n); o.has_bitdepth = true;
+            if (!parse_int_text(v, n) || n <= 0) {
+                err = "invalid --bitdepth value";
+                return false;
+            }
+            o.bitdepth = static_cast<int>(n);
+            o.has_bitdepth = true;
         } else if (a == "--color") {
-            const char* v = need(i, "--color"); if (!v) return false;
-            o.color = v; o.has_color = true;
+            const char *v = need(i, "--color");
+            if (!v)
+                return false;
+            o.color = v;
+            o.has_color = true;
         } else if (a == "--conflict") {
-            const char* v = need(i, "--conflict"); if (!v) return false;
-            o.conflict = v; o.has_conflict = true;
+            const char *v = need(i, "--conflict");
+            if (!v)
+                return false;
+            o.conflict = v;
+            o.has_conflict = true;
         } else if (a == "--metadata-only") {
             o.metadata_only = true;
         } else if (a == "--preset") {
-            const char* v = need(i, "--preset"); if (!v) return false;
-            o.preset = v; o.has_preset = true;
+            const char *v = need(i, "--preset");
+            if (!v)
+                return false;
+            o.preset = v;
+            o.has_preset = true;
         } else if (a == "--param") {
-            const char* v = need(i, "--param"); if (!v) return false;
+            const char *v = need(i, "--param");
+            if (!v)
+                return false;
             std::string k, val;
-            if (!split_kv(v, k, val)) { err = "--param expects KEY=VALUE"; return false; }
+            if (!split_kv(v, k, val)) {
+                err = "--param expects KEY=VALUE";
+                return false;
+            }
             o.params.emplace_back(std::move(k), std::move(val));
         } else if (a == "--meta") {
-            const char* v = need(i, "--meta"); if (!v) return false;
+            const char *v = need(i, "--meta");
+            if (!v)
+                return false;
             std::string k, val;
-            if (!split_kv(v, k, val)) { err = "--meta expects KEY=VALUE"; return false; }
+            if (!split_kv(v, k, val)) {
+                err = "--meta expects KEY=VALUE";
+                return false;
+            }
             o.metas.emplace_back(std::move(k), std::move(val));
         } else if (a == "--workers") {
-            const char* v = need(i, "--workers"); if (!v) return false;
+            const char *v = need(i, "--workers");
+            if (!v)
+                return false;
             int64_t n = 0;
-            if (!parse_int_text(v, n) || n < 0) { err = "invalid --workers value"; return false; }
-            o.workers = static_cast<int>(n); o.has_workers = true;
+            if (!parse_int_text(v, n) || n < 0) {
+                err = "invalid --workers value";
+                return false;
+            }
+            o.workers = static_cast<int>(n);
+            o.has_workers = true;
         } else if (a == "--base") {
-            const char* v = need(i, "--base"); if (!v) return false;
+            const char *v = need(i, "--base");
+            if (!v)
+                return false;
             o.bases.emplace_back(v);
         } else if (a == "--log-level") {
-            const char* v = need(i, "--log-level"); if (!v) return false;
+            const char *v = need(i, "--log-level");
+            if (!v)
+                return false;
             o.log_level = v;
         } else if (!a.empty() && a.front() == '-' && a != "-") {
             err = "unknown option '" + std::string(a) + "'";
@@ -262,108 +354,154 @@ bool parse_dev_options(int argc, char** argv, DevOptions& o, std::string& err) {
             o.inputs.emplace_back(a);
         }
     }
-    if (!o.out_set) { err = "--out DIR is required"; return false; }
-    if (o.inputs.empty()) { err = "at least one input file or directory is required"; return false; }
+    if (!o.out_set) {
+        err = "--out DIR is required";
+        return false;
+    }
+    if (o.inputs.empty()) {
+        err = "at least one input file or directory is required";
+        return false;
+    }
     return true;
 }
 
-bool parse_log_level(std::string_view s, pp::LogLevel& out) {
-    if (s == "trace") { out = pp::LogLevel::Trace; return true; }
-    if (s == "debug") { out = pp::LogLevel::Debug; return true; }
-    if (s == "info") { out = pp::LogLevel::Info; return true; }
-    if (s == "warn") { out = pp::LogLevel::Warn; return true; }
-    if (s == "error") { out = pp::LogLevel::Error; return true; }
+bool parse_log_level(std::string_view s, pp::LogLevel &out) {
+    if (s == "trace") {
+        out = pp::LogLevel::Trace;
+        return true;
+    }
+    if (s == "debug") {
+        out = pp::LogLevel::Debug;
+        return true;
+    }
+    if (s == "info") {
+        out = pp::LogLevel::Info;
+        return true;
+    }
+    if (s == "warn") {
+        out = pp::LogLevel::Warn;
+        return true;
+    }
+    if (s == "error") {
+        out = pp::LogLevel::Error;
+        return true;
+    }
     return false;
 }
 
-bool parse_conflict(std::string_view s, pp::ConflictPolicy& out) {
-    if (s == "skip") { out = pp::ConflictPolicy::Skip; return true; }
-    if (s == "overwrite") { out = pp::ConflictPolicy::Overwrite; return true; }
-    if (s == "rename") { out = pp::ConflictPolicy::Rename; return true; }
+bool parse_conflict(std::string_view s, pp::ConflictPolicy &out) {
+    if (s == "skip") {
+        out = pp::ConflictPolicy::Skip;
+        return true;
+    }
+    if (s == "overwrite") {
+        out = pp::ConflictPolicy::Overwrite;
+        return true;
+    }
+    if (s == "rename") {
+        out = pp::ConflictPolicy::Rename;
+        return true;
+    }
     return false;
 }
 
 // --param KEY=VALUE → typed ParamValue using the format's parameter table. Keys that are not in
 // the table are kept as strings so the encoder can report them through its E9 warning path.
-bool set_param(pp::ParamSet& s, const pp::FormatDef& f, const std::string& backend,
-               const std::string& tech, const std::string& key, const std::string& raw,
-               std::string& err) {
-    const pp::ParamDef* def = nullptr;
-    const pp::BackendDef* b = pp::find_backend(f, backend);
+bool set_param(pp::ParamSet &s, const pp::FormatDef &f, const std::string &backend,
+               const std::string &tech, const std::string &key, const std::string &raw,
+               std::string &err) {
+    const pp::ParamDef *def = nullptr;
+    const pp::BackendDef *b = pp::find_backend(f, backend);
     if (b) {
-        for (const pp::TechDef& t : b->techs) {
-            if (!tech.empty() && t.id != tech) continue;
-            for (const pp::ParamDef& p : t.params) {
-                if (p.key == key) def = &p;
+        for (const pp::TechDef &t : b->techs) {
+            if (!tech.empty() && t.id != tech)
+                continue;
+            for (const pp::ParamDef &p : t.params) {
+                if (p.key == key)
+                    def = &p;
             }
         }
     }
     if (!def) {
-        s[key] = raw;  // unknown → encoder E9 warning (log_warn, no WarningKind)
+        s[key] = raw; // unknown → encoder E9 warning (log_warn, no WarningKind)
         pp::log_warn("harness", "main.cpp", "unknown parameter key; forwarded to encoder",
                      {{"key", key}, {"value", raw}});
         return true;
     }
     switch (def->type) {
-        case pp::ParamType::Int: {
-            int64_t v = 0;
-            if (!parse_int_text(raw, v)) { err = "param '" + key + "': expected int"; return false; }
-            s[key] = v;
-            return true;
-        }
-        case pp::ParamType::Float: {
-            double v = 0;
-            if (!parse_double_text(raw, v)) { err = "param '" + key + "': expected float"; return false; }
-            s[key] = v;
-            return true;
-        }
-        case pp::ParamType::Bool: {
-            bool v = false;
-            if (!parse_bool_text(raw, v)) { err = "param '" + key + "': expected bool"; return false; }
-            s[key] = v;
-            return true;
-        }
-        case pp::ParamType::Enum: {
-            for (const auto& choice : def->choices) {
-                if (choice.first == raw || value_text(choice.second) == raw) {
-                    s[key] = choice.second;
-                    return true;
-                }
-            }
-            err = "param '" + key + "': '" + raw + "' is not a valid choice";
+    case pp::ParamType::Int: {
+        int64_t v = 0;
+        if (!parse_int_text(raw, v)) {
+            err = "param '" + key + "': expected int";
             return false;
         }
+        s[key] = v;
+        return true;
+    }
+    case pp::ParamType::Float: {
+        double v = 0;
+        if (!parse_double_text(raw, v)) {
+            err = "param '" + key + "': expected float";
+            return false;
+        }
+        s[key] = v;
+        return true;
+    }
+    case pp::ParamType::Bool: {
+        bool v = false;
+        if (!parse_bool_text(raw, v)) {
+            err = "param '" + key + "': expected bool";
+            return false;
+        }
+        s[key] = v;
+        return true;
+    }
+    case pp::ParamType::Enum: {
+        for (const auto &choice : def->choices) {
+            if (choice.first == raw || value_text(choice.second) == raw) {
+                s[key] = choice.second;
+                return true;
+            }
+        }
+        err = "param '" + key + "': '" + raw + "' is not a valid choice";
+        return false;
+    }
     }
     err = "param '" + key + "': unsupported type";
     return false;
 }
 
-std::string warning_kinds(const pp::FileResult& r) {
+std::string warning_kinds(const pp::FileResult &r) {
     std::string s;
-    for (const pp::Warning& w : r.warnings) {
-        if (!s.empty()) s += ",";
+    for (const pp::Warning &w : r.warnings) {
+        if (!s.empty())
+            s += ",";
         s += warning_name(w.kind);
     }
     return s;
 }
 
-const char* state_name(const pp::FileResult& r) {
-    if (r.ok) return "ok";
-    if (r.skipped) return "skipped";
-    if (r.cancelled) return "cancelled";
+const char *state_name(const pp::FileResult &r) {
+    if (r.ok)
+        return "ok";
+    if (r.skipped)
+        return "skipped";
+    if (r.cancelled)
+        return "cancelled";
     return "failed";
 }
 
-std::string tail_truncate(const std::string& s, std::size_t n) {
-    if (s.size() <= n) return s;
+std::string tail_truncate(const std::string &s, std::size_t n) {
+    if (s.size() <= n)
+        return s;
     return "..." + s.substr(s.size() - (n - 3));
 }
 
 // <out>.pp.json sidecar: carries the pipeline warnings/timings that pp_verify needs for
 // `warnings_contain` and for debugging (the output file itself cannot express them).
-QJsonObject sidecar_json(const pp::FileResult& r, const std::string& params_snapshot) {
+QJsonObject sidecar_json(const pp::FileResult &r, const std::string &params_snapshot) {
     QJsonArray warnings;
-    for (const pp::Warning& w : r.warnings) {
+    for (const pp::Warning &w : r.warnings) {
         QJsonObject o;
         o["kind"] = QString::fromStdString(warning_name(w.kind));
         o["detail"] = QString::fromStdString(w.detail);
@@ -405,25 +543,28 @@ QJsonObject sidecar_json(const pp::FileResult& r, const std::string& params_snap
     return o;
 }
 
-void write_sidecar(const pp::FileResult& r, const std::string& params_snapshot) {
-    if (r.out.empty()) return;
+void write_sidecar(const pp::FileResult &r, const std::string &params_snapshot) {
+    if (r.out.empty())
+        return;
     const fs::path path = r.out.string() + ".pp.json";
     std::ofstream f(path, std::ios::binary | std::ios::trunc);
-    if (!f) return;
+    if (!f)
+        return;
     const QJsonDocument doc(sidecar_json(r, params_snapshot));
     const QByteArray bytes = doc.toJson(QJsonDocument::Indented);
     f.write(bytes.constData(), bytes.size());
 }
 
-fs::path choose_base(const fs::path& file, const std::vector<fs::path>& bases) {
+fs::path choose_base(const fs::path &file, const std::vector<fs::path> &bases) {
     fs::path best;
-    for (const fs::path& b : bases) {
-        if (pp::is_inside(file, b) && b.string().size() > best.string().size()) best = b;
+    for (const fs::path &b : bases) {
+        if (pp::is_inside(file, b) && b.string().size() > best.string().size())
+            best = b;
     }
     return best.empty() ? file.parent_path() : best;
 }
 
-int run_dev(int argc, char** argv) {
+int run_dev(int argc, char **argv) {
     DevOptions o;
     std::string err;
     if (!parse_dev_options(argc, argv, o, err)) {
@@ -437,7 +578,8 @@ int run_dev(int argc, char** argv) {
 
     pp::LogLevel level = pp::LogLevel::Info;
     if (!parse_log_level(o.log_level, level)) {
-        std::fprintf(stderr, "photopipeline --dev: invalid --log-level '%s'\n", o.log_level.c_str());
+        std::fprintf(stderr, "photopipeline --dev: invalid --log-level '%s'\n",
+                     o.log_level.c_str());
         return 2;
     }
     // M2-T3 §2.3：PP_LOG_LEVEL 在启动期一次性覆盖（非法值 → stderr 提示并沿用上面的值）。
@@ -484,10 +626,11 @@ int run_dev(int argc, char** argv) {
     } else if (have_preset) {
         color = preset.color_target;
     }
-    if (!o.has_conflict && have_preset) conflict = preset.conflict;
+    if (!o.has_conflict && have_preset)
+        conflict = preset.conflict;
     pp::BatchRules rules = have_preset ? preset.rules : pp::BatchRules{};
 
-    const pp::FormatDef* fmt = pp::find_format(format);
+    const pp::FormatDef *fmt = pp::find_format(format);
     if (!fmt) {
         std::fprintf(stderr, "photopipeline --dev: unknown --format '%s'\n", format.c_str());
         pp::log_shutdown();
@@ -505,16 +648,17 @@ int run_dev(int argc, char** argv) {
     // ---- parameters: defaults → preset → --param → locks ----
     pp::ParamSet params = pp::default_params(*fmt, backend, tech, lossless);
     if (have_preset) {
-        for (const auto& [k, v] : preset.params) params[k] = v;
+        for (const auto &[k, v] : preset.params)
+            params[k] = v;
     }
-    for (const auto& [k, v] : o.params) {
+    for (const auto &[k, v] : o.params) {
         if (!set_param(params, *fmt, backend, tech, k, v, err)) {
             std::fprintf(stderr, "photopipeline --dev: %s\n", err.c_str());
             pp::log_shutdown();
             return 2;
         }
     }
-    for (const auto& [k, v] : o.metas) {
+    for (const auto &[k, v] : o.metas) {
         pp::TagEdit e;
         e.key = k;
         e.value = v;
@@ -538,8 +682,7 @@ int run_dev(int argc, char** argv) {
     const bool bitdepth_explicit = o.has_bitdepth || have_preset;
     int bitdepth = o.has_bitdepth ? o.bitdepth
                                   : (have_preset ? preset.out_bitdepth : default_bitdepth(format));
-    if (std::find(fmt->bitdepths.begin(), fmt->bitdepths.end(), bitdepth) ==
-        fmt->bitdepths.end()) {
+    if (std::find(fmt->bitdepths.begin(), fmt->bitdepths.end(), bitdepth) == fmt->bitdepths.end()) {
         std::fprintf(stderr, "photopipeline --dev: bit depth %d is not supported by format '%s'\n",
                      bitdepth, format.c_str());
         pp::log_shutdown();
@@ -554,7 +697,8 @@ int run_dev(int argc, char** argv) {
                 const bool left_ok = pos == 0 || supported[pos - 1] == ',';
                 const bool right_ok = pos + needle.size() == supported.size() ||
                                       supported[pos + needle.size()] == ',';
-                if (left_ok && right_ok) return true;
+                if (left_ok && right_ok)
+                    return true;
                 pos += needle.size();
             }
             return false;
@@ -580,7 +724,7 @@ int run_dev(int argc, char** argv) {
     // ---- inputs ----
     std::vector<std::string> collect_errors;
     std::vector<fs::path> files;
-    for (const fs::path& in : o.inputs) {
+    for (const fs::path &in : o.inputs) {
         std::error_code iec;
         if (fs::is_directory(in, iec)) {
             std::vector<fs::path> found =
@@ -590,7 +734,7 @@ int run_dev(int argc, char** argv) {
             files.push_back(in);
         }
     }
-    for (const std::string& e : collect_errors) {
+    for (const std::string &e : collect_errors) {
         std::fprintf(stderr, "photopipeline --dev: %s\n", e.c_str());
         pp::log_warn("harness", "main.cpp", "input collection problem", {{"error", e}});
     }
@@ -601,7 +745,7 @@ int run_dev(int argc, char** argv) {
     }
     std::vector<pp::FileEntry> entries;
     entries.reserve(files.size());
-    for (const fs::path& f : files) {
+    for (const fs::path &f : files) {
         pp::FileEntry fe;
         fe.src = f;
         fe.base_dir = choose_base(f, o.bases);
@@ -623,7 +767,7 @@ int run_dev(int argc, char** argv) {
     cfg.flatten_gray = 1.0;
     cfg.rules = rules;
     cfg.metadata_only = o.metadata_only;
-    cfg.workers = o.workers;  // 0 = physical cores
+    cfg.workers = o.workers; // 0 = physical cores
     cfg.budget_bytes = 0;
 
     const std::string params_snapshot = pp::snapshot_params(params);
@@ -650,7 +794,7 @@ int run_dev(int argc, char** argv) {
                   {"metadata_only", o.metadata_only ? "true" : "false"},
                   {"out", o.out_root.string()},
                   {"params", params_snapshot}});
-    for (const auto& [key, value] : pp::library_versions()) {
+    for (const auto &[key, value] : pp::library_versions()) {
         pp::log_info("run", "main.cpp", "version", {{"lib", key}, {"version", value}});
     }
 
@@ -658,28 +802,28 @@ int run_dev(int argc, char** argv) {
     sched.start();
     sched.wait();
 
-    const std::vector<pp::FileResult>& results = sched.results();
+    const std::vector<pp::FileResult> &results = sched.results();
     std::printf("\n%-46s %-9s %10s %9s  %s\n", "file", "state", "bytes", "ms", "warnings");
-    for (const pp::FileResult& r : results) {
-        std::printf("%-46s %-9s %10llu %9.1f  %s\n",
-                    tail_truncate(r.src.string(), 46).c_str(), state_name(r),
-                    static_cast<unsigned long long>(r.out_bytes), r.t.total_ms,
+    for (const pp::FileResult &r : results) {
+        std::printf("%-46s %-9s %10llu %9.1f  %s\n", tail_truncate(r.src.string(), 46).c_str(),
+                    state_name(r), static_cast<unsigned long long>(r.out_bytes), r.t.total_ms,
                     warning_kinds(r).c_str());
-        if (!r.error.empty()) std::printf("    error: %s\n", r.error.c_str());
+        if (!r.error.empty())
+            std::printf("    error: %s\n", r.error.c_str());
         write_sidecar(r, params_snapshot);
     }
 
     const pp::RunSummary sum = sched.summary();
     int failed = 0;
-    for (const pp::FileResult& r : results) {
-        if (!r.ok && !r.skipped && !r.cancelled) ++failed;
+    for (const pp::FileResult &r : results) {
+        if (!r.ok && !r.skipped && !r.cancelled)
+            ++failed;
     }
-    std::printf(
-        "\nSUMMARY files=%zu ok=%zu failed=%zu skipped=%zu cancelled=%zu bytes=%llu "
-        "total_ms=%.1f throughput_mb_s=%.2f avg_file_ms=%.1f\n",
-        sum.total, sum.ok, sum.failed, sum.skipped, sum.cancelled,
-        static_cast<unsigned long long>(sum.out_bytes), sum.total_ms, sum.throughput_mb_s,
-        sum.avg_file_ms);
+    std::printf("\nSUMMARY files=%zu ok=%zu failed=%zu skipped=%zu cancelled=%zu bytes=%llu "
+                "total_ms=%.1f throughput_mb_s=%.2f avg_file_ms=%.1f\n",
+                sum.total, sum.ok, sum.failed, sum.skipped, sum.cancelled,
+                static_cast<unsigned long long>(sum.out_bytes), sum.total_ms, sum.throughput_mb_s,
+                sum.avg_file_ms);
     std::printf("EXIT %d (failed files)\n", failed);
     pp::log_info("run", "main.cpp", "run summary",
                  {{"files", std::to_string(sum.total)},
@@ -695,7 +839,7 @@ int run_dev(int argc, char** argv) {
     return failed;
 }
 
-}  // namespace
+} // namespace
 
 // ---------------------------------------------------------------------------
 // --ui-smoke（§4.3 冻结）：参数在 QApplication 之前解析，同 --dev 惯例
@@ -703,7 +847,7 @@ int run_dev(int argc, char** argv) {
 
 namespace {
 
-const char* kUiSmokeUsage =
+const char *kUiSmokeUsage =
     "usage: photopipeline --ui-smoke [--inputs DIR] [--shots DIR]\n"
     "  --inputs DIR   input directory (default <repo>/tests/golden/base)\n"
     "  --shots DIR    screenshot directory (default .cache/ui-review; empty = do not save)\n"
@@ -711,16 +855,17 @@ const char* kUiSmokeUsage =
 
 // 可执行文件目录：复用 pp::platform::executable_dir()（Linux 读 /proc/self/exe，
 // Windows 读 GetModuleFileNameW —— M3 单一实现，不再各自探测）；空结果回退 argv[0]。
-fs::path executable_directory(const char* argv0) {
+fs::path executable_directory(const char *argv0) {
     const fs::path exe_dir = pp::platform::executable_dir();
-    if (!exe_dir.empty()) return exe_dir;
+    if (!exe_dir.empty())
+        return exe_dir;
     std::error_code ec;
     const fs::path arg = fs::absolute(fs::path(argv0 != nullptr ? argv0 : ""), ec);
     return arg.parent_path();
 }
 
 // 从可执行文件向上找仓库根：含 .git 或 CMakeLists.txt 的最近目录
-std::string find_repo_root(const char* argv0) {
+std::string find_repo_root(const char *argv0) {
     std::error_code ec;
     fs::path dir = executable_directory(argv0);
     for (int i = 0; i < 8 && !dir.empty(); ++i) {
@@ -728,18 +873,20 @@ std::string find_repo_root(const char* argv0) {
             return dir.string();
         }
         const fs::path up = dir.parent_path();
-        if (up == dir) break;
+        if (up == dir)
+            break;
         dir = up;
     }
     return {};
 }
 
-int run_ui_smoke(int argc, char** argv) {
+int run_ui_smoke(int argc, char **argv) {
     QString inputs;
     QString shots = QStringLiteral(".cache/ui-review");
     for (int i = 1; i < argc; ++i) {
         const std::string_view a = argv[i];
-        if (a == "--ui-smoke") continue;
+        if (a == "--ui-smoke")
+            continue;
         if (a == "--inputs" || a == "--shots") {
             if (i + 1 >= argc) {
                 std::fprintf(stderr, "photopipeline --ui-smoke: %s requires a value\n%s",
@@ -785,7 +932,7 @@ int run_ui_smoke(int argc, char** argv) {
     w.show();
     w.set_offline_maps(true);
     w.add_paths(QStringList{inputs});
-    w.ui_smoke_walk(shots);   // walk 内部自跑事件循环并写 pp_ui_smoke_exit
+    w.ui_smoke_walk(shots); // walk 内部自跑事件循环并写 pp_ui_smoke_exit
 
     const QVariant ran = w.property("pp_ui_smoke_ran");
     if (!ran.isValid() || !ran.toBool()) {
@@ -795,8 +942,8 @@ int run_ui_smoke(int argc, char** argv) {
     return w.property("pp_ui_smoke_exit").toInt();
 }
 
-}  // namespace
-#endif  // PP_BUILD_DEV
+} // namespace
+#endif // PP_BUILD_DEV
 
 #ifdef _WIN32
 namespace {
@@ -810,10 +957,10 @@ bool std_handle_is_captured(DWORD which) {
     const DWORD type = ::GetFileType(h);
     return type == FILE_TYPE_PIPE || type == FILE_TYPE_DISK;
 }
-}  // namespace
+} // namespace
 #endif
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
 #ifdef _WIN32
     // M3-D5 (v2.0，取代 v1.4): 判据由"句柄是否有效"改为"句柄是否捕获型"。
     // 捕获型（管道/文件重定向：ctest、tests/*.py 的 subprocess、shell 重定向）原样保留，
@@ -825,11 +972,11 @@ int main(int argc, char** argv) {
         const bool attached_now = ::AttachConsole(ATTACH_PARENT_PROCESS) != 0;
         if (attached_now || ::GetConsoleWindow() != nullptr) {
             if (!out_captured) {
-                FILE* out = nullptr;
+                FILE *out = nullptr;
                 freopen_s(&out, "CONOUT$", "w", stdout);
             }
             if (!err_captured) {
-                FILE* err = nullptr;
+                FILE *err = nullptr;
                 freopen_s(&err, "CONOUT$", "w", stderr);
             }
             if (attached_now) {
@@ -876,9 +1023,8 @@ int main(int argc, char** argv) {
     // GUI. Report the missing harness and fail with a non-zero exit code instead.
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--dev") == 0 || std::strcmp(argv[i], "--ui-smoke") == 0) {
-            std::fprintf(
-                stderr,
-                "photopipeline: dev harness not built (rebuild with -DPP_BUILD_DEV=ON)\n");
+            std::fprintf(stderr,
+                         "photopipeline: dev harness not built (rebuild with -DPP_BUILD_DEV=ON)\n");
             return 2;
         }
     }
@@ -890,10 +1036,11 @@ int main(int argc, char** argv) {
     if (QApplication::setStyle(QStringLiteral("Fluent")) == nullptr) {
         qInfo("PhotoPipeline: style 'Fluent' unavailable; keeping the default style");
     }
-    pp::platform::data_dir();   // 确保便携/回退目录存在（结果缓存）
+    pp::platform::data_dir(); // 确保便携/回退目录存在（结果缓存）
     pp::AppSettings settings = pp::load_settings(pp::platform::settings_file());
     pp::LogLevel level = pp::LogLevel::Info;
-    if (!log_level_from_text(settings.log_level, level)) level = pp::LogLevel::Info;
+    if (!log_level_from_text(settings.log_level, level))
+        level = pp::LogLevel::Info;
     // M2-T3 §2.3：环境变量在启动期一次性覆盖 settings.log_level（非法值 → stderr 一行提示，
     // 沿用 settings 值；未设置 → 与 M1b 行为完全一致）。GUI 与 --dev/--ui-smoke 同一入口。
     level = pp::level_from_env_or(level);
@@ -902,9 +1049,9 @@ int main(int argc, char** argv) {
     w.show();
     // M3-D6: Mica + 深色标题栏（非 Windows 平台在 mica.cpp 内为空操作）。
     // v1 口径：启动期跟随一次系统深浅色；运行期主题切换监听留后续。
-    pp::platform::apply_window_backdrop(
-        reinterpret_cast<void*>(w.winId()),
-        QGuiApplication::styleHints()->colorScheme() == Qt::ColorScheme::Dark);
+    pp::platform::apply_window_backdrop(reinterpret_cast<void *>(w.winId()),
+                                        QGuiApplication::styleHints()->colorScheme() ==
+                                            Qt::ColorScheme::Dark);
     const int code = app.exec();
     pp::log_shutdown();
     return code;

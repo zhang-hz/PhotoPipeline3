@@ -1,11 +1,11 @@
 // PP-FROZEN(file)
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
+#include "codecs/encoder.h"
+#include "core/params.h"
 #include <memory>
 #include <string>
 #include <vector>
-#include "codecs/encoder.h"
-#include "core/params.h"
 
 namespace pp {
 
@@ -21,4 +21,4 @@ std::vector<BackendDef> introspect_backends(std::string_view format_id);
 // 10bit 能力探测（T7 交付）：返回 "8" / "8,10" / "8,10,12"（按编码器实际支持）
 std::string probe_bitdepth_support(std::string_view format_id, std::string_view backend_id);
 
-}  // namespace pp
+} // namespace pp

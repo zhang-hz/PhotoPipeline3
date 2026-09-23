@@ -37,31 +37,27 @@ namespace pp::ui {
 namespace {
 
 // objectName（自验 / U10 --ui-smoke / 走查定位用）
-constexpr const char* kList = "preset_list";
-constexpr const char* kName = "preset_name";
-constexpr const char* kEmptyHint = "preset_empty_hint";   // §9.1 U6-FIX
-constexpr const char* kLoad = "btn_load";
-constexpr const char* kSaveAs = "btn_saveas";
-constexpr const char* kDelete = "btn_delete";
-constexpr const char* kClose = "btn_close";
+constexpr const char *kList = "preset_list";
+constexpr const char *kName = "preset_name";
+constexpr const char *kEmptyHint = "preset_empty_hint"; // §9.1 U6-FIX
+constexpr const char *kLoad = "btn_load";
+constexpr const char *kSaveAs = "btn_saveas";
+constexpr const char *kDelete = "btn_delete";
+constexpr const char *kClose = "btn_close";
 
 // dynamic property 名（返回值状态）
-constexpr const char* kPropAction = "pp_action";
-constexpr const char* kPropName = "pp_name";
-constexpr const char* kPropPath = "pp_path";
+constexpr const char *kPropAction = "pp_action";
+constexpr const char *kPropName = "pp_name";
+constexpr const char *kPropPath = "pp_path";
 
-QListWidget* list_of(const QObject* o) {
-    return o->findChild<QListWidget*>(QLatin1String(kList));
-}
-QLineEdit* name_of(const QObject* o) {
-    return o->findChild<QLineEdit*>(QLatin1String(kName));
-}
-QPushButton* button_of(const QObject* o, const char* name) {
-    return o->findChild<QPushButton*>(QLatin1String(name));
+QListWidget *list_of(const QObject *o) { return o->findChild<QListWidget *>(QLatin1String(kList)); }
+QLineEdit *name_of(const QObject *o) { return o->findChild<QLineEdit *>(QLatin1String(kName)); }
+QPushButton *button_of(const QObject *o, const char *name) {
+    return o->findChild<QPushButton *>(QLatin1String(name));
 }
 
 // 保存名清洗：剔除 [A-Za-z0-9_\- ] 之外的字符，再折叠空白（simplified 同时去首尾）
-QString sanitize_name(const QString& in) {
+QString sanitize_name(const QString &in) {
     static const QRegularExpression disallowed(QStringLiteral("[^A-Za-z0-9_\\- ]"));
     QString s = in;
     s.remove(disallowed);
@@ -69,134 +65,143 @@ QString sanitize_name(const QString& in) {
 }
 
 // §9.1 U6-FIX：空列表提示可见性（列表为空才显示）
-void update_empty_hint(const QDialog* dlg) {
-    QListWidget* list = list_of(dlg);
-    auto* hint = dlg->findChild<QLabel*>(QLatin1String(kEmptyHint));
-    if (list == nullptr || hint == nullptr) return;
+void update_empty_hint(const QDialog *dlg) {
+    QListWidget *list = list_of(dlg);
+    auto *hint = dlg->findChild<QLabel *>(QLatin1String(kEmptyHint));
+    if (list == nullptr || hint == nullptr)
+        return;
     hint->setVisible(list->count() == 0);
 }
 
 // 按钮可用性（主对话 2026-09-19 裁定；§2.10 更新版）：
 //   载入/删除 = 列表有选中（预设路径本就是合法文件，与名称清洗无关）
 //   另存为   = 清洗后名字非空（空名无法构成 <名>.json）
-void refresh_buttons(const QDialog* dlg) {
-    QListWidget* list = list_of(dlg);
-    QLineEdit* edit = name_of(dlg);
-    if (list == nullptr || edit == nullptr) return;
+void refresh_buttons(const QDialog *dlg) {
+    QListWidget *list = list_of(dlg);
+    QLineEdit *edit = name_of(dlg);
+    if (list == nullptr || edit == nullptr)
+        return;
     const bool has_selection = list->currentItem() != nullptr;
     const bool has_name = !sanitize_name(edit->text()).isEmpty();
-    if (QPushButton* b = button_of(dlg, kLoad)) b->setEnabled(has_selection);
-    if (QPushButton* b = button_of(dlg, kSaveAs)) b->setEnabled(has_name);
-    if (QPushButton* b = button_of(dlg, kDelete)) b->setEnabled(has_selection);
+    if (QPushButton *b = button_of(dlg, kLoad))
+        b->setEnabled(has_selection);
+    if (QPushButton *b = button_of(dlg, kSaveAs))
+        b->setEnabled(has_name);
+    if (QPushButton *b = button_of(dlg, kDelete))
+        b->setEnabled(has_selection);
 }
 
 // 记录动作结果并关闭对话框（MainWindow 在 exec()==Accepted 后取 action()/name()/path()）
-void commit(PresetsDialog* dlg, PresetsDialog::Action a, const QString& name,
-            const QString& path) {
+void commit(PresetsDialog *dlg, PresetsDialog::Action a, const QString &name, const QString &path) {
     dlg->setProperty(kPropAction, static_cast<int>(a));
     dlg->setProperty(kPropName, name);
     dlg->setProperty(kPropPath, path);
     dlg->accept();
 }
 
-void do_load(PresetsDialog* dlg) {
-    QListWidget* list = list_of(dlg);
-    QListWidgetItem* item = list != nullptr ? list->currentItem() : nullptr;
-    if (item == nullptr) return;
+void do_load(PresetsDialog *dlg) {
+    QListWidget *list = list_of(dlg);
+    QListWidgetItem *item = list != nullptr ? list->currentItem() : nullptr;
+    if (item == nullptr)
+        return;
     commit(dlg, PresetsDialog::Action::Load, item->text(), item->data(Qt::UserRole).toString());
 }
 
-void do_save_as(PresetsDialog* dlg) {
-    QLineEdit* edit = name_of(dlg);
-    if (edit == nullptr) return;
+void do_save_as(PresetsDialog *dlg) {
+    QLineEdit *edit = name_of(dlg);
+    if (edit == nullptr)
+        return;
     const QString name = sanitize_name(edit->text());
-    if (name.isEmpty()) return;     // 空名：按钮本已禁用，这里再兜一次
-    edit->setText(name);            // 回显清洗后的名字（用户可见）
+    if (name.isEmpty())
+        return;          // 空名：按钮本已禁用，这里再兜一次
+    edit->setText(name); // 回显清洗后的名字（用户可见）
     // path 留空：<presets_dir>/<name>.json 由 MainWindow 拼接（§2.10）
     commit(dlg, PresetsDialog::Action::SaveAs, name, QString());
 }
 
-void do_delete(PresetsDialog* dlg) {
-    QListWidget* list = list_of(dlg);
-    QListWidgetItem* item = list != nullptr ? list->currentItem() : nullptr;
-    if (item == nullptr) return;
+void do_delete(PresetsDialog *dlg) {
+    QListWidget *list = list_of(dlg);
+    QListWidgetItem *item = list != nullptr ? list->currentItem() : nullptr;
+    if (item == nullptr)
+        return;
     const QString name = item->text();
     const QString path = item->data(Qt::UserRole).toString();
     const QMessageBox::StandardButton answer = QMessageBox::question(
-        dlg, PresetsDialog::tr("删除预设"),
-        PresetsDialog::tr("确定删除预设“%1”？").arg(name),
+        dlg, PresetsDialog::tr("删除预设"), PresetsDialog::tr("确定删除预设“%1”？").arg(name),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-    if (answer != QMessageBox::Yes) return;   // 取消二次确认：不动作、不关闭
+    if (answer != QMessageBox::Yes)
+        return; // 取消二次确认：不动作、不关闭
     commit(dlg, PresetsDialog::Action::Delete, name, path);
 }
 
-}  // namespace
+} // namespace
 
-PresetsDialog::PresetsDialog(const std::vector<std::pair<QString, QString>>& presets,
-                             const QString& suggested_name, QWidget* parent)
+PresetsDialog::PresetsDialog(const std::vector<std::pair<QString, QString>> &presets,
+                             const QString &suggested_name, QWidget *parent)
     : QDialog(parent) {
-    setWindowTitle(tr("预设管理"));      // §9.1 U6-FIX：标题由“预设”改“预设管理”
+    setWindowTitle(tr("预设管理")); // §9.1 U6-FIX：标题由“预设”改“预设管理”
     setProperty(kPropAction, static_cast<int>(Action::None));
     setProperty(kPropName, QString());
     setProperty(kPropPath, QString());
 
-    auto* list = new QListWidget(this);
+    auto *list = new QListWidget(this);
     list->setObjectName(QLatin1String(kList));
     list->setSelectionMode(QAbstractItemView::SingleSelection);
-    for (const auto& entry : presets) {          // (path, display-name)
-        auto* item = new QListWidgetItem(entry.second, list);
+    for (const auto &entry : presets) { // (path, display-name)
+        auto *item = new QListWidgetItem(entry.second, list);
         item->setData(Qt::UserRole, entry.first);
     }
 
     // §9.1 U6-FIX：空列表灰字提示（列表非空时隐藏）；灰字走 palette（全仓同款做法）
     // M2-T7 §3 #28d：提示直接建在列表 viewport 上（列表区内部），居中、随列表尺寸自适应；
     // 文案与 objectName 不变；列表非空时由 update_empty_hint 隐藏。
-    auto* empty_hint = new QLabel(tr("暂无预设——输入名称后点\"另存为\"创建"), list->viewport());
+    auto *empty_hint = new QLabel(tr("暂无预设——输入名称后点\"另存为\"创建"), list->viewport());
     empty_hint->setObjectName(QLatin1String(kEmptyHint));
     QPalette hint_pal = empty_hint->palette();
     hint_pal.setColor(QPalette::WindowText, QColor(0x80, 0x80, 0x80));
     empty_hint->setPalette(hint_pal);
     empty_hint->setWordWrap(true);
     empty_hint->setAlignment(Qt::AlignCenter);
-    auto* overlay = new QVBoxLayout(list->viewport());
+    auto *overlay = new QVBoxLayout(list->viewport());
     overlay->setContentsMargins(6, 6, 6, 6);
     overlay->addStretch(1);
     overlay->addWidget(empty_hint);
     overlay->addStretch(1);
 
-    auto* name_edit = new QLineEdit(this);
+    auto *name_edit = new QLineEdit(this);
     name_edit->setObjectName(QLatin1String(kName));
     name_edit->setText(suggested_name);
 
-    auto* form = new QFormLayout;
+    auto *form = new QFormLayout;
     form->addRow(tr("名称"), name_edit);
 
-    auto* load_btn = new QPushButton(tr("载入"), this);
+    auto *load_btn = new QPushButton(tr("载入"), this);
     load_btn->setObjectName(QLatin1String(kLoad));
-    auto* saveas_btn = new QPushButton(tr("另存为"), this);
+    auto *saveas_btn = new QPushButton(tr("另存为"), this);
     saveas_btn->setObjectName(QLatin1String(kSaveAs));
-    auto* delete_btn = new QPushButton(tr("删除"), this);
+    auto *delete_btn = new QPushButton(tr("删除"), this);
     delete_btn->setObjectName(QLatin1String(kDelete));
-    auto* close_btn = new QPushButton(tr("关闭"), this);
+    auto *close_btn = new QPushButton(tr("关闭"), this);
     close_btn->setObjectName(QLatin1String(kClose));
 
-    auto* button_row = new QHBoxLayout;
+    auto *button_row = new QHBoxLayout;
     button_row->addWidget(load_btn);
     button_row->addWidget(saveas_btn);
     button_row->addWidget(delete_btn);
     button_row->addStretch(1);
     button_row->addWidget(close_btn);
 
-    auto* root = new QVBoxLayout(this);
-    root->addWidget(list, 1);        // §9.1 U6-FIX + M2-T7 #28d：空态提示已移入列表区内部
+    auto *root = new QVBoxLayout(this);
+    root->addWidget(list, 1); // §9.1 U6-FIX + M2-T7 #28d：空态提示已移入列表区内部
     root->addLayout(form);
     root->addLayout(button_row);
 
     // 选中列表项 → 名称行带出该项名（§2.10）
     connect(list, &QListWidget::currentItemChanged, this,
-            [this](QListWidgetItem* current, QListWidgetItem*) {
+            [this](QListWidgetItem *current, QListWidgetItem *) {
                 if (current != nullptr) {
-                    if (QLineEdit* edit = name_of(this)) edit->setText(current->text());
+                    if (QLineEdit *edit = name_of(this))
+                        edit->setText(current->text());
                 }
                 refresh_buttons(this);
             });
@@ -206,7 +211,7 @@ PresetsDialog::PresetsDialog(const std::vector<std::pair<QString, QString>>& pre
     connect(delete_btn, &QPushButton::clicked, this, [this] { do_delete(this); });
     connect(close_btn, &QPushButton::clicked, this, &QDialog::reject);
 
-    update_empty_hint(this);          // §9.1 U6-FIX：空列表才显示灰字提示
+    update_empty_hint(this); // §9.1 U6-FIX：空列表才显示灰字提示
     refresh_buttons(this);
     resize(420, 360);
 }
@@ -215,12 +220,8 @@ PresetsDialog::Action PresetsDialog::action() const {
     return static_cast<Action>(property(kPropAction).toInt());
 }
 
-QString PresetsDialog::name() const {
-    return property(kPropName).toString();
-}
+QString PresetsDialog::name() const { return property(kPropName).toString(); }
 
-QString PresetsDialog::path() const {
-    return property(kPropPath).toString();
-}
+QString PresetsDialog::path() const { return property(kPropPath).toString(); }
 
-}  // namespace pp::ui
+} // namespace pp::ui

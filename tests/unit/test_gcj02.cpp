@@ -18,7 +18,7 @@ namespace {
 
 int g_failed = 0;
 
-void check(bool ok, const std::string& case_name, const std::string& detail) {
+void check(bool ok, const std::string &case_name, const std::string &detail) {
     if (!ok) {
         ++g_failed;
         std::printf("FAIL %s: %s\n", case_name.c_str(), detail.c_str());
@@ -44,7 +44,7 @@ constexpr double kRoundTripToleranceDeg = 1e-6;
 constexpr double kPi = 3.14159265358979323846;
 
 struct City {
-    const char* name;
+    const char *name;
     double lat;
     double lon;
 };
@@ -57,18 +57,15 @@ const City kCities[] = {
 
 // Out-of-China samples: the rough bbox test must make the transform an exact identity.
 const City kOutside[] = {
-    {"new-york", 40.7128, -74.0060},
-    {"london", 51.5074, -0.1278},
-    {"sydney", -33.8688, 151.2093},
-    {"tokyo", 35.6762, 139.6503},
-    {"equator", 0.0, 0.0},
+    {"new-york", 40.7128, -74.0060}, {"london", 51.5074, -0.1278}, {"sydney", -33.8688, 151.2093},
+    {"tokyo", 35.6762, 139.6503},    {"equator", 0.0, 0.0},
 };
 
-}  // namespace
+} // namespace
 
 int main() {
     // 1. wgs -> gcj: nonzero offset of the right order of magnitude, three frozen cities.
-    for (const City& city : kCities) {
+    for (const City &city : kCities) {
         const std::pair<double, double> gcj = pp::map::wgs84_to_gcj02(city.lat, city.lon);
         const double dlat = gcj.first - city.lat;
         const double dlon = gcj.second - city.lon;
@@ -86,7 +83,7 @@ int main() {
     }
 
     // 2. round trip gcj(wgs(p)) -> p must come back within 1e-6 deg (and the other way round).
-    for (const City& city : kCities) {
+    for (const City &city : kCities) {
         const std::pair<double, double> gcj = pp::map::wgs84_to_gcj02(city.lat, city.lon);
         const std::pair<double, double> back = pp::map::gcj02_to_wgs84(gcj.first, gcj.second);
         const double err = std::hypot(back.first - city.lat, back.second - city.lon);
@@ -101,7 +98,7 @@ int main() {
     }
 
     // 3. outside the rough China bbox both directions are the exact identity.
-    for (const City& city : kOutside) {
+    for (const City &city : kOutside) {
         const std::pair<double, double> fwd = pp::map::wgs84_to_gcj02(city.lat, city.lon);
         check(fwd.first == city.lat && fwd.second == city.lon,
               std::string("identity/wgs-gcj/") + city.name,

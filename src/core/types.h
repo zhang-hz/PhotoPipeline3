@@ -24,37 +24,37 @@ enum class Stage { Probe, Decode, Orient, Color, Flatten, Encode, MetaWrite, Don
 // PP-THAWED(0.3.0-M4-D20) §3.6：本枚举**保持只读**（不加 SyntheticProgress；既有值含
 // MetadataDropped 语义逐字不变）。进度语义见 scheduler.h 的 ProgressInfo（§3.3）。
 enum class WarningKind {
-    DepthDowngrade,      // bit-depth reduced for target codec
-    LossyFromLossless,   // lossless source encoded lossy
-    MultipageTruncated,  // multipage/animated input: first page only
-    AlphaFlattened,      // alpha composited onto background
-    NoIccAssumeSrgb,     // no ICC found, assumed sRGB
-    MetadataDropped,     // target container has no metadata (BMP)
-    TimeFieldMissing,    // time fields absent, shift skipped
-    GrayToRgbEncoded,    // grayscale encoded as RGB (webp/heif/avif)
+    DepthDowngrade,     // bit-depth reduced for target codec
+    LossyFromLossless,  // lossless source encoded lossy
+    MultipageTruncated, // multipage/animated input: first page only
+    AlphaFlattened,     // alpha composited onto background
+    NoIccAssumeSrgb,    // no ICC found, assumed sRGB
+    MetadataDropped,    // target container has no metadata (BMP)
+    TimeFieldMissing,   // time fields absent, shift skipped
+    GrayToRgbEncoded,   // grayscale encoded as RGB (webp/heif/avif)
 };
 
 struct Warning {
     WarningKind kind;
-    std::string detail;  // English, structured
+    std::string detail; // English, structured
 };
 
 struct Timing {
-    double decode_ms = 0, orient_ms = 0, color_ms = 0, flatten_ms = 0,
-           encode_ms = 0, metawrite_ms = 0, total_ms = 0;
+    double decode_ms = 0, orient_ms = 0, color_ms = 0, flatten_ms = 0, encode_ms = 0,
+           metawrite_ms = 0, total_ms = 0;
 };
 
-struct ImageInfo {  // probe result
+struct ImageInfo { // probe result
     int width = 0, height = 0;
-    int channels = 0;        // {1,2,3,4}
+    int channels = 0; // {1,2,3,4}
     int src_bitdepth = 8;
     bool has_alpha = false;
     bool is_multipage = false;
     bool has_icc = false;
-    std::string format;      // OIIO format name
+    std::string format; // OIIO format name
 };
 
 using ParamValue = std::variant<std::monostate, bool, int64_t, double, std::string>;
-using ParamSet  = std::map<std::string, ParamValue>;
+using ParamSet = std::map<std::string, ParamValue>;
 
-}  // namespace pp
+} // namespace pp

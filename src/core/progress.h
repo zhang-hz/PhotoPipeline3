@@ -1,9 +1,12 @@
-// PP-THAWED(0.3.0-M4-D20): 纯规格块（M4-W0-T1 落注）—— 0.3.0 新模块规格，**零声明、零实现、未接入构建**
-//   落地任务 = W1-T6（core/progress：权重表/ProgressSynth/ProgressMux；出口 `test_progress` 绿）→ 落地后改标 PP-FROZEN(0.3.0)
+// PP-THAWED(0.3.0-M4-D20): 纯规格块（M4-W0-T1 落注）—— 0.3.0
+// 新模块规格，**零声明、零实现、未接入构建**
+//   落地任务 = W1-T6（core/progress：权重表/ProgressSynth/ProgressMux；出口 `test_progress` 绿）→
+//   落地后改标 PP-FROZEN(0.3.0)
 // SPDX-License-Identifier: GPL-3.0-or-later
 // PhotoPipeline — progress spec (0.3.0 / M4-W0-T1：仅规格注释，待 W1-T6 落地为声明 + 实现)
-//   依据 docs/v0.3.0-design.md §3.6 表行（`core/progress.h`（新））+ §7.1–§7.4（三级模型/权重表/合成/节流）
-//   本文件当前不写任何声明/实现，也不在 CMakeLists.txt 中编译（T1 不接入构建）。
+//   依据 docs/v0.3.0-design.md §3.6 表行（`core/progress.h`（新））+
+//   §7.1–§7.4（三级模型/权重表/合成/节流） 本文件当前不写任何声明/实现，也不在 CMakeLists.txt
+//   中编译（T1 不接入构建）。
 #pragma once
 
 // ============================================================================================

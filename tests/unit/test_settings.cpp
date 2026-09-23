@@ -20,17 +20,17 @@ namespace {
 
 int g_failed = 0;
 
-void check(bool ok, const std::string& case_name, const std::string& detail) {
+void check(bool ok, const std::string &case_name, const std::string &detail) {
     if (!ok) {
         ++g_failed;
         std::printf("FAIL %s: %s\n", case_name.c_str(), detail.c_str());
     }
 }
 
-std::string show(const fs::path& p) { return p.string(); }
+std::string show(const fs::path &p) { return p.string(); }
 
 // Scratch under the build dir (ctest runs in the build dir, like test_fsops).
-fs::path make_temp_dir(const std::string& name) {
+fs::path make_temp_dir(const std::string &name) {
     std::error_code ec;
     const fs::path d = fs::current_path(ec) / ".pp_test_tmp" / name;
     fs::remove_all(d, ec);
@@ -38,19 +38,19 @@ fs::path make_temp_dir(const std::string& name) {
     return d;
 }
 
-void write_file(const fs::path& p, const std::string& text) {
+void write_file(const fs::path &p, const std::string &text) {
     std::error_code ec;
     fs::create_directories(p.parent_path(), ec);
     std::ofstream f(p, std::ios::binary | std::ios::trunc);
     f << text;
 }
 
-std::string read_all(const fs::path& p) {
+std::string read_all(const fs::path &p) {
     std::ifstream f(p, std::ios::binary);
     return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
 }
 
-bool contains(const std::string& hay, const std::string& needle) {
+bool contains(const std::string &hay, const std::string &needle) {
     return hay.find(needle) != std::string::npos;
 }
 
@@ -71,7 +71,7 @@ pp::AppSettings non_defaults() {
     return s;
 }
 
-bool same(const pp::AppSettings& a, const pp::AppSettings& b) {
+bool same(const pp::AppSettings &a, const pp::AppSettings &b) {
     return a.workers == b.workers && a.budget_gb == b.budget_gb &&
            a.flatten_gray == b.flatten_gray && a.log_level == b.log_level &&
            a.map_provider == b.map_provider && a.amap_key == b.amap_key &&
@@ -80,9 +80,9 @@ bool same(const pp::AppSettings& a, const pp::AppSettings& b) {
            a.last_out_root == b.last_out_root;
 }
 
-std::string dump(const pp::AppSettings& s) { return pp::settings_to_string(s); }
+std::string dump(const pp::AppSettings &s) { return pp::settings_to_string(s); }
 
-}  // namespace
+} // namespace
 
 int main() {
     // ---- defaults: missing file loads the §3.14 defaults without error ----
@@ -124,18 +124,17 @@ int main() {
     {
         const fs::path dir = make_temp_dir("settings_unknown");
         const fs::path file = dir / "settings.ini";
-        write_file(file,
-                   "# PhotoPipeline settings\n"
-                   "# second comment line\n"
-                   "workers=3\n"
-                   "unknown_future_key=keep me\n"
-                   "  # indented comment\n"
-                   "tile_cache_mb=16\n");
+        write_file(file, "# PhotoPipeline settings\n"
+                         "# second comment line\n"
+                         "workers=3\n"
+                         "unknown_future_key=keep me\n"
+                         "  # indented comment\n"
+                         "tile_cache_mb=16\n");
 
         pp::AppSettings s;
         s.workers = 8;
         s.map_provider = "amap";
-        s.tile_cache_mb = 16;  // already present in the file -> rewritten in place
+        s.tile_cache_mb = 16; // already present in the file -> rewritten in place
         const std::string err = pp::save_settings(file, s);
         check(err.empty(), "unknown/save-no-error", "err=" + err);
 
@@ -171,23 +170,21 @@ int main() {
     {
         const fs::path dir = make_temp_dir("settings_invalid");
         const fs::path file = dir / "settings.ini";
-        write_file(file,
-                   "workers=abc\n"
-                   "budget_gb=\n"
-                   "flatten_gray=0.5x\n"
-                   "tile_cache_mb=999999999999999999999\n"
-                   "rotate_orientation=maybe\n"
-                   "log_level=\n");
+        write_file(file, "workers=abc\n"
+                         "budget_gb=\n"
+                         "flatten_gray=0.5x\n"
+                         "tile_cache_mb=999999999999999999999\n"
+                         "rotate_orientation=maybe\n"
+                         "log_level=\n");
         const pp::AppSettings def;
         const pp::AppSettings got = pp::load_settings(file);
         check(same(got, def), "invalid/keeps-defaults", "got " + dump(got));
 
-        write_file(file,
-                   "workers=7\n"
-                   "flatten_gray=0.125\n"
-                   "rotate_orientation=off\n"
-                   "map_provider=amap\n"
-                   "amap_key=\n");
+        write_file(file, "workers=7\n"
+                         "flatten_gray=0.125\n"
+                         "rotate_orientation=off\n"
+                         "map_provider=amap\n"
+                         "amap_key=\n");
         const pp::AppSettings got2 = pp::load_settings(file);
         check(got2.workers == 7 && got2.flatten_gray == 0.125 && !got2.rotate_orientation &&
                   got2.map_provider == "amap" && got2.amap_key.empty(),
@@ -198,12 +195,18 @@ int main() {
     {
         const pp::AppSettings s = non_defaults();
         const std::string t = pp::settings_to_string(s);
-        const char* const keys[] = {"workers=12",   "budget_gb=6",  "flatten_gray=0.25",
-                                    "log_level=debug", "map_provider=amap", "amap_key=<set>",
-                                    "tile_cache_mb=128", "rotate_orientation=false",
-                                    "last_format=avif", "last_preset=/home/u/presets/hdr.json",
+        const char *const keys[] = {"workers=12",
+                                    "budget_gb=6",
+                                    "flatten_gray=0.25",
+                                    "log_level=debug",
+                                    "map_provider=amap",
+                                    "amap_key=<set>",
+                                    "tile_cache_mb=128",
+                                    "rotate_orientation=false",
+                                    "last_format=avif",
+                                    "last_preset=/home/u/presets/hdr.json",
                                     "last_out_root=/data/out dir"};
-        for (const char* k : keys) {
+        for (const char *k : keys) {
             check(contains(t, k), std::string("to-string/") + k, "snapshot=" + t);
         }
         // The web-service key must never reach the log in clear text (main-dialogue ruling).
@@ -213,8 +216,8 @@ int main() {
         pp::AppSettings no_key = s;
         no_key.amap_key.clear();
         const std::string t2 = pp::settings_to_string(no_key);
-        check(contains(t2, "amap_key= ") || t2.ends_with("amap_key="),
-              "to-string/amap-key-empty", "snapshot=" + t2);
+        check(contains(t2, "amap_key= ") || t2.ends_with("amap_key="), "to-string/amap-key-empty",
+              "snapshot=" + t2);
         // Redaction is snapshot-only: the file keeps the real value.
         const fs::path dir = make_temp_dir("settings_redact");
         const fs::path file = dir / "settings.ini";

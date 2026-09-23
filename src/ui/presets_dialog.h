@@ -14,11 +14,11 @@ class PresetsDialog : public QDialog {
 public:
     enum class Action { None, Load, SaveAs, Delete };
     // presets: (path, display-name) list from pp::ui::list_presets(presets_dir)
-    explicit PresetsDialog(const std::vector<std::pair<QString, QString>>& presets,
-                           const QString& suggested_name, QWidget* parent = nullptr);
+    explicit PresetsDialog(const std::vector<std::pair<QString, QString>> &presets,
+                           const QString &suggested_name, QWidget *parent = nullptr);
     Action action() const;
-    QString name() const;      // load target / save-as name / delete target
-    QString path() const;      // corresponding file path (already sanitized for save-as)
+    QString name() const; // load target / save-as name / delete target
+    QString path() const; // corresponding file path (already sanitized for save-as)
 };
 
-}  // namespace pp::ui
+} // namespace pp::ui

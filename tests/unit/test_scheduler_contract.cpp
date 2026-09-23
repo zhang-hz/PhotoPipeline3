@@ -22,7 +22,7 @@ namespace {
 
 int g_failed = 0;
 
-void check(bool ok, const std::string& case_name, const std::string& detail) {
+void check(bool ok, const std::string &case_name, const std::string &detail) {
     if (!ok) {
         ++g_failed;
         std::printf("FAIL %s: %s\n", case_name.c_str(), detail.c_str());
@@ -33,14 +33,16 @@ fs::path find_corpus() {
     std::error_code ec;
     fs::path p = fs::current_path(ec);
     for (int i = 0; i < 8 && !p.empty(); ++i) {
-        if (fs::is_directory(p / "tests" / "golden", ec)) return p / "tests" / "golden";
-        if (!p.has_parent_path() || p.parent_path() == p) break;
+        if (fs::is_directory(p / "tests" / "golden", ec))
+            return p / "tests" / "golden";
+        if (!p.has_parent_path() || p.parent_path() == p)
+            break;
         p = p.parent_path();
     }
     return {};
 }
 
-fs::path make_temp_dir(const std::string& name) {
+fs::path make_temp_dir(const std::string &name) {
     std::error_code ec;
     const fs::path d = fs::current_path(ec) / ".pp_test_tmp" / name;
     fs::remove_all(d, ec);
@@ -48,9 +50,9 @@ fs::path make_temp_dir(const std::string& name) {
     return d;
 }
 
-std::vector<pp::FileEntry> entries_for(const std::vector<fs::path>& files, const fs::path& base) {
+std::vector<pp::FileEntry> entries_for(const std::vector<fs::path> &files, const fs::path &base) {
     std::vector<pp::FileEntry> out;
-    for (const fs::path& f : files) {
+    for (const fs::path &f : files) {
         pp::FileEntry fe;
         fe.src = f;
         fe.base_dir = base;
@@ -59,7 +61,7 @@ std::vector<pp::FileEntry> entries_for(const std::vector<fs::path>& files, const
     return out;
 }
 
-}  // namespace
+} // namespace
 
 int main() {
     const fs::path corpus = find_corpus();
@@ -91,19 +93,20 @@ int main() {
         pp::Scheduler sched(cfg, entries_for(inputs, corpus));
         std::mutex ev_mu;
         std::vector<pp::FileEvent> events;
-        sched.set_event_callback([&](const pp::FileEvent& ev) {
+        sched.set_event_callback([&](const pp::FileEvent &ev) {
             std::lock_guard<std::mutex> lk(ev_mu);
             events.push_back(ev);
         });
         sched.start();
         sched.wait();
 
-        const std::vector<pp::FileResult>& results = sched.results();
+        const std::vector<pp::FileResult> &results = sched.results();
         check(results.size() == inputs.size(), "basic/results-length",
               std::to_string(results.size()) + " != " + std::to_string(inputs.size()));
         bool aligned = results.size() == inputs.size();
         for (std::size_t i = 0; i < results.size() && aligned; ++i) {
-            if (results[i].src != inputs[i]) aligned = false;
+            if (results[i].src != inputs[i])
+                aligned = false;
         }
         check(aligned, "basic/input-order", "results[i].src does not match inputs[i]");
 
@@ -121,13 +124,14 @@ int main() {
 
         std::size_t terminal = 0;
         std::size_t done = 0;
-        for (const pp::FileEvent& ev : events) {
+        for (const pp::FileEvent &ev : events) {
             if (ev.result != nullptr) {
                 ++terminal;
                 check(!ev.result->out.empty(), "basic/terminal-result",
                       "terminal event without an output path");
             }
-            if (ev.state == pp::FileState::Done) ++done;
+            if (ev.state == pp::FileState::Done)
+                ++done;
         }
         check(terminal == inputs.size(), "basic/terminal-events",
               std::to_string(terminal) + " != " + std::to_string(inputs.size()));
@@ -152,8 +156,8 @@ int main() {
         check(sum.ok == 0 && sum.failed == 0, "cancel-pre/none-run",
               "ok=" + std::to_string(sum.ok) + " failed=" + std::to_string(sum.failed));
         std::error_code ec;
-        check(!fs::exists(tmp / "cancel-pre" / "base" / "rgb8.jpg", ec),
-              "cancel-pre/no-output", "an output file was produced");
+        check(!fs::exists(tmp / "cancel-pre" / "base" / "rgb8.jpg", ec), "cancel-pre/no-output",
+              "an output file was produced");
     }
 
     // ---- C. cancel() mid-run: ok + cancelled == total, no failures ----
@@ -164,7 +168,8 @@ int main() {
         cfg.out_bitdepth = 8;
         cfg.workers = 2;
         std::vector<fs::path> many;
-        for (int i = 0; i < 40; ++i) many.push_back(inputs[static_cast<std::size_t>(i) % inputs.size()]);
+        for (int i = 0; i < 40; ++i)
+            many.push_back(inputs[static_cast<std::size_t>(i) % inputs.size()]);
         pp::Scheduler sched(cfg, entries_for(many, corpus));
         sched.start();
         sched.cancel();
@@ -224,7 +229,7 @@ int main() {
         cfg.format_id = "jpeg";
         cfg.out_bitdepth = 8;
         cfg.workers = 4;
-        cfg.budget_bytes = 300000;  // ~3 concurrent 64x64x3 files (2x frame = 98304 each)
+        cfg.budget_bytes = 300000; // ~3 concurrent 64x64x3 files (2x frame = 98304 each)
         pp::Scheduler sched(cfg, entries_for(inputs, corpus));
         sched.start();
         sched.wait();

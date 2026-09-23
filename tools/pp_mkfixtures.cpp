@@ -39,33 +39,31 @@ void jpegli_CreateCompress(j_compress_ptr cinfo, int version, size_t structsize)
 void jpegli_set_defaults(j_compress_ptr cinfo);
 void jpegli_set_colorspace(j_compress_ptr cinfo, J_COLOR_SPACE colorspace);
 void jpegli_set_distance(j_compress_ptr cinfo, float distance, boolean force_baseline);
-void jpegli_stdio_dest(j_compress_ptr cinfo, FILE* outfile);
+void jpegli_stdio_dest(j_compress_ptr cinfo, FILE *outfile);
 void jpegli_start_compress(j_compress_ptr cinfo, boolean write_all_tables);
-JDIMENSION jpegli_write_scanlines(j_compress_ptr cinfo, JSAMPARRAY scanlines,
-                                  JDIMENSION num_lines);
+JDIMENSION jpegli_write_scanlines(j_compress_ptr cinfo, JSAMPARRAY scanlines, JDIMENSION num_lines);
 void jpegli_finish_compress(j_compress_ptr cinfo);
 void jpegli_destroy_compress(j_compress_ptr cinfo);
 }
-#define jpegli_create_compress(cinfo)                                                       \
-    jpegli_CreateCompress((cinfo), JPEG_LIB_VERSION,                                        \
-                          (size_t)sizeof(struct jpeg_compress_struct))
+#define jpegli_create_compress(cinfo)                                                              \
+    jpegli_CreateCompress((cinfo), JPEG_LIB_VERSION, (size_t)sizeof(struct jpeg_compress_struct))
 #endif
 
 namespace fs = std::filesystem;
 
 namespace {
 
-constexpr int kSize = 64;  // fixture edge length in pixels
-constexpr const char* kDateTimeOriginal = "2024:03:01 10:00:00";
-constexpr const char* kArtist = "M0";
+constexpr int kSize = 64; // fixture edge length in pixels
+constexpr const char *kDateTimeOriginal = "2024:03:01 10:00:00";
+constexpr const char *kArtist = "M0";
 constexpr double kLatDeg = 31.2304;
 constexpr double kLonDeg = 121.4737;
 constexpr double kGpsTolerance = 1e-4;
 
 int g_fails = 0;
 
-void emit(const char* prefix, const std::string& name, const char* status,
-          const std::string& detail) {
+void emit(const char *prefix, const std::string &name, const char *status,
+          const std::string &detail) {
     if (std::strcmp(status, "FAIL") == 0) {
         ++g_fails;
     }
@@ -78,13 +76,13 @@ std::string fmt_double(double v) {
     return std::string(buf);
 }
 
-bool write_bytes(const fs::path& path, const void* data, size_t size, std::string& err) {
+bool write_bytes(const fs::path &path, const void *data, size_t size, std::string &err) {
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     if (!out) {
         err = "cannot open for write";
         return false;
     }
-    out.write(static_cast<const char*>(data), static_cast<std::streamsize>(size));
+    out.write(static_cast<const char *>(data), static_cast<std::streamsize>(size));
     if (!out) {
         err = "write failed";
         return false;
@@ -114,9 +112,9 @@ Exiv2::ExifData standard_exif() {
     exif["Exif.Image.Artist"] = kArtist;
     exif["Exif.GPSInfo.GPSVersionID"] = "2 3 0 0";
     exif["Exif.GPSInfo.GPSLatitudeRef"] = "N";
-    exif["Exif.GPSInfo.GPSLatitude"] = "31/1 13/1 4944/100";   // 31.2304 N
+    exif["Exif.GPSInfo.GPSLatitude"] = "31/1 13/1 4944/100"; // 31.2304 N
     exif["Exif.GPSInfo.GPSLongitudeRef"] = "E";
-    exif["Exif.GPSInfo.GPSLongitude"] = "121/1 28/1 2532/100";  // 121.4737 E
+    exif["Exif.GPSInfo.GPSLongitude"] = "121/1 28/1 2532/100"; // 121.4737 E
     return exif;
 }
 
@@ -124,10 +122,10 @@ Exiv2::ExifData standard_exif() {
 // has no such overload (only Exifdatum::copy(byte*, ByteOrder)). Mechanically adapted to the
 // installed serializer ExifParser::encode(Blob&, ByteOrder, ExifData&), which yields the same
 // raw TIFF/Exif blob expected by libheif and by the JPEG XL "Exif" box.
-std::string exif_blob(Exiv2::ExifData& exif) {
+std::string exif_blob(Exiv2::ExifData &exif) {
     Exiv2::Blob blob;
     Exiv2::ExifParser::encode(blob, Exiv2::littleEndian, exif);
-    return std::string(reinterpret_cast<const char*>(blob.data()), blob.size());
+    return std::string(reinterpret_cast<const char *>(blob.data()), blob.size());
 }
 
 std::string xmp_packet() {
@@ -141,7 +139,7 @@ std::string xmp_packet() {
     return packet;
 }
 
-bool write_exif_metadata(const fs::path& path, const Exiv2::ExifData& exif, std::string& err) {
+bool write_exif_metadata(const fs::path &path, const Exiv2::ExifData &exif, std::string &err) {
     try {
         Exiv2::Image::UniquePtr img = Exiv2::ImageFactory::open(path.string());
         if (!img) {
@@ -151,15 +149,15 @@ bool write_exif_metadata(const fs::path& path, const Exiv2::ExifData& exif, std:
         img->readMetadata();
         img->setExifData(exif);
         img->writeMetadata();
-    } catch (const Exiv2::Error& e) {
+    } catch (const Exiv2::Error &e) {
         err = std::string("exiv2: ") + e.what();
         return false;
     }
     return true;
 }
 
-bool read_exif_value(const fs::path& path, const std::string& key, std::string& out,
-                     std::string& err) {
+bool read_exif_value(const fs::path &path, const std::string &key, std::string &out,
+                     std::string &err) {
     try {
         Exiv2::Image::UniquePtr img = Exiv2::ImageFactory::open(path.string());
         if (!img) {
@@ -167,14 +165,14 @@ bool read_exif_value(const fs::path& path, const std::string& key, std::string& 
             return false;
         }
         img->readMetadata();
-        const Exiv2::ExifData& exif = img->exifData();
+        const Exiv2::ExifData &exif = img->exifData();
         const auto it = exif.findKey(Exiv2::ExifKey(key));
         if (it == exif.end()) {
             err = key + " absent";
             return false;
         }
         out = it->toString();
-    } catch (const Exiv2::Error& e) {
+    } catch (const Exiv2::Error &e) {
         err = std::string("exiv2: ") + e.what();
         return false;
     }
@@ -182,7 +180,7 @@ bool read_exif_value(const fs::path& path, const std::string& key, std::string& 
 }
 
 // "31/1 13/1 4944/100" -> decimal degrees.
-bool gps_to_decimal(const std::string& s, double& out) {
+bool gps_to_decimal(const std::string &s, double &out) {
     std::vector<std::string> parts;
     std::string cur;
     for (char c : s) {
@@ -205,7 +203,8 @@ bool gps_to_decimal(const std::string& s, double& out) {
     for (size_t i = 0; i < parts.size(); ++i) {
         const size_t slash = parts[i].find('/');
         const double num = std::stod(parts[i].substr(0, slash));
-        const double den = (slash == std::string::npos) ? 1.0 : std::stod(parts[i].substr(slash + 1));
+        const double den =
+            (slash == std::string::npos) ? 1.0 : std::stod(parts[i].substr(slash + 1));
         if (den == 0.0) {
             return false;
         }
@@ -217,9 +216,9 @@ bool gps_to_decimal(const std::string& s, double& out) {
 
 // --- encoders -------------------------------------------------------------------------
 
-bool write_jpegli_jpeg(const fs::path& path, const std::vector<uint8_t>& rgb, int w, int h,
-                       float distance, std::string& err) {
-    FILE* f = std::fopen(path.string().c_str(), "wb");
+bool write_jpegli_jpeg(const fs::path &path, const std::vector<uint8_t> &rgb, int w, int h,
+                       float distance, std::string &err) {
+    FILE *f = std::fopen(path.string().c_str(), "wb");
     if (f == nullptr) {
         err = "cannot open for write";
         return false;
@@ -254,8 +253,8 @@ bool write_jpegli_jpeg(const fs::path& path, const std::vector<uint8_t>& rgb, in
     return true;
 }
 
-bool write_webp(const fs::path& path, const std::vector<uint8_t>& rgb, int w, int h,
-                bool lossless, std::string& err) {
+bool write_webp(const fs::path &path, const std::vector<uint8_t> &rgb, int w, int h, bool lossless,
+                std::string &err) {
     WebPConfig cfg;
     if (WebPConfigInit(&cfg) == 0) {
         err = "WebPConfigInit failed";
@@ -302,7 +301,7 @@ bool write_webp(const fs::path& path, const std::vector<uint8_t>& rgb, int w, in
 }
 
 struct HeifChoice {
-    const heif_encoder_descriptor* desc = nullptr;
+    const heif_encoder_descriptor *desc = nullptr;
     std::string id;
     std::string name;
 };
@@ -316,13 +315,13 @@ std::vector<HeifChoice> heif_choices(heif_compression_format fmt) {
     if (count <= 0) {
         return out;
     }
-    std::vector<const heif_encoder_descriptor*> descs(static_cast<size_t>(count), nullptr);
+    std::vector<const heif_encoder_descriptor *> descs(static_cast<size_t>(count), nullptr);
     count = heif_get_encoder_descriptors(fmt, nullptr, descs.data(), count);
     for (int i = 0; i < count; ++i) {
         HeifChoice c;
         c.desc = descs[static_cast<size_t>(i)];
-        const char* id = heif_encoder_descriptor_get_id_name(c.desc);
-        const char* nm = heif_encoder_descriptor_get_name(c.desc);
+        const char *id = heif_encoder_descriptor_get_id_name(c.desc);
+        const char *nm = heif_encoder_descriptor_get_name(c.desc);
         c.id = (id != nullptr) ? id : "";
         c.name = (nm != nullptr) ? nm : "";
         out.push_back(c);
@@ -330,18 +329,18 @@ std::vector<HeifChoice> heif_choices(heif_compression_format fmt) {
     return out;
 }
 
-bool write_heif(const fs::path& path, const std::vector<uint8_t>& rgb, int w, int h,
-                heif_compression_format fmt, const std::string& prefer_id,
-                const std::string& exif, std::string& used, std::string& err) {
-    heif_context* ctx = heif_context_alloc();
+bool write_heif(const fs::path &path, const std::vector<uint8_t> &rgb, int w, int h,
+                heif_compression_format fmt, const std::string &prefer_id, const std::string &exif,
+                std::string &used, std::string &err) {
+    heif_context *ctx = heif_context_alloc();
     if (ctx == nullptr) {
         err = "heif_context_alloc failed";
         return false;
     }
     const std::vector<HeifChoice> choices = heif_choices(fmt);
-    const HeifChoice* chosen = nullptr;
+    const HeifChoice *chosen = nullptr;
     if (!prefer_id.empty()) {
-        for (const HeifChoice& c : choices) {
+        for (const HeifChoice &c : choices) {
             if (c.id.find(prefer_id) != std::string::npos) {
                 chosen = &c;
                 break;
@@ -349,19 +348,18 @@ bool write_heif(const fs::path& path, const std::vector<uint8_t>& rgb, int w, in
         }
     }
     if (chosen == nullptr && !choices.empty()) {
-        chosen = &choices.front();  // libheif sorts descriptors by priority
+        chosen = &choices.front(); // libheif sorts descriptors by priority
     }
-    heif_encoder* enc = nullptr;
-    heif_error e = (chosen != nullptr)
-                       ? heif_context_get_encoder(ctx, chosen->desc, &enc)
-                       : heif_context_get_encoder_for_format(ctx, fmt, &enc);
+    heif_encoder *enc = nullptr;
+    heif_error e = (chosen != nullptr) ? heif_context_get_encoder(ctx, chosen->desc, &enc)
+                                       : heif_context_get_encoder_for_format(ctx, fmt, &enc);
     if (e.code != heif_error_Ok || enc == nullptr) {
         err = std::string("no encoder: ") + ((e.message != nullptr) ? e.message : "unknown");
         heif_context_free(ctx);
         return false;
     }
     used = (chosen != nullptr) ? (chosen->id.empty() ? chosen->name : chosen->id)
-                              : std::string("libheif default");
+                               : std::string("libheif default");
     std::string note;
     e = heif_encoder_set_lossy_quality(enc, 50);
     if (e.code != heif_error_Ok) {
@@ -374,7 +372,7 @@ bool write_heif(const fs::path& path, const std::vector<uint8_t>& rgb, int w, in
         note += (e.message != nullptr) ? e.message : "?";
     }
 
-    heif_image* img = nullptr;
+    heif_image *img = nullptr;
     e = heif_image_create(w, h, heif_colorspace_RGB, heif_chroma_interleaved_RGB, &img);
     if (e.code != heif_error_Ok || img == nullptr) {
         err = "heif_image_create failed";
@@ -385,7 +383,7 @@ bool write_heif(const fs::path& path, const std::vector<uint8_t>& rgb, int w, in
     e = heif_image_add_plane(img, heif_channel_interleaved, w, h, 8);
     if (e.code == heif_error_Ok) {
         int stride = 0;
-        uint8_t* plane = heif_image_get_plane(img, heif_channel_interleaved, &stride);
+        uint8_t *plane = heif_image_get_plane(img, heif_channel_interleaved, &stride);
         if (plane == nullptr) {
             e.code = heif_error_Memory_allocation_error;
             e.message = "heif_image_get_plane returned null";
@@ -397,7 +395,7 @@ bool write_heif(const fs::path& path, const std::vector<uint8_t>& rgb, int w, in
             }
         }
     }
-    heif_image_handle* handle = nullptr;
+    heif_image_handle *handle = nullptr;
     if (e.code == heif_error_Ok) {
         e = heif_context_encode_image(ctx, img, enc, nullptr, &handle);
     }
@@ -424,14 +422,14 @@ bool write_heif(const fs::path& path, const std::vector<uint8_t>& rgb, int w, in
     return ok;
 }
 
-bool write_jxl(const fs::path& path, const std::vector<uint8_t>& rgb, int w, int h,
-               const std::string& exif, const std::string& xmp, std::string& err) {
-    JxlEncoder* enc = JxlEncoderCreate(nullptr);
+bool write_jxl(const fs::path &path, const std::vector<uint8_t> &rgb, int w, int h,
+               const std::string &exif, const std::string &xmp, std::string &err) {
+    JxlEncoder *enc = JxlEncoderCreate(nullptr);
     if (enc == nullptr) {
         err = "JxlEncoderCreate failed";
         return false;
     }
-    JxlEncoderUseContainer(enc, JXL_TRUE);  // required before adding Exif/xml boxes
+    JxlEncoderUseContainer(enc, JXL_TRUE); // required before adding Exif/xml boxes
     // libjxl >= 0.11: the encoder assumes no metadata boxes by default; JxlEncoderUseBoxes
     // must be called (before encoding starts) or every JxlEncoderAddBox returns
     // JXL_ENC_ERROR, and JxlEncoderCloseBoxes is required at the end (jxl/encode.h:989-1075).
@@ -452,7 +450,7 @@ bool write_jxl(const fs::path& path, const std::vector<uint8_t>& rgb, int w, int
     if (st == JXL_ENC_SUCCESS) {
         st = JxlEncoderSetColorEncoding(enc, &color);
     }
-    JxlEncoderFrameSettings* fs = JxlEncoderFrameSettingsCreate(enc, nullptr);
+    JxlEncoderFrameSettings *fs = JxlEncoderFrameSettingsCreate(enc, nullptr);
     if (st == JXL_ENC_SUCCESS && fs == nullptr) {
         st = JXL_ENC_ERROR;
     }
@@ -471,11 +469,11 @@ bool write_jxl(const fs::path& path, const std::vector<uint8_t>& rgb, int w, int
         // jxl/encode.h:1024-1027: the "Exif" box contents must be prepended by a 4-byte
         // TIFF header offset (4 zero bytes = tiff header follows immediately).
         exif_box = std::string(4, '\0') + exif;
-        st = JxlEncoderAddBox(enc, "Exif", reinterpret_cast<const uint8_t*>(exif_box.data()),
+        st = JxlEncoderAddBox(enc, "Exif", reinterpret_cast<const uint8_t *>(exif_box.data()),
                               exif_box.size(), JXL_FALSE);
     }
     if (st == JXL_ENC_SUCCESS && !xmp.empty()) {
-        st = JxlEncoderAddBox(enc, "xml ", reinterpret_cast<const uint8_t*>(xmp.data()),
+        st = JxlEncoderAddBox(enc, "xml ", reinterpret_cast<const uint8_t *>(xmp.data()),
                               xmp.size(), JXL_FALSE);
     }
     if (st != JXL_ENC_SUCCESS) {
@@ -483,11 +481,11 @@ bool write_jxl(const fs::path& path, const std::vector<uint8_t>& rgb, int w, int
         err = "jxl encode setup failed";
         return false;
     }
-    JxlEncoderCloseBoxes(enc);  // libjxl >= 0.11: required after the last AddBox call
+    JxlEncoderCloseBoxes(enc); // libjxl >= 0.11: required after the last AddBox call
     JxlEncoderCloseInput(enc);
 
     std::vector<uint8_t> out(1u << 16);
-    uint8_t* next = out.data();
+    uint8_t *next = out.data();
     size_t avail = out.size();
     for (;;) {
         st = JxlEncoderProcessOutput(enc, &next, &avail);
@@ -509,8 +507,8 @@ bool write_jxl(const fs::path& path, const std::vector<uint8_t>& rgb, int w, int
     return write_bytes(path, out.data(), total, err);
 }
 
-bool write_cmyk_tiff(const fs::path& path, int w, int h, std::string& err) {
-    TIFF* tif = TIFFOpen(path.string().c_str(), "w");
+bool write_cmyk_tiff(const fs::path &path, int w, int h, std::string &err) {
+    TIFF *tif = TIFFOpen(path.string().c_str(), "w");
     if (tif == nullptr) {
         err = "TIFFOpen failed";
         return false;
@@ -529,10 +527,10 @@ bool write_cmyk_tiff(const fs::path& path, int w, int h, std::string& err) {
     for (int y = 0; y < h; ++y) {
         for (int x = 0; x < w; ++x) {
             const size_t i = static_cast<size_t>(x) * 4;
-            row[i + 0] = static_cast<uint8_t>(255 - x * 4);  // C
-            row[i + 1] = static_cast<uint8_t>(255 - y * 4);  // M
-            row[i + 2] = static_cast<uint8_t>(255 - (x + y) % 256);  // Y
-            row[i + 3] = 0;                                          // K
+            row[i + 0] = static_cast<uint8_t>(255 - x * 4);         // C
+            row[i + 1] = static_cast<uint8_t>(255 - y * 4);         // M
+            row[i + 2] = static_cast<uint8_t>(255 - (x + y) % 256); // Y
+            row[i + 3] = 0;                                         // K
         }
         if (TIFFWriteScanline(tif, row.data(), static_cast<uint32_t>(y), 0) < 0) {
             TIFFClose(tif);
@@ -546,7 +544,7 @@ bool write_cmyk_tiff(const fs::path& path, int w, int h, std::string& err) {
 
 // --- OIIO readback --------------------------------------------------------------------
 
-bool oiio_check(const fs::path& path, int want_w, int want_h, std::string& err) {
+bool oiio_check(const fs::path &path, int want_w, int want_h, std::string &err) {
     auto in = OIIO::ImageInput::open(path.string());
     if (!in) {
         err = "OIIO open failed: " + OIIO::geterror();
@@ -557,13 +555,13 @@ bool oiio_check(const fs::path& path, int want_w, int want_h, std::string& err) 
         err = "size=" + std::to_string(spec.width) + "x" + std::to_string(spec.height);
         return false;
     }
-    err = std::to_string(spec.width) + "x" + std::to_string(spec.height) + " ch=" +
-          std::to_string(spec.nchannels);
+    err = std::to_string(spec.width) + "x" + std::to_string(spec.height) +
+          " ch=" + std::to_string(spec.nchannels);
     return true;
 }
 
-bool check_metadata_field(const fs::path& path, const std::string& name,
-                          const std::string& key, const std::string& expect) {
+bool check_metadata_field(const fs::path &path, const std::string &name, const std::string &key,
+                          const std::string &expect) {
     std::string value;
     std::string err;
     if (!read_exif_value(path, key, value, err)) {
@@ -577,7 +575,7 @@ bool check_metadata_field(const fs::path& path, const std::string& name,
     return true;
 }
 
-int cmd_make(const fs::path& dir) {
+int cmd_make(const fs::path &dir) {
     std::error_code ec;
     fs::create_directories(dir, ec);
     if (ec) {
@@ -649,13 +647,13 @@ int cmd_make(const fs::path& dir) {
     return g_fails;
 }
 
-int cmd_verify(const fs::path& dir) {
-    const std::vector<std::string> names = {"exif_full.jpg", "webp_lossy.webp",
-                                            "webp_lossless.webp", "heif_exif.heic",
-                                            "avif_exif.avif",    "jxl_exif.jxl",
-                                            "cmyk.tif"};
+int cmd_verify(const fs::path &dir) {
+    const std::vector<std::string> names = {
+        "exif_full.jpg",  "webp_lossy.webp", "webp_lossless.webp",
+        "heif_exif.heic", "avif_exif.avif",  "jxl_exif.jxl",
+        "cmyk.tif"};
     if (!fs::is_directory(dir)) {
-        for (const std::string& n : names) {
+        for (const std::string &n : names) {
             emit("FIXTURE", n, "SKIP", "directory missing: " + dir.string());
         }
         return 77;
@@ -697,7 +695,7 @@ int cmd_verify(const fs::path& dir) {
     }
 
     // webp fixtures: OIIO must open both.
-    for (const char* n : {"webp_lossy.webp", "webp_lossless.webp"}) {
+    for (const char *n : {"webp_lossy.webp", "webp_lossless.webp"}) {
         const fs::path p = dir / n;
         std::string err;
         if (!fs::exists(p)) {
@@ -710,7 +708,7 @@ int cmd_verify(const fs::path& dir) {
     }
 
     // container fixtures: DateTimeOriginal readback through Exiv2.
-    for (const char* n : {"heif_exif.heic", "avif_exif.avif", "jxl_exif.jxl"}) {
+    for (const char *n : {"heif_exif.heic", "avif_exif.avif", "jxl_exif.jxl"}) {
         const fs::path p = dir / n;
         if (!fs::exists(p)) {
             emit("FIXTURE", n, "SKIP", "missing");
@@ -746,9 +744,9 @@ int cmd_verify(const fs::path& dir) {
     return g_fails;
 }
 
-}  // namespace
+} // namespace
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
     std::vector<std::string> args;
     for (int i = 1; i < argc; ++i) {
         args.emplace_back(argv[i]);

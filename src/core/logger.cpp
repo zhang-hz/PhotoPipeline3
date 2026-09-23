@@ -56,73 +56,103 @@ namespace {
 // M2-T11 §2.2 版本单源：app 版本取自生成的 core/version.h，唯一来源 = 顶层
 // project(PhotoPipeline VERSION …)。T3 的内联字面量随之删除——当时顾虑的
 // target_compile_definitions 已由 configure_file 生成头替代（无需额外编译定义）。
-constexpr const char* kAppVersion = PP_VERSION_STRING;
+constexpr const char *kAppVersion = PP_VERSION_STRING;
 
 // jpegli exposes no version API (only jpeg_* compatibility macros); the overlay pins the
 // upstream commit, see vcpkg-overlay/libjpeg-turbo/portfile.cmake REF.
-constexpr const char* kJpegliCommit = "031a0077";
+constexpr const char *kJpegliCommit = "031a0077";
 
 constexpr std::size_t kKeepRunFiles = 20;
 
 // M2-T3 §2.4 frozen size cap.
-constexpr std::uintmax_t kSizeCapBytes = 16u * 1024u * 1024u;  // 16 MiB
-constexpr std::uintmax_t kTailBytes = 8u * 1024u * 1024u;      // 8 MiB
-constexpr const char* kTruncateNote = "[note] log truncated (size cap 16MiB, tail kept 8MiB)\n";
+constexpr std::uintmax_t kSizeCapBytes = 16u * 1024u * 1024u; // 16 MiB
+constexpr std::uintmax_t kTailBytes = 8u * 1024u * 1024u;     // 8 MiB
+constexpr const char *kTruncateNote = "[note] log truncated (size cap 16MiB, tail kept 8MiB)\n";
 // Upper bound of the spdlog pattern overhead around the rendered body
 // ("HH:MM:SS.mmm [level] [tid] " + '\n'): timestamp 12 + brackets/level 12 + tid <= 20 + 3.
 constexpr std::size_t kLineOverhead = 64;
 
-constexpr const char* kLogPattern = "%H:%M:%S.%e [%l] [%t] %v";
+constexpr const char *kLogPattern = "%H:%M:%S.%e [%l] [%t] %v";
 
 std::mutex g_mu;
-std::shared_ptr<spdlog::logger> g_logger;  // null -> stderr fallback
+std::shared_ptr<spdlog::logger> g_logger; // null -> stderr fallback
 LogLevel g_level = LogLevel::Info;
 std::string g_qt_version;
 // §2.4 accounting: active run file and its accounted size (guarded by g_mu).
-std::filesystem::path g_log_path;  // empty -> no file sink
+std::filesystem::path g_log_path; // empty -> no file sink
 std::uintmax_t g_log_bytes = 0;
 
 spdlog::level::level_enum to_spdlog(LogLevel lv) noexcept {
     switch (lv) {
-        case LogLevel::Trace: return spdlog::level::trace;
-        case LogLevel::Debug: return spdlog::level::debug;
-        case LogLevel::Info: return spdlog::level::info;
-        case LogLevel::Warn: return spdlog::level::warn;
-        case LogLevel::Error: return spdlog::level::err;
-        case LogLevel::Critical: return spdlog::level::critical;
+    case LogLevel::Trace:
+        return spdlog::level::trace;
+    case LogLevel::Debug:
+        return spdlog::level::debug;
+    case LogLevel::Info:
+        return spdlog::level::info;
+    case LogLevel::Warn:
+        return spdlog::level::warn;
+    case LogLevel::Error:
+        return spdlog::level::err;
+    case LogLevel::Critical:
+        return spdlog::level::critical;
     }
     return spdlog::level::info;
 }
 
-const char* level_name(LogLevel lv) noexcept {
+const char *level_name(LogLevel lv) noexcept {
     switch (lv) {
-        case LogLevel::Trace: return "trace";
-        case LogLevel::Debug: return "debug";
-        case LogLevel::Info: return "info";
-        case LogLevel::Warn: return "warning";
-        case LogLevel::Error: return "error";
-        case LogLevel::Critical: return "critical";
+    case LogLevel::Trace:
+        return "trace";
+    case LogLevel::Debug:
+        return "debug";
+    case LogLevel::Info:
+        return "info";
+    case LogLevel::Warn:
+        return "warning";
+    case LogLevel::Error:
+        return "error";
+    case LogLevel::Critical:
+        return "critical";
     }
     return "info";
 }
 
-bool parse_level(std::string_view s, LogLevel& out) noexcept {
+bool parse_level(std::string_view s, LogLevel &out) noexcept {
     std::string lowered;
     lowered.reserve(s.size());
     for (const char c : s) {
         lowered.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
     }
-    if (lowered == "trace") { out = LogLevel::Trace; return true; }
-    if (lowered == "debug") { out = LogLevel::Debug; return true; }
-    if (lowered == "info") { out = LogLevel::Info; return true; }
-    if (lowered == "warn") { out = LogLevel::Warn; return true; }
-    if (lowered == "error") { out = LogLevel::Error; return true; }
-    if (lowered == "critical") { out = LogLevel::Critical; return true; }
+    if (lowered == "trace") {
+        out = LogLevel::Trace;
+        return true;
+    }
+    if (lowered == "debug") {
+        out = LogLevel::Debug;
+        return true;
+    }
+    if (lowered == "info") {
+        out = LogLevel::Info;
+        return true;
+    }
+    if (lowered == "warn") {
+        out = LogLevel::Warn;
+        return true;
+    }
+    if (lowered == "error") {
+        out = LogLevel::Error;
+        return true;
+    }
+    if (lowered == "critical") {
+        out = LogLevel::Critical;
+        return true;
+    }
     return false;
 }
 
 LogLevel env_level_or(LogLevel fallback) noexcept {
-    const char* env = std::getenv("PP_LOG_LEVEL");
+    const char *env = std::getenv("PP_LOG_LEVEL");
     LogLevel lv = fallback;
     if (env != nullptr && parse_level(env, lv)) {
         return lv;
@@ -141,8 +171,9 @@ unsigned long current_tid() noexcept {
 std::string timestamp_now(bool with_date) {
     const auto now = std::chrono::system_clock::now();
     const auto secs = std::chrono::system_clock::to_time_t(now);
-    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        now.time_since_epoch()).count() % 1000;
+    const auto ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() %
+        1000;
     std::tm tm{};
 #if defined(_WIN32)
     localtime_s(&tm, &secs);
@@ -151,12 +182,11 @@ std::string timestamp_now(bool with_date) {
 #endif
     char buf[32];
     if (with_date) {
-        std::snprintf(buf, sizeof(buf), "%04d%02d%02d-%02d%02d%02d",
-                      tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-                      tm.tm_hour, tm.tm_min, tm.tm_sec);
+        std::snprintf(buf, sizeof(buf), "%04d%02d%02d-%02d%02d%02d", tm.tm_year + 1900,
+                      tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
     } else {
-        std::snprintf(buf, sizeof(buf), "%02d:%02d:%02d.%03d",
-                      tm.tm_hour, tm.tm_min, tm.tm_sec, static_cast<int>(ms));
+        std::snprintf(buf, sizeof(buf), "%02d:%02d:%02d.%03d", tm.tm_hour, tm.tm_min, tm.tm_sec,
+                      static_cast<int>(ms));
     }
     return std::string(buf);
 }
@@ -165,8 +195,8 @@ std::string timestamp_now(bool with_date) {
 std::string render_value(std::string_view v) {
     bool quote = v.empty();
     for (const char c : v) {
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '"' || c == '\\' ||
-            c == '{' || c == '}') {
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '"' || c == '\\' || c == '{' ||
+            c == '}') {
             quote = true;
             break;
         }
@@ -179,12 +209,24 @@ std::string render_value(std::string_view v) {
     out.push_back('"');
     for (const char c : v) {
         switch (c) {
-            case '"': out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n"; break;
-            case '\r': out += "\\r"; break;
-            case '\t': out += "\\t"; break;
-            default: out.push_back(c); break;
+        case '"':
+            out += "\\\"";
+            break;
+        case '\\':
+            out += "\\\\";
+            break;
+        case '\n':
+            out += "\\n";
+            break;
+        case '\r':
+            out += "\\r";
+            break;
+        case '\t':
+            out += "\\t";
+            break;
+        default:
+            out.push_back(c);
+            break;
         }
     }
     out.push_back('"');
@@ -204,7 +246,7 @@ std::string render_body(std::string_view stage, std::string_view file, std::stri
     if (fields.size() != 0) {
         out += " {";
         bool first = true;
-        for (const auto& kv : fields) {
+        for (const auto &kv : fields) {
             if (!first) {
                 out.push_back(' ');
             }
@@ -218,14 +260,14 @@ std::string render_body(std::string_view stage, std::string_view file, std::stri
     return out;
 }
 
-void write_stderr(LogLevel lv, const std::string& body) noexcept {
+void write_stderr(LogLevel lv, const std::string &body) noexcept {
     std::fprintf(stderr, "%s [%s] [%lu] %s\n", timestamp_now(false).c_str(), level_name(lv),
                  current_tid(), body.c_str());
     std::fflush(stderr);
 }
 
 // Delete the oldest run-*.log files so that at most kKeepRunFiles remain (errors ignored).
-void prune_old_runs(const std::filesystem::path& dir) noexcept {
+void prune_old_runs(const std::filesystem::path &dir) noexcept {
     // NOTE(cap): the size rule of M2 §2.4 is enforced on the write path
     // (enforce_size_cap_locked), not here: the 20-file rule is unchanged and independent.
     try {
@@ -254,7 +296,7 @@ void prune_old_runs(const std::filesystem::path& dir) noexcept {
         if (files.size() <= kKeepRunFiles) {
             return;
         }
-        std::sort(files.begin(), files.end(), [](const Entry& a, const Entry& b) {
+        std::sort(files.begin(), files.end(), [](const Entry &a, const Entry &b) {
             if (a.first != b.first) {
                 return a.first < b.first;
             }
@@ -271,7 +313,7 @@ void prune_old_runs(const std::filesystem::path& dir) noexcept {
 }
 
 // File sink construction shared by log_init and the §2.4 rewrite path (append mode, as M1a).
-std::shared_ptr<spdlog::logger> make_file_logger(const std::filesystem::path& file,
+std::shared_ptr<spdlog::logger> make_file_logger(const std::filesystem::path &file,
                                                  spdlog::level::level_enum lv) {
     auto sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(file.string(), false);
     auto lg = std::make_shared<spdlog::logger>("pp", std::move(sink));
@@ -352,7 +394,7 @@ std::string hex8(uint32_t v) {
     return std::string(buf);
 }
 
-std::string first_line(const char* s) {
+std::string first_line(const char *s) {
     if (s == nullptr) {
         return std::string();
     }
@@ -388,28 +430,29 @@ std::string webp_version() {
 
 // x265 / svt-av1 / aom have no direct version entry point here; libheif reports them in the
 // long encoder descriptor name ("x265 HEVC encoder (4.2)", ...). §3.1 behavior contract.
-void append_heif_encoder_versions(std::vector<std::pair<std::string, std::string>>& out) {
+void append_heif_encoder_versions(std::vector<std::pair<std::string, std::string>> &out) {
     struct Wanted {
         heif_compression_format fmt;
-        const char* key;
-        const char* needle;
+        const char *key;
+        const char *needle;
     };
     const Wanted wanted[] = {
         {heif_compression_HEVC, "x265", "x265"},
         {heif_compression_AV1, "svt-av1", "svt"},
         {heif_compression_AV1, "aom", "aom"},
     };
-    for (const Wanted& w : wanted) {
+    for (const Wanted &w : wanted) {
         int count = heif_get_encoder_descriptors(w.fmt, nullptr, nullptr, 0);
         if (count <= 0) {
             continue;
         }
-        std::vector<const heif_encoder_descriptor*> descs(static_cast<std::size_t>(count), nullptr);
+        std::vector<const heif_encoder_descriptor *> descs(static_cast<std::size_t>(count),
+                                                           nullptr);
         count = heif_get_encoder_descriptors(w.fmt, nullptr, descs.data(), count);
         for (int i = 0; i < count; ++i) {
-            const heif_encoder_descriptor* d = descs[static_cast<std::size_t>(i)];
-            const char* long_name = heif_encoder_descriptor_get_name(d);
-            const char* id_name = heif_encoder_descriptor_get_id_name(d);
+            const heif_encoder_descriptor *d = descs[static_cast<std::size_t>(i)];
+            const char *long_name = heif_encoder_descriptor_get_name(d);
+            const char *id_name = heif_encoder_descriptor_get_id_name(d);
             std::string hay = long_name != nullptr ? long_name : "";
             if (id_name != nullptr) {
                 hay += ' ';
@@ -428,9 +471,9 @@ void append_heif_encoder_versions(std::vector<std::pair<std::string, std::string
     }
 }
 
-}  // namespace
+} // namespace
 
-void log_init(const std::filesystem::path& log_dir, LogLevel min_level) {
+void log_init(const std::filesystem::path &log_dir, LogLevel min_level) {
     try {
         const LogLevel lv = env_level_or(min_level);
 
@@ -443,7 +486,7 @@ void log_init(const std::filesystem::path& log_dir, LogLevel min_level) {
             file = log_dir / ("run-" + timestamp_now(true) + ".log");
             try {
                 lg = make_file_logger(file, to_spdlog(lv));
-            } catch (const std::exception& e) {
+            } catch (const std::exception &e) {
                 lg.reset();
                 std::fprintf(stderr, "log_init: cannot open '%s' (%s); logging to stderr\n",
                              file.string().c_str(), e.what());
@@ -462,7 +505,7 @@ void log_init(const std::filesystem::path& log_dir, LogLevel min_level) {
             g_logger = lg;
             g_level = lv;
             g_log_path = lg ? file : std::filesystem::path();
-            g_log_bytes = 0;  // §2.4 accounting starts from the on-disk size (append mode)
+            g_log_bytes = 0; // §2.4 accounting starts from the on-disk size (append mode)
             if (lg) {
                 std::error_code sec;
                 const std::uintmax_t existing = std::filesystem::file_size(file, sec);
@@ -524,7 +567,7 @@ LogLevel log_level() {
 // M2-T3 §2.3: the frozen startup entry point. Read once per call; main.cpp calls it exactly once
 // at start-up, so a later change of the variable does not follow the running process.
 LogLevel level_from_env_or(LogLevel fallback) {
-    const char* env = std::getenv("PP_LOG_LEVEL");
+    const char *env = std::getenv("PP_LOG_LEVEL");
     if (env == nullptr) {
         return fallback;
     }
@@ -532,7 +575,7 @@ LogLevel level_from_env_or(LogLevel fallback) {
     if (parse_level(env, lv)) {
         return lv;
     }
-    std::fprintf(stderr, "PP_LOG_LEVEL 无效：\"%s\"，已忽略\n", env);  // §2.3 frozen text
+    std::fprintf(stderr, "PP_LOG_LEVEL 无效：\"%s\"，已忽略\n", env); // §2.3 frozen text
     std::fflush(stderr);
     return fallback;
 }
@@ -597,7 +640,7 @@ std::vector<std::pair<std::string, std::string>> library_versions() {
         add("jpegli", kJpegliCommit);
         add("libjxl", hex8(JxlEncoderVersion()));
         {
-            const char* heif = heif_get_version();
+            const char *heif = heif_get_version();
             add("libheif", heif != nullptr ? std::string(heif) : std::string());
         }
         add("exiv2", Exiv2::versionString());
@@ -612,4 +655,4 @@ std::vector<std::pair<std::string, std::string>> library_versions() {
     return out;
 }
 
-}  // namespace pp
+} // namespace pp

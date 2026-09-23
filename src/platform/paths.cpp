@@ -31,14 +31,14 @@
 namespace pp::platform {
 namespace {
 
-constexpr const char* kWriteProbeName = ".pp-write-test";
-constexpr const char* kAppDirName = "PhotoPipeline";
+constexpr const char *kWriteProbeName = ".pp-write-test";
+constexpr const char *kAppDirName = "PhotoPipeline";
 
 struct Cache {
     std::once_flag once;
     std::filesystem::path exe_dir;
     bool exe_writable = false;
-    std::filesystem::path data;  // empty = no usable directory; caller must cope
+    std::filesystem::path data; // empty = no usable directory; caller must cope
 };
 
 Cache g_cache;
@@ -50,9 +50,9 @@ std::filesystem::path read_exe_path() {
 #ifdef _WIN32
     std::wstring buf(1024, L'\0');
     for (;;) {
-        const DWORD n = ::GetModuleFileNameW(nullptr, buf.data(),
-                                             static_cast<DWORD>(buf.size()));
-        if (n == 0) return {};
+        const DWORD n = ::GetModuleFileNameW(nullptr, buf.data(), static_cast<DWORD>(buf.size()));
+        if (n == 0)
+            return {};
         if (n < buf.size()) {
             buf.resize(n);
             return std::filesystem::path(buf);
@@ -63,7 +63,8 @@ std::filesystem::path read_exe_path() {
     std::string buf(1024, '\0');
     for (;;) {
         const ssize_t n = ::readlink("/proc/self/exe", buf.data(), buf.size());
-        if (n < 0) return {};
+        if (n < 0)
+            return {};
         if (static_cast<std::size_t>(n) < buf.size()) {
             buf.resize(static_cast<std::size_t>(n));
             return std::filesystem::path(buf);
@@ -74,10 +75,12 @@ std::filesystem::path read_exe_path() {
 }
 
 // 可写探测：在 dir 下创建 .pp-write-test 写入后删除；任何一步失败即不可写。
-bool dir_writable(const std::filesystem::path& dir) {
-    if (dir.empty()) return false;
+bool dir_writable(const std::filesystem::path &dir) {
+    if (dir.empty())
+        return false;
     std::error_code ec;
-    if (!std::filesystem::is_directory(dir, ec)) return false;
+    if (!std::filesystem::is_directory(dir, ec))
+        return false;
 
     const std::filesystem::path probe = dir / kWriteProbeName;
     bool ok = false;
@@ -90,7 +93,7 @@ bool dir_writable(const std::filesystem::path& dir) {
         }
     }
     std::error_code rm_ec;
-    std::filesystem::remove(probe, rm_ec);  // 探测文件必须清掉（失败也不留痕于逻辑）
+    std::filesystem::remove(probe, rm_ec); // 探测文件必须清掉（失败也不留痕于逻辑）
     return ok;
 }
 
@@ -99,15 +102,16 @@ bool dir_writable(const std::filesystem::path& dir) {
 // narrow env strings are UTF-8 under the M3-D2 activeCodePage=UTF-8 manifest).
 std::filesystem::path platform_data_dir() {
 #ifdef _WIN32
-    const char* appdata = std::getenv("APPDATA");
+    const char *appdata = std::getenv("APPDATA");
     if (appdata != nullptr && *appdata != '\0') {
         return std::filesystem::path(appdata) / kAppDirName;
     }
     return {};
 #else
-    const char* xdg = std::getenv("XDG_DATA_HOME");
-    if (xdg != nullptr && *xdg != '\0') return std::filesystem::path(xdg) / kAppDirName;
-    const char* home = std::getenv("HOME");
+    const char *xdg = std::getenv("XDG_DATA_HOME");
+    if (xdg != nullptr && *xdg != '\0')
+        return std::filesystem::path(xdg) / kAppDirName;
+    const char *home = std::getenv("HOME");
     if (home != nullptr && *home != '\0') {
         return std::filesystem::path(home) / ".local" / "share" / kAppDirName;
     }
@@ -115,22 +119,25 @@ std::filesystem::path platform_data_dir() {
 #endif
 }
 
-bool ensure_dir(const std::filesystem::path& dir) {
-    if (dir.empty()) return false;
+bool ensure_dir(const std::filesystem::path &dir) {
+    if (dir.empty())
+        return false;
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
-    if (ec) return false;
+    if (ec)
+        return false;
     return std::filesystem::is_directory(dir, ec);
 }
 
-bool ensure_layout(const std::filesystem::path& base) {
+bool ensure_layout(const std::filesystem::path &base) {
     return !base.empty() && ensure_dir(base) && ensure_dir(base / "presets") &&
            ensure_dir(base / "logs");
 }
 
 void resolve() {
     g_cache.exe_dir = read_exe_path();
-    if (!g_cache.exe_dir.empty()) g_cache.exe_dir = g_cache.exe_dir.parent_path();
+    if (!g_cache.exe_dir.empty())
+        g_cache.exe_dir = g_cache.exe_dir.parent_path();
     g_cache.exe_writable = dir_writable(g_cache.exe_dir);
 
     g_cache.data = g_cache.exe_writable ? g_cache.exe_dir : platform_data_dir();
@@ -138,19 +145,20 @@ void resolve() {
         // 便携分支的探测通过但目录创建失败（或 XDG 不可写）→ 试另一分支，再失败返回空。
         if (g_cache.exe_writable && g_cache.data != platform_data_dir()) {
             g_cache.data = platform_data_dir();
-            if (!ensure_layout(g_cache.data)) g_cache.data.clear();
+            if (!ensure_layout(g_cache.data))
+                g_cache.data.clear();
         } else {
             g_cache.data.clear();
         }
     }
 }
 
-const std::filesystem::path& data_dir_cached() {
+const std::filesystem::path &data_dir_cached() {
     std::call_once(g_cache.once, resolve);
     return g_cache.data;
 }
 
-}  // namespace
+} // namespace
 
 std::filesystem::path executable_dir() {
     std::call_once(g_cache.once, resolve);
@@ -165,4 +173,4 @@ std::filesystem::path presets_dir() { return data_dir_cached() / "presets"; }
 
 std::filesystem::path logs_dir() { return data_dir_cached() / "logs"; }
 
-}  // namespace pp::platform
+} // namespace pp::platform

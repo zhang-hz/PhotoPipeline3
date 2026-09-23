@@ -19,17 +19,17 @@ namespace {
 
 int g_failed = 0;
 
-void check(bool ok, const std::string& case_name, const std::string& detail) {
+void check(bool ok, const std::string &case_name, const std::string &detail) {
     if (!ok) {
         ++g_failed;
         std::printf("FAIL %s: %s\n", case_name.c_str(), detail.c_str());
     }
 }
 
-std::string show(const fs::path& p) { return p.string(); }
+std::string show(const fs::path &p) { return p.string(); }
 
 // <.cache-free> scratch under the build dir (ctest runs in the build dir).
-fs::path make_temp_dir(const std::string& name) {
+fs::path make_temp_dir(const std::string &name) {
     std::error_code ec;
     const fs::path d = fs::current_path(ec) / ".pp_test_tmp" / name;
     fs::remove_all(d, ec);
@@ -53,14 +53,14 @@ fs::path find_corpus() {
     return {};
 }
 
-void write_file(const fs::path& p, const std::string& text) {
+void write_file(const fs::path &p, const std::string &text) {
     std::error_code ec;
     fs::create_directories(p.parent_path(), ec);
     std::ofstream f(p, std::ios::binary);
     f << text;
 }
 
-}  // namespace
+} // namespace
 
 int main() {
     // ---- mirror_path: 5 cases (nested / other root / ext change / empty ext / unicode) ----
@@ -85,9 +85,8 @@ int main() {
               "expect /out/pic.tif, got " + show(got));
     }
     {
-        const fs::path got =
-            pp::mirror_path("/data/\u7167\u7247/\u5b50\u76ee\u5f55/\u56fe.png",
-                            "/data/\u7167\u7247", "/out", "jpg");
+        const fs::path got = pp::mirror_path("/data/\u7167\u7247/\u5b50\u76ee\u5f55/\u56fe.png",
+                                             "/data/\u7167\u7247", "/out", "jpg");
         check(got == fs::path("/out/\u5b50\u76ee\u5f55/\u56fe.jpg"), "mirror/unicode",
               "expect /out/子目录/图.jpg, got " + show(got));
     }
@@ -124,7 +123,8 @@ int main() {
         std::vector<fs::path> reserved;
 
         std::string err;
-        const pp::OutputPlan p1 = pp::resolve_conflict(desired, pp::ConflictPolicy::Skip, reserved, err);
+        const pp::OutputPlan p1 =
+            pp::resolve_conflict(desired, pp::ConflictPolicy::Skip, reserved, err);
         check(p1.skip && p1.out_path == desired && err.empty(), "conflict/skip",
               "skip=" + std::to_string(p1.skip) + " out=" + show(p1.out_path) + " err=" + err);
 
@@ -138,17 +138,17 @@ int main() {
             pp::resolve_conflict(desired, pp::ConflictPolicy::Rename, reserved, err);
         check(!p3.skip && p3.out_path == dir / "a (2).png" && p3.rename_index == 2 && err.empty(),
               "conflict/rename-sequence",
-              "expect a (2).png index=2, got " + show(p3.out_path) + " index=" +
-                  std::to_string(p3.rename_index) + " err=" + err);
+              "expect a (2).png index=2, got " + show(p3.out_path) +
+                  " index=" + std::to_string(p3.rename_index) + " err=" + err);
 
-        const fs::path free_path = dir / "b.png";  // not on disk
+        const fs::path free_path = dir / "b.png"; // not on disk
         reserved.push_back(free_path);
         const pp::OutputPlan p4 =
             pp::resolve_conflict(free_path, pp::ConflictPolicy::Rename, reserved, err);
         check(!p4.skip && p4.out_path == dir / "b (1).png" && p4.rename_index == 1 && err.empty(),
               "conflict/reserved",
-              "expect b (1).png index=1, got " + show(p4.out_path) + " index=" +
-                  std::to_string(p4.rename_index) + " err=" + err);
+              "expect b (1).png index=1, got " + show(p4.out_path) +
+                  " index=" + std::to_string(p4.rename_index) + " err=" + err);
 
         const pp::OutputPlan p5 =
             pp::resolve_conflict(dir / "c.png", pp::ConflictPolicy::Rename, reserved, err);
@@ -179,7 +179,7 @@ int main() {
                   (errors.empty() ? std::string() : (" first=" + errors.front())));
         check(files.size() == 27, "collect/corpus-count",
               "expect 27 fixture files, got " + std::to_string(files.size()));
-        for (const fs::path& f : files) {
+        for (const fs::path &f : files) {
             std::error_code ec;
             if (!fs::is_regular_file(f, ec)) {
                 check(false, "collect/corpus-regular", "not a regular file: " + show(f));
@@ -193,8 +193,8 @@ int main() {
     {
         const fs::path dir = make_temp_dir("fsops_collect");
         write_file(dir / "one.png", "x");
-        write_file(dir / "two.PNG", "x");       // case-insensitive whitelist
-        write_file(dir / "three.txt", "x");     // filtered out
+        write_file(dir / "two.PNG", "x");   // case-insensitive whitelist
+        write_file(dir / "three.txt", "x"); // filtered out
         write_file(dir / "sub" / "four.JPeG", "x");
         std::vector<std::string> errors;
         const std::vector<fs::path> pngs = pp::collect_inputs({dir}, {"png"}, errors);
@@ -211,8 +211,7 @@ int main() {
               "got " + std::to_string(single.size()));
 
         // Duplicate roots must not duplicate entries.
-        const std::vector<fs::path> dup =
-            pp::collect_inputs({dir, dir}, {"png"}, errors);
+        const std::vector<fs::path> dup = pp::collect_inputs({dir, dir}, {"png"}, errors);
         check(dup.size() == 2, "collect/duplicate-roots",
               "expect 2 (deduplicated), got " + std::to_string(dup.size()));
     }
@@ -228,21 +227,22 @@ int main() {
 
     // ---- input_extensions ----
     {
-        const std::vector<std::string>& exts = pp::input_extensions();
-        const std::vector<std::string> want = {"tif",  "tiff", "png",  "jpg",  "jpeg", "jxl", "heic",
-                                               "heif", "avif", "webp", "bmp",  "gif",  "tga"};
+        const std::vector<std::string> &exts = pp::input_extensions();
+        const std::vector<std::string> want = {"tif",  "tiff", "png",  "jpg", "jpeg", "jxl", "heic",
+                                               "heif", "avif", "webp", "bmp", "gif",  "tga"};
         check(exts.size() == want.size(), "ext/count",
               "expect " + std::to_string(want.size()) + " extensions, got " +
                   std::to_string(exts.size()));
-        for (const std::string& w : want) {
+        for (const std::string &w : want) {
             bool found = false;
-            for (const std::string& e : exts) {
+            for (const std::string &e : exts) {
                 found = found || (e == w);
             }
             check(found, "ext/contains-" + w, "missing extension " + w);
         }
-        for (const std::string& e : exts) {
-            const bool clean = !e.empty() && e.front() != '.' && e.find_first_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ") == std::string::npos;
+        for (const std::string &e : exts) {
+            const bool clean = !e.empty() && e.front() != '.' &&
+                               e.find_first_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ") == std::string::npos;
             check(clean, "ext/lowercase-nodot", "bad extension entry: '" + e + "'");
         }
     }

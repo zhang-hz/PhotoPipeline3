@@ -10,11 +10,6 @@
 //   若其 `FileState` 需新增进度值则属**表外改动**（该缺口已在 §3.3 块内标注、待主对话裁定）。
 //   本节标注 [重排]：结构重排，不再保证聚合初始化兼容（随本次解冻一次性接受）。
 #pragma once
-#include <filesystem>
-#include <functional>
-#include <optional>
-#include <string>
-#include <vector>
 #include "codecs/encoder.h"
 #include "core/colormanager.h"
 #include "core/fsops.h"
@@ -22,14 +17,19 @@
 #include "core/params.h"
 #include "core/pixelbudget.h"
 #include "core/types.h"
+#include <filesystem>
+#include <functional>
+#include <optional>
+#include <string>
+#include <vector>
 
 namespace pp {
 
 struct FileEntry {
     std::filesystem::path src;
-    std::filesystem::path base_dir;         // 镜像路径基准
+    std::filesystem::path base_dir; // 镜像路径基准
     std::optional<MetadataOverride> exception;
-    ImageInfo info;                          // probe 后回填
+    ImageInfo info; // probe 后回填
     bool probe_done = false;
 };
 
@@ -65,15 +65,17 @@ struct FileEntry {
 // };
 // clang-format on
 //   注（0.2 现形差异清单，逐条由 T5 按 §3.2 逐字形态处理）：
-//     ① format_id/backend_id/tech_id/params/out_bitdepth 删除 → outputs[] 元素（聚合初始化不再兼容）；
-//     ② `color_target = ColorTarget::KeepOriginal` → `color = ColorTarget::Keep`（字段名与枚举值均变）；
+//     ① format_id/backend_id/tech_id/params/out_bitdepth 删除 → outputs[]
+//     元素（聚合初始化不再兼容）； ② `color_target = ColorTarget::KeepOriginal` → `color =
+//     ColorTarget::Keep`（字段名与枚举值均变）；
 //        ⚠ `ColorTarget::Keep` **在 0.2 现形中不存在**：枚举定义在 src/core/colormanager.h:12
 //        `enum class ColorTarget { KeepOriginal, SRGB, DisplayP3, AdobeRGB };`，该文件是
 //        `PP-FROZEN(file)` 且设计 §3 全表未覆盖（§2 变更地图亦无 colormanager）——按 §3.2 逐字
 //        形态落地需要**表外改动**（重命名/新增枚举值）或显式映射，T5 前需主对话裁定（M4-T1 已上报，
 //        W5 收口入 m4-report；本任务不改 colormanager.h）；
 //     ③ `flatten_gray`：0.2 现形为 `double flatten_gray = 1.0`（alpha 合成底色 0=黑..1=白），
-//        §3.2 逐字为 `bool flatten_gray = false` —— 类型/语义收窄，T5 落地前需主对话裁定（M4-T1 已上报，W5 收口入 m4-report）；
+//        §3.2 逐字为 `bool flatten_gray = false` —— 类型/语义收窄，T5 落地前需主对话裁定（M4-T1
+//        已上报，W5 收口入 m4-report）；
 //     ④ `workers` 注释口径 0=自动（逻辑核）[0.2 注释为"0=物理核数"]。
 struct RunConfig {
     // 输出
@@ -85,13 +87,13 @@ struct RunConfig {
     ColorTarget color_target = ColorTarget::KeepOriginal;
     ConflictPolicy conflict = ConflictPolicy::Rename;
     bool rotate_orientation = true;
-    double flatten_gray = 1.0;               // alpha 合成底色（0=黑..1=白）
+    double flatten_gray = 1.0; // alpha 合成底色（0=黑..1=白）
     // 元数据
     BatchRules rules;
     bool metadata_only = false;
     // 运行
-    int workers = 0;                         // 0=物理核数
-    uint64_t budget_bytes = 0;               // 0=default_capacity_bytes()
+    int workers = 0;           // 0=物理核数
+    uint64_t budget_bytes = 0; // 0=default_capacity_bytes()
 };
 
 struct FileResult {
@@ -105,16 +107,28 @@ struct FileResult {
     bool ok = false, skipped = false, cancelled = false;
 };
 
-enum class FileState { Queued, Probing, Decoding, Orienting, Coloring, Flattening,
-                       Encoding, Writing, Done, Skipped, Failed, Cancelled };
+enum class FileState {
+    Queued,
+    Probing,
+    Decoding,
+    Orienting,
+    Coloring,
+    Flattening,
+    Encoding,
+    Writing,
+    Done,
+    Skipped,
+    Failed,
+    Cancelled
+};
 
 // PP-THAWED(0.3.0-M4-D20) §3.3 · FileEvent
 //   落注位置说明（与表头文件不一致，已披露）：设计 §3.3 的表头文件是 `src/core/scheduler.h`
 //   （design.md:124），但 `FileEvent` 的**声明物理位于本文件**（本文件下方）——故本块落在真实
 //   声明处，scheduler.h 内留交叉引用；裁定行仍属 §3.3。
 //   追加字段 progress 落于结构体末尾（既有 index/state/result 语义不变）。
-//   落地任务 W1-T7（配合 §3.3 的 ProgressInfo，见 src/core/scheduler.h）→ 落地后改标 PP-FROZEN(0.3.0)。
-//   0.3.0 冻结形态（设计 §3.3 逐字抄录；剥去行首 "// " 前缀即设计原文）：
+//   落地任务 W1-T7（配合 §3.3 的 ProgressInfo，见 src/core/scheduler.h）→ 落地后改标
+//   PP-FROZEN(0.3.0)。 0.3.0 冻结形态（设计 §3.3 逐字抄录；剥去行首 "// " 前缀即设计原文）：
 // clang-format off
 // struct FileEvent {
 //     int            index;
@@ -133,7 +147,7 @@ enum class FileState { Queued, Probing, Decoding, Orienting, Coloring, Flattenin
 struct FileEvent {
     std::size_t index = 0;
     FileState state = FileState::Queued;
-    const FileResult* result = nullptr;      // 仅在终态（Done/Skipped/Failed/Cancelled）非空
+    const FileResult *result = nullptr; // 仅在终态（Done/Skipped/Failed/Cancelled）非空
 };
 
 // PP-THAWED(0.3.0-M4-D20) §3.2 · run_one_file + run_metadata_only
@@ -155,18 +169,18 @@ struct FileEvent {
 //   由 T5 落地时定稿；本文件当前 FileResult/FileState 保持只读。
 // 单文件全流程（线程内串行）；budget 可为 nullptr（仅元数据模式不需要）
 // reserved 为本批次已分配输出路径（批内冲突）；返回值带终态
-FileResult run_one_file(FileEntry& fe, const RunConfig& cfg, IEncoder* enc,
-                        PixelBudget* budget, const std::vector<std::filesystem::path>& reserved,
-                        const std::function<bool()>& cancelled,
-                        const std::function<void(FileState)>& on_stage);
+FileResult run_one_file(FileEntry &fe, const RunConfig &cfg, IEncoder *enc, PixelBudget *budget,
+                        const std::vector<std::filesystem::path> &reserved,
+                        const std::function<bool()> &cancelled,
+                        const std::function<void(FileState)> &on_stage);
 
 // 仅元数据模式（零重编码）：仅 JPEG/PNG/TIFF/WebP；HEIF/AVIF/JXL 由上层拒绝
-FileResult run_metadata_only(FileEntry& fe, const RunConfig& cfg,
-                             const std::vector<std::filesystem::path>& reserved,
-                             const std::function<bool()>& cancelled,
-                             const std::function<void(FileState)>& on_stage);
+FileResult run_metadata_only(FileEntry &fe, const RunConfig &cfg,
+                             const std::vector<std::filesystem::path> &reserved,
+                             const std::function<bool()> &cancelled,
+                             const std::function<void(FileState)> &on_stage);
 
 // 输入白名单校验（唯一入口，UI 与 harness 共用）
 bool format_supports_metadata_only(std::string_view format_id);
 
-}  // namespace pp
+} // namespace pp

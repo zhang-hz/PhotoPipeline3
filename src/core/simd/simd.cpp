@@ -9,7 +9,8 @@
 // 都定义 __AVX2__。缺了它说明 flags 注入链断了（cmake/avx2.cmake 未生效），
 // 此时宁可构建失败，也不要产出一个"看起来成功、实则退回 SSE2"的产物。
 #if !defined(__AVX2__)
-#error "PP 0.3.0 基线要求 AVX2（§11.1）：本 TU 未取得 __AVX2__ —— 查 cmake/avx2.cmake 是否挂在 pp_core 上。"
+#error                                                                                             \
+    "PP 0.3.0 基线要求 AVX2（§11.1）：本 TU 未取得 __AVX2__ —— 查 cmake/avx2.cmake 是否挂在 pp_core 上。"
 #endif
 
 #include "core/simd/simd.h"
@@ -58,7 +59,7 @@ unsigned long long read_xcr0() {
 #endif
 }
 
-#endif  // PP_SIMD_HOST_X86
+#endif // PP_SIMD_HOST_X86
 
 bool detect_avx2() {
 #ifdef PP_SIMD_HOST_X86
@@ -94,7 +95,7 @@ bool detect_avx2() {
 #endif
 }
 
-}  // namespace
+} // namespace
 
 bool cpu_has_avx2() {
     // 线程安全的一次性初始化（C++11 起保证）；缓存避免热路径重复 CPUID。
@@ -102,4 +103,4 @@ bool cpu_has_avx2() {
     return cached;
 }
 
-}  // namespace pp::simd
+} // namespace pp::simd

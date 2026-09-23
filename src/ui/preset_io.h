@@ -4,18 +4,18 @@
 // PP-FROZEN(file)
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
+#include "core/presets.h"
 #include <filesystem>
 #include <string>
-#include "core/presets.h"
 
 namespace pp::ui {
 
 // JSON 读写（QJsonDocument）；返回空串=成功
-std::string save_preset(const std::filesystem::path& file, const PresetData& p);
-std::string load_preset(const std::filesystem::path& file, PresetData& out);
+std::string save_preset(const std::filesystem::path &file, const PresetData &p);
+std::string load_preset(const std::filesystem::path &file, PresetData &out);
 
 // 目录扫描：*.json，返回按名排序的 (path, name) 列表
 std::vector<std::pair<std::filesystem::path, std::string>>
-list_presets(const std::filesystem::path& dir);
+list_presets(const std::filesystem::path &dir);
 
-}  // namespace pp::ui
+} // namespace pp::ui

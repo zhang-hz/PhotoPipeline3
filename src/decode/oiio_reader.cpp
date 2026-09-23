@@ -43,7 +43,7 @@ bool ascii_iequals(std::string_view a, std::string_view b) noexcept {
 //   tiff:PhotometricInterpretation = 5       (int, PHOTOMETRIC_SEPARATED)
 // The alternate spellings are checked defensively (docs/m1-tasks.md §4.3
 // assumed 4 separated channels + a "tiff:photometric" string; see api-deltas).
-bool spec_is_cmyk(const OIIO::ImageSpec& spec) {
+bool spec_is_cmyk(const OIIO::ImageSpec &spec) {
     if (ascii_iequals(spec.get_string_attribute("tiff:ColorSpace"), "CMYK")) {
         return true;
     }
@@ -61,7 +61,7 @@ bool spec_is_cmyk(const OIIO::ImageSpec& spec) {
 
 // Source bit depth implied by the OIIO pixel data type (uint8 -> 8, half -> 16,
 // uint16 -> 16, float -> 32; instances are per-channel).
-int bitdepth_from_format(const OIIO::TypeDesc& t) noexcept {
+int bitdepth_from_format(const OIIO::TypeDesc &t) noexcept {
     const std::size_t bytes = t.basesize();
     return bytes > 0 ? static_cast<int>(bytes) * 8 : 8;
 }
@@ -85,9 +85,9 @@ std::string oiio_error_or(std::string fallback) {
 // failure can only come from the operation that just failed.
 void clear_stale_oiio_error() { (void)OIIO::geterror(); }
 
-}  // namespace
+} // namespace
 
-ProbeOutcome probe_file(const std::filesystem::path& p) {
+ProbeOutcome probe_file(const std::filesystem::path &p) {
     ProbeOutcome out;
     clear_stale_oiio_error();
     // std::filesystem::path::string() is UTF-8 on the M1 target (Linux), which
@@ -100,7 +100,7 @@ ProbeOutcome probe_file(const std::filesystem::path& p) {
         return out;
     }
 
-    const OIIO::ImageSpec spec = in->spec();  // copy: valid after close()
+    const OIIO::ImageSpec spec = in->spec(); // copy: valid after close()
     out.info.width = spec.width;
     out.info.height = spec.height;
     out.info.channels = spec.nchannels;
@@ -110,7 +110,7 @@ ProbeOutcome probe_file(const std::filesystem::path& p) {
     // frame, i.e. an out-of-range index, hence the layout check as well.)
     out.info.has_alpha = spec.alpha_channel >= 0 || spec.nchannels == 2 || spec.nchannels == 4;
     out.info.has_icc = !icc_from_spec(spec).empty();
-    const char* format_name = in->format_name();
+    const char *format_name = in->format_name();
     out.info.format = format_name ? format_name : "";
 
     // Multipage/animated detection without decoding pixels: a second subimage
@@ -131,7 +131,7 @@ ProbeOutcome probe_file(const std::filesystem::path& p) {
     return out;
 }
 
-DecodeOutcome decode_float(const std::filesystem::path& p, const ImageInfo& info) {
+DecodeOutcome decode_float(const std::filesystem::path &p, const ImageInfo &info) {
     DecodeOutcome out;
     clear_stale_oiio_error();
     const std::string file = p.string();
@@ -156,8 +156,8 @@ DecodeOutcome decode_float(const std::filesystem::path& p, const ImageInfo& info
         return out;
     }
     if (spec.nchannels < kMinChannels || spec.nchannels > kMaxChannels) {
-        out.error = "unsupported channel count: " + std::to_string(spec.nchannels) +
-                    " (expected 1..4)";
+        out.error =
+            "unsupported channel count: " + std::to_string(spec.nchannels) + " (expected 1..4)";
         out.buf.clear();
         return out;
     }
@@ -183,16 +183,16 @@ DecodeOutcome decode_float(const std::filesystem::path& p, const ImageInfo& info
     return out;
 }
 
-int orientation_from_spec(const OIIO::ImageSpec& spec) {
+int orientation_from_spec(const OIIO::ImageSpec &spec) {
     const int orientation = spec.get_int_attribute("Orientation", 1);
     return (orientation >= 1 && orientation <= 8) ? orientation : 1;
 }
 
-std::string icc_from_spec(const OIIO::ImageSpec& spec) {
+std::string icc_from_spec(const OIIO::ImageSpec &spec) {
     // The ICC profile is a binary attribute stored as uint8[N]; a typed lookup
     // with the scalar TypeDesc::UINT8 does not match it (OIIO 3.1.14), so the
     // attribute is fetched untyped and its byte payload is copied out.
-    const OIIO::ParamValue* pv = spec.find_attribute("ICCProfile");
+    const OIIO::ParamValue *pv = spec.find_attribute("ICCProfile");
     if (!pv || pv->type().basetype != OIIO::TypeDesc::UINT8) {
         return {};
     }
@@ -200,7 +200,7 @@ std::string icc_from_spec(const OIIO::ImageSpec& spec) {
     if (bytes <= 0 || !pv->data()) {
         return {};
     }
-    return std::string(static_cast<const char*>(pv->data()), static_cast<std::size_t>(bytes));
+    return std::string(static_cast<const char *>(pv->data()), static_cast<std::size_t>(bytes));
 }
 
-}  // namespace pp
+} // namespace pp

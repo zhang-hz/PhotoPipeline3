@@ -16,14 +16,14 @@ namespace {
 
 int g_failed = 0;
 
-void check(bool ok, const std::string& case_name, const std::string& detail) {
+void check(bool ok, const std::string &case_name, const std::string &detail) {
     if (!ok) {
         ++g_failed;
         std::printf("FAIL %s: %s\n", case_name.c_str(), detail.c_str());
     }
 }
 
-std::string show(const std::string& s) { return "'" + s + "'"; }
+std::string show(const std::string &s) { return "'" + s + "'"; }
 
 pp::TimeShift delta(int years = 0, int months = 0, int days = 0, int hours = 0, int minutes = 0,
                     int seconds = 0) {
@@ -46,8 +46,8 @@ pp::TimeShift zone(int from_min, int to_min) {
     return s;
 }
 
-void expect_shift(const std::string& in, const pp::TimeShift& s, const std::string& want,
-                  const std::string& case_name) {
+void expect_shift(const std::string &in, const pp::TimeShift &s, const std::string &want,
+                  const std::string &case_name) {
     bool ok = false;
     const std::string got = pp::shift_exif_datetime(in, s, ok);
     check(ok && got == want, case_name,
@@ -55,7 +55,7 @@ void expect_shift(const std::string& in, const pp::TimeShift& s, const std::stri
               " ok=" + (ok ? "true" : "false"));
 }
 
-void expect_reject(const std::string& in, const pp::TimeShift& s, const std::string& case_name) {
+void expect_reject(const std::string &in, const pp::TimeShift &s, const std::string &case_name) {
     bool ok = true;
     const std::string got = pp::shift_exif_datetime(in, s, ok);
     check(!ok && got == in, case_name,
@@ -63,13 +63,13 @@ void expect_reject(const std::string& in, const pp::TimeShift& s, const std::str
               " ok=" + (ok ? "true" : "false"));
 }
 
-void expect_offset(int minutes, const std::string& want, const std::string& case_name) {
+void expect_offset(int minutes, const std::string &want, const std::string &case_name) {
     const std::string got = pp::offset_time_string(minutes);
-    check(got == want, case_name, "minutes=" + std::to_string(minutes) + " want=" + show(want) +
-                                      " got=" + show(got));
+    check(got == want, case_name,
+          "minutes=" + std::to_string(minutes) + " want=" + show(want) + " got=" + show(got));
 }
 
-}  // namespace
+} // namespace
 
 int main() {
     // ------------------------------------------------------------------ Delta (12+ cases)
@@ -78,8 +78,10 @@ int main() {
                  "delta/month-clamp-leap-year");
     expect_shift("2023:01:31 10:00:00", delta(0, 1), "2023:02:28 10:00:00",
                  "delta/month-clamp-non-leap");
-    expect_shift("2024:12:15 00:00:00", delta(0, 1), "2025:01:15 00:00:00", "delta/cross-year-month");
-    expect_shift("2024:02:29 12:00:00", delta(1), "2025:02:28 12:00:00", "delta/year-step-leap-day");
+    expect_shift("2024:12:15 00:00:00", delta(0, 1), "2025:01:15 00:00:00",
+                 "delta/cross-year-month");
+    expect_shift("2024:02:29 12:00:00", delta(1), "2025:02:28 12:00:00",
+                 "delta/year-step-leap-day");
     expect_shift("2024:12:31 23:59:59", delta(0, 0, 0, 0, 0, 1), "2025:01:01 00:00:00",
                  "delta/cross-year-second");
     expect_shift("2024:03:01 00:30:00", delta(0, 0, 0, -1), "2024:02:29 23:30:00",
@@ -88,7 +90,8 @@ int main() {
                  "delta/negative-month-clamp");
     expect_shift("2024:01:31 23:30:00", delta(0, 1, 0, 0, 30), "2024:03:01 00:00:00",
                  "delta/month-then-minute-carry");
-    expect_shift("2024:02:28 10:00:00", delta(0, 0, 1), "2024:02:29 10:00:00", "delta/plus-one-day-leap");
+    expect_shift("2024:02:28 10:00:00", delta(0, 0, 1), "2024:02:29 10:00:00",
+                 "delta/plus-one-day-leap");
     expect_shift("2024:03:01 10:00:00", delta(0, 0, 0, 0, 90), "2024:03:01 11:30:00",
                  "delta/minutes-only");
     expect_shift("2024:03:01 10:00:00", delta(), "2024:03:01 10:00:00", "delta/zero-is-identity");
@@ -107,8 +110,10 @@ int main() {
     expect_shift("2024:03:01 10:00:00", zone(540, 480), "2024:03:01 09:00:00", "tz/minus-one-hour");
     expect_shift("2024:03:01 00:30:00", zone(540, 480), "2024:02:29 23:30:00",
                  "tz/backward-cross-month");
-    expect_shift("2024:03:01 10:00:00", zone(330, 480), "2024:03:01 12:30:00", "tz/half-hour-zones");
-    expect_shift("2024:03:01 10:00:00", zone(480, 480), "2024:03:01 10:00:00", "tz/same-offset-noop");
+    expect_shift("2024:03:01 10:00:00", zone(330, 480), "2024:03:01 12:30:00",
+                 "tz/half-hour-zones");
+    expect_shift("2024:03:01 10:00:00", zone(480, 480), "2024:03:01 10:00:00",
+                 "tz/same-offset-noop");
     expect_reject("not a date", zone(480, 540), "tz/reject-invalid");
 
     // shift_exif_datetime() must route TimezoneSemantic through reinterpret_timezone().
@@ -143,7 +148,8 @@ int main() {
     check(!zone(480, 540).is_noop(), "noop/different-zone", "different offsets are a real shift");
     check(!delta(1).is_noop(), "noop/one-year", "one year is a real shift");
 
-    check(pp::BatchRules{}.is_noop(), "noop/empty-batch-rules", "default BatchRules must be a no-op");
+    check(pp::BatchRules{}.is_noop(), "noop/empty-batch-rules",
+          "default BatchRules must be a no-op");
     {
         pp::BatchRules r;
         r.sync_mtime = true;

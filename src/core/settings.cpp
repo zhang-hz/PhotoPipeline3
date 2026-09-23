@@ -32,8 +32,10 @@ bool is_space(unsigned char c) noexcept {
 std::string trim(std::string s) {
     std::size_t b = 0;
     std::size_t e = s.size();
-    while (b < e && is_space(static_cast<unsigned char>(s[b]))) ++b;
-    while (e > b && is_space(static_cast<unsigned char>(s[e - 1]))) --e;
+    while (b < e && is_space(static_cast<unsigned char>(s[b])))
+        ++b;
+    while (e > b && is_space(static_cast<unsigned char>(s[e - 1])))
+        --e;
     return s.substr(b, e - b);
 }
 
@@ -41,31 +43,37 @@ char ascii_lower(char c) noexcept {
     return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
 }
 
-bool parse_int(const std::string& v, int& out) {
-    if (v.empty()) return false;
+bool parse_int(const std::string &v, int &out) {
+    if (v.empty())
+        return false;
     errno = 0;
-    char* end = nullptr;
+    char *end = nullptr;
     const long val = std::strtol(v.c_str(), &end, 10);
-    if (errno != 0 || end == v.c_str() || *end != '\0') return false;
-    if (val < INT_MIN || val > INT_MAX) return false;
+    if (errno != 0 || end == v.c_str() || *end != '\0')
+        return false;
+    if (val < INT_MIN || val > INT_MAX)
+        return false;
     out = static_cast<int>(val);
     return true;
 }
 
-bool parse_double(const std::string& v, double& out) {
-    if (v.empty()) return false;
+bool parse_double(const std::string &v, double &out) {
+    if (v.empty())
+        return false;
     errno = 0;
-    char* end = nullptr;
+    char *end = nullptr;
     const double val = std::strtod(v.c_str(), &end);
-    if (errno != 0 || end == v.c_str() || *end != '\0') return false;
+    if (errno != 0 || end == v.c_str() || *end != '\0')
+        return false;
     out = val;
     return true;
 }
 
-bool parse_bool(const std::string& v, bool& out) {
+bool parse_bool(const std::string &v, bool &out) {
     std::string low;
     low.reserve(v.size());
-    for (char c : v) low.push_back(ascii_lower(c));
+    for (char c : v)
+        low.push_back(ascii_lower(c));
     if (low == "true" || low == "yes" || low == "on" || low == "1") {
         out = true;
         return true;
@@ -88,8 +96,8 @@ std::string format_double(double d) {
 // `redact_secrets` is used by settings_to_string() only: the log snapshot must never carry
 // the amap web-service key in clear text (main-dialogue ruling on the M1b-U1 report), while
 // save_settings() obviously writes the real value.
-std::vector<std::pair<std::string, std::string>> settings_pairs(const AppSettings& s,
-                                                               bool redact_secrets = false) {
+std::vector<std::pair<std::string, std::string>> settings_pairs(const AppSettings &s,
+                                                                bool redact_secrets = false) {
     std::vector<std::pair<std::string, std::string>> kv;
     kv.emplace_back("workers", std::to_string(s.workers));
     kv.emplace_back("budget_gb", std::to_string(s.budget_gb));
@@ -106,28 +114,35 @@ std::vector<std::pair<std::string, std::string>> settings_pairs(const AppSetting
     return kv;
 }
 
-void apply_pair(AppSettings& s, const std::string& key, const std::string& value) {
+void apply_pair(AppSettings &s, const std::string &key, const std::string &value) {
     if (key == "workers") {
         int v = 0;
-        if (parse_int(value, v)) s.workers = v;
+        if (parse_int(value, v))
+            s.workers = v;
     } else if (key == "budget_gb") {
         int v = 0;
-        if (parse_int(value, v)) s.budget_gb = v;
+        if (parse_int(value, v))
+            s.budget_gb = v;
     } else if (key == "flatten_gray") {
         double v = 0;
-        if (parse_double(value, v)) s.flatten_gray = v;
+        if (parse_double(value, v))
+            s.flatten_gray = v;
     } else if (key == "log_level") {
-        if (!value.empty()) s.log_level = value;
+        if (!value.empty())
+            s.log_level = value;
     } else if (key == "map_provider") {
-        if (!value.empty()) s.map_provider = value;
+        if (!value.empty())
+            s.map_provider = value;
     } else if (key == "amap_key") {
-        s.amap_key = value;  // empty is a legal value (no key configured)
+        s.amap_key = value; // empty is a legal value (no key configured)
     } else if (key == "tile_cache_mb") {
         int v = 0;
-        if (parse_int(value, v)) s.tile_cache_mb = v;
+        if (parse_int(value, v))
+            s.tile_cache_mb = v;
     } else if (key == "rotate_orientation") {
         bool v = false;
-        if (parse_bool(value, v)) s.rotate_orientation = v;
+        if (parse_bool(value, v))
+            s.rotate_orientation = v;
     } else if (key == "last_format") {
         s.last_format = value;
     } else if (key == "last_preset") {
@@ -138,34 +153,38 @@ void apply_pair(AppSettings& s, const std::string& key, const std::string& value
 }
 
 // Split one raw line into (key, value); returns false for comments/blank/malformed lines.
-bool split_line(const std::string& line, std::string& key, std::string& value) {
+bool split_line(const std::string &line, std::string &key, std::string &value) {
     const std::string t = trim(line);
-    if (t.empty() || t[0] == '#') return false;
+    if (t.empty() || t[0] == '#')
+        return false;
     const std::size_t eq = t.find('=');
-    if (eq == std::string::npos) return false;
+    if (eq == std::string::npos)
+        return false;
     key = trim(t.substr(0, eq));
     value = trim(t.substr(eq + 1));
     return !key.empty();
 }
 
-}  // namespace
+} // namespace
 
-AppSettings load_settings(const std::filesystem::path& file) {
-    AppSettings s;  // defaults (docs/m1-tasks.md §3.14)
+AppSettings load_settings(const std::filesystem::path &file) {
+    AppSettings s; // defaults (docs/m1-tasks.md §3.14)
     std::ifstream in(file, std::ios::binary);
-    if (!in) return s;  // missing/unreadable file -> all defaults, no error
+    if (!in)
+        return s; // missing/unreadable file -> all defaults, no error
 
     std::string line;
     while (std::getline(in, line)) {
         std::string key;
         std::string value;
-        if (!split_line(line, key, value)) continue;
+        if (!split_line(line, key, value))
+            continue;
         apply_pair(s, key, value);
     }
     return s;
 }
 
-std::string save_settings(const std::filesystem::path& file, const AppSettings& s) {
+std::string save_settings(const std::filesystem::path &file, const AppSettings &s) {
     const std::vector<std::pair<std::string, std::string>> pairs = settings_pairs(s);
 
     // 1) Read the current file so comments/unknown keys survive byte-for-byte.
@@ -173,23 +192,28 @@ std::string save_settings(const std::filesystem::path& file, const AppSettings& 
     std::error_code ec;
     if (std::filesystem::exists(file, ec)) {
         std::ifstream in(file, std::ios::binary);
-        if (!in) return "settings: cannot read " + file.string();
+        if (!in)
+            return "settings: cannot read " + file.string();
         std::string line;
         while (std::getline(in, line)) {
-            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (!line.empty() && line.back() == '\r')
+                line.pop_back();
             lines.push_back(line);
         }
-        if (in.bad()) return "settings: read error on " + file.string();
+        if (in.bad())
+            return "settings: read error on " + file.string();
     }
 
     // 2) Rewrite known keys in place; unknown/comment/malformed lines are left untouched.
     std::vector<bool> seen(pairs.size(), false);
-    for (std::string& line : lines) {
+    for (std::string &line : lines) {
         std::string key;
         std::string value;
-        if (!split_line(line, key, value)) continue;
+        if (!split_line(line, key, value))
+            continue;
         for (std::size_t i = 0; i < pairs.size(); ++i) {
-            if (pairs[i].first != key) continue;
+            if (pairs[i].first != key)
+                continue;
             line = key + "=" + pairs[i].second;
             seen[i] = true;
             break;
@@ -198,7 +222,8 @@ std::string save_settings(const std::filesystem::path& file, const AppSettings& 
 
     // 3) Append keys the file did not have yet (fresh file: all of them).
     for (std::size_t i = 0; i < pairs.size(); ++i) {
-        if (!seen[i]) lines.push_back(pairs[i].first + "=" + pairs[i].second);
+        if (!seen[i])
+            lines.push_back(pairs[i].first + "=" + pairs[i].second);
     }
 
     // 4) Atomic write: `<file>.tmp` then rename. A missing parent directory fails here
@@ -207,8 +232,10 @@ std::string save_settings(const std::filesystem::path& file, const AppSettings& 
     tmp += ".tmp";
     {
         std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-        if (!out) return "settings: cannot write " + tmp.string();
-        for (const std::string& line : lines) out << line << '\n';
+        if (!out)
+            return "settings: cannot write " + tmp.string();
+        for (const std::string &line : lines)
+            out << line << '\n';
         out.flush();
         if (!out) {
             std::error_code rm_ec;
@@ -225,10 +252,11 @@ std::string save_settings(const std::filesystem::path& file, const AppSettings& 
     return {};
 }
 
-std::string settings_to_string(const AppSettings& s) {
+std::string settings_to_string(const AppSettings &s) {
     std::string out;
-    for (const auto& [key, value] : settings_pairs(s, /*redact_secrets=*/true)) {
-        if (!out.empty()) out += ' ';
+    for (const auto &[key, value] : settings_pairs(s, /*redact_secrets=*/true)) {
+        if (!out.empty())
+            out += ' ';
         out += key;
         out += '=';
         out += value;
@@ -236,4 +264,4 @@ std::string settings_to_string(const AppSettings& s) {
     return out;
 }
 
-}  // namespace pp
+} // namespace pp

@@ -1,5 +1,7 @@
-// PP-THAWED(0.3.0-M4-D20): 纯规格块（M4-W0-T1 落注）—— 0.3.0 新模块规格，**零声明、零实现、未接入构建**
-//   落地任务 = W1-T8（core/classify：注册表/持久化/分组键；出口 `test_classify` 绿）→ 落地后改标 PP-FROZEN(0.3.0)
+// PP-THAWED(0.3.0-M4-D20): 纯规格块（M4-W0-T1 落注）—— 0.3.0
+// 新模块规格，**零声明、零实现、未接入构建**
+//   落地任务 = W1-T8（core/classify：注册表/持久化/分组键；出口 `test_classify` 绿）→ 落地后改标
+//   PP-FROZEN(0.3.0)
 // SPDX-License-Identifier: GPL-3.0-or-later
 // PhotoPipeline — classify spec (0.3.0 / M4-W0-T1：仅规格注释，待 W1-T8 落地为声明 + 实现)
 //   依据 docs/v0.3.0-design.md §3.6 表行（`core/classify.h`（新））+ §6.2（分类子系统语义）

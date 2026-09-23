@@ -14,18 +14,18 @@
 // 线程映射义务（E3）：`encode_threads` 必须映射到库 API——jxl=`JxlThreadParallelRunner(E)`（E=1 时 nullptr）；heif/avif=插件 `threads` 参数（内省名核对，缺则记 R4 口径）；webp=`thread_level = E>1`；jpegli/oiio=无内部线程（如实 `progress_reported` 与此无关，但日志注明 E 不生效）。
 // clang-format on
 #pragma once
+#include "core/params.h"
+#include "core/types.h"
 #include <OpenImageIO/imagebuf.h>
 #include <filesystem>
 #include <functional>
-#include "core/params.h"
-#include "core/types.h"
 
 namespace pp {
 
 struct MetadataPayloads {
-    std::string exif_blob;    // TIFF blob (ExifData::copy, littleEndian)
-    std::string xmp_rdf;      // XMP RDF xml
-    std::string icc_profile;  // target or as-is profile bytes
+    std::string exif_blob;   // TIFF blob (ExifData::copy, littleEndian)
+    std::string xmp_rdf;     // XMP RDF xml
+    std::string icc_profile; // target or as-is profile bytes
 };
 
 // PP-THAWED(0.3.0-M4-D20) §3.1 · OutputTarget + ProgressFn
@@ -62,16 +62,17 @@ struct MetadataPayloads {
 // };
 // clang-format on
 struct EncodeRequest {
-    OIIO::ImageBuf& img;             // float32, channels {1,2,3,4}
-    const ParamSet& params;
+    OIIO::ImageBuf &img; // float32, channels {1,2,3,4}
+    const ParamSet &params;
     int out_bitdepth = 8;
-    const MetadataPayloads& meta;
+    const MetadataPayloads &meta;
     std::filesystem::path out_path;
     std::function<bool()> cancelled;
     // M1 (T6b, main-dialogue ruling): explicit tech selection. Additive field
     // appended at the end so existing positional aggregate initialisation of
     // the preceding members stays valid.
-    std::string tech_id;   // M1: "vardct"|"modular"|"lossy"|"lossless"|"runtime"|""（空 = 按 lossless 回退推断）
+    std::string tech_id; // M1: "vardct"|"modular"|"lossy"|"lossless"|"runtime"|""（空 = 按 lossless
+                         // 回退推断）
 };
 
 // PP-THAWED(0.3.0-M4-D20) §3.1 · EncodeResult
@@ -113,8 +114,8 @@ struct EncodeResult {
 class IEncoder {
 public:
     virtual ~IEncoder() = default;
-    virtual const FormatDef& format() const = 0;
-    virtual EncodeResult encode(const EncodeRequest&) = 0;
+    virtual const FormatDef &format() const = 0;
+    virtual EncodeResult encode(const EncodeRequest &) = 0;
 };
 
-}  // namespace pp
+} // namespace pp

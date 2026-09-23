@@ -24,7 +24,7 @@ namespace {
 int g_failed = 0;
 int g_checks = 0;
 
-void check(bool ok, const std::string& case_name, const std::string& detail) {
+void check(bool ok, const std::string &case_name, const std::string &detail) {
     ++g_checks;
     if (!ok) {
         ++g_failed;
@@ -50,8 +50,8 @@ fs::path find_corpus() {
     return {};
 }
 
-bool has_warning(const std::vector<pp::Warning>& ws, pp::WarningKind kind) {
-    for (const pp::Warning& w : ws) {
+bool has_warning(const std::vector<pp::Warning> &ws, pp::WarningKind kind) {
+    for (const pp::Warning &w : ws) {
         if (w.kind == kind) {
             return true;
         }
@@ -59,16 +59,24 @@ bool has_warning(const std::vector<pp::Warning>& ws, pp::WarningKind kind) {
     return false;
 }
 
-const char* warning_name(pp::WarningKind kind) {
+const char *warning_name(pp::WarningKind kind) {
     switch (kind) {
-    case pp::WarningKind::DepthDowngrade: return "DepthDowngrade";
-    case pp::WarningKind::LossyFromLossless: return "LossyFromLossless";
-    case pp::WarningKind::MultipageTruncated: return "MultipageTruncated";
-    case pp::WarningKind::AlphaFlattened: return "AlphaFlattened";
-    case pp::WarningKind::NoIccAssumeSrgb: return "NoIccAssumeSrgb";
-    case pp::WarningKind::MetadataDropped: return "MetadataDropped";
-    case pp::WarningKind::TimeFieldMissing: return "TimeFieldMissing";
-    case pp::WarningKind::GrayToRgbEncoded: return "GrayToRgbEncoded";
+    case pp::WarningKind::DepthDowngrade:
+        return "DepthDowngrade";
+    case pp::WarningKind::LossyFromLossless:
+        return "LossyFromLossless";
+    case pp::WarningKind::MultipageTruncated:
+        return "MultipageTruncated";
+    case pp::WarningKind::AlphaFlattened:
+        return "AlphaFlattened";
+    case pp::WarningKind::NoIccAssumeSrgb:
+        return "NoIccAssumeSrgb";
+    case pp::WarningKind::MetadataDropped:
+        return "MetadataDropped";
+    case pp::WarningKind::TimeFieldMissing:
+        return "TimeFieldMissing";
+    case pp::WarningKind::GrayToRgbEncoded:
+        return "GrayToRgbEncoded";
     }
     return "?";
 }
@@ -77,11 +85,11 @@ enum Expect { Ok = 0, OpenError = 1, Cmyk = 2 };
 
 // All 27 fixtures of tests/golden/{base,edge,meta}, in directory order.
 struct Fixture {
-    const char* rel;
-    int expect;  // Ok / OpenError / Cmyk
+    const char *rel;
+    int expect; // Ok / OpenError / Cmyk
     int width, height, channels, bitdepth;
     bool has_alpha, is_multipage, has_icc;
-    const char* format;  // OIIO ImageInput::format_name()
+    const char *format; // OIIO ImageInput::format_name()
 };
 
 const Fixture kFixtures[] = {
@@ -124,9 +132,9 @@ constexpr std::size_t kFixtureCount = sizeof(kFixtures) / sizeof(kFixtures[0]);
 // the composition of the synthesized sRGB approximation profile (it now carries the
 // CICP tag; 0.11.2 did not), so the byte count moved 536 -> 504. The profile itself
 // is unchanged in kind: CMM "jxl ", 11 standard tags, self-consistent size field.
-const char* const kIccFixtures[] = {"base/jxl8.jxl", "meta/jxl_exif.jxl"};
+const char *const kIccFixtures[] = {"base/jxl8.jxl", "meta/jxl_exif.jxl"};
 
-}  // namespace
+} // namespace
 
 int main() {
     const fs::path corpus = find_corpus();
@@ -140,11 +148,10 @@ int main() {
     {
         std::vector<std::string> on_disk;
         std::error_code ec;
-        for (const char* dir : {"base", "edge", "meta"}) {
-            for (const fs::directory_entry& e : fs::directory_iterator(corpus / dir, ec)) {
+        for (const char *dir : {"base", "edge", "meta"}) {
+            for (const fs::directory_entry &e : fs::directory_iterator(corpus / dir, ec)) {
                 if (e.is_regular_file(ec)) {
-                    on_disk.push_back(dir + std::string("/") +
-                                      e.path().filename().string());
+                    on_disk.push_back(dir + std::string("/") + e.path().filename().string());
                 }
             }
         }
@@ -152,9 +159,9 @@ int main() {
               "expected 27 fixtures, found " + num(static_cast<long long>(on_disk.size())));
         check(kFixtureCount == 27, "corpus/table",
               "fixture table has " + num(static_cast<long long>(kFixtureCount)) + " entries");
-        for (const std::string& rel : on_disk) {
+        for (const std::string &rel : on_disk) {
             bool covered = false;
-            for (const Fixture& f : kFixtures) {
+            for (const Fixture &f : kFixtures) {
                 if (rel == f.rel) {
                     covered = true;
                     break;
@@ -166,7 +173,7 @@ int main() {
 
     // ---- probe: all 27 fixtures ----
     int icc_fixture_count = 0;
-    for (const Fixture& f : kFixtures) {
+    for (const Fixture &f : kFixtures) {
         const fs::path path = corpus / f.rel;
         const std::string name = f.rel;
         const pp::ProbeOutcome po = pp::probe_file(path);
@@ -206,8 +213,8 @@ int main() {
               "has_icc expect " + std::string(f.has_icc ? "true" : "false"));
         check(po.info.format == f.format, "probe/" + name,
               "format expect '" + std::string(f.format) + "', got '" + po.info.format + "'");
-        check(po.first_spec->width == f.width && po.first_spec->height == f.height,
-              "probe/" + name, "first_spec dimensions mismatch");
+        check(po.first_spec->width == f.width && po.first_spec->height == f.height, "probe/" + name,
+              "first_spec dimensions mismatch");
 
         if (f.has_icc) {
             ++icc_fixture_count;
@@ -221,8 +228,8 @@ int main() {
         check(d.buf.localpixels() != nullptr, "decode/" + name, "expected local pixels");
         check(d.buf.nchannels() == f.channels, "decode/" + name,
               "buffer channels expect " + num(f.channels) + ", got " + num(d.buf.nchannels()));
-        check(d.buf.spec().width == f.width && d.buf.spec().height == f.height,
-              "decode/" + name, "buffer dimensions mismatch");
+        check(d.buf.spec().width == f.width && d.buf.spec().height == f.height, "decode/" + name,
+              "buffer dimensions mismatch");
         check(d.buf.spec().format == OIIO::TypeDesc::FLOAT, "decode/" + name,
               "expected float32 buffer, got " + std::string(d.buf.spec().format.c_str()));
         check(d.buf.spec().format.size() == 4, "decode/" + name,
@@ -243,14 +250,16 @@ int main() {
     // ---- decode_float: explicit channel/dimension/type cases (§4.3) ----
     {
         struct ChannelCase {
-            const char* rel;
+            const char *rel;
             int channels;
         };
         const ChannelCase cases[] = {
-            {"base/rgb8.png", 3}, {"base/graya8.png", 2},
-            {"base/rgba16.png", 4}, {"base/gray16.png", 1},
+            {"base/rgb8.png", 3},
+            {"base/graya8.png", 2},
+            {"base/rgba16.png", 4},
+            {"base/gray16.png", 1},
         };
-        for (const ChannelCase& c : cases) {
+        for (const ChannelCase &c : cases) {
             const fs::path path = corpus / c.rel;
             const std::string name = std::string("channels/") + c.rel;
             const pp::ProbeOutcome po = pp::probe_file(path);
@@ -270,13 +279,12 @@ int main() {
 
     // ---- multipage/animated: first page + warning ----
     {
-        const char* multi[] = {"base/multi.tif", "base/anim.gif"};
-        for (const char* rel : multi) {
+        const char *multi[] = {"base/multi.tif", "base/anim.gif"};
+        for (const char *rel : multi) {
             const fs::path path = corpus / rel;
             const std::string name = std::string("multipage/") + rel;
             const pp::ProbeOutcome po = pp::probe_file(path);
-            check(po.error.empty() && po.info.is_multipage, name,
-                  "expected is_multipage=true");
+            check(po.error.empty() && po.info.is_multipage, name, "expected is_multipage=true");
             const bool have_spec = po.first_spec.has_value();
             check(have_spec, name, "probe must yield first_spec: " + po.error);
             check(have_spec && po.first_spec->width == 64 && po.first_spec->height == 64, name,
@@ -288,7 +296,7 @@ int main() {
             check(d.buf.spec().width == 64 && d.buf.spec().height == 64, name,
                   "decoded first page must be 64x64, got " + num(d.buf.spec().width) + "x" +
                       num(d.buf.spec().height));
-            for (const pp::Warning& w : d.warnings) {
+            for (const pp::Warning &w : d.warnings) {
                 std::printf("INFO warning %s: %s\n", name.c_str(), warning_name(w.kind));
             }
         }
@@ -326,7 +334,7 @@ int main() {
     // ---- ICC extraction (binary spec attribute) ----
     {
         int found = 0;
-        for (const Fixture& f : kFixtures) {
+        for (const Fixture &f : kFixtures) {
             if (f.expect != Ok) {
                 continue;
             }
@@ -337,15 +345,14 @@ int main() {
             }
             const std::string icc = pp::icc_from_spec(*po.first_spec);
             bool expect_icc = false;
-            for (const char* rel : kIccFixtures) {
+            for (const char *rel : kIccFixtures) {
                 if (std::string(f.rel) == rel) {
                     expect_icc = true;
                 }
             }
             if (expect_icc) {
                 ++found;
-                check(!icc.empty(), std::string("icc/") + f.rel,
-                      "expected non-empty ICC bytes");
+                check(!icc.empty(), std::string("icc/") + f.rel, "expected non-empty ICC bytes");
                 check(icc.size() == 504, std::string("icc/") + f.rel,
                       "expected 504 ICC bytes, got " + num(static_cast<long long>(icc.size())));
             } else {
@@ -368,8 +375,7 @@ int main() {
         const pp::ProbeOutcome tif = pp::probe_file(corpus / "base/rgb8.tif");
         const pp::ProbeOutcome png = pp::probe_file(corpus / "base/rgb8.png");
         if (!tif.first_spec.has_value() || !png.first_spec.has_value()) {
-            check(false, "orientation/corpus",
-                  "probe failed: " + tif.error + png.error);
+            check(false, "orientation/corpus", "probe failed: " + tif.error + png.error);
         } else {
             check(pp::orientation_from_spec(*tif.first_spec) == 1, "orientation/tiff-attr",
                   "rgb8.tif reports Orientation=1, got " +

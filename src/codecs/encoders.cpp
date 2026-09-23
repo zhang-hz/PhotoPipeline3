@@ -50,28 +50,27 @@ const bool kEncoderMembersLinked = [] {
 
 struct RegistryEntry {
     std::string format_id;
-    std::string backend_id;  // may be empty ("default backend")
+    std::string backend_id; // may be empty ("default backend")
     EncoderFactory factory = nullptr;
 };
 
-std::vector<RegistryEntry>& registry() {
+std::vector<RegistryEntry> &registry() {
     static std::vector<RegistryEntry> entries;
     return entries;
 }
 
-}  // namespace
+} // namespace
 
 bool register_encoder(std::string_view format_id, std::string_view backend_id, EncoderFactory f) {
     if (format_id.empty() || f == nullptr) {
         return false;
     }
-    std::vector<RegistryEntry>& entries = registry();
-    const bool duplicate = std::any_of(
-        entries.begin(), entries.end(), [&](const RegistryEntry& e) {
-            return e.format_id == format_id && e.backend_id == backend_id;
-        });
+    std::vector<RegistryEntry> &entries = registry();
+    const bool duplicate = std::any_of(entries.begin(), entries.end(), [&](const RegistryEntry &e) {
+        return e.format_id == format_id && e.backend_id == backend_id;
+    });
     if (duplicate) {
-        return false;  // keep the first registration (§3.17)
+        return false; // keep the first registration (§3.17)
     }
     entries.push_back(RegistryEntry{std::string(format_id), std::string(backend_id), f});
     return true;
@@ -79,7 +78,7 @@ bool register_encoder(std::string_view format_id, std::string_view backend_id, E
 
 std::unique_ptr<IEncoder> create_registered_encoder(std::string_view format_id,
                                                     std::string_view backend_id) {
-    for (const RegistryEntry& e : registry()) {
+    for (const RegistryEntry &e : registry()) {
         if (e.format_id != format_id) {
             continue;
         }
@@ -92,7 +91,7 @@ std::unique_ptr<IEncoder> create_registered_encoder(std::string_view format_id,
 
 std::vector<std::string> registered_backends(std::string_view format_id) {
     std::vector<std::string> out;
-    for (const RegistryEntry& e : registry()) {
+    for (const RegistryEntry &e : registry()) {
         if (e.format_id != format_id) {
             continue;
         }
@@ -105,8 +104,8 @@ std::vector<std::string> registered_backends(std::string_view format_id) {
 
 std::unique_ptr<IEncoder> make_encoder(std::string_view format_id, std::string_view backend_id) {
     // Registry lookup only: unregistered combinations yield nullptr (§3.8).
-    (void)kEncoderMembersLinked;  // guarantees the link anchors stay referenced
+    (void)kEncoderMembersLinked; // guarantees the link anchors stay referenced
     return create_registered_encoder(format_id, backend_id);
 }
 
-}  // namespace pp
+} // namespace pp

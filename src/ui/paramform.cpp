@@ -45,102 +45,110 @@ namespace pp::ui {
 namespace {
 
 // 保留键（m1-tasks §3.4）：随工作集传递，但不序列化、不显示、不出现在 values()
-constexpr const char* kLosslessKey = "__lossless";
+constexpr const char *kLosslessKey = "__lossless";
 // §9.1 U3：参数表中名为 "lossless" 的参数（内省 heif/avif 暴露）不渲染为行——顶部"无损"
 // 复选框独占该参数（值随复选框同步写入工作集，编码器仍从参数集读它）。
-constexpr const char* kLosslessParamKey = "lossless";
+constexpr const char *kLosslessParamKey = "lossless";
 
-bool is_reserved_key(const std::string& key) { return key.rfind("__", 0) == 0; }
+bool is_reserved_key(const std::string &key) { return key.rfind("__", 0) == 0; }
 
 // "同类型" 判定（条 6）：Int=int64、Float=double（int64/double 互不容忍）、
 // Bool=bool、Enum=与某个 choice 的值完全相同（类型 + 取值一起匹配）
-bool same_typed_value(const pp::ParamDef& p, const pp::ParamValue& v) {
+bool same_typed_value(const pp::ParamDef &p, const pp::ParamValue &v) {
     switch (p.type) {
-        case pp::ParamType::Int:
-            return std::holds_alternative<int64_t>(v);
-        case pp::ParamType::Float:
-            return std::holds_alternative<double>(v);
-        case pp::ParamType::Bool:
-            return std::holds_alternative<bool>(v);
-        case pp::ParamType::Enum:
-            return std::any_of(p.choices.begin(), p.choices.end(),
-                               [&v](const auto& c) { return c.second == v; });
+    case pp::ParamType::Int:
+        return std::holds_alternative<int64_t>(v);
+    case pp::ParamType::Float:
+        return std::holds_alternative<double>(v);
+    case pp::ParamType::Bool:
+        return std::holds_alternative<bool>(v);
+    case pp::ParamType::Enum:
+        return std::any_of(p.choices.begin(), p.choices.end(),
+                           [&v](const auto &c) { return c.second == v; });
     }
     return false;
 }
 
-const pp::ParamDef* find_param(const pp::TechDef& t, const std::string& key) {
-    for (const pp::ParamDef& p : t.params)
-        if (p.key == key) return &p;
+const pp::ParamDef *find_param(const pp::TechDef &t, const std::string &key) {
+    for (const pp::ParamDef &p : t.params)
+        if (p.key == key)
+            return &p;
     return nullptr;
 }
 
-const pp::TechDef* find_tech_in(const pp::BackendDef* b, const std::string& id) {
-    if (!b) return nullptr;
-    for (const pp::TechDef& t : b->techs)
-        if (t.id == id) return &t;
+const pp::TechDef *find_tech_in(const pp::BackendDef *b, const std::string &id) {
+    if (!b)
+        return nullptr;
+    for (const pp::TechDef &t : b->techs)
+        if (t.id == id)
+            return &t;
     return nullptr;
 }
 
-const pp::TechDef* first_lossless_tech_in(const pp::BackendDef* b) {
-    if (!b) return nullptr;
-    for (const pp::TechDef& t : b->techs)
-        if (t.lossless_capable) return &t;
+const pp::TechDef *first_lossless_tech_in(const pp::BackendDef *b) {
+    if (!b)
+        return nullptr;
+    for (const pp::TechDef &t : b->techs)
+        if (t.lossless_capable)
+            return &t;
     return nullptr;
 }
 
 // 参数键集合一致（静态表路径与调用方传入的后端表是同一份定义时才走引擎默认值路径）
-bool same_param_keys(const pp::TechDef& a, const pp::TechDef& b) {
-    if (a.params.size() != b.params.size()) return false;
+bool same_param_keys(const pp::TechDef &a, const pp::TechDef &b) {
+    if (a.params.size() != b.params.size())
+        return false;
     for (std::size_t i = 0; i < a.params.size(); ++i)
-        if (a.params[i].key != b.params[i].key) return false;
+        if (a.params[i].key != b.params[i].key)
+            return false;
     return true;
 }
 
-}  // namespace
+} // namespace
 
 struct ParamForm::Impl {
-    ParamForm* q = nullptr;
-    const pp::FormatDef* fmt = nullptr;
-    std::vector<pp::BackendDef> backends;   // 生效后端表（静态表拷贝或运行时内省结果）
-    FormSelection sel;                      // 已解析（非空）的当前选择
-    pp::ParamSet values;                    // 工作集（含保留键 "__lossless"）
-    std::string pre_lossless_tech;          // 本表单自动切走前的技术（取消无损时切回）
+    ParamForm *q = nullptr;
+    const pp::FormatDef *fmt = nullptr;
+    std::vector<pp::BackendDef> backends; // 生效后端表（静态表拷贝或运行时内省结果）
+    FormSelection sel;                    // 已解析（非空）的当前选择
+    pp::ParamSet values;                  // 工作集（含保留键 "__lossless"）
+    std::string pre_lossless_tech;        // 本表单自动切走前的技术（取消无损时切回）
 
-    QVBoxLayout* root = nullptr;
-    QWidget* selector_row = nullptr;
-    QLabel* backend_label = nullptr;
-    QComboBox* backend_combo = nullptr;
-    QLabel* tech_label = nullptr;
-    QComboBox* tech_combo = nullptr;
-    QCheckBox* lossless_check = nullptr;
+    QVBoxLayout *root = nullptr;
+    QWidget *selector_row = nullptr;
+    QLabel *backend_label = nullptr;
+    QComboBox *backend_combo = nullptr;
+    QLabel *tech_label = nullptr;
+    QComboBox *tech_combo = nullptr;
+    QCheckBox *lossless_check = nullptr;
 
-    QWidget* core_area = nullptr;
-    QFormLayout* core_form = nullptr;
-    QGroupBox* adv_group = nullptr;
-    QWidget* adv_area = nullptr;
-    QFormLayout* adv_form = nullptr;
-    QLineEdit* adv_search = nullptr;
-    QLabel* cross_error = nullptr;   // §2.7：交叉参数约束红字区（参数组底部）
+    QWidget *core_area = nullptr;
+    QFormLayout *core_form = nullptr;
+    QGroupBox *adv_group = nullptr;
+    QWidget *adv_area = nullptr;
+    QFormLayout *adv_form = nullptr;
+    QLineEdit *adv_search = nullptr;
+    QLabel *cross_error = nullptr; // §2.7：交叉参数约束红字区（参数组底部）
 
     struct Row {
-        const pp::ParamDef* def = nullptr;   // 指向生效 TechDef 的 ParamDef（生命周期 >= 本控件）
+        const pp::ParamDef *def = nullptr; // 指向生效 TechDef 的 ParamDef（生命周期 >= 本控件）
         std::string key;
-        QLabel* label = nullptr;
-        QWidget* editor = nullptr;
+        QLabel *label = nullptr;
+        QWidget *editor = nullptr;
         bool advanced = false;
         bool locked = false;
-        bool shown = true;   // 谓词可见 且 通过高级区搜索过滤（is_param_visible 口径）
+        bool shown = true; // 谓词可见 且 通过高级区搜索过滤（is_param_visible 口径）
     };
     std::vector<Row> rows;
 
-    bool syncing = false;   // 程序化写控件期间抑制 valueChanged 回写
+    bool syncing = false; // 程序化写控件期间抑制 valueChanged 回写
 
     // ---------------------------------------------------------------- 构造
 
-    Impl(ParamForm* owner, const pp::FormatDef& f, std::vector<pp::BackendDef> bs)
+    Impl(ParamForm *owner, const pp::FormatDef &f, std::vector<pp::BackendDef> bs)
         : q(owner), fmt(&f), backends(std::move(bs)) {
-        if (backends.empty()) backends = fmt->backends;  // 内省不可用 → 回退静态表（不崩、可显示）
+        if (backends.empty())
+            backends = fmt->backends; // 内省不可用 → 回退静态表（不崩、可显示）
         root = new QVBoxLayout(q);
         root->setContentsMargins(0, 0, 0, 0);
         root->setSpacing(6);
@@ -148,7 +156,7 @@ struct ParamForm::Impl {
         build_cross_error();
 
         sel.backend = backends.empty() ? std::string() : backends.front().id;
-        const pp::TechDef* t = tech();
+        const pp::TechDef *t = tech();
         sel.tech = t ? t->id : std::string();
         sel.lossless = false;
         populate_tech_combo();
@@ -158,20 +166,22 @@ struct ParamForm::Impl {
 
     // ---------------------------------------------------------------- 查询
 
-    const pp::BackendDef* backend() const {
-        for (const pp::BackendDef& b : backends)
-            if (b.id == sel.backend) return &b;
+    const pp::BackendDef *backend() const {
+        for (const pp::BackendDef &b : backends)
+            if (b.id == sel.backend)
+                return &b;
         return backends.empty() ? nullptr : &backends.front();
     }
 
-    const pp::TechDef* tech() const {
-        const pp::BackendDef* b = backend();
-        if (!b) return nullptr;
-        const pp::TechDef* t = find_tech_in(b, sel.tech);
+    const pp::TechDef *tech() const {
+        const pp::BackendDef *b = backend();
+        if (!b)
+            return nullptr;
+        const pp::TechDef *t = find_tech_in(b, sel.tech);
         return t ? t : (b->techs.empty() ? nullptr : &b->techs.front());
     }
 
-    const pp::TechDef* tech_by_id(const std::string& id) const {
+    const pp::TechDef *tech_by_id(const std::string &id) const {
         return find_tech_in(backend(), id);
     }
 
@@ -180,14 +190,14 @@ struct ParamForm::Impl {
     void build_selectors() {
         selector_row = new QWidget(q);
         selector_row->setObjectName(QStringLiteral("pp-selector-row"));
-        auto* h = new QHBoxLayout(selector_row);
+        auto *h = new QHBoxLayout(selector_row);
         h->setContentsMargins(0, 0, 0, 0);
         h->setSpacing(6);
 
         backend_label = new QLabel(ParamForm::tr("后端"), selector_row);
         backend_combo = new QComboBox(selector_row);
         backend_combo->setObjectName(QStringLiteral("pp-backend-combo"));
-        for (const pp::BackendDef& b : backends)
+        for (const pp::BackendDef &b : backends)
             backend_combo->addItem(QString::fromStdString(b.label.empty() ? b.id : b.label),
                                    QString::fromStdString(b.id));
         h->addWidget(backend_label);
@@ -201,24 +211,29 @@ struct ParamForm::Impl {
 
         lossless_check = new QCheckBox(ParamForm::tr("无损"), selector_row);
         lossless_check->setObjectName(QStringLiteral("pp-lossless-check"));
-        lossless_check->setToolTip(ParamForm::tr("无损输出（写入保留键 __lossless，驱动参数谓词）"));
+        lossless_check->setToolTip(
+            ParamForm::tr("无损输出（写入保留键 __lossless，驱动参数谓词）"));
         h->addWidget(lossless_check);
         h->addStretch(1);
 
         root->addWidget(selector_row);
 
         QObject::connect(backend_combo, &QComboBox::currentIndexChanged, q, [this](int idx) {
-            if (syncing || idx < 0 || idx >= static_cast<int>(backends.size())) return;
+            if (syncing || idx < 0 || idx >= static_cast<int>(backends.size()))
+                return;
             user_set_backend(backends[static_cast<std::size_t>(idx)].id);
         });
         QObject::connect(tech_combo, &QComboBox::currentIndexChanged, q, [this](int idx) {
-            if (syncing || idx < 0) return;
-            const pp::BackendDef* b = backend();
-            if (!b || idx >= static_cast<int>(b->techs.size())) return;
+            if (syncing || idx < 0)
+                return;
+            const pp::BackendDef *b = backend();
+            if (!b || idx >= static_cast<int>(b->techs.size()))
+                return;
             user_set_tech(b->techs[static_cast<std::size_t>(idx)].id);
         });
         QObject::connect(lossless_check, &QCheckBox::toggled, q, [this](bool on) {
-            if (syncing) return;
+            if (syncing)
+                return;
             user_set_lossless(on);
         });
     }
@@ -226,36 +241,41 @@ struct ParamForm::Impl {
     void populate_tech_combo() {
         syncing = true;
         tech_combo->clear();
-        const pp::BackendDef* b = backend();
+        const pp::BackendDef *b = backend();
         int current = -1;
         if (b) {
             for (std::size_t i = 0; i < b->techs.size(); ++i) {
-                const pp::TechDef& t = b->techs[i];
+                const pp::TechDef &t = b->techs[i];
                 tech_combo->addItem(QString::fromStdString(t.label.empty() ? t.id : t.label),
                                     QString::fromStdString(t.id));
-                if (t.id == sel.tech) current = static_cast<int>(i);
+                if (t.id == sel.tech)
+                    current = static_cast<int>(i);
             }
         }
-        if (current >= 0) tech_combo->setCurrentIndex(current);
+        if (current >= 0)
+            tech_combo->setCurrentIndex(current);
         update_tech_items_enabled();
         syncing = false;
     }
 
     // 无损开启期间：非 lossless_capable 技术置灰（条 2）
     void update_tech_items_enabled() {
-        auto* model = qobject_cast<QStandardItemModel*>(tech_combo->model());
-        const pp::BackendDef* b = backend();
-        if (!model || !b) return;
+        auto *model = qobject_cast<QStandardItemModel *>(tech_combo->model());
+        const pp::BackendDef *b = backend();
+        if (!model || !b)
+            return;
         for (int i = 0; i < static_cast<int>(b->techs.size()) && i < model->rowCount(); ++i) {
-            QStandardItem* item = model->item(i);
-            if (!item) continue;
-            item->setEnabled(!sel.lossless || b->techs[static_cast<std::size_t>(i)].lossless_capable);
+            QStandardItem *item = model->item(i);
+            if (!item)
+                continue;
+            item->setEnabled(!sel.lossless ||
+                             b->techs[static_cast<std::size_t>(i)].lossless_capable);
         }
     }
 
     void update_selectors() {
         syncing = true;
-        const pp::BackendDef* b = backend();
+        const pp::BackendDef *b = backend();
         const bool multi_backend = backends.size() > 1;
         backend_label->setVisible(multi_backend);
         backend_combo->setVisible(multi_backend);
@@ -313,9 +333,9 @@ struct ParamForm::Impl {
         adv_group = new QGroupBox(ParamForm::tr("高级参数"), q);
         adv_group->setObjectName(QStringLiteral("pp-advanced-group"));
         adv_group->setCheckable(true);
-        adv_group->setChecked(false);   // collapsed 起始
-        auto* adv_outer = new QVBoxLayout(adv_group);
-        adv_outer->setContentsMargins(2, 0, 2, 2);   // §9.1：标题↔搜索框间距收紧
+        adv_group->setChecked(false); // collapsed 起始
+        auto *adv_outer = new QVBoxLayout(adv_group);
+        adv_outer->setContentsMargins(2, 0, 2, 2); // §9.1：标题↔搜索框间距收紧
         adv_outer->setSpacing(2);
         adv_area = new QWidget(adv_group);
         adv_area->setObjectName(QStringLiteral("pp-advanced-area"));
@@ -336,14 +356,16 @@ struct ParamForm::Impl {
         adv_area->setVisible(false);
         adv_outer->addWidget(adv_area);
         QObject::connect(adv_group, &QGroupBox::toggled, adv_area, &QWidget::setVisible);
-        QObject::connect(adv_search, &QLineEdit::textChanged, q, [this](const QString&) {
-            if (syncing) return;
-            update_row_states();   // 过滤只影响视图，不是值变化 → 不发信号
+        QObject::connect(adv_search, &QLineEdit::textChanged, q, [this](const QString &) {
+            if (syncing)
+                return;
+            update_row_states(); // 过滤只影响视图，不是值变化 → 不发信号
         });
 
-        if (const pp::TechDef* t = tech()) {
-            for (const pp::ParamDef& p : t->params) {
-                if (p.key == kLosslessParamKey) continue;   // §9.1：由顶部"无损"复选框独占
+        if (const pp::TechDef *t = tech()) {
+            for (const pp::ParamDef &p : t->params) {
+                if (p.key == kLosslessParamKey)
+                    continue; // §9.1：由顶部"无损"复选框独占
                 add_row(p);
             }
         }
@@ -355,9 +377,10 @@ struct ParamForm::Impl {
         root->addWidget(cross_error);
     }
 
-    void add_row(const pp::ParamDef& p) {
+    void add_row(const pp::ParamDef &p) {
         const QString tip = QString::fromStdString(p.tooltip);
-        QWidget* parent = p.advanced ? static_cast<QWidget*>(adv_area) : static_cast<QWidget*>(core_area);
+        QWidget *parent =
+            p.advanced ? static_cast<QWidget *>(adv_area) : static_cast<QWidget *>(core_area);
 
         Row r;
         r.def = &p;
@@ -369,82 +392,85 @@ struct ParamForm::Impl {
         r.label->setToolTip(tip);
 
         switch (p.type) {
-            case pp::ParamType::Int: {
-                auto* spin = new QSpinBox(parent);
-                int lo = static_cast<int>(std::lround(p.lo));
-                int hi = static_cast<int>(std::lround(p.hi));
-                if (hi < lo) std::swap(lo, hi);
-                spin->setRange(lo, hi);
-                spin->setSingleStep(std::max(1, static_cast<int>(std::lround(p.step))));
-                r.editor = spin;
-                QObject::connect(spin, &QSpinBox::valueChanged, q,
-                                 [this, key = p.key](int v) {
-                                     if (syncing) return;
-                                     values[key] = static_cast<int64_t>(v);
-                                     refresh();
-                                     emit q->changed();
-                                 });
-                break;
-            }
-            case pp::ParamType::Float: {
-                auto* spin = new QDoubleSpinBox(parent);
-                double lo = p.lo, hi = p.hi;
-                if (hi < lo) std::swap(lo, hi);
-                spin->setRange(lo, hi);
-                spin->setDecimals(3);   // 条 3：decimals=3
-                spin->setSingleStep(p.step > 0.0 ? p.step : 1.0);
-                r.editor = spin;
-                QObject::connect(spin, &QDoubleSpinBox::valueChanged, q,
-                                 [this, key = p.key](double v) {
-                                     if (syncing) return;
-                                     values[key] = v;
-                                     refresh();
-                                     emit q->changed();
-                                 });
-                break;
-            }
-            case pp::ParamType::Bool: {
-                auto* box = new QCheckBox(parent);
-                r.editor = box;
-                QObject::connect(box, &QCheckBox::toggled, q, [this, key = p.key](bool on) {
-                    if (syncing) return;
-                    values[key] = on;
+        case pp::ParamType::Int: {
+            auto *spin = new QSpinBox(parent);
+            int lo = static_cast<int>(std::lround(p.lo));
+            int hi = static_cast<int>(std::lround(p.hi));
+            if (hi < lo)
+                std::swap(lo, hi);
+            spin->setRange(lo, hi);
+            spin->setSingleStep(std::max(1, static_cast<int>(std::lround(p.step))));
+            r.editor = spin;
+            QObject::connect(spin, &QSpinBox::valueChanged, q, [this, key = p.key](int v) {
+                if (syncing)
+                    return;
+                values[key] = static_cast<int64_t>(v);
+                refresh();
+                emit q->changed();
+            });
+            break;
+        }
+        case pp::ParamType::Float: {
+            auto *spin = new QDoubleSpinBox(parent);
+            double lo = p.lo, hi = p.hi;
+            if (hi < lo)
+                std::swap(lo, hi);
+            spin->setRange(lo, hi);
+            spin->setDecimals(3); // 条 3：decimals=3
+            spin->setSingleStep(p.step > 0.0 ? p.step : 1.0);
+            r.editor = spin;
+            QObject::connect(spin, &QDoubleSpinBox::valueChanged, q, [this, key = p.key](double v) {
+                if (syncing)
+                    return;
+                values[key] = v;
+                refresh();
+                emit q->changed();
+            });
+            break;
+        }
+        case pp::ParamType::Bool: {
+            auto *box = new QCheckBox(parent);
+            r.editor = box;
+            QObject::connect(box, &QCheckBox::toggled, q, [this, key = p.key](bool on) {
+                if (syncing)
+                    return;
+                values[key] = on;
+                refresh();
+                emit q->changed();
+            });
+            break;
+        }
+        case pp::ParamType::Enum: {
+            auto *combo = new QComboBox(parent);
+            for (const auto &choice : p.choices)
+                combo->addItem(QString::fromStdString(choice.first));
+            r.editor = combo;
+            const pp::ParamDef *def = &p;
+            QObject::connect(
+                combo, &QComboBox::currentIndexChanged, q, [this, key = p.key, def](int idx) {
+                    if (syncing || idx < 0 || idx >= static_cast<int>(def->choices.size()))
+                        return;
+                    values[key] = def->choices[static_cast<std::size_t>(idx)].second;
                     refresh();
                     emit q->changed();
                 });
-                break;
-            }
-            case pp::ParamType::Enum: {
-                auto* combo = new QComboBox(parent);
-                for (const auto& choice : p.choices)
-                    combo->addItem(QString::fromStdString(choice.first));
-                r.editor = combo;
-                const pp::ParamDef* def = &p;
-                QObject::connect(combo, &QComboBox::currentIndexChanged, q,
-                                 [this, key = p.key, def](int idx) {
-                                     if (syncing || idx < 0 ||
-                                         idx >= static_cast<int>(def->choices.size()))
-                                         return;
-                                     values[key] = def->choices[static_cast<std::size_t>(idx)].second;
-                                     refresh();
-                                     emit q->changed();
-                                 });
-                break;
-            }
+            break;
+        }
         }
         r.editor->setObjectName(QStringLiteral("pp-param-") + QString::fromStdString(p.key));
         r.editor->setToolTip(tip);
 
-        QFormLayout* form = p.advanced ? adv_form : core_form;
+        QFormLayout *form = p.advanced ? adv_form : core_form;
         form->addRow(r.label, r.editor);
         rows.push_back(r);
 
         // 条 5：标签右键菜单 → 重置为默认
         QObject::connect(r.label, &QWidget::customContextMenuRequested, q,
-                         [this, label = r.label, key = r.key](const QPoint& pos) {
+                         [this, label = r.label, key = r.key](const QPoint &pos) {
                              QMenu menu;
-                             QAction* reset = menu.addAction(ParamForm::tr("重置为默认"));
-                             if (menu.exec(label->mapToGlobal(pos)) == reset) reset_to_default(key);
+                             QAction *reset = menu.addAction(ParamForm::tr("重置为默认"));
+                             if (menu.exec(label->mapToGlobal(pos)) == reset)
+                                 reset_to_default(key);
                          });
     }
 
@@ -453,15 +479,16 @@ struct ParamForm::Impl {
     // 默认值全集：静态表携带该 backend/tech（键集合一致）时走 pp::default_params，
     // 运行时内省后端（heif/avif，techs 只在构造传入的表里）自行取 ParamDef::def。
     pp::ParamSet make_defaults() const {
-        const pp::TechDef* effective = tech();
-        const pp::BackendDef* sb = pp::find_backend(*fmt, sel.backend);
-        const pp::TechDef* st = sb ? pp::find_tech(*sb, sel.tech) : nullptr;
+        const pp::TechDef *effective = tech();
+        const pp::BackendDef *sb = pp::find_backend(*fmt, sel.backend);
+        const pp::TechDef *st = sb ? pp::find_tech(*sb, sel.tech) : nullptr;
         if (st && effective && same_param_keys(*st, *effective))
             return pp::default_params(*fmt, sel.backend, sel.tech, sel.lossless);
         pp::ParamSet s;
         s[kLosslessKey] = sel.lossless;
         if (effective)
-            for (const pp::ParamDef& p : effective->params) s[p.key] = p.def;
+            for (const pp::ParamDef &p : effective->params)
+                s[p.key] = p.def;
         return s;
     }
 
@@ -469,11 +496,13 @@ struct ParamForm::Impl {
     void rebuild_params() {
         const pp::ParamSet old = values;
         values = make_defaults();
-        if (const pp::TechDef* t = tech()) {
-            for (const auto& [k, v] : old) {
-                if (is_reserved_key(k)) continue;
-                const pp::ParamDef* p = find_param(*t, k);
-                if (p && same_typed_value(*p, v)) values[k] = v;
+        if (const pp::TechDef *t = tech()) {
+            for (const auto &[k, v] : old) {
+                if (is_reserved_key(k))
+                    continue;
+                const pp::ParamDef *p = find_param(*t, k);
+                if (p && same_typed_value(*p, v))
+                    values[k] = v;
             }
         }
         values[kLosslessKey] = sel.lossless;
@@ -484,13 +513,14 @@ struct ParamForm::Impl {
     void refresh() {
         values[kLosslessKey] = sel.lossless;
         // §9.1：名为 "lossless" 的参数没有行，其值由顶部"无损"复选框独占（heif/avif 内省参数）
-        if (const pp::TechDef* t = tech(); t && find_param(*t, kLosslessParamKey))
+        if (const pp::TechDef *t = tech(); t && find_param(*t, kLosslessParamKey))
             values[kLosslessParamKey] = sel.lossless;
         pp::apply_locks(*fmt, sel.backend, sel.tech, sel.lossless, values);
-        for (Row& r : rows) {
+        for (Row &r : rows) {
             const std::optional<pp::ParamValue> forced = pp::eval_lock(*r.def, values);
             r.locked = forced.has_value();
-            if (forced) values[r.key] = *forced;   // 锁定 → 值显示为强制值（写入工作集）
+            if (forced)
+                values[r.key] = *forced; // 锁定 → 值显示为强制值（写入工作集）
         }
         sync_widgets();
         update_row_states();
@@ -501,11 +531,13 @@ struct ParamForm::Impl {
     // §2.7：值变化时求值交叉约束；非空 → 红字逐条换行，空 → 隐藏。
     // 输入是 refresh() 已应用锁定后的工作集（= 真正会下发给编码器的值）。
     void update_cross_error() {
-        if (!cross_error) return;
+        if (!cross_error)
+            return;
         const std::vector<std::string> msgs = pp::cross_validate(values, fmt->id, sel.tech);
         QString text;
-        for (const std::string& m : msgs) {
-            if (!text.isEmpty()) text += QLatin1Char('\n');
+        for (const std::string &m : msgs) {
+            if (!text.isEmpty())
+                text += QLatin1Char('\n');
             text += QString::fromStdString(m);
         }
         cross_error->setText(text);
@@ -514,38 +546,37 @@ struct ParamForm::Impl {
 
     void sync_widgets() {
         syncing = true;
-        for (Row& r : rows) {
+        for (Row &r : rows) {
             const auto it = values.find(r.key);
             if (it != values.end()) {
-                const pp::ParamValue& v = it->second;
+                const pp::ParamValue &v = it->second;
                 switch (r.def->type) {
-                    case pp::ParamType::Int:
-                        if (const int64_t* i = std::get_if<int64_t>(&v)) {
-                            const int64_t clamped =
-                                std::clamp<int64_t>(*i, std::numeric_limits<int>::min(),
-                                                    std::numeric_limits<int>::max());
-                            static_cast<QSpinBox*>(r.editor)->setValue(static_cast<int>(clamped));
-                        }
-                        break;
-                    case pp::ParamType::Float:
-                        if (const double* d = std::get_if<double>(&v))
-                            static_cast<QDoubleSpinBox*>(r.editor)->setValue(*d);
-                        break;
-                    case pp::ParamType::Bool:
-                        if (const bool* b = std::get_if<bool>(&v))
-                            static_cast<QCheckBox*>(r.editor)->setChecked(*b);
-                        break;
-                    case pp::ParamType::Enum: {
-                        int idx = -1;
-                        for (std::size_t i = 0; i < r.def->choices.size(); ++i) {
-                            if (r.def->choices[i].second == v) {
-                                idx = static_cast<int>(i);
-                                break;
-                            }
-                        }
-                        static_cast<QComboBox*>(r.editor)->setCurrentIndex(idx);
-                        break;
+                case pp::ParamType::Int:
+                    if (const int64_t *i = std::get_if<int64_t>(&v)) {
+                        const int64_t clamped = std::clamp<int64_t>(
+                            *i, std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
+                        static_cast<QSpinBox *>(r.editor)->setValue(static_cast<int>(clamped));
                     }
+                    break;
+                case pp::ParamType::Float:
+                    if (const double *d = std::get_if<double>(&v))
+                        static_cast<QDoubleSpinBox *>(r.editor)->setValue(*d);
+                    break;
+                case pp::ParamType::Bool:
+                    if (const bool *b = std::get_if<bool>(&v))
+                        static_cast<QCheckBox *>(r.editor)->setChecked(*b);
+                    break;
+                case pp::ParamType::Enum: {
+                    int idx = -1;
+                    for (std::size_t i = 0; i < r.def->choices.size(); ++i) {
+                        if (r.def->choices[i].second == v) {
+                            idx = static_cast<int>(i);
+                            break;
+                        }
+                    }
+                    static_cast<QComboBox *>(r.editor)->setCurrentIndex(idx);
+                    break;
+                }
                 }
             }
             r.editor->setEnabled(!r.locked);
@@ -555,32 +586,36 @@ struct ParamForm::Impl {
 
     void update_row_states() {
         const QString filter = adv_search ? adv_search->text() : QString();
-        for (Row& r : rows) {
-            bool shown = pp::eval_visible(*r.def, values);   // 条 4：不可见 → 行隐藏
+        for (Row &r : rows) {
+            bool shown = pp::eval_visible(*r.def, values); // 条 4：不可见 → 行隐藏
             if (shown && r.advanced && !filter.isEmpty()) {
                 const QString label = QString::fromStdString(r.def->label);
                 const QString key = QString::fromStdString(r.key);
                 shown = label.contains(filter, Qt::CaseInsensitive) ||
-                        key.contains(filter, Qt::CaseInsensitive);   // 条 3：包含过滤
+                        key.contains(filter, Qt::CaseInsensitive); // 条 3：包含过滤
             }
             r.shown = shown;
-            QFormLayout* form = r.advanced ? adv_form : core_form;
-            if (form) form->setRowVisible(r.label, shown);
+            QFormLayout *form = r.advanced ? adv_form : core_form;
+            if (form)
+                form->setRowVisible(r.label, shown);
 
             const auto it = values.find(r.key);
-            const bool deviates = it != values.end() &&
-                                  it->second.index() == r.def->def.index() &&
-                                  !(it->second == r.def->def);   // 条 5：同类型比较
+            const bool deviates = it != values.end() && it->second.index() == r.def->def.index() &&
+                                  !(it->second == r.def->def); // 条 5：同类型比较
             r.label->setText((deviates ? QStringLiteral("● ") : QString()) +
                              QString::fromStdString(r.def->label));
         }
     }
 
-    void reset_to_default(const std::string& key) {
-        const pp::ParamDef* p = nullptr;
-        for (const Row& r : rows)
-            if (r.key == key) { p = r.def; break; }
-        if (!p) return;
+    void reset_to_default(const std::string &key) {
+        const pp::ParamDef *p = nullptr;
+        for (const Row &r : rows)
+            if (r.key == key) {
+                p = r.def;
+                break;
+            }
+        if (!p)
+            return;
         values[key] = p->def;
         refresh();
         emit q->changed();
@@ -588,7 +623,7 @@ struct ParamForm::Impl {
 
     // ---------------------------------------------------------------- 选择变化
 
-    void apply_state(const std::string& backend_id, const std::string& tech_id, bool lossless) {
+    void apply_state(const std::string &backend_id, const std::string &tech_id, bool lossless) {
         const bool rebuild = (backend_id != sel.backend) || (tech_id != sel.tech);
         sel.backend = backend_id;
         sel.tech = tech_id;
@@ -600,58 +635,66 @@ struct ParamForm::Impl {
         refresh();
     }
 
-    void user_set_backend(const std::string& id) {
-        if (id == sel.backend) return;
-        const pp::BackendDef* b = nullptr;
-        for (const pp::BackendDef& x : backends)
-            if (x.id == id) b = &x;
-        if (!b) return;
+    void user_set_backend(const std::string &id) {
+        if (id == sel.backend)
+            return;
+        const pp::BackendDef *b = nullptr;
+        for (const pp::BackendDef &x : backends)
+            if (x.id == id)
+                b = &x;
+        if (!b)
+            return;
         pre_lossless_tech.clear();
         std::string tech_id = b->techs.empty() ? std::string() : b->techs.front().id;
         bool lossless = sel.lossless;
         if (lossless) {
-            const pp::TechDef* lt = first_lossless_tech_in(b);
-            if (lt) tech_id = lt->id;
-            else lossless = false;   // 新后端无 lossless 技术 → 复选框消失，标志归零
+            const pp::TechDef *lt = first_lossless_tech_in(b);
+            if (lt)
+                tech_id = lt->id;
+            else
+                lossless = false; // 新后端无 lossless 技术 → 复选框消失，标志归零
         }
         apply_state(id, tech_id, lossless);
-        emit q->selection_changed(sel);   // 条 7：先 selection_changed
-        emit q->changed();                //        再 changed
+        emit q->selection_changed(sel); // 条 7：先 selection_changed
+        emit q->changed();              //        再 changed
     }
 
-    void user_set_tech(const std::string& id) {
-        if (id == sel.tech) return;
-        const pp::TechDef* t = tech_by_id(id);
-        if (!t) return;
-        if (sel.lossless && !t->lossless_capable) {   // 置灰项：拒绝并回到当前项
+    void user_set_tech(const std::string &id) {
+        if (id == sel.tech)
+            return;
+        const pp::TechDef *t = tech_by_id(id);
+        if (!t)
+            return;
+        if (sel.lossless && !t->lossless_capable) { // 置灰项：拒绝并回到当前项
             update_selectors();
             return;
         }
-        pre_lossless_tech.clear();   // 手动改技术 → 不再记忆自动切换
+        pre_lossless_tech.clear(); // 手动改技术 → 不再记忆自动切换
         apply_state(sel.backend, id, sel.lossless);
         emit q->selection_changed(sel);
         emit q->changed();
     }
 
     void user_set_lossless(bool on) {
-        if (on == sel.lossless) return;
+        if (on == sel.lossless)
+            return;
         std::string tech_id = sel.tech;
         std::string memo = pre_lossless_tech;
         if (on) {
-            const pp::TechDef* ct = tech();
+            const pp::TechDef *ct = tech();
             if (!ct || !ct->lossless_capable) {
-                const pp::TechDef* lt = first_lossless_tech_in(backend());
-                if (!lt) {   // 无 lossless_capable 技术（复选框此时本应隐藏）
+                const pp::TechDef *lt = first_lossless_tech_in(backend());
+                if (!lt) { // 无 lossless_capable 技术（复选框此时本应隐藏）
                     update_selectors();
                     return;
                 }
                 memo = sel.tech;
-                tech_id = lt->id;   // jxl→modular、webp→lossless
+                tech_id = lt->id; // jxl→modular、webp→lossless
             } else {
                 memo.clear();
             }
         } else if (!memo.empty() && memo != sel.tech && tech_by_id(memo)) {
-            tech_id = memo;   // 撤销本表单造成的那次自动切换
+            tech_id = memo; // 撤销本表单造成的那次自动切换
             memo.clear();
         } else {
             memo.clear();
@@ -662,13 +705,14 @@ struct ParamForm::Impl {
         emit q->changed();
     }
 
-    void set_selection(const FormSelection& s) {
+    void set_selection(const FormSelection &s) {
         std::string backend_id = s.backend;
-        const pp::BackendDef* b = nullptr;
-        for (const pp::BackendDef& x : backends)
-            if (x.id == backend_id) b = &x;
+        const pp::BackendDef *b = nullptr;
+        for (const pp::BackendDef &x : backends)
+            if (x.id == backend_id)
+                b = &x;
         if (!b) {
-            b = backends.empty() ? nullptr : &backends.front();   // "" 或未知 → 首个
+            b = backends.empty() ? nullptr : &backends.front(); // "" 或未知 → 首个
             backend_id = b ? b->id : std::string();
         }
         std::string tech_id = s.tech;
@@ -676,27 +720,34 @@ struct ParamForm::Impl {
             tech_id = (b && !b->techs.empty()) ? b->techs.front().id : std::string();
         bool lossless = s.lossless;
         if (lossless) {
-            const pp::TechDef* ct = find_tech_in(b, tech_id);
+            const pp::TechDef *ct = find_tech_in(b, tech_id);
             if (!ct || !ct->lossless_capable) {
-                const pp::TechDef* lt = first_lossless_tech_in(b);
-                if (lt) tech_id = lt->id;   // 维持 "lossless ⇒ 技术可无损" 不变式
-                else lossless = false;
+                const pp::TechDef *lt = first_lossless_tech_in(b);
+                if (lt)
+                    tech_id = lt->id; // 维持 "lossless ⇒ 技术可无损" 不变式
+                else
+                    lossless = false;
             }
         }
-        if (backend_id != sel.backend) pre_lossless_tech.clear();
-        apply_state(backend_id, tech_id, lossless);   // 不发信号（条 7）
+        if (backend_id != sel.backend)
+            pre_lossless_tech.clear();
+        apply_state(backend_id, tech_id, lossless); // 不发信号（条 7）
     }
 
     // ---------------------------------------------------------------- 值接口
 
-    void set_values(const pp::ParamSet& s) {
-        const pp::TechDef* t = tech();
-        if (!t) return;
-        for (const auto& [k, v] : s) {
-            if (is_reserved_key(k)) continue;                 // 保留键不从外部注入
-            const pp::ParamDef* p = find_param(*t, k);
-            if (!p) continue;                                 // 未知 key 忽略
-            if (!same_typed_value(*p, v)) continue;           // 同类型才应用
+    void set_values(const pp::ParamSet &s) {
+        const pp::TechDef *t = tech();
+        if (!t)
+            return;
+        for (const auto &[k, v] : s) {
+            if (is_reserved_key(k))
+                continue; // 保留键不从外部注入
+            const pp::ParamDef *p = find_param(*t, k);
+            if (!p)
+                continue; // 未知 key 忽略
+            if (!same_typed_value(*p, v))
+                continue; // 同类型才应用
             values[k] = v;
         }
         refresh();
@@ -704,33 +755,36 @@ struct ParamForm::Impl {
 
     pp::ParamSet public_values() const {
         pp::ParamSet out;
-        for (const auto& [k, v] : values)
-            if (!is_reserved_key(k)) out.emplace(k, v);
+        for (const auto &[k, v] : values)
+            if (!is_reserved_key(k))
+                out.emplace(k, v);
         return out;
     }
 
-    bool is_visible(const std::string& key) const {
-        for (const Row& r : rows)
-            if (r.key == key) return r.shown;
+    bool is_visible(const std::string &key) const {
+        for (const Row &r : rows)
+            if (r.key == key)
+                return r.shown;
         return false;
     }
 };
 
 // ---------------------------------------------------------------- ParamForm
 
-ParamForm::ParamForm(const pp::FormatDef& fmt, std::vector<pp::BackendDef> backends, QWidget* parent)
+ParamForm::ParamForm(const pp::FormatDef &fmt, std::vector<pp::BackendDef> backends,
+                     QWidget *parent)
     : QWidget(parent), impl_(std::make_unique<Impl>(this, fmt, std::move(backends))) {}
 
 ParamForm::~ParamForm() = default;
 
-void ParamForm::set_selection(const FormSelection& sel) { impl_->set_selection(sel); }
+void ParamForm::set_selection(const FormSelection &sel) { impl_->set_selection(sel); }
 
 FormSelection ParamForm::selection() const { return impl_->sel; }
 
 pp::ParamSet ParamForm::values() const { return impl_->public_values(); }
 
-void ParamForm::set_values(const pp::ParamSet& s) { impl_->set_values(s); }
+void ParamForm::set_values(const pp::ParamSet &s) { impl_->set_values(s); }
 
-bool ParamForm::is_param_visible(const std::string& key) const { return impl_->is_visible(key); }
+bool ParamForm::is_param_visible(const std::string &key) const { return impl_->is_visible(key); }
 
-}  // namespace pp::ui
+} // namespace pp::ui

@@ -30,7 +30,7 @@ namespace {
 
 int g_fails = 0;
 
-void emit(const std::string& name, const char* status, const std::string& detail) {
+void emit(const std::string &name, const char *status, const std::string &detail) {
     if (std::strcmp(status, "FAIL") == 0) {
         ++g_fails;
     }
@@ -43,7 +43,7 @@ std::string fmt_double(double v) {
     return std::string(buf);
 }
 
-bool read_file(const fs::path& path, std::vector<uint8_t>& out, std::string& err) {
+bool read_file(const fs::path &path, std::vector<uint8_t> &out, std::string &err) {
     std::ifstream in(path, std::ios::binary);
     if (!in) {
         err = "cannot read " + path.string();
@@ -55,7 +55,7 @@ bool read_file(const fs::path& path, std::vector<uint8_t>& out, std::string& err
 
 // Offset of the SOS marker (0xFF 0xDA); JPEG entropy data is byte-stuffed, so the first
 // occurrence is the scan header.
-size_t find_sos(const std::vector<uint8_t>& data) {
+size_t find_sos(const std::vector<uint8_t> &data) {
     for (size_t i = 0; i + 1 < data.size(); ++i) {
         if (data[i] == 0xFF && data[i + 1] == 0xDA) {
             return i;
@@ -65,16 +65,16 @@ size_t find_sos(const std::vector<uint8_t>& data) {
 }
 
 // Spike e: lcms2 numeric golden values.
-bool spike_e(std::string& err) {
+bool spike_e(std::string &err) {
     cmsHPROFILE srgb = cmsCreate_sRGBProfile();
     if (srgb == nullptr) {
         err = "cmsCreate_sRGBProfile returned null";
         return false;
     }
     // (1) sRGB -> sRGB float transform must be an identity within 1e-5.
-    cmsHTRANSFORM xf = cmsCreateTransform(srgb, TYPE_RGB_FLT, srgb, TYPE_RGB_FLT,
-                                          INTENT_RELATIVE_COLORIMETRIC,
-                                          cmsFLAGS_BLACKPOINTCOMPENSATION);
+    cmsHTRANSFORM xf =
+        cmsCreateTransform(srgb, TYPE_RGB_FLT, srgb, TYPE_RGB_FLT, INTENT_RELATIVE_COLORIMETRIC,
+                           cmsFLAGS_BLACKPOINTCOMPENSATION);
     if (xf == nullptr) {
         cmsCloseProfile(srgb);
         err = "cmsCreateTransform(sRGB->sRGB) returned null";
@@ -96,9 +96,9 @@ bool spike_e(std::string& err) {
         err = "cmsCreateLab4Profile(D50) returned null";
         return false;
     }
-    cmsHTRANSFORM xf_lab = cmsCreateTransform(srgb, TYPE_RGB_FLT, lab, TYPE_Lab_DBL,
-                                              INTENT_RELATIVE_COLORIMETRIC,
-                                              cmsFLAGS_BLACKPOINTCOMPENSATION);
+    cmsHTRANSFORM xf_lab =
+        cmsCreateTransform(srgb, TYPE_RGB_FLT, lab, TYPE_Lab_DBL, INTENT_RELATIVE_COLORIMETRIC,
+                           cmsFLAGS_BLACKPOINTCOMPENSATION);
     double lab_out[3] = {0.0, 0.0, 0.0};
     if (xf_lab == nullptr) {
         cmsCloseProfile(lab);
@@ -113,15 +113,15 @@ bool spike_e(std::string& err) {
     cmsCloseProfile(srgb);
 
     const bool identity_ok = max_err <= 1e-5;
-    const bool lab_ok = lab_out[0] >= 99.5 && lab_out[0] <= 100.5 &&
-                        std::fabs(lab_out[1]) <= 1.0 && std::fabs(lab_out[2]) <= 1.0;
+    const bool lab_ok = lab_out[0] >= 99.5 && lab_out[0] <= 100.5 && std::fabs(lab_out[1]) <= 1.0 &&
+                        std::fabs(lab_out[2]) <= 1.0;
     err = "identity_max_err=" + fmt_double(max_err) + " Lab=(" + fmt_double(lab_out[0]) + "," +
           fmt_double(lab_out[1]) + "," + fmt_double(lab_out[2]) + ")";
     return identity_ok && lab_ok;
 }
 
 // Spike f: Exiv2 lossless metadata rewrite fidelity (R10).
-bool spike_f(const fs::path& golden_root, std::string& err) {
+bool spike_f(const fs::path &golden_root, std::string &err) {
     const fs::path src = golden_root / "meta" / "exif_full.jpg";
     // Repo-local scratch path (task book §12.3 r2: replaced the former /tmp path).
     const fs::path tmp = ".cache/tmp/pp_spike_f.jpg";
@@ -144,7 +144,7 @@ bool spike_f(const fs::path& golden_root, std::string& err) {
         exif["Exif.Image.Artist"] = "M0-F";
         img->setExifData(exif);
         img->writeMetadata();
-    } catch (const Exiv2::Error& e) {
+    } catch (const Exiv2::Error &e) {
         err = std::string("exiv2: ") + e.what();
         return false;
     }
@@ -163,9 +163,9 @@ bool spike_f(const fs::path& golden_root, std::string& err) {
     }
     const size_t tail_before = before.size() - sos_before;
     const size_t tail_after = after.size() - sos_after;
-    const bool tail_ok = tail_before == tail_after &&
-                         std::memcmp(before.data() + sos_before, after.data() + sos_after,
-                                     tail_before) == 0;
+    const bool tail_ok =
+        tail_before == tail_after &&
+        std::memcmp(before.data() + sos_before, after.data() + sos_after, tail_before) == 0;
 
     // (2) decoded pixels must hash equally.
     const std::string hash_before =
@@ -180,9 +180,9 @@ bool spike_f(const fs::path& golden_root, std::string& err) {
     return tail_ok && hash_ok;
 }
 
-}  // namespace
+} // namespace
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
     std::vector<std::string> args;
     for (int i = 1; i < argc; ++i) {
         args.emplace_back(argv[i]);

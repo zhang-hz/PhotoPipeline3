@@ -20,8 +20,8 @@
 #include <OpenImageIO/imagebuf.h>
 #include <OpenImageIO/imageio.h>
 
-#include <chrono>
 #include <cassert>
+#include <chrono>
 #include <csetjmp>
 #include <cstddef>
 #include <cstdint>
@@ -47,10 +47,11 @@ constexpr std::string_view kFormatId = "jpeg";
 
 // Recognised parameter keys (E9; §3.8 jpegli mapping table, 15 keys).
 constexpr std::string_view kKnownKeys[] = {
-    "quality_mode",     "distance",       "quality",      "chroma",
-    "progressive",      "optimize_coding", "arith_code",  "restart_in_rows",
-    "dct_method",       "smoothing_factor", "xyb_mode",   "adaptive_quantization",
-    "std_quant_tables", "psnr_target",    "cicp_transfer_function",
+    "quality_mode",     "distance",        "quality",
+    "chroma",           "progressive",     "optimize_coding",
+    "arith_code",       "restart_in_rows", "dct_method",
+    "smoothing_factor", "xyb_mode",        "adaptive_quantization",
+    "std_quant_tables", "psnr_target",     "cicp_transfer_function",
 };
 
 // E8 (revised): a failed encode yields bytes == 0 plus an English error string.
@@ -77,7 +78,7 @@ struct JpegliParams {
     bool optimize_coding = true;
     bool arith_code = false;
     int restart_in_rows = 0;
-    int dct_method = 0;  // JDCT_ISLOW
+    int dct_method = 0; // JDCT_ISLOW
     int smoothing_factor = 0;
     bool xyb_mode = false;
     bool adaptive_quantization = true;
@@ -86,7 +87,7 @@ struct JpegliParams {
     int cicp_transfer_function = 2;
 };
 
-JpegliParams read_params(const ParamSet& s) {
+JpegliParams read_params(const ParamSet &s) {
     JpegliParams p;
     p.quality_mode = param_str(s, "quality_mode", "distance");
     p.distance = param_float(s, "distance", 1.0);
@@ -112,11 +113,11 @@ JpegliParams read_params(const ParamSet& s) {
 // WarningKind (M0 PP-FROZEN types.h) carries per-file processing facts and, per the M1 ruling,
 // deliberately has no "configuration defect" member. This log line stays as the encoder-side
 // evidence; see api-deltas in the M2-T4 report.
-void warn_unknown_params(const ParamSet& s) {
-    for (const auto& [key, value] : s) {
+void warn_unknown_params(const ParamSet &s) {
+    for (const auto &[key, value] : s) {
         (void)value;
         if (key.rfind("__", 0) == 0) {
-            continue;  // reserved keys (§3.4 convention)
+            continue; // reserved keys (§3.4 convention)
         }
         bool known = false;
         for (std::string_view k : kKnownKeys) {
@@ -135,15 +136,15 @@ void warn_unknown_params(const ParamSet& s) {
 // ------------------------------------------------------------------ pixels --
 struct Raster {
     int width = 0, height = 0, channels = 0;
-    std::vector<float> px;  // interleaved float32
+    std::vector<float> px; // interleaved float32
 };
 
-bool fetch_raster(const OIIO::ImageBuf& img, Raster& out, std::string& err) {
+bool fetch_raster(const OIIO::ImageBuf &img, Raster &out, std::string &err) {
     if (!img.initialized()) {
         err = "input image buffer is not initialized";
         return false;
     }
-    const OIIO::ImageSpec& spec = img.spec();
+    const OIIO::ImageSpec &spec = img.spec();
     const int channels = spec.nchannels;
     if (channels < 1 || channels > 4) {
         err = "unsupported channel count: " + std::to_string(channels) + " (expected 1..4)";
@@ -162,7 +163,7 @@ bool fetch_raster(const OIIO::ImageBuf& img, Raster& out, std::string& err) {
     out.px.assign(static_cast<std::size_t>(w) * static_cast<std::size_t>(h) *
                       static_cast<std::size_t>(channels),
                   0.0f);
-    const OIIO::span<std::byte> bytes(reinterpret_cast<std::byte*>(out.px.data()),
+    const OIIO::span<std::byte> bytes(reinterpret_cast<std::byte *>(out.px.data()),
                                       out.px.size() * sizeof(float));
     if (!img.get_pixels(roi, OIIO::TypeDesc::FLOAT, bytes)) {
         err = img.geterror();
@@ -177,7 +178,7 @@ bool fetch_raster(const OIIO::ImageBuf& img, Raster& out, std::string& err) {
 // E6: standard rounding, no dithering, clamp to [0,1].
 uint8_t to_u8(float v) {
     if (!(v > 0.0f)) {
-        return 0;  // also catches NaN
+        return 0; // also catches NaN
     }
     if (v >= 1.0f) {
         return 255;
@@ -195,30 +196,30 @@ struct JpegliErrorMgr {
 };
 
 void jpegli_error_exit(j_common_ptr cinfo) {
-    auto* mgr = reinterpret_cast<JpegliErrorMgr*>(cinfo->err);
+    auto *mgr = reinterpret_cast<JpegliErrorMgr *>(cinfo->err);
     (*cinfo->err->format_message)(cinfo, mgr->msg);
     std::longjmp(mgr->jump, 1);
 }
 
 void jpegli_output_message(j_common_ptr cinfo) {
-    auto* mgr = reinterpret_cast<JpegliErrorMgr*>(cinfo->err);
+    auto *mgr = reinterpret_cast<JpegliErrorMgr *>(cinfo->err);
     (*cinfo->err->format_message)(cinfo, mgr->msg);
     log_warn("Encode", kLogFile, "jpegli message", {{"text", mgr->msg}});
 }
 
 class JpegliEncoder final : public IEncoder {
 public:
-    const FormatDef& format() const override {
-        static const FormatDef* def = find_format(kFormatId);
+    const FormatDef &format() const override {
+        static const FormatDef *def = find_format(kFormatId);
         assert(def != nullptr);
         return *def;
     }
 
-    EncodeResult encode(const EncodeRequest& req) override {
+    EncodeResult encode(const EncodeRequest &req) override {
         // E8: no exception crosses the IEncoder boundary.
         try {
             return encode_impl(req);
-        } catch (const std::exception& e) {
+        } catch (const std::exception &e) {
             return encode_error(std::string("jpegli: internal error: ") + e.what());
         } catch (...) {
             return encode_error("jpegli: unknown internal error");
@@ -226,7 +227,7 @@ public:
     }
 
 private:
-    static EncodeResult encode_impl(const EncodeRequest& req) {
+    static EncodeResult encode_impl(const EncodeRequest &req) {
         const auto t0 = std::chrono::steady_clock::now();
         if (req.out_bitdepth != 8) {
             return encode_error("jpegli: out_bitdepth " + std::to_string(req.out_bitdepth) +
@@ -253,7 +254,8 @@ private:
         assert(comps == 1 || comps == 3);
 
         // Constructed before setjmp so no destructor can be skipped by longjmp.
-        std::vector<JSAMPLE> row(static_cast<std::size_t>(r.width) * static_cast<std::size_t>(comps));
+        std::vector<JSAMPLE> row(static_cast<std::size_t>(r.width) *
+                                 static_cast<std::size_t>(comps));
 
         jpeg_compress_struct cinfo{};
         JpegliErrorMgr jerr{};
@@ -324,25 +326,25 @@ private:
             cinfo.comp_info[0].v_samp_factor = v_samp;
         }
 
-        unsigned char* mem = nullptr;
+        unsigned char *mem = nullptr;
         unsigned long mem_size = 0;
         jpegli_mem_dest(&cinfo, &mem, &mem_size);
         jpegli_start_compress(&cinfo, TRUE);
 
         if (!req.meta.icc_profile.empty()) {
             // E5: ICC APP2 marker, written before the first scanline.
-            jpegli_write_icc_profile(
-                &cinfo, reinterpret_cast<const JOCTET*>(req.meta.icc_profile.data()),
-                static_cast<unsigned int>(req.meta.icc_profile.size()));
+            jpegli_write_icc_profile(&cinfo,
+                                     reinterpret_cast<const JOCTET *>(req.meta.icc_profile.data()),
+                                     static_cast<unsigned int>(req.meta.icc_profile.size()));
         }
 
         for (int y = 0; y < r.height; ++y) {
-            const float* src = r.px.data() + static_cast<std::size_t>(y) *
+            const float *src = r.px.data() + static_cast<std::size_t>(y) *
                                                  static_cast<std::size_t>(r.width) *
                                                  static_cast<std::size_t>(r.channels);
             for (int x = 0; x < r.width; ++x) {
-                const float* px = src + static_cast<std::size_t>(x) *
-                                           static_cast<std::size_t>(r.channels);
+                const float *px =
+                    src + static_cast<std::size_t>(x) * static_cast<std::size_t>(r.channels);
                 if (gray) {
                     row[static_cast<std::size_t>(x)] = to_u8(px[0]);
                 } else {
@@ -372,7 +374,7 @@ private:
         }
 
         const std::string path = req.out_path.string();
-        std::FILE* fp = std::fopen(path.c_str(), "wb");
+        std::FILE *fp = std::fopen(path.c_str(), "wb");
         if (fp == nullptr) {
             std::free(mem);
             return encode_error("jpegli: cannot open output file: " + path);
@@ -393,11 +395,11 @@ private:
 
 std::unique_ptr<IEncoder> make_jpegli() { return std::make_unique<JpegliEncoder>(); }
 
-}  // namespace
+} // namespace
 
 PP_REGISTER_ENCODER("jpeg", "jpegli", make_jpegli);
 
-}  // namespace pp
+} // namespace pp
 
 // Link anchor: referenced by encoders.cpp so the linker pulls this (otherwise
 // unreferenced) static-library member in and the registration above actually

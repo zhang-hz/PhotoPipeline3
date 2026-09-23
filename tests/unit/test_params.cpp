@@ -13,58 +13,68 @@ namespace {
 
 int g_fail = 0;
 
-void fail(const std::string& c, const std::string& d) {
+void fail(const std::string &c, const std::string &d) {
     std::printf("FAIL %s: %s\n", c.c_str(), d.c_str());
     ++g_fail;
 }
 
-void check(bool ok, const std::string& c, const std::string& d) {
-    if (!ok) fail(c, d);
+void check(bool ok, const std::string &c, const std::string &d) {
+    if (!ok)
+        fail(c, d);
 }
 
-bool has(const pp::ParamSet& s, const char* key) { return s.count(key) != 0; }
+bool has(const pp::ParamSet &s, const char *key) { return s.count(key) != 0; }
 
-bool contains(const std::vector<std::string>& v, const std::string& s) {
-    for (const std::string& x : v)
-        if (x == s) return true;
+bool contains(const std::vector<std::string> &v, const std::string &s) {
+    for (const std::string &x : v)
+        if (x == s)
+            return true;
     return false;
 }
 
-std::string join(const std::vector<std::string>& v) {
+std::string join(const std::vector<std::string> &v) {
     std::string out;
-    for (const std::string& s : v) out += (out.empty() ? "" : ",") + s;
+    for (const std::string &s : v)
+        out += (out.empty() ? "" : ",") + s;
     return out;
 }
 
-std::string repr(const pp::ParamValue& v) {
-    if (std::holds_alternative<bool>(v)) return std::get<bool>(v) ? "bool(true)" : "bool(false)";
-    if (std::holds_alternative<int64_t>(v)) return "int(" + std::to_string(std::get<int64_t>(v)) + ")";
-    if (std::holds_alternative<double>(v)) return "float(" + std::to_string(std::get<double>(v)) + ")";
-    if (std::holds_alternative<std::string>(v)) return "str(" + std::get<std::string>(v) + ")";
+std::string repr(const pp::ParamValue &v) {
+    if (std::holds_alternative<bool>(v))
+        return std::get<bool>(v) ? "bool(true)" : "bool(false)";
+    if (std::holds_alternative<int64_t>(v))
+        return "int(" + std::to_string(std::get<int64_t>(v)) + ")";
+    if (std::holds_alternative<double>(v))
+        return "float(" + std::to_string(std::get<double>(v)) + ")";
+    if (std::holds_alternative<std::string>(v))
+        return "str(" + std::get<std::string>(v) + ")";
     return "empty";
 }
 
-const pp::ParamDef* param_of(const pp::TechDef& t, const char* key) {
-    for (const pp::ParamDef& p : t.params)
-        if (p.key == key) return &p;
+const pp::ParamDef *param_of(const pp::TechDef &t, const char *key) {
+    for (const pp::ParamDef &p : t.params)
+        if (p.key == key)
+            return &p;
     return nullptr;
 }
 
 struct Slot {
-    const pp::FormatDef* f = nullptr;
-    const pp::BackendDef* b = nullptr;
-    const pp::TechDef* t = nullptr;
+    const pp::FormatDef *f = nullptr;
+    const pp::BackendDef *b = nullptr;
+    const pp::TechDef *t = nullptr;
 };
 
-Slot slot(const char* fmt, const char* backend, const char* tech) {
+Slot slot(const char *fmt, const char *backend, const char *tech) {
     Slot s;
     s.f = pp::find_format(fmt);
-    if (s.f) s.b = pp::find_backend(*s.f, backend);
-    if (s.b) s.t = pp::find_tech(*s.b, tech);
+    if (s.f)
+        s.b = pp::find_backend(*s.f, backend);
+    if (s.b)
+        s.t = pp::find_tech(*s.b, tech);
     return s;
 }
 
-}  // namespace
+} // namespace
 
 int main() {
     using namespace pp;
@@ -73,20 +83,20 @@ int main() {
     {
         const std::string c = "defaults-match-table";
         std::size_t techs = 0;
-        for (const FormatDef& f : static_formats()) {
-            for (const BackendDef& b : f.backends) {
-                for (const TechDef& t : b.techs) {
+        for (const FormatDef &f : static_formats()) {
+            for (const BackendDef &b : f.backends) {
+                for (const TechDef &t : b.techs) {
                     ++techs;
                     const std::string where = f.id + "/" + b.id + "/" + t.id;
                     const ParamSet s = default_params(f, b.id, t.id, t.lossless_capable);
-                    for (const ParamDef& p : t.params) {
+                    for (const ParamDef &p : t.params) {
                         if (!has(s, p.key.c_str())) {
                             fail(c, where + ": missing key " + p.key);
                             continue;
                         }
                         if (!(s.at(p.key) == p.def))
-                            fail(c, where + ": " + p.key + " = " + repr(s.at(p.key)) +
-                                        " != def " + repr(p.def));
+                            fail(c, where + ": " + p.key + " = " + repr(s.at(p.key)) + " != def " +
+                                        repr(p.def));
                     }
                     if (s.size() != t.params.size() + 1)
                         fail(c, where + ": size " + std::to_string(s.size()) + " != params+1 (" +
@@ -95,11 +105,13 @@ int main() {
                         fail(c, where + ": __lossless flag not set to " +
                                     (t.lossless_capable ? "true" : "false"));
                     const std::string err = validate_params(f, b.id, t.id, t.lossless_capable, s);
-                    if (!err.empty()) fail("validate-defaults", where + ": " + err);
+                    if (!err.empty())
+                        fail("validate-defaults", where + ": " + err);
                 }
             }
         }
-        if (techs != 8) fail(c, "expected 8 static techs, got " + std::to_string(techs));
+        if (techs != 8)
+            fail(c, "expected 8 static techs, got " + std::to_string(techs));
     }
 
     // 2) 技术默认选择：空 tech_id + lossless → lossless_capable 技术
@@ -113,7 +125,8 @@ int main() {
         check(has(q, "epf") && !has(q, "modular_predictor"), c, "jxl lossy should pick vardct");
         const Slot webp = slot("webp", "libwebp", "lossless");
         const ParamSet w = default_params(*webp.f, "libwebp", "", true);
-        check(has(w, "exact") && !has(w, "sharp_yuv"), c, "webp lossless should pick lossless tech");
+        check(has(w, "exact") && !has(w, "sharp_yuv"), c,
+              "webp lossless should pick lossless tech");
         const ParamSet wl = default_params(*webp.f, "libwebp", "", false);
         check(has(wl, "sharp_yuv") && !has(wl, "exact"), c, "webp lossy should pick lossy tech");
     }
@@ -122,8 +135,8 @@ int main() {
     {
         const std::string c = "visible-quality-mode";
         const Slot j = slot("jpeg", "jpegli", "dct");
-        const ParamDef* dist = param_of(*j.t, "distance");
-        const ParamDef* qual = param_of(*j.t, "quality");
+        const ParamDef *dist = param_of(*j.t, "distance");
+        const ParamDef *qual = param_of(*j.t, "quality");
         check(dist && qual, c, "distance/quality ParamDef not found");
         if (dist && qual) {
             ParamSet s = default_params(*j.f, "jpegli", "dct", false);
@@ -137,16 +150,16 @@ int main() {
                   "missing quality_mode falls back to distance");
         }
         // 无谓词参数恒可见、恒不锁定
-        const ParamDef* chroma = param_of(*j.t, "chroma");
-        check(chroma && eval_visible(*chroma, ParamSet{}) && !eval_lock(*chroma, ParamSet{}),
-              c, "chroma should be always visible and never locked");
+        const ParamDef *chroma = param_of(*j.t, "chroma");
+        check(chroma && eval_visible(*chroma, ParamSet{}) && !eval_lock(*chroma, ParamSet{}), c,
+              "chroma should be always visible and never locked");
     }
 
     // 4) JPEG progressive>0 ⇒ optimize_coding 锁定 true（apply_locks 改写）
     {
         const std::string c = "lock-progressive";
         const Slot j = slot("jpeg", "jpegli", "dct");
-        const ParamDef* opt = param_of(*j.t, "optimize_coding");
+        const ParamDef *opt = param_of(*j.t, "optimize_coding");
         check(opt != nullptr, c, "optimize_coding not found");
         if (opt) {
             ParamSet s = default_params(*j.f, "jpegli", "dct", false);
@@ -160,7 +173,8 @@ int main() {
             const std::vector<std::string> changed = apply_locks(*j.f, "jpegli", "dct", false, s);
             check(contains(changed, "optimize_coding"), c,
                   "apply_locks should report optimize_coding, got [" + join(changed) + "]");
-            check(param_bool(s, "optimize_coding", false), c, "optimize_coding should be rewritten true");
+            check(param_bool(s, "optimize_coding", false), c,
+                  "optimize_coding should be rewritten true");
         }
     }
 
@@ -176,14 +190,15 @@ int main() {
               "changed=[" + join(changed) + "]");
         check(param_float(s, "distance", -1) == 0.0, c,
               "distance = " + std::to_string(param_float(s, "distance", -1)));
-        check(!param_bool(s, "modular_lossy_palette", true), c, "modular_lossy_palette should be false");
+        check(!param_bool(s, "modular_lossy_palette", true), c,
+              "modular_lossy_palette should be false");
         const std::vector<std::string> again = apply_locks(*jxl.f, "libjxl", "modular", true, s);
         check(again.empty(), c, "second apply_locks should be a no-op, got [" + join(again) + "]");
 
         const ParamSet locked = default_params(*jxl.f, "libjxl", "modular", true);
         check(has(locked, "__lossless"), c, "default_params must carry the __lossless key");
-        const ParamDef* md = param_of(*jxl.t, "distance");
-        const ParamDef* mp = param_of(*jxl.t, "modular_lossy_palette");
+        const ParamDef *md = param_of(*jxl.t, "distance");
+        const ParamDef *mp = param_of(*jxl.t, "modular_lossy_palette");
         const std::optional<ParamValue> dl = md ? eval_lock(*md, locked) : std::nullopt;
         check(dl && std::holds_alternative<double>(*dl) && std::get<double>(*dl) == 0.0, c,
               "eval_lock(modular distance, lossless) should be 0.0");
@@ -194,8 +209,8 @@ int main() {
               "lossy modular distance must not be locked");
 
         const Slot vd = slot("jxl", "libjxl", "vardct");
-        const ParamDef* epf = param_of(*vd.t, "epf");
-        const ParamDef* photon = param_of(*vd.t, "photon_noise");
+        const ParamDef *epf = param_of(*vd.t, "epf");
+        const ParamDef *photon = param_of(*vd.t, "photon_noise");
         const ParamSet vl = default_params(*vd.f, "libjxl", "vardct", true);
         const ParamSet vq = default_params(*vd.f, "libjxl", "vardct", false);
         check(epf && photon, c, "epf/photon_noise not found");
@@ -211,7 +226,7 @@ int main() {
     {
         const std::string c = "visible-webp-exact";
         const Slot w = slot("webp", "libwebp", "lossless");
-        const ParamDef* exact = param_of(*w.t, "exact");
+        const ParamDef *exact = param_of(*w.t, "exact");
         check(exact != nullptr, c, "exact not found");
         if (exact) {
             check(eval_visible(*exact, default_params(*w.f, "libwebp", "lossless", true)), c,
@@ -225,8 +240,8 @@ int main() {
     {
         const std::string c = "visible-tiff-compression";
         const Slot t = slot("tiff", "oiio", "codec");
-        const ParamDef* dl = param_of(*t.t, "deflate_level");
-        const ParamDef* pr = param_of(*t.t, "predictor");
+        const ParamDef *dl = param_of(*t.t, "deflate_level");
+        const ParamDef *pr = param_of(*t.t, "predictor");
         check(dl && pr, c, "deflate_level/predictor not found");
         if (dl && pr) {
             ParamSet s = default_params(*t.f, "oiio", "codec", true);
@@ -236,7 +251,8 @@ int main() {
             s["compression"] = std::string("none");
             check(!eval_visible(*dl, s) && !eval_visible(*pr, s), c, "none: both hidden");
             s.erase("compression");
-            check(!eval_visible(*dl, s) && eval_visible(*pr, s), c, "missing compression → lzw default");
+            check(!eval_visible(*dl, s) && eval_visible(*pr, s), c,
+                  "missing compression → lzw default");
         }
     }
 
@@ -246,25 +262,30 @@ int main() {
         ParamSet s = default_params(*e.f, "libjxl", "vardct", false);
         s["effort"] = int64_t(11);
         std::string err = validate_params(*e.f, "libjxl", "vardct", false, s);
-        check(!err.empty() && err.find("effort") != std::string::npos, "validate-range", "[" + err + "]");
+        check(!err.empty() && err.find("effort") != std::string::npos, "validate-range",
+              "[" + err + "]");
         s["effort"] = int64_t(1);
         s["distance"] = 99.0;
         err = validate_params(*e.f, "libjxl", "vardct", false, s);
-        check(!err.empty() && err.find("distance") != std::string::npos, "validate-range", "[" + err + "]");
+        check(!err.empty() && err.find("distance") != std::string::npos, "validate-range",
+              "[" + err + "]");
 
         const Slot j = slot("jpeg", "jpegli", "dct");
         ParamSet js = default_params(*j.f, "jpegli", "dct", false);
         js["quality_mode"] = std::string("bogus");
         err = validate_params(*j.f, "jpegli", "dct", false, js);
-        check(!err.empty() && err.find("quality_mode") != std::string::npos, "validate-enum", "[" + err + "]");
+        check(!err.empty() && err.find("quality_mode") != std::string::npos, "validate-enum",
+              "[" + err + "]");
         js["quality_mode"] = std::string("distance");
         js["chroma"] = int64_t(444);
         err = validate_params(*j.f, "jpegli", "dct", false, js);
-        check(!err.empty() && err.find("chroma") != std::string::npos, "validate-type", "[" + err + "]");
+        check(!err.empty() && err.find("chroma") != std::string::npos, "validate-type",
+              "[" + err + "]");
         js["chroma"] = std::string("444");
         js["quality"] = std::string("90");
         err = validate_params(*j.f, "jpegli", "dct", false, js);
-        check(!err.empty() && err.find("quality") != std::string::npos, "validate-type", "[" + err + "]");
+        check(!err.empty() && err.find("quality") != std::string::npos, "validate-type",
+              "[" + err + "]");
         js["quality"] = int64_t(90);
         err = validate_params(*j.f, "jpegli", "dct", false, js);
         check(err.empty(), "validate-type", "clean set should pass, got [" + err + "]");
@@ -277,7 +298,8 @@ int main() {
         js.erase("__anything");
         js["optimize_coding"] = std::string("yes");
         err = validate_params(*j.f, "jpegli", "dct", false, js);
-        check(!err.empty() && err.find("optimize_coding") != std::string::npos, "validate-type", "[" + err + "]");
+        check(!err.empty() && err.find("optimize_coding") != std::string::npos, "validate-type",
+              "[" + err + "]");
     }
     {
         const std::string c = "validate-tiff-tile";
@@ -299,7 +321,8 @@ int main() {
         s["tiff_tile_width"] = int64_t(0);
         s["tiff_tile_height"] = int64_t(96);
         err = validate_params(*t.f, "oiio", "codec", true, s);
-        check(!err.empty() && err.find("tiff_tile_height") != std::string::npos, c, "[" + err + "]");
+        check(!err.empty() && err.find("tiff_tile_height") != std::string::npos, c,
+              "[" + err + "]");
         // 未知后端 / 未知技术
         err = validate_params(*t.f, "bogus", "codec", true, s);
         check(!err.empty() && err.find("bogus") != std::string::npos, c, "[" + err + "]");
@@ -337,17 +360,18 @@ int main() {
     // 10) find_format / find_backend / find_tech：命中与未命中
     {
         const std::string c = "find-functions";
-        const FormatDef* jxl = find_format("jxl");
+        const FormatDef *jxl = find_format("jxl");
         check(jxl && jxl->id == "jxl", c, "find_format(jxl)");
         check(find_format("nope") == nullptr, c, "find_format(nope) should be null");
         check(find_format("") == nullptr, c, "find_format(\"\") should be null");
         if (jxl) {
-            const BackendDef* b = find_backend(*jxl, "libjxl");
+            const BackendDef *b = find_backend(*jxl, "libjxl");
             check(b && b->id == "libjxl", c, "find_backend(libjxl)");
-            check(find_backend(*jxl, "") == &jxl->backends.front(), c, "empty backend → first (首选)");
+            check(find_backend(*jxl, "") == &jxl->backends.front(), c,
+                  "empty backend → first (首选)");
             check(find_backend(*jxl, "nope") == nullptr, c, "find_backend(nope) should be null");
             if (b) {
-                const TechDef* t = find_tech(*b, "modular");
+                const TechDef *t = find_tech(*b, "modular");
                 check(t && t->id == "modular", c, "find_tech(modular)");
                 check(find_tech(*b, "") == &b->techs.front(), c, "empty tech → first");
                 check(find_tech(*b, "nope") == nullptr, c, "find_tech(nope) should be null");
@@ -364,7 +388,8 @@ int main() {
         const std::vector<std::string> added = fill_defaults(*jxl.f, "libjxl", "modular", false, s);
         check(!contains(added, "effort"), c, "existing key must not be reported");
         check(contains(added, "distance") && contains(added, "modular_predictor") &&
-                  contains(added, "color_transform"), c, "missing keys reported: [" + join(added) + "]");
+                  contains(added, "color_transform"),
+              c, "missing keys reported: [" + join(added) + "]");
         check(param_int(s, "effort", 0) == 3, c, "existing value preserved");
         check(s.size() == jxl.t->params.size(), c,
               "size " + std::to_string(s.size()) + " != " + std::to_string(jxl.t->params.size()));
@@ -391,7 +416,8 @@ int main() {
         check(has(def, "__lossless"), c, "default_params must still carry __lossless");
         const std::string def_snap = snapshot_params(def);
         check(def_snap.find("__lossless") == std::string::npos, c,
-              "reserved keys must be excluded from the snapshot; got [" + def_snap.substr(0, 60) + "...]");
+              "reserved keys must be excluded from the snapshot; got [" + def_snap.substr(0, 60) +
+                  "...]");
         ParamSet mixed;
         mixed["__lossless"] = true;
         mixed["effort"] = int64_t(7);
@@ -401,22 +427,26 @@ int main() {
     // 13) 静态位深允许集（M1-T2b：heif/avif = {8,10,12}；表只表达"允许集"，默认位深由调用方选）
     {
         const std::string c = "bitdepth-sets";
-        for (const char* id : {"heif", "avif"}) {
-            const FormatDef* f = find_format(id);
+        for (const char *id : {"heif", "avif"}) {
+            const FormatDef *f = find_format(id);
             check(f != nullptr, c, std::string(id) + " not found");
             if (f) {
                 for (const int d : {8, 10, 12})
-                    check(std::find(f->bitdepths.begin(), f->bitdepths.end(), d) != f->bitdepths.end(), c,
-                          std::string(id) + " must allow bitdepth " + std::to_string(d));
+                    check(std::find(f->bitdepths.begin(), f->bitdepths.end(), d) !=
+                              f->bitdepths.end(),
+                          c, std::string(id) + " must allow bitdepth " + std::to_string(d));
                 check(f->bitdepths.size() == 3, c,
-                      std::string(id) + " bitdepth set size = " + std::to_string(f->bitdepths.size()));
+                      std::string(id) +
+                          " bitdepth set size = " + std::to_string(f->bitdepths.size()));
             }
         }
-        const FormatDef* jpeg = find_format("jpeg");
-        check(jpeg && std::find(jpeg->bitdepths.begin(), jpeg->bitdepths.end(), 12) == jpeg->bitdepths.end(),
+        const FormatDef *jpeg = find_format("jpeg");
+        check(jpeg && std::find(jpeg->bitdepths.begin(), jpeg->bitdepths.end(), 12) ==
+                          jpeg->bitdepths.end(),
               c, "jpeg must not allow 12-bit output");
-        const FormatDef* png = find_format("png");
-        check(png && std::find(png->bitdepths.begin(), png->bitdepths.end(), 10) == png->bitdepths.end(),
+        const FormatDef *png = find_format("png");
+        check(png && std::find(png->bitdepths.begin(), png->bitdepths.end(), 10) ==
+                         png->bitdepths.end(),
               c, "png must not allow 10-bit output");
     }
 
@@ -454,9 +484,10 @@ int main() {
         const std::string c = "cross-jpeg-progressive";
         const Slot j = slot("jpeg", "jpegli", "dct");
         const ParamSet def = default_params(*j.f, "jpegli", "dct", false);
-        const bool def_both_true = param_bool(def, "progressive", false) &&
-                                   param_bool(def, "optimize_coding", false);
-        check(def_both_true, c, "前提失败：jpeg 默认值应为 (progressive=true, optimize_coding=true)");
+        const bool def_both_true =
+            param_bool(def, "progressive", false) && param_bool(def, "optimize_coding", false);
+        check(def_both_true, c,
+              "前提失败：jpeg 默认值应为 (progressive=true, optimize_coding=true)");
         // 关键防误报回归：默认态经 cross_validate 必须为空（§4 T5）
         std::vector<std::string> m = cross_validate(def, "jpeg", "dct");
         check(m.empty(), c, "jpeg 默认态不得报，[" + join(m) + "]");
@@ -477,7 +508,8 @@ int main() {
         ParamSet missing2 = def;
         missing2["optimize_coding"] = false;
         missing2.erase("progressive");
-        check(cross_validate(missing2, "jpeg", "dct").empty(), c, "缺 progressive 不应报（即使 optimize=false）");
+        check(cross_validate(missing2, "jpeg", "dct").empty(), c,
+              "缺 progressive 不应报（即使 optimize=false）");
         // 空集（pipeline 契约测试的既有调用形态）不得报
         check(cross_validate(ParamSet{}, "jpeg", "").empty(), c, "空参数集不应报");
     }
@@ -491,7 +523,7 @@ int main() {
         check(param_of(*jm.t, "epf") == nullptr && param_of(*jv.t, "epf") != nullptr, c,
               "前提失败：epf 应只由 vardct 声明");
         ParamSet cross = default_params(*jm.f, "libjxl", "modular", false);
-        cross["epf"] = int64_t(3);            // 人为塞入的"仅另一技术声明"的键
+        cross["epf"] = int64_t(3); // 人为塞入的"仅另一技术声明"的键
         cross["photon_noise"] = 0.01;
         std::vector<std::string> m = cross_validate(cross, "jxl", "modular");
         check(m.empty(), c, "跨技术键不得误报，[" + join(m) + "]");
@@ -501,7 +533,8 @@ int main() {
         ParamSet cross2 = default_params(*wl.f, "libwebp", "lossy", false);
         cross2["exact"] = true;
         check(cross_validate(cross2, "webp", "lossy").empty(), c,
-              "同 format 其它技术的键不得误报，[" + join(cross_validate(cross2, "webp", "lossy")) + "]");
+              "同 format 其它技术的键不得误报，[" + join(cross_validate(cross2, "webp", "lossy")) +
+                  "]");
         // 真未知键：单条
         ParamSet u = default_params(*slot("jpeg", "jpegli", "dct").f, "jpegli", "dct", false);
         u["bogus"] = std::string("1");
@@ -519,17 +552,18 @@ int main() {
         // 保留键（"__" 前缀）不参与判定
         u["__lossless"] = true;
         u["__anything"] = int64_t(1);
-        check(cross_validate(u, "jpeg", "dct") == m, c, "保留键不得判为未知，[" + join(cross_validate(u, "jpeg", "dct")) + "]");
+        check(cross_validate(u, "jpeg", "dct") == m, c,
+              "保留键不得判为未知，[" + join(cross_validate(u, "jpeg", "dct")) + "]");
         // 默认集（无残留）→ 空
-        check(cross_validate(default_params(*slot("png", "oiio", "deflate").f, "oiio", "deflate", true),
-                             "png", "deflate")
+        check(cross_validate(
+                  default_params(*slot("png", "oiio", "deflate").f, "oiio", "deflate", true), "png",
+                  "deflate")
                   .empty(),
               c, "默认集不应报");
         // 未知 format：无法判定 → 不报（格式名校验归 validate_params）
         check(cross_validate(u, "nope", "x").empty(), c, "未知 format 不应判未知参数");
         // 未知 backend/tech 但 format 合法：仍按该 format 的并集判定
-        check(cross_validate(cross, "jxl", "bogus-tech").empty(), c,
-              "未知 tech 不改变键并集判定");
+        check(cross_validate(cross, "jxl", "bogus-tech").empty(), c, "未知 tech 不改变键并集判定");
     }
 
     // 17) cross_validate 规则③ + libheif 运行时内省（heif/avif 静态表无技术）
@@ -543,7 +577,8 @@ int main() {
                         "cross_validate heif case skipped\n");
         } else {
             ParamSet s;
-            for (const ParamDef& p : live.front().techs.front().params) s[p.key] = p.def;
+            for (const ParamDef &p : live.front().techs.front().params)
+                s[p.key] = p.def;
             std::vector<std::string> m = cross_validate(s, "heif", "runtime");
             check(m.empty(), c, "内省声明的键不得判未知，[" + join(m) + "]");
             s["zz_bogus_key"] = int64_t(1);
@@ -552,7 +587,9 @@ int main() {
         }
     }
 
-    if (g_fail == 0) std::printf("test_params: OK\n");
-    else std::printf("test_params: %d failure(s)\n", g_fail);
+    if (g_fail == 0)
+        std::printf("test_params: OK\n");
+    else
+        std::printf("test_params: %d failure(s)\n", g_fail);
     return g_fail;
 }

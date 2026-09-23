@@ -38,7 +38,7 @@ std::string strip_dot(std::string_view s) {
 
 // Lexical absolute path (no symlink resolution): keeps mirror-path components exactly as the
 // user spelled them while still making prefix comparison meaningful.
-std::filesystem::path lexical_abs(const std::filesystem::path& p) {
+std::filesystem::path lexical_abs(const std::filesystem::path &p) {
     std::error_code ec;
     std::filesystem::path a = std::filesystem::absolute(p, ec);
     if (ec) {
@@ -48,7 +48,7 @@ std::filesystem::path lexical_abs(const std::filesystem::path& p) {
 }
 
 // weakly_canonical as required by §3.2 (falls back to lexical form when the call errors).
-std::filesystem::path weakly(const std::filesystem::path& p) {
+std::filesystem::path weakly(const std::filesystem::path &p) {
     std::error_code ec;
     std::filesystem::path c = std::filesystem::weakly_canonical(p, ec);
     if (ec) {
@@ -58,7 +58,7 @@ std::filesystem::path weakly(const std::filesystem::path& p) {
 }
 
 // Component-wise prefix test; both arguments must already be normalized.
-bool path_prefix(const std::filesystem::path& parent, const std::filesystem::path& child) {
+bool path_prefix(const std::filesystem::path &parent, const std::filesystem::path &child) {
     auto pit = parent.begin();
     auto cit = child.begin();
     for (; pit != parent.end(); ++pit, ++cit) {
@@ -69,19 +69,18 @@ bool path_prefix(const std::filesystem::path& parent, const std::filesystem::pat
     return true;
 }
 
-bool ext_matches(const std::filesystem::path& p, const std::set<std::string>& want) {
+bool ext_matches(const std::filesystem::path &p, const std::set<std::string> &want) {
     if (want.empty()) {
         return true;
     }
     return want.count(lower_copy(strip_dot(p.extension().string()))) != 0;
 }
 
-}  // namespace
+} // namespace
 
-std::filesystem::path mirror_path(const std::filesystem::path& src,
-                                  const std::filesystem::path& base_dir,
-                                  const std::filesystem::path& out_root,
-                                  std::string_view new_ext) {
+std::filesystem::path mirror_path(const std::filesystem::path &src,
+                                  const std::filesystem::path &base_dir,
+                                  const std::filesystem::path &out_root, std::string_view new_ext) {
     const std::filesystem::path src_abs = lexical_abs(src);
     const std::filesystem::path base_abs = lexical_abs(base_dir);
     std::filesystem::path rel;
@@ -93,9 +92,8 @@ std::filesystem::path mirror_path(const std::filesystem::path& src,
     return with_extension(out_root / rel, new_ext);
 }
 
-OutputPlan resolve_conflict(const std::filesystem::path& desired, ConflictPolicy policy,
-                            const std::vector<std::filesystem::path>& reserved,
-                            std::string& err) {
+OutputPlan resolve_conflict(const std::filesystem::path &desired, ConflictPolicy policy,
+                            const std::vector<std::filesystem::path> &reserved, std::string &err) {
     err.clear();
     OutputPlan plan;
     plan.out_path = desired;
@@ -103,10 +101,10 @@ OutputPlan resolve_conflict(const std::filesystem::path& desired, ConflictPolicy
     std::set<std::string> reserved_norm;
     // NOTE(perf): caching these normalized keys across calls would only matter for batches
     // beyond ~10k files; no bottleneck observed at current batch sizes.
-    for (const std::filesystem::path& r : reserved) {
+    for (const std::filesystem::path &r : reserved) {
         reserved_norm.insert(weakly(r).string());
     }
-    const auto taken = [&reserved_norm](const std::filesystem::path& p) {
+    const auto taken = [&reserved_norm](const std::filesystem::path &p) {
         std::error_code ec;
         if (std::filesystem::exists(p, ec)) {
             return true;
@@ -115,17 +113,17 @@ OutputPlan resolve_conflict(const std::filesystem::path& desired, ConflictPolicy
     };
 
     if (!taken(desired)) {
-        return plan;  // rename_index 0, skip false
+        return plan; // rename_index 0, skip false
     }
 
     switch (policy) {
-        case ConflictPolicy::Skip:
-            plan.skip = true;
-            return plan;
-        case ConflictPolicy::Overwrite:
-            return plan;  // caller overwrites desired in place
-        case ConflictPolicy::Rename:
-            break;
+    case ConflictPolicy::Skip:
+        plan.skip = true;
+        return plan;
+    case ConflictPolicy::Overwrite:
+        return plan; // caller overwrites desired in place
+    case ConflictPolicy::Rename:
+        break;
     }
 
     const std::string stem = desired.stem().string();
@@ -143,7 +141,7 @@ OutputPlan resolve_conflict(const std::filesystem::path& desired, ConflictPolicy
     return plan;
 }
 
-bool is_inside(const std::filesystem::path& child, const std::filesystem::path& parent) {
+bool is_inside(const std::filesystem::path &child, const std::filesystem::path &parent) {
     if (child.empty() || parent.empty()) {
         return false;
     }
@@ -152,11 +150,11 @@ bool is_inside(const std::filesystem::path& child, const std::filesystem::path& 
     return path_prefix(p, c);
 }
 
-std::vector<std::filesystem::path> collect_inputs(const std::vector<std::filesystem::path>& roots,
-                                                  const std::vector<std::string>& exts,
-                                                  std::vector<std::string>& errors) {
+std::vector<std::filesystem::path> collect_inputs(const std::vector<std::filesystem::path> &roots,
+                                                  const std::vector<std::string> &exts,
+                                                  std::vector<std::string> &errors) {
     std::set<std::string> want;
-    for (const std::string& e : exts) {
+    for (const std::string &e : exts) {
         const std::string l = lower_copy(strip_dot(e));
         if (!l.empty()) {
             want.insert(l);
@@ -166,14 +164,14 @@ std::vector<std::filesystem::path> collect_inputs(const std::vector<std::filesys
     std::vector<std::filesystem::path> found;
     std::set<std::string> seen;
 
-    const auto push_file = [&found, &seen](const std::filesystem::path& p) {
+    const auto push_file = [&found, &seen](const std::filesystem::path &p) {
         const std::string key = lexical_abs(p).string();
         if (seen.insert(key).second) {
             found.push_back(p);
         }
     };
 
-    for (const std::filesystem::path& root : roots) {
+    for (const std::filesystem::path &root : roots) {
         std::error_code ec;
         const std::filesystem::file_status st = std::filesystem::status(root, ec);
         if (ec || !std::filesystem::exists(st)) {
@@ -194,45 +192,45 @@ std::vector<std::filesystem::path> collect_inputs(const std::vector<std::filesys
             // NOTE(limit): optional follow-symlink mode + progress callback for huge trees is
             // out of scope — symlink-cycle risk outweighs the benefit.
             const auto opts = std::filesystem::directory_options::skip_permission_denied;
-            for (const std::filesystem::directory_entry& entry :
+            for (const std::filesystem::directory_entry &entry :
                  std::filesystem::recursive_directory_iterator(root, opts)) {
                 std::error_code fec;
                 if (!entry.is_regular_file(fec) || fec) {
-                    continue;  // directories, symlinks to nowhere, unreadable entries
+                    continue; // directories, symlinks to nowhere, unreadable entries
                 }
                 if (ext_matches(entry.path(), want)) {
                     push_file(entry.path());
                 }
             }
-        } catch (const std::filesystem::filesystem_error& e) {
+        } catch (const std::filesystem::filesystem_error &e) {
             errors.push_back("cannot read directory: " + root.string() + ": " + e.what());
         }
     }
 
     std::sort(found.begin(), found.end(),
-              [](const std::filesystem::path& a, const std::filesystem::path& b) {
+              [](const std::filesystem::path &a, const std::filesystem::path &b) {
                   return a.string() < b.string();
               });
     return found;
 }
 
-const std::vector<std::string>& input_extensions() {
+const std::vector<std::string> &input_extensions() {
     // §3.2 comment says "10 种输入" but lists 13 extensions; all 13 are delivered (M1-T1 report).
     static const std::vector<std::string> exts = {
-        "tif",  "tiff", "png", "jpg",  "jpeg", "jxl", "heic",
+        "tif",  "tiff", "png",  "jpg", "jpeg", "jxl", "heic",
         "heif", "avif", "webp", "bmp", "gif",  "tga",
     };
     return exts;
 }
 
-std::filesystem::path with_extension(const std::filesystem::path& p, std::string_view new_ext) {
+std::filesystem::path with_extension(const std::filesystem::path &p, std::string_view new_ext) {
     const std::string ext = strip_dot(new_ext);
     if (ext.empty()) {
-        return p;  // keep the original extension (§3.2 mirror_path rule)
+        return p; // keep the original extension (§3.2 mirror_path rule)
     }
     std::filesystem::path out = p;
     out.replace_extension("." + ext);
     return out;
 }
 
-}  // namespace pp
+} // namespace pp

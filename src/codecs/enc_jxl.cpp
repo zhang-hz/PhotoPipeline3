@@ -58,9 +58,8 @@ double ms_since(std::chrono::steady_clock::time_point t0) {
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 }
 
-const char* status_name(JxlEncoderStatus st) {
-    return st == JXL_ENC_SUCCESS ? "SUCCESS"
-                                 : (st == JXL_ENC_ERROR ? "ERROR" : "NEED_MORE_OUTPUT");
+const char *status_name(JxlEncoderStatus st) {
+    return st == JXL_ENC_SUCCESS ? "SUCCESS" : (st == JXL_ENC_ERROR ? "ERROR" : "NEED_MORE_OUTPUT");
 }
 
 // ------------------------------------------------------------- params table --
@@ -111,7 +110,7 @@ constexpr JxlParamMap kFrameSettings[] = {
 constexpr std::string_view kSpecialKeys[] = {"distance", "codestream_level", "color_transform"};
 
 bool known_key(std::string_view key) {
-    for (const JxlParamMap& m : kFrameSettings) {
+    for (const JxlParamMap &m : kFrameSettings) {
         if (m.key == key) {
             return true;
         }
@@ -127,11 +126,11 @@ bool known_key(std::string_view key) {
 // E9: unrecognised keys are ignored (never fatal) and recorded as a warning log
 // line. WarningKind (M0 PP-FROZEN types.h) has no "unknown parameter" member and
 // warnings must not carry encoder failures, so the log is the faithful channel.
-void warn_unknown_params(const ParamSet& s) {
-    for (const auto& [key, value] : s) {
+void warn_unknown_params(const ParamSet &s) {
+    for (const auto &[key, value] : s) {
         (void)value;
         if (key.rfind("__", 0) == 0) {
-            continue;  // reserved keys (§3.4 convention)
+            continue; // reserved keys (§3.4 convention)
         }
         if (!known_key(key)) {
             log_warn("Encode", kLogFile, "unknown parameter ignored",
@@ -143,15 +142,15 @@ void warn_unknown_params(const ParamSet& s) {
 // ------------------------------------------------------------------ pixels --
 struct Raster {
     int width = 0, height = 0, channels = 0;
-    std::vector<float> px;  // interleaved float32
+    std::vector<float> px; // interleaved float32
 };
 
-bool fetch_raster(const OIIO::ImageBuf& img, Raster& out, std::string& err) {
+bool fetch_raster(const OIIO::ImageBuf &img, Raster &out, std::string &err) {
     if (!img.initialized()) {
         err = "input image buffer is not initialized";
         return false;
     }
-    const OIIO::ImageSpec& spec = img.spec();
+    const OIIO::ImageSpec &spec = img.spec();
     const int channels = spec.nchannels;
     if (channels < 1 || channels > 4) {
         err = "unsupported channel count: " + std::to_string(channels) + " (expected 1..4)";
@@ -170,7 +169,7 @@ bool fetch_raster(const OIIO::ImageBuf& img, Raster& out, std::string& err) {
     out.px.assign(static_cast<std::size_t>(w) * static_cast<std::size_t>(h) *
                       static_cast<std::size_t>(channels),
                   0.0f);
-    const OIIO::span<std::byte> bytes(reinterpret_cast<std::byte*>(out.px.data()),
+    const OIIO::span<std::byte> bytes(reinterpret_cast<std::byte *>(out.px.data()),
                                       out.px.size() * sizeof(float));
     if (!img.get_pixels(roi, OIIO::TypeDesc::FLOAT, bytes)) {
         err = img.geterror();
@@ -185,7 +184,7 @@ bool fetch_raster(const OIIO::ImageBuf& img, Raster& out, std::string& err) {
 // E6: standard rounding, no dithering, clamp to [0,1].
 uint8_t to_u8(float v) {
     if (!(v > 0.0f)) {
-        return 0;  // also catches NaN
+        return 0; // also catches NaN
     }
     if (v >= 1.0f) {
         return 255;
@@ -205,23 +204,23 @@ uint16_t to_u16(float v) {
 
 // ------------------------------------------------------------------ encoder --
 struct JxlEncoderDeleter {
-    void operator()(JxlEncoder* enc) const { JxlEncoderDestroy(enc); }
+    void operator()(JxlEncoder *enc) const { JxlEncoderDestroy(enc); }
 };
 using JxlEncoderPtr = std::unique_ptr<JxlEncoder, JxlEncoderDeleter>;
 
 class JxlEncoderImpl final : public IEncoder {
 public:
-    const FormatDef& format() const override {
-        static const FormatDef* def = find_format(kFormatId);
+    const FormatDef &format() const override {
+        static const FormatDef *def = find_format(kFormatId);
         assert(def != nullptr);
         return *def;
     }
 
-    EncodeResult encode(const EncodeRequest& req) override {
+    EncodeResult encode(const EncodeRequest &req) override {
         // E8: no exception crosses the IEncoder boundary.
         try {
             return encode_impl(req);
-        } catch (const std::exception& e) {
+        } catch (const std::exception &e) {
             return encode_error(std::string("jxl: internal error: ") + e.what());
         } catch (...) {
             return encode_error("jxl: unknown internal error");
@@ -229,9 +228,9 @@ public:
     }
 
 private:
-    static EncodeResult encode_impl(const EncodeRequest& req) {
+    static EncodeResult encode_impl(const EncodeRequest &req) {
         const auto t0 = std::chrono::steady_clock::now();
-        const ParamSet& params = req.params;
+        const ParamSet &params = req.params;
 
         if (req.out_bitdepth != 8 && req.out_bitdepth != 16) {
             return encode_error("jxl: out_bitdepth " + std::to_string(req.out_bitdepth) +
@@ -248,7 +247,7 @@ private:
         // (built from the modular tech) also selects the Modular path.
         const bool lossless = param_bool(params, "__lossless", false);
         bool modular_params = false;
-        for (const JxlParamMap& m : kFrameSettings) {
+        for (const JxlParamMap &m : kFrameSettings) {
             if (m.tech == Tech::Modular && params.find(std::string(m.key)) != params.end()) {
                 modular_params = true;
                 break;
@@ -289,7 +288,8 @@ private:
         // Container always on (E7: metadata boxes need BMFF).
         st = JxlEncoderUseContainer(enc.get(), JXL_TRUE);
         if (st != JXL_ENC_SUCCESS) {
-            return encode_error(std::string("jxl: JxlEncoderUseContainer failed: ") + status_name(st));
+            return encode_error(std::string("jxl: JxlEncoderUseContainer failed: ") +
+                                status_name(st));
         }
 
         // Boxes are announced before encoding starts (libjxl >= 0.11 requirement).
@@ -319,7 +319,8 @@ private:
         info.uses_original_profile = (lossless || modular || has_icc) ? JXL_TRUE : JXL_FALSE;
         st = JxlEncoderSetBasicInfo(enc.get(), &info);
         if (st != JXL_ENC_SUCCESS) {
-            return encode_error(std::string("jxl: JxlEncoderSetBasicInfo failed: ") + status_name(st));
+            return encode_error(std::string("jxl: JxlEncoderSetBasicInfo failed: ") +
+                                status_name(st));
         }
 
         if (alpha) {
@@ -339,7 +340,7 @@ private:
         // E5: ICC profile when present, otherwise an explicit sRGB (nclx) encoding.
         if (has_icc) {
             st = JxlEncoderSetICCProfile(
-                enc.get(), reinterpret_cast<const uint8_t*>(req.meta.icc_profile.data()),
+                enc.get(), reinterpret_cast<const uint8_t *>(req.meta.icc_profile.data()),
                 req.meta.icc_profile.size());
             if (st != JXL_ENC_SUCCESS) {
                 return encode_error(std::string("jxl: JxlEncoderSetICCProfile failed: ") +
@@ -363,7 +364,7 @@ private:
                                 ") failed: " + status_name(st));
         }
 
-        JxlEncoderFrameSettings* fs = JxlEncoderFrameSettingsCreate(enc.get(), nullptr);
+        JxlEncoderFrameSettings *fs = JxlEncoderFrameSettingsCreate(enc.get(), nullptr);
         if (fs == nullptr) {
             return encode_error("jxl: JxlEncoderFrameSettingsCreate failed");
         }
@@ -380,42 +381,42 @@ private:
         // options; libjxl 0.11.2 rejects an explicit -1 for several of them
         // (measured: CHANNEL_COLORS_GLOBAL_PERCENT → JXL_ENC_ERROR), so the
         // sentinel means "leave the library default in place".
-        for (const JxlParamMap& m : kFrameSettings) {
+        for (const JxlParamMap &m : kFrameSettings) {
             if (params.find(std::string(m.key)) == params.end()) {
                 continue;
             }
             if (m.tech == Tech::VarDct && modular) {
-                continue;  // VarDCT-only option: not applicable on the Modular path
+                continue; // VarDCT-only option: not applicable on the Modular path
             }
             if (m.tech == Tech::Modular && !modular) {
                 continue;
             }
             switch (m.kind) {
-                case ParamKind::Float: {
-                    const double v = param_float(params, m.key, 0.0);
-                    if (v < 0.0) {
-                        continue;  // -1 = library default (e.g. photon noise off)
-                    }
-                    st = JxlEncoderFrameSettingsSetFloatOption(fs, m.id, static_cast<float>(v));
-                    break;
+            case ParamKind::Float: {
+                const double v = param_float(params, m.key, 0.0);
+                if (v < 0.0) {
+                    continue; // -1 = library default (e.g. photon noise off)
                 }
-                case ParamKind::Bool: {
-                    const int64_t v = param_bool(params, m.key, false) ? 1 : 0;
-                    st = JxlEncoderFrameSettingsSetOption(fs, m.id, v);
-                    break;
+                st = JxlEncoderFrameSettingsSetFloatOption(fs, m.id, static_cast<float>(v));
+                break;
+            }
+            case ParamKind::Bool: {
+                const int64_t v = param_bool(params, m.key, false) ? 1 : 0;
+                st = JxlEncoderFrameSettingsSetOption(fs, m.id, v);
+                break;
+            }
+            case ParamKind::Int: {
+                const int64_t v = param_int(params, m.key, 0);
+                if (v < 0) {
+                    continue; // -1 = library default
                 }
-                case ParamKind::Int: {
-                    const int64_t v = param_int(params, m.key, 0);
-                    if (v < 0) {
-                        continue;  // -1 = library default
-                    }
-                    st = JxlEncoderFrameSettingsSetOption(fs, m.id, v);
-                    break;
-                }
+                st = JxlEncoderFrameSettingsSetOption(fs, m.id, v);
+                break;
+            }
             }
             if (st != JXL_ENC_SUCCESS) {
-                return encode_error("jxl: option " + std::string(m.key) + " rejected: " +
-                                    status_name(st));
+                return encode_error("jxl: option " + std::string(m.key) +
+                                    " rejected: " + status_name(st));
             }
         }
 
@@ -424,18 +425,19 @@ private:
         if (modular) {
             const std::string ct = param_str(params, "color_transform", "YCoCg");
             int64_t id = JXL_ENC_FRAME_SETTING_COLOR_TRANSFORM;
-            int64_t value = 1;  // None
+            int64_t value = 1; // None
             if (ct == "XYB") {
                 value = 0;
             } else if (ct == "None") {
                 value = 1;
             } else if (ct == "YCbCr") {
                 value = 2;
-            } else {  // YCoCg (default)
+            } else { // YCoCg (default)
                 id = JXL_ENC_FRAME_SETTING_MODULAR_COLOR_SPACE;
                 value = 6;
             }
-            st = JxlEncoderFrameSettingsSetOption(fs, static_cast<JxlEncoderFrameSettingId>(id), value);
+            st = JxlEncoderFrameSettingsSetOption(fs, static_cast<JxlEncoderFrameSettingId>(id),
+                                                  value);
             if (st != JXL_ENC_SUCCESS) {
                 return encode_error("jxl: color_transform=" + ct + " rejected: " + status_name(st));
             }
@@ -466,7 +468,7 @@ private:
                                  static_cast<std::size_t>(r.channels);
         std::vector<uint8_t> pixels8;
         std::vector<uint16_t> pixels16;
-        const void* pixel_data = nullptr;
+        const void *pixel_data = nullptr;
         std::size_t pixel_bytes = 0;
         if (req.out_bitdepth == 16) {
             pixels16.resize(npix);
@@ -492,14 +494,15 @@ private:
 
         st = JxlEncoderAddImageFrame(fs, &pf, pixel_data, pixel_bytes);
         if (st != JXL_ENC_SUCCESS) {
-            return encode_error(std::string("jxl: JxlEncoderAddImageFrame failed: ") + status_name(st));
+            return encode_error(std::string("jxl: JxlEncoderAddImageFrame failed: ") +
+                                status_name(st));
         }
 
         // E7: Exif box payload = 4-byte TIFF offset prefix + TIFF blob (M0 order).
         if (have_exif) {
             std::string box(4, '\0');
             box += req.meta.exif_blob;
-            st = JxlEncoderAddBox(enc.get(), "Exif", reinterpret_cast<const uint8_t*>(box.data()),
+            st = JxlEncoderAddBox(enc.get(), "Exif", reinterpret_cast<const uint8_t *>(box.data()),
                                   box.size(), JXL_FALSE);
             if (st != JXL_ENC_SUCCESS) {
                 return encode_error(std::string("jxl: JxlEncoderAddBox(Exif) failed: ") +
@@ -508,7 +511,7 @@ private:
         }
         if (have_xmp) {
             st = JxlEncoderAddBox(enc.get(), "xml ",
-                                  reinterpret_cast<const uint8_t*>(req.meta.xmp_rdf.data()),
+                                  reinterpret_cast<const uint8_t *>(req.meta.xmp_rdf.data()),
                                   req.meta.xmp_rdf.size(), JXL_FALSE);
             if (st != JXL_ENC_SUCCESS) {
                 return encode_error(std::string("jxl: JxlEncoderAddBox(xml) failed: ") +
@@ -521,7 +524,7 @@ private:
         JxlEncoderCloseInput(enc.get());
 
         std::vector<uint8_t> out(1u << 16);
-        uint8_t* next = out.data();
+        uint8_t *next = out.data();
         std::size_t avail = out.size();
         for (;;) {
             st = JxlEncoderProcessOutput(enc.get(), &next, &avail);
@@ -543,7 +546,7 @@ private:
         }
 
         const std::string path = req.out_path.string();
-        std::FILE* fp = std::fopen(path.c_str(), "wb");
+        std::FILE *fp = std::fopen(path.c_str(), "wb");
         if (fp == nullptr) {
             return encode_error("jxl: cannot open output file: " + path);
         }
@@ -562,11 +565,11 @@ private:
 
 std::unique_ptr<IEncoder> make_jxl() { return std::make_unique<JxlEncoderImpl>(); }
 
-}  // namespace
+} // namespace
 
 PP_REGISTER_ENCODER("jxl", "libjxl", make_jxl);
 
-}  // namespace pp
+} // namespace pp
 
 // Link anchor: referenced by encoders.cpp (static-library dead-stripping guard).
 extern "C" void pp_link_encoder_jxl() {}

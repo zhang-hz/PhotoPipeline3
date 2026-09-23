@@ -52,7 +52,8 @@ TargetSize fit_target(int w, int h, int target) {
     assert(w > 0 && h > 0 && target > 0);
     const double scale =
         std::min({1.0, static_cast<double>(target) / w, static_cast<double>(target) / h});
-    if (scale >= 1.0) return {w, h};
+    if (scale >= 1.0)
+        return {w, h};
     TargetSize ts;
     ts.w = std::clamp(static_cast<int>(std::lround(w * scale)), 1, target);
     ts.h = std::clamp(static_cast<int>(std::lround(h * scale)), 1, target);
@@ -65,37 +66,42 @@ std::uint8_t to_u8(float v) {
 
 // Decode 1..4 channel float pixels into 8-bit RGBA on a white background, downsampled so
 // that the longest edge is <= target (steps 4/5). Returns false if no thumbnail can be made.
-bool to_rgba8(const OIIO::ImageBuf& src, int target, ThumbImage& out) {
-    if (!src.initialized()) return false;
-    const OIIO::ImageSpec& spec = src.spec();
+bool to_rgba8(const OIIO::ImageBuf &src, int target, ThumbImage &out) {
+    if (!src.initialized())
+        return false;
+    const OIIO::ImageSpec &spec = src.spec();
     const int sw = spec.width;
     const int sh = spec.height;
     const int nch = spec.nchannels;
-    if (sw <= 0 || sh <= 0) return false;
-    assert(nch >= 1 && nch <= 4);  // pp::decode_float()/the preview reader enforce 1..4
-    if (nch < 1 || nch > 4) return false;
+    if (sw <= 0 || sh <= 0)
+        return false;
+    assert(nch >= 1 && nch <= 4); // pp::decode_float()/the preview reader enforce 1..4
+    if (nch < 1 || nch > 4)
+        return false;
 
     const TargetSize ts = fit_target(sw, sh, target);
-    const OIIO::ROI roi(0, ts.w, 0, ts.h);  // destination ROI (== whole image)
+    const OIIO::ROI roi(0, ts.w, 0, ts.h); // destination ROI (== whole image)
 
     OIIO::ImageBuf scaled;
-    const OIIO::ImageBuf* work = &src;
+    const OIIO::ImageBuf *work = &src;
     if (ts.w != sw || ts.h != sh) {
         OIIO::ImageBuf dst(OIIO::ImageSpec(ts.w, ts.h, nch, OIIO::TypeFloat));
-        if (!OIIO::ImageBufAlgo::resample(dst, src, /*interpolate=*/true, roi)) return false;
+        if (!OIIO::ImageBufAlgo::resample(dst, src, /*interpolate=*/true, roi))
+            return false;
         scaled = std::move(dst);
         work = &scaled;
     }
 
     const std::size_t pixels = static_cast<std::size_t>(ts.w) * static_cast<std::size_t>(ts.h);
     std::vector<float> px(pixels * static_cast<std::size_t>(nch));
-    if (!work->get_pixels(roi, OIIO::TypeFloat, px.data())) return false;
+    if (!work->get_pixels(roi, OIIO::TypeFloat, px.data()))
+        return false;
 
     out.width = ts.w;
     out.height = ts.h;
-    out.rgba.assign(pixels * 4, 255);  // alpha is composited away -> always 255
+    out.rgba.assign(pixels * 4, 255); // alpha is composited away -> always 255
     for (std::size_t i = 0; i < pixels; ++i) {
-        const float* p = px.data() + i * static_cast<std::size_t>(nch);
+        const float *p = px.data() + i * static_cast<std::size_t>(nch);
         float r = p[0];
         float g = p[0];
         float b = p[0];
@@ -103,9 +109,10 @@ bool to_rgba8(const OIIO::ImageBuf& src, int target, ThumbImage& out) {
         if (nch >= 3) {
             g = p[1];
             b = p[2];
-            if (nch == 4) a = p[3];
+            if (nch == 4)
+                a = p[3];
         } else if (nch == 2) {
-            a = p[1];  // gray + alpha
+            a = p[1]; // gray + alpha
         }
         // alpha -> white composite (§2.1 step 5)
         a = std::clamp(a, 0.0f, 1.0f);
@@ -115,7 +122,7 @@ bool to_rgba8(const OIIO::ImageBuf& src, int target, ThumbImage& out) {
             g = g * a + bg;
             b = b * a + bg;
         }
-        std::uint8_t* q = out.rgba.data() + i * 4;
+        std::uint8_t *q = out.rgba.data() + i * 4;
         q[0] = to_u8(r);
         q[1] = to_u8(g);
         q[2] = to_u8(b);
@@ -125,15 +132,17 @@ bool to_rgba8(const OIIO::ImageBuf& src, int target, ThumbImage& out) {
 
 // Decode an in-memory embedded preview to float32 and turn it into a thumbnail. `data` must
 // stay alive for the call (the ImageInput borrows it through the IOProxy).
-bool preview_bytes_to_thumb(const void* data, std::size_t size, const std::string& name_hint,
-                            int target, ThumbImage& out) {
-    if (data == nullptr || size == 0) return false;
+bool preview_bytes_to_thumb(const void *data, std::size_t size, const std::string &name_hint,
+                            int target, ThumbImage &out) {
+    if (data == nullptr || size == 0)
+        return false;
 
     OIIO::Filesystem::IOMemReader reader(data, size);
     auto in = OIIO::ImageInput::open(name_hint, nullptr, &reader);
-    if (!in) return false;
+    if (!in)
+        return false;
 
-    const OIIO::ImageSpec spec = in->spec();  // copy: still valid after close()
+    const OIIO::ImageSpec spec = in->spec(); // copy: still valid after close()
     if (spec.width <= 0 || spec.height <= 0 || spec.nchannels < 1 || spec.nchannels > 4) {
         in->close();
         return false;
@@ -143,7 +152,8 @@ bool preview_bytes_to_thumb(const void* data, std::size_t size, const std::strin
                           static_cast<std::size_t>(spec.nchannels));
     const bool ok = in->read_image(0, 0, 0, spec.nchannels, OIIO::TypeFloat, px.data());
     in->close();
-    if (!ok) return false;
+    if (!ok)
+        return false;
 
     // The spec must describe the memory actually handed to the ImageBuf: float32, own copy.
     OIIO::ImageSpec fspec = spec;
@@ -158,12 +168,14 @@ bool preview_bytes_to_thumb(const void* data, std::size_t size, const std::strin
 // §2.1 step 2: largest embedded preview with a long edge >= 64 px. Exiv2 fills width/height
 // by decoding the preview itself, so 0 (unknown) means "cannot check the rule" -> skip; the
 // full decode below still produces a valid thumbnail in that case.
-bool find_preview(const Exiv2::Image& image, Exiv2::PreviewProperties& out) {
+bool find_preview(const Exiv2::Image &image, Exiv2::PreviewProperties &out) {
     const Exiv2::PreviewManager manager(image);
-    const Exiv2::PreviewPropertiesList props = manager.getPreviewProperties();  // ascending
+    const Exiv2::PreviewPropertiesList props = manager.getPreviewProperties(); // ascending
     for (auto it = props.rbegin(); it != props.rend(); ++it) {
-        if (it->width_ == 0 || it->height_ == 0) continue;
-        if (std::max(it->width_, it->height_) < kMinPreviewLongEdge) continue;
+        if (it->width_ == 0 || it->height_ == 0)
+            continue;
+        if (std::max(it->width_, it->height_) < kMinPreviewLongEdge)
+            continue;
         out = *it;
         return true;
     }
@@ -173,36 +185,40 @@ bool find_preview(const Exiv2::Image& image, Exiv2::PreviewProperties& out) {
 // Returns true only when a usable thumbnail was produced from an embedded preview; every
 // failure (no Exiv2 support for the container, no preview, undecodable preview) falls
 // through silently to the full decode (step 3).
-bool try_embedded_preview(const std::filesystem::path& src, int target, ThumbImage& out) {
+bool try_embedded_preview(const std::filesystem::path &src, int target, ThumbImage &out) {
     try {
         Exiv2::Image::UniquePtr image = Exiv2::ImageFactory::open(src.string());
-        if (!image) return false;
+        if (!image)
+            return false;
         image->readMetadata();
 
         Exiv2::PreviewProperties props;
-        if (!find_preview(*image, props)) return false;
+        if (!find_preview(*image, props))
+            return false;
 
         const Exiv2::PreviewManager manager(*image);
         const Exiv2::PreviewImage preview = manager.getPreviewImage(props);
-        if (preview.pData() == nullptr || preview.size() == 0) return false;
+        if (preview.pData() == nullptr || preview.size() == 0)
+            return false;
 
         std::string hint = "embedded-preview";
         hint += preview.extension().empty() ? std::string(".jpg") : preview.extension();
         return preview_bytes_to_thumb(preview.pData(), preview.size(), hint, target, out);
-    } catch (const Exiv2::Error&) {
+    } catch (const Exiv2::Error &) {
         return false;
-    } catch (const std::exception&) {
+    } catch (const std::exception &) {
         return false;
     } catch (...) {
         return false;
     }
 }
 
-}  // namespace
+} // namespace
 
-ThumbOutcome make_thumbnail(const std::filesystem::path& src, int target_long_edge) {
-    assert(target_long_edge > 0);  // internal invariant (UI default: 96)
-    if (target_long_edge <= 0) target_long_edge = 1;  // defensive; keeps fit_target's clamp sane
+ThumbOutcome make_thumbnail(const std::filesystem::path &src, int target_long_edge) {
+    assert(target_long_edge > 0); // internal invariant (UI default: 96)
+    if (target_long_edge <= 0)
+        target_long_edge = 1; // defensive; keeps fit_target's clamp sane
 
     ThumbOutcome out;
 
@@ -230,7 +246,7 @@ ThumbOutcome make_thumbnail(const std::filesystem::path& src, int target_long_ed
     //           reduced-resolution decode (ImageCache/mip level) is not needed for M2.
     const DecodeOutcome decoded = decode_float(src, probe.info);
     if (!decoded.error.empty() || !decoded.buf.initialized()) {
-        return out;  // 4) thumb empty, error stays empty (probe itself succeeded)
+        return out; // 4) thumb empty, error stays empty (probe itself succeeded)
     }
     thumb = ThumbImage{};
     if (to_rgba8(decoded.buf, target_long_edge, thumb)) {
@@ -240,4 +256,4 @@ ThumbOutcome make_thumbnail(const std::filesystem::path& src, int target_long_ed
     return out;
 }
 
-}  // namespace pp
+} // namespace pp

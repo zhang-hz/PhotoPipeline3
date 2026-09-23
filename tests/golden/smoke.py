@@ -8,12 +8,19 @@ M2-T8: assertion level, docs/m2-tasks.md §4 T8 ②).
 tests/golden/smoke/<case>.json (SCHEMA.md): pixels + metadata values (M2-T8 normalisation,
 #26 landed) + the WarningKind list from the .pp.json sidecar.
 
-usage: python tests/golden/smoke.py [BUILD_DIR]
+usage: python tests/golden/smoke.py [BUILD_DIR] [--cases a,b,c]
   BUILD_DIR   default <repo>/build/release   (must be configured with -DPP_BUILD_DEV=ON)
+  --cases     optional subset of case names (comma-separated); default = all pairs.
+              PP_CASES=<a,b,c> in the environment is the equivalent switch (--cases wins).
   PP_BIN      default <BUILD_DIR>/photopipeline
   PP_VERIFY   default <BUILD_DIR>/pp_verify
   OUT_ROOT    default <repo>/.cache/out-smoke
-exit code = number of failed cases (0 = all OK)
+exit code = number of failed cases (0 = all OK); 2 = usage error (unknown case name …)
+
+M4-T4（D14 pr-fast 金样子集，docs/v0.3.0-design.md §12.3/§12.2）:
+  * `--cases`/`PP_CASES` 只**筛选**用例，断言/容差/输出目录与全量完全同源（金样只增不减）。
+  * 不带开关 = 全量 16 对，控制台输出逐字不变（含冻结行）。
+  * 子集生效时追加一行 `smoke: 子集 …`，冻结行 `SMOKE total=…` 语义不变（total=选中例数）。
 
 M3-W3（裁定 D3：Python 单实现，本文件替代 tests/golden/smoke.sh）:
   * PP_BIN/PP_VERIFY 按 name / name + '.exe' 双探测（Windows 产物带 .exe）
@@ -28,14 +35,83 @@ import sys
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
+USAGE = ("用法: python tests/golden/smoke.py [BUILD_DIR] [--cases a,b,c]\n"
+         "      （子集开关等价环境变量: PP_CASES=a,b,c；不带开关 = 全量）\n")
+
+
+def parse_argv(argv):
+    """[BUILD_DIR] + --cases/--cases=<spec> 解析 → (build_arg, cases_spec)。
+
+    历史命令行（`smoke.py <BUILD_DIR>`）行为逐字不变；未知选项 → usage 错误（exit 2）。
+    """
+    build = ''
+    spec = None
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == '--cases':
+            i += 1
+            if i >= len(argv):
+                print('smoke: --cases 缺少参数', file=sys.stderr)
+                raise SystemExit(2)
+            spec = argv[i]
+        elif arg.startswith('--cases='):
+            spec = arg.split('=', 1)[1]
+        elif arg in ('-h', '--help'):
+            sys.stdout.write(USAGE)
+            raise SystemExit(0)
+        elif arg.startswith('-'):
+            print('smoke: 未知选项 {}'.format(arg), file=sys.stderr)
+            sys.stderr.write(USAGE)
+            raise SystemExit(2)
+        elif build:
+            print('smoke: 多余的参数 {}（BUILD_DIR 只接受一个）'.format(arg), file=sys.stderr)
+            raise SystemExit(2)
+        else:
+            build = arg
+        i += 1
+    return build, spec
+
+
+def select_cases(spec, cases):
+    """按 spec（逗号分隔 case 名）从 cases 里选出子集。
+
+    spec is None（未给开关）→ 原样返回（全量，默认行为零变化）。spec 给空/全是逗号 →
+    usage 错误（exit 2），避免"变量为空 → 子集悄悄变空 → 假绿"。未知 case 名同理（exit 2）。
+    """
+    if spec is None:
+        return list(cases)
+    known = {}
+    for entry in cases:
+        known[entry.split('|')[0]] = entry
+    wanted = []
+    for name in spec.split(','):
+        name = name.strip()
+        if not name:
+            continue
+        if name not in known:
+            print('smoke: 未知 case 名 {}（可用: {}）'.format(name, ','.join(sorted(known))),
+                  file=sys.stderr)
+            raise SystemExit(2)
+        if name not in wanted:
+            wanted.append(name)
+    if not wanted:
+        print('smoke: 空子集（--cases/PP_CASES 未给出任何 case 名）', file=sys.stderr)
+        raise SystemExit(2)
+    return [known[name] for name in wanted]
+
+
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_arg = sys.argv[1] if len(sys.argv) > 1 else ''
+_arg, _spec = parse_argv(sys.argv[1:])
 if _arg:
     BUILD = _arg
 elif os.environ.get('BUILD_DIR'):
     BUILD = os.environ['BUILD_DIR']
 else:
     BUILD = os.path.join(ROOT, 'build', 'release')
+if _spec is None:
+    # 环境变量路径：PP_CASES 为空串 = 未设置（惯用"取消"写法）→ 全量。
+    _spec = os.environ.get('PP_CASES') or None
 PP_BIN = os.environ.get('PP_BIN') or os.path.join(BUILD, 'photopipeline')
 PP_VERIFY = os.environ.get('PP_VERIFY') or os.path.join(BUILD, 'pp_verify')
 GOLDEN = os.path.join(ROOT, 'tests', 'golden')
@@ -95,10 +171,16 @@ def main():
 
     os.makedirs(OUT_ROOT, exist_ok=True)
 
+    selected = select_cases(_spec, CASES)
+    if _spec:
+        # 仅子集模式追加此行（默认路径控制台输出逐字不变）。
+        print('smoke: 子集 {} → 选中 {}/{} 对'.format(
+            ','.join(entry.split('|')[0] for entry in selected), len(selected), len(CASES)))
+
     passed = 0
     failed = 0
     print('%-16s %-8s %s' % ('case', 'result', 'detail'))
-    for entry in CASES:
+    for entry in selected:
         parts = entry.split('|')
         name = parts[0]
         input_rel = parts[1]

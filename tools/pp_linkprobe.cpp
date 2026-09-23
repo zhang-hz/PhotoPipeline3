@@ -42,9 +42,8 @@ void jpegli_set_defaults(j_compress_ptr cinfo);
 void jpegli_set_distance(j_compress_ptr cinfo, float distance, boolean force_baseline);
 void jpegli_destroy_compress(j_compress_ptr cinfo);
 }
-#define jpegli_create_compress(cinfo)                                                       \
-    jpegli_CreateCompress((cinfo), JPEG_LIB_VERSION,                                        \
-                          (size_t)sizeof(struct jpeg_compress_struct))
+#define jpegli_create_compress(cinfo)                                                              \
+    jpegli_CreateCompress((cinfo), JPEG_LIB_VERSION, (size_t)sizeof(struct jpeg_compress_struct))
 #endif
 
 namespace {
@@ -53,7 +52,7 @@ int g_fails = 0;
 std::string g_format_list;
 std::vector<std::string> g_heif_encoders;
 
-void report(const std::string& name, bool ok, const std::string& detail) {
+void report(const std::string &name, bool ok, const std::string &detail) {
     if (!ok) {
         ++g_fails;
     }
@@ -75,9 +74,9 @@ std::string fmt_hex(uint32_t v) {
     return std::string(buf);
 }
 
-std::string join(const std::vector<std::string>& items) {
+std::string join(const std::vector<std::string> &items) {
     std::string out;
-    for (const std::string& s : items) {
+    for (const std::string &s : items) {
         if (!out.empty()) {
             out += ",";
         }
@@ -92,7 +91,7 @@ std::string lower_copy(std::string s) {
     return s;
 }
 
-std::vector<std::string> split_commas(const std::string& s) {
+std::vector<std::string> split_commas(const std::string &s) {
     std::vector<std::string> out;
     std::string cur;
     for (char c : s) {
@@ -104,7 +103,7 @@ std::vector<std::string> split_commas(const std::string& s) {
         }
     }
     out.push_back(cur);
-    for (std::string& t : out) {
+    for (std::string &t : out) {
         const size_t b = t.find_first_not_of(" \t");
         const size_t e = t.find_last_not_of(" \t");
         t = (b == std::string::npos) ? std::string() : t.substr(b, e - b + 1);
@@ -120,9 +119,9 @@ void check_lcms2() {
         report("lcms2", false, "cmsCreate_sRGBProfile() returned null");
         return;
     }
-    cmsHTRANSFORM xf = cmsCreateTransform(srgb, TYPE_RGB_FLT, srgb, TYPE_RGB_FLT,
-                                          INTENT_RELATIVE_COLORIMETRIC,
-                                          cmsFLAGS_BLACKPOINTCOMPENSATION);
+    cmsHTRANSFORM xf =
+        cmsCreateTransform(srgb, TYPE_RGB_FLT, srgb, TYPE_RGB_FLT, INTENT_RELATIVE_COLORIMETRIC,
+                           cmsFLAGS_BLACKPOINTCOMPENSATION);
     if (xf == nullptr) {
         cmsCloseProfile(srgb);
         report("lcms2", false, "cmsCreateTransform() returned null");
@@ -161,9 +160,8 @@ void check_exiv2_bmff() {
     // box: a 20-byte input makes exiv2 throw "Failed to read input data" — measured with a
     // stand-alone probe against the installed 0.28.9).
     static const unsigned char kFtypHeic[1024] = {
-        0x00, 0x00, 0x00, 0x14, 'f',  't',  'y',  'p',
-        'h',  'e',  'i',  'c',  0x00, 0x00, 0x00, 0x00,
-        'm',  'i',  'f',  '1',
+        0x00, 0x00, 0x00, 0x14, 'f',  't',  'y', 'p', 'h', 'e',
+        'i',  'c',  0x00, 0x00, 0x00, 0x00, 'm', 'i', 'f', '1',
     };
     try {
         const Exiv2::ImageType type = Exiv2::ImageFactory::getType(kFtypHeic, sizeof(kFtypHeic));
@@ -171,7 +169,7 @@ void check_exiv2_bmff() {
         report("exiv2-bmff", ok,
                "ftyp(heic) -> ImageType=" + std::to_string(static_cast<int>(type)) +
                    " (bmff=" + std::to_string(static_cast<int>(Exiv2::ImageType::bmff)) + ")");
-    } catch (const std::exception& e) {
+    } catch (const std::exception &e) {
         report("exiv2-bmff", false, std::string("getType threw: ") + e.what());
     }
 #else
@@ -184,24 +182,24 @@ void check_oiio_plugins() {
     const std::vector<std::string> have = split_commas(g_format_list);
     std::vector<std::string> have_lc;
     have_lc.reserve(have.size());
-    for (const std::string& h : have) {
+    for (const std::string &h : have) {
         have_lc.push_back(lower_copy(h));
     }
     // §12.1 r3 (SUB-E field fact): OIIO has no separate avif plugin — its heif plugin owns
     // the avif/heic/heif extensions, so "avif" is not an OIIO format name and is not required.
-    const std::vector<std::string> want = {"jpeg", "png", "tiff", "jxl", "heif",
+    const std::vector<std::string> want = {"jpeg", "png", "tiff",  "jxl", "heif",
                                            "webp", "gif", "targa", "bmp"};
     // Mechanical adaptation (§12.1 last line): OIIO >= 3.x registers the JPEG XL plugin
     // under the format NAME "jpegxl" (its file extension is "jxl"); older OIIO used "jxl".
     // The judging criterion is unchanged: JPEG XL support must be present.
-    const auto present = [&have_lc](const std::string& w) {
+    const auto present = [&have_lc](const std::string &w) {
         if (std::find(have_lc.begin(), have_lc.end(), w) != have_lc.end()) {
             return true;
         }
         return w == "jxl" && std::find(have_lc.begin(), have_lc.end(), "jpegxl") != have_lc.end();
     };
     std::string missing;
-    for (const std::string& w : want) {
+    for (const std::string &w : want) {
         if (!present(w)) {
             if (!missing.empty()) {
                 missing += ",";
@@ -209,11 +207,10 @@ void check_oiio_plugins() {
             missing += w;
         }
     }
-    const std::string detail =
-        missing.empty()
-            ? ("required=" + std::to_string(want.size()) +
-               " all present (jxl=plugin \"jpegxl\"; heif covers avif)")
-            : ("missing=" + missing);
+    const std::string detail = missing.empty()
+                                   ? ("required=" + std::to_string(want.size()) +
+                                      " all present (jxl=plugin \"jpegxl\"; heif covers avif)")
+                                   : ("missing=" + missing);
     report("oiio-plugins", missing.empty(), detail);
 }
 
@@ -236,8 +233,8 @@ void check_libjxl() {
     report("libjxl", v > 0, "JxlEncoderVersion=" + fmt_hex(v));
 }
 
-std::vector<const heif_encoder_descriptor*> heif_encoder_descs(heif_compression_format fmt) {
-    std::vector<const heif_encoder_descriptor*> descs;
+std::vector<const heif_encoder_descriptor *> heif_encoder_descs(heif_compression_format fmt) {
+    std::vector<const heif_encoder_descriptor *> descs;
     // libheif >= 1.4 exposes the 4-argument free function
     // heif_get_encoder_descriptors(format, name, out, count), not the 6-argument context form
     // assumed by the task book (verified against the installed headers).
@@ -253,16 +250,16 @@ std::vector<const heif_encoder_descriptor*> heif_encoder_descs(heif_compression_
 
 std::vector<std::string> heif_encoder_names(heif_compression_format fmt) {
     std::vector<std::string> names;
-    for (const heif_encoder_descriptor* d : heif_encoder_descs(fmt)) {
-        const char* n = heif_encoder_descriptor_get_name(d);
+    for (const heif_encoder_descriptor *d : heif_encoder_descs(fmt)) {
+        const char *n = heif_encoder_descriptor_get_name(d);
         names.push_back(n != nullptr ? std::string(n) : std::string("(unnamed)"));
     }
     return names;
 }
 
-void check_libheif(const char* name, heif_compression_format fmt) {
+void check_libheif(const char *name, heif_compression_format fmt) {
     const std::vector<std::string> names = heif_encoder_names(fmt);
-    for (const std::string& n : names) {
+    for (const std::string &n : names) {
         g_heif_encoders.push_back(n);
     }
     report(name, !names.empty(), names.empty() ? "no encoder available" : join(names));
@@ -284,12 +281,12 @@ struct HeifParamList {
     bool types_valid = true;
 };
 
-bool heif_encoder_params(const heif_encoder_descriptor* desc, HeifParamList& out) {
-    heif_context* ctx = heif_context_alloc();
+bool heif_encoder_params(const heif_encoder_descriptor *desc, HeifParamList &out) {
+    heif_context *ctx = heif_context_alloc();
     if (ctx == nullptr) {
         return false;
     }
-    heif_encoder* enc = nullptr;
+    heif_encoder *enc = nullptr;
     // libheif >= 1.4 API (verified against the installed 1.23.5 header): the descriptor
     // form is heif_context_get_encoder(), there is no heif_encoder_create().
     const heif_error err = heif_context_get_encoder(ctx, desc, &enc);
@@ -297,9 +294,9 @@ bool heif_encoder_params(const heif_encoder_descriptor* desc, HeifParamList& out
         heif_context_free(ctx);
         return false;
     }
-    for (const heif_encoder_parameter* const* p = heif_encoder_list_parameters(enc);
+    for (const heif_encoder_parameter *const *p = heif_encoder_list_parameters(enc);
          p != nullptr && *p != nullptr; ++p) {
-        const char* n = heif_encoder_parameter_get_name(*p);
+        const char *n = heif_encoder_parameter_get_name(*p);
         out.names.push_back(n != nullptr ? std::string(n) : std::string());
         const heif_encoder_parameter_type t = heif_encoder_parameter_get_type(*p);
         if (t != heif_encoder_parameter_type_integer && t != heif_encoder_parameter_type_boolean &&
@@ -312,7 +309,7 @@ bool heif_encoder_params(const heif_encoder_descriptor* desc, HeifParamList& out
     return true;
 }
 
-std::string join_names(const std::vector<std::string>& v, size_t limit) {
+std::string join_names(const std::vector<std::string> &v, size_t limit) {
     std::string out;
     for (size_t i = 0; i < v.size() && i < limit; ++i) {
         if (!out.empty()) {
@@ -326,30 +323,30 @@ std::string join_names(const std::vector<std::string>& v, size_t limit) {
     return out;
 }
 
-void check_heif_params(const char* name, heif_compression_format fmt, const char* want_substr,
-                       const std::vector<std::string>& required) {
-    const heif_encoder_descriptor* chosen = nullptr;
+void check_heif_params(const char *name, heif_compression_format fmt, const char *want_substr,
+                       const std::vector<std::string> &required) {
+    const heif_encoder_descriptor *chosen = nullptr;
     std::string chosen_name;
     std::string available;
-    for (const heif_encoder_descriptor* d : heif_encoder_descs(fmt)) {
-        const char* n = heif_encoder_descriptor_get_name(d);
-        const char* id = heif_encoder_descriptor_get_id_name(d);
+    for (const heif_encoder_descriptor *d : heif_encoder_descs(fmt)) {
+        const char *n = heif_encoder_descriptor_get_name(d);
+        const char *id = heif_encoder_descriptor_get_id_name(d);
         const std::string name_s = n != nullptr ? std::string(n) : std::string();
         const std::string id_s = id != nullptr ? std::string(id) : std::string();
         if (!available.empty()) {
             available += ",";
         }
         available += name_s.empty() ? std::string("(unnamed)") : name_s;
-        if (chosen == nullptr &&
-            (lower_copy(name_s).find(want_substr) != std::string::npos ||
-             lower_copy(id_s).find(want_substr) != std::string::npos)) {
+        if (chosen == nullptr && (lower_copy(name_s).find(want_substr) != std::string::npos ||
+                                  lower_copy(id_s).find(want_substr) != std::string::npos)) {
             chosen = d;
             chosen_name = name_s;
         }
     }
     if (chosen == nullptr) {
-        report(name, false, std::string("no encoder matching \"") + want_substr +
-                                "\" (available: " + available + ")");
+        report(name, false,
+               std::string("no encoder matching \"") + want_substr + "\" (available: " + available +
+                   ")");
         return;
     }
     HeifParamList list;
@@ -358,13 +355,13 @@ void check_heif_params(const char* name, heif_compression_format fmt, const char
         return;
     }
     bool empty_name = false;
-    for (const std::string& s : list.names) {
+    for (const std::string &s : list.names) {
         if (s.empty()) {
             empty_name = true;
         }
     }
     std::string missing;
-    for (const std::string& want : required) {
+    for (const std::string &want : required) {
         if (std::find(list.names.begin(), list.names.end(), want) == list.names.end()) {
             if (!missing.empty()) {
                 missing += ",";
@@ -387,7 +384,7 @@ void check_libwebp() {
     report("libwebp", v > 0, "WebPGetEncoderVersion=" + std::to_string(v));
 }
 
-}  // namespace
+} // namespace
 
 int main() {
     check_lcms2();

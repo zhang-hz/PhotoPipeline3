@@ -11,4 +11,4 @@ namespace pp::map {
 std::pair<double, double> wgs84_to_gcj02(double lat, double lon);
 std::pair<double, double> gcj02_to_wgs84(double lat, double lon);
 
-}  // namespace pp::map
+} // namespace pp::map

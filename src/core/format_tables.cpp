@@ -8,40 +8,41 @@ namespace {
 
 // —— 谓词辅助（M1-T2；规则见 docs/m1-tasks.md §4.2）——
 // 保留键 "__lossless"：无损开关由参数引擎写入 ParamSet（见 src/core/params.cpp）。
-bool is_lossless(const ParamSet& s) { return param_bool(s, "__lossless", false); }
-bool not_lossless(const ParamSet& s) { return !is_lossless(s); }
+bool is_lossless(const ParamSet &s) { return param_bool(s, "__lossless", false); }
+bool not_lossless(const ParamSet &s) { return !is_lossless(s); }
 
-bool quality_mode_is_distance(const ParamSet& s) {
+bool quality_mode_is_distance(const ParamSet &s) {
     return param_str(s, "quality_mode", "distance") == "distance";
 }
-bool quality_mode_is_quality(const ParamSet& s) {
+bool quality_mode_is_quality(const ParamSet &s) {
     return param_str(s, "quality_mode", "distance") == "quality";
 }
 
-bool compression_is_zip(const ParamSet& s) {
-    return param_str(s, "compression", "lzw") == "zip";
-}
-bool compression_is_lzw_or_zip(const ParamSet& s) {
+bool compression_is_zip(const ParamSet &s) { return param_str(s, "compression", "lzw") == "zip"; }
+bool compression_is_lzw_or_zip(const ParamSet &s) {
     const std::string c = param_str(s, "compression", "lzw");
     return c == "lzw" || c == "zip";
 }
 
-std::optional<ParamValue> lock_true_when_progressive(const ParamSet& s) {
-    if (param_bool(s, "progressive", true)) return ParamValue{true};
+std::optional<ParamValue> lock_true_when_progressive(const ParamSet &s) {
+    if (param_bool(s, "progressive", true))
+        return ParamValue{true};
     return std::nullopt;
 }
-std::optional<ParamValue> lock_zero_when_lossless(const ParamSet& s) {
-    if (is_lossless(s)) return ParamValue{0.0};
+std::optional<ParamValue> lock_zero_when_lossless(const ParamSet &s) {
+    if (is_lossless(s))
+        return ParamValue{0.0};
     return std::nullopt;
 }
-std::optional<ParamValue> lock_false_when_lossless(const ParamSet& s) {
-    if (is_lossless(s)) return ParamValue{false};
+std::optional<ParamValue> lock_false_when_lossless(const ParamSet &s) {
+    if (is_lossless(s))
+        return ParamValue{false};
     return std::nullopt;
 }
 
-}  // namespace
+} // namespace
 
-const std::vector<FormatDef>& static_formats() {
+const std::vector<FormatDef> &static_formats() {
     static const std::vector<FormatDef> fmts = {
         FormatDef{
             .id = "jpeg", .label = "JPEG", .ext = "jpg",
@@ -759,4 +760,4 @@ const std::vector<FormatDef>& static_formats() {
     return fmts;
 }
 
-}  // namespace pp
+} // namespace pp

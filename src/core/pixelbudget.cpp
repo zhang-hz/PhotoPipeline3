@@ -55,11 +55,11 @@ uint64_t available_memory_bytes() {
     return 0;
 }
 
-}  // namespace
+} // namespace
 
 PixelBudget::PixelBudget(uint64_t capacity_bytes) : capacity_(capacity_bytes) {}
 
-bool PixelBudget::acquire(uint64_t bytes, const std::function<bool()>& cancelled) {
+bool PixelBudget::acquire(uint64_t bytes, const std::function<bool()> &cancelled) {
     // Larger than the whole pool: fail at once, the caller reports the error (never wait).
     if (bytes > capacity_) {
         return false;
@@ -67,7 +67,7 @@ bool PixelBudget::acquire(uint64_t bytes, const std::function<bool()>& cancelled
     std::unique_lock<std::mutex> lk(mu_);
     for (;;) {
         if (cancelled && cancelled()) {
-            return false;  // no quota taken
+            return false; // no quota taken
         }
         if (bytes <= capacity_ - used_) {
             used_ += bytes;
@@ -114,13 +114,13 @@ uint64_t PixelBudget::frame_bytes(int w, int h, int channels) {
 }
 
 uint64_t PixelBudget::default_capacity_bytes() {
-    constexpr uint64_t kCeiling = 8ull * 1024 * 1024 * 1024;  // 8 GB
+    constexpr uint64_t kCeiling = 8ull * 1024 * 1024 * 1024; // 8 GB
     const uint64_t available = available_memory_bytes();
     if (available == 0) {
-        return kCeiling;  // unknown amount of RAM -> use the ceiling
+        return kCeiling; // unknown amount of RAM -> use the ceiling
     }
     const uint64_t half = available / 2;
     return half == 0 ? kCeiling : std::min(half, kCeiling);
 }
 
-}  // namespace pp
+} // namespace pp

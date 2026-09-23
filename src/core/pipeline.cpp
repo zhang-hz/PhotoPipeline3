@@ -62,7 +62,7 @@ constexpr std::string_view kFile = "pipeline.cpp";
 
 using Clock = std::chrono::steady_clock;
 
-double ms_since(const Clock::time_point& t0) {
+double ms_since(const Clock::time_point &t0) {
     return std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
 }
 
@@ -76,8 +76,8 @@ std::string fmt_double(double v) {
 // pixel helpers
 // ---------------------------------------------------------------------------
 
-bool read_float_pixels(const OIIO::ImageBuf& buf, std::vector<float>& out, std::string& err) {
-    const OIIO::ImageSpec& spec = buf.spec();
+bool read_float_pixels(const OIIO::ImageBuf &buf, std::vector<float> &out, std::string &err) {
+    const OIIO::ImageSpec &spec = buf.spec();
     if (spec.width <= 0 || spec.height <= 0 || spec.nchannels <= 0) {
         err = "empty image buffer";
         return false;
@@ -95,24 +95,36 @@ bool read_float_pixels(const OIIO::ImageBuf& buf, std::vector<float>& out, std::
 // EXIF orientation 1–8 → the transform that brings the stored pixels upright.
 // Mapping (EXIF 2.32 + OIIO's rotate90 = 90° clockwise, imagebufalgo.h:499-518):
 //   2 flop · 3 rotate180 · 4 flip · 5 flop∘rotate90 · 6 rotate90 · 7 flip∘rotate90 · 8 rotate270
-bool orient_buf(OIIO::ImageBuf& buf, int orientation, std::string& err) {
-    if (orientation <= 1 || orientation > 8) return true;
+bool orient_buf(OIIO::ImageBuf &buf, int orientation, std::string &err) {
+    if (orientation <= 1 || orientation > 8)
+        return true;
     OIIO::ImageBuf tmp;
     OIIO::ImageBuf pre;
     bool ok = false;
     switch (orientation) {
-        case 2: ok = OIIO::ImageBufAlgo::flop(tmp, buf); break;
-        case 3: ok = OIIO::ImageBufAlgo::rotate180(tmp, buf); break;
-        case 4: ok = OIIO::ImageBufAlgo::flip(tmp, buf); break;
-        case 5:
-            ok = OIIO::ImageBufAlgo::rotate90(pre, buf) && OIIO::ImageBufAlgo::flop(tmp, pre);
-            break;
-        case 6: ok = OIIO::ImageBufAlgo::rotate90(tmp, buf); break;
-        case 7:
-            ok = OIIO::ImageBufAlgo::rotate90(pre, buf) && OIIO::ImageBufAlgo::flip(tmp, pre);
-            break;
-        case 8: ok = OIIO::ImageBufAlgo::rotate270(tmp, buf); break;
-        default: return true;
+    case 2:
+        ok = OIIO::ImageBufAlgo::flop(tmp, buf);
+        break;
+    case 3:
+        ok = OIIO::ImageBufAlgo::rotate180(tmp, buf);
+        break;
+    case 4:
+        ok = OIIO::ImageBufAlgo::flip(tmp, buf);
+        break;
+    case 5:
+        ok = OIIO::ImageBufAlgo::rotate90(pre, buf) && OIIO::ImageBufAlgo::flop(tmp, pre);
+        break;
+    case 6:
+        ok = OIIO::ImageBufAlgo::rotate90(tmp, buf);
+        break;
+    case 7:
+        ok = OIIO::ImageBufAlgo::rotate90(pre, buf) && OIIO::ImageBufAlgo::flip(tmp, pre);
+        break;
+    case 8:
+        ok = OIIO::ImageBufAlgo::rotate270(tmp, buf);
+        break;
+    default:
+        return true;
     }
     if (!ok) {
         err = "ImageBufAlgo orientation transform failed: " + buf.geterror();
@@ -123,8 +135,8 @@ bool orient_buf(OIIO::ImageBuf& buf, int orientation, std::string& err) {
 }
 
 // Composite alpha onto a constant background (§5.5). 2 channels → gray, 4 → RGB.
-bool flatten_alpha(OIIO::ImageBuf& buf, float background, std::string& err) {
-    const OIIO::ImageSpec& spec = buf.spec();
+bool flatten_alpha(OIIO::ImageBuf &buf, float background, std::string &err) {
+    const OIIO::ImageSpec &spec = buf.spec();
     const int w = spec.width, h = spec.height, ch = spec.nchannels;
     if (ch != 2 && ch != 4) {
         err = "flatten called without an alpha channel (channels=" + std::to_string(ch) + ")";
@@ -132,7 +144,8 @@ bool flatten_alpha(OIIO::ImageBuf& buf, float background, std::string& err) {
     }
     const int out_ch = (ch == 2) ? 1 : 3;
     std::vector<float> src;
-    if (!read_float_pixels(buf, src, err)) return false;
+    if (!read_float_pixels(buf, src, err))
+        return false;
     const std::size_t npix = static_cast<std::size_t>(w) * static_cast<std::size_t>(h);
     std::vector<float> dst(npix * static_cast<std::size_t>(out_ch), 0.0f);
     const float bg = std::clamp(background, 0.0f, 1.0f);
@@ -145,8 +158,8 @@ bool flatten_alpha(OIIO::ImageBuf& buf, float background, std::string& err) {
         }
     }
     OIIO::ImageSpec ospec(w, h, out_ch, OIIO::TypeDesc::FLOAT);
-    ospec.channelnames = (out_ch == 1) ? std::vector<std::string>{"Y"}
-                                       : std::vector<std::string>{"R", "G", "B"};
+    ospec.channelnames =
+        (out_ch == 1) ? std::vector<std::string>{"Y"} : std::vector<std::string>{"R", "G", "B"};
     OIIO::ImageBuf out(ospec);
     if (!out.set_pixels(out.roi(), OIIO::TypeDesc::FLOAT, dst.data())) {
         err = "cannot store composited pixels: " + out.geterror();
@@ -156,9 +169,9 @@ bool flatten_alpha(OIIO::ImageBuf& buf, float background, std::string& err) {
     return true;
 }
 
-bool is_cancelled(const std::function<bool()>& fn) { return fn && fn(); }
+bool is_cancelled(const std::function<bool()> &fn) { return fn && fn(); }
 
-void merge_warnings(std::vector<Warning>& dst, const std::vector<Warning>& src) {
+void merge_warnings(std::vector<Warning> &dst, const std::vector<Warning> &src) {
     dst.insert(dst.end(), src.begin(), src.end());
 }
 
@@ -166,9 +179,9 @@ void merge_warnings(std::vector<Warning>& dst, const std::vector<Warning>& src) 
 // out-parameter as well. Merge them into the file warnings, dropping the messages the legacy
 // plan.warnings channel already contributed (identical kind + detail) so the dual channel is
 // never visible twice. New-only: nothing already in `dst` is removed or reordered.
-void merge_writer_warnings(std::vector<Warning>& dst, const std::vector<std::string>& details) {
-    for (const std::string& detail : details) {
-        const bool duplicate = std::any_of(dst.begin(), dst.end(), [&detail](const Warning& w) {
+void merge_writer_warnings(std::vector<Warning> &dst, const std::vector<std::string> &details) {
+    for (const std::string &detail : details) {
+        const bool duplicate = std::any_of(dst.begin(), dst.end(), [&detail](const Warning &w) {
             return w.kind == WarningKind::MetadataDropped && w.detail == detail;
         });
         if (!duplicate) {
@@ -182,13 +195,12 @@ void merge_writer_warnings(std::vector<Warning>& dst, const std::vector<std::str
 // run_metadata_only are the single-file entry points — the guard here keeps the per-file
 // verdict (error = first message) identical for every caller, and the dev harness counts
 // the failed file into its exit code. Empty first message = OK.
-std::string first_cross_error(const RunConfig& cfg) {
-    const std::vector<std::string> msgs =
-        cross_validate(cfg.params, cfg.format_id, cfg.tech_id);
+std::string first_cross_error(const RunConfig &cfg) {
+    const std::vector<std::string> msgs = cross_validate(cfg.params, cfg.format_id, cfg.tech_id);
     return msgs.empty() ? std::string() : msgs.front();
 }
 
-}  // namespace
+} // namespace
 
 // ---------------------------------------------------------------------------
 // §3.9 frozen predicate (strong definition overriding the weak fallback in metadata.cpp)
@@ -200,10 +212,10 @@ bool format_supports_metadata_only(std::string_view format_id) {
 // ---------------------------------------------------------------------------
 // run_one_file
 // ---------------------------------------------------------------------------
-FileResult run_one_file(FileEntry& fe, const RunConfig& cfg, IEncoder* enc, PixelBudget* budget,
-                        const std::vector<std::filesystem::path>& reserved,
-                        const std::function<bool()>& cancelled,
-                        const std::function<void(FileState)>& on_stage) {
+FileResult run_one_file(FileEntry &fe, const RunConfig &cfg, IEncoder *enc, PixelBudget *budget,
+                        const std::vector<std::filesystem::path> &reserved,
+                        const std::function<bool()> &cancelled,
+                        const std::function<void(FileState)> &on_stage) {
     namespace fs = std::filesystem;
 
     FileResult res;
@@ -218,18 +230,20 @@ FileResult run_one_file(FileEntry& fe, const RunConfig& cfg, IEncoder* enc, Pixe
     };
 
     const auto stage = [&on_stage](FileState s) {
-        if (on_stage) on_stage(s);
+        if (on_stage)
+            on_stage(s);
     };
 
     // Budget guard: released on every exit path, including exceptions.
     uint64_t need_bytes = 0;
     bool budget_held = false;
     struct BudgetGuard {
-        PixelBudget* b;
+        PixelBudget *b;
         uint64_t bytes;
-        bool& held;
+        bool &held;
         ~BudgetGuard() {
-            if (held && b) b->release(bytes);
+            if (held && b)
+                b->release(bytes);
         }
     } budget_guard{budget, 0, budget_held};
 
@@ -255,7 +269,7 @@ FileResult run_one_file(FileEntry& fe, const RunConfig& cfg, IEncoder* enc, Pixe
         }
         fe.info = po.info;
         res.info = po.info;
-        const OIIO::ImageSpec* spec = po.first_spec ? &*po.first_spec : nullptr;
+        const OIIO::ImageSpec *spec = po.first_spec ? &*po.first_spec : nullptr;
         const int orientation = spec ? orientation_from_spec(*spec) : 1;
         std::string src_icc = spec ? icc_from_spec(*spec) : std::string();
 
@@ -265,7 +279,8 @@ FileResult run_one_file(FileEntry& fe, const RunConfig& cfg, IEncoder* enc, Pixe
             log_warn(kStage, kFile, "source metadata unavailable; continuing with empty metadata",
                      {{"src", fe.src.string()}, {"error", srcmeta.error}});
         }
-        if (src_icc.empty()) src_icc = srcmeta.icc;  // R13 chain: embedded ICC first
+        if (src_icc.empty())
+            src_icc = srcmeta.icc; // R13 chain: embedded ICC first
         // ---- R13 middle step (issue #7, implemented in M2-T6 §2.8): CICP → source profile ----
         // A JXL file that carries a native colour encoding instead of an embedded ICC exposes
         // `CICP int[4]` — libjxl only reports an encoded profile when the data profile is not
@@ -281,16 +296,15 @@ FileResult run_one_file(FileEntry& fe, const RunConfig& cfg, IEncoder* enc, Pixe
         // own gray-sRGB assumption (the constructed profiles are RGB).
         if (spec != nullptr && fe.info.channels >= 3 &&
             (fe.info.format == "jpegxl" || fe.info.format == "jxl")) {
-            const OIIO::ParamValue* pv = spec->find_attribute("CICP");
-            const bool cicp_ok = (pv != nullptr) &&
-                                 (pv->type().basetype == OIIO::TypeDesc::INT) &&
+            const OIIO::ParamValue *pv = spec->find_attribute("CICP");
+            const bool cicp_ok = (pv != nullptr) && (pv->type().basetype == OIIO::TypeDesc::INT) &&
                                  (pv->type().basevalues() * std::size_t(pv->nvalues()) >= 4);
             if (cicp_ok) {
                 Cicp cicp;
                 cicp.primaries = pv->get<int>(0);
                 cicp.transfer = pv->get<int>(1);
-                cicp.matrix = pv->get<int>(2);      // not part of the mapping (§2.8)
-                cicp.full_range = pv->get<int>(3);  // not part of the mapping (§2.8)
+                cicp.matrix = pv->get<int>(2);     // not part of the mapping (§2.8)
+                cicp.full_range = pv->get<int>(3); // not part of the mapping (§2.8)
                 const CicpMapping mapped = map_cicp_source(cicp);
                 if (mapped.recognized()) {
                     log_info(kStage, kFile, mapped.log_line, {{"src", fe.src.string()}});
@@ -299,7 +313,8 @@ FileResult run_one_file(FileEntry& fe, const RunConfig& cfg, IEncoder* enc, Pixe
                 }
                 // sRGB (lcms2 built-in) and unsupported pairs leave src_icc untouched; only
                 // the constructed P3 / BT.2020 profiles become the source description.
-                if (!mapped.src_icc.empty()) src_icc = mapped.src_icc;
+                if (!mapped.src_icc.empty())
+                    src_icc = mapped.src_icc;
             }
         }
         log_debug(kStage, kFile, "probe done",
@@ -312,8 +327,9 @@ FileResult run_one_file(FileEntry& fe, const RunConfig& cfg, IEncoder* enc, Pixe
                    {"multipage", fe.info.is_multipage ? "true" : "false"}});
 
         // ---- output format checks ----
-        const FormatDef* fmt = find_format(cfg.format_id);
-        if (!fmt) return fail("unknown output format '" + cfg.format_id + "'");
+        const FormatDef *fmt = find_format(cfg.format_id);
+        if (!fmt)
+            return fail("unknown output format '" + cfg.format_id + "'");
         if (std::find(fmt->bitdepths.begin(), fmt->bitdepths.end(), cfg.out_bitdepth) ==
             fmt->bitdepths.end()) {
             // §3.8 T7 ruling ①: unsupported bit depths are an explicit error, never a silent
@@ -326,7 +342,8 @@ FileResult run_one_file(FileEntry& fe, const RunConfig& cfg, IEncoder* enc, Pixe
         const fs::path desired = mirror_path(fe.src, fe.base_dir, cfg.out_root, fmt->ext);
         std::string conflict_err;
         const OutputPlan out_plan = resolve_conflict(desired, cfg.conflict, reserved, conflict_err);
-        if (!conflict_err.empty()) return fail("output path: " + conflict_err);
+        if (!conflict_err.empty())
+            return fail("output path: " + conflict_err);
         res.out = out_plan.out_path;
         if (out_plan.skip) {
             res.skipped = true;
@@ -337,9 +354,11 @@ FileResult run_one_file(FileEntry& fe, const RunConfig& cfg, IEncoder* enc, Pixe
         {
             std::error_code ec;
             const fs::path parent = res.out.parent_path();
-            if (!parent.empty()) fs::create_directories(parent, ec);
-            if (ec) return fail("cannot create output directory '" + parent.string() +
-                                "': " + ec.message());
+            if (!parent.empty())
+                fs::create_directories(parent, ec);
+            if (ec)
+                return fail("cannot create output directory '" + parent.string() +
+                            "': " + ec.message());
         }
 
         // ---- pixel budget (§3.3/§3.10): 2× float32 frame (rotate/composite peak, G2) ----
@@ -373,10 +392,12 @@ FileResult run_one_file(FileEntry& fe, const RunConfig& cfg, IEncoder* enc, Pixe
         Clock::time_point t0 = Clock::now();
         DecodeOutcome dec = decode_float(fe.src, fe.info);
         res.t.decode_ms = ms_since(t0);
-        if (!dec.error.empty()) return fail("decode failed: " + dec.error);
-        merge_warnings(res.warnings, dec.warnings);  // MultipageTruncated
-        OIIO::ImageBuf& buf = dec.buf;
-        if (!buf.initialized()) return fail("decode produced an empty buffer");
+        if (!dec.error.empty())
+            return fail("decode failed: " + dec.error);
+        merge_warnings(res.warnings, dec.warnings); // MultipageTruncated
+        OIIO::ImageBuf &buf = dec.buf;
+        if (!buf.initialized())
+            return fail("decode produced an empty buffer");
 
         // ---- orient (§5.3) ----
         bool rotated = false;
@@ -384,7 +405,8 @@ FileResult run_one_file(FileEntry& fe, const RunConfig& cfg, IEncoder* enc, Pixe
             stage(FileState::Orienting);
             t0 = Clock::now();
             std::string oerr;
-            if (!orient_buf(buf, orientation, oerr)) return fail("orient failed: " + oerr);
+            if (!orient_buf(buf, orientation, oerr))
+                return fail("orient failed: " + oerr);
             res.t.orient_ms = ms_since(t0);
             rotated = true;
         }
@@ -397,9 +419,9 @@ FileResult run_one_file(FileEntry& fe, const RunConfig& cfg, IEncoder* enc, Pixe
         const bool src_is_gray = (fe.info.channels == 1 || fe.info.channels == 2);
         ColorTarget eff_target = cfg.color_target;
         if (src_is_gray && !fmt->supports_gray) {
-            res.warnings.push_back(Warning{WarningKind::GrayToRgbEncoded,
-                                           "grayscale source encoded as RGB for format '" +
-                                               fmt->id + "'"});
+            res.warnings.push_back(
+                Warning{WarningKind::GrayToRgbEncoded,
+                        "grayscale source encoded as RGB for format '" + fmt->id + "'"});
             if (eff_target == ColorTarget::KeepOriginal) {
                 // Grayscale pixels must not reach webp/heif/avif: use sRGB as the effective
                 // target even though the user kept the original (§4.8).
@@ -413,7 +435,8 @@ FileResult run_one_file(FileEntry& fe, const RunConfig& cfg, IEncoder* enc, Pixe
             ColorOutcome co =
                 ColorManager::instance().transform(buf, src_icc, src_is_gray, eff_target);
             res.t.color_ms = ms_since(t0);
-            if (!co.error.empty()) return fail("color transform failed: " + co.error);
+            if (!co.error.empty())
+                return fail("color transform failed: " + co.error);
             merge_warnings(res.warnings, co.warnings);
             icc_to_embed = co.icc_to_embed;
             res.color_src = co.src_desc;
@@ -427,8 +450,8 @@ FileResult run_one_file(FileEntry& fe, const RunConfig& cfg, IEncoder* enc, Pixe
         log_debug(kStage, kFile, "color decision",
                   {{"src", res.color_src},
                    {"dst", res.color_dst},
-                   {"embed_icc", icc_to_embed.empty() ? "none"
-                                                      : std::to_string(icc_to_embed.size()) + "B"}});
+                   {"embed_icc",
+                    icc_to_embed.empty() ? "none" : std::to_string(icc_to_embed.size()) + "B"}});
 
         // ---- flatten (§5.5, §3.5 ⑥ has_alpha semantics) ----
         {
@@ -443,9 +466,9 @@ FileResult run_one_file(FileEntry& fe, const RunConfig& cfg, IEncoder* enc, Pixe
                 }
                 res.t.flatten_ms = ms_since(t0);
                 res.warnings.push_back(
-                    Warning{WarningKind::AlphaFlattened,
-                            "alpha composited onto background " + fmt_double(cfg.flatten_gray) +
-                                " for format '" + fmt->id + "'"});
+                    Warning{WarningKind::AlphaFlattened, "alpha composited onto background " +
+                                                             fmt_double(cfg.flatten_gray) +
+                                                             " for format '" + fmt->id + "'"});
             }
         }
         if (is_cancelled(cancelled)) {
@@ -456,11 +479,12 @@ FileResult run_one_file(FileEntry& fe, const RunConfig& cfg, IEncoder* enc, Pixe
         // ---- metadata plan / payloads (§3.7, §4.8) ----
         MetadataPlan meta_plan = build_plan(srcmeta, cfg.rules, fe.exception);
         if (rotated && !meta_plan.exif.empty()) {
-            meta_plan.exif["Exif.Image.Orientation"] = static_cast<uint16_t>(1);  // §5.3: clear the tag
+            meta_plan.exif["Exif.Image.Orientation"] =
+                static_cast<uint16_t>(1); // §5.3: clear the tag
         }
         const Payloads payloads = make_payloads(meta_plan);
         MetadataPayloads meta;
-        meta.exif_blob = payloads.exif_blob;  // consumed by JXL/HEIF/AVIF only (E7)
+        meta.exif_blob = payloads.exif_blob; // consumed by JXL/HEIF/AVIF only (E7)
         meta.xmp_rdf = payloads.xmp_rdf;
         meta.icc_profile = icc_to_embed;
 
@@ -512,7 +536,7 @@ FileResult run_one_file(FileEntry& fe, const RunConfig& cfg, IEncoder* enc, Pixe
         if (fmt->meta_path == "exiv2") {
             meta_err = write_metadata_exiv2(res.out, meta_plan, payloads, &writer_warnings);
         }
-        merge_warnings(res.warnings, meta_plan.warnings);  // legacy channel (frozen content)
+        merge_warnings(res.warnings, meta_plan.warnings); // legacy channel (frozen content)
         merge_writer_warnings(res.warnings, writer_warnings);
         // Defensive branch: write_metadata_exiv2() reports through the channels above and always
         // returns an empty string today, so meta_err is normally empty; a future revision may
@@ -523,8 +547,8 @@ FileResult run_one_file(FileEntry& fe, const RunConfig& cfg, IEncoder* enc, Pixe
                      {{"out", res.out.string()}, {"error", meta_err}});
         } else if (fmt->meta_path == "none") {
             // BMP has no metadata container; T5 skips silently, the pipeline reports it (§4.8).
-            res.warnings.push_back(Warning{WarningKind::MetadataDropped,
-                                           "bmp output carries no metadata container"});
+            res.warnings.push_back(
+                Warning{WarningKind::MetadataDropped, "bmp output carries no metadata container"});
         }
         res.t.metawrite_ms = ms_since(t0);
 
@@ -549,12 +573,12 @@ FileResult run_one_file(FileEntry& fe, const RunConfig& cfg, IEncoder* enc, Pixe
                   {"encode_ms", fmt_double(res.t.encode_ms)},
                   {"metawrite_ms", fmt_double(res.t.metawrite_ms)},
                   {"warnings", std::to_string(res.warnings.size())}});
-        for (const Warning& w : res.warnings) {
+        for (const Warning &w : res.warnings) {
             log_warn(kStage, kFile, "output warning",
                      {{"src", fe.src.string()}, {"detail", w.detail}});
         }
         return done();
-    } catch (const std::exception& e) {
+    } catch (const std::exception &e) {
         return fail(std::string("unexpected exception: ") + e.what());
     } catch (...) {
         return fail("unexpected non-standard exception");
@@ -564,10 +588,10 @@ FileResult run_one_file(FileEntry& fe, const RunConfig& cfg, IEncoder* enc, Pixe
 // ---------------------------------------------------------------------------
 // run_metadata_only (§3.9: zero re-encode, JPEG/PNG/TIFF/WebP only)
 // ---------------------------------------------------------------------------
-FileResult run_metadata_only(FileEntry& fe, const RunConfig& cfg,
-                             const std::vector<std::filesystem::path>& reserved,
-                             const std::function<bool()>& cancelled,
-                             const std::function<void(FileState)>& on_stage) {
+FileResult run_metadata_only(FileEntry &fe, const RunConfig &cfg,
+                             const std::vector<std::filesystem::path> &reserved,
+                             const std::function<bool()> &cancelled,
+                             const std::function<void(FileState)> &on_stage) {
     namespace fs = std::filesystem;
 
     FileResult res;
@@ -582,7 +606,8 @@ FileResult run_metadata_only(FileEntry& fe, const RunConfig& cfg,
     };
 
     const auto stage = [&on_stage](FileState s) {
-        if (on_stage) on_stage(s);
+        if (on_stage)
+            on_stage(s);
     };
     const auto fail = [&res, &t_start](std::string msg) -> FileResult {
         res.ok = false;
@@ -606,8 +631,9 @@ FileResult run_metadata_only(FileEntry& fe, const RunConfig& cfg,
         fe.info = po.info;
         res.info = po.info;
 
-        const FormatDef* fmt = find_format(cfg.format_id);
-        if (!fmt) return fail("unknown output format '" + cfg.format_id + "'");
+        const FormatDef *fmt = find_format(cfg.format_id);
+        if (!fmt)
+            return fail("unknown output format '" + cfg.format_id + "'");
         if (!format_supports_metadata_only(fmt->id)) {
             return fail("format '" + fmt->id +
                         "' does not support metadata-only rewrite (zero re-encode)");
@@ -621,7 +647,8 @@ FileResult run_metadata_only(FileEntry& fe, const RunConfig& cfg,
         const fs::path desired = mirror_path(fe.src, fe.base_dir, cfg.out_root, "");
         std::string conflict_err;
         const OutputPlan out_plan = resolve_conflict(desired, cfg.conflict, reserved, conflict_err);
-        if (!conflict_err.empty()) return fail("output path: " + conflict_err);
+        if (!conflict_err.empty())
+            return fail("output path: " + conflict_err);
         res.out = out_plan.out_path;
         if (out_plan.skip) {
             res.skipped = true;
@@ -630,8 +657,10 @@ FileResult run_metadata_only(FileEntry& fe, const RunConfig& cfg,
         {
             std::error_code ec;
             const fs::path parent = res.out.parent_path();
-            if (!parent.empty()) fs::create_directories(parent, ec);
-            if (ec) return fail("cannot create output directory: " + ec.message());
+            if (!parent.empty())
+                fs::create_directories(parent, ec);
+            if (ec)
+                return fail("cannot create output directory: " + ec.message());
         }
 
         SourceMeta srcmeta = read_metadata(fe.src);
@@ -649,7 +678,8 @@ FileResult run_metadata_only(FileEntry& fe, const RunConfig& cfg,
         const std::string err = rewrite_metadata_only(fe.src, res.out, meta_plan, payloads);
         res.t.metawrite_ms = ms_since(t0);
         merge_warnings(res.warnings, meta_plan.warnings);
-        if (!err.empty()) return fail("metadata-only rewrite failed: " + err);
+        if (!err.empty())
+            return fail("metadata-only rewrite failed: " + err);
 
         if (cfg.rules.sync_mtime && !meta_plan.datetime_original.empty()) {
             const std::string merr = sync_file_mtime(res.out, meta_plan.datetime_original);
@@ -661,7 +691,8 @@ FileResult run_metadata_only(FileEntry& fe, const RunConfig& cfg,
 
         std::error_code ec;
         res.out_bytes = fs::file_size(res.out, ec);
-        if (ec) res.out_bytes = 0;
+        if (ec)
+            res.out_bytes = 0;
         res.ok = true;
         log_info(kStage, kFile, "metadata-only done",
                  {{"src", fe.src.string()},
@@ -670,11 +701,11 @@ FileResult run_metadata_only(FileEntry& fe, const RunConfig& cfg,
                   {"metawrite_ms", fmt_double(res.t.metawrite_ms)},
                   {"warnings", std::to_string(res.warnings.size())}});
         return done();
-    } catch (const std::exception& e) {
+    } catch (const std::exception &e) {
         return fail(std::string("unexpected exception: ") + e.what());
     } catch (...) {
         return fail("unexpected non-standard exception");
     }
 }
 
-}  // namespace pp
+} // namespace pp

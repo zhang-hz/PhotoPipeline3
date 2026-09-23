@@ -34,28 +34,28 @@
 namespace pp::map {
 namespace {
 
-constexpr const char* kUserAgent = "PhotoPipeline/0.1 (batch transcoder; dev)";
+constexpr const char *kUserAgent = "PhotoPipeline/0.1 (batch transcoder; dev)";
 
 // webrd01..04 rotation. tile_url() is const (frozen signature), so the cursor is file-static:
 // one rotation sequence per process, which is exactly the documented behaviour.
 std::atomic<unsigned> g_amap_tile_cursor{0};
 
-QString msg(const char* text) { return QCoreApplication::translate("pp::map", text); }
+QString msg(const char *text) { return QCoreApplication::translate("pp::map", text); }
 
-const TileProvider& osm_provider() {
+const TileProvider &osm_provider() {
     static const TileProvider p{QStringLiteral("osm"), QStringLiteral("OpenStreetMap"), false};
     return p;
 }
 
-const TileProvider& amap_provider() {
+const TileProvider &amap_provider() {
     static const TileProvider p{QStringLiteral("amap"), QStringLiteral("高德地图"), true};
     return p;
 }
 
-QString encode(const QString& s) { return QString::fromLatin1(QUrl::toPercentEncoding(s)); }
+QString encode(const QString &s) { return QString::fromLatin1(QUrl::toPercentEncoding(s)); }
 
 // Nominatim reports lat/lon as JSON strings; amap uses strings for `status` too. Accept both.
-double json_number(const QJsonValue& v, bool* ok) {
+double json_number(const QJsonValue &v, bool *ok) {
     if (v.isString()) {
         bool parsed = false;
         const double d = v.toString().trimmed().toDouble(&parsed);
@@ -70,7 +70,7 @@ double json_number(const QJsonValue& v, bool* ok) {
     return 0.0;
 }
 
-QString json_text(const QJsonValue& v) {
+QString json_text(const QJsonValue &v) {
     if (v.isString()) {
         return v.toString();
     }
@@ -80,7 +80,7 @@ QString json_text(const QJsonValue& v) {
     return {};
 }
 
-}  // namespace
+} // namespace
 
 QUrl TileProvider::tile_url(int z, int x, int y) const {
     if (id == QLatin1String("amap")) {
@@ -95,18 +95,20 @@ QUrl TileProvider::tile_url(int z, int x, int y) const {
     return QUrl(QStringLiteral("https://tile.openstreetmap.org/%1/%2/%3.png").arg(z).arg(x).arg(y));
 }
 
-QUrl TileProvider::search_url(const QString& query, const QString& amap_key) const {
+QUrl TileProvider::search_url(const QString &query, const QString &amap_key) const {
     if (id == QLatin1String("amap")) {
-        return QUrl(QStringLiteral("https://restapi.amap.com/v3/place/text?key=") + encode(amap_key) +
-                    QStringLiteral("&keywords=") + encode(query) + QStringLiteral("&offset=6&page=1"));
+        return QUrl(QStringLiteral("https://restapi.amap.com/v3/place/text?key=") +
+                    encode(amap_key) + QStringLiteral("&keywords=") + encode(query) +
+                    QStringLiteral("&offset=6&page=1"));
     }
-    return QUrl(QStringLiteral("https://nominatim.openstreetmap.org/search?format=json&limit=6&q=") +
-                encode(query));
+    return QUrl(
+        QStringLiteral("https://nominatim.openstreetmap.org/search?format=json&limit=6&q=") +
+        encode(query));
 }
 
 QString TileProvider::user_agent() const { return QString::fromLatin1(kUserAgent); }
 
-const TileProvider* provider_by_id(const QString& id) {
+const TileProvider *provider_by_id(const QString &id) {
     if (id == QLatin1String("osm")) {
         return &osm_provider();
     }
@@ -118,9 +120,10 @@ const TileProvider* provider_by_id(const QString& id) {
 
 QStringList provider_ids() { return {QStringLiteral("osm"), QStringLiteral("amap")}; }
 
-QString parse_search(const QString& provider_id, const QByteArray& body, std::vector<SearchResult>& out) {
+QString parse_search(const QString &provider_id, const QByteArray &body,
+                     std::vector<SearchResult> &out) {
     out.clear();
-    const TileProvider* provider = provider_by_id(provider_id);
+    const TileProvider *provider = provider_by_id(provider_id);
     if (provider == nullptr) {
         return QCoreApplication::translate("pp::map", "未知的地图提供方：%1").arg(provider_id);
     }
@@ -128,7 +131,8 @@ QString parse_search(const QString& provider_id, const QByteArray& body, std::ve
     QJsonParseError parse_error{};
     const QJsonDocument doc = QJsonDocument::fromJson(body, &parse_error);
     if (parse_error.error != QJsonParseError::NoError) {
-        return QCoreApplication::translate("pp::map", "搜索响应解析失败：%1").arg(parse_error.errorString());
+        return QCoreApplication::translate("pp::map", "搜索响应解析失败：%1")
+            .arg(parse_error.errorString());
     }
 
     if (provider->id == QLatin1String("amap")) {
@@ -144,9 +148,10 @@ QString parse_search(const QString& provider_id, const QByteArray& body, std::ve
             return QCoreApplication::translate("pp::map", "高德搜索失败：%1").arg(info);
         }
         const QJsonArray pois = root.value(QStringLiteral("pois")).toArray();
-        for (const QJsonValue& v : pois) {
+        for (const QJsonValue &v : pois) {
             const QJsonObject poi = v.toObject();
-            const QStringList parts = poi.value(QStringLiteral("location")).toString().split(QLatin1Char(','));
+            const QStringList parts =
+                poi.value(QStringLiteral("location")).toString().split(QLatin1Char(','));
             if (parts.size() != 2) {
                 continue;
             }
@@ -159,7 +164,8 @@ QString parse_search(const QString& provider_id, const QByteArray& body, std::ve
             }
             // location is "lng,lat" in GCJ-02; the public API is WGS-84.
             const std::pair<double, double> wgs = gcj02_to_wgs84(lat_gcj, lon_gcj);
-            out.push_back(SearchResult{poi.value(QStringLiteral("name")).toString(), wgs.first, wgs.second});
+            out.push_back(
+                SearchResult{poi.value(QStringLiteral("name")).toString(), wgs.first, wgs.second});
         }
         return {};
     }
@@ -167,7 +173,7 @@ QString parse_search(const QString& provider_id, const QByteArray& body, std::ve
     if (!doc.isArray()) {
         return msg("搜索响应解析失败：顶层不是 JSON 数组");
     }
-    for (const QJsonValue& v : doc.array()) {
+    for (const QJsonValue &v : doc.array()) {
         const QJsonObject item = v.toObject();
         bool lat_ok = false;
         bool lon_ok = false;
@@ -176,9 +182,10 @@ QString parse_search(const QString& provider_id, const QByteArray& body, std::ve
         if (!lat_ok || !lon_ok || std::fabs(lat) > 90.0 || std::fabs(lon) > 180.0) {
             continue;
         }
-        out.push_back(SearchResult{item.value(QStringLiteral("display_name")).toString(), lat, lon});
+        out.push_back(
+            SearchResult{item.value(QStringLiteral("display_name")).toString(), lat, lon});
     }
     return {};
 }
 
-}  // namespace pp::map
+} // namespace pp::map

@@ -38,4 +38,4 @@ namespace pp::simd {
 // 调用约定：热路径可在初始化期问一次并缓存布尔，不必逐帧调用。
 bool cpu_has_avx2();
 
-}  // namespace pp::simd
+} // namespace pp::simd

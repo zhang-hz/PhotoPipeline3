@@ -14,6 +14,22 @@ enum class LogLevel { Trace, Debug, Info, Warn, Error, Critical };
 
 using LogFields = std::initializer_list<std::pair<std::string_view, std::string_view>>;
 
+// PP-THAWED(0.3.0-M4-D20) §3.6 · core/logger.h —— 追加点位（无签名改动）
+//   裁定原文（本行为逐字抄录；行首 "// " 为注释包装）：
+// clang-format off
+// | `core/logger.h` | 追加点位：交错启动偏移、线程分配、进度快照（§7.4） |
+// clang-format on
+//   落地任务 = W1-T7（交错/线程分配点位）+ W1-T6（进度快照点位）→ 落地后改标 PP-FROZEN(0.3.0)。
+//   0.2 现形 API 零改动（log_init/log_write/log_set_level/level_from_env_or/… 签名一字不改；
+//   `stage` 实参沿用既有口径；本任务只加注释，不新增函数）。
+//   点位形态（设计逐字摘录，行首 "// " 为注释包装）：
+// clang-format off
+// §8.1 交错启动：`[sched] file 启动（交错偏移 +Δms）`
+// §7.4 进度快照：运行日志每文件落 `progress_max_row/progress_reported` 快照（debug 级）；
+//      **进度事件不得淹没日志**（不逐行落盘）
+// §8.2 线程分配：worker 取件 → 计算 Alloc → 更新并发闸（信号量限 W）→ `EncodeRequest.encode_threads=E`
+//      （运行日志含交错偏移 + 线程分配读数）
+// clang-format on
 // log_dir 不存在则创建；min_level 可被环境变量 PP_LOG_LEVEL 覆盖
 // （取值 trace/debug/info/warn/error/critical，大小写不敏感）
 // 文件名 run-YYYYMMDD-HHMMSS.log；目录内保留最近 20 个 run 文件，多余的删最旧

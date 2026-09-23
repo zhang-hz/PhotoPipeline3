@@ -1,5 +1,14 @@
 // PP-FROZEN(file)
 // SPDX-License-Identifier: GPL-3.0-or-later
+//
+// PP-THAWED(0.3.0-M4-D20) —— 解冻裁定表 §3.6 行 `core/pixelbudget.h`
+//   裁定原文（本行为逐字抄录；行首 "// " 为注释包装）：
+// clang-format off
+// | `core/pixelbudget.h` | **不变** |
+// clang-format on
+//   → 本行裁决 = 0.3.0 **不变**：维持 PP-FROZEN，**零改动**（本任务只加本注释，不改任何东西）。
+//   配套语义（§4.1/§8.2）：像素预算公式与 2×frame 峰值不变；与线程分配正交（内存背压照旧
+//   `2×frame` acquire）。
 #pragma once
 #include <condition_variable>
 #include <cstdint>

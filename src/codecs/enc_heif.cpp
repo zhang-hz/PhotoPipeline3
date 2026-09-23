@@ -442,7 +442,12 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
         // T7(E3) 映射位（design §3.1）：§3.1 正文规定 heif/avif = 插件 `threads` 参数（内省名核对）
         // —— 本任务 pipeline 恒传 encode_threads=1，故此处仍写死 1 与 0.2 逐字一致；T7 接映射时
         // 改写为 req.encode_threads。
-        (void)req.progress; // T6 接线位：合成进度（heif 无编码回调 → progress_reported 保持 false）
+        // W1-T6（§7.3 口径）：heif/avif = **合成进度面** —— 本编码器不调用 `req.progress`，
+        // `EncodeResult::progress_reported` 保持 false；pipeline 的 ProgressMux 按 k[heif]/k[avif]
+        // 时长估算出 `synthetic=true` 的进度（§7.3 表：WebP/HEIF/AVIF 无编码回调）。
+        // 如实记录（libheif 1.23.5 头文件核对）：编码面（libheif/heif.h）无任何进度回调；
+        // 仅 libheif/heif_decoding.h 的**解码插件**接口有 progress 钩子（不适用于编码）。
+        (void)req.progress;
         if (is_known("threads")) {
             const heif_error te = heif_encoder_set_parameter_integer(enc, "threads", 1);
             if (te.code != heif_error_Ok)

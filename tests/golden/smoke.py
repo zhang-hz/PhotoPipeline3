@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
 """PhotoPipeline — golden smoke driver (M1-T8: docs/m1-tasks.md §3.16 / §4.8;
-M2-T8: assertion level, docs/m2-tasks.md §4 T8 ②; M4-T5: 3 多格式对，docs/v0.3.0-design.md §4).
+M2-T8: assertion level, docs/m2-tasks.md §4 T8 ②; M4-T5: 3 多格式对，docs/v0.3.0-design.md §4;
+M4-T6: 1 progress-trace 对，docs/v0.3.0-design.md §7).
 
-19 transcode pairs (9 M1 smoke pairs upgraded + 7 M2 assertion-level pairs + 3 M4 multi-format
-pairs). Every case runs `photopipeline --dev` into .cache/out-smoke/<case>/ and is then asserted
-by pp_verify against tests/golden/smoke/<case>.json (SCHEMA.md): pixels + metadata values
-(M2-T8 normalisation, #26 landed) + the WarningKind list from the .pp.json sidecar.
+20 transcode pairs (9 M1 smoke pairs upgraded + 7 M2 assertion-level pairs + 3 M4 multi-format
+pairs + 1 M4 progress-trace pair). Every case runs `photopipeline --dev` into
+.cache/out-smoke/<case>/ and is then asserted by pp_verify against tests/golden/smoke/<case>.json
+(SCHEMA.md): pixels + metadata values (M2-T8 normalisation, #26 landed) + the WarningKind list
+from the .pp.json sidecar (+ M4-T6: the progress event stream).
 
 usage: python tests/golden/smoke.py [BUILD_DIR] [--cases a,b,c]
   BUILD_DIR   default <repo>/build/release   (must be configured with -DPP_BUILD_DEV=ON)
@@ -26,6 +28,12 @@ M4-T5（多格式对）:
   * case 行第 2 段支持 ';' 分隔多源；第 3 段支持 ',' 分隔多产物（多产物 → pp_verify 第二参数
     是用例输出根目录，逐产物按 expected.json 的 outputs[].rel 定位与断言）。
   * 单源单产物的 16 对行为逐字不变。
+
+M4-T6（progress-trace 对，docs/v0.3.0-design.md §7）:
+  * 新增第 20 对 `progress-trace`：产物断言同多格式对，另由 expected.json 的 `progress_trace`
+    段断言 `<用例输出根目录>/progress-trace.jsonl`（--dev 侧车逐事件写出，schema 见 SCHEMA.md）：
+    overall_frac 单调不倒退、synthetic 口径（jxl 真实 / webp 合成）、终态 done → 达 1.0。
+  * 对其它 19 对的断言与命令**零改动**（进度侧车只是 --dev 的额外产物，不进断言面）。
 
 M3-W3（裁定 D3：Python 单实现，本文件替代 tests/golden/smoke.sh）:
   * PP_BIN/PP_VERIFY 按 name / name + '.exe' 双探测（Windows 产物带 .exe）
@@ -160,6 +168,11 @@ CASES = [
     "multiformat-split|base/rgba8.png|jpeg/base/rgba8.jpg,webp/base/rgba8.webp|--outputs jpeg:jpegli,webp:libwebp --bitdepth 8 --lossless --meta Exif.Image.Artist=M4-T5-split",
     "multiformat-mirror|base/rgb8.png|base/jpeg/rgb8.jpg,base/webp/rgb8.webp|--outputs jpeg:jpegli,webp:libwebp --bitdepth 8 --lossless --meta Exif.Image.Artist=M4-T5-mirror --template $dir/$format/$file",
     "multiformat-conflict|base/rgb8.png;base/rgb8.tif|jpeg/rgb8.jpg,jpeg/rgb8 (1).jpg,webp/rgb8.webp,webp/rgb8 (1).webp|--outputs jpeg:jpegli,webp:libwebp --bitdepth 8 --lossless --template $format/$file --conflict rename",
+    # M4-T6（0.3.0 逐文件进度 §7）：产物断言 + 进度事件流断言（<out>/progress-trace.jsonl，
+    # 由 --dev 侧车逐事件写出）。jxl = 真实行级（synthetic=false, progress_reported=true）、
+    # webp = 合成面（synthetic=true, progress_reported=false，§7.3）；另断言 overall_frac
+    # 单调不倒退与"终态 done → 达 1.0"（见 pp_verify 的 progress_trace 段 + SCHEMA.md）。
+    "progress-trace|base/rgb8.png|jxl/rgb8.jxl,webp/rgb8.webp|--outputs jxl:libjxl:modular,webp:libwebp:lossless --bitdepth 8 --lossless --meta Exif.Image.Artist=M4-T6-progress --template $format/$file",
 ]
 
 

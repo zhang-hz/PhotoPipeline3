@@ -37,6 +37,51 @@
 
 产物顺序 = RunConfig.outputs 的**配置顺序**（编码顺序是内部实现细节，§4.3）。
 
+## progress_trace（M4-T6 追加，v1/v2 皆可叠加）
+
+`--dev` 在 `<--out 根目录>/progress-trace.jsonl` 落**进度事件流**（每行一个 JSON 对象 = 一个
+`pp::FileEvent`；由 `photopipeline --dev` 的 `ProgressTraceSink` 写出，见 src/main.cpp）。
+它不是断言产物，而是进度口径的**可复核证据**：金样 `progress-trace` 对用它锁住 §7 的单调性与
+真实/合成口径（依据 docs/v0.3.0-design.md §7.1–§7.4）。
+
+事件行字段（逐行 JSON Lines，UTF-8）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `seq` | number | 全局单调序号（写入顺序 = 递达顺序） |
+| `file` | number | 批内文件下标（= `FileEvent::index`，按输入顺序） |
+| `state` | string | `queued`/`probing`/`decoding`/`orienting`/`coloring`/`flattening`/`encoding`/`writing`/`progress`/`done`/`skipped`/`failed`/`cancelled`（`FileState` 的小写名） |
+| `output_index` | number | `-1` = 源文件级（probe/decode/orient/color）；`≥0` = 输出级（`RunConfig.outputs` 的配置顺序下标） |
+| `stage` | string | `Probe`/`Decode`/`Orient`/`Color`/`Flatten`/`Encode`/`MetaWrite`/`Done` |
+| `stage_frac` | number | 阶段内 0..1 |
+| `overall_frac` | number | 文件整体 0..1（§7.2 权重表：3%+27%+10%+50%+10%） |
+| `synthetic` | boolean | `true` = 合成进度（编码器无回调，§7.3；UI 斜纹）。真实进度不得被合成覆盖（§3.1） |
+| `t_ms` | number | 相对本进程侧车起点的毫秒（记录用，**不参与断言**） |
+
+expected.json 的 `progress_trace` 段：
+
+- `progress_trace.file`: string（可选，缺省 `progress-trace.jsonl`）——相对**用例输出根目录**
+- `progress_trace.expect_outputs[]`: 逐输出下标的期望（下标 = `output_index`）
+  - `index`: number（必填，≥0）
+  - `synthetic`: boolean（必填）—— 该下标的**所有**进度事件必须等于此值
+  - `reported`: boolean（可选）—— 断言该产物 sidecar（`outputs[index].rel` 或本项的 `rel` 的
+    `<rel>.pp.json`）里的 `progress_reported`（§7.4 快照键）与此一致；并同向断言
+    `progress_max_row`（真实面 > 0、合成面 = 0）
+  - `rel`: string（可选）—— 显式指定 sidecar 定位（缺省取 `outputs[index].rel`）
+  - `format`: string（可选，记录用）
+
+断言（全部通过才 PASS；任一失败把原因拼进 detail）：
+
+1. 侧车文件存在、逐行可解析（JSON Lines）、非空。
+2. 逐文件（`file` 列）的 `overall_frac` **单调不倒退**（容差 1e-6）且 ∈ [0,1]。
+3. `expect_outputs[]` 每个下标：至少一个事件，且该下标所有事件的 `synthetic` 与期望一致。
+4. `reported` 给定时：sidecar 的 `progress_reported`/`progress_max_row` 与期望同向一致。
+5. 终态为 `done` 的文件必须存在 `overall_frac == 1.0` 的进度事件（§7.2 权重合计=1 的可观测面）。
+
+调用：`pp_verify tests/golden/smoke/progress-trace.json <用例输出根目录>`（携带 `progress_trace`
+时第二参数**必须**是目录，否则 FAIL）。`--selftest` 覆盖三条探针（通过 / 单调性违例 / synthetic
+口径违例）。
+
 ## 元数据值文本规范化（M2-T8 冻结，docs/m2-tasks.md §4 T8 ①）
 
 `pp_verify` 读取元数据后按类型渲染为文本，规则逐字节稳定（跨运行/跨机器/跨容器）：

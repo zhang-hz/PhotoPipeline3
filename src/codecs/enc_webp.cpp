@@ -247,7 +247,12 @@ private:
         // T7(E3) 映射位（design §3.1）：§3.1 正文规定本字段 = (encode_threads > 1) —— 本任务
         // pipeline 恒传 encode_threads=1，故取 0 与 0.2 逐字一致；T7 接映射时改写为
         // cfg.thread_level = (req.encode_threads > 1) ? 1 : 0。
-        (void)req.progress; // T6 接线位：真实行级进度（webp 无回调 → progress_reported 保持 false）
+        // W1-T6（§7.3 口径）：webp = **合成进度面** —— 本编码器不调用 `req.progress`，
+        // `EncodeResult::progress_reported` 保持 false；pipeline 的 ProgressMux 按 k[webp]
+        // 时长估算出 `synthetic=true` 的进度（§7.3 表：WebP/HEIF/AVIF 无编码回调）。
+        // 如实记录：libwebp 的 `WebPConfig` 确有 `progress_hook` 字段（webp/encode.h:354），但
+        // §7.2/§7.3 表把 webp 归为合成面、未授权改口径 → 本任务不接线（偏差账已记，不擅改）。
+        (void)req.progress;
 
         if (!WebPValidateConfig(&cfg)) {
             return encode_error(std::string("webp: WebPValidateConfig rejected the parameter set") +

@@ -118,12 +118,16 @@ struct Scheduler::Impl {
 
     std::vector<std::filesystem::path> reserved; // guarded by mu
     std::multiset<std::string> inflight;         // guarded by mu
+    // W1-T6（§3.3/§7.1）：每槽位的进度高水位快照（guarded by mu）。终态事件携带它 ——
+    // 消费端读终态即得"该文件最后的进度"，且进度流恒单调（progress 事件与阶段事件都更新）。
+    std::vector<ProgressInfo> last_progress;
 
     Clock::time_point t_start{};
     double elapsed_ms = 0; // guarded by mu (set by wait())
 
     Impl(RunConfig c, std::vector<FileEntry> f) : cfg(std::move(c)), files(std::move(f)) {
         results.resize(files.size());
+        last_progress.resize(files.size());
         for (std::size_t i = 0; i < files.size(); ++i)
             results[i].src = files[i].src;
     }
@@ -133,16 +137,33 @@ struct Scheduler::Impl {
         return cb;
     }
 
-    void emit_stage(std::size_t i, FileState s) {
-        const EventCb c = callback_copy();
-        if (c)
-            c(FileEvent{i, s, nullptr});
+    // 阶段/进度事件转发（W1-T6）：整事件转发（`progress` 随行），index 由调度器回填，
+    // result 恒空（终态由 finish() 携带）。进度高水位在此更新（monotonic 契约，§7.3）。
+    void emit_event(std::size_t i, const FileEvent &e) {
+        EventCb c;
+        {
+            std::lock_guard<std::mutex> lk(mu);
+            if (i < last_progress.size() && e.progress.overall_frac > last_progress[i].overall_frac)
+                last_progress[i] = e.progress;
+            c = cb;
+        }
+        if (c) {
+            FileEvent out{};
+            out.index = i;
+            out.state = e.state;
+            out.result = nullptr;
+            out.progress = e.progress;
+            c(out);
+        }
     }
+
+    void emit_stage(std::size_t i, FileState s) { emit_event(i, FileEvent{i, s, nullptr, {}}); }
 
     // Stores the terminal result and emits the terminal event (pointer into results()).
     // 终态映射（§4.1 聚合 / §3.3 事件）：DoneWithErrors 落到 FileState::Done（FileState 无该值，
     // 属 §3.3 表外缺口，T7 定稿）；FileResult.ok=false 让 RunSummary 与 dev harness 的失败计数
     // 仍把"任一输出失败"的文件算作失败（0.2 语义）。
+    // W1-T6：终态事件附**最后进度高水位**（消费端无需另存进度流；W2/W3 运行页读终态即得终值）。
     void finish(std::size_t i, FileOutcome outcome) {
         const FileState state =
             outcome.verdict == FileOutcome::Verdict::Cancelled ? FileState::Cancelled
@@ -151,13 +172,16 @@ struct Scheduler::Impl {
                                                                : FileState::Done;
         FileResult r = std::move(outcome.file);
         EventCb c;
+        ProgressInfo pi;
         {
             std::lock_guard<std::mutex> lk(mu);
             results[i] = std::move(r);
             c = cb;
+            if (i < last_progress.size())
+                pi = last_progress[i];
         }
         if (c)
-            c(FileEvent{i, state, &results[i]});
+            c(FileEvent{i, state, &results[i], pi});
     }
 
     void worker();
@@ -231,7 +255,7 @@ void Scheduler::Impl::worker() {
 
         FileOutcome outcome;
         try {
-            EventFn events{[this, i](const FileEvent &e) { emit_stage(i, e.state); }, &scope};
+            EventFn events{[this, i](const FileEvent &e) { emit_event(i, e); }, &scope};
             if (cfg.metadata_only) {
                 outcome = run_metadata_only(fe, cfg, events);
             } else {

@@ -32,6 +32,18 @@
 //
 // 工作缓冲里不属于任何 target 的告警（decode/color/…）按"出现时刻"推入每个未跳过 target
 // 的行内 —— 单输出时逐字等价于 0.2 的告警序列。
+//
+// W1-T6 进度接线（design §7.1–§7.4；本文件是进度事件的**唯一**产生点）：
+//   * 源文件级共享段（一次）：probe+acquire 3% → decode 27% → orient 5% → color 5%
+//     （不执行的阶段用 shared_skip 即时记满 → 共享段恒达 40%，权重不丢失）。
+//   * 输出级（逐 target）：flatten（无权重，仅阶段文本）→ encode 50%（真实行级 / 合成）→
+//     metawrite+mtime+落盘 10%；Skip 命中的输出全段记满（文件整体仍可达 1.0）。
+//   * 事件：阶段事件携带当前进度快照（FileState 为阶段文本）；进度事件由 ProgressMux 发
+//     `FileState::Progress`（节流：每 20ms 或每 0.5% 进度，§7.4）。
+//   * 合成输出（k 表内的 webp/heif/avif）：编码期间由 SynthPump 按 20ms 采样推进估算（§7.3）；
+//     真实行级输出（jpegli/jxl/OIIO）直接经 ProgressFn 汇流，`synthetic=false`。
+//   * 每输出的 debug 快照：progress_max_row / progress_reported / samples / synthetic / est_ms
+//     （§7.4，**不逐行落盘**；dev 侧车另落 progress-trace 事件流，见 main.cpp）。
 
 #include "core/pipeline.h"
 
@@ -39,14 +51,18 @@
 #include <OpenImageIO/imagebufalgo.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -57,6 +73,7 @@
 #include "core/metadata.h"
 #include "core/params.h"
 #include "core/pixelbudget.h"
+#include "core/progress.h"
 #include "decode/oiio_reader.h"
 
 namespace pp {
@@ -73,7 +90,62 @@ constexpr std::string_view kFile = "pipeline.cpp";
 // T5/E3 → T7：本任务 pipeline 恒传 1（§3.1 线程映射由 T7 接 alloc_threads）。
 constexpr int kEncodeThreadsThisTask = 1;
 
+// W1-T6（§7.3）：合成进度的采样周期（编码器无回调 → 只能时间驱动）。
+constexpr int kSynthPumpMs = 20;
+
 using Clock = std::chrono::steady_clock;
+
+// ---------------------------------------------------------------------------
+// W1-T6（§7.3）：合成进度泵
+//   "编码器无回调"的输出（k 表内的 webp/heif/avif，ProgressMux::synth_active 为真）在编码
+//   期间无法从编码器拿到采样 → 由本泵线程按 kSynthPumpMs 调 ProgressMux::tick() 推进估算。
+//   * RAII：构造即起（enable=false 时不起线程），析构置停止位 + notify + join（≤ 一个采样
+//     周期，且用条件变量即时唤醒 → **不给编码调用增加等待延迟**）。
+//   * 线程纪律（§8.2 E3）：本线程是**采样/监控线程**，不参与编码、不占 `encode_threads`
+//     预算（属 §8.2 的 ε 类，与 GUI/IO 线程同口径）；每个 worker 至多一条（同文件内
+//     逐 target 串行编码），随编码返回确定性退出。
+//   * 抛出的异常（含消费端回调抛出）一律吞掉：采样不得影响编码成败（§3.1 尽力而为）。
+class SynthPump {
+public:
+    SynthPump(ProgressMux *mux, bool enable) : mux_(enable ? mux : nullptr) {
+        if (mux_ == nullptr)
+            return;
+        th_ = std::thread([this] {
+            for (;;) {
+                {
+                    std::unique_lock<std::mutex> lk(mu_);
+                    if (cv_.wait_for(lk, std::chrono::milliseconds(kSynthPumpMs),
+                                     [this] { return stop_; })) {
+                        return; // stop_ == true
+                    }
+                }
+                try {
+                    mux_->tick();
+                } catch (...) {
+                    // 采样失败不影响编码（下一次采样继续）
+                }
+            }
+        });
+    }
+    ~SynthPump() {
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            stop_ = true;
+        }
+        cv_.notify_all();
+        if (th_.joinable())
+            th_.join();
+    }
+    SynthPump(const SynthPump &) = delete;
+    SynthPump &operator=(const SynthPump &) = delete;
+
+private:
+    ProgressMux *mux_ = nullptr;
+    std::mutex mu_;
+    std::condition_variable cv_;
+    bool stop_ = false;
+    std::thread th_;
+};
 
 double ms_since(const Clock::time_point &t0) {
     return std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
@@ -413,9 +485,28 @@ FileOutcome run_one_file(const FileEntry &fe, const RunConfig &cfg, EventFn ev) 
         (ev.scope != nullptr) ? ev.scope->cancelled : std::function<bool()>();
     const std::vector<fs::path> reserved =
         (ev.scope != nullptr) ? ev.scope->reserved : std::vector<fs::path>{};
-    const auto stage = [&ev](FileState s) {
-        if (ev.on_event)
-            ev.on_event(FileEvent{0, s, nullptr}); // index 由调用方（Scheduler）回填
+    // W1-T6（§3.3/§7.1–§7.4）：进度枢纽。probe 之后建立（合成估算需要像素尺寸）；
+    // 在此之前的事件（Queued/Probing 的首次）progress 取默认值（overall=0）。
+    std::unique_ptr<ProgressMux> mux;
+    // 阶段事件携带当前进度快照（§3.3：progress 为追加字段，Progress 状态为其主用途；
+    // 阶段事件带上快照可让消费端一次拿到"阶段文本 + 整体位置"，消费端按 state 分派）。
+    const auto stage = [&ev, &mux](FileState s, Stage st, int output_index) {
+        if (!ev.on_event)
+            return;
+        FileEvent e{};
+        e.index = 0; // 批内下标由调用方（Scheduler）回填
+        e.state = s;
+        e.result = nullptr;
+        if (mux)
+            e.progress = mux->snapshot(st, output_index);
+        ev.on_event(e);
+    };
+    const auto make_mux = [&mux, &ev](const ImageInfo &info, std::size_t outputs) {
+        mux = std::make_unique<ProgressMux>(info.width, info.height, outputs);
+        mux->set_event_callback([&ev](const FileEvent &e) {
+            if (ev.on_event)
+                ev.on_event(e);
+        });
     };
 
     // 聚合终态 + FileResult 聚合字段（v0.2 单输出逐字等价：见 pipeline.h 的加法说明）。
@@ -519,12 +610,15 @@ FileOutcome run_one_file(const FileEntry &fe, const RunConfig &cfg, EventFn ev) 
         // Scheduler 在取件时先探一次（早失败 + 预算/串行化决策，并把结果回填自己的 FileEntry），
         // §3.2 的 `const FileEntry&` 使 pipeline 无法复用那份结果，故此处再探一次（只读 spec、
         // 无像素工作，代价为一次头部解析）。0.2 同形（scheduler.cpp:157 + pipeline.cpp:265）。
-        stage(FileState::Probing);
+        stage(FileState::Probing, Stage::Probe, -1);
         const ProbeOutcome po = probe_file(fe.src);
         if (!po.error.empty())
             return fail("probe failed: " + po.error);
         const ImageInfo info = po.info;
         res.info = info;
+        // W1-T6：进度枢纽就位（§7.2 共享段从 probe 起算；§7.3 合成估算需要 pixels）
+        make_mux(info, cfg.outputs.size());
+        mux->shared_stage(Stage::Probe, 0.f);
         const OIIO::ImageSpec *spec = po.first_spec ? &*po.first_spec : nullptr;
         const int orientation = spec ? orientation_from_spec(*spec) : 1;
         std::string src_icc = spec ? icc_from_spec(*spec) : std::string();
@@ -632,9 +726,12 @@ FileOutcome run_one_file(const FileEntry &fe, const RunConfig &cfg, EventFn ev) 
         }
         if (is_cancelled(cancelled))
             return finalize(FileOutcome::Verdict::Cancelled);
+        // W1-T6（§7.2 首行）：probe + acquire 完成 → 3%
+        mux->shared_stage(Stage::Probe, 1.f);
 
         // ---- 5. decode (§5.2) → 工作缓冲（此后 decode 缓冲立即释出；峰值 = 2×frame）----
-        stage(FileState::Decoding);
+        stage(FileState::Decoding, Stage::Decode, -1);
+        mux->shared_stage(Stage::Decode, 0.f);
         Clock::time_point t0 = Clock::now();
         DecodeOutcome dec = decode_float(fe.src, info);
         res.t.decode_ms = ms_since(t0);
@@ -644,6 +741,14 @@ FileOutcome run_one_file(const FileEntry &fe, const RunConfig &cfg, EventFn ev) 
         std::string werr;
         if (!work_from_buf(work, dec.buf, werr))
             return fail("decode failed: " + werr);
+        // W1-T6（§7.2 decode 行）：本仓库的解码入口（src/decode/oiio_reader.h 的 decode_float）
+        // **不暴露读行回调**（该文件不在 T6 文件面内 → 不改签名）→ 按 §7.2 的"无回调格式即时 1
+        // 并日志注明"落到即时 1，并在此如实记一条 debug（fmt/尺寸可见）。
+        mux->shared_stage(Stage::Decode, 1.f);
+        log_debug(kStage, kFile, "decode progress: immediate 1 (no read-row callback exposed)",
+                  {{"src", fe.src.string()},
+                   {"format", info.format},
+                   {"decode_ms", fmt_double(res.t.decode_ms)}});
         // decode 告警（MultipageTruncated 等）随解码缓冲一起转移，再释出缓冲
         const std::vector<Warning> decode_warnings = std::move(dec.warnings);
         dec = DecodeOutcome{}; // 释放 decode 缓冲（工作缓冲已就位；峰值回到 1×frame）
@@ -663,13 +768,17 @@ FileOutcome run_one_file(const FileEntry &fe, const RunConfig &cfg, EventFn ev) 
         // ---- 6. orient (§5.3) ----
         bool rotated = false;
         if (cfg.rotate_orientation && orientation != 1) {
-            stage(FileState::Orienting);
+            stage(FileState::Orienting, Stage::Orient, -1);
+            mux->shared_stage(Stage::Orient, 0.f);
             t0 = Clock::now();
             std::string oerr;
             if (!orient_work(work, orientation, oerr))
                 return fail("orient failed: " + oerr);
             res.t.orient_ms = ms_since(t0);
             rotated = true;
+            mux->shared_stage(Stage::Orient, 1.f);
+        } else {
+            mux->shared_skip(Stage::Orient); // 不执行 → 权重不丢失（§7.2 共享段恒达 40%）
         }
         if (is_cancelled(cancelled))
             return finalize(FileOutcome::Verdict::Cancelled);
@@ -708,7 +817,8 @@ FileOutcome run_one_file(const FileEntry &fe, const RunConfig &cfg, EventFn ev) 
         }
         std::string icc_to_embed = src_icc;
         if (eff_target != ColorTarget::KeepOriginal) {
-            stage(FileState::Coloring);
+            stage(FileState::Coloring, Stage::Color, -1);
+            mux->shared_stage(Stage::Color, 0.f);
             t0 = Clock::now();
             // ColorManager 会替换 ImageBuf（可能改变通道数：灰度升维）→ 变换后同步回工作缓冲
             OIIO::ImageBuf cbuf = work.buf;
@@ -725,11 +835,13 @@ FileOutcome run_one_file(const FileEntry &fe, const RunConfig &cfg, EventFn ev) 
             if (!work_from_buf(work, cbuf, cerr))
                 return fail("color transform failed: " + cerr);
             cbuf.clear();
+            mux->shared_stage(Stage::Color, 1.f);
         } else {
             // Pixels untouched: keep the source profile as-is (T4 ruling ③).
             res.color_src = src_icc.empty() ? (src_is_gray ? "assumed gray sRGB" : "assumed sRGB")
                                             : "ICC(source)";
             res.color_dst = "keep";
+            mux->shared_skip(Stage::Color); // 不执行 → 权重不丢失（共享段收口 = 40%）
         }
         log_debug(kStage, kFile, "color decision",
                   {{"src", res.color_src},
@@ -762,8 +874,14 @@ FileOutcome run_one_file(const FileEntry &fe, const RunConfig &cfg, EventFn ev) 
             OutputResult &row = res.outputs[pt.cfg_index];
             if (pt.skip) {
                 row.skipped = true;
+                mux->on_output_skipped(pt.cfg_index); // §7.2：该输出全段记满（文件整体可达 1.0）
                 continue; // 跳过行不参与 flatten/告警（0.2 的 Skip 语义）
             }
+            // W1-T6：该输出进入编码段（§7.2 的 50%+10% 块）。绑定必须早于本输出的任何阶段
+            // 事件 —— 合成标识（§7.3）以"格式是否在 k 表内"预置，编码返回后再按
+            // `progress_reported` 校正；先绑定可保证该输出的**所有**事件 synthetic 口径一致。
+            const ProgressFn out_progress = mux->bind_output(pt.cfg_index, pt.target.format_id);
+            const bool synth_pump = mux->synth_active(pt.cfg_index);
 
             // §4.3：最后一个 alpha-preserving target 之后、首个 alpha-dropping target 之前原地
             // flatten
@@ -771,7 +889,8 @@ FileOutcome run_one_file(const FileEntry &fe, const RunConfig &cfg, EventFn ev) 
             const bool buf_has_alpha = (cur_ch == 2 || cur_ch == 4);
             if (image_has_alpha && !pt.target.supports_alpha) {
                 if (buf_has_alpha) {
-                    stage(FileState::Flattening);
+                    stage(FileState::Flattening, Stage::Flatten, static_cast<int>(pt.cfg_index));
+                    mux->output_stage(pt.cfg_index, Stage::Flatten);
                     t0 = Clock::now();
                     std::string ferr;
                     if (!flatten_alpha_in_place(work, static_cast<float>(cfg.flatten_gray), ferr)) {
@@ -805,18 +924,45 @@ FileOutcome run_one_file(const FileEntry &fe, const RunConfig &cfg, EventFn ev) 
             }
 
             // ---- encode (§5.7)：单输出一次调用（§3.1）----
-            stage(FileState::Encoding);
+            stage(FileState::Encoding, Stage::Encode, static_cast<int>(pt.cfg_index));
             t0 = Clock::now();
             // EncodeRequest 字段序（encoder.h §3.1）：img, target, meta, cancelled, progress,
-            // encode_threads。progress = T6 接线位（本任务恒空回调）；encode_threads = T7 接
-            // alloc_threads（本任务恒 1，§3.1 线程映射义务的兑现方是 T7）。
+            // encode_threads。W1-T6：progress = ProgressMux 的输出级回调（真实行级 → 直接汇流；
+            // 无回调格式 → 走合成估算，编码期间由 SynthPump 按 20ms 采样，§7.3）；
+            // encode_threads = T7 接 alloc_threads（本任务恒 1，§3.1 线程映射义务的兑现方是 T7）。
             EncodeRequest req{work.buf,  pt.target,    meta,
-                              cancelled, ProgressFn{}, kEncodeThreadsThisTask};
-            const EncodeResult er = pt.enc->encode(req);
+                              cancelled, out_progress, kEncodeThreadsThisTask};
+            EncodeResult er;
+            {
+                SynthPump pump(mux.get(), synth_pump);
+                er = pt.enc->encode(req);
+            }
             row.t.encode_ms = ms_since(t0);
             res.t.encode_ms += row.t.encode_ms;
             merge_warnings(row.warnings, er.warnings);
-            if (!er.error.empty() || er.bytes == 0) {
+            const bool enc_ok = er.error.empty() && er.bytes != 0;
+            // 先按 §3.1 口径校正 mux 的合成标识（progress_reported=false → 该输出标合成），
+            // 再取快照 —— 快照里的 synthetic/reported 即该输出的**最终**口径（不写两次）。
+            if (enc_ok)
+                mux->on_output_encode_done(pt.cfg_index, er.progress_reported);
+            else
+                mux->on_output_failed(pt.cfg_index); // 失败：停在已完成进度，不虚增
+            // §7.4 进度快照（debug 级，每输出一条；**不逐行落盘**）：progress_max_row /
+            // progress_reported 是全仓进度口径的两个事实键，另附 samples/synthetic/est_ms 便于
+            // 校准 k 表（§7.3 "k 校准表随日志实测回归校正"）。
+            const ProgressMux::Stats pstats = mux->stats(pt.cfg_index);
+            log_debug(kStage, kFile, "progress snapshot",
+                      {{"src", fe.src.string()},
+                       {"output_index", std::to_string(pt.cfg_index)},
+                       {"format", pt.target.format_id},
+                       {"progress_reported", pstats.reported ? "true" : "false"},
+                       {"progress_max_row", std::to_string(pstats.max_row)},
+                       {"progress_samples", std::to_string(pstats.samples)},
+                       {"progress_synthetic", pstats.synthetic ? "true" : "false"},
+                       {"encode_est_ms", fmt_double(pstats.est_ms)}});
+            row.progress_reported = pstats.reported;
+            row.progress_max_row = pstats.max_row;
+            if (!enc_ok) {
                 row.error = "encode failed: " +
                             (er.error.empty() ? std::string("encoder produced no data") : er.error);
                 row.ok = false;
@@ -827,7 +973,8 @@ FileOutcome run_one_file(const FileEntry &fe, const RunConfig &cfg, EventFn ev) 
             row.out_bytes = er.bytes;
 
             // ---- metadata write (§5.8, §4.8) ----
-            stage(FileState::Writing);
+            stage(FileState::Writing, Stage::MetaWrite, static_cast<int>(pt.cfg_index));
+            mux->output_stage(pt.cfg_index, Stage::MetaWrite);
             t0 = Clock::now();
             std::string meta_err;
             // M2-T4 (#6/#8): the writer's explicit failure/degradation channel; plan.warnings
@@ -850,6 +997,8 @@ FileOutcome run_one_file(const FileEntry &fe, const RunConfig &cfg, EventFn ev) 
             row.t.metawrite_ms = ms_since(t0);
             res.t.metawrite_ms += row.t.metawrite_ms;
             row.ok = true;
+            mux->on_output_metawrite_done(
+                pt.cfg_index); // §7.2 末行：metawrite + mtime + 落盘 = 10%
         }
 
         // ---- 10. mtime sync (§5.9)：生效 DateTimeOriginal 只算一次，逐输出落盘一次 ----
@@ -864,6 +1013,8 @@ FileOutcome run_one_file(const FileEntry &fe, const RunConfig &cfg, EventFn ev) 
                 }
             }
         }
+        // W1-T6：收尾样本（成功路径此处 file_frac 已按 §7.2 达 1.0；失败路径不虚增）
+        mux->finish();
 
         for (const OutputResult &row : res.outputs) {
             log_info(kStage, kFile, "output done",
@@ -923,9 +1074,20 @@ FileOutcome run_metadata_only(const FileEntry &fe, const RunConfig &cfg, EventFn
         (ev.scope != nullptr) ? ev.scope->cancelled : std::function<bool()>();
     const std::vector<fs::path> reserved =
         (ev.scope != nullptr) ? ev.scope->reserved : std::vector<fs::path>{};
-    const auto stage = [&ev](FileState s) {
-        if (ev.on_event)
-            ev.on_event(FileEvent{0, s, nullptr});
+    // W1-T6：进度枢纽（仅元数据模式同样走 §7.2 权重表：无 encode/decode 段 → 对应阶段记满）。
+    // 本路径单文件单输出，阶段事件按**源文件级**（output_index=-1）发；输出级进度由
+    // ProgressMux 的逐输出记账驱动（synthetic 恒 false：无编码器参与）。
+    std::unique_ptr<ProgressMux> mux;
+    const auto stage = [&ev, &mux](FileState s, Stage st) {
+        if (!ev.on_event)
+            return;
+        FileEvent e{};
+        e.index = 0;
+        e.state = s;
+        e.result = nullptr;
+        if (mux)
+            e.progress = mux->snapshot(st, -1);
+        ev.on_event(e);
     };
 
     const auto finalize = [&res, &t_start, &outcome](FileOutcome::Verdict v) -> FileOutcome {
@@ -990,12 +1152,23 @@ FileOutcome run_metadata_only(const FileEntry &fe, const RunConfig &cfg, EventFn
         if (!validate_output_template(cfg.output_template, &tmpl_err))
             return fail(tmpl_err);
 
-        stage(FileState::Probing);
+        stage(FileState::Probing, Stage::Probe);
         const ProbeOutcome po = probe_file(fe.src);
         if (!po.error.empty())
             return fail("probe failed: " + po.error);
         const ImageInfo info = po.info; // §3.2：FileEntry 只读，不回填
         res.info = info;
+        // W1-T6：进度枢纽 + §7.2 共享段（本路径不解码/不编码 → decode/orient/color/encode 记满）
+        mux = std::make_unique<ProgressMux>(info.width, info.height, 1);
+        mux->set_event_callback([&ev](const FileEvent &e) {
+            if (ev.on_event)
+                ev.on_event(e);
+        });
+        mux->shared_stage(Stage::Probe, 1.f); // probe + acquire（本路径无内存背压）3%
+        mux->shared_skip(Stage::Decode);      // 不解码（零重编码）
+        mux->shared_skip(Stage::Orient);
+        mux->shared_skip(Stage::Color);
+        mux->on_output_no_encode(0); // 无编码段 → 50% 记满（其余走 metawrite 10%）
 
         const FormatDef *fmt = find_format(spec.format_id);
         if (!fmt)
@@ -1021,6 +1194,7 @@ FileOutcome run_metadata_only(const FileEntry &fe, const RunConfig &cfg, EventFn
         row.out = out_plan.out_path;
         if (out_plan.skip) {
             row.skipped = true;
+            mux->on_output_skipped(0); // §7.2：无工作可做 → 全段记满
             log_info(kStage, kFile, "skipped: output exists",
                      {{"src", fe.src.string()}, {"out", row.out.string()}});
             return finalize(FileOutcome::Verdict::Skipped);
@@ -1046,7 +1220,8 @@ FileOutcome run_metadata_only(const FileEntry &fe, const RunConfig &cfg, EventFn
         // dropping the tag would change how the image displays.
 
         const Payloads payloads = make_payloads(meta_plan);
-        stage(FileState::Writing);
+        stage(FileState::Writing, Stage::MetaWrite);
+        mux->output_stage(0, Stage::MetaWrite);
         const Clock::time_point t0 = Clock::now();
         const std::string err = rewrite_metadata_only(fe.src, row.out, meta_plan, payloads);
         row.t.metawrite_ms = ms_since(t0);
@@ -1054,6 +1229,7 @@ FileOutcome run_metadata_only(const FileEntry &fe, const RunConfig &cfg, EventFn
         merge_warnings(row.warnings, meta_plan.warnings);
         if (!err.empty())
             return fail("metadata-only rewrite failed: " + err);
+        mux->on_output_metawrite_done(0); // §7.2 末行：metawrite + mtime + 落盘 = 10%
 
         if (cfg.rules.sync_mtime && !meta_plan.datetime_original.empty()) {
             const std::string merr = sync_file_mtime(row.out, meta_plan.datetime_original);
@@ -1068,6 +1244,7 @@ FileOutcome run_metadata_only(const FileEntry &fe, const RunConfig &cfg, EventFn
         if (ec)
             row.out_bytes = 0;
         row.ok = true;
+        mux->finish(); // W1-T6：收尾样本（此路径 §7.2 全段记满 → 1.0）
         log_info(kStage, kFile, "metadata-only done",
                  {{"src", fe.src.string()},
                   {"out", row.out.string()},

@@ -67,6 +67,42 @@ bool tiff_compression_known(std::string_view name) {
                        [name](std::string_view n) { return n == name; });
 }
 
+// W1-T6（§3.1/§7.2）：OIIO 写进度中继。
+//   * OIIO 的 `ProgressCallback` 是 C 函数指针（`bool(void*, float)`），故用薄中继结构把
+//     `EncodeRequest::progress`（std::function）接进去；
+//   * 返回值恒 false = **永不中止写盘**（§8.3：取消语义只在阶段边界检查，编码内不中断）；
+//   * `called_with_progress()`：只有在收到 portion > 0 的回调后才算"编码器报了真实进度"
+//     （OIIO 起手会发一个 0.0 采样；完全不发回调的插件 —— 支持 "rectangles" 的那些 —— 如实
+//     记为未报，§3.1 的 progress_reported=false）。
+struct OiioProgressRelay {
+    const ProgressFn *progress = nullptr;
+    bool called = false; // 收到过回调（含 0.0）
+    bool moved = false;  // 收到过 portion > 0 的回调
+    bool called_with_progress() const { return moved; }
+};
+
+bool oiio_progress_trampoline(void *opaque, float portion_done) {
+    auto *relay = static_cast<OiioProgressRelay *>(opaque);
+    if (relay == nullptr)
+        return false;
+    relay->called = true;
+    if (portion_done > 0.0f)
+        relay->moved = true;
+    if (relay->progress != nullptr && *relay->progress) {
+        try {
+            (*relay->progress)(portion_done);
+        } catch (...) {
+            // 进度回调不参与编码成败（§3.1 "尽力而为"）：吞掉并继续写盘
+            static bool warned = false;
+            if (!warned) {
+                warned = true;
+                log_warn(kStage, kFile, "progress callback threw; ignored", {{"source", "oiio"}});
+            }
+        }
+    }
+    return false;
+}
+
 int quantize(float v, int maxv) {
     const float x = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
     return static_cast<int>(std::lround(x * static_cast<float>(maxv)));
@@ -132,10 +168,17 @@ EncodeResult OiioEncoder::encode(const EncodeRequest &req) {
         log_warn(kStage, kFile, msg, {{"format", format_id_}, {"param", key}, {"value", value}});
     };
 
-    // T6/T7 接线位（design §3.1）：progress = 真实行级回调（T6，本任务恒空）；
+    // W1-T6 接线（design §3.1 / §7.2）：OIIO 写面 = **真实进度**，走 OIIO 自身的
+    // `ImageOutput::write_image(..., ProgressCallback, void*)`（imageio.h:66 明示该回调
+    // "called periodically by read_image and write_image"，实现见 imageoutput.cpp:651/668/703/712：
+    // 起手 0.0、逐写块、收尾 1.0）。粒度 = OIIO 的写块（约 64MB 或整 strip 行数，见
+    // imageoutput.cpp:673-680 的 chunk 计算）—— **不改写为逐行 write_scanlines**：那会打散
+    // TIFF 的 strip 并行压缩路径（tiffoutput.cpp:1471-1518 的 parallelize 条件要求整 strip
+    // 边界），构成性能回退风险（§11.3 禁回退）。png/tiff/bmp 三个插件都不支持 "rectangles"
+    // （各自 supports() 实测），故其上 write_image 必然走该回调路径。
     // encode_threads = E3 内部线程映射（T7）。OIIO 写路径无内部线程控制，§3.1 正文要求
     // "E 不生效"如实入日志 —— E=1（本任务恒值）时不产生任何额外日志。
-    (void)req.progress;
+    OiioProgressRelay relay{&req.progress};
     if (req.encode_threads > 1) {
         log_info(kStage, kFile, "encoder has no internal threading; encode_threads ignored",
                  {{"encoder", "oiio"}, {"encode_threads", std::to_string(req.encode_threads)}});
@@ -264,7 +307,7 @@ EncodeResult OiioEncoder::encode(const EncodeRequest &req) {
             }
         }
 
-        // ---- write through OIIO ----
+        // ---- write through OIIO（W1-T6：带进度中继；回调返回 false = 不中止）----
         std::unique_ptr<OIIO::ImageOutput> out = OIIO::ImageOutput::create(format_id_);
         if (!out)
             return fail("OpenImageIO has no output plugin for '" + format_id_ + "'");
@@ -273,7 +316,8 @@ EncodeResult OiioEncoder::encode(const EncodeRequest &req) {
                         out->geterror());
         const OIIO::stride_t xstride = static_cast<OIIO::stride_t>(nch) * bps;
         const OIIO::stride_t ystride = xstride * w;
-        if (!out->write_image(out_type, pixels.data(), xstride, ystride, OIIO::AutoStride))
+        if (!out->write_image(out_type, pixels.data(), xstride, ystride, OIIO::AutoStride,
+                              &oiio_progress_trampoline, &relay))
             return fail("OIIO write_image failed for " + req.target.out_path.string() + ": " +
                         out->geterror());
         if (!out->close())
@@ -286,6 +330,8 @@ EncodeResult OiioEncoder::encode(const EncodeRequest &req) {
         if (ec || bytes == 0)
             return fail("output file missing or empty: " + req.target.out_path.string());
         res.bytes = bytes;
+        res.progress_reported =
+            relay.called_with_progress(); // 真回调才报，短路（rectangles 插件）不报
         log_debug(kStage, kFile, "encoded",
                   {{"format", format_id_},
                    {"size", std::to_string(w) + "x" + std::to_string(h)},

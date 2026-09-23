@@ -229,10 +229,12 @@ public:
 private:
     static EncodeResult encode_impl(const EncodeRequest &req) {
         const auto t0 = std::chrono::steady_clock::now();
-        // T6/T7 接线位（design §3.1）：progress = 真实行级回调（T6，本任务恒空）；
+        // W1-T6 接线（design §3.1 / §7.2）：jpegli = **真实行级进度** —— 每条
+        // `jpegli_write_scanlines` 成功后上报 rows/height，故 `progress_reported=true`
+        // （进度事件由 ProgressMux 节流汇流，本处逐行上报不落盘、不打印）。
         // encode_threads = E3 内部线程映射（T7）。jpegli 无内部线程控制（E2），§3.1 正文
         // 要求"E 不生效"如实入日志 —— E=1（本任务恒值）时不产生任何额外日志。
-        (void)req.progress;
+        const ProgressFn &progress = req.progress;
         if (req.encode_threads > 1) {
             log_info(
                 "Encode", kLogFile, "encoder has no internal threading; encode_threads ignored",
@@ -371,6 +373,9 @@ private:
                 }
                 return encode_error("jpegli: short scanline write");
             }
+            // W1-T6：真实行级进度（§7.2 encode 段的 real 面；ProgressMux 负责节流/汇流）
+            if (progress)
+                progress(static_cast<float>(y + 1) / static_cast<float>(r.height));
         }
         jpegli_finish_compress(&cinfo);
         jpegli_destroy_compress(&cinfo);
@@ -398,6 +403,8 @@ private:
         EncodeResult res;
         res.bytes = static_cast<uint64_t>(mem_size);
         res.t.encode_ms = ms_since(t0);
+        res.progress_reported =
+            static_cast<bool>(progress); // §3.1：真实行级（回调存在即已逐行上报）
         return res;
     }
 };

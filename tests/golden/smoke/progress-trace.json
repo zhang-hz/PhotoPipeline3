@@ -1,0 +1,36 @@
+{
+  "case": "progress-trace",
+  "input": "base/rgb8.png",
+  "output_format": "jxl,webp",
+  "outputs": [
+    {
+      "rel": "jxl/rgb8.jxl",
+      "format": "jxl",
+      "assert": {
+        "pixel": { "mode": "exact" },
+        "metadata": [
+          { "key": "Exif.Image.Artist", "op": "eq", "value": "M4-T6-progress" }
+        ],
+        "warnings_contain": []
+      }
+    },
+    {
+      "rel": "webp/rgb8.webp",
+      "format": "webp",
+      "assert": {
+        "pixel": { "mode": "exact" },
+        "metadata": [
+          { "key": "Exif.Image.Artist", "op": "eq", "value": "M4-T6-progress" }
+        ],
+        "warnings_contain": []
+      }
+    }
+  ],
+  "progress_trace": {
+    "file": "progress-trace.jsonl",
+    "expect_outputs": [
+      { "index": 0, "format": "jxl", "synthetic": false, "reported": true },
+      { "index": 1, "format": "webp", "synthetic": true, "reported": false }
+    ]
+  }
+}

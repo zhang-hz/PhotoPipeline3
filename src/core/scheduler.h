@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // PP-THAWED(0.3.0-M4-D20) —— 解冻裁定表 §3.3（依据 docs/v0.3.0-design.md §3.3）
-//   本文件内 ProgressInfo / FileEvent / ScheduleConfig / Scheduler 为 0.3.0 一次性解冻（D20）
-//   授权变更面；落地任务 = W1-T7（E3 调度器：交错限速 + 自适应线程预算，含 §8.2 alloc_threads）。
+//   本文件内 ScheduleConfig / Scheduler 为 0.3.0 一次性解冻（D20）授权变更面；
+//   落地任务 = W1-T7（E3 调度器：交错限速 + 自适应线程预算，含 §8.2 alloc_threads）。
 //   对应任务落地后：把本文件内的 PP-THAWED 标记改标为 PP-FROZEN(0.3.0)（冻结头 SPDX 延续）。
 //   本文件其余既有声明（RunSummary）不在裁定表内 → 维持 PP-FROZEN(M1) 只读。
 //   本节标注 [重排]：结构重排，不再保证聚合初始化兼容（随本次解冻一次性接受）。
@@ -13,8 +13,24 @@
 //   `reserved` 按每个 out_path 登记；worker 以 §3.2 的三参 run_one_file/run_metadata_only
 //   + EventFn{on_event, &RunScope{budget, reserved, cancelled}} 调用管线。E3/stagger/
 //   线程预算（§8.1/§8.2）仍归 W1-T7，本任务不落。
+//
+// W1-T6 已落地面（§3.3 的**进度面**，逐条）：
+//   ① `ProgressInfo`（下表 §3.3 块）—— **已落地**，标记改标 PP-FROZEN(0.3.0)。
+//      物理声明在 `src/core/progress.h`（设计 §3.3 的表头文件是本文件；搬迁理由与披露见
+//      progress.h 文件头：`FileEvent::progress` 需要完整类型，而 scheduler.h 必须包含
+//      pipeline.h → 留在本文件会成包含环。字段名/顺序/语义/默认值逐字照设计，唯一例外 =
+//      `Stage::Queued`（现形 Stage 无该值，见 progress.h §3.3 块末注，【语义性】）。
+//   ② `FileEvent::progress`（§3.3 的第二个块）—— 声明物理位于 `src/core/pipeline.h`
+//      （T5 已披露的同一处置），字段与注释已按 §3.3 落地并改标 PP-FROZEN(0.3.0)。
+//   ③ 本文件（scheduler.cpp）的**进度转发**：worker 的 EventFn 适配器不再只取 `state`，
+//      而是整事件转发（progress 字段随行）；调度器为每个批内槽位维护"进度高水位"快照，
+//      终态事件携带它（消费端读终态即得最后进度，且进度流恒单调）。
+//   ④ §7.4 的 `FileEvent{state=Progress}` 依赖 `FileState::Progress` —— 现形 FileState
+//      （pipeline.h）原无该值；主对话已裁定授权（W0 口径 b：枚举**末尾**追加），
+//      见 pipeline.h 的 FileState / FileEvent 块（记【语义性】表缺口修复）。
 #pragma once
 #include "core/pipeline.h"
+#include "core/progress.h"
 #include <atomic>
 #include <cstddef>
 #include <functional>
@@ -24,10 +40,9 @@
 
 namespace pp {
 
-// PP-THAWED(0.3.0-M4-D20) §3.3 · ProgressInfo
-//   0.3.0 新增（三级进度模型的进度载体：运行级/源文件级/输出级，§7.1）。
-//   落地任务 W1-T7（进度合成/节流见 W1-T6 的 core/progress.h）→ 落地后改标 PP-FROZEN(0.3.0)。
-//   0.3.0 冻结形态（设计 §3.3 逐字抄录；剥去行首 "// " 前缀即设计原文）：
+// PP-FROZEN(0.3.0) §3.3 · ProgressInfo（**W1-T6 已落地**）
+//   零改动声明：物理声明在 `src/core/progress.h`（搬迁理由见本文件头 W1-T6 ①）；此处仅留
+//   交叉引用，避免同一结构两处声明。设计 §3.3 逐字形态（行首 "// " 为注释包装）：
 // clang-format off
 // struct ProgressInfo {                          // 追加
 //     int   output_index = -1;                   // -1 = 源文件级阶段（probe/decode/color）
@@ -37,11 +52,8 @@ namespace pp {
 //     bool  synthetic   = false;                 // true = 合成进度（UI 斜纹）
 // };
 // clang-format on
-//   注（0.2 现形差异，由 T6/T7 落地前裁定后处理）：`Stage::Queued` 在 core/types.h 现形的
-//   Stage{Probe, Decode, Orient, Color, Flatten, Encode, MetaWrite, Done} 中**不存在**；
-//   §3.6 未授权改 Stage（types.h 明确"不变"面）→ 需主对话裁定（M4-T1 已上报，W5 收口入
-//   m4-report；本任务零改动）。 FileEvent（§3.3 的表头文件是本文件，但其声明物理位于 pipeline.h）的
-//   progress 追加与 FileState 缺口见 src/core/pipeline.h 内 §3.3 块。
+//   唯一现形差异 = `Stage stage = Stage::Queued;` 的默认值（core/types.h 的 Stage 无 Queued，
+//   且该文件不在 §3 解冻表内）→ 落地取 `Stage::Probe`，【语义性】表缺口，详见 progress.h。
 struct RunSummary {
     std::size_t total = 0, ok = 0, failed = 0, skipped = 0, cancelled = 0;
     uint64_t out_bytes = 0;

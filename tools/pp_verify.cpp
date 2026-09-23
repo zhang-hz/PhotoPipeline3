@@ -49,6 +49,8 @@ const char *kUsage =
     "  metadata [{key, op: eq|exists|absent, value}], warnings_contain [WarningKind]\n"
     "  v2 (0.3.0): expected.json 携带 outputs[] 时，第二参数是**用例输出根目录**，\n"
     "  逐输出按 outputs[i].rel 定位文件并各自断言（路径断言 = 文件必须存在）\n"
+    "  M4-T6: 携带 progress_trace 段时同样要求第二参数是用例输出根目录，\n"
+    "  断言 <root>/progress-trace.jsonl 的 overall_frac 单调性 + synthetic 口径\n"
     "  --selftest   run the built-in three-state self test (no corpus needed)\n"
     "output: VERIFY <case> OK|FAIL <detail>; exit code = number of FAILs\n";
 
@@ -604,14 +606,231 @@ bool check_case_outputs(const QJsonObject &exp, const fs::path &case_root,
     return false;
 }
 
+// ---------------------------------------------------------------------------
+// M4-T6: expected.json 的 progress_trace 段 —— --dev 进度事件流断言
+//   （docs/v0.3.0-design.md §7.1–§7.4；文件 = <用例输出根目录>/progress-trace.jsonl，
+//    由 photopipeline --dev 逐事件写出，schema 见 tests/golden/SCHEMA.md）
+//   {
+//     "file": "progress-trace.jsonl",            // 相对用例输出根目录（缺省同值）
+//     "expect_outputs": [
+//       { "index": 0, "synthetic": false, "reported": true },   // jxl：真实行级
+//       { "index": 1, "synthetic": true,  "reported": false }   // webp：合成（§7.3）
+//     ]
+//   }
+//   断言（逐条 → 失败即拼进 detail）：
+//     ① 文件存在、逐行可解析（JSON Lines）、非空；
+//     ② 每文件（file 列）的 overall_frac 单调不倒退且 ∈ [0,1]（§7.3/§7.4 消费端契约）；
+//     ③ expect_outputs 的每个下标：存在事件，且该下标的**所有**事件 synthetic 与期望一致
+//        （§3.1：真实进度不得被合成覆盖；§7.3：合成面必须如实标 synthetic）；
+//     ④ reported 非空时：该产物 sidecar（expect_outputs[].rel 或 outputs[index].rel 的
+//        `<rel>.pp.json`）的 progress_reported 必须与期望一致 —— "编码器是否真报了行级进度"
+//        的硬证据（§7.4 快照键）；progress_max_row 与真实/合成口径同向（真实 > 0、合成 = 0）；
+//     ⑤ 终态为 done 的文件必须存在 overall_frac == 1.0 的进度事件（§7.2 权重合计=1 的可观测面）。
+// ---------------------------------------------------------------------------
+struct TraceRow {
+    int file = -1;
+    std::string state;
+    int output_index = -1;
+    float overall_frac = -1.f;
+    bool synthetic = false;
+};
+
+bool read_progress_trace(const fs::path &p, std::vector<TraceRow> &rows, std::string &err) {
+    std::ifstream in(p, std::ios::binary);
+    if (!in) {
+        err = "progress trace missing: " + p.string();
+        return false;
+    }
+    std::string line;
+    std::size_t bad = 0;
+    while (std::getline(in, line)) {
+        if (line.find_first_not_of(" \t\r\n") == std::string::npos)
+            continue;
+        const QJsonObject o = QJsonDocument::fromJson(QByteArray::fromStdString(line)).object();
+        if (o.isEmpty()) {
+            ++bad;
+            continue;
+        }
+        TraceRow r;
+        r.file = o.value("file").toInt(-1);
+        r.state = o.value("state").toString().toStdString();
+        r.output_index = o.value("output_index").toInt(-1);
+        r.overall_frac = static_cast<float>(o.value("overall_frac").toDouble(-1.0));
+        r.synthetic = o.value("synthetic").toBool(false);
+        rows.push_back(r);
+    }
+    if (bad != 0) {
+        err = std::to_string(bad) + " unparsable line(s) in " + p.string();
+        return false;
+    }
+    if (rows.empty()) {
+        err = "empty progress trace: " + p.string();
+        return false;
+    }
+    return true;
+}
+
+std::string check_progress_trace(const QJsonObject &exp, const fs::path &case_root) {
+    std::vector<std::string> failures;
+    const QJsonObject pt = exp.value("progress_trace").toObject();
+    std::string rel = pt.value("file").toString("progress-trace.jsonl").toStdString();
+    if (rel.empty())
+        rel = "progress-trace.jsonl";
+    std::vector<TraceRow> rows;
+    std::string err;
+    if (!read_progress_trace(case_root / rel, rows, err))
+        return err;
+
+    // ② 单调不倒退 + 值域（逐文件；每文件只报首条违例）
+    std::vector<int> files_seen;
+    std::vector<float> last_by_file, max_by_file;
+    std::vector<std::string> terminal_by_file;
+    for (const TraceRow &r : rows) {
+        if (r.overall_frac < 0.f) {
+            failures.push_back("row without a usable overall_frac (file " + std::to_string(r.file) +
+                               ")");
+            break;
+        }
+        if (r.overall_frac > 1.0f + 1e-6f) {
+            failures.push_back("file " + std::to_string(r.file) + ": overall_frac " +
+                               std::to_string(r.overall_frac) + " > 1");
+            break;
+        }
+        std::size_t slot = 0;
+        for (;; ++slot) {
+            if (slot == files_seen.size()) {
+                files_seen.push_back(r.file);
+                last_by_file.push_back(-1.f);
+                max_by_file.push_back(0.f);
+                terminal_by_file.push_back(std::string());
+                break;
+            }
+            if (files_seen[slot] == r.file)
+                break;
+        }
+        if (last_by_file[slot] >= 0.f && r.overall_frac < last_by_file[slot] - 1e-6f) {
+            failures.push_back("file " + std::to_string(r.file) + ": overall_frac regressed (" +
+                               std::to_string(last_by_file[slot]) + " -> " +
+                               std::to_string(r.overall_frac) + ")");
+            break;
+        }
+        last_by_file[slot] = std::max(last_by_file[slot], r.overall_frac);
+        max_by_file[slot] = std::max(max_by_file[slot], r.overall_frac);
+        if (r.state == "done" || r.state == "skipped" || r.state == "failed" ||
+            r.state == "cancelled")
+            terminal_by_file[slot] = r.state;
+    }
+
+    // ③ synthetic 口径（逐输出下标）+ ④ sidecar 的 progress_reported/max_row
+    const QJsonArray expect = pt.value("expect_outputs").toArray();
+    for (const QJsonValue &v : expect) {
+        const QJsonObject eo = v.toObject();
+        const int index = eo.value("index").toInt(-1);
+        if (index < 0) {
+            failures.push_back("expect_outputs entry without a valid 'index'");
+            continue;
+        }
+        const bool want_synth = eo.value("synthetic").toBool(false);
+        std::size_t seen = 0, mismatch = 0;
+        for (const TraceRow &r : rows) {
+            if (r.output_index != index)
+                continue;
+            ++seen;
+            if (r.synthetic != want_synth)
+                ++mismatch;
+        }
+        if (seen == 0) {
+            failures.push_back("no progress event for output_index " + std::to_string(index));
+        } else if (mismatch != 0) {
+            failures.push_back("output_index " + std::to_string(index) + ": " +
+                               std::to_string(mismatch) + "/" + std::to_string(seen) +
+                               " events do not match synthetic=" + (want_synth ? "true" : "false"));
+        }
+        if (!eo.contains("reported"))
+            continue;
+        const bool want_reported = eo.value("reported").toBool(false);
+        std::string out_rel = eo.value("rel").toString().toStdString();
+        if (out_rel.empty()) {
+            const QJsonArray outs = exp.value("outputs").toArray();
+            if (index < outs.size())
+                out_rel = outs.at(index).toObject().value("rel").toString().toStdString();
+        }
+        if (out_rel.empty()) {
+            failures.push_back(
+                "output_index " + std::to_string(index) +
+                ": no sidecar path (set expect_outputs[].rel or outputs[index].rel)");
+            continue;
+        }
+        const fs::path sidecar = case_root / (out_rel + ".pp.json");
+        std::ifstream in(sidecar, std::ios::binary);
+        if (!in) {
+            failures.push_back("sidecar missing for progress_reported assertion: " +
+                               sidecar.string());
+            continue;
+        }
+        const std::string text((std::istreambuf_iterator<char>(in)),
+                               std::istreambuf_iterator<char>());
+        const QJsonObject so = QJsonDocument::fromJson(QByteArray::fromStdString(text)).object();
+        const bool got_reported = so.value("progress_reported").toBool(!want_reported);
+        const int got_row = so.value("progress_max_row").toInt(-1);
+        if (got_reported != want_reported) {
+            failures.push_back(out_rel +
+                               ": sidecar progress_reported=" + (got_reported ? "true" : "false") +
+                               ", expected " + (want_reported ? "true" : "false"));
+        }
+        if (want_reported && got_row <= 0)
+            failures.push_back(out_rel +
+                               ": real progress but progress_max_row=" + std::to_string(got_row));
+        if (!want_reported && got_row != 0)
+            failures.push_back(
+                out_rel + ": synthetic output but progress_max_row=" + std::to_string(got_row));
+    }
+
+    // ⑤ 成功文件必须留下 1.0 的进度事件
+    for (std::size_t i = 0; i < files_seen.size(); ++i) {
+        if (terminal_by_file[i] == "done" && max_by_file[i] < 1.0f - 1e-6f)
+            failures.push_back(
+                "file " + std::to_string(files_seen[i]) +
+                ": terminal state done but max overall_frac = " + std::to_string(max_by_file[i]));
+    }
+
+    if (failures.empty())
+        return {};
+    std::string detail;
+    for (const std::string &f : failures) {
+        if (!detail.empty())
+            detail += "; ";
+        detail += f;
+    }
+    return detail;
+}
+
 // v1（无 outputs[]）= 单产物断言（<actual> 即产物文件）；v2 = outputs[] 逐产物断言。
+// M4-T6：两者都可叠加 progress_trace 段（此时第二参数必须是**用例输出根目录**）。
 bool check_expected(const QJsonObject &exp, const fs::path &actual, const fs::path &golden_root,
                     std::string &detail) {
     const QJsonArray outputs = exp.value("outputs").toArray();
     if (!outputs.isEmpty()) {
-        return check_case_outputs(exp, actual, golden_root, detail);
+        if (!check_case_outputs(exp, actual, golden_root, detail))
+            return false;
+    } else if (!check_case(exp, actual, golden_root, detail)) {
+        return false;
     }
-    return check_case(exp, actual, golden_root, detail);
+    if (exp.contains("progress_trace")) {
+        std::error_code ec;
+        if (!fs::is_directory(actual, ec)) {
+            detail = "progress_trace requires the case output root as the second argument (" +
+                     actual.string() + ")";
+            return false;
+        }
+        const std::string pt_err = check_progress_trace(exp, actual);
+        if (!pt_err.empty()) {
+            detail = pt_err;
+            return false;
+        }
+    }
+    detail.clear();
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -917,6 +1136,120 @@ int selftest() {
         }
     }
 
+    // M4-T6: progress_trace 段探针（单调性 / synthetic 口径 / sidecar progress_reported）
+    {
+        const fs::path pdir = dir / "progress";
+        std::error_code ec;
+        fs::create_directories(pdir, ec);
+        auto write_text = [](const fs::path &p, const std::string &text) {
+            std::ofstream f(p, std::ios::binary | std::ios::trunc);
+            f << text;
+        };
+        write_text(pdir / "o0.png", "not-an-image"); // 仅作"产物存在"的路径断言
+        write_text(pdir / "o1.png", "not-an-image");
+        write_text(pdir / "o0.png.pp.json", "{\"progress_reported\":true,\"progress_max_row\":64}");
+        write_text(pdir / "o1.png.pp.json", "{\"progress_reported\":false,\"progress_max_row\":0}");
+        // 合法事件流：共享段 0.03 → 0.40；输出 0（真实）→ 0.65/0.70；输出 1（合成）→ 1.0
+        const std::string ok_trace =
+            "{\"file\":0,\"state\":\"probing\",\"output_index\":-1,\"overall_frac\":0.0,"
+            "\"synthetic\":false}\n"
+            "{\"file\":0,\"state\":\"progress\",\"output_index\":0,\"overall_frac\":0.40,"
+            "\"synthetic\":false}\n"
+            "{\"file\":0,\"state\":\"progress\",\"output_index\":0,\"overall_frac\":0.65,"
+            "\"synthetic\":false}\n"
+            "{\"file\":0,\"state\":\"progress\",\"output_index\":1,\"overall_frac\":0.70,"
+            "\"synthetic\":true}\n"
+            "{\"file\":0,\"state\":\"progress\",\"output_index\":-1,\"overall_frac\":1.0,"
+            "\"synthetic\":false}\n"
+            "{\"file\":0,\"state\":\"done\",\"output_index\":1,\"overall_frac\":1.0,"
+            "\"synthetic\":true}\n";
+        write_text(pdir / "progress-trace.jsonl", ok_trace);
+
+        auto make_pt_exp = [&](const std::string &trace_text) {
+            QJsonObject e;
+            e["case"] = "selftest-progress";
+            QJsonArray outs;
+            for (const char *rel : {"o0.png", "o1.png"}) {
+                QJsonObject o;
+                o["rel"] = rel;
+                QJsonObject a;
+                a["pixel"] = QJsonObject{};
+                a["metadata"] = QJsonArray{};
+                a["warnings_contain"] = QJsonArray{};
+                o["assert"] = a;
+                outs.append(o);
+            }
+            e["outputs"] = outs;
+            QJsonObject pt;
+            pt["file"] = "progress-trace.jsonl";
+            QJsonArray eo;
+            {
+                QJsonObject o0;
+                o0["index"] = 0;
+                o0["synthetic"] = false;
+                o0["reported"] = true;
+                eo.append(o0);
+                QJsonObject o1;
+                o1["index"] = 1;
+                o1["synthetic"] = true;
+                o1["reported"] = false;
+                eo.append(o1);
+            }
+            pt["expect_outputs"] = eo;
+            e["progress_trace"] = pt;
+            if (!trace_text.empty())
+                write_text(pdir / "progress-trace.jsonl", trace_text);
+            else
+                write_text(pdir / "progress-trace.jsonl", ok_trace);
+            return e;
+        };
+
+        {
+            const QJsonObject e = make_pt_exp("");
+            std::string detail;
+            const bool ok = check_expected(e, pdir, dir, detail);
+            if (!ok)
+                ++failures;
+            std::printf("VERIFY selftest %-22s %s%s%s\n", "progress-trace-pass", ok ? "OK" : "FAIL",
+                        detail.empty() ? "" : " ", detail.c_str());
+        }
+        {
+            // overall_frac 倒退（0.70 → 0.40）→ 必须 FAIL 且点名单调性
+            std::string bad = ok_trace;
+            const std::string needle = "\"output_index\":1,\"overall_frac\":0.70";
+            const std::size_t at = bad.find(needle);
+            if (at != std::string::npos)
+                bad.replace(at, needle.size(), "\"output_index\":1,\"overall_frac\":0.40");
+            const QJsonObject e = make_pt_exp(bad);
+            std::string detail;
+            const bool ok = check_expected(e, pdir, dir, detail);
+            const bool behaves = !ok && detail.find("regressed") != std::string::npos;
+            if (!behaves)
+                ++failures;
+            std::printf("VERIFY selftest %-22s %s%s%s\n", "progress-trace-regress-fail",
+                        behaves ? "OK" : "FAIL", detail.empty() ? "" : " ", detail.c_str());
+        }
+        {
+            // synthetic 口径不符（合成面被标 false）→ 必须 FAIL
+            std::string bad = ok_trace;
+            const std::string needle =
+                "\"output_index\":1,\"overall_frac\":0.70,\"synthetic\":true";
+            const std::size_t at = bad.find(needle);
+            if (at != std::string::npos)
+                bad.replace(at, needle.size(),
+                            "\"output_index\":1,\"overall_frac\":0.70,\"synthetic\":false");
+            const QJsonObject e = make_pt_exp(bad);
+            std::string detail;
+            const bool ok = check_expected(e, pdir, dir, detail);
+            const bool behaves = !ok && detail.find("synthetic") != std::string::npos;
+            if (!behaves)
+                ++failures;
+            std::printf("VERIFY selftest %-22s %s%s%s\n", "progress-trace-synthetic-fail",
+                        behaves ? "OK" : "FAIL", detail.empty() ? "" : " ", detail.c_str());
+        }
+        write_text(pdir / "progress-trace.jsonl", ok_trace); // 复位（不影响其它探针）
+    }
+
     // M2-T8 (#26): direct probes of the frozen normalisation rules. The corpus cannot express
     // trailing NULs or den == 0, so the helpers are exercised here too.
     auto text_probe = [&failures](const char *label, const std::string &got, const char *want) {
@@ -935,7 +1268,7 @@ int selftest() {
     text_probe("normalize-rational-den0-guard", reduce_rational(7, 0), "7/0");
 
     std::printf("VERIFY selftest %s (%zu probes, %d unexpected)\n", failures == 0 ? "OK" : "FAIL",
-                probes.size() + 6 + 3, failures);
+                probes.size() + 6 + 3 + 3, failures);
     return failures;
 }
 

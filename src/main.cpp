@@ -33,6 +33,7 @@
 #include <algorithm>
 #include <atomic>
 #include <charconv>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -41,6 +42,7 @@
 #include <windows.h>
 #endif
 #include <fstream>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -125,6 +127,9 @@ const char *kDevUsage =
     "  --base DIR              mirror-path base directory (repeatable)\n"
     "  --log-level LVL         trace|debug|info|warn|error\n"
     "  -h, --help              this text\n"
+    "sidecars (--dev only): <out>/<每个产物>.pp.json（逐输出断言面）、\n"
+    "                       <out>/progress-trace.jsonl（进度事件流，W1-T6；schema 见 "
+    "tests/golden/SCHEMA.md）\n"
     "exit code = number of failed files\n";
 
 // 多输出 spec：format[:backend[:tech]]（--outputs 的单项）
@@ -600,6 +605,8 @@ QJsonObject sidecar_json(const pp::FileResult &r, const pp::OutputResult &row,
     o["timing"] = timing;
     o["info"] = info;
     o["params"] = QString::fromStdString(params_snapshot);
+    o["progress_reported"] = row.progress_reported; // W1-T6 §7.4 快照（真实行级 vs 合成）
+    o["progress_max_row"] = row.progress_max_row;
     // 源文件级聚合（多输出时逐输出行共用；单输出时与上述逐输出字段相同）
     o["file_state"] = QString::fromStdString(state_name(r));
     o["file_ok"] = r.ok;
@@ -625,6 +632,89 @@ void write_sidecars(const pp::FileResult &r, const std::vector<std::string> &par
         f.write(bytes.constData(), bytes.size());
     }
 }
+
+// ---------------------------------------------------------------------------
+// W1-T6：--dev 进度事件流侧车（progress-trace.jsonl）
+//   逐行 JSON 对象 = 一个 FileEvent（阶段态/进度态/终态），字段与 SCHEMA.md「progress_trace」
+//   一节逐字对应；pp_verify 据此断言 overall_frac 单调不倒退 + synthetic 标志（金样
+//   progress-trace 对）。写盘纪律（§7.4「进度事件不得淹没日志」）：本文件里只有**已节流**的
+//   事件（ProgressMux 每 20ms 或每 0.5% 发点），不是逐行、也不是逐行回调落盘。
+//   * 线程：事件回调来自任意 worker 线程与合成泵线程 → 本写入器自带互斥。
+//   * 位置：<--out 根目录>/progress-trace.jsonl（--dev 专属；release 构建无此路径）。
+// ---------------------------------------------------------------------------
+constexpr std::string_view kProgressTraceFile = "progress-trace.jsonl";
+
+class ProgressTraceSink {
+public:
+    explicit ProgressTraceSink(const fs::path &out_root) : path_(out_root / kProgressTraceFile) {
+        f_.open(path_, std::ios::binary | std::ios::trunc);
+    }
+    bool ok() const { return static_cast<bool>(f_); }
+    const fs::path &path() const { return path_; }
+
+    void on_event(const pp::FileEvent &ev) {
+        if (!f_)
+            return;
+        const pp::ProgressInfo &pi = ev.progress;
+        QJsonObject o;
+        o["seq"] = static_cast<double>(seq_++);
+        o["file"] = static_cast<double>(ev.index);
+        o["state"] = QString::fromLatin1(state_text(ev.state));
+        o["output_index"] = pi.output_index;
+        o["stage"] = QString::fromLatin1(pp::stage_name(pi.stage));
+        o["stage_frac"] = static_cast<double>(pi.stage_frac);
+        o["overall_frac"] = static_cast<double>(pi.overall_frac);
+        o["synthetic"] = pi.synthetic;
+        o["t_ms"] = elapsed_ms();
+        const QByteArray line = QJsonDocument(o).toJson(QJsonDocument::Compact) + "\n";
+        std::lock_guard<std::mutex> lk(mu_);
+        f_.write(line.constData(), line.size());
+        f_.flush(); // --dev 侧车要能被崩溃后的现场取证 / 被测试即时读取
+    }
+
+private:
+    double elapsed_ms() const {
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0_)
+            .count();
+    }
+    static const char *state_text(pp::FileState s) {
+        switch (s) {
+        case pp::FileState::Queued:
+            return "queued";
+        case pp::FileState::Probing:
+            return "probing";
+        case pp::FileState::Decoding:
+            return "decoding";
+        case pp::FileState::Orienting:
+            return "orienting";
+        case pp::FileState::Coloring:
+            return "coloring";
+        case pp::FileState::Flattening:
+            return "flattening";
+        case pp::FileState::Encoding:
+            return "encoding";
+        case pp::FileState::Writing:
+            return "writing";
+        case pp::FileState::Done:
+            return "done";
+        case pp::FileState::Skipped:
+            return "skipped";
+        case pp::FileState::Failed:
+            return "failed";
+        case pp::FileState::Cancelled:
+            return "cancelled";
+        case pp::FileState::Progress:
+            return "progress";
+        }
+        return "unknown";
+    }
+
+    fs::path path_;
+    std::ofstream f_;
+    std::mutex mu_;
+    double seq_ = 0;
+    std::chrono::steady_clock::time_point t0_{std::chrono::steady_clock::now()};
+};
 
 fs::path choose_base(const fs::path &file, const std::vector<fs::path> &bases) {
     fs::path best;
@@ -955,6 +1045,14 @@ int run_dev(int argc, char **argv) {
     }
 
     pp::Scheduler sched(cfg, std::move(entries));
+    // W1-T6：进度事件流侧车（--dev 专属）：逐事件落 <out>/progress-trace.jsonl，
+    // 供金样 progress-trace 对断言（格式见 tests/golden/SCHEMA.md「progress_trace」）。
+    ProgressTraceSink trace(o.out_root);
+    if (!trace.ok()) {
+        pp::log_warn("run", "main.cpp", "progress trace sidecar could not be opened",
+                     {{"path", trace.path().string()}});
+    }
+    sched.set_event_callback([&trace](const pp::FileEvent &ev) { trace.on_event(ev); });
     sched.start();
     sched.wait();
 

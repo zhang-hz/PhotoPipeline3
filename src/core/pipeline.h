@@ -6,7 +6,9 @@
 //   本标记（冻结头 SPDX 延续）。本节标注 [重排]：结构重排，不再保证聚合初始化兼容。
 //   本文件其余既有声明（FileEntry / FileResult 既有成员 / FileState / FileEvent）不在裁定
 //   表内 → 维持 PP-FROZEN(M0/M1) 只读；`FileEvent` 的 progress 追加属 §3.3（见下方 §3.3 块，
-//   落地任务 = W1-T7）。
+//   落地任务 = W1-T6，**已落地**）。W1-T6 另按主对话裁定授权（W0 口径 b）在 FileState 枚举
+//   **末尾**追加 `Progress`（§7.4 的 `FileEvent{state=Progress}` 依赖它；【语义性】表缺口修复），
+//   并在 OutputResult 末尾追加两个进度快照字段（§7.4 的 progress_max_row/progress_reported）。
 //
 //   0.2 → 0.3.0 差异清单（逐条，T5 落地）：
 //     ① format_id/backend_id/tech_id/params/out_bitdepth 删除 → outputs[] 元素；
@@ -43,6 +45,7 @@
 #include "core/metadata.h"
 #include "core/params.h"
 #include "core/pixelbudget.h"
+#include "core/progress.h" // §3.3 ProgressInfo（FileEvent::progress 的字段类型）
 #include "core/types.h"
 #include <cstdint>
 #include <filesystem>
@@ -100,6 +103,9 @@ struct OutputResult {
     Timing t;
     std::string error; // 非空 = 该输出失败
     bool ok = false, skipped = false;
+    // —— 0.3.0 追加（W1-T6，末尾；§7.4 的进度快照，随 <out>.pp.json 落盘）——
+    bool progress_reported = false; // 编码器报过真实行级进度（false → UI 标合成，§3.1/§7.3）
+    int progress_max_row = 0;       // 行级回调折算的最高行号；无回调格式恒 0
 };
 
 struct FileResult {
@@ -126,16 +132,21 @@ enum class FileState {
     Done,
     Skipped,
     Failed,
-    Cancelled
+    Cancelled,
+    // —— 0.3.0 / W1-T6 追加（**末尾**，主对话裁定授权 W0 口径 b）——
+    // §7.4「`ProgressMux` 将编码器行回调汇流为 `FileEvent{state=Progress}`」依赖本值；
+    // 现形枚举无它、§3.6 亦未授权改 FileState → 【语义性】表缺口修复（值追加在末尾 =
+    // 既有值的数值与语义零变化，0.2 语义逐字保持）。
+    Progress
 };
 
-// PP-THAWED(0.3.0-M4-D20) §3.3 · FileEvent
-//   落注位置说明（与表头文件不一致，已披露）：设计 §3.3 的表头文件是 `src/core/scheduler.h`
-//   （design.md:124），但 `FileEvent` 的**声明物理位于本文件**（本文件下方）——故本块落在真实
-//   声明处，scheduler.h 内留交叉引用；裁定行仍属 §3.3。
+// PP-FROZEN(0.3.0) §3.3 · FileEvent（**W1-T6 已落地**；原标注 PP-THAWED(0.3.0-M4-D20) 随落地
+//   再冻结为本标记）
+//   落注位置说明（与表头文件不一致，已披露，T5 起沿用）：设计 §3.3 的表头文件是
+//   `src/core/scheduler.h`（design.md:124），但 `FileEvent` 的**声明物理位于本文件** ——
+//   故本块落在真实声明处，scheduler.h 内留交叉引用；裁定行仍属 §3.3。
 //   追加字段 progress 落于结构体末尾（既有 index/state/result 语义不变）。
-//   落地任务 W1-T7（配合 §3.3 的 ProgressInfo，见 src/core/scheduler.h）→ 落地后改标
-//   PP-FROZEN(0.3.0)。 0.3.0 冻结形态（设计 §3.3 逐字抄录；剥去行首 "// " 前缀即设计原文）：
+//   0.3.0 冻结形态（设计 §3.3 逐字抄录；剥去行首 "// " 前缀即设计原文）：
 // clang-format off
 // struct FileEvent {
 //     int            index;
@@ -144,19 +155,19 @@ enum class FileState {
 //     ProgressInfo   progress;                   // 追加（Progress 状态携带）
 // };
 // clang-format on
-//   注（0.2 现形差异，由 T7 按 §3.3 逐字形态处理）：`index` 现形 `std::size_t index = 0;` →
-//   §3.3 `int index;`（类型与默认值均变）。
-//   注（**表外改动缺口**，须主对话裁定）：§7.4 出现 `FileEvent{state=Progress}`，但本文件
-//   `enum class FileState`（本文件上方）现形无 `Progress` 值，且 §3.3 围栏行未给 FileState 的
-//   枚举增补、§3.6 亦未授权改 FileState（本文件首部即声明 FileState 不在裁定表内、维持只读）
-//   → 「进度态」的承载方式（新增 `FileState::Progress`＝表外改动 / 复用既有态 + 用
-//   `ProgressInfo.synthetic` 区分 / 其它）需裁定后才能落地（M4-T1 已上报，W5 收口入 m4-report）。
-//   T5 口径：本任务不新增 FileState 值、不追加 FileEvent::progress —— 逐输出进度事件是
-//   T6/T7 的落地面（§3.3 + §7.4），pipeline 侧只需按阶段发既有 FileState（§4.1 不改事件形状）。
+//   T6 落地口径（逐条）：
+//   * `index` 现形仍为 `std::size_t index = 0;`（§3.3 逐字为 `int index;`）：批内槽位由
+//     Scheduler 回填，`std::size_t` 与 `int` 在本工程语义等价（输入数 ≤ 内存可行批次）；
+//     改类型会波及 W2/W3 的 UI 调用面（非本任务文件面）→ **本任务不动**，留 T7 与 §3.3
+//     其余行一并处理；此处如实披露，避免"改一半"的假冻结。
+//   * `progress` 由 pipeline 的 ProgressMux 填（源文件级 output_index=-1 / 输出级 = 配置顺序
+//     下标）；**Progress 状态**为进度事件的主用途（§7.4），阶段事件亦携带当前快照
+//     （消费端按 state 分派即可；终态事件由 scheduler 附最后进度高水位）。
 struct FileEvent {
     std::size_t index = 0;
     FileState state = FileState::Queued;
     const FileResult *result = nullptr; // 仅在终态（Done/Skipped/Failed/Cancelled）非空
+    ProgressInfo progress;              // 追加（Progress 状态携带；§3.3）
 };
 
 // —— T5 定稿（§3.2 注）：运行期共享态 + 事件回调载体 + 聚合终态 ——

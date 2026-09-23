@@ -283,8 +283,8 @@ private:
         // T7(E3) 映射位（design §3.1）：§3.1 正文规定此处 = JxlThreadParallelRunner(E)（E=1 时
         // nullptr）—— 本任务 pipeline 恒传 encode_threads=1，故取 nullptr 与 0.2 逐字一致；
         // T7 接映射时在此构造 runner 并注意其生命周期必须覆盖到 JxlEncoderDestroy。
-        (void)
-            req.progress; // T6 接线位：真实行级进度（jxl 走 JxlEncoderSetProgressCallback，T6 填）
+        // W1-T6：progress 已接线（见下方逐行喂入的 progress 上报）；libjxl 0.12 无编码器
+        // 进度回调接口，故实际信号 = 本 TU 的逐行喂入（详见该处注释与 T6 偏差账）。
         JxlEncoderStatus st = JxlEncoderSetParallelRunner(enc.get(), nullptr, nullptr);
         if (st != JXL_ENC_SUCCESS) {
             return encode_error(std::string("jxl: JxlEncoderSetParallelRunner failed: ") +
@@ -468,24 +468,41 @@ private:
         }
 
         // Interleaved pixel buffer in the requested output depth (E6 rounding).
+        // W1-T6 接线（design §3.1 / §7.2）：jxl = **真实行级进度**。libjxl 0.12 的编码器
+        // C API **没有进度回调**（jxl/encode.h 内无 SetProgressCallback 一类接口，只有
+        // JxlEncoderSetDebugImageCallback 这一调试面；见 T6 偏差账）→ 真实行级信号取本 TU
+        // 逐行喂入阶段（float→整数舍入 + 交织，逐行上报 rows/height）；压缩阶段
+        // （JxlEncoderAddImageFrame/JxlEncoderProcessOutput）无回调可报，属 §3.1
+        // "尽力而为"范围内的已知边界。ProgressMux 负责节流/汇流，本处逐行不落盘。
+        const ProgressFn &progress = req.progress;
         const std::size_t npix = static_cast<std::size_t>(r.width) *
                                  static_cast<std::size_t>(r.height) *
                                  static_cast<std::size_t>(r.channels);
+        const std::size_t stride = static_cast<std::size_t>(r.width) *
+                                   static_cast<std::size_t>(r.channels); // 一行的像素数（含通道）
         std::vector<uint8_t> pixels8;
         std::vector<uint16_t> pixels16;
         const void *pixel_data = nullptr;
         std::size_t pixel_bytes = 0;
         if (req.target.out_bitdepth == 16) {
             pixels16.resize(npix);
-            for (std::size_t i = 0; i < npix; ++i) {
-                pixels16[i] = to_u16(r.px[i]);
+            for (int y = 0; y < r.height; ++y) {
+                const std::size_t base = static_cast<std::size_t>(y) * stride;
+                for (std::size_t i = 0; i < stride; ++i)
+                    pixels16[base + i] = to_u16(r.px[base + i]);
+                if (progress)
+                    progress(static_cast<float>(y + 1) / static_cast<float>(r.height));
             }
             pixel_data = pixels16.data();
             pixel_bytes = pixels16.size() * sizeof(uint16_t);
         } else {
             pixels8.resize(npix);
-            for (std::size_t i = 0; i < npix; ++i) {
-                pixels8[i] = to_u8(r.px[i]);
+            for (int y = 0; y < r.height; ++y) {
+                const std::size_t base = static_cast<std::size_t>(y) * stride;
+                for (std::size_t i = 0; i < stride; ++i)
+                    pixels8[base + i] = to_u8(r.px[base + i]);
+                if (progress)
+                    progress(static_cast<float>(y + 1) / static_cast<float>(r.height));
             }
             pixel_data = pixels8.data();
             pixel_bytes = pixels8.size();
@@ -564,6 +581,7 @@ private:
         EncodeResult res;
         res.bytes = static_cast<uint64_t>(total);
         res.t.encode_ms = ms_since(t0);
+        res.progress_reported = static_cast<bool>(progress); // §3.1：逐行喂入已上报（见上方注释）
         return res;
     }
 };

@@ -58,6 +58,9 @@ void report(const std::string& name, bool ok, const std::string& detail) {
         ++g_fails;
     }
     std::printf("PROBE %s %s %s\n", name.c_str(), ok ? "OK" : "FAIL", detail.c_str());
+    // Line-by-line visibility: stdout is fully buffered when ctest/pytest capture it,
+    // and a later crash would swallow every earlier PROBE line.
+    std::fflush(stdout);
 }
 
 std::string fmt_double(double v) {
@@ -143,13 +146,36 @@ void check_exiv2() {
     report("exiv2", !v.empty(), "version=" + (v.empty() ? std::string("(empty)") : v));
 }
 
+// M4-T2 (design §10, exiv2 0.28.9): the deprecated Exiv2 runtime BMFF toggle (removed from
+// our code in this task) has no replacement API — BMFF support is a pure build-time feature
+// (vcpkg feature "bmff"), so calling it was both useless and a deprecation warning. The
+// check now asserts the same contract at the observable boundary instead: a minimal
+// ISO-BMFF header (ftyp box) must be classified as ImageType::bmff by the image factory,
+// which is only possible when exiv2 was built with BMFF support (verified against the
+// installed 0.28.9 header: ImageFactory::getType(const byte*, size_t) exists and
+// ImageType::bmff is exposed).
 void check_exiv2_bmff() {
-#if defined(EXIV2_TEST_VERSION) && EXIV2_TEST_VERSION(0, 28, 0)
-    // Exiv2 >= 0.28 API (verified against the installed headers).
-    const bool ok = Exiv2::enableBMFF(true);
-    report("exiv2-bmff", ok, ok ? "enableBMFF(true)=1" : "enableBMFF(true)=0");
+#if defined(EXIV2_TEST_VERSION) && EXIV2_TEST_VERSION(0, 28, 4)
+    // box size(4, BE) + "ftyp" + major_brand "heic" + minor_version(4) + compatible "mif1".
+    // The buffer is padded (the type probe needs a readable image header, not just the ftyp
+    // box: a 20-byte input makes exiv2 throw "Failed to read input data" — measured with a
+    // stand-alone probe against the installed 0.28.9).
+    static const unsigned char kFtypHeic[1024] = {
+        0x00, 0x00, 0x00, 0x14, 'f',  't',  'y',  'p',
+        'h',  'e',  'i',  'c',  0x00, 0x00, 0x00, 0x00,
+        'm',  'i',  'f',  '1',
+    };
+    try {
+        const Exiv2::ImageType type = Exiv2::ImageFactory::getType(kFtypHeic, sizeof(kFtypHeic));
+        const bool ok = type == Exiv2::ImageType::bmff;
+        report("exiv2-bmff", ok,
+               "ftyp(heic) -> ImageType=" + std::to_string(static_cast<int>(type)) +
+                   " (bmff=" + std::to_string(static_cast<int>(Exiv2::ImageType::bmff)) + ")");
+    } catch (const std::exception& e) {
+        report("exiv2-bmff", false, std::string("getType threw: ") + e.what());
+    }
 #else
-    report("exiv2-bmff", false, "API missing");
+    report("exiv2-bmff", false, "ImageFactory::getType(const byte*, size_t) missing");
 #endif
 }
 
@@ -210,19 +236,25 @@ void check_libjxl() {
     report("libjxl", v > 0, "JxlEncoderVersion=" + fmt_hex(v));
 }
 
-std::vector<std::string> heif_encoder_names(heif_compression_format fmt) {
-    std::vector<std::string> names;
+std::vector<const heif_encoder_descriptor*> heif_encoder_descs(heif_compression_format fmt) {
+    std::vector<const heif_encoder_descriptor*> descs;
     // libheif >= 1.4 exposes the 4-argument free function
     // heif_get_encoder_descriptors(format, name, out, count), not the 6-argument context form
     // assumed by the task book (verified against the installed headers).
     int count = heif_get_encoder_descriptors(fmt, nullptr, nullptr, 0);
     if (count <= 0) {
-        return names;
+        return descs;
     }
-    std::vector<const heif_encoder_descriptor*> descs(static_cast<size_t>(count), nullptr);
+    descs.resize(static_cast<size_t>(count), nullptr);
     count = heif_get_encoder_descriptors(fmt, nullptr, descs.data(), count);
-    for (int i = 0; i < count; ++i) {
-        const char* n = heif_encoder_descriptor_get_name(descs[static_cast<size_t>(i)]);
+    descs.resize(count > 0 ? static_cast<size_t>(count) : 0u);
+    return descs;
+}
+
+std::vector<std::string> heif_encoder_names(heif_compression_format fmt) {
+    std::vector<std::string> names;
+    for (const heif_encoder_descriptor* d : heif_encoder_descs(fmt)) {
+        const char* n = heif_encoder_descriptor_get_name(d);
         names.push_back(n != nullptr ? std::string(n) : std::string("(unnamed)"));
     }
     return names;
@@ -234,6 +266,120 @@ void check_libheif(const char* name, heif_compression_format fmt) {
         g_heif_encoders.push_back(n);
     }
     report(name, !names.empty(), names.empty() ? "no encoder available" : join(names));
+}
+
+// --- encoder parameter introspection (R26/R27) -----------------------------------------
+//
+// The GUI parameter form is built from heif_encoder_list_parameters() at runtime, so a
+// parameter-table drift introduced by a libheif / SVT-AV1 / x265 upgrade would silently
+// empty out the UI instead of failing a build. These checks turn that drift into a FAIL:
+//   * the introspection list must be non-empty, every entry must carry a non-empty name
+//     and a valid heif_encoder_parameter_type (enum drift),
+//   * the names the UI relies on must still be present (quality/lossless/preset for x265,
+//     threads for SVT-AV1 — SVT-AV1 4.2 parameter surface, R26),
+//   * the descriptor name is printed verbatim, so the encoder build actually in use
+//     (x265 4.3 / SVT-AV1 4.2) is visible in the log.
+struct HeifParamList {
+    std::vector<std::string> names;
+    bool types_valid = true;
+};
+
+bool heif_encoder_params(const heif_encoder_descriptor* desc, HeifParamList& out) {
+    heif_context* ctx = heif_context_alloc();
+    if (ctx == nullptr) {
+        return false;
+    }
+    heif_encoder* enc = nullptr;
+    // libheif >= 1.4 API (verified against the installed 1.23.5 header): the descriptor
+    // form is heif_context_get_encoder(), there is no heif_encoder_create().
+    const heif_error err = heif_context_get_encoder(ctx, desc, &enc);
+    if (err.code != heif_error_Ok || enc == nullptr) {
+        heif_context_free(ctx);
+        return false;
+    }
+    for (const heif_encoder_parameter* const* p = heif_encoder_list_parameters(enc);
+         p != nullptr && *p != nullptr; ++p) {
+        const char* n = heif_encoder_parameter_get_name(*p);
+        out.names.push_back(n != nullptr ? std::string(n) : std::string());
+        const heif_encoder_parameter_type t = heif_encoder_parameter_get_type(*p);
+        if (t != heif_encoder_parameter_type_integer && t != heif_encoder_parameter_type_boolean &&
+            t != heif_encoder_parameter_type_string) {
+            out.types_valid = false;
+        }
+    }
+    heif_encoder_release(enc);
+    heif_context_free(ctx);
+    return true;
+}
+
+std::string join_names(const std::vector<std::string>& v, size_t limit) {
+    std::string out;
+    for (size_t i = 0; i < v.size() && i < limit; ++i) {
+        if (!out.empty()) {
+            out += "|";
+        }
+        out += v[i];
+    }
+    if (v.size() > limit) {
+        out += "|...";
+    }
+    return out;
+}
+
+void check_heif_params(const char* name, heif_compression_format fmt, const char* want_substr,
+                       const std::vector<std::string>& required) {
+    const heif_encoder_descriptor* chosen = nullptr;
+    std::string chosen_name;
+    std::string available;
+    for (const heif_encoder_descriptor* d : heif_encoder_descs(fmt)) {
+        const char* n = heif_encoder_descriptor_get_name(d);
+        const char* id = heif_encoder_descriptor_get_id_name(d);
+        const std::string name_s = n != nullptr ? std::string(n) : std::string();
+        const std::string id_s = id != nullptr ? std::string(id) : std::string();
+        if (!available.empty()) {
+            available += ",";
+        }
+        available += name_s.empty() ? std::string("(unnamed)") : name_s;
+        if (chosen == nullptr &&
+            (lower_copy(name_s).find(want_substr) != std::string::npos ||
+             lower_copy(id_s).find(want_substr) != std::string::npos)) {
+            chosen = d;
+            chosen_name = name_s;
+        }
+    }
+    if (chosen == nullptr) {
+        report(name, false, std::string("no encoder matching \"") + want_substr +
+                                "\" (available: " + available + ")");
+        return;
+    }
+    HeifParamList list;
+    if (!heif_encoder_params(chosen, list)) {
+        report(name, false, "heif_encoder_create failed for " + chosen_name);
+        return;
+    }
+    bool empty_name = false;
+    for (const std::string& s : list.names) {
+        if (s.empty()) {
+            empty_name = true;
+        }
+    }
+    std::string missing;
+    for (const std::string& want : required) {
+        if (std::find(list.names.begin(), list.names.end(), want) == list.names.end()) {
+            if (!missing.empty()) {
+                missing += ",";
+            }
+            missing += want;
+        }
+    }
+    const bool ok = !list.names.empty() && list.types_valid && !empty_name && missing.empty();
+    std::string detail = "encoder=" + chosen_name + " params=" + std::to_string(list.names.size()) +
+                         " types_valid=" + (list.types_valid ? "1" : "0") +
+                         " names_ok=" + (empty_name ? "0" : "1");
+    detail += missing.empty() ? (" required=all(" + join_names(required, 8) + ")")
+                              : (" missing=" + missing);
+    detail += " list=" + join_names(list.names, 12);
+    report(name, ok, detail);
 }
 
 void check_libwebp() {
@@ -252,6 +398,10 @@ int main() {
     check_libjxl();
     check_libheif("libheif-hevc", heif_compression_HEVC);
     check_libheif("libheif-av1", heif_compression_AV1);
+    // R26/R27: encoder parameter introspection (SVT-AV1 "threads" + x265 name surface).
+    check_heif_params("libheif-params-hevc", heif_compression_HEVC, "x265",
+                      {"quality", "lossless", "preset"});
+    check_heif_params("libheif-params-av1", heif_compression_AV1, "svt", {"threads", "quality"});
     check_libwebp();
 
     std::printf("PLUGINS: %s\n", g_format_list.empty() ? "(none)" : g_format_list.c_str());

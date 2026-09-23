@@ -10,6 +10,13 @@
 // E7: container always on; boxes in the M0-measured order
 //     UseBoxes → AddBox("Exif", 4-byte TIFF offset + blob) → AddBox("xml ") →
 //     CloseBoxes → CloseInput; empty payloads skip their box.
+//
+// M4-T2 排查（design §10 libjxl 0.12.0 行的「BUFFERING mode 3 等弃用项」）：本文件零清扫。
+//   * JXL_ENC_FRAME_SETTING_BUFFERING 在 0.12 里只接受 0/1/2（3 = deprecated，见
+//     lib/include/jxl/encode.h:352），而 kFrameSettings 表里从来没有 buffering 键，
+//     编码路径不设置该选项 → 无弃用调用可删；
+//   * JxlEncoderUseBoxes / JxlEncoderAddBox / JxlEncoderCloseBoxes 在 0.12 仍是现行
+//     unstable API（encode.h 无 JXL_DEPRECATED 标记），E7 的 box 顺序与载荷不变。
 
 #include <jxl/encode.h>
 

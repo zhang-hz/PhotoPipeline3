@@ -1,8 +1,8 @@
 diff --git a/src/cmake/externalpackages.cmake b/src/cmake/externalpackages.cmake
-index 6f786ab..5af9c2e 100644
+index 2ffdd1c..453c2a5 100644
 --- a/src/cmake/externalpackages.cmake
 +++ b/src/cmake/externalpackages.cmake
-@@ -146,6 +146,11 @@ if (NOT OPENCOLORIO_INCLUDES)
+@@ -159,6 +159,11 @@ if (NOT OPENCOLORIO_INCLUDES)
      get_target_property(OPENCOLORIO_INCLUDES OpenColorIO::OpenColorIO INTERFACE_INCLUDE_DIRECTORIES)
  endif ()
  include_directories(BEFORE ${OPENCOLORIO_INCLUDES})

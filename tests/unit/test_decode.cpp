@@ -120,7 +120,10 @@ const Fixture kFixtures[] = {
 constexpr std::size_t kFixtureCount = sizeof(kFixtures) / sizeof(kFixtures[0]);
 
 // Fixture entries that must expose a non-empty ICC profile (OIIO attribute
-// "ICCProfile", 536 bytes each in the current corpus).
+// "ICCProfile", 504 bytes each in the current corpus). M4-T2: libjxl 0.12.0 changed
+// the composition of the synthesized sRGB approximation profile (it now carries the
+// CICP tag; 0.11.2 did not), so the byte count moved 536 -> 504. The profile itself
+// is unchanged in kind: CMM "jxl ", 11 standard tags, self-consistent size field.
 const char* const kIccFixtures[] = {"base/jxl8.jxl", "meta/jxl_exif.jxl"};
 
 }  // namespace
@@ -343,8 +346,8 @@ int main() {
                 ++found;
                 check(!icc.empty(), std::string("icc/") + f.rel,
                       "expected non-empty ICC bytes");
-                check(icc.size() == 536, std::string("icc/") + f.rel,
-                      "expected 536 ICC bytes, got " + num(static_cast<long long>(icc.size())));
+                check(icc.size() == 504, std::string("icc/") + f.rel,
+                      "expected 504 ICC bytes, got " + num(static_cast<long long>(icc.size())));
             } else {
                 check(icc.empty(), std::string("icc/") + f.rel,
                       "expected no ICC bytes, got " + num(static_cast<long long>(icc.size())));

@@ -661,7 +661,6 @@ int cmd_verify(const fs::path& dir) {
         return 77;
     }
     // Exiv2 >= 0.28 API (verified against the installed headers).
-    Exiv2::enableBMFF(true);
 
     // exif_full.jpg: DateTimeOriginal + Artist + GPS round-trip.
     {

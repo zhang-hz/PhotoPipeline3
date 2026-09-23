@@ -6,10 +6,6 @@ set(PATCHES
     fix-openexr-target-missing.patch
 )
 
-if(VCPKG_TARGET_IS_EMSCRIPTEN)
-    list(APPEND PATCHES fix-emscripten.patch)
-endif()
-
 if(VCPKG_TARGET_IS_OSX)
     execute_process(COMMAND xcrun --show-sdk-version
             OUTPUT_VARIABLE OSX_SDK_VERSION
@@ -28,7 +24,7 @@ vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO AcademySoftwareFoundation/OpenImageIO
     REF "v${VERSION}"
-    SHA512 dd5cb30edf8d6c2d61260cc2d91a7a29bbad11b18f83af93527f9308bff0e24b218584635fdad6a154a2c32f0c8c12a458a86261c76c36d9aa41106af8533a39
+    SHA512 e66b4e637ccb734ab20d8024105721bdf5d8612f8e43d181d5d4ef0a944f7c95c9fdb6cdb78dcf10f9d5579e95240f1deca60cea0743e48a28fa2bff79e6aa59
     HEAD_REF master
     PATCHES ${PATCHES}
 )

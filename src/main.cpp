@@ -1190,7 +1190,11 @@ int run_ui_smoke(int argc, char **argv) {
     // 冒烟分支不走磁盘 settings/log：默认 AppSettings；日志自然走 stderr（§4.3）。
     // M2-T3 §2.3：PP_LOG_LEVEL 亦作用于 --ui-smoke——此处只影响 stderr 过滤；未设置时
     // level_from_env_or(Info) 与默认级别相同，输出与现状逐字节一致。
+    // M4-T9：PP_UI_NO_STATE = 不读写面板持久化（data_dir()/ui-state.ini）→ 冻结截图与
+    // 开发机状态无关（冒烟只跑 offscreen；真实平台渲染走 --shots .cache/ui-review）。
+    qputenv("PP_UI_NO_STATE", "1");
     pp::log_set_level(pp::level_from_env_or(pp::LogLevel::Info));
+
     QApplication app(argc, argv);
     pp::ui::MainWindow w(pp::AppSettings{});
     w.resize(1440, 900);

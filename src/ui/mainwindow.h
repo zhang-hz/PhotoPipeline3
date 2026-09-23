@@ -1,6 +1,10 @@
 // PP-FROZEN(file)
 // SPDX-License-Identifier: GPL-3.0-or-later
 // PhotoPipeline — main window, three zones (M1b frozen)
+//
+// M4-T9：本文件的**公开 API/私有签名逐字不变**（无增删）；仅更新本注释以反映 0.3.0 骨架
+// 重构（顶栏兼标题栏的无边框窗口 + 三栏 QSplitters），实现全部落在 mainwindow.cpp 的
+// MainWindow::Impl 内（沿 M1b 口径：冻结头不承载控件与状态）。
 #pragma once
 #include "core/pipeline.h"
 #include "core/scheduler.h"

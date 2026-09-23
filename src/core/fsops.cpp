@@ -1,13 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // PhotoPipeline M1-T1 — filesystem helpers implementation.
+// M4-T5 — §3.4 落地：mirror_path() 由 render_output_path()（路径模板解析）取代。
 //
-// Contract: docs/m1-tasks.md §3.2 (PP-FROZEN) / §4.1.
-// Interpretations where §3.2 is silent (reported in the M1-T1 report):
-//   * with_extension(p, "") keeps the current extension (mirrors the mirror_path rule
+// Contract: docs/m1-tasks.md §3.2 (PP-FROZEN) / §4.1 + docs/v0.3.0-design.md §3.4 / §4.2.
+// Interpretations where the contract is silent (reported in the task reports):
+//   * with_extension(p, "") keeps the current extension (mirrors the old mirror_path rule
 //     "new_ext 为空 → 保留原扩展名"); a leading '.' in new_ext is tolerated.
 //   * is_inside(child, parent) is a subtree test: true for descendants AND for child==parent.
 //   * collect_inputs() drops exact duplicates, sorts the result, and treats an empty
 //     extension whitelist as "accept every regular file".
+//   * template syntax (M4-T5): empty segments collapse silently ("a//b" == "a/b"); a segment
+//     whose expansion is empty collapses as a whole; '$' followed by a non-identifier is an
+//     error; the template may not be absolute, may not contain '\\' or a drive prefix, and may
+//     not contain a ".." component (platform-independent lexical rules — no
+//     std::filesystem::path parsing, so Windows and POSIX verdicts are identical).
 
 #include "core/fsops.h"
 
@@ -76,20 +82,157 @@ bool ext_matches(const std::filesystem::path &p, const std::set<std::string> &wa
     return want.count(lower_copy(strip_dot(p.extension().string()))) != 0;
 }
 
+// ---------------------------------------------------------------- template --
+bool is_symbol_char(char c) {
+    const unsigned char u = static_cast<unsigned char>(c);
+    return std::isalnum(u) != 0 || c == '_';
+}
+
+// "stem" / "stem.ext"（ext 为空 → 无点主名；容忍调用方带前导点）
+std::string file_name_of(const PathCtx &ctx) {
+    const std::string ext = strip_dot(ctx.ext);
+    return ext.empty() ? ctx.stem : ctx.stem + "." + ext;
+}
+
+// 展开单段；未知符号 / 裸 '$' → false 且 err 非空。
+bool expand_segment(std::string_view seg, const PathCtx &ctx, std::string &out, std::string &err) {
+    out.clear();
+    out.reserve(seg.size());
+    for (std::size_t i = 0; i < seg.size();) {
+        if (seg[i] != '$') {
+            out.push_back(seg[i]);
+            ++i;
+            continue;
+        }
+        std::size_t j = i + 1;
+        while (j < seg.size() && is_symbol_char(seg[j])) {
+            ++j;
+        }
+        const std::string_view name = seg.substr(i + 1, j - (i + 1));
+        if (name.empty()) {
+            err = "output template: '$' is not followed by a symbol name";
+            return false;
+        }
+        if (name == "format") {
+            out += ctx.format_dir;
+        } else if (name == "dir") {
+            out += ctx.rel_dir.generic_string(); // '/' 分隔，$dir 展开后仍是相对片段
+        } else if (name == "file") {
+            out += file_name_of(ctx);
+        } else if (name == "name") {
+            out += ctx.stem;
+        } else if (name == "ext") {
+            out += strip_dot(ctx.ext);
+        } else {
+            err = "output template: unknown symbol '$" + std::string(name) + "'";
+            return false;
+        }
+        i = j;
+    }
+    return true;
+}
+
+// 段是否为平台无关的"非法成分"（渲染后防线：$dir 理论上是相对路径，仍逐段复核）
+bool is_dotdot_segment(std::string_view seg) { return seg == ".."; }
+
 } // namespace
 
-std::filesystem::path mirror_path(const std::filesystem::path &src,
-                                  const std::filesystem::path &base_dir,
-                                  const std::filesystem::path &out_root, std::string_view new_ext) {
+std::filesystem::path relative_dir(const std::filesystem::path &src,
+                                   const std::filesystem::path &base_dir) {
     const std::filesystem::path src_abs = lexical_abs(src);
     const std::filesystem::path base_abs = lexical_abs(base_dir);
-    std::filesystem::path rel;
     if (!base_dir.empty() && src_abs != base_abs && path_prefix(base_abs, src_abs)) {
-        rel = src_abs.lexically_relative(base_abs);
-    } else {
-        rel = src.filename();
+        return src_abs.lexically_relative(base_abs).parent_path();
     }
-    return with_extension(out_root / rel, new_ext);
+    return {};
+}
+
+bool validate_output_template(std::string_view tmpl, std::string *err) {
+    const auto fail = [err](const std::string &msg) {
+        if (err != nullptr) {
+            *err = "output template: " + msg;
+        }
+        return false;
+    };
+    if (err != nullptr) {
+        err->clear();
+    }
+    if (tmpl.empty()) {
+        return fail("template is empty");
+    }
+    if (tmpl.front() == '/' || tmpl.front() == '\\') {
+        return fail("absolute paths are not allowed");
+    }
+    if (tmpl.find('\\') != std::string_view::npos) {
+        return fail("'\\' separators are not allowed (use '/')");
+    }
+    if (tmpl.size() >= 2 && tmpl[1] == ':') {
+        return fail("drive-qualified paths are not allowed");
+    }
+    std::size_t start = 0;
+    while (start <= tmpl.size()) {
+        std::size_t end = tmpl.find('/', start);
+        if (end == std::string_view::npos) {
+            end = tmpl.size();
+        }
+        const std::string_view seg = tmpl.substr(start, end - start);
+        if (is_dotdot_segment(seg)) {
+            return fail("'..' is not allowed");
+        }
+        if (!seg.empty()) {
+            std::string expanded;
+            std::string sym_err;
+            if (!expand_segment(seg, PathCtx{}, expanded, sym_err)) {
+                if (err != nullptr) {
+                    *err = sym_err;
+                }
+                return false;
+            }
+        }
+        if (end == tmpl.size()) {
+            break;
+        }
+        start = end + 1;
+    }
+    return true;
+}
+
+std::filesystem::path render_output_path(std::string_view tmpl, const PathCtx &ctx,
+                                         const std::filesystem::path &out_root) {
+    std::string err;
+    if (!validate_output_template(tmpl, &err)) {
+        return {}; // 非法模板 → 空 path（调用方先 validate 阻断）
+    }
+    std::filesystem::path rel;
+    std::size_t start = 0;
+    while (start <= tmpl.size()) {
+        std::size_t end = tmpl.find('/', start);
+        if (end == std::string_view::npos) {
+            end = tmpl.size();
+        }
+        const std::string_view seg = tmpl.substr(start, end - start);
+        std::string expanded;
+        if (!expand_segment(seg, ctx, expanded, err)) {
+            return {};
+        }
+        if (!expanded.empty()) {
+            std::filesystem::path piece(expanded);
+            for (const std::filesystem::path &part : piece) {
+                if (is_dotdot_segment(part.string())) {
+                    return {}; // $dir 展开出的 '..' 同样拒绝
+                }
+            }
+            rel /= piece;
+        }
+        if (end == tmpl.size()) {
+            break;
+        }
+        start = end + 1;
+    }
+    if (rel.empty()) {
+        return {}; // 全部段都坍缩（例如 "$dir" 且源相对目录为空）→ 无文件名可用
+    }
+    return out_root / rel;
 }
 
 OutputPlan resolve_conflict(const std::filesystem::path &desired, ConflictPolicy policy,

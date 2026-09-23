@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
 """PhotoPipeline — golden smoke driver (M1-T8: docs/m1-tasks.md §3.16 / §4.8;
-M2-T8: assertion level, docs/m2-tasks.md §4 T8 ②).
+M2-T8: assertion level, docs/m2-tasks.md §4 T8 ②; M4-T5: 3 多格式对，docs/v0.3.0-design.md §4).
 
-16 transcode pairs (9 M1 smoke pairs upgraded + 7 M2 assertion-level pairs). Every case runs
-`photopipeline --dev` into .cache/out-smoke/<case>/ and is then asserted by pp_verify against
-tests/golden/smoke/<case>.json (SCHEMA.md): pixels + metadata values (M2-T8 normalisation,
-#26 landed) + the WarningKind list from the .pp.json sidecar.
+19 transcode pairs (9 M1 smoke pairs upgraded + 7 M2 assertion-level pairs + 3 M4 multi-format
+pairs). Every case runs `photopipeline --dev` into .cache/out-smoke/<case>/ and is then asserted
+by pp_verify against tests/golden/smoke/<case>.json (SCHEMA.md): pixels + metadata values
+(M2-T8 normalisation, #26 landed) + the WarningKind list from the .pp.json sidecar.
 
 usage: python tests/golden/smoke.py [BUILD_DIR] [--cases a,b,c]
   BUILD_DIR   default <repo>/build/release   (must be configured with -DPP_BUILD_DEV=ON)
@@ -19,8 +19,13 @@ exit code = number of failed cases (0 = all OK); 2 = usage error (unknown case n
 
 M4-T4（D14 pr-fast 金样子集，docs/v0.3.0-design.md §12.3/§12.2）:
   * `--cases`/`PP_CASES` 只**筛选**用例，断言/容差/输出目录与全量完全同源（金样只增不减）。
-  * 不带开关 = 全量 16 对，控制台输出逐字不变（含冻结行）。
+  * 不带开关 = 全量，控制台输出逐字不变（含冻结行）。
   * 子集生效时追加一行 `smoke: 子集 …`，冻结行 `SMOKE total=…` 语义不变（total=选中例数）。
+
+M4-T5（多格式对）:
+  * case 行第 2 段支持 ';' 分隔多源；第 3 段支持 ',' 分隔多产物（多产物 → pp_verify 第二参数
+    是用例输出根目录，逐产物按 expected.json 的 outputs[].rel 定位与断言）。
+  * 单源单产物的 16 对行为逐字不变。
 
 M3-W3（裁定 D3：Python 单实现，本文件替代 tests/golden/smoke.sh）:
   * PP_BIN/PP_VERIFY 按 name / name + '.exe' 双探测（Windows 产物带 .exe）
@@ -130,6 +135,7 @@ def resolve_exe(path):
 # tiff16-lzw goes through --preset on purpose: it covers the preset-file branch of §3.15.
 # The `--meta Exif.Image.Artist=…` writes are deliberate: they give every pair a metadata *value*
 # assertion (M2-T8 ②) without depending on sidecar/toolchain-specific tags (e.g. OIIO's Software).
+# M4-T5: 第 2/3 段支持 ';'（多源）与 ','（多产物）—— 详见文件头。
 CASES = [
     "jpeg-lossy|base/photo.jpg|base/photo.jpg|--format jpeg --backend jpegli --bitdepth 8 --param distance=1.0 --meta Exif.Image.Artist=M2-T8-jpeg",
     "jxl-lossless|base/rgb8.png|base/rgb8.jxl|--format jxl --tech modular --lossless --meta Exif.Image.Artist=M2-T8-jxl",
@@ -147,6 +153,13 @@ CASES = [
     "unicode-png|edge/测试📸unicode.png|edge/测试📸unicode.png|--format png --bitdepth 8 --meta Exif.Image.Artist=路径📸测试",
     "exif-roundtrip|meta/exif_full.jpg|meta/exif_full.jpg|--format jpeg --backend jpegli --bitdepth 8 --param distance=1.0",
     "metaonly-jpeg|meta/exif_full.jpg|meta/exif_full.jpg|--metadata-only --format jpeg --meta Exif.Image.Artist=M2-T8-only",
+    # M4-T5（0.3.0 多格式输出 §4）：1 源 → N 产物的路径/像素/元数据断言。
+    #  - split：$format/$dir/$file（分文件夹）；mirror：$dir/$format/$file；conflict：$format/$file
+    #    + 两个同主名源（rgb8.png / rgb8.tif）撞同一最终路径 → 逐输出独立 rename。
+    #  - 输入字段支持 ';' 分隔多源；产物字段支持 ',' 分隔多产物（多产物时第二参数 = 用例根目录）。
+    "multiformat-split|base/rgba8.png|jpeg/base/rgba8.jpg,webp/base/rgba8.webp|--outputs jpeg:jpegli,webp:libwebp --bitdepth 8 --lossless --meta Exif.Image.Artist=M4-T5-split",
+    "multiformat-mirror|base/rgb8.png|base/jpeg/rgb8.jpg,base/webp/rgb8.webp|--outputs jpeg:jpegli,webp:libwebp --bitdepth 8 --lossless --meta Exif.Image.Artist=M4-T5-mirror --template $dir/$format/$file",
+    "multiformat-conflict|base/rgb8.png;base/rgb8.tif|jpeg/rgb8.jpg,jpeg/rgb8 (1).jpg,webp/rgb8.webp,webp/rgb8 (1).webp|--outputs jpeg:jpegli,webp:libwebp --bitdepth 8 --lossless --template $format/$file --conflict rename",
 ]
 
 
@@ -189,9 +202,11 @@ def main():
         outdir = os.path.join(OUT_ROOT, name)
         log = OUT_ROOT + '/' + name + '.dev.log'
         shutil.rmtree(outdir, ignore_errors=True)
+        # 0.3.0 多格式：输入可多源（';' 分隔）、产物可多件（',' 分隔）
+        input_paths = [GOLDEN + '/' + p.strip() for p in input_rel.split(';') if p.strip()]
         # 等价 bash 的不分词引用展开：`$args` 按空白切分。
-        command = ([binary, '--dev', GOLDEN + '/' + input_rel, '--out', outdir,
-                    '--base', GOLDEN, '--conflict', 'overwrite', '--workers', '1']
+        command = ([binary, '--dev'] + input_paths +
+                   ['--out', outdir, '--base', GOLDEN, '--conflict', 'overwrite', '--workers', '1']
                    + args.split())
         with open(log, 'wb') as log_fp:
             rc = subprocess.run(command, stdout=log_fp, stderr=subprocess.STDOUT).returncode
@@ -199,7 +214,9 @@ def main():
             print('%-16s %-8s --dev exit %d (log: %s)' % (name, 'FAIL', rc, log))
             failed += 1
             continue
-        actual = outdir + '/' + out_rel
+        # 多产物 → pp_verify 拿用例根目录（逐产物按 outputs[].rel 定位/断言）；
+        # 单产物 → 拿产物文件本身（v1 口径，逐字不变）。
+        actual = outdir if ',' in out_rel else outdir + '/' + out_rel
         check = subprocess.run([verify, GOLDEN + '/smoke/' + name + '.json', actual],
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                text=True, encoding='utf-8', errors='replace')

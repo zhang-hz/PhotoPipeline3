@@ -44,9 +44,11 @@ namespace fs = std::filesystem;
 namespace {
 
 const char *kUsage =
-    "usage: pp_verify <expected.json> <actual_output> [--selftest]\n"
+    "usage: pp_verify <expected.json> <actual_output|case_dir> [--selftest]\n"
     "  asserts per tests/golden/SCHEMA.md: pixel (exact | psnr+threshold_db),\n"
     "  metadata [{key, op: eq|exists|absent, value}], warnings_contain [WarningKind]\n"
+    "  v2 (0.3.0): expected.json 携带 outputs[] 时，第二参数是**用例输出根目录**，\n"
+    "  逐输出按 outputs[i].rel 定位文件并各自断言（路径断言 = 文件必须存在）\n"
     "  --selftest   run the built-in three-state self test (no corpus needed)\n"
     "output: VERIFY <case> OK|FAIL <detail>; exit code = number of FAILs\n";
 
@@ -95,7 +97,7 @@ Sample load_oiio(const fs::path &p) {
     return s;
 }
 
-Sample load_webp(const fs::path &p) {
+Sample load_webp(const fs::path &p, bool rgb_only = false) {
     Sample s;
     std::ifstream f(p, std::ios::binary);
     if (!f) {
@@ -110,28 +112,34 @@ Sample load_webp(const fs::path &p) {
         s.error = "invalid webp: " + p.string();
         return s;
     }
+    // 通道对齐（M4-T5）：参照是 3 通道（无 alpha 源）时按 RGB 解码，否则按 RGBA。
+    // 目的仅是消除 libwebp RGBA 扩张造成的**伪**通道不匹配；alpha 产物仍走 RGBA（M1 口径：
+    // 绝不使用 OIIO 的 WebP reader，它对带 alpha 的文件返回预乘 RGB）。
     uint8_t *rgba =
-        WebPDecodeRGBA(reinterpret_cast<const uint8_t *>(raw.data()), raw.size(), &w, &h);
+        rgb_only
+            ? WebPDecodeRGB(reinterpret_cast<const uint8_t *>(raw.data()), raw.size(), &w, &h)
+            : WebPDecodeRGBA(reinterpret_cast<const uint8_t *>(raw.data()), raw.size(), &w, &h);
     if (rgba == nullptr) {
-        s.error = "WebPDecodeRGBA failed: " + p.string();
+        s.error =
+            std::string("WebPDecode") + (rgb_only ? "RGB" : "RGBA") + " failed: " + p.string();
         return s;
     }
     s.width = w;
     s.height = h;
-    s.channels = 4;
+    s.channels = rgb_only ? 3 : 4;
     s.bitdepth = 8;
     const std::size_t n = static_cast<std::size_t>(w) * static_cast<std::size_t>(h);
-    s.px.resize(n * 4);
-    for (std::size_t i = 0; i < n * 4; ++i) {
+    s.px.resize(n * static_cast<std::size_t>(s.channels));
+    for (std::size_t i = 0; i < s.px.size(); ++i) {
         s.px[i] = static_cast<float>(rgba[i]) / 255.0f;
     }
     WebPFree(rgba);
     return s;
 }
 
-Sample load_sample(const fs::path &p) {
+Sample load_sample(const fs::path &p, bool webp_rgb_only = false) {
     if (lower_ext(p) == ".webp")
-        return load_webp(p);
+        return load_webp(p, webp_rgb_only);
     return load_oiio(p);
 }
 
@@ -503,7 +511,8 @@ bool check_case(const QJsonObject &exp, const fs::path &actual, const fs::path &
         if (!in.error.empty()) {
             failures.push_back("input: " + in.error);
         } else {
-            const Sample out = load_sample(actual);
+            // 参照 = 3 通道（无 alpha 源）且产物是 webp → 产物按 RGB 解码（通道对齐）
+            const Sample out = load_sample(actual, in.channels == 3);
             if (!out.error.empty()) {
                 failures.push_back("output: " + out.error);
             } else if (mode == "exact") {
@@ -541,6 +550,68 @@ bool check_case(const QJsonObject &exp, const fs::path &actual, const fs::path &
         detail += f;
     }
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// M4-T5: expected.json v2 —— outputs[] 多产物断言（路径断言 + 逐输出像素/元数据/告警）
+// ---------------------------------------------------------------------------
+// expected.json 携带 outputs[] 时，第二参数是**用例输出根目录**：每个条目
+//   { "rel": "<相对用例根目录的产物路径>", "format": "<格式 id，记录用>", "assert": {…} }
+// 各自定位文件并断言 —— 文件不存在即 FAIL（= 路径断言）。条目缺 assert → 回落顶层 assert。
+bool check_case_outputs(const QJsonObject &exp, const fs::path &case_root,
+                        const fs::path &golden_root, std::string &detail) {
+    std::vector<std::string> failures;
+    const QJsonArray outputs = exp.value("outputs").toArray();
+    const QJsonObject top_asserts = exp.value("assert").toObject();
+    for (const QJsonValue &v : outputs) {
+        const QJsonObject o = v.toObject();
+        const std::string rel = o.value("rel").toString().toStdString();
+        if (rel.empty()) {
+            failures.push_back("outputs[] entry without 'rel'");
+            continue;
+        }
+        const fs::path file = case_root / fs::path(rel);
+        std::error_code ec;
+        if (!fs::is_regular_file(file, ec)) {
+            failures.push_back("output '" + rel + "' missing (expected at " + file.string() + ")");
+            continue;
+        }
+        QJsonObject per = o.value("assert").toObject();
+        if (per.isEmpty()) {
+            per = top_asserts;
+        }
+        QJsonObject one;
+        one["case"] = exp.value("case");
+        // 逐输出可用自己的 input 覆盖顶层 input（一源多产物时产物对应不同源，如 conflict 对）
+        const QString own_input = o.value("input").toString();
+        one["input"] = own_input.isEmpty() ? exp.value("input") : QJsonValue(own_input);
+        one["assert"] = per;
+        std::string one_detail;
+        if (!check_case(one, file, golden_root, one_detail)) {
+            failures.push_back(rel + ": " + one_detail);
+        }
+    }
+    if (failures.empty()) {
+        detail.clear();
+        return true;
+    }
+    detail.clear();
+    for (const std::string &f : failures) {
+        if (!detail.empty())
+            detail += "; ";
+        detail += f;
+    }
+    return false;
+}
+
+// v1（无 outputs[]）= 单产物断言（<actual> 即产物文件）；v2 = outputs[] 逐产物断言。
+bool check_expected(const QJsonObject &exp, const fs::path &actual, const fs::path &golden_root,
+                    std::string &detail) {
+    const QJsonArray outputs = exp.value("outputs").toArray();
+    if (!outputs.isEmpty()) {
+        return check_case_outputs(exp, actual, golden_root, detail);
+    }
+    return check_case(exp, actual, golden_root, detail);
 }
 
 // ---------------------------------------------------------------------------
@@ -760,13 +831,90 @@ int selftest() {
     int failures = 0;
     for (const Probe &p : probes) {
         std::string detail;
-        const bool ok = check_case(p.exp, p.actual, dir, detail);
+        const bool ok = check_expected(p.exp, p.actual, dir, detail);
         const bool behaves = (ok == p.expect_ok);
         if (!behaves)
             ++failures;
         std::printf("VERIFY selftest %-22s %s (expected %s, got %s)%s%s\n", p.label,
                     behaves ? "OK" : "FAIL", p.expect_ok ? "OK" : "FAIL", ok ? "OK" : "FAIL",
                     detail.empty() ? "" : " ", detail.c_str());
+    }
+
+    // M4-T5: expected.json v2（outputs[]）探针：逐产物定位/路径断言/断言按产物绑定
+    {
+        // 两个产物都命中 → OK（第二参 = 用例输出根目录）
+        QJsonObject e = make_exp("a.png", nullptr, 0, {}, {});
+        QJsonArray outs;
+        {
+            QJsonObject o0;
+            o0["rel"] = "b.png";
+            o0["format"] = "png";
+            QJsonObject a0;
+            a0["pixel"] = QJsonObject{{"mode", "exact"}};
+            a0["metadata"] = QJsonArray{};
+            a0["warnings_contain"] = QJsonArray{};
+            o0["assert"] = a0;
+            outs.append(o0);
+            QJsonObject o1;
+            o1["rel"] = "a.png";
+            QJsonObject a1;
+            a1["pixel"] = QJsonObject{{"mode", "exact"}};
+            a1["metadata"] = QJsonArray{};
+            a1["warnings_contain"] = QJsonArray{};
+            o1["assert"] = a1;
+            outs.append(o1);
+        }
+        e["outputs"] = outs;
+        {
+            std::string detail;
+            const bool ok = check_expected(e, dir, dir, detail);
+            const bool behaves = ok;
+            if (!behaves)
+                ++failures;
+            std::printf("VERIFY selftest %-22s %s%s%s\n", "outputs-pass", behaves ? "OK" : "FAIL",
+                        detail.empty() ? "" : " ", detail.c_str());
+        }
+        // 产物缺失 → FAIL（= 路径断言）
+        {
+            QJsonArray missing;
+            QJsonObject o;
+            o["rel"] = "no-such-output.png";
+            missing.append(o);
+            QJsonObject e2 = e;
+            e2["outputs"] = missing;
+            std::string detail;
+            const bool ok = check_expected(e2, dir, dir, detail);
+            const bool behaves = !ok;
+            if (!behaves)
+                ++failures;
+            std::printf("VERIFY selftest %-22s %s%s%s\n", "outputs-missing-fail",
+                        behaves ? "OK" : "FAIL", detail.empty() ? "" : " ", detail.c_str());
+        }
+        // 断言按产物绑定：第二个产物（c.png 已被扰动）的 exact 断言必须失败
+        {
+            QJsonArray bound;
+            QJsonObject o0;
+            o0["rel"] = "b.png";
+            QJsonObject a0;
+            a0["pixel"] = QJsonObject{{"mode", "exact"}};
+            o0["assert"] = a0;
+            bound.append(o0);
+            QJsonObject o1;
+            o1["rel"] = "c.png";
+            QJsonObject a1;
+            a1["pixel"] = QJsonObject{{"mode", "exact"}};
+            o1["assert"] = a1;
+            bound.append(o1);
+            QJsonObject e3 = e;
+            e3["outputs"] = bound;
+            std::string detail;
+            const bool ok = check_expected(e3, dir, dir, detail);
+            const bool behaves = !ok && detail.find("c.png") != std::string::npos;
+            if (!behaves)
+                ++failures;
+            std::printf("VERIFY selftest %-22s %s%s%s\n", "outputs-binding-fail",
+                        behaves ? "OK" : "FAIL", detail.empty() ? "" : " ", detail.c_str());
+        }
     }
 
     // M2-T8 (#26): direct probes of the frozen normalisation rules. The corpus cannot express
@@ -787,7 +935,7 @@ int selftest() {
     text_probe("normalize-rational-den0-guard", reduce_rational(7, 0), "7/0");
 
     std::printf("VERIFY selftest %s (%zu probes, %d unexpected)\n", failures == 0 ? "OK" : "FAIL",
-                probes.size() + 6, failures);
+                probes.size() + 6 + 3, failures);
     return failures;
 }
 
@@ -832,7 +980,7 @@ int main(int argc, char **argv) {
     }
 
     std::string detail;
-    const bool ok = check_case(exp, actual, golden_root_for(expected_json), detail);
+    const bool ok = check_expected(exp, actual, golden_root_for(expected_json), detail);
     if (ok) {
         std::printf("VERIFY %s OK\n", case_name.c_str());
         return 0;

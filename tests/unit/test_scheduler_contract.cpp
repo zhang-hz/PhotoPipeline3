@@ -84,9 +84,9 @@ int main() {
     // ---- A. results() is index-aligned with the input and all files succeed ----
     {
         pp::RunConfig cfg;
+        cfg.output_template = "$dir/$file"; // 0.3.0：0.2 兼容输出结构（本测例断言既有路径）
         cfg.out_root = tmp / "basic";
-        cfg.format_id = "jpeg";
-        cfg.out_bitdepth = 8;
+        cfg.outputs.push_back(pp::OutputFormatSpec{"jpeg", "", "", {}, 8});
         cfg.conflict = pp::ConflictPolicy::Overwrite;
         cfg.workers = 4;
 
@@ -141,9 +141,9 @@ int main() {
     // ---- B. cancel() before start(): every file is Cancelled and nothing is written ----
     {
         pp::RunConfig cfg;
+        cfg.output_template = "$dir/$file"; // 0.3.0：0.2 兼容输出结构（本测例断言既有路径）
         cfg.out_root = tmp / "cancel-pre";
-        cfg.format_id = "jpeg";
-        cfg.out_bitdepth = 8;
+        cfg.outputs.push_back(pp::OutputFormatSpec{"jpeg", "", "", {}, 8});
         cfg.workers = 3;
         pp::Scheduler sched(cfg, entries_for(inputs, corpus));
         sched.cancel();
@@ -163,9 +163,9 @@ int main() {
     // ---- C. cancel() mid-run: ok + cancelled == total, no failures ----
     {
         pp::RunConfig cfg;
+        cfg.output_template = "$dir/$file"; // 0.3.0：0.2 兼容输出结构（本测例断言既有路径）
         cfg.out_root = tmp / "cancel-mid";
-        cfg.format_id = "jpeg";
-        cfg.out_bitdepth = 8;
+        cfg.outputs.push_back(pp::OutputFormatSpec{"jpeg", "", "", {}, 8});
         cfg.workers = 2;
         std::vector<fs::path> many;
         for (int i = 0; i < 40; ++i)
@@ -184,9 +184,9 @@ int main() {
     // ---- D. ConflictPolicy::Skip marks existing outputs as skipped ----
     {
         pp::RunConfig cfg;
+        cfg.output_template = "$dir/$file"; // 0.3.0：0.2 兼容输出结构（本测例断言既有路径）
         cfg.out_root = tmp / "skip";
-        cfg.format_id = "jpeg";
-        cfg.out_bitdepth = 8;
+        cfg.outputs.push_back(pp::OutputFormatSpec{"jpeg", "", "", {}, 8});
         cfg.conflict = pp::ConflictPolicy::Skip;
         cfg.workers = 2;
         std::error_code ec;
@@ -208,10 +208,9 @@ int main() {
     // ---- E. missing encoder → every file fails, order preserved ----
     {
         pp::RunConfig cfg;
+        cfg.output_template = "$dir/$file"; // 0.3.0：0.2 兼容输出结构（本测例断言既有路径）
         cfg.out_root = tmp / "noenc";
-        cfg.format_id = "jpeg";
-        cfg.backend_id = "nope";
-        cfg.out_bitdepth = 8;
+        cfg.outputs.push_back(pp::OutputFormatSpec{"jpeg", "nope", "", {}, 8});
         cfg.workers = 2;
         pp::Scheduler sched(cfg, entries_for(inputs, corpus));
         sched.start();
@@ -225,9 +224,9 @@ int main() {
     // ---- F. small budget: no deadlock, no over-issue (files still complete) ----
     {
         pp::RunConfig cfg;
+        cfg.output_template = "$dir/$file"; // 0.3.0：0.2 兼容输出结构（本测例断言既有路径）
         cfg.out_root = tmp / "budget";
-        cfg.format_id = "jpeg";
-        cfg.out_bitdepth = 8;
+        cfg.outputs.push_back(pp::OutputFormatSpec{"jpeg", "", "", {}, 8});
         cfg.workers = 4;
         cfg.budget_bytes = 300000; // ~3 concurrent 64x64x3 files (2x frame = 98304 each)
         pp::Scheduler sched(cfg, entries_for(inputs, corpus));
@@ -241,8 +240,9 @@ int main() {
     // ---- G. metadata-only mode through the scheduler ----
     {
         pp::RunConfig cfg;
+        cfg.output_template = "$dir/$file"; // 0.3.0：0.2 兼容输出结构（本测例断言既有路径）
         cfg.out_root = tmp / "metaonly";
-        cfg.format_id = "jpeg";
+        cfg.outputs.push_back(pp::OutputFormatSpec{"jpeg", "", "", {}, 8});
         cfg.metadata_only = true;
         cfg.workers = 2;
         pp::TagEdit e;
@@ -262,8 +262,9 @@ int main() {
     // ---- H. empty input list ----
     {
         pp::RunConfig cfg;
+        cfg.output_template = "$dir/$file"; // 0.3.0：0.2 兼容输出结构（本测例断言既有路径）
         cfg.out_root = tmp / "empty";
-        cfg.format_id = "jpeg";
+        cfg.outputs.push_back(pp::OutputFormatSpec{"jpeg", "", "", {}, 8});
         pp::Scheduler sched(cfg, {});
         sched.start();
         sched.wait();

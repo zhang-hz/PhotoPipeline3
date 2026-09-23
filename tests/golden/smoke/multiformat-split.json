@@ -1,0 +1,29 @@
+{
+  "case": "multiformat-split",
+  "input": "base/rgba8.png",
+  "output_format": "jpeg,webp",
+  "outputs": [
+    {
+      "rel": "jpeg/base/rgba8.jpg",
+      "format": "jpeg",
+      "assert": {
+        "pixel": {},
+        "metadata": [
+          { "key": "Exif.Image.Artist", "op": "eq", "value": "M4-T5-split" }
+        ],
+        "warnings_contain": ["AlphaFlattened"]
+      }
+    },
+    {
+      "rel": "webp/base/rgba8.webp",
+      "format": "webp",
+      "assert": {
+        "pixel": { "mode": "exact" },
+        "metadata": [
+          { "key": "Exif.Image.Artist", "op": "eq", "value": "M4-T5-split" }
+        ],
+        "warnings_contain": []
+      }
+    }
+  ]
+}

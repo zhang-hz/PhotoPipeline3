@@ -106,6 +106,11 @@ const char *kDevUsage =
     "  --format ID             jpeg|jxl|png|tiff|webp|bmp|heif|avif (default jxl)\n"
     "  --backend ID            backend (avif: svt-av1|libaom; default = first)\n"
     "  --tech ID               tech (jxl: vardct|modular; webp: lossy|lossless; default = first)\n"
+    "  --outputs LIST          多输出（0.3.0，M4-T5）：逗号分隔的 format[:backend[:tech]]，\n"
+    "                          可重复追加；与 --format/--backend/--tech 互斥（二选一）\n"
+    "  --template TMPL         输出路径模板（默认按输出数派生的 0.2 兼容/分文件夹形态）：\n"
+    "                          $format/$dir/$file（分文件夹）| $dir/$file（0.2 兼容）| "
+    "$dir/$format/$file\n"
     "  --lossless              lossless switch\n"
     "  --bitdepth N            output bit depth; default jpeg 8 / jxl 16 / png 16 / tiff 16 /\n"
     "                          webp 8 / bmp 24 / heif 10 / avif 10 (unsupported 10-bit HEIF/AVIF\n"
@@ -114,13 +119,18 @@ const char *kDevUsage =
     "  --conflict POLICY       skip|overwrite|rename (dev default overwrite)\n"
     "  --metadata-only         metadata-only mode (zero re-encode)\n"
     "  --preset FILE           load a preset JSON (command line options win)\n"
-    "  --param KEY=VALUE       override one parameter (repeatable)\n"
+    "  --param KEY=VALUE       override one parameter (repeatable; applies to every output)\n"
     "  --meta KEY=VALUE        set/overwrite one metadata tag (repeatable)\n"
     "  --workers N             worker count (0 = physical cores; dev default 1)\n"
     "  --base DIR              mirror-path base directory (repeatable)\n"
     "  --log-level LVL         trace|debug|info|warn|error\n"
     "  -h, --help              this text\n"
     "exit code = number of failed files\n";
+
+// 多输出 spec：format[:backend[:tech]]（--outputs 的单项）
+struct OutputSpecText {
+    std::string format, backend, tech;
+};
 
 struct DevOptions {
     std::vector<fs::path> inputs;
@@ -130,6 +140,9 @@ struct DevOptions {
     bool help = false;
     std::string format = "jxl", backend, tech, color = "keep", conflict = "overwrite";
     std::string preset, log_level = "info";
+    std::string output_template;
+    bool has_output_template = false;
+    std::vector<OutputSpecText> outputs; // --outputs 追加项
     bool lossless = false, metadata_only = false;
     int bitdepth = -1, workers = 1;
     bool has_format = false, has_backend = false, has_tech = false, has_lossless = false;
@@ -137,6 +150,23 @@ struct DevOptions {
     bool has_workers = false;
     std::vector<std::pair<std::string, std::string>> params, metas;
 };
+
+// "format[:backend[:tech]]" → 三段（后两段可空）
+bool parse_output_spec(std::string_view text, OutputSpecText &out) {
+    const std::size_t first = text.find(':');
+    out.format = std::string(text.substr(0, first));
+    if (out.format.empty())
+        return false;
+    if (first == std::string_view::npos)
+        return true;
+    const std::size_t second = text.find(':', first + 1);
+    out.backend = std::string(text.substr(
+        first + 1, second == std::string_view::npos ? std::string_view::npos : second - first - 1));
+    if (second == std::string_view::npos)
+        return true;
+    out.tech = std::string(text.substr(second + 1));
+    return true;
+}
 
 std::string value_text(const pp::ParamValue &v) {
     if (const bool *b = std::get_if<bool>(&v))
@@ -272,6 +302,33 @@ bool parse_dev_options(int argc, char **argv, DevOptions &o, std::string &err) {
                 return false;
             o.tech = v;
             o.has_tech = true;
+        } else if (a == "--outputs") {
+            const char *v = need(i, "--outputs");
+            if (!v)
+                return false;
+            std::string_view rest(v);
+            while (!rest.empty()) {
+                const std::size_t comma = rest.find(',');
+                const std::string_view item = rest.substr(
+                    0, comma == std::string_view::npos ? std::string_view::npos : comma);
+                OutputSpecText spec;
+                if (!item.empty()) {
+                    if (!parse_output_spec(item, spec)) {
+                        err = "invalid --outputs item: '" + std::string(item) + "'";
+                        return false;
+                    }
+                    o.outputs.push_back(std::move(spec));
+                }
+                if (comma == std::string_view::npos)
+                    break;
+                rest.remove_prefix(comma + 1);
+            }
+        } else if (a == "--template") {
+            const char *v = need(i, "--template");
+            if (!v)
+                return false;
+            o.output_template = v;
+            o.has_output_template = true;
         } else if (a == "--lossless") {
             o.lossless = true;
             o.has_lossless = true;
@@ -497,11 +554,12 @@ std::string tail_truncate(const std::string &s, std::size_t n) {
     return "..." + s.substr(s.size() - (n - 3));
 }
 
-// <out>.pp.json sidecar: carries the pipeline warnings/timings that pp_verify needs for
-// `warnings_contain` and for debugging (the output file itself cannot express them).
-QJsonObject sidecar_json(const pp::FileResult &r, const std::string &params_snapshot) {
+// <out>.pp.json sidecar（0.3.0：逐输出一份）：携带 pp_verify 需要的 warnings 与调试用的
+// timing/info。单输出时字段值与 0.2 逐字等价（row.* 即文件级聚合值）。
+QJsonObject sidecar_json(const pp::FileResult &r, const pp::OutputResult &row,
+                         const std::string &params_snapshot) {
     QJsonArray warnings;
-    for (const pp::Warning &w : r.warnings) {
+    for (const pp::Warning &w : row.warnings) {
         QJsonObject o;
         o["kind"] = QString::fromStdString(warning_name(w.kind));
         o["detail"] = QString::fromStdString(w.detail);
@@ -512,8 +570,8 @@ QJsonObject sidecar_json(const pp::FileResult &r, const std::string &params_snap
     timing["orient_ms"] = r.t.orient_ms;
     timing["color_ms"] = r.t.color_ms;
     timing["flatten_ms"] = r.t.flatten_ms;
-    timing["encode_ms"] = r.t.encode_ms;
-    timing["metawrite_ms"] = r.t.metawrite_ms;
+    timing["encode_ms"] = row.t.encode_ms;
+    timing["metawrite_ms"] = row.t.metawrite_ms;
     timing["total_ms"] = r.t.total_ms;
 
     QJsonObject info;
@@ -527,32 +585,45 @@ QJsonObject sidecar_json(const pp::FileResult &r, const std::string &params_snap
 
     QJsonObject o;
     o["src"] = QString::fromStdString(r.src.string());
-    o["out"] = QString::fromStdString(r.out.string());
-    o["state"] = state_name(r);
-    o["ok"] = r.ok;
-    o["skipped"] = r.skipped;
-    o["cancelled"] = r.cancelled;
-    o["error"] = QString::fromStdString(r.error);
-    o["out_bytes"] = static_cast<double>(r.out_bytes);
+    o["out"] = QString::fromStdString(row.out.string());
+    o["format"] = QString::fromStdString(row.format_id);
+    o["backend"] = QString::fromStdString(row.backend_id);
+    o["tech"] = QString::fromStdString(row.tech_id);
+    o["state"] = row.ok ? "ok" : (row.skipped ? "skipped" : "failed");
+    o["ok"] = row.ok;
+    o["skipped"] = row.skipped;
+    o["error"] = QString::fromStdString(row.error);
+    o["out_bytes"] = static_cast<double>(row.out_bytes);
     o["warnings"] = warnings;
     o["color_src"] = QString::fromStdString(r.color_src);
     o["color_dst"] = QString::fromStdString(r.color_dst);
     o["timing"] = timing;
     o["info"] = info;
     o["params"] = QString::fromStdString(params_snapshot);
+    // 源文件级聚合（多输出时逐输出行共用；单输出时与上述逐输出字段相同）
+    o["file_state"] = QString::fromStdString(state_name(r));
+    o["file_ok"] = r.ok;
+    o["file_skipped"] = r.skipped;
+    o["file_cancelled"] = r.cancelled;
+    o["outputs_total"] = static_cast<int>(r.outputs.size());
+    o["out_bytes_total"] = static_cast<double>(r.out_bytes);
     return o;
 }
 
-void write_sidecar(const pp::FileResult &r, const std::string &params_snapshot) {
-    if (r.out.empty())
-        return;
-    const fs::path path = r.out.string() + ".pp.json";
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
-    if (!f)
-        return;
-    const QJsonDocument doc(sidecar_json(r, params_snapshot));
-    const QByteArray bytes = doc.toJson(QJsonDocument::Indented);
-    f.write(bytes.constData(), bytes.size());
+void write_sidecars(const pp::FileResult &r, const std::vector<std::string> &params_snapshots) {
+    for (std::size_t i = 0; i < r.outputs.size(); ++i) {
+        const pp::OutputResult &row = r.outputs[i];
+        if (row.out.empty())
+            continue;
+        const std::string snap = i < params_snapshots.size() ? params_snapshots[i] : std::string();
+        const fs::path path = row.out.string() + ".pp.json";
+        std::ofstream f(path, std::ios::binary | std::ios::trunc);
+        if (!f)
+            continue;
+        const QJsonDocument doc(sidecar_json(r, row, snap));
+        const QByteArray bytes = doc.toJson(QJsonDocument::Indented);
+        f.write(bytes.constData(), bytes.size());
+    }
 }
 
 fs::path choose_base(const fs::path &file, const std::vector<fs::path> &bases) {
@@ -612,9 +683,24 @@ int run_dev(int argc, char **argv) {
             return 2;
         }
     }
-    const std::string format = o.has_format ? o.format : (have_preset ? preset.format_id : "jxl");
-    const std::string backend = o.has_backend ? o.backend : (have_preset ? preset.backend_id : "");
-    const std::string tech = o.has_tech ? o.tech : (have_preset ? preset.tech_id : "");
+    const bool multi_output = !o.outputs.empty();
+    if (multi_output && (o.has_format || o.has_backend || o.has_tech)) {
+        std::fprintf(stderr, "photopipeline --dev: --outputs is mutually exclusive with "
+                             "--format/--backend/--tech (use format[:backend[:tech]] items)\n");
+        pp::log_shutdown();
+        return 2;
+    }
+    // 输出清单：--outputs（0.3.0 多输出）优先；否则 0.2 的单格式形态（预设参与）
+    std::vector<OutputSpecText> outputs;
+    if (multi_output) {
+        outputs = o.outputs;
+    } else {
+        OutputSpecText s;
+        s.format = o.has_format ? o.format : (have_preset ? preset.format_id : "jxl");
+        s.backend = o.has_backend ? o.backend : (have_preset ? preset.backend_id : "");
+        s.tech = o.has_tech ? o.tech : (have_preset ? preset.tech_id : "");
+        outputs.push_back(s);
+    }
     const bool lossless = o.has_lossless ? o.lossless : (have_preset ? preset.lossless : false);
     pp::ColorTarget color = pp::ColorTarget::KeepOriginal;
     if (o.has_color) {
@@ -629,35 +715,6 @@ int run_dev(int argc, char **argv) {
     if (!o.has_conflict && have_preset)
         conflict = preset.conflict;
     pp::BatchRules rules = have_preset ? preset.rules : pp::BatchRules{};
-
-    const pp::FormatDef *fmt = pp::find_format(format);
-    if (!fmt) {
-        std::fprintf(stderr, "photopipeline --dev: unknown --format '%s'\n", format.c_str());
-        pp::log_shutdown();
-        return 2;
-    }
-    if (o.metadata_only && !pp::format_supports_metadata_only(format)) {
-        std::fprintf(stderr,
-                     "photopipeline --dev: format '%s' does not support --metadata-only "
-                     "(jpeg/png/tiff/webp only)\n",
-                     format.c_str());
-        pp::log_shutdown();
-        return 2;
-    }
-
-    // ---- parameters: defaults → preset → --param → locks ----
-    pp::ParamSet params = pp::default_params(*fmt, backend, tech, lossless);
-    if (have_preset) {
-        for (const auto &[k, v] : preset.params)
-            params[k] = v;
-    }
-    for (const auto &[k, v] : o.params) {
-        if (!set_param(params, *fmt, backend, tech, k, v, err)) {
-            std::fprintf(stderr, "photopipeline --dev: %s\n", err.c_str());
-            pp::log_shutdown();
-            return 2;
-        }
-    }
     for (const auto &[k, v] : o.metas) {
         pp::TagEdit e;
         e.key = k;
@@ -668,56 +725,127 @@ int run_dev(int argc, char **argv) {
             rules.exif_edits.push_back(std::move(e));
         }
     }
-    pp::fill_defaults(*fmt, backend, tech, lossless, params);
-    params["__lossless"] = lossless;
-    pp::apply_locks(*fmt, backend, tech, lossless, params);
-    const std::string verr = pp::validate_params(*fmt, backend, tech, lossless, params);
-    if (!verr.empty()) {
-        std::fprintf(stderr, "photopipeline --dev: invalid parameters: %s\n", verr.c_str());
-        pp::log_shutdown();
-        return 2;
+
+    // ---- 路径模板（§4.2）：--template 优先；否则按输出数派生 ----
+    // 单输出派生为 0.2 兼容形态 $dir/$file（§1 需求 3「默认行为兼容 v0.2」+ 金样 16 对不回退）；
+    // 多输出派生为分文件夹形态 $format/$dir/$file（§3.2 默认 + §4.2「多选输出时 UI 默认 true」）。
+    const std::string output_template =
+        o.has_output_template
+            ? o.output_template
+            : (outputs.size() > 1 ? std::string("$format/$dir/$file") : std::string("$dir/$file"));
+    {
+        std::string tmpl_err;
+        if (!pp::validate_output_template(output_template, &tmpl_err)) {
+            std::fprintf(stderr, "photopipeline --dev: %s\n", tmpl_err.c_str());
+            pp::log_shutdown();
+            return 2;
+        }
     }
 
-    // ---- bit depth: per-format default, runtime probe intersection for libheif formats ----
-    const bool bitdepth_explicit = o.has_bitdepth || have_preset;
-    int bitdepth = o.has_bitdepth ? o.bitdepth
-                                  : (have_preset ? preset.out_bitdepth : default_bitdepth(format));
-    if (std::find(fmt->bitdepths.begin(), fmt->bitdepths.end(), bitdepth) == fmt->bitdepths.end()) {
-        std::fprintf(stderr, "photopipeline --dev: bit depth %d is not supported by format '%s'\n",
-                     bitdepth, format.c_str());
-        pp::log_shutdown();
-        return 2;
-    }
-    if (format == "heif" || format == "avif") {
-        const std::string supported = pp::probe_bitdepth_support(format, backend);
-        auto is_supported = [&supported](int d) {
-            const std::string needle = std::to_string(d);
-            std::size_t pos = 0;
-            while ((pos = supported.find(needle, pos)) != std::string::npos) {
-                const bool left_ok = pos == 0 || supported[pos - 1] == ',';
-                const bool right_ok = pos + needle.size() == supported.size() ||
-                                      supported[pos + needle.size()] == ',';
-                if (left_ok && right_ok)
-                    return true;
-                pos += needle.size();
-            }
-            return false;
-        };
-        if (!is_supported(bitdepth)) {
-            if (bitdepth_explicit) {
-                std::fprintf(stderr,
-                             "photopipeline --dev: %s/%s does not support %d-bit "
-                             "(supported: %s)\n",
-                             format.c_str(), backend.c_str(), bitdepth, supported.c_str());
+    // ---- 逐输出：格式校验 + 参数（defaults → preset(#0) → --param → locks）+ 位深 ----
+    std::vector<pp::OutputFormatSpec> specs;
+    std::vector<std::string> params_snapshots;
+    for (std::size_t oi = 0; oi < outputs.size(); ++oi) {
+        const OutputSpecText &s = outputs[oi];
+        const std::string &backend = s.backend;
+        const std::string &tech = s.tech;
+        const pp::FormatDef *fmt = pp::find_format(s.format);
+        if (!fmt) {
+            std::fprintf(stderr, "photopipeline --dev: unknown --format '%s'\n", s.format.c_str());
+            pp::log_shutdown();
+            return 2;
+        }
+        // 参数：引擎默认（含无损技术选择与锁定）→ 预设（仅输出 #0，0.2 单格式语义）→ --param →
+        // locks
+        pp::ParamSet params = pp::default_params(*fmt, backend, tech, lossless);
+        if (have_preset && oi == 0) {
+            for (const auto &[k, v] : preset.params)
+                params[k] = v;
+        }
+        for (const auto &[k, v] : o.params) {
+            if (!set_param(params, *fmt, backend, tech, k, v, err)) {
+                std::fprintf(stderr, "photopipeline --dev: %s\n", err.c_str());
                 pp::log_shutdown();
                 return 2;
             }
-            pp::log_warn("harness", "main.cpp",
-                         "10-bit unsupported by backend; default falls back to 8",
-                         {{"format", format}, {"backend", backend}, {"supported", supported}});
-            std::printf("warning: %s/%s supports [%s]; default bit depth falls back to 8\n",
-                        format.c_str(), backend.c_str(), supported.c_str());
-            bitdepth = 8;
+        }
+        pp::fill_defaults(*fmt, backend, tech, lossless, params);
+        // NOTE(0.3.0/§3.2 + 主对话裁定 B)：无缝语义随 OutputFormatSpec.params 承载 —— 保留键
+        // __lossless 是冻结参数引擎（default_params/apply_locks 的谓词输入）自带的内部键，
+        // pipeline 不再自行注入；T13 会把"显式 lossless 参数"补进 schema。
+        pp::apply_locks(*fmt, backend, tech, lossless, params);
+        const std::string verr = pp::validate_params(*fmt, backend, tech, lossless, params);
+        if (!verr.empty()) {
+            std::fprintf(stderr, "photopipeline --dev: invalid parameters: %s\n", verr.c_str());
+            pp::log_shutdown();
+            return 2;
+        }
+
+        // 位深：逐输出默认（预设位深沿用 0.2 的"输出 #0"口径），libheif 系走运行时探测交集
+        const bool bitdepth_explicit = o.has_bitdepth || (have_preset && oi == 0);
+        int bitdepth = o.has_bitdepth ? o.bitdepth
+                                      : ((have_preset && oi == 0) ? preset.out_bitdepth
+                                                                  : default_bitdepth(s.format));
+        if (std::find(fmt->bitdepths.begin(), fmt->bitdepths.end(), bitdepth) ==
+            fmt->bitdepths.end()) {
+            std::fprintf(stderr,
+                         "photopipeline --dev: bit depth %d is not supported by format '%s'\n",
+                         bitdepth, s.format.c_str());
+            pp::log_shutdown();
+            return 2;
+        }
+        if (s.format == "heif" || s.format == "avif") {
+            const std::string supported = pp::probe_bitdepth_support(s.format, backend);
+            auto is_supported = [&supported](int d) {
+                const std::string needle = std::to_string(d);
+                std::size_t pos = 0;
+                while ((pos = supported.find(needle, pos)) != std::string::npos) {
+                    const bool left_ok = pos == 0 || supported[pos - 1] == ',';
+                    const bool right_ok = pos + needle.size() == supported.size() ||
+                                          supported[pos + needle.size()] == ',';
+                    if (left_ok && right_ok)
+                        return true;
+                    pos += needle.size();
+                }
+                return false;
+            };
+            if (!is_supported(bitdepth)) {
+                if (bitdepth_explicit) {
+                    std::fprintf(stderr,
+                                 "photopipeline --dev: %s/%s does not support %d-bit "
+                                 "(supported: %s)\n",
+                                 s.format.c_str(), backend.c_str(), bitdepth, supported.c_str());
+                    pp::log_shutdown();
+                    return 2;
+                }
+                pp::log_warn(
+                    "harness", "main.cpp", "10-bit unsupported by backend; default falls back to 8",
+                    {{"format", s.format}, {"backend", backend}, {"supported", supported}});
+                std::printf("warning: %s/%s supports [%s]; default bit depth falls back to 8\n",
+                            s.format.c_str(), backend.c_str(), supported.c_str());
+                bitdepth = 8;
+            }
+        }
+        specs.push_back(pp::OutputFormatSpec{s.format, backend, tech, params, bitdepth});
+        params_snapshots.push_back(pp::snapshot_params(params));
+    }
+
+    if (o.metadata_only) {
+        if (specs.size() != 1) {
+            std::fprintf(stderr,
+                         "photopipeline --dev: --metadata-only requires exactly one "
+                         "output (got %zu)\n",
+                         specs.size());
+            pp::log_shutdown();
+            return 2;
+        }
+        if (!pp::format_supports_metadata_only(specs.front().format_id)) {
+            std::fprintf(stderr,
+                         "photopipeline --dev: format '%s' does not support --metadata-only "
+                         "(jpeg/png/tiff/webp only)\n",
+                         specs.front().format_id.c_str());
+            pp::log_shutdown();
+            return 2;
         }
     }
 
@@ -755,13 +883,8 @@ int run_dev(int argc, char **argv) {
     // ---- run configuration ----
     pp::RunConfig cfg;
     cfg.out_root = o.out_root;
-    cfg.format_id = format;
-    cfg.backend_id = backend;
-    cfg.tech_id = tech;
-    cfg.lossless = lossless;
-    cfg.params = params;
-    cfg.out_bitdepth = bitdepth;
-    cfg.color_target = color;
+    cfg.outputs = specs;
+    cfg.color = color;
     cfg.conflict = conflict;
     cfg.rotate_orientation = true;
     cfg.flatten_gray = 1.0;
@@ -769,31 +892,64 @@ int run_dev(int argc, char **argv) {
     cfg.metadata_only = o.metadata_only;
     cfg.workers = o.workers; // 0 = physical cores
     cfg.budget_bytes = 0;
+    cfg.split_by_format = output_template.rfind("$format", 0) == 0; // §4.2 派生态
+    cfg.output_template = output_template;
+    cfg.stagger_ms = 150;  // §3.2 默认；W1-T7 接设置项
+    cfg.thread_budget = 0; // §3.2 默认；W1-T7 接设置项
 
-    const std::string params_snapshot = pp::snapshot_params(params);
     std::printf("photopipeline --dev\n");
-    std::printf("  format=%s backend=%s tech=%s lossless=%s bitdepth=%d color=%s conflict=%s\n",
-                format.c_str(), backend.empty() ? "(first)" : backend.c_str(),
-                tech.empty() ? "(first)" : tech.c_str(), lossless ? "true" : "false", bitdepth,
-                pp::to_string(color).c_str(), o.conflict.c_str());
-    std::printf("  out=%s workers=%d files=%zu metadata_only=%s params=[%s]\n",
-                o.out_root.string().c_str(), o.workers, entries.size(),
-                o.metadata_only ? "true" : "false", params_snapshot.c_str());
+    if (specs.size() == 1) {
+        std::printf("  format=%s backend=%s tech=%s lossless=%s bitdepth=%d color=%s conflict=%s\n",
+                    specs[0].format_id.c_str(),
+                    specs[0].backend_id.empty() ? "(first)" : specs[0].backend_id.c_str(),
+                    specs[0].tech_id.empty() ? "(first)" : specs[0].tech_id.c_str(),
+                    lossless ? "true" : "false", specs[0].out_bitdepth,
+                    pp::to_string(color).c_str(), o.conflict.c_str());
+        std::printf("  out=%s workers=%d files=%zu metadata_only=%s params=[%s]\n",
+                    o.out_root.string().c_str(), o.workers, entries.size(),
+                    o.metadata_only ? "true" : "false", params_snapshots.front().c_str());
+    } else {
+        std::string list;
+        for (const pp::OutputFormatSpec &s : specs) {
+            if (!list.empty())
+                list += ",";
+            list += s.format_id;
+            if (!s.backend_id.empty())
+                list += ":" + s.backend_id;
+            if (!s.tech_id.empty())
+                list += ":" + s.tech_id;
+            list += "@" + std::to_string(s.out_bitdepth);
+        }
+        std::printf("  outputs=%zu [%s] template=%s lossless=%s color=%s conflict=%s\n",
+                    specs.size(), list.c_str(), output_template.c_str(),
+                    lossless ? "true" : "false", pp::to_string(color).c_str(), o.conflict.c_str());
+        std::printf("  out=%s workers=%d files=%zu metadata_only=%s\n", o.out_root.string().c_str(),
+                    o.workers, entries.size(), o.metadata_only ? "true" : "false");
+        for (std::size_t oi = 0; oi < specs.size(); ++oi) {
+            std::printf("    output[%zu] %s params=[%s]\n", oi, specs[oi].format_id.c_str(),
+                        params_snapshots[oi].c_str());
+        }
+    }
 
     // ---- run header log: versions + parameter snapshot (§4.8 drumbeat item 4) ----
+    std::string output_list;
+    for (const pp::OutputFormatSpec &s : specs) {
+        if (!output_list.empty())
+            output_list += ",";
+        output_list += s.format_id + (s.backend_id.empty() ? "" : ":" + s.backend_id);
+    }
     pp::log_info("run", "main.cpp", "run start",
-                 {{"format", format},
-                  {"backend", backend},
-                  {"tech", tech},
+                 {{"outputs", output_list},
+                  {"output_count", std::to_string(specs.size())},
+                  {"template", output_template},
                   {"lossless", lossless ? "true" : "false"},
-                  {"bitdepth", std::to_string(bitdepth)},
                   {"color", pp::to_string(color)},
                   {"conflict", o.conflict},
                   {"workers", std::to_string(o.workers)},
                   {"files", std::to_string(entries.size())},
                   {"metadata_only", o.metadata_only ? "true" : "false"},
                   {"out", o.out_root.string()},
-                  {"params", params_snapshot}});
+                  {"params", params_snapshots.front()}});
     for (const auto &[key, value] : pp::library_versions()) {
         pp::log_info("run", "main.cpp", "version", {{"lib", key}, {"version", value}});
     }
@@ -810,7 +966,18 @@ int run_dev(int argc, char **argv) {
                     warning_kinds(r).c_str());
         if (!r.error.empty())
             std::printf("    error: %s\n", r.error.c_str());
-        write_sidecar(r, params_snapshot);
+        if (r.outputs.size() > 1) {
+            // 0.3.0 多输出：逐输出行（与 run 页逐输出行同口径）
+            for (const pp::OutputResult &row : r.outputs) {
+                std::printf("    %-8s %-9s %10llu  %s\n", row.format_id.c_str(),
+                            row.ok ? "ok" : (row.skipped ? "skipped" : "failed"),
+                            static_cast<unsigned long long>(row.out_bytes),
+                            tail_truncate(row.out.string(), 60).c_str());
+                if (!row.error.empty())
+                    std::printf("        error: %s\n", row.error.c_str());
+            }
+        }
+        write_sidecars(r, params_snapshots);
     }
 
     const pp::RunSummary sum = sched.summary();

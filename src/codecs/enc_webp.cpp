@@ -179,10 +179,10 @@ public:
 private:
     static EncodeResult encode_impl(const EncodeRequest &req) {
         const auto t0 = std::chrono::steady_clock::now();
-        const ParamSet &params = req.params;
+        const ParamSet &params = req.target.params;
 
-        if (req.out_bitdepth != 8) {
-            return encode_error("webp: out_bitdepth " + std::to_string(req.out_bitdepth) +
+        if (req.target.out_bitdepth != 8) {
+            return encode_error("webp: out_bitdepth " + std::to_string(req.target.out_bitdepth) +
                                 " is not supported (webp is 8-bit only)");
         }
         Raster r;
@@ -195,9 +195,10 @@ private:
         // Tech selection (T6b): an explicit EncodeRequest::tech_id wins; empty or
         // unknown falls back to the reserved key __lossless (§3.4/§4.8).
         const bool lossless =
-            (req.tech_id == "lossless")
+            (req.target.tech_id == "lossless")
                 ? true
-                : ((req.tech_id == "lossy") ? false : param_bool(params, "__lossless", false));
+                : ((req.target.tech_id == "lossy") ? false
+                                                   : param_bool(params, "__lossless", false));
         const bool alpha = r.channels == 2 || r.channels == 4;
 
         WebPConfig cfg;
@@ -243,6 +244,10 @@ private:
             cfg.near_lossless = static_cast<int>(param_int(params, "near_lossless", 100));
         }
         cfg.thread_level = 0; // E2: single-threaded encoder
+        // T7(E3) 映射位（design §3.1）：§3.1 正文规定本字段 = (encode_threads > 1) —— 本任务
+        // pipeline 恒传 encode_threads=1，故取 0 与 0.2 逐字一致；T7 接映射时改写为
+        // cfg.thread_level = (req.encode_threads > 1) ? 1 : 0。
+        (void)req.progress; // T6 接线位：真实行级进度（webp 无回调 → progress_reported 保持 false）
 
         if (!WebPValidateConfig(&cfg)) {
             return encode_error(std::string("webp: WebPValidateConfig rejected the parameter set") +
@@ -359,7 +364,7 @@ private:
             out_size = muxed.size();
         }
 
-        const std::string path = req.out_path.string();
+        const std::string path = req.target.out_path.string();
         std::FILE *fp = std::fopen(path.c_str(), "wb");
         if (fp == nullptr) {
             WebPMemoryWriterClear(&writer);

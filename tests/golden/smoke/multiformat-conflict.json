@@ -1,0 +1,47 @@
+{
+  "case": "multiformat-conflict",
+  "input": "base/rgb8.png",
+  "output_format": "jpeg,webp",
+  "outputs": [
+    {
+      "rel": "jpeg/rgb8.jpg",
+      "format": "jpeg",
+      "input": "base/rgb8.png",
+      "assert": {
+        "pixel": { "mode": "psnr", "threshold_db": 35 },
+        "metadata": [],
+        "warnings_contain": []
+      }
+    },
+    {
+      "rel": "jpeg/rgb8 (1).jpg",
+      "format": "jpeg",
+      "input": "base/rgb8.tif",
+      "assert": {
+        "pixel": { "mode": "psnr", "threshold_db": 35 },
+        "metadata": [],
+        "warnings_contain": []
+      }
+    },
+    {
+      "rel": "webp/rgb8.webp",
+      "format": "webp",
+      "input": "base/rgb8.png",
+      "assert": {
+        "pixel": { "mode": "exact" },
+        "metadata": [],
+        "warnings_contain": []
+      }
+    },
+    {
+      "rel": "webp/rgb8 (1).webp",
+      "format": "webp",
+      "input": "base/rgb8.tif",
+      "assert": {
+        "pixel": { "mode": "exact" },
+        "metadata": [],
+        "warnings_contain": []
+      }
+    }
+  ]
+}

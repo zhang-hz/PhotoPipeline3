@@ -1,12 +1,16 @@
 // PP-FROZEN(file)
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// PP-THAWED(0.3.0-M4-D20) —— 解冻裁定表 §3.4（依据 docs/v0.3.0-design.md §3.4，"加性为主"）
-//   本文件内 PathCtx / render_output_path（替代 mirror_path）/ validate_output_template 为
-//   0.3.0 一次性解冻（D20）授权变更面；落地任务 = W1-T5（输出路径真值表 §4.2）。
-//   对应任务落地后：把本文件内的 PP-THAWED 标记改标为 PP-FROZEN(0.3.0)（冻结头 SPDX 延续）。
+// PP-FROZEN(0.3.0) —— 解冻裁定表 §3.4 **已落地**（依据 docs/v0.3.0-design.md §3.4，"加性为主"）
+//   落地任务 = W1-T5（输出路径真值表 §4.2）；原标注 PP-THAWED(0.3.0-M4-D20) 随落地再冻结为
+//   本标记（冻结头 SPDX 延续）。
 //   本文件其余声明（resolve_conflict / collect_inputs / is_inside / input_extensions /
 //   with_extension / OutputPlan / ConflictPolicy）签名不变 → 维持 PP-FROZEN 只读。
+//   0.2 的 mirror_path() 已按 §3.4 的 [重排] 行被 render_output_path() 取代（函数退场；
+//   test_fsops 的 mirror_path 用例同步改造为 render_output_path 用例）。
+//   §4.2 补充（模板语法，T5 实现口径）：符号 $format/$dir/$file/$name/$ext；段间 `/`；
+//   字面段可混排（photos-$format）；未知 `$` 符号 = 校验错误；禁止 `..` 与绝对路径；
+//   `$dir` 空段坍缩斜杠。
 #pragma once
 #include <filesystem>
 #include <string>
@@ -23,37 +27,40 @@ struct OutputPlan {
     int rename_index = 0;           // Rename 序号（0=原名；1→"name (1).ext"）
 };
 
-// PP-THAWED(0.3.0-M4-D20) §3.4 · PathCtx + render_output_path + validate_output_template
-//   [重排] mirror_path() → render_output_path()（路径模板解析，§4.2）；PathCtx 与
-//   validate_output_template 为 0.3.0 新增。落地任务 W1-T5 → 落地后改标 PP-FROZEN(0.3.0)。
-//   0.3.0 冻结形态（设计 §3.4 逐字抄录；剥去行首 "// " 前缀即设计原文）：
-// clang-format off
-// // [重排] mirror_path() → render_output_path()（路径模板解析，§4.2）：
-// struct PathCtx { std::string format_dir;  // "jpeg"/"webp"/…
-//                  std::filesystem::path rel_dir;  // 源相对目录
-//                  std::string stem, ext; };       // 主名 / 新扩展名
-// std::filesystem::path render_output_path(std::string_view tmpl, const PathCtx&,
-//                                          const std::filesystem::path& out_root);
-// bool validate_output_template(std::string_view tmpl, std::string* err); // 未知符号/.. 校验
-// // resolve_conflict() / collect_inputs() 不变；reserved 集合改为按"每个 out_path"登记（§4.4）
-// clang-format on
-//   注（落地提示，T5 处置）：§3.1 的 OutputTarget 注释写作 `fsops::output_path()`，本节定名为
-//   `render_output_path()` —— 以 §3.4 为准（M4-T1 已上报，W5 收口入 m4-report）。
-//   §4.2 补充（模板语法，供 T5 实现）：符号 $format/$dir/$file/$name/$ext；段间 `/`；字面段可混排；
-//   未知 `$` 符号=校验错误；禁止 `..` 与绝对路径；`$dir` 空段坍缩斜杠。
-// PP-THAWED(0.3.0-M4-D20) §3.4：本声明在 0.3.0 被 render_output_path() 替代（形态见上）
-// 镜像路径：out_root / (src 相对 base_dir 的路径)，扩展名替换为 new_ext（不含点）
-// base_dir 非 src 前缀时 → out_root / src.filename()
-// new_ext 为空 → 保留原扩展名
-std::filesystem::path mirror_path(const std::filesystem::path &src,
-                                  const std::filesystem::path &base_dir,
-                                  const std::filesystem::path &out_root, std::string_view new_ext);
+// [重排] mirror_path() → render_output_path()（路径模板解析，§4.2）：
+struct PathCtx {
+    std::string format_dir;        // "jpeg"/"webp"/…
+    std::filesystem::path rel_dir; // 源相对目录
+    std::string stem, ext;         // 主名 / 新扩展名
+};
 
-// PP-THAWED(0.3.0-M4-D20) §3.4：本函数签名**不变**；仅 `reserved` 集合的登记粒度改为
-// 按"每个 out_path"（§4.4；先逐输出独立应用，再按 out_path 快照登记）——由 T5 在调用侧落地。
+// 模板解析（纯函数，可单测）：
+//   * 段间以 '/' 分隔；空段（"a//b"、"a/"）坍缩；符号与字面段可混排（photos-$format）；
+//   * $format=ctx.format_dir；$dir=ctx.rel_dir；$file=stem.ext；$name=stem；$ext=ext；
+//   * ctx.ext 为空 → $file 退化为不含点的主名（metadata-only 的"保持原扩展名"口径由调用方
+//     把 ctx.ext 设为源扩展名来表达）；
+//   * 展开后为空的段整体坍缩（$dir 为空 → "jpeg/x.jpg"，而非 "jpeg//x.jpg"）；
+//   * 非法模板（validate_output_template 判负）或展开结果为空 → 返回空 path
+//     （调用方必须先 validate_output_template 并在 ready_to_start 阻断）。
+std::filesystem::path render_output_path(std::string_view tmpl, const PathCtx &,
+                                         const std::filesystem::path &out_root);
+
+// 未知符号 / `..` / 绝对路径校验（§3.4 冻结签名）。判负 → false 且 *err 为非空英文描述。
+// 平台无关判定（自写词法规则，不用 std::filesystem 的平台相关解析：'\\' 与 "C:" 一并拒绝，
+// 保 M3 铁律六"零平台分叉"）。
+bool validate_output_template(std::string_view tmpl, std::string *err);
+
+// 0.3.0（T5 加性小助手，§3.4「加性为主」范围内）：src 相对 base_dir 的目录。
+// 这是 PathCtx.rel_dir 的唯一来源，pipeline（真实输出路径）与 scheduler（§4.4 inflight 键）
+// 共用同一语义 —— 两处各自镜像推导会漂移，故提为单实现。base_dir 非 src 前缀/为空 → 返回空。
+std::filesystem::path relative_dir(const std::filesystem::path &src,
+                                   const std::filesystem::path &base_dir);
+
 // 冲突解析：desired 已存在或落在 reserved 中时按 policy 处理
 // Rename：依次尝试 "stem (1).ext"、"stem (2).ext"…（上限 10000，超出返回 err）
 // reserved 为本批次已分配但可能尚未落盘的路径（批内冲突，G4）
+// 0.3.0 口径（§4.4）：reserved 按"每个 out_path"登记；逐输出独立应用本函数
+// （一源的 N 个输出各自解析，互不共用序号）。
 OutputPlan resolve_conflict(const std::filesystem::path &desired, ConflictPolicy policy,
                             const std::vector<std::filesystem::path> &reserved, std::string &err);
 

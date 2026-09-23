@@ -229,11 +229,20 @@ public:
 private:
     static EncodeResult encode_impl(const EncodeRequest &req) {
         const auto t0 = std::chrono::steady_clock::now();
-        if (req.out_bitdepth != 8) {
-            return encode_error("jpegli: out_bitdepth " + std::to_string(req.out_bitdepth) +
+        // T6/T7 接线位（design §3.1）：progress = 真实行级回调（T6，本任务恒空）；
+        // encode_threads = E3 内部线程映射（T7）。jpegli 无内部线程控制（E2），§3.1 正文
+        // 要求"E 不生效"如实入日志 —— E=1（本任务恒值）时不产生任何额外日志。
+        (void)req.progress;
+        if (req.encode_threads > 1) {
+            log_info(
+                "Encode", kLogFile, "encoder has no internal threading; encode_threads ignored",
+                {{"encoder", "jpegli"}, {"encode_threads", std::to_string(req.encode_threads)}});
+        }
+        if (req.target.out_bitdepth != 8) {
+            return encode_error("jpegli: out_bitdepth " + std::to_string(req.target.out_bitdepth) +
                                 " is not supported (jpeg is 8-bit only)");
         }
-        const JpegliParams p = read_params(req.params);
+        const JpegliParams p = read_params(req.target.params);
         // §3.8: jpegli does not implement arithmetic coding (JPEGLI_ERROR).
         if (p.arith_code) {
             return encode_error("arith_code is not supported by jpegli");
@@ -244,7 +253,7 @@ private:
         if (!fetch_raster(req.img, r, err)) {
             return encode_error("jpegli: " + err);
         }
-        warn_unknown_params(req.params);
+        warn_unknown_params(req.target.params);
 
         // JPEG has no alpha channel: the caller already flattened 4/2-channel
         // input (E4, §5.5). 1/2-channel input is encoded as grayscale.
@@ -373,7 +382,7 @@ private:
             return encode_error("jpegli: empty output");
         }
 
-        const std::string path = req.out_path.string();
+        const std::string path = req.target.out_path.string();
         std::FILE *fp = std::fopen(path.c_str(), "wb");
         if (fp == nullptr) {
             std::free(mem);

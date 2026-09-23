@@ -277,9 +277,17 @@ pp::EncodeResult run_encode(pp::IEncoder *enc, OIIO::ImageBuf &img, const pp::Pa
         res.error = "make_encoder returned nullptr (registry lookup failed)";
         return res;
     }
-    // EncodeRequest member order (T6b): img, params, out_bitdepth, meta,
-    // out_path, cancelled, tech_id (additive field appended at the end).
-    pp::EncodeRequest req{img, params, out_bitdepth, meta, out, {}, tech_id};
+    // M4-T5/§3.1：EncodeRequest 以 OutputTarget 取代 params/out_bitdepth/out_path/tech_id。
+    // 本助手把入参原样装进 target（编码器只读 target.*，测例语义零变化）；
+    // progress 留空（T6 接线位）、encode_threads=1（T7 接 alloc_threads）。
+    pp::OutputTarget target;
+    target.format_id = enc->format().id;
+    target.tech_id = tech_id;
+    target.params = params;
+    target.out_bitdepth = out_bitdepth;
+    target.out_path = out;
+    target.supports_alpha = enc->format().supports_alpha;
+    pp::EncodeRequest req{img, target, meta, {}, pp::ProgressFn{}, 1};
     return enc->encode(req);
 }
 

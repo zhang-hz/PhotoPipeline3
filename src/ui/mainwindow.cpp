@@ -654,9 +654,14 @@ void MainWindow::on_start() {
 
     // M2-T5 §2.7：交叉参数约束的最后闸门。ParamForm 已实时红字提示，这里对真正要下发的
     // 配置再校验一次；非空 → 列出全部消息并阻止开始（不进入 lock_for_run/Scheduler）。
+    // 0.3.0 多输出：逐输出求值（T13 起 outputs 可能 >1，UI 现在恒 1 项）。
     {
-        const std::vector<std::string> cross =
-            pp::cross_validate(cfg.params, cfg.format_id, cfg.tech_id);
+        std::vector<std::string> cross;
+        for (const pp::OutputFormatSpec &spec : cfg.outputs) {
+            const std::vector<std::string> msgs =
+                pp::cross_validate(spec.params, spec.format_id, spec.tech_id);
+            cross.insert(cross.end(), msgs.begin(), msgs.end());
+        }
         if (!cross.empty()) {
             QStringList lines;
             lines.reserve(static_cast<int>(cross.size()));

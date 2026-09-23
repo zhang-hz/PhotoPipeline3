@@ -7,6 +7,12 @@
 //   对应任务落地后：把本文件内的 PP-THAWED 标记改标为 PP-FROZEN(0.3.0)（冻结头 SPDX 延续）。
 //   本文件其余既有声明（RunSummary）不在裁定表内 → 维持 PP-FROZEN(M1) 只读。
 //   本节标注 [重排]：结构重排，不再保证聚合初始化兼容（随本次解冻一次性接受）。
+//
+// W1-T5 已落地面（主对话裁定：设计 §4.4 为准，任务书步骤 7 与文件面冲突为笔误）：
+//   `inflight` 同目标串行化键由"单 desired 路径"改为 **逐 (target.out_path)**；
+//   `reserved` 按每个 out_path 登记；worker 以 §3.2 的三参 run_one_file/run_metadata_only
+//   + EventFn{on_event, &RunScope{budget, reserved, cancelled}} 调用管线。E3/stagger/
+//   线程预算（§8.1/§8.2）仍归 W1-T7，本任务不落。
 #pragma once
 #include "core/pipeline.h"
 #include <atomic>

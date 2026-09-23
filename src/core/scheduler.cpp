@@ -59,18 +59,40 @@ double ms_since(const Clock::time_point &t0) {
     return std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
 }
 
-// Lexical identity of the output path a file will aim for. Files that share it are never run
-// concurrently, which makes batch-internal conflict resolution (ConflictPolicy::Rename with the
-// `reserved` snapshot) deterministic without changing the frozen pipeline signature.
+// Lexical identity of the output paths a file will aim for. Files that share any of them are
+// never run concurrently, which makes batch-internal conflict resolution (ConflictPolicy::Rename
+// with the `reserved` snapshot) deterministic without changing the frozen pipeline signature.
+// M4-T5 §4.4：键由"单 desired 路径"改为**逐 (target.out_path) 键** —— 一源多输出时不同输出可
+// 并行写不同路径；同一源的多个 target 由同一 worker 串行执行，天然无内部竞态。
+// 口径澄清（主对话 T5 第三次裁定，复核项 6 追认）：键 = render_output_path 产出的**冲突解析前
+// desired 路径**；target.out_path 则是**冲突解析后的最终写路径**（pipeline.cpp 写入、编码器落盘
+// 用）。二者角色不同，设计 §4.4「按 (target.out_path) 键」是用词混淆。用 desired 更保守：两个源
+// 命中同一 desired ⇒ 必然串行 ⇒ rename 序号不随调度漂移（若按最终路径并发，序号才会漂移）。
 // NOTE(limit): the guard is lexical and per-desired-path only: two *different* desired paths
 // whose rename sequences overlap (a.jpg + "a (1).jpg" as separate inputs) can still race.
 // Accepted: Linux file systems are case-sensitive, so lexical identity covers the realistic
 // conflicts.
-std::string desired_key(const FileEntry &fe, const RunConfig &cfg) {
-    const FormatDef *fmt = find_format(cfg.format_id);
-    const std::string ext =
-        cfg.metadata_only ? fe.src.extension().string() : (fmt ? fmt->ext : std::string());
-    return mirror_path(fe.src, fe.base_dir, cfg.out_root, ext).string();
+std::vector<std::string> desired_keys(const FileEntry &fe, const RunConfig &cfg) {
+    std::vector<std::string> keys;
+    keys.reserve(cfg.outputs.size());
+    for (const OutputFormatSpec &spec : cfg.outputs) {
+        const FormatDef *fmt = find_format(spec.format_id);
+        const std::string ext =
+            cfg.metadata_only ? fe.src.extension().string() : (fmt ? fmt->ext : std::string());
+        PathCtx ctx;
+        ctx.format_dir = fmt ? fmt->id : spec.format_id;
+        ctx.rel_dir = relative_dir(fe.src, fe.base_dir);
+        ctx.stem = fe.src.stem().string();
+        ctx.ext = ext;
+        const std::filesystem::path desired =
+            render_output_path(cfg.output_template, ctx, cfg.out_root);
+        if (!desired.empty())
+            keys.push_back(desired.string());
+    }
+    // 同一文件的两个输出撞到同一 desired（例如同格式重复选择）→ 去重，避免多插一次永不释放
+    std::sort(keys.begin(), keys.end());
+    keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+    return keys;
 }
 
 } // namespace
@@ -92,7 +114,6 @@ struct Scheduler::Impl {
     std::vector<std::thread> pool;
     EventCb cb; // guarded by mu
 
-    std::unique_ptr<IEncoder> enc;
     std::unique_ptr<PixelBudget> budget;
 
     std::vector<std::filesystem::path> reserved; // guarded by mu
@@ -119,11 +140,16 @@ struct Scheduler::Impl {
     }
 
     // Stores the terminal result and emits the terminal event (pointer into results()).
-    void finish(std::size_t i, FileResult r) {
-        const FileState state = r.cancelled ? FileState::Cancelled
-                                : r.skipped ? FileState::Skipped
-                                : r.ok      ? FileState::Done
-                                            : FileState::Failed;
+    // 终态映射（§4.1 聚合 / §3.3 事件）：DoneWithErrors 落到 FileState::Done（FileState 无该值，
+    // 属 §3.3 表外缺口，T7 定稿）；FileResult.ok=false 让 RunSummary 与 dev harness 的失败计数
+    // 仍把"任一输出失败"的文件算作失败（0.2 语义）。
+    void finish(std::size_t i, FileOutcome outcome) {
+        const FileState state =
+            outcome.verdict == FileOutcome::Verdict::Cancelled ? FileState::Cancelled
+            : outcome.verdict == FileOutcome::Verdict::Skipped ? FileState::Skipped
+            : outcome.verdict == FileOutcome::Verdict::Failed  ? FileState::Failed
+                                                               : FileState::Done;
+        FileResult r = std::move(outcome.file);
         EventCb c;
         {
             std::lock_guard<std::mutex> lk(mu);
@@ -145,10 +171,11 @@ void Scheduler::Impl::worker() {
 
         FileEntry &fe = files[i];
         if (cancelled.load()) {
-            FileResult r;
-            r.src = fe.src;
-            r.cancelled = true;
-            finish(i, std::move(r));
+            FileOutcome o;
+            o.verdict = FileOutcome::Verdict::Cancelled;
+            o.file.src = fe.src;
+            o.file.cancelled = true;
+            finish(i, std::move(o));
             continue;
         }
 
@@ -157,70 +184,84 @@ void Scheduler::Impl::worker() {
         if (!fe.probe_done) {
             ProbeOutcome po = probe_file(fe.src);
             if (!po.error.empty()) {
-                FileResult r;
-                r.src = fe.src;
-                r.error = "probe failed: " + po.error;
-                finish(i, std::move(r));
+                FileOutcome o;
+                o.verdict = FileOutcome::Verdict::Failed;
+                o.file.src = fe.src;
+                o.file.error = "probe failed: " + po.error;
+                finish(i, std::move(o));
                 continue;
             }
             fe.info = po.info;
             fe.probe_done = true;
         }
 
-        // ---- serialise identical output targets ----
-        const std::string key = desired_key(fe, cfg);
+        // ---- serialise identical output targets (§4.4: per target.out_path) ----
+        const std::vector<std::string> keys = desired_keys(fe, cfg);
         {
             std::unique_lock<std::mutex> lk(mu);
-            cv.wait(lk, [&] { return cancelled.load() || inflight.find(key) == inflight.end(); });
+            cv.wait(lk, [&] {
+                if (cancelled.load())
+                    return true;
+                for (const std::string &k : keys) {
+                    if (inflight.find(k) != inflight.end())
+                        return false;
+                }
+                return true;
+            });
             if (cancelled.load()) {
                 lk.unlock();
-                FileResult r;
-                r.src = fe.src;
-                r.cancelled = true;
-                finish(i, std::move(r));
+                FileOutcome o;
+                o.verdict = FileOutcome::Verdict::Cancelled;
+                o.file.src = fe.src;
+                o.file.cancelled = true;
+                finish(i, std::move(o));
                 continue;
             }
-            inflight.insert(key);
+            for (const std::string &k : keys)
+                inflight.insert(k);
         }
 
-        std::vector<std::filesystem::path> reserved_snapshot;
+        RunScope scope;
         {
             std::lock_guard<std::mutex> lk(mu);
-            reserved_snapshot = reserved;
+            scope.reserved = reserved;
         }
+        scope.budget = budget.get();
+        scope.cancelled = [this] { return cancelled.load(); };
 
-        FileResult r;
+        FileOutcome outcome;
         try {
+            EventFn events{[this, i](const FileEvent &e) { emit_stage(i, e.state); }, &scope};
             if (cfg.metadata_only) {
-                r = run_metadata_only(
-                    fe, cfg, reserved_snapshot, [this] { return cancelled.load(); },
-                    [this, i](FileState s) { emit_stage(i, s); });
+                outcome = run_metadata_only(fe, cfg, events);
             } else {
-                r = run_one_file(
-                    fe, cfg, enc.get(), budget.get(), reserved_snapshot,
-                    [this] { return cancelled.load(); },
-                    [this, i](FileState s) { emit_stage(i, s); });
+                outcome = run_one_file(fe, cfg, events);
             }
         } catch (const std::exception &e) {
-            r = FileResult{};
-            r.src = fe.src;
-            r.error = std::string("worker: unexpected exception: ") + e.what();
+            outcome = FileOutcome{};
+            outcome.file.src = fe.src;
+            outcome.file.error = std::string("worker: unexpected exception: ") + e.what();
         } catch (...) {
-            r = FileResult{};
-            r.src = fe.src;
-            r.error = "worker: unexpected non-standard exception";
+            outcome = FileOutcome{};
+            outcome.file.src = fe.src;
+            outcome.file.error = "worker: unexpected non-standard exception";
         }
 
         {
             std::lock_guard<std::mutex> lk(mu);
-            const auto it = inflight.find(key);
-            if (it != inflight.end())
-                inflight.erase(it);
-            if (!r.out.empty())
-                reserved.push_back(r.out);
+            for (const std::string &k : keys) {
+                const auto it = inflight.find(k);
+                if (it != inflight.end())
+                    inflight.erase(it);
+            }
+            // §4.4：reserved 按**每个 out_path** 登记（一源多输出 → 多条）
+            for (const OutputResult &row : outcome.file.outputs) {
+                if (!row.out.empty())
+                    reserved.push_back(row.out);
+            }
         }
         cv.notify_all();
-        finish(i, std::move(r));
+        finish(i, std::move(outcome));
     }
 }
 
@@ -247,18 +288,25 @@ void Scheduler::start() {
         return; // idempotent
 
     d.t_start = Clock::now();
-    d.enc = make_encoder(d.cfg.format_id, d.cfg.backend_id);
-    if (!d.cfg.metadata_only && !d.enc) {
-        log_error(kStage, kFile, "no encoder registered for format; every file will fail",
-                  {{"format", d.cfg.format_id}, {"backend", d.cfg.backend_id}});
-    }
     d.budget = std::make_unique<PixelBudget>(
         d.cfg.budget_bytes != 0 ? d.cfg.budget_bytes : PixelBudget::default_capacity_bytes());
+    // 编码器由 run_one_file 逐 target 构造（E1：无状态、可跨 worker 共享；构造代价平凡），
+    // 这里只把格式清单落进运行头日志，便于 batcli/CI 断言本次运行的目标形态。
+    std::string formats;
+    for (const OutputFormatSpec &spec : d.cfg.outputs) {
+        if (!formats.empty())
+            formats += ",";
+        formats += spec.format_id;
+        if (!spec.backend_id.empty())
+            formats += ":" + spec.backend_id;
+    }
     log_info(kStage, kFile, "start",
              {{"files", std::to_string(d.files.size())},
               {"workers", std::to_string(d.cfg.workers)},
               {"budget_bytes", std::to_string(d.budget->capacity())},
-              {"format", d.cfg.format_id},
+              {"outputs", std::to_string(d.cfg.outputs.size())},
+              {"formats", formats},
+              {"template", d.cfg.output_template},
               {"mode", d.cfg.metadata_only ? "metadata-only" : "transcode"}});
 
     int n =

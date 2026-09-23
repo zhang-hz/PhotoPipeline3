@@ -326,9 +326,10 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
         assert(nch >= 1 && nch <= 4);
         if (nch < 1 || nch > 4)
             return fail("unsupported channel count " + std::to_string(nch) + " (expected 1..4)");
-        if (req.out_bitdepth != 8 && req.out_bitdepth != 10 && req.out_bitdepth != 12)
-            return fail("unsupported bitdepth " + std::to_string(req.out_bitdepth) + " for " +
-                        format_id_ + " (expected 8, 10 or 12)");
+        if (req.target.out_bitdepth != 8 && req.target.out_bitdepth != 10 &&
+            req.target.out_bitdepth != 12)
+            return fail("unsupported bitdepth " + std::to_string(req.target.out_bitdepth) +
+                        " for " + format_id_ + " (expected 8, 10 or 12)");
 
         heif_compression_format fmt = heif_compression_HEVC;
         if (!libheif_format(format_id_, fmt))
@@ -373,8 +374,8 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
         };
 
         for (const ParamDef &p : live) {
-            const auto it = req.params.find(p.key);
-            if (it == req.params.end())
+            const auto it = req.target.params.find(p.key);
+            if (it == req.target.params.end())
                 continue;
             heif_error se = kHeifOk;
             std::string rejected;
@@ -423,11 +424,11 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
             // plugin that exposes the key but rejects the generic path still honours it.
             bool recovered = false;
             if (p.key == "quality") {
-                const int64_t v = param_int(req.params, "quality", 90);
+                const int64_t v = param_int(req.target.params, "quality", 90);
                 recovered =
                     heif_encoder_set_lossy_quality(enc, static_cast<int>(v)).code == heif_error_Ok;
             } else if (p.key == "lossless") {
-                const bool v = param_bool(req.params, "lossless", false);
+                const bool v = param_bool(req.target.params, "lossless", false);
                 recovered = heif_encoder_set_lossless(enc, v ? 1 : 0).code == heif_error_Ok;
             }
             if (!recovered)
@@ -438,6 +439,10 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
         // E2: all internal threading off. The x265 plugin exposes no "threads" parameter
         // (measured), so for that backend the encoder keeps its default pool.
         // NOTE(perf): measured and pinned down — no better option for that backend.
+        // T7(E3) 映射位（design §3.1）：§3.1 正文规定 heif/avif = 插件 `threads` 参数（内省名核对）
+        // —— 本任务 pipeline 恒传 encode_threads=1，故此处仍写死 1 与 0.2 逐字一致；T7 接映射时
+        // 改写为 req.encode_threads。
+        (void)req.progress; // T6 接线位：合成进度（heif 无编码回调 → progress_reported 保持 false）
         if (is_known("threads")) {
             const heif_error te = heif_encoder_set_parameter_integer(enc, "threads", 1);
             if (te.code != heif_error_Ok)
@@ -448,7 +453,7 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
         }
 
         // E9: unrecognised keys are ignored (never an error) and logged, not warned.
-        for (const auto &[key, value] : req.params) {
+        for (const auto &[key, value] : req.target.params) {
             if (key.rfind("__", 0) == 0)
                 continue; // reserved keys (§3.4)
             if (!is_known(key))
@@ -458,7 +463,7 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
         // ---- chroma layout ----
         ChromaLayout layout = layout_for(heif_chroma_420);
         if (is_known("chroma")) {
-            const std::string c = param_str(req.params, "chroma", "420");
+            const std::string c = param_str(req.target.params, "chroma", "420");
             if (c == "444")
                 layout = layout_for(heif_chroma_444);
             else if (c == "422")
@@ -468,12 +473,12 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
             else
                 note_param("unknown chroma value, using 420", "chroma", c);
         } else {
-            const std::string c = param_str(req.params, "chroma", "");
+            const std::string c = param_str(req.target.params, "chroma", "");
             if (!c.empty() && c != "420")
                 note_param("backend exposes no chroma parameter; forced 420", "chroma", c);
         }
 
-        const int bitdepth = req.out_bitdepth;
+        const int bitdepth = req.target.out_bitdepth;
         const int maxv = (1 << bitdepth) - 1;
         const int cw = (w + layout.cw_off) / layout.cw_div;
         const int ch = (h + layout.ch_off) / layout.ch_div;
@@ -644,9 +649,9 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
             uint64_t bytes = 0;
             std::string error;
         } sink;
-        sink.f = std::fopen(req.out_path.string().c_str(), "wb");
+        sink.f = std::fopen(req.target.out_path.string().c_str(), "wb");
         if (!sink.f)
-            return fail("cannot open output file: " + req.out_path.string());
+            return fail("cannot open output file: " + req.target.out_path.string());
         heif_writer writer{};
         writer.writer_api_version = 1;
         writer.write = [](heif_context *, const void *data, size_t size,
@@ -668,7 +673,7 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
         if (!sink.error.empty())
             return fail("write error: " + sink.error);
         if (close_rc != 0)
-            return fail("fclose failed for " + req.out_path.string());
+            return fail("fclose failed for " + req.target.out_path.string());
         if (sink.bytes == 0)
             return fail("heif_context_write produced 0 bytes");
 

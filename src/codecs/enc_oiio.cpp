@@ -119,7 +119,7 @@ EncodeResult OiioEncoder::encode(const EncodeRequest &req) {
     };
     auto fail = [&](const std::string &msg) {
         log_error(kStage, kFile, "encode failed",
-                  {{"format", format_id_}, {"error", msg}, {"path", req.out_path.string()}});
+                  {{"format", format_id_}, {"error", msg}, {"path", req.target.out_path.string()}});
         res.bytes = 0;
         res.error = msg;
         return finish();
@@ -131,6 +131,15 @@ EncodeResult OiioEncoder::encode(const EncodeRequest &req) {
                           const std::string &value) {
         log_warn(kStage, kFile, msg, {{"format", format_id_}, {"param", key}, {"value", value}});
     };
+
+    // T6/T7 接线位（design §3.1）：progress = 真实行级回调（T6，本任务恒空）；
+    // encode_threads = E3 内部线程映射（T7）。OIIO 写路径无内部线程控制，§3.1 正文要求
+    // "E 不生效"如实入日志 —— E=1（本任务恒值）时不产生任何额外日志。
+    (void)req.progress;
+    if (req.encode_threads > 1) {
+        log_info(kStage, kFile, "encoder has no internal threading; encode_threads ignored",
+                 {{"encoder", "oiio"}, {"encode_threads", std::to_string(req.encode_threads)}});
+    }
 
     try {
         if (!req.img.initialized() || req.img.spec().width <= 0 || req.img.spec().height <= 0)
@@ -145,18 +154,18 @@ EncodeResult OiioEncoder::encode(const EncodeRequest &req) {
         // ---- output data type (E3: unsupported bit depth is an error, never a silent downgrade)
         OIIO::TypeDesc out_type = OIIO::TypeDesc::UINT8;
         if (format_id_ == "bmp") {
-            if (req.out_bitdepth != 24 && req.out_bitdepth != 8)
-                return fail("bmp: unsupported bitdepth " + std::to_string(req.out_bitdepth) +
+            if (req.target.out_bitdepth != 24 && req.target.out_bitdepth != 8)
+                return fail("bmp: unsupported bitdepth " + std::to_string(req.target.out_bitdepth) +
                             " (expected 24)");
             out_type = OIIO::TypeDesc::UINT8;
         } else {
-            if (req.out_bitdepth == 8)
+            if (req.target.out_bitdepth == 8)
                 out_type = OIIO::TypeDesc::UINT8;
-            else if (req.out_bitdepth == 16)
+            else if (req.target.out_bitdepth == 16)
                 out_type = OIIO::TypeDesc::UINT16;
             else
                 return fail(format_id_ + ": unsupported bitdepth " +
-                            std::to_string(req.out_bitdepth) + " (expected 8 or 16)");
+                            std::to_string(req.target.out_bitdepth) + " (expected 8 or 16)");
         }
         const int bps = static_cast<int>(out_type.size());
         const int maxv = (out_type == OIIO::TypeDesc::UINT8) ? 255 : 65535;
@@ -181,28 +190,28 @@ EncodeResult OiioEncoder::encode(const EncodeRequest &req) {
 
         // ---- format parameters ----
         if (format_id_ == "png") {
-            int64_t level = param_int(req.params, "compressionLevel", 6);
+            int64_t level = param_int(req.target.params, "compressionLevel", 6);
             const int clamped = static_cast<int>(std::clamp<int64_t>(level, 0, 9));
             if (clamped != level)
                 note_param("compressionLevel clamped", "compressionLevel",
                            std::to_string(level) + " -> " + std::to_string(clamped));
             spec.attribute("compressionLevel", clamped);
         } else if (format_id_ == "tiff") {
-            const std::string compression = param_str(req.params, "compression", "lzw");
+            const std::string compression = param_str(req.target.params, "compression", "lzw");
             if (!tiff_compression_known(compression))
                 return fail("tiff: invalid compression '" + compression +
                             "' (allowed: none, lzw, zip, ccittrle, packbits)");
             spec.attribute("compression", compression);
             if (compression == "zip") {
-                const int64_t level = param_int(req.params, "deflate_level", 6);
+                const int64_t level = param_int(req.target.params, "deflate_level", 6);
                 spec.attribute("tiff:zipquality",
                                static_cast<int>(std::clamp<int64_t>(level, 1, 9)));
             }
-            const int64_t predictor = param_int(req.params, "predictor", 2);
+            const int64_t predictor = param_int(req.target.params, "predictor", 2);
             if (compression == "lzw" || compression == "zip")
                 spec.attribute("tiff:predictor", static_cast<int>(predictor));
-            const int64_t tw = param_int(req.params, "tiff_tile_width", 0);
-            const int64_t th = param_int(req.params, "tiff_tile_height", 0);
+            const int64_t tw = param_int(req.target.params, "tiff_tile_width", 0);
+            const int64_t th = param_int(req.target.params, "tiff_tile_height", 0);
             if ((tw > 0) != (th > 0))
                 return fail("tiff: tile width and height must both be > 0 (tiled) or both be 0 "
                             "(strips); got width=" +
@@ -231,7 +240,7 @@ EncodeResult OiioEncoder::encode(const EncodeRequest &req) {
 
         // ---- E9: unknown parameters are ignored with a warning ----
         const std::vector<std::string> known = known_param_keys(format_id_, backend_id_);
-        for (const auto &[key, value] : req.params) {
+        for (const auto &[key, value] : req.target.params) {
             if (key.rfind("__", 0) == 0)
                 continue; // reserved keys (§3.4)
             if (std::find(known.begin(), known.end(), key) == known.end())
@@ -259,20 +268,23 @@ EncodeResult OiioEncoder::encode(const EncodeRequest &req) {
         std::unique_ptr<OIIO::ImageOutput> out = OIIO::ImageOutput::create(format_id_);
         if (!out)
             return fail("OpenImageIO has no output plugin for '" + format_id_ + "'");
-        if (!out->open(req.out_path.string(), spec))
-            return fail("OIIO open failed for " + req.out_path.string() + ": " + out->geterror());
+        if (!out->open(req.target.out_path.string(), spec))
+            return fail("OIIO open failed for " + req.target.out_path.string() + ": " +
+                        out->geterror());
         const OIIO::stride_t xstride = static_cast<OIIO::stride_t>(nch) * bps;
         const OIIO::stride_t ystride = xstride * w;
         if (!out->write_image(out_type, pixels.data(), xstride, ystride, OIIO::AutoStride))
-            return fail("OIIO write_image failed for " + req.out_path.string() + ": " +
+            return fail("OIIO write_image failed for " + req.target.out_path.string() + ": " +
                         out->geterror());
         if (!out->close())
-            return fail("OIIO close failed for " + req.out_path.string() + ": " + out->geterror());
+            return fail("OIIO close failed for " + req.target.out_path.string() + ": " +
+                        out->geterror());
 
         std::error_code ec;
-        const uint64_t bytes = static_cast<uint64_t>(std::filesystem::file_size(req.out_path, ec));
+        const uint64_t bytes =
+            static_cast<uint64_t>(std::filesystem::file_size(req.target.out_path, ec));
         if (ec || bytes == 0)
-            return fail("output file missing or empty: " + req.out_path.string());
+            return fail("output file missing or empty: " + req.target.out_path.string());
         res.bytes = bytes;
         log_debug(kStage, kFile, "encoded",
                   {{"format", format_id_},

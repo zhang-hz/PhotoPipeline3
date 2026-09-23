@@ -230,10 +230,10 @@ public:
 private:
     static EncodeResult encode_impl(const EncodeRequest &req) {
         const auto t0 = std::chrono::steady_clock::now();
-        const ParamSet &params = req.params;
+        const ParamSet &params = req.target.params;
 
-        if (req.out_bitdepth != 8 && req.out_bitdepth != 16) {
-            return encode_error("jxl: out_bitdepth " + std::to_string(req.out_bitdepth) +
+        if (req.target.out_bitdepth != 8 && req.target.out_bitdepth != 16) {
+            return encode_error("jxl: out_bitdepth " + std::to_string(req.target.out_bitdepth) +
                                 " is not supported (8 or 16)");
         }
         Raster r;
@@ -257,9 +257,9 @@ private:
         // unknown falls back to the previous inference (lossless, or the presence
         // of modular-only keys). This is what makes lossy Modular expressible.
         bool modular = false;
-        if (req.tech_id == "modular") {
+        if (req.target.tech_id == "modular") {
             modular = true;
-        } else if (req.tech_id == "vardct") {
+        } else if (req.target.tech_id == "vardct") {
             modular = false;
         } else {
             modular = lossless || modular_params;
@@ -280,6 +280,11 @@ private:
             return encode_error("jxl: JxlEncoderCreate failed");
         }
         // E2: single-threaded encoder (nullptr = no custom parallel runner).
+        // T7(E3) 映射位（design §3.1）：§3.1 正文规定此处 = JxlThreadParallelRunner(E)（E=1 时
+        // nullptr）—— 本任务 pipeline 恒传 encode_threads=1，故取 nullptr 与 0.2 逐字一致；
+        // T7 接映射时在此构造 runner 并注意其生命周期必须覆盖到 JxlEncoderDestroy。
+        (void)
+            req.progress; // T6 接线位：真实行级进度（jxl 走 JxlEncoderSetProgressCallback，T6 填）
         JxlEncoderStatus st = JxlEncoderSetParallelRunner(enc.get(), nullptr, nullptr);
         if (st != JXL_ENC_SUCCESS) {
             return encode_error(std::string("jxl: JxlEncoderSetParallelRunner failed: ") +
@@ -308,11 +313,11 @@ private:
         JxlEncoderInitBasicInfo(&info);
         info.xsize = static_cast<uint32_t>(r.width);
         info.ysize = static_cast<uint32_t>(r.height);
-        info.bits_per_sample = static_cast<uint32_t>(req.out_bitdepth);
+        info.bits_per_sample = static_cast<uint32_t>(req.target.out_bitdepth);
         info.exponent_bits_per_sample = 0;
         info.num_color_channels = gray ? 1 : 3;
         info.num_extra_channels = alpha ? 1 : 0;
-        info.alpha_bits = alpha ? static_cast<uint32_t>(req.out_bitdepth) : 0;
+        info.alpha_bits = alpha ? static_cast<uint32_t>(req.target.out_bitdepth) : 0;
         info.alpha_exponent_bits = 0;
         info.alpha_premultiplied = JXL_FALSE;
         // Lossless/modular keep the original profile; lossy VarDCT may use XYB.
@@ -326,7 +331,7 @@ private:
         if (alpha) {
             JxlExtraChannelInfo ec;
             JxlEncoderInitExtraChannelInfo(JXL_CHANNEL_ALPHA, &ec);
-            ec.bits_per_sample = static_cast<uint32_t>(req.out_bitdepth);
+            ec.bits_per_sample = static_cast<uint32_t>(req.target.out_bitdepth);
             ec.exponent_bits_per_sample = 0;
             ec.dim_shift = 0;
             ec.alpha_premultiplied = JXL_FALSE;
@@ -470,7 +475,7 @@ private:
         std::vector<uint16_t> pixels16;
         const void *pixel_data = nullptr;
         std::size_t pixel_bytes = 0;
-        if (req.out_bitdepth == 16) {
+        if (req.target.out_bitdepth == 16) {
             pixels16.resize(npix);
             for (std::size_t i = 0; i < npix; ++i) {
                 pixels16[i] = to_u16(r.px[i]);
@@ -488,7 +493,7 @@ private:
 
         JxlPixelFormat pf{};
         pf.num_channels = static_cast<uint32_t>(r.channels);
-        pf.data_type = (req.out_bitdepth == 16) ? JXL_TYPE_UINT16 : JXL_TYPE_UINT8;
+        pf.data_type = (req.target.out_bitdepth == 16) ? JXL_TYPE_UINT16 : JXL_TYPE_UINT8;
         pf.endianness = JXL_NATIVE_ENDIAN;
         pf.align = 0;
 
@@ -545,7 +550,7 @@ private:
             return encode_error("jxl: empty output");
         }
 
-        const std::string path = req.out_path.string();
+        const std::string path = req.target.out_path.string();
         std::FILE *fp = std::fopen(path.c_str(), "wb");
         if (fp == nullptr) {
             return encode_error("jxl: cannot open output file: " + path);

@@ -1,0 +1,29 @@
+{
+  "case": "multiformat-mirror",
+  "input": "base/rgb8.png",
+  "output_format": "jpeg,webp",
+  "outputs": [
+    {
+      "rel": "base/jpeg/rgb8.jpg",
+      "format": "jpeg",
+      "assert": {
+        "pixel": { "mode": "psnr", "threshold_db": 35 },
+        "metadata": [
+          { "key": "Exif.Image.Artist", "op": "eq", "value": "M4-T5-mirror" }
+        ],
+        "warnings_contain": []
+      }
+    },
+    {
+      "rel": "base/webp/rgb8.webp",
+      "format": "webp",
+      "assert": {
+        "pixel": { "mode": "exact" },
+        "metadata": [
+          { "key": "Exif.Image.Artist", "op": "eq", "value": "M4-T5-mirror" }
+        ],
+        "warnings_contain": []
+      }
+    }
+  ]
+}

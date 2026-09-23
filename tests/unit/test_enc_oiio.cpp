@@ -108,7 +108,15 @@ OIIO::ImageBuf make_buf(int w, int h, int nch, float phase) {
 pp::EncodeResult run_encode(pp::IEncoder &enc, OIIO::ImageBuf &buf, int bitdepth,
                             const pp::ParamSet &params, const pp::MetadataPayloads &meta,
                             const fs::path &out) {
-    pp::EncodeRequest req{buf, params, bitdepth, meta, out, {}};
+    // M4-T5/§3.1：EncodeRequest 以 OutputTarget 取代 params/out_bitdepth/out_path；
+    // 本助手原样装载（编码器只读 target.*，测例语义零变化）。
+    pp::OutputTarget target;
+    target.format_id = enc.format().id;
+    target.params = params;
+    target.out_bitdepth = bitdepth;
+    target.out_path = out;
+    target.supports_alpha = enc.format().supports_alpha;
+    pp::EncodeRequest req{buf, target, meta, {}, pp::ProgressFn{}, 1};
     return enc.encode(req);
 }
 

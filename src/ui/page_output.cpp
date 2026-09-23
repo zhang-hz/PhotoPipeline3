@@ -48,6 +48,7 @@
 #include <QWidget>
 
 #include "codecs/encoders.h"
+#include "core/fsops.h"
 #include "core/params.h"
 #include "ui/paramform.h"
 
@@ -724,18 +725,24 @@ pp::RunConfig PageOutput::config_base() const {
     const QString root = impl_->out_root_edit->text().trimmed();
     if (!root.isEmpty())
         cfg.out_root = std::filesystem::path(root.toStdString());
-    cfg.format_id = impl_->current_format_id.toStdString();
+    // 0.3.0（§3.2 [重排]）：单格式字段收敛为 outputs[] 的单个 OutputFormatSpec。
+    // T13（输出页多选磁贴 + 路径模板）会把它扩成多元素 outputs + split_by_format/模板；
+    // 本任务只做编译适配，UI 行为与布局零变化。
+    pp::OutputFormatSpec spec;
+    spec.format_id = impl_->current_format_id.toStdString();
     if (impl_->param_form) {
         const FormSelection sel = impl_->param_form->selection();
-        cfg.backend_id = sel.backend;
-        cfg.tech_id = sel.tech;
-        cfg.lossless = sel.lossless;
-        cfg.params = impl_->param_form->values();
+        spec.backend_id = sel.backend;
+        spec.tech_id = sel.tech;
+        spec.params = impl_->param_form->values();
     }
-    cfg.out_bitdepth = impl_->bitdepth();
-    cfg.color_target = impl_->color_target();
+    spec.out_bitdepth = impl_->bitdepth();
+    cfg.outputs.push_back(std::move(spec));
+    cfg.color = impl_->color_target();
     cfg.conflict = impl_->conflict();
     cfg.metadata_only = impl_->metadata_only;
+    // 输出结构与 0.2 一致（$dir/$file）；分文件夹开关/模板编辑属 W3-T13。
+    cfg.output_template = "$dir/$file";
     // rules / workers / budget_bytes / rotate_orientation / flatten_gray 由 MainWindow 填充
     return cfg;
 }
@@ -845,6 +852,14 @@ QString PageOutput::ready_to_start() const {
         return tr("未设置输出根目录");
     if (!QDir::isAbsolutePath(root))
         return tr("输出根目录必须是绝对路径");
+    // §4.2（复核项 10）：非法路径模板必须在 ready_to_start 阻断。当前 config_base() 固定
+    // "$dir/$file"（模板编辑框属 W3-T13），此闸对现状恒通过；T13 接上编辑框后即自动生效。
+    {
+        const std::string tmpl = config_base().output_template;
+        std::string tmpl_err;
+        if (!pp::validate_output_template(tmpl, &tmpl_err))
+            return QString::fromStdString(tmpl_err);
+    }
     return QString();
 }
 

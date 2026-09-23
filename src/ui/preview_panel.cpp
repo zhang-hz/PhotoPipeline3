@@ -3,13 +3,15 @@
 //
 // 三段结构（自上而下）：
 //   ① 舞台 PreviewView（= mockup .pv-stage；#pp-preview-stage 的底/边框/圆角由 theme QSS 提供）：
-//      画当前 QImage（适应 = 等比铺满舞台 / 1:1 = 原始像素 + 拖拽平移）+ 恒显徽标 + 缩放 chip 两枚；
+//      画当前 QImage（适应 = 等比铺满舞台 / 1:1 = 原始像素 + 拖拽平移）+ 恒显徽标 + 缩放 chip
+//      两枚；
 //   ② 底条（= mockup .pv-bar）：◀ ▶ 翻图 ·「n / N」· 文件名 · 右侧热键提示表（随注册表动态生成）；
 //   ③ 异步池（= §6.1「独立低并发（≤2）后台线程池」）：≤2 jthread；队列只保留最新请求，过期请求
 //      **不解码**、过期结果**不投递**（快速翻图不堆积）；LRU 命中在池线程内瞬时返回。
 //
-// 全部字面量（尺寸/文案/色值）来源：docs/mockups/meta-dark.html 的 .pv-* 规则（§9.4：HTML = 精确规格）
-// 与 ui/theme.h 的 tokens；舞台内元素（深色舞台上的徽标/chip）是主题无关固定值，单列常量并注明出处。
+// 全部字面量（尺寸/文案/色值）来源：docs/mockups/meta-dark.html 的 .pv-* 规则（§9.4：HTML =
+// 精确规格） 与 ui/theme.h 的
+// tokens；舞台内元素（深色舞台上的徽标/chip）是主题无关固定值，单列常量并注明出处。
 
 #include "ui/preview_panel.h"
 
@@ -81,8 +83,8 @@ constexpr int kKeyChipPadX = 6; // .key{padding:1px 6px;border-radius:4px}
 constexpr int kKeyChipPadY = 1;
 constexpr int kKeyChipGap = 6; // .keyhint{gap:6px}
 // 舞台内元素是**主题无关**的深色舞台配色（mockup 固定值；舞台底 #0d0f12 = tokens.stage_bg）
-const char *const kOverlayFg = "#dfe6ec";             // .pv-badge / .z 字色
-const char *const kOverlayBg = "rgba(10,12,16,62%)";  // rgba(10,12,16,.62)
+const char *const kOverlayFg = "#dfe6ec";            // .pv-badge / .z 字色
+const char *const kOverlayBg = "rgba(10,12,16,62%)"; // rgba(10,12,16,.62)
 const char *const kOverlayBd = "rgba(255,255,255,12%)";
 const char *const kOverlayActiveBg = "rgba(255,255,255,10%)"; // .seg div.on 的选中底
 const char *const kOverlayActiveBd = "rgba(255,255,255,28%)";
@@ -139,9 +141,7 @@ private:
 class ClipLabel : public QLabel {
 public:
     explicit ClipLabel(const QString &text, QWidget *parent) : QLabel(text, parent) {}
-    QSize minimumSizeHint() const override {
-        return QSize(0, QLabel::minimumSizeHint().height());
-    }
+    QSize minimumSizeHint() const override { return QSize(0, QLabel::minimumSizeHint().height()); }
 };
 
 // 预览舞台（mockup .pv-stage）。画图只做**显示所必需**的缩放/平移（§6.1「不做色彩管理之外的
@@ -160,9 +160,7 @@ public:
     void set_fit(bool fit);
     bool fit() const { return fit_; }
     void set_tokens(const theme::Tokens &tokens);
-    void set_zoom_handler(std::function<void(bool)> handler) {
-        zoom_handler_ = std::move(handler);
-    }
+    void set_zoom_handler(std::function<void(bool)> handler) { zoom_handler_ = std::move(handler); }
     QSize displayed_size() const { return image_.isNull() ? QSize() : target_size(); }
 
 protected:
@@ -409,10 +407,10 @@ struct PreviewPanel::Impl {
 
     PreviewPanel *q = nullptr;
     theme::Tokens tokens;
-    QStringList files;    // 列表顺序 = 翻图顺序
-    int current = -1;     // 列表行号；-1 = 空列表
+    QStringList files; // 列表顺序 = 翻图顺序
+    int current = -1;  // 列表行号；-1 = 空列表
     bool zoom_fit = true;
-    bool locked = false;  // G5 运行期只读（锁打标热键）
+    bool locked = false; // G5 运行期只读（锁打标热键）
     bool hotkeys_enabled = true;
     const pp::ClassRegistry *classes = nullptr; // 不持有（T11 的注册表实例）
 
@@ -514,7 +512,8 @@ void PreviewPanel::Impl::Pool::worker_loop(std::stop_token st) {
         const int index = job.index;
         const auto request_time = job.request_time;
         QMetaObject::invokeMethod(
-            im->q, [im, index, request_time, result] { im->on_loaded(index, request_time, result); },
+            im->q,
+            [im, index, request_time, result] { im->on_loaded(index, request_time, result); },
             Qt::QueuedConnection);
     }
 }
@@ -633,13 +632,14 @@ void PreviewPanel::Impl::apply_style() {
                           "QLabel#pp-preview-keyhint-label, QLabel#pp-preview-keyname { color: %1; "
                           "}\n")
                .arg(theme::css_color(tokens.text3));
-    qss += QStringLiteral("QLabel#pp-preview-key { color: %1; background: %2; border: 1px solid %3; "
-                          "border-radius: %4px; padding: %5px %6px; }\n")
-               .arg(theme::css_color(tokens.text2), theme::css_color(tokens.control),
-                    theme::css_color(tokens.control_bd))
-               .arg(kChipRadius)
-               .arg(kKeyChipPadY)
-               .arg(kKeyChipPadX);
+    qss +=
+        QStringLiteral("QLabel#pp-preview-key { color: %1; background: %2; border: 1px solid %3; "
+                       "border-radius: %4px; padding: %5px %6px; }\n")
+            .arg(theme::css_color(tokens.text2), theme::css_color(tokens.control),
+                 theme::css_color(tokens.control_bd))
+            .arg(kChipRadius)
+            .arg(kKeyChipPadY)
+            .arg(kKeyChipPadX);
     q->setStyleSheet(qss);
 }
 
@@ -767,9 +767,7 @@ bool PreviewPanel::Impl::hotkey_taken(QChar ch) const {
     return false;
 }
 
-void PreviewPanel::Impl::emit_hotkey(char key) {
-    emit q->class_hotkey(QChar(QLatin1Char(key)));
-}
+void PreviewPanel::Impl::emit_hotkey(char key) { emit q->class_hotkey(QChar(QLatin1Char(key))); }
 
 bool PreviewPanel::Impl::route_key(QObject *watched, QEvent *event) {
     if (event->type() != QEvent::KeyPress || q->window() == nullptr)
@@ -784,10 +782,10 @@ bool PreviewPanel::Impl::route_key(QObject *watched, QEvent *event) {
     QWidget *focus = QApplication::focusWidget();
     if (focus != nullptr && focus->window() != q->window())
         return false;
-    if (focus != nullptr &&
-        (qobject_cast<QLineEdit *>(focus) != nullptr ||
-         qobject_cast<QAbstractSpinBox *>(focus) != nullptr ||
-         qobject_cast<QComboBox *>(focus) != nullptr || qobject_cast<QTextEdit *>(focus) != nullptr)) {
+    if (focus != nullptr && (qobject_cast<QLineEdit *>(focus) != nullptr ||
+                             qobject_cast<QAbstractSpinBox *>(focus) != nullptr ||
+                             qobject_cast<QComboBox *>(focus) != nullptr ||
+                             qobject_cast<QTextEdit *>(focus) != nullptr)) {
         return false; // 文本输入控件自己消费（搜索框里数字/方向键照常输入）
     }
     switch (key_event->key()) {

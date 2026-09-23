@@ -19,6 +19,13 @@ M3-W3（裁定 D3：Python 单实现，本文件替代 tests/ui_smoke.sh）:
   * `mktemp -t` → tempfile；tee 用 Python 边读边写（终端透传 + 临时日志）
   * 冻结行为不变：QT_QPA_PLATFORM=offscreen、`^UI-SMOKE OK shots=8 pages=3$` 断言、
     `UI-SMOKE pass` 成功行与两条缺失提示逐字
+
+M4-W2-T11 扩展段（§6.2 + §3.6 filelistmodel.h 行）:
+  * 冻结末行**不变**（`shots=8 pages=3`）；正式冻结行 `UI-SMOKE OK shots=12 pages=3` 属 W3-T14。
+  * 追加"T11 自检行齐备"断言：勾选/搜索正交/分组节头/分类打标/classes.json 往返/圈选/只读
+    这些自动化部分由 `photopipeline --ui-smoke` 在进程内断言（smoke_fail → 退出码 1）并逐行
+    以 `UI-SMOKE <tag>:` 打印；本脚本额外要求这些**行存在**（防止断言被静默跳过/裁剪）。
+    清单 = 前缀匹配（行内容由 C++ 侧给出，脚本只验tag 存在）。
 """
 
 import os
@@ -30,6 +37,26 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
 FROZEN_LINE = 'UI-SMOKE OK shots=8 pages=3'
+
+# M4-W2-T11 自检行（前缀匹配；缺任一 → FAIL）
+T11_LINE_PREFIXES = (
+    'UI-SMOKE filelist-roles:',
+    'UI-SMOKE filelist-check:',
+    'UI-SMOKE filelist-search:',
+    'UI-SMOKE filelist-group-format:',
+    'UI-SMOKE filelist-group-camera:',
+    'UI-SMOKE filelist-group-none:',
+    'UI-SMOKE filelist-group-month:',
+    'UI-SMOKE filelist-span:',
+    'UI-SMOKE filelist-collapse:',
+    'UI-SMOKE classify-panel:',
+    'UI-SMOKE classify-tag:',
+    'UI-SMOKE classify-menu:',
+    'UI-SMOKE classify-bulk:',
+    'UI-SMOKE classify-crud:',
+    'UI-SMOKE classify-roundtrip:',
+    'UI-SMOKE classify-lock:',
+)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -69,6 +96,7 @@ def main():
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=ROOT, env=child_env,
             text=True, encoding='utf-8', errors='replace')
         found = False
+        t11_seen = set()
         with open(log_path, 'w', encoding='utf-8', newline='') as log_fp:
             for line in proc.stdout:
                 sys.stdout.write(line)
@@ -76,6 +104,9 @@ def main():
                 log_fp.write(line)
                 if line.rstrip('\r\n') == FROZEN_LINE:
                     found = True
+                for prefix in T11_LINE_PREFIXES:
+                    if line.startswith(prefix):
+                        t11_seen.add(prefix)
         status = proc.wait()
 
         if status != 0:
@@ -84,6 +115,11 @@ def main():
             return status
         if not found:
             print("ui_smoke: FAIL (missing frozen success line '{}')".format(FROZEN_LINE),
+                  file=sys.stderr)
+            return 1
+        missing = [p for p in T11_LINE_PREFIXES if p not in t11_seen]
+        if missing:
+            print('ui_smoke: FAIL (missing T11 self-check lines: {})'.format(', '.join(missing)),
                   file=sys.stderr)
             return 1
         print('UI-SMOKE pass')

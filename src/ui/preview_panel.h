@@ -81,8 +81,8 @@ public:
     void set_hotkeys_enabled(bool on);
 
     // 卡头显示用（mainwindow 读取后写 pill / hint 两枚标签）
-    QString current_file_name() const; // 文件名（无选中 → 空）
-    QString current_info_text() const; // "4032×3024 · 8 bit · Display P3"（载入前为空）
+    QString current_file_name() const;     // 文件名（无选中 → 空）
+    QString current_info_text() const;     // "4032×3024 · 8 bit · Display P3"（载入前为空）
     QString current_position_text() const; // "1 / 24"（空列表 → ""）
     QString current_path() const;
 
@@ -95,9 +95,9 @@ public slots:
     void reload(); // 强制重取当前项（缓存命中即瞬时）
 
 signals:
-    void display_changed();                          // 文件名/信息行/位置变化 → 卡头刷新
-    void zoom_changed(bool fit);                     // 适应|1:1 切换
-    void class_hotkey(QChar key);                    // 打标接线位（T11 接通；'0' = 清除）
+    void display_changed();                             // 文件名/信息行/位置变化 → 卡头刷新
+    void zoom_changed(bool fit);                        // 适应|1:1 切换
+    void class_hotkey(QChar key);                       // 打标接线位（T11 接通；'0' = 清除）
     void preview_loaded(int index, qint64 ms, bool ok); // 出图诊断（250ms 目标取证）
 
 private:

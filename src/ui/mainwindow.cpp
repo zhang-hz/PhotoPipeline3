@@ -28,6 +28,7 @@
 #include <QActionGroup>
 #include <QApplication>
 #include <QByteArray>
+#include <QComboBox>
 #include <QCoreApplication>
 #include <QDesktopServices>
 #include <QDir>
@@ -45,10 +46,11 @@
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QHeaderView>
 #include <QImage>
 #include <QLabel>
 #include <QLineEdit>
-#include <QListView>
+#include <QMenu>
 #include <QMessageBox>
 #include <QMimeData>
 #include <QMouseEvent>
@@ -65,6 +67,7 @@
 #include <QThread>
 #include <QTimer>
 #include <QToolButton>
+#include <QTreeView>
 #include <QTreeWidget>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -83,10 +86,12 @@
 #include <vector>
 
 #include "core/logger.h"
+#include "core/settings.h"
 #include "mapwidget/mapwidget.h"
 #include "platform/frameless.h"
 #include "platform/mica.h"
 #include "platform/paths.h"
+#include "ui/classify_panel.h"
 #include "ui/exif_editor.h"
 #include "ui/filelistmodel.h"
 #include "ui/page_meta.h"
@@ -534,26 +539,39 @@ struct MainWindow::Impl {
     QLabel *status_dot = nullptr;
     ElidedLabel *preview_pill = nullptr; // 中栏卡头徽标（文件名，T10 填）
     ElidedLabel *preview_hint = nullptr; // 中栏卡头右端 hint（尺寸·位深·色彩空间，T10 填）
-    QFrame *left_card = nullptr;         // 左栏卡框（T11 填内容）
+    QWidget *left_col = nullptr;         // 左栏容器（文件卡 + 分类卡，§9.1 左栏 258 固定）
+    QFrame *left_card = nullptr;         // 左栏文件卡框（T11 填内容）
+    QFrame *classify_card = nullptr;     // 左栏分类卡框（T11）
     QFrame *preview_card = nullptr;      // 中栏卡框（内嵌 T10 的 PreviewPanel）
     // ---- M4-T10：常驻输入预览面板（§6.1）+ 分类注册表（热键表数据源）----
     PreviewPanel *preview_panel = nullptr;
     // 分类注册表的**当前实例**（T10 只读消费：热键提示表；T11 接管 CRUD/持久化/打标与勾选语义）
     pp::ClassRegistry classes;
 
-    // ---- 左：文件面板 ----
+    // ---- 左：文件面板（M1b 内容 + M4-T11 勾选/分组）----
     QWidget *panel = nullptr;
     FileListModel *model = nullptr;
     Thumbnailer *thumbs = nullptr;
-    QSortFilterProxyModel *proxy = nullptr;
-    QListView *view = nullptr;
-    ElidedLabel *file_count = nullptr; // 卡头计数徽标（.pill）
+    QSortFilterProxyModel *proxy = nullptr; // 搜索过滤（§6.2：与勾选正交）
+    FileGroupProxyModel *groups = nullptr;  // M4-T11：分组节层次层（QTreeView 的数据源）
+    FileTreeView *view = nullptr;           // M4-T11：QListView → QTreeView（§3.6 裁定行）
+    QComboBox *group_mode = nullptr;        // 分组：按月份 | 按相机型号 | 按源格式 | 无分组
+    QLabel *groupby_label = nullptr;        // 「分组：」（.groupby 文案，--txt3）
+    ElidedLabel *file_count = nullptr;      // 卡头计数徽标（.pill）
     ElidedLabel *unsupported = nullptr;
+    ElidedLabel *file_hint = nullptr; // 卡头 hint（"拖放添加" / "运行中锁定"）
     QLineEdit *search = nullptr;
-    QPushButton *add_files = nullptr;
-    QPushButton *add_dir = nullptr;
-    QPushButton *remove_sel = nullptr;
-    QPushButton *clear_all = nullptr;
+    QToolButton *add_btn = nullptr;      // ＋（添加文件…/添加文件夹… 菜单）
+    QToolButton *remove_sel = nullptr;   // −（移除所选）
+    QAction *add_files_action = nullptr; // ＋ 菜单项：添加文件…
+    QAction *add_dir_action = nullptr;   // ＋ 菜单项：添加文件夹…
+    QAction *clear_action = nullptr;     // ＋ 菜单项：清空列表
+    // ---- M4-T11：分类面板（§6.2）----
+    ClassifyPanel *classify_panel = nullptr;
+    ElidedLabel *classify_hint = nullptr; // "1–9 键打标" / "运行中只读"（G5）
+    QString classes_file;                 // classes.json 路径（settings.class_file；§6.2 单源）
+    bool applying_group_state =
+        false; // 正在程序化落地展开态（期间的 collapsed/expanded 不记为用户操作）
 
     // ---- 顶栏 / 页面 ----
     QAction *nav_meta = nullptr;
@@ -581,6 +599,9 @@ struct MainWindow::Impl {
     std::size_t run_done = 0;
     std::size_t run_failed = 0;
     std::size_t run_skipped = 0;
+    // M4-T11：本批提交的**模型行号**（ev.index 是提交序号 → 需映射回列表行更新状态）
+    std::vector<std::size_t> run_rows;
+    QString last_selected_path; // 分组重建后恢复选中（重建 = 模型 reset，选中会丢）
     QString last_preset_path;
     QStringList cached_paths; // 行集合签名（避免每次状态变化都重扫时间预览）
     bool cached_alpha = false;
@@ -613,6 +634,7 @@ struct MainWindow::Impl {
     void restore_session();
     void open_logs();
     void handle_file_event(const pp::FileEvent &ev);
+    void restore_selection_by_path(const QString &path);
 
     // M4-T9 骨架：主题 / 三栏持久化 / caption 行为
     void refresh_theme();
@@ -620,6 +642,15 @@ struct MainWindow::Impl {
     void restore_splitter_state();
     void save_splitter_state();
     void update_caption_buttons();
+
+    // M4-T11：左栏（勾选/分组/分类）
+    void load_classes(); // classes.json → 注册表（失败仅告警，保持默认）
+    void save_classes(); // 注册表 → classes.json（打标/CRUD 即写）
+    void apply_class_to_selection(const QString &class_id); // 热键/菜单打标（选中集或当前项）
+    void sync_class_views(std::size_t row);                 // 面板高亮 + 预览热键表刷新
+    void rebuild_group_view();     // 分组结构变化后：跨列节头 + 展开态 + 选中恢复
+    void apply_group_view_state(); // 上述状态的落地（推迟到下一轮事件循环）
+    void set_group_mode(pp::GroupMode mode);
 
     // 冒烟工具
     void pump(int ms);
@@ -636,12 +667,20 @@ struct MainWindow::Impl {
     void smoke_probe_lifecycle();
     // M4-T10 预览面板自检（§6.1：翻图/缩放/徽标/热键提示 + 热键接线位）
     void smoke_probe_preview();
+    // M4-T11 文件列表/分类自检（§3.6 roles + §6.2 勾选/正交搜索/分组节/分类面板）
+    void smoke_probe_filelist();
+    void smoke_probe_classify();
     static QString repo_root();
 };
 
 MainWindow::Impl::Impl(MainWindow *owner, const pp::AppSettings &s)
     : w(owner), settings(s), theme_mode(preferred_theme_mode()) {
+    // M4-T11：分类注册表路径（§3.6/§6.2 单源 = settings.class_file；空 = 默认
+    // data_dir()/classes.json）
+    classes_file =
+        QString::fromStdString(s.class_file.empty() ? pp::default_class_file() : s.class_file);
     model = new FileListModel(w);
+    model->set_class_registry(&classes); // 分类单源：模型只读/直写注册表，不复制状态
     thumbs = new Thumbnailer(96, w);
     model->set_thumbnailer(thumbs); // U4 口径：内部已 connect(ready→apply_thumb) + 自动 enqueue
 
@@ -651,11 +690,17 @@ MainWindow::Impl::Impl(MainWindow *owner, const pp::AppSettings &s)
     proxy->setFilterCaseSensitivity(Qt::CaseInsensitive);
     proxy->setFilterFixedString(QString());
 
+    groups = new FileGroupProxyModel(w);
+    groups->setSourceModel(proxy); // 分组节（顶层） + 文件行（叶子）；过滤只是可见性
+    groups->set_group_mode(model->group_mode());
+
     poll = new QTimer(w);
     poll->setInterval(kPollIntervalMs);
 
     filter = new Filter(this);
     w->installEventFilter(filter);
+
+    load_classes(); // §6.2：classes.json 往返（文件不存在 = 首次运行，保持默认模板）
 }
 
 MainWindow::Impl::~Impl() {
@@ -871,75 +916,151 @@ void MainWindow::build_ui() {
     main_layout->addWidget(d.splitter);
     outer->addWidget(main_area, 1);
 
-    // 左栏卡（T11 填内容；本任务只给卡框与既有控件接线）
-    d.left_card = new QFrame(d.splitter);
-    d.left_card->setObjectName(QStringLiteral("pp-card"));
-    d.left_card->setAttribute(Qt::WA_StyledBackground, true);
+    // 左栏（T11 落地；§9.1 左栏 258px 固定 / 280 可调）：文件卡（勾选+分组）+ 分类卡（§6.2）
+    d.left_col = new QWidget(d.splitter);
+    d.left_col->setObjectName(QStringLiteral("pp-left-col"));
     // §9.1「左栏 258px 固定（280 可调）」：下界 = 固定值（缩放时不被压缩，尺寸可复现），
     // 上界 = 可调上限（用户拖拽分栏手柄最多拉到 280）
-    d.left_card->setMinimumWidth(theme::Metrics::left_width);
-    d.left_card->setMaximumWidth(theme::Metrics::left_width_max);
+    d.left_col->setMinimumWidth(theme::Metrics::left_width);
+    d.left_col->setMaximumWidth(theme::Metrics::left_width_max);
+    auto *left_col_layout = new QVBoxLayout(d.left_col);
+    left_col_layout->setContentsMargins(0, 0, 0, 0);
+    left_col_layout->setSpacing(theme::Metrics::gap); // mockup .col-left{gap:10px}
+
+    d.left_card = new QFrame(d.left_col);
+    d.left_card->setObjectName(QStringLiteral("pp-card"));
+    d.left_card->setAttribute(Qt::WA_StyledBackground, true);
     auto *left_layout = new QVBoxLayout(d.left_card);
-    left_layout->setContentsMargins(8, 6, 8, 8);
-    left_layout->setSpacing(6);
+    left_layout->setContentsMargins(0, 0, 0, 0);
+    left_layout->setSpacing(0);
 
     d.panel = new QWidget(d.left_card);
     d.panel->setObjectName(QStringLiteral("pp-file-panel"));
     auto *pv = new QVBoxLayout(d.panel);
-    pv->setContentsMargins(0, 0, 0, 0);
+    pv->setContentsMargins(0, 0, 0, 6);
     pv->setSpacing(4);
 
     // 卡头：标题 + 计数徽标（.pill）+ 右端 hint（不支持的格式数 / 拖放提示）
     QLabel *panel_title = nullptr;
-    auto *card_head = make_card_header(d.left_card, tr("文件"), &panel_title, &d.file_count);
+    auto *card_head = make_card_header(d.panel, tr("文件"), &panel_title, &d.file_count);
     d.file_count->setObjectName(QStringLiteral("pp-file-count"));
     d.unsupported = new ElidedLabel(card_head);
     d.unsupported->setObjectName(QStringLiteral("pp-card-hint"));
     d.unsupported->setStyleSheet(QStringLiteral("color:#dd8800"));
     d.unsupported->setVisible(false);
-    auto *drop_hint = new ElidedLabel(card_head);
-    drop_hint->setObjectName(QStringLiteral("pp-card-hint"));
-    drop_hint->setFont(theme::font(theme::Typography::hint_px));
-    drop_hint->set_full_text(tr("拖放添加"));
+    d.file_hint = new ElidedLabel(card_head);
+    d.file_hint->setObjectName(QStringLiteral("pp-card-hint"));
+    d.file_hint->setFont(theme::font(theme::Typography::hint_px));
+    d.file_hint->set_full_text(tr("拖放添加")); // mockup .hint；运行中 → 「运行中锁定」
     if (auto *head_layout = qobject_cast<QHBoxLayout *>(card_head->layout())) {
         head_layout->addWidget(d.unsupported); // addStretch 之后 = 右对齐
-        head_layout->addWidget(drop_hint);
+        head_layout->addWidget(d.file_hint);
     }
     pv->addWidget(card_head);
 
-    auto *buttons = new QGridLayout();
-    buttons->setSpacing(4);
-    d.add_files = new QPushButton(tr("添加文件…"), d.panel);
-    d.add_files->setObjectName(QStringLiteral("pp-add-files"));
-    d.add_dir = new QPushButton(tr("添加文件夹…"), d.panel);
-    d.add_dir->setObjectName(QStringLiteral("pp-add-dir"));
-    d.remove_sel = new QPushButton(tr("移除所选"), d.panel);
-    d.remove_sel->setObjectName(QStringLiteral("pp-remove-sel"));
-    d.clear_all = new QPushButton(tr("清空"), d.panel);
-    d.clear_all->setObjectName(QStringLiteral("pp-clear-all"));
-    d.remove_sel->setEnabled(false);
-    buttons->addWidget(d.add_files, 0, 0);
-    buttons->addWidget(d.add_dir, 0, 1);
-    buttons->addWidget(d.remove_sel, 1, 0);
-    buttons->addWidget(d.clear_all, 1, 1);
-    pv->addLayout(buttons);
-
+    // fp-tools（mockup：搜索 + ＋ + −）：添加/移除入口收进两枚 mini-btn；「清空列表」在列表
+    // 右键菜单里（M1b 功能零丢失，控件集合与 mockup 一致）
+    auto *tools = new QHBoxLayout();
+    tools->setContentsMargins(10, 0, 10, 8); // .fp-tools{padding:0 10px 8px}
+    tools->setSpacing(6);                    // .fp-tools{gap:6px}
     d.search = new QLineEdit(d.panel);
     d.search->setObjectName(QStringLiteral("pp-search"));
     d.search->setPlaceholderText(tr("搜索文件名…"));
     d.search->setClearButtonEnabled(true);
-    pv->addWidget(d.search);
+    d.search->setFixedHeight(theme::Metrics::input_h);
+    auto *add_btn = new QToolButton(d.panel);
+    add_btn->setObjectName(QStringLiteral("pp-add"));
+    add_btn->setText(QStringLiteral("＋"));
+    add_btn->setToolTip(tr("添加文件 / 文件夹"));
+    add_btn->setPopupMode(QToolButton::InstantPopup);
+    add_btn->setFixedHeight(theme::Metrics::input_h);
+    add_btn->setFixedWidth(28);
+    auto *add_menu = new QMenu(add_btn);
+    QAction *act_add_files = add_menu->addAction(tr("添加文件…"));
+    act_add_files->setObjectName(QStringLiteral("pp-add-files"));
+    QAction *act_add_dir = add_menu->addAction(tr("添加文件夹…"));
+    act_add_dir->setObjectName(QStringLiteral("pp-add-dir"));
+    add_menu->addSeparator();
+    QAction *act_clear = add_menu->addAction(tr("清空列表"));
+    act_clear->setObjectName(QStringLiteral("pp-clear-all"));
+    add_btn->setMenu(add_menu);
+    d.add_files_action = act_add_files;
+    d.add_dir_action = act_add_dir;
+    d.clear_action = act_clear;
+    auto *remove_btn = new QToolButton(d.panel);
+    remove_btn->setObjectName(QStringLiteral("pp-remove-sel"));
+    remove_btn->setText(QStringLiteral("−"));
+    remove_btn->setToolTip(tr("移除所选"));
+    remove_btn->setFixedHeight(theme::Metrics::input_h);
+    remove_btn->setFixedWidth(28);
+    remove_btn->setEnabled(false);
+    tools->addWidget(d.search, 1);
+    tools->addWidget(add_btn);
+    tools->addWidget(remove_btn);
+    pv->addLayout(tools);
+    d.add_btn = add_btn;
+    d.remove_sel = remove_btn;
 
-    d.view = new QListView(d.panel);
+    // groupby（mockup：`分组：<combo>`；§6.2 三态 + 「无分组」）
+    auto *groupby = new QHBoxLayout();
+    groupby->setContentsMargins(10, 0, 10, 8); // .groupby{padding:0 10px 8px}
+    groupby->setSpacing(6);
+    auto *group_label = new QLabel(tr("分组："), d.panel);
+    group_label->setObjectName(QStringLiteral("pp-groupby-label"));
+    group_label->setFont(theme::font(theme::Typography::small_px));
+    d.groupby_label = group_label;
+    d.group_mode = new QComboBox(d.panel);
+    d.group_mode->setObjectName(QStringLiteral("pp-group-mode"));
+    d.group_mode->setFixedHeight(26); // .combo{height:26px}
+    d.group_mode->addItem(tr("按月份"), int(pp::GroupMode::Month));
+    d.group_mode->addItem(tr("按相机型号"), int(pp::GroupMode::Camera));
+    d.group_mode->addItem(tr("按源格式"), int(pp::GroupMode::SourceFormat));
+    d.group_mode->addItem(tr("无分组"), int(pp::GroupMode::None));
+    groupby->addWidget(group_label);
+    groupby->addWidget(d.group_mode, 1);
+    pv->addLayout(groupby);
+
+    // 文件列表（M4-T11：QListView → QTreeView；两列 = 勾选列 29px + 行内容列，分组节跨两列）
+    d.view = new FileTreeView(d.panel);
     d.view->setObjectName(QStringLiteral("pp-file-view"));
-    d.view->setModel(d.proxy);
-    d.view->setItemDelegate(new FileDelegate(d.view));
+    d.view->setModel(d.groups);
+    d.view->setItemDelegate(new FileGroupDelegate(d.view));
     d.view->setSelectionMode(QAbstractItemView::ExtendedSelection);
     d.view->setSelectionBehavior(QAbstractItemView::SelectRows);
     d.view->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    d.view->setUniformItemSizes(true);
+    d.view->setRootIsDecorated(false);   // mockup：节头无展开箭头（.ghead 平铺）
+    d.view->setIndentation(0);           // 节内行与节头同左沿（mockup）
+    d.view->setHeaderHidden(true);       // mockup：无表头
+    d.view->setUniformRowHeights(false); // 节头 26px / 文件行 56px
+    d.view->setExpandsOnDoubleClick(true);
+    d.view->setAllColumnsShowFocus(true);
+    d.view->header()->setSectionResizeMode(FileGroupProxyModel::kCheckColumn, QHeaderView::Fixed);
+    d.view->header()->resizeSection(FileGroupProxyModel::kCheckColumn, 29); // 6+15+8
+    d.view->header()->setSectionResizeMode(FileGroupProxyModel::kRowColumn, QHeaderView::Stretch);
     pv->addWidget(d.view, 1);
-    left_layout->addWidget(d.panel, 1);
+    left_layout->addWidget(d.panel, 1); // 文件面板 = 卡的整个内容区（尺寸基准见 §9.1）
+    left_col_layout->addWidget(d.left_card, 1);
+
+    // 分类卡（mockup .cls-panel）：卡头（标题 + hint）+ 分类面板（T11）
+    d.classify_card = new QFrame(d.left_col);
+    d.classify_card->setObjectName(QStringLiteral("pp-card"));
+    d.classify_card->setAttribute(Qt::WA_StyledBackground, true);
+    auto *classify_layout = new QVBoxLayout(d.classify_card);
+    classify_layout->setContentsMargins(0, 0, 0, 6);
+    classify_layout->setSpacing(0);
+    QLabel *classify_title = nullptr;
+    QWidget *classify_head =
+        make_card_header(d.classify_card, tr("分类"), &classify_title, nullptr);
+    d.classify_hint = new ElidedLabel(classify_head);
+    d.classify_hint->setObjectName(QStringLiteral("pp-card-hint"));
+    d.classify_hint->setFont(theme::font(theme::Typography::hint_px));
+    d.classify_hint->set_full_text(tr("1–9 键打标")); // mockup .hint；运行中 → 「运行中只读」
+    if (auto *head_layout = qobject_cast<QHBoxLayout *>(classify_head->layout()))
+        head_layout->addWidget(d.classify_hint);
+    classify_layout->addWidget(classify_head);
+    d.classify_panel = new ClassifyPanel(d.classify_card);
+    classify_layout->addWidget(d.classify_panel);
+    left_col_layout->addWidget(d.classify_card, 0);
 
     // 中栏卡：输入预览（T10：卡头 = 文件名徽标 + 尺寸/位深/色彩空间 hint；卡体 = PreviewPanel）
     d.preview_card = new QFrame(d.splitter);
@@ -971,7 +1092,7 @@ void MainWindow::build_ui() {
     d.stack->addWidget(d.page_output); // 页 2 输出
     d.stack->addWidget(d.page_run);    // 页 3 运行
 
-    d.splitter->addWidget(d.left_card);
+    d.splitter->addWidget(d.left_col);
     d.splitter->addWidget(d.preview_card);
     d.splitter->addWidget(d.stack);
     // 左栏固定（stretch 0）；中/右弹性：1440 校准落点 = mockup 实测 537/601（§9.4 以 mockup 为准，
@@ -1024,6 +1145,9 @@ void MainWindow::build_ui() {
     // classify 接口）。T10 只**只读消费**：注册表实例由本窗口持有，T11 接管 CRUD/持久化/打标
     // 与勾选语义时共用同一实例（面板自动跟随，无需改面板）。
     d.preview_panel->set_class_registry(&d.classes);
+    // M4-T11：左栏分类面板（§6.2）——同一注册表与同一文件模型（单源；分类只做组织 + 圈选）
+    d.classify_panel->set_registry(&d.classes);
+    d.classify_panel->set_model(d.model);
 
     d.refresh_theme(); // tokens 落地（明暗跟随系统）
 }
@@ -1053,7 +1177,7 @@ void MainWindow::wire() {
     connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this,
             [this](Qt::ColorScheme) { impl_->set_theme_mode(preferred_theme_mode()); });
 
-    connect(d.add_files, &QPushButton::clicked, this, [this] {
+    connect(d.add_files_action, &QAction::triggered, this, [this] {
         const QStringList files = QFileDialog::getOpenFileNames(
             this, tr("添加文件"), QString(),
             tr("图片 (*.jpg *.jpeg *.png *.tif *.tiff *.webp *.jxl *.heic *.heif *.avif *.bmp "
@@ -1061,21 +1185,49 @@ void MainWindow::wire() {
         if (!files.isEmpty())
             add_paths(files);
     });
-    connect(d.add_dir, &QPushButton::clicked, this, [this] {
+    connect(d.add_dir_action, &QAction::triggered, this, [this] {
         const QString dir = QFileDialog::getExistingDirectory(this, tr("添加文件夹"));
         if (!dir.isEmpty())
             add_paths(QStringList{dir});
     });
-    connect(d.remove_sel, &QPushButton::clicked, this, [this] { impl_->remove_selected(); });
-    connect(d.clear_all, &QPushButton::clicked, this, [this] { impl_->model->clear(); });
-    connect(d.search, &QLineEdit::textChanged, this,
-            [this](const QString &text) { impl_->proxy->setFilterFixedString(text); });
-    connect(d.view, &QListView::doubleClicked, this, [this](const QModelIndex &idx) {
-        if (idx.isValid())
-            open_exif_editor_row(impl_->proxy->mapToSource(idx).row());
+    connect(d.clear_action, &QAction::triggered, this, [this] { impl_->model->clear(); });
+    connect(d.remove_sel, &QToolButton::clicked, this, [this] { impl_->remove_selected(); });
+    connect(d.search, &QLineEdit::textChanged, this, [this](const QString &text) {
+        Impl &impl_ref = *impl_;
+        impl_ref.proxy->setFilterFixedString(text);
+        impl_ref.groups
+            ->rebuild(); // 过滤 = 可见性变化 → 分组节重建（勾选状态住在源模型，不受影响）
+        impl_ref.rebuild_group_view();
+    });
+    connect(d.view, &QTreeView::doubleClicked, this, [this](const QModelIndex &idx) {
+        Impl &impl_ref = *impl_;
+        if (!idx.isValid() || impl_ref.groups->is_group(idx))
+            return;
+        open_exif_editor_row(impl_ref.groups->mapToSource(idx).row());
     });
     connect(d.view->selectionModel(), &QItemSelectionModel::selectionChanged, this,
             [this] { impl_->sync_selection(); });
+    // 折叠记忆（§6.2）：过滤/摘要重建后不丢用户的展开态。程序化落地（apply_group_view_state）
+    // 期间的 collapsed/expanded 不记为用户操作（否则"重建 → 程序折叠 → 记忆被自己清掉"）。
+    connect(d.view, &QTreeView::collapsed, this, [this](const QModelIndex &idx) {
+        Impl &impl_ref = *impl_;
+        if (impl_ref.applying_group_state)
+            return;
+        if (idx.isValid() && impl_ref.groups->is_group(idx))
+            impl_ref.groups->set_collapsed(impl_ref.groups->group_key_at(idx.row()), true);
+    });
+    connect(d.view, &QTreeView::expanded, this, [this](const QModelIndex &idx) {
+        Impl &impl_ref = *impl_;
+        if (impl_ref.applying_group_state)
+            return;
+        if (idx.isValid() && impl_ref.groups->is_group(idx))
+            impl_ref.groups->set_collapsed(impl_ref.groups->group_key_at(idx.row()), false);
+    });
+    // 分组模式（§6.2：月份 | 相机型号 | 源格式 + 无分组）——键由模型出、节名由代理出
+    connect(d.group_mode, &QComboBox::currentIndexChanged, this, [this](int) {
+        Impl &impl_ref = *impl_;
+        impl_ref.set_group_mode(pp::GroupMode(impl_ref.group_mode->currentData().toInt()));
+    });
     // G5（2026-09-20 R1 修订）：底栏开始按钮运行中保持"开始"且禁用 → 取消唯一入口 = 运行页
     connect(d.start, &QPushButton::clicked, this, &MainWindow::on_start);
 
@@ -1083,6 +1235,24 @@ void MainWindow::wire() {
             [this] { impl_->on_content_changed(); });
     connect(d.model, &FileListModel::exception_changed, this,
             [this](std::size_t) { impl_->sync_exceptions(); });
+    // M4-T11：勾选集合变化 → 底栏"已选 N / M"由 content_changed → refresh_status 承担；分类面板
+    // 的高亮只跟随**选中项**（sync_selection 里刷新），与勾选集合无关（勾选不改变归属）。
+    // 分组摘要批次就绪 → 分组视图重建（节头/节数变化；重建后恢复展开态与选中）
+    connect(d.model, &FileListModel::group_source_changed, this,
+            [this] { impl_->rebuild_group_view(); });
+    // 分组结构变化（重建/reset）→ 跨列节头 + 展开态 + 选中恢复
+    connect(d.groups, &QAbstractItemModel::modelReset, this,
+            [this] { impl_->rebuild_group_view(); });
+
+    // ---- M4-T11：分类面板接线（§6.2）----
+    // CRUD/颜色/热键改动 → 立即落盘 classes.json（§6.2「打标即写 registry」的持久化面）
+    connect(d.classify_panel, &ClassifyPanel::registry_changed, this,
+            [this] { impl_->save_classes(); });
+    // 被拒操作的非模态反馈（不弹对话框：面板的对话框只在用户主动打开的菜单项里）
+    connect(d.classify_panel, &ClassifyPanel::error_occurred, this, [](const QString &message) {
+        std::fprintf(stderr, "ui: classify: %s\n", message.toUtf8().constData());
+        std::fflush(stderr);
+    });
 
     // ---- M4-T10：中栏预览面板接线（§6.1）----
     // 卡头（pill = 文件名，hint = 尺寸·位深·色彩空间）由面板的 display_changed 驱动；
@@ -1094,10 +1264,22 @@ void MainWindow::wire() {
         impl_ref.preview_pill->setVisible(!file_name.isEmpty()); // 原型：有内容才画药丸
         impl_ref.preview_hint->set_full_text(impl_ref.preview_panel->current_info_text());
     });
-    // 打标动作**接线位（W2-T11）**：`class_hotkey(char)` → 注册表 assign + 列表/分类面板刷新。
-    // T10 只把热键与提示表（§6.1）落地，不实现归属（圈选/CRUD/持久化归 T11）；故此处**不连接**，
-    // 按键也不会外泄（面板内部消费，见 preview_panel.cpp 的键盘路由）。
-    // 同理不接 `zoom_changed`：适应/1:1 是面板内部显示态（无外部状态需要同步）。
+    // 打标接线（W2-T11 接通）：预览面板的 `class_hotkey`（'1'..'9' 打标 / '0' 清除）→ 注册表。
+    // 归属对象 = 当前选中集（多选 = 批量打标，与勾选/批量语义一致）；无选中 → 预览当前项。
+    connect(d.preview_panel, &PreviewPanel::class_hotkey, this, [this](QChar key) {
+        Impl &impl_ref = *impl_;
+        const char k = key.toLatin1();
+        if (k == '0') {
+            impl_ref.apply_class_to_selection(QString());
+            return;
+        }
+        for (const pp::ClassDef &c : impl_ref.classes.classes) {
+            if (c.hotkey == k) {
+                impl_ref.apply_class_to_selection(QString::fromStdString(c.id));
+                return;
+            }
+        }
+    });
 
     // 探测完成 → alpha 预检。注意：这不是 U4 的 ready→apply_thumb 连接（那个由模型内部自理），
     // 只是消费方对同一信号只读旁路，不与模型竞争写入。
@@ -1174,6 +1356,11 @@ void MainWindow::on_start() {
         QMessageBox::warning(this, tr("无法开始"), tr("没有文件"));
         return;
     }
+    // M4-T11（§6.2/D2）：勾选 = 参与运行集合 —— 未勾选任何文件 = 无参与文件
+    if (d.model->checked_count() == 0) {
+        QMessageBox::warning(this, tr("无法开始"), tr("未勾选任何文件"));
+        return;
+    }
     const QString reason = d.page_output->ready_to_start();
     if (!reason.isEmpty()) {
         QMessageBox::warning(this, tr("无法开始"), reason);
@@ -1207,10 +1394,15 @@ void MainWindow::on_start() {
         }
     }
 
+    // 参与运行集合（M4-T11：勾选口径；顺序 = 列表行序）
+    const std::vector<std::size_t> run_rows = d.model->checked_rows();
+    std::vector<pp::FileEntry> entries = d.model->checked_entries(); // 含单文件例外（引擎侧生效）
+    const std::size_t total = entries.size();
+
     if (cfg.metadata_only) {
         QStringList bad;
-        for (std::size_t i = 0; i < d.model->size(); ++i) {
-            const QString name = path_text(d.model->row(i).entry.src);
+        for (std::size_t k = 0; k < total; ++k) {
+            const QString name = path_text(entries[k].src);
             const QString suffix = QFileInfo(name).suffix().toLower();
             if (!is_metadata_only_format(suffix))
                 bad << name;
@@ -1232,14 +1424,13 @@ void MainWindow::on_start() {
     }
 
     QStringList names;
-    names.reserve(static_cast<int>(d.model->size()));
-    for (std::size_t i = 0; i < d.model->size(); ++i) {
-        names << path_text(d.model->row(i).entry.src);
-    }
-    std::vector<pp::FileEntry> entries = d.model->entries(); // 含单文件例外（引擎侧生效）
-    const std::size_t total = entries.size();
-    for (std::size_t i = 0; i < total; ++i)
-        d.model->set_state(i, pp::FileState::Queued);
+    names.reserve(static_cast<int>(total));
+    for (const pp::FileEntry &entry : entries)
+        names << path_text(entry.src);
+
+    for (const std::size_t row : run_rows)
+        d.model->set_state(row, pp::FileState::Queued); // 只复位本批（参与运行）行的状态
+    d.run_rows = run_rows;                              // ev.index（提交序号）→ 列表行号的映射
     d.run_total = total;
     d.run_terminal = 0;
     d.run_done = 0;
@@ -1302,6 +1493,16 @@ void MainWindow::lock_for_run(bool lock) {
     // （预览本身无修改语义，读图不受运行影响）。
     if (d.preview_panel != nullptr)
         d.preview_panel->set_locked(lock);
+    // M4-T11：左栏分类面板同样运行期只读；卡头 hint 按 mockup 切换（"1–9 键打标"/"运行中只读"、
+    // "拖放添加"/"运行中锁定"）
+    if (d.classify_panel != nullptr)
+        d.classify_panel->set_locked(lock);
+    if (d.classify_hint != nullptr)
+        d.classify_hint->set_full_text(lock ? tr("运行中只读") : tr("1–9 键打标"));
+    if (d.file_hint != nullptr)
+        d.file_hint->set_full_text(lock ? tr("运行中锁定") : tr("拖放添加"));
+    if (d.group_mode != nullptr)
+        d.group_mode->setEnabled(!lock); // mockup run-dark：分组下拉置灰
     if (lock)
         set_current_page(3); // stack 锁到运行页
     refresh_status();
@@ -1310,6 +1511,7 @@ void MainWindow::lock_for_run(bool lock) {
 void MainWindow::refresh_status() {
     Impl &d = *impl_;
     const std::size_t count = d.model->size();
+    const std::size_t checked = d.model->checked_count();
     const std::size_t unsupported = d.model->unsupported_count();
     const std::size_t exceptions = d.model->exception_count();
     const QString reason = d.page_output->ready_to_start();
@@ -1328,10 +1530,13 @@ void MainWindow::refresh_status() {
     } else if (!reason.isEmpty()) {
         text = reason;
         invalid = true;
+    } else if (checked == 0) {
+        // M4-T11（§6.2/D2）：勾选 = 参与运行集合；未勾选 = 无参与文件
+        text = tr("未勾选任何文件");
+        invalid = true;
     } else {
-        // §9.1 底栏 = 选中摘要 · 输出摘要 · [开始运行]。
-        // 勾选集合（参与运行的子集）由 T11 落地；当前参与集 = 全部文件（语义不变）。
-        text = tr("已选 %1 / %2 个文件 · 就绪").arg(count).arg(count);
+        // §9.1 底栏 = 选中摘要 · 输出摘要 · [开始运行]（mockup："已选 12 / 24 个文件 · 就绪"）
+        text = tr("已选 %1 / %2 个文件 · 就绪").arg(checked).arg(count);
     }
     if (exceptions > 0)
         text += tr(" · %1 个例外").arg(exceptions);
@@ -1367,7 +1572,8 @@ void MainWindow::refresh_status() {
 
     // G5（2026-09-20 R1 修订）：底栏按钮恒为"开始"；运行中禁用（取消只在运行页）。
     // M4-T9：文案按 mockup .go 改「▶  开始运行」；"运行中变状态"归 W3-T14。
-    const bool can_start = !d.running && count > 0 && reason.isEmpty();
+    // M4-T11：可开始还需勾选集非空（勾选 = 参与运行集合）
+    const bool can_start = !d.running && count > 0 && checked > 0 && reason.isEmpty();
     d.start->setText(tr("▶  开始运行"));
     d.start->setEnabled(can_start);
     const bool has_selection = d.view->selectionModel() != nullptr &&
@@ -1381,7 +1587,137 @@ void MainWindow::save_session() {
     d.settings.last_out_root = d.page_output->out_root().toStdString();
     d.settings.last_preset = d.last_preset_path.toStdString();
     pp::save_settings(pp::platform::settings_file(), d.settings);
+    d.save_classes();        // §6.2：分类归属随会话落盘（打标期已即时写；此处兜底）
     d.save_splitter_state(); // §9.1：三栏尺寸持久化（QSettings）
+}
+
+// ---------------------------------------------------------------------------
+// M4-T11：左栏（勾选 / 自动分组 / 分类面板）
+// ---------------------------------------------------------------------------
+
+void MainWindow::Impl::load_classes() {
+    if (classes_file.isEmpty())
+        return;
+    std::string err;
+    if (!classes.load(std::filesystem::path(classes_file.toStdString()), &err)) {
+        // 损坏的注册表：**不改动用户文件**、保持默认模板并在 stderr 明说（不静默）
+        std::fprintf(stderr, "ui: classes.json load failed (%s): %s\n",
+                     classes_file.toUtf8().constData(), err.c_str());
+        std::fflush(stderr);
+    }
+}
+
+void MainWindow::Impl::save_classes() {
+    if (classes_file.isEmpty())
+        return;
+    std::string err;
+    if (!classes.save(std::filesystem::path(classes_file.toStdString()), &err)) {
+        std::fprintf(stderr, "ui: classes.json save failed (%s): %s\n",
+                     classes_file.toUtf8().constData(), err.c_str());
+        std::fflush(stderr);
+        return;
+    }
+    // §6.1：预览面板的热键提示表随注册表（增删改名/热键）动态重生成
+    if (preview_panel != nullptr)
+        preview_panel->set_class_registry(&classes);
+}
+
+void MainWindow::Impl::apply_class_to_selection(const QString &class_id) {
+    if (running) // G5：分类只读（快捷键已在预览面板层锁掉，这里再兜一层）
+        return;
+    std::vector<std::size_t> targets;
+    if (view->selectionModel() != nullptr) {
+        for (const QModelIndex &idx : view->selectionModel()->selectedIndexes()) {
+            const int r = proxy->mapToSource(groups->mapToSource(idx)).row();
+            if (r < 0 || std::size_t(r) >= model->size())
+                continue;
+            const std::size_t row = std::size_t(r);
+            if (std::find(targets.begin(), targets.end(), row) == targets.end())
+                targets.push_back(row);
+        }
+    }
+    if (targets.empty()) {
+        // 无选中（或选中被过滤隐藏）→ 打给预览当前项（§6.1 热键打标的"0 交互成本"路径）
+        const int cur = preview_panel != nullptr ? preview_panel->current_index() : -1;
+        if (cur >= 0 && std::size_t(cur) < model->size())
+            targets.push_back(std::size_t(cur));
+    }
+    if (targets.empty())
+        return;
+    for (const std::size_t row : targets)
+        model->set_class(row, class_id.toStdString()); // 一文件一分类（空 id = 清除归属）
+    save_classes(); // 打标即写 registry（一次落盘；逐行写会放大 IO）
+    sync_class_views(targets.front());
+    w->refresh_status();
+}
+
+void MainWindow::Impl::sync_class_views(std::size_t row) {
+    if (classify_panel == nullptr)
+        return;
+    const QString class_id =
+        row < model->size() ? QString::fromStdString(model->class_id_of(row)) : QString();
+    classify_panel->set_current_class_id(class_id); // .cls-row.on 跟随选中（§5.2 同一条跟随口径）
+}
+
+void MainWindow::Impl::rebuild_group_view() {
+    if (view == nullptr || groups == nullptr)
+        return;
+    // 视图侧状态在模型 reset 之后是**延迟**重建的（QTreeView 内部 delayed layout）：此刻调
+    // expandAll()/collapse() 会与随后到来的布局互相覆盖。故统一推迟到下一轮事件循环落地。
+    QTimer::singleShot(0, w, [this] { apply_group_view_state(); });
+}
+
+void MainWindow::Impl::apply_group_view_state() {
+    if (view == nullptr || groups == nullptr)
+        return;
+    applying_group_state = true; // 程序化展开/折叠不写入折叠记忆（见 collapsed/expanded 接线）
+    // 节头跨两列（mockup .ghead 通栏；节头本身不参与勾选/选择）
+    for (int g = 0; g < groups->group_count(); ++g) {
+        const QModelIndex idx = groups->group_index(g);
+        if (idx.isValid())
+            view->setFirstColumnSpanned(g, QModelIndex(), true);
+    }
+    // 重建（reset）会丢选中 → 按路径恢复（被搜索过滤隐藏时不越权恢复）。
+    // 注意顺序：QTreeView::scrollTo（setCurrentIndex 内部）会**展开**当前项的祖先，故选中恢复
+    // 必须排在展开态落地**之前**，否则用户的折叠会被"露出当前项"覆盖。
+    restore_selection_by_path(last_selected_path);
+    // 展开态：默认全展开（mockup：节头 + 行平铺）；用户折叠过的节按代理记的键保持折叠（最终态）
+    view->expandAll();
+    for (int g = 0; g < groups->group_count(); ++g) {
+        if (!groups->is_collapsed(groups->group_key_at(g)))
+            continue;
+        const QModelIndex idx = groups->group_index(g);
+        if (idx.isValid())
+            view->collapse(idx);
+    }
+    applying_group_state = false;
+}
+
+void MainWindow::Impl::restore_selection_by_path(const QString &path) {
+    if (view->selectionModel() == nullptr || path.isEmpty())
+        return;
+    for (std::size_t i = 0; i < model->size(); ++i) {
+        if (QString::fromStdString(model->row(i).entry.src.string()) != path)
+            continue;
+        const QModelIndex src = model->index(int(i), 0);
+        const QModelIndex filtered = proxy->mapFromSource(src);
+        if (!filtered.isValid())
+            return; // 被搜索过滤隐藏
+        const QModelIndex group_idx = groups->mapFromSource(filtered);
+        if (!group_idx.isValid())
+            return;
+        view->setCurrentIndex(group_idx);
+        view->selectionModel()->select(group_idx, QItemSelectionModel::ClearAndSelect |
+                                                      QItemSelectionModel::Rows);
+        return;
+    }
+}
+
+void MainWindow::Impl::set_group_mode(pp::GroupMode mode) {
+    model->set_group_mode(mode);  // 键（§6.2 三态 + 无分组）
+    groups->set_group_mode(mode); // 节名文案
+    groups->rebuild();
+    rebuild_group_view();
 }
 
 // ---------------------------------------------------------------------------
@@ -1403,6 +1739,39 @@ void MainWindow::Impl::refresh_theme() {
     // M4-T10：预览面板的本地 QSS（徽标/chip/底条）随 tokens 重放（舞台框仍走上面的骨架 QSS）
     if (preview_panel != nullptr)
         preview_panel->set_tokens(tokens);
+    // M4-T11：分类面板（行字色/计数色/新建钮）随 tokens 重放
+    if (classify_panel != nullptr)
+        classify_panel->set_tokens(tokens);
+    // M4-T11：左栏控件样式（mockup .mini-btn / .search / .combo / .groupby；tokens 单源）
+    {
+        const QString mini =
+            QStringLiteral("QToolButton#pp-add, QToolButton#pp-remove-sel { background:%1; "
+                           "border:1px solid %2; border-radius:%3px; color:%4; "
+                           "font-weight:600; padding:0 %5px; }"
+                           "QToolButton#pp-add:disabled, QToolButton#pp-remove-sel:disabled "
+                           "{ color:%6; }")
+                .arg(theme::css_color(tokens.control), theme::css_color(tokens.control_bd))
+                .arg(theme::Metrics::control_radius)
+                .arg(theme::css_color(tokens.text2), QString::number(theme::Metrics::pill_pad_x),
+                     theme::css_color(tokens.text3));
+        const QString input =
+            QStringLiteral("background:%1; border:1px solid %2; "
+                           "border-radius:%3px; color:%4; padding:0 8px;")
+                .arg(theme::css_color(tokens.control), theme::css_color(tokens.control_bd))
+                .arg(theme::Metrics::control_radius)
+                .arg(theme::css_color(tokens.text));
+        if (add_btn != nullptr)
+            add_btn->setStyleSheet(mini);
+        if (remove_sel != nullptr)
+            remove_sel->setStyleSheet(mini);
+        if (search != nullptr)
+            search->setStyleSheet(input);
+        if (group_mode != nullptr)
+            group_mode->setStyleSheet(input);
+        if (groupby_label != nullptr)
+            groupby_label->setStyleSheet(
+                QStringLiteral("color:%1").arg(theme::css_color(tokens.text3)));
+    }
     if (app_icon != nullptr)
         app_icon->setPixmap(app_icon_pixmap(tokens.accent, 18));
     for (StepButton *step : {step_meta, step_output, step_run}) {
@@ -1426,7 +1795,7 @@ void MainWindow::Impl::refresh_theme() {
         }
     }
     // 卡片阴影（§9.2 浅色卡 0 1px 4px rgba(16,24,40,.06)；深色无阴影）
-    for (QFrame *card : {left_card, preview_card}) {
+    for (QFrame *card : {left_card, classify_card, preview_card}) {
         if (card == nullptr)
             continue;
         if (tokens.shadow_blur > 0) {
@@ -1627,6 +1996,9 @@ void MainWindow::Impl::on_content_changed() {
             // M4-T10：中栏预览面板的文件集合（列表顺序 = 翻图顺序；集合未变则不打扰）
             if (preview_panel != nullptr)
                 preview_panel->set_files(paths);
+            // M4-T11（§6.2）：分类归属的惰性清理（只清理"文件已不存在"的项；列表变化时才做，
+            // 避免运行期逐事件 IO）
+            classes.prune_missing();
             bool any_alpha = false;
             for (std::size_t i = 0; i < model->size(); ++i) {
                 const FileRow &row = model->row(i);
@@ -1650,7 +2022,7 @@ void MainWindow::Impl::sync_selection() {
     bool has = false;
     if (view->selectionModel() != nullptr) {
         for (const QModelIndex &idx : view->selectionModel()->selectedIndexes()) {
-            const int row = proxy->mapToSource(idx).row();
+            const int row = proxy->mapToSource(groups->mapToSource(idx)).row();
             if (row < 0 || static_cast<std::size_t>(row) >= model->size())
                 continue;
             if (first_row < 0)
@@ -1665,6 +2037,10 @@ void MainWindow::Impl::sync_selection() {
         preview_panel->set_current(first_row);
     page_meta->set_selected_files(paths);
     remove_sel->setEnabled(!running && has);
+    // M4-T11：分类面板高亮跟随选中（§5.2 同一条跟随口径）；分组重建后据此恢复选中
+    if (has && !paths.isEmpty())
+        last_selected_path = paths.first();
+    sync_class_views(first_row >= 0 ? std::size_t(first_row) : std::size_t(-1));
 }
 
 void MainWindow::Impl::sync_exceptions() {
@@ -1691,7 +2067,7 @@ void MainWindow::Impl::remove_selected() {
         return;
     QList<int> rows;
     for (const QModelIndex &idx : view->selectionModel()->selectedIndexes()) {
-        const int row = proxy->mapToSource(idx).row();
+        const int row = proxy->mapToSource(groups->mapToSource(idx)).row();
         if (row >= 0 && !rows.contains(row))
             rows << row;
     }
@@ -1769,7 +2145,11 @@ void MainWindow::Impl::open_logs() {
 }
 
 void MainWindow::Impl::handle_file_event(const pp::FileEvent &ev) {
-    if (ev.index >= model->size())
+    // M4-T11：ev.index = 提交序号（仅勾选文件）→ 映射回列表行号再落状态
+    if (ev.index < 0 || std::size_t(ev.index) >= run_rows.size())
+        return;
+    const std::size_t row = run_rows[std::size_t(ev.index)];
+    if (row >= model->size())
         return;
     switch (ev.state) { // 计数先于 set_state：set_state 同步触发 content_changed → refresh_status
     case pp::FileState::Done:
@@ -1790,7 +2170,7 @@ void MainWindow::Impl::handle_file_event(const pp::FileEvent &ev) {
     default:
         break;
     }
-    model->set_state(ev.index, ev.state);
+    model->set_state(row, ev.state);
     page_run->on_event(ev);
     w->refresh_status();
 }
@@ -2572,13 +2952,542 @@ void MainWindow::Impl::smoke_probe_preview() {
     pump(120);
 }
 
+// ---------------------------------------------------------------------------
+// M4-T11 文件列表自检（§3.6 roles + §6.2 勾选/正交搜索/自动分组节头）
+//   自动化部分：roles 可读性与可勾选标志、真实鼠标点击勾选（自绘命中框）、内容列不误触勾选、
+//   搜索过滤与勾选正交（过滤不丢勾选/不丢计数）、分组节 = 组名+计数（三态 + 无分组，节内计数
+//   合计 = 可见行数，节内行序稳定）、节头跨列与展开态。
+//   手测部分（W5 走查清单）：拖拽分栏后左栏下限、节头折叠手感、万级文件的滚动流畅度。
+// ---------------------------------------------------------------------------
+
+void MainWindow::Impl::smoke_probe_filelist() {
+    if (model->empty()) {
+        smoke_fail(MainWindow::tr("文件列表自检：列表为空"));
+        return;
+    }
+    wait_thumbs(kThumbWaitMs);
+    if (!wait_for([this] { return model->group_scan_idle(); }, 15000))
+        smoke_fail(MainWindow::tr("分组摘要扫描未在 15s 内收敛"));
+
+    // ---- (a) §3.6 追加 roles：CheckState（Qt 标准）/ ClassId / GroupKey ----
+    const QModelIndex src0 = model->index(0, 0);
+    const bool checkable = (model->flags(src0) & Qt::ItemIsUserCheckable) != 0;
+    const QVariant check_state = src0.data(Qt::CheckStateRole);
+    const QVariant class_id = src0.data(FileListModel::ClassIdRole);
+    const QVariant group_key = src0.data(FileListModel::GroupKeyRole);
+    std::printf("UI-SMOKE filelist-roles: checkable=%d check_state=%d class_id=\"%s\" "
+                "group_key=\"%s\" scanned=%d\n",
+                checkable ? 1 : 0, check_state.toInt(), qUtf8Printable(class_id.toString()),
+                qUtf8Printable(group_key.toString()), model->group_source_scanned(0) ? 1 : 0);
+    std::fflush(stdout);
+    if (!checkable)
+        smoke_fail(MainWindow::tr("文件行未置 Qt::ItemIsUserCheckable（勾选无入口）"));
+    if (!check_state.isValid() || check_state.toInt() != int(Qt::Checked))
+        smoke_fail(MainWindow::tr("默认勾选不是 Qt::Checked（实为 %1）").arg(check_state.toInt()));
+    if (!class_id.isValid() || !group_key.isValid())
+        smoke_fail(MainWindow::tr("ClassIdRole / GroupKeyRole 不可读"));
+    for (std::size_t i = 0; i < model->size(); ++i) {
+        if (!model->group_source_scanned(i)) {
+            smoke_fail(MainWindow::tr("第 %1 行的分组摘要未回填").arg(static_cast<int>(i)));
+            break;
+        }
+    }
+
+    // ---- (b) 勾选：真实鼠标点击（列 0 自绘命中框）→ 取消/恢复；内容列不误触 ----
+    const int checked_all = int(model->checked_count());
+    if (checked_all != int(model->size()))
+        smoke_fail(MainWindow::tr("默认并非全勾：%1 / %2").arg(checked_all).arg(model->size()));
+    const auto click_at = [this](const QPoint &pos) {
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(pos),
+                          view->viewport()->mapToGlobal(pos), Qt::LeftButton, Qt::LeftButton,
+                          Qt::NoModifier);
+        QApplication::sendEvent(view->viewport(), &press);
+        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(pos),
+                            view->viewport()->mapToGlobal(pos), Qt::LeftButton, Qt::NoButton,
+                            Qt::NoModifier);
+        QApplication::sendEvent(view->viewport(), &release);
+        pump(30);
+    };
+    const QModelIndex group0 = groups->group_index(0);
+    if (!group0.isValid()) {
+        smoke_fail(MainWindow::tr("分组节缺失（groups->group_index(0) 无效）"));
+        return;
+    }
+    const QModelIndex first_file = groups->index(0, FileGroupProxyModel::kCheckColumn, group0);
+    if (!first_file.isValid()) {
+        smoke_fail(MainWindow::tr("首文件行缺失"));
+        return;
+    }
+    view->scrollTo(first_file);
+    pump(40);
+    const QRect check_hit = FileGroupDelegate::check_rect(view->visualRect(first_file));
+    const bool hit_ok = view->indexAt(check_hit.center()) == first_file;
+    click_at(check_hit.center());
+    const bool after_click = model->is_checked(0);
+    const int checked_after_click = int(model->checked_count());
+    click_at(check_hit.center()); // 恢复
+    // 内容列（文件名/缩略图区域）点击不得改勾选：命中框 = 列 1 左沿 + 40px
+    const QModelIndex first_content = groups->index(0, FileGroupProxyModel::kRowColumn, group0);
+    const QRect content_rect = view->visualRect(first_content);
+    const QPoint content_pos(content_rect.left() + 40, content_rect.center().y());
+    const bool content_hits = view->indexAt(content_pos) == first_content;
+    const bool checked_before_content = model->is_checked(0);
+    click_at(content_pos);
+    const bool checked_after_content = model->is_checked(0);
+    std::printf("UI-SMOKE filelist-check: hit=%d after_click=%d checked=%d/%d restore=%d "
+                "content_hit=%d content_toggle=%d\n",
+                hit_ok ? 1 : 0, after_click ? 1 : 0, checked_after_click, int(model->size()),
+                model->is_checked(0) ? 1 : 0, content_hits ? 1 : 0,
+                checked_before_content != checked_after_content ? 1 : 0);
+    std::fflush(stdout);
+    if (!hit_ok)
+        smoke_fail(MainWindow::tr("勾选框命中失败（visualRect 中心不是该行）"));
+    if (after_click)
+        smoke_fail(MainWindow::tr("点击勾选框未取消勾选"));
+    if (checked_after_click != checked_all - 1)
+        smoke_fail(MainWindow::tr("勾选计数不符：%1（期望 %2）")
+                       .arg(checked_after_click)
+                       .arg(checked_all - 1));
+    if (!model->is_checked(0))
+        smoke_fail(MainWindow::tr("二次点击未恢复勾选"));
+    if (content_hits && checked_before_content != checked_after_content)
+        smoke_fail(MainWindow::tr("内容列点击误触了勾选"));
+
+    // ---- (c) 搜索正交（§6.2/D2）：过滤只改可见性，勾选/计数/键都不丢 ----
+    const std::size_t probe_row = model->size() > 1 ? model->size() / 2 : 0;
+    const QString probe_name =
+        QString::fromStdString(model->row(probe_row).entry.src.filename().string());
+    const QString filter_text =
+        probe_name.left(std::max(1, int(probe_name.size()) - 4)); // 名称前缀（至少 1 字符）
+    const int checked_before_filter = int(model->checked_count());
+    model->set_checked(probe_row, false); // 该行取消勾选
+    const int checked_with_unchecked = int(model->checked_count());
+    search->setText(filter_text);
+    pump(60);
+    const int filtered_rows = proxy->rowCount();
+    const int checked_while_filtered = int(model->checked_count());
+    const bool key_preserved = !model->is_checked(probe_row) &&
+                               model->group_key_of(probe_row) ==
+                                   model->group_key_of(probe_row); // 键仍可读（不随过滤变化）
+    search->clear();
+    pump(60);
+    const int rows_restored = proxy->rowCount();
+    const bool check_survived = !model->is_checked(probe_row);
+    model->set_checked(probe_row, true);
+    std::printf("UI-SMOKE filelist-search: filter=\"%s\" visible=%d/%d checked %d→%d→%d "
+                "restored_rows=%d key_kept=%d check_survived=%d\n",
+                qUtf8Printable(filter_text), filtered_rows, int(model->size()),
+                checked_before_filter, checked_with_unchecked, checked_while_filtered,
+                rows_restored, key_preserved ? 1 : 0, check_survived ? 1 : 0);
+    std::fflush(stdout);
+    if (filtered_rows >= int(model->size()))
+        smoke_fail(MainWindow::tr("搜索未过滤任何行（filter=\"%1\" → %2 / %3）")
+                       .arg(filter_text)
+                       .arg(filtered_rows)
+                       .arg(model->size()));
+    if (checked_while_filtered != checked_with_unchecked)
+        smoke_fail(MainWindow::tr("过滤改变了勾选计数：%1 ≠ %2")
+                       .arg(checked_while_filtered)
+                       .arg(checked_with_unchecked));
+    if (!check_survived)
+        smoke_fail(MainWindow::tr("过滤丢失了勾选状态（§6.2 正交性）"));
+    if (rows_restored != int(model->size()))
+        smoke_fail(
+            MainWindow::tr("清空搜索后行数未复原：%1 ≠ %2").arg(rows_restored).arg(model->size()));
+
+    // ---- (d) 分组节 = 组名 + 计数（§6.2）；三态 + 「无分组」----
+    const auto dump_headers = [this](const char *mode_name) {
+        QStringList headers;
+        for (int g = 0; g < groups->group_count(); ++g)
+            headers << groups->header_text_at(g);
+        std::printf("UI-SMOKE filelist-group-%s: groups=%d [%s]\n", mode_name,
+                    groups->group_count(), qUtf8Printable(headers.join(QStringLiteral(" | "))));
+        std::fflush(stdout);
+    };
+    const auto check_structure = [this](const char *mode_name) -> bool {
+        // 节数/节内行数 = 由模型的 GroupKeyRole 直接推导（代理分组 == 模型键）
+        const int visible = proxy->rowCount();
+        int sum = 0;
+        for (int g = 0; g < groups->group_count(); ++g) {
+            const int size = groups->group_size_at(g);
+            sum += size;
+            const QString label = groups->group_label_at(g);
+            if (label.isEmpty() ||
+                groups->header_text_at(g) != FileGroupProxyModel::header_text(label, size)) {
+                smoke_fail(MainWindow::tr("节头文案不符（%1 的第 %2 节）")
+                               .arg(QString::fromLatin1(mode_name))
+                               .arg(g));
+                return false;
+            }
+            if (size <= 0) {
+                smoke_fail(MainWindow::tr("空节未被折叠（%1 第 %2 节）")
+                               .arg(QString::fromLatin1(mode_name))
+                               .arg(g));
+                return false;
+            }
+        }
+        if (sum != visible) {
+            smoke_fail(MainWindow::tr("节内计数合计 %1 ≠ 可见行数 %2（%3）")
+                           .arg(sum)
+                           .arg(visible)
+                           .arg(QString::fromLatin1(mode_name)));
+            return false;
+        }
+        return true;
+    };
+    // 视图侧状态（跨列节头/展开态）在模型 reset 后**延迟一轮**落地（见 apply_group_view_state）
+    // → 每次切模式后 pump 一次再断言
+    set_group_mode(pp::GroupMode::SourceFormat);
+    pump(40);
+    dump_headers("format");
+    check_structure("format");
+    set_group_mode(pp::GroupMode::Camera);
+    pump(40);
+    dump_headers("camera");
+    check_structure("camera");
+    set_group_mode(pp::GroupMode::None);
+    pump(40);
+    dump_headers("none");
+    check_structure("none");
+    if (groups->group_count() != 1 ||
+        groups->group_label_at(0) !=
+            QString::fromUtf8(pp::kNoGroupLabel.data(), int(pp::kNoGroupLabel.size()))) {
+        smoke_fail(
+            MainWindow::tr("「无分组」模式不是单节「%1」")
+                .arg(QString::fromUtf8(pp::kNoGroupLabel.data(), int(pp::kNoGroupLabel.size()))));
+    }
+    // 月份模式：标签形态 "YYYY 年 M 月"（mockup .ghead）；键形态由 core/classify 保证
+    set_group_mode(pp::GroupMode::Month);
+    pump(60);
+    dump_headers("month");
+    check_structure("month");
+    for (int g = 0; g < groups->group_count(); ++g) {
+        const QString key = groups->group_key_at(g);
+        const QString label = groups->group_label_at(g);
+        if (key.isEmpty())
+            continue; // 「无分组」
+        if (!(key.size() == 7 && key.at(4) == QLatin1Char('-')) ||
+            !label.endsWith(QStringLiteral("月"))) {
+            smoke_fail(
+                MainWindow::tr("月份节键/节名形态不符：key=\"%1\" label=\"%2\"").arg(key, label));
+            break;
+        }
+    }
+    // 节头跨列（mockup .ghead 通栏）+ 展开态
+    const QModelIndex g0 = groups->group_index(0);
+    const QRect header_rect = view->visualRect(g0);
+    std::printf("UI-SMOKE filelist-span: header=%dx%d viewport=%dx%d expanded=%d\n",
+                header_rect.width(), header_rect.height(), view->viewport()->width(),
+                view->viewport()->height(), view->isExpanded(g0) ? 1 : 0);
+    {
+        const QWidget *panel_w = view->parentWidget() != nullptr ? view->parentWidget() : view;
+        const QWidget *card_w =
+            panel_w->parentWidget() != nullptr ? panel_w->parentWidget() : panel_w;
+        std::printf("UI-SMOKE filelist-geometry: view=%dx%d panel=%dx%d card=%dx%d col=%dx%d "
+                    "colmin=%dx%d tree_min=%dx%d\n",
+                    view->width(), view->height(), panel_w->width(), panel_w->height(),
+                    card_w->width(), card_w->height(), left_col->width(), left_col->height(),
+                    left_col->minimumWidth(), left_col->minimumHeight(), view->minimumWidth(),
+                    view->minimumHeight());
+    }
+    std::fflush(stdout);
+    if (!header_rect.isValid() || header_rect.width() < view->viewport()->width() * 9 / 10)
+        smoke_fail(MainWindow::tr("节头未跨两列：%1 < 视口 %2")
+                       .arg(header_rect.width())
+                       .arg(view->viewport()->width()));
+    if (!view->isExpanded(g0))
+        smoke_fail(MainWindow::tr("分组节默认未展开"));
+    if (view->isExpanded(g0)) { // 折叠记忆：用户折叠 → 重建 → 仍折叠（走真实信号路径）
+        view->collapse(g0);
+        pump(40);
+        const bool collapsed_recorded = groups->is_collapsed(groups->group_key_at(0));
+        groups->rebuild();
+        pump(60);
+        const bool still_collapsed = !view->isExpanded(groups->group_index(0)) &&
+                                     groups->is_collapsed(groups->group_key_at(0));
+        std::printf("UI-SMOKE filelist-collapse: key=\"%s\" recorded=%d expanded_after=%d "
+                    "collapsed_flag=%d rebuilds=%d\n",
+                    qUtf8Printable(groups->group_key_at(0)), collapsed_recorded ? 1 : 0,
+                    view->isExpanded(groups->group_index(0)) ? 1 : 0,
+                    groups->is_collapsed(groups->group_key_at(0)) ? 1 : 0, groups->rebuilds());
+        std::fflush(stdout);
+        if (!collapsed_recorded)
+            smoke_fail(MainWindow::tr("用户折叠未被记为折叠态（§6.2 折叠记忆）"));
+        if (!still_collapsed)
+            smoke_fail(MainWindow::tr("折叠态未跨重建保持（§6.2 过滤/摘要变化不丢展开态）"));
+        groups->set_collapsed(groups->group_key_at(0), false);
+        groups->rebuild();
+        pump(40);
+    }
+
+    // ---- 归位：截图基准 = 全部勾选 + 按月份分组 + 首个文件 + 列表回顶（mockup 左栏口径）----
+    model->set_all_checked(true);
+    set_group_mode(pp::GroupMode::Month);
+    if (search->text() != QString())
+        search->clear();
+    if (view->selectionModel() != nullptr)
+        view->selectionModel()->clearSelection();
+    view->setCurrentIndex(QModelIndex()); // 当前项也会触发 scrollTo（会把节头滚出视口）→ 一并清掉
+    view->scrollToTop();
+    preview_panel->set_current(0);
+    pump(150);
+}
+
+// ---------------------------------------------------------------------------
+// M4-T11 分类面板自检（§6.2 CRUD / 热键打标 / 圈选 / classes.json 往返）
+//   自动化部分：面板行结构与「全部」虚拟分类、CRUD（增/改/色/热键唯一/删）、
+//   热键打标（预览接线位 → registry）、右键菜单项集合与圈选三项语义、
+//   classes.json 保存-重载往返、运行期只读。
+//   手测部分（W5 走查清单）：颜色对话框取色、重命名输入体验、原生右键菜单外观。
+// ---------------------------------------------------------------------------
+
+void MainWindow::Impl::smoke_probe_classify() {
+    if (classify_panel == nullptr || model->empty()) {
+        smoke_fail(MainWindow::tr("分类自检：面板或列表缺失"));
+        return;
+    }
+    // 冒烟不碰用户真实注册表：把 classes.json 指到仓库临时目录（结束前还原）
+    const QString saved_file = classes_file;
+    const pp::ClassRegistry backup = classes; // 快照（结束时还原）
+    const QString tmp_dir = repo_root() + QStringLiteral("/.cache/tmp/ui-smoke-classes");
+    QDir(tmp_dir).removeRecursively();
+    if (!QDir().mkpath(tmp_dir))
+        smoke_fail(MainWindow::tr("无法创建分类冒烟目录：%1").arg(tmp_dir));
+    classes_file = tmp_dir + QStringLiteral("/classes.json");
+
+    // ---- (a) 面板结构：1 + classes.size() 行；首行 = 「全部」（计数 = 文件总数）----
+    const QModelIndex g0 = groups->group_index(0);
+    const QModelIndex first_file = groups->index(0, FileGroupProxyModel::kRowColumn, g0);
+    if (first_file.isValid() && view->selectionModel() != nullptr) {
+        view->setCurrentIndex(first_file); // 选中首文件 → 面板 .on 跟随
+        view->selectionModel()->select(first_file, QItemSelectionModel::ClearAndSelect |
+                                                       QItemSelectionModel::Rows);
+    }
+    pump(60);
+    const int expect_rows = 1 + int(classes.classes.size());
+    std::printf("UI-SMOKE classify-panel: rows=%d expect=%d all_label=\"%s\" all_count=%d "
+                "total=%d active=%d hotkeys=[%s]\n",
+                classify_panel->row_count(), expect_rows,
+                qUtf8Printable(classify_panel->row_label(0)), classify_panel->row_count_value(0),
+                int(model->size()), classify_panel->row_active(0) ? 1 : 0,
+                qUtf8Printable(classify_panel->hotkey_labels().join(QLatin1Char(' '))));
+    std::fflush(stdout);
+    if (classify_panel->row_count() != expect_rows)
+        smoke_fail(MainWindow::tr("面板行数 %1 ≠ 1 + 类数 %2")
+                       .arg(classify_panel->row_count())
+                       .arg(expect_rows));
+    if (classify_panel->row_label(0) != tr("全部") ||
+        classify_panel->row_count_value(0) != int(model->size())) {
+        smoke_fail(MainWindow::tr("「全部」行不符：label=\"%1\" count=%2（期望 %3）")
+                       .arg(classify_panel->row_label(0))
+                       .arg(classify_panel->row_count_value(0))
+                       .arg(model->size()));
+    }
+    // 默认模板（§6.2）：精选/待定/废片 + 热键 1/2/3
+    const QStringList hotkeys = classify_panel->hotkey_labels();
+    if (hotkeys !=
+        QStringList{QStringLiteral("1=精选"), QStringLiteral("2=待定"), QStringLiteral("3=废片")}) {
+        smoke_fail(MainWindow::tr("默认类表/热键不符：[%1]").arg(hotkeys.join(QLatin1Char(' '))));
+    }
+
+    // ---- (b) 打标：预览热键接线位（class_hotkey → 注册表）----
+    const int target_row = preview_panel->current_index() >= 0 ? preview_panel->current_index() : 0;
+    const QString target_path =
+        QString::fromStdString(model->row(std::size_t(target_row)).entry.src.string());
+    const auto send_hotkey = [this](int key, const char *text) {
+        QWidget *target =
+            view != nullptr ? static_cast<QWidget *>(view) : static_cast<QWidget *>(w);
+        target->setFocus();
+        QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier, QString::fromLatin1(text));
+        QApplication::sendEvent(target, &press);
+        pump(40);
+    };
+    send_hotkey(Qt::Key_2, "2"); // → 待定（maybe）
+    const std::optional<std::string> tagged =
+        classes.class_of(std::filesystem::path(target_path.toStdString()));
+    pump(60);
+    const QString model_class = QString::fromStdString(model->class_id_of(std::size_t(target_row)));
+    const QVariant dot = model->index(target_row, 0).data(Qt::DecorationRole);
+    const int maybe_count = int(model->class_file_count("maybe"));
+    std::printf("UI-SMOKE classify-tag: row=%d file=\"%s\" registry=%s model_class=\"%s\" "
+                "dot_valid=%d maybe_count=%d panel_count=%d\n",
+                target_row, qUtf8Printable(QFileInfo(target_path).fileName()),
+                tagged.has_value() ? tagged->c_str() : "<none>", qUtf8Printable(model_class),
+                dot.isValid() ? 1 : 0, maybe_count,
+                classify_panel->row_count_value(2)); // 行 2 = 待定（默认模板顺序）
+    std::fflush(stdout);
+    if (tagged.value_or("") != "maybe")
+        smoke_fail(MainWindow::tr("热键 '2' 未把文件标为「待定」（实为 %1）")
+                       .arg(QString::fromStdString(tagged.value_or("<none>"))));
+    if (model_class != QLatin1String("maybe"))
+        smoke_fail(MainWindow::tr("ClassIdRole 未跟随打标：\"%1\"").arg(model_class));
+    if (!dot.isValid())
+        smoke_fail(MainWindow::tr("装饰角色（分类色点）未给出颜色"));
+    if (classify_panel->row_count_value(2) != maybe_count)
+        smoke_fail(MainWindow::tr("面板「待定」计数 %1 ≠ 模型计数 %2")
+                       .arg(classify_panel->row_count_value(2))
+                       .arg(maybe_count));
+
+    // ---- (c) 右键菜单项集合 + 圈选三项语义 ----
+    QMenu *class_menu = classify_panel->build_row_menu(1); // 行 1 = 精选
+    QStringList class_actions;
+    for (QAction *action : class_menu->actions()) {
+        if (!action->isSeparator())
+            class_actions << action->text();
+    }
+    delete class_menu;
+    QMenu *all_menu = classify_panel->build_row_menu(0); // 行 0 = 「全部」
+    QStringList all_actions;
+    for (QAction *action : all_menu->actions()) {
+        if (!action->isSeparator())
+            all_actions << action->text();
+    }
+    delete all_menu;
+    const QStringList expect_class{QStringLiteral("全选该类"), QStringLiteral("反选该类"),
+                                   QStringLiteral("清空勾选"), QStringLiteral("重命名…"),
+                                   QStringLiteral("颜色…"),    QStringLiteral("热键…"),
+                                   QStringLiteral("删除")};
+    const QStringList expect_all{QStringLiteral("全选该类"), QStringLiteral("反选该类"),
+                                 QStringLiteral("清空勾选")};
+    std::printf("UI-SMOKE classify-menu: class=[%s] all=[%s]\n",
+                qUtf8Printable(class_actions.join(QLatin1Char(' '))),
+                qUtf8Printable(all_actions.join(QLatin1Char(' '))));
+    std::fflush(stdout);
+    if (class_actions != expect_class)
+        smoke_fail(MainWindow::tr("类行菜单不符：[%1]").arg(class_actions.join(QLatin1Char(' '))));
+    if (all_actions != expect_all)
+        smoke_fail(
+            MainWindow::tr("「全部」行菜单不符：[%1]").arg(all_actions.join(QLatin1Char(' '))));
+    // 圈选：该类全部取消 → 全选该类复原；反选该类；清空勾选
+    classify_panel->invert_class(QStringLiteral("maybe")); // 只有 1 个待定文件 → 取消
+    const int after_invert = int(model->checked_count());
+    classify_panel->check_class(QStringLiteral("maybe")); // 全选该类 → +1（其余不动）
+    const int after_check_class = int(model->checked_count());
+    classify_panel->clear_checks();
+    const int after_clear = int(model->checked_count());
+    classify_panel->check_class(QString()); // 「全部」= 全部文件
+    const int after_all = int(model->checked_count());
+    std::printf("UI-SMOKE classify-bulk: invert=%d check_class=%d clear=%d all=%d total=%d\n",
+                after_invert, after_check_class, after_clear, after_all, int(model->size()));
+    std::fflush(stdout);
+    if (after_invert != int(model->size()) - 1)
+        smoke_fail(MainWindow::tr("反选该类计数不符：%1（期望 %2）")
+                       .arg(after_invert)
+                       .arg(int(model->size()) - 1));
+    if (after_check_class != int(model->size()))
+        smoke_fail(MainWindow::tr("全选该类计数不符：%1").arg(after_check_class));
+    if (after_clear != 0)
+        smoke_fail(MainWindow::tr("清空勾选后仍有 %1 个勾选").arg(after_clear));
+    if (after_all != int(model->size()))
+        smoke_fail(MainWindow::tr("「全部」全选计数不符：%1").arg(after_all));
+
+    // ---- (d) CRUD（§6.2）：增 / 改名 / 颜色 / 热键唯一 / 删；「全部」不可改 ----
+    // 中文名 → ASCII slug 不可用 → id 走 "class" 兜底（id 是持久化键，显示名可随时改）
+    const bool created = classify_panel->new_class(QStringLiteral("旅行"), 0x1565C0u, '4');
+    const QString new_id =
+        classes.classes.empty() ? QString() : QString::fromStdString(classes.classes.back().id);
+    const bool slug_fallback = new_id == QLatin1String("class");
+    const bool dup_hotkey_rejected = !classify_panel->set_class_hotkey(new_id, '1');
+    const bool renamed = classify_panel->rename_class(new_id, QStringLiteral("远行"));
+    const bool recolored = classify_panel->set_class_color(new_id, 0xFF00FFu);
+    const bool all_immutable =
+        !classify_panel->rename_class(QString::fromUtf8(pp::ClassRegistry::kAllId.data(),
+                                                        int(pp::ClassRegistry::kAllId.size())),
+                                      QStringLiteral("x")) &&
+        !classify_panel->delete_class(QString::fromUtf8(pp::ClassRegistry::kAllId.data(),
+                                                        int(pp::ClassRegistry::kAllId.size())));
+    const std::size_t rows_after_create = classes.classes.size();
+    const pp::ClassDef *travel = classes.find(new_id.toStdString());
+    std::printf(
+        "UI-SMOKE classify-crud: created=%d id=\"%s\" slug_fallback=%d "
+        "dup_hotkey_rejected=%d renamed=%d recolored=%d classes=%d name=\"%s\" rgb=%06X "
+        "hotkey=%c all_immutable=%d\n",
+        created ? 1 : 0, qUtf8Printable(new_id), slug_fallback ? 1 : 0, dup_hotkey_rejected ? 1 : 0,
+        renamed ? 1 : 0, recolored ? 1 : 0, int(rows_after_create),
+        travel != nullptr ? travel->name.c_str() : "<none>", travel != nullptr ? travel->rgb : 0u,
+        travel != nullptr && travel->hotkey != 0 ? travel->hotkey : '-', all_immutable ? 1 : 0);
+    std::fflush(stdout);
+    if (!created || !dup_hotkey_rejected || !renamed || !recolored)
+        smoke_fail(MainWindow::tr("CRUD 失败：created=%1 dup_hotkey=%2 rename=%3 color=%4")
+                       .arg(created ? 1 : 0)
+                       .arg(dup_hotkey_rejected ? 1 : 0)
+                       .arg(renamed ? 1 : 0)
+                       .arg(recolored ? 1 : 0));
+    if (travel == nullptr || travel->name != "远行" || (travel->rgb & 0xFFFFFFu) != 0xFF00FFu)
+        smoke_fail(MainWindow::tr("CRUD 结果未落注册表"));
+    if (!all_immutable)
+        smoke_fail(MainWindow::tr("保留虚拟分类「全部」被改名/删除成功（应被拒）"));
+    if (classify_panel->row_count() != 1 + int(classes.classes.size()))
+        smoke_fail(MainWindow::tr("CRUD 后面板行数未跟随"));
+
+    // ---- (e) classes.json 往返（§6.2 持久化）----
+    save_classes(); // 打标 + CRUD 均已触发；这里显式落盘取文件
+    const std::filesystem::path file(classes_file.toStdString());
+    pp::ClassRegistry reloaded;
+    std::string load_err;
+    const bool loaded = reloaded.load(file, &load_err);
+    bool same = loaded && reloaded.classes.size() == classes.classes.size() &&
+                reloaded.assignment.size() == classes.assignment.size();
+    for (std::size_t i = 0; same && i < classes.classes.size(); ++i) {
+        const pp::ClassDef &a = classes.classes[i];
+        const pp::ClassDef &b = reloaded.classes[i];
+        same = a.id == b.id && a.name == b.name && a.rgb == b.rgb && a.hotkey == b.hotkey;
+    }
+    const std::optional<std::string> reloaded_class =
+        reloaded.class_of(std::filesystem::path(target_path.toStdString()));
+    std::printf("UI-SMOKE classify-roundtrip: file=\"%s\" loaded=%d classes=%d/%d "
+                "assignment=%d/%d same=%d tagged=%s err=\"%s\"\n",
+                qUtf8Printable(QFileInfo(classes_file).fileName()), loaded ? 1 : 0,
+                int(reloaded.classes.size()), int(classes.classes.size()),
+                int(reloaded.assignment.size()), int(classes.assignment.size()), same ? 1 : 0,
+                reloaded_class.has_value() ? reloaded_class->c_str() : "<none>", load_err.c_str());
+    std::fflush(stdout);
+    if (!loaded || !same)
+        smoke_fail(MainWindow::tr("classes.json 往返不符（loaded=%1 same=%2 err=%3）")
+                       .arg(loaded ? 1 : 0)
+                       .arg(same ? 1 : 0)
+                       .arg(QString::fromStdString(load_err)));
+    if (reloaded_class.value_or("") != "maybe")
+        smoke_fail(MainWindow::tr("往返后归属丢失：%1")
+                       .arg(QString::fromStdString(reloaded_class.value_or("<none>"))));
+
+    // ---- (f) 运行期只读（G5）：锁 → 行/新建钮置灰、菜单不弹 ----
+    classify_panel->set_locked(true);
+    const bool locked_rows_disabled =
+        classify_panel->row_widget(0) != nullptr && !classify_panel->row_widget(0)->isEnabled();
+    const int locked_checked = int(model->checked_count());
+    classify_panel->invert_class(QStringLiteral("maybe")); // 锁定时为 no-op
+    const bool lock_respected = int(model->checked_count()) == locked_checked;
+    classify_panel->set_locked(false);
+    std::printf("UI-SMOKE classify-lock: rows_disabled=%d bulk_noop=%d\n",
+                locked_rows_disabled ? 1 : 0, lock_respected ? 1 : 0);
+    std::fflush(stdout);
+    if (!locked_rows_disabled || !lock_respected)
+        smoke_fail(MainWindow::tr("运行期只读未生效（rows=%1 noop=%2）")
+                       .arg(locked_rows_disabled ? 1 : 0)
+                       .arg(lock_respected ? 1 : 0));
+
+    // ---- 归位：还原注册表快照与 classes.json 路径（截图基准不受冒烟污染）----
+    classes = backup;
+    classes_file = saved_file;
+    model->notify_class_changed();
+    classify_panel->set_registry(&classes);
+    preview_panel->set_class_registry(&classes);
+    model->set_all_checked(true);
+    if (view->selectionModel() != nullptr)
+        view->selectionModel()->clearSelection();
+    view->setCurrentIndex(QModelIndex());
+    pump(120);
+}
+
 void MainWindow::Impl::smoke_run(const QString &shots_dir) {
     // ---- M4-T9 骨架自检（窗口行为矩阵可自动化部分；先跑，之后截图归位 1440×900）----
     smoke_probe_lifecycle();
     smoke_probe_skeleton();
     smoke_probe_frameless();
     smoke_probe_theme();
-    smoke_probe_preview(); // M4-T10：预览面板（翻图/缩放/徽标/热键接线位）
+    smoke_probe_preview();  // M4-T10：预览面板（翻图/缩放/徽标/热键接线位）
+    smoke_probe_filelist(); // M4-T11：勾选/正交搜索/分组节（§3.6 roles + §6.2）
 
     // ---- 页 1（元数据）：等缩略图队列空 → 01-meta.png ----
     w->set_current_page(1);
@@ -2867,6 +3776,9 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
         dlg.close();
         pump(80);
     }
+
+    // ---- M4-T11：分类面板自检（放在截图之后：自检会临时改写注册表并在结束时还原）----
+    smoke_probe_classify();
 
     // ---- 断言 e：8 张 PNG 全部存在且 >10KB ----
     if (shots_dir.isEmpty()) {

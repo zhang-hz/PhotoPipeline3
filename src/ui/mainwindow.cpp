@@ -95,6 +95,7 @@
 #include "ui/paramform.h"
 #include "ui/preset_io.h"
 #include "ui/presets_dialog.h"
+#include "ui/preview_panel.h"
 #include "ui/settings_dialog.h"
 #include "ui/theme.h"
 #include "ui/thumbnails.h"
@@ -531,9 +532,14 @@ struct MainWindow::Impl {
     QPushButton *cap_close = nullptr;
     ElidedLabel *output_status = nullptr;
     QLabel *status_dot = nullptr;
-    ElidedLabel *preview_pill = nullptr; // 中栏卡头徽标（T10 填文件名）
+    ElidedLabel *preview_pill = nullptr; // 中栏卡头徽标（文件名，T10 填）
+    ElidedLabel *preview_hint = nullptr; // 中栏卡头右端 hint（尺寸·位深·色彩空间，T10 填）
     QFrame *left_card = nullptr;         // 左栏卡框（T11 填内容）
-    QFrame *preview_card = nullptr;      // 中栏卡框（T10 填内容）
+    QFrame *preview_card = nullptr;      // 中栏卡框（内嵌 T10 的 PreviewPanel）
+    // ---- M4-T10：常驻输入预览面板（§6.1）+ 分类注册表（热键表数据源）----
+    PreviewPanel *preview_panel = nullptr;
+    // 分类注册表的**当前实例**（T10 只读消费：热键提示表；T11 接管 CRUD/持久化/打标与勾选语义）
+    pp::ClassRegistry classes;
 
     // ---- 左：文件面板 ----
     QWidget *panel = nullptr;
@@ -628,6 +634,8 @@ struct MainWindow::Impl {
     void smoke_probe_frameless();
     void smoke_probe_theme();
     void smoke_probe_lifecycle();
+    // M4-T10 预览面板自检（§6.1：翻图/缩放/徽标/热键提示 + 热键接线位）
+    void smoke_probe_preview();
     static QString repo_root();
 };
 
@@ -933,7 +941,7 @@ void MainWindow::build_ui() {
     pv->addWidget(d.view, 1);
     left_layout->addWidget(d.panel, 1);
 
-    // 中栏卡：输入预览（T10 接 decode_preview + 缩放/翻图/徽标；本任务只给卡框与舞台）
+    // 中栏卡：输入预览（T10：卡头 = 文件名徽标 + 尺寸/位深/色彩空间 hint；卡体 = PreviewPanel）
     d.preview_card = new QFrame(d.splitter);
     d.preview_card->setObjectName(QStringLiteral("pp-card"));
     d.preview_card->setAttribute(Qt::WA_StyledBackground, true);
@@ -941,22 +949,17 @@ void MainWindow::build_ui() {
     preview_layout->setContentsMargins(0, 0, 0, 0);
     preview_layout->setSpacing(0);
     QLabel *preview_title = nullptr;
-    preview_layout->addWidget(
-        make_card_header(d.preview_card, tr("输入预览"), &preview_title, &d.preview_pill));
-    auto *stage = new QFrame(d.preview_card);
-    stage->setObjectName(QStringLiteral("pp-preview-stage"));
-    stage->setAttribute(Qt::WA_StyledBackground, true);
-    auto *stage_layout = new QVBoxLayout(stage);
-    stage_layout->setContentsMargins(10, 10, 10, 10);
-    auto *stage_hint = new ElidedLabel(stage);
-    stage_hint->setObjectName(QStringLiteral("pp-card-hint"));
-    stage_hint->setAlignment(Qt::AlignCenter);
-    stage_hint->set_full_text(tr("（预览面板占位：T10 接入 decode_preview）")); // §9.3 省略号
-    stage_layout->addWidget(stage_hint);
-    auto *stage_margin = new QHBoxLayout();
-    stage_margin->setContentsMargins(10, 10, 10, 10);
-    stage_margin->addWidget(stage);
-    preview_layout->addLayout(stage_margin, 1);
+    QWidget *preview_head =
+        make_card_header(d.preview_card, tr("输入预览"), &preview_title, &d.preview_pill);
+    d.preview_pill->setObjectName(QStringLiteral("pp-preview-pill")); // §9.3 pp-* 测试钩子
+    d.preview_hint = new ElidedLabel(preview_head);
+    d.preview_hint->setObjectName(QStringLiteral("pp-card-hint"));
+    d.preview_hint->setFont(theme::font(theme::Typography::hint_px));
+    if (auto *head_layout = qobject_cast<QHBoxLayout *>(preview_head->layout()))
+        head_layout->addWidget(d.preview_hint); // addStretch(1) 之后 = 右对齐（§9.3 超长省略号）
+    preview_layout->addWidget(preview_head);
+    d.preview_panel = new PreviewPanel(d.preview_card); // 舞台/翻图/缩放/徽标/热键提示
+    preview_layout->addWidget(d.preview_panel, 1);
 
     // 右栏：步骤内容区（QStacked 三页，W3 填内容）
     d.stack = new QStackedWidget(d.splitter);
@@ -1017,6 +1020,11 @@ void MainWindow::build_ui() {
     if (d.frameless != nullptr)
         d.frameless->set_caption_buttons(d.cap_min, d.cap_max, d.cap_close);
 
+    // 分类注册表 → 预览面板的热键提示表（§6.1「热键表随分类注册表动态生成」，消费 W1-T8 的
+    // classify 接口）。T10 只**只读消费**：注册表实例由本窗口持有，T11 接管 CRUD/持久化/打标
+    // 与勾选语义时共用同一实例（面板自动跟随，无需改面板）。
+    d.preview_panel->set_class_registry(&d.classes);
+
     d.refresh_theme(); // tokens 落地（明暗跟随系统）
 }
 
@@ -1075,6 +1083,22 @@ void MainWindow::wire() {
             [this] { impl_->on_content_changed(); });
     connect(d.model, &FileListModel::exception_changed, this,
             [this](std::size_t) { impl_->sync_exceptions(); });
+
+    // ---- M4-T10：中栏预览面板接线（§6.1）----
+    // 卡头（pill = 文件名，hint = 尺寸·位深·色彩空间）由面板的 display_changed 驱动；
+    // 热键提示表在 build_ui 里已 set_class_registry(&classes)（动态生成）。
+    connect(d.preview_panel, &PreviewPanel::display_changed, this, [this] {
+        Impl &impl_ref = *impl_;
+        const QString file_name = impl_ref.preview_panel->current_file_name();
+        impl_ref.preview_pill->set_full_text(file_name);
+        impl_ref.preview_pill->setVisible(!file_name.isEmpty()); // 原型：有内容才画药丸
+        impl_ref.preview_hint->set_full_text(impl_ref.preview_panel->current_info_text());
+    });
+    // 打标动作**接线位（W2-T11）**：`class_hotkey(char)` → 注册表 assign + 列表/分类面板刷新。
+    // T10 只把热键与提示表（§6.1）落地，不实现归属（圈选/CRUD/持久化归 T11）；故此处**不连接**，
+    // 按键也不会外泄（面板内部消费，见 preview_panel.cpp 的键盘路由）。
+    // 同理不接 `zoom_changed`：适应/1:1 是面板内部显示态（无外部状态需要同步）。
+
     // 探测完成 → alpha 预检。注意：这不是 U4 的 ready→apply_thumb 连接（那个由模型内部自理），
     // 只是消费方对同一信号只读旁路，不与模型竞争写入。
     connect(d.thumbs, &Thumbnailer::ready, this,
@@ -1274,6 +1298,10 @@ void MainWindow::lock_for_run(bool lock) {
     d.panel->setEnabled(!lock);
     d.page_meta->setEnabled(!lock);
     d.page_output->setEnabled(!lock);
+    // G5「预览只读、分类只读」：预览面板运行时锁**打标热键**（分类只读）；翻图/缩放仍可用
+    // （预览本身无修改语义，读图不受运行影响）。
+    if (d.preview_panel != nullptr)
+        d.preview_panel->set_locked(lock);
     if (lock)
         set_current_page(3); // stack 锁到运行页
     refresh_status();
@@ -1372,6 +1400,9 @@ void MainWindow::Impl::refresh_theme() {
     QApplication::setFont(theme::font(theme::Typography::base_px));
     // 骨架 QSS（只作用于 pp-* 钩子）；标题栏图标/步钮随主题改色
     w->setStyleSheet(theme::style_sheet(tokens));
+    // M4-T10：预览面板的本地 QSS（徽标/chip/底条）随 tokens 重放（舞台框仍走上面的骨架 QSS）
+    if (preview_panel != nullptr)
+        preview_panel->set_tokens(tokens);
     if (app_icon != nullptr)
         app_icon->setPixmap(app_icon_pixmap(tokens.accent, 18));
     for (StepButton *step : {step_meta, step_output, step_run}) {
@@ -1593,6 +1624,9 @@ void MainWindow::Impl::on_content_changed() {
         if (paths != cached_paths) {
             cached_paths = paths;
             page_meta->set_batch_files(paths); // 首文件时间预览（PageMeta 内部限扫 200）
+            // M4-T10：中栏预览面板的文件集合（列表顺序 = 翻图顺序；集合未变则不打扰）
+            if (preview_panel != nullptr)
+                preview_panel->set_files(paths);
             bool any_alpha = false;
             for (std::size_t i = 0; i < model->size(); ++i) {
                 const FileRow &row = model->row(i);
@@ -1612,17 +1646,23 @@ void MainWindow::Impl::on_content_changed() {
 
 void MainWindow::Impl::sync_selection() {
     QStringList paths;
+    int first_row = -1; // M4-T10：中栏预览跟随选中项（多选取首个）
     bool has = false;
     if (view->selectionModel() != nullptr) {
         for (const QModelIndex &idx : view->selectionModel()->selectedIndexes()) {
             const int row = proxy->mapToSource(idx).row();
             if (row < 0 || static_cast<std::size_t>(row) >= model->size())
                 continue;
+            if (first_row < 0)
+                first_row = row;
             paths << QString::fromStdString(
                 model->row(static_cast<std::size_t>(row)).entry.src.string());
             has = true;
         }
     }
+    // M4-T10：中栏预览（列表行号口径；无选中 → 面板回落到首个文件，与 §5.2 同一条跟随口径）
+    if (preview_panel != nullptr)
+        preview_panel->set_current(first_row);
     page_meta->set_selected_files(paths);
     remove_sel->setEnabled(!running && has);
 }
@@ -2358,12 +2398,187 @@ void MainWindow::Impl::smoke_probe_lifecycle() {
     std::fflush(stdout);
 }
 
+// ---------------------------------------------------------------------------
+// M4-T10 预览面板自检（§6.1 控件面 + 热键接线位）
+//   自动化部分：徽标文案恒显、缩放 chip 两枚、热键提示表（随注册表生成）、位置读数、
+//   翻图（next/previous → 索引/读数/出图）、缩放（适应/1:1 的绘制尺寸差异）、
+//   热键路由（未锁定发出 class_hotkey、锁定后不发出）。
+//   手测部分（W5 走查清单）：真实 48MP 点选的 250ms 主观手感、1:1 拖拽平移、快速翻图不堆积。
+// ---------------------------------------------------------------------------
+
+void MainWindow::Impl::smoke_probe_preview() {
+    if (preview_panel == nullptr) {
+        smoke_fail(MainWindow::tr("预览面板缺失（PreviewPanel 未建）"));
+        return;
+    }
+    if (model->empty()) {
+        smoke_fail(MainWindow::tr("预览自检：文件列表为空"));
+        return;
+    }
+    // 1:1 断言要读 model 的 probe 摘要（源尺寸）→ 先等缩略图通道把 probe 结果落进模型
+    wait_thumbs(kThumbWaitMs);
+
+    // ---- (a) 控件面：徽标恒显 / 缩放两枚 chip / 热键提示表（随 ClassRegistry 生成）----
+    QLabel *badge = preview_panel->findChild<QLabel *>(QStringLiteral("pp-preview-badge"));
+    QToolButton *zoom_fit =
+        preview_panel->findChild<QToolButton *>(QStringLiteral("pp-preview-zoom-fit"));
+    QToolButton *zoom_11 =
+        preview_panel->findChild<QToolButton *>(QStringLiteral("pp-preview-zoom-1to1"));
+    QStringList key_chips;
+    for (QLabel *chip : preview_panel->findChildren<QLabel *>(QStringLiteral("pp-preview-key")))
+        key_chips << chip->text();
+    QStringList key_names;
+    for (QLabel *label :
+         preview_panel->findChildren<QLabel *>(QStringLiteral("pp-preview-keyname")))
+        key_names << label->text();
+    std::printf("UI-SMOKE preview-controls: badge=\"%s\" zoom-fit=\"%s\" zoom-1:1=\"%s\" "
+                "keys=[%s] names=[%s] pos=\"%s\"\n",
+                badge != nullptr ? qUtf8Printable(badge->text()) : "<missing>",
+                zoom_fit != nullptr ? qUtf8Printable(zoom_fit->text()) : "<missing>",
+                zoom_11 != nullptr ? qUtf8Printable(zoom_11->text()) : "<missing>",
+                qUtf8Printable(key_chips.join(QLatin1Char(' '))),
+                qUtf8Printable(key_names.join(QLatin1Char(' '))),
+                qUtf8Printable(preview_panel->current_position_text()));
+    std::fflush(stdout);
+    if (badge == nullptr || badge->text() != QStringLiteral("输入 · 未修改像素")) {
+        smoke_fail(MainWindow::tr("预览徽标不是「输入 · 未修改像素」（%1）")
+                       .arg(badge != nullptr ? badge->text() : QStringLiteral("<missing>")));
+    }
+    if (zoom_fit == nullptr || zoom_11 == nullptr || zoom_11->text() != QStringLiteral("1:1")) {
+        smoke_fail(MainWindow::tr("缩放「适应 | 1:1」chip 缺失或不符"));
+    }
+    // 默认模板（§6.2）：精选/待定/废片（热键 1/2/3）+ 保留的「0 清除」
+    const QStringList expect_chips{QStringLiteral("1"), QStringLiteral("2"), QStringLiteral("3"),
+                                   QStringLiteral("0")};
+    if (key_chips != expect_chips)
+        smoke_fail(MainWindow::tr("热键提示 chip 表不符：%1").arg(key_chips.join(',')));
+    if (key_names.size() != 4 || key_names.at(0) != QStringLiteral("精选") ||
+        key_names.at(1) != QStringLiteral("待定") || key_names.at(2) != QStringLiteral("废片") ||
+        key_names.at(3) != QStringLiteral("清除")) {
+        smoke_fail(MainWindow::tr("热键提示名称表不符：%1").arg(key_names.join(',')));
+    }
+    if (preview_panel->current_position_text() != QStringLiteral("1 / %1").arg(model->size()))
+        smoke_fail(
+            MainWindow::tr("预览位置读数不符：%1").arg(preview_panel->current_position_text()));
+
+    const int original_index = preview_panel->current_index();
+
+    // ---- (b) 翻图：next/previous → 索引与读数跟随；出图在 5s 内落地 ----
+    preview_panel->next();
+    const int after_next = preview_panel->current_index();
+    preview_panel->previous();
+    const int after_prev = preview_panel->current_index();
+    if (after_next != original_index + 1 || after_prev != original_index)
+        smoke_fail(MainWindow::tr("翻图索引不符：%1→%2→%3")
+                       .arg(original_index)
+                       .arg(after_next)
+                       .arg(after_prev));
+    // 定位到第二张等出图（同时验证池的异步投递链路）
+    preview_panel->next();
+    const bool loaded = wait_for([this] { return preview_panel->image_visible(); }, 5000);
+    const QSize shown = preview_panel->displayed_size();
+    std::printf("UI-SMOKE preview-flip: index=%d pos=\"%s\" name=\"%s\" visible=%d "
+                "displayed=%dx%d\n",
+                preview_panel->current_index(),
+                qUtf8Printable(preview_panel->current_position_text()),
+                qUtf8Printable(preview_panel->current_file_name()), loaded ? 1 : 0, shown.width(),
+                shown.height());
+    std::fflush(stdout);
+    if (!loaded)
+        smoke_fail(
+            MainWindow::tr("翻图后 5s 内未出图（index=%1）").arg(preview_panel->current_index()));
+    if (preview_panel->current_info_text().isEmpty())
+        smoke_fail(MainWindow::tr("预览信息行为空（尺寸/位深/色彩空间未落地）"));
+
+    // ---- (c) 缩放：1:1 的绘制尺寸 = 源像素尺寸；适应 = 舞台内等比（两者对 64px 小图必须不同）----
+    const pp::ImageInfo current_info =
+        model->row(static_cast<std::size_t>(preview_panel->current_index())).info;
+    preview_panel->set_zoom_fit(false);
+    pump(60);
+    const QSize at_1to1 = preview_panel->displayed_size();
+    preview_panel->set_zoom_fit(true);
+    pump(60);
+    const QSize at_fit = preview_panel->displayed_size();
+    std::printf("UI-SMOKE preview-zoom: 1:1=%dx%d fit=%dx%d (source %dx%d)\n", at_1to1.width(),
+                at_1to1.height(), at_fit.width(), at_fit.height(), current_info.width,
+                current_info.height);
+    std::fflush(stdout);
+    if (at_1to1.width() != current_info.width || at_1to1.height() != current_info.height)
+        smoke_fail(MainWindow::tr("1:1 不是源像素尺寸：%1x%2 ≠ %3x%4")
+                       .arg(at_1to1.width())
+                       .arg(at_1to1.height())
+                       .arg(current_info.width)
+                       .arg(current_info.height));
+    if (at_fit == at_1to1)
+        smoke_fail(MainWindow::tr("适应与 1:1 绘制尺寸相同（%1x%2）——缩放未生效")
+                       .arg(at_fit.width())
+                       .arg(at_fit.height()));
+
+    // ---- (d) 热键路由 + 打标接线位：未锁定发出、锁定（G5 分类只读）不发出 ----
+    int hits = 0;
+    char last_key = 0;
+    const QMetaObject::Connection conn =
+        connect(preview_panel, &PreviewPanel::class_hotkey, w, [&hits, &last_key](QChar key) {
+            ++hits;
+            last_key = key.toLatin1();
+        });
+    const auto send_key = [this](int key, const char *text) {
+        QWidget *target =
+            view != nullptr ? static_cast<QWidget *>(view) : static_cast<QWidget *>(w);
+        target->setFocus();
+        QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier, QString::fromLatin1(text));
+        QApplication::sendEvent(target, &press);
+    };
+    send_key(Qt::Key_1, "1");
+    pump(40);
+    const int unlocked_hits = hits;
+    preview_panel->set_locked(true);
+    send_key(Qt::Key_1, "1");
+    pump(40);
+    const int locked_hits = hits;
+    preview_panel->set_locked(false);
+    disconnect(conn);
+    std::printf("UI-SMOKE preview-hotkey: unlocked=%d locked=%d last=\"%c\"\n", unlocked_hits,
+                locked_hits, last_key != 0 ? last_key : '?');
+    std::fflush(stdout);
+    if (unlocked_hits != 1 || locked_hits != 1 || last_key != '1')
+        smoke_fail(MainWindow::tr("热键路由不符：未锁定=%1 锁定=%2 末键=%3（期望 1/1/'1'）")
+                       .arg(unlocked_hits)
+                       .arg(locked_hits)
+                       .arg(QChar(last_key != 0 ? last_key : '?')));
+
+    // ---- (e) 快速翻图不堆积（§6.1）：连翻 8 张 → 池内队列深度恒 ≤1，且最终收敛到末张 ----
+    int max_pending = 0;
+    for (int i = 0; i < 8 && preview_panel->current_index() + 1 < static_cast<int>(model->size());
+         ++i) {
+        preview_panel->next();
+        pump(2); // 只推进 2ms（远短于一次解码）
+        max_pending = std::max(max_pending, preview_panel->pending_requests());
+    }
+    const int burst_index = preview_panel->current_index();
+    const bool burst_loaded = wait_for([this] { return preview_panel->image_visible(); }, 5000);
+    std::printf("UI-SMOKE preview-burst: index=%d queued_max=%d pending_now=%d visible=%d\n",
+                burst_index, max_pending, preview_panel->pending_requests(), burst_loaded ? 1 : 0);
+    std::fflush(stdout);
+    if (max_pending > 1)
+        smoke_fail(MainWindow::tr("快速翻图堆积：池队列深度 %1 > 1").arg(max_pending));
+    if (!burst_loaded || preview_panel->pending_requests() != 0)
+        smoke_fail(MainWindow::tr("快速翻图后未收敛：index=%1 pending=%2")
+                       .arg(burst_index)
+                       .arg(preview_panel->pending_requests()));
+
+    // ---- 归位：截图基准 = 面板显示首个文件（§5.2 跟随口径），且恢复未锁定态 ----
+    preview_panel->set_current(original_index);
+    pump(120);
+}
+
 void MainWindow::Impl::smoke_run(const QString &shots_dir) {
     // ---- M4-T9 骨架自检（窗口行为矩阵可自动化部分；先跑，之后截图归位 1440×900）----
     smoke_probe_lifecycle();
     smoke_probe_skeleton();
     smoke_probe_frameless();
     smoke_probe_theme();
+    smoke_probe_preview(); // M4-T10：预览面板（翻图/缩放/徽标/热键接线位）
 
     // ---- 页 1（元数据）：等缩略图队列空 → 01-meta.png ----
     w->set_current_page(1);

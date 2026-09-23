@@ -152,7 +152,11 @@ target_include_directories(pp_core PUBLIC ${CMAKE_SOURCE_DIR}/src ${CMAKE_BINARY
 target_link_libraries(pp_core PUBLIC pp_avx2_baseline OpenImageIO::OpenImageIO JPEG::JPEG
     libjpeg-turbo::jpegli-static Exiv2::exiv2lib heif PkgConfig::LIBJXL
     PkgConfig::LIBJXL_THREADS  # M4-W1-T7：§3.1 jxl 线程映射（JxlThreadParallelRunner）的链接面
-    PkgConfig::WEBP PkgConfig::WEBPMUX PkgConfig::LCMS2 PkgConfig::TIFF4 spdlog::spdlog Qt6::Core)
+    PkgConfig::WEBP PkgConfig::WEBPMUX PkgConfig::LCMS2 PkgConfig::TIFF4 spdlog::spdlog
+    # M4-W2-T10：§3.6 冻结行的返回类型是 QImage（QtGui）→ core 的 Qt 链接面从 Core 扩到 Gui
+    # （`core/thumbs.h` 的 0.3.0 追加块；既有 Qt6::Core 是同一处置的先例）。PUBLIC 传播给
+    # 全部 pp_core 消费者（单测/photopipeline），故 QImage 在 core 与测试里都可见。
+    Qt6::Core Qt6::Gui)
 
 # 2b) 静态库自注册的唯一链接形态（M2-T13）。pp_core 是 STATIC 库，编码器 TU 里的
 #     PP_REGISTER_ENCODER 静态初始化器只有在归档成员被拉入时才会运行；因此每个

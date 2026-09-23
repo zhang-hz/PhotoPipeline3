@@ -232,8 +232,11 @@ private:
         // W1-T6 接线（design §3.1 / §7.2）：jpegli = **真实行级进度** —— 每条
         // `jpegli_write_scanlines` 成功后上报 rows/height，故 `progress_reported=true`
         // （进度事件由 ProgressMux 节流汇流，本处逐行上报不落盘、不打印）。
-        // encode_threads = E3 内部线程映射（T7）。jpegli 无内部线程控制（E2），§3.1 正文
-        // 要求"E 不生效"如实入日志 —— E=1（本任务恒值）时不产生任何额外日志。
+        // —— E3 线程映射（§3.1 正文，W1-T7 落地）——
+        //   §3.1：jpegli = **无内部线程**（本库公开 C API 里没有任何线程/并行旋钮；编码是
+        //   单线程行循环）→ 映射义务 = "如实记录 E 不生效"：
+        //     E == 1（深队列分支，= 0.2 行为）→ 不产生任何日志；E > 1（浅队列分支，调度器
+        //     已把 E 放大到 2..16）→ 一条 info 行注明本编码器不吃 E（如实记录，不静默）。
         const ProgressFn &progress = req.progress;
         if (req.encode_threads > 1) {
             log_info(

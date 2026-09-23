@@ -87,8 +87,14 @@ namespace {
 constexpr std::string_view kStage = "pipeline";
 constexpr std::string_view kFile = "pipeline.cpp";
 
-// T5/E3 → T7：本任务 pipeline 恒传 1（§3.1 线程映射由 T7 接 alloc_threads）。
-constexpr int kEncodeThreadsThisTask = 1;
+// §8.2/W1-T7：编码器内部线程数 E 由调度器经 `RunScope::encode_threads` 传入（E3 分配）。
+// 无 scope / 非法值（<1）→ 回落 1 = 0.2 单线程行为（单测直调 run_one_file 的路径逐字不变）。
+constexpr int kEncodeThreadsDefault = 1;
+
+inline int encode_threads_of(const RunScope *scope) {
+    return (scope != nullptr && scope->encode_threads >= 1) ? scope->encode_threads
+                                                            : kEncodeThreadsDefault;
+}
 
 // W1-T6（§7.3）：合成进度的采样周期（编码器无回调 → 只能时间驱动）。
 constexpr int kSynthPumpMs = 20;
@@ -929,9 +935,10 @@ FileOutcome run_one_file(const FileEntry &fe, const RunConfig &cfg, EventFn ev) 
             // EncodeRequest 字段序（encoder.h §3.1）：img, target, meta, cancelled, progress,
             // encode_threads。W1-T6：progress = ProgressMux 的输出级回调（真实行级 → 直接汇流；
             // 无回调格式 → 走合成估算，编码期间由 SynthPump 按 20ms 采样，§7.3）；
-            // encode_threads = T7 接 alloc_threads（本任务恒 1，§3.1 线程映射义务的兑现方是 T7）。
-            EncodeRequest req{work.buf,  pt.target,    meta,
-                              cancelled, out_progress, kEncodeThreadsThisTask};
+            // encode_threads = W1-T7 起由调度器 E3 分配（`RunScope::encode_threads`，§8.2），
+            // 无 scope（单测直调）恒 1 = 0.2 行为。
+            const int enc_threads = encode_threads_of(ev.scope);
+            EncodeRequest req{work.buf, pt.target, meta, cancelled, out_progress, enc_threads};
             EncodeResult er;
             {
                 SynthPump pump(mux.get(), synth_pump);

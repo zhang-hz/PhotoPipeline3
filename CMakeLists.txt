@@ -116,6 +116,11 @@ find_package(spdlog REQUIRED CONFIG)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LCMS2 REQUIRED IMPORTED_TARGET lcms2)
 pkg_check_modules(LIBJXL REQUIRED IMPORTED_TARGET libjxl)
+# M4-W1-T7（主对话第八次裁定 dwfq-acd2e7c2-4）：§3.1 线程映射义务 jxl=JxlThreadParallelRunner(E)
+# 的**机械前提** —— JxlThreadParallelRunner* 住在独立的 jxl_threads 库（上游把 jxl 与
+# jxl_threads 拆成两个包：libjxl.pc 的 Libs 只有 -ljxl，线程 runner 在 libjxl_threads.pc）。
+# 故此处显式取该模块并把 PkgConfig::LIBJXL_THREADS 挂到 pp_core（见下方 target_link_libraries）。
+pkg_check_modules(LIBJXL_THREADS REQUIRED IMPORTED_TARGET libjxl_threads)
 pkg_check_modules(WEBP REQUIRED IMPORTED_TARGET libwebp)
 pkg_check_modules(WEBPMUX REQUIRED IMPORTED_TARGET libwebpmux)  # M3-W4a v1.8: enc_webp 的 ICCP mux API（WebPMux*）
 pkg_check_modules(TIFF4 REQUIRED IMPORTED_TARGET libtiff-4)
@@ -146,6 +151,7 @@ target_include_directories(pp_core PUBLIC ${CMAKE_SOURCE_DIR}/src ${CMAKE_BINARY
 # 挂在这里等于"自研 targets 全覆盖"，且保证 pp_core 的 /GL 对象与消费者的 /LTCG 成对。
 target_link_libraries(pp_core PUBLIC pp_avx2_baseline OpenImageIO::OpenImageIO JPEG::JPEG
     libjpeg-turbo::jpegli-static Exiv2::exiv2lib heif PkgConfig::LIBJXL
+    PkgConfig::LIBJXL_THREADS  # M4-W1-T7：§3.1 jxl 线程映射（JxlThreadParallelRunner）的链接面
     PkgConfig::WEBP PkgConfig::WEBPMUX PkgConfig::LCMS2 PkgConfig::TIFF4 spdlog::spdlog Qt6::Core)
 
 # 2b) 静态库自注册的唯一链接形态（M2-T13）。pp_core 是 STATIC 库，编码器 TU 里的

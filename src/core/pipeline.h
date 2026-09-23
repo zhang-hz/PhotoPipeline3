@@ -38,6 +38,10 @@
 //     * `RunScope` = budget / reserved / cancelled；
 //     * `FileOutcome` = §4.1 的源文件级聚合终态（全成功=Done / 任一失败=DoneWithErrors /
 //       全失败=Failed / 全跳过=Skipped / 已取消=Cancelled）。
+//   W1-T7 追加（**非 §3 表项**，设计 §8.2/§3.1 的接线面）：`RunScope` 末尾追加
+//   `encode_threads`（E3 分配值，≥1，默认 1 = 0.2 行为）→ pipeline 逐 target 填进
+//   `EncodeRequest::encode_threads`（§3.1 线程映射义务的输入）。既有成员语义不变；
+//   §3.2 的 RunConfig / run_one_file / run_metadata_only 签名零改动。
 #pragma once
 #include "codecs/encoder.h"
 #include "core/colormanager.h"
@@ -176,6 +180,13 @@ struct RunScope {
     PixelBudget *budget = nullptr;               // 可为 null（仅元数据模式不需要内存背压）
     std::vector<std::filesystem::path> reserved; // 本批次已分配输出路径快照（§4.4 逐 out_path）
     std::function<bool()> cancelled;             // 可空
+    // —— 0.3.0 追加（W1-T7，**追加在结构体末尾**；§8.2/§3.1）——
+    // 本文件（本 worker 本次取件）由调度器 E3 分配的编码器内部线程数 E（≥1）。
+    // 语义：调度器算 Alloc → 入闸 → 写在这里 → pipeline 逐 target 填进
+    // `EncodeRequest::encode_threads`（§3.1 线程映射义务的输入；jxl runner / heif·avif 插件
+    // `threads` / webp `thread_level`，jpegli·oiio 无内部线程 → 日志注明）。默认 1 =
+    // 0.2 行为（单线程编码器），故单测/直接调用 run_one_file 的既有路径逐字不变。
+    int encode_threads = 1;
 };
 
 // §3.2 冻结形态的第三参 `EventFn`（T5 定稿为「事件回调 + 运行期共享态」载体）：

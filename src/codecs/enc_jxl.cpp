@@ -5,7 +5,9 @@
 // §7 (M0 facts). Failures return EncodeResult{bytes = 0, error = "<reason>"}
 // (revised E8); no exception crosses the IEncoder boundary.
 //
-// E2: JxlEncoderSetParallelRunner(enc, nullptr, nullptr) — no internal threads.
+// E2→E3（W1-T7 已落地）: `JxlEncoderSetParallelRunner` 的 runner 由 §3.1 线程映射义务给定
+//   —— `JxlThreadParallelRunner(E)`，E=1 时 nullptr（0.2 行为逐字不变）。E 来自调度器的
+//   §8.2 分配（`RunScope::encode_threads`）；E>1 只出现在浅队列分支（W*2 ≤ T）。
 // E5: ICC via JxlEncoderSetICCProfile, otherwise an explicit sRGB nclx encoding.
 // E7: container always on; boxes in the M0-measured order
 //     UseBoxes → AddBox("Exif", 4-byte TIFF offset + blob) → AddBox("xml ") →
@@ -19,6 +21,7 @@
 //     unstable API（encode.h 无 JXL_DEPRECATED 标记），E7 的 box 顺序与载荷不变。
 
 #include <jxl/encode.h>
+#include <jxl/thread_parallel_runner.h>
 
 #include <OpenImageIO/imagebuf.h>
 #include <OpenImageIO/imageio.h>
@@ -208,6 +211,18 @@ struct JxlEncoderDeleter {
 };
 using JxlEncoderPtr = std::unique_ptr<JxlEncoder, JxlEncoderDeleter>;
 
+// §3.1 线程映射义务（W1-T7）：E > 1 时的 `JxlThreadParallelRunner` 句柄（E == 1 → 空 =
+// nullptr runner = 0.2 行为）。**生命周期**：runner 必须在 `JxlEncoderDestroy` **之后**销毁，
+// 故在 encode_impl 里的声明顺序先于 `JxlEncoderPtr`（RAII 逆序析构）——libjxl 文档要求
+// runner 的生命周期覆盖整个编码过程。
+struct JxlThreadRunnerDeleter {
+    void operator()(void *runner) const {
+        if (runner != nullptr)
+            JxlThreadParallelRunnerDestroy(runner);
+    }
+};
+using JxlThreadRunnerPtr = std::unique_ptr<void, JxlThreadRunnerDeleter>;
+
 class JxlEncoderImpl final : public IEncoder {
 public:
     const FormatDef &format() const override {
@@ -275,17 +290,36 @@ private:
         const bool alpha = r.channels == 2 || r.channels == 4;
         assert(r.channels >= 1 && r.channels <= 4);
 
+        // —— E3 线程映射（§3.1 正文，W1-T7 落地）——
+        //   jxl = `JxlThreadParallelRunner(E)`（E=1 时 nullptr）。
+        //   * E == 1（深队列分支 = 0.2 行为）→ runner 空、opaque 空 → 逐字等于
+        //     `JxlEncoderSetParallelRunner(enc, nullptr, nullptr)`，不产生任何额外日志。
+        //   * E > 1（浅队列分支，§8.2 把 E 放大到 2..16）→ 建 runner（E 条 worker 线程）并把
+        //     它交给编码器；一条 info 行留证（E 值可查证）。
+        //   链接面：`JxlThreadParallelRunner*` 来自 jxl_threads（CMakeLists.txt 的
+        //   `PkgConfig::LIBJXL_THREADS`，主对话第八次裁定 dwfq-acd2e7c2-4 授权；机械前提）。
+        //   声明顺序（勿动）：runner 先于 enc → 析构逆序 → runner 活过 JxlEncoderDestroy。
+        JxlThreadRunnerPtr runner;
+        JxlParallelRunner runner_fn = nullptr;
+        void *runner_opaque = nullptr;
+        if (req.encode_threads > 1) {
+            runner.reset(
+                JxlThreadParallelRunnerCreate(nullptr, static_cast<size_t>(req.encode_threads)));
+            if (!runner)
+                return encode_error("jxl: JxlThreadParallelRunnerCreate(" +
+                                    std::to_string(req.encode_threads) + ") failed");
+            runner_fn = JxlThreadParallelRunner;
+            runner_opaque = runner.get();
+            log_info("Encode", kLogFile, "parallel runner created",
+                     {{"encoder", "jxl"}, {"threads", std::to_string(req.encode_threads)}});
+        }
         JxlEncoderPtr enc(JxlEncoderCreate(nullptr));
         if (!enc) {
             return encode_error("jxl: JxlEncoderCreate failed");
         }
-        // E2: single-threaded encoder (nullptr = no custom parallel runner).
-        // T7(E3) 映射位（design §3.1）：§3.1 正文规定此处 = JxlThreadParallelRunner(E)（E=1 时
-        // nullptr）—— 本任务 pipeline 恒传 encode_threads=1，故取 nullptr 与 0.2 逐字一致；
-        // T7 接映射时在此构造 runner 并注意其生命周期必须覆盖到 JxlEncoderDestroy。
         // W1-T6：progress 已接线（见下方逐行喂入的 progress 上报）；libjxl 0.12 无编码器
         // 进度回调接口，故实际信号 = 本 TU 的逐行喂入（详见该处注释与 T6 偏差账）。
-        JxlEncoderStatus st = JxlEncoderSetParallelRunner(enc.get(), nullptr, nullptr);
+        JxlEncoderStatus st = JxlEncoderSetParallelRunner(enc.get(), runner_fn, runner_opaque);
         if (st != JXL_ENC_SUCCESS) {
             return encode_error(std::string("jxl: JxlEncoderSetParallelRunner failed: ") +
                                 status_name(st));

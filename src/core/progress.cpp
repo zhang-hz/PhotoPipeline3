@@ -15,9 +15,9 @@
 
 #include "core/progress.h"
 
-#include "codecs/encoder.h"   // ProgressFn（§3.1）
+#include "codecs/encoder.h" // ProgressFn（§3.1）
 #include "core/logger.h"
-#include "core/pipeline.h"    // FileEvent / FileState（§3.3 的汇流目标；.cpp 层包含，无头文件环）
+#include "core/pipeline.h" // FileEvent / FileState（§3.3 的汇流目标；.cpp 层包含，无头文件环）
 
 #include <algorithm>
 #include <cctype>
@@ -181,12 +181,12 @@ float ProgressSynth::on_done() {
 // ---------------------------------------------------------------------------
 struct ProgressMux::Impl {
     struct Out {
-        float enc_frac = 0.f;  // 编码段（§7.2 encode 50%）
-        float meta_frac = 0.f; // 落盘段（§7.2 metawrite 10%）
-        int max_row = 0;       // 行级回调的最大折算行号（无回调 → 0）
-        int samples = 0;       // 编码器回调次数
-        bool started = false;  // bind_output 已调用
-        bool reported = false; // 编码器报过真实进度（§3.1 progress_reported）
+        float enc_frac = 0.f;    // 编码段（§7.2 encode 50%）
+        float meta_frac = 0.f;   // 落盘段（§7.2 metawrite 10%）
+        int max_row = 0;         // 行级回调的最大折算行号（无回调 → 0）
+        int samples = 0;         // 编码器回调次数
+        bool started = false;    // bind_output 已调用
+        bool reported = false;   // 编码器报过真实进度（§3.1 progress_reported）
         bool synth_flag = false; // 当前是否标合成（§7.3；= !reported 且属合成面）
         bool synth_expected = false;
         bool skipped = false, failed = false, done = false;
@@ -241,17 +241,16 @@ struct ProgressMux::Impl {
         float overall = file_frac_locked();
         if (overall < overall_high) {
             // 契约兜底：正常路径不该发生（各分量单调）；发生即如实记一条 warn 并沿用高水位。
-            log_warn(kStage, kFile, "progress overall regressed; holding high-water mark",
-                     {{"computed", std::to_string(overall)},
-                      {"high", std::to_string(overall_high)}});
+            log_warn(
+                kStage, kFile, "progress overall regressed; holding high-water mark",
+                {{"computed", std::to_string(overall)}, {"high", std::to_string(overall_high)}});
             overall = overall_high;
         }
         overall_high = overall;
         pi.overall_frac = overall;
-        pi.synthetic =
-            (output_index >= 0 && output_index < static_cast<int>(outs.size()))
-                ? synthetic_locked(outs[static_cast<std::size_t>(output_index)])
-                : false;
+        pi.synthetic = (output_index >= 0 && output_index < static_cast<int>(outs.size()))
+                           ? synthetic_locked(outs[static_cast<std::size_t>(output_index)])
+                           : false;
         return pi;
     }
     // 节流判决（§7.4）：首样本 / 到达 1.0 / 时间窗 / 进度步进，取先到者；force = 阶段切换等强制发点
@@ -331,7 +330,8 @@ ProgressFn ProgressMux::bind_output(std::size_t index, std::string_view format_i
         o.started = true;
         o.format_id = std::string(format_id);
         o.synth_expected = ProgressSynth::has_k(format_id);
-        o.synth_flag = o.synth_expected; // 无回调面先按合成标识；编码返回后按 progress_reported 校正
+        o.synth_flag =
+            o.synth_expected; // 无回调面先按合成标识；编码返回后按 progress_reported 校正
         if (!o.synth) {
             o.synth = std::make_unique<ProgressSynth>(
                 o.format_id, static_cast<std::uint64_t>(d.w) * static_cast<std::uint64_t>(d.h));
@@ -500,9 +500,8 @@ float ProgressMux::output_frac(std::size_t index) const {
         return 0.f;
     const Impl::Out &o = d.outs[index];
     const double chunk = StageWeights::encode + StageWeights::metawrite;
-    return clamp01(static_cast<float>((StageWeights::encode * o.enc_frac +
-                                       StageWeights::metawrite * o.meta_frac) /
-                                      chunk));
+    return clamp01(static_cast<float>(
+        (StageWeights::encode * o.enc_frac + StageWeights::metawrite * o.meta_frac) / chunk));
 }
 
 std::size_t ProgressMux::outputs() const { return impl_->outs.size(); }

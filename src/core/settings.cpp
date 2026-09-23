@@ -111,6 +111,9 @@ std::vector<std::pair<std::string, std::string>> settings_pairs(const AppSetting
     kv.emplace_back("last_format", s.last_format);
     kv.emplace_back("last_preset", s.last_preset);
     kv.emplace_back("last_out_root", s.last_out_root);
+    // —— 0.3.0 / W1-T7 追加（§3.6 行前两项；顺序 = 结构体末尾顺序）——
+    kv.emplace_back("stagger_ms", std::to_string(s.stagger_ms));
+    kv.emplace_back("thread_budget", std::to_string(s.thread_budget));
     return kv;
 }
 
@@ -149,6 +152,18 @@ void apply_pair(AppSettings &s, const std::string &key, const std::string &value
         s.last_preset = value;
     } else if (key == "last_out_root") {
         s.last_out_root = value;
+    } else if (key == "stagger_ms") {
+        // §8.1/§9.3：设置域 0–2000 ms（0 = 关闭）。本存储层保持"哑存储"口径（不解析即忽略、
+        // 不裁剪合法整数 —— 域裁剪属设置对话框/UI 的输入约束，见 §9.3）；
+        // 仅把**负数**归零（引擎口径：<=0 即关闭，见 StaggerLimiter），避免负值进入日志/引擎。
+        int v = 0;
+        if (parse_int(value, v))
+            s.stagger_ms = v > 0 ? v : 0;
+    } else if (key == "thread_budget") {
+        // §8.2：0 = 逻辑核；负值无意义 → 归零（同"自动"）。
+        int v = 0;
+        if (parse_int(value, v))
+            s.thread_budget = v > 0 ? v : 0;
     }
 }
 

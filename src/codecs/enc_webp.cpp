@@ -6,7 +6,8 @@
 //
 // One IEncoder covers both WebP techs: the lossy/lossless choice travels in the
 // parameter set (reserved key "__lossless", §3.4), exactly as for JXL modular.
-// E2: WebPConfig::thread_level = 0 (no internal threads).
+// E2→E3: WebPConfig::thread_level = (encode_threads > 1)（§3.1 线程映射义务，W1-T7 落地；
+//   E==1 → 0 = 单线程，与 0.2 逐字一致）。
 // E4: 4-channel input keeps its alpha (WebPPictureImportRGBA); WebP has no
 //     grayscale mode, so 1/2-channel input is widened to RGB/RGBA by channel
 //     replication (no colour processing; the pipeline already warns).
@@ -243,10 +244,14 @@ private:
             cfg.exact = param_bool(params, "exact", true) ? 1 : 0;
             cfg.near_lossless = static_cast<int>(param_int(params, "near_lossless", 100));
         }
-        cfg.thread_level = 0; // E2: single-threaded encoder
-        // T7(E3) 映射位（design §3.1）：§3.1 正文规定本字段 = (encode_threads > 1) —— 本任务
-        // pipeline 恒传 encode_threads=1，故取 0 与 0.2 逐字一致；T7 接映射时改写为
-        // cfg.thread_level = (req.encode_threads > 1) ? 1 : 0。
+        // —— E3 线程映射（§3.1 正文，W1-T7 落地）——
+        //   webp = `thread_level = E>1`：E==1 → 0（单线程，0.2 行为逐字一致）；E>1 → 1。
+        //   语义如实记录：`WebPConfig::thread_level` 是 libwebp 的**提示位**（0 = 不用多线程，
+        //   1 = 允许内部多线程；libwebp 只用它决定是否开 worker，不提供线程数上界）→
+        //   "E 路"在此退化为"是否并行"，实际并发由 libwebp 内部按图像尺寸决定。
+        //   E3 契约（Σ活跃编码线程 ≤ T）在本格式上是**上界近似**：E>1 只可能发生在
+        //   W*2 ≤ T 的浅队列分支（E = T/W ≥ 2），故即使 libwebp 用满，量级仍受 T 约束。
+        cfg.thread_level = (req.encode_threads > 1) ? 1 : 0;
         // W1-T6（§7.3 口径）：webp = **合成进度面** —— 本编码器不调用 `req.progress`，
         // `EncodeResult::progress_reported` 保持 false；pipeline 的 ProgressMux 按 k[webp]
         // 时长估算出 `synthetic=true` 的进度（§7.3 表：WebP/HEIF/AVIF 无编码回调）。

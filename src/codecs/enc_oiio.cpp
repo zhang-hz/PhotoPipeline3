@@ -176,8 +176,16 @@ EncodeResult OiioEncoder::encode(const EncodeRequest &req) {
     // TIFF 的 strip 并行压缩路径（tiffoutput.cpp:1471-1518 的 parallelize 条件要求整 strip
     // 边界），构成性能回退风险（§11.3 禁回退）。png/tiff/bmp 三个插件都不支持 "rectangles"
     // （各自 supports() 实测），故其上 write_image 必然走该回调路径。
-    // encode_threads = E3 内部线程映射（T7）。OIIO 写路径无内部线程控制，§3.1 正文要求
-    // "E 不生效"如实入日志 —— E=1（本任务恒值）时不产生任何额外日志。
+    // —— E3 线程映射（§3.1 正文，W1-T7 落地）——
+    //   §3.1：oiio = **无内部线程**（按正文口径）→ 映射义务 = "如实记录 E 不生效"。
+    //   证据与残留缺口（不擅改，如实记录）：OIIO 确实**没有** `ImageOutput` 级的"编码线程数"
+    //   参数，本编码器无法把 E 传进写路径（png/tiff/bmp 插件各自无该参数）；但 OIIO 有
+    //   **全局** `attribute("threads")` 线程池（imageio.h 的全局属性；`ImageOutput::threads(n)`
+    //   是该池的 write 侧 fan-out 策略，imageio.h:3394 起），默认 = 逻辑核 → TIFF strip 压缩等
+    //   大块写在库内可自行 fan-out。该池是**进程级、跨格式**的，改它属于超范围（会影响解码与
+    //   其它写路径），故本任务按正文只记日志；若主对话裁定把 E 路由到 `out->threads(E)`，
+    //   落点就是这一处（T7 已上报，见 m4-report 偏差与例外）。
+    //   E == 1（深队列分支，= 0.2 行为）→ 不产生任何日志；E > 1 → 一条 info 行。
     OiioProgressRelay relay{&req.progress};
     if (req.encode_threads > 1) {
         log_info(kStage, kFile, "encoder has no internal threading; encode_threads ignored",

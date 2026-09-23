@@ -96,8 +96,8 @@ int main() {
               f2s(pp::StageWeights::stage_weight(pp::Stage::Encode)));
         check(near(pp::StageWeights::stage_weight(pp::Stage::MetaWrite), 0.10f),
               "weights/row-metawrite", f2s(pp::StageWeights::stage_weight(pp::Stage::MetaWrite)));
-        check(near(pp::StageWeights::stage_weight(pp::Stage::Flatten), 0.0f), "weights/flatten-zero",
-              "Flatten must carry no weight (not listed in §7.2)");
+        check(near(pp::StageWeights::stage_weight(pp::Stage::Flatten), 0.0f),
+              "weights/flatten-zero", "Flatten must carry no weight (not listed in §7.2)");
     }
 
     // =====================================================================
@@ -133,7 +133,7 @@ int main() {
         for (int i = 0; i <= 200; ++i) {
             const double ms = win * 2.0 * static_cast<double>(i) / 200.0;
             const float v = s.on_tick(t0 + std::chrono::duration_cast<Clock::duration>(
-                                                std::chrono::duration<double, std::milli>(ms)));
+                                               std::chrono::duration<double, std::milli>(ms)));
             if (v < last - 1e-6f)
                 monotone = false;
             if (v > 0.95f + 1e-6f)
@@ -141,16 +141,17 @@ int main() {
             last = v;
         }
         check(monotone, "synth/monotonic", "on_tick must never regress");
-        check(capped, "synth/cap-095", "value must stay <= 0.95 before completion, got " + f2s(last));
+        check(capped, "synth/cap-095",
+              "value must stay <= 0.95 before completion, got " + f2s(last));
         check(near(last, 0.95f), "synth/flat-at-095",
               "past t_est the value must hold at 0.95 (平推), got " + f2s(last));
 
         // 缓出形状 f(x)=1-(1-x)^2：窗口半程应约 0.95·0.75
         Synth half("webp", 24 * 1000 * 1000);
         const double hw = 0.95 * half.estimate_ms();
-        const float hv = half.on_tick(
-            t0 + std::chrono::duration_cast<Clock::duration>(
-                     std::chrono::duration<double, std::milli>(hw * 0.5)));
+        const float hv =
+            half.on_tick(t0 + std::chrono::duration_cast<Clock::duration>(
+                                  std::chrono::duration<double, std::milli>(hw * 0.5)));
         check(near(hv, 0.95f * 0.75f, 1e-3f), "synth/ease-out-shape",
               "f(0.5) must be 1-(1-0.5)^2 = 0.75 of the cap, got " + f2s(hv));
 
@@ -252,7 +253,7 @@ int main() {
         const float synth_mid = mux.stats(1).enc_frac;
         check(synth_mid > 0.f && synth_mid <= 0.95f, "mux/synth-tick-advances",
               "estimated frac must advance but stay capped, got " + f2s(synth_mid));
-        mux.tick(t0 + std::chrono::milliseconds(1000));                       // 时钟回拨
+        mux.tick(t0 + std::chrono::milliseconds(1000)); // 时钟回拨
         check(mux.stats(1).enc_frac >= synth_mid, "mux/synth-no-regress",
               "a backwards clock must not regress the estimate");
         // 合成输出拿到真实回调 → 立即翻 real（真实进度不得被合成覆盖）

@@ -9,6 +9,8 @@
 //   * Parameter names are NEVER hard-coded beyond the semantic ones named by the task book
 //     (quality / lossless / chroma / preset): the ParamSet -> encoder mapping iterates
 //     `heif_encoder_list_parameters()` and dispatches by the *runtime* parameter type.
+//     M4-T7（§3.1 线程映射义务）再点名一个语义键：`threads` —— 且**仍走内省判定**
+//     （is_known("threads")），插件不暴露该键时如实记录并保留后端默认池（R4 口径）。
 //   * Pixels are handed to libheif as Y/Cb/Cr planes (§3.8 mapping table). The RGB -> YCbCr
 //     matrix is full-range BT.601 (matrix_coefficients = 6 / SMPTE 170M), which is what the
 //     nclx profile written next to the planes declares.
@@ -436,12 +438,17 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
                            param_value_text(it->second));
         }
 
-        // E2: all internal threading off. The x265 plugin exposes no "threads" parameter
-        // (measured), so for that backend the encoder keeps its default pool.
-        // NOTE(perf): measured and pinned down — no better option for that backend.
-        // T7(E3) 映射位（design §3.1）：§3.1 正文规定 heif/avif = 插件 `threads` 参数（内省名核对）
-        // —— 本任务 pipeline 恒传 encode_threads=1，故此处仍写死 1 与 0.2 逐字一致；T7 接映射时
-        // 改写为 req.encode_threads。
+        // —— E3 线程映射（§3.1 正文，W1-T7 落地）——
+        //   §3.1：heif/avif = 插件 `threads` 参数（内省名核对，缺则记 R4 口径）。
+        //   内省核对结果（本机实测，tools/pp_linkprobe.cpp 的内省面 `check_heif_params`，
+        //   命令与逐字输出见 T7 自检/m4-report）：
+        //     * HEVC（x265 4.3-vcpkg）参数表 = quality|lossless|preset|tune|tu-intra-depth|
+        //       complexity|chroma —— **无 `threads`** → E 不可映射，后端保留其默认线程池
+        //       （如实记录，R4 口径；NOT-perf 注：无更好选项）。
+        //     * AV1（SVT-AV1 4.2.0）参数表 = speed|threads|tile-rows|tile-cols|quality|lossless|
+        //       qp|min-q|max-q|tune —— **有 `threads`** → 映射 E（E==1 → 1，与 0.2 逐字一致）。
+        //   E3 契约：x265 后端（HEVC）无法受 `encode_threads` 约束 → 该后端的实际并发不入
+        //   §8.2 的 Σ 计数（缺口已如实记录；libaom/SVT/JXL 三个生效面覆盖其余格式）。
         // W1-T6（§7.3 口径）：heif/avif = **合成进度面** —— 本编码器不调用 `req.progress`，
         // `EncodeResult::progress_reported` 保持 false；pipeline 的 ProgressMux 按 k[heif]/k[avif]
         // 时长估算出 `synthetic=true` 的进度（§7.3 表：WebP/HEIF/AVIF 无编码回调）。
@@ -449,12 +456,16 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
         // 仅 libheif/heif_decoding.h 的**解码插件**接口有 progress 钩子（不适用于编码）。
         (void)req.progress;
         if (is_known("threads")) {
-            const heif_error te = heif_encoder_set_parameter_integer(enc, "threads", 1);
+            const int want_threads = req.encode_threads >= 1 ? req.encode_threads : 1;
+            const heif_error te = heif_encoder_set_parameter_integer(enc, "threads", want_threads);
             if (te.code != heif_error_Ok)
-                note_param("could not force threads=1: " + heif_error_text(te), "threads", "1");
+                note_param("could not set threads: " + heif_error_text(te), "threads",
+                           std::to_string(want_threads));
         } else {
             log_info(kStage, kFile, "backend exposes no 'threads' parameter; default pool kept",
-                     {{"format", format_id_}, {"backend", backend_id_}});
+                     {{"format", format_id_},
+                      {"backend", backend_id_},
+                      {"encode_threads", std::to_string(req.encode_threads)}});
         }
 
         // E9: unrecognised keys are ignored (never an error) and logged, not warned.

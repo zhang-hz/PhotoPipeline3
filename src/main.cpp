@@ -63,6 +63,7 @@
 #include "platform/paths.h"
 #include "ui/mainwindow.h"
 #include "ui/preset_io.h"
+#include "ui/theme.h" // M4-W2-fix：preferred_theme_mode()（PP_UI_THEME 强制档的单源解析）
 
 namespace fs = std::filesystem;
 
@@ -1317,10 +1318,13 @@ int main(int argc, char **argv) {
     pp::ui::MainWindow w(settings);
     w.show();
     // M3-D6: Mica + 深色标题栏（非 Windows 平台在 mica.cpp 内为空操作）。
-    // v1 口径：启动期跟随一次系统深浅色；运行期主题切换监听留后续。
+    // M4-W2-fix 第 11 条：模式口径 = **与 GUI 同源**的 theme::preferred_theme_mode()
+    // （PP_UI_THEME 强制档优先，未设置才跟随系统）。此前这里直接读 styleHints()->colorScheme()，
+    // 于是 `PP_UI_THEME=light` 强制档下窗口边框/DWM 属性仍按系统色（启动色滞后）；
+    // 运行期主题切换由 MainWindow::Impl::refresh_theme()/Show 事件重放。
     pp::platform::apply_window_backdrop(reinterpret_cast<void *>(w.winId()),
-                                        QGuiApplication::styleHints()->colorScheme() ==
-                                            Qt::ColorScheme::Dark);
+                                        pp::ui::theme::preferred_theme_mode() ==
+                                            pp::ui::theme::ThemeMode::Dark);
     const int code = app.exec();
     pp::log_shutdown();
     return code;

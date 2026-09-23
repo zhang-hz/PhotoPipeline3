@@ -205,17 +205,29 @@ struct Frameless::Impl {
         }
     }
 
-    // 子控件矩形：相对窗口原点；physical=true → 乘 devicePixelRatio（DPI 口径，硬约束 3）
-    QRect rect_of(QWidget *child, bool physical) const {
+    // 子控件矩形：相对窗口原点；physical=true → 乘 devicePixelRatio（DPI 口径，硬约束 3）。
+    // caption_button=true → 纵向收敛到 §9.1 的 46×32 命中带（居中的 kCaptionHitHeightPx 高；
+    // 控件自身仍是 46×满高，hover 面不受影响 —— 双轨见 frameless.h 常量注释）。
+    QRect rect_of(QWidget *child, bool physical, bool caption_button = false) const {
         if (child == nullptr || window == nullptr)
             return QRect();
         const QPoint rel = child->mapToGlobal(QPoint(0, 0)) - window->mapToGlobal(QPoint(0, 0));
+        QRect logical(rel, child->size());
+        if (caption_button && logical.height() > kCaptionHitHeightPx) {
+            const int y = logical.top() + (logical.height() - kCaptionHitHeightPx) / 2;
+            logical = QRect(logical.left(), y, logical.width(), kCaptionHitHeightPx);
+        }
         if (!physical)
-            return QRect(rel, child->size());
+            return logical;
         const qreal dpr = sane_dpr(window->devicePixelRatioF());
-        const QSize size(static_cast<int>(std::lround(child->width() * dpr)),
-                         static_cast<int>(std::lround(child->height() * dpr)));
-        return QRect(to_physical(rel, dpr), size);
+        const QSize size(static_cast<int>(std::lround(logical.width() * dpr)),
+                         static_cast<int>(std::lround(logical.height() * dpr)));
+        return QRect(to_physical(logical.topLeft(), dpr), size);
+    }
+
+    bool is_caption_button(const QWidget *child) const {
+        return child != nullptr &&
+               (child == min_button || child == max_button || child == close_button);
     }
 
     HitBox build_box(bool physical) const {
@@ -230,11 +242,13 @@ struct Frameless::Impl {
             return r.isNull() ? r : r.translated(box.window.topLeft());
         };
         box.caption = shift(rect_of(caption, physical));
-        box.min_button = shift(rect_of(min_button, physical));
-        box.max_button = shift(rect_of(max_button, physical));
-        box.close_button = shift(rect_of(close_button, physical));
+        box.min_button = shift(rect_of(min_button, physical, /*caption_button=*/true));
+        box.max_button = shift(rect_of(max_button, physical, /*caption_button=*/true));
+        box.close_button = shift(rect_of(close_button, physical, /*caption_button=*/true));
         for (QWidget *child : drag_excludes) {
-            const QRect r = shift(rect_of(child, physical));
+            // 三钮的排除区 = **命中带**（32px 高）：带外回落到 Caption（拖拽），若整块排除
+            // 会变成"点上去既不开窗也不拖窗"的死区。
+            const QRect r = shift(rect_of(child, physical, is_caption_button(child)));
             if (!r.isNull())
                 box.drag_excludes.push_back(r);
         }

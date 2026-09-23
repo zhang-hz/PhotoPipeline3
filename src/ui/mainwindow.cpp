@@ -209,15 +209,10 @@ bool skeleton_state_disabled() {
 }
 
 // 启动/走查主题：PP_UI_THEME=dark|light 强制；未设置 → 跟随系统（§9.2 明暗跟随系统）。
-// 强制档供 W5 双主题截图走查用（系统同一时刻只能是一种模式）。
-theme::ThemeMode preferred_theme_mode() {
-    const QByteArray forced = qgetenv("PP_UI_THEME").trimmed().toLower();
-    if (forced == QByteArrayLiteral("dark"))
-        return theme::ThemeMode::Dark;
-    if (forced == QByteArrayLiteral("light"))
-        return theme::ThemeMode::Light;
-    return theme::system_theme_mode();
-}
+// M4-W2-fix：解析搬到 theme::preferred_theme_mode()（单源 = ui/theme.h）——main.cpp 的启动期
+// DWM 深色标题栏（apply_window_backdrop）必须与 GUI 落地的是**同一个**模式，否则窗口边框会
+// 按系统色滞后（第 11 条）。
+using theme::preferred_theme_mode;
 
 // 会话态文件（QSettings INI）：与 settings.ini 同目录（data_dir() 保证已存在）
 QString ui_state_path() {
@@ -345,7 +340,11 @@ protected:
     void paintEvent(QPaintEvent *) override {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing, true);
-        const bool active = isChecked() && isEnabled();
+        const bool enabled = isEnabled();
+        // 运行期锁定（G5）：mockup .step.dim{opacity:.45} 是**整钮**（含 18×18 编号徽标）变暗
+        // —— 自绘路径用 painter 不透明度落地（QSS 无控件级 opacity）。
+        painter.setOpacity(enabled ? 1.0 : theme::Metrics::step_dim_opacity);
+        const bool active = isChecked() && enabled;
         // 底/边：.step{background:transparent;border:1px solid transparent}
         //         .step.active{background:--acc-dim;border-color:--acc-bd}
         if (active) {
@@ -368,9 +367,10 @@ protected:
             theme::font(theme::Typography::step_badge_px, theme::Typography::step_badge_weight));
         painter.setPen(active ? tokens_.on_accent : tokens_.text2);
         painter.drawText(badge_rect, Qt::AlignCenter, QString::number(number_));
-        // 文案（§9.3 禁止折行 → 超长省略号）
+        // 文案（§9.3 禁止折行 → 超长省略号）。禁用态的字色仍是 .step 的 --txt2：变暗由上面的
+        // 整钮不透明度（.step.dim opacity .45）承担，不再叠加第二层 text3（否则比原型暗一档）。
         painter.setFont(font());
-        painter.setPen(!isEnabled() ? tokens_.text3 : (active ? tokens_.text : tokens_.text2));
+        painter.setPen(active ? tokens_.text : tokens_.text2);
         const int text_x = static_cast<int>(badge_rect.right()) + theme::Metrics::step_badge_gap;
         const int text_w = std::max(0, width() - text_x - theme::Metrics::step_pad_x);
         const QFontMetrics metrics(font());
@@ -383,24 +383,55 @@ private:
     int number_ = 1;
 };
 
-// 图标钮（mockup .icon-btn 32×32 r=6）
+// 图标钮（mockup .icon-btn 32×32 r=6）。
+// 字形字体（M4-W2-fix）：☆/⚙ 在 Windows 上会命中 **彩色 emoji** 字体（Segoe UI Emoji）→ 字形
+// 自带颜色，QSS 的 color/disabled 全部失效（原型 meta-dark.png 里两枚字形都是 --txt2 的单色文本）。
+// 故显式把"符号文本字体"排在字族栈最前（Segoe UI Symbol / Noto Sans Symbols 2 均有 U+2606/U+2699
+// 的单色字形）；找不到该字体的平台自然落回原字族栈，行为不变。
 QToolButton *make_icon_button(QWidget *parent, QAction *action, const char *object_name) {
     auto *button = new QToolButton(parent);
     button->setObjectName(QString::fromLatin1(object_name));
     button->setToolButtonStyle(Qt::ToolButtonTextOnly);
     button->setFixedSize(theme::Metrics::icon_btn, theme::Metrics::icon_btn);
-    button->setFont(theme::font(14.0));
+    QFont glyph_font = theme::font(14.0);
+    glyph_font.setFamilies({QStringLiteral("Segoe UI Symbol"), QStringLiteral("Segoe UI"),
+                            QStringLiteral("Noto Sans Symbols 2"),
+                            QString::fromLatin1(theme::Typography::family_ui)});
+    button->setFont(glyph_font);
     button->setFocusPolicy(Qt::NoFocus);
     if (action != nullptr)
         button->setDefaultAction(action); // 文本/提示/enabled 全跟 QAction（lock_for_run 靠它置灰）
     return button;
 }
 
-// caption 三钮（§9.1 能力表：46 宽、贴满顶栏高（mockup .capbtns align-self:stretch）；
-// 关闭悬停 #c42b1c 在 tokens/QSS 里）
+// caption 三钮（§9.1 能力表：46 宽；命中区 46×32、hover 面贴满顶栏 52px —— 双轨口径见
+// theme::Metrics::caption_btn_hit_h / caption_btn_h）。关闭悬停 #c42b1c 在 tokens/QSS 里。
+//
+// 双轨落地：
+//   * 可见面 = 控件自身 46×满高 → QSS :hover 背景铺满 52px（原型 .capbtns{align-self:stretch}）；
+//   * 命中 = 居中的 46×32 带（§9.1 明文）→ hitButton 只认带内（Ctrl/程序化 click() 不受影响），
+//     无边框窗口的 WM_NCHITTEST 用同一条带（platform/frameless.cpp 的 rect_of(caption_button)）。
+class CaptionButton : public QPushButton {
+public:
+    explicit CaptionButton(const QString &glyph, QWidget *parent) : QPushButton(glyph, parent) {}
+
+    // 命中带（居中）：与 platform/frameless.cpp 的 rect_of(..., caption_button=true) 同一条带
+    static QRect hit_band(const QRect &box) {
+        const int band = theme::Metrics::caption_btn_hit_h;
+        if (box.height() <= band)
+            return box;
+        return QRect(box.left(), box.top() + (box.height() - band) / 2, box.width(), band);
+    }
+
+protected:
+    bool hitButton(const QPoint &pos) const override {
+        return QPushButton::hitButton(pos) && hit_band(rect()).contains(pos);
+    }
+};
+
 QPushButton *make_caption_button(QWidget *parent, const QString &glyph, const QString &tip,
                                  const char *object_name) {
-    auto *button = new QPushButton(glyph, parent);
+    auto *button = new CaptionButton(glyph, parent);
     button->setObjectName(QString::fromLatin1(object_name));
     button->setToolTip(tip);
     button->setFixedSize(theme::Metrics::caption_btn_w, theme::Metrics::caption_btn_h);
@@ -755,6 +786,14 @@ bool MainWindow::Impl::handle_event(QObject * /*watched*/, QEvent *event) {
     case QEvent::WindowStateChange:
         // 最大化/还原 → caption 最大化钮字形与提示跟随（双击标题栏最大化也走这里）
         update_caption_buttons();
+        return false;
+    case QEvent::Show:
+        // M4-W2-fix 第 11 条：DWM 沉浸式深色标题栏/Mica 必须在**真窗口出现后**重放一次
+        // （构造期 winId 尚未成型；启动期 main.cpp 已按同一主题模式调过一次，这里是运行期
+        // 主题切换/显示时序的兜底，保证窗口边框不再按启动时的系统色滞后）。
+        // 同时重放一次 tokens：投影效果器的 blur/offset 是**设备像素**（见 refresh_theme），
+        // 构造期 devicePixelRatioF() 还是 1，必须等真窗口出现后按实际 dpr 重算。
+        refresh_theme();
         return false;
     default:
         break;
@@ -1778,7 +1817,14 @@ void MainWindow::Impl::refresh_theme() {
         if (step != nullptr)
             step->set_tokens(tokens);
     }
-    // 开始运行钮投影（.go box-shadow 0 2px 10px；QSS 无 box-shadow → 效果器落地）
+    // 开始运行钮投影（.go box-shadow 0 2px 10px；QSS 无 box-shadow → 效果器落地）。
+    // 注意 Qt 的 QGraphicsEffect**参数是设备像素**（CSS 的 blur/offset 是逻辑像素）→ 按
+    // devicePixelRatio 换算，投影的铺开范围才与原型一致（M4-W2-fix：实测未换算时 dpr=2 下
+    // 环带 Δblue 仅 +5，原型 +17；换算后见 selfChecks）。
+    const qreal dpr = w != nullptr ? w->devicePixelRatioF() : 1.0;
+    const auto to_device = [dpr](int logical) {
+        return static_cast<qreal>(logical) * (dpr > 0.01 ? dpr : 1.0);
+    };
     if (start != nullptr) {
         if (tokens.go_shadow_blur > 0) {
             auto *go_shadow = qobject_cast<QGraphicsDropShadowEffect *>(start->graphicsEffect());
@@ -1787,9 +1833,9 @@ void MainWindow::Impl::refresh_theme() {
                 start->setGraphicsEffect(go_shadow);
             }
             go_shadow->setColor(tokens.go_shadow_color);
-            go_shadow->setBlurRadius(tokens.go_shadow_blur);
+            go_shadow->setBlurRadius(to_device(tokens.go_shadow_blur));
             go_shadow->setXOffset(0);
-            go_shadow->setYOffset(tokens.go_shadow_dy);
+            go_shadow->setYOffset(to_device(tokens.go_shadow_dy));
         } else {
             start->setGraphicsEffect(nullptr);
         }
@@ -1805,9 +1851,9 @@ void MainWindow::Impl::refresh_theme() {
                 card->setGraphicsEffect(shadow);
             }
             shadow->setColor(tokens.shadow_color);
-            shadow->setBlurRadius(tokens.shadow_blur);
+            shadow->setBlurRadius(to_device(tokens.shadow_blur));
             shadow->setXOffset(0);
-            shadow->setYOffset(tokens.shadow_dy);
+            shadow->setYOffset(to_device(tokens.shadow_dy));
         } else {
             card->setGraphicsEffect(nullptr); // 删旧效果（setGraphicsEffect(nullptr) 会析构它）
         }
@@ -2472,6 +2518,38 @@ void MainWindow::Impl::smoke_probe_skeleton() {
             std::fflush(stdout);
         }
     }
+    // ---- 左栏四个动作钮的 pp-* 测试钩子（M4-W2-fix 第 3 条：§9.3「objectName 沿 pp-*
+    // 命名法」）---- 「＋ 添加文件…/添加文件夹…/清空列表」收在 ＋ 的弹出菜单里（T11 的 .fp-tools
+    // 形态）， 故钩子挂在 QAction 上；「− 移除所选」是按钮。
+    {
+        const QAction *hooks[] = {add_files_action, add_dir_action, clear_action};
+        const char *names[] = {"pp-add-files", "pp-add-dir", "pp-clear-all"};
+        QStringList found;
+        bool ok = true;
+        for (int i = 0; i < 3; ++i) {
+            const bool hit =
+                hooks[i] != nullptr && hooks[i]->objectName() == QString::fromLatin1(names[i]);
+            ok = ok && hit;
+            found << QStringLiteral("%1=%2").arg(QString::fromLatin1(names[i]),
+                                                 hooks[i] != nullptr ? hooks[i]->objectName()
+                                                                     : QStringLiteral("(null)"));
+        }
+        const bool remove_ok =
+            remove_sel != nullptr && remove_sel->objectName() == QStringLiteral("pp-remove-sel");
+        ok = ok && remove_ok;
+        found << QStringLiteral("pp-remove-sel=%1")
+                     .arg(remove_sel != nullptr ? remove_sel->objectName()
+                                                : QStringLiteral("(null)"));
+        found << QStringLiteral("file-count=%1")
+                     .arg(file_count != nullptr ? file_count->objectName()
+                                                : QStringLiteral("(null)"));
+        std::printf("UI-SMOKE hooks: %s\n", qUtf8Printable(found.join(QLatin1Char(' '))));
+        std::fflush(stdout);
+        if (!ok || file_count == nullptr ||
+            file_count->objectName() != QStringLiteral("pp-file-count"))
+            smoke_fail(MainWindow::tr("左栏 pp-* 测试钩子缺失或命名不符：%1")
+                           .arg(found.join(QLatin1Char(' '))));
+    }
 }
 
 void MainWindow::Impl::smoke_probe_frameless() {
@@ -2648,6 +2726,67 @@ void MainWindow::Impl::smoke_probe_frameless() {
                              QStringLiteral("close")};
     if (routed != expect)
         smoke_fail(MainWindow::tr("三钮命令路由不符：%1").arg(routed.join(',')));
+
+    // ---- (g) caption 双轨（M4-W2-fix 第 5 条，主对话裁定）----
+    //   * 可见/hover 面 = 控件 46×满高（52px）→ 关闭钮 hover 的 #c42b1c 铺满顶栏（原型整高）；
+    //   * 命中面 = 居中的 46×32 带（§9.1 明文）→ 带外按下不触发按钮，且窗口命中判定回落到
+    //     Caption（拖拽），不是"点了没反应"的死区。
+    {
+        const QRect widget = cap_close->rect();
+        const QRect band = CaptionButton::hit_band(widget);
+        // 带外取样点：命中带之上 2px（仍避开顶边 6px 缩放带 —— 那条带按硬约束优先返回缩放）
+        const int outside_y = std::max(plat::kResizeBorderPx + 1, band.top() - 2);
+        std::printf("UI-SMOKE caption-band: widget=%dx%d hit=%dx%d band-y=%d..%d "
+                    "out-of-band-zone=%s\n",
+                    widget.width(), widget.height(), band.width(), band.height(), band.top(),
+                    band.bottom(),
+                    hit_zone_name(frameless->classify_logical(
+                        cap_close->mapToGlobal(QPoint(cap_close->width() / 2, outside_y)))));
+        std::fflush(stdout);
+        if (widget.height() != theme::Metrics::caption_btn_h ||
+            band.height() != theme::Metrics::caption_btn_hit_h ||
+            (widget.height() - band.height()) / 2 != band.top())
+            smoke_fail(MainWindow::tr("caption 双轨几何不符：控件=%1 命中带=%2 (期望 %3×%4)")
+                           .arg(widget.height())
+                           .arg(band.height())
+                           .arg(theme::Metrics::caption_btn_w)
+                           .arg(theme::Metrics::caption_btn_hit_h));
+        // 带外（贴满顶栏的 hover 面里、32px 带之上的 2px 处）真发一次按下+释放：不得触发按钮
+        frameless->set_intercept_actions(true);
+        QStringList band_routed;
+        const QMetaObject::Connection band_conn =
+            QObject::connect(frameless, &plat::Frameless::caption_action, w,
+                             [&band_routed](plat::CaptionAction action) {
+                                 band_routed << QString::fromLatin1(caption_action_name(action));
+                             });
+        const auto send_click = [](QWidget *target, const QPoint &pos) {
+            const QPointF global(target->mapToGlobal(pos));
+            QMouseEvent press(QEvent::MouseButtonPress, QPointF(pos), global, Qt::LeftButton,
+                              Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(target, &press);
+            QMouseEvent release(QEvent::MouseButtonRelease, QPointF(pos), global, Qt::LeftButton,
+                                Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(target, &release);
+        };
+        send_click(cap_close, QPoint(cap_close->width() / 2, outside_y)); // 带外
+        const int routed_after_outside = band_routed.size();
+        send_click(cap_close, QPoint(cap_close->width() / 2, widget.height() / 2)); // 带内
+        QObject::disconnect(band_conn);
+        frameless->set_intercept_actions(false);
+        std::printf("UI-SMOKE caption-dual-track: out-of-band=%d in-band=%s\n",
+                    routed_after_outside,
+                    band_routed.size() > 0 ? qUtf8Printable(band_routed.last()) : "(none)");
+        std::fflush(stdout);
+        if (routed_after_outside != 0 || band_routed.size() != 1 ||
+            band_routed.last() != QStringLiteral("close"))
+            smoke_fail(MainWindow::tr("caption 命中带失效：带外=%1 带内=%2")
+                           .arg(routed_after_outside)
+                           .arg(band_routed.join(',')));
+        if (frameless->classify_logical(cap_close->mapToGlobal(
+                QPoint(cap_close->width() / 2, outside_y))) != plat::HitZone::Caption)
+            smoke_fail(MainWindow::tr("caption 命中带之外不是拖拽区（应回落 HTCAPTION/Caption）"));
+    }
+
     std::printf("UI-SMOKE frameless-platform: native-hit-test=%d\n",
                 plat::Frameless::native_hit_test_supported() ? 1 : 0);
     std::fflush(stdout);
@@ -2754,6 +2893,26 @@ void MainWindow::Impl::smoke_probe_theme() {
     pump(80);
     std::printf("UI-SMOKE theme-baseline: %s\n", tokens.dark() ? "dark" : "light");
     std::fflush(stdout);
+
+    // ---- theme::set_mod 便捷函数（M4-W2-fix 第 9 条；T12 的 .mod 消费入口）----
+    // 承诺的语义 = setProperty(kModProperty) + unpolish/polish 触发 QSS 重算；QSS 侧规则
+    // （*[ppMod="true"] 的强调边框/字 + 700 字重）由 style_sheet 落地，这里两者都取证。
+    {
+        QLabel probe;
+        theme::set_mod(&probe, true);
+        const bool on = probe.property(theme::kModProperty).toBool();
+        theme::set_mod(&probe, false);
+        const bool off = !probe.property(theme::kModProperty).toBool();
+        const bool rule = w->styleSheet().contains(QStringLiteral("ppMod"));
+        std::printf("UI-SMOKE set-mod: on=%d off=%d qss-rule=%d\n", on ? 1 : 0, off ? 1 : 0,
+                    rule ? 1 : 0);
+        std::fflush(stdout);
+        if (!on || !off || !rule)
+            smoke_fail(MainWindow::tr("theme::set_mod 未落地（on=%1 off=%2 qss-rule=%3）")
+                           .arg(on ? 1 : 0)
+                           .arg(off ? 1 : 0)
+                           .arg(rule ? 1 : 0));
+    }
 }
 
 void MainWindow::Impl::smoke_probe_lifecycle() {
@@ -3638,6 +3797,23 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
                 run_progress != nullptr ? run_progress->value() : -1,
                 run_progress != nullptr ? run_progress->maximum() : -1);
     std::fflush(stdout);
+    // G5 锁定视觉（M4-W2-fix 第 7 条）：运行中「设置/预设」置灰（QSS :disabled = .icon-btn.dim
+    // opacity .4 的等效预合成色）、步骤 1/2 置灰（.step.dim opacity .45，含编号徽标）。
+    {
+        const bool presets_off = presets_btn != nullptr && !presets_btn->isEnabled();
+        const bool settings_off = settings_btn != nullptr && !settings_btn->isEnabled();
+        const bool steps_off = step_meta != nullptr && !step_meta->isEnabled() &&
+                               step_output != nullptr && !step_output->isEnabled();
+        std::printf("UI-SMOKE lock-visual: presets-disabled=%d settings-disabled=%d "
+                    "steps1-2-disabled=%d\n",
+                    presets_off ? 1 : 0, settings_off ? 1 : 0, steps_off ? 1 : 0);
+        std::fflush(stdout);
+        if (!presets_off || !settings_off || !steps_off)
+            smoke_fail(MainWindow::tr("运行期锁定视觉：设置/预设/步骤 1-2 未置灰（%1/%2/%3）")
+                           .arg(presets_off ? 1 : 0)
+                           .arg(settings_off ? 1 : 0)
+                           .arg(steps_off ? 1 : 0));
+    }
     smoke_grab(shots_dir, kSmokeShots[kShotRun]);
 
     if (!wait_for([this] { return !page_run->is_running(); }, kRunWaitMs)) {

@@ -3,7 +3,12 @@
 //
 // 真源 = docs/mockups/*.html 的 :root CSS 变量与逐条规则（§9.4：HTML=精确规格）+ 设计 §9.2
 // token 表；两者逐项一致（对照表见 M4-T9 自查留证：token 行 + 尺寸行 + 控件规约行）。
-// 本文件只出**值**与少量生成函数（Tokens / QPalette / QSS / QFont / set_mod），不依赖控件。
+// 本文件只出**值**与少量生成函数（Tokens / QPalette / QSS / QFont / set_mod），不建控件、
+// 不持状态；set_mod/repolish 只对调用方传入的控件做 setProperty + unpolish/polish。
+//
+// 命中几何的单源（M4-W2-fix 第 8 条）：缩放带与 caption 命中带高度都**不在本文件取值**，
+// 而是从 platform/frameless.h 转发（kResizeBorderPx / kResizeBorderMaximizedPx /
+// kCaptionHitHeightPx）—— 窗口命中判定与 QSS 尺寸永远同源。
 //
 // 明暗跟随系统：system_theme_mode() 读 QStyleHints::colorScheme（Qt 6.5+；Windows/Linux
 // 桌面由平台主题喂入）。Unknown（含 offscreen 平台）→ 深色，理由 = 原型基准是 meta-dark。
@@ -21,6 +26,7 @@
 #include <QString>
 #include <QStyle>
 #include <QStyleHints>
+#include <QWidget> // set_mod/repolish 的入参类型（只做 setProperty + unpolish/polish）
 #include <Qt>
 #include <QtGlobal>
 
@@ -83,12 +89,16 @@ struct Metrics {
     static constexpr int ratio_tolerance_permille = 30; // 弹性比容差（±0.03，覆盖 Qt 取整）
     // ---- caption（§9.1：Win11 规格 46×32 命中区）----
     static constexpr int caption_btn_w = 46; // .capbtn{width:46px}
-    // mockup .capbtns{align-self:stretch} → 三钮**贴满**顶栏高（hover 与命中同高）；
-    // §9.1 文本的「46×32」是 Win11 在 32px 标题栏下的规格，本骨架顶栏 52px（mockup）→
-    // 纵向取满高（否则"可见按钮上/下各 10px 会变成拖拽区"与用户所见不一致），宽度 46 不变。
-    static constexpr int caption_btn_h = toolbar_height;
-    static constexpr int caption_btn_win11_h = 32; // §9.1 明文记录的对照值（本骨架不生效）
-    // 命中区/缩放带宽度：单源 = platform/frameless.h（§9.1 6px；最大化 1px）
+    // 双轨（M4-W2-fix 第 5 条，主对话裁定）：
+    //   * **命中区**高 = 46×32 —— §9.1 明文；真源 = platform/frameless.h::
+    //     kCaptionHitHeightPx（窗口侧命中几何单源），此处只转发；
+    //   * **hover 高亮面**高 = 52 = 顶栏高 —— mockup .capbtns{align-self:stretch}（原型里
+    //     三钮整高，关闭钮 hover 的 #c42b1c 铺满顶栏）→ 控件自身尺寸取满高，QSS :hover 画满，
+    //     命中判定只在居中的 32px 带内成立（frameless 的 rect_of/build_box 落地）。
+    static constexpr int caption_btn_hit_h = pp::platform::kCaptionHitHeightPx;
+    static constexpr int caption_btn_h = toolbar_height; // 视觉面（hover/字形盒）
+    // 命中区/缩放带宽度：**单源规则**（M4-W2-fix 第 8 条）—— 真源 = platform/frameless.h
+    // （§9.1 6px；最大化 1px），本处只转发（改 frameless.h 的常量即全局传导）。
     static constexpr int resize_border = pp::platform::kResizeBorderPx;
     static constexpr int resize_border_max = pp::platform::kResizeBorderMaximizedPx;
     static constexpr int icon_btn = 32;          // .icon-btn{width:32px;height:32px}
@@ -117,6 +127,13 @@ struct Metrics {
     static constexpr int pill_radius_qss = 9;
     static constexpr int pill_pad_x = 7; // .pill{padding:1px 7px}
     static constexpr int pill_pad_y = 1;
+    // .app-title .ver{padding:1px 6px}（版本药丸的内距与 .pill 不同，单列）
+    static constexpr int ver_pad_x = 6;
+    static constexpr int ver_pad_y = 1;
+    // 运行期锁定（G5）的"变暗"系数：mockup .icon-btn.dim{opacity:.4} / .step.dim{opacity:.45}
+    // （整钮不透明度；图标钮走 QSS 预合成色，步钮走自绘 painter.setOpacity）
+    static constexpr double icon_dim_opacity = 0.4;
+    static constexpr double step_dim_opacity = 0.45;
     static constexpr int mod_weight = 700;  // .spin.mod{font-weight:700}
     static constexpr int mod_border_px = 1; // .spin.mod 边框 1px
     static constexpr int checkbox_px = 15;  // .cbox 15px r=3
@@ -178,6 +195,13 @@ struct Tokens {
     QColor bottom_bg;   // .bottom{background}
     QColor stage_bg;    // .pv-stage{background:#0d0f12}（主题无关深色舞台）
     QColor close_hover; // .capbtn.close:hover{background:#c42b1c}（§9.1 逐字，双主题同值）
+    // 运行期锁定（G5）的图标钮禁用态：= .icon-btn 的底/边/字整体按 opacity .4 合成后的等效不透明色
+    // （QSS 不能设控件不透明度；等价做法是预合成 —— 见 Metrics::icon_dim_opacity 注释）
+    QColor icon_disabled_bg;
+    QColor icon_disabled_bd;
+    QColor icon_disabled_fg;
+    // 舞台框边（.pv-stage{border:1px solid rgba(255,255,255,.08)}；深色舞台 = 主题无关固定值）
+    QColor stage_bd;
     // 进度条四态（run-dark .obar/.bigbar + i / i.done / i.fail / i.synth）：
     // 轨 = control，边框 = control_bd；实心 = accent，完成 = ok，失败 = err；
     // 合成（斜纹）= 双色带 progress_fill_from→to，角度/带宽见 Metrics（115° / 6px）
@@ -223,6 +247,15 @@ inline QColor composite(const QColor &over, const QColor &under) {
     return QColor(static_cast<int>(std::lround(over.red() * a + under.red() * (1.0 - a))),
                   static_cast<int>(std::lround(over.green() * a + under.green() * (1.0 - a))),
                   static_cast<int>(std::lround(over.blue() * a + under.blue() * (1.0 - a))));
+}
+
+// 以不透明度 alpha 把前景 over 合成到背景 under 上（CSS `opacity` 对**整钮**的等效静态色）。
+// 用途：运行期锁定的图标钮（mockup .icon-btn.dim{opacity:.4}）—— QSS 无法表达控件级不透明度，
+// 故把"底色/边框/字形"三者分别按同一 alpha 预合成到窗口底上，视觉等价（不含被禁用的交互反馈）。
+inline QColor at_opacity(const QColor &color, const QColor &under, double alpha) {
+    QColor scaled = color;
+    scaled.setAlphaF(std::clamp(alpha, 0.0, 1.0) * color.alphaF());
+    return composite(scaled, under);
 }
 
 // §9.2 accent = 系统强调色。判据 = **调色板的 Highlight 是否来自平台样式**：
@@ -347,8 +380,15 @@ inline Tokens tokens(ThemeMode mode) {
     t.mod_bd = t.accent_bd;                   // §9.2 .mod = 强调边框
     t.mod_text = t.accent;                    // §9.2 .mod = 强调色字
     t.stage_bg = QColor(0x0d, 0x0f, 0x12);    // .pv-stage（主题无关）
+    t.stage_bd = rgba(255, 255, 255, 0.08);   // .pv-stage{border:1px solid rgba(255,255,255,.08)}
     t.close_hover = QColor(0xc4, 0x2b, 0x1c); // §9.1 关闭悬停（双主题同值）
     t.control_solid = composite(t.control, t.window);
+    // 锁定态图标钮（.icon-btn.dim{opacity:.4} 的静态等效）：三色都按 .4 合成到窗口底
+    t.icon_disabled_bg =
+        at_opacity(t.control, t.window, Metrics::icon_dim_opacity); // 底（--ctl 本身带透明）
+    t.icon_disabled_bd = at_opacity(composite(t.control_bd, t.window), t.window,
+                                    Metrics::icon_dim_opacity); // 边（--ctl-bd 合成成实体色再淡出）
+    t.icon_disabled_fg = at_opacity(t.text2, t.window, Metrics::icon_dim_opacity);
     return t;
 }
 
@@ -364,6 +404,18 @@ inline ThemeMode system_theme_mode() {
     default:
         return ThemeMode::Dark;
     }
+}
+
+// 启动/走查主题（**单源**：GUI 与 main.cpp 的启动后处理都走这一条）：PP_UI_THEME=dark|light
+// 强制；未设置 → 跟随系统。强制档供 W5 双主题截图走查用（系统同一时刻只能是一种模式），
+// 也用于启动期 DWM 沉浸式深色标题栏的对齐（M4-W2-fix 第 11 条：窗口边框不再按系统色滞后）。
+inline ThemeMode preferred_theme_mode() {
+    const QByteArray forced = qgetenv("PP_UI_THEME").trimmed().toLower();
+    if (forced == QByteArrayLiteral("dark"))
+        return ThemeMode::Dark;
+    if (forced == QByteArrayLiteral("light"))
+        return ThemeMode::Light;
+    return system_theme_mode();
 }
 
 // ---------------------------------------------------------------------------
@@ -414,10 +466,28 @@ inline QPalette palette(const Tokens &t) {
 }
 
 // 改动值 .mod（§9.2「强调边框+强调色字」，mockup .spin.mod 另带 700 字重）：
-// 动态属性钩子 + QSS 属性选择器 —— T12 只需 theme::set_mod(widget, changed)。
+// 动态属性钩子 + QSS 属性选择器 —— 消费入口 = theme::set_mod(widget, changed)。
 inline constexpr const char *kModProperty = "ppMod";
 // 卡头徽标 .pill 的动态属性钩子（QLabel[ppPill="true"]）：卡头/计数徽标共用一条规则
 inline constexpr const char *kPillProperty = "ppPill";
+
+// QSS 重算：Qt 只在 polish 时求值属性选择器，动态属性变更后必须 unpolish+polish 才会换样式。
+inline void repolish(QWidget *widget) {
+    if (widget == nullptr || widget->style() == nullptr)
+        return;
+    widget->style()->unpolish(widget);
+    widget->style()->polish(widget);
+    widget->update();
+}
+
+// 改动值 .mod 的落地入口（T12 起消费）：setProperty(ppMod) + 强制 QSS 重算。
+// changed=true → 强调色边框 + 强调色字（+ 700 字重，见 mod_qss）；false → 复原。
+inline void set_mod(QWidget *widget, bool changed) {
+    if (widget == nullptr)
+        return;
+    widget->setProperty(kModProperty, changed);
+    repolish(widget);
+}
 
 inline QString mod_qss(const Tokens &t) {
     const QString prop = QString::fromLatin1(kModProperty);
@@ -448,7 +518,9 @@ inline QString style_sheet(const Tokens &t) {
            QStringLiteral("; }\n");
     qss += QStringLiteral("QLabel#pp-app-ver { color: ") + css_color(t.text3) +
            QStringLiteral("; border: 1px solid ") + card_bd + QStringLiteral("; border-radius: ") +
-           QString::number(Metrics::pill_radius) + QStringLiteral("px; padding: 1px 6px; }\n");
+           QString::number(Metrics::pill_radius_qss) + // .ver{border-radius:99px} → QSS 胶囊口径
+           QStringLiteral("px; padding: ") + QString::number(Metrics::ver_pad_y) +
+           QStringLiteral("px ") + QString::number(Metrics::ver_pad_x) + QStringLiteral("px; }\n");
     // caption 三钮（§9.1 能力表 + mockup .capbtn：46×满高；关闭悬停 #c42b1c）
     qss += QStringLiteral("QPushButton#pp-cap-min, QPushButton#pp-cap-max, "
                           "QPushButton#pp-cap-close { background: transparent; border: none; "
@@ -466,6 +538,14 @@ inline QString style_sheet(const Tokens &t) {
            css_color(t.text2) + QStringLiteral("; }\n");
     qss += QStringLiteral("QToolButton#pp-presets:hover, QToolButton#pp-settings:hover { color: ") +
            css_color(t.text) + QStringLiteral("; }\n");
+    // 运行期锁定（G5 + 设计 §9.3「设置/预设置灰」）：原型 .icon-btn.dim{opacity:.4} 整钮变暗。
+    // QSS 无控件级不透明度 → 用 theme::at_opacity 预合成的等效底/边/字（见 tokens()）。
+    // 顺序：写在 :hover 之后（同优先级下后者胜），保证禁用态不被 hover 提亮。
+    qss += QStringLiteral("QToolButton#pp-presets:disabled, QToolButton#pp-settings:disabled { "
+                          "background: ") +
+           css_color(t.icon_disabled_bg) + QStringLiteral("; border: 1px solid ") +
+           css_color(t.icon_disabled_bd) + QStringLiteral("; color: ") +
+           css_color(t.icon_disabled_fg) + QStringLiteral("; }\n");
     // 卡片（.card：r=8 + 边框；浅色的 0 1px 4px 阴影由 ui 侧 QGraphicsDropShadowEffect 落地）
     qss += QStringLiteral("QFrame#pp-card { background: ") + card +
            QStringLiteral("; border: 1px solid ") + card_bd + QStringLiteral("; border-radius: ") +
@@ -483,8 +563,9 @@ inline QString style_sheet(const Tokens &t) {
            QStringLiteral("px ") + QString::number(Metrics::pill_pad_x) + QStringLiteral("px; }\n");
     // 预览舞台（.pv-stage）
     qss += QStringLiteral("QFrame#pp-preview-stage { background: ") + css_color(t.stage_bg) +
-           QStringLiteral("; border: 1px solid rgba(255,255,255,8%); border-radius: ") +
-           QString::number(t.radius_stage) + QStringLiteral("px; }\n");
+           QStringLiteral("; border: 1px solid ") + css_color(t.stage_bd) +
+           QStringLiteral("; border-radius: ") + QString::number(t.radius_stage) +
+           QStringLiteral("px; }\n");
     // 底栏（.bottom）
     qss += QStringLiteral("QWidget#pp-bottombar { background: ") + css_color(t.bottom_bg) +
            QStringLiteral("; border-top: 1px solid ") + css_color(t.line) + QStringLiteral("; }\n");

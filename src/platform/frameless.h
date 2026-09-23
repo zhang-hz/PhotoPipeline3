@@ -34,9 +34,19 @@ class QWidget;
 
 namespace pp::platform {
 
-// 边缘缩放带宽度（设计 §9.1「6px 边框带」；最大化时收敛为 1px —— 见 Metrics 同名口径）
+// 边缘缩放带宽度（设计 §9.1「6px 边框带」；最大化时收敛为 1px —— 见 Metrics 同名口径。
+// **单源规则（M4-W2-fix 第 8 条）**：这两个常量是唯一真源；ui/theme.h 的
+// Metrics::resize_border / resize_border_max 只是转发，不得再写第二份数值。）
 inline constexpr int kResizeBorderPx = 6;
 inline constexpr int kResizeBorderMaximizedPx = 1;
+
+// caption 三钮命中区高度（设计 §9.1 逐字：「右上角 ─ □ ✕，Win11 规格 46×32 命中区」）。
+// M4-W2-fix 第 5 条（主对话裁定，双轨）：
+//   * **命中**区 = 46×32（本常量；仅在按钮矩形内居中的 32px 带内返回 HTMIN/MAX/CLOSE）；
+//   * **hover 高亮面** = 贴满 52px 顶栏（mockup .capbtns{align-self:stretch} + .capbtn{width:46px}
+//     → 可见反馈整高，由控件自身矩形承担，QSS :hover 画满）。
+// 与缩放带同口径：本文件是命中几何的唯一真源（theme::Metrics::caption_btn_hit_h 转发）。
+inline constexpr int kCaptionHitHeightPx = 32;
 
 // 命中区。Windows 侧映射到 HT* 常量（映射表在 frameless.cpp，Windows 段内有 static_assert
 // 与 SDK 宏逐值核对）；其它平台只用 Caption（拖拽）与四边/四角（缩放）。

@@ -29,7 +29,9 @@
 //       不会出现两套解码口径）→ LANCZOS3 降采样（实测：48MP 全解码 ≈ 0.33s，见 test_thumbs）；
 //     * 全程不做色彩变换（像素 = 源像素，sRGB 假定；徽标「输入 · 未修改像素」的字面语义）；
 //       色彩空间只出**描述名**（ICC 描述经 lcms2 读元数据，无 ICC → "sRGB 假定"）；
-//     * nthreads=1：预览池自身 ≤2 线程，不让 OIIO 再开内部线程（§6.1「不与转码抢核」）。
+//     * M4-W2-fix（性能，第 12 条）：降采样 = **多线程 LANCZOS3**（IBA::resize nthreads=0，
+//       本机 16 核）；滤波器/中间精度/不放大/白底语义不变（只并行化，不改像素结果）。
+//       预览池自身仍是 ≤2 并发（§6.1「不与转码抢核」的"池并发"口径不变）。
 
 #include "core/thumbs.h"
 
@@ -270,7 +272,12 @@ bool try_embedded_preview(const std::filesystem::path &src, int target, ThumbIma
 //   * 目标缓冲经 IBAprep 的 "dst_datatype"="float" 显式 float32 —— 内部全程 float32（铁律），
 //     滤波器 LANCZOS3 是 §6.1 指定的降采样滤波器（"resize" 的自动默认在降采样时也是 lanczos3，
 //     这里显式写死，防止上游默认值漂移）；
-//   * nthreads=1：预览池自身 ≤2 线程，不让 OIIO 再开内部线程（§6.1「不与转码抢核」）。
+//   * M4-W2-fix 第 12 条（性能）：去掉 nthreads=1 → IBA::resize 按 OIIO 全局线程数并行
+//     （nthreads=0 = 本机 16 核）。**只改"怎么算"不改"算什么"**：滤波器 lanczos3、float32
+//     中间面、不放大、白底、sRGB 假定逐条不变（像素结果与单线程逐位一致）。
+//     两段式（box 抽到 2×目标再 LANCZOS3）按任务书"可行则"实测**不可行**（本机 48MP→2048：
+//     两段 738ms vs 单段 499ms，box 段的抽取开销大于它给 lanczos 省下的部分）→ 不采用，
+//     保留单段多线程 LANCZOS3。实测三段（内嵌原生/内嵌降采样/无内嵌）见 W2-fix selfChecks。
 bool scale_to_rgba8(const OIIO::ImageBuf &src, int max_px, QImage &out) {
     const OIIO::ImageSpec spec = src.spec(); // 文件型 ImageBuf：此处触发惰性 spec 读取
     const int sw = spec.width;
@@ -291,7 +298,7 @@ bool scale_to_rgba8(const OIIO::ImageBuf &src, int max_px, QImage &out) {
         const OIIO::ImageBufAlgo::KWArgs opts{{OIIO::ParamValue("filtername", "lanczos3")},
                                               {OIIO::ParamValue("dst_datatype", "float")}};
         OIIO::ImageBuf scaled;
-        if (!OIIO::ImageBufAlgo::resize(scaled, src, opts, roi, /*nthreads=*/1))
+        if (!OIIO::ImageBufAlgo::resize(scaled, src, opts, roi, /*nthreads=*/0))
             return false;
         if (!scaled.get_pixels(roi, OIIO::TypeFloat, px.data()))
             return false;

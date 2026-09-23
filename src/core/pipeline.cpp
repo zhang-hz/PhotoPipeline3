@@ -17,6 +17,11 @@
 //       flatten       = 仅工作缓冲（**原地**合成，零额外帧）。
 //   * 工作缓冲的像素存储由 pipeline 自持（std::vector<float>），OIIO::ImageBuf 只做非拥有包装
 //     （APPBUFFER）—— 这样 flatten 才能"原地缩通道"。
+//   * color 回拷规则（W1-T5 复核项 1 修订，2026-09-24）：ColorManager 的两条落地路径是
+//       (i) 灰度源（1/2ch）→ 彩色目标：换**独立新缓冲**（升维）→ 必须回拷；
+//       (ii) RGB/RGBA（3/4ch）→ **原地**写回我们包装的同一块存储 → **不得回拷**。
+//     判据 = "当前缓冲的本地像素地址是否仍是工作缓冲的存储"；同址回拷会把刚变换好的像素清零
+//     后再从同一块内存读回 = 全黑图（静默数据损失，见下方颜色段的逐条注释）。
 //   * 逐 target 串行（同文件内），文件间并行由 scheduler 管。
 //
 // 编码顺序（§4.3）：supports_alpha 的 target 在前、false 的在后（稳定排序），保证做 alpha 的
@@ -204,6 +209,9 @@ struct WorkImage {
 
 // src 的像素 → 工作缓冲（这是 0.2 的"decode 缓冲 + 工作缓冲"两帧中的第二次分配；
 // 之后调用方可释放 decode 缓冲）。通道数变化（color 灰度升维）时工作缓冲会重新分配。
+// W1-T5 复核项 1（2026-09-24）警示：本函数**先清零/覆写目的缓冲再读源**，故 `src` 绝不能与
+// `img.px` 同址（同址 = 清零后读回全零）。调用方在 color 段必须先判定 ColorManager 是否替换了
+// 缓冲（3/4 通道原地写回时不调用本函数 —— 见 run_one_file 的颜色段注释）。
 bool work_from_buf(WorkImage &img, const OIIO::ImageBuf &src, std::string &err) {
     if (!src.initialized()) {
         err = "empty image buffer";
@@ -826,8 +834,20 @@ FileOutcome run_one_file(const FileEntry &fe, const RunConfig &cfg, EventFn ev) 
             stage(FileState::Coloring, Stage::Color, -1);
             mux->shared_stage(Stage::Color, 0.f);
             t0 = Clock::now();
-            // ColorManager 会替换 ImageBuf（可能改变通道数：灰度升维）→ 变换后同步回工作缓冲
+            // ColorManager 的落地形态见下（可能替换 ImageBuf：灰度升维）—— 只有**被替换**时
+            // 才把像素同步回工作缓冲。
+            // 回拷规则（W1-T5 复核项 1 修订，2026-09-24）：只有**缓冲被替换**时才回拷。
+            //   * `cbuf = work.buf` 对 APPBUFFER 是**共享存储**而非深拷（OIIO 的 ImageBuf 拷贝
+            //     构造函数对 APPBUFFER 直接复用同一 bufspan），故 cbuf 的像素就是 work.px；
+            //   * ColorManager 的 3/4 通道分支用 write_planes **原地**写进这块存储
+            //     （src/core/colormanager.cpp:721-733），此时像素已就位 —— 若照旧回拷，
+            //     work_from_buf 的第一步（assign/覆写 n 个样本）与"源"同址 → 把刚变换好的像素
+            //     清零后再从同一块内存读回 → **全黑图**且 ok=true、无告警（静默数据损失）。
+            //   * 灰度升维分支 `buf = make_like(...)` 换成独立新缓冲 → 地址不同 → 必须回拷。
+            // 判据用"当前缓冲的本地像素地址是否仍是工作缓冲的存储"（两条路径都是本地缓冲：
+            // APPBUFFER 包装 / make_like 的 LOCALBUFFER，故 localpixels() 恒非空）。
             OIIO::ImageBuf cbuf = work.buf;
+            const void *const work_px = work.px.data();
             ColorOutcome co =
                 ColorManager::instance().transform(cbuf, src_icc, src_is_gray, eff_target);
             res.t.color_ms = ms_since(t0);
@@ -837,10 +857,12 @@ FileOutcome run_one_file(const FileEntry &fe, const RunConfig &cfg, EventFn ev) 
             icc_to_embed = co.icc_to_embed;
             res.color_src = co.src_desc;
             res.color_dst = co.dst_desc;
-            std::string cerr;
-            if (!work_from_buf(work, cbuf, cerr))
-                return fail("color transform failed: " + cerr);
-            cbuf.clear();
+            if (cbuf.localpixels() != work_px) {
+                std::string cerr;
+                if (!work_from_buf(work, cbuf, cerr))
+                    return fail("color transform failed: " + cerr);
+                cbuf.clear();
+            }
             mux->shared_stage(Stage::Color, 1.f);
         } else {
             // Pixels untouched: keep the source profile as-is (T4 ruling ③).

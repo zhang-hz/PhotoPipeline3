@@ -519,6 +519,16 @@ int main() {
         check(rs.ok, "color/srgb-ok", rs.error);
         check(has_warning(rs, pp::WarningKind::NoIccAssumeSrgb), "color/srgb-warning",
               "NoIccAssumeSrgb missing for an ICC-less source");
+        // W1-T5 复核项 1 的回归防线（2026-09-24）：修复前此处产出**全黑图**而 ok=true 无告警
+        // （3 通道原地色彩变换后的回拷把同址像素清零）。非 keep 目标的输出必须真正带像素。
+        // 阈值 0.02 = 5/255：全黑图（≤1-2/255 的舍入噪声）必判负，而 8px 棋盘的反差恒 ≥0.5。
+        int sw = 0, sh = 0, sc = 0;
+        const std::vector<float> spx = read_pixels(rs.out, sw, sh, sc);
+        float smax = 0.0f;
+        for (float v : spx)
+            smax = std::max(smax, v);
+        check(!spx.empty() && smax > 0.02f, "color/srgb-pixels-non-zero",
+              "非 keep 色彩目标的输出近乎全黑（静默数据损失）：max=" + std::to_string(smax));
     }
 
     // ---- T. metadata write failure → file-level warning via the explicit writer channel (M2-T4)
@@ -917,6 +927,54 @@ int main() {
         check(read_info(r.outputs[0].out).channels == 3, "gray-mixed/png-rgb",
               "全局 sRGB 变换后 png 也应是 3 通道");
         check(read_info(r.outputs[1].out).channels == 3, "gray-mixed/webp-rgb", "webp 应为 3 通道");
+
+        // 像素断言（W1-T5 复核项 1 回归防线）：灰度源 + 共享 sRGB 变换走 GRAY_FLT→RGB_FLT 单调用
+        // 升维（ColorManager 换缓冲分支），值保持 —— test_color 的 gray-rgb 口径（tests/unit/
+        // test_color.cpp:283 起）为 |值差| ≤2e-3、三通道相等。且**不得全零**（全黑 = 静默数据
+        // 损失）。webp 行是有损编码 → 只断言非常数零（有损量化不进逐像素口径）。
+        {
+            int gw = 0, gh = 0, gc = 0;
+            const std::vector<float> gin = read_pixels(base / "gray8.png", gw, gh, gc);
+            int pw = 0, ph = 0, pc = 0;
+            const std::vector<float> pout = read_pixels(r.outputs[0].out, pw, ph, pc);
+            const bool g_geom =
+                !gin.empty() && !pout.empty() && gc == 1 && pc == 3 && gw == pw && gh == ph;
+            check(g_geom, "gray-mixed/png-pixel-geometry",
+                  "in=" + std::to_string(gc) + "ch " + std::to_string(gw) + "x" +
+                      std::to_string(gh) + " out=" + std::to_string(pc) + "ch " +
+                      std::to_string(pw) + "x" + std::to_string(ph));
+            std::size_t nz = 0, spread_bad = 0, value_bad = 0;
+            if (g_geom) {
+                for (std::size_t i = 0; i < static_cast<std::size_t>(gw) * gh; ++i) {
+                    const float g = gin[i];
+                    const float rr = pout[3 * i], gg = pout[3 * i + 1], bb = pout[3 * i + 2];
+                    if (rr > 0.0f || gg > 0.0f || bb > 0.0f)
+                        ++nz;
+                    if (std::fabs(rr - gg) > 2e-3f || std::fabs(gg - bb) > 2e-3f)
+                        ++spread_bad;
+                    if (std::fabs(rr - g) > 2e-3f || std::fabs(gg - g) > 2e-3f ||
+                        std::fabs(bb - g) > 2e-3f)
+                        ++value_bad;
+                }
+            }
+            check(nz > 0, "gray-mixed/png-pixel-non-zero",
+                  "共享 sRGB 升维后 png 全零（全黑图 = 静默数据损失）：nonzero=" +
+                      std::to_string(nz) + "/" + std::to_string(gin.size()));
+            check(g_geom && spread_bad == 0 && value_bad == 0,
+                  "gray-mixed/png-pixel-gray-preserved",
+                  "GRAY→RGB 升维应值保持且三通道相等：spread_bad=" + std::to_string(spread_bad) +
+                      " value_bad=" + std::to_string(value_bad));
+            int ww = 0, wh = 0, wc = 0;
+            const std::vector<float> wout = read_pixels(r.outputs[1].out, ww, wh, wc);
+            std::size_t wnz = 0;
+            for (float v : wout) {
+                if (v > 0.0f)
+                    ++wnz;
+            }
+            check(!wout.empty() && wnz > 0, "gray-mixed/webp-pixel-non-zero",
+                  "webp 行全零（全黑图 = 静默数据损失）：nonzero=" + std::to_string(wnz) + "/" +
+                      std::to_string(wout.size()));
+        }
     }
     {
         // (4b) 单输出不触发共享升维告警：灰度 → png（支持灰度）应保持 1 通道且无告警
@@ -1076,9 +1134,103 @@ int main() {
         std::error_code ec;
         check(fs::exists(r.outputs[0].out, ec) && fs::exists(r.outputs[1].out, ec),
               "dup-target/both-written", "两个产物都应落盘");
+        const std::uintmax_t sz0 = fs::file_size(r.outputs[0].out, ec);
+        const std::uintmax_t sz1 = fs::file_size(r.outputs[1].out, ec);
+        check(sz0 > 0 && sz1 > 0, "dup-target/both-non-empty",
+              "两产物都必须非空（复核项 2：同 desired 不得互相覆盖/截断）：" + std::to_string(sz0) +
+                  " / " + std::to_string(sz1));
         check(r.out_bytes == r.outputs[0].out_bytes + r.outputs[1].out_bytes, "dup-target/bytes",
               std::to_string(r.out_bytes) + " != " + std::to_string(r.outputs[0].out_bytes) + "+" +
                   std::to_string(r.outputs[1].out_bytes));
+    }
+
+    // ==========================================================================
+    // AE. 非 keep 色彩目标的像素完整性（W1-T5 复核项 1 的回归防线，2026-09-24）
+    //
+    // 修复前的静默数据损失（复核报告 high）：RGB/RGBA 源 + 非 keep 色彩目标时，管线把
+    // ColorManager **原地**写好的 3/4 通道工作缓冲又过一遍 work_from_buf 回拷 —— 回拷的源
+    // （cbuf）与目的（work.px）是**同一块 APPBUFFER 存储**（OIIO 的 ImageBuf 拷贝对 APPBUFFER
+    // 是共享而非深拷），回拷第一步（assign/覆写）把像素清零后再从同一块内存读回 → 全黑图，
+    // 且每行 ok=true、无告警（现有测试矩阵无非 keep 目标的像素断言 → 闸门看不见）。
+    //
+    // 断言口径：无嵌入 ICC 的源 → assumed sRGB → 目标 sRGB 是**恒等变换**（test_color 的
+    // identity 口径：max err ≤1e-5，见 tests/unit/test_color.cpp:179 / :198），故输出必须逐像素
+    // 等于输入、且**不是常数零**。容器取无损（bmp24 / png8）→ 像素断言不被有损量化混淆。
+    {
+        // (a) RGB 源（3 通道 → ColorManager 原地写回分支）
+        RunSpec s;
+        s.format = "bmp";
+        s.bitdepth = 24;
+        s.color = pp::ColorTarget::SRGB;
+        const pp::FileResult r = run_spec(base / "rgb8.png", corpus, tmp / "color-srgb-pixels", s);
+        check(r.ok, "color-srgb-pixels/ok", r.error);
+        int iw = 0, ih = 0, ic = 0;
+        const std::vector<float> in = read_pixels(base / "rgb8.png", iw, ih, ic);
+        int ow = 0, oh = 0, oc = 0;
+        const std::vector<float> out = read_pixels(r.out, ow, oh, oc);
+        const bool geom =
+            !in.empty() && !out.empty() && iw == ow && ih == oh && ic == oc && ic == 3;
+        check(geom, "color-srgb-pixels/geometry",
+              "in=" + std::to_string(ic) + "ch " + std::to_string(iw) + "x" + std::to_string(ih) +
+                  " out=" + std::to_string(oc) + "ch " + std::to_string(ow) + "x" +
+                  std::to_string(oh));
+        std::size_t nonzero = 0, over_tol = 0;
+        double max_err = 0.0;
+        if (geom) {
+            for (std::size_t i = 0; i < out.size(); ++i) {
+                if (out[i] > 0.0f)
+                    ++nonzero;
+                const double d =
+                    std::fabs(static_cast<double>(out[i]) - static_cast<double>(in[i]));
+                max_err = std::max(max_err, d);
+                if (d > 1e-5)
+                    ++over_tol;
+            }
+        }
+        check(nonzero > 0, "color-srgb-pixels/non-zero",
+              "非 keep 目标的输出全零（全黑图 = 静默数据损失）：nonzero=" +
+                  std::to_string(nonzero) + "/" + std::to_string(out.size()));
+        check(geom && over_tol == 0, "color-srgb-pixels/identity<=1e-5",
+              "assumed sRGB → sRGB 应为恒等（test_color 口径 ≤1e-5）：max_err=" +
+                  std::to_string(max_err) + " 超容差样本=" + std::to_string(over_tol));
+    }
+    {
+        // (b) RGBA 源（4 通道 → 颜色面原地、alpha 原样保留）
+        RunSpec s;
+        s.format = "png";
+        s.bitdepth = 8;
+        s.color = pp::ColorTarget::SRGB;
+        const pp::FileResult r = run_spec(base / "rgba8.png", corpus, tmp / "color-srgb-rgba", s);
+        check(r.ok, "color-srgb-rgba/ok", r.error);
+        int iw = 0, ih = 0, ic = 0;
+        const std::vector<float> in = read_pixels(base / "rgba8.png", iw, ih, ic);
+        int ow = 0, oh = 0, oc = 0;
+        const std::vector<float> out = read_pixels(r.out, ow, oh, oc);
+        const bool geom =
+            !in.empty() && !out.empty() && iw == ow && ih == oh && ic == oc && ic == 4;
+        check(geom, "color-srgb-rgba/geometry",
+              "in=" + std::to_string(ic) + "ch " + std::to_string(iw) + "x" + std::to_string(ih) +
+                  " out=" + std::to_string(oc) + "ch " + std::to_string(ow) + "x" +
+                  std::to_string(oh));
+        std::size_t nonzero = 0, over_tol = 0;
+        double max_err = 0.0;
+        if (geom) {
+            for (std::size_t i = 0; i < out.size(); ++i) {
+                if (out[i] > 0.0f)
+                    ++nonzero;
+                const double d =
+                    std::fabs(static_cast<double>(out[i]) - static_cast<double>(in[i]));
+                max_err = std::max(max_err, d);
+                if (d > 1e-5)
+                    ++over_tol;
+            }
+        }
+        check(nonzero > 0, "color-srgb-rgba/non-zero",
+              "RGBA 源的非 keep 目标输出全零（全黑图 = 静默数据损失）：nonzero=" +
+                  std::to_string(nonzero) + "/" + std::to_string(out.size()));
+        check(geom && over_tol == 0, "color-srgb-rgba/identity<=1e-5",
+              "assumed sRGB → sRGB 应为恒等（含 alpha 原样保留）：max_err=" +
+                  std::to_string(max_err) + " 超容差样本=" + std::to_string(over_tol));
     }
 
     if (g_failed == 0) {

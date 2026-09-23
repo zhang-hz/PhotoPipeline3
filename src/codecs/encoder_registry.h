@@ -1,4 +1,5 @@
 // PP-FROZEN(interface): 内部注册表（T6 创建；T7 只 include + 用宏，不得改动本文件）
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include <memory>
 #include <string>

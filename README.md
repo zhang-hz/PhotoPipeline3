@@ -7,17 +7,20 @@ M0 交付仓库骨架、冻结接口、链接探针与金标语料。**M1a 交�
 ## 构建（四步）
 
 ```bash
-# 1. 新机器一键引导：aqtinstall 装 Qt、vcpkg 钉死 tag、生成 tools/env.sh
-bash tools/bootstrap.sh
+# 1. 新机器一键引导：aqtinstall 装 Qt、vcpkg 钉死 tag（M3-W3 起不再生成 tools/env.sh）
+python tools/bootstrap.py
 
-# 2. 载入环境（工具链全部在仓库内：.toolchain/、.cache/、vcpkg/）
-source tools/env.sh
+# 2. 环境注入（工具链全部在仓库内：.toolchain/、.cache/、vcpkg/）
+#    tools/env.sh / env.sh.example 已随 W3 删除；改为每条命令经 tools/env.py 包装器执行
+#    （它注入 vcvars 环境、Qt bin 与仓库内 venv 的 cmake/ninja）
+python tools/env.py run -- cmake --preset release
 
-# 3. 配置 + 构建
-cmake --preset release && cmake --build --preset release
+# 3. 构建
+python tools/env.py run -- cmake --build --preset release
 
 # 4. 生成金标语料 + 跑测试
-bash tools/gen_corpus.sh && ctest --preset release
+python tools/env.py run -- python tools/gen_corpus.py
+python tools/env.py run -- ctest --preset release
 ```
 
 其它预设：`cmake --preset dev`（ASan+UBSan，Debug）、`cmake --preset tsan`（TSan，仅 configure）。
@@ -25,9 +28,8 @@ bash tools/gen_corpus.sh && ctest --preset release
 **引擎验证构建（含 `--dev`）**：`--dev` 分支由 `PP_BUILD_DEV` 宏保护，发布构建不含该代码路径（design §8.6）。跑 harness / 矩阵 / 规模验证时另建构建目录并打开开关；并行任务各用自己的 `build/<task-id>`，依赖已在 `vcpkg_installed` 就位，关掉 manifest 自动安装以免并发写：
 
 ```bash
-source tools/env.sh
-cmake --preset release -B build/m1-dev -DVCPKG_MANIFEST_INSTALL=OFF -DPP_BUILD_DEV=ON
-cmake --build build/m1-dev
+python tools/env.py run -- cmake --preset release -B build/m1-dev -DVCPKG_MANIFEST_INSTALL=OFF -DPP_BUILD_DEV=ON
+python tools/env.py run -- cmake --build build/m1-dev
 ```
 
 ## M1a 工具与用法
@@ -68,7 +70,7 @@ build/m1-dev/photopipeline --dev tests/golden/meta/exif_full.jpg --out .cache/ou
 | 工具 | 用途 |
 |---|---|
 | `pp_verify <expected.json> <actual_output> [--selftest]` | 按 `tests/golden/SCHEMA.md` 断言 `pixel.mode`（exact / psnr+threshold_db）、`metadata[]`、`warnings_contain[]`。输出 `VERIFY <case> OK\|FAIL <detail>`，退出码 = FAIL 数；`--selftest` 用内存样本自检（不需要语料，已进 ctest） |
-| `tests/golden/smoke.sh [BUILD_DIR]` | **16 对断言级**金样冒烟（M1 冒烟级 9 对 → M2 断言级 16 对），逐例跑 `photopipeline --dev` 并用 `pp_verify` 断言像素 + 元数据值 + warnings 三面。脚本内的默认 `BUILD_DIR` 指向 `build/release`，**请显式传入自己的构建目录**（或用 `PP_BIN` / `PP_VERIFY` / `OUT_ROOT` 覆盖）；输出 `SMOKE total=16 pass=16 fail=0`，退出码 = 失败例数 |
+| `tests/golden/smoke.py [BUILD_DIR]` | **16 对断言级**金样冒烟（M1 冒烟级 9 对 → M2 断言级 16 对），逐例跑 `photopipeline --dev` 并用 `pp_verify` 断言像素 + 元数据值 + warnings 三面。脚本内的默认 `BUILD_DIR` 指向 `build/release`，**请显式传入自己的构建目录**（或用 `PP_BIN` / `PP_VERIFY` / `OUT_ROOT` 覆盖）；输出 `SMOKE total=16 pass=16 fail=0`，退出码 = 失败例数 |
 
 ### 测试命令
 
@@ -77,20 +79,20 @@ build/m1-dev/photopipeline --dev tests/golden/meta/exif_full.jpg --out .cache/ou
 ctest --test-dir build/release --output-on-failure
 
 # 金标语料（27 fixture，幂等；PP_MKFIXTURES= 指向本次构建的 pp_mkfixtures）
-PP_MKFIXTURES=build/release/pp_mkfixtures bash tools/gen_corpus.sh
+PP_MKFIXTURES=build/release/pp_mkfixtures python tools/gen_corpus.py
 
 # 16 对断言级金样（M1 冒烟级 9 对 → M2 断言级 16 对；需 PP_BUILD_DEV=ON 的构建，脚本走 --dev）
-bash tests/golden/smoke.sh build/m1-dev
+python tests/golden/smoke.py build/release-dev
 ```
 
 ## 开发工具（M2）
 
 | 工具 | 用途 |
 |---|---|
-| `tools/regression.sh` | 全语料 `--dev` 回归基线：日志规范化后与 `tools/baseline/golden.log` diff（双跑零 diff） |
+| `tools/regression.py` | 全语料 `--dev` 回归基线：日志规范化后与 `tools/baseline/golden.log` diff（双跑零 diff） |
 | `tools/lsan.supp` | LeakSanitizer 抑制文件（当前**无生效规则**，注释即论证） |
 | `tools/tsan.supp` | ThreadSanitizer 抑制文件（每条规则附 happens-before 论证 + 阳性对照） |
-| `tests/golden/smoke.sh` | 金样冒烟：**16 对断言级**用例（像素 + 元数据值 + warnings） |
+| `tests/golden/smoke.py` | 金样冒烟：**16 对断言级**用例（像素 + 元数据值 + warnings） |
 | `photopipeline --ui-smoke` | 无头 UI 走查：三页遍历 + 参数谓词/地图边界断言 + 真实转码，产出 8 张截图 |
 | `tools/make_appimage.sh` | 打包 AppImage（离线、可重复重跑；内置四项烟测） |
 | `tools/ci-system-deps.txt` | CI/构建机系统依赖**单一事实来源**（64 个 apt 包，行尾注释格式；`linux` / `ui-smoke` / `appimage` 三 job 与 `warm-cache.yml` 共用同一清单） |
@@ -108,16 +110,16 @@ gh workflow run warm-cache.yml                   # 缓存播种：改 vcpkg.json
                                                  # （workflow_dispatch；每周日 03:17 UTC 另有定时兜底）
 ```
 
-### `tools/regression.sh` — 全语料回归基线
+### `tools/regression.py` — 全语料回归基线
 
 ```bash
-bash tools/regression.sh [BUILD_DIR] [--update]
+python tools/regression.py [BUILD_DIR] [--update]
 #   BUILD_DIR  默认 build/release-dev（须为 -DPP_BUILD_DEV=ON 的构建）
 #   --update   用当前构建重新生成 tools/baseline/golden.log（而非对比）
 ```
 
 - 运行内容：27 输入 × 8 格式 + `--metadata-only` × base 16 × 4 格式 = **12 次顺序调用 / 280 文件槽**；
-  `tests/golden/real/`（用户样本）与 `tests/golden/smoke/`（归 smoke.sh）不入基线。
+  `tests/golden/real/`（用户样本）与 `tests/golden/smoke/`（归 smoke.py）不入基线。
 - **三个前提（不得放宽）**：① `workers=1` 保证逐文件顺序、预算记账与编码调用序列确定；
   ② 输出目录固定为 `.cache/regression/out-<run>` 且先清空，日志中的输出路径每次一致；
   ③ 脚本整体幂等（新输出目录、`--conflict overwrite`、不跨运行携带状态）。
@@ -148,10 +150,10 @@ ctest --test-dir build/m2-t2 --output-on-failure
   （vcpkg debug 静态库 + 预编译 Qt/GLib DSO）不产生 TSan 影子边。含阳性对照（纯 Qt 复现器、
   直接竞态复现器）证明抑制不是"关闭竞态检测"。
 
-### `tests/golden/smoke.sh` — 金样冒烟（16 对断言级）
+### `tests/golden/smoke.py` — 金样冒烟（16 对断言级）
 
 ```bash
-bash tests/golden/smoke.sh <build_dir>      # 须为 -DPP_BUILD_DEV=ON 的构建
+python tests/golden/smoke.py <build_dir>      # 须为 -DPP_BUILD_DEV=ON 的构建
 ```
 
 - 16 对用例：jpeg-lossy / jxl-lossless / png16-lossless / tiff16-lzw（走 `--preset` 分支）/
@@ -168,7 +170,7 @@ bash tests/golden/smoke.sh <build_dir>      # 须为 -DPP_BUILD_DEV=ON 的构建
 ```bash
 QT_QPA_PLATFORM=offscreen build/release-dev/photopipeline \
     --ui-smoke --inputs tests/golden/base --shots .cache/ui-review
-# ctest 入口：tests/ui_smoke.sh <build_dir>（ctest -R ui_smoke）
+# ctest 入口：python tests/ui_smoke.py <build_dir>（ctest -R ui_smoke）
 ```
 
 - 8 张截图：`01-meta` / `02-output` / `02b-output-avif` / `03-run` / `03b-run-done` / `04-settings` /
@@ -181,11 +183,11 @@ QT_QPA_PLATFORM=offscreen build/release-dev/photopipeline \
 ```bash
 tools/make_appimage.sh [OUT_DIR]     # 默认 dist/
 # env: PP_BUILD_DIR（默认 build/m2-release）、QT_DIR（默认从产物 ldd 反查 Qt）
-# 产物: <OUT_DIR>/PhotoPipeline-0.1.0-x86_64.AppImage + PhotoPipeline.AppDir/（先删后建，可重跑）
+# 产物: <OUT_DIR>/PhotoPipeline-<版本>-x86_64.AppImage + PhotoPipeline.AppDir/（先删后建，可重跑）
 ```
 
 - 输入为 release 预设产物；版本号从产物 `--version` 读取（不在脚本硬编码）；第三方许可由
-  `tools/collect_licenses.sh` 汇总为 `usr/share/licenses/<port>/copyright`（目录名 = port 名）
+  `tools/collect_licenses.py` 汇总为 `usr/share/licenses/<port>/copyright`（目录名 = port 名）
   与本项目 `usr/share/licenses/PhotoPipeline/LICENSE`。
 - 打包器 `tools/bin/appimagetool-x86_64.AppImage` 与 type2 runtime `tools/bin/type2-runtime-x86_64`
   均入库并旁置 `.sha512`：打包先校验两份 SHA512，再以 `APPIMAGE_EXTRACT_AND_RUN=1`（不依赖 FUSE）与
@@ -194,7 +196,7 @@ tools/make_appimage.sh [OUT_DIR]     # 默认 dist/
 - 组装：`usr/lib` = `ldd` 闭包中的非系统 `.so`（Qt6*、libjpeg 等），Qt 插件
   （platforms/imageformats/iconengines/styles/**tls**）、OIIO 插件目录（静态 OIIO 时留空），
   `usr/share` 拷图标与 desktop，`AppRun` 导出 `LD_LIBRARY_PATH` / `QT_PLUGIN_PATH` / `OIIO_LIBRARY_PATH`。
-- 脚本内烟测四项：① 产物 `--version` 输出 `PhotoPipeline 0.1.0`；② AppDir 二进制 `ldd` 无 `not found`；
+- 脚本内烟测四项：① 产物 `--version` 输出 `PhotoPipeline <版本>`；② AppDir 二进制 `ldd` 无 `not found`；
   ③ `AppRun` 存在且 desktop 的 `Exec=`/`Icon=` 与冻结文本逐行一致；④ 从产物解包确认
   `usr/share/licenses/` 内 ≥30 个 port 的 `copyright` + 本项目 `LICENSE`。
 - 不承诺字节可复现（squashfs 超级块时间戳/mtime 参与），同结构不同 sha 按现状接受。
@@ -204,8 +206,8 @@ tools/make_appimage.sh [OUT_DIR]     # 默认 dist/
 ### 构建与运行
 
 ```bash
-source tools/env.sh
-cmake --preset release && cmake --build --preset release
+python tools/env.py run -- cmake --preset release
+python tools/env.py run -- cmake --build --preset release
 ./build/release/photopipeline
 ```
 
@@ -223,33 +225,32 @@ cmake --preset release && cmake --build --preset release
 ### 无头 UI 冒烟（`--ui-smoke`，需 `PP_BUILD_DEV=ON`）
 
 ```bash
-source tools/env.sh
-cmake --preset release-dev -B build/release-dev -DVCPKG_MANIFEST_INSTALL=OFF
-cmake --build build/release-dev -j
-ctest --test-dir build/release-dev --output-on-failure    # 24 条 = 23 引擎 + ui_smoke
+python tools/env.py run -- cmake --preset release-dev -B build/release-dev -DVCPKG_MANIFEST_INSTALL=OFF
+python tools/env.py run -- cmake --build build/release-dev
+python tools/env.py run -- ctest --test-dir build/release-dev --output-on-failure    # 24 条 = 23 引擎 + ui_smoke
 # 或手动跑（offscreen，产出 8 张走查截图）：
 QT_QPA_PLATFORM=offscreen ./build/release-dev/photopipeline \
     --ui-smoke --inputs tests/golden/base --shots .cache/ui-review
 ```
 
-脚本化走查覆盖：三页遍历截图（01-meta / 02-output / 02b-output-avif / 03-run / 03b-run-done / 04-settings / 05-exif-editor / 06-presets）、参数谓词断言（jxl 无损→modular+distance 0、jpeg quality 显隐、tiff 压缩联动）、地图 GCJ↔WGS 边界断言（点击偏差 <0.001°）、16 文件真实转码运行；成功 stdout 末行 `UI-SMOKE OK shots=8 pages=3`。ctest 入口 `tests/ui_smoke.sh <build_dir>`。
+脚本化走查覆盖：三页遍历截图（01-meta / 02-output / 02b-output-avif / 03-run / 03b-run-done / 04-settings / 05-exif-editor / 06-presets）、参数谓词断言（jxl 无损→modular+distance 0、jpeg quality 显隐、tiff 压缩联动）、地图 GCJ↔WGS 边界断言（点击偏差 <0.001°）、16 文件真实转码运行；成功 stdout 末行 `UI-SMOKE OK shots=8 pages=3`。ctest 入口 `python tests/ui_smoke.py <build_dir>`。
 
 ## 发行版（AppImage）
 
 发行产物为单一 AppImage（Linux x86_64）；自包含 Qt6、8 个编码器、OIIO、色彩与元数据运行库，免安装。
 
-预编译 AppImage 见 [Releases](https://github.com/zhang-hz/PhotoPipeline3/releases/tag/v0.1.0)（v0.1.0，sha256 以 release 页与下方说明为准）
+预编译 AppImage 见 [Releases](https://github.com/zhang-hz/PhotoPipeline3/releases)（下载最新 tag 的 `PhotoPipeline-<版本>-x86_64.AppImage`；sha256 以 release 页与下方说明为准）
 
 ### 下载与运行
 
 ```bash
 # 1) 取得产物：Release 附件（首选），或本地打包产物 dist/
-#    PhotoPipeline-0.1.0-x86_64.AppImage（约 50 MiB）
-chmod +x PhotoPipeline-0.1.0-x86_64.AppImage
+#    PhotoPipeline-<版本>-x86_64.AppImage（约 50 MiB）
+chmod +x PhotoPipeline-<版本>-x86_64.AppImage
 
 # 2) 运行
-./PhotoPipeline-0.1.0-x86_64.AppImage            # 图形界面（文件管理器中亦可双击，需允许"执行"）
-./PhotoPipeline-0.1.0-x86_64.AppImage --version  # → PhotoPipeline 0.1.0
+./PhotoPipeline-<版本>-x86_64.AppImage            # 图形界面（文件管理器中亦可双击，需允许"执行"）
+./PhotoPipeline-<版本>-x86_64.AppImage --version  # → PhotoPipeline <版本>
 ```
 
 - **取件优先级（v0.1.0 起）**：**首选** [Release 附件](https://github.com/zhang-hz/PhotoPipeline3/releases/tag/v0.1.0)
@@ -258,7 +259,7 @@ chmod +x PhotoPipeline-0.1.0-x86_64.AppImage
   （**需登录 GitHub**，且属更早轮次的历史产物，sha256 与 Release 附件不同）；本地打包产物见
   「开发工具（M2）」。
 - AppImage 类型 2：正常挂载运行需要 FUSE（`libfuse2`）。目标机无 FUSE 时改用
-  `./PhotoPipeline-0.1.0-x86_64.AppImage --appimage-extract-and-run`（等价环境变量
+  `./PhotoPipeline-<版本>-x86_64.AppImage --appimage-extract-and-run`（等价环境变量
   `APPIMAGE_EXTRACT_AND_RUN=1`）。
 - 无图形环境（服务器/CI）可 `QT_QPA_PLATFORM=offscreen` 运行无头冒烟（见"开发工具（M2）"节）。
 
@@ -268,7 +269,7 @@ chmod +x PhotoPipeline-0.1.0-x86_64.AppImage
 - **目录只读 → 回退数据目录**：`$XDG_DATA_HOME/PhotoPipeline`（默认 `~/.local/share/PhotoPipeline`），
   预设与日志为其子目录；两处创建都失败时程序以空路径交调用方处理。
 - AppImage 的挂载点只读，故**直接运行 AppImage 时自动回退 XDG**（数据在用户目录，不随 AppImage 移动）。
-- 需要"真便携"（U 盘/移动介质）：`./PhotoPipeline-0.1.0-x86_64.AppImage --appimage-extract` 解包到可写
+- 需要"真便携"（U 盘/移动介质）：`./PhotoPipeline-<版本>-x86_64.AppImage --appimage-extract` 解包到可写
   目录后运行 `squashfs-root/AppRun`，数据即写在该解包目录内。
 
 ### 系统要求
@@ -277,7 +278,7 @@ chmod +x PhotoPipeline-0.1.0-x86_64.AppImage
 - **glibc**：**官方发行产物由 CI 构建**（`appimage` job，ubuntu-24.04 runner），基线 **≥ 2.39**
   （noble 自带 glibc，`objdump -T` 最大符号版本）；**本地自建产物取决于本机 glibc** —— 例如在
   Ubuntu 26.04 上打包，实测要求 `GLIBC_2.43`，该产物只适用于 glibc ≥ 2.43 的目标机。两句都成立：
-  取发行附件请认 **Release 附件**（v0.1.0 = CI 构建，见章首下载入口）；本地打包件按本机 glibc 自用
+  取发行附件请认 **Release 附件**（= CI 构建产物，见章首下载入口）；本地打包件按本机 glibc 自用
 - **系统库**（不在 AppImage 内，需目标机提供）：
   - `libssl3`：Qt 6.8 的 TLS 后端插件（`libqopensslbackend.so`）运行期 dlopen `libssl.so.3` /
     `libcrypto.so.3`；缺失时 `QNetworkAccessManager` 报 `No functional TLS backend was found`，
@@ -313,8 +314,81 @@ chmod +x PhotoPipeline-0.1.0-x86_64.AppImage
 - **第三方组件**（与"关于"页清单同源）：Exiv2 / x265（GPLv2+）、libheif（LGPLv3）、Qt（LGPLv3）、
   OpenImageIO（Apache-2.0）、libjxl / libwebp / SVT-AV1 / libaom（BSD）、lcms2（MIT）、
   libpng / libtiff / libjpeg（jpegli 分支）等；各库版权与许可全文随 AppImage 分发
-  （`tools/collect_licenses.sh` 汇总 → `usr/share/licenses/<port>/copyright`，本版 40 个 port；
+  （`tools/collect_licenses.py` 汇总 → `usr/share/licenses/<port>/copyright`，AppImage 为 40 个 port、
+  Windows zip 为 39 个，各见对应发行章节；
   本项目许可 → `usr/share/licenses/PhotoPipeline/LICENSE`）。
+
+## 发行版（Windows）
+
+**M3 起提供 Windows x64 免安装产物**（0.2.0 为首个 Windows 版本）；与 Linux 的 AppImage 同一引擎
+与界面，差异只在打包形态（zip vs AppImage）与平台运行时（MSVC 运行时 / Qt msvc2022_64）。
+
+### 下载与运行
+
+```powershell
+# 1) 取得产物：GitHub Releases 页面（见下方"源码与许可"链接）
+#    Windows: PhotoPipeline-<版本>-win64.zip
+#    Linux 对照件同页: PhotoPipeline-<版本>-x86_64.AppImage
+
+# 2) 解压到任意可写目录（zip 顶层为单一目录 PhotoPipeline/），双击或命令行运行
+.\PhotoPipeline\photopipeline.exe
+```
+
+### 系统要求
+
+- **Windows 10 1903+ / Windows 11**，x64。1903 是**下限**：可执行文件嵌入的应用清单声明
+  `activeCodePage=UTF-8`（全局 UTF-8 语义，见 D2），更早的 Windows 不支持该清单字段。
+- 无需自备 Qt / vcpkg / VC++ 再发行包：包内已含 Qt 6.8.3 运行库（Core/Gui/Widgets/Network/Svg）
+  与其插件树（`platforms/`、`imageformats/`、`iconengines/`、`styles/`、`tls/`、
+  `networkinformation/`、`generic/`）、全部第三方图像库 DLL，以及 **app-local VC 运行时**
+  （`msvcp140*.dll` / `vcruntime140*.dll` / `concrt140.dll` / `vccorlib140.dll`，取自 MSVC 的
+  `Microsoft.VC*.CRT` 部署单元）—— 目标机不需要预装任何 VC redist。
+- `platforms/qoffscreen.dll` 随包（供无头 `--ui-smoke` 使用）；`tls/` 内含 Qt 的
+  Schannel / CertOnly 后端（Windows 无需 OpenSSL 动态库）。
+
+### 解压即用 / 便携模式
+
+- 解压到任意**可写**目录后直接运行 `photopipeline.exe`（无安装步骤、不写注册表）。
+- **数据 = 便携**：日志与预设首次使用时创建在 **exe 同目录**（`logs/`、`presets/`）。
+- exe 目录**不可写**时（例如解压到 `C:\Program Files`）自动回退到
+  `%APPDATA%\PhotoPipeline\`（同样建 `logs/`、`presets/`）。两条路径都不可写时本次运行不落盘
+  （日志走 stderr，不静默失败）。
+- 便携用法示例：解压到 U 盘或用户目录（如 `D:\Tools\PhotoPipeline\`）直接运行，配置随目录走。
+
+### 命令行
+
+```powershell
+.\photopipeline.exe --version      # → PhotoPipeline 0.2.0（单行 + 退出码 0；非 dev 门控，发布构建亦可用）
+.\photopipeline.exe                # 图形界面
+.\photopipeline.exe --ui-smoke     # 无头 UI 走查（offscreen，产出 8 张截图；仅 PP_BUILD_DEV=ON 的构建）
+.\photopipeline.exe --dev ...      # 开发 harness：全语料矩阵 / 回归基线入口（同上，仅 dev 构建）
+```
+
+- **输出与行尾**：`stdout`/`stderr` 走**平台文本模式**（Windows 为 CRLF）；**日志文件两平台统一 LF**。
+  脚本匹配冻结行时一律 `rstrip('\r\n')`。
+- **控制台可见性**：GUI 子系统进程在**捕获型句柄**（管道、文件重定向——`ctest`、`subprocess`、
+  `> out.txt` 等）下原样保留句柄，输出可被捕获；其余情形（双击、直接在终端调用）自动挂接父控制台，
+  故 `--version` 等输出在终端可见。
+
+### 从源码构建（Windows）
+
+```powershell
+python tools\bootstrap.py                                     # 一键引导：Qt(win64_msvc2022_64) + vcpkg(pinned) + 仓库内工具链
+python tools\env.py run -- cmake --preset release             # 配置（env.py 注入 vcvars/Qt/cmake/ninja）
+python tools\env.py run -- cmake --build --preset release     # 构建（产物 build\release\photopipeline.exe）
+python tools\env.py run -- ctest --preset release             # 23 条单测
+python tools\env.py run -- python tests\golden\smoke.py build\release-dev                       # 16 对金样（需 release-dev 树）
+python tools\env.py run -- python tools\make_winzip.py dist --smoke-exe build\release-dev\photopipeline.exe   # 打包 zip
+```
+
+`tools/make_winzip.py` 内置与 AppImage 同口径的**五项烟测**（闭包 / Qt 来源 / 结构 / 许可 / 启动，
+含 offscreen `--ui-smoke`），任一失败即以非零码退出；产物 = `dist\PhotoPipeline-<版本>-win64.zip`。
+
+### 许可
+
+- 本项目：**GPL-3.0-or-later**（全文见 [LICENSE](LICENSE)）。
+- 包内 `licenses/` 随附全部第三方许可文本：`licenses/<port>/copyright`（本版 Windows 包 39 个
+  port）+ `licenses/PhotoPipeline/LICENSE`；打包时会校验数量（≥30）并在产物内复核。
 
 ## M0 工具
 
@@ -323,7 +397,7 @@ chmod +x PhotoPipeline-0.1.0-x86_64.AppImage
 | `pp_linkprobe` | 链接探针：逐库运行时校验（lcms2 / exiv2(+BMFF) / OIIO 插件 / jpegli / libjxl / libheif HEVC+AV1 编码器 / libwebp）。输出 `PROBE <name> OK\|FAIL <detail>` 与尾部两行 `PLUGINS:`、`HEIF_ENCODERS:`；退出码 = FAIL 数 |
 | `pp_mkfixtures` | fixture 生成与校验：`--make <dir>` 生成 exif_full.jpg / webp×2 / heif_exif.heic / avif_exif.avif / jxl_exif.jxl / cmyk.tif，`--verify <dir>` 逐项回读校验（`MADE`/`FIXTURE` 行，退出码 = FAIL 数，目录缺失 → SKIP 77） |
 | `pp_spikes` | Spike 验证：`e` = lcms2 数值金值（sRGB→sRGB 恒等 ≤1e-5；白点→Lab(D50) L∈[99.5,100.5]）；`f --golden-root <dir>` = Exiv2 无损重写保真（SOS `FF DA` 之后字节完全一致 + OIIO 像素 hash 相等） |
-| `tools/gen_corpus.sh` | 生成 `tests/golden/{base,edge,meta}` 语料并写出 `tests/golden/CHECKSUMS`（幂等；可 `OIIOTOOL=` / `PP_MKFIXTURES=` 覆盖工具路径） |
+| `tools/gen_corpus.py` | 生成 `tests/golden/{base,edge,meta}` 语料并写出 `tests/golden/CHECKSUMS`（幂等；可 `OIIOTOOL=` / `PP_MKFIXTURES=` 覆盖工具路径） |
 
 ## 文档
 

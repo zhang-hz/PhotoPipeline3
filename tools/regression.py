@@ -5,7 +5,7 @@
 # debug 期间每修一 bug 全量 diff").
 #
 # usage:
-#   bash tools/regression.sh [BUILD_DIR] [--update]
+#   python tools/regression.py [BUILD_DIR] [--update]
 #
 #   BUILD_DIR   default $BUILD_DIR or <repo>/build/release-dev; must contain the
 #               dev harness binary `photopipeline` (built with -DPP_BUILD_DEV=ON).
@@ -25,7 +25,7 @@
 #     jpeg png tiff webp  (the only formats supporting metadata-only)  -> 4
 #   = 12 sequential invocations, 280 file slots.
 #   tests/golden/real/ is deliberately NOT part of the baseline (user-supplied
-#   samples, empty in-tree); tests/golden/smoke/ belongs to smoke.sh, not here.
+#   samples, empty in-tree); tests/golden/smoke/ belongs to smoke.py, not here.
 #
 # THE THREE PREMISES the baseline depends on (do not relax any of them):
 #   1. workers=1      — single worker keeps the per-file order, the budget
@@ -62,7 +62,7 @@
 #   failure reasons and all summary counts (files/ok/failed/skipped/cancelled/
 #   bytes) — i.e. exactly the "what changed" signal the baseline exists for.
 #
-# regenerate the baseline: bash tools/regression.sh <BUILD_DIR> --update
+# regenerate the baseline: python tools/regression.py <BUILD_DIR> --update
 #
 # ---------------------------------------------------------------------------
 # M3-W3（裁定 D3：Python 单实现，本文件替代 tools/regression.sh）
@@ -271,17 +271,17 @@ def main(argv):
         print('regression: photopipeline not executable: {}'.format(BIN), file=sys.stderr)
         print('regression: pass a dev build dir or configure with -DPP_BUILD_DEV=ON.',
               file=sys.stderr)
-        print('用法: bash tools/regression.sh [BUILD_DIR] [--update]', file=sys.stderr)
+        print('用法: python tools/regression.py [BUILD_DIR] [--update]', file=sys.stderr)
         return 2
     if not (os.path.isdir(os.path.join(ROOT, 'tests', 'golden', 'base'))
             and os.path.isdir(os.path.join(ROOT, 'tests', 'golden', 'edge'))
             and os.path.isdir(os.path.join(ROOT, 'tests', 'golden', 'meta'))):
         print('regression: golden corpus missing under {}/tests/golden '
-              '(run tools/gen_corpus.sh)'.format(ROOT), file=sys.stderr)
+              '(run python tools/gen_corpus.py)'.format(ROOT), file=sys.stderr)
         return 2
     if update == 0 and not os.path.isfile(BASELINE):
         print('regression: baseline missing: {}'.format(BASELINE), file=sys.stderr)
-        print('regression: generate it once with: bash tools/regression.sh {} --update'.format(
+        print('regression: generate it once with: python tools/regression.py {} --update'.format(
             build), file=sys.stderr)
         return 2
     BIN = binary

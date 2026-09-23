@@ -7,7 +7,8 @@
   python tools/env.py print                 按 KEY 排序逐行打印 KEY=VALUE（调试/CI 用）
 
 背景（M3 裁定 D3：共享脚本 Python 单实现，删除 bash 版）:
-  * tools/env.sh.example 已删除（env.sh 是本地 `cp -n` 生成物）；环境故事由本脚本接管。
+  * tools/env.sh.example 已删除，且 tools/env.sh **不再生成**（bootstrap.py 里原有的
+    `cp -n tools/env.sh.example tools/env.sh` 步骤已随 W3 移除）；环境故事全部由本脚本接管。
   * CMakePresets 已自包含（CMakeLists.txt 自己读 tools/versions.env 推 QT_DIR），
     故 env.py 只补工具链环境，不做别的事。
   * 构造内容（单实现内平台分派）:
@@ -196,7 +197,8 @@ def main(argv):
     if os.name == 'nt':
         # Windows: 给出 env= 时 CreateProcess 仍用**调用者自身**的 PATH 搜索 argv[0]
         # （实测: 只把目录放进子进程环境块 → WinError 2；先写回本进程 PATH 再传同一块 → 找到）。
-        # bash `source tools/env.sh` 是同一进程改 PATH，此处等价同步，run -- cl / cmake 才可用。
+        # 历史 bash 版的 `source tools/env.sh` 是同一进程改 PATH（该文件现已不再生成）；
+        # 此处等价同步，run -- cl / cmake 才可用。
         os.environ['PATH'] = env['PATH']
     try:
         return subprocess.run(command, env=env).returncode

@@ -2,6 +2,7 @@
 // 说明：本文件是唯一允许进入 pp_core 的 Qt 适配层（JSON 读写），使 UI、--dev harness、
 //       单元测试三处复用同一份预设 I/O；src/core/ 目录本身仍零 Qt。
 // PP-FROZEN(file)
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include <filesystem>
 #include <string>

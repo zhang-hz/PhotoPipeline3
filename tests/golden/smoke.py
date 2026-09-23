@@ -81,15 +81,15 @@ def main():
         print("smoke: build directory '{}' has no dev harness binary;".format(BUILD), file=sys.stderr)
         print('smoke: configure it with -DPP_BUILD_DEV=ON (a plain release build has no --dev).',
               file=sys.stderr)
-        print('用法: bash tests/golden/smoke.sh [BUILD_DIR]', file=sys.stderr)
+        print('用法: python tests/golden/smoke.py [BUILD_DIR]', file=sys.stderr)
         return 2
     verify = resolve_exe(PP_VERIFY)
     if verify is None:
         print('smoke: pp_verify not executable: {}'.format(PP_VERIFY), file=sys.stderr)
-        print('用法: bash tests/golden/smoke.sh [BUILD_DIR]', file=sys.stderr)
+        print('用法: python tests/golden/smoke.py [BUILD_DIR]', file=sys.stderr)
         return 2
     if not os.path.isdir(os.path.join(GOLDEN, 'base')):
-        print('smoke: golden corpus missing: {}/base (run tools/gen_corpus.sh)'.format(GOLDEN),
+        print('smoke: golden corpus missing: {}/base (run python tools/gen_corpus.py)'.format(GOLDEN),
               file=sys.stderr)
         return 2
 

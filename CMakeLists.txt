@@ -56,6 +56,13 @@ elseif(MSVC)
     add_compile_options(/utf-8 /W4 /permissive- /external:anglebrackets /external:W0 /DNOMINMAX)
 endif()
 
+# M4-T3 §11.1：AVX2 编译基线（自研 targets）。定义 INTERFACE 目标 pp_avx2_baseline
+# （MSVC /arch:AVX2 /GL + /LTCG；GCC/Clang -march=x86-64-v3 -mtune=raptorlake|haswell
+# + LTO），必须在定义任何 target 之前 include；下文把该目标 PUBLIC 挂在 pp_core 上，
+# 于是全部自研消费者（单测/工具/GUI）自动继承同一组 flags。
+# vcpkg 依赖侧的同一组 flags 由 overlay triplet（triplets/x64-*-avx2.cmake）注入 —— 两处口径一致。
+include("${CMAKE_SOURCE_DIR}/cmake/avx2.cmake")
+
 # ccache 可用性回退（M1-T15；R18/D7）：只有 ccache 真正可用时才设 launcher，否则整条构建会红。
 # 背景（R18 实测）：未注入工具链环境（原 `source tools/env.sh`，M3-W3 起为
 # `python tools/env.py run -- …`）时 CCACHE_DIR 未设、HOME 也不可用 → ccache 把缓存目录
@@ -135,7 +142,9 @@ file(GLOB_RECURSE PP_CORE_SOURCES CONFIGURE_DEPENDS
 add_library(pp_core STATIC ${PP_CORE_SOURCES})
 # M2-T11 §2.2：生成的 core/version.h（构建目录）随 src 一并 PUBLIC 传播
 target_include_directories(pp_core PUBLIC ${CMAKE_SOURCE_DIR}/src ${CMAKE_BINARY_DIR}/gen)
-target_link_libraries(pp_core PUBLIC OpenImageIO::OpenImageIO JPEG::JPEG
+# M4-T3：PUBLIC 挂 AVX2 基线 flags（§11.1）。pp_core 是全部自研 target 的公共下游，
+# 挂在这里等于"自研 targets 全覆盖"，且保证 pp_core 的 /GL 对象与消费者的 /LTCG 成对。
+target_link_libraries(pp_core PUBLIC pp_avx2_baseline OpenImageIO::OpenImageIO JPEG::JPEG
     libjpeg-turbo::jpegli-static Exiv2::exiv2lib heif PkgConfig::LIBJXL
     PkgConfig::WEBP PkgConfig::WEBPMUX PkgConfig::LCMS2 PkgConfig::TIFF4 spdlog::spdlog Qt6::Core)
 

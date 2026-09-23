@@ -86,6 +86,12 @@ vcpkg_cmake_configure(
         -DUSE_OpenVDB=OFF
         -DUSE_PTEX=OFF
         -DUSE_TBB=OFF
+        # M4-T3 §11.1：显式钉死 OIIO 的 SIMD 口径。
+        # 背景（实测）：不传该变量时 `USE_SIMD:STRING=`（空）→ OIIO 的
+        # src/cmake/compiler.cmake 整段跳过（第 327 行 `if(NOT USE_SIMD STREQUAL "")`），
+        # 于是 SIMD 级别退回编译器默认（MSVC x64 = SSE2），且升级 OIIO 时口径会无声漂移。
+        # 取值域见同一行的 cache 描述：0/sse2/.../avx/avx2/avx512f/f16c/aes。
+        -DUSE_SIMD=avx2
         -DLINKSTATIC=OFF # LINKSTATIC breaks library lookup
         -DBUILD_MISSING_FMT=OFF
         -DOIIO_INTERNALIZE_FMT=OFF  # carry fmt's msvc utf8 usage requirements

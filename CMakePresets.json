@@ -8,21 +8,30 @@
       "toolchainFile": "${sourceDir}/vcpkg/scripts/buildsystems/vcpkg.cmake",
       "cacheVariables": {
         "VCPKG_OVERLAY_PORTS": "${sourceDir}/vcpkg-overlay",
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/triplets",
         "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed"
       }
     },
-    { "name": "release", "inherits": "base",
+    {
+      "name": "base-windows", "hidden": true, "inherits": "base",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+      "cacheVariables": { "VCPKG_TARGET_TRIPLET": "x64-windows-avx2" } },
+    {
+      "name": "base-linux", "hidden": true, "inherits": "base",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
+      "cacheVariables": { "VCPKG_TARGET_TRIPLET": "x64-linux-avx2" } },
+    { "name": "release", "inherits": ["base-windows", "base-linux"],
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" } },
     { "name": "release-dev", "inherits": "release",
       "cacheVariables": { "PP_BUILD_DEV": "ON" } },
-    { "name": "dev", "inherits": "base",
+    { "name": "dev", "inherits": "base-linux",
       "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "PP_BUILD_DEV": "ON",
         "CMAKE_CXX_FLAGS_DEBUG": "-g -fsanitize=address,undefined -fno-omit-frame-pointer"
       } },
-    { "name": "tsan", "inherits": "base",
+    { "name": "tsan", "inherits": "base-linux",
       "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",

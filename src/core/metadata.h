@@ -1,12 +1,14 @@
 // PP-FROZEN(file)
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// PP-THAWED(0.3.0-M4-D20) —— 解冻裁定表 §3.5（依据 docs/v0.3.0-design.md §3.5，"加性"）
+// PP-FROZEN(0.3.0) —— 解冻裁定表 §3.5（依据 docs/v0.3.0-design.md §3.5，"加性"）**已落地**
 //   本文件内 EffectiveField / EffectivePreview / preview_effective 为 0.3.0 一次性解冻（D20）
-//   授权变更面（新增；纯函数、无副作用）；落地任务 = W1-T8（classify + 生效值）。
-//   对应任务落地后：把本文件内的 PP-THAWED 标记改标为 PP-FROZEN(0.3.0)（冻结头 SPDX 延续）。
+//   授权变更面（新增；纯函数、无副作用）；落地任务 = W1-T8（classify + 生效值），
+//   原标注 PP-THAWED(0.3.0-M4-D20) 随落地再冻结为本标记（冻结头 SPDX 延续）。
 //   本文件其余声明（BatchRules / MetadataOverride / build_plan / 写路径矩阵 / SourceMeta /
 //   单测纯函数族）签名与语义均不变 → 维持 PP-FROZEN 只读。
+//   注：`build_plan()` 的函数体在 T8 内**内部重构**（抽共用纯函数 effective_rules/
+//   shifted_exif_time，供 preview_effective 复用），签名、语义、警告与写路径矩阵零改动。
 #pragma once
 #include "core/types.h"
 #include <cstdint>
@@ -82,9 +84,9 @@ struct MetadataPlan {
 MetadataPlan build_plan(const SourceMeta &src, const BatchRules &rules,
                         const std::optional<MetadataOverride> &ex);
 
-// PP-THAWED(0.3.0-M4-D20) §3.5 · EffectiveField + EffectivePreview + preview_effective
-//   0.3.0 新增（加性）：生效值预览，纯函数无副作用，供元数据卡即时显示（§5.1 同源合成逻辑）。
-//   落地任务 W1-T8 → 落地后改标 PP-FROZEN(0.3.0)。
+// PP-FROZEN(0.3.0) §3.5 · EffectiveField / EffectivePreview / preview_effective（**已落地**）
+//   落地任务 = W1-T8（classify + 生效值；出口 `test_effective` 绿：生效值金值 + 与 build_plan
+//   同源对拍）；原标注 PP-THAWED(0.3.0-M4-D20) 随落地再冻结为本标记。
 //   0.3.0 冻结形态（设计 §3.5 逐字抄录；剥去行首 "// " 前缀即设计原文）：
 // clang-format off
 // // 追加：生效值预览（纯函数，无副作用；供元数据卡即时显示）
@@ -98,14 +100,51 @@ MetadataPlan build_plan(const SourceMeta &src, const BatchRules &rules,
 //                                    const std::optional<MetadataOverride>&);
 // // BatchRules / MetadataOverride / build_plan / 写路径矩阵 均不变
 // clang-format on
-//   语义（§5.1，逐字摘录）：`preview_effective(probe, rules, exception)` 与 `build_plan()`
+//   落定名（§3.5 未给出 `DateTimeVal`/`SourceProbe` 的定义；0.2 现形源码中两者都不存在，
+//   M4-T1 已上报 → T8 按 §5.1 语义定稿，W5 收口入 m4-report）：
+//     * `DateTimeVal` = EXIF 2.3 形态的时间值（`value` = "YYYY:MM:DD HH:MM:SS"，与本层其余
+//       时间字段同口径；时区语义模式下的墙钟改写即体现在该值上）。
+//     * `SourceProbe` = `SourceMeta`（【机械性】命名映射：0.2 起 probe 结果类型就是 SourceMeta，
+//       `read_metadata()` 即 probe 入口；不新增重复类型）。
+//   §5.1 语义（逐字摘录）：`preview_effective(probe, rules, exception)` 与 `build_plan()`
 //   **共用同一套合成逻辑**（抽纯函数，杜绝显示/写入两张皮）；时间对 DateTimeOriginal /
 //   DateTimeDigitized / DateTime(ModifyDate) 各出一 `EffectiveField<DateTimeVal>`；GPS 为
 //   `EffectiveField<GpsData>`（规则未配置 → effective=original；隐私剥除开 → effective=nullopt）；
 //   `changed` = (effective ≠ original)。
-//   注（落地待定名，T8 处置）：`DateTimeVal` 与 `SourceProbe` 在 0.2 现形源码中**不存在**
-//   （现为 `SourceMeta` + 字符串时间字段）——§3.5 未给出其定义，T8 落地时按 §5.1 语义定稿
-//   （M4-T1 已上报，W5 收口入 m4-report；本任务零改动）。
+//   落地面（T8 口径，逐条对拍见 tests/unit/test_effective.cpp）：
+//     * 合成逻辑单源 = metadata.cpp 的 `effective_rules()`（BatchRules ⊕ 例外：逐项覆盖、
+//       ignore_batch 先清空批量规则）与 `shifted_exif_time()`（Δ/时区语义都走既有
+//       `shift_exif_datetime` → `reinterpret_timezone`）；`build_plan()` 与 `preview_effective()`
+//       共用这两个纯函数（无第二条合成路径）。
+//     * 三个时间字段 = 三个 EXIF 时间标签（Exif.Photo.DateTimeOriginal /
+//       Exif.Photo.DateTimeDigitized / Exif.Image.DateTime；ExifTool 名依次为
+//       DateTimeOriginal / CreateDate / ModifyDate）。
+//       XMP 日期（xmp:CreateDate/ModifyDate）由 build_plan 一并改写，但**不在**本预览三字段内
+//       （§5.1 逐字只列三个 EXIF 字段）；值缺失/不可解析 → effective = original（build_plan
+//       在这些情形同样跳过写入）。
+//     * 隐私剥除（strip_privacy）：三个时间字段与 GPS 的 effective 全为 nullopt（build_plan 剥除后
+//       不再写任何 EXIF/XMP 字段）；"将被移除"的显示语义由 UI 层负责（§5.1）。
+//     * GPS：规则未配置 → effective = original（从 probe 的 Exif.GPSInfo.* 读回）；隐私剥除或
+//       gps_clear → effective = nullopt；规则配置 → effective = 规则值。
+//     * 纯函数零副作用：只读 probe（const&），不写文件、不改注册表、不落日志。
+struct DateTimeVal {
+    std::string value; // EXIF 2.3 形态 "YYYY:MM:DD HH:MM:SS"
+    bool operator==(const DateTimeVal &) const = default;
+};
+using SourceProbe = SourceMeta; // §3.5 的 SourceProbe（= 0.2 起的 probe 类型 SourceMeta）
+template <class T> struct EffectiveField {
+    T original;
+    T effective;
+    bool changed;
+};
+struct EffectivePreview {
+    EffectiveField<std::optional<DateTimeVal>> datetime_original, datetime_digitized,
+        datetime_modify;
+    EffectiveField<std::optional<GpsData>> gps;
+    bool strip_privacy = false, sync_mtime = false;
+};
+EffectivePreview preview_effective(const SourceProbe &probe, const BatchRules &rules,
+                                   const std::optional<MetadataOverride> &ex);
 // —— 载荷（G1）——
 struct Payloads {
     std::string exif_blob;

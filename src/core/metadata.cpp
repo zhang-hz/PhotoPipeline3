@@ -441,6 +441,144 @@ bool has_any_time_field(const Exiv2::ExifData &exif, const Exiv2::XmpData &xmp) 
     return false;
 }
 
+// ---------------------------------------------------------------------------
+// §3.5 / §5.1 生效值预览的共用件（显示与写入**唯一**合成路径）
+//   `build_plan()`（写路径）与 `preview_effective()`（显示）都只经这两个纯函数做时间/GPS
+//   合成 —— 杜绝"显示/写入两张皮"（test_effective 逐字段对拍）。
+// ---------------------------------------------------------------------------
+
+// effective = 源 ⊕ BatchRules ⊕ 例外（例外逐项覆盖；ignore_batch 先清空批量规则）
+BatchRules effective_rules(const BatchRules &rules, const std::optional<MetadataOverride> &ex) {
+    BatchRules eff;
+    const bool ignore_batch = ex.has_value() && ex->ignore_batch;
+    if (!ignore_batch)
+        eff = rules;
+    if (ex.has_value()) {
+        if (ex->time_shift.has_value())
+            eff.time_shift = ex->time_shift; // 覆盖（inherit = nullopt）
+        if (ex->gps.has_value())
+            eff.gps = ex->gps;
+        if (ex->gps_clear)
+            eff.gps_clear = true;
+        // 例外编辑追加在批量编辑之后 → 同 key 的后者覆盖前者（"逐项覆盖"）
+        eff.exif_edits.insert(eff.exif_edits.end(), ex->exif_edits.begin(), ex->exif_edits.end());
+        eff.xmp_edits.insert(eff.xmp_edits.end(), ex->xmp_edits.begin(), ex->xmp_edits.end());
+        if (ex->strip_privacy.has_value())
+            eff.strip_privacy = *ex->strip_privacy; // 三态覆盖
+    }
+    return eff;
+}
+
+// 单个 EXIF 时间字段在 TimeShift 下的生效值；nullopt = "无变化"（值不可解析 —— 写入路径
+// 在这些情形正是跳过写入，故两条路径给出一致结论）。Δ/时区语义都走既有
+// shift_exif_datetime()（它在 TimezoneSemantic 下转发 reinterpret_timezone）。
+std::optional<std::string> shifted_exif_time(const std::string &value, const TimeShift &s) {
+    bool ok = false;
+    const std::string next = shift_exif_datetime(value, s, ok);
+    if (!ok)
+        return std::nullopt;
+    return next;
+}
+
+// probe 中某个 EXIF 时间标签的原值（缺失/空 → nullopt）
+std::optional<DateTimeVal> exif_time_value(const Exiv2::ExifData &exif, const char *key) {
+    auto it = exif.findKey(Exiv2::ExifKey(key));
+    if (it == exif.end())
+        return std::nullopt;
+    const std::string v = strip_nul(it->toString());
+    if (v.empty())
+        return std::nullopt;
+    return DateTimeVal{v};
+}
+
+std::string exif_string_value(const Exiv2::ExifData &exif, const char *key) {
+    auto it = exif.findKey(Exiv2::ExifKey(key));
+    if (it == exif.end())
+        return {};
+    return strip_nul(it->toString());
+}
+
+bool rational_value(const Exiv2::ExifData &exif, const char *key, std::size_t n, double &out) {
+    auto it = exif.findKey(Exiv2::ExifKey(key));
+    if (it == exif.end())
+        return false;
+    try {
+        const Exiv2::Rational r = it->value().toRational(n);
+        if (r.second == 0)
+            return false;
+        out = static_cast<double>(r.first) / static_cast<double>(r.second);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+// 3 × Rational → 十进制度（纬度/经度）
+bool dms_value(const Exiv2::ExifData &exif, const char *key, double &degrees) {
+    double d = 0.0, m = 0.0, s = 0.0;
+    if (!rational_value(exif, key, 0, d) || !rational_value(exif, key, 1, m) ||
+        !rational_value(exif, key, 2, s)) {
+        return false;
+    }
+    degrees = d + m / 60.0 + s / 3600.0;
+    return true;
+}
+
+// GPSTimeStamp 的 3 × Rational → "HH:MM:SS"
+bool gps_time_of_day(const Exiv2::ExifData &exif, std::string &out) {
+    double h = 0.0, m = 0.0, s = 0.0;
+    if (!rational_value(exif, "Exif.GPSInfo.GPSTimeStamp", 0, h) ||
+        !rational_value(exif, "Exif.GPSInfo.GPSTimeStamp", 1, m) ||
+        !rational_value(exif, "Exif.GPSInfo.GPSTimeStamp", 2, s)) {
+        return false;
+    }
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "%02d:%02d:%02d", static_cast<int>(h), static_cast<int>(m),
+                  static_cast<int>(s));
+    out = buf;
+    return true;
+}
+
+// probe 的 GPS 原值（Exif 侧读取口径与元数据页表单一致：纬度/经度缺一不可、半球由 *Ref 定号；
+// 高度按 GPSAltitudeRef 定号；方向/时间戳按需带出）
+std::optional<GpsData> gps_from_exif(const Exiv2::ExifData &exif) {
+    double lat = 0.0, lon = 0.0;
+    if (!dms_value(exif, "Exif.GPSInfo.GPSLatitude", lat) ||
+        !dms_value(exif, "Exif.GPSInfo.GPSLongitude", lon)) {
+        return std::nullopt;
+    }
+    if (exif_string_value(exif, "Exif.GPSInfo.GPSLatitudeRef") == "S")
+        lat = -lat;
+    if (exif_string_value(exif, "Exif.GPSInfo.GPSLongitudeRef") == "W")
+        lon = -lon;
+
+    GpsData g;
+    g.lat = lat;
+    g.lon = lon;
+    double alt = 0.0;
+    if (rational_value(exif, "Exif.GPSInfo.GPSAltitude", 0, alt))
+        g.altitude = (exif_string_value(exif, "Exif.GPSInfo.GPSAltitudeRef") == "1") ? -alt : alt;
+    double dir = 0.0;
+    if (rational_value(exif, "Exif.GPSInfo.GPSImgDirection", 0, dir))
+        g.direction = dir;
+    const std::string date = exif_string_value(exif, "Exif.GPSInfo.GPSDateStamp");
+    std::string tod;
+    if (!date.empty() && gps_time_of_day(exif, tod))
+        g.timestamp = date + " " + tod;
+    return g;
+}
+
+// changed = (effective ≠ original)，逐字段严格相等：GpsData 无 operator==（PP-FROZEN 面），
+// 故比较口径在本单点定义（§5.1 的 "≠" 逐字实现）。
+bool gps_same(const std::optional<GpsData> &a, const std::optional<GpsData> &b) {
+    if (a.has_value() != b.has_value())
+        return false;
+    if (!a.has_value())
+        return true;
+    return a->lat == b->lat && a->lon == b->lon && a->altitude == b->altitude &&
+           a->direction == b->direction && a->timestamp == b->timestamp;
+}
+
 // Applies `s` to the EXIF time tags and the XMP dates that are actually present (§4.5).
 // Returns the number of fields rewritten.
 int apply_time_shift(Exiv2::ExifData &exif, Exiv2::XmpData &xmp, const TimeShift &s) {
@@ -450,13 +588,13 @@ int apply_time_shift(Exiv2::ExifData &exif, Exiv2::XmpData &xmp, const TimeShift
         if (it == exif.end())
             continue;
         const std::string cur = strip_nul(it->toString());
-        bool ok = false;
-        const std::string next = shift_exif_datetime(cur, s, ok);
-        if (!ok) {
+        // EXIF 侧走与 preview_effective() 共用的纯函数（§3.5/§5.1 同源合成逻辑）
+        const std::optional<std::string> next = shifted_exif_time(cur, s);
+        if (!next.has_value()) {
             log_warn("MetaWrite", "metadata.cpp", "time shift skipped for unparsable value");
             continue;
         }
-        (void)it->setValue(next);
+        (void)it->setValue(*next);
         ++touched;
     }
     for (const char *k : kXmpTimeKeys) {
@@ -624,23 +762,8 @@ MetadataPlan build_plan(const SourceMeta &src, const BatchRules &rules,
     }
 
     // effective = 源 ⊕ BatchRules ⊕ 例外（例外逐项覆盖；ignore_batch 先清空批量规则）
-    BatchRules eff;
-    const bool ignore_batch = ex.has_value() && ex->ignore_batch;
-    if (!ignore_batch)
-        eff = rules;
-    if (ex.has_value()) {
-        if (ex->time_shift.has_value())
-            eff.time_shift = ex->time_shift; // 覆盖（inherit = nullopt）
-        if (ex->gps.has_value())
-            eff.gps = ex->gps;
-        if (ex->gps_clear)
-            eff.gps_clear = true;
-        // 例外编辑追加在批量编辑之后 → 同 key 的后者覆盖前者（"逐项覆盖"）
-        eff.exif_edits.insert(eff.exif_edits.end(), ex->exif_edits.begin(), ex->exif_edits.end());
-        eff.xmp_edits.insert(eff.xmp_edits.end(), ex->xmp_edits.begin(), ex->xmp_edits.end());
-        if (ex->strip_privacy.has_value())
-            eff.strip_privacy = *ex->strip_privacy; // 三态覆盖
-    }
+    // 合成规则单源 = effective_rules()（与 preview_effective() 共用，§3.5/§5.1）
+    const BatchRules eff = effective_rules(rules, ex);
 
     // 隐私剥除优先级最高：剥除后不得再写任何 EXIF/XMP 字段（§4.5）
     if (eff.strip_privacy) {
@@ -691,6 +814,50 @@ MetadataPlan build_plan(const SourceMeta &src, const BatchRules &rules,
     plan.datetime_original = effective_datetime(plan.exif, plan.xmp);
     plan.has_time = !plan.datetime_original.empty();
     return plan;
+}
+
+// ===========================================================================
+// effective preview（§3.5 / §5.1；纯函数零副作用：与 build_plan 同源、只读 probe）
+// ===========================================================================
+
+EffectivePreview preview_effective(const SourceProbe &probe, const BatchRules &rules,
+                                   const std::optional<MetadataOverride> &ex) {
+    EffectivePreview out{};
+    const BatchRules eff = effective_rules(rules, ex); // 与 build_plan 同一套合成逻辑
+    out.strip_privacy = eff.strip_privacy;
+    out.sync_mtime = eff.sync_mtime; // MetadataOverride 无该三态 → 恒 = rules.sync_mtime
+
+    // —— 三个 EXIF 时间字段（§5.1：DateTimeOriginal / DateTimeDigitized / DateTime(ModifyDate)）——
+    const std::optional<TimeShift> shift =
+        (eff.time_shift.has_value() && !eff.time_shift->is_noop()) ? eff.time_shift : std::nullopt;
+    EffectiveField<std::optional<DateTimeVal>> *const fields[3] = {
+        &out.datetime_original, &out.datetime_digitized, &out.datetime_modify};
+    for (std::size_t i = 0; i < 3; ++i) {
+        EffectiveField<std::optional<DateTimeVal>> &f = *fields[i];
+        f.original = exif_time_value(probe.exif, kExifTimeKeys[i]);
+        f.effective = f.original;
+        if (eff.strip_privacy) {
+            // 剥除后不得再写任何 EXIF/XMP 字段（§4.5）→ 无生效值（"将被移除"由 UI 显示）
+            f.effective = std::nullopt;
+        } else if (shift.has_value() && f.original.has_value()) {
+            const std::optional<std::string> next = shifted_exif_time(f.original->value, *shift);
+            if (next.has_value())
+                f.effective = DateTimeVal{*next}; // 不可解析 → 保持原值（与写路径同结论）
+        }
+        f.changed = (f.effective != f.original);
+    }
+
+    // —— GPS（§5.1）：规则未配置 → effective = original；剥除/gps_clear → nullopt；配置 → 规则值 ——
+    out.gps.original = gps_from_exif(probe.exif);
+    if (eff.strip_privacy || eff.gps_clear) {
+        out.gps.effective = std::nullopt;
+    } else if (eff.gps.has_value()) {
+        out.gps.effective = eff.gps;
+    } else {
+        out.gps.effective = out.gps.original;
+    }
+    out.gps.changed = !gps_same(out.gps.effective, out.gps.original);
+    return out;
 }
 
 // ===========================================================================

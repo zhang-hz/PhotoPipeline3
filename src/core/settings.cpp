@@ -114,6 +114,8 @@ std::vector<std::pair<std::string, std::string>> settings_pairs(const AppSetting
     // —— 0.3.0 / W1-T7 追加（§3.6 行前两项；顺序 = 结构体末尾顺序）——
     kv.emplace_back("stagger_ms", std::to_string(s.stagger_ms));
     kv.emplace_back("thread_budget", std::to_string(s.thread_budget));
+    // —— 0.3.0 / W1-T8 追加（§3.6 行最后一项；顺序 = 结构体末尾顺序）——
+    kv.emplace_back("class_file", s.class_file);
     return kv;
 }
 
@@ -164,6 +166,11 @@ void apply_pair(AppSettings &s, const std::string &key, const std::string &value
         int v = 0;
         if (parse_int(value, v))
             s.thread_budget = v > 0 ? v : 0;
+    } else if (key == "class_file") {
+        // §3.6/§6.2：分类注册表路径。空值 = 未配置 → 保留默认（data_dir()/classes.json），
+        // 因为"空路径"不是合法注册表位置（默认值由 default_class_file() 单点给出）。
+        if (!value.empty())
+            s.class_file = value;
     }
 }
 

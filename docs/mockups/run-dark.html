@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>PhotoPipeline 0.3.0 — 运行页（深色）</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  :root{
+    --card:rgba(255,255,255,.05); --card-bd:rgba(255,255,255,.09); --card-hi:rgba(255,255,255,.02);
+    --txt:#ececf0; --txt2:#a9aab4; --txt3:#7a7b86;
+    --acc:#4cc2ff; --acc-dim:rgba(76,194,255,.16); --acc-bd:rgba(76,194,255,.45);
+    --ok:#6ccb8a; --warn:#e3b341; --err:#f1707b;
+    --ctl:rgba(255,255,255,.06); --ctl-bd:rgba(255,255,255,.13);
+  }
+  html,body{ width:1440px; height:900px; overflow:hidden; }
+  body{
+    font-family:"Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI","Noto Sans SC",sans-serif;
+    font-size:12.5px; color:var(--txt);
+    background:linear-gradient(150deg,#2b3038 0%,#22252b 42%,#25302c 100%);
+    display:flex; flex-direction:column; user-select:none;
+  }
+  .toolbar{
+    height:52px; flex:0 0 52px; display:flex; align-items:center; gap:14px;
+    padding:0 18px; border-bottom:1px solid rgba(255,255,255,.07);
+  }
+  .app-title{ font-size:13px; font-weight:600; letter-spacing:.2px; display:flex; align-items:center; gap:8px; }
+  .app-title .ver{ font-size:10.5px; color:var(--txt3); font-weight:500; border:1px solid var(--card-bd); padding:1px 6px; border-radius:99px; }
+  .steps{ display:flex; gap:6px; margin-left:22px; }
+  .step{
+    display:flex; align-items:center; gap:8px; padding:6px 16px; border-radius:6px;
+    color:var(--txt2); font-weight:600; font-size:13px; border:1px solid transparent;
+  }
+  .step .n{
+    width:18px; height:18px; border-radius:99px; background:var(--ctl); border:1px solid var(--ctl-bd);
+    display:flex; align-items:center; justify-content:center; font-size:10.5px; font-weight:700; color:var(--txt2);
+  }
+  .step.dim{ opacity:.45; }
+  .step.active{ background:var(--acc-dim); color:var(--txt); border-color:var(--acc-bd); }
+  .step.active .n{ background:var(--acc); border-color:var(--acc); color:#10222c; }
+  .tb-right{ margin-left:auto; display:flex; align-items:center; gap:10px; }
+  .icon-btn{
+    width:32px; height:32px; border-radius:6px; background:var(--ctl); border:1px solid var(--ctl-bd);
+    display:flex; align-items:center; justify-content:center; color:var(--txt2); font-size:14px;
+  }
+  .icon-btn.dim{ opacity:.4; }
+  .main{ flex:1; display:flex; min-height:0; padding:10px 12px 8px; gap:10px; }
+  .col-left{ flex:0 0 258px; display:flex; flex-direction:column; gap:10px; min-height:0; }
+  .col-mid{ flex:1 1 420px; display:flex; flex-direction:column; gap:10px; min-height:0; }
+  .col-right{ flex:1 1 480px; display:flex; flex-direction:column; gap:10px; min-height:0; }
+  .card{
+    background:var(--card); border:1px solid var(--card-bd); border-radius:8px; backdrop-filter:blur(18px);
+  }
+  .card-h{ display:flex; align-items:center; gap:8px; padding:9px 12px 7px; }
+  .card-h .t{ font-size:12.5px; font-weight:700; letter-spacing:.2px; }
+  .card-h .hint{ margin-left:auto; font-size:10.5px; color:var(--txt3); }
+  .pill{ font-size:10px; color:var(--acc); background:var(--acc-dim); border:1px solid var(--acc-bd); border-radius:99px; padding:1px 7px; font-weight:600; }
+  .file-panel{ flex:1 1 auto; display:flex; flex-direction:column; min-height:0; }
+  .fp-tools{ display:flex; gap:6px; padding:0 10px 8px; }
+  .search{
+    flex:1; height:28px; border-radius:4px; background:var(--ctl); border:1px solid var(--ctl-bd);
+    display:flex; align-items:center; padding:0 8px; gap:6px; color:var(--txt3); font-size:11.5px;
+  }
+  .mini-btn{
+    height:28px; padding:0 10px; border-radius:4px; background:var(--ctl); border:1px solid var(--ctl-bd);
+    color:var(--txt2); font-size:11.5px; font-weight:600; display:flex; align-items:center;
+  }
+  .groupby{ display:flex; align-items:center; gap:6px; padding:0 10px 8px; color:var(--txt3); font-size:11px; }
+  .combo{
+    height:26px; border-radius:4px; background:var(--ctl); border:1px solid var(--ctl-bd); color:var(--txt);
+    display:flex; align-items:center; padding:0 8px; gap:6px; font-size:11.5px;
+  }
+  .combo .caret{ color:var(--txt3); font-size:9px; margin-left:auto; }
+  .file-list{ flex:1; overflow:hidden auto; padding:0 6px 6px; }
+  .ghead{
+    font-size:10.5px; color:var(--txt3); font-weight:700; letter-spacing:.4px;
+    padding:7px 6px 4px; display:flex; align-items:center; gap:6px;
+  }
+  .ghead .cnt{ font-weight:500; opacity:.8; }
+  .frow{ display:flex; align-items:center; gap:8px; padding:4px 6px; border-radius:5px; margin-bottom:1px; }
+  .frow.sel{ background:var(--acc-dim); outline:1px solid var(--acc-bd); }
+  .cbox{
+    width:15px; height:15px; border-radius:3px; border:1.5px solid var(--txt3);
+    flex:0 0 15px; display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:800;
+  }
+  .cbox.on{ background:var(--acc); border-color:var(--acc); color:#10222c; }
+  .thumb{ width:42px; height:30px; border-radius:3px; flex:0 0 42px; border:1px solid rgba(255,255,255,.1); }
+  .fname{ font-size:11.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .fmeta{ font-size:10px; color:var(--txt3); margin-top:1px; }
+  .chip-dot{ width:8px; height:8px; border-radius:99px; flex:0 0 8px; margin-left:auto; }
+  .cls-panel{ flex:0 0 auto; overflow:hidden; }
+  .cls-row{ display:flex; align-items:center; gap:8px; padding:5px 12px; }
+  .cls-row .nm{ font-size:11.5px; color:var(--txt2); }
+  .cls-row.on .nm{ color:var(--txt); font-weight:700; }
+  .cls-row .cnt{ margin-left:auto; font-size:10.5px; color:var(--txt3); }
+  .cls-dot{ width:9px; height:9px; border-radius:99px; }
+  .cls-new{ margin:6px 12px 10px; }
+  .preview{ flex:1; display:flex; flex-direction:column; min-height:0; }
+  .pv-stage{
+    flex:1; margin:0 10px; border-radius:6px; overflow:hidden; position:relative;
+    background:#0d0f12; border:1px solid rgba(255,255,255,.08);
+    display:flex; align-items:center; justify-content:center;
+  }
+  .pv-stage svg{ width:100%; height:100%; display:block; }
+  .pv-badge{
+    position:absolute; top:8px; left:8px; font-size:10.5px; color:#dfe6ec; background:rgba(10,12,16,.62);
+    padding:3px 8px; border-radius:4px; border:1px solid rgba(255,255,255,.12); backdrop-filter:blur(4px);
+  }
+  .pv-bar{ display:flex; align-items:center; gap:10px; padding:8px 12px 10px; color:var(--txt2); font-size:11.5px; }
+  .nav-arrow{
+    width:26px; height:26px; border-radius:5px; background:var(--ctl); border:1px solid var(--ctl-bd);
+    display:flex; align-items:center; justify-content:center; color:var(--txt2);
+  }
+  .nav-arrow.dim{ opacity:.4; }
+  .pv-pos{ color:var(--txt3); font-variant-numeric:tabular-nums; }
+  .keyhint{ margin-left:auto; display:flex; gap:6px; align-items:center; color:var(--txt3); font-size:10.5px; }
+  .scroll{ flex:1; overflow:hidden auto; display:flex; flex-direction:column; gap:10px; padding-right:2px; }
+
+  .grow{ display:grid; grid-template-columns:70px 1fr; gap:12px; align-items:center; padding:3px 14px; min-height:32px; }
+  .grow4{ display:grid; grid-template-columns:70px 1fr 70px 1fr; gap:12px; align-items:center; padding:3px 14px; min-height:32px; }
+  .gl{ font-size:11px; color:var(--txt3); text-align:right; white-space:nowrap; }
+  .gv{ display:flex; align-items:center; gap:8px; min-width:0; font-size:11.5px; white-space:nowrap; overflow:hidden; }
+  .gv.num{ font-variant-numeric:tabular-nums; }
+  .cap{ font-size:10px; color:var(--txt3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .tpl-in{
+    flex:1; height:28px; border-radius:4px; background:var(--ctl); border:1px solid var(--ctl-bd);
+    display:flex; align-items:center; padding:0 10px; color:var(--txt); font-family:Consolas,"Courier New",monospace;
+    font-size:11.5px; white-space:nowrap; cursor:text;
+  }
+
+  .capbtns{ display:flex; align-self:stretch; margin-right:-18px; margin-left:2px; }
+  .capbtn{ width:46px; display:flex; align-items:center; justify-content:center; color:var(--txt2); font-size:11px; }
+  .capbtn.close:hover{ background:#c42b1c; color:#fff; }
+  .bottom{
+    height:48px; flex:0 0 48px; display:flex; align-items:center; gap:14px; padding:0 18px;
+    border-top:1px solid rgba(255,255,255,.07); background:rgba(0,0,0,.14);
+  }
+  .status{ color:var(--txt2); font-size:11.5px; display:flex; align-items:center; gap:8px; }
+  .go{
+    margin-left:auto; height:34px; padding:0 26px; border-radius:6px; background:var(--ctl); color:var(--txt3);
+    font-size:13px; font-weight:700; display:flex; align-items:center; gap:8px; border:1px solid var(--ctl-bd);
+  }
+  /* ── run page ── */
+  .bigbar{ height:10px; border-radius:99px; background:var(--ctl); overflow:hidden; border:1px solid var(--ctl-bd); }
+  .bigbar i{ display:block; height:100%; width:68%; background:linear-gradient(90deg,#3aa3dc,#4cc2ff); border-radius:99px; }
+  .runctl{ display:flex; align-items:center; gap:14px; padding:8px 14px 12px; }
+  .btn{
+    height:28px; padding:0 14px; border-radius:4px; background:var(--ctl); border:1px solid var(--ctl-bd);
+    font-size:11.5px; font-weight:600; display:flex; align-items:center; gap:6px;
+  }
+  .btn.danger{ color:var(--err); border-color:rgba(241,112,123,.4); }
+  .link{ color:var(--acc); font-size:11.5px; font-weight:600; }
+  .tasklist{ padding:2px 12px 10px; }
+  .grp{ display:flex; align-items:center; gap:8px; padding:7px 4px 3px; }
+  .grp .nm{ font-size:11.5px; font-weight:700; }
+  .grp .st{ margin-left:auto; font-size:10px; color:var(--txt3); }
+  .orow{ display:flex; align-items:center; gap:8px; padding:3px 4px 3px 22px; }
+  .ofmt{ font-size:10px; font-weight:700; color:var(--txt2); background:var(--ctl); border:1px solid var(--ctl-bd); border-radius:3px; padding:1px 6px; width:44px; text-align:center; flex:0 0 44px; }
+  .obar{ flex:1; height:8px; border-radius:99px; background:var(--ctl); overflow:hidden; border:1px solid var(--ctl-bd); }
+  .obar i{ display:block; height:100%; background:var(--acc); border-radius:99px; }
+  .obar i.done{ background:var(--ok); }
+  .obar i.fail{ background:var(--err); }
+  .obar i.synth{ background:repeating-linear-gradient(115deg,#3aa3dc,#3aa3dc 6px,#4cc2ff 6px,#4cc2ff 12px); }
+  .opct{ font-size:10px; color:var(--txt2); width:74px; text-align:right; flex:0 0 74px; font-variant-numeric:tabular-nums; }
+  .ost{ font-size:10px; color:var(--txt3); width:150px; flex:0 0 150px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .grp .st{ white-space:nowrap; }
+  .ost.ok{ color:var(--ok); }
+  .ost.err{ color:var(--err); }
+  .ost.warn{ color:var(--warn); }
+  .mark{ font-size:11px; width:16px; text-align:center; flex:0 0 16px; }
+  .mark.ok{ color:var(--ok); } .mark.err{ color:var(--err); } .mark.run{ color:var(--acc); }
+  .loglines{
+    margin:2px 14px 12px; padding:8px 10px; border-radius:6px; background:var(--card-hi); border:1px solid var(--card-bd);
+    font-family:Consolas,"Courier New",monospace; font-size:10px; color:var(--txt2); line-height:1.7;
+  }
+  .loglines .ts{ color:var(--txt3); }
+  .loglines .lv{ color:var(--acc); }
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <div class="app-title"><svg width="18" height="18" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="3" fill="none" stroke="#4cc2ff" stroke-width="1.8"/><circle cx="12" cy="12" r="3.6" fill="none" stroke="#4cc2ff" stroke-width="1.8"/><circle cx="18.2" cy="7.6" r="1.2" fill="#4cc2ff"/></svg>PhotoPipeline<span class="ver">0.3.0</span></div>
+  <div class="steps">
+    <div class="step dim"><span class="n">1</span>元数据</div>
+    <div class="step dim"><span class="n">2</span>输出</div>
+    <div class="step active"><span class="n">3</span>运行</div>
+  </div>
+  <div class="tb-right">
+    <div class="icon-btn dim" title="预设">☆</div>
+    <div class="icon-btn dim" title="设置">⚙</div>
+    <div class="capbtns">
+      <div class="capbtn" title="最小化">&#8211;</div>
+      <div class="capbtn" title="最大化">&#9633;</div>
+      <div class="capbtn close" title="关闭">&#10005;</div>
+    </div>
+  </div>
+</div>
+
+<div class="main">
+  <div class="col-left">
+    <div class="card file-panel">
+      <div class="card-h"><span class="t">文件</span><span class="pill">24</span><span class="hint">运行中锁定</span></div>
+      <div class="fp-tools">
+        <div class="search">⌕&nbsp; 搜索文件名…</div>
+        <div class="mini-btn dim">＋</div>
+        <div class="mini-btn dim">−</div>
+      </div>
+      <div class="groupby">分组：<div class="combo" style="flex:1; opacity:.5">按月份<span class="caret">▼</span></div></div>
+      <div class="file-list">
+        <div class="ghead">2024 年 5 月<span class="cnt">· 14</span></div>
+        <div class="frow sel">
+          <div class="cbox on">✓</div>
+          <svg class="thumb" viewBox="0 0 42 30"><defs><linearGradient id="t1" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8ec5f0"/><stop offset=".62" stop-color="#d9b98a"/><stop offset="1" stop-color="#5d7a52"/></linearGradient></defs><rect width="42" height="30" fill="url(#t1)"/></svg>
+          <div style="min-width:0"><div class="fname">IMG_2731.jpg</div><div class="fmeta">编码中 · 2/2 输出</div></div>
+          <div class="chip-dot" style="background:var(--acc)"></div>
+        </div>
+        <div class="frow">
+          <div class="cbox on">✓</div>
+          <svg class="thumb" viewBox="0 0 42 30"><rect width="42" height="30" fill="url(#t1)"/></svg>
+          <div style="min-width:0"><div class="fname">IMG_2732.jpg</div><div class="fmeta">✓ 完成 · 640 KB</div></div>
+          <div class="chip-dot" style="background:var(--ok)"></div>
+        </div>
+        <div class="frow">
+          <div class="cbox on">✓</div>
+          <svg class="thumb" viewBox="0 0 42 30"><defs><linearGradient id="t2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3d5a80"/><stop offset="1" stop-color="#98c1d9"/></linearGradient></defs><rect width="42" height="30" fill="url(#t2)"/></svg>
+          <div style="min-width:0"><div class="fname">DSC_0412.ARW.tif</div><div class="fmeta">解码中…</div></div>
+          <div class="chip-dot" style="background:var(--acc)"></div>
+        </div>
+        <div class="frow">
+          <div class="cbox on">✓</div>
+          <svg class="thumb" viewBox="0 0 42 30"><rect width="42" height="30" fill="#6a7a8c"/><circle cx="21" cy="15" r="7" fill="#8fa3b6"/></svg>
+          <div style="min-width:0"><div class="fname">scan_007.png</div><div class="fmeta" style="color:var(--err)">✗ 1 个输出失败</div></div>
+          <div class="chip-dot" style="background:var(--err)"></div>
+        </div>
+        <div class="frow">
+          <div class="cbox on">✓</div>
+          <svg class="thumb" viewBox="0 0 42 30"><rect width="42" height="30" fill="#7c6a5a"/></svg>
+          <div style="min-width:0"><div class="fname">P1010888.RW2.jpg</div><div class="fmeta">排队中（交错 150ms）</div></div>
+          <div class="chip-dot" style="background:var(--txt3)"></div>
+        </div>
+      </div>
+    </div>
+    <div class="card cls-panel">
+      <div class="card-h"><span class="t">分类</span><span class="hint">运行中只读</span></div>
+      <div class="cls-row on"><div class="cls-dot" style="background:#c9c9d2"></div><div class="nm">全部</div><div class="cnt">24</div></div>
+      <div class="cls-row"><div class="cls-dot" style="background:#6ccb8a"></div><div class="nm">精选</div><div class="cnt">6</div></div>
+      <div class="cls-row"><div class="cls-dot" style="background:#e3b341"></div><div class="nm">待定</div><div class="cnt">9</div></div>
+      <div class="cls-row"><div class="cls-dot" style="background:#f1707b"></div><div class="nm">废片</div><div class="cnt">3</div></div>
+      <div class="cls-new"><div class="mini-btn dim" style="width:100%; justify-content:center">＋ 新建分类…</div></div>
+    </div>
+  </div>
+
+  <div class="col-mid">
+    <div class="card preview">
+      <div class="card-h"><span class="t">输入预览</span><span class="pill">IMG_2731.jpg</span><span class="hint">4032×3024 · 8 bit · Display P3</span></div>
+      <div class="pv-stage">
+        <svg viewBox="0 0 800 520" preserveAspectRatio="xMidYMid slice">
+          <defs>
+            <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#2c4a6e"/><stop offset=".55" stop-color="#c97b4a"/><stop offset="1" stop-color="#e8a35c"/>
+            </linearGradient>
+            <linearGradient id="water" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#c98d55"/><stop offset="1" stop-color="#31465c"/>
+            </linearGradient>
+          </defs>
+          <rect width="800" height="362" fill="url(#sky)"/>
+          <circle cx="560" cy="258" r="44" fill="#ffd9a0" opacity=".95"/>
+          <circle cx="560" cy="258" r="74" fill="#ffd9a0" opacity=".16"/>
+          <path d="M0 296 L110 224 Q 140 214, 168 236 L 236 292 L 330 208 Q 352 198, 374 218 L 448 296 Q 470 312, 500 300 L 566 262 Q 590 252, 612 270 L 700 316 L 800 268 L 800 362 L 0 362 Z" fill="#41525f" opacity=".88"/>
+          <path d="M0 328 L 130 282 Q 160 272, 188 292 L 300 336 L 420 280 Q 444 272, 468 288 L 600 338 L 800 300 L 800 362 L 0 362 Z" fill="#2c3843"/>
+          <rect y="362" width="800" height="158" fill="url(#water)"/>
+          <g stroke="#e8b06a" stroke-width="2" opacity=".5">
+            <line x1="470" y1="375" x2="650" y2="375"/><line x1="500" y1="395" x2="620" y2="395"/>
+            <line x1="520" y1="415" x2="600" y2="415"/><line x1="530" y1="438" x2="590" y2="438"/>
+          </g>
+          <path d="M0 362 L800 362" stroke="#1d2833" stroke-width="3"/>
+        </svg>
+        <div class="pv-badge">输入 · 未修改像素</div>
+      </div>
+      <div class="pv-bar">
+        <div class="nav-arrow dim">◀</div><div class="nav-arrow dim">▶</div>
+        <span class="pv-pos">1 / 24</span>
+        <span style="color:var(--txt3)">IMG_2731.jpg</span>
+        <div class="keyhint" style="color:var(--txt3)">预览只读 · 运行中锁定编辑</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════ 右：运行步骤 ══════════ -->
+  <div class="col-right">
+    <div class="scroll">
+
+      <div class="card">
+        <div class="card-h"><span class="t">运行总览</span><span class="pill">进行中</span><span class="hint">17 / 24 个输出</span></div>
+        <div class="grow"><div class="gl">进度</div>
+          <div class="gv"><div class="bigbar" style="flex:1"><i></i></div><div class="num" style="width:38px">68%</div></div></div>
+        <div class="grow4"><div class="gl">已用时</div><div class="gv num">00:42</div>
+          <div class="gl">吞吐</div><div class="gv num">38.2 MB/s</div></div>
+        <div class="grow4"><div class="gl">并行</div><div class="gv num">4 / 8 workers</div>
+          <div class="gl">交错</div><div class="gv num">150 ms</div></div>
+        <div class="grow4"><div class="gl">线程预算</div><div class="gv num">自适应（8 核）</div>
+          <div class="gl">当前分配</div><div class="gv num">3 文件并行 + 1 编码多线程</div></div>
+        <div class="runctl">
+          <div class="btn danger">■ 取消运行</div>
+          <div class="link">查看日志…</div>
+          <div class="link" style="margin-left:auto">打开输出目录</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-h"><span class="t">任务进度</span><span class="hint">阶段权重 + 行级子进度</span></div>
+        <div class="tasklist">
+          <div class="grp"><div class="mark run">◐</div><div class="nm">IMG_2731.jpg</div><div class="st">4032×3024 · 2 个输出</div></div>
+          <div class="orow"><div class="ofmt">JPEG</div><div class="obar"><i style="width:78%"></i></div><div class="opct">78%</div><div class="ost">编码 1980/2560 行</div></div>
+          <div class="orow"><div class="ofmt">WebP</div><div class="obar"><i class="synth" style="width:52%"></i></div><div class="opct">52%</div><div class="ost">编码（合成进度）</div></div>
+
+          <div class="grp"><div class="mark ok">✓</div><div class="nm">IMG_2732.jpg</div><div class="st">4032×3024 · 2 个输出</div></div>
+          <div class="orow"><div class="ofmt">JPEG</div><div class="obar"><i class="done" style="width:100%"></i></div><div class="opct">412 KB</div><div class="ost ok">3.1× · 2.4s</div></div>
+          <div class="orow"><div class="ofmt">WebP</div><div class="obar"><i class="done" style="width:100%"></i></div><div class="opct">228 KB</div><div class="ost ok">5.6× · 0.9s</div></div>
+
+          <div class="grp"><div class="mark run">◐</div><div class="nm">DSC_0412.ARW.tif</div><div class="st">7008×4672 · 2 个输出</div></div>
+          <div class="orow"><div class="ofmt">JPEG</div><div class="obar"><i style="width:18%"></i></div><div class="opct">18%</div><div class="ost">解码 → 色彩</div></div>
+          <div class="orow"><div class="ofmt">WebP</div><div class="obar"><i style="width:0%"></i></div><div class="opct">—</div><div class="ost">排队中</div></div>
+
+          <div class="grp"><div class="mark err">✗</div><div class="nm">scan_007.png</div><div class="st">2480×3508 · 2 个输出</div></div>
+          <div class="orow"><div class="ofmt">JPEG</div><div class="obar"><i class="fail" style="width:100%"></i></div><div class="opct">失败</div><div class="ost err">16→8 位降档被禁止</div></div>
+          <div class="orow"><div class="ofmt">WebP</div><div class="obar"><i style="width:0%"></i></div><div class="opct">—</div><div class="ost">排队中</div></div>
+
+          <div class="grp"><div class="mark">…</div><div class="nm">P1010888.RW2.jpg</div><div class="st">6000×4000 · 2 个输出</div></div>
+          <div class="orow"><div class="ofmt">JPEG</div><div class="obar"><i style="width:0%"></i></div><div class="opct">—</div><div class="ost">排队中（交错启动）</div></div>
+          <div class="orow"><div class="ofmt">WebP</div><div class="obar"><i style="width:0%"></i></div><div class="opct">—</div><div class="ost">排队中</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-h"><span class="t">日志尾</span><span class="hint">run-20260923-182341.log</span></div>
+        <div class="loglines">
+          <div><span class="ts">18:23:43.412</span> <span class="lv">[info]</span> [encode] IMG_2732.jpg → webp 228 KB ratio=5.6 t=0.9s</div>
+          <div><span class="ts">18:23:44.087</span> <span class="lv">[warn]</span> [depth] scan_007.png 16bit→8bit 降档被禁止，跳过</div>
+          <div><span class="ts">18:23:44.560</span> <span class="lv">[info]</span> [sched] DSC_0412.ARW.tif 启动（交错偏移 150ms）</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<div class="bottom">
+  <div class="status"><span style="width:7px;height:7px;border-radius:99px;background:var(--acc);display:inline-block"></span>成功 5 · 失败 1 · 进行中 2 · 排队 4</div>
+  <div class="status" style="color:var(--txt3)">ETA 约 00:23</div>
+  <div class="go">运行中… 68%</div>
+</div>
+
+</body>
+</html>

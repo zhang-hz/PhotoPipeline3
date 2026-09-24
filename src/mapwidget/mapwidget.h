@@ -27,6 +27,10 @@ public:
     double marker_lat() const;
     double marker_lon() const;
     void center_on(double lat, double lon, int zoom = -1); // zoom -1 = keep current
+    // M4-T12（加性只读回读；§5.2「地图 center_on 生效坐标」的取证/接线面，行为零改动）：
+    // 视口中心（WGS-84）。元数据页的「地图选点」取中心为坐标、自检断言 center_on 落点用。
+    double center_lat() const;
+    double center_lon() const;
 
     QSize minimumSizeHint() const override { return {240, 180}; }
 

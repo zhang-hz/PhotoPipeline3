@@ -651,6 +651,15 @@ double MapWidget::marker_lat() const { return impl_->marker_lat; }
 
 double MapWidget::marker_lon() const { return impl_->marker_lon; }
 
+// M4-T12：视口中心回读（内部基准面 → WGS-84，与 center_on/set_provider 同一转换边界）
+double MapWidget::center_lat() const {
+    return impl_->datum_to_wgs(impl_->center_lat, impl_->center_lon).first;
+}
+
+double MapWidget::center_lon() const {
+    return impl_->datum_to_wgs(impl_->center_lat, impl_->center_lon).second;
+}
+
 void MapWidget::center_on(double lat, double lon, int zoom) {
     Impl &d = *impl_;
     const std::pair<double, double> datum = d.wgs_to_datum(lat, lon);

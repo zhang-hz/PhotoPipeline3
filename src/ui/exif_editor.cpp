@@ -26,6 +26,11 @@
 //     `exif_search` 同构（命中可见 / 非命中隐藏 / 组内无命中 → 组隐藏 / 清空恢复）。
 #include "ui/exif_editor.h"
 
+// theme.h 依赖包含者先引入 <QApplication>（qApp->style()；见 ui/classify_panel.h 同注）
+#include <QApplication>
+
+#include "ui/theme.h" // M4-T12：.mod 样式（theme::set_mod / mod_qss）
+
 #include <QAbstractItemView>
 #include <QCheckBox>
 #include <QColor>
@@ -78,6 +83,48 @@ constexpr int kLeaf = 0;
 constexpr int kGroupNode = 1;
 constexpr int kTreeValueMax = 120;      // §2.12 树内只展示值的前若干字符（完整值在右侧编辑区）
 constexpr int kMultilineThreshold = 60; // §2.12：长 ASCII > 60 → QPlainTextEdit
+
+// 单行省略标签（§9.3「全界面禁止文案折行（超长省略号）」；与 ui/mainwindow.cpp、
+// ui/page_meta.cpp 的 ElidedLabel 同口径）：本编辑器原先在 4 处开了 setWordWrap(true)
+// （值区标题/说明/提示/读取错误），M4-T12 一并清零 → 单行 + 省略号 + 悬浮全文。
+class ElidedLabel : public QLabel {
+public:
+    explicit ElidedLabel(QWidget *parent = nullptr) : QLabel(parent) { setWordWrap(false); }
+    void set_full_text(const QString &text) {
+        full_text_ = text;
+        setProperty("ppFullText", text);
+        setToolTip(text);
+        updateGeometry();
+        apply_elide();
+    }
+    QString full_text() const { return full_text_; }
+    QSize sizeHint() const override {
+        const QSize base = QLabel::sizeHint();
+        if (full_text_.isEmpty())
+            return base;
+        return QSize(fontMetrics().horizontalAdvance(full_text_) + 2, base.height());
+    }
+
+protected:
+    void resizeEvent(QResizeEvent *event) override {
+        QLabel::resizeEvent(event);
+        apply_elide();
+    }
+
+private:
+    void apply_elide() {
+        if (full_text_.isEmpty()) {
+            QLabel::clear();
+            return;
+        }
+        if (width() <= 0) {
+            QLabel::setText(full_text_);
+            return;
+        }
+        QLabel::setText(fontMetrics().elidedText(full_text_, Qt::ElideRight, std::max(0, width())));
+    }
+    QString full_text_;
+};
 
 const char *const kSuppressModal = "pp_exif_editor_suppress_modal";
 const char *const kLastErrors = "pp_last_validation_errors";
@@ -301,7 +348,11 @@ struct ExifEditor::Impl {
     QLineEdit *gps_dir = nullptr;
     QLineEdit *gps_ts = nullptr;
     QComboBox *privacy_mode = nullptr;
+    // M4-T12（§5.2 生效值样式）：本文件例外的**生效值**回显（原 → 生效的"生效"端；改动走 .mod）
+    ElidedLabel *time_effective = nullptr;
+    ElidedLabel *gps_effective = nullptr;
 
+    void refresh_effective_values();
     void build();
     QWidget *make_exif_tab();
     QWidget *make_xmp_tab();
@@ -350,12 +401,12 @@ QWidget *ExifEditor::Impl::make_value_pane(ValuePane &vp, const QString &name) {
     auto *box = new QWidget();
     auto *v = new QVBoxLayout(box);
 
-    vp.title = new QLabel();
+    auto *title = new ElidedLabel();
+    vp.title = title;
     vp.title->setObjectName(name + QStringLiteral("_value_title"));
     QFont bold = vp.title->font();
     bold.setBold(true);
     vp.title->setFont(bold);
-    vp.title->setWordWrap(true);
     v->addWidget(vp.title);
 
     vp.type = new QLabel();
@@ -378,8 +429,7 @@ QWidget *ExifEditor::Impl::make_value_pane(ValuePane &vp, const QString &name) {
     vp.multi->setVisible(false);
     v->addWidget(vp.multi, 1);
 
-    vp.note = new QLabel();
-    vp.note->setWordWrap(true);
+    vp.note = new ElidedLabel();
     QPalette note_pal = vp.note->palette();
     note_pal.setColor(QPalette::WindowText, QColor(0x80, 0x80, 0x80));
     vp.note->setPalette(note_pal);
@@ -409,9 +459,9 @@ void ExifEditor::Impl::clear_pane(ValuePane &vp) {
     vp.multi->setReadOnly(false);
     vp.line->setVisible(true);
     vp.multi->setVisible(false);
-    vp.title->setText(T("未选择标签"));
+    static_cast<ElidedLabel *>(vp.title)->set_full_text(T("未选择标签"));
     vp.type->clear();
-    vp.note->setText(T("在左侧选择标签后编辑其值"));
+    static_cast<ElidedLabel *>(vp.note)->set_full_text(T("在左侧选择标签后编辑其值"));
 }
 
 void ExifEditor::Impl::show_row(ValuePane &vp, const std::string &key) {
@@ -422,7 +472,7 @@ void ExifEditor::Impl::show_row(ValuePane &vp, const std::string &key) {
     }
     const Row &r = it->second;
     vp.key = key;
-    vp.title->setText(QString::fromStdString(key));
+    static_cast<ElidedLabel *>(vp.title)->set_full_text(QString::fromStdString(key));
     vp.type->setText(T("类型：") + QString::fromLatin1(r.type_name.c_str()));
 
     const std::string val = effective_value(r);
@@ -447,7 +497,7 @@ void ExifEditor::Impl::show_row(ValuePane &vp, const std::string &key) {
     }
     if (r.lang_alt)
         note += T("　LangAlt 只编辑 x-default（值后缀标注）");
-    vp.note->setText(note);
+    static_cast<ElidedLabel *>(vp.note)->set_full_text(note);
 }
 
 void ExifEditor::Impl::set_edit(bool is_xmp, const std::string &key, const std::string &text) {
@@ -943,6 +993,7 @@ void ExifEditor::Impl::update_time_mode() {
     const bool delta = time_method->currentIndex() == 0;
     time_delta_box->setVisible(delta);
     time_tz_box->setVisible(!delta);
+    refresh_effective_values();
 }
 
 pp::TimeShift ExifEditor::Impl::time_shift_from_widgets() const {
@@ -962,7 +1013,10 @@ pp::TimeShift ExifEditor::Impl::time_shift_from_widgets() const {
     return ts;
 }
 
-void ExifEditor::Impl::update_gps_mode() { gps_params->setEnabled(gps_mode->currentIndex() == 1); }
+void ExifEditor::Impl::update_gps_mode() {
+    gps_params->setEnabled(gps_mode->currentIndex() == 1);
+    refresh_effective_values();
+}
 
 void ExifEditor::Impl::update_dms() {
     bool ok_lat = false, ok_lon = false;
@@ -974,6 +1028,51 @@ void ExifEditor::Impl::update_dms() {
     } else {
         gps_dms->setText(QStringLiteral("—"));
     }
+    refresh_effective_values();
+}
+
+// M4-T12（§5.2 / §9.2 .mod）：本文件例外的**生效值**回显 —— 数据源 = 与写路径同源的
+// `pp::preview_effective(meta, batch, 当前例外)`（不另算）；改动值走 theme::set_mod
+// （强调边框+强调色字+700）。显示口径与元数据页一致：隐私剥除 → 「将被移除」；
+// GPS 清除 → 「将清除 GPS」；无值 → 「（无）」。
+void ExifEditor::Impl::refresh_effective_values() {
+    if (time_effective == nullptr || gps_effective == nullptr) {
+        return;
+    }
+    const pp::MetadataOverride ov = build_override(nullptr);
+    const pp::EffectivePreview preview = pp::preview_effective(meta, batch, ov);
+    const auto dt_text = [](const std::optional<pp::DateTimeVal> &v, bool strip) {
+        if (strip) {
+            return T("将被移除");
+        }
+        if (!v.has_value()) {
+            return T("（无）");
+        }
+        QString text = QString::fromStdString(v->value);
+        if (text.size() >= 10) {
+            QString date = text.left(10);
+            date.replace(QLatin1Char(':'), QLatin1Char('-'));
+            text = date + text.mid(10);
+        }
+        return text;
+    };
+    time_effective->set_full_text(
+        T("生效：") + dt_text(preview.datetime_original.effective, preview.strip_privacy));
+    theme::set_mod(time_effective, preview.datetime_original.changed);
+    QString gps_text;
+    if (preview.strip_privacy) {
+        gps_text = T("将被移除");
+    } else if (ov.gps_clear) {
+        gps_text = T("将清除 GPS");
+    } else if (preview.gps.effective.has_value()) {
+        gps_text =
+            QStringLiteral("%1, %2").arg(QString::number(preview.gps.effective->lat, 'f', 6),
+                                         QString::number(preview.gps.effective->lon, 'f', 6));
+    } else {
+        gps_text = T("（无）");
+    }
+    gps_effective->set_full_text(T("生效：") + gps_text);
+    theme::set_mod(gps_effective, preview.gps.changed);
 }
 
 QWidget *ExifEditor::Impl::make_time_gps_tab() {
@@ -985,8 +1084,8 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     auto *inner = new QWidget();
     auto *v = new QVBoxLayout(inner);
 
-    auto *hint = new QLabel(T("以下三态只作用于当前文件的例外：继承批量规则 / 覆盖 / 清除。"));
-    hint->setWordWrap(true);
+    auto *hint = new ElidedLabel();
+    hint->set_full_text(T("以下三态只作用于当前文件的例外：继承批量规则 / 覆盖 / 清除。"));
     QPalette hint_pal = hint->palette();
     hint_pal.setColor(QPalette::WindowText, QColor(0x80, 0x80, 0x80));
     hint->setPalette(hint_pal);
@@ -1058,6 +1157,9 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     tz->addStretch(1);
     tp->addWidget(time_tz_box);
     tv->addWidget(time_params);
+    time_effective = new ElidedLabel();
+    time_effective->setObjectName(QStringLiteral("time_effective"));
+    tv->addWidget(time_effective);
     v->addWidget(time_group);
 
     // 2) GPS 三态
@@ -1120,6 +1222,9 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     more_form->addRow(T("时间戳"), gps_ts);
     gp->addWidget(gps_more);
     gv->addWidget(gps_params);
+    gps_effective = new ElidedLabel();
+    gps_effective->setObjectName(QStringLiteral("gps_effective"));
+    gv->addWidget(gps_effective);
     v->addWidget(gps_group);
 
     // 3) 隐私剥除三态
@@ -1157,6 +1262,24 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     QObject::connect(gps_lon, &QLineEdit::textChanged, q,
                      [this](const QString &) { update_dms(); });
 
+    // 生效值回显的刷新触发点（任一影响例外的控件变化 → 重算显示）
+    for (QSpinBox *spin : time_spin) {
+        QObject::connect(spin, QOverload<int>::of(&QSpinBox::valueChanged), q,
+                         [this](int) { refresh_effective_values(); });
+    }
+    for (QComboBox *combo : {tz_from, tz_to}) {
+        QObject::connect(combo, QOverload<int>::of(&QComboBox::currentIndexChanged), q,
+                         [this](int) { refresh_effective_values(); });
+    }
+    for (QLineEdit *edit : {gps_alt, gps_dir, gps_ts}) {
+        QObject::connect(edit, &QLineEdit::textChanged, q,
+                         [this](const QString &) { refresh_effective_values(); });
+    }
+    QObject::connect(gps_more, &QGroupBox::toggled, q,
+                     [this](bool) { refresh_effective_values(); });
+    QObject::connect(privacy_mode, QOverload<int>::of(&QComboBox::currentIndexChanged), q,
+                     [this](int) { refresh_effective_values(); });
+
     update_time_mode();
     update_gps_mode();
     update_dms();
@@ -1166,6 +1289,9 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
 // —— 顶部与收尾 ——
 
 void ExifEditor::Impl::build() {
+    // M4-T12：.mod 的 QSS 规则必须出现在**本对话框自己的**样式作用域里（主窗口的
+    // styleSheet 只作用于其子树；对话框是独立顶层窗口）→ 只装 mod_qss 一条，不动其余外观。
+    q->setStyleSheet(theme::mod_qss(theme::tokens(theme::preferred_theme_mode())));
     q->setWindowTitle(T("元数据编辑器 — ") + QFileInfo(src).fileName());
     q->resize(900, 640);
     q->setModal(true);
@@ -1187,11 +1313,11 @@ void ExifEditor::Impl::build() {
     root->addLayout(top);
 
     if (!meta.error.empty()) {
-        auto *err = new QLabel(T("无法读取源文件元数据：") + QString::fromStdString(meta.error));
+        auto *err = new ElidedLabel();
+        err->set_full_text(T("无法读取源文件元数据：") + QString::fromStdString(meta.error));
         QPalette err_pal = err->palette();
         err_pal.setColor(QPalette::WindowText, QColor(0xdd, 0x33, 0x33));
         err->setPalette(err_pal);
-        err->setWordWrap(true);
         root->addWidget(err);
     }
 
@@ -1210,7 +1336,10 @@ void ExifEditor::Impl::build() {
 
     QObject::connect(buttons, &QDialogButtonBox::accepted, q, [this] { on_accept(); });
     QObject::connect(buttons, &QDialogButtonBox::rejected, q, [this] { q->reject(); });
-    QObject::connect(ignore_check, &QCheckBox::toggled, q, [this](bool) { refresh_all_rows(); });
+    QObject::connect(ignore_check, &QCheckBox::toggled, q, [this](bool) {
+        refresh_all_rows();
+        refresh_effective_values();
+    });
 }
 
 void ExifEditor::Impl::init_from_existing() {

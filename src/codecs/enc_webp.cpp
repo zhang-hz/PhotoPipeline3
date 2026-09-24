@@ -68,6 +68,11 @@ constexpr std::string_view kKnownKeys[] = {
     "low_memory",
     "exact",
     "near_lossless",
+    // M4-T13：显式 schema 参数（src/core/params.h 的 kLosslessParamKey）——由下方 lossless
+    // 取值消费；列在此处以免被误报为未知参数。
+    // PP-FROZEN(0.3.0)：本行与下方 lossless 取值行按 T13 定稿冻结（内部管道键 __lossless 保留；
+    // 取值优先序 = 显式 tech_id → 显式 schema 参数 → 内部管道键）。
+    "lossless",
 };
 
 // E8 (revised): a failed encode yields bytes == 0 plus an English error string.
@@ -194,12 +199,15 @@ private:
         warn_unknown_params(params);
 
         // Tech selection (T6b): an explicit EncodeRequest::tech_id wins; empty or
-        // unknown falls back to the reserved key __lossless (§3.4/§4.8).
+        // unknown falls back to the explicit schema parameter (§3.6/M4-T13,
+        // kLosslessParamKey) and then to the reserved key __lossless (§3.4/§4.8).
+        // 参数引擎保持两键同步（src/core/params.cpp apply_locks）。
         const bool lossless =
             (req.target.tech_id == "lossless")
                 ? true
-                : ((req.target.tech_id == "lossy") ? false
-                                                   : param_bool(params, "__lossless", false));
+                : ((req.target.tech_id == "lossy")
+                       ? false
+                       : param_bool(params, "lossless", param_bool(params, "__lossless", false)));
         const bool alpha = r.channels == 2 || r.channels == 4;
 
         WebPConfig cfg;

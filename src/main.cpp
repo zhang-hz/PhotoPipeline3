@@ -782,17 +782,24 @@ int run_dev(int argc, char **argv) {
         return 2;
     }
     // 输出清单：--outputs（0.3.0 多输出）优先；否则 0.2 的单格式形态（预设参与）
+    // 预设 v2（M4-T13 §3.6：[重排] 为 outputs[] 数组 + output_template/split_by_format）：
+    // --dev 的 0.2 单格式语义 = 读 `outputs[0]`（v1 预设由 load_preset 迁移成单元素数组）。
+    const bool preset_has_output = have_preset && !preset.outputs.empty();
     std::vector<OutputSpecText> outputs;
     if (multi_output) {
         outputs = o.outputs;
     } else {
         OutputSpecText s;
-        s.format = o.has_format ? o.format : (have_preset ? preset.format_id : "jxl");
-        s.backend = o.has_backend ? o.backend : (have_preset ? preset.backend_id : "");
-        s.tech = o.has_tech ? o.tech : (have_preset ? preset.tech_id : "");
+        s.format =
+            o.has_format ? o.format : (preset_has_output ? preset.outputs[0].format_id : "jxl");
+        s.backend =
+            o.has_backend ? o.backend : (preset_has_output ? preset.outputs[0].backend_id : "");
+        s.tech = o.has_tech ? o.tech : (preset_has_output ? preset.outputs[0].tech_id : "");
         outputs.push_back(s);
     }
-    const bool lossless = o.has_lossless ? o.lossless : (have_preset ? preset.lossless : false);
+    const bool lossless =
+        o.has_lossless ? o.lossless
+                       : (preset_has_output ? pp::lossless_flag(preset.outputs[0].params) : false);
     pp::ColorTarget color = pp::ColorTarget::KeepOriginal;
     if (o.has_color) {
         if (!pp::parse_color_target(o.color, color)) {
@@ -817,12 +824,13 @@ int run_dev(int argc, char **argv) {
         }
     }
 
-    // ---- 路径模板（§4.2）：--template 优先；否则按输出数派生 ----
+    // ---- 路径模板（§4.2）：--template 优先 → 预设的 output_template → 按输出数派生 ----
     // 单输出派生为 0.2 兼容形态 $dir/$file（§1 需求 3「默认行为兼容 v0.2」+ 金样 16 对不回退）；
     // 多输出派生为分文件夹形态 $format/$dir/$file（§3.2 默认 + §4.2「多选输出时 UI 默认 true」）。
     const std::string output_template =
-        o.has_output_template
-            ? o.output_template
+        o.has_output_template ? o.output_template
+        : preset_has_output
+            ? preset.output_template
             : (outputs.size() > 1 ? std::string("$format/$dir/$file") : std::string("$dir/$file"));
     {
         std::string tmpl_err;
@@ -849,8 +857,8 @@ int run_dev(int argc, char **argv) {
         // 参数：引擎默认（含无损技术选择与锁定）→ 预设（仅输出 #0，0.2 单格式语义）→ --param →
         // locks
         pp::ParamSet params = pp::default_params(*fmt, backend, tech, lossless);
-        if (have_preset && oi == 0) {
-            for (const auto &[k, v] : preset.params)
+        if (preset_has_output && oi == 0) {
+            for (const auto &[k, v] : preset.outputs[0].params)
                 params[k] = v;
         }
         for (const auto &[k, v] : o.params) {
@@ -861,9 +869,9 @@ int run_dev(int argc, char **argv) {
             }
         }
         pp::fill_defaults(*fmt, backend, tech, lossless, params);
-        // NOTE(0.3.0/§3.2 + 主对话裁定 B)：无缝语义随 OutputFormatSpec.params 承载 —— 保留键
-        // __lossless 是冻结参数引擎（default_params/apply_locks 的谓词输入）自带的内部键，
-        // pipeline 不再自行注入；T13 会把"显式 lossless 参数"补进 schema。
+        // NOTE(0.3.0/§3.2 + M4-T13)：无损语义随 OutputFormatSpec.params 承载 —— 显式 schema 参数
+        // `lossless`（用户面，预设 v2 落盘）+ 内部管道键 `__lossless`（谓词/编码器输入）由参数
+        // 引擎保持同步（src/core/params.cpp apply_locks）；pipeline 不自行注入。
         pp::apply_locks(*fmt, backend, tech, lossless, params);
         const std::string verr = pp::validate_params(*fmt, backend, tech, lossless, params);
         if (!verr.empty()) {
@@ -873,10 +881,11 @@ int run_dev(int argc, char **argv) {
         }
 
         // 位深：逐输出默认（预设位深沿用 0.2 的"输出 #0"口径），libheif 系走运行时探测交集
-        const bool bitdepth_explicit = o.has_bitdepth || (have_preset && oi == 0);
-        int bitdepth = o.has_bitdepth ? o.bitdepth
-                                      : ((have_preset && oi == 0) ? preset.out_bitdepth
-                                                                  : default_bitdepth(s.format));
+        const bool bitdepth_explicit = o.has_bitdepth || (preset_has_output && oi == 0);
+        int bitdepth = o.has_bitdepth
+                           ? o.bitdepth
+                           : ((preset_has_output && oi == 0) ? preset.outputs[0].out_bitdepth
+                                                             : default_bitdepth(s.format));
         if (std::find(fmt->bitdepths.begin(), fmt->bitdepths.end(), bitdepth) ==
             fmt->bitdepths.end()) {
             std::fprintf(stderr,

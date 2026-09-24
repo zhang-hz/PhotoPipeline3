@@ -267,13 +267,18 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
                                2 * versions->frameWidth() + kVersionRowsPad);
     vbox_about->addWidget(versions, 1);
 
+    // §9.3（W3-T13 排版收口）：全界面禁止文案折行 → 去掉 setWordWrap(true)。
+    // 本文是**多句许可清单**（不是可省略的单行文案），故不用 ElidedLabel（省掉半句许可信息
+    // 不可接受），改为在源码原有的自然断句处显式换行：行数/观感与折行版一致，
+    // 同时宽度由最长一行决定（对话框宽度贴合内容），不触发"单行无限宽"的布局膨胀。
     auto *license =
         new QLabel(tr("本程序 GPL-3.0-or-later。所用库：Exiv2/x265 (GPLv2+)、libheif (LGPLv3)、"
-                      "Qt (LGPLv3)、OIIO (Apache-2.0)、libjxl/libwebp/SVT-AV1/libaom (BSD)、"
-                      "lcms2/spdlog (MIT)。"),
+                      "\nQt (LGPLv3)、OIIO (Apache-2.0)、libjxl/libwebp/SVT-AV1/libaom (BSD)、"
+                      "\nlcms2/spdlog (MIT)。"),
                    page_about);
     license->setObjectName("license_text");
-    license->setWordWrap(true);
+    license->setWordWrap(false);
+    license->setToolTip(license->text());
     vbox_about->addWidget(license);
 
     tabs->addTab(page_about, tr("关于"));

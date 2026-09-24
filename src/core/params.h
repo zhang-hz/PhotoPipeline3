@@ -56,6 +56,27 @@ const std::vector<FormatDef> &static_formats();
 std::optional<ParamValue> eval_lock(const ParamDef &p, const ParamSet &s);
 bool eval_visible(const ParamDef &p, const ParamSet &s);
 
+// PP-FROZEN(0.3.0) §3.6 · 无损的两个承载面（**T13 定稿：内部键 `__lossless` 保留，不退场**）
+//   * `kLosslessParamKey` = "lossless"：**显式 schema 参数**（format_tables.cpp 的 Bool，给
+//     lossless-capable 的技术声明：jxl vardct/modular、webp lossy/lossless；heif/avif 由
+//     libheif 运行时内省提供）。它是用户可见可设、可序列化（预设 v2 的 params）的面。
+//   * `kLosslessKey` = "__lossless"：**内部管道键**（0.3.0 保留，不落盘、不显示、不进 values()）：
+//     谓词（eval_visible/eval_lock）与编码器（enc_jxl/enc_webp）的既有输入。
+//   两键的一致性口径（T13 复核项 5 措辞修正）：`apply_locks()` 是**引擎侧**的同步点（在选定技术
+//   声明了显式键时按 lossless 入参写两键；default_params/normalize_preset 都经它）；表单
+//   （paramform 的复选框 → `values[__lossless]`，声明时另写 `values[lossless]`）与输出页
+//   （`spec_of()` 写 `__lossless`）在各自集合里写入**同一个** `sel.lossless`，随后同样经
+//   apply_locks 收口 → 当前无漂移路径；读取统一走 lossless_flag()，禁止各调用方自行分叉。
+//   去留裁定（T13 出口硬项之一，二选一）：**保留** —— 退场需要改 12 处谓词 + 2 个编码器的读取点，
+//   且会让 0.2 形态调用方（无显式键）失去无损语义；保留 + 单点同步的代价最小、零行为漂移。
+//   非声明格式（jpeg/png/tiff/bmp）的落盘口径见 src/ui/preset_io.cpp 的 `outputs[i].lossless`。
+inline constexpr std::string_view kLosslessParamKey = "lossless";
+inline constexpr std::string_view kLosslessKey = "__lossless";
+
+// PP-FROZEN(0.3.0) · 无损标志读取（**处置顺序**：显式 schema 参数优先 → 内部管道键 → false）。
+// 预设 v1 迁移、输出页 config_base/collect_preset、presets 校验/归一都走这一条，杜绝两张皮。
+bool lossless_flag(const ParamSet &s);
+
 // 取默认值全集（含 lossless 技术与技术默认选择）
 ParamSet default_params(const FormatDef &f, const std::string &backend_id,
                         const std::string &tech_id, bool lossless);

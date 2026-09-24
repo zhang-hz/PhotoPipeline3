@@ -110,7 +110,12 @@ constexpr JxlParamMap kFrameSettings[] = {
 };
 
 // Keys handled outside the frame-settings loop (still recognised for E9).
-constexpr std::string_view kSpecialKeys[] = {"distance", "codestream_level", "color_transform"};
+// M4-T13: "lossless" = 显式 schema 参数（src/core/params.h 的 kLosslessParamKey）——它由下方
+// 的 lossless 取值消费（见 lossless 读取行），列在此处以免被误报为未知参数。
+// PP-FROZEN(0.3.0)：本行与下方 lossless 读取行按 T13 定稿冻结（内部管道键 __lossless 保留，
+// 显式键优先读取；0.2 的取值路径逐字不变）。
+constexpr std::string_view kSpecialKeys[] = {"distance", "codestream_level", "color_transform",
+                                             "lossless"};
 
 bool known_key(std::string_view key) {
     for (const JxlParamMap &m : kFrameSettings) {
@@ -258,9 +263,12 @@ private:
         }
         warn_unknown_params(params);
 
-        // Lossless comes from the reserved key (§3.4); a modular parameter set
-        // (built from the modular tech) also selects the Modular path.
-        const bool lossless = param_bool(params, "__lossless", false);
+        // Lossless comes from the explicit schema parameter (§3.6/M4-T13, kLosslessParamKey)
+        // with the reserved key (§3.4) as the fallback; the parameter engine keeps the two in
+        // sync (src/core/params.cpp apply_locks). A modular parameter set (built from the
+        // modular tech) also selects the Modular path.
+        const bool lossless =
+            param_bool(params, "lossless", param_bool(params, "__lossless", false));
         bool modular_params = false;
         for (const JxlParamMap &m : kFrameSettings) {
             if (m.tech == Tech::Modular && params.find(std::string(m.key)) != params.end()) {

@@ -709,6 +709,11 @@ struct MainWindow::Impl {
     // M4-T12 元数据页自检（§5.2：生效值显示与写入一致性 + .mod + 多选小表 + 无选中提示 + 地图跟随）
     void smoke_probe_meta(const QString &shots_dir);
     MetaSelectionItem meta_probe_item(const QString &path); // 探针的跟随项快照（oiio probe 补摘要）
+    // M4-T13 预设卡（页面信号 → 单一持有者：I/O + rules 合并 + 列表刷新）
+    void refresh_preset_card();
+    void load_preset_file(const QString &path);
+    void save_preset_named(const QString &name);
+    void delete_preset_file(const QString &path);
     static QString repo_root();
 };
 
@@ -819,6 +824,7 @@ MainWindow::MainWindow(const pp::AppSettings &settings, QWidget *parent)
     wire();
     impl_->restore_session();
     impl_->restore_splitter_state();
+    impl_->refresh_preset_card(); // M4-T13：预设卡列表（会话上次预设高亮）
     impl_->sync_exceptions();
     impl_->on_content_changed();
     set_current_page(1);
@@ -1359,6 +1365,18 @@ void MainWindow::wire() {
     connect(d.page_output, &PageOutput::manage_presets_requested, this,
             &MainWindow::manage_presets);
     connect(d.page_output, &PageOutput::open_settings_requested, this, &MainWindow::open_settings);
+    // M4-T13：预设卡（mockup output-dark 的「预设」卡）——文件 I/O 与 rules 合并的单一持有者仍是
+    // MainWindow（与 manage_presets 同一批私有实现），页面只发意图信号。
+    connect(d.page_output, &PageOutput::preset_load_requested, this,
+            [this](const QString &path) { impl_->load_preset_file(path); });
+    connect(d.page_output, &PageOutput::preset_save_requested, this,
+            [this](const QString &name) { impl_->save_preset_named(name); });
+    connect(d.page_output, &PageOutput::preset_saveas_requested, this,
+            [this] { manage_presets(); });
+    connect(d.page_output, &PageOutput::preset_delete_requested, this,
+            [this](const QString &path) { impl_->delete_preset_file(path); });
+    connect(d.page_output, &PageOutput::output_template_changed, this,
+            [this](const QString &) { refresh_status(); });
 
     connect(d.page_run, &PageRun::cancel_requested, this, &MainWindow::on_cancel);
     connect(d.page_run, &PageRun::open_output_requested, this, [](const QString &dir) {
@@ -1599,18 +1617,23 @@ void MainWindow::refresh_status() {
         d.status_dot->setStyleSheet(alert);
 
     // 输出摘要（底栏第二段；运行中保持上一次的值，避免逐事件重建 RunConfig）
+    // M4-T13：按 mockup output-dark 底栏的产出量预告 —— 「N 个文件 × M 个格式 = N×M 个输出」；
+    // 格式清单 / 模板 / 输出根目录 / 冲突策略收进悬浮提示（§9.3 不折行）。
     if (d.output_status != nullptr && !d.running) {
         QStringList labels;
         for (const pp::OutputFormatSpec &spec : d.page_output->config_base().outputs)
             labels << format_label(QString::fromStdString(spec.format_id));
         if (labels.isEmpty())
             labels << format_label(d.page_output->current_format());
-        d.output_status->set_full_text(
-            tr("输出：%1 · %2 个格式").arg(labels.join(QStringLiteral(" + "))).arg(labels.size()));
-        // 旧状态行里的"输出根目录 / 冲突策略"不丢：收进输出摘要的悬浮提示（§9.3 不折行）
+        const int formats = std::max(1, static_cast<int>(labels.size()));
+        d.output_status->set_full_text(tr("%1 个文件 × %2 个格式 = %3 个输出")
+                                           .arg(checked)
+                                           .arg(formats)
+                                           .arg(checked * formats));
         d.output_status->setToolTip(
-            tr("输出根目录：%1\n同名冲突：%2")
-                .arg(d.page_output->out_root(),
+            tr("格式：%1\n模板：%2\n输出根目录：%3\n同名冲突：%4")
+                .arg(labels.join(QStringLiteral(" + ")), d.page_output->output_template(),
+                     d.page_output->out_root(),
                      conflict_label(d.page_output->config_base().conflict)));
     }
 
@@ -1796,6 +1819,9 @@ void MainWindow::Impl::refresh_theme() {
     // M4-T12：元数据页（关键信息卡/生效对照块/生效坐标框/折叠入口/浅色卡阴影）随 tokens 重放
     if (page_meta != nullptr)
         page_meta->set_tokens(tokens);
+    // M4-T13：输出页（磁贴/药丸开关/卡片 QSS/页签/浅色卡阴影）随 tokens 重放
+    if (page_output != nullptr)
+        page_output->set_tokens(tokens);
     // M4-T11：左栏控件样式（mockup .mini-btn / .search / .combo / .groupby；tokens 单源）
     {
         const QString mini =
@@ -1929,6 +1955,85 @@ void MainWindow::open_settings() {
     refresh_status();
 }
 
+// M4-T13：预设卡的三条动作（页面信号 → 此处单一持有者）+ 列表刷新。
+// 与 manage_presets() 共用同一批实现：载入（含 v1 迁移与显式报错）/
+// 保存（<presets_dir>/<name>.json） / 删除（二次确认）。
+void MainWindow::Impl::refresh_preset_card() {
+    if (page_output == nullptr)
+        return;
+    std::vector<std::pair<QString, QString>> items;
+    for (const auto &[path, name] : pp::ui::list_presets(pp::platform::presets_dir()))
+        items.emplace_back(QString::fromStdString(path.string()), QString::fromStdString(name));
+    page_output->set_preset_list(items);
+    page_output->set_current_preset(last_preset_path);
+}
+
+void MainWindow::Impl::load_preset_file(const QString &path) {
+    if (path.isEmpty())
+        return;
+    pp::PresetData preset;
+    const std::string err = pp::ui::load_preset(path.toStdString(), preset);
+    if (!err.empty()) {
+        // R31：加载失败**显式报错**（不静默回退到默认值）
+        QMessageBox::warning(w, MainWindow::tr("载入预设失败"), QString::fromStdString(err));
+        return;
+    }
+    pp::normalize_preset(preset);
+    // T13 复核项 2：**能载入但校验不过**的预设（非法模板 / 未知格式 / 越界参数 / v1 迁移出的
+    // tech·lossless 矛盾）同样必须显式报错 —— 否则 apply_preset 内部静默 return，用户点预设
+    // 表现为"无反应"（presets.h「预设里带非法模板 = 预设无效，不得静默通过」）。
+    const std::string verr = pp::validate_preset(preset);
+    if (!verr.empty()) {
+        QMessageBox::warning(w, MainWindow::tr("载入预设失败"), QString::fromStdString(verr));
+        return;
+    }
+    page_output->apply_preset(preset);
+    page_meta->apply_rules(preset.rules);
+    last_preset_path = path;
+    refresh_preset_card();
+    w->refresh_status();
+}
+
+void MainWindow::Impl::save_preset_named(const QString &name) {
+    if (name.isEmpty())
+        return;
+    pp::PresetData preset = page_output->collect_preset(name);
+    preset.rules = page_meta->rules(); // rules 归 PageMeta（MainWindow 合并）
+    // T13 复核项 2：保存路径同样先校验（模板框允许任意文本，非法模板不得静默落盘 ——
+    // 写出的预设下次载入即被拒，属"先污染后报错"）。校验不过 → 提示并**不写文件**。
+    const std::string verr = pp::validate_preset(preset);
+    if (!verr.empty()) {
+        QMessageBox::warning(w, MainWindow::tr("保存预设失败"), QString::fromStdString(verr));
+        return;
+    }
+    const std::filesystem::path path = pp::platform::presets_dir() / (name.toStdString() + ".json");
+    const std::string err = pp::ui::save_preset(path, preset);
+    if (!err.empty()) {
+        QMessageBox::warning(w, MainWindow::tr("保存预设失败"), QString::fromStdString(err));
+        return;
+    }
+    last_preset_path = QString::fromStdString(path.string());
+    refresh_preset_card();
+}
+
+void MainWindow::Impl::delete_preset_file(const QString &path) {
+    if (path.isEmpty())
+        return;
+    const QString name = QFileInfo(path).completeBaseName();
+    const QMessageBox::StandardButton answer = QMessageBox::question(
+        w, MainWindow::tr("删除预设"), MainWindow::tr("确定删除预设“%1”？").arg(name),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes)
+        return;
+    if (!QFile::remove(path)) {
+        QMessageBox::warning(w, MainWindow::tr("删除预设失败"), path);
+        return;
+    }
+    if (last_preset_path == path)
+        last_preset_path.clear();
+    refresh_preset_card();
+}
+
 void MainWindow::manage_presets() {
     Impl &d = *impl_;
     if (d.running)
@@ -1946,47 +2051,15 @@ void MainWindow::manage_presets() {
         return;
 
     switch (dlg.action()) {
-    case PresetsDialog::Action::Load: {
-        pp::PresetData preset;
-        const std::string err = pp::ui::load_preset(dlg.path().toStdString(), preset);
-        if (!err.empty()) {
-            QMessageBox::warning(this, tr("载入预设失败"), QString::fromStdString(err));
-            return;
-        }
-        pp::normalize_preset(preset);
-        d.page_output->apply_preset(preset);
-        d.page_meta->apply_rules(preset.rules);
-        d.last_preset_path = dlg.path();
-        refresh_status();
+    case PresetsDialog::Action::Load:
+        d.load_preset_file(dlg.path());
         return;
-    }
-    case PresetsDialog::Action::SaveAs: {
-        const QString name = dlg.name(); // U6 已在对话框内清洗
-        if (name.isEmpty())
-            return;
-        pp::PresetData preset = d.page_output->collect_preset(name);
-        preset.rules = d.page_meta->rules(); // rules 归 PageMeta（MainWindow 合并）
-        const std::filesystem::path path = dir / (name.toStdString() + ".json");
-        const std::string err = pp::ui::save_preset(path, preset);
-        if (!err.empty()) {
-            QMessageBox::warning(this, tr("保存预设失败"), QString::fromStdString(err));
-            return;
-        }
-        d.last_preset_path = QString::fromStdString(path.string());
+    case PresetsDialog::Action::SaveAs:
+        d.save_preset_named(dlg.name()); // U6 已在对话框内清洗
         return;
-    }
-    case PresetsDialog::Action::Delete: {
-        const QString path = dlg.path();
-        if (path.isEmpty())
-            return;
-        if (!QFile::remove(path)) {
-            QMessageBox::warning(this, tr("删除预设失败"), path);
-            return;
-        }
-        if (d.last_preset_path == path)
-            d.last_preset_path.clear();
+    case PresetsDialog::Action::Delete:
+        d.delete_preset_file(dlg.path());
         return;
-    }
     case PresetsDialog::Action::None:
     default:
         return;

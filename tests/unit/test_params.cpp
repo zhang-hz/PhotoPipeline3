@@ -94,6 +94,15 @@ int main() {
                             fail(c, where + ": missing key " + p.key);
                             continue;
                         }
+                        if (p.key == kLosslessParamKey) {
+                            // M4-T13：`lossless` 是**显式 schema 参数**，其值随 lossless 入参
+                            // （本扫描传 t.lossless_capable）——与"表内 def"不同源，故单独断言
+                            // （比 def 断言更强：同时钉住两键一致）。
+                            if (param_bool(s, p.key, !t.lossless_capable) != t.lossless_capable)
+                                fail(c, where + ": lossless = " + repr(s.at(p.key)) +
+                                            " != " + (t.lossless_capable ? "true" : "false"));
+                            continue;
+                        }
                         if (!(s.at(p.key) == p.def))
                             fail(c, where + ": " + p.key + " = " + repr(s.at(p.key)) + " != def " +
                                         repr(p.def));
@@ -584,6 +593,89 @@ int main() {
             s["zz_bogus_key"] = int64_t(1);
             m = cross_validate(s, "heif", "runtime");
             check(m.size() == 1 && m[0] == "未知参数：zz_bogus_key", c, "[" + join(m) + "]");
+        }
+    }
+
+    // 18) M4-T13：显式 lossless schema 参数（出口硬项「lossless 必须显式暴露」）
+    {
+        const std::string c = "lossless-schema";
+        // ① 声明面：jxl（vardct/modular）与 webp（lossy/lossless）声明了 key = "lossless"
+        for (const char *fmt : {"jxl", "webp"}) {
+            const FormatDef *f = find_format(fmt);
+            check(f != nullptr, c, std::string(fmt) + " not found");
+            if (f == nullptr)
+                continue;
+            for (const BackendDef &b : f->backends) {
+                for (const TechDef &t : b.techs) {
+                    const ParamDef *p = param_of(t, kLosslessParamKey.data());
+                    check(p != nullptr, c,
+                          std::string(fmt) + "/" + b.id + "/" + t.id + " must declare 'lossless'");
+                    if (p != nullptr)
+                        check(p->type == ParamType::Bool && std::holds_alternative<bool>(p->def) &&
+                                  !std::get<bool>(p->def),
+                              c,
+                              std::string(fmt) + "/" + t.id + " lossless must be Bool def=false");
+                }
+            }
+        }
+        // ② 同步面：default_params 与 apply_locks 把显式键写成 lossless 入参（两键一致）
+        {
+            const Slot we = slot("webp", "libwebp", "lossless");
+            const ParamSet ll = default_params(*we.f, "libwebp", "lossless", true);
+            check(param_bool(ll, kLosslessParamKey.data(), false) &&
+                      param_bool(ll, kLosslessKey.data(), false) && lossless_flag(ll),
+                  c, "webp lossless: both keys true");
+            const ParamSet ly = default_params(*we.f, "libwebp", "lossy", false);
+            check(!param_bool(ly, kLosslessParamKey.data(), true) &&
+                      !param_bool(ly, kLosslessKey.data(), true) && !lossless_flag(ly),
+                  c, "webp lossy: both keys false");
+            ParamSet s = default_params(*we.f, "libwebp", "lossy", false);
+            apply_locks(*we.f, "libwebp", "lossy", true, s);
+            check(param_bool(s, kLosslessParamKey.data(), false) &&
+                      param_bool(s, kLosslessKey.data(), false),
+                  c, "apply_locks must sync the explicit key for lossy tech as well");
+        }
+        // ③ lossless_flag 处置顺序：显式键优先 → 内部键回退 → false
+        {
+            ParamSet s;
+            s[std::string(kLosslessKey)] = true;
+            check(lossless_flag(s), c, "__lossless 回退");
+            s[std::string(kLosslessParamKey)] = false;
+            check(!lossless_flag(s), c, "显式键优先于内部键");
+            ParamSet empty;
+            check(!lossless_flag(empty), c, "两者皆无 → false");
+        }
+        // ④ 校验面：合法值通过；非法类型/未知键仍被拒（validate_params 未知键语义不变）
+        {
+            const Slot jxl = slot("jxl", "libjxl", "modular");
+            ParamSet s = default_params(*jxl.f, "libjxl", "modular", true);
+            check(validate_params(*jxl.f, "libjxl", "modular", true, s).empty(), c,
+                  "lossless 参数合法值应通过");
+            s[std::string(kLosslessParamKey)] = std::string("yes"); // 类型不符
+            check(validate_params(*jxl.f, "libjxl", "modular", true, s).find("lossless") !=
+                      std::string::npos,
+                  c, "lossless 非 bool 必须被拒");
+        }
+        // ⑤ 交叉规则面：**不新增**"lossless vs 技术能力"规则（M4-T13 记账，见 params.cpp 的
+        //    对应注释）。此处钉住两件事实： (a) cross_validate 的冻结语义未被本波次改动 ——
+        //    tech 为空（"引擎自选技术"形态，金样 multiformat-* 即此）时不得因 lossless 报错；
+        //    (b) 真·技术自相矛盾（显式 vardct + lossless=true）**不**经交叉规则拦截，而由
+        //    写入点不变式保证不会产生（paramform 的"无损 ⇒ 切 lossless_capable 技术"）。
+        {
+            const Slot vd = slot("jxl", "libjxl", "vardct");
+            check(cross_validate(default_params(*vd.f, "libjxl", "", true), "jxl", "").empty(), c,
+                  "tech 为空（引擎自选）时不得因 lossless 报错");
+            check(cross_validate(default_params(*vd.f, "libjxl", "vardct", true), "jxl", "vardct")
+                      .empty(),
+                  c, "cross_validate 维持 M2-T5 冻结规则集（无 lossless 规则）");
+        }
+        // ⑥ 未知键语义不变：显式 lossless 参数不得在**未声明**它的格式里被判未知/合法
+        {
+            ParamSet s = default_params(*slot("jpeg", "jpegli", "dct").f, "jpegli", "dct", false);
+            check(!has(s, kLosslessParamKey.data()), c, "jpeg 不应带显式 lossless 参数");
+            s[std::string(kLosslessParamKey)] = true;
+            const std::vector<std::string> m = cross_validate(s, "jpeg", "dct");
+            check(m.size() == 1 && m[0] == "未知参数：lossless", c, "[" + join(m) + "]");
         }
     }
 

@@ -312,7 +312,9 @@ void build_ui(PageRun *page, RunState *s) {
     s->guide = new QLabel(PageRun::tr("点击主界面\"开始\"运行批处理"), s->center);
     s->guide->setObjectName(QStringLiteral("runGuide"));
     s->guide->setAlignment(Qt::AlignCenter);
-    s->guide->setWordWrap(true);
+    // §9.3（W3-T13 排版收口）：全界面禁止文案折行 —— 单行 + 悬浮全文
+    s->guide->setWordWrap(false);
+    s->guide->setToolTip(s->guide->text());
     QPalette guide_pal = s->guide->palette();
     guide_pal.setColor(QPalette::WindowText, QColor(0x80, 0x80, 0x80));
     s->guide->setPalette(guide_pal);

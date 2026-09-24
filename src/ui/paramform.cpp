@@ -32,6 +32,7 @@
 #include <QMenu>
 #include <QSpinBox>
 #include <QStandardItemModel>
+#include <QStringList>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -44,11 +45,14 @@
 namespace pp::ui {
 namespace {
 
-// 保留键（m1-tasks §3.4）：随工作集传递，但不序列化、不显示、不出现在 values()
-constexpr const char *kLosslessKey = "__lossless";
-// §9.1 U3：参数表中名为 "lossless" 的参数（内省 heif/avif 暴露）不渲染为行——顶部"无损"
-// 复选框独占该参数（值随复选框同步写入工作集，编码器仍从参数集读它）。
-constexpr const char *kLosslessParamKey = "lossless";
+// 无损的两个承载面（T13 复核项 5：单源化 —— 取值改由 src/core/params.h
+// 提供，本文件不再自持字面量）：
+//   * `kLosslessKey`（= pp::kLosslessKey，内部管道键 `__lossless`）：随工作集传递，但不序列化、
+//     不显示、不出现在 values()（m1-tasks §3.4）；
+//   * `kLosslessParamKey`（= pp::kLosslessParamKey，显式 schema 参数 `lossless`）：§9.1 U3 起
+//     不渲染为行，由顶部"无损"复选框独占（值随复选框同步写入工作集，编码器/预设 v2 从参数集读它）。
+const std::string kLosslessKey(pp::kLosslessKey);
+const std::string kLosslessParamKey(pp::kLosslessParamKey);
 
 bool is_reserved_key(const std::string &key) { return key.rfind("__", 0) == 0; }
 
@@ -128,7 +132,7 @@ struct ParamForm::Impl {
     QWidget *adv_area = nullptr;
     QFormLayout *adv_form = nullptr;
     QLineEdit *adv_search = nullptr;
-    QLabel *cross_error = nullptr; // §2.7：交叉参数约束红字区（参数组底部）
+    QLabel *cross_error = nullptr; // §2.7：交叉参数约束红字区（参数组底部；不折行）
 
     struct Row {
         const pp::ParamDef *def = nullptr; // 指向生效 TechDef 的 ParamDef（生命周期 >= 本控件）
@@ -211,8 +215,11 @@ struct ParamForm::Impl {
 
         lossless_check = new QCheckBox(ParamForm::tr("无损"), selector_row);
         lossless_check->setObjectName(QStringLiteral("pp-lossless-check"));
-        lossless_check->setToolTip(
-            ParamForm::tr("无损输出（写入保留键 __lossless，驱动参数谓词）"));
+        // T13 复核项 5：tooltip 同时点明两个承载面（显式 schema 参数 + 内部管道键），
+        // 不再只说保留键 —— 用户面看到的是"无损输出"这一件事，落盘/下发/编码各自由两键承担。
+        lossless_check->setToolTip(ParamForm::tr(
+            "无损输出（显式 schema 参数 lossless：可落盘进预设、可校验；同时同步内部管道键 "
+            "__lossless 供参数谓词与编码器读取）"));
         h->addWidget(lossless_check);
         h->addStretch(1);
 
@@ -304,12 +311,16 @@ struct ParamForm::Impl {
 
     // §2.7：参数组底部的红字交叉校验区（objectName pp-cross-error，#D02222）。
     // 只创建一次；build_rows() 每次重建控件后把它移回布局末尾。
+    // §9.3「全界面禁止文案折行」：setWordWrap(false)。本区是**多行**文本（§2.7「逐条换行」=
+    // 冻结语义）， 故不走 ElidedLabel 省略号路线 —— 多行省略号标签实测**放大**本波次暴露的 ui_smoke
+    // 偶发 访问违例（同条件对照：省略号形态 11 连跑 7 次失败、本形态 4 连跑 1 次失败；见 T13
+    // 偏差账）。 超长行按宽度硬裁，全文进悬浮提示（鼠标悬浮可取全文）。
     void build_cross_error() {
         cross_error = new QLabel(q);
         cross_error->setObjectName(QStringLiteral("pp-cross-error"));
         cross_error->setStyleSheet(QStringLiteral("color: #D02222;"));
         cross_error->setTextFormat(Qt::PlainText);
-        cross_error->setWordWrap(true);
+        cross_error->setWordWrap(false);
         cross_error->setVisible(false);
     }
 
@@ -530,6 +541,7 @@ struct ParamForm::Impl {
 
     // §2.7：值变化时求值交叉约束；非空 → 红字逐条换行，空 → 隐藏。
     // 输入是 refresh() 已应用锁定后的工作集（= 真正会下发给编码器的值）。
+    // §9.3：行内不折行；全文同时进悬浮提示（超长行按宽度硬裁，不换行、不撑宽布局）。
     void update_cross_error() {
         if (!cross_error)
             return;
@@ -541,6 +553,7 @@ struct ParamForm::Impl {
             text += QString::fromStdString(m);
         }
         cross_error->setText(text);
+        cross_error->setToolTip(text);
         cross_error->setVisible(!msgs.empty());
     }
 

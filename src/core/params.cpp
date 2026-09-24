@@ -28,7 +28,8 @@ std::vector<BackendDef> introspect_backends(std::string_view format_id);
 
 namespace {
 
-constexpr std::string_view kLosslessKey = "__lossless";
+// 无损标志的两个承载面（kLosslessParamKey=显式 schema 参数 / kLosslessKey=内部管道键）在
+// params.h 中声明（0.3.0/M4-T13 单源）；本文件不再自带字面量。
 
 ParamSet::const_iterator find_key(const ParamSet &s, std::string_view key) {
     return s.find(std::string(key));
@@ -191,7 +192,22 @@ std::string effective_tech_id(const std::string &format_id, const std::string &t
     return t ? t->id : std::string();
 }
 
+// 该技术是否声明了显式无损参数（key = "lossless"，0.3.0/M4-T13 的 schema 面）
+bool declares_lossless_param(const TechDef *t) {
+    if (t == nullptr)
+        return false;
+    for (const ParamDef &p : t->params)
+        if (p.key == kLosslessParamKey)
+            return true;
+    return false;
+}
+
 } // namespace
+
+bool lossless_flag(const ParamSet &s) {
+    // 显式 schema 参数优先；缺失（未声明该参数的格式，或 0.2 形态的调用方）→ 内部管道键
+    return param_bool(s, kLosslessParamKey, param_bool(s, kLosslessKey, false));
+}
 
 const FormatDef *find_format(std::string_view id) {
     for (const FormatDef &f : static_formats())
@@ -295,6 +311,24 @@ std::vector<std::string> apply_locks(const FormatDef &f, const std::string &back
         return changed;
     ParamSet probe = s;
     probe[std::string(kLosslessKey)] = lossless; // 谓词输入（不写入调用方集合）
+    // 0.3.0/M4-T13：无损的**两个承载面同源写入**（单一写入点 —— 本函数是 default_params/
+    // normalize_preset/表单 refresh 的共同出口，故两键恒一致）：
+    //   * 内部管道键 `__lossless`：谓词/编码器的既有输入（0.2 起，保留）；
+    //   * 显式 schema 参数 `lossless`：用户面（表单复选框）/预设 v2 序列化面；仅当选定技术
+    //     声明了它才写（否则会变成该格式的"未知参数"）。
+    if (const auto it = s.find(std::string(kLosslessKey));
+        it == s.end() || !(it->second == ParamValue{lossless})) {
+        s[std::string(kLosslessKey)] = lossless;
+        changed.push_back(std::string(kLosslessKey));
+    }
+    if (declares_lossless_param(t)) {
+        probe[std::string(kLosslessParamKey)] = lossless;
+        const auto it = s.find(std::string(kLosslessParamKey));
+        if (it == s.end() || !(it->second == ParamValue{lossless})) {
+            s[std::string(kLosslessParamKey)] = lossless;
+            changed.push_back(std::string(kLosslessParamKey));
+        }
+    }
     for (const ParamDef &p : t->params) {
         const std::optional<ParamValue> forced = eval_lock(p, probe);
         if (!forced)
@@ -374,6 +408,19 @@ std::vector<std::string> cross_validate(const ParamSet &values, const std::strin
         !param_bool(values, "optimize_coding", true)) {
         out.push_back("启用渐进式时必须启用哈夫曼表优化");
     }
+
+    // M4-T13 记账：**不**为"显式 lossless 参数 vs 技术能力"新增交叉规则。实测依据：
+    //   cross_validate 的入参只有 (values, format_id, tech_id)，而 tech_id 允许为空 =
+    //   "引擎按 lossless 自行选定技术"（select_tech：空 id + lossless → 首个 lossless_capable）。
+    //   金样 multiformat-split/mirror/conflict（`--outputs jpeg:jpegli,webp:libwebp --lossless`，
+    //   tech 为空）正是这一形态：参数集来自 webp/lossless，而 effective_tech_id("webp", "")
+    //   解析出的是首技术 webp/lossy ⇒ 判"自相矛盾"会误杀三条冻结金样（实测 3/3 复现）。
+    //   "lossless ⇒ lossless_capable 技术"不变式由**写入点**保证，不在此重复执法：
+    //     * params.cpp   apply_locks()：两键唯一写入点（test_params 18② 断言）；
+    //     * paramform.cpp user_set_lossless()/set_selection()：无损 ⇒ 自动切 lossless_capable
+    //     技术；
+    //     * presets.cpp  pick_tech()：预设归一时 lossless 优先 lossless_capable 技术。
+    //   本函数语义与消息文本维持 M2-T5 冻结形态（下方规则③"未知参数"拒绝语义一字不动）。
 
     // 规则③ 未知参数（M2-T5 父裁定新增）：该 format 全部技术声明的键并集之外的键。
     //   * 保留键（"__" 前缀，如 __lossless）是引擎内部键，不参与判定；

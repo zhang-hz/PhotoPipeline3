@@ -412,6 +412,177 @@ bool rules_from_json(const QJsonObject &o, BatchRules &r, std::string &err) {
     return true;
 }
 
+// —— M4-T13：schema v2 的字段面（`outputs[]` 元素 + 全局字段）——
+// 参数对象 ⇄ ParamSet：保留键（"__" 前缀）不落盘；还原时按表内类型取（保证预设往返类型精确）。
+QJsonObject params_to_json(const ParamSet &params) {
+    QJsonObject out;
+    for (const auto &[key, value] : params) {
+        if (key.rfind("__", 0) == 0)
+            continue; // 保留键（__lossless）不落盘：无损由显式参数 lossless 表达
+        out.insert(qs(key), to_json(value));
+    }
+    return out;
+}
+
+bool params_from_json(const QJsonValue &v, const std::string &format_id,
+                      const std::string &backend_id, const std::string &tech_id, ParamSet &out,
+                      std::string &err) {
+    if (v.isUndefined() || v.isNull())
+        return true;
+    if (!v.isObject()) {
+        err = "params is not an object";
+        return false;
+    }
+    const QJsonObject params = v.toObject();
+    for (auto it = params.constBegin(); it != params.constEnd(); ++it) {
+        const std::string key = utf8(it.key());
+        if (key.rfind("__", 0) == 0)
+            continue; // 保留键由顶层字段/迁移重建
+        out[key] =
+            param_from_json(it.value(), lookup_param_def(format_id, backend_id, tech_id, key));
+    }
+    return true;
+}
+
+bool color_from_json(const QJsonObject &o, ColorTarget &out, std::string &err) {
+    // 缺省 color_target = keep（取值同样经 core 映射取得，本文件不持有该字面量）
+    const std::string color = utf8(o.value(QStringLiteral("color_target"))
+                                       .toString(qs(pp::to_string(ColorTarget::KeepOriginal))));
+    if (!pp::parse_color_target(color, out)) {
+        err = "invalid color_target '" + color + "'";
+        return false;
+    }
+    return true;
+}
+
+bool conflict_from_json(const QJsonObject &o, ConflictPolicy &out, std::string &err) {
+    const std::string conflict =
+        utf8(o.value(QStringLiteral("conflict")).toString(QStringLiteral("rename")));
+    if (!parse_conflict_name(conflict, out)) {
+        err = "invalid conflict '" + conflict + "'";
+        return false;
+    }
+    return true;
+}
+
+std::string rules_field_from_json(const QJsonObject &o, BatchRules &r) {
+    const QJsonValue rules_v = o.value(QStringLiteral("rules"));
+    if (rules_v.isUndefined() || rules_v.isNull())
+        return {};
+    if (!rules_v.isObject())
+        return "rules is not an object";
+    std::string rerr;
+    if (!rules_from_json(rules_v.toObject(), r, rerr))
+        return rerr;
+    return {};
+}
+
+// schema v2：outputs[] 的单个元素
+// `lossless` 字段（T13 复核项 1 修复）：输出级无损标志的**保真落盘点**。
+//   * 技术**声明**了显式 schema 参数（jxl/webp 静态表、heif/avif 运行时内省）时，标志由
+//     `params.lossless` 承载（== 导出硬项的用户面），本字段不写 → 每个预设恰好一个真源；
+//   * 未声明的 (format, backend, tech)（jpeg 无无损技术；png/tiff/bmp 技术本身无损、静态表
+//     不声明该参数，写进 params 会被"未知参数"拒绝）时，标志只有内部管道键 `__lossless`，
+//     而保留键不落盘 → 由本字段承载。R31：0.2 的顶层 `lossless` 在这些格式上经
+//     load→save→load 不再静默回退 false。
+QJsonObject spec_to_json(const OutputFormatSpec &spec) {
+    QJsonObject o;
+    o.insert(QStringLiteral("format"), qs(spec.format_id));
+    o.insert(QStringLiteral("backend"), qs(spec.backend_id));
+    o.insert(QStringLiteral("tech"), qs(spec.tech_id));
+    o.insert(QStringLiteral("bitdepth"), spec.out_bitdepth);
+    o.insert(QStringLiteral("params"), params_to_json(spec.params));
+    const bool declared = spec.params.find(std::string(pp::kLosslessParamKey)) != spec.params.end();
+    if (!declared && pp::lossless_flag(spec.params))
+        o.insert(QStringLiteral("lossless"), true); // 仅真值落盘（缺省 false = 不写，JSON 不膨胀）
+    return o;
+}
+
+bool spec_from_json(const QJsonValue &v, std::size_t index, OutputFormatSpec &out,
+                    std::string &err) {
+    if (!v.isObject()) {
+        err = "outputs[" + std::to_string(index) + "] is not an object";
+        return false;
+    }
+    const QJsonObject o = v.toObject();
+    out.format_id = utf8(o.value(QStringLiteral("format")).toString());
+    out.backend_id = utf8(o.value(QStringLiteral("backend")).toString());
+    out.tech_id = utf8(o.value(QStringLiteral("tech")).toString());
+    out.out_bitdepth = static_cast<int>(o.value(QStringLiteral("bitdepth")).toInteger(8));
+    std::string perr;
+    if (!params_from_json(o.value(QStringLiteral("params")), out.format_id, out.backend_id,
+                          out.tech_id, out.params, perr)) {
+        err = "outputs[" + std::to_string(index) + "]: " + perr;
+        return false;
+    }
+    // 无损标志落回**内部管道键**（谓词/编码器的输入面；保留键本身从不落盘）：
+    //   * params 携带显式 schema 参数 → 取它的值（与运行时 lossless_flag 的处置顺序一致）；
+    //   * 否则取输出级 `lossless` 字段（未声明该参数的格式，见 spec_to_json 的说明）。
+    // 两个载体都不存在 → 不写入（保持"加载结果 = JSON 所载"，不发明键）。
+    if (out.params.find(std::string(pp::kLosslessParamKey)) != out.params.end()) {
+        out.params[std::string(pp::kLosslessKey)] = pp::lossless_flag(out.params);
+    } else {
+        const QJsonValue ll = o.value(QStringLiteral("lossless"));
+        if (!ll.isUndefined() && !ll.isNull())
+            out.params[std::string(pp::kLosslessKey)] = ll.toBool(false);
+    }
+    return true;
+}
+
+// —— 0.2 单格式形态（schema v1）→ PresetDataV1（迁移的输入面；core 侧零 Qt）——
+bool load_v1(const QJsonObject &root, PresetDataV1 &out, std::string &err) {
+    out.version = 1;
+    out.name = utf8(root.value(QStringLiteral("name")).toString());
+    out.format_id = utf8(root.value(QStringLiteral("format")).toString());
+    out.backend_id = utf8(root.value(QStringLiteral("backend")).toString());
+    out.tech_id = utf8(root.value(QStringLiteral("tech")).toString());
+    out.lossless = root.value(QStringLiteral("lossless")).toBool(false);
+    out.out_bitdepth = static_cast<int>(root.value(QStringLiteral("bitdepth")).toInteger(8));
+    if (!color_from_json(root, out.color_target, err))
+        return false;
+    if (!conflict_from_json(root, out.conflict, err))
+        return false;
+    std::string perr;
+    if (!params_from_json(root.value(QStringLiteral("params")), out.format_id, out.backend_id,
+                          out.tech_id, out.params, perr)) {
+        err = perr;
+        return false;
+    }
+    err = rules_field_from_json(root, out.rules);
+    return err.empty();
+}
+
+// —— 0.3.0 schema v2 ——
+std::string load_v2(const QJsonObject &root, PresetData &out) {
+    std::string err;
+    PresetData p;
+    p.version = 2;
+    p.name = utf8(root.value(QStringLiteral("name")).toString());
+    const QJsonValue outputs_v = root.value(QStringLiteral("outputs"));
+    if (!outputs_v.isArray())
+        return "outputs is missing or is not an array";
+    const QJsonArray outputs = outputs_v.toArray();
+    if (outputs.isEmpty())
+        return "outputs is empty (at least one output format is required)";
+    for (int i = 0; i < outputs.size(); ++i) {
+        OutputFormatSpec spec;
+        if (!spec_from_json(outputs.at(i), static_cast<std::size_t>(i), spec, err))
+            return err;
+        p.outputs.push_back(std::move(spec));
+    }
+    p.output_template = utf8(root.value(QStringLiteral("output_template"))
+                                 .toString(QStringLiteral("$format/$dir/$file")));
+    p.split_by_format = root.value(QStringLiteral("split_by_format")).toBool(false);
+    if (!color_from_json(root, p.color_target, err))
+        return err;
+    if (!conflict_from_json(root, p.conflict, err))
+        return err;
+    if (const std::string rerr = rules_field_from_json(root, p.rules); !rerr.empty())
+        return rerr;
+    out = std::move(p);
+    return {};
+}
+
 } // namespace
 
 std::string save_preset(const std::filesystem::path &file, const PresetData &p) {
@@ -428,23 +599,16 @@ std::string save_preset(const std::filesystem::path &file, const PresetData &p) 
     }
 
     QJsonObject root;
-    root.insert(QStringLiteral("version"), p.version);
+    root.insert(QStringLiteral("version"), p.version >= 2 ? p.version : 2); // 本函数写 schema v2
     root.insert(QStringLiteral("name"), qs(p.name));
-    root.insert(QStringLiteral("format"), qs(p.format_id));
-    root.insert(QStringLiteral("backend"), qs(p.backend_id));
-    root.insert(QStringLiteral("tech"), qs(p.tech_id));
-    root.insert(QStringLiteral("lossless"), p.lossless);
-    root.insert(QStringLiteral("bitdepth"), p.out_bitdepth);
+    QJsonArray outputs;
+    for (const OutputFormatSpec &spec : p.outputs)
+        outputs.append(spec_to_json(spec));
+    root.insert(QStringLiteral("outputs"), outputs);
+    root.insert(QStringLiteral("output_template"), qs(p.output_template));
+    root.insert(QStringLiteral("split_by_format"), p.split_by_format);
     root.insert(QStringLiteral("color_target"), qs(pp::to_string(p.color_target)));
     root.insert(QStringLiteral("conflict"), QString::fromLatin1(conflict_name(p.conflict)));
-
-    QJsonObject params;
-    for (const auto &[key, value] : p.params) {
-        if (key.rfind("__", 0) == 0)
-            continue; // 保留键（__lossless）不落盘（顶层 lossless 表达）
-        params.insert(qs(key), to_json(value));
-    }
-    root.insert(QStringLiteral("params"), params);
     root.insert(QStringLiteral("rules"), rules_to_json(p.rules));
 
     const QByteArray bytes = QJsonDocument(root).toJson(QJsonDocument::Indented);
@@ -507,49 +671,26 @@ std::string load_preset(const std::filesystem::path &file, PresetData &out) {
         return "invalid preset '" + display_path(file) + "': root is not an object";
 
     const QJsonObject root = doc.object();
-    PresetData p; // 逐字段解析；失败时不污染 out
-    p.version = static_cast<int>(root.value(QStringLiteral("version")).toInteger(1));
-    p.name = utf8(root.value(QStringLiteral("name")).toString());
-    p.format_id = utf8(root.value(QStringLiteral("format")).toString());
-    p.backend_id = utf8(root.value(QStringLiteral("backend")).toString());
-    p.tech_id = utf8(root.value(QStringLiteral("tech")).toString());
-    p.lossless = root.value(QStringLiteral("lossless")).toBool(false);
-    p.out_bitdepth = static_cast<int>(root.value(QStringLiteral("bitdepth")).toInteger(8));
-
-    // 缺省 color_target = keep（取值同样经 core 映射取得，本文件不持有该字面量）
-    const std::string color = utf8(root.value(QStringLiteral("color_target"))
-                                       .toString(qs(pp::to_string(ColorTarget::KeepOriginal))));
-    if (!pp::parse_color_target(color, p.color_target))
-        return "invalid color_target '" + color + "' in '" + display_path(file) + "'";
-    const std::string conflict =
-        utf8(root.value(QStringLiteral("conflict")).toString(QStringLiteral("rename")));
-    if (!parse_conflict_name(conflict, p.conflict))
-        return "invalid conflict '" + conflict + "' in '" + display_path(file) + "'";
-
-    const QJsonValue params_v = root.value(QStringLiteral("params"));
-    if (!params_v.isUndefined() && !params_v.isNull()) {
-        if (!params_v.isObject())
-            return "invalid preset '" + display_path(file) + "': params is not an object";
-        const QJsonObject params = params_v.toObject();
-        for (auto it = params.constBegin(); it != params.constEnd(); ++it) {
-            const std::string key = utf8(it.key());
-            if (key.rfind("__", 0) == 0)
-                continue; // 保留键由顶层字段重建
-            p.params[key] = param_from_json(
-                it.value(), lookup_param_def(p.format_id, p.backend_id, p.tech_id, key));
-        }
+    // 版本驱动（§3.6）：v2 = 0.3.0 多输出形态；v1 = 0.2 单格式形态 → migrate_preset_v1() 零丢失
+    // 迁移；缺省 "version" 字段按 v1 读（0.2 的既有默认）。> 2 显式报错，绝不静默吞掉。
+    const int version = static_cast<int>(root.value(QStringLiteral("version")).toInteger(1));
+    if (version > 2)
+        return "unsupported preset version " + std::to_string(version) + " in '" +
+               display_path(file) + "' (expected 1 or 2)";
+    if (version >= 2) {
+        PresetData p; // 逐字段解析；失败时不污染 out
+        const std::string verr = load_v2(root, p);
+        if (!verr.empty())
+            return "invalid preset '" + display_path(file) + "': " + verr;
+        out = std::move(p);
+        return {};
     }
 
-    const QJsonValue rules_v = root.value(QStringLiteral("rules"));
-    if (!rules_v.isUndefined() && !rules_v.isNull()) {
-        if (!rules_v.isObject())
-            return "invalid preset '" + display_path(file) + "': rules is not an object";
-        std::string rerr;
-        if (!rules_from_json(rules_v.toObject(), p.rules, rerr))
-            return "invalid preset '" + display_path(file) + "': " + rerr;
-    }
-
-    out = std::move(p);
+    PresetDataV1 v1; // 0.2 单格式形态 → v2 单元素 outputs（R31：零丢失）
+    std::string verr;
+    if (!load_v1(root, v1, verr))
+        return "invalid preset '" + display_path(file) + "': " + verr;
+    out = migrate_preset_v1(v1);
     return {};
 }
 

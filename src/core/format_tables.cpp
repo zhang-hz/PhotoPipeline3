@@ -7,7 +7,11 @@ namespace pp {
 namespace {
 
 // —— 谓词辅助（M1-T2；规则见 docs/m1-tasks.md §4.2）——
-// 保留键 "__lossless"：无损开关由参数引擎写入 ParamSet（见 src/core/params.cpp）。
+// PP-FROZEN(0.3.0)：保留键 "__lossless" = 无损的**内部管道键**（T13 定稿保留，见 params.h）；
+// 无损开关由参数引擎写入 ParamSet（见 src/core/params.cpp）。
+// 0.3.0（M4-T13）：无损另有**显式 schema 参数**（key = "lossless"，Bool，见 params.h 的
+// kLosslessParamKey 与 docs/param-catalog.md）。两键由引擎同步（apply_locks 是唯一写入点）；
+// 谓词仍读内部管道键 —— 单实现、零行为漂移（0.2 的谓词语义逐字不变）。
 bool is_lossless(const ParamSet &s) { return param_bool(s, "__lossless", false); }
 bool not_lossless(const ParamSet &s) { return !is_lossless(s); }
 
@@ -38,6 +42,28 @@ std::optional<ParamValue> lock_false_when_lossless(const ParamSet &s) {
     if (is_lossless(s))
         return ParamValue{false};
     return std::nullopt;
+}
+
+// PP-FROZEN(0.3.0) —— 显式无损参数（0.3.0 / M4-T13，key = pp::kLosslessParamKey）
+// 出口硬项「lossless 必须显式暴露」：无损从"只存在于内部管道键"升级为**schema 声明的 Bool 参数**，
+// 用户可见可设（输出页格式参数卡顶部的「无损」复选框 = 它的控件）、可序列化（预设 v2 的
+// `outputs[i].params.lossless`）、可文档化（docs/param-catalog.md §2.2/§2.3/§5.1/§5.2）。
+//   * 声明面：jxl（vardct/modular）与 webp（lossy/lossless）；heif/avif 由 libheif 运行时内省
+//     提供同名字段（param-catalog §3/§4.2），enc_heif 直接消费它。
+//   * 引擎侧：`apply_locks()` 把本参数与 lossless 入参同步（唯一写入点）；谓词/编码器仍读内部
+//     管道键 `__lossless`（单实现、零行为漂移 —— 0.2 输出逐字节不变）。
+ParamDef lossless_param(const char *encoder_note) {
+    ParamDef p;
+    p.key = std::string(kLosslessParamKey);
+    p.label = "无损";
+    p.type = ParamType::Bool;
+    p.def = false;
+    p.advanced = false;
+    p.tooltip = std::string("无损输出（0.3.0 显式 schema 参数；由格式参数卡顶部的「无损」复选框"
+                            "驱动，本行不单独渲染）。编码器侧：") +
+                encoder_note +
+                "。内部管道键 __lossless 与本参数由参数引擎同步（src/core/params.cpp）。";
+    return p;
 }
 
 } // namespace
@@ -300,6 +326,8 @@ const std::vector<FormatDef> &static_formats() {
                                                      "-1=编码器默认、0=扫描线顺序、1=中心优先（影响渐进渲染），"
                                                      "不改变画质。VarDCT/Modular 通用。",
                                           .visible = not_lossless, .locked = {}},
+                                 lossless_param("JxlEncoderSetFrameLossless(true)（jxl/encode.h:1411-"
+                                                "1424，库会强制走 Modular 路径）"),
                               } },
                     TechDef{ .id = "modular", .label = "Modular", .lossless_capable = true,
                              .params = {
@@ -450,6 +478,8 @@ const std::vector<FormatDef> &static_formats() {
                                                      "-1=编码器默认、0=扫描线顺序、1=中心优先（影响渐进渲染），"
                                                      "不改变画质。VarDCT/Modular 通用。",
                                           .visible = {}, .locked = {}},
+                                 lossless_param("JxlEncoderSetFrameLossless(true)（jxl/encode.h:1411-"
+                                                "1424；Modular+lossless 即真无损）"),
                               } } } } },
             .bitdepths = {8, 16},
             .supports_alpha = true, .supports_gray = true,
@@ -693,6 +723,8 @@ const std::vector<FormatDef> &static_formats() {
                                                      "代价是更多 CPU）；库默认 false；作用于有损 VP8 路径"
                                                      "（src/enc/webp_enc.c:119）。",
                                           .visible = {}, .locked = {}},
+                                 lossless_param("WebPConfig::lossless = 1（webp/encode.h:97-98；"
+                                                "有损技术下该参数为 false）"),
                               } },
                     TechDef{ .id = "lossless", .label = "Lossless", .lossless_capable = true,
                              .params = {
@@ -725,6 +757,8 @@ const std::vector<FormatDef> &static_formats() {
                                                      "近无损预处理、输出非严格无损（src/enc/vp8l_enc.c:"
                                                      "1105-1117,1572-1577）。",
                                           .visible = {}, .locked = {}},
+                                 lossless_param("WebPConfig::lossless = 1（webp/encode.h:97-98）"
+                                                "或 tech_id=\"lossless\"；两者一致时无损生效"),
                               } } } } },
             .bitdepths = {8},
             .supports_alpha = true, .supports_gray = false,

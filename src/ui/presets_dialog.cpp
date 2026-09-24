@@ -33,6 +33,8 @@
 #include <QRegularExpression>
 #include <QVBoxLayout>
 
+#include <algorithm>
+
 namespace pp::ui {
 namespace {
 
@@ -63,6 +65,49 @@ QString sanitize_name(const QString &in) {
     s.remove(disallowed);
     return s.simplified();
 }
+
+// 单行省略标签（§9.3「全界面禁止文案折行（超长省略号）」；与 ui/mainwindow.cpp /
+// ui/page_meta.cpp / ui/exif_editor.cpp 的 ElidedLabel 同口径）：本对话框原先在空列表提示上
+// 开了 setWordWrap(true)，T13 清零 → 单行 + 省略号 + 悬浮全文。
+// 文案与 objectName 不变（§2.7 #28d）；列表非空时由 update_empty_hint 隐藏。
+class ElidedLabel : public QLabel {
+public:
+    explicit ElidedLabel(QWidget *parent = nullptr) : QLabel(parent) { setWordWrap(false); }
+    void set_full_text(const QString &text) {
+        full_text_ = text;
+        setProperty("ppFullText", text);
+        setToolTip(text);
+        updateGeometry(); // sizeHint 随全文变化（否则布局按"已省略文本"定宽 → 永远省略）
+        apply_elide();
+    }
+    QString full_text() const { return full_text_; }
+    QSize sizeHint() const override {
+        const QSize base = QLabel::sizeHint();
+        if (full_text_.isEmpty())
+            return base;
+        return QSize(fontMetrics().horizontalAdvance(full_text_) + 2, base.height());
+    }
+
+protected:
+    void resizeEvent(QResizeEvent *event) override {
+        QLabel::resizeEvent(event);
+        apply_elide();
+    }
+
+private:
+    void apply_elide() {
+        if (full_text_.isEmpty()) {
+            QLabel::clear();
+            return;
+        }
+        if (width() <= 0) { // 布局尚未定宽：先出全文，resizeEvent 时再省略
+            QLabel::setText(full_text_);
+            return;
+        }
+        QLabel::setText(fontMetrics().elidedText(full_text_, Qt::ElideRight, std::max(0, width())));
+    }
+    QString full_text_;
+};
 
 // §9.1 U6-FIX：空列表提示可见性（列表为空才显示）
 void update_empty_hint(const QDialog *dlg) {
@@ -155,13 +200,13 @@ PresetsDialog::PresetsDialog(const std::vector<std::pair<QString, QString>> &pre
     // §9.1 U6-FIX：空列表灰字提示（列表非空时隐藏）；灰字走 palette（全仓同款做法）
     // M2-T7 §3 #28d：提示直接建在列表 viewport 上（列表区内部），居中、随列表尺寸自适应；
     // 文案与 objectName 不变；列表非空时由 update_empty_hint 隐藏。
-    auto *empty_hint = new QLabel(tr("暂无预设——输入名称后点\"另存为\"创建"), list->viewport());
+    auto *empty_hint = new ElidedLabel(list->viewport());
     empty_hint->setObjectName(QLatin1String(kEmptyHint));
     QPalette hint_pal = empty_hint->palette();
     hint_pal.setColor(QPalette::WindowText, QColor(0x80, 0x80, 0x80));
     empty_hint->setPalette(hint_pal);
-    empty_hint->setWordWrap(true);
     empty_hint->setAlignment(Qt::AlignCenter);
+    empty_hint->set_full_text(tr("暂无预设——输入名称后点\"另存为\"创建"));
     auto *overlay = new QVBoxLayout(list->viewport());
     overlay->setContentsMargins(6, 6, 6, 6);
     overlay->addStretch(1);

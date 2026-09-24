@@ -311,10 +311,12 @@ struct ParamForm::Impl {
 
     // §2.7：参数组底部的红字交叉校验区（objectName pp-cross-error，#D02222）。
     // 只创建一次；build_rows() 每次重建控件后把它移回布局末尾。
-    // §9.3「全界面禁止文案折行」：setWordWrap(false)。本区是**多行**文本（§2.7「逐条换行」=
-    // 冻结语义）， 故不走 ElidedLabel 省略号路线 —— 多行省略号标签实测**放大**本波次暴露的 ui_smoke
-    // 偶发 访问违例（同条件对照：省略号形态 11 连跑 7 次失败、本形态 4 连跑 1 次失败；见 T13
-    // 偏差账）。 超长行按宽度硬裁，全文进悬浮提示（鼠标悬浮可取全文）。
+    // §9.3「全界面禁止文案折行」：本控件**不开自动折行**（word wrap=false）。本区是
+    // **多行**文本（§2.7「逐条换行」= 冻结语义：每条约束占一行，非同一行的自动折行），
+    // 故不走单行省略号路线；超长行按宽度硬裁，全文进悬浮提示（鼠标悬浮可取全文）。
+    // 补记（M4-T15）：T13 曾把本区与页面里"偶发访问违例"关联（记为省略号形态放大该问题），
+    // T13b 已定根因 = page_output.cpp 的悬垂指针（D-W3-1，ASAN: heap-use-after-free），
+    // 与本控件形态无关 → 此处保留多行形态**仅**因 §2.7 的冻结语义，不再有崩溃顾虑。
     void build_cross_error() {
         cross_error = new QLabel(q);
         cross_error->setObjectName(QStringLiteral("pp-cross-error"));

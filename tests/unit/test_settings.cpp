@@ -68,6 +68,13 @@ pp::AppSettings non_defaults() {
     s.last_format = "avif";
     s.last_preset = "/home/u/presets/hdr.json";
     s.last_out_root = "/data/out dir";
+    // M4-T15（【机械性】本测试是全字段往返的唯一断言点，随 §3.6 追加字段同步补齐）：
+    //   * stagger_ms / thread_budget —— W1-T7 落地（T7 自测在 test_scheduler_contract.cpp）；
+    //   * output_template / split_by_format —— W3-T15 落地。
+    s.stagger_ms = 275;
+    s.thread_budget = 9;
+    s.output_template = "$dir/$format/$file";
+    s.split_by_format = true;
     return s;
 }
 
@@ -77,7 +84,9 @@ bool same(const pp::AppSettings &a, const pp::AppSettings &b) {
            a.map_provider == b.map_provider && a.amap_key == b.amap_key &&
            a.tile_cache_mb == b.tile_cache_mb && a.rotate_orientation == b.rotate_orientation &&
            a.last_format == b.last_format && a.last_preset == b.last_preset &&
-           a.last_out_root == b.last_out_root;
+           a.last_out_root == b.last_out_root && a.stagger_ms == b.stagger_ms &&
+           a.thread_budget == b.thread_budget && a.output_template == b.output_template &&
+           a.split_by_format == b.split_by_format;
 }
 
 std::string dump(const pp::AppSettings &s) { return pp::settings_to_string(s); }
@@ -95,6 +104,10 @@ int main() {
                   want.log_level == "info" && want.map_provider == "osm" && want.amap_key.empty() &&
                   want.tile_cache_mb == 64 && want.rotate_orientation && want.last_format == "jxl",
               "defaults/frozen-values", "unexpected §3.14 default set");
+        // 0.3.0 追加字段的默认值（§3.6 行；默认值取自 §3.2 RunConfig 同名面 —— 逐字核对）
+        check(want.stagger_ms == 150 && want.thread_budget == 0 &&
+                  want.output_template == "$format/$dir/$file" && !want.split_by_format,
+              "defaults/0-3-0-fields", "got " + dump(want));
         // A directory is not a settings file either -> defaults, no error.
         const pp::AppSettings got_dir = pp::load_settings(dir);
         check(same(got_dir, want), "defaults/directory-path", "got " + dump(got_dir));
@@ -191,6 +204,38 @@ int main() {
               "invalid/valid-applied", "got " + dump(got2));
     }
 
+    // ---- 0.3.0 §3.6 追加字段（stagger/thread_budget/output_template/split_by_format）----
+    // M4-T15：显式覆盖"非法值 → 保留默认"与"合法值 → 应用"两侧（其余字段靠全字段往返）。
+    {
+        const fs::path dir = make_temp_dir("settings_t030");
+        const fs::path file = dir / "settings.ini";
+        const pp::AppSettings def;
+
+        // 合法：模板逐字应用；split_by_format 接受 true/off 等既有布尔词表
+        write_file(file, "stagger_ms=0\n"
+                         "thread_budget=-4\n"
+                         "output_template=$dir/$file\n"
+                         "split_by_format=on\n");
+        const pp::AppSettings ok = pp::load_settings(file);
+        check(ok.stagger_ms == 0 && ok.thread_budget == 0 && ok.output_template == "$dir/$file" &&
+                  ok.split_by_format,
+              "t030/applied", "got " + dump(ok));
+
+        // 非法：未知 $ 符号 / `..` / 绝对路径 / 反斜杠 → 保留默认模板（不把非法模板带进内存）
+        for (const char *bad :
+             {"photos-$bogus/$file", "../$dir/$file", "/abs/$file", "$dir\\\\$file"}) {
+            write_file(file, std::string("output_template=") + bad + "\n");
+            const pp::AppSettings got = pp::load_settings(file);
+            check(got.output_template == def.output_template,
+                  std::string("t030/bad-template-kept-default/") + bad, "got " + dump(got));
+        }
+        // 空值 = 未配置 → 保留默认（同 class_file 口径）
+        write_file(file, "output_template=\nsplit_by_format=\n");
+        const pp::AppSettings empty = pp::load_settings(file);
+        check(empty.output_template == def.output_template && !empty.split_by_format,
+              "t030/empty-keeps-default", "got " + dump(empty));
+    }
+
     // ---- settings_to_string: log snapshot contains every field ----
     {
         const pp::AppSettings s = non_defaults();
@@ -205,7 +250,11 @@ int main() {
                                     "rotate_orientation=false",
                                     "last_format=avif",
                                     "last_preset=/home/u/presets/hdr.json",
-                                    "last_out_root=/data/out dir"};
+                                    "last_out_root=/data/out dir",
+                                    "stagger_ms=275",
+                                    "thread_budget=9",
+                                    "output_template=$dir/$format/$file",
+                                    "split_by_format=true"};
         for (const char *k : keys) {
             check(contains(t, k), std::string("to-string/") + k, "snapshot=" + t);
         }

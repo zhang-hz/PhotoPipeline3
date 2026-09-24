@@ -13,6 +13,8 @@
 
 #include "core/settings.h"
 
+#include "core/fsops.h" // validate_output_template()（§4.2 模板校验，T15 加载期口径）
+
 #include <cerrno>
 #include <climits>
 #include <cstdio>
@@ -116,6 +118,9 @@ std::vector<std::pair<std::string, std::string>> settings_pairs(const AppSetting
     kv.emplace_back("thread_budget", std::to_string(s.thread_budget));
     // —— 0.3.0 / W1-T8 追加（§3.6 行最后一项；顺序 = 结构体末尾顺序）——
     kv.emplace_back("class_file", s.class_file);
+    // —— 0.3.0 / W3-T15 追加（§3.6 行中间两项；追加顺序 = 结构体末尾顺序，见 settings.h 头注）——
+    kv.emplace_back("output_template", s.output_template);
+    kv.emplace_back("split_by_format", s.split_by_format ? "true" : "false");
     return kv;
 }
 
@@ -171,6 +176,20 @@ void apply_pair(AppSettings &s, const std::string &key, const std::string &value
         // 因为"空路径"不是合法注册表位置（默认值由 default_class_file() 单点给出）。
         if (!value.empty())
             s.class_file = value;
+    } else if (key == "output_template") {
+        // §4.2/§9.3：路径模板默认值。与 store 的既有口径一致（"值不合法 → 保留默认"）：
+        //   * 空值 = 未配置 → 保留默认（同 class_file）；
+        //   * `validate_output_template()` 判负（未知 $ 符号 / `..` / 绝对路径 / 反斜杠 /
+        //     盘符）→ 保留默认 —— 非法模板不进内存，输出页的 ready_to_start 也就不会因
+        //     手改配置文件而莫名变红（校验仍是同一函数，见 core/fsops.h）。
+        if (!value.empty() && validate_output_template(value, nullptr))
+            s.output_template = value;
+    } else if (key == "split_by_format") {
+        // §4.2 联动：本开关 = "模板含 $format 段"的存储镜像。存储层只做布尔解析（哑存储），
+        // 与模板的配平由设置对话框/输出页维护（§9.3 设置项「分文件夹默认结构」）。
+        bool v = false;
+        if (parse_bool(value, v))
+            s.split_by_format = v;
     }
 }
 

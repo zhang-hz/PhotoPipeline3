@@ -85,8 +85,9 @@ constexpr int kTreeValueMax = 120;      // §2.12 树内只展示值的前若干
 constexpr int kMultilineThreshold = 60; // §2.12：长 ASCII > 60 → QPlainTextEdit
 
 // 单行省略标签（§9.3「全界面禁止文案折行（超长省略号）」；与 ui/mainwindow.cpp、
-// ui/page_meta.cpp 的 ElidedLabel 同口径）：本编辑器原先在 4 处开了 setWordWrap(true)
+// ui/page_meta.cpp 的 ElidedLabel 同口径）：本编辑器原先有 4 处开了**自动折行**
 // （值区标题/说明/提示/读取错误），M4-T12 一并清零 → 单行 + 省略号 + 悬浮全文。
+// （M4-T15 收尾自证：全仓 `setWordWrap(false)` 之外再无开启折行的调用点。）
 class ElidedLabel : public QLabel {
 public:
     explicit ElidedLabel(QWidget *parent = nullptr) : QLabel(parent) { setWordWrap(false); }
@@ -349,8 +350,13 @@ struct ExifEditor::Impl {
     QLineEdit *gps_ts = nullptr;
     QComboBox *privacy_mode = nullptr;
     // M4-T12（§5.2 生效值样式）：本文件例外的**生效值**回显（原 → 生效的"生效"端；改动走 .mod）
+    // M4-T15 收尾：补齐 mockup `.tline` 的另两端 —— 原（删除线）+ 右端来源字段，
+    //   与 ui/page_meta.cpp 时间卡同一版式（原 → 生效 + src）。
     ElidedLabel *time_effective = nullptr;
+    ElidedLabel *time_effective_old = nullptr;
+    ElidedLabel *time_effective_src = nullptr;
     ElidedLabel *gps_effective = nullptr;
+    ElidedLabel *gps_effective_old = nullptr;
 
     void refresh_effective_values();
     void build();
@@ -1035,6 +1041,11 @@ void ExifEditor::Impl::update_dms() {
 // `pp::preview_effective(meta, batch, 当前例外)`（不另算）；改动值走 theme::set_mod
 // （强调边框+强调色字+700）。显示口径与元数据页一致：隐私剥除 → 「将被移除」；
 // GPS 清除 → 「将清除 GPS」；无值 → 「（无）」。
+// M4-T15 收尾（mockup meta-dark.html:155-158 的 .tline 逐字口径）：
+//   * 生效值行补「原（删除线）→ 生效」两端 + 右端来源字段（P3），与 ui/page_meta.cpp 时间卡同形；
+//   * 本页自己的**改动值**一并挂 .mod：Δ 非零的 6 个 spin、时区 from≠to 的两个 combo
+//     （mockup `.spin.mod` = 强调边框+强调色字+700；判据与 page_meta.cpp 的 refresh_time_inputs
+//      逐条同款 —— 两页对"改动值"的定义必须一致）。
 void ExifEditor::Impl::refresh_effective_values() {
     if (time_effective == nullptr || gps_effective == nullptr) {
         return;
@@ -1056,9 +1067,16 @@ void ExifEditor::Impl::refresh_effective_values() {
         }
         return text;
     };
+    if (time_effective_old != nullptr) {
+        time_effective_old->set_full_text(dt_text(preview.datetime_original.original, false));
+    }
     time_effective->set_full_text(
         T("生效：") + dt_text(preview.datetime_original.effective, preview.strip_privacy));
     theme::set_mod(time_effective, preview.datetime_original.changed);
+    if (time_effective_src != nullptr) {
+        // 生效值行的来源字段（写路径读的同一字段；与元数据页首行 DateTimeOriginal 一致）
+        time_effective_src->set_full_text(QStringLiteral("DateTimeOriginal"));
+    }
     QString gps_text;
     if (preview.strip_privacy) {
         gps_text = T("将被移除");
@@ -1071,8 +1089,26 @@ void ExifEditor::Impl::refresh_effective_values() {
     } else {
         gps_text = T("（无）");
     }
+    if (gps_effective_old != nullptr) {
+        gps_effective_old->set_full_text(
+            preview.gps.original.has_value()
+                ? QStringLiteral("%1, %2").arg(QString::number(preview.gps.original->lat, 'f', 6),
+                                               QString::number(preview.gps.original->lon, 'f', 6))
+                : T("（无）"));
+    }
     gps_effective->set_full_text(T("生效：") + gps_text);
     theme::set_mod(gps_effective, preview.gps.changed);
+    // —— 本页改动值的 .mod（§9.2 / mockup .spin.mod）——
+    for (QSpinBox *spin : time_spin) {
+        if (spin != nullptr) {
+            theme::set_mod(spin, spin->value() != 0);
+        }
+    }
+    if (tz_from != nullptr && tz_to != nullptr) {
+        const bool tz_changed = tz_from->currentData().toInt() != tz_to->currentData().toInt();
+        theme::set_mod(tz_from, tz_changed);
+        theme::set_mod(tz_to, tz_changed);
+    }
 }
 
 QWidget *ExifEditor::Impl::make_time_gps_tab() {
@@ -1157,9 +1193,34 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     tz->addStretch(1);
     tp->addWidget(time_tz_box);
     tv->addWidget(time_params);
-    time_effective = new ElidedLabel();
-    time_effective->setObjectName(QStringLiteral("time_effective"));
-    tv->addWidget(time_effective);
+    // M4-T15（§5.2 + mockup .tline）：原（删除线）→ 生效（强调色，改动值另加 .mod 边框）
+    // + 右端来源字段。删除线在 QFont 侧落地（Qt QSS 无 text-decoration，与 page_meta 同款）。
+    {
+        auto *eff_row = new QWidget();
+        auto *eh = new QHBoxLayout(eff_row);
+        eh->setContentsMargins(0, 0, 0, 0);
+        eh->setSpacing(10);
+        time_effective_old = new ElidedLabel();
+        time_effective_old->setObjectName(QStringLiteral("time_effective_old"));
+        QFont old_font = time_effective_old->font();
+        old_font.setStrikeOut(true);
+        time_effective_old->setFont(old_font);
+        auto *arrow = new QLabel(QStringLiteral("→"));
+        time_effective = new ElidedLabel();
+        time_effective->setObjectName(QStringLiteral("time_effective"));
+        QFont new_font = time_effective->font();
+        new_font.setBold(true);
+        time_effective->setFont(new_font);
+        time_effective_src = new ElidedLabel();
+        time_effective_src->setObjectName(QStringLiteral("time_effective_src"));
+        time_effective_src->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        eh->addWidget(time_effective_old, 0);
+        eh->addWidget(arrow, 0);
+        eh->addWidget(time_effective, 0);
+        eh->addStretch(1);
+        eh->addWidget(time_effective_src, 0);
+        tv->addWidget(eff_row);
+    }
     v->addWidget(time_group);
 
     // 2) GPS 三态
@@ -1222,9 +1283,29 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     more_form->addRow(T("时间戳"), gps_ts);
     gp->addWidget(gps_more);
     gv->addWidget(gps_params);
-    gps_effective = new ElidedLabel();
-    gps_effective->setObjectName(QStringLiteral("gps_effective"));
-    gv->addWidget(gps_effective);
+    // M4-T15（§5.2 + mockup .tline）：原坐标（删除线）→ 生效坐标（强调色/改动值带 .mod）。
+    {
+        auto *eff_row = new QWidget();
+        auto *eh = new QHBoxLayout(eff_row);
+        eh->setContentsMargins(0, 0, 0, 0);
+        eh->setSpacing(10);
+        gps_effective_old = new ElidedLabel();
+        gps_effective_old->setObjectName(QStringLiteral("gps_effective_old"));
+        QFont old_font = gps_effective_old->font();
+        old_font.setStrikeOut(true);
+        gps_effective_old->setFont(old_font);
+        auto *arrow = new QLabel(QStringLiteral("→"));
+        gps_effective = new ElidedLabel();
+        gps_effective->setObjectName(QStringLiteral("gps_effective"));
+        QFont new_font = gps_effective->font();
+        new_font.setBold(true);
+        gps_effective->setFont(new_font);
+        eh->addWidget(gps_effective_old, 0);
+        eh->addWidget(arrow, 0);
+        eh->addWidget(gps_effective, 0);
+        eh->addStretch(1);
+        gv->addWidget(eff_row);
+    }
     v->addWidget(gps_group);
 
     // 3) 隐私剥除三态

@@ -31,6 +31,10 @@ M4-W3-T14（运行页）:
     03d-run-rows / 03e-run-cancel / 07-run-light，见 mainwindow.cpp 的 kSmokeShots）。
   * 追加运行页自检行齐备断言（逐输出行数/结束态定稿/真实vs斜纹像素取证/锁定态/总览读数/
     取消态/空闲态/浅色主题/日志尾/底栏运行读数）。
+
+M4-W3-T15（设置对话框追加项）:
+  * 追加 `UI-SMOKE settings-dialog:` 行齐备断言（§9.3 三项：交错启动 ms / 线程预算 /
+    分文件夹默认结构 → AppSettings 读回；截图仍为 12 张、冻结末行不变）。
 """
 
 import os
@@ -57,6 +61,11 @@ T14_LINE_PREFIXES = (
     'UI-SMOKE run-overview:',  # 总览只读栅格（交错/线程预算/并行/当前分配/输出计数）
     'UI-SMOKE run-cancel:',    # 取消态（唯一取消入口 → 定稿「已取消」）
     'UI-SMOKE run-light:',     # 浅色主题下的斜纹渲染
+)
+
+# M4-W3-T15 自检行（前缀匹配；缺任一 → FAIL）：设置对话框三项追加控件 → AppSettings 读回
+T15_LINE_PREFIXES = (
+    'UI-SMOKE settings-dialog:',  # 交错启动 / 线程预算 / 分文件夹默认结构（§9.3）
 )
 
 # M4-W2-T11 自检行（前缀匹配；缺任一 → FAIL）
@@ -119,6 +128,7 @@ def main():
         found = False
         t11_seen = set()
         t14_seen = set()
+        t15_seen = set()
         with open(log_path, 'w', encoding='utf-8', newline='') as log_fp:
             for line in proc.stdout:
                 sys.stdout.write(line)
@@ -132,6 +142,9 @@ def main():
                 for prefix in T14_LINE_PREFIXES:
                     if line.startswith(prefix):
                         t14_seen.add(prefix)
+                for prefix in T15_LINE_PREFIXES:
+                    if line.startswith(prefix):
+                        t15_seen.add(prefix)
         status = proc.wait()
 
         if status != 0:
@@ -150,6 +163,11 @@ def main():
         missing = [p for p in T14_LINE_PREFIXES if p not in t14_seen]
         if missing:
             print('ui_smoke: FAIL (missing T14 self-check lines: {})'.format(', '.join(missing)),
+                  file=sys.stderr)
+            return 1
+        missing = [p for p in T15_LINE_PREFIXES if p not in t15_seen]
+        if missing:
+            print('ui_smoke: FAIL (missing T15 self-check lines: {})'.format(', '.join(missing)),
                   file=sys.stderr)
             return 1
         print('UI-SMOKE pass')

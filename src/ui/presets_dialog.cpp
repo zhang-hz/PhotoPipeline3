@@ -68,7 +68,7 @@ QString sanitize_name(const QString &in) {
 
 // 单行省略标签（§9.3「全界面禁止文案折行（超长省略号）」；与 ui/mainwindow.cpp /
 // ui/page_meta.cpp / ui/exif_editor.cpp 的 ElidedLabel 同口径）：本对话框原先在空列表提示上
-// 开了 setWordWrap(true)，T13 清零 → 单行 + 省略号 + 悬浮全文。
+// 开了**自动折行**，T13 清零 → 单行 + 省略号 + 悬浮全文。
 // 文案与 objectName 不变（§2.7 #28d）；列表非空时由 update_empty_hint 隐藏。
 class ElidedLabel : public QLabel {
 public:

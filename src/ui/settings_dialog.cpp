@@ -46,6 +46,9 @@ namespace pp::ui {
 namespace {
 
 // objectName（settings() 读回用；同时供 U10 --ui-smoke / 走查定位）
+// 注（M4-T15）：既有 10 项的名称是 **M1b §2.10/§4.1 冻结契约**（docs/m1b-tasks.md:599
+// 「可编辑字段读子控件 objectName（workers/budget_gb/…）」）→ 一字不改；本任务**新增**的
+// 控件按 W3 §9.3「pp-* 命名法」给钩子（pp-stagger-ms / pp-thread-budget / pp-folder-structure）。
 constexpr auto kWorkers = "workers";
 constexpr auto kBudgetGb = "budget_gb";
 constexpr auto kFlattenGray = "flatten_gray";
@@ -56,6 +59,10 @@ constexpr auto kAmapKey = "amap_key";
 constexpr auto kTileCacheMb = "tile_cache_mb";
 constexpr auto kLogLevel = "log_level";
 constexpr auto kLibraryVersions = "library_versions";
+// —— M4-T15 §9.3 追加项（pp-* 钩子）——
+constexpr auto kStaggerMs = "pp-stagger-ms";             // 交错启动 ms（0–2000）
+constexpr auto kThreadBudget = "pp-thread-budget";       // 线程预算（0=自动）
+constexpr auto kFolderStructure = "pp-folder-structure"; // 分文件夹默认结构（模板×开关）
 
 // 构造快照的 dynamic property 名
 constexpr auto kOrigWorkers = "pp_orig_workers";
@@ -69,16 +76,41 @@ constexpr auto kOrigLogLevel = "pp_orig_log_level";
 constexpr auto kOrigLastFormat = "pp_orig_last_format";
 constexpr auto kOrigLastPreset = "pp_orig_last_preset";
 constexpr auto kOrigLastOutRoot = "pp_orig_last_out_root";
+constexpr auto kOrigStaggerMs = "pp_orig_stagger_ms";
+constexpr auto kOrigThreadBudget = "pp_orig_thread_budget";
+constexpr auto kOrigOutputTemplate = "pp_orig_output_template";
+constexpr auto kOrigSplitByFormat = "pp_orig_split_by_format";
 
 constexpr int kWorkersMax = 64;   // §2.10：QSpinBox(0..64)
 constexpr int kBudgetMax = 64;    // §2.10：QSpinBox(0..64)
 constexpr int kTileCacheMin = 16; // §2.10：QSpinBox(16..512)
 constexpr int kTileCacheMax = 512;
 constexpr int kSliderMax = 100; // §2.10：QSlider(0..100) → flatten_gray = v/100
+// M4-T15 §9.3：交错启动 ms 设置域 0–2000（0 = 关闭，§8.1）；线程预算 0 = 自动（逻辑核，§8.2）。
+constexpr int kStaggerMax = 2000;
+constexpr int kThreadBudgetMax = 64; // 与 workers 同档上限（§2.10 先例；0 = 自动）
 // §9.1 U6-FIX：关于页版本清单可见行数钳制（对话框尺寸贴合内容）
 constexpr int kVersionRowsMin = 3;
 constexpr int kVersionRowsMax = 6;
 constexpr int kVersionRowsPad = 8;
+
+// §4.2「典型模板」三档 = 设置项「分文件夹默认结构」的可选项（模板串逐字取自设计 §4.2 联动段）；
+// itemData(UserRole) = 模板串，itemData(UserRole+1) = split_by_format（= 模板含 $format 段，
+// 与 ui/page_output.cpp 的 Impl::template_has_format 同一判据）。
+constexpr const char *kStructureTemplates[] = {
+    "$format/$dir/$file", // 开：按格式分文件夹
+    "$dir/$file",         // 关：不分文件夹（平铺）
+    "$dir/$format/$file", // 旧 MirrorFirst：镜像源目录（格式目录在源目录之下）
+};
+
+// §4.2 联动判据（GUI 单源 = ui/page_output.cpp 的 Impl::template_has_format）：任一"$format"段。
+bool template_has_format(const QString &tmpl) {
+    const QStringList segs = tmpl.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    for (const QString &seg : segs)
+        if (seg == QLatin1String("$format"))
+            return true;
+    return false;
+}
 
 // 日志级别 5 档（§2.10 冻结；LogLevel 的第 6 档 critical 不出现，值非法 → 回退 info，
 // 与 main.cpp 的 parse_log_level 一致）。itemData = 落盘值，itemText = 展示文案。
@@ -96,6 +128,9 @@ int gray_to_slider(double g) {
     const double clamped = std::clamp(g, 0.0, 1.0);
     return static_cast<int>(std::lround(clamped * kSliderMax));
 }
+
+// §4.2 联动开关值：split_by_format = 模板含 $format 段（GUI 判据单源 = page_output 同名函数）。
+bool structure_split_flag(const QString &tmpl) { return template_has_format(tmpl); }
 
 // M2-T7 #28c：首次 show 后把对话框高度贴合当前页（构造期页几何未落定，
 // 增量法在 show 之后才可靠）。冻结头无成员/槽位 → 用局部事件过滤器承载。
@@ -128,6 +163,11 @@ pp::AppSettings original_values(const QObject *o) {
     s.last_format = o->property(kOrigLastFormat).toString().toStdString();
     s.last_preset = o->property(kOrigLastPreset).toString().toStdString();
     s.last_out_root = o->property(kOrigLastOutRoot).toString().toStdString();
+    // M4-T15 §9.3 追加项（交错启动 / 线程预算 / 分文件夹默认结构）
+    s.stagger_ms = o->property(kOrigStaggerMs).toInt();
+    s.thread_budget = o->property(kOrigThreadBudget).toInt();
+    s.output_template = o->property(kOrigOutputTemplate).toString().toStdString();
+    s.split_by_format = o->property(kOrigSplitByFormat).toBool();
     return s;
 }
 
@@ -148,6 +188,11 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
     setProperty(kOrigLastFormat, QString::fromStdString(current.last_format));
     setProperty(kOrigLastPreset, QString::fromStdString(current.last_preset));
     setProperty(kOrigLastOutRoot, QString::fromStdString(current.last_out_root));
+    // M4-T15 §9.3 追加项的快照（非确定路径回填 + settings() 完整结构）
+    setProperty(kOrigStaggerMs, current.stagger_ms);
+    setProperty(kOrigThreadBudget, current.thread_budget);
+    setProperty(kOrigOutputTemplate, QString::fromStdString(current.output_template));
+    setProperty(kOrigSplitByFormat, current.split_by_format);
 
     auto *tabs = new QTabWidget(this);
     tabs->setObjectName("settings_tabs");
@@ -169,6 +214,26 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
     budget->setSpecialValueText(tr("自动")); // 0 = 自动
     budget->setValue(std::clamp(current.budget_gb, 0, kBudgetMax));
     form_run->addRow(tr("内存预算 (GB)"), budget);
+
+    // M4-T15 §9.3 追加项①：交错启动 ms（0–2000，默认 150；0 = 关闭 → specialValueText）
+    auto *stagger = new QSpinBox(page_run);
+    stagger->setObjectName(QLatin1String(kStaggerMs));
+    stagger->setRange(0, kStaggerMax);
+    stagger->setSingleStep(10);
+    stagger->setSuffix(tr(" ms"));
+    stagger->setSpecialValueText(tr("关闭"));
+    stagger->setValue(std::clamp(current.stagger_ms, 0, kStaggerMax));
+    stagger->setToolTip(tr("worker 取件后的最小启动间隔（§8.1）；0 = 关闭交错（立即启动）"));
+    form_run->addRow(tr("交错启动"), stagger);
+
+    // M4-T15 §9.3 追加项②：线程预算（0 = 自动 / 逻辑核；§8.2 的 T）
+    auto *threads = new QSpinBox(page_run);
+    threads->setObjectName(QLatin1String(kThreadBudget));
+    threads->setRange(0, kThreadBudgetMax);
+    threads->setSpecialValueText(tr("自动（逻辑核）"));
+    threads->setValue(std::clamp(current.thread_budget, 0, kThreadBudgetMax));
+    threads->setToolTip(tr("总活跃线程上限 T（§8.2，含编码器内部线程）；0 = 逻辑核数"));
+    form_run->addRow(tr("线程预算"), threads);
 
     auto *flatten = new QSlider(Qt::Horizontal, page_run);
     flatten->setObjectName(kFlattenGray);
@@ -197,7 +262,42 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
 
     tabs->addTab(page_run, tr("运行"));
 
-    // ---- 页 2：地图 ----
+    // ---- 页 2：输出（M4-T15 §9.3 追加项③：分文件夹默认结构）----
+    // 三档典型模板（§4.2 联动段逐字）+ 非典型当前值回显；落值面 = output_template +
+    // split_by_format 一对（§3.6 两字段）。输出页启动期取这里的值作默认（见 MainWindow）。
+    auto *page_out = new QWidget(tabs);
+    auto *form_out = new QFormLayout(page_out);
+    auto *structure = new QComboBox(page_out);
+    structure->setObjectName(QLatin1String(kFolderStructure));
+    {
+        const auto add_item = [structure](const QString &text, const QString &tmpl) {
+            structure->addItem(text, tmpl);
+            structure->setItemData(structure->count() - 1, structure_split_flag(tmpl),
+                                   Qt::UserRole + 1);
+        };
+        add_item(tr("按格式分文件夹（$format/$dir/$file）"),
+                 QString::fromLatin1(kStructureTemplates[0]));
+        add_item(tr("不分文件夹（$dir/$file）"), QString::fromLatin1(kStructureTemplates[1]));
+        add_item(tr("镜像源目录（$dir/$format/$file）"),
+                 QString::fromLatin1(kStructureTemplates[2]));
+        const QString cur = QString::fromStdString(current.output_template);
+        int idx = structure->findData(cur);
+        if (idx < 0) {
+            // 非典型模板（手改 settings.ini / 未来预设回写）：首项如实回显当前值，
+            // 选中它即原值往返（不静默改写用户配置）
+            structure->insertItem(0, tr("当前设置（%1）").arg(cur), cur);
+            structure->setItemData(0, structure_split_flag(cur), Qt::UserRole + 1);
+            idx = 0;
+        }
+        structure->setCurrentIndex(idx);
+    }
+    structure->setToolTip(tr("新建批次的输出目录结构默认值（§4.2 路径模板；可在输出页逐批次改）。\n"
+                             "$format = 格式目录名，$dir = 源相对目录，$file = 文件名.新扩展名"));
+    form_out->addRow(tr("分文件夹默认结构"), structure);
+
+    tabs->addTab(page_out, tr("输出"));
+
+    // ---- 页 3：地图 ----
     auto *page_map = new QWidget(tabs);
     auto *form_map = new QFormLayout(page_map);
 
@@ -238,7 +338,7 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
 
     tabs->addTab(page_map, tr("地图"));
 
-    // ---- 页 3：关于 ----
+    // ---- 页 4：关于 ----
     auto *page_about = new QWidget(tabs);
     auto *vbox_about = new QVBoxLayout(page_about);
 
@@ -267,8 +367,8 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
                                2 * versions->frameWidth() + kVersionRowsPad);
     vbox_about->addWidget(versions, 1);
 
-    // §9.3（W3-T13 排版收口）：全界面禁止文案折行 → 去掉 setWordWrap(true)。
-    // 本文是**多句许可清单**（不是可省略的单行文案），故不用 ElidedLabel（省掉半句许可信息
+    // §9.3（W3-T13/T15 排版收口）：全界面禁止文案折行 → 本标签不开自动折行（word wrap）。
+    // 本文是**多句许可清单**（不是可省略的单行文案），故不用单行省略标签（省掉半句许可信息
     // 不可接受），改为在源码原有的自然断句处显式换行：行数/观感与折行版一致，
     // 同时宽度由最长一行决定（对话框宽度贴合内容），不触发"单行无限宽"的布局膨胀。
     auto *license =
@@ -359,6 +459,20 @@ pp::AppSettings SettingsDialog::settings() const {
         const QString id = w->currentData().toString();
         if (!id.isEmpty())
             s.log_level = id.toStdString();
+    }
+    // M4-T15 §9.3 追加项读回（交错启动 / 线程预算 / 分文件夹默认结构）
+    if (const auto *w = findChild<QSpinBox *>(QLatin1String(kStaggerMs))) {
+        s.stagger_ms = std::clamp(w->value(), 0, kStaggerMax);
+    }
+    if (const auto *w = findChild<QSpinBox *>(QLatin1String(kThreadBudget))) {
+        s.thread_budget = std::clamp(w->value(), 0, kThreadBudgetMax);
+    }
+    if (const auto *w = findChild<QComboBox *>(QLatin1String(kFolderStructure))) {
+        const QString tmpl = w->currentData().toString();
+        if (!tmpl.isEmpty()) {
+            s.output_template = tmpl.toStdString();
+            s.split_by_format = w->currentData(Qt::UserRole + 1).toBool();
+        }
     }
     // last_format / last_preset / last_out_root 不被本对话框编辑 → 保持构造快照
     return s;

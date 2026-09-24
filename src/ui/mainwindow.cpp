@@ -2191,6 +2191,18 @@ void MainWindow::open_exif_editor_path(const QString &path) {
 // ---------------------------------------------------------------------------
 
 void MainWindow::Impl::restore_session() {
+    // M4-T15（§9.3 设置项「分文件夹默认结构」= AppSettings.output_template + split_by_format
+    // 一对，§3.6）：启动期把设置里的**默认结构**喂给输出页（【机械性】接线 —— 承接
+    // core/settings.h 头注"T15 接线"的义务；本函数即 GUI 侧唯一会话恢复点）。
+    // 只落模板，不落 split_by_format —— 后者是 §4.2 定义的**派生态**（= 模板含 $format 段；
+    // output_page 的 set_output_template/split_by_format()/config_base() 三处同判据）。
+    // 【为什么不能两个都落】：§3.6/§3.2 的默认对本身不同调（模板 `$format/$dir/$file` +
+    // 开关 false），若在此把开关一并落值，`set_split_by_format(false)` 会按 §4.2 联动删掉
+    // `$format` 段 → **首启默认结构被静默改成平铺**，与 §3.2「多选输出时 UI 默认 true」和
+    // output-dark 原型（开关默认开）冲突。故此处以模板为真值；设置对话框写出的开关恒与
+    // 模板配平，二者不矛盾。
+    // 随后 last_preset 的 apply_preset 会覆盖它（§2.14 预设优先）。
+    page_output->set_output_template(QString::fromStdString(settings.output_template));
     page_output->restore_last(QString::fromStdString(settings.last_format),
                               QString::fromStdString(settings.last_out_root));
     page_meta->set_map_provider(QString::fromStdString(settings.map_provider),
@@ -4660,6 +4672,50 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
         dlg.show();
         pump(250);
         smoke_grab(shots_dir, kSmokeShots[kShotSettings], &dlg);
+        // ---- M4-T15（§9.3 设置追加项）：控件 → AppSettings 读回自检 ----
+        // 不新增截图、不改冻结末行。两侧都验：未 accept（非确定路径）= 构造快照原样返回
+        // （§2.10）；accept 后 = 控件值，且"分文件夹默认结构"写回 output_template +
+        // split_by_format 一对（§3.6 两字段）。
+        {
+            const pp::AppSettings snapshot = dlg.settings();
+            auto *stagger = dlg.findChild<QSpinBox *>(QStringLiteral("pp-stagger-ms"));
+            auto *threads = dlg.findChild<QSpinBox *>(QStringLiteral("pp-thread-budget"));
+            auto *structure = dlg.findChild<QComboBox *>(QStringLiteral("pp-folder-structure"));
+            if (stagger == nullptr || threads == nullptr || structure == nullptr) {
+                smoke_fail(MainWindow::tr("设置对话框缺少 T15 追加项控件（pp-stagger-ms / "
+                                          "pp-thread-budget / pp-folder-structure）"));
+            } else {
+                stagger->setValue(250);
+                threads->setValue(5);
+                const int idx = structure->findData(QStringLiteral("$dir/$format/$file"));
+                if (idx >= 0) {
+                    structure->setCurrentIndex(idx);
+                }
+                dlg.accept();
+                const pp::AppSettings edited = dlg.settings();
+                const bool ok = snapshot.stagger_ms == settings.stagger_ms &&
+                                snapshot.thread_budget == settings.thread_budget &&
+                                snapshot.output_template == settings.output_template &&
+                                snapshot.split_by_format == settings.split_by_format &&
+                                edited.stagger_ms == 250 && edited.thread_budget == 5 &&
+                                edited.output_template == "$dir/$format/$file" &&
+                                edited.split_by_format;
+                std::printf("UI-SMOKE settings-dialog: stagger=%d threads=%d tmpl=%s split=%d "
+                            "(snapshot stagger=%d threads=%d tmpl=%s)\n",
+                            edited.stagger_ms, edited.thread_budget, edited.output_template.c_str(),
+                            edited.split_by_format ? 1 : 0, snapshot.stagger_ms,
+                            snapshot.thread_budget, snapshot.output_template.c_str());
+                std::fflush(stdout);
+                if (!ok) {
+                    smoke_fail(MainWindow::tr("设置追加项读回不符（stagger=%1 threads=%2 tmpl=%3 "
+                                              "split=%4）")
+                                   .arg(edited.stagger_ms)
+                                   .arg(edited.thread_budget)
+                                   .arg(QString::fromStdString(edited.output_template))
+                                   .arg(edited.split_by_format ? 1 : 0));
+                }
+            }
+        }
         dlg.close();
         pump(80);
     }

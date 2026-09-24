@@ -17,9 +17,15 @@
 #   LD_LIBRARY_PATH=<AppDir>/usr/lib ldd <elf>
 # 输出三段:
 #   ① [FAIL-A] not found 明细（按 ELF 分组）
-#   ② [FAIL-B] libQt6* 解析到 AppDir 之外（按 ELF 分组）
+#   ② [FAIL-B] 「必须来自随包」族（libQt6*/libjxl*）解析到 AppDir 之外（按 ELF 分组）
 #   ③ [SYS]    解析到 AppDir 之外的其余库 = **目标机系统要求清单**（按 soname 聚合）
 # 退出码: 0 = 无 A/B（③ 非空不算失败，属文档化的系统要求）。1 = 存在 A 或 B。
+#
+# M4-W4-T18: B 类族从 libQt6* 扩到 **libQt6*|libjxl***。
+#   libjxl_threads.so 是**非传递**依赖（不在 libjxl.so 的 DT_NEEDED 里；Windows 侧
+#   `dumpbin /dependents jxl.dll` 同源证据 —— Linux 侧本机无法实测），刻意不随包时本机若装了
+#   系统 libjxl（Debian/Ubuntu 有 libjxl0.x）会被 ld.so.cache 顶上 ⇒ A 类不报、干净目标机才炸
+#   —— 这正是 M2-T18 B 类的机理（"本机装了系统 Qt 就测不出交叉版本冲突"），故纳入同一族。
 set -uo pipefail
 
 APPDIR="${1:-dist/PhotoPipeline.AppDir}"
@@ -65,7 +71,9 @@ for elf in "${ELFS[@]}"; do
                     "$APPDIR"/*) : ;;  # 随包，OK
                     *)
                         case "$soname" in
-                            libQt6*)
+                            # 「必须来自随包」族（M4-W4-T18: 追加 libjxl* —— 非传递闭包点
+                            # libjxl_threads.so 漏包时只能被系统 libjxl 顶替，不报 not found）
+                            libQt6*|libjxl*)
                                 b+="    $soname -> $path"$'\n'
                                 ;;
                         esac
@@ -93,7 +101,7 @@ for k in $(printf '%s\n' "${!A_BLOCK[@]}" | LC_ALL=C sort); do
 done
 
 echo
-echo "-- ② [FAIL-B] libQt6* 解析到 AppDir 之外（随包 Qt 与系统 Qt 交叉版本冲突，致命）: $([ "$FAIL_B" -eq 0 ] && echo 无 || echo "有（$((${#B_BLOCK[@]})) 个 ELF）")"
+echo "-- ② [FAIL-B] 「必须来自随包」族（libQt6*/libjxl*）解析到 AppDir 之外（随包 Qt 与系统 Qt 交叉版本冲突 / 非传递闭包点被系统库顶替，致命）: $([ "$FAIL_B" -eq 0 ] && echo 无 || echo "有（$((${#B_BLOCK[@]})) 个 ELF）")"
 for k in $(printf '%s\n' "${!B_BLOCK[@]}" | LC_ALL=C sort); do
     [ -n "$k" ] || continue
     echo "  $k:"

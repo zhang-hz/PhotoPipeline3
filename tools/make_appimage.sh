@@ -32,6 +32,20 @@
 #     打包期用 tools/appimage-check-closure.sh 对 AppDir 内**每一个** ELF 做硬门禁
 #     （A/B 任一命中即失败），并把「目标机系统要求清单」写入
 #     <OUT_DIR>/PhotoPipeline-<version>-deps.txt（供 README 系统要求章节取证）。
+#   * 版本/依赖面（M4-W4-T18 更新）: 随包 Qt = 6.11.2（tools/versions.env 的 QT_VERSION 单源）。
+#     脚本本身与 Qt 版本解耦（Qt 目录由产物 ldd 反查、插件按**整目录**随包），故 6.8→6.11
+#     无需改清单；上文 "系统 Qt 6.10 / 随包 Qt 6.8.3" 是 M2-T18 的现场值，保留原样不追改。
+#     **非传递闭包点（与 winzip 侧 jxl_threads.dll 同判）**: libjxl_threads.so 不在 libjxl.so 的
+#     DT_NEEDED 里 —— 上游把线程 runner 拆成独立库（Windows 侧同源证据:
+#     `dumpbin /dependents build/release/jxl.dll` 无 jxl_threads.dll，它被主二进制与
+#     OpenImageIO.dll 直接导入；Linux 侧 .so 的 DT_NEEDED 本机（Windows）无法实测，
+#     该推断来自同一上游 target 图 + CMakeLists.txt:146 必须显式 pkg_check_modules
+#     libjxl_threads 才能编过 JxlThreadParallelRunner 这一机械事实）
+#     ⇒ "libjxl 的传递闭包"推不出它。漏包时目标机若装了系统 libjxl
+#     （Debian/Ubuntu 有 libjxl0.x），运行期会被 ld.so.cache 顶上而**不报 not found**，
+#     只在缺失 libjxl_threads 的干净机器上炸 —— 与 M2-T18 的 B 类同一机理。
+#     故: ①本脚本对 libjxl*.so* 做显式随包断言（下方「非传递闭包点」段）；
+#         ②tools/appimage-check-closure.sh 把 libjxl* 纳入 B 类「必须来自随包」族。
 #   * 随包 / 不随包策略（M2-T18 定，逐类理由）:
 #       BUNDLE_ALWAYS（白名单豁免，必须随包）: libQt6*（必须来自 Qt 工具链，绝不允许
 #         系统 Qt 顶替）、libxcb-*.so*（Qt xcb 插件专属扩展库，体积小、ABI 稳定、目标机
@@ -47,10 +61,13 @@
 #         （Fedora）；AppRun 启动前检测并在 stderr/弹窗/日志明确报错（不静默）。
 #   * Qt 插件: usr/lib/qt-plugins/{platforms/libqoffscreen.so, platforms/libqxcb.so,
 #     imageformats/, iconengines/, styles/, tls/}；工具链缺某个目录/文件 → 跳过并提示（不视为失败）。
-#     tls/（M2-T11b 裁定加入）= Qt 6.8 的 libqopensslbackend.so / libqcertonlybackend.so：运行期
-#     **dlopen 系统 libssl.so.3 / libcrypto.so.3**（插件本身不链接 OpenSSL），故 OpenSSL 属系统
-#     白名单、**不**随包（目标机需 libssl3）；缺它时 QNetworkAccessManager 报
-#     `qt.network.ssl: No functional TLS backend was found`，在线地图瓦片/经纬度反查失效。
+#     tls/（M2-T11b 裁定加入）= Qt 的 TLS backend 插件（如 libqopensslbackend.so /
+#     libqcertonlybackend.so）：运行期 **dlopen 系统 libssl.so.3 / libcrypto.so.3**（插件本身
+#     不链接 OpenSSL），故 OpenSSL 属系统白名单、**不**随包（目标机需 libssl3）；缺它时
+#     QNetworkAccessManager 报 `qt.network.ssl: No functional TLS backend was found`，
+#     在线地图瓦片/经纬度反查失效。（M4-W4-T18 附注: Windows 侧 windeployqt 6.11.2 实测只部署
+#     qcertonlybackend + qschannelbackend —— backend 集合是平台/工具链决定的，故本脚本按
+#     **整目录**随包、不硬编码文件名。）
 #   * OIIO 插件: 本仓库 OIIO 为静态构建（插件内建），脚本按候选路径探测，存在则整拷到
 #     usr/lib/oiio-plugins；否则建空目录 + 提示（AppRun 始终导出 OIIO_LIBRARY_PATH）。
 #   * 第三方许可（M2-T11c，GPL/LGPL 分发合规）: 由 tools/collect_licenses.py 汇总
@@ -231,6 +248,16 @@ for f in "$APPDIR/usr/lib"/libQt6*.so.*; do
     cmp -s "$f" "$QT_LIB_DIR/$n" || die "随包 Qt 库与 Qt 工具链不一致（疑似系统 Qt 混入）: $n ← $QT_LIB_DIR/$n"
 done
 
+# ---- 非传递闭包点显式随包断言（M4-W4-T18；理由见文件头「非传递闭包点」段） ----
+# libjxl_threads.so 不在 libjxl.so 的 DT_NEEDED 里 ⇒ 不能靠传递闭包推导，必须显式断言存在。
+# 判据 = usr/lib 内存在该 soname 前缀文件（前缀匹配，兼容 0.10/0.12 的 soname 号）。
+for prefix in libjxl.so libjxl_threads.so; do
+    compgen -G "$APPDIR/usr/lib/${prefix}*" >/dev/null \
+        || die "非传递闭包点缺失: usr/lib 内没有 ${prefix}*（libjxl.so 的依赖里没有 libjxl_threads.so，
+  不能靠传递闭包推导；理由与判据见本脚本文件头「非传递闭包点」段）"
+done
+note "非传递闭包点就位: $(cd "$APPDIR/usr/lib" && ls -1 libjxl*.so* | LC_ALL=C sort | tr '\n' ' ')"
+
 # ---- OIIO 插件目录（静态 OIIO → 通常不存在；探测候选，存在则整拷） ----
 OIIO_PLUGINS="$APPDIR/usr/lib/oiio-plugins"
 mkdir -p "$OIIO_PLUGINS"
@@ -405,10 +432,10 @@ $missing"
 DEPS_TXT="$OUT_DIR/PhotoPipeline-${VERSION}-deps.txt"
 if ! CLOSURE_OUT="$(bash "$ROOT/tools/appimage-check-closure.sh" "$APPDIR" 2>&1)"; then
     printf '%s\n' "$CLOSURE_OUT" >&2
-    die "依赖闭包门禁失败（A=not found 或 B=libQt6* 外泄，见上）: $APPDIR"
+    die "依赖闭包门禁失败（A=not found 或 B=「必须来自随包」族 libQt6*/libjxl* 外泄，见上）: $APPDIR"
 fi
 printf '%s\n' "$CLOSURE_OUT" >"$DEPS_TXT"
-note "闭包门禁 PASS: 全部 ELF 无 not found、libQt6* 全部来自随包 Qt（$QT_LIB_DIR）"
+note "闭包门禁 PASS: 全部 ELF 无 not found、「必须来自随包」族（libQt6*/libjxl*）全部来自随包（Qt ← $QT_LIB_DIR）"
 note "  $(printf '%s\n' "$CLOSURE_OUT" | grep '① \[FAIL-A\]')"
 note "  $(printf '%s\n' "$CLOSURE_OUT" | grep '② \[FAIL-B\]')"
 note "  $(printf '%s\n' "$CLOSURE_OUT" | grep '③ \[SYS\]')"

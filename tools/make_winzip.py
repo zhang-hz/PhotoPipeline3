@@ -25,13 +25,25 @@ env 覆盖:
     失败逐名列出并带标记 + 三类计数（对应 AppImage 的 FAIL-A "not found"）。
   * 门禁 B（来源一致性）: staging 内每个 Qt6*.dll 的 sha256 必须等于 Qt 工具链 bin 目录内
     同名文件（对应 AppImage 的 FAIL-B "libQt6* 外泄/系统 Qt 混入"）。
+  * 门禁 A′（非传递闭包点，M4-W4-T18）: jxl_threads.dll **不在** jxl.dll 的导入表里
+    （`dumpbin /dependents build/release/jxl.dll` 无该项），它被 photopipeline.exe 与
+    OpenImageIO.dll **直接**导入 ⇒ 任何"从 jxl.dll 递归求闭包"的推导都会漏掉它。
+    判据 = 显式随包（不得只靠传递闭包），见 NON_TRANSITIVE_DLLS。
   * 断言 C（结构）: photopipeline.exe、platforms/qwindows.dll、platforms/qoffscreen.dll、
-    imageformats/（≥1 dll）、tls/（≥1 dll）齐备。
+    imageformats/（≥1 dll）、tls/（≥1 dll）齐备；**Qt 6.11 DLL 面**（M4-W4-T18）=
+    实际链接的 Qt 模块清单（LINKED_QT_MODULES，来源 CMakeLists.txt:133
+    `find_package(Qt6 REQUIRED COMPONENTS Widgets Network)`）必须全部随包，且
+    photopipeline.exe 的导入表里不得出现清单外的 Qt6*.dll（链接面漂移即失败）。
   * 断言 D（许可）: licenses/*/copyright 计数 ≥30 且 licenses/PhotoPipeline/LICENSE 存在；
     **写盘前 + zip 内各校验一次**（阈值 30 与 AppImage 同口径）。
   * 烟测 E（启动）: staging 内 exe 跑 --version → 冻结行 `PhotoPipeline <ver>` + rc 0；
     给出 --smoke-exe 时追加 E-2（offscreen --ui-smoke，断言 `UI-SMOKE OK shots=12 pages=3`；
     冻结行 M4-W3-T14 起为 shots=12，来源 tests/ui_smoke.py 的 FROZEN_LINE）。
+    **烟测状态隔离（M4-W4-T18）**: portable 模式（src/platform/paths.cpp 的可写探测）
+    使 data_dir() = exe 目录，故走查会把 `classes.json` / `presets/` / `logs/` 写进 staging；
+    实测未清理时 `classes.json`（内含本机 tests/golden/base 的 assignment）会随 zip 出货。
+    E-1/E-2 之前对 staging 取快照，之后统一还原：新增路径一律删除并逐条列名，
+    快照比对必须回到原状（否则硬失败）。
   * 指纹 F: 打印产物字节数 + sha256 + zip 条目数。
 
 退出码: 0 成功；1 任一硬门禁失败；2 输入资产缺失（构建产物 / windeployqt）。
@@ -42,9 +54,13 @@ env 覆盖:
   * zip 条目按路径排序写入（确定性顺序）；只写 OUT_DIR 与临时目录。
   * windeployqt 参数: --release --no-translations --no-system-d3d-compiler --no-opengl-sw
     （本应用为 QWidget/QPainter，不需要 OpenGL 软件回退）。
-    **不用** --compiler-runtime: Qt 6.8.3 该选项只投放安装器 vc_redist.x64.exe，与"解压即用"
+    **不用** --compiler-runtime: Qt 6.11.2 该选项只投放安装器 vc_redist.x64.exe，与"解压即用"
     不符；改为显式 app-local 部署 Microsoft.VC*.CRT 整目录（R1），并剔除 vc_redist.x64.exe
     与 dxcompiler.dll/dxil.dll（D3D12 RHI 着色器编译器，本应用不走该路径）。
+    Qt 6.11 面变化（M4-W4-T18 实测）: `opengl32sw.dll`/`d3dcompiler_47.dll` 已不再随 Qt 6.11
+    发行（6.8.3 的 bin 里有，6.11.2 没有）⇒ --no-opengl-sw 在 6.11 上是纯退化项（保留无害）；
+    vc_redist.x64.exe / dxcompiler.dll / dxil.dll **仍**由 windeployqt 6.11.2 投放（实测
+    18.8/14.3/1.5 MB），剔除清单照旧有效。
   * 显式补拷 platforms/qoffscreen.dll（对齐 AppImage 同时随包 qoffscreen + qxcb；
     offscreen 供本脚本烟测 E-2 使用）；工具链缺该文件只提示、不失败。
   * 不联网；不触碰 tools/make_appimage.sh 与 CI 工作流。
@@ -76,6 +92,23 @@ MUST_BUNDLE_PREFIXES = ('msvcp140', 'vcruntime140', 'concrt140', 'vccorlib140')
 SYSTEM_PREFIXES = ('api-ms-win-', 'ext-ms-win-')
 SYSTEM32 = os.path.join(
     os.environ.get('SystemRoot') or os.environ.get('WINDIR') or r'C:\Windows', 'System32')
+
+# M4-W4-T18 Qt 6.11 DLL 面 = **实际链接**的 Qt 模块（唯一来源 CMakeLists.txt:133
+# `find_package(Qt6 REQUIRED COMPONENTS Widgets Network)`，Core/Gui 随 Widgets 传递；
+# CMakeLists.txt:182 另有 Qt6::Core/Qt6::Gui 显式挂到 pp_core）。
+# 判据（断言 C 扩展，双向）:
+#   ① 这 4 个 Qt6*.dll 必须随包（缺一即失败）；
+#   ② photopipeline.exe 的导入表里不得有清单外的 Qt6*.dll（链接面漂移 ⇒ 打包面清单失同步）。
+# Qt6Svg.dll 不在此清单：它不在 exe 的链接面，而是 windeployqt 因 imageformats/qsvg.dll +
+# iconengines/qsvgicon.dll 部署的**插件依赖**（由门禁 A 覆盖，实测随包 5 个 Qt6*.dll）。
+LINKED_QT_MODULES = ('Qt6Core.dll', 'Qt6Gui.dll', 'Qt6Widgets.dll', 'Qt6Network.dll')
+
+# M4-W4-T18 非传递闭包点（W0-T7 裁定提醒过的闭包点）:
+#   jxl_threads.dll 是**非传递**依赖 —— `dumpbin /dependents build/release/jxl.dll` 的输出里
+#   没有它（jxl.dll 只导入 jxl_cms/hwy/brotli*）；真正导入它的是 photopipeline.exe 与
+#   OpenImageIO.dll（本机 dumpbin 实测）。故 packager 不得假设"staging 了 jxl.dll 就有
+#   jxl_threads.dll"，必须**显式**声明并在缺失时显式补拷（见 ensure_non_transitive_dlls）。
+NON_TRANSITIVE_DLLS = ('jxl_threads.dll',)
 
 
 def note(message):
@@ -190,6 +223,75 @@ def collect_tree(staging):
             items.append((rel, full))
     items.sort()
     return items
+
+
+def staging_paths(staging):
+    """staging 内全部文件与目录的相对路径集合（烟测 E-1/E-2 快照比对用）。"""
+    paths = set()
+    for root, dirs, files in os.walk(staging):
+        for name in dirs + files:
+            full = os.path.join(root, name)
+            paths.add(os.path.relpath(full, staging).replace(os.sep, '/'))
+    return paths
+
+
+def restore_staging(staging, before):
+    """把 staging 还原到快照 before：删除全部新增文件/目录，返回删除清单（已排序）。
+
+    M4-W4-T18 的烟测状态隔离（E-1 与 E-2 共用）: portable 模式（src/platform/paths.cpp 的
+    exe 目录可写探测）使 data_dir() = exe 目录，故 `--ui-smoke` 走查会把运行态写进 staging ——
+    实测为 classes.json（内含本机 tests/golden/base 的 assignment）+ 空目录 presets/ logs/。
+    不还原就会随 zip 出货（"测试态混进发行件"）。删除顺序 = 文件（先深后浅）→ 目录（先深后浅）。
+    """
+    added_files = []
+    added_dirs = []
+    added = []
+    for root, dirs, files in os.walk(staging):
+        for name in files + dirs:
+            full = os.path.join(root, name)
+            rel = os.path.relpath(full, staging).replace(os.sep, '/')
+            if rel in before:
+                continue
+            added.append(rel)
+            if os.path.isdir(full):
+                added_dirs.append(full)
+            else:
+                added_files.append(full)
+    for path in sorted(added_files, key=len, reverse=True):
+        os.remove(path)
+    for path in sorted(added_dirs, key=len, reverse=True):
+        try:
+            os.rmdir(path)
+        except OSError as exc:
+            die('打包前断言失败: 烟测残留目录无法删除 {}（{}）'.format(path, exc))
+    return sorted(added)
+
+
+def ensure_non_transitive_dlls(staging, build_dir):
+    """非传递闭包点显式随包（M4-W4-T18；清单与理由见 NON_TRANSITIVE_DLLS）。
+
+    staging 内已有同名文件 → 计为已就位；否则从构建目录 / vcpkg bin 显式补拷
+    （不做"传递闭包推导"）；两处都没有 → 硬失败。返回 (已就位数, 补拷数)。
+    """
+    present = 0
+    copied = 0
+    for name in NON_TRANSITIVE_DLLS:
+        if os.path.isfile(os.path.join(staging, name)):
+            present += 1
+            continue
+        sources = [os.path.join(build_dir, name)] + sorted(
+            glob.glob(os.path.join(ROOT, 'vcpkg_installed', '*', 'bin', name)))
+        for src in sources:
+            if os.path.isfile(src):
+                shutil.copy2(src, os.path.join(staging, name))
+                note('非传递闭包点补拷: {} ← {}（jxl.dll 不导入它，仅靠传递闭包必漏）'.format(name, src))
+                copied += 1
+                break
+        else:
+            die('闭包门禁 A′ 失败: 非传递依赖 {} 未随包（已试: {}）；'
+                'jxl.dll 的导入表里没有它 —— 只有显式复制才能入包'.format(
+                    name, ', '.join(sources) if sources else '<无候选>'))
+    return present, copied
 
 
 def structure_lines(staging, maxdepth=3):
@@ -391,6 +493,12 @@ def main(argv):
             os.remove(redundant)
             note('剔除冗余产物: {}（{} bytes）'.format(name, size))
 
+    # ---- 5d) 非传递闭包点显式随包（M4-W4-T18；见 NON_TRANSITIVE_DLLS） ----
+    # jxl_threads.dll 不在 jxl.dll 的导入表里（dumpbin 实测），被 photopipeline.exe 与
+    # OpenImageIO.dll 直接导入 ⇒ 必须显式确认/补拷，不能靠"jxl.dll 传递闭包"推导。
+    present, copied = ensure_non_transitive_dlls(staging, build_dir)
+    note('非传递闭包点: {} 个已随包（{} 个为本次显式补拷）'.format(present + copied, copied))
+
     # ---- 6b) 版本（单源：**staging 内**产物 --version；M3-T11b 零 PATH 依赖） ----
     # 探测对象是 staging 里的 exe：Qt / vcpkg / CRT 全部已在同目录就位，故不依赖调用者 PATH
     # （旧实现探测构建树 exe，那里没有 Qt6*.dll → CI 下输出为空而失败，run #21 真因）。
@@ -490,6 +598,27 @@ def main(argv):
     note('结构断言 C: photopipeline.exe / platforms/qwindows.dll / platforms/qoffscreen.dll / '
          'imageformats/={} dll / tls/={} dll 齐备'.format(len(imageformats), len(tls)))
 
+    # ---- 9b) Qt 6.11 DLL 面（M4-W4-T18，断言 C 扩展） ----
+    # 双向判据（见 LINKED_QT_MODULES 注释）: ①链接面清单必须全部随包；②导入表不得有清单外模块。
+    # 后者的意义: CMakeLists 的 find_package(Qt6 ...) 一旦扩模块，打包面必须同步（许可/体积/门禁 B
+    # 都按模块面走），此处让"漂移"当场变红而不是随包一个没人审计的 Qt 模块。
+    staged_qt = sorted(os.path.basename(rel) for rel, _full in qt_dlls)
+    missing_modules = [name for name in LINKED_QT_MODULES if name not in staged_qt]
+    if missing_modules:
+        die('Qt 模块面失败: 链接面清单 {} 未随包（staging 内 Qt6*.dll = {}）；'
+            '来源 CMakeLists.txt:133 find_package(Qt6 COMPONENTS Widgets Network)，'
+            'windeployqt 未部署即视为打包面缺陷'.format(
+                ', '.join(missing_modules), ', '.join(staged_qt) if staged_qt else '<无>'))
+    exe_qt = sorted(name for name in pe_imports(os.path.join(staging, 'photopipeline.exe'))
+                    if name.lower().startswith('qt6'))
+    drifted = [name for name in exe_qt if name not in LINKED_QT_MODULES]
+    if drifted:
+        die('Qt 模块面漂移: photopipeline.exe 导入了清单外的 {}（链接面 = {}）；'
+            '请同步 LINKED_QT_MODULES 与 packaging 面注释（来源 CMakeLists.txt:133）'.format(
+                ', '.join(drifted), ', '.join(exe_qt)))
+    note('Qt 6.11 DLL 面: 链接面 {} 全部随包；staging 内 Qt6*.dll = {}（插件依赖如 Qt6Svg 由门禁 A 覆盖）'
+         .format(', '.join(LINKED_QT_MODULES), ', '.join(staged_qt)))
+
     # ---- 10) 断言 D（写盘前）：许可汇总 ----
     licenses_dir = os.path.join(staging, 'licenses')
     license_rc = subprocess.call([sys.executable, os.path.join(ROOT, 'tools', 'collect_licenses.py'),
@@ -501,6 +630,11 @@ def main(argv):
          .format(license_count))
 
     # ---- 11) 烟测 E-1：staging 内 exe --version ----
+    # M4-W4-T18 烟测状态隔离（快照点）: portable 模式（src/platform/paths.cpp 的 exe 目录可写
+    # 探测）使 data_dir() = exe 目录 ⇒ 任何一次走查都可能把运行态（classes.json / presets/ /
+    # logs/）写进 staging；实测未清理时 classes.json（内含本机 tests/golden/base 的 assignment）
+    # 会随 zip 出货。故在**两条烟测之前**取快照，两条之后统一还原 + 断言回到原状（见 12b）。
+    smoke_state = staging_paths(staging)
     smoke = subprocess.run([os.path.join(staging, 'photopipeline.exe'), '--version'], cwd=staging,
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                            env=child_env(qt_bin))
@@ -539,9 +673,21 @@ def main(argv):
             if os.path.exists(dev_smoke):
                 os.remove(dev_smoke)
             shutil.rmtree(shots_dir, ignore_errors=True)
-        leftover = [rel for rel, _full in collect_tree(staging) if 'devsmoke' in rel.lower()]
-        if leftover:
-            die('打包前断言失败: staging 内残留 {}'.format(leftover))
+
+    # ---- 12b) 烟测状态隔离（M4-W4-T18）: E-1/E-2 新增的一切路径一律删除，快照必须逐项还原 ----
+    # 说明: 该清除必须留在**部署布局**内做（E-2 的 DLL 靠 exe 同目录解析，换目录跑就不是
+    # "打包产物能不能起来"了），所以是"跑完再还原"而不是"换个干净目录跑"。
+    removed = [rel for rel in restore_staging(staging, smoke_state)
+               if 'devsmoke' not in rel.lower()]
+    if removed:
+        note('烟测状态隔离: 已从 staging 清除走查运行态 {} 项（portable data_dir=exe 目录）: {}'
+             .format(len(removed), ', '.join(removed)))
+    residual = sorted(staging_paths(staging) - smoke_state)
+    if residual:
+        die('打包前断言失败: 烟测后 staging 未能还原，残留 {}'.format(residual))
+    leftover = [rel for rel, _full in collect_tree(staging) if 'devsmoke' in rel.lower()]
+    if leftover:
+        die('打包前断言失败: staging 内残留 {}'.format(leftover))
 
     # ---- 13) 打包（确定性顺序，arcname 一律 PhotoPipeline/ 前缀） ----
     zip_path = os.path.join(out_dir, 'PhotoPipeline-{}-win64.zip'.format(version))

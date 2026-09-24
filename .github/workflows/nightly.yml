@@ -79,8 +79,9 @@ env:
   QT_VERSION: 6.11.2
   VCPKG_TAG: 2026.07.29
   PP_VCPKG_WARM_MIN: "20"
-  # 语料输出落到 runner 临时目录（不污染工作树；也便于随 job 一起丢弃）。
-  OUT_ROOT: ${{ runner.temp }}/out-smoke
+  # 注: 语料输出目录 OUT_ROOT（= runner 临时目录，不污染工作树、随 job 一起丢弃）声明在**各 job 的 env**
+  #     里，不在本块 —— `runner` 上下文（runner.temp/runner.os/...）在工作流级 env **不可用**，写在这里
+  #     会使 GitHub 判整文件非法（Unrecognized named-value: 'runner'）⇒ 三个 sanitizer job 各自声明。
   # sanitizer 运行期选项（测试 preset 里另有一份同样的 env —— 那里只管 ctest，这里管金样/回归）。
   ASAN_OPTIONS: detect_leaks=1:print_stacktrace=1:abort_on_error=0
   LSAN_OPTIONS: suppressions=${{ github.workspace }}/tools/lsan.supp:print_suppressions=1
@@ -100,6 +101,7 @@ jobs:
     timeout-minutes: 20         # 硬顶（预算 20 min）
     env:
       QT_DIR: ${{ github.workspace }}/Qt/6.11.2/gcc_64
+      OUT_ROOT: ${{ runner.temp }}/out-smoke   # 语料输出落 runner 临时目录（须 job 级，见工作流 env 注）
       PP_PRESET: asan-linux
     steps:
       - uses: actions/checkout@v4
@@ -247,6 +249,7 @@ jobs:
     timeout-minutes: 20         # 硬顶（预算 20 min）
     env:
       QT_DIR: ${{ github.workspace }}/Qt/6.11.2/gcc_64
+      OUT_ROOT: ${{ runner.temp }}/out-smoke   # 语料输出落 runner 临时目录（须 job 级，见工作流 env 注）
       PP_PRESET: ubsan
     steps:
       - uses: actions/checkout@v4
@@ -392,6 +395,7 @@ jobs:
     timeout-minutes: 20         # 硬顶（预算 20 min）
     env:
       QT_DIR: ${{ github.workspace }}/Qt/6.11.2/gcc_64
+      OUT_ROOT: ${{ runner.temp }}/out-smoke   # 语料输出落 runner 临时目录（须 job 级，见工作流 env 注）
       PP_PRESET: tsan
     steps:
       - uses: actions/checkout@v4

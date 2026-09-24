@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # PhotoPipeline — GitHub Actions 缓存清理（M2-T19 ④）
 #
-# 为什么需要: vcpkg/ccache 用**滚动 key**（末段含 run_id，见 build-test.yml 注释：固定 key 会
+# 为什么需要: vcpkg/ccache 用**滚动 key**（末段含 run_id，见 main-full.yml 注释：固定 key 会
 # "首次保存即冻结半成品、之后永远命中不再更新"），代价是每轮都新增条目（3 job × ~425MiB vcpkg
 # + 1 × ccache）。不清理会在若干轮后顶到仓库缓存上限，触发平台 LRU 驱逐 —— 那时被淘汰的可能
 # 正是最贵的 Qt 缓存。

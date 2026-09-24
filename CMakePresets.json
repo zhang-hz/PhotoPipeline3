@@ -38,6 +38,20 @@
         "PP_BUILD_DEV": "ON",
         "CMAKE_CXX_FLAGS_DEBUG": "-g -fsanitize=thread"
       } },
+    { "name": "asan-linux", "inherits": "base-linux",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "PP_BUILD_DEV": "ON",
+        "CMAKE_CXX_FLAGS_DEBUG": "-g -fsanitize=address -fno-omit-frame-pointer"
+      } },
+    { "name": "ubsan", "inherits": "base-linux",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "PP_BUILD_DEV": "ON",
+        "CMAKE_CXX_FLAGS_DEBUG": "-g -fsanitize=undefined -fno-omit-frame-pointer"
+      } },
     { "name": "asan", "inherits": "base-windows",
       "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
       "cacheVariables": {
@@ -51,6 +65,8 @@
     { "name": "release-dev", "configurePreset": "release-dev" },
     { "name": "dev", "configurePreset": "dev" },
     { "name": "tsan", "configurePreset": "tsan" },
+    { "name": "asan-linux", "configurePreset": "asan-linux" },
+    { "name": "ubsan", "configurePreset": "ubsan" },
     { "name": "asan", "configurePreset": "asan" }
   ],
   "testPresets": [
@@ -64,6 +80,19 @@
       "execution": { "timeout": 120 },
       "environment": {
         "TSAN_OPTIONS": "halt_on_error=0:second_deadlock_stack=1:ignore_interceptors_accesses=1:suppressions=${sourceDir}/tools/tsan.supp:print_suppressions=1"
+      },
+      "output": { "outputOnFailure": true } },
+    { "name": "asan-linux", "configurePreset": "asan-linux",
+      "execution": { "timeout": 240 },
+      "environment": {
+        "ASAN_OPTIONS": "detect_leaks=1:print_stacktrace=1:abort_on_error=0",
+        "LSAN_OPTIONS": "suppressions=${sourceDir}/tools/lsan.supp:print_suppressions=1"
+      },
+      "output": { "outputOnFailure": true } },
+    { "name": "ubsan", "configurePreset": "ubsan",
+      "execution": { "timeout": 240 },
+      "environment": {
+        "UBSAN_OPTIONS": "print_stacktrace=1:halt_on_error=0"
       },
       "output": { "outputOnFailure": true } },
     { "name": "asan", "configurePreset": "asan",

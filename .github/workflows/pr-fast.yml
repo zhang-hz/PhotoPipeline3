@@ -14,19 +14,20 @@ name: pr-fast
 #     | fmt                | 1 min  | clang-format --dry-run -Werror 全源 0 diff        |
 #     | build-unit-windows | 10 min | windows-2025：configure/build/ctest --preset release |
 #     | build-unit-linux   | 8 min  | ubuntu-24.04：同上（apt 依赖 + ccache）             |
-#     | golden-subset      | 4 min  | 金样子集 7/16 对（release-dev：photopipeline+pp_verify）|
+#     | golden-subset      | 4 min  | 金样子集 7/20 对（release-dev：photopipeline+pp_verify）|
 #   整轮 wall ≈ fmt 1 + max(win 10, linux 8) + golden 4 ≈ 15 min（设计目标 ≤10 / 硬 ≤20；
 #   超预算处置 = 拆 job / 砍步骤，**禁止放宽时限** —— 任务书 §5-5）。
 #   ★ 实跑 wall-clock 以**首个 PR 的 CI** 为准：GitHub 侧 runner 速度/apt/网络本地无法实测
 #     （M3 的预算表同样以线上实测校准）；本文件只钉住"预算表 + 硬顶"。
 #
-#   ── 与 build-test.yml（M3 主干道）的关系 ─────────────────────────────────────
+#   ── 与 main-full.yml（M4-W4-T16 起的主干全量道）的关系 ───────────────────────
 #     * 同源: 缓存键方案（vcpkg-/vcpkgwin-/qt-/ccache- 前缀分离 + Qt 单写者）、准备块步骤形态、
 #       Windows 一律经 tools/env.py run -- 注入（vcvars）、Qt bin → GITHUB_PATH（T11b 教训）、
 #       测试超时双保险（CMakePresets execution.timeout=120s + CMakeLists 的 TIMEOUT 120 属性）。
-#     * 本道只跑**门禁子集**: 全量 ctest + 金样子集；不打包、不跑 ui-smoke、不跑 sanitizer
-#       （那些是 main-full / nightly / release 的事，W4-T16 收口）。
-#     * 缓存写入者仍是 build-test.yml / warm-cache.yml：本道**只 restore 不 save**
+#     * 本道只跑**门禁子集**: 全量 ctest + 金样子集；不打包、不跑 ui-smoke、不跑 sanitizer、
+#       不跑 clang-tidy 棘轮（那些属 main-full / nightly / release —— M4-W4-T16 已全部落地）。
+#     * 缓存写入者 = main-full.yml（linux job 写 ccache 与 Qt-gcc_64；windows job 写 Qt-win64；
+#       各 job 写自己的 vcpkg 滚动键）与 warm-cache.yml（播种）。本道**只 restore 不 save**
 #       （① 避免同一 key 上多写者撞 409 ② 不把 PR 侧中间产物写进主干缓存 ③ 省时间）。
 #       跨 workflow 可见性: PR 运行可 restore 基线分支（main）已保存的缓存 —— 正是本道所需。
 #
@@ -36,8 +37,11 @@ name: pr-fast
 #     * 缓存缺失 ⇒ **早失败**并指路 warm-cache.yml：日常流水线严禁触发冷构建（~40 min，
 #       直接击穿 20 min 硬顶）。播种 = Actions → warm-cache → Run workflow（workflow_dispatch）。
 #     * Qt 同口径：本道只从缓存取 Qt（单写者），缺失即早失败（**不再 aqt 兜底** —— M4-T2 实测
-#       Qt 6.11.2 在 download.qt.io 缺 qt6_6112/Updates.xml，aqt 3.3.0 无法定位版本；
-#       播种通道的修复属 W4-T16 的 CI 收口面）。
+#       Qt 6.11.2 的 Windows 仓库布局与 aqt 3.3.0 失配：上游是
+#       `qt6_6112/qt6_6112_msvc2022_64/Updates.xml`，aqt 仍查 `qt6_6112/qt6_6112/` ⇒ ERROR
+#       「Failed to locate XML data」。M4-W4-T16 已把播种通道收口在 warm-cache.yml：
+#       Linux 走 aqt（实测可用）+ Windows 走自备归档兜底（tools/ci-seed-qt.py，workflow_dispatch
+#       的 qt_tarball_url）；证据与复现命令见 warm-cache.yml 文件头「Qt 播种通道」节）。
 on:
   pull_request:
 
@@ -125,7 +129,7 @@ jobs:
 
   # ────────────────────────────────────────────────────────────────────────────
   # build-unit-windows（预算 10 min）: windows-2025
-  #   步骤形态逐条对齐 build-test.yml 的 windows job（准备块 + configure/build/ctest），
+  #   步骤形态逐条对齐 main-full.yml 的 windows job（准备块 + configure/build/ctest），
   #   去掉：金样 16 对（→ 独立 golden-subset job）、winzip 打包、release-dev 全量。
   #   Windows 侧命令行一律 `python tools/env.py run -- <命令>`（vcvars 注入；M3-T7 教训）。
   # ────────────────────────────────────────────────────────────────────────────
@@ -149,13 +153,13 @@ jobs:
           }
           Write-Output "versions.env OK: QT_VERSION=$env:QT_VERSION VCPKG_TAG=$env:VCPKG_TAG"
 
-      - name: Qt ${{ env.QT_VERSION }} 缓存（restore，单写者=build-test/warm-cache）
+      - name: Qt ${{ env.QT_VERSION }} 缓存（restore，单写者=main-full/warm-cache）
         id: qt-cache
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/Qt/6.11.2/msvc2022_64
           # 精确 key（不含 run_id）：Qt 版本/平台/架构变才失效；前缀含 win64_msvc2022_64
-          # ⇒ 与 Linux 的 qt-<ver>-gcc_64- 严格分离（防跨平台串味）。key 方案与 build-test.yml 同源。
+          # ⇒ 与 Linux 的 qt-<ver>-gcc_64- 严格分离（防跨平台串味）。key 方案与 main-full.yml 同源。
           key: qt-${{ env.QT_VERSION }}-win64_msvc2022_64-${{ runner.os }}-${{ runner.arch }}
           restore-keys: qt-${{ env.QT_VERSION }}-win64_msvc2022_64-
 
@@ -214,7 +218,7 @@ jobs:
         # 设计 §12.4：日常流水线严禁触发冷构建（≈40 min，击穿 20 min 硬顶）。
         # 判据 = 还原到的 archive 数（冷 = 0）。注意：本断言只能识别"缓存整体缺失"；
         # 若缓存存在但都是**旧 ABI**（刚改 triplet/flags 且未重新播种），冷构建会在 configure
-        # 暴露（build-test.yml 口径："configure 含 vcpkg install = 缓存是否命中的直接体现"）。
+        # 暴露（main-full.yml 口径："configure 含 vcpkg install = 缓存是否命中的直接体现"）。
         run: |
           $n = @(Get-ChildItem -Recurse -File "$env:VCPKG_DEFAULT_BINARY_CACHE" -Filter *.zip -ErrorAction SilentlyContinue).Count
           Write-Output "vcpkg binary cache archives = $n（判据 ≥ $env:PP_VCPKG_WARM_MIN）"
@@ -226,7 +230,7 @@ jobs:
           }
 
       - name: 语料存在性断言（不重新生成）
-        # 语义与 build-test.yml 逐字等价：语料已入库，每轮重新生成纯属浪费（且依赖 vcpkg 产物）。
+        # 语义与 main-full.yml 逐字等价：语料已入库，每轮重新生成纯属浪费（且依赖 vcpkg 产物）。
         run: |
           $n = @(git ls-files tests/golden/base).Count
           $m = @(git ls-files tests/golden/smoke | Where-Object { $_ -like '*.json' }).Count
@@ -287,7 +291,7 @@ jobs:
 
   # ────────────────────────────────────────────────────────────────────────────
   # build-unit-linux（预算 8 min）: ubuntu-24.04
-  #   步骤形态逐条对齐 build-test.yml 的 linux job（准备块 + configure/build/ctest），
+  #   步骤形态逐条对齐 main-full.yml 的 linux job（准备块 + configure/build/ctest），
   #   去掉：金样 16 对 + release-dev 树 + soname 覆盖自检（前者→ golden-subset job；
   #   后两者属 main-full 的 linux 全量 job —— 本道不重复烧时间）。
   # ────────────────────────────────────────────────────────────────────────────
@@ -311,7 +315,7 @@ jobs:
       - name: apt 系统依赖（tools/ci-system-deps.txt）
         run: bash tools/ci-install-deps.sh
 
-      - name: Qt ${{ env.QT_VERSION }} 缓存（restore，单写者=build-test/warm-cache）
+      - name: Qt ${{ env.QT_VERSION }} 缓存（restore，单写者=main-full/warm-cache）
         id: qt-cache
         uses: actions/cache/restore@v4
         with:
@@ -332,7 +336,7 @@ jobs:
       - name: vcpkg ${{ env.VCPKG_TAG }}（pinned）
         run: |
           git clone https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
-          # checkout 必须早于 bootstrap（理由见 build-test.yml：工具/ports 版本必须一致）。
+          # checkout 必须早于 bootstrap（理由见 main-full.yml：工具/ports 版本必须一致）。
           git -C "$VCPKG_ROOT" checkout "$VCPKG_TAG"
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
 
@@ -366,9 +370,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/.cache/ccache
-          # key 语义同 build-test.yml（滚动 key + 宽前缀）；0.3.0 追加 triplet 哈希
+          # key 语义同 main-full.yml（滚动 key + 宽前缀）；0.3.0 追加 triplet 哈希
           # （triplets/** 与 cmake/** 一起进 key：flags 定义变更 ⇒ 编译产物缓存口径变更）。
-          # **不含 github.job**：ccache 内容与 job 基本无关，且本道只 restore（写者是 build-test.yml）。
+          # **不含 github.job**：ccache 内容与 job 基本无关，且本道只 restore（写者是 main-full.yml 的 linux job）。
           key: ccache-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/**', 'CMakePresets.json') }}-${{ hashFiles('cmake/**', 'triplets/**') }}-${{ github.run_id }}
           restore-keys: ccache-${{ runner.os }}-
 
@@ -442,11 +446,11 @@ jobs:
   # golden-subset（预算 4 min）: 金样子集（设计 §12.2 表"金样"行 → PR 用子集）
   #   平台选择: ubuntu-24.04（理由：金样需要 release-dev 的 `--dev` harness，Windows 侧无 ccache
   #   ⇒ 单这一棵树的构建就吃掉整个 4 min 预算；Linux 侧 ccache 暖命中后两棵树的子集构建 ≈1 min。
-  #   Windows 全量金样仍在 main-full（build-test.yml 的 windows job 跑 16 对），本道不重复。）
-  #   用例筛选开关 = tests/golden/smoke.py --cases（M4-T4 新增；默认不带 = 全量 16 对，零变化）。
+  #   Windows 全量金样在 main-full 的 windows job（20 对），本道不重复。）
+  #   用例筛选开关 = tests/golden/smoke.py --cases（M4-T4 新增；默认不带 = 全量 20 对，零变化）。
   # ────────────────────────────────────────────────────────────────────────────
   golden-subset:
-    name: golden-subset（金样 7/16 对）
+    name: golden-subset（金样 7/20 对）
     runs-on: ubuntu-24.04
     timeout-minutes: 20         # 硬顶（预算 4 min）
     needs: [build-unit-windows, build-unit-linux]   # 与设计 §12.1 的 DAG 一致（两侧构建绿才跑金样）
@@ -458,7 +462,7 @@ jobs:
       - name: apt 系统依赖（tools/ci-system-deps.txt）
         run: bash tools/ci-install-deps.sh
 
-      - name: Qt ${{ env.QT_VERSION }} 缓存（restore，单写者=build-test/warm-cache）
+      - name: Qt ${{ env.QT_VERSION }} 缓存（restore，单写者=main-full/warm-cache）
         id: qt-cache
         uses: actions/cache/restore@v4
         with:

@@ -1,22 +1,51 @@
 name: warm-cache
-# PhotoPipeline — 缓存播种（M2-T19 ⑤）
+# ═══════════════════════════════════════════════════════════════════════════════
+# PhotoPipeline — 缓存播种（M2-T19 ⑤；M4-W4-T16 适配 Qt 6.11.2 + triplet 哈希 + 播种通道兜底）
 #
-# 用途: 当 **vcpkg.json / vcpkg-overlay/** / Qt 版本 / CMakeLists.txt 发生变化**（缓存 key 或
-# ABI 失效）后，用一次性的长跑把三类缓存按 build-test.yml 的**同一 key 方案**重新预热，
-# 之后日常 CI 只消费、不再承担冷构建（冷 vcpkg 全量构建 ≈34 min）。
+# 用途: 当 **vcpkg.json / vcpkg-overlay/** / Qt 版本 / triplet（AVX2 flags）/ CMakeLists.txt 变化**
+#       （缓存 key 或 ABI 失效）后，用一次性的长跑把三类缓存按**四道流水线的同一 key 方案**重新预热，
+#       之后日常/主干/夜间/发布只消费、不再承担冷构建（冷 vcpkg 全量 ≈34–50 min）。
+#
+# ★ 20min 硬约束的**唯一豁免**（设计 §12.6）: 「job 与整轮 wall-clock 双 ≤20min」适用于 pr-fast /
+#   main-full / nightly / release **全部流水线**；唯一豁免 = 本文件（缓存播种，非门禁基础设施，
+#   其存在目的就是把冷构建成本移出反馈回路）。故本文件的 timeout 按冷路径实需给足（60/120 min）。
 #
 # 触发:
-#   * workflow_dispatch —— 手动（改 overlay/Qt 版本后立刻预热）
-#   * schedule 每周日 03:17 UTC —— 兜底（防止缓存被 7 天规则清掉后首个日常轮次挨冷构建）
-#   **刻意不加 push 触发**：日常 push 由 build-test.yml 消费缓存，播种只在需要时显式跑。
+#   * workflow_dispatch —— 手动（改 overlay/Qt 版本/triplet 后立刻预热）；可传 qt_tarball_url 兜底播种 Qt
+#   * schedule 每周日 03:17 UTC —— 兜底（防缓存被 7 天规则清掉后首个日常轮次挨冷构建）
+#   **刻意不加 push 触发**：日常 push 由四道流水线消费缓存，播种只在需要时显式跑。
+#   M3 纪律保留（§12.4 / 任务书 §5-7）: **冷构建在飞期间不得推送** —— 本文件 cancel-in-progress: true
+#   会取消同 group 的旧播种轮次（那次播种的成果就丢了），故播种期间请勿推送/重跑。
 #
-# 与 build-test.yml 的关系: 准备块逐字同源（apt 清单 / Qt 缓存 key / vcpkg key / ccache key），
-# 差别只有 ① 逐平台单 job（Linux 与 Windows 各一个，不并行三个 job 抢 CPU）
-# ② 编译 **release + release-dev** 两个预设（正好等于 linux job 的 ccache 内容，见 build-test.yml
-# 的 ccache key 注释）③ M3-T11 增 warm-windows（Windows：Qt win64_msvc2022_64 + vcpkgwin- 缓存，
-# 无 ccache / 无语料断言 / 无 ci-check-deps.sh —— 后两者均为 Linux-ELF 专属）。
+# 与四道流水线的关系: 准备块与之同源（apt 清单 / Qt 缓存 key / vcpkg key / ccache key），差别只有
+#   ① 逐平台单 job（Linux 与 Windows 各一个，不并行抢 CPU）② 编译 **release + release-dev** 两个预设
+#   （正好等于 main-full linux job 的 ccache 内容）③ Windows 无 ccache / 无语料断言 / 无 ci-check-deps.sh
+#   （后两者均为 Linux-ELF 专属）④ Qt 通道带兜底（见下）。
+#
+# ── Qt 播种通道（M4-T2 遗留 → T16 收口）──────────────────────────────────────────
+#   实测事实（T16 记录，证据可复现）:
+#     * aqtinstall 3.3.0（PyPI 最新仍是 3.3.0）对 **Linux** 桌面件可用：`qt6_6112/qt6_6112/Updates.xml`
+#       存在（HTTP 200）；`aqt install-qt linux desktop 6.11.2 linux_gcc_64 --archives qtbase` 下载/解包
+#       成功（本机演示时只在最后建 symlink 一步因 Windows 账户无特权而失败 —— Linux runner 无此问题）。
+#     * aqtinstall 3.3.0 对 **Windows** 桌面件不可用：上游仓库布局把 arch 放进了路径
+#       （`windows_x86/desktop/qt6_6112/qt6_6112_msvc2022_64/Updates.xml`，HTTP 200），而 aqt 仍按
+#       `qt6_6112/qt6_6112/Updates.xml` 取件（HTTP 404）⇒ ERROR「Failed to locate XML data for Qt
+#       version '6.11.2'」（M4-T2 的原始记录即此现象）。
+#   因此本文件的 Qt 通道 = ① 缓存 ② aqt（可经 env QT_AQT_BASE 换镜像/源）③ **自备归档兜底**
+#   （workflow_dispatch 的 qt_tarball_url → tools/ci-seed-qt.py 下载解包）。③ 让 Windows 侧在 aqt 修好
+#   之前也能播种：dev 机的 .toolchain/Qt/<ver>/msvc2022_64 是完全可复用的树（`tools/bootstrap.py` 装出来的），
+#   打 zip/tar.gz 放到任意可下载 URL 即可（如本仓 Release 资产或内部镜像）。
 on:
   workflow_dispatch:
+    inputs:
+      qt_tarball_url:
+        description: '（可选）Qt 工具链归档 URL（zip/tar.gz；顶层为 <arch>/ 目录，如 msvc2022_64/bin/Qt6Core.dll）'
+        required: false
+        default: ''
+      qt_tarball_platform:
+        description: '（可选）归档用于哪个平台: linux | windows | both（默认 both）'
+        required: false
+        default: 'both'
   schedule:
     - cron: '17 3 * * 0'
 
@@ -30,29 +59,26 @@ permissions:
 
 env:
   VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-  QT_DIR: ${{ github.workspace }}/Qt/6.8.3/gcc_64
   VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg-binary
   CCACHE_DIR: ${{ github.workspace }}/.cache/ccache
   CCACHE_MAXSIZE: 2G
   CCACHE_BASEDIR: ${{ github.workspace }}
   CCACHE_SLOPPINESS: pch_defines,time_macros,include_file_mtime
-  QT_VERSION: 6.8.3
+  # 版本单源 = tools/versions.env（T16 起与四道流水线同值）。
+  QT_VERSION: 6.11.2
   VCPKG_TAG: 2026.07.29
   APPIMAGE_EXTRACT_AND_RUN: "1"
 
 jobs:
   # ────────────────────────────────────────────────────────────────────────────
-  # warm-windows（M3-T11）：Windows 侧缓存播种 —— Qt（win64_msvc2022_64）+ vcpkg 二进制缓存
-  # （vcpkgwin- 前缀，与 Linux 的 vcpkg- 严格分离）。无 ccache（MSVC 无 ccache），
-  # 无语料断言、无 ci-check-deps.sh（两者均为 Linux/ELF 专属）。
+  # warm-windows: Windows 侧播种 —— Qt（win64_msvc2022_64）+ vcpkgwin- 二进制缓存
+  #   冷路径估算: vcpkg 41 port Windows 全量 ≈25–40 min + Qt ≈3 min + 两棵树 ≈10 min ⇒ 120 min。
   # ────────────────────────────────────────────────────────────────────────────
   warm-windows:
     runs-on: windows-2025
-    # 冷路径估算: vcpkg 41 port Windows 全量构建 ≈25–40 min，加 Qt 安装 ≈3 min、两棵树 ≈10 min
-    # ⇒ 120 min 上限与 build-test.yml 的 windows job 对齐。
-    timeout-minutes: 120
+    timeout-minutes: 120        # §12.6 豁免：播种非门禁基础设施
     env:
-      QT_DIR: ${{ github.workspace }}/Qt/6.8.3/msvc2022_64
+      QT_DIR: ${{ github.workspace }}/Qt/6.11.2/msvc2022_64
     steps:
       - uses: actions/checkout@v4
 
@@ -60,17 +86,35 @@ jobs:
         id: qt-cache
         uses: actions/cache/restore@v4
         with:
-          path: ${{ github.workspace }}/Qt/6.8.3/msvc2022_64
-          key: qt-6.8.3-win64_msvc2022_64-${{ runner.os }}-${{ runner.arch }}
-          restore-keys: qt-6.8.3-win64_msvc2022_64-
+          path: ${{ github.workspace }}/Qt/6.11.2/msvc2022_64
+          key: qt-${{ env.QT_VERSION }}-win64_msvc2022_64-${{ runner.os }}-${{ runner.arch }}
+          restore-keys: qt-${{ env.QT_VERSION }}-win64_msvc2022_64-
 
-      - name: Qt ${{ env.QT_VERSION }} via aqtinstall
+      - name: Qt ${{ env.QT_VERSION }} via aqtinstall（精确命中则跳过）
+        # aqt 3.3.0 对 Qt 6.11.2 的 Windows 仓库布局**当前失配**（见文件头证据）⇒ 允许失败，
+        # 由下一步的归档兜底接手（continue-on-error + 后面的就绪断言共同兜住"其实没装成"）。
         if: steps.qt-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        env:
+          QT_AQT_BASE: ${{ vars.QT_AQT_BASE }}
         run: |
           python -m pip install --upgrade aqtinstall
-          python -m aqt install-qt windows desktop "$env:QT_VERSION" win64_msvc2022_64 -O "$env:GITHUB_WORKSPACE/Qt"
+          $base = @()
+          if ($env:QT_AQT_BASE) { $base = @('--base', $env:QT_AQT_BASE) }
+          & python -m aqt install-qt windows desktop "$env:QT_VERSION" win64_msvc2022_64 -O "$env:GITHUB_WORKSPACE/Qt" @base
+          if ($LASTEXITCODE -ne 0) { Write-Output "aqt 失败（已知 Windows 布局失配）→ 交由归档兜底" }
 
-      - name: Qt 就绪断言
+      - name: Qt 归档兜底（qt_tarball_url；aqt 失败时的播种通道）
+        if: ${{ steps.qt-cache.outputs.cache-hit != 'true' && inputs.qt_tarball_url != '' && inputs.qt_tarball_platform != 'linux' }}
+        run: |
+          if (Test-Path "$env:QT_DIR\bin\Qt6Core.dll") {
+            Write-Output "Qt 已就位（aqt 或缓存）→ 跳过归档兜底"
+          } else {
+            python tools/ci-seed-qt.py "${{ inputs.qt_tarball_url }}" "$env:QT_DIR"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+      - name: Qt 就绪断言（缺 ⇒ 红，并给出两条播种路径）
         run: |
           $paths = @(
             "$env:QT_DIR\bin\Qt6Core.dll",
@@ -78,8 +122,18 @@ jobs:
             "$env:QT_DIR\plugins\platforms\qoffscreen.dll"
           )
           $missing = @($paths | Where-Object { -not (Test-Path $_) })
-          if ($missing.Count -gt 0) { Write-Error "Qt 缺失: $($missing -join ', ')"; exit 1 }
+          if ($missing.Count -gt 0) {
+            Write-Error "Qt 缺失: $($missing -join ', ')"
+            Write-Error "→ ① 若镜像可用: workflow_dispatch 时设 env QT_AQT_BASE；"
+            Write-Error "→ ② Windows 侧推荐: workflow_dispatch 传 qt_tarball_url（自备 Qt 归档，见文件头「Qt 播种通道」）"
+            exit 1
+          }
           Write-Output "Qt OK @ $env:QT_DIR"
+
+      - name: Qt bin 注入 PATH
+        run: |
+          "$env:QT_DIR\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          Write-Output "added: $env:QT_DIR\bin"
 
       - name: vcpkg ${{ env.VCPKG_TAG }}（pinned）
         run: |
@@ -88,19 +142,19 @@ jobs:
           & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
 
       - name: 缓存目录预建
-        # vcpkg 不创建二进制缓存目录：缺失即 FATAL_ERROR，必须早于 restore。
         run: New-Item -ItemType Directory -Force -Path "$env:VCPKG_DEFAULT_BINARY_CACHE" | Out-Null
 
       - name: vcpkg binary cache（restore）
         id: vcpkg-cache
-        # 播种 job 名是 warm-windows ⇒ 与 build-test 的 windows/winzip 不冲突；宽前缀 vcpkgwin-
-        # 让播种**消费**已有热缓存，save 又产出**最新**条目（滚动 key 语义）供下一轮日常 CI 复用。
+        # 播种 job 名是 warm-windows ⇒ 与四道流水线的 windows/winzip/tidy 不冲突；宽前缀 vcpkgwin-
+        # 让播种**消费**已有热缓存，save 又产出**最新**条目（滚动 key 语义）供下一轮日常复用。
+        # T16 起键内容追加 triplet 哈希（AVX2 flags 变更 ⇒ 自动失效；§12.4）。
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/.cache/vcpkg-binary
-          key: vcpkgwin-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: vcpkgwin-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            vcpkgwin-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-
+            vcpkgwin-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-
             vcpkgwin-
 
       - name: configure + build + ctest release
@@ -143,17 +197,16 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/.cache/vcpkg-binary
-          key: vcpkgwin-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: vcpkgwin-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Qt ${{ env.QT_VERSION }} 缓存（save）
-        # 与 build-test.yml 的 windows job 同一 key（该 workflow 里的唯一写者）。播种时若 Qt 也
-        # 失效（版本变更），这一步负责把新装的 Qt 入缓存，避免之后每个 job 各装一次。
+        # 与四道流水线的 windows job 同一 key（那里是该 key 的常规写者；播种轮次覆盖写一份新内容）。
         if: always() && steps.qt-cache.outputs.cache-hit != 'true'
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
-          path: ${{ github.workspace }}/Qt/6.8.3/msvc2022_64
-          key: qt-6.8.3-win64_msvc2022_64-${{ runner.os }}-${{ runner.arch }}
+          path: ${{ github.workspace }}/Qt/6.11.2/msvc2022_64
+          key: qt-${{ env.QT_VERSION }}-win64_msvc2022_64-${{ runner.os }}-${{ runner.arch }}
 
       - name: 汇总 → $GITHUB_STEP_SUMMARY
         if: always()
@@ -162,11 +215,12 @@ jobs:
           VCPKG_HIT: ${{ steps.vcpkg-cache.outputs.cache-hit }}
         run: |
           $lines = @()
-          $lines += "## warm-windows（播种）汇总"
+          $lines += "## warm-windows（播种）汇总（§12.6 豁免：非门禁基础设施）"
           $lines += ""
           $lines += "| 项目 | 值 |"
           $lines += "| --- | --- |"
           $lines += "| 触发 | $($env:GITHUB_EVENT_NAME) |"
+          $lines += "| Qt 归档兜底 | $(if ('${{ inputs.qt_tarball_url }}') { '${{ inputs.qt_tarball_url }}' } else { '（未提供）' }) |"
           $lines += "| Qt 缓存精确命中 | $($env:QT_HIT) |"
           $lines += "| vcpkg 二进制缓存精确命中 | $($env:VCPKG_HIT) |"
           $lines += ""
@@ -180,9 +234,8 @@ jobs:
 
   warm:
     runs-on: ubuntu-24.04
-    # 冷路径估算: vcpkg 二进制缓存空 ⇒ 41 个端口全量构建 ≈34 min，加 Qt 安装 ≈3 min、
-    # 两棵构建树 ≈6 min、依赖自检 <1 min ⇒ ≈45 min。60 min 上限足够且与 build-test 对齐。
-    timeout-minutes: 60
+    # 冷路径估算: vcpkg 41 port 全量 ≈34 min + Qt ≈3 min + 两棵树 ≈6 min + 依赖自检 <1 min ⇒ 60 min。
+    timeout-minutes: 60         # §12.6 豁免：播种非门禁基础设施
     steps:
       - uses: actions/checkout@v4
 
@@ -193,19 +246,41 @@ jobs:
         id: qt-cache
         uses: actions/cache/restore@v4
         with:
-          path: ${{ github.workspace }}/Qt/6.8.3/gcc_64
-          key: qt-6.8.3-gcc_64-${{ runner.os }}-${{ runner.arch }}
-          restore-keys: qt-6.8.3-gcc_64-
+          path: ${{ github.workspace }}/Qt/6.11.2/gcc_64
+          key: qt-${{ env.QT_VERSION }}-gcc_64-${{ runner.os }}-${{ runner.arch }}
+          restore-keys: qt-${{ env.QT_VERSION }}-gcc_64-
 
-      - name: Qt ${{ env.QT_VERSION }} via aqtinstall
+      - name: Qt ${{ env.QT_VERSION }} via aqtinstall（精确命中则跳过）
+        # Linux 侧 aqt 通道实测可用（文件头证据）；仍允许失败并交由归档兜底。
         if: steps.qt-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        env:
+          QT_AQT_BASE: ${{ vars.QT_AQT_BASE }}
         run: |
-          pip3 install aqtinstall
-          aqt install-qt linux desktop "$QT_VERSION" linux_gcc_64 -O "$GITHUB_WORKSPACE/Qt"
+          pip3 install --upgrade aqtinstall
+          BASE=""
+          [ -n "$QT_AQT_BASE" ] && BASE="--base $QT_AQT_BASE"
+          aqt install-qt linux desktop "$QT_VERSION" linux_gcc_64 -O "$GITHUB_WORKSPACE/Qt" $BASE \
+            || echo "aqt 失败 → 交由归档兜底"
+
+      - name: Qt 归档兜底（qt_tarball_url）
+        if: ${{ steps.qt-cache.outputs.cache-hit != 'true' && inputs.qt_tarball_url != '' && inputs.qt_tarball_platform != 'windows' }}
+        run: |
+          if [ -f "$QT_DIR/lib/libQt6Core.so.6" ]; then
+            echo "Qt 已就位（aqt 或缓存）→ 跳过归档兜底"
+          else
+            python3 tools/ci-seed-qt.py "${{ inputs.qt_tarball_url }}" "$QT_DIR"
+          fi
 
       - name: Qt 就绪断言
+        env:
+          QT_DIR: ${{ github.workspace }}/Qt/6.11.2/gcc_64
         run: |
-          test -f "$QT_DIR/lib/libQt6Core.so.6" || { echo "::error::Qt 缺失: $QT_DIR"; exit 1; }
+          test -f "$QT_DIR/lib/libQt6Core.so.6" || {
+            echo "::error::Qt 缺失: $QT_DIR"
+            echo "::error::→ ① 换源: workflow_dispatch 时设 env QT_AQT_BASE；② 自备归档: 传 qt_tarball_url（tools/ci-seed-qt.py）"
+            exit 1
+          }
           echo "Qt $(du -sh "$QT_DIR" | cut -f1) @ $QT_DIR"
           ls -1 "$QT_DIR/plugins/platforms/libqoffscreen.so" "$QT_DIR/plugins/platforms/libqxcb.so"
 
@@ -220,15 +295,14 @@ jobs:
 
       - name: vcpkg binary cache（restore）
         id: vcpkg-cache
-        # key 末段含 github.job：播种 job 名是 warm ⇒ 与本轮 build-test 的三个 job 不冲突，
-        # 但 restore-keys 的宽前缀 vcpkg- 让播种**消费**已有热缓存，save 又产出**最新**条目
-        # （滚动 key 语义）供下一轮日常 CI 复用。
+        # key 末段含 github.job：播种 job 名是 warm ⇒ 与四道流水线的各 job 不冲突；宽前缀 vcpkg-
+        # 让播种**消费**已有热缓存，save 又产出**最新**条目供下一轮日常复用。T16 起追加 triplet 哈希。
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/.cache/vcpkg-binary
-          key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-
+            vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-
             vcpkg-
 
       - name: ccache（restore）
@@ -236,10 +310,10 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/.cache/ccache
-          key: ccache-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/**', 'CMakePresets.json') }}-${{ github.run_id }}
+          key: ccache-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/**', 'CMakePresets.json') }}-${{ hashFiles('cmake/**', 'triplets/**') }}-${{ github.run_id }}
           restore-keys: ccache-${{ runner.os }}-
 
-      - name: configure + build release
+      - name: configure + build + ctest release
         run: |
           T0=$(date +%s)
           cmake --preset release
@@ -254,7 +328,7 @@ jobs:
             echo -e "ctest release\t$(( T3 - T2 ))"
           } >> "$RUNNER_TEMP/pp-steps.tsv"
 
-      - name: configure + build release-dev
+      - name: configure + build + ctest release-dev
         run: |
           T0=$(date +%s)
           cmake --preset release-dev
@@ -277,19 +351,17 @@ jobs:
         run: |
           set +e
           ccache -s > "$RUNNER_TEMP/ccache.txt" 2>&1
-          echo "---- ccache -s -v ----" >> "$RUNNER_TEMP/ccache.txt"
           ccache -s -v 2>&1 | grep -E "cache hit|cache miss|Cacheable calls" >> "$RUNNER_TEMP/ccache.txt"
-          cat "$RUNNER_TEMP/ccache.txt"
+          head -30 "$RUNNER_TEMP/ccache.txt"
 
       - name: Qt ${{ env.QT_VERSION }} 缓存（save）
-        # 与 build-test.yml 的 linux job 同一 key（该 workflow 里的唯一写者）。播种时若 Qt 也
-        # 失效（版本变更），这一步负责把新装的 Qt 入缓存，避免之后每个 job 各装一次。
+        # 与四道流水线的 linux job 同一 key（那里是常规写者）。
         if: always() && steps.qt-cache.outputs.cache-hit != 'true'
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
-          path: ${{ github.workspace }}/Qt/6.8.3/gcc_64
-          key: qt-6.8.3-gcc_64-${{ runner.os }}-${{ runner.arch }}
+          path: ${{ github.workspace }}/Qt/6.11.2/gcc_64
+          key: qt-${{ env.QT_VERSION }}-gcc_64-${{ runner.os }}-${{ runner.arch }}
 
       - name: vcpkg binary cache（save）
         if: always()
@@ -297,17 +369,17 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/.cache/vcpkg-binary
-          key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: ccache（save）
-        # 播种 job 独占 ccache 的保存权（build-test.yml 里是 linux job）；key 完全相同
-        # ⇒ 下一次日常 CI 用 restore-keys: ccache-<os>- 直接拿到这份"release+release-dev 全集"。
+        # 播种 job 独占 ccache 的保存权（四道流水线里是 main-full 的 linux job）；key 完全相同
+        # ⇒ 下一次日常轮次用 restore-keys: ccache-<os>- 直接拿到这份"release+release-dev 全集"。
         if: always()
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/.cache/ccache
-          key: ccache-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/**', 'CMakePresets.json') }}-${{ github.run_id }}
+          key: ccache-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/**', 'CMakePresets.json') }}-${{ hashFiles('cmake/**', 'triplets/**') }}-${{ github.run_id }}
 
       - name: 汇总 → $GITHUB_STEP_SUMMARY
         if: always()
@@ -318,11 +390,12 @@ jobs:
         run: |
           set +e
           {
-            echo "## warm-cache（播种）汇总"
+            echo "## warm-cache（播种）汇总（§12.6 豁免：非门禁基础设施）"
             echo ""
             echo "| 项目 | 值 |"
             echo "| --- | --- |"
             echo "| 触发 | ${GITHUB_EVENT_NAME} |"
+            echo "| Qt 归档兜底 | ${{ inputs.qt_tarball_url }} |"
             echo "| Qt 缓存精确命中 | ${QT_HIT:-false} |"
             echo "| vcpkg 二进制缓存精确命中 | ${VCPKG_HIT:-false} |"
             echo "| ccache 缓存精确命中 | ${CCACHE_HIT:-false} |"

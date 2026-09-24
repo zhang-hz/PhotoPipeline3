@@ -5,10 +5,19 @@
 用法:
   python tools/collect_licenses.py <APPDIR>      # AppDir 根（绝对或相对当前目录）
   python tools/collect_licenses.py <APPDIR> [--dest <目录>]   # --dest 缺省 = <APPDIR>/usr/share/licenses
+  python tools/collect_licenses.py --check [--min N] [--share <目录>]   # M4-W4-T16 门禁模式（不写盘）
+      M4-W4-T16 增补（设计 §12.2「许可/SPDX」判据行: 许可 ≥30 且 SPDX 100%）：
+      ① 许可数 = share 下可收集的第三方许可文本数 + 本项目 LICENSE ≥ --min（默认 30）
+      ② SPDX 覆盖 = src|tests|tools 源码（.c/.cc/.cpp/.cxx/.h/.hpp/.hh/.py/.sh/.cmake）
+         逐文件含 `SPDX-License-Identifier`，必须 100%
+      成功末行 `LICENSE-CHECK total=<n> min=<m> spdx=<c>/<t> ok=1`（CI 摘要/断言用）；
+      退出码 0 = 全绿，1 = 判据不满足，2 = 入参/输入目录硬错误。
 env 覆盖:
   PP_VCPKG_SHARE  vcpkg 已安装 port 的 share 根
                   （默认 <repo>/vcpkg_installed/<triplet>/share；
-                   triplet = x64-windows（Windows）/ x64-linux（POSIX））
+                   triplet = x64-windows-avx2（Windows）/ x64-linux-avx2（POSIX）；
+                   M4-T3 起唯一构建 triplet 即 AVX2（CMakePresets 的 base-windows/base-linux），
+                   旧的非 AVX2 目录（x64-windows / x64-linux）已不再由 vcpkg 安装）
 
 收集规则（M2-T11c 冻结，与 tools/make_appimage.sh 头注释一致）:
   1) 遍历 share/<entry>/ 每个条目，取**第一个**存在的许可文本:
@@ -35,13 +44,14 @@ M3-W3（裁定 D3：Python 单实现，本文件替代 tools/collect_licenses.sh
 
 import os
 import shutil
+import subprocess
 import sys
 
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TRIPLET = 'x64-windows' if os.name == 'nt' else 'x64-linux'
+TRIPLET = 'x64-windows-avx2' if os.name == 'nt' else 'x64-linux-avx2'
 
 
 def die(message):
@@ -78,8 +88,142 @@ def sort_list(items):
     return ' '.join(sorted(items)) + ' '
 
 
+def collect(share, dest, write):
+    """遍历 share 收集许可文本 → (collected, renamed, missing_ports, missing_nonports)。
+
+    write=True 时落盘到 dest（collect_licenses 的默认行为，逐字节与 M2-T11c 冻结口径一致）；
+    write=False 时只统计（`--check` 门禁用，不落盘、幂等、零副作用）。
+    """
+    collected = 0
+    renamed = []
+    missing_ports = []
+    missing_nonports = []
+
+    for entry in sorted(os.listdir(share)):
+        directory = os.path.join(share, entry)
+        if not os.path.isdir(directory):
+            continue
+        src = pick_license(directory)
+        if src:
+            if write:
+                os.makedirs(os.path.join(dest, entry), exist_ok=True)
+                shutil.copyfile(src, os.path.join(dest, entry, 'copyright'))
+            collected += 1
+            if os.path.basename(src) != 'copyright':
+                renamed.append('{} <- {}'.format(entry, os.path.basename(src)))
+        elif os.path.isfile(os.path.join(directory, 'vcpkg_abi_info.txt')):
+            missing_ports.append(entry)
+        else:
+            missing_nonports.append(entry)
+    return collected, renamed, missing_ports, missing_nonports
+
+
+# ── --check（M4-W4-T16；设计 §12.2「许可/SPDX」门禁行：许可 ≥30 且 SPDX 100%）────────────
+#   判据① 许可数 = share 下可收集到的第三方许可文本数 + 本项目 LICENSE ≥ --min（默认 30）
+#   判据② SPDX 覆盖 = src|tests|tools 源码（.c/.cc/.cpp/.cxx/.h/.hpp/.hh/.py/.sh/.cmake）
+#          逐文件含 `SPDX-License-Identifier`；必须 100%（缺一即点名并失败）
+#   注: 测试数据（tests/golden/**/*.json、SCHEMA.md）不在审计范围 —— 它们不是源码分发单元。
+CHECK_EXT = ('.c', '.cc', '.cpp', '.cxx', '.h', '.hpp', '.hh', '.py', '.sh', '.cmake')
+CHECK_TREES = ('src', 'tests', 'tools')
+SPDX_TAG = 'SPDX-License-Identifier'
+
+
+def spdx_audit():
+    """返回 (covered, total, missing[])；git 不可用/无跟踪文件 → (None, None, ['<git ...>'])。"""
+    try:
+        out = subprocess.run(['git', 'ls-files'] + list(CHECK_TREES), capture_output=True,
+                             text=True, cwd=ROOT, timeout=120)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, None, ['git ls-files 失败: {}'.format(exc)]
+    if out.returncode != 0:
+        return None, None, ['git ls-files 退出码 {}: {}'.format(out.returncode, out.stderr.strip())]
+    covered = 0
+    total = 0
+    missing = []
+    for rel in out.stdout.splitlines():
+        rel = rel.strip()
+        if not rel or not rel.lower().endswith(CHECK_EXT):
+            continue
+        total += 1
+        try:
+            with open(os.path.join(ROOT, rel), encoding='utf-8', errors='replace') as fp:
+                head = fp.read(1200)
+        except OSError as exc:
+            missing.append('{}（读取失败: {}）'.format(rel, exc))
+            continue
+        if SPDX_TAG in head:
+            covered += 1
+        else:
+            missing.append(rel)
+    return covered, total, missing
+
+
+def check_mode(argv):
+    """`--check`：许可数 + SPDX 覆盖率硬判据（不写盘）。返回进程退出码。"""
+    argv = list(argv)
+    minimum = 30
+    share_override = ''
+    if '--min' in argv:
+        k = argv.index('--min')
+        if k + 1 >= len(argv):
+            die('用法: tools/collect_licenses.py --check [--min N] [--share <目录>]（--min 缺参数）')
+        try:
+            minimum = int(argv[k + 1])
+        except ValueError:
+            die('--min 必须是整数: {!r}'.format(argv[k + 1]))
+        del argv[k:k + 2]
+    if '--share' in argv:
+        k = argv.index('--share')
+        if k + 1 >= len(argv):
+            die('用法: tools/collect_licenses.py --check [--min N] [--share <目录>]（--share 缺参数）')
+        share_override = argv[k + 1]
+        del argv[k:k + 2]
+    stray = [a for a in argv if a != '--check']
+    if stray:
+        die('--check 不接受位置参数/其它开关: {}'.format(' '.join(stray)))
+
+    share = share_override or os.environ.get('PP_VCPKG_SHARE') or os.path.join(
+        ROOT, 'vcpkg_installed', TRIPLET, 'share')
+    root_license = os.path.join(ROOT, 'LICENSE')
+    if not os.path.isdir(share):
+        die('vcpkg share 目录不存在: {}（先 vcpkg install / 设 PP_VCPKG_SHARE / --share）'.format(share))
+    if not os.path.isfile(root_license):
+        die('项目 LICENSE 缺失: {}'.format(root_license))
+
+    collected, _, missing_ports, _ = collect(share, '', write=False)
+    total_lic = collected + 1          # + PhotoPipeline/LICENSE
+    covered, spdx_total, missing_spdx = spdx_audit()
+
+    print('collect_licenses --check: share={}'.format(share))
+    print('collect_licenses --check: 许可数 = {}（第三方 {} + PhotoPipeline 1）判据 ≥ {}'.format(
+        total_lic, collected, minimum))
+    if missing_ports:
+        print('collect_licenses --check: 警告: 许可缺失（真实 port）: {}'.format(
+            sort_list(missing_ports)), file=sys.stderr)
+    if spdx_total is None:
+        die('SPDX 审计无法进行: {}'.format('; '.join(missing_spdx)))
+
+    ok = True
+    if total_lic < minimum:
+        print('collect_licenses --check: FAIL 许可数不足: {} < {}'.format(total_lic, minimum),
+              file=sys.stderr)
+        ok = False
+    if missing_spdx:
+        print('collect_licenses --check: FAIL SPDX 覆盖不足（{}/{}），缺 {} 个（前 20）:'.format(
+            covered, spdx_total, len(missing_spdx)), file=sys.stderr)
+        for rel in missing_spdx[:20]:
+            print('collect_licenses --check:   ' + rel, file=sys.stderr)
+        ok = False
+    print('collect_licenses --check: SPDX 覆盖 = {}/{}（判据 100%）'.format(covered, spdx_total))
+    print('LICENSE-CHECK total={} min={} spdx={}/{} ok={}'.format(
+        total_lic, minimum, covered, spdx_total, 1 if ok else 0))
+    return 0 if ok else 1
+
+
 def main(argv):
     argv = list(argv)
+    if '--check' in argv:
+        return check_mode(argv)
     dest_override = ''
     if '--dest' in argv:
         k = argv.index('--dest')
@@ -110,26 +254,7 @@ def main(argv):
     shutil.rmtree(dest, ignore_errors=True)
     os.makedirs(dest, exist_ok=True)
 
-    collected = 0
-    renamed = []
-    missing_ports = []
-    missing_nonports = []
-
-    for entry in sorted(os.listdir(share)):
-        directory = os.path.join(share, entry)
-        if not os.path.isdir(directory):
-            continue
-        src = pick_license(directory)
-        if src:
-            os.makedirs(os.path.join(dest, entry), exist_ok=True)
-            shutil.copyfile(src, os.path.join(dest, entry, 'copyright'))
-            collected += 1
-            if os.path.basename(src) != 'copyright':
-                renamed.append('{} <- {}'.format(entry, os.path.basename(src)))
-        elif os.path.isfile(os.path.join(directory, 'vcpkg_abi_info.txt')):
-            missing_ports.append(entry)
-        else:
-            missing_nonports.append(entry)
+    collected, renamed, missing_ports, missing_nonports = collect(share, dest, write=True)
 
     # ---- 本项目许可（GPL-3.0-or-later） ----
     os.makedirs(dest + '/PhotoPipeline', exist_ok=True)

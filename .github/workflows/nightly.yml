@@ -1,0 +1,829 @@
+name: nightly
+# ═══════════════════════════════════════════════════════════════════════════════
+# PhotoPipeline — 夜间道（M4-W4-T16；D14 快慢道的第三道）
+#   依据: docs/v0.3.0-design.md §12.1 拓扑（夜间道）/ §12.2 质量门禁表（内存/UB/竞态行：
+#         ASan/UBSan/TSan 全语料 0 报告，supp 文件保留）/ §12.3 job 预算（三路各 ≤20min，
+#         并行 wall ≤20min）/ §12.4 缓存纪律 / §12.6 20min 口径
+#         + docs/m4-tasks.md §3 W4-T16（nightly 三路并行 + 回归基线 diff + 许可/SPDX/依赖审计）
+#
+#   拓扑（设计 §12.1「夜间道」）:
+#     asan  ─┐
+#     ubsan ─┼→（并行）gate：三路 0 报告 + 回归基线 diff + 许可/SPDX/依赖审计
+#     tsan  ─┘
+#     regression（回归基线 diff，含 golden.windows.log 口径）─┐
+#     audit（许可/SPDX + 依赖审计）──────────────────────────┴→ gate（总闸 + 预算校准）
+#
+#   ── 与设计 §12.1 图示的**唯一口径说明**────────────────────────────────────────
+#     §12.1 把"回归基线 diff → 许可/SPDX/依赖审计"画在三路 sanitizer 之后；若照字面串成 needs，
+#     关键路径 = max(asan,ubsan,tsan) 20 + regression + audit ≈ 32min，**结构性超过 §12.6 的 20min
+#     硬顶**（§12.3 该行自己就写着"并行 wall ≤20min"）。故按 §12.3 末行「整轮超 20min → 重排 DAG
+#     关键路径」**扁平化**：五条 job 全部并行（互无产物依赖），"串行语义"落在末端 gate（全绿才放行）。
+#     若日后需要在"sanitizer 绿"之后才跑 diff（省 runner 钱），给 regression/audit 各加一行
+#     `needs: [asan, ubsan, tsan]` 即可 —— 代价是关键路径变成 20+12+5 = 37min > 硬顶。
+#
+#   ── job 预算表（设计 §12.3：三路各 ≤20min；硬顶 = 每 job timeout-minutes: 20，禁放宽）────
+#     | job        | 平台         | 预算   | 内容                                                        |
+#     | asan       | ubuntu-24.04 | 20 min | preset asan-linux：全语料 0 报告 + 并发/编解码契约测试        |
+#     | ubsan      | ubuntu-24.04 | 20 min | preset ubsan：全语料 0 报告 + 同上                           |
+#     | tsan       | ubuntu-24.04 | 20 min | preset tsan：竞态 0 报告（含线程预算/交错批压测）             |
+#     | regression | ubuntu-24.04 | 12 min | tools/regression.py 全语料 diff vs tools/baseline/golden.log |
+#     | audit      | ubuntu-24.04 | 5 min  | collect_licenses.py --check + pp_linkprobe 依赖审计          |
+#     | gate       | ubuntu-24.04 | 1 min  | 汇总 + 预算校准表                                            |
+#     ★ 三路各 20min 预算 ⇒ 并行整轮 wall ≈ 20min（≤ §12.6 硬顶）。实测以首轮夜间运行校准。
+#
+#   ── sanitizer 口径（§12.2 内存/UB/竞态行）────────────────────────────────────
+#     * 平台 = Linux（既有 `dev`（asan+ubsan）与 `tsan` preset 的语义**零改动**；T16 另加两个
+#       **单路** preset：`asan-linux` = -fsanitize=address、`ubsan` = -fsanitize=undefined，
+#       使三路各管一件事、报告归属明确）。sup 文件保留并接线：tools/lsan.supp / tools/tsan.supp。
+#     * "全语料" = tests/golden/smoke.py 的 20 对断言级语料（覆盖 8 格式 + 多格式 + 仅元数据 +
+#       进度侧车），三路各跑一遍；更宽的 dev 矩阵（27 输入 × 8 格式 + 仅元数据 × 4 格式）由
+#       regression job 在 release-dev 树上跑 diff（见下）。
+#     * 判据 = 语料日志里 **0 条** sanitizer 报告行（ERROR/SUMMARY/runtime error/leak）。报告行
+#       会被逐条打印并判红；supp 命中的行由 supp 文件自身决定（不在判据面）。
+#
+#   ── 回归基线 diff（T17 完善口径）────────────────────────────────────────────
+#     * tools/regression.py 以 workers=1 跑归一化全语料，diff tools/baseline/golden.log（0 diff 才绿）。
+#     * M3 遗留 §8-11 的 Windows 基线 tools/baseline/golden.windows.log 在本 job 做**存在性/形态**
+#       断言（行数、头部指纹、与 golden.log 同源），双平台 diff 口径由 W4-T17 落地 —— 本任务不越权
+#       改 regression.py 的比对语义（文件头注释已把它标注为 T17 的完备面）。
+#     * ★ 基线新鲜度提示: tools/baseline/golden.log 最后一次更新是 **M2-T9（35f3c59）**；若 M4 的
+#       行为/日志面（参数快照、进度侧车等）使归一化日志发生变化，首轮 nightly 会以**非零 diff** 报红。
+#       处置属**口径动作**（不是放宽判据）: 复核 diff 后 `python tools/regression.py <BUILD_DIR> --update`
+#       重新播种，并把基线 diff 放进同一提交供评审（tools/regression.py 头注释的既有约定）。
+#
+#   ── 缓存纪律（§12.4）────────────────────────────────────────────────────────
+#     * 只 **restore** 不 save（缓存写者仍是 main-full：linux job 写 ccache/Qt-gcc_64、各 job 写自己的
+#       vcpkg 滚动键）—— 避免同一 key 多写者撞 409（M3 口径）。
+#     * sanitizer 三路**不 restore ccache**：Debug+sanitizer 的 flags 与 release 全不同 ⇒ 按键内容
+#       寻址不可能命中，白拉 GB 级缓存；这些路的编译成本由 20min 预算吸收（全量 Debug 构建 ≈3-4min）。
+#     * 缓存 miss ⇒ 早失败 + 指路 warm-cache.yml（日常/夜间严禁触发冷构建，§12.4 / R24）。
+on:
+  schedule:
+    - cron: '47 2 * * *'       # 每日 02:47 UTC（错峰：main-full 04:23 / warm-cache 周日 03:17）
+  workflow_dispatch:           # 手动补跑（排查竞态/UB 时用）
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+  VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg-binary
+  CCACHE_DIR: ${{ github.workspace }}/.cache/ccache
+  CCACHE_MAXSIZE: 2G
+  CCACHE_BASEDIR: ${{ github.workspace }}
+  CCACHE_SLOPPINESS: pch_defines,time_macros,include_file_mtime
+  QT_VERSION: 6.11.2
+  VCPKG_TAG: 2026.07.29
+  PP_VCPKG_WARM_MIN: "20"
+  # 语料输出落到 runner 临时目录（不污染工作树；也便于随 job 一起丢弃）。
+  OUT_ROOT: ${{ runner.temp }}/out-smoke
+  # sanitizer 运行期选项（测试 preset 里另有一份同样的 env —— 那里只管 ctest，这里管金样/回归）。
+  ASAN_OPTIONS: detect_leaks=1:print_stacktrace=1:abort_on_error=0
+  LSAN_OPTIONS: suppressions=${{ github.workspace }}/tools/lsan.supp:print_suppressions=1
+  UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=0
+  TSAN_OPTIONS: halt_on_error=0:second_deadlock_stack=1:ignore_interceptors_accesses=1:suppressions=${{ github.workspace }}/tools/tsan.supp:print_suppressions=1
+  # 报告判据（§12.2）：命中即红。
+  SAN_REPORT_RE: 'ERROR: AddressSanitizer|ERROR: LeakSanitizer|SUMMARY: AddressSanitizer|detected memory leaks|ERROR: UndefinedBehaviorSanitizer|runtime error:|ThreadSanitizer: data race|WARNING: ThreadSanitizer'
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────────────
+  # asan / ubsan / tsan（各预算 20 min）: 三路并行，各跑 20 对全语料 + 并发/编解码契约测试
+  #   三 job 步骤形态逐字同源，只有 preset 名与判据文案不同（house 风格：显式重复便于逐条核对）。
+  # ────────────────────────────────────────────────────────────────────────────
+  asan:
+    name: asan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20         # 硬顶（预算 20 min）
+    env:
+      QT_DIR: ${{ github.workspace }}/Qt/6.11.2/gcc_64
+      PP_PRESET: asan-linux
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: apt 系统依赖（tools/ci-system-deps.txt）
+        run: bash tools/ci-install-deps.sh
+
+      - name: Qt ${{ env.QT_VERSION }} 缓存（restore，写者=main-full 的 linux job）
+        id: qt-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/Qt/6.11.2/gcc_64
+          key: qt-${{ env.QT_VERSION }}-gcc_64-${{ runner.os }}-${{ runner.arch }}
+          restore-keys: qt-${{ env.QT_VERSION }}-gcc_64-
+
+      - name: Qt 就绪断言（缺失 ⇒ 早失败，指路 warm-cache）
+        run: |
+          test -f "$QT_DIR/lib/libQt6Core.so.6" || {
+            echo "::error::Qt 缺失（未播种）: $QT_DIR"
+            echo "::error::→ 先跑 Actions → warm-cache → Run workflow 播种 Qt $QT_VERSION / linux_gcc_64（设计 §12.4）"
+            exit 1
+          }
+          echo "Qt OK @ $QT_DIR"
+
+      - name: vcpkg ${{ env.VCPKG_TAG }}（pinned）
+        run: |
+          git clone https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
+          git -C "$VCPKG_ROOT" checkout "$VCPKG_TAG"
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+
+      - name: 缓存目录预建
+        run: mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE" "$CCACHE_DIR"
+
+      - name: vcpkg binary cache（restore）
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.cache/vcpkg-binary
+          key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-
+            vcpkg-
+
+      - name: vcpkg 缓存暖度断言（miss ⇒ 早失败，指路 warm-cache）
+        run: |
+          n=$(find "$VCPKG_DEFAULT_BINARY_CACHE" -type f -name '*.zip' 2>/dev/null | wc -l)
+          echo "vcpkg binary cache archives = $n（判据 ≥ $PP_VCPKG_WARM_MIN）"
+          if [ "$n" -lt "$PP_VCPKG_WARM_MIN" ]; then
+            echo "::error::vcpkg 二进制缓存未播种（archive=$n）—— 冷构建 ≈40 min，直接击穿硬顶。"
+            echo "::error::→ 先跑 Actions → warm-cache → Run workflow 播种（设计 §12.4 / R24）。"
+            exit 1
+          fi
+
+      - name: 语料存在性断言（不重新生成）
+        run: |
+          n=$(git ls-files tests/golden/base | wc -l)
+          m=$(git ls-files tests/golden/smoke | grep -c '\.json$')
+          [ "$n" -ge 16 ] || { echo "::error::语料缺失: tests/golden/base = $n 个（期望 ≥16）"; exit 1; }
+          [ "$m" -ge 20 ] || { echo "::error::金样断言缺失: tests/golden/smoke/*.json = $m 个（期望 ≥20）"; exit 1; }
+          echo "语料 OK: base=$n 文件、smoke 断言=$m 个（均已入库，未重新生成）"
+
+      - name: configure + build ${{ env.PP_PRESET }}（photopipeline/pp_verify + 三个契约测试）
+        run: |
+          set -o pipefail
+          T0=$(date +%s)
+          cmake --preset "$PP_PRESET"
+          T1=$(date +%s)
+          cmake --build build/"$PP_PRESET" --target photopipeline pp_verify \
+            pp_test_scheduler_contract pp_test_pipeline_contract pp_test_enc_smoke
+          T2=$(date +%s)
+          {
+            echo -e "configure $PP_PRESET\t$(( T1 - T0 ))"
+            echo -e "build $PP_PRESET（子集）\t$(( T2 - T1 ))"
+          } >> "$RUNNER_TEMP/pp-steps.tsv"
+
+      - name: ctest -R 契约测试（调度器/管线/编码器路径）
+        run: |
+          set -o pipefail
+          T0=$(date +%s)
+          ctest --preset "$PP_PRESET" -R 'test_scheduler_contract|test_pipeline_contract|test_enc_smoke' \
+            --output-on-failure 2>&1 | tee "$RUNNER_TEMP/ctest-$PP_PRESET.log"
+          echo -e "ctest $PP_PRESET（契约测试）\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
+
+      - name: 全语料 20 对（sanitizer 下跑 golden smoke）
+        run: |
+          set -o pipefail
+          T0=$(date +%s)
+          python3 tests/golden/smoke.py build/"$PP_PRESET" 2>&1 | tee "$RUNNER_TEMP/golden.log"
+          echo -e "golden smoke（$PP_PRESET）\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
+
+      - name: 金样冻结行断言（防假绿）
+        run: |
+          line=$(grep -E '^SMOKE total=' "$RUNNER_TEMP/golden.log" | tail -1)
+          echo "冻结行: $line（期望 total=20 pass=20 fail=0）"
+          printf '%s' "$line" | grep -qE '^SMOKE total=20 pass=20 fail=0 ' || {
+            echo "::error::金样口径不符（期望 total=20 pass=20 fail=0）: $line"; exit 1; }
+
+      - name: sanitizer 报告扫描（判据：全语料 0 报告）
+        # 语料每个用例的 stdout/stderr 落在 <OUT_ROOT>/<case>.dev.log（smoke.py 的合并重定向），
+        # sanitizer 的报告行就写在那里；连同 ctest 日志一起扫。命中即逐条打印并判红。
+        run: |
+          set +e
+          LOGS=$(ls "$OUT_ROOT"/*.dev.log 2>/dev/null)
+          echo "扫描: $OUT_ROOT/*.dev.log（$(printf '%s\n' $LOGS | grep -c . ) 个）+ $RUNNER_TEMP/ctest-$PP_PRESET.log"
+          HITS=$(grep -rEn "$SAN_REPORT_RE" $LOGS "$RUNNER_TEMP/ctest-$PP_PRESET.log" 2>/dev/null)
+          if [ -n "$HITS" ]; then
+            echo "$HITS" | head -40
+            echo "::error::${GITHUB_JOB}: 检出 sanitizer 报告（设计 §12.2：全语料 0 报告）"
+            exit 1
+          fi
+          echo "OK: 0 报告（$SAN_REPORT_RE 无命中）"
+
+      - name: 汇总 → $GITHUB_STEP_SUMMARY
+        if: always()
+        env:
+          QT_HIT: ${{ steps.qt-cache.outputs.cache-hit }}
+          VCPKG_HIT: ${{ steps.vcpkg-cache.outputs.cache-hit }}
+        run: |
+          set +e
+          {
+            echo "## ${GITHUB_JOB} job 汇总（预算 20 min / 硬顶 20 min）"
+            echo ""
+            echo "| 项目 | 值 |"
+            echo "| --- | --- |"
+            echo "| preset | \`${PP_PRESET}\`（T16 单路 preset；\`dev\`/\`tsan\` 语义零改动）|"
+            echo "| 判据 | 设计 §12.2：全语料 0 报告（supp 保留：tools/lsan.supp / tools/tsan.supp）|"
+            echo "| Qt 缓存精确命中 | ${QT_HIT:-false} |"
+            echo "| vcpkg 二进制缓存精确命中 | ${VCPKG_HIT:-false} |"
+            echo "| run | ${GITHUB_RUN_ID} #${GITHUB_RUN_ATTEMPT} |"
+            echo ""
+            echo "| 阶段 | 秒 |"
+            echo "| --- | --- |"
+            awk -F'\t' '{printf "| %s | %s |\n", $1, $2}' "$RUNNER_TEMP/pp-steps.tsv" 2>/dev/null
+            echo ""
+            echo "**ctest 契约测试**: $(grep -E '^[0-9]+% tests passed' "$RUNNER_TEMP/ctest-$PP_PRESET.log" 2>/dev/null | tail -1)"
+            echo ""
+            echo "**金样汇总**: $(grep -E '^SMOKE total=' "$RUNNER_TEMP/golden.log" 2>/dev/null | tail -1)"
+            echo ""
+            echo "**sanitizer 报告**: $(grep -cE "$SAN_REPORT_RE" "$OUT_ROOT"/*.dev.log 2>/dev/null | awk -F: '{s+=$2} END{print (s+0)" 条"}')（判据 0）"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  ubsan:
+    name: ubsan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20         # 硬顶（预算 20 min）
+    env:
+      QT_DIR: ${{ github.workspace }}/Qt/6.11.2/gcc_64
+      PP_PRESET: ubsan
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: apt 系统依赖（tools/ci-system-deps.txt）
+        run: bash tools/ci-install-deps.sh
+
+      - name: Qt ${{ env.QT_VERSION }} 缓存（restore，写者=main-full 的 linux job）
+        id: qt-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/Qt/6.11.2/gcc_64
+          key: qt-${{ env.QT_VERSION }}-gcc_64-${{ runner.os }}-${{ runner.arch }}
+          restore-keys: qt-${{ env.QT_VERSION }}-gcc_64-
+
+      - name: Qt 就绪断言（缺失 ⇒ 早失败，指路 warm-cache）
+        run: |
+          test -f "$QT_DIR/lib/libQt6Core.so.6" || {
+            echo "::error::Qt 缺失（未播种）: $QT_DIR"
+            echo "::error::→ 先跑 Actions → warm-cache → Run workflow 播种 Qt $QT_VERSION / linux_gcc_64（设计 §12.4）"
+            exit 1
+          }
+          echo "Qt OK @ $QT_DIR"
+
+      - name: vcpkg ${{ env.VCPKG_TAG }}（pinned）
+        run: |
+          git clone https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
+          git -C "$VCPKG_ROOT" checkout "$VCPKG_TAG"
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+
+      - name: 缓存目录预建
+        run: mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE" "$CCACHE_DIR"
+
+      - name: vcpkg binary cache（restore）
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.cache/vcpkg-binary
+          key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-
+            vcpkg-
+
+      - name: vcpkg 缓存暖度断言（miss ⇒ 早失败，指路 warm-cache）
+        run: |
+          n=$(find "$VCPKG_DEFAULT_BINARY_CACHE" -type f -name '*.zip' 2>/dev/null | wc -l)
+          echo "vcpkg binary cache archives = $n（判据 ≥ $PP_VCPKG_WARM_MIN）"
+          if [ "$n" -lt "$PP_VCPKG_WARM_MIN" ]; then
+            echo "::error::vcpkg 二进制缓存未播种（archive=$n）—— 冷构建 ≈40 min，直接击穿硬顶。"
+            echo "::error::→ 先跑 Actions → warm-cache → Run workflow 播种（设计 §12.4 / R24）。"
+            exit 1
+          fi
+
+      - name: 语料存在性断言（不重新生成）
+        run: |
+          n=$(git ls-files tests/golden/base | wc -l)
+          m=$(git ls-files tests/golden/smoke | grep -c '\.json$')
+          [ "$n" -ge 16 ] || { echo "::error::语料缺失: tests/golden/base = $n 个（期望 ≥16）"; exit 1; }
+          [ "$m" -ge 20 ] || { echo "::error::金样断言缺失: tests/golden/smoke/*.json = $m 个（期望 ≥20）"; exit 1; }
+          echo "语料 OK: base=$n 文件、smoke 断言=$m 个（均已入库，未重新生成）"
+
+      - name: configure + build ${{ env.PP_PRESET }}（photopipeline/pp_verify + 三个契约测试）
+        run: |
+          set -o pipefail
+          T0=$(date +%s)
+          cmake --preset "$PP_PRESET"
+          T1=$(date +%s)
+          cmake --build build/"$PP_PRESET" --target photopipeline pp_verify \
+            pp_test_scheduler_contract pp_test_pipeline_contract pp_test_enc_smoke
+          T2=$(date +%s)
+          {
+            echo -e "configure $PP_PRESET\t$(( T1 - T0 ))"
+            echo -e "build $PP_PRESET（子集）\t$(( T2 - T1 ))"
+          } >> "$RUNNER_TEMP/pp-steps.tsv"
+
+      - name: ctest -R 契约测试（调度器/管线/编码器路径）
+        run: |
+          set -o pipefail
+          T0=$(date +%s)
+          ctest --preset "$PP_PRESET" -R 'test_scheduler_contract|test_pipeline_contract|test_enc_smoke' \
+            --output-on-failure 2>&1 | tee "$RUNNER_TEMP/ctest-$PP_PRESET.log"
+          echo -e "ctest $PP_PRESET（契约测试）\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
+
+      - name: 全语料 20 对（sanitizer 下跑 golden smoke）
+        run: |
+          set -o pipefail
+          T0=$(date +%s)
+          python3 tests/golden/smoke.py build/"$PP_PRESET" 2>&1 | tee "$RUNNER_TEMP/golden.log"
+          echo -e "golden smoke（$PP_PRESET）\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
+
+      - name: 金样冻结行断言（防假绿）
+        run: |
+          line=$(grep -E '^SMOKE total=' "$RUNNER_TEMP/golden.log" | tail -1)
+          echo "冻结行: $line（期望 total=20 pass=20 fail=0）"
+          printf '%s' "$line" | grep -qE '^SMOKE total=20 pass=20 fail=0 ' || {
+            echo "::error::金样口径不符（期望 total=20 pass=20 fail=0）: $line"; exit 1; }
+
+      - name: sanitizer 报告扫描（判据：全语料 0 报告）
+        run: |
+          set +e
+          LOGS=$(ls "$OUT_ROOT"/*.dev.log 2>/dev/null)
+          echo "扫描: $OUT_ROOT/*.dev.log（$(printf '%s\n' $LOGS | grep -c . ) 个）+ $RUNNER_TEMP/ctest-$PP_PRESET.log"
+          HITS=$(grep -rEn "$SAN_REPORT_RE" $LOGS "$RUNNER_TEMP/ctest-$PP_PRESET.log" 2>/dev/null)
+          if [ -n "$HITS" ]; then
+            echo "$HITS" | head -40
+            echo "::error::${GITHUB_JOB}: 检出 sanitizer 报告（设计 §12.2：全语料 0 报告）"
+            exit 1
+          fi
+          echo "OK: 0 报告（$SAN_REPORT_RE 无命中）"
+
+      - name: 汇总 → $GITHUB_STEP_SUMMARY
+        if: always()
+        env:
+          QT_HIT: ${{ steps.qt-cache.outputs.cache-hit }}
+          VCPKG_HIT: ${{ steps.vcpkg-cache.outputs.cache-hit }}
+        run: |
+          set +e
+          {
+            echo "## ${GITHUB_JOB} job 汇总（预算 20 min / 硬顶 20 min）"
+            echo ""
+            echo "| 项目 | 值 |"
+            echo "| --- | --- |"
+            echo "| preset | \`${PP_PRESET}\`（T16 单路 preset；\`dev\`/\`tsan\` 语义零改动）|"
+            echo "| 判据 | 设计 §12.2：全语料 0 报告（supp 保留：tools/lsan.supp / tools/tsan.supp）|"
+            echo "| Qt 缓存精确命中 | ${QT_HIT:-false} |"
+            echo "| vcpkg 二进制缓存精确命中 | ${VCPKG_HIT:-false} |"
+            echo "| run | ${GITHUB_RUN_ID} #${GITHUB_RUN_ATTEMPT} |"
+            echo ""
+            echo "| 阶段 | 秒 |"
+            echo "| --- | --- |"
+            awk -F'\t' '{printf "| %s | %s |\n", $1, $2}' "$RUNNER_TEMP/pp-steps.tsv" 2>/dev/null
+            echo ""
+            echo "**ctest 契约测试**: $(grep -E '^[0-9]+% tests passed' "$RUNNER_TEMP/ctest-$PP_PRESET.log" 2>/dev/null | tail -1)"
+            echo ""
+            echo "**金样汇总**: $(grep -E '^SMOKE total=' "$RUNNER_TEMP/golden.log" 2>/dev/null | tail -1)"
+            echo ""
+            echo "**sanitizer 报告**: $(grep -cE "$SAN_REPORT_RE" "$OUT_ROOT"/*.dev.log 2>/dev/null | awk -F: '{s+=$2} END{print (s+0)" 条"}')（判据 0）"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  tsan:
+    name: tsan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20         # 硬顶（预算 20 min）
+    env:
+      QT_DIR: ${{ github.workspace }}/Qt/6.11.2/gcc_64
+      PP_PRESET: tsan
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: apt 系统依赖（tools/ci-system-deps.txt）
+        run: bash tools/ci-install-deps.sh
+
+      - name: Qt ${{ env.QT_VERSION }} 缓存（restore，写者=main-full 的 linux job）
+        id: qt-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/Qt/6.11.2/gcc_64
+          key: qt-${{ env.QT_VERSION }}-gcc_64-${{ runner.os }}-${{ runner.arch }}
+          restore-keys: qt-${{ env.QT_VERSION }}-gcc_64-
+
+      - name: Qt 就绪断言（缺失 ⇒ 早失败，指路 warm-cache）
+        run: |
+          test -f "$QT_DIR/lib/libQt6Core.so.6" || {
+            echo "::error::Qt 缺失（未播种）: $QT_DIR"
+            echo "::error::→ 先跑 Actions → warm-cache → Run workflow 播种 Qt $QT_VERSION / linux_gcc_64（设计 §12.4）"
+            exit 1
+          }
+          echo "Qt OK @ $QT_DIR"
+
+      - name: vcpkg ${{ env.VCPKG_TAG }}（pinned）
+        run: |
+          git clone https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
+          git -C "$VCPKG_ROOT" checkout "$VCPKG_TAG"
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+
+      - name: 缓存目录预建
+        run: mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE" "$CCACHE_DIR"
+
+      - name: vcpkg binary cache（restore）
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.cache/vcpkg-binary
+          key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-
+            vcpkg-
+
+      - name: vcpkg 缓存暖度断言（miss ⇒ 早失败，指路 warm-cache）
+        run: |
+          n=$(find "$VCPKG_DEFAULT_BINARY_CACHE" -type f -name '*.zip' 2>/dev/null | wc -l)
+          echo "vcpkg binary cache archives = $n（判据 ≥ $PP_VCPKG_WARM_MIN）"
+          if [ "$n" -lt "$PP_VCPKG_WARM_MIN" ]; then
+            echo "::error::vcpkg 二进制缓存未播种（archive=$n）—— 冷构建 ≈40 min，直接击穿硬顶。"
+            echo "::error::→ 先跑 Actions → warm-cache → Run workflow 播种（设计 §12.4 / R24）。"
+            exit 1
+          fi
+
+      - name: 语料存在性断言（不重新生成）
+        run: |
+          n=$(git ls-files tests/golden/base | wc -l)
+          m=$(git ls-files tests/golden/smoke | grep -c '\.json$')
+          [ "$n" -ge 16 ] || { echo "::error::语料缺失: tests/golden/base = $n 个（期望 ≥16）"; exit 1; }
+          [ "$m" -ge 20 ] || { echo "::error::金样断言缺失: tests/golden/smoke/*.json = $m 个（期望 ≥20）"; exit 1; }
+          echo "语料 OK: base=$n 文件、smoke 断言=$m 个（均已入库，未重新生成）"
+
+      - name: configure + build tsan（photopipeline/pp_verify + 三个契约测试）
+        run: |
+          set -o pipefail
+          T0=$(date +%s)
+          cmake --preset tsan
+          T1=$(date +%s)
+          cmake --build build/tsan --target photopipeline pp_verify \
+            pp_test_scheduler_contract pp_test_pipeline_contract pp_test_enc_smoke
+          T2=$(date +%s)
+          {
+            echo -e "configure tsan\t$(( T1 - T0 ))"
+            echo -e "build tsan（子集）\t$(( T2 - T1 ))"
+          } >> "$RUNNER_TEMP/pp-steps.tsv"
+
+      - name: ctest -R 契约测试（竞态主战场：调度器线程预算 + 交错限速器）
+        # test_scheduler_contract = T7 的 alloc_threads 穷举 + 交错限速器时序（fake clock）+ 批压测；
+        # TSAN_OPTIONS（含 tools/tsan.supp）由 test preset 注入（见 CMakePresets.json 的 tsan 条目）。
+        run: |
+          set -o pipefail
+          T0=$(date +%s)
+          ctest --preset tsan -R 'test_scheduler_contract|test_pipeline_contract|test_enc_smoke' \
+            --output-on-failure 2>&1 | tee "$RUNNER_TEMP/ctest-tsan.log"
+          echo -e "ctest tsan（契约测试）\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
+
+      - name: 全语料 20 对（TSan 下跑 golden smoke）
+        run: |
+          set -o pipefail
+          T0=$(date +%s)
+          python3 tests/golden/smoke.py build/tsan 2>&1 | tee "$RUNNER_TEMP/golden.log"
+          echo -e "golden smoke（tsan）\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
+
+      - name: 金样冻结行断言（防假绿）
+        run: |
+          line=$(grep -E '^SMOKE total=' "$RUNNER_TEMP/golden.log" | tail -1)
+          echo "冻结行: $line（期望 total=20 pass=20 fail=0）"
+          printf '%s' "$line" | grep -qE '^SMOKE total=20 pass=20 fail=0 ' || {
+            echo "::error::金样口径不符（期望 total=20 pass=20 fail=0）: $line"; exit 1; }
+
+      - name: sanitizer 报告扫描（判据：全语料 0 报告）
+        run: |
+          set +e
+          LOGS=$(ls "$OUT_ROOT"/*.dev.log 2>/dev/null)
+          echo "扫描: $OUT_ROOT/*.dev.log（$(printf '%s\n' $LOGS | grep -c . ) 个）+ $RUNNER_TEMP/ctest-tsan.log"
+          HITS=$(grep -rEn "$SAN_REPORT_RE" $LOGS "$RUNNER_TEMP/ctest-tsan.log" 2>/dev/null)
+          if [ -n "$HITS" ]; then
+            echo "$HITS" | head -40
+            echo "::error::${GITHUB_JOB}: 检出 sanitizer 报告（设计 §12.2：全语料 0 报告）"
+            exit 1
+          fi
+          echo "OK: 0 报告（$SAN_REPORT_RE 无命中）"
+
+      - name: 汇总 → $GITHUB_STEP_SUMMARY
+        if: always()
+        env:
+          QT_HIT: ${{ steps.qt-cache.outputs.cache-hit }}
+          VCPKG_HIT: ${{ steps.vcpkg-cache.outputs.cache-hit }}
+        run: |
+          set +e
+          {
+            echo "## ${GITHUB_JOB} job 汇总（预算 20 min / 硬顶 20 min）"
+            echo ""
+            echo "| 项目 | 值 |"
+            echo "| --- | --- |"
+            echo "| preset | \`tsan\`（沿用既有 preset；语义零改动）|"
+            echo "| 判据 | 设计 §12.2：全语料 0 报告（supp 保留：tools/tsan.supp，经 test preset 注入）|"
+            echo "| Qt 缓存精确命中 | ${QT_HIT:-false} |"
+            echo "| vcpkg 二进制缓存精确命中 | ${VCPKG_HIT:-false} |"
+            echo "| run | ${GITHUB_RUN_ID} #${GITHUB_RUN_ATTEMPT} |"
+            echo ""
+            echo "| 阶段 | 秒 |"
+            echo "| --- | --- |"
+            awk -F'\t' '{printf "| %s | %s |\n", $1, $2}' "$RUNNER_TEMP/pp-steps.tsv" 2>/dev/null
+            echo ""
+            echo "**ctest 契约测试**: $(grep -E '^[0-9]+% tests passed' "$RUNNER_TEMP/ctest-tsan.log" 2>/dev/null | tail -1)"
+            echo ""
+            echo "**金样汇总**: $(grep -E '^SMOKE total=' "$RUNNER_TEMP/golden.log" 2>/dev/null | tail -1)"
+            echo ""
+            echo "**sanitizer 报告**: $(grep -cE "$SAN_REPORT_RE" "$OUT_ROOT"/*.dev.log 2>/dev/null | awk -F: '{s+=$2} END{print (s+0)" 条"}')（判据 0）"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # regression（预算 12 min）: 回归基线 diff（设计 §12.1 夜间道第二段）
+  #   tools/regression.py = workers=1 归一化全语料（27 输入 × 8 格式 + 仅元数据 × 4 格式 = 12 次调用、
+  #   280 文件槽），与 tools/baseline/golden.log 逐行比对（0 diff 才绿）。
+  #   Windows 基线 tools/baseline/golden.windows.log（M3 遗留 §8-11）在本 job 做**存在性/形态**断言；
+  #   双平台 diff 口径由 W4-T17 落地（本任务不改 regression.py 的比对语义）。
+  # ────────────────────────────────────────────────────────────────────────────
+  regression:
+    name: regression（回归基线 diff）
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20         # 硬顶（预算 12 min）
+    env:
+      QT_DIR: ${{ github.workspace }}/Qt/6.11.2/gcc_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: apt 系统依赖（tools/ci-system-deps.txt）
+        run: bash tools/ci-install-deps.sh
+
+      - name: Qt ${{ env.QT_VERSION }} 缓存（restore，写者=main-full 的 linux job）
+        id: qt-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/Qt/6.11.2/gcc_64
+          key: qt-${{ env.QT_VERSION }}-gcc_64-${{ runner.os }}-${{ runner.arch }}
+          restore-keys: qt-${{ env.QT_VERSION }}-gcc_64-
+
+      - name: Qt 就绪断言（缺失 ⇒ 早失败，指路 warm-cache）
+        run: |
+          test -f "$QT_DIR/lib/libQt6Core.so.6" || {
+            echo "::error::Qt 缺失（未播种）: $QT_DIR"
+            echo "::error::→ 先跑 Actions → warm-cache → Run workflow 播种 Qt $QT_VERSION / linux_gcc_64（设计 §12.4）"
+            exit 1
+          }
+          echo "Qt OK @ $QT_DIR"
+
+      - name: vcpkg ${{ env.VCPKG_TAG }}（pinned）
+        run: |
+          git clone https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
+          git -C "$VCPKG_ROOT" checkout "$VCPKG_TAG"
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+
+      - name: 缓存目录预建
+        run: mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE" "$CCACHE_DIR"
+
+      - name: vcpkg binary cache（restore）
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.cache/vcpkg-binary
+          key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-
+            vcpkg-
+
+      - name: vcpkg 缓存暖度断言（miss ⇒ 早失败，指路 warm-cache）
+        run: |
+          n=$(find "$VCPKG_DEFAULT_BINARY_CACHE" -type f -name '*.zip' 2>/dev/null | wc -l)
+          echo "vcpkg binary cache archives = $n（判据 ≥ $PP_VCPKG_WARM_MIN）"
+          if [ "$n" -lt "$PP_VCPKG_WARM_MIN" ]; then
+            echo "::error::vcpkg 二进制缓存未播种（archive=$n）—— 冷构建 ≈40 min，直接击穿硬顶。"
+            echo "::error::→ 先跑 Actions → warm-cache → Run workflow 播种（设计 §12.4 / R24）。"
+            exit 1
+          fi
+
+      - name: ccache（restore，写者=main-full 的 linux job）
+        # 本 job 编的是 release-dev 树 —— 与 main-full linux job 的 flags 完全一致 ⇒ ccache 有命中价值。
+        id: ccache-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.cache/ccache
+          key: ccache-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/**', 'CMakePresets.json') }}-${{ hashFiles('cmake/**', 'triplets/**') }}-${{ github.run_id }}
+          restore-keys: ccache-${{ runner.os }}-
+
+      - name: 回归基线存在性/形态断言（golden.log + golden.windows.log，T17 完善双平台口径）
+        run: |
+          for f in tools/baseline/golden.log tools/baseline/golden.windows.log; do
+            [ -f "$f" ] || { echo "::error::基线缺失: $f"; exit 1; }
+            n=$(wc -l < "$f")
+            [ "$n" -ge 1000 ] || { echo "::error::基线行数异常: $f = $n 行（期望 ≥1000）"; exit 1; }
+            head -1 "$f" | grep -q '^# =' || { echo "::error::基线头部指纹异常: $f"; exit 1; }
+            echo "$f: $n 行；head: $(sed -n '2p' "$f")"
+          done
+          a=$(wc -l < tools/baseline/golden.log); b=$(wc -l < tools/baseline/golden.windows.log)
+          echo "双平台基线行数: linux=$a windows=$b（T17 将补双平台 diff 口径；本 job 只做形态断言）"
+
+      - name: configure + build release-dev 金样二进制（photopipeline + pp_verify）
+        run: |
+          set -o pipefail
+          T0=$(date +%s)
+          cmake --preset release-dev
+          T1=$(date +%s)
+          cmake --build build/release-dev --target photopipeline pp_verify
+          T2=$(date +%s)
+          {
+            echo -e "configure release-dev\t$(( T1 - T0 ))"
+            echo -e "build release-dev 子集(photopipeline,pp_verify)\t$(( T2 - T1 ))"
+          } >> "$RUNNER_TEMP/pp-steps.tsv"
+
+      - name: 回归基线 diff（python3 tools/regression.py；0 diff 才绿）
+        # 退出码: 0 = 0 diff；1 = 有 diff（前 40 行）；2 = 环境缺失。三种都直接透传 ⇒ 红/绿口径单一。
+        run: |
+          set -o pipefail
+          T0=$(date +%s)
+          python3 tools/regression.py build/release-dev 2>&1 | tee "$RUNNER_TEMP/regression.log"
+          echo -e "regression diff（12 次调用 / 280 文件槽）\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
+
+      - name: 汇总 → $GITHUB_STEP_SUMMARY
+        if: always()
+        env:
+          QT_HIT: ${{ steps.qt-cache.outputs.cache-hit }}
+          VCPKG_HIT: ${{ steps.vcpkg-cache.outputs.cache-hit }}
+          CCACHE_HIT: ${{ steps.ccache-cache.outputs.cache-hit }}
+        run: |
+          set +e
+          {
+            echo "## regression job 汇总（预算 12 min / 硬顶 20 min）"
+            echo ""
+            echo "| 项目 | 值 |"
+            echo "| --- | --- |"
+            echo "| 判据 | tools/regression.py 归一化全语料 vs \`tools/baseline/golden.log\`（0 diff）|"
+            echo "| 双平台基线 | \`tools/baseline/golden.windows.log\` 形态断言（T17 完善口径）|"
+            echo "| Qt / vcpkg / ccache 缓存命中 | ${QT_HIT:-false} / ${VCPKG_HIT:-false} / ${CCACHE_HIT:-false} |"
+            echo ""
+            echo "| 阶段 | 秒 |"
+            echo "| --- | --- |"
+            awk -F'\t' '{printf "| %s | %s |\n", $1, $2}' "$RUNNER_TEMP/pp-steps.tsv" 2>/dev/null
+            echo ""
+            echo "**diff 结论**: $(grep -E '^regression: ' "$RUNNER_TEMP/regression.log" 2>/dev/null | tail -3 | tr '\n' ' ')"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # audit（预算 5 min）: 许可/SPDX（collect_licenses.py --check）+ 依赖审计（pp_linkprobe）
+  #   * 许可/SPDX 判据 = 设计 §12.2「许可 ≥30 且 SPDX 100%」（与 main-full 的 audit job 同一命令）。
+  #   * 依赖审计 = pp_linkprobe（M0 §12.1 行为契约：OIIO 插件面 / libheif 编码器名单 / exiv2-bmff
+  #     / libjxl / jpegli 静态直调层 / 内省面断言，退出码 = FAIL 数）—— nightly 用它盯**依赖漂移**
+  #     （R4/R26：vcpkg 升级或上游行为变化会在这里变成 FAIL）。
+  # ────────────────────────────────────────────────────────────────────────────
+  audit:
+    name: audit（许可/SPDX/依赖）
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20         # 硬顶（预算 5 min）
+    env:
+      QT_DIR: ${{ github.workspace }}/Qt/6.11.2/gcc_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: apt 系统依赖（tools/ci-system-deps.txt）
+        run: bash tools/ci-install-deps.sh
+
+      - name: Qt ${{ env.QT_VERSION }} 缓存（restore，写者=main-full 的 linux job）
+        id: qt-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/Qt/6.11.2/gcc_64
+          key: qt-${{ env.QT_VERSION }}-gcc_64-${{ runner.os }}-${{ runner.arch }}
+          restore-keys: qt-${{ env.QT_VERSION }}-gcc_64-
+
+      - name: Qt 就绪断言（配置阶段 find_package(Qt6) 需要）
+        run: |
+          test -f "$QT_DIR/lib/libQt6Core.so.6" || {
+            echo "::error::Qt 缺失（未播种）: $QT_DIR —— 先跑 warm-cache 播种（设计 §12.4）"; exit 1; }
+          echo "Qt OK @ $QT_DIR"
+
+      - name: vcpkg ${{ env.VCPKG_TAG }}（pinned）
+        run: |
+          git clone https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
+          git -C "$VCPKG_ROOT" checkout "$VCPKG_TAG"
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+
+      - name: 缓存目录预建
+        run: mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
+
+      - name: vcpkg binary cache（restore）
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.cache/vcpkg-binary
+          key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-
+            vcpkg-
+
+      - name: vcpkg 缓存暖度断言（miss ⇒ 早失败，指路 warm-cache）
+        run: |
+          n=$(find "$VCPKG_DEFAULT_BINARY_CACHE" -type f -name '*.zip' 2>/dev/null | wc -l)
+          echo "vcpkg binary cache archives = $n（判据 ≥ $PP_VCPKG_WARM_MIN）"
+          if [ "$n" -lt "$PP_VCPKG_WARM_MIN" ]; then
+            echo "::error::vcpkg 二进制缓存未播种（archive=$n）—— 冷构建 ≈40 min，直接击穿硬顶。"
+            echo "::error::→ 先跑 Actions → warm-cache → Run workflow 播种（设计 §12.4 / R24）。"
+            exit 1
+          fi
+
+      - name: configure release（落 vcpkg_installed/<triplet>/share；不构建全量）
+        run: |
+          T0=$(date +%s)
+          cmake --preset release
+          echo -e "configure release（审计用）\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
+
+      - name: 许可 ≥30 + SPDX 100%（tools/collect_licenses.py --check）
+        run: |
+          set -o pipefail
+          T0=$(date +%s)
+          python3 tools/collect_licenses.py --check 2>&1 | tee "$RUNNER_TEMP/license-check.log"
+          echo -e "collect_licenses --check\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
+
+      - name: 依赖审计（pp_linkprobe：插件面/编码器名单/版本内省断言）
+        run: |
+          set -o pipefail
+          T0=$(date +%s)
+          cmake --build build/release --target pp_linkprobe
+          ./build/release/pp_linkprobe 2>&1 | tee "$RUNNER_TEMP/linkprobe.log"
+          echo -e "pp_linkprobe（依赖审计）\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
+
+      - name: 汇总 → $GITHUB_STEP_SUMMARY
+        if: always()
+        env:
+          QT_HIT: ${{ steps.qt-cache.outputs.cache-hit }}
+          VCPKG_HIT: ${{ steps.vcpkg-cache.outputs.cache-hit }}
+        run: |
+          set +e
+          {
+            echo "## audit job 汇总（预算 5 min / 硬顶 20 min）"
+            echo ""
+            echo "| 项目 | 值 |"
+            echo "| --- | --- |"
+            echo "| 判据① | 设计 §12.2：许可 ≥30 且 SPDX 100%（\`collect_licenses.py --check\`）|"
+            echo "| 判据② | 依赖审计：\`pp_linkprobe\` 退出码 0（FAIL 数 = 退出码）|"
+            echo "| Qt 缓存精确命中 | ${QT_HIT:-false} |"
+            echo "| vcpkg 二进制缓存精确命中 | ${VCPKG_HIT:-false} |"
+            echo ""
+            echo "| 阶段 | 秒 |"
+            echo "| --- | --- |"
+            awk -F'\t' '{printf "| %s | %s |\n", $1, $2}' "$RUNNER_TEMP/pp-steps.tsv" 2>/dev/null
+            echo ""
+            echo "**许可/SPDX 判据行**: \`$(grep -E '^LICENSE-CHECK ' "$RUNNER_TEMP/license-check.log" 2>/dev/null | tail -1)\`"
+            echo ""
+            echo "**依赖内省面**: \`$(grep -E '^PLUGINS: ' "$RUNNER_TEMP/linkprobe.log" 2>/dev/null | tail -1)\`"
+            echo ""
+            echo "**编码器名单**: \`$(grep -E '^HEIF_ENCODERS: ' "$RUNNER_TEMP/linkprobe.log" 2>/dev/null | tail -1)\`"
+            echo ""
+            echo "**PROBE 失败数**: $(grep -c ' PROBE .* FAIL ' "$RUNNER_TEMP/linkprobe.log" 2>/dev/null || echo 0)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # gate（预算 1 min）: 总闸 —— 五路全绿 + 预算校准（§12.3 / §12.6）
+  # ────────────────────────────────────────────────────────────────────────────
+  gate:
+    name: gate（总闸）
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20         # 硬顶（本 job ≈30 s）
+    needs: [asan, ubsan, tsan, regression, audit]
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 汇总各路结论 + 预算校准
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          R_ASAN: ${{ needs.asan.result }}
+          R_UBSAN: ${{ needs.ubsan.result }}
+          R_TSAN: ${{ needs.tsan.result }}
+          R_REG: ${{ needs.regression.result }}
+          R_AUDIT: ${{ needs.audit.result }}
+        run: |
+          set +e
+          {
+            echo "## nightly gate（设计 §12.6：三路并行 wall ≤20min）"
+            echo ""
+            echo "| job | 结论 | 预算 |"
+            echo "| --- | --- | --- |"
+            echo "| asan | ${R_ASAN} | 20 min（§12.3）|"
+            echo "| ubsan | ${R_UBSAN} | 20 min（§12.3）|"
+            echo "| tsan | ${R_TSAN} | 20 min（§12.3）|"
+            echo "| regression | ${R_REG} | 12 min（表外增补：§12.1 夜间道第二段）|"
+            echo "| audit | ${R_AUDIT} | 5 min（表外增补：许可/SPDX/依赖审计）|"
+            echo ""
+            echo "run: ${GITHUB_RUN_ID} #${GITHUB_RUN_ATTEMPT} ｜ 实跑 wall-clock 见下方预算校准表"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" \
+               > "$RUNNER_TEMP/jobs.json" 2>/dev/null; then
+            python3 tools/ci-budget.py "$RUNNER_TEMP/jobs.json" \
+              --budget "asan=20,ubsan=20,tsan=20,regression=12,audit=5,gate=1" \
+              --wall-limit 20 --title "nightly 预算校准（设计 §12.3）" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "_预算校准表不可得（jobs API 读取失败）。_" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          for r in "$R_ASAN" "$R_UBSAN" "$R_TSAN" "$R_REG" "$R_AUDIT"; do
+            [ "$r" = "success" ] || { echo "::error::夜间道未全绿（$r）—— 见各 job 汇总"; exit 1; }
+          done
+          echo "nightly gate OK"

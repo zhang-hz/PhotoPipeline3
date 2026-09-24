@@ -1,0 +1,65 @@
+# PhotoPipeline — clang-tidy 棘轮基线（M4-W4-T16；docs/v0.3.0-design.md §12.2）
+# 口径: 总数 ≤ 基线 ／ 每文件 ≤ 基线 ／ 基线外文件（新增代码）必须 0 告警
+# 统计: bugprone-* / performance-* / portability-*，仅本仓库 src|tests|tools 源码
+# 更新: python tools/ci-tidy.py <BUILD_DIR> --update   （只允许在口径/工具链变更或有意收敛后重新播种）
+# 生成: python tools/ci-tidy.py <BUILD_DIR> [--update]（同一提交内基线 diff 必须可见）
+# schema=1
+# REC  <fingerprint>	<platform>	<compiler>	<tool>	<checks>	<total>	<files>	<generated_at>
+# FILE <fingerprint>	<relpath>	<count>            （只记 count>0；缺行 = 0）
+REC	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	windows-msvc	MSVC 14.51.36231	clang-tidy 21.1.0	-*,bugprone-*,performance-*,portability-*	214	56	2026-09-24T13:11:44Z
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/codecs/enc_heif.cpp	2
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/codecs/enc_jpegli.cpp	1
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/codecs/enc_jxl.cpp	4
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/codecs/enc_oiio.cpp	2
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/codecs/enc_webp.cpp	1
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/codecs/encoders.cpp	1
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/core/classify.cpp	3
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/core/fsops.cpp	2
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/core/logger.cpp	8
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/core/metadata.cpp	8
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/core/params.cpp	3
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/core/pipeline.cpp	4
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/core/pixelbudget.cpp	1
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/core/presets.cpp	1
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/core/progress.cpp	5
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/core/settings.cpp	2
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/core/thumbs.cpp	3
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/main.cpp	4
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/mapwidget/mapwidget.cpp	5
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/mapwidget/providers.cpp	2
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/platform/frameless.cpp	5
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/ui/classify_panel.cpp	3
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/ui/exif_editor.cpp	2
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/ui/filelistmodel.cpp	2
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/ui/mainwindow.cpp	8
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/ui/page_meta.cpp	9
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/ui/page_output.cpp	6
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/ui/page_run.cpp	9
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/ui/preset_io.cpp	3
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/ui/presets_dialog.cpp	1
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/ui/preview_panel.cpp	4
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/ui/thumbnails.cpp	4
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	tests/unit/test_classify.cpp	1
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	tests/unit/test_color.cpp	5
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	tests/unit/test_decode.cpp	3
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	tests/unit/test_effective.cpp	6
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	tests/unit/test_enc_oiio.cpp	6
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	tests/unit/test_enc_smoke.cpp	4
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	tests/unit/test_fsops.cpp	1
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	tests/unit/test_logger.cpp	3
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	tests/unit/test_metadata.cpp	2
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	tests/unit/test_params.cpp	11
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	tests/unit/test_paths.cpp	1
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	tests/unit/test_pipeline_contract.cpp	3
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	tests/unit/test_pixelbudget.cpp	2
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	tests/unit/test_presets.cpp	3
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	tests/unit/test_progress.cpp	2
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	tests/unit/test_scheduler_contract.cpp	4
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	tests/unit/test_settings.cpp	1
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	tests/unit/test_smoke.cpp	1
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	tests/unit/test_thumbs.cpp	4
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	tests/unit/test_timeshift.cpp	3
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	tools/pp_linkprobe.cpp	1
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	tools/pp_mkfixtures.cpp	8
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	tools/pp_spikes.cpp	1
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	tools/pp_verify.cpp	20

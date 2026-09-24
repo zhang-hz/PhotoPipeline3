@@ -1,20 +1,48 @@
 name: release
-# PhotoPipeline — tag 发行自动化（M3-T11 S2）
+# ═══════════════════════════════════════════════════════════════════════════════
+# PhotoPipeline — 发布道（M4-W4-T16 全量重写；M3-T11 起源）
+#   依据: docs/v0.3.0-design.md §12.1 拓扑（发布道）/ §12.2 质量门禁表（发布一致性行：
+#         tag↔版本断言 + 产物 --version 前置探测）/ §12.3 job 预算（appimage/winzip/publish =
+#         12/15/3，整轮硬 ≤20min）/ §12.4 缓存纪律 / §12.6 20min 口径 /
+#         **§12.7 发布链路加固**（吸收 M3 遗留 §8-11 三件套）
+#         + docs/m4-tasks.md §3 W4-T16（release 前置探测：查重 + 产物断言）
 #
-# 触发: 仅 tag 推送 `v*`（日常 CI 由 build-test.yml 负责；build-test.yml 已用 branches 过滤
-#       把 tag 排除，两者互不重复触发）。
+#   拓扑（§12.1「发布道」+ §12.7 三件套）:
+#     appimage ─→ probe-appimage ─┐
+#     winzip   ─→ probe-winzip   ─┴→ publish（① 查重 ② 产物 --version ③ --repo ≥ gh release create）
+#   触发: 仅 tag 推送 `v*`（日常/主干道由 pr-fast / main-full / nightly 负责，两者互不重复触发）。
 #
-# 三个 job:
-#   * appimage —— Linux 发行产物（tools/make_appimage.sh，内含四项烟测 + 产物启动烟测）
-#   * winzip   —— Windows 发行产物（tools/make_winzip.py，内含五项烟测 + offscreen ui-smoke）
-#   * publish  —— 下载两个 artifact → tag↔版本一致性断言 → gh release create
+#   ── §12.7 三件套的落点（逐条对应）────────────────────────────────────────────
+#     ① `gh release view "$TAG"` 在 publish **第一步**执行；tag 已有 Release ⇒ 显式失败
+#        「该 tag 已有 Release」（M3 遗留：原来靠 `gh release create` 的隐式冲突报错，不够显眼）。
+#     ② 产物 `--version` 断言在**下载之后、发布之前**执行，且独立于构建 job 的结论：
+#          * probe-appimage（ubuntu-24.04）：下载 AppImage → `--version` 逐字断言 + sha256 复核；
+#          * probe-winzip（windows-2025）：下载 win64.zip → 解包 → `staging/photopipeline.exe --version`
+#            逐字断言（Windows 二进制只能在 Windows 上跑 ⇒ 必须有这个 job）。
+#        publish 里对 AppImage 再做一次 --version（发布动作的输入此刻是**下载件**，不是构建目录）。
+#     ③ `--repo "$GITHUB_REPOSITORY"` 显式定位保留（M3-T11c 教训：gh 需要仓库上下文）。
+#     zip 可复现性：接受现状（同 M2/M3 结论；§12.7 明文）——发布件 sha256 逐轮不同属已知事实，
+#     故发行口径以「tag → Release 附件」为锚，不以字节可复现为判据。
 #
-# 设计取舍:
-#   * concurrency 不取消（cancel-in-progress: false）: 发行不打折，tag 运行不得被后来者取消。
-#   * permissions.contents: write 仅 publish job 需要（gh release create）。
-#   * Qt 缓存的写者在本 workflow 里是 appimage job（单写者，避免同一 key 撞 409），
-#     Windows job 只读；vcpkg 缓存两侧各自 save（key 前缀 gcc/win 分离）。
-#   * 若 tag 已存在同名 release，gh release create 会失败 —— 这是**期望**行为（不静默覆盖发行）。
+#   ── job 预算表（设计 §12.3；硬顶 = 每 job timeout-minutes: 20，禁放宽）──────────────
+#     | job             | 平台         | 预算  | 内容                                                    |
+#     | appimage        | ubuntu-24.04 | 12 min | release 构建 + make_appimage.sh（4 项内置烟测）+ 启动烟测 |
+#     | winzip          | windows-2025 | 15 min | release 构建 + make_winzip.py（5 项内置门禁/烟测）+ 指纹 |
+#     | probe-appimage  | ubuntu-24.04 | 2 min  | 下载 AppImage → --version + sha256 复核（§12.7 ②）        |
+#     | probe-winzip    | windows-2025 | 3 min  | 下载 win64.zip → 解包 → --version（§12.7 ②）             |
+#     | publish         | ubuntu-24.04 | 2 min  | 查重 → tag↔版本 → gh release create（§12.7 ①③）          |
+#     关键路径预算 = winzip 15 + probe-winzip 3 + publish 2 = **20 min（恰在 §12.6 硬顶边界）**；
+#     appimage 侧 = 12 + 2 = 14 min，不在关键路径。★ 实测以**首个 tag 推送**为准；若首跑越顶，
+#     按 §12.3 处置（唯一不破坏 §12.7 独立性的手段：把 probe-winzip 的--version 断言并进 winzip
+#     job 的**末步**并保留 publish 侧的 AppImage 复核 —— 但那样就失去"独立于构建 job 结论"这一条，
+#     故优先的做法是砍 winzip job 内的构建冗余，而非删探测）。
+#
+#   ── 缓存纪律（§12.4）───────────────────────────────────────────────────────
+#     * 只从缓存取（Qt 不做 aqt 兜底：M4-T2 实测 aqt 3.3.0 无法定位 Qt 6.11.2 的 Windows 仓库布局）；
+#       缓存 miss ⇒ 早失败 + 指路 warm-cache.yml。发行轮次同理**禁止**冷构建（§12.6 口径：release
+#       也受 20min 硬顶约束）：先跑一次 warm-cache 播种，再推 tag。
+#     * Qt 单写者 = appimage job（gcc_64）；winzip 侧只 restore（写者 = main-full 的 windows job）。
+#     * concurrency 不取消（cancel-in-progress: false）：发行不打折。
 on:
   push:
     tags: ['v*']
@@ -23,54 +51,64 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false      # 发行不打折：tag 运行不得被后来者取消
 
+# contents: write = publish job 的 gh release create；actions: read 由 contents:write 隐含不足，
+# 故显式给 actions: read（download-artifact 走 runtime token，无需额外授权）。
 permissions:
-  contents: write                # publish job 的 gh release create
+  contents: write
+  actions: read
 
 env:
   VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-  QT_DIR: ${{ github.workspace }}/Qt/6.8.3/gcc_64
   VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg-binary
   CCACHE_DIR: ${{ github.workspace }}/.cache/ccache
   CCACHE_MAXSIZE: 2G
   CCACHE_BASEDIR: ${{ github.workspace }}
   CCACHE_SLOPPINESS: pch_defines,time_macros,include_file_mtime
-  QT_VERSION: 6.8.3
+  QT_VERSION: 6.11.2
   VCPKG_TAG: 2026.07.29
+  PP_VCPKG_WARM_MIN: "20"
   APPIMAGE_EXTRACT_AND_RUN: "1"
 
 jobs:
   # ────────────────────────────────────────────────────────────────────────────
-  # appimage: release 构建 + AppImage 打包（内含四项烟测）+ 产物启动烟测 + artifact(30 天)
-  # 准备块逐字照搬 build-test.yml 的 appimage job（apt/Qt/vcpkg/ccache 四类缓存）。
+  # appimage（预算 12 min）: release 构建 + AppImage 打包（4 项内置烟测）+ 启动烟测 + artifact(30 天)
   # ────────────────────────────────────────────────────────────────────────────
   appimage:
+    name: appimage
     runs-on: ubuntu-24.04
-    timeout-minutes: 60         # M3-T11b（原 90）：与 build-test 的 appimage job 同口径
+    timeout-minutes: 20         # 硬顶（预算 12 min）
+    env:
+      QT_DIR: ${{ github.workspace }}/Qt/6.11.2/gcc_64
     steps:
       - uses: actions/checkout@v4
+
+      - name: 依赖单源一致性断言（tools/versions.env）
+        run: |
+          for kv in "QT_VERSION=$QT_VERSION" "VCPKG_TAG=$VCPKG_TAG"; do
+            grep -qxF "$kv" tools/versions.env || { echo "::error::单源不一致: tools/versions.env 中找不到 '$kv'"; exit 1; }
+          done
+          echo "versions.env OK: QT_VERSION=$QT_VERSION VCPKG_TAG=$VCPKG_TAG"
 
       - name: apt 系统依赖（tools/ci-system-deps.txt）
         run: bash tools/ci-install-deps.sh
 
-      - name: Qt ${{ env.QT_VERSION }} 缓存（restore）
+      - name: Qt ${{ env.QT_VERSION }} 缓存（restore，本 workflow 唯一写者）
         id: qt-cache
         uses: actions/cache/restore@v4
         with:
-          path: ${{ github.workspace }}/Qt/6.8.3/gcc_64
-          key: qt-6.8.3-gcc_64-${{ runner.os }}-${{ runner.arch }}
-          restore-keys: qt-6.8.3-gcc_64-
+          path: ${{ github.workspace }}/Qt/6.11.2/gcc_64
+          key: qt-${{ env.QT_VERSION }}-gcc_64-${{ runner.os }}-${{ runner.arch }}
+          restore-keys: qt-${{ env.QT_VERSION }}-gcc_64-
 
-      - name: Qt ${{ env.QT_VERSION }} via aqtinstall
-        if: steps.qt-cache.outputs.cache-hit != 'true'
+      - name: Qt 就绪断言（缺失 ⇒ 早失败，指路 warm-cache）
+        # 发行轮次同样禁止冷构建（§12.6：release 也受 20min 硬顶约束）⇒ 缺 Qt 直接红。
         run: |
-          pip3 install aqtinstall
-          aqt install-qt linux desktop "$QT_VERSION" linux_gcc_64 -O "$GITHUB_WORKSPACE/Qt"
-
-      - name: Qt 就绪断言
-        run: |
-          test -f "$QT_DIR/lib/libQt6Core.so.6" || { echo "::error::Qt 缺失: $QT_DIR"; exit 1; }
-          echo "Qt $(du -sh "$QT_DIR" | cut -f1) @ $QT_DIR"
-          ls -1 "$QT_DIR/plugins/platforms/libqoffscreen.so" "$QT_DIR/plugins/platforms/libqxcb.so"
+          test -f "$QT_DIR/lib/libQt6Core.so.6" || {
+            echo "::error::Qt 缺失（未播种）: $QT_DIR"
+            echo "::error::→ 先跑 Actions → warm-cache → Run workflow 播种 Qt $QT_VERSION / linux_gcc_64（设计 §12.4）"
+            exit 1
+          }
+          echo "Qt OK @ $QT_DIR"
 
       - name: vcpkg ${{ env.VCPKG_TAG }}（pinned）
         run: |
@@ -86,17 +124,27 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/.cache/vcpkg-binary
-          key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-
+            vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-
             vcpkg-
 
-      - name: ccache（restore）
+      - name: vcpkg 缓存暖度断言（miss ⇒ 早失败，指路 warm-cache）
+        run: |
+          n=$(find "$VCPKG_DEFAULT_BINARY_CACHE" -type f -name '*.zip' 2>/dev/null | wc -l)
+          echo "vcpkg binary cache archives = $n（判据 ≥ $PP_VCPKG_WARM_MIN）"
+          if [ "$n" -lt "$PP_VCPKG_WARM_MIN" ]; then
+            echo "::error::vcpkg 二进制缓存未播种（archive=$n）—— 冷构建 ≈40 min，直接击穿硬顶。"
+            echo "::error::→ 先跑 Actions → warm-cache → Run workflow 播种（设计 §12.4 / R24）。"
+            exit 1
+          fi
+
+      - name: ccache（restore，写者=main-full 的 linux job）
         id: ccache-cache
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/.cache/ccache
-          key: ccache-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/**', 'CMakePresets.json') }}-${{ github.run_id }}
+          key: ccache-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/**', 'CMakePresets.json') }}-${{ hashFiles('cmake/**', 'triplets/**') }}-${{ github.run_id }}
           restore-keys: ccache-${{ runner.os }}-
 
       - name: 语料存在性断言（不重新生成）
@@ -104,21 +152,30 @@ jobs:
           n=$(git ls-files tests/golden/base | wc -l)
           m=$(git ls-files tests/golden/smoke | grep -c '\.json$')
           [ "$n" -ge 16 ] || { echo "::error::语料缺失: tests/golden/base = $n 个（期望 ≥16）"; exit 1; }
-          [ "$m" -ge 16 ] || { echo "::error::金样断言缺失: tests/golden/smoke/*.json = $m 个（期望 ≥16）"; exit 1; }
+          [ "$m" -ge 20 ] || { echo "::error::金样断言缺失: tests/golden/smoke/*.json = $m 个（期望 ≥20）"; exit 1; }
           echo "语料 OK: base=$n 文件、smoke 断言=$m 个（均已入库，未重新生成）"
 
-      - name: configure release
-        run: cmake --preset release
-
-      - name: build release
-        run: cmake --build --preset release
+      - name: configure + build release
+        run: |
+          T0=$(date +%s)
+          cmake --preset release
+          T1=$(date +%s)
+          cmake --build --preset release
+          T2=$(date +%s)
+          {
+            echo -e "configure release\t$(( T1 - T0 ))"
+            echo -e "build release\t$(( T2 - T1 ))"
+          } >> "$RUNNER_TEMP/pp-steps.tsv"
 
       - name: 打包 AppImage（bash tools/make_appimage.sh dist）
-        # 脚本内置四项烟测（ldd 自检 / AppRun+desktop 结构 / 依赖闭包 A+B / 产物内许可 40 份）。
-        # PP_BUILD_DIR: CI 的 release 预设落在 build/release（脚本默认是本地约定 build/m2-release）。
+        # 脚本内置 4 项烟测（ldd 自检 / AppRun+desktop 结构 / 依赖闭包 A+B / 产物内许可 ≥30）。
         env:
           PP_BUILD_DIR: build/release
-        run: bash tools/make_appimage.sh dist
+        run: |
+          set -o pipefail
+          T0=$(date +%s)
+          bash tools/make_appimage.sh dist 2>&1 | tee "$RUNNER_TEMP/appimage.log"
+          echo -e "make_appimage（含 4 项内置烟测）\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
 
       - name: 产物指纹（sha256 / 体积 / 目标机系统要求条数）
         run: |
@@ -127,7 +184,6 @@ jobs:
           SHA="$(sha256sum "$APPIMAGE" | cut -d' ' -f1)"
           SIZE="$(stat -c '%s' "$APPIMAGE")"
           SYS="$(grep -cE '^  lib' "$DEPS" || true)"
-          # GITHUB_ENV 的值在**后续**步骤才可见；本步的日志用上面这些局部量打印。
           {
             echo "APPIMAGE=$APPIMAGE"
             echo "APPIMAGE_NAME=$(basename "$APPIMAGE")"
@@ -142,8 +198,6 @@ jobs:
           echo "deps      $DEPS（目标机系统要求 ${SYS:-0} 条 soname）"
 
       - name: 产物启动烟测（offscreen；APPIMAGE_EXTRACT_AND_RUN 免 FUSE）
-        # 打包产物级别的门禁：真实启动一次 GUI，验证随包 Qt/平台插件闭包能加载、进程不早退。
-        # env -u DISPLAY/-u WAYLAND_DISPLAY：runner 无 X 是常态，同时杜绝 AppRun 走弹窗分支。
         run: |
           set +e
           LOG="$RUNNER_TEMP/appimage-start.log"
@@ -189,8 +243,8 @@ jobs:
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
-          path: ${{ github.workspace }}/Qt/6.8.3/gcc_64
-          key: qt-6.8.3-gcc_64-${{ runner.os }}-${{ runner.arch }}
+          path: ${{ github.workspace }}/Qt/6.11.2/gcc_64
+          key: qt-${{ env.QT_VERSION }}-gcc_64-${{ runner.os }}-${{ runner.arch }}
 
       - name: vcpkg binary cache（save）
         if: always()
@@ -198,34 +252,52 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/.cache/vcpkg-binary
-          key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: 汇总 → $GITHUB_STEP_SUMMARY
+        if: always()
+        run: |
+          set +e
+          {
+            echo "## appimage job 汇总（发行道；预算 12 min / 硬顶 20 min）"
+            echo ""
+            echo "| 项目 | 值 |"
+            echo "| --- | --- |"
+            echo "| 产物 | ${APPIMAGE_NAME:-<无>} |"
+            echo "| 体积 | ${APPIMAGE_SIZE:-?} bytes |"
+            echo "| sha256 | \`${APPIMAGE_SHA256:-?}\` |"
+            echo "| 目标机系统要求 | ${DEPS_SYS:-?} 条 soname |"
+            echo ""
+            echo "| 阶段 | 秒 |"
+            echo "| --- | --- |"
+            awk -F'\t' '{printf "| %s | %s |\n", $1, $2}' "$RUNNER_TEMP/pp-steps.tsv" 2>/dev/null
+            echo ""
+            echo "**闭包门禁**: $(grep -E '① \[FAIL-A\]|② \[FAIL-B\]' "$RUNNER_TEMP/appimage.log" 2>/dev/null | sed 's/^ *//' | tr '\n' ' ')"
+            echo ""
+            echo "**启动烟测**: \`--version\` + offscreen GUI 6s 存活性 PASS"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # ────────────────────────────────────────────────────────────────────────────
-  # winzip: release 构建 + tools/make_winzip.py（五项内置烟测 + offscreen ui-smoke）+ artifact(30 天)
+  # winzip（预算 15 min）: release 构建 + win64.zip（5 项内置门禁/烟测）+ artifact(30 天)
   # ────────────────────────────────────────────────────────────────────────────
   winzip:
+    name: winzip
     runs-on: windows-2025
-    timeout-minutes: 60         # M3-T11b（原 120）：与 build-test 的 winzip job 同口径
+    timeout-minutes: 20         # 硬顶（预算 15 min）
     env:
-      QT_DIR: ${{ github.workspace }}/Qt/6.8.3/msvc2022_64
+      QT_DIR: ${{ github.workspace }}/Qt/6.11.2/msvc2022_64
     steps:
       - uses: actions/checkout@v4
 
-      - name: Qt ${{ env.QT_VERSION }} 缓存（restore）
+      - name: Qt ${{ env.QT_VERSION }} 缓存（restore，写者=main-full 的 windows job）
         id: qt-cache
         uses: actions/cache/restore@v4
         with:
-          path: ${{ github.workspace }}/Qt/6.8.3/msvc2022_64
-          key: qt-6.8.3-win64_msvc2022_64-${{ runner.os }}-${{ runner.arch }}
-          restore-keys: qt-6.8.3-win64_msvc2022_64-
+          path: ${{ github.workspace }}/Qt/6.11.2/msvc2022_64
+          key: qt-${{ env.QT_VERSION }}-win64_msvc2022_64-${{ runner.os }}-${{ runner.arch }}
+          restore-keys: qt-${{ env.QT_VERSION }}-win64_msvc2022_64-
 
-      - name: Qt ${{ env.QT_VERSION }} via aqtinstall
-        if: steps.qt-cache.outputs.cache-hit != 'true'
-        run: |
-          python -m pip install --upgrade aqtinstall
-          python -m aqt install-qt windows desktop "$env:QT_VERSION" win64_msvc2022_64 -O "$env:GITHUB_WORKSPACE/Qt"
-
-      - name: Qt 就绪断言
+      - name: Qt 就绪断言（缺失 ⇒ 早失败，指路 warm-cache）
         run: |
           $paths = @(
             "$env:QT_DIR\bin\Qt6Core.dll",
@@ -233,11 +305,14 @@ jobs:
             "$env:QT_DIR\plugins\platforms\qoffscreen.dll"
           )
           $missing = @($paths | Where-Object { -not (Test-Path $_) })
-          if ($missing.Count -gt 0) { Write-Error "Qt 缺失: $($missing -join ', ')"; exit 1 }
+          if ($missing.Count -gt 0) {
+            Write-Error "Qt 缺失（未播种）: $($missing -join ', ')"
+            Write-Error "→ 先跑 Actions → warm-cache → Run workflow 播种 Qt $env:QT_VERSION / win64_msvc2022_64（设计 §12.4）"
+            exit 1
+          }
           Write-Output "Qt OK @ $env:QT_DIR"
 
       - name: Qt bin 注入 PATH（供任何启动 exe 的步骤使用）
-        # M3-T11b：不依赖 env.py 的注入行为；GITHUB_PATH 对后续所有步骤生效。
         run: |
           "$env:QT_DIR\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
           Write-Output "added: $env:QT_DIR\bin"
@@ -256,47 +331,68 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/.cache/vcpkg-binary
-          key: vcpkgwin-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: vcpkgwin-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            vcpkgwin-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-
+            vcpkgwin-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-
             vcpkgwin-
+
+      - name: vcpkg 缓存暖度断言（miss ⇒ 早失败，指路 warm-cache）
+        run: |
+          $n = @(Get-ChildItem -Recurse -File "$env:VCPKG_DEFAULT_BINARY_CACHE" -Filter *.zip -ErrorAction SilentlyContinue).Count
+          Write-Output "vcpkg binary cache archives = $n（判据 ≥ $env:PP_VCPKG_WARM_MIN）"
+          if ($n -lt [int]$env:PP_VCPKG_WARM_MIN) {
+            Write-Error "vcpkg 二进制缓存未播种（archive=$n）—— 冷构建 ≈40 min，直接击穿硬顶。"
+            Write-Error "→ 先跑 Actions → warm-cache → Run workflow 播种（设计 §12.4 / R24）。"
+            exit 1
+          }
 
       - name: 语料存在性断言（不重新生成）
         run: |
           $n = @(git ls-files tests/golden/base).Count
           $m = @(git ls-files tests/golden/smoke | Where-Object { $_ -like '*.json' }).Count
           if ($n -lt 16) { Write-Error "语料缺失: tests/golden/base = $n 个（期望 ≥16）"; exit 1 }
-          if ($m -lt 16) { Write-Error "金样断言缺失: tests/golden/smoke/*.json = $m 个（期望 ≥16）"; exit 1 }
+          if ($m -lt 20) { Write-Error "金样断言缺失: tests/golden/smoke/*.json = $m 个（期望 ≥20）"; exit 1 }
           Write-Output "语料 OK: base=$n 文件、smoke 断言=$m 个（均已入库，未重新生成）"
 
-      - name: configure release
+      - name: configure + build release
         run: |
+          $T0 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
           python tools/env.py run -- cmake --preset release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: build release
-        run: |
           python tools/env.py run -- cmake --build --preset release
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $rc = $LASTEXITCODE
+          Add-Content "$env:RUNNER_TEMP\pp-steps.tsv" "configure+build release`t$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $T0)"
+          if ($rc -ne 0) { exit $rc }
 
       - name: configure + build release-dev 子集（photopipeline，供 E-2 offscreen 走查）
         run: |
+          $T0 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
           python tools/env.py run -- cmake --preset release-dev
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/env.py run -- cmake --build build/release-dev --target photopipeline
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $rc = $LASTEXITCODE
+          Add-Content "$env:RUNNER_TEMP\pp-steps.tsv" "configure+build release-dev 子集(photopipeline)`t$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $T0)"
+          if ($rc -ne 0) { exit $rc }
 
-      - name: 打包 win64 zip（tools/make_winzip.py，内置五项烟测）
+      - name: 打包 win64 zip（tools/make_winzip.py，内置五门禁/烟测）
         run: |
+          $T0 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
           python tools/env.py run -- python tools/make_winzip.py dist --smoke-exe build/release-dev/photopipeline.exe 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\winzip.log"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $rc = $LASTEXITCODE
+          Add-Content "$env:RUNNER_TEMP\pp-steps.tsv" "make_winzip（含 5 项内置门禁/烟测）`t$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $T0)"
+          if ($rc -ne 0) { exit $rc }
 
-      - name: 产物指纹（sha256 / 体积 / 条目数）
+      - name: 产物指纹（sha256 / 体积 / 条目数）→ GITHUB_ENV
         run: |
           $zip = (Get-ChildItem dist\PhotoPipeline-*-win64.zip | Select-Object -First 1).FullName
           $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower()
           $size = (Get-Item $zip).Length
           $entries = python -c "import zipfile,sys; print(len(zipfile.ZipFile(sys.argv[1]).namelist()))" $zip
+          "ZIP=$zip" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ZIP_NAME=$([IO.Path]::GetFileName($zip))" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ZIP_SHA256=$hash" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ZIP_SIZE=$size" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ZIP_ENTRIES=$entries" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Output "zip     $([IO.Path]::GetFileName($zip))"
           Write-Output "sha256  $hash"
           Write-Output "体积    $size bytes"
@@ -316,28 +412,160 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/.cache/vcpkg-binary
-          key: vcpkgwin-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: vcpkgwin-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: 汇总 → $GITHUB_STEP_SUMMARY
+        if: always()
+        env:
+          QT_HIT: ${{ steps.qt-cache.outputs.cache-hit }}
+          VCPKG_HIT: ${{ steps.vcpkg-cache.outputs.cache-hit }}
+        run: |
+          $log = @(Get-Content "$env:RUNNER_TEMP\winzip.log" -ErrorAction SilentlyContinue)
+          function GateLine($pattern) { ($log | Where-Object { $_ -match $pattern } | Select-Object -Last 1) }
+          $lines = @()
+          $lines += "## winzip job 汇总（发行道；预算 15 min / 硬顶 20 min）"
+          $lines += ""
+          $lines += "| 项目 | 值 |"
+          $lines += "| --- | --- |"
+          $lines += "| 产物 | $($env:ZIP_NAME) |"
+          $lines += "| 体积 | $($env:ZIP_SIZE) bytes |"
+          $lines += "| sha256 | $($env:ZIP_SHA256) |"
+          $lines += "| zip 条目 | $($env:ZIP_ENTRIES) |"
+          $lines += "| Qt / vcpkg 缓存命中 | $($env:QT_HIT) / $($env:VCPKG_HIT) |"
+          $lines += ""
+          $lines += "| 阶段 | 秒 |"
+          $lines += "| --- | --- |"
+          if (Test-Path "$env:RUNNER_TEMP\pp-steps.tsv") {
+            Import-Csv -Path "$env:RUNNER_TEMP\pp-steps.tsv" -Delimiter "`t" -Header step,sec |
+              ForEach-Object { $lines += "| $($_.step) | $($_.sec) |" }
+          }
+          $lines += ""
+          $lines += "**门禁 A（闭包）**: $(GateLine '闭包门禁 A')"
+          $lines += ""
+          $lines += "**门禁 B（Qt 来源）**: $(GateLine '来源门禁 B')"
+          $lines += ""
+          $lines += "**断言 C（结构）**: $(GateLine '结构断言 C')"
+          $lines += ""
+          $lines += "**断言 D（许可）**: $(GateLine '许可断言 D')"
+          $lines += ""
+          $lines += "**烟测 E-1 / E-2**: $(GateLine '烟测 E-1') ｜ $(GateLine '烟测 E-2')"
+          $lines | Add-Content "$env:GITHUB_STEP_SUMMARY"
 
   # ────────────────────────────────────────────────────────────────────────────
-  # publish: 汇总两个 artifact → tag↔版本一致性断言 → gh release create
+  # probe-appimage（预算 2 min）: §12.7 ② 下载产物 → --version 逐字断言 + sha256 复核
+  #   独立于 appimage job 的结论（只依赖它的 artifact 存在性）。
+  # ────────────────────────────────────────────────────────────────────────────
+  probe-appimage:
+    name: probe-appimage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20         # 硬顶（预算 2 min）
+    needs: appimage
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 下载 AppImage artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: PhotoPipeline-AppImage
+          path: dist-probe
+
+      - name: 产物 --version 断言（发布级校验，独立于构建 job 结论）
+        run: |
+          set +e
+          APPIMAGE="$(ls -1 dist-probe/PhotoPipeline-*-x86_64.AppImage | head -1)"
+          echo "产物: $(basename "$APPIMAGE")"
+          sha256sum "$APPIMAGE"
+          env -u DISPLAY -u WAYLAND_DISPLAY QT_QPA_PLATFORM=offscreen \
+            "$APPIMAGE" --version > "$RUNNER_TEMP/version.log" 2>&1
+          rc=$?; cat "$RUNNER_TEMP/version.log"
+          [ "$rc" -eq 0 ] || { echo "::error::下载件 --version 退出码 $rc"; exit 1; }
+          TAG="${GITHUB_REF_NAME}"; VER="${TAG#v}"
+          grep -qx "PhotoPipeline $VER" "$RUNNER_TEMP/version.log" || {
+            echo "::error::下载件 --version 与 tag 不一致（期望 'PhotoPipeline $VER'）"; exit 1; }
+          echo "probe-appimage OK: PhotoPipeline $VER"
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # probe-winzip（预算 3 min）: §12.7 ② 下载 zip → 解包 → staging exe --version 断言
+  #   Windows 二进制只能在 Windows 上跑 ⇒ 必须有这个 job（否则"下载产物各跑一次 --version"缺一角）。
+  # ────────────────────────────────────────────────────────────────────────────
+  probe-winzip:
+    name: probe-winzip
+    runs-on: windows-2025
+    timeout-minutes: 20         # 硬顶（预算 3 min）
+    needs: winzip
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 下载 win64 zip artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: PhotoPipeline-win64
+          path: dist-probe
+
+      - name: 解包 + 产物 --version 断言（发布级校验，独立于构建 job 结论）
+        run: |
+          $zip = (Get-ChildItem dist-probe\PhotoPipeline-*-win64.zip | Select-Object -First 1).FullName
+          Write-Output "产物: $([IO.Path]::GetFileName($zip))"
+          (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower()
+          $stage = Join-Path $env:RUNNER_TEMP "zipstage"
+          Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
+          Expand-Archive -Path $zip -DestinationPath $stage -Force
+          $exe = (Get-ChildItem -Recurse -Filter photopipeline.exe $stage | Select-Object -First 1).FullName
+          if (-not $exe) { Write-Error "zip 内没有 photopipeline.exe"; exit 1 }
+          $ver = & $exe --version
+          Write-Output "下载件 --version -> $ver"
+          $TAG = $env:GITHUB_REF_NAME; $VER = $TAG -replace '^v', ''
+          if ("$ver".Trim() -ne "PhotoPipeline $VER") {
+            Write-Error "下载件 --version 与 tag 不一致（期望 'PhotoPipeline $VER'，实际 '$ver'）"; exit 1
+          }
+          Write-Output "probe-winzip OK: PhotoPipeline $VER"
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # publish（预算 2 min）: §12.7 ① 查重 → tag↔版本一致性 → ③ gh release create --repo
   # ────────────────────────────────────────────────────────────────────────────
   publish:
-    needs: [appimage, winzip]
+    name: publish
+    needs: [appimage, winzip, probe-appimage, probe-winzip]
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 20         # 硬顶（预算 2 min）
     steps:
-      # tag 运行需要完整提交/tag 历史：gh release create --generate-notes 依赖 git 仓库
-      # 上下文（run #1 实测缺失即报 `failed to run git: fatal: not a git repository`）。
+      # tag 运行需要完整提交/tag 历史：gh release create --generate-notes 依赖 git 仓库上下文
+      # （M3 实测缺失即报 `failed to run git: fatal: not a git repository`）。
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: 下载两个平台的发行产物（合并到 dist-release/）
+      - name: ① 查重（gh release view：该 tag 已有 Release ⇒ 显式失败）
+        # §12.7 三件套之一。M3 时代的做法是让 `gh release create` 隐式报冲突 —— 报错埋在其他输出里，
+        # 且"tag 已发布"这件事值得一条自己的、可读的红灯。**发布前**就跑，避免白下载/白校验。
+        # 另注发行纪律（任务书 §5-8 / M3 §7.1-11）：tag 未发布资产前可移动，发布后不可移动。
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::该 tag 已有 Release：$TAG（发行纪律：已发布的 tag 不可移动；如需重发请先人工处置）"
+            exit 1
+          fi
+          echo "查重 OK: tag $TAG 尚无 Release"
+
+      - name: 下载两个平台的发行产物（合并到 dist-release/；两个 probe job 已各自验过 --version）
         uses: actions/download-artifact@v4
         with:
           pattern: PhotoPipeline-*
           merge-multiple: true
           path: dist-release
+
+      - name: ② 发布级产物校验（AppImage 再跑一次 --version：此刻输入是**下载件**）
+        run: |
+          set +e
+          APPIMAGE="$(ls -1 dist-release/PhotoPipeline-*-x86_64.AppImage | head -1)"
+          env -u DISPLAY -u WAYLAND_DISPLAY QT_QPA_PLATFORM=offscreen \
+            "$APPIMAGE" --version > "$RUNNER_TEMP/publish-version.log" 2>&1
+          rc=$?
+          cat "$RUNNER_TEMP/publish-version.log"
+          [ "$rc" -eq 0 ] || { echo "::error::发布输入 AppImage --version 退出码 $rc"; exit 1; }
+          echo "sha256（发布输入）:"; sha256sum "$APPIMAGE" dist-release/PhotoPipeline-*-win64.zip
 
       - name: tag↔版本一致性断言（两侧产物名都必须含 tag 版本）
         run: |
@@ -349,7 +577,7 @@ jobs:
           [ "$AVER" = "$VER" ] && [ "$ZVER" = "$VER" ] || { echo "::error::版本与 tag 不一致: tag=$VER appimage=$AVER winzip=$ZVER"; exit 1; }
           echo "tag=$TAG 版本一致: appimage=$AVER winzip=$ZVER"
 
-      - name: 发布 GitHub Release
+      - name: ③ 发布 GitHub Release（--repo 显式定位保留）
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -361,3 +589,31 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --title "PhotoPipeline $VER" \
             --generate-notes
+          echo "§ Release $TAG 已发布（附件：AppImage + deps.txt + win64.zip）"
+
+      - name: 汇总 → $GITHUB_STEP_SUMMARY
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "## publish job 汇总（发行道；预算 2 min / 硬顶 20 min）"
+            echo ""
+            echo "| 项目 | 值 |"
+            echo "| --- | --- |"
+            echo "| tag | ${GITHUB_REF_NAME} |"
+            echo "| 查重（§12.7 ①）| \`gh release view\` 前置探测（已有 Release ⇒ 显式失败）|"
+            echo "| 产物 --version（§12.7 ②）| probe-appimage / probe-winzip 独立探测 + 发布输入复核 |"
+            echo "| --repo（§12.7 ③）| \`--repo \$GITHUB_REPOSITORY\` 显式定位 |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          # 预算校准（§12.3 发布道 12/15/3 + 探测 job；读不到 jobs API 不红 job —— 门禁是 timeout 硬顶）
+          if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" \
+               > "$RUNNER_TEMP/jobs.json" 2>/dev/null; then
+            python3 tools/ci-budget.py "$RUNNER_TEMP/jobs.json" \
+              --budget "appimage=12,winzip=15,probe-appimage=2,probe-winzip=3,publish=2" \
+              --wall-limit 20 --title "release 预算校准（设计 §12.3；关键路径 = winzip 15 + probe-winzip 3 + publish 2 = 20min 边界）" \
+              >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "_预算校准表不可得（jobs API 读取失败）。_" >> "$GITHUB_STEP_SUMMARY"
+          fi

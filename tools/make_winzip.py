@@ -30,7 +30,8 @@ env 覆盖:
   * 断言 D（许可）: licenses/*/copyright 计数 ≥30 且 licenses/PhotoPipeline/LICENSE 存在；
     **写盘前 + zip 内各校验一次**（阈值 30 与 AppImage 同口径）。
   * 烟测 E（启动）: staging 内 exe 跑 --version → 冻结行 `PhotoPipeline <ver>` + rc 0；
-    给出 --smoke-exe 时追加 E-2（offscreen --ui-smoke，断言 `UI-SMOKE OK shots=8 pages=3`）。
+    给出 --smoke-exe 时追加 E-2（offscreen --ui-smoke，断言 `UI-SMOKE OK shots=12 pages=3`；
+    冻结行 M4-W3-T14 起为 shots=12，来源 tests/ui_smoke.py 的 FROZEN_LINE）。
   * 指纹 F: 打印产物字节数 + sha256 + zip 条目数。
 
 退出码: 0 成功；1 任一硬门禁失败；2 输入资产缺失（构建产物 / windeployqt）。
@@ -64,7 +65,7 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FROZEN_UI_SMOKE = 'UI-SMOKE OK shots=8 pages=3'
+FROZEN_UI_SMOKE = 'UI-SMOKE OK shots=12 pages=3'   # M4-W3-T14 起 12 张（与 tests/ui_smoke.py 同源）
 VERSION_RE = re.compile(r'^PhotoPipeline \d+\.\d+\.\d+$')
 
 # 门禁 A 判据（M3-T11 v2.2 / R2）：不再维护硬编码系统 DLL 白名单（永远列不全），

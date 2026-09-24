@@ -325,6 +325,7 @@ std::string snapshot_params(const ParamSet& s);
 |---|---|
 | 键名 | `"__lossless"`（双下划线前缀 = 保留键；`ParamValue` 为 `bool`） |
 | 注入点 | `default_params` / `apply_locks` / `validate_params` / `fill_defaults`（T2 已实现）；**T8 `run_one_file` 构造有效参数集时必须置为 `cfg.lossless`**；**T10 参数表单随无损开关同步写入**；T11 预设对话框经 `PresetData.lossless` 同步 |
+| 注入点（**0.3.0 追加**；M4-T13 落地 / M4-T21 补登记） | **预设 JSON 载入**：schema v2 的 `outputs[i].params.lossless`（该 format 已声明显式 schema 参数时）或 `outputs[i].lossless`（未声明者：jpeg 无无损技术，png/tiff/bmp 技术本身无损）→ 载入时由 `src/ui/preset_io.cpp` 写回**内部管道键** `__lossless`；两个载体都不存在时**不发明键**（加载结果 = JSON 所载）。0.2 的 v1 单格式 JSON 经 `migrate_preset_v1()` 落在同一注入点（R31 零丢失）。口径见 `docs/v0.3.0-design.md` §3.6 勘误 m |
 | 排除点 | **不序列化**进预设 JSON（顶层 `lossless` 字段承载）；**不显示**在任何 UI 控件；**不计入** `snapshot_params` 输出（日志另有独立 lossless 字段）；`validate_params` 不校验其范围 |
 | 冲突 | 参数表中不得出现同名 key（T2 已核对）；若未来新增以 `__` 开头的键，一律视为保留键 |
 

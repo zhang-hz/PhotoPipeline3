@@ -2,7 +2,22 @@
 
 批量像素级转码器 + 元数据手术台（batch pixel-level transcoder with metadata surgery），GPL-3.0-or-later。
 
-M0 交付仓库骨架、冻结接口、链接探针与金标语料。**M1a 交付全部编码引擎**：core 基础设施（logger / fsops / 像素预算 / 参数引擎 / 预设）、解码层、色彩层、元数据层、8 个编码器、调度器与 `--dev` 命令行 harness。**M1b 交付完整桌面 UI**：三页主窗口（元数据规则 / 输出配置 / 运行监控）、异步缩略图文件列表、内嵌地图选点、参数表单引擎、单文件 EXIF/XMP 编辑器、设置与预设对话框，以及 `--ui-smoke` 无头走查。**M2 完成 Linux 发行收口**：`--version` 版本单源、AppImage 打包（含离线打包与许可随附）、金样断言级 16 对、回归基线、ASan/UBSan/TSan 清扫，以及持续集成——`build-test.yml` 的**四个 job**（`linux` / `ui-smoke` / `appimage` / `cache-gc`）与缓存播种 workflow `warm-cache.yml`。
+M0 交付仓库骨架、冻结接口、链接探针与金标语料。**M1a 交付全部编码引擎**：core 基础设施（logger / fsops / 像素预算 / 参数引擎 / 预设）、解码层、色彩层、元数据层、8 个编码器、调度器与 `--dev` 命令行 harness。**M1b 交付完整桌面 UI**：三页主窗口（元数据规则 / 输出配置 / 运行监控）、异步缩略图文件列表、内嵌地图选点、参数表单引擎、单文件 EXIF/XMP 编辑器、设置与预设对话框，以及 `--ui-smoke` 无头走查。**M2 完成 Linux 发行收口**：`--version` 版本单源、AppImage 打包（含离线打包与许可随附）、金样断言级 16 对、回归基线、ASan/UBSan/TSan 清扫，以及持续集成——`build-test.yml` 的**四个 job**（`linux` / `ui-smoke` / `appimage` / `cache-gc`）与缓存播种 workflow `warm-cache.yml`。**M3 完成 Windows 移植与双平台发行**（0.2.0）：UTF-8 全局语义、Mica 深色标题栏、`make_winzip.py` 五项门禁、tag 触发发行自动化。
+
+**M4 = 0.3.0（当前版本）**：从"能用的转码器"到**多格式批处理工作台**——九项需求全量落地：
+① 常驻**输入预览** + 手动**分类**（热键打标/持久化）+ 文件列表**勾选**与 EXIF 自动分组视图；
+② 元数据卡**生效值显示**（时间/GPS「原 → 生效」+ 关键信息卡，与写路径同源纯函数）；
+③ **多格式输出**（1 输入 → N 格式，解码仅一次；输出路径模板 `$format/$dir/$file/$name/$ext`；
+逐输出冲突解析）；
+④ **逐文件进度**（JPEG/JXL/PNG/TIFF 真实行级 + WebP/HEIF/AVIF 合成进度斜纹标识；逐输出行）；
+⑤ **自适应并行**（交错启动可配置 + `alloc_threads` 线程预算，总活跃线程 ≤ T）；
+⑥ **GUI 重构**（无边框窗口 + 自绘 caption 三钮、三栏骨架：文件/分类 + 预览 + 三页内容区、
+明暗双主题 tokens）；
+⑦ **CI 工业化**（pr-fast / main-full / nightly / release 四道，job 与整轮双 ≤20min 硬约束、
+clang-format 硬门禁 + clang-tidy 棘轮 + sanitizer 三路）；
+⑧ **依赖一把全升**（Qt 6.11.2 / OIIO 3.1.17 / libjxl 0.12 / exiv2 0.28.9 / x265 4.3 / SVT-AV1 4.2 …）；
+⑨ **AVX2 性能基线**（x86-64-v3 + 5 对自研热路径 SIMD：flatten / quantize / transpose / downscale / interleave）。
+金样断言级 **20 对**、ctest **27 条**、UI 冒烟冻结行 `UI-SMOKE OK shots=12 pages=3`。
 
 ## 构建（四步）
 
@@ -23,7 +38,30 @@ python tools/env.py run -- python tools/gen_corpus.py
 python tools/env.py run -- ctest --preset release
 ```
 
-其它预设：`cmake --preset dev`（ASan+UBSan，Debug）、`cmake --preset tsan`（TSan，仅 configure）。
+其它预设：`cmake --preset dev`（ASan+UBSan，Debug）、`cmake --preset tsan`（TSan，仅 configure）、
+`cmake --preset asan`（**0.3.0 追加**，Windows/MSVC AddressSanitizer，`PP_ASAN=ON`，见下）。
+
+### 构建依赖表（0.3.0）
+
+| 依赖 | 版本 / 形态 | 说明 |
+|---|---|---|
+| CMake | **3.28 ... 4.4**（兼容线；CI 装 4.4.x） | `cmake_minimum_required(VERSION 3.28...4.4)`（`CMakeLists.txt:2`） |
+| vcpkg | tag **2026.07.29**（baseline `9e593bb18ea69cc5095e012465dcd675a822ed0d`） | 超前版本一律走仓库内 `vcpkg-overlay/`（OIIO / libjxl / libheif / exiv2 / x265 / SVT-AV1 / aom / libde265 / libjpeg-turbo） |
+| Qt | **6.11.2**（Windows `msvc2022_64` / Linux `gcc_64`） | 单源 = `tools/versions.env` 的 `QT_VERSION`；`tools/bootstrap.py` 经 aqtinstall 装到 `.toolchain/Qt/` |
+| 编译器 | MSVC（VS 2022/2026 Build Tools）或 GCC ≥11 / Clang ≥12 | ISA 基线 **x86-64-v3（AVX2）**，见下 |
+| **CPU 要求** | **必须支持 AVX2 / x86-64-v3** | 0.3.0 起全产物按 AVX2 基线构建（`cmake/avx2.cmake`），**不提供 pre-AVX2 回退**；更老的 CPU 请用 0.2.0 产物 |
+| 图像 / 元数据库 | OIIO 3.1.17 · libjxl 0.12.0 · libheif 1.23.5 · exiv2 0.28.9 · x265 4.3 · SVT-AV1 4.2.0 · aom 3.15.1 · libde265 1.1.3 · libwebp 1.6.0 · lcms 2.19.1 · spdlog 1.17.0 … | 逐库版本与本版升级史见 [docs/m4-report.md](docs/m4-report.md) §1/§8；**停留项**（OIIO 3.2 / exiv2 0.29-dev / jpegli 钉 commit）见同节 |
+| Python | 3.9+（仅工具链与测试脚本用） | `tools/env.py`（环境注入）· `bootstrap.py` · `gen_corpus.py` · `regression.py` · `collect_licenses.py` · `make_winzip.py` · `tests/golden/smoke.py` · `tests/ui_smoke.py` |
+| vcpkg triplet | `x64-windows-avx2` / `x64-linux-avx2`（`triplets/`） | 只承载**命名身份**（继承原生 triplet 的动态/静态形态），**不注入 ISA/LTO flags** —— 原因（libwebp 逐文件派发 / aom IL 对象）见 [docs/m4-report.md](docs/m4-report.md) 勘误 f |
+
+### 构建与运行开关（0.3.0 追加）
+
+| 开关 | 作用 | 取值 / 默认 |
+|---|---|---|
+| `PP_ASAN`（CMake option） | Windows/MSVC 下开 AddressSanitizer（`/fsanitize=address`，仅调试用；D-W3-1 缺陷取证即经此） | `ON` / `OFF`（**默认 OFF**；`release`、`release-dev` 的 flags 与语义完全不变，只有 `cmake --preset asan` 置 ON） |
+| `PP_UI_THEME`（环境变量） | **强制 GUI 主题**（走查/截图用），优先于系统主题 | `dark` \| `light`；未设置 = 跟随系统（`src/ui/theme.h` 的单源解析；`--ui-smoke` 截图基准同源） |
+| `PP_LOG_LEVEL`（环境变量） | 启动期一次性覆盖日志级别（0.1.0 起，语义不变） | `trace`/`debug`/`info`/`warn`/`error` |
+| `PP_BUILD_DEV`（CMake option） | 构建 `--dev` harness / `--ui-smoke` / 金样与基准入口 | `ON` / `OFF`（默认 OFF，发布构建不含该代码路径） |
 
 **引擎验证构建（含 `--dev`）**：`--dev` 分支由 `PP_BUILD_DEV` 宏保护，发布构建不含该代码路径（design §8.6）。跑 harness / 矩阵 / 规模验证时另建构建目录并打开开关；并行任务各用自己的 `build/<task-id>`，依赖已在 `vcpkg_installed` 就位，关掉 manifest 自动安装以免并发写：
 
@@ -42,6 +80,10 @@ photopipeline --dev <input...> --out <dir> [options]
   --format ID            jpeg|jxl|png|tiff|webp|bmp|heif|avif（默认 jxl）
   --backend ID           后端（avif: svt-av1|libaom；默认空=首选）
   --tech ID              技术（jxl: vardct|modular；webp: lossy|lossless；默认空=首选）
+  --outputs LIST         多输出（0.3.0）：逗号分隔 format[:backend[:tech]]，可重复追加；
+                         与 --format/--backend/--tech 互斥（二选一）
+  --template TMPL        输出路径模板（0.3.0）：$format/$dir/$file | $dir/$file | $dir/$format/$file
+                         （默认按输出数派生；符号集 $format/$dir/$file/$name/$ext）
   --lossless             无损开关
   --bitdepth N           输出位深；默认 jpeg 8 / jxl 16 / png 16 / tiff 16 /
                          webp 8 / bmp 24 / heif 10 / avif 10（探测不支持时回退 8 并记 warning）
@@ -55,6 +97,13 @@ photopipeline --dev <input...> --out <dir> [options]
   --base DIR             镜像路径基准目录（可多次；默认各输入文件所在目录）
   --log-level LVL        trace|debug|info|warn|error
 退出码 = 失败文件数（0=全部成功）；stdout 末尾打印汇总表（成功/失败/跳过/取消、总耗时、吞吐 MB/s）
+sidecar（--dev 专有）：<out>/<每个产物>.pp.json（逐输出断言面）、
+                       <out>/progress-trace.jsonl（进度事件流；schema 见 tests/golden/SCHEMA.md）
+
+photopipeline --dev bench --out DIR [--bench-cases LIST] [--bench-scale N]     # 0.3.0 性能基准（§11.3）
+  # 场景：48MP TIFF→JXL / 24MP JPEG→WebP×16 批 / 单张 HEIF / 多格式(jpeg+webp) 解码共享 /
+  #       flatten·quantize·transpose·downscale·interleave 微基准（avx2 vs ref）/ 48MP 无内嵌档预览
+  # 输出：stdout 逐场景行 + `bench: verdict …` + <out>/bench-report.json（机器可读留证）
 ```
 
 示例：
@@ -70,18 +119,18 @@ build/m1-dev/photopipeline --dev tests/golden/meta/exif_full.jpg --out .cache/ou
 | 工具 | 用途 |
 |---|---|
 | `pp_verify <expected.json> <actual_output> [--selftest]` | 按 `tests/golden/SCHEMA.md` 断言 `pixel.mode`（exact / psnr+threshold_db）、`metadata[]`、`warnings_contain[]`。输出 `VERIFY <case> OK\|FAIL <detail>`，退出码 = FAIL 数；`--selftest` 用内存样本自检（不需要语料，已进 ctest） |
-| `tests/golden/smoke.py [BUILD_DIR]` | **16 对断言级**金样冒烟（M1 冒烟级 9 对 → M2 断言级 16 对），逐例跑 `photopipeline --dev` 并用 `pp_verify` 断言像素 + 元数据值 + warnings 三面。脚本内的默认 `BUILD_DIR` 指向 `build/release`，**请显式传入自己的构建目录**（或用 `PP_BIN` / `PP_VERIFY` / `OUT_ROOT` 覆盖）；输出 `SMOKE total=16 pass=16 fail=0`，退出码 = 失败例数 |
+| `tests/golden/smoke.py [BUILD_DIR]` | **20 对断言级**金样冒烟（M1 冒烟级 9 对 → M2 断言级 16 对 → M4 追加 4 对），逐例跑 `photopipeline --dev` 并用 `pp_verify` 断言像素 + 元数据值 + warnings 三面（M4 的 `progress-trace` 对另断言进度事件流）。脚本内的默认 `BUILD_DIR` 指向 `build/release`，**请显式传入自己的构建目录**（或用 `PP_BIN` / `PP_VERIFY` / `OUT_ROOT` 覆盖）；输出 `SMOKE total=20 pass=20 fail=0`，退出码 = 失败例数；`--cases a,b,c`（或 `PP_CASES`）取子集，断言口径与全量同源 |
 
 ### 测试命令
 
 ```bash
-# 单测 + M0 工具 + 金样自检（release 树共 23 条 ctest 条目）
+# 单测 + M0 工具 + 金样自检 + linkprobe（release 树共 27 条 ctest 条目）
 ctest --test-dir build/release --output-on-failure
 
 # 金标语料（27 fixture，幂等；PP_MKFIXTURES= 指向本次构建的 pp_mkfixtures）
 PP_MKFIXTURES=build/release/pp_mkfixtures python tools/gen_corpus.py
 
-# 16 对断言级金样（M1 冒烟级 9 对 → M2 断言级 16 对；需 PP_BUILD_DEV=ON 的构建，脚本走 --dev）
+# 20 对断言级金样（需 PP_BUILD_DEV=ON 的构建，脚本走 --dev）
 python tests/golden/smoke.py build/release-dev
 ```
 
@@ -92,8 +141,8 @@ python tests/golden/smoke.py build/release-dev
 | `tools/regression.py` | 全语料 `--dev` 回归基线：日志规范化后与 `tools/baseline/golden.log` diff（双跑零 diff） |
 | `tools/lsan.supp` | LeakSanitizer 抑制文件（当前**无生效规则**，注释即论证） |
 | `tools/tsan.supp` | ThreadSanitizer 抑制文件（每条规则附 happens-before 论证 + 阳性对照） |
-| `tests/golden/smoke.py` | 金样冒烟：**16 对断言级**用例（像素 + 元数据值 + warnings） |
-| `photopipeline --ui-smoke` | 无头 UI 走查：三页遍历 + 参数谓词/地图边界断言 + 真实转码，产出 8 张截图 |
+| `tests/golden/smoke.py` | 金样冒烟：**20 对断言级**用例（像素 + 元数据值 + warnings；`progress-trace` 对另含进度事件流断言） |
+| `photopipeline --ui-smoke` | 无头 UI 走查：三页遍历 + 参数谓词/地图边界断言 + 真实转码，产出 12 张截图 |
 | `tools/make_appimage.sh` | 打包 AppImage（离线、可重复重跑；内置四项烟测） |
 | `tools/ci-system-deps.txt` | CI/构建机系统依赖**单一事实来源**（64 个 apt 包，行尾注释格式；`linux` / `ui-smoke` / `appimage` 三 job 与 `warm-cache.yml` 共用同一清单） |
 | `tools/ci-install-deps.sh` | 按清单安装依赖；发行版改名容错（本发行版不存在的包只打 `::warning::`，不整体失败），真正的安全网是 soname 级自检 |
@@ -150,19 +199,21 @@ ctest --test-dir build/m2-t2 --output-on-failure
   （vcpkg debug 静态库 + 预编译 Qt/GLib DSO）不产生 TSan 影子边。含阳性对照（纯 Qt 复现器、
   直接竞态复现器）证明抑制不是"关闭竞态检测"。
 
-### `tests/golden/smoke.py` — 金样冒烟（16 对断言级）
+### `tests/golden/smoke.py` — 金样冒烟（20 对断言级）
 
 ```bash
 python tests/golden/smoke.py <build_dir>      # 须为 -DPP_BUILD_DEV=ON 的构建
 ```
 
-- 16 对用例：jpeg-lossy / jxl-lossless / png16-lossless / tiff16-lzw（走 `--preset` 分支）/
+- 20 对用例：jpeg-lossy / jxl-lossless / png16-lossless / tiff16-lzw（走 `--preset` 分支）/
   webp-lossless / heif-lossy / avif-lossy / bmp-exact / meta-artist / gray-webp / alpha-jpeg（展平警告）/
   depth-jpeg（降档警告）/ multipage-png（多页截断警告）/ unicode-png（中文+emoji 路径）/ exif-roundtrip /
-  metaonly-jpeg（仅元数据）。
+  metaonly-jpeg（仅元数据）· **M4 追加 4 对**：multiformat-split（`$format/$dir/$file` 双产物）/
+  multiformat-mirror（`$dir/$format/$file`）/ multiformat-conflict（两同主名源 → 逐输出 rename）/
+  progress-trace（多格式 + 进度事件流：单调不倒退、synthetic 口径、终态达 1.0）。
 - 每例跑 `photopipeline --dev` 后用 `pp_verify` 对 `tests/golden/smoke/<case>.json` 断言三面：
   像素（exact / PSNR+阈值）、元数据值（规范化文本）、warnings 列表。
-- 输出末行 `SMOKE total=16 pass=16 fail=0`；**退出码 = 失败例数**。可用 `PP_BIN` / `PP_VERIFY` /
+- 输出末行 `SMOKE total=20 pass=20 fail=0`；**退出码 = 失败例数**。可用 `PP_BIN` / `PP_VERIFY` /
   `OUT_ROOT` 覆盖默认路径（默认输出到 `.cache/out-smoke/`）。
 
 ### `--ui-smoke` — 无头 UI 走查
@@ -173,10 +224,12 @@ QT_QPA_PLATFORM=offscreen build/release-dev/photopipeline \
 # ctest 入口：python tests/ui_smoke.py <build_dir>（ctest -R ui_smoke）
 ```
 
-- 8 张截图：`01-meta` / `02-output` / `02b-output-avif` / `03-run` / `03b-run-done` / `04-settings` /
-  `05-exif-editor` / `06-presets`；覆盖三页遍历、参数谓词断言（jxl 无损→modular+distance 0、jpeg quality
-  显隐、tiff 压缩联动）、地图 GCJ↔WGS 边界断言（点击偏差 <0.001°）、16 文件真实转码。
-- 成功 stdout 末行 `UI-SMOKE OK shots=8 pages=3`；UI 类不进 ctest 单测，此即 UI 的回归通道。
+- 12 张截图（M4 冻结集）：`01-meta` / `02-output` / `02b-output-avif` / `03-run` / `03b-run-done` /
+  **`03c-run-idle`** / **`03d-run-rows`** / **`03e-run-cancel`** / `04-settings` / `05-exif-editor` /
+  `06-presets` / **`07-run-light`**（新增 4 张覆盖运行页空闲态/逐输出行探针态/取消态与浅色主题）；
+  覆盖三页遍历、参数谓词断言（jxl 无损→modular+distance 0、jpeg quality 显隐、tiff 压缩联动）、
+  地图 GCJ↔WGS 边界断言（点击偏差 <0.001°）、16 文件真实转码。
+- 成功 stdout 末行 `UI-SMOKE OK shots=12 pages=3`（**0.3.0 冻结行**，替换 0.2 的 `shots=8`）；UI 类不进 ctest 单测，此即 UI 的回归通道。
 
 ### `tools/make_appimage.sh` — 打包
 
@@ -227,13 +280,13 @@ python tools/env.py run -- cmake --build --preset release
 ```bash
 python tools/env.py run -- cmake --preset release-dev -B build/release-dev -DVCPKG_MANIFEST_INSTALL=OFF
 python tools/env.py run -- cmake --build build/release-dev
-python tools/env.py run -- ctest --test-dir build/release-dev --output-on-failure    # 24 条 = 23 引擎 + ui_smoke
+python tools/env.py run -- ctest --test-dir build/release-dev --output-on-failure    # 28 条 = 27 引擎 + ui_smoke
 # 或手动跑（offscreen，产出 8 张走查截图）：
 QT_QPA_PLATFORM=offscreen ./build/release-dev/photopipeline \
     --ui-smoke --inputs tests/golden/base --shots .cache/ui-review
 ```
 
-脚本化走查覆盖：三页遍历截图（01-meta / 02-output / 02b-output-avif / 03-run / 03b-run-done / 04-settings / 05-exif-editor / 06-presets）、参数谓词断言（jxl 无损→modular+distance 0、jpeg quality 显隐、tiff 压缩联动）、地图 GCJ↔WGS 边界断言（点击偏差 <0.001°）、16 文件真实转码运行；成功 stdout 末行 `UI-SMOKE OK shots=8 pages=3`。ctest 入口 `python tests/ui_smoke.py <build_dir>`。
+脚本化走查覆盖：三页遍历截图（01-meta / 02-output / 02b-output-avif / 03-run / 03b-run-done / 03c-run-idle / 03d-run-rows / 03e-run-cancel / 04-settings / 05-exif-editor / 06-presets / 07-run-light）、参数谓词断言（jxl 无损→modular+distance 0、jpeg quality 显隐、tiff 压缩联动）、地图 GCJ↔WGS 边界断言（点击偏差 <0.001°）、16 文件真实转码运行；成功 stdout 末行 `UI-SMOKE OK shots=12 pages=3`（0.3.0 冻结行）。ctest 入口 `python tests/ui_smoke.py <build_dir>`（浅色档 `PP_UI_THEME=light`）。
 
 ## 发行版（AppImage）
 
@@ -275,6 +328,8 @@ chmod +x PhotoPipeline-<版本>-x86_64.AppImage
 ### 系统要求
 
 - **平台**：Linux x86_64（本版单一发行平台；Windows / macOS 未发行）
+- **CPU 必须支持 AVX2（x86-64-v3）**：0.3.0 起全部产物按 AVX2 基线编译（`cmake/avx2.cmake` +
+  `x64-linux-avx2` triplet），**不提供 pre-AVX2 回退**；不支持 AVX2 的机器请使用 0.2.0 产物。
 - **glibc**：**官方发行产物由 CI 构建**（`appimage` job，ubuntu-24.04 runner），基线 **≥ 2.39**
   （noble 自带 glibc，`objdump -T` 最大符号版本）；**本地自建产物取决于本机 glibc** —— 例如在
   Ubuntu 26.04 上打包，实测要求 `GLIBC_2.43`，该产物只适用于 glibc ≥ 2.43 的目标机。两句都成立：
@@ -320,7 +375,7 @@ chmod +x PhotoPipeline-<版本>-x86_64.AppImage
 
 ## 发行版（Windows）
 
-**M3 起提供 Windows x64 免安装产物**（0.2.0 为首个 Windows 版本）；与 Linux 的 AppImage 同一引擎
+**M3 起提供 Windows x64 免安装产物**（0.2.0 为首个 Windows 版本，当前版本 0.3.0）；与 Linux 的 AppImage 同一引擎
 与界面，差异只在打包形态（zip vs AppImage）与平台运行时（MSVC 运行时 / Qt msvc2022_64）。
 
 ### 下载与运行
@@ -338,7 +393,9 @@ chmod +x PhotoPipeline-<版本>-x86_64.AppImage
 
 - **Windows 10 1903+ / Windows 11**，x64。1903 是**下限**：可执行文件嵌入的应用清单声明
   `activeCodePage=UTF-8`（全局 UTF-8 语义，见 D2），更早的 Windows 不支持该清单字段。
-- 无需自备 Qt / vcpkg / VC++ 再发行包：包内已含 Qt 6.8.3 运行库（Core/Gui/Widgets/Network/Svg）
+- **CPU 必须支持 AVX2（x86-64-v3）**：0.3.0 起全部产物按 AVX2 基线编译（`cmake/avx2.cmake` +
+  `x64-windows-avx2` triplet），**不提供 pre-AVX2 回退**；不支持 AVX2 的机器请使用 0.2.0 产物。
+- 无需自备 Qt / vcpkg / VC++ 再发行包：包内已含 Qt 6.11.2 运行库（Core/Gui/Widgets/Network/Svg）
   与其插件树（`platforms/`、`imageformats/`、`iconengines/`、`styles/`、`tls/`、
   `networkinformation/`、`generic/`）、全部第三方图像库 DLL，以及 **app-local VC 运行时**
   （`msvcp140*.dll` / `vcruntime140*.dll` / `concrt140.dll` / `vccorlib140.dll`，取自 MSVC 的
@@ -358,9 +415,9 @@ chmod +x PhotoPipeline-<版本>-x86_64.AppImage
 ### 命令行
 
 ```powershell
-.\photopipeline.exe --version      # → PhotoPipeline 0.2.0（单行 + 退出码 0；非 dev 门控，发布构建亦可用）
+.\photopipeline.exe --version      # → PhotoPipeline 0.3.0（单行 + 退出码 0；非 dev 门控，发布构建亦可用）
 .\photopipeline.exe                # 图形界面
-.\photopipeline.exe --ui-smoke     # 无头 UI 走查（offscreen，产出 8 张截图；仅 PP_BUILD_DEV=ON 的构建）
+.\photopipeline.exe --ui-smoke     # 无头 UI 走查（offscreen，产出 12 张截图；仅 PP_BUILD_DEV=ON 的构建）
 .\photopipeline.exe --dev ...      # 开发 harness：全语料矩阵 / 回归基线入口（同上，仅 dev 构建）
 ```
 
@@ -376,8 +433,8 @@ chmod +x PhotoPipeline-<版本>-x86_64.AppImage
 python tools\bootstrap.py                                     # 一键引导：Qt(win64_msvc2022_64) + vcpkg(pinned) + 仓库内工具链
 python tools\env.py run -- cmake --preset release             # 配置（env.py 注入 vcvars/Qt/cmake/ninja）
 python tools\env.py run -- cmake --build --preset release     # 构建（产物 build\release\photopipeline.exe）
-python tools\env.py run -- ctest --preset release             # 23 条单测
-python tools\env.py run -- python tests\golden\smoke.py build\release-dev                       # 16 对金样（需 release-dev 树）
+python tools\env.py run -- ctest --preset release             # 27 条单测
+python tools\env.py run -- python tests\golden\smoke.py build\release-dev                       # 20 对金样（需 release-dev 树）
 python tools\env.py run -- python tools\make_winzip.py dist --smoke-exe build\release-dev\photopipeline.exe   # 打包 zip
 ```
 
@@ -410,6 +467,12 @@ python tools\env.py run -- python tools\make_winzip.py dist --smoke-exe build\re
 - [docs/m1b-report.md](docs/m1b-report.md) — M1b 收口报告（任务/裁定/事故/验收证据）
 - [docs/m2-tasks.md](docs/m2-tasks.md) — M2 任务书（Linux debug 收口 + 发行；30 项 TODO 处置裁定）
 - [docs/m2-report.md](docs/m2-report.md) — M2 收口报告（任务/裁定/事故/验收证据）
+- [docs/m3-tasks.md](docs/m3-tasks.md) — M3 任务书（Windows 移植 + 双平台发行）
+- [docs/m3-report.md](docs/m3-report.md) — M3 收口报告（Windows 移植、打包/CI/发行自动化、跨平台语义裁决）
+- [docs/v0.3.0-consensus.md](docs/v0.3.0-consensus.md) — **M4 需求共识**（5 轮 × 21 项决策：预览分类 / 输出元数据 / 运行并行 / GUI 与 CI / 依赖与纪律）
+- [docs/v0.3.0-design.md](docs/v0.3.0-design.md) — **M4 设计文档**（接口解冻裁定表、多格式管线、进度/调度、GUI 规格、依赖升级表、CI 拓扑、测试与金样扩展）
+- [docs/m4-tasks.md](docs/m4-tasks.md) — **M4 任务书**（波次 W0–W5、总出口准则、subagent 开发协议与纪律）
+- [docs/m4-report.md](docs/m4-report.md) — **M4 收口报告**（九需求验收对照、总出口 8 条、金样 20 对、两大缺陷修复史、设计勘误清单落地对照、偏差与未决项）
 
 ## 许可
 

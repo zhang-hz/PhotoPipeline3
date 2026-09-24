@@ -3,9 +3,14 @@
 # 目标机器 = i7-14700K（Raptor Lake），全产物 ISA 基线 = x86-64-v3
 # （AVX2 + FMA + BMI1/BMI2 + F16C + LZCNT + MOVBE）。
 #
-# 本文件只负责**自研 targets**（pp_core / photopipeline / 单测 / M0 工具）的 flags；
-# vcpkg 依赖侧的同一组 flags 由 overlay triplet 注入
-# （triplets/x64-windows-avx2.cmake、triplets/x64-linux-avx2.cmake）——两处口径必须一致。
+# 本文件只负责**自研 targets**（pp_core / photopipeline / 单测 / M0 工具）的 flags。
+# **vcpkg 依赖侧不注入 ISA/LTO flags**（M4-T3 两次实测引爆后的裁定，见
+# docs/v0.3.0-design.md §11.1 勘误 f）：libwebp 的全局 `/arch:AVX2` 会破坏其逐文件 AVX2 +
+# 运行时派发模型（无损解码 0xC0000005），`/GL` 的 IL 对象又与 aom 端口的
+# WINDOWS_EXPORT_ALL_SYMBOLS/`__create_def` 机制冲突 ⇒ 依赖 AVX2 一律走各库自身机制
+# （OIIO `-DUSE_SIMD=avx2`、libwebp WEBP_ENABLE_SIMD、x265/SVT/aom NASM 运行时派发、
+# jxl/jpegli Highway）。故 triplets/x64-*-avx2.cmake 只承载命名身份，不设 VCPKG_*_FLAGS。
+# M4-T21 修文（与 triplet 首注、设计 §11.1 改文同口径；此前本行仍写"由 overlay triplet 注入"）。
 #
 # 纪律（§11.2）：基线即 AVX2，整仓只保留**一层**运行期分派
 # （src/core/simd 的 pp::simd::cpu_has_avx2()）；ref 实现服务测试与调试，

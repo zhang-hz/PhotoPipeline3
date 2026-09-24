@@ -1,6 +1,6 @@
 # M4-T2 §10：CMake 兼容线 3.28...4.4（CI 装 4.4.x；下界仍是 0.2.0 起的 3.28）。
 cmake_minimum_required(VERSION 3.28...4.4)
-project(PhotoPipeline VERSION 0.2.0 LANGUAGES C CXX)
+project(PhotoPipeline VERSION 0.3.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

@@ -1,4 +1,8 @@
 // PP-FROZEN(structure): 只允许替换 /* PP-PLACEHOLDER */ 注释处的内容
+//   M4-T21 修文（勘误 n）：本行原措辞对 0.3.0 已过时 —— 0.3.0/M4-T13 经追认新增了
+//   **显式无损参数行**（`lossless_param()`，key = "lossless"，见下方 PP-FROZEN(0.3.0) 块）。
+//   除该行外结构逐字不变（既有 78 条 ParamDef 的 key/type/def/lo/hi/choices 全未动；
+//   T2 只填 visible/locked）。对照见 docs/m4-report.md 勘误 n 与 docs/m1-tasks.md §3.4。
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/params.h"
 

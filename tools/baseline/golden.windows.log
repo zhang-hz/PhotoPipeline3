@@ -14,7 +14,7 @@
 # ===========================================================================
 ### run full-jpeg rc=4 args=--format jpeg
 [info] [tid] [run] [main.cpp] run start {outputs=jpeg output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-jpeg params="adaptive_quantization=true arith_code=false chroma=444 cicp_transfer_function=2 dct_method=0 distance=1 optimize_coding=true progressive=true psnr_target=0 quality=90 quality_mode=distance restart_in_rows=0 smoothing_factor=0 std_quant_tables=false xyb_mode=false"}
-[info] [tid] [run] [main.cpp] version {lib=app version=0.2.0}
+[info] [tid] [run] [main.cpp] version {lib=app version=0.3.0}
 [info] [tid] [run] [main.cpp] version {lib=qt version=6.11.2}
 [info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.17.0}
 [info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
@@ -210,7 +210,7 @@ SUMMARY files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=14236 total_ms=<ms> 
 EXIT 4 (failed files)
 ### run full-jxl rc=4 args=--format jxl
 [info] [tid] [run] [main.cpp] run start {outputs=jxl output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-jxl params="codestream_level=10 decoding_speed=0 distance=1 dots=true effort=7 epf=2 gaborish=true group_order=-1 keep_invisible=true lossless=false patches=true photon_noise=0 progressive_ac=false progressive_dc=-1 qprogressive_ac=false resampling=-1"}
-[info] [tid] [run] [main.cpp] version {lib=app version=0.2.0}
+[info] [tid] [run] [main.cpp] version {lib=app version=0.3.0}
 [info] [tid] [run] [main.cpp] version {lib=qt version=6.11.2}
 [info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.17.0}
 [info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
@@ -397,7 +397,7 @@ SUMMARY files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=24209 total_ms=<ms> 
 EXIT 4 (failed files)
 ### run full-png rc=4 args=--format png
 [info] [tid] [run] [main.cpp] run start {outputs=png output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-png params=compressionLevel=6}
-[info] [tid] [run] [main.cpp] version {lib=app version=0.2.0}
+[info] [tid] [run] [main.cpp] version {lib=app version=0.3.0}
 [info] [tid] [run] [main.cpp] version {lib=qt version=6.11.2}
 [info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.17.0}
 [info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
@@ -584,7 +584,7 @@ SUMMARY files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=28387 total_ms=<ms> 
 EXIT 4 (failed files)
 ### run full-tiff rc=4 args=--format tiff
 [info] [tid] [run] [main.cpp] run start {outputs=tiff output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-tiff params="compression=lzw deflate_level=6 predictor=2 tiff_tile_height=0 tiff_tile_width=0"}
-[info] [tid] [run] [main.cpp] version {lib=app version=0.2.0}
+[info] [tid] [run] [main.cpp] version {lib=app version=0.3.0}
 [info] [tid] [run] [main.cpp] version {lib=qt version=6.11.2}
 [info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.17.0}
 [info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
@@ -771,7 +771,7 @@ SUMMARY files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=63951 total_ms=<ms> 
 EXIT 4 (failed files)
 ### run full-webp rc=4 args=--format webp
 [info] [tid] [run] [main.cpp] run start {outputs=webp output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-webp params="alpha_compression=true alpha_filtering=1 alpha_quality=100 autofilter=false emulate_jpeg_size=false filter_sharpness=0 filter_strength=30 filter_type=true lossless=false low_memory=false method=4 partition_limit=0 partitions=0 pass=1 preprocessing=0 preset=2 qmax=100 qmin=0 quality=90 segments=4 sharp_yuv=true sns_strength=50"}
-[info] [tid] [run] [main.cpp] version {lib=app version=0.2.0}
+[info] [tid] [run] [main.cpp] version {lib=app version=0.3.0}
 [info] [tid] [run] [main.cpp] version {lib=qt version=6.11.2}
 [info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.17.0}
 [info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
@@ -960,7 +960,7 @@ SUMMARY files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=7540 total_ms=<ms> t
 EXIT 4 (failed files)
 ### run full-bmp rc=4 args=--format bmp
 [info] [tid] [run] [main.cpp] run start {outputs=bmp output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-bmp params=""}
-[info] [tid] [run] [main.cpp] version {lib=app version=0.2.0}
+[info] [tid] [run] [main.cpp] version {lib=app version=0.3.0}
 [info] [tid] [run] [main.cpp] version {lib=qt version=6.11.2}
 [info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.17.0}
 [info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
@@ -1175,7 +1175,7 @@ EXIT 4 (failed files)
 ### run full-heif rc=4 args=--format heif
 [info] [tid] [encode] [enc_heif.cpp] bit depth probe {format=heif backend="" supported=8,10,12 unsupported=""}
 [info] [tid] [run] [main.cpp] run start {outputs=heif output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-heif params=""}
-[info] [tid] [run] [main.cpp] version {lib=app version=0.2.0}
+[info] [tid] [run] [main.cpp] version {lib=app version=0.3.0}
 [info] [tid] [run] [main.cpp] version {lib=qt version=6.11.2}
 [info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.17.0}
 [info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
@@ -1388,7 +1388,7 @@ EXIT 4 (failed files)
 ### run full-avif rc=8 args=--format avif
 [info] [tid] [encode] [enc_heif.cpp] bit depth probe {format=avif backend="" supported=8,10,12 unsupported=""}
 [info] [tid] [run] [main.cpp] run start {outputs=avif output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-avif params=""}
-[info] [tid] [run] [main.cpp] version {lib=app version=0.2.0}
+[info] [tid] [run] [main.cpp] version {lib=app version=0.3.0}
 [info] [tid] [run] [main.cpp] version {lib=qt version=6.11.2}
 [info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.17.0}
 [info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
@@ -2030,7 +2030,7 @@ SUMMARY files=27 ok=19 failed=8 skipped=0 cancelled=0 bytes=23680 total_ms=<ms> 
 EXIT 8 (failed files)
 ### run meta-jpeg rc=4 args=--format jpeg
 [info] [tid] [run] [main.cpp] run start {outputs=jpeg output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=16 metadata_only=true out=.cache/regression/out-meta-jpeg params="adaptive_quantization=true arith_code=false chroma=444 cicp_transfer_function=2 dct_method=0 distance=1 optimize_coding=true progressive=true psnr_target=0 quality=90 quality_mode=distance restart_in_rows=0 smoothing_factor=0 std_quant_tables=false xyb_mode=false"}
-[info] [tid] [run] [main.cpp] version {lib=app version=0.2.0}
+[info] [tid] [run] [main.cpp] version {lib=app version=0.3.0}
 [info] [tid] [run] [main.cpp] version {lib=qt version=6.11.2}
 [info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.17.0}
 [info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
@@ -2124,7 +2124,7 @@ SUMMARY files=16 ok=12 failed=4 skipped=0 cancelled=0 bytes=6462 total_ms=<ms> t
 EXIT 4 (failed files)
 ### run meta-png rc=4 args=--format png
 [info] [tid] [run] [main.cpp] run start {outputs=png output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=16 metadata_only=true out=.cache/regression/out-meta-png params=compressionLevel=6}
-[info] [tid] [run] [main.cpp] version {lib=app version=0.2.0}
+[info] [tid] [run] [main.cpp] version {lib=app version=0.3.0}
 [info] [tid] [run] [main.cpp] version {lib=qt version=6.11.2}
 [info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.17.0}
 [info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
@@ -2218,7 +2218,7 @@ SUMMARY files=16 ok=12 failed=4 skipped=0 cancelled=0 bytes=6462 total_ms=<ms> t
 EXIT 4 (failed files)
 ### run meta-tiff rc=4 args=--format tiff
 [info] [tid] [run] [main.cpp] run start {outputs=tiff output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=16 metadata_only=true out=.cache/regression/out-meta-tiff params="compression=lzw deflate_level=6 predictor=2 tiff_tile_height=0 tiff_tile_width=0"}
-[info] [tid] [run] [main.cpp] version {lib=app version=0.2.0}
+[info] [tid] [run] [main.cpp] version {lib=app version=0.3.0}
 [info] [tid] [run] [main.cpp] version {lib=qt version=6.11.2}
 [info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.17.0}
 [info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
@@ -2312,7 +2312,7 @@ SUMMARY files=16 ok=12 failed=4 skipped=0 cancelled=0 bytes=6462 total_ms=<ms> t
 EXIT 4 (failed files)
 ### run meta-webp rc=4 args=--format webp
 [info] [tid] [run] [main.cpp] run start {outputs=webp output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=16 metadata_only=true out=.cache/regression/out-meta-webp params="alpha_compression=true alpha_filtering=1 alpha_quality=100 autofilter=false emulate_jpeg_size=false filter_sharpness=0 filter_strength=30 filter_type=true lossless=false low_memory=false method=4 partition_limit=0 partitions=0 pass=1 preprocessing=0 preset=2 qmax=100 qmin=0 quality=90 segments=4 sharp_yuv=true sns_strength=50"}
-[info] [tid] [run] [main.cpp] version {lib=app version=0.2.0}
+[info] [tid] [run] [main.cpp] version {lib=app version=0.3.0}
 [info] [tid] [run] [main.cpp] version {lib=qt version=6.11.2}
 [info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.17.0}
 [info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}

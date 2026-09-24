@@ -44,7 +44,6 @@
 #include <QFrame>
 #include <QGraphicsDropShadowEffect>
 #include <QGridLayout>
-#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QImage>
@@ -58,6 +57,7 @@
 #include <QPixmap>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QScreen>
 #include <QSettings>
 #include <QSortFilterProxyModel>
@@ -78,13 +78,16 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -115,22 +118,32 @@ namespace {
 constexpr int kPollIntervalMs = 150; // §2.14：运行轮询间隔
 constexpr int kThumbWaitMs = 10000;  // §4.3：缩略图队列空上限
 constexpr int kRunWaitMs = 120000;   // U10 冻结：冒烟实跑上限
-constexpr int kSmokeShotCount = 8;
+constexpr int kSmokeShotCount = 12;
 constexpr qint64 kMinShotBytes = 10 * 1024;
 
-// 冒烟截图清单（顺序与名称逐字节固定 = §4.3 冻结 8 张；2026-09-20 勘误以任务书为准）
+// 冒烟截图清单（顺序与名称逐字节固定；M4-T14 起 = 12 张：§4.3 冻结 8 张 + 运行页 4 张）
+//   * 03-run / 03b-run-done：**真实运行**下的运行页（运行中锁定态 / 结束态）；
+//   * 03c-run-idle：运行页空闲态（三卡空态 + 引导）；
+//   * 03d-run-rows：运行页逐输出行探针态（真实/斜纹/完成产物/失败原因 四类同行）；
+//   * 03e-run-cancel：运行页取消态（取消唯一入口 → 取消后定稿）；
+//   * 07-run-light：浅色主题运行页（明暗双主题覆盖）。
 const char *const kSmokeShots[kSmokeShotCount] = {
-    "01-meta.png",      "02-output.png",   "02b-output-avif.png", "03-run.png",
-    "03b-run-done.png", "04-settings.png", "05-exif-editor.png",  "06-presets.png",
+    "01-meta.png",      "02-output.png",      "02b-output-avif.png", "03-run.png",
+    "03b-run-done.png", "03c-run-idle.png",   "03d-run-rows.png",    "03e-run-cancel.png",
+    "04-settings.png",  "05-exif-editor.png", "06-presets.png",      "07-run-light.png",
 };
 constexpr int kShotMeta = 0;
 constexpr int kShotOutput = 1;
 constexpr int kShotAvif = 2;
 constexpr int kShotRun = 3;
 constexpr int kShotRunDone = 4;
-constexpr int kShotSettings = 5;
-constexpr int kShotExif = 6;
-constexpr int kShotPresets = 7;
+constexpr int kShotRunIdle = 5;
+constexpr int kShotRunRows = 6;
+constexpr int kShotRunCancel = 7;
+constexpr int kShotSettings = 8;
+constexpr int kShotExif = 9;
+constexpr int kShotPresets = 10;
+constexpr int kShotRunLight = 11;
 
 // ---------------------------------------------------------------------------
 // §M2-T16：走查 EXIF 编辑器 fixture 的确定性选取（消除对目录枚举顺序的依赖）
@@ -519,6 +532,14 @@ QString format_label(const QString &id) {
     return f != nullptr ? QString::fromStdString(f->label) : id;
 }
 
+// M4-T14：底栏 ETA 文案（mockup run-dark「ETA 约 00:23」）；秒 → mm:ss
+QString eta_text(int seconds) {
+    const int total = std::max(0, seconds);
+    return QStringLiteral("%1:%2")
+        .arg(total / 60, 2, 10, QLatin1Char('0'))
+        .arg(total % 60, 2, 10, QLatin1Char('0'));
+}
+
 QString conflict_label(pp::ConflictPolicy p) {
     switch (p) {
     case pp::ConflictPolicy::Rename:
@@ -626,6 +647,9 @@ struct MainWindow::Impl {
     // ---- 运行状态 ----
     std::unique_ptr<pp::Scheduler> sched;
     QTimer *poll = nullptr;
+    // M4-T14：日志尾卡喂入（§9.3「日志尾卡（5 行滚动 + 跳转）」）——单一持有者 = MainWindow：
+    // 运行期每 500ms 读最新 run-*.log 的末尾若干行推给运行页（页只渲染，不做文件 IO）
+    QTimer *log_tail = nullptr;
     bool running = false;
     // 完成检测（§2.14 的"轮询 !running()"机制不可用：pp::Scheduler::running() 只在 wait() 内清零，
     // 见报告 api-deltas）→ 轮询改为"终态事件计数 == 本批文件数"，语义等价且不阻塞 GUI。
@@ -669,6 +693,7 @@ struct MainWindow::Impl {
     void remove_selected();
     void restore_session();
     void open_logs();
+    void push_log_tail(); // M4-T14：run-*.log 末尾 5 行 → 运行页日志尾卡
     void handle_file_event(const pp::FileEvent &ev);
     void restore_selection_by_path(const QString &path);
 
@@ -714,6 +739,8 @@ struct MainWindow::Impl {
     void load_preset_file(const QString &path);
     void save_preset_named(const QString &name);
     void delete_preset_file(const QString &path);
+    // M4-T14 运行页自检（§3.4/§7：逐输出行 · 真实/斜纹像素取证 · 失败原因 · 取消态 · 浅色）
+    void smoke_probe_run(const QString &shots_dir);
     static QString repo_root();
 };
 
@@ -740,6 +767,8 @@ MainWindow::Impl::Impl(MainWindow *owner, const pp::AppSettings &s)
 
     poll = new QTimer(w);
     poll->setInterval(kPollIntervalMs);
+    log_tail = new QTimer(w);
+    log_tail->setInterval(500); // 日志尾刷新（人眼可读的节奏；不参与进度节流）
 
     filter = new Filter(this);
     w->installEventFilter(filter);
@@ -1354,6 +1383,8 @@ void MainWindow::wire() {
             on_scheduler_done();
         }
     });
+    // M4-T14：日志尾（运行期每 500ms；结束态由 on_scheduler_done 再读一次兜底）
+    connect(d.log_tail, &QTimer::timeout, this, [this] { impl_->push_log_tail(); });
 
     connect(d.page_meta, &PageMeta::rules_changed, this, [this] { refresh_status(); });
     connect(d.page_meta, &PageMeta::open_editor_requested, this,
@@ -1442,6 +1473,11 @@ void MainWindow::on_start() {
     cfg.budget_bytes = static_cast<uint64_t>(d.settings.budget_gb) << 30; // 0 = 自动
     cfg.flatten_gray = d.settings.flatten_gray;
     cfg.rotate_orientation = d.settings.rotate_orientation;
+    // M4-T14（机械性接线）：§8.1 交错步距 / §8.2 线程预算 T 的实际生效值来自设置（W1-T7 已持久化；
+    // 设置页控件归 T15）。运行总览卡的「交错 / 线程预算 / 当前分配」按这里下发的同一份值显示 ——
+    // 读数与引擎同源，不是 UI 自算的另一套数。
+    cfg.stagger_ms = d.settings.stagger_ms;
+    cfg.thread_budget = d.settings.thread_budget;
 
     // M2-T5 §2.7：交叉参数约束的最后闸门。ParamForm 已实时红字提示，这里对真正要下发的
     // 配置再校验一次；非空 → 列出全部消息并阻止开始（不进入 lock_for_run/Scheduler）。
@@ -1497,6 +1533,38 @@ void MainWindow::on_start() {
     for (const pp::FileEntry &entry : entries)
         names << path_text(entry.src);
 
+    // M4-T14：运行页运行计划（§3.4/§7.2/§8.1/§8.2）——逐源文件的尺寸/字节（行数文案与压缩比的
+    // 输入；取自列表已 probe 的摘要，零额外 IO，未 probe 则 0 = 未知，页面自动退化文案）+
+    // 输出格式清单（= 配置顺序，逐输出子行的格式 chip 与行数）+ 调度读数。
+    {
+        PageRun::RunPlan plan;
+        for (const pp::OutputFormatSpec &spec : cfg.outputs)
+            plan.format_ids << QString::fromStdString(spec.format_id);
+        plan.widths.reserve(static_cast<int>(total));
+        plan.heights.reserve(static_cast<int>(total));
+        plan.bytes.reserve(static_cast<int>(total));
+        for (std::size_t k = 0; k < total; ++k) {
+            const std::size_t row = k < run_rows.size() ? run_rows[k] : k;
+            if (row < d.model->size()) {
+                const FileRow &fr = d.model->row(row);
+                plan.widths << (fr.probe_ok ? fr.info.width : 0);
+                plan.heights << (fr.probe_ok ? fr.info.height : 0);
+            } else {
+                plan.widths << 0;
+                plan.heights << 0;
+            }
+            // 源文件字节：字节层取（std::filesystem），避免非 UTF-8 路径经 QString 往返失真
+            std::error_code ec;
+            const std::uintmax_t size = std::filesystem::file_size(entries[k].src, ec);
+            plan.bytes << (ec ? 0 : static_cast<qint64>(size));
+        }
+        plan.stagger_ms = cfg.stagger_ms;
+        plan.workers = cfg.workers;
+        plan.thread_budget = cfg.thread_budget;
+        plan.metadata_only = cfg.metadata_only;
+        d.page_run->set_plan(plan);
+    }
+
     for (const std::size_t row : run_rows)
         d.model->set_state(row, pp::FileState::Queued); // 只复位本批（参与运行）行的状态
     d.run_rows = run_rows;                              // ev.index（提交序号）→ 列表行号的映射
@@ -1524,6 +1592,8 @@ void MainWindow::on_start() {
     lock_for_run(true); // G5
     d.page_run->begin_run(total, names);
     d.poll->start();
+    d.log_tail->start();
+    impl_->push_log_tail(); // 立刻给一次（本次 run 日志刚开写）
     refresh_status();
 }
 
@@ -1537,6 +1607,7 @@ void MainWindow::on_scheduler_done() {
     if (!d.sched)
         return;
     d.poll->stop();
+    d.log_tail->stop();
     d.sched->wait();
     // 排空在途 queued 事件后再定稿，避免 end_run 之后又被迟到事件改写计数
     QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
@@ -1545,6 +1616,7 @@ void MainWindow::on_scheduler_done() {
     d.sched.reset();
     lock_for_run(false);
     impl_->on_content_changed();
+    impl_->push_log_tail(); // 结束态再读一次（末几行含 summary/收尾日志）
     refresh_status();
 }
 
@@ -1588,11 +1660,17 @@ void MainWindow::refresh_status() {
     QString text;
     bool invalid = false;
     if (d.running) {
-        // 运行中：跳过/失败计数同步状态栏（增量计数，避免每个事件 O(n) 重扫）
-        text = tr("运行中 · 完成 %1 · 失败 %2 · 跳过 %3")
+        // M4-T14（mockup run-dark 底栏）：运行中 = 「成功 N · 失败 N · 进行中 N · 排队 N」。
+        // 并行读数与运行页同源（page_run 的同一份事件流折算：已取件 − 已结算 = 进行中）。
+        const int started = d.page_run->files_started();
+        const int terminal_files = d.page_run->files_terminal();
+        const int inflight = std::max(0, started - terminal_files);
+        const int queued = std::max(0, static_cast<int>(d.run_total) - started);
+        text = tr("成功 %1 · 失败 %2 · 进行中 %3 · 排队 %4")
                    .arg(d.run_done)
                    .arg(d.run_failed)
-                   .arg(d.run_skipped);
+                   .arg(inflight)
+                   .arg(queued);
     } else if (count == 0) {
         text = tr("没有文件");
         invalid = true;
@@ -1616,25 +1694,34 @@ void MainWindow::refresh_status() {
     if (d.status_dot != nullptr)
         d.status_dot->setStyleSheet(alert);
 
-    // 输出摘要（底栏第二段；运行中保持上一次的值，避免逐事件重建 RunConfig）
+    // 输出摘要（底栏第二段）
     // M4-T13：按 mockup output-dark 底栏的产出量预告 —— 「N 个文件 × M 个格式 = N×M 个输出」；
     // 格式清单 / 模板 / 输出根目录 / 冲突策略收进悬浮提示（§9.3 不折行）。
-    if (d.output_status != nullptr && !d.running) {
-        QStringList labels;
-        for (const pp::OutputFormatSpec &spec : d.page_output->config_base().outputs)
-            labels << format_label(QString::fromStdString(spec.format_id));
-        if (labels.isEmpty())
-            labels << format_label(d.page_output->current_format());
-        const int formats = std::max(1, static_cast<int>(labels.size()));
-        d.output_status->set_full_text(tr("%1 个文件 × %2 个格式 = %3 个输出")
-                                           .arg(checked)
-                                           .arg(formats)
-                                           .arg(checked * formats));
-        d.output_status->setToolTip(
-            tr("格式：%1\n模板：%2\n输出根目录：%3\n同名冲突：%4")
-                .arg(labels.join(QStringLiteral(" + ")), d.page_output->output_template(),
-                     d.page_output->out_root(),
-                     conflict_label(d.page_output->config_base().conflict)));
+    // M4-T14（mockup run-dark 底栏第二段）：**运行中该段显示 ETA**（「ETA 约 00:23」，--txt3），
+    // 结束/空闲恢复产出量预告 —— 与原型同一条"次要状态行"的两种内容。
+    if (d.output_status != nullptr) {
+        if (d.running) {
+            const int eta = d.page_run->eta_seconds();
+            d.output_status->set_full_text(eta >= 0 ? tr("ETA 约 %1").arg(eta_text(eta))
+                                                    : tr("ETA 约 —"));
+            d.output_status->setToolTip(QString());
+        } else {
+            QStringList labels;
+            for (const pp::OutputFormatSpec &spec : d.page_output->config_base().outputs)
+                labels << format_label(QString::fromStdString(spec.format_id));
+            if (labels.isEmpty())
+                labels << format_label(d.page_output->current_format());
+            const int formats = std::max(1, static_cast<int>(labels.size()));
+            d.output_status->set_full_text(tr("%1 个文件 × %2 个格式 = %3 个输出")
+                                               .arg(checked)
+                                               .arg(formats)
+                                               .arg(checked * formats));
+            d.output_status->setToolTip(
+                tr("格式：%1\n模板：%2\n输出根目录：%3\n同名冲突：%4")
+                    .arg(labels.join(QStringLiteral(" + ")), d.page_output->output_template(),
+                         d.page_output->out_root(),
+                         conflict_label(d.page_output->config_base().conflict)));
+        }
     }
 
     // 卡头计数徽标（mockup .pill 内是纯数字）
@@ -1644,11 +1731,17 @@ void MainWindow::refresh_status() {
                                                  : QString());
     d.unsupported->setVisible(unsupported > 0);
 
-    // G5（2026-09-20 R1 修订）：底栏按钮恒为"开始"；运行中禁用（取消只在运行页）。
-    // M4-T9：文案按 mockup .go 改「▶  开始运行」；"运行中变状态"归 W3-T14。
+    // G5（2026-09-20 R1 修订）：运行中按钮禁用（**取消唯一入口 = 运行页**，该裁定不变）；
+    // M4-T14（mockup run-dark .go）：运行中按钮文案变**状态读数**「运行中… 68%」，
+    // 空闲/结束恢复「▶  开始运行」。
     // M4-T11：可开始还需勾选集非空（勾选 = 参与运行集合）
     const bool can_start = !d.running && count > 0 && checked > 0 && reason.isEmpty();
-    d.start->setText(tr("▶  开始运行"));
+    if (d.running) {
+        const int pct = d.page_run->progress_percent();
+        d.start->setText(pct >= 0 ? tr("运行中… %1%").arg(pct) : tr("运行中…"));
+    } else {
+        d.start->setText(tr("▶  开始运行"));
+    }
     d.start->setEnabled(can_start);
     const bool has_selection = d.view->selectionModel() != nullptr &&
                                !d.view->selectionModel()->selectedIndexes().isEmpty();
@@ -2307,6 +2400,50 @@ void MainWindow::Impl::open_logs() {
     }
     const std::filesystem::path newest = newest_run_log(dir);
     open_local_path_bytes(newest.empty() ? dir : newest, "logs");
+}
+
+void MainWindow::Impl::push_log_tail() {
+    // §9.3「日志尾卡（5 行滚动 + 跳转）」：单一持有者 = MainWindow（页只渲染）。
+    // 读法 = 尾部 8KB 窗口（避免整读大日志）→ 按行切 → **丢掉窗口首行的半截行** → 取末 5 行。
+    // 日志格式 = core/logger.cpp 的 `%H:%M:%S.%e [%l] [%t] %v`（与 mockup .loglines 同形）。
+    const std::filesystem::path dir = pp::platform::logs_dir();
+    if (dir.empty()) {
+        page_run->set_log_tail(QStringList(), QString());
+        return;
+    }
+    const std::filesystem::path file = newest_run_log(dir);
+    if (file.empty()) {
+        page_run->set_log_tail(QStringList(), QString());
+        return;
+    }
+    QStringList lines;
+    std::ifstream in(file, std::ios::binary);
+    if (in) {
+        in.seekg(0, std::ios::end);
+        const std::streamoff size = in.tellg();
+        if (size > 0) {
+            constexpr std::streamoff kWindow = 8192;
+            const std::streamoff start = size > kWindow ? size - kWindow : 0;
+            in.seekg(start, std::ios::beg);
+            std::string buf(static_cast<std::size_t>(size - start), '\0');
+            in.read(buf.data(), static_cast<std::streamsize>(buf.size()));
+            buf.resize(static_cast<std::size_t>(in.gcount()));
+            QString text = QString::fromUtf8(buf.data(), static_cast<int>(buf.size()));
+            if (start > 0) {
+                const int first_break = text.indexOf(QLatin1Char('\n'));
+                text = first_break >= 0 ? text.mid(first_break + 1) : QString();
+            }
+            const QStringList all = text.split(QLatin1Char('\n'));
+            for (const QString &raw : all) {
+                const QString line = raw.trimmed();
+                if (!line.isEmpty())
+                    lines << line;
+            }
+            while (lines.size() > 5)
+                lines.removeFirst();
+        }
+    }
+    page_run->set_log_tail(lines, QString::fromStdString(file.filename().string()));
 }
 
 void MainWindow::Impl::handle_file_event(const pp::FileEvent &ev) {
@@ -3758,6 +3895,405 @@ void MainWindow::Impl::smoke_probe_classify() {
     pump(120);
 }
 
+// ---------------------------------------------------------------------------
+// M4-W3-T14 运行页自检（§3.4 + §7.1-7.4 + §9.3；mockup run-dark = 精确规格）
+//   * 页实例独立（不动主窗口的运行页）：外壳容器挂主题骨架 QSS（窗口底渐变 + QFrame#pp-card
+//     等只作用于 pp-* 钩子的规则），页面只吃 tokens —— 与 smoke_probe_meta 的独立页同口径；
+//   * 探针覆盖：逐输出子行五态（真实进行中 / 斜纹合成 / 完成产物事实 / 失败原因 / 交错排队）·
+//     **真实 vs 斜纹的像素级取证**（斜纹 = 双色带 #3aa3dc/#4cc2ff 同时出现；实心 = 只有 accent，
+//     无 #3aa3dc）· 总览只读栅格（交错/线程预算/并行/当前分配）· 取消态 · 浅色主题。
+// ---------------------------------------------------------------------------
+namespace {
+
+// 迷你进度条取样：统计左/右三色 token 的命中数（取样带 = 条内中部，避开 1px 边框与圆角）
+struct BarPixels {
+    int samples = 0, accent = 0, from = 0, to = 0;
+    double accent_ratio() const { return samples > 0 ? double(accent) / samples : 0.0; }
+    double from_ratio() const { return samples > 0 ? double(from) / samples : 0.0; }
+    double to_ratio() const { return samples > 0 ? double(to) / samples : 0.0; }
+};
+
+BarPixels probe_bar_pixels(const QImage &img, const theme::Tokens &t, double frac) {
+    BarPixels p;
+    if (img.isNull() || img.width() < 24 || img.height() < 4)
+        return p;
+    const auto near = [](QRgb c, const QColor &ref) {
+        return std::abs(qRed(c) - ref.red()) <= 16 && std::abs(qGreen(c) - ref.green()) <= 16 &&
+               std::abs(qBlue(c) - ref.blue()) <= 16;
+    };
+    // 取样带 = **期望填充区的内部**：grab() 会用调色板窗底色预填 pixmap（实测轨道像素不透明），
+    // 故不能靠 alpha 区分轨道/填充；改为按语义读数 frac（ppBarFrac）算右沿，再两侧各内缩 4px
+    // 避开 1px 边框与圆角弧。
+    const int inner_left = 2;
+    const int inner_right = img.width() - 2;
+    const int fill_right = inner_left + int(double(inner_right - inner_left) * frac);
+    const int left = inner_left + 4;
+    const int right = std::min(inner_right - 4, fill_right - 4);
+    if (right <= left)
+        return p;
+    const int y = img.height() / 2;
+    for (int x = left; x <= right; ++x) {
+        const QRgb c = img.pixel(x, y);
+        ++p.samples;
+        if (near(c, t.accent))
+            ++p.accent;
+        if (near(c, t.progress_fill_from))
+            ++p.from;
+        if (near(c, t.progress_fill_to))
+            ++p.to;
+    }
+    return p;
+}
+
+// 取样带色彩直方图（失败时的取证：把实际画出来的颜色列出来，不靠猜）
+QString probe_bar_histogram(const QImage &img) {
+    if (img.isNull())
+        return QStringLiteral("(null)");
+    QHash<QRgb, int> hist;
+    const int y = img.height() / 2;
+    for (int x = 0; x < img.width(); ++x) {
+        const QRgb c = img.pixel(x, y);
+        ++hist[static_cast<QRgb>(c | 0xff000000u)]; // 忽略 alpha 维度用于分组
+    }
+    QList<QPair<int, QRgb>> sorted;
+    sorted.reserve(hist.size());
+    for (auto it = hist.constBegin(); it != hist.constEnd(); ++it)
+        sorted.append({it.value(), it.key()});
+    std::sort(
+        sorted.begin(), sorted.end(),
+        [](const QPair<int, QRgb> &a, const QPair<int, QRgb> &b) { return a.first > b.first; });
+    QStringList parts;
+    for (int i = 0; i < sorted.size() && i < 4; ++i) {
+        parts << QStringLiteral("%1x%2")
+                     .arg(QColor(QRgb(sorted[i].second)).name(QColor::HexRgb))
+                     .arg(sorted[i].first);
+    }
+    return QStringLiteral("%1x%2 [%3]")
+        .arg(img.width())
+        .arg(img.height())
+        .arg(parts.join(QLatin1Char(' ')));
+}
+
+// 探针用的事件构造
+pp::FileEvent probe_progress(int index, int out_index, pp::Stage stage, float frac, bool synth) {
+    pp::FileEvent ev{};
+    ev.index = static_cast<std::size_t>(index);
+    ev.state = pp::FileState::Progress;
+    ev.progress.output_index = out_index;
+    ev.progress.stage = stage;
+    ev.progress.stage_frac = frac;
+    ev.progress.overall_frac = frac;
+    ev.progress.synthetic = synth;
+    return ev;
+}
+
+pp::FileEvent probe_terminal(int index, pp::FileState state, const pp::FileResult &result) {
+    pp::FileEvent ev{};
+    ev.index = static_cast<std::size_t>(index);
+    ev.state = state;
+    ev.result = &result;
+    return ev;
+}
+
+QString probe_full_text(const QWidget *page, const QString &name) {
+    const auto *label = page->findChild<QLabel *>(name);
+    if (label == nullptr)
+        return QString();
+    const QVariant full = label->property("ppFullText");
+    return full.isValid() ? full.toString() : label->text();
+}
+
+} // namespace
+
+void MainWindow::Impl::smoke_probe_run(const QString &shots_dir) {
+    theme::Tokens dark = tokens;
+    if (dark.mode != theme::ThemeMode::Dark)
+        dark = theme::tokens(theme::ThemeMode::Dark); // 探针基准恒深色（原型基准）
+
+    QWidget shell;
+    shell.setObjectName(QStringLiteral("pp-root")); // theme 骨架 QSS 的窗口底（渐变）
+    shell.setStyleSheet(theme::style_sheet(dark));
+    shell.resize(theme::Metrics::right_width_1440, theme::Metrics::calibrated_h - 118);
+    auto *shell_layout = new QVBoxLayout(&shell);
+    shell_layout->setContentsMargins(0, 0, 0, 0);
+    auto *page = new PageRun(&shell);
+    shell_layout->addWidget(page);
+    page->set_tokens(dark);
+    shell.show();
+    pump(200);
+
+    // ---- 运行计划：4 个源文件 × 2 格式（mockup run-dark 的任务行组合）----
+    PageRun::RunPlan plan;
+    plan.format_ids = QStringList{QStringLiteral("jpeg"), QStringLiteral("webp")};
+    plan.widths = QVector<int>{4032, 2480, 6000, 4032};
+    plan.heights = QVector<int>{3024, 3508, 4000, 3024};
+    plan.bytes = QVector<qint64>{5'000'000, 6'200'000, 7'400'000, 1'310'720};
+    plan.stagger_ms = 150; // §8.1 默认（mockup「交错 150 ms」）
+    plan.workers = 0;      // 0 = 逻辑核
+    plan.thread_budget = 0;
+    page->set_plan(plan);
+    page->set_log_tail(
+        QStringList{
+            QStringLiteral("18:23:43.412 [info] [encode] IMG_2732.jpg → webp 228 KB ratio=5.6 "
+                           "t=0.9s"),
+            QStringLiteral("18:23:44.087 [warn] [depth] scan_007.png 16bit→8bit 降档被禁止，跳过"),
+            QStringLiteral("18:23:44.560 [info] [sched] DSC_0412.ARW.tif 启动（交错偏移 150ms）"),
+            QStringLiteral("18:23:45.004 [info] [encode] P1010888.RW2.jpg → jpeg 640 KB ratio=4.1 "
+                           "t=1.2s"),
+            QStringLiteral("18:23:45.510 [info] [run] 24 个输出已结算 · 成功 22 · 失败 1 · 跳过 1"),
+        },
+        QStringLiteral("run-20260923-182341.log"));
+
+    // ---- 03c-run-idle.png：空闲态（就绪 + 空任务表 + 引导 + 日志尾）----
+    page->reset();
+    pump(120);
+    {
+        const QString pill = probe_full_text(page, QStringLiteral("pp-run-state-pill"));
+        const QString summary = probe_full_text(page, QStringLiteral("pp-run-summary"));
+        const QString empty = probe_full_text(page, QStringLiteral("pp-run-task-empty"));
+        std::printf("UI-SMOKE run-idle: pill=\"%s\" summary=\"%s\" empty=\"%s\" bars=%d\n",
+                    qUtf8Printable(pill), qUtf8Printable(summary), qUtf8Printable(empty),
+                    int(page->findChildren<QWidget *>(
+                                QRegularExpression(QStringLiteral("^pp-run-bar-\\d+-\\d+$")))
+                            .size()));
+        std::fflush(stdout);
+        if (pill != QStringLiteral("就绪") || summary.isEmpty() || empty.isEmpty())
+            smoke_fail(MainWindow::tr("运行页空闲态不符（pill=%1 summary=%2 empty=%3）")
+                           .arg(pill, summary, empty));
+    }
+    smoke_grab(shots_dir, kSmokeShots[kShotRunIdle], &shell);
+
+    // ---- 03d-run-rows.png：逐输出行探针态（真实 / 斜纹 / 完成 / 失败 / 交错排队）----
+    page->begin_run(4, QStringList{QStringLiteral("IMG_2731.jpg"), QStringLiteral("scan_007.png"),
+                                   QStringLiteral("P1010888.RW2.jpg"),
+                                   QStringLiteral("IMG_2732.jpg")});
+    pump(120);
+    // 文件 0：共享段（probe/decode/color）→ JPEG 真实行级 78% + WebP 合成 52%
+    page->on_event(probe_progress(0, -1, pp::Stage::Probe, 1.0f, false));
+    page->on_event(probe_progress(0, -1, pp::Stage::Decode, 1.0f, false));
+    page->on_event(probe_progress(0, -1, pp::Stage::Color, 1.0f, false));
+    page->on_event(probe_progress(0, 0, pp::Stage::Encode, 0.78f, false));
+    page->on_event(probe_progress(0, 1, pp::Stage::Encode, 0.52f, true));
+    // 文件 1：共享段 → JPEG 进行中 30% → 终态失败（逐输出原因 + 文件级聚合原因同文案）
+    {
+        pp::FileResult failed;
+        failed.info.width = 2480;
+        failed.info.height = 3508;
+        failed.error = QStringLiteral("16→8 位降档被禁止").toStdString();
+        failed.outputs.resize(2);
+        failed.outputs[0].format_id = "jpeg";
+        failed.outputs[0].error = QStringLiteral("16→8 位降档被禁止").toStdString();
+        failed.outputs[0].t.encode_ms = 640;
+        failed.outputs[1].format_id = "webp";
+        page->on_event(probe_progress(1, -1, pp::Stage::Decode, 1.0f, false));
+        page->on_event(probe_progress(1, 0, pp::Stage::Encode, 0.30f, false));
+        page->on_event(probe_terminal(1, pp::FileState::Failed, failed));
+    }
+    // 文件 2：无事件 = 交错排队（stagger_ms=150）→「排队中（交错启动）」
+    // 文件 3：终态完成（产物事实：字节 · 压缩比 · 耗时）
+    {
+        pp::FileResult done;
+        done.info.width = 4032;
+        done.info.height = 3024;
+        done.out_bytes = 421888 + 233472;
+        done.outputs.resize(2);
+        done.outputs[0].format_id = "jpeg";
+        done.outputs[0].ok = true;
+        done.outputs[0].out_bytes = 421888; // 412 KB
+        done.outputs[0].t.encode_ms = 2300;
+        done.outputs[0].t.metawrite_ms = 100; // 2.4s；ratio = 1310720/421888 = 3.1×
+        done.outputs[1].format_id = "webp";
+        done.outputs[1].ok = true;
+        done.outputs[1].out_bytes = 233472; // 228 KB
+        done.outputs[1].t.encode_ms = 850;
+        done.outputs[1].t.metawrite_ms = 50; // 0.9s；ratio = 5.6×
+        page->on_event(probe_progress(3, -1, pp::Stage::Decode, 1.0f, false));
+        page->on_event(probe_terminal(3, pp::FileState::Done, done));
+    }
+    pump(250); // 60ms flush + 布局
+
+    // ---- (a) 行数与行文案 ----
+    {
+        const int bars = int(page->findChildren<QWidget *>(
+                                     QRegularExpression(QStringLiteral("^pp-run-bar-\\d+-\\d+$")))
+                                 .size());
+        const QString f0_real = probe_full_text(page, QStringLiteral("pp-run-stage-0-0"));
+        const QString f0_synth = probe_full_text(page, QStringLiteral("pp-run-stage-0-1"));
+        const QString f1_stage = probe_full_text(page, QStringLiteral("pp-run-stage-1-0"));
+        const QString f1_pct = probe_full_text(page, QStringLiteral("pp-run-pct-1-0"));
+        const QString f2_row0 = probe_full_text(page, QStringLiteral("pp-run-stage-2-0"));
+        const QString f2_row1 = probe_full_text(page, QStringLiteral("pp-run-stage-2-1"));
+        const QString f3_pct = probe_full_text(page, QStringLiteral("pp-run-pct-3-0"));
+        const QString f3_stage = probe_full_text(page, QStringLiteral("pp-run-stage-3-0"));
+        std::printf("UI-SMOKE run-probe-rows: bars=%d f0=[%s|%s] f1=[%s|%s] f2=[%s|%s] "
+                    "f3=[%s|%s]\n",
+                    bars, qUtf8Printable(f0_real), qUtf8Printable(f0_synth),
+                    qUtf8Printable(f1_stage), qUtf8Printable(f1_pct), qUtf8Printable(f2_row0),
+                    qUtf8Printable(f2_row1), qUtf8Printable(f3_pct), qUtf8Printable(f3_stage));
+        std::fflush(stdout);
+        if (bars != 8)
+            smoke_fail(MainWindow::tr("逐输出行数不符：bar=%1（期望 8）").arg(bars));
+        if (!f0_real.contains(QStringLiteral("行")) || !f0_real.contains(QStringLiteral("/3024")))
+            smoke_fail(MainWindow::tr("真实行级进度未按「编码 N/M 行」显示：%1").arg(f0_real));
+        if (f0_synth != QStringLiteral("编码（合成进度）"))
+            smoke_fail(MainWindow::tr("合成进度行文案不符：%1").arg(f0_synth));
+        if (f1_stage != QStringLiteral("16→8 位降档被禁止") || f1_pct != QStringLiteral("失败"))
+            smoke_fail(MainWindow::tr("失败行未直显原因：pct=%1 stage=%2").arg(f1_pct, f1_stage));
+        if (f2_row0 != QStringLiteral("排队中（交错启动）") || f2_row1 != QStringLiteral("排队中"))
+            smoke_fail(MainWindow::tr("排队行文案不符：%1 / %2").arg(f2_row0, f2_row1));
+        if (f3_pct != QStringLiteral("412 KB") || !f3_stage.contains(QStringLiteral("3.1×")) ||
+            !f3_stage.contains(QStringLiteral("2.4s")))
+            smoke_fail(MainWindow::tr("完成行未显示产物事实（字节·压缩比·耗时）：%1 / %2")
+                           .arg(f3_pct, f3_stage));
+    }
+
+    // ---- (b) 真实 vs 斜纹：像素级取证（斜纹 = 双色带同时出现；实心 = 无 #3aa3dc）----
+    {
+        auto *real_bar = page->findChild<QWidget *>(QStringLiteral("pp-run-bar-0-0"));
+        auto *synth_bar = page->findChild<QWidget *>(QStringLiteral("pp-run-bar-0-1"));
+        if (real_bar == nullptr || synth_bar == nullptr) {
+            smoke_fail(MainWindow::tr("运行页缺少逐输出迷你条钩子（pp-run-bar-0-*）"));
+        } else {
+            const BarPixels real_px = probe_bar_pixels(real_bar->grab().toImage(), dark,
+                                                       real_bar->property("ppBarFrac").toDouble());
+            const BarPixels synth_px = probe_bar_pixels(
+                synth_bar->grab().toImage(), dark, synth_bar->property("ppBarFrac").toDouble());
+            std::printf("UI-SMOKE run-bars: real{samples=%d accent=%.2f from=%.2f to=%.2f} "
+                        "synth{samples=%d accent=%.2f from=%.2f to=%.2f} synth-flag=%d/%d\n",
+                        real_px.samples, real_px.accent_ratio(), real_px.from_ratio(),
+                        real_px.to_ratio(), synth_px.samples, synth_px.accent_ratio(),
+                        synth_px.from_ratio(), synth_px.to_ratio(),
+                        real_bar->property("ppBarSynthetic").toBool() ? 1 : 0,
+                        synth_bar->property("ppBarSynthetic").toBool() ? 1 : 0);
+            std::printf("UI-SMOKE run-bars-hist: real=%s synth=%s accent=%s from=%s to=%s\n",
+                        qUtf8Printable(probe_bar_histogram(real_bar->grab().toImage())),
+                        qUtf8Printable(probe_bar_histogram(synth_bar->grab().toImage())),
+                        qUtf8Printable(theme::css_color(dark.accent)),
+                        qUtf8Printable(theme::css_color(dark.progress_fill_from)),
+                        qUtf8Printable(theme::css_color(dark.progress_fill_to)));
+            std::fflush(stdout);
+            const bool real_solid = real_px.samples > 40 && real_px.accent_ratio() >= 0.85 &&
+                                    real_px.from_ratio() <= 0.05;
+            const bool synth_striped =
+                synth_px.samples > 40 && synth_px.from_ratio() >= 0.2 && synth_px.to_ratio() >= 0.2;
+            const bool flags = !real_bar->property("ppBarSynthetic").toBool() &&
+                               synth_bar->property("ppBarSynthetic").toBool();
+            if (!real_solid || !synth_striped || !flags)
+                smoke_fail(
+                    MainWindow::tr("真实/斜纹渲染不符（real-solid=%1 synth-striped=%2 flags=%3）")
+                        .arg(real_solid ? 1 : 0)
+                        .arg(synth_striped ? 1 : 0)
+                        .arg(flags ? 1 : 0));
+        }
+    }
+
+    // ---- (c) 总览卡只读栅格（§3.4/§8.1/§8.2）----
+    {
+        const int cores = [] {
+            const unsigned hw = std::thread::hardware_concurrency();
+            return hw > 0 ? static_cast<int>(hw) : 1;
+        }();
+        const QString stagger = probe_full_text(page, QStringLiteral("pp-run-stagger"));
+        const QString budget = probe_full_text(page, QStringLiteral("pp-run-budget"));
+        const QString workers = probe_full_text(page, QStringLiteral("pp-run-workers"));
+        const QString alloc = probe_full_text(page, QStringLiteral("pp-run-alloc"));
+        const QString hint = probe_full_text(page, QStringLiteral("pp-run-progress-hint"));
+        const QString percent = probe_full_text(page, QStringLiteral("pp-run-percent"));
+        std::printf("UI-SMOKE run-overview: stagger=\"%s\" budget=\"%s\" workers=\"%s\" "
+                    "alloc=\"%s\" hint=\"%s\" percent=\"%s\"\n",
+                    qUtf8Printable(stagger), qUtf8Printable(budget), qUtf8Printable(workers),
+                    qUtf8Printable(alloc), qUtf8Printable(hint), qUtf8Printable(percent));
+        std::fflush(stdout);
+        if (stagger != QStringLiteral("150 ms"))
+            smoke_fail(MainWindow::tr("交错读数不符：%1").arg(stagger));
+        if (budget != MainWindow::tr("自适应（%1 核）").arg(cores))
+            smoke_fail(MainWindow::tr("线程预算读数不符：%1（期望 自适应（%2 核））")
+                           .arg(budget)
+                           .arg(cores));
+        if (!workers.endsWith(QStringLiteral("workers")) ||
+            !alloc.contains(QStringLiteral("文件并行")))
+            smoke_fail(MainWindow::tr("并行/当前分配读数不符：%1 / %2").arg(workers, alloc));
+        if (hint != QStringLiteral("4 / 8 个输出"))
+            smoke_fail(MainWindow::tr("总览输出计数不符：%1（期望 4 / 8 个输出）").arg(hint));
+        if (percent.isEmpty() || percent == QStringLiteral("0%"))
+            smoke_fail(MainWindow::tr("总览百分比未推进：%1").arg(percent));
+    }
+    smoke_grab(shots_dir, kSmokeShots[kShotRunRows], &shell);
+
+    // ---- (d) 取消态（唯一取消入口 = 运行页；取消后定稿为「已取消」）----
+    {
+        int cancel_hits = 0;
+        const QMetaObject::Connection conn = QObject::connect(
+            page, &PageRun::cancel_requested, page, [&cancel_hits]() { ++cancel_hits; });
+        page->begin_run(
+            2, QStringList{QStringLiteral("IMG_2731.jpg"), QStringLiteral("IMG_2732.jpg")});
+        page->on_event(probe_progress(0, -1, pp::Stage::Decode, 1.0f, false));
+        page->on_event(probe_progress(0, 0, pp::Stage::Encode, 0.42f, false));
+        pump(120);
+        auto *cancel = page->findChild<QPushButton *>(QStringLiteral("pp-run-cancel"));
+        if (cancel == nullptr || !cancel->isEnabled()) {
+            smoke_fail(MainWindow::tr("运行页取消钮不可用（pp-run-cancel）"));
+        } else {
+            cancel->click();
+            pump(120);
+            pp::RunSummary sum;
+            sum.total = 2;
+            sum.cancelled = 2;
+            sum.total_ms = 900.0;
+            page->on_event(probe_terminal(0, pp::FileState::Cancelled, pp::FileResult{}));
+            page->on_event(probe_terminal(1, pp::FileState::Cancelled, pp::FileResult{}));
+            page->end_run(sum, QString());
+            pump(150);
+            const QString pill = probe_full_text(page, QStringLiteral("pp-run-state-pill"));
+            const QString row0 = probe_full_text(page, QStringLiteral("pp-run-stage-0-0"));
+            std::printf("UI-SMOKE run-cancel: hits=%d pill=\"%s\" row0=\"%s\" cancel-visible=%d\n",
+                        cancel_hits, qUtf8Printable(pill), qUtf8Printable(row0),
+                        cancel->isVisible() ? 1 : 0);
+            std::fflush(stdout);
+            if (cancel_hits != 1 || pill != QStringLiteral("已取消") || cancel->isVisible() ||
+                row0 != QStringLiteral("取消"))
+                smoke_fail(MainWindow::tr("取消态不符（hits=%1 pill=%2 row0=%3 cancel-visible=%4）")
+                               .arg(cancel_hits)
+                               .arg(pill, row0)
+                               .arg(cancel->isVisible() ? 1 : 0));
+            smoke_grab(shots_dir, kSmokeShots[kShotRunCancel], &shell);
+        }
+        QObject::disconnect(conn);
+    }
+
+    // ---- (e) 浅色主题（07-run-light.png）：同一页 tokens 重放 ----
+    {
+        const theme::Tokens light = theme::tokens(theme::ThemeMode::Light);
+        shell.setStyleSheet(theme::style_sheet(light));
+        page->set_tokens(light);
+        page->begin_run(
+            4, QStringList{QStringLiteral("IMG_2731.jpg"), QStringLiteral("scan_007.png"),
+                           QStringLiteral("P1010888.RW2.jpg"), QStringLiteral("IMG_2732.jpg")});
+        page->on_event(probe_progress(0, -1, pp::Stage::Decode, 1.0f, false));
+        page->on_event(probe_progress(0, 0, pp::Stage::Encode, 0.78f, false));
+        page->on_event(probe_progress(0, 1, pp::Stage::Encode, 0.52f, true));
+        pump(250);
+        QWidget *light_bar = page->findChild<QWidget *>(QStringLiteral("pp-run-bar-0-1"));
+        const BarPixels light_synth =
+            light_bar != nullptr ? probe_bar_pixels(light_bar->grab().toImage(), light,
+                                                    light_bar->property("ppBarFrac").toDouble())
+                                 : BarPixels{};
+        std::printf("UI-SMOKE run-light: synth{samples=%d from=%.2f to=%.2f} window=%dx%d\n",
+                    light_synth.samples, light_synth.from_ratio(), light_synth.to_ratio(),
+                    shell.width(), shell.height());
+        std::fflush(stdout);
+        if (light_synth.samples == 0 || light_synth.from_ratio() < 0.2 ||
+            light_synth.to_ratio() < 0.2)
+            smoke_fail(MainWindow::tr("浅色主题下斜纹渲染不符（samples=%1 from=%2 to=%3）")
+                           .arg(light_synth.samples)
+                           .arg(light_synth.from_ratio(), 0, 'f', 2)
+                           .arg(light_synth.to_ratio(), 0, 'f', 2));
+        smoke_grab(shots_dir, kSmokeShots[kShotRunLight], &shell);
+    }
+    page->reset();
+    pump(80);
+}
+
 void MainWindow::Impl::smoke_run(const QString &shots_dir) {
     // ---- M4-T9 骨架自检（窗口行为矩阵可自动化部分；先跑，之后截图归位 1440×900）----
     smoke_probe_lifecycle();
@@ -3863,7 +4399,7 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
         }
     }
 
-    // ---- 实跑前置：jxl + out_root=<仓库>/.cache/tmp/ui-smoke-out + conflict=overwrite ----
+    // ---- 实跑前置：out_root=<仓库>/.cache/tmp/ui-smoke-out + conflict=overwrite ----
     page_output->select_format(QStringLiteral("jxl"));
     pump(250);
     QString root_dir = repo_root();
@@ -3878,17 +4414,37 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
         smoke_fail(MainWindow::tr("无法创建输出目录：%1").arg(out_root));
     }
     page_output->set_out_root(out_root);
-    // conflict 无独立 setter → 用冻结 API 走一次 collect/apply 往返（其余字段保持现状）
-    pp::PresetData preset = page_output->collect_preset(QStringLiteral("ui-smoke"));
-    preset.conflict = pp::ConflictPolicy::Overwrite;
-    page_output->apply_preset(preset);
-    pump(200);
-    if (page_output->current_format() != QLatin1String("jxl")) {
-        smoke_fail(
-            MainWindow::tr("冒烟前置：格式不是 jxl（%1）").arg(page_output->current_format()));
-    }
     if (page_output->out_root() != out_root) {
         smoke_fail(MainWindow::tr("冒烟前置：输出根目录未生效（%1）").arg(page_output->out_root()));
+    }
+    // M4-T14 实跑前置：输出 = **JPEG + WebP**（mockup run-dark 任务行的两格式组合）——让
+    // 03-run.png 的「逐输出子行」在真实运行下呈现 N=2 行（§3.4「多格式时一个源文件 N 行输出」），
+    // 并顺带覆盖多输出管线的 UI 事件流与"真实/合成"两类进度。走冻结 API 的 collect/apply 往返
+    // （select_format 是单选钩子，构造多选集合只能经预设面），同时把冲突策略置为覆盖。
+    {
+        page_output->select_format(QStringLiteral("jpeg"));
+        pump(250);
+        pp::PresetData preset = page_output->collect_preset(QStringLiteral("ui-smoke"));
+        if (preset.outputs.size() != 1) {
+            smoke_fail(MainWindow::tr("冒烟前置：jpeg 单选应收集到 1 个输出（实为 %1）")
+                           .arg(preset.outputs.size()));
+        }
+        const pp::OutputFormatSpec jpeg_spec = preset.outputs.front();
+        page_output->select_format(QStringLiteral("webp"));
+        pump(250);
+        preset = page_output->collect_preset(QStringLiteral("ui-smoke"));
+        const pp::OutputFormatSpec webp_spec = preset.outputs.front();
+        preset.outputs = {jpeg_spec, webp_spec};
+        preset.conflict = pp::ConflictPolicy::Overwrite;
+        preset.split_by_format = true; // 分格式子目录（$format/$dir/$file）
+        preset.output_template = "$format/$dir/$file";
+        page_output->apply_preset(preset);
+        pump(250);
+    }
+    const std::vector<pp::OutputFormatSpec> run_outputs = page_output->config_base().outputs;
+    if (run_outputs.size() != 2) {
+        smoke_fail(
+            MainWindow::tr("冒烟前置：输出格式不是 2 项（实为 %1）").arg(run_outputs.size()));
     }
     if (page_output->config_base().conflict != pp::ConflictPolicy::Overwrite) {
         smoke_fail(MainWindow::tr("冒烟前置：冲突策略不是覆盖"));
@@ -3898,9 +4454,9 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
     w->set_current_page(3);
     pump(200);
     start->click();
-    // 尽量抓在"运行中"：本批 16 个小文件 ~150ms 就跑完，故只推进到出现部分进度即抓，
+    // 尽量抓在"运行中"：本批 16 个小文件很短，故只推进到出现部分进度即抓，
     // 否则退化为结束态（与 03b 同图，仅记入 stdout 供审查判断）。
-    QProgressBar *run_progress = w->findChild<QProgressBar *>(QStringLiteral("runProgress"));
+    QProgressBar *run_progress = w->findChild<QProgressBar *>(QStringLiteral("pp-run-progress"));
     {
         QElapsedTimer spin;
         spin.start();
@@ -3913,26 +4469,92 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
             QThread::msleep(1);
         }
     }
-    std::printf("UI-SMOKE 03-run: running=%d progress=%d/%d\n", page_run->is_running() ? 1 : 0,
+    std::printf("UI-SMOKE 03-run: running=%d progress=%d/%d outputs=%d/%d bottom=%s\n",
+                page_run->is_running() ? 1 : 0,
                 run_progress != nullptr ? run_progress->value() : -1,
-                run_progress != nullptr ? run_progress->maximum() : -1);
+                run_progress != nullptr ? run_progress->maximum() : -1, page_run->outputs_done(),
+                page_run->outputs_total(), qUtf8Printable(start->text()));
     std::fflush(stdout);
-    // G5 锁定视觉（M4-W2-fix 第 7 条）：运行中「设置/预设」置灰（QSS :disabled = .icon-btn.dim
-    // opacity .4 的等效预合成色）、步骤 1/2 置灰（.step.dim opacity .45，含编号徽标）。
+    // G5 锁定视觉（M4-W2-fix 第 7 条 + T14 锁定接线）：运行中「设置/预设」置灰（QSS :disabled =
+    // .icon-btn.dim opacity .4 的等效预合成色）、步骤 1/2 置灰（.step.dim opacity .45，含编号
+    // 徽标）、左栏文件面板/分组下拉置灰、预览与分类只读、运行页取消可点（唯一取消入口）。
     {
         const bool presets_off = presets_btn != nullptr && !presets_btn->isEnabled();
         const bool settings_off = settings_btn != nullptr && !settings_btn->isEnabled();
         const bool steps_off = step_meta != nullptr && !step_meta->isEnabled() &&
                                step_output != nullptr && !step_output->isEnabled();
-        std::printf("UI-SMOKE lock-visual: presets-disabled=%d settings-disabled=%d "
-                    "steps1-2-disabled=%d\n",
-                    presets_off ? 1 : 0, settings_off ? 1 : 0, steps_off ? 1 : 0);
+        const bool panel_off = panel != nullptr && !panel->isEnabled();
+        const bool group_off = group_mode != nullptr && !group_mode->isEnabled();
+        const bool preview_locked =
+            [&] { // 预览只读的**可观测面** = 打标热键表置灰（PreviewPanel::set_locked 的唯一落地）
+                QLabel *keyhint =
+                    w->findChild<QLabel *>(QStringLiteral("pp-preview-keyhint-label"));
+                return keyhint != nullptr && !keyhint->isEnabled();
+            }();
+        QPushButton *run_cancel = w->findChild<QPushButton *>(QStringLiteral("pp-run-cancel"));
+        const bool cancel_ready =
+            run_cancel != nullptr && run_cancel->isVisible() && run_cancel->isEnabled();
+        const bool new_page_locked = page_meta != nullptr && !page_meta->isEnabled() &&
+                                     page_output != nullptr && !page_output->isEnabled();
+        std::printf("UI-SMOKE lock-visual: presets=%d settings=%d steps1-2=%d panel=%d group=%d "
+                    "preview-locked=%d page1-2=%d run-cancel=%d\n",
+                    presets_off ? 1 : 0, settings_off ? 1 : 0, steps_off ? 1 : 0, panel_off ? 1 : 0,
+                    group_off ? 1 : 0, preview_locked ? 1 : 0, new_page_locked ? 1 : 0,
+                    cancel_ready ? 1 : 0);
         std::fflush(stdout);
-        if (!presets_off || !settings_off || !steps_off)
-            smoke_fail(MainWindow::tr("运行期锁定视觉：设置/预设/步骤 1-2 未置灰（%1/%2/%3）")
+        if (!presets_off || !settings_off || !steps_off || !panel_off || !group_off ||
+            !preview_locked || !new_page_locked || !cancel_ready) {
+            smoke_fail(MainWindow::tr("运行期锁定未生效（预设=%1 设置=%2 步骤=%3 文件面板=%4 "
+                                      "分组=%5 预览=%6 页1-2=%7 取消钮=%8）")
                            .arg(presets_off ? 1 : 0)
                            .arg(settings_off ? 1 : 0)
-                           .arg(steps_off ? 1 : 0));
+                           .arg(steps_off ? 1 : 0)
+                           .arg(panel_off ? 1 : 0)
+                           .arg(group_off ? 1 : 0)
+                           .arg(preview_locked ? 1 : 0)
+                           .arg(new_page_locked ? 1 : 0)
+                           .arg(cancel_ready ? 1 : 0));
+        }
+    }
+    // ---- M4-T14 断言：真实运行下的**逐输出行**（§3.4：行数 = 文件数 × 格式数；运行中的行有
+    // 阶段文字/进度读数；锁定态的行不因运行而消失）----
+    {
+        const QList<QWidget *> bars = w->findChildren<QWidget *>(
+            QRegularExpression(QStringLiteral("^pp-run-bar-\\d+-\\d+$")));
+        const QList<QWidget *> groups =
+            w->findChildren<QWidget *>(QRegularExpression(QStringLiteral("^pp-run-group-\\d+$")));
+        const int expect_rows = int(model->checked_count()) * int(run_outputs.size());
+        std::printf("UI-SMOKE run-rows: bars=%d expect=%d groups=%d\n", bars.size(), expect_rows,
+                    groups.size());
+        std::fflush(stdout);
+        if (bars.size() != expect_rows || groups.size() != int(model->checked_count())) {
+            smoke_fail(MainWindow::tr("逐输出行数不符：bar=%1 group=%2（期望 %3/%4）")
+                           .arg(bars.size())
+                           .arg(groups.size())
+                           .arg(expect_rows)
+                           .arg(model->checked_count()));
+        }
+    }
+    // ---- M4-T14 断言：底栏运行态（mockup run-dark .bottom：状态计数 + ETA + .go 变状态读数）----
+    {
+        const auto full_text = [](const ElidedLabel *label) {
+            if (label == nullptr)
+                return QString();
+            const QVariant full = label->property("ppFullText");
+            return full.isValid() ? full.toString() : label->text();
+        };
+        const QString bottom = full_text(status);
+        const QString eta = full_text(output_status);
+        const QString go = start != nullptr ? start->text() : QString();
+        std::printf("UI-SMOKE run-bottom: status=\"%s\" eta=\"%s\" go=\"%s\"\n",
+                    qUtf8Printable(bottom), qUtf8Printable(eta), qUtf8Printable(go));
+        std::fflush(stdout);
+        if (!bottom.contains(QStringLiteral("进行中")) ||
+            !bottom.contains(QStringLiteral("排队")) || !eta.startsWith(QStringLiteral("ETA")) ||
+            !go.startsWith(QStringLiteral("运行中"))) {
+            smoke_fail(
+                MainWindow::tr("底栏运行态不符（status=%1 eta=%2 go=%3）").arg(bottom, eta, go));
+        }
     }
     smoke_grab(shots_dir, kSmokeShots[kShotRun]);
 
@@ -3949,26 +4571,88 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
     if (page_run->is_running()) {
         smoke_fail(MainWindow::tr("运行结束后 is_running() 仍为真"));
     }
-    QProgressBar *progress = w->findChild<QProgressBar *>(QStringLiteral("runProgress"));
+    QProgressBar *progress = w->findChild<QProgressBar *>(QStringLiteral("pp-run-progress"));
     if (progress == nullptr) {
-        smoke_fail(MainWindow::tr("运行页缺少 runProgress"));
+        smoke_fail(MainWindow::tr("运行页缺少 pp-run-progress"));
     } else if (progress->maximum() <= 0 || progress->value() != progress->maximum()) {
         smoke_fail(
             MainWindow::tr("进度条未满：%1 / %2").arg(progress->value()).arg(progress->maximum()));
     }
-    QGroupBox *summary = w->findChild<QGroupBox *>(QStringLiteral("runSummary"));
-    if (summary == nullptr || !summary->isVisible()) {
-        smoke_fail(MainWindow::tr("运行摘要不可见"));
-    }
-    if (QLabel *run_status = w->findChild<QLabel *>(QStringLiteral("runStatus"))) {
-        std::printf("UI-SMOKE run status: %s\n", qUtf8Printable(run_status->text()));
-    }
-    if (QLabel *summary_text = w->findChild<QLabel *>(QStringLiteral("runSummaryText"))) {
-        const QString text =
-            QString(summary_text->text()).replace(QLatin1Char('\n'), QLatin1String(" / "));
+    // M4-T14：摘要行（pp-run-summary）+ 结束态逐输出行定稿（产物事实/失败原因）
+    if (QLabel *summary_line = w->findChild<QLabel *>(QStringLiteral("pp-run-summary"))) {
+        const QString text = summary_line->property("ppFullText").toString();
         std::printf("UI-SMOKE summary: %s\n", qUtf8Printable(text));
+        if (text.isEmpty())
+            smoke_fail(MainWindow::tr("运行摘要为空（pp-run-summary）"));
+    } else {
+        smoke_fail(MainWindow::tr("运行页缺少摘要行（pp-run-summary）"));
     }
-    std::fflush(stdout);
+    if (QLabel *run_pill = w->findChild<QLabel *>(QStringLiteral("pp-run-state-pill"))) {
+        std::printf("UI-SMOKE run state: %s\n",
+                    qUtf8Printable(run_pill->property("ppFullText").toString()));
+    }
+    {
+        // 终态逐输出行：每行 bar 已结算（done/failed/skipped）且满格；完成行给出产物事实
+        // （字节数 + 压缩比 ×），失败行给出原因 —— 数据源 = 引擎的 OutputResult（§3.4）。
+        const QList<QWidget *> bars = w->findChildren<QWidget *>(
+            QRegularExpression(QStringLiteral("^pp-run-bar-\\d+-\\d+$")));
+        int settled = 0, done_rows = 0, failed_rows = 0, with_bytes = 0, with_ratio = 0;
+        QString first_failure;
+        for (QWidget *bar : bars) {
+            const QString kind = bar->property("ppBarKind").toString();
+            if (kind != QLatin1String("pending") && kind != QLatin1String("active"))
+                ++settled;
+            if (kind == QLatin1String("done"))
+                ++done_rows;
+            if (kind == QLatin1String("failed"))
+                ++failed_rows;
+            const QString name = bar->objectName();
+            const QString suffix = name.mid(int(QStringLiteral("pp-run-bar-").size()));
+            if (QLabel *pct = w->findChild<QLabel *>(QStringLiteral("pp-run-pct-") + suffix)) {
+                const QString text = pct->property("ppFullText").toString();
+                if (text.endsWith(QLatin1String("KB")) || text.endsWith(QLatin1String("MB")))
+                    ++with_bytes;
+            }
+            if (QLabel *stage = w->findChild<QLabel *>(QStringLiteral("pp-run-stage-") + suffix)) {
+                const QString text = stage->property("ppFullText").toString();
+                if (text.contains(QStringLiteral("×")))
+                    ++with_ratio;
+                if (kind == QLatin1String("failed") && first_failure.isEmpty())
+                    first_failure = text;
+            }
+        }
+        std::printf("UI-SMOKE run-rows-final: total=%d settled=%d done=%d failed=%d bytes=%d "
+                    "ratio=%d first-failure=\"%s\"\n",
+                    bars.size(), settled, done_rows, failed_rows, with_bytes, with_ratio,
+                    qUtf8Printable(first_failure));
+        std::fflush(stdout);
+        if (settled != bars.size() || bars.isEmpty())
+            smoke_fail(
+                MainWindow::tr("结束态仍有未结算输出行（%1/%2）").arg(settled).arg(bars.size()));
+        if (done_rows > 0 && (with_bytes == 0 || with_ratio == 0))
+            smoke_fail(MainWindow::tr("完成行未显示产物事实（字节=%1 压缩比=%2）")
+                           .arg(with_bytes)
+                           .arg(with_ratio));
+        if (failed_rows > 0 && first_failure.isEmpty())
+            smoke_fail(MainWindow::tr("失败行未直显原因"));
+    }
+    // 日志尾卡（§9.3）：单一持有者 = MainWindow 读 run-*.log 末尾、页只渲染。**--ui-smoke 分支
+    // 不写磁盘日志**（main.cpp 冒烟分支只走 stderr，§4.3）→ 这里如实打印实时读到的内容（空 =
+    // 页面占位文案「（尚无运行日志）」）；**填充态**由 smoke_probe_run 的独立页探针取证（03d）。
+    if (QLabel *log_tail = w->findChild<QLabel *>(QStringLiteral("pp-run-log-lines"))) {
+        const QString shown = log_tail->text();
+        QString flat = shown.left(200);
+        flat.replace(QLatin1Char('\n'), QLatin1String(" | "));
+        std::printf("UI-SMOKE run-log-tail: %s\n",
+                    flat.isEmpty() ? "(empty)" : qUtf8Printable(flat));
+        std::fflush(stdout);
+    } else {
+        smoke_fail(MainWindow::tr("运行页缺少日志尾控件（pp-run-log-lines）"));
+    }
+
+    // ---- M4-T14：运行页自检（独立页实例：逐输出行五态 / 真实 vs 斜纹像素取证 / 取消态 /
+    // 浅色）----
+    smoke_probe_run(shots_dir);
 
     // ---- 对话框三连（构造 → show → processEvents → grab → close，绝不 exec）----
     { // 04-settings.png：设置对话框

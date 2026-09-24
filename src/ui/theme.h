@@ -148,7 +148,10 @@ struct Metrics {
     static constexpr int progress_border_px = 1; // .obar/.bigbar{border:1px solid --ctl-bd}
     static constexpr int synth_stripe_deg = 115; // .obar i.synth 条纹角度
     static constexpr int synth_stripe_band_px = 6; // 单色带宽度（周期 = 2×6px）
-    static constexpr int input_h = 28;             // .search / .mini-btn / .btn 高度
+    // 条纹周期（= 2×band，mockup 的 `#3aa3dc 0 6px, #4cc2ff 6px 12px`）：T14 的迷你条按它铺
+    // RepeatSpread 渐变；单列一个常量是为了让"115°/6px/12px"三个几何量都在 token 表里可查。
+    static constexpr int synth_stripe_period_px = 12;
+    static constexpr int input_h = 28; // .search / .mini-btn / .btn 高度
     static constexpr int row_h = 32;
     // ---- §9.3 排版硬约束（表单栅格；T12–T14 共用同一标签轴）----
     static constexpr int form_label_w = 70; // .grow{grid-template-columns:70px 1fr}

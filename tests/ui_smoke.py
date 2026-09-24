@@ -3,7 +3,7 @@
 """PhotoPipeline — M1b-U10 offscreen UI smoke（ctest 名 ui_smoke，由 CMake 在 PP_BUILD_DEV 下注册）
 
 用法: tests/ui_smoke.py [BUILD_DIR]      # 默认 build/release-dev
-退出码: 0 = 冻结断言全过（末行 `UI-SMOKE OK shots=8 pages=3`，§4.3 冻结 8 张）；
+退出码: 0 = 冻结断言全过（末行 `UI-SMOKE OK shots=12 pages=3`，M4-W3-T14 起冻结 12 张）；
         2 = 用法/二进制缺失；其余 = photopipeline --ui-smoke 的退出码透传。
 
 截图目录（M2-T21c 隔离裁定）：
@@ -17,15 +17,20 @@
 M3-W3（裁定 D3：Python 单实现，本文件替代 tests/ui_smoke.sh）:
   * BIN 按 name / name + '.exe' 双探测（Windows 产物带 .exe）
   * `mktemp -t` → tempfile；tee 用 Python 边读边写（终端透传 + 临时日志）
-  * 冻结行为不变：QT_QPA_PLATFORM=offscreen、`^UI-SMOKE OK shots=8 pages=3$` 断言、
+  * 冻结行为不变：QT_QPA_PLATFORM=offscreen、`^UI-SMOKE OK shots=12 pages=3$` 断言、
     `UI-SMOKE pass` 成功行与两条缺失提示逐字
 
 M4-W2-T11 扩展段（§6.2 + §3.6 filelistmodel.h 行）:
-  * 冻结末行**不变**（`shots=8 pages=3`）；正式冻结行 `UI-SMOKE OK shots=12 pages=3` 属 W3-T14。
   * 追加"T11 自检行齐备"断言：勾选/搜索正交/分组节头/分类打标/classes.json 往返/圈选/只读
     这些自动化部分由 `photopipeline --ui-smoke` 在进程内断言（smoke_fail → 退出码 1）并逐行
     以 `UI-SMOKE <tag>:` 打印；本脚本额外要求这些**行存在**（防止断言被静默跳过/裁剪）。
-    清单 = 前缀匹配（行内容由 C++ 侧给出，脚本只验tag 存在）。
+    清单 = 前缀匹配（行内容由 C++ 侧给出，脚本只验 tag 存在）。
+
+M4-W3-T14（运行页）:
+  * 冻结末行**升级** `shots=8` → **`shots=12`**（逐字；新增 4 张运行页图：03c-run-idle /
+    03d-run-rows / 03e-run-cancel / 07-run-light，见 mainwindow.cpp 的 kSmokeShots）。
+  * 追加运行页自检行齐备断言（逐输出行数/结束态定稿/真实vs斜纹像素取证/锁定态/总览读数/
+    取消态/空闲态/浅色主题/日志尾/底栏运行读数）。
 """
 
 import os
@@ -36,7 +41,23 @@ import tempfile
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
-FROZEN_LINE = 'UI-SMOKE OK shots=8 pages=3'
+FROZEN_LINE = 'UI-SMOKE OK shots=12 pages=3'
+
+# M4-W3-T14 运行页自检行（前缀匹配；缺任一 → FAIL）
+T14_LINE_PREFIXES = (
+    'UI-SMOKE 03-run:',        # 真实运行读数：progress / outputs / 底栏「运行中… N%」
+    'UI-SMOKE run-rows:',      # 真实运行：逐输出行数 = 文件数 × 格式数
+    'UI-SMOKE run-bottom:',    # 底栏运行态：状态计数 + ETA 约 mm:ss + .go「运行中… N%」
+    'UI-SMOKE run-rows-final:',  # 结束态：全行已结算 + 产物事实（字节/压缩比）+ 失败原因
+    'UI-SMOKE lock-visual:',   # 运行期锁定（G5）：步骤1-2/设置/预设/文件面板/预览/页1-2/取消钮
+    'UI-SMOKE run-log-tail:',  # 日志尾卡（单一持有者 = MainWindow 读 run-*.log）
+    'UI-SMOKE run-idle:',      # 运行页空闲态（就绪 + 引导 + 空任务表）
+    'UI-SMOKE run-probe-rows:',  # 探针页逐输出行：真实行级/合成/失败原因/排队/产物事实
+    'UI-SMOKE run-bars:',      # 真实 vs 斜纹像素取证（accent 实心 vs 双色带）
+    'UI-SMOKE run-overview:',  # 总览只读栅格（交错/线程预算/并行/当前分配/输出计数）
+    'UI-SMOKE run-cancel:',    # 取消态（唯一取消入口 → 定稿「已取消」）
+    'UI-SMOKE run-light:',     # 浅色主题下的斜纹渲染
+)
 
 # M4-W2-T11 自检行（前缀匹配；缺任一 → FAIL）
 T11_LINE_PREFIXES = (
@@ -97,6 +118,7 @@ def main():
             text=True, encoding='utf-8', errors='replace')
         found = False
         t11_seen = set()
+        t14_seen = set()
         with open(log_path, 'w', encoding='utf-8', newline='') as log_fp:
             for line in proc.stdout:
                 sys.stdout.write(line)
@@ -107,6 +129,9 @@ def main():
                 for prefix in T11_LINE_PREFIXES:
                     if line.startswith(prefix):
                         t11_seen.add(prefix)
+                for prefix in T14_LINE_PREFIXES:
+                    if line.startswith(prefix):
+                        t14_seen.add(prefix)
         status = proc.wait()
 
         if status != 0:
@@ -120,6 +145,11 @@ def main():
         missing = [p for p in T11_LINE_PREFIXES if p not in t11_seen]
         if missing:
             print('ui_smoke: FAIL (missing T11 self-check lines: {})'.format(', '.join(missing)),
+                  file=sys.stderr)
+            return 1
+        missing = [p for p in T14_LINE_PREFIXES if p not in t14_seen]
+        if missing:
+            print('ui_smoke: FAIL (missing T14 self-check lines: {})'.format(', '.join(missing)),
                   file=sys.stderr)
             return 1
         print('UI-SMOKE pass')

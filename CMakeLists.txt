@@ -7,6 +7,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(PP_BUILD_DEV "Build dev-only tools" OFF)
+# M4-T13b（缺陷 D-W3-1 取证）：Windows AddressSanitizer 调试开关。默认 OFF ——
+# release / release-dev 的 flags 与语义**完全不变**（只有 CMakePresets 的 `asan` 配置置 ON）。
+option(PP_ASAN "Build with AddressSanitizer (MSVC /fsanitize=address; debug-only config)" OFF)
 set(CMAKE_AUTOMOC ON)  # Q_OBJECT (mainwindow) — wave3 template fix
 
 # 版本单源（M2-T11 §2.2）：版本号唯一定义点 = 上面的 project(PhotoPipeline VERSION …)。
@@ -62,6 +65,26 @@ endif()
 # 于是全部自研消费者（单测/工具/GUI）自动继承同一组 flags。
 # vcpkg 依赖侧的同一组 flags 由 overlay triplet（triplets/x64-*-avx2.cmake）注入 —— 两处口径一致。
 include("${CMAKE_SOURCE_DIR}/cmake/avx2.cmake")
+
+# M4-T13b（D-W3-1 取证）：ASAN 开关的 flags 注入点。必须放在 avx2.cmake 之后
+# （要在 INTERFACE 目标上追加 /GL-、/LTCG:OFF —— 同一列表内后者生效，/arch:AVX2 保持不变）
+# 且在任何 target 定义之前（add_compile_options 只作用于其后定义的 target）。
+if(PP_ASAN)
+    if(MSVC)
+        target_compile_options(pp_avx2_baseline INTERFACE /GL-)
+        target_link_options(pp_avx2_baseline INTERFACE /LTCG:OFF)
+        # _DISABLE_STL_ANNOTATION：MSVC 的 __SANITIZE_ADDRESS__ 会把 STL 容器的 ASan 注解
+        # 打开（`#pragma detect_mismatch("annotate_vector","1")`），而 vcpkg 预编译依赖
+        # （Release，注解为 0）无法重编 → 链接期 LNK2038 硬失败。关掉注解使两侧口径一致；
+        # ASan 的堆越界/释放后使用检测（本配置的取证目标）不受影响。
+        add_compile_options(/fsanitize=address /Zi /D_DISABLE_STL_ANNOTATION)
+        add_link_options(/fsanitize=address /DEBUG /INCREMENTAL:NO)
+    else()
+        add_compile_options(-fsanitize=address -fno-omit-frame-pointer -g)
+        add_link_options(-fsanitize=address)
+    endif()
+    message(STATUS "PP-ASAN: AddressSanitizer 调试配置已启用（release/release-dev 不受影响）")
+endif()
 
 # ccache 可用性回退（M1-T15；R18/D7）：只有 ccache 真正可用时才设 launcher，否则整条构建会红。
 # 背景（R18 实测）：未注入工具链环境（原 `source tools/env.sh`，M3-W3 起为

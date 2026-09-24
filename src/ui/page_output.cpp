@@ -208,6 +208,8 @@ bool has_backend(const std::vector<pp::BackendDef> &list, const std::string &id)
                        [&](const pp::BackendDef &b) { return b.id == id; });
 }
 
+// 注意（M4-T13b / D-W3-1）：返回的是 **list 容器内**的指针 —— 调用方必须保证 list 的
+// 生存期覆盖该指针的全部使用（effective_backends 按值返回，故须先绑定到具名局部）。
 const pp::TechDef *tech_by_id(const std::vector<pp::BackendDef> &list, const std::string &backend,
                               const std::string &tech) {
     for (const pp::BackendDef &b : list) {
@@ -1203,7 +1205,11 @@ struct Impl {
         if (f == nullptr)
             return 0;
         const FormSelection sel = st->form->selection();
-        const pp::TechDef *t = tech_by_id(effective_backends(*f), sel.backend, sel.tech);
+        // M4-T13b（D-W3-1 根因）：tech_by_id 返回的是**入参容器内**的指针，
+        // 而 effective_backends 按值返回 → 必须先把临时绑定到具名局部再取指针，
+        // 否则 t 在语句结束即悬垂（ASAN: heap-use-after-free @ page_output.cpp:1211）。
+        const std::vector<pp::BackendDef> backends = effective_backends(*f);
+        const pp::TechDef *t = tech_by_id(backends, sel.backend, sel.tech);
         if (t == nullptr)
             return 0;
         const pp::ParamSet values = st->form->values();
@@ -1339,7 +1345,9 @@ struct Impl {
             const pp::FormatDef *f = pp::find_format(id);
             if (f != nullptr && !f->backends.empty()) {
                 spec.backend_id = f->backends.front().id;
-                const pp::TechDef *t = tech_by_id(effective_backends(*f), spec.backend_id, "");
+                // 同上：effective_backends 按值返回，指针必须落在具名局部上（否则下一语句即悬垂）
+                const std::vector<pp::BackendDef> backends = effective_backends(*f);
+                const pp::TechDef *t = tech_by_id(backends, spec.backend_id, "");
                 spec.tech_id = t != nullptr ? t->id : std::string();
                 spec.params = default_params_for(id, spec.backend_id, spec.tech_id, false);
                 spec.out_bitdepth = default_bitdepth(id);

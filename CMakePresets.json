@@ -37,13 +37,21 @@
         "CMAKE_BUILD_TYPE": "Debug",
         "PP_BUILD_DEV": "ON",
         "CMAKE_CXX_FLAGS_DEBUG": "-g -fsanitize=thread"
+      } },
+    { "name": "asan", "inherits": "base-windows",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "PP_BUILD_DEV": "ON",
+        "PP_ASAN": "ON"
       } }
   ],
   "buildPresets": [
     { "name": "release", "configurePreset": "release" },
     { "name": "release-dev", "configurePreset": "release-dev" },
     { "name": "dev", "configurePreset": "dev" },
-    { "name": "tsan", "configurePreset": "tsan" }
+    { "name": "tsan", "configurePreset": "tsan" },
+    { "name": "asan", "configurePreset": "asan" }
   ],
   "testPresets": [
     { "name": "release", "configurePreset": "release",
@@ -57,6 +65,9 @@
       "environment": {
         "TSAN_OPTIONS": "halt_on_error=0:second_deadlock_stack=1:ignore_interceptors_accesses=1:suppressions=${sourceDir}/tools/tsan.supp:print_suppressions=1"
       },
+      "output": { "outputOnFailure": true } },
+    { "name": "asan", "configurePreset": "asan",
+      "execution": { "timeout": 240 },
       "output": { "outputOnFailure": true } }
   ]
 }

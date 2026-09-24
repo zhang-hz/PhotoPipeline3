@@ -46,6 +46,27 @@
 #     只在缺失 libjxl_threads 的干净机器上炸 —— 与 M2-T18 的 B 类同一机理。
 #     故: ①本脚本对 libjxl*.so* 做显式随包断言（下方「非传递闭包点」段）；
 #         ②tools/appimage-check-closure.sh 把 libjxl* 纳入 B 类「必须来自随包」族。
+#     **M4-CI-fix3 定因（Linux 侧实际形态 = 静态，断言须带前置条件）**: 上文的"必须随包"适用于
+#     **动态链接面**（Windows 侧: jxl.dll/jxl_threads.dll 都是真 .dll）。Linux 侧不是: vcpkg 的
+#     Linux triplet 是 `set(VCPKG_LIBRARY_LINKAGE static)`（vcpkg/triplets/x64-linux.cmake:3，由
+#     triplets/x64-linux-avx2.cmake 原样继承 —— 见该文件头"静态库，一字不改"），而
+#     vcpkg/ports/vcpkg-cmake/vcpkg_cmake_configure.cmake:157-159 会据此传 -DBUILD_SHARED_LIBS=OFF
+#     ⇒ vcpkg_installed 内只有 libjxl.a / libjxl_threads.a，**没有 libjxl*.so* 可打包**。
+#     实测三方互证（CI 日志 + 产物）:
+#       ① run 36040350296 appimage job（job 107793263289）日志: 打包步 usr/lib 拷贝完只有 26 个 .so
+#          （全为 Qt6*/libxcb-*/libjpeg.so.62 面）后即 die 在 libjxl.so 断言上（日志 1393–1394 行）；
+#          同 job 的配置步里来自同一 vcpkg_installed/x64-linux-avx2/lib 的依赖 GIF/ZLIB/PNG/TIFF/
+#          LZMA/BZip2/OpenSSL 全部解析为 .a（日志 1089–1098 行）——该树就是静态的。
+#       ② run 35853348711 appimage job（v0.2.0 成功产物，job 107155969263）末尾"结构清单"逐行列出
+#          AppDir 内全部 26 个 .so，**无任何 libjxl***。
+#       ③ 同一成功运行的产物清单 Release 资产 PhotoPipeline-0.2.0-deps.txt: ③[SYS] 46 个目标机
+#          soname 里也没有 libjxl* —— 即二进制对 libjxl 连**动态依赖都没有**（静态直调，
+#          与 CMakeLists.txt:157/162 的 pkg_check_modules libjxl/libjxl_threads 静态 .a 一致）。
+#     ⇒ 原断言（usr/lib 内必须有 libjxl*.so*）在静态链接下**不可满足**，属"缺前置条件"而非"漏收集"。
+#     故口径修正为**条件断言**: 仅当 AppDir 内确有 ELF 动态依赖 libjxl* 时才要求它来自随包
+#     （此时 libjxl_threads 的非传递语义照旧生效：两个前缀都必须有）；静态链接（无任何 libjxl*
+#     动态引用）则无物可随包，跳过并记录 —— 与 tools/appimage-check-closure.sh 的 B 类判据同构
+#     （B 类只在 ldd 真出现 libjxl* 时触发，静态链接自然不触发）。
 #   * 随包 / 不随包策略（M2-T18 定，逐类理由）:
 #       BUNDLE_ALWAYS（白名单豁免，必须随包）: libQt6*（必须来自 Qt 工具链，绝不允许
 #         系统 Qt 顶替）、libxcb-*.so*（Qt xcb 插件专属扩展库，体积小、ABI 稳定、目标机
@@ -248,15 +269,32 @@ for f in "$APPDIR/usr/lib"/libQt6*.so.*; do
     cmp -s "$f" "$QT_LIB_DIR/$n" || die "随包 Qt 库与 Qt 工具链不一致（疑似系统 Qt 混入）: $n ← $QT_LIB_DIR/$n"
 done
 
-# ---- 非传递闭包点显式随包断言（M4-W4-T18；理由见文件头「非传递闭包点」段） ----
-# libjxl_threads.so 不在 libjxl.so 的 DT_NEEDED 里 ⇒ 不能靠传递闭包推导，必须显式断言存在。
-# 判据 = usr/lib 内存在该 soname 前缀文件（前缀匹配，兼容 0.10/0.12 的 soname 号）。
-for prefix in libjxl.so libjxl_threads.so; do
-    compgen -G "$APPDIR/usr/lib/${prefix}*" >/dev/null \
-        || die "非传递闭包点缺失: usr/lib 内没有 ${prefix}*（libjxl.so 的依赖里没有 libjxl_threads.so，
-  不能靠传递闭包推导；理由与判据见本脚本文件头「非传递闭包点」段）"
+# ---- 非传递闭包点随包断言（M4-W4-T18 建立；M4-CI-fix3 加前置条件，见文件头「M4-CI-fix3 定因」） ----
+# libjxl_threads.so 不在 libjxl.so 的 DT_NEEDED 里 ⇒ **动态链接时**不能靠传递闭包推导，必须显式断言存在。
+# 前置条件（M4-CI-fix3）: vcpkg 的 Linux triplet 是静态（VCPKG_LIBRARY_LINKAGE=static ⇒
+# -DBUILD_SHARED_LIBS=OFF）⇒ vcpkg_installed 内没有 libjxl*.so*；此时"usr/lib 内必须有 libjxl*.so*"
+# 不可满足（run 36040350296/36037824293 的 appimage job 即在此 die）。故先探测 AppDir 内是否真有
+# **动态** libjxl* 依赖: 有 ⇒ 按原口径强制随包（前缀匹配，兼容 0.10/0.12 的 soname 号；两个前缀都要有，
+# 因为 libjxl_threads 是非传递点）；没有（静态直调）⇒ 无物可随包，跳过并记录。
+JXL_DYN_REFS=()
+for f in "$APPDIR/usr/bin/photopipeline" "$APPDIR"/usr/lib/*.so "$APPDIR"/usr/lib/*.so.* "$APPDIR"/usr/lib/qt-plugins/*/*.so; do
+    [ -e "$f" ] || continue
+    while IFS= read -r lib; do
+        [ -n "$lib" ] || continue
+        JXL_DYN_REFS+=("${f#"$APPDIR"/} → $lib")
+    done < <(LD_LIBRARY_PATH="$RESOLVE_PATH${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+             ldd "$f" 2>/dev/null | awk '$1 ~ /libjxl.*\.so/ {print $1}')
 done
-note "非传递闭包点就位: $(cd "$APPDIR/usr/lib" && ls -1 libjxl*.so* | LC_ALL=C sort | tr '\n' ' ')"
+if [ "${#JXL_DYN_REFS[@]}" -eq 0 ]; then
+    note "非传递闭包点: AppDir 内无 libjxl* 动态依赖（vcpkg Linux triplet 静态链接 ⇒ 无 .so 可随包；jxl_threads 的非传递语义仅在动态链接面成立，Windows 侧由 make_winzip.py 的 NON_TRANSITIVE_DLLS 把关）"
+else
+    for prefix in libjxl.so libjxl_threads.so; do
+        compgen -G "$APPDIR/usr/lib/${prefix}*" >/dev/null \
+            || die "非传递闭包点缺失: usr/lib 内没有 ${prefix}*，但 AppDir 内有 ELF 动态依赖它（$(printf '%s; ' "${JXL_DYN_REFS[@]}")）
+  该点在 libjxl.so 的依赖里没有 libjxl_threads.so，不能靠传递闭包推导；理由与判据见本脚本文件头「非传递闭包点」段"
+    done
+    note "非传递闭包点就位: $(cd "$APPDIR/usr/lib" && ls -1 libjxl*.so* | LC_ALL=C sort | tr '\n' ' ')"
+fi
 
 # ---- OIIO 插件目录（静态 OIIO → 通常不存在；探测候选，存在则整拷） ----
 OIIO_PLUGINS="$APPDIR/usr/lib/oiio-plugins"

@@ -279,14 +279,20 @@ jobs:
               ForEach-Object { $lines += "| $($_.step) | $($_.sec) |" }
           }
           $lines += ""
-          $lines += "**棘轮判据行**: \`$(Last '^TIDY total=')\`"
+          # M4-CI-fix3（G）: 原构造在双引号串里用「反斜杠+反引号」转义，但 PowerShell 的转义符只有反引号
+          # （反斜杠是字面量）: ①「反引号+$」让子表达式 $(Last …) 不展开；② 行尾「反引号+"」把闭引号变成
+          # 字面量 ⇒ 该字符串跨行吞并下一行，直到再下一行行首的引号才闭合，剩下的 **fingerprint** 被当代码
+          # 解析 ⇒ ParserError「必须在 '*' 运算符后面提供一个值表达式」（run 36037824293 tidy job 第 24 行
+          # 原文）。改为单引号拼接: 单引号内反引号是字面量、无转义，输出格式（Markdown 行内代码）与原先意图
+          # 一致（旧的坏写法即使侥幸不报错，也会把反引号吞掉并留下裸反斜杠）。
+          $lines += ('**棘轮判据行**: `' + (Last '^TIDY total=') + '`')
           $lines += ""
-          $lines += "**fingerprint**: \`$(Last 'fingerprint=')\`"
+          $lines += ('**fingerprint**: `' + (Last 'fingerprint=') + '`')
           $seed = Last '^TIDY-SEED fingerprint 未入库'
           if ($seed) {
             $lines += ""
-            $lines += "> ⚠ 本轮走了**播种路径**（该 fingerprint 尚未入库）：棘轮未判红，候选基线见 artifact " +
-                      "\`clang-tidy-candidate-baseline\`。复核后并入 \`tools/baseline/clang-tidy.tsv\` 即开启硬棘轮。"
+            $lines += ("> ⚠ 本轮走了**播种路径**（该 fingerprint 尚未入库）：棘轮未判红，候选基线见 artifact " +
+                       '`clang-tidy-candidate-baseline`。复核后并入 `tools/baseline/clang-tidy.tsv` 即开启硬棘轮。')
           }
           $lines | Add-Content "$env:GITHUB_STEP_SUMMARY"
 

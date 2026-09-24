@@ -236,6 +236,13 @@ jobs:
     runs-on: ubuntu-24.04
     # 冷路径估算: vcpkg 41 port 全量 ≈34 min + Qt ≈3 min + 两棵树 ≈6 min + 依赖自检 <1 min ⇒ 60 min。
     timeout-minutes: 60         # §12.6 豁免：播种非门禁基础设施
+    env:
+      # M4-CI-fix3（F）: 本 job 原先只在「Qt 就绪断言」步骤上挂 QT_DIR，job 级为空 —— 而 CMakeLists.txt:47-59
+      # 读的正是 env QT_DIR（为空 ⇒ 回落 ${CMAKE_SOURCE_DIR}/.toolchain/Qt/<ver>/gcc_64，播种路径下不存在）
+      # ⇒ find_package(Qt6) 找不到 Qt6Config.cmake（run 36043530845 本 job step12 实测:
+      # vcpkg/scripts/buildsystems/vcpkg.cmake:939 (_find_package) 报错，Call Stack CMakeLists.txt:149）。
+      # 值与四道流水线的 linux job 逐字一致（main-full.yml:303/703/1087 同款）。
+      QT_DIR: ${{ github.workspace }}/Qt/6.11.2/gcc_64
     steps:
       - uses: actions/checkout@v4
 

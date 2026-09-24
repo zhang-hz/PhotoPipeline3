@@ -79,9 +79,9 @@ env:
   QT_VERSION: 6.11.2
   VCPKG_TAG: 2026.07.29
   PP_VCPKG_WARM_MIN: "20"
-  # 注: 语料输出目录 OUT_ROOT（= runner 临时目录，不污染工作树、随 job 一起丢弃）声明在**各 job 的 env**
-  #     里，不在本块 —— `runner` 上下文（runner.temp/runner.os/...）在工作流级 env **不可用**，写在这里
-  #     会使 GitHub 判整文件非法（Unrecognized named-value: 'runner'）⇒ 三个 sanitizer job 各自声明。
+  # 注: 语料输出目录（runner 临时目录 out-smoke；不污染工作树、随 job 一起丢弃）**不能**写进工作流级或
+  #     job 级 env —— `runner` 上下文在这两处都不可用，写进去会让 GitHub 判整文件非法
+  #     （Unrecognized named-value: 'runner'）⇒ 只能运行期给：见三个 sanitizer job 的 export OUT_ROOT。
   # sanitizer 运行期选项（测试 preset 里另有一份同样的 env —— 那里只管 ctest，这里管金样/回归）。
   ASAN_OPTIONS: detect_leaks=1:print_stacktrace=1:abort_on_error=0
   LSAN_OPTIONS: suppressions=${{ github.workspace }}/tools/lsan.supp:print_suppressions=1
@@ -101,7 +101,6 @@ jobs:
     timeout-minutes: 20         # 硬顶（预算 20 min）
     env:
       QT_DIR: ${{ github.workspace }}/Qt/6.11.2/gcc_64
-      OUT_ROOT: ${{ runner.temp }}/out-smoke   # 语料输出落 runner 临时目录（须 job 级，见工作流 env 注）
       PP_PRESET: asan-linux
     steps:
       - uses: actions/checkout@v4
@@ -188,6 +187,7 @@ jobs:
       - name: 全语料 20 对（sanitizer 下跑 golden smoke）
         run: |
           set -o pipefail
+          export OUT_ROOT="$RUNNER_TEMP/out-smoke"   # 语料输出目录（runner 上下文在 wf/job 级 env 不可用 ⇒ 运行期给）
           T0=$(date +%s)
           python3 tests/golden/smoke.py build/"$PP_PRESET" 2>&1 | tee "$RUNNER_TEMP/golden.log"
           echo -e "golden smoke（$PP_PRESET）\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
@@ -204,8 +204,8 @@ jobs:
         # sanitizer 的报告行就写在那里；连同 ctest 日志一起扫。命中即逐条打印并判红。
         run: |
           set +e
-          LOGS=$(ls "$OUT_ROOT"/*.dev.log 2>/dev/null)
-          echo "扫描: $OUT_ROOT/*.dev.log（$(printf '%s\n' $LOGS | grep -c . ) 个）+ $RUNNER_TEMP/ctest-$PP_PRESET.log"
+          LOGS=$(ls "$RUNNER_TEMP/out-smoke"/*.dev.log 2>/dev/null)
+          echo "扫描: $RUNNER_TEMP/out-smoke/*.dev.log（$(printf '%s\n' $LOGS | grep -c . ) 个）+ $RUNNER_TEMP/ctest-$PP_PRESET.log"
           HITS=$(grep -rEn "$SAN_REPORT_RE" $LOGS "$RUNNER_TEMP/ctest-$PP_PRESET.log" 2>/dev/null)
           if [ -n "$HITS" ]; then
             echo "$HITS" | head -40
@@ -240,7 +240,7 @@ jobs:
             echo ""
             echo "**金样汇总**: $(grep -E '^SMOKE total=' "$RUNNER_TEMP/golden.log" 2>/dev/null | tail -1)"
             echo ""
-            echo "**sanitizer 报告**: $(grep -cE "$SAN_REPORT_RE" "$OUT_ROOT"/*.dev.log 2>/dev/null | awk -F: '{s+=$2} END{print (s+0)" 条"}')（判据 0）"
+            echo "**sanitizer 报告**: $(grep -cE "$SAN_REPORT_RE" "$RUNNER_TEMP/out-smoke"/*.dev.log 2>/dev/null | awk -F: '{s+=$2} END{print (s+0)" 条"}')（判据 0）"
           } >> "$GITHUB_STEP_SUMMARY"
 
   ubsan:
@@ -249,7 +249,6 @@ jobs:
     timeout-minutes: 20         # 硬顶（预算 20 min）
     env:
       QT_DIR: ${{ github.workspace }}/Qt/6.11.2/gcc_64
-      OUT_ROOT: ${{ runner.temp }}/out-smoke   # 语料输出落 runner 临时目录（须 job 级，见工作流 env 注）
       PP_PRESET: ubsan
     steps:
       - uses: actions/checkout@v4
@@ -336,6 +335,7 @@ jobs:
       - name: 全语料 20 对（sanitizer 下跑 golden smoke）
         run: |
           set -o pipefail
+          export OUT_ROOT="$RUNNER_TEMP/out-smoke"   # 语料输出目录（runner 上下文在 wf/job 级 env 不可用 ⇒ 运行期给）
           T0=$(date +%s)
           python3 tests/golden/smoke.py build/"$PP_PRESET" 2>&1 | tee "$RUNNER_TEMP/golden.log"
           echo -e "golden smoke（$PP_PRESET）\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
@@ -350,8 +350,8 @@ jobs:
       - name: sanitizer 报告扫描（判据：全语料 0 报告）
         run: |
           set +e
-          LOGS=$(ls "$OUT_ROOT"/*.dev.log 2>/dev/null)
-          echo "扫描: $OUT_ROOT/*.dev.log（$(printf '%s\n' $LOGS | grep -c . ) 个）+ $RUNNER_TEMP/ctest-$PP_PRESET.log"
+          LOGS=$(ls "$RUNNER_TEMP/out-smoke"/*.dev.log 2>/dev/null)
+          echo "扫描: $RUNNER_TEMP/out-smoke/*.dev.log（$(printf '%s\n' $LOGS | grep -c . ) 个）+ $RUNNER_TEMP/ctest-$PP_PRESET.log"
           HITS=$(grep -rEn "$SAN_REPORT_RE" $LOGS "$RUNNER_TEMP/ctest-$PP_PRESET.log" 2>/dev/null)
           if [ -n "$HITS" ]; then
             echo "$HITS" | head -40
@@ -386,7 +386,7 @@ jobs:
             echo ""
             echo "**金样汇总**: $(grep -E '^SMOKE total=' "$RUNNER_TEMP/golden.log" 2>/dev/null | tail -1)"
             echo ""
-            echo "**sanitizer 报告**: $(grep -cE "$SAN_REPORT_RE" "$OUT_ROOT"/*.dev.log 2>/dev/null | awk -F: '{s+=$2} END{print (s+0)" 条"}')（判据 0）"
+            echo "**sanitizer 报告**: $(grep -cE "$SAN_REPORT_RE" "$RUNNER_TEMP/out-smoke"/*.dev.log 2>/dev/null | awk -F: '{s+=$2} END{print (s+0)" 条"}')（判据 0）"
           } >> "$GITHUB_STEP_SUMMARY"
 
   tsan:
@@ -395,7 +395,6 @@ jobs:
     timeout-minutes: 20         # 硬顶（预算 20 min）
     env:
       QT_DIR: ${{ github.workspace }}/Qt/6.11.2/gcc_64
-      OUT_ROOT: ${{ runner.temp }}/out-smoke   # 语料输出落 runner 临时目录（须 job 级，见工作流 env 注）
       PP_PRESET: tsan
     steps:
       - uses: actions/checkout@v4
@@ -484,6 +483,7 @@ jobs:
       - name: 全语料 20 对（TSan 下跑 golden smoke）
         run: |
           set -o pipefail
+          export OUT_ROOT="$RUNNER_TEMP/out-smoke"   # 语料输出目录（runner 上下文在 wf/job 级 env 不可用 ⇒ 运行期给）
           T0=$(date +%s)
           python3 tests/golden/smoke.py build/tsan 2>&1 | tee "$RUNNER_TEMP/golden.log"
           echo -e "golden smoke（tsan）\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
@@ -498,8 +498,8 @@ jobs:
       - name: sanitizer 报告扫描（判据：全语料 0 报告）
         run: |
           set +e
-          LOGS=$(ls "$OUT_ROOT"/*.dev.log 2>/dev/null)
-          echo "扫描: $OUT_ROOT/*.dev.log（$(printf '%s\n' $LOGS | grep -c . ) 个）+ $RUNNER_TEMP/ctest-tsan.log"
+          LOGS=$(ls "$RUNNER_TEMP/out-smoke"/*.dev.log 2>/dev/null)
+          echo "扫描: $RUNNER_TEMP/out-smoke/*.dev.log（$(printf '%s\n' $LOGS | grep -c . ) 个）+ $RUNNER_TEMP/ctest-tsan.log"
           HITS=$(grep -rEn "$SAN_REPORT_RE" $LOGS "$RUNNER_TEMP/ctest-tsan.log" 2>/dev/null)
           if [ -n "$HITS" ]; then
             echo "$HITS" | head -40
@@ -534,7 +534,7 @@ jobs:
             echo ""
             echo "**金样汇总**: $(grep -E '^SMOKE total=' "$RUNNER_TEMP/golden.log" 2>/dev/null | tail -1)"
             echo ""
-            echo "**sanitizer 报告**: $(grep -cE "$SAN_REPORT_RE" "$OUT_ROOT"/*.dev.log 2>/dev/null | awk -F: '{s+=$2} END{print (s+0)" 条"}')（判据 0）"
+            echo "**sanitizer 报告**: $(grep -cE "$SAN_REPORT_RE" "$RUNNER_TEMP/out-smoke"/*.dev.log 2>/dev/null | awk -F: '{s+=$2} END{print (s+0)" 条"}')（判据 0）"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ────────────────────────────────────────────────────────────────────────────

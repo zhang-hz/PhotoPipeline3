@@ -36,6 +36,7 @@
 #include "codecs/encoders.h"
 #include "core/logger.h"
 #include "core/params.h"
+#include "core/simd/simd.h" // M4-W5-T19：交织 + 量化热路径（§11.2）
 
 namespace pp {
 namespace {
@@ -255,10 +256,6 @@ void store_sample(uint8_t *base, size_t stride, int bitdepth, int x, int y, int 
             static_cast<uint16_t>(value);
     else
         base[static_cast<size_t>(y) * stride + x] = static_cast<uint8_t>(value);
-}
-
-float load_channel(const OIIO::ImageBuf::ConstIterator<float> &it, int channel) {
-    return it[channel];
 }
 
 } // namespace
@@ -555,29 +552,54 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
         }
 
         // ---- pixels: float32 RGB(A)/gray(A) -> full-range BT.601 YCbCr ----
+        // M4-W5-T19 接线（design §11.2 热路径表第 2/5 行）：像素面从"逐像素 ConstIterator"
+        // 改为**逐行 get_pixels**（连续 float 行）+ **pp::simd::interleave**（nch < 3 的
+        // 灰度 → RGB 复制）+ **pp::simd::quantize16**（Y / alpha 平面的量化，唯一运行期
+        // 分派层）。YCbCr 表达式的算子顺序**逐字保留**（0.299r + 0.587g + 0.114b 等），
+        // 故像素语义等价。量化口径从 `lround(clamp(x,0,1)·maxv)`（double）换为 simd 的
+        // float 乘加截断 —— 两者仅在乘积落在 k+0.5 的 ±1e-5 带内时可能差 1 LSB；
+        // 金样 heif/avif 对为 psnr 30dB 断言，实测全绿（T19 selfChecks）。
         std::vector<float> cb_full(static_cast<size_t>(w) * h);
         std::vector<float> cr_full(static_cast<size_t>(w) * h);
-        for (OIIO::ImageBuf::ConstIterator<float> it(req.img); !it.done(); ++it) {
-            const int x = it.x() - ispec.x;
-            const int y = it.y() - ispec.y;
-            if (x < 0 || y < 0 || x >= w || y >= h)
-                continue;
-            float r, g, b;
-            if (nch >= 3) {
-                r = load_channel(it, 0);
-                g = load_channel(it, 1);
-                b = load_channel(it, 2);
-            } else {
-                r = g = b = load_channel(it, 0);
+        std::vector<float> rowf(static_cast<size_t>(w) * static_cast<size_t>(nch));
+        std::vector<float> rgbf;
+        if (nch < 3)
+            rgbf.resize(static_cast<size_t>(w) * 3);
+        std::vector<float> yrow(w);
+        std::vector<float> arow(w);
+        std::vector<uint16_t> yq(w);
+        std::vector<uint16_t> aq(w);
+        for (int y = 0; y < h; ++y) {
+            const OIIO::ROI rroi(ispec.x, ispec.x + w, ispec.y + y, ispec.y + y + 1, 0, 1, 0, nch);
+            if (!req.img.get_pixels(rroi, OIIO::TypeDesc::FLOAT, rowf.data()))
+                return fail("cannot read pixels (row " + std::to_string(y) +
+                            "): " + req.img.geterror());
+            const float *src = rowf.data();
+            if (nch < 3) { // 灰度（±alpha）→ RGB 复制（原 r = g = b = it[0] 的同一规则）
+                pp::simd::interleave(rowf.data(), nch, rgbf.data(), 3, static_cast<size_t>(w));
+                src = rgbf.data();
             }
-            const size_t idx = static_cast<size_t>(y) * w + x;
-            store_sample(planes[0].base, planes[0].stride, bitdepth, x, y,
-                         quantize(0.299f * r + 0.587f * g + 0.114f * b, maxv));
-            cb_full[idx] = -0.168736f * r - 0.331264f * g + 0.5f * b + 0.5f;
-            cr_full[idx] = 0.5f * r - 0.418688f * g - 0.081312f * b + 0.5f;
-            if (has_alpha)
-                store_sample(planes[3].base, planes[3].stride, bitdepth, x, y,
-                             quantize(load_channel(it, nch - 1), maxv));
+            for (int x = 0; x < w; ++x) {
+                const float r = src[static_cast<size_t>(x) * 3 + 0];
+                const float g = src[static_cast<size_t>(x) * 3 + 1];
+                const float b = src[static_cast<size_t>(x) * 3 + 2];
+                const size_t idx = static_cast<size_t>(y) * w + x;
+                yrow[static_cast<size_t>(x)] = 0.299f * r + 0.587f * g + 0.114f * b;
+                cb_full[idx] = -0.168736f * r - 0.331264f * g + 0.5f * b + 0.5f;
+                cr_full[idx] = 0.5f * r - 0.418688f * g - 0.081312f * b + 0.5f;
+                if (has_alpha)
+                    arow[static_cast<size_t>(x)] =
+                        rowf[static_cast<size_t>(x) * static_cast<size_t>(nch) +
+                             static_cast<size_t>(nch - 1)];
+            }
+            pp::simd::quantize16(yrow.data(), yq.data(), static_cast<size_t>(w), maxv);
+            for (int x = 0; x < w; ++x)
+                store_sample(planes[0].base, planes[0].stride, bitdepth, x, y, yq[x]);
+            if (has_alpha) {
+                pp::simd::quantize16(arow.data(), aq.data(), static_cast<size_t>(w), maxv);
+                for (int x = 0; x < w; ++x)
+                    store_sample(planes[3].base, planes[3].stride, bitdepth, x, y, aq[x]);
+            }
         }
         // box-downsample the chroma planes (2x2 for 420, 2x1 for 422, none for 444)
         for (int cy = 0; cy < ch; cy++) {

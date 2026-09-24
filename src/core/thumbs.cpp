@@ -58,6 +58,7 @@
 #include <utility>
 #include <vector>
 
+#include "core/simd/simd.h" // M4-W5-T19：LANCZOS3 降采样热路径（§11.2）
 #include "decode/oiio_reader.h"
 
 namespace pp {
@@ -269,15 +270,18 @@ bool try_embedded_preview(const std::filesystem::path &src, int target, ThumbIma
 // ------------------------------------------------------------------------------------------
 
 // §6.1：float32 源 → LANCZOS3 缩放到 max_px 内（不放大）→ 8bit RGBA（白底、sRGB 假定）。
-//   * 目标缓冲经 IBAprep 的 "dst_datatype"="float" 显式 float32 —— 内部全程 float32（铁律），
-//     滤波器 LANCZOS3 是 §6.1 指定的降采样滤波器（"resize" 的自动默认在降采样时也是 lanczos3，
-//     这里显式写死，防止上游默认值漂移）；
-//   * M4-W2-fix 第 12 条（性能）：去掉 nthreads=1 → IBA::resize 按 OIIO 全局线程数并行
-//     （nthreads=0 = 本机 16 核）。**只改"怎么算"不改"算什么"**：滤波器 lanczos3、float32
-//     中间面、不放大、白底、sRGB 假定逐条不变（像素结果与单线程逐位一致）。
-//     两段式（box 抽到 2×目标再 LANCZOS3）按任务书"可行则"实测**不可行**（本机 48MP→2048：
-//     两段 738ms vs 单段 499ms，box 段的抽取开销大于它给 lanczos 省下的部分）→ 不采用，
-//     保留单段多线程 LANCZOS3。实测三段（内嵌原生/内嵌降采样/无内嵌）见 W2-fix selfChecks。
+//   * 滤波器 LANCZOS3 是 §6.1 指定的降采样滤波器；内部全程 float32（铁律）。
+//   * M4-W5-T19 接线（design §11.2 热路径表第 4 行）：降采样实现从 OIIO
+//     `ImageBufAlgo::resize(filtername=lanczos3, dst_datatype=float, nthreads=0)` 换成
+//     **pp::simd::downscale**（LANCZOS3 水平 + 垂直两遍卷积，AVX2；唯一运行期分派层）。
+//     语义等价（硬要求）：权重公式、支撑按 ratio 展宽、权重归一化、边缘 clamp、两遍分离
+//     逐式对齐 OIIO 的 resize_（逐条出处见 core/simd/resample.cpp 头注）；test_simd 的
+//     OIIO 交叉断言实测上界 max|Δ| = 1.073e-06（200×150→64×48，见该测试的 printf 行）。
+//     **只改"怎么算"不改"算什么"**：滤波器 lanczos3、float32 中间面、不放大、白底、
+//     sRGB 假定逐条不变。
+//   * 线程面（W2-fix 第 12 条的修订，如实记录）：原 nthreads=0 的多线程并行落在 OIIO 内部；
+//     自研两遍实现当前**单线程**（§11.2 未要求 downscale 并行）。耗时实测见 T19 selfChecks
+//     （48MP→2048 与 W2-fix 记录的 OIIO 单段 499ms 基线对照）。
 bool scale_to_rgba8(const OIIO::ImageBuf &src, int max_px, QImage &out) {
     const OIIO::ImageSpec spec = src.spec(); // 文件型 ImageBuf：此处触发惰性 spec 读取
     const int sw = spec.width;
@@ -295,13 +299,22 @@ bool scale_to_rgba8(const OIIO::ImageBuf &src, int max_px, QImage &out) {
         if (!src.get_pixels(roi, OIIO::TypeFloat, px.data()))
             return false;
     } else {
-        const OIIO::ImageBufAlgo::KWArgs opts{{OIIO::ParamValue("filtername", "lanczos3")},
-                                              {OIIO::ParamValue("dst_datatype", "float")}};
-        OIIO::ImageBuf scaled;
-        if (!OIIO::ImageBufAlgo::resize(scaled, src, opts, roi, /*nthreads=*/0))
-            return false;
-        if (!scaled.get_pixels(roi, OIIO::TypeFloat, px.data()))
-            return false;
+        // 源面：零拷贝取 ImageBuf 的本地缓冲（全解码通道 decode_float 与内嵌预览通道
+        // preview_bytes_to_buf 都落在本地内存）；非本地（文件型）时回退一份整帧拷贝
+        // （语义不变，内存 +1 帧 —— 如实记账，见 T19 偏差账）。
+        std::vector<float> owned;
+        const float *src_px = nullptr;
+        if (src.localpixels() != nullptr && spec.format == OIIO::TypeDesc::FLOAT) {
+            src_px = static_cast<const float *>(src.localpixels());
+        } else {
+            owned.resize(static_cast<std::size_t>(sw) * static_cast<std::size_t>(sh) *
+                         static_cast<std::size_t>(nch));
+            const OIIO::ROI full(0, sw, 0, sh);
+            if (!src.get_pixels(full, OIIO::TypeFloat, owned.data()))
+                return false;
+            src_px = owned.data();
+        }
+        pp::simd::downscale(src_px, sw, sh, nch, px.data(), ts.w, ts.h, nch);
     }
 
     QImage image(ts.w, ts.h, QImage::Format_RGBA8888);

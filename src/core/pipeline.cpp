@@ -79,6 +79,7 @@
 #include "core/params.h"
 #include "core/pixelbudget.h"
 #include "core/progress.h"
+#include "core/simd/simd.h" // M4-W5-T19：flatten 热路径（§11.2）
 #include "decode/oiio_reader.h"
 
 namespace pp {
@@ -333,6 +334,14 @@ bool orient_work(WorkImage &img, int orientation, std::string &err) {
 // Composite alpha onto a constant background (§5.5) — **原地**（§4.3 内存纪律：零额外帧）。
 // 2 通道 → 1（灰），4 → 3（RGB）。通道数只减不增，dst 索引恒 ≤ src 索引，故前向写入永不
 // 覆盖尚未读取的源像素（alpha 分量先读后写，同像素内亦安全）。像素值与 0.2 逐位相同。
+//
+// M4-W5-T19 接线（design §11.2 热路径表首行）：合成循环改由 **pp::simd::flatten**（唯一
+// 运行期分派层，cpu_has_avx2() → avx2 / ref）承载 —— AVX2 向量 + FMA（具体迭代形态与
+//   三组候选的实测对照见 core/simd/kernels.cpp）。语义逐条不变：
+//   同一条式子（a = clamp(alpha,0,1)；c*a + bg*(1-a)）、同一底色 clamp、`src == dst` 的
+//   原地缩通道形态在 simd 层显式支持（simd.h 的别名契约）。唯一差异 = 乘加合一（FMA 单次
+//   舍入）⇒ 末位可能与 0.2 的 mul+add 不同；金样 20 对（含 alpha-jpeg / multiformat-split
+//   的 flatten 产物）为该口径的裁判，实测全绿（T19 selfChecks）。
 bool flatten_alpha_in_place(WorkImage &img, float background, std::string &err) {
     const int ch = img.spec.nchannels;
     if (ch != 2 && ch != 4) {
@@ -347,16 +356,7 @@ bool flatten_alpha_in_place(WorkImage &img, float background, std::string &err) 
         err = "working buffer size mismatch before flatten";
         return false;
     }
-    const float bg = std::clamp(background, 0.0f, 1.0f);
-    for (std::size_t i = 0; i < npix; ++i) {
-        const std::size_t src = i * static_cast<std::size_t>(ch);
-        const std::size_t dst = i * static_cast<std::size_t>(out_ch);
-        const float a = std::clamp(px[src + static_cast<std::size_t>(ch - 1)], 0.0f, 1.0f);
-        for (int c = 0; c < out_ch; ++c) {
-            px[dst + static_cast<std::size_t>(c)] =
-                px[src + static_cast<std::size_t>(c)] * a + bg * (1.0f - a);
-        }
-    }
+    pp::simd::flatten(px.data(), px.data(), npix, ch, background);
     px.resize(npix * static_cast<std::size_t>(out_ch)); // 只缩容（不重分配）
     img.spec.nchannels = out_ch;
     img.spec.channelnames =

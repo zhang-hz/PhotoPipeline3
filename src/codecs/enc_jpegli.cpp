@@ -37,6 +37,7 @@
 #include "codecs/encoder_registry.h"
 #include "core/logger.h"
 #include "core/params.h"
+#include "core/simd/simd.h" // M4-W5-T19：交织 + 量化热路径（§11.2）
 #include "core/types.h"
 
 namespace pp {
@@ -176,15 +177,14 @@ bool fetch_raster(const OIIO::ImageBuf &img, Raster &out, std::string &err) {
 }
 
 // E6: standard rounding, no dithering, clamp to [0,1].
-uint8_t to_u8(float v) {
-    if (!(v > 0.0f)) {
-        return 0; // also catches NaN
-    }
-    if (v >= 1.0f) {
-        return 255;
-    }
-    return static_cast<uint8_t>(v * 255.0f + 0.5f);
-}
+//
+// M4-W5-T19 接线（design §11.2 热路径表第 2/5 行）：逐行「通道选择/展开（interleave）→
+// float→u8（quantize8）」改由 **pp::simd::interleave** + **pp::simd::quantize8**
+// （唯一运行期分派层）承载。原 `to_u8` 标量表达式不再保留第二副本：语义文书 =
+// core/simd/simd.h 的 quantize 契约块，且 test_simd 的 `quantize8/matches-to_u8` 断言
+// **独立复刻**了该表达式做对照。通道规则与 simd::interleave 一致：
+//   gray（nch ≤ 2）→ comps = 1（取 src[0]，与原 `to_u8(px[0])` 同口径）；
+//   nch = 3 → RGB 直通；nch = 4 → 丢弃 alpha（原循环同样只取前 3 通道）。
 
 // ---------------------------------------------------------------- libjpeg --
 // libjpeg exits the process through error_exit() by default; the longjmp below
@@ -270,6 +270,9 @@ private:
         // Constructed before setjmp so no destructor can be skipped by longjmp.
         std::vector<JSAMPLE> row(static_cast<std::size_t>(r.width) *
                                  static_cast<std::size_t>(comps));
+        // M4-W5-T19：展开行缓冲（interleave 的目的面，L1 驻留）+ 量化输出面 = JSAMPLE 行。
+        std::vector<float> rowf(static_cast<std::size_t>(r.width) *
+                                static_cast<std::size_t>(comps));
 
         jpeg_compress_struct cinfo{};
         JpegliErrorMgr jerr{};
@@ -356,17 +359,12 @@ private:
             const float *src = r.px.data() + static_cast<std::size_t>(y) *
                                                  static_cast<std::size_t>(r.width) *
                                                  static_cast<std::size_t>(r.channels);
-            for (int x = 0; x < r.width; ++x) {
-                const float *px =
-                    src + static_cast<std::size_t>(x) * static_cast<std::size_t>(r.channels);
-                if (gray) {
-                    row[static_cast<std::size_t>(x)] = to_u8(px[0]);
-                } else {
-                    row[static_cast<std::size_t>(x) * 3 + 0] = to_u8(px[0]);
-                    row[static_cast<std::size_t>(x) * 3 + 1] = to_u8(px[1]);
-                    row[static_cast<std::size_t>(x) * 3 + 2] = to_u8(px[2]);
-                }
-            }
+            // 展开（gray → 1 通道；RGB(A) → 3 通道）→ 量化到 JSAMPLE 行
+            pp::simd::interleave(src, r.channels, rowf.data(), comps,
+                                 static_cast<std::size_t>(r.width));
+            pp::simd::quantize8(rowf.data(), row.data(),
+                                static_cast<std::size_t>(r.width) *
+                                    static_cast<std::size_t>(comps));
             JSAMPROW rows[1] = {row.data()};
             if (jpegli_write_scanlines(&cinfo, rows, 1) != 1) {
                 jpegli_abort_compress(&cinfo);

@@ -41,6 +41,7 @@
 #include "codecs/encoder_registry.h"
 #include "core/logger.h"
 #include "core/params.h"
+#include "core/simd/simd.h" // M4-W5-T19：量化热路径（§11.2）
 #include "core/types.h"
 
 namespace pp {
@@ -190,25 +191,13 @@ bool fetch_raster(const OIIO::ImageBuf &img, Raster &out, std::string &err) {
 }
 
 // E6: standard rounding, no dithering, clamp to [0,1].
-uint8_t to_u8(float v) {
-    if (!(v > 0.0f)) {
-        return 0; // also catches NaN
-    }
-    if (v >= 1.0f) {
-        return 255;
-    }
-    return static_cast<uint8_t>(v * 255.0f + 0.5f);
-}
-
-uint16_t to_u16(float v) {
-    if (!(v > 0.0f)) {
-        return 0;
-    }
-    if (v >= 1.0f) {
-        return 65535;
-    }
-    return static_cast<uint16_t>(v * 65535.0f + 0.5f);
-}
+//
+// M4-W5-T19 接线（design §11.2 热路径表第 2 行「float→int 舍入（encode 前）」）：逐行量化改由
+// **pp::simd::quantize8 / quantize16**（唯一运行期分派层）承载 —— AVX2 8 样本/迭代
+// （`_mm256_cvtps_epi32` + 饱和打包）。原 `to_u8` / `to_u16` 标量表达式不再需要副本：
+// 其语义文书 = core/simd/simd.h 的 quantize 契约块，且 test_simd 的
+// `quantize8/matches-to_u8`、`quantize16/matches-to_u16` 断言**独立复刻**了该表达式做对照
+// （v 非正（含 NaN）→ 0；v ≥ 1 → maxv；否则 (uint)(v·maxv + 0.5f)）——不出现两套口径。
 
 // ------------------------------------------------------------------ encoder --
 struct JxlEncoderDeleter {
@@ -530,8 +519,7 @@ private:
             pixels16.resize(npix);
             for (int y = 0; y < r.height; ++y) {
                 const std::size_t base = static_cast<std::size_t>(y) * stride;
-                for (std::size_t i = 0; i < stride; ++i)
-                    pixels16[base + i] = to_u16(r.px[base + i]);
+                pp::simd::quantize16(r.px.data() + base, pixels16.data() + base, stride, 65535);
                 if (progress)
                     progress(static_cast<float>(y + 1) / static_cast<float>(r.height));
             }
@@ -541,8 +529,7 @@ private:
             pixels8.resize(npix);
             for (int y = 0; y < r.height; ++y) {
                 const std::size_t base = static_cast<std::size_t>(y) * stride;
-                for (std::size_t i = 0; i < stride; ++i)
-                    pixels8[base + i] = to_u8(r.px[base + i]);
+                pp::simd::quantize8(r.px.data() + base, pixels8.data() + base, stride);
                 if (progress)
                     progress(static_cast<float>(y + 1) / static_cast<float>(r.height));
             }

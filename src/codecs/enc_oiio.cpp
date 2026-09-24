@@ -31,6 +31,7 @@
 #include "codecs/encoders.h"
 #include "core/logger.h"
 #include "core/params.h"
+#include "core/simd/simd.h" // M4-W5-T19：量化热路径（§11.2）
 
 namespace pp {
 namespace {
@@ -103,10 +104,10 @@ bool oiio_progress_trampoline(void *opaque, float portion_done) {
     return false;
 }
 
-int quantize(float v, int maxv) {
-    const float x = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
-    return static_cast<int>(std::lround(x * static_cast<float>(maxv)));
-}
+// M4-W5-T19 接线（design §11.2 热路径表第 2 行）：量化改由 **pp::simd::quantize8 /
+// quantize16**（唯一运行期分派层）承载 —— AVX2 8 样本/迭代（`_mm256_cvtps_epi32` + 饱和
+// 打包）。原 `quantize` 标量表达式（double `lround(clamp(x,0,1)·maxv)`）随之删除，其口径
+// 与 simd 契约的关系见下方像素段的接线注释与 core/simd/simd.h 的 quantize 契约块。
 
 // Parameter keys declared by the static format table for (format, backend) -> E9 detection.
 std::vector<std::string> known_param_keys(std::string_view format_id, std::string_view backend_id) {
@@ -219,7 +220,6 @@ EncodeResult OiioEncoder::encode(const EncodeRequest &req) {
                             std::to_string(req.target.out_bitdepth) + " (expected 8 or 16)");
         }
         const int bps = static_cast<int>(out_type.size());
-        const int maxv = (out_type == OIIO::TypeDesc::UINT8) ? 255 : 65535;
 
         OIIO::ImageSpec spec(w, h, nch, out_type);
         switch (nch) {
@@ -299,19 +299,29 @@ EncodeResult OiioEncoder::encode(const EncodeRequest &req) {
         }
 
         // ---- pixels: float32 -> target integer type, one conversion only (R11) ----
+        // M4-W5-T19 接线（design §11.2 热路径表第 2 行「float→int 舍入（encode 前）」）：
+        // 逐像素 ConstIterator + 标量 quantize 改为**逐行 get_pixels**（连续 float 行）+
+        // **pp::simd::quantize8 / quantize16**（唯一运行期分派层，AVX2 8 样本/迭代）。
+        // 内存面与旧实现同量级（至多多一行缓冲，不是整帧）；输出布局逐字不变（交织、
+        // xstride = nch·bps）——16 位面直接写进输出缓冲（同 strides），无额外中间帧。
+        // 量化口径：simd 契约 = v 非正（含 NaN）→ 0 / v ≥ 1 → maxv / 否则 (uint)(v·maxv+0.5f)
+        // （float 乘加截断）；原标量 `quantize` 是 double `lround(clamp·maxv)`。两者在金样
+        // 覆盖的整数源（rgb8/rgb16/multi.tif 等 8/16 位 PNG/TIFF/BMP）上逐位一致；实测金样
+        // 20 对全绿（含 png16-lossless / tiff16-lzw / bmp-exact / multipage-png 的 exact 断言）。
         std::vector<uint8_t> pixels(static_cast<size_t>(w) * h * nch * bps);
-        for (OIIO::ImageBuf::ConstIterator<float> it(req.img); !it.done(); ++it) {
-            const int x = it.x() - ispec.x;
-            const int y = it.y() - ispec.y;
-            if (x < 0 || y < 0 || x >= w || y >= h)
-                continue;
-            uint8_t *dst = pixels.data() + (static_cast<size_t>(y) * w + x) * nch * bps;
-            for (int c = 0; c < nch; c++) {
-                const int q = quantize(it[c], maxv);
-                if (bps == 1)
-                    dst[c] = static_cast<uint8_t>(q);
-                else
-                    reinterpret_cast<uint16_t *>(dst)[c] = static_cast<uint16_t>(q);
+        std::vector<float> rowf(static_cast<size_t>(w) * static_cast<size_t>(nch));
+        for (int y = 0; y < h; ++y) {
+            const OIIO::ROI rroi(ispec.x, ispec.x + w, ispec.y + y, ispec.y + y + 1, 0, 1, 0, nch);
+            if (!req.img.get_pixels(rroi, OIIO::TypeFloat, rowf.data()))
+                return fail("cannot read pixels (row " + std::to_string(y) +
+                            "): " + req.img.geterror());
+            const std::size_t n = static_cast<std::size_t>(w) * static_cast<std::size_t>(nch);
+            uint8_t *dst =
+                pixels.data() + static_cast<std::size_t>(y) * n * static_cast<std::size_t>(bps);
+            if (bps == 1) {
+                pp::simd::quantize8(rowf.data(), dst, n);
+            } else { // bps == 2：输出面本身即 u16 数组（xstride = nch·2）→ 直接落写
+                pp::simd::quantize16(rowf.data(), reinterpret_cast<uint16_t *>(dst), n, 65535);
             }
         }
 

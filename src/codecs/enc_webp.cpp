@@ -35,6 +35,7 @@
 #include "codecs/encoder_registry.h"
 #include "core/logger.h"
 #include "core/params.h"
+#include "core/simd/simd.h" // M4-W5-T19：交织 + 量化热路径（§11.2）
 #include "core/types.h"
 
 namespace pp {
@@ -153,15 +154,15 @@ bool fetch_raster(const OIIO::ImageBuf &img, Raster &out, std::string &err) {
 }
 
 // E6: standard rounding, no dithering, clamp to [0,1].
-uint8_t to_u8(float v) {
-    if (!(v > 0.0f)) {
-        return 0; // also catches NaN
-    }
-    if (v >= 1.0f) {
-        return 255;
-    }
-    return static_cast<uint8_t>(v * 255.0f + 0.5f);
-}
+//
+// M4-W5-T19 接线（design §11.2 热路径表第 2/5 行）：本 TU 的像素循环改由
+// **pp::simd::interleave**（通道展开/选择，纯数据搬运）+ **pp::simd::quantize8**
+// （float → u8，唯一运行期分派层）承载。原 `to_u8` 标量表达式不再保留第二副本：
+// 语义文书 = core/simd/simd.h 的 quantize 契约块，且 test_simd 的
+// `quantize8/matches-to_u8` 断言**独立复刻**了该表达式做对照。
+// 通道规则与 simd::interleave 的契约逐条一致（interleave 的 out_ch=3/4 展开规则
+// 就是本 TU 原 out_channels 循环的逐字形态：gray → RGB 复制；gray+alpha → RGBA(A=src[1])；
+// RGB(A) → RGB(A) 直通；4→3 丢弃 alpha）。
 
 class WebpEncoder final : public IEncoder {
 public:
@@ -279,29 +280,20 @@ private:
         const std::size_t npix =
             static_cast<std::size_t>(r.width) * static_cast<std::size_t>(r.height);
         std::vector<uint8_t> buf(npix * static_cast<std::size_t>(out_channels));
-        for (std::size_t i = 0; i < npix; ++i) {
-            const float *src = r.px.data() + i * static_cast<std::size_t>(r.channels);
-            uint8_t *dst = buf.data() + i * static_cast<std::size_t>(out_channels);
-            const uint8_t g = to_u8(src[0]);
-            if (r.channels == 1) {
-                dst[0] = g;
-                dst[1] = g;
-                dst[2] = g;
-            } else if (r.channels == 2) {
-                dst[0] = g;
-                dst[1] = g;
-                dst[2] = g;
-                dst[3] = to_u8(src[1]);
-            } else if (r.channels == 3) {
-                dst[0] = to_u8(src[0]);
-                dst[1] = to_u8(src[1]);
-                dst[2] = to_u8(src[2]);
-            } else {
-                dst[0] = to_u8(src[0]);
-                dst[1] = to_u8(src[1]);
-                dst[2] = to_u8(src[2]);
-                dst[3] = to_u8(src[3]); // alpha preserved (E4)
-            }
+        // M4-W5-T19：逐行「展开（interleave）→ 量化（quantize8）」。行缓冲驻留 L1；
+        // 与旧的"逐像素展开 + to_u8"逐位等价（同一表达式、同一通道规则）。
+        std::vector<float> rowf(static_cast<std::size_t>(r.width) *
+                                static_cast<std::size_t>(out_channels));
+        for (int y = 0; y < r.height; ++y) {
+            const float *src_row = r.px.data() + static_cast<std::size_t>(y) * r.width *
+                                                     static_cast<std::size_t>(r.channels);
+            uint8_t *dst_row = buf.data() + static_cast<std::size_t>(y) * r.width *
+                                                static_cast<std::size_t>(out_channels);
+            const std::size_t row_n =
+                static_cast<std::size_t>(r.width) * static_cast<std::size_t>(out_channels);
+            pp::simd::interleave(src_row, r.channels, rowf.data(), out_channels,
+                                 static_cast<std::size_t>(r.width));
+            pp::simd::quantize8(rowf.data(), dst_row, row_n);
         }
 
         WebPPicture pic;

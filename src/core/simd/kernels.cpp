@@ -56,12 +56,12 @@ inline void pack_rgba8_to_rgb8(__m256 o0, __m256 o1, __m256 o2, __m256 o3, float
     const __m256 m1 = _mm256_castsi256_ps(_mm256_setr_epi32(0, 0, 0, 0, -1, -1, -1, -1));
     const __m256 m2 = _mm256_castsi256_ps(_mm256_setr_epi32(0, 0, -1, -1, -1, -1, -1, -1));
 
-    const __m256 w0 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(o0, ia0),
-                                       _mm256_permutevar8x32_ps(o1, ib0), m0);
-    const __m256 w1 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(o1, ia1),
-                                       _mm256_permutevar8x32_ps(o2, ib1), m1);
-    const __m256 w2 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(o2, ia2),
-                                       _mm256_permutevar8x32_ps(o3, ib2), m2);
+    const __m256 w0 =
+        _mm256_blendv_ps(_mm256_permutevar8x32_ps(o0, ia0), _mm256_permutevar8x32_ps(o1, ib0), m0);
+    const __m256 w1 =
+        _mm256_blendv_ps(_mm256_permutevar8x32_ps(o1, ia1), _mm256_permutevar8x32_ps(o2, ib1), m1);
+    const __m256 w2 =
+        _mm256_blendv_ps(_mm256_permutevar8x32_ps(o2, ia2), _mm256_permutevar8x32_ps(o3, ib2), m2);
     _mm256_storeu_ps(dst + 0, w0);
     _mm256_storeu_ps(dst + 8, w1);
     _mm256_storeu_ps(dst + 16, w2);
@@ -71,11 +71,10 @@ inline void pack_rgba8_to_rgb8(__m256 o0, __m256 o1, __m256 o2, __m256 o3, float
 inline __m128i quantize8_avx2_8(__m256 v) {
     const __m256 zero = _mm256_setzero_ps();
     const __m256 one = _mm256_set1_ps(1.0f);
-    const __m256 ord = _mm256_cmp_ps(v, v, _CMP_ORD_Q); // NaN 车道 → 全 0
+    const __m256 ord = _mm256_cmp_ps(v, v, _CMP_ORD_Q);    // NaN 车道 → 全 0
     __m256 c = _mm256_min_ps(_mm256_max_ps(v, zero), one); // 负 → 0；> 1 → 1
     c = _mm256_and_ps(c, ord);                             // NaN → 0（与标量的 !(v>0) 同判据）
-    const __m256 q =
-        _mm256_add_ps(_mm256_mul_ps(c, _mm256_set1_ps(255.0f)), _mm256_set1_ps(0.5f));
+    const __m256 q = _mm256_add_ps(_mm256_mul_ps(c, _mm256_set1_ps(255.0f)), _mm256_set1_ps(0.5f));
     const __m256i iv = _mm256_cvttps_epi32(q); // 截断（q ≥ 0 ⇒ 等于 floor）
     const __m128i lo = _mm256_castsi256_si128(iv);
     const __m128i hi = _mm256_extracti128_si256(iv, 1);
@@ -140,14 +139,12 @@ void flatten_avx2(const float *src, float *dst, std::size_t npix, int ch, float 
             const float *s0 = src + i * 4;
             const __m256 y0 = _mm256_loadu_ps(s0);     // 像素 i, i+1
             const __m256 y1 = _mm256_loadu_ps(s0 + 8); // 像素 i+2, i+3
-            const __m256 a0 = _mm256_min_ps(
-                one8, _mm256_max_ps(zero8, _mm256_shuffle_ps(y0, y0, 0xFF)));
-            const __m256 a1 = _mm256_min_ps(
-                one8, _mm256_max_ps(zero8, _mm256_shuffle_ps(y1, y1, 0xFF)));
-            const __m256 w0 =
-                _mm256_fmadd_ps(y0, a0, _mm256_mul_ps(bg8, _mm256_sub_ps(one8, a0)));
-            const __m256 w1 =
-                _mm256_fmadd_ps(y1, a1, _mm256_mul_ps(bg8, _mm256_sub_ps(one8, a1)));
+            const __m256 a0 =
+                _mm256_min_ps(one8, _mm256_max_ps(zero8, _mm256_shuffle_ps(y0, y0, 0xFF)));
+            const __m256 a1 =
+                _mm256_min_ps(one8, _mm256_max_ps(zero8, _mm256_shuffle_ps(y1, y1, 0xFF)));
+            const __m256 w0 = _mm256_fmadd_ps(y0, a0, _mm256_mul_ps(bg8, _mm256_sub_ps(one8, a0)));
+            const __m256 w1 = _mm256_fmadd_ps(y1, a1, _mm256_mul_ps(bg8, _mm256_sub_ps(one8, a1)));
             _mm_storeu_ps(dst + i * 3, _mm256_castps256_ps128(w0));       // R0 G0 B0 (+垃圾)
             _mm_storeu_ps(dst + i * 3 + 3, _mm256_extractf128_ps(w0, 1)); // R1 G1 B1 (+垃圾)
             _mm_storeu_ps(dst + i * 3 + 6, _mm256_castps256_ps128(w1));   // R2 G2 B2 (+垃圾)
@@ -168,10 +165,10 @@ void flatten_avx2(const float *src, float *dst, std::size_t npix, int ch, float 
         for (; i + 4 <= npix; i += 4) {
             const __m128 x0 = _mm_loadu_ps(src + i * 2);     // 像素 0,1
             const __m128 x1 = _mm_loadu_ps(src + i * 2 + 4); // 像素 2,3
-            const __m128 a0 = clamp_alpha(_mm_shuffle_ps(x0, x0, _MM_SHUFFLE(3, 3, 1, 1)), zero4,
-                                          one4);
-            const __m128 a1 = clamp_alpha(_mm_shuffle_ps(x1, x1, _MM_SHUFFLE(3, 3, 1, 1)), zero4,
-                                          one4);
+            const __m128 a0 =
+                clamp_alpha(_mm_shuffle_ps(x0, x0, _MM_SHUFFLE(3, 3, 1, 1)), zero4, one4);
+            const __m128 a1 =
+                clamp_alpha(_mm_shuffle_ps(x1, x1, _MM_SHUFFLE(3, 3, 1, 1)), zero4, one4);
             const __m128 o0 = _mm_fmadd_ps(x0, a0, _mm_mul_ps(b4, _mm_sub_ps(one4, a0)));
             const __m128 o1 = _mm_fmadd_ps(x1, a1, _mm_mul_ps(b4, _mm_sub_ps(one4, a1)));
             // 每半区取车道 0,2 → [V0 V1 V2 V3]（一次 16B 存储，无垃圾车道）
@@ -234,8 +231,8 @@ void quantize16_avx2(const float *src, std::uint16_t *dst, std::size_t n, int ma
         __m256 c = _mm256_min_ps(_mm256_max_ps(v, zero), one);
         c = _mm256_and_ps(c, ord);
         const __m256i iv = _mm256_cvttps_epi32(_mm256_add_ps(_mm256_mul_ps(c, scale), half));
-        const __m128i p16 = _mm_packus_epi32(_mm256_castsi256_si128(iv),
-                                             _mm256_extracti128_si256(iv, 1));
+        const __m128i p16 =
+            _mm_packus_epi32(_mm256_castsi256_si128(iv), _mm256_extracti128_si256(iv, 1));
         _mm_storeu_si128(reinterpret_cast<__m128i *>(dst + i), p16);
     }
     if (i < n)
@@ -333,8 +330,7 @@ void transpose8_avx2(const float *src, int sw, int sh, float *dst) {
     // 下侧尾行：整行标量
     for (int y = by; y < sh; ++y) {
         for (int x = 0; x < sw; ++x) {
-            dst[static_cast<std::size_t>(x) * sh + y] =
-                src[static_cast<std::size_t>(y) * sw + x];
+            dst[static_cast<std::size_t>(x) * sh + y] = src[static_cast<std::size_t>(y) * sw + x];
         }
     }
 }
@@ -394,8 +390,10 @@ void interleave_avx2(const float *src, int nch, float *dst, int out_ch, std::siz
         for (; i + 8 <= npix; i += 8) {
             const __m256 v = _mm256_loadu_ps(src + i);
             _mm256_storeu_ps(dst + i * 3 + 0, _mm256_permutevar8x32_ps(v, idx));
-            _mm256_storeu_ps(dst + i * 3 + 8, _mm256_permutevar8x32_ps(v, _mm256_setr_epi32(2, 3, 3, 3, 4, 4, 4, 5)));
-            _mm256_storeu_ps(dst + i * 3 + 16, _mm256_permutevar8x32_ps(v, _mm256_setr_epi32(5, 5, 6, 6, 6, 7, 7, 7)));
+            _mm256_storeu_ps(dst + i * 3 + 8, _mm256_permutevar8x32_ps(
+                                                  v, _mm256_setr_epi32(2, 3, 3, 3, 4, 4, 4, 5)));
+            _mm256_storeu_ps(dst + i * 3 + 16, _mm256_permutevar8x32_ps(
+                                                   v, _mm256_setr_epi32(5, 5, 6, 6, 6, 7, 7, 7)));
         }
     } else if (nch == 1 && out_ch == 4) { // 灰度 → RGBA（RGB 复制 + A = 1）
         const __m256 one = _mm256_set1_ps(1.0f);
@@ -437,8 +435,8 @@ void interleave_avx2(const float *src, int nch, float *dst, int out_ch, std::siz
         return;
     }
     if (i < npix) // 尾块：同一语义的标量面
-        interleave_ref(src + i * static_cast<std::size_t>(nch),
-                       nch, dst + i * static_cast<std::size_t>(out_ch), out_ch, npix - i);
+        interleave_ref(src + i * static_cast<std::size_t>(nch), nch,
+                       dst + i * static_cast<std::size_t>(out_ch), out_ch, npix - i);
 }
 
 void interleave(const float *src, int nch, float *dst, int out_ch, std::size_t npix) {

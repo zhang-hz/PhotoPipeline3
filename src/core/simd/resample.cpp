@@ -46,8 +46,8 @@ inline float lanczos3(float x) {
         return 0.0f;
     if (x < 0.0001f)
         return 1.0f;
-    const float s1 = std::sin(x * ainv * pi);          // sin(x·π/a)
-    const float s3 = (-4.0f * s1 * s1 + 3.0f) * s1;    // sin(3x·π/a) == sin(x·π)
+    const float s1 = std::sin(x * ainv * pi);       // sin(x·π/a)
+    const float s3 = (-4.0f * s1 * s1 + 3.0f) * s1; // sin(3x·π/a) == sin(x·π)
     return a / (x * x * (pi * pi)) * s1 * s3;
 }
 
@@ -79,8 +79,8 @@ void build_axis(int src_n, int dst_n, Axis &ax) {
         int *idx = ax.idx.data() + static_cast<std::size_t>(x) * ax.taps;
         float total = 0.0f;
         for (int i = 0; i < ax.taps; ++i) {
-            const float u = ratio * (static_cast<float>(i) - static_cast<float>(rad) -
-                                     (frac - 0.5f));
+            const float u =
+                ratio * (static_cast<float>(i) - static_cast<float>(rad) - (frac - 0.5f));
             w[i] = lanczos3(u * m_scale);
             total += w[i];
         }
@@ -108,13 +108,12 @@ void hrow_scalar(const float *srow, int sc, const Axis &ax, float *trow, int dc)
 }
 
 // 垂直一行：dst_row[k] = Σ_j wy_j · tmp[iy_j][k]（j 升序）；标量面（avx2 的尾块共用）。
-void vrow_tail(const std::vector<float> &tmp, std::size_t row_len, const float *wy,
-               const int *iy, int taps, std::size_t k0, float *drow) {
+void vrow_tail(const std::vector<float> &tmp, std::size_t row_len, const float *wy, const int *iy,
+               int taps, std::size_t k0, float *drow) {
     for (std::size_t k = k0; k < row_len; ++k) {
         float acc = 0.0f;
         for (int j = 0; j < taps; ++j)
-            acc = std::fma(wy[j],
-                           tmp[static_cast<std::size_t>(iy[j]) * row_len + k], acc);
+            acc = std::fma(wy[j], tmp[static_cast<std::size_t>(iy[j]) * row_len + k], acc);
         drow[k] = acc;
     }
 }
@@ -155,8 +154,8 @@ void downscale_avx2(const float *src, int sw, int sh, int sc, float *dst, int dw
 
     // —— 水平（按通道打包：一个输出像素的 sc 个通道落在同一个 128 位寄存器）——
     // sc == 4 走整存；sc < 4 用掩码存（避免写出 4 个浮点覆盖同行下一个像素）。
-    const __m128i mask = _mm_setr_epi32(sc > 0 ? -1 : 0, sc > 1 ? -1 : 0, sc > 2 ? -1 : 0,
-                                         sc > 3 ? -1 : 0);
+    const __m128i mask =
+        _mm_setr_epi32(sc > 0 ? -1 : 0, sc > 1 ? -1 : 0, sc > 2 ? -1 : 0, sc > 3 ? -1 : 0);
     const int simd_rows = sh > 0 ? sh - 1 : 0; // 最后一行留标量：4 浮点载入会越过源缓冲末尾
     for (int y = 0; y < simd_rows; ++y) {
         const float *srow = src + static_cast<std::size_t>(y) * sw * sc;
@@ -166,9 +165,8 @@ void downscale_avx2(const float *src, int sw, int sh, int sc, float *dst, int dw
             const int *idx = ax.idx.data() + static_cast<std::size_t>(x) * ax.taps;
             __m128 acc = _mm_setzero_ps();
             for (int i = 0; i < ax.taps; ++i) {
-                acc = _mm_fmadd_ps(
-                    _mm_set1_ps(w[i]),
-                    _mm_loadu_ps(srow + static_cast<std::size_t>(idx[i]) * sc), acc);
+                acc = _mm_fmadd_ps(_mm_set1_ps(w[i]),
+                                   _mm_loadu_ps(srow + static_cast<std::size_t>(idx[i]) * sc), acc);
             }
             float *q = trow + static_cast<std::size_t>(x) * dc;
             if (sc == 4)

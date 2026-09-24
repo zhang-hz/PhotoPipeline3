@@ -20,7 +20,7 @@
       "name": "base-linux", "hidden": true, "inherits": "base",
       "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
       "cacheVariables": { "VCPKG_TARGET_TRIPLET": "x64-linux-avx2" } },
-    { "name": "release", "inherits": ["base-windows", "base-linux"],
+    { "name": "release", "inherits": "base", "condition": null,
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" } },
     { "name": "release-dev", "inherits": "release",
       "cacheVariables": { "PP_BUILD_DEV": "ON" } },

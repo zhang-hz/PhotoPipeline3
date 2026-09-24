@@ -1,5 +1,21 @@
 # M4-T2 §10：CMake 兼容线 3.28...4.4（CI 装 4.4.x；下界仍是 0.2.0 起的 3.28）。
 cmake_minimum_required(VERSION 3.28...4.4)
+
+# M4-CI-fix2（B2 取证收口）：VCPKG_TARGET_TRIPLET 平台分派。release 系 preset 已解除对
+# base-windows/base-linux（各带 hostSystemName condition）的双继承 —— cmake-presets(7) 字段继承
+# 规则（condition 可继承、冲突时 inherits 数组中靠前者优先）令 release 在 Linux 合成到
+# Windows-only condition 而不可用（实测 Linux `cmake --preset release` 0–1s 退 1；本机 Windows
+# 判决实验：release 启用/dev 系禁用 = condition 被继承且前者优先）。双继承解除后 triplet 由本块
+# 按平台补齐，值与原 preset 逐字一致（x64-*-avx2）⇒ vcpkg binary cache/abi 零漂移；
+# dev/tsan/asan 系仍经单父 preset 以 -D 注入同值，if(NOT DEFINED) 不覆盖。
+if(NOT DEFINED VCPKG_TARGET_TRIPLET)
+    if(WIN32)
+        set(VCPKG_TARGET_TRIPLET x64-windows-avx2 CACHE STRING "vcpkg target triplet")
+    else()
+        set(VCPKG_TARGET_TRIPLET x64-linux-avx2 CACHE STRING "vcpkg target triplet")
+    endif()
+endif()
+
 project(PhotoPipeline VERSION 0.3.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)

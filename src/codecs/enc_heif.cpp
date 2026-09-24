@@ -553,17 +553,25 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
 
         // ---- pixels: float32 RGB(A)/gray(A) -> full-range BT.601 YCbCr ----
         // M4-W5-T19 接线（design §11.2 热路径表第 2/5 行）：像素面从"逐像素 ConstIterator"
-        // 改为**逐行 get_pixels**（连续 float 行）+ **pp::simd::interleave**（nch < 3 的
-        // 灰度 → RGB 复制）+ **pp::simd::quantize16**（Y / alpha 平面的量化，唯一运行期
-        // 分派层）。YCbCr 表达式的算子顺序**逐字保留**（0.299r + 0.587g + 0.114b 等），
-        // 故像素语义等价。量化口径从 `lround(clamp(x,0,1)·maxv)`（double）换为 simd 的
-        // float 乘加截断 —— 两者仅在乘积落在 k+0.5 的 ±1e-5 带内时可能差 1 LSB；
-        // 金样 heif/avif 对为 psnr 30dB 断言，实测全绿（T19 selfChecks）。
+        // 改为**逐行 get_pixels**（连续 float 行）+ **pp::simd::interleave**（通道→RGB 展开）+
+        // **pp::simd::quantize16**（Y / alpha 平面的量化，唯一运行期分派层）。YCbCr 表达式的
+        // 算子顺序**逐字保留**（0.299r + 0.587g + 0.114b 等），故像素语义等价。量化口径从
+        // `lround(clamp(x,0,1)·maxv)`（double）换为 simd 的 float 乘加截断 —— 两者仅在乘积落在
+        // k+0.5 的 ±1e-5 带内时可能差 1 LSB。
+        //
+        // M4-W5-T20 修复（T19 回归坐标面）：展开条件原为 `nch < 3`，于是 **nch == 4 的入参**
+        // （RGBA 源，或 pipeline 灰度升维后的 (g,g,g,a)）在 stride-4 的 rowf 上仍按 `x * 3`
+        // 取 r/g/b → 逐样本错位（实测：Y 53~70% 样本差 ≤ 全量程，Cb/Cr 6~39%），heif/avif
+        // 产物像素全错（48MP 级不可接受；实测 PSNR 3.1 dB，修复后与源逐位一致）。
+        // 修复口径 = 任何非 3 通道入参都先经 interleave 展开成 3 通道 RGB 面（其契约：nch < 3
+        // 灰度复制；nch == 4 取前 3 通道 = 旧口径的 it[0..2]），alpha 仍按原 stride 取。
+        // 目击者 = 全语料回归基线（tools/baseline/golden.windows.log 的 heif/avif 字节面：
+        // 修复后逐字节复现 T19 之前的基线），金样 20 对不含 4 通道→heif/avif 用例故未覆盖。
         std::vector<float> cb_full(static_cast<size_t>(w) * h);
         std::vector<float> cr_full(static_cast<size_t>(w) * h);
         std::vector<float> rowf(static_cast<size_t>(w) * static_cast<size_t>(nch));
         std::vector<float> rgbf;
-        if (nch < 3)
+        if (nch != 3)
             rgbf.resize(static_cast<size_t>(w) * 3);
         std::vector<float> yrow(w);
         std::vector<float> arow(w);
@@ -575,7 +583,7 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
                 return fail("cannot read pixels (row " + std::to_string(y) +
                             "): " + req.img.geterror());
             const float *src = rowf.data();
-            if (nch < 3) { // 灰度（±alpha）→ RGB 复制（原 r = g = b = it[0] 的同一规则）
+            if (nch != 3) { // 1/2/4 通道 → 3 通道（灰度复制 / 取 R,G,B；T20 修复 nch==4 错位）
                 pp::simd::interleave(rowf.data(), nch, rgbf.data(), 3, static_cast<size_t>(w));
                 src = rgbf.data();
             }

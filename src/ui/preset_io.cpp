@@ -40,7 +40,7 @@ std::string utf8(const QString &s) { return s.toUtf8().toStdString(); }
 // 背景（实测，Qt 6.8/Linux）：QFile::encodeName == QString::toLocal8Bit == **UTF-8**，与 locale
 // 无关（LC_ALL=C 亦然）；解码则是严格 UTF-8，非法字节 → U+FFFD，QDir 读目录项时甚至直接丢弃
 // 非法字节。因此 "filesystem::path → QString → filesystem::path" 对含非 UTF-8 字节的路径必然
-// 失真，而原 TODO 建议的 fromLocal8Bit/toLocal8Bit 在 Qt6/Linux 上只是 fromStdString/toStdString
+// 失真，而 #23 当初建议的 fromLocal8Bit/toLocal8Bit 在 Qt6/Linux 上只是 fromStdString/toStdString
 // 的别名，并不改变行为（见 tests/unit/test_presets.cpp 的 locale-safe-path 用例）。
 // 落地口径：路径字节**不进 QString** —— 保存/载入/扫描直接用 std::filesystem + std::fstream 的
 // 原生字节路径（Linux 上 path::c_str() 即文件名字节串，POSIX API 原样传递）；QString 仅用于

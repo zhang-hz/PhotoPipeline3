@@ -76,6 +76,19 @@ M5-T7（W-G3 页：元数据页 §7.1 四卡组）:
     值表驱动，行内 `checked=N bad=M` 由 C++ 侧给出）。既有 meta-* 探针行（meta-baseline /
     meta-effective / meta-timezone / meta-gps / meta-strip / meta-gps-clear / meta-multi /
     meta-editor / meta-info / meta-geometry / meta-follow-*）全保留。截图仍为 12 张、冻结末行不变。
+
+M5-T9（W-G3 页：运行页 §7.3 三卡组）:
+  * 追加 `UI-SMOKE run-geom:` 行齐备断言（C7 几何/语义值表：总览 kv 行 pitch 28 + 标签轨 80 /
+    表行高 28（表头 24）/ 进度条高 6（总览合成条 + 分组条 + 逐输出条）/ 日志尾等宽字族（§7.3）+
+    4 行真实尾部 + 「查看完整日志…」链 + 有日志才有日志名（修 3-14）/ 状态胶囊单形态（完成=绿胶囊
+    「已完成」修 3-12、0 字节=琥珀「0 字节」且条 warn 禁绿 修 3-10、失败=红胶囊 + 「└ 原因：…」行）/
+    指标单源（无「已用时」第二出处、摘要句无指标 修 3-03/3-04）/ 实现性文案出界面（任务 hint
+    「实心=已写盘 · 斜纹=合成中」+ 术语入 tooltip 修 3-05）/ 操作行三级动作（链/危险钮/次钮）+
+    按钮高 26（修 3-08 + A7）/ 计数单源（逐文件不再重复「N 个输出」修 3-13）；值表驱动，行内
+    `checked=N bad=M` 由 C++ 侧给出）。既有 T14 运行页探针前缀（03-run / run-rows / run-bottom /
+    run-rows-final / lock-visual / run-log-tail / run-idle / run-probe-rows / run-bars /
+    run-overview / run-cancel / run-light）全保留（M5-T9 机械换锚逐条登记在任务报告）。
+    截图仍为 12 张、冻结末行不变。
 """
 
 import os
@@ -144,6 +157,13 @@ T8_LINE_PREFIXES = (
                                 # 格式名·位深 / 预设 placeholder
 )
 
+# M5-T9 自检行（前缀匹配；缺任一 → FAIL）：运行页三卡组几何/语义（§7.3/R1–R4/K4 + 修 3-03…3-16）
+T9_LINE_PREFIXES = (
+    'UI-SMOKE run-geom:',       # kv 行 pitch 28 / 标签轨 80 / 表行高 28 / 进度条 6 / 日志尾等宽 4 行 +
+                                # 查看完整日志… / 状态胶囊单形态（完成绿·0 字节琥珀·失败红 + 原因行）/
+                                # 指标单源 / 实现性文案出界面 / 三级动作 + 按钮 26 / 计数单源
+)
+
 # M4-W2-T11 自检行（前缀匹配；缺任一 → FAIL）
 T11_LINE_PREFIXES = (
     'UI-SMOKE filelist-roles:',
@@ -207,6 +227,7 @@ def main():
         t6_seen = set()
         t7_seen = set()
         t8_seen = set()
+        t9_seen = set()
         t11_seen = set()
         t14_seen = set()
         t15_seen = set()
@@ -232,6 +253,9 @@ def main():
                 for prefix in T8_LINE_PREFIXES:
                     if line.startswith(prefix):
                         t8_seen.add(prefix)
+                for prefix in T9_LINE_PREFIXES:
+                    if line.startswith(prefix):
+                        t9_seen.add(prefix)
                 for prefix in T11_LINE_PREFIXES:
                     if line.startswith(prefix):
                         t11_seen.add(prefix)
@@ -274,6 +298,11 @@ def main():
         missing = [p for p in T8_LINE_PREFIXES if p not in t8_seen]
         if missing:
             print('ui_smoke: FAIL (missing T8 output-page self-check lines: {})'.format(
+                ', '.join(missing)), file=sys.stderr)
+            return 1
+        missing = [p for p in T9_LINE_PREFIXES if p not in t9_seen]
+        if missing:
+            print('ui_smoke: FAIL (missing T9 run-page self-check lines: {})'.format(
                 ', '.join(missing)), file=sys.stderr)
             return 1
         missing = [p for p in T11_LINE_PREFIXES if p not in t11_seen]

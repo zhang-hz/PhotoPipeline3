@@ -8,6 +8,8 @@
 //     * `struct RunPlan` + `set_plan()`：运行计划（逐源文件宽/高/字节 = 行数文案与压缩比的
 //       输入；格式清单 = 逐输出子行的配置顺序；交错/线程预算/并行 = 总览卡只读读数；
 //       §3.4/§8.1/§8.2）。**必须在 begin_run() 之前调用**（begin_run 用它建行）。
+//     * `run_again_requested()`（M5-T9 追加）：总览卡操作行的「再次运行」—— v6 §7.3 操作行三件套
+//       之一；页只发意图，回收 = MainWindow 的「开始运行」同一条路径（预检/锁定/调度都在外壳）。
 //     * `set_tokens(tokens)`：主题 tokens（QSS/配色单源 ui/theme.h；与 PageMeta/PageOutput/
 //       PreviewPanel/ClassifyPanel 同一注入口径）。
 //     * `set_log_tail(lines, log_name)`：日志尾卡内容（**单一持有者 = MainWindow**：页只渲染，
@@ -78,6 +80,7 @@ signals:
     void cancel_requested();
     void open_output_requested(const QString &dir);
     void open_logs_requested();
+    void run_again_requested(); // M5-T9（§7.3 操作行）：按当前设置再次运行
 };
 
 } // namespace pp::ui

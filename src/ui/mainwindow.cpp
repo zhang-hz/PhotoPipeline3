@@ -1377,6 +1377,9 @@ struct MainWindow::Impl {
     // M5-T9（C7）运行页几何/语义值表（§7.3 三卡组 + R1–R4 + K4：指标单源 / 0 字节琥珀 /
     // 日志尾等宽 4 行 / 完成态唯一形态 + 裁定 A7/A8/A9）
     void smoke_probe_run_geometry();
+    // M5-T13（W-G4 验收，C7 探针只增）：§12-13 亮暗布局等价（pp-* 控件几何/可见性逐项一致）
+    // + §12-14 卡头 hint 禁折行/单行高/省略号 —— 两条 §12 条目此前无独立探针。
+    void smoke_probe_verification();
     static QString repo_root();
 };
 
@@ -3955,6 +3958,12 @@ void MainWindow::Impl::smoke_probe_skeleton() {
         const QSize box(12, 12);
         QStringList report;
         int bad = 0;
+        // M5-T13 验收取证（只增）：两条路径的**像素空间**采样（真实平台 dpr≠1 时引擎路径回读
+        // 为物理像素、直接绘制为逻辑像素 —— 失败时用本组读数定位是空间不一致还是真缺角）。
+        QSize direct_space(0, 0);
+        QSize via_space(0, 0);
+        qreal direct_dpr = 0.0;
+        qreal via_dpr = 0.0;
         // 墨迹必须**居中**（|left+right-(side-1)| ≤ 2 且 |top+bottom-(side-1)| ≤ 2）：这一条抓
         // "网格忘了对中 → 图标偏移越界被裁"的回归（G1 实测踩过：整枚图标只剩右下角碎片）。
         const QStringList centered_icons{QStringLiteral("caption-max"), QStringLiteral("add"),
@@ -3980,6 +3989,12 @@ void MainWindow::Impl::smoke_probe_skeleton() {
                                         .pixmap(box)
                                         .toImage()
                                         .convertToFormat(QImage::Format_ARGB32_Premultiplied);
+            if (direct_space.isEmpty()) { // M5-T13 取证：首个图标的空间样本即代表两条路径口径
+                direct_space = direct.size();
+                via_space = via_icon.size();
+                direct_dpr = direct.devicePixelRatio();
+                via_dpr = via_icon.devicePixelRatio();
+            }
             const QRect a = ink_box(direct);
             const QRect b = ink_box(via_icon);
             const bool same = a.isValid() && b.isValid() && std::abs(a.left() - b.left()) <= 1 &&
@@ -4004,6 +4019,12 @@ void MainWindow::Impl::smoke_probe_skeleton() {
         }
         std::printf("UI-SMOKE icons-engine: bad=%d [%s]\n", bad,
                     qUtf8Printable(report.join(QLatin1Char(' '))));
+        // M5-T13 验收取证（只增）：两条路径的实际像素空间（真实平台 dpr≠1 时引擎路径回读为
+        // 物理像素、直接绘制为逻辑像素 —— 本行把坐标空间显式打出来，供失败定位）。
+        std::printf("UI-SMOKE icons-engine-space: box=%dx%d direct=%dx%d(dpr=%.1f) "
+                    "via=%dx%d(dpr=%.1f)\n",
+                    box.width(), box.height(), direct_space.width(), direct_space.height(),
+                    direct_dpr, via_space.width(), via_space.height(), via_dpr);
         std::fflush(stdout);
         if (bad != 0)
             smoke_fail(
@@ -5827,6 +5848,39 @@ void MainWindow::Impl::smoke_probe_filelist_geometry() {
     const int sample_y = int(std::lround((sel_rect.top() + sel_rect.height() / 2.0) * shot_scale));
     const QColor bar_unsel = before.pixelColor(sample_x, sample_y);
     const QColor bar_sel = after.pixelColor(sample_x, sample_y);
+    // M5-T13 验收取证（只增）：选中条取样邻域 + 列 0 矩形 + 视图滚动量（真实平台失败定位）。
+    {
+        QStringList before_px;
+        QStringList after_px;
+        for (int x = 0; x <= 6; ++x) {
+            before_px << before.pixelColor(x, sample_y).name(QColor::HexRgb);
+            after_px << after.pixelColor(x, sample_y).name(QColor::HexRgb);
+        }
+        const QRect sel_rect_after = view->visualRect(row_idx);
+        const QRect check_rect_v = view->visualRect(check_idx);
+        QStringList grid;
+        const int yt = int(std::lround(sel_rect.top() * shot_scale));
+        const int yb = int(std::lround(sel_rect.bottom() * shot_scale));
+        for (int y : {yt + 2, yt + 10, sample_y - 20, sample_y, sample_y + 20, yb - 10, yb - 2}) {
+            const int yy = std::clamp(y, 0, after.height() - 1);
+            QStringList row;
+            for (int x = 0; x <= 8; x += 2)
+                row << after.pixelColor(x, yy).name(QColor::HexRgb);
+            grid << QStringLiteral("y%1[%2]").arg(yy).arg(row.join(QLatin1Char(',')));
+        }
+        std::printf("UI-SMOKE filelist-selprobe: dpr=%.1f scale=%.2f x=%d y=%d sel=%d,%d,%dx%d "
+                    "sel-after=%d,%d,%dx%d check=%d,%d,%dx%d focus=%d curcol=%d before=[%s] "
+                    "after=[%s]\n",
+                    view->viewport()->devicePixelRatioF(), shot_scale, sample_x, sample_y,
+                    sel_rect.x(), sel_rect.y(), sel_rect.width(), sel_rect.height(),
+                    sel_rect_after.x(), sel_rect_after.y(), sel_rect_after.width(),
+                    sel_rect_after.height(), check_rect_v.x(), check_rect_v.y(),
+                    check_rect_v.width(), check_rect_v.height(), view->hasFocus() ? 1 : 0,
+                    view->currentIndex().column(), qUtf8Printable(before_px.join(QLatin1Char(','))),
+                    qUtf8Printable(after_px.join(QLatin1Char(','))));
+        std::printf("UI-SMOKE filelist-selgrid: %s\n", qUtf8Printable(grid.join(QLatin1Char(' '))));
+        std::fflush(stdout);
+    }
     const auto near = [](const QColor &a, const QColor &b, int tol) {
         return std::abs(a.red() - b.red()) <= tol && std::abs(a.green() - b.green()) <= tol &&
                std::abs(a.blue() - b.blue()) <= tol;
@@ -7136,6 +7190,193 @@ void MainWindow::Impl::smoke_probe_run_geometry() {
     pump(80);
 }
 
+// ---------------------------------------------------------------------------
+// M5-T13（W-G4 验收，C7 探针只增）：§12-13 亮暗布局等价 + §12-14 卡头 hint 禁折行。
+//  · theme-equiv：同一窗口状态下 Dark→Light 两次落地，全部 pp-* 控件的
+//    (objectName, 窗口坐标几何, 可见性) 逐项一致 —— §9「布局零差异：两主题仅换 §4 令牌」。
+//  · hint-nowrap：全部 *-hint（含 pp-card-hint）标签禁折行、高 = 单行；文本要么放得下，
+//    要么以省略号结尾（§12-14「卡头 hint nowrap+省略号」= ElidedLabel 语义，无静默裁字）。
+// 探针结束时按进入时的档位归位（其余探针/截图口径不变）。
+// ---------------------------------------------------------------------------
+void MainWindow::Impl::smoke_probe_verification() {
+    struct Snap {
+        QString key;
+        QRect geom;
+        bool visible = false;
+    };
+    const auto snapshot = [this]() {
+        QList<Snap> out;
+        for (QWidget *child : w->findChildren<QWidget *>()) {
+            const QString name = child->objectName();
+            if (!name.startsWith(QStringLiteral("pp-")))
+                continue;
+            Snap s;
+            s.key = name;
+            s.geom = QRect(child->mapTo(w, QPoint(0, 0)), child->size());
+            s.visible = child->isVisible();
+            out.append(s);
+        }
+        std::sort(out.begin(), out.end(), [](const Snap &a, const Snap &b) {
+            if (a.key != b.key)
+                return a.key < b.key;
+            if (a.geom.x() != b.geom.x())
+                return a.geom.x() < b.geom.x();
+            if (a.geom.y() != b.geom.y())
+                return a.geom.y() < b.geom.y();
+            if (a.geom.width() != b.geom.width())
+                return a.geom.width() < b.geom.width();
+            if (a.geom.height() != b.geom.height())
+                return a.geom.height() < b.geom.height();
+            return int(a.visible) < int(b.visible);
+        });
+        return out;
+    };
+    const auto rect_text = [](const Snap &s) {
+        return QStringLiteral("%1@%2,%3 %4x%5 v%6")
+            .arg(s.key)
+            .arg(s.geom.x())
+            .arg(s.geom.y())
+            .arg(s.geom.width())
+            .arg(s.geom.height())
+            .arg(s.visible ? 1 : 0);
+    };
+
+    int checked = 0;
+    QStringList bad;
+    const auto expect = [&checked, &bad](const char *name, bool ok, const QString &detail) {
+        ++checked;
+        if (!ok)
+            bad << QStringLiteral("%1(%2)").arg(QString::fromLatin1(name), detail);
+    };
+
+    int equiv_n = 0; // M5-T13：比对到的 pp-* 控件数（随行打印，供取证非空）
+    int hint_n = 0;  // M5-T13：比对到的可见 hint 数
+    int nums_n = 0;  // M5-T13：比对到的数值面（spin/数值列/kv 值）数
+
+    // ---- (a) 亮暗布局等价（§12-13）----
+    {
+        wait_thumbs(kThumbWaitMs);
+        const theme::ThemeMode want = theme_mode;
+        set_theme_mode(theme::ThemeMode::Dark);
+        pump(250);
+        const QList<Snap> dark = snapshot();
+        set_theme_mode(theme::ThemeMode::Light);
+        pump(250);
+        const QList<Snap> light = snapshot();
+        set_theme_mode(want); // 归位
+        pump(250);
+        equiv_n = int(dark.size());
+        bool same = dark.size() == light.size();
+        QString detail;
+        if (!same) {
+            detail = QStringLiteral("count=%1/%2").arg(dark.size()).arg(light.size());
+        } else {
+            for (int i = 0; i < dark.size(); ++i) {
+                if (dark[i].key != light[i].key || dark[i].geom != light[i].geom ||
+                    dark[i].visible != light[i].visible) {
+                    same = false;
+                    detail =
+                        QStringLiteral("%1 vs %2").arg(rect_text(dark[i]), rect_text(light[i]));
+                    break;
+                }
+            }
+        }
+        expect("theme-equiv-widgets", same && dark.size() >= 20,
+               QStringLiteral("n=%1/%2 %3").arg(dark.size()).arg(light.size()).arg(detail));
+    }
+
+    // ---- (b) 卡头/字段 hint：禁折行 + 单行高 + 放不下必须省略号（§12-14）----
+    {
+        int hints = 0;
+        int hints_bad = 0;
+        QStringList detail;
+        for (QLabel *label : w->findChildren<QLabel *>()) {
+            const QString name = label->objectName();
+            if (!(name.endsWith(QStringLiteral("-hint")) || name == QStringLiteral("pp-card-hint")))
+                continue;
+            if (!label->isVisible() || label->text().isEmpty())
+                continue;
+            ++hints;
+            ++hint_n;
+            const QFontMetrics fm(label->font());
+            const bool single_line = label->height() <= fm.height() + 8;
+            const bool no_wrap = !label->wordWrap();
+            const bool fits_or_elided = fm.horizontalAdvance(label->text()) <= label->width() + 1 ||
+                                        label->text().endsWith(QChar(0x2026));
+            if (!(single_line && no_wrap && fits_or_elided)) {
+                ++hints_bad;
+                detail << QStringLiteral("%1 %2x%3 \"%4\"")
+                              .arg(name)
+                              .arg(label->width())
+                              .arg(label->height())
+                              .arg(label->text());
+            }
+        }
+        expect("hint-nowrap", hints >= 2 && hints_bad == 0,
+               QStringLiteral("hints=%1 bad=%2 [%3]")
+                   .arg(hints)
+                   .arg(hints_bad)
+                   .arg(detail.join(QStringLiteral("; "))));
+    }
+
+    // ---- (c) §12-8 数值右对齐 + tabular（此前无独立探针）----
+    //  判据按规范分层（§4.2「数值」行 + mockup tokens.css .kv-v）：
+    //   * 右对齐 + tnum：全部 spinbox（R4「值区 flex 右对齐」，formkit 单源落地）与运行页
+    //     数值列（§7.3「大小/速度/耗时（右对齐）」）；
+    //   * 仅 tnum：全部 kv 值标签（ppFk=value）—— mockup .kv-v 只声明 tabular-nums、不设
+    //     text-align（kv 值档不要求右对齐；formkit::value_label 的右对齐是数值 kv 的选择）。
+    {
+        int nums = 0;
+        int nums_bad = 0;
+        QStringList detail;
+        const auto check_numeric = [&](Qt::Alignment alignment, const QFont &font,
+                                       const QString &name, const QString &why,
+                                       bool require_right) {
+            ++nums;
+            const bool right = (alignment & Qt::AlignRight) != 0;
+            const bool tnum = font.featureValue(QFont::Tag("tnum")) != 0;
+            if (!(right || !require_right) || !tnum) {
+                ++nums_bad;
+                detail << QStringLiteral("%1:%2(right=%3 tnum=%4)")
+                              .arg(why, name)
+                              .arg(right ? 1 : 0)
+                              .arg(tnum ? 1 : 0);
+            }
+        };
+        for (QAbstractSpinBox *spin : w->findChildren<QAbstractSpinBox *>())
+            check_numeric(spin->alignment(), spin->font(), spin->objectName(),
+                          QStringLiteral("spin"), /*require_right=*/true);
+        for (QLabel *label : w->findChildren<QLabel *>()) {
+            if (label->property(theme::kFkProperty).toString() == QLatin1String(theme::kFkValue))
+                check_numeric(label->alignment(), label->font(), label->objectName(),
+                              QStringLiteral("kv"), /*require_right=*/false);
+        }
+        for (QLabel *label : w->findChildren<QLabel *>()) {
+            const QString name = label->objectName();
+            if (name.startsWith(QStringLiteral("pp-run-size-")) ||
+                name.startsWith(QStringLiteral("pp-run-speed-")) ||
+                name.startsWith(QStringLiteral("pp-run-time-")))
+                check_numeric(label->alignment(), label->font(), name, QStringLiteral("numcol"),
+                              /*require_right=*/true);
+        }
+        nums_n = nums;
+        expect("num-align", nums >= 12 && nums_bad == 0,
+               QStringLiteral("nums=%1 bad=%2 [%3]")
+                   .arg(nums)
+                   .arg(nums_bad)
+                   .arg(detail.join(QStringLiteral("; "))));
+    }
+
+    std::printf("UI-SMOKE theme-equiv+nowrap: checked=%d bad=%d equiv-pp-widgets=%d hints=%d "
+                "nums=%d %s\n",
+                checked, int(bad.size()), equiv_n, hint_n, nums_n,
+                qUtf8Printable(bad.join(QLatin1Char(' '))));
+    std::fflush(stdout);
+    if (!bad.isEmpty())
+        smoke_fail(MainWindow::tr("§12-13/§12-14 探针（亮暗布局等价 / hint 禁折行）不符：%1")
+                       .arg(bad.join(QLatin1Char(' '))));
+}
+
 void MainWindow::Impl::smoke_run(const QString &shots_dir) {
     // ---- M4-T9 骨架自检（窗口行为矩阵可自动化部分；先跑，之后截图归位 1440×900）----
     smoke_probe_lifecycle();
@@ -7545,6 +7786,8 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
     // 浅色）+ M5-T9 的 C7 几何探针（run-geom）----
     smoke_probe_run(shots_dir);
     smoke_probe_run_geometry();
+    // M5-T13（W-G4 验收）：§12-13 亮暗布局等价 + §12-14 hint 禁折行（探针只增；结束归位）
+    smoke_probe_verification();
 
     // ---- 对话框三连（构造 → show → processEvents → grab → close，绝不 exec）----
     { // 04-settings.png：设置对话框
@@ -9320,7 +9563,12 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
                                 banner->palette().color(QPalette::WindowText) != legacy_fg;
             }
             // (b) 像素：banner 实拍里不得有接近警示黄的像素（banner 在离线态可见）
+            // M5-T13 验收取证（只增）：最近像素的位置/颜色/邻域（真实平台上文字抗锯齿
+            // 彩边可能在光底上误报 —— 打印坐标与颜色供归因）。
             double amber_dist = 1e9;
+            int amber_x = -1;
+            int amber_y = -1;
+            QColor amber_px;
             if (banner != nullptr && banner->isVisible()) {
                 const QImage shot = banner->grab().toImage();
                 for (int y = 0; y < shot.height(); ++y) {
@@ -9329,10 +9577,20 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
                         const int dr = px.red() - legacy_bg.red();
                         const int dg = px.green() - legacy_bg.green();
                         const int db = px.blue() - legacy_bg.blue();
-                        amber_dist =
-                            std::min(amber_dist, std::sqrt(double(dr * dr + dg * dg + db * db)));
+                        const double d = std::sqrt(double(dr * dr + dg * dg + db * db));
+                        if (d < amber_dist) {
+                            amber_dist = d;
+                            amber_x = x;
+                            amber_y = y;
+                            amber_px = px;
+                        }
                     }
                 }
+                std::printf("UI-SMOKE offline-banner-px: amber-dist=%.1f at %d,%d #%02x%02x%02x "
+                            "shot=%dx%d\n",
+                            amber_dist, amber_x, amber_y, amber_px.red(), amber_px.green(),
+                            amber_px.blue(), shot.width(), shot.height());
+                std::fflush(stdout);
             }
             meta_expect("offline-banner",
                         banner != nullptr && banner->isVisible() &&
@@ -9340,12 +9598,14 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
                             tip == QStringLiteral("可手动输入坐标") && neutral_gray &&
                             palette_clean && amber_dist > 40.0,
                         QStringLiteral("text=\"%1\" tip=\"%2\" gray=%3 palette-clean=%4 "
-                                       "visible=%5 amber-dist=%.1f")
+                                       "visible=%5 amber-dist=%6 at %7,%8")
                             .arg(text, tip)
                             .arg(neutral_gray ? 1 : 0)
                             .arg(palette_clean ? 1 : 0)
                             .arg(banner != nullptr && banner->isVisible() ? 1 : 0)
-                            .arg(amber_dist));
+                            .arg(amber_dist)
+                            .arg(amber_x)
+                            .arg(amber_y));
         }
 
         // (i-8) A27（T11 缺陷根治受益面）：时间卡模式分段 —— 段自持高（= kSegH − 2）且可见可选

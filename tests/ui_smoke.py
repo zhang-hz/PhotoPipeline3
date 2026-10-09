@@ -124,6 +124,18 @@ M5-T9（W-G3 页：运行页 §7.3 三卡组）:
     run-rows-final / lock-visual / run-log-tail / run-idle / run-probe-rows / run-bars /
     run-overview / run-cancel / run-light）全保留（M5-T9 机械换锚逐条登记在任务报告）。
     截图仍为 12 张、冻结末行不变。
+
+M5-T13（W-G4 验收：v6 §12 十七条逐条核验）:
+  * 追加 `UI-SMOKE theme-equiv+nowrap:` 行齐备断言（M5-T13 只增探针 `smoke_probe_verification()`：
+    §12-13 亮暗布局等价 —— 全部 pp-* 控件 (objectName, 窗口坐标几何, 可见性) 在
+    Dark↔Light 两次落地后逐项一致（行内 `equiv-pp-widgets=N` 为比对数，证明取证非空）；
+    §12-14 卡头 hint —— 全部 *-hint 标签禁折行、单行高、文本放得下或以省略号结尾
+    （行内 `hints=M`）；§12-8 数值右对齐+tabular —— spinbox 与运行页数值列（大小·速度·耗时）
+    右对齐且 tnum、kv 值标签（ppFk=value）tnum（mockup .kv-v 不设 text-align；行内 `nums=K`）。
+    三条 §12 条目此前无独立探针；既有探针/冻结行零改动。
+  * 真实平台诊断行（不新增前缀清单；失败定位用）：`icons-engine-space`（引擎路径 vs 直接
+    绘制的像素空间/dpr）、`filelist-selprobe`/`filelist-selgrid`（选中条取样邻域）、
+    `offline-banner-px`（banner 最近警示黄像素位置/颜色）。
 """
 
 import os
@@ -245,6 +257,16 @@ T11_LINE_PREFIXES = (
     'UI-SMOKE classify-lock:',
 )
 
+# M5-T13（W-G4 验收，探针只增）：§12-13 亮暗布局等价 + §12-14 hint 禁折行 —— 两条 §12 条目
+# 此前无独立探针，本行由 `smoke_probe_verification()` 给出（`checked=2 bad=0 equiv-pp-widgets=N
+# hints=M`；N/M 为比对到的控件/hint 数，证明取证非空）。
+T13_LINE_PREFIXES = (
+    'UI-SMOKE theme-equiv+nowrap:',  # pp-* 控件 (objectName, 窗口几何, 可见性) Dark↔Light 逐项一致
+                                     # （§9 布局零差异）+ *-hint 禁折行/单行高/省略号（§12-14）
+                                     # + 数值面右对齐/tnum（§12-8 spin/数值列右对齐 + kv tnum；
+                                     # 行内 checked=3）
+)
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 build_dir = sys.argv[1] if len(sys.argv) > 1 else 'build/release-dev'
@@ -292,6 +314,7 @@ def main():
         t10_seen = set()
         t11_seen = set()
         m5t11_seen = set()
+        t13_seen = set()
         t14_seen = set()
         t15_seen = set()
         with open(log_path, 'w', encoding='utf-8', newline='') as log_fp:
@@ -328,6 +351,9 @@ def main():
                 for prefix in T11_M5_LINE_PREFIXES:
                     if line.startswith(prefix):
                         m5t11_seen.add(prefix)
+                for prefix in T13_LINE_PREFIXES:
+                    if line.startswith(prefix):
+                        t13_seen.add(prefix)
                 for prefix in T14_LINE_PREFIXES:
                     if line.startswith(prefix):
                         t14_seen.add(prefix)
@@ -387,6 +413,11 @@ def main():
         missing = [p for p in T11_M5_LINE_PREFIXES if p not in m5t11_seen]
         if missing:
             print('ui_smoke: FAIL (missing M5-T11 theme-persistence self-check lines: {})'.format(
+                ', '.join(missing)), file=sys.stderr)
+            return 1
+        missing = [p for p in T13_LINE_PREFIXES if p not in t13_seen]
+        if missing:
+            print('ui_smoke: FAIL (missing M5-T13 acceptance self-check lines: {})'.format(
                 ', '.join(missing)), file=sys.stderr)
             return 1
         missing = [p for p in T14_LINE_PREFIXES if p not in t14_seen]

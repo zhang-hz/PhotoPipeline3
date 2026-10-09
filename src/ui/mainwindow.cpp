@@ -27,6 +27,7 @@
 //     46×32 单轨）；状态栏 30px（状态四档同色 + 自然语摘要 + 固定轴 330/587 + CTA 22 居右）。
 
 #include "ui/mainwindow.h"
+#include "ui/formkit.h" // M5-T7：meta-geom 探针读回卡头胶囊（formkit::PillBadge）与 R1/R2 几何
 #include "ui/icons.h"
 
 #include <QAbstractItemView>
@@ -6702,7 +6703,18 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
         }
     }
 
-    // ---- (e) 隐私剥除：时间/GPS 生效值 → 「将被移除」（§5.1）----
+    // 卡头 GPS 状态胶囊（M5-T7/修 1-33：状态 = 独立徽标，不再是 placeholder 文案）
+    const auto gps_badge = [&page] {
+        const auto *label = page.findChild<QLabel *>(QStringLiteral("pp-meta-gps-pill"));
+        return label != nullptr ? label->text() : QString();
+    };
+    const auto gps_badge_visible = [&page] {
+        const auto *label = page.findChild<QLabel *>(QStringLiteral("pp-meta-gps-pill"));
+        return label != nullptr && label->isVisible();
+    };
+
+    // ---- (e) 隐私剥除：时间/GPS 生效值 → 「将被移除」（§5.1；M5-T7：状态落卡头胶囊，
+    //   占位符只留输入示例 → 生效值框 placeholder 恒空）----
     {
         pp::BatchRules rules;
         pp::TimeShift shift;
@@ -6715,13 +6727,15 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
         const QString time_text = full(QStringLiteral("pp-meta-time-new-0"));
         const QString gps_lat = edit_text(QStringLiteral("pp-meta-gps-lat"));
         const QString gps_hint = placeholder(QStringLiteral("pp-meta-gps-lat"));
-        std::printf("UI-SMOKE meta-strip: time=%s gps-value=%s gps-placeholder=%s\n",
-                    qUtf8Printable(time_text), qUtf8Printable(gps_lat), qUtf8Printable(gps_hint));
+        const QString badge = gps_badge();
+        std::printf("UI-SMOKE meta-strip: time=%s gps-value=%s gps-placeholder=%s badge=%s\n",
+                    qUtf8Printable(time_text), qUtf8Printable(gps_lat), qUtf8Printable(gps_hint),
+                    qUtf8Printable(badge));
         std::fflush(stdout);
-        if (time_text != QStringLiteral("将被移除") || !gps_lat.isEmpty() ||
-            gps_hint != QStringLiteral("将被移除")) {
-            smoke_fail(MainWindow::tr("隐私剥除的生效值显示不符（time=%1 gps=%2/%3）")
-                           .arg(time_text, gps_lat, gps_hint));
+        if (time_text != QStringLiteral("将被移除") || !gps_lat.isEmpty() || !gps_hint.isEmpty() ||
+            badge != QStringLiteral("将被移除") || !gps_badge_visible()) {
+            smoke_fail(MainWindow::tr("隐私剥除的生效值显示不符（time=%1 gps=%2/%3 badge=%4）")
+                           .arg(time_text, gps_lat, gps_hint, badge));
         }
     }
 
@@ -6736,18 +6750,21 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
         pump(120);
         const QString gps_lat = edit_text(QStringLiteral("pp-meta-gps-lat"));
         const QString gps_hint = placeholder(QStringLiteral("pp-meta-gps-lat"));
+        const QString badge = gps_badge();
         const bool marker = map != nullptr && map->has_marker();
         const bool kept = map != nullptr &&
                           std::fabs(map->center_lat() - center_before_lat) < 1e-9 &&
                           std::fabs(map->center_lon() - center_before_lon) < 1e-9;
-        std::printf("UI-SMOKE meta-gps-clear: value=%s placeholder=%s marker=%d center-kept=%d\n",
-                    qUtf8Printable(gps_lat), qUtf8Printable(gps_hint), marker ? 1 : 0,
-                    kept ? 1 : 0);
+        std::printf(
+            "UI-SMOKE meta-gps-clear: value=%s placeholder=%s badge=%s marker=%d center-kept=%d\n",
+            qUtf8Printable(gps_lat), qUtf8Printable(gps_hint), qUtf8Printable(badge),
+            marker ? 1 : 0, kept ? 1 : 0);
         std::fflush(stdout);
-        if (!gps_lat.isEmpty() || gps_hint != QStringLiteral("将清除 GPS") || marker || !kept) {
+        if (!gps_lat.isEmpty() || !gps_hint.isEmpty() || badge != QStringLiteral("将清除 GPS") ||
+            marker || !kept) {
             smoke_fail(MainWindow::tr("清除 GPS 的生效值显示/地图语义不符（value=%1 ph=%2 "
-                                      "marker=%3 kept=%4）")
-                           .arg(gps_lat, gps_hint)
+                                      "badge=%3 marker=%4 kept=%5）")
+                           .arg(gps_lat, gps_hint, badge)
                            .arg(marker ? 1 : 0)
                            .arg(kept ? 1 : 0));
         }
@@ -6892,6 +6909,371 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
             QStringLiteral("%1 (1/%2)").arg(QFileInfo(fixture).fileName()).arg(batch.size());
         if (hint != expected) {
             smoke_fail(MainWindow::tr("无选中跟随提示不符（got=%1 want=%2）").arg(hint, expected));
+        }
+    }
+
+    // ---- (i) M5-T7 C7 几何探针（v6 §7.1 + R1–R4；值表驱动 checked/bad）----
+    //   卡内行 pitch 28 / 标签轨 80 / 日期时间 spin 88 / 生效行 acc 值（像素取证）/ 空态收敛 /
+    //   双列第二标签起点（R2：第二标签固定 x + 24px 间档）/ 操作行在地图上方（修 1-37）/
+    //   卡头右置一律中性胶囊（1-24/1-25）/ 批量规则折叠行默认折叠 / 按钮 26（A7）/
+    //   地图离线说明中性灰 + 括号进 tooltip（修 1-38/1-39）。
+    {
+        int meta_checked = 0;
+        QStringList meta_bad;
+        const auto meta_expect = [&meta_checked, &meta_bad](const char *name, bool ok,
+                                                            const QString &detail) {
+            ++meta_checked;
+            if (!ok)
+                meta_bad << QStringLiteral("%1(%2)").arg(QString::fromLatin1(name), detail);
+        };
+
+        // (i-1) 空态收敛（修 1-23/1-31）：未选择文件 → 关键信息卡/时间卡各收敛为一行说明
+        {
+            page.set_selection(QList<MetaSelectionItem>(), /*from_selection=*/false);
+            pump(80);
+            bool rows_hidden = true;
+            for (int i = 0; i < 5; ++i) {
+                const auto *row =
+                    page.findChild<QWidget *>(QStringLiteral("pp-meta-info-row-%1").arg(i));
+                if (row == nullptr || row->isVisible())
+                    rows_hidden = false;
+            }
+            const auto *empty_row =
+                page.findChild<QWidget *>(QStringLiteral("pp-meta-info-empty-row"));
+            const auto *empty_text = page.findChild<QLabel *>(QStringLiteral("pp-meta-info-empty"));
+            const auto *time_empty_row =
+                page.findChild<QWidget *>(QStringLiteral("pp-meta-time-empty-row"));
+            const auto *view_lat = page.findChild<QLineEdit *>(QStringLiteral("pp-meta-gps-lat"));
+            const bool ok =
+                rows_hidden && empty_row != nullptr && empty_row->isVisible() &&
+                empty_text != nullptr &&
+                empty_text->text() == QStringLiteral("未选择文件，请在左侧列表选择照片") &&
+                time_empty_row != nullptr && time_empty_row->isVisible() && view_lat != nullptr &&
+                view_lat->text().isEmpty() && !gps_badge_visible();
+            meta_expect(
+                "empty", ok,
+                QStringLiteral("rows-hidden=%1 line=\"%2\" time-line=%3 gps-pill=%4")
+                    .arg(rows_hidden ? 1 : 0)
+                    .arg(empty_text != nullptr ? empty_text->text() : QStringLiteral("<none>"))
+                    .arg(time_empty_row != nullptr && time_empty_row->isVisible() ? 1 : 0)
+                    .arg(gps_badge_visible() ? 1 : 0));
+        }
+
+        // (i-2) 恢复跟随 + 生效行 acc 值（像素取证：修改态 = 强调色字；原值 = 非强调色）
+        page.set_batch_files(QStringList{fixture});
+        page.set_selection(QList<MetaSelectionItem>{meta_probe_item(fixture)},
+                           /*from_selection=*/true);
+        if (!wait_probe()) {
+            smoke_fail(MainWindow::tr("元数据页自检：几何探针的 probe 未回填"));
+        }
+        pump(120);
+        auto *time_new_label = page.findChild<QLabel *>(QStringLiteral("pp-meta-time-new-0"));
+        auto *time_old_label = page.findChild<QLabel *>(QStringLiteral("pp-meta-time-old-0"));
+        const auto color_distance = [](const QImage &image, const QColor &want) {
+            int best = 1 << 30;
+            for (int y = 0; y < image.height(); ++y) {
+                for (int x = 0; x < image.width(); ++x) {
+                    const QColor px = image.pixelColor(x, y);
+                    const int dr = px.red() - want.red();
+                    const int dg = px.green() - want.green();
+                    const int db = px.blue() - want.blue();
+                    best = std::min(best, dr * dr + dg * dg + db * db);
+                }
+            }
+            return best < (1 << 30) ? std::sqrt(double(best)) : 1e9;
+        };
+        if (time_new_label != nullptr && time_old_label != nullptr) {
+            pp::BatchRules rules;
+            pp::TimeShift shift;
+            shift.mode = pp::TimeShift::Mode::Delta;
+            shift.hours = 2;
+            rules.time_shift = shift;
+            page.apply_rules(rules);
+            pump(120);
+            const double accent_dist =
+                color_distance(time_new_label->grab().toImage(), tokens.accent);
+            const double plain_dist =
+                color_distance(time_old_label->grab().toImage(), tokens.accent);
+            const bool mod_flag = time_new_label->property(theme::kModProperty).toBool();
+            meta_expect("acc-value", mod_flag && accent_dist <= 30.0 && plain_dist >= 60.0,
+                        QStringLiteral("mod=%1 accent-dist=%.1f old-dist=%.1f")
+                            .arg(mod_flag ? 1 : 0)
+                            .arg(accent_dist)
+                            .arg(plain_dist));
+            page.apply_rules(pp::BatchRules{}); // 基线复位（无规则）
+            pump(80);
+        } else {
+            meta_expect("acc-value", false, QStringLiteral("label missing"));
+        }
+
+        // (i-2b) §3.2：页内容不得反向撑大栏宽（内容宽 ≤ 页面宽；超出 = 右栏内横滚）
+        QSize content_size;
+        {
+            const auto *content = page.findChild<QWidget *>(QStringLiteral("pp-meta-content"));
+            if (content != nullptr) {
+                content_size = QSize(content->size().width(), content->minimumSizeHint().height());
+            }
+            QStringList mins;
+            for (const auto *card : page.findChildren<QFrame *>(QStringLiteral("pp-card"))) {
+                mins << QString::number(card->minimumSizeHint().width());
+            }
+            meta_expect("content-fit", content != nullptr && content->width() <= page.width(),
+                        QStringLiteral("content=%1x%2 page=%3x%4 card-mins=[%5]")
+                            .arg(content != nullptr ? content->width() : -1)
+                            .arg(content != nullptr ? content->height() : -1)
+                            .arg(page.width())
+                            .arg(page.height())
+                            .arg(mins.join(QLatin1Char(','))));
+        }
+
+        // (i-3) R1 行节奏 28 + R2 标签轨 80 + 日期时间 spin 88 / 高 24（A2：字段轨只 88/160/flex）
+        {
+            // 行容器 = formkit 未改名的行（pp-fk-row）∪ 本页命名的行（pp-meta-*-row）
+            QList<QWidget *> rows = page.findChildren<QWidget *>(QStringLiteral("pp-fk-row"));
+            for (QWidget *widget : page.findChildren<QWidget *>()) {
+                const QString name = widget->objectName();
+                if (name.startsWith(QStringLiteral("pp-meta-")) &&
+                    name.endsWith(QStringLiteral("-row")) && !rows.contains(widget)) {
+                    rows.append(widget);
+                }
+            }
+            int rows_seen = 0;
+            int rows_bad = 0;
+            for (QWidget *row : rows) {
+                if (!row->isVisible())
+                    continue;
+                ++rows_seen;
+                if (row->height() != formkit::kRowPitch)
+                    ++rows_bad;
+            }
+            meta_expect("row-pitch", rows_seen >= 12 && rows_bad == 0,
+                        QStringLiteral("rows=%1 bad=%2").arg(rows_seen).arg(rows_bad));
+            int labels_seen = 0;
+            int labels_bad = 0;
+            const QString label_hook = QString::fromLatin1(theme::kFkLabel);
+            for (QLabel *label : page.findChildren<QLabel *>()) {
+                if (label->property(theme::kFkProperty).toString() != label_hook)
+                    continue;
+                ++labels_seen;
+                if (label->width() != formkit::kLabelW)
+                    ++labels_bad;
+            }
+            meta_expect("label-track", labels_seen >= 12 && labels_bad == 0,
+                        QStringLiteral("labels=%1 bad=%2").arg(labels_seen).arg(labels_bad));
+            int spin_bad = 0;
+            for (const char *name :
+                 {"pp-meta-delta-years", "pp-meta-delta-months", "pp-meta-delta-days",
+                  "pp-meta-delta-hours", "pp-meta-delta-minutes", "pp-meta-delta-seconds"}) {
+                const auto *spin = page.findChild<QSpinBox *>(QString::fromLatin1(name));
+                if (spin == nullptr || spin->width() != formkit::kFieldShort ||
+                    spin->height() != formkit::kControlH)
+                    ++spin_bad;
+            }
+            meta_expect("delta-spin", spin_bad == 0,
+                        QStringLiteral("bad=%1 want=%2x%3")
+                            .arg(spin_bad)
+                            .arg(formkit::kFieldShort)
+                            .arg(formkit::kControlH));
+        }
+
+        // (i-4) 双列第二标签起点（R2/A2）：160 档 = second_label_x(160)；kv 行 = 值轨右缘 + 24
+        {
+            const auto *tz_row = page.findChild<QWidget *>(QStringLiteral("pp-meta-tz-row"));
+            int tz_label2_x = -1;
+            if (tz_row != nullptr) {
+                for (QLabel *label : tz_row->findChildren<QLabel *>()) {
+                    if (label->property(theme::kFkProperty).toString() ==
+                            QString::fromLatin1(theme::kFkLabel) &&
+                        tz_label2_x < 0 && label->x() > 0) {
+                        tz_label2_x = label->x();
+                    }
+                }
+            }
+            meta_expect("second-label-160",
+                        tz_label2_x == formkit::second_label_x(formkit::kFieldStd),
+                        QStringLiteral("x=%1 want=%2")
+                            .arg(tz_label2_x)
+                            .arg(formkit::second_label_x(formkit::kFieldStd)));
+            // kv 双列行：第二标签 x 全行一致（不随内容漂移）+ = A2 的 [轨][24][80][12] 递推
+            const auto *camera_value =
+                page.findChild<QLabel *>(QStringLiteral("pp-meta-info-camera"));
+            const auto *exposure_value =
+                page.findChild<QLabel *>(QStringLiteral("pp-meta-info-exposure"));
+            const auto *color_value =
+                page.findChild<QLabel *>(QStringLiteral("pp-meta-info-color"));
+            const auto *gps_value = page.findChild<QLabel *>(QStringLiteral("pp-meta-info-gps"));
+            const auto page_x = [&page](const QWidget *widget) {
+                return widget->mapTo(&page, QPoint(0, 0)).x();
+            };
+            const int col2 = camera_value != nullptr ? page_x(camera_value) : -1;
+            const bool aligned = camera_value != nullptr && exposure_value != nullptr &&
+                                 color_value != nullptr && gps_value != nullptr &&
+                                 page_x(exposure_value) == col2 && page_x(color_value) == col2 &&
+                                 page_x(gps_value) == col2;
+            // kv 行 0 的列结构（A2 逐字）：[80 标签][12][轨][24][80 第二标签][12][轨]
+            const auto *row0 = page.findChild<QWidget *>(QStringLiteral("pp-meta-info-row-0"));
+            int l1 = -1, l2 = -1, t1_x = -1, t1_w = -1, t2_x = -1, t2_w = -1;
+            if (row0 != nullptr) {
+                int label_seen = 0;
+                for (QWidget *child : row0->findChildren<QWidget *>()) {
+                    if (child->parentWidget() != row0)
+                        continue;
+                    const bool is_label = child->property(theme::kFkProperty).toString() ==
+                                          QString::fromLatin1(theme::kFkLabel);
+                    if (is_label) {
+                        if (label_seen == 0)
+                            l1 = child->x();
+                        else if (label_seen == 1)
+                            l2 = child->x();
+                        ++label_seen;
+                    } else if (child->objectName() == QStringLiteral("pp-fk-track")) {
+                        if (t1_x < 0) {
+                            t1_x = child->x();
+                            t1_w = child->width();
+                        } else {
+                            t2_x = child->x();
+                            t2_w = child->width();
+                        }
+                    }
+                }
+            }
+            const bool grid_ok =
+                l1 >= 0 && l2 > l1 && t1_x >= 0 && t2_x > t1_x &&
+                l2 == l1 + formkit::kLabelW + formkit::kColGap + t1_w + formkit::kDoubleGap &&
+                t2_x == l2 + formkit::kLabelW + formkit::kColGap &&
+                std::abs(t1_w - t2_w) <= 1; // 同列同宽（两栏都是 flex → 平分富余宽）
+            meta_expect("second-label-kv", aligned && grid_ok,
+                        QStringLiteral("col2=%1 aligned=%2 l1=%3 l2=%4 t1=%5+%6 t2=%7+%8")
+                            .arg(col2)
+                            .arg(aligned ? 1 : 0)
+                            .arg(l1)
+                            .arg(l2)
+                            .arg(t1_x)
+                            .arg(t1_w)
+                            .arg(t2_x)
+                            .arg(t2_w));
+        }
+
+        // (i-5) 卡头右置一律中性胶囊（1-24/1-25）+ GPS 状态徽标（修 1-33/「已有 GPS」）
+        {
+            const auto tone_of = [&page](const char *name) {
+                const auto *label = page.findChild<QLabel *>(QString::fromLatin1(name));
+                if (label == nullptr)
+                    return -1;
+                // 卡头胶囊由本页构造（PillBadge）→ 静态下转安全；取色调键
+                return int(static_cast<const formkit::PillBadge *>(label)->tone());
+            };
+            const bool neutral =
+                tone_of("pp-meta-info-pill") == int(formkit::PillBadge::Tone::Neutral) &&
+                tone_of("pp-meta-time-pill") == int(formkit::PillBadge::Tone::Neutral) &&
+                tone_of("pp-meta-gps-pill") == int(formkit::PillBadge::Tone::Neutral) &&
+                tone_of("pp-meta-privacy-pill") == int(formkit::PillBadge::Tone::Neutral);
+            meta_expect("header-pill-neutral", neutral,
+                        QStringLiteral("info=%1 time=%2 gps=%3 privacy=%4")
+                            .arg(tone_of("pp-meta-info-pill"))
+                            .arg(tone_of("pp-meta-time-pill"))
+                            .arg(tone_of("pp-meta-gps-pill"))
+                            .arg(tone_of("pp-meta-privacy-pill")));
+            // 金样带 GPS 且无规则 → 状态胶囊 = 「已有 GPS」（独立徽标，非 placeholder）
+            meta_expect("gps-state-badge",
+                        gps_badge_visible() && gps_badge() == QStringLiteral("已有 GPS"),
+                        QStringLiteral("visible=%1 text=%2")
+                            .arg(gps_badge_visible() ? 1 : 0)
+                            .arg(gps_badge()));
+            // 隐私与文件时间（§7.1）：开关 30×16 + 说明 + 文字链（高 26）；关键字行带「编辑…」
+            {
+                int switch_rows = 0;
+                for (const char *name : {"privacy_strip", "mtime_sync"}) {
+                    const auto *button =
+                        page.findChild<QAbstractButton *>(QString::fromLatin1(name));
+                    if (button != nullptr && button->width() == formkit::kSwitchW &&
+                        button->height() == formkit::kSwitchH && button->isCheckable()) {
+                        ++switch_rows;
+                    }
+                }
+                const auto *tags_link =
+                    page.findChild<QToolButton *>(QStringLiteral("privacy_strip_link"));
+                const auto *exc_link =
+                    page.findChild<QToolButton *>(QStringLiteral("mtime_sync_link"));
+                const auto *keywords_link =
+                    page.findChild<QToolButton *>(QStringLiteral("pp-meta-keywords-link"));
+                const bool links_ok =
+                    tags_link != nullptr && tags_link->text() == QStringLiteral("标签编辑…") &&
+                    tags_link->height() == theme::Metrics::btn_h && exc_link != nullptr &&
+                    exc_link->text() == QStringLiteral("例外…") && keywords_link != nullptr &&
+                    keywords_link->text() == QStringLiteral("编辑…") &&
+                    keywords_link->height() == theme::Metrics::btn_h;
+                meta_expect(
+                    "switch-rows", switch_rows == 2 && links_ok,
+                    QStringLiteral("switches=%1 links=%2").arg(switch_rows).arg(links_ok ? 1 : 0));
+            }
+        }
+
+        // (i-6) 修 1-37：地图操作行固定在地图上方（核心动作不落进内滚盲区）+ 折叠行默认折叠
+        {
+            const auto *ops_row = page.findChild<QWidget *>(QStringLiteral("pp-meta-gps-ops-row"));
+            const auto *map = page.findChild<pp::map::MapWidget *>(QStringLiteral("pp-meta-map"));
+            const auto *rule_host = page.findChild<QWidget *>(QStringLiteral("pp-meta-gps-rule"));
+            const auto *rule_toggle =
+                page.findChild<QToolButton *>(QStringLiteral("pp-meta-gps-rule-toggle"));
+            const bool above =
+                ops_row != nullptr && map != nullptr &&
+                ops_row->mapTo(&page, QPoint(0, 0)).y() < map->mapTo(&page, QPoint(0, 0)).y();
+            meta_expect("ops-above-map", above,
+                        QStringLiteral("ops-y=%1 map-y=%2")
+                            .arg(ops_row != nullptr ? ops_row->mapTo(&page, QPoint(0, 0)).y() : -1)
+                            .arg(map != nullptr ? map->mapTo(&page, QPoint(0, 0)).y() : -1));
+            meta_expect("rule-folded",
+                        rule_toggle != nullptr && rule_host != nullptr && !rule_host->isVisible() &&
+                            !rule_toggle->isChecked(),
+                        QStringLiteral("toggle=%1 host-visible=%2")
+                            .arg(rule_toggle != nullptr ? 1 : 0)
+                            .arg(rule_host != nullptr && rule_host->isVisible() ? 1 : 0));
+            // 操作行/搜索钮高 26（A7 按钮换锚）
+            int btn_bad = 0;
+            for (const char *name : {"pp-meta-gps-read", "pp-meta-gps-pick", "pp-meta-gps-clear",
+                                     "pp-meta-gps-search-button"}) {
+                const auto *button = page.findChild<QPushButton *>(QString::fromLatin1(name));
+                if (button == nullptr || button->height() != theme::Metrics::btn_h)
+                    ++btn_bad;
+            }
+            meta_expect("btn-26", btn_bad == 0,
+                        QStringLiteral("bad=%1 want=%2").arg(btn_bad).arg(theme::Metrics::btn_h));
+        }
+
+        // (i-7) 修 1-38/1-39：地图离线说明 = 中性灰 + 括号进 tooltip（宿主侧收口）
+        {
+            const auto *map = page.findChild<pp::map::MapWidget *>(QStringLiteral("pp-meta-map"));
+            QString text;
+            QString tip;
+            QString sheet;
+            if (map != nullptr) {
+                const QList<QLabel *> labels = map->findChildren<QLabel *>();
+                if (!labels.isEmpty()) {
+                    text = labels.first()->text();
+                    tip = labels.first()->toolTip();
+                    sheet = labels.first()->styleSheet();
+                }
+            }
+            const bool neutral_gray = sheet.contains(theme::css_color(tokens.text3)) &&
+                                      !sheet.contains(theme::css_color(tokens.warn));
+            meta_expect("offline-banner",
+                        text == QStringLiteral("地图离线") &&
+                            tip == QStringLiteral("可手动输入坐标") && neutral_gray,
+                        QStringLiteral("text=\"%1\" tip=\"%2\" gray=%3")
+                            .arg(text, tip)
+                            .arg(neutral_gray ? 1 : 0));
+        }
+
+        std::printf("UI-SMOKE meta-geom: checked=%d bad=%d content=%dx%d(pane=%dx%d) %s\n",
+                    meta_checked, int(meta_bad.size()), content_size.width(), content_size.height(),
+                    page.width(), page.height(), qUtf8Printable(meta_bad.join(QLatin1Char(' '))));
+        // 注：content 高 = 布局最小高（右栏 4 卡组所需高度）；> 页面高 = 该栏内滚（§3.2 禁的是
+        // 横向反撑，纵向滚动与 M4 同口径）—— 探针只报数，不设阈值。
+        std::fflush(stdout);
+        if (!meta_bad.isEmpty()) {
+            smoke_fail(MainWindow::tr("元数据页几何（§7.1/R1–R4）不符：%1")
+                           .arg(meta_bad.join(QLatin1Char(' '))));
         }
     }
 

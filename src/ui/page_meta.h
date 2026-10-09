@@ -1,6 +1,11 @@
 // PP-FROZEN(file)
 // SPDX-License-Identifier: GPL-3.0-or-later
-// PhotoPipeline — metadata page (M1b frozen; M4-T12 追加面)
+// PhotoPipeline — metadata page (M1b frozen; M4-T12 追加面；M5-T7 v6 外观)
+//
+// M5-T7（W-G3）：界面按 docs/qt-gui-design-spec.md §7.1 重构为**四卡组**（关键信息 kv 双列 5 行 /
+//   时间偏移 3×spin88+生效对照行 / GPS 双列轨+地图+操作行 / 隐私与文件时间开关+链），全部信息行
+//   改走 formkit 行构造器（R1–R4 构造层强制）。**接口一字不动**：类签名、方法语义、三枚信号与
+//   全部 pp-* / pp_meta_* 自验钩子保持（探针面见 page_meta.cpp 头注释）。
 //
 // PP-FROZEN(0.3.0) —— 元数据页「生效值显示」（设计 §5.2 / §9.3；mockup meta-dark|meta-light）
 //   落地任务 = W3-T12。本文件 0.3.0 的**追加面**（既有方法签名/语义一字不动）：

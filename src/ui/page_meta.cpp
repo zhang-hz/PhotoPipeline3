@@ -1,76 +1,65 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// PhotoPipeline 0.3.0（M4-W3-T12）— 元数据页：**生效值显示**
+// PhotoPipeline 0.3.0（M5-T7）— 元数据页：v6 §7.1 四卡组（右栏）
 //
-// 规格 = docs/v0.3.0-design.md §5.1/§5.2 + §9.3（元数据页内容规格）+ docs/mockups/meta-dark.html
-// （精确规格；meta-light.html 的浅色对照）+ meta-dark.png / meta-light.png（视觉参照）。
+// 规格 = docs/qt-gui-design-spec.md §7.1（卡表）/ §5（R1–R4 表单体系）/ §6（控件语义）/
+// §8（状态与空态）/ §10（Qt 映射）+ docs/mockups-v2/meta-dark|meta-light.{png,html}（视觉终稿）+
+// docs/m5-adjudications.md A2（双列行栅格）/ A6（硬编码色收口进令牌）/ A7（按钮高 26）/
+// A8（改值零字形）。
 //
-// 数据源与"同源"义务（§5.1，本页的**第一硬约束**）：
-//   * 生效值一律来自 W1-T8 的纯函数 `pp::preview_effective(probe, rules, exception)`，
-//     本文件**不另算**任何时间/GPS 合成（无第二条显示路径）；
-//   * 喂进去的 `rules` 就是提交运行用的那一份 —— `build_rules()` 同时是 `rules()` 的实现，
-//     即"显示 = 即将写入"（与 build_plan 在 core 侧同源，见 core/metadata.h 的 PP-FROZEN(0.3.0)
-//     头）。
+// 四卡（§7.1 逐行；全部信息行走 formkit 行构造器 —— C2「表单唯一入口」）：
+//   ① 关键信息：kv 双列 5 行 = 拍摄时间/相机、镜头/曝光、尺寸/色彩、文件/GPS(+「已有」胶囊)、
+//      白平衡/评级(矢量星)；空态（未选择文件）收敛为**一行**（修 1-23），不再平铺空值。
+//   ② 时间偏移：模式（分段控件）｜日期偏移（3×spin88 + 年月日 16px 槽 + 「−99…+99」注释）｜
+//      时间偏移（3×spin88 + 时分秒槽 + 「UTC±HH:MM」注释）｜生效时间（删除线原值 → 强调色生效值
+//      + 「日期 · Δ · 字段名」注释）。时区语义模式的「从/到」行保留（§7.1 表未列；该模式的功能
+//      必需控件，与 M4 同一控件集合）。
+//   ③ GPS：纬度/经度（双列轨，fill）｜海拔/方位（同）｜时间戳｜**操作行固定在地图上方**
+//      （修 1-37：核心动作不再落进内滚盲区）｜地图源（OSM 下拉，有标签；§7.1「OSM 下拉」）｜
+//      地点搜索｜搜索结果（有标签 + 占位，修 1-36）｜地图（高 196 · 图钉 · 版权行）｜批量 GPS
+//      规则（折叠行，默认折叠；内为规则编辑面）。
+//   ④ 隐私与文件时间：隐私剥除（开关+说明+「标签编辑…」链）｜时间同步（开关+说明+「例外…」链）｜
+//      关键字（中性胶囊组 + 「+N」 + 「编辑…」链）。
 //
-// 卡片（§9.3 逐条；mockup 控件集合/文案对齐，偏离处见文末"落地口径"）：
-//   ① 关键信息（只读，常显）：拍摄时间 · 相机 · 镜头 · 曝光(ISO/快门/光圈/焦距) ·
-//      尺寸/位深/通道 · 色彩空间(ICC 有无) · 文件大小/格式 · GPS 有无；
-//   ② 时间偏移：seg（Δ 偏移 | 时区语义）+ 6 spin + 生效对照行（原→生效 + 来源字段标注）；
-//   ③ GPS：生效坐标（只读，跟随选中）+ MAP（跟随 center_on）+ 三按钮 + 批量规则折叠；
-//   ④ 隐私 / 文件时间 / 例外行（含「EXIF / XMP 标签编辑…」「单文件例外 (N) ⚑」两个折叠入口）。
+// 生效值显示（M4-T12 语义零改动；§5.1/§5.2 + D4）：
+//   * 生效值一律出自纯函数 `pp::preview_effective(probe, rules, exception)`（**唯一**合成源），
+//     喂进去的 rules 就是 rules()/build_rules() 产出的那一份 → 显示 = 即将写入（两张皮检测）；
+//   * .mod（A8）＝ 强调边框 + 强调色字 + 700、**无字形前缀**；
+//   * 生效时间对照：未修改时两值相同也照常显示；改值行 = 强调档；另两个时间字段
+//     （CreateDate/ModifyDate）的对照进标签 tooltip（1-30「细节进 tooltip」，信息不丢）；
+//   * 多选（≥2）→ 逐行小表（文件名 | 原 → 生效，上限 8 行 + 「…还有 N 个」）；
+//   * GPS：只显**生效坐标** + 地图 center_on 生效坐标 + 单钉（D4：不画新旧对比；无生效值 →
+//     不画钉、不动视口）；
+//   * 状态与占位分离（修 1-33）：GPS 状态（已有/无/将被移除/将清除）= 卡头**中性胶囊**；
+//     placeholder 只留输入示例（规则输入框），生效值框不再用状态文案占位。
 //
-// 跟随语义（§5.2 / D4 / D8）：一切显示跟随文件列表选中项；**无选中 → 首个文件 + 「(1/N)」提示**；
-//   多选（≥2）→ 时间卡换成逐行小表（文件名 | 原 → 生效，上限 8 行 + 「…还有 N 个」）；
-//   地图只显**生效值单钉**（D4：不画新旧对比），无生效 GPS → 不 center_on（保持选点位置）且不画钉。
-//
-// .mod（§9.2「改动值 = 强调边框+强调色字+700」；mockup .spin.mod = meta-dark.html:144/367）：
-//   改动值统一走 `theme::set_mod(widget, changed)` —— Δ 非零的 spin、时区 from≠to 的 combo、
-//   生效值与原值不同的时间/坐标显示框。未修改时两个值相同也照常显示（§5.2 末段）。
-//
-// 排版（§9.3 硬约束）：表单行 = `theme::Metrics::form_label_w`(70) 右对齐标签列 +
-//   `form_col_gap`(12) 列距 + `form_row_h`(32) 行高；全页禁用折行（ElidedLabel = 省略号 +
-//   悬浮全文）。时间卡的 6 个偏移 spin 沿用 mockup 的 `.fields` 紧凑条（"年 [+0]" 横排，
-//   `.fld{gap:5px}` / `.spin{52×26}`）—— 它不是"标签/值"表单行，不占 70px 轴；其余表单行
-//   （关键信息卡、GPS 生效值行、批量规则行）共用同一标签轴。
-//
-// 落地口径（§5.1/§5.2 未逐字给出处，逐条记账）：
-//   * **时间卡不再有「启用」复选框**（mockup/§9.3 的控件集合 = seg + 6 spin + 生效对照行）：
-//     全零 Δ 与 from==to 的时区本就等价于"无规则"（`TimeShift::is_noop()`；写路径
-//     `build_plan` 与显示路径 `preview_effective` 用同一判据跳过）→ 语义零损失。
-//   * **GPS 卡的批量规则输入**（启用/纬度/经度/海拔/方位/时间戳）收进「批量 GPS 规则」折叠行：
-//     mockup 的可见面（生效坐标 + MAP + 三按钮）逐条保留；v0.2 冻结的 rules() 语义要求
-//     "规则存在性"必须显式可控（否则把跟随文件的源 GPS 当规则写回会污染其它文件）→ 折叠行内
-//     保留「启用」。这是**控件集合 ⊃ mockup** 的唯一一处（mockup 自身也有"可选折叠"形态）。
-//   * 「地图选点」= 取地图**视口中心**为规则坐标（配合拖拽定位）；点击地图仍照旧直接取点
-//     （v0.2 行为不变，ui-smoke 的 amap 边界断言继续走点击路径）。
-//   * 生效值为空时的占位文案：隐私剥除开 → 「将被移除」（§5.1）；清除 GPS 勾选 → 「将清除 GPS」；
-//     其余（无源 GPS 且无规则）→ 「无 GPS，规则将写入」（§5.2 逐字）。
-//   * 时间卡的「来源字段」按 EXIF 字段名标注：DateTimeOriginal / CreateDate / ModifyDate
-//     （core/metadata.h 的字段表口径；三行各自一源）。
-//   * 异步性（§5.2 末段）：probe 摘要在列表添加时由 thumbs 通道收集（`MetaSelectionItem::info`）；
-//     本页只对**跟随项**（≤ 8）做一次 `read_metadata`（QtConcurrent + 序号守卫，M2-T7 口径），
-//     之后每次规则变化都是纯函数重算（微秒级）→ 即时刷新。
-//   * M1b/M2 的"扫描前 200 个文件找首个含时间者"预览（及其上限文案）随 §5.2 的跟随口径**退场**
-//     （显示源不再是"批内首个有时间者"而是"选中项/首个文件"）。
-//
-// 自验钩子（供 --ui-smoke 探针与 .cache 自验程序读；非用户可见）：
-//   * 动态属性（同时挂在 MetaState 子对象与页面本身）：pp_meta_follow_count /
-//     pp_meta_follow_name / pp_meta_follow_pending / pp_meta_follow_stale_dropped /
-//     pp_meta_time_new / pp_meta_gps_effective / pp_meta_multi_rows；
+// 自验钩子（--ui-smoke 的 meta-geom / meta-* 探针读；非用户可见）：
+//   * 动态属性（同时挂 MetaState 与页面本身）：pp_meta_follow_count / pp_meta_follow_name /
+//     pp_meta_follow_pending / pp_meta_follow_stale_dropped / pp_meta_time_new /
+//     pp_meta_gps_effective / pp_meta_multi_rows；
 //   * ElidedLabel 的 `ppFullText`：显示文本可能按宽度省略成 "…"，语义值（全文）挂在这枚属性上，
-//     自验断言按语义值比对；
-//   * objectName（§9.3 pp-* 命名法）：pp-meta-info-<field> / pp-meta-time-<old|new|src>-<i> /
-//     pp-meta-gps-<lat|lon|alt|dir|ts> / pp-meta-map / pp-meta-seg-<delta|tz> /
-//     pp-meta-delta-<years…seconds> / pp-meta-multi-<name|old|new>-<i> / pp-meta-info-hint /
-//     pp-meta-multi-more 等；既有 gps_lat/gps_lon/privacy_strip/… 保留原名（外部无引用，续用）。
-//   * 显示层用到的 Exiv2 标签名逐个在 0.28.9 上验过（`ISOSpeedRatings` 存在、
-//     `PhotographicSensitivity` 不存在且会抛异常 → exif_text 兜住构造失败）。
+//     断言按语义值比对；
+//   * objectName（pp-* 命名法）：pp-meta-info-<time|camera|lens|exposure|size|color|file|gps|wb|
+//     rating> / pp-meta-info-row-<0…4> / pp-meta-info-empty / pp-meta-info-empty-row /
+//     pp-meta-info-hint / pp-meta-info-pill / pp-meta-info-gps-pill / pp-meta-gps-pill /
+//     pp-meta-time-<old|new|note|src>-0 / pp-meta-time-empty / pp-meta-time-pill /
+//     pp-meta-delta-<years|months|days|hours|minutes|seconds> / pp-meta-tz-<from|to> /
+//     pp-meta-seg-delta / pp-meta-seg-tz / pp-meta-multi-<name|old|new>-<i> / pp-meta-multi-more /
+//     pp-meta-gps-<lat|lon|alt|dir>（生效值，只读；DMS 与时间戳读数在 tooltip）/
+//     pp-meta-gps-<read|pick|clear> /
+//     pp-meta-gps-<provider|search-edit|search-button|search-results> / pp-meta-map /
+//     pp-meta-gps-rule-toggle / pp-meta-privacy-pill / pp-meta-keyword-<i> / gps_status /
+//     gps_warning / privacy_strip / mtime_sync / gps_enable / gps_more_toggle /
+//     gps_lat|gps_lon|gps_alt|gps_dir|gps_ts（规则输入）/ exception_label / exception_list /
+//     tag_add_button / tag_row|tag_key|tag_value|tag_remove；
+//   * 地图离线 banner（mapwidget 内硬编码黄底）：本页只做**宿主侧**收口 —— 文案去括号（进 tooltip）
+//     与中性灰覆盖 QSS（修 1-38/1-39；mapwidget 文件零改动，令牌由本页铺）。
 #include "ui/page_meta.h"
-#include "ui/icons.h" // M5-T3：折叠插入符/删除钮/例外标记一律矢量图标（C3）
+
+#include "ui/formkit.h" // M5-T7：全部表单行走 formkit 行构造器（R1–R4 构造层强制）
+#include "ui/icons.h"   // 折叠插入符/删除钮一律矢量图标（C3）
 
 #include <QAbstractSpinBox>
 #include <QApplication>
-#include <QButtonGroup>
-#include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleValidator>
 #include <QFileInfo>
@@ -84,9 +73,11 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMenu>
-#include <QPalette>
+#include <QPainter>
+#include <QPainterPath>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QSignalBlocker>
 #include <QSpinBox>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -98,6 +89,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -106,42 +98,51 @@
 #include <vector>
 
 #include "mapwidget/mapwidget.h"
+#include "mapwidget/providers.h" // 地图源下拉的 id/label 单源（provider_ids/provider_by_id）
 #include "ui/theme.h"
 
 namespace pp::ui {
 namespace {
 
-// PageMeta 头文件（PP-FROZEN）没有成员声明，全部状态挂在一个子 QObject 上，
-// 经动态属性从 PageMeta* 取回（O(1)，随父对象析构）。
+using formkit::FieldWidth;
+
 constexpr const char *kStateProperty = "pp_meta_state";
 constexpr const char *kStateObjectName = "pp_meta_state";
+// 页面级动态属性钩子（QSS 选择器锚）：与 theme.h 的 ppFk/ppMod 并列，页面私有不外泄。
+constexpr const char *kFieldProperty = "ppMetaField";
+
+// §7.1 时间卡的对照行主字段（core/metadata.h 的字段表：ExifTool 名）；另两字段进标签 tooltip。
+constexpr const char *kPrimaryTimeSource = "DateTimeOriginal";
+constexpr const char *kSecondaryTimeSources[2] = {"CreateDate", "ModifyDate"};
 
 // §5.2 多选小表上限（超过 → 「…还有 N 个」）
 constexpr int kMultiRowCap = 8;
-// mockup 逐条几何：.map-box{height:196px} / .gps-in{height:26px} / .spin{width:52px;height:26px}
-constexpr int kMapHeight = 196;
-constexpr int kGpsBoxHeight = 26;
-constexpr int kSpinWidth = 52;
-constexpr int kSpinHeight = 26;
-// mockup .effect{margin:4px 14px 12px; padding:9px 12px}
-constexpr int kCardPadX = 14;
+// mockups-v2 视觉终稿 .map{height:136px}（M4 的 196 来自 v1 原型；v2 为 §7.1 的对照基准）
+constexpr int kMapHeight = 136;
+// 评级星（§7.1「评级(★)」；A8 零字形 → 矢量星）
+constexpr int kStarPx = 12;
+constexpr int kStarGap = 2;
 
-// 时间三字段的来源标注（core/metadata.h 的字段表：ExifTool 名）
-constexpr const char *kTimeSourceLabels[3] = {"DateTimeOriginal", "CreateDate", "ModifyDate"};
-
-// §9.1 FIX2 口径：控件禁用时清空占位文本（Qt 占位色不随 setEnabled 变化，像素实测 ink 与
-// 启用态相同 → 会被误认为可编辑）；启用时恢复原始文案（不新造文案）。
+// 输入示例占位（修 1-33：placeholder 只留输入示例 —— 状态一律走卡头胶囊）
 constexpr const char *kLatPlaceholder = QT_TR_NOOP("例如 31.230400");
 constexpr const char *kLonPlaceholder = QT_TR_NOOP("例如 121.473700");
+constexpr const char *kAltPlaceholder = QT_TR_NOOP("例如 12.0");
+constexpr const char *kDirPlaceholder = QT_TR_NOOP("例如 87.5");
+constexpr const char *kTsPlaceholder = QT_TR_NOOP("例如 2024:03:01 10:00:00");
 constexpr const char *kSearchPlaceholder = QT_TR_NOOP("搜索地点");
-// §5.2 逐字：无 GPS → 空值提示
-constexpr const char *kNoGpsPlaceholder = QT_TR_NOOP("无 GPS，规则将写入");
+constexpr const char *kSearchResultPlaceholder = QT_TR_NOOP("搜索后在此选择");
+// GPS 卡头状态胶囊文案（修 1-33：状态用独立徽标；§5.2 的两条状态语逐字保留）
+constexpr const char *kHasGpsText = QT_TR_NOOP("已有 GPS");
+constexpr const char *kNoGpsText = QT_TR_NOOP("无 GPS");
 constexpr const char *kWillRemoveText = QT_TR_NOOP("将被移除");
-constexpr const char *kGpsClearPlaceholder = QT_TR_NOOP("将清除 GPS");
-constexpr const char *kNoneText = QT_TR_NOOP("（无）");
+constexpr const char *kGpsClearText = QT_TR_NOOP("将清除 GPS");
+// 空态一行（修 1-23/1-31：未选择文件 → 一行说明，不平铺空值）
+constexpr const char *kNoSelectionText = QT_TR_NOOP("未选择文件，请在左侧列表选择照片");
+constexpr const char *kNoKeywordsText = QT_TR_NOOP("无关键字");
 
 // ---------------------------------------------------------------------------
-// 单行省略标签（§9.3「全界面禁止文案折行（超长省略号）」；与 mainwindow.cpp 的 ElidedLabel 同口径）
+// 单行省略标签（§12-14「全界面禁止文案折行（超长省略号）」；与 mainwindow.cpp 的 ElidedLabel
+// 同口径）
 // ---------------------------------------------------------------------------
 
 class ElidedLabel : public QLabel {
@@ -198,9 +199,16 @@ QString format_datetime(const QString &exif_dt) {
     return date + exif_dt.mid(10);
 }
 
+// 日期部分（生效行注释的「日期」段）；空值 → 空串
+QString date_part(const std::optional<pp::DateTimeVal> &v) {
+    if (!v.has_value() || v->value.size() < 10) {
+        return QString();
+    }
+    return format_datetime(QString::fromStdString(v->value)).left(10);
+}
+
 QString datetime_text(const std::optional<pp::DateTimeVal> &v) {
-    return v.has_value() ? format_datetime(QString::fromStdString(v->value))
-                         : PageMeta::tr(kNoneText);
+    return v.has_value() ? format_datetime(QString::fromStdString(v->value)) : QStringLiteral("—");
 }
 
 QString coord_text(double v, int decimals) {
@@ -234,13 +242,13 @@ QString channels_text(const pp::ImageInfo &info) {
     }
 }
 
-// EXIF 字符串读取（显示层只读；§1.7 例外：本文件允许直接调 Exiv2 API）
+// EXIF 字符串读取（显示层只读）
 std::string exif_text(const Exiv2::ExifData &exif, const char *key) {
     std::unique_ptr<Exiv2::ExifKey> exif_key;
     try {
         exif_key = std::make_unique<Exiv2::ExifKey>(key);
     } catch (const std::exception &) {
-        return {}; // 未知标签名 = 无值（不抛、不猜；0.28.9 无 PhotographicSensitivity 等名字）
+        return {}; // 未知标签名 = 无值（不抛、不猜）
     }
     const auto it = exif.findKey(*exif_key);
     if (it == exif.end()) {
@@ -309,6 +317,71 @@ QString exposure_text(const Exiv2::ExifData &exif) {
     return parts.isEmpty() ? QStringLiteral("—") : parts.join(QStringLiteral(" · "));
 }
 
+// 白平衡（§7.1「白平衡」）：Exif.Photo.WhiteBalance（0=自动/1=手动）+ ColorTemperature（K）
+// —— mockup 口径「自动 · 6200K」；缺项即略过，全缺 → "—"。
+QString white_balance_text(const Exiv2::ExifData &exif) {
+    QStringList parts;
+    const std::string wb = exif_text(exif, "Exif.Photo.WhiteBalance");
+    if (!wb.empty()) {
+        const int v = std::atoi(wb.c_str());
+        parts << (v == 0 ? PageMeta::tr("自动")
+                         : (v == 1 ? PageMeta::tr("手动") : QString::fromStdString(wb)));
+    }
+    const std::string kelvin = exif_text(exif, "Exif.Photo.ColorTemperature");
+    if (!kelvin.empty()) {
+        parts << QStringLiteral("%1K").arg(QString::fromStdString(kelvin));
+    }
+    return parts.isEmpty() ? QStringLiteral("—") : parts.join(QStringLiteral(" · "));
+}
+
+// 评级（§7.1「评级(★)」）：Exif.Image.Rating 优先，XMP xmp:Rating 兜底；无 → nullopt（显示 "—"）
+std::optional<int> rating_of(const pp::SourceMeta &meta) {
+    const std::string exif_value = exif_text(meta.exif, "Exif.Image.Rating");
+    if (!exif_value.empty()) {
+        bool ok = false;
+        const int value = QString::fromStdString(exif_value).toInt(&ok);
+        if (ok) {
+            return std::clamp(value, 0, 5);
+        }
+    }
+    try {
+        const Exiv2::XmpKey key("Xmp.xmp.Rating");
+        const auto it = meta.xmp.findKey(key);
+        if (it != meta.xmp.end()) {
+            bool ok = false;
+            const int value = QString::fromStdString(it->toString()).toInt(&ok);
+            if (ok) {
+                return std::clamp(value, 0, 5);
+            }
+        }
+    } catch (const std::exception &) {
+        // 未知 XMP 键 = 无值
+    }
+    return std::nullopt;
+}
+
+// 关键字（§7.1「关键字 胶囊组」）：Xmp.dc.subject（数组；非数组值按单项处理）
+QStringList keywords_of(const pp::SourceMeta &meta) {
+    QStringList out;
+    try {
+        const Exiv2::XmpKey key("Xmp.dc.subject");
+        const auto it = meta.xmp.findKey(key);
+        if (it == meta.xmp.end()) {
+            return out;
+        }
+        const std::size_t count = std::max<std::size_t>(1, it->count());
+        for (std::size_t i = 0; i < count; ++i) {
+            const QString value = QString::fromStdString(it->toString(i)).trimmed();
+            if (!value.isEmpty() && !out.contains(value)) {
+                out << value;
+            }
+        }
+    } catch (const std::exception &) {
+        // 未知 XMP 键 = 无值
+    }
+    return out;
+}
+
 QString dms_component(double value, bool latitude) {
     const double abs_v = std::isfinite(value) ? std::fabs(value) : 0.0;
     double tenths = std::round(abs_v * 36000.0) / 10.0; // 0.1" 网格 → 无 60.0" 进位问题
@@ -329,6 +402,107 @@ QString dms_string(double lat, double lon) {
     return dms_component(lat, true) + QLatin1Char(' ') + dms_component(lon, false);
 }
 
+// Δ 模式摘要（生效行注释的「Δ」段；mockup「+8h」口径）：y/mo/d/h/m/s，全零 → ±0
+QString delta_text(const pp::TimeShift &shift) {
+    if (shift.mode == pp::TimeShift::Mode::TimezoneSemantic) {
+        return QStringLiteral("UTC%1 → UTC%2")
+            .arg(QString::fromStdString(pp::offset_time_string(shift.from_offset_min)),
+                 QString::fromStdString(pp::offset_time_string(shift.to_offset_min)));
+    }
+    QStringList parts;
+    const auto add = [&parts](int value, const QString &unit) {
+        if (value == 0) {
+            return;
+        }
+        parts << QStringLiteral("%1%2%3")
+                     .arg(value > 0 ? QStringLiteral("+") : QStringLiteral("−"))
+                     .arg(std::abs(value))
+                     .arg(unit);
+    };
+    add(shift.years, PageMeta::tr("y"));
+    add(shift.months, PageMeta::tr("mo"));
+    add(shift.days, PageMeta::tr("d"));
+    add(shift.hours, PageMeta::tr("h"));
+    add(shift.minutes, PageMeta::tr("m"));
+    add(shift.seconds, PageMeta::tr("s"));
+    return parts.isEmpty() ? PageMeta::tr("±0") : parts.join(QStringLiteral(" "));
+}
+
+// ---------------------------------------------------------------------------
+// 页内小控件
+// ---------------------------------------------------------------------------
+
+// 时间偏移 spin（R4 数值控件）：mockup 的「+8」符号显示在 Qt 里只有 textFromValue 一处干净落点，
+// 故为 QSpinBox 的**极小覆写**（其余设置与 formkit::spin_box 逐条一致：ppFk=spin / 右对齐 /
+// tabular / 高 24 / 短档 88 —— 由 meta-geom 探针钉住宽度 88 与高度 24）。
+class DeltaSpin : public QSpinBox {
+public:
+    DeltaSpin(QWidget *parent, const QString &object_name) : QSpinBox(parent) {
+        setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkSpin));
+        setFont(theme::font(theme::Typography::body_px, QFont::Normal, /*tabular=*/true));
+        setAlignment(Qt::AlignRight | Qt::AlignVCenter); // §4.2「数值」：右对齐
+        setFixedSize(formkit::kFieldShort, formkit::kControlH);
+        setObjectName(object_name);
+        setRange(-99, 99); // §7.1 注释「−99…+99」= 范围（R3：范围入注释）
+        setValue(0);
+    }
+
+protected:
+    QString textFromValue(int value) const override {
+        return (value < 0 ? QStringLiteral("−") : QStringLiteral("+")) +
+               QString::number(std::abs(value));
+    }
+};
+
+// 评级（§7.1「评级(★)」；A8 零字形 → **矢量星**）：形 = icons 库的 star 路径（单源），
+// 实心 = acc 填充、空心 = text3 描边；无任何字形字符。
+class RatingStars : public QWidget {
+public:
+    explicit RatingStars(QWidget *parent = nullptr) : QWidget(parent) {
+        setFixedSize(kStarPx * 5 + kStarGap * 4, kStarPx);
+        setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    }
+    void set_rating(int stars) {
+        const int value = std::clamp(stars, 0, 5);
+        if (value == rating_) {
+            return;
+        }
+        rating_ = value;
+        update();
+    }
+    void set_tokens(const theme::Tokens &t) {
+        tokens_ = t;
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        const QPainterPath star = icons::path(icons::Name::Star);
+        const double scale = double(kStarPx) / icons::kGrid;
+        for (int i = 0; i < 5; ++i) {
+            QTransform transform;
+            transform.translate(i * (kStarPx + kStarGap), 0);
+            transform.scale(scale, scale);
+            const QPainterPath boxed = transform.map(star);
+            if (i < rating_) {
+                p.setPen(Qt::NoPen);
+                p.setBrush(tokens_.accent);
+                p.drawPath(boxed);
+            } else {
+                p.setPen(QPen(tokens_.text3, 1.0));
+                p.setBrush(Qt::NoBrush);
+                p.drawPath(boxed);
+            }
+        }
+    }
+
+private:
+    int rating_ = 0;
+    theme::Tokens tokens_ = formkit::default_tokens();
+};
+
 // ---------------------------------------------------------------------------
 // 页面状态（挂在 PageMeta 下的子 QObject）
 // ---------------------------------------------------------------------------
@@ -340,70 +514,85 @@ struct ProbeSnapshot {
     bool ok = false;
 };
 
-struct TimeRowWidgets {
-    ElidedLabel *old = nullptr;
-    ElidedLabel *fresh = nullptr;
-    ElidedLabel *src = nullptr;
-};
-
 struct MetaState : QObject {
     PageMeta *page = nullptr;
     bool loading = false; // apply_rules 期间抑制信号与重复刷新
     theme::Tokens tokens;
 
-    // ---- 卡片 ① 关键信息（只读）----
     std::array<QFrame *, 4> cards{};
-    ElidedLabel *info_pill = nullptr;
+
+    // ---- 卡片 ① 关键信息（kv 双列 5 行 + 空态一行）----
+    formkit::PillBadge *info_pill = nullptr;
     ElidedLabel *info_hint = nullptr;
-    std::array<ElidedLabel *, 8> info_value{};
+    std::array<QWidget *, 5> info_row{};
+    std::array<ElidedLabel *, 8> info_value{}; // time/camera/lens/exposure/size/color/file/gps
+    ElidedLabel *info_wb = nullptr;
+    RatingStars *info_rating = nullptr;
+    QLabel *info_rating_none = nullptr;
+    formkit::PillBadge *info_gps_pill = nullptr;
+    QWidget *info_empty_row = nullptr;
+    ElidedLabel *info_empty = nullptr;
 
     // ---- 卡片 ② 时间偏移 ----
+    formkit::PillBadge *time_pill = nullptr;
     ElidedLabel *time_hint = nullptr;
-    QToolButton *seg_delta = nullptr;
-    QToolButton *seg_tz = nullptr;
+    formkit::SegmentedControl *seg = nullptr;
     QWidget *delta_row = nullptr;
-    QWidget *tz_row = nullptr;
     std::array<QSpinBox *, 6> delta{};
+    QWidget *time_row = nullptr;
+    QWidget *tz_row = nullptr;
     QComboBox *tz_from = nullptr;
     QComboBox *tz_to = nullptr;
-    QFrame *effect = nullptr;
-    QWidget *time_rows_host = nullptr;
-    std::array<TimeRowWidgets, 3> time_row{};
+    QWidget *effect_row = nullptr;
+    QLabel *effect_label = nullptr;
+    ElidedLabel *time_old = nullptr;
+    QLabel *time_arrow = nullptr;
+    ElidedLabel *time_new = nullptr;
+    ElidedLabel *time_note = nullptr;
+    ElidedLabel *time_src = nullptr;
+    QWidget *time_empty_row = nullptr;
+    ElidedLabel *time_empty = nullptr;
     QWidget *multi_host = nullptr;
     QGridLayout *multi_grid = nullptr;
     ElidedLabel *multi_more = nullptr;
 
     // ---- 卡片 ③ GPS ----
+    formkit::PillBadge *gps_pill = nullptr;
     ElidedLabel *gps_hint = nullptr;
     QLabel *gps_warn = nullptr;
     QLineEdit *view_lat = nullptr;
     QLineEdit *view_lon = nullptr;
     QLineEdit *view_alt = nullptr;
     QLineEdit *view_dir = nullptr;
-    QLineEdit *view_ts = nullptr;
     pp::map::MapWidget *map = nullptr;
+    QComboBox *provider = nullptr;
     QLineEdit *search_edit = nullptr;
     QPushButton *search_btn = nullptr;
     QComboBox *search_results = nullptr;
     QPushButton *read_gps = nullptr;
     QPushButton *pick_map = nullptr;
     QPushButton *clear_gps = nullptr;
+    QLabel *gps_status = nullptr;
     QToolButton *rule_toggle = nullptr;
     QWidget *rule_host = nullptr;
-    QCheckBox *gps_enable = nullptr;
-    QToolButton *more_toggle = nullptr; // 批量规则的可选字段折叠（海拔/方位/时间戳）
+    formkit::CheckBox *gps_enable = nullptr;
+    QToolButton *more_toggle = nullptr; // 规则的可选字段折叠（海拔/方位/时间戳）
     QLineEdit *lat = nullptr;
     QLineEdit *lon = nullptr;
     QLineEdit *alt = nullptr;
     QLineEdit *dir = nullptr;
     QLineEdit *ts = nullptr;
-    QLabel *gps_status = nullptr;
 
-    // ---- 卡片 ④ 隐私 / 时间 / 例外 ----
-    QCheckBox *strip = nullptr;
-    QCheckBox *mtime = nullptr;
+    // ---- 卡片 ④ 隐私与文件时间 ----
+    formkit::PillBadge *privacy_pill = nullptr;
+    formkit::SwitchControl *strip = nullptr;
+    formkit::SwitchControl *mtime = nullptr;
     QToolButton *link_tags = nullptr;
     QToolButton *link_exc = nullptr;
+    QToolButton *link_keywords = nullptr;
+    QWidget *keyword_box = nullptr;
+    QHBoxLayout *keyword_row = nullptr;
+    ElidedLabel *keyword_none = nullptr;
     QWidget *tag_host = nullptr;
     QWidget *exc_host = nullptr;
     QVBoxLayout *tag_rows = nullptr;
@@ -419,6 +608,16 @@ struct MetaState : QObject {
     bool probe_pending = false;
     quint64 probe_generation = 0;
     int probe_stale_dropped = 0;
+
+    // ---- 主题重放的控件集（持有 tokens 副本的自绘控件）----
+    QList<formkit::PillBadge *> pills;         // 常驻胶囊（卡头/GPS 值格）
+    QList<formkit::PillBadge *> keyword_pills; // 关键字胶囊（随跟随项重建 → 每次刷新重填）
+    QList<formkit::SwitchControl *> switches;
+
+    void add_pill(formkit::PillBadge *pill) {
+        pill->set_tokens(tokens);
+        pills.append(pill);
+    }
 };
 
 MetaState *state_of(const PageMeta *page) {
@@ -481,8 +680,8 @@ void notify_rules_changed(MetaState *st) {
     }
 }
 
-// 自验钩子（动态属性）：同时挂在 MetaState 子对象（.cache/tmp 自验程序）与页面本身
-// （--ui-smoke 探针只持有 PageMeta*，见 smoke_probe_meta）——非用户可见的只读读数。
+// 自验钩子（动态属性）：同时挂在 MetaState 子对象（自验程序）与页面本身（--ui-smoke 探针只持有
+// PageMeta*）——非用户可见的只读读数。
 void set_hook(MetaState *st, const char *name, const QVariant &value) {
     st->setProperty(name, value);
     if (st->page != nullptr) {
@@ -491,12 +690,108 @@ void set_hook(MetaState *st, const char *name, const QVariant &value) {
 }
 
 // ---------------------------------------------------------------------------
+// formkit 行构造的页内辅助（R2/R3 的组内规则）
+//   页面自有的"多控件一行"（年月日 / 时分秒 / 生效对照 / 开关行 / 操作行 / 关键字行）在**一个
+//   字段轨内**并列：单位入 16px 槽、行内距 6px、组内距 8px —— 三个取值都取自 formkit
+//   （formkit_layout.h 的 kUnitSlotW / kInlineGap + 令牌 group_gap）；行/标签轨/轨宽仍由
+//   formkit 的行构造器给出。
+// ---------------------------------------------------------------------------
+
+struct TrackGroup {
+    QWidget *host = nullptr;
+    QHBoxLayout *line = nullptr;
+
+    QWidget *widget() const { return host; }
+    void add(QWidget *item, int stretch = 0) { line->addWidget(item, stretch, Qt::AlignVCenter); }
+    void gap(int px) {
+        if (px > 0) {
+            line->addSpacing(px);
+        }
+    }
+    void stretch() { line->addStretch(1); }
+};
+
+TrackGroup make_group(QWidget *parent) {
+    TrackGroup out;
+    out.host = new QWidget(parent);
+    out.line = new QHBoxLayout(out.host);
+    out.line->setContentsMargins(0, 0, 0, 0);
+    out.line->setSpacing(0);
+    return out;
+}
+
+// 单位槽（R3：单位入 16px 槽）—— 与 formkit 的 unit_slot 同取值同着色钩子
+QLabel *unit_slot(QWidget *parent, const QString &text) {
+    auto *label = new QLabel(text, parent);
+    label->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkUnit));
+    label->setFont(theme::font(theme::Typography::hint_px));
+    label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    label->setFixedWidth(formkit::kUnitSlotW);
+    return label;
+}
+
+// 10px 注释（R3：范围/提示入注释）——与 formkit 的 range_note 同取值同着色钩子
+ElidedLabel *note_label(QWidget *parent, const QString &object_name = QString()) {
+    auto *label = new ElidedLabel(parent);
+    if (!object_name.isEmpty()) {
+        label->setObjectName(object_name);
+    }
+    label->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkNote));
+    label->setFont(theme::font(theme::Typography::hint_px));
+    label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    return label;
+}
+
+// 文本链（§5 R4「文字链无框」；高 26 = A7 按钮换锚）
+QToolButton *make_link(QWidget *parent, const QString &object_name, const QString &text) {
+    auto *link = new QToolButton(parent);
+    link->setObjectName(object_name);
+    link->setProperty(kFieldProperty, QStringLiteral("link"));
+    link->setText(text);
+    link->setAutoRaise(true);
+    link->setCursor(Qt::PointingHandCursor);
+    link->setFixedHeight(theme::Metrics::btn_h);
+    link->setFont(theme::font(theme::Typography::body_px, 600));
+    return link;
+}
+
+// 次按钮（§5 R4：高 26 + 描边；A7）
+QPushButton *make_button(QWidget *parent, const QString &object_name, const QString &text) {
+    auto *button = new QPushButton(text, parent);
+    button->setObjectName(object_name);
+    button->setProperty(kFieldProperty, QStringLiteral("btn"));
+    button->setFixedHeight(theme::Metrics::btn_h);
+    button->setCursor(Qt::PointingHandCursor);
+    return button;
+}
+
+// 只读生效值框（§7.1 GPS 卡的生效坐标；mockup .gps-in 口径：--ctl 底 + r3 + tabular）
+QLineEdit *make_view_field(QWidget *parent, const QString &object_name) {
+    auto *edit = new QLineEdit(parent);
+    edit->setObjectName(object_name);
+    edit->setProperty(kFieldProperty, QStringLiteral("view"));
+    edit->setReadOnly(true);
+    edit->setFixedHeight(formkit::kControlH);
+    edit->setFont(theme::font(theme::Typography::body_px, QFont::Normal, /*tabular=*/true));
+    return edit;
+}
+
+// 规则输入框（R4 文本输入高 24；placeholder = 输入示例，修 1-33）
+QLineEdit *make_rule_field(QWidget *parent, const QString &object_name) {
+    auto *edit = new QLineEdit(parent);
+    edit->setObjectName(object_name);
+    edit->setProperty(kFieldProperty, QStringLiteral("rule"));
+    edit->setFixedHeight(formkit::kControlH);
+    return edit;
+}
+
+// ---------------------------------------------------------------------------
 // 规则装配（**唯一**规则源：rules() 与生效值显示都走这里 → 显示=写入）
 // ---------------------------------------------------------------------------
 
 pp::TimeShift current_time_shift(const MetaState *st) {
     pp::TimeShift shift;
-    if (st->seg_delta->isChecked()) {
+    if (st->seg->current_index() == 0) {
         shift.mode = pp::TimeShift::Mode::Delta;
         shift.years = st->delta[0]->value();
         shift.months = st->delta[1]->value();
@@ -649,22 +944,21 @@ QString follow_hint(const MetaState *st) {
     return name;
 }
 
-// 生效值为空时的占位文案（§5.1/§5.2；优先级：剥除 > 清除 > 无）
-QString empty_effective_hint(const MetaState *st, bool strip) {
-    if (strip) {
-        return PageMeta::tr(kWillRemoveText);
-    }
-    if (st->clear_gps->isChecked()) {
-        return PageMeta::tr(kGpsClearPlaceholder);
-    }
-    return PageMeta::tr(kNoGpsPlaceholder);
-}
-
 void refresh_info_card(MetaState *st, const std::vector<pp::EffectivePreview> &previews) {
-    if (previews.empty()) {
+    const bool empty = st->items.isEmpty();
+    // 空态（修 1-23）：5 行 kv 收起，只留一行说明
+    for (QWidget *row : st->info_row) {
+        row->setVisible(!empty);
+    }
+    st->info_empty_row->setVisible(empty);
+    if (empty || previews.empty()) {
         for (ElidedLabel *label : st->info_value) {
             label->set_full_text(QString());
         }
+        st->info_wb->set_full_text(QString());
+        st->info_rating->setVisible(false);
+        st->info_rating_none->setVisible(!empty);
+        st->info_gps_pill->setVisible(false);
         return;
     }
     const MetaSelectionItem &item = st->items.first();
@@ -695,17 +989,24 @@ void refresh_info_card(MetaState *st, const std::vector<pp::EffectivePreview> &p
         st->info_value[6]->set_full_text(format_size(item.file_size));
     }
     if (preview.gps.original.has_value()) {
-        st->info_value[7]->set_full_text(QStringLiteral("%1, %2  %3")
-                                             .arg(coord_text(preview.gps.original->lat, 5),
-                                                  coord_text(preview.gps.original->lon, 5),
-                                                  PageMeta::tr("已有")));
+        st->info_value[7]->set_full_text(QStringLiteral("%1, %2").arg(
+            coord_text(preview.gps.original->lat, 4), coord_text(preview.gps.original->lon, 4)));
+        st->info_gps_pill->setVisible(true);
     } else {
-        st->info_value[7]->set_full_text(probe.ok ? PageMeta::tr(kNoneText) : QStringLiteral("—"));
+        st->info_value[7]->set_full_text(QStringLiteral("—"));
+        st->info_gps_pill->setVisible(false);
     }
+    // 白平衡 / 评级（§7.1 第 5 行）
+    st->info_wb->set_full_text(probe.ok ? white_balance_text(probe.meta.exif)
+                                        : QStringLiteral("—"));
+    const std::optional<int> rating = probe.ok ? rating_of(probe.meta) : std::nullopt;
+    st->info_rating->setVisible(rating.has_value());
+    st->info_rating->set_rating(rating.value_or(0));
+    st->info_rating_none->setVisible(!rating.has_value());
 }
 
 // 清空多选小表（**保留** multi_more —— 它是常驻子控件、仅在有截断行时才入列，重复入列/
-// 误删会造成 use-after-free，见 M4-T12 自验抓到的堆损坏）
+// 误删会造成 use-after-free）
 void clear_multi_rows(MetaState *st) {
     if (st->multi_grid == nullptr) {
         return;
@@ -719,17 +1020,23 @@ void clear_multi_rows(MetaState *st) {
 }
 
 void refresh_time_section(MetaState *st, const std::vector<pp::EffectivePreview> &previews) {
+    const bool empty = st->items.isEmpty();
     const bool multi = previews.size() >= 2;
-    st->time_rows_host->setVisible(!multi);
-    st->multi_host->setVisible(multi);
+    st->effect_row->setVisible(!empty && !multi);
+    st->time_empty_row->setVisible(empty);
+    st->multi_host->setVisible(!empty && multi);
+
+    const pp::TimeShift shift = current_time_shift(st);
+    const auto clear_single = [st] {
+        st->time_old->set_full_text(QString());
+        st->time_new->set_full_text(QString());
+        st->time_note->set_full_text(QString());
+        st->time_src->set_full_text(QString());
+        theme::set_mod(st->time_new, false);
+    };
 
     if (previews.empty()) {
-        for (TimeRowWidgets &row : st->time_row) {
-            row.old->set_full_text(QString());
-            row.fresh->set_full_text(QString());
-            row.src->set_full_text(QString());
-            theme::set_mod(row.fresh, false);
-        }
+        clear_single();
         clear_multi_rows(st);
         st->multi_more->set_full_text(QString());
         st->multi_more->setVisible(false);
@@ -740,23 +1047,38 @@ void refresh_time_section(MetaState *st, const std::vector<pp::EffectivePreview>
 
     if (!multi) {
         const pp::EffectivePreview &preview = previews.front();
-        const std::array<const pp::EffectiveField<std::optional<pp::DateTimeVal>> *, 3> fields = {
-            &preview.datetime_original, &preview.datetime_digitized, &preview.datetime_modify};
-        for (std::size_t i = 0; i < fields.size(); ++i) {
-            TimeRowWidgets &row = st->time_row[i];
-            row.old->set_full_text(datetime_text(fields[i]->original));
-            row.fresh->set_full_text(preview.strip_privacy ? PageMeta::tr(kWillRemoveText)
-                                                           : datetime_text(fields[i]->effective));
-            row.src->set_full_text(QString::fromLatin1(kTimeSourceLabels[i]));
-            theme::set_mod(row.fresh, fields[i]->changed);
+        st->time_old->set_full_text(datetime_text(preview.datetime_original.original));
+        st->time_new->set_full_text(preview.strip_privacy
+                                        ? PageMeta::tr(kWillRemoveText)
+                                        : datetime_text(preview.datetime_original.effective));
+        QStringList note_parts;
+        const QString date = date_part(preview.datetime_original.original);
+        if (!date.isEmpty()) {
+            note_parts << date;
         }
-        set_hook(st, "pp_meta_time_new",
-                 st->time_row[0].fresh->full_text()); // 自验钩子（探针读生效时间）
+        note_parts << delta_text(shift);
+        st->time_note->set_full_text(note_parts.join(QStringLiteral(" · ")) + QStringLiteral(" ·"));
+        st->time_src->set_full_text(QString::fromLatin1(kPrimaryTimeSource));
+        theme::set_mod(st->time_new, preview.datetime_original.changed);
+        // 另两个时间字段（CreateDate / ModifyDate）的对照进标签 tooltip（1-30：细节进 tooltip）
+        const std::array<const pp::EffectiveField<std::optional<pp::DateTimeVal>> *, 2> others = {
+            &preview.datetime_digitized, &preview.datetime_modify};
+        QString tip = PageMeta::tr("跟随选中文件；未修改时两值相同");
+        for (std::size_t i = 0; i < others.size(); ++i) {
+            tip += QStringLiteral("\n%1: %2 → %3")
+                       .arg(QString::fromLatin1(kSecondaryTimeSources[i]),
+                            datetime_text(others[i]->original),
+                            preview.strip_privacy ? PageMeta::tr(kWillRemoveText)
+                                                  : datetime_text(others[i]->effective));
+        }
+        st->effect_label->setToolTip(tip);
+        set_hook(st, "pp_meta_time_new", st->time_new->full_text()); // 自验钩子（探针读生效时间）
         set_hook(st, "pp_meta_multi_rows", 0);
         return;
     }
 
     // 多选（≥2）：逐行小表（文件名 | 原 → 生效），上限 8 行 + 「…还有 N 个」（§5.2）
+    clear_single(); // 单文件对照行让位（文本一并清空：探针据此判定"多选态"）
     if (st->multi_grid == nullptr) {
         return;
     }
@@ -770,23 +1092,27 @@ void refresh_time_section(MetaState *st, const std::vector<pp::EffectivePreview>
         const QString name = QFileInfo(st->items.at(i).path).fileName();
         auto *name_label = new ElidedLabel(st->multi_host);
         name_label->setObjectName(QStringLiteral("pp-meta-multi-name-%1").arg(i));
+        name_label->setProperty(kFieldProperty, QStringLiteral("multi-name"));
         name_label->setFont(theme::font(theme::Typography::body_px, QFont::Normal));
-        name_label->setMinimumHeight(theme::Metrics::form_row_h);
+        name_label->setMinimumHeight(formkit::kRowPitch);
         name_label->set_full_text(name);
         auto *old_label = new ElidedLabel(st->multi_host);
         old_label->setObjectName(QStringLiteral("pp-meta-multi-old-%1").arg(i));
+        old_label->setProperty(kFieldProperty, QStringLiteral("old"));
         QFont old_font = theme::font(theme::Typography::body_px, QFont::Normal, /*tabular=*/true);
         old_font.setStrikeOut(true);
         old_label->setFont(old_font);
-        old_label->setMinimumHeight(theme::Metrics::form_row_h);
+        old_label->setMinimumHeight(formkit::kRowPitch);
         old_label->set_full_text(datetime_text(preview.datetime_original.original));
         auto *arrow = new QLabel(QStringLiteral("→"), st->multi_host);
         arrow->setObjectName(QStringLiteral("pp-meta-multi-arrow"));
+        arrow->setProperty(kFieldProperty, QStringLiteral("arrow"));
         arrow->setFont(theme::font(theme::Typography::body_px, QFont::Normal));
         auto *new_label = new ElidedLabel(st->multi_host);
         new_label->setObjectName(QStringLiteral("pp-meta-multi-new-%1").arg(i));
+        new_label->setProperty(kFieldProperty, QStringLiteral("new"));
         new_label->setFont(theme::font(theme::Typography::body_px, QFont::Bold, /*tabular=*/true));
-        new_label->setMinimumHeight(theme::Metrics::form_row_h);
+        new_label->setMinimumHeight(formkit::kRowPitch);
         new_label->set_full_text(preview.strip_privacy
                                      ? PageMeta::tr(kWillRemoveText)
                                      : datetime_text(preview.datetime_original.effective));
@@ -808,17 +1134,27 @@ void refresh_time_section(MetaState *st, const std::vector<pp::EffectivePreview>
 }
 
 void refresh_gps_section(MetaState *st, const pp::EffectivePreview *preview) {
+    const bool empty = st->items.isEmpty();
     const bool strip = preview != nullptr && preview->strip_privacy;
-    const bool locked = st->clear_gps->isChecked();
     const std::optional<pp::GpsData> effective =
         (preview != nullptr && !strip) ? preview->gps.effective : std::nullopt;
-    const QString placeholder = empty_effective_hint(st, strip);
     const bool changed = preview != nullptr && preview->gps.changed;
-    const auto set_view = [&](QLineEdit *edit, const QString &text) {
+    const auto set_view = [](QLineEdit *edit, const QString &text) {
         edit->setText(text);
-        edit->setPlaceholderText(text.isEmpty() ? placeholder : QString());
-        edit->setToolTip(QString());
+        edit->setPlaceholderText(QString()); // 生效值框不承担状态（修 1-33）
     };
+    if (empty || preview == nullptr) {
+        for (QLineEdit *edit : {st->view_lat, st->view_lon, st->view_alt, st->view_dir}) {
+            set_view(edit, QString());
+            edit->setToolTip(QString());
+        }
+        theme::set_mod(st->view_lat, false);
+        theme::set_mod(st->view_lon, false);
+        st->gps_pill->setVisible(false);
+        st->map->clear_marker();
+        set_hook(st, "pp_meta_gps_effective", QString());
+        return;
+    }
     if (effective.has_value()) {
         set_view(st->view_lat, coord_text(effective->lat, 6));
         set_view(st->view_lon, coord_text(effective->lon, 6));
@@ -829,21 +1165,21 @@ void refresh_gps_section(MetaState *st, const pp::EffectivePreview *preview) {
         set_view(st->view_dir, effective->direction.has_value()
                                    ? coord_text(*effective->direction, 1)
                                    : QString());
-        set_view(st->view_ts, effective->timestamp.has_value()
-                                  ? QString::fromStdString(*effective->timestamp)
-                                  : QString());
-        // DMS 读数（v0.2 的纬度/经度秒级读数）收进悬浮提示：不占 mockup 的控件面，信息不丢
-        const QString dms = dms_string(effective->lat, effective->lon);
-        st->view_lat->setToolTip(dms);
-        st->view_lon->setToolTip(dms);
+        // DMS 读数 + 时间戳收进悬浮提示（不占控件面，信息不丢）
+        QString tip = dms_string(effective->lat, effective->lon);
+        if (effective->timestamp.has_value()) {
+            tip += QStringLiteral("\n%1: %2")
+                       .arg(PageMeta::tr("时间戳"), QString::fromStdString(*effective->timestamp));
+        }
+        st->view_lat->setToolTip(tip);
+        st->view_lon->setToolTip(tip);
     } else {
-        set_view(st->view_lat, QString());
-        set_view(st->view_lon, QString());
-        set_view(st->view_alt, QString());
-        set_view(st->view_dir, QString());
-        set_view(st->view_ts, QString());
+        for (QLineEdit *edit : {st->view_lat, st->view_lon, st->view_alt, st->view_dir}) {
+            set_view(edit, QString());
+            edit->setToolTip(QString());
+        }
     }
-    // .mod（§9.2）：生效坐标与原值不同 → 强调边框+强调色字
+    // .mod（A8）：生效坐标与原值不同 → 强调边框+强调色字
     theme::set_mod(st->view_lat, changed && !st->view_lat->text().isEmpty());
     theme::set_mod(st->view_lon, changed && !st->view_lon->text().isEmpty());
     // D4：只显生效值**单钉**；无生效值 → 不画钉、不 center_on（保持当前视口/选点位置）
@@ -857,18 +1193,74 @@ void refresh_gps_section(MetaState *st, const pp::EffectivePreview *preview) {
         st->map->clear_marker();
         set_hook(st, "pp_meta_gps_effective", QString());
     }
-    Q_UNUSED(locked);
+    // 状态 = 独立徽标（修 1-33）：隐私剥除 > 清除 > 生效值有无
+    const bool clearing = st->clear_gps->isChecked();
+    const QString state = strip ? PageMeta::tr(kWillRemoveText)
+                                : (clearing ? PageMeta::tr(kGpsClearText)
+                                            : (effective.has_value() ? PageMeta::tr(kHasGpsText)
+                                                                     : PageMeta::tr(kNoGpsText)));
+    st->gps_pill->setText(state);
+    st->gps_pill->setVisible(true);
+    st->gps_pill->setToolTip(
+        strip
+            ? PageMeta::tr("输出不含 EXIF / XMP（含 GPS）")
+            : (clearing ? PageMeta::tr("输出不含 GPS（清除优先于坐标）")
+                        : (effective.has_value() ? PageMeta::tr("源文件或批量规则提供坐标")
+                                                 : PageMeta::tr("源文件无坐标；批量规则可写入"))));
+}
+
+// 关键字胶囊组（§7.1「关键字 胶囊组」）：跟随项的 XMP dc:subject；超过 3 枚 → 「+N」
+void refresh_keywords(MetaState *st) {
+    if (st->keyword_row == nullptr) {
+        return;
+    }
+    // 胶囊是**重建件**：本函数每次刷新都换一批 —— 令牌重放清单先清空（否则 apply_style 会对
+    // 已 deleteLater 的旧胶囊取 tokens → 悬垂指针）
+    st->keyword_pills.clear();
+    // 说明位是常驻子控件（与 multi_more 同口径：重复入列/误删会造成悬垂引用）→ 只清胶囊
+    while (st->keyword_row->count() > 1) {
+        QLayoutItem *item = st->keyword_row->takeAt(1);
+        if (QWidget *widget = item->widget()) {
+            widget->hide();
+            widget->setParent(nullptr);
+            widget->deleteLater();
+        }
+        delete item;
+    }
+    QStringList keywords;
+    if (!st->probes.empty() && !st->items.isEmpty()) {
+        keywords = keywords_of(st->probes.front().meta);
+    }
+    st->keyword_none->setVisible(keywords.isEmpty());
+    constexpr int kShown = 3;
+    for (int i = 0; i < std::min<int>(kShown, keywords.size()); ++i) {
+        auto *pill = formkit::PillBadge::of(st->keyword_box, formkit::PillBadge::Tone::Neutral,
+                                            keywords.at(i));
+        pill->setObjectName(QStringLiteral("pp-meta-keyword-%1").arg(i));
+        pill->set_tokens(st->tokens);
+        st->keyword_pills.append(pill);
+        st->keyword_row->addWidget(pill, 0, Qt::AlignVCenter);
+    }
+    if (keywords.size() > kShown) {
+        auto *more = formkit::PillBadge::of(st->keyword_box, formkit::PillBadge::Tone::Neutral,
+                                            QStringLiteral("+%1").arg(keywords.size() - kShown));
+        more->setObjectName(QStringLiteral("pp-meta-keyword-more"));
+        more->set_tokens(st->tokens);
+        st->keyword_pills.append(more);
+        st->keyword_row->addWidget(more, 0, Qt::AlignVCenter);
+    }
 }
 
 void refresh_effective(MetaState *st) {
     st->info_hint->set_full_text(follow_hint(st));
-    st->time_hint->set_full_text(PageMeta::tr("影响 %1 / %2 个文件")
-                                     .arg(st->batch_files.size())
-                                     .arg(st->batch_files.size()));
+    // 时间卡范围胶囊（mockup「影响 12 / 24」的语义位）：页面知道的只有批内文件数，除数/被除数
+    // 同源 → 不编造"N / M"。
+    st->time_pill->setText(PageMeta::tr("影响 %1 个文件").arg(st->batch_files.size()));
     if (st->probe_pending) {
         refresh_info_card(st, {});
         refresh_time_section(st, {});
         refresh_gps_section(st, nullptr);
+        refresh_keywords(st);
         return;
     }
     const pp::BatchRules rules = build_rules(st);
@@ -878,12 +1270,14 @@ void refresh_effective(MetaState *st) {
         const std::optional<pp::MetadataOverride> exception =
             i < std::size_t(st->items.size()) ? st->items.at(int(i)).exception
                                               : std::optional<pp::MetadataOverride>();
+
         previews.push_back(
             pp::preview_effective(st->probes[i].meta, rules, exception)); // §5.1 唯一合成源
     }
     refresh_info_card(st, previews);
     refresh_time_section(st, previews);
     refresh_gps_section(st, previews.empty() ? nullptr : &previews.front());
+    refresh_keywords(st);
 }
 
 // ---------------------------------------------------------------------------
@@ -891,16 +1285,12 @@ void refresh_effective(MetaState *st) {
 // ---------------------------------------------------------------------------
 
 void refresh_time_inputs(MetaState *st) {
-    // 时间卡无「启用」开关（见头注释）：seg 选中的那一组恒可用，另一组隐藏
-    const bool delta_mode = st->seg_delta->isChecked();
+    // 时间卡无「启用」开关：seg 选中的那一组恒可用，另一组隐藏
+    const bool delta_mode = st->seg->current_index() == 0;
     st->delta_row->setVisible(delta_mode);
+    st->time_row->setVisible(delta_mode);
     st->tz_row->setVisible(!delta_mode);
-    for (QSpinBox *spin : st->delta) {
-        spin->setEnabled(true);
-    }
-    st->tz_from->setEnabled(true);
-    st->tz_to->setEnabled(true);
-    // .mod（mockup .spin.mod：改动值 = 强调边框+强调色字+700）
+    // .mod（A8：改动值 = 强调边框+强调色字）
     for (QSpinBox *spin : st->delta) {
         theme::set_mod(spin, spin->value() != 0);
     }
@@ -909,7 +1299,7 @@ void refresh_time_inputs(MetaState *st) {
     theme::set_mod(st->tz_to, tz_changed);
 }
 
-// GPS 勾选但坐标非法 → 卡片顶部黄字提示（§2.11 冻结文案）
+// GPS 规则勾选但坐标非法 → 卡片黄字提示（真警告才用 warn 档令牌；A6：0xcc8800 收口）
 void refresh_gps_warning(MetaState *st) {
     double lat = 0, lon = 0;
     const bool valid =
@@ -918,11 +1308,11 @@ void refresh_gps_warning(MetaState *st) {
     st->gps_warn->setVisible(show);
 }
 
-// M5-T3（契约 C3）：折叠入口的插入符 = **矢量图标**（▸ 收起 / ▾ 展开），不再是 "… ▾" 字形文本；
-// 例外标记同样不再用 ⚑ 字形 —— 例外状态由文案里的计数 "(N)" 表达（§7.1 无字形图标）。
+// 折叠入口的插入符 = **矢量图标**（▸ 收起 / ▾ 展开），不再是字形文本（C3/A8）
 void set_fold_icon(MetaState *st, QToolButton *button, bool expanded) {
-    if (button == nullptr)
+    if (button == nullptr) {
         return;
+    }
     button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     icons::apply(button, expanded ? icons::Name::ChevronDown : icons::Name::ChevronRight,
                  st->tokens.text3, st->tokens.text3, 12);
@@ -939,13 +1329,17 @@ void refresh_gps_inputs(MetaState *st) {
     st->dir->setEnabled(editable);
     st->ts->setEnabled(editable);
     st->more_toggle->setEnabled(editable);
-    // §9.1 FIX2：占位文本跟随各框自身可用性（不新造文案）
+    // placeholder = 输入示例（修 1-33）；禁用时清空（占位色不随 setEnabled 变化）
     st->lat->setPlaceholderText(editable ? PageMeta::tr(kLatPlaceholder) : QString());
     st->lon->setPlaceholderText(editable ? PageMeta::tr(kLonPlaceholder) : QString());
+    st->alt->setPlaceholderText(editable ? PageMeta::tr(kAltPlaceholder) : QString());
+    st->dir->setPlaceholderText(editable ? PageMeta::tr(kDirPlaceholder) : QString());
+    st->ts->setPlaceholderText(editable ? PageMeta::tr(kTsPlaceholder) : QString());
     st->search_edit->setPlaceholderText(locked ? QString() : PageMeta::tr(kSearchPlaceholder));
     st->search_edit->setEnabled(!locked);
     st->search_btn->setEnabled(!locked);
     st->search_results->setEnabled(!locked);
+    st->provider->setEnabled(!locked);
     st->read_gps->setEnabled(!locked && st->from_selection && !st->items.isEmpty());
     st->pick_map->setEnabled(!locked);
     st->rule_toggle->setText(rule_on ? PageMeta::tr("批量 GPS 规则 · 已启用")
@@ -984,18 +1378,23 @@ void add_tag_row(MetaState *st, const QString &key, const QString &value) {
     row->setObjectName(QStringLiteral("tag_row"));
     auto *lay = new QHBoxLayout(row);
     lay->setContentsMargins(0, 0, 0, 0);
+    lay->setSpacing(theme::Metrics::group_gap);
 
     auto *key_edit = new QLineEdit(row);
     key_edit->setObjectName(QStringLiteral("tag_key"));
+    key_edit->setProperty(kFieldProperty, QStringLiteral("rule"));
+    key_edit->setFixedHeight(formkit::kControlH);
     key_edit->setPlaceholderText(PageMeta::tr("Exif.Image.Artist 或 Xmp.dc.title"));
     key_edit->setText(key);
     auto *value_edit = new QLineEdit(row);
     value_edit->setObjectName(QStringLiteral("tag_value"));
+    value_edit->setProperty(kFieldProperty, QStringLiteral("rule"));
+    value_edit->setFixedHeight(formkit::kControlH);
     value_edit->setText(value);
     value_edit->setToolTip(PageMeta::tr("值留空 = 删除该标签"));
     auto *remove = new QPushButton(row);
     remove->setObjectName(QStringLiteral("tag_remove"));
-    remove->setFixedWidth(28);
+    remove->setFixedSize(formkit::kIconBtn, formkit::kIconBtn); // 图标钮 28×28（R4）
     remove->setToolTip(PageMeta::tr("删除此行"));
     remove->setAccessibleName(PageMeta::tr("删除此行")); // §11：图标钮必有 accessibleName
     icons::apply(remove, icons::Name::Clear, st->tokens.text2, st->tokens.text3, 12);
@@ -1028,9 +1427,7 @@ void apply_state(MetaState *st, const pp::BatchRules &r) {
 
     if (r.time_shift.has_value()) {
         const pp::TimeShift &s = *r.time_shift;
-        const bool delta_mode = s.mode == pp::TimeShift::Mode::Delta;
-        st->seg_delta->setChecked(delta_mode);
-        st->seg_tz->setChecked(!delta_mode);
+        st->seg->set_current_index(s.mode == pp::TimeShift::Mode::Delta ? 0 : 1);
         st->delta[0]->setValue(s.years);
         st->delta[1]->setValue(s.months);
         st->delta[2]->setValue(s.days);
@@ -1041,8 +1438,7 @@ void apply_state(MetaState *st, const pp::BatchRules &r) {
         select_timezone(st->tz_to, s.to_offset_min);
     } else {
         // 无时间规则 = 全零 Δ（noop；与"未配置"在两条路径上等价）
-        st->seg_delta->setChecked(true);
-        st->seg_tz->setChecked(false);
+        st->seg->set_current_index(0);
         for (QSpinBox *spin : st->delta) {
             spin->setValue(0);
         }
@@ -1084,95 +1480,138 @@ void apply_state(MetaState *st, const pp::BatchRules &r) {
 }
 
 // ---------------------------------------------------------------------------
-// 样式（tokens 单源 = ui/theme.h；本页只把 tokens 铺到自己的控件上）
+// 样式（tokens 单源 = ui/theme.h；本页只把 tokens 铺到自己的控件上；A6：硬编码色一律收口）
 // ---------------------------------------------------------------------------
-
-constexpr const char *kFieldProperty = "ppMetaField";
 
 void apply_style(MetaState *st) {
     const theme::Tokens &t = st->tokens;
     const auto css = [](const QColor &c) { return theme::css_color(c); };
-    const QString mod = QString::fromLatin1(kFieldProperty);
+    const QString field = QString::fromLatin1(kFieldProperty);
 
     QString qss;
-    // 卡片头/关键信息行（.kv-k / .kv-v）
-    qss += QStringLiteral("QLabel#pp-meta-info-key { color: ") + css(t.text3) +
-           QStringLiteral("; }\n");
-    qss += QStringLiteral("QLabel#pp-meta-info-value { color: ") + css(t.text) +
-           QStringLiteral("; }\n");
-    // 分段控件（mockup .seg：--ctl 底 + r=6 + 内 2px；选中格 = 亮底 + --txt）
-    qss += QStringLiteral("QWidget#pp-meta-seg { background: ") + css(t.control) +
+    // formkit 行内辅助件（ppFk：标签轨/值/单位/注释 + R4 spin 盒）+ .mod + 胶囊：页面自足
+    // （独立冒烟实例不再依赖窗口 QSS；与窗口 QSS 同值同源，重复规则无副作用）
+    qss += theme::formkit_qss(t);
+    qss += theme::mod_qss(t);
+    qss += theme::pill_qss(t);
+    // 卡头（mockup .card-h .t / .hint）
+    qss += QStringLiteral("QLabel#pp-card-title { color: ") + css(t.text) + QStringLiteral("; }\n");
+    qss += QStringLiteral("QLabel#pp-card-hint { color: ") + css(t.text3) + QStringLiteral("; }\n");
+    // 只读生效值框 / 规则输入框（mockup .gps-in / .tbx：--ctl 底 + --ctl-bd 边 + r3 + 高 24）
+    qss += QStringLiteral("QLineEdit[") + field + QStringLiteral("=\"view\"], QLineEdit[") + field +
+           QStringLiteral("=\"rule\"] { background: ") + css(t.control) +
            QStringLiteral("; border: 1px solid ") + css(t.control_bd) +
-           QStringLiteral("; border-radius: 6px; }\n");
-    qss += QStringLiteral("QToolButton[") + mod +
-           QStringLiteral("=\"seg\"] { background: "
-                          "transparent; border: none; border-radius: 4px; color: ") +
-           css(t.text2) + QStringLiteral("; padding: 4px 16px; font-weight: 600; }\n");
-    qss += QStringLiteral("QToolButton[") + mod +
-           QStringLiteral("=\"seg\"]:checked { background: ") +
-           css(t.dark() ? QColor(255, 255, 255, 26) : QColor(255, 255, 255)) +
-           QStringLiteral("; color: ") + css(t.text) + QStringLiteral("; }\n");
-    // 数值框（mockup .spin：--ctl 底 + --ctl-bd 边 + r=4 + tabular）
-    qss += QStringLiteral("QSpinBox[") + mod + QStringLiteral("=\"spin\"] { background: ") +
+           QStringLiteral("; border-radius: ") + QString::number(t.radius_control) +
+           QStringLiteral("px; color: ") + css(t.text) + QStringLiteral("; padding: 0 8px; }\n");
+    qss += QStringLiteral("QLineEdit[") + field +
+           QStringLiteral("=\"view\"]:disabled, QLineEdit[") + field +
+           QStringLiteral("=\"rule\"]:disabled { color: ") + css(t.text3) + QStringLiteral("; }\n");
+    // 下拉（R4：高 24 r3；同 --ctl 底）
+    qss += QStringLiteral("QComboBox[") + field + QStringLiteral("=\"combo\"] { background: ") +
            css(t.control) + QStringLiteral("; border: 1px solid ") + css(t.control_bd) +
-           QStringLiteral("; border-radius: 4px; color: ") + css(t.text) + QStringLiteral("; }\n");
-    qss += QStringLiteral("QComboBox[") + mod + QStringLiteral("=\"combo\"] { background: ") +
+           QStringLiteral("; border-radius: ") + QString::number(t.radius_control) +
+           QStringLiteral("px; color: ") + css(t.text) + QStringLiteral("; padding: 0 8px; }\n");
+    // 次按钮（R4：高 26 + 描边；A7）
+    qss += QStringLiteral("QPushButton[") + field + QStringLiteral("=\"btn\"] { background: ") +
            css(t.control) + QStringLiteral("; border: 1px solid ") + css(t.control_bd) +
-           QStringLiteral("; border-radius: 4px; color: ") + css(t.text) +
-           QStringLiteral("; padding: 0 6px; }\n");
-    // 生效值显示框（mockup .gps-in：--ctl 底 + --ctl-bd 边 + r=4）
-    qss += QStringLiteral("QLineEdit[") + mod + QStringLiteral("=\"view\"] { background: ") +
-           css(t.control) + QStringLiteral("; border: 1px solid ") + css(t.control_bd) +
-           QStringLiteral("; border-radius: 4px; color: ") + css(t.text) +
-           QStringLiteral("; padding: 0 8px; }\n");
-    // 生效对照块（mockup .effect：--card-hi 底 + --card-bd 边 + r=6）
-    qss += QStringLiteral("QFrame#pp-meta-effect { background: ") + css(t.card_hi) +
-           QStringLiteral("; border: 1px solid ") + css(t.card_bd) +
-           QStringLiteral("; border-radius: 6px; }\n");
-    qss += QStringLiteral("QLabel#pp-meta-effect-title { color: ") + css(t.text3) +
-           QStringLiteral("; }\n");
-    // 原（删除线）→ 生效（强调色）（mockup .tline；删除线在 QFont 侧落地 —— Qt QSS 无
-    // text-decoration）
-    qss += QStringLiteral("QLabel[") + mod + QStringLiteral("=\"old\"] { color: ") + css(t.text2) +
-           QStringLiteral("; }\n");
-    qss += QStringLiteral("QLabel[") + mod + QStringLiteral("=\"new\"] { color: ") + css(t.accent) +
-           QStringLiteral("; }\n");
-    qss += QStringLiteral("QLabel[") + mod + QStringLiteral("=\"arrow\"] { color: ") +
-           css(t.text3) + QStringLiteral("; }\n");
-    qss += QStringLiteral("QLabel[") + mod + QStringLiteral("=\"src\"] { color: ") + css(t.text3) +
-           QStringLiteral("; }\n");
-    qss += QStringLiteral("QLabel[") + mod + QStringLiteral("=\"multi-name\"] { color: ") +
-           css(t.text) + QStringLiteral("; }\n");
-    qss += QStringLiteral("QLabel[") + mod + QStringLiteral("=\"multi-more\"] { color: ") +
-           css(t.text3) + QStringLiteral("; }\n");
-    // 折叠入口 / 链接（mockup .link = accent 600；.switch-row 的 hint 文案）
-    qss += QStringLiteral("QToolButton[") + mod +
-           QStringLiteral("=\"fold\"] { border: none; "
-                          "background: transparent; color: ") +
+           QStringLiteral("; border-radius: ") + QString::number(t.radius_control) +
+           QStringLiteral("px; color: ") + css(t.text2) +
+           QStringLiteral("; padding: 0 11px; font-weight: 600; }\n");
+    qss += QStringLiteral("QPushButton[") + field + QStringLiteral("=\"btn\"]:disabled { color: ") +
+           css(t.text3) + QStringLiteral("; background: transparent; border-color: ") +
+           css(t.control_bd) + QStringLiteral("; }\n");
+    // 文字链（无框）与危险链（清除 GPS = 红链；红只表达破坏性动作 §4.1）
+    qss += QStringLiteral("QToolButton[") + field +
+           QStringLiteral("=\"link\"] { border: none; background: transparent; color: ") +
+           css(t.accent) + QStringLiteral("; font-weight: 600; padding: 0 2px; }\n");
+    qss += QStringLiteral("QPushButton[") + field +
+           QStringLiteral("=\"danger\"] { border: none; background: transparent; color: ") +
+           css(t.err) + QStringLiteral("; font-weight: 600; padding: 0 2px; }\n");
+    qss += QStringLiteral("QPushButton[") + field +
+           QStringLiteral("=\"danger\"]:checked { "
+                          "background: ") +
+           css(t.err_dim) + QStringLiteral("; border-radius: ") +
+           QString::number(t.radius_control) + QStringLiteral("px; }\n");
+    // 折叠行（插入符 = 矢量图标）
+    qss += QStringLiteral("QToolButton[") + field +
+           QStringLiteral("=\"fold\"] { border: none; background: transparent; color: ") +
            css(t.text2) + QStringLiteral("; font-weight: 600; }\n");
-    qss += QStringLiteral("QToolButton[") + mod +
-           QStringLiteral("=\"link\"] { border: none; "
-                          "background: transparent; color: ") +
-           css(t.accent) + QStringLiteral("; font-weight: 600; }\n");
-    qss += QStringLiteral("QLabel[") + mod + QStringLiteral("=\"sub\"] { color: ") + css(t.text3) +
-           QStringLiteral("; }\n");
-    // 危险动作（mockup .btn.danger = --err 字）
-    qss += QStringLiteral("QPushButton[") + mod + QStringLiteral("=\"danger\"] { color: ") +
-           css(t.err) + QStringLiteral("; }\n");
-    // 卡片间距（§9.3 卡片间 10px = mockup .scroll{gap:10px}）
+    // 说明/提示行（mockup .sub-hint）
+    qss += QStringLiteral("QLabel[") + field + QStringLiteral("=\"sub\"], QLabel[") + field +
+           QStringLiteral("=\"hint\"] { color: ") + css(t.text3) + QStringLiteral("; }\n");
+    // 生效对照（mockup .tline）：原 = 删除线 + --txt2；新 = 强调色（.mod 时再叠强调边框）；
+    // 箭头/注释/来源 = --txt3；多选小表名 = --txt
+    qss += QStringLiteral("QLabel[") + field + QStringLiteral("=\"old\"] { color: ") +
+           css(t.text2) + QStringLiteral("; }\n");
+    qss += QStringLiteral("QLabel[") + field + QStringLiteral("=\"new\"] { color: ") +
+           css(t.accent) + QStringLiteral("; }\n");
+    qss += QStringLiteral("QLabel[") + field + QStringLiteral("=\"arrow\"], QLabel[") + field +
+           QStringLiteral("=\"note\"], QLabel[") + field +
+           QStringLiteral("=\"multi-more\"] "
+                          "{ color: ") +
+           css(t.text3) + QStringLiteral("; }\n");
+    qss += QStringLiteral("QLabel[") + field + QStringLiteral("=\"multi-name\"] { color: ") +
+           css(t.text) + QStringLiteral("; }\n");
+    // 空态一行（§8：中性灰说明；绝不警示色）
+    qss += QStringLiteral("QLabel[") + field + QStringLiteral("=\"empty\"] { color: ") +
+           css(t.text3) + QStringLiteral("; }\n");
+    // 真警告（GPS 坐标无效）：A6 —— 原硬编码 0xcc8800 收口为 warn 令牌
+    qss += QStringLiteral("QLabel#gps_warning { color: ") + css(t.warn) + QStringLiteral("; }\n");
+    // 卡片（§4.3 r6 + --card-bd 描边）
+    qss += QStringLiteral("QFrame#pp-card { background: ") + css(t.card) +
+           QStringLiteral("; border: 1px solid ") + css(t.card_bd) +
+           QStringLiteral("; border-radius: ") + QString::number(t.radius_card) +
+           QStringLiteral("px; }\n");
     qss += QStringLiteral("QWidget#pp-meta-content { background: transparent; }\n");
     st->page->setStyleSheet(qss);
 
-    // M5-T3：矢量图标随 tokens 重放（QIcon 取色不吃 QSS 的 color）—— 折叠插入符 + 标签行删除钮
+    // 地图离线 banner 的**宿主侧**收口（修 1-38/1-39：中性灰说明 + 括号进 tooltip；
+    // mapwidget 文件零改动 —— 令牌/文案由本页铺）
+    if (st->map != nullptr) {
+        const QList<QLabel *> labels = st->map->findChildren<QLabel *>();
+        for (QLabel *banner : labels) {
+            if (!banner->text().contains(PageMeta::tr("地图离线"))) {
+                continue;
+            }
+            banner->setText(PageMeta::tr("地图离线"));
+            banner->setToolTip(PageMeta::tr("可手动输入坐标"));
+            banner->setStyleSheet(
+                QStringLiteral("QLabel { background: ") + css(t.card_hi) +
+                QStringLiteral("; border: 1px solid ") + css(t.card_bd) +
+                QStringLiteral("; border-radius: ") + QString::number(t.radius_control) +
+                QStringLiteral("px; color: ") + css(t.text3) + QStringLiteral("; padding: 4px; }"));
+            break;
+        }
+    }
+
+    // M5-T3：矢量图标随 tokens 重放（QIcon 取色不吃 QSS 的 color）
     set_fold_icon(st, st->rule_toggle, st->rule_toggle != nullptr && st->rule_toggle->isChecked());
+    set_fold_icon(st, st->more_toggle, st->more_toggle != nullptr && st->more_toggle->isChecked());
     set_fold_icon(st, st->link_tags, st->tag_host != nullptr && st->tag_host->isVisible());
     set_fold_icon(st, st->link_exc, st->exc_host != nullptr && st->exc_host->isVisible());
+    set_fold_icon(st, st->link_keywords, st->tag_host != nullptr && st->tag_host->isVisible());
     for (QPushButton *remove :
          st->page->findChildren<QPushButton *>(QStringLiteral("tag_remove"))) {
         icons::apply(remove, icons::Name::Clear, t.text2, t.text3, 12);
     }
+    // 自绘控件（胶囊/开关/分段/评级）持令牌副本
+    for (formkit::PillBadge *pill : st->pills) {
+        pill->set_tokens(t);
+    }
+    for (formkit::PillBadge *pill : st->keyword_pills) {
+        pill->set_tokens(t);
+    }
+    for (formkit::SwitchControl *sw : st->switches) {
+        sw->set_tokens(t);
+    }
+    if (st->seg != nullptr) {
+        st->seg->set_tokens(t);
+    }
+    if (st->info_rating != nullptr) {
+        st->info_rating->set_tokens(t);
+    }
 
-    // 浅色卡阴影（§9.2 0 1px 4px rgba(16,24,40,.06)；深色无阴影）
+    // 浅色卡阴影（§4.1 shadow；深色无阴影）
     const qreal dpr = st->page->devicePixelRatioF() > 0.01 ? st->page->devicePixelRatioF() : 1.0;
     for (QFrame *card : st->cards) {
         if (card == nullptr) {
@@ -1204,48 +1643,64 @@ QFrame *make_card(QWidget *parent) {
     return card;
 }
 
-// 卡头（mockup .card-h）：标题（12.5px/700）+ 可选徽标（.pill）+ 右端 hint（超长省略）
-QWidget *make_card_header(QWidget *parent, const QString &title, ElidedLabel **pill_out,
-                          ElidedLabel **hint_out) {
-    auto *row = new QWidget(parent);
-    auto *layout = new QHBoxLayout(row);
-    layout->setContentsMargins(12, 9, 12, 7);
-    layout->setSpacing(8);
-    auto *label = new QLabel(title, row);
-    label->setObjectName(QStringLiteral("pp-card-title"));
-    label->setFont(
+// 卡头（§7.1/mockup .card-h：标题 12/700 + **中性状态胶囊**（1-24/1-25：卡头右置元素统一规格）+
+// 右端 hint（10px/--txt3，超长省略））
+struct CardHeader {
+    QWidget *row = nullptr;
+    QLabel *title = nullptr;
+    formkit::PillBadge *pill = nullptr;
+    ElidedLabel *hint = nullptr;
+};
+
+CardHeader make_header(MetaState *st, QWidget *parent, const QString &title,
+                       const QString &pill_name, const QString &hint_name) {
+    CardHeader out;
+    out.row = new QWidget(parent);
+    auto *layout = new QHBoxLayout(out.row);
+    layout->setContentsMargins(theme::Metrics::card_pad_x, 9, theme::Metrics::card_pad_x, 7);
+    layout->setSpacing(theme::Metrics::group_gap);
+    out.title = new QLabel(title, out.row);
+    out.title->setObjectName(QStringLiteral("pp-card-title"));
+    out.title->setFont(
         theme::font(theme::Typography::card_title_px, theme::Typography::card_title_weight));
-    layout->addWidget(label);
-    if (pill_out != nullptr) {
-        auto *pill = new ElidedLabel(row);
-        pill->setProperty(theme::kPillProperty, true); // QSS：QLabel[ppPill="true"]（.pill）
-        pill->setFont(theme::font(theme::Typography::badge_px, theme::Typography::badge_weight));
-        pill->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-        pill->setVisible(false);
-        layout->addWidget(pill);
-        *pill_out = pill;
+    layout->addWidget(out.title);
+    out.pill = new formkit::PillBadge(out.row);
+    if (!pill_name.isEmpty()) {
+        out.pill->setObjectName(pill_name);
     }
+    out.pill->set_tone(formkit::PillBadge::Tone::Neutral); // 1-24/1-25：卡头右置一律中性
+    out.pill->setVisible(false);
+    layout->addWidget(out.pill);
+    st->add_pill(out.pill);
     layout->addStretch(1);
-    if (hint_out != nullptr) {
-        auto *hint = new ElidedLabel(row);
-        hint->setObjectName(QStringLiteral("pp-card-hint"));
-        hint->setFont(theme::font(theme::Typography::hint_px, 500));
-        hint->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        layout->addWidget(hint, 1);
-        *hint_out = hint;
+    out.hint = new ElidedLabel(out.row);
+    if (!hint_name.isEmpty()) {
+        out.hint->setObjectName(hint_name);
     }
-    return row;
+    out.hint->setProperty(kFieldProperty, QStringLiteral("hint"));
+    out.hint->setFont(theme::font(theme::Typography::hint_px, 500));
+    out.hint->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    layout->addWidget(out.hint, 1);
+    return out;
 }
 
-QLabel *form_label(QWidget *parent, const QString &text) {
-    auto *label = new QLabel(text, parent);
-    label->setObjectName(QStringLiteral("pp-meta-form-label"));
-    label->setProperty(kFieldProperty, QStringLiteral("label"));
-    label->setFont(theme::font(theme::Typography::small_px, QFont::Normal));
-    label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    label->setMinimumHeight(theme::Metrics::form_row_h);
-    label->setMinimumWidth(theme::Metrics::form_label_w);
-    return label;
+// 卡体（R1：下内边距 12；上侧由卡头下沿承担）
+QVBoxLayout *card_body(QWidget *card) {
+    auto *body = new QWidget(card);
+    auto *v = new QVBoxLayout(body);
+    v->setContentsMargins(theme::Metrics::card_pad_x, 0, theme::Metrics::card_pad_x,
+                          theme::Metrics::card_pad_bottom);
+    v->setSpacing(0);
+    return v;
+}
+
+ElidedLabel *make_info_value(QWidget *parent, const QString &object_name) {
+    auto *value = new ElidedLabel(parent);
+    value->setObjectName(object_name);
+    value->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkValue));
+    value->setFont(theme::font(theme::Typography::body_px, QFont::Normal, /*tabular=*/true));
+    value->setAlignment(Qt::AlignLeft | Qt::AlignVCenter); // kv 值：正文语序（mockup .kv-v 左起）
+    return value;
 }
 
 QWidget *build_info_card(MetaState *st, QWidget *parent) {
@@ -1253,37 +1708,91 @@ QWidget *build_info_card(MetaState *st, QWidget *parent) {
     auto *v = new QVBoxLayout(card);
     v->setContentsMargins(0, 0, 0, 0);
     v->setSpacing(0);
-    v->addWidget(make_card_header(card, PageMeta::tr("关键信息"), &st->info_pill, &st->info_hint));
-    st->info_hint->setObjectName(QStringLiteral("pp-meta-info-hint"));
-    st->info_hint->setProperty(kFieldProperty, QStringLiteral("hint"));
-    st->info_pill->set_full_text(PageMeta::tr("跟随选中"));
-    st->info_pill->setVisible(true);
+    const CardHeader header =
+        make_header(st, card, PageMeta::tr("关键信息"), QStringLiteral("pp-meta-info-pill"),
+                    QStringLiteral("pp-meta-info-hint"));
+    st->info_pill = header.pill;
+    st->info_hint = header.hint;
+    v->addWidget(header.row);
 
-    auto *grid = new QGridLayout();
-    grid->setContentsMargins(kCardPadX, 2, kCardPadX, 12);
-    grid->setHorizontalSpacing(theme::Metrics::form_col_gap);
-    grid->setVerticalSpacing(0);
-    const std::array<QString, 8> keys = {
+    auto *body = new QWidget(card);
+    auto *bv = new QVBoxLayout(body);
+    bv->setContentsMargins(theme::Metrics::card_pad_x, 0, theme::Metrics::card_pad_x,
+                           theme::Metrics::card_pad_bottom);
+    bv->setSpacing(0);
+
+    // kv 双列 5 行（§7.1 逐行）：拍摄时间/相机、镜头/曝光、尺寸/色彩、文件/GPS、白平衡/评级
+    const std::array<QString, 10> keys = {
         PageMeta::tr("拍摄时间"), PageMeta::tr("相机"), PageMeta::tr("镜头"), PageMeta::tr("曝光"),
-        PageMeta::tr("尺寸"),     PageMeta::tr("色彩"), PageMeta::tr("文件"), PageMeta::tr("GPS")};
+        PageMeta::tr("尺寸"),     PageMeta::tr("色彩"), PageMeta::tr("文件"), PageMeta::tr("GPS"),
+        PageMeta::tr("白平衡"),   PageMeta::tr("评级")};
     const std::array<const char *, 8> hooks = {
         "pp-meta-info-time", "pp-meta-info-camera", "pp-meta-info-lens", "pp-meta-info-exposure",
         "pp-meta-info-size", "pp-meta-info-color",  "pp-meta-info-file", "pp-meta-info-gps"};
-    for (int i = 0; i < 8; ++i) {
-        const int row = i / 2;
-        const int col = (i % 2) * 2;
-        grid->addWidget(form_label(card, keys[std::size_t(i)]), row, col);
-        auto *value = new ElidedLabel(card);
-        value->setObjectName(QString::fromLatin1(hooks[std::size_t(i)]));
-        value->setProperty(kFieldProperty, QStringLiteral("value"));
-        value->setFont(theme::font(theme::Typography::body_px, QFont::Normal, /*tabular=*/true));
-        value->setMinimumHeight(theme::Metrics::form_row_h);
-        grid->addWidget(value, row, col + 1);
-        st->info_value[std::size_t(i)] = value;
+    for (int i = 0; i < 5; ++i) {
+        formkit::FieldCell left;
+        formkit::FieldCell right;
+        left.label = keys[std::size_t(i * 2)];
+        right.label = keys[std::size_t(i * 2 + 1)];
+        if (i == 4) {
+            // 第 5 行：白平衡 / 评级（矢量星；无评级 → 「—」）
+            st->info_wb = make_info_value(body, QStringLiteral("pp-meta-info-wb"));
+            left.field = st->info_wb;
+            TrackGroup rating = make_group(body);
+            st->info_rating = new RatingStars(rating.widget());
+            st->info_rating->setObjectName(QStringLiteral("pp-meta-info-rating"));
+            rating.add(st->info_rating);
+            st->info_rating_none = new QLabel(QStringLiteral("—"), rating.widget());
+            rating.add(st->info_rating_none);
+            rating.stretch();
+            right.field = rating.widget();
+        } else {
+            ElidedLabel *left_value =
+                make_info_value(body, QString::fromLatin1(hooks[std::size_t(i * 2)]));
+            ElidedLabel *right_value =
+                make_info_value(body, QString::fromLatin1(hooks[std::size_t(i * 2 + 1)]));
+            st->info_value[std::size_t(i * 2)] = left_value;
+            st->info_value[std::size_t(i * 2 + 1)] = right_value;
+            left.field = left_value;
+            if (i == 3) {
+                // 第 4 行右格：GPS 值 + 「已有」胶囊（mockup .kv-v.cells + .pill.ok）
+                TrackGroup gps = make_group(body);
+                gps.add(right_value, 1);
+                gps.gap(theme::Metrics::group_gap);
+                st->info_gps_pill = formkit::PillBadge::of(
+                    gps.widget(), formkit::PillBadge::Tone::Ok, PageMeta::tr("已有"));
+                st->info_gps_pill->setObjectName(QStringLiteral("pp-meta-info-gps-pill"));
+                st->info_gps_pill->setVisible(false);
+                st->add_pill(st->info_gps_pill);
+                gps.add(st->info_gps_pill);
+                gps.stretch();
+                right.field = gps.widget();
+            } else {
+                right.field = right_value;
+            }
+        }
+        left.width = FieldWidth::Flex;
+        right.width = FieldWidth::Flex;
+        const formkit::DoubleRow row = formkit::double_row(body, left, right);
+        row.row->setObjectName(QStringLiteral("pp-meta-info-row-%1").arg(i));
+        bv->addWidget(row.row);
+        st->info_row[std::size_t(i)] = row.row;
     }
-    grid->setColumnStretch(1, 1);
-    grid->setColumnStretch(3, 1);
-    v->addLayout(grid);
+    // 空态一行（修 1-23）：未选择文件 → 一行说明（行高仍 28，栅格不错位）
+    {
+        st->info_empty = new ElidedLabel(body);
+        st->info_empty->setObjectName(QStringLiteral("pp-meta-info-empty"));
+        st->info_empty->setProperty(kFieldProperty, QStringLiteral("empty"));
+        st->info_empty->setFont(theme::font(theme::Typography::body_px, QFont::Normal));
+        st->info_empty->set_full_text(PageMeta::tr(kNoSelectionText));
+        const formkit::Row empty_row =
+            formkit::frow(body, QString(), st->info_empty, FieldWidth::Flex);
+        empty_row.row->setObjectName(QStringLiteral("pp-meta-info-empty-row"));
+        st->info_empty_row = empty_row.row;
+        st->info_empty_row->setVisible(false);
+        bv->addWidget(st->info_empty_row);
+    }
+    v->addWidget(body);
     return card;
 }
 
@@ -1292,183 +1801,163 @@ QWidget *build_time_card(MetaState *st, QWidget *parent) {
     auto *v = new QVBoxLayout(card);
     v->setContentsMargins(0, 0, 0, 0);
     v->setSpacing(0);
-    v->addWidget(make_card_header(card, PageMeta::tr("时间偏移"), nullptr, &st->time_hint));
-    st->time_hint->setObjectName(QStringLiteral("pp-meta-time-hint"));
-    st->time_hint->setProperty(kFieldProperty, QStringLiteral("hint"));
+    const CardHeader header =
+        make_header(st, card, PageMeta::tr("时间偏移"), QStringLiteral("pp-meta-time-pill"),
+                    QStringLiteral("pp-meta-time-hint"));
+    st->time_pill = header.pill;
+    st->time_hint = header.hint;
+    st->time_hint->set_full_text(PageMeta::tr("修改值以强调色标记"));
+    v->addWidget(header.row);
 
-    // 方式分段（mockup .seg：Δ 偏移 | 时区语义）
-    auto *seg_row = new QHBoxLayout();
-    seg_row->setContentsMargins(kCardPadX, 0, kCardPadX, 8);
-    auto *seg = new QWidget(card);
-    seg->setObjectName(QStringLiteral("pp-meta-seg"));
-    auto *seg_layout = new QHBoxLayout(seg);
-    seg_layout->setContentsMargins(2, 2, 2, 2);
-    seg_layout->setSpacing(0);
-    st->seg_delta = new QToolButton(seg);
-    st->seg_delta->setObjectName(QStringLiteral("pp-meta-seg-delta"));
-    st->seg_delta->setText(PageMeta::tr("Δ 偏移"));
-    st->seg_tz = new QToolButton(seg);
-    st->seg_tz->setObjectName(QStringLiteral("pp-meta-seg-tz"));
-    st->seg_tz->setText(PageMeta::tr("时区语义"));
-    auto *group = new QButtonGroup(st);
-    group->setExclusive(true);
-    group->addButton(st->seg_delta);
-    group->addButton(st->seg_tz);
-    for (QToolButton *button : {st->seg_delta, st->seg_tz}) {
-        button->setCheckable(true);
-        button->setFocusPolicy(Qt::NoFocus);
-        button->setProperty(kFieldProperty, QStringLiteral("seg"));
-        button->setFont(theme::font(theme::Typography::body_px, 600));
-        button->setCursor(Qt::PointingHandCursor);
-        seg_layout->addWidget(button);
+    auto *body = new QWidget(card);
+    auto *bv = new QVBoxLayout(body);
+    bv->setContentsMargins(theme::Metrics::card_pad_x, 0, theme::Metrics::card_pad_x,
+                           theme::Metrics::card_pad_bottom);
+    bv->setSpacing(0);
+
+    // 模式（§6：互斥模式唯一形态 = 分段控件，段宽 88 等宽）
+    {
+        TrackGroup group = make_group(body);
+        st->seg = new formkit::SegmentedControl(group.widget());
+        st->seg->setObjectName(QStringLiteral("pp-meta-seg"));
+        st->seg->add_segment(PageMeta::tr("Δ 偏移"), QStringLiteral("pp-meta-seg-delta"));
+        st->seg->add_segment(PageMeta::tr("时区语义"), QStringLiteral("pp-meta-seg-tz"));
+        group.add(st->seg);
+        group.stretch();
+        bv->addWidget(
+            formkit::frow(body, PageMeta::tr("模式"), group.widget(), FieldWidth::Flex).row);
     }
-    st->seg_delta->setChecked(true);
-    seg_row->addWidget(seg, 0, Qt::AlignLeft);
-    seg_row->addStretch(1);
-    v->addLayout(seg_row);
+    // 日期偏移 / 时间偏移：3×spin88（短档）+ 单位槽 + 范围注释（§7.1 逐行）
+    const auto offset_row = [&](const QString &label, const std::array<QString, 3> &units,
+                                const std::array<const char *, 3> &hooks, const QString &note,
+                                int first_index) {
+        TrackGroup group = make_group(body);
+        for (int i = 0; i < 3; ++i) {
+            if (i > 0) {
+                group.gap(theme::Metrics::group_gap);
+            }
+            auto *spin = new DeltaSpin(group.widget(), QString::fromLatin1(hooks[std::size_t(i)]));
+            st->delta[std::size_t(first_index + i)] = spin;
+            group.add(spin);
+            group.gap(formkit::kInlineGap);
+            group.add(unit_slot(group.widget(), units[std::size_t(i)]));
+        }
+        group.gap(theme::Metrics::group_gap);
+        group.add(note_label(group.widget()));
+        group.stretch();
+        return formkit::frow(body, label, group.widget(), FieldWidth::Flex).row;
+    };
+    st->delta_row = offset_row(
+        PageMeta::tr("日期偏移"), {PageMeta::tr("年"), PageMeta::tr("月"), PageMeta::tr("日")},
+        {"pp-meta-delta-years", "pp-meta-delta-months", "pp-meta-delta-days"},
+        PageMeta::tr("−99…+99"), 0);
+    bv->addWidget(st->delta_row);
+    st->time_row = offset_row(
+        PageMeta::tr("时间偏移"), {PageMeta::tr("时"), PageMeta::tr("分"), PageMeta::tr("秒")},
+        {"pp-meta-delta-hours", "pp-meta-delta-minutes", "pp-meta-delta-seconds"},
+        PageMeta::tr("UTC±HH:MM"), 3);
+    bv->addWidget(st->time_row);
 
-    // Δ 模式：年..秒（mockup .fields 紧凑条：标签 + 52×26 数值框）
-    st->delta_row = new QWidget(card);
-    auto *dh = new QHBoxLayout(st->delta_row);
-    dh->setContentsMargins(kCardPadX, 0, kCardPadX, 6);
-    dh->setSpacing(8);
-    const std::array<QString, 6> names = {PageMeta::tr("年"), PageMeta::tr("月"),
-                                          PageMeta::tr("日"), PageMeta::tr("时"),
-                                          PageMeta::tr("分"), PageMeta::tr("秒")};
-    const std::array<const char *, 6> hooks = {"pp-meta-delta-years",   "pp-meta-delta-months",
-                                               "pp-meta-delta-days",    "pp-meta-delta-hours",
-                                               "pp-meta-delta-minutes", "pp-meta-delta-seconds"};
-    for (int i = 0; i < 6; ++i) {
-        auto *cell = new QHBoxLayout();
-        cell->setSpacing(5);
-        auto *label = new QLabel(names[std::size_t(i)], st->delta_row);
-        label->setObjectName(QStringLiteral("pp-meta-form-label"));
-        label->setFont(theme::font(theme::Typography::small_px, QFont::Normal));
-        cell->addWidget(label);
-        st->delta[std::size_t(i)] = new QSpinBox(st->delta_row);
-        st->delta[std::size_t(i)]->setObjectName(QString::fromLatin1(hooks[std::size_t(i)]));
-        st->delta[std::size_t(i)]->setProperty(kFieldProperty, QStringLiteral("spin"));
-        st->delta[std::size_t(i)]->setRange(-9999, 9999);
-        st->delta[std::size_t(i)]->setValue(0);
-        st->delta[std::size_t(i)]->setFixedSize(kSpinWidth, kSpinHeight);
-        // mockup .spin = 纯数值盒（无箭头）：52px 内塞进上下箭头会把数字挤没（实测截图），
-        // 故隐藏箭头（滚动/键盘/输入仍可用，见 tooltip），几何与原型逐条一致
-        st->delta[std::size_t(i)]->setButtonSymbols(QAbstractSpinBox::NoButtons);
-        st->delta[std::size_t(i)]->setAlignment(Qt::AlignCenter);
-        st->delta[std::size_t(i)]->setToolTip(
-            PageMeta::tr("偏移量（可直接输入 / 滚轮 / ↑↓ 调整）"));
-        st->delta[std::size_t(i)]->setFont(
-            theme::font(theme::Typography::body_px, QFont::Normal, /*tabular=*/true));
-        cell->addWidget(st->delta[std::size_t(i)]);
-        dh->addLayout(cell);
+    // 时区语义（从 / 到）：双列行（R2 标准档 160 —— A2 的第二标签 x = 276）
+    {
+        formkit::FieldCell left;
+        formkit::FieldCell right;
+        left.label = PageMeta::tr("从");
+        right.label = PageMeta::tr("到");
+        for (const bool is_from : {true, false}) {
+            auto *combo = new QComboBox(body);
+            combo->setObjectName(is_from ? QStringLiteral("pp-meta-tz-from")
+                                         : QStringLiteral("pp-meta-tz-to"));
+            combo->setProperty(kFieldProperty, QStringLiteral("combo"));
+            combo->setFixedHeight(formkit::kControlH);
+            combo->setToolTip(is_from ? PageMeta::tr("源时区（EXIF 记录所用的时区）")
+                                      : PageMeta::tr("目标时区（改写后的墙钟时区）"));
+            fill_timezone_combo(combo);
+            select_timezone(combo, 480);
+            (is_from ? left : right).field = combo;
+            (is_from ? st->tz_from : st->tz_to) = combo;
+        }
+        left.width = FieldWidth::Standard;
+        right.width = FieldWidth::Standard;
+        const formkit::DoubleRow row = formkit::double_row(body, left, right);
+        row.row->setObjectName(QStringLiteral("pp-meta-tz-row"));
+        st->tz_row = row.row;
+        st->tz_row->setVisible(false);
+        bv->addWidget(st->tz_row);
     }
-    dh->addStretch(1);
-    st->delta_row->setMinimumHeight(theme::Metrics::form_row_h);
-    v->addWidget(st->delta_row);
 
-    // 时区模式：从 / 到（同一 70px 标签轴）
-    st->tz_row = new QWidget(card);
-    auto *th = new QGridLayout(st->tz_row);
-    th->setContentsMargins(kCardPadX, 0, kCardPadX, 6);
-    th->setHorizontalSpacing(theme::Metrics::form_col_gap);
-    th->setVerticalSpacing(0);
-    st->tz_from = new QComboBox(st->tz_row);
-    st->tz_from->setObjectName(QStringLiteral("pp-meta-tz-from"));
-    st->tz_from->setProperty(kFieldProperty, QStringLiteral("combo"));
-    st->tz_from->setFixedHeight(kGpsBoxHeight);
-    fill_timezone_combo(st->tz_from);
-    select_timezone(st->tz_from, 480);
-    st->tz_to = new QComboBox(st->tz_row);
-    st->tz_to->setObjectName(QStringLiteral("pp-meta-tz-to"));
-    st->tz_to->setProperty(kFieldProperty, QStringLiteral("combo"));
-    st->tz_to->setFixedHeight(kGpsBoxHeight);
-    fill_timezone_combo(st->tz_to);
-    select_timezone(st->tz_to, 480);
-    th->addWidget(form_label(st->tz_row, PageMeta::tr("从")), 0, 0);
-    th->addWidget(st->tz_from, 0, 1);
-    th->addWidget(form_label(st->tz_row, PageMeta::tr("到")), 0, 2);
-    th->addWidget(st->tz_to, 0, 3);
-    th->setColumnStretch(1, 1);
-    th->setColumnStretch(3, 1);
-    st->tz_row->setMinimumHeight(theme::Metrics::form_row_h);
-    v->addWidget(st->tz_row);
-    st->tz_row->setVisible(false);
-
-    // 生效对照块（mockup .effect）：原（删除线）→ 生效（强调色）＋右端来源字段；
-    // 多选（≥2）→ 逐行小表替换（§5.2）
-    st->effect = new QFrame(card);
-    st->effect->setObjectName(QStringLiteral("pp-meta-effect"));
-    auto *ev = new QVBoxLayout(st->effect);
-    ev->setContentsMargins(12, 9, 12, 12);
-    ev->setSpacing(5);
-    auto *title =
-        new QLabel(PageMeta::tr("生效时间 · 跟随选中文件（未修改时两值相同）"), st->effect);
-    title->setObjectName(QStringLiteral("pp-meta-effect-title"));
-    title->setFont(theme::font(theme::Typography::hint_px, theme::Typography::card_title_weight));
-    ev->addWidget(title);
-
-    st->time_rows_host = new QWidget(st->effect);
-    auto *rv = new QVBoxLayout(st->time_rows_host);
-    rv->setContentsMargins(0, 0, 0, 0);
-    rv->setSpacing(2);
-    for (int i = 0; i < 3; ++i) {
-        auto *row = new QWidget(st->time_rows_host);
-        auto *rh = new QHBoxLayout(row);
-        rh->setContentsMargins(0, 0, 0, 0);
-        rh->setSpacing(10);
-        TimeRowWidgets widgets;
-        widgets.old = new ElidedLabel(row);
-        widgets.old->setObjectName(QStringLiteral("pp-meta-time-old-%1").arg(i));
-        widgets.old->setProperty(kFieldProperty, QStringLiteral("old"));
+    // 生效时间（§7.1）：[标签 生效时间][原（删除线）→ 生效（强调）] + 「日期 · Δ · 字段名」注释
+    {
+        TrackGroup group = make_group(body);
+        st->time_old = new ElidedLabel(group.widget());
+        st->time_old->setObjectName(QStringLiteral("pp-meta-time-old-0"));
+        st->time_old->setProperty(kFieldProperty, QStringLiteral("old"));
         QFont old_font = theme::font(theme::Typography::body_px, QFont::Normal, /*tabular=*/true);
         old_font.setStrikeOut(true); // mockup .tline .old{text-decoration:line-through}
-        widgets.old->setFont(old_font);
-        auto *arrow = new QLabel(QStringLiteral("→"), row);
-        arrow->setProperty(kFieldProperty, QStringLiteral("arrow"));
-        arrow->setFont(theme::font(theme::Typography::body_px, QFont::Normal));
-        widgets.fresh = new ElidedLabel(row);
-        widgets.fresh->setObjectName(QStringLiteral("pp-meta-time-new-%1").arg(i));
-        widgets.fresh->setProperty(kFieldProperty, QStringLiteral("new"));
-        widgets.fresh->setFont(
+        st->time_old->setFont(old_font);
+        group.add(st->time_old);
+        group.gap(theme::Metrics::group_gap);
+        st->time_arrow = new QLabel(QStringLiteral("→"), group.widget());
+        st->time_arrow->setProperty(kFieldProperty, QStringLiteral("arrow"));
+        st->time_arrow->setFont(theme::font(theme::Typography::body_px, QFont::Normal));
+        group.add(st->time_arrow);
+        group.gap(theme::Metrics::group_gap);
+        st->time_new = new ElidedLabel(group.widget());
+        st->time_new->setObjectName(QStringLiteral("pp-meta-time-new-0"));
+        st->time_new->setProperty(kFieldProperty, QStringLiteral("new"));
+        st->time_new->setFont(
             theme::font(theme::Typography::body_px, QFont::Bold, /*tabular=*/true));
-        widgets.src = new ElidedLabel(row);
-        widgets.src->setObjectName(QStringLiteral("pp-meta-time-src-%1").arg(i));
-        widgets.src->setProperty(kFieldProperty, QStringLiteral("src"));
-        widgets.src->setFont(theme::font(theme::Typography::hint_px, QFont::Normal));
-        widgets.src->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        // mockup .tline：原 → 生效 按内容宽排布（gap 10），来源字段靠右（.src{margin-left:auto}）
-        rh->addWidget(widgets.old, 0);
-        rh->addWidget(arrow, 0);
-        rh->addWidget(widgets.fresh, 0);
-        rh->addStretch(1);
-        rh->addWidget(widgets.src, 0);
-        row->setMinimumHeight(theme::Metrics::form_row_h - 8);
-        rv->addWidget(row);
-        st->time_row[std::size_t(i)] = widgets;
+        group.add(st->time_new);
+        group.gap(theme::Metrics::group_gap);
+        st->time_note = note_label(group.widget(), QStringLiteral("pp-meta-time-note-0"));
+        group.add(st->time_note);
+        group.gap(formkit::kInlineGap);
+        st->time_src = note_label(group.widget(), QStringLiteral("pp-meta-time-src-0"));
+        group.add(st->time_src);
+        group.stretch();
+        const formkit::Row row =
+            formkit::frow(body, PageMeta::tr("生效时间"), group.widget(), FieldWidth::Flex);
+        st->effect_label = row.label;
+        row.row->setObjectName(QStringLiteral("pp-meta-effect-row"));
+        st->effect_row = row.row;
+        bv->addWidget(st->effect_row);
     }
-    ev->addWidget(st->time_rows_host);
-
-    st->multi_host = new QWidget(st->effect);
-    st->multi_host->setObjectName(QStringLiteral("pp-meta-multi"));
-    st->multi_grid = new QGridLayout(st->multi_host);
-    st->multi_grid->setContentsMargins(0, 0, 0, 0);
-    st->multi_grid->setHorizontalSpacing(theme::Metrics::form_col_gap);
-    st->multi_grid->setVerticalSpacing(0);
-    st->multi_grid->setColumnStretch(0, 3);
-    st->multi_grid->setColumnStretch(1, 3);
-    st->multi_grid->setColumnStretch(2, 0);
-    st->multi_grid->setColumnStretch(3, 3);
-    st->multi_more = new ElidedLabel(st->multi_host);
-    st->multi_more->setObjectName(QStringLiteral("pp-meta-multi-more"));
-    st->multi_more->setVisible(false);
-    st->multi_more->setProperty(kFieldProperty, QStringLiteral("multi-more"));
-    st->multi_more->setFont(theme::font(theme::Typography::hint_px, QFont::Normal));
-    st->multi_host->setVisible(false);
-    ev->addWidget(st->multi_host);
-    v->addWidget(st->effect);
+    // 空态一行（修 1-31：未选择文件 → 一行说明）
+    {
+        st->time_empty = new ElidedLabel(body);
+        st->time_empty->setObjectName(QStringLiteral("pp-meta-time-empty"));
+        st->time_empty->setProperty(kFieldProperty, QStringLiteral("empty"));
+        st->time_empty->setFont(theme::font(theme::Typography::body_px, QFont::Normal));
+        st->time_empty->set_full_text(PageMeta::tr(kNoSelectionText));
+        const formkit::Row row = formkit::frow(body, QString(), st->time_empty, FieldWidth::Flex);
+        row.row->setObjectName(QStringLiteral("pp-meta-time-empty-row"));
+        st->time_empty_row = row.row;
+        st->time_empty_row->setVisible(false);
+        bv->addWidget(st->time_empty_row);
+    }
+    // 多选逐行小表（§5.2；上限 8 行 + 「…还有 N 个」）
+    {
+        st->multi_host = new QWidget(body);
+        st->multi_host->setObjectName(QStringLiteral("pp-meta-multi"));
+        st->multi_grid = new QGridLayout(st->multi_host);
+        st->multi_grid->setContentsMargins(0, 0, 0, 0);
+        st->multi_grid->setHorizontalSpacing(theme::Metrics::form_col_gap);
+        st->multi_grid->setVerticalSpacing(0);
+        st->multi_grid->setColumnStretch(0, 3);
+        st->multi_grid->setColumnStretch(1, 3);
+        st->multi_grid->setColumnStretch(2, 0);
+        st->multi_grid->setColumnStretch(3, 3);
+        st->multi_more = new ElidedLabel(st->multi_host);
+        st->multi_more->setObjectName(QStringLiteral("pp-meta-multi-more"));
+        st->multi_more->setVisible(false);
+        st->multi_more->setProperty(kFieldProperty, QStringLiteral("multi-more"));
+        st->multi_more->setFont(theme::font(theme::Typography::hint_px, QFont::Normal));
+        st->multi_host->setVisible(false);
+        bv->addWidget(st->multi_host);
+    }
 
     // ---- 连接（任一控件变化 → 通知 + 生效值刷新）----
-    const auto on_mode_changed = [st](bool) {
+    const auto on_time_changed = [st] {
         if (st->loading) {
             return;
         }
@@ -1476,28 +1965,17 @@ QWidget *build_time_card(MetaState *st, QWidget *parent) {
         refresh_effective(st);
         notify_rules_changed(st);
     };
-    QObject::connect(st->seg_delta, &QToolButton::toggled, st, on_mode_changed);
-    QObject::connect(st->seg_tz, &QToolButton::toggled, st, on_mode_changed);
+    QObject::connect(st->seg, &formkit::SegmentedControl::current_changed, st,
+                     [on_time_changed](int) { on_time_changed(); });
     for (QSpinBox *spin : st->delta) {
-        QObject::connect(spin, QOverload<int>::of(&QSpinBox::valueChanged), st, [st](int) {
-            if (st->loading) {
-                return;
-            }
-            refresh_time_inputs(st);
-            refresh_effective(st);
-            notify_rules_changed(st);
-        });
+        QObject::connect(spin, QOverload<int>::of(&QSpinBox::valueChanged), st,
+                         [on_time_changed](int) { on_time_changed(); });
     }
     for (QComboBox *combo : {st->tz_from, st->tz_to}) {
-        QObject::connect(combo, QOverload<int>::of(&QComboBox::currentIndexChanged), st, [st](int) {
-            if (st->loading) {
-                return;
-            }
-            refresh_time_inputs(st);
-            refresh_effective(st);
-            notify_rules_changed(st);
-        });
+        QObject::connect(combo, QOverload<int>::of(&QComboBox::currentIndexChanged), st,
+                         [on_time_changed](int) { on_time_changed(); });
     }
+    v->addWidget(body);
     return card;
 }
 
@@ -1506,112 +1984,156 @@ QWidget *build_gps_card(MetaState *st, QWidget *parent) {
     auto *v = new QVBoxLayout(card);
     v->setContentsMargins(0, 0, 0, 0);
     v->setSpacing(0);
-    v->addWidget(make_card_header(card, PageMeta::tr("GPS"), nullptr, &st->gps_hint));
-    st->gps_hint->setObjectName(QStringLiteral("pp-meta-gps-hint"));
-    st->gps_hint->setProperty(kFieldProperty, QStringLiteral("hint"));
-    st->gps_hint->set_full_text(PageMeta::tr("地图跟随选中文件 · 显示生效值"));
+    const CardHeader header =
+        make_header(st, card, PageMeta::tr("GPS"), QStringLiteral("pp-meta-gps-pill"),
+                    QStringLiteral("pp-meta-gps-hint"));
+    st->gps_pill = header.pill;
+    st->gps_hint = header.hint;
+    st->gps_hint->set_full_text(PageMeta::tr("跟随选中 · WGS-84"));
+    v->addWidget(header.row);
+
+    auto *body = new QWidget(card);
+    auto *bv = new QVBoxLayout(body);
+    bv->setContentsMargins(theme::Metrics::card_pad_x, 0, theme::Metrics::card_pad_x,
+                           theme::Metrics::card_pad_bottom);
+    bv->setSpacing(0);
 
     st->gps_warn = new QLabel(PageMeta::tr("GPS 坐标无效"), card);
     st->gps_warn->setObjectName(QStringLiteral("gps_warning"));
-    QPalette warn_pal = st->gps_warn->palette();
-    warn_pal.setColor(QPalette::WindowText, QColor(0xcc, 0x88, 0x00));
-    st->gps_warn->setPalette(warn_pal);
     st->gps_warn->setFont(theme::font(theme::Typography::hint_px, QFont::Normal));
-    st->gps_warn->setContentsMargins(kCardPadX, 0, kCardPadX, 4);
+    st->gps_warn->setContentsMargins(theme::Metrics::card_pad_x, 0, theme::Metrics::card_pad_x, 4);
     st->gps_warn->setVisible(false);
     v->addWidget(st->gps_warn);
 
-    // 生效坐标（只读显示；§5.2「GPS 卡输入框显示生效坐标」，无 GPS → 空值提示）
-    const auto make_view = [&](const QString &hook) {
-        auto *edit = new QLineEdit(card);
-        edit->setObjectName(hook);
-        edit->setProperty(kFieldProperty, QStringLiteral("view"));
-        edit->setReadOnly(true);
-        edit->setFixedHeight(kGpsBoxHeight);
-        edit->setFont(theme::font(theme::Typography::body_px, QFont::Normal, /*tabular=*/true));
-        return edit;
-    };
-    st->view_lat = make_view(QStringLiteral("pp-meta-gps-lat"));
-    st->view_lon = make_view(QStringLiteral("pp-meta-gps-lon"));
-    st->view_alt = make_view(QStringLiteral("pp-meta-gps-alt"));
-    st->view_dir = make_view(QStringLiteral("pp-meta-gps-dir"));
-    st->view_ts = make_view(QStringLiteral("pp-meta-gps-ts"));
-    auto *gps_grid = new QGridLayout();
-    gps_grid->setContentsMargins(kCardPadX, 0, kCardPadX, 8);
-    gps_grid->setHorizontalSpacing(theme::Metrics::form_col_gap);
-    gps_grid->setVerticalSpacing(4);
-    gps_grid->addWidget(form_label(card, PageMeta::tr("纬度")), 0, 0);
-    gps_grid->addWidget(st->view_lat, 0, 1);
-    gps_grid->addWidget(form_label(card, PageMeta::tr("经度")), 0, 2);
-    gps_grid->addWidget(st->view_lon, 0, 3);
-    gps_grid->addWidget(form_label(card, PageMeta::tr("海拔")), 1, 0);
-    gps_grid->addWidget(st->view_alt, 1, 1);
-    gps_grid->addWidget(form_label(card, PageMeta::tr("方位")), 1, 2);
-    gps_grid->addWidget(st->view_dir, 1, 3);
-    gps_grid->addWidget(form_label(card, PageMeta::tr("时间戳")), 2, 0);
-    gps_grid->addWidget(st->view_ts, 2, 1, 1, 3);
-    gps_grid->setColumnStretch(1, 1);
-    gps_grid->setColumnStretch(3, 1);
-    v->addLayout(gps_grid);
+    // 生效坐标（只读；§5.2「GPS 卡显示生效坐标」）+ 海拔/方位（双列轨，fill）——§7.1 的
+    // 控件集合 = 纬度/经度｜海拔/方位｜地图｜操作（生效时间戳读数进坐标行 tooltip，信息不丢）
+    st->view_lat = make_view_field(card, QStringLiteral("pp-meta-gps-lat"));
+    st->view_lon = make_view_field(card, QStringLiteral("pp-meta-gps-lon"));
+    st->view_alt = make_view_field(card, QStringLiteral("pp-meta-gps-alt"));
+    st->view_dir = make_view_field(card, QStringLiteral("pp-meta-gps-dir"));
+    {
+        formkit::FieldCell l;
+        formkit::FieldCell r;
+        l.label = PageMeta::tr("纬度");
+        r.label = PageMeta::tr("经度");
+        l.field = st->view_lat;
+        r.field = st->view_lon;
+        l.width = FieldWidth::Flex;
+        r.width = FieldWidth::Flex;
+        const formkit::DoubleRow row = formkit::double_row(body, l, r);
+        row.row->setObjectName(QStringLiteral("pp-meta-gps-coord-row"));
+        bv->addWidget(row.row);
+    }
+    {
+        formkit::FieldCell l;
+        formkit::FieldCell r;
+        l.label = PageMeta::tr("海拔");
+        r.label = PageMeta::tr("方位");
+        l.field = st->view_alt;
+        r.field = st->view_dir;
+        l.width = FieldWidth::Flex;
+        r.width = FieldWidth::Flex;
+        const formkit::DoubleRow row = formkit::double_row(body, l, r);
+        row.row->setObjectName(QStringLiteral("pp-meta-gps-altdir-row"));
+        bv->addWidget(row.row);
+    }
 
-    // 搜索行（地图正上方；§2.11 保留）
-    auto *search_row = new QHBoxLayout();
-    search_row->setContentsMargins(kCardPadX, 0, kCardPadX, 6);
-    search_row->setSpacing(8);
-    st->search_edit = new QLineEdit(card);
-    st->search_edit->setObjectName(QStringLiteral("pp-meta-gps-search-edit"));
-    st->search_edit->setProperty(kFieldProperty, QStringLiteral("view"));
-    st->search_edit->setPlaceholderText(PageMeta::tr(kSearchPlaceholder));
-    st->search_edit->setFixedHeight(kGpsBoxHeight);
-    st->search_btn = new QPushButton(PageMeta::tr("搜索"), card);
-    st->search_btn->setObjectName(QStringLiteral("pp-meta-gps-search-button"));
-    st->search_results = new QComboBox(card);
-    st->search_results->setObjectName(QStringLiteral("pp-meta-gps-search-results"));
-    st->search_results->setProperty(kFieldProperty, QStringLiteral("combo"));
-    st->search_results->setFixedHeight(kGpsBoxHeight);
-    search_row->addWidget(st->search_edit, 2);
-    search_row->addWidget(st->search_btn, 0);
-    search_row->addWidget(st->search_results, 3);
-    v->addLayout(search_row);
+    // 操作行（修 1-37：**固定在地图上方**，核心动作不再落进内滚盲区；按钮高 26 = A7）
+    {
+        TrackGroup group = make_group(body);
+        st->read_gps = make_button(group.widget(), QStringLiteral("pp-meta-gps-read"),
+                                   PageMeta::tr("从文件读取"));
+        st->read_gps->setFont(theme::font(theme::Typography::body_px, 600));
+        st->read_gps->setEnabled(false);
+        st->pick_map = make_button(group.widget(), QStringLiteral("pp-meta-gps-pick"),
+                                   PageMeta::tr("地图选点"));
+        st->pick_map->setFont(theme::font(theme::Typography::body_px, 600));
+        st->pick_map->setToolTip(PageMeta::tr("取地图中心为坐标（可先拖拽地图定位）"));
+        st->clear_gps = new QPushButton(PageMeta::tr("清除 GPS"), group.widget());
+        st->clear_gps->setObjectName(QStringLiteral("pp-meta-gps-clear"));
+        st->clear_gps->setProperty(kFieldProperty, QStringLiteral("danger"));
+        st->clear_gps->setCheckable(true);
+        st->clear_gps->setFixedHeight(theme::Metrics::btn_h);
+        st->clear_gps->setCursor(Qt::PointingHandCursor);
+        st->clear_gps->setFont(theme::font(theme::Typography::body_px, 600));
+        st->clear_gps->setToolTip(PageMeta::tr("输出不含 GPS（清除优先于坐标）"));
+        group.add(st->read_gps);
+        group.gap(theme::Metrics::group_gap);
+        group.add(st->pick_map);
+        group.gap(theme::Metrics::group_gap);
+        group.add(st->clear_gps);
+        group.stretch();
+        const formkit::Row row =
+            formkit::frow(body, PageMeta::tr("操作"), group.widget(), FieldWidth::Flex);
+        row.row->setObjectName(QStringLiteral("pp-meta-gps-ops-row"));
+        bv->addWidget(row.row);
+    }
 
-    // 地图：固定高 196（mockup .map-box）
-    auto *map_host = new QHBoxLayout();
-    map_host->setContentsMargins(kCardPadX, 0, kCardPadX, 8);
-    st->map = new pp::map::MapWidget(card);
-    st->map->setObjectName(QStringLiteral("pp-meta-map"));
-    st->map->setFixedHeight(kMapHeight);
-    map_host->addWidget(st->map);
-    v->addLayout(map_host);
-
-    // 三按钮（mockup .btn-row：从选中文件读取 GPS / 地图选点 / 清除 GPS）
-    auto *btn_row = new QHBoxLayout();
-    btn_row->setContentsMargins(kCardPadX, 0, kCardPadX, 8);
-    btn_row->setSpacing(8);
-    st->read_gps = new QPushButton(PageMeta::tr("从选中文件读取 GPS"), card);
-    st->read_gps->setObjectName(QStringLiteral("pp-meta-gps-read"));
-    st->read_gps->setEnabled(false);
-    st->pick_map = new QPushButton(PageMeta::tr("地图选点"), card);
-    st->pick_map->setObjectName(QStringLiteral("pp-meta-gps-pick"));
-    st->pick_map->setToolTip(PageMeta::tr("取地图中心为坐标（可先拖拽地图定位）"));
-    st->clear_gps = new QPushButton(PageMeta::tr("清除 GPS"), card);
-    st->clear_gps->setObjectName(QStringLiteral("pp-meta-gps-clear"));
-    st->clear_gps->setProperty(kFieldProperty, QStringLiteral("danger"));
-    st->clear_gps->setCheckable(true);
-    st->clear_gps->setToolTip(PageMeta::tr("输出不含 GPS（清除优先于坐标）"));
-    btn_row->addWidget(st->read_gps);
-    btn_row->addWidget(st->pick_map);
-    btn_row->addWidget(st->clear_gps);
-    btn_row->addStretch(1);
-    v->addLayout(btn_row);
-
+    // 地图源（§7.1「OSM 下拉」；有标签；切换 = 本卡地图的显示源）
+    {
+        st->provider = new QComboBox(body);
+        st->provider->setObjectName(QStringLiteral("pp-meta-gps-provider"));
+        st->provider->setProperty(kFieldProperty, QStringLiteral("combo"));
+        st->provider->setFixedHeight(formkit::kControlH);
+        st->provider->setToolTip(PageMeta::tr("地图瓦片源（设置·地图 的持久档在外层设置里）"));
+        for (const QString &id : pp::map::provider_ids()) {
+            const pp::map::TileProvider *provider = pp::map::provider_by_id(id);
+            st->provider->addItem(provider != nullptr ? provider->label : id, id);
+        }
+        const formkit::Row row =
+            formkit::frow(body, PageMeta::tr("地图源"), st->provider, FieldWidth::Standard);
+        row.row->setObjectName(QStringLiteral("pp-meta-gps-provider-row"));
+        bv->addWidget(row.row);
+    }
+    // 地点搜索（label + flex 输入 + 搜索钮）
+    {
+        TrackGroup group = make_group(body);
+        st->search_edit =
+            make_rule_field(group.widget(), QStringLiteral("pp-meta-gps-search-edit"));
+        st->search_edit->setPlaceholderText(PageMeta::tr(kSearchPlaceholder));
+        group.add(st->search_edit, 1);
+        group.gap(theme::Metrics::group_gap);
+        st->search_btn = make_button(group.widget(), QStringLiteral("pp-meta-gps-search-button"),
+                                     PageMeta::tr("搜索"));
+        st->search_btn->setFont(theme::font(theme::Typography::body_px, 600));
+        group.add(st->search_btn);
+        const formkit::Row row =
+            formkit::frow(body, PageMeta::tr("地点搜索"), group.widget(), FieldWidth::Flex);
+        row.row->setObjectName(QStringLiteral("pp-meta-gps-search-row"));
+        bv->addWidget(row.row);
+    }
+    // 搜索结果（修 1-36：下拉有标签 + 占位）
+    {
+        st->search_results = new QComboBox(body);
+        st->search_results->setObjectName(QStringLiteral("pp-meta-gps-search-results"));
+        st->search_results->setProperty(kFieldProperty, QStringLiteral("combo"));
+        st->search_results->setFixedHeight(formkit::kControlH);
+        st->search_results->setPlaceholderText(PageMeta::tr(kSearchResultPlaceholder));
+        st->search_results->setToolTip(PageMeta::tr("选择后地图居中到该结果"));
+        const formkit::Row row =
+            formkit::frow(body, PageMeta::tr("搜索结果"), st->search_results, FieldWidth::Flex);
+        row.row->setObjectName(QStringLiteral("pp-meta-gps-result-row"));
+        bv->addWidget(row.row);
+    }
+    // 地图（固定高 196；图钉由生效坐标驱动、版权行由地图自绘）
+    {
+        TrackGroup group = make_group(body);
+        st->map = new pp::map::MapWidget(group.widget());
+        st->map->setObjectName(QStringLiteral("pp-meta-map"));
+        st->map->setFixedHeight(kMapHeight);
+        group.add(st->map, 1);
+        bv->addWidget(group.widget());
+    }
+    v->addWidget(body);
     st->gps_status = new QLabel(card);
     st->gps_status->setObjectName(QStringLiteral("gps_status"));
     st->gps_status->setProperty(kFieldProperty, QStringLiteral("sub"));
     st->gps_status->setFont(theme::font(theme::Typography::hint_px, QFont::Normal));
-    st->gps_status->setContentsMargins(kCardPadX, 0, kCardPadX, 6);
+    st->gps_status->setContentsMargins(theme::Metrics::card_pad_x, 4, theme::Metrics::card_pad_x,
+                                       4);
     v->addWidget(st->gps_status);
 
-    // 批量规则折叠行（rules() 的规则面；见头注释的控件集合说明）
+    // 批量规则折叠行（修 1-37：拆分混合控件 → 纯折叠行，默认折叠）
     st->rule_toggle = new QToolButton(card);
     st->rule_toggle->setObjectName(QStringLiteral("pp-meta-gps-rule-toggle"));
     st->rule_toggle->setProperty(kFieldProperty, QStringLiteral("fold"));
@@ -1619,69 +2141,90 @@ QWidget *build_gps_card(MetaState *st, QWidget *parent) {
     st->rule_toggle->setCheckable(true);
     st->rule_toggle->setChecked(false);
     st->rule_toggle->setAutoRaise(true);
+    st->rule_toggle->setFixedHeight(theme::Metrics::btn_h);
     st->rule_toggle->setFont(theme::font(theme::Typography::body_px, 600));
-    auto *toggle_row = new QHBoxLayout();
-    toggle_row->setContentsMargins(kCardPadX, 0, kCardPadX, 6);
-    toggle_row->addWidget(st->rule_toggle, 0, Qt::AlignLeft);
-    toggle_row->addStretch(1);
-    v->addLayout(toggle_row);
+    {
+        auto *toggle_row = new QHBoxLayout();
+        toggle_row->setContentsMargins(theme::Metrics::card_pad_x, 0, theme::Metrics::card_pad_x,
+                                       6);
+        toggle_row->addWidget(st->rule_toggle, 0, Qt::AlignLeft);
+        toggle_row->addStretch(1);
+        v->addLayout(toggle_row);
+    }
 
+    // 规则编辑面（折叠内容）：启用（表单布尔）+ 纬度/经度 + 可选字段（海拔/方位/时间戳）
     st->rule_host = new QWidget(card);
     st->rule_host->setObjectName(QStringLiteral("pp-meta-gps-rule"));
-    auto *rule_grid = new QGridLayout(st->rule_host);
-    rule_grid->setContentsMargins(kCardPadX, 0, kCardPadX, 10);
-    rule_grid->setHorizontalSpacing(theme::Metrics::form_col_gap);
-    rule_grid->setVerticalSpacing(0);
-    st->gps_enable = new QCheckBox(PageMeta::tr("启用"), st->rule_host);
-    st->gps_enable->setObjectName(QStringLiteral("gps_enable"));
-    st->gps_enable->setChecked(false);
-    rule_grid->addWidget(st->gps_enable, 0, 0, 1, 2);
-    const auto make_rule_edit = [&](const QString &hook) {
-        auto *edit = new QLineEdit(st->rule_host);
-        edit->setObjectName(hook);
-        edit->setProperty(kFieldProperty, QStringLiteral("view"));
-        edit->setFixedHeight(kGpsBoxHeight);
-        return edit;
+    auto *rule_body = st->rule_host;
+    auto *rule_v = new QVBoxLayout(rule_body);
+    rule_v->setContentsMargins(theme::Metrics::card_pad_x, 0, theme::Metrics::card_pad_x, 10);
+    rule_v->setSpacing(0);
+    {
+        const formkit::CheckRow enable = formkit::check_row(
+            rule_body, QString(), PageMeta::tr("启用"), QStringLiteral("gps_enable"));
+        st->gps_enable = enable.box;
+        rule_v->addWidget(enable.row);
+    }
+    const auto make_rule_grid_pair = [&](const QString &label_a, QLineEdit *edit_a,
+                                         const QString &unit_a, const QString &label_b,
+                                         QLineEdit *edit_b, const QString &unit_b) {
+        formkit::FieldCell l;
+        formkit::FieldCell r;
+        l.label = label_a;
+        l.field = edit_a;
+        l.width = FieldWidth::Flex;
+        l.unit = unit_a;
+        r.label = label_b;
+        r.field = edit_b;
+        r.width = FieldWidth::Flex;
+        r.unit = unit_b;
+        return formkit::double_row(rule_body, l, r).row;
     };
-    st->lat = make_rule_edit(QStringLiteral("gps_lat"));
+    st->lat = make_rule_field(rule_body, QStringLiteral("gps_lat"));
     st->lat->setValidator(new QDoubleValidator(-90.0, 90.0, 6, st->lat));
-    st->lat->setPlaceholderText(PageMeta::tr(kLatPlaceholder));
-    st->lon = make_rule_edit(QStringLiteral("gps_lon"));
+    st->lon = make_rule_field(rule_body, QStringLiteral("gps_lon"));
     st->lon->setValidator(new QDoubleValidator(-180.0, 180.0, 6, st->lon));
-    st->lon->setPlaceholderText(PageMeta::tr(kLonPlaceholder));
-    rule_grid->addWidget(form_label(st->rule_host, PageMeta::tr("纬度")), 1, 0);
-    rule_grid->addWidget(st->lat, 1, 1);
-    rule_grid->addWidget(form_label(st->rule_host, PageMeta::tr("经度")), 1, 2);
-    rule_grid->addWidget(st->lon, 1, 3);
-    st->more_toggle = new QToolButton(st->rule_host);
+    rule_v->addWidget(make_rule_grid_pair(PageMeta::tr("纬度"), st->lat, QStringLiteral("°"),
+                                          PageMeta::tr("经度"), st->lon, QStringLiteral("°")));
+    st->more_toggle = new QToolButton(rule_body);
     st->more_toggle->setObjectName(QStringLiteral("gps_more_toggle"));
     st->more_toggle->setProperty(kFieldProperty, QStringLiteral("fold"));
     st->more_toggle->setText(PageMeta::tr("更多字段"));
     st->more_toggle->setCheckable(true);
     st->more_toggle->setChecked(false);
-    st->more_toggle->setArrowType(Qt::RightArrow);
-    st->more_toggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     st->more_toggle->setAutoRaise(true);
+    st->more_toggle->setFixedHeight(theme::Metrics::btn_h);
     st->more_toggle->setFont(theme::font(theme::Typography::body_px, 600));
-    rule_grid->addWidget(st->more_toggle, 2, 0, 1, 2);
-    st->alt = make_rule_edit(QStringLiteral("gps_alt"));
-    st->alt->setPlaceholderText(PageMeta::tr("可空"));
-    st->dir = make_rule_edit(QStringLiteral("gps_dir"));
-    st->dir->setPlaceholderText(PageMeta::tr("可空"));
-    st->ts = make_rule_edit(QStringLiteral("gps_ts"));
-    st->ts->setPlaceholderText(QStringLiteral("YYYY:MM:DD HH:MM:SS"));
-    rule_grid->addWidget(form_label(st->rule_host, PageMeta::tr("海拔 (m)")), 3, 0);
-    rule_grid->addWidget(st->alt, 3, 1);
-    rule_grid->addWidget(form_label(st->rule_host, PageMeta::tr("方位角 (°)")), 3, 2);
-    rule_grid->addWidget(st->dir, 3, 3);
-    rule_grid->addWidget(form_label(st->rule_host, PageMeta::tr("时间戳")), 4, 0);
-    rule_grid->addWidget(st->ts, 4, 1, 1, 3);
-    rule_grid->setColumnStretch(1, 1);
-    rule_grid->setColumnStretch(3, 1);
+    {
+        auto *more_row = new QHBoxLayout();
+        more_row->setContentsMargins(0, 0, 0, 0);
+        more_row->addWidget(st->more_toggle, 0, Qt::AlignLeft);
+        more_row->addStretch(1);
+        rule_v->addLayout(more_row);
+    }
+    st->alt = make_rule_field(rule_body, QStringLiteral("gps_alt"));
+    st->dir = make_rule_field(rule_body, QStringLiteral("gps_dir"));
+    st->ts = make_rule_field(rule_body, QStringLiteral("gps_ts"));
+    QWidget *altdir_row = make_rule_grid_pair(PageMeta::tr("海拔"), st->alt, QStringLiteral("m"),
+                                              PageMeta::tr("方位"), st->dir, QStringLiteral("°"));
+    QWidget *ts_row =
+        formkit::frow(rule_body, PageMeta::tr("时间戳"), st->ts, FieldWidth::Flex).row;
+    rule_v->addWidget(altdir_row);
+    rule_v->addWidget(ts_row);
+    for (QWidget *hidden : {altdir_row, ts_row}) {
+        hidden->setVisible(false);
+    }
     st->rule_host->setVisible(false);
     v->addWidget(st->rule_host);
 
     // ---- 连接 ----
+    QObject::connect(st->provider, QOverload<int>::of(&QComboBox::currentIndexChanged), st,
+                     [st](int index) {
+                         const QString id = st->provider->itemData(index).toString();
+                         if (!id.isEmpty()) {
+                             st->map->set_provider(id);
+                         }
+                     });
     for (QLineEdit *edit : {st->lat, st->lon}) {
         QObject::connect(edit, &QLineEdit::textChanged, st, [st](const QString &) {
             if (st->loading) {
@@ -1701,7 +2244,7 @@ QWidget *build_gps_card(MetaState *st, QWidget *parent) {
             notify_rules_changed(st);
         });
     }
-    QObject::connect(st->gps_enable, &QCheckBox::toggled, st, [st](bool) {
+    QObject::connect(st->gps_enable, &formkit::CheckBox::toggled, st, [st](bool) {
         if (st->loading) {
             return;
         }
@@ -1719,18 +2262,14 @@ QWidget *build_gps_card(MetaState *st, QWidget *parent) {
         refresh_effective(st);
         notify_rules_changed(st);
     });
-    QObject::connect(st->more_toggle, &QToolButton::toggled, st, [st](bool on) {
-        st->more_toggle->setArrowType(on ? Qt::DownArrow : Qt::RightArrow);
-        st->alt->setVisible(on);
-        st->dir->setVisible(on);
-        st->ts->setVisible(on);
+    QObject::connect(st->more_toggle, &QToolButton::toggled, st, [st, altdir_row, ts_row](bool on) {
+        set_fold_icon(st, st->more_toggle, on); // 插入符 = 矢量图标（C3）
+        altdir_row->setVisible(on);
+        ts_row->setVisible(on);
     });
-    st->alt->setVisible(false);
-    st->dir->setVisible(false);
-    st->ts->setVisible(false);
     QObject::connect(st->rule_toggle, &QToolButton::toggled, st, [st](bool on) {
         st->rule_host->setVisible(on);
-        set_fold_icon(st, st->rule_toggle, on); // M5-T3：▸/▾ = 矢量图标
+        set_fold_icon(st, st->rule_toggle, on);
     });
 
     // 从选中文件读取 GPS（坐标来自**同一个 probe**：与生效值同源，不另解析 EXIF）
@@ -1792,11 +2331,13 @@ QWidget *build_gps_card(MetaState *st, QWidget *parent) {
     QObject::connect(st->map, &pp::map::MapWidget::search_finished, st,
                      [st](const QStringList &titles, const QString &error) {
                          st->search_results->clear();
+                         st->search_results->setCurrentIndex(-1); // 保持占位（修 1-36）
                          if (!error.isEmpty()) {
                              st->gps_status->setText(error);
                              return;
                          }
                          st->search_results->addItems(titles);
+                         st->search_results->setCurrentIndex(-1);
                          st->gps_status->setText(
                              titles.isEmpty()
                                  ? PageMeta::tr("没有匹配的结果")
@@ -1825,67 +2366,95 @@ QWidget *build_switches_card(MetaState *st, QWidget *parent) {
     auto *v = new QVBoxLayout(card);
     v->setContentsMargins(0, 0, 0, 0);
     v->setSpacing(0);
-    v->addWidget(make_card_header(card, PageMeta::tr("隐私与文件时间"), nullptr, nullptr));
+    const CardHeader header = make_header(st, card, PageMeta::tr("隐私与文件时间"),
+                                          QStringLiteral("pp-meta-privacy-pill"), QString());
+    st->privacy_pill = header.pill;
+    v->addWidget(header.row);
 
-    const auto add_switch_row = [&](QCheckBox *&box, const QString &hook, const QString &text,
-                                    const QString &sub, QToolButton *&link,
-                                    const QString &link_text) {
-        auto *row = new QWidget(card);
-        auto *h = new QHBoxLayout(row);
-        h->setContentsMargins(kCardPadX, 8, kCardPadX, 8);
-        h->setSpacing(10);
-        auto *texts = new QVBoxLayout();
-        texts->setContentsMargins(0, 0, 0, 0);
-        texts->setSpacing(1);
-        box = new QCheckBox(text, row);
-        box->setObjectName(hook);
-        box->setFont(theme::font(theme::Typography::body_px, QFont::Normal));
-        auto *sub_label = new QLabel(sub, row);
-        sub_label->setProperty(kFieldProperty, QStringLiteral("sub"));
-        sub_label->setFont(theme::font(theme::Typography::hint_px, QFont::Normal));
-        sub_label->setIndent(theme::Metrics::checkbox_px + 6); // 与复选框文字左沿对齐
-        texts->addWidget(box);
-        texts->addWidget(sub_label);
-        h->addLayout(texts);
-        h->addStretch(1);
-        link = new QToolButton(row);
-        link->setObjectName(hook + QStringLiteral("_link"));
-        link->setProperty(kFieldProperty, QStringLiteral("link"));
-        link->setText(link_text);
-        link->setAutoRaise(true);
-        link->setCursor(Qt::PointingHandCursor);
-        link->setFont(theme::font(theme::Typography::body_px, 600));
-        h->addWidget(link, 0, Qt::AlignVCenter);
-        v->addWidget(row);
-        return row;
+    auto *body = new QWidget(card);
+    auto *bv = new QVBoxLayout(body);
+    bv->setContentsMargins(theme::Metrics::card_pad_x, 0, theme::Metrics::card_pad_x,
+                           theme::Metrics::card_pad_bottom);
+    bv->setSpacing(0);
+
+    // 开关行（§6：独立布尔（立即生效）= 开关）：[开关 30×16][说明][……][链]
+    const auto switch_row = [&](const QString &label, const QString &object_name,
+                                formkit::SwitchControl **out, const QString &sub,
+                                const QString &link_name, const QString &link_text,
+                                QToolButton **link_out) {
+        TrackGroup group = make_group(body);
+        auto *sw = new formkit::SwitchControl(group.widget());
+        sw->setObjectName(object_name);
+        sw->set_tokens(st->tokens);
+        st->switches.append(sw);
+        *out = sw;
+        group.add(sw);
+        group.gap(theme::Metrics::group_gap);
+        auto *note = new QLabel(sub, group.widget());
+        note->setProperty(kFieldProperty, QStringLiteral("sub"));
+        note->setFont(theme::font(theme::Typography::hint_px, QFont::Normal));
+        group.add(note);
+        group.stretch();
+        QToolButton *link = make_link(group.widget(), link_name, link_text);
+        group.add(link);
+        *link_out = link;
+        const formkit::Row row = formkit::frow(body, label, group.widget(), FieldWidth::Flex);
+        return row.row;
     };
+    bv->addWidget(switch_row(PageMeta::tr("隐私剥除"), QStringLiteral("privacy_strip"), &st->strip,
+                             PageMeta::tr("输出前移除全部 EXIF / XMP，保留 ICC"),
+                             QStringLiteral("privacy_strip_link"), PageMeta::tr("标签编辑…"),
+                             &st->link_tags));
+    bv->addWidget(switch_row(PageMeta::tr("时间同步"), QStringLiteral("mtime_sync"), &st->mtime,
+                             PageMeta::tr("输出 mtime 跟随拍摄时间"),
+                             QStringLiteral("mtime_sync_link"), PageMeta::tr("例外…"),
+                             &st->link_exc));
+    // 关键字（§7.1：胶囊组 + 「编辑…」链）
+    {
+        TrackGroup group = make_group(body);
+        // 胶囊组本体 = 独立子容器（随跟随项重建；说明位/胶囊都在它内部）
+        st->keyword_box = new QWidget(group.widget());
+        st->keyword_row = new QHBoxLayout(st->keyword_box);
+        st->keyword_row->setContentsMargins(0, 0, 0, 0);
+        st->keyword_row->setSpacing(formkit::kInlineGap);
+        st->keyword_none = new ElidedLabel(st->keyword_box);
+        st->keyword_none->setObjectName(QStringLiteral("pp-meta-keyword-none"));
+        st->keyword_none->setProperty(kFieldProperty, QStringLiteral("note"));
+        st->keyword_none->setFont(theme::font(theme::Typography::hint_px, QFont::Normal));
+        st->keyword_none->set_full_text(PageMeta::tr(kNoKeywordsText));
+        st->keyword_row->addWidget(st->keyword_none, 0, Qt::AlignVCenter);
+        group.add(st->keyword_box);
+        group.stretch();
+        st->link_keywords = make_link(group.widget(), QStringLiteral("pp-meta-keywords-link"),
+                                      PageMeta::tr("编辑…"));
+        group.add(st->link_keywords);
+        const formkit::Row row =
+            formkit::frow(body, PageMeta::tr("关键字"), group.widget(), FieldWidth::Flex);
+        bv->addWidget(row.row);
+    }
 
-    add_switch_row(st->strip, QStringLiteral("privacy_strip"), PageMeta::tr("隐私剥除"),
-                   PageMeta::tr("输出前移除全部 EXIF/XMP（保留 ICC）"), st->link_tags,
-                   PageMeta::tr("EXIF / XMP 标签编辑…"));
-    add_switch_row(st->mtime, QStringLiteral("mtime_sync"), PageMeta::tr("文件时间同步"),
-                   PageMeta::tr("输出文件 mtime 跟随拍摄时间"), st->link_exc,
-                   PageMeta::tr("单文件例外 ()"));
-
-    // 标签编辑（折叠；链接入口 = mockup 的「EXIF / XMP 标签编辑…」）
+    // 标签编辑（折叠；「标签编辑…」/「编辑…」入口）
     st->tag_host = new QWidget(card);
+    st->tag_host->setObjectName(QStringLiteral("pp-meta-tag-host"));
     auto *tv = new QVBoxLayout(st->tag_host);
-    tv->setContentsMargins(kCardPadX, 0, kCardPadX, 8);
+    tv->setContentsMargins(theme::Metrics::card_pad_x, 0, theme::Metrics::card_pad_x, 8);
     auto *rows_host = new QWidget(st->tag_host);
     rows_host->setObjectName(QStringLiteral("tag_rows_host"));
     st->tag_rows = new QVBoxLayout(rows_host);
     st->tag_rows->setContentsMargins(0, 0, 0, 0);
+    st->tag_rows->setSpacing(theme::Metrics::group_gap);
     tv->addWidget(rows_host);
-    st->add_tag = new QPushButton(PageMeta::tr("添加标签"), st->tag_host);
-    st->add_tag->setObjectName(QStringLiteral("tag_add_button"));
+    st->add_tag =
+        make_button(st->tag_host, QStringLiteral("tag_add_button"), PageMeta::tr("添加标签"));
     tv->addWidget(st->add_tag, 0, Qt::AlignLeft);
     st->tag_host->setVisible(false);
     v->addWidget(st->tag_host);
 
-    // 例外列表（折叠；链接入口 = mockup 的「单文件例外 (N) ⚑」）
+    // 例外列表（折叠；「例外…」入口）
     st->exc_host = new QWidget(card);
+    st->exc_host->setObjectName(QStringLiteral("pp-meta-exception-host"));
     auto *xv = new QVBoxLayout(st->exc_host);
-    xv->setContentsMargins(kCardPadX, 0, kCardPadX, 8);
+    xv->setContentsMargins(theme::Metrics::card_pad_x, 0, theme::Metrics::card_pad_x, 8);
     st->exc_label = new QLabel(PageMeta::tr("无例外文件"), st->exc_host);
     st->exc_label->setObjectName(QStringLiteral("exception_label"));
     st->exc_label->setProperty(kFieldProperty, QStringLiteral("sub"));
@@ -1899,28 +2468,31 @@ QWidget *build_switches_card(MetaState *st, QWidget *parent) {
     st->exc_host->setVisible(false);
     v->addWidget(st->exc_host);
 
-    QObject::connect(st->strip, &QCheckBox::toggled, st, [st](bool) {
+    QObject::connect(st->strip, &formkit::SwitchControl::toggled, st, [st](bool) {
         if (!st->loading) {
             refresh_effective(st);
             notify_rules_changed(st);
         }
     });
-    QObject::connect(st->mtime, &QCheckBox::toggled, st, [st](bool) {
+    QObject::connect(st->mtime, &formkit::SwitchControl::toggled, st, [st](bool) {
         if (!st->loading) {
             refresh_effective(st);
             notify_rules_changed(st);
         }
     });
-    QObject::connect(st->link_tags, &QToolButton::clicked, st, [st] {
+    const auto toggle_tags = [st] {
         const bool on = !st->tag_host->isVisible();
         st->tag_host->setVisible(on);
-        st->link_tags->setText(PageMeta::tr("EXIF / XMP 标签编辑…"));
         set_fold_icon(st, st->link_tags, on);
-    });
+        set_fold_icon(st, st->link_keywords, on);
+    };
+    QObject::connect(st->link_tags, &QToolButton::clicked, st, [toggle_tags] { toggle_tags(); });
+    QObject::connect(st->link_keywords, &QToolButton::clicked, st,
+                     [toggle_tags] { toggle_tags(); });
     QObject::connect(st->link_exc, &QToolButton::clicked, st, [st] {
         const bool on = !st->exc_host->isVisible();
         st->exc_host->setVisible(on);
-        set_fold_icon(st, st->link_exc, on); // 文案不动（计数由 set_exception_summary 维护）
+        set_fold_icon(st, st->link_exc, on);
     });
     QObject::connect(st->add_tag, &QPushButton::clicked, st, [st] {
         add_tag_row(st, QString(), QString());
@@ -1967,7 +2539,7 @@ void build_ui(PageMeta *page) {
     content->setObjectName(QStringLiteral("pp-meta-content"));
     auto *v = new QVBoxLayout(content);
     v->setContentsMargins(0, 0, 0, 0);
-    v->setSpacing(theme::Metrics::gap); // mockup .scroll{gap:10px}
+    v->setSpacing(theme::Metrics::gap); // 卡间距 8（§4.3）
     QFrame *info_card = qobject_cast<QFrame *>(build_info_card(st, content));
     QFrame *time_card = qobject_cast<QFrame *>(build_time_card(st, content));
     QFrame *gps_card = qobject_cast<QFrame *>(build_gps_card(st, content));
@@ -1999,7 +2571,7 @@ void PageMeta::apply_rules(const pp::BatchRules &r) { apply_state(state_of(this)
 void PageMeta::set_batch_files(const QStringList &paths) {
     MetaState *st = state_of(this);
     st->batch_files = paths;
-    refresh_effective(st); // 「影响 N / N」与 (i/N) 跟随提示
+    refresh_effective(st); // 「影响 N 个文件」与 (i/N) 跟随提示
 }
 
 void PageMeta::set_selection(const QList<MetaSelectionItem> &items, bool from_selection) {
@@ -2028,9 +2600,10 @@ void PageMeta::set_exception_summary(const QStringList &paths) {
     }
     st->exc_label->setText(paths.isEmpty() ? tr("无例外文件")
                                            : tr("%1 个文件带元数据例外").arg(paths.size()));
-    if (!st->exc_host->isVisible()) {
-        st->link_exc->setText(tr("单文件例外 (%1)").arg(paths.size()));
-    }
+    // 例外计数 = 卡头中性胶囊（1-24/1-25：右置元素统一规格；链接文案保持「例外…」）；
+    // 无例外 → 不显示（§2.5「未发生的量不显示」）
+    st->privacy_pill->setText(tr("例外 %1").arg(paths.size()));
+    st->privacy_pill->setVisible(!paths.isEmpty());
 }
 
 void PageMeta::set_tokens(const theme::Tokens &tokens) {
@@ -2044,6 +2617,13 @@ void PageMeta::set_map_provider(const QString &provider_id, const QString &amap_
     st->map->set_provider(provider_id);
     st->map->set_amap_key(amap_key);
     st->map->set_cache_mb(cache_mb);
+    if (st->provider != nullptr) {
+        const QSignalBlocker blocker(st->provider);
+        const int index = st->provider->findData(provider_id);
+        if (index >= 0) {
+            st->provider->setCurrentIndex(index);
+        }
+    }
 }
 
 } // namespace pp::ui

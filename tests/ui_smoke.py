@@ -54,6 +54,17 @@ M5-T6（W-G2 壳层：预览画布 缩放/拖动/空态/角标）:
     左下提示逐字 / 空态矢量图标 + 引导语 + chip 同档禁用（修 1-16/1-17/1-19/1-21/1-22）/
     照片衬垫与画布底可区分（修 3-21）/ 小图放大档最近邻（修 3-20）；值表驱动，行内
     `checked=N bad=M` 由 C++ 侧给出）。截图仍为 12 张、冻结末行不变。
+
+M5-T7（W-G3 页：元数据页 §7.1 四卡组）:
+  * 追加 `UI-SMOKE meta-geom:` 行齐备断言（C7 几何探针：卡内行 pitch 28 / 标签轨 80 /
+    日期时间 spin 88×24 / 生效行 acc 值（像素取证：修改值 = 强调色、原值 ≠ 强调色）/
+    空态收敛（未选择文件 → 一行说明，kv 行收起）/ 双列第二标签起点（A2：160 档 =
+    second_label_x(160)、kv 行第二标签同 x 且 = 首值轨右缘 + 24）/ 卡头右置一律中性胶囊
+    （1-24/1-25）/ GPS 状态 = 独立徽标「已有 GPS」（修 1-33）/ 地图操作行在地图上方（修 1-37）/
+    批量规则折叠行默认折叠 / 按钮 26（A7）/ 地图离线说明中性灰 + 括号进 tooltip（修 1-38/1-39）；
+    值表驱动，行内 `checked=N bad=M` 由 C++ 侧给出）。既有 meta-* 探针行（meta-baseline /
+    meta-effective / meta-timezone / meta-gps / meta-strip / meta-gps-clear / meta-multi /
+    meta-editor / meta-info / meta-geometry / meta-follow-*）全保留。截图仍为 12 张、冻结末行不变。
 """
 
 import os
@@ -106,6 +117,13 @@ T6_LINE_PREFIXES = (
     'UI-SMOKE preview-geom:',   # 画布底 #16181d（明暗同值）/ 缩放条钮 28 / 翻图钮 28 /
                                 # 角标空态隐藏 + 半透明底与描边 / 提示逐字 / 空态图标+引导语 /
                                 # chip 同档禁用 / 衬垫与画布底区分（3-21）/ 最近邻（3-20）
+)
+
+# M5-T7 自检行（前缀匹配；缺任一 → FAIL）：元数据页几何/空态/状态徽标（§7.1/R1–R4 + 修 1-23/1-33/1-37/1-38/1-39）
+T7_LINE_PREFIXES = (
+    'UI-SMOKE meta-geom:',      # 卡内行 pitch 28 / 标签轨 80 / 日期时间 spin 88 / 生效行 acc 值
+                                # （像素取证）/ 空态收敛 / 双列第二标签起点（A2）/ 卡头中性胶囊 /
+                                # 操作行在地图上方 / 折叠默认 / 按钮 26 / 离线说明中性灰
 )
 
 # M4-W2-T11 自检行（前缀匹配；缺任一 → FAIL）
@@ -169,6 +187,7 @@ def main():
         t4_seen = set()
         t5_seen = set()
         t6_seen = set()
+        t7_seen = set()
         t11_seen = set()
         t14_seen = set()
         t15_seen = set()
@@ -188,6 +207,9 @@ def main():
                 for prefix in T6_LINE_PREFIXES:
                     if line.startswith(prefix):
                         t6_seen.add(prefix)
+                for prefix in T7_LINE_PREFIXES:
+                    if line.startswith(prefix):
+                        t7_seen.add(prefix)
                 for prefix in T11_LINE_PREFIXES:
                     if line.startswith(prefix):
                         t11_seen.add(prefix)
@@ -221,6 +243,11 @@ def main():
         if missing:
             print('ui_smoke: FAIL (missing T6 preview canvas self-check lines: {})'.format(', '.join(missing)),
                   file=sys.stderr)
+            return 1
+        missing = [p for p in T7_LINE_PREFIXES if p not in t7_seen]
+        if missing:
+            print('ui_smoke: FAIL (missing T7 meta-page self-check lines: {})'.format(
+                ', '.join(missing)), file=sys.stderr)
             return 1
         missing = [p for p in T11_LINE_PREFIXES if p not in t11_seen]
         if missing:

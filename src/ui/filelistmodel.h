@@ -39,9 +39,21 @@
 //       stale-guard 按路径比对），就绪后发 `group_source_changed()` → 分组视图重建。
 //     * **节头计数 = 当前可见（过滤后）文件数**：树里只挂可见行，节头数字与树内容自洽；
 //       分组键本身取自源模型（过滤不改变键）。
+//
+// M5-T5（§7.5 文件列表行 + 裁定 A6）加性面（既有接口/语义逐字不动；逐条见各点注释）：
+//   * 行几何换锚：行高 56→**58**、缩略图 48→**46**（= theme::Metrics::thumb_px，R4）、
+//     状态 + → **状态胶囊**（R4 16 高 r3 9.5/700；色 = theme::pill_paint 单源）；
+//   * 信息面 = 三行（文件名 12/600 + 「尺寸 · 大小 · 格式」+「日期 · 机型」，注释 10px = §4.2
+//     辅助档，裁定 A3）；为此**追加** roles：`SizeRole` / `ShotDateRole` / `CameraRole`
+//     （追加在既有 11 枚**末尾**，不重排 —— 与 0.3.0 的 ClassId/GroupKey 同一模式）；
+//   * 令牌收口（A6）：`FileDelegate` 持 theme::Tokens 副本（set_tokens，随主题重放），
+//     状态色/注释色/勾选框色一律取自令牌 —— 本文件不再有硬编码色字面量；
+//     `FileGroupDelegate::kCheckBox=15` 自持副本**废除** → 统一 theme::Metrics::checkbox_px=13
+//     （勾选列宽 = check_column_width()，mainwindow 不再手写 6+15+8）。
 #pragma once
 #include "core/classify.h"
 #include "core/pipeline.h"
+#include "ui/theme.h" // M5-T5（A6）：行几何/字阶/语义色的令牌单源（QSS/绘制同一份值）
 #include "ui/thumbnails.h" // M1b-U4: +1 line vs §2.8 frozen text (Thumbnailer must be declared for AUTOMOC; see report)
 #include <QAbstractListModel>
 #include <QAbstractProxyModel>
@@ -71,6 +83,8 @@ struct FileRow {
     std::string scan_datetime;  // EXIF 生效时间 "YYYY:MM:DD HH:MM:SS"（异步摘要；可空）
     std::string scan_camera;    // Exif.Image.Model（异步摘要；可空）
     bool group_scanned = false; // 摘要扫描已回填（无字段/失败同样置位，避免重复扫）
+    // ---- M5-T5（§7.5 行内「大小」项）**加性字段** ----
+    qint64 size_bytes = -1; // 字节层文件大小（add_paths 时 stat；-1 = 未知 → 行内不显示"大小"）
     bool has_exception() const { return entry.exception.has_value(); }
 };
 
@@ -91,8 +105,12 @@ public:
         ExceptionRole,                // bool
         ErrorRole,                    // QString
         // ---- 0.3.0 追加 ----
-        ClassIdRole, // QString：所属分类 id（"" = 无分类；"all" 是虚拟「全部」，不作归属）
-        GroupKeyRole // QString：分组节键（"" = 「无分组」；形态 = YYYY-MM / 相机型号 / 源格式）
+        ClassIdRole,  // QString：所属分类 id（"" = 无分类；"all" 是虚拟「全部」，不作归属）
+        GroupKeyRole, // QString：分组节键（"" = 「无分组」；形态 = YYYY-MM / 相机型号 / 源格式）
+        // ---- M5-T5 追加（§7.5 第二/三行信息的取数面；既有 11 枚不重排）----
+        SizeRole,     // QString "3.21 MB"（"" = 未知/取不到）
+        ShotDateRole, // QString "2024-05-12"（EXIF 生效时间的日期段；"" = 无）
+        CameraRole    // QString "Apple iPhone 15 Pro"（Exif.Image.Model；"" = 无）
     };
 
     explicit FileListModel(QObject *parent = nullptr);
@@ -194,8 +212,10 @@ private:
     std::set<QString> scan_inflight_;                 // 在途摘要（键 = 路径；去重 + 结果回填守卫）
 };
 
-// Row painting: 56px high; 48x48 thumb left; name (bold) + "1920×1080 · JPEG" second line;
-// right-aligned state badge (colored text §3) + "⚑" exception marker before badge.
+// Row painting（M5-T5 §7.5）：行高 **58**；[☑ 13×13] | 46×46 缩略图 r4 | 文件名 12/600 +
+// 两行 10px 注释（「尺寸 · 大小 · 格式」/「日期 · 机型」）；右端**状态胶囊**（R4 16 高 r3、
+// 9.5px/700，色调 = theme::pill_paint 单源）。信息行**禁止截断**：放不下按优先级减行内项
+// （尺寸 > 大小 > 格式 / 日期 > 机型），绝不产出省略号（§7.5 逐字）。
 class FileDelegate : public QStyledItemDelegate {
     Q_OBJECT
 public:
@@ -203,15 +223,50 @@ public:
     void paint(QPainter *painter, const QStyleOptionViewItem &option,
                const QModelIndex &index) const override;
     QSize sizeHint(const QStyleOptionViewItem &option,
-                   const QModelIndex &index) const override; // {option.rect.width(), 56}
+                   const QModelIndex &index) const override; // {option.rect.width(), 58}
+
+    // M5-T5（A6）：语义色/注释色/选中面一律取自 tokens（明暗随主题重放；本 TU 不再写色值）
+    void set_tokens(const theme::Tokens &t);
+    const theme::Tokens &tokens() const { return tokens_; }
+
+    // ---- 行内几何与字阶的**单源**（绘制与 --ui-smoke 的 filelist-geom 探针同一实现）----
+    static constexpr int kFileRowHeight = 58; // §7.5 行高 58
+    static constexpr int kRowInsetY = 6;      // .fitem{padding:6px 12px} 之纵向（46 + 6 + 6 = 58）
+    static constexpr int kRowInsetL = 6;      // 内容列左内距（左轴已由勾选列承担 6+13+8）
+    static constexpr int kRowInsetR = 12;     // 内容列右内距（.fitem 右 12px → 胶囊离右缘 12）
+    static constexpr int kThumbTextGap = 10;  // .fitem{gap:10px}（缩略图 ↔ 信息区）
+    static constexpr int kPillGap = 8;        // 信息区 ↔ 例外标记/状态胶囊
+    static constexpr int kExceptionMarkPx = 12; // 例外标记（矢量 tag 图标）边长
+    static constexpr int kSelectionBarW = 2;    // 选中行左缘强调条（修 3-17 的"高亮强化"）
+    // 行内容几何：[缩略图 46×46][gap][信息区][gap][例外图标?][gap][状态胶囊(右对齐)]
+    struct RowRects {
+        QRect thumb;
+        QRect text; // 信息区（三行；放不下减行内项，不截断）
+        QRect pill; // 状态胶囊（高 16，右对齐）
+        QRect flag; // 例外标记盒（无例外 → 空矩形）
+    };
+    static RowRects row_rects(const QRect &item_rect, int pill_w, bool has_flag);
+    static QFont name_font(); // 文件名行：12px/600（§7.5）
+    static QFont info_font(); // 信息行：10px（§4.2 辅助档；§7.5 的 10.5 表述按裁定 A3 作废）
+    // 行内项装配（信息行**不截断**的唯一实现）：保持书写序，取能放下的最长前缀；
+    // 结果永远不含省略号 —— 尺寸/大小绝不因放不下而被"…"吞掉（§7.5）。
+    static QString join_items(const QStringList &items, const QFontMetrics &fm, int avail_w);
+    // 选中面（修 3-17：勾选 = 参与运行、选中 = 当前焦点，两概念分属两个视觉通道）：
+    // 选中 = 整行淡强调底（accent_dim，mockup .fitem.sel）+ 左缘 2px 强调条（accent）。
+    static QColor selection_fill(const theme::Tokens &t);
+    static QColor selection_bar(const theme::Tokens &t);
+
+private:
+    theme::Tokens tokens_ = theme::tokens(theme::preferred_theme_mode());
 };
 
 // ============================================================================================
 // PP-FROZEN(0.3.0) §3.6 · 自动分组视图（"QListView→QTreeView（分组节）" 的层次结构层）
 // ============================================================================================
-// 两列口径（mockup .frow 的 cbox 15px + gap 8px 的等价实现，避免改动冻结委托的绘制几何）：
-//   * 列 0 = 勾选列（固定 29px = 6 内距 + 15 框 + 8 间隙）：只画 .cbox；
-//   * 列 1 = 行内容列（弹性）：文件行交给冻结的 FileDelegate::paint（一字不改）；
+// 两列口径（mockup .frow 的 cbox + gap 的等价实现，避免改动冻结委托的绘制几何）：
+//   * 列 0 = 勾选列（固定 check_column_width() = 6 内距 + 13 框 + 8 间隙）：只画 .cbox；
+//   * 列 1 = 行内容列（弹性）：文件行交给冻结的 FileDelegate::paint（一处扩展：M5-T5 行内三行，
+//     见其注释）+ 行尾分类色点；
 //   * 分组节 = 顶层节点，`setFirstColumnSpanned` 跨两列，节头 = "组名 · 计数"（§6.2）。
 class FileGroupProxyModel : public QAbstractProxyModel {
     Q_OBJECT
@@ -302,9 +357,12 @@ protected:
 // PP-FROZEN(0.3.0) §3.6 · 左栏委托（勾选列 + 行内容列 + 分组节头）
 // ============================================================================================
 // 分派（唯一入口，view 只设这一枚委托）：
-//   * 分组节（GroupCountRole 有效）→ 节头（mockup .ghead：10.5px/700 + letter-spacing + txt3）；
-//   * 文件行 + 列 0 → .cbox（15px r=3；未勾选 = 1.5px 边框，勾选 = accent 填充 + ✓）；
-//   * 文件行 + 列 1 → FileDelegate::paint（冻结绘制）+ 行尾分类色点（mockup .chip-dot）。
+//   * 分组节（GroupCountRole 有效）→ 节头（mockup .ghead：10px/700 + letter-spacing + txt3）；
+//   * 文件行 + 列 0 → .cbox（**13px r2**；未勾选 = 1px --ctl-bd 边框 + card 底，勾选 = accent
+//     填充 + acc-on 勾形 —— M5-T5/A6：自持的 15px 副本废除，统一 theme::Metrics::checkbox_px）；
+//   * 文件行 + 列 1 → FileDelegate::paint（§7.5 三行布局）+ 行尾分类色点（mockup .chip-dot）。
+// 选中面（修 3-17）：选中 = 整行 accent-dim 底 + 左缘 2px accent 条（两列各画自己那半），
+// 与勾选框（13×13 小方框）分属两个视觉通道 —— "勾选 = 参与运行、选中 = 当前焦点"肉眼可分。
 // 勾选交互走 editorEvent 的**自绘命中框**（不依赖样式 SE_ItemViewItemCheckIndicator 的几何，
 // 文件行内容列一律不响应勾选 —— 点缩略图只选中，不误触勾选）。
 class FileGroupDelegate : public FileDelegate {
@@ -318,11 +376,13 @@ public:
     bool editorEvent(QEvent *event, QAbstractItemModel *model, const QStyleOptionViewItem &option,
                      const QModelIndex &index) override;
 
-    // 勾选框几何（mockup .cbox：15px r=3；左内距 6px、纵向居中）——冒烟点击命中用同一函数
+    // 勾选框几何（mockup .cbx：13px r2；左内距 6px、纵向居中）——冒烟点击命中用同一函数
     static QRect check_rect(const QRect &item_rect);
-    static constexpr int kGroupHeaderHeight = 26; // .ghead{padding:7px 6px 4px} + 10.5px 行高
-    static constexpr int kCheckBox = 15;          // .cbox 15px（= theme::Metrics::checkbox_px）
-    static constexpr int kCheckInset = 6;         // .frow{padding:4px 6px}
+    // 勾选列宽（单源：内距 + theme::Metrics::checkbox_px + 间隙；mainwindow 不再手写 6+15+8）
+    static int check_column_width();
+    static constexpr int kGroupHeaderHeight = 26; // .ghead{padding:7px 6px 4px} + 10px 行高
+    static constexpr int kCheckInset = 6;         // .fitem{padding:4px 6px}
+    static constexpr int kCheckGap = 8;           // 勾选框 → 行内容列
 };
 
 } // namespace pp::ui

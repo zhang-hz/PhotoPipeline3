@@ -1,9 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// PhotoPipeline 0.3.0（M4-W2-T11）— 分类面板实现（设计 §6.2 / mockup 左栏 .cls-panel）
+// PhotoPipeline 0.3.0（M4-W2-T11；M5-T5 控件面换锚）— 分类面板实现（设计 §6.2 / mockup 左栏）
 //
 // 见 classify_panel.h 的规格与落地口径。本 TU 的实现要点：
-//   * 行 = 自绘色点（DotLabel，零 QSS）+ 名称 QLabel + 计数 QLabel；整体 24px（.cls-row
-//     padding 5px 12px + 11.5px 行高）；
+//   * 行 = 自绘色点（DotLabel，零 QSS）+ 打标 chip（formkit::ChipButton：键帽+类名，固定宽）+
+//     中性计数胶囊（formkit::PillBadge::count）—— M5-T5（1-11/1-13/1-14/A7）：
+//       - chip 鼠标事件穿透（WA_TransparentForMouseEvents + NoFocus）：展示件，无点击语义，
+//         右键菜单仍由**行**承载（唯一交互入口，语义零改动）；
+//       - 计数 = 中性胶囊（禁蓝色实心）；chip 选中态 = `.on`（当前选中项的归属，§5.2 跟随口径）；
+//       - 「＋ 新建分类…」= 文字链（无框 + accent 字；R4），高 = btn_h（A7），＋ 为矢量图标；
+//       - 常量宽度只由（键帽 + 类名）决定（ChipButton.sizeHint），长名再上限截断到 kChipMaxWidth
+//         —— 悬停/选中/锁定零宽度变化（§12-4）。
 //   * 行部件 contextMenuPolicy=CustomContextMenu → build_row_menu() + exec（不新增点击语义）；
 //   * 「全部」= 保留虚拟分类（core/classify 的 kAllId）：计数 = 模型行数，列表首行；
 //   * id 生成（新建）：名称 → ASCII  slug（[a-z0-9_-]）；无可用字符（中文名等）→ "class"；
@@ -19,7 +25,6 @@
 #include <QCursor>
 #include <QHBoxLayout>
 #include <QInputDialog>
-#include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMessageBox>
@@ -30,13 +35,14 @@
 #include <QVariant>
 
 #include "ui/filelistmodel.h"
-#include "ui/icons.h" // M5-T3：「＋ 新建分类…」的 ＋ 一律矢量图标（C3）
+#include "ui/formkit.h" // M5-T5：打标 chip = formkit::ChipButton；计数 = formkit::PillBadge
+#include "ui/icons.h"   // M5-T3：「＋ 新建分类…」的 ＋ 一律矢量图标（C3）
 #include "ui/theme.h"
 
 namespace pp::ui {
 namespace {
 
-// 色点（mockup .cls-dot 9px 圆）；自绘，无 QSS，随主题无关（颜色来自类定义/保留色）
+// 色点（mockup .cls-dot 9px 圆）；自绘，无 QSS，颜色来自类定义/保留色
 class DotLabel : public QWidget {
 public:
     explicit DotLabel(QWidget *parent = nullptr) : QWidget(parent) { setFixedSize(kDot, kDot); }
@@ -59,9 +65,12 @@ private:
     QColor color_;
 };
 
-constexpr int kRowHeight = 24; // .cls-row{padding:5px 12px} + 11.5px 行
+constexpr int kRowHeight = 24; // .cls-row{padding:5px 12px} + 行高（chip 22 / 胶囊 16 都装得下）
 constexpr int kRowPadX = 12;
 constexpr int kDotGap = 8;
+// chip 宽度上限（长类名截断到此处；面板宽 330 − 行内距 24 − 色点/间距/胶囊的余量 ≈ 250，
+// 取 200 留空 —— 宽度只由类名决定，悬停/选中不变，§12-4）
+constexpr int kChipMaxWidth = 200;
 
 // 「全部」行的保留色点（mockup #c9c9d2，主题无关的灰）
 const QColor kAllDot(0xc9, 0xc9, 0xd2);
@@ -93,12 +102,21 @@ struct ClassifyPanel::Impl {
     FileListModel *model = nullptr;
     theme::Tokens tokens;
     bool has_tokens = false;
+    // 首次 set_tokens 之前的绘制档（= formkit 默认令牌；窗口未显示即会被 refresh_theme 覆盖）
+    theme::Tokens fallback = formkit::default_tokens();
+    const theme::Tokens &paint_tokens() const { return has_tokens ? tokens : fallback; }
     bool locked = false;
-    QString current_class_id;     // 空 = 无分类（高亮「全部」）
-    std::vector<QWidget *> rows;  // 行部件（index 0 = 「全部」）
-    std::vector<QString> row_ids; // "" = 「全部」
+    QString current_class_id; // 空 = 无分类（高亮「全部」）
+    // 行部件（M5-T5）：行 = 色点 + 打标 chip（键帽+类名）+ 中性计数胶囊；index 0 = 「全部」
+    struct Row {
+        QWidget *widget = nullptr;
+        QString id; // "" = 「全部」
+        formkit::ChipButton *chip = nullptr;
+        formkit::PillBadge *count = nullptr;
+    };
+    std::vector<Row> rows;
     QVBoxLayout *rows_layout = nullptr;
-    QWidget *new_btn = nullptr;
+    QPushButton *new_btn = nullptr;
     QTimer *refresh_timer = nullptr;
 
     void rebuild_rows();
@@ -138,9 +156,9 @@ void ClassifyPanel::set_tokens(const theme::Tokens &tokens) {
     impl_->tokens = tokens;
     impl_->has_tokens = true;
     impl_->apply_row_styles();
-    // M5-T3：矢量图标随 tokens 重放（QIcon 取色不吃 QSS 的 color）
+    // M5-T3：矢量图标随 tokens 重放（QIcon 取色不吃 QSS 的 color）；M5-T5：文字链取 accent
     if (auto *btn = findChild<QPushButton *>(QStringLiteral("pp-class-new")))
-        icons::apply(btn, icons::Name::Add, tokens.text2, tokens.text3, 12);
+        icons::apply(btn, icons::Name::Add, tokens.accent, tokens.text3, 12);
 }
 
 void ClassifyPanel::set_registry(pp::ClassRegistry *registry) {
@@ -168,9 +186,9 @@ void ClassifyPanel::set_model(FileListModel *model) {
 
 void ClassifyPanel::set_locked(bool locked) {
     impl_->locked = locked;
-    for (QWidget *row : impl_->rows) {
-        if (row != nullptr)
-            row->setEnabled(!locked);
+    for (Impl::Row &row : impl_->rows) {
+        if (row.widget != nullptr)
+            row.widget->setEnabled(!locked);
     }
     if (impl_->new_btn != nullptr)
         impl_->new_btn->setEnabled(!locked);
@@ -192,17 +210,22 @@ void ClassifyPanel::set_current_class_id(const QString &class_id) {
 // ---------------------------------------------------------------------------
 
 void ClassifyPanel::Impl::rebuild_rows() {
-    // 清旧行（含「＋ 新建分类…」按钮）
+    // 清旧行（含「＋ 新建分类…」按钮）：**先 hide 再 deleteLater** —— deleteLater 要等事件循环
+    // 回到主层才会真正析构，而本面板的重建由 0ms 定时器/信号驱动、冒烟走 processEvents
+    // （不派发 DeferredDelete）→ 旧代部件会以**旧几何**继续可见并在同槽位叠画（实测伪影：
+    // 分类首行的"双圆角框 + 双 ＋"）。hide() 让旧代立即退出可见面，析构仍走 deleteLater
+    // （不在这里直接 delete：重建可能发生在行部件自己的信号发射栈内，立即析构 = 悬垂发送者）。
     while (QLayoutItem *item = rows_layout->takeAt(0)) {
-        if (QWidget *w = item->widget())
+        if (QWidget *w = item->widget()) {
+            w->hide();
             w->deleteLater();
+        }
         delete item;
     }
     rows.clear();
-    row_ids.clear();
 
-    const auto add_row = [&](const QString &id, const QString &label, int count,
-                             const QColor &dot) {
+    const auto add_row = [&](const QString &id, const QString &label, const QString &keycap,
+                             int count, const QColor &dot) {
         auto *row = new QWidget(panel);
         row->setObjectName(QStringLiteral("pp-class-row"));
         row->setFixedHeight(kRowHeight);
@@ -213,12 +236,23 @@ void ClassifyPanel::Impl::rebuild_rows() {
         auto *dot_label = new DotLabel(row);
         dot_label->setObjectName(QStringLiteral("pp-class-dot"));
         dot_label->set_color(dot);
-        auto *name = new QLabel(label, row);
-        name->setObjectName(QStringLiteral("pp-class-name"));
-        auto *cnt = new QLabel(QString::number(count), row);
+        // 打标 chip（formkit 唯一形态）：键帽 = 热键位（无热键 → 不画键帽）、文字 = 类名；
+        // 展示件 —— 鼠标事件穿透（右键菜单仍归**行**），宽度只由类名决定（§12-4 零形变）
+        auto *chip = new formkit::ChipButton(row);
+        chip->setObjectName(QStringLiteral("pp-class-chip"));
+        chip->set_key_text(keycap);
+        chip->setText(label);
+        chip->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+        chip->setFocusPolicy(Qt::NoFocus);
+        chip->setCursor(Qt::ArrowCursor);
+        chip->setFixedWidth(std::min(chip->sizeHint().width(), kChipMaxWidth));
+        chip->set_tokens(paint_tokens());
+        // 计数 = 中性胶囊（§2.7：计数不表状态、禁蓝色实心；1-11/1-13）
+        auto *cnt = formkit::PillBadge::count(row, count);
         cnt->setObjectName(QStringLiteral("pp-class-count"));
+        cnt->set_tokens(paint_tokens());
         lay->addWidget(dot_label);
-        lay->addWidget(name);
+        lay->addWidget(chip);
         lay->addStretch(1);
         lay->addWidget(cnt);
         const int index = int(rows.size());
@@ -231,28 +265,29 @@ void ClassifyPanel::Impl::rebuild_rows() {
                     menu->exec(row->mapToGlobal(pos));
                 });
         rows_layout->addWidget(row);
-        rows.push_back(row);
-        row_ids.push_back(id);
+        rows.push_back(Row{row, id, chip, cnt});
     };
 
-    // 首行 = 「全部」（保留虚拟分类；计数 = 模型行数）
+    // 首行 = 「全部」（保留虚拟分类；计数 = 模型行数；无热键 → 无键帽）
     const int total = model != nullptr ? int(model->size()) : 0;
-    add_row(QString(), ClassifyPanel::tr("全部"), total, kAllDot);
+    add_row(QString(), ClassifyPanel::tr("全部"), QString(), total, kAllDot);
     if (registry != nullptr) {
         for (const pp::ClassDef &c : registry->classes) {
             add_row(QString::fromStdString(c.id), QString::fromStdString(c.name),
+                    c.hotkey != 0 ? QString(QChar(c.hotkey)) : QString(),
                     int(model != nullptr ? model->class_file_count(c.id) : 0),
                     QColor(QRgb(c.rgb & 0xFFFFFFu)));
         }
     }
 
-    // 末行 = 「＋ 新建分类…」（mockup .cls-new 全宽 mini-btn）：M5-T3 起 ＋ = 矢量图标
+    // 末行 = 「＋ 新建分类…」文字链（R4「文字链无框」+ mockup `.btn.lnk`；高 = btn_h，裁定 A7）；
+    // M5-T3 起 ＋ = 矢量图标
     auto *btn = new QPushButton(ClassifyPanel::tr("新建分类…"), panel);
     btn->setObjectName(QStringLiteral("pp-class-new"));
     btn->setToolTip(ClassifyPanel::tr("新建分类…"));
     btn->setAccessibleName(ClassifyPanel::tr("新建分类…")); // §11
-    icons::apply(btn, icons::Name::Add, tokens.text2, tokens.text3, 12);
-    btn->setFixedHeight(theme::Metrics::input_h);
+    icons::apply(btn, icons::Name::Add, paint_tokens().accent, paint_tokens().text3, 12);
+    btn->setFixedHeight(theme::Metrics::btn_h); // 裁定 A7（R4 按钮高 26）
     btn->setEnabled(!locked);
     connect(btn, &QPushButton::clicked, panel, [this] {
         if (locked)
@@ -277,21 +312,12 @@ void ClassifyPanel::Impl::rebuild_rows() {
 
 void ClassifyPanel::Impl::apply_row_style(int row) {
     const bool active =
-        row == 0 ? current_class_id.isEmpty() : row_ids[std::size_t(row)] == current_class_id;
-    QWidget *row_widget = rows[std::size_t(row)];
-    if (row_widget == nullptr)
+        row == 0 ? current_class_id.isEmpty() : rows[std::size_t(row)].id == current_class_id;
+    Row &entry = rows[std::size_t(row)];
+    if (entry.chip == nullptr)
         return;
-    if (QLabel *name = row_widget->findChild<QLabel *>(QStringLiteral("pp-class-name"))) {
-        QFont font = name->font();
-        font.setBold(active); // .cls-row.on .nm{font-weight:700}
-        name->setFont(font);
-        const QColor color = active ? tokens.text : tokens.text2; // --txt / --txt2
-        name->setStyleSheet(QStringLiteral("color:%1").arg(theme::css_color(color)));
-    }
-    if (QLabel *cnt = row_widget->findChild<QLabel *>(QStringLiteral("pp-class-count"))) {
-        cnt->setStyleSheet(QStringLiteral("color:%1").arg(theme::css_color(tokens.text3)));
-        cnt->setFont(theme::font(theme::Typography::hint_px));
-    }
+    // `.on` = 当前选中项的归属（§5.2 跟随口径）：chip 选中态换底/换字色，**不改宽**（§12-4）
+    entry.chip->setChecked(active);
 }
 
 void ClassifyPanel::Impl::schedule_refresh() {
@@ -305,27 +331,29 @@ void ClassifyPanel::Impl::apply_row_styles() {
     if (!has_tokens)
         return;
     for (int i = 0; i < int(rows.size()); ++i) {
-        QWidget *row = rows[std::size_t(i)];
+        Row &entry = rows[std::size_t(i)];
         // 计数实时重取（文件增删/打标后跟随）
-        if (QLabel *cnt = row != nullptr
-                              ? row->findChild<QLabel *>(QStringLiteral("pp-class-count"))
-                              : nullptr) {
+        if (entry.count != nullptr) {
             const std::string id = id_at(i);
             const int value = id.empty() ? int(model != nullptr ? model->size() : 0)
                                          : int(model != nullptr ? model->class_file_count(id) : 0);
-            cnt->setText(QString::number(value));
+            entry.count->setText(QString::number(value));
+            entry.count->set_tokens(tokens);
         }
+        if (entry.chip != nullptr)
+            entry.chip->set_tokens(tokens);
         apply_row_style(i);
     }
     if (new_btn != nullptr) {
         new_btn->setFont(theme::font(theme::Typography::body_px, 600));
+        // 文字链（R4：无框 + accent 字；禁用 = --txt3）
         new_btn->setStyleSheet(
-            QStringLiteral("QPushButton#pp-class-new { background:%1; border:1px solid %2; "
-                           "border-radius:%3px; color:%4; }"
-                           "QPushButton#pp-class-new:disabled { color:%5; }")
-                .arg(theme::css_color(tokens.control), theme::css_color(tokens.control_bd))
-                .arg(theme::Metrics::control_radius)
-                .arg(theme::css_color(tokens.text2), theme::css_color(tokens.text3)));
+            QStringLiteral("QPushButton#pp-class-new { background:transparent; border:none; "
+                           "color:%1; text-align:left; padding:0 %2px; }"
+                           "QPushButton#pp-class-new:disabled { color:%3; }")
+                .arg(theme::css_color(tokens.accent))
+                .arg(theme::Metrics::pill_pad_x)
+                .arg(theme::css_color(tokens.text3)));
     }
 }
 
@@ -542,36 +570,31 @@ QMenu *ClassifyPanel::build_row_menu(int row) {
 int ClassifyPanel::row_count() const { return int(impl_->rows.size()); }
 
 QString ClassifyPanel::row_id(int row) const {
-    if (row < 0 || row >= int(impl_->row_ids.size()))
+    if (row < 0 || row >= int(impl_->rows.size()))
         return {};
-    return impl_->row_ids[std::size_t(row)];
+    return impl_->rows[std::size_t(row)].id;
 }
 
 QString ClassifyPanel::row_label(int row) const {
-    if (row < 0 || row >= int(impl_->rows.size()) || impl_->rows[std::size_t(row)] == nullptr)
+    if (row < 0 || row >= int(impl_->rows.size()))
         return {};
-    if (QLabel *name =
-            impl_->rows[std::size_t(row)]->findChild<QLabel *>(QStringLiteral("pp-class-name")))
-        return name->text();
-    return {};
+    // M5-T5：行名 = 打标 chip 的文字（唯一显示面）
+    const formkit::ChipButton *chip = impl_->rows[std::size_t(row)].chip;
+    return chip != nullptr ? chip->text() : QString();
 }
 
 int ClassifyPanel::row_count_value(int row) const {
-    if (row < 0 || row >= int(impl_->rows.size()) || impl_->rows[std::size_t(row)] == nullptr)
+    if (row < 0 || row >= int(impl_->rows.size()))
         return -1;
-    if (QLabel *cnt =
-            impl_->rows[std::size_t(row)]->findChild<QLabel *>(QStringLiteral("pp-class-count")))
-        return cnt->text().toInt();
-    return -1;
+    const formkit::PillBadge *cnt = impl_->rows[std::size_t(row)].count;
+    return cnt != nullptr ? cnt->text().toInt() : -1;
 }
 
 bool ClassifyPanel::row_active(int row) const {
-    if (row < 0 || row >= int(impl_->rows.size()) || impl_->rows[std::size_t(row)] == nullptr)
+    if (row < 0 || row >= int(impl_->rows.size()))
         return false;
-    if (QLabel *name =
-            impl_->rows[std::size_t(row)]->findChild<QLabel *>(QStringLiteral("pp-class-name")))
-        return name->font().bold();
-    return false;
+    const formkit::ChipButton *chip = impl_->rows[std::size_t(row)].chip;
+    return chip != nullptr && chip->isChecked(); // `.on` = chip 选中态（§5.2 跟随口径）
 }
 
 QStringList ClassifyPanel::hotkey_labels() const {
@@ -589,7 +612,7 @@ QStringList ClassifyPanel::hotkey_labels() const {
 QWidget *ClassifyPanel::row_widget(int row) const {
     if (row < 0 || row >= int(impl_->rows.size()))
         return nullptr;
-    return impl_->rows[std::size_t(row)];
+    return impl_->rows[std::size_t(row)].widget;
 }
 
 } // namespace pp::ui

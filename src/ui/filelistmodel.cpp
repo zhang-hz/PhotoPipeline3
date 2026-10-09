@@ -24,8 +24,23 @@
 //     分组节头（mockup .ghead）三路分派 + 勾选自绘命中框。配色一律取 QPalette
 //     （theme::palette(tokens) 已把 §9.2 tokens 映射进 Text/PlaceholderText/Highlight/
 //     HighlightedText），故本 TU 零 tokens 依赖、随主题自动跟随。
+//
+// M5-T5（§7.5 文件行 + 裁定 A6/A3）追加面（**加性**；A6 明令的令牌收口即本段）：
+//   * 行几何：58 高（§7.5）/ 缩略图 46 r4（R4 = theme::Metrics::thumb_px）/ 状态**胶囊**
+//     （R4 16 r3 9.5/700，色 = theme::pill_paint 单源）；
+//   * 信息 = 三行：文件名 12/600 + 「尺寸 · 大小 · 格式」+「日期 · 机型」（注释 10px = §4.2
+//     辅助档，裁定 A3 作废 §7.5 的 10.5 表述）；`join_items` 保证**不截断**（放不下减行内项，
+//     绝不产出省略号）；取数 = 追加 roles SizeRole / ShotDateRole / CameraRole（+ FileRow 加性
+//     字段 size_bytes）；
+//   * **A6 令牌收口**：`kStateStyle` 的 12 态硬编码色 → theme::Tokens（排队/跳过/取消 = text3、
+//     进行中 = accent、完成 = ok、失败 = err；例外标记 #dd8800 → warn；第二行灰字 → text3）；
+//     委托持 tokens 副本（FileDelegate::set_tokens，MainWindow::refresh_theme 重放）；
+//   * **A6 废除自持副本**：`FileGroupDelegate::kCheckBox=15` 删除 → theme::Metrics::checkbox_px
+//     （13；勾选框 = .cbx 13×13 r2，边框 1px --ctl-bd / 选中 accent 填充 + acc-on 勾形）；
+//   * 选中面（修 3-17）：选中 = 整行 accent-dim 底 + 左缘 2px accent 条（与勾选框分属两个视觉
+//     通道）；样式对 State_Selected 的填充被屏蔽（否则盖住淡底）。
 #include "ui/filelistmodel.h"
-#include "ui/icons.h" // M5-T3：勾形/例外标记一律矢量图标（C3）—— 取 QPalette 色，仍零 tokens 依赖
+#include "ui/icons.h"      // M5-T3：勾形/例外标记一律矢量图标（C3）—— 色取自 tokens（M5-T5/A6）
 #include "ui/thumbnails.h" // 冻结的 filelistmodel.h 依赖 Thumbnailer 已声明（不自带该头）
 
 #include <QAbstractItemView>
@@ -39,6 +54,7 @@
 #include <QModelIndex>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPalette>
 #include <QPen>
 #include <QRunnable>
@@ -62,29 +78,32 @@
 
 #include "core/fsops.h"
 #include "core/metadata.h" // pp::read_metadata / pp::effective_datetime（分组摘要的来源）
-#include "ui/theme.h"      // 排印单源（节头 10.5px/700；include 顺序须在 <QApplication> 之后）
+#include "ui/theme.h"      // 令牌单源（排印/语义色/行内度量；M5-T5/A6 起本 TU 全面消费）
 
 namespace pp::ui {
 namespace {
 
-// ---- §3.1 FileState 12 态映射（文本 + 颜色）唯一表；顺序 = pp::FileState 枚举顺序 ----
+// ---- §3.1 FileState 12 态映射（文本 + **色调**）唯一表；顺序 = pp::FileState 枚举顺序 ----
+// M5-T5（A6 令牌收口）：原表里的硬编码色（#808080/#0088cc/#22aa22/#999999/#dd3333）作废 ——
+// 色调键交给 theme::pill_paint（§4.1 末行「同色 8–10% 底 + 30–34% 描边 + 同色字」单源）：
+//   排队/跳过/取消 = 中性（n）、进行中（探测→写入）= accent、完成 = ok、失败 = err（§8 四档语义）。
 struct StateStyle {
     const char *text;
-    const char *color;
+    const char *tone;
 };
 constexpr StateStyle kStateStyle[] = {
-    {"排队", "#808080"}, // Queued
-    {"探测", "#0088cc"}, // Probing
-    {"解码", "#0088cc"}, // Decoding
-    {"旋转", "#0088cc"}, // Orienting
-    {"色彩", "#0088cc"}, // Coloring
-    {"合成", "#0088cc"}, // Flattening
-    {"编码", "#0088cc"}, // Encoding
-    {"写入", "#0088cc"}, // Writing
-    {"完成", "#22aa22"}, // Done
-    {"跳过", "#999999"}, // Skipped
-    {"失败", "#dd3333"}, // Failed
-    {"取消", "#999999"}, // Cancelled
+    {"排队", theme::kPillNeutral}, // Queued
+    {"探测", theme::kPillAccent},  // Probing
+    {"解码", theme::kPillAccent},  // Decoding
+    {"旋转", theme::kPillAccent},  // Orienting
+    {"色彩", theme::kPillAccent},  // Coloring
+    {"合成", theme::kPillAccent},  // Flattening
+    {"编码", theme::kPillAccent},  // Encoding
+    {"写入", theme::kPillAccent},  // Writing
+    {"完成", theme::kPillOk},      // Done
+    {"跳过", theme::kPillNeutral}, // Skipped
+    {"失败", theme::kPillErr},     // Failed
+    {"取消", theme::kPillNeutral}, // Cancelled
 };
 static_assert(std::size(kStateStyle) == 12, "§3.1 十二态映射必须齐全");
 
@@ -94,13 +113,77 @@ const StateStyle &state_style(pp::FileState st) {
 }
 
 QString state_text(pp::FileState st) { return QString::fromUtf8(state_style(st).text); }
-QColor state_color(pp::FileState st) { return QColor(QLatin1String(state_style(st).color)); }
 
-constexpr int kRowHeight = 56;                     // §2.8 行高
-constexpr int kThumbBox = 48;                      // §2.8 缩略图 48×48
-constexpr const char *kExceptionColor = "#dd8800"; // §3.1 例外标记（矢量 icons::tag 的取色）
-constexpr int kExceptionMarkPx = 12;               // 例外标记图标边长（M5-T3：⚑ 字形 → 矢量）
-constexpr const char *kSubLineColor = "#808080";   // 第二行灰字
+const char *state_tone(pp::FileState st) { return state_style(st).tone; }
+
+// §7.5 行内「大小」项的格式化：3 位有效数字（mockup 行内示例 "3.21 MB" / "64.2 MB" / "142 MB"）
+QString format_size(qint64 bytes) {
+    if (bytes < 0)
+        return {};
+    static const char *const kUnits[] = {"B", "KB", "MB", "GB", "TB"};
+    double value = double(bytes);
+    std::size_t unit = 0;
+    while (value >= 1024.0 && unit + 1 < std::size(kUnits)) {
+        value /= 1024.0;
+        ++unit;
+    }
+    if (unit == 0)
+        return QStringLiteral("%1 B").arg(bytes); // 字节档不用小数
+    const int digits = value >= 100.0 ? 0 : (value >= 10.0 ? 1 : 2);
+    return QStringLiteral("%1 %2").arg(value, 0, 'f', digits).arg(QLatin1String(kUnits[unit]));
+}
+
+// EXIF 生效时间 "YYYY:MM:DD HH:MM:SS" → 行内日期段 "YYYY-MM-DD"（形态不符 → 原样直出）
+QString format_shot_date(const std::string &datetime) {
+    QString text = QString::fromStdString(datetime).trimmed();
+    if (text.size() < 10)
+        return text;
+    text.truncate(10);
+    if (text.at(4) == QLatin1Char(':') && text.at(7) == QLatin1Char(':'))
+        return text.replace(4, 1, QLatin1Char('-')).replace(7, 1, QLatin1Char('-'));
+    return text;
+}
+
+constexpr const char *kExceptionTone = theme::kPillWarn; // 例外标记（矢量 tag 图标）色调
+
+// 状态胶囊宽度（= formkit::PillBadge::sizeHint 的口径：内距 ×2 + 文字；边框画在盒内）
+int state_pill_width(const QString &text) {
+    const QFontMetrics fm(
+        theme::font(theme::Typography::badge_px, theme::Typography::badge_weight));
+    return theme::Metrics::pill_pad_x * 2 + fm.horizontalAdvance(text);
+}
+
+// 状态胶囊绘制：色 = theme::pill_paint（与 formkit::PillBadge 同一取色函数/同一 R4 几何；
+// 委托无法承载 QWidget，故按令牌复述形状 —— 半径/内距/字阶都取自主题单源，漂移即探针红）
+void draw_state_pill(QPainter *painter, const QRect &box, const theme::Tokens &t, const char *tone,
+                     const QString &text) {
+    const theme::PillPaint paint = theme::pill_paint(t, tone);
+    painter->save();
+    painter->setRenderHint(QPainter::Antialiasing, true);
+    const QRectF rect = QRectF(box).adjusted(0.5, 0.5, -0.5, -0.5);
+    painter->setPen(QPen(paint.bd, 1.0));
+    painter->setBrush(paint.bg);
+    painter->drawRoundedRect(rect, theme::Metrics::pill_radius, theme::Metrics::pill_radius);
+    painter->setFont(theme::font(theme::Typography::badge_px, theme::Typography::badge_weight));
+    painter->setPen(paint.fg);
+    painter->drawText(box, Qt::AlignCenter, text);
+    painter->restore();
+}
+
+// 选中面（修 3-17）：两列各画自己那半；左缘 2px 强调条只画在行首列（列 0）
+void paint_selection(QPainter *painter, const QRect &item_rect, const theme::Tokens &t,
+                     bool first_column) {
+    painter->save();
+    painter->fillRect(item_rect, FileDelegate::selection_fill(t));
+    if (first_column) {
+        painter->fillRect(QRect(item_rect.left(), item_rect.top(), FileDelegate::kSelectionBarW,
+                                item_rect.height()),
+                          FileDelegate::selection_bar(t));
+    }
+    painter->restore();
+}
+
+constexpr int kGroupCountAlphaPct = 80; // .cnt{opacity:.8}（节头计数）
 
 std::filesystem::path fs_path(const QString &s) {
     return std::filesystem::path(s.toStdString()).lexically_normal();
@@ -217,6 +300,13 @@ QVariant FileListModel::data(const QModelIndex &idx, int role) const {
         return QString::fromStdString(class_id_of(std::size_t(idx.row())));
     case GroupKeyRole:
         return group_key_of(std::size_t(idx.row()));
+    // ---- M5-T5（§7.5 第二/三行信息）----
+    case SizeRole:
+        return format_size(r.size_bytes); // "" = 未知 → 行内不显示"大小"
+    case ShotDateRole:
+        return format_shot_date(r.scan_datetime); // EXIF 生效时间（异步摘要；"" = 无）
+    case CameraRole:
+        return QString::fromStdString(r.scan_camera); // Exif.Image.Model（"" = 无）
     default:
         return {};
     }
@@ -275,6 +365,11 @@ void FileListModel::add_paths(const QStringList &paths) {
             FileRow row;
             row.entry.src = f;
             row.entry.base_dir = f.parent_path(); // §2.8：base_dir = src.parent
+            // M5-T5（§7.5 行内「大小」）：入列时一次 stat（与自走的 is_regular_file 同把锁；
+            // 失败 → -1 = 未知，行内不显示"大小"而不是显示 0）
+            std::error_code size_ec;
+            const std::uintmax_t bytes = std::filesystem::file_size(f, size_ec);
+            row.size_bytes = size_ec ? -1 : static_cast<qint64>(bytes);
             known_paths_.insert(fs_string(f));
             rows_.push_back(std::move(row));
         }
@@ -667,7 +762,8 @@ void FileListModel::apply_group_scan(int row, const QString &path, const std::st
     r.scan_datetime = datetime;
     r.scan_camera = camera;
     r.group_scanned = true;
-    emit_row_data_changed(std::size_t(target), {GroupKeyRole});
+    // M5-T5：摘要同时喂「日期 · 机型」信息行 → 一并声明变化角色（行重绘即见）
+    emit_row_data_changed(std::size_t(target), {GroupKeyRole, ShotDateRole, CameraRole});
     emit group_source_changed();
 }
 
@@ -712,124 +808,198 @@ void FileListModel::emit_row_data_changed(std::size_t i, const QVector<int> &rol
 
 // ------------------------------------------------------------------ FileDelegate
 
+void FileDelegate::set_tokens(const theme::Tokens &t) { tokens_ = t; }
+
+QFont FileDelegate::name_font() {
+    return theme::font(theme::Typography::card_title_px, QFont::DemiBold); // §7.5 文件名 12/600
+}
+
+QFont FileDelegate::info_font() {
+    return theme::font(theme::Typography::hint_px); // §4.2 辅助 10/400（裁定 A3）
+}
+
+QColor FileDelegate::selection_fill(const theme::Tokens &t) { return t.accent_dim; }
+QColor FileDelegate::selection_bar(const theme::Tokens &t) { return t.accent; }
+
+QString FileDelegate::join_items(const QStringList &items, const QFontMetrics &fm, int avail_w) {
+    QString out;
+    for (const QString &item : items) {
+        if (item.isEmpty())
+            continue;
+        const int item_w = fm.horizontalAdvance(item);
+        if (out.isEmpty()) {
+            // 首项就放不下 → 本行留空：宁可少一行信息，也不用省略号吞掉尺寸/大小（§7.5 逐字）
+            if (item_w > avail_w)
+                break;
+            out = item;
+            continue;
+        }
+        const QString candidate = out + QStringLiteral(" · ") + item;
+        if (fm.horizontalAdvance(candidate) > avail_w)
+            break; // 放不下 → 减行内项（书写序保持，不截断、不省略号）
+        out = candidate;
+    }
+    return out;
+}
+
+FileDelegate::RowRects FileDelegate::row_rects(const QRect &item_rect, int pill_w, bool has_flag) {
+    RowRects rects;
+    const int thumb_px = theme::Metrics::thumb_px; // R4 缩略图 46（§7.5）
+    rects.thumb = QRect(item_rect.left() + kRowInsetL,
+                        item_rect.top() + (item_rect.height() - thumb_px) / 2, thumb_px, thumb_px);
+    int right = item_rect.left() + item_rect.width() - kRowInsetR; // 右开边界
+    const int pill_h = theme::Metrics::pill_h;                     // R4 胶囊高 16
+    rects.pill =
+        QRect(right - pill_w, item_rect.top() + (item_rect.height() - pill_h) / 2, pill_w, pill_h);
+    right = rects.pill.left() - kPillGap;
+    if (has_flag) {
+        rects.flag = QRect(right - kExceptionMarkPx,
+                           item_rect.top() + (item_rect.height() - kExceptionMarkPx) / 2,
+                           kExceptionMarkPx, kExceptionMarkPx);
+        right = rects.flag.left() - kPillGap;
+    }
+    const int text_x = rects.thumb.left() + thumb_px + kThumbTextGap;
+    rects.text = QRect(text_x, item_rect.top() + kRowInsetY, std::max(0, right - text_x),
+                       item_rect.height() - 2 * kRowInsetY);
+    return rects;
+}
+
 void FileDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option,
                          const QModelIndex &index) const {
     QStyleOptionViewItem opt = option;
     initStyleOption(&opt, index);
 
-    // 背景/选中/焦点框交给样式；文字与图标自绘（清空避免默认绘制）
     const QWidget *const widget = opt.widget;
     QStyle *const style = widget ? widget->style() : QApplication::style();
-    opt.text.clear();
-    opt.icon = QIcon();
-    style->drawControl(QStyle::CE_ItemViewItem, &opt, painter, widget);
+    const bool selected = (opt.state & QStyle::State_Selected) != 0;
+    const theme::Tokens &t = tokens_;
 
-    QRect area = opt.rect.adjusted(6, 4, -6, -4);
-    // 事实（U4 实测）：QListView 用"未含竖滚动条"的视口宽度调 sizeHint（§2.8 冻结公式），
-    // 竖滚动条出现后 item 比可见视口宽 ~14px → 右对齐徽标会被裁掉。以可见视口右边界收口。
+    // 行背景：悬停/交替底交给样式；**选中底由本委托自绘**（修 3-17 的高亮强化）→ 先屏蔽样式
+    // 的选中填充，否则样式蓝底会盖住 accent-dim 淡底。
+    {
+        QStyleOptionViewItem bg_opt = opt;
+        bg_opt.state &= ~QStyle::State_Selected;
+        bg_opt.text.clear();
+        bg_opt.icon = QIcon();
+        style->drawControl(QStyle::CE_ItemViewItem, &bg_opt, painter, widget);
+    }
+
+    QRect row_rect = opt.rect;
+    // 事实（U4 实测）：QListView/QTreeView 用"未含竖滚动条"的视口宽度调 sizeHint，竖滚动条出现
+    // 后 item 比可见视口宽 ~14px → 右对齐胶囊会被裁掉。以可见视口右边界收口（M1b 口径不变）。
     if (const QAbstractItemView *view = qobject_cast<const QAbstractItemView *>(widget)) {
         const int visible_right =
             view->horizontalScrollBar()->value() + view->viewport()->width() - 1;
-        if (area.right() > visible_right)
-            area.setRight(visible_right);
+        if (row_rect.right() > visible_right)
+            row_rect.setRight(visible_right);
     }
-    if (area.width() <= 0 || area.height() <= 0)
+    if (row_rect.width() <= 0 || row_rect.height() <= 0)
         return;
 
-    const bool selected = opt.state & QStyle::State_Selected;
-    const QColor primary = opt.palette.color(selected ? QPalette::HighlightedText : QPalette::Text);
-    const QColor secondary = selected ? opt.palette.color(QPalette::HighlightedText)
-                                      : QColor(QLatin1String(kSubLineColor));
+    // 选中面（修 3-17）：整行淡强调底 + 左缘 2px 强调条（行首由列 0 承担，见 FileGroupDelegate）
+    if (selected)
+        painter->fillRect(row_rect, selection_fill(t));
 
-    // 左：48×48 缩略图（等比缩放居中；无缩略图 → 空白占位框）
-    const QRect thumb_box(area.left(), area.top() + (area.height() - kThumbBox) / 2, kThumbBox,
-                          kThumbBox);
-    const QImage thumb = index.data(FileListModel::ThumbRole).value<QImage>();
-    painter->save();
-    if (!thumb.isNull()) {
-        const QImage scaled =
-            thumb.scaled(kThumbBox, kThumbBox, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-        const QRect target(thumb_box.left() + (kThumbBox - scaled.width()) / 2,
-                           thumb_box.top() + (kThumbBox - scaled.height()) / 2, scaled.width(),
-                           scaled.height());
-        painter->drawImage(target, scaled);
-    } else {
-        painter->setPen(QPen(opt.palette.color(QPalette::Mid)));
-        painter->drawRect(thumb_box.adjusted(0, 0, -1, -1));
-    }
-    painter->restore();
-
-    // 右：状态徽标（§3.1 颜色，右对齐），例外时其左侧一枚**矢量打标图标**（#dd8800）。
-    // M5-T3：⚑ 字形 → icons::tag（同色同位，宽度按图标盒常量占位，不再用量字形宽度）。
     const QString state_label = index.data(FileListModel::StateTextRole).toString();
     const int state_int = index.data(FileListModel::StateRole).toInt();
     const bool has_exception = index.data(FileListModel::ExceptionRole).toBool();
-    QFont badge_font = opt.font;
-    badge_font.setBold(true);
-    const QFontMetrics badge_fm(badge_font);
-    const int badge_w = badge_fm.horizontalAdvance(state_label);
-    const int flag_w = has_exception ? kExceptionMarkPx : 0;
-    const int badge_left = area.right() - badge_w;
-    const int flag_left = badge_left - (has_exception ? flag_w + 6 : 0);
+    const RowRects rects = row_rects(row_rect, state_pill_width(state_label), has_exception);
 
+    // 左：46×46 缩略图（r4 圆角；无缩略图 → --ctl 占位块，mockup .thumb{background:var(--ctl)}）
     painter->save();
-    painter->setFont(badge_font);
-    painter->setPen(state_color(pp::FileState(state_int)));
-    painter->drawText(QRect(badge_left, area.top(), badge_w, area.height()),
-                      Qt::AlignRight | Qt::AlignVCenter, state_label);
-    if (has_exception) {
-        icons::paint(*painter, icons::Name::Tag,
-                     QRectF(flag_left, area.center().y() - kExceptionMarkPx / 2.0, kExceptionMarkPx,
-                            kExceptionMarkPx),
-                     QColor(QLatin1String(kExceptionColor)));
+    painter->setRenderHint(QPainter::Antialiasing, true);
+    QPainterPath thumb_clip;
+    thumb_clip.addRoundedRect(QRectF(rects.thumb), theme::Metrics::thumb_radius,
+                              theme::Metrics::thumb_radius);
+    painter->setClipPath(thumb_clip);
+    painter->fillRect(rects.thumb, t.control);
+    const QImage thumb = index.data(FileListModel::ThumbRole).value<QImage>();
+    if (!thumb.isNull()) {
+        const QImage scaled = thumb.scaled(theme::Metrics::thumb_px, theme::Metrics::thumb_px,
+                                           Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        const QRect target(rects.thumb.left() + (rects.thumb.width() - scaled.width()) / 2,
+                           rects.thumb.top() + (rects.thumb.height() - scaled.height()) / 2,
+                           scaled.width(), scaled.height());
+        painter->drawImage(target, scaled);
     }
     painter->restore();
 
-    // 中：第一行文件名（粗体），第二行 "1920×1080 · JPEG"（灰）；
-    // 探测失败且无尺寸信息时第二行显示 ErrorRole 文本（失败色），避免只看到徽标无原因
+    // 中：三行信息 —— 文件名（12/600）+「尺寸 · 大小 · 格式」+「日期 · 机型」（10px，--txt3）。
+    // 信息行**禁止截断**：放不下减行内项（join_items），绝不产出省略号；失败行的原因在
+    // 第三行（无 EXIF 信息时）以 err 色兜底，否则由右侧"失败"胶囊表达。
     const QString name = index.data(FileListModel::NameRole).toString();
-    QString sub = index.data(FileListModel::DimRole).toString();
+    QStringList meta1;
+    const QString dims = index.data(FileListModel::DimRole).toString();
+    const QString size = index.data(FileListModel::SizeRole).toString();
     const QString format = index.data(FileListModel::FormatRole).toString();
+    if (!dims.isEmpty())
+        meta1 << dims;
+    if (!size.isEmpty())
+        meta1 << size;
     if (!format.isEmpty())
-        sub = sub.isEmpty() ? format : sub + QStringLiteral(" · ") + format;
-    bool sub_is_error = false;
-    if (sub.isEmpty()) {
-        const QString error = index.data(FileListModel::ErrorRole).toString();
-        if (!error.isEmpty()) {
-            sub = error;
-            sub_is_error = true;
-        }
+        meta1 << format;
+    QStringList meta2;
+    const QString date = index.data(FileListModel::ShotDateRole).toString();
+    const QString camera = index.data(FileListModel::CameraRole).toString();
+    if (!date.isEmpty())
+        meta2 << date;
+    if (!camera.isEmpty())
+        meta2 << camera;
+    const QString error = index.data(FileListModel::ErrorRole).toString();
+    bool line3_is_error = false;
+    if (meta2.isEmpty() && !error.isEmpty()) {
+        meta2 << error; // 失败行的原因（行内唯一可见处；行内文案与 §7.5 的字段优先级无关）
+        line3_is_error = true;
     }
 
-    const int text_left = thumb_box.right() + 10;
-    const int text_width = flag_left - 8 - text_left;
-    if (text_width > 0) {
-        QFont name_font = opt.font;
-        name_font.setBold(true);
-        const QFontMetrics name_fm(name_font);
-        const QFontMetrics sub_fm(opt.font);
-        const int line_h = area.height() / 2;
+    const QFont name_draw_font = name_font();
+    const QFont info_draw_font = info_font();
+    const QFontMetrics name_fm(name_draw_font);
+    const QFontMetrics info_fm(info_draw_font);
+    const QString line2 = join_items(meta1, info_fm, rects.text.width());
+    const QString line3 = join_items(meta2, info_fm, rects.text.width());
+    if (rects.text.width() > 0) {
+        const int name_h = name_fm.height();
+        const int info_h = info_fm.height();
+        const int block = name_h + (line2.isEmpty() ? 0 : info_h) + (line3.isEmpty() ? 0 : info_h);
+        int y = rects.text.top() + std::max(0, (rects.text.height() - block) / 2);
         painter->save();
-        painter->setFont(name_font);
-        painter->setPen(primary);
-        painter->drawText(QRect(text_left, area.top(), text_width, line_h),
+        painter->setFont(name_draw_font);
+        painter->setPen(t.text);
+        painter->drawText(QRect(rects.text.left(), y, rects.text.width(), name_h),
                           Qt::AlignLeft | Qt::AlignVCenter,
-                          name_fm.elidedText(name, Qt::ElideMiddle, text_width));
-        if (!sub.isEmpty()) {
-            painter->setFont(opt.font);
-            painter->setPen(sub_is_error ? state_color(pp::FileState::Failed) : secondary);
-            painter->drawText(
-                QRect(text_left, area.top() + line_h, text_width, area.height() - line_h),
-                Qt::AlignLeft | Qt::AlignVCenter,
-                sub_fm.elidedText(sub, Qt::ElideRight, text_width));
+                          name_fm.elidedText(name, Qt::ElideMiddle, rects.text.width()));
+        y += name_h;
+        painter->setFont(info_draw_font);
+        painter->setPen(t.text3);
+        if (!line2.isEmpty()) {
+            painter->drawText(QRect(rects.text.left(), y, rects.text.width(), info_h),
+                              Qt::AlignLeft | Qt::AlignVCenter, line2);
+            y += info_h;
+        }
+        if (!line3.isEmpty()) {
+            painter->setPen(line3_is_error ? t.err : t.text3);
+            painter->drawText(QRect(rects.text.left(), y, rects.text.width(), info_h),
+                              Qt::AlignLeft | Qt::AlignVCenter, line3);
         }
         painter->restore();
     }
+
+    // 例外标记（矢量 tag 图标；§3.1 例外 = 警告档色 —— A6：原 #dd8800 收口为令牌 warn 档）
+    if (has_exception && !rects.flag.isEmpty()) {
+        painter->save();
+        icons::paint(*painter, icons::Name::Tag, QRectF(rects.flag),
+                     theme::pill_paint(t, kExceptionTone).fg);
+        painter->restore();
+    }
+
+    // 右：状态胶囊（R4 16 高 r3 9.5/700；色 = theme::pill_paint 单源 —— §8 四档语义）
+    draw_state_pill(painter, rects.pill, t, state_tone(pp::FileState(state_int)), state_label);
 }
 
 QSize FileDelegate::sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const {
     Q_UNUSED(index);
-    return QSize(option.rect.width(), kRowHeight); // §2.8：行高 56
+    return QSize(option.rect.width(), kFileRowHeight); // §7.5：行高 58
 }
 
 // ============================================================================================
@@ -1139,25 +1309,34 @@ QStringList FileGroupProxyModel::collapsed_keys() const {
 FileGroupDelegate::FileGroupDelegate(QObject *parent) : FileDelegate(parent) {}
 
 QRect FileGroupDelegate::check_rect(const QRect &item_rect) {
-    return QRect(item_rect.left() + kCheckInset,
-                 item_rect.top() + (item_rect.height() - kCheckBox) / 2, kCheckBox, kCheckBox);
+    const int box = theme::Metrics::checkbox_px; // R4 复选框 13×13（A6：自持 15 副本已废除）
+    return QRect(item_rect.left() + kCheckInset, item_rect.top() + (item_rect.height() - box) / 2,
+                 box, box);
+}
+
+int FileGroupDelegate::check_column_width() {
+    return kCheckInset + theme::Metrics::checkbox_px + kCheckGap;
 }
 
 void FileGroupDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option,
                               const QModelIndex &index) const {
+    const theme::Tokens &t = tokens();
+    const bool selected = (option.state & QStyle::State_Selected) != 0;
     if (index.data(FileGroupProxyModel::GroupCountRole).isValid()) {
-        // ---- 分组节头（mockup .ghead：10.5px/700 + letter-spacing .4 + --txt3；"组名 · N"）----
+        // ---- 分组节头（mockup .ghead：10px/700 + letter-spacing .4 + --txt3；"组名 · N"）----
         const QString text = index.data(Qt::DisplayRole).toString();
         const int count = index.data(FileGroupProxyModel::GroupCountRole).toInt();
         painter->save();
         painter->setClipRect(option.rect);
+        if (selected) // 节头不可选（flags 只给 ItemIsEnabled），此处仅为不变量兜底
+            painter->fillRect(option.rect, selection_fill(t));
         QFont font = theme::font(theme::Typography::hint_px, 700);
         font.setLetterSpacing(QFont::AbsoluteSpacing, 0.4f);
         painter->setFont(font);
         const QFontMetrics fm(font);
         const int left = option.rect.left() + kCheckInset;
         const int baseline_y = option.rect.top() + 7; // .ghead{padding:7px 6px 4px}
-        QColor label_color = option.palette.color(QPalette::PlaceholderText); // = --txt3
+        QColor label_color = t.text3;                 // = --txt3
         painter->setPen(label_color);
         painter->drawText(QPoint(left, baseline_y + fm.ascent()), text);
         // 计数部分（.cnt{opacity:.8}）：覆盖重绘 " · N"（尾部），色更淡
@@ -1166,7 +1345,7 @@ void FileGroupDelegate::paint(QPainter *painter, const QStyleOptionViewItem &opt
             const int cut = std::max(0, int(text.size() - suffix.size()));
             const QString prefix = text.left(cut);
             const int prefix_w = fm.horizontalAdvance(prefix);
-            label_color.setAlphaF(0.8f);
+            label_color.setAlphaF(float(kGroupCountAlphaPct) / 100.0f);
             painter->setPen(label_color);
             painter->drawText(QPoint(left + prefix_w, baseline_y + fm.ascent()), suffix);
         }
@@ -1174,36 +1353,35 @@ void FileGroupDelegate::paint(QPainter *painter, const QStyleOptionViewItem &opt
         return;
     }
     if (index.column() == FileGroupProxyModel::kCheckColumn) {
-        // ---- 勾选列：样式画行背景/选中/焦点（屏蔽样式自带指示器）→ 自绘 .cbox ----
+        // ---- 勾选列：样式画悬停/交替底（屏蔽其选中填充，选中面由本委托落地）→ 自绘 .cbx ----
         QStyleOptionViewItem opt = option;
         initStyleOption(&opt, index);
         opt.text.clear();
         opt.icon = QIcon();
         opt.features &= ~QStyleOptionViewItem::HasCheckIndicator; // 自绘，不用样式指示器
+        opt.state &= ~QStyle::State_Selected;
         QStyle *style = opt.widget != nullptr ? opt.widget->style() : QApplication::style();
         style->drawControl(QStyle::CE_ItemViewItem, &opt, painter, opt.widget);
-        const QRect box = check_rect(opt.rect);
+        if (selected)
+            paint_selection(painter, option.rect, t, /*first_column=*/true);
+
+        // .cbx 13×13 r2（mockup：未勾选 = --ctl-bd 边框 + --card 底；勾选 = accent 填充 + 勾形）
+        const QRect box = check_rect(option.rect);
         const bool on = index.data(Qt::CheckStateRole).toInt() == int(Qt::Checked);
-        const QColor border = opt.palette.color(QPalette::PlaceholderText);
-        const QColor fill = opt.palette.color(QPalette::Highlight);
-        const QColor mark = opt.palette.color(QPalette::HighlightedText);
         painter->save();
         painter->setRenderHint(QPainter::Antialiasing, true);
-        QPen pen(on ? fill : border);
-        pen.setWidthF(on ? 1.0 : 1.5); // .cbox{border:1.5px}
-        painter->setPen(pen);
-        painter->setBrush(on ? QBrush(fill) : Qt::NoBrush);
-        const qreal radius = 3.0; // .cbox{r=3}
-        painter->drawRoundedRect(QRectF(box).adjusted(0.0, 0.0, -1.0, -1.0), radius, radius);
+        painter->setPen(QPen(on ? t.accent : t.control_bd, 1.0));
+        painter->setBrush(on ? QBrush(t.accent) : QBrush(t.card));
+        painter->drawRoundedRect(QRectF(box).adjusted(0.5, 0.5, -0.5, -0.5),
+                                 theme::Metrics::checkbox_radius, theme::Metrics::checkbox_radius);
         if (on) {
-            // M5-T3：勾形 = 矢量路径（icons::check，与 mockup 的 10×10 勾形等比同源），
-            // 不再是 "✓" 字形（§3.3 禁字形图标）。
-            icons::paint(*painter, icons::Name::Check, QRectF(box), mark);
+            // M5-T3：勾形 = 矢量路径（icons::check）；色 = acc-on（强调底上的字色，§4.1）
+            icons::paint(*painter, icons::Name::Check, QRectF(box), t.on_accent);
         }
         painter->restore();
         return;
     }
-    // ---- 行内容列：冻结绘制（一字不改）+ 行尾分类色点（mockup .chip-dot）----
+    // ---- 行内容列：§7.5 三行布局（FileDelegate::paint）+ 行尾分类色点（mockup .chip-dot）----
     FileDelegate::paint(painter, option, index);
     const QVariant deco = index.data(Qt::DecorationRole);
     if (!deco.isValid())
@@ -1211,19 +1389,18 @@ void FileGroupDelegate::paint(QPainter *painter, const QStyleOptionViewItem &opt
     const QColor dot_color = deco.value<QColor>();
     if (!dot_color.isValid())
         return;
-    QRect area = option.rect.adjusted(6, 4, -6, -4);
+    QRect area = option.rect.adjusted(FileDelegate::kRowInsetL, FileDelegate::kRowInsetY,
+                                      -FileDelegate::kRowInsetR, FileDelegate::kRowInsetY);
     if (area.width() <= 0 || area.height() <= 0)
         return;
-    QFont badge_font = option.font;
-    badge_font.setBold(true);
-    const QFontMetrics fm(badge_font);
-    const int badge_w = fm.horizontalAdvance(index.data(FileListModel::StateTextRole).toString());
+    const QString state_label = index.data(FileListModel::StateTextRole).toString();
     const bool has_exception = index.data(FileListModel::ExceptionRole).toBool();
-    const int flag_w = has_exception ? kExceptionMarkPx + 6 : 0; // 例外标记 = 矢量图标（同上）
-    const int dot_size = 8;                                      // .chip-dot{width:8px;height:8px}
-    const int dot_right = area.right() - badge_w - flag_w - 8;
-    const QRect dot(dot_right - dot_size + 1, area.center().y() - dot_size / 2, dot_size, dot_size);
-    if (dot.left() < area.left())
+    const FileDelegate::RowRects rects =
+        row_rects(option.rect, state_pill_width(state_label), has_exception);
+    const int dot_size = 8; // .chip-dot{width:8px;height:8px}
+    const QRect dot(rects.pill.left() - FileDelegate::kPillGap - dot_size,
+                    option.rect.center().y() - dot_size / 2, dot_size, dot_size);
+    if (dot.left() < rects.thumb.right() + 1)
         return; // 空间不足（极窄列）→ 不画，避免压到文件名
     painter->save();
     painter->setRenderHint(QPainter::Antialiasing, true);
@@ -1238,7 +1415,7 @@ QSize FileGroupDelegate::sizeHint(const QStyleOptionViewItem &option,
     if (index.data(FileGroupProxyModel::GroupCountRole).isValid())
         return QSize(option.rect.width(), kGroupHeaderHeight);
     if (index.column() == FileGroupProxyModel::kCheckColumn)
-        return QSize(option.rect.width(), kRowHeight); // 与内容列同高（冻结行高 56）
+        return QSize(option.rect.width(), kFileRowHeight); // 与内容列同高（§7.5 行高 58）
     return FileDelegate::sizeHint(option, index);
 }
 

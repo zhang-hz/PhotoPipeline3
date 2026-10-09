@@ -41,6 +41,12 @@ M5-T4（W-G2 壳层）:
     caption 命中 46×32 / 栏宽 330·587 轴 / CTA 22 / 按钮 26 / 品牌图标 20 / 窗口内边距 10；
     值表驱动，行内 `checked=N bad=M` 由 C++ 侧给出）与 `UI-SMOKE status-tones:`（§8 状态四档
     QSS 规则 + 点/词同档 + 空态不得为红）。截图仍为 12 张、冻结末行不变。
+
+M5-T5（W-G2 壳层：文件行/工具行/空态/分类面板）:
+  * 追加 `UI-SMOKE filelist-geom:` 行齐备断言（C7 几何探针：行高 58 / 缩略图 46 / 勾选框 13 /
+    工具行按钮 28×26 / 信息行字阶 10 / 工具行常驻 + 无选择时移除钮隐藏 / 信息行不截断（无省略号）/
+    空态投放区 / 选中行左缘强调条像素取证；值表驱动，行内 `checked=N bad=M` 由 C++ 侧给出）。
+    截图仍为 12 张、冻结末行不变。
 """
 
 import os
@@ -80,6 +86,12 @@ T4_LINE_PREFIXES = (
                                 # 栏宽 330·587 / CTA 22 / btn 26 / 品牌图标 20 / 内边距 10
     'UI-SMOKE nav-text:',       # §6.2 段序（① 元数据→② 输出→③ 运行）+ K1 无完成态装饰/字形
     'UI-SMOKE status-tones:',   # §8 四档 QSS 规则 + 点/词同档 + 空态不得为红
+)
+
+# M5-T5 自检行（前缀匹配；缺任一 → FAIL）：文件行/工具行几何（§7.5 + C7）+ 空态 + 选中面
+T5_LINE_PREFIXES = (
+    'UI-SMOKE filelist-geom:',  # 行高 58 / 缩略图 46 / 勾选框 13 / 工具行按钮 28×26 /
+                                # 信息行字阶 10 / 工具行常驻 + 移除钮隐藏 / 不截断 / 空态 / 选中条
 )
 
 # M4-W2-T11 自检行（前缀匹配；缺任一 → FAIL）
@@ -141,6 +153,7 @@ def main():
             text=True, encoding='utf-8', errors='replace')
         found = False
         t4_seen = set()
+        t5_seen = set()
         t11_seen = set()
         t14_seen = set()
         t15_seen = set()
@@ -154,6 +167,9 @@ def main():
                 for prefix in T4_LINE_PREFIXES:
                     if line.startswith(prefix):
                         t4_seen.add(prefix)
+                for prefix in T5_LINE_PREFIXES:
+                    if line.startswith(prefix):
+                        t5_seen.add(prefix)
                 for prefix in T11_LINE_PREFIXES:
                     if line.startswith(prefix):
                         t11_seen.add(prefix)
@@ -176,6 +192,11 @@ def main():
         missing = [p for p in T4_LINE_PREFIXES if p not in t4_seen]
         if missing:
             print('ui_smoke: FAIL (missing T4 shell self-check lines: {})'.format(', '.join(missing)),
+                  file=sys.stderr)
+            return 1
+        missing = [p for p in T5_LINE_PREFIXES if p not in t5_seen]
+        if missing:
+            print('ui_smoke: FAIL (missing T5 filelist self-check lines: {})'.format(', '.join(missing)),
                   file=sys.stderr)
             return 1
         missing = [p for p in T11_LINE_PREFIXES if p not in t11_seen]

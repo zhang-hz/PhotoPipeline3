@@ -318,8 +318,11 @@ QWidget *make_card_header(QWidget *parent, const QString &title, QLabel **title_
     if (title_out != nullptr)
         *title_out = label;
     if (pill_out != nullptr) {
-        auto *pill = new ElidedLabel(row);             // 长文件名/计数都按 §9.3 省略号
-        pill->setProperty(theme::kPillProperty, true); // QSS：QLabel[ppPill="true"]（.pill）
+        auto *pill = new ElidedLabel(row); // 长文件名/计数都按 §9.3 省略号
+        // M5-T5（§2.7「徽章只表状态不表计数」+ 1-11 修：蓝色实心误导可点击）：卡头徽标 =
+        // **中性**胶囊（mockup .pill n）。色调仍由 theme.h 的 pill QSS 单源给出。
+        pill->setProperty(theme::kPillProperty,
+                          QString::fromLatin1(theme::kPillNeutral)); // QSS：QLabel[ppPill="n"]
         pill->setFont(theme::font(theme::Typography::badge_px, theme::Typography::badge_weight));
         pill->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed); // 不随行高拉伸
         pill->setVisible(false);                                         // 原型里有内容才画药丸
@@ -328,6 +331,63 @@ QWidget *make_card_header(QWidget *parent, const QString &title, QLabel **title_
     }
     layout->addStretch(1);
     return row;
+}
+
+// 空态投放区（修 1-06；§8「文件列表=投放区+显式"添加文件…"钮」）：
+//   居中矢量图标 + 引导语「将照片拖到此处，或点击 ＋ 添加」+ 显式「添加文件…」钮；
+//   框/底为 accent 档（mockup fix-5 `.list1{background:var(--acc-dim);border:1px solid
+//   var(--acc-bd)}`）。
+QWidget *build_empty_state(QWidget *parent, QFrame **drop_zone_out, QLabel **icon_out,
+                           ElidedLabel **text_out, QPushButton **add_out) {
+    auto *page = new QWidget(parent);
+    page->setObjectName(QStringLiteral("pp-empty-state"));
+    auto *layout = new QVBoxLayout(page);
+    layout->setContentsMargins(10, 0, 10, 10);
+    auto *zone = new QFrame(page);
+    zone->setObjectName(QStringLiteral("pp-drop-zone"));
+    zone->setAttribute(Qt::WA_StyledBackground, true);
+    auto *zone_layout = new QVBoxLayout(zone);
+    zone_layout->setContentsMargins(14, 14, 14, 14);
+    zone_layout->setSpacing(10); // 组内距 8–12（§4.3）
+    zone_layout->addStretch(1);
+    auto *icon = new QLabel(zone);
+    icon->setObjectName(QStringLiteral("pp-drop-icon"));
+    icon->setFixedSize(26, 26);
+    icon->setAlignment(Qt::AlignCenter);
+    icon->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    auto *text = new ElidedLabel(zone);
+    text->setObjectName(QStringLiteral("pp-drop-text"));
+    text->setFont(theme::font(theme::Typography::body_px));
+    text->setAlignment(Qt::AlignCenter);
+    text->set_full_text(T("将照片拖到此处，或点击 ＋ 添加")); // §8 逐字（＋ 是文案，不是图标）
+    auto *add = new QPushButton(T("添加文件…"), zone);
+    add->setObjectName(QStringLiteral("pp-empty-add"));
+    add->setFont(theme::font(theme::Typography::body_px, 600));
+    add->setFixedHeight(theme::Metrics::btn_h); // 裁定 A7（R4 按钮高 26）
+    add->setCursor(Qt::PointingHandCursor);
+    add->setAccessibleName(T("添加文件…"));
+    icons::apply(add, icons::Name::Add, theme::tokens(theme::preferred_theme_mode()).accent,
+                 QColor(), 12);
+    auto *btn_row = new QHBoxLayout();
+    btn_row->setContentsMargins(0, 0, 0, 0);
+    btn_row->addStretch(1);
+    btn_row->addWidget(add);
+    btn_row->addStretch(1);
+    zone_layout->addWidget(icon, 0, Qt::AlignHCenter);
+    zone_layout->addWidget(text, 0);
+    zone_layout->addLayout(btn_row);
+    zone_layout->addStretch(1);
+    layout->addWidget(zone);
+    page->setVisible(false); // 有文件时不占位（apply_empty_state 是唯一开关）
+    if (drop_zone_out != nullptr)
+        *drop_zone_out = zone;
+    if (icon_out != nullptr)
+        *icon_out = icon;
+    if (text_out != nullptr)
+        *text_out = text;
+    if (add_out != nullptr)
+        *add_out = add;
+    return page;
 }
 
 // 顶栏一体式分段导航（§6.2）：**单控件**——共享描边 + 段间 hairline + 选中段填充 acc +
@@ -706,6 +766,60 @@ QString conflict_label(pp::ConflictPolicy p) {
     return T("自动加序号");
 }
 
+// ---------------------------------------------------------------------------
+// M5-T5（§7.5 工具行 + G3）左栏筛选代理：搜索之外的两个**可见性**开关
+// （「仅显示已勾选」/「仅显示有例外的文件」）。
+//   * 与搜索**正交**（§6.2：过滤只改可见性 —— 勾选集合/计数/分组键/分类归属都不因过滤变化）；
+//   * 只读消费源模型已有 roles（Qt::CheckStateRole / ExceptionRole），不新增任何数据语义；
+//   * 基类的 filterAcceptsRow 语义（搜索串 × NameRole × 大小写不敏感）原样保留。
+// ---------------------------------------------------------------------------
+class LeftPanelFilterProxy : public QSortFilterProxyModel {
+public:
+    explicit LeftPanelFilterProxy(QObject *parent = nullptr) : QSortFilterProxyModel(parent) {}
+
+    void set_checked_only(bool on) {
+        if (checked_only_ == on)
+            return;
+        checked_only_ = on;
+        invalidateFilter();
+    }
+    void set_exceptions_only(bool on) {
+        if (exceptions_only_ == on)
+            return;
+        exceptions_only_ = on;
+        invalidateFilter();
+    }
+    bool checked_only() const { return checked_only_; }
+    bool exceptions_only() const { return exceptions_only_; }
+    bool filtering() const { return checked_only_ || exceptions_only_; }
+    void clear_filters() {
+        set_checked_only(false);
+        set_exceptions_only(false);
+    }
+
+protected:
+    bool filterAcceptsRow(int source_row, const QModelIndex &source_parent) const override {
+        if (!QSortFilterProxyModel::filterAcceptsRow(source_row, source_parent))
+            return false; // 搜索（文件名，大小写不敏感）
+        if (!checked_only_ && !exceptions_only_)
+            return true;
+        const QModelIndex idx = sourceModel() != nullptr
+                                    ? sourceModel()->index(source_row, 0, source_parent)
+                                    : QModelIndex();
+        if (!idx.isValid())
+            return false;
+        if (checked_only_ && idx.data(Qt::CheckStateRole).toInt() != int(Qt::Checked))
+            return false;
+        if (exceptions_only_ && !idx.data(FileListModel::ExceptionRole).toBool())
+            return false;
+        return true;
+    }
+
+private:
+    bool checked_only_ = false;
+    bool exceptions_only_ = false;
+};
+
 QString path_text(const std::filesystem::path &p) {
     return QFileInfo(QString::fromStdString(p.string())).fileName();
 }
@@ -757,24 +871,35 @@ struct MainWindow::Impl {
     // 分类注册表的**当前实例**（T10 只读消费：热键提示表；T11 接管 CRUD/持久化/打标与勾选语义）
     pp::ClassRegistry classes;
 
-    // ---- 左：文件面板（M1b 内容 + M4-T11 勾选/分组）----
+    // ---- 左：文件面板（M1b 内容 + M4-T11 勾选/分组 + M5-T5 工具行/空态）----
     QWidget *panel = nullptr;
     FileListModel *model = nullptr;
     Thumbnailer *thumbs = nullptr;
-    QSortFilterProxyModel *proxy = nullptr; // 搜索过滤（§6.2：与勾选正交）
-    FileGroupProxyModel *groups = nullptr;  // M4-T11：分组节层次层（QTreeView 的数据源）
-    FileTreeView *view = nullptr;           // M4-T11：QListView → QTreeView（§3.6 裁定行）
-    QComboBox *group_mode = nullptr;        // 分组：按月份 | 按相机型号 | 按源格式 | 无分组
-    QLabel *groupby_label = nullptr;        // 「分组：」（.groupby 文案，--txt3）
-    ElidedLabel *file_count = nullptr;      // 卡头计数徽标（.pill）
+    LeftPanelFilterProxy *proxy = nullptr;      // 搜索 + 筛选（§6.2：与勾选正交）
+    FileGroupProxyModel *groups = nullptr;      // M4-T11：分组节层次层（QTreeView 的数据源）
+    FileTreeView *view = nullptr;               // M4-T11：QListView → QTreeView（§3.6 裁定行）
+    FileGroupDelegate *file_delegate = nullptr; // M5-T5：行几何/字阶单源 + tokens 重放
+    QComboBox *group_mode = nullptr;            // 分组：按月份 | 按相机型号 | 按源格式 | 无分组
+    ElidedLabel *file_count = nullptr;          // 卡头计数徽标（中性 pill，§2.7/1-11）
     ElidedLabel *unsupported = nullptr;
-    ElidedLabel *file_hint = nullptr; // 卡头 hint（"拖放添加" / "运行中锁定"）
+    ElidedLabel *file_hint = nullptr; // 卡头 hint（仅运行期「运行中锁定」；教学文案已入空态 1-12）
     QLineEdit *search = nullptr;
-    QToolButton *add_btn = nullptr;      // ＋（添加文件…/添加文件夹… 菜单）
-    QToolButton *remove_sel = nullptr;   // −（移除所选）
-    QAction *add_files_action = nullptr; // ＋ 菜单项：添加文件…
-    QAction *add_dir_action = nullptr;   // ＋ 菜单项：添加文件夹…
-    QAction *clear_action = nullptr;     // ＋ 菜单项：清空列表
+    QToolButton *add_btn = nullptr;       // ＋（添加文件…/添加文件夹… 菜单）
+    QToolButton *remove_sel = nullptr;    // −（移除所选；无选择时**隐藏**，1-08）
+    QToolButton *filter_btn = nullptr;    // 筛选…（M5-T5 工具行第三钮；菜单由其父对象持有）
+    QAction *filter_checked = nullptr;    // 仅显示已勾选
+    QAction *filter_exceptions = nullptr; // 仅显示有例外的文件
+    QAction *filter_clear = nullptr;      // 清除筛选
+    QWidget *tools_row = nullptr;         // 工具行容器（常驻五件：搜索/添加/移除/筛选/分组）
+    QStackedWidget *file_stack = nullptr; // 文件区两页：0 = 列表，1 = 空态投放区（修 1-06）
+    QWidget *empty_state = nullptr;       // 空态页
+    QFrame *drop_zone = nullptr;          // 投放区（accent-bd 框 + accent-dim 底）
+    QLabel *drop_icon = nullptr;          // 投放引导图标（矢量）
+    ElidedLabel *drop_text = nullptr;     // 投放引导文案（§8 逐字）
+    QPushButton *empty_add = nullptr;     // 空态的显式「添加文件…」钮（§8）
+    QAction *add_files_action = nullptr;  // ＋ 菜单项：添加文件…
+    QAction *add_dir_action = nullptr;    // ＋ 菜单项：添加文件夹…
+    QAction *clear_action = nullptr;      // ＋ 菜单项：清空列表
     // ---- M4-T11：分类面板（§6.2）----
     ClassifyPanel *classify_panel = nullptr;
     ElidedLabel *classify_hint = nullptr; // "1–9 键打标" / "运行中只读"（G5）
@@ -887,6 +1012,12 @@ struct MainWindow::Impl {
     // M4-T11 文件列表/分类自检（§3.6 roles + §6.2 勾选/正交搜索/分组节/分类面板）
     void smoke_probe_filelist();
     void smoke_probe_classify();
+    // M5-T5（C7）文件行/工具行几何值表 + 空态投放区 + 选中面像素取证（§7.5 / 修
+    // 3-17/1-06/1-07/1-08）
+    void smoke_probe_filelist_geometry();
+    // M5-T5：列表空 ⟺ 空态投放区（修 1-06 的唯一落地；探针与运行期同一实现）
+    void apply_empty_state();
+    static bool empty_state_visible(bool model_empty, bool running);
     // M4-T12 元数据页自检（§5.2：生效值显示与写入一致性 + .mod + 多选小表 + 无选中提示 + 地图跟随）
     void smoke_probe_meta(const QString &shots_dir);
     MetaSelectionItem meta_probe_item(const QString &path); // 探针的跟随项快照（oiio probe 补摘要）
@@ -911,7 +1042,8 @@ MainWindow::Impl::Impl(MainWindow *owner, const pp::AppSettings &s)
     thumbs = new Thumbnailer(96, w);
     model->set_thumbnailer(thumbs); // U4 口径：内部已 connect(ready→apply_thumb) + 自动 enqueue
 
-    proxy = new QSortFilterProxyModel(w);
+    // M5-T5：搜索（NameRole，大小写不敏感）+ 筛选（仅勾选/仅有例外）——同一代理，两者正交
+    proxy = new LeftPanelFilterProxy(w);
     proxy->setSourceModel(model);
     proxy->setFilterRole(FileListModel::NameRole);
     proxy->setFilterCaseSensitivity(Qt::CaseInsensitive);
@@ -1171,7 +1303,7 @@ void MainWindow::build_ui() {
     pv->setContentsMargins(0, 0, 0, 6);
     pv->setSpacing(4);
 
-    // 卡头：标题 + 计数徽标（.pill）+ 右端 hint（不支持的格式数 / 拖放提示）
+    // 卡头：标题 + 计数徽标（**中性** pill，§2.7/1-11）+ 右端 hint（不支持的格式数 / 运行期锁定）
     QLabel *panel_title = nullptr;
     auto *card_head = make_card_header(d.panel, tr("文件"), &panel_title, &d.file_count);
     d.file_count->setObjectName(QStringLiteral("pp-file-count"));
@@ -1182,32 +1314,39 @@ void MainWindow::build_ui() {
     d.file_hint = new ElidedLabel(card_head);
     d.file_hint->setObjectName(QStringLiteral("pp-card-hint"));
     d.file_hint->setFont(theme::font(theme::Typography::hint_px));
-    d.file_hint->set_full_text(tr("拖放添加")); // mockup .hint；运行中 → 「运行中锁定」
+    // M5-T5（1-12）：「拖放添加」教学文案常驻标题旁的问题 → 教学文案移入空态投放区；
+    // 卡头 hint 只保留运行期锁定反馈（非运行态为空）
+    d.file_hint->set_full_text(QString());
     if (auto *head_layout = qobject_cast<QHBoxLayout *>(card_head->layout())) {
         head_layout->addWidget(d.unsupported); // addStretch 之后 = 右对齐
         head_layout->addWidget(d.file_hint);
     }
     pv->addWidget(card_head);
 
-    // fp-tools（mockup：搜索 + ＋ + −）：添加/移除入口收进两枚 mini-btn；「清空列表」在列表
-    // 右键菜单里（M1b 功能零丢失，控件集合与 mockup 一致）
-    auto *tools = new QHBoxLayout();
-    tools->setContentsMargins(10, 0, 10, 8); // .fp-tools{padding:0 10px 8px}
-    tools->setSpacing(6);                    // .fp-tools{gap:6px}
-    d.search = new QLineEdit(d.panel);
+    // fp-tools（v6 mockup `.ftools`：搜索 + ＋ + − + 筛选 + 分组下拉，**单行常驻**，修
+    // 1-07/1-09）： 全部矢量图标钮（R4 图标钮宽 28 + 裁定 A7 按钮高 26）都带 tooltip +
+    // accessibleName（§11）；
+    // 无选择时**隐藏**移除钮（1-08：不再常驻禁用）；「清空列表」仍在列表右键/＋
+    // 菜单里（功能零丢失）。
+    d.tools_row = new QWidget(d.panel);
+    d.tools_row->setObjectName(QStringLiteral("pp-tools"));
+    auto *tools = new QHBoxLayout(d.tools_row);
+    tools->setContentsMargins(theme::Metrics::card_pad_x, 0, theme::Metrics::card_pad_x, 8);
+    tools->setSpacing(6); // .ftools{gap:6px}
+    d.search = new QLineEdit(d.tools_row);
     d.search->setObjectName(QStringLiteral("pp-search"));
-    d.search->setPlaceholderText(tr("搜索文件名…"));
+    d.search->setPlaceholderText(tr("搜索文件名…")); // 1-10：省略号 = …（非三句点）
     d.search->setClearButtonEnabled(true);
     d.search->setFixedHeight(theme::Metrics::input_h);
-    auto *add_btn = new QToolButton(d.panel);
+    auto *add_btn = new QToolButton(d.tools_row);
     add_btn->setObjectName(QStringLiteral("pp-add"));
     add_btn->setToolTip(tr("添加文件 / 文件夹"));
     add_btn->setAccessibleName(tr("添加文件 / 文件夹")); // §11：图标钮必有 accessibleName
-    icons::apply(add_btn, icons::Name::Add, d.tokens.text2, QColor(), 12); // mockup 12×12 svg
+    icons::apply(add_btn, icons::Name::Add, d.tokens.text2, QColor(), 12);
     add_btn->setPopupMode(QToolButton::InstantPopup);
     // 裁定 A7（R4 表按钮高 26）：＋/− 是**按钮**，此前挂 input_h(24) 是 M4 遗留 → 换锚 btn_h。
     add_btn->setFixedHeight(theme::Metrics::btn_h);
-    add_btn->setFixedWidth(28);
+    add_btn->setFixedWidth(theme::Metrics::icon_btn); // R4 图标钮宽 28
     auto *add_menu = new QMenu(add_btn);
     QAction *act_add_files = add_menu->addAction(tr("添加文件…"));
     act_add_files->setObjectName(QStringLiteral("pp-add-files"));
@@ -1220,58 +1359,86 @@ void MainWindow::build_ui() {
     d.add_files_action = act_add_files;
     d.add_dir_action = act_add_dir;
     d.clear_action = act_clear;
-    auto *remove_btn = new QToolButton(d.panel);
+    auto *remove_btn = new QToolButton(d.tools_row);
     remove_btn->setObjectName(QStringLiteral("pp-remove-sel"));
     remove_btn->setToolTip(tr("移除所选"));
     remove_btn->setAccessibleName(tr("移除所选")); // §11
     icons::apply(remove_btn, icons::Name::Remove, d.tokens.text2, QColor(), 12);
     remove_btn->setFixedHeight(theme::Metrics::btn_h); // 裁定 A7（同 ＋）
-    remove_btn->setFixedWidth(28);
+    remove_btn->setFixedWidth(theme::Metrics::icon_btn);
     remove_btn->setEnabled(false);
-    tools->addWidget(d.search, 1);
-    tools->addWidget(add_btn);
-    tools->addWidget(remove_btn);
-    pv->addLayout(tools);
-    d.add_btn = add_btn;
-    d.remove_sel = remove_btn;
-
-    // groupby（mockup：`分组：<combo>`；§6.2 三态 + 「无分组」）
-    auto *groupby = new QHBoxLayout();
-    groupby->setContentsMargins(10, 0, 10, 8); // .groupby{padding:0 10px 8px}
-    groupby->setSpacing(6);
-    auto *group_label = new QLabel(tr("分组："), d.panel);
-    group_label->setObjectName(QStringLiteral("pp-groupby-label"));
-    group_label->setFont(theme::font(theme::Typography::small_px));
-    d.groupby_label = group_label;
-    d.group_mode = new QComboBox(d.panel);
+    remove_btn->setVisible(false); // 1-08：无选择时**隐藏**（refresh_status/sync_selection 驱动）
+    // 筛选…（修 1-07 的语义可读性：矢量漏斗 + tooltip + accessibleName）：菜单三项 = 两个
+    // **可见性**开关（仅显示已勾选 / 仅显示有例外的文件）+ 清除筛选 —— 全部只改可见性，
+    // 与搜索/勾选/分组正交（§6.2 的正交口径，语义零新增：代理只读既有 roles）。
+    auto *filter_btn = new QToolButton(d.tools_row);
+    filter_btn->setObjectName(QStringLiteral("pp-filter"));
+    filter_btn->setToolTip(tr("筛选…"));
+    filter_btn->setAccessibleName(tr("筛选…")); // §11
+    icons::apply(filter_btn, icons::Name::Filter, d.tokens.text2, QColor(), 12);
+    filter_btn->setPopupMode(QToolButton::InstantPopup);
+    filter_btn->setFixedHeight(theme::Metrics::btn_h); // 裁定 A7
+    filter_btn->setFixedWidth(theme::Metrics::icon_btn);
+    auto *filter_menu = new QMenu(filter_btn);
+    QAction *act_filter_checked = filter_menu->addAction(tr("仅显示已勾选"));
+    act_filter_checked->setCheckable(true);
+    QAction *act_filter_exceptions = filter_menu->addAction(tr("仅显示有例外的文件"));
+    act_filter_exceptions->setCheckable(true);
+    filter_menu->addSeparator();
+    QAction *act_filter_clear = filter_menu->addAction(tr("清除筛选"));
+    filter_btn->setMenu(filter_menu);
+    d.filter_btn = filter_btn;
+    d.filter_checked = act_filter_checked;
+    d.filter_exceptions = act_filter_exceptions;
+    d.filter_clear = act_filter_clear;
+    d.group_mode = new QComboBox(d.tools_row);
     d.group_mode->setObjectName(QStringLiteral("pp-group-mode"));
-    d.group_mode->setFixedHeight(26); // .combo{height:26px}
+    d.group_mode->setToolTip(tr("分组方式"));              // 1-09：工具行并入后，语义提示进 tooltip
+    d.group_mode->setAccessibleName(tr("分组方式"));       // §11
+    d.group_mode->setFixedHeight(theme::Metrics::combo_h); // R4 下拉高 24（tokens.css .dd 同值）
+    d.group_mode->setSizeAdjustPolicy(QComboBox::AdjustToContentsOnFirstShow);
     d.group_mode->addItem(tr("按月份"), int(pp::GroupMode::Month));
     d.group_mode->addItem(tr("按相机型号"), int(pp::GroupMode::Camera));
     d.group_mode->addItem(tr("按源格式"), int(pp::GroupMode::SourceFormat));
     d.group_mode->addItem(tr("无分组"), int(pp::GroupMode::None));
-    groupby->addWidget(group_label);
-    groupby->addWidget(d.group_mode, 1);
-    pv->addLayout(groupby);
+    tools->addWidget(d.search, 1);
+    tools->addWidget(add_btn);
+    tools->addWidget(remove_btn);
+    tools->addWidget(filter_btn);
+    tools->addWidget(d.group_mode);
+    pv->addWidget(d.tools_row);
+    d.add_btn = add_btn;
+    d.remove_sel = remove_btn;
 
-    // 文件列表（M4-T11：QListView → QTreeView；两列 = 勾选列 29px + 行内容列，分组节跨两列）
-    d.view = new FileTreeView(d.panel);
+    // 文件列表（M4-T11：QListView → QTreeView；两列 = 勾选列 + 行内容列，分组节跨两列）；
+    // M5-T5：列表与空态投放区同槽切页（修 1-06 —— 空态居中引导 + 显式"添加文件…"钮，
+    // 且空态不渲染滚动条）。
+    d.file_stack = new QStackedWidget(d.panel);
+    d.file_stack->setObjectName(QStringLiteral("pp-file-stack"));
+    d.view = new FileTreeView(d.file_stack);
     d.view->setObjectName(QStringLiteral("pp-file-view"));
+    d.file_delegate = new FileGroupDelegate(d.view); // M5-T5：持有以重放 tokens（A6）
     d.view->setModel(d.groups);
-    d.view->setItemDelegate(new FileGroupDelegate(d.view));
+    d.view->setItemDelegate(d.file_delegate);
     d.view->setSelectionMode(QAbstractItemView::ExtendedSelection);
     d.view->setSelectionBehavior(QAbstractItemView::SelectRows);
     d.view->setEditTriggers(QAbstractItemView::NoEditTriggers);
     d.view->setRootIsDecorated(false);   // mockup：节头无展开箭头（.ghead 平铺）
     d.view->setIndentation(0);           // 节内行与节头同左沿（mockup）
     d.view->setHeaderHidden(true);       // mockup：无表头
-    d.view->setUniformRowHeights(false); // 节头 26px / 文件行 56px
+    d.view->setUniformRowHeights(false); // 节头 26px / 文件行 58px（§7.5）
     d.view->setExpandsOnDoubleClick(true);
     d.view->setAllColumnsShowFocus(true);
     d.view->header()->setSectionResizeMode(FileGroupProxyModel::kCheckColumn, QHeaderView::Fixed);
-    d.view->header()->resizeSection(FileGroupProxyModel::kCheckColumn, 29); // 6+15+8
+    // 勾选列宽 = 单源函数（内距 6 + theme::Metrics::checkbox_px 13 + 间隙 8；A6 废除手写 6+15+8）
+    d.view->header()->resizeSection(FileGroupProxyModel::kCheckColumn,
+                                    FileGroupDelegate::check_column_width());
     d.view->header()->setSectionResizeMode(FileGroupProxyModel::kRowColumn, QHeaderView::Stretch);
-    pv->addWidget(d.view, 1);
+    d.file_stack->addWidget(d.view);
+    d.empty_state =
+        build_empty_state(d.panel, &d.drop_zone, &d.drop_icon, &d.drop_text, &d.empty_add);
+    d.file_stack->addWidget(d.empty_state);
+    pv->addWidget(d.file_stack, 1);
     left_layout->addWidget(d.panel, 1); // 文件面板 = 卡的整个内容区（尺寸基准见 §9.1）
     left_col_layout->addWidget(d.left_card, 1);
 
@@ -1285,14 +1452,17 @@ void MainWindow::build_ui() {
     QLabel *classify_title = nullptr;
     QWidget *classify_head =
         make_card_header(d.classify_card, tr("分类"), &classify_title, nullptr);
+    // M5-T5（1-14）：「1–9 键打标」不再常驻标题行 → 移入 tooltip（卡片标题 + 分类面板两处可及）
+    classify_title->setToolTip(tr("1–9 键打标"));
     d.classify_hint = new ElidedLabel(classify_head);
     d.classify_hint->setObjectName(QStringLiteral("pp-card-hint"));
     d.classify_hint->setFont(theme::font(theme::Typography::hint_px));
-    d.classify_hint->set_full_text(tr("1–9 键打标")); // mockup .hint；运行中 → 「运行中只读」
+    d.classify_hint->set_full_text(QString()); // 非运行态为空；运行中 → 「运行中只读」（G5）
     if (auto *head_layout = qobject_cast<QHBoxLayout *>(classify_head->layout()))
         head_layout->addWidget(d.classify_hint);
     classify_layout->addWidget(classify_head);
     d.classify_panel = new ClassifyPanel(d.classify_card);
+    d.classify_panel->setToolTip(tr("1–9 键打标")); // 面板内 hover 也可及（1-14 的引导层）
     classify_layout->addWidget(d.classify_panel);
     left_col_layout->addWidget(d.classify_card, 0);
 
@@ -1444,7 +1614,33 @@ void MainWindow::wire() {
             add_paths(QStringList{dir});
     });
     connect(d.clear_action, &QAction::triggered, this, [this] { impl_->model->clear(); });
+    // M5-T5：空态投放区的显式「添加文件…」钮复用同一入口（§8「显式按钮」；功能零分叉）
+    connect(d.empty_add, &QPushButton::clicked, this,
+            [this] { impl_->add_files_action->trigger(); });
     connect(d.remove_sel, &QToolButton::clicked, this, [this] { impl_->remove_selected(); });
+    // M5-T5 筛选（修 1-07 的语义可读性）：三项 = 两个可见性开关 + 清除。
+    // 过滤只改可见性（§6.2 正交口径）：勾选集合/计数/分组键都不变；分组视图随可见性重建。
+    const auto apply_filter = [this] {
+        Impl &impl_ref = *impl_;
+        impl_ref.groups->rebuild();
+        impl_ref.rebuild_group_view();
+        impl_ref.apply_empty_state();
+        refresh_status();
+    };
+    connect(d.filter_checked, &QAction::toggled, this, [this, apply_filter](bool on) {
+        impl_->proxy->set_checked_only(on);
+        apply_filter();
+    });
+    connect(d.filter_exceptions, &QAction::toggled, this, [this, apply_filter](bool on) {
+        impl_->proxy->set_exceptions_only(on);
+        apply_filter();
+    });
+    connect(d.filter_clear, &QAction::triggered, this, [this, apply_filter] {
+        impl_->proxy->clear_filters();
+        impl_->filter_checked->setChecked(false);
+        impl_->filter_exceptions->setChecked(false);
+        apply_filter();
+    });
     connect(d.search, &QLineEdit::textChanged, this, [this](const QString &text) {
         Impl &impl_ref = *impl_;
         impl_ref.proxy->setFilterFixedString(text);
@@ -1810,14 +2006,15 @@ void MainWindow::lock_for_run(bool lock) {
     // （预览本身无修改语义，读图不受运行影响）。
     if (d.preview_panel != nullptr)
         d.preview_panel->set_locked(lock);
-    // M4-T11：左栏分类面板同样运行期只读；卡头 hint 按 mockup 切换（"1–9 键打标"/"运行中只读"、
-    // "拖放添加"/"运行中锁定"）
+    // M4-T11：左栏分类面板同样运行期只读；卡头 hint 按 mockup 切换（"运行中只读"；非运行态为空
+    // —— M5-T5/1-14：快捷键提示「1–9 键打标」已移入 tooltip）
     if (d.classify_panel != nullptr)
         d.classify_panel->set_locked(lock);
     if (d.classify_hint != nullptr)
-        d.classify_hint->set_full_text(lock ? tr("运行中只读") : tr("1–9 键打标"));
+        d.classify_hint->set_full_text(lock ? tr("运行中只读") : QString());
+    // M5-T5（1-12）：教学文案已入空态；卡头 hint 只保留运行期锁定反馈
     if (d.file_hint != nullptr)
-        d.file_hint->set_full_text(lock ? tr("运行中锁定") : tr("拖放添加"));
+        d.file_hint->set_full_text(lock ? tr("运行中锁定") : QString());
     if (d.group_mode != nullptr)
         d.group_mode->setEnabled(!lock); // mockup run-dark：分组下拉置灰
     if (lock)
@@ -1930,9 +2127,14 @@ void MainWindow::refresh_status() {
         icons::apply(d.start, icons::Name::Play, d.tokens.on_accent, d.tokens.text3, 12);
     }
     d.start->setEnabled(can_start);
+    // 修 1-08：无选择时**隐藏**移除钮（非常驻禁用）；运行期由面板级 G5 锁定置灰
     const bool has_selection = d.view->selectionModel() != nullptr &&
                                !d.view->selectionModel()->selectedIndexes().isEmpty();
+    d.remove_sel->setVisible(has_selection);
     d.remove_sel->setEnabled(!d.running && has_selection);
+    // 筛选菜单：无生效筛选时「清除筛选」不可点（其余两枚自身即状态）
+    if (d.filter_clear != nullptr)
+        d.filter_clear->setEnabled(d.proxy->filtering());
 }
 
 void MainWindow::save_session() {
@@ -2096,6 +2298,10 @@ void MainWindow::Impl::apply_chrome_icons() {
         icons::apply(add_btn, icons::Name::Add, tokens.text2, tokens.text3, 12);
     if (remove_sel != nullptr)
         icons::apply(remove_sel, icons::Name::Remove, tokens.text2, tokens.text3, 12);
+    if (filter_btn != nullptr)
+        icons::apply(filter_btn, icons::Name::Filter, tokens.text2, tokens.text3, 12);
+    if (empty_add != nullptr) // 空态显式钮的 ＋（矢量；色 = accent —— 投放引导的邀请语义）
+        icons::apply(empty_add, icons::Name::Add, tokens.accent, tokens.text3, 12);
     if (start != nullptr)
         icons::apply(start, icons::Name::Play, tokens.on_accent, tokens.text3, 12);
     if (cap_min != nullptr)
@@ -2130,14 +2336,15 @@ void MainWindow::Impl::refresh_theme() {
     // M4-T13：输出页（磁贴/药丸开关/卡片 QSS/页签/浅色卡阴影）随 tokens 重放
     if (page_output != nullptr)
         page_output->set_tokens(tokens);
-    // M4-T11：左栏控件样式（mockup .mini-btn / .search / .combo / .groupby；tokens 单源）
+    // M4-T11：左栏控件样式（mockup .mini-btn / .search / .combo；tokens 单源）
     {
         const QString mini =
-            QStringLiteral("QToolButton#pp-add, QToolButton#pp-remove-sel { background:%1; "
+            QStringLiteral("QToolButton#pp-add, QToolButton#pp-remove-sel, QToolButton#pp-filter "
+                           "{ background:%1; "
                            "border:1px solid %2; border-radius:%3px; color:%4; "
                            "font-weight:600; padding:0 %5px; }"
-                           "QToolButton#pp-add:disabled, QToolButton#pp-remove-sel:disabled "
-                           "{ color:%6; }")
+                           "QToolButton#pp-add:disabled, QToolButton#pp-remove-sel:disabled, "
+                           "QToolButton#pp-filter:disabled { color:%6; }")
                 .arg(theme::css_color(tokens.control), theme::css_color(tokens.control_bd))
                 .arg(theme::Metrics::control_radius)
                 .arg(theme::css_color(tokens.text2), QString::number(theme::Metrics::pill_pad_x),
@@ -2152,18 +2359,44 @@ void MainWindow::Impl::refresh_theme() {
             add_btn->setStyleSheet(mini);
         if (remove_sel != nullptr)
             remove_sel->setStyleSheet(mini);
+        if (filter_btn != nullptr)
+            filter_btn->setStyleSheet(mini);
         if (search != nullptr)
             search->setStyleSheet(input);
         if (group_mode != nullptr)
             group_mode->setStyleSheet(input);
-        if (groupby_label != nullptr)
-            groupby_label->setStyleSheet(
-                QStringLiteral("color:%1").arg(theme::css_color(tokens.text3)));
+    }
+    // M5-T5：文件行委托的 tokens 重放（A6 —— 状态胶囊/注释/例外标记/勾选框的取色单源）
+    if (file_delegate != nullptr)
+        file_delegate->set_tokens(tokens);
+    // M5-T5：空态投放区（修 1-06）—— accent 档框 + 居中引导（§8）；图标按 dpr 光栅化
+    if (drop_zone != nullptr) {
+        drop_zone->setStyleSheet(
+            QStringLiteral("QFrame#pp-drop-zone { background:%1; "
+                           "border:1px solid %2; border-radius:%3px; }")
+                .arg(theme::css_color(tokens.accent_dim), theme::css_color(tokens.accent_bd))
+                .arg(theme::Metrics::card_radius));
+    }
+    if (drop_text != nullptr)
+        drop_text->setStyleSheet(QStringLiteral("color:%1").arg(theme::css_color(tokens.text2)));
+    if (empty_add != nullptr) {
+        empty_add->setStyleSheet(
+            QStringLiteral("QPushButton#pp-empty-add { background:%1; border:1px solid %2; "
+                           "border-radius:%3px; color:%4; padding:0 %5px; }"
+                           "QPushButton#pp-empty-add:disabled { color:%6; }")
+                .arg(theme::css_color(tokens.card), theme::css_color(tokens.accent_bd))
+                .arg(theme::Metrics::btn_radius)
+                .arg(theme::css_color(tokens.accent), QString::number(theme::Metrics::pill_pad_x),
+                     theme::css_color(tokens.text3)));
     }
     // 顶栏/底栏/文件工具行的图标随主题重放（QIcon 取色不吃 QSS → 主题切换必须显式换色）
     const qreal chrome_dpr = w != nullptr ? w->devicePixelRatioF() : 1.0;
     if (app_icon != nullptr)
         app_icon->setPixmap(app_icon_pixmap(tokens.accent, theme::Metrics::brand_icon, chrome_dpr));
+    // M5-T5：空态投放区的引导图标（矢量 → pixmap；色彩单源 tokens）
+    if (drop_icon != nullptr)
+        drop_icon->setPixmap(
+            icons::pixmap(icons::Name::Image, drop_icon->width(), tokens.accent, chrome_dpr));
     apply_chrome_icons();
     if (nav != nullptr)
         nav->set_tokens(tokens); // 一体式分段导航（自绘件持有令牌副本）
@@ -2493,7 +2726,23 @@ void MainWindow::Impl::on_content_changed() {
         // 例外编辑只在非运行期发生（编辑器/清除入口在运行中关闭）→ 运行中跳过 O(n) 重扫
         sync_exceptions();
     }
+    apply_empty_state(); // M5-T5（修 1-06）：列表空 ⟺ 空态投放区（唯一开关）
     w->refresh_status();
+}
+
+// M5-T5（修 1-06）：空态判定 = 列表为空且未在运行（运行期不可能为空 —— 开始运行需非空列表；
+// 该纯函数同时是 --ui-smoke 的真值表断言对象，与运行期落地同一实现）。
+bool MainWindow::Impl::empty_state_visible(bool model_empty, bool running) {
+    return model_empty && !running;
+}
+
+void MainWindow::Impl::apply_empty_state() {
+    if (file_stack == nullptr)
+        return;
+    const bool empty = empty_state_visible(model != nullptr && model->empty(), running);
+    const int page = empty ? 1 : 0; // 页 0 = 列表，页 1 = 空态投放区
+    if (file_stack->currentIndex() != page)
+        file_stack->setCurrentIndex(page);
 }
 
 void MainWindow::Impl::sync_selection() {
@@ -2528,6 +2777,7 @@ void MainWindow::Impl::sync_selection() {
     if (!has && !model->empty())
         items.append(meta_selection_item(model->row(0)));
     page_meta->set_selection(items, has);
+    remove_sel->setVisible(has); // 1-08：无选择即隐藏（与 refresh_status 同一口径）
     remove_sel->setEnabled(!running && has);
     // M4-T11：分类面板高亮跟随选中（§5.2 同一条跟随口径）；分组重建后据此恢复选中
     if (has && !paths.isEmpty())
@@ -4458,12 +4708,260 @@ void MainWindow::Impl::smoke_probe_filelist() {
     set_group_mode(pp::GroupMode::Month);
     if (search->text() != QString())
         search->clear();
+    if (proxy->filtering())
+        proxy->clear_filters(); // M5-T5 筛选归位（避免污染后续探针/截图）
     if (view->selectionModel() != nullptr)
         view->selectionModel()->clearSelection();
     view->setCurrentIndex(QModelIndex()); // 当前项也会触发 scrollTo（会把节头滚出视口）→ 一并清掉
     view->scrollToTop();
     preview_panel->set_current(0);
     pump(150);
+}
+
+// ---------------------------------------------------------------------------
+// M5-T5（C7）文件行/工具行几何值表 + 空态投放区 + 选中面像素取证（§7.5 / 修 3-17/1-06/1-07/1-08）
+//   口径 = "落在屏幕上的实际几何"（视图里的行矩形 / 行内几何单源函数 / 控件尺寸 / 视口像素取样），
+//   不是令牌读数 —— 令牌读数由 smoke_probe_theme 的 v6 值表承担，两者互补（改了令牌但没落到
+//   布局/绘制 = 这里红）。行内几何与绘制共用 FileDelegate::row_rects/join_items（同一实现）。
+// ---------------------------------------------------------------------------
+void MainWindow::Impl::smoke_probe_filelist_geometry() {
+    if (model->empty() || groups->group_count() == 0 || view->itemDelegate() == nullptr) {
+        smoke_fail(MainWindow::tr("文件行几何自检：列表/委托缺失"));
+        return;
+    }
+    wait_thumbs(kThumbWaitMs);
+    const QModelIndex group0 = groups->group_index(0);
+    const QModelIndex row_idx = groups->index(0, FileGroupProxyModel::kRowColumn, group0);
+    const QModelIndex check_idx = groups->index(0, FileGroupProxyModel::kCheckColumn, group0);
+    if (!row_idx.isValid() || !check_idx.isValid()) {
+        smoke_fail(MainWindow::tr("文件行几何自检：首文件行缺失"));
+        return;
+    }
+    const theme::Tokens &t = tokens;
+
+    // ---- (a) 行内几何（单源函数 = 绘制的同一实现）----
+    const QRect row_rect = view->visualRect(row_idx); // 屏幕上的实际行矩形
+    QStyleOptionViewItem opt;
+    opt.initFrom(view);
+    opt.rect = QRect(0, 0, std::max(1, view->viewport()->width()), FileDelegate::kFileRowHeight);
+    const QSize row_hint = view->itemDelegate()->sizeHint(opt, row_idx);
+    const QSize check_hint = view->itemDelegate()->sizeHint(opt, check_idx);
+    const QString state_text = row_idx.data(FileListModel::StateTextRole).toString();
+    const QFontMetrics pill_fm(
+        theme::font(theme::Typography::badge_px, theme::Typography::badge_weight));
+    const int pill_w = theme::Metrics::pill_pad_x * 2 + pill_fm.horizontalAdvance(state_text);
+    const bool has_exception = row_idx.data(FileListModel::ExceptionRole).toBool();
+    const FileDelegate::RowRects rects = FileDelegate::row_rects(row_rect, pill_w, has_exception);
+    const QRect check_box = FileGroupDelegate::check_rect(row_rect);
+    const auto px_of = [](const QFont &f) {
+        return int(std::lround(f.pointSizeF() * 96.0 / 72.0)); // pt → px（theme::px_to_pt 的逆）
+    };
+    struct Expect {
+        const char *name;
+        int got;
+        int want;
+    };
+    const Expect table[] = {
+        // §7.5 行高 58 / R4 缩略图 46 / R4 复选框 13（A6：单一来源）
+        {"row_h", row_rect.height(), FileDelegate::kFileRowHeight},
+        {"row_hint", row_hint.height(), FileDelegate::kFileRowHeight},
+        {"check_hint", check_hint.height(), FileDelegate::kFileRowHeight},
+        {"thumb", rects.thumb.width(), theme::Metrics::thumb_px},
+        {"thumb_h", rects.thumb.height(), theme::Metrics::thumb_px},
+        {"check", check_box.width(), theme::Metrics::checkbox_px},
+        {"check_col", view->columnWidth(FileGroupProxyModel::kCheckColumn),
+         FileGroupDelegate::check_column_width()},
+        // R4 胶囊 16 / 工具行按钮（宽 28 / 高 26 —— A7）
+        {"pill_h", rects.pill.height(), theme::Metrics::pill_h},
+        {"btn_w", add_btn != nullptr ? add_btn->width() : -1, theme::Metrics::icon_btn},
+        {"btn_h", add_btn != nullptr ? add_btn->height() : -1, theme::Metrics::btn_h},
+        {"remove_h", remove_sel != nullptr ? remove_sel->height() : -1, theme::Metrics::btn_h},
+        {"filter_h", filter_btn != nullptr ? filter_btn->height() : -1, theme::Metrics::btn_h},
+        {"filter_w", filter_btn != nullptr ? filter_btn->width() : -1, theme::Metrics::icon_btn},
+        {"search_h", search != nullptr ? search->height() : -1, theme::Metrics::input_h},
+        {"group_h", group_mode != nullptr ? group_mode->height() : -1, theme::Metrics::combo_h},
+        // §4.2/§7.5 字阶：文件名 12、信息行 10（裁定 A3）
+        {"name_px", px_of(FileDelegate::name_font()),
+         int(std::lround(theme::Typography::card_title_px))},
+        {"info_px", px_of(FileDelegate::info_font()), int(std::lround(theme::Typography::hint_px))},
+    };
+    const int count = int(sizeof(table) / sizeof(table[0]));
+    QStringList bad;
+    for (const Expect &e : table) {
+        if (e.got != e.want)
+            bad << QStringLiteral("%1=%2(期望 %3)")
+                       .arg(QString::fromLatin1(e.name))
+                       .arg(e.got)
+                       .arg(e.want);
+    }
+
+    // ---- (b) 工具行常驻（修 1-07/1-08）：五件可达；无选择时移除钮**隐藏**而非常驻禁用 ----
+    // 起点归位：前序探针（T11 的分组重建会按路径恢复选中）可能留下选中 → 先清空再断言"无选择"
+    if (view->selectionModel() != nullptr)
+        view->selectionModel()->clearSelection();
+    view->setCurrentIndex(QModelIndex());
+    pump(60);
+    const bool tools_visible = tools_row != nullptr && tools_row->isVisibleTo(panel) &&
+                               search->isVisibleTo(tools_row) && add_btn->isVisibleTo(tools_row) &&
+                               filter_btn->isVisibleTo(tools_row) &&
+                               group_mode->isVisibleTo(tools_row);
+    const bool remove_hidden_without_selection = !remove_sel->isVisibleTo(tools_row);
+    view->setCurrentIndex(row_idx);
+    if (view->selectionModel() != nullptr)
+        view->selectionModel()->select(row_idx, QItemSelectionModel::ClearAndSelect |
+                                                    QItemSelectionModel::Rows);
+    pump(60);
+    const bool remove_shown_with_selection =
+        remove_sel->isVisibleTo(tools_row) && remove_sel->isEnabled();
+    // 置灰必须仍是**隐藏**路径（1-08）：清掉选择 → 按钮消失（而不是变灰）
+    if (view->selectionModel() != nullptr)
+        view->selectionModel()->clearSelection();
+    view->setCurrentIndex(QModelIndex());
+    pump(60);
+    const bool remove_hidden_again = !remove_sel->isVisibleTo(tools_row);
+
+    // ---- (c) 信息行不截断（§7.5）：join_items = 绘制同一实现（放不下减行内项，禁省略号）----
+    const QFontMetrics info_fm(FileDelegate::info_font());
+    const QStringList info_items{QStringLiteral("4032×3024"), QStringLiteral("3.21 MB"),
+                                 QStringLiteral("JPEG")};
+    const QString wide = FileDelegate::join_items(info_items, info_fm, 400);
+    const QString narrow = FileDelegate::join_items(info_items, info_fm, 90);
+    const QString tiny = FileDelegate::join_items(info_items, info_fm, 10);
+    const bool no_ellipsis = !wide.contains(QChar(0x2026)) && !narrow.contains(QChar(0x2026)) &&
+                             !tiny.contains(QChar(0x2026));
+    const bool dims_first = narrow.startsWith(QStringLiteral("4032×3024"));
+    // 第三行（日期 · 机型）的装配同一实现（golden/base 夹具无 EXIF → 行内取数为空，
+    // 故此处用合成项对装配口径取证；role 侧只断言可读 + 日期形态）
+    const QString shot_line = FileDelegate::join_items(
+        {QStringLiteral("2024-05-12"), QStringLiteral("Apple iPhone 15 Pro")}, info_fm, 400);
+    const bool shot_line_ok = shot_line == QStringLiteral("2024-05-12 · Apple iPhone 15 Pro");
+    // 行内取数（第二/三行信息）：三项 role 可读（尺寸/大小/格式 + 日期 · 机型）
+    const QVariant size_var = row_idx.data(FileListModel::SizeRole);
+    const QVariant date_var = row_idx.data(FileListModel::ShotDateRole);
+    const QVariant camera_var = row_idx.data(FileListModel::CameraRole);
+    const QString size_text = size_var.toString();
+    const QString date_text = date_var.toString();
+    const QString camera_text = camera_var.toString();
+    const bool info_roles_ok = size_var.isValid() && date_var.isValid() && camera_var.isValid() &&
+                               !size_text.isEmpty() &&
+                               (date_text.isEmpty() || date_text.size() == 10);
+
+    // ---- (d) 空态投放区（修 1-06）：结构 + 真值表 + 运行态落地 ----
+    const bool empty_struct =
+        empty_state != nullptr && drop_zone != nullptr && drop_icon != nullptr &&
+        !drop_icon->pixmap().isNull() && drop_text != nullptr && empty_add != nullptr &&
+        !empty_add->text().isEmpty() && empty_add->height() == theme::Metrics::btn_h &&
+        !drop_zone->styleSheet().isEmpty();
+    const bool empty_truth = MainWindow::Impl::empty_state_visible(true, false) &&
+                             !MainWindow::Impl::empty_state_visible(false, false) &&
+                             !MainWindow::Impl::empty_state_visible(true, true);
+    const bool empty_live = file_stack != nullptr && file_stack->currentIndex() == 0 &&
+                            !empty_state->isVisible(); // 有文件 → 列表页（空态不占位）
+
+    // ---- (e) 选中面像素取证（修 3-17）：选中 = 整行 accent-dim 底 + 左缘 2px accent 条 ----
+    view->scrollToTop();
+    pump(40);
+    const QRect sel_rect = view->visualRect(row_idx);
+    const QImage before = view->viewport()->grab().toImage();
+    const QImage after = [&] {
+        view->setCurrentIndex(row_idx);
+        view->selectionModel()->select(row_idx, QItemSelectionModel::ClearAndSelect |
+                                                    QItemSelectionModel::Rows);
+        pump(60);
+        return view->viewport()->grab().toImage();
+    }();
+    const qreal shot_scale = view->viewport()->width() > 0
+                                 ? double(before.width()) / double(view->viewport()->width())
+                                 : 1.0;
+    const int sample_x = int(std::lround(0.5 * shot_scale)); // 条带 2px 之内（x=0..1）
+    const int sample_y = int(std::lround((sel_rect.top() + sel_rect.height() / 2.0) * shot_scale));
+    const QColor bar_unsel = before.pixelColor(sample_x, sample_y);
+    const QColor bar_sel = after.pixelColor(sample_x, sample_y);
+    const auto near = [](const QColor &a, const QColor &b, int tol) {
+        return std::abs(a.red() - b.red()) <= tol && std::abs(a.green() - b.green()) <= tol &&
+               std::abs(a.blue() - b.blue()) <= tol;
+    };
+    const bool bar_is_accent = near(bar_sel, t.accent, 32);
+    const bool selection_distinct = !near(bar_sel, bar_unsel, 24);
+    const bool sel_token = FileDelegate::selection_fill(t) == t.accent_dim &&
+                           FileDelegate::selection_bar(t) == t.accent &&
+                           FileDelegate::kSelectionBarW == 2;
+    // 归位（后续探针/截图不受选中面污染）
+    if (view->selectionModel() != nullptr)
+        view->selectionModel()->clearSelection();
+    view->setCurrentIndex(QModelIndex());
+    view->scrollToTop();
+    pump(60);
+
+    // ---- (f) 面板无残留（M5-T5 实测伪影回归）：分类面板可见行/chip 数 == 行数 ----
+    // deleteLater 要等事件循环回主层才析构（冒烟的 processEvents 不派发 DeferredDelete）→
+    // 重建时必须先 hide()，否则旧代会以旧几何在同槽位叠画（"双圆角框 + 双 ＋"伪影）。
+    int visible_rows = 0;
+    int visible_chips = 0;
+    for (QWidget *w : classify_card->findChildren<QWidget *>(QStringLiteral("pp-class-row"))) {
+        if (w->isVisible())
+            ++visible_rows;
+    }
+    for (QWidget *w : classify_card->findChildren<QWidget *>(QStringLiteral("pp-class-chip"))) {
+        if (w->isVisible())
+            ++visible_chips;
+    }
+    const int classify_rows = classify_panel != nullptr ? classify_panel->row_count() : -1;
+    const bool no_stale_rows = classify_panel != nullptr && visible_rows == classify_rows &&
+                               visible_chips == classify_rows;
+
+    std::printf(
+        "UI-SMOKE filelist-geom: checked=%d bad=%d row=%dx%d thumb=%d check=%d check_col=%d "
+        "pill_h=%d btn=%dx%d info_px=%d tools=%d remove-hidden=%d/%d/%d join=\"%s\"|\"%s\" "
+        "info=size:\"%s\" date:\"%s\" camera:\"%s\" empty=%d/%d/%d rows=%d/%d "
+        "bar=%s→%s sel_token=%d %s\n",
+        count, int(bad.size()), row_rect.width(), row_rect.height(), rects.thumb.width(),
+        check_box.width(), view->columnWidth(FileGroupProxyModel::kCheckColumn),
+        rects.pill.height(), add_btn != nullptr ? add_btn->width() : -1,
+        add_btn != nullptr ? add_btn->height() : -1, px_of(FileDelegate::info_font()),
+        tools_visible ? 1 : 0, remove_hidden_without_selection ? 1 : 0,
+        remove_shown_with_selection ? 1 : 0, remove_hidden_again ? 1 : 0, qUtf8Printable(wide),
+        qUtf8Printable(narrow), qUtf8Printable(size_text), qUtf8Printable(date_text),
+        qUtf8Printable(camera_text), empty_struct ? 1 : 0, empty_truth ? 1 : 0, empty_live ? 1 : 0,
+        visible_rows, classify_rows, qUtf8Printable(bar_unsel.name(QColor::HexRgb)),
+        qUtf8Printable(bar_sel.name(QColor::HexRgb)), sel_token ? 1 : 0,
+        qUtf8Printable(bad.join(QLatin1Char(' '))));
+    std::fflush(stdout);
+    if (!bad.isEmpty())
+        smoke_fail(MainWindow::tr("文件行/工具行几何（§7.5/R4/A3/A7）不符：%1")
+                       .arg(bad.join(QLatin1Char(' '))));
+    if (!tools_visible || !remove_hidden_without_selection || !remove_shown_with_selection ||
+        !remove_hidden_again) {
+        smoke_fail(MainWindow::tr("工具行常驻/移除钮隐藏不符（tools=%1 无选择隐藏=%2 有选择显示=%3 "
+                                  "复归隐藏=%4）")
+                       .arg(tools_visible ? 1 : 0)
+                       .arg(remove_hidden_without_selection ? 1 : 0)
+                       .arg(remove_shown_with_selection ? 1 : 0)
+                       .arg(remove_hidden_again ? 1 : 0));
+    }
+    if (!no_ellipsis || !dims_first || narrow != QStringLiteral("4032×3024"))
+        smoke_fail(MainWindow::tr("信息行截断口径不符（宽=\"%1\" 窄=\"%2\" 极窄=\"%3\"）")
+                       .arg(wide, narrow, tiny));
+    if (wide != QStringLiteral("4032×3024 · 3.21 MB · JPEG") || !shot_line_ok)
+        smoke_fail(MainWindow::tr("信息行装配不符：\"%1\" / \"%2\"").arg(wide, shot_line));
+    if (!info_roles_ok)
+        smoke_fail(MainWindow::tr("行内信息取数不符（大小=\"%1\" 日期=\"%2\" 机型=\"%3\"）")
+                       .arg(size_text, date_text, camera_text));
+    if (!empty_struct || !empty_truth || !empty_live)
+        smoke_fail(MainWindow::tr("空态投放区不符（结构=%1 真值=%2 落地=%3）")
+                       .arg(empty_struct ? 1 : 0)
+                       .arg(empty_truth ? 1 : 0)
+                       .arg(empty_live ? 1 : 0));
+    if (!no_stale_rows)
+        smoke_fail(MainWindow::tr("分类面板残留部件（可见行 %1 / chip %2 ≠ 行数 %3）")
+                       .arg(visible_rows)
+                       .arg(visible_chips)
+                       .arg(classify_rows));
+    if (!bar_is_accent || !selection_distinct || !sel_token)
+        smoke_fail(MainWindow::tr("选中行高亮（修 3-17）不符：像素 %1→%2（accent=%3）条带=%4")
+                       .arg(bar_unsel.name(QColor::HexRgb), bar_sel.name(QColor::HexRgb),
+                            theme::css_color(t.accent))
+                       .arg(sel_token ? 1 : 0));
 }
 
 // ---------------------------------------------------------------------------
@@ -5119,9 +5617,10 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
     smoke_probe_shell_geometry(); // M5-T4（C7）：壳层几何值表 + 状态四档（§3/§6.2/R4/§8）
     smoke_probe_frameless();
     smoke_probe_theme();
-    smoke_probe_preview();       // M4-T10：预览面板（翻图/缩放/徽标/热键接线位）
-    smoke_probe_filelist();      // M4-T11：勾选/正交搜索/分组节（§3.6 roles + §6.2）
-    smoke_probe_meta(shots_dir); // M4-T12：生效值显示/写入一致性 + 多选小表 + 地图跟随（§5.2）
+    smoke_probe_preview();           // M4-T10：预览面板（翻图/缩放/徽标/热键接线位）
+    smoke_probe_filelist();          // M4-T11：勾选/正交搜索/分组节（§3.6 roles + §6.2）
+    smoke_probe_filelist_geometry(); // M5-T5（C7）：行/工具行几何 + 空态 + 选中面（§7.5/修 3-17）
+    smoke_probe_meta(shots_dir);     // M4-T12：生效值显示/写入一致性 + 多选小表 + 地图跟随（§5.2）
 
     // ---- 页 1（元数据）：等缩略图队列空 → 01-meta.png ----
     w->set_current_page(1);

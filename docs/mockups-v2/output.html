@@ -1,0 +1,170 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>PhotoPipeline · 输出</title><link rel="stylesheet" href="tokens.css"></head>
+<body>
+<script>if(new URLSearchParams(location.search).get("theme")==="dark")document.body.className="dark";</script>
+<div class="toolbar">
+  <div class="brand">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--acc)" stroke-width="1.6"><rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="9" cy="10" r="1.5" fill="var(--acc)" stroke="none"/><path d="M5 17l4.5-4.5 3 3L16 12l3 3"/></svg>
+    <span class="nm">PhotoPipeline</span><span class="ver">0.3.0</span>
+  </div>
+  <div class="nav-strip">
+    <button><span class="n">1</span>元数据</button>
+    <button class="on"><span class="n">2</span>输出</button>
+    <button><span class="n">3</span>运行</button>
+  </div>
+  <div class="tb-tools" style="margin-left:auto">
+    <button class="icon-btn" title="收藏当前设置"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.2 1 5.8L12 17l-5.2 2.7 1-5.8L3.5 9.7l5.9-.9z"/></svg></button>
+    <button class="icon-btn" title="设置"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.4M12 18.6V21M3 12h2.4M18.6 12H21M5.9 5.9l1.7 1.7M16.4 16.4l1.7 1.7M18.1 5.9l-1.7 1.7M7.6 16.4l-1.7 1.7"/></svg></button>
+    <button class="cap" title="最小化"><svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" stroke-width="1"><path d="M1 5h8"/></svg></button>
+    <button class="cap" title="最大化"><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><rect x="1.5" y="1.5" width="7" height="7"/></svg></button>
+    <button class="cap close" title="关闭"><svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" stroke-width="1"><path d="M1.5 1.5l7 7M8.5 1.5l-7 7"/></svg></button>
+  </div>
+</div>
+
+<div class="main">
+  <div class="col-l">
+    <div class="card" style="flex:1 1 auto">
+      <div class="card-h"><span class="t">文件</span><span class="pill n">24</span><span class="hint">拖放文件或文件夹到此</span></div>
+      <div class="ftools">
+        <div class="tbx ph"><svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="5" cy="5" r="3.2"/><path d="M7.5 7.5L10 10"/></svg>搜索文件名…</div>
+        <button class="icon-btn bordered" style="width:24px;height:24px" title="添加文件"><svg width="11" height="11" viewBox="0 0 12 12" stroke="currentColor" stroke-width="1.3"><path d="M6 2v8M2 6h8"/></svg></button>
+        <button class="icon-btn bordered" style="width:24px;height:24px" title="移除选中"><svg width="11" height="11" viewBox="0 0 12 12" stroke="currentColor" stroke-width="1.3"><path d="M2 6h8"/></svg></button>
+        <button class="icon-btn bordered" style="width:24px;height:24px" title="筛选…"><svg width="11" height="11" viewBox="0 0 12 12" stroke="currentColor" stroke-width="1.3"><path d="M2 3h8M3.5 6h5M5 9h2"/></svg></button>
+        <div class="dd">按月份<span class="car">▾</span></div>
+      </div>
+      <div style="overflow:hidden">
+        <div class="fitem sel"><span class="cbx on"><svg width="8" height="8" viewBox="0 0 10 10" stroke="#fff" stroke-width="1.7" fill="none"><path d="M2 5l2.2 2.2L8 3"/></svg></span><div class="thumb" style="background:linear-gradient(150deg,#5d5468,#c8763f)"></div>
+          <div class="info"><div class="nm">IMG_2731.jpg</div><div class="meta">4032×3024 · 3.21 MB · JPEG</div><div class="meta">2024-05-12 · Apple iPhone 15 Pro</div></div>
+          <div class="st"><span class="pill ok">✓ 完成</span></div></div>
+        <div class="fitem"><span class="cbx on"><svg width="8" height="8" viewBox="0 0 10 10" stroke="#fff" stroke-width="1.7" fill="none"><path d="M2 5l2.2 2.2L8 3"/></svg></span><div class="thumb" style="background:linear-gradient(150deg,#3a4256,#e8b06a)"></div>
+          <div class="info"><div class="nm">IMG_2732.jpg</div><div class="meta">4032×3024 · 2.87 MB · JPEG</div><div class="meta">2024-05-12 · Apple iPhone 15 Pro</div></div>
+          <div class="st"><span class="pill ok">✓ 完成</span></div></div>
+        <div class="fitem"><span class="cbx on"><svg width="8" height="8" viewBox="0 0 10 10" stroke="#fff" stroke-width="1.7" fill="none"><path d="M2 5l2.2 2.2L8 3"/></svg></span><div class="thumb" style="background:linear-gradient(150deg,#2c3e50,#95a5a6)"></div>
+          <div class="info"><div class="nm">DSC_0412.ARW.tif</div><div class="meta">7008×4672 · 64.2 MB · TIFF</div><div class="meta">2024-05-11 · Sony A7 IV</div></div>
+          <div class="st"><span class="pill warn">! 待定</span></div></div>
+        <div class="fitem"><span class="cbx"></span><div class="thumb" style="background:linear-gradient(150deg,#34495e,#8e9eab)"></div>
+          <div class="info"><div class="nm">scan_007.png</div><div class="meta">2480×3508 · 8.40 MB · PNG</div><div class="meta">2024-04-28 · 平板扫描 · 300 dpi</div></div>
+          <div class="st"><span class="pill n">例外</span></div></div>
+        <div class="fitem"><span class="cbx on"><svg width="8" height="8" viewBox="0 0 10 10" stroke="#fff" stroke-width="1.7" fill="none"><path d="M2 5l2.2 2.2L8 3"/></svg></span><div class="thumb" style="background:linear-gradient(150deg,#4a3b52,#c06c84)"></div>
+          <div class="info"><div class="nm">P1010888.RW2.jpg</div><div class="meta">6000×4000 · 5.12 MB · JPEG</div><div class="meta">2024-04-21 · Panasonic GX9</div></div>
+          <div class="st"><span class="pill ok">✓ 完成</span></div></div>
+        <div class="fitem"><span class="cbx on"><svg width="8" height="8" viewBox="0 0 10 10" stroke="#fff" stroke-width="1.7" fill="none"><path d="M2 5l2.2 2.2L8 3"/></svg></span><div class="thumb" style="background:linear-gradient(150deg,#232526,#414345)"></div>
+          <div class="info"><div class="nm">A7R5_0121.arw</div><div class="meta">9504×6336 · 87.6 MB · ARW</div><div class="meta">2024-04-19 · Sony A7R V</div></div>
+          <div class="st"><span class="pill ok">✓ 完成</span></div></div>
+        <div class="fitem"><span class="cbx"></span><div class="thumb" style="background:linear-gradient(150deg,#5c2e2e,#b85c5c)"></div>
+          <div class="info"><div class="nm">IMG_9988.heic</div><div class="meta">4032×3024 · 1.92 MB · HEIC</div><div class="meta">2024-04-15 · Apple iPhone 14</div></div>
+          <div class="st"><span class="pill err">✕ 失败</span></div></div>
+        <div class="fitem"><span class="cbx on"><svg width="8" height="8" viewBox="0 0 10 10" stroke="#fff" stroke-width="1.7" fill="none"><path d="M2 5l2.2 2.2L8 3"/></svg></span><div class="thumb" style="background:linear-gradient(150deg,#3e5151,#9ba6a3)"></div>
+          <div class="info"><div class="nm">DSC00344.NEF</div><div class="meta">6048×4024 · 28.4 MB · NEF</div><div class="meta">2024-04-12 · Nikon Z6 II</div></div>
+          <div class="st"><span class="pill ok">✓ 完成</span></div></div>
+        <div class="fitem"><span class="cbx on"><svg width="8" height="8" viewBox="0 0 10 10" stroke="#fff" stroke-width="1.7" fill="none"><path d="M2 5l2.2 2.2L8 3"/></svg></span><div class="thumb" style="background:linear-gradient(150deg,#1e3c72,#2a5298)"></div>
+          <div class="info"><div class="nm">DSC00350.NEF</div><div class="meta">6048×4024 · 27.9 MB · NEF</div><div class="meta">2024-04-03 · Nikon Z6 II</div></div>
+          <div class="st"><span class="pill ok">✓ 完成</span></div></div>
+        <div class="fitem"><span class="cbx"></span><div class="thumb" style="background:linear-gradient(150deg,#360033,#0b8793)"></div>
+          <div class="info"><div class="nm">photo_2024_04_01.tif</div><div class="meta">8688×5792 · 142 MB · TIFF</div><div class="meta">2024-04-01 · 修图输出 · 16 bit</div></div>
+          <div class="st"><span class="pill warn">! 待定</span></div></div>
+      </div>
+    </div>
+    <div class="card" style="flex:0 0 132px">
+      <div class="card-h"><span class="t">分类</span><span class="hint">1–9 键打标</span></div>
+      <div class="card-b" style="padding:8px 12px 10px">
+        <div class="kv-grid" style="grid-template-columns:1fr auto 1fr auto;gap:6px 12px">
+          <span class="kv-v"><span class="dot" style="background:var(--txt3);margin-right:6px"></span>全部</span><span class="kv-v" style="text-align:right">24</span>
+          <span class="kv-v"><span class="dot" style="background:var(--ok);margin-right:6px"></span>精选</span><span class="kv-v" style="text-align:right">6</span>
+          <span class="kv-v"><span class="dot" style="background:var(--warn);margin-right:6px"></span>待定</span><span class="kv-v" style="text-align:right">9</span>
+          <span class="kv-v"><span class="dot" style="background:var(--err);margin-right:6px"></span>废片</span><span class="kv-v" style="text-align:right">3</span>
+          <span class="kv-v"><span class="dot" style="background:var(--acc);margin-right:6px"></span>扫描件</span><span class="kv-v" style="text-align:right">6</span>
+          <button class="btn lnk" style="text-align:left">＋ 新建分类…</button><span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-m">
+    <div class="card" style="flex:1">
+      <div class="card-h"><span class="t">输入预览</span><span class="pill n">IMG_2731.jpg</span><span class="hint">4032×3024 · 8 bit · Display P3 · 原图未修改</span></div>
+      <div class="card-b" style="flex:1;display:flex;padding:8px">
+        <div class="canvas" style="width:100%">
+          <div class="art"><div style="width:330px;height:220px;background:linear-gradient(160deg,#3a4256 0%,#5d5468 38%,#c8763f 72%,#e8b06a 100%)"></div></div>
+          <div class="hint">拖动平移 · 滚轮缩放 · 双击适应</div>
+          <div class="zoombar"><button>−</button><span class="z">100%</span><button>＋</button><div class="sep"></div><button style="width:auto;padding:0 6px">适应</button><button style="width:auto;padding:0 6px">1:1</button></div>
+        </div>
+      </div>
+      <div class="pv-bar" style="border-top:1px solid rgba(0,0,0,.05)">
+        <button class="icon-btn" style="width:22px;height:22px"><svg width="11" height="11" viewBox="0 0 12 12" stroke="currentColor" stroke-width="1.4" fill="none"><path d="M7.5 2L4 6l3.5 4"/></svg></button>
+        <button class="icon-btn" style="width:22px;height:22px"><svg width="11" height="11" viewBox="0 0 12 12" stroke="currentColor" stroke-width="1.4" fill="none"><path d="M4.5 2L8 6l-3.5 4"/></svg></button>
+        <span class="sub-hint" style="margin-left:2px">1 / 10</span>
+        <div style="margin-left:auto;display:flex;gap:6px">
+          <span class="tagchip on"><span class="k">1</span>精选</span><span class="tagchip"><span class="k">2</span>待定</span><span class="tagchip"><span class="k">3</span>废片</span><span class="tagchip" style="color:var(--txt3)">0 清除</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-r">
+    <div class="card">
+      <div class="card-h"><span class="t">输出格式</span><span class="pill acc">已选 2</span><span class="hint">可多选 · 对勾位固定</span></div>
+      <div class="card-b" style="padding-top:6px">
+        <div class="frow"><label>转换模式</label><div class="fd"><div class="seg"><button class="on">转码</button><button>仅元数据</button></div><span class="sub-hint">转码=生成新文件 · 仅元数据=原地写入</span></div></div>
+      </div>
+      <div class="card-b" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding-top:0">
+        <div style="height:30px;border:1px solid var(--ctl-bd);border-radius:3px;display:flex;align-items:center;gap:6px;padding:0 9px;color:var(--txt2)"><span class="cbx"></span><b>JPEG</b><span class="sub-hint">.jpg</span></div>
+        <div style="height:30px;border:1px solid var(--ctl-bd);border-radius:3px;display:flex;align-items:center;gap:6px;padding:0 9px;color:var(--txt2)"><span class="cbx"></span><b>WebP</b><span class="sub-hint">.webp</span></div>
+        <div style="height:30px;border:1px solid var(--acc-bd);background:var(--acc-dim);border-radius:3px;display:flex;align-items:center;gap:6px;padding:0 9px"><span class="cbx on"><svg width="8" height="8" viewBox="0 0 10 10" stroke="#fff" stroke-width="1.7" fill="none"><path d="M2 5l2.2 2.2L8 3"/></svg></span><b>JPEG XL</b><span class="sub-hint" style="color:var(--acc)">.jxl</span></div>
+        <div style="height:30px;border:1px solid var(--ctl-bd);border-radius:3px;display:flex;align-items:center;gap:6px;padding:0 9px;color:var(--txt2)"><span class="cbx"></span><b>HEIF</b><span class="sub-hint">.heic</span></div>
+        <div style="height:30px;border:1px solid var(--ctl-bd);border-radius:3px;display:flex;align-items:center;gap:6px;padding:0 9px;color:var(--txt2)"><span class="cbx"></span><b>AVIF</b><span class="sub-hint">.avif</span></div>
+        <div style="height:30px;border:1px solid var(--acc-bd);background:var(--acc-dim);border-radius:3px;display:flex;align-items:center;gap:6px;padding:0 9px"><span class="cbx on"><svg width="8" height="8" viewBox="0 0 10 10" stroke="#fff" stroke-width="1.7" fill="none"><path d="M2 5l2.2 2.2L8 3"/></svg></span><b>PNG</b><span class="sub-hint" style="color:var(--acc)">.png</span></div>
+        <div style="height:30px;border:1px solid var(--ctl-bd);border-radius:3px;display:flex;align-items:center;gap:6px;padding:0 9px;color:var(--txt2)"><span class="cbx"></span><b>TIFF</b><span class="sub-hint">.tiff</span></div>
+        <div style="height:30px;border:1px solid var(--ctl-bd);border-radius:3px;display:flex;align-items:center;gap:6px;padding:0 9px;color:var(--txt2)"><span class="cbx"></span><b>BMP</b><span class="sub-hint">.bmp</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-h"><span class="t">全局</span></div>
+      <div class="card-b" style="padding-top:6px">
+        <div class="frow"><label>根目录</label><div class="fd"><div class="tbx" style="flex:1;min-width:0">D:\Photos\export</div><button class="btn">浏览…</button></div></div>
+        <div class="frow"><label>同名冲突</label><div class="fd"><div class="dd">自动加序号<span class="car">▾</span></div></div></div>
+        <div class="frow"><label>色彩目标</label><div class="fd"><div class="dd">保持原样<span class="car">▾</span></div></div></div>
+        <div class="frow"><label>分文件夹</label><div class="fd"><button class="sw on"></button><span class="kv-v">按文件格式分文件夹</span></div></div>
+        <div class="frow"><label>路径模板</label><div class="fd"><div class="tbx" style="flex:1;min-width:0">$format/$dir/$file</div><button class="btn">变量表</button></div></div>
+        <div class="frow"><label>输出示例</label><div class="fd"><span class="sub-hint">…\jxl\2024-05\IMG_2731.jxl ＋ …\png\2024-05\IMG_2731.png</span></div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-h"><span class="t">格式参数</span><span class="hint">页签内含位深与编码参数</span></div>
+      <div class="card-b" style="padding-top:6px">
+        <div style="display:flex;gap:2px;border-bottom:1px solid var(--card-bd);margin-bottom:8px">
+          <div class="dlg-tab on" style="height:28px;font-size:11px">JPEG XL <span class="pill acc" style="margin-left:5px">16 bit</span></div>
+          <div class="dlg-tab" style="height:28px;font-size:11px">PNG <span class="pill n" style="margin-left:5px">8 bit</span></div>
+          <button class="btn lnk" style="margin-left:auto;align-self:center">＋ 添加格式…</button>
+        </div>
+        <div class="frow"><label>位深</label><div class="fd"><div class="dd">16 位<span class="car">▾</span></div></div></div>
+        <div class="frow"><label>技术</label><div class="fd"><div class="dd">VarDCT<span class="car">▾</span></div></div></div>
+        <div class="frow"><label>无损</label><div class="fd"><span class="cbx on"><svg width="8" height="8" viewBox="0 0 10 10" stroke="#fff" stroke-width="1.7" fill="none"><path d="M2 5l2.2 2.2L8 3"/></svg></span><span class="kv-v">无损编码（忽略视觉距离）</span></div></div>
+        <div class="frow"><label>编码努力</label><div class="fd"><div class="spin"><span class="v">7</span><span class="ar"><button>▲</button><button>▼</button></span></div><span class="unit" style="width:40px">1–10</span></div></div>
+        <div class="frow"><label>视觉距离</label><div class="fd"><div class="spin"><span class="v">1.000</span><span class="ar"><button>▲</button><button>▼</button></span></div><span class="unit" style="width:56px">0.0–10.0</span></div></div>
+        <div class="frow"><label>高级参数</label><div class="fd"><span class="cbx on"><svg width="8" height="8" viewBox="0 0 10 10" stroke="#fff" stroke-width="1.7" fill="none"><path d="M2 5l2.2 2.2L8 3"/></svg></span><span class="kv-v">渐进 / 噪声 / 解码预算 13 项</span><button class="btn lnk" style="margin-left:auto">展开 ▾</button></div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-h"><span class="t">预设与预估</span><span class="hint">基于选中 12 项</span></div>
+      <div class="card-b" style="padding-top:6px;padding-bottom:8px">
+        <div class="frow"><label>当前预设</label><div class="fd"><div class="dd ph" style="flex:1;min-width:0;color:var(--txt3)">未选择预设<span class="car">▾</span></div>
+          <button class="btn">另存…</button><button class="btn">保存</button><button class="btn">删除</button></div></div>
+        <div class="kv-grid" style="margin-top:4px">
+          <span class="kv-k">预计输出</span><span class="kv-v">24 个（12 × 2 格式）</span><span class="kv-k">预计体积</span><span class="kv-v">≈ 286 MB</span>
+          <span class="kv-k">预计耗时</span><span class="kv-v">≈ 12 s（8 并行）</span><span class="kv-k">剩余磁盘</span><span class="kv-v">1.2 TB · 充足</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="statusbar">
+  <span class="dot" style="background:var(--ok)"></span><span class="st-ok">已选 12 / 24 · 就绪</span>
+  <span class="st-sep">｜</span><span style="color:var(--txt2)">输出：JPEG XL + PNG · 预计 48 个输出 ≈ 286 MB</span>
+  <span class="st-sep">｜</span><span style="color:var(--txt3)">剩余磁盘 1.2 TB</span>
+  <button class="btn-go">▶ 开始运行</button>
+</div>
+</body></html>

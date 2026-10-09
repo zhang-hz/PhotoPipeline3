@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>PhotoPipeline 0.3.0 · GUI 问题决策台</title>
+<style>
+:root{--card:#fff;--bd:rgba(0,0,0,.08);--txt:#1b1c20;--txt2:#5d5f68;--txt3:#8b8d96;--acc:#0067c0;--acc-dim:rgba(0,103,192,.10);--acc-bd:rgba(0,103,192,.35);--ok:#1d7a3e;--ok-dim:rgba(29,122,62,.10);--warn:#9a6a00;--err:#c42b3a;--ctl:#eef0f4;--ctl-bd:rgba(0,0,0,.12)}
+*{box-sizing:border-box}
+body{margin:0;font:13px/1.55 "Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI",sans-serif;color:var(--txt);background:linear-gradient(150deg,#e9ecf2,#e3e5ea 45%,#e7efe9)}
+header{position:sticky;top:0;z-index:50;background:rgba(233,236,242,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--bd);padding:12px 22px 10px}
+h1{margin:0 0 8px;font-size:17px}
+h1 small{font-size:11px;color:var(--txt3);font-weight:400;margin-left:10px}
+.stats{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:9px}
+.st{border:1px solid var(--bd);background:#fff;border-radius:99px;padding:3px 12px;font-size:11.5px;font-weight:600;color:var(--txt2)}
+.st b{font-size:13px;color:var(--txt)}
+.st.p0 b{color:var(--err)}.st.p1 b{color:#c2571b}.st.p2 b{color:var(--warn)}.st.p3 b{color:var(--txt3)}
+.st.done b{color:var(--ok)}
+.filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+select,input[type=text],button{font:inherit;height:30px;border:1px solid var(--ctl-bd);border-radius:6px;background:#fff;color:var(--txt);padding:0 10px}
+button{cursor:pointer;font-weight:600}
+button:hover{border-color:var(--acc-bd);background:var(--acc-dim)}
+button.primary{background:var(--acc);border-color:var(--acc);color:#fff}
+button.primary:hover{background:#0057a3}
+main{padding:16px 22px 60px;max-width:1280px;margin:0 auto}
+section{margin-bottom:22px}
+h2{font-size:14px;margin:0 0 10px;display:flex;align-items:center;gap:10px}
+h2 .cnt{font-size:11px;color:var(--txt3);font-weight:400}
+.keygrid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.keycard{background:var(--card);border:1px solid var(--bd);border-radius:8px;box-shadow:0 1px 4px rgba(16,24,40,.06);overflow:hidden}
+.keycard .kh{padding:10px 14px 8px;display:flex;align-items:center;gap:9px;border-bottom:1px solid var(--bd)}
+.keycard .kh .t{font-weight:700;font-size:12.5px}
+.keycard img{width:100%;display:block;border-bottom:1px solid var(--bd);cursor:zoom-in;background:#f6f7fa}
+.keycard .kf{padding:10px 14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.catblock{background:var(--card);border:1px solid var(--bd);border-radius:8px;box-shadow:0 1px 4px rgba(16,24,40,.06);margin-bottom:12px;overflow:hidden}
+.catblock>summary{cursor:pointer;padding:10px 14px;font-weight:700;font-size:13px;display:flex;gap:10px;align-items:center;list-style:none}
+.catblock>summary::-webkit-details-marker{display:none}
+.catblock>summary .cnt{font-size:11px;color:var(--txt3);font-weight:400}
+table{width:100%;border-collapse:collapse}
+th{font-size:10.5px;color:var(--txt3);text-align:left;font-weight:600;padding:6px 10px;border-bottom:1px solid var(--bd);background:#f6f7fa;position:sticky;top:104px}
+td{padding:7px 10px;border-bottom:1px solid rgba(0,0,0,.05);vertical-align:top}
+tr:last-child td{border-bottom:0}
+tr:hover{background:#f6f8fb}
+tr.decided{background:rgba(29,122,62,.045)}
+.id{font-family:Consolas,monospace;font-size:11px;color:var(--txt2);white-space:nowrap}
+.badge{display:inline-block;font-size:9.5px;font-weight:700;border-radius:99px;padding:1px 7px;margin-right:4px;white-space:nowrap}
+.P0{background:rgba(196,43,58,.10);color:var(--err);border:1px solid rgba(196,43,58,.35)}
+.P1{background:rgba(194,87,27,.10);color:#c2571b;border:1px solid rgba(194,87,27,.35)}
+.P2{background:rgba(154,106,0,.10);color:var(--warn);border:1px solid rgba(154,106,0,.35)}
+.P3{background:rgba(0,0,0,.05);color:var(--txt3);border:1px solid rgba(0,0,0,.12)}
+.D1{background:var(--ok-dim);color:var(--ok);border:1px solid rgba(29,122,62,.35)}
+.D2{background:rgba(0,0,0,.05);color:var(--txt2);border:1px solid rgba(0,0,0,.12)}
+.D3{background:rgba(154,106,0,.10);color:var(--warn);border:1px solid rgba(154,106,0,.35)}
+.prob{font-weight:600}
+.fix{color:var(--txt2);font-size:11.5px;margin-top:2px}
+.fix::before{content:"→ ";color:var(--ok)}
+.dec{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.dec select{height:27px;font-size:11.5px;padding:0 6px;max-width:150px}
+.dec input[type=text]{height:27px;font-size:11.5px;width:150px}
+.legend{font-size:11px;color:var(--txt2);line-height:1.8;margin:6px 0 14px}
+.legend code{background:var(--ctl);border-radius:4px;padding:1px 6px;font-size:10.5px}
+#toast{position:fixed;right:18px;bottom:18px;background:#1b1c20;color:#fff;padding:9px 16px;border-radius:8px;font-size:12px;opacity:0;transition:opacity .25s;pointer-events:none;z-index:99}
+#lightbox{position:fixed;inset:0;background:rgba(10,14,20,.82);display:none;align-items:center;justify-content:center;z-index:98;cursor:zoom-out}
+#lightbox img{max-width:94vw;max-height:92vh;border-radius:8px}
+@media (max-width:980px){.keygrid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <h1>PhotoPipeline 0.3.0 · GUI 问题决策台 <small>亮色主题实测（dark 待补）· 逐条裁定：①是否要求改 ②修改建议是否满足 · 决策自动保存在本机浏览器</small></h1>
+  <div class="stats" id="stats"></div>
+  <div class="filters">
+    <select id="f-p"><option value="">全部级别</option><option value="0">P0 严重</option><option value="1">P1 高</option><option value="2">P2 中</option><option value="3">P3 低</option></select>
+    <select id="f-c"><option value="">全部类别</option></select>
+    <select id="f-d"><option value="">全部定稿对照</option><option value="1">D1 回归定稿即可修</option><option value="2">D2 定稿未覆盖</option><option value="3">D3 定稿亦需改</option></select>
+    <select id="f-dec"><option value="">全部决策状态</option><option value="open">未决</option><option value="done">已决</option><option value="req">要求改</option><option value="no">不要求改</option></select>
+    <input type="text" id="f-q" placeholder="搜索编号/标题/建议…">
+    <button id="btn-next">下一条未决 →</button>
+    <button id="btn-exp-json">导出决策 JSON</button>
+    <button id="btn-exp-md">导出报告 Markdown</button>
+    <button id="btn-reset" style="color:#c42b3a">重置全部决策</button>
+  </div>
+</header>
+<main>
+  <section>
+    <h2>关键问题 · 修复示意（6 张，先过这 6 条）<span class="cnt">点击图片放大 · 每张卡双轴裁定</span></h2>
+    <div class="keygrid" id="keygrid"></div>
+  </section>
+  <section>
+    <h2>全量问题清单（159 条）<span class="cnt">按类别分组 · 级别 P0–P3 · 定稿对照 D1–D3</span></h2>
+    <div class="legend">
+      <code>P0</code> 错误信号/自相矛盾（发布前必修） <code>P1</code> 可用性障碍/硬约束违反/系统性硬伤
+      <code>P2</code> 不一致/不精致 <code>P3</code> 打磨 ·
+      <code>D1</code> 实现偏离定稿（对齐 docs/mockups 或 v0.3.0-design.md 即修复）
+      <code>D2</code> 定稿未覆盖（本报告给出新设计） <code>D3</code> 定稿本身也需修改
+    </div>
+    <div id="lists"></div>
+  </section>
+</main>
+<div id="toast"></div>
+<div id="lightbox" onclick="this.style.display='none'"><img alt=""></div>
+<script>
+const CATS = ["数据与状态真实性","控件与交互语义","设计系统（色/字/距/圆角/图标）","窗口 chrome 与框架","布局与信息架构","空状态与反馈","文案与术语","主题与主题化（dark 预留）"];
+const DL = {1:"D1 回归定稿即可修",2:"D2 定稿未覆盖·需新设计",3:"D3 定稿亦需改"};
+// [id, P, C, D, 标题, 修改方向]
+const DATA = [
+["1-01",1,4,1,"窗口控制钮为描边小方块","caption 按平台惯例（46×32）"],
+["1-02",2,4,2,"☆ 按钮语义不明无 tooltip","明确命名并补 tooltip"],
+["1-03",3,4,3,"版本号 pill 常驻标题栏","移入关于/悬停显示"],
+["1-04",2,4,3,"步骤条三层装饰过重","简化为统一步骤控件"],
+["1-05",2,4,2,"顶栏与内容区无分界","分隔线/材质/激活态"],
+["1-06",1,6,2,"文件面板空态空白无引导","居中投放区+添加按钮"],
+["1-07",1,2,2,"＋/− 22px 图标语义不可读","显式按钮/图标+tooltip，命中区≥28px"],
+["1-08",2,2,2,"− 常驻禁用像坏了","无选择时隐藏"],
+["1-09",2,5,1,"分组行与右栏表单栅格不一致","统一 70px 标签轴"],
+["1-10",3,7,2,"占位符三点句号","统一省略号 …"],
+["1-11",2,3,1,"计数徽标用蓝色实心","改中性灰胶囊"],
+["1-12",3,7,2,"“拖放添加”常驻标题旁","移入空态/首次引导"],
+["1-13",1,5,2,"分类与快速打标双入口重复","合并单一打标入口"],
+["1-14",3,7,2,"快捷键提示常驻面板标题","移入 tooltip"],
+["1-15",3,3,2,"新建分类按钮风格不统一","统一按钮规格"],
+["1-16",1,6,2,"预览空态纯黑无引导","深灰舞台+图标+引导文案"],
+["1-17",2,1,2,"角标在无文件时显示无效信息","有图才显示角标"],
+["1-18",2,7,2,"“未修改像素”术语化","改人话：原图·未应用修改"],
+["1-19",1,2,1,"适应/1:1 用 checkbox 语义误用","合并缩放控件/分段"],
+["1-20",1,2,2,"快速打标 chip 碎片化+清除混排","简化 chip，清除分隔降级"],
+["1-21",2,2,2,"◀▶ 22px 难点击","命中区 ≥28px"],
+["1-22",2,1,2,"空态禁用逻辑不一致","统一空态禁用"],
+["1-23",1,6,2,"关键信息空态亮 8 标签空值","收敛为“未选择文件”"],
+["1-24",2,3,2,"徽章风格混用","统一徽章体系"],
+["1-25",2,3,2,"面板右置信息风格混乱","统一面板副标题规格"],
+["1-26",3,5,2,"标签-值行距松散","收紧行高固定标签列"],
+["1-27",1,2,1,"Δ偏移/时区语义 checkbox 胶囊","改分段控件"],
+["1-28",2,7,2,"Δ 符号不友好","改“时间偏移”"],
+["1-29",1,2,1,"6× Win32 spinbox 横排","紧凑步进器/日期控件"],
+["1-30",2,7,2,"长括号注释文案","精简，细节进 tooltip"],
+["1-31",2,6,2,"三行 —→— 占位像坏 UI","空态收敛为一行"],
+["1-32",3,5,2,"空态仍展开高级区","无选择时折叠"],
+["1-33",1,6,2,"GPS 5×重复占位符","卡级徽标+示例值占位"],
+["1-34",2,2,2,"禁用/可编辑外观区分不足","明确禁用态样式"],
+["1-35",2,5,1,"GPS 两列栅格不齐","统一标签轴"],
+["1-36",1,2,2,"无标签无占位下拉框","补标签/占位"],
+["1-37",1,2,2,"混合控件+操作行被内滚隐藏","拆分控件，操作行固定"],
+["1-38",2,3,2,"地图离线警示黄滥用","改中性灰说明"],
+["1-39",3,7,2,"括号注释常驻","移 tooltip"],
+["1-40",2,5,2,"双层滚动割裂","重组减少嵌套滚动"],
+["1-41",0,1,1,"红点红字表示“没有文件”","中性灰；红色只给失败"],
+["1-42",2,7,1,"公式文案 ×/= 公式","改自然语（对齐 mockup）"],
+["1-43",1,2,1,"禁用主按钮淡紫蓝像可点","禁用=灰底灰字"],
+["1-44",3,3,2,"状态栏 10px 偏小","≥11–12px"],
+["1-45",2,3,1,"圆角不统一（4/6/10/全圆）","圆角令牌 2–3 级"],
+["1-46",2,3,1,"控件高度 22/26/28/32 混用","统一 32px 行高规格"],
+["1-47",1,3,1,"多套色并存缺令牌","1 强调色+中性阶+3 语义色"],
+["1-48",2,3,1,"无材质/投影，描边不统一","统一卡片语言"],
+["1-49",2,3,1,"字阶平、辅助字对比不足","title/body/caption 字阶"],
+["1-50",3,2,2,"滚动条常驻","自动隐藏"],
+["1-51",3,7,2,"教学文案常驻界面","收进 tooltip/引导"],
+["1-52",2,2,2,"小图标按钮无 tooltip","命中区+tooltip"],
+["1-53",2,5,2,"缺渐进披露（40+ 控件）","高级项折叠/弹出"],
+["1-54",2,5,2,"右栏宽于预览主次倒置","预览作为视觉重心"],
+["1-55",1,1,2,"底部中央 “T” 形渲染残留","定位裁切元素修复"],
+["2-01",1,5,2,"输出页布局不随任务自适应","表单占主区，预览可折叠"],
+["2-02",2,5,2,"一屏 20+ 控件缺渐进披露","低频项进折叠区"],
+["2-03",1,2,1,"转码/仅元数据 checkbox 胶囊","改分段控件"],
+["2-04",3,3,2,"分段两宽度不均","等宽/统一内边距"],
+["2-05",1,1,1,"未选中格式卡灰字≈禁用","未选中保持正常对比度"],
+["2-06",2,2,2,"格式卡三段拼接+双重指示","整卡可点+角标对勾"],
+["2-07",2,3,1,"“已选 2”蓝色计数徽标","中性灰胶囊"],
+["2-08",2,7,2,"“N 个文件”公式文案常驻","自然语+进 tooltip"],
+["2-09",3,7,2,"HEIF 标签配 .heic","统一命名口径"],
+["2-10",1,6,1,"输出根目录空框无占位","补占位/默认值回显"],
+["2-11",1,5,1,"开关行破坏表单栅格","统一 70px 右对齐标签轴"],
+["2-12",2,2,2,"同页三种开关并存","开关语汇三类定则"],
+["2-13",2,7,1,"路径模板 $var 无说明","符号表进悬浮提示"],
+["2-14",1,7,1,"模板 $x 与示例 <根> 两套语法","统一 $var 语法"],
+["2-15",2,5,2,"模板示例行将溢出","换行列表/折叠"],
+["2-16",2,7,2,"色彩目标无上下文","补 tooltip"],
+["2-17",1,2,1,"全宽 spinbox+小值","紧凑步进器"],
+["2-18",2,7,2,"专业参数无范围/单位","补 tooltip/范围提示"],
+["2-19",2,3,2,"高级参数折叠行样式突兀","统一折叠行规格"],
+["2-20",2,2,2,"无损与技术依赖无表达","联动禁用+解释"],
+["2-21",2,2,2,"页签混排添加按钮像禁用","页签基线+明确可用态"],
+["2-22",3,7,2,"补丁文案常驻","用结构表达，删补丁"],
+["2-23",3,2,2,"AX 出现重复页签节点","排查隐藏/重复节点"],
+["2-24",1,6,2,"预设下拉无占位空白","显示“未选择/当前名”"],
+["2-25",2,2,2,"保存/删除禁用无解释","主次分明+禁用提示"],
+["2-26",3,3,2,"预设按钮宽窄不一","统一按钮规格"],
+["2-27",1,2,1,"互斥模式误用 checkbox（3 处）","全局改分段控件"],
+["2-28",1,2,2,"无名下拉系统性出现","全局补标签/占位"],
+["2-29",1,3,1,"同一控件多副面孔","建立控件规格表"],
+["2-30",2,6,2,"空输入框普遍缺占位","全局补空态文案"],
+["2-31",1,3,2,"QGroupBox 双层框线","现代 expander 无边框"],
+["2-32",1,5,1,"组内外栅格错位","统一标签轴（硬约束）"],
+["2-33",1,2,1,"组内 5×宽框小值","控件宽度随内容"],
+["2-34",2,5,2,"checkbox 悬空行大片空白","勾选框+标签紧凑同行"],
+["2-35",2,2,2,"checkbox 语序三处混乱","统一“勾选框→标签”"],
+["2-36",2,2,2,"数值控件 spin/下拉混用","统一数值控件"],
+["2-37",1,1,1,"魔法数字 -1/0 裸露","改“自动”文案+范围"],
+["2-38",2,7,2,"术语费解+括号全半角混用","术语审校+统一标点"],
+["2-39",2,5,2,"高级组 13 项平铺无结构","按语义分子组"],
+["2-40",2,5,2,"搜索参数框与首行黏连","行距/分隔+用途说明"],
+["2-41",3,7,2,"占位符三点句号","统一省略号"],
+["2-42",2,5,2,"展开即 17 行滚动压力","限高内滚/二次折叠"],
+["2-43",3,5,2,"滚动截断面板无吸附","间距/吸附优化"],
+["3-01",2,5,2,"右栏 300px 死区不自适应","按页分配栏宽/高度"],
+["3-02",2,5,2,"页间密度节奏割裂","统一卡片密度"],
+["3-03",0,1,1,"已用时 00:00 vs 总耗时 0.2s","指标单源（按 spec 删已用时）"],
+["3-04",2,3,1,"统计值比标签更浅层级倒置","统计值用正文对比度"],
+["3-05",1,7,1,"“阶段权重+行级子进度”泄漏实现","删实现文案，改逐输出进度"],
+["3-06",2,3,1,"进度条 130px vs 300px","统一 8px r=99 迷你进度条"],
+["3-07",1,2,1,"进度条 slider 语义/值 2000","progressbar 角色+值对齐"],
+["3-08",2,2,2,"文字链/按钮主次混排","建立三级动作规范"],
+["3-09",3,5,2,"摘要行 7 项密排无层级","关键项加粗/语义色"],
+["3-10",0,1,1,"PNG 0 KB 却绿条成功","异常琥珀/红标记"],
+["3-11",2,7,2,"加速比 0.6× 无基线","标明基线/进 tooltip"],
+["3-12",2,3,2,"完成标记三词汇两色","统一绿胶囊 ✓"],
+["3-13",3,5,2,"输出计数三处重复","收敛一处/统一措辞"],
+["3-14",0,1,1,"日志头文件名 vs “尚无日志”","有日志显示真实尾部行"],
+["3-15",2,6,1,"日志占位括号文本非等宽","等宽 5 行滚动+跳转"],
+["3-16",3,5,2,"日志面板留白与信息不配","收紧或扩展内容"],
+["3-17",1,2,2,"勾选/选中双概念高亮弱","强化选中行高亮"],
+["3-18",3,5,2,"文件名三处重复","预览头/底栏二选一"],
+["3-19",2,3,2,"行徽章与全局体系不一","统一徽章体系"],
+["3-20",2,2,2,"小图平滑插值糊化","默认最近邻/可切换"],
+["3-21",3,3,2,"letterbox 与画布同黑","略作区分"],
+["3-22",0,1,1,"就绪态红点红字","状态色分档（就绪=绿）"],
+["3-23",3,1,2,"“就绪”与“已完成”并存","统一状态机文案"],
+["4-01",1,4,2,"弹窗与主窗口两套皮肤","同源设计语言"],
+["4-02",2,4,2,"标题栏浅黄绿（强调色渗入）","自绘标题栏中性化"],
+["4-03",1,3,2,"弹窗控件尺度整体脱节","全局控件规格表"],
+["4-04",3,5,2,"6 行设置占 956×598","收紧行距/缩窗"],
+["4-05",3,2,2,"AX 重复页签节点","排查"],
+["4-06",1,4,2,"文件夹式页签过时","下划线页签/分段控件"],
+["4-07",2,5,2,"页签字号脱节+双导航隐喻","统一隐喻与字号"],
+["4-08",1,2,1,"spinner 承载“自动（物理核）”","下拉或“自动”+数值"],
+["4-09",2,3,2,"单位三套摆法","统一单位后缀规则"],
+["4-10",3,7,2,"全/半角括号混用","统一标点"],
+["4-11",1,5,1,"标签左对齐+90px 空隙","70px 右对齐标签轴"],
+["4-12",1,7,3,"同一设置两套命名话术","全局统一（spec 亦需改）"],
+["4-13",2,7,2,"worker/预算/交错等术语","术语审校"],
+["4-14",2,2,1,"宽框小值再现","控件宽度随内容"],
+["4-15",0,1,2,"滑杆-色块-标注三方矛盾","校准映射（疑似 bug）"],
+["4-16",2,5,2,"alpha 行四件套拥挤错位","重排并标注各元素"],
+["4-17",2,5,1,"checkbox 行破坏标签列","统一 checkbox 行规格"],
+["4-18",1,2,2,"确定=描边钮主次不分","实心主按钮+次按钮弱化"],
+["4-19",2,5,2,"确定左/取消右反惯例","主操作居右"],
+["4-20",2,5,2,"无“通用/外观”页签","增页签收主题/语言"],
+["5-01",2,4,3,"顶栏三簇失衡中部空","三段分布/步骤居中"],
+["5-02",1,3,3,"字形字符充当图标","SVG 图标系统（定稿同画）"],
+["5-03",3,4,3,"版本 pill 基线不齐","对齐基线/移入关于"],
+["5-04",2,2,2,"步骤无完成态+圆角不一","完成态 ✓+统一圆角"],
+["5-05",2,4,2,"工具/控制组边界模糊","组间分隔"],
+["5-06",2,4,2,"顶栏无 hairline，失焦糊","分隔线/激活态变色"],
+["5-07",3,3,2,"三条水平带节奏不合","统一垂直节奏"],
+["5-08",2,5,2,"左右边距 12 vs 22 不对称","对称边距"],
+["5-09",1,2,2,"分隔条可拖但不可见","悬停手柄/光标提示"],
+["5-10",2,3,1,"外框内卡无层级差","描边/圆角分级"],
+["5-11",2,3,1,"间距不成 4/8 网格","建立间距令牌"],
+["5-13",2,4,2,"状态栏无分隔无分区","分隔+分区"],
+["5-14",2,5,2,"无菜单/帮助入口","收纳快捷键/关于"],
+["5-15",1,4,2,"chrome 尺寸两套实锤","控件规格表同源"],
+["5-16",2,4,1,"关闭按钮两套语言","统一 caption 样式"],
+["5-17",2,3,3,"小尺寸图标辨识度差","16/24px 图标变体"],
+["5-18",2,3,1,"圆角描边不同源，灰未令牌","中性色阶令牌化"],
+["5-19",2,5,2,"页签顺序与步骤顺序冲突","同序排列"]
+];
+const KEYS = [
+["K1","fix-1-toolbar.png","顶栏与窗口控制","1-01/1-03/1-04/5-01/5-02/5-04/5-05"],
+["K2","fix-2-controls.png","控件语义与表单栅格","1-27/1-29/2-11/2-17/2-27/2-29/2-33/4-08/4-11"],
+["K3","fix-3-status.png","状态语义色 / 状态栏 / 徽章","1-41/1-42/1-43/3-12/3-19/3-22"],
+["K4","fix-4-run-truth.png","运行页数据真实性","3-03/3-05/3-06/3-07/3-10/3-14"],
+["K5","fix-5-empty.png","空状态设计","1-06/1-16/1-23/1-33/2-10/2-24/2-30"],
+["K6","fix-6-settings.png","设置弹窗重构","4-01/4-03/4-06/4-08/4-11/4-15/4-18/4-19/5-15/5-19"]
+];
+const REQ = ["","要求改","缓改(P2/P3 批次)","不要求改"];
+const SUG = ["","满足·按此实施","需调整","不满足·重新提案","不适用"];
+const SEED = {
+ "K1":{req:"要求改",sug:"需调整",note:"去掉完成态对号等状态提示；窗口控制严格 WinUI3 风格，不自创"},
+ "K2":{req:"要求改",sug:"需调整",note:"互斥=分段 OK；数值保留 spinbox 只优化细节；栅格 OK 但严控宽度/对齐/行距；开关/徽章 OK；选中前后宽度不得变化"},
+ "K3":{req:"要求改",sug:"满足·按此实施",note:""},
+ "K4":{req:"要求改",sug:"满足·按此实施",note:""},
+ "K5":{req:"要求改",sug:"需调整",note:"补充预览画布基础功能：缩放/拖动等"},
+ "K6":{req:"要求改",sug:"不满足·重新提案",note:"新设计不对齐、间距有问题、不简洁直接——重做"},
+ "1-41":{req:"要求改",sug:"满足·按此实施",note:"继承 K3"},"1-42":{req:"要求改",sug:"满足·按此实施",note:"继承 K3"},"1-43":{req:"要求改",sug:"满足·按此实施",note:"继承 K3"},
+ "3-12":{req:"要求改",sug:"满足·按此实施",note:"继承 K3"},"3-19":{req:"要求改",sug:"满足·按此实施",note:"继承 K3"},"3-22":{req:"要求改",sug:"满足·按此实施",note:"继承 K3"},
+ "3-03":{req:"要求改",sug:"满足·按此实施",note:"继承 K4"},"3-05":{req:"要求改",sug:"满足·按此实施",note:"继承 K4"},"3-06":{req:"要求改",sug:"满足·按此实施",note:"继承 K4"},
+ "3-07":{req:"要求改",sug:"满足·按此实施",note:"继承 K4"},"3-10":{req:"要求改",sug:"满足·按此实施",note:"继承 K4"},"3-14":{req:"要求改",sug:"满足·按此实施",note:"继承 K4"},
+ "1-01":{req:"要求改",sug:"需调整",note:"继承 K1：caption 严格 WinUI3"},"1-03":{req:"要求改",sug:"需调整",note:"继承 K1"},"1-04":{req:"要求改",sug:"需调整",note:"继承 K1：无对号状态提示"},
+ "5-01":{req:"要求改",sug:"需调整",note:"继承 K1"},"5-02":{req:"要求改",sug:"需调整",note:"继承 K1"},"5-04":{req:"要求改",sug:"需调整",note:"继承 K1：去掉完成态对号"},"5-05":{req:"要求改",sug:"需调整",note:"继承 K1"},
+ "1-27":{req:"要求改",sug:"需调整",note:"继承 K2：分段 OK"},"1-29":{req:"要求改",sug:"需调整",note:"继承 K2：保留 spinbox 优化细节"},"2-03":{req:"要求改",sug:"需调整",note:"继承 K2：分段 OK"},
+ "2-11":{req:"要求改",sug:"需调整",note:"继承 K2：栅格细节严控"},"2-17":{req:"要求改",sug:"需调整",note:"继承 K2：保留 spinbox"},"2-27":{req:"要求改",sug:"需调整",note:"继承 K2：分段 OK"},
+ "2-29":{req:"要求改",sug:"需调整",note:"继承 K2"},"2-32":{req:"要求改",sug:"需调整",note:"继承 K2：统一标签轴"},"2-33":{req:"要求改",sug:"需调整",note:"继承 K2：保留 spinbox"},
+ "4-08":{req:"要求改",sug:"需调整",note:"继承 K2：保留 spinbox 优化细节"},"4-11":{req:"要求改",sug:"需调整",note:"继承 K2：70px 标签轴"},
+ "1-06":{req:"要求改",sug:"需调整",note:"继承 K5：补画布缩放/拖动"},"1-16":{req:"要求改",sug:"需调整",note:"继承 K5"},"1-23":{req:"要求改",sug:"需调整",note:"继承 K5"},
+ "1-33":{req:"要求改",sug:"需调整",note:"继承 K5"},"2-10":{req:"要求改",sug:"需调整",note:"继承 K5"},"2-24":{req:"要求改",sug:"需调整",note:"继承 K5"},"2-30":{req:"要求改",sug:"需调整",note:"继承 K5"},
+ "4-01":{req:"要求改",sug:"不满足·重新提案",note:"继承 K6：重做"},"4-03":{req:"要求改",sug:"不满足·重新提案",note:"继承 K6：重做"},"4-06":{req:"要求改",sug:"不满足·重新提案",note:"继承 K6：重做"},
+ "4-15":{req:"要求改",sug:"不满足·重新提案",note:"继承 K6：重做（修 bug + 重排）"},"4-18":{req:"要求改",sug:"不满足·重新提案",note:"继承 K6：重做"},"4-19":{req:"要求改",sug:"不满足·重新提案",note:"继承 K6：重做"},
+ "5-15":{req:"要求改",sug:"不满足·重新提案",note:"继承 K6：重做"},"5-19":{req:"要求改",sug:"不满足·重新提案",note:"继承 K6：重做"}
+};
+let store = {...SEED, ...JSON.parse(localStorage.getItem("pp-gui-decisions-v1") || "{}")};
+function save(){ localStorage.setItem("pp-gui-decisions-v1", JSON.stringify(store)); }
+function get(k){ return store[k] || {}; }
+function set(k,field,val){ store[k] = store[k]||{}; store[k][field]=val; save(); }
+function toast(msg){ const t=document.getElementById("toast"); t.textContent=msg; t.style.opacity=1; clearTimeout(t._h); t._h=setTimeout(()=>t.style.opacity=0,1600); }
+function esc(s){ return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function decSel(k,field,opts,ph){
+  const cur=get(k)[field]||"";
+  return `<select onchange="set('${k}','${field}',this.value);renderStats();markRow('${k}')"><option value="">${ph}</option>`+
+    opts.slice(1).map((o,i)=>`<option value="${esc(o)}" ${cur===o?"selected":""}>${esc(o)}</option>`).join("")+`</select>`;
+}
+window.markRow=function(k){ const tr=document.querySelector(`[data-k="${k}"]`); if(tr){ const d=get(k); tr.classList.toggle("decided", !!(d.req||d.sug)); } };
+function renderKeys(){
+  document.getElementById("keygrid").innerHTML = KEYS.map(([id,img,t,refs])=>`
+   <div class="keycard" data-k="${id}">
+     <div class="kh"><span class="badge P1">${id}</span><span class="t">${esc(t)}</span><span style="margin-left:auto;font-size:10.5px;color:var(--txt3)">覆盖 ${refs}</span></div>
+     <img src="gui-fix-mockups/${img}" alt="${esc(t)}" onclick="showLightbox(this.src)">
+     <div class="kf">
+       <span style="font-size:11px;color:var(--txt3)">① 是否要求改</span>${decSel(id,"req",REQ,"裁定…")}
+       <span style="font-size:11px;color:var(--txt3)">② 建议是否满足</span>${decSel(id,"sug",SUG,"裁定…")}
+       <input type="text" placeholder="备注…" value="${esc(get(id).note||"")}" onchange="set('${id}','note',this.value)">
+     </div>
+   </div>`).join("");
+}
+window.showLightbox=function(src){ const lb=document.getElementById("lightbox"); lb.querySelector("img").src=src; lb.style.display="flex"; };
+function rowHtml(r){
+  const [id,p,c,d,title,fix]=r;
+  return `<tr data-k="${id}">
+   <td class="id">${id}</td>
+   <td style="white-space:nowrap"><span class="badge P${p}">P${p}</span><span class="badge D${d}" title="${esc(DL[d])}">D${d}</span></td>
+   <td><div class="prob">${esc(title)}</div><div class="fix">${esc(fix)}</div></td>
+   <td><div class="dec">${decSel(id,"req",REQ,"要求改?")}${decSel(id,"sug",SUG,"建议满足?")}<input type="text" placeholder="备注…" value="${esc(get(id).note||"")}" onchange="set('${id}','note',this.value)"></div></td>
+  </tr>`;
+}
+function filtered(){
+  const p=document.getElementById("f-p").value, c=document.getElementById("f-c").value,
+        d=document.getElementById("f-d").value, dec=document.getElementById("f-dec").value,
+        q=document.getElementById("f-q").value.trim().toLowerCase();
+  return DATA.filter(r=>{
+    const st=get(r[0]);
+    if(p!=="" && r[1]!=+p) return false;
+    if(c!=="" && r[2]!=+c) return false;
+    if(d!=="" && r[3]!=+d) return false;
+    if(dec==="open" && (st.req||st.sug)) return false;
+    if(dec==="done" && !(st.req||st.sug)) return false;
+    if(dec==="req" && st.req!=="要求改") return false;
+    if(dec==="no" && st.req!=="不要求改") return false;
+    if(q && !(r[0]+" "+r[4]+" "+r[5]).toLowerCase().includes(q)) return false;
+    return true;
+  });
+}
+function renderLists(){
+  const rows=filtered();
+  const html=CATS.map((cat,ci)=>{
+    const sub=rows.filter(r=>r[2]==ci+1);
+    if(!sub.length) return "";
+    return `<details class="catblock" ${sub.length<40?"open":""}><summary>C${ci+1} ${esc(cat)} <span class="cnt">${sub.length} 条</span></summary>
+      <table><thead><tr><th style="width:62px">编号</th><th style="width:96px">分级/对照</th><th>问题 → 修改方向</th><th style="width:400px">决策 ①要求改 ②建议满足</th></tr></thead>
+      <tbody>${sub.map(rowHtml).join("")}</tbody></table></details>`;
+  }).join("");
+  document.getElementById("lists").innerHTML = html || `<div style="padding:30px;text-align:center;color:var(--txt3)">没有匹配的问题</div>`;
+}
+function renderStats(){
+  const n=DATA.length, done=DATA.filter(r=>{const d=get(r[0]);return d.req||d.sug;}).length;
+  const keyDone=KEYS.filter(([id])=>{const d=get(id);return d.req||d.sug;}).length;
+  const pc=[0,1,2,3].map(p=>DATA.filter(r=>r[1]===p).length);
+  const dd=[1,2,3].map(x=>DATA.filter(r=>r[3]===x).length);
+  document.getElementById("stats").innerHTML=`
+   <span class="st done">已决 <b>${done}</b>/${n}（关键卡 ${keyDone}/6）</span>
+   <span class="st p0">P0 <b>${pc[0]}</b></span><span class="st p1">P1 <b>${pc[1]}</b></span>
+   <span class="st p2">P2 <b>${pc[2]}</b></span><span class="st p3">P3 <b>${pc[3]}</b></span>
+   <span class="st">D1 回归定稿 <b>${dd[0]}</b></span><span class="st">D2 新设计 <b>${dd[1]}</b></span><span class="st">D3 定稿亦改 <b>${dd[2]}</b></span>`;
+}
+function download(name,text){
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob([text],{type:"text/plain;charset=utf-8"}));
+  a.download=name; a.click();
+}
+function expJson(){
+  download("gui-decisions.json", JSON.stringify({app:"PhotoPipeline 0.3.0",theme:"light",exported:new Date().toISOString(),decisions:store},null,2));
+  toast("已导出 gui-decisions.json");
+}
+function expMd(){
+  const L=[];
+  L.push("# PhotoPipeline 0.3.0 GUI 问题决策记录（亮色主题）\n");
+  L.push(`- 导出时间：${new Date().toLocaleString()} · 问题总数 ${DATA.length} · 已决 ${DATA.filter(r=>{const d=get(r[0]);return d.req||d.sug;}).length}`);
+  const pc=[0,1,2,3].map(p=>DATA.filter(r=>r[1]===p).length);
+  L.push(`- 分级：P0 ${pc[0]} · P1 ${pc[1]} · P2 ${pc[2]} · P3 ${pc[3]}\n`);
+  L.push("## 关键问题·修复示意决策\n");
+  L.push("| 编号 | 主题 | 覆盖问题 | ①要求改 | ②建议满足 | 备注 |");
+  L.push("|---|---|---|---|---|---|");
+  KEYS.forEach(([id,,t,refs])=>{ const d=get(id)||{}; L.push(`| ${id} | ${t} | ${refs} | ${d.req||"未决"} | ${d.sug||"未决"} | ${d.note||""} |`); });
+  L.push("\n## 全量清单（按类别）\n");
+  CATS.forEach((cat,ci)=>{
+    const sub=DATA.filter(r=>r[2]==ci+1);
+    if(!sub.length) return;
+    L.push(`### C${ci+1} ${cat}（${sub.length} 条）\n`);
+    L.push("| 编号 | P | D | 问题 | 修改方向 | ①要求改 | ②建议满足 | 备注 |");
+    L.push("|---|---|---|---|---|---|---|---|");
+    sub.forEach(([id,p,c,d,t,f])=>{ const s=get(id)||{}; L.push(`| ${id} | P${p} | D${d} | ${t} | ${f} | ${s.req||"未决"} | ${s.sug||"未决"} | ${s.note||""} |`); });
+    L.push("");
+  });
+  download("gui-decision-report.md", L.join("\n"));
+  toast("已导出 gui-decision-report.md");
+}
+function init(){
+  const cs=document.getElementById("f-c");
+  CATS.forEach((c,i)=>cs.insertAdjacentHTML("beforeend",`<option value="${i+1}">C${i+1} ${c}</option>`));
+  renderKeys(); renderLists(); renderStats();
+  ["f-p","f-c","f-d","f-dec"].forEach(id=>document.getElementById(id).addEventListener("change",renderLists));
+  document.getElementById("f-q").addEventListener("input",()=>{clearTimeout(window._q);window._q=setTimeout(renderLists,200);});
+  document.getElementById("btn-exp-json").onclick=expJson;
+  document.getElementById("btn-exp-md").onclick=expMd;
+  document.getElementById("btn-reset").onclick=()=>{ if(confirm("清空全部决策记录？")){ store={}; save(); renderLists(); renderStats(); toast("已重置"); } };
+  document.getElementById("btn-next").onclick=()=>{
+    const nxt=DATA.find(r=>{const d=get(r[0]);return !(d.req||d.sug);});
+    if(!nxt){ toast("全部已决完 🎉"); return; }
+    document.getElementById("f-dec").value="open"; renderLists();
+    setTimeout(()=>{ const el=document.querySelector(`[data-k="${nxt[0]}"]`); if(el){ el.scrollIntoView({block:"center"}); el.style.outline="2px solid var(--acc)"; setTimeout(()=>el.style.outline="",1200);} },50);
+    toast(`下一条未决：${nxt[0]} ${nxt[4]}`);
+  };
+}
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,187 @@
+/* PhotoPipeline GUI v4 · 专业 PC 工具：密度 × 美学
+   原则：信息密而不挤（12px 卡内边距 / 28px 行高 / 8px 节奏）· 功能不删 · 全局 80px 标签轴严格对齐
+   裁定：K1 无状态对号+WinUI3 caption · K2 spinbox+选中零宽度变化 · K5 画布缩放拖动 */
+:root{
+  --card:#ffffff; --card-bd:rgba(0,0,0,.09); --card-hi:#f7f8fa;
+  --txt:#1b1c20; --txt2:#5d5f68; --txt3:#8b8d96;
+  --acc:#0067c0; --acc-dim:rgba(0,103,192,.08); --acc-bd:rgba(0,103,192,.32); --acc-on:#fff;
+  --ok:#1d7a3e; --ok-dim:rgba(29,122,62,.08); --ok-bd:rgba(29,122,62,.30);
+  --warn:#9a6a00; --warn-dim:rgba(154,106,0,.08); --warn-bd:rgba(154,106,0,.30);
+  --err:#c42b3a; --err-dim:rgba(196,43,58,.08); --err-bd:rgba(196,43,58,.30);
+  --ctl:#eef0f4; --ctl-bd:rgba(0,0,0,.12);
+  --win:linear-gradient(150deg,#e9ecf2 0%,#e3e5ea 45%,#e7efe9 100%);
+  --shadow:0 1px 4px rgba(16,24,40,.07);
+  --go-bg:#0067c0; --go-fg:#fff;
+  --hov:rgba(0,0,0,.06); --cap-hov:rgba(0,0,0,.06); --cap-close-hov:#c42b1c;
+}
+body.dark{
+  --card:rgba(255,255,255,.05); --card-bd:rgba(255,255,255,.10); --card-hi:rgba(255,255,255,.07);
+  --txt:#ececf0; --txt2:#a9aab4; --txt3:#7a7b86;
+  --acc:#4cc2ff; --acc-dim:rgba(76,194,255,.10); --acc-bd:rgba(76,194,255,.34); --acc-on:#0c1b24;
+  --ok:#4cc47c; --ok-dim:rgba(76,196,124,.10); --ok-bd:rgba(76,196,124,.32);
+  --warn:#e0a94a; --warn-dim:rgba(224,169,74,.10); --warn-bd:rgba(224,169,74,.32);
+  --err:#ff7a8a; --err-dim:rgba(255,122,138,.10); --err-bd:rgba(255,122,138,.32);
+  --ctl:rgba(255,255,255,.07); --ctl-bd:rgba(255,255,255,.12);
+  --win:#22252b; --shadow:none;
+  --go-bg:#4cc2ff; --go-fg:#0c1b24;
+  --hov:rgba(255,255,255,.08); --cap-hov:rgba(255,255,255,.08); --cap-close-hov:#c42b1c;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:1440px;height:900px;overflow:hidden}
+body{font-family:"Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI",sans-serif;font-size:11.5px;line-height:1.45;color:var(--txt);background:var(--win);user-select:none}
+
+/* ───────── 顶栏 44px ───────── */
+.toolbar{height:44px;display:flex;align-items:center;gap:12px;padding:0 6px 0 14px;border-bottom:1px solid var(--card-bd)}
+.brand{display:flex;align-items:center;gap:8px}
+.brand .nm{font-size:13px;font-weight:700;letter-spacing:.2px}
+.ver{font-size:9.5px;color:var(--txt3);border:1px solid var(--card-bd);padding:0 6px;border-radius:99px;line-height:16px}
+.steps{display:flex;margin:0 6px 0 4px}
+/* 一体式分段导航（单一控件，非三个独立按钮） */
+.nav-strip{display:inline-flex;height:30px;border:1px solid var(--ctl-bd);border-radius:6px;overflow:hidden;background:var(--card)}
+.nav-strip button{width:92px;border:0;background:transparent;color:var(--txt2);font-weight:600;font-size:12px;display:flex;align-items:center;justify-content:center;gap:6px}
+.nav-strip button+button{border-left:1px solid var(--ctl-bd)}
+.nav-strip button.on{background:var(--acc);color:var(--acc-on)}
+.nav-strip .n{width:15px;height:15px;border-radius:99px;background:var(--ctl);border:1px solid var(--ctl-bd);display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;color:var(--txt2)}
+.nav-strip button.on .n{background:rgba(255,255,255,.25);border-color:transparent;color:var(--acc-on)}
+.tb-tools{display:flex;align-items:center}
+.icon-btn{width:28px;height:28px;border-radius:4px;border:0;background:transparent;display:flex;align-items:center;justify-content:center;color:var(--txt2)}
+.icon-btn:hover{background:var(--hov)}
+.cap{width:46px;height:32px;border:0;background:transparent;display:flex;align-items:center;justify-content:center;color:var(--txt)}
+.cap:hover{background:var(--cap-hov)}
+.cap.close:hover{background:var(--cap-close-hov);color:#fff}
+
+/* ───────── 布局：列宽固定（三页同轴） · 8px 间隙节奏 ───────── */
+.main{height:828px;display:flex;gap:8px;padding:8px 10px 8px}
+.col-l{flex:0 0 330px;display:flex;flex-direction:column;gap:8px;min-height:0;min-width:0}
+.col-m{flex:1 1 0;display:flex;flex-direction:column;gap:8px;min-height:0;min-width:0}
+.col-r{flex:0 0 587px;display:flex;flex-direction:column;gap:8px;min-height:0;min-width:0}
+.card{background:var(--card);border:1px solid var(--card-bd);border-radius:6px;box-shadow:var(--shadow);display:flex;flex-direction:column;min-height:0;min-width:0;overflow:hidden}
+.card-h{display:flex;align-items:center;gap:8px;height:32px;flex:0 0 32px;padding:0 12px;border-bottom:1px solid rgba(0,0,0,.05);flex-wrap:nowrap;overflow:hidden}
+body.dark .card-h{border-bottom-color:rgba(255,255,255,.06)}
+.card-h .t{font-size:12px;font-weight:700;letter-spacing:.2px;white-space:nowrap}
+.card-h .hint{margin-left:auto;font-size:10px;color:var(--txt3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.card-b{padding:10px 12px 12px}
+
+/* ───────── 表单：全局统一 80px 标签轴 + 12px 列距 + 28px 行高（全部禁换行） ───────── */
+.frow{height:28px;display:grid;grid-template-columns:80px 1fr;column-gap:12px;align-items:center;overflow:hidden}
+.frow>label{text-align:right;color:var(--txt2);font-size:11px;white-space:nowrap}
+.frow .fd{display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:nowrap;white-space:nowrap;overflow:hidden}
+/* R1 行节奏：一切信息行 pitch=28px */
+.kv-grid{display:grid;grid-template-columns:80px 1fr 80px 1fr;grid-auto-rows:28px;gap:0 12px;align-items:center;padding:2px 0 4px}
+/* R2 双列固定轨：字段撑满轨 */
+.frow2{height:28px;display:grid;grid-template-columns:80px 152px 80px 152px;column-gap:12px;align-items:center;overflow:hidden}
+.frow2>label{text-align:right;color:var(--txt2);font-size:11px;white-space:nowrap}
+.kv-k{font-size:11px;color:var(--txt2);text-align:right;white-space:nowrap}
+.kv-v{font-size:11.5px;color:var(--txt);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.kv-v.cells{display:flex;align-items:center;gap:6px}
+.kv-v .txt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.kv-v.mod{color:var(--acc);font-weight:700}
+.unit{width:16px;flex:0 0 16px;color:var(--txt3);font-size:10.5px}
+
+/* ───────── 任务表（运行页） ───────── */
+.ftab{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;table-layout:fixed}
+.ftab th{font-size:9.5px;color:var(--txt3);font-weight:600;text-align:left;padding:4px 8px;border-bottom:1px solid var(--card-bd);white-space:nowrap}
+.ftab th.num,.ftab td.num{text-align:right}
+.ftab td{font-size:11px;padding:5px 8px;border-bottom:1px solid rgba(0,0,0,.04);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+body.dark .ftab td{border-bottom-color:rgba(255,255,255,.05)}
+.ftab tfoot td{border-top:1px solid var(--card-bd);border-bottom:0;color:var(--txt3);font-size:10px;background:var(--card-hi);padding:5px 8px}
+.sub-hint{font-size:10px;color:var(--txt3)}
+.hr{height:1px;background:rgba(0,0,0,.05);margin:8px 0}
+body.dark .hr{background:rgba(255,255,255,.06)}
+
+/* ───────── 控件 24–28px ───────── */
+/* R2 字段宽三档：短88 / 标准160 / 长flex；R4 控件高24 */
+.spin{display:inline-flex;align-items:stretch;height:24px;width:160px;border:1px solid var(--ctl-bd);border-radius:3px;background:var(--card);overflow:hidden}
+.spin.s88{width:88px}
+.spin.fill{width:100%}
+.spin .v{flex:1;min-width:0;display:flex;align-items:center;justify-content:flex-end;padding:0 7px;font-variant-numeric:tabular-nums;font-size:11.5px}
+.spin .ar{width:17px;display:flex;flex-direction:column;border-left:1px solid var(--ctl-bd)}
+.spin .ar button{flex:1;border:0;background:transparent;color:var(--txt3);font-size:7px;display:flex;align-items:center;justify-content:center}
+.spin .ar button:hover{background:var(--hov);color:var(--txt)}
+.dd{display:inline-flex;align-items:center;height:24px;width:160px;border:1px solid var(--ctl-bd);border-radius:3px;background:var(--card);padding:0 8px;gap:8px;font-size:11.5px}
+.dd.fill{flex:1;width:auto;min-width:0}
+.dd .car{color:var(--txt3);font-size:8px}
+.tbx{display:inline-flex;align-items:center;height:24px;border:1px solid var(--ctl-bd);border-radius:3px;background:var(--card);padding:0 8px;font-size:11.5px;font-variant-numeric:tabular-nums;gap:6px}
+.tbx.ph{color:var(--txt3)}
+.seg{display:inline-flex;height:24px;border:1px solid var(--ctl-bd);border-radius:3px;background:var(--ctl);overflow:hidden}
+.seg button{width:88px;border:0;background:transparent;color:var(--txt2);font-weight:600;font-size:11.5px}
+.seg button.on{background:var(--acc);color:var(--acc-on)}
+.sw{width:30px;height:16px;border-radius:99px;background:#c3c6cf;position:relative;border:0;flex:0 0 30px}
+.sw::after{content:"";position:absolute;left:2px;top:2px;width:12px;height:12px;border-radius:99px;background:#fff}
+.sw.on{background:var(--acc)}
+.sw.on::after{left:16px}
+.cbx{width:13px;height:13px;border-radius:2px;border:1px solid var(--ctl-bd);background:var(--card);flex:0 0 13px;display:flex;align-items:center;justify-content:center}
+.cbx.on{background:var(--acc);border-color:var(--acc)}
+.pill{display:inline-flex;align-items:center;gap:3px;padding:0 7px;border-radius:3px;font-size:9.5px;font-weight:700;border:1px solid transparent;white-space:nowrap;line-height:16px}
+.pill.n{background:var(--ctl);border-color:var(--ctl-bd);color:var(--txt2)}
+.pill.acc{background:var(--acc-dim);border-color:var(--acc-bd);color:var(--acc)}
+.pill.ok{background:var(--ok-dim);border-color:var(--ok-bd);color:var(--ok)}
+.pill.warn{background:var(--warn-dim);border-color:var(--warn-bd);color:var(--warn)}
+.pill.err{background:var(--err-dim);border-color:var(--err-bd);color:var(--err)}
+.btn{height:24px;border-radius:3px;padding:0 11px;font-size:11px;font-weight:600;border:1px solid var(--ctl-bd);background:var(--card);color:var(--txt2);white-space:nowrap}
+.btn.pri{background:var(--acc);border-color:var(--acc);color:var(--acc-on)}
+.btn.lnk{border:0;background:transparent;color:var(--acc);padding:0 2px;font-weight:600}
+.icon-btn.bordered{border:1px solid var(--ctl-bd);background:var(--card)}
+.btn-go{margin-left:auto;height:24px;border:0;border-radius:4px;padding:0 18px;font-size:11.5px;font-weight:700;background:var(--go-bg);color:var(--go-fg);display:inline-flex;align-items:center;gap:6px}
+
+/* ───────── 进度 ───────── */
+.pbar{height:6px;border-radius:99px;background:var(--ctl);overflow:hidden;display:flex}
+.pbar i{display:block;height:100%}
+.pbar .done{background:var(--ok)}.pbar .warn{background:var(--warn)}.pbar .fail{background:var(--err)}
+.pbar .comp{background:repeating-linear-gradient(45deg,var(--acc-bd) 0 4px,transparent 4px 8px)}
+
+/* ───────── 文件行：勾选+大缩略图 | 2–3 行信息 | 最右状态 ───────── */
+.ftools{display:flex;align-items:center;gap:6px;padding:8px 12px 6px}
+.ftools .tbx{flex:1}
+.fitem{display:flex;align-items:center;gap:10px;padding:6px 12px;border-bottom:1px solid rgba(0,0,0,.045);height:58px}
+body.dark .fitem{border-bottom-color:rgba(255,255,255,.05)}
+.fitem.sel{background:var(--acc-dim)}
+.fitem .thumb{width:46px;height:46px;border-radius:4px;flex:0 0 46px;background:var(--ctl)}
+.fitem .info{min-width:0;flex:1;display:flex;flex-direction:column;gap:1px}
+.fitem .nm{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fitem .meta{font-size:10.5px;color:var(--txt3);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fitem .st{flex:0 0 auto;margin-left:8px}
+.dot{width:7px;height:7px;border-radius:99px;display:inline-block}
+
+/* ───────── 预览画布 ───────── */
+.canvas{flex:1;position:relative;background:#16181d;border-radius:4px;overflow:hidden}
+.canvas .art{position:absolute;inset:22px 30px;display:flex;align-items:center;justify-content:center}
+.zoombar{position:absolute;right:10px;bottom:10px;height:26px;display:flex;align-items:center;gap:1px;background:rgba(18,20,26,.85);border:1px solid rgba(255,255,255,.13);border-radius:4px;padding:0 4px;color:#ececf0}
+.zoombar button{width:22px;height:22px;border:0;border-radius:3px;background:transparent;color:#c9ccd4;font-size:11px;display:flex;align-items:center;justify-content:center}
+.zoombar button:hover{background:rgba(255,255,255,.12)}
+.zoombar .z{font-size:10px;padding:0 5px;font-variant-numeric:tabular-nums}
+.zoombar .sep{width:1px;height:13px;background:rgba(255,255,255,.15);margin:0 2px}
+.canvas .hint{position:absolute;left:10px;bottom:12px;font-size:9.5px;color:rgba(236,236,240,.5)}
+.pv-bar{height:32px;display:flex;align-items:center;gap:6px;padding:0 12px}
+.tagchip{height:22px;display:inline-flex;align-items:center;gap:4px;padding:0 8px;border-radius:3px;border:1px solid var(--ctl-bd);background:var(--card);color:var(--txt2);font-size:10.5px;font-weight:600}
+.tagchip .k{width:13px;height:13px;border-radius:2px;background:var(--ctl);border:1px solid var(--ctl-bd);display:flex;align-items:center;justify-content:center;font-size:8.5px}
+.tagchip.on{background:var(--acc-dim);border-color:var(--acc-bd);color:var(--txt)}
+.tagchip.on .k{background:var(--acc);border-color:var(--acc);color:var(--acc-on)}
+
+/* ───────── 地图 ───────── */
+.map{height:118px;border-radius:4px;border:1px solid var(--card-bd);position:relative;overflow:hidden;
+  background:linear-gradient(rgba(0,0,0,.05) 1px,transparent 1px) 0 0/24px 24px,linear-gradient(90deg,rgba(0,0,0,.05) 1px,transparent 1px) 0 0/24px 24px,var(--card-hi)}
+body.dark .map{background:linear-gradient(rgba(255,255,255,.05) 1px,transparent 1px) 0 0/24px 24px,linear-gradient(90deg,rgba(255,255,255,.05) 1px,transparent 1px) 0 0/24px 24px,rgba(255,255,255,.03)}
+.map .pin{position:absolute;left:52%;top:46%;transform:translate(-50%,-100%);color:var(--acc)}
+
+/* ───────── 状态栏 ───────── */
+.statusbar{height:30px;display:flex;align-items:center;gap:8px;padding:0 12px;border-top:1px solid var(--card-bd);font-size:11px}
+.st-n{color:var(--txt2);font-weight:600}
+.st-ok{color:var(--ok);font-weight:600}
+.st-warn{color:var(--warn);font-weight:600}
+.st-err{color:var(--err);font-weight:600}
+.st-sep{color:var(--txt3)}
+
+/* ───────── 设置对话框 ───────── */
+.dlg-wrap{width:1440px;height:900px;display:flex;align-items:center;justify-content:center}
+.dlg{width:660px;background:var(--card);border:1px solid var(--card-bd);border-radius:6px;box-shadow:0 10px 32px rgba(16,24,40,.20);overflow:hidden}
+.dlg-tb{height:40px;display:flex;align-items:center;gap:8px;padding:0 4px 0 14px;border-bottom:1px solid var(--card-bd)}
+.dlg-tb .t{font-size:12.5px;font-weight:700}
+.dlg-tabs{height:34px;display:flex;align-items:flex-end;gap:0;padding:0 14px;border-bottom:1px solid var(--card-bd)}
+.dlg-tab{height:32px;padding:0 13px;display:flex;align-items:center;font-size:11.5px;font-weight:600;color:var(--txt2);border-bottom:2px solid transparent;margin-bottom:-1px}
+.dlg-tab.on{color:var(--txt);border-bottom-color:var(--acc)}
+.dlg-body{padding:14px 18px 10px}
+.dlg-ft{height:48px;display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:0 18px}
+.dlg .frow{height:28px}
+.dlg .spin,.dlg .dd{width:160px}
+.dlg .spin .v{width:auto!important;flex:1}

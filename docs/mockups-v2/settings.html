@@ -1,0 +1,52 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>PhotoPipeline · 设置</title><link rel="stylesheet" href="tokens.css">
+<style></style></head>
+<body>
+<script>if(new URLSearchParams(location.search).get("theme")==="dark")document.body.className="dark";</script>
+<div class="dlg-wrap">
+  <div class="dlg">
+    <div class="dlg-tb">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--acc)" stroke-width="1.6"><rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="9" cy="10" r="1.5" fill="var(--acc)" stroke="none"/><path d="M5 17l4.5-4.5 3 3L16 12l3 3"/></svg>
+      <span class="t">设置</span>
+      <div style="margin-left:auto;display:flex">
+        <button class="cap close" title="关闭"><svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" stroke-width="1"><path d="M1.5 1.5l7 7M8.5 1.5l-7 7"/></svg></button>
+      </div>
+    </div>
+
+    <div class="dlg-tabs">
+      <div class="dlg-tab">通用</div>
+      <div class="dlg-tab on">运行</div>
+      <div class="dlg-tab">输出</div>
+      <div class="dlg-tab">地图</div>
+      <div class="dlg-tab">关于</div>
+    </div>
+
+    <div class="dlg-body">
+      <div class="frow"><label>并发 worker</label><div class="fd"><div class="spin"><span class="v">自动</span><span class="ar"><button>▲</button><button>▼</button></span></div><span style="color:var(--txt3);font-size:10.5px">物理核 8 · 0 = 自动</span></div></div>
+      <div class="frow"><label>交错启动</label><div class="fd"><div class="spin"><span class="v">150</span><span class="ar"><button>▲</button><button>▼</button></span></div><span class="kv-k" style="width:14px;text-align:left">ms</span><span style="color:var(--txt3);font-size:10.5px">0–2000</span></div></div>
+      <div class="frow"><label>线程预算</label><div class="fd"><div class="spin"><span class="v">自动</span><span class="ar"><button>▲</button><button>▼</button></span></div><span style="color:var(--txt3);font-size:10.5px">逻辑核 16 · 0 = 自动</span></div></div>
+      <div class="frow"><label>内存预算</label><div class="fd"><div class="spin"><span class="v">4</span><span class="ar"><button>▲</button><button>▼</button></span></div><span class="kv-k" style="width:14px;text-align:left">GB</span><span style="color:var(--txt3);font-size:10.5px">0 = 自动</span></div></div>
+      <div class="frow"><label>alpha 底色</label><div class="fd" style="gap:0">
+        <span class="kv-k" style="width:14px">黑</span>
+        <div style="flex:1;height:4px;border-radius:99px;background:linear-gradient(90deg,#111,#eee);border:1px solid var(--ctl-bd);position:relative;margin:0 8px">
+          <div style="position:absolute;right:-1px;top:-5px;width:12px;height:12px;border-radius:99px;background:#fff;border:2px solid var(--acc)"></div>
+        </div>
+        <span class="kv-k" style="width:14px">白</span>
+        <div style="width:30px;height:18px;border:1px solid var(--ctl-bd);border-radius:3px;background:#f2f2f2;margin-left:10px"></div>
+        <span style="color:var(--txt3);font-size:10px;margin-left:5px">预览</span>
+      </div></div>
+      <div class="frow"><label>EXIF 方向</label><div class="fd"><span class="cbx on"><svg width="8" height="8" viewBox="0 0 10 10" stroke="#fff" stroke-width="1.7" fill="none"><path d="M2 5l2.2 2.2L8 3"/></svg></span><span class="kv-v">按 EXIF 方向自动旋转输出</span></div></div>
+      <div class="frow"><label>默认分组</label><div class="fd"><div class="dd">按月份<span class="car">▾</span></div>
+        <label class="kv-k" style="width:56px;text-align:right">界面语言</label><div class="dd">简体中文<span class="car">▾</span></div>
+        <label class="kv-k" style="width:44px;text-align:right">主题</label><div class="dd">跟随系统<span class="car">▾</span></div></div></div>
+    </div>
+
+    <div class="dlg-ft">
+      <button class="btn" style="height:26px">恢复默认</button>
+      <div style="margin-left:auto;display:flex;gap:8px">
+        <button class="btn" style="height:26px">取消</button>
+        <button class="btn pri" style="height:26px">确定</button>
+      </div>
+    </div>
+  </div>
+</div>
+</body></html>

@@ -74,6 +74,7 @@
 #include <QSpinBox>
 #include <QSplitter>
 #include <QStackedWidget>
+#include <QStorageInfo> // A19（T11）：底栏「剩余磁盘」段的卷可用空间读数
 #include <QStyleHints>
 #include <QTabWidget>
 #include <QThread>
@@ -244,11 +245,23 @@ bool skeleton_state_disabled() {
     return qEnvironmentVariableIsSet("PP_UI_NO_STATE");
 }
 
-// 启动/走查主题：PP_UI_THEME=dark|light 强制；未设置 → 跟随系统（§9.2 明暗跟随系统）。
+// 启动/走查主题：PP_UI_THEME=dark|light 强制；未设置 → 持久化档（A28）→ 跟随系统（§9.2）。
 // M4-W2-fix：解析搬到 theme::preferred_theme_mode()（单源 = ui/theme.h）——main.cpp 的启动期
 // DWM 深色标题栏（apply_window_backdrop）必须与 GUI 落地的是**同一个**模式，否则窗口边框会
 // 按系统色滞后（第 11 条）。
 using theme::preferred_theme_mode;
+
+// A28（T11）主窗启动读取点（§9「手动切换（设置·通用）」的跨进程落地）：把 settings.ui_theme_mode
+// 注入 theme.h 的进程级持久化档，再按单源顺序解析本窗口的落地模式（PP_UI_THEME 强制档 > 持久化
+// 档 > 跟随系统）。注入只发生在这里 —— 之后所有 preferred_theme_mode() 调用点（图标/自绘件初值/
+// 弹窗）取到同一档。
+// 只吃**入参**（不读盘）：--ui-smoke/走查构造 MainWindow(pp::AppSettings{}) → 恒为默认档
+// system → 冻结截图与开发机 settings.ini 状态无关（M4-T9 口径由"调用方给默认设置"承担，
+// 故本函数不再叠加 PP_UI_NO_STATE 判断；双主题走查的强制档仍是 PP_UI_THEME）。
+theme::ThemeMode apply_startup_theme(const std::string &persisted) {
+    theme::set_persisted_theme_mode(QByteArray::fromStdString(persisted));
+    return theme::preferred_theme_mode();
+}
 
 // 会话态文件（QSettings INI）：与 settings.ini 同目录（data_dir() 保证已存在）
 QString ui_state_path() {
@@ -261,6 +274,22 @@ QString ui_state_path() {
 // M5-T3 起并入图标库（单实现，M3 铁律六）—— 形 = icons::Name::Image（与 mockup 逐点同源）。
 QPixmap app_icon_pixmap(const QColor &accent, int size, qreal dpr) {
     return pp::ui::icons::pixmap(pp::ui::icons::Name::Image, size, accent, dpr);
+}
+
+// A19（T11，§3.2 骨架行）：底栏「剩余磁盘」段的自然语读数（1024 进制；B/KB 整数、MB 起一位
+// 小数 —— 与 §7.2 预估卡的磁盘读数同族口径，见 ui/page_output.cpp 的 human_bytes）。
+QString natural_bytes(qint64 bytes) {
+    constexpr double kKiB = 1024.0;
+    static const char *const kUnits[] = {"B", "KB", "MB", "GB", "TB", "PB"};
+    double value = double(bytes);
+    int unit = 0;
+    while (value >= kKiB && unit < 5) {
+        value /= kKiB;
+        ++unit;
+    }
+    return unit <= 1
+               ? QStringLiteral("%1 %2").arg(qint64(value)).arg(QLatin1String(kUnits[unit]))
+               : QStringLiteral("%1 %2").arg(value, 0, 'f', 1).arg(QLatin1String(kUnits[unit]));
 }
 
 // 单行省略标签（§9.3「全界面禁止文案折行（超长省略号）」）：保存全文，按当前宽度省略
@@ -335,7 +364,8 @@ QWidget *make_card_header(QWidget *parent, const QString &title, QLabel **title_
 }
 
 // 空态投放区（修 1-06；§8「文件列表=投放区+显式"添加文件…"钮」）：
-//   居中矢量图标 + 引导语「将照片拖到此处，或点击 ＋ 添加」+ 显式「添加文件…」钮；
+//   居中矢量图标 + 引导语「拖放照片到此处」+ 显式「添加文件…」钮（A16：§8 的逐字引导语
+//   「将照片拖到此处，或点击 ＋ 添加」归属**预览画布**，文件列表不得同屏重复同一句）；
 //   框/底为 accent 档（mockup fix-5 `.list1{background:var(--acc-dim);border:1px solid
 //   var(--acc-bd)}`）。
 QWidget *build_empty_state(QWidget *parent, QFrame **drop_zone_out, QLabel **icon_out,
@@ -360,7 +390,9 @@ QWidget *build_empty_state(QWidget *parent, QFrame **drop_zone_out, QLabel **ico
     text->setObjectName(QStringLiteral("pp-drop-text"));
     text->setFont(theme::font(theme::Typography::body_px));
     text->setAlignment(Qt::AlignCenter);
-    text->set_full_text(T("将照片拖到此处，或点击 ＋ 添加")); // §8 逐字（＋ 是文案，不是图标）
+    // A16：文件列表空态 = 「拖放照片到此处」（§8 的逐字引导语只归预览画布；同屏两条同文
+    // 冗余 → 列表侧改短句 + 显式「添加文件…」钮，见下方 add）
+    text->set_full_text(T("拖放照片到此处"));
     auto *add = new QPushButton(T("添加文件…"), zone);
     add->setObjectName(QStringLiteral("pp-empty-add"));
     add->setFont(theme::font(theme::Typography::body_px, 600));
@@ -859,6 +891,13 @@ struct MainWindow::Impl {
     QPushButton *cap_max = nullptr;
     QPushButton *cap_close = nullptr;
     ElidedLabel *output_status = nullptr;
+    // A19（T11，§3.2 骨架行）：第三段「剩余磁盘」+ 段前 hairline；读数缓存（refresh_status 会被
+    // 逐文件事件高频触发，卷查询无需逐帧精度）
+    ElidedLabel *disk_status = nullptr;
+    QFrame *disk_sep = nullptr;
+    QString disk_checked_path;
+    qint64 disk_free_bytes = -1;
+    QElapsedTimer disk_clock;
     QFrame *status_sep = nullptr; // 状态栏段间分隔 hairline（修 5-13）
     QLabel *status_dot = nullptr;
     ElidedLabel *preview_pill = nullptr; // 中栏卡头徽标（文件名，T10 填）
@@ -972,7 +1011,8 @@ struct MainWindow::Impl {
     void remove_selected();
     void restore_session();
     void open_logs();
-    void push_log_tail(); // M4-T14：run-*.log 末尾 5 行 → 运行页日志尾卡
+    QString disk_free_segment(); // A19（T11）：底栏「剩余磁盘」段（输出根 → 源目录 → 工作目录）
+    void push_log_tail();        // M4-T14：run-*.log 末尾 5 行 → 运行页日志尾卡
     void handle_file_event(const pp::FileEvent &ev);
     void restore_selection_by_path(const QString &path);
 
@@ -1042,7 +1082,7 @@ struct MainWindow::Impl {
 };
 
 MainWindow::Impl::Impl(MainWindow *owner, const pp::AppSettings &s)
-    : w(owner), settings(s), theme_mode(preferred_theme_mode()) {
+    : w(owner), settings(s), theme_mode(apply_startup_theme(s.ui_theme_mode)) {
     // M4-T11：分类注册表路径（§3.6/§6.2 单源 = settings.class_file；空 = 默认
     // data_dir()/classes.json）
     classes_file =
@@ -1551,10 +1591,20 @@ void MainWindow::build_ui() {
     d.output_status = new ElidedLabel(d.bottombar);
     d.output_status->setObjectName(QStringLiteral("pp-output-status"));
     d.output_status->setFont(theme::font(theme::Typography::small_px)); // 状态栏 11px
+    // A19（§3.2 骨架行）：第三段「剩余磁盘 1.2 TB」—— 次级读数（--txt3）+ 段前 hairline 分区
+    d.disk_sep = new QFrame(d.bottombar);
+    d.disk_sep->setObjectName(QStringLiteral("pp-disk-sep"));
+    d.disk_sep->setAttribute(Qt::WA_StyledBackground, true);
+    d.disk_sep->setFixedSize(1, theme::Metrics::statusbar_sep_h);
+    d.disk_status = new ElidedLabel(d.bottombar);
+    d.disk_status->setObjectName(QStringLiteral("pp-disk-status"));
+    d.disk_status->setFont(theme::font(theme::Typography::small_px)); // 状态栏 11px
     bottom->addWidget(d.status_dot);
     bottom->addWidget(d.status);
     bottom->addWidget(d.status_sep);
     bottom->addWidget(d.output_status);
+    bottom->addWidget(d.disk_sep);
+    bottom->addWidget(d.disk_status);
     bottom->addStretch(1);
     d.start = new QPushButton(tr("开始运行"), d.bottombar);
     d.start->setObjectName(QStringLiteral("pp-start"));
@@ -2123,6 +2173,9 @@ void MainWindow::refresh_status() {
         }
     }
 
+    // A19（§3.2）：底栏第三段「剩余磁盘」读数（输出根目录 → 源目录）
+    d.disk_free_segment();
+
     // 卡头计数徽标（mockup .pill 内是纯数字）
     d.file_count->set_full_text(QString::number(count));
     d.file_count->setVisible(true);
@@ -2482,6 +2535,41 @@ void MainWindow::Impl::apply_status_tone(const char *tone) {
     }
 }
 
+// A19（T11，§3.2 骨架行「…｜输出：…｜剩余磁盘 1.2 TB」）：底栏第三段的读数。
+// 数据源 = **输出根目录**（未设 = 源目录 = 首个输入文件的目录；两者都无 = 进程工作目录 ——
+// 仍是"这次会话往哪写"的最近似面），显示该卷的可用空间（自然语，不显示裸字节）。
+// 读数缓存 1.5s：refresh_status 会被逐文件事件高频触发，卷查询不需要逐帧精度。
+QString MainWindow::Impl::disk_free_segment() {
+    if (page_output == nullptr || disk_status == nullptr)
+        return QString();
+    QString root = page_output->out_root().trimmed();
+    QString source;
+    if (root.isEmpty() && model != nullptr && !model->empty())
+        source = QString::fromStdString(model->row(0).entry.base_dir.string());
+    const bool from_out_root = !root.isEmpty();
+    if (root.isEmpty())
+        root = source.isEmpty() ? QDir::currentPath() : source;
+    constexpr qint64 kRefreshMs = 1500;
+    if (disk_checked_path != root || !disk_clock.isValid() || disk_clock.elapsed() > kRefreshMs) {
+        disk_checked_path = root;
+        const QStorageInfo info(root);
+        disk_free_bytes = (info.isValid() && info.isReady()) ? info.bytesAvailable() : -1;
+        disk_clock.restart();
+    }
+    const QString text = disk_free_bytes >= 0
+                             ? MainWindow::tr("剩余磁盘 %1").arg(natural_bytes(disk_free_bytes))
+                             : MainWindow::tr("剩余磁盘 —");
+    // 读数出处进 tooltip（§2.6：单位/口径不占正文）
+    disk_status->setToolTip(
+        disk_free_bytes >= 0
+            ? MainWindow::tr("%1所在卷的可用空间：%2")
+                  .arg(from_out_root ? MainWindow::tr("输出根目录") : MainWindow::tr("源目录"),
+                       root)
+            : MainWindow::tr("无法读取卷的可用空间：%1").arg(root));
+    disk_status->set_full_text(text);
+    return text;
+}
+
 void MainWindow::Impl::update_caption_buttons() {
     if (cap_max == nullptr || w == nullptr)
         return;
@@ -2494,11 +2582,16 @@ void MainWindow::Impl::update_caption_buttons() {
     cap_max->setAccessibleName(tip); // §11：文案随状态变化，两者同步
 }
 
+// A13（T11）：分栏几何键 bump 至 v6 键名 —— 旧键名（`ui/splitter`，M4 的 258/601 口径）下的
+// 老会话几何**一次性丢弃**，新基线（§3.2 左 330 / 右 587）在下一轮启动即生效；不写迁移代码
+// （旧值 = 恰好要作废的那一份）。键名里的 v6 = 规范版本，改基线口径时随之 bump。
+QString splitter_state_key() { return QStringLiteral("ui/splitter-v6"); }
+
 void MainWindow::Impl::restore_splitter_state() {
     if (splitter == nullptr || skeleton_state_disabled())
         return;
     QSettings state(ui_state_path(), QSettings::IniFormat);
-    const QByteArray saved = state.value(QStringLiteral("ui/splitter")).toByteArray();
+    const QByteArray saved = state.value(splitter_state_key()).toByteArray();
     if (!saved.isEmpty())
         splitter->restoreState(saved);
 }
@@ -2507,7 +2600,7 @@ void MainWindow::Impl::save_splitter_state() {
     if (splitter == nullptr || skeleton_state_disabled())
         return;
     QSettings state(ui_state_path(), QSettings::IniFormat);
-    state.setValue(QStringLiteral("ui/splitter"), splitter->saveState());
+    state.setValue(splitter_state_key(), splitter->saveState());
 }
 
 // ---------------------------------------------------------------------------
@@ -2522,6 +2615,10 @@ void MainWindow::open_settings() {
     if (dlg.exec() != QDialog::Accepted)
         return;
     d.settings = dlg.settings();
+    // A28（T11）：主题档的即时落地（§9「手动切换（设置·通用）」）—— 对话框把三档选择写进
+    // settings.ui_theme_mode（下面随即落盘），这里按单源顺序重解析本窗主题（PP_UI_THEME 强制档 >
+    // 持久化档 > 跟随系统）并重建 QSS/自绘件；档未变 → set_theme_mode 仍是幂等的整窗重放。
+    d.set_theme_mode(theme::preferred_theme_mode());
     pp::LogLevel level = pp::LogLevel::Info;
     if (!parse_log_level_text(d.settings.log_level, level))
         level = pp::LogLevel::Info;
@@ -3997,6 +4094,47 @@ void MainWindow::Impl::smoke_probe_shell_geometry() {
         if (live == QString::fromLatin1(theme::kToneErr) && model->checked_count() == 0)
             smoke_fail(MainWindow::tr("空/未勾选态用了红档（§8：就绪/空不得用红）"));
     }
+
+    // ---- A19（T11，§3.2 骨架行）：底栏第三段「剩余磁盘」—— 自然语读数（值 + 单位）+ 分区 hairline
+    // ----
+    {
+        const QString text = disk_status != nullptr ? disk_status->full_text() : QString();
+        const QString prefix = QStringLiteral("剩余磁盘 ");
+        const QString value = text.startsWith(prefix) ? text.mid(prefix.size()) : QString();
+        static const QRegularExpression natural(
+            QStringLiteral("^\\d+(\\.\\d)? (B|KB|MB|GB|TB|PB)$"));
+        const bool reading = natural.match(value).hasMatch();
+        const bool placeholder = value == QStringLiteral("—");
+        // 分区位置：… [输出摘要] [hairline] [剩余磁盘]（段序逐字 = §3.2 骨架行）
+        const auto cx = [this](const QWidget *widget) {
+            return widget != nullptr ? widget->mapTo(root, QPoint(0, 0)).x() : -1;
+        };
+        const int out_right =
+            output_status != nullptr ? cx(output_status) + output_status->width() : -1;
+        const int sep_x = cx(disk_sep);
+        const int label_x = cx(disk_status);
+        const bool ordered = out_right >= 0 && sep_x > out_right && label_x > sep_x;
+        const bool tip = disk_status != nullptr && !disk_status->toolTip().isEmpty();
+        std::printf("UI-SMOKE status-disk: text=\"%s\" reading=%d placeholder=%d ordered=%d "
+                    "tip=%d\n",
+                    qUtf8Printable(text), reading ? 1 : 0, placeholder ? 1 : 0, ordered ? 1 : 0,
+                    tip ? 1 : 0);
+        std::fflush(stdout);
+        if (disk_status == nullptr || disk_sep == nullptr || !ordered || !tip) {
+            smoke_fail(MainWindow::tr("底栏「剩余磁盘」段不符（控件=%1/%2 段序=%3 tooltip=%4）")
+                           .arg(disk_status != nullptr ? 1 : 0)
+                           .arg(disk_sep != nullptr ? 1 : 0)
+                           .arg(ordered ? 1 : 0)
+                           .arg(tip ? 1 : 0));
+        }
+        // 自然语读数值（在真实卷上必须给真读数：占位「—」= 卷不可读）
+        if (!reading && !placeholder) {
+            smoke_fail(MainWindow::tr("「剩余磁盘」不是「值 + 单位」自然语：\"%1\"").arg(text));
+        }
+        if (placeholder) {
+            smoke_fail(MainWindow::tr("「剩余磁盘」未取到卷可用空间（工作目录所在卷不可读？）"));
+        }
+    }
 }
 
 void MainWindow::Impl::smoke_probe_theme() {
@@ -4305,13 +4443,23 @@ void MainWindow::Impl::smoke_probe_preview() {
         preview_panel->findChild<QToolButton *>(QStringLiteral("pp-preview-zoom-fit"));
     QToolButton *zoom_11 =
         preview_panel->findChild<QToolButton *>(QStringLiteral("pp-preview-zoom-1to1"));
+    // A17（T11）机械换锚：打标 chip 的控件类型由「键帽 ClipLabel + 名称 ClipLabel」双件改为
+    // formkit::ChipButton 单件（§6.1 唯一形态）→ 取值路径随控件换锚（键 = key_text()、
+    // 名称 = text()）；chip 表语义（热键 1/2/3 与名称逐字）与断言本体不变。「0 清除」不再是
+    // chip（降级为文字链，见下）→ 期望表相应缩短一条（规范强制变化，登记在任务报告）。
     QStringList key_chips;
-    for (QLabel *chip : preview_panel->findChildren<QLabel *>(QStringLiteral("pp-preview-key")))
-        key_chips << chip->text();
     QStringList key_names;
-    for (QLabel *label :
-         preview_panel->findChildren<QLabel *>(QStringLiteral("pp-preview-keyname")))
-        key_names << label->text();
+    for (QAbstractButton *button :
+         preview_panel->findChildren<QAbstractButton *>(QStringLiteral("pp-preview-key"))) {
+        const auto *chip = static_cast<const formkit::ChipButton *>(button);
+        key_chips << chip->key_text();
+        key_names << chip->text();
+    }
+    // 修 1-20（A17）：清除 = 文字链（QToolButton，无键帽）+ 前置分隔线
+    const auto *clear_link =
+        preview_panel->findChild<QToolButton *>(QStringLiteral("pp-preview-clear"));
+    const auto *clear_sep =
+        preview_panel->findChild<QFrame *>(QStringLiteral("pp-preview-key-sep"));
     // 缩放两钮的读数 = 挂载的矢量图标名（修 1-19：图标钮无文案，控件面身份由图标名承载）
     const auto icon_key = [](const QToolButton *button) {
         return button != nullptr ? button->property(icons::kIconNameProperty).toString()
@@ -4340,15 +4488,40 @@ void MainWindow::Impl::smoke_probe_preview() {
                        .arg(zoom_fit != nullptr ? zoom_fit->isCheckable() : -1)
                        .arg(zoom_11 != nullptr ? zoom_11->isCheckable() : -1));
     }
-    // 默认模板（§6.2）：精选/待定/废片（热键 1/2/3）+ 保留的「0 清除」
-    const QStringList expect_chips{QStringLiteral("1"), QStringLiteral("2"), QStringLiteral("3"),
-                                   QStringLiteral("0")};
+    // 默认模板（§6.2）：精选/待定/废片（热键 1/2/3）—— A17/修 1-20：保留的「0 清除」不再以
+    // chip 出现（降级为文字链；热键 '0' 的路由不变，见下）
+    const QStringList expect_chips{QStringLiteral("1"), QStringLiteral("2"), QStringLiteral("3")};
     if (key_chips != expect_chips)
         smoke_fail(MainWindow::tr("热键提示 chip 表不符：%1").arg(key_chips.join(',')));
-    if (key_names.size() != 4 || key_names.at(0) != QStringLiteral("精选") ||
-        key_names.at(1) != QStringLiteral("待定") || key_names.at(2) != QStringLiteral("废片") ||
-        key_names.at(3) != QStringLiteral("清除")) {
+    if (key_names.size() != 3 || key_names.at(0) != QStringLiteral("精选") ||
+        key_names.at(1) != QStringLiteral("待定") || key_names.at(2) != QStringLiteral("废片")) {
         smoke_fail(MainWindow::tr("热键提示名称表不符：%1").arg(key_names.join(',')));
+    }
+    if (clear_link == nullptr || clear_link->text() != QStringLiteral("清除") ||
+        clear_sep == nullptr) {
+        smoke_fail(
+            MainWindow::tr("「清除」未降级为文字链/未分隔（link=%1 sep=%2）")
+                .arg(clear_link != nullptr ? clear_link->text() : QStringLiteral("<missing>"))
+                .arg(clear_sep != nullptr ? QStringLiteral("ok") : QStringLiteral("<missing>")));
+    }
+    // 修 1-20 的空间关系：… [最后一个 chip] [分隔线] [清除文字链]（破坏性动作与打标分列）
+    {
+        const QList<QAbstractButton *> chip_buttons =
+            preview_panel->findChildren<QAbstractButton *>(QStringLiteral("pp-preview-key"));
+        const QAbstractButton *last_chip = chip_buttons.isEmpty() ? nullptr : chip_buttons.last();
+        const auto cx = [this](const QWidget *widget) {
+            return widget != nullptr ? widget->mapTo(preview_panel, QPoint(0, 0)).x() : -1;
+        };
+        const int chip_right = last_chip != nullptr ? cx(last_chip) + last_chip->width() : -1;
+        const int sep_x = cx(clear_sep);
+        const int link_x = cx(clear_link);
+        if (chip_right < 0 || sep_x <= chip_right || link_x <= sep_x) {
+            smoke_fail(MainWindow::tr("「清除」文字链未与打标 chip 分隔"
+                                      "（chip-right=%1 sep=%2 link=%3）")
+                           .arg(chip_right)
+                           .arg(sep_x)
+                           .arg(link_x));
+        }
     }
     if (preview_panel->current_position_text() != QStringLiteral("1 / %1").arg(model->size()))
         smoke_fail(
@@ -4492,7 +4665,10 @@ void MainWindow::Impl::smoke_probe_preview_geometry() {
     QToolButton *nav_prev = w->findChild<QToolButton *>(QStringLiteral("pp-preview-prev"));
     QToolButton *nav_next = w->findChild<QToolButton *>(QStringLiteral("pp-preview-next"));
     // 热键 chip（修 1-22 的禁用面：chip 自身 isEnabled 跟随其容器）
-    QLabel *key_chip = w->findChild<QLabel *>(QStringLiteral("pp-preview-key"));
+    // A17（T11）机械换锚：chip 的控件类型 ClipLabel → formkit::ChipButton（QAbstractButton 子类，
+    // 无 Q_OBJECT → 按 objectName 取 + 静态下转，与页面探针同一口径）；禁用面语义不变。
+    auto *key_chip = static_cast<formkit::ChipButton *>(
+        w->findChild<QAbstractButton *>(QStringLiteral("pp-preview-key")));
     if (stage == nullptr || badge == nullptr || zoombar == nullptr || zoom_out == nullptr ||
         zoom_in_btn == nullptr || zoom_fit_btn == nullptr || zoom_11_btn == nullptr ||
         zoom_level == nullptr || hint == nullptr || empty_box == nullptr || empty_icon == nullptr ||
@@ -5138,12 +5314,17 @@ void MainWindow::Impl::smoke_probe_filelist_geometry() {
                                !size_text.isEmpty() &&
                                (date_text.isEmpty() || date_text.size() == 10);
 
-    // ---- (d) 空态投放区（修 1-06）：结构 + 真值表 + 运行态落地 ----
+    // ---- (d) 空态投放区（修 1-06 + A16）：结构 + 真值表 + 运行态落地 + 文案去重 ----
+    // A16：文件列表空态 = 「拖放照片到此处」（§8 的逐字引导语「将照片拖到此处，或点击 ＋ 添加」
+    // 归预览画布 —— 同屏两条同文冗余）；显式「添加文件…」钮留存（§8 逐字）。
+    const QString drop_full = drop_text != nullptr ? drop_text->full_text() : QString();
     const bool empty_struct =
         empty_state != nullptr && drop_zone != nullptr && drop_icon != nullptr &&
         !drop_icon->pixmap().isNull() && drop_text != nullptr && empty_add != nullptr &&
         !empty_add->text().isEmpty() && empty_add->height() == theme::Metrics::btn_h &&
-        !drop_zone->styleSheet().isEmpty();
+        !drop_zone->styleSheet().isEmpty() && drop_full == QStringLiteral("拖放照片到此处") &&
+        empty_add->text() == QStringLiteral("添加文件…") &&
+        drop_full != QStringLiteral("将照片拖到此处，或点击 ＋ 添加"); // A16：不得与预览同文
     const bool empty_truth = MainWindow::Impl::empty_state_visible(true, false) &&
                              !MainWindow::Impl::empty_state_visible(false, false) &&
                              !MainWindow::Impl::empty_state_visible(true, true);
@@ -5205,7 +5386,7 @@ void MainWindow::Impl::smoke_probe_filelist_geometry() {
     std::printf(
         "UI-SMOKE filelist-geom: checked=%d bad=%d row=%dx%d thumb=%d check=%d check_col=%d "
         "pill_h=%d btn=%dx%d info_px=%d tools=%d remove-hidden=%d/%d/%d join=\"%s\"|\"%s\" "
-        "info=size:\"%s\" date:\"%s\" camera:\"%s\" empty=%d/%d/%d rows=%d/%d "
+        "info=size:\"%s\" date:\"%s\" camera:\"%s\" drop=\"%s\" empty=%d/%d/%d rows=%d/%d "
         "bar=%s→%s sel_token=%d %s\n",
         count, int(bad.size()), row_rect.width(), row_rect.height(), rects.thumb.width(),
         check_box.width(), view->columnWidth(FileGroupProxyModel::kCheckColumn),
@@ -5214,8 +5395,9 @@ void MainWindow::Impl::smoke_probe_filelist_geometry() {
         tools_visible ? 1 : 0, remove_hidden_without_selection ? 1 : 0,
         remove_shown_with_selection ? 1 : 0, remove_hidden_again ? 1 : 0, qUtf8Printable(wide),
         qUtf8Printable(narrow), qUtf8Printable(size_text), qUtf8Printable(date_text),
-        qUtf8Printable(camera_text), empty_struct ? 1 : 0, empty_truth ? 1 : 0, empty_live ? 1 : 0,
-        visible_rows, classify_rows, qUtf8Printable(bar_unsel.name(QColor::HexRgb)),
+        qUtf8Printable(camera_text), qUtf8Printable(drop_full), empty_struct ? 1 : 0,
+        empty_truth ? 1 : 0, empty_live ? 1 : 0, visible_rows, classify_rows,
+        qUtf8Printable(bar_unsel.name(QColor::HexRgb)),
         qUtf8Printable(bar_sel.name(QColor::HexRgb)), sel_token ? 1 : 0,
         qUtf8Printable(bad.join(QLatin1Char(' '))));
     std::fflush(stdout);
@@ -5240,10 +5422,11 @@ void MainWindow::Impl::smoke_probe_filelist_geometry() {
         smoke_fail(MainWindow::tr("行内信息取数不符（大小=\"%1\" 日期=\"%2\" 机型=\"%3\"）")
                        .arg(size_text, date_text, camera_text));
     if (!empty_struct || !empty_truth || !empty_live)
-        smoke_fail(MainWindow::tr("空态投放区不符（结构=%1 真值=%2 落地=%3）")
+        smoke_fail(MainWindow::tr("空态投放区不符（结构=%1 真值=%2 落地=%3 文案=\"%4\" 钮=\"%5\"）")
                        .arg(empty_struct ? 1 : 0)
                        .arg(empty_truth ? 1 : 0)
-                       .arg(empty_live ? 1 : 0));
+                       .arg(empty_live ? 1 : 0)
+                       .arg(drop_full, empty_add != nullptr ? empty_add->text() : QString()));
     if (!no_stale_rows)
         smoke_fail(MainWindow::tr("分类面板残留部件（可见行 %1 / chip %2 ≠ 行数 %3）")
                        .arg(visible_rows)
@@ -6842,6 +7025,133 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
                 }
             }
         }
+        // ---- M5-T11（A28）：主题三档写回 + 持久化往返 + 启动读取点的解析链 ----
+        // 位置：T15 读回之后、close 之前；**不改变任何终态**（三档逐一取值后复位到原档，
+        // 持久化覆盖与临时文件都还原/清理）→ 后继截图与探针基线不受影响。
+        {
+            auto *mode =
+                dlg.findChild<formkit::SegmentedControl *>(QStringLiteral("pp-theme-mode"));
+            int bad = 0;
+            QString detail;
+            if (mode == nullptr || mode->count() != 3) {
+                ++bad;
+                detail = QStringLiteral("seg-missing");
+            } else {
+                const int keep = mode->current_index();
+                // 三档写回：档位 → AppSettings.ui_theme_mode（system/light/dark 逐档一致）
+                for (int i = 0; i < 3; ++i) {
+                    mode->set_current_index(i);
+                    const QString got = QString::fromStdString(dlg.settings().ui_theme_mode);
+                    const QString want =
+                        QString::fromLatin1(i == 0 ? "system" : (i == 1 ? "light" : "dark"));
+                    if (got != want) {
+                        ++bad;
+                        detail += QStringLiteral("%1→%2(期望 %3) ").arg(i).arg(got, want);
+                    }
+                }
+                mode->set_current_index(keep); // 复位（探针不改变被检对象的终态）
+                // 即时生效链（A28「选后立即生效」）：点「亮色」段 → 全局档翻转 + 解析链同档；
+                // 随后点回原档复位（同一进程环境与基线不受影响）
+                if (QAbstractButton *light = qobject_cast<QAbstractButton *>(mode->segment(1))) {
+                    light->click();
+                    pump(40);
+                    const bool instant = mode->current_index() == 1 &&
+                                         theme::preferred_theme_mode() == theme::ThemeMode::Light;
+                    if (!instant) {
+                        ++bad;
+                        detail += QStringLiteral("instant(click→%1) ")
+                                      .arg(theme::theme_mode_id() == QByteArrayLiteral("light")
+                                               ? QStringLiteral("light")
+                                               : QStringLiteral("<none>"));
+                    }
+                    if (QAbstractButton *back =
+                            qobject_cast<QAbstractButton *>(mode->segment(keep))) {
+                        back->click(); // 复位到探针进入时的档
+                        pump(40);
+                    }
+                }
+                // 持久化往返：AppSettings 经真实存储层落盘再读回（临时文件，不碰 data_dir）
+                pp::AppSettings round = dlg.settings();
+                round.ui_theme_mode = "dark";
+                const QString tmp =
+                    QDir(QDir::tempPath()).filePath(QStringLiteral("pp-m5t11-theme.ini"));
+                const std::string err = pp::save_settings(tmp.toStdString(), round);
+                const pp::AppSettings back = pp::load_settings(tmp.toStdString());
+                if (!err.empty() || back.ui_theme_mode != "dark") {
+                    ++bad;
+                    detail += QStringLiteral("roundtrip(%1) ").arg(QString::fromStdString(err));
+                }
+                QFile::remove(tmp);
+                // 启动读取点：**与 MainWindow 构造期同一函数** apply_startup_theme()
+                // （settings.ui_theme_mode → 进程级持久化档 → 落地模式）；PP_UI_THEME 强制档
+                // 优先，故仅在未设强制档时取证（强制档下持久化档按设计让位）。
+                const QByteArray keep_persisted = theme::persisted_theme_mode();
+                const QByteArray forced = qgetenv("PP_UI_THEME").trimmed().toLower();
+                if (forced.isEmpty()) {
+                    const bool dark_ok = apply_startup_theme("dark") == theme::ThemeMode::Dark &&
+                                         theme::theme_mode_id() == QByteArrayLiteral("dark") &&
+                                         theme::persisted_theme_mode() == QByteArrayLiteral("dark");
+                    const bool light_ok =
+                        apply_startup_theme("light") == theme::ThemeMode::Light &&
+                        theme::theme_mode_id() == QByteArrayLiteral("light") &&
+                        theme::persisted_theme_mode() == QByteArrayLiteral("light");
+                    const bool system_ok =
+                        apply_startup_theme("system") == theme::system_theme_mode() &&
+                        theme::persisted_theme_mode().isEmpty();
+                    theme::set_persisted_theme_mode(keep_persisted); // 复位到探针进入时的档
+                    if (!dark_ok || !light_ok || !system_ok) {
+                        ++bad;
+                        detail += QStringLiteral("startup(dark=%1 light=%2 system=%3) ")
+                                      .arg(dark_ok ? 1 : 0)
+                                      .arg(light_ok ? 1 : 0)
+                                      .arg(system_ok ? 1 : 0);
+                    }
+                }
+                // 端到端（A28「主窗启动读取点」的**构造路径**）：用 ui_theme_mode=light 的
+                // AppSettings 造一个主窗 —— 这正是新进程启动时的同一构造序列（磁盘 → AppSettings
+                // 的一段由 test_settings 的往返单测覆盖）→ 窗口必须落到浅色档。随后销毁并复位
+                // 本窗主题与全局持久化档（后继截图/探针基线不受影响）。
+                {
+                    pp::AppSettings light_settings;
+                    light_settings.ui_theme_mode = "light";
+                    auto *probe_window = new MainWindow(light_settings, nullptr);
+                    pump(120);
+                    // 注入 + 落地：持久化档被写进进程覆盖；窗口落**单源解析**的档（未设
+                    // PP_UI_THEME 强制档时即浅色；强制档在场时按设计落强制档 —— 判据随之取
+                    // 同一函数的结果，不写死浅色）+ tokens 与档一致。
+                    const theme::ThemeMode want = theme::preferred_theme_mode();
+                    const bool landed =
+                        theme::persisted_theme_mode() == QByteArrayLiteral("light") &&
+                        probe_window->impl_->theme_mode == want &&
+                        probe_window->impl_->tokens.dark() == (want == theme::ThemeMode::Dark);
+                    delete probe_window;
+                    pump(80);
+                    theme::set_persisted_theme_mode(keep_persisted);
+                    refresh_theme(); // 重放 QApplication 调色板/字体 + 本窗
+                                     // QSS（探针窗口改过全局调色板）
+                    pump(80);
+                    if (!landed) {
+                        ++bad;
+                        detail += QStringLiteral("mainwindow-startup ");
+                    }
+                }
+            }
+            // 单行诊断（前缀 = tests/ui_smoke.py 的 T11 清单）：checked = 三档写回 3 +
+            // 即时生效（点段）1 + 存储往返 1 + 启动读取点 3（强制档在场时启动链让位 → 少 3 项）
+            // + 主窗构造路径端到端 1
+            const int total = (mode != nullptr && mode->count() == 3)
+                                  ? (qgetenv("PP_UI_THEME").trimmed().isEmpty() ? 9 : 6)
+                                  : 0;
+            std::printf("UI-SMOKE settings-theme: checked=%d bad=%d mode=\"%s\" %s\n", total, bad,
+                        qUtf8Printable(mode != nullptr
+                                           ? QString::fromStdString(dlg.settings().ui_theme_mode)
+                                           : QString()),
+                        qUtf8Printable(detail.trimmed()));
+            std::fflush(stdout);
+            if (bad != 0) {
+                smoke_fail(MainWindow::tr("主题档持久化（A28）不符：%1").arg(detail));
+            }
+        }
         dlg.close();
         pump(80);
     }
@@ -7119,6 +7429,35 @@ void MainWindow::Impl::smoke_probe_output_geometry() {
                QStringLiteral("ok=%1/%2").arg(deform_ok).arg(tiles.size()));
         expect("tile-normal", enabled_tiles == tiles.size(), // 未选中 = 正常对比度（非禁用态）
                QStringLiteral("enabled=%1/%2").arg(enabled_tiles).arg(tiles.size()));
+    }
+    // ---- (a2) A27（T11 缺陷根治受益面）：转换模式分段 —— 段自持高（= kSegH − 2）且可见可选 ----
+    {
+        const auto *seg =
+            page.findChild<formkit::SegmentedControl *>(QStringLiteral("pp-output-seg"));
+        QWidget *first = seg != nullptr ? seg->segment(0) : nullptr;
+        QWidget *second = seg != nullptr ? seg->segment(1) : nullptr;
+        const auto *convert = page.findChild<QWidget *>(QStringLiteral("pp-mode-convert"));
+        const auto *metadata = page.findChild<QWidget *>(QStringLiteral("pp-mode-metadata"));
+        // 段对象名 = 调用点为探针留的钩子（pp-mode-convert / pp-mode-metadata）
+        const bool named = first != nullptr && second != nullptr && seg->segment(0) == convert &&
+                           seg->segment(1) == metadata;
+        expect("mode-seg-visible",
+               seg != nullptr && seg->count() == 2 && seg->height() == formkit::kSegH &&
+                   first != nullptr && first->height() == formkit::seg_inner_h() &&
+                   first->width() == formkit::kSegW && second != nullptr &&
+                   second->height() == formkit::seg_inner_h() &&
+                   second->width() == formkit::kSegW && first->isVisible() && second->isVisible() &&
+                   named && seg->current_index() >= 0 && seg->current_index() < seg->count(),
+               QStringLiteral("seg=%1x%2 first=%3x%4(期望 %5x%6) visible=%7/%8 named=%9")
+                   .arg(seg != nullptr ? seg->width() : -1)
+                   .arg(seg != nullptr ? seg->height() : -1)
+                   .arg(first != nullptr ? first->width() : -1)
+                   .arg(first != nullptr ? first->height() : -1)
+                   .arg(formkit::kSegW)
+                   .arg(formkit::seg_inner_h())
+                   .arg(first != nullptr && first->isVisible() ? 1 : 0)
+                   .arg(second != nullptr && second->isVisible() ? 1 : 0)
+                   .arg(named ? 1 : 0));
     }
     page.select_format(QStringLiteral("jxl"));
     pump(60);
@@ -8382,6 +8721,44 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
                         QStringLiteral("text=\"%1\" tip=\"%2\" gray=%3")
                             .arg(text, tip)
                             .arg(neutral_gray ? 1 : 0));
+        }
+
+        // (i-8) A27（T11 缺陷根治受益面）：时间卡模式分段 —— 段自持高（= kSegH − 2）且可见可选
+        {
+            const auto *seg =
+                page.findChild<formkit::SegmentedControl *>(QStringLiteral("pp-meta-seg"));
+            int seg_h = -1;
+            int seg_w = -1;
+            bool visible = false;
+            bool uniform = seg != nullptr && seg->count() == 2;
+            if (seg != nullptr) {
+                for (int i = 0; i < seg->count(); ++i) {
+                    QWidget *segment = seg->segment(i);
+                    if (segment == nullptr) {
+                        uniform = false;
+                        continue;
+                    }
+                    if (i == 0) {
+                        seg_h = segment->height();
+                        seg_w = segment->width();
+                    }
+                    visible = visible || segment->isVisible();
+                    uniform = uniform && segment->isVisible() && segment->height() == seg_h &&
+                              segment->width() == seg_w;
+                }
+            }
+            meta_expect("seg-visible",
+                        seg != nullptr && seg->height() == formkit::kSegH && seg_h > 0 &&
+                            seg_h == formkit::seg_inner_h() && seg_w == formkit::kSegW && visible &&
+                            uniform && seg->current_index() >= 0 &&
+                            seg->current_index() < seg->count(),
+                        QStringLiteral("seg=%1x%2 seg-h=%3(期望 %4) visible=%5 uniform=%6")
+                            .arg(seg != nullptr ? seg->width() : -1)
+                            .arg(seg != nullptr ? seg->height() : -1)
+                            .arg(seg_h)
+                            .arg(formkit::seg_inner_h())
+                            .arg(visible ? 1 : 0)
+                            .arg(uniform ? 1 : 0));
         }
 
         std::printf("UI-SMOKE meta-geom: checked=%d bad=%d content=%dx%d(pane=%dx%d) %s\n",

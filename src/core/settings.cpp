@@ -10,11 +10,16 @@
 // Key names are the struct field names (snake_case); booleans are written `true`/`false`;
 // doubles use the shortest `%.10g` form. Values that do not parse are ignored on load
 // (the default is kept) — load_settings has no error channel by contract.
+//
+// M5-T11（A28，按契约 C6 的加性追加面）：新增 `ui_theme_mode`（system|light|dark，默认
+// system）—— settings_pairs 末尾追加一行 + apply_pair 加一个词表分支；既有键的读写语义与
+// 文件字节序（未知键/注释原样保留）零改动（test_settings 的全字段往返随码扩展）。
 
 #include "core/settings.h"
 
 #include "core/fsops.h" // validate_output_template()（§4.2 模板校验，T15 加载期口径）
 
+#include <cctype> // std::tolower（A28 的 ui_theme_mode 词表解析）
 #include <cerrno>
 #include <climits>
 #include <cstdio>
@@ -121,6 +126,8 @@ std::vector<std::pair<std::string, std::string>> settings_pairs(const AppSetting
     // —— 0.3.0 / W3-T15 追加（§3.6 行中间两项；追加顺序 = 结构体末尾顺序，见 settings.h 头注）——
     kv.emplace_back("output_template", s.output_template);
     kv.emplace_back("split_by_format", s.split_by_format ? "true" : "false");
+    // —— 0.3.0 / M5-T11 追加（A28；追加顺序 = 结构体末尾顺序）——
+    kv.emplace_back("ui_theme_mode", s.ui_theme_mode);
     return kv;
 }
 
@@ -190,6 +197,15 @@ void apply_pair(AppSettings &s, const std::string &key, const std::string &value
         bool v = false;
         if (parse_bool(value, v))
             s.split_by_format = v;
+    } else if (key == "ui_theme_mode") {
+        // A28/§9：手动主题档。词表 = system|light|dark；**词表外/空值 → 保留默认（system）**
+        // （同 class_file/output_template 的"值不合法 → 保留默认"口径）—— 不把未知档带进
+        // 内存，UI 侧的三档回填也就不会出现"第四档"。大小写不敏感（手改配置文件容错）。
+        std::string v = value;
+        for (char &c : v)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (v == "system" || v == "light" || v == "dark")
+            s.ui_theme_mode = v;
     }
 }
 

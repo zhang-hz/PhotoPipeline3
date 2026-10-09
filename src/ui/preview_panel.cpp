@@ -64,8 +64,9 @@
 #include <utility>
 #include <vector>
 
-#include "ui/icons.h" // M5-T3：翻图钮/缩放 chip 的图标一律矢量绘制（C3）
-#include "ui/theme.h" // 只在实现里引（头文件前置声明 theme::Tokens 的原因见 preview_panel.h）
+#include "ui/formkit.h" // A17/T11：打标 chip = formkit::ChipButton（§6.1 批量快捷打标唯一形态）
+#include "ui/icons.h"   // M5-T3：翻图钮/缩放 chip 的图标一律矢量绘制（C3）
+#include "ui/theme.h"   // 只在实现里引（头文件前置声明 theme::Tokens 的原因见 preview_panel.h）
 
 namespace pp::ui {
 namespace {
@@ -102,10 +103,10 @@ constexpr int kStageOverlayMargin =
 constexpr int kOverlayPadX = 8; // .pv-badge{padding:3px 8px}
 constexpr int kOverlayPadY = 3;
 constexpr int kOverlayRadius = 4;
-constexpr int kKeyChipPadX = 6; // .key{padding:1px 6px;border-radius:4px}
-constexpr int kKeyChipPadY = 1;
-constexpr int kKeyChipRadius = 4; // .key{border-radius:4px}
-constexpr int kKeyChipGap = 6;    // .keyhint{gap:6px}
+// A17（T11）：打标 chip 的 pad/radius 已随控件统一进 formkit（ChipButton 的 kChipPadX/…），
+// 本文件只剩「chip 之间与文字链的间距」与「清除文字链的内距」两个局部量。
+constexpr int kKeyChipPadX = 6; // 「清除」文字链的左右内距（.key{padding:1px 6px} 的口径）
+constexpr int kKeyChipGap = 6;  // .keyhint{gap:6px}
 // 空态（§8「预览=深灰舞台 #16181d + 图标 + 引导语」；修 1-16）：图标 32（左栏投放区 26 的舞台档）、
 // 图标与引导语 10px 间距（§4.3 令牌 8–12 之间取 8）、引导语 11.5px（§4.2 正文·值）
 constexpr int kEmptyIconPx = 32;
@@ -760,6 +761,10 @@ struct PreviewPanel::Impl {
     ElideLabel *name = nullptr;
     QWidget *keyhint = nullptr;
     QHBoxLayout *keyhint_layout = nullptr;
+    // A17（T11）：打标 chip（formkit::ChipButton；令牌随主题重放要逐件 set_tokens）+
+    // 「0 清除」文字链（修 1-20：降级为文字链并分隔）
+    QList<formkit::ChipButton *> chips;
+    QToolButton *clear_hint = nullptr;
 
     std::unique_ptr<pp::PreviewCache> cache;
     Pool *pool = nullptr;
@@ -985,25 +990,28 @@ void PreviewPanel::Impl::apply_style() {
     icons::apply(prev, icons::Name::Prev, tokens.text2, tokens.text3, kNavIconPx);
     icons::apply(next, icons::Name::Next, tokens.text2, tokens.text3, kNavIconPx);
     qss += QStringLiteral("QLabel#pp-preview-pos, QLabel#pp-preview-name, "
-                          "QLabel#pp-preview-keyhint-label, QLabel#pp-preview-keyname { color: %1; "
-                          "}\n")
+                          "QLabel#pp-preview-keyhint-label { color: %1; }\n")
                .arg(theme::css_color(tokens.text3));
-    qss +=
-        QStringLiteral("QLabel#pp-preview-key { color: %1; background: %2; border: 1px solid %3; "
-                       "border-radius: %4px; padding: %5px %6px; }\n")
-            .arg(theme::css_color(tokens.text2), theme::css_color(tokens.control),
-                 theme::css_color(tokens.control_bd))
-            .arg(kKeyChipRadius)
-            .arg(kKeyChipPadY)
-            .arg(kKeyChipPadX);
-    // 修 1-22：无文件（禁用）或运行期只读时，打标 chip 与翻图钮同档置灰（禁用态管理一致）
-    qss += QStringLiteral("QLabel#pp-preview-key:disabled { color: %1; background: transparent; "
-                          "border-color: %2; }\n")
-               .arg(theme::css_color(tokens.text3), theme::css_color(tokens.control_bd));
-    qss += QStringLiteral("QLabel#pp-preview-keyhint-label:disabled, "
-                          "QLabel#pp-preview-keyname:disabled { color: %1; }\n")
+    // A17（T11）：打标 chip 的形态 = formkit::ChipButton 自绘（键帽 13×13 r2 + 文字；底色/描边/
+    // 禁用态都在 formkit 内取 tokens）→ 这里不再有 chip 的 QSS 双实现；只为**分隔线**与
+    // 「清除」文字链补两条规则（修 1-20：清除是破坏性动作，与打标 chip 用分隔线隔开）。
+    qss += QStringLiteral("QFrame#pp-preview-key-sep { background: %1; border: none; }\n")
+               .arg(theme::css_color(tokens.control_bd));
+    qss += QStringLiteral("QToolButton#pp-preview-clear { color: %1; background: transparent; "
+                          "border: none; padding: 0 %2px; }\n"
+                          "QToolButton#pp-preview-clear:hover { color: %3; }\n"
+                          "QToolButton#pp-preview-clear:disabled { color: %4; }\n")
+               .arg(theme::css_color(tokens.text3))
+               .arg(kKeyChipPadX)
+               .arg(theme::css_color(tokens.text2), theme::css_color(tokens.text3));
+    qss += QStringLiteral("QLabel#pp-preview-keyhint-label:disabled { color: %1; }\n")
                .arg(theme::css_color(tokens.text3));
     q->setStyleSheet(qss);
+    // A17：chip 是自绘件（不吃 QSS）→ 令牌在这里显式重放（与骨架 QSS 同一次主题切换）
+    for (formkit::ChipButton *chip : chips) {
+        if (chip != nullptr)
+            chip->set_tokens(tokens);
+    }
 }
 
 void PreviewPanel::Impl::rebuild_key_hints() {
@@ -1018,22 +1026,29 @@ void PreviewPanel::Impl::rebuild_key_hints() {
         }
         delete item;
     }
+    // A17（T11）：chip = formkit::ChipButton（**单实现**；旧实现是「键帽 ClipLabel + 名称
+    // ClipLabel」两个件的碎片化拼接，且与 formkit 的同名控件构成双实现）。键帽 = R4 口径的
+    // 13×13 r2 小方块（修 1-20「键帽化简」：不再是 padding 1px 6px / r4 的大框），快捷键同时
+    // 进 tooltip（悬停可查）。chip 自身不勾选（打标接线位属其后任务）→ 视觉零形变。
+    chips.clear();
     const auto add_chip = [this](const QString &key, const QString &label) {
-        auto *chip = new ClipLabel(key, keyhint);
+        auto *chip = new formkit::ChipButton(keyhint);
         chip->setObjectName(QStringLiteral("pp-preview-key"));
-        chip->setFont(theme::font(theme::Typography::badge_px, theme::Typography::badge_weight));
-        chip->setAlignment(Qt::AlignCenter);
+        chip->set_key_text(key);
+        chip->setText(label);
+        chip->setCheckable(false); // 仅承载热键提示（勾选语义留给打标接线）
+        chip->setFocusPolicy(Qt::NoFocus);
+        chip->setToolTip(T("快捷键 ") + key);
+        chip->setAccessibleName(label);
+        chip->set_tokens(tokens);
         keyhint_layout->addWidget(chip);
-        auto *name_label = new ClipLabel(label, keyhint);
-        name_label->setObjectName(QStringLiteral("pp-preview-keyname"));
-        name_label->setFont(theme::font(theme::Typography::hint_px));
-        keyhint_layout->addWidget(name_label);
+        chips.append(chip);
     };
     auto *title = new ClipLabel(T("快速打标"), keyhint);
     title->setObjectName(QStringLiteral("pp-preview-keyhint-label"));
     title->setFont(theme::font(theme::Typography::hint_px));
     keyhint_layout->addWidget(title);
-    // 热键表 = 注册表的 classes（hotkey ≠ 0，§6.2）+ 保留的「0 清除」
+    // 热键表 = 注册表的 classes（hotkey ≠ 0，§6.2）
     if (classes != nullptr) {
         for (const pp::ClassDef &def : classes->classes) {
             if (def.hotkey == 0)
@@ -1041,7 +1056,25 @@ void PreviewPanel::Impl::rebuild_key_hints() {
             add_chip(QString(QChar(def.hotkey)), QString::fromStdString(def.name));
         }
     }
-    add_chip(QStringLiteral("0"), T("清除"));
+    // 修 1-20（A17）：保留的「0 清除」是破坏性动作 → 与打标 chip **分隔线**隔开，并**降级为
+    // 文字链**（无键帽、无底框）；热键 '0' 的路由不变（hotkey_taken/emit_hotkey 仍认它）。
+    auto *sep = new QFrame(keyhint);
+    sep->setObjectName(QStringLiteral("pp-preview-key-sep"));
+    sep->setAttribute(Qt::WA_StyledBackground, true);
+    sep->setFixedSize(1, 14);
+    keyhint_layout->addWidget(sep);
+    auto *clear = new QToolButton(keyhint);
+    clear->setObjectName(QStringLiteral("pp-preview-clear"));
+    clear->setText(T("清除"));
+    clear->setAutoRaise(true);
+    clear->setCursor(Qt::PointingHandCursor);
+    clear->setFocusPolicy(Qt::NoFocus);
+    clear->setFixedHeight(formkit::kChipH); // 与 chip 同高（行内基线一致）
+    clear->setFont(theme::font(theme::Typography::small_px));
+    clear->setToolTip(T("清除打标（快捷键 0）"));
+    clear->setAccessibleName(clear->text());
+    clear_hint = clear;
+    keyhint_layout->addWidget(clear);
     update_keyhint_enabled();
 }
 

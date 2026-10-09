@@ -21,6 +21,14 @@
 //   stagger_ms/thread_budget、T8 追加 class_file 都落在末尾；T15 的两项因此续在 class_file
 //   **之后**（而不是 §3.6 行内的字面次序 split_by_format→output_template→class_file）。
 //   结构体布局/INI 键序均按追加时间递增，语义与 §3.6 行等价。
+//
+// PP-FROZEN(0.3.0)【追加面登记 · M5-T11/A28】—— `ui_theme_mode`（追加在结构体末尾）：
+//   裁定原文（docs/m5-adjudications.md A28）：「主题选择持久化：按 C6 追加 AppSettings 键
+//   （`ui_theme_mode`: system/light/dark，默认 system=现行为）+ 主窗启动读取点；`test_settings`
+//   往返扩展」。落地形态 = 本文件末尾一个 `std::string` 字段 + settings.cpp 的
+//   settings_pairs/apply_pair 各一行（词表外/空值保留默认）；**既有键零改动**、INI 未知键
+//   原样保留的存储契约零改动 → §3.6 面的既有冻结语义不变（与 A29 的 RunSummary::peak_bytes
+//   「末尾追加 = 冻结面登记」同口径）。
 #pragma once
 #include <filesystem>
 #include <map>
@@ -91,6 +99,13 @@ struct AppSettings {
     // （restore_session；随后被 last_preset 覆盖，§2.14）。
     std::string output_template = "$format/$dir/$file"; // §3.2 同名默认（§4.2）
     bool split_by_format = false;                       // §3.2 同名默认
+    // —— 0.3.0 / M5-T11 追加（**末尾**；开发期裁定 A28，按契约 C6「新设置项走 AppSettings
+    //    追加键」落地）——
+    // `ui_theme_mode`：手动主题档（§9「遵循系统主题 + 手动切换（设置·通用）」的持久面）。
+    // 词表 = `system` | `light` | `dark`，默认 `system` = 现行为（跟随系统；§9.2）。
+    // 非词表值在加载期丢弃（保留默认，见 settings.cpp）；消费点 = MainWindow 启动期
+    // （ui/theme.h 的持久化档注入）+ 设置对话框「通用」页签的三档写回。
+    std::string ui_theme_mode = "system";
 };
 
 // 极简 INI：`key=value` 单层，`#` 注释；未知键保留原样写回（向前兼容）

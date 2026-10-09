@@ -372,8 +372,16 @@ public:
         setAttribute(Qt::WA_Hover, true);
         setFocusPolicy(Qt::StrongFocus);
         setFixedWidth(kSegW); // R4 段宽 88 等宽 → 选中/悬停零宽度变化
+        // A27（T11 根治）：QAbstractButton 基类**没有** sizeHint（QWidget 默认 = 无效尺寸），
+        // 布局据此会把段算成 0 高 → 段文字/选中填充全不可见（T7/T8/T10 交付面均中招）。
+        // 段本体高由**本件**自持：容器内边距 1px，故段高 = kSegH − 2（与容器描边同口径）。
+        setFixedHeight(seg_inner_h());
         setFont(theme::font(theme::Typography::body_px, QFont::DemiBold));
     }
+
+    // 段的自有尺寸：宽 = R4 段宽 88（等宽），高 = 容器内高（A27）。固定高已由
+    // setFixedHeight 钉住，这里的 sizeHint 是**同一口径的第二道**（去掉 fixed 也不会塌成 0）。
+    QSize sizeHint() const override { return QSize(kSegW, seg_inner_h()); }
 
     void set_tokens(const theme::Tokens &t) {
         tokens_ = t;
@@ -430,7 +438,7 @@ SegmentedControl::SegmentedControl(QWidget *parent) : QWidget(parent) {
     setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     setFixedHeight(kSegH); // R4 高 24（容器；段本体 = 24 − 上下各 1px 描边）
     auto *line = new QHBoxLayout(this);
-    line->setContentsMargins(1, 1, 1, 1); // 内容盒留出容器 1px 描边
+    line->setContentsMargins(kSegBorder, kSegBorder, kSegBorder, kSegBorder); // 留出容器描边
     line->setSpacing(0);
 }
 

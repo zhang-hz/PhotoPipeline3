@@ -75,6 +75,8 @@ pp::AppSettings non_defaults() {
     s.thread_budget = 9;
     s.output_template = "$dir/$format/$file";
     s.split_by_format = true;
+    // M5-T11（A28）：主题档（词表 system|light|dark；此处取非默认档以证往返）
+    s.ui_theme_mode = "dark";
     return s;
 }
 
@@ -86,7 +88,7 @@ bool same(const pp::AppSettings &a, const pp::AppSettings &b) {
            a.last_format == b.last_format && a.last_preset == b.last_preset &&
            a.last_out_root == b.last_out_root && a.stagger_ms == b.stagger_ms &&
            a.thread_budget == b.thread_budget && a.output_template == b.output_template &&
-           a.split_by_format == b.split_by_format;
+           a.split_by_format == b.split_by_format && a.ui_theme_mode == b.ui_theme_mode;
 }
 
 std::string dump(const pp::AppSettings &s) { return pp::settings_to_string(s); }
@@ -108,6 +110,8 @@ int main() {
         check(want.stagger_ms == 150 && want.thread_budget == 0 &&
                   want.output_template == "$format/$dir/$file" && !want.split_by_format,
               "defaults/0-3-0-fields", "got " + dump(want));
+        // M5-T11/A28：主题档默认 = system（= 现行为：跟随系统，§9.2）；键缺省即现行为
+        check(want.ui_theme_mode == "system", "defaults/ui-theme-mode-system", "got " + dump(want));
         // A directory is not a settings file either -> defaults, no error.
         const pp::AppSettings got_dir = pp::load_settings(dir);
         check(same(got_dir, want), "defaults/directory-path", "got " + dump(got_dir));
@@ -236,6 +240,35 @@ int main() {
               "t030/empty-keeps-default", "got " + dump(empty));
     }
 
+    // ---- M5-T11/A28：ui_theme_mode 的三档词表（system|light|dark）+ 非法值保留默认 ----
+    {
+        const fs::path dir = make_temp_dir("settings_theme_mode");
+        const fs::path file = dir / "settings.ini";
+        const pp::AppSettings def;
+
+        // 三档逐一 set→save→load 往返（档名单源 = AppSettings 字段文本）
+        for (const char *mode : {"light", "dark", "system"}) {
+            pp::AppSettings s;
+            s.ui_theme_mode = mode;
+            const std::string err = pp::save_settings(file, s);
+            const pp::AppSettings got = pp::load_settings(file);
+            check(err.empty() && got.ui_theme_mode == mode &&
+                      contains(read_all(file), std::string("ui_theme_mode=") + mode),
+                  std::string("ui-theme/roundtrip/") + mode, "err=" + err + " got=" + dump(got));
+        }
+        // 大小写不敏感（手改配置文件容错）：Dark → dark
+        write_file(file, "ui_theme_mode=Dark\n");
+        check(pp::load_settings(file).ui_theme_mode == "dark", "ui-theme/case-insensitive",
+              "got " + dump(pp::load_settings(file)));
+        // 词表外/空值 → 保留默认（不把未知档带进内存）
+        for (const char *bad : {"auto", "system2", "", "  ", "light dark"}) {
+            write_file(file, std::string("ui_theme_mode=") + bad + "\n");
+            check(pp::load_settings(file).ui_theme_mode == def.ui_theme_mode,
+                  std::string("ui-theme/bad-keeps-default/") + bad,
+                  "got " + dump(pp::load_settings(file)));
+        }
+    }
+
     // ---- settings_to_string: log snapshot contains every field ----
     {
         const pp::AppSettings s = non_defaults();
@@ -254,7 +287,8 @@ int main() {
                                     "stagger_ms=275",
                                     "thread_budget=9",
                                     "output_template=$dir/$format/$file",
-                                    "split_by_format=true"};
+                                    "split_by_format=true",
+                                    "ui_theme_mode=dark"};
         for (const char *k : keys) {
             check(contains(t, k), std::string("to-string/") + k, "snapshot=" + t);
         }

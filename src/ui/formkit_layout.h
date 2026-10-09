@@ -8,8 +8,9 @@
 //
 // 与 theme.h 的关系（C1 令牌单源）：颜色/字阶/间距圆角/控件度量的真源仍是 theme.h（§4.1/§4.2/
 // §4.3 + R4）；本头按 §5 的栅格口径**复述**其中与表单相关的数值，并在 formkit.h 里以
-// static_assert 逐条对齐 —— 两处漂移即编译失败。唯二例外见文件末「M4 遗留」注释
-// （theme::Metrics::form_label_w / form_row_h：仍被 W-G2/W-G3 待迁移页面消费，T2 不动其值）。
+// static_assert 逐条对齐 —— 两处漂移即编译失败。
+// 迁移期例外（M4 的 theme::Metrics::form_label_w 70 / form_row_h 32）已由 A10/T11 退役：
+// W-G2/W-G3 页面全部迁完，栅格取值只剩本头一份（见 theme.h 的同级注释）。
 //
 // 单位口径：px = 逻辑像素（Qt 设备无关像素，与 mockup CSS px 同口径）。
 
@@ -56,7 +57,12 @@ inline constexpr int kComboArrowPx = 8; // 下拉箭头 8px 居右
 inline constexpr int kSegH = 24;        // 分段控件高 24
 inline constexpr int kSegW = 88;        // 分段段宽 88（等宽 → 选中/悬停零宽度变化）
 inline constexpr int kSegRadius = 3;    // 分段 r3
-inline constexpr int kSwitchW = 30;     // 开关 30×16 药丸
+// A27：段本体高 = 容器高 − 上下各 1px 容器描边（容器 paintEvent 画 1px 框、布局 1px 内边距）。
+// 取值单源在此：Segment 的 sizeHint/fixedHeight 与容器内边距都从这里取 —— 段不会因为
+// 「QAbstractButton 基类无 sizeHint」被布局算成 0 高（全仓分段控件的可见性前提）。
+inline constexpr int kSegBorder = 1; // 容器描边（相当于 `border: 1px solid`）
+constexpr int seg_inner_h() { return kSegH - 2 * kSegBorder; }
+inline constexpr int kSwitchW = 30; // 开关 30×16 药丸
 inline constexpr int kSwitchH = 16;
 inline constexpr int kSwitchKnob = 12;  // 开关钮 12
 inline constexpr int kCheckPx = 13;     // 复选框 13×13

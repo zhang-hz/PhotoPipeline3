@@ -27,12 +27,9 @@
 
 #pragma once
 
-// 先引 QtWidgets 的 qApp 定义，再引 ui/theme.h：theme.h 的 style_mirrors_system_accent() 走
-// `qApp->style()`（QApplication 的成员），而 theme.h 自身只引 <QGuiApplication> ⇒ 若本头（含 moc
-// 产物）先引 theme.h，qApp 会展开成 QGuiApplication* 而编译失败。既有页面 TU 都恰好先引了
-// <QApplication> 才没暴露这个顺序依赖；此处显式固定顺序（theme.h 侧只做加性扩展，见任务边界）。
-#include <QApplication>
-
+// 包含顺序：theme.h 自 A5/T4 起显式引 QtWidgets 侧（qApp 的定义在 <QApplication>），
+// 本头不再需要「先引 <QApplication> 再引 theme.h」的规避 —— 顺序依赖已消除（原注释随 A5
+// 修复作废）。
 #include "ui/formkit_layout.h"
 #include "ui/icons.h" // M5-T3：勾形/胶囊前置图标一律走 icons 库（C3；与 theme.h 无环）
 #include "ui/theme.h"
@@ -54,9 +51,9 @@ namespace pp::ui::formkit {
 
 // ---------------------------------------------------------------------------
 // 几何对齐（C1 单源）：本头复述的栅格/度量值与 theme.h 令牌逐条一致 → 漂移即编译失败。
-// 唯二例外 = theme::Metrics::form_label_w（M4 70）/ form_row_h（M4 32）：仍是待迁移页面
-// （page_meta / page_output / page_run）的活字段，T2 不动其值；表单栅格真源 = formkit_layout.h
-// （标签轨 80 / pitch 28），页面迁移（W-G2/W-G3）后这两个 M4 字段随之退役。
+// 表单栅格真源 = formkit_layout.h（标签轨 80 / pitch 28）；M4 的迁移期双源
+// theme::Metrics::form_label_w(70) / form_row_h(32) 已随 W-G2/W-G3 迁完在 A10/T11 退役
+// （值只剩本头+theme.h 一份，见 theme.h Metrics 的同级注释）。
 // ---------------------------------------------------------------------------
 static_assert(kRowPitch == 28, "R1 行 pitch 28");
 static_assert(kLabelW == 80, "R2 标签轨 80");
@@ -228,6 +225,8 @@ private:
 
 // 分段控件（互斥模式唯一形态；R4 高 24 r3 段宽 88 等宽）：选中段填充 acc，选中/悬停
 // **零宽度变化**（段尺寸固定）。段本体是 QAbstractButton（键盘/无障碍语义），容器自绘底与描边。
+// A27：段高由 Segment **自持**（sizeHint + fixedHeight = kSegH − 2，见 formkit_layout.h 的
+// seg_inner_h）—— QAbstractButton 无基类 sizeHint，调用点不得再自打段高补丁。
 class SegmentedControl : public QWidget {
     Q_OBJECT
 public:

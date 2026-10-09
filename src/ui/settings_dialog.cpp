@@ -21,10 +21,11 @@
 //   ④ 行构造一律走 formkit（R1 pitch 28 / R2 标签轨 80 / R3 提示位 / R4 控件规格），本文件不手摆
 //      栅格；弹窗 chrome（标题栏 40 / 下划线页签 / 底栏 48 / 焦点环 / QSS）走本文件的 dialogkit
 //      （三弹窗共用一份实现，见 ui/settings_dialog.h）。
-//   ⑤ 主题（通用页签，修 4-20）：三档 = 跟随系统 / 亮色 / 暗色，接**现有**主题机制
-//      theme::preferred_theme_mode() 的单源口径（PP_UI_THEME 强制档 > 跟随系统）——选择即时写进
-//      强制档并即时重放本对话框令牌；整窗重放归主窗 refresh_theme()，选择持久化需 AppSettings
-//      新键（本任务键面零改动）→ 见任务报告 escalation。
+//   ⑤ 主题（通用页签，修 4-20 + A28/T11）：三档 = 跟随系统 / 亮色 / 暗色，接**现有**主题机制
+//      theme::preferred_theme_mode() 的单源口径（PP_UI_THEME 强制档 > 持久化档 > 跟随系统）——
+//      选择即时重放本对话框令牌 + 即时更新进程级持久化档；整窗重放归主窗 refresh_theme()
+//      （open_settings() 在 accept 后重解析），跨进程落地 = AppSettings.ui_theme_mode（A28 新增键，
+//      settings() 从段选中态写回、construct 时按同一映射回填）。
 //   语言：仓库无 i18n 实现（无 .ts / QTranslator）→ 通用页签**不摆空行**（不放假下拉）。
 #include "ui/settings_dialog.h"
 
@@ -113,6 +114,7 @@ constexpr auto kOrigStaggerMs = "pp_orig_stagger_ms";
 constexpr auto kOrigThreadBudget = "pp_orig_thread_budget";
 constexpr auto kOrigOutputTemplate = "pp_orig_output_template";
 constexpr auto kOrigSplitByFormat = "pp_orig_split_by_format";
+constexpr auto kOrigUiThemeMode = "pp_orig_ui_theme_mode"; // A28：主题档构造快照
 
 constexpr int kWorkersMax = 64;   // §2.10：QSpinBox(0..64) 同域
 constexpr int kBudgetMax = 64;    // §2.10：QSpinBox(0..64)
@@ -155,6 +157,20 @@ constexpr const char *kLevelIds[] = {"trace", "debug", "info", "warn", "error"};
 
 // §4.2 联动开关值：split_by_format = 模板含 $format 段（GUI 判据单源 = page_output 同名函数）。
 bool structure_split_flag(const QString &tmpl) { return template_has_format(tmpl); }
+
+// —— A28：主题三档的档位 ↔ 档名单源映射（段序 = 跟随系统 / 亮色 / 暗色；与
+//    AppSettings.ui_theme_mode 的词表逐字一致）——
+constexpr const char *kThemeModeIds[] = {"system", "light", "dark"};
+
+int theme_mode_index(const QString &id) {
+    for (int i = 0; i < 3; ++i) {
+        if (id == QLatin1String(kThemeModeIds[i]))
+            return i;
+    }
+    return 0; // 词表外/空 → 跟随系统（与 core 的"值不合法 → 保留默认"同口径）
+}
+
+QString theme_mode_id(int index) { return QLatin1String(kThemeModeIds[std::clamp(index, 0, 2)]); }
 
 // —— 滑杆 ↔ 灰度（§7.4 alpha 行；修 4-15：旧实现把"滑杆值"直接当灰度用，最右端（白）
 // 画成 #646464 深灰，滑杆 / 色块 / 端标三方矛盾）——
@@ -203,6 +219,7 @@ pp::AppSettings original_values(const QObject *o) {
     s.thread_budget = o->property(kOrigThreadBudget).toInt();
     s.output_template = o->property(kOrigOutputTemplate).toString().toStdString();
     s.split_by_format = o->property(kOrigSplitByFormat).toBool();
+    s.ui_theme_mode = o->property(kOrigUiThemeMode).toString().toStdString(); // A28
     return s;
 }
 
@@ -850,9 +867,20 @@ GeomProbeReport settings_geom_probe(const QDialog &dialog) {
         {"theme_seg_w",
          mode != nullptr && mode->segment(0) != nullptr ? mode->segment(0)->width() : -1,
          formkit::kSegW},
+        // A27（T11）：段高自持 = formkit_layout.h 的 seg_inner_h()（kSegH − 2×描边 = 22）——
+        // 期望值由「kSegH − 2」换锚成具名单源函数（语义不变，值同为 22）
         {"theme_seg_h",
          mode != nullptr && mode->segment(0) != nullptr ? mode->segment(0)->height() : -1,
-         formkit::kSegH - 2},
+         formkit::seg_inner_h()},
+        // A27：三档段**全部可见**（段文字/选中填充可见的前提）+ 容器高 = R4 24
+        {"theme_seg_visible",
+         mode != nullptr && mode->count() == 3 && mode->segment(0) != nullptr &&
+                 mode->segment(1) != nullptr && mode->segment(2) != nullptr &&
+                 mode->segment(0)->isVisible() && mode->segment(1)->isVisible() &&
+                 mode->segment(2)->isVisible() && mode->height() == formkit::kSegH
+             ? 1
+             : 0,
+         1},
         // 段组贴字段轨起点（R2：页内 [标签 80][列距 12][轨]，无浮空）
         {"theme_field_x",
          mode != nullptr && page_general != nullptr ? mode->mapTo(page_general, QPoint(0, 0)).x()
@@ -1020,6 +1048,7 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
     setProperty(kOrigThreadBudget, current.thread_budget);
     setProperty(kOrigOutputTemplate, QString::fromStdString(current.output_template));
     setProperty(kOrigSplitByFormat, current.split_by_format);
+    setProperty(kOrigUiThemeMode, QString::fromStdString(current.ui_theme_mode)); // A28
 
     theme::Tokens tokens = theme::tokens(theme::preferred_theme_mode());
     setFixedWidth(dk::kDialogWidth); // §7.4：660px 宽（居中见首次 show）
@@ -1084,23 +1113,14 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
                 segment->setToolTip(segment->text());
             }
         }
-        { // 当前档 = 现有机制的单源口径（PP_UI_THEME 强制档 > 跟随系统）
-            const QByteArray forced = qgetenv("PP_UI_THEME").trimmed().toLower();
-            const int index = forced == QByteArrayLiteral("light")
-                                  ? 1
-                                  : (forced == QByteArrayLiteral("dark") ? 2 : 0);
-            mode->set_current_index(index);
-        }
+        // 当前档 = 单源口径（A28）：PP_UI_THEME 强制档 > 持久化档（AppSettings.ui_theme_mode，
+        // 启动期已注入 theme.h）> 跟随系统 —— 与 theme::preferred_theme_mode() 同一判据顺序，
+        // 只是保留"跟随系统"这一档（theme_mode_id() 给原始档名）。
+        mode->set_current_index(theme_mode_index(QString::fromLatin1(theme::theme_mode_id())));
         mode->set_tokens(tokens);
 
-        // 段高**暂补（调用点）**：formkit::Segment（QAbstractButton 子类）未给 sizeHint → 段在
-        // 容器内被布局算成 0 高（段文字/选中填充不可见，整仓分段控件同此）。根治点在
-        // src/ui/formkit.cpp（本任务文件面外，已登记 escalation）；此处在设置弹窗这一处把段高
-        // 钉到 R4 规格（高 24 − 容器上下各 1px 描边 = 22），保证「主题」三档可见可选。
-        for (int i = 0; i < mode->count(); ++i) {
-            if (QWidget *segment = mode->segment(i))
-                segment->setFixedHeight(formkit::kSegH - 2);
-        }
+        // A27（T11）：段高由 formkit::Segment **自持**（sizeHint/fixedHeight = kSegH − 2）——
+        // 调用点临时补丁（setFixedHeight）已撤销；此处不再对段做任何几何修补。
         // 分段控件本体宽 = 3×88 + 2（R4 段宽 88 等宽）→ 轨用长档；容器**不**定宽（否则会被
         // 轨居中），内部段组贴左缘（R2：字段轨起点 x = 80 + 12，与其它行同轴）
         auto *mode_holder = new QWidget(general);
@@ -1464,16 +1484,25 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
             const int idx = w->findData(QString::fromStdString(def.output_template));
             w->setCurrentIndex(idx >= 0 ? idx : 0);
         }
+        // A28：主题档也是可编辑面 → 复位到默认档（system = 跟随系统）。程序化 set_current_index
+        // 不发射信号 → 与其余字段同一"确定后才落地"语义（不即时改主题）。
+        if (auto *w = findChild<formkit::SegmentedControl *>(QLatin1String(kThemeMode)))
+            w->set_current_index(theme_mode_index(QString::fromStdString(def.ui_theme_mode)));
     });
 
-    // ---- 主题切换（通用页签，修 4-20）：接现有机制（PP_UI_THEME 强制档 > 跟随系统）----
+    // ---- 主题切换（通用页签，修 4-20 + A28）：即时生效（本对话框就地重放）+ 持久化
+    //      （写进 AppSettings.ui_theme_mode，见 settings()）----
     connect(mode, &formkit::SegmentedControl::current_changed, this,
             [this, swatch, rotate_box, mode](int index) {
-                const char *forced = index == 1 ? "light" : (index == 2 ? "dark" : "");
-                if (*forced != '\0')
-                    qputenv("PP_UI_THEME", QByteArray(forced));
+                // A28：档位 → 档名单源映射；"跟随系统"= 撤掉强制档 + 清持久化覆盖
+                const QString id = theme_mode_id(index);
+                if (id == QLatin1String("light") || id == QLatin1String("dark"))
+                    qputenv("PP_UI_THEME", id.toLatin1());
                 else
                     qunsetenv("PP_UI_THEME"); // 跟随系统：撤掉强制档
+                // 进程级持久化档就地更新：主窗在下一次 open_settings() 的 accept 后按同一条
+                // 单源顺序重解析（PP_UI_THEME 强制档 > 持久化档 > 跟随系统）。
+                theme::set_persisted_theme_mode(id.toLatin1());
                 const theme::Tokens t = theme::tokens(theme::preferred_theme_mode());
                 setStyleSheet(dk::dialog_qss(t));
                 // 自绘件与行内辅助件随令牌重放（QSS 覆盖不到的走 set_tokens）
@@ -1572,6 +1601,11 @@ pp::AppSettings SettingsDialog::settings() const {
             s.output_template = tmpl.toStdString();
             s.split_by_format = w->currentData(Qt::UserRole + 1).toBool();
         }
+    }
+    // A28：主题三档写回 —— 从**段选中态**取值（与其它字段"从控件取值"同口径；信号是否发射
+    // 不影响落库，程序化 set_current_index 同样成立）。
+    if (const auto *w = findChild<formkit::SegmentedControl *>(QLatin1String(kThemeMode))) {
+        s.ui_theme_mode = theme_mode_id(w->current_index()).toStdString();
     }
     // last_format / last_preset / last_out_root 不被本对话框编辑 → 保持构造快照
     return s;

@@ -225,11 +225,12 @@ struct Metrics {
     // RepeatSpread 渐变；单列一个常量是为了让"115°/6px/12px"三个几何量都在 token 表里可查。
     static constexpr int synth_stripe_period_px = 12;
     static constexpr int input_h = 24; // R4 文本输入高 24（v4 28 → v6 24）
-    static constexpr int row_h = 32;   // 兼容保留（表单行 pitch 见 R1:28 / form_row_h，T2 换锚）
-    // ---- §5 表单栅格（R1/R2；归 M5-T2 formkit：标签轴 80 / pitch 28 / 双列 24 —— 本任务不动）----
-    static constexpr int form_label_w = 70;        // R2 标签轴 80（T2 换锚）
-    static constexpr int form_col_gap = spacing_m; // R2 列距 12
-    static constexpr int form_row_h = 32;          // R1 行 pitch 28（T2 换锚）
+    static constexpr int row_h = 32;   // M4 遗留取值（表单行 pitch 见 R1 = 28，真源 = formkit）
+    // ---- §5 表单栅格（R1/R2；归 M5-T2 formkit：标签轴 80 / pitch 28 / 双列 24）----
+    // 取值单源 = ui/formkit_layout.h（kLabelW/kRowPitch/kDoubleGap），formkit.h 以 static_assert
+    // 与本表逐条对齐。A10/T11 退役的**迁移期双源**（M4 的 form_label_w=70 / form_row_h=32：
+    // W-G2/W-G3 页面迁完后已无消费者，grep 全仓只剩本注）：不再保留转发，避免"两处取值"。
+    static constexpr int form_col_gap = spacing_m; // R2 列距 12（formkit 仍消费）
 };
 
 // ---------------------------------------------------------------------------
@@ -525,14 +526,50 @@ inline ThemeMode system_theme_mode() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 持久化主题档（A28/T11）：AppSettings.ui_theme_mode 的**进程级覆盖**（"system"|"light"|"dark"，
+// 空 = 未注入 = 跟随系统）。启动期由 MainWindow 从设置注入一次（mainwindow.cpp 的
+// apply_startup_theme）；设置弹窗在用户选档时就地更新 → 同一进程内后续所有
+// preferred_theme_mode() 调用点（图标/自绘件初值/弹窗）取到**同一档**，不再是"各处各读一套"。
+// 存 QByteArray 而非 ThemeMode：`system` 无法用 ThemeMode 表达（"未强制" ≠ "浅色"）。
+// ---------------------------------------------------------------------------
+inline QByteArray &persisted_theme_mode_ref() {
+    static QByteArray mode;
+    return mode;
+}
+
+// 词表外/空值 → 清掉覆盖（等价"跟随系统"）
+inline void set_persisted_theme_mode(const QByteArray &mode) {
+    const QByteArray value = mode.trimmed().toLower();
+    const bool forced = value == QByteArrayLiteral("light") || value == QByteArrayLiteral("dark");
+    persisted_theme_mode_ref() = forced ? value : QByteArray();
+}
+
+inline QByteArray persisted_theme_mode() { return persisted_theme_mode_ref(); }
+
+// 当前生效档的**原始档名**（"system"/"light"/"dark"）：设置弹窗的三档回填与探针取值都走它
+// （与 preferred_theme_mode() 同一判据顺序，只是保留"未强制"这一档）。
+inline QByteArray theme_mode_id() {
+    const QByteArray forced = qgetenv("PP_UI_THEME").trimmed().toLower();
+    if (forced == QByteArrayLiteral("dark") || forced == QByteArrayLiteral("light"))
+        return forced;
+    return persisted_theme_mode_ref(); // 空 = 跟随系统
+}
+
 // 启动/走查主题（**单源**：GUI 与 main.cpp 的启动后处理都走这一条）：PP_UI_THEME=dark|light
-// 强制；未设置 → 跟随系统。强制档供双主题截图走查用（系统同一时刻只能是一种模式），
-// 也用于启动期 DWM 沉浸式深色标题栏的对齐（M4-W2-fix 第 11 条：窗口边框不再按系统色滞后）。
+// 强制；未设置 → 持久化档（A28；设置·通用 三档的跨进程落地）；再未设置 → 跟随系统。
+// 强制档供双主题截图走查用（系统同一时刻只能是一种模式），也用于启动期 DWM 沉浸式深色标题栏
+// 的对齐（M4-W2-fix 第 11 条：窗口边框不再按系统色滞后）——故强制档优先级最高。
 inline ThemeMode preferred_theme_mode() {
     const QByteArray forced = qgetenv("PP_UI_THEME").trimmed().toLower();
     if (forced == QByteArrayLiteral("dark"))
         return ThemeMode::Dark;
     if (forced == QByteArrayLiteral("light"))
+        return ThemeMode::Light;
+    const QByteArray &persisted = persisted_theme_mode_ref();
+    if (persisted == QByteArrayLiteral("dark"))
+        return ThemeMode::Dark;
+    if (persisted == QByteArrayLiteral("light"))
         return ThemeMode::Light;
     return system_theme_mode();
 }
@@ -824,6 +861,12 @@ inline QString style_sheet(const Tokens &t) {
     // 段间分隔 hairline（修 5-13「状态栏加分隔与分区」；分隔色 = --txt3 的对照 weight 由 1px
     // 细线承担）
     qss += QStringLiteral("QFrame#pp-status-sep { background: ") + css_color(t.line) +
+           QStringLiteral("; border: none; }\n");
+    // A19（T11，§3.2 骨架行「● 已选 12 / 24 · 就绪｜输出：…｜剩余磁盘…」）：底栏第三段
+    // 「剩余磁盘」= 次级读数（--txt3，与输出摘要同 weight），段前同样以 hairline 分区。
+    qss += QStringLiteral("QLabel#pp-disk-status { color: ") + css_color(t.text3) +
+           QStringLiteral("; }\n");
+    qss += QStringLiteral("QFrame#pp-disk-sep { background: ") + css_color(t.line) +
            QStringLiteral("; border: none; }\n");
     // 状态四档（§8）：状态点与状态词**同色**；中性 = 空/无事（点 --txt3 / 词 --txt2，绝不用红，
     // 修 5-13/K3）。色值单源在本文件的 QSS 里 —— 调用方只设 kStatusToneProperty + repolish。

@@ -116,6 +116,16 @@ int main() {
     check_eq(fk::kSegH, 24, "r4/seg-h-24");
     check_eq(fk::kSegW, 88, "r4/seg-w-88");
     check_eq(fk::kSegRadius, 3, "r4/seg-r3");
+    // A27（T11 缺陷根治）：段本体高 = 容器高 − 上下各 1px 描边（22），**不得为 0** ——
+    // 段（QAbstractButton 子类）无基类 sizeHint，布局曾把段算成 0 高 → 全仓分段控件不可见。
+    // 段高自持 = sizeHint/fixedHeight 取同一算式（formkit.cpp 的 Segment）→ 取值单源在此。
+    check_eq(fk::kSegBorder, 1, "r4/seg-border-1");
+    check_eq(fk::seg_inner_h(), 22, "r4/seg-inner-h-22");
+    check_eq(fk::seg_inner_h(), fk::kSegH - 2 * fk::kSegBorder, "r4/seg-inner-h-from-border");
+    check(fk::seg_inner_h() > 0, "r4/seg-inner-h-positive",
+          "段本体高被算成 0（A27 缺陷回归）：" + num(fk::seg_inner_h()));
+    check(fk::seg_inner_h() < fk::kSegH, "r4/seg-inner-h-inside-container",
+          "段本体高越出容器高：" + num(fk::seg_inner_h()));
     check_eq(fk::kSwitchW, 30, "r4/switch-w-30");
     check_eq(fk::kSwitchH, 16, "r4/switch-h-16");
     check_eq(fk::kSwitchKnob, 12, "r4/switch-knob-12");
@@ -159,6 +169,8 @@ int main() {
     // 分段控件整宽 = 段数 × 88（等宽 → 选中不改宽）
     check_eq(fk::kSegW * 2, 176, "r12-4/seg-two-segments-width");
     check_eq(fk::kSegW * 3, 264, "r12-4/seg-three-segments-width");
+    // A27：段组总高 = 容器高 = 段高 + 上下描边（段与容器同高口径，选中不改高也不改宽）
+    check_eq(fk::seg_inner_h() + 2 * fk::kSegBorder, fk::kSegH, "r12-4/seg-inner-plus-border-is-h");
     // 磁贴对勾位 = 勾选框同口径 13×13（在固定宽里始终占位 → 勾选不改宽）
     check_eq(fk::kCheckPx, 13, "r12-4/tile-check-slot-reserved-13");
     check(fk::kTileH > fk::kCheckPx && fk::kTilePadX * 2 + fk::kCheckPx < fk::kTileH + 100,

@@ -86,6 +86,17 @@ M5-T10（W-G3：设置弹窗 §7.4 重做）:
     分文件夹默认三项读回）全保留（线程预算的控件类型按修 4-08 换锚为下拉，断言本体不变；
     M5-T10 机械换锚登记在任务报告）。截图仍为 12 张、冻结末行不变。
 
+M5-T11（W-G4 首项：缺陷根治与壳层收尾；裁定 A27/A28/A13/A16/A17/A19/A10）:
+  * 追加 `UI-SMOKE settings-theme:` 行齐备断言（A28 主题档持久化：三档写回
+    system/light/dark 逐档一致 + 点「亮色」段的即时生效链 + AppSettings 经真实存储层落盘往返
+    + 启动读取点 apply_startup_theme()（持久化档 → 落地档）+ 主窗构造路径端到端；
+    PP_UI_THEME 强制档在场时启动链按设计让位，该行 checked 相应少 3 项 = 6）。
+  * A27（分段控件段高 0 根治）不新增行名：断言落在既有 `meta-geom` / `output-geom` /
+    `settings-geom` 行内（段高 = kSegH − 2 且可见可选），checked 计数随之增加；调用点
+    临时补丁已撤销，段高由 formkit::Segment 自持。
+  * A16（空态文案去重）同样落在既有 `filelist-geom` 行内：文件列表空态文案 = 「拖放照片到此处」
+    且 ≠ 预览空态逐字「将照片拖到此处，或点击 ＋ 添加」。
+
 M5-T9（W-G3 页：运行页 §7.3 三卡组）:
   * 追加 `UI-SMOKE run-geom:` 行齐备断言（C7 几何/语义值表：总览 kv 行 pitch 28 + 标签轨 80 /
     表行高 28（表头 24）/ 进度条高 6（总览合成条 + 分组条 + 逐输出条）/ 日志尾等宽字族（§7.3）+
@@ -188,6 +199,14 @@ T10_LINE_PREFIXES = (
                                 # 下拉项（0）/ 修 4-15 alpha 端值映射（100→255 白、0→0 黑）
 )
 
+# M5-T11 自检行（前缀匹配；缺任一 → FAIL）：A28 主题档持久化（三档写回 + 点段即时生效 +
+# 存储往返 + 启动读取点 + 主窗构造路径端到端）；PP_UI_THEME 强制档在场时启动链让位 →
+# 行内 checked 少 3 项（6 而非 9），断言本体不变。
+# A27/A16 的断言不新增行名（落在 meta-geom/output-geom/settings-geom/filelist-geom 行内）。
+T11_M5_LINE_PREFIXES = (
+    'UI-SMOKE settings-theme:',  # system/light/dark 三档写回 + AppSettings 往返 + 单源解析链
+)
+
 # M4-W2-T11 自检行（前缀匹配；缺任一 → FAIL）
 T11_LINE_PREFIXES = (
     'UI-SMOKE filelist-roles:',
@@ -254,6 +273,7 @@ def main():
         t9_seen = set()
         t10_seen = set()
         t11_seen = set()
+        m5t11_seen = set()
         t14_seen = set()
         t15_seen = set()
         with open(log_path, 'w', encoding='utf-8', newline='') as log_fp:
@@ -287,6 +307,9 @@ def main():
                 for prefix in T11_LINE_PREFIXES:
                     if line.startswith(prefix):
                         t11_seen.add(prefix)
+                for prefix in T11_M5_LINE_PREFIXES:
+                    if line.startswith(prefix):
+                        m5t11_seen.add(prefix)
                 for prefix in T14_LINE_PREFIXES:
                     if line.startswith(prefix):
                         t14_seen.add(prefix)
@@ -342,6 +365,11 @@ def main():
         if missing:
             print('ui_smoke: FAIL (missing T11 self-check lines: {})'.format(', '.join(missing)),
                   file=sys.stderr)
+            return 1
+        missing = [p for p in T11_M5_LINE_PREFIXES if p not in m5t11_seen]
+        if missing:
+            print('ui_smoke: FAIL (missing M5-T11 theme-persistence self-check lines: {})'.format(
+                ', '.join(missing)), file=sys.stderr)
             return 1
         missing = [p for p in T14_LINE_PREFIXES if p not in t14_seen]
         if missing:

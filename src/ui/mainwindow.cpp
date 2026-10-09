@@ -1009,6 +1009,9 @@ struct MainWindow::Impl {
     void smoke_probe_lifecycle();
     // M4-T10 预览面板自检（§6.1：翻图/缩放/徽标/热键提示 + 热键接线位）
     void smoke_probe_preview();
+    // M5-T6（C7）预览画布几何值表 + 空态/角标/缩放条/衬垫/插值（§8 / 修
+    // 1-16/1-17/1-19/1-21/1-22/3-20/3-21）
+    void smoke_probe_preview_geometry();
     // M4-T11 文件列表/分类自检（§3.6 roles + §6.2 勾选/正交搜索/分组节/分类面板）
     void smoke_probe_filelist();
     void smoke_probe_classify();
@@ -4281,7 +4284,8 @@ void MainWindow::Impl::smoke_probe_preview() {
     // 1:1 断言要读 model 的 probe 摘要（源尺寸）→ 先等缩略图通道把 probe 结果落进模型
     wait_thumbs(kThumbWaitMs);
 
-    // ---- (a) 控件面：徽标恒显 / 缩放两枚 chip / 热键提示表（随 ClassRegistry 生成）----
+    // ---- (a) 控件面：徽标（M5-T6 修 1-17/1-18 文案人话）/ 缩放控件组的模式两钮 / 热键提示表
+    //   （随 ClassRegistry 生成）----
     QLabel *badge = preview_panel->findChild<QLabel *>(QStringLiteral("pp-preview-badge"));
     QToolButton *zoom_fit =
         preview_panel->findChild<QToolButton *>(QStringLiteral("pp-preview-zoom-fit"));
@@ -4294,21 +4298,33 @@ void MainWindow::Impl::smoke_probe_preview() {
     for (QLabel *label :
          preview_panel->findChildren<QLabel *>(QStringLiteral("pp-preview-keyname")))
         key_names << label->text();
+    // 缩放两钮的读数 = 挂载的矢量图标名（修 1-19：图标钮无文案，控件面身份由图标名承载）
+    const auto icon_key = [](const QToolButton *button) {
+        return button != nullptr ? button->property(icons::kIconNameProperty).toString()
+                                 : QStringLiteral("<missing>");
+    };
     std::printf("UI-SMOKE preview-controls: badge=\"%s\" zoom-fit=\"%s\" zoom-1:1=\"%s\" "
                 "keys=[%s] names=[%s] pos=\"%s\"\n",
                 badge != nullptr ? qUtf8Printable(badge->text()) : "<missing>",
-                zoom_fit != nullptr ? qUtf8Printable(zoom_fit->text()) : "<missing>",
-                zoom_11 != nullptr ? qUtf8Printable(zoom_11->text()) : "<missing>",
+                qUtf8Printable(icon_key(zoom_fit)), qUtf8Printable(icon_key(zoom_11)),
                 qUtf8Printable(key_chips.join(QLatin1Char(' '))),
                 qUtf8Printable(key_names.join(QLatin1Char(' '))),
                 qUtf8Printable(preview_panel->current_position_text()));
     std::fflush(stdout);
-    if (badge == nullptr || badge->text() != QStringLiteral("输入 · 未修改像素")) {
-        smoke_fail(MainWindow::tr("预览徽标不是「输入 · 未修改像素」（%1）")
+    if (badge == nullptr || badge->text() != QStringLiteral("原图 · 未应用修改")) {
+        smoke_fail(MainWindow::tr("预览徽标不是「原图 · 未应用修改」（%1）")
                        .arg(badge != nullptr ? badge->text() : QStringLiteral("<missing>")));
     }
-    if (zoom_fit == nullptr || zoom_11 == nullptr || zoom_11->text() != QStringLiteral("1:1")) {
-        smoke_fail(MainWindow::tr("缩放「适应 | 1:1」chip 缺失或不符"));
+    // 修 1-19：缩放模式两钮 = 矢量图标钮（无文案、非 checkbox；「适应」/「1:1」由图标名承载）
+    if (zoom_fit == nullptr || zoom_11 == nullptr || zoom_11->text() != QString() ||
+        zoom_fit->isCheckable() || zoom_11->isCheckable() ||
+        icon_key(zoom_11) != QString::fromLatin1(icons::key(icons::Name::ZoomActual)) ||
+        icon_key(zoom_fit) != QString::fromLatin1(icons::key(icons::Name::ZoomFit))) {
+        smoke_fail(MainWindow::tr("缩放「适应 | 1:1」模式钮不是矢量图标钮（fit=%1 1:1=%2 "
+                                  "checkable=%3/%4）")
+                       .arg(icon_key(zoom_fit), icon_key(zoom_11))
+                       .arg(zoom_fit != nullptr ? zoom_fit->isCheckable() : -1)
+                       .arg(zoom_11 != nullptr ? zoom_11->isCheckable() : -1));
     }
     // 默认模板（§6.2）：精选/待定/废片（热键 1/2/3）+ 保留的「0 清除」
     const QStringList expect_chips{QStringLiteral("1"), QStringLiteral("2"), QStringLiteral("3"),
@@ -4433,6 +4449,268 @@ void MainWindow::Impl::smoke_probe_preview() {
     // ---- 归位：截图基准 = 面板显示首个文件（§5.2 跟随口径），且恢复未锁定态 ----
     preview_panel->set_current(original_index);
     pump(120);
+}
+
+// ---------------------------------------------------------------------------
+// M5-T6（C7）预览画布几何/状态自检（§8 画布/空态 + 修 1-16/1-17/1-18/1-19/1-21/1-22/3-20/3-21）
+//   取证面 = "落在屏幕上的实际几何 + 实拍像素"：画布底 #16181d（明暗两档同值）、缩放条钮 28、
+//   翻图钮 28、角标空态隐藏、空态矢量图标 + 引导语、照片衬垫与画布底可区分、小图最近邻。
+//   令牌读数由 smoke_probe_theme 的 v6 值表承担，两者互补（改了令牌但没落到画布 = 这里红）。
+//   空态取样前先把文件集合清空、取样后原样恢复（集合 + 当前项），不扰动后继探针/截图基线。
+// ---------------------------------------------------------------------------
+void MainWindow::Impl::smoke_probe_preview_geometry() {
+    if (preview_panel == nullptr || model->empty()) {
+        smoke_fail(MainWindow::tr("预览几何自检：面板或文件集合缺失"));
+        return;
+    }
+    QFrame *stage = w->findChild<QFrame *>(QStringLiteral("pp-preview-stage"));
+    QLabel *badge = w->findChild<QLabel *>(QStringLiteral("pp-preview-badge"));
+    QWidget *zoombar = w->findChild<QWidget *>(QStringLiteral("pp-preview-zoombar"));
+    QToolButton *zoom_out = w->findChild<QToolButton *>(QStringLiteral("pp-preview-zoom-out"));
+    QToolButton *zoom_in_btn = w->findChild<QToolButton *>(QStringLiteral("pp-preview-zoom-in"));
+    QToolButton *zoom_fit_btn = w->findChild<QToolButton *>(QStringLiteral("pp-preview-zoom-fit"));
+    QToolButton *zoom_11_btn = w->findChild<QToolButton *>(QStringLiteral("pp-preview-zoom-1to1"));
+    QLabel *zoom_level = w->findChild<QLabel *>(QStringLiteral("pp-preview-zoom-level"));
+    QLabel *hint = w->findChild<QLabel *>(QStringLiteral("pp-preview-hint"));
+    QWidget *empty_box = w->findChild<QWidget *>(QStringLiteral("pp-preview-empty"));
+    QLabel *empty_icon = w->findChild<QLabel *>(QStringLiteral("pp-preview-empty-icon"));
+    QLabel *empty_text = w->findChild<QLabel *>(QStringLiteral("pp-preview-empty-text"));
+    QToolButton *nav_prev = w->findChild<QToolButton *>(QStringLiteral("pp-preview-prev"));
+    QToolButton *nav_next = w->findChild<QToolButton *>(QStringLiteral("pp-preview-next"));
+    // 热键 chip（修 1-22 的禁用面：chip 自身 isEnabled 跟随其容器）
+    QLabel *key_chip = w->findChild<QLabel *>(QStringLiteral("pp-preview-key"));
+    if (stage == nullptr || badge == nullptr || zoombar == nullptr || zoom_out == nullptr ||
+        zoom_in_btn == nullptr || zoom_fit_btn == nullptr || zoom_11_btn == nullptr ||
+        zoom_level == nullptr || hint == nullptr || empty_box == nullptr || empty_icon == nullptr ||
+        empty_text == nullptr || nav_prev == nullptr || nav_next == nullptr ||
+        key_chip == nullptr) {
+        smoke_fail(MainWindow::tr("预览画布构件缺失（舞台/角标/缩放条/提示/空态/翻图钮）"));
+        return;
+    }
+    if (!wait_for([this] { return preview_panel->image_visible(); }, 5000)) {
+        smoke_fail(MainWindow::tr("预览几何自检：当前项 5s 内未出图"));
+        return;
+    }
+    // 实拍取样：逻辑坐标 → 抓图像素（dpr 换算与 filelist-geom 同一口径）
+    const auto sample = [&stage](const QPoint &logical) {
+        const QImage shot = stage->grab().toImage();
+        const double scale =
+            stage->width() > 0 ? double(shot.width()) / double(stage->width()) : 1.0;
+        const int x = std::clamp(int(std::lround(logical.x() * scale)), 0, shot.width() - 1);
+        const int y = std::clamp(int(std::lround(logical.y() * scale)), 0, shot.height() - 1);
+        return shot.pixelColor(x, y);
+    };
+    const auto near = [](const QColor &a, const QColor &b, int tol) {
+        return std::abs(a.red() - b.red()) <= tol && std::abs(a.green() - b.green()) <= tol &&
+               std::abs(a.blue() - b.blue()) <= tol;
+    };
+    const QColor stage_token(0x16, 0x18, 0x1d); // §4.1 画布底 #16181d（不随主题变）
+    int checked = 0;
+    QStringList bad;
+    const auto expect = [&checked, &bad](const char *name, bool ok, const QString &detail) {
+        ++checked;
+        if (!ok)
+            bad << QStringLiteral("%1(%2)").arg(QString::fromLatin1(name), detail);
+    };
+
+    // ---- (a) 有图态：角标（修 1-17/1-18）/ 缩放控件组（修 1-19）/ 提示（§8 逐字）/ 翻图钮（修
+    // 1-21）----
+    const QSize nav_size(nav_prev->width(), nav_prev->height());
+    const QSize zoom_btn_size(zoom_out->width(), zoom_out->height());
+    const int zoom_buttons = int(zoombar->findChildren<QToolButton *>().size());
+    const bool zoom_group_ok =
+        zoom_btn_size == QSize(theme::Metrics::icon_btn, theme::Metrics::icon_btn) &&
+        zoom_in_btn->size() == zoom_btn_size && zoom_fit_btn->size() == zoom_btn_size &&
+        zoom_11_btn->size() == zoom_btn_size && zoom_buttons == 4 && !zoom_out->isCheckable() &&
+        !zoom_fit_btn->isCheckable() && zoom_out->toolTip() == QStringLiteral("缩小") &&
+        zoom_in_btn->toolTip() == QStringLiteral("放大") &&
+        zoom_fit_btn->toolTip() == QStringLiteral("适应舞台") &&
+        zoom_11_btn->toolTip() == QStringLiteral("原始像素 (1:1)");
+    expect("zoom-group", zoombar->isVisible() && zoom_group_ok,
+           QStringLiteral("bar=%1 %2x%2 n=%3")
+               .arg(zoombar->isVisible() ? 1 : 0)
+               .arg(zoom_btn_size.width())
+               .arg(zoom_buttons));
+    expect("nav-btn",
+           nav_size == QSize(theme::Metrics::icon_btn, theme::Metrics::icon_btn) &&
+               nav_next->size() == nav_size,
+           QStringLiteral("%1x%2").arg(nav_size.width()).arg(nav_size.height()));
+    expect("badge", badge->isVisible() && badge->text() == QStringLiteral("原图 · 未应用修改"),
+           QStringLiteral("vis=%1 text=\"%2\"").arg(badge->isVisible() ? 1 : 0).arg(badge->text()));
+    // 角标笔触：半透明底（实拍 ≠ 画布底）+ 1px 描边（活动 QSS 里成文）
+    {
+        const QColor badge_px = sample(QPoint(14, 14));
+        const bool translucent = !near(badge_px, stage_token, 3);
+        const QString sheet = preview_panel->styleSheet();
+        const int badge_rule = sheet.indexOf(QStringLiteral("QLabel#pp-preview-badge"));
+        const bool bordered =
+            badge_rule >= 0 &&
+            sheet.mid(badge_rule, 160).contains(QStringLiteral("border: 1px solid"));
+        expect("badge-paint", translucent && bordered,
+               QStringLiteral("px=%1 border=%2")
+                   .arg(badge_px.name(QColor::HexRgb))
+                   .arg(bordered ? 1 : 0));
+    }
+    expect("hint",
+           hint->isVisible() && hint->text() == QStringLiteral("拖动平移 · 滚轮缩放 · 双击适应"),
+           QStringLiteral("vis=%1 text=\"%2\"").arg(hint->isVisible() ? 1 : 0).arg(hint->text()));
+    // 比例读数 = 面板的有效比例（适应档 = 实测；1:1/比例档 = 100%/档值）
+    expect("level", zoom_level->text() == QStringLiteral("%1%").arg(preview_panel->zoom_percent()),
+           QStringLiteral("\"%1\"(面板=%2)")
+               .arg(zoom_level->text())
+               .arg(preview_panel->zoom_percent()));
+
+    // ---- (b) 修 3-21：照片衬垫与画布底可区分（letterbox 带 / 画布底 两点实拍）----
+    const QSize shot_size = preview_panel->displayed_size();
+    const int stage_w = stage->width();
+    const int stage_h = stage->height();
+    const int image_top = (stage_h - shot_size.height()) / 2;
+    const int mat_top = image_top - 6; // kPhotoMatPad = 6（ui/preview_panel.cpp 单源）
+    QColor band_px;                    // letterbox 带上的实拍（= 画布底；与下方的衬垫色对照）
+    QColor mat_px;                     // 照片衬垫实拍（修 3-21 的取证点）
+    if (mat_top > 18 && shot_size.width() == stage_w) {
+        band_px = sample(QPoint(stage_w / 2, std::max(2, mat_top - 12)));
+        mat_px = sample(QPoint(stage_w / 2, mat_top + 3));
+        expect("letterbox", near(band_px, stage_token, 3) && !near(mat_px, band_px, 3),
+               QStringLiteral("band=%1 mat=%2")
+                   .arg(band_px.name(QColor::HexRgb), mat_px.name(QColor::HexRgb)));
+    } else {
+        expect("letterbox", false,
+               QStringLiteral("no-band shot=%1x%2 stage=%3x%4")
+                   .arg(shot_size.width())
+                   .arg(shot_size.height())
+                   .arg(stage_w)
+                   .arg(stage_h));
+    }
+
+    // ---- (c) 修 3-20：小图（64px 源）放大档最近邻、缩小档平滑 ----
+    const pp::ImageInfo info =
+        model->row(static_cast<std::size_t>(preview_panel->current_index())).info;
+    preview_panel->set_zoom_fit(true);
+    pump(40);
+    const bool nn_fit = preview_panel->nearest_neighbor();
+    const int fit_percent = preview_panel->zoom_percent(); // 适应档实测比例（截图基线档）
+    preview_panel->set_zoom_percent(25);                   // 16px < 源 64px → 缩小档（平滑）
+    pump(40);
+    const bool nn_small = preview_panel->nearest_neighbor();
+    const bool small_size_ok =
+        preview_panel->zoom_percent() == 25 &&
+        preview_panel->displayed_size() == QSize(info.width / 4, info.height / 4) &&
+        zoom_level->text() == QStringLiteral("25%");
+    // 缩放钮实点（修 1-19 的控件语义落地）：＋ 步进（比例上走）、适应钮回到适应档
+    zoom_in_btn->click();
+    pump(20);
+    const int up_percent = preview_panel->zoom_percent();
+    zoom_fit_btn->click();
+    pump(20);
+    const bool click_ok = up_percent > 25 && preview_panel->zoom_fit() &&
+                          preview_panel->zoom_percent() == fit_percent;
+    // 修 3-20：放大档（适应/1:1）最近邻 = 1，缩小档（25% < 源）平滑 = 0
+    expect("nearest", nn_fit && !nn_small && small_size_ok && click_ok,
+           QStringLiteral("fit=%1 small=%2 size=%3 click=%4 up=%5 fit=%6")
+               .arg(nn_fit ? 1 : 0)
+               .arg(nn_small ? 1 : 0)
+               .arg(small_size_ok ? 1 : 0)
+               .arg(click_ok ? 1 : 0)
+               .arg(up_percent)
+               .arg(preview_panel->zoom_fit() ? 1 : 0));
+
+    // ---- (c2) K5「拖动平移」：放大档超出舞台 → 左键拖动 → 画面真的位移（grab 实拍对比）----
+    {
+        preview_panel->set_zoom_percent(800); // 64px × 8 = 512 > 舞台宽 → 可平移
+        pump(40);
+        const QImage before = stage->grab().toImage();
+        const QPoint start(stage->width() / 2, stage->height() / 2);
+        const QPoint end = start + QPoint(20, 0); // 夹取范围（±23）内 → 位移可分辨
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(start), stage->mapToGlobal(start),
+                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(stage, &press);
+        QMouseEvent move(QEvent::MouseMove, QPointF(end), stage->mapToGlobal(end), Qt::NoButton,
+                         Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(stage, &move);
+        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(end), stage->mapToGlobal(end),
+                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(stage, &release);
+        pump(40);
+        const QImage after = stage->grab().toImage();
+        expect("drag", before != after, QStringLiteral("moved=%1").arg(before != after ? 1 : 0));
+        preview_panel->set_zoom_fit(true); // 归位（截图基线 = 适应档）
+        pump(40);
+    }
+
+    // ---- (d) 空态（§8 + 修 1-16/1-17/1-22）：清空集合 → 取样 → 原样恢复 ----
+    const int saved_index = preview_panel->current_index();
+    const QStringList saved_files = cached_paths;
+    preview_panel->set_files(QStringList());
+    pump(80);
+    const QString empty_text_seen = empty_text->text(); // 打印用（恢复后会被还原成占位空串）
+    const bool empty_structure =
+        empty_box->isVisible() && !badge->isVisible() && !zoombar->isVisible() &&
+        !hint->isVisible() && !empty_icon->pixmap().isNull() &&
+        empty_text->text() == QStringLiteral("将照片拖到此处，或点击 ＋ 添加") &&
+        !nav_prev->isEnabled() && !nav_next->isEnabled() && !key_chip->isEnabled();
+    expect("empty", empty_structure,
+           QStringLiteral("box=%1 badge=%2 bar=%3 hint=%4 icon=%5 text=\"%6\" nav=%7/%8 chips=%9")
+               .arg(empty_box->isVisible() ? 1 : 0)
+               .arg(badge->isVisible() ? 1 : 0)
+               .arg(zoombar->isVisible() ? 1 : 0)
+               .arg(hint->isVisible() ? 1 : 0)
+               .arg(empty_icon->pixmap().isNull() ? 0 : 1)
+               .arg(empty_text->text())
+               .arg(nav_prev->isEnabled() ? 1 : 0)
+               .arg(nav_next->isEnabled() ? 1 : 0)
+               .arg(key_chip->isEnabled() ? 1 : 0));
+    // 画布底 = §4.1 #16181d，且**明暗两档同值**（§9「画布底不变」）
+    const QColor canvas_dark = [&] {
+        set_theme_mode(theme::ThemeMode::Dark);
+        pump(40);
+        return sample(QPoint(12, 12));
+    }();
+    const QColor canvas_light = [&] {
+        set_theme_mode(theme::ThemeMode::Light);
+        pump(40);
+        return sample(QPoint(12, 12));
+    }();
+    set_theme_mode(preferred_theme_mode());
+    pump(40);
+    expect("canvas",
+           near(canvas_dark, stage_token, 2) && near(canvas_light, stage_token, 2) &&
+               theme::tokens(theme::ThemeMode::Dark).stage_bg == stage_token &&
+               theme::tokens(theme::ThemeMode::Light).stage_bg == stage_token,
+           QStringLiteral("dark=%1 light=%2")
+               .arg(canvas_dark.name(QColor::HexRgb), canvas_light.name(QColor::HexRgb)));
+    // 恢复（集合 + 当前项；LRU 命中 → 出图瞬时）
+    preview_panel->set_files(saved_files);
+    preview_panel->set_current(saved_index);
+    pump(80);
+    const bool restored = wait_for([this] { return preview_panel->image_visible(); }, 5000) &&
+                          !empty_box->isVisible() && badge->isVisible() && zoombar->isVisible() &&
+                          key_chip->isEnabled() && nav_prev->isEnabled() == (saved_index > 0);
+    expect("restore", restored,
+           QStringLiteral("index=%1/%2 visible=%3 chips=%4")
+               .arg(preview_panel->current_index())
+               .arg(saved_index)
+               .arg(preview_panel->image_visible() ? 1 : 0)
+               .arg(key_chip->isEnabled() ? 1 : 0));
+
+    std::printf("UI-SMOKE preview-geom: checked=%d bad=%d canvas=%s(light=%s) band/mat=%s/%s "
+                "zoom-btn=%dx%d n=%d nav=%dx%d level=\"%s\" badge(empty-hidden)=%d hint=%d "
+                "empty(icon=%d text=\"%s\") chip-off=%d nn=%d/%d footer=%s\n",
+                checked, int(bad.size()), qUtf8Printable(canvas_dark.name(QColor::HexRgb)),
+                qUtf8Printable(canvas_light.name(QColor::HexRgb)),
+                qUtf8Printable(band_px.name(QColor::HexRgb)),
+                qUtf8Printable(mat_px.name(QColor::HexRgb)), zoom_btn_size.width(),
+                zoom_btn_size.height(), zoom_buttons, nav_size.width(), nav_size.height(),
+                qUtf8Printable(zoom_level->text()), badge->isVisible() ? 1 : 0,
+                hint->isVisible() ? 1 : 0, empty_icon->pixmap().isNull() ? 0 : 1,
+                qUtf8Printable(empty_text_seen), key_chip->isEnabled() ? 1 : 0,
+                preview_panel->nearest_neighbor() ? 1 : 0, int(info.width),
+                qUtf8Printable(bad.join(QLatin1Char(' '))));
+    std::fflush(stdout);
+    if (!bad.isEmpty())
+        smoke_fail(MainWindow::tr("预览画布几何/状态不符（§8 + 修 1-16/1-17/1-19/1-21/1-22/"
+                                  "3-20/3-21）：%1")
+                       .arg(bad.join(QLatin1Char(' '))));
 }
 
 // ---------------------------------------------------------------------------
@@ -5618,6 +5896,7 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
     smoke_probe_frameless();
     smoke_probe_theme();
     smoke_probe_preview();           // M4-T10：预览面板（翻图/缩放/徽标/热键接线位）
+    smoke_probe_preview_geometry();  // M5-T6（C7）：画布底/空态/角标/缩放条/衬垫/最近邻（§8）
     smoke_probe_filelist();          // M4-T11：勾选/正交搜索/分组节（§3.6 roles + §6.2）
     smoke_probe_filelist_geometry(); // M5-T5（C7）：行/工具行几何 + 空态 + 选中面（§7.5/修 3-17）
     smoke_probe_meta(shots_dir);     // M4-T12：生效值显示/写入一致性 + 多选小表 + 地图跟随（§5.2）

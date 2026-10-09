@@ -409,7 +409,7 @@ private:
     QString name_, ext_;
 };
 
-// 药丸开关（§9.2 控件规约：34×18 药丸 + 14px 圆钮；mockup .sw / .sw.off）
+// 药丸开关（R4 控件规格：30×16 药丸 + 12px 圆钮 —— 几何全走 theme::Metrics 单源）
 class PillSwitch : public QAbstractButton {
 public:
     explicit PillSwitch(QWidget *parent = nullptr) : QAbstractButton(parent) {
@@ -435,7 +435,7 @@ protected:
         p.setPen(Qt::NoPen);
         p.setBrush(isChecked() ? t.accent : t.control_bd);
         p.drawRoundedRect(track, theme::Metrics::switch_h / 2.0, theme::Metrics::switch_h / 2.0);
-        const double knob = 14.0;
+        const double knob = theme::Metrics::switch_knob; // R4：轨 30×16 → 钮 12
         const double y = (theme::Metrics::switch_h - knob) / 2.0;
         const double x = isChecked() ? theme::Metrics::switch_w - knob - 2.0 : 2.0;
         p.setBrush(isChecked() ? t.on_accent : QColor(0xc9, 0xc9, 0xd2));

@@ -210,7 +210,15 @@ QString smoke_fixture_label(const std::filesystem::path &p, const QString &repo_
 // 断言 e 的最小字节数（语义 = "offscreen 下非空渲染"）：1440×900 整窗截图 >10KB；
 // 对话框截图 >2KB——空列表的预设对话框大面积空白，PNG 压缩后仅 ~7.6KB（实测），
 // 仍是有内容的真实渲染，故按控件面积分档（数值随每次冒烟 stdout 打印备查）。
-qint64 min_shot_bytes(int index) { return index >= kShotSettings ? 2 * 1024 : kMinShotBytes; }
+// M5-T1 机械阈值调整（C7 登记，语义不变）：运行页三张探针图（03c/03d/03e）自 v6 令牌起
+// 下限由 10KB 下调到 4KB——(a) 暗色窗口底自 §4.1 起是**纯色 #22252b**（v4 三停渐变的抖动
+// 噪声使 PNG 虚高 4–5×：346 种残色 → 94 种）、(b) 进度条高 6（R4，v4 8）。二者皆令牌取值
+// 变化，产物仍是真实渲染（空白图 <2KB，照旧被拦下；实测 5679 / 10214 / 7186 字节）。
+qint64 min_shot_bytes(int index) {
+    if (index == kShotRunIdle || index == kShotRunRows || index == kShotRunCancel)
+        return 4 * 1024;
+    return index >= kShotSettings ? 2 * 1024 : kMinShotBytes;
+}
 
 QString T(const char *s) { return QCoreApplication::translate("MainWindow", s); }
 
@@ -3080,31 +3088,142 @@ void MainWindow::Impl::smoke_probe_theme() {
             t.go_shadow_dy, t.go_shadow_blur);
         std::fflush(stdout);
     };
+    // M5-T1：期望值换锚到设计说明书 v6 §4.1/§4.3（原 v4 mockup 口径的 card-bd .08 / r8 / r4
+    // 随令牌换值机械对齐 —— 语义不变：tokens 必须与单源规范逐字一致）。α 改以**百分比**断言，
+    // ±1pp 容差只吸收 8bit α 量化（0.09×255 = 22.95 → 23 → 回读 9.02%）。
+    const auto alpha_pp = [](const QColor &c) {
+        return static_cast<int>(std::lround(c.alphaF() * 100.0));
+    };
+    const auto near_pp = [&alpha_pp](const QColor &c, int pp) {
+        return std::abs(alpha_pp(c) - pp) <= 1;
+    };
     set_theme_mode(theme::ThemeMode::Dark);
     pump(80);
     dump("dark", tokens);
     const theme::Tokens dark = tokens;
-    if (dark.window != QColor(0x22, 0x25, 0x2b) || dark.text != QColor(0xec, 0xec, 0xf0) ||
-        dark.text2 != QColor(0xa9, 0xaa, 0xb4) || dark.text3 != QColor(0x7a, 0x7b, 0x86) ||
-        dark.card.alpha() != 13 || dark.go_text != QColor(0x0c, 0x1b, 0x24) ||
+    if (dark.window != QColor(0x22, 0x25, 0x2b) || dark.window_grad0 != QColor(0x22, 0x25, 0x2b) ||
+        dark.window_grad1 != QColor(0x22, 0x25, 0x2b) ||
+        dark.window_grad2 != QColor(0x22, 0x25, 0x2b) || // v6：暗色 win = 纯色（无渐变）
+        dark.text != QColor(0xec, 0xec, 0xf0) || dark.text2 != QColor(0xa9, 0xaa, 0xb4) ||
+        dark.text3 != QColor(0x7a, 0x7b, 0x86) || !near_pp(dark.card, 5) ||
+        !near_pp(dark.card_bd, 10) || !near_pp(dark.control, 7) || !near_pp(dark.control_bd, 12) ||
+        !near_pp(dark.accent_dim, 10) || !near_pp(dark.accent_bd, 34) ||
+        dark.on_accent != QColor(0x0c, 0x1b, 0x24) || dark.go_text != QColor(0x0c, 0x1b, 0x24) ||
+        dark.ok != QColor(0x4c, 0xc4, 0x7c) || dark.warn != QColor(0xe0, 0xa9, 0x4a) ||
+        dark.err != QColor(0xff, 0x7a, 0x8a) || !near_pp(dark.ok_dim, 10) ||
+        !near_pp(dark.ok_bd, 32) || !near_pp(dark.warn_dim, 10) || !near_pp(dark.warn_bd, 32) ||
+        !near_pp(dark.err_dim, 10) || !near_pp(dark.err_bd, 32) ||
+        dark.stage_bg != QColor(0x16, 0x18, 0x1d) || !near_pp(dark.shadow_color, 0) ||
         dark.shadow_blur != 0 || dark.go_shadow_blur != 10 || dark.go_shadow_dy != 2 ||
-        dark.radius_card != 8 || dark.radius_control != 4 || dark.mod_bd != dark.accent_bd ||
+        dark.window_mid_stop != 0.45 || dark.radius_card != 6 || dark.radius_control != 3 ||
+        dark.radius_stage != 4 || dark.radius_pill != 3 || dark.mod_bd != dark.accent_bd ||
         dark.mod_text != dark.accent || dark.progress_fill_from != QColor(0x3a, 0xa3, 0xdc) ||
         dark.progress_fill_to != QColor(0x4c, 0xc2, 0xff))
-        smoke_fail(MainWindow::tr("深色 tokens 与 mockup/:root 不符"));
+        smoke_fail(MainWindow::tr("深色 tokens 与 v6 §4.1 表不符"));
 
     set_theme_mode(theme::ThemeMode::Light);
     pump(80);
     dump("light", tokens);
     const theme::Tokens light = tokens;
-    if (light.window != QColor(0xe3, 0xe5, 0xea) || light.card != QColor(0xff, 0xff, 0xff) ||
-        light.card_bd != QColor(0, 0, 0, 20) || light.text != QColor(0x1b, 0x1c, 0x20) ||
-        light.text2 != QColor(0x5d, 0x5f, 0x68) || light.text3 != QColor(0x8b, 0x8d, 0x96) ||
-        light.on_accent != QColor(0xff, 0xff, 0xff) || light.go_text != QColor(0x0c, 0x1b, 0x24) ||
-        light.shadow_blur != 4 || light.shadow_dy != 1 || light.go_shadow_blur != 10 ||
-        light.go_shadow_dy != 2 || light.mod_bd != light.accent_bd ||
-        light.mod_text != light.accent)
-        smoke_fail(MainWindow::tr("浅色 tokens 与 mockup/:root 不符"));
+    if (light.window != QColor(0xe3, 0xe5, 0xea) ||
+        light.window_grad0 != QColor(0xe9, 0xec, 0xf2) ||
+        light.window_grad2 != QColor(0xe7, 0xef, 0xe9) || // v6：亮色 win = 三停渐变
+        light.card != QColor(0xff, 0xff, 0xff) || !near_pp(light.card_bd, 9) ||
+        light.text != QColor(0x1b, 0x1c, 0x20) || light.text2 != QColor(0x5d, 0x5f, 0x68) ||
+        light.text3 != QColor(0x8b, 0x8d, 0x96) || light.control != QColor(0xee, 0xf0, 0xf4) ||
+        !near_pp(light.control_bd, 12) || !near_pp(light.accent_dim, 8) ||
+        !near_pp(light.accent_bd, 32) || light.on_accent != QColor(0xff, 0xff, 0xff) ||
+        light.go_text != QColor(0x0c, 0x1b, 0x24) || light.ok != QColor(0x1d, 0x7a, 0x3e) ||
+        light.warn != QColor(0x9a, 0x6a, 0x00) || light.err != QColor(0xc4, 0x2b, 0x3a) ||
+        !near_pp(light.ok_dim, 8) || !near_pp(light.ok_bd, 30) || !near_pp(light.warn_dim, 8) ||
+        !near_pp(light.warn_bd, 30) || !near_pp(light.err_dim, 8) || !near_pp(light.err_bd, 30) ||
+        light.stage_bg != QColor(0x16, 0x18, 0x1d) || light.shadow_blur != 4 ||
+        light.shadow_dy != 1 || !near_pp(light.shadow_color, 7) || light.go_shadow_blur != 10 ||
+        light.go_shadow_dy != 2 || light.window_mid_stop != 0.45 || light.radius_pill != 3 ||
+        light.mod_bd != light.accent_bd || light.mod_text != light.accent)
+        smoke_fail(MainWindow::tr("浅色 tokens 与 v6 §4.1 表不符"));
+
+    // ---- M5-T1：§4.3 间距/圆角 + §4.2 字阶 + §5 R4 控件度量（逐行；token 单源取值）----
+    // 值表驱动：任一不符即 FAIL 并把**全部**不符项连名带值打印（不靠猜）。
+    {
+        struct Expect {
+            const char *name;
+            int got;
+            int want;
+        };
+        const Expect table[] = {
+            // R4 控件度量
+            {"spin_h", theme::Metrics::spin_h, 24},
+            {"spin_arrow_w", theme::Metrics::spin_arrow_w, 17},
+            {"spin_arrow_h", theme::Metrics::spin_arrow_h, 12},
+            {"combo_h", theme::Metrics::combo_h, 24},
+            {"combo_arrow_px", theme::Metrics::combo_arrow_px, 8},
+            {"field_w", theme::Metrics::field_w, 160},
+            {"input_h", theme::Metrics::input_h, 24},
+            {"checkbox_px", theme::Metrics::checkbox_px, 13},
+            {"checkbox_radius", theme::Metrics::checkbox_radius, 2},
+            {"switch_w", theme::Metrics::switch_w, 30},
+            {"switch_h", theme::Metrics::switch_h, 16},
+            {"switch_knob", theme::Metrics::switch_knob, 12},
+            {"seg_h", theme::Metrics::seg_h, 24},
+            {"seg_w", theme::Metrics::seg_w, 88},
+            {"seg_radius", theme::Metrics::seg_radius, 3},
+            {"btn_h", theme::Metrics::btn_h, 26},
+            {"cta_h", theme::Metrics::cta_h, 22},
+            {"pill_h", theme::Metrics::pill_h, 16},
+            {"progress_h", theme::Metrics::progress_h, 6},
+            {"mini_progress_px", theme::Metrics::mini_progress_px, 6},
+            {"big_progress_px", theme::Metrics::big_progress_px, 6},
+            {"icon_btn", theme::Metrics::icon_btn, 28},
+            {"icon_btn_radius", theme::Metrics::icon_btn_radius, 4},
+            {"thumb_px", theme::Metrics::thumb_px, 46},
+            {"thumb_radius", theme::Metrics::thumb_radius, 4},
+            // §4.3 圆角 / 间距令牌
+            {"card_radius", theme::Metrics::card_radius, 6},
+            {"control_radius", theme::Metrics::control_radius, 3},
+            {"btn_radius", theme::Metrics::btn_radius, 3},
+            {"go_radius", theme::Metrics::go_radius, 4},
+            {"stage_radius", theme::Metrics::stage_radius, 4},
+            {"dialog_radius", theme::Metrics::dialog_radius, 6},
+            {"pill_radius", theme::Metrics::pill_radius, 3},
+            {"dot_px", theme::Metrics::dot_px, 8},
+            {"dot_radius", theme::Metrics::dot_radius, 99},
+            {"spacing_xs", theme::Metrics::spacing_xs, 4},
+            {"spacing_s", theme::Metrics::spacing_s, 8},
+            {"spacing_m", theme::Metrics::spacing_m, 12},
+            {"spacing_l", theme::Metrics::spacing_l, 16},
+            {"gap", theme::Metrics::gap, 8},
+            {"group_gap", theme::Metrics::group_gap, 8},
+            {"card_pad_top", theme::Metrics::card_pad_top, 10},
+            {"card_pad_x", theme::Metrics::card_pad_x, 12},
+            {"card_pad_bottom", theme::Metrics::card_pad_bottom, 12},
+            {"form_col_gap", theme::Metrics::form_col_gap, 12},
+            // §4.2 字阶（px 以 1/10px 整数编码比较，避开浮点 ==）
+            {"card_title_px_x10", int(theme::Typography::card_title_px * 10), 120},
+            {"card_title_weight", theme::Typography::card_title_weight, 700},
+            {"body_px_x10", int(theme::Typography::body_px * 10), 115},
+            {"small_px_x10", int(theme::Typography::small_px * 10), 110},
+            {"hint_px_x10", int(theme::Typography::hint_px * 10), 100},
+            {"badge_px_x10", int(theme::Typography::badge_px * 10), 95},
+            {"badge_weight", theme::Typography::badge_weight, 700},
+            {"base_px_x10", int(theme::Typography::base_px * 10), 115},
+        };
+        const int count = int(sizeof(table) / sizeof(table[0]));
+        QStringList bad;
+        for (const Expect &e : table) {
+            if (e.got != e.want)
+                bad << QStringLiteral("%1=%2(期望 %3)")
+                           .arg(QString::fromLatin1(e.name))
+                           .arg(e.got)
+                           .arg(e.want);
+        }
+        std::printf("UI-SMOKE theme-tokens-v6: checked=%d bad=%d %s\n", count, bad.size(),
+                    qUtf8Printable(bad.join(QLatin1Char(' '))));
+        std::fflush(stdout);
+        if (!bad.isEmpty())
+            smoke_fail(MainWindow::tr("v6 令牌（§4.2/§4.3/R4）取值不符：%1")
+                           .arg(bad.join(QLatin1Char(' '))));
+    }
 
     // accent（§9.2：系统强调色，mockup 值兜底）：判据 = 调色板样式是否镜像系统（见 theme.h）。
     // 有系统强调色 → 明暗两侧同值；否则逐侧比对 mockup 兜底值
@@ -3180,6 +3299,29 @@ void MainWindow::Impl::smoke_probe_theme() {
                            .arg(on ? 1 : 0)
                            .arg(off ? 1 : 0)
                            .arg(rule ? 1 : 0));
+    }
+
+    // ---- M5-T1：徽章 pill 全色调 QSS（§4.1 末行：同色 8–10% 底 + 30–34% 描边 + 同色字）----
+    // 选择器 + 三色都要在生成串里逐条落地（arg 链错位是 QSS 生成的典型失效模式：
+    // 选择器会被吃成空串、或色调张冠李戴 —— 这里逐色调钉住，不留"看起来对"）。
+    {
+        const QString sheet = w->styleSheet();
+        QStringList pill_bad;
+        for (const char *tone : {"n", "acc", "ok", "warn", "err"}) {
+            const theme::PillPaint paint = theme::pill_paint(tokens, tone);
+            const QString sel =
+                QStringLiteral("QLabel[ppPill=\"%1\"]").arg(QString::fromLatin1(tone));
+            if (!sheet.contains(sel) || !sheet.contains(theme::css_color(paint.fg)) ||
+                !sheet.contains(theme::css_color(paint.bg)) ||
+                !sheet.contains(theme::css_color(paint.bd)))
+                pill_bad << sel;
+        }
+        std::printf("UI-SMOKE pill-tones: tones=5 bad=%d mode=%s\n", pill_bad.size(),
+                    tokens.dark() ? "dark" : "light");
+        std::fflush(stdout);
+        if (!pill_bad.isEmpty())
+            smoke_fail(MainWindow::tr("徽章 pill 色调 QSS 缺失/错色：%1")
+                           .arg(pill_bad.join(QLatin1Char(' '))));
     }
 }
 

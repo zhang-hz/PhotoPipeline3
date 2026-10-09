@@ -156,11 +156,13 @@ struct Metrics {
     static constexpr int ver_pad_y = 1;
     static constexpr int ver_radius_qss = 8; // 99 的 QSS 等效（16–18px 盒 → 半高）
     // ---- R4 控件度量（逐行）----
-    static constexpr int field_w = 160;               // R2 标准字段宽 160（下拉/独立数值/短文本）
-    static constexpr int field_w_short = 88;          // R2 短档 88（组内小数值）
-    static constexpr int spin_h = 24;                 // R4 spinbox 高 24
-    static constexpr int spin_arrow_w = 17;           // R4 箭头列 17px
-    static constexpr int spin_arrow_h = 12;           // R4 箭头列内 ▲/▼ 各 12（= 24 / 2）
+    static constexpr int field_w = 160;      // R2 标准字段宽 160（下拉/独立数值/短文本）
+    static constexpr int field_w_short = 88; // R2 短档 88（组内小数值）
+    static constexpr int spin_h = 24;        // R4 spinbox 高 24
+    static constexpr int spin_arrow_w = 17;  // R4 箭头列 17px
+    static constexpr int spin_arrow_h = 12;  // R4 箭头列内 ▲/▼ 各 12（= 24 / 2）
+    // M5-T2 加性扩展（登记见报告）：R4 表未列 spin 值区内距，取 mockup `.spin .v{padding:0 7px}`
+    static constexpr int spin_pad_x = 7;              // spinbox 值区内距（左右）
     static constexpr int combo_h = 24;                // R4 下拉高 24（宽 160 = field_w）
     static constexpr int combo_arrow_px = 8;          // R4 下拉箭头 8px 居右（.dd .car）
     static constexpr int seg_h = 24;                  // R4 分段控件高 24
@@ -249,6 +251,11 @@ struct Tokens {
     QColor bottom_bg;   // 状态栏底（既有权重；T4 复核）
     QColor stage_bg;    // §4.1 画布底 #16181d（不随主题变）
     QColor close_hover; // §3.1 关闭悬停 #c42b1c（双主题同值）
+    // 开关（R4 30×16 药丸）的关态轨/滑钮（M5-T2 加性扩展，登记见报告）：**§4.1 表外**，
+    // 取 mockup `.sw{background:#c3c6cf}` / `.sw::after{background:#fff}`（双主题同值）；
+    // 开态轨 = accent、开态钮 = on_accent（§4.1 令牌）。
+    QColor switch_rail_off;
+    QColor switch_knob_off;
     // 运行期锁定（G5）的图标钮禁用态：= .icon-btn 的底/边/字整体按 opacity .4 合成后的等效不透明色
     // （QSS 不能设控件不透明度；等价做法是预合成 —— 见 Metrics::icon_dim_opacity 注释）
     QColor icon_disabled_bg;
@@ -444,11 +451,13 @@ inline Tokens tokens(ThemeMode mode) {
         t.go_shadow_dy = 2;
     }
     t.accent = accent_color(mode);
-    t.mod_bd = t.accent_bd;                   // R4 .mod = 强调边框
-    t.mod_text = t.accent;                    // R4 .mod = 强调色字
-    t.stage_bg = QColor(0x16, 0x18, 0x1d);    // §4.1 画布底（主题无关）
-    t.stage_bd = rgba(255, 255, 255, 0.08);   // 舞台框边（固定深色舞台上的浅描边）
-    t.close_hover = QColor(0xc4, 0x2b, 0x1c); // §3.1 关闭悬停（双主题同值）
+    t.mod_bd = t.accent_bd;                       // R4 .mod = 强调边框
+    t.mod_text = t.accent;                        // R4 .mod = 强调色字
+    t.stage_bg = QColor(0x16, 0x18, 0x1d);        // §4.1 画布底（主题无关）
+    t.stage_bd = rgba(255, 255, 255, 0.08);       // 舞台框边（固定深色舞台上的浅描边）
+    t.close_hover = QColor(0xc4, 0x2b, 0x1c);     // §3.1 关闭悬停（双主题同值）
+    t.switch_rail_off = QColor(0xc3, 0xc6, 0xcf); // mockup .sw（关态轨，双主题同值）
+    t.switch_knob_off = QColor(0xff, 0xff, 0xff); // mockup .sw::after（关态钮，双主题同值）
     t.control_solid = composite(t.control, t.window);
     // 锁定态图标钮（.icon-btn.dim{opacity:.4} 的静态等效）：三色都按 .4 合成到窗口底
     t.icon_disabled_bg =
@@ -547,6 +556,18 @@ inline constexpr const char *kPillOk = "ok";
 inline constexpr const char *kPillWarn = "warn";
 inline constexpr const char *kPillErr = "err";
 
+// M5-T2（**加性扩展**，登记见报告）：formkit（C2）的行内辅助件与数值控件的动态属性钩子。
+// 行构造器产出的标签轨/kv 值/单位槽/范围注释/勾选文字与 spinbox 只挂 `ppFk`，"表单栅格几何"
+// 仍归 src/ui/formkit_layout.h（T2 契约），此处只负责**着色与盒度量**（颜色取自 §4 令牌）。
+// 既有页面无人设该属性 ⇒ 主题 QSS 增量对现网控件零影响。
+inline constexpr const char *kFkProperty = "ppFk";
+inline constexpr const char *kFkLabel = "label"; // 标签轨（§4.2 标签 11px / --txt2）
+inline constexpr const char *kFkValue = "value"; // kv 值（--txt；右对齐 tabular 由 C++ 落地）
+inline constexpr const char *kFkUnit = "unit";   // 16px 单位槽（§4.2 辅助 10px / --txt3）
+inline constexpr const char *kFkNote = "note";   // 10px 范围注释（§4.2 辅助 10px / --txt3）
+inline constexpr const char *kFkCheck = "check"; // check 行文字（§4.2 正文·值 / --txt）
+inline constexpr const char *kFkSpin = "spin";   // 数值控件（R4 spinbox 盒）
+
 // 自绘控件（ItemDelegate / 自绘 pill）的三色取法：同一张 §4.1 末行规则，避免各处复写色值。
 struct PillPaint {
     QColor bg;
@@ -616,6 +637,60 @@ inline QString mod_qss(const Tokens &t) {
                           "QComboBox[%1=\"true\"] { font-weight: %2; }\n")
                .arg(prop)
                .arg(Metrics::mod_weight);
+}
+
+// formkit（C2）辅助件与数值控件的 QSS（M5-T2 加性扩展，登记见报告）。
+//   * 标签轨 / kv 值 / 单位槽 / 范围注释 / 勾选文字：只给**颜色**（字号与对齐由 C++ 侧
+//     theme::font(...) + setAlignment 落地 —— QSS 的 font-size 只吃整数，§4.2 的 11.5/9.5/10.5
+//     会失真）；
+//   * spinbox（R4）：盒高 24（QSS 的 min/max-height 指内容盒 → 24 − 2×1px 边 = 22）、
+//     箭头列 17px（▲▼ 各 12）；**值区右对齐 + tabular 由 C++ 落地**（Qt QSS 无 text-align，
+//     也无 font-feature-settings 的 tnum 开关）。
+//   * 选择器一律以 `ppFk` 动态属性为锚（既有页面无人设该属性 → 对现网控件零影响）。
+inline QString formkit_qss(const Tokens &t) {
+    const QString prop = QString::fromLatin1(kFkProperty);
+    const auto label_rule = [&prop](const char *hook, const QColor &color) {
+        return QStringLiteral("QLabel[%1=\"%2\"] { color: %3; }\n")
+            .arg(prop)
+            .arg(QString::fromLatin1(hook), css_color(color));
+    };
+    QString qss;
+    qss += label_rule(kFkLabel, t.text2);
+    qss += label_rule(kFkValue, t.text);
+    qss += label_rule(kFkCheck, t.text);
+    qss += label_rule(kFkUnit, t.text3);
+    qss += label_rule(kFkNote, t.text3);
+    const QString spin =
+        QStringLiteral("QSpinBox[%1=\"%2\"]").arg(prop).arg(QString::fromLatin1(kFkSpin));
+    const QString dspin =
+        QStringLiteral("QDoubleSpinBox[%1=\"%2\"]").arg(prop).arg(QString::fromLatin1(kFkSpin));
+    qss += spin + QStringLiteral(", ") + dspin + QStringLiteral(" { background: ") +
+           css_color(t.control) + QStringLiteral("; border: 1px solid ") + css_color(t.control_bd) +
+           QStringLiteral("; border-radius: ") + QString::number(t.radius_control) +
+           // QSS 的 min/max-height 是**内容盒**高 → 24 − 上下各 1px 边 = 22（总高 24）
+           QStringLiteral("px; color: ") + css_color(t.text) + QStringLiteral("; min-height: ") +
+           QString::number(Metrics::spin_h - 2) + QStringLiteral("px; max-height: ") +
+           QString::number(Metrics::spin_h - 2) + QStringLiteral("px; padding: 0 ") +
+           QString::number(Metrics::spin_pad_x) + QStringLiteral("px; }\n");
+    // 箭头列 17px（上下各 12）—— 只给**几何**（不设底色/边），箭头本体沿用样式绘制，
+    // 待 M5-T3 的矢量图标集接入后再换 ::up-arrow/::down-arrow 的 image。
+    const QString up_sel =
+        spin + QStringLiteral("::up-button, ") + dspin + QStringLiteral("::up-button");
+    const QString down_sel =
+        spin + QStringLiteral("::down-button, ") + dspin + QStringLiteral("::down-button");
+    qss += up_sel +
+           QStringLiteral(" { subcontrol-origin: border; subcontrol-position: top right; "
+                          "width: ") +
+           QString::number(Metrics::spin_arrow_w) + QStringLiteral("px; height: ") +
+           QString::number(Metrics::spin_arrow_h) + QStringLiteral("px; }\n");
+    qss +=
+        down_sel +
+        QStringLiteral(" { subcontrol-origin: border; subcontrol-position: bottom right; width: ") +
+        QString::number(Metrics::spin_arrow_w) + QStringLiteral("px; height: ") +
+        QString::number(Metrics::spin_arrow_h) + QStringLiteral("px; }\n");
+    qss += spin + QStringLiteral(":disabled, ") + dspin + QStringLiteral(":disabled { color: ") +
+           css_color(t.text3) + QStringLiteral("; }\n");
+    return qss;
 }
 
 // 骨架 QSS：只作用于 pp-* 钩子与 ppMod/ppPill 动态属性，避免误伤既有页面控件
@@ -701,6 +776,8 @@ inline QString style_sheet(const Tokens &t) {
            QStringLiteral("; }\n");
     // splitter 手柄 = 列间距（§4.3 卡间距 8），透明不抢视觉
     qss += QStringLiteral("QSplitter#pp-splitter::handle { background: transparent; }\n");
+    // formkit（C2）行内辅助件 + R4 数值控件（M5-T2 加性扩展；选择器只认 ppFk）
+    qss += formkit_qss(t);
     // 改动值 .mod（动态属性钩子）
     qss += mod_qss(t);
     return qss;

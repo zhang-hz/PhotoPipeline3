@@ -40,12 +40,12 @@ namespace pp::platform {
 inline constexpr int kResizeBorderPx = 6;
 inline constexpr int kResizeBorderMaximizedPx = 1;
 
-// caption 三钮命中区高度（设计 §9.1 逐字：「右上角 ─ □ ✕，Win11 规格 46×32 命中区」）。
-// M4-W2-fix 第 5 条（主对话裁定，双轨）：
-//   * **命中**区 = 46×32（本常量；仅在按钮矩形内居中的 32px 带内返回 HTMIN/MAX/CLOSE）；
-//   * **hover 高亮面** = 贴满 52px 顶栏（mockup .capbtns{align-self:stretch} + .capbtn{width:46px}
-//     → 可见反馈整高，由控件自身矩形承担，QSS :hover 画满）。
-// 与缩放带同口径：本文件是命中几何的唯一真源（theme::Metrics::caption_btn_hit_h 转发）。
+// caption 三钮命中区高度（设计 §9.1/§3.3 逐字：「Win11 规格 46×32」，M5-T4 复述：46×32、透明底、
+// 悬停灰、关闭悬停 #c42b1c）。
+// **单轨（M5-T4，裁定 A1）**：按钮可见面与命中区同为 46×32 → 命中几何 = 按钮矩形；本常量仍是
+// 命中几何的唯一真源（window 侧 rect_of/build_box 消费，theme::Metrics::caption_btn_hit_h 转发），
+// 只是"命中带比可见面矮"的双轨收敛（M4：46×满高控件内的居中 32px 带）随顶栏 44 换锚不再触发。
+// 命中**语义**零改动：带外按下不触发三钮、HTMINBUTTON/HTMAXBUTTON/HTCLOSE 与 Snap 全保留。
 inline constexpr int kCaptionHitHeightPx = 32;
 
 // 命中区。Windows 侧映射到 HT* 常量（映射表在 frameless.cpp，Windows 段内有 static_assert

@@ -6,9 +6,10 @@
 // 本文件只出**值**与少量生成函数（Tokens / QPalette / QSS / QFont / set_mod），不建控件、
 // 不持状态；set_mod/repolish 只对调用方传入的控件做 setProperty + unpolish/polish。
 //
-// 边界（M5-T1）：§4 令牌 + R4 控件度量在本文件；§3 骨架尺寸（顶栏 52→44 / 状态栏 48→30 /
-// 栏宽 258→330·587 / 窗口内边距 10·8）与 §5 表单栅格（标签轴 70→80 / 行 pitch 32→28）分别归
-// M5-T4 壳层与 M5-T2 formkit（C2 契约），本任务不预先改动，避免与两轮重建正面相撞。
+// 边界（M5-T1 划出 / M5-T4 已落地）：§4 令牌 + R4 控件度量在本文件；§5 表单栅格（标签轴 70→80 /
+// 行 pitch 32→28）归 M5-T2 formkit（C2 契约）；§3 骨架尺寸（顶栏 52→44 / 状态栏 48→30 /
+// 栏宽 258→330·587 / 窗口内边距 12·10→10·8）+ §6.2 一体式分段导航（92×30）+ caption 单轨
+// 46×32 由 M5-T4 壳层在本文件换锚（值仍只此处一份，调用点零逻辑改动由取值单源保证）。
 //
 // 命中几何的单源（M4-W2-fix 第 8 条）：缩放带与 caption 命中带高度都**不在本文件取值**，
 // 而是从 platform/frameless.h 转发（kResizeBorderPx / kResizeBorderMaximizedPx /
@@ -23,9 +24,14 @@
 
 #pragma once
 
+// A5（M5-T4 修复）：本文件用 `qApp->style()`（style_mirrors_system_accent，QApplication 的成员），
+// 但此前只引 <QGuiApplication> —— qApp 由 <QApplication> 定为 QApplication*，只引 QGui 侧时
+// qApp 展开成 QGuiApplication*（无 style()）而编译失败：包含顺序雷（formkit.h 曾被迫在引本头之前
+// 显式先引 <QApplication> 规避，见 C2 契约）。此处显式引 QtWidgets 侧（本文件本来就用
+// QWidget/QStyle/QPalette，QtWidgets 依赖既存），隐式包含依赖清零。
+#include <QApplication>
 #include <QColor>
 #include <QFont>
-#include <QGuiApplication>
 #include <QPalette>
 #include <QString>
 #include <QStyle>
@@ -54,15 +60,21 @@ struct Typography {
     static constexpr const char *family_ui = "Microsoft YaHei UI";  // §4.2 中文回退（逐字）
     static constexpr const char *family_mono = "Consolas";          // 日志尾/模板输入（§7.3 等宽）
     static constexpr double caption_px = 13.0;                      // §3.3 品牌标题 13/700
+    static constexpr int caption_weight = 700;
     static constexpr double base_px = 11.5;       // §4.2 正文·值（QApplication 基准）
     static constexpr double card_title_px = 12.0; // §4.2 卡题 12/700
     static constexpr int card_title_weight = 700;
     // §4.2 徽标 9.5/700 —— 状态/计数 pill 与导航编号圆同一档
     static constexpr double badge_px = 9.5;
     static constexpr int badge_weight = 700;
-    static constexpr double step_badge_px =
-        9.5; // 导航编号圆（§4.2 徽标档；tokens.css 9px → 偏差登记）
-    static constexpr int step_badge_weight = 700;
+    // §6.2 导航编号圆（内嵌数字圆）：字号/字重取 §4.2 徽标档 9.5/700（裁定 A4：tokens.css 的
+    // 9px 作废）。M5-T4：v4 的 .step 三独立钮 → v6 一体式分段导航（单控件），命名随之换锚。
+    static constexpr double nav_num_px = 9.5;
+    static constexpr int nav_num_weight = 700;
+    // §6.2 导航段文案：tokens.css .nav-strip button 的 12px/600（§4.2 字阶表未列导航档，
+    // 按 A11 口径取对照值；段宽 92 等宽由 Metrics 承担）。
+    static constexpr double nav_text_px = 12.0;
+    static constexpr int nav_text_weight = 600;
     static constexpr double hint_px = 10.0;  // §4.2 辅助 10/400（txt3：hint/范围/单位说明）
     static constexpr double body_px = 11.5;  // §4.2 正文·值 11.5/400（字段值、控件文字）
     static constexpr double small_px = 11.0; // §4.2 标签 11/400（txt2：表单标签、kv 标签）
@@ -74,37 +86,39 @@ struct Typography {
 // 除本任务列明的 §4/R4 项外，其余取值原样保留（调用点零逻辑改动由取值单源保证）。
 // ---------------------------------------------------------------------------
 struct Metrics {
-    // ---- §3 骨架（M5-T4 壳层负责 v6 化：44 / 30 / 330 / 587 / 10·8）----
-    static constexpr int toolbar_height = 52; // §3.1 顶栏 44（T4 换锚）
-    static constexpr int bottom_height = 48;  // §3.1 状态栏 30（T4 换锚）
-    static constexpr int main_pad_top = 10;   // §3.2 窗口内边距 8（T4 换锚）
-    static constexpr int main_pad_x = 12;     // §3.2 窗口内边距 10（T4 换锚）
+    // ---- §3 骨架（M5-T4 壳层 v6 换锚：44 / 30 / 330·587 / 10·8）----
+    static constexpr int toolbar_height = 44; // §3.1 顶栏 44
+    static constexpr int bottom_height = 30;  // §3.1 状态栏 30
+    static constexpr int main_pad_top = 8;    // §3.2 窗口内边距 上下 8
+    static constexpr int main_pad_x = 10;     // §3.2 窗口内边距 左右 10
     static constexpr int main_pad_bottom = 8;
-    static constexpr int left_width = 258;     // §3.2 左栏 330（T4 换锚）
-    static constexpr int left_width_max = 280; // §3.2 400 可调（T4 换锚）
-    static constexpr int min_window_w = 1180;  // §3.1 最小窗口
+    // §3.2 栏宽固定轴：左 330（280–400 可调）/ 右 587（520–680 可调）/ 中弹性（mockup
+    // .col-l/.col-r 为 `flex:0 0`、.col-m 为 `flex:1 1 0`）。"可调"= 用户拖分栏手柄的上下界，
+    // 基线（= 初始尺寸）恒为 330 / 587；窗口缩放只动中栏（§12-16「栏宽固定轴，切页列不错位」）。
+    static constexpr int left_width = 330;
+    static constexpr int left_width_min = 280;
+    static constexpr int left_width_max = 400;
+    static constexpr int right_width = 587;
+    static constexpr int right_width_min = 520;
+    static constexpr int right_width_max = 680;
+    static constexpr int min_window_w = 1180; // §3.1 最小窗口
     static constexpr int min_window_h = 720;
     static constexpr int calibrated_w = 1440; // §3.1 参考尺寸
     static constexpr int calibrated_h = 900;
-    // 中/右栏弹性：1440 校准落点 = mockup 实测 537/601（.col-mid/.col-right flex:1 1 420/480px）；
-    // 窗口缩放时 Qt 按当前尺寸等比分配 → 比例恒为 537:601≈1:1.119（探针取证）。§3.1 文本写的
-    // 「1.15」与原型实测 1.111/1.119 冲突 → 按 §3.2 以 mockup 为准（记 T9 偏差），故这里的
-    // stretch 常数取与实现一致的口径（100:112），不再虚标 115。
-    static constexpr int mid_width_1440 = 537;
-    static constexpr int right_width_1440 = 601;
-    static constexpr int mid_stretch = 100;
-    static constexpr int right_stretch = 112;
-    static constexpr int ratio_tolerance_permille = 30; // 弹性比容差（±0.03，覆盖 Qt 取整）
-    // ---- caption（§3.1：Win11 规格 46×32 命中区）----
+    // 中栏弹性：1440 校准落点 = 1440 − 2×10（窗口内边距）− 330 − 587 − 2×8（列距/分栏手柄）
+    // = 487（§3.2 三栏基线的算术结果，探针取证）。
+    static constexpr int mid_width_1440 = 487;
+    // 弹性因子：只有中栏吃窗口余量（左/右 = 0 → 固定轴）；mid_stretch ≠ 0 是"弹性列"的语义位。
+    static constexpr int mid_stretch = 1;
+    static constexpr int right_stretch = 0;
+    // ---- caption（§3.1：Win11 规格 46×32）----
     static constexpr int caption_btn_w = 46; // .cap{width:46px}
-    // 双轨（M4-W2-fix 第 5 条，主对话裁定）：
-    //   * **命中区**高 = 46×32 —— §3.1 明文；真源 = platform/frameless.h::
-    //     kCaptionHitHeightPx（窗口侧命中几何单源），此处只转发；
-    //   * **hover 高亮面**高 = 顶栏高 —— mockup .cap 贴顶栏；v4 原型里三钮整高（关闭钮 hover 的
-    //     #c42b1c 铺满顶栏）→ 控件自身尺寸取满高，QSS :hover 画满，命中判定只在居中的 32px
-    //     带内成立（frameless 的 rect_of/build_box 落地）；v6 tokens.css .cap 高 32（M5-T4 换锚）。
+    // **单轨（M5-T4，裁定 A1）**：可见面与命中区同为 46×32（§3.3 逐字「46×32、透明底、悬停灰、
+    // 关闭悬停 #c42b1c」）—— 命中几何真源 = platform/frameless.h::kCaptionHitHeightPx
+    // （窗口侧单源，此处只转发）；M4 的"46×满高 hover 面 + 居中 32px 命中带"双轨随顶栏 44
+    // 换锚收敛（frameless 命中语义零弱化：带外按下不触发、HTMAXBUTTON Snap 保留）。
     static constexpr int caption_btn_hit_h = pp::platform::kCaptionHitHeightPx;
-    static constexpr int caption_btn_h = toolbar_height; // 视觉面（hover/字形盒）
+    static constexpr int caption_btn_h = caption_btn_hit_h; // 单轨：可见面 = 命中面
     // 命中区/缩放带宽度：**单源规则**（M4-W2-fix 第 8 条）—— 真源 = platform/frameless.h
     // （§3.1 6px；最大化 1px），本处只转发（改 frameless.h 的常量即全局传导）。
     static constexpr int resize_border = pp::platform::kResizeBorderPx;
@@ -115,17 +129,26 @@ struct Metrics {
     // 24 网格是形、1.5px 是**屏幕线宽**），此处只转发 —— 与缩放带/命中带同一条单源规则（M5-T3
     // 加性扩展）。
     static constexpr qreal icon_stroke_px = pp::ui::icons::kStrokePx;
-    static constexpr int titlebar_pad_left = 18; // .toolbar{padding:0 18px}（T4 复核）
-    // 步骤切换组（T4 换锚为 v6 一体式分段 92×30；本任务不动骨架）
-    static constexpr int step_gap = 6;
-    // .steps{margin-left:22px}；实现取 20（= 22 − 2）是 ±4px 布局微调：Qt 与浏览器对同一字号的
-    // 字宽差使标题/版本药丸累计宽 3–5px，微调后步骤组落点与原型对齐。
-    static constexpr int step_margin_left = 20;
-    static constexpr int step_pad_x = 16;
-    static constexpr int step_pad_y = 6;
-    static constexpr int step_badge = 18; // .step .n{width:18px;height:18px;border-radius:99px}
-    static constexpr int step_badge_gap = 8;
-    static constexpr int step_radius = 6; // .step{border-radius:6px}
+    // §3.3 顶栏盒（v6：tokens.css `.toolbar{height:44px;display:flex;align-items:center;gap:12px;
+    // padding:0 6px 0 14px}` + `.brand{gap:8px}` + 品牌图标 20）——三段式（品牌区｜导航区｜
+    // 工具与窗口控制区）由调用方按这三个值 + 居中的导航区落地（修 5-01：中段不得大片空置）。
+    static constexpr int titlebar_pad_left = 14;
+    static constexpr int titlebar_pad_right = 6;
+    static constexpr int toolbar_gap = 12; // .toolbar{gap:12px}（三段之间的基准距）
+    static constexpr int brand_gap = 8;    // .brand{gap:8px}
+    static constexpr int brand_icon = 20;  // §3.3「品牌区（图标 20…）」
+    // §6.2 一体式分段导航（**单控件**；M5-T4 把 v4 的 .step 三独立钮换锚为此）：共享描边 +
+    // 段间 hairline + 选中段填充 acc + 数字圆内嵌；段宽 92、高 30（= 段所在行高 = 导航条高）。
+    static constexpr int nav_h = 30;     // §6.2 高 30
+    static constexpr int nav_seg_w = 92; // §6.2 段宽 92（等宽 → 选中/悬停零宽度变化，§12-4）
+    static constexpr int nav_radius = 6; // tokens.css .nav-strip{border-radius:6px}
+    static constexpr int nav_border = 1; // 共享描边 1px（段间 hairline 同宽 = --ctl-bd）
+    static constexpr int nav_num = 15;   // .nav-strip .n{width:15px;height:15px;border-radius:99px}
+    static constexpr int nav_num_gap = 6; // .nav-strip button{gap:6px}（数字圆 ↔ 文案）
+    // 状态栏盒（§3.1 高 30；tokens.css `.statusbar{padding:0 12px;gap:8px;font-size:11px}`）
+    static constexpr int statusbar_pad_x = 12;
+    static constexpr int statusbar_gap = 8;
+    static constexpr int statusbar_sep_h = 14; // 段间分隔 hairline 高（分区用，修 5-13）
     // ---- §4.3 间距令牌：4 / 8 / 12 / 16（卡间距 8、卡内边距 10–12、列距 12、组内 8）----
     static constexpr int spacing_xs = 4;  // 令牌 4
     static constexpr int spacing_s = 8;   // 令牌 8（卡间距 / 组内 / 控件间）
@@ -180,9 +203,10 @@ struct Metrics {
     static constexpr int thumb_radius = 4;            // R4 缩略图 r4
     static constexpr int switch_knob = 12;            // R4 开关钮 12（轨 30×16）
     // 运行期锁定（G5）的"变暗"系数：mockup .icon-btn.dim{opacity:.4} / .step.dim{opacity:.45}
-    // （整钮不透明度；图标钮走 QSS 预合成色，步钮走自绘 painter.setOpacity）
+    // （整钮不透明度；图标钮走 QSS 预合成色，导航段走自绘 painter.setOpacity —— M5-T4 随
+    // 一体式分段导航改名，取值与语义不变）
     static constexpr double icon_dim_opacity = 0.4;
-    static constexpr double step_dim_opacity = 0.45;
+    static constexpr double nav_dim_opacity = 0.45;
     static constexpr int mod_weight = 700;    // .spin.mod{font-weight:700}
     static constexpr int mod_border_px = 1;   // .spin.mod 边框 1px
     static constexpr int checkbox_px = 13;    // R4 复选框 13×13（v4 15 → v6 13）
@@ -252,8 +276,13 @@ struct Tokens {
     QColor control_bd;
     QColor control_solid; // control 合成到窗口底（QPalette::Base/Button 用，不透明）
     // 骨架辅助（§4.1 表外既有字段，随对照值）
-    QColor line;        // 顶栏下沿/状态栏上沿 hairline（v6 = --card-bd 口径）
-    QColor bottom_bg;   // 状态栏底（既有权重；T4 复核）
+    QColor line; // 顶栏下沿/状态栏上沿 hairline（v6 = --card-bd 口径）
+    // M4 遗留字段（v6 复核结论：状态栏**无独立底色** —— tokens.css .statusbar 只有上沿
+    // --card-bd 分隔线，底 = 窗口底；QSS 已改透明。字段与取值保留供既有调用点读回，不删）
+    QColor bottom_bg;
+    // §6.2 选中段数字圆底：tokens.css `.nav-strip button.on .n{background:rgba(255,255,255,.25);
+    // border-color:transparent}`（双主题同值，画在 acc 填充之上；§4.1 表外，随对照值）
+    QColor nav_num_sel_bg;
     QColor stage_bg;    // §4.1 画布底 #16181d（不随主题变）
     QColor close_hover; // §3.1 关闭悬停 #c42b1c（双主题同值）
     // §3.1「关闭悬停 #c42b1c（白字）」的字色（M5-T3 加性扩展：caption 字形已矢量化，悬停换色
@@ -265,8 +294,10 @@ struct Tokens {
     // 开态轨 = accent、开态钮 = on_accent（§4.1 令牌）。
     QColor switch_rail_off;
     QColor switch_knob_off;
-    // 运行期锁定（G5）的图标钮禁用态：= .icon-btn 的底/边/字整体按 opacity .4 合成后的等效不透明色
-    // （QSS 不能设控件不透明度；等价做法是预合成 —— 见 Metrics::icon_dim_opacity 注释）
+    // 运行期锁定（G5）的图标钮禁用态：= .icon-btn 按 opacity .4 合成后的等效不透明色（QSS 不能设
+    // 控件不透明度；等价做法是预合成 —— 见 Metrics::icon_dim_opacity 注释）。M5-T4：v6 图标钮是
+    // **透明底**（悬停显底）→ 禁用态只用 icon_disabled_fg（图标淡化）；bg/bd 两字段保留不删
+    // （既有读回口径；不再进 QSS）。
     QColor icon_disabled_bg;
     QColor icon_disabled_bd;
     QColor icon_disabled_fg;
@@ -460,12 +491,14 @@ inline Tokens tokens(ThemeMode mode) {
         t.go_shadow_dy = 2;
     }
     t.accent = accent_color(mode);
-    t.mod_bd = t.accent_bd;                       // R4 .mod = 强调边框
-    t.mod_text = t.accent;                        // R4 .mod = 强调色字
-    t.stage_bg = QColor(0x16, 0x18, 0x1d);        // §4.1 画布底（主题无关）
-    t.stage_bd = rgba(255, 255, 255, 0.08);       // 舞台框边（固定深色舞台上的浅描边）
-    t.close_hover = QColor(0xc4, 0x2b, 0x1c);     // §3.1 关闭悬停（双主题同值）
-    t.close_hover_fg = QColor(0xff, 0xff, 0xff);  // §3.1 关闭悬停白字（M5-T3 加性扩展）
+    t.mod_bd = t.accent_bd;                      // R4 .mod = 强调边框
+    t.mod_text = t.accent;                       // R4 .mod = 强调色字
+    t.stage_bg = QColor(0x16, 0x18, 0x1d);       // §4.1 画布底（主题无关）
+    t.stage_bd = rgba(255, 255, 255, 0.08);      // 舞台框边（固定深色舞台上的浅描边）
+    t.close_hover = QColor(0xc4, 0x2b, 0x1c);    // §3.1 关闭悬停（双主题同值）
+    t.close_hover_fg = QColor(0xff, 0xff, 0xff); // §3.1 关闭悬停白字（M5-T3 加性扩展）
+    // §6.2 选中段数字圆底 = rgba(255,255,255,.25)（tokens.css 逐字，双主题同值）
+    t.nav_num_sel_bg = rgba(255, 255, 255, 0.25);
     t.switch_rail_off = QColor(0xc3, 0xc6, 0xcf); // mockup .sw（关态轨，双主题同值）
     t.switch_knob_off = QColor(0xff, 0xff, 0xff); // mockup .sw::after（关态钮，双主题同值）
     t.control_solid = composite(t.control, t.window);
@@ -561,7 +594,17 @@ inline constexpr const char *kModProperty = "ppMod";
 inline constexpr const char *kPillProperty = "ppPill";
 // 底栏状态点的警醒态动态属性钩子（M5-T3 加性扩展）：true → err 色圆点（§9.1「未就绪不用红，
 // 警醒用 err」）；色值单源在本文件的 QSS 里，调用方只翻转属性 + repolish。
+// M5-T4：被**四档状态色**取代（§8「状态四档：中性=空/无事、绿=就绪/完成、琥珀=警告、红=失败；
+// 状态点与状态词同色」—— 两档表达不了"中性/琥珀"，且空态不得用红）。属性保留不删（既有读回），
+// 新调用点一律走 kStatusToneProperty。
 inline constexpr const char *kDotAlertProperty = "ppDotAlert";
+// 状态栏"状态点 + 状态词"的四档色调动态属性钩子（M5-T4，§8）：取值 = 下面的 kTone* 键；
+// 点与词同色（同一条属性挂到 QLabel#pp-status-dot 与 QLabel#pp-status），色值单源在 QSS 里。
+inline constexpr const char *kStatusToneProperty = "ppStatusTone";
+inline constexpr const char *kToneNeutral = "n"; // 中性：空/无事发生（--txt3 点 / --txt2 词）
+inline constexpr const char *kToneOk = "ok";     // 绿：就绪/完成
+inline constexpr const char *kToneWarn = "warn"; // 琥珀：警告（例外/0 字节/预检未过）
+inline constexpr const char *kToneErr = "err";   // 红：失败（只给失败；就绪/空不得用红）
 // §4.1 末行：语义色胶囊 = 同色 8–10% 透明底 + 30–34% 描边 + 同色字；n = 中性（ctl 底/txt2 字）
 inline constexpr const char *kPillNeutral = "n";
 inline constexpr const char *kPillAccent = "acc";
@@ -738,20 +781,21 @@ inline QString style_sheet(const Tokens &t) {
     qss += QStringLiteral("QPushButton#pp-cap-close:hover { background: ") +
            css_color(t.close_hover) + QStringLiteral("; color: ") + css_color(t.close_hover_fg) +
            QStringLiteral("; }\n");
-    // 预设 / 设置图标钮（R4 图标钮 28×28 r4）
-    qss += QStringLiteral("QToolButton#pp-presets, QToolButton#pp-settings { background: ") +
-           css_color(t.control) + QStringLiteral("; border: 1px solid ") + css_color(t.control_bd) +
-           QStringLiteral("; border-radius: ") + QString::number(Metrics::icon_btn_radius) +
-           QStringLiteral("px; color: ") + css_color(t.text2) + QStringLiteral("; }\n");
-    qss += QStringLiteral("QToolButton#pp-presets:hover, QToolButton#pp-settings:hover { color: ") +
-           css_color(t.text) + QStringLiteral("; }\n");
-    // 运行期锁定（G5 + 设计 §9「设置/预设置灰」）：原型 .icon-btn.dim{opacity:.4} 整钮变暗。
-    // QSS 无控件级不透明度 → 用 theme::at_opacity 预合成的等效底/边/字（见 tokens()）。
+    // 预设 / 设置图标钮（R4 图标钮 28×28 r4「悬停显底」）—— v6 换锚（M5-T4）：常驻底/描边作废，
+    // 透明底 + 悬停灰（.icon-btn{background:transparent;border:0} / .icon-btn:hover{--hov}）
+    qss += QStringLiteral("QToolButton#pp-presets, QToolButton#pp-settings { background: "
+                          "transparent; border: none; border-radius: ") +
+           QString::number(Metrics::icon_btn_radius) + QStringLiteral("px; color: ") +
+           css_color(t.text2) + QStringLiteral("; }\n");
+    qss += QStringLiteral("QToolButton#pp-presets:hover, QToolButton#pp-settings:hover { "
+                          "background: ") +
+           css_color(t.control) + QStringLiteral("; color: ") + css_color(t.text) +
+           QStringLiteral("; }\n");
+    // 运行期锁定（G5 + 设计 §9「设置/预设置灰」）：原型 .icon-btn.dim{opacity:.4} 整钮变暗 ——
+    // 透明底上等价于"图标按 .4 预合成"（token.icon_disabled_fg，见 tokens()），不再画底/边。
     // 顺序：写在 :hover 之后（同优先级下后者胜），保证禁用态不被 hover 提亮。
     qss += QStringLiteral("QToolButton#pp-presets:disabled, QToolButton#pp-settings:disabled { "
-                          "background: ") +
-           css_color(t.icon_disabled_bg) + QStringLiteral("; border: 1px solid ") +
-           css_color(t.icon_disabled_bd) + QStringLiteral("; color: ") +
+                          "background: transparent; border: none; color: ") +
            css_color(t.icon_disabled_fg) + QStringLiteral("; }\n");
     // 卡片（§4.3 r6 + --card-bd 描边；§4.1 shadow 由 ui 侧 QGraphicsDropShadowEffect 落地）
     qss += QStringLiteral("QFrame#pp-card { background: ") + card +
@@ -768,21 +812,44 @@ inline QString style_sheet(const Tokens &t) {
            QStringLiteral("; border: 1px solid ") + css_color(t.stage_bd) +
            QStringLiteral("; border-radius: ") + QString::number(t.radius_stage) +
            QStringLiteral("px; }\n");
-    // 底栏（状态栏）
-    qss += QStringLiteral("QWidget#pp-bottombar { background: ") + css_color(t.bottom_bg) +
-           QStringLiteral("; border-top: 1px solid ") + css_color(t.line) + QStringLiteral("; }\n");
+    // 状态栏（§3.1 高 30px；§3.2/mockup .statusbar = 窗口底 + 上沿 hairline，**无独立底色**；
+    // 文案 11px。修 5-13：与内容区以 hairline 分隔 + 段间分区由分隔符承担）
     qss +=
-        QStringLiteral("QLabel#pp-status { color: ") + css_color(t.text2) + QStringLiteral("; }\n");
+        QStringLiteral("QWidget#pp-bottombar { background: transparent; border-top: 1px solid ") +
+        css_color(t.line) + QStringLiteral("; }\n");
+    qss += QStringLiteral("QLabel#pp-status { color: ") + css_color(t.text2) +
+           QStringLiteral("; }\n"); // 兜底（未设色调属性时 = 中性档词色）
     qss += QStringLiteral("QLabel#pp-output-status { color: ") + css_color(t.text3) +
            QStringLiteral("; }\n");
-    // 状态点（§3.2 底栏「● 已选 12 / 24」；mockup .dot = 8px 圆形状而非字形）：
-    // M5-T3 起为 QSS 矢量形状（background + r99 等效半高半径），警醒态 = 动态属性 ppDotAlert
-    // （theme::kDotAlertProperty，色值仍单源在本文件 —— 调用方只翻转属性）。
-    qss += QStringLiteral("QLabel#pp-status-dot { background: ") + css_color(t.ok) +
-           QStringLiteral("; border-radius: ") + QString::number(Metrics::dot_px / 2) +
-           QStringLiteral("px; }\n");
-    qss += QStringLiteral("QLabel#pp-status-dot[") + QString::fromLatin1(kDotAlertProperty) +
-           QStringLiteral("=\"true\"] { background: ") + css_color(t.err) + QStringLiteral("; }\n");
+    // 段间分隔 hairline（修 5-13「状态栏加分隔与分区」；分隔色 = --txt3 的对照 weight 由 1px
+    // 细线承担）
+    qss += QStringLiteral("QFrame#pp-status-sep { background: ") + css_color(t.line) +
+           QStringLiteral("; border: none; }\n");
+    // 状态四档（§8）：状态点与状态词**同色**；中性 = 空/无事（点 --txt3 / 词 --txt2，绝不用红，
+    // 修 5-13/K3）。色值单源在本文件的 QSS 里 —— 调用方只设 kStatusToneProperty + repolish。
+    {
+        const struct {
+            const char *tone;
+            QColor word; // 状态词色
+            QColor dot;  // 状态点色
+        } tones[] = {
+            {kToneNeutral, t.text2, t.text3},
+            {kToneOk, t.ok, t.ok},
+            {kToneWarn, t.warn, t.warn},
+            {kToneErr, t.err, t.err},
+        };
+        const QString prop = QString::fromLatin1(kStatusToneProperty);
+        for (const auto &tone : tones) {
+            const QString value = QString::fromLatin1(tone.tone);
+            qss += QStringLiteral("QLabel#pp-status[%1=\"%2\"] { color: %3; font-weight: 600; }\n")
+                       .arg(prop, value, css_color(tone.word));
+            qss +=
+                QStringLiteral("QLabel#pp-status-dot[%1=\"%2\"] { background: %3; border-radius: "
+                               "%4px; }\n")
+                    .arg(prop, value, css_color(tone.dot))
+                    .arg(Metrics::dot_px / 2);
+        }
+    }
     // 开始运行（R4 主 CTA：状态栏 22px 高实心 acc 底 + acc-on 字 + r4；
     // 禁用态 = --ctl 底 + --txt3 字 + 1px --ctl-bd 边；box-shadow 由 ui 侧落地）
     qss += QStringLiteral("QPushButton#pp-start { background: ") + css_color(t.accent) +

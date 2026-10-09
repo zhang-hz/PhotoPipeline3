@@ -17,9 +17,14 @@
 //   * 无边框窗口（Qt::FramelessWindowHint）+ 顶栏自绘 caption 三钮：接线在 platform/frameless
 //     （Windows = WM_NCHITTEST/HTCAPTION/HTMAXBUTTON/六向缩放；其它平台 =
 //     startSystemMove/Resize）；
-//   * 三栏骨架：QSplitter(左 258 固定 | 中输入预览 | 右 QStacked 三页)，尺寸持久化走 QSettings；
+//   * 三栏骨架：QSplitter(左 330 固定轴 | 中输入预览 | 右 587 固定轴 + QStacked 三页)，
+//     尺寸持久化走 QSettings（M5-T4 换锚到规范 §3.2 的 330/587 基线与 min-width:0 约束）；
 //   * 顶栏/底栏 + 主题 tokens 单源（ui/theme.h）：明暗跟随系统（QStyleHints::colorScheme）。
 //     本任务只给面板**占位与布局接线**：中栏内容归 T10、左栏内容归 T11、右栏三页内容归 W3。
+// M5-T4（W-G2 壳层，依据 docs/qt-gui-design-spec.md v6 §3/§6.2/§8 + m5-adjudications
+// A1/A4/A5/A7）：
+//   * 顶栏 44px 三段式（品牌区 20/13-700/9.5 ｜ 一体式分段导航 92×30 居中 ｜ ☆/⚙ 28×28 + caption
+//     46×32 单轨）；状态栏 30px（状态四档同色 + 自然语摘要 + 固定轴 330/587 + CTA 22 居右）。
 
 #include "ui/mainwindow.h"
 #include "ui/icons.h"
@@ -50,6 +55,8 @@
 #include <QImage>
 #include <QLabel>
 #include <QLineEdit>
+#include <QList>
+#include <QMargins>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMimeData>
@@ -323,80 +330,182 @@ QWidget *make_card_header(QWidget *parent, const QString &title, QLabel **title_
     return row;
 }
 
-// 步骤切换钮（mockup .step / .step .n）：几何与配色逐条照 CSS —— 圆角 6、padding 6×16、
-// 编号徽标 18×18 r=99、徽标↔文案间距 8、文案 13px/600（.step{font-size:13px}）。
-// 选中态 = accent-dim 底 + accent-bd 边 + txt 字 + accent 实心徽标（编号字色 on_accent）。
-// 自绘而不是 QToolButton 的 icon+text：icon 与 text 的间距由样式决定、无法对齐 .step 的
-// gap:8px；自绘后 badge/gap/padding 才能与原型逐像素一致（自检里按墨迹簇量过）。
-class StepButton : public QAbstractButton {
+// 顶栏一体式分段导航（§6.2）：**单控件**——共享描边 + 段间 hairline + 选中段填充 acc +
+// 数字圆内嵌；段宽 92、高 30（= 段所在行高 = 导航条高 30）。注意与 R4「分段控件 高 24 / 段宽 88」
+// 的区别：那是**表单里的互斥模式档**（formkit::SegmentedControl），本件是顶栏导航档，两者同形不同源。
+//
+// 接线口径（沿 M4）：选中态与使能态的**唯一持有者 = 三个 QAction**（checked → 选中段、
+// enabled → 段可用；运行期锁定 G5 与 set_current_page 都走既有 action 路径），本控件只画与收点击
+// （点击 → action->trigger()），不持有第二份状态。
+// 自绘（而不是三个子钮）的理由：共享描边、段间 hairline、容器圆角裁切（overflow:hidden 等效）
+// 与"选中零宽度变化"（段宽恒 92）在一次绘制里落地；段几何 = 容器内的整高切片（92×30）。
+class ShellNav : public QWidget {
 public:
-    explicit StepButton(QWidget *parent = nullptr) : QAbstractButton(parent) {
-        setCheckable(true);
+    explicit ShellNav(QWidget *parent = nullptr) : QWidget(parent) {
+        setObjectName(QStringLiteral("pp-nav-strip"));
+        // 顶栏外壳不参与 Tab 序（与 caption/图标钮同口径；外壳的键盘焦点语义见 T4 报告）
         setFocusPolicy(Qt::NoFocus);
         setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-        setFont(theme::font(theme::Typography::caption_px, 600));
+        setMouseTracking(true);
     }
-    void set_number(int number) {
-        number_ = number;
+
+    // 段 = [数字圆 15][gap 6][action->text()]；number 内嵌圆内（§6.2）；文案一律来自 QAction
+    void add_segment(QAction *action, int number) {
+        Segment segment;
+        segment.action = action;
+        segment.number = number;
+        segments_.append(segment);
+        if (action != nullptr) {
+            // QAction 的 checked/enabled 变化（点击/键盘/set_current_page/lock_for_run）→ 重绘
+            connect(action, &QAction::toggled, this, [this] { update(); });
+            connect(action, &QAction::changed, this, [this] { update(); });
+        }
         updateGeometry();
         update();
     }
+
+    int segment_count() const { return int(segments_.size()); }
+    // 段矩形（容器坐标；92×30 —— 含容器描边的整高切片，探针口径见 shell-geom 行）
+    QRect segment_rect(int index) const {
+        if (index < 0 || index >= segments_.size())
+            return QRect();
+        return QRect(theme::Metrics::nav_border + index * theme::Metrics::nav_seg_w, 0,
+                     theme::Metrics::nav_seg_w, height());
+    }
+    QAction *segment_action(int index) const {
+        return index >= 0 && index < segments_.size() ? segments_.at(index).action : nullptr;
+    }
+    int segment_number(int index) const {
+        return index >= 0 && index < segments_.size() ? segments_.at(index).number : -1;
+    }
+
     void set_tokens(const theme::Tokens &tokens) {
         tokens_ = tokens;
         update();
     }
+
     QSize sizeHint() const override {
-        const QFontMetrics metrics(font());
-        return QSize(theme::Metrics::step_pad_x * 2 + theme::Metrics::step_badge +
-                         theme::Metrics::step_badge_gap + metrics.horizontalAdvance(text()),
-                     theme::Metrics::step_pad_y * 2 + theme::Metrics::step_badge);
+        return QSize(segments_.size() * theme::Metrics::nav_seg_w + 2 * theme::Metrics::nav_border,
+                     theme::Metrics::nav_h);
     }
+    QSize minimumSizeHint() const override { return sizeHint(); }
 
 protected:
     void paintEvent(QPaintEvent *) override {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing, true);
-        const bool enabled = isEnabled();
-        // 运行期锁定（G5）：mockup .step.dim{opacity:.45} 是**整钮**（含 18×18 编号徽标）变暗
-        // —— 自绘路径用 painter 不透明度落地（QSS 无控件级 opacity）。
-        painter.setOpacity(enabled ? 1.0 : theme::Metrics::step_dim_opacity);
-        const bool active = isChecked() && enabled;
-        // 底/边：.step{background:transparent;border:1px solid transparent}
-        //         .step.active{background:--acc-dim;border-color:--acc-bd}
-        if (active) {
-            painter.setPen(QPen(tokens_.accent_bd, 1.0));
-            painter.setBrush(tokens_.accent_dim);
-        } else {
-            painter.setPen(Qt::NoPen);
-            painter.setBrush(Qt::NoBrush);
+        // 容器：共享描边 + 卡片底 + r6（tokens.css `.nav-strip{border:1px solid --ctl-bd;
+        // border-radius:6px;background:--card}`）
+        const QRectF box = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        painter.setPen(QPen(tokens_.control_bd, 1.0));
+        painter.setBrush(tokens_.card);
+        painter.drawRoundedRect(box, theme::Metrics::nav_radius, theme::Metrics::nav_radius);
+        QPainterPath clip; // 容器形状（选中填充/悬停底的圆角裁切 = CSS overflow:hidden 等效）
+        clip.addRoundedRect(box, theme::Metrics::nav_radius, theme::Metrics::nav_radius);
+
+        for (int i = 0; i < segments_.size(); ++i) {
+            const Segment &segment = segments_.at(i);
+            const QAction *action = segment.action;
+            const bool active = action != nullptr && action->isChecked();
+            const bool enabled = action == nullptr || action->isEnabled();
+            const QRect area = segment_rect(i);
+            painter.save();
+            painter.setClipPath(clip);
+            // 运行期锁定（G5）：mockup .step.dim{opacity:.45} 是整段（含数字圆）变暗
+            painter.setOpacity(enabled ? 1.0 : theme::Metrics::nav_dim_opacity);
+            // 选中段填充 acc（段间 hairline 画在填充之上：非首段的左 1px 线在 CSS 里是
+            // `button+button{border-left:1px solid --ctl-bd}`，选中态也保留）
+            if (active) {
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(tokens_.accent);
+                painter.drawRect(area);
+            } else if (hover_ == i && enabled) {
+                // 悬停仅换底、零形变（§12-4）；取与 .cap:hover/图标钮同一"悬停灰"档令牌
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(tokens_.control);
+                painter.drawRect(area);
+            }
+            if (i > 0) {
+                painter.setPen(QPen(tokens_.control_bd, 1.0));
+                painter.drawLine(area.left(), theme::Metrics::nav_border, area.left(),
+                                 height() - theme::Metrics::nav_border);
+            }
+            // 内容 = [数字圆 15][gap 6][文案]，整体在段内居中（tokens.css button{gap:6px}）
+            const QFont text_font =
+                theme::font(theme::Typography::nav_text_px, theme::Typography::nav_text_weight);
+            const QFontMetrics text_metrics(text_font);
+            const QString text = action != nullptr ? action->text() : QString();
+            const int content_w = theme::Metrics::nav_num + theme::Metrics::nav_num_gap +
+                                  text_metrics.horizontalAdvance(text);
+            const int x0 = area.left() + (area.width() - content_w) / 2;
+            const qreal diameter = theme::Metrics::nav_num;
+            const QRectF circle(x0, (height() - diameter) / 2.0, diameter, diameter);
+            // 数字圆：`.nav-strip .n{background:--ctl;border:1px --ctl-bd;color:--txt2}` /
+            // 选中段 `button.on .n{background:rgba(255,255,255,.25);border-color:transparent;
+            // color:--acc-on}`（§4.2 徽标档 9.5/700，裁定 A4）
+            painter.setPen(active ? Qt::NoPen : QPen(tokens_.control_bd, 1.0));
+            painter.setBrush(active ? tokens_.nav_num_sel_bg : tokens_.control);
+            painter.drawEllipse(circle.adjusted(0.5, 0.5, -0.5, -0.5));
+            painter.setFont(
+                theme::font(theme::Typography::nav_num_px, theme::Typography::nav_num_weight));
+            painter.setPen(active ? tokens_.on_accent : tokens_.text2);
+            painter.drawText(circle, Qt::AlignCenter, QString::number(segment.number));
+            painter.setFont(text_font);
+            painter.setPen(active ? tokens_.on_accent : tokens_.text2);
+            painter.drawText(QRect(x0 + theme::Metrics::nav_num + theme::Metrics::nav_num_gap, 0,
+                                   text_metrics.horizontalAdvance(text), height()),
+                             Qt::AlignVCenter | Qt::AlignLeft, text);
+            painter.restore();
         }
-        const qreal radius = theme::Metrics::step_radius;
-        painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), radius, radius);
-        // 编号徽标：.step .n{18×18;r=99;background:--ctl;border:1px --ctl-bd;color:--txt2}
-        //            .step.active .n{background:--acc;border-color:--acc;color:on_accent}
-        const qreal badge = theme::Metrics::step_badge;
-        const QRectF badge_rect(theme::Metrics::step_pad_x, (height() - badge) / 2.0, badge, badge);
-        painter.setPen(QPen(active ? tokens_.accent : tokens_.control_bd, 1.0));
-        painter.setBrush(active ? tokens_.accent : tokens_.control);
-        painter.drawEllipse(badge_rect.adjusted(0.5, 0.5, -0.5, -0.5));
-        painter.setFont(
-            theme::font(theme::Typography::step_badge_px, theme::Typography::step_badge_weight));
-        painter.setPen(active ? tokens_.on_accent : tokens_.text2);
-        painter.drawText(badge_rect, Qt::AlignCenter, QString::number(number_));
-        // 文案（§9.3 禁止折行 → 超长省略号）。禁用态的字色仍是 .step 的 --txt2：变暗由上面的
-        // 整钮不透明度（.step.dim opacity .45）承担，不再叠加第二层 text3（否则比原型暗一档）。
-        painter.setFont(font());
-        painter.setPen(active ? tokens_.text : tokens_.text2);
-        const int text_x = static_cast<int>(badge_rect.right()) + theme::Metrics::step_badge_gap;
-        const int text_w = std::max(0, width() - text_x - theme::Metrics::step_pad_x);
-        const QFontMetrics metrics(font());
-        painter.drawText(QRect(text_x, 0, text_w, height()), Qt::AlignVCenter | Qt::AlignLeft,
-                         metrics.elidedText(text(), Qt::ElideRight, text_w));
+    }
+
+    void mousePressEvent(QMouseEvent *event) override {
+        pressed_ = segment_at(event->pos());
+        QWidget::mousePressEvent(event);
+    }
+    void mouseReleaseEvent(QMouseEvent *event) override {
+        const int hit = segment_at(event->pos());
+        if (hit >= 0 && hit == pressed_) {
+            QAction *action = segments_.at(hit).action;
+            if (action != nullptr && action->isEnabled())
+                action->trigger(); // 唯一路径 = 既有 set_current_page 接线
+        }
+        pressed_ = -1;
+        QWidget::mouseReleaseEvent(event);
+    }
+    void mouseMoveEvent(QMouseEvent *event) override {
+        const int hit = segment_at(event->pos());
+        if (hit != hover_) {
+            hover_ = hit;
+            update();
+        }
+        QWidget::mouseMoveEvent(event);
+    }
+    void leaveEvent(QEvent *event) override {
+        if (hover_ != -1) {
+            hover_ = -1;
+            update();
+        }
+        QWidget::leaveEvent(event);
     }
 
 private:
+    struct Segment {
+        QAction *action = nullptr;
+        int number = 1;
+    };
+    int segment_at(const QPoint &pos) const {
+        for (int i = 0; i < segments_.size(); ++i) {
+            if (segment_rect(i).contains(pos))
+                return i;
+        }
+        return -1;
+    }
+
+    QList<Segment> segments_;
     theme::Tokens tokens_;
-    int number_ = 1;
+    int hover_ = -1;
+    int pressed_ = -1;
 };
 
 // 图标钮（mockup .icon-btn：R4 图标钮 28×28 r4，悬停显底）。
@@ -423,13 +532,13 @@ QToolButton *make_icon_button(QWidget *parent, QAction *action, const char *obje
     return button;
 }
 
-// caption 三钮（§9.1 能力表：46 宽；命中区 46×32、hover 面贴满顶栏 52px —— 双轨口径见
-// theme::Metrics::caption_btn_hit_h / caption_btn_h）。关闭悬停 #c42b1c 在 tokens/QSS 里。
+// caption 三钮（§3.1/§3.3：46×32、透明底、悬停灰、关闭悬停 #c42b1c 白字）。关闭悬停色在
+// tokens/QSS 里（theme::Tokens::close_hover / close_hover_fg）。
 //
-// 双轨落地：
-//   * 可见面 = 控件自身 46×满高 → QSS :hover 背景铺满 52px（原型 .capbtns{align-self:stretch}）；
-//   * 命中 = 居中的 46×32 带（§9.1 明文）→ hitButton 只认带内（Ctrl/程序化 click() 不受影响），
-//     无边框窗口的 WM_NCHITTEST 用同一条带（platform/frameless.cpp 的 rect_of(caption_button)）。
+// **单轨（M5-T4，裁定 A1）**：可见面与命中区同为 46×32（theme::Metrics::caption_btn_h ==
+// caption_btn_hit_h == platform::kCaptionHitHeightPx）。命中带 = 按钮矩形（居中的 32px 带在顶栏
+// 44px 内），无边框窗口的 WM_NCHITTEST 用同一条带（platform/frameless.cpp 的
+// rect_of(caption_button) 在"控件高 > 命中带高"时才收敛，单轨下两者恒等）。
 // caption 图标边长（px）：mockup 的 .cap 内联 svg 是 10×10（WinUI3 语言的 caption 字形盒）
 constexpr int kCaptionIconPx = 10;
 
@@ -456,7 +565,8 @@ public:
         apply_icon(underMouse());
     }
 
-    // 命中带（居中）：与 platform/frameless.cpp 的 rect_of(..., caption_button=true) 同一条带
+    // 命中带：与 platform/frameless.cpp 的 rect_of(..., caption_button=true) 同一条带。单轨下
+    // box.height() == band（46×32）→ 原文返回；此处的居中收敛只对"控件比命中带高"的历史形态生效。
     static QRect hit_band(const QRect &box) {
         const int band = theme::Metrics::caption_btn_hit_h;
         if (box.height() <= band)
@@ -487,9 +597,8 @@ private:
     QColor hover_;
 };
 
-// caption 三钮：图标 = icons 库（mockup/run.html 的 .cap 内联 svg 逐点同源：─ / □ / ✕），
-// 尺寸与命中几何仍是 M4-W2-fix 第 5 条的双轨裁定（控件 46×满高、命中 46×32）—— v6 的
-// 「46×32」是**命中区**（§3.1 逐字「Win11 规格 46×32 命中区」），可见面高度随顶栏（M5-T4 换锚）。
+// caption 三钮：图标 = icons 库（mockup 的 .cap 内联 svg 逐点同源：─ / □ / ✕），尺寸 =
+// §3.3 逐字「46×32」（M5-T4 单轨：可见面 = 命中区 = 46×32，见 theme::Metrics::caption_btn_h）。
 QPushButton *make_caption_button(QWidget *parent, icons::Name icon_name, const QString &tip,
                                  const char *object_name, const QColor &normal,
                                  const QColor &hover) {
@@ -624,12 +733,10 @@ struct MainWindow::Impl {
     plat::Frameless *frameless = nullptr;                 // 无边框接线（Windows = WM_NCHITTEST）
     QWidget *root = nullptr;                              // 窗口底（mockup body 渐变）
     QWidget *titlebar = nullptr;                          // 顶栏（兼标题栏；拖拽区）
-    QWidget *bottombar = nullptr;                         // 底栏
+    QWidget *bottombar = nullptr;                         // 底栏（状态栏 30px）
     QSplitter *splitter = nullptr;                        // 三栏
     QLabel *app_icon = nullptr;
-    StepButton *step_meta = nullptr;
-    StepButton *step_output = nullptr;
-    StepButton *step_run = nullptr;
+    ShellNav *nav = nullptr; // 顶栏导航区（一体式分段，§6.2；段 = 三个 QAction）
     QAction *presets_action = nullptr;
     QToolButton *presets_btn = nullptr;
     QToolButton *settings_btn = nullptr;
@@ -637,10 +744,11 @@ struct MainWindow::Impl {
     QPushButton *cap_max = nullptr;
     QPushButton *cap_close = nullptr;
     ElidedLabel *output_status = nullptr;
+    QFrame *status_sep = nullptr; // 状态栏段间分隔 hairline（修 5-13）
     QLabel *status_dot = nullptr;
     ElidedLabel *preview_pill = nullptr; // 中栏卡头徽标（文件名，T10 填）
     ElidedLabel *preview_hint = nullptr; // 中栏卡头右端 hint（尺寸·位深·色彩空间，T10 填）
-    QWidget *left_col = nullptr;         // 左栏容器（文件卡 + 分类卡，§9.1 左栏 258 固定）
+    QWidget *left_col = nullptr;         // 左栏容器（文件卡 + 分类卡，§3.2 左栏 330 固定轴）
     QFrame *left_card = nullptr;         // 左栏文件卡框（T11 填内容）
     QFrame *classify_card = nullptr;     // 左栏分类卡框（T11）
     QFrame *preview_card = nullptr;      // 中栏卡框（内嵌 T10 的 PreviewPanel）
@@ -749,6 +857,8 @@ struct MainWindow::Impl {
     void restore_splitter_state();
     void save_splitter_state();
     void update_caption_buttons();
+    void apply_status_tone(const char *tone); // M5-T4（§8）：状态点 + 状态词同色四档
+    void smoke_probe_shell_geometry();        // M5-T4（C7）：壳层几何值表探针
 
     // M4-T11：左栏（勾选/分组/分类）
     void load_classes(); // classes.json → 注册表（失败仅告警，保持默认）
@@ -932,28 +1042,34 @@ void MainWindow::build_ui() {
     outer->setContentsMargins(0, 0, 0, 0);
     outer->setSpacing(0);
 
-    // ---- 顶栏（兼标题栏，§9.1）：图标+标题 | ①元数据 ②输出 ③运行 | ☆ ⚙ | ─ □ ✕ ----
+    // ---- 顶栏（兼标题栏，§3.1/§3.3）：44px 三段式 ----
+    //   品牌区（图标 20 + 标题 13/700 + 版本 pill 9.5）｜ 导航区（一体式分段导航，§6.2）｜
+    //   工具与窗口控制区（左推：☆ 收藏、⚙ 设置 28×28；caption 三连 46×32）。
+    //   三段分布均衡（修 5-01「中段不得大片空置」）：导航区在**两侧弹性之间居中**，品牌贴左、
+    //   工具与窗口控制贴右（fix-1-toolbar 裁定「品牌/步骤/工具三段分布，步骤条居中」）。
     d.titlebar = new QWidget(central);
     d.titlebar->setObjectName(QStringLiteral("pp-titlebar"));
     d.titlebar->setFixedHeight(theme::Metrics::toolbar_height);
     auto *top = new QHBoxLayout(d.titlebar);
-    top->setContentsMargins(theme::Metrics::titlebar_pad_left, 0, 0, 0);
-    top->setSpacing(14);
+    top->setContentsMargins(theme::Metrics::titlebar_pad_left, 0,
+                            theme::Metrics::titlebar_pad_right, 0);
+    top->setSpacing(theme::Metrics::toolbar_gap); // .toolbar{gap:12px}
 
+    // 品牌区（§3.3）：图标 20（矢量，accent）+ 标题 13/700 + 版本 pill 9.5（§4.2 徽标档）
     d.app_icon = new QLabel(d.titlebar);
     d.app_icon->setObjectName(QStringLiteral("pp-app-icon"));
-    d.app_icon->setFixedSize(18, 18);
+    d.app_icon->setFixedSize(theme::Metrics::brand_icon, theme::Metrics::brand_icon);
     auto *title = new QLabel(QStringLiteral("PhotoPipeline"), d.titlebar);
     title->setObjectName(QStringLiteral("pp-app-title"));
-    title->setFont(theme::font(theme::Typography::caption_px, 600));
+    title->setFont(theme::font(theme::Typography::caption_px, theme::Typography::caption_weight));
     auto *version = new QLabel(QStringLiteral("0.3.0"), d.titlebar);
     version->setObjectName(QStringLiteral("pp-app-ver"));
-    version->setFont(theme::font(theme::Typography::hint_px, 500));
+    version->setFont(theme::font(theme::Typography::badge_px, theme::Typography::badge_weight));
     // mockup .toolbar{align-items:center}：徽标按自身高度居中，不被行高拉伸
     version->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     auto *title_row = new QHBoxLayout();
     title_row->setContentsMargins(0, 0, 0, 0);
-    title_row->setSpacing(8);
+    title_row->setSpacing(theme::Metrics::brand_gap); // .brand{gap:8px}
     title_row->addWidget(d.app_icon);
     title_row->addWidget(title);
     title_row->addWidget(version);
@@ -969,41 +1085,15 @@ void MainWindow::build_ui() {
         d.nav_group->addAction(action);
     }
     d.nav_meta->setChecked(true);
-    // mockup .toolbar{gap:14px} + .steps{margin-left:22px} = 36px（外加上方 14 的间距）
-    top->addSpacing(theme::Metrics::step_margin_left);
-    auto *steps = new QHBoxLayout();
-    steps->setContentsMargins(0, 0, 0, 0);
-    steps->setSpacing(theme::Metrics::step_gap); // .steps{gap:6px}
-    d.step_meta = new StepButton(d.titlebar);
-    d.step_output = new StepButton(d.titlebar);
-    d.step_run = new StepButton(d.titlebar);
-    const struct {
-        StepButton *button;
-        QAction *action;
-        int number;
-        const char *object_name;
-    } step_bindings[] = {
-        {d.step_meta, d.nav_meta, 1, "pp-step-meta"},
-        {d.step_output, d.nav_output, 2, "pp-step-output"},
-        {d.step_run, d.nav_run, 3, "pp-step-run"},
-    };
-    for (const auto &binding : step_bindings) {
-        binding.button->setObjectName(QString::fromLatin1(binding.object_name));
-        binding.button->set_number(binding.number);
-        binding.button->setText(binding.action->text());
-        binding.button->setChecked(binding.action->isChecked());
-        // 自绘步钮 ↔ QAction 同步：点击 → action->trigger()（= 既有 set_current_page 路径）；
-        // action 的 checked/enabled 变化 → 步钮（lock_for_run/set_current_page 依赖 action）
-        connect(binding.button, &QAbstractButton::clicked, binding.action, &QAction::trigger);
-        connect(binding.action, &QAction::toggled, binding.button, &QAbstractButton::setChecked);
-        connect(binding.action, &QAction::changed, binding.button,
-                [action = binding.action, button = binding.button] {
-                    button->setEnabled(action->isEnabled());
-                });
-        steps->addWidget(binding.button);
-    }
-    top->addLayout(steps);
-
+    // 导航区（§6.2）：一体式分段导航 = **单控件**（ShellNav），段序 = 运行流程顺序
+    // ① 元数据 → ② 输出 → ③ 运行（数字圆内嵌；K1：不放 ✓ 等完成态装饰）。
+    top->addStretch(1);
+    d.nav = new ShellNav(d.titlebar);
+    d.nav->setObjectName(QStringLiteral("pp-nav-strip"));
+    d.nav->add_segment(d.nav_meta, 1);
+    d.nav->add_segment(d.nav_output, 2);
+    d.nav->add_segment(d.nav_run, 3);
+    top->addWidget(d.nav);
     top->addStretch(1);
     // M5-T3：QAction 只承载提示/使能（图标 = 矢量引擎，见 make_icon_button）；setText 保留
     // 「收藏当前设置 / 设置」供 QAction 语义与探针读回（按钮本体 ToolButtonIconOnly，不出文本）。
@@ -1014,8 +1104,10 @@ void MainWindow::build_ui() {
     d.presets_btn = make_icon_button(d.titlebar, d.presets_action, "pp-presets", icons::Name::Star);
     d.settings_btn =
         make_icon_button(d.titlebar, d.settings_action, "pp-settings", icons::Name::Gear);
+    // 工具与窗口控制区：v6 .tb-tools 无 gap（☆/⚙ 28×28 相邻、三连 46×32 紧贴 ☰ 侧），
+    // 与原型实测一致（图标中心距 28 / caption 中心距 46；右侧留 .toolbar 的 6px 内边距）。
     auto *caps = new QHBoxLayout();
-    caps->setContentsMargins(2, 0, 0, 0); // .capbtns{margin-left:2px}
+    caps->setContentsMargins(0, 0, 0, 0);
     caps->setSpacing(0);
     // 取色（§3.1/WinUI3 语言）：字形 = --txt；关闭悬停 = #c42b1c 底 +
     // 白字（tokens.close_hover_fg）。 初值用 preferred_theme_mode() 的令牌，refresh_theme()
@@ -1030,18 +1122,16 @@ void MainWindow::build_ui() {
     caps->addWidget(d.cap_min);
     caps->addWidget(d.cap_max);
     caps->addWidget(d.cap_close);
-    // mockup .tb-right{gap:10px}：☆/⚙ 之间与 ⚙↔三钮之间都是 10（后者再叠 .capbtns 的 2px）
     auto *right_row = new QHBoxLayout();
     right_row->setContentsMargins(0, 0, 0, 0);
-    right_row->setSpacing(10);
+    right_row->setSpacing(0); // 见上：v6 工具区无 gap（右端整体贴 .toolbar 的 6px 内边距）
     right_row->addWidget(d.presets_btn);
     right_row->addWidget(d.settings_btn);
-    right_row->addSpacing(2);
     right_row->addLayout(caps);
     top->addLayout(right_row);
     outer->addWidget(d.titlebar);
 
-    // ---- 三栏骨架（§9.1）：左 258 固定 | 中 1.0 弹性 | 右 1.15 弹性 ----
+    // ---- 三栏骨架（§3.2）：左 330（280–400 可调）| 中弹性 | 右 587（520–680 可调）----
     auto *main_area = new QWidget(central);
     auto *main_layout = new QHBoxLayout(main_area);
     main_layout->setContentsMargins(theme::Metrics::main_pad_x, theme::Metrics::main_pad_top,
@@ -1054,13 +1144,16 @@ void MainWindow::build_ui() {
     main_layout->addWidget(d.splitter);
     outer->addWidget(main_area, 1);
 
-    // 左栏（T11 落地；§9.1 左栏 258px 固定 / 280 可调）：文件卡（勾选+分组）+ 分类卡（§6.2）
+    // 左栏（T11 落地；§3.2 左栏基线 330 / 280–400 可调）：文件卡（勾选+分组）+ 分类卡（§6.2）
     d.left_col = new QWidget(d.splitter);
     d.left_col->setObjectName(QStringLiteral("pp-left-col"));
-    // §9.1「左栏 258px 固定（280 可调）」：下界 = 固定值（缩放时不被压缩，尺寸可复现），
-    // 上界 = 可调上限（用户拖拽分栏手柄最多拉到 280）
-    d.left_col->setMinimumWidth(theme::Metrics::left_width);
+    // §3.2「左 330px（280–400 可调）」：基线 = 初始尺寸（setSizes 落 330）、可调区间 =
+    // [min, max]；窗口缩放不动它（stretch 0 + min-width:0，见下）。
+    // 「任何页内容不得反向撑大栏宽（min-width:0）」：横向 QSizePolicy::Ignored = Qt 侧等效 ——
+    // 子内容的 sizeHint/minimumSizeHint 一律不参与列宽决定（列宽只由固定轴/弹性分配给出）。
+    d.left_col->setMinimumWidth(theme::Metrics::left_width_min);
     d.left_col->setMaximumWidth(theme::Metrics::left_width_max);
+    d.left_col->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     auto *left_col_layout = new QVBoxLayout(d.left_col);
     left_col_layout->setContentsMargins(0, 0, 0, 0);
     left_col_layout->setSpacing(theme::Metrics::gap); // mockup .col-left{gap:10px}
@@ -1112,7 +1205,8 @@ void MainWindow::build_ui() {
     add_btn->setAccessibleName(tr("添加文件 / 文件夹")); // §11：图标钮必有 accessibleName
     icons::apply(add_btn, icons::Name::Add, d.tokens.text2, QColor(), 12); // mockup 12×12 svg
     add_btn->setPopupMode(QToolButton::InstantPopup);
-    add_btn->setFixedHeight(theme::Metrics::input_h);
+    // 裁定 A7（R4 表按钮高 26）：＋/− 是**按钮**，此前挂 input_h(24) 是 M4 遗留 → 换锚 btn_h。
+    add_btn->setFixedHeight(theme::Metrics::btn_h);
     add_btn->setFixedWidth(28);
     auto *add_menu = new QMenu(add_btn);
     QAction *act_add_files = add_menu->addAction(tr("添加文件…"));
@@ -1131,7 +1225,7 @@ void MainWindow::build_ui() {
     remove_btn->setToolTip(tr("移除所选"));
     remove_btn->setAccessibleName(tr("移除所选")); // §11
     icons::apply(remove_btn, icons::Name::Remove, d.tokens.text2, QColor(), 12);
-    remove_btn->setFixedHeight(theme::Metrics::input_h);
+    remove_btn->setFixedHeight(theme::Metrics::btn_h); // 裁定 A7（同 ＋）
     remove_btn->setFixedWidth(28);
     remove_btn->setEnabled(false);
     tools->addWidget(d.search, 1);
@@ -1206,6 +1300,9 @@ void MainWindow::build_ui() {
     d.preview_card = new QFrame(d.splitter);
     d.preview_card->setObjectName(QStringLiteral("pp-card"));
     d.preview_card->setAttribute(Qt::WA_StyledBackground, true);
+    // §3.2 min-width:0：中栏是**弹性列**（唯一吃窗口余量者），缩到最小时不得被预览内容顶住
+    d.preview_card->setMinimumWidth(0);
+    d.preview_card->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     auto *preview_layout = new QVBoxLayout(d.preview_card);
     preview_layout->setContentsMargins(0, 0, 0, 0);
     preview_layout->setSpacing(0);
@@ -1235,43 +1332,55 @@ void MainWindow::build_ui() {
     d.splitter->addWidget(d.left_col);
     d.splitter->addWidget(d.preview_card);
     d.splitter->addWidget(d.stack);
-    // 左栏固定（stretch 0）；中/右弹性：1440 校准落点 = mockup 实测 537/601（§9.4 以 mockup 为准，
-    // §9.1 文本「1.15」与原型实测 1.111/1.119 冲突 → 见 T9 偏差），缩放时 Qt 按当前尺寸等比分配。
+    d.stack->setMinimumWidth(theme::Metrics::right_width_min); // §3.2 右栏 520–680 可调
+    d.stack->setMaximumWidth(theme::Metrics::right_width_max);
+    d.stack->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred); // min-width:0（同上）
+    // 栏宽固定轴（§3.2/§12-16）：左/右 = 固定轴（stretch 0 → 窗口缩放不动），中栏 = 弹性列
+    // （stretch 1 → 吃全部余量）；1440 校准落点 = 330 / 487 / 587。
     d.splitter->setStretchFactor(0, 0);
     d.splitter->setStretchFactor(1, theme::Metrics::mid_stretch);
     d.splitter->setStretchFactor(2, theme::Metrics::right_stretch);
-    d.splitter->setSizes({theme::Metrics::left_width, theme::Metrics::mid_width_1440,
-                          theme::Metrics::right_width_1440});
+    d.splitter->setSizes(
+        {theme::Metrics::left_width, theme::Metrics::mid_width_1440, theme::Metrics::right_width});
 
-    // ---- 底栏（§9.1）：选中摘要 · 输出摘要 · [开始运行]（运行中变状态，W3-T14 接运行态）----
+    // ---- 底栏（§3.1 状态栏 30px）：状态词 · 输出摘要 · [▶ 开始运行] ----
+    // 与内容区以 hairline 分隔（修 5-13/§5-13，QSS 的 border-top）；栏内三种重量元素**分区**：
+    // 状态点 + 状态词（语义色 + 600 字重）｜ 分隔细线 ｜ 输出摘要（--txt3 次级）｜ 实心主 CTA
+    // 居右。
     d.bottombar = new QWidget(central);
     d.bottombar->setObjectName(QStringLiteral("pp-bottombar"));
     d.bottombar->setFixedHeight(theme::Metrics::bottom_height);
     auto *bottom = new QHBoxLayout(d.bottombar);
-    bottom->setContentsMargins(theme::Metrics::titlebar_pad_left, 0,
-                               theme::Metrics::titlebar_pad_left, 0);
-    bottom->setSpacing(14);
+    bottom->setContentsMargins(theme::Metrics::statusbar_pad_x, 0, theme::Metrics::statusbar_pad_x,
+                               0);
+    bottom->setSpacing(theme::Metrics::statusbar_gap); // .statusbar{gap:8px}
     // M5-T3：状态点 = 形状（QSS background + border-radius 的 8px 圆，mockup .dot），不再是 ●
-    // 字形。 警醒态 = 动态属性 ppDotAlert（色值仍单源在 theme.h 的 QSS 里，C1）。
+    // 字形。M5-T4：色调 = 动态属性 ppStatusTone 四档（§8：点与词同色；空/就绪绝不用红，
+    // 色值仍单源在 theme.h 的 QSS 里，C1）。
     d.status_dot = new QLabel(d.bottombar);
     d.status_dot->setObjectName(QStringLiteral("pp-status-dot"));
     d.status_dot->setFixedSize(theme::Metrics::dot_px, theme::Metrics::dot_px);
     d.status = new ElidedLabel(d.bottombar); // §9.3：超长文案省略号，不折行
     d.status->setObjectName(QStringLiteral("pp-status"));
-    d.status->setFont(theme::font(theme::Typography::body_px));
-    d.status->set_full_text(tr("没有文件"));
+    d.status->setFont(theme::font(theme::Typography::small_px)); // 状态栏 11px
+    d.status->set_full_text(tr("未添加文件"));
+    d.status_sep = new QFrame(d.bottombar); // 段间分隔（修 5-13：栏内分区）
+    d.status_sep->setObjectName(QStringLiteral("pp-status-sep"));
+    d.status_sep->setAttribute(Qt::WA_StyledBackground, true);
+    d.status_sep->setFixedSize(1, theme::Metrics::statusbar_sep_h);
     d.output_status = new ElidedLabel(d.bottombar);
     d.output_status->setObjectName(QStringLiteral("pp-output-status"));
-    d.output_status->setFont(theme::font(theme::Typography::body_px));
+    d.output_status->setFont(theme::font(theme::Typography::small_px)); // 状态栏 11px
     bottom->addWidget(d.status_dot);
     bottom->addWidget(d.status);
+    bottom->addWidget(d.status_sep);
     bottom->addWidget(d.output_status);
     bottom->addStretch(1);
     d.start = new QPushButton(tr("开始运行"), d.bottombar);
     d.start->setObjectName(QStringLiteral("pp-start"));
     // 图标 = icons::play（矢量 ▶，mockup statusbar .btn-go 的 ▶）；色 = acc-on（实心 CTA 上的字色）
     icons::apply(d.start, icons::Name::Play, d.tokens.on_accent, d.tokens.text3, 12);
-    d.start->setFixedHeight(theme::Metrics::go_height); // .go{height:34px}
+    d.start->setFixedHeight(theme::Metrics::go_height); // R4 主 CTA 22px（禁用 = 灰底灰字）
     d.start->setFont(theme::font(theme::Typography::caption_px, 700));
     d.start->setDefault(true);
     bottom->addWidget(d.start);
@@ -1280,8 +1389,8 @@ void MainWindow::build_ui() {
     setCentralWidget(central);
 
     // ---- 无边框接线（§9.1 能力表）：顶栏 = 拖拽/HTCAPTION 区；交互控件全部排除 ----
-    d.frameless = plat::Frameless::attach(
-        this, d.titlebar, {d.step_meta, d.step_output, d.step_run, d.presets_btn, d.settings_btn});
+    // 导航区 = 一整件（ShellNav 单控件）→ 整块排除（含段间 hairline 位，§9.1 硬约束 1）。
+    d.frameless = plat::Frameless::attach(this, d.titlebar, {d.nav, d.presets_btn, d.settings_btn});
     if (d.frameless != nullptr)
         d.frameless->set_caption_buttons(d.cap_min, d.cap_max, d.cap_close);
 
@@ -1689,6 +1798,11 @@ void MainWindow::lock_for_run(bool lock) {
     d.nav_output->setEnabled(!lock);
     d.settings_action->setEnabled(!lock);
     d.presets_action->setEnabled(!lock);
+    // QToolButton 与 defaultAction 的图标同步是**单向覆盖**：action 的 icon 为空时，使能态一变化
+    // 就会用空图标覆盖按钮自己的矢量图标（实测：置灰瞬间 icon().isNull() 0→1），随后 QCommonStyle
+    // 因"图标空 + 文本非空"回落成**文本**渲染（§3.3 图标不得退化为字形/文本）。⇒ 使能态切换后
+    // 立即重放一次骨架图标（单源 = apply_chrome_icons）。
+    d.apply_chrome_icons();
     d.panel->setEnabled(!lock);
     d.page_meta->setEnabled(!lock);
     d.page_output->setEnabled(!lock);
@@ -1719,8 +1833,11 @@ void MainWindow::refresh_status() {
     const std::size_t exceptions = d.model->exception_count();
     const QString reason = d.page_output->ready_to_start();
 
+    // 状态词 + **色调**（§8 四档：中性=空/无事、绿=就绪/完成、琥珀=警告、红=失败；点与词同色；
+    // 修 K3/5-13：就绪与空态**绝不用红**，红色只给失败）。文案 = 自然语（§12-17：无公式、
+    // 无实现细节词；fix-3-status 的裁定文案）。
     QString text;
-    bool invalid = false;
+    const char *tone = theme::kToneNeutral;
     if (d.running) {
         // M4-T14（mockup run-dark 底栏）：运行中 = 「成功 N · 失败 N · 进行中 N · 排队 N」。
         // 并行读数与运行页同源（page_run 的同一份事件流折算：已取件 − 已结算 = 进行中）。
@@ -1733,40 +1850,39 @@ void MainWindow::refresh_status() {
                    .arg(d.run_failed)
                    .arg(inflight)
                    .arg(queued);
+        // 运行中：绿 = 进行中；已出现失败/例外 → 琥珀（预警，不打断 —— mockup run-dark 底栏
+        // 的「进行中 · 1 异常 · 3 失败」正是琥珀档）
+        tone = (d.run_failed > 0 || exceptions > 0) ? theme::kToneWarn : theme::kToneOk;
     } else if (count == 0) {
-        text = tr("没有文件");
-        invalid = true;
+        text = tr("未添加文件"); // 空态 = 中性（§8：空/无事发生；不得用红）
     } else if (!reason.isEmpty()) {
-        text = reason;
-        invalid = true;
+        text = reason; // 预检未过（输出页的阻塞原因）= 警告档，不是失败
+        tone = theme::kToneWarn;
     } else if (checked == 0) {
-        // M4-T11（§6.2/D2）：勾选 = 参与运行集合；未勾选 = 无参与文件
+        // M4-T11（§6.2/D2）：勾选 = 参与运行集合；未勾选 = 无参与文件（中性：无事发生）
         text = tr("未勾选任何文件");
-        invalid = true;
+    } else if (d.run_failed > 0) {
+        // 上一轮运行有失败项（§8：红 = 失败，唯一允许红的语义）
+        text = tr("%1 项失败").arg(d.run_failed);
+        tone = theme::kToneErr;
     } else {
-        // §9.1 底栏 = 选中摘要 · 输出摘要 · [开始运行]（mockup："已选 12 / 24 个文件 · 就绪"）
-        text = tr("已选 %1 / %2 个文件 · 就绪").arg(checked).arg(count);
+        // §3.2 底栏 = 选中摘要 · 输出摘要 · [▶ 开始运行]（mockup："已选 12 / 24 · 就绪"）
+        text = tr("已选 %1 / %2 · 就绪").arg(checked).arg(count);
+        tone = theme::kToneOk;
     }
-    if (exceptions > 0)
+    if (exceptions > 0) {
         text += tr(" · %1 个例外").arg(exceptions);
-    d.status->set_full_text(text); // §9.3：超长省略号（不折行）
-    const QString alert =
-        invalid ? QStringLiteral("color:") + theme::css_color(d.tokens.err) : QString();
-    d.status->setStyleSheet(alert);
-    if (d.status_dot != nullptr) {
-        // M5-T3：状态点 = QSS 圆点（形状），警醒态走动态属性（theme.h 的 QSS 规则，色值单源）
-        const bool dot_alert = d.status_dot->property(theme::kDotAlertProperty).toBool();
-        if (dot_alert != invalid) {
-            d.status_dot->setProperty(theme::kDotAlertProperty, invalid);
-            theme::repolish(d.status_dot);
-        }
+        if (tone != theme::kToneErr)
+            tone = theme::kToneWarn; // 例外 = 警告档（琥珀），仍不升到红
     }
+    d.status->set_full_text(text); // §9.3：超长省略号（不折行）
+    d.apply_status_tone(tone);
 
-    // 输出摘要（底栏第二段）
-    // M4-T13：按 mockup output-dark 底栏的产出量预告 —— 「N 个文件 × M 个格式 = N×M 个输出」；
-    // 格式清单 / 模板 / 输出根目录 / 冲突策略收进悬浮提示（§9.3 不折行）。
+    // 输出摘要（底栏第二段）：自然语「输出：<格式清单> · <文件数/格式数>」（§12-17：禁公式型
+    // 文案 —— 原「N 个文件 × M 个格式 = N×M 个输出」作废）。格式清单/模板/输出根目录/冲突策略
+    // 收进悬浮提示（§9.3 不折行）。
     // M4-T14（mockup run-dark 底栏第二段）：**运行中该段显示 ETA**（「ETA 约 00:23」，--txt3），
-    // 结束/空闲恢复产出量预告 —— 与原型同一条"次要状态行"的两种内容。
+    // 结束/空闲恢复产出量摘要 —— 与原型同一条"次要状态行"的两种内容。
     if (d.output_status != nullptr) {
         if (d.running) {
             const int eta = d.page_run->eta_seconds();
@@ -1780,14 +1896,15 @@ void MainWindow::refresh_status() {
             if (labels.isEmpty())
                 labels << format_label(d.page_output->current_format());
             const int formats = std::max(1, static_cast<int>(labels.size()));
-            d.output_status->set_full_text(tr("%1 个文件 × %2 个格式 = %3 个输出")
-                                               .arg(checked)
-                                               .arg(formats)
-                                               .arg(checked * formats));
+            const QString list = labels.join(QStringLiteral(" + "));
+            // 有参与文件 → 「· N 个文件」（N = 勾选数）；一个都没勾 → 「· M 个格式」（避免
+            // "0 个文件"式的空读数 —— fix-3-status 两行的同一条口径）。
+            d.output_status->set_full_text(checked > 0
+                                               ? tr("输出：%1 · %2 个文件").arg(list).arg(checked)
+                                               : tr("输出：%1 · %2 个格式").arg(list).arg(formats));
             d.output_status->setToolTip(
                 tr("格式：%1\n模板：%2\n输出根目录：%3\n同名冲突：%4")
-                    .arg(labels.join(QStringLiteral(" + ")), d.page_output->output_template(),
-                         d.page_output->out_root(),
+                    .arg(list, d.page_output->output_template(), d.page_output->out_root(),
                          conflict_label(d.page_output->config_base().conflict)));
         }
     }
@@ -1964,10 +2081,17 @@ void MainWindow::Impl::set_group_mode(pp::GroupMode mode) {
 // M5-T3：骨架图标的两态取色（Normal = --txt2 / --txt；Disabled = .dim 预合成色 —— 与 QSS 同源）。
 // 图标名同时挂到 ppIcon 属性（icons::apply 内），供 --ui-smoke 的 icons 探针逐钮断言。
 void MainWindow::Impl::apply_chrome_icons() {
-    if (presets_btn != nullptr)
+    // 纯图标钮的**可见面只有图标**（§3.3/§11）：QToolButton 在 QAction 使能态变化时会把 action 的
+    // 文案同步回按钮（实测：置灰瞬间文案重现），必须在同一次重放里清掉；否则一旦图标再被清空，
+    // QCommonStyle 会因"图标空 + 文本非空"回落成文本渲染（§3.3 禁字形充当图标）。
+    if (presets_btn != nullptr) {
         icons::apply(presets_btn, icons::Name::Star, tokens.text2, tokens.icon_disabled_fg, 15);
-    if (settings_btn != nullptr)
+        presets_btn->setText(QString());
+    }
+    if (settings_btn != nullptr) {
         icons::apply(settings_btn, icons::Name::Gear, tokens.text2, tokens.icon_disabled_fg, 15);
+        settings_btn->setText(QString());
+    }
     if (add_btn != nullptr)
         icons::apply(add_btn, icons::Name::Add, tokens.text2, tokens.text3, 12);
     if (remove_sel != nullptr)
@@ -1992,7 +2116,7 @@ void MainWindow::Impl::refresh_theme() {
     // 调色板 + 基准字族（§9.2 排印）：全局生效，既有页面/对话框随之明暗
     QApplication::setPalette(theme::palette(tokens));
     QApplication::setFont(theme::font(theme::Typography::base_px));
-    // 骨架 QSS（只作用于 pp-* 钩子）；标题栏图标/步钮随主题改色
+    // 骨架 QSS（只作用于 pp-* 钩子）；顶栏图标/分段导航随主题改色
     w->setStyleSheet(theme::style_sheet(tokens));
     // M4-T10：预览面板的本地 QSS（徽标/chip/底条）随 tokens 重放（舞台框仍走上面的骨架 QSS）
     if (preview_panel != nullptr)
@@ -2039,12 +2163,10 @@ void MainWindow::Impl::refresh_theme() {
     // 顶栏/底栏/文件工具行的图标随主题重放（QIcon 取色不吃 QSS → 主题切换必须显式换色）
     const qreal chrome_dpr = w != nullptr ? w->devicePixelRatioF() : 1.0;
     if (app_icon != nullptr)
-        app_icon->setPixmap(app_icon_pixmap(tokens.accent, 18, chrome_dpr));
+        app_icon->setPixmap(app_icon_pixmap(tokens.accent, theme::Metrics::brand_icon, chrome_dpr));
     apply_chrome_icons();
-    for (StepButton *step : {step_meta, step_output, step_run}) {
-        if (step != nullptr)
-            step->set_tokens(tokens);
-    }
+    if (nav != nullptr)
+        nav->set_tokens(tokens); // 一体式分段导航（自绘件持有令牌副本）
     // 开始运行钮投影（.go box-shadow 0 2px 10px；QSS 无 box-shadow → 效果器落地）。
     // 注意 Qt 的 QGraphicsEffect**参数是设备像素**（CSS 的 blur/offset 是逻辑像素）→ 按
     // devicePixelRatio 换算，投影的铺开范围才与原型一致（M4-W2-fix：实测未换算时 dpr=2 下
@@ -2093,6 +2215,21 @@ void MainWindow::Impl::refresh_theme() {
         plat::apply_window_backdrop(reinterpret_cast<void *>(w->winId()), tokens.dark());
     if (w != nullptr)
         w->update();
+}
+
+// M5-T4（§8 状态四档）：把色调键落到**状态点 + 状态词**两件上（同色；色值一律单源在 theme.h 的
+// QSS 规则里 —— 调用方只设属性 + repolish）。只在取值变化时 repolish（避免每帧重建样式）。
+void MainWindow::Impl::apply_status_tone(const char *tone) {
+    const QString value = QString::fromLatin1(tone);
+    QWidget *const targets[] = {status_dot, status};
+    for (QWidget *widget : targets) {
+        if (widget == nullptr)
+            continue;
+        if (widget->property(theme::kStatusToneProperty).toString() == value)
+            continue;
+        widget->setProperty(theme::kStatusToneProperty, value);
+        theme::repolish(widget);
+    }
 }
 
 void MainWindow::Impl::update_caption_buttons() {
@@ -2764,15 +2901,17 @@ void MainWindow::Impl::smoke_probe_skeleton() {
         return;
     }
 
-    // ---- 三栏尺寸：1440×900 校准（§9.1）----
+    // ---- 三栏尺寸：1440×900 校准（§3.2 栏宽固定轴 330 / 487 / 587）----
+    // M5-T4 机械换锚：基线由 M4 的 258/537/601（J 口径）换到 v6 §3.2 的 330/587 + 中栏弹性
+    // 落点 487（1440 − 2×10 − 330 − 587 − 2×8）；语义不变（三栏基线可复现）。
     const auto check_columns = [this](const char *tag, int left, int mid, int right, int tol) {
         std::printf("UI-SMOKE columns-%s: %d/%d/%d (expect %d/%d/%d ±%d)\n", tag, left, mid, right,
                     theme::Metrics::left_width, theme::Metrics::mid_width_1440,
-                    theme::Metrics::right_width_1440, tol);
+                    theme::Metrics::right_width, tol);
         std::fflush(stdout);
         const bool ok = std::abs(left - theme::Metrics::left_width) <= tol &&
                         std::abs(mid - theme::Metrics::mid_width_1440) <= tol &&
-                        std::abs(right - theme::Metrics::right_width_1440) <= tol;
+                        std::abs(right - theme::Metrics::right_width) <= tol;
         if (!ok)
             smoke_fail(MainWindow::tr("三栏尺寸 %1 不符：%2/%3/%4")
                            .arg(QString::fromLatin1(tag))
@@ -2789,45 +2928,64 @@ void MainWindow::Impl::smoke_probe_skeleton() {
         }
     }
 
-    // ---- 放大：左栏固定 258；中/右弹性（1440 校准比 537:601，§9.4 以 mockup 为准）----
+    // ---- 放大（1700）：**左右两条固定轴不动**，全部余量进中栏（§3.2 .col-l/.col-r `flex:0 0`
+    //      + §12-16「栏宽固定轴，切页列不错位」）。M5-T4 机械换锚：M4 的中:右=100:112 弹性比
+    //      随 v6 固定轴作废（右栏不再是弹性列），改为断言"左右恒 330/587、中栏 = 余量" ——
+    //      比原比例断言更强（逐列钉住），语义不变（列宽可复现、内容不撑宽）。
+    const auto grown_columns = [](int window_w) {
+        return window_w - 2 * theme::Metrics::main_pad_x - 2 * theme::Metrics::gap; // 列区总宽
+    };
     w->resize(1700, 1000);
     pump(150);
     {
         const QList<int> sizes = splitter->sizes();
+        const int expect_mid =
+            grown_columns(1700) - theme::Metrics::left_width - theme::Metrics::right_width;
+        std::printf("UI-SMOKE columns-grown: %d/%d/%d (expect %d/%d/%d ±4, 左右固定轴)\n",
+                    sizes.value(0), sizes.value(1), sizes.value(2), theme::Metrics::left_width,
+                    expect_mid, theme::Metrics::right_width);
+        std::fflush(stdout);
         if (sizes.size() == 3) {
-            const double ratio = sizes.at(1) > 0 ? double(sizes.at(2)) / double(sizes.at(1)) : 0.0;
-            const double expect =
-                double(theme::Metrics::right_width_1440) / double(theme::Metrics::mid_width_1440);
-            const double tol = theme::Metrics::ratio_tolerance_permille / 1000.0;
-            std::printf("UI-SMOKE columns-grown: %d/%d/%d mid:right=%.3f (expect %.3f±%.3f, "
-                        "left 固定 %d)\n",
-                        sizes.at(0), sizes.at(1), sizes.at(2), ratio, expect, tol,
-                        theme::Metrics::left_width);
-            std::fflush(stdout);
             if (std::abs(sizes.at(0) - theme::Metrics::left_width) > 2)
                 smoke_fail(MainWindow::tr("放大后左栏不再是固定 %1px（实为 %2）")
                                .arg(theme::Metrics::left_width)
                                .arg(sizes.at(0)));
-            if (std::abs(ratio - expect) > tol)
-                smoke_fail(MainWindow::tr("中:右弹性比 %.3f 偏离校准比 %.3f（±%.3f）")
-                               .arg(ratio, 0, 'f', 3)
-                               .arg(expect, 0, 'f', 3)
-                               .arg(tol, 0, 'f', 3));
+            if (std::abs(sizes.at(2) - theme::Metrics::right_width) > 2)
+                smoke_fail(MainWindow::tr("放大后右栏不再是固定 %1px（实为 %2）")
+                               .arg(theme::Metrics::right_width)
+                               .arg(sizes.at(2)));
+            if (std::abs(sizes.at(1) - expect_mid) > 4)
+                smoke_fail(MainWindow::tr("放大后中栏不是余量 %1px（实为 %2）")
+                               .arg(expect_mid)
+                               .arg(sizes.at(1)));
         }
     }
 
-    // ---- 最小窗口：1180×720（§9.1）----
+    // ---- 最小窗口：1180×720（§3.1）----
     w->resize(theme::Metrics::min_window_w, theme::Metrics::min_window_h);
     pump(150);
     {
         const QList<int> sizes = splitter->sizes();
-        std::printf("UI-SMOKE columns-min: %d/%d/%d\n", sizes.value(0), sizes.value(1),
-                    sizes.value(2));
+        const int expect_mid = grown_columns(theme::Metrics::min_window_w) -
+                               theme::Metrics::left_width - theme::Metrics::right_width;
+        std::printf("UI-SMOKE columns-min: %d/%d/%d (expect %d/%d/%d ±4)\n", sizes.value(0),
+                    sizes.value(1), sizes.value(2), theme::Metrics::left_width, expect_mid,
+                    theme::Metrics::right_width);
         std::fflush(stdout);
-        if (sizes.size() == 3 && std::abs(sizes.at(0) - theme::Metrics::left_width) > 2)
-            smoke_fail(MainWindow::tr("最小窗口下左栏不是 %1px（实为 %2）")
-                           .arg(theme::Metrics::left_width)
-                           .arg(sizes.at(0)));
+        if (sizes.size() == 3) {
+            if (std::abs(sizes.at(0) - theme::Metrics::left_width) > 2)
+                smoke_fail(MainWindow::tr("最小窗口下左栏不是 %1px（实为 %2）")
+                               .arg(theme::Metrics::left_width)
+                               .arg(sizes.at(0)));
+            if (std::abs(sizes.at(2) - theme::Metrics::right_width) > 2)
+                smoke_fail(MainWindow::tr("最小窗口下右栏不是 %1px（实为 %2）")
+                               .arg(theme::Metrics::right_width)
+                               .arg(sizes.at(2)));
+            if (std::abs(sizes.at(1) - expect_mid) > 4)
+                smoke_fail(MainWindow::tr("最小窗口下中栏不是余量 %1px（实为 %2）")
+                               .arg(expect_mid)
+                               .arg(sizes.at(1)));
+        }
     }
 
     // ---- 回到校准尺寸（后续 8 张冻结截图的基准）----
@@ -2843,34 +3001,47 @@ void MainWindow::Impl::smoke_probe_skeleton() {
     {
         const int cap_h = cap_close != nullptr ? cap_close->height() : -1;
         const int cap_w = cap_close != nullptr ? cap_close->width() : -1;
-        std::printf("UI-SMOKE caption-geometry: w=%d h=%d (mockup 46×52=满高; §9.1 对照 46×32)\n",
+        std::printf("UI-SMOKE caption-geometry: w=%d h=%d (单轨 §3.3 46×32；命中带 = 可见面)\n",
                     cap_w, cap_h);
         std::fflush(stdout);
-        if (cap_w != theme::Metrics::caption_btn_w || cap_h != theme::Metrics::toolbar_height) {
-            smoke_fail(MainWindow::tr("caption 三钮几何 %1×%2（期望 %3×%4）")
+        // M5-T4 机械换锚（裁定 A1 单轨）：可见面 = 命中面 = 46×32（v4 的"46×顶栏满高"作废）。
+        if (cap_w != theme::Metrics::caption_btn_w || cap_h != theme::Metrics::caption_btn_h ||
+            cap_h != theme::Metrics::caption_btn_hit_h) {
+            smoke_fail(MainWindow::tr("caption 三钮几何 %1×%2（期望 %3×%4 单轨）")
                            .arg(cap_w)
                            .arg(cap_h)
                            .arg(theme::Metrics::caption_btn_w)
-                           .arg(theme::Metrics::toolbar_height));
+                           .arg(theme::Metrics::caption_btn_h));
         }
-        if (step_meta == nullptr || step_output == nullptr || step_run == nullptr) {
-            smoke_fail(MainWindow::tr("步骤切换钮缺失"));
+        // 导航区（§6.2 一体式分段 92×30）：M5-T4 机械换锚 —— v4 的三个 .step 独立钮 +
+        // 6px 间距 + 18px 编号徽标 → v6 单控件三段（段宽 92 等宽、无段间距、数字圆 15 内嵌）。
+        if (nav == nullptr || nav->segment_count() != 3) {
+            smoke_fail(MainWindow::tr("一体式分段导航缺失（段数 %1）")
+                           .arg(nav != nullptr ? nav->segment_count() : -1));
         } else {
-            const int h = step_meta->height();
-            std::printf("UI-SMOKE steps: meta=%d+%d output=%d+%d run=%d+%d h=%d badge=%d gap=%d "
-                        "pad=%d/%d\n",
-                        step_meta->x(), step_meta->width(), step_output->x(), step_output->width(),
-                        step_run->x(), step_run->width(), h, theme::Metrics::step_badge,
-                        theme::Metrics::step_gap, theme::Metrics::step_pad_x,
-                        theme::Metrics::step_pad_y);
+            const QRect first = nav->segment_rect(0);
+            const QRect second = nav->segment_rect(1);
+            const QRect third = nav->segment_rect(2);
+            std::printf("UI-SMOKE nav: strip=%dx%d seg0=%d+%d seg1=%d+%d seg2=%d+%d seg=%dx%d\n",
+                        nav->width(), nav->height(), first.x(), first.width(), second.x(),
+                        second.width(), third.x(), third.width(), first.width(), first.height());
             std::fflush(stdout);
-            const int expect_h = theme::Metrics::step_pad_y * 2 + theme::Metrics::step_badge;
-            if (h != expect_h)
-                smoke_fail(
-                    MainWindow::tr("步钮高度 %1（期望 .step = 6×2+18 = %2）").arg(h).arg(expect_h));
-            if (step_output->x() - (step_meta->x() + step_meta->width()) !=
-                theme::Metrics::step_gap)
-                smoke_fail(MainWindow::tr("步钮间距不是 %1px").arg(theme::Metrics::step_gap));
+            const bool contiguous = second.x() - (first.x() + first.width()) == 0 &&
+                                    third.x() - (second.x() + second.width()) == 0;
+            if (first.width() != theme::Metrics::nav_seg_w ||
+                first.height() != theme::Metrics::nav_h || !contiguous)
+                smoke_fail(MainWindow::tr("导航段几何 %1×%2（期望 %3×%4、段间无 gap）")
+                               .arg(first.width())
+                               .arg(first.height())
+                               .arg(theme::Metrics::nav_seg_w)
+                               .arg(theme::Metrics::nav_h));
+            if (nav->height() != theme::Metrics::nav_h ||
+                nav->width() != 3 * theme::Metrics::nav_seg_w + 2 * theme::Metrics::nav_border)
+                smoke_fail(MainWindow::tr("导航条几何 %1×%2（期望 %3×%4）")
+                               .arg(nav->width())
+                               .arg(nav->height())
+                               .arg(3 * theme::Metrics::nav_seg_w + 2 * theme::Metrics::nav_border)
+                               .arg(theme::Metrics::nav_h));
         }
         if (file_count == nullptr || !file_count->isVisible() || file_count->text().isEmpty()) {
             smoke_fail(MainWindow::tr("卡头计数徽标（.pill）异常：null=%1 visible=%2 text=\"%3\"")
@@ -3172,14 +3343,22 @@ void MainWindow::Impl::smoke_probe_skeleton() {
 }
 
 void MainWindow::Impl::smoke_probe_frameless() {
-    // ---- (a) 纯函数命中判定（合成盒：1440×900 窗口 / 52px 顶栏 / 三钮贴右 46×32）----
+    // ---- (a) 纯函数命中判定（合成盒：1440×900 窗口 / 44px 顶栏 / 三钮贴右 46×32 居中）----
+    // M5-T4 机械换锚：几何改按 v6 §3（顶栏 44、caption 46×32 居中 —— 单轨下命中带 = 控件矩形），
+    // 断言集合与语义不变（拖拽/排除区/三钮/八向缩放/最大化 1px 边）。
+    const int tb = theme::Metrics::toolbar_height;
+    const int cap_w = theme::Metrics::caption_btn_w;
+    const int cap_h = theme::Metrics::caption_btn_hit_h;
+    const int cap_y = (tb - cap_h) / 2; // 居中：44 顶栏里 32 高控件的 y = 6
+    const int cap_mid_y = cap_y + cap_h / 2;
     plat::HitBox box;
     box.window = QRect(0, 0, 1440, 900);
-    box.caption = QRect(0, 0, 1440, 52);
-    box.min_button = QRect(1440 - 3 * 46, 10, 46, 32);
-    box.max_button = QRect(1440 - 2 * 46, 10, 46, 32);
-    box.close_button = QRect(1440 - 46, 10, 46, 32);
-    box.drag_excludes = {QRect(200, 10, 300, 32)}; // 步骤切换钮位（硬约束 1 的被排除区）
+    box.caption = QRect(0, 0, 1440, tb);
+    box.min_button = QRect(1440 - 3 * cap_w, cap_y, cap_w, cap_h);
+    box.max_button = QRect(1440 - 2 * cap_w, cap_y, cap_w, cap_h);
+    box.close_button = QRect(1440 - cap_w, cap_y, cap_w, cap_h);
+    // 一体式分段导航位（硬约束 1 的被排除区；宽 = 3×92 + 2×1）
+    box.drag_excludes = {QRect(200, cap_y, 3 * theme::Metrics::nav_seg_w + 2, cap_h)};
     box.border = plat::kResizeBorderPx;
     struct HitCase {
         const char *name;
@@ -3187,11 +3366,11 @@ void MainWindow::Impl::smoke_probe_frameless() {
         plat::HitZone expect;
     };
     const HitCase cases[] = {
-        {"caption", {700, 26}, plat::HitZone::Caption},
-        {"excluded", {250, 26}, plat::HitZone::Client},
-        {"min-btn", {1440 - 3 * 46 + 10, 26}, plat::HitZone::MinButton},
-        {"max-btn", {1440 - 2 * 46 + 10, 26}, plat::HitZone::MaxButton},
-        {"close-btn", {1440 - 46 + 10, 26}, plat::HitZone::CloseButton},
+        {"caption", {700, cap_mid_y}, plat::HitZone::Caption},
+        {"excluded", {250, cap_mid_y}, plat::HitZone::Client},
+        {"min-btn", {1440 - 3 * cap_w + 10, cap_mid_y}, plat::HitZone::MinButton},
+        {"max-btn", {1440 - 2 * cap_w + 10, cap_mid_y}, plat::HitZone::MaxButton},
+        {"close-btn", {1440 - cap_w + 10, cap_mid_y}, plat::HitZone::CloseButton},
         {"client", {700, 450}, plat::HitZone::Client},
         {"outside", {1500, 450}, plat::HitZone::None},
         {"left", {2, 450}, plat::HitZone::Left},
@@ -3254,26 +3433,29 @@ void MainWindow::Impl::smoke_probe_frameless() {
     }
 
     // ---- (d) 真窗口命中：顶栏空白 = 拖拽；三钮 = 各自命中区；控件/列表 = 不拖拽（硬约束 1）----
-    const QPoint caption_point =
-        titlebar->mapToGlobal(QPoint(titlebar->width() / 2, titlebar->height() / 2));
+    // M5-T4 机械换锚：三段式下顶栏中央已被**导航区**占据（导航居中），顶栏空白取样点随之移到
+    // 导航区与工具区之间的空档；导航区的取样点是第 2 段中心。语义不变（空白=Caption 拖拽，
+    // 导航/列表=Client 不拖拽）。
+    const int drag_x = (nav->geometry().right() + 1 + presets_btn->x()) / 2;
+    const QPoint caption_point = titlebar->mapToGlobal(QPoint(drag_x, titlebar->height() / 2));
     // 注意：mapToGlobal 吃**控件自身坐标**，故中心点取 rect().center()（geometry() 是父坐标系）
     const QPoint close_point = cap_close->mapToGlobal(cap_close->rect().center());
-    const QPoint step_point = step_output->mapToGlobal(step_output->rect().center());
+    const QPoint nav_point = nav->mapToGlobal(nav->segment_rect(1).center());
     const QPoint panel_point = view->mapToGlobal(QPoint(8, 8));
     const plat::HitZone live_caption = frameless->classify_logical(caption_point);
     const plat::HitZone live_close = frameless->classify_logical(close_point);
-    const plat::HitZone live_step = frameless->classify_logical(step_point);
+    const plat::HitZone live_nav = frameless->classify_logical(nav_point);
     const plat::HitZone live_panel = frameless->classify_logical(panel_point);
-    std::printf("UI-SMOKE hit-live: caption=%s close=%s step=%s panel=%s\n",
-                hit_zone_name(live_caption), hit_zone_name(live_close), hit_zone_name(live_step),
+    std::printf("UI-SMOKE hit-live: caption=%s close=%s nav=%s panel=%s\n",
+                hit_zone_name(live_caption), hit_zone_name(live_close), hit_zone_name(live_nav),
                 hit_zone_name(live_panel));
     std::fflush(stdout);
     if (live_caption != plat::HitZone::Caption || live_close != plat::HitZone::CloseButton ||
-        live_step != plat::HitZone::Client || live_panel != plat::HitZone::Client) {
-        smoke_fail(MainWindow::tr("真窗口命中不符：顶栏=%1 关闭钮=%2 步骤钮=%3 文件列表=%4")
+        live_nav != plat::HitZone::Client || live_panel != plat::HitZone::Client) {
+        smoke_fail(MainWindow::tr("真窗口命中不符：顶栏=%1 关闭钮=%2 导航区=%3 文件列表=%4")
                        .arg(QString::fromLatin1(hit_zone_name(live_caption)),
                             QString::fromLatin1(hit_zone_name(live_close)),
-                            QString::fromLatin1(hit_zone_name(live_step)),
+                            QString::fromLatin1(hit_zone_name(live_nav)),
                             QString::fromLatin1(hit_zone_name(live_panel))));
     }
 
@@ -3294,7 +3476,7 @@ void MainWindow::Impl::smoke_probe_frameless() {
         const QPoint right_edge(titlebar->width() - 1, titlebar->height() / 2);
         const QPoint bottom_edge(titlebar->width() / 2, w->height() - 1);
         const NativeCase native_cases[] = {
-            {"caption", titlebar->mapToGlobal(QPoint(titlebar->width() / 2, 26)),
+            {"caption", titlebar->mapToGlobal(QPoint(drag_x, titlebar->height() / 2)),
              plat::HitZone::Caption},
             {"close", cap_close->mapToGlobal(cap_close->rect().center()),
              plat::HitZone::CloseButton},
@@ -3346,15 +3528,15 @@ void MainWindow::Impl::smoke_probe_frameless() {
     if (routed != expect)
         smoke_fail(MainWindow::tr("三钮命令路由不符：%1").arg(routed.join(',')));
 
-    // ---- (g) caption 双轨（M4-W2-fix 第 5 条，主对话裁定）----
-    //   * 可见/hover 面 = 控件 46×满高（52px）→ 关闭钮 hover 的 #c42b1c 铺满顶栏（原型整高）；
-    //   * 命中面 = 居中的 46×32 带（§9.1 明文）→ 带外按下不触发按钮，且窗口命中判定回落到
-    //     Caption（拖拽），不是"点了没反应"的死区。
+    // ---- (g) caption **单轨**（M5-T4，裁定 A1；行名沿用 M4 的探测标签以便对账）----
+    //   * 可见面 = 命中面 = 46×32（§3.3 逐字）→ 命中带恒等于控件矩形（band.top() = 0）；
+    //   * 带外（控件矩形之外、仍落顶栏）按下不触发按钮，且窗口命中判定回落到 Caption（拖拽），
+    //     不是"点了没反应"的死区 —— 语义与 M4 双轨探针一致，只有"带"的几何换了锚。
     {
         const QRect widget = cap_close->rect();
         const QRect band = CaptionButton::hit_band(widget);
-        // 带外取样点：命中带之上 2px（仍避开顶边 6px 缩放带 —— 那条带按硬约束优先返回缩放）
-        const int outside_y = std::max(plat::kResizeBorderPx + 1, band.top() - 2);
+        // 带外取样点：控件下缘之下 2px（相对控件坐标，故 y = 33；映射到顶栏仍在 44px 内）
+        const int outside_y = widget.height() - 1 + 2;
         std::printf("UI-SMOKE caption-band: widget=%dx%d hit=%dx%d band-y=%d..%d "
                     "out-of-band-zone=%s\n",
                     widget.width(), widget.height(), band.width(), band.height(), band.top(),
@@ -3363,14 +3545,15 @@ void MainWindow::Impl::smoke_probe_frameless() {
                         cap_close->mapToGlobal(QPoint(cap_close->width() / 2, outside_y)))));
         std::fflush(stdout);
         if (widget.height() != theme::Metrics::caption_btn_h ||
-            band.height() != theme::Metrics::caption_btn_hit_h ||
-            (widget.height() - band.height()) / 2 != band.top())
-            smoke_fail(MainWindow::tr("caption 双轨几何不符：控件=%1 命中带=%2 (期望 %3×%4)")
+            widget.height() != theme::Metrics::caption_btn_hit_h ||
+            band.height() != theme::Metrics::caption_btn_hit_h || band.top() != 0 || band != widget)
+            smoke_fail(MainWindow::tr("caption 单轨几何不符：控件=%1×%2 命中带=%3×%4(top=%5)")
+                           .arg(widget.width())
                            .arg(widget.height())
+                           .arg(band.width())
                            .arg(band.height())
-                           .arg(theme::Metrics::caption_btn_w)
-                           .arg(theme::Metrics::caption_btn_hit_h));
-        // 带外（贴满顶栏的 hover 面里、32px 带之上的 2px 处）真发一次按下+释放：不得触发按钮
+                           .arg(band.top()));
+        // 带外（控件矩形外 2px）真发一次按下+释放：不得触发按钮
         frameless->set_intercept_actions(true);
         QStringList band_routed;
         const QMetaObject::Connection band_conn =
@@ -3392,9 +3575,10 @@ void MainWindow::Impl::smoke_probe_frameless() {
         send_click(cap_close, QPoint(cap_close->width() / 2, widget.height() / 2)); // 带内
         QObject::disconnect(band_conn);
         frameless->set_intercept_actions(false);
-        std::printf("UI-SMOKE caption-dual-track: out-of-band=%d in-band=%s\n",
-                    routed_after_outside,
-                    band_routed.size() > 0 ? qUtf8Printable(band_routed.last()) : "(none)");
+        std::printf(
+            "UI-SMOKE caption-dual-track: tracks=1 widget=%dx%d out-of-band=%d in-band=%s\n",
+            widget.width(), widget.height(), routed_after_outside,
+            band_routed.size() > 0 ? qUtf8Printable(band_routed.last()) : "(none)");
         std::fflush(stdout);
         if (routed_after_outside != 0 || band_routed.size() != 1 ||
             band_routed.last() != QStringLiteral("close"))
@@ -3403,12 +3587,149 @@ void MainWindow::Impl::smoke_probe_frameless() {
                            .arg(band_routed.join(',')));
         if (frameless->classify_logical(cap_close->mapToGlobal(
                 QPoint(cap_close->width() / 2, outside_y))) != plat::HitZone::Caption)
-            smoke_fail(MainWindow::tr("caption 命中带之外不是拖拽区（应回落 HTCAPTION/Caption）"));
+            smoke_fail(MainWindow::tr("caption 命中区之外不是拖拽区（应回落 HTCAPTION/Caption）"));
     }
 
     std::printf("UI-SMOKE frameless-platform: native-hit-test=%d\n",
                 plat::Frameless::native_hit_test_supported() ? 1 : 0);
     std::fflush(stdout);
+}
+
+// ---------------------------------------------------------------------------
+// M5-T4（C7）壳层几何值表探针：§3.1/§3.2/§3.3/§6.2 + R4 的壳层落点逐项 checked/bad。
+// 口径 = "落在屏幕上的实际几何"（控件尺寸/栏宽切片/命中区），不是令牌读数 —— 令牌读数由
+// smoke_probe_theme 的 v6 值表承担，两者互补（改了令牌但没落到布局 = 这里红）。
+// ---------------------------------------------------------------------------
+void MainWindow::Impl::smoke_probe_shell_geometry() {
+    const QList<int> sizes = splitter != nullptr ? splitter->sizes() : QList<int>();
+    const QRect caption = cap_close != nullptr ? cap_close->rect() : QRect();
+    const QRect cap_band = cap_close != nullptr ? CaptionButton::hit_band(caption) : QRect();
+    const QRect nav_first = nav != nullptr ? nav->segment_rect(0) : QRect();
+    // 窗口内边距（§3.2 左右 10 / 上下 8）：以三栏区在窗口根容器里的落点反测（= 布局的实际留给
+    // 内容区的边距），不是读令牌 —— 令牌与布局脱节时这里红。
+    const int pad_x =
+        splitter != nullptr && root != nullptr ? splitter->mapTo(root, QPoint(0, 0)).x() : -1;
+    struct Expect {
+        const char *name;
+        int got;
+        int want;
+    };
+    const Expect table[] = {
+        // §3.1 窗口骨架
+        {"toolbar_h", titlebar != nullptr ? titlebar->height() : -1,
+         theme::Metrics::toolbar_height},
+        {"statusbar_h", bottombar != nullptr ? bottombar->height() : -1,
+         theme::Metrics::bottom_height},
+        {"pad_x", pad_x, theme::Metrics::main_pad_x},
+        // §3.3 顶栏三段
+        {"brand_icon", app_icon != nullptr ? app_icon->width() : -1, theme::Metrics::brand_icon},
+        {"icon_btn", presets_btn != nullptr ? presets_btn->width() : -1, theme::Metrics::icon_btn},
+        // §6.2 一体式分段导航（段 92×30）
+        {"nav_h", nav != nullptr ? nav->height() : -1, theme::Metrics::nav_h},
+        {"nav_w", nav != nullptr ? nav->width() : -1,
+         3 * theme::Metrics::nav_seg_w + 2 * theme::Metrics::nav_border},
+        {"nav_seg_w", nav_first.width(), theme::Metrics::nav_seg_w},
+        {"nav_seg_h", nav_first.height(), theme::Metrics::nav_h},
+        // §3.3 caption 单轨 46×32（可见面 = 命中面）
+        {"caption_w", caption.width(), theme::Metrics::caption_btn_w},
+        {"caption_h", caption.height(), theme::Metrics::caption_btn_h},
+        {"caption_hit_w", cap_band.width(), theme::Metrics::caption_btn_w},
+        {"caption_hit_h", cap_band.height(), theme::Metrics::caption_btn_hit_h},
+        // §3.2 栏宽固定轴（1440 校准切片）
+        {"col_left", sizes.value(0, -1), theme::Metrics::left_width},
+        {"col_mid", sizes.value(1, -1), theme::Metrics::mid_width_1440},
+        {"col_right", sizes.value(2, -1), theme::Metrics::right_width},
+        // R4 按钮高 26 / 主 CTA 22（A7：壳层内不得再挂 input_h）
+        {"btn_h", add_btn != nullptr ? add_btn->height() : -1, theme::Metrics::btn_h},
+        {"cta_h", start != nullptr ? start->height() : -1, theme::Metrics::cta_h},
+        {"status_dot", status_dot != nullptr ? status_dot->width() : -1, theme::Metrics::dot_px},
+    };
+    const int count = int(sizeof(table) / sizeof(table[0]));
+    QStringList bad;
+    for (const Expect &e : table) {
+        if (e.got != e.want)
+            bad << QStringLiteral("%1=%2(期望 %3)")
+                       .arg(QString::fromLatin1(e.name))
+                       .arg(e.got)
+                       .arg(e.want);
+    }
+    std::printf("UI-SMOKE shell-geom: checked=%d bad=%d %s\n", count, bad.size(),
+                qUtf8Printable(bad.join(QLatin1Char(' '))));
+    std::fflush(stdout);
+    if (!bad.isEmpty())
+        smoke_fail(
+            MainWindow::tr("壳层几何（§3/§6.2/R4）不符：%1").arg(bad.join(QLatin1Char(' '))));
+
+    // ---- §6.2 段序 + K1「不放 ✓ 等完成态装饰」----
+    // 导航是**单控件**（段不是 QAbstractButton）→ M5-T3 的"全局面按钮文案字形扫描"覆盖不到这里，
+    // 就地补一条同源断言：段序 = ① 元数据 → ② 输出 → ③ 运行（绑定既有三个 QAction，顺序即运行
+    // 流程）、编号 1–3 内嵌、文案非空且不含完成态/字形钩子。
+    {
+        // 字形清单按码点构造（避免本探针自身命中"字面量字形"扫描）：✓ ✔ ✗ ● ▶ ◀ ▸ □
+        const char16_t banned_points[] = {0x2713, 0x2714, 0x2717, 0x25CF,
+                                          0x25B6, 0x25C0, 0x25B8, 0x25A1};
+        QString banned;
+        for (char16_t point : banned_points)
+            banned.append(QChar(point));
+        QStringList nav_bad;
+        const QAction *expect_actions[] = {nav_meta, nav_output, nav_run};
+        for (int i = 0; i < 3; ++i) {
+            const QAction *action = nav != nullptr ? nav->segment_action(i) : nullptr;
+            const QString text = action != nullptr ? action->text() : QString();
+            if (nav == nullptr || action != expect_actions[i] || action == nullptr)
+                nav_bad << QStringLiteral("seg%1=wrong-action").arg(i + 1);
+            if (nav == nullptr || nav->segment_number(i) != i + 1)
+                nav_bad << QStringLiteral("seg%1=wrong-number").arg(i + 1);
+            if (text.isEmpty())
+                nav_bad << QStringLiteral("seg%1=no-text").arg(i + 1);
+            for (const QChar ch : text) {
+                if (banned.contains(ch)) {
+                    nav_bad << QStringLiteral("seg%1=glyph").arg(i + 1);
+                    break;
+                }
+            }
+        }
+        std::printf("UI-SMOKE nav-text: segments=%d bad=%d\n",
+                    nav != nullptr ? nav->segment_count() : -1, int(nav_bad.size()));
+        std::fflush(stdout);
+        if (!nav_bad.isEmpty())
+            smoke_fail(MainWindow::tr("导航段序/文案不符（§6.2 + K1 无完成态装饰）：%1")
+                           .arg(nav_bad.join(QLatin1Char(' '))));
+    }
+
+    // ---- 状态四档（§8）：QSS 侧四档规则齐备 + 当前落地档位（点/词同色、空/就绪不得为红）----
+    {
+        const QString sheet = w->styleSheet();
+        QStringList tone_bad;
+        for (const char *tone :
+             {theme::kToneNeutral, theme::kToneOk, theme::kToneWarn, theme::kToneErr}) {
+            const QString value = QString::fromLatin1(tone);
+            for (const QString &selector :
+                 {QStringLiteral("QLabel#pp-status"), QStringLiteral("QLabel#pp-status-dot")}) {
+                const QString rule =
+                    selector + QStringLiteral("[%1=\"%2\"]")
+                                   .arg(QString::fromLatin1(theme::kStatusToneProperty), value);
+                if (!sheet.contains(rule))
+                    tone_bad << rule;
+            }
+        }
+        const QString live = status_dot != nullptr
+                                 ? status_dot->property(theme::kStatusToneProperty).toString()
+                                 : QString();
+        const QString live_word =
+            status != nullptr ? status->property(theme::kStatusToneProperty).toString() : QString();
+        std::printf("UI-SMOKE status-tones: rules-bad=%d live=%s word=%s\n", tone_bad.size(),
+                    qUtf8Printable(live), qUtf8Printable(live_word));
+        std::fflush(stdout);
+        if (!tone_bad.isEmpty())
+            smoke_fail(
+                MainWindow::tr("状态四档 QSS 规则缺失：%1").arg(tone_bad.join(QLatin1Char(' '))));
+        // 点与词同色（同一条属性值）；且**空态**（未勾选 = 中性档）绝不为红
+        if (live.isEmpty() || live != live_word)
+            smoke_fail(MainWindow::tr("状态点与状态词不同档（点=%1 词=%2）").arg(live, live_word));
+        if (live == QString::fromLatin1(theme::kToneErr) && model->checked_count() == 0)
+            smoke_fail(MainWindow::tr("空/未勾选态用了红档（§8：就绪/空不得用红）"));
+    }
 }
 
 void MainWindow::Impl::smoke_probe_theme() {
@@ -4510,7 +4831,7 @@ void MainWindow::Impl::smoke_probe_run(const QString &shots_dir) {
     QWidget shell;
     shell.setObjectName(QStringLiteral("pp-root")); // theme 骨架 QSS 的窗口底（渐变）
     shell.setStyleSheet(theme::style_sheet(dark));
-    shell.resize(theme::Metrics::right_width_1440, theme::Metrics::calibrated_h - 118);
+    shell.resize(theme::Metrics::right_width, theme::Metrics::calibrated_h - 118);
     auto *shell_layout = new QVBoxLayout(&shell);
     shell_layout->setContentsMargins(0, 0, 0, 0);
     auto *page = new PageRun(&shell);
@@ -4795,6 +5116,7 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
     // ---- M4-T9 骨架自检（窗口行为矩阵可自动化部分；先跑，之后截图归位 1440×900）----
     smoke_probe_lifecycle();
     smoke_probe_skeleton();
+    smoke_probe_shell_geometry(); // M5-T4（C7）：壳层几何值表 + 状态四档（§3/§6.2/R4/§8）
     smoke_probe_frameless();
     smoke_probe_theme();
     smoke_probe_preview();       // M4-T10：预览面板（翻图/缩放/徽标/热键接线位）
@@ -4973,13 +5295,23 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
                 page_run->outputs_total(), qUtf8Printable(start->text()));
     std::fflush(stdout);
     // G5 锁定视觉（M4-W2-fix 第 7 条 + T14 锁定接线）：运行中「设置/预设」置灰（QSS :disabled =
-    // .icon-btn.dim opacity .4 的等效预合成色）、步骤 1/2 置灰（.step.dim opacity .45，含编号
-    // 徽标）、左栏文件面板/分组下拉置灰、预览与分类只读、运行页取消可点（唯一取消入口）。
+    // .icon-btn.dim opacity .4 的等效预合成色）、导航段 1/2 置灰（.step.dim opacity .45 口径，
+    // 含数字圆；M5-T4：段的使能态 = QAction —— 单控件下不再有独立钮可问）、左栏文件面板/分组
+    // 下拉置灰、预览与分类只读、运行页取消可点（唯一取消入口）。
     {
         const bool presets_off = presets_btn != nullptr && !presets_btn->isEnabled();
         const bool settings_off = settings_btn != nullptr && !settings_btn->isEnabled();
-        const bool steps_off = step_meta != nullptr && !step_meta->isEnabled() &&
-                               step_output != nullptr && !step_output->isEnabled();
+        const bool steps_off = nav != nullptr && nav->segment_count() == 3 &&
+                               !nav_meta->isEnabled() && !nav_output->isEnabled();
+        // 置灰**不得**把矢量图标退化成文本（§3.3「图标全 SVG、禁字形」）：按钮仍须挂矢量图标、
+        // 无可见文案 —— 钉住 T4 修复的"QToolButton 被 action 空图标覆盖 → 回落文本"问题。
+        const bool icons_kept =
+            presets_btn != nullptr && !presets_btn->icon().isNull() &&
+            !presets_btn->property(icons::kIconNameProperty).toString().isEmpty() &&
+            presets_btn->text().isEmpty() && settings_btn != nullptr &&
+            !settings_btn->icon().isNull() &&
+            !settings_btn->property(icons::kIconNameProperty).toString().isEmpty() &&
+            settings_btn->text().isEmpty();
         const bool panel_off = panel != nullptr && !panel->isEnabled();
         const bool group_off = group_mode != nullptr && !group_mode->isEnabled();
         const bool preview_locked =
@@ -4994,15 +5326,15 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
         const bool new_page_locked = page_meta != nullptr && !page_meta->isEnabled() &&
                                      page_output != nullptr && !page_output->isEnabled();
         std::printf("UI-SMOKE lock-visual: presets=%d settings=%d steps1-2=%d panel=%d group=%d "
-                    "preview-locked=%d page1-2=%d run-cancel=%d\n",
+                    "preview-locked=%d page1-2=%d run-cancel=%d icons-kept=%d\n",
                     presets_off ? 1 : 0, settings_off ? 1 : 0, steps_off ? 1 : 0, panel_off ? 1 : 0,
                     group_off ? 1 : 0, preview_locked ? 1 : 0, new_page_locked ? 1 : 0,
-                    cancel_ready ? 1 : 0);
+                    cancel_ready ? 1 : 0, icons_kept ? 1 : 0);
         std::fflush(stdout);
         if (!presets_off || !settings_off || !steps_off || !panel_off || !group_off ||
-            !preview_locked || !new_page_locked || !cancel_ready) {
+            !preview_locked || !new_page_locked || !cancel_ready || !icons_kept) {
             smoke_fail(MainWindow::tr("运行期锁定未生效（预设=%1 设置=%2 步骤=%3 文件面板=%4 "
-                                      "分组=%5 预览=%6 页1-2=%7 取消钮=%8）")
+                                      "分组=%5 预览=%6 页1-2=%7 取消钮=%8 图标未退化=%9）")
                            .arg(presets_off ? 1 : 0)
                            .arg(settings_off ? 1 : 0)
                            .arg(steps_off ? 1 : 0)
@@ -5010,7 +5342,8 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
                            .arg(group_off ? 1 : 0)
                            .arg(preview_locked ? 1 : 0)
                            .arg(new_page_locked ? 1 : 0)
-                           .arg(cancel_ready ? 1 : 0));
+                           .arg(cancel_ready ? 1 : 0)
+                           .arg(icons_kept ? 1 : 0));
         }
     }
     // ---- M4-T14 断言：真实运行下的**逐输出行**（§3.4：行数 = 文件数 × 格式数；运行中的行有
@@ -5381,7 +5714,7 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
     }
     PageMeta page;
     page.set_tokens(tokens);
-    page.resize(theme::Metrics::right_width_1440, theme::Metrics::calibrated_h);
+    page.resize(theme::Metrics::right_width, theme::Metrics::calibrated_h);
     page.show();
     pump(150);
     if (auto *map = page.findChild<pp::map::MapWidget *>()) {

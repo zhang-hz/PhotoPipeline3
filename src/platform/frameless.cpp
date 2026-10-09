@@ -206,8 +206,9 @@ struct Frameless::Impl {
     }
 
     // 子控件矩形：相对窗口原点；physical=true → 乘 devicePixelRatio（DPI 口径，硬约束 3）。
-    // caption_button=true → 纵向收敛到 §9.1 的 46×32 命中带（居中的 kCaptionHitHeightPx 高；
-    // 控件自身仍是 46×满高，hover 面不受影响 —— 双轨见 frameless.h 常量注释）。
+    // caption_button=true → 纵向收敛到 §9.1/§3.3 的 46×32 命中带（居中的 kCaptionHitHeightPx 高）。
+    // M5-T4 单轨（裁定 A1）：按钮可见面本身就是 46×32 → logical.height() == 32，收敛条件不成立，
+    // 返回值就是按钮矩形本身（本函数**逻辑零改动**，只是"双轨收敛"随几何换锚不再触发）。
     QRect rect_of(QWidget *child, bool physical, bool caption_button = false) const {
         if (child == nullptr || window == nullptr)
             return QRect();
@@ -246,8 +247,8 @@ struct Frameless::Impl {
         box.max_button = shift(rect_of(max_button, physical, /*caption_button=*/true));
         box.close_button = shift(rect_of(close_button, physical, /*caption_button=*/true));
         for (QWidget *child : drag_excludes) {
-            // 三钮的排除区 = **命中带**（32px 高）：带外回落到 Caption（拖拽），若整块排除
-            // 会变成"点上去既不开窗也不拖窗"的死区。
+            // 三钮的排除区 = **命中带**（M5-T4 单轨下 = 按钮矩形 46×32）：带外回落到 Caption
+            // （拖拽），若整块排除会变成"点上去既不开窗也不拖窗"的死区。
             const QRect r = shift(rect_of(child, physical, is_caption_button(child)));
             if (!r.isNull())
                 box.drag_excludes.push_back(r);

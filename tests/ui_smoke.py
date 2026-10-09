@@ -35,6 +35,12 @@ M4-W3-T14（运行页）:
 M4-W3-T15（设置对话框追加项）:
   * 追加 `UI-SMOKE settings-dialog:` 行齐备断言（§9.3 三项：交错启动 ms / 线程预算 /
     分文件夹默认结构 → AppSettings 读回；截图仍为 12 张、冻结末行不变）。
+
+M5-T4（W-G2 壳层）:
+  * 追加 `UI-SMOKE shell-geom:` 行齐备断言（C7 几何探针：顶栏 44 / 状态栏 30 / 导航段 92×30 /
+    caption 命中 46×32 / 栏宽 330·587 轴 / CTA 22 / 按钮 26 / 品牌图标 20 / 窗口内边距 10；
+    值表驱动，行内 `checked=N bad=M` 由 C++ 侧给出）与 `UI-SMOKE status-tones:`（§8 状态四档
+    QSS 规则 + 点/词同档 + 空态不得为红）。截图仍为 12 张、冻结末行不变。
 """
 
 import os
@@ -66,6 +72,14 @@ T14_LINE_PREFIXES = (
 # M4-W3-T15 自检行（前缀匹配；缺任一 → FAIL）：设置对话框三项追加控件 → AppSettings 读回
 T15_LINE_PREFIXES = (
     'UI-SMOKE settings-dialog:',  # 交错启动 / 线程预算 / 分文件夹默认结构（§9.3）
+)
+
+# M5-T4 自检行（前缀匹配；缺任一 → FAIL）：壳层几何值表（§3/§6.2/R4）+ 状态四档（§8）
+T4_LINE_PREFIXES = (
+    'UI-SMOKE shell-geom:',     # 顶栏 44 / 状态栏 30 / 导航段 92×30 / caption 46×32 /
+                                # 栏宽 330·587 / CTA 22 / btn 26 / 品牌图标 20 / 内边距 10
+    'UI-SMOKE nav-text:',       # §6.2 段序（① 元数据→② 输出→③ 运行）+ K1 无完成态装饰/字形
+    'UI-SMOKE status-tones:',   # §8 四档 QSS 规则 + 点/词同档 + 空态不得为红
 )
 
 # M4-W2-T11 自检行（前缀匹配；缺任一 → FAIL）
@@ -126,6 +140,7 @@ def main():
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=ROOT, env=child_env,
             text=True, encoding='utf-8', errors='replace')
         found = False
+        t4_seen = set()
         t11_seen = set()
         t14_seen = set()
         t15_seen = set()
@@ -136,6 +151,9 @@ def main():
                 log_fp.write(line)
                 if line.rstrip('\r\n') == FROZEN_LINE:
                     found = True
+                for prefix in T4_LINE_PREFIXES:
+                    if line.startswith(prefix):
+                        t4_seen.add(prefix)
                 for prefix in T11_LINE_PREFIXES:
                     if line.startswith(prefix):
                         t11_seen.add(prefix)
@@ -153,6 +171,11 @@ def main():
             return status
         if not found:
             print("ui_smoke: FAIL (missing frozen success line '{}')".format(FROZEN_LINE),
+                  file=sys.stderr)
+            return 1
+        missing = [p for p in T4_LINE_PREFIXES if p not in t4_seen]
+        if missing:
+            print('ui_smoke: FAIL (missing T4 shell self-check lines: {})'.format(', '.join(missing)),
                   file=sys.stderr)
             return 1
         missing = [p for p in T11_LINE_PREFIXES if p not in t11_seen]

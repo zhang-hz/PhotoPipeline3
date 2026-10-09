@@ -55,6 +55,17 @@ M5-T6（W-G2 壳层：预览画布 缩放/拖动/空态/角标）:
     照片衬垫与画布底可区分（修 3-21）/ 小图放大档最近邻（修 3-20）；值表驱动，行内
     `checked=N bad=M` 由 C++ 侧给出）。截图仍为 12 张、冻结末行不变。
 
+M5-T8（W-G3 页：输出页 §7.2 四卡组）:
+  * 追加 `UI-SMOKE output-geom:` 行齐备断言（C7 几何探针：8 格式磁贴 2×4 + 对勾位零形变（选中不改宽、
+    不改 sizeHint）/ 未选中 ≠ 禁用（修 2-05）/ 六行一义 pitch 28（位深·技术·无损·编码努力·视觉距离·
+    高级参数；行内只有一个标签）/ 标签轨 80 + 组内外同轴（修 2-32）/ spin 只取 88·160 两档（修 2-33）/
+    范围入 10px 注释（修 2-18）/ 魔法值「自动」（修 2-37）/ 高级参数折叠行默认折叠 + 子分组 + 搜索行
+    （修 2-19/2-31/2-39/2-40/2-41）/ 互斥置灰（仅元数据：磁贴区 + 格式参数卡禁用，模式分段仍可用）/
+    模板示例行单行且不再混用 <根>（修 2-14/2-15）/ 卡头计数 = 中性胶囊（修 2-07）/ 按钮 26（A7）/
+    页签 = 格式名 · 位深（修 2-21）/ 预设 placeholder + 禁用原因（修 2-24/2-25）/ 根目录 placeholder
+    （修 2-10）/ 色彩目标 tooltip（修 2-16）/ 模板 tooltip（修 2-13）；值表驱动，行内 `checked=N bad=M`
+    由 C++ 侧给出）。既有 T13/T15 相关前缀全保留。截图仍为 12 张、冻结末行不变。
+
 M5-T7（W-G3 页：元数据页 §7.1 四卡组）:
   * 追加 `UI-SMOKE meta-geom:` 行齐备断言（C7 几何探针：卡内行 pitch 28 / 标签轨 80 /
     日期时间 spin 88×24 / 生效行 acc 值（像素取证：修改值 = 强调色、原值 ≠ 强调色）/
@@ -126,6 +137,13 @@ T7_LINE_PREFIXES = (
                                 # 操作行在地图上方 / 折叠默认 / 按钮 26 / 离线说明中性灰
 )
 
+# M5-T8 自检行（前缀匹配；缺任一 → FAIL）：输出页四卡组几何（§7.2 逐行 + R1–R4 + 修 2-05…2-42）
+T8_LINE_PREFIXES = (
+    'UI-SMOKE output-geom:',    # 磁贴 2×4 零形变 / 六行一义 pitch 28 / spin 88·160 / 折叠行 +
+                                # 子分组 / 互斥置灰 / 模板示例行 / 中性计数胶囊 / 按钮 26 / 页签
+                                # 格式名·位深 / 预设 placeholder
+)
+
 # M4-W2-T11 自检行（前缀匹配；缺任一 → FAIL）
 T11_LINE_PREFIXES = (
     'UI-SMOKE filelist-roles:',
@@ -188,6 +206,7 @@ def main():
         t5_seen = set()
         t6_seen = set()
         t7_seen = set()
+        t8_seen = set()
         t11_seen = set()
         t14_seen = set()
         t15_seen = set()
@@ -210,6 +229,9 @@ def main():
                 for prefix in T7_LINE_PREFIXES:
                     if line.startswith(prefix):
                         t7_seen.add(prefix)
+                for prefix in T8_LINE_PREFIXES:
+                    if line.startswith(prefix):
+                        t8_seen.add(prefix)
                 for prefix in T11_LINE_PREFIXES:
                     if line.startswith(prefix):
                         t11_seen.add(prefix)
@@ -247,6 +269,11 @@ def main():
         missing = [p for p in T7_LINE_PREFIXES if p not in t7_seen]
         if missing:
             print('ui_smoke: FAIL (missing T7 meta-page self-check lines: {})'.format(
+                ', '.join(missing)), file=sys.stderr)
+            return 1
+        missing = [p for p in T8_LINE_PREFIXES if p not in t8_seen]
+        if missing:
+            print('ui_smoke: FAIL (missing T8 output-page self-check lines: {})'.format(
                 ', '.join(missing)), file=sys.stderr)
             return 1
         missing = [p for p in T11_LINE_PREFIXES if p not in t11_seen]

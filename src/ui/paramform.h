@@ -1,6 +1,15 @@
 // PP-FROZEN(file)
 // SPDX-License-Identifier: GPL-3.0-or-later
 // PhotoPipeline — schema-driven parameter form (M1b frozen)
+//
+// PP-FROZEN(0.3.0) —— M5-T8（W-G3 §7.2「格式参数卡」）**追加面**（既有方法签名/语义一字不动）：
+//     * `set_tokens(tokens)`：主题 tokens 注入（与 PageOutput/PageMeta/PreviewPanel 同一口径）——
+//       M5-T8 起本控件的行一律经 formkit 构造（R1 pitch 28 / R2 标签轨 80 / R3 范围入 10px 注释 /
+//       R4 控件规格），自绘控件（勾选框/折叠插入符）自带令牌副本，故需要本注入口；
+//     * 布局形态（§7.2「一行一义六行」）：技术行 / 无损行 / 核心参数行 / 高级参数折叠行 ——
+//       高级参数 = 现代折叠行（chevron + 摘要、无组框、无双层框线），区内含搜索行与子分组；
+//       改值标记 = 强调边框 + 强调色字（theme::set_mod；裁定 A8：`●` 前缀已删）。
+//   既有方法（set_selection/selection/values/set_values/is_param_visible 与两枚信号）语义不变。
 #pragma once
 #include "core/params.h"
 #include <QWidget>
@@ -8,6 +17,12 @@
 #include <vector>
 
 namespace pp::ui {
+
+// 前置声明（不拉 ui/theme.h：theme.h 依赖包含者先引入 <QApplication>，而本头会被 AUTOMOC 的
+// mocs_compilation.cpp 直接包含 —— 与 ui/page_output.h / page_meta.h 同口径）
+namespace theme {
+struct Tokens;
+}
 
 struct FormSelection {
     std::string backend;   // current backend id ("" -> first)
@@ -32,6 +47,9 @@ public:
 
     // test/inspection hook: is the row for `key` currently visible?
     bool is_param_visible(const std::string &key) const;
+
+    // ---- PP-FROZEN(0.3.0) 追加面（M5-T8）----
+    void set_tokens(const theme::Tokens &tokens); // 主题令牌（自绘控件/图标/折叠区颜色）
 
 signals:
     void selection_changed(const pp::ui::FormSelection &sel); // user action only

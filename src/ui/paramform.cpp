@@ -2,7 +2,7 @@
 // PhotoPipeline — schema-driven parameter form engine (M1b-U3)
 //
 // 行为规格落地（docs/m1b-tasks.md §2.6 条 1..8）：
-//   1. 顶部选择器行：后端（backends.size()>1）/ 技术（当前后端 techs.size()>1）/
+//   1. 顶部选择行：后端（backends.size()>1）/ 技术（当前后端 techs.size()>1）/
 //      无损（当前后端存在 lossless_capable 技术——条 2 的 jpeg 反例即隐藏）。
 //   2. 无损 = 保留键 "__lossless"（m1-tasks §3.4）：勾选写工作集并 pp::apply_locks；
 //      当前技术不可无损 → 自动切首个 lossless_capable 技术（jxl→modular、webp→lossless）；
@@ -13,26 +13,39 @@
 //      （起始折叠）+ 组内顶部搜索框（label/key 包含过滤，大小写不敏感）。
 //   4. 任何值/选择变化 → 对当前技术每个参数重算 eval_visible（隐藏行）/ eval_lock
 //      （控件禁用 + 强制值写入工作集）。
-//   5. 值 ≠ def（同类型比较）→ 行标签前缀 "● "；标签右键菜单 "重置为默认"。
+//   5. 值 ≠ def（同类型比较）→ 改值标记（theme::set_mod：强调边框 + 强调色字；裁定 A8：`●`
+//      前缀字形已删）+ 标签右键菜单 "重置为默认"。
 //   6. values() = 工作集去掉 "__" 前缀键；set_values() 同 key 同类型才应用。
 //   7. 用户操作 → changed()；用户改后端/技术/无损 → 先 selection_changed 再 changed()；
 //      set_selection/set_values 不发信号。
 //   8. heif/avif：单一 "runtime" 技术 → 技术下拉隐藏；参数全部来自内省 TechDef。
+//
+// M5-T8（W-G3 · §7.2 格式参数卡 / §5 R1–R4；评审 2-18/2-19/2-20/2-31/2-32/2-33/2-34/2-35/
+// 2-37/2-39/2-40/2-41/2-42）：
+//   * 一切行经 formkit 构造器（R1 pitch 28 / R2 标签轨 80 / 字段宽 88·160 两档 / R3 范围入
+//     10px 注释）—— 组内外同一标签轴与同一起点（2-32）；
+//   * 技术 / 无损 = 普通表单行；布尔参数行语序「勾选框→标签」且文字紧邻勾选框（2-34/2-35）；
+//   * 高级参数 = 现代折叠行（chevron + 摘要、**无** QGroupBox、无双层框线，2-19/2-31），
+//     区内 = 搜索行（带标签与用途说明，2-40/2-41）+ 子分组（2-39）+ 限高内滚（2-42）；
+//   * 数值控件只取短 88（组内小数值）/ 标准 160（核心独立数值）两档，不再拉满行宽（2-33）；
+//   * 魔法值（范围下端 < 0 = 编码器自选）显示「自动」（specialValueText；枚举的 "auto" 档
+//     同义显示为「自动」）—— 修 2-37。
 #include "ui/paramform.h"
 
 #include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
-#include <QFormLayout>
-#include <QGroupBox>
-#include <QHBoxLayout>
+#include <QFontMetrics>
+#include <QFrame>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QScrollArea>
 #include <QSpinBox>
 #include <QStandardItemModel>
 #include <QStringList>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -42,6 +55,10 @@
 #include <optional>
 #include <utility>
 
+#include "ui/formkit.h" // C2：行构造器（R1–R4）+ 自绘勾选框（M5-T8）
+#include "ui/icons.h"   // 折叠插入符 = 矢量图标（C3；禁字形）
+#include "ui/theme.h"
+
 namespace pp::ui {
 namespace {
 
@@ -50,7 +67,7 @@ namespace {
 //   * `kLosslessKey`（= pp::kLosslessKey，内部管道键 `__lossless`）：随工作集传递，但不序列化、
 //     不显示、不出现在 values()（m1-tasks §3.4）；
 //   * `kLosslessParamKey`（= pp::kLosslessParamKey，显式 schema 参数 `lossless`）：§9.1 U3 起
-//     不渲染为行，由顶部"无损"复选框独占（值随复选框同步写入工作集，编码器/预设 v2 从参数集读它）。
+//     不渲染为行，由"无损"复选框独占（值随复选框同步写入工作集，编码器/预设 v2 从参数集读它）。
 const std::string kLosslessKey(pp::kLosslessKey);
 const std::string kLosslessParamKey(pp::kLosslessParamKey);
 
@@ -108,6 +125,67 @@ bool same_param_keys(const pp::TechDef &a, const pp::TechDef &b) {
     return true;
 }
 
+QString tr_c(const char *text) { return QCoreApplication::translate("pp::ui::ParamForm", text); }
+
+// 高级区子分组（M5-T8 · 修 2-39「组内 13 项平铺无内部结构 → 按语义分子组」）。
+// 分组判据 = key 词根（schema 无分组字段，故按 key 词根归类；见 M5-T8 报告的机械偏差登记）：
+//   progressive*（谱进 / 量化位 / DC 级数）→ 渐进；*noise*（感光噪声模拟）→ 噪声；
+//   speed/budget（解码速度预算）→ 解码预算；其余编码器工具开关 → 编码工具。
+enum class SubGroup { Progressive, Noise, Decode, Tools };
+
+SubGroup subgroup_of(const std::string &key) {
+    if (key.find("progressive") != std::string::npos)
+        return SubGroup::Progressive;
+    if (key.find("noise") != std::string::npos)
+        return SubGroup::Noise;
+    if (key.find("speed") != std::string::npos || key.find("budget") != std::string::npos)
+        return SubGroup::Decode;
+    return SubGroup::Tools;
+}
+
+QString subgroup_title(SubGroup g) {
+    switch (g) {
+    case SubGroup::Progressive:
+        return tr_c("渐进");
+    case SubGroup::Noise:
+        return tr_c("噪声");
+    case SubGroup::Decode:
+        return tr_c("解码预算");
+    case SubGroup::Tools:
+        break;
+    }
+    return tr_c("编码工具");
+}
+
+// 子分组先后（= 折叠行摘要里的列出顺序，与 mockup「渐进 / 噪声 / 解码预算」同序）
+constexpr SubGroup kSubGroupOrder[] = {SubGroup::Progressive, SubGroup::Noise, SubGroup::Decode,
+                                       SubGroup::Tools};
+
+// R3 范围注释（10px；"1–10" / "0.0–25.0" / 魔法值档 "自动…3"）。
+// 小数位数随步长：步长 < 1 → 1 位小数（视觉距离 0.0–25.0），否则整数（感光噪声 0–6400）。
+QString range_note_text(const pp::ParamDef &p) {
+    if (p.type != pp::ParamType::Int && p.type != pp::ParamType::Float)
+        return QString();
+    const bool fractional = p.step > 0.0 && p.step < 1.0;
+    const auto num = [fractional](double v) {
+        return fractional ? QString::number(v, 'f', 1)
+                          : QString::number(static_cast<qint64>(std::llround(v)));
+    };
+    if (p.lo < 0.0) // 范围下端 < 0 = 编码器自选（"自动"），注释按同一语义写
+        return tr_c("%1…%2").arg(tr_c("自动"), num(p.hi));
+    return QStringLiteral("%1–%2").arg(num(p.lo), num(p.hi));
+}
+
+// 标签轨文字超宽 → 省略号（R2 标签轨 80px；全文进 tooltip —— 与页面口径一致）
+void elide_track_label(QLabel *label) {
+    if (label == nullptr)
+        return;
+    const QString full = label->text();
+    const QFontMetrics fm(label->font());
+    if (fm.horizontalAdvance(full) > formkit::kLabelW)
+        label->setText(fm.elidedText(full, Qt::ElideRight, formkit::kLabelW));
+}
+
 } // namespace
 
 struct ParamForm::Impl {
@@ -117,29 +195,38 @@ struct ParamForm::Impl {
     FormSelection sel;                    // 已解析（非空）的当前选择
     pp::ParamSet values;                  // 工作集（含保留键 "__lossless"）
     std::string pre_lossless_tech;        // 本表单自动切走前的技术（取消无损时切回）
+    theme::Tokens tokens = theme::tokens(theme::ThemeMode::Dark);
 
     QVBoxLayout *root = nullptr;
-    QWidget *selector_row = nullptr;
-    QLabel *backend_label = nullptr;
-    QComboBox *backend_combo = nullptr;
-    QLabel *tech_label = nullptr;
+    // 选择行（M5-T8：一律 formkit 行栅格 —— 后端行 / 技术行 / 无损行）
+    QComboBox *backend_combo = nullptr; // 多后端格式（heif/avif）才可见
+    QWidget *backend_row = nullptr;
+    formkit::Row tech_row; // [技术 80][12][combo 160][注：依赖说明]
     QComboBox *tech_combo = nullptr;
-    QCheckBox *lossless_check = nullptr;
+    formkit::CheckRow lossless_row; // [空标签轨][12][13×13 勾选框 → "无损编码"]
+    formkit::CheckBox *lossless_check = nullptr;
 
-    QWidget *core_area = nullptr;
-    QFormLayout *core_form = nullptr;
-    QGroupBox *adv_group = nullptr;
-    QWidget *adv_area = nullptr;
-    QFormLayout *adv_form = nullptr;
+    QWidget *core_host = nullptr; // 核心参数行容器（pitch 28）
+    QVBoxLayout *core_box = nullptr;
+    formkit::Row adv_row; // 高级参数折叠行：[高级参数][12][chevron + 摘要]
+    QToolButton *adv_toggle = nullptr;
+    QWidget *adv_host = nullptr; // 折叠内容（默认隐藏）
+    QScrollArea *adv_scroll = nullptr;
+    QWidget *adv_body = nullptr;
+    QVBoxLayout *adv_box = nullptr;
     QLineEdit *adv_search = nullptr;
-    QLabel *cross_error = nullptr; // §2.7：交叉参数约束红字区（参数组底部；不折行）
+    QFrame *adv_rule = nullptr;                   // 折叠区顶缘 hairline（替代组框：无双层框线）
+    QList<QPair<int, QLabel *>> subgroup_headers; // (SubGroup 序号, 标题)
+    QLabel *cross_error = nullptr;                // §2.7：交叉参数约束红字区（参数组底部；不折行）
 
     struct Row {
         const pp::ParamDef *def = nullptr; // 指向生效 TechDef 的 ParamDef（生命周期 >= 本控件）
         std::string key;
-        QLabel *label = nullptr;
+        QWidget *row = nullptr;  // 行容器（formkit 行，固定高 28）
+        QLabel *label = nullptr; // 标签轨（80 右对齐；布尔行留空）
         QWidget *editor = nullptr;
         bool advanced = false;
+        SubGroup subgroup = SubGroup::Tools;
         bool locked = false;
         bool shown = true; // 谓词可见 且 通过高级区搜索过滤（is_param_visible 口径）
     };
@@ -155,16 +242,16 @@ struct ParamForm::Impl {
             backends = fmt->backends; // 内省不可用 → 回退静态表（不崩、可显示）
         root = new QVBoxLayout(q);
         root->setContentsMargins(0, 0, 0, 0);
-        root->setSpacing(6);
-        build_selectors();
+        root->setSpacing(0); // R1：行 pitch 由行容器自身承担，行间无额外 gap
         build_cross_error();
+        build_selectors();
 
         sel.backend = backends.empty() ? std::string() : backends.front().id;
         const pp::TechDef *t = tech();
         sel.tech = t ? t->id : std::string();
         sel.lossless = false;
         populate_tech_combo();
-        rebuild_params();
+        rebuild_params(); // 工作集 = 表内默认（缺失则整表为空 —— 见 M5-T8 修复记录）
         refresh();
     }
 
@@ -189,47 +276,41 @@ struct ParamForm::Impl {
         return find_tech_in(backend(), id);
     }
 
-    // ---------------------------------------------------------------- 顶部选择器行
+    // ---------------------------------------------------------------- 选择行
 
     void build_selectors() {
-        selector_row = new QWidget(q);
-        selector_row->setObjectName(QStringLiteral("pp-selector-row"));
-        auto *h = new QHBoxLayout(selector_row);
-        h->setContentsMargins(0, 0, 0, 0);
-        h->setSpacing(6);
+        // 后端行（仅多后端格式：heif/avif 内省出多个后端；单后端不占位）
+        if (backends.size() > 1) {
+            auto *combo = new QComboBox(q);
+            backend_combo = combo;
+            for (const pp::BackendDef &b : backends)
+                combo->addItem(QString::fromStdString(b.label.empty() ? b.id : b.label),
+                               QString::fromStdString(b.id));
+            const formkit::Row row =
+                formkit::frow(q, ParamForm::tr("后端"), combo, formkit::FieldWidth::Standard);
+            row.row->setObjectName(QStringLiteral("pp-backend-row"));
+            backend_row = row.row;
+            root->addWidget(row.row);
+            QObject::connect(combo, &QComboBox::currentIndexChanged, q, [this](int idx) {
+                if (syncing || idx < 0 || idx >= static_cast<int>(backends.size()))
+                    return;
+                user_set_backend(backends[static_cast<std::size_t>(idx)].id);
+            });
+        }
 
-        backend_label = new QLabel(ParamForm::tr("后端"), selector_row);
-        backend_combo = new QComboBox(selector_row);
-        backend_combo->setObjectName(QStringLiteral("pp-backend-combo"));
-        for (const pp::BackendDef &b : backends)
-            backend_combo->addItem(QString::fromStdString(b.label.empty() ? b.id : b.label),
-                                   QString::fromStdString(b.id));
-        h->addWidget(backend_label);
-        h->addWidget(backend_combo);
-
-        tech_label = new QLabel(ParamForm::tr("技术"), selector_row);
-        tech_combo = new QComboBox(selector_row);
+        // 技术行（[技术][combo 160][注：无损开启时的依赖说明]）
+        tech_combo = new QComboBox(q);
         tech_combo->setObjectName(QStringLiteral("pp-tech-combo"));
-        h->addWidget(tech_label);
-        h->addWidget(tech_combo);
-
-        lossless_check = new QCheckBox(ParamForm::tr("无损"), selector_row);
-        lossless_check->setObjectName(QStringLiteral("pp-lossless-check"));
-        // T13 复核项 5：tooltip 同时点明两个承载面（显式 schema 参数 + 内部管道键），
-        // 不再只说保留键 —— 用户面看到的是"无损输出"这一件事，落盘/下发/编码各自由两键承担。
-        lossless_check->setToolTip(ParamForm::tr(
-            "无损输出（显式 schema 参数 lossless：可落盘进预设、可校验；同时同步内部管道键 "
-            "__lossless 供参数谓词与编码器读取）"));
-        h->addWidget(lossless_check);
-        h->addStretch(1);
-
-        root->addWidget(selector_row);
-
-        QObject::connect(backend_combo, &QComboBox::currentIndexChanged, q, [this](int idx) {
-            if (syncing || idx < 0 || idx >= static_cast<int>(backends.size()))
-                return;
-            user_set_backend(backends[static_cast<std::size_t>(idx)].id);
-        });
+        tech_combo->setToolTip(
+            ParamForm::tr("编码技术（各技术参数不同）；勾选「无损编码」后仅无损技术可选"));
+        {
+            const formkit::Row row =
+                formkit::frow(q, ParamForm::tr("技术"), tech_combo, formkit::FieldWidth::Standard,
+                              QString(), QStringLiteral(" "));
+            row.row->setObjectName(QStringLiteral("pp-tech-row"));
+            tech_row = row;
+            root->addWidget(row.row);
+        }
         QObject::connect(tech_combo, &QComboBox::currentIndexChanged, q, [this](int idx) {
             if (syncing || idx < 0)
                 return;
@@ -238,7 +319,22 @@ struct ParamForm::Impl {
                 return;
             user_set_tech(b->techs[static_cast<std::size_t>(idx)].id);
         });
-        QObject::connect(lossless_check, &QCheckBox::toggled, q, [this](bool on) {
+
+        // 无损行（表单布尔 = 勾选框；语序固定「勾选框→标签」，2-35）
+        {
+            const formkit::CheckRow row = formkit::check_row(
+                q, QString(), ParamForm::tr("无损编码"), QStringLiteral("pp-lossless-check"));
+            row.row->setObjectName(QStringLiteral("pp-lossless-row"));
+            lossless_row = row;
+            lossless_check = row.box;
+            // T13 复核项 5：tooltip 同时点明两个承载面（显式 schema 参数 + 内部管道键），
+            // 不再只说保留键 —— 用户面看到的是"无损输出"这一件事，落盘/下发/编码各自由两键承担。
+            lossless_check->setToolTip(ParamForm::tr(
+                "无损输出（显式 schema 参数 lossless：可落盘进预设、可校验；同时同步内部管道键 "
+                "__lossless 供参数谓词与编码器读取）；开启后视觉距离按 0 处理（忽略视觉距离）"));
+            root->addWidget(row.row);
+        }
+        QObject::connect(lossless_check, &formkit::CheckBox::toggled, q, [this](bool on) {
             if (syncing)
                 return;
             user_set_lossless(on);
@@ -280,23 +376,27 @@ struct ParamForm::Impl {
         }
     }
 
+    // 选择行状态同步（可见性 + 依赖说明）：无损开启 → 技术行出"仅无损技术可选"注释（修 2-20）
     void update_selectors() {
         syncing = true;
         const pp::BackendDef *b = backend();
         const bool multi_backend = backends.size() > 1;
-        backend_label->setVisible(multi_backend);
-        backend_combo->setVisible(multi_backend);
-        const bool multi_tech = b && b->techs.size() > 1;
-        tech_label->setVisible(multi_tech);
-        tech_combo->setVisible(multi_tech);
-        lossless_check->setVisible(first_lossless_tech_in(b) != nullptr);
-        lossless_check->setChecked(sel.lossless);
-        for (int i = 0; i < backend_combo->count(); ++i) {
-            if (backend_combo->itemData(i).toString() == QString::fromStdString(sel.backend)) {
-                backend_combo->setCurrentIndex(i);
-                break;
+        if (backend_combo != nullptr && backend_row != nullptr) {
+            backend_combo->setVisible(multi_backend);
+            backend_row->setVisible(multi_backend);
+            for (int i = 0; i < backend_combo->count(); ++i) {
+                if (backend_combo->itemData(i).toString() == QString::fromStdString(sel.backend)) {
+                    backend_combo->setCurrentIndex(i);
+                    break;
+                }
             }
         }
+        const bool multi_tech = b && b->techs.size() > 1;
+        tech_combo->setVisible(multi_tech);
+        tech_row.row->setVisible(multi_tech);
+        if (tech_row.note != nullptr)
+            tech_row.note->setText(multi_tech && sel.lossless ? ParamForm::tr("仅无损技术可选")
+                                                              : QString());
         for (int i = 0; i < tech_combo->count(); ++i) {
             if (tech_combo->itemData(i).toString() == QString::fromStdString(sel.tech)) {
                 tech_combo->setCurrentIndex(i);
@@ -304,87 +404,180 @@ struct ParamForm::Impl {
             }
         }
         update_tech_items_enabled();
+        // 注意：isVisible() 会被祖先的可见性污染（构造期整页未 show → 恒 false）→ 用语义判据
+        const bool has_lossless = first_lossless_tech_in(b) != nullptr;
+        lossless_check->setVisible(has_lossless);
+        lossless_check->setChecked(sel.lossless);
+        lossless_row.row->setVisible(has_lossless);
         syncing = false;
     }
 
-    // ---------------------------------------------------------------- 行构建
+    // ---------------------------------------------------------------- 折叠行 / 行构建
 
-    // §2.7：参数组底部的红字交叉校验区（objectName pp-cross-error，#D02222）。
-    // 只创建一次；build_rows() 每次重建控件后把它移回布局末尾。
-    // §9.3「全界面禁止文案折行」：本控件**不开自动折行**（word wrap=false）。本区是
-    // **多行**文本（§2.7「逐条换行」= 冻结语义：每条约束占一行，非同一行的自动折行），
-    // 故不走单行省略号路线；超长行按宽度硬裁，全文进悬浮提示（鼠标悬浮可取全文）。
-    // 补记（M4-T15）：T13 曾把本区与页面里"偶发访问违例"关联（记为省略号形态放大该问题），
-    // T13b 已定根因 = page_output.cpp 的悬垂指针（D-W3-1，ASAN: heap-use-after-free），
-    // 与本控件形态无关 → 此处保留多行形态**仅**因 §2.7 的冻结语义，不再有崩溃顾虑。
-    void build_cross_error() {
-        cross_error = new QLabel(q);
-        cross_error->setObjectName(QStringLiteral("pp-cross-error"));
-        cross_error->setStyleSheet(QStringLiteral("color: #D02222;"));
-        cross_error->setTextFormat(Qt::PlainText);
-        cross_error->setWordWrap(false);
-        cross_error->setVisible(false);
+    void set_fold_icon(QToolButton *button, bool expanded) {
+        if (button == nullptr)
+            return;
+        icons::apply(button, expanded ? icons::Name::ChevronDown : icons::Name::ChevronRight,
+                     tokens.text2, tokens.text3, 12);
+    }
+
+    int count_advanced() const {
+        int total = 0;
+        for (const Row &r : rows)
+            if (r.advanced)
+                ++total;
+        return total;
+    }
+
+    // 高级区摘要（折叠行文字）："渐进 / 噪声 / 解码预算 / 编码工具 13 项"（mockup 同形）
+    QString advanced_summary() const {
+        if (count_advanced() == 0)
+            return QString();
+        QStringList names;
+        for (const SubGroup g : kSubGroupOrder) {
+            const bool any = std::any_of(rows.begin(), rows.end(), [g](const Row &r) {
+                return r.advanced && r.subgroup == g;
+            });
+            if (any)
+                names << subgroup_title(g);
+        }
+        return names.join(QStringLiteral(" / ")) + QLatin1Char(' ') +
+               ParamForm::tr("%1 项").arg(count_advanced());
     }
 
     void build_rows() {
         rows.clear();
-        delete core_area;
-        core_area = nullptr;
-        core_form = nullptr;
-        delete adv_group;
-        adv_group = nullptr;
-        adv_area = nullptr;
-        adv_form = nullptr;
+        subgroup_headers.clear();
+        delete core_host;
+        core_host = nullptr;
+        core_box = nullptr;
+        if (adv_row.row != nullptr) {
+            root->removeWidget(adv_row.row);
+            delete adv_row.row;
+        }
+        adv_row = formkit::Row{};
+        adv_toggle = nullptr;
+        delete adv_host;
+        adv_host = nullptr;
+        adv_scroll = nullptr;
+        adv_body = nullptr;
+        adv_box = nullptr;
         adv_search = nullptr;
+        adv_rule = nullptr;
 
-        core_area = new QWidget(q);
-        core_area->setObjectName(QStringLiteral("pp-core-area"));
-        core_form = new QFormLayout(core_area);
-        core_form->setContentsMargins(0, 0, 0, 0);
-        core_form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        // ---- 核心参数区（一行一义；formkit 行 × n）----
+        core_host = new QWidget(q);
+        core_host->setObjectName(QStringLiteral("pp-core-area"));
+        core_box = new QVBoxLayout(core_host);
+        core_box->setContentsMargins(0, 0, 0, 0);
+        core_box->setSpacing(0);
+        root->addWidget(core_host);
 
-        adv_group = new QGroupBox(ParamForm::tr("高级参数"), q);
-        adv_group->setObjectName(QStringLiteral("pp-advanced-group"));
-        adv_group->setCheckable(true);
-        adv_group->setChecked(false); // collapsed 起始
-        auto *adv_outer = new QVBoxLayout(adv_group);
-        adv_outer->setContentsMargins(2, 0, 2, 2); // §9.1：标题↔搜索框间距收紧
-        adv_outer->setSpacing(2);
-        adv_area = new QWidget(adv_group);
-        adv_area->setObjectName(QStringLiteral("pp-advanced-area"));
-        adv_form = new QFormLayout(adv_area);
-        adv_form->setContentsMargins(0, 0, 0, 0);
-        adv_form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
-        adv_search = new QLineEdit(adv_area);
-        adv_search->setObjectName(QStringLiteral("pp-advanced-search"));
-        adv_search->setPlaceholderText(ParamForm::tr("搜索参数…"));
-        adv_search->setClearButtonEnabled(true);
-        // §9.1：搜索框与相邻参数控件同列同宽（空标签占位 → 落在字段列，不拉满整行）
-        // M2-T7 #28b（实测复核后裁定不改布局）：搜索框过滤的就是高级参数行，其左边界与
-        // 这些行的编辑器字段列严格相等（自验实测 jxl 134/134、jpeg 115/115、webp 132/132、
-        // tiff 79/79，d=0）；与上一层"核心参数"表单字段列的差值（jxl 60px）来自另一个
-        // QFormLayout 的标签列宽，且随格式在 -79..+60px 浮动——按它对齐会让搜索框随格式
-        // 漂移、并与所过滤的行错列。等式由 .cache/tmp/m2t7-selftest 断言锁死。
-        adv_form->addRow(QString(), adv_search);
-        adv_area->setVisible(false);
-        adv_outer->addWidget(adv_area);
-        QObject::connect(adv_group, &QGroupBox::toggled, adv_area, &QWidget::setVisible);
-        QObject::connect(adv_search, &QLineEdit::textChanged, q, [this](const QString &) {
-            if (syncing)
-                return;
-            update_row_states(); // 过滤只影响视图，不是值变化 → 不发信号
-        });
+        // ---- 高级参数折叠行（现代折叠行：chevron + 摘要；无 QGroupBox → 无双层框线）----
+        adv_toggle = new QToolButton(q);
+        adv_toggle->setObjectName(QStringLiteral("pp-advanced-toggle"));
+        adv_toggle->setCheckable(true);
+        adv_toggle->setChecked(false); // 起始折叠（§7.2「高级参数(展开)」）
+        adv_toggle->setAutoRaise(true);
+        adv_toggle->setCursor(Qt::PointingHandCursor);
+        adv_toggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        adv_toggle->setFixedHeight(theme::Metrics::btn_h); // R4 按钮高 26
+        adv_toggle->setFont(theme::font(theme::Typography::body_px, QFont::DemiBold));
+        adv_toggle->setToolTip(ParamForm::tr("展开或收起高级参数（低频编码器选项）"));
+        set_fold_icon(adv_toggle, false);
+        {
+            const formkit::Row row =
+                formkit::frow(q, ParamForm::tr("高级参数"), adv_toggle, formkit::FieldWidth::Flex);
+            row.row->setObjectName(QStringLiteral("pp-advanced-row"));
+            adv_row = row;
+            root->addWidget(row.row);
+        }
+
+        // ---- 折叠内容（受控区内滚：2-42）----
+        adv_host = new QWidget(q);
+        adv_host->setObjectName(QStringLiteral("pp-advanced-area"));
+        auto *hv = new QVBoxLayout(adv_host);
+        hv->setContentsMargins(0, 0, 0, 0);
+        hv->setSpacing(0);
+        adv_rule = new QFrame(adv_host);
+        adv_rule->setObjectName(QStringLiteral("pp-adv-rule"));
+        adv_rule->setFixedHeight(1);
+        hv->addWidget(adv_rule);
+        // 搜索行（带标签 + 用途说明；省略号统一 "…" —— 修 2-40/2-41；与参数行同轴 → 2-32）
+        {
+            adv_search = new QLineEdit(adv_host);
+            adv_search->setObjectName(QStringLiteral("pp-advanced-search"));
+            adv_search->setPlaceholderText(ParamForm::tr("在高级参数中搜索…"));
+            adv_search->setClearButtonEnabled(true);
+            adv_search->setToolTip(ParamForm::tr("按参数名或键过滤高级参数（大小写不敏感）"));
+            const formkit::Row row = formkit::frow(adv_host, ParamForm::tr("搜索"), adv_search,
+                                                   formkit::FieldWidth::Flex);
+            row.row->setObjectName(QStringLiteral("pp-advanced-search-row"));
+            hv->addWidget(row.row);
+            QObject::connect(adv_search, &QLineEdit::textChanged, q, [this](const QString &) {
+                if (syncing)
+                    return;
+                update_row_states(); // 过滤只影响视图，不是值变化 → 不发信号
+            });
+        }
+        adv_scroll = new QScrollArea(adv_host);
+        adv_scroll->setObjectName(QStringLiteral("pp-advanced-scroll"));
+        adv_scroll->setWidgetResizable(true);
+        adv_scroll->setFrameShape(QFrame::NoFrame);
+        adv_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        adv_scroll->setMaximumHeight(formkit::kRowPitch * 8); // 限高内滚（2-42）
+        adv_body = new QWidget(adv_scroll);
+        adv_body->setObjectName(QStringLiteral("pp-advanced-body"));
+        adv_box = new QVBoxLayout(adv_body);
+        adv_box->setContentsMargins(0, 0, 0, 0);
+        adv_box->setSpacing(0);
+        adv_scroll->setWidget(adv_body);
+        hv->addWidget(adv_scroll);
 
         if (const pp::TechDef *t = tech()) {
+            // 子分组：标题紧接本组参数行（按 kSubGroupOrder 顺序；空组不出头；标题 12px 缩进
+            // —— 内容缩进，行本体仍走 formkit 全局轴 → 组内外同轴，修 2-32）
+            for (const SubGroup g : kSubGroupOrder) {
+                const bool any =
+                    std::any_of(t->params.begin(), t->params.end(), [g](const pp::ParamDef &p) {
+                        return p.advanced && p.key != kLosslessParamKey && subgroup_of(p.key) == g;
+                    });
+                if (!any)
+                    continue;
+                auto *header = new QLabel(subgroup_title(g), adv_body);
+                header->setObjectName(QStringLiteral("pp-advanced-group-") +
+                                      QString::number(static_cast<int>(g)));
+                header->setFont(theme::font(theme::Typography::hint_px, QFont::Bold));
+                header->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkNote));
+                header->setContentsMargins(formkit::kColGap, 0, 0, 0); // 内容缩进 12px
+                header->setFixedHeight(formkit::kRowPitch);
+                subgroup_headers.append({static_cast<int>(g), header});
+                adv_box->addWidget(header);
+                for (const pp::ParamDef &p : t->params) {
+                    if (!p.advanced || p.key == kLosslessParamKey || subgroup_of(p.key) != g)
+                        continue;
+                    add_row(p);
+                }
+            }
+            // 核心参数（表内顺序）
             for (const pp::ParamDef &p : t->params) {
-                if (p.key == kLosslessParamKey)
-                    continue; // §9.1：由顶部"无损"复选框独占
+                if (p.advanced || p.key == kLosslessParamKey)
+                    continue; // §9.1：lossless 由"无损"复选框独占
                 add_row(p);
             }
         }
+        adv_toggle->setText(advanced_summary());
+        adv_row.row->setVisible(count_advanced() > 0);
+        adv_toggle->setEnabled(count_advanced() > 0);
 
-        root->addWidget(core_area);
-        root->addWidget(adv_group);
+        root->addWidget(adv_host);
+        adv_host->setVisible(false);
+        QObject::connect(adv_toggle, &QToolButton::toggled, adv_host, &QWidget::setVisible);
+        QObject::connect(adv_toggle, &QToolButton::toggled, q, [this](bool on) {
+            set_fold_icon(adv_toggle, on);
+            adv_toggle->setToolTip(on ? ParamForm::tr("收起高级参数")
+                                      : ParamForm::tr("展开或收起高级参数（低频编码器选项）"));
+        });
         // §2.7：跨格式/技术重建后，红字区恒为参数组最后一行
         root->removeWidget(cross_error);
         root->addWidget(cross_error);
@@ -392,27 +585,34 @@ struct ParamForm::Impl {
 
     void add_row(const pp::ParamDef &p) {
         const QString tip = QString::fromStdString(p.tooltip);
-        QWidget *parent =
-            p.advanced ? static_cast<QWidget *>(adv_area) : static_cast<QWidget *>(core_area);
+        const QString label_text = QString::fromStdString(p.label);
+        QWidget *area =
+            p.advanced ? static_cast<QWidget *>(adv_body) : static_cast<QWidget *>(core_host);
+        QVBoxLayout *box = p.advanced ? adv_box : core_box;
+        // R2 字段宽两档（2-33：核心独立数值 = 标准 160；组内小数值 = 短 88，不再拉满行宽）
+        const formkit::FieldWidth width =
+            p.advanced ? formkit::FieldWidth::Short : formkit::FieldWidth::Standard;
 
         Row r;
         r.def = &p;
         r.key = p.key;
         r.advanced = p.advanced;
-        r.label = new QLabel(QString::fromStdString(p.label), parent);
-        r.label->setObjectName(QStringLiteral("pp-label-") + QString::fromStdString(p.key));
-        r.label->setContextMenuPolicy(Qt::CustomContextMenu);
-        r.label->setToolTip(tip);
+        r.subgroup = subgroup_of(p.key);
 
         switch (p.type) {
         case pp::ParamType::Int: {
-            auto *spin = new QSpinBox(parent);
-            int lo = static_cast<int>(std::lround(p.lo));
-            int hi = static_cast<int>(std::lround(p.hi));
-            if (hi < lo)
-                std::swap(lo, hi);
-            spin->setRange(lo, hi);
+            formkit::SpinSpec spec;
+            spec.min = static_cast<int>(std::lround(p.lo));
+            spec.max = static_cast<int>(std::lround(p.hi));
+            if (spec.max < spec.min)
+                std::swap(spec.min, spec.max);
+            spec.value = spec.min;
+            spec.auto_magic = spec.min < 0; // 2-37：魔法值（编码器自选）显示「自动」
+            spec.note = range_note_text(p);
+            spec.object_name = QStringLiteral("pp-param-") + QString::fromStdString(p.key);
+            auto *spin = formkit::spin_box(area, spec, width);
             spin->setSingleStep(std::max(1, static_cast<int>(std::lround(p.step))));
+            spin->setToolTip(tip);
             r.editor = spin;
             QObject::connect(spin, &QSpinBox::valueChanged, q, [this, key = p.key](int v) {
                 if (syncing)
@@ -421,16 +621,26 @@ struct ParamForm::Impl {
                 refresh();
                 emit q->changed();
             });
+            const formkit::Row row =
+                formkit::frow(area, label_text, spin, width, QString(), spec.note);
+            r.row = row.row;
+            r.label = row.label;
             break;
         }
         case pp::ParamType::Float: {
-            auto *spin = new QDoubleSpinBox(parent);
-            double lo = p.lo, hi = p.hi;
-            if (hi < lo)
-                std::swap(lo, hi);
-            spin->setRange(lo, hi);
-            spin->setDecimals(3); // 条 3：decimals=3
+            formkit::DoubleSpinSpec spec;
+            spec.min = p.lo;
+            spec.max = p.hi;
+            if (spec.max < spec.min)
+                std::swap(spec.min, spec.max);
+            spec.value = spec.min;
+            spec.decimals = 3;                // 条 3：decimals=3
+            spec.auto_magic = spec.min < 0.0; // 2-37：范围下端 < 0 = 编码器自选 → 「自动」
+            spec.note = range_note_text(p);
+            spec.object_name = QStringLiteral("pp-param-") + QString::fromStdString(p.key);
+            auto *spin = formkit::dspin_box(area, spec, width);
             spin->setSingleStep(p.step > 0.0 ? p.step : 1.0);
+            spin->setToolTip(tip);
             r.editor = spin;
             QObject::connect(spin, &QDoubleSpinBox::valueChanged, q, [this, key = p.key](double v) {
                 if (syncing)
@@ -439,12 +649,22 @@ struct ParamForm::Impl {
                 refresh();
                 emit q->changed();
             });
+            const formkit::Row row =
+                formkit::frow(area, label_text, spin, width, QString(), spec.note);
+            r.row = row.row;
+            r.label = row.label;
             break;
         }
         case pp::ParamType::Bool: {
-            auto *box = new QCheckBox(parent);
-            r.editor = box;
-            QObject::connect(box, &QCheckBox::toggled, q, [this, key = p.key](bool on) {
+            // 2-34/2-35：布尔行 = 「勾选框→标签」紧凑同行（标签轨留空，网格不错位）
+            const formkit::CheckRow row =
+                formkit::check_row(area, QString(), label_text,
+                                   QStringLiteral("pp-param-") + QString::fromStdString(p.key));
+            r.row = row.row;
+            r.label = row.label;
+            r.editor = row.box;
+            row.box->setToolTip(tip);
+            QObject::connect(row.box, &formkit::CheckBox::toggled, q, [this, key = p.key](bool on) {
                 if (syncing)
                     return;
                 values[key] = on;
@@ -454,9 +674,15 @@ struct ParamForm::Impl {
             break;
         }
         case pp::ParamType::Enum: {
-            auto *combo = new QComboBox(parent);
-            for (const auto &choice : p.choices)
-                combo->addItem(QString::fromStdString(choice.first));
+            auto *combo = new QComboBox(area);
+            combo->setObjectName(QStringLiteral("pp-param-") + QString::fromStdString(p.key));
+            for (const auto &choice : p.choices) {
+                // 修 2-37：枚举的 "auto" 档同义显示为「自动」（显示面；值仍走 choices 的原值）
+                const QString name =
+                    choice.first == "auto" ? tr_c("自动") : QString::fromStdString(choice.first);
+                combo->addItem(name);
+            }
+            combo->setToolTip(tip);
             r.editor = combo;
             const pp::ParamDef *def = &p;
             QObject::connect(
@@ -467,24 +693,29 @@ struct ParamForm::Impl {
                     refresh();
                     emit q->changed();
                 });
+            const formkit::Row row = formkit::frow(area, label_text, combo, width);
+            r.row = row.row;
+            r.label = row.label;
             break;
         }
         }
-        r.editor->setObjectName(QStringLiteral("pp-param-") + QString::fromStdString(p.key));
-        r.editor->setToolTip(tip);
-
-        QFormLayout *form = p.advanced ? adv_form : core_form;
-        form->addRow(r.label, r.editor);
+        r.row->setObjectName(QStringLiteral("pp-param-row-") + QString::fromStdString(p.key));
+        elide_track_label(r.label);
+        if (r.label != nullptr) {
+            r.label->setObjectName(QStringLiteral("pp-label-") + QString::fromStdString(p.key));
+            r.label->setToolTip(tip);
+            r.label->setContextMenuPolicy(Qt::CustomContextMenu);
+            // 条 5：标签右键菜单 → 重置为默认
+            QObject::connect(r.label, &QWidget::customContextMenuRequested, q,
+                             [this, label = r.label, key = r.key](const QPoint &pos) {
+                                 QMenu menu;
+                                 QAction *reset = menu.addAction(ParamForm::tr("重置为默认"));
+                                 if (menu.exec(label->mapToGlobal(pos)) == reset)
+                                     reset_to_default(key);
+                             });
+        }
+        box->addWidget(r.row);
         rows.push_back(r);
-
-        // 条 5：标签右键菜单 → 重置为默认
-        QObject::connect(r.label, &QWidget::customContextMenuRequested, q,
-                         [this, label = r.label, key = r.key](const QPoint &pos) {
-                             QMenu menu;
-                             QAction *reset = menu.addAction(ParamForm::tr("重置为默认"));
-                             if (menu.exec(label->mapToGlobal(pos)) == reset)
-                                 reset_to_default(key);
-                         });
     }
 
     // ---------------------------------------------------------------- 值 / 谓词
@@ -522,10 +753,10 @@ struct ParamForm::Impl {
         build_rows();
     }
 
-    // 条 4：谓词重算 —— apply_locks → 强制值写回 → 控件同步 → 可见性/●
+    // 条 4：谓词重算 —— apply_locks → 强制值写回 → 控件同步 → 可见性/改值标记
     void refresh() {
         values[kLosslessKey] = sel.lossless;
-        // §9.1：名为 "lossless" 的参数没有行，其值由顶部"无损"复选框独占（heif/avif 内省参数）
+        // §9.1：名为 "lossless" 的参数没有行，其值由"无损"复选框独占（heif/avif 内省参数）
         if (const pp::TechDef *t = tech(); t && find_param(*t, kLosslessParamKey))
             values[kLosslessParamKey] = sel.lossless;
         pp::apply_locks(*fmt, sel.backend, sel.tech, sel.lossless, values);
@@ -579,7 +810,7 @@ struct ParamForm::Impl {
                     break;
                 case pp::ParamType::Bool:
                     if (const bool *b = std::get_if<bool>(&v))
-                        static_cast<QCheckBox *>(r.editor)->setChecked(*b);
+                        static_cast<formkit::CheckBox *>(r.editor)->setChecked(*b);
                     break;
                 case pp::ParamType::Enum: {
                     int idx = -1;
@@ -610,15 +841,24 @@ struct ParamForm::Impl {
                         key.contains(filter, Qt::CaseInsensitive); // 条 3：包含过滤
             }
             r.shown = shown;
-            QFormLayout *form = r.advanced ? adv_form : core_form;
-            if (form)
-                form->setRowVisible(r.label, shown);
+            if (r.row != nullptr)
+                r.row->setVisible(shown);
 
             const auto it = values.find(r.key);
             const bool deviates = it != values.end() && it->second.index() == r.def->def.index() &&
                                   !(it->second == r.def->def); // 条 5：同类型比较
-            r.label->setText((deviates ? QStringLiteral("● ") : QString()) +
-                             QString::fromStdString(r.def->label));
+            // 条 5 / 裁定 A8：改值标记 = 强调边框 + 强调色字（theme::set_mod），无 `●` 字形。
+            // 布尔行（自绘勾选框不吃 QSS，且无值文本可着色）与锁定项不打标记：该格式的改值
+            // 总量由格式参数卡头的「已改 N」中性胶囊承担（§7.2/1-24）。
+            if (r.def->type != pp::ParamType::Bool && r.editor != nullptr)
+                theme::set_mod(r.editor, deviates && !r.locked);
+        }
+        // 子分组标题：本组无可见行 → 一并隐藏（过滤后不留空标题）
+        for (const auto &[group, header] : subgroup_headers) {
+            const bool any = std::any_of(rows.begin(), rows.end(), [group](const Row &r) {
+                return r.advanced && r.shown && static_cast<int>(r.subgroup) == group;
+            });
+            header->setVisible(any);
         }
     }
 
@@ -782,6 +1022,41 @@ struct ParamForm::Impl {
                 return r.shown;
         return false;
     }
+
+    // ---------------------------------------------------------------- 主题
+
+    void set_tokens(const theme::Tokens &t) {
+        tokens = t;
+        if (lossless_check != nullptr)
+            lossless_check->set_tokens(t);
+        for (Row &r : rows) {
+            if (r.def != nullptr && r.def->type == pp::ParamType::Bool && r.editor != nullptr)
+                static_cast<formkit::CheckBox *>(r.editor)->set_tokens(t);
+        }
+        set_fold_icon(adv_toggle, adv_toggle != nullptr && adv_toggle->isChecked());
+        if (adv_rule != nullptr)
+            adv_rule->setStyleSheet(QStringLiteral("background: ") + theme::css_color(t.line) +
+                                    QStringLiteral("; border: none;"));
+        if (adv_search != nullptr)
+            adv_search->setStyleSheet(
+                QStringLiteral("background: ") + theme::css_color(t.control) +
+                QStringLiteral("; border: 1px solid ") + theme::css_color(t.control_bd) +
+                QStringLiteral("; border-radius: ") +
+                QString::number(theme::Metrics::control_radius) + QStringLiteral("px; color: ") +
+                theme::css_color(t.text) + QStringLiteral("; padding: 0 8px; min-height: ") +
+                QString::number(theme::Metrics::input_h - 2) + QStringLiteral("px;"));
+        if (cross_error != nullptr)
+            cross_error->setStyleSheet(QStringLiteral("color: ") + theme::css_color(t.err) +
+                                       QStringLiteral(";"));
+    }
+
+    void build_cross_error() {
+        cross_error = new QLabel(q);
+        cross_error->setObjectName(QStringLiteral("pp-cross-error"));
+        cross_error->setTextFormat(Qt::PlainText);
+        cross_error->setWordWrap(false);
+        cross_error->setVisible(false);
+    }
 };
 
 // ---------------------------------------------------------------- ParamForm
@@ -801,5 +1076,7 @@ pp::ParamSet ParamForm::values() const { return impl_->public_values(); }
 void ParamForm::set_values(const pp::ParamSet &s) { impl_->set_values(s); }
 
 bool ParamForm::is_param_visible(const std::string &key) const { return impl_->is_visible(key); }
+
+void ParamForm::set_tokens(const theme::Tokens &tokens) { impl_->set_tokens(tokens); }
 
 } // namespace pp::ui

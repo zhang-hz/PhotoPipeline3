@@ -67,6 +67,11 @@ public:
 
     // ---- PP-FROZEN(0.3.0) 追加面（M4-T13）----
     void set_tokens(const theme::Tokens &tokens);
+    // ---- PP-FROZEN(0.3.0) 追加面（M5-T8 · §7.2 预设与预估卡）----
+    // 预估卡的**输入面**：勾选文件数（MainWindow 在 refresh_status 里喂入；页面据此算
+    // 「预计输出 = 勾选数 × 已选格式数」，其余预估项无实测依据 → 中性空态）。不发信号
+    // （只在页面内部刷新读数），故不会与 refresh_status 形成回环。
+    void set_input_count(int files);
     void set_preset_list(const std::vector<std::pair<QString, QString>> &presets);
     void set_current_preset(const QString &path); // 高亮当前预设（不发信号）
     QString output_template() const;

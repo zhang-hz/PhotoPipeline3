@@ -1025,6 +1025,9 @@ struct MainWindow::Impl {
     // M4-T12 元数据页自检（§5.2：生效值显示与写入一致性 + .mod + 多选小表 + 无选中提示 + 地图跟随）
     void smoke_probe_meta(const QString &shots_dir);
     MetaSelectionItem meta_probe_item(const QString &path); // 探针的跟随项快照（oiio probe 补摘要）
+    // M5-T8（C7）输出页几何值表（§7.2 四卡组 + R1–R4 + 修 2-05/2-07/2-10/2-11/2-13/2-14/2-15/
+    // 2-16/2-21/2-24/2-25/2-33 + 裁定 A6/A7/A8）
+    void smoke_probe_output_geometry();
     // M4-T13 预设卡（页面信号 → 单一持有者：I/O + rules 合并 + 列表刷新）
     void refresh_preset_card();
     void load_preset_file(const QString &path);
@@ -2030,6 +2033,10 @@ void MainWindow::refresh_status() {
     Impl &d = *impl_;
     const std::size_t count = d.model->size();
     const std::size_t checked = d.model->checked_count();
+    // M5-T8：输出页「预设与预估」卡的输入面（预计输出 = 勾选数 × 已选格式数）。数据源 = 文件模型
+    // 的勾选数（与底栏「已选 N / M」同一处读数）；set_input_count 不发信号 → 无回环。
+    if (d.page_output != nullptr)
+        d.page_output->set_input_count(static_cast<int>(checked));
     const std::size_t unsupported = d.model->unsupported_count();
     const std::size_t exceptions = d.model->exception_count();
     const QString reason = d.page_output->ready_to_start();
@@ -5898,6 +5905,7 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
     smoke_probe_theme();
     smoke_probe_preview();           // M4-T10：预览面板（翻图/缩放/徽标/热键接线位）
     smoke_probe_preview_geometry();  // M5-T6（C7）：画布底/空态/角标/缩放条/衬垫/最近邻（§8）
+    smoke_probe_output_geometry();   // M5-T8（C7）：输出页四卡组几何（§7.2 逐行 / R1–R4）
     smoke_probe_filelist();          // M4-T11：勾选/正交搜索/分组节（§3.6 roles + §6.2）
     smoke_probe_filelist_geometry(); // M5-T5（C7）：行/工具行几何 + 空态 + 选中面（§7.5/修 3-17）
     smoke_probe_meta(shots_dir);     // M4-T12：生效值显示/写入一致性 + 多选小表 + 地图跟随（§5.2）
@@ -6481,6 +6489,518 @@ MetaSelectionItem MainWindow::Impl::meta_probe_item(const QString &path) {
     item.probe_ok = probe.error.empty();
     item.file_size = QFileInfo(path).size();
     return item;
+}
+
+// ---------------------------------------------------------------------------
+// M5-T8（W-G3 · §7.2 输出页 / §5 R1–R4 / 评审 2-05…2-42 / 裁定 A6/A7/A8）—— C7 几何值表
+//   磁贴 2×4 + 对勾位零形变（选中不改宽、不改 sizeHint）｜六行一义 pitch 28（位深/技术/无损/
+//   编码努力/视觉距离/高级参数，行内只有一个标签）｜标签轨 80 且组内外同轴（2-32）｜
+//   spin 只取 88·160 两档（2-33）｜范围入 10px 注释（2-18）｜魔法值「自动」（2-37）｜
+//   高级参数折叠行默认折叠 + 子分组 + 搜索行（2-19/2-31/2-39/2-40/2-41）｜
+//   互斥置灰（仅元数据：磁贴区 + 格式参数卡禁用，模式分段自身仍可用）｜
+//   模板示例行单行且无 "<根>"（2-14/2-15）｜卡头计数 = 中性胶囊（2-07）｜按钮 26（A7）｜
+//   页签 = 格式名 · 位深（2-21）｜预设 placeholder + 禁用原因（2-24/2-25）｜
+//   根目录 placeholder（2-10）/色彩目标 tooltip（2-16）/模板 tooltip（2-13）。
+// ---------------------------------------------------------------------------
+void MainWindow::Impl::smoke_probe_output_geometry() {
+    PageOutput page;
+    page.set_tokens(tokens);
+    page.resize(theme::Metrics::right_width, theme::Metrics::calibrated_h);
+    page.show();
+    page.select_format(QStringLiteral("jxl"));
+    pump(150);
+
+    int checked = 0;
+    QStringList bad;
+    const auto expect = [&checked, &bad](const char *name, bool ok, const QString &detail) {
+        ++checked;
+        if (!ok)
+            bad << QStringLiteral("%1(%2)").arg(QString::fromLatin1(name), detail);
+    };
+    const auto row_of = [&page](const QString &name) { return page.findChild<QWidget *>(name); };
+    const auto row_x = [&page](const QString &name) {
+        QWidget *row = page.findChild<QWidget *>(name);
+        return row != nullptr ? row->mapTo(&page, QPoint(0, 0)).x() : -1;
+    };
+    const auto row_label_x = [&page](const QString &name) {
+        QWidget *row = page.findChild<QWidget *>(name);
+        if (row == nullptr)
+            return -1;
+        const QString hook = QString::fromLatin1(theme::kFkLabel);
+        for (QLabel *label : row->findChildren<QLabel *>()) {
+            if (label->property(theme::kFkProperty).toString() == hook)
+                return label->mapTo(&page, QPoint(0, 0)).x();
+        }
+        return -1;
+    };
+    const auto row_note = [&page](const QString &name) {
+        QWidget *row = page.findChild<QWidget *>(name);
+        if (row == nullptr)
+            return QString();
+        const QString hook = QString::fromLatin1(theme::kFkNote);
+        for (QLabel *label : row->findChildren<QLabel *>()) {
+            if (label->property(theme::kFkProperty).toString() == hook)
+                return label->text();
+        }
+        return QString();
+    };
+    const auto full_text = [&page](const QString &name) {
+        const auto *widget = page.findChild<QLabel *>(name);
+        if (widget == nullptr)
+            return QString();
+        const QVariant value = widget->property("ppFullText");
+        return value.isValid() ? value.toString() : widget->text();
+    };
+
+    // ---- (a) 磁贴 2×4 + 对勾位零形变 + 未选中 ≠ 禁用（修 2-05）----
+    {
+        // formkit 自绘控件无 Q_OBJECT（不走 moc）→ 按 objectName 取 + 静态下转（单元确定性）
+        QList<formkit::CheckableCard *> tiles;
+        for (const char *id : {"jpeg", "webp", "jxl", "heif", "avif", "png", "tiff", "bmp"}) {
+            if (QWidget *widget = page.findChild<QWidget *>(QStringLiteral("pp-format-") +
+                                                            QString::fromLatin1(id))) {
+                tiles.append(static_cast<formkit::CheckableCard *>(widget));
+            }
+        }
+        QList<int> xs;
+        QList<int> ys;
+        for (formkit::CheckableCard *tile : tiles) {
+            const QPoint pos = tile->mapTo(&page, QPoint(0, 0));
+            xs.append(pos.x());
+            ys.append(pos.y());
+        }
+        std::sort(xs.begin(), xs.end());
+        xs.erase(std::unique(xs.begin(), xs.end()), xs.end());
+        std::sort(ys.begin(), ys.end());
+        ys.erase(std::unique(ys.begin(), ys.end()), ys.end());
+        int deform_ok = 0;
+        int enabled_tiles = 0;
+        for (formkit::CheckableCard *tile : tiles) {
+            const QSize size_before = tile->size();
+            const QSize hint_before = tile->sizeHint();
+            const QPoint pos_before = tile->mapTo(&page, QPoint(0, 0));
+            tile->setChecked(!tile->isChecked());
+            pump(40);
+            if (tile->size() == size_before && tile->sizeHint() == hint_before &&
+                tile->mapTo(&page, QPoint(0, 0)) == pos_before)
+                ++deform_ok;
+            tile->setChecked(!tile->isChecked()); // 还原（jxl 单选）
+            pump(40);
+            if (tile->isEnabled())
+                ++enabled_tiles;
+        }
+        expect("tiles-2x4", tiles.size() == 8 && ys.size() == 2 && xs.size() == 4,
+               QStringLiteral("tiles=%1 rows=%2 cols=%3")
+                   .arg(tiles.size())
+                   .arg(ys.size())
+                   .arg(xs.size()));
+        expect("tile-zero-deform", deform_ok == tiles.size(),
+               QStringLiteral("ok=%1/%2").arg(deform_ok).arg(tiles.size()));
+        expect("tile-normal", enabled_tiles == tiles.size(), // 未选中 = 正常对比度（非禁用态）
+               QStringLiteral("enabled=%1/%2").arg(enabled_tiles).arg(tiles.size()));
+    }
+    page.select_format(QStringLiteral("jxl"));
+    pump(60);
+
+    // ---- (b) 六行一义：pitch 28 + 行内单标签 + 顺序（§7.2 逐行）+ 分文件夹行语法（修 2-11）----
+    const QStringList six_rows = {
+        QStringLiteral("pp-bitdepth-row"),       QStringLiteral("pp-tech-row"),
+        QStringLiteral("pp-lossless-row"),       QStringLiteral("pp-param-row-effort"),
+        QStringLiteral("pp-param-row-distance"), QStringLiteral("pp-advanced-row")};
+    {
+        int seen = 0;
+        int pitch_bad = 0;
+        int multi_label = 0;
+        bool ordered = true;
+        int prev_y = -1;
+        const QString label_hook = QString::fromLatin1(theme::kFkLabel);
+        for (const QString &name : six_rows) {
+            QWidget *row = row_of(name);
+            if (row == nullptr || !row->isVisible())
+                continue;
+            ++seen;
+            if (row->height() != formkit::kRowPitch)
+                ++pitch_bad;
+            int labels = 0;
+            for (QLabel *label : row->findChildren<QLabel *>())
+                if (label->property(theme::kFkProperty).toString() == label_hook)
+                    ++labels;
+            if (labels > 1)
+                ++multi_label; // R3：一行只有一个标签
+            const int y = row->mapTo(&page, QPoint(0, 0)).y();
+            if (prev_y >= 0 && y <= prev_y)
+                ordered = false;
+            prev_y = y;
+        }
+        expect("six-rows", seen == 6 && pitch_bad == 0 && ordered && multi_label == 0,
+               QStringLiteral("seen=%1 pitch-bad=%2 ordered=%3 multi-label=%4")
+                   .arg(seen)
+                   .arg(pitch_bad)
+                   .arg(ordered ? 1 : 0)
+                   .arg(multi_label));
+        // 全部行（两卡 + 页签内）pitch 28
+        QStringList all_rows = six_rows;
+        all_rows << QStringLiteral("pp-mode-row") << QStringLiteral("pp-root-row")
+                 << QStringLiteral("pp-conflict-row") << QStringLiteral("pp-color-row")
+                 << QStringLiteral("pp-split-row") << QStringLiteral("pp-template-row")
+                 << QStringLiteral("pp-example-row") << QStringLiteral("pp-preset-row");
+        int rows_seen = 0;
+        int rows_bad = 0;
+        for (const QString &name : all_rows) {
+            QWidget *row = row_of(name);
+            if (row == nullptr || !row->isVisible())
+                continue;
+            ++rows_seen;
+            if (row->height() != formkit::kRowPitch)
+                ++rows_bad;
+        }
+        expect("row-pitch", rows_seen >= 14 && rows_bad == 0,
+               QStringLiteral("rows=%1 bad=%2").arg(rows_seen).arg(rows_bad));
+        // 标签轨 80（R2）
+        int labels_seen = 0;
+        int labels_bad = 0;
+        for (QLabel *label : page.findChildren<QLabel *>()) {
+            if (label->property(theme::kFkProperty).toString() != label_hook)
+                continue;
+            ++labels_seen;
+            if (label->width() != formkit::kLabelW)
+                ++labels_bad;
+        }
+        expect("label-track", labels_seen >= 12 && labels_bad == 0,
+               QStringLiteral("labels=%1 bad=%2").arg(labels_seen).arg(labels_bad));
+        // 分文件夹行：标签归左列、控件在字段轨（修 2-11）
+        const int split_label_x = row_label_x(QStringLiteral("pp-split-row"));
+        const auto *split_switch = page.findChild<QWidget *>(QStringLiteral("pp-split-switch"));
+        const int split_x =
+            split_switch != nullptr ? split_switch->mapTo(&page, QPoint(0, 0)).x() : -1;
+        expect("split-row",
+               split_label_x == row_x(QStringLiteral("pp-split-row")) &&
+                   split_x >= split_label_x + formkit::kLabelW + formkit::kColGap,
+               QStringLiteral("label-x=%1 switch-x=%2").arg(split_label_x).arg(split_x));
+    }
+
+    // ---- (c) 数值控件 88·160 两档（2-33）+ 范围 10px 注释（2-18）----
+    {
+        const auto *effort = page.findChild<QSpinBox *>(QStringLiteral("pp-param-effort"));
+        const auto *distance =
+            page.findChild<QDoubleSpinBox *>(QStringLiteral("pp-param-distance"));
+        const QString effort_note = row_note(QStringLiteral("pp-param-row-effort"));
+        const QString distance_note = row_note(QStringLiteral("pp-param-row-distance"));
+        expect("spin-core",
+               effort != nullptr && effort->width() == formkit::kFieldStd && distance != nullptr &&
+                   distance->width() == formkit::kFieldStd,
+               QStringLiteral("effort=%1 distance=%2 want=%3")
+                   .arg(effort != nullptr ? effort->width() : -1)
+                   .arg(distance != nullptr ? distance->width() : -1)
+                   .arg(formkit::kFieldStd));
+        expect("range-note",
+               effort_note == QStringLiteral("1–10") && distance_note == QStringLiteral("0.0–25.0"),
+               QStringLiteral("effort=\"%1\" distance=\"%2\"").arg(effort_note, distance_note));
+    }
+
+    int groups_jxl = 0; // 打印用：jxl 页签的高级区子分组数（jpeg 页签只有 1 组）
+    // ---- (d) 高级参数：默认折叠 → 展开后 搜索行 + 子分组 + 88 档 spin + 同轴 + 魔法值 ----
+    //      （2-19/2-31/2-32/2-37/2-39/2-40/2-41/2-42）
+    {
+        auto *toggle = page.findChild<QToolButton *>(QStringLiteral("pp-advanced-toggle"));
+        auto *host = row_of(QStringLiteral("pp-advanced-area"));
+        const bool folded =
+            toggle != nullptr && host != nullptr && !host->isVisible() && !toggle->isChecked();
+        if (toggle != nullptr)
+            toggle->setChecked(true);
+        pump(80);
+        auto *search = page.findChild<QLineEdit *>(QStringLiteral("pp-advanced-search"));
+        int groups = 0;
+        if (host != nullptr) {
+            for (QWidget *widget : host->findChildren<QWidget *>()) {
+                if (widget->objectName().startsWith(QStringLiteral("pp-advanced-group-")))
+                    ++groups;
+            }
+        }
+        expect("advanced-fold",
+               folded && host != nullptr && host->isVisible() && toggle != nullptr &&
+                   toggle->text().contains(QStringLiteral("项")),
+               QStringLiteral("folded=%1 expanded=%2 summary=\"%3\"")
+                   .arg(folded ? 1 : 0)
+                   .arg(host != nullptr && host->isVisible() ? 1 : 0)
+                   .arg(toggle != nullptr ? toggle->text() : QString()));
+        expect("advanced-search",
+               search != nullptr && search->placeholderText().endsWith(QStringLiteral("…")) &&
+                   !search->toolTip().isEmpty(),
+               QStringLiteral("ph=\"%1\"")
+                   .arg(search != nullptr ? search->placeholderText() : QString()));
+        groups_jxl = groups;
+        expect("advanced-groups", groups >= 3, QStringLiteral("groups=%1").arg(groups));
+        // 组内数值 = 短 88（2-33）；组内外标签列同轴（2-32）
+        int adv_spins = 0;
+        int adv_bad = 0;
+        if (host != nullptr) {
+            for (QSpinBox *spin : host->findChildren<QSpinBox *>()) {
+                ++adv_spins;
+                if (spin->width() != formkit::kFieldShort)
+                    ++adv_bad;
+            }
+            for (QDoubleSpinBox *spin : host->findChildren<QDoubleSpinBox *>()) {
+                ++adv_spins;
+                if (spin->width() != formkit::kFieldShort)
+                    ++adv_bad;
+            }
+        }
+        expect("spin-group", adv_spins >= 2 && adv_bad == 0,
+               QStringLiteral("spins=%1 bad=%2 want=%3")
+                   .arg(adv_spins)
+                   .arg(adv_bad)
+                   .arg(formkit::kFieldShort));
+        expect("label-axis",
+               row_label_x(QStringLiteral("pp-param-row-effort")) >= 0 &&
+                   row_label_x(QStringLiteral("pp-param-row-effort")) ==
+                       row_label_x(QStringLiteral("pp-param-row-epf")),
+               QStringLiteral("core-x=%1 adv-x=%2")
+                   .arg(row_label_x(QStringLiteral("pp-param-row-effort")))
+                   .arg(row_label_x(QStringLiteral("pp-param-row-epf"))));
+        // 魔法值「自动」（2-37）：epf（范围下端 = -1 = 编码器自选）
+        auto *epf = page.findChild<QSpinBox *>(QStringLiteral("pp-param-epf"));
+        const QString epf_default = epf != nullptr ? epf->text() : QString();
+        if (epf != nullptr)
+            epf->setValue(-1);
+        pump(60);
+        expect("magic-auto",
+               epf != nullptr && epf->text() == QStringLiteral("自动") &&
+                   epf_default != QStringLiteral("自动"),
+               QStringLiteral("default=\"%1\" magic=\"%2\"")
+                   .arg(epf_default)
+                   .arg(epf != nullptr ? epf->text() : QString()));
+        // 改值 → 卡头中性 pill 计数（A8：无 ● 字形；计数由 pill 承担）
+        const auto *changed_label =
+            page.findChild<QLabel *>(QStringLiteral("pp-format-changed-pill"));
+        const auto *changed_pill = changed_label != nullptr
+                                       ? static_cast<const formkit::PillBadge *>(changed_label)
+                                       : nullptr;
+        expect("changed-pill",
+               changed_pill != nullptr && changed_pill->isVisible() &&
+                   changed_pill->text() == QStringLiteral("已改 1"),
+               QStringLiteral("text=\"%1\" visible=%2")
+                   .arg(changed_pill != nullptr ? changed_pill->text() : QString())
+                   .arg(changed_pill != nullptr && changed_pill->isVisible() ? 1 : 0));
+        if (toggle != nullptr)
+            toggle->setChecked(false);
+        pump(60);
+    }
+
+    // ---- (e) 模板示例行：单行、统一 $ 语法（无 "<根>"）（2-13/2-14/2-15）----
+    {
+        const auto *edit = page.findChild<QLineEdit *>(QStringLiteral("pp-template-edit"));
+        const auto *example = page.findChild<QLabel *>(QStringLiteral("pp-template-example"));
+        const QString text = full_text(QStringLiteral("pp-template-example"));
+        expect("template-example",
+               edit != nullptr && example != nullptr && example->isVisible() &&
+                   !text.contains(QLatin1Char('<')) && text.contains(QStringLiteral("/jxl/")) &&
+                   example->height() <= formkit::kRowPitch - 8,
+               QStringLiteral("text=\"%1\" h=%2")
+                   .arg(text)
+                   .arg(example != nullptr ? example->height() : -1));
+        expect("template-tooltip",
+               edit != nullptr && edit->toolTip().contains(QStringLiteral("$format")) &&
+                   edit->toolTip().contains(QStringLiteral("$dir")),
+               QStringLiteral("tip=%1").arg(edit != nullptr && !edit->toolTip().isEmpty() ? 1 : 0));
+    }
+
+    // ---- (f) 卡头中性计数胶囊（2-07）+ 页签 = 格式名 · 位深（2-21）+ 预设
+    // placeholder（2-24/2-25）
+    //      + 根目录 placeholder（2-10）+ 色彩目标 tooltip（2-16）+ 按钮 26（A7）----
+    {
+        const auto *format_label = page.findChild<QLabel *>(QStringLiteral("pp-format-pill"));
+        const auto *format_pill = format_label != nullptr
+                                      ? static_cast<const formkit::PillBadge *>(format_label)
+                                      : nullptr;
+        expect("card-pill",
+               format_pill != nullptr && format_pill->tone() == formkit::PillBadge::Tone::Neutral &&
+                   format_pill->text().startsWith(QStringLiteral("已选")),
+               QStringLiteral("format=\"%1\"")
+                   .arg(format_pill != nullptr ? format_pill->text() : QString()));
+        const auto *tabs = page.findChild<QTabWidget *>(QStringLiteral("pp-format-tabs"));
+        const QString tab0 = tabs != nullptr && tabs->count() > 0 ? tabs->tabText(0) : QString();
+        expect("tab-label",
+               tab0.contains(QStringLiteral(" · ")) && tab0.endsWith(QStringLiteral("位")),
+               QStringLiteral("tab0=\"%1\"").arg(tab0));
+        const auto *root_edit = page.findChild<QLineEdit *>(QStringLiteral("pp-out-root-edit"));
+        const auto *color = page.findChild<QComboBox *>(QStringLiteral("pp-color-combo"));
+        expect(
+            "placeholders",
+            root_edit != nullptr && !root_edit->placeholderText().isEmpty() && color != nullptr &&
+                color->toolTip().contains(QStringLiteral("ICC")),
+            QStringLiteral("root-ph=\"%1\" color-tip=%2")
+                .arg(root_edit != nullptr ? root_edit->placeholderText() : QString())
+                .arg(color != nullptr && color->toolTip().contains(QStringLiteral("ICC")) ? 1 : 0));
+        const auto *preset = page.findChild<QComboBox *>(QStringLiteral("pp-preset-combo"));
+        const auto *save = page.findChild<QPushButton *>(QStringLiteral("pp-preset-save"));
+        const auto *remove = page.findChild<QPushButton *>(QStringLiteral("pp-preset-delete"));
+        expect("preset-placeholder",
+               preset != nullptr && preset->placeholderText() == QStringLiteral("未选择预设") &&
+                   save != nullptr && !save->isEnabled() && !save->toolTip().isEmpty() &&
+                   remove != nullptr && !remove->isEnabled(),
+               QStringLiteral("ph=\"%1\" save=%2 del=%3")
+                   .arg(preset != nullptr ? preset->placeholderText() : QString())
+                   .arg(save != nullptr && save->isEnabled() ? 1 : 0)
+                   .arg(remove != nullptr && remove->isEnabled() ? 1 : 0));
+        int btn_bad = 0;
+        for (const char *name : {"pp-browse-button", "pp-template-vars", "pp-preset-saveas",
+                                 "pp-preset-save", "pp-preset-delete"}) {
+            const auto *button = page.findChild<QPushButton *>(QString::fromLatin1(name));
+            if (button == nullptr || button->height() != theme::Metrics::btn_h)
+                ++btn_bad;
+        }
+        const auto *add_format = page.findChild<QToolButton *>(QStringLiteral("pp-add-format"));
+        if (add_format == nullptr || add_format->height() != theme::Metrics::btn_h)
+            ++btn_bad;
+        expect("btn-26", btn_bad == 0,
+               QStringLiteral("bad=%1 want=%2").arg(btn_bad).arg(theme::Metrics::btn_h));
+    }
+
+    // ---- (g) 预估 kv（④）：输入面 → 预计输出 = 勾选数 × 格式数 ----
+    {
+        page.set_input_count(12);
+        pump(60);
+        const QString one = full_text(QStringLiteral("pp-est-output"));
+        QWidget *png_widget = page.findChild<QWidget *>(QStringLiteral("pp-format-png"));
+        auto *png =
+            png_widget != nullptr ? static_cast<formkit::CheckableCard *>(png_widget) : nullptr;
+        if (png != nullptr)
+            png->setChecked(true);
+        pump(80);
+        const QString two = full_text(QStringLiteral("pp-est-output"));
+        const QString disk = full_text(QStringLiteral("pp-est-disk"));
+        expect("estimate",
+               one == QStringLiteral("12 个") && two == QStringLiteral("24 个") &&
+                   !full_text(QStringLiteral("pp-est-size")).isEmpty() && !disk.isEmpty(),
+               QStringLiteral("one=\"%1\" two=\"%2\" disk=\"%3\"").arg(one, two, disk));
+        if (png != nullptr)
+            png->setChecked(false);
+        pump(80);
+    }
+    page.select_format(QStringLiteral("jxl"));
+    pump(60);
+
+    // ---- (h) 互斥置灰：仅元数据 → 磁贴区 + 格式参数卡禁用，模式分段仍可用（D7 语义零改动）----
+    {
+        auto *tiles_host = page.findChild<QWidget *>(QStringLiteral("pp-tiles"));
+        QWidget *param_card = nullptr;
+        for (QFrame *card : page.findChildren<QFrame *>(QStringLiteral("pp-card"))) {
+            if (card->findChild<QTabWidget *>(QStringLiteral("pp-format-tabs")) != nullptr)
+                param_card = card;
+        }
+        auto *mode_seg = page.findChild<QWidget *>(QStringLiteral("pp-output-seg"));
+        auto *note = page.findChild<QLabel *>(QStringLiteral("pp-format-note"));
+        page.set_metadata_only(true);
+        pump(80);
+        const bool on = page.metadata_only();
+        const bool disabled = tiles_host != nullptr && !tiles_host->isEnabled() &&
+                              param_card != nullptr && !param_card->isEnabled() &&
+                              mode_seg != nullptr && mode_seg->isEnabled() && note != nullptr &&
+                              note->isVisible();
+        page.set_metadata_only(false);
+        pump(80);
+        const bool restored = !page.metadata_only() && tiles_host != nullptr &&
+                              tiles_host->isEnabled() && param_card != nullptr &&
+                              param_card->isEnabled() && note != nullptr && !note->isVisible();
+        expect("metadata-only", on && disabled && restored,
+               QStringLiteral("on=%1 off=%2 disabled=%3 restored=%4")
+                   .arg(on ? 1 : 0)
+                   .arg(page.metadata_only() ? 1 : 0)
+                   .arg(disabled ? 1 : 0)
+                   .arg(restored ? 1 : 0));
+    }
+
+    // ---- (j) 预设卡主次（修 2-25/2-26）：给一份预设并选中 → 保存/删除启用，且保存为**实心
+    //      accent 主按钮**（R4 主按钮实心 acc + acc-on 字）----
+    {
+        auto *save = page.findChild<QPushButton *>(QStringLiteral("pp-preset-save"));
+        auto *remove = page.findChild<QPushButton *>(QStringLiteral("pp-preset-delete"));
+        page.set_preset_list(
+            {{QStringLiteral("/tmp/m5t8-smoke.json"), QStringLiteral("m5t8 冒烟预设")}});
+        page.set_current_preset(QStringLiteral("/tmp/m5t8-smoke.json"));
+        pump(80);
+        const auto color_distance = [](const QImage &image, const QColor &want) {
+            if (image.isNull())
+                return 1e9;
+            int best = 1 << 30;
+            for (int y = 0; y < image.height(); ++y) {
+                for (int x = 0; x < image.width(); ++x) {
+                    const QColor px = image.pixelColor(x, y);
+                    const int dr = px.red() - want.red();
+                    const int dg = px.green() - want.green();
+                    const int db = px.blue() - want.blue();
+                    best = std::min(best, dr * dr + dg * dg + db * db);
+                }
+            }
+            return best < (1 << 30) ? std::sqrt(double(best)) : 1e9;
+        };
+        const QImage shot = save != nullptr ? save->grab().toImage() : QImage();
+        const double accent_dist = color_distance(shot, tokens.accent);
+        const double ctl_dist = color_distance(shot, tokens.control_solid);
+        expect("preset-primary",
+               save != nullptr && save->isEnabled() && remove != nullptr && remove->isEnabled() &&
+                   accent_dist < 24.0 && accent_dist < ctl_dist,
+               QStringLiteral("save=%1 del=%2 accent=%.1f ctl=%.1f")
+                   .arg(save != nullptr && save->isEnabled() ? 1 : 0)
+                   .arg(remove != nullptr && remove->isEnabled() ? 1 : 0)
+                   .arg(accent_dist)
+                   .arg(ctl_dist));
+        page.set_preset_list({});
+        pump(40);
+    }
+
+    // ---- (i) 位深能力约束（JPEG 锁 8 位）：页签文案 + 行内注释 ----
+    {
+        page.select_format(QStringLiteral("jpeg"));
+        pump(120);
+        const auto *bitdepth = page.findChild<QComboBox *>(QStringLiteral("pp-bitdepth-combo"));
+        const auto *note = page.findChild<QLabel *>(QStringLiteral("pp-bitdepth-note-jpeg"));
+        const auto *tabs = page.findChild<QTabWidget *>(QStringLiteral("pp-format-tabs"));
+        const QString tab0 = tabs != nullptr && tabs->count() > 0 ? tabs->tabText(0) : QString();
+        expect("bitdepth-lock",
+               bitdepth != nullptr && bitdepth->count() == 1 &&
+                   bitdepth->currentText() == QStringLiteral("8 位") && note != nullptr &&
+                   note->text().contains(QStringLiteral("仅支持 8 位")) &&
+                   tab0.endsWith(QStringLiteral("8 位")),
+               QStringLiteral("count=%1 text=\"%2\" note=\"%3\" tab=\"%4\"")
+                   .arg(bitdepth != nullptr ? bitdepth->count() : -1)
+                   .arg(bitdepth != nullptr ? bitdepth->currentText() : QString())
+                   .arg(note != nullptr ? note->text() : QString())
+                   .arg(tab0));
+    }
+
+    const auto count_named = [&page](const QString &prefix, const QString &suffix) {
+        int n = 0;
+        for (QWidget *widget : page.findChildren<QWidget *>()) {
+            const QString name = widget->objectName();
+            if (name.startsWith(prefix) && (suffix.isEmpty() || name.endsWith(suffix)))
+                ++n;
+        }
+        return n;
+    };
+    const int rows_now = count_named(QStringLiteral("pp-"), QStringLiteral("-row"));
+    int tiles_now = 0;
+    for (const char *id : {"jpeg", "webp", "jxl", "heif", "avif", "png", "tiff", "bmp"}) {
+        if (page.findChild<QWidget *>(QStringLiteral("pp-format-") + QString::fromLatin1(id)) !=
+            nullptr) {
+            ++tiles_now;
+        }
+    }
+    const int groups_now = groups_jxl;
+    std::printf("UI-SMOKE output-geom: checked=%d bad=%d tiles=%d rows=%d six-rows=%d "
+                "spin-short=%d spin-std=%d groups=%d pills=%d %s\n",
+                checked, int(bad.size()), tiles_now, rows_now, 6, formkit::kFieldShort,
+                formkit::kFieldStd, groups_now,
+                count_named(QStringLiteral("pp-"), QStringLiteral("-pill")),
+                qUtf8Printable(bad.join(QLatin1Char(' '))));
+    std::fflush(stdout);
+    if (!bad.isEmpty()) {
+        smoke_fail(MainWindow::tr("输出页几何（§7.2/R1–R4/修 2-05…2-42）不符：%1")
+                       .arg(bad.join(QLatin1Char(' '))));
+    }
+    page.hide();
+    pump(80);
 }
 
 void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {

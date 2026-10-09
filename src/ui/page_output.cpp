@@ -1,45 +1,41 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// PhotoPipeline 0.3.0（M4-W3-T13）— 输出页：多格式磁贴 + 路径模板 + 预设 v2 + lossless 显式参数
+// PhotoPipeline — 输出页（0.3.0 多格式 + 路径模板 + 预设 v2；M5-T8 v6 化）
 //
-// 规格 = docs/v0.3.0-design.md §3.2/§3.3/§4.2/§9.3 + docs/v0.3.0-consensus.md §3.3（需求 3 展开）
-//        + 决策 D5/D6/D7 + docs/mockups/output-dark.html（**精确规格**）+
-//        output-dark.png（视觉参照）：
-//   ① 模式卡：转码 / 仅元数据 seg（D7：切仅元数据 → 格式多选区+格式参数卡禁用并出提示）；
-//   ② 输出格式卡：8 磁贴复选 + 头部「已选 N」计数徽标（多选 = 1 输入 → N 输出）；
-//   ③ 全局卡（**一行一字段 70px 统一轴**）：输出根目录 / 同名冲突 / 色彩目标 / 单行分文件夹开关 /
-//      路径模板（中性输入框；符号表与示例收进悬浮提示）+ 单行示例路径（实时、超长省略、不折行）；
-//   ④ 格式参数卡：QTabWidget 逐已选格式页签（页签内含位深 + ParamForm 原样嵌入；页签带改动计数
-//      徽标；右端「＋ 添加格式…」入口）；
-//   ⑤ 预设卡：预设下拉 + 保存 / 另存… / 删除（读取 = 下拉选中即载入；文件 I/O 与 rules 合并归
-//      MainWindow —— 单一持有者）。
+// 规格 = docs/qt-gui-design-spec.md（v6）§7.2 输出页卡表 + §5 表单体系 R1–R4 + §6 控件语义决策表
+//        + §8 状态/空态/反馈；视觉终稿 = docs/mockups-v2/output-{dark,light}.png + output.html；
+//        评审台账 = docs/gui-review-0.3.0.md（问题 2-01～2-43）；开发期裁定 =
+//        docs/m5-adjudications.md。
 //
-// 冻结契约（PP-FROZEN，见 page_output.h 的追加面说明）：既有方法签名/语义不变；本文件是
-// M1b 单格式页的 0.3.0 多格式实现，既有"冻结行为"逐条保留：
-//   * 位深可选集 = FormatDef.bitdepths ∩ probe_bitdepth_support()（heif/avif；探测按
-//     (format, backend) 进程内缓存一次）；
-//   * introspect_backends() 的结果按静态表顺序归一（avif 默认后端 = svt-av1）；
-//   * avif + alpha 预选 = **触发条件求值**（进入 avif / 后端 / 位深 / alpha 变化时求值），
-//     用户手动改过后端 → user_backend_override（set_batch_has_alpha 清除）；
-//   * 预设落值后同样求值；`select_format()` 是冒烟/走查钩子（收敛为单选 + 激活该页签）。
+// 四卡组（§7.2 逐行）：
+//   ① 输出格式：转换模式（分段：转码 | 仅元数据 + 说明行）｜ 8 格式磁贴
+//   2×4（formkit::CheckableCard：
+//      整卡可点 + 对勾位固定 → 选中零形变；未选中 = 正常对比度，禁用另设样式 —— 修 2-05）｜
+//      卡头计数 = **中性** pill「已选 N」（修 2-07；1-24/1-25 卡头右置一律中性胶囊）；
+//   ② 全局：根目录（flex + 浏览…，placeholder 说明留空行为 —— 修 2-10）｜ 同名冲突（下拉）｜
+//      色彩目标（下拉 + tooltip 解释专业词 —— 修 2-16）｜ 分文件夹（开关 = 立即生效布尔，
+//      标签归左列 —— 修 2-11；与路径模板的 $format 段联动）｜ 路径模板（flex + 变量表钮；
+//      变量表/示例进 tooltip —— 修 2-13；统一 $var 语法、不再混用 <根> —— 修 2-14）｜
+//      输出示例（注释行；自然语单行防溢出 —— 修 2-15）；
+//   ③ 格式参数：页签（格式名 · 位深 ｜ 右端「＋ 添加格式…」可用态 —— 修 2-21）+ 每页签一行一义
+//      六行（位深 ｜ 技术 ｜ 无损 ｜ 编码努力 ｜ 视觉距离 ｜ 高级参数）—— 行本体归
+//      formkit/ParamForm； 页签归属由结构本身表达（删常驻补丁文案 —— 修 2-22），卡头中性 pill =
+//      该格式「已改 N」计数；
+//   ④ 预设与预估：当前预设（下拉 placeholder「未选择预设」—— 修 2-24；另存… / 删除 / 保存，
+//      统一按钮规格 + 主操作居右 + 禁用原因进 tooltip —— 修 2-25/2-26）｜ 预估 kv 2 行。
 //
-// lossless（出口硬项）：无损 = **显式 schema 参数** `lossless`（src/core/params.h 的
-// kLosslessParamKey；format_tables.cpp 为 jxl vardct/modular、webp lossy/lossless 声明；
-// heif/avif 由 libheif 内省提供）+ 内部管道键 `__lossless`（谓词/编码器输入，0.3.0 保留）。
-// 本页的「无损」复选框（ParamForm 顶部，objectName pp-lossless-check）是两个承载面的控制点；
-// ParamForm/params 引擎保持两键同步 → 预设 v2 序列化含该键、config_base 下发的参数集含该键。
+// 冻结契约（PP-FROZEN，见 page_output.h 的追加面说明）：既有方法签名/语义不变；既有"冻结行为"逐条
+// 保留：位深可选集 = FormatDef.bitdepths ∩ probe_bitdepth_support()（heif/avif，按 (format,backend)
+// 进程内缓存）；introspect_backends() 结果按静态表顺序归一；avif + alpha 预选 = 触发条件求值
+// （用户手动改过后端 → user_backend_override）；预设落值后同样求值；select_format()
+// 仍是冒烟/走查钩子。
 //
-// 排版硬约束（§9.3）：表单行 = 70px 右对齐标签列 + 12px 列距 + 32px 行高（theme::Metrics）；
-// 全页禁折行（ElidedLabel 省略号 + 悬浮提示）；卡片间距 10px；objectName 全部 pp-* 钩子。
+// 依赖 M5-T8 追加面：`set_input_count(files)`（预估卡的输入面；MainWindow 在 refresh_status 里喂入
+// 勾选数，页面据此算「预计输出 = 勾选数 × 已选格式数」；**不发信号**，其余预估项无实测依据 →
+// 空态「—」+ tooltip 说明，见 M5-T8 报告的偏差登记）。
 //
-// 落地口径（设计未逐字给出处，逐条记账）：
-//   * **磁贴顺序**按 M4 原型（精确规格）：JPEG · WebP · JPEG XL · HEIF · AVIF · PNG · TIFF · BMP
-//     —— 取代 M1b 的单选版顺序（v0.2 的 8 格式集合不变；本页为 0.3.0 多选实现）；
-//   * 磁贴扩展名文本取自 `FormatDef.ext`（单源）：HEIF 显示 `.heic`（原型写 `.heif`）；
-//   * 页签计数徽标 = 该格式参数表中「值 ≠ 表内默认」的项数（QTabWidget 的页签文案承载，
-//     `label` 与数字间以 `·` 分隔；QSS 无法给页签内嵌药丸，故不做 .pill 造型）；
-//   * 路径模板示例用固定样例上下文（`2024/05` + `IMG_2731`，与原型 tooltip 同例），
-//     前缀 = 当前输出根目录（空 → `<根>`）；多格式时并排显示前两个格式的示例；
-//   * 「另存…」复用既有 PresetsDialog（冻结的命名清洗与落盘路径归 MainWindow）。
+// 排版硬约束（R1–R4）：行 pitch 28（formkit 行容器）；标签轨 80 右对齐；字段宽只取 88/160/flex；
+// 单位入 16px 槽、范围入 10px 注释；按钮高 26（A7：浏览/变量表/另存…/保存/删除/添加格式）；
+// 全页禁折行（ElidedLabel 省略号 + 悬浮提示）；objectName 全部 pp-* 钩子。
 #include "ui/page_output.h"
 
 #include <algorithm>
@@ -53,8 +49,8 @@
 #include <vector>
 
 #include <QAbstractButton>
+#include <QAction>
 #include <QApplication>
-#include <QButtonGroup>
 #include <QColor>
 #include <QComboBox>
 #include <QDir>
@@ -66,13 +62,13 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QPainter>
-#include <QPalette>
-#include <QPen>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSizePolicy>
+#include <QStorageInfo>
 #include <QTabBar>
 #include <QTabWidget>
 #include <QToolButton>
@@ -82,12 +78,15 @@
 #include "codecs/encoders.h"
 #include "core/fsops.h"
 #include "core/params.h"
-#include "ui/icons.h" // M5-T3：磁贴勾形 /「添加格式…」的 ＋ 一律矢量图标（C3）
+#include "ui/formkit.h" // C2：行构造器（R1–R4）+ 自绘控件（磁贴/开关/胶囊）
+#include "ui/icons.h"   // M5-T3：折叠插入符 /「添加格式…」的 ＋ 一律矢量图标（C3）
 #include "ui/paramform.h"
 #include "ui/theme.h"
 
 namespace pp::ui {
 namespace {
+
+using formkit::FieldWidth;
 
 // ---------------------------------------------------------------- 格式按钮表
 
@@ -96,13 +95,13 @@ struct FormatEntry {
     const char *label;
 };
 
-// M4 原型 output-dark.html 的磁贴网格顺序（4 列行优先，§9.4「原型 = 精确规格」）
+// v6 原型（mockups-v2/output-dark.html）的磁贴网格顺序（4 列行优先）
 const FormatEntry kFormats[] = {
     {"jpeg", "JPEG"}, {"webp", "WebP"}, {"jxl", "JPEG XL"}, {"heif", "HEIF"},
     {"avif", "AVIF"}, {"png", "PNG"},   {"tiff", "TIFF"},   {"bmp", "BMP"},
 };
 constexpr int kFormatCount = static_cast<int>(sizeof(kFormats) / sizeof(kFormats[0]));
-constexpr int kFormatColumns = 4;
+constexpr int kFormatColumns = 4; // 2×4（§7.2）
 
 // §2.9.2：逐格式高质量档默认位深
 int default_bitdepth(const std::string &id) {
@@ -276,6 +275,21 @@ int color_to_index(pp::ColorTarget t) {
     }
 }
 
+// 人类可读容量（剩余磁盘读数；自然语，不显示裸字节）
+QString human_bytes(qint64 bytes) {
+    constexpr double kKiB = 1024.0;
+    const char *const units[] = {"B", "KB", "MB", "GB", "TB", "PB"};
+    double value = double(bytes);
+    int unit = 0;
+    while (value >= kKiB && unit < 5) {
+        value /= kKiB;
+        ++unit;
+    }
+    return unit <= 1
+               ? QStringLiteral("%1 %2").arg(qint64(value)).arg(QLatin1String(units[unit]))
+               : QStringLiteral("%1 %2").arg(value, 0, 'f', 1).arg(QLatin1String(units[unit]));
+}
+
 // ---------------------------------------------------------------- 小控件
 
 // 单行省略标签（§9.3「全界面禁止文案折行（超长省略号）」；与 mainwindow/page_meta 同口径）
@@ -318,146 +332,19 @@ private:
     QString full_text_;
 };
 
-// 格式复选磁贴（mockup .fmt）：15px 复选方框 + 名称（12px/700）+ 右端扩展名（9.5px --txt3）；
-// 选中 = accent-dim 底 + accent-bd 边（.fmt.on）。自绘（QSS 无法表达方框+右对齐扩展名的组合）。
-class FormatTile : public QAbstractButton {
-public:
-    explicit FormatTile(QWidget *parent = nullptr) : QAbstractButton(parent) {
-        setCheckable(true);
-        setCursor(Qt::PointingHandCursor);
-        setAttribute(Qt::WA_Hover, true);
-        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    }
-    void set_tokens(const theme::Tokens &t) {
-        tokens_ = t;
-        update();
-    }
-    void set_labels(const QString &name, const QString &ext) {
-        name_ = name;
-        ext_ = ext;
-        setToolTip(name + QLatin1Char(' ') + ext);
-        updateGeometry();
-        update();
-    }
-    QSize sizeHint() const override {
-        const QFontMetrics name_fm(theme::font(12.0, QFont::Bold));
-        const QFontMetrics ext_fm(theme::font(9.5));
-        const int w = kPadX * 2 + theme::Metrics::checkbox_px + kGap +
-                      name_fm.horizontalAdvance(name_) + kGap + ext_fm.horizontalAdvance(ext_);
-        return QSize(w + 8, kTileHeight);
-    }
-    QSize minimumSizeHint() const override { return sizeHint(); }
-
-protected:
-    void paintEvent(QPaintEvent *) override {
-        QPainter p(this);
-        p.setRenderHint(QPainter::Antialiasing, true);
-        const theme::Tokens &t = tokens_;
-        const bool on = isChecked();
-        const bool dim = !isEnabled();
-        QColor bg = on ? t.accent_dim : t.control;
-        QColor bd = on ? t.accent_bd : t.control_bd;
-        if (dim) {
-            bg = theme::at_opacity(on ? t.accent_dim : t.control, t.window, kDimAlpha);
-            bd = theme::at_opacity(on ? t.accent_bd : t.control_bd, t.window, kDimAlpha);
-        } else if (!on && underMouse()) {
-            bg = theme::composite(t.control, t.window);
-            bd = t.control_bd;
-        }
-        QRectF box = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-        p.setPen(QPen(bd, 1.0));
-        p.setBrush(bg);
-        p.drawRoundedRect(box, kTileRadius, kTileRadius);
-
-        const int cb = theme::Metrics::checkbox_px;
-        const QRectF mark(kPadX, (height() - cb) / 2.0, cb, cb);
-        if (on) {
-            p.setPen(QPen(t.accent, 1.5));
-            p.setBrush(t.accent);
-        } else {
-            p.setPen(QPen(dim ? theme::at_opacity(t.text3, t.window, kDimAlpha) : t.text3, 1.5));
-            p.setBrush(Qt::NoBrush);
-        }
-        p.drawRoundedRect(mark, theme::Metrics::checkbox_radius, theme::Metrics::checkbox_radius);
-        if (on) {
-            // M5-T3：勾形 = 矢量路径（icons::check，与 mockup 的 10×10 勾形等比同源），
-            // 不再是 "✓" 字形（§3.3 禁字形图标；M3 铁律六：勾形单实现在 icons 库）。
-            icons::paint(p, icons::Name::Check, mark,
-                         dim ? theme::at_opacity(t.on_accent, t.window, kDimAlpha) : t.on_accent);
-        }
-        const int name_x = static_cast<int>(mark.right()) + kGap;
-        const QFontMetrics ext_fm(theme::font(9.5));
-        const int ext_w = ext_fm.horizontalAdvance(ext_);
-        const QRect name_rect(name_x, 0, std::max(0, width() - name_x - ext_w - kGap - kPadX),
-                              height());
-        p.setFont(theme::font(12.0, QFont::Bold));
-        const QFontMetrics name_fm(theme::font(12.0, QFont::Bold));
-        p.setPen(dim ? theme::at_opacity(t.text, t.window, kDimAlpha) : t.text);
-        p.drawText(name_rect, Qt::AlignLeft | Qt::AlignVCenter,
-                   name_fm.elidedText(name_, Qt::ElideRight, name_rect.width()));
-        p.setFont(theme::font(9.5));
-        p.setPen(dim ? theme::at_opacity(t.text3, t.window, kDimAlpha) : t.text3);
-        p.drawText(QRect(width() - kPadX - ext_w, 0, ext_w, height()),
-                   Qt::AlignRight | Qt::AlignVCenter, ext_);
-    }
-
-private:
-    static constexpr int kPadX = 10;
-    static constexpr int kGap = 8;
-    static constexpr int kTileHeight = 30;
-    static constexpr int kTileRadius = 6;    // mockup .fmt{border-radius:6px}
-    static constexpr double kDimAlpha = 0.4; // 禁用态（仅元数据）：.icon-btn.dim 同口径
-    theme::Tokens tokens_{};
-    QString name_, ext_;
-};
-
-// 药丸开关（R4 控件规格：30×16 药丸 + 12px 圆钮 —— 几何全走 theme::Metrics 单源）
-class PillSwitch : public QAbstractButton {
-public:
-    explicit PillSwitch(QWidget *parent = nullptr) : QAbstractButton(parent) {
-        setCheckable(true);
-        setCursor(Qt::PointingHandCursor);
-        setAttribute(Qt::WA_Hover, true);
-        setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-    }
-    void set_tokens(const theme::Tokens &t) {
-        tokens_ = t;
-        update();
-    }
-    QSize sizeHint() const override {
-        return QSize(theme::Metrics::switch_w, theme::Metrics::switch_h);
-    }
-
-protected:
-    void paintEvent(QPaintEvent *) override {
-        QPainter p(this);
-        p.setRenderHint(QPainter::Antialiasing, true);
-        const theme::Tokens &t = tokens_;
-        const QRectF track(0, 0, theme::Metrics::switch_w, theme::Metrics::switch_h);
-        p.setPen(Qt::NoPen);
-        p.setBrush(isChecked() ? t.accent : t.control_bd);
-        p.drawRoundedRect(track, theme::Metrics::switch_h / 2.0, theme::Metrics::switch_h / 2.0);
-        const double knob = theme::Metrics::switch_knob; // R4：轨 30×16 → 钮 12
-        const double y = (theme::Metrics::switch_h - knob) / 2.0;
-        const double x = isChecked() ? theme::Metrics::switch_w - knob - 2.0 : 2.0;
-        p.setBrush(isChecked() ? t.on_accent : QColor(0xc9, 0xc9, 0xd2));
-        p.drawEllipse(QRectF(x, y, knob, knob));
-    }
-
-private:
-    theme::Tokens tokens_{};
-};
-
 // ---------------------------------------------------------------- 页面样式
 // tokens 单源 = ui/theme.h；本页只把 tokens 铺到自己的控件上（与 PageMeta/PreviewPanel 同口径）。
 // 选择器一律以 pp-* objectName / ppField 动态属性为锚，避免误伤其它页面控件。
+// 注：磁贴（formkit::CheckableCard）、开关（formkit::SwitchControl）、分段（SegmentedControl）、
+// 胶囊（PillBadge）与全部行内标签/值/注释（ppFk 钩子）都不在此处 —— 它们自带令牌副本或走
+// theme.h 的 formkit_qss 全局规则（C1 单源；A6：本页不再有任何硬编码色值）。
 constexpr const char *kFieldProperty = "ppField";
 
 QString page_qss(const theme::Tokens &t) {
     const auto css = [](const QColor &c) { return theme::css_color(c); };
     const QString mod = QString::fromLatin1(kFieldProperty);
     QString qss;
-    // 输入类控件（mockup .path-in / .combo：--ctl 底 + --ctl-bd 边 + r=4 + --txt 字）
+    // 输入类控件（mockup .tbx / .dd：--ctl 底 + --ctl-bd 边 + r3 + --txt 字）
     const auto control_rule = [&](const QString &selector) {
         return selector + QStringLiteral(" { background: ") + css(t.control) +
                QStringLiteral("; border: 1px solid ") + css(t.control_bd) +
@@ -466,58 +353,65 @@ QString page_qss(const theme::Tokens &t) {
                css(t.text) + QStringLiteral("; padding: 0 8px; }\n");
     };
     qss += control_rule(QStringLiteral("QLineEdit[") + mod + QStringLiteral("=\"input\"]"));
-    qss += control_rule(QStringLiteral("QLineEdit[") + mod + QStringLiteral("=\"mono\"]"));
     qss += control_rule(QStringLiteral("QComboBox[") + mod + QStringLiteral("=\"combo\"]"));
-    // 次按钮（mockup .mini-btn：--ctl 底 + --ctl-bd 边 + r=4 + --txt2 字 + 600）
+    // 次按钮（R4：高 26 + 描边 + --txt2 字；悬停提亮到 --txt）
     qss += QStringLiteral("QPushButton[") + mod + QStringLiteral("=\"button\"] { background: ") +
            css(t.control) + QStringLiteral("; border: 1px solid ") + css(t.control_bd) +
-           QStringLiteral("; border-radius: ") + QString::number(theme::Metrics::control_radius) +
-           QStringLiteral("px; color: ") + css(t.text2) + QStringLiteral("; padding: 0 10px; }\n");
+           QStringLiteral("; border-radius: ") + QString::number(theme::Metrics::btn_radius) +
+           QStringLiteral("px; color: ") + css(t.text2) +
+           QStringLiteral("; font-weight: 600; padding: 0 11px; }\n");
     qss += QStringLiteral("QPushButton[") + mod + QStringLiteral("=\"button\"]:hover { color: ") +
            css(t.text) + QStringLiteral("; }\n");
-    // 表单标签（--txt3，右对齐 70px 轴）/ 提示（--txt3）/ 失效提示（--err）
-    qss += QStringLiteral("QLabel[") + mod + QStringLiteral("=\"label\"] { color: ") +
+    qss += QStringLiteral("QPushButton[") + mod +
+           QStringLiteral("=\"button\"]:disabled { background: ") + css(t.control) +
+           QStringLiteral("; border-color: ") + css(t.control_bd) + QStringLiteral("; color: ") +
            css(t.text3) + QStringLiteral("; }\n");
-    qss += QStringLiteral("QLabel[") + mod + QStringLiteral("=\"hint\"] { color: ") + css(t.text3) +
-           QStringLiteral("; }\n");
+    // 主按钮（R4：实心 acc 底 + acc-on 字；禁用 = 灰底灰字）
+    qss += QStringLiteral("QPushButton[") + mod + QStringLiteral("=\"primary\"] { background: ") +
+           css(t.accent) + QStringLiteral("; border: 1px solid ") + css(t.accent) +
+           QStringLiteral("; border-radius: ") + QString::number(theme::Metrics::btn_radius) +
+           QStringLiteral("px; color: ") + css(t.on_accent) +
+           QStringLiteral("; font-weight: 600; padding: 0 11px; }\n");
+    qss += QStringLiteral("QPushButton[") + mod +
+           QStringLiteral("=\"primary\"]:disabled { background: ") + css(t.control) +
+           QStringLiteral("; border-color: ") + css(t.control_bd) + QStringLiteral("; color: ") +
+           css(t.text3) + QStringLiteral("; }\n");
+    // 折叠行（高级参数：chevron 为矢量图标 —— C3 禁字形）
+    qss += QStringLiteral("QToolButton[") + mod +
+           QStringLiteral("=\"fold\"] { border: none; background: transparent; color: ") +
+           css(t.text2) + QStringLiteral("; font-weight: 600; }\n");
+    qss += QStringLiteral("QToolButton[") + mod + QStringLiteral("=\"fold\"]:disabled { color: ") +
+           css(t.text3) + QStringLiteral("; }\n");
+    // 说明/提示（mockup .sub-hint / .card-h .hint）
+    qss += QStringLiteral("QLabel[") + mod + QStringLiteral("=\"hint\"], QLabel[") + mod +
+           QStringLiteral("=\"sub\"] { color: ") + css(t.text3) + QStringLiteral("; }\n");
     qss += QStringLiteral("QLabel[") + mod +
            QStringLiteral("=\"hint\"][ppInvalid=\"true\"] { color: ") + css(t.err) +
            QStringLiteral("; }\n");
     qss += QStringLiteral("QLabel[ppInvalid=\"true\"] { color: ") + css(t.err) +
            QStringLiteral("; }\n");
-    qss += QStringLiteral("QLabel#pp-card-hint { color: ") + css(t.text3) + QStringLiteral("; }\n");
-    qss +=
-        QStringLiteral("QLabel#pp-split-label { color: ") + css(t.text) + QStringLiteral("; }\n");
-    // 模式分段（mockup .seg：--ctl 底 + r=6 + 内 2px；选中格 = 亮底 + --txt）
-    qss += QStringLiteral("QWidget#pp-output-seg { background: ") + css(t.control) +
-           QStringLiteral("; border: 1px solid ") + css(t.control_bd) +
-           QStringLiteral("; border-radius: 6px; }\n");
-    qss += QStringLiteral("QToolButton[ppSeg=\"seg\"] { background: transparent; border: none; "
-                          "border-radius: 4px; color: ") +
-           css(t.text2) + QStringLiteral("; padding: 4px 16px; font-weight: 600; }\n");
-    qss += QStringLiteral("QToolButton[ppSeg=\"seg\"]:checked { background: ") +
-           css(t.dark() ? QColor(255, 255, 255, 26) : QColor(255, 255, 255)) +
-           QStringLiteral("; color: ") + css(t.text) + QStringLiteral("; }\n");
-    // 格式页签（mockup .tabs/.tab：--txt2 600；选中 = accent-dim 底 + accent-bd 边 + --txt 字）
+    // 格式页签（mockup .dlg-tab：11.5/600 + 选中 = --txt 字 + 2px acc 下划线；页签行有分隔基线
+    // —— 修 2-21）
     qss +=
         QStringLiteral("QTabWidget#pp-format-tabs::pane { border: none; border-top: 1px solid ") +
         css(t.line) + QStringLiteral("; }\n");
-    qss += QStringLiteral("QTabWidget#pp-format-tabs QTabBar::tab { background: transparent; "
-                          "color: ") +
-           css(t.text2) +
-           QStringLiteral("; padding: 6px 14px 7px; margin-right: 4px; "
-                          "border: 1px solid transparent; border-bottom: none; "
-                          "border-top-left-radius: 6px; border-top-right-radius: 6px;"
-                          " font-weight: 700; }\n");
-    qss += QStringLiteral("QTabWidget#pp-format-tabs QTabBar::tab:selected { background: ") +
-           css(t.accent_dim) + QStringLiteral("; border-color: ") + css(t.accent_bd) +
-           QStringLiteral("; color: ") + css(t.text) + QStringLiteral("; }\n");
-    // 「＋ 添加格式…」（mockup：页签行右端，--txt3 500）
+    qss += QStringLiteral("QTabBar::tab { background: transparent; color: ") + css(t.text2) +
+           QStringLiteral("; padding: 5px 12px 6px; margin-right: 2px; border: none; "
+                          "border-bottom: 2px solid transparent; font-weight: 600; }\n");
+    qss += QStringLiteral("QTabBar::tab:first { margin-left: ") +
+           QString::number(theme::Metrics::card_pad_x) + QStringLiteral("px; }\n");
+    qss += QStringLiteral("QTabBar::tab:selected { color: ") + css(t.text) +
+           QStringLiteral("; border-bottom-color: ") + css(t.accent) + QStringLiteral("; }\n");
+    qss += QStringLiteral("QTabBar::tab:hover { color: ") + css(t.text) + QStringLiteral("; }\n");
+    // 「＋ 添加格式…」（修 2-21：可用态 = 文字链式 accent，不再灰字像禁用）
     qss += QStringLiteral("QToolButton#pp-add-format { border: none; background: transparent; "
                           "color: ") +
-           css(t.text3) + QStringLiteral("; padding: 4px 10px; }\n");
-    qss += QStringLiteral("QToolButton#pp-add-format:hover { color: ") + css(t.accent) +
+           css(t.accent) + QStringLiteral("; padding: 0 10px; font-weight: 600; border-radius: ") +
+           QString::number(theme::Metrics::btn_radius) + QStringLiteral("px; }\n");
+    qss += QStringLiteral("QToolButton#pp-add-format:hover { background: ") + css(t.accent_dim) +
            QStringLiteral("; }\n");
+    qss += QStringLiteral("QToolButton#pp-add-format:disabled { color: ") + css(t.text3) +
+           QStringLiteral("; background: transparent; }\n");
     // 容器透明（窗口底渐变透出）
     qss += QStringLiteral("QWidget#pp-output-content { background: transparent; }\n");
     qss += QStringLiteral("QScrollArea#pp-output-scroll { background: transparent; }\n");
@@ -533,7 +427,7 @@ struct FormatState {
     QWidget *page = nullptr;
     ParamForm *form = nullptr;
     QComboBox *bitdepth = nullptr;
-    ElidedLabel *bitdepth_note = nullptr;
+    QLabel *bitdepth_note = nullptr; // 格式能力约束说明（行内 10px 注释位；如 "JPEG 仅支持 8 位"）
     ElidedLabel *alpha_hint = nullptr;
 };
 
@@ -548,40 +442,45 @@ struct Impl {
     std::string active_id = "jxl";      // 当前页签 / 仅元数据模式的单一格式
     std::vector<std::string> selected;  // 已选格式（规范顺序 = 磁贴顺序）
     std::map<std::string, FormatState> states;
+    int input_count = 0; // 预估卡输入面（勾选文件数；MainWindow 喂入）
 
-    // 模式
-    QToolButton *mode_convert = nullptr;
-    QToolButton *mode_meta = nullptr;
-    ElidedLabel *mode_note = nullptr;
-
-    // 输出格式卡
+    // 卡 ① 输出格式
     QFrame *format_card = nullptr;
-    FormatTile *tiles[kFormatCount] = {};
-    ElidedLabel *format_pill = nullptr;
+    formkit::SegmentedControl *mode_seg = nullptr;
+    ElidedLabel *mode_note = nullptr;
+    QWidget *tiles_host = nullptr;
+    formkit::CheckableCard *tiles[kFormatCount] = {};
+    formkit::PillBadge *format_pill = nullptr;
     ElidedLabel *format_hint = nullptr;
 
-    // 全局卡
+    // 卡 ② 全局
     QFrame *global_card = nullptr;
     QLineEdit *out_root_edit = nullptr;
     QPushButton *browse_button = nullptr;
     QComboBox *conflict_combo = nullptr;
     QComboBox *color_combo = nullptr;
-    PillSwitch *split_switch = nullptr;
+    formkit::SwitchControl *split_switch = nullptr;
     QLineEdit *template_edit = nullptr;
+    QPushButton *vars_button = nullptr;
     ElidedLabel *template_example = nullptr;
 
-    // 格式参数卡
+    // 卡 ③ 格式参数
     QFrame *param_card = nullptr;
     QTabWidget *tabs = nullptr;
     QToolButton *add_format_button = nullptr;
-    ElidedLabel *tabs_hint = nullptr;
+    formkit::PillBadge *changed_pill = nullptr;
 
-    // 预设卡
+    // 卡 ④ 预设与预估
     QFrame *preset_card = nullptr;
     QComboBox *preset_combo = nullptr;
     QPushButton *preset_save = nullptr;
     QPushButton *preset_saveas = nullptr;
     QPushButton *preset_delete = nullptr;
+    ElidedLabel *preset_hint = nullptr;
+    ElidedLabel *est_output = nullptr;
+    ElidedLabel *est_size = nullptr;
+    ElidedLabel *est_time = nullptr;
+    ElidedLabel *est_disk = nullptr;
 
     // ------------------------------------------------------------ 查询
 
@@ -641,10 +540,9 @@ struct Impl {
         content->setObjectName(QStringLiteral("pp-output-content"));
         auto *v = new QVBoxLayout(content);
         v->setContentsMargins(0, 0, 0, 0);
-        v->setSpacing(theme::Metrics::gap); // mockup .scroll{gap:10px}
+        v->setSpacing(theme::Metrics::gap); // §4.3 卡间距 8
         scroll->setWidget(content);
 
-        v->addWidget(build_mode_card(content));
         v->addWidget(build_format_card(content));
         v->addWidget(build_global_card(content));
         v->addWidget(build_param_card(content));
@@ -652,242 +550,295 @@ struct Impl {
         v->addStretch(1);
     }
 
-    QFrame *make_card(QWidget *parent, const QString &title, const QString &hint,
-                      ElidedLabel **pill_out, ElidedLabel **hint_out) {
+    // 卡壳（§4.3 r6 + --card-bd 描边/阴影走 theme QSS；卡头 = 标题 12/700 + 中性 pill + hint）
+    QFrame *make_card(QWidget *parent, QVBoxLayout **body_out) {
         auto *card = new QFrame(parent);
         card->setObjectName(QStringLiteral("pp-card"));
         auto *v = new QVBoxLayout(card);
         v->setContentsMargins(0, 0, 0, 0);
         v->setSpacing(0);
-        auto *head = new QWidget(card);
-        auto *h = new QHBoxLayout(head);
-        h->setContentsMargins(12, 9, 12, 7);
-        h->setSpacing(8);
-        auto *title_label = new QLabel(title, head);
-        title_label->setObjectName(QStringLiteral("pp-card-title"));
-        title_label->setFont(
+        *body_out = v;
+        return card;
+    }
+
+    struct CardHeader {
+        QWidget *row = nullptr;
+        QLabel *title = nullptr;
+        formkit::PillBadge *pill = nullptr;
+        ElidedLabel *hint = nullptr;
+    };
+
+    CardHeader make_header(QWidget *card, const QString &title, const QString &pill_name,
+                           const QString &hint_name) {
+        CardHeader out;
+        out.row = new QWidget(card);
+        auto *layout = new QHBoxLayout(out.row);
+        layout->setContentsMargins(theme::Metrics::card_pad_x, 9, theme::Metrics::card_pad_x, 7);
+        layout->setSpacing(theme::Metrics::group_gap);
+        out.title = new QLabel(title, out.row);
+        out.title->setObjectName(QStringLiteral("pp-card-title"));
+        out.title->setFont(
             theme::font(theme::Typography::card_title_px, theme::Typography::card_title_weight));
-        h->addWidget(title_label);
-        if (pill_out != nullptr) {
-            auto *pill = new ElidedLabel(head);
-            pill->setProperty(theme::kPillProperty, true);
-            pill->setFont(
-                theme::font(theme::Typography::badge_px, theme::Typography::badge_weight));
-            pill->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-            pill->setVisible(false);
-            h->addWidget(pill);
-            *pill_out = pill;
-        }
-        h->addStretch(1);
-        if (hint_out != nullptr) {
-            auto *hint_label = new ElidedLabel(head);
-            hint_label->setObjectName(QStringLiteral("pp-card-hint"));
-            hint_label->setFont(theme::font(theme::Typography::hint_px, 500));
-            hint_label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-            hint_label->set_full_text(hint);
-            h->addWidget(hint_label, 1);
-            *hint_out = hint_label;
-        }
-        v->addWidget(head);
-        return card;
+        layout->addWidget(out.title);
+        out.pill = new formkit::PillBadge(out.row);
+        if (!pill_name.isEmpty())
+            out.pill->setObjectName(pill_name);
+        out.pill->set_tone(formkit::PillBadge::Tone::Neutral); // 1-24/1-25：卡头右置一律中性
+        out.pill->setVisible(false);
+        layout->addWidget(out.pill);
+        layout->addStretch(1);
+        out.hint = new ElidedLabel(out.row);
+        if (!hint_name.isEmpty())
+            out.hint->setObjectName(hint_name);
+        out.hint->setProperty(kFieldProperty, QStringLiteral("hint"));
+        out.hint->setFont(theme::font(theme::Typography::hint_px, 500));
+        out.hint->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        layout->addWidget(out.hint, 1);
+        return out;
     }
 
-    // 模式卡：seg（转码 | 仅元数据）+ 互斥提示
-    QWidget *build_mode_card(QWidget *parent) {
-        auto *card = make_card(parent, PageOutput::tr("模式"), QString(), nullptr, nullptr);
-        auto *v = qobject_cast<QVBoxLayout *>(card->layout());
+    // 卡体（R1：上内边距 10、下 12；行 pitch 由 formkit 行容器承担 → 行间无额外 gap）
+    struct Body {
+        QWidget *host = nullptr;
+        QVBoxLayout *box = nullptr;
+    };
 
-        auto *seg_row = new QWidget(card);
-        auto *seg_h = new QHBoxLayout(seg_row);
-        seg_h->setContentsMargins(14, 0, 14, 8);
-        seg_h->setSpacing(0);
-        auto *seg = new QWidget(seg_row);
-        seg->setObjectName(QStringLiteral("pp-output-seg"));
-        auto *seg_layout = new QHBoxLayout(seg);
-        seg_layout->setContentsMargins(2, 2, 2, 2);
-        seg_layout->setSpacing(0);
-        mode_convert = new QToolButton(seg);
-        mode_convert->setObjectName(QStringLiteral("pp-mode-convert"));
-        mode_convert->setText(PageOutput::tr("转码"));
-        mode_meta = new QToolButton(seg);
-        mode_meta->setObjectName(QStringLiteral("pp-mode-metadata"));
-        mode_meta->setText(PageOutput::tr("仅元数据"));
-        for (QToolButton *b : {mode_convert, mode_meta}) {
-            b->setCheckable(true);
-            b->setAutoRaise(true);
-            b->setCursor(Qt::PointingHandCursor);
-            b->setProperty("ppSeg", QStringLiteral("seg"));
-            b->setFont(theme::font(theme::Typography::body_px, 600));
-            b->setMinimumHeight(24);
-            seg_layout->addWidget(b);
-        }
-        mode_convert->setChecked(true);
-        seg_h->addWidget(seg);
-        seg_h->addStretch(1);
-        v->addWidget(seg_row);
-
-        mode_note = new ElidedLabel(card);
-        mode_note->setObjectName(QStringLiteral("pp-format-note"));
-        mode_note->setFont(theme::font(theme::Typography::hint_px));
-        mode_note->setContentsMargins(14, 0, 14, 8);
-        mode_note->set_full_text(
-            PageOutput::tr("仅元数据：同容器零重编码；此时输出格式多选自动禁用（保持原格式）"));
-        mode_note->setVisible(false);
-        v->addWidget(mode_note);
-        return card;
+    Body make_body(QWidget *card) {
+        Body out;
+        out.host = new QWidget(card);
+        out.box = new QVBoxLayout(out.host);
+        out.box->setContentsMargins(theme::Metrics::card_pad_x, theme::Metrics::card_pad_top,
+                                    theme::Metrics::card_pad_x, theme::Metrics::card_pad_bottom);
+        out.box->setSpacing(0);
+        return out;
     }
 
-    // 输出格式卡：8 磁贴复选 + 「已选 N」计数徽标
+    QPushButton *make_button(QWidget *parent, const QString &text, const QString &object_name,
+                             bool primary) {
+        auto *button = new QPushButton(text, parent);
+        button->setObjectName(object_name);
+        button->setFixedHeight(theme::Metrics::btn_h); // R4 按钮高 26（A7）
+        button->setCursor(Qt::PointingHandCursor);
+        button->setFont(theme::font(theme::Typography::body_px, QFont::DemiBold));
+        button->setProperty(kFieldProperty,
+                            primary ? QStringLiteral("primary") : QStringLiteral("button"));
+        button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        return button;
+    }
+
+    // 行内复合字段（flex 轨）：[本体 flex][附件…] —— 复合字段容器撑满轨，无浮空死区（R2）
+    QWidget *make_flex_field(QWidget *parent, QList<QWidget *> widgets) {
+        auto *host = new QWidget(parent);
+        auto *h = new QHBoxLayout(host);
+        h->setContentsMargins(0, 0, 0, 0);
+        h->setSpacing(theme::Metrics::group_gap);
+        for (int i = 0; i < widgets.size(); ++i)
+            h->addWidget(widgets[i], i == 0 ? 1 : 0);
+        return host;
+    }
+
+    // 卡 ①：输出格式（转换模式分段 + 说明行 ｜ 8 格式磁贴 2×4）
     QWidget *build_format_card(QWidget *parent) {
-        format_card =
-            make_card(parent, PageOutput::tr("输出格式"),
-                      PageOutput::tr("可多选 · 每个输入输出 N 个文件"), &format_pill, &format_hint);
-        auto *v = qobject_cast<QVBoxLayout *>(format_card->layout());
-        auto *grid = new QGridLayout();
-        grid->setContentsMargins(14, 2, 14, 12);
-        grid->setHorizontalSpacing(7); // mockup .fmt-grid{gap:7px}
-        grid->setVerticalSpacing(7);
-        for (int i = 0; i < kFormatCount; ++i) {
-            const pp::FormatDef *f = pp::find_format(kFormats[i].id);
-            auto *tile = new FormatTile(format_card);
-            tile->setObjectName(QStringLiteral("pp-format-") + QLatin1String(kFormats[i].id));
-            tile->set_labels(PageOutput::tr(kFormats[i].label),
-                             QStringLiteral(".") + QString::fromStdString(f ? f->ext : ""));
-            tile->set_tokens(tokens);
-            grid->addWidget(tile, i / kFormatColumns, i % kFormatColumns);
-            tiles[i] = tile;
+        QVBoxLayout *v = nullptr;
+        format_card = make_card(parent, &v);
+        const CardHeader header =
+            make_header(format_card, PageOutput::tr("输出格式"), QStringLiteral("pp-format-pill"),
+                        QStringLiteral("pp-format-hint"));
+        // 修 2-08：公式式文案（"每个输入输出 N 个文件"）不再常驻 —— 自然语 hint + tooltip 说明
+        header.hint->set_full_text(PageOutput::tr("可多选 · 对勾位固定"));
+        header.hint->setToolTip(PageOutput::tr("每个已选格式都会为每个输入文件生成一个输出文件"));
+        format_pill = header.pill;
+        format_hint = header.hint;
+        v->addWidget(header.row);
+
+        const Body body = make_body(format_card);
+        // 转换模式（互斥 = 分段控件唯一形态；段宽 88 等宽 → 选中零形变）
+        {
+            mode_seg = new formkit::SegmentedControl(format_card);
+            mode_seg->setObjectName(QStringLiteral("pp-output-seg"));
+            mode_seg->add_segment(PageOutput::tr("转码"), QStringLiteral("pp-mode-convert"));
+            mode_seg->add_segment(PageOutput::tr("仅元数据"), QStringLiteral("pp-mode-metadata"));
+            auto *note =
+                new QLabel(PageOutput::tr("转码 = 生成新文件 · 仅元数据 = 原地写入"), format_card);
+            note->setObjectName(QStringLiteral("pp-mode-hint"));
+            note->setProperty(kFieldProperty, QStringLiteral("hint"));
+            note->setFont(theme::font(theme::Typography::hint_px));
+            QWidget *field = make_flex_field(format_card, {mode_seg, note});
+            const formkit::Row row =
+                formkit::frow(format_card, PageOutput::tr("转换模式"), field, FieldWidth::Flex);
+            row.row->setObjectName(QStringLiteral("pp-mode-row"));
+            body.box->addWidget(row.row);
         }
-        for (int c = 0; c < kFormatColumns; ++c)
-            grid->setColumnStretch(c, 1);
-        v->addLayout(grid);
+        // 仅元数据说明行（互斥语义零改动：格式多选/格式参数卡置灰并出说明）
+        mode_note = new ElidedLabel(format_card);
+        mode_note->setObjectName(QStringLiteral("pp-format-note"));
+        mode_note->setProperty(kFieldProperty, QStringLiteral("hint"));
+        mode_note->setFont(theme::font(theme::Typography::hint_px));
+        mode_note->setMinimumHeight(formkit::kRowPitch);
+        mode_note->setContentsMargins(formkit::kLabelW + formkit::kColGap, 0, 0, 0);
+        mode_note->set_full_text(
+            PageOutput::tr("仅元数据：同容器零重编码，输出格式多选已禁用（保持原格式）"));
+        mode_note->setVisible(false);
+        body.box->addWidget(mode_note);
+        // 8 格式磁贴 2×4（多选集合唯一形态 = formkit::CheckableCard：整卡可点 + 对勾位固定）
+        {
+            tiles_host = new QWidget(format_card);
+            tiles_host->setObjectName(QStringLiteral("pp-tiles"));
+            auto *grid = new QGridLayout(tiles_host);
+            grid->setContentsMargins(0, 0, 0, 0);
+            grid->setHorizontalSpacing(theme::Metrics::group_gap); // §4.3 组内 8
+            grid->setVerticalSpacing(theme::Metrics::group_gap);
+            for (int i = 0; i < kFormatCount; ++i) {
+                const pp::FormatDef *f = pp::find_format(kFormats[i].id);
+                auto *tile = new formkit::CheckableCard(tiles_host);
+                tile->setObjectName(QStringLiteral("pp-format-") + QLatin1String(kFormats[i].id));
+                tile->set_labels(PageOutput::tr(kFormats[i].label),
+                                 QStringLiteral(".") + QString::fromStdString(f ? f->ext : ""));
+                tile->set_tokens(tokens);
+                tile->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+                grid->addWidget(tile, i / kFormatColumns, i % kFormatColumns);
+                tiles[i] = tile;
+            }
+            for (int c = 0; c < kFormatColumns; ++c)
+                grid->setColumnStretch(c, 1);
+            body.box->addWidget(tiles_host);
+        }
+        v->addWidget(body.host);
         update_format_count();
         return format_card;
     }
 
-    // 全局卡：一行一字段（70px 右对齐标签轴）
+    // 卡 ②：全局（一行一义 6 行）
     QWidget *build_global_card(QWidget *parent) {
-        global_card = make_card(parent, PageOutput::tr("全局"), QString(), nullptr, nullptr);
-        auto *v = qobject_cast<QVBoxLayout *>(global_card->layout());
-        auto *grid = new QGridLayout();
-        grid->setContentsMargins(14, 2, 14, 12);
-        grid->setHorizontalSpacing(theme::Metrics::form_col_gap);
-        grid->setVerticalSpacing(0);
-        int row = 0;
-        const auto add_label = [&](const QString &text, int r) {
-            auto *label = new QLabel(text, global_card);
-            label->setObjectName(QStringLiteral("pp-global-label"));
-            label->setFont(theme::font(theme::Typography::small_px));
-            label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-            label->setMinimumHeight(theme::Metrics::form_row_h);
-            label->setMinimumWidth(theme::Metrics::form_label_w);
-            label->setMaximumWidth(theme::Metrics::form_label_w);
-            label->setProperty("ppField", QStringLiteral("label"));
-            grid->addWidget(label, r, 0);
-            return label;
-        };
+        QVBoxLayout *v = nullptr;
+        global_card = make_card(parent, &v);
+        const CardHeader header =
+            make_header(global_card, PageOutput::tr("全局"), QString(), QString());
+        v->addWidget(header.row);
+        const Body body = make_body(global_card);
 
-        // 输出根目录（输入框 + 浏览钮）
-        add_label(PageOutput::tr("输出根目录"), row);
-        auto *root_row = new QWidget(global_card);
-        auto *root_h = new QHBoxLayout(root_row);
-        root_h->setContentsMargins(0, 0, 0, 0);
-        root_h->setSpacing(8);
-        out_root_edit = new QLineEdit(root_row);
-        out_root_edit->setObjectName(QStringLiteral("pp-out-root-edit"));
-        out_root_edit->setMinimumHeight(theme::Metrics::input_h);
-        out_root_edit->setProperty("ppField", QStringLiteral("input"));
-        browse_button = new QPushButton(PageOutput::tr("浏览…"), root_row);
-        browse_button->setObjectName(QStringLiteral("pp-browse-button"));
-        browse_button->setMinimumHeight(theme::Metrics::input_h);
-        browse_button->setProperty("ppField", QStringLiteral("button"));
-        root_h->addWidget(out_root_edit, 1);
-        root_h->addWidget(browse_button);
-        grid->addWidget(root_row, row++, 1);
-
-        // 同名冲突
-        add_label(PageOutput::tr("同名冲突"), row);
-        conflict_combo = new QComboBox(global_card);
-        conflict_combo->setObjectName(QStringLiteral("pp-conflict-combo"));
-        conflict_combo->addItem(PageOutput::tr("自动加序号"),
-                                static_cast<int>(pp::ConflictPolicy::Rename));
-        conflict_combo->addItem(PageOutput::tr("跳过"), static_cast<int>(pp::ConflictPolicy::Skip));
-        conflict_combo->addItem(PageOutput::tr("覆盖"),
-                                static_cast<int>(pp::ConflictPolicy::Overwrite));
-        conflict_combo->setCurrentIndex(0);
-        conflict_combo->setMinimumHeight(theme::Metrics::input_h);
-        conflict_combo->setProperty("ppField", QStringLiteral("combo"));
-        grid->addWidget(conflict_combo, row++, 1, Qt::AlignLeft);
-
-        // 色彩目标
-        add_label(PageOutput::tr("色彩目标"), row);
-        color_combo = new QComboBox(global_card);
-        color_combo->setObjectName(QStringLiteral("pp-color-combo"));
-        color_combo->addItem(PageOutput::tr("保持原样"),
-                             static_cast<int>(pp::ColorTarget::KeepOriginal));
-        color_combo->addItem(PageOutput::tr("sRGB"), static_cast<int>(pp::ColorTarget::SRGB));
-        color_combo->addItem(PageOutput::tr("Display P3"),
-                             static_cast<int>(pp::ColorTarget::DisplayP3));
-        color_combo->addItem(PageOutput::tr("Adobe RGB (1998)"),
-                             static_cast<int>(pp::ColorTarget::AdobeRGB));
-        color_combo->setCurrentIndex(0);
-        color_combo->setMinimumHeight(theme::Metrics::input_h);
-        color_combo->setProperty("ppField", QStringLiteral("combo"));
-        grid->addWidget(color_combo, row++, 1, Qt::AlignLeft);
-
-        // 按文件格式分文件夹（单行开关；不含解释文字 —— 共识 §4 修订 ②）
-        add_label(QString(), row);
-        auto *switch_row = new QWidget(global_card);
-        auto *switch_h = new QHBoxLayout(switch_row);
-        switch_h->setContentsMargins(0, 0, 0, 0);
-        switch_h->setSpacing(10);
-        split_switch = new PillSwitch(switch_row);
-        split_switch->setObjectName(QStringLiteral("pp-split-switch"));
-        split_switch->set_tokens(tokens);
-        auto *switch_label = new QLabel(PageOutput::tr("按文件格式分文件夹"), switch_row);
-        switch_label->setObjectName(QStringLiteral("pp-split-label"));
-        switch_label->setFont(theme::font(theme::Typography::body_px));
-        switch_h->addWidget(split_switch);
-        switch_h->addWidget(switch_label);
-        switch_h->addStretch(1);
-        grid->addWidget(switch_row, row++, 1);
-
-        // 路径模板（中性输入框 + 悬浮提示里的符号表/示例）
-        add_label(PageOutput::tr("路径模板"), row);
-        template_edit = new QLineEdit(global_card);
-        template_edit->setObjectName(QStringLiteral("pp-template-edit"));
-        template_edit->setMinimumHeight(theme::Metrics::input_h);
-        template_edit->setProperty("ppField", QStringLiteral("mono"));
-        template_edit->setToolTip(template_tooltip());
-        template_edit->setText(QStringLiteral("$format/$dir/$file"));
-        grid->addWidget(template_edit, row++, 1);
-
-        // 单行示例路径（实时、超长省略、不折行）
-        add_label(QString(), row);
-        template_example = new ElidedLabel(global_card);
-        template_example->setObjectName(QStringLiteral("pp-template-example"));
-        template_example->setFont(theme::font(theme::Typography::hint_px, QFont::Normal, true));
-        template_example->setProperty("ppField", QStringLiteral("hint"));
-        template_example->setToolTip(template_tooltip());
-        template_example->setMinimumHeight(theme::Metrics::form_row_h - 8);
-        grid->addWidget(template_example, row++, 1);
-        grid->setColumnStretch(1, 1);
-        v->addLayout(grid);
+        // 根目录（flex + 浏览…）；修 2-10：placeholder 说明留空行为
+        {
+            out_root_edit = new QLineEdit(global_card);
+            out_root_edit->setObjectName(QStringLiteral("pp-out-root-edit"));
+            out_root_edit->setFixedHeight(theme::Metrics::input_h);
+            out_root_edit->setProperty(kFieldProperty, QStringLiteral("input"));
+            out_root_edit->setPlaceholderText(PageOutput::tr("留空无法开始运行：请选择输出根目录"));
+            out_root_edit->setToolTip(PageOutput::tr("所有输出都落在这个目录下（按路径模板分层）"));
+            browse_button = make_button(global_card, PageOutput::tr("浏览…"),
+                                        QStringLiteral("pp-browse-button"), false);
+            browse_button->setToolTip(PageOutput::tr("选择输出根目录"));
+            QWidget *field = make_flex_field(global_card, {out_root_edit, browse_button});
+            const formkit::Row row =
+                formkit::frow(global_card, PageOutput::tr("根目录"), field, FieldWidth::Flex);
+            row.row->setObjectName(QStringLiteral("pp-root-row"));
+            body.box->addWidget(row.row);
+        }
+        // 同名冲突（枚举 = 下拉）
+        {
+            conflict_combo = new QComboBox(global_card);
+            conflict_combo->setObjectName(QStringLiteral("pp-conflict-combo"));
+            conflict_combo->addItem(PageOutput::tr("自动加序号"),
+                                    static_cast<int>(pp::ConflictPolicy::Rename));
+            conflict_combo->addItem(PageOutput::tr("跳过"),
+                                    static_cast<int>(pp::ConflictPolicy::Skip));
+            conflict_combo->addItem(PageOutput::tr("覆盖"),
+                                    static_cast<int>(pp::ConflictPolicy::Overwrite));
+            conflict_combo->setCurrentIndex(0);
+            conflict_combo->setFixedHeight(theme::Metrics::combo_h);
+            conflict_combo->setProperty(kFieldProperty, QStringLiteral("combo"));
+            conflict_combo->setToolTip(
+                PageOutput::tr("目标文件已存在时：自动加序号（IMG_1.jpg）/ 跳过 / 覆盖"));
+            const formkit::Row row = formkit::frow(global_card, PageOutput::tr("同名冲突"),
+                                                   conflict_combo, FieldWidth::Standard);
+            row.row->setObjectName(QStringLiteral("pp-conflict-row"));
+            body.box->addWidget(row.row);
+        }
+        // 色彩目标（下拉 + tooltip 解释专业词 —— 修 2-16）
+        {
+            color_combo = new QComboBox(global_card);
+            color_combo->setObjectName(QStringLiteral("pp-color-combo"));
+            color_combo->addItem(PageOutput::tr("保持原样"),
+                                 static_cast<int>(pp::ColorTarget::KeepOriginal));
+            color_combo->addItem(PageOutput::tr("sRGB"), static_cast<int>(pp::ColorTarget::SRGB));
+            color_combo->addItem(PageOutput::tr("Display P3"),
+                                 static_cast<int>(pp::ColorTarget::DisplayP3));
+            color_combo->addItem(PageOutput::tr("Adobe RGB (1998)"),
+                                 static_cast<int>(pp::ColorTarget::AdobeRGB));
+            color_combo->setCurrentIndex(0);
+            color_combo->setFixedHeight(theme::Metrics::combo_h);
+            color_combo->setProperty(kFieldProperty, QStringLiteral("combo"));
+            color_combo->setToolTip(PageOutput::tr(
+                "保持原样 = 不改动嵌入的 ICC 色彩描述；其余档位按目标色域转换并写入新的 ICC。"
+                "仅元数据模式下不生效（不做色彩转换）"));
+            const formkit::Row row = formkit::frow(global_card, PageOutput::tr("色彩目标"),
+                                                   color_combo, FieldWidth::Standard);
+            row.row->setObjectName(QStringLiteral("pp-color-row"));
+            body.box->addWidget(row.row);
+        }
+        // 分文件夹（独立布尔（立即生效）= 开关；标签归左列 —— 修 2-11；与 $format 段联动）
+        {
+            split_switch = new formkit::SwitchControl(global_card);
+            split_switch->setObjectName(QStringLiteral("pp-split-switch"));
+            split_switch->set_tokens(tokens);
+            split_switch->setToolTip(
+                PageOutput::tr("开 = 路径模板带上 $format 段（每个格式一个子目录）；关 = 去掉该段，"
+                               "多个格式会写进同一目录"));
+            auto *text = new QLabel(PageOutput::tr("按文件格式分文件夹"), global_card);
+            text->setObjectName(QStringLiteral("pp-split-label"));
+            text->setProperty(kFieldProperty, QStringLiteral("sub"));
+            text->setFont(theme::font(theme::Typography::body_px));
+            QWidget *field = make_flex_field(global_card, {split_switch, text});
+            const formkit::Row row =
+                formkit::frow(global_card, PageOutput::tr("分文件夹"), field, FieldWidth::Flex);
+            row.row->setObjectName(QStringLiteral("pp-split-row"));
+            body.box->addWidget(row.row);
+        }
+        // 路径模板（flex + 变量表钮；变量表/示例进 tooltip —— 修 2-13；统一 $var 语法 —— 修 2-14）
+        {
+            template_edit = new QLineEdit(global_card);
+            template_edit->setObjectName(QStringLiteral("pp-template-edit"));
+            template_edit->setFixedHeight(theme::Metrics::input_h);
+            template_edit->setProperty(kFieldProperty, QStringLiteral("input"));
+            template_edit->setPlaceholderText(QStringLiteral("$format/$dir/$file"));
+            template_edit->setToolTip(template_tooltip());
+            template_edit->setText(QStringLiteral("$format/$dir/$file"));
+            vars_button = make_button(global_card, PageOutput::tr("变量表"),
+                                      QStringLiteral("pp-template-vars"), false);
+            vars_button->setToolTip(template_tooltip());
+            QWidget *field = make_flex_field(global_card, {template_edit, vars_button});
+            const formkit::Row row =
+                formkit::frow(global_card, PageOutput::tr("路径模板"), field, FieldWidth::Flex);
+            row.row->setObjectName(QStringLiteral("pp-template-row"));
+            body.box->addWidget(row.row);
+        }
+        // 输出示例（注释行；自然语单行 —— 修 2-14/2-15）
+        {
+            template_example = new ElidedLabel(global_card);
+            template_example->setObjectName(QStringLiteral("pp-template-example"));
+            template_example->setProperty(kFieldProperty, QStringLiteral("sub"));
+            template_example->setFont(theme::font(theme::Typography::hint_px));
+            const formkit::Row row = formkit::frow(global_card, PageOutput::tr("输出示例"),
+                                                   template_example, FieldWidth::Flex);
+            row.row->setObjectName(QStringLiteral("pp-example-row"));
+            body.box->addWidget(row.row);
+        }
+        v->addWidget(body.host);
         update_template_example();
         return global_card;
     }
 
-    static QString template_tooltip() {
-        return PageOutput::tr(
-            "$format=格式目录 · $dir=镜像目录 · $file=文件名.扩展名 · $name=主名 · $ext=扩展名\n"
-            "例：<根>/jpeg/2024/05/IMG_2731.jpg + <根>/webp/2024/05/IMG_2731.webp\n"
-            "段间以 / 分隔；未知 $ 符号、.. 与绝对路径会被拒绝（开始运行前阻断）");
-    }
-
-    // 格式参数卡：QTabWidget 逐已选格式（位深 + ParamForm）
+    // 卡 ③：格式参数（页签 + 「＋ 添加格式…」；每页签一行一义六行）
     QWidget *build_param_card(QWidget *parent) {
-        param_card = make_card(parent, PageOutput::tr("格式参数"),
-                               PageOutput::tr("页签内含位深与编码参数"), nullptr, &tabs_hint);
-        auto *v = qobject_cast<QVBoxLayout *>(param_card->layout());
+        QVBoxLayout *v = nullptr;
+        param_card = make_card(parent, &v);
+        // 修 2-22：页签内参数的归属由**结构**表达（位深/技术/无损/编码努力/视觉距离都在页签内），
+        // 不再挂"页签内含位深与编码参数"这类常驻补丁文案。
+        const CardHeader header = make_header(param_card, PageOutput::tr("格式参数"),
+                                              QStringLiteral("pp-format-changed-pill"), QString());
+        changed_pill = header.pill;
+        v->addWidget(header.row);
+
         tabs = new QTabWidget(param_card);
         tabs->setObjectName(QStringLiteral("pp-format-tabs"));
         tabs->setDocumentMode(true);
@@ -895,62 +846,114 @@ struct Impl {
         add_format_button->setObjectName(QStringLiteral("pp-add-format"));
         add_format_button->setText(PageOutput::tr("添加格式…"));
         add_format_button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-        add_format_button->setToolTip(PageOutput::tr("添加格式…"));
+        add_format_button->setToolTip(PageOutput::tr("添加格式…（开启尚未选中的格式）"));
         add_format_button->setAccessibleName(PageOutput::tr("添加格式…")); // §11
         add_format_button->setProperty(icons::kIconNameProperty,
                                        QString::fromLatin1(icons::key(icons::Name::Add)));
         add_format_button->setAutoRaise(true);
         add_format_button->setCursor(Qt::PointingHandCursor);
+        add_format_button->setFixedHeight(theme::Metrics::btn_h); // R4 按钮高 26（A7）
         add_format_button->setFont(theme::font(theme::Typography::body_px, 500));
         tabs->setCornerWidget(add_format_button, Qt::TopRightCorner);
+        tabs->setContentsMargins(0, 0, 0, 0);
         v->addWidget(tabs);
+        refresh_changed_pill();
         return param_card;
     }
 
-    // 预设卡：下拉 + 保存 / 另存… / 删除
+    // 卡 ④：预设与预估（当前预设 + 另存…/删除/保存 ｜ 预估 kv 2 行）
     QWidget *build_preset_card(QWidget *parent) {
-        preset_card = make_card(parent, PageOutput::tr("预设"), QString(), nullptr, nullptr);
-        auto *v = qobject_cast<QVBoxLayout *>(preset_card->layout());
-        auto *row = new QWidget(preset_card);
-        auto *h = new QHBoxLayout(row);
-        h->setContentsMargins(14, 2, 14, 12);
-        h->setSpacing(8);
-        preset_combo = new QComboBox(row);
-        preset_combo->setObjectName(QStringLiteral("pp-preset-combo"));
-        preset_combo->setMinimumHeight(theme::Metrics::input_h);
-        preset_combo->setProperty("ppField", QStringLiteral("combo"));
-        preset_combo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        preset_save = new QPushButton(PageOutput::tr("保存"), row);
-        preset_save->setObjectName(QStringLiteral("pp-preset-save"));
-        preset_saveas = new QPushButton(PageOutput::tr("另存…"), row);
-        preset_saveas->setObjectName(QStringLiteral("pp-preset-saveas"));
-        preset_delete = new QPushButton(PageOutput::tr("删除"), row);
-        preset_delete->setObjectName(QStringLiteral("pp-preset-delete"));
-        for (QPushButton *b : {preset_save, preset_saveas, preset_delete}) {
-            b->setMinimumHeight(theme::Metrics::input_h);
-            b->setProperty("ppField", QStringLiteral("button"));
-            b->setFont(theme::font(theme::Typography::body_px, 600));
+        QVBoxLayout *v = nullptr;
+        preset_card = make_card(parent, &v);
+        const CardHeader header = make_header(preset_card, PageOutput::tr("预设与预估"), QString(),
+                                              QStringLiteral("pp-preset-hint"));
+        preset_hint = header.hint;
+        v->addWidget(header.row);
+        const Body body = make_body(preset_card);
+
+        // 当前预设（下拉 + 三个按钮；主操作居右 —— R4）
+        {
+            preset_combo = new QComboBox(preset_card);
+            preset_combo->setObjectName(QStringLiteral("pp-preset-combo"));
+            preset_combo->setFixedHeight(theme::Metrics::combo_h);
+            preset_combo->setProperty(kFieldProperty, QStringLiteral("combo"));
+            preset_combo->setPlaceholderText(PageOutput::tr("未选择预设")); // 修 2-24
+            preset_combo->setToolTip(PageOutput::tr("选择预设即载入（不改变左侧文件的勾选）"));
+            preset_combo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+            preset_saveas = make_button(preset_card, PageOutput::tr("另存…"),
+                                        QStringLiteral("pp-preset-saveas"), false);
+            preset_saveas->setToolTip(PageOutput::tr("另存为新预设…（命名后写入预设目录）"));
+            preset_delete = make_button(preset_card, PageOutput::tr("删除"),
+                                        QStringLiteral("pp-preset-delete"), false);
+            preset_save = make_button(preset_card, PageOutput::tr("保存"),
+                                      QStringLiteral("pp-preset-save"), true);
+            QWidget *field = make_flex_field(
+                preset_card, {preset_combo, preset_saveas, preset_delete, preset_save});
+            const formkit::Row row =
+                formkit::frow(preset_card, PageOutput::tr("当前预设"), field, FieldWidth::Flex);
+            row.row->setObjectName(QStringLiteral("pp-preset-row"));
+            body.box->addWidget(row.row);
         }
-        h->addWidget(preset_combo, 1);
-        h->addWidget(preset_save);
-        h->addWidget(preset_saveas);
-        h->addWidget(preset_delete);
-        v->addWidget(row);
+        // 预估 kv 2 行（预计输出/体积 ｜ 预计耗时/剩余磁盘）—— 无实测依据的两项走中性空态
+        {
+            const auto make_value = [&](const QString &object_name) {
+                auto *value = new ElidedLabel(preset_card);
+                value->setObjectName(object_name);
+                value->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkValue));
+                value->setFont(theme::font(theme::Typography::body_px, QFont::Normal, true));
+                value->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+                return value;
+            };
+            est_output = make_value(QStringLiteral("pp-est-output"));
+            est_size = make_value(QStringLiteral("pp-est-size"));
+            est_time = make_value(QStringLiteral("pp-est-time"));
+            est_disk = make_value(QStringLiteral("pp-est-disk"));
+            est_size->setToolTip(
+                PageOutput::tr("未运行前不给估值（避免假读数）：完成后体积见运行页"));
+            est_time->setToolTip(
+                PageOutput::tr("未运行前不给估值（避免假读数）：完成后吞吐见运行页"));
+            const auto make_row = [&](const QString &key1, ElidedLabel *value1, const QString &key2,
+                                      ElidedLabel *value2) {
+                formkit::FieldCell left;
+                left.label = key1;
+                left.field = value1;
+                left.width = FieldWidth::Flex;
+                formkit::FieldCell right;
+                right.label = key2;
+                right.field = value2;
+                right.width = FieldWidth::Flex;
+                return formkit::double_row(preset_card, left, right).row;
+            };
+            body.box->addWidget(make_row(PageOutput::tr("预计输出"), est_output,
+                                         PageOutput::tr("预计体积"), est_size));
+            body.box->addWidget(make_row(PageOutput::tr("预计耗时"), est_time,
+                                         PageOutput::tr("剩余磁盘"), est_disk));
+        }
+        v->addWidget(body.host);
+        update_estimate();
+        sync_preset_buttons(); // 初始无当前预设 → 保存/删除禁用并给出原因（修 2-25）
         return preset_card;
+    }
+
+    static QString template_tooltip() {
+        return PageOutput::tr(
+            "变量：$format=格式目录 · $dir=源相对目录 · $file=文件名.扩展名 · $name=主名 · "
+            "$ext=扩展名\n"
+            "示例：$format/$dir/$file → …/jxl/2024-05/IMG_2731.jxl\n"
+            "段间以 / 分隔；未知 $ 符号、.. 与绝对路径会被拒绝（开始运行前阻断）");
     }
 
     // ------------------------------------------------------------ 信号接线
 
     void wire() {
         for (int i = 0; i < kFormatCount; ++i) {
-            QObject::connect(tiles[i], &QAbstractButton::toggled, q, [this, i](bool on) {
+            formkit::CheckableCard *tile = tiles[i];
+            QObject::connect(tile, &QAbstractButton::toggled, q, [this, i](bool on) {
                 toggle_format(kFormats[i].id, on, /*user=*/true);
             });
         }
-        QObject::connect(mode_convert, &QToolButton::clicked, q,
-                         [this] { q->set_metadata_only(false); });
-        QObject::connect(mode_meta, &QToolButton::clicked, q,
-                         [this] { q->set_metadata_only(true); });
+        QObject::connect(mode_seg, &formkit::SegmentedControl::current_changed, q,
+                         [this](int index) { q->set_metadata_only(index == 1); });
 
         QObject::connect(browse_button, &QPushButton::clicked, q, [this] {
             const QString start = out_root_edit->text().trimmed();
@@ -961,6 +964,7 @@ struct Impl {
         });
         QObject::connect(out_root_edit, &QLineEdit::textChanged, q, [this](const QString &) {
             update_template_example();
+            update_estimate();
             emit q->config_changed();
         });
         QObject::connect(conflict_combo, &QComboBox::currentIndexChanged, q,
@@ -973,7 +977,8 @@ struct Impl {
             emit q->output_template_changed(text);
             emit q->config_changed();
         });
-        QObject::connect(split_switch, &QAbstractButton::toggled, q,
+        QObject::connect(vars_button, &QPushButton::clicked, q, [this] { show_vars_menu(); });
+        QObject::connect(split_switch, &formkit::SwitchControl::toggled, q,
                          [this](bool on) { apply_split_to_template(on); });
         QObject::connect(tabs, &QTabWidget::currentChanged, q, [this](int index) {
             if (index < 0 || index >= static_cast<int>(selected.size()))
@@ -984,18 +989,19 @@ struct Impl {
             active_id = id;
             update_form_object_names();
             update_template_example();
+            refresh_changed_pill();
+            refresh_tab_labels();
             emit q->format_changed(QString::fromStdString(id));
             emit q->config_changed();
         });
         QObject::connect(add_format_button, &QToolButton::clicked, q, [this] {
-            // 「＋ 添加格式…」= 打开尚未选中的首个格式（磁贴顺序）；全部已选 → 提示
+            // 「＋ 添加格式…」= 打开尚未选中的首个格式（磁贴顺序）；全部已选 → 无可用项
             for (const FormatEntry &e : kFormats) {
                 if (!is_selected(e.id)) {
                     toggle_format(e.id, true, /*user=*/true);
                     return;
                 }
             }
-            tabs_hint->set_full_text(PageOutput::tr("8 个格式已全部选中"));
         });
         QObject::connect(preset_combo, &QComboBox::activated, q, [this](int index) {
             if (index < 0)
@@ -1005,24 +1011,53 @@ struct Impl {
                 emit q->preset_load_requested(path);
         });
         QObject::connect(preset_save, &QPushButton::clicked, q, [this] {
-            const QString name =
-                preset_combo->currentIndex() >= 0 ? preset_combo->currentText() : QString();
-            if (name.isEmpty()) {
-                emit q->preset_saveas_requested();
+            const int index = preset_combo->currentIndex();
+            const QString path =
+                index >= 0 ? preset_combo->itemData(index, Qt::UserRole).toString() : QString();
+            if (path.isEmpty()) {
+                emit q->preset_saveas_requested(); // 未选预设 → 走命名保存
                 return;
             }
-            emit q->preset_save_requested(name);
+            emit q->preset_save_requested(preset_combo->itemText(index));
         });
         QObject::connect(preset_saveas, &QPushButton::clicked, q,
                          [this] { emit q->preset_saveas_requested(); });
         QObject::connect(preset_delete, &QPushButton::clicked, q, [this] {
+            const int index = preset_combo->currentIndex();
             const QString path =
-                preset_combo->currentIndex() >= 0
-                    ? preset_combo->itemData(preset_combo->currentIndex(), Qt::UserRole).toString()
-                    : QString();
+                index >= 0 ? preset_combo->itemData(index, Qt::UserRole).toString() : QString();
             if (!path.isEmpty())
                 emit q->preset_delete_requested(path);
         });
+    }
+
+    // 变量表菜单（点击变量即插入到模板光标处；§8：变量语法必有
+    // tooltip，本菜单是同一份说明的可点形态）
+    void show_vars_menu() {
+        struct Var {
+            const char *token;
+            const char *desc;
+        };
+        static const Var vars[] = {
+            {"$format", "格式目录（jxl / png / …）"},
+            {"$dir", "源相对目录（如 2024/05）"},
+            {"$file", "文件名.扩展名"},
+            {"$name", "主名（不含扩展名）"},
+            {"$ext", "扩展名"},
+        };
+        QMenu menu(q);
+        for (const Var &v : vars) {
+            QAction *action = menu.addAction(QString::fromLatin1(v.token) + QStringLiteral(" · ") +
+                                             PageOutput::tr(v.desc));
+            QObject::connect(action, &QAction::triggered, q, [this, token = v.token] {
+                const int pos = template_edit->cursorPosition();
+                QString text = template_edit->text();
+                text.insert(pos, QString::fromLatin1(token));
+                template_edit->setText(text); // textChanged → 示例/信号
+                template_edit->setCursorPosition(pos + QString::fromLatin1(token).size());
+            });
+        }
+        menu.exec(vars_button->mapToGlobal(QPoint(0, vars_button->height())));
     }
 
     // ------------------------------------------------------------ 磁贴 / 页签
@@ -1055,6 +1090,8 @@ struct Impl {
         update_format_count();
         update_metadata_only_state();
         update_template_example();
+        update_estimate();
+        refresh_changed_pill();
         emit q->config_changed();
     }
 
@@ -1105,44 +1142,43 @@ struct Impl {
         st.page = new QWidget(tabs);
         st.page->setObjectName(QStringLiteral("pp-format-page-") + QString::fromStdString(id));
         auto *v = new QVBoxLayout(st.page);
-        v->setContentsMargins(14, 8, 14, 10);
-        v->setSpacing(6);
+        // 页签内容与卡片其余行同轴（卡内边距 12；R1 行 pitch 连续）
+        v->setContentsMargins(theme::Metrics::card_pad_x, 0, theme::Metrics::card_pad_x,
+                              theme::Metrics::card_pad_bottom);
+        v->setSpacing(0);
 
-        // 位深行（70px 轴；格式能力约束：如 JPEG 锁 8 位）
-        auto *bd_row = new QWidget(st.page);
-        auto *bd_h = new QHBoxLayout(bd_row);
-        bd_h->setContentsMargins(0, 0, 0, 0);
-        bd_h->setSpacing(theme::Metrics::form_col_gap);
-        auto *bd_label = new QLabel(PageOutput::tr("位深"), bd_row);
-        bd_label->setObjectName(QStringLiteral("pp-bitdepth-label-") + QString::fromStdString(id));
-        bd_label->setFont(theme::font(theme::Typography::small_px));
-        bd_label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        bd_label->setMinimumWidth(theme::Metrics::form_label_w);
-        bd_label->setMaximumWidth(theme::Metrics::form_label_w);
-        st.bitdepth = new QComboBox(bd_row);
-        st.bitdepth->setObjectName(QStringLiteral("pp-bitdepth-combo"));
-        st.bitdepth->setMinimumHeight(theme::Metrics::input_h);
-        st.bitdepth->setProperty("ppField", QStringLiteral("combo"));
-        st.bitdepth_note = new ElidedLabel(bd_row);
-        st.bitdepth_note->setObjectName(QStringLiteral("pp-bitdepth-note-") +
-                                        QString::fromStdString(id));
-        st.bitdepth_note->setFont(theme::font(theme::Typography::hint_px));
-        st.bitdepth_note->setProperty("ppField", QStringLiteral("hint"));
-        bd_h->addWidget(bd_label);
-        bd_h->addWidget(st.bitdepth);
-        bd_h->addWidget(st.bitdepth_note, 1);
-        bd_h->addStretch(0);
-        v->addWidget(bd_row);
+        // 行 1：位深（格式能力约束：如 JPEG 锁 8 位；约束说明入 10px 注释位）
+        {
+            st.bitdepth = new QComboBox(st.page);
+            st.bitdepth->setObjectName(QStringLiteral("pp-bitdepth-combo"));
+            st.bitdepth->setFixedHeight(theme::Metrics::combo_h);
+            st.bitdepth->setProperty(kFieldProperty, QStringLiteral("combo"));
+            // 行内 10px 注释位 = 格式能力约束说明（R3：提示不占标签位；占位符 " " 保证注释位存在）
+            const formkit::Row row =
+                formkit::frow(st.page, PageOutput::tr("位深"), st.bitdepth, FieldWidth::Standard,
+                              QString(), QStringLiteral(" "));
+            row.row->setObjectName(QStringLiteral("pp-bitdepth-row"));
+            st.bitdepth_note = row.note;
+            st.bitdepth_note->setObjectName(QStringLiteral("pp-bitdepth-note-") +
+                                            QString::fromStdString(id));
+            st.bitdepth_note->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+            st.bitdepth_note->setText(QString());
+            v->addWidget(row.row);
+        }
 
-        // ParamForm（原样嵌入；无损复选框在其顶部选择器行）
+        // 行 2..6：技术 / 无损 / 核心参数 / 高级参数（ParamForm 一行一义）
         st.form = new ParamForm(*f, effective_backends(*f), st.page);
         st.form->setObjectName(QStringLiteral("pp-param-form-") + QString::fromStdString(id));
+        st.form->set_tokens(tokens);
         v->addWidget(st.form);
 
         // avif 10bit+alpha 预选提示（原 pp-alpha-hint 语义，位置随格式页签）
         st.alpha_hint = new ElidedLabel(st.page);
         st.alpha_hint->setObjectName(QStringLiteral("pp-alpha-hint"));
+        st.alpha_hint->setProperty(kFieldProperty, QStringLiteral("hint"));
         st.alpha_hint->setFont(theme::font(theme::Typography::hint_px));
+        st.alpha_hint->setMinimumHeight(formkit::kRowPitch);
+        st.alpha_hint->setContentsMargins(formkit::kLabelW + formkit::kColGap, 0, 0, 0);
         st.alpha_hint->set_full_text(
             PageOutput::tr("10 位 + 含 alpha：已选择 libaom 后端（SVT-AV1 不支持该组合）"));
         st.alpha_hint->setVisible(false);
@@ -1151,6 +1187,7 @@ struct Impl {
         QObject::connect(st.form, &ParamForm::selection_changed, q,
                          [this, id](const FormSelection &) { on_param_selection_changed(id); });
         QObject::connect(st.form, &ParamForm::changed, q, [this, id] {
+            refresh_changed_pill();
             refresh_tab_labels();
             Q_UNUSED(id);
             emit q->config_changed();
@@ -1195,15 +1232,25 @@ struct Impl {
         st->spec.out_bitdepth = bitdepth_of(id);
     }
 
+    // 页签文案 = 格式名 · 位深（§7.2 页签；改动计数改由卡头中性 pill 承担）
     QString format_tab_label(const std::string &id) const {
         const pp::FormatDef *f = pp::find_format(id);
         const QString name =
             f != nullptr ? QString::fromStdString(f->label) : QString::fromStdString(id);
-        const int changed = changed_param_count(id);
-        return changed > 0 ? name + QStringLiteral("  · ") + QString::number(changed) : name;
+        const int depth = bitdepth_of(id);
+        return depth > 0 ? name + QStringLiteral(" · ") + PageOutput::tr("%1 位").arg(depth) : name;
     }
 
-    // 页签计数徽标：值 ≠ 表内默认 的参数项数
+    // 卡头中性 pill：当前页签格式「已改 N」（值 ≠ 表内默认的参数项数；修 2-07 计数用中性档）
+    void refresh_changed_pill() {
+        if (changed_pill == nullptr)
+            return;
+        const int changed = changed_param_count(active_id);
+        changed_pill->setText(PageOutput::tr("已改 %1").arg(changed));
+        changed_pill->setVisible(changed > 0);
+    }
+
+    // 页签计数：值 ≠ 表内默认 的参数项数
     int changed_param_count(const std::string &id) const {
         const FormatState *st = state_of(id);
         if (st == nullptr || st->form == nullptr)
@@ -1214,7 +1261,7 @@ struct Impl {
         const FormSelection sel = st->form->selection();
         // M4-T13b（D-W3-1 根因）：tech_by_id 返回的是**入参容器内**的指针，
         // 而 effective_backends 按值返回 → 必须先把临时绑定到具名局部再取指针，
-        // 否则 t 在语句结束即悬垂（ASAN: heap-use-after-free @ page_output.cpp:1211）。
+        // 否则 t 在语句结束即悬垂（ASAN: heap-use-after-free @ page_output.cpp）。
         const std::vector<pp::BackendDef> backends = effective_backends(*f);
         const pp::TechDef *t = tech_by_id(backends, sel.backend, sel.tech);
         if (t == nullptr)
@@ -1242,8 +1289,8 @@ struct Impl {
     void update_format_count() {
         if (format_pill == nullptr)
             return;
+        format_pill->setText(PageOutput::tr("已选 %1").arg(selected.size()));
         format_pill->setVisible(true);
-        format_pill->set_full_text(PageOutput::tr("已选 %1").arg(selected.size()));
     }
 
     // ------------------------------------------------------------ 参数状态
@@ -1261,11 +1308,13 @@ struct Impl {
         evaluate_avif_alpha_preselect(id); // 后端/位深变化可能使预选条件成立
         update_alpha_hint(id);
         refresh_tab_labels();
+        refresh_changed_pill();
     }
 
     void on_bitdepth_changed(const std::string &id) {
         evaluate_avif_alpha_preselect(id);
         update_alpha_hint(id);
+        refresh_tab_labels(); // 位深入页签文案
         emit q->config_changed();
     }
 
@@ -1307,13 +1356,13 @@ struct Impl {
                 resolved = contains(allowed, 8) ? 8 : allowed.front(); // §2.9.2
         }
         repopulate_bitdepths(*st, allowed, resolved);
-        // 格式能力约束提示（如 JPEG 仅 8 位）
+        // 格式能力约束说明（如 JPEG 仅 8 位）：排在同行控件右侧（行内提示不占标签位）
         if (st->bitdepth_note != nullptr) {
             const bool locked = allowed.size() == 1;
-            st->bitdepth_note->set_full_text(locked ? PageOutput::tr("%1 仅支持 %2 位输出")
-                                                          .arg(QString::fromStdString(f->label))
-                                                          .arg(allowed.front())
-                                                    : QString());
+            st->bitdepth_note->setText(locked ? PageOutput::tr("%1 仅支持 %2 位输出")
+                                                    .arg(QString::fromStdString(f->label))
+                                                    .arg(allowed.front())
+                                              : QString());
         }
         return resolved != current;
     }
@@ -1340,7 +1389,7 @@ struct Impl {
         set_bitdepth_options(id, have_spec ? spec.out_bitdepth : -1, /*keep_if_valid=*/false);
         evaluate_avif_alpha_preselect(id);
         update_alpha_hint(id);
-        refresh_tab_labels();
+        refresh_changed_pill();
     }
 
     pp::OutputFormatSpec spec_of(const std::string &id) const {
@@ -1413,16 +1462,15 @@ struct Impl {
 
     void update_metadata_only_state() {
         const bool enabled = !metadata_only;
-        format_card->setEnabled(enabled);
+        // 互斥置灰：磁贴多选区 + 格式参数卡（模式分段自身保持可用 —— 否则无法切回）
+        tiles_host->setEnabled(enabled);
         param_card->setEnabled(enabled);
         // v0.2 语义（M1b §2.9）：仅元数据不做色彩转换 → 色彩目标一并禁用
         color_combo->setEnabled(enabled);
         mode_note->setVisible(metadata_only);
-        if (mode_convert != nullptr) {
-            const QSignalBlocker b1(mode_convert);
-            const QSignalBlocker b2(mode_meta);
-            mode_convert->setChecked(!metadata_only);
-            mode_meta->setChecked(metadata_only);
+        {
+            const QSignalBlocker blocker(mode_seg);
+            mode_seg->set_current_index(metadata_only ? 1 : 0);
         }
         for (const auto &[id, st] : states) {
             if (st.alpha_hint != nullptr)
@@ -1466,20 +1514,21 @@ struct Impl {
         template_edit->setText(segs.join(QLatin1Char('/'))); // textChanged → 示例/信号
     }
 
+    // 输出示例（注释行）：自然语、单行、防溢出（修 2-14 统一 $var 语法/ 2-15 不再 "+..." 堆叠）
     void update_template_example() {
         if (template_example == nullptr || template_edit == nullptr)
             return;
         const QString tmpl = template_edit->text();
         std::string err;
         if (!pp::validate_output_template(tmpl.toStdString(), &err)) {
+            template_example->setProperty("ppInvalid", true);
+            theme::repolish(template_example);
             template_example->set_full_text(
                 PageOutput::tr("模板无效：%1").arg(QString::fromStdString(err)));
-            template_example->setProperty("ppInvalid", true);
             return;
         }
         template_example->setProperty("ppInvalid", false);
-        const QString root = out_root_edit->text().trimmed();
-        const QString prefix = root.isEmpty() ? QStringLiteral("<根>") : root;
+        theme::repolish(template_example);
         QStringList samples;
         for (const std::string &id : selected) {
             const pp::FormatDef *f = pp::find_format(id);
@@ -1497,15 +1546,74 @@ struct Impl {
             QString rel = QString::fromStdString(out.generic_string());
             if (rel.startsWith(QStringLiteral("./")))
                 rel.remove(0, 2);
-            samples << prefix + QStringLiteral("/") + rel;
+            samples << QStringLiteral("…/") +
+                           rel; // 根目录前缀以 "…" 表示（与模板语法同族，无 <根>）
             if (samples.size() == 2)
                 break;
         }
-        if (selected.size() > 2)
-            samples << QStringLiteral("…");
-        template_example->set_full_text(samples.join(QStringLiteral("  + ")));
+        if (selected.empty()) {
+            template_example->set_full_text(PageOutput::tr("选择输出格式后显示输出路径示例"));
+        } else if (samples.isEmpty()) {
+            template_example->set_full_text(PageOutput::tr("模板为空的段（无可展开的路径）"));
+        } else if (selected.size() > 1) {
+            template_example->set_full_text(
+                samples.first() + QLatin1Char(' ') +
+                PageOutput::tr("等 %1 个输出路径").arg(selected.size()));
+        } else {
+            template_example->set_full_text(samples.first());
+        }
         template_example->setToolTip(template_tooltip() + QLatin1Char('\n') +
                                      template_example->full_text());
+    }
+
+    // ------------------------------------------------------------ 预估（④）
+
+    // 预估卡：预计输出 = 勾选文件数 × 已选格式数（仅元数据恒 1 个格式 —— §3.2 硬校验）；
+    // 体积/耗时无实测依据 → 中性空态「—」（§8：未发生的量不显示；tooltip 说明）。
+    void update_estimate() {
+        if (est_output == nullptr)
+            return;
+        const int formats = metadata_only ? 1 : static_cast<int>(selected.size());
+        const int outputs = input_count > 0 && formats > 0 ? input_count * formats : 0;
+        est_output->set_full_text(outputs > 0 ? PageOutput::tr("%1 个").arg(outputs)
+                                              : PageOutput::tr("—"));
+        est_output->setToolTip(PageOutput::tr("每个已选文件都会为每个已选格式生成一个输出文件"));
+        est_size->set_full_text(PageOutput::tr("—"));
+        est_time->set_full_text(PageOutput::tr("—"));
+        const QString root = out_root_edit != nullptr ? out_root_edit->text().trimmed() : QString();
+        QString disk = PageOutput::tr("—");
+        QString disk_tip = PageOutput::tr("填写输出根目录后显示可用空间");
+        if (!root.isEmpty()) {
+            const QStorageInfo info(root);
+            if (info.isValid() && info.isReady()) {
+                disk = PageOutput::tr("%1 可用").arg(human_bytes(info.bytesAvailable()));
+                disk_tip = PageOutput::tr("输出根目录所在卷的可用空间：%1").arg(root);
+            } else {
+                disk_tip = PageOutput::tr("无法读取输出根目录所在卷的可用空间：%1").arg(root);
+            }
+        }
+        est_disk->set_full_text(disk);
+        est_disk->setToolTip(disk_tip);
+        if (preset_hint != nullptr)
+            preset_hint->set_full_text(input_count > 0
+                                           ? PageOutput::tr("基于选中 %1 个文件").arg(input_count)
+                                           : QString());
+    }
+
+    // 修 2-25：保存/删除的可用态随"是否有当前预设"走，禁用原因写进 tooltip（不静默灰）
+    void sync_preset_buttons() {
+        if (preset_combo == nullptr)
+            return;
+        const int index = preset_combo->currentIndex();
+        const QString path =
+            index >= 0 ? preset_combo->itemData(index, Qt::UserRole).toString() : QString();
+        const bool has = !path.isEmpty();
+        preset_save->setEnabled(has);
+        preset_delete->setEnabled(has);
+        preset_save->setToolTip(has ? PageOutput::tr("保存到当前预设（覆盖同名文件）")
+                                    : PageOutput::tr("未选择预设：请先「另存…」保存一份新预设"));
+        preset_delete->setToolTip(has ? PageOutput::tr("删除当前预设（会二次确认）")
+                                      : PageOutput::tr("未选择预设：无可删除项"));
     }
 };
 
@@ -1575,6 +1683,7 @@ void PageOutput::set_metadata_only(bool on) {
         return;
     impl_->metadata_only = on;
     impl_->update_metadata_only_state();
+    impl_->update_estimate();
     emit config_changed();
 }
 
@@ -1590,6 +1699,7 @@ void PageOutput::set_out_root(const QString &dir) {
     const QSignalBlocker blocker(impl_->out_root_edit);
     impl_->out_root_edit->setText(dir);
     impl_->update_template_example();
+    impl_->update_estimate();
     emit config_changed();
 }
 
@@ -1661,6 +1771,9 @@ void PageOutput::apply_preset(const pp::PresetData &p) {
     }
     impl_->sync_split_switch(QString::fromStdString(preset.output_template));
     impl_->update_template_example();
+    impl_->update_estimate();
+    impl_->refresh_tab_labels();
+    impl_->refresh_changed_pill();
     if (!impl_->selected.empty())
         emit format_changed(QString::fromStdString(impl_->active_id));
     emit config_changed();
@@ -1738,25 +1851,47 @@ void PageOutput::select_format(const QString &format_id) {
     impl_->active_id = id;
     impl_->sync_tab_current();
     impl_->update_template_example();
+    impl_->refresh_tab_labels();
+    impl_->refresh_changed_pill();
 }
 
-// ---------------------------------------------------------------- 追加面（M4-T13）
+// ---------------------------------------------------------------- 追加面（M4-T13 / M5-T8）
+
+void PageOutput::set_input_count(int files) {
+    Impl *impl_ = impl_of(this);
+    const int next = files > 0 ? files : 0;
+    if (impl_->input_count == next)
+        return;
+    impl_->input_count = next;
+    impl_->update_estimate(); // 只刷新预估读数（不发信号 → 不触发 refresh_status 回环）
+}
 
 void PageOutput::set_tokens(const theme::Tokens &tokens) {
     Impl *impl_ = impl_of(this);
     impl_->tokens = tokens;
-    for (FormatTile *tile : impl_->tiles) {
+    for (formkit::CheckableCard *tile : impl_->tiles) {
         if (tile != nullptr)
             tile->set_tokens(tokens);
     }
     if (impl_->split_switch != nullptr)
         impl_->split_switch->set_tokens(tokens);
+    if (impl_->mode_seg != nullptr)
+        impl_->mode_seg->set_tokens(tokens);
+    if (impl_->format_pill != nullptr)
+        impl_->format_pill->set_tokens(tokens);
+    if (impl_->changed_pill != nullptr)
+        impl_->changed_pill->set_tokens(tokens);
+    for (auto &[id, st] : impl_->states) {
+        Q_UNUSED(id);
+        if (st.form != nullptr)
+            st.form->set_tokens(tokens);
+    }
     // 页面 QSS（卡片/徽标/输入类控件/页签；与 PageMeta 同一注入口径）
     impl_->q->setStyleSheet(page_qss(tokens));
     // M5-T3：矢量图标随 tokens 重放（QIcon 取色不吃 QSS 的 color）—— 「添加格式…」的 ＋
     if (impl_->add_format_button != nullptr)
-        icons::apply(impl_->add_format_button, icons::Name::Add, tokens.text3, tokens.text3, 12);
-    // 浅色卡阴影（§9.2 0 1px 4px rgba(16,24,40,.06)；深色无阴影）
+        icons::apply(impl_->add_format_button, icons::Name::Add, tokens.accent, tokens.text3, 12);
+    // 浅色卡阴影（§4.1 shadow：亮 0 1px 4px；深色无投影）
     const qreal dpr = impl_->q->devicePixelRatioF() > 0.01 ? impl_->q->devicePixelRatioF() : 1.0;
     const std::array<QFrame *, 4> cards = {impl_->format_card, impl_->global_card,
                                            impl_->param_card, impl_->preset_card};
@@ -1790,17 +1925,18 @@ void PageOutput::set_preset_list(const std::vector<std::pair<QString, QString>> 
     impl_->preset_combo->clear();
     for (const auto &[path, name] : presets)
         impl_->preset_combo->addItem(name, path);
+    // 修 2-24：无当前预设 → 保持未选中（显示 placeholder「未选择预设」），不再默认指向首项
+    int index = -1;
     if (!current.isEmpty()) {
         for (int i = 0; i < impl_->preset_combo->count(); ++i) {
             if (impl_->preset_combo->itemData(i, Qt::UserRole).toString() == current) {
-                impl_->preset_combo->setCurrentIndex(i);
+                index = i;
                 break;
             }
         }
     }
-    const bool has = impl_->preset_combo->count() > 0;
-    impl_->preset_save->setEnabled(has);
-    impl_->preset_delete->setEnabled(has);
+    impl_->preset_combo->setCurrentIndex(index);
+    impl_->sync_preset_buttons();
 }
 
 void PageOutput::set_current_preset(const QString &path) {
@@ -1811,9 +1947,10 @@ void PageOutput::set_current_preset(const QString &path) {
     for (int i = 0; i < impl_->preset_combo->count(); ++i) {
         if (impl_->preset_combo->itemData(i, Qt::UserRole).toString() == path) {
             impl_->preset_combo->setCurrentIndex(i);
-            return;
+            break;
         }
     }
+    impl_->sync_preset_buttons();
 }
 
 QString PageOutput::output_template() const {

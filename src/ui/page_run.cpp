@@ -6,7 +6,8 @@
 //   tooltip）+ §5 R1–R4（行 pitch 28 / 标签轨 80 / 控件度量）+ §10（Qt 实现映射）+ §11（无障碍）；
 //   问题台账 docs/gui-review-0.3.0.md 3-01…3-16 与 K4 裁定（要求改·满足）；
 //   开发期裁定 docs/m5-adjudications.md A7（按钮高 26）/ A8（字形禁令：状态一律矢量图标）/
-//   A9（RunMarkLabel 的屏幕/DPI 变化失效缓存）。
+//   A9（RunMarkLabel 的屏幕/DPI 变化失效缓存）/ A29（RunSummary::peak_bytes 加性解冻 →
+//   「峰值内存」kv 接**真实读数**，量级换档 B→KB→MB→GB；0 = 未采集 → 「—」）。
 //
 // v6 口径（逐条对应 K4「运行页数据真实性」）：
 //   * **指标单源**（修 3-03/3-04）：总览 kv 只有 §7.3 的 8 项（总耗时/吞吐 · 平均/并行 ·
@@ -445,6 +446,19 @@ QString fmt_bytes(quint64 bytes) {
 
 QString fmt_secs(double ms) { return QStringLiteral("%1s").arg(ms / 1000.0, 0, 'f', 1); }
 
+// 峰值内存读数（A29）：量级换档 B→KB→MB→GB；0 = 本次无像素预算读数 → 「—」（§2.5 未发生的量）
+QString fmt_mem_bytes(quint64 bytes) {
+    if (bytes == 0)
+        return QStringLiteral("—");
+    const double kb = static_cast<double>(bytes) / 1024.0;
+    if (kb < 1024.0)
+        return PageRun::tr("%1 KB").arg(kb, 0, 'f', 0);
+    const double mb = kb / 1024.0;
+    if (mb < 1024.0)
+        return PageRun::tr("%1 MB").arg(mb, 0, 'f', 1);
+    return PageRun::tr("%1 GB").arg(mb / 1024.0, 0, 'f', 2);
+}
+
 // 行名：只显示文件名（调用方可能传完整路径）
 QString row_name(const QString &name) {
     const QString base = QFileInfo(name).fileName();
@@ -614,6 +628,7 @@ struct RunState {
     // 终态读数（end_run 的引擎汇总；未结束 → 显示走实时折算）
     bool has_summary = false;
     double summary_total_ms = 0.0, summary_mb_s = 0.0, summary_avg_ms = 0.0;
+    quint64 summary_peak_bytes = 0; // A29：RunSummary::peak_bytes（像素预算峰值，单源）
 };
 
 QHash<const PageRun *, RunState *> &registry() {
@@ -1223,9 +1238,11 @@ void refresh_widgets(RunState &s) {
     s.budget->setToolTip(PageRun::tr("编码可用的处理器核心数上限；自适应 = 按本机核心数"));
     s.tally->set_full_text(tally_text(tally));
     s.tally->setToolTip(PageRun::tr("按输出计：成功 / 0 字节异常 / 失败 / 跳过 / 取消"));
-    // 峰值内存：引擎只把它写进日志（RunSummary 未上报）→ 界面不编数（§2.5/G6）
-    s.memory->set_full_text(QStringLiteral("—"));
-    s.memory->setToolTip(PageRun::tr("本次运行的峰值内存由引擎写入日志，界面未采集"));
+    // 峰值内存（A29：解冻加性字段 RunSummary::peak_bytes → 接**真实读数**；与引擎
+    // `budget report` 行同一统计点，单源）。运行中未采集（终态汇总才有该读数）→ 「—」（§2.5）
+    s.memory->set_full_text(s.has_summary ? fmt_mem_bytes(s.summary_peak_bytes)
+                                          : QStringLiteral("—"));
+    s.memory->setToolTip(PageRun::tr("本次运行的像素预算峰值（解码/合成期的最大并发占用）"));
 
     // ---- 总览：状态胶囊（§8 四档；完成态唯一形态 = 绿胶囊「已完成」）----
     StatusText pill;
@@ -2039,6 +2056,7 @@ void PageRun::end_run(const pp::RunSummary &sum, const QString &out_root) {
     s->summary_total_ms = sum.total_ms;
     s->summary_mb_s = sum.throughput_mb_s;
     s->summary_avg_ms = sum.avg_file_ms;
+    s->summary_peak_bytes = sum.peak_bytes; // A29（加性字段；M4 前恒 0 → 读数「—」）
     if (sum.cancelled > 0)
         s->cancel_requested = true;
     // 防御性收尾：未收到终态事件的行按结果定稿（正常路径调度器对每文件恰好发一次终态）
@@ -2078,6 +2096,7 @@ void PageRun::reset() {
     s->summary_total_ms = 0.0;
     s->summary_mb_s = 0.0;
     s->summary_avg_ms = 0.0;
+    s->summary_peak_bytes = 0;
     for (FileRow &file : s->files) {
         delete file.group;
         for (OutRow &out : file.outs) {

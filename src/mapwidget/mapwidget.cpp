@@ -33,7 +33,6 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QPainter>
-#include <QPalette>
 #include <QPixmap>
 #include <QResizeEvent>
 #include <QStringList>
@@ -556,14 +555,16 @@ MapWidget::MapWidget(QWidget *parent) : QWidget(parent), impl_(std::make_unique<
     d.provider = provider_by_id(QStringLiteral("osm"));
     d.nam = new QNetworkAccessManager(this);
 
-    d.banner = new QLabel(tr("地图离线（可手动输入坐标）"), this);
+    // M5-T12/A30（§8 状态色语义）：离线 banner **中性化** —— 文案去括号（说明进 tooltip，§2.6
+    // 「实现细节/补充说明进 tooltip」）、底色/字色去**警示黄**（琥珀语义只留 0 字节那类真警告）。
+    // 中性底色/字色 = 系统调色板默认（本件不持令牌，宿主页以自身令牌 QSS 接管同一标签 ——
+    // 令牌单源在宿主侧）；此文件不再自持任何硬编码语义色（A6 口径）。
+    d.banner = new QLabel(tr("地图离线"), this);
     d.banner->setAlignment(Qt::AlignCenter);
     d.banner->setFrameShape(QFrame::Box);
     d.banner->setMargin(4);
-    QPalette banner_palette = d.banner->palette();
-    banner_palette.setColor(QPalette::Window, QColor(0xff, 0xf1, 0xb8));
-    banner_palette.setColor(QPalette::WindowText, QColor(0x6b, 0x4a, 0x00));
-    d.banner->setPalette(banner_palette);
+    d.banner->setToolTip(tr("可手动输入坐标"));
+    d.banner->setAccessibleName(tr("地图离线")); // §11：状态说明可读（tooltip 同文案的主干）
     d.banner->setAutoFillBackground(true);
     d.banner->setVisible(false);
 

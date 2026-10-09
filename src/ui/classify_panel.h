@@ -8,14 +8,20 @@
 // - 圈选语义（D2）：……分类行右键菜单「全选该类/反选该类/清空勾选」；搜索过滤与勾选正交（勾选状态不因过滤丢失）。
 // clang-format on
 //
-// 控件面（mockup meta-dark.html 左栏 `.cls-panel`，逐条；M5-T5 换锚见下）：
-//   * 行 = 色点 9px + **打标 chip**（formkit::ChipButton：键帽 = 热键位、文字 = 类名，固定宽）+
+// 控件面（mockup meta-dark.html 左栏 `.cls-panel`，逐条；M5-T5 换锚、M5-T12/A15 改 2 列网格）：
+//   * **形态 = 2 列 kv-grid**（A15，mockups-v2 视觉终稿）：`grid-auto-rows:28px` + 列距 12
+//     （R1 行 pitch 28；卡体内边距 12/8/12/4 = mockup `card-b{padding:8px 12px 10px}`）；
+//     单元按视觉序（左→右、上→下）填格、两列等宽；
+//   * 单元 = 色点 9px + **打标 chip**（formkit::ChipButton：键帽 = 热键位、文字 = 类名，固定宽）+
 //     右端**中性计数胶囊**（formkit::PillBadge::count —— §2.7「徽章只表状态不表计数，计数 = 中性
 //     胶囊」；1-11/1-13：禁用蓝色实心计数、与预览底栏的"快速打标"合成**单一打标入口**：键帽与
 //     计数同屏一处一个语义）；
-//     首行 = 保留虚拟分类「全部」（计数 = 文件总数；色点用 --txt3，对应 mockup #c9c9d2）；
-//   * 末行 = 全宽「＋ 新建分类…」**文字链**（R4「文字链无框」/ mockup `.btn.lnk`；高 = 裁定 A7
-//     的 btn_h；1-15「统一按钮规格」）；
+//     首格 = 保留虚拟分类「全部」（计数 = 文件总数；色点用 --txt3，对应 mockup #c9c9d2）；
+//   * 「＋ 新建分类…」= **文字链**（R4「文字链无框」/ mockup `.btn.lnk`；高 = 裁定 A7 的 btn_h；
+//     1-15「统一按钮规格」），位置 = 网格的**下一个空位**（与 mockup 的 `.kv-grid` 内 button
+//     同格位）；
+//   * chip 宽上限 = 单元可用宽（栏宽可调 → `resizeEvent` 重定尺；宽度只由类名决定、锁定/选中/计数
+//     不该宽 —— §12-4；长名截断，全名与热键进 tooltip/accessibleName）；
 //   * 卡头 hint = 「运行中只读」（运行期由 mainwindow 依 G5 切换；**非运行态为空** ——
 //     1-14：快捷键提示「1–9 键打标」移入 tooltip，不再常驻标题行）。
 //   * 卡片框/卡头由 mainwindow 承载（与本窗口其余卡片同一 pp-card 口径）；本类只出**卡体**。
@@ -93,7 +99,10 @@ public:
     int row_count_value(int row) const; // 行尾计数
     bool row_active(int row) const;     // .cls-row.on
     QStringList hotkey_labels() const;  // 热键行读数（"1=精选" …）
-    QWidget *row_widget(int row) const; // 行部件（右键菜单命中/几何断言用）
+    QWidget *row_widget(int row) const; // 单元部件（右键菜单命中/几何断言用）
+    // 「＋ 新建分类…」所在格（A15：= 网格的下一个空位；**当前代**实例 —— findChild 会命中
+    // 尚未析构的旧代，故探针据此取件）
+    QWidget *new_class_cell() const;
     // 构造类行右键菜单（不 exec；冒烟据此断言项集合并按项触发）。父 = 本面板，调用方可 delete。
     QMenu *build_row_menu(int row);
 
@@ -102,6 +111,11 @@ signals:
     // 被拒操作（热键冲突 / 保留 id / 空名 …）的**非模态**反馈：不弹对话框（弹出会阻塞脚本化
     // 走查；面板的对话框只出现在用户主动打开的重命名/颜色/删除菜单项里）
     void error_occurred(const QString &message);
+
+protected:
+    // A15：栏宽可调（左栏 280–400）→ 单元宽/chip 宽上限随面板宽重算（网格 2 列等宽，
+    // 计数贴右缘；chip 宽仍只由类名决定 —— 悬停/选中/锁定不改宽，§12-4）
+    void resizeEvent(QResizeEvent *event) override;
 
 private:
     struct Impl;

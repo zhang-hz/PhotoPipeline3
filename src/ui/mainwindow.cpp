@@ -31,6 +31,11 @@
 #include "ui/icons.h"
 
 #include <QAbstractItemView>
+#if QT_CONFIG(accessibility)
+#include <QAccessible> // §11/A18：ShellNav 的 tab/button group 语义（自建接口 + 工厂）
+#include <QAccessibleActionInterface>
+#include <QAccessibleWidget>
+#endif
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
@@ -54,6 +59,7 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QImage>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QList>
@@ -64,6 +70,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPalette>
 #include <QPixmap>
 #include <QProgressBar>
 #include <QPushButton>
@@ -432,14 +439,35 @@ QWidget *build_empty_state(QWidget *parent, QFrame **drop_zone_out, QLabel **ico
 // （点击 → action->trigger()），不持有第二份状态。
 // 自绘（而不是三个子钮）的理由：共享描边、段间 hairline、容器圆角裁切（overflow:hidden 等效）
 // 与"选中零宽度变化"（段宽恒 92）在一次绘制里落地；段几何 = 容器内的整高切片（92×30）。
+//
+// §11 无障碍（M5-T12/A18）：
+//   * 可访问接口 = **tab/button group 语义**（容器 PageTabList、段 PageTab；名/选中/使能一律取自
+//     既有 QAction）——见本文件下方的 ShellNavAccessible/段节点与 installFactory；
+//   * 键盘：Tab 进入本控件（**单 Tab 停靠点**），段间用 ←/→（**Ctrl+←/→ 亦可** —— 预览面板的
+//     应用级 Router 吃无修饰 ←/→，见下方 keyPressEvent 注释）按**视觉序**（= 段序 = 运行流程序）
+//     移动并激活，Home/End（含 Ctrl 变体）到首尾，Enter/Space 激活当前段 —— 与鼠标点击同一条
+//     QAction 路径；
+//   * 焦点环自绘（accent 描边 1px；本类是自绘件，不出系统虚线框）。
+class ShellNav;
+
+// §11/A18：可访问接口工厂（定义在本节之后；objectName 命中，见实现处注释）。
+// Qt 未编入 accessibility（QT_CONFIG(accessibility) 关）时为空实现 —— 控件面零变化。
+#if QT_CONFIG(accessibility)
+void ensure_shell_nav_accessible_factory();
+#else
+inline void ensure_shell_nav_accessible_factory() {}
+#endif
+
 class ShellNav : public QWidget {
 public:
     explicit ShellNav(QWidget *parent = nullptr) : QWidget(parent) {
         setObjectName(QStringLiteral("pp-nav-strip"));
-        // 顶栏外壳不参与 Tab 序（与 caption/图标钮同口径；外壳的键盘焦点语义见 T4 报告）
-        setFocusPolicy(Qt::NoFocus);
+        // §11/A18：导航 = 交互控件 → 进入 Tab 链（A18 前为 NoFocus，键盘不可达）
+        setFocusPolicy(Qt::StrongFocus);
+        setAccessibleName(tr("步骤导航")); // §11：控件可读名（nav-a11y 探针取证非空）
         setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         setMouseTracking(true);
+        ensure_shell_nav_accessible_factory(); // §11/A18：tab/button group 语义的可访问接口
     }
 
     // 段 = [数字圆 15][gap 6][action->text()]；number 内嵌圆内（§6.2）；文案一律来自 QAction
@@ -471,6 +499,17 @@ public:
     int segment_number(int index) const {
         return index >= 0 && index < segments_.size() ? segments_.at(index).number : -1;
     }
+    // 选中段（checked action）下标；-1 = 无（键盘视觉序的起点，§11/A18）
+    int current_segment() const {
+        for (int i = 0; i < segments_.size(); ++i) {
+            const QAction *action = segments_.at(i).action;
+            if (action != nullptr && action->isChecked())
+                return i;
+        }
+        return -1;
+    }
+    // §11/A18：焦点环是否在画（自绘；探针据此 + 像素取证双重取证）
+    bool focus_ring_visible() const { return hasFocus(); }
 
     void set_tokens(const theme::Tokens &tokens) {
         tokens_ = tokens;
@@ -550,6 +589,64 @@ protected:
                              Qt::AlignVCenter | Qt::AlignLeft, text);
             painter.restore();
         }
+        // §11/A18：焦点环自绘 —— accent 描边 1px，环位 = 容器内 1px（与 container 描边并见）、
+        // 圆角同容器。本类全自绘 → 系统虚线框（QStyle focus rect）本就不出，无需另行关闭。
+        if (hasFocus()) {
+            painter.setPen(QPen(tokens_.accent, kFocusRingPx));
+            painter.setBrush(Qt::NoBrush);
+            const qreal inset = theme::Metrics::nav_border + kFocusRingPx / 2.0;
+            painter.drawRoundedRect(QRectF(rect()).adjusted(inset, inset, -inset, -inset),
+                                    theme::Metrics::nav_radius, theme::Metrics::nav_radius);
+        }
+    }
+
+    // §11/A18：键盘 = 「Tab 进入本控件（单停靠点）→ ←/→ 按**视觉序**在段间移动并激活，
+    // Home/End 到首尾，Enter/Space 激活当前段」。移动即激活（导航 = 互斥档语义：选中段就是
+    // 当前页）；跳过禁用段（运行期锁定 G5 下 1/2 段禁用 → 键盘不会落到不可用段）。
+    //
+    // 键面与预览面板的翻图热键的关系（**应用里真正可达的一路**）：预览面板装有应用级事件
+    // 过滤器（PreviewPanel 的 Router：无修饰的 ←/→ = 翻图，全窗口生效），故在本窗口内
+    // **带 Ctrl 的同一组键**才是导航可达路径（Router 只吃无修饰键）；两路都认，语义一致。
+    void keyPressEvent(QKeyEvent *event) override {
+        const Qt::KeyboardModifiers mods = event->modifiers();
+        const bool nav_mods = mods == Qt::NoModifier || mods == Qt::ControlModifier;
+        int target = -1;
+        if (nav_mods) {
+            switch (event->key()) {
+            case Qt::Key_Left:
+            case Qt::Key_PageUp: // 页签语义的惯用键（QTabWidget 同族）
+                target = neighbor_segment(-1);
+                break;
+            case Qt::Key_Right:
+            case Qt::Key_PageDown:
+                target = neighbor_segment(1);
+                break;
+            case Qt::Key_Home:
+                target = edge_segment(1);
+                break;
+            case Qt::Key_End:
+                target = edge_segment(-1);
+                break;
+            default:
+                break;
+            }
+        }
+        if (target < 0 && mods == Qt::NoModifier) {
+            switch (event->key()) {
+            case Qt::Key_Return:
+            case Qt::Key_Enter:
+            case Qt::Key_Space:
+                target = current_segment();
+                break;
+            default:
+                break;
+            }
+        }
+        if (target >= 0 && activate_segment(target)) {
+            event->accept();
+            return;
+        }
+        QWidget::keyPressEvent(event);
     }
 
     void mousePressEvent(QMouseEvent *event) override {
@@ -594,12 +691,214 @@ private:
         }
         return -1;
     }
+    bool segment_enabled(int index) const {
+        const QAction *action = segment_action(index);
+        return action != nullptr && action->isEnabled();
+    }
+    // 视觉序（= 段序）上距当前段最近的使能段（step = ±1，越界回卷）；-1 = 无可去段
+    int neighbor_segment(int step) const {
+        const int count = int(segments_.size());
+        if (count == 0)
+            return -1;
+        const int from = current_segment() >= 0 ? current_segment() : 0;
+        for (int i = 1; i <= count; ++i) {
+            const int candidate = ((from + step * i) % count + count) % count;
+            if (segment_enabled(candidate))
+                return candidate;
+        }
+        return -1;
+    }
+    // 视觉序首/尾的使能段（Home = 从最左向右找；End = 反之）
+    int edge_segment(int step) const {
+        const int count = int(segments_.size());
+        if (count == 0)
+            return -1;
+        const int start = step > 0 ? 0 : count - 1;
+        for (int i = 0; i < count; ++i) {
+            const int candidate = ((start + step * i) % count + count) % count;
+            if (segment_enabled(candidate))
+                return candidate;
+        }
+        return -1;
+    }
+    bool activate_segment(int index) {
+        QAction *action = segment_action(index);
+        if (action == nullptr || !action->isEnabled())
+            return false;
+        action->trigger(); // 唯一路径 = 既有 set_current_page 接线（与鼠标同一条）
+        update();
+        return true;
+    }
+
+    static constexpr int kFocusRingPx = 1; // §11：accent 描边 1px
 
     QList<Segment> segments_;
     theme::Tokens tokens_;
     int hover_ = -1;
     int pressed_ = -1;
 };
+
+#if QT_CONFIG(accessibility)
+// ---------------------------------------------------------------------------
+// §11 无障碍（M5-T12/A18）：ShellNav 的可访问接口 —— **tab/button group 语义**
+//   导航是自绘**单控件**（§6.2：段不是子部件）→ 段在无障碍层是**合成**节点：
+//   容器 = `PageTabList`、段 = `PageTab`（名/选中/使能/动作**一律取自既有 QAction** —— 唯一
+//   状态源，不新增第二份状态；press = action->trigger()，与鼠标点击同一条路径）。
+//   工厂按 **objectName**（"pp-nav-strip"）命中：本类不持 Q_OBJECT（定义在 .cpp 内，类名键
+//   只能是基类名），objectName 在本窗口内唯一且已被 shell-geom 探针钉住。
+// ---------------------------------------------------------------------------
+class ShellNavSegmentAccessible : public QAccessibleInterface, public QAccessibleActionInterface {
+public:
+    ShellNavSegmentAccessible(ShellNav *nav, int index) : nav_(nav), index_(index) {}
+    ~ShellNavSegmentAccessible() override = default;
+
+    int index() const { return index_; }
+
+    // ---- QAccessibleInterface ----
+    bool isValid() const override { return nav_ != nullptr && action() != nullptr; }
+    QObject *object() const override { return nav_; }
+    QAccessibleInterface *childAt(int, int) const override { return nullptr; }
+    QAccessibleInterface *parent() const override;
+    QAccessibleInterface *child(int) const override { return nullptr; }
+    int childCount() const override { return 0; }
+    int indexOfChild(const QAccessibleInterface *) const override { return -1; }
+    QString text(QAccessible::Text t) const override {
+        const QAction *a = action();
+        switch (t) {
+        case QAccessible::Name:
+            return a != nullptr ? a->text() : QString();
+        case QAccessible::Description: // 语义补充：这是运行流程里的第几步
+            return QObject::tr("步骤 %1").arg(index_ + 1);
+        default:
+            return QString();
+        }
+    }
+    void setText(QAccessible::Text, const QString &) override {}
+    QRect rect() const override {
+        return nav_ != nullptr ? QRect(nav_->mapToGlobal(nav_->segment_rect(index_).topLeft()),
+                                       nav_->segment_rect(index_).size())
+                               : QRect();
+    }
+    QAccessible::Role role() const override { return QAccessible::PageTab; }
+    QAccessible::State state() const override {
+        const QAction *a = action();
+        QAccessible::State state;
+        state.disabled = a == nullptr || !a->isEnabled();
+        state.selectable = true;
+        state.selected = a != nullptr && a->isChecked();
+        state.checked = state.selected;
+        state.focusable = true; // 段 = 键盘可达（Tab 进容器后 ←/→ 按视觉序移动）
+        state.focused = nav_ != nullptr && nav_->hasFocus() && nav_->current_segment() == index_;
+        state.active = state.focused;
+        return state;
+    }
+    void *interface_cast(QAccessible::InterfaceType t) override {
+        return t == QAccessible::ActionInterface ? static_cast<QAccessibleActionInterface *>(this)
+                                                 : nullptr;
+    }
+
+    // ---- QAccessibleActionInterface（唯一动作 = press；与鼠标同一触发路径）----
+    QStringList actionNames() const override { return {QAccessibleActionInterface::pressAction()}; }
+    void doAction(const QString &actionName) override {
+        if (actionName != QAccessibleActionInterface::pressAction())
+            return;
+        QAction *a = action();
+        if (a != nullptr && a->isEnabled())
+            a->trigger();
+    }
+    // §11/A18：真实键面（Ctrl 变体 = 本应用里可达的一路，见 ShellNav::keyPressEvent 注释）
+    QStringList keyBindingsForAction(const QString &) const override {
+        return {QStringLiteral("Ctrl+Left"), QStringLiteral("Ctrl+Right"),
+                QStringLiteral("Ctrl+Home"), QStringLiteral("Ctrl+End"), QStringLiteral("Space")};
+    }
+
+private:
+    QAction *action() const { return nav_ != nullptr ? nav_->segment_action(index_) : nullptr; }
+    ShellNav *nav_ = nullptr;
+    int index_ = -1;
+};
+
+class ShellNavAccessible : public QAccessibleWidget {
+public:
+    explicit ShellNavAccessible(ShellNav *nav)
+        : QAccessibleWidget(nav, QAccessible::PageTabList,
+                            nav != nullptr ? nav->accessibleName() : QString()) {}
+    ~ShellNavAccessible() override {
+        qDeleteAll(segments_); // 段节点 = 合成子项（本接口持有；容器接口析构即回收）
+        segments_.clear();
+    }
+
+    QAccessible::Role role() const override { return QAccessible::PageTabList; }
+    QAccessible::State state() const override {
+        QAccessible::State state = QAccessibleWidget::state();
+        state.focusable = true;
+        state.focused = nav() != nullptr && nav()->hasFocus();
+        return state;
+    }
+    int childCount() const override { return nav() != nullptr ? nav()->segment_count() : 0; }
+    QAccessibleInterface *child(int index) const override {
+        ShellNav *host = nav();
+        if (host == nullptr || index < 0 || index >= host->segment_count())
+            return nullptr;
+        while (segments_.size() <= index) // 惰性建（段数在构造后由 add_segment 递增）
+            segments_.append(new ShellNavSegmentAccessible(host, int(segments_.size())));
+        return segments_.at(index);
+    }
+    int indexOfChild(const QAccessibleInterface *child) const override {
+        const auto *segment = dynamic_cast<const ShellNavSegmentAccessible *>(child);
+        return segment != nullptr ? segment->index() : -1;
+    }
+    QAccessibleInterface *childAt(int x, int y) const override {
+        ShellNav *host = nav();
+        if (host == nullptr)
+            return nullptr;
+        const QPoint local = host->mapFromGlobal(QPoint(x, y)); // childAt 的口径 = 屏幕坐标
+        for (int i = 0; i < host->segment_count(); ++i) {
+            if (host->segment_rect(i).contains(local))
+                return child(i);
+        }
+        return nullptr;
+    }
+    QAccessibleInterface *focusChild() const override {
+        ShellNav *host = nav();
+        if (host == nullptr || !host->hasFocus())
+            return nullptr;
+        const int current = host->current_segment();
+        return current >= 0 ? child(current) : nullptr;
+    }
+    QString text(QAccessible::Text t) const override {
+        ShellNav *host = nav();
+        if (t == QAccessible::Name && host != nullptr && !host->accessibleName().isEmpty())
+            return host->accessibleName();
+        return QAccessibleWidget::text(t);
+    }
+
+private:
+    ShellNav *nav() const { return static_cast<ShellNav *>(widget()); }
+    mutable QList<ShellNavSegmentAccessible *> segments_;
+};
+
+QAccessibleInterface *ShellNavSegmentAccessible::parent() const {
+    return nav_ != nullptr ? QAccessible::queryAccessibleInterface(nav_) : nullptr;
+}
+
+namespace {
+QAccessibleInterface *shell_nav_accessible_factory(const QString &, QObject *object) {
+    if (object == nullptr || object->objectName() != QLatin1String("pp-nav-strip"))
+        return nullptr;
+    auto *nav = dynamic_cast<ShellNav *>(object);
+    return nav != nullptr ? new ShellNavAccessible(nav) : nullptr;
+}
+} // namespace
+
+void ensure_shell_nav_accessible_factory() {
+    static const bool installed = [] {
+        QAccessible::installFactory(&shell_nav_accessible_factory);
+        return true;
+    }();
+    Q_UNUSED(installed);
+}
+#endif // QT_CONFIG(accessibility)
 
 // 图标钮（mockup .icon-btn：R4 图标钮 28×28 r4，悬停显底）。
 // M5-T3（契约 C3）：图标 = **矢量绘制**（ui/icons.h），不再是 Segoe UI Symbol 字形 ——
@@ -1867,6 +2166,9 @@ void MainWindow::set_current_page(int one_based) {
 }
 
 void MainWindow::set_offline_maps(bool off) {
+    // M5-T12/A30：banner 本体（文案/配色）已在 mapwidget.cpp 的 banner 区中性化 —— 本外壳只切
+    // 离线态；**令牌化的中性底/字由元数据页（PageMeta::set_tokens）铺**（令牌单源在宿主侧，
+    // mapwidget 不持令牌、也不再自持任何硬编码语义色）。
     const QList<pp::map::MapWidget *> maps = findChildren<pp::map::MapWidget *>();
     for (pp::map::MapWidget *map : maps)
         map->set_offline(off);
@@ -2392,8 +2694,11 @@ void MainWindow::Impl::refresh_theme() {
     // 调色板 + 基准字族（§9.2 排印）：全局生效，既有页面/对话框随之明暗
     QApplication::setPalette(theme::palette(tokens));
     QApplication::setFont(theme::font(theme::Typography::base_px));
-    // 骨架 QSS（只作用于 pp-* 钩子）；顶栏图标/分段导航随主题改色
-    w->setStyleSheet(theme::style_sheet(tokens));
+    // 骨架 QSS（只作用于 pp-* 钩子）；顶栏图标/分段导航随主题改色。
+    // §11/A18：分段导航**禁用系统虚线框**（`outline: none`）—— 焦点指示只有自绘的 accent 1px 环
+    // （ShellNav::paintEvent），与设置弹窗的"可见焦点指示单源"同口径。
+    w->setStyleSheet(theme::style_sheet(tokens) +
+                     QStringLiteral("QWidget#pp-nav-strip { outline: none; }\n"));
     // M4-T10：预览面板的本地 QSS（徽标/chip/底条）随 tokens 重放（舞台框仍走上面的骨架 QSS）
     if (preview_panel != nullptr)
         preview_panel->set_tokens(tokens);
@@ -4061,6 +4366,178 @@ void MainWindow::Impl::smoke_probe_shell_geometry() {
                            .arg(nav_bad.join(QLatin1Char(' '))));
     }
 
+    // ---- A18（§11 无障碍）：可访问接口（tab/button group 语义）+ 自绘焦点环（accent 1px）+
+    //      段间键盘导航按**视觉序** ----
+    {
+        QStringList a11y_bad;
+        int role = -1;
+        int child_count = -1;
+        int child_role = -1;
+        int child_selected = -1;
+        int interface_ready = 0;
+        QString interface_via = QStringLiteral("none");
+        const int page_before = nav_meta != nullptr && nav_meta->isChecked()
+                                    ? 1
+                                    : (nav_output != nullptr && nav_output->isChecked() ? 2 : 3);
+#if QT_CONFIG(accessibility)
+        // (1) 接口来源：优先走 QAccessible 查询（= 无障碍栈的同一条路）；不可用（平台未激活
+        //     无障碍）时退回**同类实例**直采语义 —— 两条路都过才算「接口在场」。
+        QAccessibleInterface *iface = QAccessible::queryAccessibleInterface(nav);
+        ShellNavAccessible *owned = nullptr; // 直采实例（工厂路径的接口归 QAccessible 缓存所有）
+        if (iface != nullptr) {
+            interface_via = QStringLiteral("query");
+        } else if (nav != nullptr) {
+            owned = new ShellNavAccessible(nav);
+            iface = owned;
+            interface_via = QStringLiteral("direct");
+        }
+        if (iface != nullptr) {
+            interface_ready = 1;
+            role = int(iface->role());
+            child_count = iface->childCount();
+            if (QAccessibleInterface *child0 = iface->child(0)) {
+                child_role = int(child0->role()); // 段 = PageTab（tab 语义）
+                child_selected = child0->state().selected ? 1 : 0;
+            }
+        }
+        delete owned;
+        if (interface_ready == 0)
+            a11y_bad << QStringLiteral("iface=none");
+        if (role != int(QAccessible::PageTabList))
+            a11y_bad
+                << QStringLiteral("role=%1(期望 %2)").arg(role).arg(int(QAccessible::PageTabList));
+        if (child_count != 3)
+            a11y_bad << QStringLiteral("children=%1").arg(child_count);
+        if (child_role != int(QAccessible::PageTab))
+            a11y_bad << QStringLiteral("child-role=%1").arg(child_role);
+        if (child_selected != 1) // 段 0（元数据）为当前选中段
+            a11y_bad << QStringLiteral("child-selected=%1").arg(child_selected);
+#else
+        a11y_bad << QStringLiteral("accessibility-disabled");
+#endif
+        // (2) 控件可读名（§11：控件有可读名；非 QAccessible 路径也能取证）
+        if (nav == nullptr || nav->accessibleName().isEmpty())
+            a11y_bad << QStringLiteral("no-accessible-name");
+        // (3) Tab 序：导航进入 Tab 链（A18 前 = NoFocus；单 Tab 停靠点 + 段间 ←/→ 视觉序）
+        const bool tabbable = nav != nullptr && (nav->focusPolicy() & Qt::TabFocus) != 0;
+        if (!tabbable)
+            a11y_bad << QStringLiteral("no-tab-focus");
+        // (4) 自绘焦点环：聚焦前/后同一控件实拍的差异像素（环 = accent 1px 圆角外框）。
+        //     离屏平台窗口默认不激活（hasFocus() 需窗口 active）→ 先显式激活本窗口再聚焦。
+        int ring_diff = -1;
+        int ring_accent_hits = -1;
+        bool ring_visible = false;
+        if (nav != nullptr) {
+            QApplication::setActiveWindow(w);
+            pump(40);
+            nav->clearFocus();
+            pump(40);
+            const QImage off_shot = nav->grab().toImage();
+            nav->setFocus(Qt::TabFocusReason);
+            pump(40);
+            const QImage on_shot = nav->grab().toImage();
+            ring_visible = nav->focus_ring_visible();
+            int diff = 0;
+            int accent_hits = 0;
+            const QColor accent = tokens.accent;
+            if (!off_shot.isNull() && off_shot.size() == on_shot.size()) {
+                for (int y = 0; y < on_shot.height(); ++y) {
+                    for (int x = 0; x < on_shot.width(); ++x) {
+                        const QColor before = off_shot.pixelColor(x, y);
+                        const QColor after = on_shot.pixelColor(x, y);
+                        if (before == after)
+                            continue;
+                        ++diff;
+                        const int dr = after.red() - accent.red();
+                        const int dg = after.green() - accent.green();
+                        const int db = after.blue() - accent.blue();
+                        if (std::sqrt(double(dr * dr + dg * dg + db * db)) < 120.0)
+                            ++accent_hits;
+                    }
+                }
+            }
+            ring_diff = diff;
+            ring_accent_hits = accent_hits;
+            if (!ring_visible || diff < 200 || accent_hits < 100)
+                a11y_bad << QStringLiteral("focus-ring(visible=%1 diff=%2 accent=%3)")
+                                .arg(ring_visible ? 1 : 0)
+                                .arg(diff)
+                                .arg(accent_hits);
+        } else {
+            a11y_bad << QStringLiteral("no-nav");
+        }
+        // (5) 段间键盘导航 = 视觉序（←/→；Home 到首段）+ 与鼠标同一条 QAction 路径
+        int order_ok = 0;
+        QString diag;
+        if (nav != nullptr) {
+            w->set_current_page(1);
+            pump(60);
+            diag = QStringLiteral("en=%1%2%3 seg=%4 preview=%5 focus=%6")
+                       .arg(nav_meta != nullptr && nav_meta->isEnabled() ? 1 : 0)
+                       .arg(nav_output != nullptr && nav_output->isEnabled() ? 1 : 0)
+                       .arg(nav_run != nullptr && nav_run->isEnabled() ? 1 : 0)
+                       .arg(nav->current_segment())
+                       .arg(preview_panel != nullptr ? preview_panel->current_position_text()
+                                                     : QStringLiteral("-"))
+                       .arg(QApplication::focusWidget() != nullptr
+                                ? QApplication::focusWidget()->objectName()
+                                : QStringLiteral("-"));
+            nav->setFocus(Qt::TabFocusReason);
+            // 键面取 **Ctrl 变体**：预览面板装有应用级 Router（无修饰 ←/→ = 翻图，全窗口生效），
+            // 带 Ctrl 的同一组键才是本应用里导航可达的一路（Router 只吃无修饰键）。
+            const auto send_nav_key = [this](int key, Qt::KeyboardModifiers mods) {
+                QKeyEvent press(QEvent::KeyPress, key, mods);
+                QCoreApplication::sendEvent(nav, &press); // nav = Impl 成员（本块已判非空）
+                pump(60);
+            };
+            const QString preview_before =
+                preview_panel != nullptr ? preview_panel->current_position_text() : QString();
+            send_nav_key(Qt::Key_Right, Qt::ControlModifier); // ① 元数据 → ② 输出（视觉序向右）
+            const bool to_output = nav->current_segment() == 1 && nav_output != nullptr &&
+                                   nav_output->isChecked() && stack != nullptr &&
+                                   stack->currentIndex() == 1;
+            send_nav_key(Qt::Key_Right, Qt::ControlModifier); // ② → ③ 运行
+            const bool to_run =
+                nav->current_segment() == 2 && stack != nullptr && stack->currentIndex() == 2;
+            send_nav_key(Qt::Key_Home, Qt::ControlModifier); // 回到最左（视觉序首段）
+            const bool to_home =
+                nav->current_segment() == 0 && stack != nullptr && stack->currentIndex() == 0;
+            const bool single_stop = nav->focusPolicy() == Qt::StrongFocus; // 单停靠点（内部导航）
+            // 预览翻图不得被本控件抢走（Ctrl 键面 = 与预览热键正交的取证）
+            const bool preview_kept = preview_panel == nullptr ||
+                                      preview_panel->current_position_text() == preview_before;
+            if (to_output && to_run && to_home && single_stop && preview_kept)
+                order_ok = 1;
+            else
+                a11y_bad << QStringLiteral("order(out=%1 run=%2 home=%3 stop=%4 preview-kept=%5)")
+                                .arg(to_output ? 1 : 0)
+                                .arg(to_run ? 1 : 0)
+                                .arg(to_home ? 1 : 0)
+                                .arg(single_stop ? 1 : 0)
+                                .arg(preview_kept ? 1 : 0);
+            w->set_current_page(page_before); // 归位（后续探针/截图不受本块影响）
+            nav->clearFocus();
+            pump(60);
+        }
+        // (6) §11「禁用系统虚线框」：骨架 QSS 里导航的 outline 关闭（可见焦点指示 = 自绘环）
+        const bool outline_off = w->styleSheet().contains(QStringLiteral("outline: none"));
+        if (!outline_off)
+            a11y_bad << QStringLiteral("outline-on");
+        std::printf(
+            "UI-SMOKE nav-a11y: rules=%d diag=[%s] iface=%s role=%d children=%d child-role=%d "
+            "selected=%d name=%d tab=%d ring=%d diff=%d accent=%d order=%d outline-off=%d "
+            "%s\n",
+            int(a11y_bad.size()), qUtf8Printable(diag), qUtf8Printable(interface_via), role,
+            child_count, child_role, child_selected,
+            nav != nullptr && !nav->accessibleName().isEmpty() ? 1 : 0, tabbable ? 1 : 0,
+            ring_visible ? 1 : 0, ring_diff, ring_accent_hits, order_ok, outline_off ? 1 : 0,
+            qUtf8Printable(a11y_bad.join(QLatin1Char(' '))));
+        std::fflush(stdout);
+        if (!a11y_bad.isEmpty())
+            smoke_fail(MainWindow::tr("导航无障碍（§11/A18）不符：%1")
+                           .arg(a11y_bad.join(QLatin1Char(' '))));
+    }
+
     // ---- 状态四档（§8）：QSS 侧四档规则齐备 + 当前落地档位（点/词同色、空/就绪不得为红）----
     {
         const QString sheet = w->styleSheet();
@@ -5496,6 +5973,94 @@ void MainWindow::Impl::smoke_probe_classify() {
         smoke_fail(MainWindow::tr("默认类表/热键不符：[%1]").arg(hotkeys.join(QLatin1Char(' '))));
     }
 
+    // ---- (a2) A15：面板 = **2 列 kv-grid**（mockups-v2 形态）----
+    //   口径（逐条）：① 2 列 → 相邻两单元同行（同 y）、第三行起换行；② 行 pitch 28（R1）；
+    //   ③ 两列**等宽**（1fr/1fr）且列距 = form_col_gap；④ 「＋ 新建分类…」占网格的**下一个
+    //   空位**（与 mockup 的 `.kv-grid` 内 button 同格位：偶数行数 → 换行首格，奇数 → 紧随其后）。
+    {
+        QStringList grid_bad;
+        const int rows_now = classify_panel->row_count();
+        QVector<QWidget *> cells;
+        for (int i = 0; i < rows_now; ++i)
+            cells.append(classify_panel->row_widget(i));
+        // 当前代的新建格（findChild 会命中尚未析构的旧代 → 走面板的**当前代**读数）
+        QWidget *new_cell = classify_panel->new_class_cell();
+        int pitch_bad = 0;
+        for (QWidget *cell : cells) {
+            if (cell == nullptr || !cell->isVisible() || cell->height() != formkit::kRowPitch)
+                ++pitch_bad;
+        }
+        if (pitch_bad > 0)
+            grid_bad << QStringLiteral("row-pitch=%1").arg(pitch_bad);
+        int pair_bad = 0;
+        int line_bad = 0;
+        for (int i = 0; i + 1 < rows_now; i += 2) {
+            const QWidget *left = cells.value(i);
+            const QWidget *right = cells.value(i + 1);
+            if (left == nullptr || right == nullptr) {
+                ++pair_bad;
+                continue;
+            }
+            // 同行（同 y）+ 右侧在后（视觉序）+ 两列等宽 + 列距 = form_col_gap
+            if (left->y() != right->y() || right->x() <= left->x() ||
+                std::abs(right->width() - left->width()) > 1 ||
+                right->x() - left->x() != left->width() + theme::Metrics::form_col_gap) {
+                ++pair_bad;
+            }
+        }
+        // 列对齐：第 2 网格行（若有）与第 1 行同轴（同 x）；行距 = 1 行 pitch（28）
+        if (rows_now > 2 && cells.at(0) != nullptr && cells.at(2) != nullptr) {
+            if (cells.at(2)->x() != cells.at(0)->x() ||
+                cells.at(2)->y() - cells.at(0)->y() != formkit::kRowPitch) {
+                ++line_bad;
+            }
+        }
+        if (pair_bad > 0)
+            grid_bad << QStringLiteral("pairs=%1").arg(pair_bad);
+        if (line_bad > 0)
+            grid_bad << QStringLiteral("second-line-misaligned");
+        // ④ 新建链的格位 = 下一个空位
+        bool slot_ok = new_cell != nullptr && !cells.isEmpty();
+        if (slot_ok) {
+            const bool even = (rows_now % 2) == 0;
+            QWidget *last = cells.last();
+            QWidget *first = cells.first();
+            QWidget *second = cells.value(1, first);
+            slot_ok = even ? (new_cell->y() > last->y() && new_cell->x() == first->x())
+                           : (new_cell->y() == last->y() && new_cell->x() == second->x());
+        }
+        if (!slot_ok)
+            grid_bad << QStringLiteral("new-link-slot");
+        const int cell_w =
+            cells.isEmpty() || cells.first() == nullptr ? -1 : cells.first()->width();
+        QStringList geom;
+        for (QWidget *cell : cells) {
+            geom << (cell != nullptr ? QStringLiteral("%1+%2,%3x%4")
+                                           .arg(cell->x())
+                                           .arg(cell->y())
+                                           .arg(cell->width())
+                                           .arg(cell->height())
+                                     : QStringLiteral("<null>"));
+        }
+        if (new_cell != nullptr)
+            geom << QStringLiteral("new=%1+%2,%3x%4")
+                        .arg(new_cell->x())
+                        .arg(new_cell->y())
+                        .arg(new_cell->width())
+                        .arg(new_cell->height());
+        std::printf("UI-SMOKE classify-grid: rows=%d cell=%dx%d cols=2 gap=%d pitch=%d bad=%d "
+                    "geom=[%s] %s\n",
+                    rows_now, cell_w,
+                    cells.isEmpty() || cells.first() == nullptr ? -1 : cells.first()->height(),
+                    theme::Metrics::form_col_gap, formkit::kRowPitch, int(grid_bad.size()),
+                    qUtf8Printable(geom.join(QLatin1Char(' '))),
+                    qUtf8Printable(grid_bad.join(QLatin1Char(' '))));
+        std::fflush(stdout);
+        if (!grid_bad.isEmpty())
+            smoke_fail(MainWindow::tr("分类面板 2 列网格（A15）不符：%1")
+                           .arg(grid_bad.join(QLatin1Char(' '))));
+    }
+
     // ---- (b) 打标：预览热键接线位（class_hotkey → 注册表）----
     const int target_row = preview_panel->current_index() >= 0 ? preview_panel->current_index() : 0;
     const QString target_path =
@@ -6155,6 +6720,7 @@ void MainWindow::Impl::smoke_probe_run(const QString &shots_dir) {
 //   g) 实现性文案出界面（任务 hint 逐字 + 术语入 tooltip；修 3-05）
 //   h) 三级动作层级（链/危险钮/次钮）+ 按钮高 26（修 3-08 + A7）
 //   i) 计数单源（逐文件行不再重复「N 个输出」；修 3-13） + A9（屏幕/DPI 变化失效缓存）
+//   m) A29：峰值内存 kv = 引擎真实读数（RunSummary::peak_bytes；量级换档非「—」）
 void MainWindow::Impl::smoke_probe_run_geometry() {
     PageRun page;
     page.set_tokens(tokens);
@@ -6214,6 +6780,7 @@ void MainWindow::Impl::smoke_probe_run_geometry() {
         sum.total_ms = 9800.0;
         sum.throughput_mb_s = 86.0;
         sum.avg_file_ms = 344.0;
+        sum.peak_bytes = 2'254'857'830ull; // A29：≈2.1 GB（像素预算峰值；读数断言见 (g)）
         page.end_run(sum, QStringLiteral("D:/Photos/export"));
     }
     pump(250);
@@ -6449,6 +7016,17 @@ void MainWindow::Impl::smoke_probe_run_geometry() {
                QStringLiteral("hint=\"%1\" stagger=\"%2\" tips=%3")
                    .arg(hint, stagger)
                    .arg(tips_ok ? 1 : 0));
+    }
+
+    // ---- (m) A29：峰值内存 kv = 引擎**真实读数**（RunSummary::peak_bytes 加性解冻）----
+    //   口径：非「—」+ 量级换档格式（B→KB→MB→GB）；本探针喂 2'254'857'830 B → 「2.10 GB」。
+    {
+        const QString memory = text_of(QStringLiteral("pp-run-memory"));
+        const QRegularExpression shape(QStringLiteral("^\\d+(?:\\.\\d+)? (?:KB|MB|GB)$"));
+        expect("memory-peak",
+               memory != QStringLiteral("—") && shape.match(memory).hasMatch() &&
+                   memory == QStringLiteral("2.10 GB"),
+               QStringLiteral("memory=\"%1\"").arg(memory));
     }
 
     // ---- (h) 操作行三级动作（修 3-08）+ 按钮高 26（R4/A7）----
@@ -6856,6 +7434,19 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
     } else if (progress->maximum() <= 0 || progress->value() != progress->maximum()) {
         smoke_fail(
             MainWindow::tr("进度条未满：%1 / %2").arg(progress->value()).arg(progress->maximum()));
+    }
+    // ---- M5-T12/A29：**实跑**结束态的「峰值内存」= 引擎真实读数（RunSummary::peak_bytes）----
+    //   本批走真实 Scheduler → PixelBudget（每文件 acquire 2×frame）→ 结束态必须是非零读数
+    //   （非「—」）；加性字段未接线/未取值时这里红。
+    if (QLabel *memory = w->findChild<QLabel *>(QStringLiteral("pp-run-memory"))) {
+        const QVariant full = memory->property("ppFullText");
+        const QString text = full.isValid() ? full.toString() : memory->text();
+        std::printf("UI-SMOKE run-memory: %s\n", qUtf8Printable(text));
+        std::fflush(stdout);
+        if (text == QStringLiteral("—") || !text.endsWith(QLatin1String("B")))
+            smoke_fail(MainWindow::tr("结束态峰值内存非真实读数：\"%1\"").arg(text));
+    } else {
+        smoke_fail(MainWindow::tr("运行页缺少峰值内存 kv（pp-run-memory）"));
     }
     // M4-T14：摘要句（pp-run-summary）+ 结束态逐输出行定稿（产物事实/失败原因）
     if (QLabel *summary_line = w->findChild<QLabel *>(QStringLiteral("pp-run-summary"))) {
@@ -8699,28 +9290,62 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
                         QStringLiteral("bad=%1 want=%2").arg(btn_bad).arg(theme::Metrics::btn_h));
         }
 
-        // (i-7) 修 1-38/1-39：地图离线说明 = 中性灰 + 括号进 tooltip（宿主侧收口）
+        // (i-7) 修 1-38/1-39 + A30：地图离线说明 = 中性灰 + 括号进 tooltip。
+        //   T12/A30 加强：banner 本体的**警示黄已去** —— mapwidget.cpp 不再自持硬编码语义色，
+        //   故此处除文案/tooltip/令牌灰外，另做两路取证：(a) banner 调色板不得是原警示黄
+        //   #fff1b8；(b) banner 实拍像素中不得出现原警示黄（阈值 40）。
         {
             const auto *map = page.findChild<pp::map::MapWidget *>(QStringLiteral("pp-meta-map"));
             QString text;
             QString tip;
             QString sheet;
+            QLabel *banner = nullptr;
             if (map != nullptr) {
                 const QList<QLabel *> labels = map->findChildren<QLabel *>();
                 if (!labels.isEmpty()) {
-                    text = labels.first()->text();
-                    tip = labels.first()->toolTip();
-                    sheet = labels.first()->styleSheet();
+                    banner = labels.first();
+                    text = banner->text();
+                    tip = banner->toolTip();
+                    sheet = banner->styleSheet();
                 }
             }
             const bool neutral_gray = sheet.contains(theme::css_color(tokens.text3)) &&
                                       !sheet.contains(theme::css_color(tokens.warn));
+            // (a) 调色板：原硬编码警示黄（底 #fff1b8 / 字 #6b4a00）不得残留
+            const QColor legacy_bg(0xff, 0xf1, 0xb8);
+            const QColor legacy_fg(0x6b, 0x4a, 0x00);
+            bool palette_clean = banner != nullptr;
+            if (banner != nullptr) {
+                palette_clean = banner->palette().color(QPalette::Window) != legacy_bg &&
+                                banner->palette().color(QPalette::WindowText) != legacy_fg;
+            }
+            // (b) 像素：banner 实拍里不得有接近警示黄的像素（banner 在离线态可见）
+            double amber_dist = 1e9;
+            if (banner != nullptr && banner->isVisible()) {
+                const QImage shot = banner->grab().toImage();
+                for (int y = 0; y < shot.height(); ++y) {
+                    for (int x = 0; x < shot.width(); ++x) {
+                        const QColor px = shot.pixelColor(x, y);
+                        const int dr = px.red() - legacy_bg.red();
+                        const int dg = px.green() - legacy_bg.green();
+                        const int db = px.blue() - legacy_bg.blue();
+                        amber_dist =
+                            std::min(amber_dist, std::sqrt(double(dr * dr + dg * dg + db * db)));
+                    }
+                }
+            }
             meta_expect("offline-banner",
-                        text == QStringLiteral("地图离线") &&
-                            tip == QStringLiteral("可手动输入坐标") && neutral_gray,
-                        QStringLiteral("text=\"%1\" tip=\"%2\" gray=%3")
+                        banner != nullptr && banner->isVisible() &&
+                            text == QStringLiteral("地图离线") &&
+                            tip == QStringLiteral("可手动输入坐标") && neutral_gray &&
+                            palette_clean && amber_dist > 40.0,
+                        QStringLiteral("text=\"%1\" tip=\"%2\" gray=%3 palette-clean=%4 "
+                                       "visible=%5 amber-dist=%.1f")
                             .arg(text, tip)
-                            .arg(neutral_gray ? 1 : 0));
+                            .arg(neutral_gray ? 1 : 0)
+                            .arg(palette_clean ? 1 : 0)
+                            .arg(banner != nullptr && banner->isVisible() ? 1 : 0)
+                            .arg(amber_dist));
         }
 
         // (i-8) A27（T11 缺陷根治受益面）：时间卡模式分段 —— 段自持高（= kSegH − 2）且可见可选

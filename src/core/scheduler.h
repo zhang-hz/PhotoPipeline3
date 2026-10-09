@@ -4,7 +4,9 @@
 // PP-FROZEN(0.3.0) —— 解冻裁定表 §3.3 **已落地**（依据 docs/v0.3.0-design.md §3.3）
 //   落地任务 = W1-T5/T6（事件/进度面）+ W1-T7（E3 调度面）；原标注
 //   PP-THAWED(0.3.0-M4-D20) 随落地再冻结为本标记（冻结头 SPDX 延续）。
-//   本文件其余既有声明（RunSummary）不在裁定表内 → 维持 PP-FROZEN(M1) 只读。
+//   本文件其余既有声明（RunSummary）不在裁定表内 → 维持 PP-FROZEN(M1) 只读；
+//   **例外（M5-T12/A29）**：RunSummary **末尾追加** `peak_bytes`（加性一项，既有字段/顺序/语义
+//   零改动，日志行零改动）—— 裁定与登记见下 RunSummary 块内【追加面登记】。
 //   本节标注 [重排]：结构重排，不再保证聚合初始化兼容（随本次解冻一次性接受）。
 //
 // W1-T7 已落地面（§8 整节：交错启动 / 自适应线程预算 / 取消语义 / 线程映射义务）：
@@ -71,6 +73,17 @@ struct RunSummary {
     std::size_t total = 0, ok = 0, failed = 0, skipped = 0, cancelled = 0;
     uint64_t out_bytes = 0;
     double total_ms = 0, throughput_mb_s = 0, avg_file_ms = 0;
+
+    // PP-FROZEN(0.3.0)【追加面登记 · M5-T12/A29】—— `peak_bytes`（追加在结构体末尾）：
+    //   裁定原文（docs/m5-adjudications.md A29）：「**批准 core 窄幅加性扩展（解冻一项）**：
+    //   `RunSummary` 末尾追加 `peak_bytes`（PP-FROZEN 追加面登记；日志行/金样零改动），
+    //   page_run 峰值内存接真实值」。
+    //   落地形态 = 本结构末尾一个 `uint64_t` 字段 + scheduler.cpp `summary()` 一行取值
+    //   （取值点 = wait() 的 `budget report` 行同一统计点 `PixelBudget::peak()`，语义单源）。
+    //   口径与 A28（`ui_theme_mode`）/M4 FileState 追加同：**末尾追加 = 冻结面登记**，既有字段
+    //   与其顺序零改动、聚合初始化兼容；日志行格式零改动（金样不受影响）。
+    //   语义：本次运行 PixelBudget 的历史峰值字节；0 = 本次未用像素预算（未 start() 的空批）。
+    uint64_t peak_bytes = 0;
 };
 
 // PP-FROZEN(0.3.0) §3.3 · ScheduleConfig + Scheduler（**W1-T7 已落地**）

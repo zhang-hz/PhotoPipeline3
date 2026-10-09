@@ -599,6 +599,10 @@ RunSummary Scheduler::summary() const {
     s.total_ms = ms;
     s.avg_file_ms = s.total > 0 ? ms / static_cast<double>(s.total) : 0.0;
     s.throughput_mb_s = ms > 0 ? (static_cast<double>(s.out_bytes) / 1.0e6) / (ms / 1000.0) : 0.0;
+    // M5-T12/A29（RunSummary::peak_bytes，加性）：与 wait() 的 `budget report` 行**同一统计点**
+    // （PixelBudget::peak()），读数单源、不在本函数里另算。budget 由 start() 建（未 start = 空批
+    // → 0）；PixelBudget::peak() 自持锁，UI 在运行中轮询 summary() 亦安全。
+    s.peak_bytes = d.budget ? d.budget->peak() : 0;
     return s;
 }
 

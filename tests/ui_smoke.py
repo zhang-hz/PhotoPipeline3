@@ -97,6 +97,21 @@ M5-T11（W-G4 首项：缺陷根治与壳层收尾；裁定 A27/A28/A13/A16/A17/
   * A16（空态文案去重）同样落在既有 `filelist-geom` 行内：文件列表空态文案 = 「拖放照片到此处」
     且 ≠ 预览空态逐字「将照片拖到此处，或点击 ＋ 添加」。
 
+M5-T12（W-G4：峰值内存接线 + 分类网格 + 无障碍 + 地图收口；裁定 A29/A15/A18/A30）:
+  * 追加 `UI-SMOKE classify-grid:` 行齐备断言（A15：分类面板 = 2 列 kv-grid —— 相邻单元同 y、
+    两列等宽、列距 = form_col_gap、行 pitch 28、「＋ 新建分类…」占网格下一个空位；值表驱动，
+    行内 `bad=N` 由 C++ 侧给出）。
+  * A29（RunSummary::peak_bytes 加性解冻）不新增行名：断言落在既有 `run-geom` 行内
+    （`memory-peak`：峰值内存 kv = 真实读数、量级换档非「—」），另在实跑结束态新增
+    `UI-SMOKE run-memory:` 行（真实 Scheduler → PixelBudget 的读数非「—」）。
+  * A18（ShellNav 无障碍）不新增行名：断言落在既有 `shell-geom` 段内的 `UI-SMOKE nav-a11y:`
+    行（可访问接口 = PageTabList/PageTab（段）/选中态、accessibleName、Tab 可达、自绘焦点环
+    accent 1px（聚焦前后实拍差异像素取证）、段间 Ctrl+←/→（本应用里可达的一路）视觉序导航
+    + 预览翻图热键不被抢、骨架 QSS outline:none）。
+  * A30（地图 banner 中性化）落在既有 `meta-geom` 行的 `offline-banner` 内：调色板不得残留
+    警示黄 #fff1b8/#6b4a00 + banner 实拍像素不得出现警示黄（阈值 40）+ 文案去括号（进 tooltip）。
+  * 截图仍为 12 张、冻结末行不变。
+
 M5-T9（W-G3 页：运行页 §7.3 三卡组）:
   * 追加 `UI-SMOKE run-geom:` 行齐备断言（C7 几何/语义值表：总览 kv 行 pitch 28 + 标签轨 80 /
     表行高 28（表头 24）/ 进度条高 6（总览合成条 + 分组条 + 逐输出条）/ 日志尾等宽字族（§7.3）+
@@ -208,7 +223,10 @@ T11_M5_LINE_PREFIXES = (
 )
 
 # M4-W2-T11 自检行（前缀匹配；缺任一 → FAIL）
+# M5-T12（A15）追加 `classify-grid:`：分类面板 = 2 列 kv-grid（相邻单元同 y / 两列等宽 /
+# 列距 12 / 行 pitch 28 / 「＋ 新建分类…」占下一个空位）。
 T11_LINE_PREFIXES = (
+    'UI-SMOKE classify-grid:',
     'UI-SMOKE filelist-roles:',
     'UI-SMOKE filelist-check:',
     'UI-SMOKE filelist-search:',

@@ -15,7 +15,11 @@
 //   * 〔批〕= 批量规则会命中的标签：时间字段（EXIF 3 + OffsetTime* 3 / XMP CreateDate 族）、
 //     GPS 字段（批量 gps 或 gps_clear 时的 Exif.GPSInfo.*）、strip_privacy（全部）、
 //     edits 命中键。勾选“忽略全部批量规则”后该文件不再受批量规则影响 → 标记消失。
-//   * 已改值项前缀 “● ”；值留空 = 删除该标签（remove 编辑）。
+//     M5-T10（A8）：行首不再有「〔批〕」字形 —— 改为行内**中性 pill「批」**（delegate 画 16px
+//     胶囊，色 = theme::pill_paint(kPillNeutral)）。
+//   * 已改值项：M5-T10（A8）不再用 "● " 前缀 —— 改值 = **强调色字 + 700**（行内 .mod 等价；
+//     树行没有边框可画，故取"强调边框+强调色字"的字色一档）。
+//   * 值留空 = 删除该标签（remove 编辑）。
 //   * 时间三态“清除”：MetadataOverride 没有对应字段，语义化为对时间标签的 remove 编辑
 //     （EXIF 3 + XMP 2；见报告 next-needed）；GPS“清除”= gps_clear；隐私剥除 = optional<bool>。
 //   * 自验开关（不改冻结头）：动态属性 "pp_exif_editor_suppress_modal" = true 时，所有
@@ -29,7 +33,7 @@
 // theme.h 依赖包含者先引入 <QApplication>（qApp->style()；见 ui/classify_panel.h 同注）
 #include <QApplication>
 
-#include "ui/theme.h" // M4-T12：.mod 样式（theme::set_mod / mod_qss）
+#include "ui/theme.h" // M4-T12：.mod 样式（theme::set_mod / mod_qss）；M5-T10：令牌 + dialogkit
 
 #include <QAbstractItemView>
 #include <QCheckBox>
@@ -49,6 +53,7 @@
 #include <QLocale>
 #include <QMessageBox>
 #include <QModelIndex>
+#include <QPainter>
 #include <QPalette>
 #include <QPlainTextEdit>
 #include <QPushButton>
@@ -57,6 +62,7 @@
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QSplitter>
+#include <QStyledItemDelegate>
 #include <QTabWidget>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
@@ -74,11 +80,19 @@
 #include <utility>
 #include <vector>
 
+#include "platform/frameless.h" // M5-T10：无边框接线（与主窗/设置弹窗同一机制）
+#include "ui/formkit.h"         // M5-T10：勾选框（忽略批量规则）走 formkit 单实现
+#include "ui/settings_dialog.h" // M5-T10：dialogkit（标题栏/页签样式/按钮/焦点环/QSS）
+
 namespace pp::ui {
 namespace {
 
-constexpr int kKeyRole = Qt::UserRole;      // QString: full Exiv2 key
-constexpr int kNodeRole = Qt::UserRole + 1; // int: 0 = tag leaf, 1 = group node
+// role 值单源 = exif_editor.h 的 exif_roles（探针按同一对值读回）
+constexpr int kKeyRole = exif_roles::key;   // QString: full Exiv2 key
+constexpr int kNodeRole = exif_roles::node; // int: 0 = tag leaf, 1 = group node
+// M5-T10：行级标记（delegate 用；也是探针读回面 —— A8 零字形两条）。role 值单源 = exif_editor.h
+constexpr int kBatchRole = exif_roles::batch;     // bool: 批量规则会命中（画中性 pill「批」）
+constexpr int kChangedRole = exif_roles::changed; // bool: 该行已改值（强调色字 + 700）
 constexpr int kLeaf = 0;
 constexpr int kGroupNode = 1;
 constexpr int kTreeValueMax = 120;      // §2.12 树内只展示值的前若干字符（完整值在右侧编辑区）
@@ -127,15 +141,124 @@ private:
     QString full_text_;
 };
 
+// 弹窗文案取词（ExifEditor 上下文；dialogkit/本文件的辅助件共用）
+QString T(const char *s) { return ExifEditor::tr(s); }
+
 const char *const kSuppressModal = "pp_exif_editor_suppress_modal";
 const char *const kLastErrors = "pp_last_validation_errors";
 const char *const kLastWarning = "pp_last_warning";
+
+// 树行 delegate（M5-T10 / A8 零字形两条）：行首画**中性 pill「批」**（批量规则命中），
+// 改值行用**强调色字 + 700**（树行无边框可画 → 取 .mod 的字色/字重一档）。行文本本身不再
+// 含任何标记字形（〔批〕/●）；两个标记同时以 item data 存回（探针读回面）。
+class TagItemDelegate : public QStyledItemDelegate {
+public:
+    explicit TagItemDelegate(QObject *parent = nullptr) : QStyledItemDelegate(parent) {}
+
+    void set_tokens(const theme::Tokens &t) { tokens_ = t; }
+    const theme::Tokens &tokens() const { return tokens_; }
+    int pill_width() const {
+        const QFontMetrics fm(theme::font(theme::Typography::badge_px, QFont::Bold));
+        return fm.horizontalAdvance(T("批")) + 2 * theme::Metrics::pill_pad_x + 2;
+    }
+
+    QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override {
+        QSize base = QStyledItemDelegate::sizeHint(option, index);
+        if (index.data(kBatchRole).toBool())
+            base.setWidth(base.width() + pill_width() + kPillGap);
+        return base;
+    }
+
+    void paint(QPainter *painter, const QStyleOptionViewItem &option,
+               const QModelIndex &index) const override {
+        QStyleOptionViewItem opt = option;
+        initStyleOption(&opt, index);
+        const QString text = opt.text;
+        const bool batch = index.data(kBatchRole).toBool();
+        const bool changed = index.data(kChangedRole).toBool();
+        opt.text.clear(); // 文本自绘（底/选中/缩进仍走基类）
+        QStyledItemDelegate::paint(painter, opt, index);
+
+        int left = opt.rect.left() + 2;
+        if (batch) { // 中性 pill「批」（R4 高 16 r3 + 9.5px/700；色 = 中性档）
+            const theme::PillPaint paint = theme::pill_paint(tokens_, theme::kPillNeutral);
+            const int w = pill_width();
+            const QRectF box(left, opt.rect.center().y() - theme::Metrics::pill_h / 2.0 + 0.5, w,
+                             theme::Metrics::pill_h);
+            painter->save();
+            painter->setRenderHint(QPainter::Antialiasing, true);
+            painter->setPen(QPen(paint.bd, 1.0));
+            painter->setBrush(paint.bg);
+            painter->drawRoundedRect(box, theme::Metrics::pill_radius, theme::Metrics::pill_radius);
+            painter->setFont(theme::font(theme::Typography::badge_px, QFont::Bold));
+            painter->setPen(paint.fg);
+            painter->drawText(box, Qt::AlignCenter, T("批"));
+            painter->restore();
+            left += w + kPillGap;
+        }
+        QFont font = opt.font;
+        font.setWeight(changed ? QFont::Bold : QFont::Normal);
+        painter->save();
+        painter->setFont(font);
+        painter->setPen(changed ? tokens_.accent : tokens_.text);
+        const QRect text_rect(left, opt.rect.top(), std::max(0, opt.rect.right() - left),
+                              opt.rect.height());
+        painter->drawText(text_rect, Qt::AlignLeft | Qt::AlignVCenter,
+                          QFontMetrics(font).elidedText(text, Qt::ElideRight, text_rect.width()));
+        painter->restore();
+    }
+
+private:
+    static constexpr int kPillGap = 6; // pill ↔ 文字
+    theme::Tokens tokens_ = theme::tokens(theme::preferred_theme_mode());
+};
 
 const char *const kExifTimeKeys[3] = {"Exif.Photo.DateTimeOriginal", "Exif.Photo.DateTimeDigitized",
                                       "Exif.Image.DateTime"};
 const char *const kXmpTimeKeys[2] = {"Xmp.xmp.CreateDate", "Xmp.xmp.ModifyDate"};
 
-QString T(const char *s) { return ExifEditor::tr(s); }
+// R4 控件规格（M5-T10）：盒高/描边走 QSS（dialogkit），字体/无障碍/tooltip 在此给齐（§11）
+void dress_combo(QComboBox *combo, const QString &accessible, const QString &tooltip) {
+    if (combo == nullptr)
+        return;
+    combo->setFont(theme::font(theme::Typography::body_px));
+    combo->setProperty(dialogkit::kFieldProperty, QString::fromLatin1(dialogkit::kFieldCombo));
+    if (!tooltip.isEmpty())
+        combo->setToolTip(tooltip);
+    if (!accessible.isEmpty())
+        combo->setAccessibleName(accessible);
+}
+
+void dress_edit(QLineEdit *edit, const QString &accessible, const QString &tooltip) {
+    if (edit == nullptr)
+        return;
+    edit->setFont(theme::font(theme::Typography::body_px));
+    edit->setProperty(dialogkit::kFieldProperty, QString::fromLatin1(dialogkit::kFieldInput));
+    if (!tooltip.isEmpty())
+        edit->setToolTip(tooltip);
+    if (!accessible.isEmpty())
+        edit->setAccessibleName(accessible);
+}
+
+// 数值 spin（R4 高 24 / 值区右对齐 + tabular）。A8：↑↓ 操作提示只进 tooltip（不上界面）
+void dress_spin(QSpinBox *spin, const QString &accessible) {
+    if (spin == nullptr)
+        return;
+    spin->setFont(theme::font(theme::Typography::body_px, QFont::Normal, /*tabular=*/true));
+    spin->setAlignment(Qt::AlignRight);
+    spin->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkSpin));
+    spin->setToolTip(T("↑↓ 调整数值（也可直接输入）"));
+    spin->setAccessibleName(accessible);
+}
+
+// 按钮选择器钩子（dialogkit 词汇：button / primary —— 与 page_output 的 ppField 同源）
+void hook_button(QPushButton *button, bool primary) {
+    if (button != nullptr) {
+        button->setProperty(
+            dialogkit::kFieldProperty,
+            QString::fromLatin1(primary ? dialogkit::kFieldPrimary : dialogkit::kFieldButton));
+    }
+}
 
 // "Exif.Image.Artist" → "Artist"; "Xmp.dc.title" → "title"
 std::string tag_name(const std::string &key) {
@@ -291,6 +414,8 @@ struct ExifEditor::Impl {
     pp::BatchRules batch;
     std::optional<pp::MetadataOverride> existing;
     pp::SourceMeta meta; // 只读源元数据（pp::read_metadata 结果）
+    theme::Tokens tokens = theme::tokens(theme::preferred_theme_mode()); // M5-T10：弹窗令牌（单源）
+    TagItemDelegate *delegate = nullptr; // M5-T10：行首 pill「批」+ 改值强调色字（A8）
 
     std::vector<pp::TagEdit> exif_edits, xmp_edits; // 树中的 set/remove 记录
 
@@ -359,6 +484,7 @@ struct ExifEditor::Impl {
     ElidedLabel *gps_effective_old = nullptr;
 
     void refresh_effective_values();
+    void attach_delegate(QTreeWidget *tree); // M5-T10：树行 delegate（pill「批」/改值强调色字）
     void build();
     QWidget *make_exif_tab();
     QWidget *make_xmp_tab();
@@ -410,15 +536,14 @@ QWidget *ExifEditor::Impl::make_value_pane(ValuePane &vp, const QString &name) {
     auto *title = new ElidedLabel();
     vp.title = title;
     vp.title->setObjectName(name + QStringLiteral("_value_title"));
-    QFont bold = vp.title->font();
-    bold.setBold(true);
-    vp.title->setFont(bold);
+    vp.title->setFont(
+        theme::font(theme::Typography::card_title_px, QFont::Bold)); // §4.2 卡题 12/700
     v->addWidget(vp.title);
 
     vp.type = new QLabel();
-    QPalette gray = vp.type->palette();
-    gray.setColor(QPalette::WindowText, QColor(0x80, 0x80, 0x80));
-    vp.type->setPalette(gray);
+    // M5-T10（A6）：硬编码灰 0x808080 → 令牌 txt3（§4.2 辅助 10px）
+    vp.type->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkNote));
+    vp.type->setFont(theme::font(theme::Typography::hint_px));
     v->addWidget(vp.type);
 
     // 值编辑区纵向填满右半区（单行 QLineEdit 也设 Expanding：下半部不留大片空白）
@@ -436,9 +561,8 @@ QWidget *ExifEditor::Impl::make_value_pane(ValuePane &vp, const QString &name) {
     v->addWidget(vp.multi, 1);
 
     vp.note = new ElidedLabel();
-    QPalette note_pal = vp.note->palette();
-    note_pal.setColor(QPalette::WindowText, QColor(0x80, 0x80, 0x80));
-    vp.note->setPalette(note_pal);
+    vp.note->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkNote)); // A6：令牌 txt3
+    vp.note->setFont(theme::font(theme::Typography::hint_px));
     v->addWidget(vp.note);
 
     // textChanged（而不是 textEdited）：程序化 setText 也能触发提交，自验/集成可直接注入值
@@ -565,15 +689,11 @@ std::string ExifEditor::Impl::effective_value(const Row &r) const {
 }
 
 QString ExifEditor::Impl::row_text(const Row &r) const {
-    QString t;
-    const pp::BatchRules &eff = (ignore_check && ignore_check->isChecked()) ? kNoRules : batch;
-    if (batch_affects(eff, r.key, r.is_xmp))
-        t += QStringLiteral("〔批〕");
-    const pp::TagEdit *e = find_edit(r.is_xmp, r.key);
-    if (e)
-        t += QStringLiteral("● ");
-    t += QString::fromStdString(tag_name(r.key));
+    // M5-T10（A8 零字形）：行文本只留「标签 = 值」——「批」「已改值」两个标记走 item data
+    // （kBatchRole/kChangedRole）+ delegate 绘制（中性 pill / 强调色字），不再用 〔批〕/● 字形。
+    QString t = QString::fromStdString(tag_name(r.key));
     t += QStringLiteral(" = ");
+    const pp::TagEdit *e = find_edit(r.is_xmp, r.key);
     QString v;
     if (e && (e->remove || !e->value.has_value())) {
         v = T("（将删除）");
@@ -592,9 +712,20 @@ void ExifEditor::Impl::refresh_row(const std::string &key) {
     auto it = rows.find(key);
     if (it == rows.end() || !it->second.item)
         return;
-    it->second.item->setText(0, row_text(it->second));
-    it->second.item->setToolTip(
-        0, QString::fromStdString(it->second.key + "  [" + it->second.type_name + "]"));
+    Row &r = it->second;
+    const pp::BatchRules &eff = (ignore_check && ignore_check->isChecked()) ? kNoRules : batch;
+    const bool batch_hit = batch_affects(eff, r.key, r.is_xmp);
+    const bool changed = find_edit(r.is_xmp, r.key) != nullptr;
+    QTreeWidgetItem *item = r.item;
+    item->setData(0, kBatchRole, batch_hit); // delegate：中性 pill「批」
+    item->setData(0, kChangedRole, changed); // delegate：强调色字 + 700
+    item->setText(0, row_text(r));
+    // 字色/字重同步写回 item（探针读回面 + 非 delegate 路径的兜底），色值 = 令牌（A6）
+    QFont font = item->font(0);
+    font.setWeight(changed ? QFont::Bold : QFont::Normal);
+    item->setFont(0, font);
+    item->setForeground(0, changed ? tokens.accent : tokens.text);
+    item->setToolTip(0, QString::fromStdString(r.key + "  [" + r.type_name + "]"));
 }
 
 void ExifEditor::Impl::refresh_all_rows() {
@@ -881,6 +1012,10 @@ QWidget *ExifEditor::Impl::make_exif_tab() {
     exif_search->setObjectName(QStringLiteral("exif_search"));
     exif_search->setPlaceholderText(T("搜索标签名 / 键 / 值"));
     exif_search->setClearButtonEnabled(true);
+    exif_search->setFont(theme::font(theme::Typography::body_px));
+    exif_search->setProperty(dialogkit::kFieldProperty,
+                             QString::fromLatin1(dialogkit::kFieldInput));
+    exif_search->setAccessibleName(T("搜索标签"));
     lv->addWidget(exif_search);
     exif_tree = new QTreeWidget();
     exif_tree->setObjectName(QStringLiteral("exif_tree"));
@@ -888,6 +1023,9 @@ QWidget *ExifEditor::Impl::make_exif_tab() {
     exif_tree->setUniformRowHeights(true);
     exif_tree->setAlternatingRowColors(true);
     exif_tree->setSelectionMode(QAbstractItemView::SingleSelection);
+    exif_tree->setFont(theme::font(theme::Typography::body_px));
+    exif_tree->setAccessibleName(T("EXIF 标签树"));
+    attach_delegate(exif_tree); // M5-T10：行首 pill「批」+ 改值强调色字（A8）
     lv->addWidget(exif_tree, 1);
     split->addWidget(left);
 
@@ -898,20 +1036,33 @@ QWidget *ExifEditor::Impl::make_exif_tab() {
     v->addWidget(split, 1);
 
     auto *add = new QHBoxLayout();
-    add->addWidget(new QLabel(T("分组")));
+    auto *group_label = new QLabel(T("分组"));
+    group_label->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkLabel));
+    group_label->setFont(theme::font(theme::Typography::small_px));
+    add->addWidget(group_label);
     exif_group = new QComboBox();
     exif_group->setObjectName(QStringLiteral("add_exif_group"));
     exif_group->addItem(T("IFD0"), QStringLiteral("Image"));
     exif_group->addItem(T("Exif"), QStringLiteral("Photo"));
     exif_group->addItem(T("GPS"), QStringLiteral("GPSInfo"));
     add->addWidget(exif_group);
-    add->addWidget(new QLabel(T("编号 (hex)")));
+    auto *number_label = new QLabel(T("编号 (hex)"));
+    number_label->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkLabel));
+    number_label->setFont(theme::font(theme::Typography::small_px));
+    add->addWidget(number_label);
     exif_number = new QLineEdit();
     exif_number->setObjectName(QStringLiteral("add_exif_number"));
     exif_number->setPlaceholderText(QStringLiteral("0x0132"));
     exif_number->setMaximumWidth(110);
+    exif_number->setFont(theme::font(theme::Typography::body_px));
+    exif_number->setProperty(dialogkit::kFieldProperty,
+                             QString::fromLatin1(dialogkit::kFieldInput));
+    exif_number->setToolTip(T("十六进制标签编号，例如 0x0132"));
     add->addWidget(exif_number);
-    add->addWidget(new QLabel(T("类型")));
+    auto *type_label = new QLabel(T("类型"));
+    type_label->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkLabel));
+    type_label->setFont(theme::font(theme::Typography::small_px));
+    add->addWidget(type_label);
     exif_type = new QComboBox();
     exif_type->setObjectName(QStringLiteral("add_exif_type"));
     exif_type->addItem(QStringLiteral("Byte"), static_cast<int>(Exiv2::unsignedByte));
@@ -925,6 +1076,7 @@ QWidget *ExifEditor::Impl::make_exif_tab() {
     add->addWidget(exif_type);
     auto *add_button = new QPushButton(T("添加标签"));
     add_button->setObjectName(QStringLiteral("add_exif_button"));
+    hook_button(add_button, /*primary=*/false); // R4 按钮 26（A7）
     add->addWidget(add_button);
     add->addStretch(1);
     v->addLayout(add);
@@ -955,6 +1107,9 @@ QWidget *ExifEditor::Impl::make_xmp_tab() {
     xmp_search->setObjectName(QStringLiteral("xmp_search"));
     xmp_search->setPlaceholderText(T("搜索标签名 / 键 / 值"));
     xmp_search->setClearButtonEnabled(true);
+    xmp_search->setFont(theme::font(theme::Typography::body_px));
+    xmp_search->setProperty(dialogkit::kFieldProperty, QString::fromLatin1(dialogkit::kFieldInput));
+    xmp_search->setAccessibleName(T("搜索属性"));
     lv->addWidget(xmp_search);
     xmp_tree = new QTreeWidget();
     xmp_tree->setObjectName(QStringLiteral("xmp_tree"));
@@ -962,6 +1117,9 @@ QWidget *ExifEditor::Impl::make_xmp_tab() {
     xmp_tree->setUniformRowHeights(true);
     xmp_tree->setAlternatingRowColors(true);
     xmp_tree->setSelectionMode(QAbstractItemView::SingleSelection);
+    xmp_tree->setFont(theme::font(theme::Typography::body_px));
+    xmp_tree->setAccessibleName(T("XMP 属性树"));
+    attach_delegate(xmp_tree);
     lv->addWidget(xmp_tree, 1);
     split->addWidget(left);
 
@@ -975,9 +1133,13 @@ QWidget *ExifEditor::Impl::make_xmp_tab() {
     xmp_path = new QLineEdit();
     xmp_path->setObjectName(QStringLiteral("add_xmp_path"));
     xmp_path->setPlaceholderText(T("Xmp.xxx.yyy 自定义路径"));
+    xmp_path->setFont(theme::font(theme::Typography::body_px));
+    xmp_path->setProperty(dialogkit::kFieldProperty, QString::fromLatin1(dialogkit::kFieldInput));
+    xmp_path->setToolTip(T("完整 XMP 路径，例如 Xmp.dc.title"));
     add->addWidget(xmp_path, 1);
     auto *add_button = new QPushButton(T("添加标签"));
     add_button->setObjectName(QStringLiteral("add_xmp_button"));
+    hook_button(add_button, /*primary=*/false);
     add->addWidget(add_button);
     v->addLayout(add);
 
@@ -1122,21 +1284,26 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
 
     auto *hint = new ElidedLabel();
     hint->set_full_text(T("以下三态只作用于当前文件的例外：继承批量规则 / 覆盖 / 清除。"));
-    QPalette hint_pal = hint->palette();
-    hint_pal.setColor(QPalette::WindowText, QColor(0x80, 0x80, 0x80));
-    hint->setPalette(hint_pal);
+    hint->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkNote)); // A6：令牌 txt3
+    hint->setFont(theme::font(theme::Typography::hint_px));
     v->addWidget(hint);
 
     // 1) 时间三态
     auto *time_group = new QGroupBox(T("时间"));
+    time_group->setFont(theme::font(theme::Typography::small_px, QFont::DemiBold));
     auto *tv = new QVBoxLayout(time_group);
     auto *time_row = new QHBoxLayout();
-    time_row->addWidget(new QLabel(T("时间偏移")));
+    auto *time_label = new QLabel(T("时间偏移"));
+    time_label->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkLabel));
+    time_label->setFont(theme::font(theme::Typography::small_px));
+    time_row->addWidget(time_label);
     time_mode = new QComboBox();
     time_mode->setObjectName(QStringLiteral("time_mode"));
     time_mode->addItem(T("继承批量规则"));
     time_mode->addItem(T("覆盖"));
     time_mode->addItem(T("清除"));
+    dress_combo(time_mode, T("时间偏移"),
+                T("本文件的时间处理：继承批量规则 / 覆盖 / 清除时间标签"));
     time_row->addWidget(time_mode);
     time_row->addStretch(1);
     tv->addLayout(time_row);
@@ -1145,11 +1312,16 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     auto *tp = new QVBoxLayout(time_params);
     tp->setContentsMargins(0, 0, 0, 0);
     auto *method_row = new QHBoxLayout();
-    method_row->addWidget(new QLabel(T("方式")));
+    auto *method_label = new QLabel(T("方式"));
+    method_label->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkLabel));
+    method_label->setFont(theme::font(theme::Typography::small_px));
+    method_row->addWidget(method_label);
     time_method = new QComboBox();
     time_method->setObjectName(QStringLiteral("time_method"));
     time_method->addItem(T("Δ 偏移（时钟拨错）"));
     time_method->addItem(T("时区语义（旅行照片）"));
+    dress_combo(time_method, T("方式"),
+                T("Δ 偏移 = 直接加减时间差；时区语义 = 按「从/到」时区换算"));
     method_row->addWidget(time_method);
     method_row->addStretch(1);
     tp->addLayout(method_row);
@@ -1161,10 +1333,15 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     const char *names[6] = {"time_years", "time_months",  "time_days",
                             "time_hours", "time_minutes", "time_seconds"};
     for (int i = 0; i < 6; ++i) {
-        grid->addWidget(new QLabel(labels[i]), 0, i);
+        auto *field_label = new QLabel(labels[i]);
+        field_label->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkLabel));
+        field_label->setFont(theme::font(theme::Typography::small_px));
+        field_label->setAlignment(Qt::AlignCenter);
+        grid->addWidget(field_label, 0, i);
         time_spin[i] = new QSpinBox();
         time_spin[i]->setObjectName(QString::fromLatin1(names[i]));
         time_spin[i]->setRange(-9999, 9999);
+        dress_spin(time_spin[i], labels[i]);
         grid->addWidget(time_spin[i], 1, i);
     }
     tp->addWidget(time_delta_box);
@@ -1174,8 +1351,10 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     tz->setContentsMargins(0, 0, 0, 0);
     tz_from = new QComboBox();
     tz_from->setObjectName(QStringLiteral("tz_from"));
+    dress_combo(tz_from, T("从"), T("↑↓ 选择原时区（整点 / 半小时）；与「到」不同即视为改动"));
     tz_to = new QComboBox();
     tz_to->setObjectName(QStringLiteral("tz_to"));
+    dress_combo(tz_to, T("到"), T("↑↓ 选择目标时区（整点 / 半小时）"));
     for (int m = -12 * 60; m <= 14 * 60; m += 30) { // 整点 + 半小时时区全表
         tz_from->addItem(offset_label(m), m);
         tz_to->addItem(offset_label(m), m);
@@ -1186,9 +1365,15 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     const int zero_to = tz_to->findData(0);
     if (zero_to >= 0)
         tz_to->setCurrentIndex(zero_to);
-    tz->addWidget(new QLabel(T("从")));
+    auto *tz_from_label = new QLabel(T("从"));
+    tz_from_label->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkLabel));
+    tz_from_label->setFont(theme::font(theme::Typography::small_px));
+    auto *tz_to_label = new QLabel(T("到"));
+    tz_to_label->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkLabel));
+    tz_to_label->setFont(theme::font(theme::Typography::small_px));
+    tz->addWidget(tz_from_label);
     tz->addWidget(tz_from);
-    tz->addWidget(new QLabel(T("到")));
+    tz->addWidget(tz_to_label);
     tz->addWidget(tz_to);
     tz->addStretch(1);
     tp->addWidget(time_tz_box);
@@ -1225,14 +1410,19 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
 
     // 2) GPS 三态
     auto *gps_group = new QGroupBox(T("GPS"));
+    gps_group->setFont(theme::font(theme::Typography::small_px, QFont::DemiBold));
     auto *gv = new QVBoxLayout(gps_group);
     auto *gps_row = new QHBoxLayout();
-    gps_row->addWidget(new QLabel(T("GPS")));
+    auto *gps_label = new QLabel(T("GPS"));
+    gps_label->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkLabel));
+    gps_label->setFont(theme::font(theme::Typography::small_px));
+    gps_row->addWidget(gps_label);
     gps_mode = new QComboBox();
     gps_mode->setObjectName(QStringLiteral("gps_mode"));
     gps_mode->addItem(T("继承批量规则"));
     gps_mode->addItem(T("覆盖"));
     gps_mode->addItem(T("清除 GPS"));
+    dress_combo(gps_mode, T("GPS"), T("本文件的 GPS 处理：继承批量规则 / 覆盖 / 清除"));
     gps_row->addWidget(gps_mode);
     gps_row->addStretch(1);
     gv->addLayout(gps_row);
@@ -1248,6 +1438,7 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     lat_validator->setNotation(QDoubleValidator::StandardNotation);
     lat_validator->setLocale(QLocale::c());
     gps_lat->setValidator(lat_validator);
+    dress_edit(gps_lat, T("纬度"), T("十进制纬度（-90..90，6 位小数）"));
     gps_lon = new QLineEdit();
     gps_lon->setObjectName(QStringLiteral("gps_lon"));
     gps_lon->setPlaceholderText(QStringLiteral("121.473700"));
@@ -1255,13 +1446,13 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     lon_validator->setNotation(QDoubleValidator::StandardNotation);
     lon_validator->setLocale(QLocale::c());
     gps_lon->setValidator(lon_validator);
+    dress_edit(gps_lon, T("经度"), T("十进制经度（-180..180，6 位小数）"));
     coord->addRow(T("纬度"), gps_lat);
     coord->addRow(T("经度"), gps_lon);
     gps_dms = new QLabel(QStringLiteral("—"));
     gps_dms->setObjectName(QStringLiteral("gps_dms"));
-    QPalette dms_pal = gps_dms->palette();
-    dms_pal.setColor(QPalette::WindowText, QColor(0x80, 0x80, 0x80));
-    gps_dms->setPalette(dms_pal);
+    gps_dms->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkNote)); // A6：令牌 txt3
+    gps_dms->setFont(theme::font(theme::Typography::body_px, QFont::Normal, /*tabular=*/true));
     coord->addRow(T("DMS"), gps_dms);
     gp->addLayout(coord);
 
@@ -1278,6 +1469,9 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     gps_ts = new QLineEdit();
     gps_ts->setObjectName(QStringLiteral("gps_ts"));
     gps_ts->setPlaceholderText(QStringLiteral("YYYY:MM:DD HH:MM:SS"));
+    dress_edit(gps_alt, T("海拔"), T("海拔（米，可空）"));
+    dress_edit(gps_dir, T("方位角"), T("方位角（0–359.99 度，可空）"));
+    dress_edit(gps_ts, T("时间戳"), T("GPS 时间戳（YYYY:MM:DD HH:MM:SS，可空）"));
     more_form->addRow(T("海拔 (m)"), gps_alt);
     more_form->addRow(T("方位角 (°)"), gps_dir);
     more_form->addRow(T("时间戳"), gps_ts);
@@ -1310,21 +1504,25 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
 
     // 3) 隐私剥除三态
     auto *privacy_group = new QGroupBox(T("隐私剥除"));
+    privacy_group->setFont(theme::font(theme::Typography::small_px, QFont::DemiBold));
     auto *pv = new QVBoxLayout(privacy_group);
     auto *privacy_row = new QHBoxLayout();
-    privacy_row->addWidget(new QLabel(T("剥除全部 EXIF / XMP（保留 ICC 与像素）")));
+    auto *privacy_label = new QLabel(T("剥除全部 EXIF / XMP（保留 ICC 与像素）"));
+    privacy_label->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkLabel));
+    privacy_label->setFont(theme::font(theme::Typography::small_px));
+    privacy_row->addWidget(privacy_label);
     privacy_mode = new QComboBox();
     privacy_mode->setObjectName(QStringLiteral("privacy_mode"));
     privacy_mode->addItem(T("继承批量规则"));
     privacy_mode->addItem(T("强制开"));
     privacy_mode->addItem(T("强制关"));
+    dress_combo(privacy_mode, T("隐私剥除"), T("本文件的隐私剥除：继承批量规则 / 强制开 / 强制关"));
     privacy_row->addWidget(privacy_mode);
     privacy_row->addStretch(1);
     pv->addLayout(privacy_row);
     auto *priority = new QLabel(T("优先级最高的规则"));
-    QPalette priority_pal = priority->palette();
-    priority_pal.setColor(QPalette::WindowText, QColor(0x80, 0x80, 0x80));
-    priority->setPalette(priority_pal);
+    priority->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkNote)); // A6：令牌 txt3
+    priority->setFont(theme::font(theme::Typography::hint_px));
     pv->addWidget(priority);
     v->addWidget(privacy_group);
     v->addStretch(1);
@@ -1369,37 +1567,63 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
 
 // —— 顶部与收尾 ——
 
+void ExifEditor::Impl::attach_delegate(QTreeWidget *tree) {
+    if (tree == nullptr)
+        return;
+    if (delegate == nullptr) {
+        delegate = new TagItemDelegate(tree); // 两棵树共用一个实例（delegate 不取所有权）
+        delegate->set_tokens(tokens);
+    }
+    tree->setItemDelegate(delegate);
+}
+
 void ExifEditor::Impl::build() {
-    // M4-T12：.mod 的 QSS 规则必须出现在**本对话框自己的**样式作用域里（主窗口的
-    // styleSheet 只作用于其子树；对话框是独立顶层窗口）→ 只装 mod_qss 一条，不动其余外观。
-    q->setStyleSheet(theme::mod_qss(theme::tokens(theme::preferred_theme_mode())));
+    // M5-T10：本弹窗与设置弹窗**同一套语言** —— chrome/控件规格/QSS 走 dialogkit 单实现
+    // （M4-T12 的 .mod 规则仍在本对话框自己的作用域里：主窗 styleSheet 不覆盖独立顶层窗口的子树）。
+    tokens = theme::tokens(theme::preferred_theme_mode());
+    q->setStyleSheet(dialogkit::dialog_qss(tokens));
     q->setWindowTitle(T("元数据编辑器 — ") + QFileInfo(src).fileName());
     q->resize(900, 640);
     q->setModal(true);
 
     auto *root = new QVBoxLayout(q);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(0);
+
+    // 自绘标题栏 40px（中性底 + 矢量图标 + 关闭 caption；§7.4 同一语言）
+    const dialogkit::TitleBar title_bar = dialogkit::make_title_bar(
+        q, icons::Name::Image, T("元数据编辑器 — ") + QFileInfo(src).fileName());
+    title_bar.title->setToolTip(src); // 全文路径（标题栏窄时仍可读；替代原文件名列）
+    root->addWidget(title_bar.widget);
+
+    auto *body = new QWidget();
+    auto *body_line = new QVBoxLayout(body);
+    body_line->setContentsMargins(theme::Metrics::main_pad_x, theme::Metrics::main_pad_top,
+                                  theme::Metrics::main_pad_x, theme::Metrics::main_pad_bottom);
+    body_line->setSpacing(theme::Metrics::group_gap);
+
     auto *top = new QHBoxLayout();
-    auto *name = new QLabel(QFileInfo(src).fileName());
-    QFont bold = name->font();
-    bold.setBold(true);
-    name->setFont(bold);
-    name->setToolTip(src);
-    top->addWidget(name);
     top->addStretch(1);
-    ignore_check = new QCheckBox(T("忽略全部批量规则"));
+    // M5-T10（R4/4-03）：勾选框改 formkit 单实现（13×13 + 矢量勾，与主窗同规格）
+    auto *ignore = new formkit::CheckBox(body);
+    ignore_check = ignore;
     ignore_check->setObjectName(QStringLiteral("ignore_batch"));
+    ignore_check->setText(T("忽略全部批量规则"));
     ignore_check->setToolTip(T("勾选后本文件不使用任何批量规则，只应用下面的例外"));
+    ignore_check->setAccessibleName(T("忽略全部批量规则"));
     ignore_check->setChecked(existing.has_value() && existing->ignore_batch);
+    ignore->set_tokens(tokens); // formkit 自绘勾选框（13×13 + 矢量勾）
     top->addWidget(ignore_check);
-    root->addLayout(top);
+    body_line->addLayout(top);
 
     if (!meta.error.empty()) {
         auto *err = new ElidedLabel();
         err->set_full_text(T("无法读取源文件元数据：") + QString::fromStdString(meta.error));
+        // M5-T10（A6）：硬编码 0xdd3333 → 令牌 err（§4.1 语义色）
         QPalette err_pal = err->palette();
-        err_pal.setColor(QPalette::WindowText, QColor(0xdd, 0x33, 0x33));
+        err_pal.setColor(QPalette::WindowText, tokens.err);
         err->setPalette(err_pal);
-        root->addWidget(err);
+        body_line->addWidget(err);
     }
 
     tabs = new QTabWidget();
@@ -1407,13 +1631,27 @@ void ExifEditor::Impl::build() {
     tabs->addTab(make_exif_tab(), T("EXIF"));
     tabs->addTab(make_xmp_tab(), T("XMP"));
     tabs->addTab(make_time_gps_tab(), T("时间 / GPS"));
-    root->addWidget(tabs, 1);
+    body_line->addWidget(tabs, 1);
 
+    auto *button_row = new QHBoxLayout();
+    button_row->addStretch(1);
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
     buttons->setObjectName(QStringLiteral("buttons"));
-    buttons->button(QDialogButtonBox::Ok)->setText(T("确定"));
-    buttons->button(QDialogButtonBox::Cancel)->setText(T("取消"));
-    root->addWidget(buttons);
+    // R4 按钮 26 + 主/次（A7）：确定 = 实心 acc（主操作居右），取消 = 描边
+    auto *ok = buttons->button(QDialogButtonBox::Ok);
+    ok->setText(T("确定"));
+    hook_button(ok, /*primary=*/true);
+    auto *cancel = buttons->button(QDialogButtonBox::Cancel);
+    cancel->setText(T("取消"));
+    hook_button(cancel, /*primary=*/false);
+    button_row->addWidget(buttons);
+    body_line->addLayout(button_row);
+
+    root->addWidget(body, 1);
+
+    // §11：自绘焦点环（accent 1px；系统虚线框由 dialog_qss 的 outline:none 关闭）
+    auto *ring = new dialogkit::FocusRing(q);
+    ring->set_tokens(tokens);
 
     QObject::connect(buttons, &QDialogButtonBox::accepted, q, [this] { on_accept(); });
     QObject::connect(buttons, &QDialogButtonBox::rejected, q, [this] { q->reject(); });
@@ -1421,6 +1659,9 @@ void ExifEditor::Impl::build() {
         refresh_all_rows();
         refresh_effective_values();
     });
+
+    // 无边框接线（拖拽 / 八向缩放；与主窗、设置弹窗同一机制）
+    pp::platform::Frameless::attach(q, title_bar.widget, {title_bar.close});
 }
 
 void ExifEditor::Impl::init_from_existing() {

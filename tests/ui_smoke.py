@@ -77,6 +77,15 @@ M5-T7（W-G3 页：元数据页 §7.1 四卡组）:
     meta-effective / meta-timezone / meta-gps / meta-strip / meta-gps-clear / meta-multi /
     meta-editor / meta-info / meta-geometry / meta-follow-*）全保留。截图仍为 12 张、冻结末行不变。
 
+M5-T10（W-G3：设置弹窗 §7.4 重做）:
+  * 追加 `UI-SMOKE settings-geom:` 行齐备断言（C7 几何探针：660 宽 / 标题栏 40 / 页签条 34（5 页签，
+    序逐字 = A21）/ 底栏 48 / 行 pitch 28 / 字段 160 + 单位槽 16 + 范围注释 10px / 确定实心居右 +
+    恢复默认居左 / 焦点环 accent 1px 跟随 + outline:none / 主题三档段几何 + 段组贴字段轨 /
+    无语言假控件 / 修 4-08 自动档 = 下拉项 / 修 4-15 alpha 端值映射；值表驱动，行内
+    `checked=N bad=M` 由 C++ 侧给出）。既有 `UI-SMOKE settings-dialog:` 行（交错启动 ms / 线程预算 /
+    分文件夹默认三项读回）全保留（线程预算的控件类型按修 4-08 换锚为下拉，断言本体不变；
+    M5-T10 机械换锚登记在任务报告）。截图仍为 12 张、冻结末行不变。
+
 M5-T9（W-G3 页：运行页 §7.3 三卡组）:
   * 追加 `UI-SMOKE run-geom:` 行齐备断言（C7 几何/语义值表：总览 kv 行 pitch 28 + 标签轨 80 /
     表行高 28（表头 24）/ 进度条高 6（总览合成条 + 分组条 + 逐输出条）/ 日志尾等宽字族（§7.3）+
@@ -164,6 +173,21 @@ T9_LINE_PREFIXES = (
                                 # 指标单源 / 实现性文案出界面 / 三级动作 + 按钮 26 / 计数单源
 )
 
+# M5-T10 自检行（前缀匹配；缺任一 → FAIL）：设置弹窗 §7.4 重做几何/语义（值表驱动，行内
+# `checked=N bad=M` 由 C++ 侧给出；既有 settings-dialog 行 = 交错启动/线程预算/分文件夹默认三项读回）
+# + EXIF 编辑器树行标记（A8 零字形）
+T10_LINE_PREFIXES = (
+    'UI-SMOKE exif-rows:',      # 行文本无 〔 〕 ● 与「批」字形；批量命中 ≥ 1 行走 item data
+                                # （delegate 画中性 pill「批」）；注入改值 → changed role +
+                                # 强调色字 + 700（无 ●）
+    'UI-SMOKE settings-geom:',  # 660 宽 / 标题栏 40 / 页签条 34（5 页签，序逐字 = A21 通用·输出·
+                                # 运行·地图·关于）/ 底栏 48 / 行 pitch 28 / 字段 160 × 4 +
+                                # 单位槽 16 + 范围注释 / 确定实心（QSS 规则 + accent 色）且居右 +
+                                # 恢复默认居左 / 焦点环（accent 1px，跟随焦点控件；outline:none）/
+                                # 主题三档段几何 + 段组贴字段轨 / 无语言假控件 / 修 4-08 自动档 =
+                                # 下拉项（0）/ 修 4-15 alpha 端值映射（100→255 白、0→0 黑）
+)
+
 # M4-W2-T11 自检行（前缀匹配；缺任一 → FAIL）
 T11_LINE_PREFIXES = (
     'UI-SMOKE filelist-roles:',
@@ -228,6 +252,7 @@ def main():
         t7_seen = set()
         t8_seen = set()
         t9_seen = set()
+        t10_seen = set()
         t11_seen = set()
         t14_seen = set()
         t15_seen = set()
@@ -256,6 +281,9 @@ def main():
                 for prefix in T9_LINE_PREFIXES:
                     if line.startswith(prefix):
                         t9_seen.add(prefix)
+                for prefix in T10_LINE_PREFIXES:
+                    if line.startswith(prefix):
+                        t10_seen.add(prefix)
                 for prefix in T11_LINE_PREFIXES:
                     if line.startswith(prefix):
                         t11_seen.add(prefix)
@@ -303,6 +331,11 @@ def main():
         missing = [p for p in T9_LINE_PREFIXES if p not in t9_seen]
         if missing:
             print('ui_smoke: FAIL (missing T9 run-page self-check lines: {})'.format(
+                ', '.join(missing)), file=sys.stderr)
+            return 1
+        missing = [p for p in T10_LINE_PREFIXES if p not in t10_seen]
+        if missing:
+            print('ui_smoke: FAIL (missing T10 settings-dialog self-check lines: {})'.format(
                 ', '.join(missing)), file=sys.stderr)
             return 1
         missing = [p for p in T11_LINE_PREFIXES if p not in t11_seen]

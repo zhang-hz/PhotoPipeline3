@@ -17,6 +17,9 @@
 //     （QString::simplified）→ 例："My 预设 #1" → "My 1"；清洗后为空只禁用“另存为”。
 //   - §9.1 U6-FIX：标题 `预设管理`；列表为空时显示灰字提示（objectName
 //     `preset_empty_hint`，非空隐藏，提示在列表区上方）。
+//   - M5-T10（§7.4 弹窗语言）：chrome 走 dialogkit（自绘标题栏 40 + 焦点环 + 弹窗 QSS），
+//     按钮统一 R4 规格（高 26；主操作「载入」实心 acc，其余描边）+ 26px 行高；列表/名称行
+//     的控件规格与主窗同源（QSS 由 dialogkit 单源给出）。行为语义零改动（下方全部保持）。
 #include "ui/presets_dialog.h"
 
 #include <QAbstractItemView>
@@ -34,6 +37,12 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+
+#include "platform/frameless.h" // M5-T10：无边框接线（与主窗/设置弹窗同一机制）
+#include "ui/formkit.h"         // M5-T10：行构造器（名称行 R2/R3）
+#include "ui/icons.h"           // M5-T10：标题栏矢量图标（C3 禁字形）
+#include "ui/settings_dialog.h" // M5-T10：dialogkit（标题栏/按钮/焦点环/弹窗 QSS）
+#include "ui/theme.h"           // M5-T10：令牌（A6：灰字/按钮色不再硬编码）
 
 namespace pp::ui {
 namespace {
@@ -189,9 +198,34 @@ PresetsDialog::PresetsDialog(const std::vector<std::pair<QString, QString>> &pre
     setProperty(kPropName, QString());
     setProperty(kPropPath, QString());
 
-    auto *list = new QListWidget(this);
+    // M5-T10：与设置弹窗同一套 chrome/控件语言（dialogkit 单实现）
+    const theme::Tokens tokens = theme::tokens(theme::preferred_theme_mode());
+    setStyleSheet(dialogkit::dialog_qss(tokens));
+
+    auto *root_card = new QWidget(this);
+    root_card->setObjectName(QStringLiteral("pp-dlg-card"));
+    auto *card_line = new QVBoxLayout(root_card);
+    card_line->setContentsMargins(0, 0, 0, 0);
+    card_line->setSpacing(0);
+    const dialogkit::TitleBar title_bar =
+        dialogkit::make_title_bar(root_card, icons::Name::Image, tr("预设管理"));
+    card_line->addWidget(title_bar.widget);
+
+    auto *body = new QWidget(root_card);
+    auto *body_line = new QVBoxLayout(body);
+    body_line->setContentsMargins(dialogkit::kBodyPadX, dialogkit::kBodyPadTop,
+                                  dialogkit::kBodyPadX, dialogkit::kBodyPadBottom);
+    body_line->setSpacing(theme::Metrics::group_gap);
+
+    auto *list = new QListWidget(body);
     list->setObjectName(QLatin1String(kList));
     list->setSelectionMode(QAbstractItemView::SingleSelection);
+    list->setFont(theme::font(theme::Typography::body_px));
+
+    // §11：自绘焦点环（accent 1px；系统虚线框由 dialogkit QSS 的 outline:none 关闭）
+    auto *ring = new dialogkit::FocusRing(this);
+    ring->set_tokens(tokens);
+
     for (const auto &entry : presets) { // (path, display-name)
         auto *item = new QListWidgetItem(entry.second, list);
         item->setData(Qt::UserRole, entry.first);
@@ -202,9 +236,11 @@ PresetsDialog::PresetsDialog(const std::vector<std::pair<QString, QString>> &pre
     // 文案与 objectName 不变；列表非空时由 update_empty_hint 隐藏。
     auto *empty_hint = new ElidedLabel(list->viewport());
     empty_hint->setObjectName(QLatin1String(kEmptyHint));
+    // M5-T10（A6）：硬编码灰 0x808080 → 令牌 txt3（§4.2 辅助 10px）
     QPalette hint_pal = empty_hint->palette();
-    hint_pal.setColor(QPalette::WindowText, QColor(0x80, 0x80, 0x80));
+    hint_pal.setColor(QPalette::WindowText, tokens.text3);
     empty_hint->setPalette(hint_pal);
+    empty_hint->setFont(theme::font(theme::Typography::hint_px));
     empty_hint->setAlignment(Qt::AlignCenter);
     empty_hint->set_full_text(tr("暂无预设——输入名称后点\"另存为\"创建"));
     auto *overlay = new QVBoxLayout(list->viewport());
@@ -213,20 +249,30 @@ PresetsDialog::PresetsDialog(const std::vector<std::pair<QString, QString>> &pre
     overlay->addWidget(empty_hint);
     overlay->addStretch(1);
 
-    auto *name_edit = new QLineEdit(this);
+    auto *name_edit = new QLineEdit(body);
     name_edit->setObjectName(QLatin1String(kName));
     name_edit->setText(suggested_name);
+    name_edit->setFont(theme::font(theme::Typography::body_px));
+    name_edit->setProperty(dialogkit::kFieldProperty, QString::fromLatin1(dialogkit::kFieldInput));
+    name_edit->setAccessibleName(tr("名称"));
+    name_edit->setToolTip(tr("预设名（仅保留字母/数字/下划线/连字符/空格）"));
 
-    auto *form = new QFormLayout;
-    form->addRow(tr("名称"), name_edit);
+    // 名称行：R2/R3 口径（标签轨 80 右对齐 + 长档字段；单位/范围位不占标签位）
+    const formkit::Row name_row =
+        formkit::frow(body, tr("名称"), name_edit, formkit::FieldWidth::Flex);
+    name_row.label->setBuddy(name_edit);
 
-    auto *load_btn = new QPushButton(tr("载入"), this);
+    // R4 按钮 26 + 主/次（A7）：载入 = 主操作（实心 acc），其余描边（§2.10 的顺序不变）
+    auto *load_btn = dialogkit::make_button(body, tr("载入"), /*primary=*/true);
     load_btn->setObjectName(QLatin1String(kLoad));
-    auto *saveas_btn = new QPushButton(tr("另存为"), this);
+    load_btn->setToolTip(tr("载入选中的预设"));
+    auto *saveas_btn = dialogkit::make_button(body, tr("另存为"), /*primary=*/false);
     saveas_btn->setObjectName(QLatin1String(kSaveAs));
-    auto *delete_btn = new QPushButton(tr("删除"), this);
+    saveas_btn->setToolTip(tr("按名称保存为新的预设"));
+    auto *delete_btn = dialogkit::make_button(body, tr("删除"), /*primary=*/false);
     delete_btn->setObjectName(QLatin1String(kDelete));
-    auto *close_btn = new QPushButton(tr("关闭"), this);
+    delete_btn->setToolTip(tr("删除选中的预设（需确认）"));
+    auto *close_btn = dialogkit::make_button(body, tr("关闭"), /*primary=*/false);
     close_btn->setObjectName(QLatin1String(kClose));
 
     auto *button_row = new QHBoxLayout;
@@ -236,10 +282,17 @@ PresetsDialog::PresetsDialog(const std::vector<std::pair<QString, QString>> &pre
     button_row->addStretch(1);
     button_row->addWidget(close_btn);
 
+    body_line->addWidget(list, 1); // §9.1 U6-FIX + M2-T7 #28d：空态提示已移入列表区内部
+    body_line->addWidget(name_row.row);
+    body_line->addLayout(button_row);
+    card_line->addWidget(body, 1);
+
     auto *root = new QVBoxLayout(this);
-    root->addWidget(list, 1); // §9.1 U6-FIX + M2-T7 #28d：空态提示已移入列表区内部
-    root->addLayout(form);
-    root->addLayout(button_row);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->addWidget(root_card, 1);
+
+    // 无边框接线（拖拽 / 八向缩放；与主窗、设置弹窗同一机制）
+    pp::platform::Frameless::attach(this, title_bar.widget, {title_bar.close});
 
     // 选中列表项 → 名称行带出该项名（§2.10）
     connect(list, &QListWidget::currentItemChanged, this,

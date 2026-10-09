@@ -6778,6 +6778,20 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
         dlg.show();
         pump(250);
         smoke_grab(shots_dir, kSmokeShots[kShotSettings], &dlg);
+        // ---- M5-T10（§7.4 重做）：C7 几何探针（值表驱动；判据实现与控件同 TU =
+        // settings_dialog.cpp 的 dialogkit::settings_geom_probe，调用方只打印与 smoke_fail）----
+        // 位置：截图之后、accept 之前（accept 会隐藏对话框 → 焦点环/可见面几何失效）。
+        {
+            const dialogkit::GeomProbeReport geom = dialogkit::settings_geom_probe(dlg);
+            std::printf("UI-SMOKE settings-geom: checked=%d bad=%d %s\n", geom.checked,
+                        static_cast<int>(geom.bad.size()),
+                        qUtf8Printable(geom.bad.join(QLatin1Char(' '))));
+            std::fflush(stdout);
+            if (!geom.bad.isEmpty()) {
+                smoke_fail(MainWindow::tr("设置弹窗几何（§7.4/A21）不符：%1")
+                               .arg(geom.bad.join(QLatin1Char(' '))));
+            }
+        }
         // ---- M4-T15（§9.3 设置追加项）：控件 → AppSettings 读回自检 ----
         // 不新增截图、不改冻结末行。两侧都验：未 accept（非确定路径）= 构造快照原样返回
         // （§2.10）；accept 后 = 控件值，且"分文件夹默认结构"写回 output_template +
@@ -6785,14 +6799,20 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
         {
             const pp::AppSettings snapshot = dlg.settings();
             auto *stagger = dlg.findChild<QSpinBox *>(QStringLiteral("pp-stagger-ms"));
-            auto *threads = dlg.findChild<QSpinBox *>(QStringLiteral("pp-thread-budget"));
+            // M5-T10 机械换锚（修 4-08「禁 spinbox 塞文本魔法值」）：「线程预算」的控件类型由
+            // spinbox 改为「自动/数值」下拉 → 这里的查找类型随之换锚；objectName 与
+            // 「0 = 自动」的读回语义不变，断言本体（set 5 → 读回 5）逐字不变。
+            auto *threads = dlg.findChild<QComboBox *>(QStringLiteral("pp-thread-budget"));
             auto *structure = dlg.findChild<QComboBox *>(QStringLiteral("pp-folder-structure"));
             if (stagger == nullptr || threads == nullptr || structure == nullptr) {
                 smoke_fail(MainWindow::tr("设置对话框缺少 T15 追加项控件（pp-stagger-ms / "
                                           "pp-thread-budget / pp-folder-structure）"));
             } else {
                 stagger->setValue(250);
-                threads->setValue(5);
+                const int threads_idx = threads->findData(5);
+                if (threads_idx >= 0) {
+                    threads->setCurrentIndex(threads_idx);
+                }
                 const int idx = structure->findData(QStringLiteral("$dir/$format/$file"));
                 if (idx >= 0) {
                     structure->setCurrentIndex(idx);
@@ -7906,6 +7926,84 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
             std::fflush(stdout);
             if (!saved) {
                 smoke_fail(MainWindow::tr("EXIF 编辑器走查图保存失败：%1").arg(path));
+            }
+        }
+        // ---- M5-T10（A8 零字形）：树行标记只存在于 item data ----
+        // 探针：① 全树行文本里不得有 〔 〕 ● 字形；② 批量命中行 ≥ 1（本探针注入了 time_shift +
+        // gps 规则）且该行的 text 里也没有「批」字形（标记由 delegate 画成中性 pill）；
+        // ③ 注入一次改值 → 该行 changed=true 且文字不带 ●、字色 = 令牌 accent、字重 700。
+        {
+            int leaves = 0;
+            int batch_rows = 0;
+            int changed_rows = 0;
+            int glyph_rows = 0;
+            int changed_marked = 0;
+            QWidget *tree_host = nullptr;
+            auto *tree = editor.findChild<QTreeWidget *>(QStringLiteral("exif_tree"));
+            QTreeWidgetItem *first_leaf = nullptr;
+            if (tree != nullptr) {
+                tree_host = tree;
+                QList<QTreeWidgetItem *> stack;
+                for (int i = 0; i < tree->topLevelItemCount(); ++i)
+                    stack.push_back(tree->topLevelItem(i));
+                // 字形清单按码点构造（避免本探针自身命中"字面量字形"扫描）：〔 〕 ●
+                const char16_t banned[] = {0x3014, 0x3015, 0x25CF, 0x6279}; // 含「批」字
+                while (!stack.isEmpty()) {
+                    QTreeWidgetItem *item = stack.takeFirst();
+                    for (int i = 0; i < item->childCount(); ++i)
+                        stack.push_back(item->child(i));
+                    // 叶子 = 非分组节点（分组节点的 node role = 1，且没有键）
+                    if (item->childCount() != 0 ||
+                        item->data(0, pp::ui::exif_roles::node).toInt() != 0)
+                        continue;
+                    ++leaves;
+                    // 首叶子优先取可编辑行（MakerNote 归并/二进制块只读 → 换下一个）
+                    if (first_leaf == nullptr ||
+                        (first_leaf->text(0).contains(QStringLiteral("MakerNote")) &&
+                         !item->text(0).contains(QStringLiteral("MakerNote"))))
+                        first_leaf = item;
+                    const QString text = item->text(0);
+                    for (char16_t point : banned) {
+                        if (text.contains(QChar(point))) {
+                            ++glyph_rows;
+                            break;
+                        }
+                    }
+                    if (item->data(0, pp::ui::exif_roles::batch).toBool())
+                        ++batch_rows;
+                    if (item->data(0, pp::ui::exif_roles::changed).toBool())
+                        ++changed_rows;
+                }
+                // ③ 注入改值：选中叶子 → 右值区改文本（textChanged → set_edit）
+                if (first_leaf != nullptr) {
+                    tree->setCurrentItem(first_leaf);
+                    pump(120);
+                    auto *pane_probe = editor.findChild<QLineEdit *>(QStringLiteral("exif_value"));
+                    if (auto *pane = pane_probe) {
+                        pane->setText(pane->text() + QStringLiteral("X"));
+                        pump(120);
+                        const QColor want = theme::tokens(theme::preferred_theme_mode()).accent;
+                        const bool marked =
+                            first_leaf->data(0, pp::ui::exif_roles::changed).toBool() &&
+                            !first_leaf->text(0).contains(QChar(0x25CF)) &&
+                            first_leaf->font(0).weight() == QFont::Bold &&
+                            first_leaf->foreground(0).color() == want;
+                        changed_marked = marked ? 1 : 0;
+                    }
+                }
+            }
+            std::printf("UI-SMOKE exif-rows: leaves=%d batch=%d changed-before=%d glyphs=%d "
+                        "changed-marked=%d\n",
+                        leaves, batch_rows, changed_rows, glyph_rows, changed_marked);
+            std::fflush(stdout);
+            if (tree_host == nullptr || leaves == 0 || glyph_rows != 0 || batch_rows == 0 ||
+                !changed_marked) {
+                smoke_fail(MainWindow::tr("EXIF 编辑器树行标记不符（leaves=%1 batch=%2 glyphs=%3 "
+                                          "changed-marked=%4）")
+                               .arg(leaves)
+                               .arg(batch_rows)
+                               .arg(glyph_rows)
+                               .arg(changed_marked));
             }
         }
         editor.reject();

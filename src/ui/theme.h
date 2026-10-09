@@ -37,6 +37,7 @@
 #include <cmath>
 
 #include "platform/frameless.h" // 命中区/缩放带常量单源（kResizeBorderPx 等）
+#include "ui/icons.h"           // 图标线宽单源（M5-T3：§3.3 等线宽 1.4–1.6px）
 
 namespace pp::ui {
 namespace theme {
@@ -108,8 +109,12 @@ struct Metrics {
     // （§3.1 6px；最大化 1px），本处只转发（改 frameless.h 的常量即全局传导）。
     static constexpr int resize_border = pp::platform::kResizeBorderPx;
     static constexpr int resize_border_max = pp::platform::kResizeBorderMaximizedPx;
-    static constexpr int icon_btn = 28;          // R4 图标钮 28×28（v4 32 → v6 28）
-    static constexpr int icon_btn_radius = 4;    // R4 图标钮 r4
+    static constexpr int icon_btn = 28;       // R4 图标钮 28×28（v4 32 → v6 28）
+    static constexpr int icon_btn_radius = 4; // R4 图标钮 r4
+    // §3.3「图标一律 SVG 等线宽（1.4–1.6px）」：真源 = ui/icons.h::kStrokePx（图标库的线宽口径：
+    // 24 网格是形、1.5px 是**屏幕线宽**），此处只转发 —— 与缩放带/命中带同一条单源规则（M5-T3
+    // 加性扩展）。
+    static constexpr qreal icon_stroke_px = pp::ui::icons::kStrokePx;
     static constexpr int titlebar_pad_left = 18; // .toolbar{padding:0 18px}（T4 复核）
     // 步骤切换组（T4 换锚为 v6 一体式分段 92×30；本任务不动骨架）
     static constexpr int step_gap = 6;
@@ -251,6 +256,10 @@ struct Tokens {
     QColor bottom_bg;   // 状态栏底（既有权重；T4 复核）
     QColor stage_bg;    // §4.1 画布底 #16181d（不随主题变）
     QColor close_hover; // §3.1 关闭悬停 #c42b1c（双主题同值）
+    // §3.1「关闭悬停 #c42b1c（白字）」的字色（M5-T3 加性扩展：caption 字形已矢量化，悬停换色
+    // 由控件显式落地（QIcon 取色不吃 QSS 的 :hover color）→ 字色必须有令牌可读；tokens.css
+    // `.cap.close:hover{color:#fff}` 逐字，双主题同值）
+    QColor close_hover_fg;
     // 开关（R4 30×16 药丸）的关态轨/滑钮（M5-T2 加性扩展，登记见报告）：**§4.1 表外**，
     // 取 mockup `.sw{background:#c3c6cf}` / `.sw::after{background:#fff}`（双主题同值）；
     // 开态轨 = accent、开态钮 = on_accent（§4.1 令牌）。
@@ -456,6 +465,7 @@ inline Tokens tokens(ThemeMode mode) {
     t.stage_bg = QColor(0x16, 0x18, 0x1d);        // §4.1 画布底（主题无关）
     t.stage_bd = rgba(255, 255, 255, 0.08);       // 舞台框边（固定深色舞台上的浅描边）
     t.close_hover = QColor(0xc4, 0x2b, 0x1c);     // §3.1 关闭悬停（双主题同值）
+    t.close_hover_fg = QColor(0xff, 0xff, 0xff);  // §3.1 关闭悬停白字（M5-T3 加性扩展）
     t.switch_rail_off = QColor(0xc3, 0xc6, 0xcf); // mockup .sw（关态轨，双主题同值）
     t.switch_knob_off = QColor(0xff, 0xff, 0xff); // mockup .sw::after（关态钮，双主题同值）
     t.control_solid = composite(t.control, t.window);
@@ -549,6 +559,9 @@ inline constexpr const char *kModProperty = "ppMod";
 // 徽章 pill 的动态属性钩子（QLabel[ppPill="…"]）：色调取字符串值，见下面的 kPill* 常量。
 // 历史值 true（bool）= accent 档（M4 口径），保持可渲染（既有调用点零改动）。
 inline constexpr const char *kPillProperty = "ppPill";
+// 底栏状态点的警醒态动态属性钩子（M5-T3 加性扩展）：true → err 色圆点（§9.1「未就绪不用红，
+// 警醒用 err」）；色值单源在本文件的 QSS 里，调用方只翻转属性 + repolish。
+inline constexpr const char *kDotAlertProperty = "ppDotAlert";
 // §4.1 末行：语义色胶囊 = 同色 8–10% 透明底 + 30–34% 描边 + 同色字；n = 中性（ctl 底/txt2 字）
 inline constexpr const char *kPillNeutral = "n";
 inline constexpr const char *kPillAccent = "acc";
@@ -723,7 +736,8 @@ inline QString style_sheet(const Tokens &t) {
                           "background: ") +
            css_color(t.control) + QStringLiteral("; }\n");
     qss += QStringLiteral("QPushButton#pp-cap-close:hover { background: ") +
-           css_color(t.close_hover) + QStringLiteral("; color: #ffffff; }\n");
+           css_color(t.close_hover) + QStringLiteral("; color: ") + css_color(t.close_hover_fg) +
+           QStringLiteral("; }\n");
     // 预设 / 设置图标钮（R4 图标钮 28×28 r4）
     qss += QStringLiteral("QToolButton#pp-presets, QToolButton#pp-settings { background: ") +
            css_color(t.control) + QStringLiteral("; border: 1px solid ") + css_color(t.control_bd) +
@@ -761,8 +775,14 @@ inline QString style_sheet(const Tokens &t) {
         QStringLiteral("QLabel#pp-status { color: ") + css_color(t.text2) + QStringLiteral("; }\n");
     qss += QStringLiteral("QLabel#pp-output-status { color: ") + css_color(t.text3) +
            QStringLiteral("; }\n");
-    qss += QStringLiteral("QLabel#pp-status-dot { color: ") + css_color(t.ok) +
-           QStringLiteral("; }\n");
+    // 状态点（§3.2 底栏「● 已选 12 / 24」；mockup .dot = 8px 圆形状而非字形）：
+    // M5-T3 起为 QSS 矢量形状（background + r99 等效半高半径），警醒态 = 动态属性 ppDotAlert
+    // （theme::kDotAlertProperty，色值仍单源在本文件 —— 调用方只翻转属性）。
+    qss += QStringLiteral("QLabel#pp-status-dot { background: ") + css_color(t.ok) +
+           QStringLiteral("; border-radius: ") + QString::number(Metrics::dot_px / 2) +
+           QStringLiteral("px; }\n");
+    qss += QStringLiteral("QLabel#pp-status-dot[") + QString::fromLatin1(kDotAlertProperty) +
+           QStringLiteral("=\"true\"] { background: ") + css_color(t.err) + QStringLiteral("; }\n");
     // 开始运行（R4 主 CTA：状态栏 22px 高实心 acc 底 + acc-on 字 + r4；
     // 禁用态 = --ctl 底 + --txt3 字 + 1px --ctl-bd 边；box-shadow 由 ui 侧落地）
     qss += QStringLiteral("QPushButton#pp-start { background: ") + css_color(t.accent) +

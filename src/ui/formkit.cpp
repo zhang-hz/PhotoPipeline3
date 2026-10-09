@@ -35,6 +35,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "ui/icons.h" // M5-T3：勾形（勾选框/胶囊）一律矢量图标（C3；M3 铁律六 单实现）
 #include "ui/theme.h"
 
 namespace pp::ui::formkit {
@@ -166,20 +167,12 @@ QString tr_magic() {
     return QCoreApplication::translate("pp::ui::formkit", "自动"); // R4 魔法值文案（§7.4）
 }
 
-// 勾选标记（矢量路径：mockup 的 10×10 viewBox「M2 5l2.2 2.2L8 3」等比投到盒内；§3.3 禁字形图标）
+// 勾选标记（矢量路径）：M5-T3 起**唯一实现** = icons 库的 check（与 mockup 的 10×10
+// 「M2 5l2.2 2.2L8 3」等比同源；§3.3 禁字形图标）—— 本函数只做盒内投点，不另存一份曲线。
 void draw_check_mark(QPainter &p, const QRectF &box, const QColor &color) {
-    const double side = std::min(box.width(), box.height()) * 0.8;
-    const double scale = side / 10.0;
-    const QPointF origin(box.center().x() - side / 2.0, box.center().y() - side / 2.0);
-    const auto at = [&](double x, double y) {
-        return QPointF(origin.x() + x * scale, origin.y() + y * scale);
-    };
-    QPainterPath path(at(2.0, 5.0));
-    path.lineTo(at(4.2, 7.2));
-    path.lineTo(at(8.0, 3.0));
-    p.setPen(QPen(color, 1.7, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    p.setBrush(Qt::NoBrush);
-    p.drawPath(path);
+    const double side = std::min(box.width(), box.height()) * 0.8; // 10 网格占盒 80%（M4 口径不变）
+    const QRectF target(box.center().x() - side / 2.0, box.center().y() - side / 2.0, side, side);
+    icons::paint(p, icons::Name::Check, target, color, 1.7);
 }
 
 // 13×13 r2 勾选框底（CheckBox 与 CheckableCard 共用；选中 = acc 填充 + 白勾）
@@ -630,7 +623,15 @@ static const char *pill_tone_name(PillBadge::Tone tone) {
 
 QSize PillBadge::sizeHint() const {
     const QFontMetrics fm(theme::font(double(kPillPx10) / 10.0, kPillWeight));
-    return QSize(theme::Metrics::pill_pad_x * 2 + fm.horizontalAdvance(text()), kPillH);
+    const int icon_w = has_icon_ ? kPillIconPx + kPillIconGap : 0;
+    return QSize(theme::Metrics::pill_pad_x * 2 + icon_w + fm.horizontalAdvance(text()), kPillH);
+}
+
+void PillBadge::set_icon(icons::Name name) {
+    has_icon_ = true;
+    icon_name_ = name;
+    updateGeometry();
+    update();
 }
 
 void PillBadge::paintEvent(QPaintEvent *) {
@@ -643,12 +644,27 @@ void PillBadge::paintEvent(QPaintEvent *) {
     p.drawRoundedRect(box, kPillRadius, kPillRadius);
     p.setFont(theme::font(double(kPillPx10) / 10.0, kPillWeight));
     p.setPen(paint.fg);
-    p.drawText(rect(), Qt::AlignCenter, text());
+    if (!has_icon_) {
+        p.drawText(rect(), Qt::AlignCenter, text());
+        return;
+    }
+    // 图标 + 文案整体居中（图标盒固定 → 有无图标都不改胶囊高度，§12-4 选中/状态零形变）
+    const QFontMetrics fm(font());
+    const int text_w = fm.horizontalAdvance(text());
+    const int group_w = kPillIconPx + kPillIconGap + text_w;
+    const int left = rect().left() + (width() - group_w) / 2;
+    const QRectF icon_box(left, rect().center().y() - kPillIconPx / 2.0, kPillIconPx, kPillIconPx);
+    icons::paint(p, icon_name_, icon_box, paint.fg);
+    p.drawText(QRect(left + kPillIconPx + kPillIconGap, rect().top(), text_w, rect().height()),
+               Qt::AlignLeft | Qt::AlignVCenter, text());
 }
 
 PillBadge *PillBadge::completed(QWidget *parent) {
-    // §7.3/§8：完成态唯一形态（绿胶囊"✓ 已完成"）—— 别处不得自造
-    return of(parent, Tone::Ok, QCoreApplication::translate("pp::ui::formkit", "✓ 已完成"));
+    // §7.3/§8：完成态唯一形态（绿胶囊"已完成"）—— 别处不得自造。
+    // M5-T3：勾形 = **矢量图标**（icons::check）而非 "✓" 字形（§3.3 禁字形图标）。
+    auto *pill = of(parent, Tone::Ok, QCoreApplication::translate("pp::ui::formkit", "已完成"));
+    pill->set_icon(icons::Name::Check);
+    return pill;
 }
 
 PillBadge *PillBadge::count(QWidget *parent, int n) {

@@ -30,6 +30,7 @@
 #include <QVariant>
 
 #include "ui/filelistmodel.h"
+#include "ui/icons.h" // M5-T3：「＋ 新建分类…」的 ＋ 一律矢量图标（C3）
 #include "ui/theme.h"
 
 namespace pp::ui {
@@ -137,6 +138,9 @@ void ClassifyPanel::set_tokens(const theme::Tokens &tokens) {
     impl_->tokens = tokens;
     impl_->has_tokens = true;
     impl_->apply_row_styles();
+    // M5-T3：矢量图标随 tokens 重放（QIcon 取色不吃 QSS 的 color）
+    if (auto *btn = findChild<QPushButton *>(QStringLiteral("pp-class-new")))
+        icons::apply(btn, icons::Name::Add, tokens.text2, tokens.text3, 12);
 }
 
 void ClassifyPanel::set_registry(pp::ClassRegistry *registry) {
@@ -242,9 +246,12 @@ void ClassifyPanel::Impl::rebuild_rows() {
         }
     }
 
-    // 末行 = 「＋ 新建分类…」（mockup .cls-new 全宽 mini-btn）
-    auto *btn = new QPushButton(ClassifyPanel::tr("＋ 新建分类…"), panel);
+    // 末行 = 「＋ 新建分类…」（mockup .cls-new 全宽 mini-btn）：M5-T3 起 ＋ = 矢量图标
+    auto *btn = new QPushButton(ClassifyPanel::tr("新建分类…"), panel);
     btn->setObjectName(QStringLiteral("pp-class-new"));
+    btn->setToolTip(ClassifyPanel::tr("新建分类…"));
+    btn->setAccessibleName(ClassifyPanel::tr("新建分类…")); // §11
+    icons::apply(btn, icons::Name::Add, tokens.text2, tokens.text3, 12);
     btn->setFixedHeight(theme::Metrics::input_h);
     btn->setEnabled(!locked);
     connect(btn, &QPushButton::clicked, panel, [this] {

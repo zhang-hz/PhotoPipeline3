@@ -34,6 +34,7 @@
 #include <QApplication>
 
 #include "ui/formkit_layout.h"
+#include "ui/icons.h" // M5-T3：勾形/胶囊前置图标一律走 icons 库（C3；与 theme.h 无环）
 #include "ui/theme.h"
 
 #include <QAbstractButton>
@@ -289,8 +290,12 @@ public:
     Tone tone() const { return tone_; }
     void set_tokens(const theme::Tokens &t);
     QSize sizeHint() const override;
+    // 前置矢量图标（M5-T3 加性扩展）：图标盒固定（kPillIconPx + 4px 间距）→ 有无图标都不改
+    // 胶囊高度与语义；完成态的勾形即由此承载（"已完成" 文案里不再有 ✓ 字形）。
+    void set_icon(icons::Name name);
+    bool has_icon() const { return has_icon_; }
 
-    static PillBadge *completed(QWidget *parent); // "✓ 已完成" 绿胶囊
+    static PillBadge *completed(QWidget *parent); // "✓ 已完成" 绿胶囊（勾形 = 矢量图标）
     static PillBadge *count(QWidget *parent, int n);
     static PillBadge *of(QWidget *parent, Tone tone, const QString &text);
 
@@ -299,6 +304,8 @@ protected:
 
 private:
     Tone tone_ = Tone::Neutral;
+    bool has_icon_ = false;
+    icons::Name icon_name_ = icons::Name::Check;
     theme::Tokens tokens_ = default_tokens();
 };
 

@@ -34,6 +34,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QResizeEvent>
+#include <QSize>
 #include <QSizePolicy>
 #include <QString>
 #include <QTextEdit>
@@ -58,6 +59,7 @@
 #include <utility>
 #include <vector>
 
+#include "ui/icons.h" // M5-T3：翻图钮/缩放 chip 的图标一律矢量绘制（C3）
 #include "ui/theme.h" // 只在实现里引（头文件前置声明 theme::Tokens 的原因见 preview_panel.h）
 
 namespace pp::ui {
@@ -71,7 +73,8 @@ constexpr int kBarPadBottom = 10;
 constexpr int kBarGap = 10;      // .pv-bar{gap:10px}
 constexpr int kNavButtonPx = 26; // .nav-arrow{width:26px;height:26px;border-radius:5px}
 constexpr int kNavButtonRadius = 5;
-constexpr int kChipPadX = 8; // .pv-zoom .z{padding:3px 8px;border-radius:4px}
+constexpr int kNavIconPx = 12; // 翻图钮/插入符的图标边长（mockup .pv-bar 内联 svg 的 12×12 盒）
+constexpr int kChipPadX = 8;   // .pv-zoom .z{padding:3px 8px;border-radius:4px}
 constexpr int kChipPadY = 3;
 constexpr int kChipRadius = 4;
 constexpr int kChipGap = 4;       // .pv-zoom{gap:4px}
@@ -202,15 +205,20 @@ PreviewView::PreviewView(QWidget *parent) : QFrame(parent) {
     badge_->setObjectName(QStringLiteral("pp-preview-badge"));
     badge_->setFont(theme::font(theme::Typography::hint_px, 500));
 
-    // 缩放「适应 | 1:1」（mockup .pv-zoom 的两枚 chip；文案逐字含「适应 ▾」的插入符）
+    // 缩放「适应 | 1:1」（mockup .pv-zoom 的两枚 chip）。M5-T3：插入符 ▾ 由**矢量图标**承载
+    // （icons::chevron-down；Qt 的 setIcon 只能前置，故插入符落在文案左侧 ——
+    // 字形清零是同轮的硬要求）
     zoom_row_ = new QWidget(this);
     auto *zoom_layout = new QHBoxLayout(zoom_row_);
     zoom_layout->setContentsMargins(0, 0, 0, 0);
     zoom_layout->setSpacing(kChipGap);
     zoom_fit_ = new QToolButton(zoom_row_);
     zoom_fit_->setObjectName(QStringLiteral("pp-preview-zoom-fit"));
-    zoom_fit_->setText(T("适应 ▾"));
+    zoom_fit_->setText(T("适应"));
+    zoom_fit_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    zoom_fit_->setIconSize(QSize(kNavIconPx, kNavIconPx));
     zoom_fit_->setToolTip(T("适应舞台（等比铺满）"));
+    zoom_fit_->setAccessibleName(T("适应舞台（等比铺满）"));
     zoom_1to1_ = new QToolButton(zoom_row_);
     zoom_1to1_->setObjectName(QStringLiteral("pp-preview-zoom-1to1"));
     zoom_1to1_->setText(QStringLiteral("1:1"));
@@ -237,6 +245,10 @@ PreviewView::PreviewView(QWidget *parent) : QFrame(parent) {
 
 void PreviewView::set_tokens(const theme::Tokens &tokens) {
     tokens_ = tokens;
+    // M5-T3：「适应」chip 的插入符 = 矢量图标（icons::chevron-down），色 = 舞台覆盖层字色
+    // （kOverlayFg；舞台是固定深色，与主题无关）—— 不再是 "适应 ▾" 的字形文本。
+    icons::apply(zoom_fit_, icons::Name::ChevronDown, QColor(QString::fromLatin1(kOverlayFg)),
+                 QColor(QString::fromLatin1(kOverlayFg)), kNavIconPx);
     update(); // 舞台内的深色徽标/chip 配色与主题无关（固定深色舞台），故只重绘
 }
 
@@ -563,20 +575,24 @@ void PreviewPanel::Impl::build_ui() {
     bar_layout->setContentsMargins(kBarPadX, kBarPadTop, kBarPadX, kBarPadBottom);
     bar_layout->setSpacing(kBarGap);
 
-    const auto make_nav = [this, bar_layout](const char *object_name, const char *glyph,
+    // 翻图钮：图标 = 矢量（icons::prev/next，mockup .pv-bar 的 12×12 内联 svg 逐点同源），
+    // 不再是 ◀/▶ 字形（§3.3）；取色在 apply_style()（text2，禁用 text3）。
+    const auto make_nav = [this, bar_layout](const char *object_name, icons::Name icon_name,
                                              const char *tip) {
         auto *button = new QToolButton(bar);
         button->setObjectName(QString::fromLatin1(object_name));
-        button->setText(QString::fromUtf8(glyph));
         button->setToolTip(T(tip));
+        button->setAccessibleName(T(tip)); // §11：图标钮必有 accessibleName + tooltip
         button->setFixedSize(kNavButtonPx, kNavButtonPx);
+        button->setIconSize(QSize(kNavIconPx, kNavIconPx));
+        button->setProperty(icons::kIconNameProperty, QString::fromLatin1(icons::key(icon_name)));
         button->setFocusPolicy(Qt::NoFocus);
         button->setCursor(Qt::PointingHandCursor);
         bar_layout->addWidget(button);
         return button;
     };
-    prev = make_nav("pp-preview-prev", "◀", "上一张 (←)");
-    next = make_nav("pp-preview-next", "▶", "下一张 (→)");
+    prev = make_nav("pp-preview-prev", icons::Name::Prev, "上一张 (←)");
+    next = make_nav("pp-preview-next", icons::Name::Next, "下一张 (→)");
     QObject::connect(prev, &QToolButton::clicked, q, [this] { q->previous(); });
     QObject::connect(next, &QToolButton::clicked, q, [this] { q->next(); });
 
@@ -628,6 +644,11 @@ void PreviewPanel::Impl::apply_style() {
     qss += QStringLiteral("QToolButton#pp-preview-prev:disabled, "
                           "QToolButton#pp-preview-next:disabled { color: %1; }\n")
                .arg(theme::css_color(tokens.text3));
+    // M5-T3：图标取色不吃 QSS（QIcon 是位图/矢量渲染色）→ 随 tokens 显式重放，与上面的
+    // color 规则同源（normal = --txt2 / disabled = --txt3；「适应」chip 的插入符 =
+    // 舞台覆盖层字色）。
+    icons::apply(prev, icons::Name::Prev, tokens.text2, tokens.text3, kNavIconPx);
+    icons::apply(next, icons::Name::Next, tokens.text2, tokens.text3, kNavIconPx);
     qss += QStringLiteral("QLabel#pp-preview-pos, QLabel#pp-preview-name, "
                           "QLabel#pp-preview-keyhint-label, QLabel#pp-preview-keyname { color: %1; "
                           "}\n")

@@ -1,0 +1,9 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- PhotoPipeline（M5-T3 / 契约 C3）矢量图标**设计源**：24x24 设计网格、描边 1.5 等线宽、
+     圆帽圆角连接、纯几何线性图标。路径数据与 src/ui/icons.cpp 的表同名同形（该表逐条给出
+     同名 d 串）；运行期不使用本目录（不加 qrc、不依赖 Qt6::Svg，打包闭包零漂移），
+     SVG 仅作设计源与人工走查对照。 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#000000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M20.5 12C20.5 16.694 16.694 20.5 12 20.5C7.306 20.5 3.5 16.694 3.5 12C3.5 7.306 7.306 3.5 12 3.5C16.694 3.5 20.5 7.306 20.5 12 M12 11.5V16.5"/>
+  <path d="M13.1 7.6C13.1 8.208 12.608 8.7 12 8.7C11.392 8.7 10.9 8.208 10.9 7.6C10.9 6.992 11.392 6.5 12 6.5C12.608 6.5 13.1 6.992 13.1 7.6" fill="#000000" stroke="none"/>
+</svg>

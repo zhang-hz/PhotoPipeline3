@@ -82,6 +82,7 @@
 #include "codecs/encoders.h"
 #include "core/fsops.h"
 #include "core/params.h"
+#include "ui/icons.h" // M5-T3：磁贴勾形 /「添加格式…」的 ＋ 一律矢量图标（C3）
 #include "ui/paramform.h"
 #include "ui/theme.h"
 
@@ -379,9 +380,10 @@ protected:
         }
         p.drawRoundedRect(mark, theme::Metrics::checkbox_radius, theme::Metrics::checkbox_radius);
         if (on) {
-            p.setPen(dim ? theme::at_opacity(t.on_accent, t.window, kDimAlpha) : t.on_accent);
-            p.setFont(theme::font(10.0, QFont::Bold));
-            p.drawText(mark, Qt::AlignCenter, QStringLiteral("✓"));
+            // M5-T3：勾形 = 矢量路径（icons::check，与 mockup 的 10×10 勾形等比同源），
+            // 不再是 "✓" 字形（§3.3 禁字形图标；M3 铁律六：勾形单实现在 icons 库）。
+            icons::paint(p, icons::Name::Check, mark,
+                         dim ? theme::at_opacity(t.on_accent, t.window, kDimAlpha) : t.on_accent);
         }
         const int name_x = static_cast<int>(mark.right()) + kGap;
         const QFontMetrics ext_fm(theme::font(9.5));
@@ -877,7 +879,7 @@ struct Impl {
     static QString template_tooltip() {
         return PageOutput::tr(
             "$format=格式目录 · $dir=镜像目录 · $file=文件名.扩展名 · $name=主名 · $ext=扩展名\n"
-            "例：<根>/jpeg/2024/05/IMG_2731.jpg ＋ <根>/webp/2024/05/IMG_2731.webp\n"
+            "例：<根>/jpeg/2024/05/IMG_2731.jpg + <根>/webp/2024/05/IMG_2731.webp\n"
             "段间以 / 分隔；未知 $ 符号、.. 与绝对路径会被拒绝（开始运行前阻断）");
     }
 
@@ -891,7 +893,12 @@ struct Impl {
         tabs->setDocumentMode(true);
         add_format_button = new QToolButton(tabs);
         add_format_button->setObjectName(QStringLiteral("pp-add-format"));
-        add_format_button->setText(PageOutput::tr("＋ 添加格式…"));
+        add_format_button->setText(PageOutput::tr("添加格式…"));
+        add_format_button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        add_format_button->setToolTip(PageOutput::tr("添加格式…"));
+        add_format_button->setAccessibleName(PageOutput::tr("添加格式…")); // §11
+        add_format_button->setProperty(icons::kIconNameProperty,
+                                       QString::fromLatin1(icons::key(icons::Name::Add)));
         add_format_button->setAutoRaise(true);
         add_format_button->setCursor(Qt::PointingHandCursor);
         add_format_button->setFont(theme::font(theme::Typography::body_px, 500));
@@ -1746,6 +1753,9 @@ void PageOutput::set_tokens(const theme::Tokens &tokens) {
         impl_->split_switch->set_tokens(tokens);
     // 页面 QSS（卡片/徽标/输入类控件/页签；与 PageMeta 同一注入口径）
     impl_->q->setStyleSheet(page_qss(tokens));
+    // M5-T3：矢量图标随 tokens 重放（QIcon 取色不吃 QSS 的 color）—— 「添加格式…」的 ＋
+    if (impl_->add_format_button != nullptr)
+        icons::apply(impl_->add_format_button, icons::Name::Add, tokens.text3, tokens.text3, 12);
     // 浅色卡阴影（§9.2 0 1px 4px rgba(16,24,40,.06)；深色无阴影）
     const qreal dpr = impl_->q->devicePixelRatioF() > 0.01 ? impl_->q->devicePixelRatioF() : 1.0;
     const std::array<QFrame *, 4> cards = {impl_->format_card, impl_->global_card,

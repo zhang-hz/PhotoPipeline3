@@ -22,6 +22,7 @@
 //     本任务只给面板**占位与布局接线**：中栏内容归 T10、左栏内容归 T11、右栏三页内容归 W3。
 
 #include "ui/mainwindow.h"
+#include "ui/icons.h"
 
 #include <QAbstractItemView>
 #include <QAction>
@@ -54,6 +55,7 @@
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPixmap>
 #include <QProgressBar>
 #include <QPushButton>
@@ -226,6 +228,7 @@ QString T(const char *s) { return QCoreApplication::translate("MainWindow", s); 
 // M4-T9 骨架部件（设计 §9.1/§9.2；尺寸与色值一律取自 ui/theme.h 的 tokens，不写死字面量）
 // ---------------------------------------------------------------------------
 namespace theme = pp::ui::theme;
+namespace icons = pp::ui::icons;
 namespace plat = pp::platform;
 
 bool skeleton_state_disabled() {
@@ -246,22 +249,10 @@ QString ui_state_path() {
     return QFile::decodeName(QByteArray(bytes.data(), static_cast<int>(bytes.size())));
 }
 
-// 顶栏应用图标（mockup .app-title 的 24×24 svg 等价绘制：相机外框 + 镜头圆 + 右上小点）
-QPixmap app_icon_pixmap(const QColor &accent, int size = 18) {
-    QPixmap pixmap(size, size);
-    pixmap.fill(Qt::transparent);
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    const qreal scale = size / 24.0;
-    painter.setPen(QPen(accent, 1.8 * scale));
-    painter.setBrush(Qt::NoBrush);
-    painter.drawRoundedRect(QRectF(2 * scale, 4 * scale, 20 * scale, 16 * scale), 3 * scale,
-                            3 * scale);
-    painter.drawEllipse(QPointF(12 * scale, 12 * scale), 3.6 * scale, 3.6 * scale);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(accent);
-    painter.drawEllipse(QPointF(18.2 * scale, 7.6 * scale), 1.2 * scale, 1.2 * scale);
-    return pixmap;
+// 顶栏应用图标（mockup .app-title 的 24×24 svg：相机外框 + 镜头圆 + 右上小点）：
+// M5-T3 起并入图标库（单实现，M3 铁律六）—— 形 = icons::Name::Image（与 mockup 逐点同源）。
+QPixmap app_icon_pixmap(const QColor &accent, int size, qreal dpr) {
+    return pp::ui::icons::pixmap(pp::ui::icons::Name::Image, size, accent, dpr);
 }
 
 // 单行省略标签（§9.3「全界面禁止文案折行（超长省略号）」）：保存全文，按当前宽度省略
@@ -408,24 +399,27 @@ private:
     int number_ = 1;
 };
 
-// 图标钮（mockup .icon-btn 32×32 r=6）。
-// 字形字体（M4-W2-fix）：☆/⚙ 在 Windows 上会命中 **彩色 emoji** 字体（Segoe UI Emoji）→ 字形
-// 自带颜色，QSS 的 color/disabled 全部失效（原型 meta-dark.png 里两枚字形都是 --txt2 的单色文本）。
-// 故显式把"符号文本字体"排在字族栈最前（Segoe UI Symbol / Noto Sans Symbols 2 均有 U+2606/U+2699
-// 的单色字形）；找不到该字体的平台自然落回原字族栈，行为不变。
-QToolButton *make_icon_button(QWidget *parent, QAction *action, const char *object_name) {
+// 图标钮（mockup .icon-btn：R4 图标钮 28×28 r4，悬停显底）。
+// M5-T3（契约 C3）：图标 = **矢量绘制**（ui/icons.h），不再是 Segoe UI Symbol 字形 ——
+// mockup/run.html 的 ☆/⚙ 内联 SVG 已转录进图标库（star/gear 逐点同源），故 M4-W2-fix 的
+// "彩色 emoji 字形自带颜色、QSS 失效"整条历史问题随之消失（QIcon 按模式取色的矢量引擎）。
+// 取色：Normal = --txt2、Active/选中 = --txt、Disabled = 预合成的 .dim 等效色（见 refresh_theme）。
+QToolButton *make_icon_button(QWidget *parent, QAction *action, const char *object_name,
+                              icons::Name icon_name) {
     auto *button = new QToolButton(parent);
     button->setObjectName(QString::fromLatin1(object_name));
-    button->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    button->setToolButtonStyle(Qt::ToolButtonIconOnly);
     button->setFixedSize(theme::Metrics::icon_btn, theme::Metrics::icon_btn);
-    QFont glyph_font = theme::font(14.0);
-    glyph_font.setFamilies({QStringLiteral("Segoe UI Symbol"), QStringLiteral("Segoe UI"),
-                            QStringLiteral("Noto Sans Symbols 2"),
-                            QString::fromLatin1(theme::Typography::family_ui)});
-    button->setFont(glyph_font);
+    icons::apply(button, icon_name, theme::tokens(theme::preferred_theme_mode()).text2, QColor(),
+                 15); // mockup/run.html .icon-btn 的 15×15 svg
     button->setFocusPolicy(Qt::NoFocus);
-    if (action != nullptr)
-        button->setDefaultAction(action); // 文本/提示/enabled 全跟 QAction（lock_for_run 靠它置灰）
+    if (action != nullptr) {
+        button->setDefaultAction(action); // 提示/enabled 跟 QAction（lock_for_run 靠它置灰）
+        // 纯图标钮不出文本（可见面 = 图标）：QAction 的 text 只为无障碍/语义而设，不落到控件文案
+        button->setText(QString());
+        // §11：图标钮必有 accessibleName + tooltip（同源 = QAction 的文案）
+        button->setAccessibleName(action->toolTip().isEmpty() ? action->text() : action->toolTip());
+    }
     return button;
 }
 
@@ -436,9 +430,31 @@ QToolButton *make_icon_button(QWidget *parent, QAction *action, const char *obje
 //   * 可见面 = 控件自身 46×满高 → QSS :hover 背景铺满 52px（原型 .capbtns{align-self:stretch}）；
 //   * 命中 = 居中的 46×32 带（§9.1 明文）→ hitButton 只认带内（Ctrl/程序化 click() 不受影响），
 //     无边框窗口的 WM_NCHITTEST 用同一条带（platform/frameless.cpp 的 rect_of(caption_button)）。
+// caption 图标边长（px）：mockup 的 .cap 内联 svg 是 10×10（WinUI3 语言的 caption 字形盒）
+constexpr int kCaptionIconPx = 10;
+
 class CaptionButton : public QPushButton {
 public:
-    explicit CaptionButton(const QString &glyph, QWidget *parent) : QPushButton(glyph, parent) {}
+    // normal/hover = 两态令牌色（tokens.css .cap{color:var(--txt)} /
+    // .cap.close:hover{color:#fff}）： QIcon 的取色不受 QSS 的 :hover color
+    // 影响，故悬停换色由本控件显式落地（enter/leaveEvent）。
+    CaptionButton(icons::Name name, const QColor &normal, const QColor &hover, QWidget *parent)
+        : QPushButton(parent), name_(name), normal_(normal), hover_(hover) {
+        setText(QString()); // M5-T3：内容 = 矢量图标（icons::caption-*），字形文本清零
+        setAttribute(Qt::WA_Hover, true);
+        apply_icon(false);
+    }
+
+    void set_icon_name(icons::Name name) {
+        name_ = name;
+        apply_icon(underMouse());
+    }
+    icons::Name icon_name() const { return name_; }
+    void set_colors(const QColor &normal, const QColor &hover) {
+        normal_ = normal;
+        hover_ = hover;
+        apply_icon(underMouse());
+    }
 
     // 命中带（居中）：与 platform/frameless.cpp 的 rect_of(..., caption_button=true) 同一条带
     static QRect hit_band(const QRect &box) {
@@ -452,15 +468,36 @@ protected:
     bool hitButton(const QPoint &pos) const override {
         return QPushButton::hitButton(pos) && hit_band(rect()).contains(pos);
     }
+    void enterEvent(QEnterEvent *event) override {
+        QPushButton::enterEvent(event);
+        apply_icon(true);
+    }
+    void leaveEvent(QEvent *event) override {
+        QPushButton::leaveEvent(event);
+        apply_icon(false);
+    }
+
+private:
+    void apply_icon(bool hovered) {
+        icons::apply(this, name_, hovered ? hover_ : normal_, QColor(), kCaptionIconPx);
+    }
+
+    icons::Name name_;
+    QColor normal_;
+    QColor hover_;
 };
 
-QPushButton *make_caption_button(QWidget *parent, const QString &glyph, const QString &tip,
-                                 const char *object_name) {
-    auto *button = new CaptionButton(glyph, parent);
+// caption 三钮：图标 = icons 库（mockup/run.html 的 .cap 内联 svg 逐点同源：─ / □ / ✕），
+// 尺寸与命中几何仍是 M4-W2-fix 第 5 条的双轨裁定（控件 46×满高、命中 46×32）—— v6 的
+// 「46×32」是**命中区**（§3.1 逐字「Win11 规格 46×32 命中区」），可见面高度随顶栏（M5-T4 换锚）。
+QPushButton *make_caption_button(QWidget *parent, icons::Name icon_name, const QString &tip,
+                                 const char *object_name, const QColor &normal,
+                                 const QColor &hover) {
+    auto *button = new CaptionButton(icon_name, normal, hover, parent);
     button->setObjectName(QString::fromLatin1(object_name));
     button->setToolTip(tip);
+    button->setAccessibleName(tip); // §11：图标钮必有 accessibleName + tooltip
     button->setFixedSize(theme::Metrics::caption_btn_w, theme::Metrics::caption_btn_h);
-    button->setFont(theme::font(theme::Typography::small_px));
     button->setFocusPolicy(Qt::NoFocus);
     return button;
 }
@@ -707,6 +744,7 @@ struct MainWindow::Impl {
 
     // M4-T9 骨架：主题 / 三栏持久化 / caption 行为
     void refresh_theme();
+    void apply_chrome_icons(); // M5-T3：骨架图标（☆/⚙/caption/＋/－/▶）随 tokens 重放
     void set_theme_mode(theme::ThemeMode mode);
     void restore_splitter_state();
     void save_splitter_state();
@@ -967,18 +1005,28 @@ void MainWindow::build_ui() {
     top->addLayout(steps);
 
     top->addStretch(1);
-    d.presets_action = new QAction(QStringLiteral("☆"), this);
-    d.presets_action->setToolTip(tr("预设"));
-    d.settings_action = new QAction(QStringLiteral("⚙"), this);
+    // M5-T3：QAction 只承载提示/使能（图标 = 矢量引擎，见 make_icon_button）；setText 保留
+    // 「收藏当前设置 / 设置」供 QAction 语义与探针读回（按钮本体 ToolButtonIconOnly，不出文本）。
+    d.presets_action = new QAction(tr("收藏当前设置"), this);
+    d.presets_action->setToolTip(tr("收藏当前设置"));
+    d.settings_action = new QAction(tr("设置"), this);
     d.settings_action->setToolTip(tr("设置"));
-    d.presets_btn = make_icon_button(d.titlebar, d.presets_action, "pp-presets");
-    d.settings_btn = make_icon_button(d.titlebar, d.settings_action, "pp-settings");
+    d.presets_btn = make_icon_button(d.titlebar, d.presets_action, "pp-presets", icons::Name::Star);
+    d.settings_btn =
+        make_icon_button(d.titlebar, d.settings_action, "pp-settings", icons::Name::Gear);
     auto *caps = new QHBoxLayout();
     caps->setContentsMargins(2, 0, 0, 0); // .capbtns{margin-left:2px}
     caps->setSpacing(0);
-    d.cap_min = make_caption_button(d.titlebar, QStringLiteral("–"), tr("最小化"), "pp-cap-min");
-    d.cap_max = make_caption_button(d.titlebar, QStringLiteral("□"), tr("最大化"), "pp-cap-max");
-    d.cap_close = make_caption_button(d.titlebar, QStringLiteral("✕"), tr("关闭"), "pp-cap-close");
+    // 取色（§3.1/WinUI3 语言）：字形 = --txt；关闭悬停 = #c42b1c 底 +
+    // 白字（tokens.close_hover_fg）。 初值用 preferred_theme_mode() 的令牌，refresh_theme()
+    // 末尾按当前主题重放（明暗切换即换色）。
+    const theme::Tokens boot = theme::tokens(preferred_theme_mode());
+    d.cap_min = make_caption_button(d.titlebar, icons::Name::CaptionMin, tr("最小化"), "pp-cap-min",
+                                    boot.text, boot.text);
+    d.cap_max = make_caption_button(d.titlebar, icons::Name::CaptionMax, tr("最大化"), "pp-cap-max",
+                                    boot.text, boot.text);
+    d.cap_close = make_caption_button(d.titlebar, icons::Name::CaptionClose, tr("关闭"),
+                                      "pp-cap-close", boot.text, boot.close_hover_fg);
     caps->addWidget(d.cap_min);
     caps->addWidget(d.cap_max);
     caps->addWidget(d.cap_close);
@@ -1060,8 +1108,9 @@ void MainWindow::build_ui() {
     d.search->setFixedHeight(theme::Metrics::input_h);
     auto *add_btn = new QToolButton(d.panel);
     add_btn->setObjectName(QStringLiteral("pp-add"));
-    add_btn->setText(QStringLiteral("＋"));
     add_btn->setToolTip(tr("添加文件 / 文件夹"));
+    add_btn->setAccessibleName(tr("添加文件 / 文件夹")); // §11：图标钮必有 accessibleName
+    icons::apply(add_btn, icons::Name::Add, d.tokens.text2, QColor(), 12); // mockup 12×12 svg
     add_btn->setPopupMode(QToolButton::InstantPopup);
     add_btn->setFixedHeight(theme::Metrics::input_h);
     add_btn->setFixedWidth(28);
@@ -1079,8 +1128,9 @@ void MainWindow::build_ui() {
     d.clear_action = act_clear;
     auto *remove_btn = new QToolButton(d.panel);
     remove_btn->setObjectName(QStringLiteral("pp-remove-sel"));
-    remove_btn->setText(QStringLiteral("−"));
     remove_btn->setToolTip(tr("移除所选"));
+    remove_btn->setAccessibleName(tr("移除所选")); // §11
+    icons::apply(remove_btn, icons::Name::Remove, d.tokens.text2, QColor(), 12);
     remove_btn->setFixedHeight(theme::Metrics::input_h);
     remove_btn->setFixedWidth(28);
     remove_btn->setEnabled(false);
@@ -1201,9 +1251,11 @@ void MainWindow::build_ui() {
     bottom->setContentsMargins(theme::Metrics::titlebar_pad_left, 0,
                                theme::Metrics::titlebar_pad_left, 0);
     bottom->setSpacing(14);
-    d.status_dot = new QLabel(QStringLiteral("●"), d.bottombar);
+    // M5-T3：状态点 = 形状（QSS background + border-radius 的 8px 圆，mockup .dot），不再是 ●
+    // 字形。 警醒态 = 动态属性 ppDotAlert（色值仍单源在 theme.h 的 QSS 里，C1）。
+    d.status_dot = new QLabel(d.bottombar);
     d.status_dot->setObjectName(QStringLiteral("pp-status-dot"));
-    d.status_dot->setFont(theme::font(8.0));
+    d.status_dot->setFixedSize(theme::Metrics::dot_px, theme::Metrics::dot_px);
     d.status = new ElidedLabel(d.bottombar); // §9.3：超长文案省略号，不折行
     d.status->setObjectName(QStringLiteral("pp-status"));
     d.status->setFont(theme::font(theme::Typography::body_px));
@@ -1215,8 +1267,10 @@ void MainWindow::build_ui() {
     bottom->addWidget(d.status);
     bottom->addWidget(d.output_status);
     bottom->addStretch(1);
-    d.start = new QPushButton(tr("▶  开始运行"), d.bottombar);
+    d.start = new QPushButton(tr("开始运行"), d.bottombar);
     d.start->setObjectName(QStringLiteral("pp-start"));
+    // 图标 = icons::play（矢量 ▶，mockup statusbar .btn-go 的 ▶）；色 = acc-on（实心 CTA 上的字色）
+    icons::apply(d.start, icons::Name::Play, d.tokens.on_accent, d.tokens.text3, 12);
     d.start->setFixedHeight(theme::Metrics::go_height); // .go{height:34px}
     d.start->setFont(theme::font(theme::Typography::caption_px, 700));
     d.start->setDefault(true);
@@ -1699,8 +1753,14 @@ void MainWindow::refresh_status() {
     const QString alert =
         invalid ? QStringLiteral("color:") + theme::css_color(d.tokens.err) : QString();
     d.status->setStyleSheet(alert);
-    if (d.status_dot != nullptr)
-        d.status_dot->setStyleSheet(alert);
+    if (d.status_dot != nullptr) {
+        // M5-T3：状态点 = QSS 圆点（形状），警醒态走动态属性（theme.h 的 QSS 规则，色值单源）
+        const bool dot_alert = d.status_dot->property(theme::kDotAlertProperty).toBool();
+        if (dot_alert != invalid) {
+            d.status_dot->setProperty(theme::kDotAlertProperty, invalid);
+            theme::repolish(d.status_dot);
+        }
+    }
 
     // 输出摘要（底栏第二段）
     // M4-T13：按 mockup output-dark 底栏的产出量预告 —— 「N 个文件 × M 个格式 = N×M 个输出」；
@@ -1747,8 +1807,10 @@ void MainWindow::refresh_status() {
     if (d.running) {
         const int pct = d.page_run->progress_percent();
         d.start->setText(pct >= 0 ? tr("运行中… %1%").arg(pct) : tr("运行中…"));
+        d.start->setIcon(QIcon()); // 状态读数态不挂图标（mockup run-dark 的 .go 只出读数）
     } else {
-        d.start->setText(tr("▶  开始运行"));
+        d.start->setText(tr("开始运行"));
+        icons::apply(d.start, icons::Name::Play, d.tokens.on_accent, d.tokens.text3, 12);
     }
     d.start->setEnabled(can_start);
     const bool has_selection = d.view->selectionModel() != nullptr &&
@@ -1899,6 +1961,27 @@ void MainWindow::Impl::set_group_mode(pp::GroupMode mode) {
 // M4-T9：主题 tokens 落地 / 三栏持久化 / caption 字形
 // ---------------------------------------------------------------------------
 
+// M5-T3：骨架图标的两态取色（Normal = --txt2 / --txt；Disabled = .dim 预合成色 —— 与 QSS 同源）。
+// 图标名同时挂到 ppIcon 属性（icons::apply 内），供 --ui-smoke 的 icons 探针逐钮断言。
+void MainWindow::Impl::apply_chrome_icons() {
+    if (presets_btn != nullptr)
+        icons::apply(presets_btn, icons::Name::Star, tokens.text2, tokens.icon_disabled_fg, 15);
+    if (settings_btn != nullptr)
+        icons::apply(settings_btn, icons::Name::Gear, tokens.text2, tokens.icon_disabled_fg, 15);
+    if (add_btn != nullptr)
+        icons::apply(add_btn, icons::Name::Add, tokens.text2, tokens.text3, 12);
+    if (remove_sel != nullptr)
+        icons::apply(remove_sel, icons::Name::Remove, tokens.text2, tokens.text3, 12);
+    if (start != nullptr)
+        icons::apply(start, icons::Name::Play, tokens.on_accent, tokens.text3, 12);
+    if (cap_min != nullptr)
+        static_cast<CaptionButton *>(cap_min)->set_colors(tokens.text, tokens.text);
+    if (cap_max != nullptr)
+        static_cast<CaptionButton *>(cap_max)->set_colors(tokens.text, tokens.text);
+    if (cap_close != nullptr)
+        static_cast<CaptionButton *>(cap_close)->set_colors(tokens.text, tokens.close_hover_fg);
+}
+
 void MainWindow::Impl::set_theme_mode(theme::ThemeMode mode) {
     theme_mode = mode;
     refresh_theme();
@@ -1953,8 +2036,11 @@ void MainWindow::Impl::refresh_theme() {
             groupby_label->setStyleSheet(
                 QStringLiteral("color:%1").arg(theme::css_color(tokens.text3)));
     }
+    // 顶栏/底栏/文件工具行的图标随主题重放（QIcon 取色不吃 QSS → 主题切换必须显式换色）
+    const qreal chrome_dpr = w != nullptr ? w->devicePixelRatioF() : 1.0;
     if (app_icon != nullptr)
-        app_icon->setPixmap(app_icon_pixmap(tokens.accent, 18));
+        app_icon->setPixmap(app_icon_pixmap(tokens.accent, 18, chrome_dpr));
+    apply_chrome_icons();
     for (StepButton *step : {step_meta, step_output, step_run}) {
         if (step != nullptr)
             step->set_tokens(tokens);
@@ -2013,8 +2099,12 @@ void MainWindow::Impl::update_caption_buttons() {
     if (cap_max == nullptr || w == nullptr)
         return;
     const bool maximized = w->isMaximized();
-    cap_max->setText(maximized ? QStringLiteral("❐") : QStringLiteral("□"));
-    cap_max->setToolTip(maximized ? MainWindow::tr("向下还原") : MainWindow::tr("最大化"));
+    // M5-T3：最大化/还原 = 换**矢量图标**（caption-max ↔ caption-restore），不再是 ❐/□ 字形
+    auto *button = static_cast<CaptionButton *>(cap_max);
+    button->set_icon_name(maximized ? icons::Name::CaptionRestore : icons::Name::CaptionMax);
+    const QString tip = maximized ? MainWindow::tr("向下还原") : MainWindow::tr("最大化");
+    cap_max->setToolTip(tip);
+    cap_max->setAccessibleName(tip); // §11：文案随状态变化，两者同步
 }
 
 void MainWindow::Impl::restore_splitter_state() {
@@ -2825,6 +2915,259 @@ void MainWindow::Impl::smoke_probe_skeleton() {
             file_count->objectName() != QStringLiteral("pp-file-count"))
             smoke_fail(MainWindow::tr("左栏 pp-* 测试钩子缺失或命名不符：%1")
                            .arg(found.join(QLatin1Char(' '))));
+    }
+
+    // ---- M5-T3（契约 C3）：矢量图标集自检 ----
+    //   (a) 库面：§3.3 的 34 个必需名齐备 + 运行标记 3 名；每条路径非空、落在 24×24 设计网格内、
+    //       等线宽 ∈ 1.4–1.6（§3.3「描边 1.5px 等线宽」）；
+    //   (b) 同源面：assets/icons/<键>.svg 的 d 串与本库同名条目**逐元素同形**（同一 path_from_d
+    //       解析后逐点比对；SVG 是设计源，不是运行期依赖 —— 不加 qrc/不依赖 Qt6::Svg）；
+    //   (c) 控件面：骨架图标钮（caption 三钮 / ☆ / ⚙ / ＋ / − / ▶）挂的是矢量图标、无字形文本、
+    //       且都有 accessibleName + tooltip（§11）；
+    //   (d) 全局面：窗口内任何 QAbstractButton 的文案都不含禁用字形（§3.3 禁字形充当图标）。
+    {
+        const QVector<icons::Name> &names = icons::all_names();
+        const char *const required[] = {
+            "caption-min",  "caption-max",   "caption-restore", "caption-close", "star",  "gear",
+            "search",       "add",           "remove",          "filter",        "group", "zoom-in",
+            "zoom-out",     "zoom-fit",      "zoom-actual",     "prev",          "next",  "browse",
+            "map-pin",      "map-search",    "folder-open",     "log",           "play",  "check",
+            "chevron-down", "chevron-right", "clear",           "tag",           "image", "info",
+            "warn",         "error",         "reset",           "edit"};
+        int bad_required = 0;
+        QStringList missing;
+        for (const char *key : required) {
+            icons::Name hit{};
+            if (!icons::from_key(QLatin1String(key), &hit)) {
+                ++bad_required;
+                missing << QString::fromLatin1(key);
+            }
+        }
+        // 解析器回归：C/S 的参数组耗尽后必须**回到命令循环**（继续解析后续子路径），不得截断。
+        // 期望：M0 0 / L1 1 / M2 2 / C×3 / M6 6 / H7 / M8 8 = 9 个元素，末元素 = (8,8) 的 MoveTo。
+        {
+            const QPainterPath probe =
+                icons::path_from_d(QStringLiteral("M0 0L1 1M2 2C3 3 4 4 5 5M6 6H7M8 8"));
+            const QPainterPath::Element last = probe.elementCount() > 0
+                                                   ? probe.elementAt(probe.elementCount() - 1)
+                                                   : QPainterPath::Element{};
+            if (probe.elementCount() != 9 ||
+                !(last.x == 8.0 && last.y == 8.0 &&
+                  last.type == QPainterPath::ElementType::MoveToElement)) {
+                smoke_fail(MainWindow::tr("图标 d 串解析器截断（元素 %1，末元素 %2,%3）")
+                               .arg(probe.elementCount())
+                               .arg(last.x)
+                               .arg(last.y));
+            }
+        }
+        // 图标形的边界（含描边半径 0.75）：24 网格内不得越界（越界 = 形被裁）
+        const qreal stroke_half = icons::kStrokePx / 2.0;
+        int bad_path = 0, bad_bounds = 0, bad_svg = 0, bad_svg_attr = 0;
+        QStringList bad_detail;
+        const QDir assets(QDir(repo_root()).filePath(QStringLiteral("assets/icons")));
+        for (icons::Name name : names) {
+            const QPainterPath shape = icons::path(name);
+            if (shape.isEmpty()) {
+                ++bad_path;
+                bad_detail << QStringLiteral("path:%1").arg(QString::fromLatin1(icons::key(name)));
+                continue;
+            }
+            const QRectF bounds = shape.boundingRect();
+            if (bounds.left() < -stroke_half || bounds.top() < -stroke_half ||
+                bounds.right() > icons::kGrid + stroke_half ||
+                bounds.bottom() > icons::kGrid + stroke_half) {
+                ++bad_bounds;
+                bad_detail
+                    << QStringLiteral("bounds:%1").arg(QString::fromLatin1(icons::key(name)));
+            }
+            // (b) SVG 设计源同源：d 串集合解析后与 C++ 路径逐元素比对
+            const QString path_file =
+                assets.filePath(QString::fromLatin1(icons::key(name)) + QStringLiteral(".svg"));
+            QFile fp(path_file);
+            if (!fp.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                ++bad_svg;
+                bad_detail
+                    << QStringLiteral("svg-missing:%1").arg(QString::fromLatin1(icons::key(name)));
+                continue;
+            }
+            const QString svg = QString::fromUtf8(fp.readAll());
+            fp.close();
+            if (!svg.contains(QStringLiteral("viewBox=\"0 0 24 24\"")) ||
+                !svg.contains(QStringLiteral("stroke-width=\"1.5\"")))
+                ++bad_svg_attr;
+            QPainterPath from_svg;
+            const QRegularExpression d_re(QStringLiteral("d=\"([^\"]*)\""));
+            auto it = d_re.globalMatch(svg);
+            while (it.hasNext())
+                from_svg.addPath(icons::path_from_d(it.next().captured(1)));
+            bool same = from_svg.elementCount() == shape.elementCount();
+            for (int i = 0; same && i < shape.elementCount(); ++i) {
+                const QPainterPath::Element a = shape.elementAt(i);
+                const QPainterPath::Element b = from_svg.elementAt(i);
+                same = a.type == b.type && std::abs(a.x - b.x) < 1e-6 && std::abs(a.y - b.y) < 1e-6;
+            }
+            if (!same) {
+                ++bad_svg;
+                bad_detail
+                    << QStringLiteral("svg-mismatch:%1").arg(QString::fromLatin1(icons::key(name)));
+            }
+        }
+        std::printf("UI-SMOKE icons: count=%d required=%d stroke=%.2f bad-path=%d bad-bounds=%d "
+                    "bad-svg=%d bad-svg-attr=%d [%s]\n",
+                    int(names.size()), int(sizeof(required) / sizeof(required[0])),
+                    double(icons::kStrokePx), bad_path, bad_bounds, bad_svg, bad_svg_attr,
+                    qUtf8Printable(bad_detail.join(QLatin1Char(' '))));
+        std::fflush(stdout);
+        if (names.size() < 34 || bad_required != 0 || bad_path != 0 || bad_bounds != 0 ||
+            bad_svg != 0 || bad_svg_attr != 0 || icons::kStrokePx < icons::kStrokeMinPx ||
+            icons::kStrokePx > icons::kStrokeMaxPx) {
+            smoke_fail(
+                MainWindow::tr("矢量图标集自检不符（清单 %1 缺 %2 / path=%3 bounds=%4 svg=%5 "
+                               "attr=%6）： %7")
+                    .arg(names.size())
+                    .arg(missing.join(QLatin1Char(',')))
+                    .arg(bad_path)
+                    .arg(bad_bounds)
+                    .arg(bad_svg)
+                    .arg(bad_svg_attr)
+                    .arg(bad_detail.join(QLatin1Char(' '))));
+        }
+    }
+    {
+        // (c) 骨架图标钮：矢量图标 + 无文本 + accessibleName/tooltip 齐（§11）。
+        // 分两档：A = **纯图标钮**（可见面只有图标 → 必有 accessibleName + tooltip）；
+        //        B = **带图标的文字钮**（文案本身即无障碍名 / 可见语义，如底栏 CTA）。
+        const struct {
+            QAbstractButton *button;
+            const char *object_name;
+            bool text_button;
+        } icon_buttons[] = {
+            {cap_min, "pp-cap-min", false},       {cap_max, "pp-cap-max", false},
+            {cap_close, "pp-cap-close", false},   {presets_btn, "pp-presets", false},
+            {settings_btn, "pp-settings", false}, {add_btn, "pp-add", false},
+            {remove_sel, "pp-remove-sel", false}, {start, "pp-start", true},
+        };
+        QStringList bad;
+        for (const auto &entry : icon_buttons) {
+            const QAbstractButton *button = entry.button;
+            const QString tag = QString::fromLatin1(entry.object_name);
+            if (button == nullptr) {
+                bad << tag + QStringLiteral("=null");
+                continue;
+            }
+            const QString icon_key = button->property(icons::kIconNameProperty).toString();
+            if (button->icon().isNull() || icon_key.isEmpty())
+                bad << tag + QStringLiteral("=no-icon");
+            if (entry.text_button) {
+                if (button->text().isEmpty())
+                    bad << tag + QStringLiteral("=no-text");
+            } else {
+                if (!button->text().isEmpty())
+                    bad << tag + QStringLiteral("=glyph-text");
+                if (button->accessibleName().isEmpty() || button->toolTip().isEmpty())
+                    bad << tag + QStringLiteral("=a11y");
+            }
+        }
+        // (d) 全局面：任何按钮文案都不含禁用字形（§3.3）。
+        // 清单按**码点**构造（而非字面量）：否则本探针自身会命中"字面量字形"的全仓扫描。
+        // ─ □ ✕ ☆ ⚙ ◀ ▶ ＋ − ✓ ❐ ✗ ■ ◐ » ⚑ ▾
+        const char16_t banned_points[] = {0x2500, 0x25A1, 0x2715, 0x2606, 0x2699, 0x25C0,
+                                          0x25B6, 0xFF0B, 0x2212, 0x2713, 0x2750, 0x2717,
+                                          0x25A0, 0x25D0, 0x00BB, 0x2691, 0x25BE};
+        QString banned;
+        banned.reserve(int(std::size(banned_points)));
+        for (char16_t point : banned_points)
+            banned.append(QChar(point));
+        for (QAbstractButton *button : w->findChildren<QAbstractButton *>()) {
+            if (button == nullptr)
+                continue;
+            for (const QChar ch : button->text()) {
+                if (banned.contains(ch)) {
+                    bad << button->objectName() + QStringLiteral("=") + button->text();
+                    break;
+                }
+            }
+        }
+        std::printf("UI-SMOKE icon-buttons: buttons=%d bad=%d [%s]\n",
+                    int(sizeof(icon_buttons) / sizeof(icon_buttons[0])), int(bad.size()),
+                    qUtf8Printable(bad.join(QLatin1Char(' '))));
+        std::fflush(stdout);
+        if (!bad.isEmpty())
+            smoke_fail(MainWindow::tr("图标钮/字形残留：%1").arg(bad.join(QLatin1Char(' '))));
+    }
+    {
+        // (e) QIcon 引擎路径（按钮实际走的那条）与直接绘制**等价**：同一图标两条路径的墨迹
+        //     包围盒必须逐边相差 ≤1px（否则按钮上的图标会缺角/缩水 —— 引擎路径回归的守门断言）。
+        const auto ink_box = [](const QImage &img) {
+            int x0 = img.width(), y0 = img.height(), x1 = -1, y1 = -1;
+            for (int y = 0; y < img.height(); ++y) {
+                for (int x = 0; x < img.width(); ++x) {
+                    if (qAlpha(img.pixel(x, y)) <= 8)
+                        continue;
+                    x0 = std::min(x0, x);
+                    y0 = std::min(y0, y);
+                    x1 = std::max(x1, x);
+                    y1 = std::max(y1, y);
+                }
+            }
+            return QRect(QPoint(x0, y0), QPoint(x1, y1));
+        };
+        const QSize box(12, 12);
+        QStringList report;
+        int bad = 0;
+        // 墨迹必须**居中**（|left+right-(side-1)| ≤ 2 且 |top+bottom-(side-1)| ≤ 2）：这一条抓
+        // "网格忘了对中 → 图标偏移越界被裁"的回归（G1 实测踩过：整枚图标只剩右下角碎片）。
+        const QStringList centered_icons{QStringLiteral("caption-max"), QStringLiteral("add"),
+                                         QStringLiteral("remove"),      QStringLiteral("gear"),
+                                         QStringLiteral("error"),       QStringLiteral("stop"),
+                                         QStringLiteral("image"),       QStringLiteral("zoom-fit")};
+        const auto ink_centered = [&box](const QRect &ink) {
+            const int sum_x = ink.left() + ink.right();
+            const int sum_y = ink.top() + ink.bottom();
+            return std::abs(sum_x - (box.width() - 1)) <= 2 &&
+                   std::abs(sum_y - (box.height() - 1)) <= 2;
+        };
+        for (icons::Name name :
+             {icons::Name::CaptionMax, icons::Name::CaptionClose, icons::Name::Star,
+              icons::Name::Gear, icons::Name::Add, icons::Name::Remove, icons::Name::Play}) {
+            QImage direct(box, QImage::Format_ARGB32_Premultiplied);
+            direct.fill(Qt::transparent);
+            {
+                QPainter p(&direct);
+                icons::paint(p, name, QRectF(QPointF(0, 0), QSizeF(box)), Qt::white);
+            }
+            const QImage via_icon = icons::icon(name, Qt::white)
+                                        .pixmap(box)
+                                        .toImage()
+                                        .convertToFormat(QImage::Format_ARGB32_Premultiplied);
+            const QRect a = ink_box(direct);
+            const QRect b = ink_box(via_icon);
+            const bool same = a.isValid() && b.isValid() && std::abs(a.left() - b.left()) <= 1 &&
+                              std::abs(a.top() - b.top()) <= 1 &&
+                              std::abs(a.right() - b.right()) <= 1 &&
+                              std::abs(a.bottom() - b.bottom()) <= 1;
+            const bool must_center = centered_icons.contains(QString::fromLatin1(icons::key(name)));
+            if (!same || (must_center && (!ink_centered(a) || !ink_centered(b))))
+                ++bad;
+            report << QStringLiteral("%1:%2/%3")
+                          .arg(QString::fromLatin1(icons::key(name)),
+                               QStringLiteral("%1,%2,%3,%4")
+                                   .arg(a.left())
+                                   .arg(a.top())
+                                   .arg(a.right())
+                                   .arg(a.bottom()),
+                               QStringLiteral("%1,%2,%3,%4")
+                                   .arg(b.left())
+                                   .arg(b.top())
+                                   .arg(b.right())
+                                   .arg(b.bottom()));
+        }
+        std::printf("UI-SMOKE icons-engine: bad=%d [%s]\n", bad,
+                    qUtf8Printable(report.join(QLatin1Char(' '))));
+        std::fflush(stdout);
+        if (bad != 0)
+            smoke_fail(
+                MainWindow::tr("QIcon 引擎路径与直接绘制的墨迹包围盒不符（%1 例）").arg(bad));
     }
 }
 

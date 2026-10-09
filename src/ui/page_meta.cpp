@@ -65,6 +65,7 @@
 //   * 显示层用到的 Exiv2 标签名逐个在 0.28.9 上验过（`ISOSpeedRatings` 存在、
 //     `PhotographicSensitivity` 不存在且会抛异常 → exif_text 兜住构造失败）。
 #include "ui/page_meta.h"
+#include "ui/icons.h" // M5-T3：折叠插入符/删除钮/例外标记一律矢量图标（C3）
 
 #include <QAbstractSpinBox>
 #include <QApplication>
@@ -917,6 +918,16 @@ void refresh_gps_warning(MetaState *st) {
     st->gps_warn->setVisible(show);
 }
 
+// M5-T3（契约 C3）：折叠入口的插入符 = **矢量图标**（▸ 收起 / ▾ 展开），不再是 "… ▾" 字形文本；
+// 例外标记同样不再用 ⚑ 字形 —— 例外状态由文案里的计数 "(N)" 表达（§7.1 无字形图标）。
+void set_fold_icon(MetaState *st, QToolButton *button, bool expanded) {
+    if (button == nullptr)
+        return;
+    button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    icons::apply(button, expanded ? icons::Name::ChevronDown : icons::Name::ChevronRight,
+                 st->tokens.text3, st->tokens.text3, 12);
+}
+
 void refresh_gps_inputs(MetaState *st) {
     const bool locked = st->clear_gps->isChecked();
     const bool rule_on = st->gps_enable->isChecked();
@@ -937,8 +948,9 @@ void refresh_gps_inputs(MetaState *st) {
     st->search_results->setEnabled(!locked);
     st->read_gps->setEnabled(!locked && st->from_selection && !st->items.isEmpty());
     st->pick_map->setEnabled(!locked);
-    st->rule_toggle->setText(rule_on ? PageMeta::tr("批量 GPS 规则 · 已启用 ▾")
-                                     : PageMeta::tr("批量 GPS 规则 ▾"));
+    st->rule_toggle->setText(rule_on ? PageMeta::tr("批量 GPS 规则 · 已启用")
+                                     : PageMeta::tr("批量 GPS 规则"));
+    set_fold_icon(st, st->rule_toggle, st->rule_toggle->isChecked());
     if (locked) {
         st->gps_status->setText(PageMeta::tr("已勾选清除 GPS：输出将不含 GPS"));
     }
@@ -981,10 +993,12 @@ void add_tag_row(MetaState *st, const QString &key, const QString &value) {
     value_edit->setObjectName(QStringLiteral("tag_value"));
     value_edit->setText(value);
     value_edit->setToolTip(PageMeta::tr("值留空 = 删除该标签"));
-    auto *remove = new QPushButton(QStringLiteral("✕"), row);
+    auto *remove = new QPushButton(row);
     remove->setObjectName(QStringLiteral("tag_remove"));
     remove->setFixedWidth(28);
     remove->setToolTip(PageMeta::tr("删除此行"));
+    remove->setAccessibleName(PageMeta::tr("删除此行")); // §11：图标钮必有 accessibleName
+    icons::apply(remove, icons::Name::Clear, st->tokens.text2, st->tokens.text3, 12);
 
     lay->addWidget(key_edit, 2);
     lay->addWidget(value_edit, 3);
@@ -1148,6 +1162,15 @@ void apply_style(MetaState *st) {
     // 卡片间距（§9.3 卡片间 10px = mockup .scroll{gap:10px}）
     qss += QStringLiteral("QWidget#pp-meta-content { background: transparent; }\n");
     st->page->setStyleSheet(qss);
+
+    // M5-T3：矢量图标随 tokens 重放（QIcon 取色不吃 QSS 的 color）—— 折叠插入符 + 标签行删除钮
+    set_fold_icon(st, st->rule_toggle, st->rule_toggle != nullptr && st->rule_toggle->isChecked());
+    set_fold_icon(st, st->link_tags, st->tag_host != nullptr && st->tag_host->isVisible());
+    set_fold_icon(st, st->link_exc, st->exc_host != nullptr && st->exc_host->isVisible());
+    for (QPushButton *remove :
+         st->page->findChildren<QPushButton *>(QStringLiteral("tag_remove"))) {
+        icons::apply(remove, icons::Name::Clear, t.text2, t.text3, 12);
+    }
 
     // 浅色卡阴影（§9.2 0 1px 4px rgba(16,24,40,.06)；深色无阴影）
     const qreal dpr = st->page->devicePixelRatioF() > 0.01 ? st->page->devicePixelRatioF() : 1.0;
@@ -1592,7 +1615,7 @@ QWidget *build_gps_card(MetaState *st, QWidget *parent) {
     st->rule_toggle = new QToolButton(card);
     st->rule_toggle->setObjectName(QStringLiteral("pp-meta-gps-rule-toggle"));
     st->rule_toggle->setProperty(kFieldProperty, QStringLiteral("fold"));
-    st->rule_toggle->setText(PageMeta::tr("批量 GPS 规则 ▾"));
+    st->rule_toggle->setText(PageMeta::tr("批量 GPS 规则"));
     st->rule_toggle->setCheckable(true);
     st->rule_toggle->setChecked(false);
     st->rule_toggle->setAutoRaise(true);
@@ -1705,8 +1728,10 @@ QWidget *build_gps_card(MetaState *st, QWidget *parent) {
     st->alt->setVisible(false);
     st->dir->setVisible(false);
     st->ts->setVisible(false);
-    QObject::connect(st->rule_toggle, &QToolButton::toggled, st,
-                     [st](bool on) { st->rule_host->setVisible(on); });
+    QObject::connect(st->rule_toggle, &QToolButton::toggled, st, [st](bool on) {
+        st->rule_host->setVisible(on);
+        set_fold_icon(st, st->rule_toggle, on); // M5-T3：▸/▾ = 矢量图标
+    });
 
     // 从选中文件读取 GPS（坐标来自**同一个 probe**：与生效值同源，不另解析 EXIF）
     QObject::connect(st->read_gps, &QPushButton::clicked, st, [st] {
@@ -1889,13 +1914,13 @@ QWidget *build_switches_card(MetaState *st, QWidget *parent) {
     QObject::connect(st->link_tags, &QToolButton::clicked, st, [st] {
         const bool on = !st->tag_host->isVisible();
         st->tag_host->setVisible(on);
-        st->link_tags->setText(on ? PageMeta::tr("EXIF / XMP 标签编辑… ▾")
-                                  : PageMeta::tr("EXIF / XMP 标签编辑…"));
+        st->link_tags->setText(PageMeta::tr("EXIF / XMP 标签编辑…"));
+        set_fold_icon(st, st->link_tags, on);
     });
     QObject::connect(st->link_exc, &QToolButton::clicked, st, [st] {
         const bool on = !st->exc_host->isVisible();
         st->exc_host->setVisible(on);
-        st->link_exc->setText(on ? PageMeta::tr("单文件例外 ⚑ ▾") : st->link_exc->text());
+        set_fold_icon(st, st->link_exc, on); // 文案不动（计数由 set_exception_summary 维护）
     });
     QObject::connect(st->add_tag, &QPushButton::clicked, st, [st] {
         add_tag_row(st, QString(), QString());
@@ -2004,7 +2029,7 @@ void PageMeta::set_exception_summary(const QStringList &paths) {
     st->exc_label->setText(paths.isEmpty() ? tr("无例外文件")
                                            : tr("%1 个文件带元数据例外").arg(paths.size()));
     if (!st->exc_host->isVisible()) {
-        st->link_exc->setText(tr("单文件例外 (%1) ⚑").arg(paths.size()));
+        st->link_exc->setText(tr("单文件例外 (%1)").arg(paths.size()));
     }
 }
 

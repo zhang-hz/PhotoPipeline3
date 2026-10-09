@@ -45,6 +45,7 @@
 // 是 PP-FROZEN 头文件，不含私有成员（§2.13）；行控件亦然（不进头文件）。本文件无 Q_OBJECT 类
 // （控件类不发信号），故不含 *.moc 包含（与 page_meta.cpp / page_output.cpp 同口径）。
 #include "ui/page_run.h"
+#include "ui/icons.h" // M5-T3：任务表状态标记 / 取消钮 ■ 一律矢量图标（C3）
 
 #include <algorithm>
 #include <cmath>
@@ -88,6 +89,8 @@ using pp::StageWeights;
 
 constexpr int kFlushMs = 60;     // §7.4：GUI 节流 60ms 刷新
 constexpr int kLogTailLines = 5; // §9.3：日志尾 5 行滚动
+constexpr int kMarkWidth = 16;   // .mark{width:16px}（状态列盒宽，M4 口径不变）
+constexpr int kMarkPx = 12;      // 标记图标边长（16px 盒内居中）
 
 // ===========================================================================
 // 小控件
@@ -469,9 +472,32 @@ struct OutRow {
     QColor applied_pct_color, applied_stage_color;
 };
 
+// 状态标记位点（16px 盒，固定尺寸无省略需求 → 普通 QLabel + 矢量 pixmap）：
+// ElidedLabel 的 resizeEvent 会 setText（清掉 pixmap），故标记不能用它；同 (图标, 色) 早退，
+// 避免 60ms flush 的高频路径反复光栅化。
+class RunMarkLabel : public QLabel {
+public:
+    explicit RunMarkLabel(QWidget *parent = nullptr) : QLabel(parent) {
+        setFixedWidth(kMarkWidth);
+        setAlignment(Qt::AlignCenter);
+    }
+    void set_mark(icons::Name name, const QColor &color) {
+        if (name == name_ && color == color_ && !pixmap().isNull())
+            return;
+        name_ = name;
+        color_ = color;
+        setPixmap(icons::pixmap(name_, kMarkPx, color_, devicePixelRatioF()));
+    }
+    icons::Name mark_name() const { return name_; }
+
+private:
+    icons::Name name_ = icons::Name::Pending;
+    QColor color_;
+};
+
 struct FileRow {
     QWidget *group = nullptr;
-    ElidedLabel *mark = nullptr;
+    RunMarkLabel *mark = nullptr;
     ElidedLabel *name = nullptr;
     ElidedLabel *meta = nullptr;
     QVector<OutRow> outs;
@@ -700,20 +726,23 @@ QColor out_stage_color(const RunState &s, const OutRow &out) {
     return s.tokens.text3;
 }
 
-QString mark_text(const FileRow &file) {
+// 状态标记（§7.3 任务表状态列）：M5-T3 起 = **矢量图标**（icons 库），不再是 ✓ ✗ » ■ … ◐ 字形。
+// 语义映射逐条不变（Done=勾 / Failed=叉圈 / Skipped=跳过 / Cancelled=方停 / Queued=排队点 /
+// 进行中=半填充圆），下游读数仍走 file.state（图标只是同一状态的形）。
+icons::Name mark_name(const FileRow &file) {
     switch (file.state) {
     case pp::FileState::Done:
-        return QStringLiteral("✓");
+        return icons::Name::Check;
     case pp::FileState::Failed:
-        return QStringLiteral("✗");
+        return icons::Name::Error;
     case pp::FileState::Skipped:
-        return QStringLiteral("»");
+        return icons::Name::ChevronRight;
     case pp::FileState::Cancelled:
-        return QStringLiteral("■");
+        return icons::Name::Stop;
     case pp::FileState::Queued:
-        return QStringLiteral("…");
+        return icons::Name::Pending;
     default:
-        return file.terminal ? QStringLiteral("…") : QStringLiteral("◐");
+        return file.terminal ? icons::Name::Pending : icons::Name::Active;
     }
 }
 
@@ -922,14 +951,13 @@ void refresh_widgets(RunState &s) {
     } else if (s.running) {
         s.cancel->setEnabled(true);
         s.cancel->setVisible(true);
-        s.cancel->setText(PageRun::tr("■ 取消运行"));
+        s.cancel->setText(PageRun::tr("取消运行"));
     }
 
     // ---- 任务进度卡（源文件分组行 + 逐输出子行）----
     for (int i = 0; i < s.files.size(); ++i) {
         FileRow &file = s.files[i];
-        file.mark->set_full_text(mark_text(file));
-        set_color(file.mark, mark_color(s, file), file.applied_mark_color);
+        file.mark->set_mark(mark_name(file), mark_color(s, file));
         file.meta->set_full_text(file_meta_text(file));
         for (int j = 0; j < file.outs.size(); ++j)
             apply_out_row(s, file, file.outs[j], j);
@@ -1149,8 +1177,10 @@ void build_overview_card(QWidget *parent, RunState *s) {
     auto *ctl_h = new QHBoxLayout(ctl);
     ctl_h->setContentsMargins(14, 8, 14, 10);
     ctl_h->setSpacing(14);
-    s->cancel = new QPushButton(PageRun::tr("■ 取消运行"), ctl);
+    s->cancel = new QPushButton(PageRun::tr("取消运行"), ctl);
     s->cancel->setObjectName(QStringLiteral("pp-run-cancel"));
+    // M5-T3：■（停止）→ 矢量图标（取色与重放在 PageRun::set_tokens，QIcon 不吃 QSS 的 color）
+    s->cancel->setAccessibleName(PageRun::tr("取消运行")); // §11
     s->cancel->setProperty(kFieldProperty, QStringLiteral("danger"));
     s->cancel->setFixedHeight(theme::Metrics::input_h); // .btn{height:28px}
     s->cancel->setFont(theme::font(theme::Typography::body_px, 600));
@@ -1240,13 +1270,10 @@ void build_rows(RunState *s, const QStringList &names) {
         auto *g = new QHBoxLayout(file.group);
         g->setContentsMargins(12, 0, 0, 0); // .grp{padding:7px 4px 3px} → 行高 24
         g->setSpacing(8);
-        file.mark = new ElidedLabel(file.group);
+        file.mark = new RunMarkLabel(file.group);
         file.mark->setObjectName(QStringLiteral("pp-run-gmark-%1").arg(i));
-        file.mark->setFont(theme::font(theme::Typography::body_px, QFont::Bold));
-        file.mark->setProperty(kFieldProperty, QStringLiteral("mark"));
-        file.mark->setFixedWidth(16); // .mark{width:16px}
-        file.mark->setAlignment(Qt::AlignCenter);
-        file.mark->set_full_text(QStringLiteral("…"));
+        file.mark->set_mark(icons::Name::Pending,
+                            theme::tokens(theme::preferred_theme_mode()).text3);
         g->addWidget(file.mark);
         file.name = new ElidedLabel(file.group);
         file.name->setObjectName(QStringLiteral("pp-run-gname-%1").arg(i));
@@ -1381,6 +1408,8 @@ void PageRun::set_tokens(const theme::Tokens &tokens) {
         return;
     s->tokens = tokens;
     setStyleSheet(page_qss(tokens));
+    // M5-T3：矢量图标随 tokens 重放（QIcon 取色不吃 QSS 的 color）
+    icons::apply(s->cancel, icons::Name::Stop, tokens.err, tokens.text3, 12);
     for (FileRow &file : s->files) {
         for (OutRow &out : file.outs)
             out.bar->set_tokens(tokens);

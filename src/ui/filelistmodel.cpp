@@ -25,6 +25,7 @@
 //     （theme::palette(tokens) 已把 §9.2 tokens 映射进 Text/PlaceholderText/Highlight/
 //     HighlightedText），故本 TU 零 tokens 依赖、随主题自动跟随。
 #include "ui/filelistmodel.h"
+#include "ui/icons.h" // M5-T3：勾形/例外标记一律矢量图标（C3）—— 取 QPalette 色，仍零 tokens 依赖
 #include "ui/thumbnails.h" // 冻结的 filelistmodel.h 依赖 Thumbnailer 已声明（不自带该头）
 
 #include <QAbstractItemView>
@@ -97,7 +98,8 @@ QColor state_color(pp::FileState st) { return QColor(QLatin1String(state_style(s
 
 constexpr int kRowHeight = 56;                     // §2.8 行高
 constexpr int kThumbBox = 48;                      // §2.8 缩略图 48×48
-constexpr const char *kExceptionColor = "#dd8800"; // §3.1 例外徽标 ⚑
+constexpr const char *kExceptionColor = "#dd8800"; // §3.1 例外标记（矢量 icons::tag 的取色）
+constexpr int kExceptionMarkPx = 12;               // 例外标记图标边长（M5-T3：⚑ 字形 → 矢量）
 constexpr const char *kSubLineColor = "#808080";   // 第二行灰字
 
 std::filesystem::path fs_path(const QString &s) {
@@ -757,18 +759,18 @@ void FileDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option,
     }
     painter->restore();
 
-    // 右：状态徽标（§3.1 颜色，右对齐），例外时其左侧 "⚑"（#dd8800）
+    // 右：状态徽标（§3.1 颜色，右对齐），例外时其左侧一枚**矢量打标图标**（#dd8800）。
+    // M5-T3：⚑ 字形 → icons::tag（同色同位，宽度按图标盒常量占位，不再用量字形宽度）。
     const QString state_label = index.data(FileListModel::StateTextRole).toString();
     const int state_int = index.data(FileListModel::StateRole).toInt();
     const bool has_exception = index.data(FileListModel::ExceptionRole).toBool();
     QFont badge_font = opt.font;
     badge_font.setBold(true);
     const QFontMetrics badge_fm(badge_font);
-    const QString flag = QString::fromUtf8("⚑");
     const int badge_w = badge_fm.horizontalAdvance(state_label);
-    const int flag_adv = has_exception ? badge_fm.horizontalAdvance(flag) : 0;
+    const int flag_w = has_exception ? kExceptionMarkPx : 0;
     const int badge_left = area.right() - badge_w;
-    const int flag_left = badge_left - (has_exception ? flag_adv + 6 : 0);
+    const int flag_left = badge_left - (has_exception ? flag_w + 6 : 0);
 
     painter->save();
     painter->setFont(badge_font);
@@ -776,9 +778,10 @@ void FileDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option,
     painter->drawText(QRect(badge_left, area.top(), badge_w, area.height()),
                       Qt::AlignRight | Qt::AlignVCenter, state_label);
     if (has_exception) {
-        painter->setPen(QColor(QLatin1String(kExceptionColor)));
-        painter->drawText(QRect(flag_left, area.top(), flag_adv, area.height()),
-                          Qt::AlignRight | Qt::AlignVCenter, flag);
+        icons::paint(*painter, icons::Name::Tag,
+                     QRectF(flag_left, area.center().y() - kExceptionMarkPx / 2.0, kExceptionMarkPx,
+                            kExceptionMarkPx),
+                     QColor(QLatin1String(kExceptionColor)));
     }
     painter->restore();
 
@@ -1193,10 +1196,9 @@ void FileGroupDelegate::paint(QPainter *painter, const QStyleOptionViewItem &opt
         const qreal radius = 3.0; // .cbox{r=3}
         painter->drawRoundedRect(QRectF(box).adjusted(0.0, 0.0, -1.0, -1.0), radius, radius);
         if (on) {
-            QFont mark_font = theme::font(theme::Typography::badge_px, 800);
-            painter->setFont(mark_font);
-            painter->setPen(mark);
-            painter->drawText(box, Qt::AlignCenter, QStringLiteral("✓"));
+            // M5-T3：勾形 = 矢量路径（icons::check，与 mockup 的 10×10 勾形等比同源），
+            // 不再是 "✓" 字形（§3.3 禁字形图标）。
+            icons::paint(*painter, icons::Name::Check, QRectF(box), mark);
         }
         painter->restore();
         return;
@@ -1217,8 +1219,8 @@ void FileGroupDelegate::paint(QPainter *painter, const QStyleOptionViewItem &opt
     const QFontMetrics fm(badge_font);
     const int badge_w = fm.horizontalAdvance(index.data(FileListModel::StateTextRole).toString());
     const bool has_exception = index.data(FileListModel::ExceptionRole).toBool();
-    const int flag_w = has_exception ? fm.horizontalAdvance(QString::fromUtf8("⚑")) + 6 : 0;
-    const int dot_size = 8; // .chip-dot{width:8px;height:8px}
+    const int flag_w = has_exception ? kExceptionMarkPx + 6 : 0; // 例外标记 = 矢量图标（同上）
+    const int dot_size = 8;                                      // .chip-dot{width:8px;height:8px}
     const int dot_right = area.right() - badge_w - flag_w - 8;
     const QRect dot(dot_right - dot_size + 1, area.center().y() - dot_size / 2, dot_size, dot_size);
     if (dot.left() < area.left())

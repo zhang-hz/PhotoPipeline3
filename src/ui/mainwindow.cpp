@@ -53,6 +53,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFont>
+#include <QFontMetrics> // M5-T14：offline-banner 环带取样的文字盒（QFontMetricsF 同头）
 #include <QFrame>
 #include <QGraphicsDropShadowEffect>
 #include <QGridLayout>
@@ -73,6 +74,8 @@
 #include <QPalette>
 #include <QPixmap>
 #include <QProgressBar>
+#include <QProxyStyle> // M5-T14：文件列表系统焦点框抑制（QTreeView::drawRow 的焦点框调用不带
+                       // widget → QSS outline:none 无效；见 FileViewFocusFrameStyle 说明）
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScreen>
@@ -900,6 +903,82 @@ void ensure_shell_nav_accessible_factory() {
 }
 #endif // QT_CONFIG(accessibility)
 
+// ---------------------------------------------------------------------------
+// M5-T14（§12-12/§11）：文件列表视图的**系统焦点框抑制**（样式层收口）
+//   事实与依据（Qt 6.11 源码 + T13 真实平台取证）：QTreeView::drawRow 画当前行焦点框的调用是
+//   `style()->drawPrimitive(QStyle::PE_FrameFocusRect, &o, painter)` —— **不带 widget 参数**；
+//   而 QStyleSheetStyle 的规则查找以该参数为键 → 骨架 QSS 的 `outline: none` 对这条路径天然
+//   无效（实测：规则在场时当前行仍被「1px 白 + 1px 黑」焦点框盖住左缘 2px accent 选中条，
+//   见 T13 filelist-selprobe after=[#ffffff,#ffffff,#000000,#000000,…]；与 QTBUG-4281
+//   「focus rect 无法用样式表去除」同源）。故本件在样式层收口：QProxyStyle 包装当前样式，
+//   仅当 PE_FrameFocusRect 的**目标**是文件列表视图时吞掉绘制（判定三条任一命中：widget 参数
+//   = 该视图或其 viewport / QStyleOption::styleObject = 该视图 / 无 widget 且画布 = 该视图
+//   或其 viewport），其余 primitive/control/几何**全部透传** —— 其他控件的系统焦点提示不受
+//   影响。选中面本体由委托自绘（accent-dim 底 + 左缘 2px accent 条，修 3-17）
+//   ＝ 可见焦点指示本身（§11「禁用系统虚线框」）。
+//   目标识别按 **objectName**（"pp-file-view" 与 Qt 自动命名的 viewport）——不持任何部件
+//   指针：多窗口（冒烟走查会临时建/销第二个主窗）与部件析构下零悬空（T14 实测教训：曾以
+//   静态指针登记目标视图，第二个主窗析构后指针悬空 → 真实平台焦点框绘制崩于 viewport()）。
+//   诊断计数器（只增，不参与断言）：供真实平台失败定位「哪条判定命中/是否漏网」。
+class FileViewFocusFrameStyle : public QProxyStyle {
+public:
+    explicit FileViewFocusFrameStyle(QStyle *base) : QProxyStyle(base) {}
+    static void reset_counters() { hits_option() = hits_widget() = hits_device() = misses() = 0; }
+    static int &hits_option() {
+        static int n = 0;
+        return n;
+    }
+    static int &hits_widget() {
+        static int n = 0;
+        return n;
+    }
+    static int &hits_device() {
+        static int n = 0;
+        return n;
+    }
+    static int &misses() {
+        static int n = 0;
+        return n;
+    }
+
+    void drawPrimitive(PrimitiveElement element, const QStyleOption *option, QPainter *painter,
+                       const QWidget *widget) const override {
+        if (element == QStyle::PE_FrameFocusRect) {
+            if (widget != nullptr && is_file_list_target(widget)) {
+                ++hits_widget();
+                return;
+            }
+            if (option != nullptr && is_file_list_target(option->styleObject)) {
+                ++hits_option();
+                return;
+            }
+            // 画布口径（无 widget 的 QTreeView::drawRow 焦点框调用）：画布是 QWidget 时才可比
+            const QObject *canvas =
+                painter != nullptr ? dynamic_cast<const QObject *>(painter->device()) : nullptr;
+            if (widget == nullptr && is_file_list_target(canvas)) {
+                ++hits_device();
+                return;
+            }
+            if (widget == nullptr)
+                ++misses();
+        }
+        QProxyStyle::drawPrimitive(element, option, painter, widget);
+    }
+
+private:
+    // 目标 = 文件列表视图本体（objectName "pp-file-view"）或其 viewport（Qt 自动命名，
+    // 父 = 该视图）。
+    static bool is_file_list_target(const QObject *object) {
+        const QWidget *widget = qobject_cast<const QWidget *>(object);
+        if (widget == nullptr)
+            return false;
+        if (widget->objectName() == QLatin1String("pp-file-view"))
+            return true;
+        const QWidget *parent = widget->parentWidget();
+        return parent != nullptr && parent->objectName() == QLatin1String("pp-file-view");
+    }
+};
+
 // 图标钮（mockup .icon-btn：R4 图标钮 28×28 r4，悬停显底）。
 // M5-T3（契约 C3）：图标 = **矢量绘制**（ui/icons.h），不再是 Segoe UI Symbol 字形 ——
 // mockup/run.html 的 ☆/⚙ 内联 SVG 已转录进图标库（star/gear 逐点同源），故 M4-W2-fix 的
@@ -1385,6 +1464,22 @@ struct MainWindow::Impl {
 
 MainWindow::Impl::Impl(MainWindow *owner, const pp::AppSettings &s)
     : w(owner), settings(s), theme_mode(apply_startup_theme(s.ui_theme_mode)) {
+    // M5-T14（§12-12/§11）：文件列表系统焦点框抑制 = **应用样式层收口**（见
+    // FileViewFocusFrameStyle 的成因说明）。安装点 = 本窗口任何子部件之前：其后创建的部件在
+    // 铺样式/被 QSS 包装时都以本代理为底座（refresh_theme 的骨架 QSS 亦在之后落地）。
+    // 安全前提（Qt 6.11 QApplication::setStyle 行为）：旧样式只在「父对象 = qApp」时被删除 →
+    // 先给旧样式**脱父**再换，旧实例继续存活（仍被先前建立的 QSS 包装引用 → 不会留下悬空
+    // 底座；进程级单例，随进程退出回收）。目标部件按 objectName 识别，不登记任何指针。
+    {
+        QStyle *current = QApplication::style();
+        if (current != nullptr && dynamic_cast<FileViewFocusFrameStyle *>(current) == nullptr) {
+            if (current->parent() == qApp)
+                current->setParent(nullptr);
+            auto *proxy = new FileViewFocusFrameStyle(current); // 代理接管底座所有权
+            proxy->setObjectName(current->objectName());        // 样式名口径不变（诊断/日志用）
+            QApplication::setStyle(proxy);
+        }
+    }
     // M4-T11：分类注册表路径（§3.6/§6.2 单源 = settings.class_file；空 = 默认
     // data_dir()/classes.json）
     classes_file =
@@ -1768,6 +1863,8 @@ void MainWindow::build_ui() {
     d.file_stack = new QStackedWidget(d.panel);
     d.file_stack->setObjectName(QStringLiteral("pp-file-stack"));
     d.view = new FileTreeView(d.file_stack);
+    // M5-T14（§12-12/§11）：objectName 是双职 —— 骨架 QSS 钩子 + FileViewFocusFrameStyle 的
+    // 系统焦点框抑制判定键（该代理样式在 Impl 构造期最早点已安装，按此名识别目标，不持指针）。
     d.view->setObjectName(QStringLiteral("pp-file-view"));
     d.file_delegate = new FileGroupDelegate(d.view); // M5-T5：持有以重放 tokens（A6）
     d.view->setModel(d.groups);
@@ -2700,8 +2797,16 @@ void MainWindow::Impl::refresh_theme() {
     // 骨架 QSS（只作用于 pp-* 钩子）；顶栏图标/分段导航随主题改色。
     // §11/A18：分段导航**禁用系统虚线框**（`outline: none`）—— 焦点指示只有自绘的 accent 1px 环
     // （ShellNav::paintEvent），与设置弹窗的"可见焦点指示单源"同口径。
+    // M5-T14（§12-12/§11）：文件列表视图的系统焦点框（Windows11/Fluent 样式 = 当前行全部列上
+    // 的「1px 白 + 1px 黑」指示框）会盖掉左缘 2px accent 选中条（真实平台 T13 取证：
+    // filelist-selprobe after=[#ffffff,#ffffff,#000000,#000000,…]）。此处 `outline: none` 是
+    // **口径声明**（`filelist-geom` 的 `focus-frame-off` 断言即钉在本串上），但该 QSS 路径对
+    // QTreeView 的焦点框**不生效** —— 绘制调用 `style()->drawPrimitive(PE_FrameFocusRect, …)`
+    // 不带 widget（QTBUG-4281），规则查不到 → 实际收口在 FileViewFocusFrameStyle（见其说明）。
+    // 选中面本体由委托自绘（accent-dim 底 + 左缘 2px accent 条，修 3-17）。
     w->setStyleSheet(theme::style_sheet(tokens) +
-                     QStringLiteral("QWidget#pp-nav-strip { outline: none; }\n"));
+                     QStringLiteral("QWidget#pp-nav-strip { outline: none; }\n"
+                                    "QTreeView#pp-file-view { outline: none; }\n"));
     // M4-T10：预览面板的本地 QSS（徽标/chip/底条）随 tokens 重放（舞台框仍走上面的骨架 QSS）
     if (preview_panel != nullptr)
         preview_panel->set_tokens(tokens);
@@ -3941,6 +4046,12 @@ void MainWindow::Impl::smoke_probe_skeleton() {
     {
         // (e) QIcon 引擎路径（按钮实际走的那条）与直接绘制**等价**：同一图标两条路径的墨迹
         //     包围盒必须逐边相差 ≤1px（否则按钮上的图标会缺角/缩水 —— 引擎路径回归的守门断言）。
+        //     M5-T14 口径修正（T13 真实平台红 7 例的**探针缺陷**）：旧引擎路径取
+        //     `QIcon::pixmap(box)` 再回读像素 —— 该重载在 dpr≠1 平台上按**平台 dpr** 光栅化，
+        //     返回的是**物理**像素图（dpr=2 → 24×24），与直接绘制的逻辑 12×12 跨坐标系比较，
+        //     逐边差值恰为 2 倍（T13 取证行 icons-engine-space: via=24x24(dpr=2.0)）。修正 =
+        //     引擎路径改走 `QIcon::paint()` 渲到 12×12/dpr=1 的同一目标 —— 即按钮经 QStyle
+        //     实际走的路径。断言本体（逐边 ≤1px + 居中）零改动。
         const auto ink_box = [](const QImage &img) {
             int x0 = img.width(), y0 = img.height(), x1 = -1, y1 = -1;
             for (int y = 0; y < img.height(); ++y) {
@@ -3958,12 +4069,16 @@ void MainWindow::Impl::smoke_probe_skeleton() {
         const QSize box(12, 12);
         QStringList report;
         int bad = 0;
-        // M5-T13 验收取证（只增）：两条路径的**像素空间**采样（真实平台 dpr≠1 时引擎路径回读
-        // 为物理像素、直接绘制为逻辑像素 —— 失败时用本组读数定位是空间不一致还是真缺角）。
+        // M5-T13 验收取证（只增；M5-T14 更正口径）：两条路径的**像素空间**采样 —— 修正后两条
+        // 路径都在同一坐标系（逻辑 12×12 / dpr=1：direct = icons::paint，via = QIcon::paint）。
+        // engine-raw = `QIcon::pixmap(box)` 的原始回读（真实平台上 = 物理像素 + 平台 dpr）：
+        // 旧探针误把它当同空间是比较 bug 的现场证据，保留为诊断读数（不参与断言）。
         QSize direct_space(0, 0);
         QSize via_space(0, 0);
         qreal direct_dpr = 0.0;
         qreal via_dpr = 0.0;
+        QSize raw_space(0, 0);
+        qreal raw_dpr = 0.0;
         // 墨迹必须**居中**（|left+right-(side-1)| ≤ 2 且 |top+bottom-(side-1)| ≤ 2）：这一条抓
         // "网格忘了对中 → 图标偏移越界被裁"的回归（G1 实测踩过：整枚图标只剩右下角碎片）。
         const QStringList centered_icons{QStringLiteral("caption-max"), QStringLiteral("add"),
@@ -3985,15 +4100,22 @@ void MainWindow::Impl::smoke_probe_skeleton() {
                 QPainter p(&direct);
                 icons::paint(p, name, QRectF(QPointF(0, 0), QSizeF(box)), Qt::white);
             }
-            const QImage via_icon = icons::icon(name, Qt::white)
-                                        .pixmap(box)
-                                        .toImage()
-                                        .convertToFormat(QImage::Format_ARGB32_Premultiplied);
+            // 引擎路径 = QIcon::paint 渲到**同一 12×12/dpr=1 目标**（按钮经 QStyle 的路径；
+            // 不再走 QIcon::pixmap(size) 的物理像素回读 —— 见本段开头 M5-T14 口径修正）
+            QImage via_icon(box, QImage::Format_ARGB32_Premultiplied);
+            via_icon.fill(Qt::transparent);
+            {
+                QPainter p(&via_icon);
+                icons::icon(name, Qt::white).paint(&p, QRect(QPoint(0, 0), box));
+            }
             if (direct_space.isEmpty()) { // M5-T13 取证：首个图标的空间样本即代表两条路径口径
                 direct_space = direct.size();
                 via_space = via_icon.size();
                 direct_dpr = direct.devicePixelRatio();
                 via_dpr = via_icon.devicePixelRatio();
+                const QPixmap raw = icons::icon(name, Qt::white).pixmap(box); // 诊断：原始回读
+                raw_space = raw.size();
+                raw_dpr = raw.devicePixelRatio();
             }
             const QRect a = ink_box(direct);
             const QRect b = ink_box(via_icon);
@@ -4019,12 +4141,14 @@ void MainWindow::Impl::smoke_probe_skeleton() {
         }
         std::printf("UI-SMOKE icons-engine: bad=%d [%s]\n", bad,
                     qUtf8Printable(report.join(QLatin1Char(' '))));
-        // M5-T13 验收取证（只增）：两条路径的实际像素空间（真实平台 dpr≠1 时引擎路径回读为
-        // 物理像素、直接绘制为逻辑像素 —— 本行把坐标空间显式打出来，供失败定位）。
+        // M5-T13 验收取证（只增；M5-T14 更正口径）：两条路径的实际像素空间 —— 修正后都在同一
+        // 坐标系（逻辑 12×12/dpr=1）；engine-raw 为旧探针误用的 `QIcon::pixmap(box)` 原始回读
+        // （真实平台上 = 物理像素 + 平台 dpr，与旧 via=24x24(dpr=2.0) 同源，供失败定位）。
         std::printf("UI-SMOKE icons-engine-space: box=%dx%d direct=%dx%d(dpr=%.1f) "
-                    "via=%dx%d(dpr=%.1f)\n",
+                    "via=%dx%d(dpr=%.1f) engine-raw=%dx%d(dpr=%.1f)\n",
                     box.width(), box.height(), direct_space.width(), direct_space.height(),
-                    direct_dpr, via_space.width(), via_space.height(), via_dpr);
+                    direct_dpr, via_space.width(), via_space.height(), via_dpr, raw_space.width(),
+                    raw_space.height(), raw_dpr);
         std::fflush(stdout);
         if (bad != 0)
             smoke_fail(
@@ -5834,6 +5958,7 @@ void MainWindow::Impl::smoke_probe_filelist_geometry() {
     pump(40);
     const QRect sel_rect = view->visualRect(row_idx);
     const QImage before = view->viewport()->grab().toImage();
+    FileViewFocusFrameStyle::reset_counters(); // M5-T14 诊断：本次选中面取证的拦截计数
     const QImage after = [&] {
         view->setCurrentIndex(row_idx);
         view->selectionModel()->select(row_idx, QItemSelectionModel::ClearAndSelect |
@@ -5848,6 +5973,13 @@ void MainWindow::Impl::smoke_probe_filelist_geometry() {
     const int sample_y = int(std::lround((sel_rect.top() + sel_rect.height() / 2.0) * shot_scale));
     const QColor bar_unsel = before.pixelColor(sample_x, sample_y);
     const QColor bar_sel = after.pixelColor(sample_x, sample_y);
+    // M5-T14 断言补强（只增）：左缘 2px accent 条**整幅**取样 —— 0.5 与 1.5 逻辑像素两处都必须
+    // 落在 accent 上（T13 真实平台红 = 系统焦点框「1px 白 + 1px 黑」恰好盖满这两列；修复后两处
+    // 复原 → 本检查同时守住"条宽 = 2px"与"无系统焦点框覆盖条带"两条语义）。
+    const int bar_last_x =
+        std::max(0, int(std::lround(double(FileDelegate::kSelectionBarW) * shot_scale)) - 1);
+    const int sample_x2 = std::clamp(int(std::lround(1.5 * shot_scale)), 0, bar_last_x);
+    const QColor bar_sel2 = after.pixelColor(sample_x2, sample_y);
     // M5-T13 验收取证（只增）：选中条取样邻域 + 列 0 矩形 + 视图滚动量（真实平台失败定位）。
     {
         QStringList before_px;
@@ -5868,16 +6000,19 @@ void MainWindow::Impl::smoke_probe_filelist_geometry() {
                 row << after.pixelColor(x, yy).name(QColor::HexRgb);
             grid << QStringLiteral("y%1[%2]").arg(yy).arg(row.join(QLatin1Char(',')));
         }
-        std::printf("UI-SMOKE filelist-selprobe: dpr=%.1f scale=%.2f x=%d y=%d sel=%d,%d,%dx%d "
-                    "sel-after=%d,%d,%dx%d check=%d,%d,%dx%d focus=%d curcol=%d before=[%s] "
-                    "after=[%s]\n",
-                    view->viewport()->devicePixelRatioF(), shot_scale, sample_x, sample_y,
-                    sel_rect.x(), sel_rect.y(), sel_rect.width(), sel_rect.height(),
-                    sel_rect_after.x(), sel_rect_after.y(), sel_rect_after.width(),
-                    sel_rect_after.height(), check_rect_v.x(), check_rect_v.y(),
-                    check_rect_v.width(), check_rect_v.height(), view->hasFocus() ? 1 : 0,
-                    view->currentIndex().column(), qUtf8Printable(before_px.join(QLatin1Char(','))),
-                    qUtf8Printable(after_px.join(QLatin1Char(','))));
+        std::printf(
+            "UI-SMOKE filelist-selprobe: dpr=%.1f scale=%.2f x=%d y=%d sel=%d,%d,%dx%d "
+            "sel-after=%d,%d,%dx%d check=%d,%d,%dx%d focus=%d curcol=%d bar2=x%d:%s "
+            "focus-frame-suppress[opt=%d wid=%d dev=%d miss=%d] before=[%s] after=[%s]\n",
+            view->viewport()->devicePixelRatioF(), shot_scale, sample_x, sample_y, sel_rect.x(),
+            sel_rect.y(), sel_rect.width(), sel_rect.height(), sel_rect_after.x(),
+            sel_rect_after.y(), sel_rect_after.width(), sel_rect_after.height(), check_rect_v.x(),
+            check_rect_v.y(), check_rect_v.width(), check_rect_v.height(), view->hasFocus() ? 1 : 0,
+            view->currentIndex().column(), sample_x2, qUtf8Printable(bar_sel2.name(QColor::HexRgb)),
+            FileViewFocusFrameStyle::hits_option(), FileViewFocusFrameStyle::hits_widget(),
+            FileViewFocusFrameStyle::hits_device(), FileViewFocusFrameStyle::misses(),
+            qUtf8Printable(before_px.join(QLatin1Char(','))),
+            qUtf8Printable(after_px.join(QLatin1Char(','))));
         std::printf("UI-SMOKE filelist-selgrid: %s\n", qUtf8Printable(grid.join(QLatin1Char(' '))));
         std::fflush(stdout);
     }
@@ -5886,6 +6021,11 @@ void MainWindow::Impl::smoke_probe_filelist_geometry() {
                std::abs(a.blue() - b.blue()) <= tol;
     };
     const bool bar_is_accent = near(bar_sel, t.accent, 32);
+    // M5-T14 断言补强（只增）：条带第 2 逻辑像素同为 accent（守"条宽 = 2px"），
+    // 且骨架 QSS 已对文件列表视图关闭系统焦点框（守"系统虚线框不再盖条带"的实现面）。
+    const bool bar_is_accent2 = near(bar_sel2, t.accent, 32);
+    const bool focus_frame_off = w->styleSheet().contains(QStringLiteral("outline: none")) &&
+                                 w->styleSheet().contains(QStringLiteral("QTreeView#pp-file-view"));
     const bool selection_distinct = !near(bar_sel, bar_unsel, 24);
     const bool sel_token = FileDelegate::selection_fill(t) == t.accent_dim &&
                            FileDelegate::selection_bar(t) == t.accent &&
@@ -5918,7 +6058,7 @@ void MainWindow::Impl::smoke_probe_filelist_geometry() {
         "UI-SMOKE filelist-geom: checked=%d bad=%d row=%dx%d thumb=%d check=%d check_col=%d "
         "pill_h=%d btn=%dx%d info_px=%d tools=%d remove-hidden=%d/%d/%d join=\"%s\"|\"%s\" "
         "info=size:\"%s\" date:\"%s\" camera:\"%s\" drop=\"%s\" empty=%d/%d/%d rows=%d/%d "
-        "bar=%s→%s sel_token=%d %s\n",
+        "bar=%s→%s|%s sel_token=%d focus-frame-off=%d %s\n",
         count, int(bad.size()), row_rect.width(), row_rect.height(), rects.thumb.width(),
         check_box.width(), view->columnWidth(FileGroupProxyModel::kCheckColumn),
         rects.pill.height(), add_btn != nullptr ? add_btn->width() : -1,
@@ -5929,8 +6069,8 @@ void MainWindow::Impl::smoke_probe_filelist_geometry() {
         qUtf8Printable(camera_text), qUtf8Printable(drop_full), empty_struct ? 1 : 0,
         empty_truth ? 1 : 0, empty_live ? 1 : 0, visible_rows, classify_rows,
         qUtf8Printable(bar_unsel.name(QColor::HexRgb)),
-        qUtf8Printable(bar_sel.name(QColor::HexRgb)), sel_token ? 1 : 0,
-        qUtf8Printable(bad.join(QLatin1Char(' '))));
+        qUtf8Printable(bar_sel.name(QColor::HexRgb)), qUtf8Printable(bar_sel2.name(QColor::HexRgb)),
+        sel_token ? 1 : 0, focus_frame_off ? 1 : 0, qUtf8Printable(bad.join(QLatin1Char(' '))));
     std::fflush(stdout);
     if (!bad.isEmpty())
         smoke_fail(MainWindow::tr("文件行/工具行几何（§7.5/R4/A3/A7）不符：%1")
@@ -5963,11 +6103,13 @@ void MainWindow::Impl::smoke_probe_filelist_geometry() {
                        .arg(visible_rows)
                        .arg(visible_chips)
                        .arg(classify_rows));
-    if (!bar_is_accent || !selection_distinct || !sel_token)
-        smoke_fail(MainWindow::tr("选中行高亮（修 3-17）不符：像素 %1→%2（accent=%3）条带=%4")
+    if (!bar_is_accent || !bar_is_accent2 || !selection_distinct || !sel_token || !focus_frame_off)
+        smoke_fail(MainWindow::tr("选中行高亮（修 3-17）不符：像素 %1→%2 条带右列=%3（accent=%4）"
+                                  "条带=%5 焦点框关闭=%6")
                        .arg(bar_unsel.name(QColor::HexRgb), bar_sel.name(QColor::HexRgb),
-                            theme::css_color(t.accent))
-                       .arg(sel_token ? 1 : 0));
+                            bar_sel2.name(QColor::HexRgb), theme::css_color(t.accent))
+                       .arg(sel_token ? 1 : 0)
+                       .arg(focus_frame_off ? 1 : 0));
 }
 
 // ---------------------------------------------------------------------------
@@ -9562,15 +9704,47 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
                 palette_clean = banner->palette().color(QPalette::Window) != legacy_bg &&
                                 banner->palette().color(QPalette::WindowText) != legacy_fg;
             }
-            // (b) 像素：banner 实拍里不得有接近警示黄的像素（banner 在离线态可见）
-            // M5-T13 验收取证（只增）：最近像素的位置/颜色/邻域（真实平台上文字抗锯齿
-            // 彩边可能在光底上误报 —— 打印坐标与颜色供归因）。
-            double amber_dist = 1e9;
+            // (b) 像素：banner 实拍里不得有**成片**接近警示黄的像素（banner 在离线态可见）。
+            // M5-T13 验收取证（只增；M5-T14 口径换锚）：旧判据 = 全幅**最近**像素距离 > 40 ——
+            // 属"点代理"，真实平台**亮色**下被文字 ClearType 子像素抗锯齿的零星暖色彩边触发
+            // （实测 #f7e7c9 距 #fff1b8 = 21.3 < 40），而 banner 用色本身（调色板/QSS/文案）全部
+            // 清白 → 语义（"警示黄不得上屏"）不动，动的是取样口径（登记为机械换锚）。新口径两条
+            // 互补，判据只增不减：
+            //   (b1) **内边距环带**（= 居中文字盒之外的一圈，天然避开文字行的抗锯齿彩边）严格
+            //        口径：环带内最近警示黄像素距离 > 40 —— 旧实现（黄底 #fff1b8 / 黄框）在此
+            //        必然命中（底色/描边铺满环带）；
+            //   (b2) 全幅近警示黄像素**计数占比** < 5%（A30 口径换锚后的校准值）：实心黄底/黄字
+            //        是成片像素（≥ 10% 量级），零星彩边只有几粒 —— 真实平台实测亮色 1.19%
+            //        （107/8976，ClearType 彩边）、暗色 0.00% → 5% 为两侧各 ≥ 4× 余量的分界
+            //        （见诊断行近警示黄计数/占比）。
+            constexpr double kAmberDistPx = 40.0;  // A30 阈值（T12 口径，不改）
+            constexpr double kAmberRatioPct = 5.0; // b2 占比上限（%）
+            double amber_dist = 1e9;               // 全幅最近（诊断）
+            double ring_dist = 1e9;                // 环带最近（b1 判据）
             int amber_x = -1;
             int amber_y = -1;
+            int ring_x = -1;
+            int ring_y = -1;
             QColor amber_px;
+            QColor ring_px;
+            int near_amber = 0;  // 全幅 dist <= kAmberDistPx 计数（b2 分子）
+            int shot_pixels = 0; // b2 分母
+            qreal shot_dpr = 1.0;
+            QRect text_box;
             if (banner != nullptr && banner->isVisible()) {
                 const QImage shot = banner->grab().toImage();
+                shot_pixels = shot.width() * shot.height();
+                shot_dpr = shot.devicePixelRatio() > 0.01 ? shot.devicePixelRatio() : 1.0;
+                // 文字行盒：居中绘制的单行文本（§7.1 的 banner 只有一行）；外扩 3 逻辑像素吞掉
+                // 抗锯齿外溢 → 盒**之外**即"避开文字行"的环带
+                const QSizeF text_sz = QFontMetricsF(banner->font()).size(Qt::TextSingleLine, text);
+                const QSize text_phys(int(std::ceil(text_sz.width() * shot_dpr)),
+                                      int(std::ceil(text_sz.height() * shot_dpr)));
+                const int pad = int(std::ceil(3.0 * shot_dpr));
+                text_box = QRect(QPoint((shot.width() - text_phys.width()) / 2,
+                                        (shot.height() - text_phys.height()) / 2),
+                                 text_phys)
+                               .adjusted(-pad, -pad, pad, pad);
                 for (int y = 0; y < shot.height(); ++y) {
                     for (int x = 0; x < shot.width(); ++x) {
                         const QColor px = shot.pixelColor(x, y);
@@ -9578,34 +9752,57 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
                         const int dg = px.green() - legacy_bg.green();
                         const int db = px.blue() - legacy_bg.blue();
                         const double d = std::sqrt(double(dr * dr + dg * dg + db * db));
+                        if (d <= kAmberDistPx)
+                            ++near_amber;
                         if (d < amber_dist) {
                             amber_dist = d;
                             amber_x = x;
                             amber_y = y;
                             amber_px = px;
                         }
+                        if (!text_box.contains(x, y) && d < ring_dist) {
+                            ring_dist = d;
+                            ring_x = x;
+                            ring_y = y;
+                            ring_px = px;
+                        }
                     }
                 }
+                const double ratio_pct =
+                    shot_pixels > 0 ? 100.0 * double(near_amber) / double(shot_pixels) : 0.0;
                 std::printf("UI-SMOKE offline-banner-px: amber-dist=%.1f at %d,%d #%02x%02x%02x "
-                            "shot=%dx%d\n",
+                            "ring-dist=%.1f at %d,%d #%02x%02x%02x near=%d/%d(%.2f%%) dpr=%.1f "
+                            "text-box=%d,%d,%dx%d shot=%dx%d\n",
                             amber_dist, amber_x, amber_y, amber_px.red(), amber_px.green(),
-                            amber_px.blue(), shot.width(), shot.height());
+                            amber_px.blue(), ring_dist, ring_x, ring_y, ring_px.red(),
+                            ring_px.green(), ring_px.blue(), near_amber, shot_pixels, ratio_pct,
+                            shot_dpr, text_box.x(), text_box.y(), text_box.width(),
+                            text_box.height(), shot.width(), shot.height());
                 std::fflush(stdout);
             }
-            meta_expect("offline-banner",
-                        banner != nullptr && banner->isVisible() &&
-                            text == QStringLiteral("地图离线") &&
-                            tip == QStringLiteral("可手动输入坐标") && neutral_gray &&
-                            palette_clean && amber_dist > 40.0,
-                        QStringLiteral("text=\"%1\" tip=\"%2\" gray=%3 palette-clean=%4 "
-                                       "visible=%5 amber-dist=%6 at %7,%8")
-                            .arg(text, tip)
-                            .arg(neutral_gray ? 1 : 0)
-                            .arg(palette_clean ? 1 : 0)
-                            .arg(banner != nullptr && banner->isVisible() ? 1 : 0)
-                            .arg(amber_dist)
-                            .arg(amber_x)
-                            .arg(amber_y));
+            const double amber_ratio_pct =
+                shot_pixels > 0 ? 100.0 * double(near_amber) / double(shot_pixels) : 0.0;
+            meta_expect(
+                "offline-banner",
+                banner != nullptr && banner->isVisible() && text == QStringLiteral("地图离线") &&
+                    tip == QStringLiteral("可手动输入坐标") && neutral_gray && palette_clean &&
+                    ring_dist > kAmberDistPx && amber_ratio_pct < kAmberRatioPct,
+                QStringLiteral("text=\"%1\" tip=\"%2\" gray=%3 palette-clean=%4 "
+                               "visible=%5 amber-dist=%6 at %7,%8 ring=%9 at %10,%11 "
+                               "near=%12/%13(ratio=%14%%)")
+                    .arg(text, tip)
+                    .arg(neutral_gray ? 1 : 0)
+                    .arg(palette_clean ? 1 : 0)
+                    .arg(banner != nullptr && banner->isVisible() ? 1 : 0)
+                    .arg(amber_dist)
+                    .arg(amber_x)
+                    .arg(amber_y)
+                    .arg(ring_dist)
+                    .arg(ring_x)
+                    .arg(ring_y)
+                    .arg(near_amber)
+                    .arg(shot_pixels)
+                    .arg(amber_ratio_pct, 0, 'f', 2));
         }
 
         // (i-8) A27（T11 缺陷根治受益面）：时间卡模式分段 —— 段自持高（= kSegH − 2）且可见可选

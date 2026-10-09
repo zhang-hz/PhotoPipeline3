@@ -136,6 +136,26 @@ M5-T13（W-G4 验收：v6 §12 十七条逐条核验）:
   * 真实平台诊断行（不新增前缀清单；失败定位用）：`icons-engine-space`（引擎路径 vs 直接
     绘制的像素空间/dpr）、`filelist-selprobe`/`filelist-selgrid`（选中条取样邻域）、
     `offline-banner-px`（banner 最近警示黄像素位置/颜色）。
+
+M5-T14（W-G4 收尾：T13 FAIL 清单逐条修复 + 全量回归复验）:
+  * **前缀清单零改动**（行名/冻结末行都不变）；三条 T13 FAIL 的修法与断言补强：
+    1) §12-5 图标：`icons-engine` 探针口径修正 —— 引擎路径从 `QIcon::pixmap(box)` 的**物理**
+       像素回读（dpr≠1 平台 = 24×24）改为 `QIcon::paint()` 渲到 12×12/dpr=1 的**同一坐标系**
+       目标（按钮经 QStyle 实际走的路径）；断言本体（逐边 ≤1px + 居中）不动。诊断行
+       `icons-engine-space` 追加 `engine-raw=`（旧回读原样，供 dpr 归因）。
+    2) §12-12/§11 文件行选中面：真实平台焦点框（Fluent 样式给当前行画的「1px 白 + 1px 黑」
+       指示框）盖住左缘 2px accent 条的**实现面缺陷**根治 —— QSS `outline: none` 对该绘制
+       路径天然无效（`QTreeView::drawRow` 的焦点框调用不带 widget，QTBUG-4281），实收口 =
+       壳层 `FileViewFocusFrameStyle`（按 objectName 识别文件列表视图的代理样式）。断言补强
+       （只增）：2px 条带**双点**像素取证（x=0.5 与 1.5 逻辑像素都须为 accent）+ 骨架 QSS
+       `focus-frame-off` 结构位；`filelist-geom` 行末尾新增 `|%s focus-frame-off=%d` 字段，
+       `filelist-selprobe` 追加 `bar2=` 与 `focus-frame-suppress[opt/wid/dev/miss]` 诊断。
+    3) §12-9 地图 banner：`offline-banner` 像素判据换锚（原「全幅最近警示黄距离 > 40」为点
+       代理，真实平台亮色下被文字 ClearType 彩边 #f7e7c9（距 21.3）误报）→ 双判据
+       「内边距环带（避开文字行）最近距离 > 40」+「全幅近警示黄像素计数占比 < 5%」
+       （实测亮色 1.19%、暗色 0.00%）；`offline-banner-px` 诊断行追加
+       `ring-dist/near/比率/dpr/text-box`，`meta-geom` 失败详情补齐环带/占比取证。
+  * 截图仍为 12 张、冻结末行不变。
 """
 
 import os

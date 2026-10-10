@@ -78,15 +78,20 @@
 
 ### 发行
 
-- Windows：`PhotoPipeline-0.3.1-win64.zip` —— `make_winzip.py` 五项门禁（A 闭包 / B 来源 /
-  C 结构 / D 许可 / E 启动含 offscreen `--ui-smoke`）
-- Linux：`PhotoPipeline-0.3.1-x86_64.AppImage` + `PhotoPipeline-0.3.1-deps.txt`
-  （`tools/appimage-check-closure.sh` 闭包清单）
-- 第 4 附件：`PhotoPipeline-0.3.1-SHA256SUMS.txt`（三个发布件的 sha256，逐字取自下载件）
-- **发布链路**：tag `v0.3.1` 推送触发 `release.yml`（appimage → probe-appimage /
-  winzip → probe-winzip → publish）；publish 前置探测 = Release 查重 + tag↔版本断言 +
-  产物 `--version` 逐字断言；发布说明取本节**之前**的 `[0.3.1]` 正文
-- 指纹与「已发行」终态留待**发行后收口**提交登记（同 0.3.0 的 M5-A5 口径）
+- Windows：`PhotoPipeline-0.3.1-win64.zip` —— **33,551,147 B**（sha256 `e372f5a8…`），
+  `make_winzip.py` 五项门禁（A 闭包 / B 来源 / C 结构 / D 许可 / E 启动含 offscreen `--ui-smoke`）
+- Linux：`PhotoPipeline-0.3.1-x86_64.AppImage` **51,853,816 B**（sha256 `245645f8…`）+
+  `PhotoPipeline-0.3.1-deps.txt` **2,439 B**（sha256 `e8c80b3d…`，`tools/appimage-check-closure.sh`
+  闭包清单）
+- 第 4 附件：`PhotoPipeline-0.3.1-SHA256SUMS.txt` **293 B**（三个发布件的 sha256，逐字取自下载件）
+- **已发行**（2026-10-10）：`v0.3.1` tag 指向发行树 `16f0a08`，GitHub Release 含 4 资产；
+  发布说明 = 本节**之前**的 `[0.3.1]` 正文（release.yml ④ 口径，止于 `### 发行`）。
+  发行前核对：`main-full` 九 job 含总闸全绿 @ `16f0a08`（lint / appimage / **linux 全 ctest+金样** /
+  winzip / **windows 全 ctest+金样** / audit / tidy / cache-gc / gate）；本机门禁七项全绿。
+  release 道五 job 全绿（appimage 3.2 / winzip **17.7** / probe-appimage 0.6 / probe-winzip 0.2 /
+  publish 0.8 min），前置探测（Release 查重 + tag↔版本 + 产物 `--version` 逐字）全过；
+  关键路径 winzip+probe-winzip+publish = **18.7 min ≤ 20min 硬顶**（winzip 17.7 仍超 §12.3 的
+  15 min job 预算 —— 硬顶未破，与 0.3.0 同一已登记偏差，重标预算属设计文档口径，待裁定）
 
 ## [0.3.0] — 2026-09-24
 

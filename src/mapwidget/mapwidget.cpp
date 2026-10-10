@@ -16,6 +16,13 @@
 // "satellite", Hybrid -> "satellite" + "label" (imagery below, labels above; a source without a
 // label layer skips it). The cache key is {source, layer, zoom, x, y}; LRU/byte budget unchanged.
 //
+// M6-T6 pins: result pins (solid accent dot + numbered bubble: the label, or the index when the
+// label is empty) are drawn above the tiles and below the main marker, so the main marker is
+// always on top. A non-drag click first hit-tests them (nearest pin within kMarkerRadius + 6 px of
+// the cursor): on a hit the main marker moves to that pin and pin_clicked(index) is emitted — the
+// state-then-signal order of search_select; only without a hit does the click fall back to the
+// frozen point-selection behaviour.
+//
 // Events: the PP-FROZEN header declares no paint/mouse/wheel overrides (and it may not be
 // edited), so an event filter owned by the pimpl receives them for the widget — the only
 // conforming way to hook QWidget events without touching the frozen class declaration.
@@ -72,6 +79,11 @@ constexpr int kCopyrightPointSize = 6;  // frozen: 6 pt credit label
 constexpr int kSearchZoomFloor = 12;    // ruling 2026-09-19: a search hit zooms to >= 12
 constexpr int kMarkerRadius = 7;
 constexpr int kMarkerArm = 5;
+// M6-T6 结果图钉（§4.4）：实心圆半径 / 编号气泡字号与文本像素上限 / 命中阈值（光标-钉心屏距）。
+constexpr int kPinRadius = 5;
+constexpr int kPinBubblePointSize = 7;
+constexpr int kPinBubbleTextMax = 64; // 长地名省略，避免气泡盖住大片地图
+constexpr double kPinHitRadius = kMarkerRadius + 6;
 
 // M6-T5 缓存 key 的 layer 维度（§4.1）：路网 / 影像 / Hybrid 标注叠加层。
 const char *const kLayerRoad = "road";
@@ -206,7 +218,8 @@ struct MapWidget::Impl {
 
     std::vector<SearchResult> results;
 
-    // M6-T4 加性状态：图层 + 结果图钉（图层绘制见 M6-T5 select_source/paint_layers；命中在 T6）。
+    // M6-T4 加性状态：图层 + 结果图钉（图层绘制见 M6-T5 select_source/paint_layers；图钉绘制与
+    // 命中见 M6-T6 on_paint/on_mouse_release）。
     TileStyle tile_style_ = TileStyle::Road;
     std::vector<Pin> result_pins;
 
@@ -542,6 +555,36 @@ void MapWidget::Impl::on_paint() {
         }
     }
 
+    // M6-T6 结果图钉（§4.4）：实心圆 + 编号气泡，坐标管线和主钉一致（WGS-84 → datum → world
+    // → screen）。画在瓦片之上、主 marker 之下 —— 主钉最后画，恒在钉堆顶层。
+    if (!result_pins.empty()) {
+        painter.save();
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        QFont pin_font = painter.font();
+        pin_font.setPointSize(kPinBubblePointSize);
+        painter.setFont(pin_font);
+        const QFontMetrics pin_metrics(pin_font);
+        const QColor accent(0x2b, 0x6c, 0xb0); // 中性强调色
+        for (const Pin &pin : result_pins) {
+            const std::pair<double, double> datum = wgs_to_datum(pin.lat, pin.lon);
+            const QPointF pos = world_to_screen(latlon_to_world(datum.first, datum.second, zoom));
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(accent);
+            painter.drawEllipse(pos, double(kPinRadius), double(kPinRadius));
+            const QString full = pin.label.isEmpty() ? QString::number(pin.index) : pin.label;
+            const QString text = pin_metrics.elidedText(full, Qt::ElideRight, kPinBubbleTextMax);
+            const QRectF bubble(pos.x() + kPinRadius + 1,
+                                pos.y() - kPinRadius - pin_metrics.height() - 2,
+                                pin_metrics.horizontalAdvance(text) + 8, pin_metrics.height() + 2);
+            painter.setPen(QPen(accent, 1));
+            painter.setBrush(QColor(255, 255, 255, 230)); // 白底：卫星影像上仍可读
+            painter.drawRoundedRect(bubble, 3, 3);
+            painter.setPen(accent);
+            painter.drawText(bubble, Qt::AlignCenter, text);
+        }
+        painter.restore();
+    }
+
     // Marker last (WGS-84 -> datum -> world -> screen).
     if (marker_set) {
         const std::pair<double, double> datum = wgs_to_datum(marker_lat, marker_lon);
@@ -617,6 +660,29 @@ bool MapWidget::Impl::on_mouse_release(QMouseEvent *event) {
     pressed = false;
     dragging = false;
     if (!was_drag && moved < kClickThresholdPx) {
+        // M6-T6 命中优先于取点（§4.4）：对最近结果钉做屏距判定 —— 光标与钉心 ≤
+        // kMarkerRadius + 6 px 即命中（钉位与绘制同一管线，所见即所点）。并列时先者优先。
+        const Pin *hit = nullptr;
+        double best_dist = 0.0;
+        for (const Pin &pin : result_pins) {
+            const std::pair<double, double> datum = wgs_to_datum(pin.lat, pin.lon);
+            const QPointF pin_pos =
+                world_to_screen(latlon_to_world(datum.first, datum.second, zoom));
+            const double dist = QLineF(pin_pos, QPointF(pos)).length();
+            if (dist > kPinHitRadius) {
+                continue;
+            }
+            if (hit == nullptr || dist < best_dist) {
+                hit = &pin;
+                best_dist = dist;
+            }
+        }
+        if (hit != nullptr) {
+            const Pin picked = *hit;               // 命中钉副本（set_marker 不改 result_pins）
+            q->set_marker(picked.lat, picked.lon); // 主钉落到该结果点（含重绘）
+            emit q->pin_clicked(picked.index);     // 回报结果索引；点钉不算「取点」
+            return true;
+        }
         const std::pair<double, double> datum =
             world_to_latlon(screen_to_world(QPointF(pos)), zoom);
         const std::pair<double, double> wgs = datum_to_wgs(datum.first, datum.second);
@@ -842,7 +908,7 @@ void MapWidget::search_select(int index) {
     emit point_selected(result.lat, result.lon);
 }
 
-// ---- M6-T4 加性状态存取：图层切换 + 结果图钉（图层绘制见 M6-T5；命中在 T6） ----------
+// ---- M6-T4 加性状态存取：图层切换 + 结果图钉（图层绘制见 M6-T5，图钉绘制与命中见 M6-T6） ----
 
 void MapWidget::set_tile_style(TileStyle style) {
     // 基准不漂（契约 C3）：只换绘制图层与缓存 key 的 layer 维度——三图层同基准（amap 全 GCJ-02；

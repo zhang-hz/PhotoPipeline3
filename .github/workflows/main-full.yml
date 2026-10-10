@@ -227,9 +227,16 @@ jobs:
           Write-Output "clang-tidy: $exe"
 
       - name: configure release-dev + 导出 compile_commands.json（不起编译）
+        # M5-T14（首跑修复）: 追加 -DCMAKE_CXX_SCAN_FOR_MODULES=OFF —— 本工程不使用 C++20 模块，
+        #   而 CMake ≥3.28 + MSVC 会把模块扫描响应参数 `@…obj.modmap` 写进 compile_commands.json；
+        #   该文件是**编译期产物**，configure-only 树（本 job 不起编译）中不存在 ⇒ clang-tidy 的
+        #   clang 驱动把 @… 当响应文件展开时报 `error: no such file or directory: '@…obj.modmap'`，
+        #   73/73 TU 全部「解析失败 ⇒ 不可判绿」（run 38016196938 tidy job 原文）。
+        #   扫描关闭后 DB 内 0 个 modmap 参数（本机同版 CMake 4.4.3 实测），分析面（-std:c++latest 等
+        #   其余参数）不变；本 job 只做静态分析，不做构建，故对产物零影响。
         run: |
           $T0 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-          python tools/env.py run -- cmake --preset release-dev -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          python tools/env.py run -- cmake --preset release-dev -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_CXX_SCAN_FOR_MODULES=OFF
           $rc = $LASTEXITCODE
           Add-Content "$env:RUNNER_TEMP\pp-steps.tsv" "configure release-dev (compile_commands)`t$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $T0)"
           if ($rc -ne 0) { exit $rc }

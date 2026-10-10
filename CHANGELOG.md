@@ -220,9 +220,10 @@ CI 工业化（快慢道四流水线）、依赖一把全升、AVX2 性能基线
 - Linux：`PhotoPipeline-0.3.0-x86_64.AppImage` **51,837,432 B**（sha256 `c79b6b8a…`），由
   `main-full` 的 `appimage` job 构建；`tools/appimage-check-closure.sh` 结果 = 受检 **36 个 ELF**、
   FAIL-A/FAIL-B 均无、目标机系统 soname **45 条**（清单 = 产物旁 `PhotoPipeline-0.3.0-deps.txt`）
-- **本轮仍不含 push / tag / Release**（M5-T15 硬边界）：`v0.3.0` tag 已存在但指向 M4 提交
-  `80888ca`（**未挂 Release 资产**，按 M3 §7.1-11 仍可移动）；tag 推进与 GitHub Release 留待发行轮
-  —— 口径与证据见 [docs/m5-report.md](docs/m5-report.md) §1.4(d)/§5 未决项 1
+- **已发行**（M5-T16，2026-10-10）：`v0.3.0` tag 指向发行树 `50317d0`，GitHub Release
+  含 4 资产（win64.zip / AppImage / deps.txt / SHA256SUMS.txt），前置探测（Release 查重 +
+  产物 `--version` 断言）全过，release 道整轮 17.7 min ≤ 20min —— 口径与证据见
+  [docs/m5-report.md](docs/m5-report.md) §1.5
 
 ## [0.2.0] — 2026-09-23
 

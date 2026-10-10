@@ -471,6 +471,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: 运行期系统库（与 appimage job 同源清单；AppRun 的 ldd 自检需要）
+        # M5-T16-fix4（首跑第二跳归因）：下载件在本 job 里执行 `--version` 前会先过 AppImage
+        # 内 AppRun 的 `ldd` 自检（tools/make_appimage.sh:423-427）——runner 基础镜像缺
+        # libEGL.so.1 / libOpenGL.so.0 ⇒ 退出码 3「缺少运行期系统库」。与 appimage job 一样，
+        # 先按同一清单（tools/ci-system-deps.txt）装运行期依赖再探测（本步骤 ≈35s，预算内）。
+        run: bash tools/ci-install-deps.sh
+
       - name: 下载 AppImage artifact
         uses: actions/download-artifact@v4
         with:
@@ -523,15 +530,23 @@ jobs:
           Expand-Archive -Path $zip -DestinationPath $stage -Force
           $exe = (Get-ChildItem -Recurse -Filter photopipeline.exe $stage | Select-Object -First 1).FullName
           if (-not $exe) { Write-Error "zip 内没有 photopipeline.exe"; exit 1 }
-          # M5-T16-fix3（首跑归因 + 本机复现）：photopipeline.exe 是 **GUI 子系统**二进制
+          # M5-T16-fix3/fix4（首跑归因 + 本机复现）：photopipeline.exe 是 **GUI 子系统**二进制
           # （CMakeLists.txt:243 WIN32_EXECUTABLE TRUE）——PowerShell 的 `& $exe` 对它**不等待、
           # 也不接管 stdout**（本机实测捕获恒为空）；且 PowerShell 变量名大小写不敏感，原写法里
           # `$ver` 会被随后的 `$VER = $TAG -replace …` 覆写 ⇒ 首跑报「实际 '0.3.0'」（既非 exe
-          # 输出、也非空串，两处缺陷叠加）。改用 `cmd /c` 捕获（cmd 会等待 GUI 应用退出、stdout
-          # 走管道）：本机同一 exe 实测 `cmd /c` 得 `PhotoPipeline 0.3.0`（rc=0），`& $exe` 得空。
-          $out = @(cmd /c "`"$exe`" --version 2>&1")
+          # 输出、也非空串，两处缺陷叠加）。修复 = 让 **cmd** 持有重定向并等待（cmd 对 GUI 应用
+          # 会等待，重定向由 cmd 完成）：产物输出落文件，本步只读文件 —— 不依赖 PowerShell 的
+          # 原生 stdout 捕获机制。本机同一 exe 实测：`& $exe` → 空；本写法（含 `cmd /c` 变量式）
+          # → `PhotoPipeline 0.3.0`（rc=0）。
+          $verFile = Join-Path $env:RUNNER_TEMP "probe-winzip-version.txt"
+          Remove-Item -Force $verFile -ErrorAction SilentlyContinue
+          cmd /c "`"$exe`" --version > `"$verFile`" 2>&1"
           $rc = $LASTEXITCODE
-          $first = if ($out.Count -gt 0) { "$($out[0])".Trim() } else { "" }
+          $first = ""
+          if (Test-Path $verFile) {
+            $line = Get-Content $verFile -TotalCount 1
+            if ($null -ne $line) { $first = "$line".Trim() }
+          }
           Write-Output "下载件 --version -> [$first] (rc=$rc)"
           if ($rc -ne 0) { Write-Error "下载件 --version 退出码 $rc"; exit 1 }
           $TAG = $env:GITHUB_REF_NAME; $WANT = "PhotoPipeline " + ($TAG -replace '^v', '')
@@ -554,6 +569,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: 运行期系统库（与 appimage job 同源清单；② 的 AppImage --version 需要）
+        # M5-T16-fix4：② 在下载件上跑 `--version`，同样会先过 AppRun 的 `ldd` 自检 ⇒ 必须先装
+        # 运行期依赖（缺 libEGL.so.1 / libOpenGL.so.0 时 rc=3，见 tools/make_appimage.sh:423-427）。
+        run: bash tools/ci-install-deps.sh
 
       - name: ① 查重（gh release view：该 tag 已有 Release ⇒ 显式失败）
         # §12.7 三件套之一。M3 时代的做法是让 `gh release create` 隐式报冲突 —— 报错埋在其他输出里，

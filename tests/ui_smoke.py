@@ -195,6 +195,17 @@ M6-T12（W-M5 体验件；§5.3/§7-T12）:
     像素取证 —— 底部左侧 96×26 内近白像素计数）。另加一条 `UI-SMOKE map-hud:` 诊断行
     （钮几何 / 读数文本 / 比例尺近白计数，只报数）。既有前缀清单零改动、冻结末行不变。
 
+M6-T13（W-M5 R5 大地图；§7-T13）:
+  * 追加 `M6T13_LINE_PREFIXES` 一行齐备断言（`smoke_probe_meta` 的 (k) 段，**全程离线**）：
+    覆盖层「展开」钮（24×24 矢量图标钮 + tooltip/accessibleName + `ppIcon`=zoom-fit + 右上角位）
+    → 点按进模态「地图」对话框（标题「地图」/ 底栏关闭 / caption ✕ 齐备 + `isModal()`）→
+    对话框内是**同一只** MapWidget（指针同源 = 重挂载，图层/图钉/视口随控件走、零同步；地图区
+    ≥640×480 + 实拍非空：左上 96×26 近白像素 ≥ 20 = 覆盖层白底 chip/钮随控件进对话框）→
+    底栏「关闭」（真实用户路径）→ 挂回卡片行（固定高 136、几何/落点
+    逐位复原、`pp-meta-map` objectName 与可视性不变）→ 二次展开（可重复 + 尺寸记忆 = 上次尺寸；
+    视图随对话框尺寸）。探针在 exec() 的嵌套循环内取证并关窗（预置 0ms 定时器 + 兜底 reject）；
+    行内 `checked=N bad=M` 由 C++ 侧给出。既有前缀清单与冻结末行零改动（截图仍 12 张）。
+
 GUI-R2（docs/gui-review-0.3.0-r2.md 可视化排查回归）:
   * 追加 `GUI_R2_LINE_PREFIXES` 四行齐备断言（`smoke_probe_gui_r2()`，只增）：
     `combo-consistency`（全界面 QComboBox 样式钩子 / 高 24 / **实拍非空像素**——钉问题 1「亮色下拉
@@ -358,6 +369,17 @@ M6T9_LINE_PREFIXES = (
     'UI-SMOKE meta-loop:',
 )
 
+# M6-T13（R5 大地图）自检行（前缀匹配，缺任一 → FAIL）：覆盖层「展开」钮（24×24 矢量图标钮 +
+# tooltip/accessibleName + `ppIcon` 键 + 右上角位）→ 点按进模态「地图」对话框（标题/底栏关闭/
+# caption ✕ 齐备），对话框内是**同一只** MapWidget（重挂载：指针同源 = 图层/图钉/视口随控件走、
+# 零同步；地图区 ≥640×480、实拍非空）→ 底栏「关闭」（真实用户路径）→ 挂回卡片行（固定高 136、
+# 几何/落点逐位复原、`pp-meta-map` objectName 不变）→ 二次展开（可重复 + 尺寸记忆 = 上次尺寸；
+# 大视图随对话框尺寸）。探针在 exec() 的嵌套循环内取证并关窗（预置 0ms 定时器），全程离线；
+# 行内 `checked=N bad=M` 由 C++ 侧给出。
+M6T13_LINE_PREFIXES = (
+    'UI-SMOKE meta-map-expand:',
+)
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 build_dir = sys.argv[1] if len(sys.argv) > 1 else 'build/release-dev'
@@ -410,6 +432,7 @@ def main():
         t15_seen = set()
         gui_r2_seen = set()
         m6t9_seen = set()
+        m6t13_seen = set()
         with open(log_path, 'w', encoding='utf-8', newline='') as log_fp:
             for line in proc.stdout:
                 sys.stdout.write(line)
@@ -459,6 +482,9 @@ def main():
                 for prefix in M6T9_LINE_PREFIXES:
                     if line.startswith(prefix):
                         m6t9_seen.add(prefix)
+                for prefix in M6T13_LINE_PREFIXES:
+                    if line.startswith(prefix):
+                        m6t13_seen.add(prefix)
         status = proc.wait()
 
         if status != 0:
@@ -537,6 +563,11 @@ def main():
         missing = [p for p in M6T9_LINE_PREFIXES if p not in m6t9_seen]
         if missing:
             print('ui_smoke: FAIL (missing M6-T9 meta-loop self-check lines: {})'.format(
+                ', '.join(missing)), file=sys.stderr)
+            return 1
+        missing = [p for p in M6T13_LINE_PREFIXES if p not in m6t13_seen]
+        if missing:
+            print('ui_smoke: FAIL (missing M6-T13 map-expand self-check lines: {})'.format(
                 ', '.join(missing)), file=sys.stderr)
             return 1
         print('UI-SMOKE pass')

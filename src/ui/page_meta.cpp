@@ -59,6 +59,11 @@
 //   「混合叠标注」（map_sat_labels，T11 落地存储）的消费点 = MainWindow 启动/设置变更时的
 //   map->set_sat_labels（本页只做覆盖层，不持设置值）。
 //
+// M6-T13 大地图（§7-T13 R5）：覆盖层右上「展开」钮 → 模态「地图」对话框（ui/map_dialog.*），
+//   内含**同一只** MapWidget —— 重挂载（reparent）而非新建：图层/图钉/视口/在途瓦片请求随
+//   控件走（零同步），关闭后挂回卡片行并复位固定高（卡片几何逐位复原；`pp-meta-map`
+//   objectName 随控件、不变）。对话框默认不弹（只在点「展开」时出现）；尺寸跨展开记忆。
+//
 // 自验钩子（--ui-smoke 的 meta-geom / meta-* 探针读；非用户可见）：
 //   * 动态属性（同时挂 MetaState 与页面本身）：pp_meta_follow_count / pp_meta_follow_name /
 //     pp_meta_follow_pending / pp_meta_follow_stale_dropped / pp_meta_time_new /
@@ -79,6 +84,8 @@
 //     可点结果列表）/ pp-meta-gps-<layer|suggest|address>（M6-T8 加性）/ pp-meta-gps-<datum|
 //     dms|copy>（M6-T10 加性：WGS-84 标签 / DMS 切换 / 复制）/ pp-meta-map /
 //     pp-meta-map-<cursor|zoom-in|zoom-out>（M6-T12 加性：覆盖层光标读数 chip / 缩放钮）/
+//     pp-meta-map-<expand|dialog|close>（M6-T13 加性：覆盖层「展开」钮 / 大地图对话框 /
+//     其底栏「关闭」钮）/ pp-meta-map-placeholder（M6-T13 加性：展开期卡片位的同高空占位）/
 //     pp-meta-gps-rule-toggle / pp-meta-privacy-pill / pp-meta-keyword-<i> / gps_status /
 //     gps_warning / privacy_strip / mtime_sync / gps_enable / gps_more_toggle /
 //     gps_lat|gps_lon|gps_alt|gps_dir|gps_ts（规则输入）/ exception_label / exception_list /
@@ -87,8 +94,9 @@
 //     与中性灰覆盖 QSS（修 1-38/1-39；mapwidget 文件零改动，令牌由本页铺）。
 #include "ui/page_meta.h"
 
-#include "ui/formkit.h" // M5-T7：全部表单行走 formkit 行构造器（R1–R4 构造层强制）
-#include "ui/icons.h"   // 折叠插入符/删除钮一律矢量图标（C3）
+#include "ui/formkit.h"    // M5-T7：全部表单行走 formkit 行构造器（R1–R4 构造层强制）
+#include "ui/icons.h"      // 折叠插入符/删除钮一律矢量图标（C3）
+#include "ui/map_dialog.h" // M6-T13：大地图对话框（同一 map 控件的重挂载宿主）
 
 #include <QAbstractSpinBox>
 #include <QApplication>
@@ -190,6 +198,13 @@ constexpr const char *kMapCursorTooltipText =
     QT_TR_NOOP("光标世界坐标（WGS-84，约 100ms 刷新）；移出地图后保留最后一次读数");
 constexpr const char *kMapZoomInText = QT_TR_NOOP("放大（＋1 档）");
 constexpr const char *kMapZoomOutText = QT_TR_NOOP("缩小（−1 档）");
+// M6-T13（§7-T13 R5）：覆盖层右上的「展开」钮 —— 同一 map 控件重挂载到大地图对话框
+// （图标 = zoom-fit 的四角外扩形，全仓唯一「变大视图」语义的既有矢量图标；C3 禁字形）
+constexpr const char *kMapExpandText = QT_TR_NOOP("展开大地图");
+constexpr const char *kMapExpandTooltipText =
+    QT_TR_NOOP("在更大的视图里查看/选点（同一地图：图层、图钉与视口都跟随）");
+// 展开期卡片位的同高空占位（名字入自验钩子清单：模态期卡片高度不变）
+constexpr const char *kMapPlaceholderName = "pp-meta-map-placeholder";
 // 图层 Seg 三态（与 pp::map::TileStyle 同序；键 = 自验钩子读数）
 constexpr std::array<const char *, 3> kLayerStyleKeys = {"road", "satellite", "hybrid"};
 // 分类 chips 文案 = 直接进 run_search 的类目关键词（§4.3 分类 POI）
@@ -666,6 +681,11 @@ struct MetaState : QObject {
     QToolButton *zoom_out = nullptr; // 地图覆盖层：缩小（矢量图标钮）
     QToolButton *zoom_in = nullptr;  // 地图覆盖层：放大
     QLabel *map_cursor = nullptr;    // 地图覆盖层左上：光标坐标读数（接 cursor_moved）
+    // ---- M6-T13 加性（§7-T13 R5：展开大地图 —— 同一 map 控件重挂载；默认不弹）----
+    QToolButton *map_expand = nullptr; // 地图覆盖层右上：打开「大地图」对话框
+    QWidget *map_host = nullptr;       // map 的卡片宿主（挂回用；与 map_line 同源）
+    QHBoxLayout *map_line = nullptr;   // map 在卡片里所占的行（重挂载的同一槽位）
+    QSize map_dialog_size;             // 上次调整的大地图尺寸（跨展开记忆）
     QToolButton *rule_toggle = nullptr;
     QWidget *rule_host = nullptr;
     formkit::CheckBox *gps_enable = nullptr;
@@ -894,10 +914,11 @@ QPushButton *make_chip(QWidget *parent, const QString &object_name, const QStrin
     return chip;
 }
 
-// M6-T12（§5.3）：地图覆盖层的缩放钮 —— 24×24 图标钮（矢量图标，C3 无字形）；tooltip +
+// M6-T12（§5.3）：地图覆盖层的图标钮 —— 24×24 图标钮（矢量图标，C3 无字形）；tooltip +
 // accessibleName 成对（§11 图标钮必有）；取色不吃 QSS → 主题重放时显式重刷（见 apply_style）。
-QToolButton *make_map_zoom_button(QWidget *parent, const QString &object_name, icons::Name icon,
-                                  const QString &tip) {
+// M6-T13 起缩放钮之外的「展开」钮复用同一工厂（同一档外观 = HUD 白底钮）。
+QToolButton *make_map_hud_button(QWidget *parent, const QString &object_name, icons::Name icon,
+                                 const QString &tip) {
     auto *button = new QToolButton(parent);
     button->setObjectName(object_name);
     button->setProperty(kFieldProperty, QStringLiteral("map-zoom"));
@@ -909,6 +930,40 @@ QToolButton *make_map_zoom_button(QWidget *parent, const QString &object_name, i
     button->setFocusPolicy(Qt::NoFocus);
     button->setCursor(Qt::PointingHandCursor);
     return button;
+}
+
+// M6-T13（§7-T13 R5）：展开大地图 —— **同一控件重挂载**：map 暂挂到对话框内容区（图层/图钉/
+// 视口/在途瓦片请求随控件走，零同步），exec() 返回后挂回卡片行并复位固定高（卡片几何逐位
+// 复原）。对话框每次展开新建（主题档/尺寸记忆按时读/写本状态）。
+// 卡片位：地图离场期间放**同高空占位**（模态期卡片不上下抖动；关闭时移除）。
+void open_map_expanded_view(MetaState *st) {
+    if (st == nullptr || st->map == nullptr || st->map_host == nullptr || st->map_line == nullptr) {
+        return;
+    }
+    MapDialog dialog(st->map->window());
+    if (st->map_dialog_size.isValid()) {
+        dialog.resize(st->map_dialog_size); // 上次调整的尺寸（跨展开记忆）
+    }
+    if (st->map_expand != nullptr) {
+        st->map_expand->setVisible(false); // 对话框自有「关闭」；展开期不重复该入口
+    }
+    auto *placeholder = new QWidget(st->map_host);
+    placeholder->setObjectName(QString::fromLatin1(kMapPlaceholderName));
+    placeholder->setFixedHeight(kMapHeight);
+    st->map_line->addWidget(placeholder, 1, Qt::AlignVCenter);
+    dialog.adopt(st->map);
+    dialog.exec(); // 模态：返回即已关闭（Esc / 底栏关闭 / 标题栏 ✕ 同效）
+    // 挂回卡片行：先撤占位（占位不参与任何信号链，同步删）再挂 map；随后固定高逐位复原
+    // （宿主 + 行槽 + objectName 随控件、无需重挂）
+    st->map->setParent(st->map_host);
+    delete placeholder;
+    st->map_line->addWidget(st->map, 1, Qt::AlignVCenter);
+    st->map->setFixedHeight(kMapHeight);
+    st->map->show();
+    if (st->map_expand != nullptr) {
+        st->map_expand->setVisible(true);
+    }
+    st->map_dialog_size = dialog.size();
 }
 
 // ---------------------------------------------------------------------------
@@ -2044,6 +2099,11 @@ void apply_style(MetaState *st) {
         icons::apply(st->zoom_out, icons::Name::ZoomOut, QColor(0x40, 0x40, 0x40),
                      QColor(0x9a, 0x9a, 0x9a), kMapZoomIconPx);
     }
+    // M6-T13：展开钮同档（覆盖层固定白底 → 图标恒取深灰 #404040）
+    if (st->map_expand != nullptr) {
+        icons::apply(st->map_expand, icons::Name::ZoomFit, QColor(0x40, 0x40, 0x40),
+                     QColor(0x9a, 0x9a, 0x9a), kMapZoomIconPx);
+    }
     // M6-T10：坐标行 WGS-84 标签的 Info 矢量图标随令牌重放（QLabel 承载的 QPixmap 取色不吃 QSS）
     if (st->datum_icon != nullptr) {
         st->datum_icon->setPixmap(icons::pixmap(icons::Name::Info, kDatumIconPx, t.text3,
@@ -2704,32 +2764,40 @@ QWidget *build_gps_card(MetaState *st, QWidget *parent) {
         st->map->setObjectName(QStringLiteral("pp-meta-map"));
         st->map->setFixedHeight(kMapHeight);
         group.add(st->map, 1);
-        // M6-T12（§5.3/§7-T12）：地图覆盖层 —— 左上「光标」坐标读数 + 右下「－/＋」缩放钮。
-        // 覆盖层 = map 的子布局（不进卡内行节奏：行 pitch / 地图几何 / 内容宽零变化）。
+        st->map_host = group.widget(); // M6-T13：重挂载的原位（挂回时同一宿主 + 同一行槽）
+        st->map_line = group.line;
+        // M6-T12（§5.3/§7-T12）：地图覆盖层 —— 左上「光标」坐标读数 + 右下「－/＋」缩放钮
+        // （M6-T13 加：右上「展开」钮）。
+        // 覆盖层 = map 的子布局（不进卡内行节奏：行 pitch / 地图几何 / 内容宽零变化；
+        // 控件是 map 的子件 → 重挂载时随 map 一并进对话框，无需重建）。
         auto *overlay = new QVBoxLayout(st->map);
         overlay->setContentsMargins(6, 4, 6, 4);
         overlay->setSpacing(formkit::kInlineGap);
         auto *cursor_line = new QHBoxLayout();
         cursor_line->setContentsMargins(0, 0, 0, 0);
-        cursor_line->setSpacing(0);
+        cursor_line->setSpacing(formkit::kInlineGap);
         st->map_cursor = new QLabel(PageMeta::tr(kMapCursorIdleText), st->map);
         st->map_cursor->setObjectName(QStringLiteral("pp-meta-map-cursor"));
         st->map_cursor->setProperty(kFieldProperty, QStringLiteral("map-hud"));
         st->map_cursor->setFont(theme::font(theme::Typography::hint_px, QFont::Normal, true));
         st->map_cursor->setToolTip(PageMeta::tr(kMapCursorTooltipText));
         st->map_cursor->setAttribute(Qt::WA_TransparentForMouseEvents, true); // 不吃地图鼠标事件
+        st->map_expand = make_map_hud_button(st->map, QStringLiteral("pp-meta-map-expand"),
+                                             icons::Name::ZoomFit, PageMeta::tr(kMapExpandText));
+        st->map_expand->setToolTip(PageMeta::tr(kMapExpandTooltipText));
         cursor_line->addWidget(st->map_cursor, 0, Qt::AlignLeft | Qt::AlignTop);
         cursor_line->addStretch(1);
+        cursor_line->addWidget(st->map_expand, 0, Qt::AlignRight | Qt::AlignTop);
         overlay->addLayout(cursor_line);
         overlay->addStretch(1); // 缩放钮沉底（右下）
         auto *zoom_line = new QHBoxLayout();
         zoom_line->setContentsMargins(0, 0, 0, 0);
         zoom_line->setSpacing(formkit::kInlineGap);
         zoom_line->addStretch(1);
-        st->zoom_out = make_map_zoom_button(st->map, QStringLiteral("pp-meta-map-zoom-out"),
-                                            icons::Name::ZoomOut, PageMeta::tr(kMapZoomOutText));
-        st->zoom_in = make_map_zoom_button(st->map, QStringLiteral("pp-meta-map-zoom-in"),
-                                           icons::Name::ZoomIn, PageMeta::tr(kMapZoomInText));
+        st->zoom_out = make_map_hud_button(st->map, QStringLiteral("pp-meta-map-zoom-out"),
+                                           icons::Name::ZoomOut, PageMeta::tr(kMapZoomOutText));
+        st->zoom_in = make_map_hud_button(st->map, QStringLiteral("pp-meta-map-zoom-in"),
+                                          icons::Name::ZoomIn, PageMeta::tr(kMapZoomInText));
         zoom_line->addWidget(st->zoom_out);
         zoom_line->addWidget(st->zoom_in);
         overlay->addLayout(zoom_line);
@@ -3078,6 +3146,9 @@ QWidget *build_gps_card(MetaState *st, QWidget *parent) {
     // M6-T12（§5.3/§7-T12 体验件）：缩放钮 → map->zoom_in/zoom_out（视口中心锚点，中心不动）
     QObject::connect(st->zoom_in, &QToolButton::clicked, st, [st] { st->map->zoom_in(); });
     QObject::connect(st->zoom_out, &QToolButton::clicked, st, [st] { st->map->zoom_out(); });
+    // M6-T13（§7-T13 R5）：展开钮 → 大地图对话框（同一 map 控件重挂载；模态，关闭即挂回）
+    QObject::connect(st->map_expand, &QToolButton::clicked, st,
+                     [st] { open_map_expanded_view(st); });
     // 光标坐标读数（接 map 的 cursor_moved，WGS-84、约 100ms 节流）：地图覆盖层 chip 显示
     // 「光标: lat, lon」；同一读数另挂坐标行 tooltip（§2.6：细节进 tooltip）—— 只读回显，
     // 不写规则框、不动 gps_status（状态行留给选点/搜索结果等语义消息）。

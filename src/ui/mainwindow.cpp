@@ -44,6 +44,7 @@
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDesktopServices>
+#include <QDialog> // M6-T13：meta-map-expand 探针在模态循环内取证大地图对话框
 #include <QDir>
 #include <QDragEnterEvent>
 #include <QDropEvent>
@@ -11005,6 +11006,260 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
         if (!loop_bad.isEmpty()) {
             smoke_fail(
                 MainWindow::tr("选点闭环（R3/§4.4）不符：%1").arg(loop_bad.join(QLatin1Char(' '))));
+        }
+    }
+
+    // ---- (k) M6-T13 大地图（§7-T13 R5）：覆盖层「展开」→ 模态对话框内是**同一只** MapWidget
+    //   （重挂载：图层/图钉/视口/在途请求随控件走，零同步）→ 底栏「关闭」（真实用户路径）→
+    //   挂回卡片并复位固定高（几何逐位复原、objectName 不变）。探针全程离线（(j) 段已
+    //   set_offline(true)，大视口不发请求）。
+    //   模态取证：点「展开」会进入 exec() 的嵌套事件循环 —— 预置 0ms 定时器在循环内完成取证
+    //   并关窗（否则探针被模态阻塞）；两条路径都关窗（底栏关闭钮缺失 → reject 兜底）。
+    {
+        int expand_checked = 0;
+        QStringList expand_bad;
+        const auto expand_expect = [&expand_checked, &expand_bad](const char *name, bool ok,
+                                                                  const QString &detail) {
+            ++expand_checked;
+            if (!ok) {
+                expand_bad << QStringLiteral("%1(%2)").arg(QString::fromLatin1(name), detail);
+            }
+        };
+        auto *expand_btn = page.findChild<QToolButton *>(QStringLiteral("pp-meta-map-expand"));
+        auto *map = page.findChild<pp::map::MapWidget *>(QStringLiteral("pp-meta-map"));
+        const bool expand_controls_ok =
+            expand_btn != nullptr && map != nullptr && expand_btn->parentWidget() == map;
+        expand_expect(
+            "expand-button",
+            expand_controls_ok && expand_btn->width() == 24 && expand_btn->height() == 24 &&
+                expand_btn->text().isEmpty() && !expand_btn->icon().isNull() &&
+                expand_btn->property(icons::kIconNameProperty).toString() ==
+                    QStringLiteral("zoom-fit") &&
+                !expand_btn->toolTip().isEmpty() && !expand_btn->accessibleName().isEmpty() &&
+                expand_btn->isVisible(),
+            QStringLiteral("btn=%1 icon=%2 tip=\"%3\"")
+                .arg(
+                    expand_controls_ok
+                        ? QStringLiteral("%1x%2").arg(expand_btn->width()).arg(expand_btn->height())
+                        : QStringLiteral("null"))
+                .arg(expand_controls_ok ? expand_btn->property(icons::kIconNameProperty).toString()
+                                        : QString())
+                .arg(expand_controls_ok ? expand_btn->toolTip() : QString()));
+        if (!expand_controls_ok) {
+            expand_expect("dialog-modal", false, QStringLiteral("控件缺失"));
+        } else {
+            // 覆盖层位置：右上（不与右下缩放钮 / 左下比例尺抢位）
+            const QRect btn_box = expand_btn->geometry();
+            expand_expect("expand-position",
+                          btn_box.right() <= map->width() - 2 && btn_box.top() <= 8,
+                          QStringLiteral("btn=%1,%2 %3x%4 map=%5x%6")
+                              .arg(btn_box.x())
+                              .arg(btn_box.y())
+                              .arg(btn_box.width())
+                              .arg(btn_box.height())
+                              .arg(map->width())
+                              .arg(map->height()));
+            // 基线：视口/主钉/图层设成可区分档 —— 展开后必须逐位保持（零同步证据）
+            map->center_on(31.230400, 121.473700, 14);
+            map->set_marker(31.230400, 121.473700);
+            map->set_tile_style(pp::map::TileStyle::Hybrid);
+            map->set_sat_labels(false);
+            pump(80);
+            const QRect card_geom = map->geometry();
+            const QPoint card_pos = map->mapTo(&page, QPoint(0, 0));
+            const double card_lat = map->center_lat();
+            const double card_lon = map->center_lon();
+            const double card_mlat = map->marker_lat();
+            const double card_mlon = map->marker_lon();
+
+            struct ExpandCycle {
+                bool modal = false, title_ok = false, close_btn = false, caption_close = false;
+                bool same_control = false, state_kept = false, painted = false;
+                bool card_kept = false, placeholder_removed = false;
+                QSize dialog_size;
+                QSize map_size;
+            };
+            const auto find_map_dialog = []() -> QDialog * {
+                if (auto *modal = qobject_cast<QDialog *>(QApplication::activeModalWidget())) {
+                    if (modal->objectName() == QStringLiteral("pp-meta-map-dialog")) {
+                        return modal;
+                    }
+                }
+                const QWidgetList tops = QApplication::topLevelWidgets();
+                for (QWidget *top : tops) {
+                    if (top != nullptr &&
+                        top->objectName() == QStringLiteral("pp-meta-map-dialog")) {
+                        return qobject_cast<QDialog *>(top);
+                    }
+                }
+                return nullptr;
+            };
+            // 一次展开/关闭往返：0ms 定时器在 exec() 的嵌套循环内取证 → 关窗 → exec 返回
+            const auto run_expand_cycle = [this, &page, expand_btn, map, &find_map_dialog,
+                                           &card_lat, &card_lon, &card_mlat,
+                                           &card_mlon](ExpandCycle *out, const QSize &resize_to) {
+                QTimer::singleShot(
+                    0, &page,
+                    [out, map, &page, &find_map_dialog, &card_lat, &card_lon, &card_mlat,
+                     &card_mlon, resize_to] {
+                        QDialog *dialog = find_map_dialog();
+                        if (dialog == nullptr) {
+                            return; // out->modal 保持 false（= 取证失败，由调用侧记 bad）
+                        }
+                        out->modal = dialog->isVisible() && dialog->isModal();
+                        out->title_ok = dialog->windowTitle() == QStringLiteral("地图");
+                        out->close_btn = dialog->findChild<QPushButton *>(
+                                             QStringLiteral("pp-meta-map-close")) != nullptr;
+                        out->caption_close = dialog->findChild<QPushButton *>(
+                                                 QStringLiteral("pp-dlg-close")) != nullptr;
+                        auto *inside =
+                            dialog->findChild<pp::map::MapWidget *>(QStringLiteral("pp-meta-map"));
+                        out->same_control = inside != nullptr && inside == map;
+                        if (inside != nullptr) {
+                            out->map_size = inside->size();
+                            out->state_kept = std::fabs(inside->center_lat() - card_lat) < 1e-9 &&
+                                              std::fabs(inside->center_lon() - card_lon) < 1e-9 &&
+                                              inside->has_marker() &&
+                                              std::fabs(inside->marker_lat() - card_mlat) < 1e-9 &&
+                                              std::fabs(inside->marker_lon() - card_mlon) < 1e-9 &&
+                                              inside->tile_style() == pp::map::TileStyle::Hybrid;
+                            const QImage shot = inside->grab().toImage();
+                            // 实拍：大图非空且尺寸 = 控件尺寸；左上 96×26 内近白像素 ≥ 20 =
+                            // 覆盖层（白底 chip/钮）随控件一同进对话框（子件随 reparent 走）
+                            int near_white = 0;
+                            if (!shot.isNull()) {
+                                const int roi_w = std::min(shot.width(), 96);
+                                const int roi_h = std::min(shot.height(), 26);
+                                for (int y = 0; y < roi_h; ++y) {
+                                    for (int x = 0; x < roi_w; ++x) {
+                                        const QColor px = shot.pixelColor(x, y);
+                                        if (px.red() >= 244 && px.green() >= 244 &&
+                                            px.blue() >= 244) {
+                                            ++near_white;
+                                        }
+                                    }
+                                }
+                            }
+                            out->painted =
+                                !shot.isNull() && shot.size() == inside->size() && near_white >= 20;
+                        }
+                        if (resize_to.isValid()) {
+                            dialog->resize(resize_to); // 模拟用户拉伸（尺寸记忆的取证前提）
+                        }
+                        out->dialog_size = dialog->size();
+                        // 展开期卡片位 = 同高空占位（模态期卡片不抖动）
+                        const auto *placeholder =
+                            page.findChild<QWidget *>(QStringLiteral("pp-meta-map-placeholder"));
+                        out->card_kept = placeholder != nullptr && placeholder->height() == 136;
+                        if (auto *close = dialog->findChild<QPushButton *>(
+                                QStringLiteral("pp-meta-map-close"))) {
+                            close->click(); // 真实用户路径：底栏「关闭」
+                        } else {
+                            dialog->reject(); // 兜底：绝不让探针卡在模态循环里
+                        }
+                    });
+                expand_btn->click(); // 同步：内部 exec() 直到对话框关闭才返回
+                pump(80);
+                out->placeholder_removed =
+                    page.findChild<QWidget *>(QStringLiteral("pp-meta-map-placeholder")) == nullptr;
+            };
+
+            ExpandCycle first;
+            run_expand_cycle(&first, QSize(900, 720));
+            expand_expect("dialog-modal", first.modal,
+                          QStringLiteral("modal=%1").arg(first.modal ? 1 : 0));
+            expand_expect("dialog-chrome", first.title_ok && first.close_btn && first.caption_close,
+                          QStringLiteral("title=%1 close=%2 caption=%3")
+                              .arg(first.title_ok ? 1 : 0)
+                              .arg(first.close_btn ? 1 : 0)
+                              .arg(first.caption_close ? 1 : 0));
+            expand_expect("dialog-same-control", first.same_control,
+                          QStringLiteral("same=%1").arg(first.same_control ? 1 : 0));
+            expand_expect("dialog-map-size",
+                          first.map_size.width() >= 640 && first.map_size.height() >= 480,
+                          QStringLiteral("map=%1x%2(期望 ≥640x480) dialog=%3x%4")
+                              .arg(first.map_size.width())
+                              .arg(first.map_size.height())
+                              .arg(first.dialog_size.width())
+                              .arg(first.dialog_size.height()));
+            expand_expect("dialog-state-kept", first.state_kept && first.painted,
+                          QStringLiteral("state=%1 painted=%2")
+                              .arg(first.state_kept ? 1 : 0)
+                              .arg(first.painted ? 1 : 0));
+            expand_expect("dialog-card-kept", first.card_kept && first.placeholder_removed,
+                          QStringLiteral("占位高 136=%1 关闭后已移除=%2")
+                              .arg(first.card_kept ? 1 : 0)
+                              .arg(first.placeholder_removed ? 1 : 0));
+            // 关闭后：挂回卡片（同实例 + 同宿主 + 固定高 136 + 几何/落点逐位复原 + 状态保持）
+            expand_expect("restored-card",
+                          page.isAncestorOf(map) && map->isVisible() && map->height() == 136 &&
+                              map->geometry() == card_geom &&
+                              map->mapTo(&page, QPoint(0, 0)) == card_pos,
+                          QStringLiteral("h=%1 vis=%2 geom=(%3,%4 %5x%6) 基线=(%7,%8 %9x%10)")
+                              .arg(map->height())
+                              .arg(map->isVisible() ? 1 : 0)
+                              .arg(map->geometry().x())
+                              .arg(map->geometry().y())
+                              .arg(map->geometry().width())
+                              .arg(map->geometry().height())
+                              .arg(card_geom.x())
+                              .arg(card_geom.y())
+                              .arg(card_geom.width())
+                              .arg(card_geom.height()));
+            expand_expect("restored-state",
+                          std::fabs(map->center_lat() - card_lat) < 1e-9 &&
+                              std::fabs(map->center_lon() - card_lon) < 1e-9 && map->has_marker() &&
+                              std::fabs(map->marker_lat() - card_mlat) < 1e-9 &&
+                              map->tile_style() == pp::map::TileStyle::Hybrid,
+                          QStringLiteral("center=%1,%2 marker=%3,%4")
+                              .arg(map->center_lat(), 0, 'f', 6)
+                              .arg(map->center_lon(), 0, 'f', 6)
+                              .arg(map->marker_lat(), 0, 'f', 6)
+                              .arg(map->marker_lon(), 0, 'f', 6));
+            expand_expect("restored-objectname",
+                          map->objectName() == QStringLiteral("pp-meta-map") &&
+                              page.findChild<pp::map::MapWidget *>(QStringLiteral("pp-meta-map")) ==
+                                  map &&
+                              expand_btn->isVisible() && expand_btn->parentWidget() == map,
+                          QStringLiteral("name=\"%1\" expand-vis=%2")
+                              .arg(map->objectName())
+                              .arg(expand_btn->isVisible() ? 1 : 0));
+            // 第二次展开：可重复 + 尺寸记忆（沿用上次尺寸）+ 大视图随对话框尺寸
+            ExpandCycle second;
+            run_expand_cycle(&second, QSize());
+            expand_expect("dialog-reopen",
+                          second.modal && second.same_control && second.state_kept &&
+                              second.map_size.width() >= 640 && second.map_size.height() >= 480,
+                          QStringLiteral("modal=%1 same=%2 map=%3x%4")
+                              .arg(second.modal ? 1 : 0)
+                              .arg(second.same_control ? 1 : 0)
+                              .arg(second.map_size.width())
+                              .arg(second.map_size.height()));
+            expand_expect("dialog-size-memory",
+                          second.dialog_size == first.dialog_size &&
+                              second.dialog_size == QSize(900, 720) &&
+                              second.map_size.width() > first.map_size.width(),
+                          QStringLiteral("1st=%1x%2 2nd=%3x%4")
+                              .arg(first.dialog_size.width())
+                              .arg(first.dialog_size.height())
+                              .arg(second.dialog_size.width())
+                              .arg(second.dialog_size.height()));
+            expand_expect("restored-card-2",
+                          page.isAncestorOf(map) && map->height() == 136 &&
+                              map->geometry() == card_geom && map->isVisible(),
+                          QStringLiteral("h=%1 geom=(%2,%3 %4x%5)")
+                              .arg(map->height())
+                              .arg(map->geometry().x())
+                              .arg(map->geometry().y())
+                              .arg(map->geometry().width())
+                              .arg(map->geometry().height()));
+        }
+        std::printf("UI-SMOKE meta-map-expand: checked=%d bad=%d %s\n", expand_checked,
+                    int(expand_bad.size()), qUtf8Printable(expand_bad.join(QLatin1Char(' '))));
+        std::fflush(stdout);
+        if (!expand_bad.isEmpty()) {
+            smoke_fail(MainWindow::tr("大地图弹窗（§7-T13 R5）不符：%1")
+                           .arg(expand_bad.join(QLatin1Char(' '))));
         }
     }
 

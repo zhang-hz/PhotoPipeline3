@@ -14,7 +14,9 @@
       --title "main-full 预算校准" >> "$GITHUB_STEP_SUMMARY"
 
 参数:
-  jobs.json          `gh api .../jobs` 的原始输出（含 jobs[].name/status/conclusion/started_at/finished_at）
+  jobs.json          `gh api .../jobs` 的原始输出（含 jobs[].name/status/conclusion/started_at/completed_at；
+                     兼容旧版字段名 finished_at —— M5-T14 首跑实测: REST API 现行 schema 只有
+                     `completed_at`，原实现单读 `finished_at` ⇒ 实测列与整轮 wall 恒为「不可得」）
   --budget K=V,...   预算表（分钟；键 = workflow 里的 job `name:` 前缀或裸 job 名，见下）
   --wall-limit N     整轮 wall 硬顶（分钟，默认 20；设计 §12.6）
   --title TEXT       汇总标题（默认「CI 预算校准」）
@@ -24,7 +26,7 @@
   * 预算键与 job 名的匹配是**前缀**匹配（cap 里 job 名常带后缀，如 `linux（全 ctest+金样）`）；
     留空的键取裸 job id（github.job）。
   * 出现在 run 里但不在预算表里的 job → 预算列打 `—`（**不**判超预算），但仍进 wall 计算。
-  * 未跑完（无 finished_at）/被跳过的 job → 实测列 `—`。
+  * 未跑完（无 completed_at）/被跳过的 job → 实测列 `—`。
 
 退出码: 0 = 汇总完成（无论是否超预算；超预算只是报告事实）；2 = 输入/用法错误。
 """
@@ -85,7 +87,9 @@ def main(argv):
     for job in jobs:
         name = job.get('name') or ''
         start = parse_ts(job.get('started_at'))
-        end = parse_ts(job.get('finished_at'))
+        # M5-T14: REST API 现行字段是 completed_at（旧读法 finished_at 恒为空 ⇒ 全表「不可得」）；
+        # 两个都认，顺序 = 现行字段优先。
+        end = parse_ts(job.get('completed_at') or job.get('finished_at'))
         dur = (end - start).total_seconds() if (start and end) else None
         key = ''
         for k in budget:

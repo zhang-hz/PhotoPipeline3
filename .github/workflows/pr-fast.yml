@@ -44,6 +44,10 @@ name: pr-fast
 #       的 qt_tarball_url）；证据与复现命令见 warm-cache.yml 文件头「Qt 播种通道」节）。
 on:
   pull_request:
+  # M5-T14（W-R 首跑）：补手动补跑通道 —— 与 main-full / nightly 的「手动补跑」同口径。
+  #   首跑取证必须能在**无 PR** 状态下手动触发本道（`gh workflow run pr-fast.yml`）；PR 触发语义
+  #   零改动。注意缓存纪律（§12.4）：本道只 restore 不 save（写者仍是 warm-cache / main-full）。
+  workflow_dispatch:
 
 # 同一 PR 的新推送立即取消仍在跑的旧轮次（M3 口径逐字保留）。
 concurrency:

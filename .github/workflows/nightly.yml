@@ -50,6 +50,10 @@ name: nightly
 #       行为/日志面（参数快照、进度侧车等）使归一化日志发生变化，首轮 nightly 会以**非零 diff** 报红。
 #       处置属**口径动作**（不是放宽判据）: 复核 diff 后 `python tools/regression.py <BUILD_DIR> --update`
 #       重新播种，并把基线 diff 放进同一提交供评审（tools/regression.py 头注释的既有约定）。
+#     * M5-T14 起该处置有了可执行通道: workflow_dispatch 的 `update_baseline=true` ⇒ 本 job 在
+#       **Linux 运行器**上跑 `--update` 并把 golden.log + .cache/regression/current.log 传成 artifact
+#       （linux-golden-baseline，7 天），维护者复核 diff 后人工入库；计划轮次与普通手动轮次
+#       （inputs 为空）行为零变化，diff 判据逐字保留。
 #
 #   ── 缓存纪律（§12.4）────────────────────────────────────────────────────────
 #     * 只 **restore** 不 save（缓存写者仍是 main-full：linux job 写 ccache/Qt-gcc_64、各 job 写自己的
@@ -61,6 +65,15 @@ on:
   schedule:
     - cron: '47 2 * * *'       # 每日 02:47 UTC（错峰：main-full 04:23 / warm-cache 周日 03:17）
   workflow_dispatch:           # 手动补跑（排查竞态/UB 时用）
+    inputs:
+      # M5-T14（W-R 首跑）：Linux 基线重播种通道 —— m4-report §10-2 / 文件头「回归基线 diff」节
+      # 的既定口径动作（golden.log 只能在 Linux 机 --update）。默认 false ⇒ 计划/普通手动轮次
+      # 零行为变化；true = 本 job 改跑 --update 并上传 golden.log artifact，由维护者复核 diff 后
+      # 人工入库（一次动作，不是自动改写）。**不是**放宽判据：diff 模式仍逐字保留。
+      update_baseline:
+        description: '（维护）在 Linux 上重生成 tools/baseline/golden.log 并上传 artifact（口径动作；复核后人工入库）'
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -638,11 +651,35 @@ jobs:
 
       - name: 回归基线 diff（python3 tools/regression.py；0 diff 才绿）
         # 退出码: 0 = 0 diff；1 = 有 diff（前 40 行）；2 = 环境缺失。三种都直接透传 ⇒ 红/绿口径单一。
+        # 维护模式（update_baseline=true）由下一条步骤接管；计划/普通手动轮次（inputs 为空）照跑。
+        if: ${{ inputs.update_baseline != true }}
         run: |
           set -o pipefail
           T0=$(date +%s)
           python3 tools/regression.py build/release-dev 2>&1 | tee "$RUNNER_TEMP/regression.log"
           echo -e "regression diff（12 次调用 / 280 文件槽）\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
+
+      - name: （维护模式）重生成 Linux 基线（--update；口径动作）
+        # 只在 workflow_dispatch + update_baseline=true 时执行（M5-T14 起）。产出 = 运行器工作树里的
+        # tools/baseline/golden.log —— 由下一条步骤上传，人工复核后入库；本 job 不做任何提交。
+        if: ${{ inputs.update_baseline == true }}
+        run: |
+          set -o pipefail
+          T0=$(date +%s)
+          python3 tools/regression.py build/release-dev --update 2>&1 | tee "$RUNNER_TEMP/regression-update.log"
+          echo -e "regression update（12 次调用 / 280 文件槽）\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
+          wc -l tools/baseline/golden.log
+
+      - name: （维护模式）上传 golden.log + 归一化运行日志 artifact
+        if: ${{ inputs.update_baseline == true }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-golden-baseline
+          retention-days: 7
+          path: |
+            tools/baseline/golden.log
+            .cache/regression/current.log
+          if-no-files-found: error
 
       - name: 汇总 → $GITHUB_STEP_SUMMARY
         if: always()

@@ -51,6 +51,14 @@
 //   （≤0.5°）内 → gps_status 追加「该区域坐标精度存疑（国境/港澳台边界）」；生效坐标的
 //   悬浮提示同句（盒内深处与境外不提示 —— 粗盒外偏移恒 identity，两向一致）。
 //
+// M6-T12 地图体验件（§5.3/§7-T12 R5）：地图块加**覆盖层**（map 的子布局 —— 卡内行节奏/地图
+//   几何零改动）：① 左上「光标: lat, lon」读数 chip（接 mapwidget 的 cursor_moved，WGS-84、
+//   约 100ms 节流；同一读数另挂坐标行 tooltip；**只回显，不写规则框、不动 gps_status**——
+//   状态行留给选点/搜索结果等语义消息）；② 右下「－/＋」缩放钮（矢量图标 24×24 → map 的
+//   zoom_in/zoom_out，视口中心锚点）。比例尺由 mapwidget 自绘（左下，白底 α190 同版权行口径）。
+//   「混合叠标注」（map_sat_labels，T11 落地存储）的消费点 = MainWindow 启动/设置变更时的
+//   map->set_sat_labels（本页只做覆盖层，不持设置值）。
+//
 // 自验钩子（--ui-smoke 的 meta-geom / meta-* 探针读；非用户可见）：
 //   * 动态属性（同时挂 MetaState 与页面本身）：pp_meta_follow_count / pp_meta_follow_name /
 //     pp_meta_follow_pending / pp_meta_follow_stale_dropped / pp_meta_time_new /
@@ -70,6 +78,7 @@
 //     pp-meta-gps-<provider|search-edit|search-button> / pp-meta-gps-search-results（M6-T8 起 =
 //     可点结果列表）/ pp-meta-gps-<layer|suggest|address>（M6-T8 加性）/ pp-meta-gps-<datum|
 //     dms|copy>（M6-T10 加性：WGS-84 标签 / DMS 切换 / 复制）/ pp-meta-map /
+//     pp-meta-map-<cursor|zoom-in|zoom-out>（M6-T12 加性：覆盖层光标读数 chip / 缩放钮）/
 //     pp-meta-gps-rule-toggle / pp-meta-privacy-pill / pp-meta-keyword-<i> / gps_status /
 //     gps_warning / privacy_strip / mtime_sync / gps_enable / gps_more_toggle /
 //     gps_lat|gps_lon|gps_alt|gps_dir|gps_ts（规则输入）/ exception_label / exception_list /
@@ -172,6 +181,15 @@ constexpr int kResultIconPx = 12;
 // M6-T10（§4.5 R4）：WGS-84 标签的矢量图标盒（与结果行图钉同规格）
 constexpr int kDatumIconPx = 12;
 constexpr double kSuggestZoom = 16.0; // 联想定位的缩放档（与 search_select 的 ≥12 同向）
+// M6-T12（§5.3/§7-T12 体验件）：地图覆盖层 —— 「－/＋」缩放钮（矢量图标钮档）与光标坐标读数 chip
+// （覆盖层是 map 的子布局：不进卡内行节奏，地图几何/内容零改动）
+constexpr int kMapZoomBtnPx = 24;
+constexpr int kMapZoomIconPx = 12;
+constexpr const char *kMapCursorIdleText = QT_TR_NOOP("光标: —");
+constexpr const char *kMapCursorTooltipText =
+    QT_TR_NOOP("光标世界坐标（WGS-84，约 100ms 刷新）；移出地图后保留最后一次读数");
+constexpr const char *kMapZoomInText = QT_TR_NOOP("放大（＋1 档）");
+constexpr const char *kMapZoomOutText = QT_TR_NOOP("缩小（−1 档）");
 // 图层 Seg 三态（与 pp::map::TileStyle 同序；键 = 自验钩子读数）
 constexpr std::array<const char *, 3> kLayerStyleKeys = {"road", "satellite", "hybrid"};
 // 分类 chips 文案 = 直接进 run_search 的类目关键词（§4.3 分类 POI）
@@ -641,8 +659,13 @@ struct MetaState : QObject {
     std::optional<pp::GpsData> shown_gps; // 生效坐标缓存（DMS 切换只重排这一份，不重算 preview）
     QLabel *datum_icon = nullptr;         // 「WGS-84（标准 GPS）」前置 Info 矢量图标
     QLabel *datum_label = nullptr;
+    QWidget *datum_row = nullptr;       // 坐标行（M6-T12：光标坐标读数的 tooltip 承载面）
     QPushButton *dms_toggle = nullptr;  // DMS 切换（chip；与右键菜单同一收口）
     QToolButton *copy_coords = nullptr; // 复制当前格式坐标（文字链）
+    // ---- M6-T12 加性（§5.3/§7-T12：地图体验件 —— 缩放 ± / 光标坐标读数）----
+    QToolButton *zoom_out = nullptr; // 地图覆盖层：缩小（矢量图标钮）
+    QToolButton *zoom_in = nullptr;  // 地图覆盖层：放大
+    QLabel *map_cursor = nullptr;    // 地图覆盖层左上：光标坐标读数（接 cursor_moved）
     QToolButton *rule_toggle = nullptr;
     QWidget *rule_host = nullptr;
     formkit::CheckBox *gps_enable = nullptr;
@@ -869,6 +892,23 @@ QPushButton *make_chip(QWidget *parent, const QString &object_name, const QStrin
     chip->setFont(theme::font(theme::Typography::small_px, QFont::DemiBold));
     chip->setToolTip(PageMeta::tr("按类目搜索：%1").arg(text));
     return chip;
+}
+
+// M6-T12（§5.3）：地图覆盖层的缩放钮 —— 24×24 图标钮（矢量图标，C3 无字形）；tooltip +
+// accessibleName 成对（§11 图标钮必有）；取色不吃 QSS → 主题重放时显式重刷（见 apply_style）。
+QToolButton *make_map_zoom_button(QWidget *parent, const QString &object_name, icons::Name icon,
+                                  const QString &tip) {
+    auto *button = new QToolButton(parent);
+    button->setObjectName(object_name);
+    button->setProperty(kFieldProperty, QStringLiteral("map-zoom"));
+    button->setToolTip(tip);
+    button->setAccessibleName(tip);
+    button->setFixedSize(kMapZoomBtnPx, kMapZoomBtnPx);
+    button->setIconSize(QSize(kMapZoomIconPx, kMapZoomIconPx));
+    button->setProperty(icons::kIconNameProperty, QString::fromLatin1(icons::key(icon)));
+    button->setFocusPolicy(Qt::NoFocus);
+    button->setCursor(Qt::PointingHandCursor);
+    return button;
 }
 
 // ---------------------------------------------------------------------------
@@ -1923,6 +1963,23 @@ void apply_style(MetaState *st) {
            QStringLiteral("; }\n");
     qss += QStringLiteral("QLabel[") + field + QStringLiteral("=\"address\"] { color: ") +
            css(t.text2) + QStringLiteral("; }\n");
+    // M6-T12 地图覆盖层（§5.3）：光标读数 chip + 「－/＋」缩放钮 —— **定位色固定**（白底 α190 +
+    // 深灰字/图标，与 mapwidget 的版权行/图钉气泡同口径）：两者都压在地图上（可能是影像/卫星/
+    // 路网，明暗主题都可能落在其上），固定白底是两主题下都可读的唯一解；结构色仍走令牌。
+    const QString hud_bg = QStringLiteral("rgba(255, 255, 255, 190)");
+    const QString hud_fg = QStringLiteral("#404040");
+    qss += QStringLiteral("QLabel[") + field + QStringLiteral("=\"map-hud\"] { background: ") +
+           hud_bg + QStringLiteral("; border-radius: ") + QString::number(t.radius_control) +
+           QStringLiteral("px; color: ") + hud_fg + QStringLiteral("; padding: 1px 5px; }\n");
+    qss += QStringLiteral("QToolButton[") + field +
+           QStringLiteral("=\"map-zoom\"] { background: ") + hud_bg +
+           QStringLiteral("; border: 1px solid ") + css(t.card_bd) +
+           QStringLiteral("; border-radius: ") + QString::number(t.radius_control) +
+           QStringLiteral("px; }\n");
+    qss += QStringLiteral("QToolButton[") + field +
+           QStringLiteral("=\"map-zoom\"]:hover { background: rgba(255, 255, 255, 230); }\n");
+    qss += QStringLiteral("QToolButton[") + field +
+           QStringLiteral("=\"map-zoom\"]:disabled { background: rgba(255, 255, 255, 150); }\n");
     // 分类 chip（与 formkit::ChipButton 同色同源：未选 = 透明底 + --ctl-bd；悬停 = --ctl 底；
     // 选中 = --acc-dim 底 + --acc-bd 边 + --txt 字）
     qss += QStringLiteral("QPushButton[") + field +
@@ -1977,6 +2034,15 @@ void apply_style(MetaState *st) {
     set_fold_icon(st, st->link_keywords, st->tag_host != nullptr && st->tag_host->isVisible());
     if (st->search_btn != nullptr) {
         icons::apply(st->search_btn, icons::Name::Search, t.text2, t.text3, 12);
+    }
+    // M6-T12：地图缩放钮的矢量图标随令牌重放（覆盖层固定白底 → 图标恒取深灰 #404040）
+    if (st->zoom_in != nullptr) {
+        icons::apply(st->zoom_in, icons::Name::ZoomIn, QColor(0x40, 0x40, 0x40),
+                     QColor(0x9a, 0x9a, 0x9a), kMapZoomIconPx);
+    }
+    if (st->zoom_out != nullptr) {
+        icons::apply(st->zoom_out, icons::Name::ZoomOut, QColor(0x40, 0x40, 0x40),
+                     QColor(0x9a, 0x9a, 0x9a), kMapZoomIconPx);
     }
     // M6-T10：坐标行 WGS-84 标签的 Info 矢量图标随令牌重放（QLabel 承载的 QPixmap 取色不吃 QSS）
     if (st->datum_icon != nullptr) {
@@ -2458,6 +2524,7 @@ QWidget *build_gps_card(MetaState *st, QWidget *parent) {
         const formkit::Row row =
             formkit::frow(body, PageMeta::tr("坐标"), group.widget(), FieldWidth::Flex);
         row.row->setObjectName(QStringLiteral("pp-meta-gps-datum-row"));
+        st->datum_row = row.row; // M6-T12：光标坐标读数的 tooltip 面（见 cursor_moved 接线）
         bv->addWidget(row.row);
     }
     {
@@ -2637,6 +2704,35 @@ QWidget *build_gps_card(MetaState *st, QWidget *parent) {
         st->map->setObjectName(QStringLiteral("pp-meta-map"));
         st->map->setFixedHeight(kMapHeight);
         group.add(st->map, 1);
+        // M6-T12（§5.3/§7-T12）：地图覆盖层 —— 左上「光标」坐标读数 + 右下「－/＋」缩放钮。
+        // 覆盖层 = map 的子布局（不进卡内行节奏：行 pitch / 地图几何 / 内容宽零变化）。
+        auto *overlay = new QVBoxLayout(st->map);
+        overlay->setContentsMargins(6, 4, 6, 4);
+        overlay->setSpacing(formkit::kInlineGap);
+        auto *cursor_line = new QHBoxLayout();
+        cursor_line->setContentsMargins(0, 0, 0, 0);
+        cursor_line->setSpacing(0);
+        st->map_cursor = new QLabel(PageMeta::tr(kMapCursorIdleText), st->map);
+        st->map_cursor->setObjectName(QStringLiteral("pp-meta-map-cursor"));
+        st->map_cursor->setProperty(kFieldProperty, QStringLiteral("map-hud"));
+        st->map_cursor->setFont(theme::font(theme::Typography::hint_px, QFont::Normal, true));
+        st->map_cursor->setToolTip(PageMeta::tr(kMapCursorTooltipText));
+        st->map_cursor->setAttribute(Qt::WA_TransparentForMouseEvents, true); // 不吃地图鼠标事件
+        cursor_line->addWidget(st->map_cursor, 0, Qt::AlignLeft | Qt::AlignTop);
+        cursor_line->addStretch(1);
+        overlay->addLayout(cursor_line);
+        overlay->addStretch(1); // 缩放钮沉底（右下）
+        auto *zoom_line = new QHBoxLayout();
+        zoom_line->setContentsMargins(0, 0, 0, 0);
+        zoom_line->setSpacing(formkit::kInlineGap);
+        zoom_line->addStretch(1);
+        st->zoom_out = make_map_zoom_button(st->map, QStringLiteral("pp-meta-map-zoom-out"),
+                                            icons::Name::ZoomOut, PageMeta::tr(kMapZoomOutText));
+        st->zoom_in = make_map_zoom_button(st->map, QStringLiteral("pp-meta-map-zoom-in"),
+                                           icons::Name::ZoomIn, PageMeta::tr(kMapZoomInText));
+        zoom_line->addWidget(st->zoom_out);
+        zoom_line->addWidget(st->zoom_in);
+        overlay->addLayout(zoom_line);
         bv->addWidget(group.widget());
     }
     // 地址回显行（M6-T8/§4.5）：选点后由 reverse_finished 回填；未选点 = "—"
@@ -2979,6 +3075,19 @@ QWidget *build_gps_card(MetaState *st, QWidget *parent) {
                          set_hook(st, "pp_meta_gps_layer",
                                   QString::fromLatin1(kLayerStyleKeys[std::size_t(style)]));
                      });
+    // M6-T12（§5.3/§7-T12 体验件）：缩放钮 → map->zoom_in/zoom_out（视口中心锚点，中心不动）
+    QObject::connect(st->zoom_in, &QToolButton::clicked, st, [st] { st->map->zoom_in(); });
+    QObject::connect(st->zoom_out, &QToolButton::clicked, st, [st] { st->map->zoom_out(); });
+    // 光标坐标读数（接 map 的 cursor_moved，WGS-84、约 100ms 节流）：地图覆盖层 chip 显示
+    // 「光标: lat, lon」；同一读数另挂坐标行 tooltip（§2.6：细节进 tooltip）—— 只读回显，
+    // 不写规则框、不动 gps_status（状态行留给选点/搜索结果等语义消息）。
+    QObject::connect(st->map, &pp::map::MapWidget::cursor_moved, st, [st](double lat, double lon) {
+        const QString text = PageMeta::tr("光标: %1, %2").arg(format_6(lat), format_6(lon));
+        st->map_cursor->setText(text);
+        if (st->datum_row != nullptr) {
+            st->datum_row->setToolTip(text);
+        }
+    });
     // M6-T10（§4.5 R4）：显示档切换钮 + 复制链 + 坐标框右键菜单 —— 三条入口同一收口
     // （set_dms_mode / copy_coords）；右键菜单同时承担"复制"（只读框的默认菜单不可用）
     QObject::connect(st->dms_toggle, &QPushButton::toggled, st,

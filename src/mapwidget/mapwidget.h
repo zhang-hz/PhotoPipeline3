@@ -44,6 +44,11 @@ public:
     TileStyle tile_style() const;
     void set_result_pins(const std::vector<Pin> &pins);
     void clear_result_pins();
+    // M6-T12 加性（追认见 docs/m6-adjudications.md A3）—— 地图体验件（§5.3 / §7-T12）：
+    // Hybrid 的「叠标注」开关（false = 只画影像层）与缩放 ±1（clamp 到既有档域，中心不动）。
+    void set_sat_labels(bool on);
+    void zoom_in();
+    void zoom_out();
 
     QSize minimumSizeHint() const override { return {240, 180}; }
 
@@ -55,6 +60,7 @@ signals:
     void suggest_finished(const std::vector<SuggestItem> &items, const QString &error);
     void reverse_finished(const QString &address, const QString &error);
     void search_results_ready(const std::vector<GeocodeResult> &results, const QString &error);
+    void cursor_moved(double lat, double lon); // M6-T12 加性：光标世界坐标（WGS-84；约 100ms 节流）
 
 public slots:
     void run_search(const QString &query); // async; -> search_finished

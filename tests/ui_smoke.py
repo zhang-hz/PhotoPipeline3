@@ -187,6 +187,14 @@ M6-T9（R3 选点闭环；docs/m6-map-upgrade.md §4.4/§7-T9）:
     （真实搜索/逆地理地址）由 M6-T15 验收的联网证据承担。
   * 既有前缀清单与冻结末行零改动（截图仍 12 张）。
 
+M6-T12（W-M5 体验件；§5.3/§7-T12）:
+  * 不新增行名：断言落在既有 `UI-SMOKE meta-geom:` 行内（`smoke_probe_meta` 的 (i-9) 段）——
+    「－/＋」缩放钮（24×24 矢量图标钮 + tooltip/accessibleName + `ppIcon` 键）· 缩放**真的改档**
+    （同中心下 grab 逐像素变化、±1 往返复原）· 光标坐标读数（`cursor_moved` → 覆盖层 chip 文本
+    = 信号值 6 位小数 + 坐标行 tooltip 同读数）· 比例尺（mapwidget 自绘：左下白底 α190 段的
+    像素取证 —— 底部左侧 96×26 内近白像素计数）。另加一条 `UI-SMOKE map-hud:` 诊断行
+    （钮几何 / 读数文本 / 比例尺近白计数，只报数）。既有前缀清单零改动、冻结末行不变。
+
 GUI-R2（docs/gui-review-0.3.0-r2.md 可视化排查回归）:
   * 追加 `GUI_R2_LINE_PREFIXES` 四行齐备断言（`smoke_probe_gui_r2()`，只增）：
     `combo-consistency`（全界面 QComboBox 样式钩子 / 高 24 / **实拍非空像素**——钉问题 1「亮色下拉

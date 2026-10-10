@@ -35,6 +35,13 @@
 // parse failed / no match). Credit label: on_paint now reads the effective source's attribution
 // (layers.cpp is the single source) instead of hardcoding the text here (D1).
 //
+// M6-T12 体验件（§5.3 / §7-T12，加性登记 A3）：① `set_sat_labels(false)` 让 Hybrid 只画影像层
+// （paint_layers 对 label 层的唯一开关）；② `zoom_in/zoom_out` = 视口中心锚点的 ±1 档缩放（与滚轮
+// 同一内部字段，clamp 到 [kMinZoom, kMaxZoom]，中心逐位不动）；③ on_paint 左下比例尺（当前
+// zoom/纬度下的米每像素 → 1/2/5 × 10^k 档，白底 α190 + 6pt 与版权行同口径）；④ 光标世界坐标
+// 经 datum→WGS-84 后由 `cursor_moved` 发出（约 100 ms 节流；setMouseTracking 使悬停也可回显 ——
+// 冻结的滚轮/拖拽/点击三件套行为不变）。
+//
 // Events: the PP-FROZEN header declares no paint/mouse/wheel overrides (and it may not be
 // edited), so an event filter owned by the pimpl receives them for the widget — the only
 // conforming way to hook QWidget events without touching the frozen class declaration.
@@ -47,6 +54,7 @@
 
 #include <QByteArray>
 #include <QColor>
+#include <QElapsedTimer>
 #include <QEvent>
 #include <QFont>
 #include <QFontMetrics>
@@ -98,6 +106,10 @@ constexpr int kPinRadius = 5;
 constexpr int kPinBubblePointSize = 7;
 constexpr int kPinBubbleTextMax = 64; // 长地名省略，避免气泡盖住大片地图
 constexpr double kPinHitRadius = kMarkerRadius + 6;
+// M6-T12 体验件（§5.3 / §7-T12）：光标坐标信号的节流窗 / 比例尺（左下）的目标段长与档系。
+constexpr int kCursorThrottleMs = 100;
+constexpr int kScaleBarTargetPx = 60;           // 取档前的目标段长（实际段长 = 取整档反算）
+constexpr double kScaleBarMppZ0 = 156543.03392; // z=0、256 px 瓦片下的赤道米/像素
 
 // M6-T5 缓存 key 的 layer 维度（§4.1）：路网 / 影像 / Hybrid 标注叠加层。
 const char *const kLayerRoad = "road";
@@ -247,6 +259,9 @@ struct MapWidget::Impl {
     // 命中见 M6-T6 on_paint/on_mouse_release）。
     TileStyle tile_style_ = TileStyle::Road;
     std::vector<Pin> result_pins;
+    // M6-T12 加性状态：Hybrid 的「叠标注」开关（默认 true = 现行为）+ 光标信号节流钟。
+    bool sat_labels_ = true;
+    QElapsedTimer cursor_clock;
 
     // ---- M6-T5 图层选择 ----------------------------------------------------------
     // select_source(style)：给定图层 → 有效瓦片源。当前 provider 的源支持该图层则用它；
@@ -269,6 +284,7 @@ struct MapWidget::Impl {
 
     // 本帧图层栈（自下而上）：Road → road；Satellite → satellite；Hybrid → satellite + label。
     // 无标注层的源（osm/esri）返回空 label_url → 该层无 URL 不请求，即「无标注层则跳过」。
+    // M6-T12：Hybrid 的标注层受 sat_labels_（set_sat_labels）控制 —— false = 只画影像层。
     std::vector<PaintLayer> paint_layers() const {
         std::vector<PaintLayer> stack;
         const TileSource *const source = select_source(tile_style_);
@@ -280,10 +296,84 @@ struct MapWidget::Impl {
             return stack;
         }
         stack.push_back(PaintLayer{source, QString::fromLatin1(kLayerSatellite)});
-        if (tile_style_ == TileStyle::Hybrid) {
+        if (tile_style_ == TileStyle::Hybrid && sat_labels_) {
             stack.push_back(PaintLayer{source, QString::fromLatin1(kLayerLabel)});
         }
         return stack;
+    }
+
+    // ---- M6-T12 体验件（§5.3 / §7-T12） -----------------------------------------
+    // 缩放 ±1：与滚轮缩放**同一内部字段**（zoom），锚点 = 视口中心 → 中心逐位不动（滚轮是
+    // 以光标为锚，两者只在锚点上有别）；越界档位 clamp 后无变化即提前返回（不空重绘）。
+    void zoom_step(int delta) {
+        const int target = std::clamp(zoom + delta, kMinZoom, kMaxZoom);
+        if (target == zoom) {
+            return;
+        }
+        zoom = target;
+        q->update();
+    }
+
+    // 光标坐标回显（约 100 ms 节流）：屏坐标 → 世界 → 内部基准面 → WGS-84（与取点/绘制同一条
+    // 转换管线）；仅在移动时发（无定时器、无空闲发射）。首帧钟未启动 → 立即发。
+    void emit_cursor_readout(QPointF screen) {
+        if (cursor_clock.isValid() && cursor_clock.elapsed() < kCursorThrottleMs) {
+            return;
+        }
+        cursor_clock.restart();
+        const std::pair<double, double> datum = world_to_latlon(screen_to_world(screen), zoom);
+        const std::pair<double, double> wgs = datum_to_wgs(datum.first, datum.second);
+        emit q->cursor_moved(wgs.first, wgs.second);
+    }
+
+    // 左下比例尺（§5.3）：当前 zoom/纬度下的「米每像素」把 ~60 px 段长折成 1/2/5 × 10^k 的整
+    // 档（100 m / 500 m / 1 km …），再按该档反算实际段长绘制；白底 α190 + 6pt 与右下版权行同
+    // 口径（卫星底图上仍可读）。纬度取视口中心（同一比例尺的横轴近菱形，取中心纬度即用户所在档）。
+    void draw_scale_bar(QPainter &painter, int h) const {
+        const double mpp = kScaleBarMppZ0 * std::cos(clamp_lat(center_lat) / 180.0 * kPi) /
+                           double(std::int64_t(1) << zoom);
+        if (!(mpp > 0.0) || !std::isfinite(mpp)) {
+            return;
+        }
+        const double raw_m = double(kScaleBarTargetPx) * mpp;
+        const double mag = std::pow(10.0, std::floor(std::log10(raw_m)));
+        double nice_m = mag;
+        for (const double factor : {1.0, 2.0, 5.0}) {
+            if (mag * factor <= raw_m) {
+                nice_m = mag * factor;
+            }
+        }
+        const QString label = nice_m >= 1000.0
+                                  ? QStringLiteral("%1 km").arg(nice_m / 1000.0, 0, 'g', 4)
+                                  : QStringLiteral("%1 m").arg(nice_m, 0, 'g', 4);
+        const QString zero = QStringLiteral("0");
+        const int bar_px = std::max(8, int(std::lround(nice_m / mpp)));
+
+        painter.save();
+        QFont font = painter.font();
+        font.setPointSize(kCopyrightPointSize);
+        painter.setFont(font);
+        const QFontMetrics metrics(font);
+        const int pad = 5;
+        const int gap = 4;
+        const int box_w = 2 * pad + metrics.horizontalAdvance(zero) + gap + bar_px + gap +
+                          metrics.horizontalAdvance(label);
+        const int box_h = metrics.height() + 4;
+        const QRect box(6, h - 6 - box_h, box_w, box_h);
+        painter.fillRect(box, QColor(255, 255, 255, 190));
+        painter.setPen(QColor(0x40, 0x40, 0x40));
+        const int mid_y = box.y() + box_h / 2;
+        int x = box.x() + pad;
+        painter.drawText(QRect(x, box.y(), metrics.horizontalAdvance(zero), box_h),
+                         Qt::AlignLeft | Qt::AlignVCenter, zero);
+        x += metrics.horizontalAdvance(zero) + gap;
+        painter.drawLine(x, mid_y, x + bar_px, mid_y); // 段线 + 两端刻度
+        painter.drawLine(x, mid_y - 3, x, mid_y + 3);
+        painter.drawLine(x + bar_px, mid_y - 3, x + bar_px, mid_y + 3);
+        x += bar_px + gap;
+        painter.drawText(QRect(x, box.y(), metrics.horizontalAdvance(label), box_h),
+                         Qt::AlignLeft | Qt::AlignVCenter, label);
+        painter.restore();
     }
 
     // ---- datum boundary (frozen: conversion only at the boundary) ----------------
@@ -821,6 +911,9 @@ void MapWidget::Impl::on_paint() {
         painter.setRenderHint(QPainter::Antialiasing, false);
     }
 
+    // M6-T12：左下比例尺（§5.3）—— 与右下版权行同在瓦片/图钉/主钉之上，互为左右角标。
+    draw_scale_bar(painter, h);
+
     // Bottom-right credit label —— 文案单源 = 有效源的 attribution（D1：唯一定义处在 layers.cpp；
     // 卫星/混合回退到 esri 影像时报 esri 版权）。§4.1：卫星底图偏暗，白底 α190 保留可读性。
     const TileSource *const credit_source = select_source(tile_style_);
@@ -850,6 +943,8 @@ bool MapWidget::Impl::on_mouse_press(QMouseEvent *event) {
 }
 
 bool MapWidget::Impl::on_mouse_move(QMouseEvent *event) {
+    // M6-T12：光标坐标回显（悬停与拖拽都算"移动"，约 100 ms 节流；不动拖拽/点击语义）。
+    emit_cursor_readout(event->position());
     if (!pressed || !(event->buttons() & Qt::LeftButton)) {
         return false;
     }
@@ -963,6 +1058,8 @@ MapWidget::MapWidget(QWidget *parent) : QWidget(parent), impl_(std::make_unique<
 
     d.filter = new Impl::EventFilter(&d);
     installEventFilter(d.filter);
+    // M6-T12：悬停即回显光标坐标（cursor_moved）—— 冻结的滚轮/拖拽/点击三件套不受影响。
+    setMouseTracking(true);
 
     setMinimumSize(minimumSizeHint());
 }
@@ -1189,5 +1286,19 @@ void MapWidget::clear_result_pins() {
     impl_->result_pins.clear();
     update();
 }
+
+// ---- M6-T12 加性（追认见 docs/m6-adjudications.md A3）--------------------------
+
+// Hybrid 的「叠标注」开关（§5.2/§7-T12）：false = 只画影像层（paint_layers 里 label 层的唯一
+// 开关；非 Hybrid 图层不受影响）。默认 true = 现行为，故不设此开关时绘制逐字节不变。
+void MapWidget::set_sat_labels(bool on) {
+    impl_->sat_labels_ = on;
+    update();
+}
+
+// 缩放 ±1（§5.3）：与滚轮缩放同一内部字段（zoom），锚点 = 视口中心 → 中心不动。
+void MapWidget::zoom_in() { impl_->zoom_step(+1); }
+
+void MapWidget::zoom_out() { impl_->zoom_step(-1); }
 
 } // namespace pp::map

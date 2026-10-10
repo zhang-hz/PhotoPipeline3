@@ -3298,6 +3298,8 @@ void MainWindow::Impl::restore_session() {
 //     启动期 restore_session（在 set_map_provider 之后 —— 支持性提示按最终源判定）与设置
 //     对话框 accept 之后（档可在设置页被改）。
 //   * 写回：Seg 换层（用户点段）→ settings.map_style + 立即落盘；首次调用接线，此后常驻。
+//   * M6-T12 加性：同一次调用下发 `map_sat_labels`（混合「叠标注」开关）——
+//     settings.map_sat_labels → map->set_sat_labels（启动与设置变更即这两个调用点）。
 // 单源：段序 → 图层的映射仍是 page_meta 的 layer_style_of（本处不重复枚举枚举值），故回填
 // 先「点段」= 与用户同一条链路（set_tile_style + 图层支持性提示 + 自验钩子一并落地），随后
 // 再按 kMapStyles 直达一次 set_tile_style（同值幂等，是"档 = 图"的兜底直落）。两行的组合
@@ -3330,9 +3332,11 @@ void MainWindow::Impl::apply_map_style() {
     }
     if (auto *map = page_meta->findChild<pp::map::MapWidget *>(QStringLiteral("pp-meta-map"))) {
         map->set_tile_style(kMapStyles[index].style); // 档 → 图直达（§5.2；幂等）
+        // M6-T12（§5.2/§7-T12 R5）：`map_sat_labels`（混合「叠标注」开关，T11 落地存储）的
+        // 消费面 —— 启动与「设置·地图」变更后各下发一次（本函数两个调用点即这两处）；
+        // mapwidget 侧只影响 Hybrid 的 label 层（false = 只画影像层），其余绘制零改动。
+        map->set_sat_labels(settings.map_sat_labels);
     }
-    // `map_sat_labels`（混合叠标注）本任务只落持久化面（设置对话框读写 + settings 往返），
-    // mapwidget 侧消费归 W-M5（§7 T13）—— 这里**不**对 map 下发，保持本版零行为风险。
 }
 
 void MainWindow::Impl::on_content_changed() {
@@ -10687,6 +10691,94 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
                             .arg(formkit::seg_inner_h())
                             .arg(visible ? 1 : 0)
                             .arg(uniform ? 1 : 0));
+        }
+
+        // (i-9) M6-T12（§5.3/§7-T12 体验件）：地图覆盖层 —— 「－/＋」缩放钮（矢量图标钮；点按
+        //   真的改档：同中心下 grab 逐像素变化，±1 往返复原）+ 光标坐标读数（接 cursor_moved，
+        //   读数 = 信号值 = 6 位小数；坐标行 tooltip 同读数）+ 比例尺（mapwidget 自绘：左下白底
+        //   α190 段的像素取证）。原样保留 §2.5 的滚轮/拖拽/点击三件套探针（(j) 段）。
+        {
+            auto *zoom_map = page.findChild<pp::map::MapWidget *>(QStringLiteral("pp-meta-map"));
+            auto *zoom_in = page.findChild<QToolButton *>(QStringLiteral("pp-meta-map-zoom-in"));
+            auto *zoom_out = page.findChild<QToolButton *>(QStringLiteral("pp-meta-map-zoom-out"));
+            auto *cursor_label = page.findChild<QLabel *>(QStringLiteral("pp-meta-map-cursor"));
+            const auto zoom_button_ok = [](const QToolButton *button, const char *icon_key) {
+                return button != nullptr && button->width() == 24 && button->height() == 24 &&
+                       button->text().isEmpty() && !button->icon().isNull() &&
+                       button->property(icons::kIconNameProperty).toString() ==
+                           QString::fromLatin1(icon_key) &&
+                       !button->toolTip().isEmpty() && !button->accessibleName().isEmpty();
+            };
+            meta_expect("map-zoom-buttons",
+                        zoom_button_ok(zoom_in, "zoom-in") && zoom_button_ok(zoom_out, "zoom-out"),
+                        QStringLiteral("in=%1x%2 out=%3x%4")
+                            .arg(zoom_in != nullptr ? zoom_in->width() : -1)
+                            .arg(zoom_in != nullptr ? zoom_in->height() : -1)
+                            .arg(zoom_out != nullptr ? zoom_out->width() : -1)
+                            .arg(zoom_out != nullptr ? zoom_out->height() : -1));
+            if (zoom_map != nullptr && zoom_in != nullptr && zoom_out != nullptr &&
+                cursor_label != nullptr) {
+                const QImage before = zoom_map->grab().toImage();
+                zoom_in->click();
+                pump(60);
+                const QImage zoomed = zoom_map->grab().toImage();
+                zoom_out->click();
+                pump(60);
+                const QImage restored = zoom_map->grab().toImage();
+                meta_expect("map-zoom-applied", before != zoomed && restored == before,
+                            QStringLiteral("in=%1x%2 out=%3x%4 zoomed-diff=%5 restored-eq=%6")
+                                .arg(before.width())
+                                .arg(before.height())
+                                .arg(zoomed.width())
+                                .arg(zoomed.height())
+                                .arg(before != zoomed ? 1 : 0)
+                                .arg(restored == before ? 1 : 0));
+                // ③ 光标读数：cursor_moved（公开信号）→ chip 文本 + 坐标行 tooltip（同读数）
+                zoom_map->cursor_moved(31.230400, 121.473700);
+                pump(40);
+                const QString want_cursor = QStringLiteral("光标: %1, %2")
+                                                .arg(QString::number(31.230400, 'f', 6),
+                                                     QString::number(121.473700, 'f', 6));
+                const auto *datum_row =
+                    page.findChild<QWidget *>(QStringLiteral("pp-meta-gps-datum-row"));
+                meta_expect("map-cursor-readout",
+                            cursor_label->text() == want_cursor && datum_row != nullptr &&
+                                datum_row->toolTip() == want_cursor,
+                            QStringLiteral("text=\"%1\" tip=\"%2\"")
+                                .arg(cursor_label->text())
+                                .arg(datum_row != nullptr ? datum_row->toolTip() : QString()));
+                // ④ 比例尺（左下）：白底 α190 段 —— 底部左侧 96×26 内近白像素计数（底 = 灰 #e9，
+                //   网格 #d2 → 阈值 244 只有比例尺底能达标；banner 居中不落此区）
+                const QImage shot = zoom_map->grab().toImage();
+                const int roi_w = std::min(shot.width(), 96);
+                const int roi_h = std::min(shot.height(), 26);
+                int near_white = 0;
+                for (int y = shot.height() - roi_h; y < shot.height(); ++y) {
+                    for (int x = 0; x < roi_w; ++x) {
+                        const QColor px = shot.pixelColor(x, y);
+                        if (px.red() >= 244 && px.green() >= 244 && px.blue() >= 244) {
+                            ++near_white;
+                        }
+                    }
+                }
+                meta_expect("map-scale-bar", near_white >= 20,
+                            QStringLiteral("near-white=%1 roi=%2x%3 shot=%4x%5")
+                                .arg(near_white)
+                                .arg(roi_w)
+                                .arg(roi_h)
+                                .arg(shot.width())
+                                .arg(shot.height()));
+                std::printf("UI-SMOKE map-hud: zoom-btn=%dx%d cursor=\"%s\" scale-bar near=%d/%d "
+                            "roi=%dx%d shot=%dx%d\n",
+                            zoom_in->width(), zoom_in->height(),
+                            qUtf8Printable(cursor_label->text()), near_white, roi_w * roi_h, roi_w,
+                            roi_h, shot.width(), shot.height());
+                std::fflush(stdout);
+            } else {
+                meta_expect("map-zoom-applied", false, QStringLiteral("controls missing"));
+                meta_expect("map-cursor-readout", false, QStringLiteral("controls missing"));
+                meta_expect("map-scale-bar", false, QStringLiteral("controls missing"));
+            }
         }
 
         std::printf("UI-SMOKE meta-geom: checked=%d bad=%d content=%dx%d(pane=%dx%d) %s\n",

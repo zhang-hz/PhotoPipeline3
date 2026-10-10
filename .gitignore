@@ -11,3 +11,17 @@ tests/golden/real/
 tests/golden/CHECKSUMS
 /dist/
 .pp_test_tmp/
+
+# 本地 ZCode 状态(仅忽略 drafts/secrets;`.zcode/workflows/` 保存的工作流按规范入库)
+.zcode/workflow-drafts/
+.zcode/secrets/
+
+# 密钥/凭证类:绝不入库(高德 Web 服务 Key 等调试凭据)
+amap_key*
+*.amap_key
+*.amapkey
+.secrets/
+.env
+.env.*
+*.secret
+*secret*.key

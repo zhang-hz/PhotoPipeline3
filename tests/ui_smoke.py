@@ -176,6 +176,17 @@ M5-T13（W-R 视觉收尾修正：裁定 A39 ①–⑥ + A40 核对）:
   * `status-selection` 为**新增的自检/诊断行**（不在前缀清单内，与 run-bars-hist / icons-engine-space
     同类）：判据本身在探针里逐条 meta_expect/expect 硬判，失败经 smoke_fail 通道报错。
 
+M6-T9（R3 选点闭环；docs/m6-map-upgrade.md §4.4/§7-T9）:
+  * 追加 `UI-SMOKE meta-loop:` 行齐备断言（`smoke_probe_meta` 的 (j) 段，**全程离线**）：搜索成功
+    路径的两步输出由探针等价喂入（图钉面 `set_result_pins` + 列表面 `search_results_ready`）→
+    点图钉（视口中心命中）→ 主钉 + 规则框回填 = **WGS-84**（amap/GCJ-02 基准面下断言回填值逐位
+    等于结果点 WGS-84 且 ≠ GCJ-02 偏移值；选点值 = WGS-84 的机械断言）→ 列表当前行跟随 +
+    取点文案（已选结果：<名>，与点钉同句）→ 地图微调（point_selected 回填）→ 「地图选点」取
+    拖拽后的视口中心 → 逆地理离线分类文案（不谎报地址）→ 换地图源清列表 + 清结果钉（点击旧钉
+    位必须落回取点路径 = 不留"点不动"的旧钉）。行内 `checked=N bad=M` 由 C++ 侧给出；端点
+    （真实搜索/逆地理地址）由 M6-T15 验收的联网证据承担。
+  * 既有前缀清单与冻结末行零改动（截图仍 12 张）。
+
 GUI-R2（docs/gui-review-0.3.0-r2.md 可视化排查回归）:
   * 追加 `GUI_R2_LINE_PREFIXES` 四行齐备断言（`smoke_probe_gui_r2()`，只增）：
     `combo-consistency`（全界面 QComboBox 样式钩子 / 高 24 / **实拍非空像素**——钉问题 1「亮色下拉
@@ -330,6 +341,15 @@ GUI_R2_LINE_PREFIXES = (
     'UI-SMOKE render-tokens:',
 )
 
+# M6-T9（R3 选点闭环）自检行（前缀匹配，缺任一 → FAIL）：搜索→多钉+可点列表→点钉→主钉+
+# 规则框回填（**选点值 = WGS-84 断言**：amap/GCJ-02 基准面下回填值 = 结果点 WGS-84，显式
+# 排除 GCJ-02 偏移值）→地图微调→「地图选点」取中心→逆地理（离线分类文案）→换源清钉
+# （不留"点不动"的旧钉）。探针全程离线（结果面由 set_result_pins + search_results_ready
+# 等价喂入），行内 `checked=N bad=M` 由 C++ 侧给出。
+M6T9_LINE_PREFIXES = (
+    'UI-SMOKE meta-loop:',
+)
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 build_dir = sys.argv[1] if len(sys.argv) > 1 else 'build/release-dev'
@@ -381,6 +401,7 @@ def main():
         t14_seen = set()
         t15_seen = set()
         gui_r2_seen = set()
+        m6t9_seen = set()
         with open(log_path, 'w', encoding='utf-8', newline='') as log_fp:
             for line in proc.stdout:
                 sys.stdout.write(line)
@@ -427,6 +448,9 @@ def main():
                 for prefix in GUI_R2_LINE_PREFIXES:
                     if line.startswith(prefix):
                         gui_r2_seen.add(prefix)
+                for prefix in M6T9_LINE_PREFIXES:
+                    if line.startswith(prefix):
+                        m6t9_seen.add(prefix)
         status = proc.wait()
 
         if status != 0:
@@ -501,6 +525,11 @@ def main():
         if missing:
             print('ui_smoke: FAIL (missing GUI-R2 regression lines: {})'.format(', '.join(missing)),
                   file=sys.stderr)
+            return 1
+        missing = [p for p in M6T9_LINE_PREFIXES if p not in m6t9_seen]
+        if missing:
+            print('ui_smoke: FAIL (missing M6-T9 meta-loop self-check lines: {})'.format(
+                ', '.join(missing)), file=sys.stderr)
             return 1
         print('UI-SMOKE pass')
         return 0

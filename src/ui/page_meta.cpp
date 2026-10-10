@@ -33,6 +33,13 @@
 //   * 状态与占位分离（修 1-33）：GPS 状态（已有/无/将被移除/将清除）= 卡头**中性胶囊**；
 //     placeholder 只留输入示例（规则输入框），生效值框不再用状态文案占位。
 //
+// M6-T9 选点闭环（§4.4 / R3）：搜索 → search_results_ready → 多钉（map 的 set_result_pins）+
+//   可点列表 → 点结果行（search_select）或点图钉（pin_clicked）→ 主钉落到该点 + 规则框回填
+//   （**一律 WGS-84**；map 边界保证，amap 的 GCJ-02 偏移已在 parse/绘制两侧抵消）→ 点地图
+//   微调（既有 point_selected 回填）→ 「地图选点」取视口中心（既有）→ run_reverse →
+//   reverse_finished 地址回显（用户据此确认位置对不对）。两条取点入口同一句反馈
+//   （已选结果：<名>）；换地图源 = 换地理编码源 → 结果钉随列表一并清（不留点不动的旧钉）。
+//
 // 自验钩子（--ui-smoke 的 meta-geom / meta-* 探针读；非用户可见）：
 //   * 动态属性（同时挂 MetaState 与页面本身）：pp_meta_follow_count / pp_meta_follow_name /
 //     pp_meta_follow_pending / pp_meta_follow_stale_dropped / pp_meta_time_new /
@@ -1583,11 +1590,17 @@ void apply_picked_point(MetaState *st, double lat, double lon, const QString &st
 }
 
 // 结果行选中（行点击 / 回车激活）：唯一结果源在 map 内部（results 与列表同序）。
+// M6-T9 闭环接线②：map 侧 search_select 负责居中(≥12 档) + 主钉 + point_selected（回填/
+// 逆地理由 apply_picked_point 收口）；本页只补两件与「点图钉」入口对齐的用户反馈 ——
+// 列表当前行跟随 + 结果级状态文案（两条入口同一句话，闭环一路到底）。
 void select_result(MetaState *st, int index) {
     if (index < 0 || index >= int(st->results.size())) {
         return; // 占位行 / 越界 = 不动作（§8 空态）
     }
     st->map->search_select(index); // 居中 + 主钉 + point_selected
+    st->search_results->setCurrentRow(index);
+    st->gps_status->setText(
+        PageMeta::tr("已选结果：%1").arg(st->results[std::size_t(index)].title));
 }
 
 // ---------------------------------------------------------------------------
@@ -2595,10 +2608,13 @@ QWidget *build_gps_card(MetaState *st, QWidget *parent) {
                              st->map->set_provider(id);
                          }
                          refresh_layer_hint(st); // 换源 → 图层支持性提示随之更新（§5.2）
-                         // 换源 = 换地理编码源：旧结果/联想不再代表当前源 → 收干净
+                         // 换源 = 换地理编码源：旧结果/联想/结果钉不再代表当前源 → 一并收干净
+                         // （M6-T9：钉必须随列表一起清 —— 否则地图上残留"点不动"的旧钉
+                         // （pin_clicked 索引越界被忽略），闭环缺一口）
                          st->results.clear();
                          set_hook(st, "pp_meta_gps_results", 0);
                          fill_result_rows(st);
+                         st->map->clear_result_pins();
                          st->suggest_list->clear();
                          st->suggest_list->setVisible(false);
                          set_hook(st, "pp_meta_gps_suggest", 0);

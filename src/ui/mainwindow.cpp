@@ -65,6 +65,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QList>
+#include <QListWidget> // M6-T9：meta-loop 探针读结果列表（可点行/占位行）
 #include <QMargins>
 #include <QMenu>
 #include <QMessageBox>
@@ -10621,6 +10622,221 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
         if (!meta_bad.isEmpty()) {
             smoke_fail(MainWindow::tr("元数据页几何（§7.1/R1–R4）不符：%1")
                            .arg(meta_bad.join(QLatin1Char(' '))));
+        }
+    }
+
+    // ---- (j) M6-T9 选点闭环（R3/§4.4）：搜索→多钉+可点列表→点钉/点行→主钉+规则框回填→
+    //   地图微调→「地图选点」取中心→逆地理确认。全程离线（探针不发请求）：搜索成功路径的
+    //   两步输出由探针等价地喂入 —— 图钉面 `set_result_pins`（公开加性 API），列表面直发
+    //   `search_results_ready`（公开信号；页面结果面唯一入口，等价于搜索成功路径的第一步）。
+    //   **选点值 = WGS-84 断言**：amap（GCJ-02）基准面下，规则框回填值仍逐位等于结果点的
+    //   WGS-84，并显式排除 GCJ-02 偏移值（两者相差 > 1e-4°）。终点（真实逆地理地址）由
+    //   M6-T15 验收的联网证据承担；此处断言离线分类文案（逆地理在离线态不谎报地址）。
+    {
+        int loop_checked = 0;
+        QStringList loop_bad;
+        const auto loop_expect = [&loop_checked, &loop_bad](const char *name, bool ok,
+                                                            const QString &detail) {
+            ++loop_checked;
+            if (!ok)
+                loop_bad << QStringLiteral("%1(%2)").arg(QString::fromLatin1(name), detail);
+        };
+        auto *map = page.findChild<pp::map::MapWidget *>(QStringLiteral("pp-meta-map"));
+        auto *combo = page.findChild<QComboBox *>(QStringLiteral("pp-meta-gps-provider"));
+        auto *list = page.findChild<QListWidget *>(QStringLiteral("pp-meta-gps-search-results"));
+        auto *pick = page.findChild<QPushButton *>(QStringLiteral("pp-meta-gps-pick"));
+        auto *status_label = page.findChild<QLabel *>(QStringLiteral("gps_status"));
+        auto *lat_edit = page.findChild<QLineEdit *>(QStringLiteral("gps_lat"));
+        auto *lon_edit = page.findChild<QLineEdit *>(QStringLiteral("gps_lon"));
+        if (map == nullptr || combo == nullptr || list == nullptr || pick == nullptr ||
+            status_label == nullptr || lat_edit == nullptr || lon_edit == nullptr) {
+            loop_expect("controls", false, QStringLiteral("闭环控件缺失"));
+        } else {
+            // 规则清底（前序探针段留下的时间/GPS/剥除规则不参与本段）+ 跟随项回位
+            // （生效值才有主钉）+ amap 基准面（GCJ-02 → 回填断言才有区分力）
+            page.apply_rules(pp::BatchRules{});
+            page.set_batch_files(QStringList{fixture});
+            page.set_selection(QList<MetaSelectionItem>{meta_probe_item(fixture)},
+                               /*from_selection=*/true);
+            wait_probe();
+            pump(80);
+            combo->setCurrentIndex(combo->findData(QStringLiteral("amap")));
+            map->set_offline(true);
+            pump(80);
+
+            const auto make_result = [](const QString &title, const QString &address, double lat,
+                                        double lon, double distance_m) {
+                pp::map::GeocodeResult result;
+                result.title = title;
+                result.address = address;
+                result.lat = lat;
+                result.lon = lon;
+                result.distance_m = distance_m;
+                return result;
+            };
+            const std::vector<pp::map::GeocodeResult> results = {
+                make_result(QStringLiteral("探针结果甲"), QStringLiteral("北京市东城区"), 39.9087,
+                            116.3975, -1.0),
+                make_result(QStringLiteral("探针结果乙"), QStringLiteral("上海市黄浦区"), 31.2304,
+                            121.4737, 250.0),
+                make_result(QStringLiteral("探针结果丙"), QStringLiteral("深圳市福田区"), 22.5431,
+                            114.0579, -1.0),
+            };
+            std::vector<pp::map::MapWidget::Pin> pins;
+            pins.reserve(results.size());
+            for (std::size_t i = 0; i < results.size(); ++i) {
+                pins.push_back(pp::map::MapWidget::Pin{results[i].lat, results[i].lon,
+                                                       results[i].title, int(i)});
+            }
+            map->set_result_pins(pins);
+            map->search_results_ready(results, QString());
+            pump(80);
+
+            // ① 搜索 → 多钉 + 结果列表（每行 = 名称/地址/距离，行件非空 = 可点列表而非占位行）
+            loop_expect(
+                "results-list",
+                list->count() == int(results.size()) &&
+                    (list->item(0) != nullptr && list->itemWidget(list->item(0)) != nullptr) &&
+                    page.property("pp_meta_gps_results").toInt() == int(results.size()),
+                QStringLiteral("rows=%1 hook=%2")
+                    .arg(list->count())
+                    .arg(page.property("pp_meta_gps_results").toInt()));
+            loop_expect("results-status",
+                        status_label->text() ==
+                            QStringLiteral("搜索到 %1 个结果").arg(results.size()),
+                        status_label->text());
+
+            // 鼠标动作（与用户输入同路：press/release 事件直投地图/视口）
+            int pin_hits = 0;
+            int pin_index = -1;
+            int points = 0;
+            const QMetaObject::Connection pin_conn = QObject::connect(
+                map, &pp::map::MapWidget::pin_clicked, w, [&pin_hits, &pin_index](int index) {
+                    ++pin_hits;
+                    pin_index = index;
+                });
+            const QMetaObject::Connection point_conn =
+                QObject::connect(map, &pp::map::MapWidget::point_selected, w,
+                                 [&points](double, double) { ++points; });
+            const auto click_at = [](QWidget *target, const QPoint &pos) {
+                QMouseEvent press(QEvent::MouseButtonPress, QPointF(pos), target->mapToGlobal(pos),
+                                  Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+                QApplication::sendEvent(target, &press);
+                QMouseEvent release(QEvent::MouseButtonRelease, QPointF(pos),
+                                    target->mapToGlobal(pos), Qt::LeftButton, Qt::NoButton,
+                                    Qt::NoModifier);
+                QApplication::sendEvent(target, &release);
+            };
+
+            // ② 点图钉（第 3 条：视口中心 = 钉位，绘制与命中同一坐标管线）→ 主钉 + 回填 WGS-84
+            map->center_on(results[2].lat, results[2].lon, 14);
+            pump(80);
+            const QPoint view_center(map->width() / 2, map->height() / 2);
+            click_at(map, view_center);
+            pump(120);
+            const std::pair<double, double> gcj =
+                pp::map::wgs84_to_gcj02(results[2].lat, results[2].lon);
+            loop_expect("pin-hit", pin_hits == 1 && pin_index == 2,
+                        QStringLiteral("hits=%1 idx=%2").arg(pin_hits).arg(pin_index));
+            loop_expect("pin-fill-wgs84",
+                        lat_edit->text() == QString::number(results[2].lat, 'f', 6) &&
+                            lon_edit->text() == QString::number(results[2].lon, 'f', 6) &&
+                            (std::fabs(lat_edit->text().toDouble() - gcj.first) > 1e-4 ||
+                             std::fabs(lon_edit->text().toDouble() - gcj.second) > 1e-4),
+                        QStringLiteral("box=%1,%2 gcj=%3,%4")
+                            .arg(lat_edit->text(), lon_edit->text())
+                            .arg(gcj.first, 0, 'f', 6)
+                            .arg(gcj.second, 0, 'f', 6));
+            loop_expect("pin-marker",
+                        map->has_marker() && std::fabs(map->marker_lat() - results[2].lat) < 1e-6 &&
+                            std::fabs(map->marker_lon() - results[2].lon) < 1e-6,
+                        QStringLiteral("marker=%1,%2")
+                            .arg(map->marker_lat(), 0, 'f', 6)
+                            .arg(map->marker_lon(), 0, 'f', 6));
+            loop_expect("pin-list-follow",
+                        list->currentRow() == 2 &&
+                            status_label->text() ==
+                                QStringLiteral("已选结果：%1").arg(results[2].title),
+                        QStringLiteral("row=%1 status=%2")
+                            .arg(list->currentRow())
+                            .arg(status_label->text()));
+            loop_expect("pin-reverse-offline",
+                        page.property("pp_meta_gps_address").toString() ==
+                            QStringLiteral("离线模式：逆地理不可用"),
+                        page.property("pp_meta_gps_address").toString());
+
+            // ③ 地图微调（自由取点）→ 回填 + 主钉随之 + 状态
+            click_at(map, view_center + QPoint(-60, 40));
+            pump(120);
+            loop_expect("tune",
+                        points == 1 &&
+                            std::fabs(lat_edit->text().toDouble() - map->marker_lat()) < 1e-6 &&
+                            std::fabs(lon_edit->text().toDouble() - map->marker_lon()) < 1e-6 &&
+                            status_label->text() == QStringLiteral("已从地图选择坐标"),
+                        QStringLiteral("points=%1 box=%2,%3")
+                            .arg(points)
+                            .arg(lat_edit->text(), lon_edit->text()));
+
+            // ④ 「地图选点」= 视口中心（先拖拽平移，再取中心）
+            {
+                const QPoint drag_to = view_center + QPoint(50, -30);
+                QMouseEvent press(QEvent::MouseButtonPress, QPointF(view_center),
+                                  map->mapToGlobal(view_center), Qt::LeftButton, Qt::LeftButton,
+                                  Qt::NoModifier);
+                QApplication::sendEvent(map, &press);
+                QMouseEvent move(QEvent::MouseMove, QPointF(drag_to), map->mapToGlobal(drag_to),
+                                 Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+                QApplication::sendEvent(map, &move);
+                QMouseEvent release(QEvent::MouseButtonRelease, QPointF(drag_to),
+                                    map->mapToGlobal(drag_to), Qt::LeftButton, Qt::NoButton,
+                                    Qt::NoModifier);
+                QApplication::sendEvent(map, &release);
+                pump(80);
+                pick->click();
+                pump(120);
+                loop_expect("center-pick",
+                            std::fabs(lat_edit->text().toDouble() - map->center_lat()) < 2e-6 &&
+                                std::fabs(lon_edit->text().toDouble() - map->center_lon()) < 2e-6 &&
+                                status_label->text() == QStringLiteral("已取地图中心为坐标"),
+                            QStringLiteral("box=%1,%2 center=%3,%4")
+                                .arg(lat_edit->text(), lon_edit->text())
+                                .arg(map->center_lat(), 0, 'f', 6)
+                                .arg(map->center_lon(), 0, 'f', 6));
+            }
+
+            // ⑤ 换地图源 = 换地理编码源 → 列表与结果钉一并收干净（不得留"点不动"的旧钉）
+            {
+                const int pins_before = pin_hits;
+                const int points_before = points;
+                combo->setCurrentIndex(combo->findData(QStringLiteral("osm")));
+                pump(120);
+                loop_expect(
+                    "switch-clears-list",
+                    page.property("pp_meta_gps_results").toInt() == 0 && list->count() == 1 &&
+                        (list->item(0) != nullptr && list->itemWidget(list->item(0)) == nullptr),
+                    QStringLiteral("hook=%1 rows=%2")
+                        .arg(page.property("pp_meta_gps_results").toInt())
+                        .arg(list->count()));
+                map->center_on(results[2].lat, results[2].lon, 14);
+                pump(80);
+                click_at(map, view_center);
+                pump(120);
+                loop_expect("switch-clears-pins",
+                            pin_hits == pins_before && points == points_before + 1,
+                            QStringLiteral("pins=%1→%2 points=%3")
+                                .arg(pins_before)
+                                .arg(pin_hits)
+                                .arg(points));
+            }
+            QObject::disconnect(pin_conn);
+            QObject::disconnect(point_conn);
+        }
+        std::printf("UI-SMOKE meta-loop: checked=%d bad=%d %s\n", loop_checked,
+                    int(loop_bad.size()), qUtf8Printable(loop_bad.join(QLatin1Char(' '))));
+        std::fflush(stdout);
+        if (!loop_bad.isEmpty()) {
+            smoke_fail(
+                MainWindow::tr("选点闭环（R3/§4.4）不符：%1").arg(loop_bad.join(QLatin1Char(' '))));
         }
     }
 

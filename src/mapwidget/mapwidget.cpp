@@ -11,12 +11,18 @@
 //   y_world = (0.5 - ln((1 + sin lat) / (1 - sin lat)) / (4 pi)) * 2^z * 256
 // Missing tiles stay light grey with a thin tile-grid; fetches are bounded to <= 4 in flight.
 //
+// M6-T5 layers: tiles are drawn through the W-M1 model (layers.h) — the effective source comes
+// from select_source() and the per-frame stack from paint_layers(): Road -> "road", Satellite ->
+// "satellite", Hybrid -> "satellite" + "label" (imagery below, labels above; a source without a
+// label layer skips it). The cache key is {source, layer, zoom, x, y}; LRU/byte budget unchanged.
+//
 // Events: the PP-FROZEN header declares no paint/mouse/wheel overrides (and it may not be
 // edited), so an event filter owned by the pimpl receives them for the widget — the only
 // conforming way to hook QWidget events without touching the frozen class declaration.
 
 #include "mapwidget/mapwidget.h"
 
+#include "mapwidget/layers.h"
 #include "mapwidget/providers.h"
 
 #include <QByteArray>
@@ -67,6 +73,11 @@ constexpr int kSearchZoomFloor = 12;    // ruling 2026-09-19: a search hit zooms
 constexpr int kMarkerRadius = 7;
 constexpr int kMarkerArm = 5;
 
+// M6-T5 缓存 key 的 layer 维度（§4.1）：路网 / 影像 / Hybrid 标注叠加层。
+const char *const kLayerRoad = "road";
+const char *const kLayerSatellite = "satellite";
+const char *const kLayerLabel = "label";
+
 double clamp_lat(double lat) { return std::clamp(lat, -kMaxMercatorLat, kMaxMercatorLat); }
 
 double world_span(int zoom) { return double(kTileSize) * double(std::int64_t(1) << zoom); }
@@ -93,32 +104,61 @@ std::pair<double, double> world_to_latlon(QPointF world, int zoom) {
 
 // Tile cache key. Declared at namespace scope (not in the anonymous namespace) so that QHash
 // finds qHash() by argument-dependent lookup; it stays private to this translation unit.
+// M6-T5：维度由 {provider} 扩为 {source, layer}（layer ∈ road/satellite/label），使 Hybrid 的
+// 影像层与标注层、以及回退源（osm 的卫星走 esri）各有独立条目；LRU/字节预算逻辑不变。
 struct TileKey {
-    QString provider;
+    QString source; // 瓦片源 id："amap" | "osm" | "esri"
+    QString layer;  // "road" | "satellite" | "label"
     int zoom = 0;
     int x = 0;
     int y = 0;
 };
 
 inline bool operator==(const TileKey &a, const TileKey &b) {
-    return a.zoom == b.zoom && a.x == b.x && a.y == b.y && a.provider == b.provider;
+    return a.zoom == b.zoom && a.x == b.x && a.y == b.y && a.source == b.source &&
+           a.layer == b.layer;
 }
 
 inline size_t qHash(const TileKey &k, size_t seed = 0) {
-    size_t h = qHash(k.provider, seed);
+    size_t h = qHash(k.source, seed);
+    h = h * 1000003u + qHash(k.layer);
     h = h * 1000003u + size_t(k.zoom);
     h = h * 1000003u + size_t(k.x);
     h = h * 1000003u + size_t(k.y);
     return h;
 }
 
+// 图层键 → URL 的唯一出口（缓存命中判定与抓取共用同一个 key）。「road」走 Road 路网，
+// 「satellite」走影像层（Hybrid 的底层同为影像），「label」走 Hybrid 标注叠加层；
+// 源不支持该层（osm 无影像层、esri 无标注层）时返回空 URL —— 调用方据此不发请求。
+// static：TileKey 需在匿名命名空间外（ADL 找 qHash），本辅助函数随之留在此处但仅本 TU 可见。
+static QUrl tile_url_for(const TileKey &key) {
+    const TileSource *const source = tile_source_by_id(key.source);
+    if (source == nullptr) {
+        return {};
+    }
+    if (key.layer == QLatin1String(kLayerLabel)) {
+        return source->label_url(key.zoom, key.x, key.y);
+    }
+    if (key.layer == QLatin1String(kLayerSatellite)) {
+        // 影像层：优先 Satellite；只支持 Hybrid 的源退用其影像层（当前源皆支持前者）。
+        return source->tile_url(key.zoom, key.x, key.y,
+                                source->supports(TileStyle::Satellite) ? TileStyle::Satellite
+                                                                       : TileStyle::Hybrid);
+    }
+    return source->tile_url(key.zoom, key.x, key.y, TileStyle::Road); // 路网层：只按 Road 取
+}
+
 struct MapWidget::Impl {
     struct PendingTile {
         QNetworkReply *reply = nullptr;
-        QString provider;
-        int zoom = 0;
-        int x = 0;
-        int y = 0;
+        TileKey key; // 完成的瓦片按这个键入缓存（source/layer/zoom/x/y）
+    };
+
+    // 本帧要绘制的图层（source + layer 键；Hybrid = 影像 + 标注两条）。
+    struct PaintLayer {
+        const TileSource *source = nullptr;
+        QString layer;
     };
 
     struct CacheEntry {
@@ -166,9 +206,61 @@ struct MapWidget::Impl {
 
     std::vector<SearchResult> results;
 
-    // M6-T4 加性状态：图层 + 结果图钉（绘制/命中在 T5/T6，这里只存取）。
+    // M6-T4 加性状态：图层 + 结果图钉（图层绘制见 M6-T5 select_source/paint_layers；命中在 T6）。
     TileStyle tile_style_ = TileStyle::Road;
     std::vector<Pin> result_pins;
+
+    // ---- M6-T5 图层选择 ----------------------------------------------------------
+    // select_source(style)：给定图层 → 有效瓦片源。当前 provider 的源支持该图层则用它；
+    // 不支持时（如 osm 无卫星/混合层）回退 esri（esri 支持 Satellite/Hybrid）；Road 永远用当前源。
+    //
+    // 基准不漂（契约 C3）：回退只发生在 osm → esri 之间，二者栅格皆 WGS-84；amap 三图层同为
+    // GCJ-02。内部中心基准面只由 provider->gcj02 决定，与所选源无关 —— 切图层/回退**不做**
+    // 任何 datum 转换，center_lat/lon 与 marker 的 WGS 坐标逐位不变。
+    const TileSource *select_source(TileStyle style) const {
+        const TileSource *const current =
+            provider != nullptr ? tile_source_by_id(provider->id) : nullptr;
+        if (style == TileStyle::Road) {
+            return current; // 路网：永远当前源（不参与回退）
+        }
+        if (current != nullptr && current->supports(style)) {
+            return current;
+        }
+        return tile_source_by_id(QStringLiteral("esri")); // 卫星/混合回退：esri 二者皆支持
+    }
+
+    // 本帧图层栈（自下而上）：Road → road；Satellite → satellite；Hybrid → satellite + label。
+    // 无标注层的源（osm/esri）返回空 label_url → 该层无 URL 不请求，即「无标注层则跳过」。
+    std::vector<PaintLayer> paint_layers() const {
+        std::vector<PaintLayer> stack;
+        const TileSource *const source = select_source(tile_style_);
+        if (source == nullptr) {
+            return stack;
+        }
+        if (tile_style_ == TileStyle::Road) {
+            stack.push_back(PaintLayer{source, QString::fromLatin1(kLayerRoad)});
+            return stack;
+        }
+        stack.push_back(PaintLayer{source, QString::fromLatin1(kLayerSatellite)});
+        if (tile_style_ == TileStyle::Hybrid) {
+            stack.push_back(PaintLayer{source, QString::fromLatin1(kLayerLabel)});
+        }
+        return stack;
+    }
+
+    // 版权行文案随**有效源**（M6-T5）：卫星/混合回退到 esri 影像时也报对应源版权；
+    // 未知源沿用旧行为（OpenStreetMap 版权）。
+    QString credit_text(const TileSource *source) const {
+        const QString id =
+            source != nullptr ? source->id : (provider != nullptr ? provider->id : QString());
+        if (id == QLatin1String("amap")) {
+            return MapWidget::tr("© 高德地图");
+        }
+        if (id == QLatin1String("esri")) {
+            return MapWidget::tr("© Esri, Maxar, Earthstar Geographics");
+        }
+        return MapWidget::tr("© OpenStreetMap contributors");
+    }
 
     // ---- datum boundary (frozen: conversion only at the boundary) ----------------
     std::pair<double, double> wgs_to_datum(double lat, double lon) const {
@@ -248,7 +340,7 @@ struct MapWidget::Impl {
     // ---- fetching ---------------------------------------------------------------
     bool is_pending(const TileKey &key) const {
         for (const PendingTile &t : pending) {
-            if (t.zoom == key.zoom && t.x == key.x && t.y == key.y && t.provider == key.provider) {
+            if (t.key == key) {
                 return true;
             }
         }
@@ -262,15 +354,17 @@ struct MapWidget::Impl {
         if (pending.size() >= size_t(kMaxConcurrentFetches) || is_pending(key)) {
             return;
         }
-        const TileProvider *const owner = provider_by_id(key.provider);
-        if (owner == nullptr) {
-            return;
+        const QUrl url = tile_url_for(key);
+        if (url.isEmpty()) {
+            return; // 该源没有这一图层（如 esri 的标注层）：不发空 URL 请求
         }
-        QNetworkRequest request(owner->tile_url(key.zoom, key.x, key.y));
-        request.setRawHeader("User-Agent", owner->user_agent().toUtf8());
+        // UA 仍由 provider 单源给出（M6-T5 不改每 provider 的 UA 串；回退源的瓦片也带本 provider
+        // 的 UA，OSM/Nominatim 使用政策要求的非空 UA 语义不变）。
+        QNetworkRequest request(url);
+        request.setRawHeader("User-Agent", provider->user_agent().toUtf8());
         request.setTransferTimeout(std::chrono::milliseconds(kRequestTimeoutMs));
         QNetworkReply *const reply = nam->get(request);
-        pending.push_back(PendingTile{reply, key.provider, key.zoom, key.x, key.y});
+        pending.push_back(PendingTile{reply, key});
         notify_pending();
         QObject::connect(reply, &QNetworkReply::finished, q,
                          [this, reply] { on_tile_finished(reply); });
@@ -299,7 +393,7 @@ struct MapWidget::Impl {
             note_failure();
             return;
         }
-        insert_tile(TileKey{entry.provider, entry.zoom, entry.x, entry.y}, body);
+        insert_tile(entry.key, body);
         consecutive_failures = 0;
         set_banner_visible(false);
         q->update();
@@ -426,18 +520,23 @@ void MapWidget::Impl::on_paint() {
         const int x1 = int(std::floor((left + w - 1) / kTileSize));
         const int y0 = int(std::floor(top / kTileSize));
         const int y1 = int(std::floor((top + h - 1) / kTileSize));
-        for (int ty = y0; ty <= y1; ++ty) {
-            if (ty < 0 || ty >= tile_count) {
-                continue; // no vertical wrap on a slippy map
-            }
-            for (int tx = x0; tx <= x1; ++tx) {
-                const TileKey key{provider->id, zoom, wrap_tile_x(tx, tile_count), ty};
-                const int sx = int(std::lround(tx * double(kTileSize) - left));
-                const int sy = int(std::lround(ty * double(kTileSize) - top));
-                if (const QPixmap *const tile = find_tile(key)) {
-                    painter.drawPixmap(sx, sy, kTileSize, kTileSize, *tile);
-                } else {
-                    request_tile(key); // no-op when offline / already pending / 4 in flight
+        // M6-T5：逐层绘制（Hybrid 的影像层在前 = 在下，标注层在后 = 叠在上面）；每层各有自己的
+        // 缓存条目（key 含 layer）。缺瓦片仍留灰底网格，抓取仍受 ≤4 并发 / 8s 超时 / 离线不发约束。
+        for (const PaintLayer &layer : paint_layers()) {
+            for (int ty = y0; ty <= y1; ++ty) {
+                if (ty < 0 || ty >= tile_count) {
+                    continue; // no vertical wrap on a slippy map
+                }
+                for (int tx = x0; tx <= x1; ++tx) {
+                    const TileKey key{layer.source->id, layer.layer, zoom,
+                                      wrap_tile_x(tx, tile_count), ty};
+                    const int sx = int(std::lround(tx * double(kTileSize) - left));
+                    const int sy = int(std::lround(ty * double(kTileSize) - top));
+                    if (const QPixmap *const tile = find_tile(key)) {
+                        painter.drawPixmap(sx, sy, kTileSize, kTileSize, *tile);
+                    } else {
+                        request_tile(key); // no-op when offline / already pending / 4 in flight
+                    }
                 }
             }
         }
@@ -457,10 +556,9 @@ void MapWidget::Impl::on_paint() {
         painter.setRenderHint(QPainter::Antialiasing, false);
     }
 
-    // Bottom-right credit label.
-    const QString credit = (provider != nullptr && provider->id == QLatin1String("amap"))
-                               ? MapWidget::tr("© 高德地图")
-                               : MapWidget::tr("© OpenStreetMap contributors");
+    // Bottom-right credit label —— 随**有效源**：卫星/混合回退到 esri 影像时报 esri 版权（§4.1：
+    // 卫星底图偏暗，白底 α190 保留可读性）。
+    const QString credit = credit_text(select_source(tile_style_));
     QFont font = painter.font();
     font.setPointSize(kCopyrightPointSize);
     painter.setFont(font);
@@ -602,6 +700,8 @@ void MapWidget::set_provider(const QString &id) {
     if (next == nullptr || next == d.provider) {
         return; // unknown id: keep the current provider (no invented fallback)
     }
+    // 换 provider 才换基准面（amap GCJ-02 ↔ osm WGS-84），故这里的往返转换是必须的；
+    // 图层切换/回退（M6-T5 select_source）不动基准面，见 set_tile_style 的「同基准，无漂移」。
     const std::pair<double, double> wgs = d.datum_to_wgs(d.center_lat, d.center_lon);
     d.provider = next;
     const std::pair<double, double> datum = d.wgs_to_datum(wgs.first, wgs.second);
@@ -742,9 +842,12 @@ void MapWidget::search_select(int index) {
     emit point_selected(result.lat, result.lon);
 }
 
-// ---- M6-T4 加性状态存取：图层切换 + 结果图钉（绘制/命中在 T5/T6） ------------------
+// ---- M6-T4 加性状态存取：图层切换 + 结果图钉（图层绘制见 M6-T5；命中在 T6） ----------
 
 void MapWidget::set_tile_style(TileStyle style) {
+    // 基准不漂（契约 C3）：只换绘制图层与缓存 key 的 layer 维度——三图层同基准（amap 全 GCJ-02；
+    // osm/esri 全 WGS-84），select_source 的回退只在 osm→esri（皆 WGS-84）之间发生，故此处
+    // **不做**任何 datum 转换，center_lat/center_lon 逐位不变（只 update() 重绘）。
     impl_->tile_style_ = style;
     update();
 }

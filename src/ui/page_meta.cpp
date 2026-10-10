@@ -13,7 +13,8 @@
 //      时间偏移（3×spin88 + 时分秒槽 + 「UTC±HH:MM」注释）｜生效时间（删除线原值 → 强调色生效值
 //      + 「日期 · Δ · 字段名」注释）。时区语义模式的「从/到」行保留（§7.1 表未列；该模式的功能
 //      必需控件，与 M4 同一控件集合）。
-//   ③ GPS：纬度/经度（双列轨，fill）｜海拔/方位（同）｜时间戳｜**操作行固定在地图上方**
+//   ③ GPS：纬度/经度（双列轨，fill）｜坐标显示（M6-T10：WGS-84 标签 + DMS 切换 + 复制）｜
+//      海拔/方位（同）｜时间戳｜**操作行固定在地图上方**
 //      （修 1-37：核心动作不再落进内滚盲区）｜图层（M6-T8：Seg 三态 → set_tile_style）｜
 //      地图源（OSM 下拉，有标签）｜地点搜索（M6-T8：200ms 防抖联想）｜分类 chips（M6-T8）｜
 //      搜索结果（M6-T8：可点列表 = 名称 + 地址 + 距离）｜地图（高 136 · 图钉 · 版权行）｜
@@ -40,12 +41,22 @@
 //   reverse_finished 地址回显（用户据此确认位置对不对）。两条取点入口同一句反馈
 //   （已选结果：<名>）；换地图源 = 换地理编码源 → 结果钉随列表一并清（不留点不动的旧钉）。
 //
+// M6-T10 坐标基准透明化（§4.5 R4）：GPS 卡新增「坐标」显示行（紧贴经纬度行）——
+//   ① 固定小标签「WGS-84（标准 GPS）」（Info 矢量图标 + tooltip：EXIF GPS 即 WGS-84 标准，
+//      高德 GCJ-02 火星偏移已在内部抵消）；②『DMS』切换钮 + 坐标框右键菜单：十进制度 ↔
+//      度分（pp::map::deg_to_dms 单源）互切；③『复制』链把**当前格式**坐标写剪贴板。
+//   三者一律**只显示 / 只复制，不改写入值**—— 规则框 gps_lat/gps_lon 恒为十进制度
+//   （build_rules 只读规则框），显示层与写入层在这一点上不共享状态。
+//   边界精度提示：选点落在 coord.cpp 粗盒（72.004–137.8347E / 0.8293–55.8271N）边缘带
+//   （≤0.5°）内 → gps_status 追加「该区域坐标精度存疑（国境/港澳台边界）」；生效坐标的
+//   悬浮提示同句（盒内深处与境外不提示 —— 粗盒外偏移恒 identity，两向一致）。
+//
 // 自验钩子（--ui-smoke 的 meta-geom / meta-* 探针读；非用户可见）：
 //   * 动态属性（同时挂 MetaState 与页面本身）：pp_meta_follow_count / pp_meta_follow_name /
 //     pp_meta_follow_pending / pp_meta_follow_stale_dropped / pp_meta_time_new /
 //     pp_meta_gps_effective / pp_meta_multi_rows；M6-T8 加性：pp_meta_gps_layer（"road"|
 //     "satellite"|"hybrid"）/ pp_meta_gps_results（结果数）/ pp_meta_gps_suggest（联想条数）/
-//     pp_meta_gps_address（逆地理回显文本）；
+//     pp_meta_gps_address（逆地理回显文本）；M6-T10 加性：pp_meta_gps_dms（显示档 bool）；
 //   * ElidedLabel 的 `ppFullText`：显示文本可能按宽度省略成 "…"，语义值（全文）挂在这枚属性上，
 //     断言按语义值比对；
 //   * objectName（pp-* 命名法）：pp-meta-info-<time|camera|lens|exposure|size|color|file|gps|wb|
@@ -54,10 +65,11 @@
 //     pp-meta-time-<old|new|note|src>-0 / pp-meta-time-empty / pp-meta-time-pill /
 //     pp-meta-delta-<years|months|days|hours|minutes|seconds> / pp-meta-tz-<from|to> /
 //     pp-meta-seg-delta / pp-meta-seg-tz / pp-meta-multi-<name|old|new>-<i> / pp-meta-multi-more /
-//     pp-meta-gps-<lat|lon|alt|dir>（生效值，只读；DMS 与时间戳读数在 tooltip）/
+//     pp-meta-gps-<lat|lon|alt|dir>（生效值，只读；**另一档**坐标读数与时间戳在 tooltip）/
 //     pp-meta-gps-<read|pick|clear> /
 //     pp-meta-gps-<provider|search-edit|search-button> / pp-meta-gps-search-results（M6-T8 起 =
-//     可点结果列表）/ pp-meta-gps-<layer|suggest|address>（M6-T8 加性）/ pp-meta-map /
+//     可点结果列表）/ pp-meta-gps-<layer|suggest|address>（M6-T8 加性）/ pp-meta-gps-<datum|
+//     dms|copy>（M6-T10 加性：WGS-84 标签 / DMS 切换 / 复制）/ pp-meta-map /
 //     pp-meta-gps-rule-toggle / pp-meta-privacy-pill / pp-meta-keyword-<i> / gps_status /
 //     gps_warning / privacy_strip / mtime_sync / gps_enable / gps_more_toggle /
 //     gps_lat|gps_lon|gps_alt|gps_dir|gps_ts（规则输入）/ exception_label / exception_list /
@@ -72,6 +84,7 @@
 #include <QAbstractSpinBox>
 #include <QApplication>
 #include <QButtonGroup>
+#include <QClipboard>
 #include <QComboBox>
 #include <QDoubleValidator>
 #include <QFileInfo>
@@ -110,6 +123,7 @@
 #include <utility>
 #include <vector>
 
+#include "mapwidget/dms.h"      // M6-T10：坐标显示格式化（度分/逆解析/粗盒边界带）
 #include "mapwidget/geocoder.h" // M6-T8：联想/结果/逆地理的信号类型（SuggestItem/GeocodeResult）
 #include "mapwidget/layers.h"   // M6-T8：图层支持性提示（tile_source_by_id / TileStyle）
 #include "mapwidget/mapwidget.h"
@@ -155,6 +169,8 @@ constexpr int kSuggestVisibleRows = 5;
 constexpr int kResultVisibleRows = 3;
 constexpr int kResultRowH = 36;
 constexpr int kResultIconPx = 12;
+// M6-T10（§4.5 R4）：WGS-84 标签的矢量图标盒（与结果行图钉同规格）
+constexpr int kDatumIconPx = 12;
 constexpr double kSuggestZoom = 16.0; // 联想定位的缩放档（与 search_select 的 ≥12 同向）
 // 图层 Seg 三态（与 pp::map::TileStyle 同序；键 = 自验钩子读数）
 constexpr std::array<const char *, 3> kLayerStyleKeys = {"road", "satellite", "hybrid"};
@@ -167,6 +183,13 @@ constexpr const char *kHasGpsText = QT_TR_NOOP("已有 GPS");
 constexpr const char *kNoGpsText = QT_TR_NOOP("无 GPS");
 constexpr const char *kWillRemoveText = QT_TR_NOOP("将被移除");
 constexpr const char *kGpsClearText = QT_TR_NOOP("将清除 GPS");
+// M6-T10（§4.5 R4 坐标基准透明化）：WGS-84 标签 / DMS 切换 / 复制 / 边界精度提示的固定文案
+constexpr const char *kDatumTooltipText =
+    QT_TR_NOOP("EXIF GPS 采用 WGS-84 标准；高德火星偏移（GCJ-02）已在内部抵消，写入为真实坐标");
+constexpr const char *kDmsToggleTooltipText =
+    QT_TR_NOOP("坐标显示切换：十进制度 ↔ 度分（DMS）；只影响显示与复制，不改写入值");
+constexpr const char *kCopyCoordsTooltipText = QT_TR_NOOP("复制当前格式坐标（只读显示值）");
+constexpr const char *kPrecisionSuspectText = QT_TR_NOOP("该区域坐标精度存疑（国境/港澳台边界）");
 // 空态一行（修 1-23/1-31：未选择文件 → 一行说明，不平铺空值）
 constexpr const char *kNoSelectionText = QT_TR_NOOP("未选择文件，请在左侧列表选择照片");
 constexpr const char *kNoKeywordsText = QT_TR_NOOP("无关键字");
@@ -613,6 +636,13 @@ struct MetaState : QObject {
     QPushButton *pick_map = nullptr;
     QPushButton *clear_gps = nullptr;
     QLabel *gps_status = nullptr;
+    // ---- M6-T10 加性（坐标基准透明化 R4：WGS-84 标签 / DMS 显示档 / 复制 / 边界精度提示）----
+    bool dms_mode = false;                // 坐标显示档（false = 十进制度；纯显示层，不入规则）
+    std::optional<pp::GpsData> shown_gps; // 生效坐标缓存（DMS 切换只重排这一份，不重算 preview）
+    QLabel *datum_icon = nullptr;         // 「WGS-84（标准 GPS）」前置 Info 矢量图标
+    QLabel *datum_label = nullptr;
+    QPushButton *dms_toggle = nullptr;  // DMS 切换（chip；与右键菜单同一收口）
+    QToolButton *copy_coords = nullptr; // 复制当前格式坐标（文字链）
     QToolButton *rule_toggle = nullptr;
     QWidget *rule_host = nullptr;
     formkit::CheckBox *gps_enable = nullptr;
@@ -1189,12 +1219,90 @@ void refresh_time_section(MetaState *st, const std::vector<pp::EffectivePreview>
     set_hook(st, "pp_meta_time_new", rows > 0 ? QStringLiteral("<multi>") : QString());
 }
 
+// ---------------------------------------------------------------------------
+// M6-T10 坐标基准透明化（§4.5 R4）：显示档（十进制度 ↔ 度分）+ 复制 + 边界精度提示。
+//   显示 ≠ 写入：规则框（gps_lat/gps_lon）恒为十进制度（build_rules 只读规则框）；
+//   本节只重排**只读生效值框**的文本与悬浮提示（DMS 切换不触发 center_on/规则信号）。
+// ---------------------------------------------------------------------------
+
+// 生效坐标框文本（**唯一**排版点）：十进制度（6 位小数 + °）或度分（pp::map::deg_to_dms 单源）
+QString coord_field_text(const MetaState *st, double value, bool is_lat) {
+    return st->dms_mode ? pp::map::deg_to_dms(value, is_lat) : coord_text(value, 6);
+}
+
+// 坐标框悬浮提示：**当前档之外的另一种读数**（十进制 → 度分；度分 → 十进制）+ 边界精度提示
+// （粗盒边缘带才提示，§4.5）+ 时间戳（既有信息不丢）
+QString coord_tooltip(const MetaState *st, const pp::GpsData &gps) {
+    QString tip = st->dms_mode ? coord_text(gps.lat, 6) + QLatin1Char(' ') + coord_text(gps.lon, 6)
+                               : dms_string(gps.lat, gps.lon);
+    if (pp::map::coord_precision_suspect(gps.lat, gps.lon)) {
+        tip += QStringLiteral("\n") + PageMeta::tr(kPrecisionSuspectText);
+    }
+    if (gps.timestamp.has_value()) {
+        tip += QStringLiteral("\n%1: %2")
+                   .arg(PageMeta::tr("时间戳"), QString::fromStdString(*gps.timestamp));
+    }
+    return tip;
+}
+
+// 坐标框重排（**唯一**落笔点）：生效值刷新与 DMS 切换都走这里 → 两种格式同源。
+// 无生效坐标 → 两框清空（与既有空态一致）。
+void apply_coord_fields(MetaState *st) {
+    const auto set_view = [](QLineEdit *edit, const QString &text) {
+        edit->setText(text);
+        edit->setPlaceholderText(QString()); // 生效值框不承担状态（修 1-33）
+    };
+    if (!st->shown_gps.has_value()) {
+        for (QLineEdit *edit : {st->view_lat, st->view_lon}) {
+            set_view(edit, QString());
+            edit->setToolTip(QString());
+        }
+        return;
+    }
+    const pp::GpsData &gps = *st->shown_gps;
+    set_view(st->view_lat, coord_field_text(st, gps.lat, true));
+    set_view(st->view_lon, coord_field_text(st, gps.lon, false));
+    const QString tip = coord_tooltip(st, gps);
+    st->view_lat->setToolTip(tip);
+    st->view_lon->setToolTip(tip);
+}
+
+// 显示档切换（**唯一**入口：坐标行『DMS』切换钮 / 坐标框右键菜单）：只重排坐标框 + 同步
+// 切换钮自身态；不动地图视口 / 胶囊 / 规则（纯显示层，且不改写入值）。
+void set_dms_mode(MetaState *st, bool dms) {
+    if (st->dms_mode == dms) {
+        return;
+    }
+    st->dms_mode = dms;
+    if (st->dms_toggle != nullptr) {
+        const QSignalBlocker blocker(st->dms_toggle); // 程序化同步不回头触发 toggled
+        st->dms_toggle->setChecked(dms);
+    }
+    set_hook(st, "pp_meta_gps_dms", dms);
+    apply_coord_fields(st);
+}
+
+// 复制当前格式坐标（**只读显示值**：与坐标框所见逐字一致；不改规则/不写 EXIF）
+void copy_coords(MetaState *st) {
+    const QString lat_text = st->view_lat->text();
+    const QString lon_text = st->view_lon->text();
+    if (lat_text.isEmpty() || lon_text.isEmpty()) {
+        st->gps_status->setText(PageMeta::tr("当前没有可复制的坐标"));
+        return;
+    }
+    const QString text = lat_text + QStringLiteral(", ") + lon_text;
+    QApplication::clipboard()->setText(text);
+    st->gps_status->setText(PageMeta::tr("已复制坐标：%1").arg(text));
+}
+
 void refresh_gps_section(MetaState *st, const pp::EffectivePreview *preview) {
     const bool empty = st->items.isEmpty();
     const bool strip = preview != nullptr && preview->strip_privacy;
     const std::optional<pp::GpsData> effective =
         (preview != nullptr && !strip) ? preview->gps.effective : std::nullopt;
     const bool changed = preview != nullptr && preview->gps.changed;
+    // M6-T10：缓存这一份生效坐标 —— DMS 切换据此重排（同一份数据，不重算 preview）
+    st->shown_gps = effective;
     const auto set_view = [](QLineEdit *edit, const QString &text) {
         edit->setText(text);
         edit->setPlaceholderText(QString()); // 生效值框不承担状态（修 1-33）
@@ -1212,8 +1320,7 @@ void refresh_gps_section(MetaState *st, const pp::EffectivePreview *preview) {
         return;
     }
     if (effective.has_value()) {
-        set_view(st->view_lat, coord_text(effective->lat, 6));
-        set_view(st->view_lon, coord_text(effective->lon, 6));
+        apply_coord_fields(st); // 纬度/经度：十进制度 ↔ 度分单源排版 + 悬浮提示（M6-T10）
         set_view(st->view_alt,
                  effective->altitude.has_value()
                      ? QStringLiteral("%1 m").arg(QString::number(*effective->altitude, 'f', 1))
@@ -1221,14 +1328,6 @@ void refresh_gps_section(MetaState *st, const pp::EffectivePreview *preview) {
         set_view(st->view_dir, effective->direction.has_value()
                                    ? coord_text(*effective->direction, 1)
                                    : QString());
-        // DMS 读数 + 时间戳收进悬浮提示（不占控件面，信息不丢）
-        QString tip = dms_string(effective->lat, effective->lon);
-        if (effective->timestamp.has_value()) {
-            tip += QStringLiteral("\n%1: %2")
-                       .arg(PageMeta::tr("时间戳"), QString::fromStdString(*effective->timestamp));
-        }
-        st->view_lat->setToolTip(tip);
-        st->view_lon->setToolTip(tip);
     } else {
         for (QLineEdit *edit : {st->view_lat, st->view_lon, st->view_alt, st->view_dir}) {
             set_view(edit, QString());
@@ -1578,7 +1677,12 @@ void apply_picked_point(MetaState *st, double lat, double lon, const QString &st
     st->lon->setText(format_6(lon));
     st->gps_enable->setChecked(true);
     st->loading = false;
-    st->gps_status->setText(status);
+    // M6-T10（§4.5）：粗盒边缘带（国境/港澳台边缘）坐标精度存疑 → 状态行显式提示
+    // （盒内深处与境外不加句 —— 境外偏移恒 identity，两向一致，无"界内界外不一致"）
+    st->gps_status->setText(pp::map::coord_precision_suspect(lat, lon)
+                                ? status + QStringLiteral(" · ") +
+                                      PageMeta::tr(kPrecisionSuspectText)
+                                : status);
     refresh_gps_inputs(st);
     refresh_gps_warning(st);
     refresh_effective(st);
@@ -1873,6 +1977,15 @@ void apply_style(MetaState *st) {
     set_fold_icon(st, st->link_keywords, st->tag_host != nullptr && st->tag_host->isVisible());
     if (st->search_btn != nullptr) {
         icons::apply(st->search_btn, icons::Name::Search, t.text2, t.text3, 12);
+    }
+    // M6-T10：坐标行 WGS-84 标签的 Info 矢量图标随令牌重放（QLabel 承载的 QPixmap 取色不吃 QSS）
+    if (st->datum_icon != nullptr) {
+        st->datum_icon->setPixmap(icons::pixmap(icons::Name::Info, kDatumIconPx, t.text3,
+                                                st->datum_icon->devicePixelRatioF()));
+    }
+    if (st->dms_toggle != nullptr) {
+        const QSignalBlocker blocker(st->dms_toggle); // 主题重放不动显示档，只保持控件态与档一致
+        st->dms_toggle->setChecked(st->dms_mode);
     }
     for (QPushButton *remove :
          st->page->findChildren<QPushButton *>(QStringLiteral("tag_remove"))) {
@@ -2313,6 +2426,38 @@ QWidget *build_gps_card(MetaState *st, QWidget *parent) {
         r.width = FieldWidth::Flex;
         const formkit::DoubleRow row = formkit::double_row(body, l, r);
         row.row->setObjectName(QStringLiteral("pp-meta-gps-coord-row"));
+        bv->addWidget(row.row);
+    }
+    // 坐标显示行（M6-T10/§4.5 R4，紧贴经纬度行）：[ⓘ WGS-84（标准 GPS）] ……[DMS][复制]
+    //   —— 基准面标签（tooltip 说明火星偏移已抵消）+ 显示档切换 + 复制；**只显示/只复制**，
+    //   写入值一律十进制度（规则框在下方折叠面里，与本行无关）。
+    {
+        TrackGroup group = make_group(body);
+        st->datum_icon = new QLabel(group.widget());
+        st->datum_icon->setObjectName(QStringLiteral("pp-meta-gps-datum-icon"));
+        st->datum_icon->setFixedSize(kDatumIconPx, kDatumIconPx);
+        st->datum_icon->setAccessibleName(PageMeta::tr("WGS-84"));
+        group.add(st->datum_icon);
+        group.gap(formkit::kInlineGap);
+        st->datum_label = new QLabel(PageMeta::tr("WGS-84（标准 GPS）"), group.widget());
+        st->datum_label->setObjectName(QStringLiteral("pp-meta-gps-datum"));
+        st->datum_label->setProperty(kFieldProperty, QStringLiteral("sub"));
+        st->datum_label->setFont(theme::font(theme::Typography::hint_px, QFont::Normal));
+        st->datum_label->setToolTip(PageMeta::tr(kDatumTooltipText));
+        group.add(st->datum_label);
+        group.stretch();
+        st->dms_toggle =
+            make_chip(group.widget(), QStringLiteral("pp-meta-gps-dms"), PageMeta::tr("DMS"));
+        st->dms_toggle->setToolTip(PageMeta::tr(kDmsToggleTooltipText));
+        group.add(st->dms_toggle);
+        group.gap(theme::Metrics::group_gap);
+        st->copy_coords =
+            make_link(group.widget(), QStringLiteral("pp-meta-gps-copy"), PageMeta::tr("复制"));
+        st->copy_coords->setToolTip(PageMeta::tr(kCopyCoordsTooltipText));
+        group.add(st->copy_coords);
+        const formkit::Row row =
+            formkit::frow(body, PageMeta::tr("坐标"), group.widget(), FieldWidth::Flex);
+        row.row->setObjectName(QStringLiteral("pp-meta-gps-datum-row"));
         bv->addWidget(row.row);
     }
     {
@@ -2834,13 +2979,36 @@ QWidget *build_gps_card(MetaState *st, QWidget *parent) {
                          set_hook(st, "pp_meta_gps_layer",
                                   QString::fromLatin1(kLayerStyleKeys[std::size_t(style)]));
                      });
+    // M6-T10（§4.5 R4）：显示档切换钮 + 复制链 + 坐标框右键菜单 —— 三条入口同一收口
+    // （set_dms_mode / copy_coords）；右键菜单同时承担"复制"（只读框的默认菜单不可用）
+    QObject::connect(st->dms_toggle, &QPushButton::toggled, st,
+                     [st](bool on) { set_dms_mode(st, on); });
+    QObject::connect(st->copy_coords, &QToolButton::clicked, st, [st] { copy_coords(st); });
+    for (QLineEdit *edit : {st->view_lat, st->view_lon}) {
+        edit->setContextMenuPolicy(Qt::CustomContextMenu);
+        QObject::connect(edit, &QLineEdit::customContextMenuRequested, st,
+                         [st, edit](const QPoint &pos) {
+                             QMenu menu(edit);
+                             QAction *copy = menu.addAction(PageMeta::tr("复制坐标"));
+                             QAction *dms = menu.addAction(PageMeta::tr("度分显示（DMS）"));
+                             dms->setCheckable(true);
+                             dms->setChecked(st->dms_mode);
+                             const QAction *chosen = menu.exec(edit->mapToGlobal(pos));
+                             if (chosen == copy) {
+                                 copy_coords(st);
+                             } else if (chosen == dms) {
+                                 set_dms_mode(st, dms->isChecked()); // 菜单已翻转勾选态
+                             }
+                         });
+    }
     // 初始态（Road = map 的默认图层）+ 自验钩子读数
     refresh_layer_hint(st);
     set_hook(st, "pp_meta_gps_layer", QString::fromLatin1(kLayerStyleKeys[0]));
     set_hook(st, "pp_meta_gps_results", 0);
     set_hook(st, "pp_meta_gps_suggest", 0);
     set_hook(st, "pp_meta_gps_address", QString());
-    fill_result_rows(st); // 空态 = 占位行（"搜索后在此选择"）
+    set_hook(st, "pp_meta_gps_dms", false); // M6-T10：显示档（默认十进制度）
+    fill_result_rows(st);                   // 空态 = 占位行（"搜索后在此选择"）
     return card;
 }
 

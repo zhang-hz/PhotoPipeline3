@@ -68,10 +68,10 @@
 | v6 §12 十七条逐条 PASS | ✅ | §1.2（探针逐字）；视觉面见 §3 |
 | m4-tasks §6 七项走查自动化部分全绿 + 证据包留 `.cache/m5-review/` | ✅ 证据包在库 | `.cache/m5-review/wg4-t13-{dark,light}-*/` 各 **15 张**真实平台截图（§6 证据路径） |
 | ctest 27/27 + release-dev 28/28 + 金样 20/20 + 冻结行 + regression zero diff | ✅ **数值随 M5 增测上移**：ctest release **28/28**、release-dev **29/29**（新增 `test_formkit` 段几何断言）；其余逐项见 §1.4 | §1.4 |
-| CI 四道全绿 + 双 ≤20min 实测 | ⚠️ **3/4**（pr-fast / main-full / nightly 全绿且 ≤20min；release 道未触发——见 §1.4 与 §5 未决项 1）；**且首次实测出 2 个 job 超 §12.3 单 job 预算**（§4.1 第 1 条，如实登记） | §1.4 |
+| CI 四道全绿 + 双 ≤20min 实测 | ✅ **4/4**（后补：release 道 run 38024895135 全绿，整轮 wall **17.7 min ≤ 20**（§1.5 e）；单 job 实测上限 16.7 min，各自 `timeout-minutes: 20` 未破）。**遗留**：`winzip` 16.7 min 超 §12.3 单 job 预算 15 min（承 §4.1 第 1 条——**超预算是报告事实、非门禁红**） | §1.4 / §1.5 |
 | win64.zip 五门禁 + 许可审计 + AppImage 烟测 | ✅ Windows 本机全过；✅ AppImage 经 CI 实测（本机不可复跑，明示） | §1.4 |
 | `docs/m5-report.md` + CHANGELOG 0.3.0 增补 + README 增补 | ✅ 本批落地 | 本文 + `CHANGELOG.md` + `README.md` |
-| `tag v0.3.0` → GitHub Release（含前置探测） | ⛔ **不在本任务边界**（发行轮动作） | §5 未决项 1 |
+| `tag v0.3.0` → GitHub Release（含前置探测） | ✅ **已发行**（M5-T16 发行轮）：tag 推进至 `50317d0`，release 道 run 38024895135 五 job 全绿，Release v0.3.0 四附件（含双探测绿） | §1.5（a–g） |
 
 ### 1.4 本波次 CI 与打包实测（全部本机执行，逐字）
 
@@ -163,7 +163,8 @@ exit 0
 | pr-fast | 38019714454 | success | `e932abf` | 12m2s | fmt 9s / build+unit linux 3m51s / build+unit windows 9m54s / golden-subset 1m48s / gate 3s |
 | main-full | 38019708847 | success | `e932abf` | 18m2s | 9 个 job 详见下 |
 | nightly | 38019720990 | success | `e932abf` | 4m23s | asan/ubsan/tsan + regression + audit + gate |
-| **release** | — | **未触发** | — | — | `release.yml:47-48` `on: push: tags: ['v*']`；本波次未推 tag（§5 未决项 1） |
+| **release（首跑）** | 38023300103 | **failure**（双探测均误判；逐条归因并修复，见 §1.5） | `cef01fe` | 16m11s | appimage ✓3.8 · winzip ✓15.9 · **probe-appimage ✗7s**（下载件无 x 位 rc=126）· **probe-winzip ✗14s**（PS 捕获为空 + `$ver`/`$VER` 覆写）· publish skipped（未产生 Release ⇒ tag 仍可移动） |
+| **release（发行）** | 38024895135 | **success** | `50317d0` | **17m47s**（job wall **17.7 min ≤ 20** ✅） | 五 job 全绿（4.5 / 16.7 / 0.5 / 0.2 / 0.7 min）→ **GitHub Release v0.3.0 已发布**（§1.5） |
 | （前置）warm-cache | 38010575991 | success | — | 1h14m13s | 唯一豁免 20min 的播种道 |
 
 main-full job 实测（`gh api …/jobs`）与**预算校准**（本机用 `tools/ci-budget.py` 复算，
@@ -198,6 +199,113 @@ gate 0.1 min，**整轮 4.3 min ≤ 20min**，全部 ✅ 预算内。
 
 CI fingerprint 行逐字：`make_winzip: 产物: …\dist\PhotoPipeline-0.3.0-win64.zip (33538488 bytes,
 sha256=b555ff7e…, 条目 104)`；本机下载 CI artifact 后 `sha256sum` 与 `33,538,488 B` **逐字一致**。
+
+### 1.5 发行结果（M5-T16 发行轮；`gh` 取证 + 本机实跑抽查）
+
+**（a）前置核对（发行前，逐项实跑）**
+
+| 项 | 结果 | 证据 |
+|---|---|---|
+| 工作树 | 干净（仅 M4/M5 既有未跟踪杂物：`nul` / `docs/mockups$n.png` / `docs/mockups-v2$pg-*.png` / `docs/gui-fix-mockups*` / `tests/__pycache__/`，未触碰、未提交） | `git status --porcelain` |
+| 版本单源 | **0.3.0**（单源 = `CMakeLists.txt:19` `project(PhotoPipeline VERSION 0.3.0 …)`） | 产物 `--version` = `PhotoPipeline 0.3.0` |
+| CI 三道（发行前树 `cef01fe`） | pr-fast **38022179465** success `13m23s` · main-full **38022184222** success `18m18s` · nightly **38022181606** success `3m57s`（三条 headSha 均 = `cef01fed…`） | `gh run view --json headSha` 逐条核对 |
+| CI 三道 + release（**发行提交 `50317d0`**，发行后逐一复核） | pr-fast **38026021415** success `10m32s` · main-full **38024893020**（push）success `18m11s` · nightly **38026023524** success `3m36s` · release **38024895135** success | headSha 全部 = `50317d0e…` |
+| 本机闸门（最终树） | release/release-dev 构建 exit 0 · `ctest --preset release` **28/28** · 金样 `SMOKE total=20 pass=20 fail=0` · `UI-SMOKE OK shots=12 pages=3` · regression `zero diff (baseline reproduced)` · `ci-format` `violations=0` | 本轮复跑，日志 `build/m5t16-logs/` |
+| Release 查重 | `no release for v0.3.0`（发行前显式核对；与 publish ① 的 `查重 OK: tag v0.3.0 尚无 Release` 互证） | `gh release view v0.3.0` → `release not found` |
+
+**（b）tag 推进（挂资产前可移动，M3 §7.1-11；共 4 次 `git push -f origin v0.3.0`）**
+
+| 时点 | tag 对象 | 指向提交 | 说明 |
+|---|---|---|---|
+| 发行前（M4 遗留） | `97d4753` | `80888ca`（M4-CI-fix2，2026-09-25） | 远端同 hash；**未挂任何 Release 资产** ⇒ 可移动 |
+| fix 轮 1 | `aaec299` | `cef01fe` | 发布说明改源 + SHA256SUMS 附件 |
+| fix 轮 2 | `7b53717` | `8b84f93` | 下载件 `chmod +x` |
+| fix 轮 3 | `97eadec` | `745d07e` | probe-winzip 捕获改 `cmd /c` |
+| **发行（最终）** | **`84c9158`**（annotated，message `PhotoPipeline 0.3.0`） | **`50317d0`** | = 本报告记录的修复树；`git rev-parse v0.3.0^{}` = `origin/main` = `50317d0` |
+
+**（c）release 道运行序列（4 跑；红/取消逐条归因，最终跑绿）**
+
+| # | run | 树 | 结论 | 时长 | 归因与处置 |
+|---|---|---|---|---|---|
+| 1 | 38023300103 | `cef01fe` | **failure** | 16m11s | **双探测误判**：probe-appimage ✗7s（下载件无 x 位 → `env … Permission denied` / rc=126）；probe-winzip ✗14s（GUI 子系统 exe 的 PS `&` 捕获恒空 + `$ver`/`$VER` 大小写覆写 ⇒ 假「不一致」）。产物本体无问题（appimage ✓ / winzip ✓，E-1 与构建目录自测同绿）⇒ tag 仍可移动 |
+| 2 | 38023713939 | `8b84f93` | cancelled | 11m55s | 与跑 1 的 probe-winzip 同码（彼时 fix3 未落地）⇒ **主动取消止血**，避免白等 8 min |
+| 3 | 38024417697 | `745d07e` | cancelled | 7m25s | probe-appimage **二跳红**：过 chmod 后卡在 AppRun `ldd` 自检——runner 基础镜像缺 `libEGL.so.1` / `libOpenGL.so.0`（rc=3）。同因必红 ⇒ 主动取消 |
+| 4 | **38024895135** | `50317d0` | **success** | **17m47s** | 五 job 全绿 → Release v0.3.0 发布（下表） |
+
+**（d）修复提交（每项一提交、均只增；先本机验证再推 tag）**
+
+| 提交 | 内容 | 本机验证（逐字） |
+|---|---|---|
+| `cef01fe` | 发布说明改源 `CHANGELOG [版本]` 节（止于 `### 发行`）+ 新增 `SHA256SUMS` 附件（原 `--generate-notes` 由本步骤产出） | YAML 解析 OK；④ 脚本以假 `dist-release` 实跑 rc=0（说明 217 行、末行 Full Changelog 链接；清单 3 行 sha256） |
+| `8b84f93` | probe-appimage / publish ② 的**下载件补 `chmod +x`**；④ 补 `git fetch --tags` 兜底 | 归因 = 跑 1 日志（`Permission denied`、rc=126）；`ci-format` violations=0 |
+| `745d07e` | probe-winzip 捕获改 `cmd /c`（GUI 子系统 exe 不走 PowerShell `&`） | step 原文整段实跑：正例 `下载件 --version -> [PhotoPipeline 0.3.0] (rc=0)`；负例（v9.9.9）报「不一致」并 exit 1 |
+| `50317d0` | probe-appimage / publish **补运行期系统库**（`bash tools/ci-install-deps.sh`，与 appimage job 同源清单）；probe-winzip 捕获**落文件 + `Get-Content -TotalCount 1`**（去除对 PS 原生 stdout 捕获与数组语义的依赖） | 双侧实证同 `745d07e`；CI 实测 apt 步：probe-appimage 22s / publish 33s |
+
+**（e）双 ≤20min 核对（run 38024895135；`tools/ci-budget.py` 本机复算，参数与 `release.yml` 逐字相同）**
+
+```
+## release 预算校准（设计 §12.3；关键路径 = winzip 15 + probe-winzip 3 + publish 2 = 20min 边界）
+
+| job | 预算 (min) | 实测 (min) | 结论 | 状态 |
+| --- | --- | --- | --- | --- |
+| appimage | 12 | 4.5 | ✅ 预算内 | success |
+| winzip | 15 | 16.7 | ⚠ 超预算 +1.7 | success |
+| probe-appimage | 2 | 0.5 | ✅ 预算内 | success |
+| probe-winzip | 3 | 0.2 | ✅ 预算内 | success |
+| publish | 2 | 0.7 | ✅ 预算内 | success |
+
+**整轮 wall-clock** = 17.7 min（首 job 04:40:40 → 末 job 04:58:24）｜✅ ≤ 20min 硬顶
+
+**关键路径嫌疑** = `winzip`（16.7 min）——若整轮超顶，优先拆它（设计 §12.3）。
+
+**超预算 job**（1 个）: `winzip`
+```
+
+**（f）Release 核对（`gh release view v0.3.0` 逐字）**
+
+```
+title:	PhotoPipeline 0.3.0
+tag:	v0.3.0
+draft:	false
+prerelease:	false
+immutable:	false
+author:	github-actions[bot]
+created:	2026-10-10T04:40:35Z
+published:	2026-10-10T04:58:22Z
+url:	https://github.com/zhang-hz/PhotoPipeline3/releases/tag/v0.3.0
+asset:	PhotoPipeline-0.3.0-deps.txt
+asset:	PhotoPipeline-0.3.0-SHA256SUMS.txt
+asset:	PhotoPipeline-0.3.0-win64.zip
+asset:	PhotoPipeline-0.3.0-x86_64.AppImage
+```
+
+说明正文 = **CHANGELOG `[0.3.0]` 节**（217 行，止于 `### 发行`）+「完整变更日志 @v0.3.0」+
+「**Full Changelog**: …/compare/v0.2.0...v0.3.0」；publish 日志逐字：
+`发布说明 217 行（源: CHANGELOG.md [0.3.0] 节，止于 ### 发行；prev=v0.2.0）`。
+
+附件逐字（`--json assets`，size / GitHub digest 与下载后本机 `sha256sum` 三方一致）：
+
+| 资产 | 字节 | sha256 |
+|---|---|---|
+| `PhotoPipeline-0.3.0-x86_64.AppImage` | 51,837,432 | `3ac8e2bc8d4919da96feee28132d58c8fe192e785cfa9d5967fd7a163591a3f9` |
+| `PhotoPipeline-0.3.0-deps.txt` | 2,439 | `e8c80b3d61a4e0d41cde50eb3c04577688d7428cc189129b3331cf221407854d` |
+| `PhotoPipeline-0.3.0-win64.zip` | 33,538,488 | `acbd54a3b47fa2082c52ad69105ecef013c297223c80c330b816e35003639d40` |
+| `PhotoPipeline-0.3.0-SHA256SUMS.txt` | 293 | `4b1b8551021be9a5fc7546bda1f06b563819665d76163f91603751836eebf4b3` |
+
+**（g）产物抽查（全部下载自 Release 资产，本机实跑）**
+
+- `gh release download v0.3.0` 三件 + 清单：本机 `sha256sum` 与 `SHA256SUMS.txt` **逐字一致**
+  （`3ac8e2bc…` / `e8c80b3d…` / `acbd54a3…`）。
+- **`photopipeline.exe --version` 抽查 = `PhotoPipeline 0.3.0`（rc=0）**（解包 `PhotoPipeline/photopipeline.exe`，
+  zip 条目 **104**）——即任务书「产物 `--version` 抽查」。
+- AppImage 侧：CI 双探测 + publish 复核（`probe-appimage OK: PhotoPipeline 0.3.0`；
+  publish 内 `PhotoPipeline 0.3.0` + `tag=v0.3.0 版本一致: appimage=0.3.0 winzip=0.3.0`）；
+  **本机不可复跑 AppImage**（Windows；无 WSL 发行版）——如实标「未跑」，仅做 sha256 核对。
+- CI 打包指纹逐字：`make_winzip: 产物: …\dist\PhotoPipeline-0.3.0-win64.zip (33538488 bytes,
+  sha256=acbd54a3b47fa2082c52ad69105ecef013c297223c80c330b816e35003639d40, 条目 104)`；
+  `make_appimage: 产物: …/dist/PhotoPipeline-0.3.0-x86_64.AppImage (51837432 bytes)`；
+  `烟测 E-1: PhotoPipeline 0.3.0 (exit 0)`；`烟测 E-2: UI-SMOKE OK shots=12 pages=3 (exit 0, QT_QPA_PLATFORM=offscreen)`。
+- 发布动作末行逐字：`§ Release v0.3.0 已发布（附件：AppImage + deps.txt + win64.zip + SHA256SUMS.txt）`。
 
 ---
 
@@ -291,6 +399,10 @@ W-G4 验收/收尾提交（`ae1269f`/`2cd650b`）在时间轴上交错；W-R 的
 | 8 | **`src/main.cpp` 主题注释修文（1953 行附近）**：原文只写「PP_UI_THEME 强制档优先，未设置才跟随系统」，缺 A28 持久化档 | 本任务改动（纯注释，零语义） | **【机械性】**注释修文；`bash tools/ci-format.sh` = `violations=0`；构建增量仅 `main.cpp` 重编 + 链接 |
 | 9 | **README 陈旧事实订正**（ctest 27→28 / 许可数 39→35 / AppImage 40→35 / `PP_UI_THEME` 两档→三档 / deps.txt 条目） | 本任务改动，逐条以本机或 CI 实测为准（§1.4） | **【机械性】**文档与实测对齐；改动均在 README.md 文件面内 |
 | 10 | **W-G4/CI 各轮的 workflow 回报不可读** | M4 §9.2 同源限制（workflow introspection 不可用） | **【机械性】**波次证据以**提交正文 + 本机实跑**为凭，不编造未落盘的引文 |
+| 11 | **release 道探测链三处环境假设缺陷（首发即红，全部为"从未实跑过"的路径）**：① 下载件无 unix x 位（`download-artifact` 不还原权限）⇒ rc=126；② GUI 子系统 exe 不走 PowerShell `&` 捕获（且 `$ver`/`$VER` 覆写造成假"不一致"）；③ 探测 job 未装运行期系统库 ⇒ AppRun `ldd` 自检 rc=3 | §1.5(c)（跑 1 / 跑 3 日志逐字） | **【机械性/管道缺陷】**已修：`8b84f93`（chmod）/ `745d07e`（capture）/ `50317d0`（apt 运行期库）。三项均"产物本体无问题、是探测环境假设错"——即 M5-T16 任务书第 5 点的「探测脚本误判」情形；修复**只增**（未动断言、未删探测、未放宽时限） |
+| 12 | **发布说明源与附件集变更（M5-T16-fix）**：`--generate-notes` → CHANGELOG `[版本]` 节（止于 `### 发行`）+ links；新增 `SHA256SUMS` 第 4 附件 | `cef01fe`；发行清单要求「说明 = CHANGELOG 0.3.0 节摘要」「资产含 checksums」 | **【口径/只增】**原 §12.7 三件套与五 job 拓扑原样保留；本项属发行物形态，逐字登记 |
+| 13 | **`M5-T16-fix2` 提交正文笔误**：首跑 run 写作 `258bfef`（不存在的 hash），实际 = `cef01fe` | `git show 8b84f93` | **【机械性】**历史未改写（未 force-push main）；以本报告为准 |
+| 14 | **`CHANGELOG.md` 的 `[0.3.0] ### 发行` 末条在发行后即过时**（原文「本轮仍不含 push / tag / Release…留待发行轮」） | `CHANGELOG.md`（M5-T15 边界陈述） | **【机械性】**`CHANGELOG.md` **不在本任务文件面**，按纪律未改；发布说明已按「止于 `### 发行`」生成以避开该条。建议主对话授权一次文案订正（§6 未决项升报第 3 条） |
 
 ### 4.2 开发期裁定引用表（`docs/m5-adjudications.md` A1–A40）
 
@@ -343,9 +455,9 @@ W-G4 验收/收尾提交（`ae1269f`/`2cd650b`）在时间轴上交错；W-R 的
 
 | # | 事项 | 现状 | 处置建议 |
 |---|---|---|---|
-| 1 | **`tag v0.3.0` → GitHub Release（发行轮）** | tag **已存在**且指向 M4 提交 `80888ca`（远端同 hash）；**无 Release 资产**；`release.yml` 由 `push: tags: ['v*']` 触发，本波次未触发 | 发行轮：按 M3 §7.1-11「挂资产前可移动」把 tag 移到 0.3.0 树的验收提交并推 tag → release.yml 四 job（appimage ∥ winzip → 双探测 → publish）；**不在本任务边界** |
-| 2 | **§12.3 单 job 预算表校准**（winzip 17.1 / windows 17.0 vs 15 min） | 首次实测即超 2 个 job（§4.1 第 1 条）；20min 硬顶未破 | 发行轮前按 §12.3 处置条款重标预算或拆分 job；**禁止放宽时限** |
-| 3 | **release 道首跑** | 未触发（无 tag push） | 与第 1 项同批验证（含 `probe-*` 双探测与 `gh release view` 查重） |
+| 1 | **`tag v0.3.0` → GitHub Release（发行轮）** | ✅ **已闭合（M5-T16）**：tag 推进 4 次至 `50317d0`（tag 对象 `84c9158`），Release v0.3.0 已发布（4 附件、双探测绿、查重前置探测在位），见 §1.5 | — |
+| 2 | **§12.3 单 job 预算表校准**（winzip 17.1 / windows 17.0 vs 15 min） | **发行轮实测补全**：release 道 `winzip` = **16.7 min**（首跑 15.9），仍超 15 min 预算 +1.7；**整轮 wall 17.7 min ≤ 20min 硬顶**、各 job `timeout-minutes: 20` 未破（§1.5 e） | 建议主对话按 §12.3 处置：把 `winzip`/`windows` 15min 预算**重标 18min**，或按同一处置条款**拆 job/砍冗余**（「禁止放宽时限」= `timeout-minutes` 不动；预算表属设计文档口径，本报告不擅自改） |
+| 3 | **release 道首跑** | ✅ **已闭合**：首跑 38023300103 双探测红 → 三处管道缺陷逐条归因修复（§4.1 第 11 条）→ 发行跑 38024895135 五 job 全绿（含 `gh release view` 查重、`probe-*` 双探测、publish 复核） | — |
 | 4 | **A37 未覆盖的同类焦点框风险面** | T14 只对**文件列表视图**吞掉 `PE_FrameFocusRect`；其它视图（树/表）未逐一大排查 | 记 M6 候选：全仓 `QTreeView`/`QTableView` 焦点框面排查 |
 | 5 | **40 分钟级 TODO：M6 候选清单**（用户可见面） | ① 预估体积/耗时**真实算法**（A24，现为「—」+ tooltip）；② 峰值内存**分母**（A35，现 "2.1 / 4 GB" 缺 4 GB 来源）；③ **Router 焦点路由化**（A34，现 Ctrl+←/→ 变体）；④ 分类面板**严格 mockup 形态**（A36，chip vs 纯文本）；⑤ **mockup PNG 重渲**（A2 作废的 tokens.css 量化值 + M4 未决 #10） | 逐项须先改规范/原型再开发（§0 权威链） |
 | 6 | **Linux 基线重生成** | ✅ **本波次已做**：`tools/baseline/golden.log` 由 `0951888` 重播种（现含 12 处 `version=0.3.0`，2377 行）；nightly `regression` job 在 `e932abf` 上 success。**残留**：`tools/regression.py` 的 `HEADER` 两行仍引用 `tools/regression.sh`（M3 §8-9 口径：改它必须先重生成基线） | 如需文案同步：Linux 侧 `--update` 后再改 HEADER（独立口径动作） |
@@ -382,6 +494,18 @@ gh api "repos/zhang-hz/PhotoPipeline3/actions/runs/38019708847/jobs?per_page=100
 python tools\ci-budget.py .cache\m5t15-ci\jobs-38019708847.json `
   --budget "lint=1,tidy=12,linux=12,windows=15,appimage=12,winzip=15,audit=3,cache-gc=1,gate=1" `
   --wall-limit 20 --title "main-full 预算校准（设计 §12.3）"
+
+# ---- 发行轮（§1.5：tag 推进 + release 道取证 + Release 抽查） ----
+git tag -f -a v0.3.0 -m "PhotoPipeline 0.3.0" 50317d0 ; git push -f origin v0.3.0   # 仅「未挂资产」期可做（M3 §7.1-11）
+gh run list --workflow=release.yml --limit 5
+gh api "repos/zhang-hz/PhotoPipeline3/actions/runs/38024895135/jobs?per_page=100" > .cache\m5t16-jobs-38024895135.json
+python tools\ci-budget.py .cache\m5t16-jobs-38024895135.json `
+  --budget "appimage=12,winzip=15,probe-appimage=2,probe-winzip=3,publish=2" `
+  --wall-limit 20 --title "release 预算校准（设计 §12.3）"
+gh release view v0.3.0
+gh release download v0.3.0 -D .cache\m5t16-release --pattern "PhotoPipeline-0.3.0-*"
+sha256sum .cache\m5t16-release\PhotoPipeline-0.3.0-*      # 与 SHA256SUMS.txt 对拍（逐字一致）
+.cache\m5t16-release\stage\PhotoPipeline\photopipeline.exe --version   # 抽查 = PhotoPipeline 0.3.0
 ```
 
 证据留档（本机，未入库）：
@@ -393,4 +517,8 @@ python tools\ci-budget.py .cache\m5t15-ci\jobs-38019708847.json `
   `appimage/`（AppImage 51,837,432 B + deps.txt）· `winzip/`（CI zip 33,538,488 B）·
   `local-e1only.zip` / `local-e1e2.zip`（本机两轮产物副本，CRC 比对用））；
 - 视觉证据包：`.cache/m5-review/wg4-t13-{dark,light}-*/`（各 15 张真实平台截图）；
-- 蒙版/对比留证（W-G4 期）：`.cache/m5-review/rb/`、`.cache/m5-review/rb2/`。
+- 蒙版/对比留证（W-G4 期）：`.cache/m5-review/rb/`、`.cache/m5-review/rb2/`；
+- **发行轮（§1.5）**：`.cache/m5t16-jobs-38024895135.json`（release 跑 jobs API 原文）·
+  `.cache/m5t16-release/`（Release 四附件本机副本 + `stage/` 解包）· 本机最终树闸门日志
+  `build/m5t16-logs/`（`build-release.log` / `build-release-dev.log` / `ctest-release.log` /
+  `golden.log` / `ui-smoke.log` / `regression.log`）。

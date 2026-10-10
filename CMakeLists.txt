@@ -183,6 +183,7 @@ file(GLOB_RECURSE PP_CORE_SOURCES CONFIGURE_DEPENDS
      ${CMAKE_SOURCE_DIR}/src/platform/paths.cpp
      ${CMAKE_SOURCE_DIR}/src/mapwidget/coord.cpp
      ${CMAKE_SOURCE_DIR}/src/mapwidget/layers.cpp  # M6-T1：瓦片源/图层 URL 事实表（纯函数，UI 侧 REMOVE_ITEM 剔除）
+     ${CMAKE_SOURCE_DIR}/src/mapwidget/geocoder.cpp  # M6-T2：地理编码 URL/解析（纯函数，UI 侧 REMOVE_ITEM 剔除）
      ${CMAKE_SOURCE_DIR}/src/ui/preset_io.cpp)   # 唯一 Qt 适配层（JSON），UI/harness/测试三处复用
 add_library(pp_core STATIC ${PP_CORE_SOURCES})
 # M2-T11 §2.2：生成的 core/version.h（构建目录）随 src 一并 PUBLIC 传播
@@ -235,7 +236,8 @@ file(GLOB_RECURSE PP_UI_SOURCES CONFIGURE_DEPENDS
      ${CMAKE_SOURCE_DIR}/src/platform/*.cpp)
 list(REMOVE_ITEM PP_UI_SOURCES ${CMAKE_SOURCE_DIR}/src/ui/preset_io.cpp  # 已在 pp_core，避免重复符号
      ${CMAKE_SOURCE_DIR}/src/platform/paths.cpp ${CMAKE_SOURCE_DIR}/src/mapwidget/coord.cpp  # M1b：同上
-     ${CMAKE_SOURCE_DIR}/src/mapwidget/layers.cpp)  # M6-T1：同上（编入 pp_core，UI 不再编译）
+     ${CMAKE_SOURCE_DIR}/src/mapwidget/layers.cpp  # M6-T1：同上（编入 pp_core，UI 不再编译）
+     ${CMAKE_SOURCE_DIR}/src/mapwidget/geocoder.cpp)  # M6-T2：同上
 add_executable(photopipeline src/main.cpp ${PP_UI_SOURCES})
 if(WIN32)
     # M3-D2/D5/D6: 嵌入应用清单（UTF-8 代码页）；GUI 子系统（双击无控制台，

@@ -8,7 +8,49 @@ CI 工业化（快慢道四流水线）、依赖一把全升、AVX2 性能基线
 + vcpkg（`x64-windows-avx2` 自定义 triplet，继承 `x64-windows` 动态链接形态）+ **Qt 6.11.2**
 （`msvc2022_64`）；ISA 基线 = **AVX2 / x86-64-v3**（调优目标 i7-14700K）。
 
+> **M5 折入（2026-10-10 收口）**：本版同时折入 **M5「GUI 刷新 v6」**——视觉体系按
+> [docs/qt-gui-design-spec.md](docs/qt-gui-design-spec.md)（v6 单源规范）与视觉终稿
+> [docs/mockups-v2/](docs/mockups-v2/) 全量重做（**版本号不变**，用户已确认口径）。引擎侧零改动
+> （`src/core`/`src/codecs`/`src/decode` 未触碰），只做视觉与排版；用户可见变化见下方
+> 「GUI 刷新 v6（M5 折入）」节，验收证据与偏差登记见 [docs/m5-report.md](docs/m5-report.md)。
+
 ### 新增
+
+**GUI 刷新 v6（M5 折入）**
+
+- **视觉体系 v6（令牌单源）**：全界面颜色/字阶/间距/圆角与控件度量收口到 `src/ui/theme.h`
+  唯一令牌源（明暗 = 换令牌重建 QSS；暗色卡片无投影、画布底 `#16181d` 不随主题变）；页内行节奏
+  统一 **pitch 28px**
+- **表单体系（`src/ui/formkit.{h,cpp}`）**：行构造器在构造层强制规格 —— 标签轨 80px 右对齐、
+  列距 12、**字段宽只有 88 / 160 / flex 三档**、单位 16px 槽、范围 10px 注释；页面不再手摆栅格
+- **图标矢量化（`src/ui/icons.{h,cpp}`）**：24×24 网格、1.5px 等线宽、圆角端点的 QPainterPath
+  矢量图标（`assets/icons/*.svg` 为设计源入库）；**全界面 Unicode 字形充当图标已清零**（含改值标记、
+  状态徽标、弹窗套件），每枚图标带 tooltip 与 accessibleName
+- **无边框窗口收口**：caption 三钮 **46×32 单轨**（可见面 = 命中区），关闭悬停 `#c42b1c`，
+  最大化钮保留 `HTMAXBUTTON`（Win11 Snap），八向 6px 缩放命中几何不变
+- **壳层**：顶栏 44px 三段式（品牌 / 一体式分段导航 92×30 / 工具 + caption）、状态栏 30px 四档
+  （新增「剩余磁盘」读数段）；**栏宽固定轴 左 330 / 右 587**（切页列不错位）；步骤导航**无 ✓ 等完成态装饰**
+- **明暗主题**：亮暗两主题**布局等价**（`--ui-smoke` 逐一比对 **988 个 `pp-*` 控件**的几何与可见性
+  逐项一致，仅令牌不同）；**主题可手动切换并跨进程持久化** —— 设置·通用 三档
+  「跟随系统｜浅色｜深色」（`AppSettings.ui_theme_mode`），优先级 = `PP_UI_THEME` 强制档 >
+  持久化档 > 跟随系统
+- **文件列表**：行高 **58px**（勾选 13px + 46px 缩略图 + 2–3 行信息不截断 + 右侧状态胶囊）；
+  工具行常驻（搜索 / 添加 / 移除 / 筛选 / 分组）+ 空态投放区；**分类面板改 2 列网格**
+  （色点 + 名 + 计数胶囊）；分类筛选新增「仅显示已勾选 / 仅显示有例外 + 清除筛选」
+  （只影响列表可见性，不动勾选 / 输出 / 分类数据）
+- **预览画布**：`#16181d` 舞台（明暗同值）、矢量图标空态 + 引导语、缩放控件组
+  「− / 100% / ＋ / 适应 / 1:1」、翻图钮 28px、角标空态隐藏、小图最近邻、letterbox 照片衬垫
+- **三页 v6 化**：① 元数据页四卡组（关键信息 kv 双列 5 行 / 时间偏移 3×spin88 + 生效对照 /
+  GPS 双列轨 + 地图 + 操作行 / 隐私与文件时间）；② 输出页四卡组（格式磁贴 2×4 零形变 /
+  全局一行一义 / 格式参数「一行一义」六行 + 折叠区 / 预设与预估）；③ 运行页三卡组
+  （总览合成条 + 指标单源 kv 八项 + 操作行三级动作 / 任务表分组行 + 逐输出行 tabular /
+  日志尾等宽真实尾部 4 行）
+- **设置弹窗重做**：660px、标题栏 40px、下划线页签 **通用｜输出｜运行｜地图｜关于**、
+  行 pitch 28 / 标签 80 / 字段 160、底栏 48px（恢复默认居左 / 实心确定居右）；EXIF 编辑器与
+  预设弹窗同语言（零字形改值标记）
+- **语义与措辞统一**：线程预算值全局同词「**自动（N 核）**」；状态栏「已选 N / M」不被预检警告
+  吞掉；运行页「峰值内存」显示**真实读数**（core 末尾追加 `RunSummary::peak_bytes`，
+  日志行与金样零改动）
 
 **预览、分类与勾选（需求 1）**
 
@@ -152,9 +194,12 @@ CI 工业化（快慢道四流水线）、依赖一把全升、AVX2 性能基线
 
 ### 已知问题
 
-- **CI 四道流水线尚未在 GitHub 上首跑**：YAML 落地、本地可验证项（fmt/tidy/YAML 解析/命令面核对/
-  预算表/timeout 核对）全绿；wall-clock 双 ≤20min、Linux 全链、appimage 烟测、tidy 棘轮首跑判定
-  以**首次 CI 运行**为准（详见 `docs/m4-report.md` §10）
+- **CI 四道首跑（M5 实测）**：`pr-fast` / `main-full` / `nightly` 三道士 `e932abf` 全绿
+  （wall **12m2s / 18m2s / 4m23s**，均 ≤20min 硬顶；main-full 的 `appimage` 与 `winzip` 两个
+  打包 job 亦绿）；**`release` 道未触发**（`on: push: tags: ['v*']`，本版 tag 尚未推进）。
+  首次实测发现 **`windows`（17.0 min）与 `winzip`（17.1 min）两个 job 超出 §12.3 单 job 预算
+  15min 约 2min**（整轮 17.6 min ≤ 20min 硬顶未破，故未改任何时限）—— 处置见
+  [docs/m5-report.md](docs/m5-report.md) §4.1 第 1 条与 §5 未决项 2
 - **预览 250ms 判据**：内嵌预览命中路径满足；**无内嵌预览的 48MP 输入**实测 535.1 ms
   （含一次全解码，`--dev bench` 场景 `preview48`）——为如实记录，不改判据也不改口径
 - **Windows 回归基线随版本号漂移**：`tools/baseline/golden.windows.log` 含 `version=app` 行
@@ -168,10 +213,16 @@ CI 工业化（快慢道四流水线）、依赖一把全升、AVX2 性能基线
 
 ### 发行
 
-- Windows：`PhotoPipeline-0.3.0-win64.zip`（由发布轮打包产出；**T21 未在本机重跑打包**，
-  release 上传由主对话执行——口径见 `docs/m4-report.md` §8.7/§10）
-- Linux：`PhotoPipeline-0.3.0-x86_64.AppImage`（由 `release.yml` 的 `appimage` job 构建）
-- **本轮不含 push / tag / Release**：`v0.3.0` tag 与 GitHub Release 待用户验收授权后由主对话执行
+- Windows：`PhotoPipeline-0.3.0-win64.zip` —— **M5 打包轮本机五门禁全过**（A 闭包 / B 来源 /
+  C 结构 / D 许可 / E 启动含 offscreen `--ui-smoke`），指纹 **34,602,328 B / 104 条目**
+  （sha256 随条目 mtime 浮动，逐次登记）；CI `winzip` job 同轮产物 **33,538,488 B / 104 条目**
+  （sha256 `b555ff7e…`）。两者**条目面逐一相同**，二进制面因本机与 runner 编译环境不同而不同
+- Linux：`PhotoPipeline-0.3.0-x86_64.AppImage` **51,837,432 B**（sha256 `c79b6b8a…`），由
+  `main-full` 的 `appimage` job 构建；`tools/appimage-check-closure.sh` 结果 = 受检 **36 个 ELF**、
+  FAIL-A/FAIL-B 均无、目标机系统 soname **45 条**（清单 = 产物旁 `PhotoPipeline-0.3.0-deps.txt`）
+- **本轮仍不含 push / tag / Release**（M5-T15 硬边界）：`v0.3.0` tag 已存在但指向 M4 提交
+  `80888ca`（**未挂 Release 资产**，按 M3 §7.1-11 仍可移动）；tag 推进与 GitHub Release 留待发行轮
+  —— 口径与证据见 [docs/m5-report.md](docs/m5-report.md) §1.4(d)/§5 未决项 1
 
 ## [0.2.0] — 2026-09-23
 

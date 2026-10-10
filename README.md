@@ -17,7 +17,18 @@ M0 交付仓库骨架、冻结接口、链接探针与金标语料。**M1a 交�
 clang-format 硬门禁 + clang-tidy 棘轮 + sanitizer 三路）；
 ⑧ **依赖一把全升**（Qt 6.11.2 / OIIO 3.1.17 / libjxl 0.12 / exiv2 0.28.9 / x265 4.3 / SVT-AV1 4.2 …）；
 ⑨ **AVX2 性能基线**（x86-64-v3 + 5 对自研热路径 SIMD：flatten / quantize / transpose / downscale / interleave）。
-金样断言级 **20 对**、ctest **27 条**、UI 冒烟冻结行 `UI-SMOKE OK shots=12 pages=3`。
+金样断言级 **20 对**、ctest **28 条**（release）/ **29 条**（release-dev，含 UI 冒烟）、UI 冒烟冻结行 `UI-SMOKE OK shots=12 pages=3`。
+
+**M5（GUI 刷新 v6，折入 0.3.0，版本号不变）**：视觉体系与排版全量重做——单源规范
+[docs/qt-gui-design-spec.md](docs/qt-gui-design-spec.md)（v6）+ 视觉终稿 [docs/mockups-v2/](docs/mockups-v2/)
+（4 页 × 亮暗 8 张）。要点：令牌单源 `src/ui/theme.h`；表单体系 `src/ui/formkit.*`（行 pitch 28 /
+标签轨 80 / 字段宽只有 88·160·flex）；矢量图标集 `src/ui/icons.*`（**全界面无字形图标**）；
+caption 单轨 46×32；壳层顶栏 44 + 状态栏 30；**栏宽固定轴 330 / 587**；文件列表行 58px +
+分类面板 2 列网格；预览画布 `#16181d` 舞台；元数据/输出/运行三页与设置弹窗 v6 化；
+**明暗主题可手动切换并跨进程持久化**（三档 `ui_theme_mode`，见下表）。
+**引擎零改动**（`src/core`/`src/codecs`/`src/decode` 未触碰，只做视觉与排版）。验收证据、§12 十七条
+逐条探针、偏差与未决项见 [docs/m5-report.md](docs/m5-report.md)，开发期裁定见
+[docs/m5-adjudications.md](docs/m5-adjudications.md)。
 
 ## 构建（四步）
 
@@ -59,7 +70,8 @@ python tools/env.py run -- ctest --preset release
 | 开关 | 作用 | 取值 / 默认 |
 |---|---|---|
 | `PP_ASAN`（CMake option） | Windows/MSVC 下开 AddressSanitizer（`/fsanitize=address`，仅调试用；D-W3-1 缺陷取证即经此） | `ON` / `OFF`（**默认 OFF**；`release`、`release-dev` 的 flags 与语义完全不变，只有 `cmake --preset asan` 置 ON） |
-| `PP_UI_THEME`（环境变量） | **强制 GUI 主题**（走查/截图用），优先于系统主题 | `dark` \| `light`；未设置 = 跟随系统（`src/ui/theme.h` 的单源解析；`--ui-smoke` 截图基准同源） |
+| `PP_UI_THEME`（环境变量） | **强制 GUI 主题**（走查/截图用），**优先级最高** | `dark` \| `light`；未设置 = 落到下一档（见下） |
+| `ui_theme_mode`（设置项 / `AppSettings` 键） | **主题三档持久化档**：设置 → 通用 → 主题（M5 起）。解析顺序 = **强制档（`PP_UI_THEME`）> 持久化档（`ui_theme_mode`）> 跟随系统**；单源 = `src/ui/theme.h` 的 `preferred_theme_mode()`，`--ui-smoke` 截图基准同源 | `system`（默认，= 跟随系统）\| `light` \| `dark`；写回 `settings.ini`，跨进程保留 |
 | `PP_LOG_LEVEL`（环境变量） | 启动期一次性覆盖日志级别（0.1.0 起，语义不变） | `trace`/`debug`/`info`/`warn`/`error` |
 | `PP_BUILD_DEV`（CMake option） | 构建 `--dev` harness / `--ui-smoke` / 金样与基准入口 | `ON` / `OFF`（默认 OFF，发布构建不含该代码路径） |
 
@@ -124,7 +136,7 @@ build/m1-dev/photopipeline --dev tests/golden/meta/exif_full.jpg --out .cache/ou
 ### 测试命令
 
 ```bash
-# 单测 + M0 工具 + 金样自检 + linkprobe（release 树共 27 条 ctest 条目）
+# 单测 + M0 工具 + 金样自检 + linkprobe（release 树共 28 条 ctest 条目）
 ctest --test-dir build/release --output-on-failure
 
 # 金标语料（27 fixture，幂等；PP_MKFIXTURES= 指向本次构建的 pp_mkfixtures）
@@ -271,7 +283,28 @@ python tools/env.py run -- cmake --build --preset release
 - **② 输出页**：转码 / 仅元数据、8 格式 ×（后端 × 技术）参数表单（无损锁定、谓词显隐、位深运行时探测）、色彩目标、同名冲突策略、预设按钮
 - **③ 运行页**：进度条 / 吞吐 / 逐文件状态着色、取消（幂等）、结束摘要 + 打开输出目录 / 查看日志
 - **双击文件** → 单文件编辑器：EXIF 树（IFD0/Exif/GPS/只读 MakerNote）、XMP、时间/GPS/隐私三态覆盖、忽略批量规则（源文件永远只读）
-- **设置**（worker / 内存预算 / 展平底色 / 旋转 / 地图提供方 / 瓦片缓存 / 日志级别）与**预设**（JSON，`预设管理` 对话框）持久化于平台配置目录
+- **设置**（worker / 内存预算 / 展平底色 / 旋转 / 地图提供方 / 瓦片缓存 / 日志级别 / **主题三档**）与**预设**（JSON，`预设管理` 对话框）持久化于平台配置目录
+
+### GUI 刷新 v6（M5）
+
+视觉体系与排版按 v6 单源规范全量重做（引擎零改动）。设计稿即终稿：**视觉终稿 = [docs/mockups-v2/](docs/mockups-v2/)
+的 8 张 PNG**（`meta` / `output` / `run` / `settings` 四页 × `dark` / `light`）；规范正文与验收清单
+（§12 十七条）见 [docs/qt-gui-design-spec.md](docs/qt-gui-design-spec.md)，实测截图证据包与逐条探针
+见 [docs/m5-report.md](docs/m5-report.md) §1.2/§3。
+
+| 区域 | v6 口径 |
+|---|---|
+| 令牌 / 表单 | `src/ui/theme.h` 令牌单源（明暗 = 换令牌重建 QSS，暗色卡片无投影）；`src/ui/formkit.*` 行构造器：行 pitch **28** / 标签轨 **80** 右对齐 / 字段宽只有 **88 · 160 · flex** / 单位 16px 槽 |
+| 图标 / 标题栏 | `src/ui/icons.*` 矢量图标（24×24 网格、1.5px 描边）——**全界面无 Unicode 字形图标**；caption 三钮 **46×32 单轨**（可见面 = 命中区，关闭悬停 `#c42b1c`，最大化钮保留 Win11 Snap） |
+| 壳层 / 栏宽 | 顶栏 44px 三段式 + 一体式分段导航 92×30（**无 ✓ 完成态装饰**）+ 状态栏 30px 四档（含「剩余磁盘」读数）；**栏宽固定轴 左 330 / 右 587**，切页列不错位 |
+| 文件列表 / 分类 | 行高 **58px**（勾选 13px + 46px 缩略图 + 2–3 行信息不截断 + 状态胶囊）；工具行常驻（搜索/添加/移除/筛选/分组）；分类面板 **2 列网格**（色点 + 名 + 计数胶囊）；筛选「仅显示已勾选 / 仅显示有例外 + 清除」只影响可见性 |
+| 预览画布 | `#16181d` 舞台（明暗同值）、矢量空态 + 引导语、缩放条「− / 100% / ＋ / 适应 / 1:1」、翻图钮 28px、小图最近邻、letterbox 照片衬垫 |
+| 三页 / 弹窗 | 元数据页四卡组（kv 双列 / 时间偏移 3×spin88 + 生效对照 / GPS 双列轨 + 地图 / 隐私）；输出页四卡组（磁贴 2×4 零形变 / 一行一义六行 / 预设与预估）；运行页三卡组（总览 + 指标单源 kv + 分组/逐输出行 + 日志尾等宽 4 行）；设置弹窗 660px 下划线页签 **通用｜输出｜运行｜地图｜关于** |
+
+**主题切换（三档，M5 起）**：设置 → **通用 → 主题** = `跟随系统｜浅色｜深色`，选后即时生效并写入
+`settings.ini`（键 `ui_theme_mode`，默认 `system`）⇒ 跨进程保留。解析顺序 = **强制档 > 持久化档 >
+跟随系统**：命令行/截图走查可用 `PP_UI_THEME=dark|light` 强行覆盖（优先级最高，**不写回**设置）。
+亮暗两主题**布局等价**（`--ui-smoke` 逐一比对 988 个控件的几何与可见性，仅令牌不同）。
 
 地图支持 OSM（WGS-84）与高德（GCJ-02，坐标自动边界转换）双提供方；高德需在设置中填 Web 服务 Key。
 
@@ -280,8 +313,8 @@ python tools/env.py run -- cmake --build --preset release
 ```bash
 python tools/env.py run -- cmake --preset release-dev -B build/release-dev -DVCPKG_MANIFEST_INSTALL=OFF
 python tools/env.py run -- cmake --build build/release-dev
-python tools/env.py run -- ctest --test-dir build/release-dev --output-on-failure    # 28 条 = 27 引擎 + ui_smoke
-# 或手动跑（offscreen，产出 8 张走查截图）：
+python tools/env.py run -- ctest --test-dir build/release-dev --output-on-failure    # 29 条 = 28 引擎 + ui_smoke
+# 或手动跑（offscreen，产出 12 张走查截图）：
 QT_QPA_PLATFORM=offscreen ./build/release-dev/photopipeline \
     --ui-smoke --inputs tests/golden/base --shots .cache/ui-review
 ```
@@ -356,9 +389,10 @@ chmod +x PhotoPipeline-<版本>-x86_64.AppImage
     因此在 Wayland 桌面下经 **XWayland** 回退运行 —— Qt 会先打印一行 wayland 插件缺失警告、随后
     正常回退到 xcb，**非缺陷**；如需静默可显式 `QT_QPA_PLATFORM=xcb`（无 XWayland 的纯 Wayland
     环境可改用 `QT_QPA_PLATFORM=offscreen` 无头运行）。
-  - **完整 soname 清单**：打包时产出 `dist/PhotoPipeline-0.1.0-deps.txt`（**本机实测**：闭包检查
-    覆盖全部 **36 个 ELF**、逐项列出目标机系统要求 **本机 40 条 / CI 46 条** soname —— 条数差异来自
-    打包基础镜像的依赖闭包不同（本机 Ubuntu 26.04 vs CI ubuntu-24.04），非笔误；CI 产物清单见 job 摘要）。
+  - **完整 soname 清单**：打包时产出 `dist/PhotoPipeline-<版本>-deps.txt`（**0.3.0 CI 实测**：闭包检查
+    覆盖全部 **36 个 ELF**、逐项列出目标机系统要求 **45 条** soname（本机自建产物的条数会因打包
+    基础镜像的依赖闭包不同而不同，非笔误；CI 产物清单见 job 摘要与 artifact 内 deps.txt）。
+    本机未复跑该脚本（依赖 Linux ELF 工具链，Windows 主机不可用）—— 口径见 [docs/m5-report.md](docs/m5-report.md) §1.4(c)）。
 - **磁盘**：AppImage 约 50 MiB；另需输出目录与地图瓦片缓存（数据目录内）空间
 
 ### 源码与许可
@@ -369,8 +403,9 @@ chmod +x PhotoPipeline-<版本>-x86_64.AppImage
 - **第三方组件**（与"关于"页清单同源）：Exiv2 / x265（GPLv2+）、libheif（LGPLv3）、Qt（LGPLv3）、
   OpenImageIO（Apache-2.0）、libjxl / libwebp / SVT-AV1 / libaom（BSD）、lcms2（MIT）、
   libpng / libtiff / libjpeg（jpegli 分支）等；各库版权与许可全文随 AppImage 分发
-  （`tools/collect_licenses.py` 汇总 → `usr/share/licenses/<port>/copyright`，AppImage 为 40 个 port、
-  Windows zip 为 39 个，各见对应发行章节；
+  （`tools/collect_licenses.py` 汇总 → `usr/share/licenses/<port>/copyright`；**0.3.0 实测两平台同为
+  35 个 port**（AppImage 与 win64.zip 的产物内复核均报 `copyright = 35`，门禁阈值 ≥30），另附子项目
+  `usr/share/licenses/PhotoPipeline/LICENSE`；各见对应发行章节；
   本项目许可 → `usr/share/licenses/PhotoPipeline/LICENSE`）。
 
 ## 发行版（Windows）
@@ -433,7 +468,7 @@ chmod +x PhotoPipeline-<版本>-x86_64.AppImage
 python tools\bootstrap.py                                     # 一键引导：Qt(win64_msvc2022_64) + vcpkg(pinned) + 仓库内工具链
 python tools\env.py run -- cmake --preset release             # 配置（env.py 注入 vcvars/Qt/cmake/ninja）
 python tools\env.py run -- cmake --build --preset release     # 构建（产物 build\release\photopipeline.exe）
-python tools\env.py run -- ctest --preset release             # 27 条单测
+python tools\env.py run -- ctest --preset release             # 28 条单测
 python tools\env.py run -- python tests\golden\smoke.py build\release-dev                       # 20 对金样（需 release-dev 树）
 python tools\env.py run -- python tools\make_winzip.py dist --smoke-exe build\release-dev\photopipeline.exe   # 打包 zip
 ```
@@ -444,7 +479,7 @@ python tools\env.py run -- python tools\make_winzip.py dist --smoke-exe build\re
 ### 许可
 
 - 本项目：**GPL-3.0-or-later**（全文见 [LICENSE](LICENSE)）。
-- 包内 `licenses/` 随附全部第三方许可文本：`licenses/<port>/copyright`（本版 Windows 包 39 个
+- 包内 `licenses/` 随附全部第三方许可文本：`licenses/<port>/copyright`（**0.3.0 实测 35 个**
   port）+ `licenses/PhotoPipeline/LICENSE`；打包时会校验数量（≥30）并在产物内复核。
 
 ## M0 工具
@@ -473,6 +508,11 @@ python tools\env.py run -- python tools\make_winzip.py dist --smoke-exe build\re
 - [docs/v0.3.0-design.md](docs/v0.3.0-design.md) — **M4 设计文档**（接口解冻裁定表、多格式管线、进度/调度、GUI 规格、依赖升级表、CI 拓扑、测试与金样扩展）
 - [docs/m4-tasks.md](docs/m4-tasks.md) — **M4 任务书**（波次 W0–W5、总出口准则、subagent 开发协议与纪律）
 - [docs/m4-report.md](docs/m4-report.md) — **M4 收口报告**（九需求验收对照、总出口 8 条、金样 20 对、两大缺陷修复史、设计勘误清单落地对照、偏差与未决项）
+- [docs/m5-tasks.md](docs/m5-tasks.md) — **M5 任务书**（GUI 刷新 v6：架构契约 C1–C8、波次 W-G1–W-R、subagent 协议与纪律、收口清单）
+- [docs/qt-gui-design-spec.md](docs/qt-gui-design-spec.md) — **GUI v6 设计规范（单源）**（令牌/字阶/间距圆角、表单体系 R1–R4、页面规格、§12 验收十七条）
+- [docs/mockups-v2/](docs/mockups-v2/) — **GUI v6 视觉终稿**（4 页 × 亮暗 8 张 PNG + HTML/`tokens.css`）
+- [docs/m5-adjudications.md](docs/m5-adjudications.md) — **M5 开发期裁定记录**（A1–A40：规格冲突口径、跨波次缺陷追认、core 窄幅解冻）
+- [docs/m5-report.md](docs/m5-report.md) — **M5 收口报告**（§12 十七条逐条探针、波次执行记录、视觉比对结论、CI/打包实测指纹、偏差与未决项）
 
 ## 许可
 

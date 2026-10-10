@@ -1950,10 +1950,13 @@ int main(int argc, char **argv) {
     pp::ui::MainWindow w(settings);
     w.show();
     // M3-D6: Mica + 深色标题栏（非 Windows 平台在 mica.cpp 内为空操作）。
-    // M4-W2-fix 第 11 条：模式口径 = **与 GUI 同源**的 theme::preferred_theme_mode()
-    // （PP_UI_THEME 强制档优先，未设置才跟随系统）。此前这里直接读 styleHints()->colorScheme()，
-    // 于是 `PP_UI_THEME=light` 强制档下窗口边框/DWM 属性仍按系统色（启动色滞后）；
-    // 运行期主题切换由 MainWindow::Impl::refresh_theme()/Show 事件重放。
+    // M4-W2-fix 第 11 条 / M5-T11（A28）：模式口径 = **与 GUI 同源**的
+    // theme::preferred_theme_mode()，三档顺序 = **强制档 > 持久化档 > 跟随系统** —— 强制档 =
+    // PP_UI_THEME=dark|light 环境变量（双主题截图走查 + 启动期 DWM 对齐用，优先级最高）；
+    // 持久化档 = AppSettings.ui_theme_mode（A28，设置·通用三档的跨进程落地，注入点在上一行
+    // MainWindow 构造期的 apply_startup_theme()）；两者皆无 → 跟随系统色。此前这里直接读
+    // styleHints()->colorScheme()，故 PP_UI_THEME=light 强制档下窗口边框/DWM 属性仍按系统色
+    // （启动色滞后）；运行期主题切换由 MainWindow::Impl::refresh_theme()/Show 事件重放。
     pp::platform::apply_window_backdrop(reinterpret_cast<void *>(w.winId()),
                                         pp::ui::theme::preferred_theme_mode() ==
                                             pp::ui::theme::ThemeMode::Dark);

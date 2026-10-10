@@ -444,6 +444,21 @@ def main(argv):
             print('ci-tidy:   ' + v)
         print('ci-tidy: 处置: 修掉新增告警；确属口径变更/有意收敛 ⇒ python tools/ci-tidy.py {} --update '
               '（基线 diff 进同一提交）'.format(args.build_dir))
+        # M5-T14（W-R 首跑）: 棘轮违规时**也**写候选基线（内容 = 现有记录 + 本次实测），供 r2 裁定
+        # 「首跑红 ⇒ --update 重播种」以 **CI 实测值** 执行 —— 本路径把 CI 侧完整实测（total/逐文件）
+        # 经既有 artifact 通道交回维护者复核并入。判据零改动：退出码仍为 1（红），仅多写一个诊断文件。
+        candidate = args.candidate or (args.baseline + '.candidate.tsv')
+        new_records = dict(records)
+        new_files = {k: dict(v) for k, v in files.items()}
+        new_files[fp_key] = dict(counts_total)
+        new_records[fp_key] = {
+            'platform': platform, 'compiler': compiler, 'tool': 'clang-tidy ' + ver,
+            'checks': args.checks, 'total': total, 'files': n_files,
+            'generated_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+        }
+        write_baseline(candidate, new_records, new_files)
+        print('TIDY-CANDIDATE 棘轮违规 ⇒ 候选基线（本次实测）已写出: {}（复核后并入 {} 重播种）'
+              .format(candidate, args.baseline))
         print('TIDY total={} baseline={} files={} violations={} seed=0'.format(
             total, record['total'], n_files, len(violations)))
         return 1

@@ -67,9 +67,21 @@
 #       unconditional budget accounting
 #   N9  stdout table `file state bytes ms warnings` -> the ms column -> `<ms>`
 #       (bytes, state and warnings stay verbatim)
+#   N10 (M5-T14 首跑) svt-av1 的 CPU 特性横幅
+#       `Svt[info]: [asm level on system : up to <cpu>]` 与
+#       `Svt[info]: [asm level selected : up to <cpu>]` -> `up to <asm>`：
+#       <cpu> 是**宿主 CPU 特性探测结果**（avx512icl / avx2 / …），GitHub
+#       ubuntu-24.04 池是异构主机 ⇒ 同一提交在两类主机上产出不同横幅
+#       （实测: run 38015489525 播种 = avx512icl，run 38018644510 落 avx2 主机
+#       ⇒ 38 行 vendor-stdout 差异 ⇒ 非零 diff）。与 N7 同口径: 机器相关量
+#       不得进入基线。
 #   Kept verbatim: level/stage/source, file names, parameter snapshot, warnings,
 #   failure reasons and all summary counts (files/ok/failed/skipped/cancelled/
 #   bytes) — i.e. exactly the "what changed" signal the baseline exists for.
+#
+#   比对侧同规则（M5-T14）: diff 路径对基线文本同样套用 normalize()（与写入侧
+#   同一规则集）。规则函数对既有基线幂等（实测两平台基线 normalize 后 0 行变化）
+#   ⇒ 对既有内容零行为变化；规则集扩充时基线自愈，无需为每条新规则重播种。
 #
 # regenerate the baseline: python tools/regression.py <BUILD_DIR> --update
 #
@@ -160,7 +172,7 @@ def usage(dest=None):
     (dest or sys.stdout).write('\n'.join(out) + '\n')
 
 
-# N1..N9 — see the header. Applied to the run log and to the stdout table.
+# N1..N10 — see the header. Applied to the run log and to the stdout table.
 _N1 = re.compile(r'^[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} ')
 _N2 = re.compile(r'^(\[[a-z]+\] )\[[0-9]+\] ')
 _N4 = re.compile(r'0x[0-9a-fA-F]{9,}')
@@ -168,10 +180,12 @@ _N5 = re.compile(r'/tmp/[A-Za-z0-9._+-]+')
 _N6 = re.compile(r'([a-z_]+_ms)=[0-9]+(\.[0-9]+)?')
 _N6B = re.compile(r'throughput_mb_s=[0-9.]+')
 _N7 = re.compile(r'(capacity_bytes|budget_bytes)=[0-9]+')
+# N10: svt-av1 的宿主 CPU 特性横幅（avx512icl / avx2 / …）—— 见文件头 N10。
+_N10 = re.compile(r'(Svt\[info\]: \[asm level (?:on system|selected) : up to )[^\]]+(\])')
 
 
 def normalize(text):
-    """sed/grep/awk 管线（N1–N9）→ 规范化后的行列表。"""
+    """sed/grep/awk 管线（N1–N10）→ 规范化后的行列表。"""
     normalized = []
     for line in text.splitlines():
         line = _N1.sub('', line)
@@ -182,6 +196,7 @@ def normalize(text):
         line = _N6.sub(r'\1=<ms>', line)
         line = _N6B.sub('throughput_mb_s=<val>', line)
         line = _N7.sub(r'\1=<bytes>', line)
+        line = _N10.sub(r'\1<asm>\2', line)
         if 'budget report {' in line:
             continue
         fields = line.split()
@@ -720,7 +735,9 @@ def main(argv):
     base_text = read_text(BASELINE)
     lines_base = base_text.count('\n')
     print('regression: normalized %d lines vs baseline %d lines' % (lines_new, lines_base))
-    base_lines = base_text.splitlines()
+    # M5-T14: 基线与本次运行走**同一** normalize() 规则集（见文件头「比对侧同规则」节）。
+    # 对既有基线幂等（实测两平台基线 normalize 后 0 行变化）⇒ 零行为变化；规则集扩充时基线自愈。
+    base_lines = normalize(base_text)
     work_lines = work_text.splitlines()
     diff_lines = list(difflib.unified_diff(base_lines, work_lines,
                                            fromfile=BASELINE, tofile=WORK, lineterm=''))

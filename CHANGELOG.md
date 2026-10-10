@@ -1,5 +1,93 @@
 # 变更日志
 
+## [0.3.1] — 2026-10-10
+
+**GUI 缺陷根治版**：对 0.3.0 做可视化排查（真实平台渲染双主题实拍 + 像素级取证），根治四类
+用户可见缺陷，并按「设计要求自绘/令牌化、实现却让平台画」把同类**平台代画存量**一次收口；
+同时修正**验收判定口径**（控件几何 → 渲染像素）。**引擎侧零改动**（`src/core` / `src/codecs` /
+`src/decode` 未触碰）。排查报告与证据见 [docs/gui-review-0.3.0-r2.md](docs/gui-review-0.3.0-r2.md)。
+
+### 新增
+
+- **下拉唯一构造点**（`src/ui/formkit.{h,cpp}`）：`ComboSpec` / `combo_box()` / `combo_row()`，
+  配套自绘 `formkit::Combo`（`icons::ChevronDown` 矢量箭头 8px 居右、**无分格按钮**）。QComboBox
+  从 6 个建造点收敛到这一处（`grep "new QComboBox" src/` 归零），样式钩子唯一 = `ppFk="combo"`
+- **数值控件自绘**（`formkit::Spin` / `DSpin`）：箭头列改为**盒内一列**（竖发丝线 + 横发丝线 +
+  矢量 ▲▼），对齐设计稿 `.spin .ar`，取代平台的独立描边按钮格
+- **平台指示器矢量化**（收在应用级 `QProxyStyle`，形只有一份走 `icons` 库）：树展开符
+  （`QTreeView::branch`）/ 菜单勾选（`QMenu::indicator`）/ 菜单钮下拉三角（`PE_IndicatorArrowDown`）
+- **GUI-R2 五条回归探针**（`smoke_probe_gui_r2()` + `tests/ui_smoke.py` 的 `GUI_R2_LINE_PREFIXES`，
+  只增、冻结末行不变、截图仍 12 张）：`combo-consistency` · `format-card-align` · `dialog-close` ·
+  `run-guard` · `render-tokens`（**渲染像素**口径：箭头列无贯穿对比线、树展开符形态、
+  勾选语义只属勾选列、令牌 QSS 在场性）
+
+### 修复
+
+**下拉（问题 1 + 5，同一根因）**
+
+- 亮色下 `ParamForm` 建造的下拉（技术 / 后端 / 枚举参数）**整只不绘制** —— 未挂样式钩子 →
+  不匹配任何 QSS 规则；实测非背景像素 `0/19604` → 修复后 `6331/19604`
+- 同一功能控件**四种高度**（24 / 30 / 18 / 22）与三套属性名（`ppField` / `ppMetaField` / 无）→
+  统一为 `ppFk="combo"` + 高 24 单源；退役 `page_qss` / `page_meta` / `dialogkit` 三份重复规则
+- 下拉箭头是 **Win32 经典分格按钮**（竖分隔 + 描边）→ 改矢量 chevron（`::drop-down` 只留箭头位、
+  `::down-arrow` 置空）；`Metrics::combo_arrow_px = 8` 终于有了消费点
+
+**格式参数（问题 2）**
+
+- 「＋ 添加格式…」与页签带**同高同色错位 14px、中间有缝** —— 两条 29px 灰带是 `QTabBar` /
+  corner 未透明、吃了 palette 的 `--ctl` 底（设计稿该行是白底 + 底部发丝线 + 文字链，无色带）。
+  透明化后色带消除；按钮**垂直居中**到页签带（按钮高 26 是 A7，不随带拉伸）
+
+**弹窗（问题 3）**
+
+- 设置 / 元数据编辑器 / 预设管理 三个弹窗标题栏 **✕ 点了没反应** —— caption 关闭钮只创建、
+  从未 `connect`（`make_title_bar` 只建按钮；主窗那枚是显式接的，弹窗三处漏接）。
+  新增共享接线 `dialogkit::bind_close_button`（幂等），三处各调一次
+
+**文件列表（用户复审新增）**
+
+- 选中文件后**出现第二枚勾选框**（大半被缩略图挡住、选中高亮后更显眼）—— `flags()` 对所有列返回
+  `ItemIsUserCheckable`，而内容列的绘制没清 `HasCheckIndicator`（勾选列分支清了、内容列漏了）。
+  勾选语义改为**只属勾选列** + 委托任何列都不画样式勾选指示
+- ＋/−/筛选 工具钮多出**下拉箭头**（设计稿是纯图标钮，只有分组下拉带箭头）—— 箭头是 ＋/筛选
+  挂菜单后平台自己画的。`QToolButton::menu-indicator` 置空（菜单功能保留、语义由 tooltip 承担）
+
+**运行（问题 4，防御）**
+
+- 「开始运行」在运行期存在**可点窗口期**（只靠 `refresh_status` 的 `setEnabled` 落地），
+  重入会弹「正在运行」模态 → `lock_for_run` 开头立即禁用
+
+**平台代画存量（举一反三，10 项一次收口）**
+
+- 滚动条（评审 1-50 点过名，此前零 QSS 规则）→ 令牌化细轨 + 圆角滑块 + 隐藏两端箭头钮
+- 下拉**弹出列表** → 令牌化（`--card` 底 + `--acc-dim` 选中）
+- 右键/上下文菜单（18 处）→ 令牌化（底/边/圆角/选中/分隔线）
+- 报错/询问框（38 处，含 `on_start` 六闸门）→ 令牌化（底/标签/按钮）
+- 提示框（`QToolTip`）→ 令牌化（`--card-hi` 底 + `--txt` 字）
+- 分组盒（EXIF 编辑器 3 处）→ 扁平化，消除双层框线
+
+### 已知问题
+
+- **「点击运行概率性错误」未复现**：脚本化走查 5/5 全绿、`run-guard` 两轮重入 0 模态 ⇒ 不在脚本化
+  路径上，需真实交互时序复现后定位。本轮只做了防御（立即禁用开始钮）+ 值守探针（模态看门狗）
+- `QMessageBox` 只做了令牌化（颜色/字体/按钮），**未换 dialogkit 自绘标题栏** —— 38 处调用面换壳
+  属功能改动，待裁定
+- 工具钮去箭头后，带菜单的 ＋/筛选 不再有可点提示，语义全靠 tooltip（与设计稿一致；若要严格按稿
+  把 ＋ 改成「添加文件」单一动作，属功能改动）
+- `QFileDialog` 仍为原生对话框（平台惯例，设计上允许）；树展开符不画连接线（设计稿的树没有）
+
+### 发行
+
+- Windows：`PhotoPipeline-0.3.1-win64.zip` —— `make_winzip.py` 五项门禁（A 闭包 / B 来源 /
+  C 结构 / D 许可 / E 启动含 offscreen `--ui-smoke`）
+- Linux：`PhotoPipeline-0.3.1-x86_64.AppImage` + `PhotoPipeline-0.3.1-deps.txt`
+  （`tools/appimage-check-closure.sh` 闭包清单）
+- 第 4 附件：`PhotoPipeline-0.3.1-SHA256SUMS.txt`（三个发布件的 sha256，逐字取自下载件）
+- **发布链路**：tag `v0.3.1` 推送触发 `release.yml`（appimage → probe-appimage /
+  winzip → probe-winzip → publish）；publish 前置探测 = Release 查重 + tag↔版本断言 +
+  产物 `--version` 逐字断言；发布说明取本节**之前**的 `[0.3.1]` 正文
+- 指纹与「已发行」终态留待**发行后收口**提交登记（同 0.3.0 的 M5-A5 口径）
+
 ## [0.3.0] — 2026-09-24
 
 **多格式批处理工作台**：在 0.2.0（Linux + Windows 双平台）基础上完成 M4 的九项需求——

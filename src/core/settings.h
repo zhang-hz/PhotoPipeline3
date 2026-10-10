@@ -29,6 +29,18 @@
 //   settings_pairs/apply_pair 各一行（词表外/空值保留默认）；**既有键零改动**、INI 未知键
 //   原样保留的存储契约零改动 → §3.6 面的既有冻结语义不变（与 A29 的 RunSummary::peak_bytes
 //   「末尾追加 = 冻结面登记」同口径）。
+//
+// PP-FROZEN(0.3.0)【追加面登记 · M6-T11（契约 C6「设置加键规则」）】—— `map_style` /
+//   `map_sat_labels`（追加在结构体末尾）：
+//   契约原文（docs/m6-map-upgrade.md §3 C6）：「新增 `map_tile_source` / `map_geocoder` /
+//   `map_style` / `map_sat_labels`；默认值=现行为；`test_settings` 随码扩展；老 INI 可读
+//   （缺键回落默认）；`amap_key` 脱敏规则不变」。T11 任务面 = 其中 **`map_style` /
+//   `map_sat_labels` 两项**（`map_tile_source`/`map_geocoder` 按任务拆分后续落；既有
+//   `map_provider` 语义不动）。
+//   落地形态 = 本文件末尾两个字段 + settings.cpp 的 settings_pairs/apply_pair 各两行
+//   （`map_style` 词表外/空值保留默认）；**既有键零改动**、INI 未知键原样保留的存储契约
+//   零改动 → §3.6 面的既有冻结语义不变（与 A28 的 ui_theme_mode「末尾追加 = 冻结面登记」
+//   同口径）。
 #pragma once
 #include <filesystem>
 #include <map>
@@ -106,6 +118,17 @@ struct AppSettings {
     // 非词表值在加载期丢弃（保留默认，见 settings.cpp）；消费点 = MainWindow 启动期
     // （ui/theme.h 的持久化档注入）+ 设置对话框「通用」页签的三档写回。
     std::string ui_theme_mode = "system";
+    // —— M6-T11 追加（**末尾**；契约 C6：默认 = 现行为，老 INI 缺键回落默认，脱敏不变）——
+    // `map_style`：GPS 卡图层档的跨进程记忆（§5.2「切换即 set_tile_style；记忆跨进程」）。
+    // 词表 = `road` | `satellite` | `hybrid`（与 mapwidget/layers.h 的 `TileStyle`
+    // 同序同义，也与 GPS 卡图层 Seg 的段序 矢量|卫星|混合 一致），默认 `road` = 现行为
+    // （图层初始档 = 矢量）。非词表值在加载期丢弃（保留默认，见 settings.cpp）；消费点 =
+    // MainWindow 启动期回填 + 换层写回 + 设置对话框「地图」页签的图层行。
+    std::string map_style = "road";
+    // `map_sat_labels`：混合图层的「叠标注」开关（默认 true = 现行为：混合 = 影像 + 标注双层）。
+    // 持久化面在本任务落地（设置对话框读写）；mapwidget 侧消费归 W-M5（§7 T13）——
+    // 本版只保证跨进程读写往返，不动图层绘制。
+    bool map_sat_labels = true;
 };
 
 // 极简 INI：`key=value` 单层，`#` 注释；未知键保留原样写回（向前兼容）

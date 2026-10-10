@@ -14,6 +14,11 @@
 // M5-T11（A28，按契约 C6 的加性追加面）：新增 `ui_theme_mode`（system|light|dark，默认
 // system）—— settings_pairs 末尾追加一行 + apply_pair 加一个词表分支；既有键的读写语义与
 // 文件字节序（未知键/注释原样保留）零改动（test_settings 的全字段往返随码扩展）。
+//
+// M6-T11（契约 C6「设置加键规则」，docs/m6-map-upgrade.md §3）：新增 `map_style`
+// （road|satellite|hybrid，默认 road）+ `map_sat_labels`（bool，默认 true）—— 同口径的加性
+// 追加（settings_pairs 末尾两行 + apply_pair 两个分支）；`map_style` 词表外/空值保留默认，
+// `amap_key` 脱敏规则与既有键语义一律不变。
 
 #include "core/settings.h"
 
@@ -128,6 +133,9 @@ std::vector<std::pair<std::string, std::string>> settings_pairs(const AppSetting
     kv.emplace_back("split_by_format", s.split_by_format ? "true" : "false");
     // —— 0.3.0 / M5-T11 追加（A28；追加顺序 = 结构体末尾顺序）——
     kv.emplace_back("ui_theme_mode", s.ui_theme_mode);
+    // —— M6-T11 追加（契约 C6；追加顺序 = 结构体末尾顺序）——
+    kv.emplace_back("map_style", s.map_style);
+    kv.emplace_back("map_sat_labels", s.map_sat_labels ? "true" : "false");
     return kv;
 }
 
@@ -206,6 +214,21 @@ void apply_pair(AppSettings &s, const std::string &key, const std::string &value
             c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
         if (v == "system" || v == "light" || v == "dark")
             s.ui_theme_mode = v;
+    } else if (key == "map_style") {
+        // C6/§5.2：GPS 卡图层档。词表 = road|satellite|hybrid（与 pp::map::TileStyle 同序）；
+        // **词表外/空值 → 保留默认（road）**（同 ui_theme_mode 的"值不合法 → 保留默认"口径）
+        // —— 不把未知档带进内存，GPS 卡的三态 Seg 也就不会出现"第四档"。大小写不敏感
+        // （手改配置文件容错）。
+        std::string v = value;
+        for (char &c : v)
+            c = ascii_lower(c);
+        if (v == "road" || v == "satellite" || v == "hybrid")
+            s.map_style = v;
+    } else if (key == "map_sat_labels") {
+        // C6：混合图层的「叠标注」开关（哑存储：只做既有布尔词表解析；消费归 UI/W-M5）。
+        bool v = false;
+        if (parse_bool(value, v))
+            s.map_sat_labels = v;
     }
 }
 

@@ -11,6 +11,7 @@
 #include <fstream>
 #include <string>
 #include <system_error>
+#include <utility>
 
 #include "core/settings.h"
 
@@ -77,6 +78,9 @@ pp::AppSettings non_defaults() {
     s.split_by_format = true;
     // M5-T11（A28）：主题档（词表 system|light|dark；此处取非默认档以证往返）
     s.ui_theme_mode = "dark";
+    // M6-T11（C6）：图层档（词表 road|satellite|hybrid）+ 混合叠标注（此处取非默认档/值）
+    s.map_style = "satellite";
+    s.map_sat_labels = false;
     return s;
 }
 
@@ -88,7 +92,8 @@ bool same(const pp::AppSettings &a, const pp::AppSettings &b) {
            a.last_format == b.last_format && a.last_preset == b.last_preset &&
            a.last_out_root == b.last_out_root && a.stagger_ms == b.stagger_ms &&
            a.thread_budget == b.thread_budget && a.output_template == b.output_template &&
-           a.split_by_format == b.split_by_format && a.ui_theme_mode == b.ui_theme_mode;
+           a.split_by_format == b.split_by_format && a.ui_theme_mode == b.ui_theme_mode &&
+           a.map_style == b.map_style && a.map_sat_labels == b.map_sat_labels;
 }
 
 std::string dump(const pp::AppSettings &s) { return pp::settings_to_string(s); }
@@ -112,6 +117,9 @@ int main() {
               "defaults/0-3-0-fields", "got " + dump(want));
         // M5-T11/A28：主题档默认 = system（= 现行为：跟随系统，§9.2）；键缺省即现行为
         check(want.ui_theme_mode == "system", "defaults/ui-theme-mode-system", "got " + dump(want));
+        // M6-T11（C6）：图层档 / 混合叠标注的默认值 = 现行为（road = 矢量档；true = 混合叠标注）
+        check(want.map_style == "road" && want.map_sat_labels, "defaults/m6-map-keys",
+              "got " + dump(want));
         // A directory is not a settings file either -> defaults, no error.
         const pp::AppSettings got_dir = pp::load_settings(dir);
         check(same(got_dir, want), "defaults/directory-path", "got " + dump(got_dir));
@@ -269,6 +277,73 @@ int main() {
         }
     }
 
+    // ---- M6-T11（C6）：map_style / map_sat_labels —— 三档往返 + 非法回落 + 老串缺键取默认 ----
+    {
+        const fs::path dir = make_temp_dir("settings_map_style");
+        const fs::path file = dir / "settings.ini";
+        const pp::AppSettings def;
+
+        // 三档逐一 set→save→load 往返（档名 = AppSettings 字段文本 = settings.ini 落值）
+        for (const char *style : {"road", "satellite", "hybrid"}) {
+            pp::AppSettings s;
+            s.map_style = style;
+            const std::string err = pp::save_settings(file, s);
+            const pp::AppSettings got = pp::load_settings(file);
+            check(err.empty() && got.map_style == style &&
+                      contains(read_all(file), std::string("map_style=") + style),
+                  std::string("map-style/roundtrip/") + style, "err=" + err + " got=" + dump(got));
+        }
+        // 混合叠标注两端往返（true = 默认档；false = 关闭档；落值恒为 true/false 词表）
+        for (const bool labels : {true, false}) {
+            pp::AppSettings s;
+            s.map_sat_labels = labels;
+            const std::string err = pp::save_settings(file, s);
+            const pp::AppSettings got = pp::load_settings(file);
+            check(err.empty() && got.map_sat_labels == labels &&
+                      contains(read_all(file),
+                               std::string("map_sat_labels=") + (labels ? "true" : "false")),
+                  std::string("map-labels/roundtrip/") + (labels ? "true" : "false"),
+                  "err=" + err + " got=" + dump(got));
+        }
+        // 大小写不敏感（手改配置文件容错）：Satellite → satellite
+        write_file(file, "map_style=Satellite\n");
+        check(pp::load_settings(file).map_style == "satellite", "map-style/case-insensitive",
+              "got " + dump(pp::load_settings(file)));
+        // 词表外/空值 → 保留默认（不把未知档带进内存 —— GPS 卡三态 Seg 不会出现"第四档"）
+        for (const char *bad : {"sat", "hybrid2", "esri", "", "  ", "road hybrid"}) {
+            write_file(file, std::string("map_style=") + bad + "\n");
+            check(pp::load_settings(file).map_style == def.map_style,
+                  std::string("map-style/bad-keeps-default/") + bad,
+                  "got " + dump(pp::load_settings(file)));
+        }
+        // 混合叠标注：既有布尔词表逐词可用；词表外 → 保留默认（true）
+        const std::pair<const char *, bool> label_words[] = {
+            {"true", true},   {"yes", true}, {"on", true},   {"1", true},
+            {"false", false}, {"no", false}, {"off", false}, {"0", false}};
+        for (const auto &[word, want] : label_words) {
+            write_file(file, std::string("map_sat_labels=") + word + "\n");
+            const pp::AppSettings got = pp::load_settings(file);
+            check(got.map_sat_labels == want, std::string("map-labels/word/") + word,
+                  "got " + dump(got));
+        }
+        write_file(file, "map_sat_labels=maybe\n");
+        check(pp::load_settings(file).map_sat_labels == def.map_sat_labels,
+              "map-labels/bad-keeps-default", "got " + dump(pp::load_settings(file)));
+
+        // 老 INI 兼容（C6「老 INI 可读（缺键回落默认）」）：T11 之前的设置串（无两枚新键）→
+        // 新键取默认，既有键照常解析（键面取 T11 前真实存在的一组）
+        write_file(file, "# M6-T11 之前写出的 settings.ini\n"
+                         "map_provider=amap\n"
+                         "amap_key=KEY-OLD-1\n"
+                         "tile_cache_mb=32\n"
+                         "ui_theme_mode=dark\n");
+        const pp::AppSettings old = pp::load_settings(file);
+        check(old.map_provider == "amap" && old.amap_key == "KEY-OLD-1" &&
+                  old.tile_cache_mb == 32 && old.ui_theme_mode == "dark" &&
+                  old.map_style == def.map_style && old.map_sat_labels == def.map_sat_labels,
+              "map-style/old-ini-defaults", "got " + dump(old));
+    }
+
     // ---- settings_to_string: log snapshot contains every field ----
     {
         const pp::AppSettings s = non_defaults();
@@ -288,7 +363,9 @@ int main() {
                                     "thread_budget=9",
                                     "output_template=$dir/$format/$file",
                                     "split_by_format=true",
-                                    "ui_theme_mode=dark"};
+                                    "ui_theme_mode=dark",
+                                    "map_style=satellite",
+                                    "map_sat_labels=false"};
         for (const char *k : keys) {
             check(contains(t, k), std::string("to-string/") + k, "snapshot=" + t);
         }

@@ -89,6 +89,9 @@ constexpr auto kThreadBudget = "pp-thread-budget";       // 线程预算（0=自
 constexpr auto kFolderStructure = "pp-folder-structure"; // 分文件夹默认结构（模板×开关）
 // —— M5-T10 新增（pp-* 钩子）——
 constexpr auto kThemeMode = "pp-theme-mode"; // 主题分段（通用页签）
+// —— M6-T11 新增（pp-* 钩子；C6 加键的「地图」页签控件）——
+constexpr auto kMapStyle = "pp-map-style";          // 图层（矢量/卫星/混合）
+constexpr auto kMapSatLabels = "pp-map-sat-labels"; // 混合叠标注（布尔）
 constexpr auto kPageGeneral = "pp-settings-page-general";
 constexpr auto kPageOutput = "pp-settings-page-output";
 constexpr auto kPageRun = "pp-settings-page-run";
@@ -114,7 +117,9 @@ constexpr auto kOrigStaggerMs = "pp_orig_stagger_ms";
 constexpr auto kOrigThreadBudget = "pp_orig_thread_budget";
 constexpr auto kOrigOutputTemplate = "pp_orig_output_template";
 constexpr auto kOrigSplitByFormat = "pp_orig_split_by_format";
-constexpr auto kOrigUiThemeMode = "pp_orig_ui_theme_mode"; // A28：主题档构造快照
+constexpr auto kOrigUiThemeMode = "pp_orig_ui_theme_mode";   // A28：主题档构造快照
+constexpr auto kOrigMapStyle = "pp_orig_map_style";          // M6-T11：图层档构造快照
+constexpr auto kOrigMapSatLabels = "pp_orig_map_sat_labels"; // M6-T11：混合叠标注构造快照
 
 constexpr int kWorkersMax = 64;   // §2.10：QSpinBox(0..64) 同域
 constexpr int kBudgetMax = 64;    // §2.10：QSpinBox(0..64)
@@ -172,6 +177,18 @@ int theme_mode_index(const QString &id) {
 
 QString theme_mode_id(int index) { return QLatin1String(kThemeModeIds[std::clamp(index, 0, 2)]); }
 
+// —— M6-T11（C6/§5.2）：图层三档的词表 ↔ 下拉项序单源映射（段序/项序 = 矢量 / 卫星 / 混合；
+//    落盘值 = AppSettings.map_style 词表 road|satellite|hybrid，与 GPS 卡图层 Seg 的三态同序）——
+constexpr const char *kMapStyleIds[] = {"road", "satellite", "hybrid"};
+
+int map_style_index(const QString &id) {
+    for (int i = 0; i < 3; ++i) {
+        if (id == QLatin1String(kMapStyleIds[i]))
+            return i;
+    }
+    return 0; // 词表外/空 → 矢量（与 core 的"值不合法 → 保留默认"同口径）
+}
+
 // —— 滑杆 ↔ 灰度（§7.4 alpha 行；修 4-15：旧实现把"滑杆值"直接当灰度用，最右端（白）
 // 画成 #646464 深灰，滑杆 / 色块 / 端标三方矛盾）——
 int gray_to_slider(double g) {
@@ -220,6 +237,9 @@ pp::AppSettings original_values(const QObject *o) {
     s.output_template = o->property(kOrigOutputTemplate).toString().toStdString();
     s.split_by_format = o->property(kOrigSplitByFormat).toBool();
     s.ui_theme_mode = o->property(kOrigUiThemeMode).toString().toStdString(); // A28
+    // M6-T11（C6）：图层档 / 混合叠标注
+    s.map_style = o->property(kOrigMapStyle).toString().toStdString();
+    s.map_sat_labels = o->property(kOrigMapSatLabels).toBool();
     return s;
 }
 
@@ -1082,6 +1102,9 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
     setProperty(kOrigOutputTemplate, QString::fromStdString(current.output_template));
     setProperty(kOrigSplitByFormat, current.split_by_format);
     setProperty(kOrigUiThemeMode, QString::fromStdString(current.ui_theme_mode)); // A28
+    // M6-T11（C6）：图层档 / 混合叠标注的快照（非确定路径回填 + settings() 完整结构）
+    setProperty(kOrigMapStyle, QString::fromStdString(current.map_style));
+    setProperty(kOrigMapSatLabels, current.map_sat_labels);
 
     theme::Tokens tokens = theme::tokens(theme::preferred_theme_mode());
     setFixedWidth(dk::kDialogWidth); // §7.4：660px 宽（居中见首次 show）
@@ -1089,7 +1112,8 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
 
     // 主题重放需要的自绘件指针（通用页签的主题段在本构造末尾接线，见 "主题切换"）
     formkit::SegmentedControl *mode = nullptr;
-    formkit::CheckBox *rotate_box = nullptr; // 占位（check_row 的勾选框）
+    formkit::CheckBox *rotate_box = nullptr;     // 占位（check_row 的勾选框）
+    formkit::CheckBox *sat_labels_box = nullptr; // M6-T11：混合叠标注（check_row 的勾选框）
     Swatch *swatch = nullptr;
 
     // ---- 卡片骨架（§7.4：自绘标题栏 40 + 下划线页签 + 正文 + 底栏 48）----
@@ -1347,6 +1371,32 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
         bind_row(provider_row, provider);
         v->addWidget(provider_row.row);
 
+        // 图层（M6-T11/C6：map_style 的落值面；与 GPS 卡图层 Seg 同词表同序 矢量|卫星|混合）
+        formkit::ComboSpec layer_spec;
+        layer_spec.object_name = QLatin1String(kMapStyle);
+        layer_spec.accessible = T("图层");
+        layer_spec.tooltip = T("地图图层：矢量路网 / 卫星影像 / 混合（影像 + 标注）");
+        auto *layer = formkit::combo_box(page_map, layer_spec);
+        layer->addItem(T("矢量"), QLatin1String(kMapStyleIds[0]));
+        layer->addItem(T("卫星"), QLatin1String(kMapStyleIds[1]));
+        layer->addItem(T("混合"), QLatin1String(kMapStyleIds[2]));
+        layer->setCurrentIndex(map_style_index(QString::fromStdString(current.map_style)));
+        const formkit::Row layer_row =
+            formkit::frow(page_map, T("图层"), layer, formkit::FieldWidth::Standard);
+        bind_row(layer_row, layer);
+        v->addWidget(layer_row.row);
+
+        // 混合叠标注（M6-T11/C6：map_sat_labels；勾选行同「EXIF 方向」一行一形）
+        const formkit::CheckRow sat_labels =
+            formkit::check_row(page_map, T("混合叠标注"), T("混合图层在影像上叠加道路与地名标注"),
+                               QLatin1String(kMapSatLabels));
+        sat_labels_box = sat_labels.box;
+        sat_labels_box->setChecked(current.map_sat_labels);
+        sat_labels_box->setToolTip(T("混合图层在影像上叠加道路与地名标注（关闭 = 纯影像）"));
+        sat_labels_box->setAccessibleName(T("混合图层在影像上叠加道路与地名标注"));
+        sat_labels_box->set_tokens(tokens);
+        v->addWidget(sat_labels.row);
+
         auto *amap_key = new QLineEdit(page_map);
         amap_key->setObjectName(QLatin1String(kAmapKey));
         amap_key->setEchoMode(QLineEdit::Password); // 不回显明文
@@ -1509,6 +1559,11 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
             const int idx = w->findData(QString::fromStdString(def.map_provider));
             w->setCurrentIndex(idx >= 0 ? idx : 0);
         }
+        // M6-T11（C6）：图层档 / 混合叠标注也属可编辑面 → 复位到默认（road / true）
+        if (auto *w = findChild<QComboBox *>(QLatin1String(kMapStyle)))
+            w->setCurrentIndex(map_style_index(QString::fromStdString(def.map_style)));
+        if (auto *w = findChild<QCheckBox *>(QLatin1String(kMapSatLabels)))
+            w->setChecked(def.map_sat_labels);
         if (auto *w = findChild<QComboBox *>(QLatin1String(kLogLevel))) {
             const int idx = w->findData(QString::fromStdString(def.log_level));
             w->setCurrentIndex(idx >= 0 ? idx : w->findData(QStringLiteral("info")));
@@ -1526,7 +1581,7 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
     // ---- 主题切换（通用页签，修 4-20 + A28）：即时生效（本对话框就地重放）+ 持久化
     //      （写进 AppSettings.ui_theme_mode，见 settings()）----
     connect(mode, &formkit::SegmentedControl::current_changed, this,
-            [this, swatch, rotate_box, mode](int index) {
+            [this, swatch, rotate_box, sat_labels_box, mode](int index) {
                 // A28：档位 → 档名单源映射；"跟随系统"= 撤掉强制档 + 清持久化覆盖
                 const QString id = theme_mode_id(index);
                 if (id == QLatin1String("light") || id == QLatin1String("dark"))
@@ -1543,6 +1598,8 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
                     mode->set_tokens(t);
                 if (rotate_box != nullptr)
                     rotate_box->set_tokens(t);
+                if (sat_labels_box != nullptr)
+                    sat_labels_box->set_tokens(t); // M6-T11：混合叠标注勾选框随令牌重放
                 if (swatch != nullptr)
                     swatch->set_tokens(t);
                 if (auto *ring = dynamic_cast<dk::FocusRing *>(
@@ -1640,6 +1697,15 @@ pp::AppSettings SettingsDialog::settings() const {
     // 不影响落库，程序化 set_current_index 同样成立）。
     if (const auto *w = findChild<formkit::SegmentedControl *>(QLatin1String(kThemeMode))) {
         s.ui_theme_mode = theme_mode_id(w->current_index()).toStdString();
+    }
+    // M6-T11（C6）：图层档 / 混合叠标注写回（同"从控件取值"口径）
+    if (const auto *w = findChild<QComboBox *>(QLatin1String(kMapStyle))) {
+        const QString id = w->currentData().toString();
+        if (!id.isEmpty())
+            s.map_style = id.toStdString();
+    }
+    if (const auto *w = findChild<QCheckBox *>(QLatin1String(kMapSatLabels))) {
+        s.map_sat_labels = w->isChecked();
     }
     // last_format / last_preset / last_out_root 不被本对话框编辑 → 保持构造快照
     return s;

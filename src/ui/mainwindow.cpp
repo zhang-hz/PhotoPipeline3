@@ -30,6 +30,7 @@
 #include "ui/formkit.h" // M5-T7：meta-geom 探针读回卡头胶囊（formkit::PillBadge）与 R1/R2 几何
 #include "ui/icons.h"
 
+#include <QAbstractButton> // M6-T11：图层 Seg 的段（QAbstractButton）驱动回填
 #include <QAbstractItemView>
 #if QT_CONFIG(accessibility)
 #include <QAccessible> // §11/A18：ShellNav 的 tab/button group 语义（自建接口 + 工厂）
@@ -274,6 +275,29 @@ using theme::preferred_theme_mode;
 theme::ThemeMode apply_startup_theme(const std::string &persisted) {
     theme::set_persisted_theme_mode(QByteArray::fromStdString(persisted));
     return theme::preferred_theme_mode();
+}
+
+// —— M6-T11（§5.2 R5 / 契约 C6 的消费面）：图层档的跨进程记忆 ——
+// 档词表 = AppSettings.map_style（road|satellite|hybrid），与 GPS 卡图层 Seg 的三态段序
+// （矢量|卫星|混合；objectName pp-meta-gps-layer，C7 冻结面）**同序同义**，也与
+// mapwidget/layers.h 的 TileStyle 枚举同序。本表 = 该序在外壳侧的唯一登记处（core 侧词表在
+// settings.cpp 的 apply_pair；页面侧段序在 page_meta.cpp 的三段构造）。
+struct MapStyleRow {
+    const char *id;
+    pp::map::TileStyle style;
+};
+constexpr MapStyleRow kMapStyles[] = {
+    {"road", pp::map::TileStyle::Road},           // 0 矢量
+    {"satellite", pp::map::TileStyle::Satellite}, // 1 卫星
+    {"hybrid", pp::map::TileStyle::Hybrid},       // 2 混合
+};
+
+int map_style_index(const std::string &id) {
+    for (int i = 0; i < 3; ++i) {
+        if (id == kMapStyles[i].id)
+            return i;
+    }
+    return 0; // 词表外/空 → 矢量（与 core「值不合法 → 保留默认」同口径）
 }
 
 // 会话态文件（QSettings INI）：与 settings.ini 同目录（data_dir() 保证已存在）
@@ -1389,6 +1413,8 @@ struct MainWindow::Impl {
     QString last_preset_path;
     QStringList cached_paths; // 行集合签名（避免每次状态变化都重扫时间预览）
     bool cached_alpha = false;
+    // M6-T11（§5.2 R5）：图层档记忆的写回接线只接一次（apply_map_style 幂等，可反复调用）
+    bool map_layer_bound = false;
 
     // ---- 拖放 / closeEvent 事件过滤器（冻结头不允许覆写虚函数）----
     struct Filter : QObject {
@@ -1417,6 +1443,9 @@ struct MainWindow::Impl {
     void clear_exception(const QString &path);
     void remove_selected();
     void restore_session();
+    // M6-T11（§5.2 R5）：settings.map_style → GPS 卡图层 Seg + map->set_tile_style
+    // （启动期与设置对话框 accept 后各一次；首次调用同时接线"换层写回 settings"）
+    void apply_map_style();
     void open_logs();
     QString disk_free_segment(); // A19（T11）：底栏「剩余磁盘」段（输出根 → 源目录 → 工作目录）
     void push_log_tail();        // M4-T14：run-*.log 末尾 5 行 → 运行页日志尾卡
@@ -3081,6 +3110,8 @@ void MainWindow::open_settings() {
     d.page_meta->set_map_provider(QString::fromStdString(d.settings.map_provider),
                                   QString::fromStdString(d.settings.amap_key),
                                   d.settings.tile_cache_mb);
+    // M6-T11（§5.2 R5）：设置页也能改图层档（「地图」页签）→ accept 后与启动期同一条回填
+    d.apply_map_style();
     pp::save_settings(pp::platform::settings_file(), d.settings); // 设置持久化：立即落盘
     refresh_status();
 }
@@ -3244,6 +3275,9 @@ void MainWindow::Impl::restore_session() {
                               QString::fromStdString(settings.last_out_root));
     page_meta->set_map_provider(QString::fromStdString(settings.map_provider),
                                 QString::fromStdString(settings.amap_key), settings.tile_cache_mb);
+    // M6-T11（§5.2 R5）：图层档的启动回填（在 set_map_provider 之后 —— 图层支持性提示按最终
+    // 源判定；`map_sat_labels` 保持持久化面，消费归 W-M5）
+    apply_map_style();
     // 预设优先于 last_format（§2.14）：仅当文件仍存在
     if (settings.last_preset.empty())
         return;
@@ -3257,6 +3291,48 @@ void MainWindow::Impl::restore_session() {
     page_output->apply_preset(preset);
     page_meta->apply_rules(preset.rules);
     last_preset_path = QString::fromStdString(settings.last_preset);
+}
+
+// M6-T11（§5.2 R5 / C6）：图层档（矢量/卫星/混合）的跨进程记忆。
+//   * 回填（本函数）：settings.map_style → GPS 卡图层 Seg + map->set_tile_style；调用点 =
+//     启动期 restore_session（在 set_map_provider 之后 —— 支持性提示按最终源判定）与设置
+//     对话框 accept 之后（档可在设置页被改）。
+//   * 写回：Seg 换层（用户点段）→ settings.map_style + 立即落盘；首次调用接线，此后常驻。
+// 单源：段序 → 图层的映射仍是 page_meta 的 layer_style_of（本处不重复枚举枚举值），故回填
+// 先「点段」= 与用户同一条链路（set_tile_style + 图层支持性提示 + 自验钩子一并落地），随后
+// 再按 kMapStyles 直达一次 set_tile_style（同值幂等，是"档 = 图"的兜底直落）。两行的组合
+// 语义 =「记忆的图层必须真的显示出来」：段在目标档而图未跟（或反之）都会让用户看到与档
+// 不符的图层。
+void MainWindow::Impl::apply_map_style() {
+    auto *seg =
+        page_meta->findChild<formkit::SegmentedControl *>(QStringLiteral("pp-meta-gps-layer"));
+    if (seg == nullptr) {
+        return; // 无图层 Seg（防御性；GPS 卡为常驻卡）
+    }
+    if (!map_layer_bound) {
+        map_layer_bound = true;
+        QObject::connect(seg, &formkit::SegmentedControl::current_changed, w, [this](int index) {
+            const std::string id = kMapStyles[std::clamp(index, 0, 2)].id;
+            if (settings.map_style == id) {
+                return; // 程序化回填（set_current_index）不发射信号；同值也不落盘
+            }
+            settings.map_style = id;
+            // 立即落盘：跨进程记忆不依赖正常退出（与 open_settings 的"立即落盘"同口径；
+            // 写回的是内存档当时的全量值，与 closeEvent 的 save_session 同源）
+            pp::save_settings(pp::platform::settings_file(), settings);
+        });
+    }
+    const int index = map_style_index(settings.map_style);
+    if (seg->current_index() != index) {
+        if (auto *segment = qobject_cast<QAbstractButton *>(seg->segment(index))) {
+            segment->click(); // 同值短路由 Seg 的 activate 保证（本分支本就只走"不同值"）
+        }
+    }
+    if (auto *map = page_meta->findChild<pp::map::MapWidget *>(QStringLiteral("pp-meta-map"))) {
+        map->set_tile_style(kMapStyles[index].style); // 档 → 图直达（§5.2；幂等）
+    }
+    // `map_sat_labels`（混合叠标注）本任务只落持久化面（设置对话框读写 + settings 往返），
+    // mapwidget 侧消费归 W-M5（§7 T13）—— 这里**不**对 map 下发，保持本版零行为风险。
 }
 
 void MainWindow::Impl::on_content_changed() {

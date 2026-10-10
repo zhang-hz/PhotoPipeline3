@@ -483,6 +483,9 @@ jobs:
           APPIMAGE="$(ls -1 dist-probe/PhotoPipeline-*-x86_64.AppImage | head -1)"
           echo "产物: $(basename "$APPIMAGE")"
           sha256sum "$APPIMAGE"
+          # M5-T16-fix2（首跑实测归因）：actions/download-artifact 不还原 unix 权限位 ⇒ 下载件无 x 位，
+          # 直接执行得 exit 126 "Permission denied"（探测误判：产物本体没问题，是下载语义）。显式补 chmod。
+          chmod +x "$APPIMAGE" || { echo "::error::chmod +x 失败: $APPIMAGE"; exit 1; }
           env -u DISPLAY -u WAYLAND_DISPLAY QT_QPA_PLATFORM=offscreen \
             "$APPIMAGE" --version > "$RUNNER_TEMP/version.log" 2>&1
           rc=$?; cat "$RUNNER_TEMP/version.log"
@@ -568,6 +571,8 @@ jobs:
         run: |
           set +e
           APPIMAGE="$(ls -1 dist-release/PhotoPipeline-*-x86_64.AppImage | head -1)"
+          # M5-T16-fix2：同 probe-appimage —— 下载件无 x 位（download-artifact 不还原 unix 权限）。
+          chmod +x "$APPIMAGE" || { echo "::error::chmod +x 失败: $APPIMAGE"; exit 1; }
           env -u DISPLAY -u WAYLAND_DISPLAY QT_QPA_PLATFORM=offscreen \
             "$APPIMAGE" --version > "$RUNNER_TEMP/publish-version.log" 2>&1
           rc=$?
@@ -605,6 +610,9 @@ jobs:
           [ -n "$pub" ] && notes_end=$(( pub - 1 ))
           sed -n "${start},${notes_end}p" CHANGELOG.md > "$NOTES"
           grep -q "^## \[$VER\]" "$NOTES" || { echo "::error::发布说明生成异常（节标题缺失）"; exit 1; }
+          # tag 字典兜底（notes 的 prev tag 依赖 tag 对象可见）：抓取失败不红 job —— 缺失时退回
+          # 「**Tag**」链接（见下），说明正文不受影响。
+          git fetch --tags --force --quiet 2>/dev/null || true
           PREV=$(git describe --tags --abbrev=0 --exclude 'ci-*' "${TAG}^{}^" 2>/dev/null || true)
           {
             echo ""; echo "---"; echo ""

@@ -11078,6 +11078,10 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
                 bool card_kept = false, placeholder_removed = false;
                 QSize dialog_size;
                 QSize map_size;
+                // M6-T16：实拍诊断（失败时随详情打印；dpr≠1 平台归因用）
+                qreal paint_dpr = 1.0;
+                QSize paint_shot;
+                int paint_near = 0;
             };
             const auto find_map_dialog = []() -> QDialog * {
                 if (auto *modal = qobject_cast<QDialog *>(QApplication::activeModalWidget())) {
@@ -11125,11 +11129,20 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
                                               inside->tile_style() == pp::map::TileStyle::Hybrid;
                             const QImage shot = inside->grab().toImage();
                             // 实拍：大图非空且尺寸 = 控件尺寸；左上 96×26 内近白像素 ≥ 20 =
-                            // 覆盖层（白底 chip/钮）随控件一同进对话框（子件随 reparent 走）
+                            // 覆盖层（白底 chip/钮）随控件一同进对话框（子件随 reparent 走）。
+                            // M6-T16 修（T15 提出、T16 裁定）：grab() 的图是**设备像素**
+                            // （= 逻辑 × dpr），原判据拿设备尺寸比逻辑尺寸 —— dpr≠1 平台
+                            // （200% 缩放）恒假。现按 dpr 换算两侧：尺寸比设备像素，ROI 的
+                            // 96×26 保持**逻辑像素**口径（dpr=1 时与旧判据逐位等价）。
+                            const qreal shot_dpr = shot.isNull() || shot.devicePixelRatio() <= 0.0
+                                                       ? 1.0
+                                                       : shot.devicePixelRatio();
                             int near_white = 0;
                             if (!shot.isNull()) {
-                                const int roi_w = std::min(shot.width(), 96);
-                                const int roi_h = std::min(shot.height(), 26);
+                                const int roi_w =
+                                    int(std::min(qreal(shot.width()), 96.0 * shot_dpr));
+                                const int roi_h =
+                                    int(std::min(qreal(shot.height()), 26.0 * shot_dpr));
                                 for (int y = 0; y < roi_h; ++y) {
                                     for (int x = 0; x < roi_w; ++x) {
                                         const QColor px = shot.pixelColor(x, y);
@@ -11140,8 +11153,14 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
                                     }
                                 }
                             }
+                            const QSize shot_expected(
+                                int(std::lround(inside->width() * shot_dpr)),
+                                int(std::lround(inside->height() * shot_dpr)));
+                            out->paint_dpr = shot_dpr;
+                            out->paint_shot = shot.size();
+                            out->paint_near = near_white;
                             out->painted =
-                                !shot.isNull() && shot.size() == inside->size() && near_white >= 20;
+                                !shot.isNull() && shot.size() == shot_expected && near_white >= 20;
                         }
                         if (resize_to.isValid()) {
                             dialog->resize(resize_to); // 模拟用户拉伸（尺寸记忆的取证前提）
@@ -11183,9 +11202,13 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
                               .arg(first.dialog_size.width())
                               .arg(first.dialog_size.height()));
             expand_expect("dialog-state-kept", first.state_kept && first.painted,
-                          QStringLiteral("state=%1 painted=%2")
+                          QStringLiteral("state=%1 painted=%2 shot=%3x%4 dpr=%5 near=%6")
                               .arg(first.state_kept ? 1 : 0)
-                              .arg(first.painted ? 1 : 0));
+                              .arg(first.painted ? 1 : 0)
+                              .arg(first.paint_shot.width())
+                              .arg(first.paint_shot.height())
+                              .arg(first.paint_dpr)
+                              .arg(first.paint_near));
             expand_expect("dialog-card-kept", first.card_kept && first.placeholder_removed,
                           QStringLiteral("占位高 136=%1 关闭后已移除=%2")
                               .arg(first.card_kept ? 1 : 0)

@@ -206,6 +206,14 @@ M6-T13（W-M5 R5 大地图；§7-T13）:
     视图随对话框尺寸）。探针在 exec() 的嵌套循环内取证并关窗（预置 0ms 定时器 + 兜底 reject）；
     行内 `checked=N bad=M` 由 C++ 侧给出。既有前缀清单与冻结末行零改动（截图仍 12 张）。
 
+M6-T16（全量回归收口；T15 偏差裁定）:
+  * **前缀清单零改动**（不新增行名、冻结末行不变）——`meta-map-expand` 的
+    `dialog-state-kept` 判据修正：grab() 的实拍图是**设备像素**（= 逻辑 × dpr），
+    T13 原判据拿设备尺寸比逻辑尺寸（`shot.size() == inside->size()`），dpr≠1 平台
+    （200% 缩放，T15 真机复跑实测 dpr=2.0）恒假 ⇒ 误报 `painted=0`。现按图的
+    devicePixelRatio 换算两侧（dpr=1 时与旧判据逐位等价），ROI 的 96×26 保持
+    逻辑像素口径；失败详情追加 `shot/dpr/near` 诊断字段。**探针修正、非产品缺陷**。
+
 GUI-R2（docs/gui-review-0.3.0-r2.md 可视化排查回归）:
   * 追加 `GUI_R2_LINE_PREFIXES` 四行齐备断言（`smoke_probe_gui_r2()`，只增）：
     `combo-consistency`（全界面 QComboBox 样式钩子 / 高 24 / **实拍非空像素**——钉问题 1「亮色下拉

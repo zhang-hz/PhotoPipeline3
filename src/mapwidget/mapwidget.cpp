@@ -166,6 +166,10 @@ struct MapWidget::Impl {
 
     std::vector<SearchResult> results;
 
+    // M6-T4 加性状态：图层 + 结果图钉（绘制/命中在 T5/T6，这里只存取）。
+    TileStyle tile_style_ = TileStyle::Road;
+    std::vector<Pin> result_pins;
+
     // ---- datum boundary (frozen: conversion only at the boundary) ----------------
     std::pair<double, double> wgs_to_datum(double lat, double lon) const {
         if (provider != nullptr && provider->gcj02) {
@@ -736,6 +740,25 @@ void MapWidget::search_select(int index) {
     // so raise the zoom to at least kSearchZoomFloor (never lower an already closer view).
     center_on(result.lat, result.lon, std::max(d.zoom, kSearchZoomFloor));
     emit point_selected(result.lat, result.lon);
+}
+
+// ---- M6-T4 加性状态存取：图层切换 + 结果图钉（绘制/命中在 T5/T6） ------------------
+
+void MapWidget::set_tile_style(TileStyle style) {
+    impl_->tile_style_ = style;
+    update();
+}
+
+TileStyle MapWidget::tile_style() const { return impl_->tile_style_; }
+
+void MapWidget::set_result_pins(const std::vector<Pin> &pins) {
+    impl_->result_pins = pins;
+    update();
+}
+
+void MapWidget::clear_result_pins() {
+    impl_->result_pins.clear();
+    update();
 }
 
 } // namespace pp::map

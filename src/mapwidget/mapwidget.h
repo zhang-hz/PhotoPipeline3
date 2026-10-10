@@ -3,8 +3,10 @@
 // PhotoPipeline — self-drawn slippy map (M1b frozen)
 #pragma once
 #include "mapwidget/coord.h"
+#include "mapwidget/layers.h"
 #include <QWidget>
 #include <memory>
+#include <vector>
 
 namespace pp::map {
 
@@ -31,6 +33,16 @@ public:
     // 视口中心（WGS-84）。元数据页的「地图选点」取中心为坐标、自检断言 center_on 落点用。
     double center_lat() const;
     double center_lon() const;
+    // M6 加性：结果图钉 + 图层切换（追认见 docs/m6-adjudications.md）
+    struct Pin {
+        double lat = 0, lon = 0; // WGS-84
+        QString label;
+        int index = 0;
+    };
+    void set_tile_style(TileStyle style);
+    TileStyle tile_style() const;
+    void set_result_pins(const std::vector<Pin> &pins);
+    void clear_result_pins();
 
     QSize minimumSizeHint() const override { return {240, 180}; }
 
@@ -38,6 +50,7 @@ signals:
     void point_selected(double lat, double lon); // click (not drag) selection, WGS-84
     void search_finished(const QStringList &titles, const QString &error);
     void tiles_pending_changed(int pending); // fetch queue depth (for spinners/tests)
+    void pin_clicked(int index);             // M6 加性：点击结果图钉
 
 public slots:
     void run_search(const QString &query); // async; -> search_finished

@@ -93,7 +93,9 @@ constexpr int kZoomBtnPx = theme::Metrics::icon_btn; // 缩放条各钮 28×28�
 // （A11 口径 —— §5 R4 是规则层，优先于 tokens.css 的量化值；悬停面显底时的圆角因此与全局面
 // 图标钮同档）
 constexpr int kZoomIconPx = 14; // 28px 图标钮内的图标边长（v2 .icon-btn 档；.zoombar 未给图标尺寸）
-constexpr int kZoomLevelW = 40; // 比例读数固定宽（tabular；「100%」10px 约 24px + 2×5 内距）
+// A39 ④：「适应 / 1:1」= 文字钮的左右内距（v2 .zoombar 的两颗模式钮 `padding:0 6px`）
+constexpr int kZoomTextBtnPadX = 6;
+constexpr int kZoomLevelW = 40;   // 比例读数固定宽（tabular；「100%」10px 约 24px + 2×5 内距）
 constexpr int kZoomLevelPadX = 5; // .zoombar .z{padding:0 5px}
 constexpr int kZoomSepW = 1;      // .zoombar .sep{width:1px;height:13px;margin:0 2px}
 constexpr int kZoomSepH = 13;
@@ -306,8 +308,10 @@ PreviewView::PreviewView(QWidget *parent) : QFrame(parent) {
     badge_->setFont(theme::font(theme::Typography::hint_px, 500));
     badge_->setAttribute(Qt::WA_TransparentForMouseEvents, true);
 
-    // 缩放控件组「− | 100% | ＋ | 适应 | 1:1」（§8 K5）：悬浮右下**单一控件组**（v2 .zoombar）；
-    // 各钮 = 矢量图标钮 28×28（R4），插入符/字形一律不出现（C3）。
+    // 缩放控件组「− | 100% | ＋ | 适应 | 1:1」（§8 K5/W-R-T13）：悬浮右下**单一控件组**
+    // （v2 .zoombar）；−/＋ = 矢量图标钮 28×28（R4），插入符/字形一律不出现（C3）；
+    // **「适应 / 1:1」= 文字形态**（A39 ④：§8 组件清单逐字给的是文字，不是图标；v2 .zoombar 的
+    // 两颗模式钮同样是 `width:auto;padding:0 6px` 的文字钮）—— tooltip 原样保留。
     zoom_bar_ = new QWidget(this);
     zoom_bar_->setObjectName(QStringLiteral("pp-preview-zoombar"));
     zoom_bar_->setAttribute(Qt::WA_StyledBackground, true); // 容器底/描边由 QSS 落（显式属性保险）
@@ -323,6 +327,25 @@ PreviewView::PreviewView(QWidget *parent) : QFrame(parent) {
         button->setFixedSize(kZoomBtnPx, kZoomBtnPx);
         button->setIconSize(QSize(kZoomIconPx, kZoomIconPx));
         button->setProperty(icons::kIconNameProperty, QString::fromLatin1(icons::key(icon)));
+        button->setProperty(kZoomActiveProperty, false);
+        button->setFocusPolicy(Qt::NoFocus);
+        button->setCursor(Qt::PointingHandCursor);
+        zoom_layout->addWidget(button);
+        return button;
+    };
+    // A39 ④：模式钮 = 文字钮（高与图标钮同档 28 → 同一条带内不撑高；宽随文本 + 2×6 内距）。
+    const auto make_zoom_text_button = [this, zoom_layout](const char *object_name,
+                                                           const char *text, const char *tip) {
+        auto *button = new QToolButton(zoom_bar_);
+        button->setObjectName(QString::fromLatin1(object_name));
+        button->setText(T(text));
+        button->setToolButtonStyle(Qt::ToolButtonTextOnly);
+        button->setToolTip(T(tip));
+        button->setAccessibleName(T(tip)); // §11：必有 accessibleName + tooltip
+        button->setFont(theme::font(theme::Typography::hint_px, QFont::Normal));
+        button->setFixedHeight(kZoomBtnPx);
+        button->setFixedWidth(QFontMetrics(button->font()).horizontalAdvance(T(text)) +
+                              2 * kZoomTextBtnPadX);
         button->setProperty(kZoomActiveProperty, false);
         button->setFocusPolicy(Qt::NoFocus);
         button->setCursor(Qt::PointingHandCursor);
@@ -353,9 +376,8 @@ PreviewView::PreviewView(QWidget *parent) : QFrame(parent) {
         sep_layout->addWidget(sep, 0, Qt::AlignVCenter);
         zoom_layout->addWidget(sep_box);
     }
-    zoom_fit_btn_ = make_zoom_button("pp-preview-zoom-fit", icons::Name::ZoomFit, "适应舞台");
-    zoom_actual_btn_ =
-        make_zoom_button("pp-preview-zoom-1to1", icons::Name::ZoomActual, "原始像素 (1:1)");
+    zoom_fit_btn_ = make_zoom_text_button("pp-preview-zoom-fit", "适应", "适应舞台");
+    zoom_actual_btn_ = make_zoom_text_button("pp-preview-zoom-1to1", "1:1", "原始像素 (1:1)");
     QObject::connect(zoom_out_, &QToolButton::clicked, this, [this] { zoom_step(-1); });
     QObject::connect(zoom_in_, &QToolButton::clicked, this, [this] { zoom_step(+1); });
     QObject::connect(zoom_fit_btn_, &QToolButton::clicked, this, [this] { set_zoom_fit(true); });
@@ -379,8 +401,7 @@ void PreviewView::set_tokens(const theme::Tokens &tokens) {
     const QColor fg(QString::fromLatin1(kZoomBarFg));
     icons::apply(zoom_out_, icons::Name::ZoomOut, fg, fg, kZoomIconPx);
     icons::apply(zoom_in_, icons::Name::ZoomIn, fg, fg, kZoomIconPx);
-    icons::apply(zoom_fit_btn_, icons::Name::ZoomFit, fg, fg, kZoomIconPx);
-    icons::apply(zoom_actual_btn_, icons::Name::ZoomActual, fg, fg, kZoomIconPx);
+    // A39 ④：「适应 / 1:1」= 文字钮（取色走 QSS，见 apply_style 的 pp-preview-zoom-fit/1to1 规则）
     update_empty_icon();
     update(); // 舞台内的深色徽标/缩放条配色与主题无关（固定深色舞台），故只重绘
 }
@@ -964,6 +985,12 @@ void PreviewPanel::Impl::apply_style() {
     qss += QStringLiteral("QToolButton#pp-preview-zoom-fit[%1=\"true\"], "
                           "QToolButton#pp-preview-zoom-1to1[%1=\"true\"] { background: %2; }\n")
                .arg(QString::fromLatin1(kZoomActiveProperty), QString::fromLatin1(kZoomActiveBg));
+    // A39 ④：模式钮 = 文字形态 → 字色取 .zoombar button 的 #c9ccd4（与 −/＋ 图标同色），
+    // 左右内距 = v2 .zoombar 的 `padding:0 6px`（钮宽已按文本 + 内距定死，此处只补色/内距）。
+    qss += QStringLiteral("QToolButton#pp-preview-zoom-fit, QToolButton#pp-preview-zoom-1to1 { "
+                          "color: %1; padding: 0 %2px; }\n")
+               .arg(QString::fromLatin1(kZoomBarFg))
+               .arg(kZoomTextBtnPadX);
     qss += QStringLiteral("QFrame#pp-preview-zoom-sep { background: %1; border: none; }\n")
                .arg(QString::fromLatin1(kZoomSepBg));
     qss += QStringLiteral("QLabel#pp-preview-zoom-level { color: %1; }\n")

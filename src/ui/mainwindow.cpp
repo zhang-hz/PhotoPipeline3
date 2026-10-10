@@ -2522,7 +2522,10 @@ void MainWindow::refresh_status() {
     } else if (count == 0) {
         text = tr("未添加文件"); // 空态 = 中性（§8：空/无事发生；不得用红）
     } else if (!reason.isEmpty()) {
-        text = reason; // 预检未过（输出页的阻塞原因）= 警告档，不是失败
+        // W-R-T13（A39 ⑤）：预检未过（输出页的阻塞原因）= 警告档，不是失败 —— 但**选中数不被
+        // 警告吞掉**：有勾选时读数照报（「已选 N / M · 未设置输出根目录」），警告接在其后；
+        // 没有勾选时无可报的读数 → 只出原因（原行为）。
+        text = checked > 0 ? tr("已选 %1 / %2 · %3").arg(checked).arg(count).arg(reason) : reason;
         tone = theme::kToneWarn;
     } else if (checked == 0) {
         // M4-T11（§6.2/D2）：勾选 = 参与运行集合；未勾选 = 无参与文件（中性：无事发生）
@@ -4717,6 +4720,58 @@ void MainWindow::Impl::smoke_probe_shell_geometry() {
             smoke_fail(MainWindow::tr("空/未勾选态用了红档（§8：就绪/空不得用红）"));
     }
 
+    // ---- W-R-T13（A39 ⑤）：**选中数不被预检警告吞掉** ----
+    //   两态取证（在位改值后原样还原）：
+    //     * 输出根目录未设 → 「已选 N / M · 未设置输出根目录」（琥珀档；N/M = 当前勾选/总数）；
+    //     * 根目录就位   → 「已选 N / M · 就绪」语义不变（档位按例外数：§8 例外 = 琥珀）。
+    {
+        const QString keep_root = page_output->out_root();
+        const int checked_now = int(model->checked_count());
+        const int total_now = int(model->size());
+        const std::size_t exceptions_now = model->exception_count();
+        const QString prefix = MainWindow::tr("已选 %1 / %2 · ").arg(checked_now).arg(total_now);
+        const auto tone_now = [this] {
+            return status != nullptr ? status->property(theme::kStatusToneProperty).toString()
+                                     : QString();
+        };
+        page_output->set_out_root(QString()); // 预检必拦（ready_to_start = 未设置输出根目录）
+        pump(60);
+        const QString unset_reason = page_output->ready_to_start();
+        const QString unset_text = status != nullptr ? status->full_text() : QString();
+        const QString unset_tone = tone_now();
+        // 根目录就位档：给一个**绝对**临时目录（其余预检项照旧）→ 读数 + 档位按就地实况判
+        page_output->set_out_root(QDir::tempPath());
+        pump(60);
+        const QString ready_reason = page_output->ready_to_start();
+        const QString ready_text = status != nullptr ? status->full_text() : QString();
+        const QString ready_tone = tone_now();
+        page_output->set_out_root(keep_root); // 还原（探针不改被检对象的终态）
+        pump(60);
+        const bool unset_ok = checked_now > 0 && !unset_reason.isEmpty() &&
+                              unset_text.startsWith(prefix) &&
+                              unset_text.contains(QStringLiteral("未设置输出根目录")) &&
+                              unset_tone == QString::fromLatin1(theme::kToneWarn);
+        // 无阻塞 → 「已选 N / M · 就绪」（档位按例外数：§8 例外 = 琥珀）；若还有别的预检项没到位 →
+        // 读数前缀仍须在场、警告接在其后（本探针要钉的正是"选中数不被警告吞掉"）。
+        const bool ready_ok =
+            ready_reason.isEmpty()
+                ? (ready_text.startsWith(prefix) && ready_text.contains(MainWindow::tr("就绪")) &&
+                   ready_tone ==
+                       QString::fromLatin1(exceptions_now > 0 ? theme::kToneWarn : theme::kToneOk))
+                : (ready_text.startsWith(prefix) && ready_text.contains(ready_reason) &&
+                   ready_tone == QString::fromLatin1(theme::kToneWarn));
+        std::printf("UI-SMOKE status-selection: checked=%d/%d unset=\"%s\"(%s) ready=\"%s\"(%s) "
+                    "ready-reason=\"%s\" exceptions=%d\n",
+                    checked_now, total_now, qUtf8Printable(unset_text), qUtf8Printable(unset_tone),
+                    qUtf8Printable(ready_text), qUtf8Printable(ready_tone),
+                    qUtf8Printable(ready_reason), int(exceptions_now));
+        std::fflush(stdout);
+        if (!unset_ok || !ready_ok)
+            smoke_fail(MainWindow::tr("状态栏选中数被警告吞掉（unset=%1[%2] ready=%3[%4] 期望前缀 "
+                                      "\"%5\"）")
+                           .arg(unset_text, unset_tone, ready_text, ready_tone, prefix));
+    }
+
     // ---- A19（T11，§3.2 骨架行）：底栏第三段「剩余磁盘」—— 自然语读数（值 + 单位）+ 分区 hairline
     // ----
     {
@@ -5082,15 +5137,19 @@ void MainWindow::Impl::smoke_probe_preview() {
         preview_panel->findChild<QToolButton *>(QStringLiteral("pp-preview-clear"));
     const auto *clear_sep =
         preview_panel->findChild<QFrame *>(QStringLiteral("pp-preview-key-sep"));
-    // 缩放两钮的读数 = 挂载的矢量图标名（修 1-19：图标钮无文案，控件面身份由图标名承载）
+    // −/＋ 两钮的读数 = 挂载的矢量图标名（修 1-19：图标钮无文案，控件面身份由图标名承载）
     const auto icon_key = [](const QToolButton *button) {
         return button != nullptr ? button->property(icons::kIconNameProperty).toString()
                                  : QStringLiteral("<missing>");
     };
+    // W-R-T13（A39 ④）机械换锚：「适应 / 1:1」由矢量图标钮恢复为**文字形态**（§8 组件清单逐字
+    // 「− / 100% / ＋ / 适应 / 1:1」；v2 .zoombar 的两颗模式钮本就是文字钮）→ 控件面身份随之从
+    // 「图标名」换锚成「钮文案 + tooltip」；断言本体（模式钮两枚、非 checkbox、身份可读）不变。
     std::printf("UI-SMOKE preview-controls: badge=\"%s\" zoom-fit=\"%s\" zoom-1:1=\"%s\" "
                 "keys=[%s] names=[%s] pos=\"%s\"\n",
                 badge != nullptr ? qUtf8Printable(badge->text()) : "<missing>",
-                qUtf8Printable(icon_key(zoom_fit)), qUtf8Printable(icon_key(zoom_11)),
+                zoom_fit != nullptr ? qUtf8Printable(zoom_fit->text()) : "<missing>",
+                zoom_11 != nullptr ? qUtf8Printable(zoom_11->text()) : "<missing>",
                 qUtf8Printable(key_chips.join(QLatin1Char(' '))),
                 qUtf8Printable(key_names.join(QLatin1Char(' '))),
                 qUtf8Printable(preview_panel->current_position_text()));
@@ -5099,16 +5158,30 @@ void MainWindow::Impl::smoke_probe_preview() {
         smoke_fail(MainWindow::tr("预览徽标不是「原图 · 未应用修改」（%1）")
                        .arg(badge != nullptr ? badge->text() : QStringLiteral("<missing>")));
     }
-    // 修 1-19：缩放模式两钮 = 矢量图标钮（无文案、非 checkbox；「适应」/「1:1」由图标名承载）
-    if (zoom_fit == nullptr || zoom_11 == nullptr || zoom_11->text() != QString() ||
-        zoom_fit->isCheckable() || zoom_11->isCheckable() ||
-        icon_key(zoom_11) != QString::fromLatin1(icons::key(icons::Name::ZoomActual)) ||
-        icon_key(zoom_fit) != QString::fromLatin1(icons::key(icons::Name::ZoomFit))) {
-        smoke_fail(MainWindow::tr("缩放「适应 | 1:1」模式钮不是矢量图标钮（fit=%1 1:1=%2 "
-                                  "checkable=%3/%4）")
-                       .arg(icon_key(zoom_fit), icon_key(zoom_11))
+    // A39 ④：缩放模式两钮 = **文字钮**（「适应」/「1:1」逐字；非 checkbox；tooltip 保留；且不再
+    // 挂矢量图标 —— C3 字形禁令针对「用字形充当图标」，这里是规范正文要求的文字形态）。
+    if (zoom_fit == nullptr || zoom_11 == nullptr || zoom_fit->text() != QStringLiteral("适应") ||
+        zoom_11->text() != QStringLiteral("1:1") ||
+        zoom_fit->toolTip() != QStringLiteral("适应舞台") ||
+        zoom_11->toolTip() != QStringLiteral("原始像素 (1:1)") || zoom_fit->isCheckable() ||
+        zoom_11->isCheckable() ||
+        !zoom_fit->property(icons::kIconNameProperty).toString().isEmpty() ||
+        !zoom_11->property(icons::kIconNameProperty).toString().isEmpty()) {
+        smoke_fail(MainWindow::tr("缩放「适应 | 1:1」模式钮不是文字钮（fit=%1/%2 1:1=%3/%4 "
+                                  "checkable=%5/%6）")
+                       .arg(zoom_fit != nullptr ? zoom_fit->text() : QStringLiteral("<missing>"),
+                            zoom_fit != nullptr ? zoom_fit->toolTip() : QStringLiteral("<missing>"),
+                            zoom_11 != nullptr ? zoom_11->text() : QStringLiteral("<missing>"),
+                            zoom_11 != nullptr ? zoom_11->toolTip() : QStringLiteral("<missing>"))
                        .arg(zoom_fit != nullptr ? zoom_fit->isCheckable() : -1)
                        .arg(zoom_11 != nullptr ? zoom_11->isCheckable() : -1));
+    }
+    // A39 ④ 补强（断言只增）：−/＋ 仍是矢量图标钮（C3：图标全 SVG），图标名读出非空
+    if (icon_key(preview_panel->findChild<QToolButton *>(QStringLiteral("pp-preview-zoom-out"))) !=
+            QString::fromLatin1(icons::key(icons::Name::ZoomOut)) ||
+        icon_key(preview_panel->findChild<QToolButton *>(QStringLiteral("pp-preview-zoom-in"))) !=
+            QString::fromLatin1(icons::key(icons::Name::ZoomIn))) {
+        smoke_fail(MainWindow::tr("缩放 −/＋ 钮不再是矢量图标钮"));
     }
     // 默认模板（§6.2）：精选/待定/废片（热键 1/2/3）—— A17/修 1-20：保留的「0 清除」不再以
     // chip 出现（降级为文字链；热键 '0' 的路由不变，见下）
@@ -5330,18 +5403,40 @@ void MainWindow::Impl::smoke_probe_preview_geometry() {
     const QSize nav_size(nav_prev->width(), nav_prev->height());
     const QSize zoom_btn_size(zoom_out->width(), zoom_out->height());
     const int zoom_buttons = int(zoombar->findChildren<QToolButton *>().size());
+    // W-R-T13（A39 ④）机械换锚：断言本体（单一控件组 4 钮 / 非 checkbox / tooltip 逐字 / 高度
+    // 同档）不变；「适应 / 1:1」的尺寸判据从「28×28 图标钮」换锚为「**文字形态**：高 28 + 宽随
+    // 文本（放得下、≥ 图标钮档）」，并补文字逐字断言（断言只增）。−/＋ 仍钉 28×28。
+    // 文字钮的形态判据 = 「文案放得下」（宽随文本 + 左右内距 v2 .zoombar 的 width:auto;padding:0
+    // 6px），**不锚** 28 —— 「1:1」这类窄文案在真实字体下比图标钮窄是合法的（实测 22px）；
+    // 与图标钮的分野由 icon() 空/非空判（形态本体），高度仍同为 28（同一条带不撑高）。
+    const auto fits_text = [](const QToolButton *button) {
+        if (button == nullptr)
+            return false;
+        const QFontMetrics fm(button->font());
+        return button->width() >= fm.horizontalAdvance(button->text()) + 8;
+    };
     const bool zoom_group_ok =
         zoom_btn_size == QSize(theme::Metrics::icon_btn, theme::Metrics::icon_btn) &&
-        zoom_in_btn->size() == zoom_btn_size && zoom_fit_btn->size() == zoom_btn_size &&
-        zoom_11_btn->size() == zoom_btn_size && zoom_buttons == 4 && !zoom_out->isCheckable() &&
-        !zoom_fit_btn->isCheckable() && zoom_out->toolTip() == QStringLiteral("缩小") &&
+        zoom_in_btn->size() == zoom_btn_size && zoom_buttons == 4 && !zoom_out->isCheckable() &&
+        !zoom_in_btn->isCheckable() && !zoom_fit_btn->isCheckable() &&
+        !zoom_11_btn->isCheckable() && zoom_out->toolTip() == QStringLiteral("缩小") &&
         zoom_in_btn->toolTip() == QStringLiteral("放大") &&
         zoom_fit_btn->toolTip() == QStringLiteral("适应舞台") &&
-        zoom_11_btn->toolTip() == QStringLiteral("原始像素 (1:1)");
+        zoom_11_btn->toolTip() == QStringLiteral("原始像素 (1:1)") &&
+        zoom_fit_btn->text() == QStringLiteral("适应") &&
+        zoom_11_btn->text() == QStringLiteral("1:1") &&
+        zoom_fit_btn->height() == theme::Metrics::icon_btn &&
+        zoom_11_btn->height() == theme::Metrics::icon_btn && fits_text(zoom_fit_btn) &&
+        fits_text(zoom_11_btn) && zoom_fit_btn->icon().isNull() && zoom_11_btn->icon().isNull() &&
+        !zoom_out->icon().isNull() && !zoom_in_btn->icon().isNull();
     expect("zoom-group", zoombar->isVisible() && zoom_group_ok,
-           QStringLiteral("bar=%1 %2x%2 n=%3")
+           QStringLiteral("bar=%1 %2x%2 fit=%3x%4 act=%5x%6 n=%7")
                .arg(zoombar->isVisible() ? 1 : 0)
                .arg(zoom_btn_size.width())
+               .arg(zoom_fit_btn->width())
+               .arg(zoom_fit_btn->height())
+               .arg(zoom_11_btn->width())
+               .arg(zoom_11_btn->height())
                .arg(zoom_buttons));
     expect("nav-btn",
            nav_size == QSize(theme::Metrics::icon_btn, theme::Metrics::icon_btn) &&
@@ -6644,7 +6739,8 @@ void MainWindow::Impl::smoke_probe_run(const QString &shots_dir) {
         page->on_event(probe_progress(1, 0, pp::Stage::Encode, 0.30f, false));
         page->on_event(probe_terminal(1, pp::FileState::Failed, failed));
     }
-    // 文件 2：无事件 = 交错排队（stagger_ms=150）→「排队中（交错启动）」
+    // 文件 2：无事件 = 交错排队（stagger_ms=150）→ pill 收「排队」（A39 ③：交错启动语义
+    // 移进 pill 的 tooltip）
     // 文件 3：终态完成（产物事实：字节 · 压缩比 · 耗时）
     {
         pp::FileResult done;
@@ -6704,6 +6800,14 @@ void MainWindow::Impl::smoke_probe_run(const QString &shots_dir) {
         const QString f1_zero = pill(QStringLiteral("pp-run-status-1-1"));
         const QString f2_row0 = pill(QStringLiteral("pp-run-status-2-0"));
         const QString f2_row1 = pill(QStringLiteral("pp-run-status-2-1"));
+        const auto pill_tip = [page](const QString &name) {
+            auto *label = page->findChild<QLabel *>(name);
+            return label != nullptr ? label->toolTip() : QString();
+        };
+        const QString f2_row0_tip = pill_tip(QStringLiteral("pp-run-status-2-0"));
+        const QString f2_row1_tip = pill_tip(QStringLiteral("pp-run-status-2-1"));
+        const QString f2_group = pill(QStringLiteral("pp-run-gstatus-2"));
+        const QString f2_group_tip = pill_tip(QStringLiteral("pp-run-gstatus-2"));
         const QString f3_size = probe_full_text(page, QStringLiteral("pp-run-size-3-0"));
         const QString f3_speed = probe_full_text(page, QStringLiteral("pp-run-speed-3-0"));
         const QString f3_time = probe_full_text(page, QStringLiteral("pp-run-time-3-0"));
@@ -6712,10 +6816,11 @@ void MainWindow::Impl::smoke_probe_run(const QString &shots_dir) {
         const QString f4_zero_kind = bar_kind(QStringLiteral("pp-run-bar-4-1"));
         const QString f4_group = pill(QStringLiteral("pp-run-gstatus-4"));
         std::printf("UI-SMOKE run-probe-rows: bars=%d f0=[%s|%s] f1=[%s|%s|%s] f2=[%s|%s] "
-                    "f3=[%s|%s|%s|%s] f4=[%s|%s|%s]\n",
+                    "f2tip=\"%s\" f2group=%s/%s f3=[%s|%s|%s|%s] f4=[%s|%s|%s]\n",
                     bars, qUtf8Printable(f0_real), qUtf8Printable(f0_synth),
                     qUtf8Printable(f1_status), qUtf8Printable(f1_zero), qUtf8Printable(f1_reason),
-                    qUtf8Printable(f2_row0), qUtf8Printable(f2_row1), qUtf8Printable(f3_size),
+                    qUtf8Printable(f2_row0), qUtf8Printable(f2_row1), qUtf8Printable(f2_row0_tip),
+                    qUtf8Printable(f2_group), qUtf8Printable(f2_group_tip), qUtf8Printable(f3_size),
                     qUtf8Printable(f3_speed), qUtf8Printable(f3_time), qUtf8Printable(f3_status),
                     qUtf8Printable(f4_zero), qUtf8Printable(f4_zero_kind),
                     qUtf8Printable(f4_group));
@@ -6732,8 +6837,19 @@ void MainWindow::Impl::smoke_probe_run(const QString &shots_dir) {
             !f1_reason.startsWith(QStringLiteral("└ 原因：")))
             smoke_fail(
                 MainWindow::tr("失败行未直显原因（状态=%1 原因=%2）").arg(f1_status, f1_reason));
-        if (f2_row0 != QStringLiteral("排队中（交错启动）") || f2_row1 != QStringLiteral("排队中"))
-            smoke_fail(MainWindow::tr("排队行文案不符：%1 / %2").arg(f2_row0, f2_row1));
+        // W-R-T13（A39 ③）机械换锚：pill 文案由「排队中（交错启动）/ 排队中」收成「排队」
+        // （mockup run.html 的 .pill 逐字）；「交错启动」的实现语义移进 pill 的 tooltip ——
+        // 断言本体（排队态可读 + 交错语义可达）不变并补强（tooltip 必须带步距 150 ms）。
+        if (f2_row0 != QStringLiteral("排队") || f2_row1 != QStringLiteral("排队") ||
+            f2_group != QStringLiteral("排队"))
+            smoke_fail(MainWindow::tr("排队行文案不符：%1 / %2（组行 %3）")
+                           .arg(f2_row0, f2_row1, f2_group));
+        if (!f2_row0_tip.contains(QStringLiteral("交错启动")) ||
+            !f2_row0_tip.contains(QStringLiteral("150")) ||
+            !f2_group_tip.contains(QStringLiteral("交错启动")) || f2_row1_tip != f2_row0_tip)
+            smoke_fail(
+                MainWindow::tr("排队 pill 的 tooltip 未承载交错启动语义（行0=%1 行1=%2 组=%3）")
+                    .arg(f2_row0_tip, f2_row1_tip, f2_group_tip));
         if (f3_size != QStringLiteral("412 KB") || f3_speed != QStringLiteral("3.1×") ||
             f3_time != QStringLiteral("2.4s") || f3_status != QStringLiteral("已完成"))
             smoke_fail(MainWindow::tr("完成行未显示产物事实（大小=%1 速度=%2 耗时=%3 状态=%4）")
@@ -6809,10 +6925,33 @@ void MainWindow::Impl::smoke_probe_run(const QString &shots_dir) {
         std::fflush(stdout);
         if (stagger != QStringLiteral("150 ms"))
             smoke_fail(MainWindow::tr("交错读数不符：%1").arg(stagger));
-        if (budget != MainWindow::tr("自适应（%1 核）").arg(cores))
-            smoke_fail(MainWindow::tr("线程预算读数不符：%1（期望 自适应（%2 核））")
+        // W-R-T13（A39 ①）机械换锚：值「自适应（16 核）」→「自动（16 核）」（review 4-12 全局
+        // 措辞统一：设置弹窗·运行页签的「线程预算」下拉首项与行注同为「自动」）。断言本体
+        // （自动档 = 按本机逻辑核数报读）不变；另补：旧措辞「自适应」必须从本页消失（断言只增）。
+        if (budget != MainWindow::tr("自动（%1 核）").arg(cores))
+            smoke_fail(MainWindow::tr("线程预算读数不符：%1（期望 自动（%2 核））")
                            .arg(budget)
                            .arg(cores));
+        {
+            auto *budget_label = page->findChild<QLabel *>(QStringLiteral("pp-run-budget"));
+            const bool tip_ok =
+                budget_label != nullptr &&
+                budget_label->toolTip().contains(QStringLiteral("自动 = 按本机核心数"));
+            QStringList stale;
+            for (QLabel *label : page->findChildren<QLabel *>()) {
+                const QVariant full =
+                    label->property("ppFullText"); // 省略标签的全文（同 probe_full_text 口径）
+                const QString text = full.isValid() ? full.toString() : label->text();
+                if (text.contains(QStringLiteral("自适应")) ||
+                    label->toolTip().contains(QStringLiteral("自适应")))
+                    stale << label->objectName();
+            }
+            if (!tip_ok || !stale.isEmpty())
+                smoke_fail(MainWindow::tr("线程预算措辞未统一（tip=%1 残留自适应=%2）")
+                               .arg(tip_ok ? 1 : 0)
+                               .arg(stale.isEmpty() ? QStringLiteral("<无>")
+                                                    : stale.join(QLatin1Char(','))));
+        }
         if (!QRegularExpression(QStringLiteral("^\\d+ / \\d+$")).match(workers).hasMatch() ||
             !worker_tip.contains(QStringLiteral("文件并行")))
             smoke_fail(MainWindow::tr("并行读数/分配提示不符：%1 / %2").arg(workers, worker_tip));
@@ -7235,8 +7374,23 @@ void MainWindow::Impl::smoke_probe_run_geometry() {
             return button != nullptr &&
                    button->property("ppField").toString() == QString::fromLatin1(value);
         };
+        // W-R-T13（A39 ②）机械换锚：破坏性动作由「红描边钮（danger）」改**红文字链**
+        // （link-danger：border:none + color = 令牌 err）。断言本体（三级动作各一副面孔 +
+        // 高 26 + 文案逐字）不变；补强（断言只增）：页 QSS 里该档规则必须成文且取 err 令牌，
+        // **旧 danger 描边档必须已退役**（否定断言——旧形态不得回潮）。
         const bool tiers = is_field(open_logs, "link") && is_field(open_output, "link") &&
-                           is_field(cancel, "danger") && is_field(again, "button");
+                           is_field(cancel, "link-danger") && is_field(again, "button");
+        const QString sheet = page.styleSheet();
+        const int rule_at = sheet.indexOf(QStringLiteral("QPushButton[ppField=\"link-danger\"]"));
+        const bool link_qss =
+            rule_at >= 0 &&
+            sheet.mid(rule_at, 200)
+                .contains(QStringLiteral("border: none; color: ") + theme::css_color(tokens.err));
+        const bool danger_retired = !sheet.contains(QStringLiteral("ppField=\"danger\""));
+        // 文字链本体：无框（QSS 已成文）+ **不挂图标**（与另两条文字链同形；旧 danger 钮的 ■ 退役）
+        const bool link_icons_off = cancel != nullptr && open_logs != nullptr &&
+                                    open_output != nullptr && cancel->icon().isNull() &&
+                                    open_logs->icon().isNull() && open_output->icon().isNull();
         const bool heights = cancel != nullptr && cancel->height() == theme::Metrics::btn_h &&
                              again != nullptr && again->height() == theme::Metrics::btn_h;
         const bool labels =
@@ -7244,12 +7398,16 @@ void MainWindow::Impl::smoke_probe_run_geometry() {
             open_output != nullptr && open_output->text() == QStringLiteral("打开输出目录") &&
             cancel != nullptr && cancel->text() == QStringLiteral("取消剩余") && again != nullptr &&
             again->text() == QStringLiteral("再次运行");
-        expect("action-tiers", tiers && heights && labels,
-               QStringLiteral("tiers=%1 h=%2/%3 labels=%4")
+        expect("action-tiers",
+               tiers && heights && labels && link_qss && danger_retired && link_icons_off,
+               QStringLiteral("tiers=%1 h=%2/%3 labels=%4 qss=%5 danger-retired=%6 icon-off=%7")
                    .arg(tiers ? 1 : 0)
                    .arg(cancel != nullptr ? cancel->height() : -1)
                    .arg(again != nullptr ? again->height() : -1)
-                   .arg(labels ? 1 : 0));
+                   .arg(labels ? 1 : 0)
+                   .arg(link_qss ? 1 : 0)
+                   .arg(danger_retired ? 1 : 0)
+                   .arg(link_icons_off ? 1 : 0));
         // 接线：结束态「再次运行」可点且**只发意图**（页不含调度；回收 = MainWindow 的开始运行）
         int again_hits = 0;
         const QMetaObject::Connection again_conn = QObject::connect(
@@ -9640,6 +9798,52 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
                 meta_expect(
                     "switch-rows", switch_rows == 2 && links_ok,
                     QStringLiteral("switches=%1 links=%2").arg(switch_rows).arg(links_ok ? 1 : 0));
+
+                // (i-5b) W-R-T13（A39 ⑥ 缺陷根治回执）：隐私卡**卡体在卡内布局里**。
+                //   病灶（缺陷复现时的取值）：卡体是"有父无布局"的孤儿 —— 几何停在默认 100×30、
+                //   三行被压成 6px pitch 贴在卡左上角并盖住卡题（截图里的"圆形伪影"）。
+                //   判据（姿态可判、不依赖缺陷形态）：卡高容得下 [卡头 28 + 3 行 × 28] + 三行
+                //   pitch = 28 + 首行不压卡头（y ≥ 卡头高）。
+                {
+                    QWidget *card = nullptr;
+                    const auto *strip_now =
+                        page.findChild<QAbstractButton *>(QStringLiteral("privacy_strip"));
+                    for (QWidget *p = strip_now != nullptr ? strip_now->parentWidget() : nullptr;
+                         p != nullptr; p = p->parentWidget()) {
+                        if (p->objectName() == QStringLiteral("pp-card")) {
+                            card = p;
+                            break;
+                        }
+                    }
+                    QList<QWidget *> rows;
+                    if (card != nullptr) {
+                        rows = card->findChildren<QWidget *>(QStringLiteral("pp-fk-row"));
+                    }
+                    // 行在**卡坐标系**里的落点（行父 = 卡体；pitch 与"是否压住卡头"都按卡坐标判）
+                    const auto row_y = [card](const QWidget *row) {
+                        return row->mapTo(card, QPoint(0, 0)).y();
+                    };
+                    std::sort(rows.begin(), rows.end(),
+                              [&row_y](const QWidget *a, const QWidget *b) {
+                                  return row_y(a) < row_y(b);
+                              });
+                    int pitch_bad = 0;
+                    for (int i = 1; i < rows.size(); ++i) {
+                        if (row_y(rows.at(i)) - row_y(rows.at(i - 1)) != formkit::kRowPitch)
+                            ++pitch_bad;
+                    }
+                    const int first_y = rows.isEmpty() ? -1 : row_y(rows.first());
+                    const int want_h = formkit::kRowPitch * 4; // 卡头 1 行 + 卡体 3 行
+                    const bool body_ok = card != nullptr && rows.size() == 3 && pitch_bad == 0 &&
+                                         first_y >= formkit::kRowPitch && card->height() >= want_h;
+                    meta_expect("privacy-card-body", body_ok,
+                                QStringLiteral("card-h=%1 rows=%2 pitch-bad=%3 first-y=%4 want>=%5")
+                                    .arg(card != nullptr ? card->height() : -1)
+                                    .arg(rows.size())
+                                    .arg(pitch_bad)
+                                    .arg(first_y)
+                                    .arg(want_h));
+                }
             }
         }
 

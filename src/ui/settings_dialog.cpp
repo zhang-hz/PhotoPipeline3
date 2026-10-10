@@ -951,6 +951,29 @@ GeomProbeReport settings_geom_probe(const QDialog &dialog) {
     } else {
         out.bad << QStringLiteral("stagger_row=missing");
     }
+    // —— W-R-T13（A39 ①）：线程预算与运行页**同词**（review 4-12 全局措辞统一）——
+    //   settings 侧 = 自动档项文本「自动」（值表 auto_control_kind 已钉）+ 行注逐字「0 = 自动」；
+    //   运行页 kv 值 = 「自动（N 核）」（run-overview 探针按同一措辞核对）。两表面共词 = 「自动」；
+    //   旧措辞「自适应」在两处都不得再出现。
+    if (threads != nullptr && threads->parentWidget() != nullptr) {
+        QString note_text;
+        for (QLabel *l : threads->parentWidget()->findChildren<QLabel *>()) {
+            if (l->property(theme::kFkProperty).toString() == QLatin1String(theme::kFkNote))
+                note_text = l->text();
+        }
+        out.checked += 3;
+        if (threads->itemText(0) != T("自动"))
+            out.bad << QStringLiteral("thread_budget_word=%1(期望 %2)")
+                           .arg(threads->itemText(0), T("自动"));
+        if (note_text != T("0 = 自动"))
+            out.bad << QStringLiteral("thread_budget_note=%1(期望 %2)")
+                           .arg(note_text.isEmpty() ? QStringLiteral("<无>") : note_text,
+                                T("0 = 自动"));
+        if (threads->itemText(0).contains(T("自适应")) || note_text.contains(T("自适应")))
+            out.bad << QStringLiteral("thread_budget_stale_wording");
+    } else {
+        out.bad << QStringLiteral("thread_budget_row=missing");
+    }
     // —— 页签序逐字（A21：通用｜输出｜运行｜地图｜关于）——
     const QStringList want_tabs{T("通用"), T("输出"), T("运行"), T("地图"), T("关于")};
     out.checked += 1;

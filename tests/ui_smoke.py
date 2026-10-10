@@ -156,6 +156,25 @@ M5-T14（W-G4 收尾：T13 FAIL 清单逐条修复 + 全量回归复验）:
        （实测亮色 1.19%、暗色 0.00%）；`offline-banner-px` 诊断行追加
        `ring-dist/near/比率/dpr/text-box`，`meta-geom` 失败详情补齐环带/占比取证。
   * 截图仍为 12 张、冻结末行不变。
+
+M5-T13（W-R 视觉收尾修正：裁定 A39 ①–⑥ + A40 核对）:
+  * **前缀清单零改动**（不新增行名、冻结末行不变）——六项各自落在既有行内，逐条登记换锚：
+    ① 线程预算措辞「自适应（N 核）」→「自动（N 核）」（run-overview 换锚 + 页内「自适应」残留
+       扫描；settings-geom 追加同词核对：`thread_budget_word/note`（自动 / 0 = 自动）+ 旧措辞否定）。
+    ② 「取消剩余」红描边钮 → **红文字链**（run-geom 的 `action-tiers` 换锚到 `ppField=link-danger`
+       + 页 QSS 规则取 err 令牌 + **旧 danger 档必须退役**（否定断言）+ 三条文字链不挂图标）。
+    ③ 排队 pill 收「排队」（mockup run.html 逐字；「交错启动」语义移进 pill tooltip）——
+       run-probe-rows 换锚（f2 行/组行文案 + `f2tip` 带步距 150 ms 与「交错启动」）。
+    ④ 缩放条「适应 / 1:1」恢复**文字形态**（§8 组件清单逐字）——preview-controls 换锚到钮文案
+       + tooltip（不再锚图标名），preview-geom 的 `zoom-group` 换锚为「高 28 + 宽随文本（放得下）
+       + icon() 空」，−/＋ 仍钉 28×28 图标钮（icon() 非空）。
+    ⑤ 状态栏选中数不被警告吞掉 —— 新增 `UI-SMOKE status-selection:` 行（两态在位取证后还原：
+       根目录未设 =「已选 N / M · 未设置输出根目录」琥珀；根目录就位 =「已选 N / M · 就绪」）。
+    ⑥ 隐私卡「圆形伪影」定性 = **实现缺陷**（`build_switches_card` 的卡体未进卡布局 → 卡体停在
+       默认 100×30、三行压成 6px pitch 盖住卡题）→ 已根治；`meta-geom` 追加 `privacy-card-body`
+       （卡高 ≥ 卡头 + 3 行 × 28 / 行 pitch 28 / 首行不压卡头）。
+  * `status-selection` 为**新增的自检/诊断行**（不在前缀清单内，与 run-bars-hist / icons-engine-space
+    同类）：判据本身在探针里逐条 meta_expect/expect 硬判，失败经 smoke_fail 通道报错。
 """
 
 import os

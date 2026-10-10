@@ -2376,6 +2376,10 @@ QWidget *build_switches_card(MetaState *st, QWidget *parent) {
     bv->setContentsMargins(theme::Metrics::card_pad_x, 0, theme::Metrics::card_pad_x,
                            theme::Metrics::card_pad_bottom);
     bv->setSpacing(0);
+    // W-R-T13（A39 ⑥ 缺陷根治）：卡体必须进卡布局 —— 缺这一行时 body 是"有父无布局"的孤儿
+    // （几何停在默认 100×30、行被压成 6px pitch 并盖住卡题），截图里表现为卡题上的"圆形伪影"。
+    // 与其余三张卡（build_info_card/build_time_card/build_gps_card）同一条接线。
+    v->addWidget(body);
 
     // 开关行（§6：独立布尔（立即生效）= 开关）：[开关 30×16][说明][……][链]
     const auto switch_row = [&](const QString &label, const QString &object_name,

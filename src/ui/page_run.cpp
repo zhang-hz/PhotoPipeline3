@@ -17,8 +17,9 @@
 //   * **实现性文案出界面**（修 3-05）：任务卡 hint =「实心=已写盘 · 斜纹=合成中」（mockup 逐字），
 //     "阶段权重 + 行级子进度"作废；"交错启动/线程预算/并行"的算法口径（§8.1 步距、§8.2 分配）
 //     进 tooltip（§2.6「实现细节进 tooltip」）。
-//   * **三级动作层级**（修 3-08）：导航（查看日志…/打开输出目录）= 文字链；破坏性（取消剩余）=
-//     描边危险钮；结果（再次运行）= 描边按钮 —— 三者高 26（R4 表 + A7），不再"同一层级两副面孔"。
+//   * **三级动作层级**（修 3-08 + A39 ②/W-R-T13）：导航（查看日志…/打开输出目录）= accent
+//     文字链；破坏性（取消剩余）= **红文字链**（红色表达破坏语义，不再是描边危险钮）；结果
+//     （再次运行）= 描边次钮 —— 三者高 26（R4 表 + A7），不再"同一层级两副面孔"。
 //   * **0 字节 = 异常**（修 3-10）：完成的输出若 0 字节 → 进度条 = 琥珀（**禁绿色成功条**）、
 //     状态标记 = 琥珀 Warn 矢量图标（不再是绿勾）、状态胶囊 = 琥珀「0 字节」、大小列显真实
 //     「0 B」（不做 KB 四舍五入 —— 3-10 的"若为四舍五入应显示真实字节"）。
@@ -734,7 +735,16 @@ struct StatusText {
     fk::PillBadge::Tone tone = fk::PillBadge::Tone::Neutral;
     icons::Name icon = icons::Name::Pending;
     bool has_icon = false;
+    QString tip; // A39 ③：排队 pill 的「交错启动」语义（§2.6：实现细节进 tooltip）
 };
+
+// 排队 pill 的 tooltip（W-R-T13 / A39 ③）：pill 文案收「排队」（mockup run.html 的 .pill 逐字），
+// 「交错启动」的实现语义移到这里（§2.6 实现细节进 tooltip）；文案随本批次的交错步距。
+QString queue_tip(const RunState &s) {
+    return s.plan.stagger_ms > 0
+               ? PageRun::tr("等待启动：交错启动，每 %1 ms 才启动下一个文件").arg(s.plan.stagger_ms)
+               : PageRun::tr("等待启动：前序输出完成后开始");
+}
 
 // 输出行阶段文字（未启动/进行中：排队、共享段承载、编码行数、合成、写入）
 QString out_stage_text(const FileRow &file, const RunState &s, int index) {
@@ -744,10 +754,9 @@ QString out_stage_text(const FileRow &file, const RunState &s, int index) {
         if (index == first_unstarted(file) && !any_output_started(file) && !file.terminal) {
             if (file.started)
                 return shared_stage_text(file.shared_stage);
-            return s.plan.stagger_ms > 0 ? PageRun::tr("排队中（交错启动）")
-                                         : PageRun::tr("排队中");
+            return PageRun::tr("排队"); // A39 ③：pill 收「排队」（交错语义进 tooltip）
         }
-        return PageRun::tr("排队中");
+        return PageRun::tr("排队"); // A39 ③
     }
     if (out.has_stage && out.last_stage == Stage::MetaWrite)
         return write_stage_text(Stage::MetaWrite);
@@ -781,12 +790,16 @@ StatusText out_status(const FileRow &file, const RunState &s, int index) {
     case OutKind::Queued:
         break;
     }
-    return {out_stage_text(file, s, index), fk::PillBadge::Tone::Neutral, icons::Name::Pending,
-            false};
+    // A39 ③：未启动的 pill 文案统一收「排队」（交错语义进 tooltip）；「首个未完成行承载共享段」
+    // 的行不是排队态（文本 = 共享段阶段词）→ 不带排队 tooltip。
+    const QString text = out_stage_text(file, s, index);
+    const bool queued = !out.started && text == PageRun::tr("排队");
+    return {text, fk::PillBadge::Tone::Neutral, icons::Name::Pending, false,
+            queued ? queue_tip(s) : QString()};
 }
 
 // 分组行状态（文件级）
-StatusText file_status(const FileRow &file) {
+StatusText file_status(const FileRow &file, const RunState &s) {
     bool zero = false;
     for (const OutRow &out : file.outs)
         zero = zero || out_zero_bytes(out);
@@ -802,7 +815,8 @@ StatusText file_status(const FileRow &file) {
     case pp::FileState::Cancelled:
         return {PageRun::tr("已取消"), fk::PillBadge::Tone::Neutral, icons::Name::Stop, false};
     case pp::FileState::Queued:
-        return {PageRun::tr("排队中"), fk::PillBadge::Tone::Neutral, icons::Name::Pending, false};
+        return {PageRun::tr("排队"), fk::PillBadge::Tone::Neutral, icons::Name::Pending, false,
+                queue_tip(s)}; // A39 ③：组行 pill 同收「排队」+ 交错 tooltip
     default:
         break;
     }
@@ -1087,6 +1101,7 @@ void render_out_row(RunState &s, FileRow &file, int index) {
     out.mark->set_mark(st.icon, tone_color(s, st.tone));
     apply_pill(out.status, st, out.applied_status, out.applied_tone, out.applied_icon_set,
                out.applied_icon);
+    out.status->setToolTip(st.tip); // A39 ③：排队 pill 的 tooltip（其余状态清空）
 
     // 数值列（完成 = 正文对比度；未发生 = 注释档；0 字节 = 琥珀，修 3-10）
     out.size_cache.apply(out.size, out_size_text(out),
@@ -1116,10 +1131,11 @@ void render_out_row(RunState &s, FileRow &file, int index) {
 }
 
 void render_file_row(RunState &s, FileRow &file) {
-    const StatusText st = file_status(file);
+    const StatusText st = file_status(file, s);
     file.mark->set_mark(st.icon, tone_color(s, st.tone));
     apply_pill(file.status, st, file.applied_status, file.applied_tone, file.applied_icon_set,
                file.applied_icon);
+    file.status->setToolTip(st.tip); // A39 ③：组行排队 pill 的 tooltip（其余状态清空）
 
     const GroupFacts facts = group_facts(file);
     file.size_cell.apply(file.size,
@@ -1232,10 +1248,13 @@ void refresh_widgets(RunState &s) {
             ? PageRun::tr("每 %1 ms 才启动下一个文件，避免所有文件同时解码占满处理器")
                   .arg(s.plan.stagger_ms)
             : PageRun::tr("不交错：所有文件立即启动"));
+    // 线程预算读数（W-R-T13 / A39 ①；修 4-12「同一设置跨界面同名同词」）：自动档的值 = 设置
+    // 弹窗同词「自动」（settings·运行页签的「线程预算」下拉首项 + 行注「0 = 自动」）→ 运行页
+    // 值形如「自动（16 核）」；旧「自适应（16 核）」措辞作废（review 3-04 的同值不同说）。
     s.budget->set_full_text(s.plan.thread_budget > 0
                                 ? PageRun::tr("固定 %1 核").arg(s.plan.thread_budget)
-                                : PageRun::tr("自适应（%1 核）").arg(hardware_threads()));
-    s.budget->setToolTip(PageRun::tr("编码可用的处理器核心数上限；自适应 = 按本机核心数"));
+                                : PageRun::tr("自动（%1 核）").arg(hardware_threads()));
+    s.budget->setToolTip(PageRun::tr("编码可用的处理器核心数上限；自动 = 按本机核心数"));
     s.tally->set_full_text(tally_text(tally));
     s.tally->setToolTip(PageRun::tr("按输出计：成功 / 0 字节异常 / 失败 / 跳过 / 取消"));
     // 峰值内存（A29：解冻加性字段 RunSummary::peak_bytes → 接**真实读数**；与引擎
@@ -1360,15 +1379,14 @@ QString page_qss(const theme::Tokens &t) {
     qss += QStringLiteral("QPushButton[") + QString::fromLatin1(kFieldProperty) +
            QStringLiteral("=\"button\"]:disabled { color: ") + css(t.text3) +
            QStringLiteral("; border-color: ") + css(t.control_bd) + QStringLiteral("; }\n");
-    qss += button_rule("danger", QStringLiteral("background: transparent; border: 1px solid ") +
-                                     css(t.err_bd) + QStringLiteral("; color: ") + css(t.err) +
-                                     QStringLiteral("; font-weight: 600; padding: 0 12px"));
+    // A39 ②（W-R-T13）：破坏性动作 = 红文字链（与 accent 文字链同形，仅换色 = 令牌 err；
+    // 「语义色只表达语义」§2.4 → 红色只在破坏性动作上出现）。红描边钮（旧 danger）退役。
+    qss += button_rule("link-danger",
+                       QStringLiteral("background: transparent; border: none; color: ") +
+                           css(t.err) + QStringLiteral("; font-weight: 600; padding: 0 2px"));
     qss += QStringLiteral("QPushButton[") + QString::fromLatin1(kFieldProperty) +
-           QStringLiteral("=\"danger\"]:hover { background: ") + css(t.err_dim) +
+           QStringLiteral("=\"link-danger\"]:disabled { color: ") + css(t.text3) +
            QStringLiteral("; }\n");
-    qss += QStringLiteral("QPushButton[") + QString::fromLatin1(kFieldProperty) +
-           QStringLiteral("=\"danger\"]:disabled { color: ") + css(t.text3) +
-           QStringLiteral("; border-color: ") + css(t.control_bd) + QStringLiteral("; }\n");
     qss += button_rule("link", QStringLiteral("background: transparent; border: none; color: ") +
                                    css(t.accent) +
                                    QStringLiteral("; font-weight: 600; padding: 0 2px"));
@@ -1674,7 +1692,9 @@ void build_overview_card(QWidget *parent, RunState *s) {
         hl->addWidget(s->open_output);
         s->cancel = new QPushButton(PageRun::tr("取消剩余"), host);
         s->cancel->setObjectName(QStringLiteral("pp-run-cancel"));
-        s->cancel->setProperty(kFieldProperty, QStringLiteral("danger"));
+        // W-R-T13（A39 ②）：破坏性动作 = **红文字链**（视觉终稿动作层级：导航链 / 破坏性红链 /
+        // 结果次钮三副面孔）。红描边钮形态退役（旧 "danger" 属性值不再出现在本页 QSS）。
+        s->cancel->setProperty(kFieldProperty, QStringLiteral("link-danger"));
         s->cancel->setFont(theme::font(theme::Typography::body_px, 600));
         s->cancel->setFixedHeight(theme::Metrics::btn_h); // R4/A7 按钮高 26
         s->cancel->setCursor(Qt::PointingHandCursor);
@@ -1912,8 +1932,9 @@ void PageRun::set_tokens(const theme::Tokens &tokens) {
         return;
     s->tokens = tokens;
     setStyleSheet(page_qss(tokens));
-    // 矢量图标随 tokens 重放（QIcon 取色不吃 QSS 的 color）
-    icons::apply(s->cancel, icons::Name::Stop, tokens.err, tokens.text3, 12);
+    // W-R-T13（A39 ②）：取消剩余已是**文字链**（mockup run.html 的 .btn.lnk 逐字：与「查看日志…」
+    // 「打开输出目录」同形、仅换色）→ 钮上不再挂矢量图标（旧 danger 钮时代的 ■ 已随形态一并退役；
+    // 取色交给 QSS 的 link-danger 档）。
     s->progress->set_tokens(tokens);
     s->state_pill->set_tokens(tokens);
     for (FileRow &file : s->files) {

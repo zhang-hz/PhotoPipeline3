@@ -24,6 +24,14 @@ name: release
 #     zip 可复现性：接受现状（同 M2/M3 结论；§12.7 明文）——发布件 sha256 逐轮不同属已知事实，
 #     故发行口径以「tag → Release 附件」为锚，不以字节可复现为判据。
 #
+#   ── M5-T16 发行轮追加（只增，不动上述三件套）────────────────────────────────────
+#     ④ 发布说明 = `CHANGELOG.md` 的 `[版本]` 节正文（节标题 → 下一个 `## [` 之前，且**止于**
+#        `### 发行` 小节——该小节是仓库内部的口径/指纹记账，含"留待发行轮"的边界说明，发布后即
+#        过时），末尾附「完整变更日志 @tag」与「Full Changelog」链接；生成失败即红（不肯以空说明
+#        发布）。原 `--generate-notes`（M4 口径）改由本步骤产出（gh 两者互斥）。
+#     ⑤ `PhotoPipeline-<ver>-SHA256SUMS.txt` 作为第 4 个附件随 Release 发布（发行清单要求
+#        "win64.zip + AppImage + checksums"；内容 = 三个发布件的 sha256，逐字取自下载件）。
+#
 #   ── job 预算表（设计 §12.3；硬顶 = 每 job timeout-minutes: 20，禁放宽）──────────────
 #     | job             | 平台         | 预算  | 内容                                                    |
 #     | appimage        | ubuntu-24.04 | 12 min | release 构建 + make_appimage.sh（4 项内置烟测）+ 启动烟测 |
@@ -577,6 +585,45 @@ jobs:
           [ "$AVER" = "$VER" ] && [ "$ZVER" = "$VER" ] || { echo "::error::版本与 tag 不一致: tag=$VER appimage=$AVER winzip=$ZVER"; exit 1; }
           echo "tag=$TAG 版本一致: appimage=$AVER winzip=$ZVER"
 
+      - name: ④ 生成发布说明（CHANGELOG [版本] 节）与 SHA256SUMS 清单（M5-T16 追加）
+        # 只增步骤：说明源 = CHANGELOG.md 的 [版本] 节（止于 `### 发行`）；校验和清单进附件。
+        # 生成失败即红 —— 不以空说明/缺清单状态发布。
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"; VER="${TAG#v}"
+          NOTES="$RUNNER_TEMP/release-notes.md"
+
+          start=$(grep -n "^## \[$VER\]" CHANGELOG.md | head -1 | cut -d: -f1 || true)
+          if [ -z "$start" ]; then
+            echo "::error::CHANGELOG.md 找不到 [${VER}] 节（发布说明必须来自变更日志）"; exit 1
+          fi
+          sec_end=$(awk -v s="$start" 'NR > s && /^## \[/ { print NR - 1; exit }' CHANGELOG.md)
+          [ -n "$sec_end" ] || sec_end=$(wc -l < CHANGELOG.md)
+          pub=$(awk -v s="$start" -v e="$sec_end" \
+                  'NR >= s && NR <= e && /^### 发行/ { print NR; exit }' CHANGELOG.md)
+          notes_end="$sec_end"
+          [ -n "$pub" ] && notes_end=$(( pub - 1 ))
+          sed -n "${start},${notes_end}p" CHANGELOG.md > "$NOTES"
+          grep -q "^## \[$VER\]" "$NOTES" || { echo "::error::发布说明生成异常（节标题缺失）"; exit 1; }
+          PREV=$(git describe --tags --abbrev=0 --exclude 'ci-*' "${TAG}^{}^" 2>/dev/null || true)
+          {
+            echo ""; echo "---"; echo ""
+            echo "**完整变更日志**：[CHANGELOG.md @ ${TAG}](https://github.com/${GITHUB_REPOSITORY}/blob/${TAG}/CHANGELOG.md)"
+            echo ""
+            if [ -n "$PREV" ]; then
+              echo "**Full Changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${PREV}...${TAG}"
+            else
+              echo "**Tag**: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+            fi
+          } >> "$NOTES"
+          echo "发布说明 $(( $(wc -l < "$NOTES") )) 行（源: CHANGELOG.md [${VER}] 节，止于 ### 发行；prev=${PREV:-<无>}）"
+          head -2 "$NOTES"
+
+          ( cd dist-release && sha256sum PhotoPipeline-*-x86_64.AppImage \
+              PhotoPipeline-*-deps.txt \
+              PhotoPipeline-*-win64.zip > "PhotoPipeline-${VER}-SHA256SUMS.txt" )
+          echo "校验和清单:"; cat "dist-release/PhotoPipeline-${VER}-SHA256SUMS.txt"
+
       - name: ③ 发布 GitHub Release（--repo 显式定位保留）
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -586,10 +633,11 @@ jobs:
             dist-release/PhotoPipeline-*-x86_64.AppImage \
             dist-release/PhotoPipeline-*-deps.txt \
             dist-release/PhotoPipeline-*-win64.zip \
+            "dist-release/PhotoPipeline-${VER}-SHA256SUMS.txt" \
             --repo "$GITHUB_REPOSITORY" \
             --title "PhotoPipeline $VER" \
-            --generate-notes
-          echo "§ Release $TAG 已发布（附件：AppImage + deps.txt + win64.zip）"
+            --notes-file "$RUNNER_TEMP/release-notes.md"
+          echo "§ Release $TAG 已发布（附件：AppImage + deps.txt + win64.zip + SHA256SUMS.txt）"
 
       - name: 汇总 → $GITHUB_STEP_SUMMARY
         if: always()
@@ -605,6 +653,8 @@ jobs:
             echo "| 查重（§12.7 ①）| \`gh release view\` 前置探测（已有 Release ⇒ 显式失败）|"
             echo "| 产物 --version（§12.7 ②）| probe-appimage / probe-winzip 独立探测 + 发布输入复核 |"
             echo "| --repo（§12.7 ③）| \`--repo \$GITHUB_REPOSITORY\` 显式定位 |"
+            echo "| 发布说明（M5-T16 ④）| CHANGELOG.md [${GITHUB_REF_NAME#v}] 节（止于 \`### 发行\`）+ 完整变更日志 / Full Changelog 链接 |"
+            echo "| 校验和（M5-T16 ⑤）| \`PhotoPipeline-${GITHUB_REF_NAME#v}-SHA256SUMS.txt\` 随附件发布（AppImage+deps.txt+win64.zip）|"
           } >> "$GITHUB_STEP_SUMMARY"
           # 预算校准（§12.3 发布道 12/15/3 + 探测 job；读不到 jobs API 不红 job —— 门禁是 timeout 硬顶）
           if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" \

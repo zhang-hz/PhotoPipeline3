@@ -523,13 +523,22 @@ jobs:
           Expand-Archive -Path $zip -DestinationPath $stage -Force
           $exe = (Get-ChildItem -Recurse -Filter photopipeline.exe $stage | Select-Object -First 1).FullName
           if (-not $exe) { Write-Error "zip 内没有 photopipeline.exe"; exit 1 }
-          $ver = & $exe --version
-          Write-Output "下载件 --version -> $ver"
-          $TAG = $env:GITHUB_REF_NAME; $VER = $TAG -replace '^v', ''
-          if ("$ver".Trim() -ne "PhotoPipeline $VER") {
-            Write-Error "下载件 --version 与 tag 不一致（期望 'PhotoPipeline $VER'，实际 '$ver'）"; exit 1
+          # M5-T16-fix3（首跑归因 + 本机复现）：photopipeline.exe 是 **GUI 子系统**二进制
+          # （CMakeLists.txt:243 WIN32_EXECUTABLE TRUE）——PowerShell 的 `& $exe` 对它**不等待、
+          # 也不接管 stdout**（本机实测捕获恒为空）；且 PowerShell 变量名大小写不敏感，原写法里
+          # `$ver` 会被随后的 `$VER = $TAG -replace …` 覆写 ⇒ 首跑报「实际 '0.3.0'」（既非 exe
+          # 输出、也非空串，两处缺陷叠加）。改用 `cmd /c` 捕获（cmd 会等待 GUI 应用退出、stdout
+          # 走管道）：本机同一 exe 实测 `cmd /c` 得 `PhotoPipeline 0.3.0`（rc=0），`& $exe` 得空。
+          $out = @(cmd /c "`"$exe`" --version 2>&1")
+          $rc = $LASTEXITCODE
+          $first = if ($out.Count -gt 0) { "$($out[0])".Trim() } else { "" }
+          Write-Output "下载件 --version -> [$first] (rc=$rc)"
+          if ($rc -ne 0) { Write-Error "下载件 --version 退出码 $rc"; exit 1 }
+          $TAG = $env:GITHUB_REF_NAME; $WANT = "PhotoPipeline " + ($TAG -replace '^v', '')
+          if ($first -ne $WANT) {
+            Write-Error "下载件 --version 与 tag 不一致（期望 '$WANT'，实际 '$first'）"; exit 1
           }
-          Write-Output "probe-winzip OK: PhotoPipeline $VER"
+          Write-Output "probe-winzip OK: $WANT"
 
   # ────────────────────────────────────────────────────────────────────────────
   # publish（预算 2 min）: §12.7 ① 查重 → tag↔版本一致性 → ③ gh release create --repo

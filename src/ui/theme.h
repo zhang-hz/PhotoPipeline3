@@ -660,6 +660,10 @@ inline constexpr const char *kFkUnit = "unit";   // 16px 单位槽（§4.2 辅�
 inline constexpr const char *kFkNote = "note";   // 10px 范围注释（§4.2 辅助 10px / --txt3）
 inline constexpr const char *kFkCheck = "check"; // check 行文字（§4.2 正文·值 / --txt）
 inline constexpr const char *kFkSpin = "spin";   // 数值控件（R4 spinbox 盒）
+// 下拉（R4 combo 盒）。GUI-R2：下拉的样式钩子由本条**唯一**承载 —— 在此之前六个建造点各自
+// 挂 `ppField`/`ppMetaField`/不挂属性，导致同一控件四种高度、亮色下整只不绘制
+// （docs/gui-review-0.3.0-r2.md §1）。
+inline constexpr const char *kFkCombo = "combo"; // 下拉（R4 combo 盒）
 
 // 自绘控件（ItemDelegate / 自绘 pill）的三色取法：同一张 §4.1 末行规则，避免各处复写色值。
 struct PillPaint {
@@ -765,8 +769,10 @@ inline QString formkit_qss(const Tokens &t) {
            QString::number(Metrics::spin_h - 2) + QStringLiteral("px; max-height: ") +
            QString::number(Metrics::spin_h - 2) + QStringLiteral("px; padding: 0 ") +
            QString::number(Metrics::spin_pad_x) + QStringLiteral("px; }\n");
-    // 箭头列 17px（上下各 12）—— 只给**几何**（不设底色/边），箭头本体沿用样式绘制，
-    // 待 M5-T3 的矢量图标集接入后再换 ::up-arrow/::down-arrow 的 image。
+    // 箭头列 17px（上下各 12）—— GUI-R2：`::up-arrow/::down-arrow` 置空、`::*-button` 只留几何
+    // 且不画底/边 —— 平台样式不再画经典的**独立描边按钮格**（竖分隔 + 横分隔 + 加粗箭头）。
+    // 箭头本体与列内两条发丝线由 formkit::Spin/DSpin 自绘（icons 矢量，C3 禁字形），
+    // 与下拉（formkit::Combo）同一套做法。
     const QString up_sel =
         spin + QStringLiteral("::up-button, ") + dspin + QStringLiteral("::up-button");
     const QString down_sel =
@@ -775,14 +781,48 @@ inline QString formkit_qss(const Tokens &t) {
            QStringLiteral(" { subcontrol-origin: border; subcontrol-position: top right; "
                           "width: ") +
            QString::number(Metrics::spin_arrow_w) + QStringLiteral("px; height: ") +
-           QString::number(Metrics::spin_arrow_h) + QStringLiteral("px; }\n");
-    qss +=
-        down_sel +
-        QStringLiteral(" { subcontrol-origin: border; subcontrol-position: bottom right; width: ") +
-        QString::number(Metrics::spin_arrow_w) + QStringLiteral("px; height: ") +
-        QString::number(Metrics::spin_arrow_h) + QStringLiteral("px; }\n");
+           QString::number(Metrics::spin_arrow_h) +
+           QStringLiteral("px; border: none; background: transparent; }\n");
+    qss += down_sel +
+           QStringLiteral(" { subcontrol-origin: border; subcontrol-position: bottom right; "
+                          "width: ") +
+           QString::number(Metrics::spin_arrow_w) + QStringLiteral("px; height: ") +
+           QString::number(Metrics::spin_arrow_h) +
+           QStringLiteral("px; border: none; background: transparent; }\n");
+    qss += spin + QStringLiteral("::up-arrow, ") + dspin +
+           QStringLiteral("::up-arrow { image: none; width: 0px; height: 0px; }\n");
+    qss += spin + QStringLiteral("::down-arrow, ") + dspin +
+           QStringLiteral("::down-arrow { image: none; width: 0px; height: 0px; }\n");
     qss += spin + QStringLiteral(":disabled, ") + dspin + QStringLiteral(":disabled { color: ") +
            css_color(t.text3) + QStringLiteral("; }\n");
+    // 下拉（R4 combo 盒 24 / r3 / --ctl 底 + --ctl-bd 边；箭头 8px 居右、**无分格按钮**）。
+    // GUI-R2：`::drop-down` 只留箭头位几何、`::down-arrow` 置空 —— 平台样式不再画经典分格
+    // 按钮；箭头本体由 formkit::Combo 自绘（icons::ChevronDown 矢量，C3 禁字形）。
+    // 高度**不在此处夹**：盒高单源 = formkit::combo_box 的 setFixedHeight(combo_h)（QSS 的
+    // min/max-height 是另一套盒模型口径，会把总高压成 22 → 同一控件两种高）。
+    const QString combo =
+        QStringLiteral("QComboBox[%1=\"%2\"]").arg(prop).arg(QString::fromLatin1(kFkCombo));
+    qss += combo + QStringLiteral(" { background: ") + css_color(t.control) +
+           QStringLiteral("; border: 1px solid ") + css_color(t.control_bd) +
+           QStringLiteral("; border-radius: ") + QString::number(t.radius_control) +
+           QStringLiteral("px; color: ") + css_color(t.text) +
+           QStringLiteral("; padding: 0 8px; padding-right: 26px; }\n");
+    qss += combo + QStringLiteral(":disabled { color: ") + css_color(t.text3) +
+           QStringLiteral("; }\n");
+    // 箭头位 24px（= combo_arrow_px×2 + 8）：只给几何，不画分隔线/按钮底
+    qss += combo + QStringLiteral("::drop-down { border: none; background: transparent; width: ") +
+           QString::number(Metrics::combo_arrow_px * 2 + 8) + QStringLiteral("px; }\n");
+    qss += combo + QStringLiteral("::down-arrow { image: none; width: 0px; height: 0px; }\n");
+    // 下拉**弹层**（GUI-R2 举一反三：此前零规则 = 平台默认弹出列表，与本体两套皮）
+    qss += combo + QStringLiteral(" QAbstractItemView { background: ") + css_color(t.card) +
+           QStringLiteral("; border: 1px solid ") + css_color(t.card_bd) +
+           QStringLiteral("; border-radius: ") + QString::number(t.radius_control) +
+           QStringLiteral("px; color: ") + css_color(t.text) +
+           QStringLiteral("; selection-background-color: ") + css_color(t.accent_dim) +
+           QStringLiteral("; selection-color: ") + css_color(t.text) +
+           QStringLiteral("; padding: 2px; outline: none; }\n");
+    qss +=
+        combo + QStringLiteral(" QAbstractItemView::item { min-height: 24px; padding: 0 8px; }\n");
     return qss;
 }
 
@@ -906,6 +946,81 @@ inline QString style_sheet(const Tokens &t) {
            QStringLiteral("; }\n");
     // splitter 手柄 = 列间距（§4.3 卡间距 8），透明不抢视觉
     qss += QStringLiteral("QSplitter#pp-splitter::handle { background: transparent; }\n");
+    // 滚动条（GUI-R2 举一反三：审查 1-50 就点过名，此前**零 QSS 规则** = 平台默认复古样式）。
+    // 令牌化：细轨（10px）+ 圆角滑块（--ctl-bd）+ 隐藏两端箭头钮/页槽。
+    for (int o = 0; o < 2; ++o) {
+        const bool vert = (o == 0);
+        const QString orient = vert ? QStringLiteral("vertical") : QStringLiteral("horizontal");
+        const QString extent =
+            vert ? QStringLiteral("width: 10px") : QStringLiteral("height: 10px");
+        const QString min_extent =
+            vert ? QStringLiteral("min-height: 24px") : QStringLiteral("min-width: 24px");
+        const QString line_extent =
+            vert ? QStringLiteral("height: 0px") : QStringLiteral("width: 0px");
+        qss += QStringLiteral("QScrollBar:%1 { background: transparent; %2; margin: 0; }\n")
+                   .arg(orient, extent);
+        qss += QStringLiteral("QScrollBar::handle:%1 { background: ").arg(orient) +
+               css_color(t.control_bd) + QStringLiteral("; border-radius: 5px; ") + min_extent +
+               QStringLiteral("; }\n");
+        qss += QStringLiteral("QScrollBar::add-line:%1, QScrollBar::sub-line:%1 { %2; background: "
+                              "none; border: none; }\n")
+                   .arg(orient, line_extent);
+        qss += QStringLiteral("QScrollBar::add-page:%1, QScrollBar::sub-page:%1 { background: "
+                              "transparent; }\n")
+                   .arg(orient);
+    }
+    // GUI-R2 举一反三：平台默认皮的令牌化（此前这四类**零 QSS 规则**）
+    // ① 右键/上下文菜单（分类打标、筛选、参数、异常列表 …）
+    qss += QStringLiteral("QMenu { background: ") + css_color(t.card) +
+           QStringLiteral("; border: 1px solid ") + css_color(t.card_bd) +
+           QStringLiteral("; border-radius: ") + QString::number(t.radius_control) +
+           QStringLiteral("px; padding: 4px 2px; }\n");
+    qss += QStringLiteral("QMenu::item { padding: 5px 24px 5px 12px; border-radius: ") +
+           QString::number(t.radius_control) + QStringLiteral("px; color: ") + css_color(t.text) +
+           QStringLiteral("; }\n");
+    qss += QStringLiteral("QMenu::item:selected { background: ") + css_color(t.accent_dim) +
+           QStringLiteral("; color: ") + css_color(t.text) + QStringLiteral("; }\n");
+    qss += QStringLiteral("QMenu::item:disabled { color: ") + css_color(t.text3) +
+           QStringLiteral("; }\n");
+    qss += QStringLiteral("QMenu::separator { height: 1px; background: ") + css_color(t.line) +
+           QStringLiteral("; margin: 4px 10px; }\n");
+    // 勾选由代理样式画矢量（formkit::paint_menu_check）；这里只给指示器留几何位
+    qss += QStringLiteral("QMenu::indicator { width: 16px; height: 16px; }\n");
+    // GUI-R2：工具钮**不画下拉箭头**（设计稿 output.html 的 .ftools 里 ＋/−/筛选 都是纯图标钮，
+    // 只有「按月份 ▾」那枚下拉带箭头）。＋/筛选 确有菜单，但语义由 tooltip（"添加文件 / 文件夹"、
+    // "筛选…"）承担 —— 加/减/筛 三枚钮上挂箭头是实现自己长出来的。
+    qss += QStringLiteral("QToolButton::menu-indicator { image: none; width: 0px; height: 0px; "
+                          "subcontrol-origin: padding; subcontrol-position: bottom right; }\n");
+    // ② 报错/询问框（on_start 的 6 个闸门、预设读写失败 …）—— 原生皮下是复古灰
+    qss +=
+        QStringLiteral("QMessageBox { background: ") + css_color(t.card) + QStringLiteral("; }\n");
+    qss += QStringLiteral("QMessageBox QLabel { color: ") + css_color(t.text) +
+           QStringLiteral("; }\n");
+    qss += QStringLiteral("QMessageBox QPushButton { background: ") + css_color(t.control) +
+           QStringLiteral("; border: 1px solid ") + css_color(t.control_bd) +
+           QStringLiteral("; border-radius: ") + QString::number(t.radius_control) +
+           QStringLiteral("px; color: ") + css_color(t.text) +
+           QStringLiteral("; font-weight: 600; padding: 0 14px; min-height: 24px; }\n");
+    qss += QStringLiteral("QMessageBox QPushButton:hover { color: ") + css_color(t.text) +
+           QStringLiteral("; }\n");
+    // ③ 提示框（评审 1-49：辅助文字对比不足）
+    qss += QStringLiteral("QToolTip { background: ") + css_color(t.card_hi) +
+           QStringLiteral("; color: ") + css_color(t.text) +
+           QStringLiteral("; border: 1px solid ") + css_color(t.card_bd) +
+           QStringLiteral("; border-radius: ") + QString::number(t.radius_control) +
+           QStringLiteral("px; padding: 4px 8px; }\n");
+    // ④ 分组盒（EXIF 编辑器 时间/GPS/更多字段）—— 扁平化，不再双层框线
+    qss += QStringLiteral("QGroupBox { background: transparent; border: 1px solid ") +
+           css_color(t.card_bd) + QStringLiteral("; border-radius: ") +
+           QString::number(t.radius_card) +
+           QStringLiteral("px; margin-top: 12px; padding: 8px "
+                          "8px 8px 8px; color: ") +
+           css_color(t.text) + QStringLiteral("; }\n");
+    qss +=
+        QStringLiteral("QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 6px; "
+                       "color: ") +
+        css_color(t.text2) + QStringLiteral("; }\n");
+    qss += QStringLiteral("QGroupBox::indicator { width: 16px; height: 16px; }\n"); // 勾选同走矢量
     // formkit（C2）行内辅助件 + R4 数值控件（M5-T2 加性扩展；选择器只认 ppFk）
     qss += formkit_qss(t);
     // 改动值 .mod（动态属性钩子）

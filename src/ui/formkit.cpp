@@ -288,7 +288,7 @@ CheckRow check_row(QWidget *parent, const QString &label, const QString &text,
 // 数值控件（K2）
 // ---------------------------------------------------------------------------
 QSpinBox *spin_box(QWidget *parent, const SpinSpec &spec, FieldWidth width) {
-    auto *spin = new QSpinBox(parent);
+    auto *spin = new Spin(parent); // GUI-R2：自绘箭头列（平台不再画复古 spinner）
     bind_spin_common(spin, width, spec.object_name);
     spin->setRange(spec.min, spec.max);
     if (spec.auto_magic)
@@ -298,7 +298,7 @@ QSpinBox *spin_box(QWidget *parent, const SpinSpec &spec, FieldWidth width) {
 }
 
 QDoubleSpinBox *dspin_box(QWidget *parent, const DoubleSpinSpec &spec, FieldWidth width) {
-    auto *spin = new QDoubleSpinBox(parent);
+    auto *spin = new DSpin(parent); // GUI-R2：自绘箭头列（平台不再画复古 spinner）
     bind_spin_common(spin, width, spec.object_name);
     spin->setDecimals(spec.decimals);
     spin->setRange(spec.min, spec.max);
@@ -313,6 +313,146 @@ SpinRow spin_row(QWidget *parent, const QString &label, const SpinSpec &spec, Fi
     out.spin = spin_box(parent, spec, width);
     out.row = frow(parent, label, out.spin, width, spec.unit, spec.note);
     return out;
+}
+
+// ---------------------------------------------------------------------------
+// 下拉（GUI-R2：QComboBox 的唯一构造点）
+// ---------------------------------------------------------------------------
+Combo::Combo(QWidget *parent) : QComboBox(parent) {
+    setObjectName(QStringLiteral("pp-fk-combo"));
+    setFixedHeight(kControlH); // R4 高 24
+    setFocusPolicy(Qt::StrongFocus);
+}
+
+void Combo::set_tokens(const theme::Tokens &t) {
+    tokens_ = t;
+    update();
+}
+
+// 基类画盒/当前项文字；右端补画 8px 矢量箭头（`::drop-down/::down-arrow` 已在 QSS 里清空
+// 平台绘制，见 theme::formkit_qss）。箭头形只有一份 —— icons::ChevronDown（C3 单源）。
+void Combo::paintEvent(QPaintEvent *event) {
+    QComboBox::paintEvent(event);
+    QPainter p(this);
+    const int box = theme::Metrics::combo_arrow_px * 2 + 8; // 箭头位宽（= ::drop-down width）
+    const QRectF slot(width() - box, 0, box, height());
+    const QColor color = isEnabled() ? tokens_.text2 : tokens_.text3;
+    icons::paint(p, icons::Name::ChevronDown,
+                 slot.adjusted((box - theme::Metrics::combo_arrow_px) / 2.0, 0,
+                               -(box - theme::Metrics::combo_arrow_px) / 2.0, 0),
+                 color, icons::kStrokePx);
+}
+
+QComboBox *combo_box(QWidget *parent, const ComboSpec &spec, FieldWidth width) {
+    auto *combo = new Combo(parent);
+    combo->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkCombo)); // 唯一样式钩子
+    combo->setFont(theme::font(theme::Typography::body_px));
+    if (!spec.object_name.isEmpty())
+        combo->setObjectName(spec.object_name);
+    if (!spec.tooltip.isEmpty())
+        combo->setToolTip(spec.tooltip);
+    if (!spec.accessible.isEmpty())
+        combo->setAccessibleName(spec.accessible); // §11：控件必有 accessibleName
+    apply_field_width(combo, width);
+    return combo;
+}
+
+ComboRow combo_row(QWidget *parent, const QString &label, const ComboSpec &spec, FieldWidth width) {
+    ComboRow out;
+    out.combo = combo_box(parent, spec, width);
+    out.row = frow(parent, label, out.combo, width);
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// 数值控件的箭头列（GUI-R2：与 Combo 同一套做法 —— 平台不画，本函数自绘）
+// ---------------------------------------------------------------------------
+// 列内两条发丝线（竖：值区/箭头列分界；横：▲/▼ 分界）+ 矢量 ▲▼。设计稿 mockup
+// output.html 的 `.spin .ar` 正是这个形态：盒内一列、细线分隔，**不是**平台的
+// 独立描边按钮格。形只有一份 —— icons::ChevronDown（上箭头 = 旋转 180°）。
+void paint_spin_arrows(QPainter &painter, QWidget *widget, const theme::Tokens &tokens) {
+    if (widget == nullptr)
+        return;
+    const int col = theme::Metrics::spin_arrow_w; // 17
+    const QRectF box(widget->width() - col, 0, col, widget->height());
+    const QColor line = tokens.line;
+    const QColor arrow = widget->isEnabled() ? tokens.text2 : tokens.text3;
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    // 竖发丝线：箭头列左界
+    QPen pen(line);
+    pen.setWidthF(1.0);
+    painter.setPen(pen);
+    painter.drawLine(QPointF(box.left() + 0.5, 1.0), QPointF(box.left() + 0.5, box.bottom() - 1.0));
+    // 横发丝线：▲/▼ 分界
+    const qreal mid = box.center().y();
+    painter.drawLine(QPointF(box.left() + 1.0, mid), QPointF(box.right(), mid));
+    // ▲/▼（ChevronDown 旋转 180° 得上箭头；两枚同尺寸居中于各自半格）
+    const qreal side = theme::Metrics::combo_arrow_px; // 8，与下拉箭头同规格
+    const QRectF up(box.left() + (col - side) / 2.0, (mid - side) / 2.0, side, side);
+    const QRectF down(box.left() + (col - side) / 2.0, mid + (mid - side) / 2.0, side, side);
+    painter.save();
+    painter.translate(up.center());
+    painter.rotate(180);
+    painter.translate(-up.center());
+    icons::paint(painter, icons::Name::ChevronDown, up, arrow, icons::kStrokePx);
+    painter.restore();
+    icons::paint(painter, icons::Name::ChevronDown, down, arrow, icons::kStrokePx);
+    painter.restore();
+}
+
+Spin::Spin(QWidget *parent) : QSpinBox(parent) {
+    setObjectName(QStringLiteral("pp-fk-spin"));
+    setFixedHeight(kControlH);
+}
+
+void Spin::set_tokens(const theme::Tokens &t) {
+    tokens_ = t;
+    update();
+}
+
+void Spin::paintEvent(QPaintEvent *event) {
+    QSpinBox::paintEvent(event);
+    QPainter p(this);
+    paint_spin_arrows(p, this, tokens_);
+}
+
+DSpin::DSpin(QWidget *parent) : QDoubleSpinBox(parent) {
+    setObjectName(QStringLiteral("pp-fk-dspin"));
+    setFixedHeight(kControlH);
+}
+
+void DSpin::set_tokens(const theme::Tokens &t) {
+    tokens_ = t;
+    update();
+}
+
+void DSpin::paintEvent(QPaintEvent *event) {
+    QDoubleSpinBox::paintEvent(event);
+    QPainter p(this);
+    paint_spin_arrows(p, this, tokens_);
+}
+
+// ---------------------------------------------------------------------------
+// 平台指示器矢量化（GUI-R2 举一反三）：树展开符 / 菜单勾选
+// ---------------------------------------------------------------------------
+void paint_branch_indicator(QPainter &painter, const QRect &rect, bool has_children, bool open,
+                            const theme::Tokens &tokens) {
+    if (!has_children || rect.isEmpty())
+        return;
+    // 矢量形只有一份 —— icons（C3）；收起 = ChevronRight，展开 = ChevronDown
+    const int side = std::min(rect.width(), rect.height());
+    const QRectF box(rect.center().x() - side / 2.0, rect.center().y() - side / 2.0, side, side);
+    icons::paint(painter, open ? icons::Name::ChevronDown : icons::Name::ChevronRight, box,
+                 tokens.text2, icons::kStrokePx);
+}
+
+void paint_menu_check(QPainter &painter, const QRect &rect, const theme::Tokens &tokens) {
+    if (rect.isEmpty())
+        return;
+    const int side = std::min(rect.width(), rect.height()) - 4;
+    const QRectF box(rect.center().x() - side / 2.0, rect.center().y() - side / 2.0, side, side);
+    icons::paint(painter, icons::Name::Check, box, tokens.accent, icons::kStrokePx);
 }
 
 // ---------------------------------------------------------------------------

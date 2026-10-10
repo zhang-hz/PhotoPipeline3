@@ -38,6 +38,7 @@
 #include <QBrush>
 #include <QCheckBox>
 #include <QColor>
+#include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QLabel>
 #include <QList>
@@ -191,6 +192,35 @@ struct DoubleSpinSpec {
     QString object_name;
 };
 
+// 自绘箭头的数值控件（GUI-R2 修「复古 spinner」）：基类画盒/值，右端补画箭头列的
+// **两条发丝线 + 矢量 ▲▼**。`::up-button/::down-button` 已在 QSS 里去掉底/边、
+// `::*-arrow` 置空 → 平台不再画独立描边按钮格（见 theme::formkit_qss）。
+void paint_spin_arrows(QPainter &painter, QWidget *widget, const theme::Tokens &tokens);
+
+class Spin : public QSpinBox {
+public:
+    explicit Spin(QWidget *parent = nullptr);
+    void set_tokens(const theme::Tokens &t);
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+
+private:
+    theme::Tokens tokens_ = default_tokens();
+};
+
+class DSpin : public QDoubleSpinBox {
+public:
+    explicit DSpin(QWidget *parent = nullptr);
+    void set_tokens(const theme::Tokens &t);
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+
+private:
+    theme::Tokens tokens_ = default_tokens();
+};
+
 QSpinBox *spin_box(QWidget *parent, const SpinSpec &spec, FieldWidth width = FieldWidth::Standard);
 QDoubleSpinBox *dspin_box(QWidget *parent, const DoubleSpinSpec &spec,
                           FieldWidth width = FieldWidth::Standard);
@@ -203,6 +233,45 @@ struct SpinRow {
 
 SpinRow spin_row(QWidget *parent, const QString &label, const SpinSpec &spec,
                  FieldWidth width = FieldWidth::Standard);
+
+// ---------------------------------------------------------------------------
+// 下拉（GUI-R2：QComboBox 的**唯一**构造点 —— 契约 C2 补齐）
+//   * 高 24、r3、--ctl 底/边由 theme.h 的 `ppFk="combo"` QSS 落地；
+//   * 箭头 8px 居右、**无分格按钮**：`::drop-down/::down-arrow` 在 QSS 里清空平台绘制，
+//     本控件自绘 icons::ChevronDown（C3 禁字形、与图标库同一份形）；
+//   * 字体/无障碍/tooltip 在此给齐（§11）。调用点不得再 `new QComboBox`、不得自设样式钩子
+//     （旧的 ppField="combo" / ppMetaField="combo" 三套规则随本条退役）。
+// ---------------------------------------------------------------------------
+struct ComboSpec {
+    QString object_name; // 探针钩子（pp-*，§10）
+    QString accessible;  // §11：控件必有 accessibleName
+    QString tooltip;
+};
+
+// 自绘箭头的下拉本体（QComboBox；仅供 combo_box() 使用，调用点拿 QComboBox*）
+class Combo : public QComboBox {
+public:
+    explicit Combo(QWidget *parent = nullptr);
+    void set_tokens(const theme::Tokens &t);
+
+protected:
+    void paintEvent(QPaintEvent *event) override; // 基类画盒/字后，右端补画 8px 矢量箭头
+
+private:
+    theme::Tokens tokens_ = default_tokens();
+};
+
+QComboBox *combo_box(QWidget *parent, const ComboSpec &spec = ComboSpec(),
+                     FieldWidth width = FieldWidth::Standard);
+
+// 单列下拉行 = combo_box + frow（与 spin_row 同口径）
+struct ComboRow {
+    Row row;
+    QComboBox *combo = nullptr;
+};
+
+ComboRow combo_row(QWidget *parent, const QString &label, const ComboSpec &spec = ComboSpec(),
+                   FieldWidth width = FieldWidth::Standard);
 
 // ---------------------------------------------------------------------------
 // 自绘控件（取色取形全走 theme.h 令牌；零平台分叉）
@@ -361,6 +430,18 @@ private:
     double frac_ = 0.0;
     bool synthetic_ = false;
 };
+
+// ---------------------------------------------------------------------------
+// 平台指示器的矢量化（GUI-R2 举一反三）。这两枚是**唯一**的自绘入口，供应用级 QProxyStyle
+// 调用 —— QTreeView::branch（树展开符）与 QMenu::indicator（菜单勾选）QSS 只能塞图片，
+// 无法用矢量形；C3 禁字形/禁第二套图标，故走样式层自绘。
+// ---------------------------------------------------------------------------
+// 树分枝指示：有子节点时画 ChevronRight（收起）/ ChevronDown（展开）；其余不画
+// （设计稿的树没有连接线）。rect = 样式给的指示器盒。
+void paint_branch_indicator(QPainter &painter, const QRect &rect, bool has_children, bool open,
+                            const theme::Tokens &tokens);
+// 菜单勾选：icons::Check（矢量），居中于指示器盒。
+void paint_menu_check(QPainter &painter, const QRect &rect, const theme::Tokens &tokens);
 
 // 图标钮（R4 28×28 r4，悬停显底）。§11：图标钮必有 accessibleName + tooltip —— 由
 // set_action(text) 一次设齐（图标本体走 QAbstractButton::setIcon，见 icons.h）。

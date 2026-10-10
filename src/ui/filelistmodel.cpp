@@ -315,8 +315,14 @@ QVariant FileListModel::data(const QModelIndex &idx, int role) const {
 Qt::ItemFlags FileListModel::flags(const QModelIndex &idx) const {
     if (!idx.isValid())
         return Qt::NoItemFlags;
-    // M4-T11：ItemIsUserCheckable = 勾选入口（§6.2/D2）；内容列由委托自绘命中框，行本身不可编辑
-    return Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsUserCheckable;
+    // M4-T11：ItemIsUserCheckable = 勾选入口（§6.2/D2）；内容列由委托自绘命中框，行本身不可编辑。
+    // GUI-R2 修「选中后出现两排选择框」：勾选语义**只属勾选列** —— 对内容列也给 UserCheckable
+    // 会让 initStyleOption 置上 HasCheckIndicator，样式于是又在内容列左缘画一个原生勾选框
+    // （实拍：缩略图左侧露出第二枚框，选中高亮后更显眼）。
+    Qt::ItemFlags f = Qt::ItemIsEnabled | Qt::ItemIsSelectable;
+    if (idx.column() == FileGroupProxyModel::kCheckColumn)
+        f |= Qt::ItemIsUserCheckable;
+    return f;
 }
 
 bool FileListModel::setData(const QModelIndex &idx, const QVariant &value, int role) {
@@ -881,6 +887,9 @@ void FileDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option,
         bg_opt.state &= ~QStyle::State_Selected;
         bg_opt.text.clear();
         bg_opt.icon = QIcon();
+        // GUI-R2：勾选框一律自绘（FileGroupDelegate 的勾选列），样式指示器在**任何列**都不得
+        // 出现 —— 否则内容列左缘会多画一枚原生勾选框（"两排选择框"）。
+        bg_opt.features &= ~QStyleOptionViewItem::HasCheckIndicator;
         style->drawControl(QStyle::CE_ItemViewItem, &bg_opt, painter, widget);
     }
 

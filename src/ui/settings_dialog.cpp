@@ -345,16 +345,16 @@ private:
 // 塞进 spinbox（↑↓ 行为不可预期）。itemData(0) = 0（自动），其余 = 数值本体。
 QComboBox *make_auto_combo(QWidget *parent, const QString &object_name, int value, int max_value,
                            const QString &tooltip) {
-    auto *combo = new QComboBox(parent);
-    combo->setObjectName(object_name);
+    formkit::ComboSpec spec;
+    spec.object_name = object_name;
+    spec.accessible = tooltip; // §11：tooltip 即该下拉的语义名
+    spec.tooltip = tooltip;
+    QComboBox *combo = formkit::combo_box(parent, spec);
     combo->addItem(T("自动"), 0);
     for (int n = 1; n <= max_value; ++n)
         combo->addItem(QString::number(n), n);
     const int idx = combo->findData(std::clamp(value, 0, max_value));
     combo->setCurrentIndex(idx >= 0 ? idx : 0);
-    combo->setFont(theme::font(theme::Typography::body_px));
-    combo->setToolTip(tooltip);
-    hook_field(combo, dk::kFieldCombo);
     return combo;
 }
 
@@ -426,12 +426,11 @@ QString dialog_qss(const theme::Tokens &t) {
     };
     qss += control_rule(QStringLiteral("QLineEdit[") + field + QStringLiteral("=\"") +
                         QLatin1String(kFieldInput) + QStringLiteral("\"]"));
-    qss += control_rule(QStringLiteral("QComboBox[") + field + QStringLiteral("=\"") +
-                        QLatin1String(kFieldCombo) + QStringLiteral("\"]"));
+    // 下拉规则已随 GUI-R2 收口到 theme::formkit_qss 的 `ppFk="combo"`（弹窗不再自带 QComboBox
+    // 规则）
     qss += QStringLiteral("QLineEdit[") + field + QStringLiteral("=\"") +
-           QLatin1String(kFieldInput) + QStringLiteral("\"]:disabled, QComboBox[") + field +
-           QStringLiteral("=\"") + QLatin1String(kFieldCombo) +
-           QStringLiteral("\"]:disabled { color: ") + css(t.text3) + QStringLiteral("; }\n");
+           QLatin1String(kFieldInput) + QStringLiteral("\"]:disabled { color: ") + css(t.text3) +
+           QStringLiteral("; }\n");
     // 多行文本（关于页清单）：--ctl 底 + 等宽字（字族由 C++ 侧给）
     qss += QStringLiteral("QPlainTextEdit { background: ") + css(t.control) +
            QStringLiteral("; border: 1px solid ") + css(t.control_bd) +
@@ -561,6 +560,17 @@ void restyle_title_bar(const TitleBar &bar, const theme::Tokens &t) {
     }
     if (auto *close = dynamic_cast<CaptionCloseButton *>(bar.close))
         close->set_colors(t.text, t.close_hover_fg);
+}
+
+// caption ✕ → 关闭对话框（GUI-R2 修 3）。只接一次；重复调用是幂等的（Qt 的 connect 会重复
+// 触发槽，故用 objectName 标记避开二次接线）。
+void bind_close_button(const TitleBar &bar, QDialog *dialog) {
+    if (bar.close == nullptr || dialog == nullptr)
+        return;
+    if (bar.close->property("ppCloseBound").toBool())
+        return;
+    bar.close->setProperty("ppCloseBound", true);
+    QObject::connect(bar.close, &QPushButton::clicked, dialog, &QDialog::reject);
 }
 
 // —— 下划线页签 ——
@@ -1174,8 +1184,10 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
 
         // 三档典型模板（§4.2 联动段逐字）+ 非典型当前值回显；落值面 = output_template +
         // split_by_format 一对（§3.6 两字段）。输出页启动期取这里的值作默认（见 MainWindow）。
-        auto *structure = new QComboBox(page_out);
-        structure->setObjectName(QLatin1String(kFolderStructure));
+        formkit::ComboSpec structure_spec;
+        structure_spec.object_name = QLatin1String(kFolderStructure);
+        structure_spec.accessible = T("分文件夹默认结构");
+        auto *structure = formkit::combo_box(page_out, structure_spec);
         {
             const auto add_item = [structure](const QString &text, const QString &tmpl) {
                 structure->addItem(text, tmpl);
@@ -1199,8 +1211,6 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
             structure->setCurrentIndex(idx);
         }
         // 长文本字段（模板串）→ R2 长档 flex（160 档会吞掉模板串）
-        structure->setFont(theme::font(theme::Typography::body_px));
-        hook_field(structure, dk::kFieldCombo);
         const QString structure_tip =
             T("新建批次的输出目录结构默认值（§4.2 路径模板；可在输出页逐批次改）。\n"
               "$format = 格式目录名，$dir = 源相对目录，$file = 文件名.新扩展名");
@@ -1321,17 +1331,17 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
         v->setContentsMargins(dk::kBodyPadX, dk::kBodyPadTop, dk::kBodyPadX, dk::kBodyPadBottom);
         v->setSpacing(0);
 
-        auto *provider = new QComboBox(page_map);
-        provider->setObjectName(QLatin1String(kMapProvider));
+        formkit::ComboSpec map_provider_spec;
+        map_provider_spec.object_name = QLatin1String(kMapProvider);
+        map_provider_spec.accessible = T("底图提供方");
+        map_provider_spec.tooltip = T("底图来源；高德需填 Web 服务 Key");
+        auto *provider = formkit::combo_box(page_map, map_provider_spec);
         provider->addItem(T("OpenStreetMap（内置）"), QStringLiteral("osm"));
         provider->addItem(T("高德地图"), QStringLiteral("amap"));
         {
             const int idx = provider->findData(QString::fromStdString(current.map_provider));
             provider->setCurrentIndex(idx >= 0 ? idx : 0); // 未知值 → OSM（默认）
         }
-        provider->setFont(theme::font(theme::Typography::body_px));
-        hook_field(provider, dk::kFieldCombo);
-        provider->setToolTip(T("底图来源；高德需填 Web 服务 Key"));
         const formkit::Row provider_row =
             formkit::frow(page_map, T("底图提供方"), provider, formkit::FieldWidth::Standard);
         bind_row(provider_row, provider);
@@ -1359,8 +1369,11 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
         bind_row(tile_row, tile_cache);
         v->addWidget(tile_row.row);
 
-        auto *level = new QComboBox(page_map);
-        level->setObjectName(QLatin1String(kLogLevel));
+        formkit::ComboSpec level_spec;
+        level_spec.object_name = QLatin1String(kLogLevel);
+        level_spec.accessible = T("日志级别");
+        level_spec.tooltip = T("日志详细程度；trace 最详细");
+        auto *level = formkit::combo_box(page_map, level_spec);
         level->addItem(QStringLiteral("trace"), QLatin1String(kLevelIds[0]));
         level->addItem(QStringLiteral("debug"), QLatin1String(kLevelIds[1]));
         level->addItem(QStringLiteral("info"), QLatin1String(kLevelIds[2]));
@@ -1370,9 +1383,6 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
             const int idx = level->findData(QString::fromStdString(current.log_level));
             level->setCurrentIndex(idx >= 0 ? idx : level->findData(QStringLiteral("info")));
         }
-        level->setFont(theme::font(theme::Typography::body_px));
-        hook_field(level, dk::kFieldCombo);
-        level->setToolTip(T("日志详细程度；trace 最详细"));
         const formkit::Row level_row =
             formkit::frow(page_map, T("日志级别"), level, formkit::FieldWidth::Standard);
         bind_row(level_row, level);
@@ -1575,6 +1585,7 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
 
     // 无边框接线（拖拽 / 八向缩放入口与主窗同一机制：platform/frameless）
     pp::platform::Frameless::attach(this, title_bar.widget, {title_bar.close});
+    dk::bind_close_button(title_bar, this); // GUI-R2 修 3：caption ✕ 必须真关窗
 }
 
 pp::AppSettings SettingsDialog::settings() const {

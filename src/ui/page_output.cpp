@@ -353,8 +353,8 @@ QString page_qss(const theme::Tokens &t) {
                css(t.text) + QStringLiteral("; padding: 0 8px; }\n");
     };
     qss += control_rule(QStringLiteral("QLineEdit[") + mod + QStringLiteral("=\"input\"]"));
-    qss += control_rule(QStringLiteral("QComboBox[") + mod + QStringLiteral("=\"combo\"]"));
-    // 次按钮（R4：高 26 + 描边 + --txt2 字；悬停提亮到 --txt）
+    // 下拉规则已随 GUI-R2 收口到 theme::formkit_qss 的 `ppFk="combo"`（本页不再自带 QComboBox
+    // 规则） 次按钮（R4：高 26 + 描边 + --txt2 字；悬停提亮到 --txt）
     qss += QStringLiteral("QPushButton[") + mod + QStringLiteral("=\"button\"] { background: ") +
            css(t.control) + QStringLiteral("; border: 1px solid ") + css(t.control_bd) +
            QStringLiteral("; border-radius: ") + QString::number(theme::Metrics::btn_radius) +
@@ -391,7 +391,11 @@ QString page_qss(const theme::Tokens &t) {
     qss += QStringLiteral("QLabel[ppInvalid=\"true\"] { color: ") + css(t.err) +
            QStringLiteral("; }\n");
     // 格式页签（mockup .dlg-tab：11.5/600 + 选中 = --txt 字 + 2px acc 下划线；页签行有分隔基线
-    // —— 修 2-21）
+    // —— 修 2-21）。GUI-R2：QTabBar / QTabWidget 本体**必须显式透明** —— 否则各自吃 palette 的
+    // --ctl 底，在页签行画出两条 29px 灰带（设计稿这一行是白底 + 底部发丝线，没有任何色带）。
+    qss += QStringLiteral("QTabWidget#pp-format-tabs, QTabBar#pp-format-tabs { background: "
+                          "transparent; border: none; }\n");
+    qss += QStringLiteral("QTabBar { background: transparent; border: none; }\n");
     qss +=
         QStringLiteral("QTabWidget#pp-format-tabs::pane { border: none; border-top: 1px solid ") +
         css(t.line) + QStringLiteral("; }\n");
@@ -736,8 +740,11 @@ struct Impl {
         }
         // 同名冲突（枚举 = 下拉）
         {
-            conflict_combo = new QComboBox(global_card);
-            conflict_combo->setObjectName(QStringLiteral("pp-conflict-combo"));
+            formkit::ComboSpec conflict_spec;
+            conflict_spec.object_name = QStringLiteral("pp-conflict-combo");
+            conflict_spec.accessible = PageOutput::tr("同名冲突");
+            conflict_spec.tooltip = PageOutput::tr("输出文件与已有文件同名时的处理方式");
+            conflict_combo = formkit::combo_box(global_card, conflict_spec);
             conflict_combo->addItem(PageOutput::tr("自动加序号"),
                                     static_cast<int>(pp::ConflictPolicy::Rename));
             conflict_combo->addItem(PageOutput::tr("跳过"),
@@ -756,8 +763,10 @@ struct Impl {
         }
         // 色彩目标（下拉 + tooltip 解释专业词 —— 修 2-16）
         {
-            color_combo = new QComboBox(global_card);
-            color_combo->setObjectName(QStringLiteral("pp-color-combo"));
+            formkit::ComboSpec color_spec;
+            color_spec.object_name = QStringLiteral("pp-color-combo");
+            color_spec.accessible = PageOutput::tr("色彩目标");
+            color_combo = formkit::combo_box(global_card, color_spec);
             color_combo->addItem(PageOutput::tr("保持原样"),
                                  static_cast<int>(pp::ColorTarget::KeepOriginal));
             color_combo->addItem(PageOutput::tr("sRGB"), static_cast<int>(pp::ColorTarget::SRGB));
@@ -855,6 +864,40 @@ struct Impl {
         add_format_button->setFixedHeight(theme::Metrics::btn_h); // R4 按钮高 26（A7）
         add_format_button->setFont(theme::font(theme::Typography::body_px, 500));
         tabs->setCornerWidget(add_format_button, Qt::TopRightCorner);
+        // GUI-R2 修 2：QTabWidget 的 corner widget 由它自己的布局摆位，与页签带**不是同一绘制
+        // 单元**（实测 dy=10 / 实拍色带差 14px，两块圆角块中间还有缝）。这里在每次布局后把按钮
+        // **垂直居中**到页签带上（按钮高 26 是 A7 规格，不随页签带拉伸），保证「＋ 添加格式…」
+        // 与页签带同带；只在几何真变时写，避免布局环。
+        class AddFormatAligner : public QObject {
+        public:
+            AddFormatAligner(QTabWidget *tabs_, QToolButton *btn_)
+                : QObject(tabs_), tabs_(tabs_), btn_(btn_) {
+                tabs_->installEventFilter(this);
+            }
+
+        protected:
+            bool eventFilter(QObject *watched, QEvent *event) override {
+                const QEvent::Type t = event->type();
+                if (watched == tabs_ &&
+                    (t == QEvent::Resize || t == QEvent::LayoutRequest || t == QEvent::Show)) {
+                    QTabBar *bar = tabs_->tabBar();
+                    if (bar != nullptr && btn_ != nullptr) {
+                        const QPoint org = bar->mapTo(tabs_, QPoint(0, 0));
+                        const int y = org.y() + (bar->height() - btn_->height()) / 2;
+                        const QRect want(org.x() + bar->width() - btn_->width(), y, btn_->width(),
+                                         btn_->height());
+                        if (btn_->geometry() != want)
+                            btn_->setGeometry(want);
+                    }
+                }
+                return QObject::eventFilter(watched, event);
+            }
+
+        private:
+            QTabWidget *tabs_;
+            QToolButton *btn_;
+        };
+        new AddFormatAligner(tabs, add_format_button);
         tabs->setContentsMargins(0, 0, 0, 0);
         v->addWidget(tabs);
         refresh_changed_pill();
@@ -873,12 +916,12 @@ struct Impl {
 
         // 当前预设（下拉 + 三个按钮；主操作居右 —— R4）
         {
-            preset_combo = new QComboBox(preset_card);
-            preset_combo->setObjectName(QStringLiteral("pp-preset-combo"));
-            preset_combo->setFixedHeight(theme::Metrics::combo_h);
-            preset_combo->setProperty(kFieldProperty, QStringLiteral("combo"));
+            formkit::ComboSpec preset_spec;
+            preset_spec.object_name = QStringLiteral("pp-preset-combo");
+            preset_spec.accessible = PageOutput::tr("当前预设");
+            preset_spec.tooltip = PageOutput::tr("选择预设即载入（不改变左侧文件的勾选）");
+            preset_combo = formkit::combo_box(preset_card, preset_spec);
             preset_combo->setPlaceholderText(PageOutput::tr("未选择预设")); // 修 2-24
-            preset_combo->setToolTip(PageOutput::tr("选择预设即载入（不改变左侧文件的勾选）"));
             preset_combo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
             preset_saveas = make_button(preset_card, PageOutput::tr("另存…"),
                                         QStringLiteral("pp-preset-saveas"), false);
@@ -1149,10 +1192,10 @@ struct Impl {
 
         // 行 1：位深（格式能力约束：如 JPEG 锁 8 位；约束说明入 10px 注释位）
         {
-            st.bitdepth = new QComboBox(st.page);
-            st.bitdepth->setObjectName(QStringLiteral("pp-bitdepth-combo"));
-            st.bitdepth->setFixedHeight(theme::Metrics::combo_h);
-            st.bitdepth->setProperty(kFieldProperty, QStringLiteral("combo"));
+            formkit::ComboSpec bit_spec;
+            bit_spec.object_name = QStringLiteral("pp-bitdepth-combo");
+            bit_spec.accessible = PageOutput::tr("位深");
+            st.bitdepth = formkit::combo_box(st.page, bit_spec);
             // 行内 10px 注释位 = 格式能力约束说明（R3：提示不占标签位；占位符 " " 保证注释位存在）
             const formkit::Row row =
                 formkit::frow(st.page, PageOutput::tr("位深"), st.bitdepth, FieldWidth::Standard,

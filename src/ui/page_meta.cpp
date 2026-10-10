@@ -1506,12 +1506,8 @@ void apply_style(MetaState *st) {
     qss += QStringLiteral("QLineEdit[") + field +
            QStringLiteral("=\"view\"]:disabled, QLineEdit[") + field +
            QStringLiteral("=\"rule\"]:disabled { color: ") + css(t.text3) + QStringLiteral("; }\n");
-    // 下拉（R4：高 24 r3；同 --ctl 底）
-    qss += QStringLiteral("QComboBox[") + field + QStringLiteral("=\"combo\"] { background: ") +
-           css(t.control) + QStringLiteral("; border: 1px solid ") + css(t.control_bd) +
-           QStringLiteral("; border-radius: ") + QString::number(t.radius_control) +
-           QStringLiteral("px; color: ") + css(t.text) + QStringLiteral("; padding: 0 8px; }\n");
-    // 次按钮（R4：高 26 + 描边；A7）
+    // 下拉规则已随 GUI-R2 收口到 theme::formkit_qss 的 `ppFk="combo"`（本页不再自带 QComboBox
+    // 规则） 次按钮（R4：高 26 + 描边；A7）
     qss += QStringLiteral("QPushButton[") + field + QStringLiteral("=\"btn\"] { background: ") +
            css(t.control) + QStringLiteral("; border: 1px solid ") + css(t.control_bd) +
            QStringLiteral("; border-radius: ") + QString::number(t.radius_control) +
@@ -1865,13 +1861,13 @@ QWidget *build_time_card(MetaState *st, QWidget *parent) {
         left.label = PageMeta::tr("从");
         right.label = PageMeta::tr("到");
         for (const bool is_from : {true, false}) {
-            auto *combo = new QComboBox(body);
-            combo->setObjectName(is_from ? QStringLiteral("pp-meta-tz-from")
-                                         : QStringLiteral("pp-meta-tz-to"));
-            combo->setProperty(kFieldProperty, QStringLiteral("combo"));
-            combo->setFixedHeight(formkit::kControlH);
-            combo->setToolTip(is_from ? PageMeta::tr("源时区（EXIF 记录所用的时区）")
-                                      : PageMeta::tr("目标时区（改写后的墙钟时区）"));
+            formkit::ComboSpec spec;
+            spec.object_name =
+                is_from ? QStringLiteral("pp-meta-tz-from") : QStringLiteral("pp-meta-tz-to");
+            spec.accessible = is_from ? PageMeta::tr("源时区") : PageMeta::tr("目标时区");
+            spec.tooltip = is_from ? PageMeta::tr("源时区（EXIF 记录所用的时区）")
+                                   : PageMeta::tr("目标时区（改写后的墙钟时区）");
+            auto *combo = formkit::combo_box(body, spec);
             fill_timezone_combo(combo);
             select_timezone(combo, 480);
             (is_from ? left : right).field = combo;
@@ -2071,11 +2067,11 @@ QWidget *build_gps_card(MetaState *st, QWidget *parent) {
 
     // 地图源（§7.1「OSM 下拉」；有标签；切换 = 本卡地图的显示源）
     {
-        st->provider = new QComboBox(body);
-        st->provider->setObjectName(QStringLiteral("pp-meta-gps-provider"));
-        st->provider->setProperty(kFieldProperty, QStringLiteral("combo"));
-        st->provider->setFixedHeight(formkit::kControlH);
-        st->provider->setToolTip(PageMeta::tr("地图瓦片源（设置·地图 的持久档在外层设置里）"));
+        formkit::ComboSpec provider_spec;
+        provider_spec.object_name = QStringLiteral("pp-meta-gps-provider");
+        provider_spec.accessible = PageMeta::tr("地图源");
+        provider_spec.tooltip = PageMeta::tr("地图瓦片源（设置·地图 的持久档在外层设置里）");
+        st->provider = formkit::combo_box(body, provider_spec);
         for (const QString &id : pp::map::provider_ids()) {
             const pp::map::TileProvider *provider = pp::map::provider_by_id(id);
             st->provider->addItem(provider != nullptr ? provider->label : id, id);
@@ -2104,12 +2100,12 @@ QWidget *build_gps_card(MetaState *st, QWidget *parent) {
     }
     // 搜索结果（修 1-36：下拉有标签 + 占位）
     {
-        st->search_results = new QComboBox(body);
-        st->search_results->setObjectName(QStringLiteral("pp-meta-gps-search-results"));
-        st->search_results->setProperty(kFieldProperty, QStringLiteral("combo"));
-        st->search_results->setFixedHeight(formkit::kControlH);
+        formkit::ComboSpec result_spec;
+        result_spec.object_name = QStringLiteral("pp-meta-gps-search-results");
+        result_spec.accessible = PageMeta::tr("搜索结果");
+        result_spec.tooltip = PageMeta::tr("选择后地图居中到该结果");
+        st->search_results = formkit::combo_box(body, result_spec);
         st->search_results->setPlaceholderText(PageMeta::tr(kSearchResultPlaceholder));
-        st->search_results->setToolTip(PageMeta::tr("选择后地图居中到该结果"));
         const formkit::Row row =
             formkit::frow(body, PageMeta::tr("搜索结果"), st->search_results, FieldWidth::Flex);
         row.row->setObjectName(QStringLiteral("pp-meta-gps-result-row"));

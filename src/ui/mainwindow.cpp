@@ -58,6 +58,7 @@
 #include <QGraphicsDropShadowEffect>
 #include <QGridLayout>
 #include <QHBoxLayout>
+#include <QHash>
 #include <QHeaderView>
 #include <QImage>
 #include <QKeyEvent>
@@ -86,6 +87,7 @@
 #include <QStackedWidget>
 #include <QStorageInfo> // A19（T11）：底栏「剩余磁盘」段的卷可用空间读数
 #include <QStyleHints>
+#include <QTabBar>
 #include <QTabWidget>
 #include <QThread>
 #include <QTimer>
@@ -962,6 +964,32 @@ public:
             if (widget == nullptr)
                 ++misses();
         }
+        // GUI-R2 举一反三：平台指示器矢量化。QSS 只能给 ::branch / ::indicator 塞图片，
+        // 无法画矢量形（C3 禁字形）→ 在样式层自绘，形只有一份（formkit + icons）。
+        if (element == QStyle::PE_IndicatorBranch && option != nullptr && painter != nullptr) {
+            formkit::paint_branch_indicator(
+                *painter, option->rect, option->state & QStyle::State_Children,
+                option->state & QStyle::State_Open, theme::tokens(theme::preferred_theme_mode()));
+            return; // 平台的方块/加号/连接线一并不画（设计稿的树无连接线）
+        }
+        if (element == QStyle::PE_IndicatorMenuCheckMark && option != nullptr &&
+            painter != nullptr) {
+            formkit::paint_menu_check(*painter, option->rect,
+                                      theme::tokens(theme::preferred_theme_mode()));
+            return;
+        }
+        // 菜单钮的下拉箭头（QToolButton::menu-indicator 走这里）—— 同样矢量化，
+        // 不再让平台画那枚小三角（GUI-R2 举一反三第 6 处）
+        if (element == QStyle::PE_IndicatorArrowDown && option != nullptr && painter != nullptr) {
+            const theme::Tokens t = theme::tokens(theme::preferred_theme_mode());
+            const int side = std::min(option->rect.width(), option->rect.height());
+            const QRectF box(option->rect.center().x() - side / 2.0,
+                             option->rect.center().y() - side / 2.0, side, side);
+            icons::paint(*painter, icons::Name::ChevronDown, box,
+                         option->state & QStyle::State_Enabled ? t.text2 : t.text3,
+                         icons::kStrokePx);
+            return;
+        }
         QProxyStyle::drawPrimitive(element, option, painter, widget);
     }
 
@@ -1459,6 +1487,9 @@ struct MainWindow::Impl {
     // M5-T13（W-G4 验收，C7 探针只增）：§12-13 亮暗布局等价（pp-* 控件几何/可见性逐项一致）
     // + §12-14 卡头 hint 禁折行/单行高/省略号 —— 两条 §12 条目此前无独立探针。
     void smoke_probe_verification();
+    // GUI-R2（docs/gui-review-0.3.0-r2.md 回归探针，只增）：下拉一致性 / 格式卡对齐 /
+    // 弹窗 caption 关闭钮 / 运行重入守卫 —— 四条自检行各钉一轮排查的一条结论。
+    void smoke_probe_gui_r2();
     static QString repo_root();
 };
 
@@ -1838,11 +1869,14 @@ void MainWindow::build_ui() {
     d.filter_checked = act_filter_checked;
     d.filter_exceptions = act_filter_exceptions;
     d.filter_clear = act_filter_clear;
-    d.group_mode = new QComboBox(d.tools_row);
-    d.group_mode->setObjectName(QStringLiteral("pp-group-mode"));
-    d.group_mode->setToolTip(tr("分组方式"));              // 1-09：工具行并入后，语义提示进 tooltip
-    d.group_mode->setAccessibleName(tr("分组方式"));       // §11
-    d.group_mode->setFixedHeight(theme::Metrics::combo_h); // R4 下拉高 24（tokens.css .dd 同值）
+    // GUI-R2：左栏下拉同样走 formkit 唯一构造点（原先逐控件 setStyleSheet 是第六条样式路径）
+    {
+        formkit::ComboSpec group_spec;
+        group_spec.object_name = QStringLiteral("pp-group-mode");
+        group_spec.accessible = tr("分组方式");
+        group_spec.tooltip = tr("分组方式"); // 1-09：工具行并入后，语义提示进 tooltip
+        d.group_mode = formkit::combo_box(d.tools_row, group_spec);
+    }
     d.group_mode->setSizeAdjustPolicy(QComboBox::AdjustToContentsOnFirstShow);
     d.group_mode->addItem(tr("按月份"), int(pp::GroupMode::Month));
     d.group_mode->addItem(tr("按相机型号"), int(pp::GroupMode::Camera));
@@ -2455,6 +2489,11 @@ void MainWindow::on_scheduler_done() {
 void MainWindow::lock_for_run(bool lock) {
     Impl &d = *impl_;
     d.running = lock;
+    // GUI-R2 修 4（防御）：「开始运行」在运行期必须**立即**禁用 —— 原先只靠末尾 refresh_status()
+    // 的 setEnabled(can_start) 落地，中间存在可点窗口期；重入会弹「正在运行」模态（用户看到的
+    // "概率性错误"）。这里先掐掉，末尾的 refresh_status 再按完整闸门校准。
+    if (d.start != nullptr)
+        d.start->setEnabled(!lock);
     d.nav_meta->setEnabled(!lock);
     d.nav_output->setEnabled(!lock);
     d.settings_action->setEnabled(!lock);
@@ -2849,8 +2888,7 @@ void MainWindow::Impl::refresh_theme() {
             filter_btn->setStyleSheet(mini);
         if (search != nullptr)
             search->setStyleSheet(input);
-        if (group_mode != nullptr)
-            group_mode->setStyleSheet(input);
+        // group_mode 不再逐控件 setStyleSheet —— GUI-R2：下拉样式单源 = theme::formkit_qss
     }
     // M5-T5：文件行委托的 tokens 重放（A6 —— 状态胶囊/注释/例外标记/勾选框的取色单源）
     if (file_delegate != nullptr)
@@ -3565,6 +3603,528 @@ void MainWindow::Impl::wait_thumbs(int timeout_ms) {
     if (thumbs->pending() > 0)
         loop.exec();
     pump(250); // 让已排队的 ready 结果落到模型
+}
+
+// ---------------------------------------------------------------------------
+// GUI-R2 回归探针（docs/gui-review-0.3.0-r2.md）——只增，四条自检行：
+//   * combo-consistency：全界面 QComboBox 的样式钩子 / 高 24 / **实拍非空**（钉问题 1+5）
+//   * format-card-align：页签带 ↔「＋ 添加格式…」corner widget 几何同带（钉问题 2）
+//   * dialog-close：设置/元数据编辑器/预设 弹窗的 caption ✕ 必须真关窗（钉问题 3）
+//   * run-guard：「开始运行」可点性与闸门一致 + 点击后不弹模态（钉问题 4）
+// 判据一律硬判（smoke_fail）；行内 checked/bad 与取证值由本函数给出。
+// ---------------------------------------------------------------------------
+void MainWindow::Impl::smoke_probe_gui_r2() {
+    // ---- (1) 下拉一致性 ----
+    // 期望：每个 QComboBox 都挂**唯一**样式钩子（ppField="combo"；ppMetaField 为迁移期遗留名，
+    // 同样接受），高度与 Metrics::combo_h 同档（±2 容 border-box），且**明暗两档实拍都有内容**
+    // （亮色下 ParamForm 的下拉曾整只不绘制 —— 非背景像素 0/19604，见报告 §1.1 表）。
+    {
+        int checked = 0, hook_miss = 0, height_bad = 0, invisible = 0;
+        QStringList detail, heights;
+        const theme::ThemeMode restore_mode = theme_mode;
+        // 全量扫描：**不按 isVisible 过滤** —— 病灶多藏在非当前页；QWidget::grab() 对隐藏
+        // 控件同样能渲染，取证不受影响。structural=true 才查钩子/高度（与主题无关，只查一次）。
+        const auto scan = [&](QWidget *root, const char *scope, bool structural) {
+            if (root == nullptr)
+                return;
+            const QList<QComboBox *> combos = root->findChildren<QComboBox *>();
+            for (QComboBox *c : combos) {
+                if (c == nullptr)
+                    continue;
+                if (structural) {
+                    ++checked;
+                    heights << QString::number(c->height());
+                    // 唯一样式钩子 = ppFk="combo"（theme::kFkCombo）。旧的 ppField="combo" /
+                    // ppMetaField="combo" 两条迁移期路径随 GUI-R2 退役，这里不再接受。
+                    const bool hooked = c->property(theme::kFkProperty).toString() ==
+                                        QLatin1String(theme::kFkCombo);
+                    if (!hooked) {
+                        ++hook_miss;
+                        detail << QStringLiteral("%1:%2/no-hook")
+                                      .arg(QString::fromLatin1(scope), c->objectName());
+                    }
+                    if (std::abs(c->height() - theme::Metrics::combo_h) > 2) {
+                        ++height_bad;
+                        detail << QStringLiteral("%1:%2/h=%3")
+                                      .arg(QString::fromLatin1(scope), c->objectName())
+                                      .arg(c->height());
+                    }
+                }
+                // 实拍可见性：grab 自身，统计与域众数色偏离 > 24 的像素；0 = 整只没画
+                const QImage img = c->grab().toImage();
+                int nonbg = 0;
+                if (!img.isNull()) {
+                    QHash<QRgb, int> hist;
+                    for (int y = 0; y < img.height(); ++y)
+                        for (int x = 0; x < img.width(); ++x)
+                            ++hist[img.pixel(x, y)];
+                    QRgb modal = 0;
+                    int best = -1;
+                    for (auto it = hist.constBegin(); it != hist.constEnd(); ++it)
+                        if (it.value() > best) {
+                            best = it.value();
+                            modal = it.key();
+                        }
+                    const int mr = qRed(modal), mg = qGreen(modal), mb = qBlue(modal);
+                    for (int y = 0; y < img.height(); ++y)
+                        for (int x = 0; x < img.width(); ++x) {
+                            const QRgb p = img.pixel(x, y);
+                            if (std::abs(qRed(p) - mr) + std::abs(qGreen(p) - mg) +
+                                    std::abs(qBlue(p) - mb) >
+                                24)
+                                ++nonbg;
+                        }
+                }
+                if (nonbg <= 0) {
+                    ++invisible;
+                    detail << QStringLiteral("%1:%2/invisible")
+                                  .arg(QString::fromLatin1(scope), c->objectName());
+                }
+            }
+        };
+        // 明暗各扫一遍（结构性判据只在暗档取，避免重复计数）
+        for (int pass = 0; pass < 2; ++pass) {
+            set_theme_mode(pass == 0 ? theme::ThemeMode::Dark : theme::ThemeMode::Light);
+            pump(120);
+            const bool structural = (pass == 0);
+            scan(w, pass == 0 ? "win/dark" : "win/light", structural);
+            { // 弹窗侧（dialogkit 口径）—— 同一功能控件的另一条样式路径
+                SettingsDialog sd(settings, w);
+                sd.show();
+                pump(120);
+                scan(&sd, pass == 0 ? "settings/dark" : "settings/light", structural);
+                sd.close();
+                const std::vector<std::pair<QString, QString>> empty_list;
+                PresetsDialog pd(empty_list, QStringLiteral("sample"), w);
+                pd.show();
+                pump(120);
+                scan(&pd, pass == 0 ? "presets/dark" : "presets/light", structural);
+                pd.close();
+                if (model->size() > 0) {
+                    ExifEditor ed(QString::fromStdString(model->row(0).entry.src.string()),
+                                  page_meta->rules(), model->row(0).entry.exception, w);
+                    ed.setProperty("pp_exif_editor_suppress_modal", true);
+                    ed.show();
+                    pump(120);
+                    scan(&ed, pass == 0 ? "exif/dark" : "exif/light", structural);
+                    ed.close();
+                }
+            }
+        }
+        set_theme_mode(restore_mode); // 结束归位
+        pump(80);
+        heights.removeDuplicates();
+        std::printf("UI-SMOKE combo-consistency: checked=%d no-hook=%d h-bad=%d invisible=%d "
+                    "bad=%d heights=[%s] %s\n",
+                    checked, hook_miss, height_bad, invisible, hook_miss + height_bad + invisible,
+                    qUtf8Printable(heights.join(QLatin1Char(' '))),
+                    qUtf8Printable(detail.join(QLatin1Char(' '))));
+        std::fflush(stdout);
+        if (hook_miss + height_bad + invisible > 0)
+            smoke_fail(
+                MainWindow::tr("下拉一致性（问题 1/5）：%1").arg(detail.join(QLatin1Char(' '))));
+    }
+
+    // ---- (2) 格式卡对齐 ----
+    // 期望：「＋ 添加格式…」**垂直居中于页签带**且含于其中（实测 0.3.0：页签带 y=664–704、
+    // 添加格式块 y=678–718 → 垂直错位 14px + 水平缝隙，双主题同现）。按钮高 26 是 A7 规格，
+    // 判据据此取**中心线对齐 + 含于带内**，不要求与页签带同高（真机页签带高随字族 29）。
+    {
+        auto *tabs = w->findChild<QTabWidget *>(QStringLiteral("pp-format-tabs"));
+        auto *add = w->findChild<QToolButton *>(QStringLiteral("pp-add-format"));
+        int checked = 0, bad = 0;
+        QStringList detail;
+        if (tabs == nullptr || add == nullptr || tabs->tabBar() == nullptr) {
+            ++checked;
+            ++bad;
+            detail << QStringLiteral("missing-tabs-or-add");
+        } else {
+            QTabBar *bar = tabs->tabBar();
+            const QPoint bar_org = bar->mapTo(tabs, QPoint(0, 0));
+            const QPoint add_org = add->mapTo(tabs, QPoint(0, 0));
+            const int bar_mid = bar_org.y() + bar->height() / 2;
+            const int add_mid = add_org.y() + add->height() / 2;
+            const int dmid = add_mid - bar_mid;
+            const bool inside = add_org.y() >= bar_org.y() &&
+                                add_org.y() + add->height() <= bar_org.y() + bar->height() + 1;
+            ++checked;
+            detail << QStringLiteral("tab=%1+%2,%3x%4 add=%5+%6,%7x%8 dmid=%9 inside=%10")
+                          .arg(bar_org.x())
+                          .arg(bar_org.y())
+                          .arg(bar->width())
+                          .arg(bar->height())
+                          .arg(add_org.x())
+                          .arg(add_org.y())
+                          .arg(add->width())
+                          .arg(add->height())
+                          .arg(dmid)
+                          .arg(inside ? 1 : 0);
+            if (std::abs(dmid) > 2 || !inside)
+                ++bad;
+        }
+        std::printf("UI-SMOKE format-card-align: checked=%d bad=%d %s\n", checked, bad,
+                    qUtf8Printable(detail.join(QLatin1Char(' '))));
+        std::fflush(stdout);
+        if (bad > 0)
+            smoke_fail(MainWindow::tr("格式参数页签带与「添加格式」错位（问题 2）：%1")
+                           .arg(detail.join(QLatin1Char(' '))));
+    }
+
+    // ---- (3) 弹窗 caption 关闭钮 ----
+    // 期望：点 pp-dlg-close 必须关掉对话框。0.3.0 三个弹窗都只创建按钮、从未 connect，
+    // 点了没反应（问题 3）。逐个构造 → show → click ✕ → 断言不可见。
+    {
+        int checked = 0, bad = 0;
+        QStringList detail;
+        const auto probe_close = [&](QDialog &dlg, const char *name) {
+            ++checked;
+            dlg.show();
+            pump(200);
+            auto *close_btn = dlg.findChild<QPushButton *>(QStringLiteral("pp-dlg-close"));
+            if (close_btn == nullptr) {
+                ++bad;
+                detail << QStringLiteral("%1/no-close-btn").arg(QString::fromLatin1(name));
+                dlg.close();
+                pump(60);
+                return;
+            }
+            close_btn->click();
+            pump(200);
+            const bool closed = !dlg.isVisible();
+            if (!closed) {
+                ++bad;
+                detail << QStringLiteral("%1/close-noop").arg(QString::fromLatin1(name));
+                dlg.close();
+                pump(60);
+            }
+        };
+        { // 设置
+            SettingsDialog dlg(settings, w);
+            probe_close(dlg, "settings");
+        }
+        { // 元数据编辑器（U8：模态短路属性保持）
+            std::optional<pp::MetadataOverride> exc;
+            std::string src;
+            if (model->size() > 0) {
+                const FileRow &fr = model->row(0);
+                src = fr.entry.src.string();
+                exc = fr.entry.exception;
+            }
+            if (!src.empty()) {
+                ExifEditor dlg(QString::fromStdString(src), page_meta->rules(), exc, w);
+                dlg.setProperty("pp_exif_editor_suppress_modal", true);
+                probe_close(dlg, "exif-editor");
+            } else {
+                ++checked;
+                detail << QStringLiteral("exif-editor/no-fixture");
+            }
+        }
+        { // 预设管理
+            const std::vector<std::pair<QString, QString>> empty_list;
+            PresetsDialog dlg(empty_list, QStringLiteral("sample"), w);
+            probe_close(dlg, "presets");
+        }
+        std::printf("UI-SMOKE dialog-close: checked=%d bad=%d %s\n", checked, bad,
+                    qUtf8Printable(detail.join(QLatin1Char(' '))));
+        std::fflush(stdout);
+        if (bad > 0)
+            smoke_fail(MainWindow::tr("弹窗 caption 关闭钮无效（问题 3）：%1")
+                           .arg(detail.join(QLatin1Char(' '))));
+    }
+
+    // ---- (4) 运行重入守卫 ----
+    // 期望：可点性与 on_start 的闸门同源；点击后进入运行态、**全程不弹模态框**；运行期按钮
+    // 必须禁用（重入会弹「正在运行」= 用户看到的"概率性错误"）。模态看门狗一出现就记录并
+    // 关闭，避免走查被 QMessageBox 卡死。
+    {
+        int checked = 0, bad = 0;
+        QStringList detail, modals;
+        QPushButton *start = w->findChild<QPushButton *>(QStringLiteral("pp-start"));
+        QTimer watchdog;
+        watchdog.setInterval(30);
+        QObject::connect(&watchdog, &QTimer::timeout, w, [&modals] {
+            if (QWidget *m = QApplication::activeModalWidget()) {
+                modals << QStringLiteral("%1/%2").arg(
+                    QString::fromLatin1(m->metaObject()->className()), m->objectName());
+                m->close();
+            }
+        });
+        watchdog.start();
+        const QString reason = page_output != nullptr ? page_output->ready_to_start() : QString();
+        if (start == nullptr) {
+            ++checked;
+            ++bad;
+            detail << QStringLiteral("no-pp-start");
+        } else if (!reason.isEmpty()) {
+            // 闸门未过：按钮必须禁用，且点了不该弹模态（禁用钮点不动 = 无模态）
+            ++checked;
+            if (start->isEnabled()) {
+                ++bad;
+                detail << QStringLiteral("enabled-while-blocked(%1)").arg(reason);
+            }
+            start->click();
+            pump(150);
+            if (!modals.isEmpty()) {
+                ++bad;
+                detail << QStringLiteral("modal-on-disabled-click=[%1]")
+                              .arg(modals.join(QLatin1Char(',')));
+            }
+            detail << QStringLiteral("blocked-by=\"%1\"").arg(reason);
+        } else {
+            // 闸门已过：点击应真跑起来且无模态；随后取消复位。两轮 = 抓"概率性"重入。
+            for (int round = 0; round < 2 && bad == 0; ++round) {
+                ++checked;
+                modals.clear();
+                start->click();
+                pump(120);
+                if (!modals.isEmpty()) {
+                    ++bad;
+                    detail << QStringLiteral("r%d/modal-on-start=[%2]")
+                                  .arg(round)
+                                  .arg(modals.join(QLatin1Char(',')));
+                }
+                if (!running) {
+                    ++bad;
+                    detail << QStringLiteral("r%d/not-running").arg(round);
+                } else if (start->isEnabled()) {
+                    ++bad;
+                    detail << QStringLiteral("r%d/start-enabled-in-run").arg(round);
+                }
+                if (running)
+                    w->on_cancel();
+                wait_for([this] { return !running; }, kRunWaitMs);
+                pump(120);
+            }
+            detail << QStringLiteral("rounds=2");
+        }
+        watchdog.stop();
+        std::printf("UI-SMOKE run-guard: checked=%d bad=%d modals=%d %s\n", checked, bad,
+                    modals.size(), qUtf8Printable(detail.join(QLatin1Char(' '))));
+        std::fflush(stdout);
+        if (bad > 0)
+            smoke_fail(
+                MainWindow::tr("运行重入守卫（问题 4）：%1").arg(detail.join(QLatin1Char(' '))));
+    }
+
+    // ---- (5) 渲染面取证（GUI-R2 判定口径修正）----
+    // 上面 (1)(2) 查的是**控件几何**，挡不住"几何对了、画出来还是平台的复古件"——
+    // 数值框的 ▲▼ 分格按钮、页签行的两条灰带都是这么漏过去的。本节一律以**渲染像素**判：
+    //   * 箭头列内不得有贯穿的对比线（竖分隔 / 横分隔）—— 平台"独立描边按钮格"的签名；
+    //   * 箭头列内必须有图形（矢量箭头）；
+    //   * 页签行不得有平坦色带（设计稿这一行是白底 + 底部发丝线，无色带）。
+    // 判据与主题无关：对比度取**相对域众数色**的偏差，不写死色值。
+    {
+        int checked = 0, bad = 0;
+        QStringList detail;
+        const auto luma = [](const QColor &c) {
+            return 0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue();
+        };
+        // 找出 img 里的域众数色（= 控件底），返回它
+        const auto modal_of = [](const QImage &img) {
+            QHash<QRgb, int> hist;
+            for (int y = 0; y < img.height(); ++y)
+                for (int x = 0; x < img.width(); ++x)
+                    ++hist[img.pixel(x, y)];
+            QRgb best = 0;
+            int n = -1;
+            for (auto it = hist.constBegin(); it != hist.constEnd(); ++it)
+                if (it.value() > n) {
+                    n = it.value();
+                    best = it.key();
+                }
+            return QColor(best);
+        };
+        // 箭头列检查：strip = 控件右端 col 宽的竖带
+        const auto check_strip = [&](QWidget *wgt, int col, const char *name) {
+            if (wgt == nullptr)
+                return;
+            ++checked;
+            const QImage img = wgt->grab().toImage();
+            if (img.isNull() || img.width() <= col) {
+                ++bad;
+                detail << QStringLiteral("%1/no-image").arg(QString::fromLatin1(name));
+                return;
+            }
+            const QColor bg = modal_of(img);
+            const double bg_l = luma(bg);
+            auto contrast = [&](const QColor &c) { return std::abs(luma(c) - bg_l) > 40.0; };
+            const int x0 = img.width() - col;
+            // ① 竖分隔：任一列的对比像素占比 ≥ 50% 高
+            int vline = -1;
+            for (int x = x0; x < img.width(); ++x) {
+                int n = 0;
+                for (int y = 0; y < img.height(); ++y)
+                    if (contrast(QColor(img.pixel(x, y))))
+                        ++n;
+                if (n * 2 >= img.height()) {
+                    vline = x - x0;
+                    break;
+                }
+            }
+            // ② 横分隔：任一行的对比像素占比 ≥ 50% 带宽
+            int hline = -1;
+            for (int y = 0; y < img.height(); ++y) {
+                int n = 0;
+                for (int x = x0; x < img.width(); ++x)
+                    if (contrast(QColor(img.pixel(x, y))))
+                        ++n;
+                if (n * 2 >= col) {
+                    hline = y;
+                    break;
+                }
+            }
+            // ③ 箭头本体：带内对比像素总数须 > 0
+            int glyph = 0;
+            for (int y = 0; y < img.height(); ++y)
+                for (int x = x0; x < img.width(); ++x)
+                    if (contrast(QColor(img.pixel(x, y))))
+                        ++glyph;
+            if (vline >= 0 || hline >= 0 || glyph == 0) {
+                ++bad;
+                detail << QStringLiteral("%1/vline=%2 hline=%3 glyph=%4")
+                              .arg(QString::fromLatin1(name))
+                              .arg(vline)
+                              .arg(hline)
+                              .arg(glyph);
+            }
+        };
+        const QList<QComboBox *> combos = w->findChildren<QComboBox *>();
+        for (QComboBox *c : combos)
+            check_strip(c, theme::Metrics::combo_arrow_px * 2 + 8, "combo");
+        const QList<QAbstractSpinBox *> spins = w->findChildren<QAbstractSpinBox *>();
+        for (QAbstractSpinBox *s : spins)
+            check_strip(s, theme::Metrics::spin_arrow_w, "spin");
+        // 页签行色带：设计稿这一行是**卡底 + 底部发丝线**，不许出现 --ctl 平坦色块
+        // （0.3.0 的两条 29px 灰带正是 QTabBar/corner 吃了 palette 的 --ctl 底）。
+        // 取证域 = **页签条本身那一行**（不含页签内容区 —— 那里的下拉/spin 本来就是 --ctl 底，
+        // 算进来必误报）。只扫 tab bar 高度内、corner widget 之外的区域。
+        if (auto *tabs = w->findChild<QTabWidget *>(QStringLiteral("pp-format-tabs"))) {
+            QTabBar *bar = tabs->tabBar();
+            if (bar != nullptr && tabs->height() > 0) {
+                ++checked;
+                const QImage img = tabs->grab().toImage();
+                if (!img.isNull()) {
+                    const int rows = std::min(img.height(), img.height() * (bar->height() + 2) /
+                                                                std::max(1, tabs->height()));
+                    const int x_end = img.width() * bar->width() / std::max(1, tabs->width());
+                    const QColor ctl = tokens.control;
+                    int hit = 0;
+                    for (int y = 0; y < rows; ++y)
+                        for (int x = 0; x < x_end; ++x) {
+                            const QColor p(img.pixel(x, y));
+                            if (std::abs(p.red() - ctl.red()) + std::abs(p.green() - ctl.green()) +
+                                    std::abs(p.blue() - ctl.blue()) <=
+                                12)
+                                ++hit;
+                        }
+                    const int total = rows * x_end;
+                    if (total > 0 && hit * 100 > total * 3) {
+                        ++bad;
+                        detail << QStringLiteral("tabstrip/ctl-fill=%1/%2").arg(hit).arg(total);
+                    }
+                }
+            }
+        }
+        // 树展开符：矢量 chevron 的笔画是**斜线**（横/竖连续段都很短）；平台的方框/加号
+        // 展开符有 ≥8px 的横竖贯通描边。据此区分，不写死形状。
+        if (auto *view = w->findChild<QWidget *>(QStringLiteral("pp-file-view"))) {
+            ++checked;
+            const QImage img = view->grab().toImage();
+            if (img.isNull()) {
+                ++bad;
+                detail << QStringLiteral("branch/no-image");
+            } else {
+                // 取分组节头那一行左端 24px（分组节头才带展开符）
+                const int side = 24 * img.width() / std::max(1, view->width());
+                const QColor bg = modal_of(img);
+                const double bg_l = luma(bg);
+                auto contrast = [&](int x, int y) {
+                    return std::abs(luma(QColor(img.pixel(x, y))) - bg_l) > 40.0;
+                };
+                int best_glyph = 0, best_h = 0, best_v = 0;
+                for (int y0 = 0; y0 + side <= img.height(); y0 += side) {
+                    int glyph = 0, hrun = 0, vrun = 0;
+                    for (int y = y0; y < y0 + side; ++y) {
+                        int run = 0;
+                        for (int x = 0; x < side; ++x) {
+                            if (contrast(x, y)) {
+                                ++glyph;
+                                ++run;
+                            } else {
+                                hrun = std::max(hrun, run);
+                                run = 0;
+                            }
+                        }
+                        hrun = std::max(hrun, run);
+                    }
+                    for (int x = 0; x < side; ++x) {
+                        int run = 0;
+                        for (int y = y0; y < y0 + side; ++y) {
+                            if (contrast(x, y))
+                                ++run;
+                            else {
+                                vrun = std::max(vrun, run);
+                                run = 0;
+                            }
+                        }
+                        vrun = std::max(vrun, run);
+                    }
+                    if (glyph > best_glyph) {
+                        best_glyph = glyph;
+                        best_h = hrun;
+                        best_v = vrun;
+                    }
+                }
+                if (best_glyph == 0 || best_h > side * 2 / 3 || best_v > side * 2 / 3) {
+                    ++bad;
+                    detail << QStringLiteral("branch/glyph=%1 hrun=%2 vrun=%3")
+                                  .arg(best_glyph)
+                                  .arg(best_h)
+                                  .arg(best_v);
+                }
+            }
+        }
+        // 令牌 QSS 在场性（结构位）：四类平台默认皮的规则不得被回退掉
+        {
+            ++checked;
+            const QString sheet = w->styleSheet();
+            for (const char *sel :
+                 {"QMenu", "QMessageBox", "QToolTip", "QGroupBox", "QToolButton::menu-indicator"}) {
+                if (!sheet.contains(QLatin1String(sel))) {
+                    ++bad;
+                    detail << QStringLiteral("qss-missing/%1").arg(QString::fromLatin1(sel));
+                }
+            }
+        }
+        // 勾选语义只属勾选列（GUI-R2 修「两排选择框」）：内容列若仍带 UserCheckable，
+        // initStyleOption 会置 HasCheckIndicator → 样式在内容列左缘再画一枚原生勾选框。
+        {
+            ++checked;
+            const QAbstractItemModel *m = model;
+            if (m == nullptr) {
+                ++bad;
+                detail << QStringLiteral("check-col/no-model");
+            } else {
+                int leaked = 0;
+                const int rows = std::min<int>(m->rowCount(), 24);
+                for (int r = 0; r < rows; ++r) {
+                    const QModelIndex content = m->index(r, 1);
+                    if (content.isValid() && (m->flags(content) & Qt::ItemIsUserCheckable) != 0)
+                        ++leaked;
+                }
+                if (leaked > 0) {
+                    ++bad;
+                    detail << QStringLiteral("check-col/user-checkable-on-content=%1").arg(leaked);
+                }
+            }
+        }
+        std::printf("UI-SMOKE render-tokens: checked=%d bad=%d %s\n", checked, bad,
+                    qUtf8Printable(detail.join(QLatin1Char(' '))));
+        std::fflush(stdout);
+        if (bad > 0)
+            smoke_fail(MainWindow::tr("渲染面仍有平台代画痕迹（复古分格/色带）：%1")
+                           .arg(detail.join(QLatin1Char(' '))));
+    }
 }
 
 void MainWindow::Impl::smoke_fail(const QString &reason) {
@@ -8410,6 +8970,11 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
                            .arg(hint_text, expected));
         }
     }
+
+    // ---- GUI-R2 回归探针（docs/gui-review-0.3.0-r2.md）：下拉一致性 / 格式卡对齐 /
+    //   弹窗 caption 关闭钮 / 运行重入守卫。放最末 —— run-guard 会真跑两轮并取消复位，
+    //   不得插在任何依赖列表/选中/页面态的断言之前。
+    smoke_probe_gui_r2();
 
     // ---- 断言 e：8 张 PNG 全部存在且 >10KB ----
     if (shots_dir.isEmpty()) {

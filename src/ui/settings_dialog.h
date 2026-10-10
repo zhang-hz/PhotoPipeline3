@@ -88,6 +88,9 @@ struct TitleBar {
 TitleBar make_title_bar(QWidget *parent, icons::Name icon, const QString &title);
 // 主题重放：标题栏的矢量图标换色 + 关闭 caption 两态色（图标取色不吃 QSS）
 void restyle_title_bar(const TitleBar &bar, const theme::Tokens &t);
+// caption ✕ → 关闭对话框（GUI-R2 修 3）：make_title_bar 只建按钮不接线，三个弹窗原先
+// **都漏接**（点了没反应，只能靠取消/确定退出）。接线收口在本函数一处，弹窗各自调用一次。
+void bind_close_button(const TitleBar &bar, QDialog *dialog);
 
 // 下划线页签（§7.4 / tokens.css .dlg-tabs）：段 = QAbstractButton（键盘可达、角色 = button
 // group），选中段 2px accent 下划线 + 通栏 hairline 基线；**不用 QTabWidget**（修 4-05：

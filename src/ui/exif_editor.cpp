@@ -217,16 +217,15 @@ const char *const kExifTimeKeys[3] = {"Exif.Photo.DateTimeOriginal", "Exif.Photo
                                       "Exif.Image.DateTime"};
 const char *const kXmpTimeKeys[2] = {"Xmp.xmp.CreateDate", "Xmp.xmp.ModifyDate"};
 
-// R4 控件规格（M5-T10）：盒高/描边走 QSS（dialogkit），字体/无障碍/tooltip 在此给齐（§11）
-void dress_combo(QComboBox *combo, const QString &accessible, const QString &tooltip) {
-    if (combo == nullptr)
-        return;
-    combo->setFont(theme::font(theme::Typography::body_px));
-    combo->setProperty(dialogkit::kFieldProperty, QString::fromLatin1(dialogkit::kFieldCombo));
-    if (!tooltip.isEmpty())
-        combo->setToolTip(tooltip);
-    if (!accessible.isEmpty())
-        combo->setAccessibleName(accessible);
+// 本文件下拉的唯一构造点（GUI-R2）：走 formkit::combo_box —— 钩子/高/箭头/字体/无障碍
+// 一律单源（原 dress_combo 已随之退役）。调用点不得再 `new QComboBox`（formkit.h 契约 C2）。
+QComboBox *make_combo(const QString &object_name, const QString &accessible,
+                      const QString &tooltip = QString()) {
+    formkit::ComboSpec spec;
+    spec.object_name = object_name;
+    spec.accessible = accessible;
+    spec.tooltip = tooltip;
+    return formkit::combo_box(nullptr, spec); // 父由后续 addWidget/setParent 落定
 }
 
 void dress_edit(QLineEdit *edit, const QString &accessible, const QString &tooltip) {
@@ -1040,8 +1039,7 @@ QWidget *ExifEditor::Impl::make_exif_tab() {
     group_label->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkLabel));
     group_label->setFont(theme::font(theme::Typography::small_px));
     add->addWidget(group_label);
-    exif_group = new QComboBox();
-    exif_group->setObjectName(QStringLiteral("add_exif_group"));
+    exif_group = make_combo(QStringLiteral("add_exif_group"), T("分组"));
     exif_group->addItem(T("IFD0"), QStringLiteral("Image"));
     exif_group->addItem(T("Exif"), QStringLiteral("Photo"));
     exif_group->addItem(T("GPS"), QStringLiteral("GPSInfo"));
@@ -1063,8 +1061,7 @@ QWidget *ExifEditor::Impl::make_exif_tab() {
     type_label->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkLabel));
     type_label->setFont(theme::font(theme::Typography::small_px));
     add->addWidget(type_label);
-    exif_type = new QComboBox();
-    exif_type->setObjectName(QStringLiteral("add_exif_type"));
+    exif_type = make_combo(QStringLiteral("add_exif_type"), T("类型"));
     exif_type->addItem(QStringLiteral("Byte"), static_cast<int>(Exiv2::unsignedByte));
     exif_type->addItem(QStringLiteral("Ascii"), static_cast<int>(Exiv2::asciiString));
     exif_type->addItem(QStringLiteral("Short"), static_cast<int>(Exiv2::unsignedShort));
@@ -1297,13 +1294,11 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     time_label->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkLabel));
     time_label->setFont(theme::font(theme::Typography::small_px));
     time_row->addWidget(time_label);
-    time_mode = new QComboBox();
-    time_mode->setObjectName(QStringLiteral("time_mode"));
+    time_mode = make_combo(QStringLiteral("time_mode"), T("时间偏移"),
+                           T("本文件的时间处理：继承批量规则 / 覆盖 / 清除时间标签"));
     time_mode->addItem(T("继承批量规则"));
     time_mode->addItem(T("覆盖"));
     time_mode->addItem(T("清除"));
-    dress_combo(time_mode, T("时间偏移"),
-                T("本文件的时间处理：继承批量规则 / 覆盖 / 清除时间标签"));
     time_row->addWidget(time_mode);
     time_row->addStretch(1);
     tv->addLayout(time_row);
@@ -1316,12 +1311,10 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     method_label->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkLabel));
     method_label->setFont(theme::font(theme::Typography::small_px));
     method_row->addWidget(method_label);
-    time_method = new QComboBox();
-    time_method->setObjectName(QStringLiteral("time_method"));
+    time_method = make_combo(QStringLiteral("time_method"), T("方式"),
+                             T("Δ 偏移 = 直接加减时间差；时区语义 = 按「从/到」时区换算"));
     time_method->addItem(T("Δ 偏移（时钟拨错）"));
     time_method->addItem(T("时区语义（旅行照片）"));
-    dress_combo(time_method, T("方式"),
-                T("Δ 偏移 = 直接加减时间差；时区语义 = 按「从/到」时区换算"));
     method_row->addWidget(time_method);
     method_row->addStretch(1);
     tp->addLayout(method_row);
@@ -1349,12 +1342,9 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     time_tz_box = new QWidget();
     auto *tz = new QHBoxLayout(time_tz_box);
     tz->setContentsMargins(0, 0, 0, 0);
-    tz_from = new QComboBox();
-    tz_from->setObjectName(QStringLiteral("tz_from"));
-    dress_combo(tz_from, T("从"), T("↑↓ 选择原时区（整点 / 半小时）；与「到」不同即视为改动"));
-    tz_to = new QComboBox();
-    tz_to->setObjectName(QStringLiteral("tz_to"));
-    dress_combo(tz_to, T("到"), T("↑↓ 选择目标时区（整点 / 半小时）"));
+    tz_from = make_combo(QStringLiteral("tz_from"), T("从"),
+                         T("↑↓ 选择原时区（整点 / 半小时）；与「到」不同即视为改动"));
+    tz_to = make_combo(QStringLiteral("tz_to"), T("到"), T("↑↓ 选择目标时区（整点 / 半小时）"));
     for (int m = -12 * 60; m <= 14 * 60; m += 30) { // 整点 + 半小时时区全表
         tz_from->addItem(offset_label(m), m);
         tz_to->addItem(offset_label(m), m);
@@ -1417,12 +1407,11 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     gps_label->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkLabel));
     gps_label->setFont(theme::font(theme::Typography::small_px));
     gps_row->addWidget(gps_label);
-    gps_mode = new QComboBox();
-    gps_mode->setObjectName(QStringLiteral("gps_mode"));
+    gps_mode = make_combo(QStringLiteral("gps_mode"), T("GPS"),
+                          T("本文件的 GPS 处理：继承批量规则 / 覆盖 / 清除"));
     gps_mode->addItem(T("继承批量规则"));
     gps_mode->addItem(T("覆盖"));
     gps_mode->addItem(T("清除 GPS"));
-    dress_combo(gps_mode, T("GPS"), T("本文件的 GPS 处理：继承批量规则 / 覆盖 / 清除"));
     gps_row->addWidget(gps_mode);
     gps_row->addStretch(1);
     gv->addLayout(gps_row);
@@ -1511,12 +1500,11 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     privacy_label->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkLabel));
     privacy_label->setFont(theme::font(theme::Typography::small_px));
     privacy_row->addWidget(privacy_label);
-    privacy_mode = new QComboBox();
-    privacy_mode->setObjectName(QStringLiteral("privacy_mode"));
+    privacy_mode = make_combo(QStringLiteral("privacy_mode"), T("隐私剥除"),
+                              T("本文件的隐私剥除：继承批量规则 / 强制开 / 强制关"));
     privacy_mode->addItem(T("继承批量规则"));
     privacy_mode->addItem(T("强制开"));
     privacy_mode->addItem(T("强制关"));
-    dress_combo(privacy_mode, T("隐私剥除"), T("本文件的隐私剥除：继承批量规则 / 强制开 / 强制关"));
     privacy_row->addWidget(privacy_mode);
     privacy_row->addStretch(1);
     pv->addLayout(privacy_row);
@@ -1662,6 +1650,7 @@ void ExifEditor::Impl::build() {
 
     // 无边框接线（拖拽 / 八向缩放；与主窗、设置弹窗同一机制）
     pp::platform::Frameless::attach(q, title_bar.widget, {title_bar.close});
+    dialogkit::bind_close_button(title_bar, q); // GUI-R2 修 3：caption ✕ 必须真关窗
 }
 
 void ExifEditor::Impl::init_from_existing() {

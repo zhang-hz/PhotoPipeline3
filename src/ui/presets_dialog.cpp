@@ -293,6 +293,7 @@ PresetsDialog::PresetsDialog(const std::vector<std::pair<QString, QString>> &pre
 
     // 无边框接线（拖拽 / 八向缩放；与主窗、设置弹窗同一机制）
     pp::platform::Frameless::attach(this, title_bar.widget, {title_bar.close});
+    dialogkit::bind_close_button(title_bar, this); // GUI-R2 修 3：caption ✕ 必须真关窗
 
     // 选中列表项 → 名称行带出该项名（§2.10）
     connect(list, &QListWidget::currentItemChanged, this,

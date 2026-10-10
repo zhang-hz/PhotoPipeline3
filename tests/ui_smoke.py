@@ -175,6 +175,17 @@ M5-T13（W-R 视觉收尾修正：裁定 A39 ①–⑥ + A40 核对）:
        （卡高 ≥ 卡头 + 3 行 × 28 / 行 pitch 28 / 首行不压卡头）。
   * `status-selection` 为**新增的自检/诊断行**（不在前缀清单内，与 run-bars-hist / icons-engine-space
     同类）：判据本身在探针里逐条 meta_expect/expect 硬判，失败经 smoke_fail 通道报错。
+
+GUI-R2（docs/gui-review-0.3.0-r2.md 可视化排查回归）:
+  * 追加 `GUI_R2_LINE_PREFIXES` 四行齐备断言（`smoke_probe_gui_r2()`，只增）：
+    `combo-consistency`（全界面 QComboBox 样式钩子 / 高 24 / **实拍非空像素**——钉问题 1「亮色下拉
+    整只不绘制」与问题 5「无公用构造器」）· `format-card-align`（格式参数页签带 ↔「＋ 添加格式…」
+    corner widget 几何同带——钉问题 2「格式卡片错位」）· `dialog-close`（设置/元数据编辑器/预设
+    弹窗 caption ✕ 点击后必须真关窗——钉问题 3）· `run-guard`（「开始运行」可点性与闸门同源 +
+    点击不弹模态 + 运行期禁用 + 两轮重入——钉问题 4「点运行概率性错误」）。
+  * 判据硬判（smoke_fail）；行内 `checked=N bad=M` 与取证值由 C++ 侧给出。既有前缀清单零改动、
+    冻结末行不变（截图仍 12 张）。
+  * **本节为缺陷回归**：0.3.0 现状会红 —— 每条红即报告里对应问题的活证据。
 """
 
 import os
@@ -306,6 +317,19 @@ T13_LINE_PREFIXES = (
                                      # 行内 checked=3）
 )
 
+# GUI-R2（docs/gui-review-0.3.0-r2.md 回归探针；前缀匹配，缺任一 → FAIL）：
+#   combo-consistency —— 全界面 QComboBox 样式钩子/高 24/实拍非空（问题 1+5）
+#   format-card-align —— 格式参数页签带 ↔「＋ 添加格式…」几何同带（问题 2）
+#   dialog-close      —— 设置/元数据编辑器/预设 弹窗 caption ✕ 真关窗（问题 3）
+#   run-guard         —— 运行闸门一致性 + 点击不弹模态 + 运行期禁用（问题 4）
+GUI_R2_LINE_PREFIXES = (
+    'UI-SMOKE combo-consistency:',
+    'UI-SMOKE format-card-align:',
+    'UI-SMOKE dialog-close:',
+    'UI-SMOKE run-guard:',
+    'UI-SMOKE render-tokens:',
+)
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 build_dir = sys.argv[1] if len(sys.argv) > 1 else 'build/release-dev'
@@ -356,6 +380,7 @@ def main():
         t13_seen = set()
         t14_seen = set()
         t15_seen = set()
+        gui_r2_seen = set()
         with open(log_path, 'w', encoding='utf-8', newline='') as log_fp:
             for line in proc.stdout:
                 sys.stdout.write(line)
@@ -399,6 +424,9 @@ def main():
                 for prefix in T15_LINE_PREFIXES:
                     if line.startswith(prefix):
                         t15_seen.add(prefix)
+                for prefix in GUI_R2_LINE_PREFIXES:
+                    if line.startswith(prefix):
+                        gui_r2_seen.add(prefix)
         status = proc.wait()
 
         if status != 0:
@@ -467,6 +495,11 @@ def main():
         missing = [p for p in T15_LINE_PREFIXES if p not in t15_seen]
         if missing:
             print('ui_smoke: FAIL (missing T15 self-check lines: {})'.format(', '.join(missing)),
+                  file=sys.stderr)
+            return 1
+        missing = [p for p in GUI_R2_LINE_PREFIXES if p not in gui_r2_seen]
+        if missing:
+            print('ui_smoke: FAIL (missing GUI-R2 regression lines: {})'.format(', '.join(missing)),
                   file=sys.stderr)
             return 1
         print('UI-SMOKE pass')

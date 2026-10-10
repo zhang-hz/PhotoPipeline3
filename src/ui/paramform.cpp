@@ -281,7 +281,9 @@ struct ParamForm::Impl {
     void build_selectors() {
         // 后端行（仅多后端格式：heif/avif 内省出多个后端；单后端不占位）
         if (backends.size() > 1) {
-            auto *combo = new QComboBox(q);
+            formkit::ComboSpec spec;
+            spec.accessible = ParamForm::tr("后端");
+            auto *combo = formkit::combo_box(q, spec);
             backend_combo = combo;
             for (const pp::BackendDef &b : backends)
                 combo->addItem(QString::fromStdString(b.label.empty() ? b.id : b.label),
@@ -299,10 +301,12 @@ struct ParamForm::Impl {
         }
 
         // 技术行（[技术][combo 160][注：无损开启时的依赖说明]）
-        tech_combo = new QComboBox(q);
-        tech_combo->setObjectName(QStringLiteral("pp-tech-combo"));
-        tech_combo->setToolTip(
-            ParamForm::tr("编码技术（各技术参数不同）；勾选「无损编码」后仅无损技术可选"));
+        formkit::ComboSpec tech_spec;
+        tech_spec.object_name = QStringLiteral("pp-tech-combo");
+        tech_spec.accessible = ParamForm::tr("技术");
+        tech_spec.tooltip =
+            ParamForm::tr("编码技术（各技术参数不同）；勾选「无损编码」后仅无损技术可选");
+        tech_combo = formkit::combo_box(q, tech_spec);
         {
             const formkit::Row row =
                 formkit::frow(q, ParamForm::tr("技术"), tech_combo, formkit::FieldWidth::Standard,
@@ -674,15 +678,17 @@ struct ParamForm::Impl {
             break;
         }
         case pp::ParamType::Enum: {
-            auto *combo = new QComboBox(area);
-            combo->setObjectName(QStringLiteral("pp-param-") + QString::fromStdString(p.key));
+            formkit::ComboSpec spec;
+            spec.object_name = QStringLiteral("pp-param-") + QString::fromStdString(p.key);
+            spec.accessible = label_text;
+            spec.tooltip = tip;
+            auto *combo = formkit::combo_box(area, spec);
             for (const auto &choice : p.choices) {
                 // 修 2-37：枚举的 "auto" 档同义显示为「自动」（显示面；值仍走 choices 的原值）
                 const QString name =
                     choice.first == "auto" ? tr_c("自动") : QString::fromStdString(choice.first);
                 combo->addItem(name);
             }
-            combo->setToolTip(tip);
             r.editor = combo;
             const pp::ParamDef *def = &p;
             QObject::connect(

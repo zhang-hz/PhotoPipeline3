@@ -3,6 +3,7 @@
 // PhotoPipeline — self-drawn slippy map (M1b frozen)
 #pragma once
 #include "mapwidget/coord.h"
+#include "mapwidget/geocoder.h"
 #include "mapwidget/layers.h"
 #include <QWidget>
 #include <memory>
@@ -51,10 +52,15 @@ signals:
     void search_finished(const QStringList &titles, const QString &error);
     void tiles_pending_changed(int pending); // fetch queue depth (for spinners/tests)
     void pin_clicked(int index);             // M6 加性：点击结果图钉
+    void suggest_finished(const std::vector<SuggestItem> &items, const QString &error);
+    void reverse_finished(const QString &address, const QString &error);
+    void search_results_ready(const std::vector<GeocodeResult> &results, const QString &error);
 
 public slots:
     void run_search(const QString &query); // async; -> search_finished
     void search_select(int index);         // pick result -> center+marker+point_selected
+    void run_suggest(const QString &query);
+    void run_reverse(double lat, double lon);
 
 private:
     struct Impl;

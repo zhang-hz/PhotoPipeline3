@@ -23,12 +23,25 @@
 // state-then-signal order of search_select; only without a hit does the click fall back to the
 // frozen point-selection behaviour.
 //
+// M6-T7 search pipeline: run_search goes through the W-M1 Geocoder model (geocoder.h) — the
+// provider maps to its geocoder (osm→nominatim, amap→amap) and the query is biased to the viewport
+// centre (`near`, WGS-84; geocoder.cpp converts to the source datum for amap's `around`), falling
+// back to the full-text endpoint when the biased search finds nothing. Results feed both the frozen
+// search_finished (titles in the frozen order, so search_select(i) keeps indexing d.results) and
+// the additive search_results_ready, plus one result pin per hit. run_suggest / run_reverse add the
+// inputtips and regeo endpoints. Every search-pipeline request keeps exactly one in-flight reply
+// (a new request aborts the old), transfers with the same 8 s timeout and UA as tiles, sends
+// nothing while offline, and reports failures by class (offline / missing key / request failed /
+// parse failed / no match). Credit label: on_paint now reads the effective source's attribution
+// (layers.cpp is the single source) instead of hardcoding the text here (D1).
+//
 // Events: the PP-FROZEN header declares no paint/mouse/wheel overrides (and it may not be
 // edited), so an event filter owned by the pimpl receives them for the widget — the only
 // conforming way to hook QWidget events without touching the frozen class declaration.
 
 #include "mapwidget/mapwidget.h"
 
+#include "mapwidget/geocoder.h"
 #include "mapwidget/layers.h"
 #include "mapwidget/providers.h"
 
@@ -57,6 +70,7 @@
 #include <cstdint>
 #include <list>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -110,6 +124,15 @@ std::pair<double, double> world_to_latlon(QPointF world, int zoom) {
     const double span = world_span(zoom);
     const double n = kPi * (1.0 - 2.0 * world.y() / span);
     return {std::atan(std::sinh(n)) * 180.0 / kPi, world.x() / span * 360.0 - 180.0};
+}
+
+// C1 适配映射（与 providers.cpp 的 geocoder_for_provider 同序）：provider id → 地理编码源。
+// amap → amap；osm（及未知 id 的旧兜底）→ nominatim。
+const Geocoder *geocoder_for_provider(const TileProvider *provider) {
+    if (provider != nullptr && provider->id == QLatin1String("amap")) {
+        return geocoder_by_id(QStringLiteral("amap"));
+    }
+    return geocoder_by_id(QStringLiteral("nominatim"));
 }
 
 } // namespace
@@ -201,6 +224,8 @@ struct MapWidget::Impl {
 
     QNetworkAccessManager *nam = nullptr;
     QNetworkReply *search_reply = nullptr;
+    QNetworkReply *suggest_reply = nullptr; // M6-T7：每类请求至多一个在途 reply
+    QNetworkReply *reverse_reply = nullptr;
     QLabel *banner = nullptr;
     EventFilter *filter = nullptr;
 
@@ -259,20 +284,6 @@ struct MapWidget::Impl {
             stack.push_back(PaintLayer{source, QString::fromLatin1(kLayerLabel)});
         }
         return stack;
-    }
-
-    // 版权行文案随**有效源**（M6-T5）：卫星/混合回退到 esri 影像时也报对应源版权；
-    // 未知源沿用旧行为（OpenStreetMap 版权）。
-    QString credit_text(const TileSource *source) const {
-        const QString id =
-            source != nullptr ? source->id : (provider != nullptr ? provider->id : QString());
-        if (id == QLatin1String("amap")) {
-            return MapWidget::tr("© 高德地图");
-        }
-        if (id == QLatin1String("esri")) {
-            return MapWidget::tr("© Esri, Maxar, Earthstar Geographics");
-        }
-        return MapWidget::tr("© OpenStreetMap contributors");
     }
 
     // ---- datum boundary (frozen: conversion only at the boundary) ----------------
@@ -443,13 +454,224 @@ struct MapWidget::Impl {
         banner->setVisible(on);
     }
 
-    // ---- search -----------------------------------------------------------------
+    // ---- search pipeline (M6-T7) -------------------------------------------------
     void abort_search() {
         if (search_reply != nullptr) {
             QNetworkReply *const reply = search_reply;
             search_reply = nullptr;
             reply->abort();
         }
+    }
+
+    void abort_suggest() {
+        if (suggest_reply != nullptr) {
+            QNetworkReply *const reply = suggest_reply;
+            suggest_reply = nullptr;
+            reply->abort();
+        }
+    }
+
+    void abort_reverse() {
+        if (reverse_reply != nullptr) {
+            QNetworkReply *const reply = reverse_reply;
+            reverse_reply = nullptr;
+            reply->abort();
+        }
+    }
+
+    void abort_geocoding() {
+        abort_search();
+        abort_suggest();
+        abort_reverse();
+    }
+
+    // 搜索管线请求的统一构造：每 provider 一个 UA（OSM/Nominatim 政策要求非空 UA）+ 8s 超时。
+    QNetworkRequest make_request(const QUrl &url) const {
+        QNetworkRequest request(url);
+        if (provider != nullptr) {
+            request.setRawHeader("User-Agent", provider->user_agent().toUtf8());
+        }
+        request.setTransferTimeout(std::chrono::milliseconds(kRequestTimeoutMs));
+        return request;
+    }
+
+    // 「请求失败」分类文案：免 Key 源（Nominatim）在大陆不可达是常态，附带切源指引（§4.3/§8 R1）。
+    static QString request_failure_text(const QString &what, const Geocoder *geocoder,
+                                        const QString &detail) {
+        if (geocoder != nullptr && !geocoder->requires_key) {
+            return MapWidget::tr("%1请求失败：%2（该源大陆不可达，请切高德）").arg(what, detail);
+        }
+        return MapWidget::tr("%1请求失败：%2").arg(what, detail);
+    }
+
+    // 搜索请求（含周边偏置开关）：near = 视口中心（WGS-84），由 geocoder 转该源基准
+    // （amap around 的 location 是 GCJ-02）。with_near=false 即全文搜（0 结果时的回退路径）。
+    // 每次 run_search 恰好以一对 search_results_ready + search_finished 收尾（含失败）。
+    void start_search(const QString &query, bool with_near) {
+        const Geocoder *const geocoder = geocoder_for_provider(provider);
+        if (geocoder == nullptr) {
+            const QString text = MapWidget::tr("未知的地理编码源");
+            emit q->search_results_ready({}, text);
+            emit q->search_finished({}, text);
+            return;
+        }
+        const std::pair<double, double> center_wgs = datum_to_wgs(center_lat, center_lon);
+        const std::optional<std::pair<double, double>> near =
+            with_near ? std::optional<std::pair<double, double>>(center_wgs) : std::nullopt;
+        abort_search();
+        QNetworkReply *const reply =
+            nam->get(make_request(geocoder->search_url(query, amap_key, near)));
+        search_reply = reply;
+        const QString fallback_query = query; // 周边无果时回退全文用
+        QObject::connect(
+            reply, &QNetworkReply::finished, q, [this, reply, geocoder, with_near, fallback_query] {
+                const bool current = (search_reply == reply);
+                if (current) {
+                    search_reply = nullptr;
+                }
+                // abort 过的 reply 设备已关闭：不再 readAll（否则 Qt 打 "device not open" 噪声）。
+                const QByteArray body = reply->isOpen() ? reply->readAll() : QByteArray();
+                const QNetworkReply::NetworkError error = reply->error();
+                const QString error_string = reply->errorString();
+                reply->deleteLater();
+                if (offline) {
+                    // 冻结文案（docs/m1b-tasks.md §2.5）：离线一律报「离线模式：搜索不可用」。
+                    const QString text = MapWidget::tr("离线模式：搜索不可用");
+                    emit q->search_results_ready({}, text);
+                    emit q->search_finished({}, text);
+                    return;
+                }
+                if (!current) {
+                    return; // 已被新请求取代（abort_search）：静默丢弃，由新请求报最终结果
+                }
+                if (error != QNetworkReply::NoError) {
+                    const QString text =
+                        request_failure_text(MapWidget::tr("搜索"), geocoder, error_string);
+                    emit q->search_results_ready({}, text);
+                    emit q->search_finished({}, text);
+                    return;
+                }
+                std::vector<GeocodeResult> parsed;
+                const QString parse_error = parse_search(body, geocoder->id, parsed);
+                if (!parse_error.isEmpty()) {
+                    emit q->search_results_ready({}, parse_error);
+                    emit q->search_finished({}, parse_error);
+                    return;
+                }
+                if (parsed.empty()) {
+                    // 周边偏置消费 near 的只有 amap 的 around 端点；nominatim 忽略 near（两次同
+                    // URL）， 故只在周边真生效时回退一次全文（§4.3「优先周边偏置，回退全文」）。
+                    if (with_near && geocoder->id == QLatin1String("amap")) {
+                        start_search(fallback_query, false);
+                        return;
+                    }
+                    const QString text = MapWidget::tr("无匹配结果"); // 0 结果分类（§4.3）
+                    emit q->search_results_ready({}, text);
+                    emit q->search_finished({}, text);
+                    return;
+                }
+                // 冻结事实（docs/m1b-tasks.md §2.5）：search_finished 顺序 == 内部 results 顺序，
+                // 故 d.results 与图钉都按 parsed 原序生成，search_select(i) 直接索引同一结果。
+                results.clear();
+                results.reserve(parsed.size());
+                std::vector<Pin> pins;
+                pins.reserve(parsed.size());
+                QStringList titles;
+                titles.reserve(int(parsed.size()));
+                for (std::size_t i = 0; i < parsed.size(); ++i) {
+                    const GeocodeResult &result = parsed[i];
+                    results.push_back(SearchResult{result.title, result.lat, result.lon});
+                    pins.push_back(Pin{result.lat, result.lon, result.title, int(i)});
+                    titles << result.title;
+                }
+                q->set_result_pins(pins);
+                emit q->search_results_ready(parsed, QString());
+                emit q->search_finished(titles, QString());
+            });
+    }
+
+    // 联想请求（amap inputtips；nominatim 无此端点，由调用方先行拦截）。
+    void start_suggest(const Geocoder *geocoder, const QString &query) {
+        abort_suggest();
+        QNetworkReply *const reply = nam->get(make_request(geocoder->suggest_url(query, amap_key)));
+        suggest_reply = reply;
+        QObject::connect(reply, &QNetworkReply::finished, q, [this, reply, geocoder] {
+            const bool current = (suggest_reply == reply);
+            if (current) {
+                suggest_reply = nullptr;
+            }
+            const QByteArray body =
+                reply->isOpen() ? reply->readAll() : QByteArray(); // 见 start_search
+            const QNetworkReply::NetworkError error = reply->error();
+            const QString error_string = reply->errorString();
+            reply->deleteLater();
+            if (offline) {
+                emit q->suggest_finished({}, MapWidget::tr("离线模式：联想不可用"));
+                return;
+            }
+            if (!current) {
+                return; // 已被新请求取代：静默丢弃
+            }
+            if (error != QNetworkReply::NoError) {
+                emit q->suggest_finished(
+                    {}, request_failure_text(MapWidget::tr("联想"), geocoder, error_string));
+                return;
+            }
+            std::vector<SuggestItem> items;
+            const QString parse_error = parse_suggest(body, geocoder->id, items);
+            if (!parse_error.isEmpty()) {
+                emit q->suggest_finished({}, parse_error);
+                return;
+            }
+            if (items.empty()) {
+                emit q->suggest_finished({}, MapWidget::tr("无匹配结果")); // 0 结果分类（§4.3）
+                return;
+            }
+            emit q->suggest_finished(items, QString());
+        });
+    }
+
+    // 逆地理请求：坐标按该源基准传入（amap=GCJ-02，nominatim=WGS-84），调用方已转换。
+    void start_reverse(const Geocoder *geocoder, double datum_lat, double datum_lon) {
+        abort_reverse();
+        QNetworkReply *const reply =
+            nam->get(make_request(geocoder->reverse_url(datum_lat, datum_lon, amap_key)));
+        reverse_reply = reply;
+        QObject::connect(reply, &QNetworkReply::finished, q, [this, reply, geocoder] {
+            const bool current = (reverse_reply == reply);
+            if (current) {
+                reverse_reply = nullptr;
+            }
+            const QByteArray body =
+                reply->isOpen() ? reply->readAll() : QByteArray(); // 见 start_search
+            const QNetworkReply::NetworkError error = reply->error();
+            const QString error_string = reply->errorString();
+            reply->deleteLater();
+            if (offline) {
+                emit q->reverse_finished(QString(), MapWidget::tr("离线模式：逆地理不可用"));
+                return;
+            }
+            if (!current) {
+                return; // 已被新请求取代：静默丢弃
+            }
+            if (error != QNetworkReply::NoError) {
+                emit q->reverse_finished(QString(), request_failure_text(MapWidget::tr("逆地理"),
+                                                                         geocoder, error_string));
+                return;
+            }
+            QString address;
+            const QString parse_error = parse_reverse(body, geocoder->id, address);
+            if (!parse_error.isEmpty()) {
+                emit q->reverse_finished(QString(), parse_error);
+                return;
+            }
+            if (address.isEmpty()) {
+                // 0 结果分类（§4.3）：坐标没有解析出地址（如海面/无地址区）。
+                emit q->reverse_finished(QString(), MapWidget::tr("未找到该坐标的地址"));
+                return;
+            }
+            emit q->reverse_finished(address, QString());
+        });
     }
 
     void abort_fetches() {
@@ -599,18 +821,21 @@ void MapWidget::Impl::on_paint() {
         painter.setRenderHint(QPainter::Antialiasing, false);
     }
 
-    // Bottom-right credit label —— 随**有效源**：卫星/混合回退到 esri 影像时报 esri 版权（§4.1：
-    // 卫星底图偏暗，白底 α190 保留可读性）。
-    const QString credit = credit_text(select_source(tile_style_));
-    QFont font = painter.font();
-    font.setPointSize(kCopyrightPointSize);
-    painter.setFont(font);
-    const QFontMetrics metrics(font);
-    const QRect box(w - metrics.horizontalAdvance(credit) - 8, h - metrics.height() - 6,
-                    metrics.horizontalAdvance(credit) + 6, metrics.height() + 2);
-    painter.fillRect(box, QColor(255, 255, 255, 190));
-    painter.setPen(QColor(0x40, 0x40, 0x40));
-    painter.drawText(box, Qt::AlignCenter, credit);
+    // Bottom-right credit label —— 文案单源 = 有效源的 attribution（D1：唯一定义处在 layers.cpp；
+    // 卫星/混合回退到 esri 影像时报 esri 版权）。§4.1：卫星底图偏暗，白底 α190 保留可读性。
+    const TileSource *const credit_source = select_source(tile_style_);
+    const QString credit = credit_source != nullptr ? credit_source->attribution : QString();
+    if (!credit.isEmpty()) {
+        QFont font = painter.font();
+        font.setPointSize(kCopyrightPointSize);
+        painter.setFont(font);
+        const QFontMetrics metrics(font);
+        const QRect box(w - metrics.horizontalAdvance(credit) - 8, h - metrics.height() - 6,
+                        metrics.horizontalAdvance(credit) + 6, metrics.height() + 2);
+        painter.fillRect(box, QColor(255, 255, 255, 190));
+        painter.setPen(QColor(0x40, 0x40, 0x40));
+        painter.drawText(box, Qt::AlignCenter, credit);
+    }
 }
 
 bool MapWidget::Impl::on_mouse_press(QMouseEvent *event) {
@@ -752,12 +977,17 @@ MapWidget::~MapWidget() {
         }
     }
     d.pending.clear();
-    if (d.search_reply != nullptr) {
-        d.search_reply->disconnect();
-        d.search_reply->abort();
-        d.search_reply->deleteLater();
-        d.search_reply = nullptr;
+    // 在途的搜索/联想/逆地理请求：先断开 finished（销毁期不再重入处理器）再 abort。
+    for (QNetworkReply *const reply : {d.search_reply, d.suggest_reply, d.reverse_reply}) {
+        if (reply != nullptr) {
+            reply->disconnect();
+            reply->abort();
+            reply->deleteLater();
+        }
     }
+    d.search_reply = nullptr;
+    d.suggest_reply = nullptr;
+    d.reverse_reply = nullptr;
 }
 
 void MapWidget::set_provider(const QString &id) {
@@ -792,7 +1022,7 @@ void MapWidget::set_offline(bool off) {
     }
     d.offline = off;
     if (off) {
-        d.abort_search();
+        d.abort_geocoding(); // 搜索/联想/逆地理一并在途取消（离线不发请求）
         d.abort_fetches();
         d.set_banner_visible(true); // offline degradation notice (design §6.5 / walkthrough §8.3)
     } else {
@@ -845,54 +1075,84 @@ void MapWidget::center_on(double lat, double lon, int zoom) {
 void MapWidget::run_search(const QString &query) {
     Impl &d = *impl_;
     d.results.clear();
+    clear_result_pins(); // 新搜索从零开始：旧查询的结果钉不残留在新结果上
     if (d.offline) {
-        emit search_finished({}, tr("离线模式：搜索不可用"));
+        // 冻结行为（docs/m1b-tasks.md §2.5）：离线同步回「离线模式：搜索不可用」，不发请求。
+        const QString text = tr("离线模式：搜索不可用");
+        emit search_results_ready({}, text);
+        emit search_finished({}, text);
         return;
     }
-    if (d.provider != nullptr && d.provider->id == QLatin1String("amap") && d.amap_key.isEmpty()) {
-        emit search_finished({}, tr("使用高德搜索需要先在设置中填写 Key"));
+    const Geocoder *const geocoder = geocoder_for_provider(d.provider);
+    if (geocoder == nullptr) {
+        const QString text = tr("未知的地理编码源");
+        emit search_results_ready({}, text);
+        emit search_finished({}, text);
         return;
     }
-    const QString provider_id = d.provider->id;
-    const QString user_agent = d.provider->user_agent();
-    QNetworkRequest request(d.provider->search_url(query, d.amap_key));
-    request.setRawHeader("User-Agent", user_agent.toUtf8());
-    request.setTransferTimeout(std::chrono::milliseconds(kRequestTimeoutMs));
+    if (geocoder->requires_key && d.amap_key.isEmpty()) {
+        const QString text = tr("使用高德搜索需要先在设置中填写 Key");
+        emit search_results_ready({}, text);
+        emit search_finished({}, text);
+        return;
+    }
+    // 行为升级（M6-T7，已追认）：走 Geocoder 的 20 条/zh 事实表 + 视口中心周边偏置。
+    d.start_search(query, true);
+}
 
-    d.abort_search();
-    QNetworkReply *const reply = d.nam->get(request);
-    d.search_reply = reply;
-    QObject::connect(reply, &QNetworkReply::finished, this, [this, reply, provider_id] {
-        Impl &dd = *impl_;
-        const QByteArray body = reply->readAll();
-        const QNetworkReply::NetworkError error = reply->error();
-        const QString error_string = reply->errorString();
-        reply->deleteLater();
-        if (dd.search_reply == reply) {
-            dd.search_reply = nullptr;
-        }
-        if (dd.offline) {
-            emit search_finished({}, tr("离线模式：搜索不可用"));
-            return;
-        }
-        if (error != QNetworkReply::NoError) {
-            emit search_finished({}, tr("搜索请求失败：%1").arg(error_string));
-            return;
-        }
-        std::vector<SearchResult> parsed;
-        const QString parse_error = parse_search(provider_id, body, parsed);
-        if (!parse_error.isEmpty()) {
-            emit search_finished({}, parse_error);
-            return;
-        }
-        dd.results = parsed;
-        QStringList titles;
-        titles.reserve(int(parsed.size()));
-        for (const SearchResult &result : parsed) {
-            titles << result.title;
-        }
-        emit search_finished(titles, QString());
-    });
+// M6-T7 加性：联想（amap inputtips）。
+void MapWidget::run_suggest(const QString &query) {
+    Impl &d = *impl_;
+    const QString trimmed = query.trimmed();
+    if (trimmed.isEmpty()) {
+        emit suggest_finished({}, QString()); // 空输入：无请求也无错误（联想是增量面）
+        return;
+    }
+    if (d.offline) {
+        emit suggest_finished({}, tr("离线模式：联想不可用"));
+        return;
+    }
+    const Geocoder *const geocoder = geocoder_for_provider(d.provider);
+    if (geocoder == nullptr) {
+        emit suggest_finished({}, tr("未知的地理编码源"));
+        return;
+    }
+    if (geocoder->requires_key && d.amap_key.isEmpty()) {
+        emit suggest_finished({}, tr("使用高德联想需要先在设置中填写 Key"));
+        return;
+    }
+    if (geocoder->suggest_url(trimmed, d.amap_key).isEmpty()) {
+        emit suggest_finished({}, tr("该源不支持联想搜索：%1").arg(geocoder->id));
+        return;
+    }
+    d.start_suggest(geocoder, trimmed);
+}
+
+// M6-T7 加性：逆地理（选点后回显地址）。公共坐标一律 WGS-84，请求前转该源基准。
+void MapWidget::run_reverse(double lat, double lon) {
+    Impl &d = *impl_;
+    if (d.offline) {
+        emit reverse_finished(QString(), tr("离线模式：逆地理不可用"));
+        return;
+    }
+    const Geocoder *const geocoder = geocoder_for_provider(d.provider);
+    if (geocoder == nullptr) {
+        emit reverse_finished(QString(), tr("未知的地理编码源"));
+        return;
+    }
+    if (geocoder->requires_key && d.amap_key.isEmpty()) {
+        emit reverse_finished(QString(), tr("使用高德逆地理需要先在设置中填写 Key"));
+        return;
+    }
+    // 契约 C3：amap 传 GCJ-02（wgs84_to_gcj02），nominatim 本就 WGS-84 原样传。
+    double datum_lat = lat;
+    double datum_lon = lon;
+    if (geocoder->gcj02) {
+        const std::pair<double, double> gcj = wgs84_to_gcj02(lat, lon);
+        datum_lat = gcj.first;
+        datum_lon = gcj.second;
+    }
+    d.start_reverse(geocoder, datum_lat, datum_lon);
 }
 
 void MapWidget::search_select(int index) {

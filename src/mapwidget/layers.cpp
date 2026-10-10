@@ -11,6 +11,10 @@
 //   osm Road       https://tile.openstreetmap.org/{z}/{x}/{y}.png
 //   esri Sat/Hybrid  https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/
 //                  MapServer/tile/{z}/{y}/{x}   (y before x; Hybrid reuses the imagery layer)
+//
+// Attribution（§9-X5 合规）：地图右下版权行由 mapwidget 读取 TileSource::attribution 绘制，
+// 本文件的构造是**唯一定义处**。amap=「© 高德地图」、osm=「© OpenStreetMap contributors」、
+// esri=「© Esri, Maxar, Earthstar Geographics」。
 
 #include "mapwidget/layers.h"
 
@@ -69,7 +73,7 @@ QUrl esri_imagery_url(int z, int x, int y) {
 
 const TileSource &amap_source() {
     static const TileSource s{QStringLiteral("amap"), QStringLiteral("高德地图"), true,
-                              QStringLiteral("© 高德地图 AutoNavi")};
+                              QStringLiteral("© 高德地图")};
     return s;
 }
 
@@ -81,7 +85,7 @@ const TileSource &osm_source() {
 
 const TileSource &esri_source() {
     static const TileSource s{QStringLiteral("esri"), QStringLiteral("Esri 影像"), false,
-                              QStringLiteral("© Esri World Imagery")};
+                              QStringLiteral("© Esri, Maxar, Earthstar Geographics")};
     return s;
 }
 

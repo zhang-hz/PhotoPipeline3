@@ -139,7 +139,11 @@ if(PP_CCACHE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         set(PP_CCACHE "")
     endif()
 endif()
-if(PP_CCACHE)
+if(PP_CCACHE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    # M7-WP3（R-124，deep-review-0.3.2）：launcher 只挂"探针已验证"的编译器族。探针（上面
+    # ② 的空 TU 真编译）用 GCC/Clang 风格 `-c … -o …`，MSVC 的 cl.exe 不认这组开关 ⇒ 对
+    # MSVC 挂 launcher 等于"坏 ccache 直接全构建红"（评审取证）。处置取二选一里的"不挂"：
+    # MSVC 侧回退无 launcher 构建（与 R18 的回退语义同源），ccache 只在 GNU|Clang 上生效。
     set(CMAKE_CXX_COMPILER_LAUNCHER ${PP_CCACHE})
 endif()
 
@@ -259,7 +263,8 @@ target_link_libraries(photopipeline PRIVATE pp_core_registered
 if(PP_BUILD_DEV)
   target_compile_definitions(photopipeline PRIVATE PP_BUILD_DEV)
   # M1b-U10：UI 冒烟取代 M0 的 PP_M0_SMOKE 定时退出桩。走脚本以便同时校验冻结成功末行
-  # `UI-SMOKE OK shots=7 pages=3`；offscreen 平台由测试环境注入。
+  # `UI-SMOKE OK shots=12 pages=3`（M4-W3-T14 起 12 张；R-126 修注释口径过期）；offscreen
+  # 平台由测试环境注入。
   add_test(NAME ui_smoke COMMAND ${CMAKE_COMMAND} -E env QT_QPA_PLATFORM=offscreen ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/ui_smoke.py ${CMAKE_BINARY_DIR})
   set_tests_properties(ui_smoke PROPERTIES TIMEOUT 240)
 endif()
@@ -299,7 +304,8 @@ add_executable(pp_verify tools/pp_verify.cpp)
 # 静态库自注册：唯一链接形态（M2-T13）= pp_core_registered
 target_link_libraries(pp_verify PRIVATE pp_core_registered)
 add_test(NAME verify_selftest COMMAND pp_verify --selftest)
-# M3-T11b：与其余条目统一（23 个 ctest 条目全部带 TIMEOUT 120 属性）
+# M3-T11b：与其余条目统一（全部 ctest 条目带 TIMEOUT 120 属性；条目数以 `ctest -N` 实测
+# 为准，R-115 修旧注释的计数口径过期 —— 数字不再写死在注释里）
 set_tests_properties(verify_selftest PROPERTIES TIMEOUT 120)
 
 # M3 v1.9（D2）：工具二进制同样嵌入 UTF-8 清单（同上；pp_mkfixtures/pp_verify/spike_f

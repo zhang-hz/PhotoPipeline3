@@ -5,7 +5,8 @@
 # 用法:
 #   tools/make_appimage.sh [OUT_DIR]      # 默认 dist/
 # env 覆盖:
-#   PP_BUILD_DIR   release 预设构建目录（默认 <repo>/build/m2-release）
+#   PP_BUILD_DIR   release 预设构建目录（默认 <repo>/build/release；M7-WP3 / R-121 与
+#                  make_winzip.py 统一口径，旧默认 build/m2-release 为 M2 遗留）
 #   QT_DIR         Qt 工具链根（默认从产物的 ldd 反查 libQt6Core.so.6 所在目录）
 #
 # 产物: <OUT_DIR>/PhotoPipeline-<version>-x86_64.AppImage
@@ -108,7 +109,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="${1:-dist}"
 case "$OUT_DIR" in /*) : ;; *) OUT_DIR="$ROOT/$OUT_DIR" ;; esac
-BUILD_DIR="${PP_BUILD_DIR:-$ROOT/build/m2-release}"
+BUILD_DIR="${PP_BUILD_DIR:-$ROOT/build/release}"
 BIN="$BUILD_DIR/photopipeline"
 TOOL="$ROOT/tools/bin/appimagetool-x86_64.AppImage"
 TOOL_SHA="$TOOL.sha512"
@@ -485,7 +486,44 @@ grep -qx 'Icon=photopipeline' "$APPDIR/usr/share/applications/photopipeline.desk
     || die "desktop Icon 与冻结文本不一致"
 # 烟测 ④ 前置（产物内验证见打包后）
 [ -d "$LIC_DIR" ] || die "许可目录缺失: usr/share/licenses"
+# M7-WP3（R-092，deep-review-0.3.2）：包内 NOTICE —— GPL §6 源码 offer 的离线可读指引
+# （源码 URL + tag 对应）。文本与 tools/make_winzip.py 的 NOTICE_TEXT 同文。
+NOTICE="$LIC_DIR/PhotoPipeline/NOTICE"
+mkdir -p "$LIC_DIR/PhotoPipeline"
+{
+  printf 'PhotoPipeline %s
+' "$VERSION"
+  printf '===================
+'
+  printf '
+'
+  printf '源码获取（GPL-3.0-or-later §6）
+'
+  printf '  仓库: https://github.com/zhang-hz/PhotoPipeline3
+'
+  printf '  本发行件对应的源码 = 该仓库 tag v%s 的提交（tag 与发行件一一对应）：
+' "$VERSION"
+  printf '    https://github.com/zhang-hz/PhotoPipeline3/releases/tag/v%s
+' "$VERSION"
+  printf '
+'
+  printf '许可
+'
+  printf '  本程序按 GPL-3.0-or-later 分发，不提供任何担保；全文见
+'
+  printf '  licenses/PhotoPipeline/LICENSE（AppImage 内为 usr/share/licenses/PhotoPipeline/LICENSE）。
+'
+  printf '  第三方组件的版权与许可全文随包分发（licenses/<port>/copyright）。
+'
+  printf '
+'
+  printf '生成
+'
+  printf '  本文件由 tools/make_winzip.py / tools/make_appimage.sh 打包时写入（deep-review-0.3.2 R-092）。
+'
+} > "$NOTICE"
 [ -f "$LIC_DIR/PhotoPipeline/LICENSE" ] || die "本项目 LICENSE 未随包: usr/share/licenses/PhotoPipeline/LICENSE"
+[ -f "$NOTICE" ] || die "本项目 NOTICE 未随包: usr/share/licenses/PhotoPipeline/NOTICE（R-092）"
 [ "$LIC_COUNT" -ge 30 ] || die "许可文本数不足（烟测 ④）: $LIC_COUNT < 30"
 note "烟测 ④ 前置: usr/share/licenses/ 存在，copyright 文件 $LIC_COUNT 个（≥30 ✓）"
 
@@ -503,7 +541,8 @@ PKG_LIC="$EXTRACT_DIR/squashfs-root/usr/share/licenses"
 PKG_COUNT="$(find "$PKG_LIC" -mindepth 2 -maxdepth 2 -type f -name copyright 2>/dev/null | wc -l)"
 [ "$PKG_COUNT" -ge 30 ] || die "产物内许可文本数不足（烟测 ④）: $PKG_COUNT < 30"
 [ -f "$PKG_LIC/PhotoPipeline/LICENSE" ] || die "产物内缺 usr/share/licenses/PhotoPipeline/LICENSE"
-note "烟测 ④: 产物内 usr/share/licenses/ = $PKG_COUNT 个 copyright（≥30 ✓）+ PhotoPipeline/LICENSE ✓"
+[ -f "$PKG_LIC/PhotoPipeline/NOTICE" ] || die "产物内缺 usr/share/licenses/PhotoPipeline/NOTICE（R-092）"
+note "烟测 ④: 产物内 usr/share/licenses/ = $PKG_COUNT 个 copyright（≥30 ✓）+ PhotoPipeline/LICENSE ✓ + NOTICE ✓"
 note "  产物内示例: $(find "$PKG_LIC" -mindepth 2 -maxdepth 2 -type f -name copyright | LC_ALL=C sort | sed -n '1p' | sed "s#^$EXTRACT_DIR/##")"
 note "  产物内示例: squashfs-root/usr/share/licenses/PhotoPipeline/LICENSE"
 

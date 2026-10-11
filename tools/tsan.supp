@@ -73,11 +73,11 @@ race:OpenImageIO::v3_1::thread_pool
 # cannot hide an application-data race.
 race:std::packaged_task
 
-# --- ACTIVE: Qt queued invocation (QMetaObject::invokeMethod + functor) --------------------
+# --- ACTIVE: Qt queued invocation —— **收窄到 callable 拷贝/发布帧**（M7-WP3 / R-027） ------
 # What races: the worker thread copies the callable and its captures into the heap object that
-# Qt's event posting publishes (frame `QCallableObject`, qobjectdefs_impl.h) while the receiving
-# thread invokes that same object through the QMetaCallEvent (frames `QtPrivate::FunctorCall` /
-# `impl`). The captures are therefore OUR values, but the *publication* is Qt's.
+# Qt's event posting publishes (the QCallableObject **constructor** frame, qobjectdefs_impl.h)
+# while the receiving thread invokes that same object through the QMetaCallEvent. The captures
+# are therefore OUR values, but the *publication* is Qt's.
 # HB argument: QCoreApplication::postEvent publishes the event through the receiving thread's
 # post-event list. On the uncontended path that list is guarded by a QMutex (pthread-based, so
 # TSan sees lock/unlock and the report cannot happen); on the contended path - receiver busy
@@ -90,9 +90,29 @@ race:std::packaged_task
 # QMetaObject::invokeMethod(..., Qt::QueuedConnection)) and reproduces this family 5/5 runs under
 # `taskset -c 0,1` (9 reports each); the same family shows up in the Thumbnailer harness only
 # under the same 2-CPU oversubscription (taskset-thumbs-3.log) and never on an idle 16-core host
-# (47 clean runs). Pattern scope: ONLY the functor-copy frame of a queued invocation matches, so
-# an application-data race that does not go through Qt's callable machinery is still reported.
-race:QCallableObject
+# (47 clean runs).
+#
+# WHY THE PATTERN WAS NARROWED (R-027, deep-review-0.3.2):
+#   the old pattern `race:QCallableObject` matched the class name in **any** frame of either
+#   stack - including the invoke-side frames (`…QCallableObject<…>::impl` / `::call` reached
+#   from QtPrivate::FunctorCall). A "bad capture" race (lambda capturing `this`/a reference and
+#   reading it while another thread writes) has its READ exactly inside that invoked lambda
+#   body, so the old pattern suppressed the report - i.e. it hid the one class of races in our
+#   own most-used cross-thread dispatch pattern (invokeMethod + lambda).
+#   The pattern now anchors on the **constructor frame only** (`>::QCallableObject(` - the
+#   demangled ctor of the class template; `~QCallableObject` dtors deliberately do NOT match):
+#   * still suppressed: the false family above, whose write side IS the callable/capture copy
+#     in the ctor (publication through uninstrumented Qt atomics);
+#   * now reported: bad-capture reads inside the invoked lambda body, user-data races that do
+#     not pass through the ctor, and destroy/use-after-free pairs of the callable object.
+# POSITIVE CONTROL REQUIRED (bad capture, must REPORT with this file loaded):
+#   two std::threads + QMetaObject::invokeMethod(..., Qt::QueuedConnection) where the lambda
+#   captures a reference to a plain int the other thread keeps writing; run under
+#   TSAN_OPTIONS=…suppressions=tools/tsan.supp with `taskset -c 0,1`. If it stays silent, the
+#   narrowing went too wide - do not re-broaden; re-examine the pattern.
+#   (TSan is Linux-only: this control cannot be run on the Windows authoring host - the first
+#   nightly `tsan` job after this change is the verification point; see build/m7-wp3/handoff.md.)
+race:>::QCallableObject(
 
 # --- DORMANT VARIANTS OF THE SAME TWO FAMILIES (0 hits in the final run set) ----------------
 # HB argument: allocator frame of the packaged_task control block (the allocator's template

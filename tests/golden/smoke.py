@@ -38,6 +38,15 @@ M4-T6（progress-trace 对，docs/v0.3.0-design.md §7）:
 M3-W3（裁定 D3：Python 单实现，本文件替代 tests/golden/smoke.sh）:
   * PP_BIN/PP_VERIFY 按 name / name + '.exe' 双探测（Windows 产物带 .exe）
   * 冻结行 `SMOKE total=%d pass=%d fail=%d (out: %s)` 与全部消息逐字不变
+
+M7-WP3（R-018，deep-review-0.3.2）金样语料 sha256 锁:
+  * tools/baseline/corpus.sha256（入库）钉死 tests/golden/{base,edge,meta} 全部 fixture 的
+    字节；本脚本**开跑前**校验，任一缺失/漂移 ⇒ 拒跑（exit 2）。此前 CHECKSUMS 自签且
+    零消费者 ⇒ 换工具链重跑语料、20 对金样照样全绿（评审取证）。
+  * 成功路径控制台输出**逐字不变**（校验静默通过，不加任何新行；失败才打印点名行）。
+  * 维护口径（语料有意重生成后）: `python tests/golden/smoke.py --relock` —— 先打印
+    改了哪些行/新增/删除（归因），再落盘；归因须进提交正文。与 regression.py --update
+    的归因护栏同口径。
 """
 
 import os
@@ -49,16 +58,18 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
 USAGE = ("用法: python tests/golden/smoke.py [BUILD_DIR] [--cases a,b,c]\n"
-         "      （子集开关等价环境变量: PP_CASES=a,b,c；不带开关 = 全量）\n")
+         "      （子集开关等价环境变量: PP_CASES=a,b,c；不带开关 = 全量）\n"
+         "      python tests/golden/smoke.py --relock   重生成语料 sha256 锁（口径动作）\n")
 
 
 def parse_argv(argv):
-    """[BUILD_DIR] + --cases/--cases=<spec> 解析 → (build_arg, cases_spec)。
+    """[BUILD_DIR] + --cases/--cases=<spec> + --relock 解析 → (build_arg, cases_spec, relock)。
 
     历史命令行（`smoke.py <BUILD_DIR>`）行为逐字不变；未知选项 → usage 错误（exit 2）。
     """
     build = ''
     spec = None
+    relock = False
     i = 0
     while i < len(argv):
         arg = argv[i]
@@ -70,6 +81,8 @@ def parse_argv(argv):
             spec = argv[i]
         elif arg.startswith('--cases='):
             spec = arg.split('=', 1)[1]
+        elif arg == '--relock':
+            relock = True
         elif arg in ('-h', '--help'):
             sys.stdout.write(USAGE)
             raise SystemExit(0)
@@ -83,7 +96,7 @@ def parse_argv(argv):
         else:
             build = arg
         i += 1
-    return build, spec
+    return build, spec, relock
 
 
 def select_cases(spec, cases):
@@ -115,7 +128,7 @@ def select_cases(spec, cases):
 
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_arg, _spec = parse_argv(sys.argv[1:])
+_arg, _spec, _relock = parse_argv(sys.argv[1:])
 if _arg:
     BUILD = _arg
 elif os.environ.get('BUILD_DIR'):
@@ -129,6 +142,109 @@ PP_BIN = os.environ.get('PP_BIN') or os.path.join(BUILD, 'photopipeline')
 PP_VERIFY = os.environ.get('PP_VERIFY') or os.path.join(BUILD, 'pp_verify')
 GOLDEN = os.path.join(ROOT, 'tests', 'golden')
 OUT_ROOT = os.environ.get('OUT_ROOT') or os.path.join(ROOT, '.cache', 'out-smoke')
+
+# ── R-018 金样语料 sha256 锁（详见文件头 M7-WP3 段）──────────────────────────────
+CORPUS_LOCK = os.path.join(ROOT, 'tools', 'baseline', 'corpus.sha256')
+CORPUS_SUBDIRS = ('base', 'edge', 'meta')
+LOCK_HEADER_PREFIX = '#'
+
+
+def corpus_rel_files():
+    """tests/golden/{base,edge,meta} 全部 fixture 的仓库相对路径（正斜杠、LC_ALL=C 序）。"""
+    found = []
+    for sub in CORPUS_SUBDIRS:
+        d = os.path.join(GOLDEN, sub)
+        if not os.path.isdir(d):
+            continue
+        for name in sorted(os.listdir(d)):
+            p = os.path.join(d, name)
+            if os.path.isfile(p):
+                found.append('tests/golden/{}/{}'.format(sub, name))
+    found.sort()
+    return found
+
+
+def sha256_of(path):
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, 'rb') as fp:
+        for chunk in iter(lambda: fp.read(1 << 20), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def read_lock(path):
+    """锁文件 → {rel: sha256}；'#' 行与空行忽略。"""
+    entries = {}
+    with open(path, encoding='utf-8') as fp:
+        for raw in fp:
+            line = raw.strip()
+            if not line or line.startswith(LOCK_HEADER_PREFIX):
+                continue
+            digest, sep, rel = line.partition('  ')
+            if not sep:
+                print('smoke: 语料锁行格式错（应为 <sha256>␣␣<path>）: {!r}'.format(raw),
+                      file=sys.stderr)
+                raise SystemExit(2)
+            entries[rel.strip()] = digest.strip()
+    return entries
+
+
+def verify_corpus_lock():
+    """校验语料与锁一致 → 问题列表（空 = 通过）。"""
+    if not os.path.isfile(CORPUS_LOCK):
+        return ['语料锁缺失: {}（跑 python tests/golden/smoke.py --relock 播种）'.format(
+            CORPUS_LOCK[len(ROOT) + 1:].replace(os.sep, '/'))]
+    locked = read_lock(CORPUS_LOCK)
+    actual = corpus_rel_files()
+    problems = []
+    for rel in actual:
+        want = locked.get(rel)
+        if want is None:
+            problems.append('语料未入锁: {}'.format(rel))
+            continue
+        got = sha256_of(os.path.join(ROOT, *rel.split('/')))
+        if got != want:
+            problems.append('语料字节漂移: {} (锁 {} 实际 {})'.format(rel, want[:12], got[:12]))
+    for rel in sorted(locked):
+        if rel not in actual:
+            problems.append('锁内文件已不存在: {}'.format(rel))
+    return problems
+
+
+def relock_corpus():
+    """重生成语料锁（口径动作）：先归因（改了哪些行/新增/删除）再落盘。"""
+    actual = corpus_rel_files()
+    if not actual:
+        print('smoke: 语料为空（{}）—— 拒绝写锁'.format(GOLDEN), file=sys.stderr)
+        return 2
+    new_entries = {rel: sha256_of(os.path.join(ROOT, *rel.split('/'))) for rel in actual}
+    old_entries = read_lock(CORPUS_LOCK) if os.path.isfile(CORPUS_LOCK) else {}
+    changed = [r for r in sorted(new_entries)
+               if r in old_entries and old_entries[r] != new_entries[r]]
+    added = [r for r in sorted(new_entries) if r not in old_entries]
+    removed = [r for r in sorted(old_entries) if r not in new_entries]
+    print('smoke: --relock 归因: 变更 {} 新增 {} 删除 {}（总 {} 文件）'.format(
+        len(changed), len(added), len(removed), len(new_entries)))
+    for rel in changed:
+        print('smoke:   ~ {}  {} -> {}'.format(rel, old_entries[rel][:12], new_entries[rel][:12]))
+    for rel in added:
+        print('smoke:   + {}  {}'.format(rel, new_entries[rel][:12]))
+    for rel in removed:
+        print('smoke:   - {}  {}'.format(rel, old_entries[rel][:12]))
+    lines = []
+    if os.path.isfile(CORPUS_LOCK):
+        with open(CORPUS_LOCK, encoding='utf-8') as fp:
+            lines = [ln.rstrip('\n') for ln in fp if ln.startswith(LOCK_HEADER_PREFIX)]
+    if not lines:
+        lines = ['# PhotoPipeline — 金样语料 sha256 锁（tools/baseline/corpus.sha256）',
+                 '# 更新口径: python tests/golden/smoke.py --relock（归因进提交正文）']
+    body = ['{}  {}'.format(new_entries[rel], rel) for rel in sorted(new_entries)]
+    with open(CORPUS_LOCK, 'w', encoding='utf-8', newline='\n') as fp:
+        fp.write('\n'.join(lines + body) + '\n')
+    print('smoke: --relock 已写 {}（{} 行）'.format(
+        CORPUS_LOCK[len(ROOT) + 1:].replace(os.sep, '/'), len(body)))
+    return 0
 
 
 def resolve_exe(path):
@@ -177,6 +293,16 @@ CASES = [
 
 
 def main():
+    if _relock:
+        return relock_corpus()
+    # R-018：语料锁校验在最前（成功路径零新增输出，冻结行/既有消息逐字不变）。
+    problems = verify_corpus_lock()
+    if problems:
+        for p in problems[:20]:
+            print('smoke: ' + p, file=sys.stderr)
+        print('smoke: 语料锁校验失败（R-018）—— 拒跑金样；语料有意重生成后跑 '
+              'python tests/golden/smoke.py --relock 并把归因写进提交', file=sys.stderr)
+        return 2
     binary = resolve_exe(PP_BIN)
     if binary is None:
         print('smoke: photopipeline not executable: {}'.format(PP_BIN), file=sys.stderr)

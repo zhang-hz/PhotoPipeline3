@@ -7,6 +7,6 @@
     "metadata": [
       { "key": "Exif.Image.Artist", "op": "eq", "value": "M1-T8" }
     ],
-    "warnings_contain": []
+    "warnings_contain": [], "warnings_empty": true
   }
 }

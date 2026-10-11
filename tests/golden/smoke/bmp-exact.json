@@ -7,6 +7,6 @@
     "metadata": [
       { "key": "Exif.Image.Artist", "op": "absent" }
     ],
-    "warnings_contain": [ "MetadataDropped" ]
+    "warnings_contain": [ "MetadataDropped" ], "warnings_exact": ["MetadataDropped"]
   }
 }

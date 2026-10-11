@@ -1,5 +1,6 @@
 BasedOnStyle: LLVM
-Standard: c++20
+# R-132（deep-review-0.3.2）：Standard 与构建标准同源 = C++23（CMakeLists.txt:21 CMAKE_CXX_STANDARD 23）。
+Standard: c++23
 IndentWidth: 4
 ColumnLimit: 100
 AccessModifierOffset: -4

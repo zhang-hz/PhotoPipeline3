@@ -13,6 +13,9 @@
     ],
     "warnings_contain": [
       "AlphaFlattened"
+    ],
+    "warnings_exact": [
+      "AlphaFlattened"
     ]
   }
 }

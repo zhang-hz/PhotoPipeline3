@@ -10,7 +10,7 @@
       "assert": {
         "pixel": { "mode": "psnr", "threshold_db": 35 },
         "metadata": [],
-        "warnings_contain": []
+        "warnings_contain": [], "warnings_empty": true
       }
     },
     {
@@ -20,7 +20,7 @@
       "assert": {
         "pixel": { "mode": "psnr", "threshold_db": 35 },
         "metadata": [],
-        "warnings_contain": []
+        "warnings_contain": [], "warnings_empty": true
       }
     },
     {
@@ -30,7 +30,7 @@
       "assert": {
         "pixel": { "mode": "exact" },
         "metadata": [],
-        "warnings_contain": []
+        "warnings_contain": [], "warnings_empty": true
       }
     },
     {
@@ -40,7 +40,7 @@
       "assert": {
         "pixel": { "mode": "exact" },
         "metadata": [],
-        "warnings_contain": []
+        "warnings_contain": [], "warnings_empty": true
       }
     }
   ]

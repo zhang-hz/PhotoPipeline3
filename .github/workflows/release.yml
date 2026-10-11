@@ -85,26 +85,22 @@ jobs:
     name: appimage
     runs-on: ubuntu-24.04
     timeout-minutes: 20         # 硬顶（预算 12 min）
-    env:
-      QT_DIR: ${{ github.workspace }}/Qt/6.11.2/gcc_64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - name: Qt 路径（QT_VERSION 单源 = tools/versions.env；R-063 去版本字面量）
+        run: echo "QT_DIR=$GITHUB_WORKSPACE/Qt/$QT_VERSION/gcc_64" >> "$GITHUB_ENV"
 
-      - name: 依赖单源一致性断言（tools/versions.env）
+      - name: 依赖单源一致性断言（tools/ci-versions-check.py；R-062/R-091/R-122）
         run: |
-          for kv in "QT_VERSION=$QT_VERSION" "VCPKG_TAG=$VCPKG_TAG"; do
-            grep -qxF "$kv" tools/versions.env || { echo "::error::单源不一致: tools/versions.env 中找不到 '$kv'"; exit 1; }
-          done
-          echo "versions.env OK: QT_VERSION=$QT_VERSION VCPKG_TAG=$VCPKG_TAG"
-
+          python3 tools/ci-versions-check.py --expect "QT_VERSION=$QT_VERSION" --expect "VCPKG_TAG=$VCPKG_TAG"
       - name: apt 系统依赖（tools/ci-system-deps.txt）
         run: bash tools/ci-install-deps.sh
 
       - name: Qt ${{ env.QT_VERSION }} 缓存（restore，本 workflow 唯一写者）
         id: qt-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
-          path: ${{ github.workspace }}/Qt/6.11.2/gcc_64
+          path: ${{ github.workspace }}/Qt/${{ env.QT_VERSION }}/gcc_64
           key: qt-${{ env.QT_VERSION }}-gcc_64-${{ runner.os }}-${{ runner.arch }}
           restore-keys: qt-${{ env.QT_VERSION }}-gcc_64-
 
@@ -122,6 +118,9 @@ jobs:
         run: |
           git clone https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
           git -C "$VCPKG_ROOT" checkout "$VCPKG_TAG"
+          want_sha="$(sed -n 's/^VCPKG_SHA=//p' tools/versions.env | tr -d '\r')"
+          got_sha="$(git -C "$VCPKG_ROOT" rev-parse HEAD)"
+          [ "$got_sha" = "$want_sha" ] || { echo "::error::vcpkg HEAD $got_sha != VCPKG_SHA $want_sha（R-091）"; exit 1; }
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
 
       - name: 缓存目录预建
@@ -129,7 +128,7 @@ jobs:
 
       - name: vcpkg binary cache（restore）
         id: vcpkg-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: ${{ github.workspace }}/.cache/vcpkg-binary
           key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -149,7 +148,7 @@ jobs:
 
       - name: ccache（restore，写者=main-full 的 linux job）
         id: ccache-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: ${{ github.workspace }}/.cache/ccache
           key: ccache-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/**', 'CMakePresets.json') }}-${{ hashFiles('cmake/**', 'triplets/**') }}-${{ github.run_id }}
@@ -237,7 +236,7 @@ jobs:
           echo "§ 产物启动烟测 PASS"
 
       - name: 上传 AppImage 与依赖清单（artifact，发行保留 30 天）
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: PhotoPipeline-AppImage
           path: |
@@ -249,15 +248,15 @@ jobs:
       - name: Qt ${{ env.QT_VERSION }} 缓存（save，本 workflow 唯一写者）
         if: always() && steps.qt-cache.outputs.cache-hit != 'true'
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
-          path: ${{ github.workspace }}/Qt/6.11.2/gcc_64
+          path: ${{ github.workspace }}/Qt/${{ env.QT_VERSION }}/gcc_64
           key: qt-${{ env.QT_VERSION }}-gcc_64-${{ runner.os }}-${{ runner.arch }}
 
       - name: vcpkg binary cache（save）
         if: always()
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: ${{ github.workspace }}/.cache/vcpkg-binary
           key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -292,16 +291,17 @@ jobs:
     name: winzip
     runs-on: windows-2025
     timeout-minutes: 20         # 硬顶（预算 15 min）
-    env:
-      QT_DIR: ${{ github.workspace }}/Qt/6.11.2/msvc2022_64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - name: Qt 路径（QT_VERSION 单源 = tools/versions.env；R-063 去版本字面量）
+        run: |
+          "QT_DIR=$env:GITHUB_WORKSPACE\Qt\$env:QT_VERSION\msvc2022_64" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Qt ${{ env.QT_VERSION }} 缓存（restore，写者=main-full 的 windows job）
         id: qt-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
-          path: ${{ github.workspace }}/Qt/6.11.2/msvc2022_64
+          path: ${{ github.workspace }}/Qt/${{ env.QT_VERSION }}/msvc2022_64
           key: qt-${{ env.QT_VERSION }}-win64_msvc2022_64-${{ runner.os }}-${{ runner.arch }}
           restore-keys: qt-${{ env.QT_VERSION }}-win64_msvc2022_64-
 
@@ -329,6 +329,9 @@ jobs:
         run: |
           git clone https://github.com/microsoft/vcpkg "$env:VCPKG_ROOT"
           git -C "$env:VCPKG_ROOT" checkout "$env:VCPKG_TAG"
+          $wantSha = (Select-String -Path tools/versions.env -Pattern '^VCPKG_SHA=(.+)$').Matches.Groups[1].Value.Trim()
+          $gotSha = (git -C "$env:VCPKG_ROOT" rev-parse HEAD).Trim()
+          if ($gotSha -ne $wantSha) { Write-Error "vcpkg HEAD $gotSha != VCPKG_SHA $wantSha（R-091）"; exit 1 }
           & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
 
       - name: 缓存目录预建
@@ -336,7 +339,7 @@ jobs:
 
       - name: vcpkg binary cache（restore）
         id: vcpkg-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: ${{ github.workspace }}/.cache/vcpkg-binary
           key: vcpkgwin-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -407,7 +410,7 @@ jobs:
           Write-Output "条目    $entries"
 
       - name: 上传 win64 zip（artifact，发行保留 30 天）
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: PhotoPipeline-win64
           path: dist/PhotoPipeline-*-win64.zip
@@ -417,7 +420,7 @@ jobs:
       - name: vcpkg binary cache（save）
         if: always()
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: ${{ github.workspace }}/.cache/vcpkg-binary
           key: vcpkgwin-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -469,7 +472,7 @@ jobs:
     timeout-minutes: 20         # 硬顶（预算 2 min）
     needs: appimage
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
       - name: 运行期系统库（与 appimage job 同源清单；AppRun 的 ldd 自检需要）
         # M5-T16-fix4（首跑第二跳归因）：下载件在本 job 里执行 `--version` 前会先过 AppImage
@@ -479,7 +482,7 @@ jobs:
         run: bash tools/ci-install-deps.sh
 
       - name: 下载 AppImage artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
         with:
           name: PhotoPipeline-AppImage
           path: dist-probe
@@ -512,10 +515,10 @@ jobs:
     timeout-minutes: 20         # 硬顶（预算 3 min）
     needs: winzip
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
       - name: 下载 win64 zip artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
         with:
           name: PhotoPipeline-win64
           path: dist-probe
@@ -566,7 +569,7 @@ jobs:
     steps:
       # tag 运行需要完整提交/tag 历史：gh release create --generate-notes 依赖 git 仓库上下文
       # （M3 实测缺失即报 `failed to run git: fatal: not a git repository`）。
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           fetch-depth: 0
 
@@ -590,7 +593,7 @@ jobs:
           echo "查重 OK: tag $TAG 尚无 Release"
 
       - name: 下载两个平台的发行产物（合并到 dist-release/；两个 probe job 已各自验过 --version）
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
         with:
           pattern: PhotoPipeline-*
           merge-multiple: true

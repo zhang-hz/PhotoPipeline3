@@ -86,6 +86,16 @@
 # regenerate the baseline: python tools/regression.py <BUILD_DIR> --update
 #
 # ---------------------------------------------------------------------------
+# M7-WP3（R-015，deep-review-0.3.2）：--update 的归因护栏
+#   * `--update` 先产出归因日志（改了哪些行 + 版本行 vs 行为变化两类计数 + 逐行明细），
+#     写 .cache/regression/attribution.log（与 diff 模式同一路径），**写成功才允许**把
+#     本次运行日志落盘为基线；写失败 ⇒ 基线保持不动、退出码 2。
+#   * 归因 stdout 行前缀 `regression: --update attrib:`（diff 模式仍是 `regression: attrib:`）。
+#   * 背景：0.3.2 的 Linux 基线系 Windows 机上文本替换产物（提交 6d98e2e 自述），无归因
+#     的 `DIFF FOUND → --update` 可把任何真实退化合法化。发行前仍须在 Linux 跑一次
+#     `update_baseline=false` 的 nightly 确认 0 diff（流程口径，见 deep-review R-015）。
+#
+# ---------------------------------------------------------------------------
 # M3-W3（裁定 D3：Python 单实现，本文件替代 tools/regression.sh）
 #   * 可执行文件探测按 name / name + '.exe' 双探测（Windows 产物带 .exe）
 #   * N1–N9 用 re 逐条实现（见 normalize()），顺序与 sed/grep/awk 管线一致
@@ -719,13 +729,56 @@ def main(argv):
     lines_new = work_text.count('\n')
 
     if update == 1:
-        if os.path.isfile(BASELINE):
-            base_text = read_text(BASELINE)
-            lines_old = base_text.count('\n')
-            changed = count_changed(list(difflib.unified_diff(
-                base_text.splitlines(), work_text.splitlines(), lineterm='')))
-            print('regression: --update: replacing baseline '
-                  '(%d lines -> %d lines, %s changed lines)' % (lines_old, lines_new, changed))
+        # M7-WP3（R-015，deep-review-0.3.2）：`--update` 不再直接 copyfile —— 必须先产出
+        # 归因日志（改了哪些行 / 版本行 vs 行为变化）才允许落盘；归因写不出来 ⇒ 基线不动。
+        base_text = read_text(BASELINE) if os.path.isfile(BASELINE) else ''
+        lines_old = base_text.count('\n')
+        changed = count_changed(list(difflib.unified_diff(
+            base_text.splitlines(), work_text.splitlines(), lineterm='')))
+        base_lines = normalize(base_text) if base_text else []
+        work_lines = work_text.splitlines()
+        attr = Attribution()
+        attr.compare(base_lines, work_lines)
+        # 版本行 vs 行为变化两类计数（评审要求的归因口径）：removed/added/transitions 里
+        # 行型 == version 的归"版本行"，其余归"行为变化"。
+        ver_n = 0
+        beh_n = 0
+        for (kind, _key), n in list(attr.removed.items()) + list(attr.added.items()):
+            if kind == 'version':
+                ver_n += n
+            else:
+                beh_n += n
+        for label, n in attr.transitions.items():
+            if label.startswith('version-'):
+                ver_n += n
+            else:
+                beh_n += n
+        if not os.path.isfile(BASELINE):
+            note = 'baseline 不存在（首次播种）—— 全部行均为新增'
+        else:
+            note = 'baseline 已存在 —— 归因基于重播种前后的差异'
+        try:
+            with open(ATTRIB, 'w', encoding='utf-8', newline='\n') as fp:
+                fp.write('# regression --update attribution — platform=%s baseline=%s (%s)\n' % (
+                    platform_of_baseline(BASELINE), BASELINE, HOST_PLATFORM + ' host'))
+                fp.write('# %s\n' % note)
+                fp.write('# lines: baseline=%d -> current=%d, unified-diff changed=%d\n' % (
+                    lines_old, lines_new, changed))
+                fp.write('# version-line changes: %d / behavior changes: %d\n' % (ver_n, beh_n))
+                for line in attr.summary_lines(attrib_lines):
+                    fp.write(line + '\n')
+                fp.write('\n# per-line detail (kind/transition annotated)\n')
+                write_lines(fp, attr.detail)
+        except OSError as exc:
+            print('regression: --update attrib: 归因日志写不出（{}）—— 基线保持不动'.format(exc),
+                  file=sys.stderr)
+            return 2
+        print('regression: --update attrib: version-line changes={} behavior changes={} '
+              'changed-lines={} ({})'.format(ver_n, beh_n, changed, note))
+        print('regression: --update attrib: detail -> {} ({} lines)'.format(
+            ATTRIB[len(ROOT) + 1:].replace(os.sep, '/'), len(attr.detail)))
+        print('regression: --update: replacing baseline '
+              '(%d lines -> %d lines, %s changed lines)' % (lines_old, lines_new, changed))
         os.makedirs(os.path.dirname(BASELINE), exist_ok=True)
         shutil.copyfile(WORK, BASELINE)
         print('regression: baseline written: {} ({} lines)'.format(

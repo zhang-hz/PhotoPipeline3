@@ -25,3 +25,9 @@ amap_key*
 .env.*
 *.secret
 *secret*.key
+
+# M7-WP3（R-129，deep-review-0.3.2）：Python 缓存、Windows 保留名、未展开变量的截图产物
+__pycache__/
+*.pyc
+/nul
+docs/*$*.png

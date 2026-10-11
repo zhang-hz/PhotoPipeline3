@@ -1,6 +1,6 @@
 {
   "name": "photopipeline",
-  "version": "0.3.0",
+  "version": "0.3.2",
   "builtin-baseline": "9e593bb18ea69cc5095e012465dcd675a822ed0d",
   "dependencies": [
     { "name": "openimageio", "features": ["jpegxl", "libheif", "webp", "gif", "tools"] },
@@ -9,7 +9,9 @@
     "libwebp",
     "lcms",
     { "name": "exiv2", "features": ["bmff", "xmp", "png"] },
-    "spdlog"
-    , { "name": "pkgconf", "platform": "windows" }
+    "spdlog",
+    "libjpeg-turbo",
+    "tiff",
+    { "name": "pkgconf", "platform": "windows" }
   ]
 }

@@ -3,8 +3,12 @@
 """PhotoPipeline 工具链环境（M3-W3：Python 单实现，替代 tools/env.sh / env.sh.example）。
 
 用法:
-  python tools/env.py run -- <command...>   构造环境后运行命令，透传其退出码
-  python tools/env.py print                 按 KEY 排序逐行打印 KEY=VALUE（调试/CI 用）
+  python tools/env.py [--strict] run -- <command...>   构造环境后运行命令，透传其退出码
+  python tools/env.py [--strict] print                 按 KEY 排序逐行打印 KEY=VALUE（调试/CI 用）
+
+  --strict（M7-WP3 / R-098，deep-review-0.3.2）: Windows 上 vcvars 捕获失败即失败（退出码 2），
+  不再只提示一行继续跑。默认（不带开关）行为逐字不变 —— 裸跑报错点远离真因的老问题由
+  调用方按需开启；CI/打包路径一律建议带 --strict。
 
 背景（M3 裁定 D3：共享脚本 Python 单实现，删除 bash 版）:
   * tools/env.sh.example 已删除，且 tools/env.sh **不再生成**（bootstrap.py 里原有的
@@ -21,12 +25,14 @@
       Windows PATH 前置 <repo>/.toolchain/venv/Scripts 与
               <repo>/.toolchain/Qt/<QT_VERSION>/msvc2022_64/bin；
               并用 vswhere + vcvars64.bat 捕获 MSVC 工具链环境（VS 的 cl/link 不在
-              PATH，仓库内工具链自足）；vswhere 缺失或失败只提示一行，不致命。
+              PATH，仓库内工具链自足）；vswhere 缺失或失败默认只提示一行，不致命
+              （`--strict` 时即失败，见用法段 R-098）。
 
 退出码:
   run     子命令退出码（命令不存在 → 127）
   print   0
   用法错   2
+  --strict 下 vcvars 捕获失败 / versions.env 损坏   2
 
 M6-T17（REL-0.3.2 门禁取证）: `run` 现在把本进程的 stdin/stdout/stderr **显式**交给子进程
 （见 forward_std_streams()）。Windows 的句柄继承对 **GUI 子系统**子进程不生效 ——
@@ -43,32 +49,25 @@ import os
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from versions_env import VersionsError, load as load_versions  # noqa: E402  (tools/ 内部模块)
+
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
-USAGE = ("用法: python tools/env.py run -- <command...>\n"
-         "      python tools/env.py print\n")
+USAGE = ("用法: python tools/env.py [--strict] run -- <command...>\n"
+         "      python tools/env.py [--strict] print\n")
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def read_versions():
-    """解析 tools/versions.env（KEY=VALUE，'#' 起头为注释）→ dict。"""
-    values = {}
-    path = os.path.join(ROOT, 'tools', 'versions.env')
-    try:
-        with open(path, encoding='utf-8') as fp:
-            for raw in fp:
-                line = raw.strip()
-                if not line or line.startswith('#'):
-                    continue
-                key, sep, value = line.partition('=')
-                if not sep:
-                    continue
-                values[key.strip()] = value.strip().strip('"').strip("'")
-    except OSError:
-        pass
-    return values
+    """解析 tools/versions.env → dict（R-131：统一走 tools/versions_env.py，失败即抛）。
+
+    旧实现静默吞 OSError 并返回空 dict（评审取证 env.py:69-71）—— fresh-machine 上缺文件时
+    QT_VERSION='' 被拼进路径、报错点远离真因。现改为 VersionsError 由 main() 转退出码 2。
+    """
+    return load_versions()
 
 
 def set_key(env, key, value):
@@ -110,19 +109,29 @@ def decode_console(data):
     return data.decode('utf-8', errors='replace')
 
 
-def capture_vcvars(env):
+def capture_vcvars(env, strict=False):
     """Windows：vswhere → vcvars64.bat → `set`，把 MSVC 环境覆盖进 env。
 
-    vswhere 不存在/失败、vcvars64.bat 缺失/失败 → stderr 一行提示后跳过（不致命）。
+    vswhere 不存在/失败、vcvars64.bat 缺失/失败 → 默认 stderr 一行提示后跳过（不致命，
+    既有行为逐字不变）；strict=True（R-098 的 --strict）时返回 False，由调用方转退出码 2。
+    成功捕获返回 True。
     """
     hint = ("env: 提示: 未捕获 MSVC 工具链环境（vswhere 或 vcvars64.bat 不可用），"
             "cl/link 可能不在 PATH")
+
+    def fail():
+        if strict:
+            print('env: --strict: 未捕获 MSVC 工具链环境（vswhere/vcvars64.bat 不可用或失败）',
+                  file=sys.stderr)
+            return False
+        print(hint, file=sys.stderr)
+        return True
+
     program_files_x86 = get_key(env, 'ProgramFiles(x86)')
     vswhere = (os.path.join(program_files_x86, 'Microsoft Visual Studio', 'Installer',
                             'vswhere.exe') if program_files_x86 else None)
     if not vswhere or not os.path.isfile(vswhere):
-        print(hint, file=sys.stderr)
-        return
+        return fail()
     try:
         probe = subprocess.run(
             [vswhere, '-latest', '-products', '*',
@@ -130,44 +139,43 @@ def capture_vcvars(env):
              '-property', 'installationPath'],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env)
     except OSError:
-        print(hint, file=sys.stderr)
-        return
+        return fail()
     vs_root = decode_console(probe.stdout).strip().splitlines()
     vs_root = vs_root[0].strip() if vs_root else ''
     if probe.returncode != 0 or not vs_root:
-        print(hint, file=sys.stderr)
-        return
+        return fail()
     vcvars = os.path.join(vs_root, 'VC', 'Auxiliary', 'Build', 'vcvars64.bat')
     if not os.path.isfile(vcvars):
-        print(hint, file=sys.stderr)
-        return
+        return fail()
     # 规格给定形式 `cmd /s /c ""<vcvars64.bat>" && set"`：列表参数 + 禁 shell=True 时，
     # subprocess 会把内层引号反斜杠转义（cmd 不认 `\"`），实测 rc=1 且 env 为空；
     # 故用等价的列表形式（cmd 收到 `call "<vcvars64.bat>" && set`）。
     captured = subprocess.run(['cmd', '/c', 'call', vcvars, '&&', 'set'],
                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env)
     if captured.returncode != 0:
-        print(hint, file=sys.stderr)
-        return
+        return fail()
     for line in decode_console(captured.stdout).splitlines():
         key, sep, value = line.partition('=')
         if not sep or not key or key.startswith('['):
             continue
         set_key(env, key, value)
+    return True
 
 
-def build_env():
-    """构造完整子进程环境（os.environ 副本 + 工具链增量）。
+def build_env(strict=False):
+    """构造完整子进程环境（os.environ 副本 + 工具链增量）→ (env, toolchain_ok)。
 
     顺序：Windows 先捕获 vcvars，再写仓库值 —— vcvars64.bat 自己会导出
     VCPKG_ROOT=%VCINSTALLDIR%vcpkg（VS 自带 vcpkg），后写者必须是本仓库的值。
     PATH 前置放在最后，保证 <repo>/.toolchain 的工具优先于 VS/系统。
+    toolchain_ok = MSVC 环境捕获结果（POSIX 恒 True；R-098 的 --strict 由 main 据此判失败）。
     """
     env = dict(os.environ)
+    toolchain_ok = True
     if os.name == 'nt':
-        capture_vcvars(env)
+        toolchain_ok = capture_vcvars(env, strict=strict)
 
-    version = read_versions().get('QT_VERSION', '')
+    version = read_versions()['QT_VERSION']
     arch = 'msvc2022_64' if os.name == 'nt' else 'gcc_64'
     binary_cache = os.path.join(ROOT, '.cache', 'vcpkg-binary')
     os.makedirs(binary_cache, exist_ok=True)
@@ -183,7 +191,7 @@ def build_env():
                            os.path.join(qt_dir, 'bin')])
     else:
         set_key(env, 'CCACHE_DIR', os.path.join(ROOT, '.cache', 'ccache'))
-    return env
+    return env, toolchain_ok
 
 
 def forward_std_streams():
@@ -207,12 +215,22 @@ def forward_std_streams():
 
 
 def main(argv):
+    strict = False
+    while argv and argv[0] == '--strict':
+        strict = True
+        argv = argv[1:]
     if not argv or argv[0] not in ('run', 'print'):
         sys.stderr.write(USAGE)
         return 2
     mode = argv[0]
+    try:
+        env, toolchain_ok = build_env(strict=strict)
+    except VersionsError as exc:
+        sys.stderr.write('env: {}\n'.format(exc))
+        return 2
+    if not toolchain_ok:
+        return 2
     if mode == 'print':
-        env = build_env()
         for key in sorted(env):
             sys.stdout.write('{}={}\n'.format(key, env[key]))
         return 0
@@ -222,7 +240,6 @@ def main(argv):
         sys.stderr.write(USAGE)
         return 2
     command = rest[1:]
-    env = build_env()
     if os.name == 'nt':
         # Windows: 给出 env= 时 CreateProcess 仍用**调用者自身**的 PATH 搜索 argv[0]
         # （实测: 只把目录放进子进程环境块 → WinError 2；先写回本进程 PATH 再传同一块 → 找到）。

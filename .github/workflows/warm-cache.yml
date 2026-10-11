@@ -77,16 +77,21 @@ jobs:
   warm-windows:
     runs-on: windows-2025
     timeout-minutes: 120        # §12.6 豁免：播种非门禁基础设施
-    env:
-      QT_DIR: ${{ github.workspace }}/Qt/6.11.2/msvc2022_64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - name: Qt 路径（QT_VERSION 单源 = tools/versions.env；R-063 去版本字面量）
+        run: |
+          "QT_DIR=$env:GITHUB_WORKSPACE\Qt\$env:QT_VERSION\msvc2022_64" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: 依赖单源一致性断言（tools/ci-versions-check.py；R-062/R-091/R-122）
+        run: |
+          python tools/ci-versions-check.py --expect "QT_VERSION=$env:QT_VERSION" --expect "VCPKG_TAG=$env:VCPKG_TAG"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Qt ${{ env.QT_VERSION }} 缓存（restore）
         id: qt-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
-          path: ${{ github.workspace }}/Qt/6.11.2/msvc2022_64
+          path: ${{ github.workspace }}/Qt/${{ env.QT_VERSION }}/msvc2022_64
           key: qt-${{ env.QT_VERSION }}-win64_msvc2022_64-${{ runner.os }}-${{ runner.arch }}
           restore-keys: qt-${{ env.QT_VERSION }}-win64_msvc2022_64-
 
@@ -139,6 +144,9 @@ jobs:
         run: |
           git clone https://github.com/microsoft/vcpkg "$env:VCPKG_ROOT"
           git -C "$env:VCPKG_ROOT" checkout "$env:VCPKG_TAG"
+          $wantSha = (Select-String -Path tools/versions.env -Pattern '^VCPKG_SHA=(.+)$').Matches.Groups[1].Value.Trim()
+          $gotSha = (git -C "$env:VCPKG_ROOT" rev-parse HEAD).Trim()
+          if ($gotSha -ne $wantSha) { Write-Error "vcpkg HEAD $gotSha != VCPKG_SHA $wantSha（R-091）"; exit 1 }
           & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
 
       - name: 缓存目录预建
@@ -149,7 +157,7 @@ jobs:
         # 播种 job 名是 warm-windows ⇒ 与四道流水线的 windows/winzip/tidy 不冲突；宽前缀 vcpkgwin-
         # 让播种**消费**已有热缓存，save 又产出**最新**条目（滚动 key 语义）供下一轮日常复用。
         # T16 起键内容追加 triplet 哈希（AVX2 flags 变更 ⇒ 自动失效；§12.4）。
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: ${{ github.workspace }}/.cache/vcpkg-binary
           key: vcpkgwin-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -194,7 +202,7 @@ jobs:
       - name: vcpkg binary cache（save）
         if: always()
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: ${{ github.workspace }}/.cache/vcpkg-binary
           key: vcpkgwin-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -203,9 +211,9 @@ jobs:
         # 与四道流水线的 windows job 同一 key（那里是该 key 的常规写者；播种轮次覆盖写一份新内容）。
         if: always() && steps.qt-cache.outputs.cache-hit != 'true'
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
-          path: ${{ github.workspace }}/Qt/6.11.2/msvc2022_64
+          path: ${{ github.workspace }}/Qt/${{ env.QT_VERSION }}/msvc2022_64
           key: qt-${{ env.QT_VERSION }}-win64_msvc2022_64-${{ runner.os }}-${{ runner.arch }}
 
       - name: 汇总 → $GITHUB_STEP_SUMMARY
@@ -242,18 +250,19 @@ jobs:
       # ⇒ find_package(Qt6) 找不到 Qt6Config.cmake（run 36043530845 本 job step12 实测:
       # vcpkg/scripts/buildsystems/vcpkg.cmake:939 (_find_package) 报错，Call Stack CMakeLists.txt:149）。
       # 值与四道流水线的 linux job 逐字一致（main-full.yml:303/703/1087 同款）。
-      QT_DIR: ${{ github.workspace }}/Qt/6.11.2/gcc_64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - name: Qt 路径（QT_VERSION 单源 = tools/versions.env；R-063 去版本字面量）
+        run: echo "QT_DIR=$GITHUB_WORKSPACE/Qt/$QT_VERSION/gcc_64" >> "$GITHUB_ENV"
 
       - name: apt 系统依赖（tools/ci-system-deps.txt）
         run: bash tools/ci-install-deps.sh
 
       - name: Qt ${{ env.QT_VERSION }} 缓存（restore）
         id: qt-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
-          path: ${{ github.workspace }}/Qt/6.11.2/gcc_64
+          path: ${{ github.workspace }}/Qt/${{ env.QT_VERSION }}/gcc_64
           key: qt-${{ env.QT_VERSION }}-gcc_64-${{ runner.os }}-${{ runner.arch }}
           restore-keys: qt-${{ env.QT_VERSION }}-gcc_64-
 
@@ -270,18 +279,23 @@ jobs:
           aqt install-qt linux desktop "$QT_VERSION" linux_gcc_64 -O "$GITHUB_WORKSPACE/Qt" $BASE \
             || echo "aqt 失败 → 交由归档兜底"
 
-      - name: Qt 归档兜底（qt_tarball_url）
+      - name: Qt 归档兜底（qt_tarball_url + qt_tarball_sha256）
+        # M7-WP3（R-037）：--sha256 必填（解包前校验；与 Windows 侧同口径）。
         if: ${{ steps.qt-cache.outputs.cache-hit != 'true' && inputs.qt_tarball_url != '' && inputs.qt_tarball_platform != 'windows' }}
         run: |
+          if [ -z '${{ inputs.qt_tarball_sha256 }}' ]; then
+            echo "::error::qt_tarball_url 已给但 qt_tarball_sha256 为空（R-037：完整性信任锚必填）"
+            exit 1
+          fi
           if [ -f "$QT_DIR/lib/libQt6Core.so.6" ]; then
             echo "Qt 已就位（aqt 或缓存）→ 跳过归档兜底"
           else
-            python3 tools/ci-seed-qt.py "${{ inputs.qt_tarball_url }}" "$QT_DIR"
+            python3 tools/ci-seed-qt.py --sha256 "${{ inputs.qt_tarball_sha256 }}" "${{ inputs.qt_tarball_url }}" "$QT_DIR"
           fi
 
       - name: Qt 就绪断言
         env:
-          QT_DIR: ${{ github.workspace }}/Qt/6.11.2/gcc_64
+          QT_DIR: ${{ github.workspace }}/Qt/${{ env.QT_VERSION }}/gcc_64
         run: |
           test -f "$QT_DIR/lib/libQt6Core.so.6" || {
             echo "::error::Qt 缺失: $QT_DIR"
@@ -295,6 +309,9 @@ jobs:
         run: |
           git clone https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
           git -C "$VCPKG_ROOT" checkout "$VCPKG_TAG"
+          want_sha="$(sed -n 's/^VCPKG_SHA=//p' tools/versions.env | tr -d '\r')"
+          got_sha="$(git -C "$VCPKG_ROOT" rev-parse HEAD)"
+          [ "$got_sha" = "$want_sha" ] || { echo "::error::vcpkg HEAD $got_sha != VCPKG_SHA $want_sha（R-091）"; exit 1; }
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
 
       - name: 缓存目录预建
@@ -304,7 +321,7 @@ jobs:
         id: vcpkg-cache
         # key 末段含 github.job：播种 job 名是 warm ⇒ 与四道流水线的各 job 不冲突；宽前缀 vcpkg-
         # 让播种**消费**已有热缓存，save 又产出**最新**条目供下一轮日常复用。T16 起追加 triplet 哈希。
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: ${{ github.workspace }}/.cache/vcpkg-binary
           key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -314,7 +331,7 @@ jobs:
 
       - name: ccache（restore）
         id: ccache-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: ${{ github.workspace }}/.cache/ccache
           key: ccache-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/**', 'CMakePresets.json') }}-${{ hashFiles('cmake/**', 'triplets/**') }}-${{ github.run_id }}
@@ -365,15 +382,15 @@ jobs:
         # 与四道流水线的 linux job 同一 key（那里是常规写者）。
         if: always() && steps.qt-cache.outputs.cache-hit != 'true'
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
-          path: ${{ github.workspace }}/Qt/6.11.2/gcc_64
+          path: ${{ github.workspace }}/Qt/${{ env.QT_VERSION }}/gcc_64
           key: qt-${{ env.QT_VERSION }}-gcc_64-${{ runner.os }}-${{ runner.arch }}
 
       - name: vcpkg binary cache（save）
         if: always()
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: ${{ github.workspace }}/.cache/vcpkg-binary
           key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -383,7 +400,7 @@ jobs:
         # ⇒ 下一次日常轮次用 restore-keys: ccache-<os>- 直接拿到这份"release+release-dev 全集"。
         if: always()
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: ${{ github.workspace }}/.cache/ccache
           key: ccache-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/**', 'CMakePresets.json') }}-${{ hashFiles('cmake/**', 'triplets/**') }}-${{ github.run_id }}

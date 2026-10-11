@@ -11,7 +11,7 @@
         "metadata": [
           { "key": "Exif.Image.Artist", "op": "eq", "value": "M4-T6-progress" }
         ],
-        "warnings_contain": []
+        "warnings_contain": [], "warnings_empty": true
       }
     },
     {
@@ -22,7 +22,7 @@
         "metadata": [
           { "key": "Exif.Image.Artist", "op": "eq", "value": "M4-T6-progress" }
         ],
-        "warnings_contain": []
+        "warnings_contain": [], "warnings_empty": true
       }
     }
   ],

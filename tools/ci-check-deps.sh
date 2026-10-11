@@ -96,7 +96,9 @@ if [ -n "$SONAME_FILE" ]; then
     say "== 输入: soname 列表 $SONAME_FILE（${#SONAME_PATH[@]} 条）"
 else
     if [ "${#BUILD_DIRS[@]}" -eq 0 ]; then
-        for c in build/release-dev build/release build/m2-release build/m2-t19-dev build/m2-t19; do
+        # M7-WP3（R-120）：去掉 M2 遗留目录名（build/m2-release 等永远命不中 = 覆盖自检假绿），
+        # 只认当前两个预设的构建树。
+        for c in build/release-dev build/release; do
             [ -d "$ROOT/$c" ] && BUILD_DIRS+=("$ROOT/$c")
         done
     fi
@@ -105,7 +107,11 @@ else
         [ -d "$d" ] || { echo "ci-check-deps: 构建目录不存在: $d" >&2; exit 2; }
     done
 
-    for c in "${QT_DIR:-}" "$ROOT/Qt/6.8.3/gcc_64" "$ROOT/.toolchain/Qt/6.8.3/gcc_64"; do
+    # M7-WP3（R-120）：Qt 版本一律从 tools/versions.env 解析（旧的 6.8.3 字面量回退路径
+    # 与单源不符，QT_DIR 未注入时永远命不中 ⇒ 覆盖自检假绿）。缺键即失败。
+    QT_VERSION_PIN="$(sed -n 's/^QT_VERSION=//p' "$ROOT/tools/versions.env" | tail -1 | tr -d '\r')"
+    [ -n "$QT_VERSION_PIN" ] || { echo "ci-check-deps: tools/versions.env 缺键 QT_VERSION" >&2; exit 2; }
+    for c in "${QT_DIR:-}" "$ROOT/Qt/$QT_VERSION_PIN/gcc_64" "$ROOT/.toolchain/Qt/$QT_VERSION_PIN/gcc_64"; do
         [ -n "$c" ] && [ -d "$c/lib" ] && { QT_LIB="$c/lib"; QT_PLUGINS="$c/plugins"; break; }
     done
 

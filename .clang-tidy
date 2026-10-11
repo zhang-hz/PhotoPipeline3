@@ -1,3 +1,14 @@
-Checks: 'bugprone-*,performance-*,modernize-*,readability-*,-modernize-use-trailing-return-type,-readability-identifier-length'
+# PP-FROZEN(checkset): 静态分析棘轮的检查集单源（R-127，deep-review-0.3.2）。
+#   契约出处: docs/v0.3.0-design.md §12.2「静态分析棘轮：bugprone/performance/portability」。
+#   消费点: tools/ci-tidy.py 读取本文件的 Checks 作为默认 --checks（不再自带第二份字面量）；
+#   改本行 = 改棘轮口径 ⇒ fingerprint 变化 ⇒ 走播种路径/--update 重播种（基线 diff 同提交评审）。
+#   与旧状态的关系: 旧 .clang-tidy 声明 modernize/readability，但门禁（ci-tidy.py）实际执行的
+#   CLI 检查集在其后匹配并覆盖 config ⇒ modernize/readability 实际不生效。此处按门禁实况收敛
+#   = 有效检查集零变化（fingerprint 与 tools/baseline/clang-tidy.tsv 既有记录逐字一致，
+#   棘轮计数不受影响）。
+Checks: '-*,bugprone-*,performance-*,portability-*'
 WarningsAsErrors: ''
+# HeaderFilterRegex 维持 src/.*（工具头/测试头的诊断仍被 clang-tidy 滤掉）：扩面到 tests|tools
+# 会改变棘轮计数（env_compat.h 等历史诊断会冒出）⇒ 必须 --update 重播种，属口径动作，
+# 已登记 build/m7-wp3/handoff.md「残余项」待主对话裁决。
 HeaderFilterRegex: 'src/.*'

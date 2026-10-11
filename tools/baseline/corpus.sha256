@@ -1,0 +1,35 @@
+# PhotoPipeline — 金样语料 sha256 锁（M7-WP3 / R-018，deep-review-0.3.2）
+# 判据: tests/golden/{base,edge,meta} 的 27 个 fixture 字节钉死 —— smoke.py 开头校验，
+#       不符即拒跑（换工具链重跑 gen_corpus.py 的字节漂移不再无声通过金样）。
+# 与 tests/golden/CHECKSUMS 的关系: 后者由生成器自签且 gitignored（评审取证"零消费者"），
+#       保持不动；本文件入库且由**消费方**（tests/golden/smoke.py）校验。
+# 更新口径（口径动作，非日常操作）: python tests/golden/smoke.py --relock
+#   （先打印改了哪些行/新增/删除，再落盘；归因进提交正文）
+# 格式: sha256sum 兼容（<hash>  <repo 相对路径，正斜杠>，LC_ALL=C 排序）
+3f6430aee4ec2d2768859f247fd8b1d6ea201dfc43636b4a817a33b146d133a3  tests/golden/base/anim.gif
+3fba5f2fde66a705c05530d4df68808943f68a9877f782f40d71b5050649065c  tests/golden/base/bmp24.bmp
+c91a3ef9c8fb670c5cb6cf8622e5f073578cc77962c3801d0781b13311feffb0  tests/golden/base/gray16.png
+e7b6dad71d9f696fbc1b7b48d242318bee82f1986dc64beb683b84edbcf1b427  tests/golden/base/gray16.tif
+f716e1c2c7ae4c6dcd700afb58e5f939fd45c3c4df1772f3c9cd05d6be1b502b  tests/golden/base/gray8.png
+5fb9725317ee331c25ccec350ac11952b53eaf88e0b3fe381ca639eb703d1670  tests/golden/base/graya8.png
+98be9e8a7f7b1a179f8b7126bfeafc1cd568ab7914a72ac41fd0708bf7fe2d97  tests/golden/base/jxl8.jxl
+150ca3937b2600995ac92769e0e95abca0c152dffa28ef938506fa5b6abeedb9  tests/golden/base/multi.tif
+77da57eeee3fd05b15d639b7d918e90f164bb45ef73982131c4212ef96ec272c  tests/golden/base/photo.jpg
+6c8da892aec84fb311aedc0efede373ed2d9045bf60704adfd72064190361266  tests/golden/base/rgb16.png
+8e4a1c5948120b12410d147f299e10031cc1c4d83f56650cdf53c45844bfa1ba  tests/golden/base/rgb16.tif
+3089d230e503bc8b351c6624f8300ffdde3becede724df7141647ea7cf6307aa  tests/golden/base/rgb8.png
+1eb93537d138726f75b81377b30db837199211494f6a4a1a1662cfb44564f7c0  tests/golden/base/rgb8.tif
+a4fdf54722e08152ae156e77952646cbf5f05f76446bc18e9bb0ab7387f23809  tests/golden/base/rgba16.png
+ab44408f68b326050faa2e6873f6ff7fe52eb1add231a0e4381e7769ff240c18  tests/golden/base/rgba8.png
+afb3792dd7e4c8595160cf54eae6f20814a13e6436732da401a53697a9997599  tests/golden/base/targa.tga
+d801d6343932334e00b9b57d518a00cc14c05f592e45cb5dac8aa05fed3fbff2  tests/golden/edge/cmyk.tif
+51939369f911e68eff88989b0b5116258b33abf0241827eef0de7a934119eda6  tests/golden/edge/corrupt_trunc.jpg
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  tests/golden/edge/corrupt_zero.png
+3089d230e503bc8b351c6624f8300ffdde3becede724df7141647ea7cf6307aa  tests/golden/edge/测试📸unicode.png
+ad5ea8d8f7cb1d3f76347c0a455c4da14af6d17eb041a21d92a15c05b67fe1f6  tests/golden/meta/avif_exif.avif
+d801d6343932334e00b9b57d518a00cc14c05f592e45cb5dac8aa05fed3fbff2  tests/golden/meta/cmyk.tif
+035f9955f7a85136d35bf735b3c71f42d564f36cfeb7cb087bec96d9cc0e8893  tests/golden/meta/exif_full.jpg
+f3576a47152d000b1077d246038b3e1e081eb509fd54b3b840e6ccced47e814b  tests/golden/meta/heif_exif.heic
+74436e27059ef03b1c7c542db37e7b86d9c5c55074252e7e54c40d1420618a89  tests/golden/meta/jxl_exif.jxl
+d5d3274a534a05dc5b5b0e9b7bc2bdf46e0c9460536581de0e0eee669c227a77  tests/golden/meta/webp_lossless.webp
+ef007c806c57a078d08007b81ad1211d2b7e8e3b734983f44737c4a34fc4896c  tests/golden/meta/webp_lossy.webp

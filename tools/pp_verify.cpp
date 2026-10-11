@@ -8,6 +8,10 @@
 //                     normalisation of M2-T8 (see normalize_value_text below / SCHEMA.md)
 //     warnings_contain[]  WarningKind names, read from the <actual_output>.pp.json sidecar
 //                         written by `photopipeline --dev` (a decoded image cannot carry them)
+//     warnings_exact[]    (M7-WP3 / R-040) sidecar 的 WarningKind **全集**必须与所列多集合
+//                         逐项相等（含重复次数；顺序无关）—— 防"只判包含、多出的意外告警永不判红"。
+//     warnings_empty      (M7-WP3 / R-040) true = 该产物必须零告警。
+//                         warnings_contain 语义逐字不变；三种模式可并存，各自独立判。
 //   output:  `VERIFY <case> OK|FAIL <detail>`; exit code = number of FAILs
 //   --selftest: synthesises its own samples (PNG/JPEG/metadata/sidecar) in .cache/tmp and
 //               checks that each assertion mode both passes and fails as expected.
@@ -444,13 +448,20 @@ std::string check_metadata(const fs::path &actual, const QJsonArray &asserts) {
 // ---------------------------------------------------------------------------
 // warnings (sidecar written by `photopipeline --dev`)
 // ---------------------------------------------------------------------------
-std::string check_warnings(const fs::path &actual, const QJsonArray &asserts) {
-    if (asserts.isEmpty())
+std::string check_warnings(const fs::path &actual, const QJsonObject &asserts) {
+    // M7-WP3 / R-040（deep-review-0.3.2）：告警面三模式 —— warnings_contain（包含，语义逐字
+    // 不变）/ warnings_exact（全集相等，多集合）/ warnings_empty（零告警）。任一模式给出即
+    // 要求 sidecar 存在；三种都没给 = 零告警断言（既有行为）。
+    const QJsonArray contain = asserts.value("warnings_contain").toArray();
+    const bool have_exact = asserts.contains("warnings_exact");
+    const QJsonArray exact = asserts.value("warnings_exact").toArray();
+    const bool want_empty = asserts.value("warnings_empty").toBool(false);
+    if (contain.isEmpty() && !have_exact && !want_empty)
         return {};
     const fs::path sidecar = actual.string() + ".pp.json";
     std::ifstream f(sidecar, std::ios::binary);
     if (!f)
-        return "warnings_contain requires the sidecar " + sidecar.string() + " (missing)";
+        return "warnings_* requires the sidecar " + sidecar.string() + " (missing)";
     const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     const QJsonObject obj = QJsonDocument::fromJson(QByteArray::fromStdString(text)).object();
     if (obj.isEmpty())
@@ -463,21 +474,49 @@ std::string check_warnings(const fs::path &actual, const QJsonArray &asserts) {
             kinds.push_back(w.toObject().value("kind").toString().toStdString());
         }
     }
+    auto joined = [&kinds]() {
+        std::string have;
+        for (const std::string &k : kinds) {
+            if (!have.empty())
+                have += ",";
+            have += k;
+        }
+        return have;
+    };
     std::string failures;
-    for (const QJsonValue &v : asserts) {
+    for (const QJsonValue &v : contain) {
         const std::string want = v.toString().toStdString();
         const bool found = std::find(kinds.begin(), kinds.end(), want) != kinds.end();
         if (!found) {
-            std::string have;
-            for (const std::string &k : kinds) {
-                if (!have.empty())
-                    have += ",";
-                have += k;
-            }
             if (!failures.empty())
                 failures += "; ";
-            failures += "warning '" + want + "' not reported (have: [" + have + "])";
+            failures += "warning '" + want + "' not reported (have: [" + joined() + "])";
         }
+    }
+    if (have_exact) { // 键在即生效：warnings_exact: [] = 全集必须为空（= warnings_empty）
+        std::vector<std::string> want;
+        for (const QJsonValue &v : exact)
+            want.push_back(v.toString().toStdString());
+        std::vector<std::string> have = kinds;
+        std::sort(want.begin(), want.end());
+        std::sort(have.begin(), have.end());
+        if (want != have) {
+            if (!failures.empty())
+                failures += "; ";
+            std::string want_s;
+            for (const std::string &k : want) {
+                if (!want_s.empty())
+                    want_s += ",";
+                want_s += k;
+            }
+            failures +=
+                "warnings_exact mismatch (want: [" + want_s + "], have: [" + joined() + "])";
+        }
+    }
+    if (want_empty && !kinds.empty()) {
+        if (!failures.empty())
+            failures += "; ";
+        failures += "warnings_empty violated (have: [" + joined() + "])";
     }
     return failures;
 }
@@ -536,8 +575,7 @@ bool check_case(const QJsonObject &exp, const fs::path &actual, const fs::path &
     if (!meta_err.empty())
         failures.push_back(meta_err);
 
-    const std::string warn_err =
-        check_warnings(actual, asserts.value("warnings_contain").toArray());
+    const std::string warn_err = check_warnings(actual, asserts);
     if (!warn_err.empty())
         failures.push_back(warn_err);
 
@@ -949,6 +987,12 @@ int selftest() {
         std::ofstream f((b_png.string() + ".pp.json"), std::ios::binary | std::ios::trunc);
         f << json;
     }
+    // M7-WP3 / R-040：零告警 sidecar（warnings_empty / warnings_exact: [] 的正对照）
+    {
+        const std::string json = "{\"warnings\":[]}";
+        std::ofstream f((c_png.string() + ".pp.json"), std::ios::binary | std::ios::trunc);
+        f << json;
+    }
 
     auto make_exp = [](const char *input, const char *mode, double threshold,
                        const QJsonArray &metadata, const QJsonArray &warnings) {
@@ -990,6 +1034,22 @@ int selftest() {
         a.append(kind);
         return a;
     };
+    // M7-WP3 / R-040：warnings_exact / warnings_empty 的探针装配（键存在即生效）
+    auto with_exact = [](QJsonObject e, std::initializer_list<const char *> kinds) {
+        QJsonArray a;
+        for (const char *k : kinds)
+            a.append(k);
+        QJsonObject asrt = e.value("assert").toObject();
+        asrt["warnings_exact"] = a;
+        e["assert"] = asrt;
+        return e;
+    };
+    auto with_empty = [](QJsonObject e) {
+        QJsonObject asrt = e.value("assert").toObject();
+        asrt["warnings_empty"] = true;
+        e["assert"] = asrt;
+        return e;
+    };
 
     struct Probe {
         const char *label;
@@ -1014,6 +1074,18 @@ int selftest() {
          make_exp("a.png", "exact", 0, meta_op("Exif.Image.Software", "absent"), {}), m_png, true},
         {"warnings-pass", make_exp("a.png", "exact", 0, {}, warns("AlphaFlattened")), b_png, true},
         {"warnings-fail", make_exp("a.png", "exact", 0, {}, warns("DepthDowngrade")), b_png, false},
+        // M7-WP3 / R-040：warnings_exact / warnings_empty 两模式的正反对照（只增）
+        {"warnings-exact-pass",
+         with_exact(make_exp("a.png", nullptr, 0, {}, {}), {"AlphaFlattened"}), b_png, true},
+        {"warnings-exact-fail-extra",
+         with_exact(make_exp("a.png", nullptr, 0, {}, {}), {"AlphaFlattened", "DepthDowngrade"}),
+         b_png, false},
+        {"warnings-exact-empty-pass", with_exact(make_exp("a.png", nullptr, 0, {}, {}), {}), c_png,
+         true},
+        {"warnings-exact-empty-fail", with_exact(make_exp("a.png", nullptr, 0, {}, {}), {}), b_png,
+         false},
+        {"warnings-empty-pass", with_empty(make_exp("a.png", nullptr, 0, {}, {})), c_png, true},
+        {"warnings-empty-fail", with_empty(make_exp("a.png", nullptr, 0, {}, {})), b_png, false},
         // M2-T8 (#26): one probe per frozen normalisation class.
         {"normalize-ascii-trim",
          make_exp("a.png", nullptr, 0, meta_eq("Exif.Image.ImageDescription", "padded M2-T8"), {}),

@@ -13,6 +13,6 @@
         "value": "M2-T8-webp"
       }
     ],
-    "warnings_contain": []
+    "warnings_contain": [], "warnings_empty": true
   }
 }

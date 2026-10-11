@@ -1,1 +1,16 @@
 tools/versions.env text eol=lf
+# M7-WP3（R-130，deep-review-0.3.2）：脚本/配置/文档一律 LF 入库 —— autocrlf 环境下 checkout
+# 成 CRLF 会让 bash 报「回车符: command not found」（ci-format.sh 等），并破坏 sha512/冻结行比对。
+*.sh text eol=lf
+*.bash text eol=lf
+*.py text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.tsv text eol=lf
+*.supp text eol=lf
+*.env text eol=lf
+*.cmake text eol=lf
+CMakeLists.txt text eol=lf

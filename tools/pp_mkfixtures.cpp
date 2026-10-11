@@ -654,9 +654,11 @@ int cmd_verify(const fs::path &dir) {
         "cmyk.tif"};
     if (!fs::is_directory(dir)) {
         for (const std::string &n : names) {
-            emit("FIXTURE", n, "SKIP", "directory missing: " + dir.string());
+            emit("FIXTURE", n, "FAIL", "directory missing: " + dir.string());
         }
-        return 77;
+        // M7-WP3（R-095，deep-review-0.3.2）：缺 fixture 计 FAIL —— 语料入库即契约，缺件曾只记
+        // SKIP（ctest 的 SKIP_RETURN_CODE 77）把"语料缺失"变成假绿。目录缺失 = 全部缺件。
+        return g_fails;
     }
     // Exiv2 >= 0.28 API (verified against the installed headers).
 
@@ -664,7 +666,7 @@ int cmd_verify(const fs::path &dir) {
     {
         const fs::path p = dir / "exif_full.jpg";
         if (!fs::exists(p)) {
-            emit("FIXTURE", "exif_full.jpg", "SKIP", "missing");
+            emit("FIXTURE", "exif_full.jpg", "FAIL", "missing");
         } else if (!check_metadata_field(p, "exif_full.jpg", "Exif.Photo.DateTimeOriginal",
                                          kDateTimeOriginal) ||
                    !check_metadata_field(p, "exif_full.jpg", "Exif.Image.Artist", kArtist)) {
@@ -699,7 +701,7 @@ int cmd_verify(const fs::path &dir) {
         const fs::path p = dir / n;
         std::string err;
         if (!fs::exists(p)) {
-            emit("FIXTURE", n, "SKIP", "missing");
+            emit("FIXTURE", n, "FAIL", "missing");
         } else if (!oiio_check(p, kSize, kSize, err)) {
             emit("FIXTURE", n, "FAIL", err);
         } else {
@@ -711,7 +713,7 @@ int cmd_verify(const fs::path &dir) {
     for (const char *n : {"heif_exif.heic", "avif_exif.avif", "jxl_exif.jxl"}) {
         const fs::path p = dir / n;
         if (!fs::exists(p)) {
-            emit("FIXTURE", n, "SKIP", "missing");
+            emit("FIXTURE", n, "FAIL", "missing");
             continue;
         }
         if (!check_metadata_field(p, n, "Exif.Photo.DateTimeOriginal", kDateTimeOriginal)) {
@@ -734,7 +736,7 @@ int cmd_verify(const fs::path &dir) {
         const fs::path p = dir / "cmyk.tif";
         std::string err;
         if (!fs::exists(p)) {
-            emit("FIXTURE", "cmyk.tif", "SKIP", "missing");
+            emit("FIXTURE", "cmyk.tif", "FAIL", "missing");
         } else if (!oiio_check(p, kSize, kSize, err)) {
             emit("FIXTURE", "cmyk.tif", "FAIL", err);
         } else {

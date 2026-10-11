@@ -362,6 +362,27 @@ def resolve_crt_dir():
         2)
 
 
+# M7-WP3（R-092，deep-review-0.3.2）：包内 NOTICE —— GPL §6 源码 offer 的**离线可读**指引。
+# 此前 offer 只在仓库 README（离线拿到包的用户找不到）；现随包携带，并由 check_licenses /
+# 产物内复核两道断言钉住（源码 URL + tag 对应 = 发行件与源码的一一映射）。
+NOTICE_TEXT = """PhotoPipeline {version}
+{rule}
+
+源码获取（GPL-3.0-or-later §6）
+  仓库: https://github.com/zhang-hz/PhotoPipeline3
+  本发行件对应的源码 = 该仓库 tag v{version} 的提交（tag 与发行件一一对应）：
+    https://github.com/zhang-hz/PhotoPipeline3/releases/tag/v{version}
+
+许可
+  本程序按 GPL-3.0-or-later 分发，不提供任何担保；全文见
+  licenses/PhotoPipeline/LICENSE（AppImage 内为 usr/share/licenses/PhotoPipeline/LICENSE）。
+  第三方组件的版权与许可全文随包分发（licenses/<port>/copyright）。
+
+生成
+  本文件由 tools/make_winzip.py / tools/make_appimage.sh 打包时写入（deep-review-0.3.2 R-092）。
+"""
+
+
 def check_licenses(staging, where):
     licenses = os.path.join(staging, 'licenses')
     count = 0
@@ -370,10 +391,13 @@ def check_licenses(staging, where):
             if os.path.isfile(os.path.join(licenses, entry, 'copyright')):
                 count += 1
     project_license = os.path.join(licenses, 'PhotoPipeline', 'LICENSE')
+    project_notice = os.path.join(licenses, 'PhotoPipeline', 'NOTICE')
     if count < 30:
         die('许可断言失败（{}）: licenses/*/copyright = {} < 30'.format(where, count))
     if not os.path.isfile(project_license):
         die('许可断言失败（{}）: 缺 licenses/PhotoPipeline/LICENSE'.format(where))
+    if not os.path.isfile(project_notice):
+        die('许可断言失败（{}）: 缺 licenses/PhotoPipeline/NOTICE（R-092 源码获取指引）'.format(where))
     return count
 
 
@@ -625,6 +649,11 @@ def main(argv):
                                   staging, '--dest', licenses_dir], env=child_env(qt_bin))
     if license_rc != 0:
         die('许可汇总失败（collect_licenses.py exit {}）'.format(license_rc))
+    # R-092：包内 NOTICE（源码 URL + tag 对应；版本单源 = 产物 --version，见 6b）
+    notice_dir = os.path.join(licenses_dir, 'PhotoPipeline')
+    os.makedirs(notice_dir, exist_ok=True)
+    with open(os.path.join(notice_dir, 'NOTICE'), 'w', encoding='utf-8', newline='') as fp:
+        fp.write(NOTICE_TEXT.format(version=version, rule='=' * (14 + len(version))))
     license_count = check_licenses(staging, '写盘前')
     note('许可断言 D（写盘前）: licenses/ = {} 个 copyright（≥30 ✓）+ PhotoPipeline/LICENSE ✓'
          .format(license_count))
@@ -706,6 +735,8 @@ def main(argv):
         die('产物内复核失败: 缺 PhotoPipeline/photopipeline.exe')
     if 'PhotoPipeline/licenses/PhotoPipeline/LICENSE' not in names:
         die('产物内复核失败: 缺 PhotoPipeline/licenses/PhotoPipeline/LICENSE')
+    if 'PhotoPipeline/licenses/PhotoPipeline/NOTICE' not in names:
+        die('产物内复核失败: 缺 PhotoPipeline/licenses/PhotoPipeline/NOTICE（R-092 源码获取指引）')
     zip_licenses = [name for name in names
                     if name.startswith('PhotoPipeline/licenses/')
                     and name.endswith('/copyright') and name.count('/') == 3]

@@ -16,6 +16,9 @@
     ],
     "warnings_contain": [
       "DepthDowngrade"
+    ],
+    "warnings_exact": [
+      "DepthDowngrade"
     ]
   }
 }

@@ -13,6 +13,9 @@
     ],
     "warnings_contain": [
       "GrayToRgbEncoded"
+    ],
+    "warnings_exact": [
+      "GrayToRgbEncoded"
     ]
   }
 }

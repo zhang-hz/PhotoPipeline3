@@ -6,6 +6,17 @@
 退出码: 0 = 冻结断言全过（末行 `UI-SMOKE OK shots=12 pages=3`，M4-W3-T14 起冻结 12 张）；
         2 = 用法/二进制缺失；其余 = photopipeline --ui-smoke 的退出码透传。
 
+取证口径（M7-WP3 / R-044，deep-review-0.3.2；如实表述，勿再传"截图比对"）：
+  * **截图仅存档，不做像素比对** —— 12 张 PNG 落 .cache/ui-smoke-ci（CI 存档）/ .cache/ui-review
+    （人工审查），本脚本与 `--ui-smoke` 都**不**比对截图字节或像素差异；回归判据是下一行的
+    C++ 硬判 + 冻结末行。
+  * **硬判在 C++ 探针侧**（mainwindow.cpp 的 smoke_probe_* 段）：逐条 meta_expect/expect 断言
+    （几何/文案/对象名/像素取证），失败经 smoke_fail 通道 ⇒ `--ui-smoke` 退出码 1；本脚本只负责
+    ① 校验冻结末行 `UI-SMOKE OK shots=12 pages=3`、② 校验各 tag 自检行齐备（防断言被静默跳过）。
+  * 字体敏感的像素断言（ClearType 彩边 / dpr 缩放）一律给**容差**或换锚到非字形区域（先例：
+    offline-banner 的"内边距环带 + 占比"双判据、icons-engine 的同坐标系回读）——字体/渲染差异
+    不得判红。像素探针本体在 C++ 侧（非本文件面），改动须经 UI 面任务。
+
 截图目录（M2-T21c 隔离裁定）：
   * CI/ctest（本脚本默认）固定写 .cache/ui-smoke-ci —— 本脚本总是以 QT_QPA_PLATFORM=
     offscreen 运行，产物是 Fusion/offscreen 口径，**不是**真实平台渲染。

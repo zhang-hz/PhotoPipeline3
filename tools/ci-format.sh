@@ -20,13 +20,34 @@
 #                        来源: PyPI clang-format 23.1.1 wheel（win_amd64 / manylinux_2_27_x86_64），
 #                        wheel sha256 = eaf3075d…86d5 / 64900462…2f56（打包的即 LLVM 官方发行二进制，
 #                        见 wheel METADATA Project-URL Download: github.com/llvm/llvm-project/releases）。
-#   PP_FMT_VERSION=<x.y.z>  期望的 clang-format 版本（默认 23.1.1，即仓库钉版）。
+#   PP_FMT_VERSION=<x.y.z>  期望版本**校验值**（R-128：单源 = tools/versions.env 的
+#                        CLANG_FORMAT_VERSION；本变量若设置且与单源不符 ⇒ 直接失败）。
 #                        版本不符 = 判据不可比 ⇒ 直接失败；确要放行用 PP_FMT_ALLOW_ANY_VERSION=1。
+#   完整性（R-036，deep-review-0.3.2）: 仓库钉版二进制在**执行前**做 sha512 校验 ——
+#                        期望哈希钉在 tools/versions.env（CLANG_FORMAT_SHA512_WIN64 / _LINUX，
+#                        外部信任锚；同目录的 *.sha512 侧车与二进制可被一并篡改，不作判据）。
+#                        不符即失败。CLANG_FORMAT 显式指向外部文件时跳过哈希（用户显式指定）。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-EXPECTED_VERSION="${PP_FMT_VERSION:-23.1.1}"
 STYLE_FILE="$ROOT/.clang-format"
+
+# ── 单源解析 tools/versions.env（R-128/R-036/R-131：缺键/空值即失败，报错点落在真因） ──
+versions_get() {  # $1 = key
+    local v
+    v="$(sed -n "s/^$1=//p" "$ROOT/tools/versions.env" | tail -1 | tr -d '\r')"
+    if [ -z "$v" ]; then
+        echo "ci-format: tools/versions.env 缺键 $1（或值为空）" >&2
+        exit 2
+    fi
+    printf '%s' "$v"
+}
+EXPECTED_VERSION="$(versions_get CLANG_FORMAT_VERSION)"
+if [ -n "${PP_FMT_VERSION:-}" ] && [ "$PP_FMT_VERSION" != "$EXPECTED_VERSION" ]; then
+    echo "ci-format: PP_FMT_VERSION=$PP_FMT_VERSION 与单源 tools/versions.env 的" >&2
+    echo "ci-format: CLANG_FORMAT_VERSION=$EXPECTED_VERSION 不一致（两处口径必须同源）" >&2
+    exit 2
+fi
 
 mode=check
 case "${1:-}" in
@@ -57,6 +78,29 @@ elif command -v clang-format >/dev/null 2>&1; then
 else
     echo "ci-format: 找不到 clang-format（CLANG_FORMAT=<path>，或补 tools/bin/clang-format-{win64.exe,linux-x86_64}）" >&2
     exit 2
+fi
+
+# ── R-036：执行前 sha512 完整性校验（期望哈希 = versions.env 外部信任锚） ──
+case "$(basename "$CF")" in
+    clang-format-win64.exe)      want="$(versions_get CLANG_FORMAT_SHA512_WIN64)"; pinned_use=1 ;;
+    clang-format-linux-x86_64)   want="$(versions_get CLANG_FORMAT_SHA512_LINUX)"; pinned_use=1 ;;
+    *)                           want=""; pinned_use=0 ;;
+esac
+if [ "$pinned_use" = 1 ]; then
+    if command -v sha512sum >/dev/null 2>&1; then
+        got="$(sha512sum "$CF" | awk '{print $1}')"
+    else
+        got="$(python3 -c "import hashlib,sys;print(hashlib.sha512(open(sys.argv[1],'rb').read()).hexdigest())" "$CF")"
+    fi
+    if [ "$got" != "$want" ]; then
+        echo "ci-format: 钉版二进制 sha512 不符（R-036 信任锚）: $CF" >&2
+        echo "ci-format:   期望 $want" >&2
+        echo "ci-format:   实际 $got" >&2
+        echo "ci-format: 二进制被替换/损坏 ⇒ 判据不可信，拒绝执行。" >&2
+        exit 2
+    fi
+else
+    echo "ci-format: 注意: CLANG_FORMAT 指向仓库外二进制，sha512 校验跳过（$CF）" >&2
 fi
 
 version="$("$CF" --version | head -1)"

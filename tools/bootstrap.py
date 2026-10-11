@@ -28,6 +28,9 @@ import shutil
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from versions_env import VersionsError, load as load_versions  # noqa: E402  (tools/ 内部模块)
+
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
@@ -43,17 +46,8 @@ else:
 
 
 def read_versions():
-    """解析 tools/versions.env（KEY=VALUE，'#' 起头为注释）→ dict。"""
-    values = {}
-    with open(os.path.join(ROOT, 'tools', 'versions.env'), encoding='utf-8') as fp:
-        for raw in fp:
-            line = raw.strip()
-            if not line or line.startswith('#'):
-                continue
-            key, sep, value = line.partition('=')
-            if sep:
-                values[key.strip()] = value.strip().strip('"').strip("'")
-    return values
+    """解析 tools/versions.env → dict（R-131：统一走 tools/versions_env.py，失败即抛）。"""
+    return load_versions()
 
 
 def sh(cmd, env=None, quiet_stderr=False, check=True):
@@ -68,9 +62,24 @@ def sh(cmd, env=None, quiet_stderr=False, check=True):
 
 
 def main():
-    versions = read_versions()
-    qt_version = versions.get('QT_VERSION', '')
-    vcpkg_tag = versions.get('VCPKG_TAG', '')
+    try:
+        versions = read_versions()
+    except VersionsError as exc:
+        sys.stderr.write('bootstrap: {}\n'.format(exc))
+        return 2
+    # R-131：单源键缺任一即失败（旧实现拿空串继续跑，报错点远离真因）。
+    for key in ('QT_VERSION', 'VCPKG_TAG', 'AQTINSTALL_VERSION', 'CMAKE_VERSION', 'NINJA_VERSION'):
+        if key not in versions:
+            sys.stderr.write('bootstrap: tools/versions.env 缺键 {}\n'.format(key))
+            return 2
+    qt_version = versions['QT_VERSION']
+    vcpkg_tag = versions['VCPKG_TAG']
+    # R-039（deep-review-0.3.2）：构建期 Python 工具链钉版 —— 版本一律来自 versions.env，
+    # 不再裸装（对照 main-full 的 clang-tidy== 钉版纪律）。钉的值 = 仓库 .toolchain/venv
+    # 实测在用版本（见 versions.env 注释），装出来的工具链与现状字节级同版。
+    aqt_pin = 'aqtinstall=={}'.format(versions['AQTINSTALL_VERSION'])
+    cmake_pin = 'cmake=={}'.format(versions['CMAKE_VERSION'])
+    ninja_pin = 'ninja=={}'.format(versions['NINJA_VERSION'])
 
     toolchain = os.path.join(ROOT, '.toolchain')
     binary_cache = os.path.join(ROOT, '.cache', 'vcpkg-binary')
@@ -86,10 +95,10 @@ def main():
     aqt = os.path.join(venv_bin, 'aqt' + venv_exe)
 
     if sh([PYTHON, '-m', 'venv', venv], quiet_stderr=True, check=False) == 0:
-        sh([pip, '--no-cache-dir', 'install', 'aqtinstall'])
+        sh([pip, '--no-cache-dir', 'install', aqt_pin])
         if WINDOWS:
             # M3-W3 设计增量: VS 的 cmake/ninja 不在 PATH，装进同一 venv 让仓库内工具链自足。
-            sh([pip, '--no-cache-dir', 'install', 'cmake', 'ninja'])
+            sh([pip, '--no-cache-dir', 'install', cmake_pin, ninja_pin])
         aqt_cmd = [aqt]
         aqt_env = None
     else:
@@ -98,7 +107,7 @@ def main():
         pip3 = None if WINDOWS else shutil.which('pip3')
         fallback = [pip3] if pip3 else [PYTHON, '-m', 'pip']
         sh(fallback + ['--no-cache-dir', 'install',
-                       '--target', os.path.join(toolchain, 'pylibs'), 'aqtinstall'])
+                       '--target', os.path.join(toolchain, 'pylibs'), aqt_pin])
         aqt_cmd = [PYTHON, '-m', 'aqt']
         aqt_env = dict(os.environ, PYTHONPATH=os.path.join(toolchain, 'pylibs'))
 

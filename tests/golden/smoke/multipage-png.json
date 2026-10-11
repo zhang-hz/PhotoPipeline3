@@ -15,6 +15,9 @@
     ],
     "warnings_contain": [
       "MultipageTruncated"
+    ],
+    "warnings_exact": [
+      "MultipageTruncated"
     ]
   }
 }

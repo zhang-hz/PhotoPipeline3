@@ -12,7 +12,8 @@
   python tools/ci-tidy.py [BUILD_DIR] --list       # 只打印将检查的 TU 清单（不跑 clang-tidy）
 
 选项:
-  --checks <CSV>      检查集（默认 -*,bugprone-*,performance-*,portability-*；设计 §12.2 冻结口径）
+  --checks <CSV>      检查集（**默认 = 根 .clang-tidy 的 Checks 行**，R-127 单源；显式给值
+                      只用于口径试验 —— 改检查集会改 fingerprint，走播种/--update）
   --baseline <PATH>   基线文件（默认 tools/baseline/clang-tidy.tsv，入库）
   --candidate <PATH>  未播种 fingerprint 时的候选基线（默认 <baseline>.candidate.tsv）
   --clang-tidy <PATH> clang-tidy 可执行文件（优先级最高）；亦可用 env CLANG_TIDY
@@ -45,7 +46,8 @@ exit codes:
   统计口径:
     * 只统计**指向本仓库源码**（src/**、tests/**、tools/** 下的 .cpp/.h/.hpp…）的 `warning:` 诊断行；
       vcpkg/Qt/系统头的告警由 .clang-tidy 的 HeaderFilterRegex('src/.*') 拦掉，不进计数。
-    * 每条诊断按**它自己指向的文件**归属（头文件告警归头文件，不重复计入每个包含它的 TU）。
+    * 每条诊断按**它自己指向的文件**归属（头文件告警归头文件，不重复计入每个包含它的 TU；
+      M7-WP3 / R-096：去重键 = (file,line,col,check)，跨 TU 重复出现的同一条头文件告警只计 1 次）。
     * `per-file` 计数 = 归到该文件的告警条数；`total` = 各文件之和。
 
   棘轮判据（fingerprint 命中基线记录时）:
@@ -82,8 +84,27 @@ sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_BUILD = os.path.join(ROOT, 'build', 'release-dev')
 DEFAULT_BASELINE = os.path.join(ROOT, 'tools', 'baseline', 'clang-tidy.tsv')
+# R-127（deep-review-0.3.2）：检查集单源 = 根 .clang-tidy 的 Checks 行（read_clang_tidy_checks）。
+# 旧 DEFAULT_CHECKS 字面量仅作 .clang-tidy 缺失时的兜底（此时直接判环境错误，见 main）。
 DEFAULT_CHECKS = '-*,bugprone-*,performance-*,portability-*'
 SCHEMA = 1
+
+
+def read_clang_tidy_checks():
+    """读根 .clang-tidy 的 Checks: 行（R-127 单源）；缺失/解析不出 ⇒ 返回 ''。"""
+    path = os.path.join(ROOT, '.clang-tidy')
+    try:
+        with open(path, encoding='utf-8') as fp:
+            for raw in fp:
+                line = raw.strip()
+                if not line or line.startswith('#'):
+                    continue
+                if line.startswith('Checks:'):
+                    value = line[len('Checks:'):].strip().strip('"').strip("'")
+                    return value
+    except OSError:
+        return ''
+    return ''
 
 # 参与静态分析的源文件范围（与设计 §12.2「全源」口径一致；生成物/第三方一律在外）。
 SCOPE_RE = re.compile(r'^(src|tests|tools)/')
@@ -213,16 +234,20 @@ def select_tus(db):
 
 
 def run_one(exe, build_dir, checks, rel, timeout, env):
-    """跑单个 TU；返回 (rel, counts_by_file, errors, seconds)。"""
+    """跑单个 TU；返回 (rel, diag_keys, errors, seconds)。
+
+    diag_keys = {(file,line,col,check), …}（R-096：头文件告警跨 TU 重复计数的去重键 ——
+    一条诊断只认它**自己指向**的 (file,line,col,check) 四元组一次；跨 TU 汇总在 main 做）。
+    """
     cmd = [exe, '-p', build_dir, '--checks=' + checks, '--quiet', os.path.join(ROOT, rel)]
     t0 = time.time()
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env,
                               cwd=ROOT, errors='replace')
     except subprocess.TimeoutExpired:
-        return rel, {}, ['超时 {}s（--timeout 可调）'.format(timeout)], time.time() - t0
+        return rel, set(), ['超时 {}s（--timeout 可调）'.format(timeout)], time.time() - t0
     text = (proc.stdout or '') + (proc.stderr or '')
-    counts = collections.Counter()
+    diag_keys = set()
     errors = []
     for line in text.splitlines():
         m = DIAG_RE.match(line.strip())
@@ -243,11 +268,12 @@ def run_one(exe, build_dir, checks, rel, timeout, env):
             continue
         if not drel or drel.startswith('..') or not SCOPE_RE.match(drel):
             continue
-        counts[drel] += 1
+        cm = CHECK_RE.search(m.group('msg'))
+        diag_keys.add((drel, m.group('line'), m.group('col'), cm.group('check') if cm else ''))
     if proc.returncode != 0 and not errors:
         tail = [ln for ln in text.splitlines() if 'Error while processing' in ln or 'error:' in ln]
         errors.append('clang-tidy 退出码 {}（{}）'.format(proc.returncode, tail[0].strip() if tail else '无明细'))
-    return rel, counts, errors, time.time() - t0
+    return rel, diag_keys, errors, time.time() - t0
 
 
 def warn_missing_include(errors):
@@ -310,7 +336,7 @@ def write_baseline(path, records, files, header_extra=''):
 def main(argv):
     ap = argparse.ArgumentParser(add_help=True, description='clang-tidy 静态分析棘轮（M4-W4-T16）')
     ap.add_argument('build_dir', nargs='?', default=DEFAULT_BUILD)
-    ap.add_argument('--checks', default=DEFAULT_CHECKS)
+    ap.add_argument('--checks', default='')
     ap.add_argument('--baseline', default=DEFAULT_BASELINE)
     ap.add_argument('--candidate', default='')
     ap.add_argument('--clang-tidy', default='')
@@ -320,6 +346,11 @@ def main(argv):
     ap.add_argument('--list', action='store_true')
     ap.add_argument('--require-baseline', action='store_true')
     args = ap.parse_args(argv)
+
+    # R-127：检查集单源 = 根 .clang-tidy（显式 --checks 仅口径试验用）。
+    checks = args.checks or read_clang_tidy_checks()
+    if not checks:
+        die(2, '检查集不可得：根 .clang-tidy 缺失/无 Checks 行，且未显式给 --checks')
 
     build_dir = args.build_dir if os.path.isabs(args.build_dir) else os.path.join(ROOT, args.build_dir)
     build_dir = os.path.normpath(build_dir)
@@ -347,29 +378,30 @@ def main(argv):
                '  → 安装钉版: python -m pip install clang-tidy=={}'.format(ver, pinned, pinned))
     platform = platform_id()
     compiler = compiler_version(build_dir, db)
-    fp_key = '{}|clang-tidy {}|{}'.format(platform, ver, args.checks)
+    fp_key = '{}|clang-tidy {}|{}'.format(platform, ver, checks)
     jobs = args.jobs or (os.cpu_count() or 4)
 
     print('ci-tidy: tool=clang-tidy {} @ {}'.format(ver, exe))
-    print('ci-tidy: build_dir={}  TU={}  jobs={}  checks={}'.format(build_dir, len(tus), jobs, args.checks))
+    print('ci-tidy: build_dir={}  TU={}  jobs={}  checks={}'.format(build_dir, len(tus), jobs, checks))
     print('ci-tidy: platform={} compiler={} fingerprint={}'.format(platform, compiler, fp_key))
 
     t0 = time.time()
-    counts_total = collections.Counter()
+    all_keys = set()            # R-096：跨 TU 去重键 (file,line,col,check)
     failed = []
     env = dict(os.environ)
     with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
-        futures = [pool.submit(run_one, exe, build_dir, args.checks, rel, args.timeout, env) for rel in tus]
+        futures = [pool.submit(run_one, exe, build_dir, checks, rel, args.timeout, env) for rel in tus]
         done = 0
         for fut in concurrent.futures.as_completed(futures):
-            rel, counts, errors, secs = fut.result()
+            rel, diag_keys, errors, secs = fut.result()
             done += 1
             if errors:
                 failed.append((rel, errors))
-            counts_total.update(counts)
+            all_keys |= diag_keys
             if done % 10 == 0 or done == len(tus):
                 print('ci-tidy:   {}/{} TU 完成（累计告警 {}，{:.0f}s）'.format(
-                    done, len(tus), sum(counts_total.values()), time.time() - t0))
+                    done, len(tus), len(all_keys), time.time() - t0))
+    counts_total = collections.Counter(key[0] for key in all_keys)
     elapsed = time.time() - t0
 
     if failed:
@@ -395,7 +427,7 @@ def main(argv):
         files[fp_key] = dict(counts_total)
         records[fp_key] = {
             'platform': platform, 'compiler': compiler, 'tool': 'clang-tidy ' + ver,
-            'checks': args.checks, 'total': total, 'files': n_files,
+            'checks': checks, 'total': total, 'files': n_files,
             'generated_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
         }
         write_baseline(args.baseline, records, files)
@@ -410,7 +442,7 @@ def main(argv):
         new_files[fp_key] = dict(counts_total)
         new_records[fp_key] = {
             'platform': platform, 'compiler': compiler, 'tool': 'clang-tidy ' + ver,
-            'checks': args.checks, 'total': total, 'files': n_files,
+            'checks': checks, 'total': total, 'files': n_files,
             'generated_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
         }
         write_baseline(candidate, new_records, new_files)
@@ -453,7 +485,7 @@ def main(argv):
         new_files[fp_key] = dict(counts_total)
         new_records[fp_key] = {
             'platform': platform, 'compiler': compiler, 'tool': 'clang-tidy ' + ver,
-            'checks': args.checks, 'total': total, 'files': n_files,
+            'checks': checks, 'total': total, 'files': n_files,
             'generated_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
         }
         write_baseline(candidate, new_records, new_files)

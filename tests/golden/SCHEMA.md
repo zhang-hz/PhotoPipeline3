@@ -20,6 +20,12 @@
   - `value` 用**下方规范化文本**（M2-T8：#26 已销账）比较，与 Exiv2 的 `print()` 无关
 - assert.warnings_contain: [string]（WarningKind 名，输出警告必须包含所列项）
   - 来源：`photopipeline --dev` 写出的 `<输出>.pp.json` sidecar（解码后的图像无法携带警告）
+- assert.warnings_exact: [string]（M7-WP3 / R-040 **加性**扩展）：sidecar 的 WarningKind
+  **全集**必须与所列**多集合**逐项相等（重复次数计入；顺序无关）。键存在即生效，
+  `"warnings_exact": []` = 全集必须为空（与 `warnings_empty: true` 同义）。
+- assert.warnings_empty: bool（M7-WP3 / R-040 加性扩展）：true = 该产物必须零告警。
+- 三模式并存时各自独立判；**warnings_contain 语义逐字不变**（只判包含）。给出任一模式
+  即要求 sidecar 存在（缺失 = FAIL）。三者都缺省 = 不做告警断言（v1 既有行为）。
 
 ## outputs[]（M4-T5 追加，v1 字段全部保留兼容读取）
 
@@ -32,8 +38,8 @@
 - outputs[i].input: string（可选）覆盖顶层 input —— 一个用例的多个产物对应不同源时使用
   （如 `multiformat-conflict`：产物分别来自 `base/rgb8.png` 与 `base/rgb8.tif`）
 - outputs[i].assert: object（可选；缺省回落到顶层 `assert`）
-  - 结构与顶层 `assert` 相同（pixel / metadata / warnings_contain），**逐产物独立断言**；
-    warnings 从该产物自己的 `<rel>.pp.json` sidecar 读取。
+  - 结构与顶层 `assert` 相同（pixel / metadata / warnings_contain / warnings_exact /
+    warnings_empty），**逐产物独立断言**；warnings 从该产物自己的 `<rel>.pp.json` sidecar 读取。
 
 产物顺序 = RunConfig.outputs 的**配置顺序**（编码顺序是内部实现细节，§4.3）。
 

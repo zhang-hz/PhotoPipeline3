@@ -14,7 +14,7 @@ name: pr-fast
 #     | fmt                | 1 min  | clang-format --dry-run -Werror 全源 0 diff        |
 #     | build-unit-windows | 10 min | windows-2025：configure/build/ctest --preset release |
 #     | build-unit-linux   | 8 min  | ubuntu-24.04：同上（apt 依赖 + ccache）             |
-#     | golden-subset      | 4 min  | 金样子集 7/20 对（release-dev：photopipeline+pp_verify）|
+#     | golden-subset      | 5 min  | 金样子集 7/20 对 + ui-smoke（release-dev 一树两用）|
 #   整轮 wall ≈ fmt 1 + max(win 10, linux 8) + golden 4 ≈ 15 min（设计目标 ≤10 / 硬 ≤20；
 #   超预算处置 = 拆 job / 砍步骤，**禁止放宽时限** —— 任务书 §5-5）。
 #   ★ 实跑 wall-clock 以**首个 PR 的 CI** 为准：GitHub 侧 runner 速度/apt/网络本地无法实测
@@ -24,7 +24,9 @@ name: pr-fast
 #     * 同源: 缓存键方案（vcpkg-/vcpkgwin-/qt-/ccache- 前缀分离 + Qt 单写者）、准备块步骤形态、
 #       Windows 一律经 tools/env.py run -- 注入（vcvars）、Qt bin → GITHUB_PATH（T11b 教训）、
 #       测试超时双保险（CMakePresets execution.timeout=120s + CMakeLists 的 TIMEOUT 120 属性）。
-#     * 本道只跑**门禁子集**: 全量 ctest + 金样子集；不打包、不跑 ui-smoke、不跑 sanitizer、
+#     * 本道只跑**门禁子集**: 全量 ctest + 金样子集 + ui-smoke（M7-WP3 / R-043：PR 全绿要含
+#     "UI 可用"——冻结末行 + 探针行齐备；截图仅存档不做像素比对，见 tests/ui_smoke.py 头注释）；
+#     不打包、不跑 sanitizer、
 #       不跑 clang-tidy 棘轮（那些属 main-full / nightly / release —— M4-W4-T16 已全部落地）。
 #     * 缓存写入者 = main-full.yml（linux job 写 ccache 与 Qt-gcc_64；windows job 写 Qt-win64；
 #       各 job 写自己的 vcpkg 滚动键）与 warm-cache.yml（播种）。本道**只 restore 不 save**
@@ -74,7 +76,7 @@ env:
   QT_VERSION: 6.11.2
   VCPKG_TAG: 2026.07.29
   # 格式门禁版本（与仓库钉版 tools/bin/clang-format-* 同版本；tools/ci-format.sh 会复核）。
-  PP_FMT_VERSION: 23.1.1
+  CLANG_FORMAT_VERSION: 23.1.1
   # vcpkg 二进制缓存"已播种"判据：还原到的 archive 数 ≥ 此值才算暖（本地全量 ≈41 port）。
   # 0 = 缓存整体缺失（典型：7 天过期后首跑）→ 早失败，别等 configure 里的冷构建。
   PP_VCPKG_WARM_MIN: "20"
@@ -99,7 +101,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20         # 硬顶（预算 1 min）
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
       - name: 格式门禁（D15：--dry-run -Werror 全源 0 diff）
         # 全源 = git 跟踪的 src/** tests/** tools/** 下 C/C++ 源，风格源 = 根 .clang-format。
@@ -119,7 +121,7 @@ jobs:
             echo "| 项目 | 值 |"
             echo "| --- | --- |"
             echo "| 判据 | \`clang-format --dry-run -Werror\` 全源 0 diff（D15）|"
-            echo "| 工具 | clang-format ${PP_FMT_VERSION}（tools/bin 钉版，版本不符即红）|"
+            echo "| 工具 | clang-format ${CLANG_FORMAT_VERSION}（tools/bin 钉版，版本不符即红）|"
             echo "| run | ${GITHUB_RUN_ID} #${GITHUB_RUN_ATTEMPT} |"
             echo ""
             echo "| 阶段 | 秒 |"
@@ -142,26 +144,24 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 20         # 硬顶（预算 10 min）
     needs: fmt                  # 拓扑: fmt 门禁在前（设计 §12.1）；格式红 ⇒ 不浪费 10 min runner
-    env:
-      QT_DIR: ${{ github.workspace }}/Qt/6.11.2/msvc2022_64
     steps:
-      - uses: actions/checkout@v4
-
-      - name: 依赖单源一致性断言（tools/versions.env）
-        # workflow env 里的 QT_VERSION / VCPKG_TAG 必须与单源一致：不一致 = 本道跑在
-        # 过时依赖上（且缓存键会静默偏离）⇒ 直接红。
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - name: Qt 路径（QT_VERSION 单源 = tools/versions.env；R-063 去版本字面量）
         run: |
-          $lines = Get-Content tools/versions.env
-          foreach ($kv in @("QT_VERSION=$env:QT_VERSION", "VCPKG_TAG=$env:VCPKG_TAG")) {
-            if ($lines -notcontains $kv) { Write-Error "单源不一致: tools/versions.env 中找不到行 '$kv'"; exit 1 }
-          }
-          Write-Output "versions.env OK: QT_VERSION=$env:QT_VERSION VCPKG_TAG=$env:VCPKG_TAG"
+          "QT_DIR=$env:GITHUB_WORKSPACE\Qt\$env:QT_VERSION\msvc2022_64" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: 依赖单源一致性断言（tools/ci-versions-check.py；R-062/R-091/R-122）
+        # workflow env 里的 QT_VERSION / VCPKG_TAG / CLANG_FORMAT_VERSION 必须与单源一致：
+        # 不一致 = 本道跑在过时依赖上（且缓存键会静默偏离）⇒ 直接红。判据与 Linux 侧同一脚本。
+        run: |
+          python tools/ci-versions-check.py --expect "QT_VERSION=$env:QT_VERSION" --expect "VCPKG_TAG=$env:VCPKG_TAG" --expect "CLANG_FORMAT_VERSION=$env:CLANG_FORMAT_VERSION"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Qt ${{ env.QT_VERSION }} 缓存（restore，单写者=main-full/warm-cache）
         id: qt-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
-          path: ${{ github.workspace }}/Qt/6.11.2/msvc2022_64
+          path: ${{ github.workspace }}/Qt/${{ env.QT_VERSION }}/msvc2022_64
           # 精确 key（不含 run_id）：Qt 版本/平台/架构变才失效；前缀含 win64_msvc2022_64
           # ⇒ 与 Linux 的 qt-<ver>-gcc_64- 严格分离（防跨平台串味）。key 方案与 main-full.yml 同源。
           key: qt-${{ env.QT_VERSION }}-win64_msvc2022_64-${{ runner.os }}-${{ runner.arch }}
@@ -210,7 +210,7 @@ jobs:
         #   ③ 宽前缀 vcpkgwin- 让"改了 manifest/overlay/triplet ⇒ hash 变"时仍能复用旧缓存
         #   （二进制缓存按 ABI 内容寻址，ABI 已变的条目自然不命中）。
         #   0.3.0 追加：`${{ hashFiles('triplets/**') }}` —— AVX2 flags 变更 ⇒ 缓存键自动失效（§12.4）。
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: ${{ github.workspace }}/.cache/vcpkg-binary
           key: vcpkgwin-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -304,26 +304,22 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20         # 硬顶（预算 8 min）
     needs: fmt                  # 拓扑: fmt 门禁在前（设计 §12.1）
-    env:
-      QT_DIR: ${{ github.workspace }}/Qt/6.11.2/gcc_64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - name: Qt 路径（QT_VERSION 单源 = tools/versions.env；R-063 去版本字面量）
+        run: echo "QT_DIR=$GITHUB_WORKSPACE/Qt/$QT_VERSION/gcc_64" >> "$GITHUB_ENV"
 
-      - name: 依赖单源一致性断言（tools/versions.env）
+      - name: 依赖单源一致性断言（tools/ci-versions-check.py；R-062/R-091/R-122）
         run: |
-          for kv in "QT_VERSION=$QT_VERSION" "VCPKG_TAG=$VCPKG_TAG"; do
-            grep -qxF "$kv" tools/versions.env || { echo "::error::单源不一致: tools/versions.env 中找不到 '$kv'"; exit 1; }
-          done
-          echo "versions.env OK: QT_VERSION=$QT_VERSION VCPKG_TAG=$VCPKG_TAG"
-
+          python3 tools/ci-versions-check.py --expect "QT_VERSION=$QT_VERSION" --expect "VCPKG_TAG=$VCPKG_TAG" --expect "CLANG_FORMAT_VERSION=$CLANG_FORMAT_VERSION"
       - name: apt 系统依赖（tools/ci-system-deps.txt）
         run: bash tools/ci-install-deps.sh
 
       - name: Qt ${{ env.QT_VERSION }} 缓存（restore，单写者=main-full/warm-cache）
         id: qt-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
-          path: ${{ github.workspace }}/Qt/6.11.2/gcc_64
+          path: ${{ github.workspace }}/Qt/${{ env.QT_VERSION }}/gcc_64
           key: qt-${{ env.QT_VERSION }}-gcc_64-${{ runner.os }}-${{ runner.arch }}
           restore-keys: qt-${{ env.QT_VERSION }}-gcc_64-
 
@@ -350,7 +346,7 @@ jobs:
       - name: vcpkg binary cache（restore）
         id: vcpkg-cache
         # key 语义同 Windows 侧（前缀 vcpkg- 与 vcpkgwin- 严格分离）；0.3.0 追加 triplet 文件哈希。
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: ${{ github.workspace }}/.cache/vcpkg-binary
           key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -371,7 +367,7 @@ jobs:
 
       - name: ccache（restore）
         id: ccache-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: ${{ github.workspace }}/.cache/ccache
           # key 语义同 main-full.yml（滚动 key + 宽前缀）；0.3.0 追加 triplet 哈希
@@ -458,19 +454,19 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20         # 硬顶（预算 4 min）
     needs: [build-unit-windows, build-unit-linux]   # 与设计 §12.1 的 DAG 一致（两侧构建绿才跑金样）
-    env:
-      QT_DIR: ${{ github.workspace }}/Qt/6.11.2/gcc_64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - name: Qt 路径（QT_VERSION 单源 = tools/versions.env；R-063 去版本字面量）
+        run: echo "QT_DIR=$GITHUB_WORKSPACE/Qt/$QT_VERSION/gcc_64" >> "$GITHUB_ENV"
 
       - name: apt 系统依赖（tools/ci-system-deps.txt）
         run: bash tools/ci-install-deps.sh
 
       - name: Qt ${{ env.QT_VERSION }} 缓存（restore，单写者=main-full/warm-cache）
         id: qt-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
-          path: ${{ github.workspace }}/Qt/6.11.2/gcc_64
+          path: ${{ github.workspace }}/Qt/${{ env.QT_VERSION }}/gcc_64
           key: qt-${{ env.QT_VERSION }}-gcc_64-${{ runner.os }}-${{ runner.arch }}
           restore-keys: qt-${{ env.QT_VERSION }}-gcc_64-
 
@@ -489,6 +485,9 @@ jobs:
         run: |
           git clone https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
           git -C "$VCPKG_ROOT" checkout "$VCPKG_TAG"
+          want_sha="$(sed -n 's/^VCPKG_SHA=//p' tools/versions.env | tr -d '\r')"
+          got_sha="$(git -C "$VCPKG_ROOT" rev-parse HEAD)"
+          [ "$got_sha" = "$want_sha" ] || { echo "::error::vcpkg HEAD $got_sha != VCPKG_SHA $want_sha（R-091）"; exit 1; }
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
 
       - name: 缓存目录预建
@@ -496,7 +495,7 @@ jobs:
 
       - name: vcpkg binary cache（restore）
         id: vcpkg-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: ${{ github.workspace }}/.cache/vcpkg-binary
           key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -516,7 +515,7 @@ jobs:
 
       - name: ccache（restore）
         id: ccache-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: ${{ github.workspace }}/.cache/ccache
           key: ccache-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/**', 'CMakePresets.json') }}-${{ hashFiles('cmake/**', 'triplets/**') }}-${{ github.run_id }}
@@ -555,6 +554,15 @@ jobs:
             echo "::error::金样子集口径不符（期望 total=$want pass=$want fail=0）: $line"
             exit 1
           }
+
+      - name: ui-smoke（R-043：PR 全绿须含 UI 可用；冻结末行 + 探针行齐备）
+        # 与 ctest 的 ui_smoke 条目同命令（tests/ui_smoke.py），offscreen 平台；截图仅存档
+        # .cache/ui-smoke-ci，判据 = C++ 硬判 + `UI-SMOKE OK shots=12 pages=3` 冻结行。
+        run: |
+          set -o pipefail
+          T0=$(date +%s)
+          QT_QPA_PLATFORM=offscreen python3 tests/ui_smoke.py build/release-dev 2>&1 | tee "$RUNNER_TEMP/ui-smoke.log"
+          echo -e "ui-smoke（offscreen）	$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
 
       - name: 汇总 → $GITHUB_STEP_SUMMARY
         if: always()

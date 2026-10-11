@@ -390,6 +390,28 @@ struct PlannedTarget {
     std::unique_ptr<IEncoder> enc;
 };
 
+// R-001（P0，数据安全线）：输出路径命中源文件 → 该文件整体失败（源文件永远只读）。
+// 判据：两者都在磁盘上 → fs::equivalent（符号链接/大小写/8.3 短名一并识破）；
+// 任一不存在（输出尚未落盘是常态）→ 退化为词法绝对路径比较。
+bool same_output_as_source(const std::filesystem::path &out, const std::filesystem::path &src) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const bool out_exists = fs::exists(out, ec);
+    const bool src_exists = fs::exists(src, ec);
+    if (out_exists && src_exists) {
+        std::error_code eq_ec;
+        if (fs::equivalent(out, src, eq_ec) && !eq_ec) {
+            return true;
+        }
+    }
+    const auto lex_abs = [](const fs::path &p) {
+        std::error_code aec;
+        fs::path a = fs::absolute(p, aec);
+        return (aec ? p : a).lexically_normal();
+    };
+    return lex_abs(out) == lex_abs(src);
+}
+
 // 目标构建：格式/位深校验、编码器构造、路径模板渲染、逐输出冲突解析。
 // 失败 → false 且 err = 该文件的首条错误消息（与 0.2 的消息文本一致）。
 // 冲突解析（§4.4，复核项 2 修订）：本文件内**逐个 target 顺序登记**已解析出的 out_path——
@@ -403,7 +425,7 @@ bool plan_targets(const FileEntry &fe, const RunConfig &cfg,
     namespace fs = std::filesystem;
     out.clear();
     out.reserve(cfg.outputs.size());
-    std::vector<fs::path> taken = reserved; // 本文件内逐输出累积的 reserved 视图
+    std::vector<fs::path> taken; // 本文件内逐输出累积的硬保留（尚未落盘，R-005）
     for (std::size_t i = 0; i < cfg.outputs.size(); ++i) {
         const OutputFormatSpec &spec = cfg.outputs[i];
         OutputResult &row = rows[i];
@@ -420,35 +442,44 @@ bool plan_targets(const FileEntry &fe, const RunConfig &cfg,
                   " is not supported by format '" + fmt->id + "'";
             return false;
         }
-        std::unique_ptr<IEncoder> enc;
-        if (cfg.metadata_only) {
-            if (!format_supports_metadata_only(fmt->id)) {
-                err = "format '" + fmt->id +
-                      "' does not support metadata-only rewrite (zero re-encode)";
-                return false;
-            }
-        } else {
-            enc = make_encoder(spec.format_id, spec.backend_id);
-            if (!enc) {
-                err = "no encoder registered for format '" + spec.format_id + "' (backend '" +
-                      spec.backend_id + "')";
-                return false;
-            }
+        std::unique_ptr<IEncoder> enc = make_encoder(spec.format_id, spec.backend_id);
+        if (!enc) {
+            err = "no encoder registered for format '" + spec.format_id + "' (backend '" +
+                  spec.backend_id + "')";
+            return false;
         }
 
         PathCtx ctx;
         ctx.format_dir = fmt->id;
         ctx.rel_dir = relative_dir(fe.src, fe.base_dir);
         ctx.stem = fe.src.stem().string();
-        // 仅元数据模式：同一容器 → 保持源扩展名（0.2 的 mirror_path(..., "") 口径）
-        ctx.ext = cfg.metadata_only ? fe.src.extension().string() : fmt->ext;
+        // 多格式输出恒为重编码路径：ctx.ext = 目标格式扩展名（R-169：metadata_only 分支
+        // 为死代码 —— run_one_file 入口处已拒绝 metadata_only 配置，此处删除）。
+        ctx.ext = fmt->ext;
         const fs::path desired = render_output_path(cfg.output_template, ctx, cfg.out_root);
         if (desired.empty()) {
             err = "output path: template '" + cfg.output_template + "' produced no file name";
             return false;
         }
+        // R-001（P0）：渲染出的输出路径命中源文件 → 整文件失败（防"输出根=输入目录 +
+        // $dir/$file 模板 + 覆盖策略"把原图替换成重编码结果）。
+        if (same_output_as_source(desired, fe.src)) {
+            err = "output path collides with the source file (source is read-only): " +
+                  desired.string();
+            return false;
+        }
+        // R-007（P1）：渲染后统一做合法名/长度预检（保留名/非法字符/尾随点空格/长度），
+        // 不再让非法名延后到写盘时逐文件失败到底。
+        std::string name_err;
+        if (!validate_output_filename(desired, &name_err)) {
+            err = "output path: " + name_err;
+            return false;
+        }
         std::string conflict_err;
-        const OutputPlan plan = resolve_conflict(desired, cfg.conflict, taken, conflict_err);
+        // R-005：硬保留 = 本文件更早 target 的未落盘路径；批内 reserved 为软保留（幽灵
+        // 跳过防线：Skip 命中软保留而磁盘缺失时回退正常写入）。
+        const OutputPlan plan =
+            resolve_conflict(desired, cfg.conflict, taken, reserved, conflict_err);
         if (!conflict_err.empty()) {
             err = "output path: " + conflict_err;
             return false;
@@ -687,8 +718,11 @@ FileOutcome run_one_file(const FileEntry &fe, const RunConfig &cfg, EventFn ev) 
         const bool all_skipped = std::all_of(targets.begin(), targets.end(),
                                              [](const PlannedTarget &t) { return t.skip; });
         if (all_skipped) {
-            for (OutputResult &row : res.outputs)
-                row.skipped = true; // 逐输出行标记（聚合判定与 sidecar 都要看它）
+            for (std::size_t i = 0; i < res.outputs.size(); ++i) {
+                res.outputs[i].skipped = true; // 逐输出行标记（聚合判定与 sidecar 都要看它）
+                mux->on_output_skipped(i); // R-235：全跳过早退同样发输出级进度事件（§7.2 全段记满）
+            }
+            mux->finish();
             log_info(kStage, kFile, "skipped: output exists",
                      {{"src", fe.src.string()}, {"out", res.outputs.front().out.string()}});
             return finalize(FileOutcome::Verdict::Skipped);
@@ -848,12 +882,32 @@ FileOutcome run_one_file(const FileEntry &fe, const RunConfig &cfg, EventFn ev) 
             // APPBUFFER 包装 / make_like 的 LOCALBUFFER，故 localpixels() 恒非空）。
             OIIO::ImageBuf cbuf = work.buf;
             const void *const work_px = work.px.data();
+            // I3 加性重载：R-032（ICC 通道不匹配降级）/R-035（灰度升维）的告警经 out_warnings
+            // 输出并进逐输出行（opts 用默认 = 现行为；RunConfig 的 I8 字段消费归 WP8/WP10）。
+            std::vector<Warning> color_warnings;
+            std::string color_err;
             ColorOutcome co =
-                ColorManager::instance().transform(cbuf, src_icc, src_is_gray, eff_target);
+                ColorManager::instance().transform(cbuf, src_icc, src_is_gray, eff_target,
+                                                   ColorOptions{}, &color_warnings, &color_err);
             res.t.color_ms = ms_since(t0);
             if (!co.error.empty())
                 return fail("color transform failed: " + co.error);
             push_global(co.warnings);
+            // R-032/R-035 的降级/升维告警并入逐输出行；同 kind 已有条目时不再重复 ——
+            // 灰度→不支持灰度格式时管线已按 §4.8 报过 GrayToRgbEncoded（逐格式条目），
+            // 色彩段的升维告警是同义补充（golden 的 warnings_exact 按 kind 序列断言）。
+            for (const Warning &cw : color_warnings) {
+                for (const PlannedTarget &t : targets) {
+                    if (t.skip)
+                        continue;
+                    std::vector<Warning> &roww = res.outputs[t.cfg_index].warnings;
+                    const bool dup = std::any_of(roww.begin(), roww.end(), [&cw](const Warning &e) {
+                        return e.kind == cw.kind;
+                    });
+                    if (!dup)
+                        roww.push_back(cw);
+                }
+            }
             icc_to_embed = co.icc_to_embed;
             res.color_src = co.src_desc;
             res.color_dst = co.dst_desc;
@@ -933,7 +987,9 @@ FileOutcome run_one_file(const FileEntry &fe, const RunConfig &cfg, EventFn ev) 
                         }
                         break;
                     }
-                    res.t.flatten_ms = ms_since(t0);
+                    // R-289：Timing 聚合口径统一 —— 逐输出**累加**（与 encode_ms/metawrite_ms
+                    // 同口径；flatten 至多发生一次，+= 与 = 在现行为下逐字等价）。
+                    res.t.flatten_ms += ms_since(t0);
                 }
                 row.warnings.push_back(Warning{WarningKind::AlphaFlattened,
                                                "alpha composited onto background " +
@@ -1006,25 +1062,33 @@ FileOutcome run_one_file(const FileEntry &fe, const RunConfig &cfg, EventFn ev) 
             mux->output_stage(pt.cfg_index, Stage::MetaWrite);
             t0 = Clock::now();
             std::string meta_err;
-            // M2-T4 (#6/#8): the writer's explicit failure/degradation channel; plan.warnings
-            // below stays byte-identical to M1 (semantic freeze) — the two are merged with dedup.
+            // M2-T4 (#6/#8): the writer's explicit failure/degradation channel. R-171 起写路径
+            // 告警**只**走本通道（plan.warnings 归 build_plan，写路径不再回写 const plan）。
             std::vector<std::string> writer_warnings;
             if (pt.fmt->meta_path == "exiv2") {
                 meta_err = write_metadata_exiv2(row.out, meta_plan, payloads, &writer_warnings);
             }
-            merge_warnings(row.warnings, meta_plan.warnings); // legacy channel (frozen content)
+            merge_warnings(row.warnings, meta_plan.warnings); // build_plan 通道（frozen content）
             merge_writer_warnings(row.warnings, writer_warnings);
+            row.t.metawrite_ms = ms_since(t0);
+            res.t.metawrite_ms += row.t.metawrite_ms;
             if (!meta_err.empty()) {
-                row.warnings.push_back(Warning{WarningKind::MetadataDropped, meta_err});
-                log_warn(kStage, kFile, "metadata write failed (non-fatal)",
-                         {{"out", row.out.string()}, {"error", meta_err}});
-            } else if (pt.fmt->meta_path == "none") {
+                // R-002（P0）：写回失败 = 该输出真失败（不再吞成 warning + ok=true）。
+                // 写回已是临时文件 + rename（metadata.cpp），失败时磁盘上是编码产物原样
+                // （无截断半成品；编码产物不删除 —— 删除用户数据比保留像素更危险，裁定见
+                // handoff），此处如实记失败行让上层可见。
+                row.error = "metadata write failed: " + meta_err;
+                row.ok = false;
+                log_error(kStage, kFile, row.error,
+                          {{"src", fe.src.string()}, {"out", row.out.string()}});
+                mux->on_output_failed(pt.cfg_index);
+                continue;
+            }
+            if (pt.fmt->meta_path == "none") {
                 // BMP has no metadata container; T5 skips silently, the pipeline reports it (§4.8).
                 row.warnings.push_back(Warning{WarningKind::MetadataDropped,
                                                "bmp output carries no metadata container"});
             }
-            row.t.metawrite_ms = ms_since(t0);
-            res.t.metawrite_ms += row.t.metawrite_ms;
             row.ok = true;
             mux->on_output_metawrite_done(
                 pt.cfg_index); // §7.2 末行：metawrite + mtime + 落盘 = 10%
@@ -1216,8 +1280,19 @@ FileOutcome run_metadata_only(const FileEntry &fe, const RunConfig &cfg, EventFn
         if (desired.empty())
             return fail("output path: template '" + cfg.output_template +
                         "' produced no file name");
+        // R-001（P0）：仅元数据模式同样拒绝 out==src（copy_file 就地覆盖 = 原图被改写）。
+        if (same_output_as_source(desired, fe.src))
+            return fail("output path collides with the source file (source is read-only): " +
+                        desired.string());
+        // R-007：渲染后统一做合法名/长度预检（与 run_one_file 同口径）。
+        std::string name_err;
+        if (!validate_output_filename(desired, &name_err))
+            return fail("output path: " + name_err);
         std::string conflict_err;
-        const OutputPlan out_plan = resolve_conflict(desired, cfg.conflict, reserved, conflict_err);
+        // R-005：批内 reserved 为软保留（Skip 命中软保留而磁盘缺失 → 回退正常写入）。
+        static const std::vector<fs::path> kNoHardReserved;
+        const OutputPlan out_plan =
+            resolve_conflict(desired, cfg.conflict, kNoHardReserved, reserved, conflict_err);
         if (!conflict_err.empty())
             return fail("output path: " + conflict_err);
         row.out = out_plan.out_path;
@@ -1241,8 +1316,10 @@ FileOutcome run_metadata_only(const FileEntry &fe, const RunConfig &cfg, EventFn
 
         SourceMeta srcmeta = read_metadata(fe.src);
         if (!srcmeta.error.empty()) {
-            log_warn(kStage, kFile, "source metadata unavailable; continuing with empty metadata",
-                     {{"src", fe.src.string()}, {"error", srcmeta.error}});
+            // R-004（P1）：仅元数据模式下"读不到源元数据"不得按空元数据继续 —— 那会把
+            // 副本的 EXIF/XMP 清空并报成功。读失败 = 该文件失败（重编码路径不受此限，
+            // §4.8 的"读失败非致命"语义保持不变）。
+            return fail("source metadata unavailable: " + srcmeta.error);
         }
         MetadataPlan meta_plan = build_plan(srcmeta, cfg.rules, fe.exception);
         // No orientation clearing here: the pixels are not rotated in metadata-only mode, so
@@ -1252,12 +1329,21 @@ FileOutcome run_metadata_only(const FileEntry &fe, const RunConfig &cfg, EventFn
         stage(FileState::Writing, Stage::MetaWrite);
         mux->output_stage(0, Stage::MetaWrite);
         const Clock::time_point t0 = Clock::now();
+        // R-030：失败后不留"占名的坏副本"——本次创建的输出（此前不存在）在失败时删除；
+        // 覆盖已存在的目标时不删除（那是上一轮的好文件，删除 = 破坏用户数据）。
+        std::error_code exist_ec;
+        const bool out_existed = fs::exists(row.out, exist_ec);
         const std::string err = rewrite_metadata_only(fe.src, row.out, meta_plan, payloads);
         row.t.metawrite_ms = ms_since(t0);
         res.t.metawrite_ms = row.t.metawrite_ms;
         merge_warnings(row.warnings, meta_plan.warnings);
-        if (!err.empty())
+        if (!err.empty()) {
+            if (!out_existed) {
+                std::error_code rm_ec;
+                fs::remove(row.out, rm_ec);
+            }
             return fail("metadata-only rewrite failed: " + err);
+        }
         mux->on_output_metawrite_done(0); // §7.2 末行：metawrite + mtime + 落盘 = 10%
 
         if (cfg.rules.sync_mtime && !meta_plan.datetime_original.empty()) {

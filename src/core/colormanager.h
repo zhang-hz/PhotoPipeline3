@@ -20,6 +20,17 @@ struct ColorOutcome {
     std::string icc_to_embed;       // 应在输出中嵌入的 ICC 字节（空=不嵌）
 };
 
+// —— M7-WP1 / I3 加性追加（裁定登记 build/m7-wp1/handoff.md）——
+// 色彩变换可选项。默认值 = 现行为逐字等价（intent=0 → RelativeColorimetric + BPC、
+// dither8=false、gamut_mapping=0 = 无色域映射、linear_resample=false）；能力档位的引擎侧
+// 消费归 WP8/WP10（与 pipeline.h RunConfig 的同名字段 I8 对应），本波只落数据面。
+struct ColorOptions {
+    int intent = 0;
+    bool dither8 = false;
+    int gamut_mapping = 0;
+    bool linear_resample = false;
+};
+
 class ColorManager {
 public:
     static ColorManager &instance();
@@ -32,6 +43,13 @@ public:
     // 输出目标 ICC：sRGB 用 lcms2 内建；P3/AdobeRGB 从 assets/icc/ 加载（缺失 → error）
     ColorOutcome transform(OIIO::ImageBuf &buf, const std::string &src_icc, bool src_is_gray,
                            ColorTarget target);
+
+    // —— M7-WP1 / I3 加性重载（尾参形态；旧签名保留并转发 = 默认 opts + 空 warnings）——
+    // R-032/R-035 的降级与告警经 out_warnings 输出（可空 = 丢弃告警通道）；*err 与
+    // ColorOutcome::error 同文（可空）。默认 opts 下变换行为与旧签名逐字等价。
+    ColorOutcome transform(OIIO::ImageBuf &buf, const std::string &src_icc, bool src_is_gray,
+                           ColorTarget target, const ColorOptions &opts,
+                           std::vector<Warning> *out_warnings, std::string *err);
 
     void clear_cache();
     std::size_t cache_size() const; // 测试用：应随 (src,target,channels,bitdepth) 复用

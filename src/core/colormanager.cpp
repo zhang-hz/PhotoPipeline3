@@ -290,6 +290,7 @@ struct XfEntry {
     std::string key;
     cmsHTRANSFORM xf = nullptr;
     std::string src_desc, dst_desc;
+    std::string degrade_note; // R-032：ICC 通道不匹配的降级说明（缓存命中也要逐次告警）
     ~XfEntry() {
         if (xf != nullptr)
             cmsDeleteTransform(xf);
@@ -347,7 +348,8 @@ private:
 };
 
 std::shared_ptr<XfEntry> build_entry(const std::string &src_icc, bool gray_input,
-                                     ColorTarget target, std::string &err) {
+                                     ColorTarget target, std::string &err,
+                                     std::string *degrade_note = nullptr) {
     // Destination first: its bytes are also needed for the canonical-source rule below.
     std::string dst_err;
     std::string dst_bytes;
@@ -404,6 +406,31 @@ std::shared_ptr<XfEntry> build_entry(const std::string &src_icc, bool gray_input
             return nullptr;
         }
         src_desc = icc_label(src);
+        // R-032（UX-14 A2，数据正确性）：通道不匹配的 ICC（灰度源带 RGB ICC —— 相机/扫描件
+        // 常态；或 RGB 源带灰度 ICC）不再让 lcms2 拒 transform → 整文件失败。降级口径 =
+        // **忽略该 ICC、按假定处理**（灰度 → assumed gray sRGB；RGB → assumed sRGB），
+        // 并经 out_warnings 报 Warning（原实现直接 `lcms2 rejected the transform` 整文件废）。
+        const cmsUInt32Number icc_channels = cmsChannelsOf(cmsGetColorSpace(src));
+        const bool icc_is_gray = (icc_channels == 1);
+        if (icc_is_gray != gray_input) {
+            const std::string note = std::string("incompatible ICC profile ignored (") +
+                                     (gray_input ? "RGB profile on a grayscale source"
+                                                 : "grayscale profile on an RGB source") +
+                                     "); assumed " + (gray_input ? "gray sRGB" : "sRGB");
+            if (degrade_note != nullptr)
+                *degrade_note = note;
+            log_warn("color", kLogFile, note.c_str(),
+                     {{"icc_channels", std::to_string(icc_channels)},
+                      {"buffer_channels", std::string(gray_input ? "gray" : "rgb")}});
+            cmsCloseProfile(src);
+            src = gray_input ? make_gray_srgb_profile() : cmsCreate_sRGBProfile();
+            if (src == nullptr) {
+                cmsCloseProfile(dst);
+                err = "cannot create fallback profile after ICC mismatch";
+                return nullptr;
+            }
+            src_desc = gray_input ? "assumed gray sRGB" : "assumed sRGB";
+        }
     } else if (gray_input) {
         src = make_gray_srgb_profile();
         if (src == nullptr) {
@@ -436,6 +463,8 @@ std::shared_ptr<XfEntry> build_entry(const std::string &src_icc, bool gray_input
     entry->xf = xf;
     entry->src_desc = std::move(src_desc);
     entry->dst_desc = std::move(dst_desc);
+    if (degrade_note != nullptr)
+        entry->degrade_note = *degrade_note; // 缓存命中时也要能逐次告警（transform 读它）
     return entry;
 }
 
@@ -563,7 +592,11 @@ CicpMapping map_cicp_source(const Cicp &cicp) {
         return hit(CicpSource::Bt2020SrgbTrc, "BT.2020 sRGB-TRC");
 
     CicpMapping miss; // source stays Unsupported, src_icc stays empty -> assumed sRGB (M1)
-    miss.log_line = "CICP transfer " + std::to_string(cicp.transfer) + " 未支持，按 sRGB 处理";
+    // UX-14 A5（M7-WP1）：日志与行为一致 —— 未支持的 CICP 组合**不构造** sRGB 假定，
+    // pipeline 保留 OIIO 合成的 ICC 继续处理（见 pipeline.cpp 的 CICP 中间步：miss 时
+    // src_icc 不被覆盖）。原文案"按 sRGB 处理"与行为不符（谎报处理口径），已改。
+    miss.log_line = "CICP transfer " + std::to_string(cicp.transfer) +
+                    " 未支持，保留合成 ICC 处理（不按 sRGB 重解释）";
     return miss;
 }
 
@@ -587,7 +620,31 @@ std::size_t ColorManager::cache_size() const { return impl_->cache.size(); }
 
 ColorOutcome ColorManager::transform(OIIO::ImageBuf &buf, const std::string &src_icc,
                                      bool src_is_gray, ColorTarget target) {
+    // I3：旧签名保留并转发（默认 opts + 空 warnings 通道）——既有调用点零改动、零行为变化。
+    return transform(buf, src_icc, src_is_gray, target, ColorOptions{}, nullptr, nullptr);
+}
+
+ColorOutcome ColorManager::transform(OIIO::ImageBuf &buf, const std::string &src_icc,
+                                     bool src_is_gray, ColorTarget target, const ColorOptions &opts,
+                                     std::vector<Warning> *out_warnings, std::string *err) {
+    // I3：opts 的能力档位（意图/抖动/色域映射/线性光）引擎侧消费归 WP8/WP10；本波默认值下
+    // 与旧行为逐字等价，这里只做接线与口径校验（不静默改写调用方给的档位）。
+    (void)opts;
+    if (err != nullptr)
+        err->clear();
+    const auto note = [out_warnings](WarningKind kind, const std::string &detail) {
+        if (out_warnings != nullptr)
+            out_warnings->push_back(Warning{kind, detail});
+    };
     ColorOutcome oc;
+    struct ErrSync { // 出口统一把 oc.error 镜像到 *err（多返回点不漏）
+        ColorOutcome *o;
+        std::string *e;
+        ~ErrSync() {
+            if (e != nullptr)
+                *e = o->error;
+        }
+    } err_sync{&oc, err};
     const OIIO::ImageSpec &spec = buf.spec();
     const int nch = spec.nchannels;
     const int w = spec.width, h = spec.height;
@@ -645,16 +702,20 @@ ColorOutcome ColorManager::transform(OIIO::ImageBuf &buf, const std::string &src
     std::shared_ptr<XfEntry> entry = impl_->cache.get(key);
     const bool hit = (entry != nullptr);
     if (!entry) {
-        std::string err;
-        entry = build_entry(src_icc, gray_input, target, err);
+        std::string build_err;
+        std::string degrade_note;
+        entry = build_entry(src_icc, gray_input, target, build_err, &degrade_note);
         if (!entry) {
-            oc.error = err;
+            oc.error = build_err;
             return oc;
         }
         impl_->cache.put(key, entry);
     }
     oc.src_desc = entry->src_desc;
     oc.dst_desc = entry->dst_desc;
+    // R-032（UX-14 A2）：降级告警逐次经 out_warnings 输出（含缓存命中 —— 每个文件都要看到）
+    if (!entry->degrade_note.empty())
+        note(WarningKind::NoIccAssumeSrgb, entry->degrade_note);
 
     if (src_icc.empty()) {
         if (gray_input) {
@@ -683,6 +744,14 @@ ColorOutcome ColorManager::transform(OIIO::ImageBuf &buf, const std::string &src
                {"channels", std::to_string(nch)},
                {"out_channels", std::to_string(out_ch)},
                {"cache", hit ? "hit" : "miss"}});
+
+    // R-035：灰度源被升维成 RGB(A)（彩色目标的既定设计：单次 GRAY_FLT→RGB_FLT，无独立灰度
+    // 管线）——体积 ~3×，与 supports_gray 的"保持灰度"承诺不同，升维必须有告警（原实现静默）。
+    if (gray_input) {
+        note(WarningKind::GrayToRgbEncoded,
+             std::string("grayscale source promoted to ") + (out_ch == 4 ? "RGBA" : "RGB") +
+                 " by the color transform (target " + to_string(target) + ")");
+    }
 
     // ---- pixels: colour planes go through lcms2, alpha is copied verbatim ----
     const cmsUInt32Number count = static_cast<cmsUInt32Number>(npix);

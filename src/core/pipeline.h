@@ -92,6 +92,15 @@ struct RunConfig {
     std::string output_template = "$format/$dir/$file"; // 路径模板（§4.2）；替代固定结构二选一
     int stagger_ms = 150;                               // 0=立即启动
     int thread_budget = 0;                              // 0 = 逻辑核数
+    // —— M7-WP1 / I8 加性追加（**末尾**；裁定登记 build/m7-wp1/handoff.md）——
+    // 色彩变换可选项（与 core/colormanager.h 的 ColorOptions 同名同义，I3）。
+    // 默认值 = 现行为逐字等价（intent=0 → RelativeColorimetric+BPC、dither8=false、
+    // gamut_mapping=0 → 无色域映射、linear_resample=false）；引擎侧消费归 WP8/WP10，
+    // 本波只落声明与默认值零变化。
+    int color_intent = 0;
+    bool color_dither8 = false;
+    int gamut_mapping = 0;
+    bool linear_resample = false;
 };
 
 // 0.3.0 追加（主对话裁定：§3 表头通则「加性字段一律追加在结构体末尾」）：
@@ -141,7 +150,11 @@ enum class FileState {
     // §7.4「`ProgressMux` 将编码器行回调汇流为 `FileEvent{state=Progress}`」依赖本值；
     // 现形枚举无它、§3.6 亦未授权改 FileState → 【语义性】表缺口修复（值追加在末尾 =
     // 既有值的数值与语义零变化，0.2 语义逐字保持）。
-    Progress
+    Progress,
+    // —— M7-WP1 / I7 加性追加（**末尾**；裁定登记 build/m7-wp1/handoff.md）——
+    // 多输出部分成功（§4.1 的 FileOutcome::Verdict::DoneWithErrors 的状态面配对值；
+    // R-076 的消费接线归后续任务，本波只落枚举值 —— 既有值的数值与语义零变化）。
+    DoneWithErrors
 };
 
 // PP-FROZEN(0.3.0) §3.3 · FileEvent（**W1-T6 已落地**；原标注 PP-THAWED(0.3.0-M4-D20) 随落地

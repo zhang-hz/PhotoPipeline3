@@ -231,6 +231,10 @@ void test_read_metadata(const fs::path &tmp) {
     const fs::path png = corpus() / "base" / "rgb8.png";
     const bool png_ok = exiv2_supports(png);
     const pp::SourceMeta p = pp::read_metadata(png);
+    // R-097（M7-WP1）：CI 环境断言 png_ok == true —— 钉版 vcpkg exiv2 带 png 特性（zlib），
+    // 能力探测为假 = 依赖悄然降级，必须判红而不是把断言降级成"应当报错"的双模。
+    check(png_ok, "read/png/ci-capable",
+          "exiv2 cannot open PNG in this build (zlib/png feature missing)");
     if (png_ok) {
         check(p.error.empty(), "read/png/no-error", p.error);
     } else {
@@ -865,9 +869,10 @@ void test_png_r1(const fs::path &tmp) {
     rules.exif_edits.push_back(pp::TagEdit{"Exif.Image.Artist", std::string("M1-T5"), false});
     rules.xmp_edits.push_back(pp::TagEdit{"Xmp.dc.title", std::string("png r1"), false});
     pp::MetadataPlan plan = pp::build_plan(meta, rules, std::nullopt);
-    const std::string err = pp::write_metadata_exiv2(out, plan, pp::make_payloads(plan));
+    std::vector<std::string> wmsg;
+    const std::string err = pp::write_metadata_exiv2(out, plan, pp::make_payloads(plan), &wmsg);
 
-    check(err.empty(), "r1/png/non-fatal", "metadata loss must not fail the file: " + err);
+    check(err.empty(), "r1/png/non-fatal", "png metadata write must succeed in this build: " + err);
     check(pixel_hash(out) == h0, "r1/png/pixels-intact", "pixel hash changed");
 
     const bool writable = exiv2_supports(out);
@@ -893,14 +898,18 @@ void test_png_r1(const fs::path &tmp) {
             num(dms_to_degrees(back.exif, "Exif.GPSInfo.GPSLatitude")).c_str(),
             show(xmp_str(back.xmp, "Xmp.dc.title")).c_str(), plan.warnings.size());
     } else {
-        // fallback path — only reachable when exiv2 has no png support (EXV_HAVE_LIBZ undefined)
-        check(has_warning(plan, pp::WarningKind::MetadataDropped), "r1/png/dropped-warning",
-              "expected Warning{MetadataDropped} for a PNG output");
-        check(
-            warning_detail(plan, pp::WarningKind::MetadataDropped).find("png") != std::string::npos,
-            "r1/png/warning-detail", show(warning_detail(plan, pp::WarningKind::MetadataDropped)));
+        // fallback path — only reachable when exiv2 has no png support (EXV_HAVE_LIBZ undefined;
+        // R-097 已把"CI 必须有 PNG 能力"钉成硬断言，本分支在钉版工具链上不可达)。
+        // R-002/R-171 新口径：写失败 = 真失败（err 非空）；消息只走出参通道；plan 不被写路径触碰。
+        check(!err.empty(), "r1/png/real-failure",
+              "a dropped PNG metadata write must fail the output (R-002)");
+        check(!wmsg.empty() && wmsg.front().find("png") != std::string::npos,
+              "r1/png/warning-detail",
+              wmsg.empty() ? std::string("<no message>") : show(wmsg.front()));
+        check(!has_warning(plan, pp::WarningKind::MetadataDropped), "r1/png/const-plan-untouched",
+              "write path must not touch plan.warnings (R-171)");
         std::printf("info R1 png exif: writable=0 dropped_detail=%s\n",
-                    show(warning_detail(plan, pp::WarningKind::MetadataDropped)).c_str());
+                    wmsg.empty() ? "<none>" : show(wmsg.front()).c_str());
     }
 }
 
@@ -1017,30 +1026,31 @@ void test_write_warnings_out_param(const fs::path &tmp) {
     pp::BatchRules rules;
     rules.exif_edits.push_back(pp::TagEdit{"Exif.Image.Artist", std::string("M2-T4"), false});
     pp::MetadataPlan plan =
-        pp::build_plan(meta, rules, std::nullopt); // mutable: plan.warnings channel
+        pp::build_plan(meta, rules, std::nullopt); // mutable: build_plan 的告警通道
     const pp::Payloads pl = pp::make_payloads(plan);
+    const std::size_t plan_warnings_before = plan.warnings.size();
 
-    // Failure case: the post-encode Exiv2 write cannot open its container → metadata loss stays
-    // non-fatal, but the message must arrive through the explicit out-parameter *and* the legacy
-    // plan.warnings channel.
+    // R-002（M7-WP1）：写失败 = **真失败**（返回非空错误；不再吞成 warning + 成功）。
+    // M2-T4 的显式出参通道照旧收到同一 detail（消息必须到达 out_warnings）。
+    // R-171（M7-WP1）：写路径不再回写 const plan（原 const_cast 双通道已收成 out_warnings
+    // 单通道）—— plan.warnings 只承载 build_plan 的合成期告警，写路径前后必须不变。
     const fs::path missing = tmp / "no-such-dir" / "out.jpg";
     std::vector<std::string> got;
     const std::string err = pp::write_metadata_exiv2(missing, plan, pl, &got);
-    check(err.empty(), "write-warnings/non-fatal", "metadata loss must stay non-fatal: " + err);
+    check(!err.empty(), "write-warnings/real-failure",
+          "a failed metadata write must fail the output (R-002); err was empty");
     check(got.size() == 1, "write-warnings/out-param-count",
           "expected exactly one writer message, got " + std::to_string(got.size()));
-    check(plan.warnings.size() == got.size(), "write-warnings/frozen-plan-channel",
-          "plan.warnings production changed: size " + std::to_string(plan.warnings.size()) +
-              " vs out-param " + std::to_string(got.size()));
-    if (got.empty() || plan.warnings.empty()) {
+    check(plan.warnings.size() == plan_warnings_before, "write-warnings/const-plan-untouched",
+          "write path must not touch plan.warnings (R-171): " +
+              std::to_string(plan.warnings.size()) + " vs " + std::to_string(plan_warnings_before));
+    if (got.empty()) {
         fail("write-warnings/detail", "no writer message produced");
     } else {
-        check(got.front() == plan.warnings.front().detail, "write-warnings/identical-detail",
-              show(got.front()) + " vs " + show(plan.warnings.front().detail));
-        check(plan.warnings.front().kind == pp::WarningKind::MetadataDropped, "write-warnings/kind",
-              "expected MetadataDropped");
         check(got.front().find("metadata dropped") != std::string::npos, "write-warnings/detail",
               show(got.front()));
+        check(err.find("metadata dropped") != std::string::npos, "write-warnings/err-detail",
+              show(err));
     }
 
     // Success path: the out-parameter stays empty (no invented warnings).
@@ -1064,6 +1074,127 @@ void test_write_warnings_out_param(const fs::path &tmp) {
 
 // §4.5 / consensus §3.6: MakerNote bytes are carried across containers verbatim, never parsed or
 // edited, and the layer only reports "Makernote present, N bytes" in the log.
+// ---------------------------------------------------------------------------
+// M7-WP1 回归面：R-029 / R-084 / R-234 / R-002（数据安全与元数据语义收紧）
+// ---------------------------------------------------------------------------
+void test_m7wp1_regressions(const fs::path &tmp) {
+    // ---- R-029：GPS 时间戳非法 → 不擦除既有 GPSDateStamp/GPSTimeStamp + Warning ----
+    {
+        check(pp::is_valid_gps_timestamp("2024:03:01 02:30:00"), "r029/valid", "expected true");
+        check(!pp::is_valid_gps_timestamp("2024-03-01T02:30:00"), "r029/iso-rejected",
+              "expected false for an ISO-8601 form");
+        check(!pp::is_valid_gps_timestamp("2024:03:01 2:30:00"), "r029/short-rejected",
+              "expected false for a non-padded form");
+        check(!pp::is_valid_gps_timestamp(""), "r029/empty-rejected", "expected false");
+
+        Exiv2::ExifData exif;
+        pp::GpsData g;
+        g.lat = 31.2;
+        g.lon = 121.5;
+        g.timestamp = std::string("2024:03:01 02:30:00");
+        pp::write_gps(exif, g);
+        check(exif_str(exif, "Exif.GPSInfo.GPSDateStamp") == "2024:03:01", "r029/setup-date",
+              show(exif_str(exif, "Exif.GPSInfo.GPSDateStamp")));
+
+        pp::GpsData bad = g;
+        bad.timestamp = std::string("2024-03-01T02:30:00"); // 非 EXIF 形态：写不进去
+        std::vector<pp::Warning> ws;
+        pp::write_gps(exif, bad, &ws);
+        check(exif_str(exif, "Exif.GPSInfo.GPSDateStamp") == "2024:03:01", "r029/kept-date-stamp",
+              show(exif_str(exif, "Exif.GPSInfo.GPSDateStamp")));
+        check(exif_str(exif, "Exif.GPSInfo.GPSTimeStamp") == "2/1 30/1 0/1", "r029/kept-time-stamp",
+              show(exif_str(exif, "Exif.GPSInfo.GPSTimeStamp")));
+        check(ws.size() == 1 && ws.front().kind == pp::WarningKind::MetadataDropped &&
+                  ws.front().detail.find("GPSDateStamp") != std::string::npos,
+              "r029/warning-emitted",
+              ws.empty() ? std::string("<no warning>") : show(ws.front().detail));
+
+        // 规则未给时间戳 → GPS 块整体替换语义仍清旧时间戳（既有行为逐字不变）
+        pp::GpsData none = g;
+        none.timestamp.reset();
+        pp::write_gps(exif, none);
+        check(!has_exif(exif, "Exif.GPSInfo.GPSDateStamp") &&
+                  !has_exif(exif, "Exif.GPSInfo.GPSTimeStamp"),
+              "r029/absent-clears", "a rule without a timestamp must clear the old block");
+    }
+
+    // ---- R-084：批量标签编辑被拒 → 升格 Warning（不只进日志）----
+    {
+        const pp::SourceMeta meta = pp::read_metadata(corpus() / "meta" / "exif_full.jpg");
+        pp::BatchRules rules;
+        rules.exif_edits.push_back(pp::TagEdit{"Exif.Nope.BadKey", std::string("X"), false});
+        rules.xmp_edits.push_back(pp::TagEdit{"Xmp.Nope.BadKey", std::string("X"), false});
+        const pp::MetadataPlan plan = pp::build_plan(meta, rules, std::nullopt);
+        std::size_t rejected = 0;
+        for (const pp::Warning &w : plan.warnings) {
+            if (w.detail.find("tag edit rejected") != std::string::npos)
+                ++rejected;
+        }
+        check(rejected == 2, "r084/edit-rejected-warning",
+              "expected 2 'tag edit rejected' warnings, got " + std::to_string(rejected));
+    }
+
+    // ---- R-234：OffsetTime* 以「墙钟实际改写成功」为条件 ----
+    {
+        const pp::SourceMeta meta = pp::read_metadata(corpus() / "meta" / "exif_full.jpg");
+        pp::TimeShift tz;
+        tz.mode = pp::TimeShift::Mode::TimezoneSemantic;
+        tz.from_offset_min = 8 * 60;
+        tz.to_offset_min = 9 * 60;
+        pp::BatchRules rules;
+        rules.time_shift = tz;
+
+        const pp::MetadataPlan ok = pp::build_plan(meta, rules, std::nullopt);
+        check(exif_str(ok.exif, "Exif.Photo.OffsetTimeOriginal") == "+09:00", "r234/written",
+              show(exif_str(ok.exif, "Exif.Photo.OffsetTimeOriginal")));
+
+        pp::SourceMeta broken = meta;
+        for (const char *k : {"Exif.Photo.DateTimeOriginal", "Exif.Photo.DateTimeDigitized",
+                              "Exif.Image.DateTime"}) {
+            auto it = broken.exif.findKey(Exiv2::ExifKey(k));
+            if (it != broken.exif.end())
+                (void)it->setValue(std::string("not a date"));
+        }
+        const pp::MetadataPlan no = pp::build_plan(broken, rules, std::nullopt);
+        check(exif_str(no.exif, "Exif.Photo.OffsetTimeOriginal").empty(), "r234/not-written",
+              "OffsetTime* must not be written when the wall clock did not change");
+        const pp::EffectivePreview pv = pp::preview_effective(broken, rules, std::nullopt);
+        check(!pv.offset_time_original.changed, "r234/preview-same",
+              "preview must mirror the write condition (R-085 同源)");
+    }
+
+    // ---- R-002：元数据写回原子性（失败无半成品；源文件零触碰）----
+    {
+        const fs::path src = corpus() / "base" / "photo.jpg";
+        const fs::path out = tmp / "m7wp1-atomic-meta.jpg";
+        pp::SourceMeta meta = pp::read_metadata(src);
+        pp::BatchRules rules;
+        rules.exif_edits.push_back(pp::TagEdit{"Exif.Image.Artist", std::string("atomic"), false});
+        const pp::MetadataPlan plan = pp::build_plan(meta, rules, std::nullopt);
+        const std::string src_hash = pixel_hash(src);
+        const std::string err = pp::rewrite_metadata_only(src, out, plan, pp::make_payloads(plan));
+        check(err.empty(), "r002/rewrite-ok", err);
+        check(exif_str(pp::read_metadata(out).exif, "Exif.Image.Artist") == "atomic",
+              "r002/written", "");
+        check(pixel_hash(src) == src_hash, "r002/source-untouched", "source bytes changed");
+        std::error_code ec;
+        std::size_t leftovers = 0;
+        for (const fs::directory_entry &e : fs::directory_iterator(tmp, ec)) {
+            if (e.path().filename().string().find(".tmp") != std::string::npos)
+                ++leftovers;
+        }
+        check(leftovers == 0, "r002/no-tmp-leftovers",
+              "temp files left behind: " + std::to_string(leftovers));
+
+        // 失败路径：源不存在 → 报错且 out 不被创建（无占名坏副本，R-030 的结构保证）
+        const fs::path out2 = tmp / "m7wp1-atomic-fail.jpg";
+        const std::string err2 =
+            pp::rewrite_metadata_only(tmp / "no-such-src.jpg", out2, plan, pp::make_payloads(plan));
+        check(!err2.empty(), "r002/fail-reported", "expected an error for a missing source");
+        check(!fs::exists(out2, ec), "r002/no-half-output", out2.string());
+    }
+}
+
 void test_makernote(const fs::path &tmp) {
     const fs::path src = corpus() / "meta" / "exif_full.jpg";
     const fs::path out = tmp / "makernote.jpg";
@@ -1170,6 +1301,7 @@ int main() {
     test_write_warnings_out_param(tmp);
     test_makernote(tmp);
     test_mtime(tmp);
+    test_m7wp1_regressions(tmp);
 
     if (g_failed == 0) {
         std::printf("OK test_metadata: all cases passed\n");

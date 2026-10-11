@@ -25,6 +25,7 @@
 #include <system_error>
 #include <utility>
 
+#include "core/fsops.h" // R-194/R-290：原子写单实现（write_atomic_file）
 #include "core/logger.h"
 
 namespace pp {
@@ -83,6 +84,19 @@ std::uint32_t parse_rgb(std::string_view s) {
 
 // ---------------------------------------------------------------------------
 // 最小 JSON reader（本文件专用 schema；UTF-8 文本层，路径按原生字节串搬运）
+//
+// R-210（M7-WP1）真实边界标注 —— 本栈是**有意的最小子集**，不是通用 JSON 库：
+//   * 接受：RFC 8259 的 object/array/string/number/bool/null；字符串转义仅 \" \\ \/ \b \f
+//     \n \r \t 与 \uXXXX（按码点直编 UTF-8，**不处理 UTF-16 代理对** —— 本 schema 的
+//     id/name/hotkey 实际面是 BMP 文本）；数字走 strtod（无溢出/精度保护）。
+//   * 拒绝：注释、尾逗号、单引号、NaN/Infinity、嵌套深度 > 32（kMaxDepth → "nesting too
+//     deep"）；根后有残留数据 → "trailing data"。
+//   * 消费面：仅 ClassRegistry::load() 的 classes.json（save() 产出的扁平 schema，见本文件
+//     头注）。
+//   * 保留理由（裁定登记 build/m7-wp1/handoff.md）：core/classify 是 Qt-free 语义面，
+//     换 Qt JSON 会把注册表层绑上额外依赖面并改写错误文案/自愈语义；换第三方 JSON 库则撞
+//     "禁止新增依赖"红线。既有 test_classify 全量覆盖本栈的接受/拒绝面 → 删除或替换的
+//     收益 < 风险，故保留 + 标注真实边界。
 // ---------------------------------------------------------------------------
 
 struct JsonValue {
@@ -412,7 +426,9 @@ std::string hex_rgb(std::uint32_t rgb) {
     return std::string(buf);
 }
 
-// 原子写：`<file>.tmp` → rename（与 core/settings.cpp 同口径；失败不留 tmp）
+// 原子写（R-194/R-290，M7-WP1 收敛）：实现单源 = core/fsops 的 write_atomic_file（I1：
+// 同目录 PID/随机后缀 tmp → 字节校验 → rename 覆盖；失败清场）。本函数只保留 classify
+// 语义层职责：父目录创建 + 错误文案前缀（原第二份 tmp/rename 实现已删除）。
 bool write_atomic(const std::filesystem::path &file, const std::string &text, std::string *err) {
     const auto set_err = [err](const std::string &msg) {
         if (err != nullptr)
@@ -426,26 +442,9 @@ bool write_atomic(const std::filesystem::path &file, const std::string &text, st
             return set_err("classify: cannot create directory " + file.parent_path().string() +
                            ": " + ec.message());
     }
-    std::filesystem::path tmp = file;
-    tmp += ".tmp";
-    {
-        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-        if (!out)
-            return set_err("classify: cannot write " + tmp.string());
-        out.write(text.data(), static_cast<std::streamsize>(text.size()));
-        out.flush();
-        if (!out) {
-            std::error_code rm_ec;
-            std::filesystem::remove(tmp, rm_ec);
-            return set_err("classify: write failed on " + tmp.string());
-        }
-    }
-    std::filesystem::rename(tmp, file, ec);
-    if (ec) {
-        std::error_code rm_ec;
-        std::filesystem::remove(tmp, rm_ec);
-        return set_err("classify: cannot replace " + file.string() + ": " + ec.message());
-    }
+    std::string io_err;
+    if (!write_atomic_file(file, text, &io_err))
+        return set_err("classify: " + io_err);
     return true;
 }
 
@@ -680,11 +679,26 @@ bool ClassRegistry::load(const std::filesystem::path &file, std::string *err) {
     if (!root.is_object())
         return set_err("classify: root is not an object in " + file.string());
 
+    // I9/R-082：版本面。缺省 "version" 按 v1 读（与 preset_io 的缺省口径一致）；高于 1 的
+    // 版本**显式拒绝** —— 未来 schema 被静默误读 = 用户分类体系被悄悄改写。
+    if (const JsonValue *ver = root.find("version")) {
+        if (ver->type == JsonValue::Type::Number && ver->number > 1.0) {
+            return set_err("classify: unsupported classes.json version " +
+                           std::to_string(static_cast<int>(ver->number)) + " in " + file.string());
+        }
+    }
+
     // 先解析到暂存区：任何结构性错误都不改动当前注册表（强异常安全）
     std::vector<ClassDef> new_classes;
     std::map<std::string, std::string> new_assignment;
 
-    if (const JsonValue *arr = root.find("classes")) {
+    // R-232/R-023（I9）：**合法 JSON 但缺 classes 键** = 损坏/异构文件，不得静默清空注册表
+    // （原实现缺键 → 空注册表 → 无条件 save 把用户分类体系抹掉且无恢复路径）。显式失败、
+    // 注册表不动，交由上层改名保留原文件 + 提示。
+    const JsonValue *arr = root.find("classes");
+    if (arr == nullptr)
+        return set_err("classify: missing 'classes' key in " + file.string());
+    {
         if (!arr->is_array())
             return set_err("classify: 'classes' is not an array in " + file.string());
         for (const JsonValue &e : arr->array) {

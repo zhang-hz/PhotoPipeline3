@@ -626,6 +626,107 @@ void test_synthetic_matrix() {
     check_same_source(src, edits, std::nullopt, "synthetic/edits-only");
 }
 
+// ---------------------------------------------------------------------------
+// M7-WP1：R-085（XMP 日期 + OffsetTime* 进生效值显示面）、R-029（GPS 时间戳回显按写入口径）、
+// I5（*_enabled 卡开关）—— 全部与 build_plan 同源对拍
+// ---------------------------------------------------------------------------
+void test_m7wp1_effective_surface() {
+    // 合成 probe：EXIF 时间 + XMP 日期 + GPS（带时间戳）都有，便于逐字段对拍
+    pp::SourceMeta src;
+    src.exif["Exif.Photo.DateTimeOriginal"] = std::string("2024:03:01 10:00:00");
+    src.exif["Exif.Photo.DateTimeDigitized"] = std::string("2024:03:01 10:00:00");
+    src.exif["Exif.Image.DateTime"] = std::string("2024:03:01 10:00:00");
+    src.xmp["Xmp.xmp.CreateDate"] = std::string("2024-03-01T10:00:00+08:00");
+    src.xmp["Xmp.xmp.ModifyDate"] = std::string("2024-03-01T10:00:00+08:00");
+    pp::GpsData g;
+    g.lat = 31.2304;
+    g.lon = 121.4737;
+    g.timestamp = std::string("2024:03:01 02:30:00");
+    pp::write_gps(src.exif, g);
+    src.has_gps = true;
+    src.has_time = true;
+
+    pp::BatchRules rules;
+    rules.time_shift = tz(480, 540); // +08:00 → +09:00
+
+    // ---- R-085：XMP 日期与 OffsetTime* 进入显示面，且与写路径逐字同源 ----
+    {
+        const pp::EffectivePreview p = pp::preview_effective(src, rules, std::nullopt);
+        check(p.xmp_create_date.effective.has_value() &&
+                  p.xmp_create_date.effective->value == "2024-03-01T11:00:00+09:00",
+              "r085/xmp-create-shifted", show(p.xmp_create_date.effective));
+        check(p.xmp_modify_date.changed, "r085/xmp-modify-changed", dump(p));
+        check(p.offset_time.effective.has_value() && *p.offset_time.effective == "+09:00",
+              "r085/offset-effective", "got " + (p.offset_time.effective.value_or("<none>")));
+        check(p.offset_time_original.changed && p.offset_time_digitized.changed,
+              "r085/offset-trio-changed", dump(p));
+
+        const pp::MetadataPlan plan = pp::build_plan(src, rules, std::nullopt);
+        check(exif_str(plan.exif, "Exif.Photo.OffsetTime") == "+09:00" &&
+                  exif_str(plan.exif, "Exif.Photo.OffsetTimeOriginal") == "+09:00" &&
+                  exif_str(plan.exif, "Exif.Photo.OffsetTimeDigitized") == "+09:00",
+              "r085/offset-trio-written", exif_str(plan.exif, "Exif.Photo.OffsetTimeOriginal"));
+        const auto xmp_val = [&plan](const char *key) {
+            auto it = plan.xmp.findKey(Exiv2::XmpKey(key));
+            return it == plan.xmp.end() ? std::string() : it->toString();
+        };
+        const std::string want_xmp = p.xmp_create_date.effective.has_value()
+                                         ? p.xmp_create_date.effective->value
+                                         : std::string();
+        check(xmp_val("Xmp.xmp.CreateDate") == want_xmp, "r085/xmp-same-source",
+              "preview=" + show(want_xmp) + " plan=" + show(xmp_val("Xmp.xmp.CreateDate")));
+        check_same_source(src, rules, std::nullopt, "m7wp1/r085");
+    }
+
+    // ---- R-029：GPS 时间戳非法 → 回显按写入口径（保留源时间戳），与 plan 同源 ----
+    {
+        pp::BatchRules bad_rules;
+        pp::GpsData bad = g;
+        bad.lat = 22.5;
+        bad.timestamp = std::string("2024-03-01T02:30:00"); // 非 EXIF 形态
+        bad_rules.gps = bad;
+        const pp::EffectivePreview p = pp::preview_effective(src, bad_rules, std::nullopt);
+        check(p.gps.effective.has_value() && p.gps.effective->timestamp.has_value() &&
+                  *p.gps.effective->timestamp == "2024:03:01 02:30:00",
+              "r029/echo-keeps-source-timestamp",
+              p.gps.effective.has_value() ? p.gps.effective->timestamp.value_or("<none>")
+                                          : std::string("<no gps>"));
+        check(p.gps.changed, "r029/changed-by-lat", dump(p));
+        check_same_source(src, bad_rules, std::nullopt, "m7wp1/r029");
+    }
+
+    // ---- I5：*_enabled 卡开关（该卡参与规则 = 开关 && 原判据；默认 true = 零变化）----
+    {
+        pp::BatchRules off;
+        off.time_shift = tz(480, 540);
+        off.gps = g;
+        off.strip_privacy = true;
+        off.time_enabled = false;
+        off.gps_enabled = false;
+        off.privacy_enabled = false;
+        const pp::EffectivePreview p = pp::preview_effective(src, off, std::nullopt);
+        check(!p.datetime_original.changed && !p.xmp_create_date.changed && !p.offset_time.changed,
+              "i5/time-card-off", dump(p));
+        check(!p.gps.changed, "i5/gps-card-off", dump(p));
+        check(!p.strip_privacy, "i5/privacy-card-off", "strip_privacy must be gated off");
+        const pp::MetadataPlan plan = pp::build_plan(src, off, std::nullopt);
+        check(exif_str(plan.exif, "Exif.Photo.DateTimeOriginal") == "2024:03:01 10:00:00",
+              "i5/no-shift-written", exif_str(plan.exif, "Exif.Photo.DateTimeOriginal"));
+        check(exif_str(plan.exif, "Exif.GPSInfo.GPSLatitudeRef") == "N", "i5/gps-kept",
+              "gps card disabled ⇒ source GPS must stay untouched");
+        check(!plan.exif.empty(), "i5/no-strip", "privacy card disabled ⇒ no stripping");
+        check_same_source(src, off, std::nullopt, "m7wp1/i5");
+
+        // 开关默认 true ⇒ 与不设开关逐字同结论（零迁移零变化）
+        pp::BatchRules on = off;
+        on.time_enabled = on.gps_enabled = on.privacy_enabled = true;
+        const pp::EffectivePreview a = pp::preview_effective(src, off, std::nullopt);
+        const pp::EffectivePreview b = pp::preview_effective(src, on, std::nullopt);
+        check(!same_preview(a, b), "i5/flags-matter",
+              "disabled cards must differ from enabled ones");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -636,6 +737,7 @@ int main() {
     test_fixture_privacy();
     test_exception_overrides();
     test_synthetic_matrix();
+    test_m7wp1_effective_surface();
 
     if (g_failed == 0) {
         std::printf("test_effective: OK\n");

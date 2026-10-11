@@ -386,6 +386,33 @@ int main() {
               "to-string/save-keeps-cleartext", "err=" + err + " raw=" + read_all(file));
     }
 
+    // ---- M7-WP1 · R-050（默认构造无文件系统副作用）+ R-028（tmp 名唯一、失败/成功都不留）----
+    {
+        // R-050：class_file 默认惰性空串（原 `= default_class_file()` 会在默认构造时就 mkdir）
+        const pp::AppSettings def;
+        check(def.class_file.empty(), "m7wp1/class-file-lazy-default",
+              "class_file default must stay unresolved (lazy), got " + show(def.class_file));
+        check(!pp::default_class_file().empty(), "m7wp1/class-file-explicit-resolver",
+              "default_class_file() must still resolve the §6.2 single source");
+        // 空 class_file 从 INI 往返后仍是"未配置"（空值语义不变）
+        const fs::path dir = make_temp_dir("settings_m7wp1");
+        const fs::path file = dir / "settings.ini";
+        check(pp::save_settings(file, def).empty(), "m7wp1/save-defaults", "");
+        const pp::AppSettings back = pp::load_settings(file);
+        check(back.class_file.empty(), "m7wp1/class-file-roundtrip-empty", show(back.class_file));
+
+        // R-028：tmp 名带 PID/随机后缀 —— 保存后目录内不得残留任何 .tmp 形态文件
+        check(pp::save_settings(file, non_defaults()).empty(), "m7wp1/save-again", "");
+        std::error_code ec;
+        std::size_t leftovers = 0;
+        for (const fs::directory_entry &e : fs::directory_iterator(dir, ec)) {
+            if (e.path().filename().string().find(".tmp") != std::string::npos)
+                ++leftovers;
+        }
+        check(leftovers == 0, "m7wp1/no-tmp-leftovers",
+              "temp files left behind: " + std::to_string(leftovers));
+    }
+
     if (g_failed == 0) {
         std::printf("test_settings: OK\n");
         return 0;

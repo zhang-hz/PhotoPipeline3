@@ -187,8 +187,8 @@ void apply_pair(AppSettings &s, const std::string &key, const std::string &value
         if (parse_int(value, v))
             s.thread_budget = v > 0 ? v : 0;
     } else if (key == "class_file") {
-        // §3.6/§6.2：分类注册表路径。空值 = 未配置 → 保留默认（data_dir()/classes.json），
-        // 因为"空路径"不是合法注册表位置（默认值由 default_class_file() 单点给出）。
+        // §3.6/§6.2：分类注册表路径。空值 = 未配置 → 保留默认（惰性空串，消费点经
+        // default_class_file() 解析 —— R-050），因为"空路径"不是合法注册表位置。
         if (!value.empty())
             s.class_file = value;
     } else if (key == "output_template") {
@@ -306,29 +306,18 @@ std::string save_settings(const std::filesystem::path &file, const AppSettings &
             lines.push_back(pairs[i].first + "=" + pairs[i].second);
     }
 
-    // 4) Atomic write: `<file>.tmp` then rename. A missing parent directory fails here
-    //    (creating it is platform::data_dir()'s job, not the settings store's).
-    std::filesystem::path tmp = file;
-    tmp += ".tmp";
-    {
-        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-        if (!out)
-            return "settings: cannot write " + tmp.string();
-        for (const std::string &line : lines)
-            out << line << '\n';
-        out.flush();
-        if (!out) {
-            std::error_code rm_ec;
-            std::filesystem::remove(tmp, rm_ec);
-            return "settings: write failed on " + tmp.string();
-        }
+    // 4) Atomic write（R-194/R-290，M7-WP1 收敛）：实现单源 = core/fsops 的 write_atomic_file
+    //    （I1：同目录 PID/随机后缀 tmp → 字节校验 → rename 覆盖；失败清场）。
+    //    A missing parent directory fails here (creating it is platform::data_dir()'s job,
+    //    not the settings store's).
+    std::string text;
+    for (const std::string &line : lines) {
+        text += line;
+        text += '\n';
     }
-    std::filesystem::rename(tmp, file, ec);
-    if (ec) {
-        std::error_code rm_ec;
-        std::filesystem::remove(tmp, rm_ec);
-        return "settings: cannot replace " + file.string() + ": " + ec.message();
-    }
+    std::string io_err;
+    if (!write_atomic_file(file, text, &io_err))
+        return "settings: " + io_err;
     return {};
 }
 

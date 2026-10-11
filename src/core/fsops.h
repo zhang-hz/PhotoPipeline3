@@ -78,4 +78,66 @@ const std::vector<std::string> &input_extensions();
 // 替换扩展名（保留目录与 stem）
 std::filesystem::path with_extension(const std::filesystem::path &p, std::string_view new_ext);
 
+// ===========================================================================
+// M7-WP1 加性追加（R-003 / R-005 / R-007 / R-028 / R-031 / R-083 / I1 / I2）
+//   裁定登记：build/m7-wp1/handoff.md「裁定登记」节（加性 + 追认：既有签名逐字保留、
+//   既有语义零改动；新能力一律新函数/新重载承载）。
+// ===========================================================================
+
+// —— I1 原子写四件套（R-003/R-028/R-194/R-290）——
+// 临时文件名：<target 文件名>.<pid>.<随机十六进制>.tmp（同目录；双开/同进程并发写互不
+//   干扰，R-028 的固定名 `.tmp` 互踩问题即由此根治）。target 为空 → 返回空 path。
+std::filesystem::path atomic_temp_path(const std::filesystem::path &target);
+
+// tmp → target 的原子替换（同目录 rename）。目标已存在 → 覆盖（POSIX rename 与 MSVC
+//   std::filesystem::rename 的标准语义；test_fsops 有"覆盖已存在目标"实证用例）。
+//   失败 → false 且 *err 非空，tmp **不**删除（调用方决定重试或 discard_temp_file）。
+bool commit_temp_file(const std::filesystem::path &tmp, const std::filesystem::path &target,
+                      std::string *err);
+
+// 失败清场：尽力删除临时文件（noexcept；删除失败静默 —— 清场不得抛异常）。
+void discard_temp_file(const std::filesystem::path &tmp) noexcept;
+
+// 一步式原子写：写 data → **字节数校验**（落盘 size == data.size()）→ commit_temp_file
+//   覆盖 target；任一步失败 → discard_temp_file 清场 + false + *err。target 已存在时
+//   继承其权限位（preset_io 的既有行为收口到这里）。data 为空 = 合法（写空文件）。
+bool write_atomic_file(const std::filesystem::path &target, std::string_view data,
+                       std::string *err);
+
+// —— I2 输出名/输出根校验（R-007）——
+// 输出路径合法性（**平台无关判定**，与 validate_output_template 同口径的词法规则）：
+//   * 每个路径段：非法字符 `< > : " | ? *` 与 ASCII 控制字符（0x00–0x1F）；
+//   * 每个路径段不得以点/空格结尾（Windows 静默截断面）；
+//   * 保留设备名（大小写不敏感、含带扩展名形态 CON.txt）：CON/PRN/AUX/NUL/COM1–9/LPT1–9；
+//   * 长度：单段 ≤ 255、整串 ≤ 259（MAX_PATH−1；写路径的 fopen/Exiv2 无 `\\?\` 归一，
+//     超长路径必然在 open 处失败 → 按评审 R-007 在渲染后**预检**拦截并给可读错误）；
+//   * 末段必须是文件名（非空）。
+// 判负 → false 且 *err 为非空英文描述；err 可为 nullptr。
+bool validate_output_filename(const std::filesystem::path &p, std::string *err);
+
+// 输出根探针（R-007/R-073 的引擎侧预检）：目录不存在 → 试建；随后试写一个唯一探针文件
+//   并删除。不可建/不可写 → false 且 *err 非空。dir 为空 → 判负。
+bool probe_output_root(const std::filesystem::path &dir, std::string *err);
+
+// —— R-005 加性重载：软保留（幽灵跳过防线）——
+// `reserved` = 硬保留（同一文件更早 target 已解析出、**尚未落盘**的路径）；
+// `soft_reserved` = 软保留（批内已完成登记、但磁盘上可能不存在的路径：登记时失败的输出
+//   不再入册，唯余"成功后被外部删除"一类残留）。
+//   * Skip：目标**在磁盘上存在**或命中硬保留 → 跳过；仅命中软保留而磁盘缺失 → 回退
+//     正常写入（R-005：不许把"幽灵占位"当已存在输出）；
+//   * Rename/Overwrite：软硬保留一视同仁（保持既有避让语义）。
+// 既有 4 参签名转发到本重载（软保留空集）→ 既有行为逐字不变。
+OutputPlan resolve_conflict(const std::filesystem::path &desired, ConflictPolicy policy,
+                            const std::vector<std::filesystem::path> &reserved,
+                            const std::vector<std::filesystem::path> &soft_reserved,
+                            std::string &err);
+
+// —— R-031 加性重载：收集时排除输出根子树 ——
+// `exclude_roots` 内的目录/文件整棵排除（is_inside 判定；含根自身）—— 仅元数据模式把
+// out_root 放进输入树时不再把产物收集为下一轮输入（`out/out/…` 镜像堆叠问题）。
+// 既有 3 参签名转发（空排除集）→ 既有行为逐字不变。
+std::vector<std::filesystem::path> collect_inputs(
+    const std::vector<std::filesystem::path> &roots, const std::vector<std::string> &exts,
+    const std::vector<std::filesystem::path> &exclude_roots, std::vector<std::string> &errors);
+
 } // namespace pp

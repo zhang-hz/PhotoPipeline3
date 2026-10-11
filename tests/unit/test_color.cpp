@@ -770,17 +770,19 @@ void test_cicp_mapping() {
 
     // PQ(16) / HLG(18) and every other unlisted pair: not recognized, no profile bytes
     // (-> ColorManager's M1 assumed-sRGB branch) and the §2.8 log text verbatim.
+    // UX-14 A5（M7-WP1）：日志口径随行为修正 —— 未支持组合**保留合成 ICC** 继续处理，
+    // 原文案"按 sRGB 处理"谎报口径，改为如实描述（断言同严格度换锚，裁定登记见 handoff）。
     const struct {
         int p, t;
         const char *log;
     } misses[] = {
-        {9, 16, "CICP transfer 16 未支持，按 sRGB 处理"},
-        {9, 18, "CICP transfer 18 未支持，按 sRGB 处理"},
-        {12, 16, "CICP transfer 16 未支持，按 sRGB 处理"},
-        {12, 18, "CICP transfer 18 未支持，按 sRGB 处理"},
-        {1, 8, "CICP transfer 8 未支持，按 sRGB 处理"},
-        {9, 1, "CICP transfer 1 未支持，按 sRGB 处理"},
-        {11, 13, "CICP transfer 13 未支持，按 sRGB 处理"},
+        {9, 16, "CICP transfer 16 未支持，保留合成 ICC 处理（不按 sRGB 重解释）"},
+        {9, 18, "CICP transfer 18 未支持，保留合成 ICC 处理（不按 sRGB 重解释）"},
+        {12, 16, "CICP transfer 16 未支持，保留合成 ICC 处理（不按 sRGB 重解释）"},
+        {12, 18, "CICP transfer 18 未支持，保留合成 ICC 处理（不按 sRGB 重解释）"},
+        {1, 8, "CICP transfer 8 未支持，保留合成 ICC 处理（不按 sRGB 重解释）"},
+        {9, 1, "CICP transfer 1 未支持，保留合成 ICC 处理（不按 sRGB 重解释）"},
+        {11, 13, "CICP transfer 13 未支持，保留合成 ICC 处理（不按 sRGB 重解释）"},
     };
     for (const auto &c : misses) {
         pp::Cicp cicp;
@@ -824,6 +826,229 @@ void test_cicp_mapping() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// M7-WP1 · UX-14 B1：ΔE2000 数值护栏（sRGB↔P3↔AdobeRGB 往返 ≤ 1.0）
+//   改色彩面（A1 nclx / A2 降级）必须有数值标尺；粗断言（白>0.9、spread≤0.01）测不出漂移。
+// ΔE2000 = CIEDE2000（Sharma et al. 2005 标准式）；Lab 由 lcms2（同管线同意图）给出，
+// 前后两帧走同一 transform ⇒ 系统性差异抵消，剩下的就是往返漂移。
+// ---------------------------------------------------------------------------
+double delta_e2000(const double lab1[3], const double lab2[3]) {
+    const double L1 = lab1[0], a1 = lab1[1], b1 = lab1[2];
+    const double L2 = lab2[0], a2 = lab2[1], b2 = lab2[2];
+    constexpr double kL = 1.0, kC = 1.0, kH = 1.0;
+    const double C1 = std::hypot(a1, b1);
+    const double C2 = std::hypot(a2, b2);
+    const double Cbar = (C1 + C2) / 2.0;
+    const double C7 = std::pow(Cbar, 7);
+    const double G = 0.5 * (1.0 - std::sqrt(C7 / (C7 + std::pow(25.0, 7))));
+    const double a1p = (1 + G) * a1;
+    const double a2p = (1 + G) * a2;
+    const double C1p = std::hypot(a1p, b1);
+    const double C2p = std::hypot(a2p, b2);
+    const auto hpf = [](double ap, double bb) {
+        if (ap == 0.0 && bb == 0.0)
+            return 0.0;
+        const double h = std::atan2(bb, ap) * 180.0 / 3.14159265358979323846;
+        return h < 0 ? h + 360.0 : h;
+    };
+    const double h1p = hpf(a1p, b1);
+    const double h2p = hpf(a2p, b2);
+    const double dLp = L2 - L1;
+    const double dCp = C2p - C1p;
+    double dhp = 0.0;
+    if (C1p * C2p != 0.0) {
+        dhp = h2p - h1p;
+        if (dhp > 180.0)
+            dhp -= 360.0;
+        else if (dhp < -180.0)
+            dhp += 360.0;
+    }
+    const double dHp =
+        2.0 * std::sqrt(C1p * C2p) * std::sin(dhp / 2.0 * 3.14159265358979323846 / 180.0);
+    const double Lbar = (L1 + L2) / 2.0;
+    const double Cbarp = (C1p + C2p) / 2.0;
+    double hbarp = h1p + h2p;
+    if (C1p * C2p != 0.0) {
+        const double diff = std::fabs(h1p - h2p);
+        if (diff <= 180.0)
+            hbarp = (h1p + h2p) / 2.0;
+        else
+            hbarp = (h1p + h2p < 360.0 ? (h1p + h2p + 360.0) : (h1p + h2p - 360.0)) / 2.0;
+    }
+    const double T = 1.0 - 0.17 * std::cos((hbarp - 30.0) * 3.14159265358979323846 / 180.0) +
+                     0.24 * std::cos((2.0 * hbarp) * 3.14159265358979323846 / 180.0) +
+                     0.32 * std::cos((3.0 * hbarp + 6.0) * 3.14159265358979323846 / 180.0) -
+                     0.20 * std::cos((4.0 * hbarp - 63.0) * 3.14159265358979323846 / 180.0);
+    const double dtheta = 30.0 * std::exp(-std::pow((hbarp - 275.0) / 25.0, 2));
+    const double Rc =
+        2.0 * std::sqrt(std::pow(Cbarp, 7) / (std::pow(Cbarp, 7) + std::pow(25.0, 7)));
+    const double Sl =
+        1.0 + (0.015 * std::pow(Lbar - 50.0, 2)) / std::sqrt(20.0 + std::pow(Lbar - 50.0, 2));
+    const double Sc = 1.0 + 0.045 * Cbarp;
+    const double Sh = 1.0 + 0.015 * Cbarp * T;
+    const double Rt = -std::sin(2.0 * dtheta * 3.14159265358979323846 / 180.0) * Rc;
+    return std::sqrt(std::pow(dLp / (kL * Sl), 2) + std::pow(dCp / (kC * Sc), 2) +
+                     std::pow(dHp / (kH * Sh), 2) + Rt * (dCp / (kC * Sc)) * (dHp / (kH * Sh)));
+}
+
+// RGB（给定 profile）→ Lab D50（lcms2，RC+BPC 与主管线同口径）
+bool rgb_to_lab(cmsHPROFILE prof, const double rgb[3], double lab[3]) {
+    cmsHPROFILE labp = cmsCreateLab4Profile(nullptr);
+    if (!labp)
+        return false;
+    cmsHTRANSFORM xf =
+        cmsCreateTransform(prof, TYPE_RGB_DBL, labp, TYPE_Lab_DBL, INTENT_RELATIVE_COLORIMETRIC,
+                           cmsFLAGS_BLACKPOINTCOMPENSATION);
+    cmsCloseProfile(labp);
+    if (!xf)
+        return false;
+    cmsDoTransform(xf, rgb, lab, 1);
+    cmsDeleteTransform(xf);
+    return true;
+}
+
+void test_de2000_roundtrip() {
+    // 样本取**三空间共域内**颜色（sRGB 子集）—— 色域映射/硬裁不参与，纯测往返漂移。
+    const double samples[][3] = {
+        {0.50, 0.50, 0.50}, {0.20, 0.20, 0.20}, {0.85, 0.85, 0.85}, {0.60, 0.35, 0.25},
+        {0.25, 0.45, 0.30}, {0.30, 0.30, 0.55}, {0.75, 0.65, 0.35}, {0.10, 0.12, 0.14},
+    };
+    struct Trip {
+        pp::ColorTarget mid;
+        const char *name;
+    };
+    const Trip trips[] = {
+        {pp::ColorTarget::DisplayP3, "srgb-p3-srgb"},
+        {pp::ColorTarget::AdobeRGB, "srgb-adobergb-srgb"},
+        {pp::ColorTarget::DisplayP3, "adobergb-p3-adobergb"},
+    };
+    pp::ColorTarget outer_of[3] = {pp::ColorTarget::SRGB, pp::ColorTarget::SRGB,
+                                   pp::ColorTarget::AdobeRGB};
+    for (int t = 0; t < 3; ++t) {
+        double worst = 0.0;
+        for (const auto &s : samples) {
+            std::string err;
+            std::string outer_bytes = pp::load_target_icc(outer_of[t], err);
+            if (outer_of[t] == pp::ColorTarget::SRGB)
+                outer_bytes = srgb_icc_bytes();
+            const std::string mid_bytes = pp::load_target_icc(trips[t].mid, err);
+            cmsHPROFILE outer = cmsOpenProfileFromMem(
+                outer_bytes.data(), static_cast<cmsUInt32Number>(outer_bytes.size()));
+            check(outer != nullptr, std::string(trips[t].name) + "/profile", "cannot open profile");
+            if (!outer)
+                continue;
+
+            // 前：outer 空间的 Lab
+            double lab_before[3];
+            check(rgb_to_lab(outer, s, lab_before), std::string(trips[t].name) + "/lab-before", "");
+
+            // outer → mid → outer（走真实 ColorManager 变换）
+            OIIO::ImageBuf buf = make_buf(1, 1, 3, {float(s[0]), float(s[1]), float(s[2])});
+            std::string e1, e2;
+            pp::ColorOutcome oc1 = cm().transform(buf, outer_bytes, false, trips[t].mid,
+                                                  pp::ColorOptions{}, nullptr, &e1);
+            check(oc1.error.empty(), std::string(trips[t].name) + "/to-mid", oc1.error);
+            pp::ColorOutcome oc2 = cm().transform(buf, mid_bytes, false, outer_of[t],
+                                                  pp::ColorOptions{}, nullptr, &e2);
+            check(oc2.error.empty(), std::string(trips[t].name) + "/back", oc2.error);
+            const std::vector<float> got = get_all(buf);
+            const double back[3] = {double(got[0]), double(got[1]), double(got[2])};
+
+            double lab_after[3];
+            check(rgb_to_lab(outer, back, lab_after), std::string(trips[t].name) + "/lab-after",
+                  "");
+            const double de = delta_e2000(lab_before, lab_after);
+            worst = std::max(worst, de);
+            check(de <= 1.0, std::string(trips[t].name) + "/de2000",
+                  "dE2000=" + fnum(de) + " (> 1.0) for rgb (" + fnum(s[0]) + "," + fnum(s[1]) +
+                      "," + fnum(s[2]) + ")");
+            cmsCloseProfile(outer);
+        }
+        info(std::string("de2000 ") + trips[t].name + " worst=" + fnum(worst) + " (limit 1.0)");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// M7-WP1 · UX-14 A2 / R-032：ICC 通道不匹配 → 降级（不再整文件失败）+ Warning
+//            R-035：灰度升维必须有 GrayToRgbEncoded 告警（不再静默 ~3×）
+// ---------------------------------------------------------------------------
+void test_icc_mismatch_degrade() {
+    pp::ColorManager::instance().clear_cache();
+    std::string err;
+    const std::string rgb_icc = srgb_icc_bytes();
+    const std::string gray_icc = gray_icc_bytes(2.2);
+
+    // 灰度源 + RGB ICC（相机/扫描件常态）：原实现 lcms2 拒 transform → 整文件失败
+    {
+        OIIO::ImageBuf buf = make_buf(2, 2, 1, {0.10f, 0.20f, 0.30f, 0.40f});
+        std::vector<pp::Warning> ws;
+        std::string e;
+        const pp::ColorOutcome oc =
+            cm().transform(buf, rgb_icc, true, pp::ColorTarget::SRGB, pp::ColorOptions{}, &ws, &e);
+        check(oc.error.empty(), "r032/gray-rgb-icc-no-fail",
+              "transform must degrade, not fail: " + oc.error);
+        check(e.empty(), "r032/err-out-empty", e);
+        check(buf.spec().nchannels == 3, "r032/promoted",
+              "nchannels=" + std::to_string(buf.spec().nchannels));
+        bool degrade = false;
+        bool promoted = false;
+        for (const pp::Warning &w : ws) {
+            if (w.kind == pp::WarningKind::NoIccAssumeSrgb &&
+                w.detail.find("incompatible ICC") != std::string::npos)
+                degrade = true;
+            if (w.kind == pp::WarningKind::GrayToRgbEncoded)
+                promoted = true;
+        }
+        check(degrade, "r032/degrade-warning",
+              "expected an incompatible-ICC warning, got " + std::to_string(ws.size()));
+        check(promoted, "r035/promotion-warning",
+              "expected a GrayToRgbEncoded warning for the gray->RGB promotion");
+    }
+
+    // 反向：RGB 源 + 灰度 ICC → 同样降级不失败
+    {
+        OIIO::ImageBuf buf = make_buf(1, 1, 3, {0.50f, 0.40f, 0.30f});
+        std::vector<pp::Warning> ws;
+        std::string e;
+        const pp::ColorOutcome oc = cm().transform(buf, gray_icc, false, pp::ColorTarget::SRGB,
+                                                   pp::ColorOptions{}, &ws, &e);
+        check(oc.error.empty(), "r032/rgb-gray-icc-no-fail",
+              "transform must degrade, not fail: " + oc.error);
+        bool degrade = false;
+        for (const pp::Warning &w : ws) {
+            if (w.detail.find("incompatible ICC") != std::string::npos)
+                degrade = true;
+        }
+        check(degrade, "r032/rgb-gray-degrade-warning",
+              "expected an incompatible-ICC warning, got " + std::to_string(ws.size()));
+    }
+
+    // 匹配的灰度 ICC（真灰度 profile）不得触发降级（既有行为逐字不变）
+    {
+        OIIO::ImageBuf buf = make_buf(1, 1, 1, {0.25f});
+        std::vector<pp::Warning> ws;
+        std::string e;
+        const pp::ColorOutcome oc =
+            cm().transform(buf, gray_icc, true, pp::ColorTarget::SRGB, pp::ColorOptions{}, &ws, &e);
+        check(oc.error.empty(), "r032/matched-gray-ok", oc.error);
+        bool degrade = false;
+        for (const pp::Warning &w : ws) {
+            if (w.detail.find("incompatible ICC") != std::string::npos)
+                degrade = true;
+        }
+        check(!degrade, "r032/matched-gray-no-degrade", "false positive on a matching gray ICC");
+    }
+
+    // 旧签名（无 out_warnings）：行为零变化 —— 降级仍生效，只是告警通道为空
+    {
+        OIIO::ImageBuf buf = make_buf(1, 1, 1, {0.35f});
+        const pp::ColorOutcome oc = cm().transform(buf, rgb_icc, true, pp::ColorTarget::SRGB);
+        check(oc.error.empty(), "r032/legacy-signature-degrades",
+              "old signature must keep working: " + oc.error);
+    }
+    pp::ColorManager::instance().clear_cache();
+}
+
 } // namespace
 
 int main() {
@@ -841,6 +1066,8 @@ int main() {
     test_cicp_mapping();
     test_errors();
     test_concurrent_transforms();
+    test_de2000_roundtrip();
+    test_icc_mismatch_degrade();
 
     std::printf("test_color: %d checks, %d failed\n", g_checks, g_failed);
     return g_failed == 0 ? 0 : 1;

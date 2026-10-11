@@ -7,6 +7,13 @@
       <!-- M3-D2 裁定：进程代码页 UTF-8。argv/getenv/fopen/path::string() 与 Linux
            "路径=UTF-8 字节" 语义对齐，跨平台单一代码路径的基石。要求 Win10 1903+。 -->
       <ws2019:activeCodePage>UTF-8</ws2019:activeCodePage>
+      <!-- R-007（M7-WP1）：长路径声明。与 core/fsops 的 validate_output_filename 预检互补 ——
+           预检按 259 字符（MAX_PATH-1）硬线拦截写路径（fopen/Exiv2 无 \\?\ 归一，超长必然
+           open 失败）；本声明给系统侧（Win10 1607+ 且 LongPathsEnabled 策略）解除进程级
+           MAX_PATH 限制留出余地。注意：longPathAware 的 schema 命名空间是 SMI/2016（与
+           activeCodePage 的 SMI/2019 不同），按元素自带 xmlns 声明（混用前缀会致 SxS 拒绝
+           启动：「应用程序的并行配置不正确」）。 -->
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
     </windowsSettings>
   </application>
 </assembly>

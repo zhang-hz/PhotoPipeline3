@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "core/colormanager.h" // pp::to_string/parse_color_target（color target 唯一映射源）
+#include "core/fsops.h"        // R-194/R-290：原子写单实现（write_atomic_file）
 #include "core/params.h"
 
 namespace pp::ui {
@@ -613,45 +614,14 @@ std::string save_preset(const std::filesystem::path &file, const PresetData &p) 
 
     const QByteArray bytes = QJsonDocument(root).toJson(QJsonDocument::Indented);
 
-    // 原子写：先写同目录 <file>.tmp 再 rename 覆盖（与 core/settings.cpp 的 INI 原子写同形）。
+    // 原子写（R-194/R-290，M7-WP1 收敛）：实现单源 = core/fsops 的 write_atomic_file（I1：
+    // 同目录 PID/随机后缀 tmp → 字节校验 → rename 覆盖，目标已存在时沿用其权限位；失败清场）。
     // 不用 QSaveFile/QFile：其文件名为 QString，Qt6/Linux 固定按 UTF-8 编码，无法表达非 UTF-8
     // 字节路径（见文件头"路径层"注释）。
-    std::filesystem::path tmp = file;
-    tmp += ".tmp";
-    std::string write_err;
-    {
-        errno = 0;
-        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-        if (!out) {
-            write_err = "cannot open '" + display_path(file) + "' for writing: " + errno_text();
-        } else {
-            out.write(bytes.constData(), static_cast<std::streamsize>(bytes.size()));
-            out.flush();
-            if (!out)
-                write_err = "short write to '" + display_path(file) + "': " + errno_text();
-        }
-    }
-    if (!write_err.empty()) {
-        std::error_code rm_ec;
-        std::filesystem::remove(tmp, rm_ec);
-        return write_err;
-    }
-    // 目标已存在 → 沿用其权限位（QSaveFile::commit 的既有语义；不随 umask 漂移）
-    {
-        std::error_code st_ec;
-        const std::filesystem::file_status st = std::filesystem::status(file, st_ec);
-        if (!st_ec && std::filesystem::exists(st)) {
-            std::error_code pm_ec;
-            std::filesystem::permissions(tmp, st.permissions(),
-                                         std::filesystem::perm_options::replace, pm_ec);
-        }
-    }
-    std::filesystem::rename(tmp, file, ec);
-    if (ec) {
-        std::error_code rm_ec;
-        std::filesystem::remove(tmp, rm_ec);
-        return "cannot commit '" + display_path(file) + "': " + ec.message();
-    }
+    std::string io_err;
+    const std::string_view payload(bytes.constData(), static_cast<std::size_t>(bytes.size()));
+    if (!pp::write_atomic_file(file, payload, &io_err))
+        return "cannot save '" + display_path(file) + "': " + io_err;
     return {};
 }
 

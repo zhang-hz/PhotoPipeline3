@@ -439,9 +439,12 @@ void Scheduler::Impl::worker() {
                 if (it != inflight.end())
                     inflight.erase(it);
             }
-            // §4.4：reserved 按**每个 out_path** 登记（一源多输出 → 多条）
+            // §4.4：reserved 按**每个 out_path** 登记（一源多输出 → 多条）。
+            // R-005（P1）：**仅成功输出**入册 —— 失败输出没写出文件却占名，会让后续同名源
+            // 被幽灵跳过（"skipped: output exists" 而磁盘上什么都没有，用户漏图）。
+            // 批内同键串行由 inflight/desired_keys 保证（不靠 reserved）。
             for (const OutputResult &row : outcome.file.outputs) {
-                if (!row.out.empty())
+                if (row.ok && !row.out.empty())
                     reserved.push_back(row.out);
             }
         }

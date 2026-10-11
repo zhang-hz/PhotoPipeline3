@@ -34,6 +34,8 @@
 #include <system_error>
 #include <utility>
 
+#include "core/fsops.h" // R-002/R-030：原子写四件套（临时文件 + rename）
+
 #include "core/logger.h"
 #include "core/pipeline.h" // frozen declaration of format_supports_metadata_only()
 
@@ -349,30 +351,17 @@ void log_makernote(const Exiv2::ExifData &exif, std::string_view stage) {
     log_info(stage, "metadata.cpp", msg.c_str());
 }
 
-// FROZEN-SIGNATURE WORKAROUND: write_metadata_exiv2() receives a `const MetadataPlan&` yet must
-// report MetadataDropped/PngExifDropped to its caller (T8 copies plan.warnings into
-// FileResult.warnings). Every call site passes a mutable plan object (the build_plan() result
-// stored in a local, or a temporary) — never a declared-const object — so writing through the
-// cast is well defined there. Documented in the M1-T5 report as `next-needed` for T8.
-// M2-T4 RESOLUTION: write_metadata_exiv2() now also takes an explicit `out_warnings`
-// out-parameter (see note_write_warning below), which is the supported channel for callers.
-// The plan.warnings push is kept verbatim as the backward-compatibility channel — M2-T4 freezes
-// its production and content ("new channel adds, never removes"), so both stay in lockstep.
-void push_plan_warning(const MetadataPlan &plan, WarningKind kind, std::string detail) {
-    auto &mutable_plan = const_cast<MetadataPlan &>(plan);
-    mutable_plan.warnings.push_back(Warning{kind, std::move(detail)});
-}
-
-// M2-T4 (#6): report a write-path failure/degradation through *both* channels with a
-// byte-identical detail string, so the pipeline can merge them and drop the duplicate.
-void note_write_warning(const MetadataPlan &plan, std::vector<std::string> *out_warnings,
-                        WarningKind kind, const std::string &detail) {
+// R-171（M7-WP1）：写路径告警**只**走 `out_warnings` 显式出参（M2-T4 的加性通道）——
+// 既消灭 const_cast 突破 const 契约的写法，也收掉"plan.warnings 与 out_warnings 双通道
+// 纯靠注释 lockstep"的隐患。plan.warnings 自此只承载 build_plan() 的合成期告警。
+void note_write_warning(std::vector<std::string> *out_warnings, const std::string &detail) {
     if (out_warnings != nullptr)
         out_warnings->push_back(detail);
-    push_plan_warning(plan, kind, detail);
 }
 
-// Exiv2 read/modify/write in one place; empty containers => remove that metadata section.
+// Exiv2 read/modify/write **in place on `file`**；空容器 => remove that metadata section。
+// 注意：本函数可能截断重写（Exiv2 内部行为），调用方必须只把它用在**临时副本**上
+// （R-002：写回一律 临时文件 + rename，见 exiv2_apply_atomic / rewrite_metadata_only）。
 std::string exiv2_apply(const std::filesystem::path &file, const Exiv2::ExifData *exif,
                         const Exiv2::XmpData *xmp) {
     if (exif != nullptr)
@@ -399,6 +388,35 @@ std::string exiv2_apply(const std::filesystem::path &file, const Exiv2::ExifData
         return std::string("exiv2: ") + e.what();
     } catch (...) {
         return "exiv2: unknown error while writing " + file.string();
+    }
+    return {};
+}
+
+// R-002（P0，数据安全线）：Exiv2 写回 = 临时文件 + rename。Exiv2 的 writeMetadata() 内部
+// 是截断重写 —— 直接作用最终文件时，磁盘满/杀进程/文件被占会把已编码好的输出截断成坏文件。
+// 这里把改动落在同目录临时副本上，成功才 commit 覆盖；失败清场，目标文件保持原样。
+std::string exiv2_apply_atomic(const std::filesystem::path &file, const Exiv2::ExifData *exif,
+                               const Exiv2::XmpData *xmp) {
+    namespace fs = std::filesystem;
+    const fs::path tmp = atomic_temp_path(file);
+    if (tmp.empty())
+        return "exiv2: cannot build temp name for " + file.string();
+    std::error_code cp_ec;
+    fs::copy_file(file, tmp, fs::copy_options::overwrite_existing, cp_ec);
+    if (cp_ec) {
+        discard_temp_file(tmp);
+        return "exiv2: cannot stage " + file.string() + " -> " + tmp.string() + ": " +
+               cp_ec.message();
+    }
+    const std::string err = exiv2_apply(tmp, exif, xmp);
+    if (!err.empty()) {
+        discard_temp_file(tmp);
+        return err;
+    }
+    std::string commit_err;
+    if (!commit_temp_file(tmp, file, &commit_err)) {
+        discard_temp_file(tmp);
+        return "exiv2: " + commit_err;
     }
     return {};
 }
@@ -453,6 +471,16 @@ BatchRules effective_rules(const BatchRules &rules, const std::optional<Metadata
     const bool ignore_batch = ex.has_value() && ex->ignore_batch;
     if (!ignore_batch)
         eff = rules;
+    // M7-WP1 / I5：各卡参与开关（UX-5）。该卡参与规则 = *_enabled && 原判据；缺省 true =
+    // 既有行为逐字不变。开关只作用于**批量规则**（例外是单文件显式意志，不受批量卡开关影响）。
+    if (!eff.time_enabled)
+        eff.time_shift.reset();
+    if (!eff.gps_enabled) {
+        eff.gps.reset();
+        eff.gps_clear = false;
+    }
+    if (!eff.privacy_enabled)
+        eff.strip_privacy = false;
     if (ex.has_value()) {
         if (ex->time_shift.has_value())
             eff.time_shift = ex->time_shift; // 覆盖（inherit = nullopt）
@@ -491,9 +519,44 @@ std::optional<DateTimeVal> exif_time_value(const Exiv2::ExifData &exif, const ch
     return DateTimeVal{v};
 }
 
+// XMP 日期在 TimeShift 下的生效值（build_plan 的写路径与 preview_effective 的显示路径
+// **共用**本纯函数 —— §3.5/§5.1 同源合成，杜绝显示/写入两张皮）。nullopt = 不可解析/越界
+// （写入路径在这些情形跳过写入，两条路径同结论）。
+std::optional<std::string> shifted_xmp_time(const std::string &value, const TimeShift &s) {
+    XmpDate d;
+    if (!parse_xmp_date(value, d))
+        return std::nullopt;
+    DateTime out;
+    std::string fraction = d.fraction;
+    std::string offset = d.offset;
+    if (s.mode == TimeShift::Mode::Delta) {
+        if (!apply_delta(d.dt, s, out))
+            return std::nullopt;
+    } else {
+        // The value's own offset (when present) is authoritative; otherwise the caller's
+        // `from` zone is the interpretation (§5.3).
+        TimeShift delta;
+        const int src_off = d.has_offset ? offset_minutes_of(d.offset) : s.from_offset_min;
+        delta.minutes = s.to_offset_min - src_off;
+        if (!apply_delta(d.dt, delta, out))
+            return std::nullopt;
+        if (d.has_offset)
+            offset = offset_time_string(s.to_offset_min);
+    }
+    return format_iso_base(out) + fraction + offset;
+}
+
 std::string exif_string_value(const Exiv2::ExifData &exif, const char *key) {
     auto it = exif.findKey(Exiv2::ExifKey(key));
     if (it == exif.end())
+        return {};
+    return strip_nul(it->toString());
+}
+
+// XMP 时间标签的原值（缺失/空 → 空串；键形态经 normalize_xmp_key 归一）
+std::string xmp_string_value(const Exiv2::XmpData &xmp, const char *key) {
+    auto it = xmp.findKey(Exiv2::XmpKey(normalize_xmp_key(key)));
+    if (it == xmp.end())
         return {};
     return strip_nul(it->toString());
 }
@@ -580,9 +643,13 @@ bool gps_same(const std::optional<GpsData> &a, const std::optional<GpsData> &b) 
 }
 
 // Applies `s` to the EXIF time tags and the XMP dates that are actually present (§4.5).
-// Returns the number of fields rewritten.
-int apply_time_shift(Exiv2::ExifData &exif, Exiv2::XmpData &xmp, const TimeShift &s) {
+// Returns the number of fields rewritten; `exif_rewritten` (optional) counts the EXIF side only
+// — R-234 的 OffsetTime* 写入条件以它为准（"墙钟实际改写成功"）。
+int apply_time_shift(Exiv2::ExifData &exif, Exiv2::XmpData &xmp, const TimeShift &s,
+                     int *exif_rewritten = nullptr) {
     int touched = 0;
+    if (exif_rewritten != nullptr)
+        *exif_rewritten = 0;
     for (const char *k : kExifTimeKeys) {
         auto it = exif.findKey(Exiv2::ExifKey(k));
         if (it == exif.end())
@@ -596,36 +663,22 @@ int apply_time_shift(Exiv2::ExifData &exif, Exiv2::XmpData &xmp, const TimeShift
         }
         (void)it->setValue(*next);
         ++touched;
+        if (exif_rewritten != nullptr)
+            ++*exif_rewritten;
     }
     for (const char *k : kXmpTimeKeys) {
         const std::string key = normalize_xmp_key(k);
         auto it = xmp.findKey(Exiv2::XmpKey(key));
         if (it == xmp.end())
             continue;
-        XmpDate d;
         const std::string cur = strip_nul(it->toString());
-        if (!parse_xmp_date(cur, d)) {
+        // XMP 侧同走 preview_effective 共用的纯函数（R-085：显示面与写入面同源）
+        const std::optional<std::string> next = shifted_xmp_time(cur, s);
+        if (!next.has_value()) {
             log_warn("MetaWrite", "metadata.cpp", "time shift skipped for unparsable xmp date");
             continue;
         }
-        DateTime out;
-        std::string fraction = d.fraction;
-        std::string offset = d.offset;
-        if (s.mode == TimeShift::Mode::Delta) {
-            if (!apply_delta(d.dt, s, out))
-                continue;
-        } else {
-            // The value's own offset (when present) is authoritative; otherwise the caller's
-            // `from` zone is the interpretation (§5.3).
-            TimeShift delta;
-            const int src_off = d.has_offset ? offset_minutes_of(d.offset) : s.from_offset_min;
-            delta.minutes = s.to_offset_min - src_off;
-            if (!apply_delta(d.dt, delta, out))
-                continue;
-            if (d.has_offset)
-                offset = offset_time_string(s.to_offset_min);
-        }
-        (void)it->setValue(format_iso_base(out) + fraction + offset);
+        (void)it->setValue(*next);
         ++touched;
     }
     return touched;
@@ -776,7 +829,8 @@ MetadataPlan build_plan(const SourceMeta &src, const BatchRules &rules,
     if (eff.gps_clear) {
         clear_gps(plan.exif);
     } else if (eff.gps.has_value()) {
-        write_gps(plan.exif, *eff.gps);
+        // R-029：时间戳格式非法 → 保留既有 GPSDateStamp/GPSTimeStamp + Warning 进 plan。
+        write_gps(plan.exif, *eff.gps, &plan.warnings);
     }
 
     if (eff.time_shift.has_value() && !eff.time_shift->is_noop()) {
@@ -784,16 +838,13 @@ MetadataPlan build_plan(const SourceMeta &src, const BatchRules &rules,
             plan.warnings.push_back(
                 Warning{WarningKind::TimeFieldMissing, "no time field found, time shift skipped"});
         } else {
-            apply_time_shift(plan.exif, plan.xmp, *eff.time_shift);
+            int exif_rewritten = 0;
+            apply_time_shift(plan.exif, plan.xmp, *eff.time_shift, &exif_rewritten);
             if (eff.time_shift->mode == TimeShift::Mode::TimezoneSemantic) {
-                // EXIF 2.31 OffsetTime* describes the EXIF time tags, so only write them when at
-                // least one of those tags is present.
-                bool any_exif_time = false;
-                for (const char *k : kExifTimeKeys) {
-                    if (plan.exif.findKey(Exiv2::ExifKey(k)) != plan.exif.end())
-                        any_exif_time = true;
-                }
-                if (any_exif_time) {
+                // R-234：OffsetTime* 描述的是 EXIF 时间标签的时区 —— 只有**墙钟实际改写成功**
+                // （至少一个 EXIF 时间标签被写入新值）才写 OffsetTime*；否则"墙钟未变 + 新
+                // offset"会把拍摄时刻语义改错。
+                if (exif_rewritten > 0) {
                     const std::string off = offset_time_string(eff.time_shift->to_offset_min);
                     for (const char *k : {"Exif.Photo.OffsetTime", "Exif.Photo.OffsetTimeOriginal",
                                           "Exif.Photo.OffsetTimeDigitized"}) {
@@ -807,8 +858,11 @@ MetadataPlan build_plan(const SourceMeta &src, const BatchRules &rules,
     std::vector<std::string> edit_errors;
     apply_edits(plan.exif, plan.xmp, eff.exif_edits, eff.xmp_edits, edit_errors);
     for (const std::string &e : edit_errors) {
+        // R-084：批量标签编辑被拒（非法 key/类型）升格 Warning —— 不能只进日志，
+        // 否则用户以为已写入（plan.warnings → row.warnings 既有聚合链路，UI 可见）。
         log_warn("MetaWrite", "metadata.cpp", "tag edit rejected");
         log_debug("MetaWrite", "metadata.cpp", e.c_str());
+        plan.warnings.push_back(Warning{WarningKind::MetadataDropped, "tag edit rejected: " + e});
     }
 
     plan.datetime_original = effective_datetime(plan.exif, plan.xmp);
@@ -832,6 +886,7 @@ EffectivePreview preview_effective(const SourceProbe &probe, const BatchRules &r
         (eff.time_shift.has_value() && !eff.time_shift->is_noop()) ? eff.time_shift : std::nullopt;
     EffectiveField<std::optional<DateTimeVal>> *const fields[3] = {
         &out.datetime_original, &out.datetime_digitized, &out.datetime_modify};
+    int exif_shifted = 0; // R-234/R-085：OffsetTime* 的写入条件（墙钟实际改写成功）与写路径同判据
     for (std::size_t i = 0; i < 3; ++i) {
         EffectiveField<std::optional<DateTimeVal>> &f = *fields[i];
         f.original = exif_time_value(probe.exif, kExifTimeKeys[i]);
@@ -841,8 +896,50 @@ EffectivePreview preview_effective(const SourceProbe &probe, const BatchRules &r
             f.effective = std::nullopt;
         } else if (shift.has_value() && f.original.has_value()) {
             const std::optional<std::string> next = shifted_exif_time(f.original->value, *shift);
-            if (next.has_value())
+            if (next.has_value()) {
                 f.effective = DateTimeVal{*next}; // 不可解析 → 保持原值（与写路径同结论）
+                ++exif_shifted;
+            }
+        }
+        f.changed = (f.effective != f.original);
+    }
+
+    // —— R-085：XMP 日期（build_plan 一并改写 → 显示面补全，同源 shifted_xmp_time）——
+    EffectiveField<std::optional<DateTimeVal>> *const xmp_fields[2] = {&out.xmp_create_date,
+                                                                       &out.xmp_modify_date};
+    for (std::size_t i = 0; i < 2; ++i) {
+        EffectiveField<std::optional<DateTimeVal>> &f = *xmp_fields[i];
+        const std::string cur = xmp_string_value(probe.xmp, kXmpTimeKeys[i]);
+        f.original = cur.empty() ? std::nullopt : std::optional<DateTimeVal>{DateTimeVal{cur}};
+        f.effective = f.original;
+        if (eff.strip_privacy) {
+            f.effective = std::nullopt;
+        } else if (shift.has_value() && f.original.has_value()) {
+            const std::optional<std::string> next = shifted_xmp_time(f.original->value, *shift);
+            if (next.has_value())
+                f.effective = DateTimeVal{*next};
+        }
+        f.changed = (f.effective != f.original);
+    }
+
+    // —— R-085/R-234：OffsetTime*（三键同值写入；条件 = 墙钟实际改写成功）——
+    const auto offset_orig = [&probe](const char *key) -> std::optional<std::string> {
+        const std::string v = exif_string_value(probe.exif, key);
+        return v.empty() ? std::nullopt : std::optional<std::string>{v};
+    };
+    EffectiveField<std::optional<std::string>> *const off_fields[3] = {
+        &out.offset_time, &out.offset_time_original, &out.offset_time_digitized};
+    const char *const off_keys[3] = {"Exif.Photo.OffsetTime", "Exif.Photo.OffsetTimeOriginal",
+                                     "Exif.Photo.OffsetTimeDigitized"};
+    for (std::size_t i = 0; i < 3; ++i) {
+        EffectiveField<std::optional<std::string>> &f = *off_fields[i];
+        f.original = offset_orig(off_keys[i]);
+        f.effective = f.original;
+        if (eff.strip_privacy) {
+            f.effective = std::nullopt; // 剥除 → 一并消失
+        } else if (shift.has_value() && shift->mode == TimeShift::Mode::TimezoneSemantic &&
+                   exif_shifted > 0) {
+            f.effective = offset_time_string(shift->to_offset_min);
         }
         f.changed = (f.effective != f.original);
     }
@@ -852,7 +949,14 @@ EffectivePreview preview_effective(const SourceProbe &probe, const BatchRules &r
     if (eff.strip_privacy || eff.gps_clear) {
         out.gps.effective = std::nullopt;
     } else if (eff.gps.has_value()) {
-        out.gps.effective = eff.gps;
+        // R-029：回显按写入口径同源 —— 规则时间戳非法时写侧保留源 GPSDateStamp/GPSTimeStamp，
+        // 显示面就该显示被保留的源时间戳（而不是那条写不进去的字符串）。
+        GpsData g = *eff.gps;
+        if (g.timestamp.has_value() && !is_valid_gps_timestamp(*g.timestamp)) {
+            g.timestamp = out.gps.original.has_value() ? out.gps.original->timestamp
+                                                       : std::optional<std::string>{};
+        }
+        out.gps.effective = g;
     } else {
         out.gps.effective = out.gps.original;
     }
@@ -897,6 +1001,10 @@ std::string write_metadata_exiv2(const std::filesystem::path &out_file, const Me
     const std::string ext = lower_copy(out_file.extension().string());
     const bool is_png = (ext == ".png");
 
+    // R-282（M7-WP1，grep 复核结论）：BMP 分支**保留** —— 评审称其"不可达"只对 pipeline
+    // 生产路径成立（那里 BMP 走 meta_path=="none" 的显式告警分支）；本函数是 §5.8 的公开
+    // API 面，"BMP 丢元数据 + 不算失败"是其文档化契约且被 test_post_write_formats 钉住。
+    // 删除 = 改冻结契约 + 减证据面 → 不删，登记裁定（handoff）。
     if (ext == ".bmp") {
         // BMP has no metadata container; §5.8 assigns the MetadataDropped warning to the pipeline.
         log_info("MetaWrite", "metadata.cpp", "bmp output carries no metadata container");
@@ -906,7 +1014,9 @@ std::string write_metadata_exiv2(const std::filesystem::path &out_file, const Me
         return {}; // nothing to write (e.g. privacy strip): the encoder output carries none
     }
 
-    std::string err = exiv2_apply(out_file, &plan.exif, &plan.xmp);
+    // R-002（P0）：写回改临时文件 + rename（exiv2_apply_atomic）。写失败 = 真失败：
+    // 返回非空错误、目标文件保持编码产物原样（不再吞成 warning + 成功）。
+    std::string err = exiv2_apply_atomic(out_file, &plan.exif, &plan.xmp);
     if (err.empty() && (!is_png || key_exif_landed(out_file, plan.exif)))
         return {};
 
@@ -919,22 +1029,23 @@ std::string write_metadata_exiv2(const std::filesystem::path &out_file, const Me
         Exiv2::XmpData mirrored = plan.xmp;
         const std::size_t mirrored_n = detail_mirror_key_exif_to_xmp(plan.exif, mirrored);
         if (mirrored_n > 0) {
-            const std::string err2 = exiv2_apply(out_file, nullptr, &mirrored);
+            const std::string err2 = exiv2_apply_atomic(out_file, nullptr, &mirrored);
             if (err2.empty()) {
                 log_warn("MetaWrite", "metadata.cpp", "png exif mirrored to xmp");
-                note_write_warning(plan, out_warnings, WarningKind::MetadataDropped,
-                                   "png exif mirrored to xmp");
+                note_write_warning(out_warnings, "png exif mirrored to xmp");
                 return {};
             }
             err = err2;
         }
     }
 
-    // Metadata-only loss: keep the pixel output, report it (§5.2 BMP policy; R1 fallback for PNG).
-    std::string detail = is_png ? "png metadata dropped: " + err : "metadata dropped: " + err;
+    // R-002（P0）：写失败不再降级成"保留像素 + warning + 成功"——坏/缺元数据的产物必须
+    // 显式失败（ok=false），交由上层决定保留或重试。文案沿用既有 detail 形态（可检索）；
+    // M2-T4 的显式出参通道照旧收到同一 detail（消息必须到达 out_warnings 的契约不变）。
+    const std::string detail = is_png ? "png metadata dropped: " + err : "metadata dropped: " + err;
     log_error("MetaWrite", "metadata.cpp", detail.c_str());
-    note_write_warning(plan, out_warnings, WarningKind::MetadataDropped, detail);
-    return {};
+    note_write_warning(out_warnings, detail);
+    return detail;
 }
 
 // ---------------------------------------------------------------------------
@@ -946,6 +1057,9 @@ bool detail_metadata_only_supported(std::string_view format_id) {
     // The container itself is probed at runtime with Exiv2's own type detection, so a future
     // exiv2 build that loses a format handler (e.g. no zlib → no PNG) degrades automatically
     // instead of failing per file. T8's format_supports_metadata_only() should delegate here.
+    //
+    // R-285：探测结果按进程缓存（结果只取决于 exiv2 构建的类型表，运行期不可变）——
+    // 原实现每次调用都重放 ImageFactory::getType（每文件/每输出都会走到），白烧 CPU。
     struct Sample {
         std::string_view id;
         const unsigned char *sig;
@@ -964,24 +1078,31 @@ bool detail_metadata_only_supported(std::string_view format_id) {
                                           0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00, 0x01,
                                           0x00, 0x00, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00,
                                           0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-    static const unsigned char kWebp[] = {
-        // RIFF/WEBP + minimal VP8X chunk
-        0x52, 0x49, 0x46, 0x46, 0x16, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50, 0x56, 0x50, 0x38,
-        0x58, 0x0A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    static const unsigned char kWebp[] = {// RIFF/WEBP + minimal VP8X chunk
+                                          0x52, 0x49, 0x46, 0x46, 0x16, 0x00, 0x00, 0x00, 0x57,
+                                          0x45, 0x42, 0x50, 0x56, 0x50, 0x38, 0x58, 0x0A, 0x00,
+                                          0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
     static const Sample kSamples[] = {{"jpeg", kJpeg, sizeof(kJpeg)},
                                       {"png", kPng, sizeof(kPng)},
                                       {"tiff", kTiff, sizeof(kTiff)},
                                       {"webp", kWebp, sizeof(kWebp)}};
-    for (const Sample &s : kSamples) {
-        if (format_id != s.id)
-            continue;
-        try {
-            return Exiv2::ImageFactory::getType(s.sig, s.size) != Exiv2::ImageType::none;
-        } catch (...) {
-            return false;
+    static const std::map<std::string, bool> kCache = [] {
+        std::map<std::string, bool> m;
+        for (const Sample &s : kSamples) {
+            bool ok = false;
+            try {
+                ok = Exiv2::ImageFactory::getType(s.sig, s.size) != Exiv2::ImageType::none;
+            } catch (...) {
+                ok = false;
+            }
+            m.emplace(std::string(s.id), ok);
         }
-    }
-    return false; // bmp/heif/avif/jxl and anything else: no lossless metadata rewrite in v1
+        return m;
+    }();
+    const auto it = kCache.find(std::string(format_id));
+    if (it == kCache.end())
+        return false; // bmp/heif/avif/jxl and anything else: no lossless metadata rewrite in v1
+    return it->second;
 }
 
 // The frozen predicate is declared in core/pipeline.h and owned by T8's pipeline.cpp. Until that
@@ -1002,13 +1123,30 @@ std::string rewrite_metadata_only(const std::filesystem::path &src,
                                   const std::filesystem::path &out, const MetadataPlan &plan,
                                   const Payloads &payloads) {
     (void)payloads; // containers are handed to Exiv2 directly
+    namespace fs = std::filesystem;
+    // R-002/R-030：临时文件 + rename。Exiv2 的截断重写只作用在临时副本上；任一步失败
+    // 清场并保持 out 原样（不存在就仍不存在 —— 也就没有"占名的坏副本"）。
+    // 源文件永远只读（copy_file 只读 src，全程不写 src）。
+    const fs::path tmp = atomic_temp_path(out);
+    if (tmp.empty())
+        return "cannot build temp name for " + out.string();
     std::error_code ec;
-    std::filesystem::copy_file(src, out, std::filesystem::copy_options::overwrite_existing, ec);
-    if (ec)
+    fs::copy_file(src, tmp, fs::copy_options::overwrite_existing, ec);
+    if (ec) {
+        discard_temp_file(tmp);
         return "copy " + src.string() + " -> " + out.string() + " failed: " + ec.message();
-    // Exiv2 rewrites the container in place (JPEG/WebP/TIFF keep the compressed payload bytes);
-    // the source file is never touched because we work on the copy.
-    return exiv2_apply(out, &plan.exif, &plan.xmp);
+    }
+    const std::string err = exiv2_apply(tmp, &plan.exif, &plan.xmp);
+    if (!err.empty()) {
+        discard_temp_file(tmp);
+        return err;
+    }
+    std::string commit_err;
+    if (!commit_temp_file(tmp, out, &commit_err)) {
+        discard_temp_file(tmp);
+        return commit_err;
+    }
+    return {};
 }
 
 // ===========================================================================
@@ -1045,7 +1183,12 @@ std::string sync_file_mtime(const std::filesystem::path &out, const std::string 
 // GPS
 // ===========================================================================
 
-void write_gps(Exiv2::ExifData &exif, const GpsData &gps) {
+bool is_valid_gps_timestamp(const std::string &s) {
+    DateTime ts;
+    return parse_exif_datetime(s, ts); // 与写侧同一判据（"YYYY:MM:DD HH:MM:SS"）
+}
+
+void write_gps(Exiv2::ExifData &exif, const GpsData &gps, std::vector<Warning> *out_warnings) {
     const double lat = std::clamp(std::isfinite(gps.lat) ? gps.lat : 0.0, -90.0, 90.0);
     const double lon = std::clamp(std::isfinite(gps.lon) ? gps.lon : 0.0, -180.0, 180.0);
 
@@ -1084,11 +1227,21 @@ void write_gps(Exiv2::ExifData &exif, const GpsData &gps) {
         exif["Exif.GPSInfo.GPSDateStamp"] = std::string(date);
         exif["Exif.GPSInfo.GPSTimeStamp"] =
             urational(ts.hour, 1) + " " + urational(ts.minute, 1) + " " + urational(ts.second, 1);
-    } else {
-        if (gps.timestamp.has_value()) {
-            log_warn("MetaWrite", "metadata.cpp",
-                     "gps timestamp is not 'YYYY:MM:DD HH:MM:SS'; skipped");
+    } else if (gps.timestamp.has_value()) {
+        // R-029（数据安全线）：非 "YYYY:MM:DD HH:MM:SS" 的时间戳**不再擦除**既有
+        // GPSDateStamp/GPSTimeStamp（原实现跳过写入却顺手清掉源时间戳 = 静默数据损失），
+        // 改为保留源值 + 升格 Warning（写路径单通道 out_warnings，R-171）。
+        log_warn("MetaWrite", "metadata.cpp",
+                 "gps timestamp is not 'YYYY:MM:DD HH:MM:SS'; kept existing GPSDateStamp/"
+                 "GPSTimeStamp");
+        if (out_warnings != nullptr) {
+            out_warnings->push_back(Warning{
+                WarningKind::MetadataDropped,
+                "gps timestamp is not 'YYYY:MM:DD HH:MM:SS'; existing GPSDateStamp/GPSTimeStamp "
+                "kept unchanged"});
         }
+    } else {
+        // 规则未给时间戳：GPS 块整体替换语义（stale optionals 不得存活）→ 清掉旧时间戳。
         erase_exif_key(exif, "Exif.GPSInfo.GPSDateStamp");
         erase_exif_key(exif, "Exif.GPSInfo.GPSTimeStamp");
     }
@@ -1230,10 +1383,7 @@ std::string effective_datetime(const Exiv2::ExifData &exif, const Exiv2::XmpData
         XmpDate d;
         if (parse_xmp_date(v, d))
             return format_exif_datetime(d.dt); // XMP ISO-8601 → EXIF form
-        DateTime t;
-        if (parse_exif_datetime(v, t))
-            return v;
-        return v;
+        return v; // R-282：原"parse 成功返回 v / 失败也返回 v"两分支同果（死条件），收成一条
     }
     return {};
 }

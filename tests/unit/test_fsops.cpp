@@ -387,6 +387,229 @@ int main() {
         }
     }
 
+    // ---- M7-WP1 · I1 原子写四件套（R-003/R-028）----
+    {
+        const fs::path dir = make_temp_dir("fsops_atomic");
+        // 基本写 + 字节校验（内容逐字节回读）
+        const fs::path target = dir / "a.bin";
+        std::string err = "unset";
+        check(pp::write_atomic_file(target, std::string_view("hello\x00world", 11), &err),
+              "atomic/write-ok", err);
+        check(err.empty(), "atomic/write-err-cleared", "err='" + err + "'");
+        {
+            std::ifstream in(target, std::ios::binary);
+            const std::string got((std::istreambuf_iterator<char>(in)),
+                                  std::istreambuf_iterator<char>());
+            check(got.size() == 11 && got.substr(0, 5) == "hello", "atomic/write-bytes",
+                  "got " + std::to_string(got.size()) + " bytes");
+        }
+        // tmp 名带 PID/随机后缀且互不相同（R-028：双开不互踩）
+        const fs::path t1 = pp::atomic_temp_path(target);
+        const fs::path t2 = pp::atomic_temp_path(target);
+        check(!t1.empty() && !t2.empty() && t1 != t2, "atomic/temp-unique",
+              "t1=" + show(t1) + " t2=" + show(t2));
+        check(t1.parent_path() == dir && t1.extension() == ".tmp", "atomic/temp-shape",
+              "got " + show(t1));
+        // 失败清场：目标在不存在的目录 → 写失败且不留任何 tmp 兄弟
+        const fs::path bad = dir / "missing-sub" / "x.bin";
+        check(!pp::write_atomic_file(bad, std::string_view("x"), &err), "atomic/write-fail",
+              "expected failure for a missing parent directory");
+        check(!err.empty(), "atomic/write-fail-err", "expected a non-empty error");
+        std::error_code ec;
+        check(!fs::exists(bad, ec), "atomic/no-half-file", show(bad));
+        // commit_temp_file 覆盖已存在目标（Windows rename 语义实证）+ 失败清场
+        const fs::path tmp = pp::atomic_temp_path(target);
+        write_file(tmp, "new-content");
+        check(pp::commit_temp_file(tmp, target, &err), "atomic/commit-overwrite", err);
+        {
+            std::ifstream in(target, std::ios::binary);
+            const std::string got((std::istreambuf_iterator<char>(in)),
+                                  std::istreambuf_iterator<char>());
+            check(got == "new-content", "atomic/commit-content", "got " + show(got));
+        }
+        const fs::path ghost = pp::atomic_temp_path(target);
+        check(!pp::commit_temp_file(ghost, dir / "out.bin", &err), "atomic/commit-missing-tmp",
+              "expected failure for a missing temp file");
+        pp::discard_temp_file(ghost); // 幂等、noexcept
+        pp::discard_temp_file(ghost);
+        check(!fs::exists(ghost, ec), "atomic/discard-gone", show(ghost));
+        // 目标已存在 → 权限位继承（覆盖不改权限）
+        check(pp::write_atomic_file(target, std::string_view("again"), &err), "atomic/rewrite-ok",
+              err);
+    }
+
+    // ---- M7-WP1 · I2 validate_output_filename（R-007）----
+    {
+        struct Case {
+            const char *path;
+            bool ok;
+            const char *name;
+        };
+        const Case cases[] = {
+            {"out/photo.jpg", true, "valid/simple"},
+            {"out/sub dir/图-片 (1).JPG", true, "valid/unicode-spaces"},
+            {"out/a.b.c.png", true, "valid/dots-in-stem"},
+            {"CON", false, "invalid/con"},
+            {"out/CON.jpg", false, "invalid/con-with-ext"},
+            {"out/prn", false, "invalid/prn-lower"},
+            {"out/AUX.png", false, "invalid/aux"},
+            {"out/NUL", false, "invalid/nul"},
+            {"out/COM1.jpg", false, "invalid/com1"},
+            {"out/COM9.jpg", false, "invalid/com9"},
+            {"out/LPT1.jpg", false, "invalid/lpt1"},
+            {"out/LPT9.jpg", false, "invalid/lpt9"},
+            {"out/COM10.jpg", true, "valid/com10-not-reserved"},
+            {"out/a:b.jpg", false, "invalid/colon"},
+            {"out/a<b.jpg", false, "invalid/lt"},
+            {"out/a>b.jpg", false, "invalid/gt"},
+            {"out/a\"b.jpg", false, "invalid/quote"},
+            {"out/a|b.jpg", false, "invalid/pipe"},
+            {"out/a?b.jpg", false, "invalid/question"},
+            {"out/a*b.jpg", false, "invalid/star"},
+            {"out/bad\nname.jpg", false, "invalid/control-char"},
+            {"out/trailing.", false, "invalid/trailing-dot"},
+            {"out/trailing ", false, "invalid/trailing-space"},
+            {"out/", false, "invalid/no-file-name"},
+            {"", false, "invalid/empty"},
+        };
+        for (const Case &c : cases) {
+            std::string err;
+            const bool ok = pp::validate_output_filename(fs::path(c.path), &err);
+            check(ok == c.ok, c.name,
+                  std::string("validate('") + c.path + "') = " + (ok ? "true" : "false") +
+                      " (want " + (c.ok ? "true" : "false") + "), err='" + err + "'");
+            if (!c.ok) {
+                check(!err.empty(), std::string(c.name) + "/message", "no error message");
+            }
+        }
+        // 长度：单段 >255、整串 >259 都要判负
+        std::string long_component = "out/";
+        long_component.append(300, 'x');
+        long_component += ".jpg";
+        check(!pp::validate_output_filename(fs::path(long_component), nullptr),
+              "invalid/component-too-long", "300-char component must be rejected");
+        std::string long_total = "out/";
+        for (int i = 0; i < 40; ++i)
+            long_total += "abcdefghij/";
+        long_total += "photo.jpg";
+        check(long_total.size() > 259 &&
+                  !pp::validate_output_filename(fs::path(long_total), nullptr),
+              "invalid/total-too-long", "total " + std::to_string(long_total.size()) + " chars");
+        // err 可为 nullptr
+        check(pp::validate_output_filename(fs::path("out/ok.jpg"), nullptr), "valid/null-err",
+              "valid path rejected with nullptr err");
+    }
+
+    // ---- M7-WP1 · I2 probe_output_root（R-007/R-073 引擎侧预检）----
+    {
+        const fs::path dir = make_temp_dir("fsops_probe_root") / "created" / "nested";
+        std::string err;
+        check(pp::probe_output_root(dir, &err), "probe/create-ok", err);
+        std::error_code ec;
+        check(fs::is_directory(dir, ec), "probe/dir-exists", show(dir));
+        // 探针文件必须清掉
+        std::size_t leftovers = 0;
+        for (const fs::directory_entry &e : fs::directory_iterator(dir, ec)) {
+            if (e.path().filename().string().find("pp-write-probe") != std::string::npos)
+                ++leftovers;
+        }
+        check(leftovers == 0, "probe/no-leftovers",
+              "leftover probes: " + std::to_string(leftovers));
+        check(!pp::probe_output_root(fs::path(), &err), "probe/empty-dir", "expected failure");
+        check(!err.empty(), "probe/empty-dir-err", "expected a non-empty error");
+    }
+
+    // ---- M7-WP1 · R-005 软保留（幽灵跳过防线）----
+    {
+        const fs::path dir = make_temp_dir("fsops_soft_reserved");
+        const fs::path desired = dir / "ghost.png";
+        std::vector<fs::path> hard;
+        std::vector<fs::path> soft;
+        std::string err;
+
+        soft.push_back(desired); // 批内登记过、但磁盘上不存在（失败输出的幽灵占位）
+        const pp::OutputPlan p1 =
+            pp::resolve_conflict(desired, pp::ConflictPolicy::Skip, hard, soft, err);
+        check(!p1.skip && p1.out_path == desired && err.empty(), "conflict/skip-soft-fallback",
+              "skip=" + std::to_string(p1.skip) + " out=" + show(p1.out_path) + " err=" + err);
+
+        write_file(desired, "x"); // 磁盘上真的存在 → Skip 必须跳过
+        const pp::OutputPlan p2 =
+            pp::resolve_conflict(desired, pp::ConflictPolicy::Skip, hard, soft, err);
+        check(p2.skip && p2.out_path == desired, "conflict/skip-on-disk",
+              "skip=" + std::to_string(p2.skip));
+
+        hard.push_back(dir / "inflight.png"); // 同文件更早 target 的未落盘路径 = 硬保留
+        const pp::OutputPlan p3 =
+            pp::resolve_conflict(dir / "inflight.png", pp::ConflictPolicy::Skip, hard, soft, err);
+        check(p3.skip, "conflict/skip-on-hard-reserved", "expected skip for an in-flight target");
+
+        // Rename 对软保留照旧避让（既有语义逐字不变）
+        const pp::OutputPlan p4 =
+            pp::resolve_conflict(desired, pp::ConflictPolicy::Rename, hard, soft, err);
+        check(p4.out_path == dir / "ghost (1).png" && p4.rename_index == 1,
+              "conflict/rename-avoids-soft", "got " + show(p4.out_path));
+    }
+
+    // ---- M7-WP1 · R-031 collect_inputs 排除输出根子树 ----
+    {
+        const fs::path dir = make_temp_dir("fsops_exclude");
+        write_file(dir / "in1.png", "x");
+        write_file(dir / "sub" / "in2.png", "x");
+        write_file(dir / "out" / "copy1.png", "x");          // 输出根
+        write_file(dir / "out" / "deep" / "copy2.png", "x"); // 输出根子树
+        std::vector<std::string> errors;
+        const std::vector<fs::path> all = pp::collect_inputs({dir}, {"png"}, errors);
+        check(all.size() == 4, "exclude/without-filter",
+              "expect 4, got " + std::to_string(all.size()));
+        const std::vector<fs::path> filtered =
+            pp::collect_inputs({dir}, {"png"}, {dir / "out"}, errors);
+        check(filtered.size() == 2, "exclude/out-root-excluded",
+              "expect 2, got " + std::to_string(filtered.size()));
+        for (const fs::path &f : filtered) {
+            check(!pp::is_inside(f, dir / "out"), "exclude/no-output-inside",
+                  "leaked output: " + show(f));
+        }
+        // 3 参旧签名转发（空排除集）→ 既有行为
+        const std::vector<fs::path> legacy = pp::collect_inputs({dir}, {"png"}, errors);
+        check(legacy.size() == 4, "exclude/legacy-signature",
+              "expect 4, got " + std::to_string(legacy.size()));
+    }
+
+    // ---- M7-WP1 · R-083 模板末段必须产出文件名 ----
+    {
+        struct Case {
+            const char *tmpl;
+            bool ok;
+            const char *name;
+        };
+        const Case cases[] = {
+            {"$format/$dir/$file", true, "r083/valid-default"},
+            {"$dir/$file", true, "r083/valid-mirror"},
+            {"$file", true, "r083/valid-file"},
+            {"$name", true, "r083/valid-name"},
+            {"$name.$ext", true, "r083/valid-name-ext"},
+            {"photos-$format/$dir/$name-$ext.$ext", true, "r083/valid-mixed"},
+            {"jpeg/", false, "r083/invalid-literal-tail"},
+            {"$format", false, "r083/invalid-dir-symbol-tail"},
+            {"photos-$format", false, "r083/invalid-literal-mixed-tail"},
+            {"$dir/", false, "r083/invalid-dir-only"},
+            {"out/exports", false, "r083/invalid-nested-literal-tail"},
+        };
+        for (const Case &c : cases) {
+            std::string err;
+            const bool ok = pp::validate_output_template(c.tmpl, &err);
+            check(ok == c.ok, c.name,
+                  std::string("validate('") + c.tmpl + "') = " + (ok ? "true" : "false") +
+                      " (want " + (c.ok ? "true" : "false") + "), err='" + err + "'");
+            if (!ok) {
+                check(pp::render_output_path(c.tmpl, ctx, "/out").empty(),
+                      std::string(c.name) + "/render-empty",
+                      "invalid template must render to an empty path");
+            }
+        }
+    }
+
     if (g_failed == 0) {
         std::printf("test_fsops: OK\n");
         return 0;

@@ -96,8 +96,14 @@ struct AppSettings {
     int stagger_ms = 150;  // §8.1 交错启动步距（设置域 0–2000 ms；0 = 关闭）
     int thread_budget = 0; // §8.2 线程预算 T（0 = 逻辑核）
     // —— 0.3.0 / W1-T8 追加（**末尾**，§3.6 行最后一项）——
-    // 分类注册表路径（§6.2 持久化单源；默认 data_dir()/classes.json）
-    std::string class_file = default_class_file();
+    // 分类注册表路径（§6.2 持久化单源）。
+    // R-050（M7-WP1）：默认值改**惰性** —— 原 `= default_class_file()` 会让纯数据结构的
+    // 默认构造（含单测、UI 快照）就经 platform::data_dir() **建真实目录**（文件系统副作用
+    // 逃出构造语义）。现默认空串 = "未配置"，由消费点在使用时经 default_class_file() 显式
+    // 解析（mainwindow.cpp:1545-1548 既有口径：class_file.empty() ? default_class_file()
+    // : class_file）；load/save 的空值语义不变（空 = 未配置 = 默认位置，见 settings.cpp
+    // apply_pair 的 class_file 分支）。
+    std::string class_file;
     // —— 0.3.0 / W3-T15 追加（**末尾**，§3.6 行中间两项；追加顺序见文件头说明）——
     // 分文件夹默认结构（§9.3 设置项「分文件夹默认结构」= 这两项的配对面）：
     //   * `output_template`：路径模板默认值（§4.2 符号表；设置对话框择一写入，

@@ -287,9 +287,14 @@ int main() {
         skip.conflict = pp::ConflictPolicy::Skip;
         const pp::FileResult rs = run_spec(base / "rgb8.png", corpus, out, skip);
         check(rs.skipped && !rs.ok, "conflict/skip-flag", rs.error);
-        std::ifstream in(desired, std::ios::binary);
-        std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-        check(content == "stale", "conflict/skip-keeps-file", content);
+        {
+            // 读完即关：Windows 下不带 FILE_SHARE_DELETE 的读句柄会让后续 rename 覆盖失败
+            // （R-002 的原子写 = 临时文件 + rename），句柄不得跨用例持有。
+            std::ifstream in(desired, std::ios::binary);
+            std::string content((std::istreambuf_iterator<char>(in)),
+                                std::istreambuf_iterator<char>());
+            check(content == "stale", "conflict/skip-keeps-file", content);
+        }
 
         RunSpec rename;
         rename.conflict = pp::ConflictPolicy::Rename;
@@ -555,7 +560,12 @@ int main() {
         };
         const pp::FileResult r = run_spec(base / "rgb8.png", corpus, tmp / "meta-write-fail", s);
 
-        check(r.ok, "meta-write-fail/non-fatal", r.error);
+        // R-002（M7-WP1，P0）：元数据写回失败 = 该输出**真失败**（原实现吞成 warning + ok=true
+        // 产出了坏/缺元数据的"成功"文件）。断言随策略换锚（同严格度）。
+        check(!r.ok, "meta-write-fail/now-fatal",
+              "a failed metadata write must fail the output (R-002); got ok=true");
+        check(r.error.find("metadata write failed") != std::string::npos,
+              "meta-write-fail/error-text", r.error);
         std::size_t dropped = 0;
         std::string detail;
         for (const pp::Warning &w : r.warnings) {
@@ -564,14 +574,13 @@ int main() {
                 detail = w.detail;
             }
         }
-        // Exactly one: the legacy plan.warnings entry and the writer's explicit message must be
-        // merged with dedup, never shown twice.
+        // Exactly one: the writer's explicit message must arrive once (merged with dedup).
         check(dropped == 1, "meta-write-fail/warning-count",
               "expected exactly 1 MetadataDropped, got " + std::to_string(dropped));
         check(detail.find("metadata dropped") != std::string::npos, "meta-write-fail/detail",
               "writer detail missing, got '" + detail + "'");
-        std::printf("info meta-write-fail: warnings=%zu detail=%s\n", r.warnings.size(),
-                    detail.c_str());
+        std::printf("info meta-write-fail: ok=%d warnings=%zu detail=%s\n", r.ok ? 1 : 0,
+                    r.warnings.size(), detail.c_str());
     }
 
     // ---- U. cross-field parameter constraints → per-file failure, error = first message (M2-T5)
@@ -1231,6 +1240,122 @@ int main() {
         check(geom && over_tol == 0, "color-srgb-rgba/identity<=1e-5",
               "assumed sRGB → sRGB 应为恒等（含 alpha 原样保留）：max_err=" +
                   std::to_string(max_err) + " 超容差样本=" + std::to_string(over_tol));
+    }
+
+    // =========================================================================
+    // M7-WP1 数据安全与原子写盘（R-001/R-004/R-007/R-030/R-235）
+    // =========================================================================
+    {
+        // R-001（P0）：v1 迁移默认模板 "$dir/$file" + 输出根 = 输入树 → 渲染出的输出路径
+        // 精确命中源文件 → 整文件失败（源文件永远只读；原图不得被重编码结果替换）。
+        // 注：夹具副本放在临时目录里做源（绝不让用例有能力写 tests/golden）。
+        const fs::path work = tmp / "r001";
+        std::error_code ec;
+        fs::create_directories(work / "in", ec);
+        fs::copy_file(base / "rgb8.png", work / "in" / "rgb8.png",
+                      fs::copy_options::overwrite_existing, ec);
+        RunSpec s;
+        s.format = "png"; // 目标扩展名 == 源扩展名 ⇒ "$dir/$file" 渲染结果精确命中源
+        s.output_template = "$dir/$file";
+        const pp::FileResult r = run_spec(work / "in" / "rgb8.png", work / "in", work / "in", s);
+        check(!r.ok, "r001/must-fail", "out==src must fail the whole file, got ok=true");
+        check(r.error.find("collides with the source") != std::string::npos, "r001/error-text",
+              r.error);
+        // 源文件零触碰
+        int sw = 0, sh = 0, sc = 0;
+        int cw = 0, ch = 0, cc = 0;
+        const std::vector<float> a = read_pixels(work / "in" / "rgb8.png", sw, sh, sc);
+        const std::vector<float> b = read_pixels(base / "rgb8.png", cw, ch, cc);
+        check(!a.empty() && a == b, "r001/source-untouched", "source copy changed");
+
+        // metadata-only 同样拒绝 out==src（copy_file 就地覆盖 = 原图被改写）
+        fs::copy_file(corpus / "meta" / "exif_full.jpg", work / "in" / "exif_full.jpg",
+                      fs::copy_options::overwrite_existing, ec);
+        RunSpec m;
+        m.metadata_only = true;
+        m.format = "jpeg";
+        m.output_template = "$dir/$file";
+        const pp::FileResult rm =
+            run_spec(work / "in" / "exif_full.jpg", work / "in", work / "in", m);
+        check(!rm.ok, "r001/metaonly-must-fail", "metadata-only out==src must fail");
+        check(rm.error.find("collides with the source") != std::string::npos,
+              "r001/metaonly-error-text", rm.error);
+    }
+    {
+        // R-007：渲染后的输出名预检（保留设备名 CON → 整文件失败，不再逐文件 open 失败到底）
+        RunSpec s;
+        s.format = "jpeg";
+        s.output_template = "$dir/CON.$ext";
+        const pp::FileResult r = run_spec(base / "rgb8.png", corpus, tmp / "r007", s);
+        check(!r.ok, "r007/reserved-name-fails", "reserved device name must be rejected");
+        check(r.error.find("reserved device name") != std::string::npos, "r007/error-text",
+              r.error);
+    }
+    {
+        // R-004：仅元数据模式下源元数据读不到 = 该文件失败（不许按空元数据继续写 —— 那会把
+        // 副本的 EXIF/XMP 清空并报成功）。构造"OIIO 可探可解、Exiv2 读元数据必抛"的 JPEG：
+        // APP1 里的 TIFF 字节序标记打坏（像素不受影响，元数据解析失败）。
+        const fs::path work = tmp / "r004";
+        std::error_code ec;
+        fs::create_directories(work / "in", ec);
+        std::string bytes;
+        {
+            std::ifstream f(base / "photo.jpg", std::ios::binary);
+            bytes.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+        }
+        const std::size_t pos = bytes.find(std::string("Exif\0\0", 6), 0);
+        check(pos != std::string::npos, "r004/fixture-has-exif",
+              "photo.jpg must carry an APP1 Exif segment");
+        if (pos != std::string::npos) {
+            bytes[pos + 6] = 'X'; // TIFF magic "II*" → 无效 → readMetadata 抛错
+            bytes[pos + 7] = 'X';
+        }
+        const fs::path corrupt = work / "in" / "photo.jpg";
+        {
+            std::ofstream f(corrupt, std::ios::binary);
+            f.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        }
+        // 先证破坏有效：read_metadata 必须报错（否则本用例测不到 R-004 分支）
+        check(!pp::read_metadata(corrupt).error.empty(), "r004/corrupt-is-unreadable",
+              "corrupted EXIF was still readable; cannot exercise the R-004 branch");
+
+        RunSpec s;
+        s.metadata_only = true;
+        s.format = "jpeg";
+        s.output_template = "$dir/$file";
+        const pp::FileResult r = run_spec(corrupt, work / "in", work / "out", s);
+        check(!r.ok, "r004/must-fail", "unreadable source metadata must fail the file");
+        check(r.error.find("source metadata unavailable") != std::string::npos, "r004/error-text",
+              r.error);
+        // R-030：失败不得留下占名的坏副本（本次创建的输出在失败路径上不存在）
+        check(!fs::exists(r.out, ec), "r004/r030-no-leftover",
+              "failed metadata-only run left an output behind: " + r.out.string());
+    }
+    {
+        // R-235：全跳过（Skip 策略 + 输出已存在）早退也发输出级进度事件（原实现零事件，
+        // 进度条停在 ~3%）。
+        const fs::path out_root = tmp / "r235";
+        std::error_code ec;
+        fs::create_directories(out_root / "base", ec);
+        const fs::path pre = out_root / "base" / "rgb8.jpg"; // "$dir/$file" + rel_dir="base"
+        {
+            std::ofstream f(pre, std::ios::binary);
+            f << "stale";
+        }
+        RunSpec s;
+        s.format = "jpeg";
+        s.conflict = pp::ConflictPolicy::Skip;
+        s.output_template = "$dir/$file";
+        int progress_events = 0;
+        s.on_stage = [&progress_events](pp::FileState st) {
+            if (st == pp::FileState::Progress)
+                ++progress_events;
+        };
+        const pp::FileResult r = run_spec(base / "rgb8.png", corpus, out_root, s);
+        check(r.skipped && !r.ok, "r235/skipped", r.error);
+        check(progress_events > 0, "r235/output-progress-events",
+              "all-skip early return must emit output-level progress events, got " +
+                  std::to_string(progress_events));
     }
 
     if (g_failed == 0) {

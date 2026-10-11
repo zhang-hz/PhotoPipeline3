@@ -60,6 +60,13 @@ struct BatchRules {
     std::vector<TagEdit> exif_edits, xmp_edits;
     bool strip_privacy = false; // 删全部 EXIF+XMP，保留 ICC 与像素
     bool sync_mtime = false;
+    // —— M7-WP1 / I5 加性追加（**数据成员末位**；裁定登记 build/m7-wp1/handoff.md）——
+    // 各卡参与开关（UX-5 的元数据页"功能启用"三卡）：该卡参与规则 = *_enabled && 原判据。
+    // 缺省 true = 既有调用点/旧会话零迁移零变化（不设即旧行为逐字不变）。
+    // UI 开关初态归 WP7（本波只落数据面与合成语义）。
+    bool time_enabled = true;
+    bool gps_enabled = true;
+    bool privacy_enabled = true;
     bool is_noop() const;
 };
 
@@ -142,6 +149,13 @@ struct EffectivePreview {
         datetime_modify;
     EffectiveField<std::optional<GpsData>> gps;
     bool strip_privacy = false, sync_mtime = false;
+    // —— M7-WP1 / R-085 加性追加（**末尾**；裁定登记 build/m7-wp1/handoff.md）——
+    // 时区语义显示面补全：build_plan 一并改写的 XMP 日期与 OffsetTime* 也进生效值数据面
+    // （preview_effective 与 build_plan 同源合成 —— "生效值看着没变、落盘变了几处"到此为止）。
+    // OffsetTime* 三键同值写入；effective 取"墙钟实际改写成功"口径（R-234，与写路径同判据）。
+    EffectiveField<std::optional<DateTimeVal>> xmp_create_date, xmp_modify_date;
+    EffectiveField<std::optional<std::string>> offset_time, offset_time_original,
+        offset_time_digitized;
 };
 EffectivePreview preview_effective(const SourceProbe &probe, const BatchRules &rules,
                                    const std::optional<MetadataOverride> &ex);
@@ -185,8 +199,16 @@ std::string reinterpret_timezone(const std::string &exif_dt, int from_min, int t
 // GPS 有理数编码（G7：正值 Rational + 半球 ref）
 // 写入 Exif.GPSInfo.GPSLatitude/GPSLatitudeRef/GPSLongitude/GPSLongitudeRef/GPSVersionID
 // 以及可选的 GPSAltitude(Ref)/GPSImgDirection(Ref)/GPSTimeStamp+GPSDateStamp
-void write_gps(Exiv2::ExifData &exif, const GpsData &gps);
+// M7-WP1 / R-029（加性尾参，缺省 nullptr = 既有调用点零改动）：时间戳非
+// "YYYY:MM:DD HH:MM:SS" 时**不再擦除**既有 GPSDateStamp/GPSTimeStamp（保留源时间戳），
+// 改为经 out_warnings 报 Warning{MetadataDropped}（文案见 metadata.cpp）。
+void write_gps(Exiv2::ExifData &exif, const GpsData &gps,
+               std::vector<Warning> *out_warnings = nullptr);
 void clear_gps(Exiv2::ExifData &exif);
+
+// —— M7-WP1 / R-029 加性纯函数（供 WP7 UI 与 preview_effective 同源复用）——
+// GPS 时间戳格式校验：严格 "YYYY:MM:DD HH:MM:SS"（与写侧 parse_exif_datetime 同判据）。
+bool is_valid_gps_timestamp(const std::string &s);
 
 // 隐私剥除：清空 exif/xmp（保留 ICC 与像素）
 void strip_privacy(Exiv2::ExifData &exif, Exiv2::XmpData &xmp);

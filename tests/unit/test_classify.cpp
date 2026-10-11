@@ -387,6 +387,43 @@ void test_persistence_edge() {
           show(blocked));
 }
 
+// M7-WP1 · I9/R-232/R-082：load() 收紧（缺 classes 键 = 失败；高版本拒绝；缺省版本 = v1）
+void test_load_tightening() {
+    const fs::path dir = make_temp_dir("load_tightening");
+    std::string err;
+
+    // 合法 JSON 但缺 classes 键 = 损坏/异构文件 → 显式失败 + 注册表不动（R-232/R-023）
+    write_file(dir / "no_classes.json", "{ \"version\": 1, \"assignment\": {} }");
+    pp::ClassRegistry keep;
+    keep.rename("pick", "旧名");
+    check(!keep.load(dir / "no_classes.json", &err), "tighten/missing-classes-rejected",
+          "expected false for a JSON without a 'classes' key");
+    check(!err.empty(), "tighten/missing-classes-error", "expected a message");
+    check(keep.classes.size() == 3 && keep.classes[0].name == "旧名",
+          "tighten/missing-classes-untouched", dump(keep));
+
+    // 版本面（R-082）：缺省按 v1 读；v1 合法；>1 显式拒绝（绝不静默误读未来 schema）
+    write_file(dir / "no_version.json",
+               "{ \"classes\": [ { \"id\": \"x\", \"name\": \"X\" } ], \"assignment\": {} }");
+    pp::ClassRegistry r1;
+    check(r1.load(dir / "no_version.json", &err), "tighten/no-version-v1", err);
+    check(r1.classes.size() == 1 && r1.classes[0].id == "x", "tighten/no-version-content",
+          dump(r1));
+
+    write_file(dir / "v1.json",
+               "{ \"version\": 1, \"classes\": [ { \"id\": \"y\", \"name\": \"Y\" } ], "
+               "\"assignment\": {} }");
+    pp::ClassRegistry r2;
+    check(r2.load(dir / "v1.json", &err), "tighten/v1-ok", err);
+
+    write_file(dir / "v2.json", "{ \"version\": 2, \"classes\": [], \"assignment\": {} }");
+    pp::ClassRegistry r3;
+    r3.rename("pick", "旧名");
+    check(!r3.load(dir / "v2.json", &err), "tighten/v2-rejected", "expected false for version 2");
+    check(!err.empty() && err.find("version") != std::string::npos, "tighten/v2-error", err);
+    check(r3.classes.size() == 3 && r3.classes[0].name == "旧名", "tighten/v2-untouched", dump(r3));
+}
+
 void test_prune_missing() {
     const fs::path dir = make_temp_dir("prune");
     const fs::path keep = dir / "keep.jpg";
@@ -451,11 +488,13 @@ void test_group_key() {
 }
 
 void test_settings_class_file() {
-    // §3.6：class_file 默认 = data_dir()/classes.json（单源 default_class_file()）
+    // §3.6：class_file 的默认路径单源 = default_class_file()（= data_dir()/classes.json）。
+    // R-050（M7-WP1）：AppSettings 默认成员不再直接求值该路径（原实现默认构造就 mkdir
+    // 真实目录）—— 默认空串 = "未配置"，消费点在使用时经 default_class_file() 解析。
     const std::string want = (fs::path(pp::platform::data_dir()) / "classes.json").string();
     const pp::AppSettings def;
-    check(def.class_file == want, "settings/class-file-default",
-          show(def.class_file) + " vs " + show(want));
+    check(def.class_file.empty(), "settings/class-file-default",
+          "R-050: lazy default must be empty, got " + show(def.class_file));
     check(pp::default_class_file() == want, "settings/class-file-single-source",
           show(pp::default_class_file()));
 
@@ -472,10 +511,10 @@ void test_settings_class_file() {
     check(contains(read_all(ini), "class_file=" + reg.string()), "settings/ini-has-key",
           read_all(ini));
 
-    // 空值 = 未配置 → 保留默认（与其它键"非法即默认"的口径一致）
+    // 空值 = 未配置 → 保留默认（与其它键"非法即默认"的口径一致；R-050 后默认即惰性空串）
     const fs::path empty_ini = dir / "empty.ini";
     write_file(empty_ini, "class_file=\n");
-    check(pp::load_settings(empty_ini).class_file == want, "settings/class-file-empty-default",
+    check(pp::load_settings(empty_ini).class_file.empty(), "settings/class-file-empty-default",
           show(pp::load_settings(empty_ini).class_file));
 
     // 注册表以 settings.class_file 为唯一路径源（§6.2 持久化路径的单源消费）
@@ -497,6 +536,7 @@ int main() {
     test_norm_path();
     test_persistence_roundtrip();
     test_persistence_edge();
+    test_load_tightening();
     test_prune_missing();
     test_group_key();
     test_settings_class_file();

@@ -18,10 +18,21 @@
 #include "core/fsops.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
+#include <chrono>
+#include <cstdio>
+#include <fstream>
+#include <random>
 #include <set>
 #include <system_error>
 #include <utility>
+
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace pp {
 namespace {
@@ -170,6 +181,7 @@ bool validate_output_template(std::string_view tmpl, std::string *err) {
         return fail("drive-qualified paths are not allowed");
     }
     std::size_t start = 0;
+    std::size_t last_named_seg = std::string_view::npos; // 最后一个非空段的起点（R-083）
     while (start <= tmpl.size()) {
         std::size_t end = tmpl.find('/', start);
         if (end == std::string_view::npos) {
@@ -188,11 +200,27 @@ bool validate_output_template(std::string_view tmpl, std::string *err) {
                 }
                 return false;
             }
+            last_named_seg = start;
         }
         if (end == tmpl.size()) {
             break;
         }
         start = end + 1;
+    }
+    // R-083：末段必须产出文件名（$file/$name/$ext 至少其一）。纯字面段结尾（"jpeg/"、
+    // "photos-$format"）会把目录名当文件名渲染（Rename 后更是无扩展名怪文件）→ 校验层拒绝。
+    if (last_named_seg != std::string_view::npos) {
+        std::size_t end = tmpl.find('/', last_named_seg);
+        if (end == std::string_view::npos) {
+            end = tmpl.size();
+        }
+        const std::string_view seg = tmpl.substr(last_named_seg, end - last_named_seg);
+        const bool file_name_seg = seg.find("$file") != std::string_view::npos ||
+                                   seg.find("$name") != std::string_view::npos ||
+                                   seg.find("$ext") != std::string_view::npos;
+        if (!file_name_seg) {
+            return fail("last segment must produce a file name (use $file/$name/$ext)");
+        }
     }
     return true;
 }
@@ -236,26 +264,39 @@ std::filesystem::path render_output_path(std::string_view tmpl, const PathCtx &c
 }
 
 OutputPlan resolve_conflict(const std::filesystem::path &desired, ConflictPolicy policy,
-                            const std::vector<std::filesystem::path> &reserved, std::string &err) {
+                            const std::vector<std::filesystem::path> &reserved,
+                            const std::vector<std::filesystem::path> &soft_reserved,
+                            std::string &err) {
     err.clear();
     OutputPlan plan;
     plan.out_path = desired;
 
     std::set<std::string> reserved_norm;
+    std::set<std::string> soft_norm;
     // NOTE(perf): caching these normalized keys across calls would only matter for batches
     // beyond ~10k files; no bottleneck observed at current batch sizes.
     for (const std::filesystem::path &r : reserved) {
         reserved_norm.insert(weakly(r).string());
     }
-    const auto taken = [&reserved_norm](const std::filesystem::path &p) {
+    for (const std::filesystem::path &r : soft_reserved) {
+        soft_norm.insert(weakly(r).string());
+    }
+    const auto exists_on_disk = [](const std::filesystem::path &p) {
         std::error_code ec;
-        if (std::filesystem::exists(p, ec)) {
-            return true;
-        }
-        return reserved_norm.count(weakly(p).string()) != 0;
+        return std::filesystem::exists(p, ec);
+    };
+    // Rename/Overwrite 的避让面 = 磁盘 + 硬保留 + 软保留（既有语义逐字不变）。
+    const auto taken_any = [&](const std::filesystem::path &p) {
+        return exists_on_disk(p) || reserved_norm.count(weakly(p).string()) != 0 ||
+               soft_norm.count(weakly(p).string()) != 0;
+    };
+    // Skip 的判据（R-005）：磁盘存在或命中硬保留才跳过；仅软保留而磁盘缺失 → 回退正常写入。
+    const auto taken_skip = [&](const std::filesystem::path &p) {
+        return exists_on_disk(p) || reserved_norm.count(weakly(p).string()) != 0;
     };
 
-    if (!taken(desired)) {
+    const bool taken = (policy == ConflictPolicy::Skip) ? taken_skip(desired) : taken_any(desired);
+    if (!taken) {
         return plan; // rename_index 0, skip false
     }
 
@@ -274,7 +315,7 @@ OutputPlan resolve_conflict(const std::filesystem::path &desired, ConflictPolicy
     for (int i = 1; i <= 10000; ++i) {
         const std::filesystem::path cand =
             desired.parent_path() / (stem + " (" + std::to_string(i) + ")" + ext);
-        if (!taken(cand)) {
+        if (!taken_any(cand)) {
             plan.out_path = cand;
             plan.rename_index = i;
             return plan;
@@ -282,6 +323,13 @@ OutputPlan resolve_conflict(const std::filesystem::path &desired, ConflictPolicy
     }
     err = "cannot find a free output name for: " + desired.string();
     return plan;
+}
+
+OutputPlan resolve_conflict(const std::filesystem::path &desired, ConflictPolicy policy,
+                            const std::vector<std::filesystem::path> &reserved, std::string &err) {
+    // 既有 4 参签名（冻结）转发：软保留空集 → 既有行为逐字不变。
+    static const std::vector<std::filesystem::path> kNoSoft;
+    return resolve_conflict(desired, policy, reserved, kNoSoft, err);
 }
 
 bool is_inside(const std::filesystem::path &child, const std::filesystem::path &parent) {
@@ -293,9 +341,9 @@ bool is_inside(const std::filesystem::path &child, const std::filesystem::path &
     return path_prefix(p, c);
 }
 
-std::vector<std::filesystem::path> collect_inputs(const std::vector<std::filesystem::path> &roots,
-                                                  const std::vector<std::string> &exts,
-                                                  std::vector<std::string> &errors) {
+std::vector<std::filesystem::path> collect_inputs(
+    const std::vector<std::filesystem::path> &roots, const std::vector<std::string> &exts,
+    const std::vector<std::filesystem::path> &exclude_roots, std::vector<std::string> &errors) {
     std::set<std::string> want;
     for (const std::string &e : exts) {
         const std::string l = lower_copy(strip_dot(e));
@@ -313,8 +361,20 @@ std::vector<std::filesystem::path> collect_inputs(const std::vector<std::filesys
             found.push_back(p);
         }
     };
+    // R-031：输出根子树整棵排除（is_inside = 子树判定，含根自身）。
+    const auto excluded = [&exclude_roots](const std::filesystem::path &p) {
+        for (const std::filesystem::path &x : exclude_roots) {
+            if (!x.empty() && is_inside(p, x)) {
+                return true;
+            }
+        }
+        return false;
+    };
 
     for (const std::filesystem::path &root : roots) {
+        if (excluded(root)) {
+            continue;
+        }
         std::error_code ec;
         const std::filesystem::file_status st = std::filesystem::status(root, ec);
         if (ec || !std::filesystem::exists(st)) {
@@ -335,11 +395,22 @@ std::vector<std::filesystem::path> collect_inputs(const std::vector<std::filesys
             // NOTE(limit): optional follow-symlink mode + progress callback for huge trees is
             // out of scope — symlink-cycle risk outweighs the benefit.
             const auto opts = std::filesystem::directory_options::skip_permission_denied;
-            for (const std::filesystem::directory_entry &entry :
-                 std::filesystem::recursive_directory_iterator(root, opts)) {
+            std::filesystem::recursive_directory_iterator it(root, opts);
+            const std::filesystem::recursive_directory_iterator end;
+            for (; it != end; ++it) {
                 std::error_code fec;
+                const std::filesystem::directory_entry &entry = *it;
+                if (entry.is_directory(fec) && !fec) {
+                    if (excluded(entry.path())) {
+                        it.disable_recursion_pending(); // 排除子树不下降
+                    }
+                    continue;
+                }
                 if (!entry.is_regular_file(fec) || fec) {
                     continue; // directories, symlinks to nowhere, unreadable entries
+                }
+                if (excluded(entry.path())) {
+                    continue;
                 }
                 if (ext_matches(entry.path(), want)) {
                     push_file(entry.path());
@@ -355,6 +426,14 @@ std::vector<std::filesystem::path> collect_inputs(const std::vector<std::filesys
                   return a.string() < b.string();
               });
     return found;
+}
+
+std::vector<std::filesystem::path> collect_inputs(const std::vector<std::filesystem::path> &roots,
+                                                  const std::vector<std::string> &exts,
+                                                  std::vector<std::string> &errors) {
+    // 既有 3 参签名（冻结）转发：空排除集 → 既有行为逐字不变。
+    static const std::vector<std::filesystem::path> kNoExclude;
+    return collect_inputs(roots, exts, kNoExclude, errors);
 }
 
 const std::vector<std::string> &input_extensions() {
@@ -374,6 +453,246 @@ std::filesystem::path with_extension(const std::filesystem::path &p, std::string
     std::filesystem::path out = p;
     out.replace_extension("." + ext);
     return out;
+}
+
+// ===========================================================================
+// M7-WP1 · I1 原子写四件套 + I2 输出名/输出根校验（R-003/R-007/R-028）
+// Contract: build/m7-wp1/handoff.md「裁定登记」（加性 + 追认）
+// ===========================================================================
+
+namespace {
+
+// 进程 id（tmp 名的 PID 段；R-028 要求 PID/随机后缀，双开不互踩）。
+unsigned long current_pid() {
+#ifdef _WIN32
+    return static_cast<unsigned long>(_getpid());
+#else
+    return static_cast<unsigned long>(getpid());
+#endif
+}
+
+// 进程内单调序 + 随机 64 位（跨进程碰撞概率可忽略；PID 段再兜一层）。
+std::string unique_suffix() {
+    static std::atomic<unsigned long long> counter{0};
+    static const unsigned long long rnd = [] {
+        std::random_device rd;
+        const unsigned long long a = (static_cast<unsigned long long>(rd()) << 32) ^ rd();
+        return a ^ static_cast<unsigned long long>(
+                       std::chrono::steady_clock::now().time_since_epoch().count());
+    }();
+    const unsigned long long n = counter.fetch_add(1, std::memory_order_relaxed);
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%lu.%llx%llx", current_pid(), rnd, n);
+    return buf;
+}
+
+const char *const kReservedNames[] = {
+    "con",  "prn",  "aux",  "nul",  "com1", "com2", "com3", "com4", "com5", "com6", "com7",
+    "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"};
+
+bool is_reserved_device_name(std::string_view comp) {
+    // Windows 规则：主名（第一个 '.' 之前）命中保留设备名即保留（CON.txt 同样非法）。
+    const std::size_t dot = comp.find('.');
+    const std::string base = lower_copy(comp.substr(0, dot));
+    for (const char *r : kReservedNames) {
+        if (base == r) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+std::filesystem::path atomic_temp_path(const std::filesystem::path &target) {
+    if (target.empty() || target.filename().empty()) {
+        return {};
+    }
+    const std::string name = target.filename().string() + "." + unique_suffix() + ".tmp";
+    return target.parent_path() / name;
+}
+
+bool commit_temp_file(const std::filesystem::path &tmp, const std::filesystem::path &target,
+                      std::string *err) {
+    const auto fail = [err](const std::string &msg) {
+        if (err != nullptr) {
+            *err = msg;
+        }
+        return false;
+    };
+    if (err != nullptr) {
+        err->clear();
+    }
+    if (tmp.empty() || target.empty()) {
+        return fail("atomic commit: empty path");
+    }
+    std::error_code ec;
+    if (!std::filesystem::exists(tmp, ec) || ec) {
+        return fail("atomic commit: temp file missing: " + tmp.string());
+    }
+    // 标准语义：rename 覆盖已存在目标（POSIX rename / MSVC std::filesystem::rename）。
+    std::filesystem::rename(tmp, target, ec);
+    if (ec) {
+        return fail("atomic commit: cannot replace " + target.string() + ": " + ec.message());
+    }
+    return true;
+}
+
+void discard_temp_file(const std::filesystem::path &tmp) noexcept {
+    if (tmp.empty()) {
+        return;
+    }
+    std::error_code ec;
+    std::filesystem::remove(tmp, ec); // 清场尽力而为；失败不抛不报（noexcept 契约）
+}
+
+bool write_atomic_file(const std::filesystem::path &target, std::string_view data,
+                       std::string *err) {
+    const auto fail = [err](const std::string &msg) {
+        if (err != nullptr) {
+            *err = msg;
+        }
+        return false;
+    };
+    if (err != nullptr) {
+        err->clear();
+    }
+    if (target.empty() || target.filename().empty()) {
+        return fail("atomic write: target has no file name");
+    }
+    const std::filesystem::path tmp = atomic_temp_path(target);
+    if (tmp.empty()) {
+        return fail("atomic write: cannot build temp name for " + target.string());
+    }
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        if (!out) {
+            discard_temp_file(tmp);
+            return fail("atomic write: cannot create " + tmp.string());
+        }
+        if (!data.empty()) {
+            out.write(data.data(), static_cast<std::streamsize>(data.size()));
+        }
+        out.flush();
+        if (!out) {
+            out.close();
+            discard_temp_file(tmp);
+            return fail("atomic write: write failed on " + tmp.string());
+        }
+    }
+    // 字节校验（R-003 口径）：落盘 size 必须精确等于 data.size()，否则视为写失败并清场。
+    std::error_code ec;
+    const std::uintmax_t written = std::filesystem::file_size(tmp, ec);
+    if (ec || written != static_cast<std::uintmax_t>(data.size())) {
+        discard_temp_file(tmp);
+        return fail("atomic write: byte count mismatch on " + tmp.string() + " (wrote " +
+                    std::to_string(written) + ", expected " + std::to_string(data.size()) + ")");
+    }
+    // 继承既有目标的权限位（preset_io 的既有行为收口到这里：覆盖不改权限）。
+    std::error_code st_ec;
+    const std::filesystem::file_status st = std::filesystem::status(target, st_ec);
+    if (!st_ec && std::filesystem::exists(st)) {
+        std::error_code pm_ec;
+        std::filesystem::permissions(tmp, st.permissions(), pm_ec);
+    }
+    if (!commit_temp_file(tmp, target, err)) {
+        discard_temp_file(tmp);
+        return false;
+    }
+    return true;
+}
+
+bool validate_output_filename(const std::filesystem::path &p, std::string *err) {
+    const auto fail = [err](const std::string &msg) {
+        if (err != nullptr) {
+            *err = msg;
+        }
+        return false;
+    };
+    if (err != nullptr) {
+        err->clear();
+    }
+    if (p.empty()) {
+        return fail("output path is empty");
+    }
+    if (p.filename().empty()) {
+        return fail("output path has no file name: " + p.string());
+    }
+    // 长度（R-007）：整串 ≤ 259（MAX_PATH−1）。写路径的 fopen/Exiv2 无 `\\?\` 归一，超长
+    // 路径必然在 open 处失败 → 渲染后即预检拦截，不再逐文件跑到底。
+    const std::string whole = p.generic_string();
+    if (whole.size() > 259) {
+        return fail("output path is too long (" + std::to_string(whole.size()) +
+                    " > 259 chars): " + whole);
+    }
+    for (const std::filesystem::path &comp : p) {
+        if (comp.empty() || comp == p.root_name() || comp == p.root_directory()) {
+            continue; // 盘符/根分隔符不参与文件名规则
+        }
+        const std::string s = comp.string();
+        if (s.size() > 255) {
+            return fail("output path component is too long (" + std::to_string(s.size()) +
+                        " > 255 chars): " + s);
+        }
+        for (const char c : s) {
+            const unsigned char u = static_cast<unsigned char>(c);
+            if (u < 0x20) {
+                return fail("output path component contains a control character: " + s);
+            }
+            if (c == '<' || c == '>' || c == ':' || c == '"' || c == '|' || c == '?' || c == '*') {
+                return fail(std::string("output path component contains an illegal character '") +
+                            c + "': " + s);
+            }
+        }
+        if (s.back() == '.' || s.back() == ' ') {
+            return fail("output path component ends with a dot or space: " + s);
+        }
+        if (is_reserved_device_name(s)) {
+            return fail("output path component is a reserved device name: " + s);
+        }
+    }
+    return true;
+}
+
+bool probe_output_root(const std::filesystem::path &dir, std::string *err) {
+    const auto fail = [err](const std::string &msg) {
+        if (err != nullptr) {
+            *err = msg;
+        }
+        return false;
+    };
+    if (err != nullptr) {
+        err->clear();
+    }
+    if (dir.empty()) {
+        return fail("output root is empty");
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    if (ec) {
+        return fail("output root is not creatable: " + dir.string() + ": " + ec.message());
+    }
+    const std::filesystem::file_status st = std::filesystem::status(dir, ec);
+    if (ec || !std::filesystem::is_directory(st)) {
+        return fail("output root is not a directory: " + dir.string());
+    }
+    // 试写探针（唯一名，写后即删）：只读介质/配额/共享限制在这里就暴露。
+    const std::filesystem::path probe = dir / ("pp-write-probe." + unique_suffix() + ".tmp");
+    {
+        std::ofstream out(probe, std::ios::binary | std::ios::trunc);
+        if (!out) {
+            return fail("output root is not writable: " + dir.string());
+        }
+        out << "pp write probe\n";
+        out.flush();
+        if (!out) {
+            out.close();
+            discard_temp_file(probe);
+            return fail("output root is not writable: " + dir.string());
+        }
+    }
+    discard_temp_file(probe);
+    return true;
 }
 
 } // namespace pp

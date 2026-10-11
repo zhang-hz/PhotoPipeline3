@@ -53,7 +53,8 @@
 #pragma once
 #include "core/classify.h"
 #include "core/pipeline.h"
-#include "ui/theme.h" // M5-T5（A6）：行几何/字阶/语义色的令牌单源（QSS/绘制同一份值）
+#include "ui/term_words.h" // R-139：终态词表单源（列表/运行页/状态栏共用）
+#include "ui/theme.h"      // M5-T5（A6）：行几何/字阶/语义色的令牌单源（QSS/绘制同一份值）
 #include "ui/thumbnails.h" // M1b-U4: +1 line vs §2.8 frozen text (Thumbnailer must be declared for AUTOMOC; see report)
 #include <QAbstractListModel>
 #include <QAbstractProxyModel>
@@ -85,6 +86,10 @@ struct FileRow {
     bool group_scanned = false; // 摘要扫描已回填（无字段/失败同样置位，避免重复扫）
     // ---- M5-T5（§7.5 行内「大小」项）**加性字段** ----
     qint64 size_bytes = -1; // 字节层文件大小（add_paths 时 stat；-1 = 未知 → 行内不显示"大小"）
+    // ---- M7-WP6 / R-069 **加性字段**：0 字节产物事实（终态事件回传）——
+    // 三处状态面（列表胶囊 / 运行页 / 状态栏）对"完成但产物 0 字节"必须同判：列表胶囊不再
+    // 显示绿色「已完成」，改显「0 字节」+ 琥珀（与运行页的「异常/0 字节」同色调）。
+    bool zero_byte_output = false;
     bool has_exception() const { return entry.exception.has_value(); }
 };
 
@@ -110,7 +115,12 @@ public:
         // ---- M5-T5 追加（§7.5 第二/三行信息的取数面；既有 11 枚不重排）----
         SizeRole,     // QString "3.21 MB"（"" = 未知/取不到）
         ShotDateRole, // QString "2024-05-12"（EXIF 生效时间的日期段；"" = 无）
-        CameraRole    // QString "Apple iPhone 15 Pro"（Exif.Image.Model；"" = 无）
+        CameraRole,   // QString "Apple iPhone 15 Pro"（Exif.Image.Model；"" = 无）
+        // ---- M7-WP6 / R-069 追加（既有 14 枚不重排）----
+        // 状态胶囊色调键（theme::kPill*）：原由委托按 FileState 自算，0
+        // 字节事实（zero_byte_output） 要能把"已完成"改判成琥珀 → 色调也得由模型出（与
+        // StateTextRole 同一条数据源）。
+        StateToneRole // QString（theme::kPill* 常量的 ASCII 值）
     };
 
     explicit FileListModel(QObject *parent = nullptr);
@@ -136,6 +146,10 @@ public:
     std::vector<pp::FileEntry> entries() const; // deep copy for Scheduler
 
     void set_state(std::size_t i, pp::FileState st); // dataChanged
+    // —— M7-WP6 / R-069 加性追加（既有签名逐字不变）——
+    // 0 字节产物事实（终态事件回传）：置位后该行的胶囊文案/色调改判（见 StateTextRole /
+    // StateToneRole）。只在 Done / DoneWithErrors 上生效（其余态本来就不是"成功"档）。
+    void set_zero_byte_output(std::size_t i, bool on);
     void set_exception(std::size_t i, std::optional<pp::MetadataOverride> ex);
     void apply_thumb(int row, const QString &path, const pp::ImageInfo &info, bool probe_ok,
                      const QString &error, const QImage &thumb);
@@ -160,6 +174,9 @@ public:
     void check_class(const std::string &class_id);  // 全选该类：该类文件全部勾选（其余不动）
     void invert_class(const std::string &class_id); // 反选该类：该类已勾选者取消、未勾选者勾上
     void clear_checks();                            // 清空勾选：全部取消
+    // —— M7-WP6 / R-142 加性追加（既有签名逐字不变）——
+    // 清空该类勾选：只取消 class_id 命中的那类文件（id 空或 "all" = 全部 → 同 clear_checks）。
+    void clear_class_checks(const std::string &class_id);
 
     // ==========================================================================================
     // M4-T11 · 分类（消费 W1-T8 `core/classify`；单源 = 注册表，本模型不复制状态）
@@ -203,6 +220,12 @@ private:
     std::set<QString> known_paths_;       // lexically_normal strings
     std::set<QString> unsupported_paths_; // M1b v1.1: dedup unsupported counts (2026-09-20 ruling)
     std::size_t unsupported_ = 0;
+    // ---- M7-WP6 / R-024 加性字段：勾选数 / 例外数的**增量计数**（原 checked_count() 与
+    // exception_count() 各走一次 O(n) 扫描，运行期逐文件事件 × 每次 refresh_status 会把
+    // 两条全表扫压到 GUI 线程）。维护点 = set_checked / set_all_checked / set_exception /
+    // add_paths / remove_rows / clear（每一处改动行数的地方同步增减，见各处注释）。
+    std::size_t checked_ = 0;
+    std::size_t exceptions_ = 0;
     Thumbnailer *thumbs_ = nullptr;
     // ---- M4-T11 追加 ----
     pp::ClassRegistry *classes_ = nullptr;            // 不持有（单源在 MainWindow）
@@ -384,5 +407,11 @@ public:
     static constexpr int kCheckInset = 6;         // .fitem{padding:4px 6px}
     static constexpr int kCheckGap = 8;           // 勾选框 → 行内容列
 };
+
+// ============================================================================================
+// M7-WP6 / R-139：终态词表（三面共用一张）—— 声明在 ui/term_words.h（本头引而不再内联定义：
+// page_run.cpp 只需词表、不需要 FileRow，独立小头避免把本文件的 FileRow 带进 page_run 的
+// 同名局部结构）。既有接口/语义零改动。
+// ============================================================================================
 
 } // namespace pp::ui

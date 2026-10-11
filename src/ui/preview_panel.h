@@ -113,6 +113,10 @@ signals:
     void zoom_changed(bool fit);                        // 缩放变化（载荷 = 是否处于适应档）
     void class_hotkey(QChar key);                       // 打标接线位（T11 接通；'0' = 清除）
     void preview_loaded(int index, qint64 ms, bool ok); // 出图诊断（250ms 目标取证）
+    // R-151（翻图/打标对象错位）：**仅**翻图动作（←/→/翻图钮）后发一次，载荷 = 新的当前项
+    // （列表行号）。消费方据此把左栏选中同步过来 —— "所见即所标"。display_changed 不发它：
+    // 那是选中驱动的跟随刷新，反向同步会吞掉多选（多选 → 预览只显示首个）。加性信号。
+    void navigated(int index);
 
 private:
     struct Impl;

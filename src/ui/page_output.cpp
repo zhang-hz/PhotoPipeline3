@@ -76,6 +76,7 @@
 #include <QWidget>
 
 #include "codecs/encoders.h"
+#include "codecs/heif_profile.h" // UX-10.1：编码档位纯函数单源（WP2 I4）
 #include "core/fsops.h"
 #include "core/params.h"
 #include "ui/formkit.h" // C2：行构造器（R1–R4）+ 自绘控件（磁贴/开关/胶囊）
@@ -314,6 +315,139 @@ QString page_qss(const theme::Tokens &t) {
 
 // ---------------------------------------------------------------- 页面状态
 
+// UX-9（§16-1 口径）：页签**等宽** —— 宽度 = 最长格式名的文本宽 + 两侧内距（不随"位深"文案
+// 漂移；QTabBar 自身按文本宽排，"JPEG · 8 位" 与 "JPEG XL · 16 位" 宽不同是原缺陷）。
+// 自绘宽度走 tabSizeHint（不引 QSS —— UX-6「样式必须公共」的纪律下，几何类固定宽不属样式）。
+class EqualWidthTabBar : public QTabBar {
+public:
+    explicit EqualWidthTabBar(int fixed_w, QWidget *parent = nullptr)
+        : QTabBar(parent), fixed_w_(fixed_w) {
+        setExpanding(true); // 等宽 + 有多余空间时平摊（§16-1）
+        setUsesScrollButtons(false);
+        setDrawBase(true);
+    }
+
+    void set_fixed_width(int w) {
+        if (fixed_w_ == w)
+            return;
+        fixed_w_ = w;
+        updateGeometry();
+        update();
+    }
+
+protected:
+    QSize tabSizeHint(int index) const override {
+        const QSize base = QTabBar::tabSizeHint(index);
+        return QSize(fixed_w_ > 0 ? fixed_w_ : base.width(), base.height());
+    }
+
+private:
+    int fixed_w_ = 0;
+};
+
+// QTabWidget::setTabBar 是 protected → 需要一层子类才能换上等宽页签条
+// （不引 QSS：几何类固定宽不属样式，UX-6「样式必须公共」只管色/形，不管尺寸锚）。
+class EqualWidthTabWidget : public QTabWidget {
+public:
+    explicit EqualWidthTabWidget(QWidget *parent = nullptr) : QTabWidget(parent) {
+        setTabBar(new EqualWidthTabBar(0, this));
+    }
+    void set_tab_width(int w) {
+        if (auto *bar = dynamic_cast<EqualWidthTabBar *>(tabBar()))
+            bar->set_fixed_width(w);
+    }
+};
+
+// 页签固定宽的取值口径（单源）：最长格式名 + 两侧 16px 内距（与 QTabBar 默认 padding 同档）。
+int format_tab_width(const QStringList &labels) {
+    int w = 0;
+    const QFontMetrics fm(theme::font(theme::Typography::body_px, 600));
+    for (const QString &label : labels)
+        w = std::max(w, fm.horizontalAdvance(label));
+    return w + 32;
+}
+
+// ---------------------------------------------------------------------------
+// UX-10.1：HEIF/AVIF「编码档位 (Profile)」核心行（docs/ux-review-14.md §10.1 口径）
+//   profile = **编码档位**（HEVC 的 Main/Main10/Main12/Main Still Picture、AV1 的
+//   Main/High/Professional），决定解码兼容性；**不是**色彩 ICC profile。
+//   libheif 的两个插件都不暴露 profile 参数 —— 档位由插件按位深/色度/静止图自动推导
+//   （见 codecs/heif_profile.h 的规则复刻，同一份真相）。本行把该推导**显式呈现**。
+//   选定点落盘键 = pp::kHeifProfileParamKey（"__heif_profile"；保留键：不落预设、不进
+//   未知参数校验、不进日志快照 —— params.h §3.4 约定）。
+// ---------------------------------------------------------------------------
+bool is_heif_family(const std::string &id) { return id == "heif" || id == "avif"; }
+
+struct ProfileOption {
+    pp::HeifProfile profile;
+    const char *label; // 中文标签（含兼容性说明，§10.1 逐字口径）
+};
+
+// 选项表（docs/ux-review-14.md §10.1）：HEIF 五档 / AVIF 四档，首项恒为「自动」
+const ProfileOption *heif_profile_options(bool avif, int &count) {
+    static const ProfileOption kHeif[] = {
+        {pp::HeifProfile::Auto, "自动"},
+        {pp::HeifProfile::Main, "Main（8 位 · 兼容性最好）"},
+        {pp::HeifProfile::Main10, "Main10（10 位）"},
+        {pp::HeifProfile::Main12, "Main12（12 位）"},
+        {pp::HeifProfile::MainStill, "Main Still Picture（8 位 · 静止图）"},
+    };
+    static const ProfileOption kAvif[] = {
+        {pp::HeifProfile::Auto, "自动"},
+        {pp::HeifProfile::Main, "Main（8/10 位 · 4:2:0/4:0:0）"},
+        {pp::HeifProfile::High, "High（8/10 位 · 4:4:4）"},
+        {pp::HeifProfile::Professional, "Professional（12 位 / 4:2:2）"},
+    };
+    if (avif) {
+        count = int(std::size(kAvif));
+        return kAvif;
+    }
+    count = int(std::size(kHeif));
+    return kHeif;
+}
+
+// 档位 → 允许位深（联动限幅；空 = 不限）。口径与 heif_profile.h 的 derive 规则一致：
+// HEVC 只看位深（Main/MainStill→8、Main10→10、Main12→12）；AV1 的 Professional 还可以由
+// 4:2:2 命中（不限位深），故放宽到 {8,10,12}，最终判定交给 heif_profile_compatible。
+std::vector<int> profile_allowed_bitdepths(pp::HeifProfile p) {
+    switch (p) {
+    case pp::HeifProfile::Auto:
+        return {};
+    case pp::HeifProfile::Main:
+    case pp::HeifProfile::MainStill:
+        return {8};
+    case pp::HeifProfile::Main10:
+        return {10};
+    case pp::HeifProfile::Main12:
+        return {12};
+    case pp::HeifProfile::High:
+        return {8, 10};
+    case pp::HeifProfile::Professional:
+        return {8, 10, 12};
+    }
+    return {};
+}
+
+// 兼容性提示（§8「禁用不静默灰」/ §10.1-4）：非 Main 档位给 warn 色说明
+QString profile_compat_hint(pp::HeifProfile p) {
+    switch (p) {
+    case pp::HeifProfile::Main:
+    case pp::HeifProfile::Auto:
+        return QString();
+    case pp::HeifProfile::MainStill:
+        return PageOutput::tr("Main Still Picture：8 位静止图档，需较新解码器");
+    case pp::HeifProfile::Main10:
+        return PageOutput::tr("Main10 需较新解码器（10 位）");
+    case pp::HeifProfile::Main12:
+        return PageOutput::tr("Main12 需较新解码器（12 位）");
+    case pp::HeifProfile::High:
+        return PageOutput::tr("High 档（4:4:4）兼容性有限，需较新解码器");
+    case pp::HeifProfile::Professional:
+        return PageOutput::tr("Professional 档（12 位 / 4:2:2）兼容性最差，老解码器不可用");
+    }
+    return QString();
+}
+
 struct FormatState {
     pp::OutputFormatSpec spec; // 首次建页签的初值（无则表内默认）
     QWidget *page = nullptr;
@@ -321,6 +455,10 @@ struct FormatState {
     QComboBox *bitdepth = nullptr;
     QLabel *bitdepth_note = nullptr; // 格式能力约束说明（行内 10px 注释位；如 "JPEG 仅支持 8 位"）
     ElidedLabel *alpha_hint = nullptr;
+    // ---- UX-10.1：HEIF/AVIF 编码档位核心行（位深行之上；仅这两格有）----
+    QComboBox *profile = nullptr;   // pp-profile-combo（首项「自动」）
+    QLabel *profile_note = nullptr; // 推导结果 / 兼容性提示（warn 色）
+    bool profile_user_set = false;  // 用户手选过档位（反向联动改位深时不覆盖手选项）
 };
 
 struct Impl {
@@ -566,15 +704,28 @@ struct Impl {
             grid->setHorizontalSpacing(theme::Metrics::group_gap); // §4.3 组内 8
             grid->setVerticalSpacing(theme::Metrics::group_gap);
             for (int i = 0; i < kFormatCount; ++i) {
-                const pp::FormatDef *f = pp::find_format(kFormats[i].id);
                 auto *tile = new formkit::CheckableCard(tiles_host);
                 tile->setObjectName(QStringLiteral("pp-format-") + QLatin1String(kFormats[i].id));
-                tile->set_labels(PageOutput::tr(kFormats[i].label),
-                                 QStringLiteral(".") + QString::fromStdString(f ? f->ext : ""));
+                // UX-9（§16-1 口径）：磁贴只留「☑ 格式名」—— 原第二行文本（".jpg" 等扩展名）
+                // 随内容变宽；去掉后宽度才能统一固定。
+                tile->set_labels(PageOutput::tr(kFormats[i].label));
                 tile->set_tokens(tokens);
-                tile->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+                tile->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
                 grid->addWidget(tile, i / kFormatColumns, i % kFormatColumns);
                 tiles[i] = tile;
+            }
+            // UX-9：磁贴固定宽 = 8 格里最宽的那个（"☑ 格式名" 宽度，与 CheckableCard::sizeHint
+            // 同一算法 → 不会出现"名被裁"或"格子宽窄不一"）
+            {
+                int tile_w = 0;
+                for (int i = 0; i < kFormatCount; ++i) {
+                    if (tiles[i] != nullptr)
+                        tile_w = std::max(tile_w, tiles[i]->sizeHint().width());
+                }
+                for (int i = 0; i < kFormatCount; ++i) {
+                    if (tiles[i] != nullptr)
+                        tiles[i]->setFixedWidth(tile_w);
+                }
             }
             for (int c = 0; c < kFormatColumns; ++c)
                 grid->setColumnStretch(c, 1);
@@ -721,7 +872,8 @@ struct Impl {
         changed_pill = header.pill;
         v->addWidget(header.row);
 
-        tabs = new QTabWidget(param_card);
+        // UX-9：页签等宽（固定宽 = 最长格式名档；宽度随选中集合变化，见 apply_tab_width）
+        tabs = new EqualWidthTabWidget(param_card);
         tabs->setObjectName(QStringLiteral("pp-format-tabs"));
         tabs->setDocumentMode(true);
         add_format_button = new QToolButton(tabs);
@@ -1063,6 +1215,33 @@ struct Impl {
                               theme::Metrics::card_pad_bottom);
         v->setSpacing(0);
 
+        // 行 0（仅 HEIF/AVIF）：编码档位（Profile）—— UX-10.1 核心行，置于位深行**之上**
+        // （档位是因、位深是果）。标签带兼容性说明见 heif_profile_options 的选项文案。
+        if (is_heif_family(id)) {
+            formkit::ComboSpec prof_spec;
+            prof_spec.object_name = QStringLiteral("pp-profile-combo");
+            prof_spec.accessible = PageOutput::tr("编码档位");
+            st.profile = formkit::combo_box(st.page, prof_spec);
+            const bool avif = (id == "avif");
+            int option_count = 0;
+            const ProfileOption *options = heif_profile_options(avif, option_count);
+            for (int i = 0; i < option_count; ++i)
+                st.profile->addItem(PageOutput::tr(options[i].label),
+                                    static_cast<int>(options[i].profile));
+            const formkit::Row row =
+                formkit::frow(st.page, PageOutput::tr("编码档位"), st.profile, FieldWidth::Standard,
+                              QString(), QStringLiteral(" "));
+            row.row->setObjectName(QStringLiteral("pp-profile-row"));
+            st.profile_note = row.note;
+            st.profile_note->setObjectName(QStringLiteral("pp-profile-note-") +
+                                           QString::fromStdString(id));
+            st.profile_note->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+            st.profile_note->setText(QString());
+            v->addWidget(row.row);
+            QObject::connect(st.profile, &QComboBox::currentIndexChanged, q,
+                             [this, id](int) { on_profile_changed(id); });
+        }
+
         // 行 1：位深（格式能力约束：如 JPEG 锁 8 位；约束说明入 10px 注释位）
         {
             formkit::ComboSpec bit_spec;
@@ -1114,6 +1293,7 @@ struct Impl {
         // 初值：优先快照（取消勾选后重选），否则表内默认
         apply_state_to_form(id, st.spec);
         tabs->addTab(st.page, format_tab_label(id));
+        apply_tab_width(); // UX-9：等宽
         sync_tab_current();
     }
 
@@ -1121,9 +1301,14 @@ struct Impl {
         FormatState *st = state_of(id);
         if (st == nullptr || st->page == nullptr)
             return;
+        // R-229：删页签前**先快照**当前控件状态 —— 否则重勾选时还原的是几个会话前的陈旧配置
+        // （states[id].spec 停留在上次 snapshot_state 的那一刻）。
+        snapshot_state(id);
         const int index = tabs->indexOf(st->page);
         if (index >= 0)
-            tabs->removeTab(index); // 不删除页面（快照保留在 states 里，重选可复用）
+            tabs->removeTab(index); // R-241：页面本体**会**被删（见下三行 deleteLater）；留下的
+                                    // 是 states[id].spec 这份参数快照（重选可复用）—— 原注释
+                                    // "不删除页面"与实现相反，已纠偏。
         st->page->hide();
         st->page->setParent(nullptr);
         st->page->deleteLater();
@@ -1132,6 +1317,9 @@ struct Impl {
         st->bitdepth = nullptr;
         st->bitdepth_note = nullptr;
         st->alpha_hint = nullptr;
+        st->profile = nullptr; // UX-10.1
+        st->profile_note = nullptr;
+        apply_tab_width(); // UX-9：等宽
     }
 
     // 取消勾选前把当前控件状态快照进 spec（重选时还原用户编辑）
@@ -1146,15 +1334,20 @@ struct Impl {
         st->spec.params = st->form->values();
         st->spec.params[std::string(pp::kLosslessKey)] = sel.lossless;
         st->spec.out_bitdepth = bitdepth_of(id);
+        // UX-10.1：编码档位随快照落盘（保留键 __heif_profile = HeifProfile 序号；
+        // 缺省 Auto = 0。enc_heif 编码前用同一规则源反查，见 codecs/heif_profile.h）
+        if (st->profile != nullptr)
+            st->spec.params[std::string(pp::kHeifProfileParamKey)] =
+                static_cast<int64_t>(st->profile->currentData().toInt());
     }
 
-    // 页签文案 = 格式名 · 位深（§7.2 页签；改动计数改由卡头中性 pill 承担）
+    // 页签文案 = 格式名（§7.2 页签）。
+    // UX-9（§16-1 口径）：**只在选项卡标题里去掉"多少位"** —— 位深控制功能原样保留
+    // （pp-bitdepth-row / -combo / -note、预设往返、evaluate_avif_alpha_preselect 联动全不动）。
+    // 位深变化仍会调 refresh_tab_labels()，但它只重写格式名（保留入口以便将来换文案）。
     QString format_tab_label(const std::string &id) const {
         const pp::FormatDef *f = pp::find_format(id);
-        const QString name =
-            f != nullptr ? QString::fromStdString(f->label) : QString::fromStdString(id);
-        const int depth = bitdepth_of(id);
-        return depth > 0 ? name + QStringLiteral(" · ") + PageOutput::tr("%1 位").arg(depth) : name;
+        return f != nullptr ? QString::fromStdString(f->label) : QString::fromStdString(id);
     }
 
     // 卡头中性 pill：当前页签格式「已改 N」（值 ≠ 表内默认的参数项数；修 2-07 计数用中性档）
@@ -1200,6 +1393,20 @@ struct Impl {
     void refresh_tab_labels() {
         for (int i = 0; i < static_cast<int>(selected.size()); ++i)
             tabs->setTabText(i, format_tab_label(selected[static_cast<std::size_t>(i)]));
+        apply_tab_width(); // UX-9：等宽随格式集合重算（文案已不含位深 → 宽度不随位深漂移）
+    }
+
+    // UX-9：页签等宽的落地点（addTab/removeTab/改文案后都要走一次）
+    void apply_tab_width() {
+        if (tabs == nullptr || tabs->tabBar() == nullptr)
+            return;
+        QStringList labels;
+        labels.reserve(static_cast<int>(selected.size()));
+        for (const std::string &id : selected)
+            labels << format_tab_label(id);
+        const int w = labels.isEmpty() ? 0 : format_tab_width(labels);
+        if (auto *bar = dynamic_cast<EqualWidthTabWidget *>(tabs))
+            bar->set_tab_width(w);
     }
 
     void update_format_count() {
@@ -1230,8 +1437,88 @@ struct Impl {
     void on_bitdepth_changed(const std::string &id) {
         evaluate_avif_alpha_preselect(id);
         update_alpha_hint(id);
-        refresh_tab_labels(); // 位深入页签文案
+        refresh_tab_labels();    // 位深入页签文案（UX-9 起只重写格式名，保留入口）
+        update_profile_note(id); // UX-10.1：反向联动 —— 位深变了，「自动」档的推导结果跟着变
         emit q->config_changed();
+    }
+
+    // ------------------------------------------------------------ UX-10.1 编码档位
+
+    pp::HeifProfile current_profile(const std::string &id) const {
+        const FormatState *st = state_of(id);
+        if (st == nullptr || st->profile == nullptr)
+            return pp::HeifProfile::Auto;
+        return static_cast<pp::HeifProfile>(st->profile->currentData().toInt());
+    }
+
+    // 色度（与 enc_heif 同键 "chroma"；0=4:0:0 1=4:2:0 2=4:2:2 3=4:4:4 —— heif_profile.h 口径）
+    int current_chroma(const std::string &id) const {
+        const FormatState *st = state_of(id);
+        if (st == nullptr || st->form == nullptr)
+            return 1;
+        return int(pp::param_int(st->form->values(), std::string("chroma"), 1));
+    }
+
+    // 档位选定 → 位深/色度限幅（位深限幅在 set_bitdepth_options 里与格式能力求交；
+    // 色度是 ParamForm 的表内参数，这里只做**校验**：heif_profile_compatible 反查不通过
+    // 就把中文错误放进档位注释位，不静默改写用户的色度选择 —— 一控件一义）。
+    void on_profile_changed(const std::string &id) {
+        FormatState *st = state_of(id);
+        if (st == nullptr || st->profile == nullptr)
+            return;
+        st->profile_user_set = st->profile->currentIndex() != 0; // 0 = 「自动」
+        set_bitdepth_options(id, -1, /*keep_if_valid=*/true);
+        update_profile_note(id);
+        emit q->config_changed();
+    }
+
+    // 档位注释位：「自动」显示插件自选的**推导结果**；手选档位与当前设置不一致时给中文错误；
+    // 非 Main 档位给 warn 色兼容性提示（§8「禁用不静默灰」）。
+    // 色调三档（色值一律取自 tokens，本页不写色值字面量）：
+    //   * 非法组合 → ppInvalid="true"（theme::field_qss 的红字轨，已有钩子）；
+    //   * 兼容性提示 → QPalette 指 tokens.warn（公共 warn 钩子尚未进 theme.h，属跨界需求；
+    //     这里不挂 kFkHint —— 那条 QSS 的 text3 会把 palette 色覆盖掉）；
+    //   * 其余 → kFkHint（--txt3）。
+    enum class NoteTone { Hint, Warn, Error };
+    void update_profile_note(const std::string &id) {
+        FormatState *st = state_of(id);
+        if (st == nullptr || st->profile == nullptr || st->profile_note == nullptr)
+            return;
+        const pp::HeifProfile want = current_profile(id);
+        const int depth = st->bitdepth != nullptr ? st->bitdepth->currentData().toInt() : 8;
+        const int chroma = current_chroma(id);
+        // 本输出恒为静止图（与 enc_heif.cpp 的反查同口径：still = true）
+        const pp::HeifProfile derived = pp::derive_heif_profile(id == "avif", depth, chroma, true);
+        QString note;
+        NoteTone tone = NoteTone::Hint;
+        if (want == pp::HeifProfile::Auto) {
+            note = PageOutput::tr("插件自选 → %1")
+                       .arg(QString::fromStdString(pp::heif_profile_label(derived)));
+            if (derived != pp::HeifProfile::Main && derived != pp::HeifProfile::MainStill)
+                tone = NoteTone::Warn;
+        } else {
+            std::string err_zh;
+            if (!pp::heif_profile_compatible(want, depth, chroma, true, &err_zh)) {
+                note = QString::fromStdString(err_zh);
+                tone = NoteTone::Error;
+            } else {
+                note = profile_compat_hint(want);
+                if (!note.isEmpty())
+                    tone = NoteTone::Warn;
+            }
+        }
+        st->profile_note->setText(note);
+        st->profile_note->setProperty("ppInvalid",
+                                      tone == NoteTone::Error ? QStringLiteral("true") : QString());
+        st->profile_note->setProperty(
+            theme::kFkProperty, tone == NoteTone::Hint ? QLatin1String(theme::kFkHint) : QString());
+        QPalette pal = st->profile_note->palette();
+        pal.setColor(QPalette::WindowText, tone == NoteTone::Warn    ? tokens.warn
+                                           : tone == NoteTone::Error ? tokens.err
+                                                                     : tokens.text3);
+        st->profile_note->setPalette(pal);
+        st->profile_note->style()->unpolish(st->profile_note);
+        st->profile_note->style()->polish(st->profile_note);
     }
 
     // ------------------------------------------------------------ 位深
@@ -1256,10 +1543,25 @@ struct Impl {
         FormatState *st = state_of(id);
         if (f == nullptr || st == nullptr || st->bitdepth == nullptr)
             return false;
-        const std::vector<int> allowed =
+        std::vector<int> allowed =
             allowed_bitdepths(*f, st->form != nullptr ? st->form->selection().backend : "");
         if (allowed.empty())
             return false;
+        // UX-10.1：档位 → 位深限幅（与格式能力求交；「自动」不限幅）。
+        // 限幅只收窄下拉选项，不静默改写用户已选的位深（keep_if_valid 语义不变）。
+        {
+            const std::vector<int> cap = profile_allowed_bitdepths(current_profile(id));
+            if (!cap.empty()) {
+                std::vector<int> narrowed;
+                narrowed.reserve(allowed.size());
+                for (int d : allowed) {
+                    if (contains(cap, d))
+                        narrowed.push_back(d);
+                }
+                if (!narrowed.empty())
+                    allowed.swap(narrowed);
+            }
+        }
         const int current = st->bitdepth->currentData().toInt();
         int resolved = 0;
         if (forced > 0 && contains(allowed, forced)) {
@@ -1301,10 +1603,24 @@ struct Impl {
             st->form->set_selection(sel);
             st->form->set_values(spec.params);
             st->form->set_values(spec.params); // 二次落值：切技术后补齐同键项（幂等）
+            // UX-10.1：还原编码档位（保留键 __heif_profile；缺省 = Auto）
+            if (st->profile != nullptr) {
+                const int want =
+                    int(pp::param_int(spec.params, std::string(pp::kHeifProfileParamKey), 0));
+                const QSignalBlocker blocker(st->profile);
+                for (int i = 0; i < st->profile->count(); ++i) {
+                    if (st->profile->itemData(i).toInt() == want) {
+                        st->profile->setCurrentIndex(i);
+                        break;
+                    }
+                }
+                st->profile_user_set = st->profile->currentIndex() != 0;
+            }
         }
         set_bitdepth_options(id, have_spec ? spec.out_bitdepth : -1, /*keep_if_valid=*/false);
         evaluate_avif_alpha_preselect(id);
         update_alpha_hint(id);
+        update_profile_note(id); // UX-10.1：档位注释位随落值刷新
         refresh_changed_pill();
     }
 
@@ -1332,6 +1648,10 @@ struct Impl {
         spec.params = st->form->values();
         spec.params[std::string(pp::kLosslessKey)] = sel.lossless; // 内部管道键（引擎侧）
         spec.out_bitdepth = bitdepth_of(id);
+        // UX-10.1：编码档位随 spec 下发（保留键 __heif_profile）
+        if (st->profile != nullptr)
+            spec.params[std::string(pp::kHeifProfileParamKey)] =
+                static_cast<int64_t>(st->profile->currentData().toInt());
         return spec;
     }
 

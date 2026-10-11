@@ -1168,14 +1168,18 @@ void PreviewPanel::reload() { impl_->select(impl_->current, /*force=*/true); }
 
 void PreviewPanel::next() {
     Impl &d = *impl_;
-    if (d.current + 1 < d.files.size())
+    if (d.current + 1 < d.files.size()) {
         d.select(d.current + 1, /*force=*/false);
+        emit navigated(d.current); // R-151：翻图同步左栏选中（所见即所标）
+    }
 }
 
 void PreviewPanel::previous() {
     Impl &d = *impl_;
-    if (d.current > 0)
+    if (d.current > 0) {
         d.select(d.current - 1, /*force=*/false);
+        emit navigated(d.current); // R-151：同上
+    }
 }
 
 // 缩放：状态在舞台（view）里一份 —— 本组入口只转发，信号只由舞台的 zoom_handler 发一次

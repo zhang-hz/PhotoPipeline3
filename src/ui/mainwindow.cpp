@@ -41,6 +41,7 @@
 #include <QActionGroup>
 #include <QApplication>
 #include <QByteArray>
+#include <QClipboard> // UX-1：「复制路径」等菜单动作
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDesktopServices>
@@ -84,6 +85,7 @@
 #include <QRegularExpression>
 #include <QScreen>
 #include <QSettings>
+#include <QSignalBlocker> // R-153：filter_clear 一次 apply_filter（屏蔽两枚开关的 toggled）
 #include <QSortFilterProxyModel>
 #include <QSpinBox>
 #include <QSplitter>
@@ -117,14 +119,18 @@
 #include <utility>
 #include <vector>
 
+#include "core/fsops.h" // R-006/R-073：补齐预检的路径渲染 + 输出根试建/试写探针
 #include "core/logger.h"
+#include "core/params.h" // R-006：find_format（补齐预检取目标扩展名）
 #include "core/settings.h"
+#include "core/version.h" // R-150：版本徽标取 PP_VERSION_STRING（单源 = CMakeLists.txt:19 生成链）
 #include "decode/oiio_reader.h" // M4-T12：探针的 probe 摘要（与列表模型同一条 oiio probe 通道）
 #include "mapwidget/mapwidget.h"
 #include "platform/frameless.h"
 #include "platform/mica.h"
 #include "platform/paths.h"
 #include "ui/classify_panel.h"
+#include "ui/contextmenu.h" // UX-1：公共右键菜单件（单一构造点 + 12 类卡 actions）
 #include "ui/exif_editor.h"
 #include "ui/filelistmodel.h"
 #include "ui/page_meta.h"
@@ -142,6 +148,7 @@ namespace pp::ui {
 namespace {
 
 constexpr int kPollIntervalMs = 150; // §2.14：运行轮询间隔
+constexpr int kStatusFlushMs = 150;  // R-024：状态栏合并刷新间隔（100–200ms 档）
 constexpr int kThumbWaitMs = 10000;  // §4.3：缩略图队列空上限
 constexpr int kRunWaitMs = 120000;   // U10 冻结：冒烟实跑上限
 constexpr int kSmokeShotCount = 12;
@@ -1197,6 +1204,55 @@ QString conflict_label(pp::ConflictPolicy p) {
 }
 
 // ---------------------------------------------------------------------------
+// M7-WP6 / R-055：错误弹窗文案抽助手
+//   原状：`tr("无法开始")` ×5（on_start 五个分支）、`tr("未勾选任何文件")` 双源（on_start /
+//   refresh_status）、预设成败标题各 2 处（load_preset_file / save_preset_named /
+//   delete_preset_file）。同一文案不再散落多处 —— 改一处即全改。
+// ---------------------------------------------------------------------------
+void warn_cannot_start(QWidget *parent, const QString &reason) {
+    QMessageBox::warning(parent, T("无法开始"), reason);
+}
+
+enum class PresetOp { Load, Save, Delete };
+void warn_preset_op(QWidget *parent, PresetOp op, const QString &detail) {
+    const char *title = op == PresetOp::Load   ? "载入预设失败"
+                        : op == PresetOp::Save ? "保存预设失败"
+                                               : "删除预设失败";
+    QMessageBox::warning(parent, T(title), detail);
+}
+
+// ---------------------------------------------------------------------------
+// M7-WP6 / R-006：「再次运行」补齐语义的**只读预检**
+//   逐输出渲染目标路径（渲染口径与 pipeline::plan_targets 同源：relative_dir +
+//   render_output_path），全部「已存在且非空」→ 该文件视为已完成、不再提交。
+//   0 字节产物按「缺件」处理（会提交；写侧冲突策略见 on_start 的补齐分支）。
+//   预检只读磁盘，不写不删（源文件永远只读、输出不得覆盖源文件的红线不受影响）。
+// ---------------------------------------------------------------------------
+bool entry_outputs_complete(const pp::FileEntry &entry, const pp::RunConfig &cfg) {
+    if (cfg.outputs.empty())
+        return false;
+    for (const pp::OutputFormatSpec &spec : cfg.outputs) {
+        const pp::FormatDef *fmt = pp::find_format(spec.format_id);
+        if (fmt == nullptr)
+            return false;
+        pp::PathCtx ctx;
+        ctx.format_dir = fmt->id;
+        ctx.rel_dir = pp::relative_dir(entry.src, entry.base_dir);
+        ctx.stem = entry.src.stem().string();
+        ctx.ext = fmt->ext;
+        const std::filesystem::path desired =
+            pp::render_output_path(cfg.output_template, ctx, cfg.out_root);
+        if (desired.empty())
+            return false;
+        std::error_code ec;
+        const std::uintmax_t size = std::filesystem::file_size(desired, ec);
+        if (ec || size == 0)
+            return false; // 缺件：不存在，或 0 字节（不算成品）
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // M5-T5（§7.5 工具行 + G3）左栏筛选代理：搜索之外的两个**可见性**开关
 // （「仅显示已勾选」/「仅显示有例外的文件」）。
 //   * 与搜索**正交**（§6.2：过滤只改可见性 —— 勾选集合/计数/分组键/分类归属都不因过滤变化）；
@@ -1365,6 +1421,7 @@ struct MainWindow::Impl {
     // M4-T14：日志尾卡喂入（§9.3「日志尾卡（5 行滚动 + 跳转）」）——单一持有者 = MainWindow：
     // 运行期每 500ms 读最新 run-*.log 的末尾若干行推给运行页（页只渲染，不做文件 IO）
     QTimer *log_tail = nullptr;
+    QTimer *status_flush = nullptr; // R-024：运行期状态栏合并刷新（singleShot 150ms）
     bool running = false;
     // 完成检测（§2.14 的"轮询 !running()"机制不可用：pp::Scheduler::running() 只在 wait() 内清零，
     // 见报告 api-deltas）→ 轮询改为"终态事件计数 == 本批文件数"，语义等价且不阻塞 GUI。
@@ -1373,9 +1430,21 @@ struct MainWindow::Impl {
     std::size_t run_done = 0;
     std::size_t run_failed = 0;
     std::size_t run_skipped = 0;
+    // R-076/R-140：部分成功与取消各自独立计数（部分成功不并入"成功"，取消不隐身）
+    std::size_t run_partial = 0;
+    std::size_t run_cancelled = 0;
+    // R-250：运行读数**单账本** —— started/terminal 全部在 Impl（原与 page_run 的
+    // files_started/files_terminal 混拼同一文案 = 双账本）。run_seen = 该文件是否已离开 Queued。
+    std::size_t run_started = 0;
+    std::vector<bool> run_seen;
+    // R-006/R-146：「再次运行」= 补齐语义（只提交缺件 + Skip 冲突策略）；由 on_run_again 置位
+    bool run_again_pending = false;
     // M4-T11：本批提交的**模型行号**（ev.index 是提交序号 → 需映射回列表行更新状态）
     std::vector<std::size_t> run_rows;
     QString last_selected_path; // 分组重建后恢复选中（重建 = 模型 reset，选中会丢）
+    // R-153（分组重建吞多选）：重建前快照**全部**选中路径（不止首个）—— 过滤/摘要/分组模式
+    // 变化触发 modelReset 时多选整组恢复，批量打标/移除不再塌缩成 1 行。
+    QStringList last_selected_paths;
     QString last_preset_path;
     QStringList cached_paths; // 行集合签名（避免每次状态变化都重扫时间预览）
     bool cached_alpha = false;
@@ -1416,7 +1485,10 @@ struct MainWindow::Impl {
     QString disk_free_segment(); // A19（T11）：底栏「剩余磁盘」段（输出根 → 源目录 → 工作目录）
     void push_log_tail();        // M4-T14：run-*.log 末尾 5 行 → 运行页日志尾卡
     void handle_file_event(const pp::FileEvent &ev);
+    void schedule_status_refresh(); // R-024：合并刷新（singleShot 起搏）
     void restore_selection_by_path(const QString &path);
+    void restore_selection_by_paths(const QStringList &paths); // R-153：整组恢复
+    void select_row(int row);                                  // R-151：翻图同步选中
 
     // M4-T9 骨架：主题 / 三栏持久化 / caption 行为
     void refresh_theme();
@@ -1531,6 +1603,12 @@ MainWindow::Impl::Impl(MainWindow *owner, const pp::AppSettings &s)
     poll->setInterval(kPollIntervalMs);
     log_tail = new QTimer(w);
     log_tail->setInterval(500); // 日志尾刷新（人眼可读的节奏；不参与进度节流）
+    // R-024：状态栏合并刷新（100–200ms 档取 150ms）—— 运行期逐文件事件洪峰不再每条都跑
+    // 一次全量 refresh_status（含两个 O(n) 计数 + 磁盘查询）。单次触发（singleShot 语义）：
+    // 只要还有事件进来就一直推后，静默 150ms 后落地一次。
+    status_flush = new QTimer(w);
+    status_flush->setSingleShot(true);
+    status_flush->setInterval(kStatusFlushMs);
 
     filter = new Filter(this);
     w->installEventFilter(filter);
@@ -1550,6 +1628,12 @@ bool MainWindow::Impl::handle_event(QObject * /*watched*/, QEvent *event) {
     switch (event->type()) {
     case QEvent::DragEnter: {
         auto *e = static_cast<QDragEnterEvent *>(event);
+        // R-071/R-154：运行中拒收拖放 —— 原实现放行 → 目录拖入触发同步递归扫盘冻结 GUI
+        // （poll/取消停摆），新行还默认勾选显示"排队"却不属本批（run_rows 是启动快照）。
+        if (running) {
+            e->ignore();
+            return true;
+        }
         if (e->mimeData() != nullptr && e->mimeData()->hasUrls()) {
             e->acceptProposedAction();
             return true;
@@ -1558,6 +1642,10 @@ bool MainWindow::Impl::handle_event(QObject * /*watched*/, QEvent *event) {
     }
     case QEvent::Drop: {
         auto *e = static_cast<QDropEvent *>(event);
+        if (running) { // R-071/R-154：同上（拖放已被 DragEnter 拒收，这里是第二道）
+            e->ignore();
+            return true;
+        }
         if (e->mimeData() == nullptr)
             return false;
         QStringList paths;
@@ -1621,7 +1709,17 @@ MainWindow::MainWindow(const pp::AppSettings &settings, QWidget *parent)
     set_current_page(1);
 }
 
-MainWindow::~MainWindow() = default;
+// R-107：显式收尾序（原 `= default` 靠"析构期无事件循环"的巧合保证正确性）。
+// ① 取消在途批次（幂等）→ ② 阻塞等 worker 退出 → ③ 置空事件回调（此后不再有回调落回
+// 已在析构的 this）→ ④ 释放调度器。closeEvent 只做异步 cancel，析构路径必须自己收口。
+MainWindow::~MainWindow() {
+    if (impl_ && impl_->sched) {
+        impl_->sched->cancel();
+        impl_->sched->wait();
+        impl_->sched->set_event_callback({});
+        impl_->sched.reset();
+    }
+}
 
 void MainWindow::build_ui() {
     Impl &d = *impl_;
@@ -1668,7 +1766,9 @@ void MainWindow::build_ui() {
     auto *title = new QLabel(QStringLiteral("PhotoPipeline"), d.titlebar);
     title->setObjectName(QStringLiteral("pp-app-title"));
     title->setFont(theme::font(theme::Typography::caption_px, theme::Typography::caption_weight));
-    auto *version = new QLabel(QStringLiteral("0.3.0"), d.titlebar);
+    // R-150：版本徽标 = PP_VERSION_STRING（core/version.h 单源；原硬编码 "0.3.0" 在 0.3.2 发行后
+    // 仍显示旧版本）。与 settings_dialog 的「关于」同一条取值口径。
+    auto *version = new QLabel(QLatin1String(PP_VERSION_STRING), d.titlebar);
     version->setObjectName(QStringLiteral("pp-app-ver"));
     version->setFont(theme::font(theme::Typography::badge_px, theme::Typography::badge_weight));
     // mockup .toolbar{align-items:center}：徽标按自身高度居中，不被行高拉伸
@@ -2129,9 +2229,16 @@ void MainWindow::wire() {
         apply_filter();
     });
     connect(d.filter_clear, &QAction::triggered, this, [this, apply_filter] {
-        impl_->proxy->clear_filters();
-        impl_->filter_checked->setChecked(false);
-        impl_->filter_exceptions->setChecked(false);
+        // R-153：原实现 clear_filters + 两次 setChecked 各自触发 apply_filter（最多 3 连刷）。
+        // 这里屏蔽两枚开关的 toggled，只走一次 apply_filter。
+        Impl &impl_ref = *impl_;
+        impl_ref.proxy->clear_filters();
+        {
+            const QSignalBlocker b1(impl_ref.filter_checked);
+            const QSignalBlocker b2(impl_ref.filter_exceptions);
+            impl_ref.filter_checked->setChecked(false);
+            impl_ref.filter_exceptions->setChecked(false);
+        }
         apply_filter();
     });
     connect(d.search, &QLineEdit::textChanged, this, [this](const QString &text) {
@@ -2145,7 +2252,11 @@ void MainWindow::wire() {
         Impl &impl_ref = *impl_;
         if (!idx.isValid() || impl_ref.groups->is_group(idx))
             return;
-        open_exif_editor_row(impl_ref.groups->mapToSource(idx).row());
+        // R-152（数据完整性）：过滤态下 idx 是**分组代理**行号，必须走完整的
+        // proxy->mapToSource(groups->mapToSource(idx)) 链才能拿到根 FileListModel 行号
+        // （与 :2701/:3377/:3444 三处同口径）。原先漏 proxy 一层 → 搜索/仅勾选过滤后双击
+        // 打开的 EXIF 编辑器把例外写到**别的文件**上。
+        open_exif_editor_row(impl_ref.proxy->mapToSource(impl_ref.groups->mapToSource(idx)).row());
     });
     connect(d.view->selectionModel(), &QItemSelectionModel::selectionChanged, this,
             [this] { impl_->sync_selection(); });
@@ -2210,6 +2321,10 @@ void MainWindow::wire() {
         impl_ref.preview_pill->setVisible(!file_name.isEmpty()); // 原型：有内容才画药丸
         impl_ref.preview_hint->set_full_text(impl_ref.preview_panel->current_info_text());
     });
+    // R-151（翻图/打标对象错位）：←/→ 翻图同步左栏选中 —— 热键打标作用于"所见"的那一张。
+    // （仅翻图动作发 navigated；选中驱动的 set_current 不发，故不会吞多选。）
+    connect(d.preview_panel, &PreviewPanel::navigated, this,
+            [this](int index) { impl_->select_row(index); });
     // 打标接线（W2-T11 接通）：预览面板的 `class_hotkey`（'1'..'9' 打标 / '0' 清除）→ 注册表。
     // 归属对象 = 当前选中集（多选 = 批量打标，与勾选/批量语义一致）；无选中 → 预览当前项。
     connect(d.preview_panel, &PreviewPanel::class_hotkey, this, [this](QChar key) {
@@ -2245,6 +2360,8 @@ void MainWindow::wire() {
     });
     // M4-T14：日志尾（运行期每 500ms；结束态由 on_scheduler_done 再读一次兜底）
     connect(d.log_tail, &QTimer::timeout, this, [this] { impl_->push_log_tail(); });
+    // R-024：状态栏合并刷新（运行期逐文件事件洪峰 → 150ms 一次全量刷新）
+    connect(d.status_flush, &QTimer::timeout, this, [this] { refresh_status(); });
 
     connect(d.page_meta, &PageMeta::rules_changed, this, [this] { refresh_status(); });
     connect(d.page_meta, &PageMeta::open_editor_requested, this,
@@ -2277,7 +2394,81 @@ void MainWindow::wire() {
     connect(d.page_run, &PageRun::open_logs_requested, this, [this] { impl_->open_logs(); });
     // M5-T9（§7.3 操作行「再次运行」）：页只发意图 —— 回收 = 与底栏「开始运行」同一条路径
     // （预检/锁定/调度/状态都在外壳，on_start 里已有全部守卫）。
-    connect(d.page_run, &PageRun::run_again_requested, this, &MainWindow::on_start);
+    // R-006/R-146：改经 on_run_again（补齐语义 + 含失败先确认），不再直接 on_start。
+    connect(d.page_run, &PageRun::run_again_requested, this, &MainWindow::on_run_again);
+
+    // ---- UX-1（M7-WP6）：文件列表右键菜单（公共件 = ui/contextmenu）+ UX-2 勾选三项 ----
+    // 菜单内容见 docs/ux-review-14.md §1 表第 ① 行；运行中按 G5 只读置灰（lock_for_run）。
+    d.view->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(d.view, &QWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
+        Impl &d2 = *impl_;
+        // UX-2：勾选三项作用于**当前可见（过滤后）**的行（§2 改进方案 1）。运行集是全局的，
+        // 故作用域写进菜单文案（有筛选时显示"（可见 N 行）"）—— 不静默扩大作用面。
+        const auto visible_rows = [&d2] {
+            std::vector<std::size_t> rows;
+            for (int r = 0; r < d2.proxy->rowCount(); ++r) {
+                const QModelIndex src = d2.proxy->mapToSource(d2.proxy->index(r, 0));
+                if (src.isValid())
+                    rows.push_back(std::size_t(src.row()));
+            }
+            return rows;
+        };
+        const bool filtered = d2.proxy->filtering() || !d2.search->text().isEmpty();
+        contextmenu::FileListIntents in;
+        in.running = d2.running;
+        in.check_all = [&d2, visible_rows] {
+            for (const std::size_t row : visible_rows())
+                d2.model->set_checked(row, true);
+        };
+        in.uncheck_all = [&d2, visible_rows] {
+            for (const std::size_t row : visible_rows())
+                d2.model->set_checked(row, false);
+        };
+        in.invert_checks = [&d2, visible_rows] {
+            for (const std::size_t row : visible_rows())
+                d2.model->set_checked(row, !d2.model->is_checked(row));
+        };
+        in.edit_exif = [this] {
+            if (impl_->view != nullptr && impl_->view->currentIndex().isValid())
+                open_exif_editor_row(
+                    impl_->proxy
+                        ->mapToSource(impl_->groups->mapToSource(impl_->view->currentIndex()))
+                        .row());
+        };
+        in.remove_selected = [this] { impl_->remove_selected(); };
+        in.clear_list = [this] { impl_->model->clear(); };
+        // 「按分类打标 →」子菜单：分类注册表动态生成（含"清除归属"）
+        for (const pp::ClassDef &c : d2.classes.classes) {
+            in.tag_targets.emplace_back(QString::fromStdString(c.name), [&d2, id = c.id] {
+                d2.apply_class_to_selection(QString::fromStdString(id));
+            });
+        }
+        in.tag_targets.emplace_back(tr("清除归属"),
+                                    [&d2] { d2.apply_class_to_selection(QString()); });
+        in.copy_path = [&d2] {
+            const QModelIndex idx = d2.view != nullptr ? d2.view->currentIndex() : QModelIndex();
+            if (!idx.isValid())
+                return;
+            const int row = d2.proxy->mapToSource(d2.groups->mapToSource(idx)).row();
+            if (row < 0 || std::size_t(row) >= d2.model->size())
+                return;
+            if (QClipboard *clip = QGuiApplication::clipboard())
+                clip->setText(
+                    QString::fromStdString(d2.model->row(std::size_t(row)).entry.src.string()));
+        };
+        std::vector<contextmenu::Item> items = contextmenu::file_list_actions(in);
+        if (filtered) {
+            // 作用域提示（UX-2：过滤出 5 行点"勾选全部"是勾 5 行还是 24 行 —— 文案说清）
+            const QString scope = tr("（可见 %1 行）").arg(visible_rows().size());
+            for (contextmenu::Item &item : items) {
+                if (!item.separator && !item.text.isEmpty())
+                    item.text += scope;
+            }
+        }
+        QMenu *m = contextmenu::menu(d2.view, items);
+        m->setAttribute(Qt::WA_DeleteOnClose);
+        m->popup(d2.view->viewport()->mapToGlobal(pos));
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -2314,22 +2505,24 @@ void MainWindow::set_offline_maps(bool off) {
 
 void MainWindow::on_start() {
     Impl &d = *impl_;
+    const bool run_again = d.run_again_pending; // R-006/R-146：「再次运行」的补齐语义分支
+    d.run_again_pending = false;
     if (d.running) {
-        QMessageBox::warning(this, tr("无法开始"), tr("正在运行"));
+        warn_cannot_start(this, tr("正在运行"));
         return;
     }
     if (d.model->empty()) {
-        QMessageBox::warning(this, tr("无法开始"), tr("没有文件"));
+        warn_cannot_start(this, tr("没有文件"));
         return;
     }
     // M4-T11（§6.2/D2）：勾选 = 参与运行集合 —— 未勾选任何文件 = 无参与文件
     if (d.model->checked_count() == 0) {
-        QMessageBox::warning(this, tr("无法开始"), tr("未勾选任何文件"));
+        warn_cannot_start(this, tr("未勾选任何文件"));
         return;
     }
     const QString reason = d.page_output->ready_to_start();
     if (!reason.isEmpty()) {
-        QMessageBox::warning(this, tr("无法开始"), reason);
+        warn_cannot_start(this, reason);
         return;
     }
 
@@ -2344,6 +2537,25 @@ void MainWindow::on_start() {
     // 读数与引擎同源，不是 UI 自算的另一套数。
     cfg.stagger_ms = d.settings.stagger_ms;
     cfg.thread_budget = d.settings.thread_budget;
+
+    // R-074：仅元数据模式的冲突策略改 Skip（原默认 Rename 会静默产出 "photo (1).jpg" 副本，
+    // 新元数据落在副本上、用户拿旧文件交差）。仅作用于 GUI 下发路径；--dev/金样走 CLI 默认面
+    // （main.cpp 的 overwrite），回归基线零影响。
+    if (cfg.metadata_only)
+        cfg.conflict = pp::ConflictPolicy::Skip;
+
+    // R-073：输出根预检（试建 + 试写探针，fsops::probe_output_root）—— 不可建/不可写时
+    // 在**开跑之前**拦下，不再"逐文件失败跑到底、结束语还说可打开输出目录"。
+    {
+        std::string root_err;
+        const std::filesystem::path out_root(cfg.out_root);
+        if (out_root.empty() || !pp::probe_output_root(out_root, &root_err)) {
+            warn_cannot_start(
+                this, tr("输出目录不可用：%1\n\n请更换输出根目录后重试。")
+                          .arg(QString::fromStdString(root_err.empty() ? "目录为空" : root_err)));
+            return;
+        }
+    }
 
     // M2-T5 §2.7：交叉参数约束的最后闸门。ParamForm 已实时红字提示，这里对真正要下发的
     // 配置再校验一次；非空 → 列出全部消息并阻止开始（不进入 lock_for_run/Scheduler）。
@@ -2360,14 +2572,90 @@ void MainWindow::on_start() {
             lines.reserve(static_cast<int>(cross.size()));
             for (const std::string &msg : cross)
                 lines << QString::fromStdString(msg);
-            QMessageBox::warning(this, tr("无法开始"), lines.join(QLatin1Char('\n')));
+            warn_cannot_start(this, lines.join(QLatin1Char('\n')));
             return;
         }
     }
 
+    // R-075：GPS 批量规则 on_start 预检（形态同"仅元数据预检"）—— 规则坐标非法/时间戳格式
+    // 不符时，运行期不会再有任何提示（只在元数据页黄字），用户会在"输出无 GPS"后才发现。
+    // 这里在开跑前确认一次；ts 格式校验复用 WP1 的纯函数 pp::is_valid_gps_timestamp。
+    if (const pp::BatchRules rules = cfg.rules; rules.gps.has_value()) {
+        const pp::GpsData &gps = *rules.gps;
+        const bool lat_ok = gps.lat >= -90.0 && gps.lat <= 90.0;
+        const bool lon_ok = gps.lon >= -180.0 && gps.lon <= 180.0;
+        const bool ts_ok = !gps.timestamp.has_value() || pp::is_valid_gps_timestamp(*gps.timestamp);
+        if (!lat_ok || !lon_ok || !ts_ok) {
+            QStringList bad;
+            if (!lat_ok)
+                bad << tr("纬度 %1 超出 [-90, 90]").arg(gps.lat);
+            if (!lon_ok)
+                bad << tr("经度 %1 超出 [-180, 180]").arg(gps.lon);
+            if (!ts_ok)
+                bad << tr("时间戳「%1」不是 YYYY:MM:DD HH:MM:SS 形态")
+                           .arg(QString::fromStdString(*gps.timestamp));
+            const QMessageBox::StandardButton answer = QMessageBox::warning(
+                this, tr("GPS 规则预检"),
+                tr("批量 GPS 规则存在无效字段：\n%1\n\n继续运行将不写入 GPS。仍要继续吗？")
+                    .arg(bad.join(QLatin1Char('\n'))),
+                QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+            if (answer != QMessageBox::Yes)
+                return;
+        }
+    }
+
     // 参与运行集合（M4-T11：勾选口径；顺序 = 列表行序）
-    const std::vector<std::size_t> run_rows = d.model->checked_rows();
+    std::vector<std::size_t> run_rows = d.model->checked_rows();
     std::vector<pp::FileEntry> entries = d.model->checked_entries(); // 含单文件例外（引擎侧生效）
+
+    // R-067：过滤视图与运行集语义冲突 —— 过滤只改可见行，勾选/运行集是全局的。
+    // 运行前置提示"参与集含 N 个被过滤隐藏的文件"（唯一线索不再是底栏数字）。
+    if (d.proxy->filtering() || !d.search->text().isEmpty()) {
+        std::size_t hidden = 0;
+        for (const std::size_t row : run_rows) {
+            const QModelIndex filtered = d.proxy->mapFromSource(d.model->index(int(row), 0));
+            if (!filtered.isValid())
+                ++hidden;
+        }
+        if (hidden > 0) {
+            const QMessageBox::StandardButton answer = QMessageBox::question(
+                this, tr("参与集含隐藏文件"),
+                tr("当前筛选条件下参与集含 %1 个被过滤隐藏的文件，它们仍会参与本次运行。\n\n"
+                   "仍要继续吗？")
+                    .arg(hidden),
+                QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+            if (answer != QMessageBox::Yes)
+                return;
+        }
+    }
+
+    // R-006（补齐语义）：「再次运行」= 只补缺件 —— 逐文件预检目标输出，全部「已存在且非空」
+    // 的文件不再提交；本轮冲突策略改 Skip，已存在的输出不再被 Rename 成 "photo (1).jpg" 副本。
+    // （预检只读磁盘；0 字节产物按缺件处理，见 entry_outputs_complete。）
+    std::size_t complete_dropped = 0;
+    if (run_again) {
+        std::vector<std::size_t> keep_rows;
+        std::vector<pp::FileEntry> keep_entries;
+        keep_rows.reserve(run_rows.size());
+        keep_entries.reserve(entries.size());
+        for (std::size_t k = 0; k < entries.size(); ++k) {
+            if (entry_outputs_complete(entries[k], cfg)) {
+                ++complete_dropped;
+                continue;
+            }
+            keep_rows.push_back(run_rows[k]);
+            keep_entries.push_back(std::move(entries[k]));
+        }
+        run_rows.swap(keep_rows);
+        entries.swap(keep_entries);
+        cfg.conflict = pp::ConflictPolicy::Skip;
+        if (entries.empty()) {
+            QMessageBox::information(
+                this, tr("再次运行"),
+                tr("没有缺件：全部 %1 个文件的输出已存在且非空，无需重跑。").arg(complete_dropped));
+            return;
+        }
+    }
     const std::size_t total = entries.size();
 
     if (cfg.metadata_only) {
@@ -2434,11 +2722,15 @@ void MainWindow::on_start() {
     for (const std::size_t row : run_rows)
         d.model->set_state(row, pp::FileState::Queued); // 只复位本批（参与运行）行的状态
     d.run_rows = run_rows;                              // ev.index（提交序号）→ 列表行号的映射
+    d.run_started = 0;                                  // R-250：单账本
+    d.run_seen.assign(run_rows.size(), false);
     d.run_total = total;
     d.run_terminal = 0;
     d.run_done = 0;
     d.run_failed = 0;
     d.run_skipped = 0;
+    d.run_partial = 0;   // R-076
+    d.run_cancelled = 0; // R-140
 
     d.sched = std::make_unique<pp::Scheduler>(cfg, std::move(entries));
     d.sched->set_event_callback([this](const pp::FileEvent &ev) {
@@ -2461,6 +2753,27 @@ void MainWindow::on_start() {
     d.log_tail->start();
     impl_->push_log_tail(); // 立刻给一次（本次 run 日志刚开写）
     refresh_status();
+}
+
+// R-006/R-146：「再次运行」入口。补齐语义 = 只提交缺件（已存在且非空的输出跳过）；
+// 上一批含失败/部分成功时先确认（不然一点即失现场，用户想核对失败原因就没了）。
+void MainWindow::on_run_again() {
+    Impl &d = *impl_;
+    if (d.running)
+        return;
+    if (d.run_failed > 0 || d.run_partial > 0) {
+        const QMessageBox::StandardButton answer =
+            QMessageBox::question(this, tr("再次运行"),
+                                  tr("上一批有 %1 个失败、%2 个部分成功。再次运行只补跑缺失的输出"
+                                     "（已存在且非空的输出跳过，不会重新编码）。\n\n仍要继续吗？")
+                                      .arg(d.run_failed)
+                                      .arg(d.run_partial),
+                                  QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (answer != QMessageBox::Yes)
+            return;
+    }
+    d.run_again_pending = true;
+    on_start();
 }
 
 void MainWindow::on_cancel() {
@@ -2494,6 +2807,8 @@ void MainWindow::lock_for_run(bool lock) {
     // "概率性错误"）。这里先掐掉，末尾的 refresh_status 再按完整闸门校准。
     if (d.start != nullptr)
         d.start->setEnabled(!lock);
+    // R-071/R-154：运行期关掉窗口级拖放入口（handle_event 里另有拒收兜底）
+    setAcceptDrops(!lock);
     d.nav_meta->setEnabled(!lock);
     d.nav_output->setEnabled(!lock);
     d.settings_action->setEnabled(!lock);
@@ -2544,17 +2859,28 @@ void MainWindow::refresh_status() {
     QString text;
     const char *tone = theme::kToneNeutral;
     if (d.running) {
-        // M4-T14（mockup run-dark 底栏）：运行中 = 「成功 N · 失败 N · 进行中 N · 排队 N」。
-        // 并行读数与运行页同源（page_run 的同一份事件流折算：已取件 − 已结算 = 进行中）。
-        const int started = d.page_run->files_started();
-        const int terminal_files = d.page_run->files_terminal();
-        const int inflight = std::max(0, started - terminal_files);
-        const int queued = std::max(0, static_cast<int>(d.run_total) - started);
-        text = tr("成功 %1 · 失败 %2 · 进行中 %3 · 排队 %4")
-                   .arg(d.run_done)
-                   .arg(d.run_failed)
-                   .arg(inflight)
-                   .arg(queued);
+        // M4-T14（mockup run-dark 底栏）：运行中 = 各终态桶 + 进行中 + 排队。
+        // R-250（双账本收敛单源）：全部桶取自 Impl 的**文件级**计数（原与 page_run 的
+        // started/terminal 混拼同一文案）；inflight/queued 由本账本自算。
+        // R-140：补「跳过 / 取消 / 部分」三桶 + 标注计数单位（与运行页汇总的"按输出"区分）。
+        // R-139：终态词统一走 term_words（与列表胶囊/运行页胶囊同一张词表）。
+        const std::size_t started = d.run_started;
+        const std::size_t inflight = started > d.run_terminal ? started - d.run_terminal : 0;
+        const std::size_t queued = d.run_total > started ? d.run_total - started : 0;
+        const auto bucket = [](const char *word, std::size_t n) {
+            return QStringLiteral("%1 %2")
+                .arg(QCoreApplication::translate("MainWindow", word))
+                .arg(static_cast<qulonglong>(n));
+        };
+        text = QStringList{bucket(term_words::kDone, d.run_done),
+                           bucket(term_words::kPartial, d.run_partial),
+                           bucket(term_words::kFailed, d.run_failed),
+                           bucket(term_words::kSkipped, d.run_skipped),
+                           bucket(term_words::kCancelled, d.run_cancelled),
+                           bucket(term_words::kRunning, inflight),
+                           bucket(term_words::kQueued, queued)}
+                   .join(QStringLiteral(" · ")) +
+               tr("（按文件）");
         // 运行中：绿 = 进行中；已出现失败/例外 → 琥珀（预警，不打断 —— mockup run-dark 底栏
         // 的「进行中 · 1 异常 · 3 失败」正是琥珀档）
         tone = (d.run_failed > 0 || exceptions > 0) ? theme::kToneWarn : theme::kToneOk;
@@ -2747,10 +3073,11 @@ void MainWindow::Impl::apply_group_view_state() {
         if (idx.isValid())
             view->setFirstColumnSpanned(g, QModelIndex(), true);
     }
-    // 重建（reset）会丢选中 → 按路径恢复（被搜索过滤隐藏时不越权恢复）。
+    // 重建（reset）会丢选中 → 按路径**整组**恢复（R-153：多选 5 行后敲过滤字符不再塌缩成 1 行；
+    // 被搜索过滤隐藏时不越权恢复）。
     // 注意顺序：QTreeView::scrollTo（setCurrentIndex 内部）会**展开**当前项的祖先，故选中恢复
     // 必须排在展开态落地**之前**，否则用户的折叠会被"露出当前项"覆盖。
-    restore_selection_by_path(last_selected_path);
+    restore_selection_by_paths(last_selected_paths);
     // 展开态：默认全展开（mockup：节头 + 行平铺）；用户折叠过的节按代理记的键保持折叠（最终态）
     view->expandAll();
     for (int g = 0; g < groups->group_count(); ++g) {
@@ -2764,23 +3091,54 @@ void MainWindow::Impl::apply_group_view_state() {
 }
 
 void MainWindow::Impl::restore_selection_by_path(const QString &path) {
-    if (view->selectionModel() == nullptr || path.isEmpty())
+    restore_selection_by_paths(path.isEmpty() ? QStringList{} : QStringList{path});
+}
+
+// R-153：分组重建后**整组**恢复选中（不止首个）。被过滤隐藏的行不越权恢复（与旧口径一致）。
+void MainWindow::Impl::restore_selection_by_paths(const QStringList &paths) {
+    if (view->selectionModel() == nullptr || paths.isEmpty())
         return;
-    for (std::size_t i = 0; i < model->size(); ++i) {
-        if (QString::fromStdString(model->row(i).entry.src.string()) != path)
-            continue;
-        const QModelIndex src = model->index(int(i), 0);
-        const QModelIndex filtered = proxy->mapFromSource(src);
-        if (!filtered.isValid())
-            return; // 被搜索过滤隐藏
-        const QModelIndex group_idx = groups->mapFromSource(filtered);
-        if (!group_idx.isValid())
-            return;
-        view->setCurrentIndex(group_idx);
-        view->selectionModel()->select(group_idx, QItemSelectionModel::ClearAndSelect |
-                                                      QItemSelectionModel::Rows);
-        return;
+    QItemSelection selection;
+    QModelIndex first;
+    for (const QString &path : paths) {
+        for (std::size_t i = 0; i < model->size(); ++i) {
+            if (QString::fromStdString(model->row(i).entry.src.string()) != path)
+                continue;
+            const QModelIndex src = model->index(int(i), 0);
+            const QModelIndex filtered = proxy->mapFromSource(src);
+            if (!filtered.isValid())
+                break; // 被搜索过滤隐藏
+            const QModelIndex group_idx = groups->mapFromSource(filtered);
+            if (!group_idx.isValid())
+                break;
+            if (!first.isValid())
+                first = group_idx;
+            selection.select(group_idx, group_idx);
+            break;
+        }
     }
+    if (selection.isEmpty())
+        return;
+    view->selectionModel()->select(selection,
+                                   QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+    if (first.isValid())
+        view->setCurrentIndex(first);
+}
+
+// R-151：翻图（PreviewPanel::navigated）同步左栏选中 —— "所见即所标"。
+void MainWindow::Impl::select_row(int row) {
+    if (view == nullptr || view->selectionModel() == nullptr || row < 0 ||
+        std::size_t(row) >= model->size())
+        return;
+    const QModelIndex filtered = proxy->mapFromSource(model->index(row, 0));
+    if (!filtered.isValid())
+        return; // 被过滤隐藏：不动选中（保持旧口径的"不越权"）
+    const QModelIndex group_idx = groups->mapFromSource(filtered);
+    if (!group_idx.isValid())
+        return;
+    view->setCurrentIndex(group_idx);
+    view->selectionModel()->select(group_idx,
+                                   QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
 }
 
 void MainWindow::Impl::set_group_mode(pp::GroupMode mode) {
@@ -3318,7 +3676,9 @@ void MainWindow::Impl::on_content_changed() {
         }
         if (paths != cached_paths) {
             cached_paths = paths;
-            page_meta->set_batch_files(paths); // 首文件时间预览（PageMeta 内部限扫 200）
+            page_meta->set_batch_files(
+                paths); // 首文件时间预览（PageMeta 跟随项限扫 ≤8 =
+                        // kMultiRowCap；R-262：原注释「限扫 200」与实现相反）
             // M4-T10：中栏预览面板的文件集合（列表顺序 = 翻图顺序；集合未变则不打扰）
             if (preview_panel != nullptr)
                 preview_panel->set_files(paths);
@@ -3399,8 +3759,10 @@ void MainWindow::Impl::sync_selection() {
     remove_sel->setVisible(has); // 1-08：无选择即隐藏（与 refresh_status 同一口径）
     remove_sel->setEnabled(!running && has);
     // M4-T11：分类面板高亮跟随选中（§5.2 同一条跟随口径）；分组重建后据此恢复选中
-    if (has && !paths.isEmpty())
+    if (has && !paths.isEmpty()) {
         last_selected_path = paths.first();
+        last_selected_paths = paths; // R-153：整组快照（多选重建后整组恢复）
+    }
     sync_class_views(first_row >= 0 ? std::size_t(first_row) : std::size_t(-1));
 }
 
@@ -3569,10 +3931,38 @@ void MainWindow::Impl::handle_file_event(const pp::FileEvent &ev) {
     const std::size_t row = run_rows[std::size_t(ev.index)];
     if (row >= model->size())
         return;
-    switch (ev.state) { // 计数先于 set_state：set_state 同步触发 content_changed → refresh_status
+    // R-250：单账本 —— "已取件"在此记账（离开 Queued 的第一个事件），inflight/queued 自算。
+    if (ev.state != pp::FileState::Queued && std::size_t(ev.index) < run_seen.size() &&
+        !run_seen[std::size_t(ev.index)]) {
+        run_seen[std::size_t(ev.index)] = true;
+        ++run_started;
+    }
+    // R-076：多输出部分成功不聚合成 Done —— 调度器仍把 Verdict::DoneWithErrors 映射成
+    // FileState::Done（scheduler.cpp 非本包文件面，见 handoff「跨界需求」），故这里按
+    // FileResult.outputs 的逐输出事实**补判**：有成有败 = 部分成功。
+    pp::FileState state = ev.state;
+    bool zero_bytes = false;
+    if (ev.result != nullptr) {
+        for (const pp::OutputResult &out : ev.result->outputs) {
+            if (out.ok && out.out_bytes == 0)
+                zero_bytes = true; // R-069：0 字节产物事实
+        }
+        if (state == pp::FileState::Done && ev.result->outputs.size() > 1) {
+            std::size_t ok = 0, bad = 0;
+            for (const pp::OutputResult &out : ev.result->outputs)
+                (out.ok ? ok : bad)++;
+            if (ok > 0 && bad > 0)
+                state = pp::FileState::DoneWithErrors; // R-076
+        }
+    }
+    switch (state) { // 计数先于 set_state：set_state 同步触发 content_changed → refresh_status
     case pp::FileState::Done:
         ++run_terminal;
         ++run_done;
+        break;
+    case pp::FileState::DoneWithErrors: // R-076：多输出部分成功 = 独立档，不并入 Done
+        ++run_terminal;
+        ++run_partial;
         break;
     case pp::FileState::Skipped:
         ++run_terminal;
@@ -3583,21 +3973,46 @@ void MainWindow::Impl::handle_file_event(const pp::FileEvent &ev) {
         ++run_failed;
         break;
     case pp::FileState::Cancelled:
-        ++run_terminal; // Scheduler::finish() 对每个文件恰好发一次终态事件
+        ++run_terminal;  // Scheduler::finish() 对每个文件恰好发一次终态事件
+        ++run_cancelled; // R-140：取消不隐身（状态栏有独立桶）
         break;
     default:
         break;
     }
-    model->set_state(row, ev.state);
+    // R-008：Progress 是逐输出的**过程**事件（一次文件会发多条），落模型会把左列表状态胶囊
+    // 全程覆写成过程态 —— 过程态只喂 page_run，列表只落阶段/终态。
+    if (state != pp::FileState::Progress) {
+        model->set_state(row, state);
+        if (zero_bytes) // R-069：终态事件带 0 字节事实回传列表
+            model->set_zero_byte_output(row, true);
+    }
     page_run->on_event(ev);
-    w->refresh_status();
+    // R-024：逐文件事件洪峰合并刷新 —— 运行期不再每条事件都跑一次全量 refresh_status
+    // （含两个 O(n) 计数 + 磁盘查询），改为 150ms 定时合并；终态事件立即刷（定稿要看得见）。
+    if (state != pp::FileState::Progress && run_terminal >= run_total)
+        w->refresh_status();
+    else
+        schedule_status_refresh();
+}
+
+// R-024：合并刷新（singleShot 起搏：只要还有事件就推后，静默 kStatusFlushMs 后落地一次）
+void MainWindow::Impl::schedule_status_refresh() {
+    if (status_flush == nullptr) {
+        w->refresh_status();
+        return;
+    }
+    if (!status_flush->isActive())
+        status_flush->start();
 }
 
 // ---------------------------------------------------------------------------
 // --ui-smoke 脚本化走查（§4.3 冻结断言）
 // ---------------------------------------------------------------------------
-
 void MainWindow::ui_smoke_walk(const QString &shots_dir) {
+    // 探针输出改**非缓冲**：Windows GUI 子系统下 stdout 是全缓冲，走查途中崩溃（如 0xC0000005）
+    // 会把已打印的探针行全部丢掉，只剩一个 exit code（实测：ui_smoke 崩溃时 smoke.log 0 字节，
+    // 无法定位卡在哪条探针）。本行不改变任何输出内容，只保证"跑到哪儿看得见"。
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     Impl &d = *impl_;
     setProperty("pp_ui_smoke_ran", true);
     setProperty("pp_ui_smoke_exit", 1);
@@ -9422,7 +9837,7 @@ void MainWindow::Impl::smoke_probe_output_geometry() {
                QStringLiteral("tip=%1").arg(edit != nullptr && !edit->toolTip().isEmpty() ? 1 : 0));
     }
 
-    // ---- (f) 卡头中性计数胶囊（2-07）+ 页签 = 格式名 · 位深（2-21）+ 预设
+    // ---- (f) 卡头中性计数胶囊（2-07）+ 页签 = 格式名（UX-9：去"· N 位"）+ 预设
     // placeholder（2-24/2-25）
     //      + 根目录 placeholder（2-10）+ 色彩目标 tooltip（2-16）+ 按钮 26（A7）----
     {
@@ -9437,9 +9852,23 @@ void MainWindow::Impl::smoke_probe_output_geometry() {
                    .arg(format_pill != nullptr ? format_pill->text() : QString()));
         const auto *tabs = page.findChild<QTabWidget *>(QStringLiteral("pp-format-tabs"));
         const QString tab0 = tabs != nullptr && tabs->count() > 0 ? tabs->tabText(0) : QString();
-        expect("tab-label",
-               tab0.contains(QStringLiteral(" · ")) && tab0.endsWith(QStringLiteral("位")),
+        // UX-9 机械换锚（语义不变；登记 build/m7-wp6/handoff.md 裁定登记）：页签文案**不再拼
+        // 位深**（§16-1 口径 = 只在选项卡标题去掉"多少位"，位深控制功能原样保留 —— 见下面
+        // bitdepth-lock 与 six_rows 两条**逐字保留**的断言）。新断言 = 不含「位」且非空。
+        expect("tab-label", !tab0.isEmpty() && !tab0.contains(QStringLiteral("位")),
                QStringLiteral("tab0=\"%1\"").arg(tab0));
+        // UX-9 加性断言（只增）：页签等宽（EqualWidthTabBar 的固定宽 = 最长格式名档）
+        {
+            int bad = 0;
+            if (tabs != nullptr && tabs->count() > 1 && tabs->tabBar() != nullptr) {
+                const int w0 = tabs->tabBar()->tabRect(0).width();
+                for (int i = 1; i < tabs->count(); ++i) {
+                    if (std::abs(tabs->tabBar()->tabRect(i).width() - w0) > 1)
+                        ++bad;
+                }
+            }
+            expect("tab-equal", bad == 0, QStringLiteral("unequal=%1").arg(bad));
+        }
         const auto *root_edit = page.findChild<QLineEdit *>(QStringLiteral("pp-out-root-edit"));
         const auto *color = page.findChild<QComboBox *>(QStringLiteral("pp-color-combo"));
         expect(
@@ -10502,6 +10931,30 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
                         QStringLiteral("bad=%1 want=%2").arg(btn_bad).arg(theme::Metrics::btn_h));
         }
 
+        // (i-6b) UX-4②（M7-WP7 只增）：分类 chips 行已收进搜索框右侧「分类 ▾」下拉 ——
+        //   objectName pp-meta-gps-category-0..5 由菜单 action 继承；探针断言菜单项数 == 6
+        //   且逐一在位（ux-review §4 改进方案 ② 的取证口径）。
+        {
+            const auto *cat_btn =
+                page.findChild<QPushButton *>(QStringLiteral("pp-meta-gps-category-menu"));
+            const QMenu *menu = cat_btn != nullptr ? cat_btn->menu() : nullptr;
+            int items = 0;
+            bool names_ok = menu != nullptr;
+            if (menu != nullptr) {
+                const QList<QAction *> actions = menu->actions();
+                items = int(actions.size());
+                for (int i = 0; i < actions.size(); ++i) {
+                    names_ok = names_ok && actions.at(i)->objectName() ==
+                                               QStringLiteral("pp-meta-gps-category-%1").arg(i);
+                }
+            }
+            meta_expect("category-menu", items == 6 && names_ok,
+                        QStringLiteral("btn=%1 items=%2 names=%3")
+                            .arg(cat_btn != nullptr ? 1 : 0)
+                            .arg(items)
+                            .arg(names_ok ? 1 : 0));
+        }
+
         // (i-7) 修 1-38/1-39 + A30：地图离线说明 = 中性灰 + 括号进 tooltip。
         //   T12/A30 加强：banner 本体的**警示黄已去** —— mapwidget.cpp 不再自持硬编码语义色，
         //   故此处除文案/tooltip/令牌灰外，另做两路取证：(a) banner 调色板不得是原警示黄
@@ -11145,7 +11598,9 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
                         // 展开期卡片位 = 同高空占位（模态期卡片不抖动）
                         const auto *placeholder =
                             page.findChild<QWidget *>(QStringLiteral("pp-meta-map-placeholder"));
-                        out->card_kept = placeholder != nullptr && placeholder->height() == 136;
+                        out->card_kept =
+                            placeholder != nullptr &&
+                            placeholder->height() == 260; // UX-4⑤ 换锚（kMapHeight 136→260）
                         if (auto *close = dialog->findChild<QPushButton *>(
                                 QStringLiteral("pp-meta-map-close"))) {
                             close->click(); // 真实用户路径：底栏「关闭」
@@ -11186,12 +11641,13 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
                               .arg(first.paint_dpr)
                               .arg(first.paint_near));
             expand_expect("dialog-card-kept", first.card_kept && first.placeholder_removed,
-                          QStringLiteral("占位高 136=%1 关闭后已移除=%2")
+                          QStringLiteral("占位高 260=%1 关闭后已移除=%2") // UX-4⑤ 换锚
                               .arg(first.card_kept ? 1 : 0)
                               .arg(first.placeholder_removed ? 1 : 0));
-            // 关闭后：挂回卡片（同实例 + 同宿主 + 固定高 136 + 几何/落点逐位复原 + 状态保持）
+            // 关闭后：挂回卡片（同实例 + 同宿主 + 固定高 260 + 几何/落点逐位复原 + 状态保持）
+            // UX-4⑤ 换锚：kMapHeight 136 → 260（ux-review §16-2 定档）
             expand_expect("restored-card",
-                          page.isAncestorOf(map) && map->isVisible() && map->height() == 136 &&
+                          page.isAncestorOf(map) && map->isVisible() && map->height() == 260 &&
                               map->geometry() == card_geom &&
                               map->mapTo(&page, QPoint(0, 0)) == card_pos,
                           QStringLiteral("h=%1 vis=%2 geom=(%3,%4 %5x%6) 基线=(%7,%8 %9x%10)")
@@ -11244,7 +11700,7 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
                               .arg(second.dialog_size.width())
                               .arg(second.dialog_size.height()));
             expand_expect("restored-card-2",
-                          page.isAncestorOf(map) && map->height() == 136 &&
+                          page.isAncestorOf(map) && map->height() == 260 && // UX-4⑤ 换锚
                               map->geometry() == card_geom && map->isVisible(),
                           QStringLiteral("h=%1 geom=(%2,%3 %4x%5)")
                               .arg(map->height())

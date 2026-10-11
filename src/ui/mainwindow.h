@@ -35,6 +35,9 @@ private slots:
     void manage_presets();
     void open_exif_editor_row(int row);
     void open_exif_editor_path(const QString &path);
+    // —— M7-WP6 加性追加（R-006/R-146；既有签名逐字不变）——
+    // 「再次运行」= 补齐语义入口：含失败先确认（R-146），随后只提交缺件（R-006）。
+    void on_run_again();
 
 private:
     void build_ui();

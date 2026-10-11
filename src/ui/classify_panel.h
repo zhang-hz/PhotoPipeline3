@@ -84,6 +84,9 @@ public:
     void check_class(const QString &class_id);  // 全选该类（class_id 空 = 「全部」= 全部文件）
     void invert_class(const QString &class_id); // 反选该类
     void clear_checks();                        // 清空勾选（全部取消）
+    // —— M7-WP6 / R-142 加性追加（既有签名逐字不变）——
+    // 「清空该类勾选」：只清 class_id 命中的那类文件（空 = 「全部」= 全局清空）。
+    void clear_class_checks(const QString &class_id);
 
     // ---- CRUD（§6.2「增删改名/颜色/热键（0-9）」；菜单经对话框调用，冒烟直调）----
     bool new_class(const QString &name, std::uint32_t rgb = 0, char hotkey = 0);

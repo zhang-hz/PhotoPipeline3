@@ -5,6 +5,7 @@
 #include "core/types.h"
 #include <functional>
 #include <optional>
+#include <string_view>
 #include <utility>
 
 namespace pp {
@@ -23,7 +24,24 @@ struct ParamDef {
     // Predicates (optional; filled in M1, empty in M0)
     std::function<bool(const ParamSet &)> visible;
     std::function<std::optional<ParamValue>(const ParamSet &)> locked;
+    // —— M7-WP6 / UX-8 加性字段（**追加在结构体末尾**；既有聚合初始化逐字兼容，
+    //    未写本字段的旧写法 = 空串）。分组单源：高级区子分组不再由 UI 按 key 词根启发式
+    //    推断（原 paramform 的 subgroup_of），改由本字段显式驱动。取值域见下方 kGroup*。
+    //    契约：docs/ux-review-14.md §8 改进方案 2「分组由 schema 显式字段驱动，废除
+    //    key 词根启发式（params.h ParamDef 加 group 字段；format_tables.cpp 82 条补 group）」。
+    std::string group;
 };
+
+// —— M7-WP6 / UX-8：ParamDef::group 的取值域（单源词表）——
+// 核心参数 → kGroupCore（不入子分组折叠）；高级参数 → 四个子分组之一（二级折叠的四段，
+// 默认只展开第一组，见 docs/ux-review-14.md §8）。空串 = 未分类（应视为缺陷，test_smoke 有断言）。
+// 形态 = `const char *`（不是 string_view）：聚合初始化 `.group = kGroupCore` 需要**隐式**转换到
+// std::string，而 string_view → string 的构造是 explicit（实测 C2440）。
+inline constexpr const char *kGroupCore = "核心";
+inline constexpr const char *kGroupProgressive = "渐进";
+inline constexpr const char *kGroupNoise = "噪声";
+inline constexpr const char *kGroupDecodeBudget = "解码预算";
+inline constexpr const char *kGroupEncodeTools = "编码工具";
 
 struct TechDef {
     std::string id, label;

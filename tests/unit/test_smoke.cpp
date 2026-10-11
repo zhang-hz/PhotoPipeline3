@@ -73,6 +73,45 @@ int main() {
           "ParamValue monostate round-trip");
     check(ps.size() == 5, "ParamSet holds 5 entries");
 
+    // 4. M7-WP6 / UX-8（断言只增；既有 1–3 节逐字不动）：ParamDef::group 显式分组
+    //    契约 = docs/ux-review-14.md §8 改进方案 2「分组由 schema 显式字段驱动，
+    //    废除 key 词根启发式」。判据：
+    //    * 每条 ParamDef 的 group 必须落在 kGroup* 词表内（空串 = 未分类 = 缺陷）；
+    //    * 核心参数恒 kGroupCore；高级参数恒落四个子分组之一（二级折叠的四段）。
+    {
+        const std::set<std::string> all_groups = {
+            std::string(pp::kGroupCore), std::string(pp::kGroupProgressive),
+            std::string(pp::kGroupNoise), std::string(pp::kGroupDecodeBudget),
+            std::string(pp::kGroupEncodeTools)};
+        const std::set<std::string> sub_groups = {
+            std::string(pp::kGroupProgressive), std::string(pp::kGroupNoise),
+            std::string(pp::kGroupDecodeBudget), std::string(pp::kGroupEncodeTools)};
+        int params_seen = 0;
+        for (const pp::FormatDef &f : fmts) {
+            for (const pp::BackendDef &b : f.backends) {
+                for (const pp::TechDef &t : b.techs) {
+                    for (const pp::ParamDef &p : t.params) {
+                        ++params_seen;
+                        check(all_groups.count(p.group) == 1,
+                              f.id + "." + p.key + ".group 落在 kGroup* 词表内（got '" + p.group +
+                                  "'）");
+                        if (p.advanced) {
+                            check(sub_groups.count(p.group) == 1,
+                                  f.id + "." + p.key + "（advanced）group ∈ 四个子分组（got '" +
+                                      p.group + "'）");
+                        } else {
+                            check(p.group == std::string(pp::kGroupCore),
+                                  f.id + "." + p.key + "（core）group == kGroupCore（got '" +
+                                      p.group + "'）");
+                        }
+                    }
+                }
+            }
+        }
+        check(params_seen >= 60,
+              "static 表内 ParamDef 条目数 >= 60（got " + std::to_string(params_seen) + "）");
+    }
+
     if (g_failed == 0) {
         std::printf("test_smoke: OK (8 formats, ParamSet round-trip)\n");
         return 0;

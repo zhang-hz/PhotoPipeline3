@@ -58,12 +58,15 @@
 // 不含私有成员（§2.13）。本文件无 Q_OBJECT 类（行内控件不发信号），故不含 *.moc 包含
 // （与 page_meta.cpp / page_output.cpp 同口径）。
 #include "ui/page_run.h"
+#include "ui/contextmenu.h" // UX-1：公共右键菜单件（一卡一 actions 构造函数）
+#include "ui/term_words.h"  // R-139：终态词表 term_words 单源（列表/运行页/状态栏共用一张）
 
 #include <algorithm>
 #include <cmath>
 #include <thread>
 
 #include <QApplication> // theme.h 的 style_mirrors_system_accent() 用 qApp->style()
+#include <QClipboard>   // UX-1：「复制日志 / 复制失败原因」
 #include <QColor>
 #include <QElapsedTimer>
 #include <QEvent>
@@ -72,10 +75,12 @@
 #include <QFontMetrics>
 #include <QFrame>
 #include <QGraphicsDropShadowEffect>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QHash>
 #include <QLabel>
 #include <QLinearGradient>
+#include <QMenu> // UX-1：卡片右键菜单
 #include <QPainter>
 #include <QPen>
 #include <QProgressBar>
@@ -740,14 +745,19 @@ StatusText out_status(const FileRow &file, const RunState &s, int index) {
     switch (out.kind) {
     case OutKind::Done:
         if (out_zero_bytes(out))
-            return {PageRun::tr("0 字节"), fk::PillBadge::Tone::Warn, icons::Name::Warn, true};
-        return {PageRun::tr("已完成"), fk::PillBadge::Tone::Ok, icons::Name::Check, true};
+            return {PageRun::tr(pp::ui::term_words::kZeroBytes), fk::PillBadge::Tone::Warn,
+                    icons::Name::Warn, true}; // R-069/R-139：词表单源
+        return {PageRun::tr(pp::ui::term_words::kDone), fk::PillBadge::Tone::Ok, icons::Name::Check,
+                true};
     case OutKind::Failed:
-        return {PageRun::tr("失败"), fk::PillBadge::Tone::Err, icons::Name::Error, true};
+        return {PageRun::tr(pp::ui::term_words::kFailed), fk::PillBadge::Tone::Err,
+                icons::Name::Error, true};
     case OutKind::Skipped:
-        return {PageRun::tr("跳过"), fk::PillBadge::Tone::Warn, icons::Name::Pending, false};
+        return {PageRun::tr(pp::ui::term_words::kSkipped), fk::PillBadge::Tone::Warn,
+                icons::Name::Pending, false};
     case OutKind::Cancelled:
-        return {PageRun::tr("已取消"), fk::PillBadge::Tone::Neutral, icons::Name::Stop, false};
+        return {PageRun::tr(pp::ui::term_words::kCancelled), fk::PillBadge::Tone::Neutral,
+                icons::Name::Stop, false};
     case OutKind::Active:
         return {out_stage_text(file, s, index), fk::PillBadge::Tone::Accent, icons::Name::Active,
                 false};
@@ -765,22 +775,42 @@ StatusText out_status(const FileRow &file, const RunState &s, int index) {
 // 分组行状态（文件级）
 StatusText file_status(const FileRow &file, const RunState &s) {
     bool zero = false;
-    for (const OutRow &out : file.outs)
+    bool any_ok = false, any_bad = false;
+    for (const OutRow &out : file.outs) {
         zero = zero || out_zero_bytes(out);
+        if (out.kind == OutKind::Done)
+            any_ok = true;
+        if (out.kind == OutKind::Failed)
+            any_bad = true;
+    }
+    // R-076：多输出"有成有败" = 部分成功（不聚合成 Done）—— 调动器侧仍映射 Done，这里按
+    // 逐输出事实补判（与 mainwindow::handle_file_event 的补判同口径）。
+    const bool partial = file.state == pp::FileState::Done && any_ok && any_bad;
     switch (file.state) {
+    case pp::FileState::DoneWithErrors: // R-076：独立档
+        return {PageRun::tr(pp::ui::term_words::kPartial), fk::PillBadge::Tone::Warn,
+                icons::Name::Warn, true};
     case pp::FileState::Done:
         if (zero)
             return {PageRun::tr("异常"), fk::PillBadge::Tone::Warn, icons::Name::Warn, true};
-        return {PageRun::tr("已完成"), fk::PillBadge::Tone::Ok, icons::Name::Check, true};
+        if (partial) // R-076
+            return {PageRun::tr(pp::ui::term_words::kPartial), fk::PillBadge::Tone::Warn,
+                    icons::Name::Warn, true};
+        return {PageRun::tr(pp::ui::term_words::kDone), fk::PillBadge::Tone::Ok, icons::Name::Check,
+                true};
     case pp::FileState::Failed:
-        return {PageRun::tr("失败"), fk::PillBadge::Tone::Err, icons::Name::Error, true};
+        return {PageRun::tr(pp::ui::term_words::kFailed), fk::PillBadge::Tone::Err,
+                icons::Name::Error, true};
     case pp::FileState::Skipped:
-        return {PageRun::tr("跳过"), fk::PillBadge::Tone::Warn, icons::Name::Pending, false};
+        return {PageRun::tr(pp::ui::term_words::kSkipped), fk::PillBadge::Tone::Warn,
+                icons::Name::Pending, false};
     case pp::FileState::Cancelled:
-        return {PageRun::tr("已取消"), fk::PillBadge::Tone::Neutral, icons::Name::Stop, false};
+        return {PageRun::tr(pp::ui::term_words::kCancelled), fk::PillBadge::Tone::Neutral,
+                icons::Name::Stop, false};
     case pp::FileState::Queued:
-        return {PageRun::tr("排队"), fk::PillBadge::Tone::Neutral, icons::Name::Pending, false,
-                queue_tip(s)}; // A39 ③：组行 pill 同收「排队」+ 交错 tooltip
+        return {PageRun::tr(pp::ui::term_words::kQueued), fk::PillBadge::Tone::Neutral,
+                icons::Name::Pending, false,
+                queue_tip(s)}; // A39 ③：组行 pill 同收「排队」+ tooltip
     default:
         break;
     }
@@ -1319,6 +1349,24 @@ QString page_qss(const theme::Tokens &t) {
 // 界面构建
 // ===========================================================================
 
+// ---------------------------------------------------------------------------
+// UX-1（M7-WP6）：卡片右键菜单 —— 公共件 ui/contextmenu（单一构造点）。
+// items **惰性**构造（右键时才求值）→ 运行中置灰实时反映 lock_for_run 状态。
+// 一卡一 actions 构造函数：运行总览 = run_overview_actions、任务进度 = task_row_actions、
+// 日志尾 = log_tail_actions（docs/ux-review-14.md §1 表 ⑩⑪⑫ 行）。
+// ---------------------------------------------------------------------------
+void attach_card_menu(QWidget *host, const std::function<std::vector<contextmenu::Item>()> &items) {
+    if (host == nullptr)
+        return;
+    host->setContextMenuPolicy(Qt::CustomContextMenu);
+    QObject::connect(host, &QWidget::customContextMenuRequested, host,
+                     [host, items](const QPoint &pos) {
+                         QMenu *m = contextmenu::menu(host, items());
+                         m->setAttribute(Qt::WA_DeleteOnClose);
+                         m->popup(host->mapToGlobal(pos));
+                     });
+}
+
 QFrame *make_card(QWidget *parent, const QString &title) {
     auto *card = new QFrame(parent);
     card->setObjectName(QStringLiteral("pp-card")); // theme 骨架 QSS：QFrame#pp-card
@@ -1815,6 +1863,60 @@ PageRun::PageRun(QWidget *parent) : QWidget(parent) {
     v->addWidget(s->logs);
     v->addStretch(1);
 
+    // ---- UX-1（M7-WP6）：三张卡各一个右键菜单（公共件 = ui/contextmenu）----
+    attach_card_menu(s->overview, [this, s] {
+        contextmenu::RunOverviewIntents in;
+        in.running = s->running;
+        in.open_log = [this] { emit open_logs_requested(); };
+        in.open_output_dir = [this, s] { emit open_output_requested(s->out_root); };
+        in.cancel_remaining = [this] { emit cancel_requested(); };
+        in.run_again = [this] { emit run_again_requested(); };
+        return contextmenu::run_overview_actions(in);
+    });
+    attach_card_menu(s->tasks, [s] {
+        contextmenu::TaskRowIntents in;
+        in.running = s->running;
+        // 复制失败原因 = 当前可见的全部「└ 原因：…」行（R-144 的下钻替代面：失败清单可带走）
+        in.copy_failure = [s] {
+            QStringList reasons;
+            for (const FileRow &file : s->files) {
+                for (const OutRow &out : file.outs) {
+                    if (out.reason == nullptr || !out.reason->isVisible())
+                        continue;
+                    // ElidedLabel 的完整文本在 ppFullText 动态属性（省略号版在 text()）
+                    const QVariant full = out.reason->property("ppFullText");
+                    const QString text = full.isValid() ? full.toString() : out.reason->text();
+                    if (!text.isEmpty())
+                        reasons << text;
+                }
+            }
+            if (QClipboard *clip = QGuiApplication::clipboard())
+                clip->setText(reasons.join(QLatin1Char('\n')));
+        };
+        // 「跳到该文件 / 重试该文件」需要行级上下文（逐输出行的右键）；本轮未接线 → 置灰，
+        // 见 build/m7-wp6/handoff.md 残余项。
+        return contextmenu::task_row_actions(in);
+    });
+    attach_card_menu(s->logs, [s] {
+        contextmenu::LogTailIntents in;
+        in.running = s->running;
+        in.copy_log = [s] {
+            if (QClipboard *clip = QGuiApplication::clipboard())
+                clip->setText(s->log_lines != nullptr
+                                  ? s->log_lines->lines().join(QLatin1Char('\n'))
+                                  : QString());
+        };
+        in.open_log_file = [s] {
+            if (s->page != nullptr)
+                emit s->page->open_logs_requested();
+        };
+        in.clear_display = [s] {
+            if (s->log_lines != nullptr)
+                s->log_lines->set_lines({});
+        };
+        return contextmenu::log_tail_actions(in);
+    });
+
     setStyleSheet(page_qss(s->tokens));
 
     s->flush = new QTimer(this);
@@ -1992,6 +2094,8 @@ void PageRun::end_run(const pp::RunSummary &sum, const QString &out_root) {
     if (sum.cancelled > 0)
         s->cancel_requested = true;
     // 防御性收尾：未收到终态事件的行按结果定稿（正常路径调度器对每文件恰好发一次终态）
+    // R-141/R-225：**同时回写 file.state** —— 原实现只定稿 out.kind，组行胶囊仍停在"排队/处理中"，
+    // 与其下输出行"失败/已取消"同屏矛盾。
     for (FileRow &file : s->files) {
         if (file.terminal)
             continue;
@@ -2000,12 +2104,30 @@ void PageRun::end_run(const pp::RunSummary &sum, const QString &out_root) {
             if (!settled_kind(out.kind))
                 out.kind = sum.cancelled > 0 ? OutKind::Cancelled : OutKind::Failed;
         }
+        // 组行终态与输出行同判：全部取消 → Cancelled；否则按"有失败 = Failed、否则 Done"。
+        bool any_failed = false, any_cancelled = false, any_ok = false;
+        for (const OutRow &out : file.outs) {
+            any_failed = any_failed || out.kind == OutKind::Failed;
+            any_cancelled = any_cancelled || out.kind == OutKind::Cancelled;
+            any_ok = any_ok || out.kind == OutKind::Done;
+        }
+        file.state = any_cancelled && !any_ok && !any_failed ? pp::FileState::Cancelled
+                     : any_failed && any_ok                  ? pp::FileState::DoneWithErrors
+                     : any_failed                            ? pp::FileState::Failed
+                                                             : pp::FileState::Done;
     }
     s->progress->setRange(0, 100);
     s->open_output->setEnabled(!out_root.isEmpty());
     s->open_logs->setEnabled(true);
-    s->summary->set_full_text(sum.cancelled > 0 ? tr("已取消 · 剩余文件未处理（可再次运行补齐）")
-                                                : tr("运行结束 · 可打开输出目录查看结果"));
+    // R-006：取消文案与**实际语义**一致 —— 「再次运行」现在是补齐语义（只提交缺件、
+    // 已存在且非空的输出跳过），故这句不再是空头支票；非取消态的结束语按有无失败分档（R-073）。
+    if (sum.cancelled > 0)
+        s->summary->set_full_text(tr("已取消 · 剩余文件未处理（可再次运行补齐缺件）"));
+    else if (sum.failed > 0)
+        s->summary->set_full_text(
+            tr("运行结束 · 有 %1 个失败，可再次运行补齐缺件").arg(sum.failed));
+    else
+        s->summary->set_full_text(tr("运行结束 · 可打开输出目录查看结果"));
     refresh_widgets(*s); // 终态恒满（含失败；口径 = 全部输出已结算）
     s->dirty = false;
 }

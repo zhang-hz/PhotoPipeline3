@@ -92,20 +92,27 @@ struct StateStyle {
     const char *tone;
 };
 constexpr StateStyle kStateStyle[] = {
-    {"排队", theme::kPillNeutral}, // Queued
-    {"探测", theme::kPillAccent},  // Probing
-    {"解码", theme::kPillAccent},  // Decoding
-    {"旋转", theme::kPillAccent},  // Orienting
-    {"色彩", theme::kPillAccent},  // Coloring
-    {"合成", theme::kPillAccent},  // Flattening
-    {"编码", theme::kPillAccent},  // Encoding
-    {"写入", theme::kPillAccent},  // Writing
-    {"完成", theme::kPillOk},      // Done
-    {"跳过", theme::kPillNeutral}, // Skipped
-    {"失败", theme::kPillErr},     // Failed
-    {"取消", theme::kPillNeutral}, // Cancelled
+    {term_words::kQueued, theme::kPillNeutral},    // Queued
+    {"探测", theme::kPillAccent},                  // Probing
+    {"解码", theme::kPillAccent},                  // Decoding
+    {"旋转", theme::kPillAccent},                  // Orienting
+    {"色彩", theme::kPillAccent},                  // Coloring
+    {"合成", theme::kPillAccent},                  // Flattening
+    {"编码", theme::kPillAccent},                  // Encoding
+    {"写入", theme::kPillAccent},                  // Writing
+    {term_words::kDone, theme::kPillOk},           // Done（R-139 词表：与运行页同词）
+    {term_words::kSkipped, theme::kPillNeutral},   // Skipped
+    {term_words::kFailed, theme::kPillErr},        // Failed
+    {term_words::kCancelled, theme::kPillNeutral}, // Cancelled（R-139 词表）
+    // ---- M7-WP6 加性两档（枚举尾部 I7/R-008；既有 12 行语义逐字不动）----
+    // R-008：Progress 是**过程**态，不再落列表模型（只喂 page_run）；此行只作兜底映射
+    // （万一落表也不再误报"排队"）。
+    {term_words::kRunning, theme::kPillAccent}, // Progress
+    {term_words::kPartial, theme::kPillWarn},   // DoneWithErrors（R-076：多输出部分成功档）
 };
-static_assert(std::size(kStateStyle) == 12, "§3.1 十二态映射必须齐全");
+// 映射表必须覆盖 FileState **全部**枚举值（原 12 行断言扩到 14 行 = 断言面只增不减：
+// 语义仍是"逐枚举恰好一项"，换锚说明见 build/m7-wp6/handoff.md 裁定登记）。
+static_assert(std::size(kStateStyle) == 14, "§3.1 状态映射必须覆盖 FileState 全部枚举");
 
 const StateStyle &state_style(pp::FileState st) {
     const std::size_t i = static_cast<std::size_t>(st);
@@ -115,6 +122,22 @@ const StateStyle &state_style(pp::FileState st) {
 QString state_text(pp::FileState st) { return QString::fromUtf8(state_style(st).text); }
 
 const char *state_tone(pp::FileState st) { return state_style(st).tone; }
+
+// ---- M7-WP6 / R-069：0 字节产物事实的行级判据（三处状态面同判的唯一实现）----
+// 终态事件把"输出 0 字节"回传进 FileRow::zero_byte_output；完成档（Done / DoneWithErrors）
+// 一旦带该事实，胶囊不再显绿色「已完成」，改显琥珀「0 字节」—— 与运行页的「异常/0 字节」同判。
+bool row_zero_anomaly(const FileRow &r) {
+    return r.zero_byte_output &&
+           (r.state == pp::FileState::Done || r.state == pp::FileState::DoneWithErrors);
+}
+
+QString row_state_text(const FileRow &r) {
+    return row_zero_anomaly(r) ? QString::fromUtf8(term_words::kZeroBytes) : state_text(r.state);
+}
+
+const char *row_state_tone(const FileRow &r) {
+    return row_zero_anomaly(r) ? theme::kPillWarn : state_tone(r.state);
+}
 
 // §7.5 行内「大小」项的格式化：3 位有效数字（mockup 行内示例 "3.21 MB" / "64.2 MB" / "142 MB"）
 QString format_size(qint64 bytes) {
@@ -280,7 +303,9 @@ QVariant FileListModel::data(const QModelIndex &idx, int role) const {
     case StateRole:
         return int(r.state);
     case StateTextRole:
-        return state_text(r.state);
+        return row_state_text(r); // R-069：0 字节事实改判「0 字节」
+    case StateToneRole:           // R-069：色调同源（原由委托按枚举自算）
+        return QLatin1String(row_state_tone(r));
     case ExceptionRole:
         return r.has_exception();
     case ErrorRole:
@@ -380,6 +405,8 @@ void FileListModel::add_paths(const QStringList &paths) {
             rows_.push_back(std::move(row));
         }
         endInsertRows();
+        // R-024：增量计数（新行默认 checked = true、无例外）
+        checked_ += fresh.size();
     }
     unsupported_ += unsupported;
 
@@ -410,12 +437,33 @@ void FileListModel::remove_rows(const QList<int> &rows) {
     std::sort(idx.begin(), idx.end());
     idx.erase(std::unique(idx.begin(), idx.end()), idx.end());
 
-    // 从大到小删除，避免行号漂移（任意输入顺序都正确）
-    for (auto it = idx.rbegin(); it != idx.rend(); ++it) {
-        const int r = *it;
-        beginRemoveRows(QModelIndex(), r, r);
-        known_paths_.erase(fs_string(rows_[std::size_t(r)].entry.src));
-        rows_.erase(rows_.begin() + r);
+    // R-248：一次移除只发**一段连续区间**的 beginRemoveRows（原实现逐行发 N 次 →
+    // 每次都触发分组代理的结构重建）。连续段合并后按段删除，N 个散行退化为「段数」次信号。
+    // 从大到小删段，行号不漂移。
+    std::vector<std::pair<int, int>> runs; // [first, last] 闭区间
+    for (std::size_t k = 0; k < idx.size();) {
+        int first = idx[k];
+        int last = first;
+        std::size_t j = k + 1;
+        while (j < idx.size() && idx[j] == last + 1) {
+            last = idx[j];
+            ++j;
+        }
+        runs.emplace_back(first, last);
+        k = j;
+    }
+    for (auto it = runs.rbegin(); it != runs.rend(); ++it) {
+        const int first = it->first;
+        const int last = it->second;
+        beginRemoveRows(QModelIndex(), first, last);
+        for (int r = last; r >= first; --r) {
+            known_paths_.erase(fs_string(rows_[std::size_t(r)].entry.src));
+            if (rows_[std::size_t(r)].checked && checked_ > 0)
+                --checked_; // R-024：增量计数
+            if (rows_[std::size_t(r)].has_exception() && exceptions_ > 0)
+                --exceptions_;
+            rows_.erase(rows_.begin() + r);
+        }
         endRemoveRows();
     }
     // 在途/排队结果由 apply_thumb stale-guard（行号漂移 → path 不匹配）丢弃；
@@ -433,6 +481,8 @@ void FileListModel::clear() {
     known_paths_.clear();
     unsupported_paths_.clear(); // v1.1：去重集合与计数一起归零
     unsupported_ = 0;
+    checked_ = 0; // R-024：增量计数归零
+    exceptions_ = 0;
     endResetModel();
     if (changed)
         emit content_changed();
@@ -450,8 +500,8 @@ const FileRow &FileListModel::row(std::size_t i) const {
 std::size_t FileListModel::unsupported_count() const { return unsupported_; }
 
 std::size_t FileListModel::exception_count() const {
-    return std::size_t(std::count_if(rows_.begin(), rows_.end(),
-                                     [](const FileRow &r) { return r.has_exception(); }));
+    // R-024：增量计数（原 O(n) 全表扫；运行期逐文件事件 × refresh_status 会反复压 GUI 线程）
+    return exceptions_;
 }
 
 std::vector<pp::FileEntry> FileListModel::entries() const {
@@ -467,8 +517,17 @@ void FileListModel::set_state(std::size_t i, pp::FileState st) {
         return;
     rows_[i].state = st;
     const QModelIndex idx = index(int(i));
-    emit dataChanged(idx, idx, {StateRole, StateTextRole});
+    emit dataChanged(idx, idx, {StateRole, StateTextRole, StateToneRole});
     emit content_changed(); // 各态计数属"摘要相关"
+}
+
+// R-069：0 字节产物事实（终态事件回传）
+void FileListModel::set_zero_byte_output(std::size_t i, bool on) {
+    if (i >= rows_.size() || rows_[i].zero_byte_output == on)
+        return;
+    rows_[i].zero_byte_output = on;
+    const QModelIndex idx = index(int(i));
+    emit dataChanged(idx, idx, {StateTextRole, StateToneRole});
 }
 
 void FileListModel::set_exception(std::size_t i, std::optional<pp::MetadataOverride> ex) {
@@ -479,6 +538,10 @@ void FileListModel::set_exception(std::size_t i, std::optional<pp::MetadataOverr
     r.entry.exception = std::move(ex);
     if (had == r.has_exception() && !had)
         return; // 无变化（都为空）
+    if (had && !r.has_exception() && exceptions_ > 0)
+        --exceptions_; // R-024：增量计数
+    else if (!had && r.has_exception())
+        ++exceptions_;
     const QModelIndex idx = index(int(i));
     emit dataChanged(idx, idx, {ExceptionRole});
     emit exception_changed(i);
@@ -496,18 +559,25 @@ void FileListModel::apply_thumb(int row, const QString &path, const pp::ImageInf
     r.probe_ok = probe_ok;
     r.thumb = thumb;
     const bool was_failed = (r.state == pp::FileState::Failed);
+    bool state_written = false;
     if (probe_ok) {
         r.error.clear();
     } else {
         r.error = error.isEmpty() ? tr("探测失败") : tr("探测失败：%1").arg(error);
-        r.state = pp::FileState::Failed; // 探测失败 = 该行错误态（thumbs.h：error 非空）
+        // R-227：探测结果**不得**覆写流水线状态 —— 缩略图探测是旁路（只补 info/thumb），
+        // 迟到的失败结果若把 Done/Failed/Cancelled 等终态盖成"失败"，列表胶囊就与运行页矛盾。
+        // 只有"什么都还没发生"（Queued）的行才由探测失败定为失败态。
+        if (r.state == pp::FileState::Queued) {
+            r.state = pp::FileState::Failed; // 探测失败 = 该行错误态（thumbs.h：error 非空）
+            state_written = true;
+        }
     }
     const QModelIndex idx = index(row);
     // M4-T11：+GroupKeyRole（源格式模式的分组键随 probe 摘要落定）
     emit dataChanged(
         idx, idx,
         {ThumbRole, DimRole, FormatRole, StateRole, StateTextRole, ErrorRole, GroupKeyRole});
-    if (!probe_ok && !was_failed)
+    if (!probe_ok && !was_failed && state_written)
         emit content_changed();
 }
 
@@ -547,6 +617,11 @@ void FileListModel::set_checked(std::size_t i, bool on) {
     if (i >= rows_.size() || rows_[i].checked == on)
         return;
     rows_[i].checked = on;
+    // R-024：增量计数
+    if (on)
+        ++checked_;
+    else if (checked_ > 0)
+        --checked_;
     const QModelIndex idx = index(int(i));
     emit dataChanged(idx, idx, {Qt::CheckStateRole});
     emit checks_changed();
@@ -563,6 +638,7 @@ void FileListModel::set_all_checked(bool on) {
     }
     if (!any)
         return;
+    checked_ = on ? rows_.size() : 0; // R-024：增量计数
     if (!rows_.empty())
         emit dataChanged(index(0), index(int(rows_.size()) - 1), {Qt::CheckStateRole});
     emit checks_changed();
@@ -570,8 +646,8 @@ void FileListModel::set_all_checked(bool on) {
 }
 
 std::size_t FileListModel::checked_count() const {
-    return std::size_t(
-        std::count_if(rows_.begin(), rows_.end(), [](const FileRow &r) { return r.checked; }));
+    // R-024：增量计数（原 O(n) 全表扫；见 filelistmodel.h 的 checked_/exceptions_）
+    return checked_;
 }
 
 std::vector<std::size_t> FileListModel::checked_rows() const {
@@ -600,6 +676,7 @@ void FileListModel::check_class(const std::string &class_id) {
             continue;
         if (!rows_[i].checked) {
             rows_[i].checked = true;
+            ++checked_; // R-024：增量计数
             any = true;
         }
     }
@@ -618,6 +695,11 @@ void FileListModel::invert_class(const std::string &class_id) {
         if (!all && class_id_of(i) != class_id)
             continue;
         rows_[i].checked = !rows_[i].checked;
+        // R-024：增量计数
+        if (rows_[i].checked)
+            ++checked_;
+        else if (checked_ > 0)
+            --checked_;
         any = true;
     }
     if (!any)
@@ -629,6 +711,30 @@ void FileListModel::invert_class(const std::string &class_id) {
 }
 
 void FileListModel::clear_checks() { set_all_checked(false); }
+
+// R-142：只清该类的勾（id 空/"all" = 全部 → 转发 clear_checks）
+void FileListModel::clear_class_checks(const std::string &class_id) {
+    const bool all = class_id.empty() || class_id == std::string(pp::ClassRegistry::kAllId);
+    if (all) {
+        clear_checks();
+        return;
+    }
+    bool any = false;
+    for (std::size_t i = 0; i < rows_.size(); ++i) {
+        if (class_id_of(i) != class_id || !rows_[i].checked)
+            continue;
+        rows_[i].checked = false;
+        if (checked_ > 0)
+            --checked_; // R-024：增量计数
+        any = true;
+    }
+    if (!any)
+        return;
+    if (!rows_.empty())
+        emit dataChanged(index(0), index(int(rows_.size()) - 1), {Qt::CheckStateRole});
+    emit checks_changed();
+    emit content_changed();
+}
 
 // ============================================================================================
 // M4-T11 · 分类（单源 = pp::ClassRegistry；本模型只读写它，不复制状态）
@@ -910,7 +1016,6 @@ void FileDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option,
         painter->fillRect(row_rect, selection_fill(t));
 
     const QString state_label = index.data(FileListModel::StateTextRole).toString();
-    const int state_int = index.data(FileListModel::StateRole).toInt();
     const bool has_exception = index.data(FileListModel::ExceptionRole).toBool();
     const RowRects rects = row_rects(row_rect, state_pill_width(state_label), has_exception);
 
@@ -1003,7 +1108,10 @@ void FileDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option,
     }
 
     // 右：状态胶囊（R4 16 高 r3 9.5/700；色 = theme::pill_paint 单源 —— §8 四档语义）
-    draw_state_pill(painter, rects.pill, t, state_tone(pp::FileState(state_int)), state_label);
+    // R-069：色调改由模型出（StateToneRole）—— 0 字节产物事实（行级）才能把"已完成"
+    // 改判成琥珀；原实现按 FileState 枚举自算，行级事实进不来。
+    const QByteArray tone = index.data(FileListModel::StateToneRole).toString().toLatin1();
+    draw_state_pill(painter, rects.pill, t, tone.constData(), state_label);
 }
 
 QSize FileDelegate::sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const {

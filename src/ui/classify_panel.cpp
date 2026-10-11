@@ -460,6 +460,14 @@ void ClassifyPanel::clear_checks() {
     impl_->model->clear_checks();
 }
 
+// R-142：右键「清空该类勾选」—— 只清**该类**文件的勾（原第三项是全局清空，右键"废片"
+// 会把"精选"的勾也清掉；前两项都带"该类"限定、第三项没有，语义自相矛盾）。
+void ClassifyPanel::clear_class_checks(const QString &class_id) {
+    if (impl_->locked || impl_->model == nullptr)
+        return;
+    impl_->model->clear_class_checks(class_id.toStdString());
+}
+
 // ---------------------------------------------------------------------------
 // CRUD（§6.2）
 // ---------------------------------------------------------------------------
@@ -561,10 +569,11 @@ QMenu *ClassifyPanel::build_row_menu(int row) {
     // §6.2/D2 圈选三项（「全部」行同样可用：「全部」= 全部文件）
     QAction *a_all = menu->addAction(tr("全选该类"));
     QAction *a_inv = menu->addAction(tr("反选该类"));
-    QAction *a_clear = menu->addAction(tr("清空勾选"));
+    // R-142：第三项改「清空该类勾选」—— 与前两项同一条"该类"限定（原为全局清空）。
+    QAction *a_clear = menu->addAction(tr("清空该类勾选"));
     connect(a_all, &QAction::triggered, this, [this, class_id] { check_class(class_id); });
     connect(a_inv, &QAction::triggered, this, [this, class_id] { invert_class(class_id); });
-    connect(a_clear, &QAction::triggered, this, [this] { clear_checks(); });
+    connect(a_clear, &QAction::triggered, this, [this, class_id] { clear_class_checks(class_id); });
 
     if (!is_all) {
         menu->addSeparator();
@@ -573,9 +582,14 @@ QMenu *ClassifyPanel::build_row_menu(int row) {
         QAction *a_hotkey = menu->addAction(tr("热键…"));
         QAction *a_del = menu->addAction(tr("删除"));
         connect(a_rename, &QAction::triggered, this, [this, class_id] {
+            // R-263：预填**显示名**（原预填 id —— 用户看到的是 "pick" 而不是"精选"）。
+            const pp::ClassDef *def = impl_->registry != nullptr
+                                          ? impl_->registry->find(class_id.toStdString())
+                                          : nullptr;
+            const QString current = def != nullptr ? QString::fromStdString(def->name) : class_id;
             bool ok = false;
             const QString name = QInputDialog::getText(this, tr("重命名分类"), tr("新名称："),
-                                                       QLineEdit::Normal, class_id, &ok);
+                                                       QLineEdit::Normal, current, &ok);
             if (ok && !name.trimmed().isEmpty())
                 rename_class(class_id, name.trimmed());
         });

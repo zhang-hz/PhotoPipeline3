@@ -1380,7 +1380,13 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
         level->addItem(QStringLiteral("warn"), QLatin1String(kLevelIds[3]));
         level->addItem(QStringLiteral("error"), QLatin1String(kLevelIds[4]));
         {
-            const int idx = level->findData(QString::fromStdString(current.log_level));
+            // R-157（M7-WP9）：落盘值合法性判定单源 = pp::log_level_from_text（core/logger.h；
+            // 与启动侧/mainwindow 同一条判据 —— 词表外与 "critical" 都判负）。判负 → 回退 info，
+            // 与原 findData 失败回退行为逐字一致。
+            pp::LogLevel parsed = pp::LogLevel::Info;
+            const int idx = pp::log_level_from_text(current.log_level, parsed)
+                                ? level->findData(QString::fromStdString(current.log_level))
+                                : -1;
             level->setCurrentIndex(idx >= 0 ? idx : level->findData(QStringLiteral("info")));
         }
         const formkit::Row level_row =

@@ -95,9 +95,11 @@
 #include <QtGlobal>
 #include <cstdint>
 
-#include "core/progress.h" // StageWeights（§7.2 单源）
-#include "ui/formkit.h"    // M5-T9：行构造器（C2）+ 胶囊/进度条（C8）/令牌（C1）
-#include "ui/icons.h"      // M5-T3：状态标记/取消钮 ■ 一律矢量图标（C3）
+#include "core/progress.h"      // StageWeights（§7.2 单源）
+#include "ui/formkit.h"         // M5-T9：行构造器（C2）+ 胶囊/进度条（C8）/令牌（C1）
+#include "ui/icons.h"           // M5-T3：状态标记/取消钮 ■ 一律矢量图标（C3）
+#include "ui/run_rows_model.h"  // M7-WP9（B.2）：行模型纯语义（runpage）
+#include "ui/run_status_text.h" // M7-WP9（B.2）：文案/数值格式纯函数（runpage）
 #include "ui/theme.h"
 
 namespace pp::ui {
@@ -364,107 +366,30 @@ float shared_weight(Stage s) {
     }
 }
 
-// 阶段文字（§3.4 词汇表 = 解码/色彩/编码+行数/写入/完成/失败；探测/旋转/合成取自十二态表）
-QString shared_stage_text(Stage s) {
-    switch (s) {
-    case Stage::Probe:
-        return PageRun::tr("探测");
-    case Stage::Decode:
-        return PageRun::tr("解码 → 色彩"); // mockup：共享段的前后串联提示
-    case Stage::Orient:
-        return PageRun::tr("旋转");
-    case Stage::Color:
-        return PageRun::tr("色彩");
-    default:
-        return PageRun::tr("处理中");
-    }
-}
-
-QString write_stage_text(Stage s) {
-    return s == Stage::Flatten ? PageRun::tr("合成") : PageRun::tr("写入");
-}
-
-// ===========================================================================
-// 数值/杂项
-// ===========================================================================
-
-// 总耗时：< 60 s → "9.8 s"；≥ 60 s → "mm:ss"（同一指标两种量纲，长跑不出现三位数秒）
-QString fmt_duration(qint64 ms) {
-    const qint64 clamped = std::max<qint64>(0, ms);
-    if (clamped < 60'000) {
-        return PageRun::tr("%1 s").arg(static_cast<double>(clamped) / 1000.0, 0, 'f', 1);
-    }
-    const qint64 total = clamped / 1000;
-    return QStringLiteral("%1:%2")
-        .arg(total / 60, 2, 10, QLatin1Char('0'))
-        .arg(total % 60, 2, 10, QLatin1Char('0'));
-}
-
-QString fmt_mb_s(double v) { return PageRun::tr("%1 MB/s").arg(v, 0, 'f', 1); }
-
-// 字节口径（修 3-10：不做 KB 四舍五入 —— 0 字节就是 0 B，<1 KB 显真实字节）
-QString fmt_bytes(quint64 bytes) {
-    if (bytes == 0)
-        return QStringLiteral("0 B");
-    if (bytes < 1024)
-        return PageRun::tr("%1 B").arg(bytes);
-    const double kb = static_cast<double>(bytes) / 1024.0;
-    if (kb < 1024.0)
-        return PageRun::tr("%1 KB").arg(kb, 0, 'f', 0);
-    return PageRun::tr("%1 MB").arg(kb / 1024.0, 0, 'f', 2);
-}
-
-QString fmt_secs(double ms) { return QStringLiteral("%1s").arg(ms / 1000.0, 0, 'f', 1); }
-
-// 峰值内存读数（A29）：量级换档 B→KB→MB→GB；0 = 本次无像素预算读数 → 「—」（§2.5 未发生的量）
-QString fmt_mem_bytes(quint64 bytes) {
-    if (bytes == 0)
-        return QStringLiteral("—");
-    const double kb = static_cast<double>(bytes) / 1024.0;
-    if (kb < 1024.0)
-        return PageRun::tr("%1 KB").arg(kb, 0, 'f', 0);
-    const double mb = kb / 1024.0;
-    if (mb < 1024.0)
-        return PageRun::tr("%1 MB").arg(mb, 0, 'f', 1);
-    return PageRun::tr("%1 GB").arg(mb / 1024.0, 0, 'f', 2);
-}
-
-// 行名：只显示文件名（调用方可能传完整路径）
-QString row_name(const QString &name) {
-    const QString base = QFileInfo(name).fileName();
-    return base.isEmpty() ? name : base;
-}
+// M7-WP9（B.2 run_status_text / run_rows_model）：阶段文案与数值格式族、终态判定抽入
+// ui/run_status_text.h + ui/run_rows_model.h（可单测单元，R-109）；此处 using/转发，
+// 调用点零改动（转发 = 冻结面「加性 + 追认」的旧签名保留形态）。
+using runpage::fmt_bytes;
+using runpage::fmt_duration;
+using runpage::fmt_mb_s;
+using runpage::fmt_mem_bytes;
+using runpage::fmt_secs;
+using runpage::format_name;
+using runpage::is_terminal_state;
+using runpage::row_name;
+using runpage::shared_stage_text;
+using runpage::write_stage_text;
 
 int hardware_threads() {
     const unsigned hw = std::thread::hardware_concurrency();
     return hw > 0 ? static_cast<int>(hw) : 1;
 }
 
-bool is_terminal_state(pp::FileState s) {
-    return s == pp::FileState::Done || s == pp::FileState::Skipped || s == pp::FileState::Failed ||
-           s == pp::FileState::Cancelled;
-}
+// is_terminal_state / format_name 已抽入 ui/run_status_text.h（见上方 using）
 
-// 格式名（mockup .ofmt 口径；未知 id 取大写）
-QString format_name(const QString &format_id) {
-    if (format_id.isEmpty())
-        return QStringLiteral("—");
-    if (format_id.compare(QStringLiteral("jpeg"), Qt::CaseInsensitive) == 0)
-        return QStringLiteral("JPEG");
-    if (format_id.compare(QStringLiteral("webp"), Qt::CaseInsensitive) == 0)
-        return QStringLiteral("WebP");
-    if (format_id.compare(QStringLiteral("jxl"), Qt::CaseInsensitive) == 0)
-        return QStringLiteral("JXL");
-    return format_id.toUpper();
-}
-
-// ===========================================================================
-// 行状态
-// ===========================================================================
-
-enum class OutKind { Queued, Active, Done, Failed, Skipped, Cancelled };
-
-bool settled_kind(OutKind k) { return k != OutKind::Queued && k != OutKind::Active; }
+// 行状态（结算判定单源 = runpage::OutKind / runpage::settled_kind；ui/run_rows_model.h）
+using runpage::OutKind;
+using runpage::settled_kind;
 
 // 数值列缓存（文本 + 色；§4.2 数值档 = 右对齐 + tabular）
 struct CellCache {
@@ -608,12 +533,11 @@ QHash<const PageRun *, RunState *> &registry() {
 
 RunState *state_of(const PageRun *page) { return registry().value(page, nullptr); }
 
-bool out_zero_bytes(OutKind kind, qint64 bytes) {
-    // 0 字节完成的输出 = **异常**（§8/§7.3；修 3-10）：条/标记/胶囊一律琥珀，绝不落绿色成功态
-    return kind == OutKind::Done && bytes <= 0;
-}
+// 0 字节完成的输出 = **异常**（§8/§7.3；修 3-10）：条/标记/胶囊一律琥珀，绝不落绿色成功态
+// —— 判定单源 = runpage::out_zero_bytes（ui/run_rows_model.h）。
+using runpage::out_zero_bytes;
 
-bool out_zero_bytes(const OutRow &out) { return out_zero_bytes(out.kind, out.bytes); }
+bool out_zero_bytes(const OutRow &out) { return runpage::out_zero_bytes(out.kind, out.bytes); }
 
 // 状态四档（§8）：标记色与状态词同档（"状态点与状态词同色"）
 QColor tone_color(const RunState &s, fk::PillBadge::Tone tone) {
@@ -649,25 +573,19 @@ float out_row_frac(const FileRow &file, const OutRow &out) {
                       0.f, 1.f);
 }
 
-// §7.1 运行级：Σ 输出完成度 / 总输出数；终态输出按已结算计 1.0
+// §7.1 运行级完成度：Σ 输出完成度 / (文件数 × 格式数)。折算单源 =
+// runpage::out_completion / runpage::run_frac（ui/run_rows_model.h，可单测）。
 double out_completion(const OutRow &out) {
-    if (settled_kind(out.kind))
-        return 1.0;
-    const double own = (StageWeights::encode * out.enc + StageWeights::metawrite * out.meta) /
-                       (StageWeights::encode + StageWeights::metawrite);
-    return std::clamp(own, 0.0, 1.0);
+    return runpage::out_completion(settled_kind(out.kind), out.enc, out.meta);
 }
 
 double run_frac(const RunState &s) {
-    const int total = static_cast<int>(s.files.size()) * s.formats;
-    if (total <= 0)
-        return 0.0;
     double sum = 0.0;
     for (const FileRow &file : s.files) {
         for (const OutRow &out : file.outs)
             sum += out_completion(out);
     }
-    return std::clamp(sum / static_cast<double>(total), 0.0, 1.0);
+    return runpage::run_frac(static_cast<int>(s.files.size()), s.formats, sum);
 }
 
 int settled_outputs(const RunState &s) {

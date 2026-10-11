@@ -45,7 +45,7 @@ private:
     void lock_for_run(bool lock); // G5
     void refresh_status();        // bottom summary + start enable
     void save_session();          // closeEvent
-    // zones/pages/models (unique_ptr<...> members; types not repeated here — keep private)
+    // zones/pages/models carried by the pimpl below (types not repeated here — keep private)
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

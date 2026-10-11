@@ -13,20 +13,20 @@
 # regenerate: bash tools/regression.sh <build_dir> --update
 # ===========================================================================
 ### run full-jpeg rc=4 args=--format jpeg
-[info] [tid] [run] [main.cpp] run start {outputs=jpeg output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-jpeg params="adaptive_quantization=true arith_code=false chroma=444 cicp_transfer_function=2 dct_method=0 distance=1 optimize_coding=true progressive=true psnr_target=0 quality=90 quality_mode=distance restart_in_rows=0 smoothing_factor=0 std_quant_tables=false xyb_mode=false"}
-[info] [tid] [run] [main.cpp] version {lib=app version=0.3.2}
-[info] [tid] [run] [main.cpp] version {lib=qt version=6.11.2}
-[info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.17.0}
-[info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
-[info] [tid] [run] [main.cpp] version {lib=libjxl version=0x00002ee0}
-[info] [tid] [run] [main.cpp] version {lib=libheif version=1.23.5}
-[info] [tid] [run] [main.cpp] version {lib=exiv2 version=0.28.9}
-[info] [tid] [run] [main.cpp] version {lib=lcms2 version=2190}
-[info] [tid] [run] [main.cpp] version {lib=webp version=1.6.0}
-[info] [tid] [run] [main.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
-[info] [tid] [run] [main.cpp] version {lib=x265 version="x265 HEVC encoder (4.3-vcpkg)"}
-[info] [tid] [run] [main.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.2.0"}
-[info] [tid] [run] [main.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.15.1"}
+[info] [tid] [run] [dev_cli.cpp] run start {outputs=jpeg output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-jpeg params="adaptive_quantization=true arith_code=false chroma=444 cicp_transfer_function=2 dct_method=0 distance=1 optimize_coding=true progressive=true psnr_target=0 quality=90 quality_mode=distance restart_in_rows=0 smoothing_factor=0 std_quant_tables=false xyb_mode=false"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=app version=0.3.2}
+[info] [tid] [run] [dev_cli.cpp] version {lib=qt version=6.11.2}
+[info] [tid] [run] [dev_cli.cpp] version {lib=oiio version=3.1.17.0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=jpegli version=031a0077}
+[info] [tid] [run] [dev_cli.cpp] version {lib=libjxl version=0x00002ee0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=libheif version=1.23.5}
+[info] [tid] [run] [dev_cli.cpp] version {lib=exiv2 version=0.28.9}
+[info] [tid] [run] [dev_cli.cpp] version {lib=lcms2 version=2190}
+[info] [tid] [run] [dev_cli.cpp] version {lib=webp version=1.6.0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=x265 version="x265 HEVC encoder (4.3-vcpkg)"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.2.0"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.15.1"}
 [info] [tid] [scheduler] [scheduler.cpp] start {files=27 workers=1 workers_resolved=1 stagger_ms=<ms> thread_budget=16 budget_bytes=<bytes> outputs=1 formats=jpeg template=$dir/$file mode=transcode}
 [info] [tid] [sched] [scheduler.cpp] file start {index=0 src=tests/golden/base/anim.gif stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=0 alloc_files=16 encode_threads=1 active_files=1 sum_encode_threads=1 thread_budget=16}
@@ -168,7 +168,7 @@
 [info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/meta/webp_lossy.webp out=".cache/regression/out-full-jpeg\\meta\\webp_lossy.jpg" format=jpeg ok=true bytes=897 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/webp_lossy.webp outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [scheduler] [scheduler.cpp] e3 report {thread_budget=16 stagger_ms=<ms> peak_active_files=1 peak_sum_encode_threads=16 active_files_end=0 files_done=27}
-[info] [tid] [run] [main.cpp] run summary {files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=14236 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
+[info] [tid] [run] [dev_cli.cpp] run summary {files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=14236 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
 photopipeline --dev
   format=jpeg backend=(first) tech=(first) lossless=false bitdepth=8 color=keep conflict=overwrite
   out=.cache/regression/out-full-jpeg workers=1 files=27 metadata_only=false params=[adaptive_quantization=true arith_code=false chroma=444 cicp_transfer_function=2 dct_method=0 distance=1 optimize_coding=true progressive=true psnr_target=0 quality=90 quality_mode=distance restart_in_rows=0 smoothing_factor=0 std_quant_tables=false xyb_mode=false]
@@ -209,20 +209,20 @@ tests/golden/meta/webp_lossy.webp ok 897 <ms>
 SUMMARY files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=14236 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>
 EXIT 4 (failed files)
 ### run full-jxl rc=4 args=--format jxl
-[info] [tid] [run] [main.cpp] run start {outputs=jxl output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-jxl params="codestream_level=10 decoding_speed=0 distance=1 dots=true effort=7 epf=2 gaborish=true group_order=-1 keep_invisible=true lossless=false patches=true photon_noise=0 progressive_ac=false progressive_dc=-1 qprogressive_ac=false resampling=-1"}
-[info] [tid] [run] [main.cpp] version {lib=app version=0.3.2}
-[info] [tid] [run] [main.cpp] version {lib=qt version=6.11.2}
-[info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.17.0}
-[info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
-[info] [tid] [run] [main.cpp] version {lib=libjxl version=0x00002ee0}
-[info] [tid] [run] [main.cpp] version {lib=libheif version=1.23.5}
-[info] [tid] [run] [main.cpp] version {lib=exiv2 version=0.28.9}
-[info] [tid] [run] [main.cpp] version {lib=lcms2 version=2190}
-[info] [tid] [run] [main.cpp] version {lib=webp version=1.6.0}
-[info] [tid] [run] [main.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
-[info] [tid] [run] [main.cpp] version {lib=x265 version="x265 HEVC encoder (4.3-vcpkg)"}
-[info] [tid] [run] [main.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.2.0"}
-[info] [tid] [run] [main.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.15.1"}
+[info] [tid] [run] [dev_cli.cpp] run start {outputs=jxl output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-jxl params="codestream_level=10 decoding_speed=0 distance=1 dots=true effort=7 epf=2 gaborish=true group_order=-1 keep_invisible=true lossless=false patches=true photon_noise=0 progressive_ac=false progressive_dc=-1 qprogressive_ac=false resampling=-1"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=app version=0.3.2}
+[info] [tid] [run] [dev_cli.cpp] version {lib=qt version=6.11.2}
+[info] [tid] [run] [dev_cli.cpp] version {lib=oiio version=3.1.17.0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=jpegli version=031a0077}
+[info] [tid] [run] [dev_cli.cpp] version {lib=libjxl version=0x00002ee0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=libheif version=1.23.5}
+[info] [tid] [run] [dev_cli.cpp] version {lib=exiv2 version=0.28.9}
+[info] [tid] [run] [dev_cli.cpp] version {lib=lcms2 version=2190}
+[info] [tid] [run] [dev_cli.cpp] version {lib=webp version=1.6.0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=x265 version="x265 HEVC encoder (4.3-vcpkg)"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.2.0"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.15.1"}
 [info] [tid] [scheduler] [scheduler.cpp] start {files=27 workers=1 workers_resolved=1 stagger_ms=<ms> thread_budget=16 budget_bytes=<bytes> outputs=1 formats=jxl template=$dir/$file mode=transcode}
 [info] [tid] [sched] [scheduler.cpp] file start {index=0 src=tests/golden/base/anim.gif stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=0 alloc_files=16 encode_threads=1 active_files=1 sum_encode_threads=1 thread_budget=16}
@@ -355,7 +355,7 @@ EXIT 4 (failed files)
 [info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/meta/webp_lossy.webp out=".cache/regression/out-full-jxl\\meta\\webp_lossy.jxl" format=jxl ok=true bytes=420 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/webp_lossy.webp outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [scheduler] [scheduler.cpp] e3 report {thread_budget=16 stagger_ms=<ms> peak_active_files=1 peak_sum_encode_threads=16 active_files_end=0 files_done=27}
-[info] [tid] [run] [main.cpp] run summary {files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=24209 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
+[info] [tid] [run] [dev_cli.cpp] run summary {files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=24209 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
 photopipeline --dev
   format=jxl backend=(first) tech=(first) lossless=false bitdepth=16 color=keep conflict=overwrite
   out=.cache/regression/out-full-jxl workers=1 files=27 metadata_only=false params=[codestream_level=10 decoding_speed=0 distance=1 dots=true effort=7 epf=2 gaborish=true group_order=-1 keep_invisible=true lossless=false patches=true photon_noise=0 progressive_ac=false progressive_dc=-1 qprogressive_ac=false resampling=-1]
@@ -396,20 +396,20 @@ tests/golden/meta/webp_lossy.webp ok 420 <ms>
 SUMMARY files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=24209 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>
 EXIT 4 (failed files)
 ### run full-png rc=4 args=--format png
-[info] [tid] [run] [main.cpp] run start {outputs=png output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-png params=compressionLevel=6}
-[info] [tid] [run] [main.cpp] version {lib=app version=0.3.2}
-[info] [tid] [run] [main.cpp] version {lib=qt version=6.11.2}
-[info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.17.0}
-[info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
-[info] [tid] [run] [main.cpp] version {lib=libjxl version=0x00002ee0}
-[info] [tid] [run] [main.cpp] version {lib=libheif version=1.23.5}
-[info] [tid] [run] [main.cpp] version {lib=exiv2 version=0.28.9}
-[info] [tid] [run] [main.cpp] version {lib=lcms2 version=2190}
-[info] [tid] [run] [main.cpp] version {lib=webp version=1.6.0}
-[info] [tid] [run] [main.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
-[info] [tid] [run] [main.cpp] version {lib=x265 version="x265 HEVC encoder (4.3-vcpkg)"}
-[info] [tid] [run] [main.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.2.0"}
-[info] [tid] [run] [main.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.15.1"}
+[info] [tid] [run] [dev_cli.cpp] run start {outputs=png output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-png params=compressionLevel=6}
+[info] [tid] [run] [dev_cli.cpp] version {lib=app version=0.3.2}
+[info] [tid] [run] [dev_cli.cpp] version {lib=qt version=6.11.2}
+[info] [tid] [run] [dev_cli.cpp] version {lib=oiio version=3.1.17.0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=jpegli version=031a0077}
+[info] [tid] [run] [dev_cli.cpp] version {lib=libjxl version=0x00002ee0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=libheif version=1.23.5}
+[info] [tid] [run] [dev_cli.cpp] version {lib=exiv2 version=0.28.9}
+[info] [tid] [run] [dev_cli.cpp] version {lib=lcms2 version=2190}
+[info] [tid] [run] [dev_cli.cpp] version {lib=webp version=1.6.0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=x265 version="x265 HEVC encoder (4.3-vcpkg)"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.2.0"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.15.1"}
 [info] [tid] [scheduler] [scheduler.cpp] start {files=27 workers=1 workers_resolved=1 stagger_ms=<ms> thread_budget=16 budget_bytes=<bytes> outputs=1 formats=png template=$dir/$file mode=transcode}
 [info] [tid] [sched] [scheduler.cpp] file start {index=0 src=tests/golden/base/anim.gif stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=0 alloc_files=16 encode_threads=1 active_files=1 sum_encode_threads=1 thread_budget=16}
@@ -542,7 +542,7 @@ EXIT 4 (failed files)
 [info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/meta/webp_lossy.webp out=".cache/regression/out-full-png\\meta\\webp_lossy.png" format=png ok=true bytes=5042 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/webp_lossy.webp outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [scheduler] [scheduler.cpp] e3 report {thread_budget=16 stagger_ms=<ms> peak_active_files=1 peak_sum_encode_threads=16 active_files_end=0 files_done=27}
-[info] [tid] [run] [main.cpp] run summary {files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=28387 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
+[info] [tid] [run] [dev_cli.cpp] run summary {files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=28387 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
 photopipeline --dev
   format=png backend=(first) tech=(first) lossless=false bitdepth=16 color=keep conflict=overwrite
   out=.cache/regression/out-full-png workers=1 files=27 metadata_only=false params=[compressionLevel=6]
@@ -583,20 +583,20 @@ tests/golden/meta/webp_lossy.webp ok 5042 <ms>
 SUMMARY files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=28387 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>
 EXIT 4 (failed files)
 ### run full-tiff rc=4 args=--format tiff
-[info] [tid] [run] [main.cpp] run start {outputs=tiff output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-tiff params="compression=lzw deflate_level=6 predictor=2 tiff_tile_height=0 tiff_tile_width=0"}
-[info] [tid] [run] [main.cpp] version {lib=app version=0.3.2}
-[info] [tid] [run] [main.cpp] version {lib=qt version=6.11.2}
-[info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.17.0}
-[info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
-[info] [tid] [run] [main.cpp] version {lib=libjxl version=0x00002ee0}
-[info] [tid] [run] [main.cpp] version {lib=libheif version=1.23.5}
-[info] [tid] [run] [main.cpp] version {lib=exiv2 version=0.28.9}
-[info] [tid] [run] [main.cpp] version {lib=lcms2 version=2190}
-[info] [tid] [run] [main.cpp] version {lib=webp version=1.6.0}
-[info] [tid] [run] [main.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
-[info] [tid] [run] [main.cpp] version {lib=x265 version="x265 HEVC encoder (4.3-vcpkg)"}
-[info] [tid] [run] [main.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.2.0"}
-[info] [tid] [run] [main.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.15.1"}
+[info] [tid] [run] [dev_cli.cpp] run start {outputs=tiff output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-tiff params="compression=lzw deflate_level=6 predictor=2 tiff_tile_height=0 tiff_tile_width=0"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=app version=0.3.2}
+[info] [tid] [run] [dev_cli.cpp] version {lib=qt version=6.11.2}
+[info] [tid] [run] [dev_cli.cpp] version {lib=oiio version=3.1.17.0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=jpegli version=031a0077}
+[info] [tid] [run] [dev_cli.cpp] version {lib=libjxl version=0x00002ee0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=libheif version=1.23.5}
+[info] [tid] [run] [dev_cli.cpp] version {lib=exiv2 version=0.28.9}
+[info] [tid] [run] [dev_cli.cpp] version {lib=lcms2 version=2190}
+[info] [tid] [run] [dev_cli.cpp] version {lib=webp version=1.6.0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=x265 version="x265 HEVC encoder (4.3-vcpkg)"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.2.0"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.15.1"}
 [info] [tid] [scheduler] [scheduler.cpp] start {files=27 workers=1 workers_resolved=1 stagger_ms=<ms> thread_budget=16 budget_bytes=<bytes> outputs=1 formats=tiff template=$dir/$file mode=transcode}
 [info] [tid] [sched] [scheduler.cpp] file start {index=0 src=tests/golden/base/anim.gif stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=0 alloc_files=16 encode_threads=1 active_files=1 sum_encode_threads=1 thread_budget=16}
@@ -729,7 +729,7 @@ EXIT 4 (failed files)
 [info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/meta/webp_lossy.webp out=".cache/regression/out-full-tiff\\meta\\webp_lossy.tif" format=tiff ok=true bytes=7006 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/webp_lossy.webp outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [scheduler] [scheduler.cpp] e3 report {thread_budget=16 stagger_ms=<ms> peak_active_files=1 peak_sum_encode_threads=16 active_files_end=0 files_done=27}
-[info] [tid] [run] [main.cpp] run summary {files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=63951 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
+[info] [tid] [run] [dev_cli.cpp] run summary {files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=63951 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
 photopipeline --dev
   format=tiff backend=(first) tech=(first) lossless=false bitdepth=16 color=keep conflict=overwrite
   out=.cache/regression/out-full-tiff workers=1 files=27 metadata_only=false params=[compression=lzw deflate_level=6 predictor=2 tiff_tile_height=0 tiff_tile_width=0]
@@ -770,20 +770,20 @@ tests/golden/meta/webp_lossy.webp ok 7006 <ms>
 SUMMARY files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=63951 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>
 EXIT 4 (failed files)
 ### run full-webp rc=4 args=--format webp
-[info] [tid] [run] [main.cpp] run start {outputs=webp output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-webp params="alpha_compression=true alpha_filtering=1 alpha_quality=100 autofilter=false emulate_jpeg_size=false filter_sharpness=0 filter_strength=30 filter_type=true lossless=false low_memory=false method=4 partition_limit=0 partitions=0 pass=1 preprocessing=0 preset=2 qmax=100 qmin=0 quality=90 segments=4 sharp_yuv=true sns_strength=50"}
-[info] [tid] [run] [main.cpp] version {lib=app version=0.3.2}
-[info] [tid] [run] [main.cpp] version {lib=qt version=6.11.2}
-[info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.17.0}
-[info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
-[info] [tid] [run] [main.cpp] version {lib=libjxl version=0x00002ee0}
-[info] [tid] [run] [main.cpp] version {lib=libheif version=1.23.5}
-[info] [tid] [run] [main.cpp] version {lib=exiv2 version=0.28.9}
-[info] [tid] [run] [main.cpp] version {lib=lcms2 version=2190}
-[info] [tid] [run] [main.cpp] version {lib=webp version=1.6.0}
-[info] [tid] [run] [main.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
-[info] [tid] [run] [main.cpp] version {lib=x265 version="x265 HEVC encoder (4.3-vcpkg)"}
-[info] [tid] [run] [main.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.2.0"}
-[info] [tid] [run] [main.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.15.1"}
+[info] [tid] [run] [dev_cli.cpp] run start {outputs=webp output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-webp params="alpha_compression=true alpha_filtering=1 alpha_quality=100 autofilter=false emulate_jpeg_size=false filter_sharpness=0 filter_strength=30 filter_type=true lossless=false low_memory=false method=4 partition_limit=0 partitions=0 pass=1 preprocessing=0 preset=2 qmax=100 qmin=0 quality=90 segments=4 sharp_yuv=true sns_strength=50"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=app version=0.3.2}
+[info] [tid] [run] [dev_cli.cpp] version {lib=qt version=6.11.2}
+[info] [tid] [run] [dev_cli.cpp] version {lib=oiio version=3.1.17.0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=jpegli version=031a0077}
+[info] [tid] [run] [dev_cli.cpp] version {lib=libjxl version=0x00002ee0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=libheif version=1.23.5}
+[info] [tid] [run] [dev_cli.cpp] version {lib=exiv2 version=0.28.9}
+[info] [tid] [run] [dev_cli.cpp] version {lib=lcms2 version=2190}
+[info] [tid] [run] [dev_cli.cpp] version {lib=webp version=1.6.0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=x265 version="x265 HEVC encoder (4.3-vcpkg)"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.2.0"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.15.1"}
 [info] [tid] [scheduler] [scheduler.cpp] start {files=27 workers=1 workers_resolved=1 stagger_ms=<ms> thread_budget=16 budget_bytes=<bytes> outputs=1 formats=webp template=$dir/$file mode=transcode}
 [info] [tid] [sched] [scheduler.cpp] file start {index=0 src=tests/golden/base/anim.gif stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=0 alloc_files=16 encode_threads=1 active_files=1 sum_encode_threads=1 thread_budget=16}
@@ -918,7 +918,7 @@ EXIT 4 (failed files)
 [info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/meta/webp_lossy.webp out=".cache/regression/out-full-webp\\meta\\webp_lossy.webp" format=webp ok=true bytes=324 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/webp_lossy.webp outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [scheduler] [scheduler.cpp] e3 report {thread_budget=16 stagger_ms=<ms> peak_active_files=1 peak_sum_encode_threads=16 active_files_end=0 files_done=27}
-[info] [tid] [run] [main.cpp] run summary {files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=7540 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
+[info] [tid] [run] [dev_cli.cpp] run summary {files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=7540 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
 photopipeline --dev
   format=webp backend=(first) tech=(first) lossless=false bitdepth=8 color=keep conflict=overwrite
   out=.cache/regression/out-full-webp workers=1 files=27 metadata_only=false params=[alpha_compression=true alpha_filtering=1 alpha_quality=100 autofilter=false emulate_jpeg_size=false filter_sharpness=0 filter_strength=30 filter_type=true lossless=false low_memory=false method=4 partition_limit=0 partitions=0 pass=1 preprocessing=0 preset=2 qmax=100 qmin=0 quality=90 segments=4 sharp_yuv=true sns_strength=50]
@@ -959,20 +959,20 @@ tests/golden/meta/webp_lossy.webp ok 324 <ms>
 SUMMARY files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=7540 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>
 EXIT 4 (failed files)
 ### run full-bmp rc=4 args=--format bmp
-[info] [tid] [run] [main.cpp] run start {outputs=bmp output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-bmp params=""}
-[info] [tid] [run] [main.cpp] version {lib=app version=0.3.2}
-[info] [tid] [run] [main.cpp] version {lib=qt version=6.11.2}
-[info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.17.0}
-[info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
-[info] [tid] [run] [main.cpp] version {lib=libjxl version=0x00002ee0}
-[info] [tid] [run] [main.cpp] version {lib=libheif version=1.23.5}
-[info] [tid] [run] [main.cpp] version {lib=exiv2 version=0.28.9}
-[info] [tid] [run] [main.cpp] version {lib=lcms2 version=2190}
-[info] [tid] [run] [main.cpp] version {lib=webp version=1.6.0}
-[info] [tid] [run] [main.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
-[info] [tid] [run] [main.cpp] version {lib=x265 version="x265 HEVC encoder (4.3-vcpkg)"}
-[info] [tid] [run] [main.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.2.0"}
-[info] [tid] [run] [main.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.15.1"}
+[info] [tid] [run] [dev_cli.cpp] run start {outputs=bmp output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-bmp params=""}
+[info] [tid] [run] [dev_cli.cpp] version {lib=app version=0.3.2}
+[info] [tid] [run] [dev_cli.cpp] version {lib=qt version=6.11.2}
+[info] [tid] [run] [dev_cli.cpp] version {lib=oiio version=3.1.17.0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=jpegli version=031a0077}
+[info] [tid] [run] [dev_cli.cpp] version {lib=libjxl version=0x00002ee0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=libheif version=1.23.5}
+[info] [tid] [run] [dev_cli.cpp] version {lib=exiv2 version=0.28.9}
+[info] [tid] [run] [dev_cli.cpp] version {lib=lcms2 version=2190}
+[info] [tid] [run] [dev_cli.cpp] version {lib=webp version=1.6.0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=x265 version="x265 HEVC encoder (4.3-vcpkg)"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.2.0"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.15.1"}
 [info] [tid] [scheduler] [scheduler.cpp] start {files=27 workers=1 workers_resolved=1 stagger_ms=<ms> thread_budget=16 budget_bytes=<bytes> outputs=1 formats=bmp template=$dir/$file mode=transcode}
 [info] [tid] [sched] [scheduler.cpp] file start {index=0 src=tests/golden/base/anim.gif stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=0 alloc_files=16 encode_threads=1 active_files=1 sum_encode_threads=1 thread_budget=16}
@@ -1132,7 +1132,7 @@ EXIT 4 (failed files)
 [warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/meta/webp_lossy.webp out=".cache/regression/out-full-bmp\\meta\\webp_lossy.bmp" detail="bmp output carries no metadata container"}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/webp_lossy.webp outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [scheduler] [scheduler.cpp] e3 report {thread_budget=16 stagger_ms=<ms> peak_active_files=1 peak_sum_encode_threads=16 active_files_end=0 files_done=27}
-[info] [tid] [run] [main.cpp] run summary {files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=255194 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
+[info] [tid] [run] [dev_cli.cpp] run summary {files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=255194 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
 photopipeline --dev
   format=bmp backend=(first) tech=(first) lossless=false bitdepth=24 color=keep conflict=overwrite
   out=.cache/regression/out-full-bmp workers=1 files=27 metadata_only=false params=[]
@@ -1174,20 +1174,20 @@ SUMMARY files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=255194 total_ms=<ms>
 EXIT 4 (failed files)
 ### run full-heif rc=4 args=--format heif
 [info] [tid] [encode] [enc_heif.cpp] bit depth probe {format=heif backend="" supported=8,10,12 unsupported=""}
-[info] [tid] [run] [main.cpp] run start {outputs=heif output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-heif params=""}
-[info] [tid] [run] [main.cpp] version {lib=app version=0.3.2}
-[info] [tid] [run] [main.cpp] version {lib=qt version=6.11.2}
-[info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.17.0}
-[info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
-[info] [tid] [run] [main.cpp] version {lib=libjxl version=0x00002ee0}
-[info] [tid] [run] [main.cpp] version {lib=libheif version=1.23.5}
-[info] [tid] [run] [main.cpp] version {lib=exiv2 version=0.28.9}
-[info] [tid] [run] [main.cpp] version {lib=lcms2 version=2190}
-[info] [tid] [run] [main.cpp] version {lib=webp version=1.6.0}
-[info] [tid] [run] [main.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
-[info] [tid] [run] [main.cpp] version {lib=x265 version="x265 HEVC encoder (4.3-vcpkg)"}
-[info] [tid] [run] [main.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.2.0"}
-[info] [tid] [run] [main.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.15.1"}
+[info] [tid] [run] [dev_cli.cpp] run start {outputs=heif output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-heif params=""}
+[info] [tid] [run] [dev_cli.cpp] version {lib=app version=0.3.2}
+[info] [tid] [run] [dev_cli.cpp] version {lib=qt version=6.11.2}
+[info] [tid] [run] [dev_cli.cpp] version {lib=oiio version=3.1.17.0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=jpegli version=031a0077}
+[info] [tid] [run] [dev_cli.cpp] version {lib=libjxl version=0x00002ee0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=libheif version=1.23.5}
+[info] [tid] [run] [dev_cli.cpp] version {lib=exiv2 version=0.28.9}
+[info] [tid] [run] [dev_cli.cpp] version {lib=lcms2 version=2190}
+[info] [tid] [run] [dev_cli.cpp] version {lib=webp version=1.6.0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=x265 version="x265 HEVC encoder (4.3-vcpkg)"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.2.0"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.15.1"}
 [info] [tid] [scheduler] [scheduler.cpp] start {files=27 workers=1 workers_resolved=1 stagger_ms=<ms> thread_budget=16 budget_bytes=<bytes> outputs=1 formats=heif template=$dir/$file mode=transcode}
 [info] [tid] [sched] [scheduler.cpp] file start {index=0 src=tests/golden/base/anim.gif stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=0 alloc_files=16 encode_threads=1 active_files=1 sum_encode_threads=1 thread_budget=16}
@@ -1368,7 +1368,7 @@ EXIT 4 (failed files)
 [info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/meta/webp_lossy.webp out=".cache/regression/out-full-heif\\meta\\webp_lossy.heic" format=heif ok=true bytes=472 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/webp_lossy.webp outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [scheduler] [scheduler.cpp] e3 report {thread_budget=16 stagger_ms=<ms> peak_active_files=1 peak_sum_encode_threads=16 active_files_end=0 files_done=27}
-[info] [tid] [run] [main.cpp] run summary {files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=23814 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
+[info] [tid] [run] [dev_cli.cpp] run summary {files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=23814 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
 photopipeline --dev
   format=heif backend=(first) tech=(first) lossless=false bitdepth=10 color=keep conflict=overwrite
   out=.cache/regression/out-full-heif workers=1 files=27 metadata_only=false params=[]
@@ -1410,26 +1410,25 @@ SUMMARY files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=23814 total_ms=<ms> 
 EXIT 4 (failed files)
 ### run full-avif rc=8 args=--format avif
 [info] [tid] [encode] [enc_heif.cpp] bit depth probe {format=avif backend="" supported=8,10,12 unsupported=""}
-[info] [tid] [run] [main.cpp] run start {outputs=avif output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-avif params=""}
-[info] [tid] [run] [main.cpp] version {lib=app version=0.3.2}
-[info] [tid] [run] [main.cpp] version {lib=qt version=6.11.2}
-[info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.17.0}
-[info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
-[info] [tid] [run] [main.cpp] version {lib=libjxl version=0x00002ee0}
-[info] [tid] [run] [main.cpp] version {lib=libheif version=1.23.5}
-[info] [tid] [run] [main.cpp] version {lib=exiv2 version=0.28.9}
-[info] [tid] [run] [main.cpp] version {lib=lcms2 version=2190}
-[info] [tid] [run] [main.cpp] version {lib=webp version=1.6.0}
-[info] [tid] [run] [main.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
-[info] [tid] [run] [main.cpp] version {lib=x265 version="x265 HEVC encoder (4.3-vcpkg)"}
-[info] [tid] [run] [main.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.2.0"}
-[info] [tid] [run] [main.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.15.1"}
+[info] [tid] [run] [dev_cli.cpp] run start {outputs=avif output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=27 metadata_only=false out=.cache/regression/out-full-avif params=""}
+[info] [tid] [run] [dev_cli.cpp] version {lib=app version=0.3.2}
+[info] [tid] [run] [dev_cli.cpp] version {lib=qt version=6.11.2}
+[info] [tid] [run] [dev_cli.cpp] version {lib=oiio version=3.1.17.0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=jpegli version=031a0077}
+[info] [tid] [run] [dev_cli.cpp] version {lib=libjxl version=0x00002ee0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=libheif version=1.23.5}
+[info] [tid] [run] [dev_cli.cpp] version {lib=exiv2 version=0.28.9}
+[info] [tid] [run] [dev_cli.cpp] version {lib=lcms2 version=2190}
+[info] [tid] [run] [dev_cli.cpp] version {lib=webp version=1.6.0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=x265 version="x265 HEVC encoder (4.3-vcpkg)"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.2.0"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.15.1"}
 [info] [tid] [scheduler] [scheduler.cpp] start {files=27 workers=1 workers_resolved=1 stagger_ms=<ms> thread_budget=16 budget_bytes=<bytes> outputs=1 formats=avif template=$dir/$file mode=transcode}
 [info] [tid] [sched] [scheduler.cpp] file start {index=0 src=tests/golden/base/anim.gif stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=0 alloc_files=16 encode_threads=1 active_files=1 sum_encode_threads=1 thread_budget=16}
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/anim.gif need_bytes=131072 capacity_bytes=<bytes> used_bytes=131072 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=avif backend=svt-av1 profile=Main（兼容性最好） bitdepth=10 chroma=1}
-[error] [tid] [encode] [enc_heif.cpp] encode failed {format=avif backend=svt-av1 error="svt-av1 does not support 10-bit with alpha; use backend libaom"}
 [error] [tid] [pipeline] [pipeline.cpp] encode failed: svt-av1 does not support 10-bit with alpha; use backend libaom {src=tests/golden/base/anim.gif out=".cache/regression/out-full-avif\\base\\anim.avif"}
 [info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/anim.gif out=".cache/regression/out-full-avif\\base\\anim.avif" format=avif ok=false bytes=0 encode_ms=<ms> metawrite_ms=<ms> warnings=1}
 [warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/anim.gif out=".cache/regression/out-full-avif\\base\\anim.avif" detail="multipage or animated input: only the first page was decoded"}
@@ -1467,7 +1466,6 @@ EXIT 4 (failed files)
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=5 alloc_files=16 encode_threads=1 active_files=1 sum_encode_threads=1 thread_budget=16}
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/graya8.png need_bytes=65536 capacity_bytes=<bytes> used_bytes=65536 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=avif backend=svt-av1 profile=Main（兼容性最好） bitdepth=10 chroma=1}
-[error] [tid] [encode] [enc_heif.cpp] encode failed {format=avif backend=svt-av1 error="svt-av1 does not support 10-bit with alpha; use backend libaom"}
 [error] [tid] [pipeline] [pipeline.cpp] encode failed: svt-av1 does not support 10-bit with alpha; use backend libaom {src=tests/golden/base/graya8.png out=".cache/regression/out-full-avif\\base\\graya8.avif"}
 [info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/graya8.png out=".cache/regression/out-full-avif\\base\\graya8.avif" format=avif ok=false bytes=0 encode_ms=<ms> metawrite_ms=<ms> warnings=1}
 [warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/graya8.png out=".cache/regression/out-full-avif\\base\\graya8.avif" detail="grayscale source encoded as RGB for format 'avif'"}
@@ -1522,7 +1520,6 @@ EXIT 4 (failed files)
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=13 alloc_files=14 encode_threads=1 active_files=1 sum_encode_threads=1 thread_budget=16}
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgba16.png need_bytes=131072 capacity_bytes=<bytes> used_bytes=131072 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=avif backend=svt-av1 profile=Main（兼容性最好） bitdepth=10 chroma=1}
-[error] [tid] [encode] [enc_heif.cpp] encode failed {format=avif backend=svt-av1 error="svt-av1 does not support 10-bit with alpha; use backend libaom"}
 [error] [tid] [pipeline] [pipeline.cpp] encode failed: svt-av1 does not support 10-bit with alpha; use backend libaom {src=tests/golden/base/rgba16.png out=".cache/regression/out-full-avif\\base\\rgba16.avif"}
 [info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/rgba16.png out=".cache/regression/out-full-avif\\base\\rgba16.avif" format=avif ok=false bytes=0 encode_ms=<ms> metawrite_ms=<ms> warnings=1}
 [warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/rgba16.png out=".cache/regression/out-full-avif\\base\\rgba16.avif" detail="source bit depth 16 -> output bit depth 10"}
@@ -1531,7 +1528,6 @@ EXIT 4 (failed files)
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=14 alloc_files=13 encode_threads=1 active_files=1 sum_encode_threads=1 thread_budget=16}
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgba8.png need_bytes=131072 capacity_bytes=<bytes> used_bytes=131072 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=avif backend=svt-av1 profile=Main（兼容性最好） bitdepth=10 chroma=1}
-[error] [tid] [encode] [enc_heif.cpp] encode failed {format=avif backend=svt-av1 error="svt-av1 does not support 10-bit with alpha; use backend libaom"}
 [error] [tid] [pipeline] [pipeline.cpp] encode failed: svt-av1 does not support 10-bit with alpha; use backend libaom {src=tests/golden/base/rgba8.png out=".cache/regression/out-full-avif\\base\\rgba8.avif"}
 [info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/rgba8.png out=".cache/regression/out-full-avif\\base\\rgba8.avif" format=avif ok=false bytes=0 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgba8.png outputs=1 ok_outputs=0 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Failed warnings=0}
@@ -1589,7 +1585,7 @@ EXIT 4 (failed files)
 [info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/meta/webp_lossy.webp out=".cache/regression/out-full-avif\\meta\\webp_lossy.avif" format=avif ok=true bytes=319 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/webp_lossy.webp outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [scheduler] [scheduler.cpp] e3 report {thread_budget=16 stagger_ms=<ms> peak_active_files=1 peak_sum_encode_threads=16 active_files_end=0 files_done=27}
-[info] [tid] [run] [main.cpp] run summary {files=27 ok=19 failed=8 skipped=0 cancelled=0 bytes=23680 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
+[info] [tid] [run] [dev_cli.cpp] run summary {files=27 ok=19 failed=8 skipped=0 cancelled=0 bytes=23680 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
 Svt[info]: -------------------------------------------
 Svt[info]: SVT [version]:	SVT-AV1 Encoder Lib v4.2.0
 Svt[info]: SVT [build]  :	Visual Studio 2026 64 bit
@@ -2075,20 +2071,20 @@ tests/golden/meta/webp_lossy.webp ok 319 <ms>
 SUMMARY files=27 ok=19 failed=8 skipped=0 cancelled=0 bytes=23680 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>
 EXIT 8 (failed files)
 ### run meta-jpeg rc=4 args=--format jpeg
-[info] [tid] [run] [main.cpp] run start {outputs=jpeg output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=16 metadata_only=true out=.cache/regression/out-meta-jpeg params="adaptive_quantization=true arith_code=false chroma=444 cicp_transfer_function=2 dct_method=0 distance=1 optimize_coding=true progressive=true psnr_target=0 quality=90 quality_mode=distance restart_in_rows=0 smoothing_factor=0 std_quant_tables=false xyb_mode=false"}
-[info] [tid] [run] [main.cpp] version {lib=app version=0.3.2}
-[info] [tid] [run] [main.cpp] version {lib=qt version=6.11.2}
-[info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.17.0}
-[info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
-[info] [tid] [run] [main.cpp] version {lib=libjxl version=0x00002ee0}
-[info] [tid] [run] [main.cpp] version {lib=libheif version=1.23.5}
-[info] [tid] [run] [main.cpp] version {lib=exiv2 version=0.28.9}
-[info] [tid] [run] [main.cpp] version {lib=lcms2 version=2190}
-[info] [tid] [run] [main.cpp] version {lib=webp version=1.6.0}
-[info] [tid] [run] [main.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
-[info] [tid] [run] [main.cpp] version {lib=x265 version="x265 HEVC encoder (4.3-vcpkg)"}
-[info] [tid] [run] [main.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.2.0"}
-[info] [tid] [run] [main.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.15.1"}
+[info] [tid] [run] [dev_cli.cpp] run start {outputs=jpeg output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=16 metadata_only=true out=.cache/regression/out-meta-jpeg params="adaptive_quantization=true arith_code=false chroma=444 cicp_transfer_function=2 dct_method=0 distance=1 optimize_coding=true progressive=true psnr_target=0 quality=90 quality_mode=distance restart_in_rows=0 smoothing_factor=0 std_quant_tables=false xyb_mode=false"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=app version=0.3.2}
+[info] [tid] [run] [dev_cli.cpp] version {lib=qt version=6.11.2}
+[info] [tid] [run] [dev_cli.cpp] version {lib=oiio version=3.1.17.0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=jpegli version=031a0077}
+[info] [tid] [run] [dev_cli.cpp] version {lib=libjxl version=0x00002ee0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=libheif version=1.23.5}
+[info] [tid] [run] [dev_cli.cpp] version {lib=exiv2 version=0.28.9}
+[info] [tid] [run] [dev_cli.cpp] version {lib=lcms2 version=2190}
+[info] [tid] [run] [dev_cli.cpp] version {lib=webp version=1.6.0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=x265 version="x265 HEVC encoder (4.3-vcpkg)"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.2.0"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.15.1"}
 [info] [tid] [scheduler] [scheduler.cpp] start {files=16 workers=1 workers_resolved=1 stagger_ms=<ms> thread_budget=16 budget_bytes=<bytes> outputs=1 formats=jpeg template=$dir/$file mode=metadata-only}
 [info] [tid] [sched] [scheduler.cpp] file start {index=0 src=tests/golden/base/anim.gif stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=0 alloc_files=16 encode_threads=1 active_files=1 sum_encode_threads=1 thread_budget=16}
@@ -2139,7 +2135,7 @@ EXIT 8 (failed files)
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=15 alloc_files=1 encode_threads=16 active_files=1 sum_encode_threads=16 thread_budget=16}
 [error] [tid] [pipeline] [pipeline.cpp] metadata-only rewrite failed: exiv2: Writing to TGA images is not supported {src=tests/golden/base/targa.tga}
 [info] [tid] [scheduler] [scheduler.cpp] e3 report {thread_budget=16 stagger_ms=<ms> peak_active_files=1 peak_sum_encode_threads=16 active_files_end=0 files_done=16}
-[info] [tid] [run] [main.cpp] run summary {files=16 ok=12 failed=4 skipped=0 cancelled=0 bytes=6462 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
+[info] [tid] [run] [dev_cli.cpp] run summary {files=16 ok=12 failed=4 skipped=0 cancelled=0 bytes=6462 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
 photopipeline --dev
   format=jpeg backend=(first) tech=(first) lossless=false bitdepth=8 color=keep conflict=overwrite
   out=.cache/regression/out-meta-jpeg workers=1 files=16 metadata_only=true params=[adaptive_quantization=true arith_code=false chroma=444 cicp_transfer_function=2 dct_method=0 distance=1 optimize_coding=true progressive=true psnr_target=0 quality=90 quality_mode=distance restart_in_rows=0 smoothing_factor=0 std_quant_tables=false xyb_mode=false]
@@ -2169,20 +2165,20 @@ tests/golden/base/targa.tga failed 0 <ms>
 SUMMARY files=16 ok=12 failed=4 skipped=0 cancelled=0 bytes=6462 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>
 EXIT 4 (failed files)
 ### run meta-png rc=4 args=--format png
-[info] [tid] [run] [main.cpp] run start {outputs=png output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=16 metadata_only=true out=.cache/regression/out-meta-png params=compressionLevel=6}
-[info] [tid] [run] [main.cpp] version {lib=app version=0.3.2}
-[info] [tid] [run] [main.cpp] version {lib=qt version=6.11.2}
-[info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.17.0}
-[info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
-[info] [tid] [run] [main.cpp] version {lib=libjxl version=0x00002ee0}
-[info] [tid] [run] [main.cpp] version {lib=libheif version=1.23.5}
-[info] [tid] [run] [main.cpp] version {lib=exiv2 version=0.28.9}
-[info] [tid] [run] [main.cpp] version {lib=lcms2 version=2190}
-[info] [tid] [run] [main.cpp] version {lib=webp version=1.6.0}
-[info] [tid] [run] [main.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
-[info] [tid] [run] [main.cpp] version {lib=x265 version="x265 HEVC encoder (4.3-vcpkg)"}
-[info] [tid] [run] [main.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.2.0"}
-[info] [tid] [run] [main.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.15.1"}
+[info] [tid] [run] [dev_cli.cpp] run start {outputs=png output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=16 metadata_only=true out=.cache/regression/out-meta-png params=compressionLevel=6}
+[info] [tid] [run] [dev_cli.cpp] version {lib=app version=0.3.2}
+[info] [tid] [run] [dev_cli.cpp] version {lib=qt version=6.11.2}
+[info] [tid] [run] [dev_cli.cpp] version {lib=oiio version=3.1.17.0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=jpegli version=031a0077}
+[info] [tid] [run] [dev_cli.cpp] version {lib=libjxl version=0x00002ee0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=libheif version=1.23.5}
+[info] [tid] [run] [dev_cli.cpp] version {lib=exiv2 version=0.28.9}
+[info] [tid] [run] [dev_cli.cpp] version {lib=lcms2 version=2190}
+[info] [tid] [run] [dev_cli.cpp] version {lib=webp version=1.6.0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=x265 version="x265 HEVC encoder (4.3-vcpkg)"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.2.0"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.15.1"}
 [info] [tid] [scheduler] [scheduler.cpp] start {files=16 workers=1 workers_resolved=1 stagger_ms=<ms> thread_budget=16 budget_bytes=<bytes> outputs=1 formats=png template=$dir/$file mode=metadata-only}
 [info] [tid] [sched] [scheduler.cpp] file start {index=0 src=tests/golden/base/anim.gif stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=0 alloc_files=16 encode_threads=1 active_files=1 sum_encode_threads=1 thread_budget=16}
@@ -2233,7 +2229,7 @@ EXIT 4 (failed files)
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=15 alloc_files=1 encode_threads=16 active_files=1 sum_encode_threads=16 thread_budget=16}
 [error] [tid] [pipeline] [pipeline.cpp] metadata-only rewrite failed: exiv2: Writing to TGA images is not supported {src=tests/golden/base/targa.tga}
 [info] [tid] [scheduler] [scheduler.cpp] e3 report {thread_budget=16 stagger_ms=<ms> peak_active_files=1 peak_sum_encode_threads=16 active_files_end=0 files_done=16}
-[info] [tid] [run] [main.cpp] run summary {files=16 ok=12 failed=4 skipped=0 cancelled=0 bytes=6462 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
+[info] [tid] [run] [dev_cli.cpp] run summary {files=16 ok=12 failed=4 skipped=0 cancelled=0 bytes=6462 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
 photopipeline --dev
   format=png backend=(first) tech=(first) lossless=false bitdepth=16 color=keep conflict=overwrite
   out=.cache/regression/out-meta-png workers=1 files=16 metadata_only=true params=[compressionLevel=6]
@@ -2263,20 +2259,20 @@ tests/golden/base/targa.tga failed 0 <ms>
 SUMMARY files=16 ok=12 failed=4 skipped=0 cancelled=0 bytes=6462 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>
 EXIT 4 (failed files)
 ### run meta-tiff rc=4 args=--format tiff
-[info] [tid] [run] [main.cpp] run start {outputs=tiff output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=16 metadata_only=true out=.cache/regression/out-meta-tiff params="compression=lzw deflate_level=6 predictor=2 tiff_tile_height=0 tiff_tile_width=0"}
-[info] [tid] [run] [main.cpp] version {lib=app version=0.3.2}
-[info] [tid] [run] [main.cpp] version {lib=qt version=6.11.2}
-[info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.17.0}
-[info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
-[info] [tid] [run] [main.cpp] version {lib=libjxl version=0x00002ee0}
-[info] [tid] [run] [main.cpp] version {lib=libheif version=1.23.5}
-[info] [tid] [run] [main.cpp] version {lib=exiv2 version=0.28.9}
-[info] [tid] [run] [main.cpp] version {lib=lcms2 version=2190}
-[info] [tid] [run] [main.cpp] version {lib=webp version=1.6.0}
-[info] [tid] [run] [main.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
-[info] [tid] [run] [main.cpp] version {lib=x265 version="x265 HEVC encoder (4.3-vcpkg)"}
-[info] [tid] [run] [main.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.2.0"}
-[info] [tid] [run] [main.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.15.1"}
+[info] [tid] [run] [dev_cli.cpp] run start {outputs=tiff output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=16 metadata_only=true out=.cache/regression/out-meta-tiff params="compression=lzw deflate_level=6 predictor=2 tiff_tile_height=0 tiff_tile_width=0"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=app version=0.3.2}
+[info] [tid] [run] [dev_cli.cpp] version {lib=qt version=6.11.2}
+[info] [tid] [run] [dev_cli.cpp] version {lib=oiio version=3.1.17.0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=jpegli version=031a0077}
+[info] [tid] [run] [dev_cli.cpp] version {lib=libjxl version=0x00002ee0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=libheif version=1.23.5}
+[info] [tid] [run] [dev_cli.cpp] version {lib=exiv2 version=0.28.9}
+[info] [tid] [run] [dev_cli.cpp] version {lib=lcms2 version=2190}
+[info] [tid] [run] [dev_cli.cpp] version {lib=webp version=1.6.0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=x265 version="x265 HEVC encoder (4.3-vcpkg)"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.2.0"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.15.1"}
 [info] [tid] [scheduler] [scheduler.cpp] start {files=16 workers=1 workers_resolved=1 stagger_ms=<ms> thread_budget=16 budget_bytes=<bytes> outputs=1 formats=tiff template=$dir/$file mode=metadata-only}
 [info] [tid] [sched] [scheduler.cpp] file start {index=0 src=tests/golden/base/anim.gif stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=0 alloc_files=16 encode_threads=1 active_files=1 sum_encode_threads=1 thread_budget=16}
@@ -2327,7 +2323,7 @@ EXIT 4 (failed files)
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=15 alloc_files=1 encode_threads=16 active_files=1 sum_encode_threads=16 thread_budget=16}
 [error] [tid] [pipeline] [pipeline.cpp] metadata-only rewrite failed: exiv2: Writing to TGA images is not supported {src=tests/golden/base/targa.tga}
 [info] [tid] [scheduler] [scheduler.cpp] e3 report {thread_budget=16 stagger_ms=<ms> peak_active_files=1 peak_sum_encode_threads=16 active_files_end=0 files_done=16}
-[info] [tid] [run] [main.cpp] run summary {files=16 ok=12 failed=4 skipped=0 cancelled=0 bytes=6462 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
+[info] [tid] [run] [dev_cli.cpp] run summary {files=16 ok=12 failed=4 skipped=0 cancelled=0 bytes=6462 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
 photopipeline --dev
   format=tiff backend=(first) tech=(first) lossless=false bitdepth=16 color=keep conflict=overwrite
   out=.cache/regression/out-meta-tiff workers=1 files=16 metadata_only=true params=[compression=lzw deflate_level=6 predictor=2 tiff_tile_height=0 tiff_tile_width=0]
@@ -2357,20 +2353,20 @@ tests/golden/base/targa.tga failed 0 <ms>
 SUMMARY files=16 ok=12 failed=4 skipped=0 cancelled=0 bytes=6462 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>
 EXIT 4 (failed files)
 ### run meta-webp rc=4 args=--format webp
-[info] [tid] [run] [main.cpp] run start {outputs=webp output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=16 metadata_only=true out=.cache/regression/out-meta-webp params="alpha_compression=true alpha_filtering=1 alpha_quality=100 autofilter=false emulate_jpeg_size=false filter_sharpness=0 filter_strength=30 filter_type=true lossless=false low_memory=false method=4 partition_limit=0 partitions=0 pass=1 preprocessing=0 preset=2 qmax=100 qmin=0 quality=90 segments=4 sharp_yuv=true sns_strength=50"}
-[info] [tid] [run] [main.cpp] version {lib=app version=0.3.2}
-[info] [tid] [run] [main.cpp] version {lib=qt version=6.11.2}
-[info] [tid] [run] [main.cpp] version {lib=oiio version=3.1.17.0}
-[info] [tid] [run] [main.cpp] version {lib=jpegli version=031a0077}
-[info] [tid] [run] [main.cpp] version {lib=libjxl version=0x00002ee0}
-[info] [tid] [run] [main.cpp] version {lib=libheif version=1.23.5}
-[info] [tid] [run] [main.cpp] version {lib=exiv2 version=0.28.9}
-[info] [tid] [run] [main.cpp] version {lib=lcms2 version=2190}
-[info] [tid] [run] [main.cpp] version {lib=webp version=1.6.0}
-[info] [tid] [run] [main.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
-[info] [tid] [run] [main.cpp] version {lib=x265 version="x265 HEVC encoder (4.3-vcpkg)"}
-[info] [tid] [run] [main.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.2.0"}
-[info] [tid] [run] [main.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.15.1"}
+[info] [tid] [run] [dev_cli.cpp] run start {outputs=webp output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=16 metadata_only=true out=.cache/regression/out-meta-webp params="alpha_compression=true alpha_filtering=1 alpha_quality=100 autofilter=false emulate_jpeg_size=false filter_sharpness=0 filter_strength=30 filter_type=true lossless=false low_memory=false method=4 partition_limit=0 partitions=0 pass=1 preprocessing=0 preset=2 qmax=100 qmin=0 quality=90 segments=4 sharp_yuv=true sns_strength=50"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=app version=0.3.2}
+[info] [tid] [run] [dev_cli.cpp] version {lib=qt version=6.11.2}
+[info] [tid] [run] [dev_cli.cpp] version {lib=oiio version=3.1.17.0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=jpegli version=031a0077}
+[info] [tid] [run] [dev_cli.cpp] version {lib=libjxl version=0x00002ee0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=libheif version=1.23.5}
+[info] [tid] [run] [dev_cli.cpp] version {lib=exiv2 version=0.28.9}
+[info] [tid] [run] [dev_cli.cpp] version {lib=lcms2 version=2190}
+[info] [tid] [run] [dev_cli.cpp] version {lib=webp version=1.6.0}
+[info] [tid] [run] [dev_cli.cpp] version {lib=tiff version="LIBTIFF, Version 4.7.2"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=x265 version="x265 HEVC encoder (4.3-vcpkg)"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=svt-av1 version="SVT-AV1 encoder v4.2.0"}
+[info] [tid] [run] [dev_cli.cpp] version {lib=aom version="AOMedia Project AV1 Encoder v3.15.1"}
 [info] [tid] [scheduler] [scheduler.cpp] start {files=16 workers=1 workers_resolved=1 stagger_ms=<ms> thread_budget=16 budget_bytes=<bytes> outputs=1 formats=webp template=$dir/$file mode=metadata-only}
 [info] [tid] [sched] [scheduler.cpp] file start {index=0 src=tests/golden/base/anim.gif stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=0 alloc_files=16 encode_threads=1 active_files=1 sum_encode_threads=1 thread_budget=16}
@@ -2421,7 +2417,7 @@ EXIT 4 (failed files)
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=15 alloc_files=1 encode_threads=16 active_files=1 sum_encode_threads=16 thread_budget=16}
 [error] [tid] [pipeline] [pipeline.cpp] metadata-only rewrite failed: exiv2: Writing to TGA images is not supported {src=tests/golden/base/targa.tga}
 [info] [tid] [scheduler] [scheduler.cpp] e3 report {thread_budget=16 stagger_ms=<ms> peak_active_files=1 peak_sum_encode_threads=16 active_files_end=0 files_done=16}
-[info] [tid] [run] [main.cpp] run summary {files=16 ok=12 failed=4 skipped=0 cancelled=0 bytes=6462 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
+[info] [tid] [run] [dev_cli.cpp] run summary {files=16 ok=12 failed=4 skipped=0 cancelled=0 bytes=6462 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
 photopipeline --dev
   format=webp backend=(first) tech=(first) lossless=false bitdepth=8 color=keep conflict=overwrite
   out=.cache/regression/out-meta-webp workers=1 files=16 metadata_only=true params=[alpha_compression=true alpha_filtering=1 alpha_quality=100 autofilter=false emulate_jpeg_size=false filter_sharpness=0 filter_strength=30 filter_type=true lossless=false low_memory=false method=4 partition_limit=0 partitions=0 pass=1 preprocessing=0 preset=2 qmax=100 qmin=0 quality=90 segments=4 sharp_yuv=true sns_strength=50]

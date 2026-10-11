@@ -875,6 +875,167 @@ int main() {
               "缺失文件未回落默认值");
     }
 
+    // ---- O. M7-WP8 / R-078：实测线程统计（RunSummary 加性字段，E3 读数同源）----
+    {
+        pp::RunConfig cfg;
+        cfg.output_template = "$dir/$file";
+        cfg.out_root = tmp / "threads";
+        cfg.outputs.push_back(pp::OutputFormatSpec{"jpeg", "", "", {}, 8});
+        cfg.conflict = pp::ConflictPolicy::Overwrite;
+        cfg.workers = 2;
+        cfg.thread_budget = 2;
+        pp::Scheduler sched(cfg, entries_for(inputs, corpus));
+        sched.start();
+        sched.wait();
+        const pp::RunSummary sum = sched.summary();
+        check(sum.peak_active_files >= 1, "r078/peak-active-positive",
+              "peak_active_files=" + std::to_string(sum.peak_active_files));
+        check(sum.peak_sum_encode_threads >= 1, "r078/peak-encode-positive",
+              "peak_sum_encode_threads=" + std::to_string(sum.peak_sum_encode_threads));
+        check(sum.threads_total_est ==
+                  sum.peak_active_files + static_cast<int>(sum.peak_sum_encode_threads),
+              "r078/total-est-formula",
+              "threads_total_est=" + std::to_string(sum.threads_total_est));
+    }
+
+    // ---- P. M7-WP8 / B.8 契约收口（pipeline.h 加性面；R-172/173/175/176/322）----
+    {
+        // R-322 / R-136：template_has_format 单源（含 $format 段；含段 ≠ 前缀）
+        check(pp::template_has_format("$format/$file"), "b8/tmpl-split", "$format/$file 应判 true");
+        check(pp::template_has_format("$dir/$format/$file"), "b8/tmpl-mirror",
+              "$dir/$format/$file 含 $format 段 → true（旧 CLI 仅前缀判 false 的分叉）");
+        check(!pp::template_has_format("$dir/$file"), "b8/tmpl-flat", "$dir/$file 应判 false");
+        check(!pp::template_has_format(""), "b8/tmpl-empty", "空模板应判 false");
+
+        // R-173：RunConfig 字段约束校验器
+        pp::RunConfig good;
+        good.output_template = "$dir/$file";
+        good.outputs.push_back(pp::OutputFormatSpec{"jpeg", "", "", {}, 8});
+        check(pp::validate_run_config(good).empty(), "b8/validate-good",
+              "合法配置应返回空串，got: " + pp::validate_run_config(good));
+
+        pp::RunConfig empty;
+        check(pp::validate_run_config(empty) ==
+                  "no output configured (RunConfig::outputs is empty)",
+              "b8/validate-empty", "outputs 为空应报错");
+
+        pp::RunConfig meta2 = good;
+        meta2.metadata_only = true;
+        meta2.outputs.push_back(pp::OutputFormatSpec{"jpeg", "", "", {}, 8});
+        check(pp::validate_run_config(meta2).rfind("metadata-only mode requires exactly one output",
+                                                   0) == 0,
+              "b8/validate-meta-only-size", "metadata_only 要求恰好 1 个输出");
+
+        pp::RunConfig split = good;
+        split.split_by_format = true;
+        check(pp::validate_run_config(split).rfind("split_by_format=true requires", 0) == 0,
+              "b8/validate-split-linkage", "split_by_format=true 要求模板含 $format");
+        split.output_template = "$format/$file";
+        check(pp::validate_run_config(split).empty(), "b8/validate-split-ok",
+              "split_by_format=true + $format 模板应通过");
+
+        pp::RunConfig badbd = good;
+        badbd.outputs[0].out_bitdepth = 7;
+        check(pp::validate_run_config(badbd).rfind("output bit depth", 0) == 0,
+              "b8/validate-bitdepth", "位深不在 fmt->bitdepths 应报错");
+
+        pp::RunConfig badfmt = good;
+        badfmt.outputs[0].format_id = "nope";
+        check(pp::validate_run_config(badfmt).rfind("unknown output format", 0) == 0,
+              "b8/validate-unknown-format", "未知格式应报错");
+
+        // R-176：ErrorKind 前缀判据单源
+        check(pp::error_kind_of("") == pp::ErrorKind::None, "b8/err-none", "空错误 = None");
+        check(pp::error_kind_of("probe failed: x") == pp::ErrorKind::Probe, "b8/err-probe", "");
+        check(pp::error_kind_of("decode failed: x") == pp::ErrorKind::Decode, "b8/err-decode", "");
+        check(pp::error_kind_of("encode failed: x") == pp::ErrorKind::Encode, "b8/err-encode", "");
+        check(pp::error_kind_of("metadata write failed: x") == pp::ErrorKind::MetaWrite,
+              "b8/err-metawrite", "");
+        check(pp::error_kind_of("metadata-only rewrite failed: x") == pp::ErrorKind::MetaWrite,
+              "b8/err-metawrite-only", "");
+        check(pp::error_kind_of("output path: boom") == pp::ErrorKind::Io, "b8/err-io", "");
+        check(pp::error_kind_of("encode cancelled") == pp::ErrorKind::Cancelled, "b8/err-cancel",
+              "");
+        check(pp::error_kind_of("unexpected exception: x") == pp::ErrorKind::Internal,
+              "b8/err-internal", "");
+        check(pp::error_kind_of("no output configured (RunConfig::outputs is empty)") ==
+                  pp::ErrorKind::Config,
+              "b8/err-config", "");
+        check(std::string(pp::error_kind_name(pp::ErrorKind::Encode)) == "encode", "b8/err-name",
+              "error_kind_name 口径");
+
+        // R-172：set_output_state 双轨单点对齐 + verdict_of_rows 聚合
+        pp::OutputResult row;
+        pp::set_output_state(row, pp::OutputState::Ok);
+        check(row.ok && !row.skipped && row.state == pp::OutputState::Ok, "b8/state-ok",
+              "set_output_state(Ok) 应同步布尔");
+        pp::set_output_state(row, pp::OutputState::Skipped);
+        check(!row.ok && row.skipped && row.state == pp::OutputState::Skipped, "b8/state-skipped",
+              "set_output_state(Skipped) 应同步布尔");
+        check(std::string(pp::output_state_name(pp::OutputState::Pending)) == "pending",
+              "b8/state-name", "");
+
+        pp::FileResult fr;
+        fr.outputs.push_back(pp::OutputResult{});
+        pp::set_output_state(fr.outputs[0], pp::OutputState::Ok);
+        check(pp::verdict_of_rows(fr) == pp::FileOutcome::Verdict::Done, "b8/verdict-done", "");
+        fr.outputs.push_back(pp::OutputResult{});
+        pp::set_output_state(fr.outputs[1], pp::OutputState::Failed);
+        fr.outputs[1].error = "encode failed: x";
+        check(pp::verdict_of_rows(fr) == pp::FileOutcome::Verdict::DoneWithErrors,
+              "b8/verdict-partial", "1 成 1 败 = DoneWithErrors");
+        pp::set_output_state(fr.outputs[0], pp::OutputState::Failed);
+        check(pp::verdict_of_rows(fr) == pp::FileOutcome::Verdict::Failed, "b8/verdict-failed", "");
+        pp::set_output_state(fr.outputs[0], pp::OutputState::Skipped);
+        pp::set_output_state(fr.outputs[1], pp::OutputState::Skipped);
+        check(pp::verdict_of_rows(fr) == pp::FileOutcome::Verdict::Skipped, "b8/verdict-skipped",
+              "");
+
+        // R-175：path_ctx_for 单源（scheduler desired_keys 与 pipeline plan_targets 共用）
+        pp::FileEntry fe;
+        fe.src = corpus / "base" / "rgb8.png";
+        fe.base_dir = corpus;
+        const pp::FormatDef *fmt = pp::find_format("jpeg");
+        check(fmt != nullptr, "b8/pathctx-fmt", "find_format(jpeg)");
+        if (fmt) {
+            const pp::PathCtx ctx = pp::path_ctx_for(fe, good, fmt);
+            check(ctx.format_dir == "jpeg", "b8/pathctx-format-dir", ctx.format_dir);
+            check(ctx.ext == fmt->ext, "b8/pathctx-ext", ctx.ext);
+            check(ctx.stem == "rgb8", "b8/pathctx-stem", ctx.stem);
+            pp::RunConfig meta = good;
+            meta.metadata_only = true;
+            const pp::PathCtx mctx = pp::path_ctx_for(fe, meta, fmt);
+            check(mctx.ext == ".png", "b8/pathctx-metaonly-ext",
+                  "仅元数据模式同容器 → 源扩展名，got " + mctx.ext);
+        }
+
+        // B.6 ③：build_output_specs 装配链单源
+        {
+            std::vector<pp::OutputFormatSpec> out;
+            std::vector<pp::OutputSpecRequest> reqs;
+            pp::OutputSpecRequest q;
+            q.format_id = "jpeg";
+            q.out_bitdepth = 8;
+            reqs.push_back(q);
+            const std::string err = pp::build_output_specs(reqs, false, out);
+            check(err.empty(), "b8/specs-good", err);
+            check(out.size() == 1 && out[0].format_id == "jpeg" && out[0].out_bitdepth == 8,
+                  "b8/specs-shaped", "装配结果形态");
+
+            reqs[0].format_id = "nope";
+            check(pp::build_output_specs(reqs, false, out).rfind("unknown format", 0) == 0,
+                  "b8/specs-unknown", "未知格式应报错");
+            reqs[0].format_id = "jpeg";
+            reqs[0].out_bitdepth = 7;
+            check(pp::build_output_specs(reqs, false, out).rfind("bit depth", 0) == 0,
+                  "b8/specs-bitdepth", "非法位深应报错");
+            reqs[0].out_bitdepth = -1;
+            const std::string err2 = pp::build_output_specs(reqs, true, out);
+            check(err2.empty() && out.size() == 1 && out[0].out_bitdepth == 8,
+                  "b8/specs-default-bd", "默认位深单源（jpeg=8）；err=" + err2);
+        }
+    }
+
     if (g_failed == 0) {
         std::printf("test_scheduler_contract: all checks passed\n");
     } else {

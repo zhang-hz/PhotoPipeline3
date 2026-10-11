@@ -333,6 +333,86 @@ int main() {
                   " extra)");
     }
 
+    // ---- M7-WP8 / R-284：进度算术纯函数单源（与 mux 读数对拍）----
+    {
+        pp::OutputProgress a{0.5f, 0.f};
+        pp::OutputProgress b{1.f, 1.f};
+        check(near(pp::output_chunk_frac(a), (0.5f * 0.5f) / 0.6f), "pure/chunk-half",
+              f2s(pp::output_chunk_frac(a)));
+        check(near(pp::output_chunk_frac(b), 1.0f), "pure/chunk-full",
+              f2s(pp::output_chunk_frac(b)));
+        pp::OutputProgress outs[2] = {{0.5f, 0.f}, {1.f, 1.f}};
+        const float predicted = pp::file_frac_from(0.40f, outs, 2);
+        check(near(predicted, 0.40f + (0.25f + 0.6f) / 2.f), "pure/file-frac-formula",
+              f2s(predicted));
+
+        pp::ProgressMux mux(10, 10, 2);
+        mux.shared_skip(pp::Stage::Probe);
+        mux.shared_skip(pp::Stage::Decode);
+        mux.shared_skip(pp::Stage::Orient);
+        mux.shared_skip(pp::Stage::Color);
+        pp::ProgressFn fn0 = mux.bind_output(0, "jpeg");
+        fn0(0.5f);
+        mux.bind_output(1, "webp");
+        mux.on_output_encode_done(1, true);
+        mux.on_output_metawrite_done(1);
+        check(near(mux.file_frac(), predicted, 1e-5f), "pure/matches-mux",
+              "mux=" + f2s(mux.file_frac()) + " pure=" + f2s(predicted));
+        check(near(mux.output_frac(0), pp::output_chunk_frac(outs[0]), 1e-5f),
+              "pure/output-frac-matches", f2s(mux.output_frac(0)));
+    }
+
+    // ---- M7-WP8 / R-288：snapshot 并入高水位单源（旧旁路已消）----
+    {
+        pp::ProgressMux mux(10, 10, 1);
+        mux.shared_skip(pp::Stage::Probe);
+        mux.shared_skip(pp::Stage::Decode);
+        mux.shared_skip(pp::Stage::Orient);
+        mux.shared_skip(pp::Stage::Color);
+        pp::ProgressFn fn = mux.bind_output(0, "jpeg");
+        fn(1.0f);
+        mux.on_output_encode_done(0, true);
+        mux.on_output_metawrite_done(0);
+        mux.finish();
+        const pp::ProgressInfo after = mux.snapshot(pp::Stage::Done, -1);
+        check(after.overall_frac >= 1.0f - 1e-6f, "hv/snapshot-one",
+              "finish 后 snapshot 不得低于 1.0，got " + f2s(after.overall_frac));
+        // snapshot 与 file_frac 同源（同一高水位）
+        check(near(after.overall_frac, mux.file_frac()), "hv/snapshot-matches-frac",
+              f2s(after.overall_frac) + " vs " + f2s(mux.file_frac()));
+    }
+
+    // ---- M7-WP8 / R-287：输出状态机（经公共读数面观察迁移）----
+    {
+        pp::ProgressMux mux(10, 10, 2);
+        check(!mux.stats(0).started, "state/initial-unbound", "未 bind = 未启动");
+        mux.bind_output(0, "jpeg");
+        check(mux.stats(0).started, "state/bound", "bind 后 started");
+        mux.on_output_skipped(1);
+        const pp::ProgressMux::Stats sk = mux.stats(1);
+        check(sk.skipped && sk.started, "state/skipped", "skip 迁移");
+        check(!mux.synth_active(1), "state/skip-not-synth", "skip 后不进合成面");
+        mux.on_output_encode_done(0, true);
+        mux.on_output_metawrite_done(0);
+        check(mux.stats(0).reported && !mux.stats(0).synthetic, "state/reported",
+              "真实进度不得被合成覆盖（§3.1）");
+    }
+
+    // ---- M7-WP8 / R-170：回调可重入（回调内调用 tick/读数不自死锁）----
+    {
+        pp::ProgressMux mux(10, 10, 1);
+        bool reentered = false;
+        mux.set_event_callback([&](const pp::FileEvent &e) {
+            (void)e;
+            // R-170 口径：回调在事件序列锁下、数据锁之外 —— 可安全重入本对象。
+            (void)mux.file_frac();
+            (void)mux.tick();
+            reentered = true;
+        });
+        mux.shared_skip(pp::Stage::Probe);
+        check(reentered, "r170/reentrant-callback", "回调内调用 mux 读数/tick 应安全返回");
+    }
+
     if (g_failed == 0)
         std::printf("test_progress: all checks passed\n");
     return g_failed;

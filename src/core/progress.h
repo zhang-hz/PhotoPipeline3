@@ -165,14 +165,19 @@ private:
 
 // ============================================================================================
 // §7.4 · ProgressMux（编码器行回调 → FileEvent{state=Progress} 汇流 + 三级模型算术）
-//   * 逐文件一个实例（`run_one_file` / `run_metadata_only` 内）；线程安全：内部互斥 +
-//     事件回调**持锁**调用（保序：进度事件必须单调递达消费端）。
+//   * 逐文件一个实例（`run_one_file` / `run_metadata_only` 内）；线程安全：数据面互斥 +
+//     **事件序列锁**（R-170 口径，M7-WP8 修正）—— 回调在事件序列锁下、**数据锁之外**被调用：
+//     ① 事件按序单调递达消费端（两个采样源 = 编码器线程 / 合成泵线程）；
+//     ② 回调内可以安全调用本对象的读数/推进方法（可重入，序列锁为 recursive），
+//        不再有"回调持数据锁 → 回调再进 tick() 自死锁"的口径矛盾。
 //   * 源文件级共享段（§7.2 前三行，一次）：shared_stage(Stage, frac) 推进；不执行的阶段用
 //     shared_skip() 即时记满（权重不丢失，整体恒可达 1.0）。
 //   * 输出级（§7.2 后两行，逐输出）：bind_output() 取编码器 ProgressFn；on_output_* 收尾。
 //   * 合成输出：bind_output 时按 k 表建立 ProgressSynth；编码期间由**泵**（pipeline 侧
 //     20ms 采样线程，编码器无回调 → 只能时间驱动）调用 tick() 推进。
 //   * 节流：每 20ms 或每 0.5% 进度发点（另有首样本/1.0/阶段切换/synthetic 翻转强制发点）。
+//   * 单调高水位**单层**（R-288 收敛）：overall_high 在本类内统一兜底（含 snapshot()，旧
+//     snapshot 旁路已并入）；消费端无需再做单调化，scheduler 只缓存"最后进度"供终态携带。
 // ============================================================================================
 class ProgressMux {
 public:
@@ -229,5 +234,22 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
+
+// ============================================================================================
+// M7-WP8 / B.8 · R-284 进度算术**纯函数单源**（加性追加；裁定登记 build/m7-wp8/handoff.md）
+//   §7.2 权重表的折算此前只活在 ProgressMux::Impl 内，page_run 又自实现了一遍权重归一
+//   （E7-10 双源）。此处把两步算术提为纯函数：mux 内部与 UI/侧车共用同一实现。
+// ============================================================================================
+struct OutputProgress {
+    float enc_frac = 0.f;  // 编码段内 0..1（§7.2 encode 50%）
+    float meta_frac = 0.f; // 落盘段内 0..1（§7.2 metawrite 10%）
+};
+
+// 单输出完成度：(0.5·enc + 0.1·meta) / 0.6 ∈ [0,1]（= ProgressMux::output_frac）
+float output_chunk_frac(const OutputProgress &o);
+
+// 源文件级完成度：shared_weighted（= Σ 共享段已加权值 ≤ 0.40）+ mean(0.5·enc + 0.1·meta)，
+// clamp 到 [0,1]（= ProgressMux::file_frac）。
+float file_frac_from(float shared_weighted, const OutputProgress *outs, std::size_t n);
 
 } // namespace pp

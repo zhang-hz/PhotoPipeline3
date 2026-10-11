@@ -37,9 +37,9 @@
 #include <utility>
 #include <vector>
 
+#include "codecs/enc_common.h" // M7-WP8/B.7（R-156/162/165）：族公共面单源
 #include "codecs/encoder.h"
 #include "codecs/encoder_registry.h"
-#include "core/fsops.h" // R-003：write_atomic_file（原子落盘）
 #include "core/logger.h"
 #include "core/params.h"
 #include "core/simd/simd.h" // M4-W5-T19：量化热路径（§11.2）
@@ -52,16 +52,8 @@ constexpr char kLogFile[] = "enc_jxl.cpp";
 constexpr std::string_view kFormatId = "jxl";
 
 // E8 (revised): a failed encode yields bytes == 0 plus an English error string.
-EncodeResult encode_error(std::string msg) {
-    EncodeResult res;
-    res.bytes = 0;
-    res.error = std::move(msg);
-    return res;
-}
-
-double ms_since(std::chrono::steady_clock::time_point t0) {
-    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-}
+// M7-WP8/B.7（R-156/162）：encode_error / ms_since 收编 codecs/enc_common（单源）；
+// 错误级日志归 pipeline（消双记），Timing 由 encode() 外壳统一补填（成败皆填）。
 
 const char *status_name(JxlEncoderStatus st) {
     return st == JXL_ENC_SUCCESS ? "SUCCESS" : (st == JXL_ENC_ERROR ? "ERROR" : "NEED_MORE_OUTPUT");
@@ -136,60 +128,10 @@ bool known_key(std::string_view key) {
 // E9: unrecognised keys are ignored (never fatal) and recorded as a warning log
 // line. WarningKind (M0 PP-FROZEN types.h) has no "unknown parameter" member and
 // warnings must not carry encoder failures, so the log is the faithful channel.
-void warn_unknown_params(const ParamSet &s) {
-    for (const auto &[key, value] : s) {
-        (void)value;
-        if (key.rfind("__", 0) == 0) {
-            continue; // reserved keys (§3.4 convention)
-        }
-        if (!known_key(key)) {
-            log_warn("Encode", kLogFile, "unknown parameter ignored",
-                     {{"encoder", "libjxl"}, {"key", key}});
-        }
-    }
-}
+// M7-WP8/B.7（R-156）：实现收编 enc_common::warn_unknown_params_if（判据 known_key 仍本表）。
 
 // ------------------------------------------------------------------ pixels --
-struct Raster {
-    int width = 0, height = 0, channels = 0;
-    std::vector<float> px; // interleaved float32
-};
-
-bool fetch_raster(const OIIO::ImageBuf &img, Raster &out, std::string &err) {
-    if (!img.initialized()) {
-        err = "input image buffer is not initialized";
-        return false;
-    }
-    const OIIO::ImageSpec &spec = img.spec();
-    const int channels = spec.nchannels;
-    if (channels < 1 || channels > 4) {
-        err = "unsupported channel count: " + std::to_string(channels) + " (expected 1..4)";
-        return false;
-    }
-    const OIIO::ROI roi = img.roi();
-    const int w = static_cast<int>(roi.width());
-    const int h = static_cast<int>(roi.height());
-    if (w <= 0 || h <= 0) {
-        err = "empty image region";
-        return false;
-    }
-    out.width = w;
-    out.height = h;
-    out.channels = channels;
-    out.px.assign(static_cast<std::size_t>(w) * static_cast<std::size_t>(h) *
-                      static_cast<std::size_t>(channels),
-                  0.0f);
-    const OIIO::span<std::byte> bytes(reinterpret_cast<std::byte *>(out.px.data()),
-                                      out.px.size() * sizeof(float));
-    if (!img.get_pixels(roi, OIIO::TypeDesc::FLOAT, bytes)) {
-        err = img.geterror();
-        if (err.empty()) {
-            err = "ImageBuf::get_pixels failed";
-        }
-        return false;
-    }
-    return true;
-}
+// M7-WP8/B.7（R-156/165）：Raster/fetch_raster 收编 enc_common（整帧 = img.roi() 单口径）。
 
 // E6: standard rounding, no dithering, clamp to [0,1].
 //
@@ -228,13 +170,20 @@ public:
 
     EncodeResult encode(const EncodeRequest &req) override {
         // E8: no exception crosses the IEncoder boundary.
+        // R-162 统一收尾口径（M7-WP8/B.7）：成败皆填 Timing（失败路径由本外壳补填）；
+        // 错误级日志归 pipeline，本类只返回 EncodeResult。
+        const auto t0 = std::chrono::steady_clock::now();
+        EncodeResult res;
         try {
-            return encode_impl(req);
+            res = encode_impl(req);
         } catch (const std::exception &e) {
-            return encode_error(std::string("jxl: internal error: ") + e.what());
+            res = enc::encode_error(std::string("jxl: internal error: ") + e.what());
         } catch (...) {
-            return encode_error("jxl: unknown internal error");
+            res = enc::encode_error("jxl: unknown internal error");
         }
+        if (res.t.encode_ms <= 0.0)
+            enc::finish_encode(res, t0);
+        return res;
     }
 
 private:
@@ -243,15 +192,16 @@ private:
         const ParamSet &params = req.target.params;
 
         if (req.target.out_bitdepth != 8 && req.target.out_bitdepth != 16) {
-            return encode_error("jxl: out_bitdepth " + std::to_string(req.target.out_bitdepth) +
-                                " is not supported (8 or 16)");
+            return enc::encode_error("jxl: out_bitdepth " +
+                                     std::to_string(req.target.out_bitdepth) +
+                                     " is not supported (8 or 16)");
         }
-        Raster r;
+        enc::Raster r;
         std::string err;
-        if (!fetch_raster(req.img, r, err)) {
-            return encode_error("jxl: " + err);
+        if (!enc::fetch_raster(req.img, r, err)) {
+            return enc::encode_error("jxl: " + err);
         }
-        warn_unknown_params(params);
+        enc::warn_unknown_params_if(params, "libjxl", known_key);
 
         // Lossless comes from the explicit schema parameter (§3.6/M4-T13, kLosslessParamKey)
         // with the reserved key (§3.4) as the fallback; the parameter engine keeps the two in
@@ -305,8 +255,8 @@ private:
             runner.reset(
                 JxlThreadParallelRunnerCreate(nullptr, static_cast<size_t>(req.encode_threads)));
             if (!runner)
-                return encode_error("jxl: JxlThreadParallelRunnerCreate(" +
-                                    std::to_string(req.encode_threads) + ") failed");
+                return enc::encode_error("jxl: JxlThreadParallelRunnerCreate(" +
+                                         std::to_string(req.encode_threads) + ") failed");
             runner_fn = JxlThreadParallelRunner;
             runner_opaque = runner.get();
             log_info("Encode", kLogFile, "parallel runner created",
@@ -314,20 +264,20 @@ private:
         }
         JxlEncoderPtr enc(JxlEncoderCreate(nullptr));
         if (!enc) {
-            return encode_error("jxl: JxlEncoderCreate failed");
+            return enc::encode_error("jxl: JxlEncoderCreate failed");
         }
         // W1-T6：progress 已接线（见下方逐行喂入的 progress 上报）；libjxl 0.12 无编码器
         // 进度回调接口，故实际信号 = 本 TU 的逐行喂入（详见该处注释与 T6 偏差账）。
         JxlEncoderStatus st = JxlEncoderSetParallelRunner(enc.get(), runner_fn, runner_opaque);
         if (st != JXL_ENC_SUCCESS) {
-            return encode_error(std::string("jxl: JxlEncoderSetParallelRunner failed: ") +
-                                status_name(st));
+            return enc::encode_error(std::string("jxl: JxlEncoderSetParallelRunner failed: ") +
+                                     status_name(st));
         }
         // Container always on (E7: metadata boxes need BMFF).
         st = JxlEncoderUseContainer(enc.get(), JXL_TRUE);
         if (st != JXL_ENC_SUCCESS) {
-            return encode_error(std::string("jxl: JxlEncoderUseContainer failed: ") +
-                                status_name(st));
+            return enc::encode_error(std::string("jxl: JxlEncoderUseContainer failed: ") +
+                                     status_name(st));
         }
 
         // Boxes are announced before encoding starts (libjxl >= 0.11 requirement).
@@ -337,8 +287,8 @@ private:
         if (any_box) {
             st = JxlEncoderUseBoxes(enc.get());
             if (st != JXL_ENC_SUCCESS) {
-                return encode_error(std::string("jxl: JxlEncoderUseBoxes failed: ") +
-                                    status_name(st));
+                return enc::encode_error(std::string("jxl: JxlEncoderUseBoxes failed: ") +
+                                         status_name(st));
             }
         }
 
@@ -357,8 +307,8 @@ private:
         info.uses_original_profile = (lossless || modular || has_icc) ? JXL_TRUE : JXL_FALSE;
         st = JxlEncoderSetBasicInfo(enc.get(), &info);
         if (st != JXL_ENC_SUCCESS) {
-            return encode_error(std::string("jxl: JxlEncoderSetBasicInfo failed: ") +
-                                status_name(st));
+            return enc::encode_error(std::string("jxl: JxlEncoderSetBasicInfo failed: ") +
+                                     status_name(st));
         }
 
         if (alpha) {
@@ -370,8 +320,8 @@ private:
             ec.alpha_premultiplied = JXL_FALSE;
             st = JxlEncoderSetExtraChannelInfo(enc.get(), 0, &ec);
             if (st != JXL_ENC_SUCCESS) {
-                return encode_error(std::string("jxl: JxlEncoderSetExtraChannelInfo failed: ") +
-                                    status_name(st));
+                return enc::encode_error(
+                    std::string("jxl: JxlEncoderSetExtraChannelInfo failed: ") + status_name(st));
             }
         }
 
@@ -381,16 +331,16 @@ private:
                 enc.get(), reinterpret_cast<const uint8_t *>(req.meta.icc_profile.data()),
                 req.meta.icc_profile.size());
             if (st != JXL_ENC_SUCCESS) {
-                return encode_error(std::string("jxl: JxlEncoderSetICCProfile failed: ") +
-                                    status_name(st));
+                return enc::encode_error(std::string("jxl: JxlEncoderSetICCProfile failed: ") +
+                                         status_name(st));
             }
         } else {
             JxlColorEncoding color;
             JxlColorEncodingSetToSRGB(&color, gray ? JXL_TRUE : JXL_FALSE);
             st = JxlEncoderSetColorEncoding(enc.get(), &color);
             if (st != JXL_ENC_SUCCESS) {
-                return encode_error(std::string("jxl: JxlEncoderSetColorEncoding failed: ") +
-                                    status_name(st));
+                return enc::encode_error(std::string("jxl: JxlEncoderSetColorEncoding failed: ") +
+                                         status_name(st));
             }
         }
 
@@ -398,18 +348,19 @@ private:
         const int64_t level = param_int(params, "codestream_level", 10);
         st = JxlEncoderSetCodestreamLevel(enc.get(), static_cast<int>(level));
         if (st != JXL_ENC_SUCCESS) {
-            return encode_error("jxl: JxlEncoderSetCodestreamLevel(" + std::to_string(level) +
-                                ") failed: " + status_name(st));
+            return enc::encode_error("jxl: JxlEncoderSetCodestreamLevel(" + std::to_string(level) +
+                                     ") failed: " + status_name(st));
         }
 
         JxlEncoderFrameSettings *fs = JxlEncoderFrameSettingsCreate(enc.get(), nullptr);
         if (fs == nullptr) {
-            return encode_error("jxl: JxlEncoderFrameSettingsCreate failed");
+            return enc::encode_error("jxl: JxlEncoderFrameSettingsCreate failed");
         }
         if (modular && !lossless) {
             st = JxlEncoderFrameSettingsSetOption(fs, JXL_ENC_FRAME_SETTING_MODULAR, 1);
             if (st != JXL_ENC_SUCCESS) {
-                return encode_error(std::string("jxl: modular mode rejected: ") + status_name(st));
+                return enc::encode_error(std::string("jxl: modular mode rejected: ") +
+                                         status_name(st));
             }
         }
 
@@ -453,8 +404,8 @@ private:
             }
             }
             if (st != JXL_ENC_SUCCESS) {
-                return encode_error("jxl: option " + std::string(m.key) +
-                                    " rejected: " + status_name(st));
+                return enc::encode_error("jxl: option " + std::string(m.key) +
+                                         " rejected: " + status_name(st));
             }
         }
 
@@ -477,7 +428,8 @@ private:
             st = JxlEncoderFrameSettingsSetOption(fs, static_cast<JxlEncoderFrameSettingId>(id),
                                                   value);
             if (st != JXL_ENC_SUCCESS) {
-                return encode_error("jxl: color_transform=" + ct + " rejected: " + status_name(st));
+                return enc::encode_error("jxl: color_transform=" + ct +
+                                         " rejected: " + status_name(st));
             }
         }
 
@@ -489,14 +441,15 @@ private:
                 st = JxlEncoderSetFrameLossless(fs, JXL_TRUE);
             }
             if (st != JXL_ENC_SUCCESS) {
-                return encode_error(std::string("jxl: lossless mode rejected: ") + status_name(st));
+                return enc::encode_error(std::string("jxl: lossless mode rejected: ") +
+                                         status_name(st));
             }
         } else {
             const float distance = static_cast<float>(param_float(params, "distance", 1.0));
             st = JxlEncoderSetFrameDistance(fs, distance);
             if (st != JXL_ENC_SUCCESS) {
-                return encode_error("jxl: distance " + std::to_string(distance) +
-                                    " rejected: " + status_name(st));
+                return enc::encode_error("jxl: distance " + std::to_string(distance) +
+                                         " rejected: " + status_name(st));
             }
         }
 
@@ -522,7 +475,7 @@ private:
             for (int y = 0; y < r.height; ++y) {
                 // R-163：cancelled 真实消费 —— 喂入循环内提前退出（尚未写盘，无半成品）。
                 if (req.cancelled && req.cancelled())
-                    return encode_error("jxl: encode cancelled");
+                    return enc::encode_error("jxl: encode cancelled");
                 const std::size_t base = static_cast<std::size_t>(y) * stride;
                 pp::simd::quantize16(r.px.data() + base, pixels16.data() + base, stride, 65535);
                 // R-086：喂入循环进度 **0.95 封顶** —— 之后还有压缩期
@@ -538,7 +491,7 @@ private:
             for (int y = 0; y < r.height; ++y) {
                 // R-163：同上。
                 if (req.cancelled && req.cancelled())
-                    return encode_error("jxl: encode cancelled");
+                    return enc::encode_error("jxl: encode cancelled");
                 const std::size_t base = static_cast<std::size_t>(y) * stride;
                 pp::simd::quantize8(r.px.data() + base, pixels8.data() + base, stride);
                 if (progress)
@@ -556,8 +509,8 @@ private:
 
         st = JxlEncoderAddImageFrame(fs, &pf, pixel_data, pixel_bytes);
         if (st != JXL_ENC_SUCCESS) {
-            return encode_error(std::string("jxl: JxlEncoderAddImageFrame failed: ") +
-                                status_name(st));
+            return enc::encode_error(std::string("jxl: JxlEncoderAddImageFrame failed: ") +
+                                     status_name(st));
         }
 
         // E7: Exif box payload = 4-byte TIFF offset prefix + TIFF blob (M0 order).
@@ -567,8 +520,8 @@ private:
             st = JxlEncoderAddBox(enc.get(), "Exif", reinterpret_cast<const uint8_t *>(box.data()),
                                   box.size(), JXL_FALSE);
             if (st != JXL_ENC_SUCCESS) {
-                return encode_error(std::string("jxl: JxlEncoderAddBox(Exif) failed: ") +
-                                    status_name(st));
+                return enc::encode_error(std::string("jxl: JxlEncoderAddBox(Exif) failed: ") +
+                                         status_name(st));
             }
         }
         if (have_xmp) {
@@ -576,8 +529,8 @@ private:
                                   reinterpret_cast<const uint8_t *>(req.meta.xmp_rdf.data()),
                                   req.meta.xmp_rdf.size(), JXL_FALSE);
             if (st != JXL_ENC_SUCCESS) {
-                return encode_error(std::string("jxl: JxlEncoderAddBox(xml) failed: ") +
-                                    status_name(st));
+                return enc::encode_error(std::string("jxl: JxlEncoderAddBox(xml) failed: ") +
+                                         status_name(st));
             }
         }
         if (any_box) {
@@ -594,8 +547,8 @@ private:
                 break;
             }
             if (st != JXL_ENC_NEED_MORE_OUTPUT) {
-                return encode_error(std::string("jxl: JxlEncoderProcessOutput failed: ") +
-                                    status_name(st));
+                return enc::encode_error(std::string("jxl: JxlEncoderProcessOutput failed: ") +
+                                         status_name(st));
             }
             const std::size_t used = static_cast<std::size_t>(next - out.data());
             out.resize(out.size() * 2);
@@ -604,21 +557,22 @@ private:
         }
         const std::size_t total = static_cast<std::size_t>(next - out.data());
         if (total == 0) {
-            return encode_error("jxl: empty output");
+            return enc::encode_error("jxl: empty output");
         }
 
         const std::string path = req.target.out_path.string();
-        // R-003（M7-WP2 接线）：内存型产物走 fsops::write_atomic_file（原子落盘 + 失败清场）。
+        // R-003（M7-WP2 接线）：内存型产物走 enc::write_file（= write_atomic_file 唯一转发点，
+        // M7-WP8/B.7 落盘单口径；原子落盘 + 失败清场）。
         {
             std::string werr;
             const std::string_view payload(reinterpret_cast<const char *>(out.data()), total);
-            if (!write_atomic_file(req.target.out_path, payload, &werr))
-                return encode_error("jxl: failed to write output file: " + path + ": " + werr);
+            if (!enc::write_file(req.target.out_path, payload, &werr))
+                return enc::encode_error("jxl: failed to write output file: " + path + ": " + werr);
         }
 
         EncodeResult res;
         res.bytes = static_cast<uint64_t>(total);
-        res.t.encode_ms = ms_since(t0);
+        res.t.encode_ms = enc::ms_since(t0);
         res.progress_reported = static_cast<bool>(progress); // §3.1：逐行喂入已上报（见上方注释）
         return res;
     }

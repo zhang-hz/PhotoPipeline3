@@ -34,6 +34,7 @@
 #include <string_view>
 #include <vector>
 
+#include "codecs/enc_common.h" // M7-WP8/B.7(R-156/162/165): shared helpers
 #include "codecs/encoder.h"
 #include "codecs/encoder_registry.h"
 #include "codecs/encoders.h"
@@ -48,25 +49,7 @@ namespace {
 constexpr std::string_view kStage = "encode";
 constexpr std::string_view kFile = "enc_oiio.cpp";
 
-double ms_since(const std::chrono::steady_clock::time_point &t0) {
-    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-}
-
-// Log-only rendering of a parameter value (run-log fields for E9 notes).
-std::string param_value_text(const ParamValue &v) {
-    if (const bool *b = std::get_if<bool>(&v))
-        return *b ? "true" : "false";
-    if (const int64_t *i = std::get_if<int64_t>(&v))
-        return std::to_string(*i);
-    if (const double *d = std::get_if<double>(&v)) {
-        char buf[32];
-        std::snprintf(buf, sizeof(buf), "%.10g", *d);
-        return buf;
-    }
-    if (const std::string *s = std::get_if<std::string>(&v))
-        return *s;
-    return "<empty>";
-}
+// M7-WP8/B.7 (R-156): ms_since / param_value_text live in codecs/enc_common (single source).
 
 // OIIO 3.1.14 TIFF writer name table (tiffoutput.cpp:301-338); "deflate" is only an alias
 // accepted by ImageSpec::decode_compression_metadata, unknown names silently fall back to
@@ -161,13 +144,13 @@ EncodeResult OiioEncoder::encode(const EncodeRequest &req) {
     EncodeResult res;
     const auto t0 = std::chrono::steady_clock::now();
     auto finish = [&]() {
-        res.t.encode_ms = ms_since(t0);
+        res.t.encode_ms = enc::ms_since(t0);
         res.t.total_ms = res.t.encode_ms;
         return res;
     };
+    // R-162 unified end state (M7-WP8/B.7): no error-level log here -- pipeline records
+    // the single `encode failed` line (old double record removed). Timing via finish().
     auto fail = [&](const std::string &msg) {
-        log_error(kStage, kFile, "encode failed",
-                  {{"format", format_id_}, {"error", msg}, {"path", req.target.out_path.string()}});
         res.bytes = 0;
         res.error = msg;
         return finish();
@@ -328,7 +311,7 @@ EncodeResult OiioEncoder::encode(const EncodeRequest &req) {
             if (key.rfind("__", 0) == 0)
                 continue; // reserved keys (§3.4)
             if (std::find(known.begin(), known.end(), key) == known.end())
-                note_param("unrecognised parameter ignored", key, param_value_text(value));
+                note_param("unrecognised parameter ignored", key, enc::param_value_text(value));
         }
 
         // ---- pixels: float32 -> target integer type, one conversion only (R11) ----
@@ -347,10 +330,11 @@ EncodeResult OiioEncoder::encode(const EncodeRequest &req) {
             // R-163：`EncodeRequest::cancelled` 真实消费 —— 行级提前退出（写盘前无半成品）。
             if (req.cancelled && req.cancelled())
                 return fail("encode cancelled");
-            const OIIO::ROI rroi(ispec.x, ispec.x + w, ispec.y + y, ispec.y + y + 1, 0, 1, 0, nch);
-            if (!req.img.get_pixels(rroi, OIIO::TypeFloat, rowf.data()))
-                return fail("cannot read pixels (row " + std::to_string(y) +
-                            "): " + req.img.geterror());
+            // R-165（M7-WP8/B.7）：行取样统一走 enc::fetch_row（行窗 = img.roi() 的第 y 行，
+            // 与 jpegli/jxl/webp 的整帧取样同一像素面）。
+            std::string row_err;
+            if (!enc::fetch_row(req.img, y, rowf.data(), row_err))
+                return fail("cannot read pixels (row " + std::to_string(y) + "): " + row_err);
             const std::size_t n = static_cast<std::size_t>(w) * static_cast<std::size_t>(nch);
             uint8_t *dst =
                 pixels.data() + static_cast<std::size_t>(y) * n * static_cast<std::size_t>(bps);

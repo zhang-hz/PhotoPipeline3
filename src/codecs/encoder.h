@@ -67,6 +67,17 @@ struct EncodeResult {
 
 // 0.3.0 形态：encode() 单输出一次调用（一个 EncodeRequest.target = 一次调用）。
 // 线程映射义务（E3）见本文件头部 §3.1 正文抄录。
+//
+// —— M7-WP8 / B.7 · R-162 错误收尾口径（契约注释；实现面单源 = codecs/enc_common.h）——
+//   * 失败 = `EncodeResult{bytes=0, error≠空, t 已填}`（成败皆填 Timing，统一 finish 口径）；
+//     异常不得穿越 IEncoder 边界（E8 原文不变）。
+//   * **错误级日志归 pipeline**（pipeline.cpp 的 `encode failed` 行）：编码器内部不再
+//     log_error（消 heif/oiio 旧"失败双记"）；E9 参数面的 log_warn（unknown/ignored 参数）
+//     保留 —— 那是配置缺陷证据，不是编码失败。
+//   * 像素取样单口径（R-165）：整帧走 img.roi()（内存型：jpegli/jxl/webp 的 fetch_raster），
+//     逐行走 roi 行窗（流式：heif/oiio 的 fetch_row）；裁剪视图下两者取同一像素面。
+//   * 落盘单口径（R-167）：内存型产物一律 enc::write_file（= fsops::write_atomic_file）；
+//     库句柄清理用 enc::on_scope_exit。
 class IEncoder {
 public:
     virtual ~IEncoder() = default;

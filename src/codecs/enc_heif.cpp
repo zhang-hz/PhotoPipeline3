@@ -32,6 +32,7 @@
 #include <string_view>
 #include <vector>
 
+#include "codecs/enc_common.h" // M7-WP8/B.7(R-156/162/165/166): shared helpers
 #include "codecs/encoder.h"
 #include "codecs/encoder_registry.h"
 #include "codecs/encoders.h"
@@ -52,25 +53,7 @@ constexpr std::string_view kFile = "enc_heif.cpp";
 // small helpers
 // ---------------------------------------------------------------------------
 
-double ms_since(const std::chrono::steady_clock::time_point &t0) {
-    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-}
-
-// Log-only rendering of a parameter value (run-log fields for E9 notes).
-std::string param_value_text(const ParamValue &v) {
-    if (const bool *b = std::get_if<bool>(&v))
-        return *b ? "true" : "false";
-    if (const int64_t *i = std::get_if<int64_t>(&v))
-        return std::to_string(*i);
-    if (const double *d = std::get_if<double>(&v)) {
-        char buf[32];
-        std::snprintf(buf, sizeof(buf), "%.10g", *d);
-        return buf;
-    }
-    if (const std::string *s = std::get_if<std::string>(&v))
-        return *s;
-    return "<empty>";
-}
+// M7-WP8/B.7 (R-156): ms_since / param_value_text live in codecs/enc_common (single source).
 
 std::string heif_error_text(const heif_error &e) {
     std::string s = (e.message && *e.message) ? e.message : "unspecified libheif error";
@@ -329,13 +312,13 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
     EncodeResult res;
     const auto t0 = std::chrono::steady_clock::now();
     auto finish = [&]() {
-        res.t.encode_ms = ms_since(t0);
+        res.t.encode_ms = enc::ms_since(t0);
         res.t.total_ms = res.t.encode_ms;
         return res;
     };
+    // R-162 unified end state (M7-WP8/B.7): no error-level log here -- pipeline records
+    // the single `encode failed` line (old double record removed). Timing via finish().
     auto fail = [&](const std::string &msg) {
-        log_error(kStage, kFile, "encode failed",
-                  {{"format", format_id_}, {"backend", backend_id_}, {"error", msg}});
         res.bytes = 0;
         res.error = msg;
         return finish();
@@ -467,7 +450,7 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
             }
             if (!recovered)
                 note_param("parameter ignored by backend: " + rejected, p.key,
-                           param_value_text(it->second));
+                           enc::param_value_text(it->second));
         }
 
         // —— E3 线程映射（§3.1 正文，W1-T7 落地）——
@@ -505,7 +488,7 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
             if (key.rfind("__", 0) == 0)
                 continue; // reserved keys (§3.4)
             if (!is_known(key))
-                note_param("unrecognised parameter ignored", key, param_value_text(value));
+                note_param("unrecognised parameter ignored", key, enc::param_value_text(value));
         }
 
         // ---- chroma layout ----
@@ -630,8 +613,12 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
         // 灰度复制；nch == 4 取前 3 通道 = 旧口径的 it[0..2]），alpha 仍按原 stride 取。
         // 目击者 = 全语料回归基线（tools/baseline/golden.windows.log 的 heif/avif 字节面：
         // 修复后逐字节复现 T19 之前的基线），金样 20 对不含 4 通道→heif/avif 用例故未覆盖。
-        std::vector<float> cb_full(static_cast<size_t>(w) * h);
-        std::vector<float> cr_full(static_cast<size_t>(w) * h);
+        // R-166（M7-WP8/B.7）：chroma 不再整帧驻留（48MP 旧口径 cb_full+cr_full ≈ +384MB）——
+        // 按 2×2（420）/ 2×1（422）/ 1×1（444）行组滚动：本 chroma 行所需的 ≤ ch_div 行源行
+        // 即时转换进滚动缓冲（w × ch_div × 2 面），降采样累加序（dy→dx）与量化口径逐字不变
+        // ⇒ 产物字节逐位相同。行取样走 enc::fetch_row（R-165 单口径 = img.roi() 行窗）。
+        std::vector<float> cb_roll(static_cast<size_t>(w) * static_cast<size_t>(layout.ch_div));
+        std::vector<float> cr_roll(static_cast<size_t>(w) * static_cast<size_t>(layout.ch_div));
         std::vector<float> rowf(static_cast<size_t>(w) * static_cast<size_t>(nch));
         std::vector<float> rgbf;
         if (nch != 3)
@@ -640,41 +627,6 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
         std::vector<float> arow(w);
         std::vector<uint16_t> yq(w);
         std::vector<uint16_t> aq(w);
-        for (int y = 0; y < h; ++y) {
-            // R-163：`EncodeRequest::cancelled` 真实消费 —— 行级提前退出（写盘前无半成品）。
-            if (req.cancelled && req.cancelled())
-                return fail("encode cancelled");
-            const OIIO::ROI rroi(ispec.x, ispec.x + w, ispec.y + y, ispec.y + y + 1, 0, 1, 0, nch);
-            if (!req.img.get_pixels(rroi, OIIO::TypeDesc::FLOAT, rowf.data()))
-                return fail("cannot read pixels (row " + std::to_string(y) +
-                            "): " + req.img.geterror());
-            const float *src = rowf.data();
-            if (nch != 3) { // 1/2/4 通道 → 3 通道（灰度复制 / 取 R,G,B；T20 修复 nch==4 错位）
-                pp::simd::interleave(rowf.data(), nch, rgbf.data(), 3, static_cast<size_t>(w));
-                src = rgbf.data();
-            }
-            for (int x = 0; x < w; ++x) {
-                const float r = src[static_cast<size_t>(x) * 3 + 0];
-                const float g = src[static_cast<size_t>(x) * 3 + 1];
-                const float b = src[static_cast<size_t>(x) * 3 + 2];
-                const size_t idx = static_cast<size_t>(y) * w + x;
-                yrow[static_cast<size_t>(x)] = 0.299f * r + 0.587f * g + 0.114f * b;
-                cb_full[idx] = -0.168736f * r - 0.331264f * g + 0.5f * b + 0.5f;
-                cr_full[idx] = 0.5f * r - 0.418688f * g - 0.081312f * b + 0.5f;
-                if (has_alpha)
-                    arow[static_cast<size_t>(x)] =
-                        rowf[static_cast<size_t>(x) * static_cast<size_t>(nch) +
-                             static_cast<size_t>(nch - 1)];
-            }
-            pp::simd::quantize16(yrow.data(), yq.data(), static_cast<size_t>(w), maxv);
-            for (int x = 0; x < w; ++x)
-                store_sample(planes[0].base, planes[0].stride, bitdepth, x, y, yq[x]);
-            if (has_alpha) {
-                pp::simd::quantize16(arow.data(), aq.data(), static_cast<size_t>(w), maxv);
-                for (int x = 0; x < w; ++x)
-                    store_sample(planes[3].base, planes[3].stride, bitdepth, x, y, aq[x]);
-            }
-        }
         // box-downsample the chroma planes (2x2 for 420, 2x1 for 422, none for 444)
         // R-089（M7-WP2）：chroma 平面量化统一走 **pp::simd::quantize16**（与 Y/alpha 同一
         // 舍入口径），逐行量化替代逐样本 `quantize(lround)` —— 平面间不再有 1 LSB 口径差。
@@ -683,20 +635,58 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
         std::vector<uint16_t> cbq(static_cast<size_t>(cw));
         std::vector<uint16_t> crq(static_cast<size_t>(cw));
         for (int cy = 0; cy < ch; cy++) {
+            // 本 chroma 行组的源行（y 递增 = 与旧逐行序一致）：Y/alpha 平面即写，chroma 值
+            // 进滚动缓冲。浮点式子与旧逐字相同。
+            int rows_used = 0;
+            for (int dy = 0; dy < layout.ch_div; dy++) {
+                const int y = cy * layout.ch_div + dy;
+                if (y >= h)
+                    break;
+                // R-163：`EncodeRequest::cancelled` 真实消费 —— 行级提前退出（写盘前无半成品）。
+                if (req.cancelled && req.cancelled())
+                    return fail("encode cancelled");
+                std::string row_err;
+                if (!enc::fetch_row(req.img, y, rowf.data(), row_err))
+                    return fail("cannot read pixels (row " + std::to_string(y) + "): " + row_err);
+                const float *src = rowf.data();
+                if (nch != 3) { // 1/2/4 通道 → 3 通道（灰度复制 / 取 R,G,B；T20 修复 nch==4 错位）
+                    pp::simd::interleave(rowf.data(), nch, rgbf.data(), 3, static_cast<size_t>(w));
+                    src = rgbf.data();
+                }
+                for (int x = 0; x < w; ++x) {
+                    const float r = src[static_cast<size_t>(x) * 3 + 0];
+                    const float g = src[static_cast<size_t>(x) * 3 + 1];
+                    const float b = src[static_cast<size_t>(x) * 3 + 2];
+                    const size_t idx = static_cast<size_t>(dy) * w + x;
+                    yrow[static_cast<size_t>(x)] = 0.299f * r + 0.587f * g + 0.114f * b;
+                    cb_roll[idx] = -0.168736f * r - 0.331264f * g + 0.5f * b + 0.5f;
+                    cr_roll[idx] = 0.5f * r - 0.418688f * g - 0.081312f * b + 0.5f;
+                    if (has_alpha)
+                        arow[static_cast<size_t>(x)] =
+                            rowf[static_cast<size_t>(x) * static_cast<size_t>(nch) +
+                                 static_cast<size_t>(nch - 1)];
+                }
+                pp::simd::quantize16(yrow.data(), yq.data(), static_cast<size_t>(w), maxv);
+                for (int x = 0; x < w; ++x)
+                    store_sample(planes[0].base, planes[0].stride, bitdepth, x, y, yq[x]);
+                if (has_alpha) {
+                    pp::simd::quantize16(arow.data(), aq.data(), static_cast<size_t>(w), maxv);
+                    for (int x = 0; x < w; ++x)
+                        store_sample(planes[3].base, planes[3].stride, bitdepth, x, y, aq[x]);
+                }
+                rows_used = dy + 1;
+            }
             for (int cx = 0; cx < cw; cx++) {
                 float scb = 0.0f, scr = 0.0f;
                 int n = 0;
-                for (int dy = 0; dy < layout.ch_div; dy++) {
-                    const int sy = cy * layout.ch_div + dy;
-                    if (sy >= h)
-                        break;
+                for (int dy = 0; dy < rows_used; dy++) {
                     for (int dx = 0; dx < layout.cw_div; dx++) {
                         const int sx = cx * layout.cw_div + dx;
                         if (sx >= w)
                             break;
-                        const size_t idx = static_cast<size_t>(sy) * w + sx;
-                        scb += cb_full[idx];
-                        scr += cr_full[idx];
+                        const size_t idx = static_cast<size_t>(dy) * w + sx;
+                        scb += cb_roll[idx];
+                        scr += cr_roll[idx];
                         n++;
                     }
                 }

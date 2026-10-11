@@ -91,4 +91,12 @@ void set_qt_version_string(std::string version);
 // 调用点：main.cpp 在 load_settings/参数解析之后、log_init 之前（GUI 与 --dev/--ui-smoke 共用）。
 LogLevel level_from_env_or(LogLevel fallback);
 
+// —— M7-WP8 / R-157 加性追加（**末尾**；裁定登记 build/m7-wp8/handoff.md）——
+// 设置/CLI 文本档（5 档：trace|debug|info|warn|error，大小写敏感小写）→ LogLevel 单源解析。
+// 此前 main.cpp 同文件两份逐字重复 + UI 侧第三份（R-157）；本函数为唯一判据：
+//   * 5 档之外（含 "critical"/空串/任意其它文本）→ 返回 false（调用方回退 Info）；
+//   * 不打日志、无副作用（level_from_env_or 的 stderr 提示语义不在此函数内）。
+// 调用点：--dev/--bench 的 --log-level、GUI settings.log_level（UI 侧替换归 WP9）。
+bool log_level_from_text(std::string_view s, LogLevel &out);
+
 } // namespace pp

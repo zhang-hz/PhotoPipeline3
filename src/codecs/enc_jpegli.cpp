@@ -33,9 +33,9 @@
 #include <utility>
 #include <vector>
 
+#include "codecs/enc_common.h" // M7-WP8/B.7（R-156/162/165）：族公共面单源
 #include "codecs/encoder.h"
 #include "codecs/encoder_registry.h"
-#include "core/fsops.h" // R-003：write_atomic_file（原子落盘）
 #include "core/logger.h"
 #include "core/params.h"
 #include "core/simd/simd.h" // M4-W5-T19：交织 + 量化热路径（§11.2）
@@ -57,16 +57,9 @@ constexpr std::string_view kKnownKeys[] = {
 };
 
 // E8 (revised): a failed encode yields bytes == 0 plus an English error string.
-EncodeResult encode_error(std::string msg) {
-    EncodeResult res;
-    res.bytes = 0;
-    res.error = std::move(msg);
-    return res;
-}
-
-double ms_since(std::chrono::steady_clock::time_point t0) {
-    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-}
+// M7-WP8/B.7（R-156/162）：encode_error / ms_since 收编进 codecs/enc_common（单源）；
+// 错误收尾口径 = 失败不落 error 级日志（归 pipeline 的 `encode failed` 行，消双记），
+// Timing 由 encode() 外壳统一补填（成败皆填）。
 
 // --------------------------------------------------------------- parameters --
 // E9: every value is read through param_*; a missing key falls back to the
@@ -115,67 +108,10 @@ JpegliParams read_params(const ParamSet &s) {
 // WarningKind (M0 PP-FROZEN types.h) carries per-file processing facts and, per the M1 ruling,
 // deliberately has no "configuration defect" member. This log line stays as the encoder-side
 // evidence; see api-deltas in the M2-T4 report.
-void warn_unknown_params(const ParamSet &s) {
-    for (const auto &[key, value] : s) {
-        (void)value;
-        if (key.rfind("__", 0) == 0) {
-            continue; // reserved keys (§3.4 convention)
-        }
-        bool known = false;
-        for (std::string_view k : kKnownKeys) {
-            if (key == k) {
-                known = true;
-                break;
-            }
-        }
-        if (!known) {
-            log_warn("Encode", kLogFile, "unknown parameter ignored",
-                     {{"encoder", "jpegli"}, {"key", key}});
-        }
-    }
-}
+// M7-WP8/B.7（R-156）：实现收编 enc_common::warn_unknown_params（键表仍由本编码器持有）。
 
 // ------------------------------------------------------------------ pixels --
-struct Raster {
-    int width = 0, height = 0, channels = 0;
-    std::vector<float> px; // interleaved float32
-};
-
-bool fetch_raster(const OIIO::ImageBuf &img, Raster &out, std::string &err) {
-    if (!img.initialized()) {
-        err = "input image buffer is not initialized";
-        return false;
-    }
-    const OIIO::ImageSpec &spec = img.spec();
-    const int channels = spec.nchannels;
-    if (channels < 1 || channels > 4) {
-        err = "unsupported channel count: " + std::to_string(channels) + " (expected 1..4)";
-        return false;
-    }
-    const OIIO::ROI roi = img.roi();
-    const int w = static_cast<int>(roi.width());
-    const int h = static_cast<int>(roi.height());
-    if (w <= 0 || h <= 0) {
-        err = "empty image region";
-        return false;
-    }
-    out.width = w;
-    out.height = h;
-    out.channels = channels;
-    out.px.assign(static_cast<std::size_t>(w) * static_cast<std::size_t>(h) *
-                      static_cast<std::size_t>(channels),
-                  0.0f);
-    const OIIO::span<std::byte> bytes(reinterpret_cast<std::byte *>(out.px.data()),
-                                      out.px.size() * sizeof(float));
-    if (!img.get_pixels(roi, OIIO::TypeDesc::FLOAT, bytes)) {
-        err = img.geterror();
-        if (err.empty()) {
-            err = "ImageBuf::get_pixels failed";
-        }
-        return false;
-    }
-    return true;
-}
+// M7-WP8/B.7（R-156/165）：Raster/fetch_raster 收编 enc_common（整帧 = img.roi() 单口径）。
 
 // E6: standard rounding, no dithering, clamp to [0,1].
 //
@@ -218,13 +154,20 @@ public:
 
     EncodeResult encode(const EncodeRequest &req) override {
         // E8: no exception crosses the IEncoder boundary.
+        // R-162 统一收尾口径（M7-WP8/B.7）：成败皆填 Timing（失败路径由本外壳补填）；
+        // 错误级日志归 pipeline（消 heif/oiio 旧双记口径），本类只返回 EncodeResult。
+        const auto t0 = std::chrono::steady_clock::now();
+        EncodeResult res;
         try {
-            return encode_impl(req);
+            res = encode_impl(req);
         } catch (const std::exception &e) {
-            return encode_error(std::string("jpegli: internal error: ") + e.what());
+            res = enc::encode_error(std::string("jpegli: internal error: ") + e.what());
         } catch (...) {
-            return encode_error("jpegli: unknown internal error");
+            res = enc::encode_error("jpegli: unknown internal error");
         }
+        if (res.t.encode_ms <= 0.0)
+            enc::finish_encode(res, t0);
+        return res;
     }
 
 private:
@@ -245,21 +188,22 @@ private:
                 {{"encoder", "jpegli"}, {"encode_threads", std::to_string(req.encode_threads)}});
         }
         if (req.target.out_bitdepth != 8) {
-            return encode_error("jpegli: out_bitdepth " + std::to_string(req.target.out_bitdepth) +
-                                " is not supported (jpeg is 8-bit only)");
+            return enc::encode_error("jpegli: out_bitdepth " +
+                                     std::to_string(req.target.out_bitdepth) +
+                                     " is not supported (jpeg is 8-bit only)");
         }
         const JpegliParams p = read_params(req.target.params);
         // §3.8: jpegli does not implement arithmetic coding (JPEGLI_ERROR).
         if (p.arith_code) {
-            return encode_error("arith_code is not supported by jpegli");
+            return enc::encode_error("arith_code is not supported by jpegli");
         }
 
-        Raster r;
+        enc::Raster r;
         std::string err;
-        if (!fetch_raster(req.img, r, err)) {
-            return encode_error("jpegli: " + err);
+        if (!enc::fetch_raster(req.img, r, err)) {
+            return enc::encode_error("jpegli: " + err);
         }
-        warn_unknown_params(req.target.params);
+        enc::warn_unknown_params(req.target.params, "jpegli", kKnownKeys);
 
         // JPEG has no alpha channel: the caller already flattened 4/2-channel
         // input (E4, §5.5). 1/2-channel input is encoded as grayscale.
@@ -304,7 +248,7 @@ private:
             }
             std::free(mem_dest->p); // R-087：兜底释放（旧实现此处泄漏）
             delete mem_dest;
-            return encode_error(std::string("jpegli: ") + jerr.msg);
+            return enc::encode_error(std::string("jpegli: ") + jerr.msg);
         }
 
         jpegli_create_compress(&cinfo);
@@ -378,7 +322,7 @@ private:
                 jpegli_destroy_compress(&cinfo);
                 std::free(mem_dest->p);
                 delete mem_dest;
-                return encode_error("jpegli: encode cancelled");
+                return enc::encode_error("jpegli: encode cancelled");
             }
             const float *src = r.px.data() + static_cast<std::size_t>(y) *
                                                  static_cast<std::size_t>(r.width) *
@@ -395,7 +339,7 @@ private:
                 jpegli_destroy_compress(&cinfo);
                 std::free(mem_dest->p);
                 delete mem_dest;
-                return encode_error("jpegli: short scanline write");
+                return enc::encode_error("jpegli: short scanline write");
             }
             // W1-T6：真实行级进度（§7.2 encode 段的 real 面；ProgressMux 负责节流/汇流）。
             // R-086：**0.95 封顶** —— 喂入循环之外还有压缩期（渐进 JPEG 的实际压缩在
@@ -421,26 +365,27 @@ private:
             if (mem != nullptr) {
                 std::free(mem);
             }
-            return encode_error("jpegli: empty output");
+            return enc::encode_error("jpegli: empty output");
         }
 
         const std::string path = req.target.out_path.string();
-        // R-003（M7-WP2 接线）：内存型产物走 fsops::write_atomic_file —— 字节数校验 +
-        // 同目录 tmp→rename 原子落盘、失败清场；不再直写最终路径（半成品驻留 / Overwrite
-        // 先截断旧好文件两坑根治）。
+        // R-003（M7-WP2 接线）：内存型产物走 enc::write_file（= fsops::write_atomic_file 的
+        // 唯一转发点，M7-WP8/B.7 落盘单口径）—— 字节数校验 + 同目录 tmp→rename 原子落盘、
+        // 失败清场；不再直写最终路径（半成品驻留 / Overwrite 先截断旧好文件两坑根治）。
         {
             std::string werr;
             const std::string_view payload(reinterpret_cast<const char *>(mem),
                                            static_cast<std::size_t>(mem_size));
-            const bool ok = write_atomic_file(req.target.out_path, payload, &werr);
+            const bool ok = enc::write_file(req.target.out_path, payload, &werr);
             std::free(mem);
             if (!ok)
-                return encode_error("jpegli: failed to write output file: " + path + ": " + werr);
+                return enc::encode_error("jpegli: failed to write output file: " + path + ": " +
+                                         werr);
         }
 
         EncodeResult res;
         res.bytes = static_cast<uint64_t>(mem_size);
-        res.t.encode_ms = ms_since(t0);
+        res.t.encode_ms = enc::ms_since(t0);
         res.progress_reported =
             static_cast<bool>(progress); // §3.1：真实行级（回调存在即已逐行上报）
         return res;

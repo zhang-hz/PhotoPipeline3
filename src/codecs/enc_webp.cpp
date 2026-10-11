@@ -31,9 +31,9 @@
 #include <utility>
 #include <vector>
 
+#include "codecs/enc_common.h" // M7-WP8/B.7(R-156/162/165/167): shared helpers
 #include "codecs/encoder.h"
 #include "codecs/encoder_registry.h"
-#include "core/fsops.h" // R-003：write_atomic_file（原子落盘）
 #include "core/logger.h"
 #include "core/params.h"
 #include "core/simd/simd.h" // M4-W5-T19：交织 + 量化热路径（§11.2）
@@ -78,81 +78,17 @@ constexpr std::string_view kKnownKeys[] = {
 };
 
 // E8 (revised): a failed encode yields bytes == 0 plus an English error string.
-EncodeResult encode_error(std::string msg) {
-    EncodeResult res;
-    res.bytes = 0;
-    res.error = std::move(msg);
-    return res;
-}
-
-double ms_since(std::chrono::steady_clock::time_point t0) {
-    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-}
+// M7-WP8/B.7 (R-156/162): encode_error / ms_since live in codecs/enc_common (single source);
+// error-level logging belongs to pipeline (no double record); Timing is filled by the
+// encode() wrapper for both success and failure.
 
 // E9: unrecognised keys are ignored (never fatal) and recorded as a warning log
 // line. WarningKind (M0 PP-FROZEN types.h) has no "unknown parameter" member and
 // warnings must not carry encoder failures, so the log is the faithful channel.
-void warn_unknown_params(const ParamSet &s) {
-    for (const auto &[key, value] : s) {
-        (void)value;
-        if (key.rfind("__", 0) == 0) {
-            continue; // reserved keys (§3.4 convention)
-        }
-        bool known = false;
-        for (std::string_view k : kKnownKeys) {
-            if (key == k) {
-                known = true;
-                break;
-            }
-        }
-        if (!known) {
-            log_warn("Encode", kLogFile, "unknown parameter ignored",
-                     {{"encoder", "libwebp"}, {"key", key}});
-        }
-    }
-}
+// M7-WP8/B.7 (R-156): implementation moved to enc_common::warn_unknown_params.
 
 // ------------------------------------------------------------------ pixels --
-struct Raster {
-    int width = 0, height = 0, channels = 0;
-    std::vector<float> px; // interleaved float32
-};
-
-bool fetch_raster(const OIIO::ImageBuf &img, Raster &out, std::string &err) {
-    if (!img.initialized()) {
-        err = "input image buffer is not initialized";
-        return false;
-    }
-    const OIIO::ImageSpec &spec = img.spec();
-    const int channels = spec.nchannels;
-    if (channels < 1 || channels > 4) {
-        err = "unsupported channel count: " + std::to_string(channels) + " (expected 1..4)";
-        return false;
-    }
-    const OIIO::ROI roi = img.roi();
-    const int w = static_cast<int>(roi.width());
-    const int h = static_cast<int>(roi.height());
-    if (w <= 0 || h <= 0) {
-        err = "empty image region";
-        return false;
-    }
-    out.width = w;
-    out.height = h;
-    out.channels = channels;
-    out.px.assign(static_cast<std::size_t>(w) * static_cast<std::size_t>(h) *
-                      static_cast<std::size_t>(channels),
-                  0.0f);
-    const OIIO::span<std::byte> bytes(reinterpret_cast<std::byte *>(out.px.data()),
-                                      out.px.size() * sizeof(float));
-    if (!img.get_pixels(roi, OIIO::TypeDesc::FLOAT, bytes)) {
-        err = img.geterror();
-        if (err.empty()) {
-            err = "ImageBuf::get_pixels failed";
-        }
-        return false;
-    }
-    return true;
-}
+// M7-WP8/B.7 (R-156/165): Raster/fetch_raster live in enc_common (img.roi() basis).
 
 // E6: standard rounding, no dithering, clamp to [0,1].
 //
@@ -175,13 +111,20 @@ public:
 
     EncodeResult encode(const EncodeRequest &req) override {
         // E8: no exception crosses the IEncoder boundary.
+        // R-162 unified end state (M7-WP8/B.7): Timing filled for success and failure alike;
+        // error-level logging belongs to pipeline.
+        const auto t0 = std::chrono::steady_clock::now();
+        EncodeResult res;
         try {
-            return encode_impl(req);
+            res = encode_impl(req);
         } catch (const std::exception &e) {
-            return encode_error(std::string("webp: internal error: ") + e.what());
+            res = enc::encode_error(std::string("webp: internal error: ") + e.what());
         } catch (...) {
-            return encode_error("webp: unknown internal error");
+            res = enc::encode_error("webp: unknown internal error");
         }
+        if (res.t.encode_ms <= 0.0)
+            enc::finish_encode(res, t0);
+        return res;
     }
 
 private:
@@ -190,15 +133,16 @@ private:
         const ParamSet &params = req.target.params;
 
         if (req.target.out_bitdepth != 8) {
-            return encode_error("webp: out_bitdepth " + std::to_string(req.target.out_bitdepth) +
-                                " is not supported (webp is 8-bit only)");
+            return enc::encode_error("webp: out_bitdepth " +
+                                     std::to_string(req.target.out_bitdepth) +
+                                     " is not supported (webp is 8-bit only)");
         }
-        Raster r;
+        enc::Raster r;
         std::string err;
-        if (!fetch_raster(req.img, r, err)) {
-            return encode_error("webp: " + err);
+        if (!enc::fetch_raster(req.img, r, err)) {
+            return enc::encode_error("webp: " + err);
         }
-        warn_unknown_params(params);
+        enc::warn_unknown_params(params, "libwebp", kKnownKeys);
 
         // Tech selection (T6b): an explicit EncodeRequest::tech_id wins; empty or
         // unknown falls back to the explicit schema parameter (§3.6/M4-T13,
@@ -213,18 +157,18 @@ private:
 
         WebPConfig cfg;
         if (!WebPConfigInit(&cfg)) {
-            return encode_error("webp: WebPConfigInit failed (encoder ABI mismatch)");
+            return enc::encode_error("webp: WebPConfigInit failed (encoder ABI mismatch)");
         }
         if (!lossless) {
             // Content preset first: WebPConfigPreset rewrites the lossy defaults,
             // every explicit parameter below wins over it (§3.8 table).
             const int64_t preset = param_int(params, "preset", 2);
             if (preset < 0 || preset > 5) {
-                return encode_error("webp: invalid preset value " + std::to_string(preset));
+                return enc::encode_error("webp: invalid preset value " + std::to_string(preset));
             }
             const float quality = static_cast<float>(param_float(params, "quality", 90.0));
             if (!WebPConfigPreset(&cfg, static_cast<WebPPreset>(preset), quality)) {
-                return encode_error("webp: WebPConfigPreset failed");
+                return enc::encode_error("webp: WebPConfigPreset failed");
             }
             cfg.quality = quality;
             cfg.method = static_cast<int>(param_int(params, "method", 4));
@@ -269,8 +213,9 @@ private:
         (void)req.progress;
 
         if (!WebPValidateConfig(&cfg)) {
-            return encode_error(std::string("webp: WebPValidateConfig rejected the parameter set") +
-                                (lossless ? " (lossless)" : " (lossy)"));
+            return enc::encode_error(
+                std::string("webp: WebPValidateConfig rejected the parameter set") +
+                (lossless ? " (lossless)" : " (lossy)"));
         }
 
         // E4: WebP has no grayscale mode. 1/2-channel input is widened by channel
@@ -287,7 +232,7 @@ private:
         for (int y = 0; y < r.height; ++y) {
             // R-163：`EncodeRequest::cancelled` 真实消费 —— 行级提前退出（写盘前无半成品）。
             if (req.cancelled && req.cancelled())
-                return encode_error("webp: encode cancelled");
+                return enc::encode_error("webp: encode cancelled");
             const float *src_row = r.px.data() + static_cast<std::size_t>(y) * r.width *
                                                      static_cast<std::size_t>(r.channels);
             uint8_t *dst_row = buf.data() + static_cast<std::size_t>(y) * r.width *
@@ -301,8 +246,10 @@ private:
 
         WebPPicture pic;
         if (!WebPPictureInit(&pic)) {
-            return encode_error("webp: WebPPictureInit failed (encoder ABI mismatch)");
+            return enc::encode_error("webp: WebPPictureInit failed (encoder ABI mismatch)");
         }
+        // R-167 (M7-WP8/B.7): RAII cleanup of library handles (old manual 5 exits removed).
+        auto pic_guard = enc::on_scope_exit([&pic] { WebPPictureFree(&pic); });
         pic.use_argb = 1;
         pic.width = r.width;
         pic.height = r.height;
@@ -311,28 +258,24 @@ private:
                                                  : WebPPictureImportRGB(&pic, buf.data(), stride);
         if (!imported) {
             const int code = pic.error_code;
-            WebPPictureFree(&pic);
-            return encode_error("webp: WebPPictureImport" +
-                                std::string(out_channels == 4 ? "RGBA" : "RGB") +
-                                " failed (error_code " + std::to_string(code) + ")");
+            return enc::encode_error("webp: WebPPictureImport" +
+                                     std::string(out_channels == 4 ? "RGBA" : "RGB") +
+                                     " failed (error_code " + std::to_string(code) + ")");
         }
 
         WebPMemoryWriter writer;
         WebPMemoryWriterInit(&writer);
+        auto writer_guard = enc::on_scope_exit([&writer] { WebPMemoryWriterClear(&writer); });
         pic.writer = WebPMemoryWrite;
         pic.custom_ptr = &writer;
 
         if (!WebPEncode(&cfg, &pic)) {
             const int code = pic.error_code;
-            WebPPictureFree(&pic);
-            WebPMemoryWriterClear(&writer);
-            return encode_error("webp: WebPEncode failed (error_code " + std::to_string(code) +
-                                ")");
+            return enc::encode_error("webp: WebPEncode failed (error_code " + std::to_string(code) +
+                                     ")");
         }
-        WebPPictureFree(&pic);
         if (writer.mem == nullptr || writer.size == 0) {
-            WebPMemoryWriterClear(&writer);
-            return encode_error("webp: empty output");
+            return enc::encode_error("webp: empty output");
         }
 
         // E5: ICC profile as a RIFF "ICCP" chunk (WebPMux rebuilds VP8X if needed).
@@ -345,8 +288,7 @@ private:
             encoded.size = writer.size;
             WebPMux *mux = WebPMuxCreate(&encoded, 1);
             if (mux == nullptr) {
-                WebPMemoryWriterClear(&writer);
-                return encode_error("webp: WebPMuxCreate failed");
+                return enc::encode_error("webp: WebPMuxCreate failed");
             }
             WebPData icc;
             icc.bytes = reinterpret_cast<const uint8_t *>(req.meta.icc_profile.data());
@@ -354,9 +296,8 @@ private:
             WebPMuxError me = WebPMuxSetChunk(mux, "ICCP", &icc, 1);
             if (me != WEBP_MUX_OK) {
                 WebPMuxDelete(mux);
-                WebPMemoryWriterClear(&writer);
-                return encode_error("webp: WebPMuxSetChunk(ICCP) failed (error " +
-                                    std::to_string(static_cast<int>(me)) + ")");
+                return enc::encode_error("webp: WebPMuxSetChunk(ICCP) failed (error " +
+                                         std::to_string(static_cast<int>(me)) + ")");
             }
             WebPData assembled;
             WebPDataInit(&assembled);
@@ -366,9 +307,8 @@ private:
                     WebPDataClear(&assembled);
                 }
                 WebPMuxDelete(mux);
-                WebPMemoryWriterClear(&writer);
-                return encode_error("webp: WebPMuxAssemble failed (error " +
-                                    std::to_string(static_cast<int>(me)) + ")");
+                return enc::encode_error("webp: WebPMuxAssemble failed (error " +
+                                         std::to_string(static_cast<int>(me)) + ")");
             }
             muxed.assign(assembled.bytes, assembled.bytes + assembled.size);
             WebPDataClear(&assembled);
@@ -379,22 +319,22 @@ private:
 
         const std::string path = req.target.out_path.string();
         if (req.cancelled && req.cancelled()) {
-            WebPMemoryWriterClear(&writer);
-            return encode_error("webp: encode cancelled");
+            return enc::encode_error("webp: encode cancelled");
         }
-        // R-003（M7-WP2 接线）：内存型产物走 fsops::write_atomic_file（原子落盘 + 失败清场）。
+        // R-003（M7-WP2 接线）：内存型产物走 enc::write_file（= write_atomic_file 唯一转发点，
+        // M7-WP8/B.7 落盘单口径；原子落盘 + 失败清场）。
         {
             std::string werr;
             const std::string_view payload(reinterpret_cast<const char *>(out_bytes), out_size);
-            const bool wok = write_atomic_file(req.target.out_path, payload, &werr);
-            WebPMemoryWriterClear(&writer);
+            const bool wok = enc::write_file(req.target.out_path, payload, &werr);
             if (!wok)
-                return encode_error("webp: failed to write output file: " + path + ": " + werr);
+                return enc::encode_error("webp: failed to write output file: " + path + ": " +
+                                         werr);
         }
 
         EncodeResult res;
         res.bytes = static_cast<uint64_t>(out_size);
-        res.t.encode_ms = ms_since(t0);
+        res.t.encode_ms = enc::ms_since(t0);
         return res;
     }
 };

@@ -619,6 +619,32 @@ void set_qt_version_string(std::string version) {
     g_qt_version = std::move(version);
 }
 
+// M7-WP8 / R-157：设置/CLI 文本档（5 档）单源解析。语义与旧 main.cpp 两份逐字重复的
+// log_level_from_text/parse_log_level 完全一致（大小写敏感小写、"critical" 判负、无副作用）。
+bool log_level_from_text(std::string_view s, LogLevel &out) {
+    if (s == "trace") {
+        out = LogLevel::Trace;
+        return true;
+    }
+    if (s == "debug") {
+        out = LogLevel::Debug;
+        return true;
+    }
+    if (s == "info") {
+        out = LogLevel::Info;
+        return true;
+    }
+    if (s == "warn") {
+        out = LogLevel::Warn;
+        return true;
+    }
+    if (s == "error") {
+        out = LogLevel::Error;
+        return true;
+    }
+    return false;
+}
+
 std::vector<std::pair<std::string, std::string>> library_versions() {
     std::vector<std::pair<std::string, std::string>> out;
     auto add = [&out](std::string key, std::string value) {

@@ -3,7 +3,8 @@
 // M4-W1-T7: E3 adaptive thread budget + staggered start (docs/v0.3.0-design.md §8).
 //
 // Frozen semantics:
-//   * workers = cfg.workers or the physical core count;
+//   * workers = cfg.workers, else thread_budget, else hardware_concurrency (logical cores;
+//     R-283 fix: the old "physical core count" wording never matched the implementation);
 //   * files are taken in input order (atomic ticket = G14);
 //   * per file the sequence is probe → budget.acquire(2×frame) → run → release, with the
 //     cancel flag checked at the acquire point; probe failures are reported as a terminal
@@ -109,13 +110,11 @@ std::vector<std::string> desired_keys(const FileEntry &fe, const RunConfig &cfg)
     keys.reserve(cfg.outputs.size());
     for (const OutputFormatSpec &spec : cfg.outputs) {
         const FormatDef *fmt = find_format(spec.format_id);
-        const std::string ext =
-            cfg.metadata_only ? fe.src.extension().string() : (fmt ? fmt->ext : std::string());
-        PathCtx ctx;
-        ctx.format_dir = fmt ? fmt->id : spec.format_id;
-        ctx.rel_dir = relative_dir(fe.src, fe.base_dir);
-        ctx.stem = fe.src.stem().string();
-        ctx.ext = ext;
+        // R-175（M7-WP8/B.8）：PathCtx 组装收口 path_ctx_for（与 pipeline plan_targets 同源）；
+        // fmt 缺失时回退 spec.format_id（旧行为：format_dir = fmt ? fmt->id : spec.format_id）。
+        PathCtx ctx = path_ctx_for(fe, cfg, fmt);
+        if (!fmt)
+            ctx.format_dir = spec.format_id;
         const std::filesystem::path desired =
             render_output_path(cfg.output_template, ctx, cfg.out_root);
         if (!desired.empty())
@@ -210,12 +209,14 @@ struct Scheduler::Impl {
     }
 
     // 阶段/进度事件转发（W1-T6）：整事件转发（`progress` 随行），index 由调度器回填，
-    // result 恒空（终态由 finish() 携带）。进度高水位在此更新（monotonic 契约，§7.3）。
+    // result 恒空（终态由 finish() 携带）。
+    // R-288（M7-WP8 收敛）：进度单调化**单层**在 ProgressMux::overall_high（含 snapshot）；
+    // 本层只缓存"该槽位最后进度"供终态携带，不再做第二套高水位比较。
     void emit_event(std::size_t i, const FileEvent &e) {
         EventCb c;
         {
             std::lock_guard<std::mutex> lk(mu);
-            if (i < last_progress.size() && e.progress.overall_frac > last_progress[i].overall_frac)
+            if (i < last_progress.size())
                 last_progress[i] = e.progress;
             c = cb;
         }
@@ -259,6 +260,31 @@ struct Scheduler::Impl {
             c(FileEvent{i, state, &results[i], pi});
     }
 
+    // R-174（M7-WP8/B.8）：取消出口**单点** —— 四段复制的 Cancelled 终态构造合一。
+    // 持键路径（闸等待中被取消）先在独立临界区放键再 notify —— 与主路径同一"放键即通知"
+    // 口径；死锁序不变量（勿动顺序）：
+    //   INVARIANT(D1)：desired-key 串行化 **先于** 并发闸登记 —— worker 绝不"持闸等键"
+    //   （W=1 且两文件同键时会互等）；持键等闸不会成环（持键者必在闸内或即将入闸）。
+    //   放闸/放键各自在同一临界区内完成，其后 notify_all。
+    void cancel_exit(std::size_t i, FileEntry &fe, const std::vector<std::string> *held_keys) {
+        if (held_keys != nullptr) {
+            {
+                std::lock_guard<std::mutex> lk2(mu);
+                for (const std::string &k : *held_keys) {
+                    const auto it = inflight.find(k);
+                    if (it != inflight.end())
+                        inflight.erase(it);
+                }
+            }
+            cv.notify_all();
+        }
+        FileOutcome o;
+        o.verdict = FileOutcome::Verdict::Cancelled;
+        o.file.src = fe.src;
+        o.file.cancelled = true;
+        finish(i, std::move(o));
+    }
+
     void worker();
 };
 
@@ -270,11 +296,7 @@ void Scheduler::Impl::worker() {
 
         FileEntry &fe = files[i];
         if (cancelled.load()) {
-            FileOutcome o;
-            o.verdict = FileOutcome::Verdict::Cancelled;
-            o.file.src = fe.src;
-            o.file.cancelled = true;
-            finish(i, std::move(o));
+            cancel_exit(i, fe, nullptr); // R-174：取消出口单点
             continue;
         }
 
@@ -297,12 +319,8 @@ void Scheduler::Impl::worker() {
             if (cancelled.load()) {
                 lk.unlock();
                 // §8.3：交错等待中被取消 → 立即出 Cancelled 终态事件，**不进管线**（无 probe/
-                // decode/encode；也不占用预算与并发闸）。
-                FileOutcome o;
-                o.verdict = FileOutcome::Verdict::Cancelled;
-                o.file.src = fe.src;
-                o.file.cancelled = true;
-                finish(i, std::move(o));
+                // decode/encode；也不占用预算与并发闸）。R-174：出口单点。
+                cancel_exit(i, fe, nullptr);
                 continue;
             }
         }
@@ -346,11 +364,7 @@ void Scheduler::Impl::worker() {
             });
             if (cancelled.load()) {
                 lk.unlock();
-                FileOutcome o;
-                o.verdict = FileOutcome::Verdict::Cancelled;
-                o.file.src = fe.src;
-                o.file.cancelled = true;
-                finish(i, std::move(o));
+                cancel_exit(i, fe, nullptr); // R-174：取消出口单点（键尚未登记）
                 continue;
             }
             for (const std::string &k : keys)
@@ -369,20 +383,9 @@ void Scheduler::Impl::worker() {
                     [this] { return cancelled.load() || active_files < alloc_now_locked().files; });
             if (cancelled.load()) {
                 lk.unlock();
-                { // 键已在上面登记 → 与主路径同样释放（否则同键文件永久互等）
-                    std::lock_guard<std::mutex> lk2(mu);
-                    for (const std::string &k : keys) {
-                        const auto it = inflight.find(k);
-                        if (it != inflight.end())
-                            inflight.erase(it);
-                    }
-                }
-                cv.notify_all();
-                FileOutcome o;
-                o.verdict = FileOutcome::Verdict::Cancelled;
-                o.file.src = fe.src;
-                o.file.cancelled = true;
-                finish(i, std::move(o));
+                // 键已在上面登记 → 与主路径同样释放（否则同键文件永久互等）。
+                // R-174：出口单点（持键放键 + notify 在 cancel_exit 内）。
+                cancel_exit(i, fe, &keys);
                 continue;
             }
             alloc = alloc_now_locked();
@@ -606,6 +609,13 @@ RunSummary Scheduler::summary() const {
     // （PixelBudget::peak()），读数单源、不在本函数里另算。budget 由 start() 建（未 start = 空批
     // → 0）；PixelBudget::peak() 自持锁，UI 在运行中轮询 summary() 亦安全。
     s.peak_bytes = d.budget ? d.budget->peak() : 0;
+    // R-078（M7-WP8，加性）：实测线程统计 —— 与 wait() 的 `e3 report` 行同一统计点
+    // （peak_active_files / peak_sum_encode_threads），读数单源。threads_total_est =
+    // 两族峰值之和的**估算口径**（SynthPump/x265 库内池不入账；发行说明须写明，见 handoff）。
+    s.peak_active_files = d.peak_active_files;
+    s.peak_sum_encode_threads = d.peak_sum_encode_threads;
+    s.threads_total_est =
+        static_cast<int>(static_cast<long long>(d.peak_active_files) + d.peak_sum_encode_threads);
     return s;
 }
 

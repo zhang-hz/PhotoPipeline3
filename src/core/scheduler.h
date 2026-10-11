@@ -84,6 +84,17 @@ struct RunSummary {
     //   与其顺序零改动、聚合初始化兼容；日志行格式零改动（金样不受影响）。
     //   语义：本次运行 PixelBudget 的历史峰值字节；0 = 本次未用像素预算（未 start() 的空批）。
     uint64_t peak_bytes = 0;
+
+    // —— M7-WP8 / R-078 加性追加（**末尾**；裁定登记 build/m7-wp8/handoff.md）——
+    // 实测线程统计（E3 读数的运行级汇总；日志 `e3 report` 行的同一统计点，读数单源）：
+    //   * peak_active_files：峰值并发文件数（W 的实测上界）；
+    //   * peak_sum_encode_threads：峰值 ΣE（编码器内部线程的实测上界）；
+    //   * threads_total_est：峰值"活跃线程估算" = peak_active_files + peak_sum_encode_threads
+    //     （worker 主线程 + 编码线程两族之和；**估算口径**：两族峰值不一定同时刻出现，且
+    //     SynthPump 采样线程 / x265 库内线程池不入账 —— 发行说明须如实写明，见 handoff）。
+    int peak_active_files = 0;
+    long long peak_sum_encode_threads = 0;
+    int threads_total_est = 0;
 };
 
 // PP-FROZEN(0.3.0) §3.3 · ScheduleConfig + Scheduler（**W1-T7 已落地**）
@@ -171,7 +182,7 @@ public:
     ~Scheduler();
 
     void set_event_callback(EventCb cb);
-    void start();  // 非阻塞；创建 worker 池（N=cfg.workers 或物理核数）
+    void start();  // 非阻塞；创建 worker 池（N=cfg.workers，否则 thread_budget 或逻辑核数）
     void cancel(); // 置取消标志；已在编码中的文件跑完
     void wait();   // 阻塞至全部结束
     bool running() const;

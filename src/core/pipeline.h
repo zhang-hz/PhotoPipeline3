@@ -43,7 +43,8 @@
 //   `EncodeRequest::encode_threads`（§3.1 线程映射义务的输入）。既有成员语义不变；
 //   §3.2 的 RunConfig / run_one_file / run_metadata_only 签名零改动。
 #pragma once
-#include "codecs/encoder.h"
+// M7-WP8 / R-286（B.8）：include 链清理 —— 旧  在本头未被任何
+// 声明使用（R-106），却把 OIIO ImageBuf 面传染给全部消费者；删除后由需要它的 .cpp 自 include。
 #include "core/colormanager.h"
 #include "core/fsops.h"
 #include "core/metadata.h"
@@ -108,6 +109,28 @@ struct RunConfig {
 // T14 逐输出进度行 + 金样 outputs[] 断言共同要求它；FileResult 的既有成员语义不变，
 // 单输出时**逐字等价**于 v0.2：out == outputs[0].out、out_bytes == outputs[0].out_bytes、
 // warnings == outputs[0].warnings（串联）、ok/skipped/cancelled/error 取聚合口径。
+// —— M7-WP8 / B.8 加性追加（R-172/R-176；裁定登记 build/m7-wp8/handoff.md「裁定登记」）——
+// 两个枚举为 OutputResult/FileResult 末尾新字段的类型面；既有声明零改动。
+// R-172：逐输出终态**显式枚举**（消 ok/skipped 布尔与 Verdict 的手工双轨对齐）。
+// 旧布尔字段保留（冻结面）= 状态面的只读投影：一切状态迁移经 set_output_state 单点落地。
+enum class OutputState { Pending, Ok, Skipped, Failed, Cancelled };
+// R-176：错误分类**枚举**（消"消息前缀约定"：前缀判据只活在 error_kind_of 一处，单测钉住）。
+enum class ErrorKind {
+    None,      // 无错误
+    Config,    // 配置面：模板/参数/位深/格式/互斥约束
+    Probe,     // probe failed
+    Decode,    // decode failed
+    Orient,    // orient failed
+    Color,     // color transform failed
+    Flatten,   // flatten failed
+    Encode,    // encode failed
+    MetaWrite, // metadata(-only) write failed
+    Io,        // 输出目录/路径/落盘
+    Cancelled, // encode cancelled
+    Internal,  // unexpected exception
+    Unknown
+};
+
 struct OutputResult {
     std::string format_id, backend_id, tech_id;
     std::filesystem::path out; // 冲突解析后的最终输出路径
@@ -119,6 +142,9 @@ struct OutputResult {
     // —— 0.3.0 追加（W1-T6，末尾；§7.4 的进度快照，随 <out>.pp.json 落盘）——
     bool progress_reported = false; // 编码器报过真实行级进度（false → UI 标合成，§3.1/§7.3）
     int progress_max_row = 0;       // 行级回调折算的最高行号；无回调格式恒 0
+    // —— M7-WP8 / B.8 加性追加（**末尾**；R-172/R-166 判定，行为零变化）——
+    OutputState state = OutputState::Pending; // 显式终态（set_output_state 唯一迁移点）
+    ErrorKind error_kind = ErrorKind::None;   // 错误分类（error_kind_of 单源判据）
 };
 
 struct FileResult {
@@ -131,6 +157,8 @@ struct FileResult {
     std::string color_src, color_dst;
     bool ok = false, skipped = false, cancelled = false;
     std::vector<OutputResult> outputs; // 0.3.0 追加（末尾；逐输出，配置顺序）
+    // —— M7-WP8 / B.8 加性追加（**末尾**；R-176，行为零变化）——
+    ErrorKind error_kind = ErrorKind::None; // 错误分类（error_kind_of 单源判据）
 };
 
 enum class FileState {
@@ -237,5 +265,53 @@ FileOutcome run_metadata_only(const FileEntry &, const RunConfig &, EventFn);
 
 // 输入白名单校验（唯一入口，UI 与 harness 共用）
 bool format_supports_metadata_only(std::string_view format_id);
+
+// ============================================================================================
+// M7-WP8 / B.8 契约收口（**加性追加**；既有签名/行为零改动；裁定登记
+// build/m7-wp8/handoff.md「裁定登记」）。依据 docs/deep-review-0.3.2.md 附录 B.8 +
+// R-172/173/175/176/322/325 与 B.6 ③（装配链上提）。类型面（OutputState/ErrorKind）见
+// OutputResult 之前的加性块。
+// ============================================================================================
+
+const char *output_state_name(OutputState s); // "pending"/"ok"/"skipped"/"failed"/"cancelled"
+void set_output_state(OutputResult &row, OutputState s); // R-172 唯一迁移点（双轨在此对齐）
+
+const char *error_kind_name(ErrorKind k);
+ErrorKind error_kind_of(std::string_view error); // R-176 消息前缀 → 枚举（唯一判据）
+
+// R-168：终态聚合单源（run_one_file / run_metadata_only 共用同一份 finalize 语义）。
+// 行级计数 + 告警去重合并 + FileResult 聚合字段 + verdict 落位，一次算清。
+FileOutcome::Verdict verdict_of_rows(const FileResult &res);
+void finalize_aggregate(FileOutcome &outcome, std::chrono::steady_clock::time_point t_start,
+                        FileOutcome::Verdict v);
+
+// R-322 / R-136：`split_by_format` 的派生判据**单源**（模板含 $format 段即 true；
+// CLI/GUI/持久化三处共用，消"前缀 vs 含段"双判据）。
+bool template_has_format(std::string_view output_template);
+
+// R-173：RunConfig 字段约束校验器（空串 = OK；运行期字符串约束的唯一入口）。
+// 覆盖：outputs 非空 / metadata_only ↔ outputs.size()==1 / split_by_format ↔ $format 联动
+// （split_by_format=true 要求模板含 $format；false 恒过 = 字段为派生态的单向约束）/
+// out_bitdepth ∈ fmt->bitdepths / 未知格式 / 模板合法。
+std::string validate_run_config(const RunConfig &cfg);
+
+// R-175：PathCtx 组装单源（scheduler 的 desired_keys 与 pipeline 的 plan_targets 共用）。
+// metadata_only 时 ext = 源扩展名（同容器），否则 = 目标格式扩展名。
+PathCtx path_ctx_for(const FileEntry &fe, const RunConfig &cfg, const FormatDef *fmt);
+
+// 默认位深单源（R-238 的口径之一；--dev / bench / UI 装配链共用）：
+// jpeg 8 / jxl 16 / png 16 / tiff 16 / webp 8 / bmp 24（bpp 口径）/ heif·avif 10 / 其余 8。
+int default_bitdepth_for(std::string_view format_id);
+
+// B.6 ③：参数装配链单源（run_dev / bench / UI config_base 三处调用；PolicyDefaults 显式注入）。
+// 逐输出：default_params(lossless) → base_params 逐键覆盖 → fill_defaults → apply_locks →
+// validate_params → 位深（>0 = 显式；否则 default_bitdepth_for）+ fmt->bitdepths 归属校验。
+struct OutputSpecRequest {
+    std::string format_id, backend_id, tech_id;
+    ParamSet base_params;  // 预设/上层参数（逐键覆盖引擎默认；--param 由调用方先并入）
+    int out_bitdepth = -1; // >0 = 显式位深；<=0 = 逐格式默认
+};
+std::string build_output_specs(const std::vector<OutputSpecRequest> &reqs, bool lossless,
+                               std::vector<OutputFormatSpec> &out); // 空串 = OK（out 已填）
 
 } // namespace pp

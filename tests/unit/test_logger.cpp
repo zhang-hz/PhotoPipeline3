@@ -477,6 +477,23 @@ int main() {
         check(contains(text, "under-probe"), "cap/under-written", "log text empty");
     }
 
+    // ---- M7-WP8 / R-157：log_level_from_text 单源（5 档设置词表；旧 main.cpp 双份已收编）----
+    {
+        pp::LogLevel lv = pp::LogLevel::Critical;
+        check(pp::log_level_from_text("trace", lv) && lv == pp::LogLevel::Trace, "lvl/trace", "");
+        check(pp::log_level_from_text("debug", lv) && lv == pp::LogLevel::Debug, "lvl/debug", "");
+        check(pp::log_level_from_text("info", lv) && lv == pp::LogLevel::Info, "lvl/info", "");
+        check(pp::log_level_from_text("warn", lv) && lv == pp::LogLevel::Warn, "lvl/warn", "");
+        check(pp::log_level_from_text("error", lv) && lv == pp::LogLevel::Error, "lvl/error", "");
+        // 5 档之外判负（含 critical —— 设置词表无第 6 档）；且不改动 out
+        lv = pp::LogLevel::Info;
+        check(!pp::log_level_from_text("critical", lv) && lv == pp::LogLevel::Info, "lvl/critical",
+              "critical 不在设置词表 → false");
+        check(!pp::log_level_from_text("INFO", lv) && lv == pp::LogLevel::Info, "lvl/case",
+              "大小写敏感（旧实现口径）");
+        check(!pp::log_level_from_text("", lv) && lv == pp::LogLevel::Info, "lvl/empty", "");
+    }
+
     if (g_failed == 0) {
         std::printf("test_logger: OK\n");
         return 0;

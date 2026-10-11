@@ -264,6 +264,10 @@ target_link_libraries(photopipeline PRIVATE pp_core_registered
 # 发布构建（不带 -DPP_BUILD_DEV=ON）不含 `--dev` 代码路径；鼓点/矩阵/规模用 -DPP_BUILD_DEV=ON。
 if(PP_BUILD_DEV)
   target_compile_definitions(photopipeline PRIVATE PP_BUILD_DEV)
+  # M7-WP8 / B.6（R-193/323）：--dev/--bench/--ui-smoke 三个 harness TU 仅 dev 构建编入
+  # （main.cpp 只留 GUI 启动 + 分发 + §4.3 冻结启动序；release 产物零 dev 代码路径不变）。
+  target_sources(photopipeline PRIVATE
+      src/dev_cli.cpp src/dev_bench.cpp src/dev_ui_smoke.cpp)
   # M1b-U10：UI 冒烟取代 M0 的 PP_M0_SMOKE 定时退出桩。走脚本以便同时校验冻结成功末行
   # `UI-SMOKE OK shots=12 pages=3`（M4-W3-T14 起 12 张；R-126 修注释口径过期）；offscreen
   # 平台由测试环境注入。

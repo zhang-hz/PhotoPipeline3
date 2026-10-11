@@ -2,6 +2,13 @@
 // PhotoPipeline — M4-T5: multi-output single-file pipeline
 // (docs/v0.3.0-design.md §3.2 / §4.1 / §4.2 / §4.3 / §4.4).
 //
+// M7-WP8 / B.4（docs/deep-review-0.3.2.md 附录 B.4，R-061/324）：run_one_file 拆十阶段 +
+// 单一上下文 RunFileContext{fe, cfg, ev, scope, mux, res, t_start}（替代 5 个内联 lambda 的
+// 捕获面）。阶段函数 = validate_run_config → probe_source → plan_targets → acquire_budget
+// （BudgetGuard 命名 RAII）→ decode_to_work → orient_stage → color_stage → build_meta →
+// encode_loop（多输出循环整体下沉）→ finish_file（aggregate 单源聚合）。**行为零变化**：
+// 日志行/事件序/计时点/告警序列逐字保留（金样 20 对 + 全语料回归背书）。
+//
 // 单文件执行序（§4.1 冻结）：
 //   probe(一次) → budget.acquire(2×frame) → decode(一次, float32) → orient(如启用)
 //   → color(全局目标, 一次) → 按 targets 顺序逐个：
@@ -21,7 +28,7 @@
 //       (i) 灰度源（1/2ch）→ 彩色目标：换**独立新缓冲**（升维）→ 必须回拷；
 //       (ii) RGB/RGBA（3/4ch）→ **原地**写回我们包装的同一块存储 → **不得回拷**。
 //     判据 = "当前缓冲的本地像素地址是否仍是工作缓冲的存储"；同址回拷会把刚变换好的像素清零
-//     后再从同一块内存读回 = 全黑图（静默数据损失，见下方颜色段的逐条注释）。
+//     后再从同一块内存读回 = 全黑图（静默数据损失，见 color_stage 的逐条注释）。
 //   * 逐 target 串行（同文件内），文件间并行由 scheduler 管。
 //
 // 编码顺序（§4.3）：supports_alpha 的 target 在前、false 的在后（稳定排序），保证做 alpha 的
@@ -48,7 +55,7 @@
 //   * 合成输出（k 表内的 webp/heif/avif）：编码期间由 SynthPump 按 20ms 采样推进估算（§7.3）；
 //     真实行级输出（jpegli/jxl/OIIO）直接经 ProgressFn 汇流，`synthetic=false`。
 //   * 每输出的 debug 快照：progress_max_row / progress_reported / samples / synthetic / est_ms
-//     （§7.4，**不逐行落盘**；dev 侧车另落 progress-trace 事件流，见 main.cpp）。
+//     （§7.4，**不逐行落盘**；dev 侧车另落 progress-trace 事件流，见 dev_cli.cpp）。
 
 #include "core/pipeline.h"
 
@@ -212,7 +219,7 @@ struct WorkImage {
 // 之后调用方可释放 decode 缓冲）。通道数变化（color 灰度升维）时工作缓冲会重新分配。
 // W1-T5 复核项 1（2026-09-24）警示：本函数**先清零/覆写目的缓冲再读源**，故 `src` 绝不能与
 // `img.px` 同址（同址 = 清零后读回全零）。调用方在 color 段必须先判定 ColorManager 是否替换了
-// 缓冲（3/4 通道原地写回时不调用本函数 —— 见 run_one_file 的颜色段注释）。
+// 缓冲（3/4 通道原地写回时不调用本函数 —— 见 color_stage 的颜色段注释）。
 bool work_from_buf(WorkImage &img, const OIIO::ImageBuf &src, std::string &err) {
     if (!src.initialized()) {
         err = "empty image buffer";
@@ -366,30 +373,6 @@ bool flatten_alpha_in_place(WorkImage &img, float background, std::string &err) 
     return true;
 }
 
-// M2-T5 §2.7 (--dev 校验调用点): cross-field constraints the per-key predicates cannot
-// express. 0.3.0 多输出口径：逐输出求值，**配置顺序的首条消息**即该文件的失败原因。
-// Empty first message = OK.
-std::string first_cross_error(const RunConfig &cfg) {
-    for (const OutputFormatSpec &spec : cfg.outputs) {
-        const std::vector<std::string> msgs =
-            cross_validate(spec.params, spec.format_id, spec.tech_id);
-        if (!msgs.empty())
-            return msgs.front();
-    }
-    return {};
-}
-
-// ---------------------------------------------------------------------------
-// 逐输出计划（§4.2 路径模板 + §4.4 逐输出独立冲突）
-// ---------------------------------------------------------------------------
-struct PlannedTarget {
-    OutputTarget target; // 含冲突解析后的最终 out_path
-    const FormatDef *fmt = nullptr;
-    std::size_t cfg_index = 0; // 配置顺序（= FileResult.outputs 下标）
-    bool skip = false;         // Skip 策略命中
-    std::unique_ptr<IEncoder> enc;
-};
-
 // R-001（P0，数据安全线）：输出路径命中源文件 → 该文件整体失败（源文件永远只读）。
 // 判据：两者都在磁盘上 → fs::equivalent（符号链接/大小写/8.3 短名一并识破）；
 // 任一不存在（输出尚未落盘是常态）→ 退化为词法绝对路径比较。
@@ -412,12 +395,24 @@ bool same_output_as_source(const std::filesystem::path &out, const std::filesyst
     return lex_abs(out) == lex_abs(src);
 }
 
+// ---------------------------------------------------------------------------
+// 逐输出计划（§4.2 路径模板 + §4.4 逐输出独立冲突）
+// ---------------------------------------------------------------------------
+struct PlannedTarget {
+    OutputTarget target; // 含冲突解析后的最终 out_path
+    const FormatDef *fmt = nullptr;
+    std::size_t cfg_index = 0; // 配置顺序（= FileResult.outputs 下标）
+    bool skip = false;         // Skip 策略命中
+    std::unique_ptr<IEncoder> enc;
+};
+
 // 目标构建：格式/位深校验、编码器构造、路径模板渲染、逐输出冲突解析。
 // 失败 → false 且 err = 该文件的首条错误消息（与 0.2 的消息文本一致）。
 // 冲突解析（§4.4，复核项 2 修订）：本文件内**逐个 target 顺序登记**已解析出的 out_path——
 // 一源多输出撞同一 desired（例如同格式重复选择、或经 $format/$file 之类的模板把不同源压到
 // 同一路径）时，第 2..N 个 target 走 Rename 得到独立名字，而不是沿用同一最终路径互相覆盖。
 // 文件结束后的跨文件登记由 scheduler 负责（reserved 按每个 out_path 粒度）。
+// R-175（M7-WP8/B.8）：PathCtx 组装收口 path_ctx_for（与 scheduler 的 desired_keys 同源）。
 bool plan_targets(const FileEntry &fe, const RunConfig &cfg,
                   const std::vector<std::filesystem::path> &reserved,
                   std::vector<PlannedTarget> &out, std::vector<OutputResult> &rows,
@@ -449,13 +444,7 @@ bool plan_targets(const FileEntry &fe, const RunConfig &cfg,
             return false;
         }
 
-        PathCtx ctx;
-        ctx.format_dir = fmt->id;
-        ctx.rel_dir = relative_dir(fe.src, fe.base_dir);
-        ctx.stem = fe.src.stem().string();
-        // 多格式输出恒为重编码路径：ctx.ext = 目标格式扩展名（R-169：metadata_only 分支
-        // 为死代码 —— run_one_file 入口处已拒绝 metadata_only 配置，此处删除）。
-        ctx.ext = fmt->ext;
+        const PathCtx ctx = path_ctx_for(fe, cfg, fmt);
         const fs::path desired = render_output_path(cfg.output_template, ctx, cfg.out_root);
         if (desired.empty()) {
             err = "output path: template '" + cfg.output_template + "' produced no file name";
@@ -506,6 +495,689 @@ bool plan_targets(const FileEntry &fe, const RunConfig &cfg,
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// RunFileContext + 十阶段（B.4，R-061/324）
+// ---------------------------------------------------------------------------
+// 单文件执行的全部可变状态的唯一载体（替代 5 个内联 lambda 的捕获面）。
+// 生命周期 = run_one_file 一次调用；阶段函数按 ①..⑩ 顺序读写本结构。
+
+// R-168：双入口共享的失败收尾（旧行为逐字：行级 error 回填 + log_error + finalize(Failed)）。
+void fail_fill(FileOutcome &outcome, Clock::time_point t_start, std::string msg);
+
+// B.4 ④：像素预算的命名 RAII（旧 BudgetGuard 匿名 struct 升格；退出路径一律自动释放）。
+struct BudgetGuard {
+    PixelBudget *b = nullptr;
+    uint64_t bytes = 0;
+    bool held = false;
+    ~BudgetGuard() {
+        if (held && b)
+            b->release(bytes);
+    }
+    BudgetGuard() = default;
+    BudgetGuard(const BudgetGuard &) = delete;
+    BudgetGuard &operator=(const BudgetGuard &) = delete;
+};
+
+struct RunFileContext {
+    RunFileContext(const FileEntry &fe_, const RunConfig &cfg_, EventFn &ev_)
+        : fe(fe_), cfg(cfg_), ev(ev_) {
+        res.src = fe.src;
+        cancelled = (ev.scope != nullptr) ? ev.scope->cancelled : std::function<bool()>();
+        reserved =
+            (ev.scope != nullptr) ? ev.scope->reserved : std::vector<std::filesystem::path>{};
+    }
+
+    const FileEntry &fe;
+    const RunConfig &cfg;
+    EventFn &ev;
+    std::function<bool()> cancelled;
+    std::vector<std::filesystem::path> reserved;
+
+    FileOutcome outcome;
+    FileResult &res = outcome.file;
+    Clock::time_point t_start = Clock::now();
+
+    // W1-T6（§3.3/§7.1–§7.4）：进度枢纽。probe 之后建立（合成估算需要像素尺寸）；
+    // 在此之前的事件（Queued/Probing 的首次）progress 取默认值（overall=0）。
+    std::unique_ptr<ProgressMux> mux;
+
+    // ---- 阶段间传递的事实 ----
+    ImageInfo info;
+    int orientation = 1;
+    std::string src_icc;
+    SourceMeta srcmeta;
+    std::vector<PlannedTarget> targets;
+    std::vector<Warning> decode_warnings;
+    bool rotated = false;
+    std::string icc_to_embed;
+    MetadataPlan meta_plan;
+    Payloads payloads;
+    MetadataPayloads meta; // EncodeRequest 的载荷面（build_meta 从 payloads + icc 组装）
+    WorkImage work;
+    BudgetGuard budget; // ④ 的命名 RAII（acquire_budget 置位，ctx 析构释放）
+
+    // ---- 收尾（旧 finalize/fail 两个内联 lambda 的单源化，R-168）----
+    FileOutcome finalize(FileOutcome::Verdict v) {
+        finalize_aggregate(outcome, t_start, v);
+        return outcome;
+    }
+    FileOutcome fail(std::string msg) {
+        fail_fill(outcome, t_start, std::move(msg));
+        return outcome;
+    }
+
+    // ---- 事件面（旧 stage/make_mux 两个内联 lambda 的单源化）----
+    // 阶段事件携带当前进度快照（§3.3：progress 为追加字段，Progress 状态为其主用途；
+    // 阶段事件带上快照可让消费端一次拿到"阶段文本 + 整体位置"，消费端按 state 分派）。
+    void stage(FileState s, Stage st, int output_index) {
+        if (!ev.on_event)
+            return;
+        FileEvent e{};
+        e.index = 0; // 批内下标由调用方（Scheduler）回填
+        e.state = s;
+        e.result = nullptr;
+        if (mux)
+            e.progress = mux->snapshot(st, output_index);
+        ev.on_event(e);
+    }
+    void make_mux(const ImageInfo &inf, std::size_t outputs) {
+        mux = std::make_unique<ProgressMux>(inf.width, inf.height, outputs);
+        mux->set_event_callback([this](const FileEvent &e) {
+            if (ev.on_event)
+                ev.on_event(e);
+        });
+    }
+
+    // 工作缓冲里不属于单一 target 的告警（decode/color）按出现时刻推入每个未跳过行：
+    // 单输出时与 0.2 的 res.warnings 序列逐字一致。
+    void push_global(const std::vector<Warning> &ws) {
+        for (const Warning &w : ws) {
+            for (const PlannedTarget &t : targets) {
+                if (!t.skip)
+                    res.outputs[t.cfg_index].warnings.push_back(w);
+            }
+        }
+    }
+};
+
+// ---- ① validate_run_config：配置硬校验（§3.2 + R-173 校验器）----
+bool stage_validate(RunFileContext &ctx) {
+    // 逐输出的行记录（配置顺序）；失败路径也保留行（UI/sidecar 需要可见的逐输出状态）。
+    // 顺序与旧 run_one_file 逐字一致：行先建、其后才做配置硬校验。
+    for (const OutputFormatSpec &spec : ctx.cfg.outputs) {
+        OutputResult row;
+        row.format_id = spec.format_id;
+        row.backend_id = spec.backend_id;
+        row.tech_id = spec.tech_id;
+        ctx.res.outputs.push_back(std::move(row));
+    }
+    if (ctx.cfg.outputs.empty()) {
+        ctx.fail("no output configured (RunConfig::outputs is empty)");
+        return false;
+    }
+    if (ctx.cfg.metadata_only) {
+        ctx.fail("run_one_file must not be called in metadata-only mode "
+                 "(use run_metadata_only; RunConfig::outputs.size() must be 1 there)");
+        return false;
+    }
+    // R-173：字段约束（模板 / 未知格式 / 位深归属 / 跨字段参数 / split_by_format 联动）
+    // 收口 validate_run_config 单源（消息文本与旧逐点检查逐字一致）。
+    if (const std::string cfg_err = validate_run_config(ctx.cfg); !cfg_err.empty()) {
+        ctx.fail(cfg_err);
+        return false;
+    }
+    return true;
+}
+
+// ---- ② probe_source（CICP 段整体下沉）----
+bool stage_probe(RunFileContext &ctx) {
+    ctx.stage(FileState::Probing, Stage::Probe, -1);
+    const ProbeOutcome po = probe_file(ctx.fe.src);
+    if (!po.error.empty())
+        return ctx.fail("probe failed: " + po.error), false;
+    ctx.info = po.info;
+    ctx.res.info = ctx.info;
+    // W1-T6：进度枢纽就位（§7.2 共享段从 probe 起算；§7.3 合成估算需要 pixels）
+    ctx.make_mux(ctx.info, ctx.cfg.outputs.size());
+    ctx.mux->shared_stage(Stage::Probe, 0.f);
+    const OIIO::ImageSpec *spec = po.first_spec ? &*po.first_spec : nullptr;
+    ctx.orientation = spec ? orientation_from_spec(*spec) : 1;
+    ctx.src_icc = spec ? icc_from_spec(*spec) : std::string();
+
+    // EXIF summary (time / GPS / ICC / Orientation). A read failure is NOT fatal (§4.8).
+    ctx.srcmeta = read_metadata(ctx.fe.src);
+    if (!ctx.srcmeta.error.empty())
+        log_warn(kStage, kFile, "source metadata unavailable; continuing with empty metadata",
+                 {{"src", ctx.fe.src.string()}, {"error", ctx.srcmeta.error}});
+    if (ctx.src_icc.empty())
+        ctx.src_icc = ctx.srcmeta.icc; // R13 chain: embedded ICC first
+    // ---- R13 middle step (issue #7, M2-T6 §2.8): CICP → source profile ----
+    // See the M2-T6 landing note: OIIO always publishes a JXL ICCProfile (synthesized from
+    // CICP), so CICP presence — not an empty src_icc — marks a source without its own ICC.
+    if (spec != nullptr && ctx.info.channels >= 3 &&
+        (ctx.info.format == "jpegxl" || ctx.info.format == "jxl")) {
+        const OIIO::ParamValue *pv = spec->find_attribute("CICP");
+        const bool cicp_ok = (pv != nullptr) && (pv->type().basetype == OIIO::TypeDesc::INT) &&
+                             (pv->type().basevalues() * std::size_t(pv->nvalues()) >= 4);
+        if (cicp_ok) {
+            Cicp cicp;
+            cicp.primaries = pv->get<int>(0);
+            cicp.transfer = pv->get<int>(1);
+            cicp.matrix = pv->get<int>(2);     // not part of the mapping (§2.8)
+            cicp.full_range = pv->get<int>(3); // not part of the mapping (§2.8)
+            const CicpMapping mapped = map_cicp_source(cicp);
+            if (mapped.recognized()) {
+                log_info(kStage, kFile, mapped.log_line, {{"src", ctx.fe.src.string()}});
+            } else {
+                log_warn(kStage, kFile, mapped.log_line, {{"src", ctx.fe.src.string()}});
+            }
+            if (!mapped.src_icc.empty())
+                ctx.src_icc = mapped.src_icc;
+        }
+    }
+    log_debug(kStage, kFile, "probe done",
+              {{"src", ctx.fe.src.string()},
+               {"size", std::to_string(ctx.info.width) + "x" + std::to_string(ctx.info.height)},
+               {"channels", std::to_string(ctx.info.channels)},
+               {"bitdepth", std::to_string(ctx.info.src_bitdepth)},
+               {"orientation", std::to_string(ctx.orientation)},
+               {"icc", ctx.src_icc.empty() ? "none" : std::to_string(ctx.src_icc.size()) + "B"},
+               {"multipage", ctx.info.is_multipage ? "true" : "false"},
+               {"outputs", std::to_string(ctx.cfg.outputs.size())}});
+    return true;
+}
+
+// ---- ③ plan_targets + 全跳过早退 + 输出目录 ----
+bool stage_plan(RunFileContext &ctx) {
+    std::string plan_err;
+    if (!plan_targets(ctx.fe, ctx.cfg, ctx.reserved, ctx.targets, ctx.res.outputs, plan_err)) {
+        ctx.fail(plan_err);
+        return false;
+    }
+
+    // 全跳过（Skip 策略命中每一个输出）→ 不解码、不取预算（0.2 行为）
+    const bool all_skipped = std::all_of(ctx.targets.begin(), ctx.targets.end(),
+                                         [](const PlannedTarget &t) { return t.skip; });
+    if (all_skipped) {
+        for (std::size_t i = 0; i < ctx.res.outputs.size(); ++i) {
+            set_output_state(ctx.res.outputs[i], OutputState::Skipped); // R-172 单点迁移
+            ctx.mux->on_output_skipped(i); // R-235：全跳过早退同样发输出级进度事件（§7.2 全段记满）
+        }
+        ctx.mux->finish();
+        log_info(kStage, kFile, "skipped: output exists",
+                 {{"src", ctx.fe.src.string()}, {"out", ctx.res.outputs.front().out.string()}});
+        ctx.finalize(FileOutcome::Verdict::Skipped);
+        return false;
+    }
+
+    // 输出目录（逐 target；0.2 在解码前创建）
+    for (const PlannedTarget &pt : ctx.targets) {
+        if (pt.skip)
+            continue;
+        std::error_code ec;
+        const std::filesystem::path parent = pt.target.out_path.parent_path();
+        if (!parent.empty())
+            std::filesystem::create_directories(parent, ec);
+        if (ec) {
+            ctx.fail("cannot create output directory '" + parent.string() + "': " + ec.message());
+            return false;
+        }
+    }
+    return true;
+}
+
+// ---- ④ acquire_budget（2× float32 frame；BudgetGuard 命名 RAII）----
+bool stage_budget(RunFileContext &ctx) {
+    // 工作缓冲与 decode 缓冲同尺寸（通道数取自 probe），故 2×frame 仍是本文件的峰值上界。
+    const uint64_t need_bytes =
+        2 * PixelBudget::frame_bytes(ctx.info.width, ctx.info.height, ctx.info.channels);
+    ctx.budget.bytes = need_bytes;
+    ctx.budget.b = ctx.ev.scope != nullptr ? ctx.ev.scope->budget : nullptr;
+    if (ctx.ev.scope != nullptr && ctx.ev.scope->budget != nullptr) {
+        if (!ctx.ev.scope->budget->acquire(need_bytes, ctx.cancelled)) {
+            if (is_cancelled(ctx.cancelled)) {
+                ctx.finalize(FileOutcome::Verdict::Cancelled);
+                return false;
+            }
+            ctx.fail("pixel budget exceeded: need " + std::to_string(need_bytes) + " B, capacity " +
+                     std::to_string(ctx.ev.scope->budget->capacity()) + " B");
+            return false;
+        }
+        ctx.budget.held = true;
+        // Drumbeat evidence: the 2× frame peak reservation actually made it through the pool.
+        log_info(kStage, kFile, "pixel budget acquired",
+                 {{"src", ctx.fe.src.string()},
+                  {"need_bytes", std::to_string(need_bytes)},
+                  {"capacity_bytes", std::to_string(ctx.ev.scope->budget->capacity())},
+                  {"used_bytes", std::to_string(ctx.ev.scope->budget->used())},
+                  {"peak_bytes", std::to_string(ctx.ev.scope->budget->peak())}});
+    }
+    if (is_cancelled(ctx.cancelled)) {
+        ctx.finalize(FileOutcome::Verdict::Cancelled);
+        return false;
+    }
+    // W1-T6（§7.2 首行）：probe + acquire 完成 → 3%
+    ctx.mux->shared_stage(Stage::Probe, 1.f);
+    return true;
+}
+
+// ---- ⑤ decode_to_work（内存纪律点随之下沉）----
+bool stage_decode(RunFileContext &ctx) {
+    ctx.stage(FileState::Decoding, Stage::Decode, -1);
+    ctx.mux->shared_stage(Stage::Decode, 0.f);
+    Clock::time_point t0 = Clock::now();
+    DecodeOutcome dec = decode_float(ctx.fe.src, ctx.info);
+    ctx.res.t.decode_ms = ms_since(t0);
+    if (!dec.error.empty()) {
+        ctx.fail("decode failed: " + dec.error);
+        return false;
+    }
+    std::string werr;
+    if (!work_from_buf(ctx.work, dec.buf, werr)) {
+        ctx.fail("decode failed: " + werr);
+        return false;
+    }
+    // W1-T6（§7.2 decode 行）：本仓库的解码入口（src/decode/oiio_reader.h 的 decode_float）
+    // **不暴露读行回调**（该文件不在 T6 文件面内 → 不改签名）→ 按 §7.2 的"无回调格式即时 1
+    // 并日志注明"落到即时 1，并在此如实记一条 debug（fmt/尺寸可见）。
+    ctx.mux->shared_stage(Stage::Decode, 1.f);
+    log_debug(kStage, kFile, "decode progress: immediate 1 (no read-row callback exposed)",
+              {{"src", ctx.fe.src.string()},
+               {"format", ctx.info.format},
+               {"decode_ms", fmt_double(ctx.res.t.decode_ms)}});
+    // decode 告警（MultipageTruncated 等）随解码缓冲一起转移，再释出缓冲
+    ctx.decode_warnings = std::move(dec.warnings);
+    dec = DecodeOutcome{}; // 释放 decode 缓冲（工作缓冲已就位；峰值回到 1×frame）
+    ctx.push_global(ctx.decode_warnings);
+    return true;
+}
+
+// ---- ⑥ orient_stage ----
+bool stage_orient(RunFileContext &ctx) {
+    if (ctx.cfg.rotate_orientation && ctx.orientation != 1) {
+        ctx.stage(FileState::Orienting, Stage::Orient, -1);
+        ctx.mux->shared_stage(Stage::Orient, 0.f);
+        const Clock::time_point t0 = Clock::now();
+        std::string oerr;
+        if (!orient_work(ctx.work, ctx.orientation, oerr)) {
+            ctx.fail("orient failed: " + oerr);
+            return false;
+        }
+        ctx.res.t.orient_ms = ms_since(t0);
+        ctx.rotated = true;
+        ctx.mux->shared_stage(Stage::Orient, 1.f);
+    } else {
+        ctx.mux->shared_skip(Stage::Orient); // 不执行 → 权重不丢失（§7.2 共享段恒达 40%）
+    }
+    if (is_cancelled(ctx.cancelled)) {
+        ctx.finalize(FileOutcome::Verdict::Cancelled);
+        return false;
+    }
+    return true;
+}
+
+// ---- ⑦ color_stage（灰度/回拷判据收单点）----
+bool stage_color(RunFileContext &ctx) {
+    const bool src_is_gray = (ctx.info.channels == 1 || ctx.info.channels == 2);
+    // 灰度源：任一 target 不支持灰度 → 报 GrayToRgbEncoded，并把有效目标推成 sRGB
+    // （多输出下"一次变换、全体共享"，行为对单输出与 0.2 逐字一致）。
+    bool any_target_needs_rgb = false;
+    for (const PlannedTarget &pt : ctx.targets) {
+        if (pt.skip || !src_is_gray || pt.fmt->supports_gray)
+            continue;
+        any_target_needs_rgb = true;
+        ctx.res.outputs[pt.cfg_index].warnings.push_back(
+            Warning{WarningKind::GrayToRgbEncoded,
+                    "grayscale source encoded as RGB for format '" + pt.fmt->id + "'"});
+    }
+    ColorTarget eff_target = ctx.cfg.color;
+    if (src_is_gray && any_target_needs_rgb && eff_target == ColorTarget::KeepOriginal) {
+        // Grayscale pixels must not reach webp/heif/avif: use sRGB as the effective target
+        // even though the user kept the original (§4.8).
+        eff_target = ColorTarget::SRGB;
+    }
+    // 复核项 9：混合灰度支持的多输出里，color 是全局一次（D5）⇒ 支持灰度的 target 也被动
+    // 升到 RGB。它自己的格式并非"不支持灰度"，故与上面的告警措辞区分开、如实补一条
+    // （单输出 / 全支持灰度的组合不触发 → 0.2 语义逐字不变）。
+    if (src_is_gray && any_target_needs_rgb && eff_target != ColorTarget::KeepOriginal) {
+        for (const PlannedTarget &pt : ctx.targets) {
+            if (pt.skip || !pt.fmt->supports_gray)
+                continue;
+            ctx.res.outputs[pt.cfg_index].warnings.push_back(
+                Warning{WarningKind::GrayToRgbEncoded,
+                        "grayscale source encoded as RGB for format '" + pt.fmt->id +
+                            "' (shared color transform: another output cannot carry grayscale)"});
+        }
+    }
+    ctx.icc_to_embed = ctx.src_icc;
+    if (eff_target != ColorTarget::KeepOriginal) {
+        ctx.stage(FileState::Coloring, Stage::Color, -1);
+        ctx.mux->shared_stage(Stage::Color, 0.f);
+        const Clock::time_point t0 = Clock::now();
+        // ColorManager 的落地形态见下（可能替换 ImageBuf：灰度升维）—— 只有**被替换**时
+        // 才把像素同步回工作缓冲。
+        // 回拷规则（W1-T5 复核项 1 修订，2026-09-24）：只有**缓冲被替换**时才回拷。
+        //   * `cbuf = work.buf` 对 APPBUFFER 是**共享存储**而非深拷（OIIO 的 ImageBuf 拷贝
+        //     构造函数对 APPBUFFER 直接复用同一 bufspan），故 cbuf 的像素就是 work.px；
+        //   * ColorManager 的 3/4 通道分支用 write_planes **原地**写进这块存储
+        //     （src/core/colormanager.cpp:721-733），此时像素已就位 —— 若照旧回拷，
+        //     work_from_buf 的第一步（assign/覆写 n 个样本）与"源"同址 → 把刚变换好的像素
+        //     清零后再从同一块内存读回 → **全黑图**且 ok=true、无告警（静默数据损失）。
+        //   * 灰度升维分支 `buf = make_like(...)` 换成独立新缓冲 → 地址不同 → 必须回拷。
+        // 判据用"当前缓冲的本地像素地址是否仍是工作缓冲的存储"（两条路径都是本地缓冲：
+        // APPBUFFER 包装 / make_like 的 LOCALBUFFER，故 localpixels() 恒非空）。
+        OIIO::ImageBuf cbuf = ctx.work.buf;
+        const void *const work_px = ctx.work.px.data();
+        // I3 加性重载：R-032（ICC 通道不匹配降级）/R-035（灰度升维）的告警经 out_warnings
+        // 输出并进逐输出行。
+        // M7-WP8 跨包接口（WP1 数据面 / WP10 行为实现）：RunConfig 的 color_intent /
+        // color_dither8 / gamut_mapping / linear_resample 四字段喂给 ColorOptions；默认值
+        // （0/false/0/false）与旧 `ColorOptions{}` 逐字等价 → 默认路径零行为变化。
+        ColorOptions copts;
+        copts.intent = ctx.cfg.color_intent;
+        copts.dither8 = ctx.cfg.color_dither8;
+        copts.gamut_mapping = ctx.cfg.gamut_mapping;
+        copts.linear_resample = ctx.cfg.linear_resample;
+        std::vector<Warning> color_warnings;
+        std::string color_err;
+        ColorOutcome co = ColorManager::instance().transform(
+            cbuf, ctx.src_icc, src_is_gray, eff_target, copts, &color_warnings, &color_err);
+        ctx.res.t.color_ms = ms_since(t0);
+        if (!co.error.empty()) {
+            ctx.fail("color transform failed: " + co.error);
+            return false;
+        }
+        ctx.push_global(co.warnings);
+        // R-032/R-035 的降级/升维告警并入逐输出行；同 kind 已有条目时不再重复 ——
+        // 灰度→不支持灰度格式时管线已按 §4.8 报过 GrayToRgbEncoded（逐格式条目），
+        // 色彩段的升维告警是同义补充（golden 的 warnings_exact 按 kind 序列断言）。
+        for (const Warning &cw : color_warnings) {
+            for (const PlannedTarget &t : ctx.targets) {
+                if (t.skip)
+                    continue;
+                std::vector<Warning> &roww = ctx.res.outputs[t.cfg_index].warnings;
+                const bool dup = std::any_of(roww.begin(), roww.end(),
+                                             [&cw](const Warning &e) { return e.kind == cw.kind; });
+                if (!dup)
+                    roww.push_back(cw);
+            }
+        }
+        ctx.icc_to_embed = co.icc_to_embed;
+        ctx.res.color_src = co.src_desc;
+        ctx.res.color_dst = co.dst_desc;
+        if (cbuf.localpixels() != work_px) {
+            std::string cerr;
+            if (!work_from_buf(ctx.work, cbuf, cerr)) {
+                ctx.fail("color transform failed: " + cerr);
+                return false;
+            }
+            cbuf.clear();
+        }
+        ctx.mux->shared_stage(Stage::Color, 1.f);
+    } else {
+        // Pixels untouched: keep the source profile as-is (T4 ruling ③).
+        ctx.res.color_src = ctx.src_icc.empty()
+                                ? (src_is_gray ? "assumed gray sRGB" : "assumed sRGB")
+                                : "ICC(source)";
+        ctx.res.color_dst = "keep";
+        ctx.mux->shared_skip(Stage::Color); // 不执行 → 权重不丢失（共享段收口 = 40%）
+    }
+    log_debug(
+        kStage, kFile, "color decision",
+        {{"src", ctx.res.color_src},
+         {"dst", ctx.res.color_dst},
+         {"embed_icc",
+          ctx.icc_to_embed.empty() ? "none" : std::to_string(ctx.icc_to_embed.size()) + "B"}});
+    return true;
+}
+
+// ---- ⑧ build_meta（全局一次，逐输出共享）----
+bool stage_meta(RunFileContext &ctx) {
+    ctx.meta_plan = build_plan(ctx.srcmeta, ctx.cfg.rules, ctx.fe.exception);
+    if (ctx.rotated && !ctx.meta_plan.exif.empty())
+        ctx.meta_plan.exif["Exif.Image.Orientation"] = static_cast<uint16_t>(1); // §5.3
+    ctx.payloads = make_payloads(ctx.meta_plan);
+    ctx.meta.exif_blob = ctx.payloads.exif_blob; // consumed by JXL/HEIF/AVIF only (E7)
+    ctx.meta.xmp_rdf = ctx.payloads.xmp_rdf;
+    ctx.meta.icc_profile = ctx.icc_to_embed;
+    return true;
+}
+
+// ---- ⑨ encode_loop（多输出循环整体下沉：排序/flatten 边界/逐行失败隔离/break 扫尾）----
+bool stage_encode_loop(RunFileContext &ctx) {
+    std::vector<std::size_t> order(ctx.targets.size());
+    for (std::size_t i = 0; i < order.size(); ++i)
+        order[i] = i;
+    std::stable_sort(order.begin(), order.end(), [&ctx](std::size_t a, std::size_t b) {
+        return ctx.targets[a].target.supports_alpha && !ctx.targets[b].target.supports_alpha;
+    });
+
+    const bool image_has_alpha = (ctx.work.spec.nchannels == 2 || ctx.work.spec.nchannels == 4);
+    for (std::size_t pos = 0; pos < order.size(); ++pos) {
+        const std::size_t idx = order[pos];
+        const PlannedTarget &pt = ctx.targets[idx];
+        OutputResult &row = ctx.res.outputs[pt.cfg_index];
+        if (pt.skip) {
+            set_output_state(row, OutputState::Skipped); // R-172 单点迁移
+            ctx.mux->on_output_skipped(pt.cfg_index);    // §7.2：该输出全段记满（文件整体可达 1.0）
+            continue; // 跳过行不参与 flatten/告警（0.2 的 Skip 语义）
+        }
+        // W1-T6：该输出进入编码段（§7.2 的 50%+10% 块）。绑定必须早于本输出的任何阶段
+        // 事件 —— 合成标识（§7.3）以"格式是否在 k 表内"预置，编码返回后再按
+        // `progress_reported` 校正；先绑定可保证该输出的**所有**事件 synthetic 口径一致。
+        const ProgressFn out_progress = ctx.mux->bind_output(pt.cfg_index, pt.target.format_id);
+        const bool synth_pump = ctx.mux->synth_active(pt.cfg_index);
+
+        // §4.3：最后一个 alpha-preserving target 之后、首个 alpha-dropping target 之前原地
+        // flatten
+        const int cur_ch = ctx.work.spec.nchannels;
+        const bool buf_has_alpha = (cur_ch == 2 || cur_ch == 4);
+        if (image_has_alpha && !pt.target.supports_alpha) {
+            if (buf_has_alpha) {
+                ctx.stage(FileState::Flattening, Stage::Flatten, static_cast<int>(pt.cfg_index));
+                ctx.mux->output_stage(pt.cfg_index, Stage::Flatten);
+                Clock::time_point t0 = Clock::now();
+                std::string ferr;
+                if (!flatten_alpha_in_place(ctx.work, static_cast<float>(ctx.cfg.flatten_gray),
+                                            ferr)) {
+                    // 共享工作缓冲已不可信 → 本 target 与其余未处理 target 全部按输出级失败
+                    // 记录，再走聚合（§4.1：此时若已有输出成功 = DoneWithErrors，复核项 5）。
+                    const std::string msg = "flatten failed: " + ferr;
+                    log_error(kStage, kFile, msg, {{"src", ctx.fe.src.string()}});
+                    for (std::size_t rest = pos; rest < order.size(); ++rest) {
+                        OutputResult &r2 = ctx.res.outputs[ctx.targets[order[rest]].cfg_index];
+                        if (!r2.ok && !r2.skipped && r2.error.empty()) {
+                            r2.error = msg;
+                            r2.error_kind = ErrorKind::Flatten;
+                        }
+                    }
+                    break;
+                }
+                // R-289：Timing 聚合口径统一 —— 逐输出**累加**（与 encode_ms/metawrite_ms
+                // 同口径；flatten 至多发生一次，+= 与 = 在现行为下逐字等价）。
+                ctx.res.t.flatten_ms += ms_since(t0);
+            }
+            row.warnings.push_back(Warning{WarningKind::AlphaFlattened,
+                                           "alpha composited onto background " +
+                                               fmt_double(ctx.cfg.flatten_gray) + " for format '" +
+                                               pt.target.format_id + "'"});
+        }
+        if (is_cancelled(ctx.cancelled)) {
+            ctx.finalize(FileOutcome::Verdict::Cancelled);
+            return false;
+        }
+
+        // ---- bit depth note (§5.7) ----
+        if (ctx.info.src_bitdepth > pt.target.out_bitdepth) {
+            row.warnings.push_back(
+                Warning{WarningKind::DepthDowngrade,
+                        "source bit depth " + std::to_string(ctx.info.src_bitdepth) +
+                            " -> output bit depth " + std::to_string(pt.target.out_bitdepth)});
+        }
+
+        // ---- encode (§5.7)：单输出一次调用（§3.1）----
+        ctx.stage(FileState::Encoding, Stage::Encode, static_cast<int>(pt.cfg_index));
+        Clock::time_point t0 = Clock::now();
+        // EncodeRequest 字段序（encoder.h §3.1）：img, target, meta, cancelled, progress,
+        // encode_threads。W1-T6：progress = ProgressMux 的输出级回调（真实行级 → 直接汇流；
+        // 无回调格式 → 走合成估算，编码期间由 SynthPump 按 20ms 采样，§7.3）；
+        // encode_threads = W1-T7 起由调度器 E3 分配（`RunScope::encode_threads`，§8.2），
+        // 无 scope（单测直调）恒 1 = 0.2 行为。
+        const int enc_threads = encode_threads_of(ctx.ev.scope);
+        EncodeRequest req{ctx.work.buf,  pt.target,    ctx.meta,
+                          ctx.cancelled, out_progress, enc_threads};
+        EncodeResult er;
+        {
+            SynthPump pump(ctx.mux.get(), synth_pump);
+            er = pt.enc->encode(req);
+        }
+        row.t.encode_ms = ms_since(t0);
+        ctx.res.t.encode_ms += row.t.encode_ms;
+        merge_warnings(row.warnings, er.warnings);
+        const bool enc_ok = er.error.empty() && er.bytes != 0;
+        // 先按 §3.1 口径校正 mux 的合成标识（progress_reported=false → 该输出标合成），
+        // 再取快照 —— 快照里的 synthetic/reported 即该输出的**最终**口径（不写两次）。
+        if (enc_ok)
+            ctx.mux->on_output_encode_done(pt.cfg_index, er.progress_reported);
+        else
+            ctx.mux->on_output_failed(pt.cfg_index); // 失败：停在已完成进度，不虚增
+        // §7.4 进度快照（debug 级，每输出一条；**不逐行落盘**）：progress_max_row /
+        // progress_reported 是全仓进度口径的两个事实键，另附 samples/synthetic/est_ms 便于
+        // 校准 k 表（§7.3 "k 校准表随日志实测回归校正"）。
+        const ProgressMux::Stats pstats = ctx.mux->stats(pt.cfg_index);
+        log_debug(kStage, kFile, "progress snapshot",
+                  {{"src", ctx.fe.src.string()},
+                   {"output_index", std::to_string(pt.cfg_index)},
+                   {"format", pt.target.format_id},
+                   {"progress_reported", pstats.reported ? "true" : "false"},
+                   {"progress_max_row", std::to_string(pstats.max_row)},
+                   {"progress_samples", std::to_string(pstats.samples)},
+                   {"progress_synthetic", pstats.synthetic ? "true" : "false"},
+                   {"encode_est_ms", fmt_double(pstats.est_ms)}});
+        row.progress_reported = pstats.reported;
+        row.progress_max_row = pstats.max_row;
+        if (!enc_ok) {
+            row.error = "encode failed: " +
+                        (er.error.empty() ? std::string("encoder produced no data") : er.error);
+            row.error_kind = ErrorKind::Encode;
+            set_output_state(row, OutputState::Failed);
+            log_error(kStage, kFile, row.error,
+                      {{"src", ctx.fe.src.string()}, {"out", row.out.string()}});
+            continue; // 该输出失败：其余输出继续（§4.1 任一失败=DoneWithErrors）
+        }
+        row.out_bytes = er.bytes;
+
+        // ---- metadata write (§5.8, §4.8) ----
+        ctx.stage(FileState::Writing, Stage::MetaWrite, static_cast<int>(pt.cfg_index));
+        ctx.mux->output_stage(pt.cfg_index, Stage::MetaWrite);
+        t0 = Clock::now();
+        std::string meta_err;
+        // M2-T4 (#6/#8): the writer's explicit failure/degradation channel. R-171 起写路径
+        // 告警**只**走本通道（plan.warnings 归 build_plan，写路径不再回写 const plan）。
+        std::vector<std::string> writer_warnings;
+        if (pt.fmt->meta_path == "exiv2") {
+            meta_err = write_metadata_exiv2(row.out, ctx.meta_plan, ctx.payloads, &writer_warnings);
+        }
+        merge_warnings(row.warnings, ctx.meta_plan.warnings); // build_plan 通道（frozen content）
+        merge_writer_warnings(row.warnings, writer_warnings);
+        row.t.metawrite_ms = ms_since(t0);
+        ctx.res.t.metawrite_ms += row.t.metawrite_ms;
+        if (!meta_err.empty()) {
+            // R-002（P0）：写回失败 = 该输出真失败（不再吞成 warning + ok=true）。
+            // 写回已是临时文件 + rename（metadata.cpp），失败时磁盘上是编码产物原样
+            // （无截断半成品；编码产物不删除 —— 删除用户数据比保留像素更危险，裁定见
+            // handoff），此处如实记失败行让上层可见。
+            row.error = "metadata write failed: " + meta_err;
+            row.error_kind = ErrorKind::MetaWrite;
+            set_output_state(row, OutputState::Failed);
+            log_error(kStage, kFile, row.error,
+                      {{"src", ctx.fe.src.string()}, {"out", row.out.string()}});
+            ctx.mux->on_output_failed(pt.cfg_index);
+            continue;
+        }
+        if (pt.fmt->meta_path == "none") {
+            // BMP has no metadata container; T5 skips silently, the pipeline reports it (§4.8).
+            row.warnings.push_back(
+                Warning{WarningKind::MetadataDropped, "bmp output carries no metadata container"});
+        }
+        set_output_state(row, OutputState::Ok); // R-172 单点迁移
+        ctx.mux->on_output_metawrite_done(
+            pt.cfg_index); // §7.2 末行：metawrite + mtime + 落盘 = 10%
+    }
+    return true;
+}
+
+// ---- ⑩ finish_file（mtime + 收尾样本 + 逐输出/整文件日志 + aggregate 单源聚合）----
+void stage_finish(RunFileContext &ctx) {
+    // mtime sync (§5.9)：生效 DateTimeOriginal 只算一次，逐输出落盘一次
+    if (ctx.cfg.rules.sync_mtime && !ctx.meta_plan.datetime_original.empty()) {
+        for (const OutputResult &row : ctx.res.outputs) {
+            if (!row.ok)
+                continue;
+            const std::string merr = sync_file_mtime(row.out, ctx.meta_plan.datetime_original);
+            if (!merr.empty()) {
+                log_warn(kStage, kFile, "mtime sync failed",
+                         {{"out", row.out.string()}, {"error", merr}});
+            }
+        }
+    }
+    // W1-T6：收尾样本（成功路径此处 file_frac 已按 §7.2 达 1.0；失败路径不虚增）
+    ctx.mux->finish();
+
+    for (const OutputResult &row : ctx.res.outputs) {
+        log_info(kStage, kFile, "output done",
+                 {{"src", ctx.fe.src.string()},
+                  {"out", row.out.string()},
+                  {"format", row.format_id},
+                  {"ok", row.ok ? "true" : (row.skipped ? "skipped" : "false")},
+                  {"bytes", std::to_string(row.out_bytes)},
+                  {"encode_ms", fmt_double(row.t.encode_ms)},
+                  {"metawrite_ms", fmt_double(row.t.metawrite_ms)},
+                  {"warnings", std::to_string(row.warnings.size())}});
+        for (const Warning &w : row.warnings) {
+            log_warn(
+                kStage, kFile, "output warning",
+                {{"src", ctx.fe.src.string()}, {"out", row.out.string()}, {"detail", w.detail}});
+        }
+    }
+    const FileOutcome::Verdict v = verdict_of_rows(ctx.res);
+    log_info(
+        kStage, kFile, "file done",
+        {{"src", ctx.fe.src.string()},
+         {"outputs", std::to_string(ctx.res.outputs.size())},
+         {"ok_outputs", std::to_string(std::count_if(ctx.res.outputs.begin(), ctx.res.outputs.end(),
+                                                     [](const OutputResult &o) { return o.ok; }))},
+         {"bytes", std::to_string(ctx.res.out_bytes)},
+         {"decode_ms", fmt_double(ctx.res.t.decode_ms)},
+         {"orient_ms", fmt_double(ctx.res.t.orient_ms)},
+         {"color_ms", fmt_double(ctx.res.t.color_ms)},
+         {"flatten_ms", fmt_double(ctx.res.t.flatten_ms)},
+         {"encode_ms", fmt_double(ctx.res.t.encode_ms)},
+         {"metawrite_ms", fmt_double(ctx.res.t.metawrite_ms)},
+         {"verdict", v == FileOutcome::Verdict::Done      ? "Done"
+                     : v == FileOutcome::Verdict::Skipped ? "Skipped"
+                     : v == FileOutcome::Verdict::Failed  ? "Failed"
+                                                          : "DoneWithErrors"},
+         {"warnings", std::to_string(ctx.res.warnings.size())}});
+    ctx.finalize(v);
+}
+
+// R-168（M7-WP8/B.8）：双入口共享的失败收尾（旧行为逐字：行级 error 回填 + log_error +
+// finalize(Failed)）。
+void fail_fill(FileOutcome &outcome, Clock::time_point t_start, std::string msg) {
+    FileResult &res = outcome.file;
+    res.error = msg;
+    res.error_kind = error_kind_of(msg);
+    for (OutputResult &o : res.outputs) {
+        if (!o.ok && !o.skipped && o.error.empty()) {
+            o.error = msg;
+            o.error_kind = res.error_kind;
+        }
+    }
+    log_error(kStage, kFile, msg, {{"src", res.src.string()}});
+    finalize_aggregate(outcome, t_start, FileOutcome::Verdict::Failed);
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -516,644 +1188,41 @@ bool format_supports_metadata_only(std::string_view format_id) {
 }
 
 // ---------------------------------------------------------------------------
-// run_one_file（多输出循环，§4）
+// run_one_file（多输出循环，§4）—— B.4 拆解后本体 = 十阶段编排
 // ---------------------------------------------------------------------------
 FileOutcome run_one_file(const FileEntry &fe, const RunConfig &cfg, EventFn ev) {
-    namespace fs = std::filesystem;
-
-    FileOutcome outcome;
-    FileResult &res = outcome.file;
-    res.src = fe.src;
-    const Clock::time_point t_start = Clock::now();
-
-    const std::function<bool()> cancelled =
-        (ev.scope != nullptr) ? ev.scope->cancelled : std::function<bool()>();
-    const std::vector<fs::path> reserved =
-        (ev.scope != nullptr) ? ev.scope->reserved : std::vector<fs::path>{};
-    // W1-T6（§3.3/§7.1–§7.4）：进度枢纽。probe 之后建立（合成估算需要像素尺寸）；
-    // 在此之前的事件（Queued/Probing 的首次）progress 取默认值（overall=0）。
-    std::unique_ptr<ProgressMux> mux;
-    // 阶段事件携带当前进度快照（§3.3：progress 为追加字段，Progress 状态为其主用途；
-    // 阶段事件带上快照可让消费端一次拿到"阶段文本 + 整体位置"，消费端按 state 分派）。
-    const auto stage = [&ev, &mux](FileState s, Stage st, int output_index) {
-        if (!ev.on_event)
-            return;
-        FileEvent e{};
-        e.index = 0; // 批内下标由调用方（Scheduler）回填
-        e.state = s;
-        e.result = nullptr;
-        if (mux)
-            e.progress = mux->snapshot(st, output_index);
-        ev.on_event(e);
-    };
-    const auto make_mux = [&mux, &ev](const ImageInfo &info, std::size_t outputs) {
-        mux = std::make_unique<ProgressMux>(info.width, info.height, outputs);
-        mux->set_event_callback([&ev](const FileEvent &e) {
-            if (ev.on_event)
-                ev.on_event(e);
-        });
-    };
-
-    // 聚合终态 + FileResult 聚合字段（v0.2 单输出逐字等价：见 pipeline.h 的加法说明）。
-    const auto finalize = [&res, &t_start, &outcome](FileOutcome::Verdict v) -> FileOutcome {
-        res.t.total_ms = ms_since(t_start);
-        std::size_t n_ok = 0, n_skip = 0, n_fail = 0;
-        const OutputResult *first_fail = nullptr;
-        for (const OutputResult &o : res.outputs) {
-            if (o.ok) {
-                ++n_ok;
-            } else if (o.skipped) {
-                ++n_skip;
-            } else {
-                ++n_fail;
-                if (first_fail == nullptr)
-                    first_fail = &o;
-            }
-        }
-        res.out_bytes = 0;
-        for (const OutputResult &o : res.outputs)
-            res.out_bytes += o.out_bytes;
-        // 告警聚合：逐输出串联（全局告警在每行各有一份 → 按 kind+detail 去重）
-        res.warnings.clear();
-        for (const OutputResult &o : res.outputs) {
-            for (const Warning &w : o.warnings) {
-                const bool dup =
-                    std::any_of(res.warnings.begin(), res.warnings.end(), [&w](const Warning &e) {
-                        return e.kind == w.kind && e.detail == w.detail;
-                    });
-                if (!dup)
-                    res.warnings.push_back(w);
-            }
-        }
-        res.out = res.outputs.empty() ? fs::path{} : res.outputs.front().out;
-        res.ok = (n_fail == 0 && n_ok > 0);
-        res.skipped = (n_fail == 0 && n_ok == 0 && n_skip > 0);
-        res.cancelled = (v == FileOutcome::Verdict::Cancelled);
-        if (res.ok || res.skipped) {
-            res.error.clear();
-        } else if (res.error.empty() && first_fail != nullptr) {
-            res.error = first_fail->error;
-        }
-        outcome.verdict = v;
-        return outcome;
-    };
-
-    const auto fail = [&res, &finalize](std::string msg) -> FileOutcome {
-        res.error = msg;
-        for (OutputResult &o : res.outputs) {
-            if (!o.ok && !o.skipped && o.error.empty())
-                o.error = msg;
-        }
-        log_error(kStage, kFile, msg, {{"src", res.src.string()}});
-        return finalize(FileOutcome::Verdict::Failed);
-    };
-
-    // 逐输出的行记录（配置顺序）；失败路径也保留行（UI/sidecar 需要可见的逐输出状态）
-    for (const OutputFormatSpec &spec : cfg.outputs) {
-        OutputResult row;
-        row.format_id = spec.format_id;
-        row.backend_id = spec.backend_id;
-        row.tech_id = spec.tech_id;
-        res.outputs.push_back(std::move(row));
-    }
-
-    const auto verdict_of_rows = [&res]() -> FileOutcome::Verdict {
-        std::size_t n_ok = 0, n_fail = 0;
-        for (const OutputResult &o : res.outputs) {
-            if (o.ok) {
-                ++n_ok;
-            } else if (!o.skipped) {
-                ++n_fail;
-            }
-        }
-        if (n_fail == 0 && n_ok > 0)
-            return FileOutcome::Verdict::Done;
-        if (n_fail == 0)
-            return FileOutcome::Verdict::Skipped;
-        if (n_ok == 0 && n_fail == res.outputs.size())
-            return FileOutcome::Verdict::Failed;
-        return FileOutcome::Verdict::DoneWithErrors;
-    };
-
+    RunFileContext ctx(fe, cfg, ev);
     try {
-        // ---- 0. 配置硬校验（§3.2：outputs ≥ 1；仅元数据模式是另一个入口）----
-        if (cfg.outputs.empty())
-            return fail("no output configured (RunConfig::outputs is empty)");
-        if (cfg.metadata_only)
-            return fail("run_one_file must not be called in metadata-only mode "
-                        "(use run_metadata_only; RunConfig::outputs.size() must be 1 there)");
-        std::string tmpl_err;
-        if (!validate_output_template(cfg.output_template, &tmpl_err))
-            return fail(tmpl_err);
-
-        // ---- 1. cross-field parameter constraints (§2.7, M2-T5): fail with the first message ----
-        if (const std::string cross_err = first_cross_error(cfg); !cross_err.empty())
-            return fail(cross_err);
-
-        // ---- 2. probe (§5.1): spec only, no pixels ----
-        // NOTE(复核项 7)：§4.1 的"probe(一次)"在落地形态下是**每文件两次 spec 级探测** ——
-        // Scheduler 在取件时先探一次（早失败 + 预算/串行化决策，并把结果回填自己的 FileEntry），
-        // §3.2 的 `const FileEntry&` 使 pipeline 无法复用那份结果，故此处再探一次（只读 spec、
-        // 无像素工作，代价为一次头部解析）。0.2 同形（scheduler.cpp:157 + pipeline.cpp:265）。
-        stage(FileState::Probing, Stage::Probe, -1);
-        const ProbeOutcome po = probe_file(fe.src);
-        if (!po.error.empty())
-            return fail("probe failed: " + po.error);
-        const ImageInfo info = po.info;
-        res.info = info;
-        // W1-T6：进度枢纽就位（§7.2 共享段从 probe 起算；§7.3 合成估算需要 pixels）
-        make_mux(info, cfg.outputs.size());
-        mux->shared_stage(Stage::Probe, 0.f);
-        const OIIO::ImageSpec *spec = po.first_spec ? &*po.first_spec : nullptr;
-        const int orientation = spec ? orientation_from_spec(*spec) : 1;
-        std::string src_icc = spec ? icc_from_spec(*spec) : std::string();
-
-        // EXIF summary (time / GPS / ICC / Orientation). A read failure is NOT fatal (§4.8).
-        SourceMeta srcmeta = read_metadata(fe.src);
-        if (!srcmeta.error.empty())
-            log_warn(kStage, kFile, "source metadata unavailable; continuing with empty metadata",
-                     {{"src", fe.src.string()}, {"error", srcmeta.error}});
-        if (src_icc.empty())
-            src_icc = srcmeta.icc; // R13 chain: embedded ICC first
-        // ---- R13 middle step (issue #7, M2-T6 §2.8): CICP → source profile ----
-        // See the M2-T6 landing note: OIIO always publishes a JXL ICCProfile (synthesized from
-        // CICP), so CICP presence — not an empty src_icc — marks a source without its own ICC.
-        if (spec != nullptr && info.channels >= 3 &&
-            (info.format == "jpegxl" || info.format == "jxl")) {
-            const OIIO::ParamValue *pv = spec->find_attribute("CICP");
-            const bool cicp_ok = (pv != nullptr) && (pv->type().basetype == OIIO::TypeDesc::INT) &&
-                                 (pv->type().basevalues() * std::size_t(pv->nvalues()) >= 4);
-            if (cicp_ok) {
-                Cicp cicp;
-                cicp.primaries = pv->get<int>(0);
-                cicp.transfer = pv->get<int>(1);
-                cicp.matrix = pv->get<int>(2);     // not part of the mapping (§2.8)
-                cicp.full_range = pv->get<int>(3); // not part of the mapping (§2.8)
-                const CicpMapping mapped = map_cicp_source(cicp);
-                if (mapped.recognized()) {
-                    log_info(kStage, kFile, mapped.log_line, {{"src", fe.src.string()}});
-                } else {
-                    log_warn(kStage, kFile, mapped.log_line, {{"src", fe.src.string()}});
-                }
-                if (!mapped.src_icc.empty())
-                    src_icc = mapped.src_icc;
-            }
-        }
-        log_debug(kStage, kFile, "probe done",
-                  {{"src", fe.src.string()},
-                   {"size", std::to_string(info.width) + "x" + std::to_string(info.height)},
-                   {"channels", std::to_string(info.channels)},
-                   {"bitdepth", std::to_string(info.src_bitdepth)},
-                   {"orientation", std::to_string(orientation)},
-                   {"icc", src_icc.empty() ? "none" : std::to_string(src_icc.size()) + "B"},
-                   {"multipage", info.is_multipage ? "true" : "false"},
-                   {"outputs", std::to_string(cfg.outputs.size())}});
-
-        // ---- 3. 逐输出目标计划：格式/位深/编码器 + 路径模板 + 独立冲突解析 ----
-        std::vector<PlannedTarget> targets;
-        if (std::string plan_err; !plan_targets(fe, cfg, reserved, targets, res.outputs, plan_err))
-            return fail(plan_err);
-
-        // 全跳过（Skip 策略命中每一个输出）→ 不解码、不取预算（0.2 行为）
-        const bool all_skipped = std::all_of(targets.begin(), targets.end(),
-                                             [](const PlannedTarget &t) { return t.skip; });
-        if (all_skipped) {
-            for (std::size_t i = 0; i < res.outputs.size(); ++i) {
-                res.outputs[i].skipped = true; // 逐输出行标记（聚合判定与 sidecar 都要看它）
-                mux->on_output_skipped(i); // R-235：全跳过早退同样发输出级进度事件（§7.2 全段记满）
-            }
-            mux->finish();
-            log_info(kStage, kFile, "skipped: output exists",
-                     {{"src", fe.src.string()}, {"out", res.outputs.front().out.string()}});
-            return finalize(FileOutcome::Verdict::Skipped);
-        }
-
-        // 输出目录（逐 target；0.2 在解码前创建）
-        for (const PlannedTarget &pt : targets) {
-            if (pt.skip)
-                continue;
-            std::error_code ec;
-            const fs::path parent = pt.target.out_path.parent_path();
-            if (!parent.empty())
-                fs::create_directories(parent, ec);
-            if (ec)
-                return fail("cannot create output directory '" + parent.string() +
-                            "': " + ec.message());
-        }
-
-        // ---- 4. pixel budget (§3.3/§3.10): 2× float32 frame (rotate/composite peak, G2) ----
-        // 工作缓冲与 decode 缓冲同尺寸（通道数取自 probe），故 2×frame 仍是本文件的峰值上界。
-        const uint64_t need_bytes =
-            2 * PixelBudget::frame_bytes(info.width, info.height, info.channels);
-        bool budget_held = false;
-        struct BudgetGuard {
-            PixelBudget *b;
-            uint64_t bytes;
-            bool &held;
-            ~BudgetGuard() {
-                if (held && b)
-                    b->release(bytes);
-            }
-        } budget_guard{ev.scope != nullptr ? ev.scope->budget : nullptr, need_bytes, budget_held};
-        if (ev.scope != nullptr && ev.scope->budget != nullptr) {
-            if (!ev.scope->budget->acquire(need_bytes, cancelled)) {
-                if (is_cancelled(cancelled)) {
-                    return finalize(FileOutcome::Verdict::Cancelled);
-                }
-                return fail("pixel budget exceeded: need " + std::to_string(need_bytes) +
-                            " B, capacity " + std::to_string(ev.scope->budget->capacity()) + " B");
-            }
-            budget_held = true;
-            // Drumbeat evidence: the 2× frame peak reservation actually made it through the pool.
-            log_info(kStage, kFile, "pixel budget acquired",
-                     {{"src", fe.src.string()},
-                      {"need_bytes", std::to_string(need_bytes)},
-                      {"capacity_bytes", std::to_string(ev.scope->budget->capacity())},
-                      {"used_bytes", std::to_string(ev.scope->budget->used())},
-                      {"peak_bytes", std::to_string(ev.scope->budget->peak())}});
-        }
-        if (is_cancelled(cancelled))
-            return finalize(FileOutcome::Verdict::Cancelled);
-        // W1-T6（§7.2 首行）：probe + acquire 完成 → 3%
-        mux->shared_stage(Stage::Probe, 1.f);
-
-        // ---- 5. decode (§5.2) → 工作缓冲（此后 decode 缓冲立即释出；峰值 = 2×frame）----
-        stage(FileState::Decoding, Stage::Decode, -1);
-        mux->shared_stage(Stage::Decode, 0.f);
-        Clock::time_point t0 = Clock::now();
-        DecodeOutcome dec = decode_float(fe.src, info);
-        res.t.decode_ms = ms_since(t0);
-        if (!dec.error.empty())
-            return fail("decode failed: " + dec.error);
-        WorkImage work;
-        std::string werr;
-        if (!work_from_buf(work, dec.buf, werr))
-            return fail("decode failed: " + werr);
-        // W1-T6（§7.2 decode 行）：本仓库的解码入口（src/decode/oiio_reader.h 的 decode_float）
-        // **不暴露读行回调**（该文件不在 T6 文件面内 → 不改签名）→ 按 §7.2 的"无回调格式即时 1
-        // 并日志注明"落到即时 1，并在此如实记一条 debug（fmt/尺寸可见）。
-        mux->shared_stage(Stage::Decode, 1.f);
-        log_debug(kStage, kFile, "decode progress: immediate 1 (no read-row callback exposed)",
-                  {{"src", fe.src.string()},
-                   {"format", info.format},
-                   {"decode_ms", fmt_double(res.t.decode_ms)}});
-        // decode 告警（MultipageTruncated 等）随解码缓冲一起转移，再释出缓冲
-        const std::vector<Warning> decode_warnings = std::move(dec.warnings);
-        dec = DecodeOutcome{}; // 释放 decode 缓冲（工作缓冲已就位；峰值回到 1×frame）
-
-        // 工作缓冲里不属于单一 target 的告警（decode/color）按出现时刻推入每个未跳过行：
-        // 单输出时与 0.2 的 res.warnings 序列逐字一致。
-        const auto push_global = [&res, &targets](const std::vector<Warning> &ws) {
-            for (const Warning &w : ws) {
-                for (const PlannedTarget &t : targets) {
-                    if (!t.skip)
-                        res.outputs[t.cfg_index].warnings.push_back(w);
-                }
-            }
-        };
-        push_global(decode_warnings);
-
-        // ---- 6. orient (§5.3) ----
-        bool rotated = false;
-        if (cfg.rotate_orientation && orientation != 1) {
-            stage(FileState::Orienting, Stage::Orient, -1);
-            mux->shared_stage(Stage::Orient, 0.f);
-            t0 = Clock::now();
-            std::string oerr;
-            if (!orient_work(work, orientation, oerr))
-                return fail("orient failed: " + oerr);
-            res.t.orient_ms = ms_since(t0);
-            rotated = true;
-            mux->shared_stage(Stage::Orient, 1.f);
-        } else {
-            mux->shared_skip(Stage::Orient); // 不执行 → 权重不丢失（§7.2 共享段恒达 40%）
-        }
-        if (is_cancelled(cancelled))
-            return finalize(FileOutcome::Verdict::Cancelled);
-
-        // ---- 7. color (§5.4 + §4.8 gray/ICC rulings；全局目标，一次，多输出共享 D5) ----
-        const bool src_is_gray = (info.channels == 1 || info.channels == 2);
-        // 灰度源：任一 target 不支持灰度 → 报 GrayToRgbEncoded，并把有效目标推成 sRGB
-        // （多输出下"一次变换、全体共享"，行为对单输出与 0.2 逐字一致）。
-        bool any_target_needs_rgb = false;
-        for (const PlannedTarget &pt : targets) {
-            if (pt.skip || !src_is_gray || pt.fmt->supports_gray)
-                continue;
-            any_target_needs_rgb = true;
-            res.outputs[pt.cfg_index].warnings.push_back(
-                Warning{WarningKind::GrayToRgbEncoded,
-                        "grayscale source encoded as RGB for format '" + pt.fmt->id + "'"});
-        }
-        ColorTarget eff_target = cfg.color;
-        if (src_is_gray && any_target_needs_rgb && eff_target == ColorTarget::KeepOriginal) {
-            // Grayscale pixels must not reach webp/heif/avif: use sRGB as the effective target
-            // even though the user kept the original (§4.8).
-            eff_target = ColorTarget::SRGB;
-        }
-        // 复核项 9：混合灰度支持的多输出里，color 是全局一次（D5）⇒ 支持灰度的 target 也被动
-        // 升到 RGB。它自己的格式并非"不支持灰度"，故与上面的告警措辞区分开、如实补一条
-        // （单输出 / 全支持灰度的组合不触发 → 0.2 语义逐字不变）。
-        if (src_is_gray && any_target_needs_rgb && eff_target != ColorTarget::KeepOriginal) {
-            for (const PlannedTarget &pt : targets) {
-                if (pt.skip || !pt.fmt->supports_gray)
-                    continue;
-                res.outputs[pt.cfg_index].warnings.push_back(Warning{
-                    WarningKind::GrayToRgbEncoded,
-                    "grayscale source encoded as RGB for format '" + pt.fmt->id +
-                        "' (shared color transform: another output cannot carry grayscale)"});
-            }
-        }
-        std::string icc_to_embed = src_icc;
-        if (eff_target != ColorTarget::KeepOriginal) {
-            stage(FileState::Coloring, Stage::Color, -1);
-            mux->shared_stage(Stage::Color, 0.f);
-            t0 = Clock::now();
-            // ColorManager 的落地形态见下（可能替换 ImageBuf：灰度升维）—— 只有**被替换**时
-            // 才把像素同步回工作缓冲。
-            // 回拷规则（W1-T5 复核项 1 修订，2026-09-24）：只有**缓冲被替换**时才回拷。
-            //   * `cbuf = work.buf` 对 APPBUFFER 是**共享存储**而非深拷（OIIO 的 ImageBuf 拷贝
-            //     构造函数对 APPBUFFER 直接复用同一 bufspan），故 cbuf 的像素就是 work.px；
-            //   * ColorManager 的 3/4 通道分支用 write_planes **原地**写进这块存储
-            //     （src/core/colormanager.cpp:721-733），此时像素已就位 —— 若照旧回拷，
-            //     work_from_buf 的第一步（assign/覆写 n 个样本）与"源"同址 → 把刚变换好的像素
-            //     清零后再从同一块内存读回 → **全黑图**且 ok=true、无告警（静默数据损失）。
-            //   * 灰度升维分支 `buf = make_like(...)` 换成独立新缓冲 → 地址不同 → 必须回拷。
-            // 判据用"当前缓冲的本地像素地址是否仍是工作缓冲的存储"（两条路径都是本地缓冲：
-            // APPBUFFER 包装 / make_like 的 LOCALBUFFER，故 localpixels() 恒非空）。
-            OIIO::ImageBuf cbuf = work.buf;
-            const void *const work_px = work.px.data();
-            // I3 加性重载：R-032（ICC 通道不匹配降级）/R-035（灰度升维）的告警经 out_warnings
-            // 输出并进逐输出行（opts 用默认 = 现行为；RunConfig 的 I8 字段消费归 WP8/WP10）。
-            std::vector<Warning> color_warnings;
-            std::string color_err;
-            ColorOutcome co =
-                ColorManager::instance().transform(cbuf, src_icc, src_is_gray, eff_target,
-                                                   ColorOptions{}, &color_warnings, &color_err);
-            res.t.color_ms = ms_since(t0);
-            if (!co.error.empty())
-                return fail("color transform failed: " + co.error);
-            push_global(co.warnings);
-            // R-032/R-035 的降级/升维告警并入逐输出行；同 kind 已有条目时不再重复 ——
-            // 灰度→不支持灰度格式时管线已按 §4.8 报过 GrayToRgbEncoded（逐格式条目），
-            // 色彩段的升维告警是同义补充（golden 的 warnings_exact 按 kind 序列断言）。
-            for (const Warning &cw : color_warnings) {
-                for (const PlannedTarget &t : targets) {
-                    if (t.skip)
-                        continue;
-                    std::vector<Warning> &roww = res.outputs[t.cfg_index].warnings;
-                    const bool dup = std::any_of(roww.begin(), roww.end(), [&cw](const Warning &e) {
-                        return e.kind == cw.kind;
-                    });
-                    if (!dup)
-                        roww.push_back(cw);
-                }
-            }
-            icc_to_embed = co.icc_to_embed;
-            res.color_src = co.src_desc;
-            res.color_dst = co.dst_desc;
-            if (cbuf.localpixels() != work_px) {
-                std::string cerr;
-                if (!work_from_buf(work, cbuf, cerr))
-                    return fail("color transform failed: " + cerr);
-                cbuf.clear();
-            }
-            mux->shared_stage(Stage::Color, 1.f);
-        } else {
-            // Pixels untouched: keep the source profile as-is (T4 ruling ③).
-            res.color_src = src_icc.empty() ? (src_is_gray ? "assumed gray sRGB" : "assumed sRGB")
-                                            : "ICC(source)";
-            res.color_dst = "keep";
-            mux->shared_skip(Stage::Color); // 不执行 → 权重不丢失（共享段收口 = 40%）
-        }
-        log_debug(kStage, kFile, "color decision",
-                  {{"src", res.color_src},
-                   {"dst", res.color_dst},
-                   {"embed_icc",
-                    icc_to_embed.empty() ? "none" : std::to_string(icc_to_embed.size()) + "B"}});
-
-        // ---- 8. metadata plan / payloads (§3.7, §4.8)：全局一次，逐输出共享 ----
-        MetadataPlan meta_plan = build_plan(srcmeta, cfg.rules, fe.exception);
-        if (rotated && !meta_plan.exif.empty())
-            meta_plan.exif["Exif.Image.Orientation"] = static_cast<uint16_t>(1); // §5.3
-        const Payloads payloads = make_payloads(meta_plan);
-        MetadataPayloads meta;
-        meta.exif_blob = payloads.exif_blob; // consumed by JXL/HEIF/AVIF only (E7)
-        meta.xmp_rdf = payloads.xmp_rdf;
-        meta.icc_profile = icc_to_embed;
-
-        // ---- 9. 编码循环（§4.3 排序：supports_alpha 的在前，稳定）----
-        std::vector<std::size_t> order(targets.size());
-        for (std::size_t i = 0; i < order.size(); ++i)
-            order[i] = i;
-        std::stable_sort(order.begin(), order.end(), [&targets](std::size_t a, std::size_t b) {
-            return targets[a].target.supports_alpha && !targets[b].target.supports_alpha;
-        });
-
-        const bool image_has_alpha = (work.spec.nchannels == 2 || work.spec.nchannels == 4);
-        for (std::size_t pos = 0; pos < order.size(); ++pos) {
-            const std::size_t idx = order[pos];
-            const PlannedTarget &pt = targets[idx];
-            OutputResult &row = res.outputs[pt.cfg_index];
-            if (pt.skip) {
-                row.skipped = true;
-                mux->on_output_skipped(pt.cfg_index); // §7.2：该输出全段记满（文件整体可达 1.0）
-                continue; // 跳过行不参与 flatten/告警（0.2 的 Skip 语义）
-            }
-            // W1-T6：该输出进入编码段（§7.2 的 50%+10% 块）。绑定必须早于本输出的任何阶段
-            // 事件 —— 合成标识（§7.3）以"格式是否在 k 表内"预置，编码返回后再按
-            // `progress_reported` 校正；先绑定可保证该输出的**所有**事件 synthetic 口径一致。
-            const ProgressFn out_progress = mux->bind_output(pt.cfg_index, pt.target.format_id);
-            const bool synth_pump = mux->synth_active(pt.cfg_index);
-
-            // §4.3：最后一个 alpha-preserving target 之后、首个 alpha-dropping target 之前原地
-            // flatten
-            const int cur_ch = work.spec.nchannels;
-            const bool buf_has_alpha = (cur_ch == 2 || cur_ch == 4);
-            if (image_has_alpha && !pt.target.supports_alpha) {
-                if (buf_has_alpha) {
-                    stage(FileState::Flattening, Stage::Flatten, static_cast<int>(pt.cfg_index));
-                    mux->output_stage(pt.cfg_index, Stage::Flatten);
-                    t0 = Clock::now();
-                    std::string ferr;
-                    if (!flatten_alpha_in_place(work, static_cast<float>(cfg.flatten_gray), ferr)) {
-                        // 共享工作缓冲已不可信 → 本 target 与其余未处理 target 全部按输出级失败
-                        // 记录，再走聚合（§4.1：此时若已有输出成功 = DoneWithErrors，复核项 5）。
-                        const std::string msg = "flatten failed: " + ferr;
-                        log_error(kStage, kFile, msg, {{"src", fe.src.string()}});
-                        for (std::size_t rest = pos; rest < order.size(); ++rest) {
-                            OutputResult &r2 = res.outputs[targets[order[rest]].cfg_index];
-                            if (!r2.ok && !r2.skipped && r2.error.empty())
-                                r2.error = msg;
-                        }
-                        break;
-                    }
-                    // R-289：Timing 聚合口径统一 —— 逐输出**累加**（与 encode_ms/metawrite_ms
-                    // 同口径；flatten 至多发生一次，+= 与 = 在现行为下逐字等价）。
-                    res.t.flatten_ms += ms_since(t0);
-                }
-                row.warnings.push_back(Warning{WarningKind::AlphaFlattened,
-                                               "alpha composited onto background " +
-                                                   fmt_double(cfg.flatten_gray) + " for format '" +
-                                                   pt.target.format_id + "'"});
-            }
-            if (is_cancelled(cancelled))
-                return finalize(FileOutcome::Verdict::Cancelled);
-
-            // ---- bit depth note (§5.7) ----
-            if (info.src_bitdepth > pt.target.out_bitdepth) {
-                row.warnings.push_back(
-                    Warning{WarningKind::DepthDowngrade,
-                            "source bit depth " + std::to_string(info.src_bitdepth) +
-                                " -> output bit depth " + std::to_string(pt.target.out_bitdepth)});
-            }
-
-            // ---- encode (§5.7)：单输出一次调用（§3.1）----
-            stage(FileState::Encoding, Stage::Encode, static_cast<int>(pt.cfg_index));
-            t0 = Clock::now();
-            // EncodeRequest 字段序（encoder.h §3.1）：img, target, meta, cancelled, progress,
-            // encode_threads。W1-T6：progress = ProgressMux 的输出级回调（真实行级 → 直接汇流；
-            // 无回调格式 → 走合成估算，编码期间由 SynthPump 按 20ms 采样，§7.3）；
-            // encode_threads = W1-T7 起由调度器 E3 分配（`RunScope::encode_threads`，§8.2），
-            // 无 scope（单测直调）恒 1 = 0.2 行为。
-            const int enc_threads = encode_threads_of(ev.scope);
-            EncodeRequest req{work.buf, pt.target, meta, cancelled, out_progress, enc_threads};
-            EncodeResult er;
-            {
-                SynthPump pump(mux.get(), synth_pump);
-                er = pt.enc->encode(req);
-            }
-            row.t.encode_ms = ms_since(t0);
-            res.t.encode_ms += row.t.encode_ms;
-            merge_warnings(row.warnings, er.warnings);
-            const bool enc_ok = er.error.empty() && er.bytes != 0;
-            // 先按 §3.1 口径校正 mux 的合成标识（progress_reported=false → 该输出标合成），
-            // 再取快照 —— 快照里的 synthetic/reported 即该输出的**最终**口径（不写两次）。
-            if (enc_ok)
-                mux->on_output_encode_done(pt.cfg_index, er.progress_reported);
-            else
-                mux->on_output_failed(pt.cfg_index); // 失败：停在已完成进度，不虚增
-            // §7.4 进度快照（debug 级，每输出一条；**不逐行落盘**）：progress_max_row /
-            // progress_reported 是全仓进度口径的两个事实键，另附 samples/synthetic/est_ms 便于
-            // 校准 k 表（§7.3 "k 校准表随日志实测回归校正"）。
-            const ProgressMux::Stats pstats = mux->stats(pt.cfg_index);
-            log_debug(kStage, kFile, "progress snapshot",
-                      {{"src", fe.src.string()},
-                       {"output_index", std::to_string(pt.cfg_index)},
-                       {"format", pt.target.format_id},
-                       {"progress_reported", pstats.reported ? "true" : "false"},
-                       {"progress_max_row", std::to_string(pstats.max_row)},
-                       {"progress_samples", std::to_string(pstats.samples)},
-                       {"progress_synthetic", pstats.synthetic ? "true" : "false"},
-                       {"encode_est_ms", fmt_double(pstats.est_ms)}});
-            row.progress_reported = pstats.reported;
-            row.progress_max_row = pstats.max_row;
-            if (!enc_ok) {
-                row.error = "encode failed: " +
-                            (er.error.empty() ? std::string("encoder produced no data") : er.error);
-                row.ok = false;
-                log_error(kStage, kFile, row.error,
-                          {{"src", fe.src.string()}, {"out", row.out.string()}});
-                continue; // 该输出失败：其余输出继续（§4.1 任一失败=DoneWithErrors）
-            }
-            row.out_bytes = er.bytes;
-
-            // ---- metadata write (§5.8, §4.8) ----
-            stage(FileState::Writing, Stage::MetaWrite, static_cast<int>(pt.cfg_index));
-            mux->output_stage(pt.cfg_index, Stage::MetaWrite);
-            t0 = Clock::now();
-            std::string meta_err;
-            // M2-T4 (#6/#8): the writer's explicit failure/degradation channel. R-171 起写路径
-            // 告警**只**走本通道（plan.warnings 归 build_plan，写路径不再回写 const plan）。
-            std::vector<std::string> writer_warnings;
-            if (pt.fmt->meta_path == "exiv2") {
-                meta_err = write_metadata_exiv2(row.out, meta_plan, payloads, &writer_warnings);
-            }
-            merge_warnings(row.warnings, meta_plan.warnings); // build_plan 通道（frozen content）
-            merge_writer_warnings(row.warnings, writer_warnings);
-            row.t.metawrite_ms = ms_since(t0);
-            res.t.metawrite_ms += row.t.metawrite_ms;
-            if (!meta_err.empty()) {
-                // R-002（P0）：写回失败 = 该输出真失败（不再吞成 warning + ok=true）。
-                // 写回已是临时文件 + rename（metadata.cpp），失败时磁盘上是编码产物原样
-                // （无截断半成品；编码产物不删除 —— 删除用户数据比保留像素更危险，裁定见
-                // handoff），此处如实记失败行让上层可见。
-                row.error = "metadata write failed: " + meta_err;
-                row.ok = false;
-                log_error(kStage, kFile, row.error,
-                          {{"src", fe.src.string()}, {"out", row.out.string()}});
-                mux->on_output_failed(pt.cfg_index);
-                continue;
-            }
-            if (pt.fmt->meta_path == "none") {
-                // BMP has no metadata container; T5 skips silently, the pipeline reports it (§4.8).
-                row.warnings.push_back(Warning{WarningKind::MetadataDropped,
-                                               "bmp output carries no metadata container"});
-            }
-            row.ok = true;
-            mux->on_output_metawrite_done(
-                pt.cfg_index); // §7.2 末行：metawrite + mtime + 落盘 = 10%
-        }
-
-        // ---- 10. mtime sync (§5.9)：生效 DateTimeOriginal 只算一次，逐输出落盘一次 ----
-        if (cfg.rules.sync_mtime && !meta_plan.datetime_original.empty()) {
-            for (const OutputResult &row : res.outputs) {
-                if (!row.ok)
-                    continue;
-                const std::string merr = sync_file_mtime(row.out, meta_plan.datetime_original);
-                if (!merr.empty()) {
-                    log_warn(kStage, kFile, "mtime sync failed",
-                             {{"out", row.out.string()}, {"error", merr}});
-                }
-            }
-        }
-        // W1-T6：收尾样本（成功路径此处 file_frac 已按 §7.2 达 1.0；失败路径不虚增）
-        mux->finish();
-
-        for (const OutputResult &row : res.outputs) {
-            log_info(kStage, kFile, "output done",
-                     {{"src", fe.src.string()},
-                      {"out", row.out.string()},
-                      {"format", row.format_id},
-                      {"ok", row.ok ? "true" : (row.skipped ? "skipped" : "false")},
-                      {"bytes", std::to_string(row.out_bytes)},
-                      {"encode_ms", fmt_double(row.t.encode_ms)},
-                      {"metawrite_ms", fmt_double(row.t.metawrite_ms)},
-                      {"warnings", std::to_string(row.warnings.size())}});
-            for (const Warning &w : row.warnings) {
-                log_warn(
-                    kStage, kFile, "output warning",
-                    {{"src", fe.src.string()}, {"out", row.out.string()}, {"detail", w.detail}});
-            }
-        }
-        const FileOutcome::Verdict v = verdict_of_rows();
-        log_info(kStage, kFile, "file done",
-                 {{"src", fe.src.string()},
-                  {"outputs", std::to_string(res.outputs.size())},
-                  {"ok_outputs",
-                   std::to_string(std::count_if(res.outputs.begin(), res.outputs.end(),
-                                                [](const OutputResult &o) { return o.ok; }))},
-                  {"bytes", std::to_string(res.out_bytes)},
-                  {"decode_ms", fmt_double(res.t.decode_ms)},
-                  {"orient_ms", fmt_double(res.t.orient_ms)},
-                  {"color_ms", fmt_double(res.t.color_ms)},
-                  {"flatten_ms", fmt_double(res.t.flatten_ms)},
-                  {"encode_ms", fmt_double(res.t.encode_ms)},
-                  {"metawrite_ms", fmt_double(res.t.metawrite_ms)},
-                  {"verdict", v == FileOutcome::Verdict::Done      ? "Done"
-                              : v == FileOutcome::Verdict::Skipped ? "Skipped"
-                              : v == FileOutcome::Verdict::Failed  ? "Failed"
-                                                                   : "DoneWithErrors"},
-                  {"warnings", std::to_string(res.warnings.size())}});
-        return finalize(v);
+        if (!stage_validate(ctx))
+            return std::move(ctx.outcome);
+        if (!stage_probe(ctx))
+            return std::move(ctx.outcome);
+        if (!stage_plan(ctx))
+            return std::move(ctx.outcome);
+        if (!stage_budget(ctx))
+            return std::move(ctx.outcome);
+        if (!stage_decode(ctx))
+            return std::move(ctx.outcome);
+        if (!stage_orient(ctx))
+            return std::move(ctx.outcome);
+        if (!stage_color(ctx))
+            return std::move(ctx.outcome);
+        if (!stage_meta(ctx))
+            return std::move(ctx.outcome);
+        if (!stage_encode_loop(ctx))
+            return std::move(ctx.outcome);
+        stage_finish(ctx);
+        return std::move(ctx.outcome);
     } catch (const std::exception &e) {
-        return fail(std::string("unexpected exception: ") + e.what());
+        return ctx.fail(std::string("unexpected exception: ") + e.what());
     } catch (...) {
-        return fail("unexpected non-standard exception");
+        return ctx.fail("unexpected non-standard exception");
     }
 }
 
 // ---------------------------------------------------------------------------
 // run_metadata_only（§3.2：语义不变，互斥 outputs.size()==1；零重编码）
+// M7-WP8/R-168：finalize/fail 与 run_one_file 共用单源（旧行为逐字一致）。
 // ---------------------------------------------------------------------------
 FileOutcome run_metadata_only(const FileEntry &fe, const RunConfig &cfg, EventFn ev) {
     namespace fs = std::filesystem;
@@ -1183,41 +1252,13 @@ FileOutcome run_metadata_only(const FileEntry &fe, const RunConfig &cfg, EventFn
         ev.on_event(e);
     };
 
-    const auto finalize = [&res, &t_start, &outcome](FileOutcome::Verdict v) -> FileOutcome {
-        res.t.total_ms = ms_since(t_start);
-        res.out_bytes = 0;
-        res.warnings.clear();
-        for (const OutputResult &o : res.outputs) {
-            res.out_bytes += o.out_bytes;
-            for (const Warning &w : o.warnings) {
-                const bool dup =
-                    std::any_of(res.warnings.begin(), res.warnings.end(), [&w](const Warning &e) {
-                        return e.kind == w.kind && e.detail == w.detail;
-                    });
-                if (!dup)
-                    res.warnings.push_back(w);
-            }
-        }
-        res.out = res.outputs.empty() ? fs::path{} : res.outputs.front().out;
-        res.ok = (v == FileOutcome::Verdict::Done);
-        res.skipped = (v == FileOutcome::Verdict::Skipped);
-        res.cancelled = (v == FileOutcome::Verdict::Cancelled);
-        if ((res.ok || res.skipped) && res.error.empty()) {
-            // keep empty
-        } else if (res.error.empty() && !res.outputs.empty()) {
-            res.error = res.outputs.front().error;
-        }
-        outcome.verdict = v;
+    const auto finalize = [&t_start, &outcome](FileOutcome::Verdict v) -> FileOutcome {
+        finalize_aggregate(outcome, t_start, v);
         return outcome;
     };
-    const auto fail = [&res, &finalize](std::string msg) -> FileOutcome {
-        res.error = msg;
-        for (OutputResult &o : res.outputs) {
-            if (!o.ok && !o.skipped && o.error.empty())
-                o.error = msg;
-        }
-        log_error(kStage, kFile, msg, {{"src", res.src.string()}});
-        return finalize(FileOutcome::Verdict::Failed);
+    const auto fail = [&t_start, &outcome](std::string msg) -> FileOutcome {
+        fail_fill(outcome, t_start, std::move(msg)); // R-168：与 run_one_file 同源收尾
+        return outcome;
     };
 
     try {
@@ -1271,12 +1312,9 @@ FileOutcome run_metadata_only(const FileEntry &fe, const RunConfig &cfg, EventFn
                         "' does not support metadata-only rewrite (zero re-encode)");
         }
         // 路径模板（同容器 → 保持源扩展名）+ 冲突解析（逐输出独立）
-        PathCtx ctx;
-        ctx.format_dir = fmt->id;
-        ctx.rel_dir = relative_dir(fe.src, fe.base_dir);
-        ctx.stem = fe.src.stem().string();
-        ctx.ext = fe.src.extension().string();
-        const fs::path desired = render_output_path(cfg.output_template, ctx, cfg.out_root);
+        // R-175（M7-WP8/B.8）：PathCtx 组装收口 path_ctx_for（metadata_only → 源扩展名）。
+        const PathCtx ctx_path = path_ctx_for(fe, cfg, fmt);
+        const fs::path desired = render_output_path(cfg.output_template, ctx_path, cfg.out_root);
         if (desired.empty())
             return fail("output path: template '" + cfg.output_template +
                         "' produced no file name");
@@ -1297,8 +1335,8 @@ FileOutcome run_metadata_only(const FileEntry &fe, const RunConfig &cfg, EventFn
             return fail("output path: " + conflict_err);
         row.out = out_plan.out_path;
         if (out_plan.skip) {
-            row.skipped = true;
-            mux->on_output_skipped(0); // §7.2：无工作可做 → 全段记满
+            set_output_state(row, OutputState::Skipped); // R-172 单点迁移
+            mux->on_output_skipped(0);                   // §7.2：无工作可做 → 全段记满
             log_info(kStage, kFile, "skipped: output exists",
                      {{"src", fe.src.string()}, {"out", row.out.string()}});
             return finalize(FileOutcome::Verdict::Skipped);
@@ -1358,8 +1396,8 @@ FileOutcome run_metadata_only(const FileEntry &fe, const RunConfig &cfg, EventFn
         row.out_bytes = fs::file_size(row.out, ec);
         if (ec)
             row.out_bytes = 0;
-        row.ok = true;
-        mux->finish(); // W1-T6：收尾样本（此路径 §7.2 全段记满 → 1.0）
+        set_output_state(row, OutputState::Ok); // R-172 单点迁移
+        mux->finish();                          // W1-T6：收尾样本（此路径 §7.2 全段记满 → 1.0）
         log_info(kStage, kFile, "metadata-only done",
                  {{"src", fe.src.string()},
                   {"out", row.out.string()},
@@ -1376,6 +1414,273 @@ FileOutcome run_metadata_only(const FileEntry &fe, const RunConfig &cfg, EventFn
     } catch (...) {
         return fail("unexpected non-standard exception");
     }
+}
+
+// ============================================================================================
+// M7-WP8 / B.8 契约收口实现（声明见 pipeline.h 尾部加性块）
+// ============================================================================================
+
+const char *output_state_name(OutputState s) {
+    switch (s) {
+    case OutputState::Pending:
+        return "pending";
+    case OutputState::Ok:
+        return "ok";
+    case OutputState::Skipped:
+        return "skipped";
+    case OutputState::Failed:
+        return "failed";
+    case OutputState::Cancelled:
+        return "cancelled";
+    }
+    return "unknown";
+}
+
+// R-172：终态双轨（state 枚举 ↔ ok/skipped 布尔）的**唯一**对齐点。
+void set_output_state(OutputResult &row, OutputState s) {
+    row.state = s;
+    row.ok = (s == OutputState::Ok);
+    row.skipped = (s == OutputState::Skipped);
+}
+
+const char *error_kind_name(ErrorKind k) {
+    switch (k) {
+    case ErrorKind::None:
+        return "none";
+    case ErrorKind::Config:
+        return "config";
+    case ErrorKind::Probe:
+        return "probe";
+    case ErrorKind::Decode:
+        return "decode";
+    case ErrorKind::Orient:
+        return "orient";
+    case ErrorKind::Color:
+        return "color";
+    case ErrorKind::Flatten:
+        return "flatten";
+    case ErrorKind::Encode:
+        return "encode";
+    case ErrorKind::MetaWrite:
+        return "metawrite";
+    case ErrorKind::Io:
+        return "io";
+    case ErrorKind::Cancelled:
+        return "cancelled";
+    case ErrorKind::Internal:
+        return "internal";
+    case ErrorKind::Unknown:
+        return "unknown";
+    }
+    return "unknown";
+}
+
+// R-176：消息前缀约定的**唯一**判据（此前散在 pipeline.cpp:630 等处的字符串约定收口于此；
+// UI 中文映射表按 ErrorKind 对表，见 handoff「跨界需求」）。
+ErrorKind error_kind_of(std::string_view error) {
+    if (error.empty())
+        return ErrorKind::None;
+    const auto starts = [&error](std::string_view p) { return error.rfind(p, 0) == 0; };
+    if (starts("probe failed:"))
+        return ErrorKind::Probe;
+    if (starts("decode failed:"))
+        return ErrorKind::Decode;
+    if (starts("orient failed:"))
+        return ErrorKind::Orient;
+    if (starts("color transform failed:"))
+        return ErrorKind::Color;
+    if (starts("flatten failed:"))
+        return ErrorKind::Flatten;
+    if (starts("encode failed:"))
+        return ErrorKind::Encode;
+    if (starts("metadata write failed:") || starts("metadata-only rewrite failed:"))
+        return ErrorKind::MetaWrite;
+    if (starts("source metadata unavailable"))
+        return ErrorKind::MetaWrite;
+    if (starts("output path") || starts("cannot create output directory") ||
+        starts("pixel budget exceeded"))
+        return ErrorKind::Io;
+    if (starts("encode cancelled"))
+        return ErrorKind::Cancelled;
+    if (starts("unexpected exception") || starts("unexpected non-standard exception"))
+        return ErrorKind::Internal;
+    if (starts("no output configured") || starts("run_one_file must not be called") ||
+        starts("metadata-only mode requires") || starts("unknown output format") ||
+        starts("no encoder registered") || starts("output bit depth") || starts("format '"))
+        return ErrorKind::Config;
+    return ErrorKind::Unknown;
+}
+
+// R-168：终态聚合单源（run_one_file / run_metadata_only 共用；旧两份 finalize 合一）。
+FileOutcome::Verdict verdict_of_rows(const FileResult &res) {
+    std::size_t n_ok = 0, n_fail = 0;
+    for (const OutputResult &o : res.outputs) {
+        if (o.ok) {
+            ++n_ok;
+        } else if (!o.skipped) {
+            ++n_fail;
+        }
+    }
+    if (n_fail == 0 && n_ok > 0)
+        return FileOutcome::Verdict::Done;
+    if (n_fail == 0)
+        return FileOutcome::Verdict::Skipped;
+    if (n_ok == 0 && n_fail == res.outputs.size())
+        return FileOutcome::Verdict::Failed;
+    return FileOutcome::Verdict::DoneWithErrors;
+}
+
+void finalize_aggregate(FileOutcome &outcome, std::chrono::steady_clock::time_point t_start,
+                        FileOutcome::Verdict v) {
+    FileResult &res = outcome.file;
+    res.t.total_ms = ms_since(t_start);
+    std::size_t n_ok = 0, n_skip = 0, n_fail = 0;
+    const OutputResult *first_fail = nullptr;
+    for (const OutputResult &o : res.outputs) {
+        if (o.ok) {
+            ++n_ok;
+        } else if (o.skipped) {
+            ++n_skip;
+        } else {
+            ++n_fail;
+            if (first_fail == nullptr)
+                first_fail = &o;
+        }
+    }
+    res.out_bytes = 0;
+    for (const OutputResult &o : res.outputs)
+        res.out_bytes += o.out_bytes;
+    // 告警聚合：逐输出串联（全局告警在每行各有一份 → 按 kind+detail 去重）
+    res.warnings.clear();
+    for (const OutputResult &o : res.outputs) {
+        for (const Warning &w : o.warnings) {
+            const bool dup =
+                std::any_of(res.warnings.begin(), res.warnings.end(), [&w](const Warning &e) {
+                    return e.kind == w.kind && e.detail == w.detail;
+                });
+            if (!dup)
+                res.warnings.push_back(w);
+        }
+    }
+    res.out = res.outputs.empty() ? std::filesystem::path{} : res.outputs.front().out;
+    res.ok = (n_fail == 0 && n_ok > 0);
+    res.skipped = (n_fail == 0 && n_ok == 0 && n_skip > 0);
+    res.cancelled = (v == FileOutcome::Verdict::Cancelled);
+    if (res.ok || res.skipped) {
+        res.error.clear();
+    } else if (res.error.empty() && first_fail != nullptr) {
+        res.error = first_fail->error;
+        res.error_kind = first_fail->error_kind;
+    }
+    if (v == FileOutcome::Verdict::Cancelled) {
+        // R-172：取消终态下未决行如实标 Cancelled（旧口径行停在 Pending 面）。
+        for (OutputResult &o : res.outputs) {
+            if (o.state == OutputState::Pending)
+                o.state = OutputState::Cancelled;
+        }
+    }
+    outcome.verdict = v;
+}
+
+// R-322 / R-136：split_by_format 的派生判据单源（模板**含** $format 段即 true；与
+// page_output 的"含段"口径一致，消 CLI 的"仅前缀"分叉）。
+bool template_has_format(std::string_view output_template) {
+    return output_template.find("$format") != std::string_view::npos;
+}
+
+// R-173：RunConfig 字段约束校验器（空串 = OK）。消息文本与旧逐点检查逐字一致。
+std::string validate_run_config(const RunConfig &cfg) {
+    if (cfg.outputs.empty())
+        return "no output configured (RunConfig::outputs is empty)";
+    if (cfg.metadata_only && cfg.outputs.size() != 1)
+        return "metadata-only mode requires exactly one output (RunConfig::outputs.size() == 1)";
+    std::string tmpl_err;
+    if (!validate_output_template(cfg.output_template, &tmpl_err))
+        return tmpl_err;
+    // split_by_format ↔ $format 联动（R-173/R-322）：true 要求模板含 $format 段；
+    // false 恒过（字段是派生态，UI/CLI 落盘时以 template_has_format 回填）。
+    if (cfg.split_by_format && !template_has_format(cfg.output_template))
+        return "split_by_format=true requires a $format segment in output_template '" +
+               cfg.output_template + "'";
+    for (const OutputFormatSpec &spec : cfg.outputs) {
+        const FormatDef *fmt = find_format(spec.format_id);
+        if (!fmt)
+            return "unknown output format '" + spec.format_id + "'";
+        if (std::find(fmt->bitdepths.begin(), fmt->bitdepths.end(), spec.out_bitdepth) ==
+            fmt->bitdepths.end())
+            return "output bit depth " + std::to_string(spec.out_bitdepth) +
+                   " is not supported by format '" + fmt->id + "'";
+    }
+    // M2-T5 §2.7 跨字段参数约束（逐输出求值，配置顺序的首条消息即失败原因）
+    for (const OutputFormatSpec &spec : cfg.outputs) {
+        const std::vector<std::string> msgs =
+            cross_validate(spec.params, spec.format_id, spec.tech_id);
+        if (!msgs.empty())
+            return msgs.front();
+    }
+    return {};
+}
+
+// R-175：PathCtx 组装单源（scheduler desired_keys / pipeline plan_targets / run_metadata_only）。
+PathCtx path_ctx_for(const FileEntry &fe, const RunConfig &cfg, const FormatDef *fmt) {
+    PathCtx ctx;
+    ctx.format_dir = fmt ? fmt->id : std::string();
+    ctx.rel_dir = relative_dir(fe.src, fe.base_dir);
+    ctx.stem = fe.src.stem().string();
+    // 多格式输出恒为重编码路径：ctx.ext = 目标格式扩展名；仅元数据模式同容器 → 源扩展名。
+    ctx.ext = cfg.metadata_only ? fe.src.extension().string() : (fmt ? fmt->ext : std::string());
+    return ctx;
+}
+
+int default_bitdepth_for(std::string_view format_id) {
+    if (format_id == "jpeg")
+        return 8;
+    if (format_id == "jxl")
+        return 16;
+    if (format_id == "png")
+        return 16;
+    if (format_id == "tiff")
+        return 16;
+    if (format_id == "webp")
+        return 8;
+    if (format_id == "bmp")
+        return 24;
+    if (format_id == "heif" || format_id == "avif")
+        return 10;
+    return 8;
+}
+
+// B.6 ③：参数装配链单源（run_dev / bench / UI config_base 共用）。
+// 逐输出：default_params(lossless) → base_params 逐键覆盖 → fill_defaults → apply_locks →
+// validate_params → 位深 + fmt->bitdepths 归属校验。空串 = OK。
+std::string build_output_specs(const std::vector<OutputSpecRequest> &reqs, bool lossless,
+                               std::vector<OutputFormatSpec> &out) {
+    out.clear();
+    out.reserve(reqs.size());
+    for (const OutputSpecRequest &r : reqs) {
+        const FormatDef *fmt = find_format(r.format_id);
+        if (!fmt)
+            return "unknown format '" + r.format_id + "'";
+        ParamSet params = default_params(*fmt, r.backend_id, r.tech_id, lossless);
+        for (const auto &[k, v] : r.base_params)
+            params[k] = v;
+        fill_defaults(*fmt, r.backend_id, r.tech_id, lossless, params);
+        // NOTE(0.3.0/§3.2 + M4-T13)：无损语义随 OutputFormatSpec.params 承载 —— 显式 schema
+        // 参数 `lossless` + 内部管道键 `__lossless` 由参数引擎保持同步（apply_locks）。
+        apply_locks(*fmt, r.backend_id, r.tech_id, lossless, params);
+        const std::string verr = validate_params(*fmt, r.backend_id, r.tech_id, lossless, params);
+        if (!verr.empty())
+            return r.format_id + ": invalid parameters: " + verr;
+
+        const int bitdepth =
+            r.out_bitdepth > 0 ? r.out_bitdepth : default_bitdepth_for(r.format_id);
+        if (std::find(fmt->bitdepths.begin(), fmt->bitdepths.end(), bitdepth) ==
+            fmt->bitdepths.end())
+            return "bit depth " + std::to_string(bitdepth) + " is not supported by format '" +
+                   r.format_id + "'";
+        out.push_back(OutputFormatSpec{r.format_id, r.backend_id, r.tech_id, params, bitdepth});
+    }
+    return {};
 }
 
 } // namespace pp

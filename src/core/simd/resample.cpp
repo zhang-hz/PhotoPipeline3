@@ -23,6 +23,12 @@
     "PP 0.3.0 基线要求 AVX2（§11.1）：core/simd 的 *_avx2 内核未取得 __AVX2__ —— 查 cmake/avx2.cmake。"
 #endif
 
+// R-302：关闭 FP 收缩，理由与 kernels.cpp 同一处注记（位精确论证要求 ref 的 std::fma
+// 与 avx2 的 _mm256_fmadd_ps 舍入次数一致；收缩会让 ref 的 a*b+c 融成 FMA）。
+#if defined(__clang__) || defined(__GNUC__)
+#pragma STDC FP_CONTRACT OFF
+#endif
+
 #include "core/simd/simd.h"
 
 #include <immintrin.h>
@@ -153,10 +159,16 @@ void downscale_avx2(const float *src, int sw, int sh, int sc, float *dst, int dw
     std::vector<float> tmp(static_cast<std::size_t>(sh) * row_len);
 
     // —— 水平（按通道打包：一个输出像素的 sc 个通道落在同一个 128 位寄存器）——
-    // sc == 4 走整存；sc < 4 用掩码存（避免写出 4 个浮点覆盖同行下一个像素）。
+    // sc == 4 走整存/整载；sc < 4 用掩码存（避免写出 4 个浮点覆盖同行下一个像素），
+    // 载入同样走掩码载入（R-033）：整载 `_mm_loadu_ps` 会读到行尾之后的 4−sc 个浮点，
+    // 当行宽·sc < 4（灰度 1×N / 2×N / 3×N 缩略图，thumbs 的 downscale 路径可达）时
+    // 连非末行都会越出源缓冲末尾（旧实现只把**最后一行**留给标量，挡不住这种小宽度）。
+    // `_mm_maskload_ps` 的掩码车道不参与取址、不产生缺页（SDM：faults occur only due to
+    // mask-bit required memory accesses）⇒ 掩码车道的垃圾值不进有效车道，且
+    // acc 的有效 sc 车道与 ref 逐位一致（垃圾车道只被掩码存丢弃）。
     const __m128i mask =
         _mm_setr_epi32(sc > 0 ? -1 : 0, sc > 1 ? -1 : 0, sc > 2 ? -1 : 0, sc > 3 ? -1 : 0);
-    const int simd_rows = sh > 0 ? sh - 1 : 0; // 最后一行留标量：4 浮点载入会越过源缓冲末尾
+    const int simd_rows = sh > 0 ? sh - 1 : 0; // 最后一行仍留标量（与 ref 同一求和次序载体）
     for (int y = 0; y < simd_rows; ++y) {
         const float *srow = src + static_cast<std::size_t>(y) * sw * sc;
         float *trow = tmp.data() + static_cast<std::size_t>(y) * row_len;
@@ -165,8 +177,9 @@ void downscale_avx2(const float *src, int sw, int sh, int sc, float *dst, int dw
             const int *idx = ax.idx.data() + static_cast<std::size_t>(x) * ax.taps;
             __m128 acc = _mm_setzero_ps();
             for (int i = 0; i < ax.taps; ++i) {
-                acc = _mm_fmadd_ps(_mm_set1_ps(w[i]),
-                                   _mm_loadu_ps(srow + static_cast<std::size_t>(idx[i]) * sc), acc);
+                const float *sp = srow + static_cast<std::size_t>(idx[i]) * sc;
+                const __m128 sv = (sc == 4) ? _mm_loadu_ps(sp) : _mm_maskload_ps(sp, mask);
+                acc = _mm_fmadd_ps(_mm_set1_ps(w[i]), sv, acc);
             }
             float *q = trow + static_cast<std::size_t>(x) * dc;
             if (sc == 4)
@@ -202,7 +215,7 @@ void downscale_avx2(const float *src, int sw, int sh, int sc, float *dst, int dw
 }
 
 void downscale(const float *src, int sw, int sh, int sc, float *dst, int dw, int dh, int dc) {
-    if (cpu_has_avx2())
+    if (use_avx2()) // R-303：use_avx2 = cpu_has_avx2 ∧ ¬force_scalar（测试可走 ref）
         downscale_avx2(src, sw, sh, sc, dst, dw, dh, dc);
     else
         downscale_ref(src, sw, sh, sc, dst, dw, dh, dc);

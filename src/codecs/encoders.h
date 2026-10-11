@@ -21,4 +21,8 @@ std::vector<BackendDef> introspect_backends(std::string_view format_id);
 // 10bit 能力探测（T7 交付）：返回 "8" / "8,10" / "8,10,12"（按编码器实际支持）
 std::string probe_bitdepth_support(std::string_view format_id, std::string_view backend_id);
 
+// R-299（M7-WP2 加性）：注册表诊断 —— 返回 (format, backend) 经空串 tie-break 解析后
+// 实际命中的 backend_id（未命中 → 空串）。空串 tie-break 规则见 encoders.cpp 文件头。
+std::string resolved_backend(std::string_view format_id, std::string_view backend_id);
+
 } // namespace pp

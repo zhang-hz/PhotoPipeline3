@@ -1,12 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // PhotoPipeline — M1-T7: OpenImageIO encoders (PNG / TIFF / BMP).
 //
-// Mapping (docs/m1-tasks.md §3.8 + §7, verified against OIIO 3.1.14):
-//   PNG  : compressionLevel -> ImageSpec attribute "compressionLevel" (clamped 0..9)
+// Mapping (docs/m1-tasks.md §3.8 + §7; re-verified against the installed OIIO 3.1.17,
+// vcpkg_installed/x64-windows-avx2/include/OpenImageIO/oiioversion.h:45-47 —— R-010/R-011
+// 复核后订正：旧注释自述 verified 3.1.14，且两个属性键名与上游消费点不符/未核对):
+//   PNG  : compressionLevel -> ImageSpec attribute "png:compressionLevel" (clamped 0..9)
+//          （pngoutput.cpp:165-169 唯一读取点，裸键 "compressionLevel" 全库无人消费 —— R-010）
 //   TIFF : compression -> ImageSpec attribute "compression" (name table:
 //          none/lzw/zip/ccittrle/packbits; an unknown name is an ERROR here, OIIO would
 //          silently fall back to deflate), deflate_level -> "tiff:zipquality",
-//          predictor -> "tiff:predictor", tiling -> spec.tile_width/height
+//          predictor -> "tiff:Predictor"（tiffoutput.cpp:1026-1029 put_parameter 逐字键名，
+//          大小写不敏感匹配；在 open() 的自动 predictor 规则（tiffoutput.cpp:685-701）之后
+//          处理（extra_attribs 循环 tiffoutput.cpp:936-937），故用户值**覆盖**自动选择
+//          —— R-011 复核结论：控制面真实存在，接线保留并补字节差测试），
+//          tiling -> spec.tile_width/height
 //          (both > 0 and multiples of 16, otherwise ERROR)
 //   BMP  : no parameters
 //   ICC  : ImageSpec attribute "ICCProfile" (uint8 array); EXIF/XMP are NOT written here
@@ -15,6 +22,7 @@
 #include <OpenImageIO/imageio.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <cmath>
@@ -29,6 +37,7 @@
 #include "codecs/encoder.h"
 #include "codecs/encoder_registry.h"
 #include "codecs/encoders.h"
+#include "core/fsops.h" // R-003：atomic_temp_path / commit / discard
 #include "core/logger.h"
 #include "core/params.h"
 #include "core/simd/simd.h" // M4-W5-T19：量化热路径（§11.2）
@@ -93,10 +102,12 @@ bool oiio_progress_trampoline(void *opaque, float portion_done) {
         try {
             (*relay->progress)(portion_done);
         } catch (...) {
-            // 进度回调不参与编码成败（§3.1 "尽力而为"）：吞掉并继续写盘
-            static bool warned = false;
-            if (!warned) {
-                warned = true;
+            // 进度回调不参与编码成败（§3.1 "尽力而为"）：吞掉并继续写盘。
+            // R-301：`warned` 用 atomic —— 多 worker 并发写盘时本中继可被并行触发，
+            // 普通 bool 的 read-then-write 是数据竞争（TSan 可见）；atomic_exchange
+            // 单点判定"只告警一次"，语义不变。
+            static std::atomic<bool> warned{false};
+            if (!warned.exchange(true, std::memory_order_relaxed)) {
                 log_warn(kStage, kFile, "progress callback threw; ignored", {{"source", "oiio"}});
             }
         }
@@ -204,11 +215,14 @@ EncodeResult OiioEncoder::encode(const EncodeRequest &req) {
             return fail("unsupported channel count " + std::to_string(nch) + " (expected 1..4)");
 
         // ---- output data type (E3: unsupported bit depth is an error, never a silent downgrade)
+        // R-090：BMP 的 out_bitdepth 是**每像素位数（bpp）口径**（24=RGB 24bpp / 8=灰度 8bpp），
+        // 其余格式是**每样本位数（bps）口径**（8/16）—— 同名 int 双语义，见 params.h 的
+        // FormatDef::bitdepths 注释与 format_tables.cpp 的 bmp 行。错误文案必须两个值都列。
         OIIO::TypeDesc out_type = OIIO::TypeDesc::UINT8;
         if (format_id_ == "bmp") {
             if (req.target.out_bitdepth != 24 && req.target.out_bitdepth != 8)
                 return fail("bmp: unsupported bitdepth " + std::to_string(req.target.out_bitdepth) +
-                            " (expected 24)");
+                            " (expected 24 or 8)");
             out_type = OIIO::TypeDesc::UINT8;
         } else {
             if (req.target.out_bitdepth == 8)
@@ -246,7 +260,9 @@ EncodeResult OiioEncoder::encode(const EncodeRequest &req) {
             if (clamped != level)
                 note_param("compressionLevel clamped", "compressionLevel",
                            std::to_string(level) + " -> " + std::to_string(clamped));
-            spec.attribute("compressionLevel", clamped);
+            // R-010：键名 = "png:compressionLevel"（pngoutput.cpp:165-169 唯一读取点）。
+            // 旧裸键 "compressionLevel" 全库无人消费 → UI「zlib 压缩级别」静默无效。
+            spec.attribute("png:compressionLevel", clamped);
         } else if (format_id_ == "tiff") {
             const std::string compression = param_str(req.target.params, "compression", "lzw");
             if (!tiff_compression_known(compression))
@@ -259,8 +275,25 @@ EncodeResult OiioEncoder::encode(const EncodeRequest &req) {
                                static_cast<int>(std::clamp<int64_t>(level, 1, 9)));
             }
             const int64_t predictor = param_int(req.target.params, "predictor", 2);
-            if (compression == "lzw" || compression == "zip")
-                spec.attribute("tiff:predictor", static_cast<int>(predictor));
+            // R-011（M7-WP2 复核 + 补充）：键名逐字取上游消费点 "tiff:Predictor"
+            // （tiffoutput.cpp:1026-1029 put_parameter），且在自动 predictor 规则
+            // （tiffoutput.cpp:685-701）**之后**处理 ⇒ none/horizontal 两档真实生效
+            // （test_enc_oiio 的字节差断言钉住）。float(3) 是**整型样本下不可用**的档：
+            // libtiff 的 PREDICTOR_FLOATINGPOINT 仅支持 SAMPLEFORMAT_IEEEFP，本编码器
+            // 输出 8/16 位整型 ⇒ 上游 write 期报 "Floating point Predictor not supported"
+            // 拒绝（R-011 "假选项"支线）——此处前置校验，给出明确文案而不是让 libtiff 报
+            // 英文底层错。
+            if (predictor != 1 && predictor != 2 && predictor != 3)
+                return fail("tiff: invalid predictor " + std::to_string(predictor) +
+                            " (allowed: 1=none, 2=horizontal, 3=float)");
+            if (compression == "lzw" || compression == "zip") {
+                if (predictor == 3)
+                    return fail("tiff: predictor=float (3) is not usable here — libtiff's "
+                                "floating point predictor requires float samples, and this "
+                                "encoder writes 8/16-bit integer samples (use 1=none or "
+                                "2=horizontal)");
+                spec.attribute("tiff:Predictor", static_cast<int>(predictor));
+            }
             const int64_t tw = param_int(req.target.params, "tiff_tile_width", 0);
             const int64_t th = param_int(req.target.params, "tiff_tile_height", 0);
             if ((tw > 0) != (th > 0))
@@ -311,6 +344,9 @@ EncodeResult OiioEncoder::encode(const EncodeRequest &req) {
         std::vector<uint8_t> pixels(static_cast<size_t>(w) * h * nch * bps);
         std::vector<float> rowf(static_cast<size_t>(w) * static_cast<size_t>(nch));
         for (int y = 0; y < h; ++y) {
+            // R-163：`EncodeRequest::cancelled` 真实消费 —— 行级提前退出（写盘前无半成品）。
+            if (req.cancelled && req.cancelled())
+                return fail("encode cancelled");
             const OIIO::ROI rroi(ispec.x, ispec.x + w, ispec.y + y, ispec.y + y + 1, 0, 1, 0, nch);
             if (!req.img.get_pixels(rroi, OIIO::TypeFloat, rowf.data()))
                 return fail("cannot read pixels (row " + std::to_string(y) +
@@ -326,27 +362,45 @@ EncodeResult OiioEncoder::encode(const EncodeRequest &req) {
         }
 
         // ---- write through OIIO（W1-T6：带进度中继；回调返回 false = 不中止）----
+        // R-003（M7-WP2 接线）：流式产物先写**同目录临时文件**（fsops::atomic_temp_path），
+        // 成功后 commit_temp_file 原子替换最终路径；任一步失败 discard_temp_file 清场。
+        if (req.cancelled && req.cancelled())
+            return fail("encode cancelled");
+        const std::filesystem::path tmp_path = atomic_temp_path(req.target.out_path);
+        if (tmp_path.empty())
+            return fail("cannot derive temp path for: " + req.target.out_path.string());
         std::unique_ptr<OIIO::ImageOutput> out = OIIO::ImageOutput::create(format_id_);
-        if (!out)
+        if (!out) {
+            discard_temp_file(tmp_path);
             return fail("OpenImageIO has no output plugin for '" + format_id_ + "'");
-        if (!out->open(req.target.out_path.string(), spec))
-            return fail("OIIO open failed for " + req.target.out_path.string() + ": " +
-                        out->geterror());
+        }
+        auto fail_tmp = [&](const std::string &msg) {
+            out.reset(); // 先关句柄再清场（Windows 上占用中的文件删不掉）
+            discard_temp_file(tmp_path);
+            return fail(msg);
+        };
+        if (!out->open(tmp_path.string(), spec))
+            return fail_tmp("OIIO open failed for " + req.target.out_path.string() + ": " +
+                            out->geterror());
         const OIIO::stride_t xstride = static_cast<OIIO::stride_t>(nch) * bps;
         const OIIO::stride_t ystride = xstride * w;
         if (!out->write_image(out_type, pixels.data(), xstride, ystride, OIIO::AutoStride,
                               &oiio_progress_trampoline, &relay))
-            return fail("OIIO write_image failed for " + req.target.out_path.string() + ": " +
-                        out->geterror());
+            return fail_tmp("OIIO write_image failed for " + req.target.out_path.string() + ": " +
+                            out->geterror());
         if (!out->close())
-            return fail("OIIO close failed for " + req.target.out_path.string() + ": " +
-                        out->geterror());
+            return fail_tmp("OIIO close failed for " + req.target.out_path.string() + ": " +
+                            out->geterror());
 
         std::error_code ec;
-        const uint64_t bytes =
-            static_cast<uint64_t>(std::filesystem::file_size(req.target.out_path, ec));
+        const uint64_t bytes = static_cast<uint64_t>(std::filesystem::file_size(tmp_path, ec));
         if (ec || bytes == 0)
-            return fail("output file missing or empty: " + req.target.out_path.string());
+            return fail_tmp("output file missing or empty: " + req.target.out_path.string());
+        {
+            std::string cerr;
+            if (!commit_temp_file(tmp_path, req.target.out_path, &cerr))
+                return fail_tmp("commit failed: " + cerr);
+        }
         res.bytes = bytes;
         res.progress_reported =
             relay.called_with_progress(); // 真回调才报，短路（rectangles 插件）不报
@@ -354,7 +408,11 @@ EncodeResult OiioEncoder::encode(const EncodeRequest &req) {
                   {{"format", format_id_},
                    {"size", std::to_string(w) + "x" + std::to_string(h)},
                    {"channels", std::to_string(nch)},
-                   {"bitdepth", std::to_string(bps * 8)},
+                   // R-090：报 out_bitdepth 原值并标注单位（bmp = bpp，其余 = bps），
+                   // 旧口径 bps*8 对 bmp 恒报 8，与所选 24 对不上。
+                   {"bitdepth", std::to_string(req.target.out_bitdepth)},
+                   {"bitdepth_unit", format_id_ == "bmp" ? "bpp" : "bps"},
+                   {"sample_bitdepth", std::to_string(bps * 8)},
                    {"bytes", std::to_string(res.bytes)}});
         return finish();
     } catch (const std::exception &ex) {

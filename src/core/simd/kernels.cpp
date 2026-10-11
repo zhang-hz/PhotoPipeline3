@@ -9,7 +9,8 @@
 //   * 每对 `*_ref`（标量基准）与 `*_avx2`（热路径）**用同一算子序列**：乘加合一的地方
 //     ref = std::fma / avx2 = _mm256_fmadd_ps，其余同序 mul/add —— 差异恒为 0，
 //     故单测按「逐位相等」断言（容差不会替实现缺陷打掩护）。
-//   * 分派入口（无后缀名）只做一次 `cpu_has_avx2()` 判断：这是整仓唯一一层运行期 ISA
+//   * 分派入口（无后缀名）只做一次 `use_avx2()` 判断（= cpu_has_avx2() ∧ ¬force_scalar，
+//     R-303 测试开关见 simd.h）：这是整仓唯一一层运行期 ISA
 //     分派（§11.2 纪律），调用方不得自行写 CPUID/ISA 宏分支。
 
 // —— 编译期闸门（§11.1，与 simd.cpp 同款）——
@@ -18,6 +19,15 @@
 #if !defined(__AVX2__)
 #error                                                                                             \
     "PP 0.3.0 基线要求 AVX2（§11.1）：core/simd 的 *_avx2 内核未取得 __AVX2__ —— 查 cmake/avx2.cmake。"
+#endif
+
+// R-302：位精确论证（ref 的 std::fma ⇔ avx2 的 _mm256_fmadd_ps）对 **FP 收缩**不设防 ——
+// 编译器若把 ref 的 `a*b+c` 收缩成 FMA（GCC/Clang 的 FP_CONTRACT 默认 ON），ref 自身的
+// 舍入次数就与契约描述（"单次正确舍入"）不符，跨平台对拍面（Linux ref vs MSVC ref）可分叉。
+// 这里显式关掉收缩（GCC/Clang 认识 `#pragma STDC FP_CONTRACT OFF`；MSVC /fp:precise 默认
+// 不收缩、忽略该 STDC pragma，见 handoff 裁定登记）。断言仍按逐位相等。
+#if defined(__clang__) || defined(__GNUC__)
+#pragma STDC FP_CONTRACT OFF
 #endif
 
 #include "core/simd/simd.h"
@@ -37,35 +47,11 @@ namespace {
 // ============================================================================================
 // 共用 lane 工具
 // ============================================================================================
-
-// RGBA 交织的 4 个 YMM（= 8 像素）→ RGB 交织的 3 个 YMM（= 24 浮点），顺序写到 dst[0..24)。
-// 纯 lane 选择（vpermps + vblendps），无任何算术 ⇒ 位精确。flatten(ch=4) 与 interleave(4→3)
-// 共用同一份实现（两条路径的 3 通道落位口径必须一致，否则金样会出现"同一像素两套展开"）。
-inline void pack_rgba8_to_rgb8(__m256 o0, __m256 o1, __m256 o2, __m256 o3, float *dst) {
-    // 目标 24 浮点 = [R0 G0 B0 | R1 G1 B1 | … | R7 G7 B7]
-    //   out0 = [o0[0],o0[1],o0[2], o0[4],o0[5],o0[6], o1[0],o1[1]]
-    //   out1 = [o1[2], o1[4],o1[5],o1[6], o2[0],o2[1],o2[2], o2[4]]
-    //   out2 = [o2[5],o2[6], o3[0],o3[1],o3[2], o3[4],o3[5],o3[6]]
-    const __m256i ia0 = _mm256_setr_epi32(0, 1, 2, 4, 5, 6, 0, 0);
-    const __m256i ib0 = _mm256_setr_epi32(0, 0, 0, 0, 0, 0, 0, 1);
-    const __m256i ia1 = _mm256_setr_epi32(2, 4, 5, 6, 0, 0, 0, 0);
-    const __m256i ib1 = _mm256_setr_epi32(0, 0, 0, 0, 0, 1, 2, 4);
-    const __m256i ia2 = _mm256_setr_epi32(5, 6, 0, 0, 0, 0, 0, 0);
-    const __m256i ib2 = _mm256_setr_epi32(0, 0, 0, 1, 2, 4, 5, 6);
-    const __m256 m0 = _mm256_castsi256_ps(_mm256_setr_epi32(0, 0, 0, 0, 0, 0, -1, -1));
-    const __m256 m1 = _mm256_castsi256_ps(_mm256_setr_epi32(0, 0, 0, 0, -1, -1, -1, -1));
-    const __m256 m2 = _mm256_castsi256_ps(_mm256_setr_epi32(0, 0, -1, -1, -1, -1, -1, -1));
-
-    const __m256 w0 =
-        _mm256_blendv_ps(_mm256_permutevar8x32_ps(o0, ia0), _mm256_permutevar8x32_ps(o1, ib0), m0);
-    const __m256 w1 =
-        _mm256_blendv_ps(_mm256_permutevar8x32_ps(o1, ia1), _mm256_permutevar8x32_ps(o2, ib1), m1);
-    const __m256 w2 =
-        _mm256_blendv_ps(_mm256_permutevar8x32_ps(o2, ia2), _mm256_permutevar8x32_ps(o3, ib2), m2);
-    _mm256_storeu_ps(dst + 0, w0);
-    _mm256_storeu_ps(dst + 8, w1);
-    _mm256_storeu_ps(dst + 16, w2);
-}
+// R-057（M7-WP2）：曾有 `pack_rgba8_to_rgb8`（8 像素 RGBA→RGB 的 vpermps/blend 打包器），
+// 全仓零调用 —— flatten(ch=4) 与 interleave(4→3) 实测都走"每像素 1×16B 载入 + 1×16B 存储"
+// 形态（T19 实测对照①最慢，已弃用），该 kernel 是未接线死代码且注释宣称"共用同一份实现"
+// 属失实。按 R-057 裁定**删除**（保留会误导读者以为打包器路径已启用）；如未来 8px/迭代
+// 形态翻案，可从 git 历史找回并补调用点 + 等价性测试。
 
 // float32 [0,1] → uint8（8 个样本），语义 = simd.h 的 quantize8 契约。
 inline __m128i quantize8_avx2_8(__m256 v) {
@@ -181,7 +167,7 @@ void flatten_avx2(const float *src, float *dst, std::size_t npix, int ch, float 
 }
 
 void flatten(const float *src, float *dst, std::size_t npix, int ch, float bg) {
-    if (cpu_has_avx2())
+    if (use_avx2())
         flatten_avx2(src, dst, npix, ch, bg);
     else
         flatten_ref(src, dst, npix, ch, bg);
@@ -240,14 +226,14 @@ void quantize16_avx2(const float *src, std::uint16_t *dst, std::size_t n, int ma
 }
 
 void quantize8(const float *src, std::uint8_t *dst, std::size_t n) {
-    if (cpu_has_avx2())
+    if (use_avx2())
         quantize8_avx2(src, dst, n);
     else
         quantize8_ref(src, dst, n);
 }
 
 void quantize16(const float *src, std::uint16_t *dst, std::size_t n, int maxv) {
-    if (cpu_has_avx2())
+    if (use_avx2())
         quantize16_avx2(src, dst, n, maxv);
     else
         quantize16_ref(src, dst, n, maxv);
@@ -336,7 +322,7 @@ void transpose8_avx2(const float *src, int sw, int sh, float *dst) {
 }
 
 void transpose8(const float *src, int sw, int sh, float *dst) {
-    if (cpu_has_avx2())
+    if (use_avx2())
         transpose8_avx2(src, sw, sh, dst);
     else
         transpose8_ref(src, sw, sh, dst);
@@ -345,8 +331,21 @@ void transpose8(const float *src, int sw, int sh, float *dst) {
 // ============================================================================================
 // 4) interleave —— 编码器入参的通道交织/展开（通道选择 + 复制；纯搬运）
 // ============================================================================================
+// R-297（M7-WP2）修正两处失实/缺陷：
+//   * 契约（simd.h）只写了 out_ch ∈ {1,3,4}，但 avx2 侧早有 `out_ch == nch` 等通道直通分支
+//     （含 2→2），注释与实现不一致（"2→2 注释失实"）；
+//   * 旧 ref 在 out_ch == 2（2→2）时会走到三通道写法 q[0..2]，**每个像素越界写 1 个浮点**
+//     （stride 为 2 个浮点；生产调用面不可达，等价性论证存在洞）。
+//   统一口径：out_ch == nch 一律按纯拷贝（ref 与 avx2 同语义），其余形态保持下述规则。
 void interleave_ref(const float *src, int nch, float *dst, int out_ch, std::size_t npix) {
-    assert(nch >= 1 && nch <= 4 && (out_ch == 1 || out_ch == 3 || out_ch == 4));
+    // 合法面 = 等通道直通（out_ch == nch，含 2→2）∪ {1,3,4} 输出（下方规则表）。
+    assert(nch >= 1 && nch <= 4 && ((out_ch == nch) || out_ch == 1 || out_ch == 3 || out_ch == 4));
+    if (out_ch == nch) { // 等通道直通（1→1 / 2→2 / 3→3 / 4→4）：纯拷贝，无越界面
+        std::memcpy(dst, src, npix * static_cast<std::size_t>(nch) * sizeof(float));
+        return;
+    }
+    if (out_ch != 1 && out_ch != 3 && out_ch != 4)
+        return; // 非法组合（如 3→2）：不写输出（防越界；契约外调用）
     const float opaque = 1.0f;
     for (std::size_t i = 0; i < npix; ++i) {
         const float *p = src + i * static_cast<std::size_t>(nch);
@@ -440,7 +439,7 @@ void interleave_avx2(const float *src, int nch, float *dst, int out_ch, std::siz
 }
 
 void interleave(const float *src, int nch, float *dst, int out_ch, std::size_t npix) {
-    if (cpu_has_avx2())
+    if (use_avx2())
         interleave_avx2(src, nch, dst, out_ch, npix);
     else
         interleave_ref(src, nch, dst, out_ch, npix);

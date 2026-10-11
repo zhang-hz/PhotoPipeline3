@@ -383,6 +383,102 @@ void test_interleave() {
     }
 }
 
+// ============================ M7-WP2 新增（断言只增）============================
+
+// R-033：downscale 水平段最小宽度（sc==1 且行宽 < 4）—— 旧实现 `_mm_loadu_ps` 在行尾
+// 越读 4 个浮点，行宽 1/2/3 的灰度（1×N / 2×N / 3×N）连非末行都越出源缓冲末尾。
+// 源/目标按**精确尺寸**分配（无 padding）：任何越界读写在 ASan 构建下即刻暴露；
+// 本构建下以 ref/avx2 逐位相等 + 输出全有限双保险。
+void test_downscale_min_width() {
+    struct Case {
+        int sw, sh, sc, dw, dh;
+    };
+    const Case cases[] = {
+        {1, 32, 1, 1, 8},                  // 1×N 灰度（thumbs 最小宽度路径）
+        {2, 16, 1, 1, 4},                  // 2×N 灰度
+        {3, 16, 1, 2, 4},                  // 3×N 灰度
+        {1, 1, 1, 1, 1},                   // 单像素
+        {2, 2, 1, 1, 1},  {3, 3, 2, 1, 1}, // sc=2（灰度+alpha）
+    };
+    for (const Case &c : cases) {
+        Rng r(0x5200u + static_cast<std::uint32_t>(c.sw * 3 + c.sh * 7 + c.sc));
+        const std::size_t sn = static_cast<std::size_t>(c.sw) * c.sh * c.sc;
+        std::vector<float> src = random_floats(r, sn, false); // 精确尺寸，无尾部余量
+        const std::size_t dn = static_cast<std::size_t>(c.dw) * c.dh * c.sc;
+        std::vector<float> a(dn, -3.0f), b(dn, -4.0f);
+        pp::simd::downscale_ref(src.data(), c.sw, c.sh, c.sc, a.data(), c.dw, c.dh, c.sc);
+        pp::simd::downscale_avx2(src.data(), c.sw, c.sh, c.sc, b.data(), c.dw, c.dh, c.sc);
+        double max_diff = 0.0;
+        const bool same = bits_equal(a, b, &max_diff);
+        check(max_diff <= 1e-5 && same, "downscale/minwidth/bitwise",
+              std::to_string(c.sw) + "x" + std::to_string(c.sh) + " sc=" + std::to_string(c.sc) +
+                  " max_diff=" + std::to_string(max_diff));
+        bool finite = true;
+        for (float v : b)
+            finite = finite && std::isfinite(v);
+        check(finite, "downscale/minwidth/finite",
+              std::to_string(c.sw) + "x" + std::to_string(c.sh) + " 输出含非有限值");
+    }
+}
+
+// R-297：interleave 2→2 等通道直通 —— ref/avx2 同语义（纯拷贝），且**不得越界写**
+// （旧 ref 在 2→2 上按三通道写法每像素多写 1 个浮点）。目标缓冲后接哨兵区，
+// 哨兵必须原样保留。
+void test_interleave_2to2_and_guard() {
+    constexpr std::size_t npix = 5;
+    constexpr std::size_t guard = 8;
+    std::vector<float> src(npix * 2);
+    for (std::size_t i = 0; i < npix * 2; ++i)
+        src[i] = static_cast<float>(i) * 0.25f;
+    std::vector<float> a(npix * 2 + guard, -9.0f), b(npix * 2 + guard, -8.0f);
+    pp::simd::interleave_ref(src.data(), 2, a.data(), 2, npix);
+    pp::simd::interleave_avx2(src.data(), 2, b.data(), 2, npix);
+    // 哨兵区两侧故意不同值（检验越界写），故逐位对拍只比**载荷区**。
+    std::vector<float> a_payload(a.begin(), a.begin() + static_cast<std::ptrdiff_t>(npix * 2));
+    std::vector<float> b_payload(b.begin(), b.begin() + static_cast<std::ptrdiff_t>(npix * 2));
+    check(bits_equal(a_payload, b_payload, nullptr), "interleave/2to2/bitwise",
+          "ref 与 avx2 的 2→2 不一致");
+    bool copy_ok = true, guard_ok = true;
+    for (std::size_t i = 0; i < npix * 2; ++i)
+        copy_ok = copy_ok && a[i] == src[i] && b[i] == src[i];
+    for (std::size_t i = npix * 2; i < npix * 2 + guard; ++i) {
+        guard_ok = guard_ok && a[i] == -9.0f && b[i] == -8.0f;
+    }
+    check(copy_ok, "interleave/2to2/copy", "2→2 应为纯拷贝");
+    check(guard_ok, "interleave/2to2/guard", "2→2 越界写入哨兵区（ref 旧缺陷 / avx2 回归）");
+    // 契约外组合（3→2）：不写输出、不越界（防御分支）
+    std::vector<float> c(npix * 2 + guard, -7.0f);
+    pp::simd::interleave_ref(src.data(), 3, c.data(), 2, npix);
+    bool untouched = true;
+    for (float v : c)
+        untouched = untouched && v == -7.0f;
+    check(untouched, "interleave/3to2/defensive", "契约外组合应不写输出");
+}
+
+// R-303：kernel 脚手架 —— 标量回退分支可测（PP_SIMD_FORCE_SCALAR 测试开关）。
+void test_force_scalar_dispatch() {
+    const bool avx2 = pp::simd::cpu_has_avx2();
+    // 开关关（默认）：use_avx2 与 cpu_has_avx2 一致。
+    pp::simd::set_force_scalar(false);
+    check(pp::simd::force_scalar_enabled() == false, "simd/switch/off", "默认应为关");
+    check(pp::simd::use_avx2() == avx2, "simd/switch/use_avx2-off",
+          "开关关时 use_avx2 应 == cpu_has_avx2");
+    // 开关开：分派入口必须走 ref（对拍 quantize8 的 ref 输出）。
+    pp::simd::set_force_scalar(true);
+    check(pp::simd::force_scalar_enabled(), "simd/switch/on", "开关应生效");
+    check(!pp::simd::use_avx2(), "simd/switch/use_avx2-on", "开关开时 use_avx2 应为 false");
+    Rng r(0x5300u);
+    const std::vector<float> src = random_floats(r, 33, true); // 含越界值/NaN
+    std::vector<std::uint8_t> via_dispatch(33, 0xCD), via_ref(33, 0xAB);
+    pp::simd::quantize8(src.data(), via_dispatch.data(), 33);
+    pp::simd::quantize8_ref(src.data(), via_ref.data(), 33);
+    check(std::memcmp(via_dispatch.data(), via_ref.data(), 33) == 0, "simd/switch/dispatch-is-ref",
+          "强制标量后分派入口输出应与 *_ref 逐位一致");
+    // 关回开关：恢复默认（不影响后续用例）。
+    pp::simd::set_force_scalar(false);
+    check(!pp::simd::force_scalar_enabled(), "simd/switch/restore", "恢复默认失败");
+}
+
 } // namespace
 
 int main() {
@@ -407,6 +503,11 @@ int main() {
     test_transpose();
     test_downscale();
     test_interleave();
+
+    // —— M7-WP2（断言只增）——
+    test_downscale_min_width();       // R-033
+    test_interleave_2to2_and_guard(); // R-297
+    test_force_scalar_dispatch();     // R-303
 
     if (g_failed == 0) {
         std::printf("test_simd: OK (探测层 + 5 对 avx2/ref 一致性；W5-T19)\n");

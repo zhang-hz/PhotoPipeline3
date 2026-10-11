@@ -33,6 +33,7 @@
 
 #include "codecs/encoder.h"
 #include "codecs/encoder_registry.h"
+#include "core/fsops.h" // R-003：write_atomic_file（原子落盘）
 #include "core/logger.h"
 #include "core/params.h"
 #include "core/simd/simd.h" // M4-W5-T19：交织 + 量化热路径（§11.2）
@@ -203,12 +204,11 @@ private:
         // unknown falls back to the explicit schema parameter (§3.6/M4-T13,
         // kLosslessParamKey) and then to the reserved key __lossless (§3.4/§4.8).
         // 参数引擎保持两键同步（src/core/params.cpp apply_locks）。
+        // R-295：两键读取统一走 pp::lossless_flag()（kLosslessKey/kLosslessParamKey 单源）。
         const bool lossless =
             (req.target.tech_id == "lossless")
                 ? true
-                : ((req.target.tech_id == "lossy")
-                       ? false
-                       : param_bool(params, "lossless", param_bool(params, "__lossless", false)));
+                : ((req.target.tech_id == "lossy") ? false : lossless_flag(params));
         const bool alpha = r.channels == 2 || r.channels == 4;
 
         WebPConfig cfg;
@@ -285,6 +285,9 @@ private:
         std::vector<float> rowf(static_cast<std::size_t>(r.width) *
                                 static_cast<std::size_t>(out_channels));
         for (int y = 0; y < r.height; ++y) {
+            // R-163：`EncodeRequest::cancelled` 真实消费 —— 行级提前退出（写盘前无半成品）。
+            if (req.cancelled && req.cancelled())
+                return encode_error("webp: encode cancelled");
             const float *src_row = r.px.data() + static_cast<std::size_t>(y) * r.width *
                                                      static_cast<std::size_t>(r.channels);
             uint8_t *dst_row = buf.data() + static_cast<std::size_t>(y) * r.width *
@@ -375,16 +378,18 @@ private:
         }
 
         const std::string path = req.target.out_path.string();
-        std::FILE *fp = std::fopen(path.c_str(), "wb");
-        if (fp == nullptr) {
+        if (req.cancelled && req.cancelled()) {
             WebPMemoryWriterClear(&writer);
-            return encode_error("webp: cannot open output file: " + path);
+            return encode_error("webp: encode cancelled");
         }
-        const std::size_t written = std::fwrite(out_bytes, 1, out_size, fp);
-        const int close_rc = std::fclose(fp);
-        WebPMemoryWriterClear(&writer);
-        if (written != out_size || close_rc != 0) {
-            return encode_error("webp: failed to write output file: " + path);
+        // R-003（M7-WP2 接线）：内存型产物走 fsops::write_atomic_file（原子落盘 + 失败清场）。
+        {
+            std::string werr;
+            const std::string_view payload(reinterpret_cast<const char *>(out_bytes), out_size);
+            const bool wok = write_atomic_file(req.target.out_path, payload, &werr);
+            WebPMemoryWriterClear(&writer);
+            if (!wok)
+                return encode_error("webp: failed to write output file: " + path + ": " + werr);
         }
 
         EncodeResult res;
@@ -402,5 +407,4 @@ PP_REGISTER_ENCODER("webp", "libwebp", make_webp);
 
 } // namespace pp
 
-// Link anchor: referenced by encoders.cpp (static-library dead-stripping guard).
-extern "C" void pp_link_encoder_webp() {}
+// R-051（M7-WP2）：原 `pp_link_encoder_webp` 链接锚点已删，理由同 enc_jpegli.cpp 尾注。

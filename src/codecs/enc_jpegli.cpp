@@ -35,6 +35,7 @@
 
 #include "codecs/encoder.h"
 #include "codecs/encoder_registry.h"
+#include "core/fsops.h" // R-003：write_atomic_file（原子落盘）
 #include "core/logger.h"
 #include "core/params.h"
 #include "core/simd/simd.h" // M4-W5-T19：交织 + 量化热路径（§11.2）
@@ -281,12 +282,28 @@ private:
         jerr.pub.error_exit = jpegli_error_exit;
         jerr.pub.output_message = jpegli_output_message;
 
+        // R-087：目标缓冲经**堆侧影子**跟踪 —— longjmp 兜底路径也能释放。
+        // ISO C 规定 longjmp 返回后"setjmp 之后被修改的非 volatile 局部变量"值不确定；
+        // 缓冲指针正是这种变量（由 jpegli_mem_dest 经指针回填，且回填发生在可能 longjmp
+        // 的写扫描线/收尾阶段），旧实现的 longjmp 分支拿不到它 ⇒ 缓冲泄漏。
+        // 改 volatile 又过不了 `&mem`（`unsigned char *volatile` ≠ `unsigned char **`）。
+        // 故 setjmp 之前在堆上建影子结构：局部指针 `mem_dest` 此后**不再重新赋值**
+        // （longjmp 后仍确定有效），库回填的是 `&mem_dest->p / &mem_dest->n`（堆内存
+        // 不受 longjmp 规则影响）。
+        struct MemDestShadow {
+            unsigned char *p = nullptr;
+            unsigned long n = 0;
+        };
+        MemDestShadow *const mem_dest = new MemDestShadow();
+
         // volatile: modified after setjmp, read on the longjmp path (ISO C rule).
         volatile bool created = false;
         if (setjmp(jerr.jump) != 0) {
             if (created) {
                 jpegli_destroy_compress(&cinfo);
             }
+            std::free(mem_dest->p); // R-087：兜底释放（旧实现此处泄漏）
+            delete mem_dest;
             return encode_error(std::string("jpegli: ") + jerr.msg);
         }
 
@@ -343,9 +360,8 @@ private:
             cinfo.comp_info[0].v_samp_factor = v_samp;
         }
 
-        unsigned char *mem = nullptr;
-        unsigned long mem_size = 0;
-        jpegli_mem_dest(&cinfo, &mem, &mem_size);
+        // R-087：mem 缓冲由 setjmp 之前的堆侧影子 mem_dest 跟踪（见上）。
+        jpegli_mem_dest(&cinfo, &mem_dest->p, &mem_dest->n);
         jpegli_start_compress(&cinfo, TRUE);
 
         if (!req.meta.icc_profile.empty()) {
@@ -356,6 +372,14 @@ private:
         }
 
         for (int y = 0; y < r.height; ++y) {
+            // R-163：`EncodeRequest::cancelled` 真实消费 —— 行级提前退出（写盘前无半成品）。
+            if (req.cancelled && req.cancelled()) {
+                jpegli_abort_compress(&cinfo);
+                jpegli_destroy_compress(&cinfo);
+                std::free(mem_dest->p);
+                delete mem_dest;
+                return encode_error("jpegli: encode cancelled");
+            }
             const float *src = r.px.data() + static_cast<std::size_t>(y) *
                                                  static_cast<std::size_t>(r.width) *
                                                  static_cast<std::size_t>(r.channels);
@@ -369,17 +393,29 @@ private:
             if (jpegli_write_scanlines(&cinfo, rows, 1) != 1) {
                 jpegli_abort_compress(&cinfo);
                 jpegli_destroy_compress(&cinfo);
-                if (mem != nullptr) {
-                    std::free(mem);
-                }
+                std::free(mem_dest->p);
+                delete mem_dest;
                 return encode_error("jpegli: short scanline write");
             }
-            // W1-T6：真实行级进度（§7.2 encode 段的 real 面；ProgressMux 负责节流/汇流）
-            if (progress)
-                progress(static_cast<float>(y + 1) / static_cast<float>(r.height));
+            // W1-T6：真实行级进度（§7.2 encode 段的 real 面；ProgressMux 负责节流/汇流）。
+            // R-086：**0.95 封顶** —— 喂入循环之外还有压缩期（渐进 JPEG 的实际压缩在
+            // jpegli_finish_compress 才发生），行循环内不得直达 1.0（与合成路径
+            // progress.cpp 的 0.95 口径一致）。
+            // R-087：回调包 try/catch —— 异常不得穿越 setjmp 区间（否则跳过 destroy/释放）。
+            if (progress) {
+                try {
+                    progress(0.95f * (static_cast<float>(y + 1) / static_cast<float>(r.height)));
+                } catch (...) {
+                    // 进度回调不参与编码成败（§3.1 "尽力而为"）：吞掉并继续。
+                }
+            }
         }
         jpegli_finish_compress(&cinfo);
         jpegli_destroy_compress(&cinfo);
+
+        unsigned char *const mem = mem_dest->p;
+        const unsigned long mem_size = mem_dest->n;
+        delete mem_dest; // 指针本身不再使用（longjmp 已不可能：jpegli 生命周期已结束）
 
         if (mem == nullptr || mem_size == 0) {
             if (mem != nullptr) {
@@ -389,16 +425,17 @@ private:
         }
 
         const std::string path = req.target.out_path.string();
-        std::FILE *fp = std::fopen(path.c_str(), "wb");
-        if (fp == nullptr) {
+        // R-003（M7-WP2 接线）：内存型产物走 fsops::write_atomic_file —— 字节数校验 +
+        // 同目录 tmp→rename 原子落盘、失败清场；不再直写最终路径（半成品驻留 / Overwrite
+        // 先截断旧好文件两坑根治）。
+        {
+            std::string werr;
+            const std::string_view payload(reinterpret_cast<const char *>(mem),
+                                           static_cast<std::size_t>(mem_size));
+            const bool ok = write_atomic_file(req.target.out_path, payload, &werr);
             std::free(mem);
-            return encode_error("jpegli: cannot open output file: " + path);
-        }
-        const std::size_t written = std::fwrite(mem, 1, mem_size, fp);
-        const int close_rc = std::fclose(fp);
-        std::free(mem);
-        if (written != mem_size || close_rc != 0) {
-            return encode_error("jpegli: failed to write output file: " + path);
+            if (!ok)
+                return encode_error("jpegli: failed to write output file: " + path + ": " + werr);
         }
 
         EncodeResult res;
@@ -418,7 +455,6 @@ PP_REGISTER_ENCODER("jpeg", "jpegli", make_jpegli);
 
 } // namespace pp
 
-// Link anchor: referenced by encoders.cpp so the linker pulls this (otherwise
-// unreferenced) static-library member in and the registration above actually
-// runs. See the note in encoders.cpp.
-extern "C" void pp_link_encoder_jpegli() {}
+// R-051（M7-WP2）：原 `pp_link_encoder_jpegli` 链接锚点已删 —— 自注册由
+// pp_core_registered 的 whole-archive 链接形态保证（CMakeLists §2b），不再需要
+// 人为引用符号；注册缺失的诊断由 encoders.cpp 的期望键断言承担。

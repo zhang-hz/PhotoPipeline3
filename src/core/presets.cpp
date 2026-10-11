@@ -18,18 +18,9 @@
 namespace pp {
 namespace {
 
-// 与 params.cpp 的 select_tech 同规则：显式 id → find_tech；空 id → 首选
-// （lossless 时优先 lossless_capable 的技术，如 webp=lossless / jxl=modular）
-const TechDef *pick_tech(const BackendDef &b, std::string_view id, bool lossless) {
-    if (!id.empty())
-        return find_tech(b, id);
-    if (lossless) {
-        for (const TechDef &t : b.techs)
-            if (t.lossless_capable)
-                return &t;
-    }
-    return b.techs.empty() ? nullptr : &b.techs.front();
-}
+// R-208（M7-WP2）：原 pick_tech 与 params.cpp 的 select_tech 逐字重复、原 declares_lossless
+// 与 params.cpp 的 declares_lossless_param 语义并存 —— 均收敛到 params.h 的单源导出
+// （pp::select_tech / pp::declares_lossless），本文件不再持有第二份实现。
 
 bool contains(const std::vector<std::string> &v, const std::string &s) {
     return std::find(v.begin(), v.end(), s) != v.end();
@@ -39,28 +30,6 @@ void push_unique(std::vector<std::string> &v, const std::vector<std::string> &ad
     for (const std::string &k : add)
         if (!contains(v, k))
             v.push_back(k);
-}
-
-// 该 (format, backend, tech) 是否把无损暴露为**显式 schema 参数**（key = "lossless"）：
-//   * 静态表：匹配到的技术声明了该 key（jxl/vardct+modular、webp/lossy+lossless —— T13 落地）；
-//   * libheif 系（heif/avif）：技术来自运行时内省，静态表为空 → 按 param-catalog §3/§4.2 的惯例
-//     视为声明（内省面本就暴露 `lossless` bool，enc_heif 消费它）；
-//   * 其余格式（jpeg 无 lossless 技术、png/tiff/bmp 技术本身无损且 catalog 不列该参数）→ 不声明：
-//     无损标志只落内部管道键 `__lossless`（谓词/编码器输入，不落盘、不参与未知键校验）。
-bool declares_lossless(const FormatDef &f, const std::string &backend_id,
-                       const std::string &tech_id) {
-    const BackendDef *b = find_backend(f, backend_id);
-    if (!b)
-        return false;
-    if (b->runtime_introspected)
-        return true;
-    const TechDef *t = tech_id.empty() ? pick_tech(*b, {}, false) : find_tech(*b, tech_id);
-    if (!t)
-        return false;
-    for (const ParamDef &p : t->params)
-        if (p.key == kLosslessParamKey)
-            return true;
-    return false;
 }
 
 // 多输出时的错误前缀（单输出消息与 0.2 逐字一致 → 旧断言/日志文本沿用）
@@ -126,7 +95,7 @@ std::vector<std::string> normalize_preset(PresetData &p) {
         if (b->runtime_introspected && b->techs.empty())
             continue; // heif/avif：参数来自 introspect_backends（T7），静态表无法补齐
         const bool lossless = lossless_flag(spec.params);
-        const TechDef *t = pick_tech(*b, spec.tech_id, lossless);
+        const TechDef *t = select_tech(*b, spec.tech_id, lossless);
         if (!t)
             continue;
         if (spec.tech_id.empty())

@@ -40,7 +40,13 @@ struct BackendDef {
 struct FormatDef {
     std::string id, label, ext; // e.g. "jxl"
     std::vector<BackendDef> backends;
-    std::vector<int> bitdepths; // {8} / {8,16} ...
+    // R-211（M7-WP2 注记，不改类型）：本字段是 **int 双语义** ——
+    //   * jpeg/jxl/png/tiff/webp/heif/avif：每**样本**位数（bps，8/16 或 8/10/12）；
+    //   * bmp：每**像素**位数（bpp：24 = RGB 24bpp = 每样本 8 位；8 = 灰度 8bpp）。
+    // 单位随格式翻转，取值/校验处（pipeline plan_targets、presets validate、UI 位深行、
+    // enc_oiio bmp 分支）按格式各自解释。彻底根治需拆字段/强类型（涉及 UI 与 pipeline），
+    // 本波按评审口径先显式化（本注释 + format_tables bmp 行 + enc_oiio 错误文案），登记裁定。
+    std::vector<int> bitdepths; // {8} / {8,16} / bmp: {8,24}（单位见上）
     bool supports_alpha = false;
     bool supports_gray = false;
     std::string meta_path; // "exiv2" | "libheif" | "jxl-box" | "none"
@@ -111,5 +117,24 @@ std::string snapshot_params(const ParamSet &s);
 // Empty result = OK. Messages are user-facing (frozen texts).
 std::vector<std::string> cross_validate(const ParamSet &values, const std::string &format_id,
                                         const std::string &tech_id);
+
+// —— M7-WP2 加性追认（R-208 技术/无损判定收敛、R-207 跨字段规则绑键常量；裁定登记
+//    build/m7-wp2/handoff.md）：以下声明**追加在既有声明之后**，既有签名零改动。——
+// 技术选择单源（原 params.cpp `select_tech` 与 presets.cpp `pick_tech` 逐字重复 → 合一）：
+// 显式 id → find_tech；空 id → 首选（lossless 时优先 lossless_capable 的技术）。
+const TechDef *select_tech(const BackendDef &b, std::string_view tech_id, bool lossless);
+// 无损"显式 schema 参数"声明判定单源（原 presets.cpp `declares_lossless` 与 params.cpp
+// `declares_lossless_param` 语义并存 → 合一）：该 (format, backend, tech) 是否把无损暴露
+// 为显式 schema 参数（key = kLosslessParamKey）。libheif 系（runtime_introspected）由
+// 运行时内省提供同名字段 ⇒ 视为声明（与 0.3.0 迁移口径一致）。
+bool declares_lossless(const FormatDef &f, const std::string &backend_id,
+                       const std::string &tech_id);
+// 跨字段规则的绑键常量（R-207）：规则不再用裸字符串引用键名（表改 key 时编译期可见）。
+inline constexpr std::string_view kKeyQmin = "qmin";
+inline constexpr std::string_view kKeyQmax = "qmax";
+inline constexpr std::string_view kKeyProgressive = "progressive";
+inline constexpr std::string_view kKeyOptimizeCoding = "optimize_coding";
+inline constexpr std::string_view kKeyTiffTileWidth = "tiff_tile_width";
+inline constexpr std::string_view kKeyTiffTileHeight = "tiff_tile_height";
 
 } // namespace pp

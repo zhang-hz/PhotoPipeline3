@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <limits>
 #include <map>
 #include <memory>
@@ -34,6 +35,9 @@
 #include "codecs/encoder.h"
 #include "codecs/encoder_registry.h"
 #include "codecs/encoders.h"
+#include "codecs/heif_nclx.h"    // M7-WP2 UX-14 A1：nclx ← ICC 推导（纯函数）
+#include "codecs/heif_profile.h" // M7-WP2 I4：编码档位单源（UX-10.1/10.3）
+#include "core/fsops.h"          // R-003：atomic_temp_path / commit / discard
 #include "core/logger.h"
 #include "core/params.h"
 #include "core/simd/simd.h" // M4-W5-T19：交织 + 量化热路径（§11.2）
@@ -113,14 +117,28 @@ std::string canonical_backend_id(std::string_view id_name) {
 
 // Descriptors are enumerated per call (the list is owned by libheif and stable for the
 // process lifetime, but the returned pointer array is ours).
+// R-305（M7-WP2）：旧实现固定 `raw[32]`，插件数 > 32 时**静默截断**。改为容量自增重试
+// （返回值 == 容量即认为可能截断 → 翻倍再来），并给一个显式上限（1024，超出即 log_error
+// 并按截断如实返回），不再无声丢插件。
 std::vector<const heif_encoder_descriptor *> enumerate_descriptors(heif_compression_format fmt) {
-    const heif_encoder_descriptor *raw[32] = {};
-    const int n = heif_get_encoder_descriptors(fmt, nullptr, raw, 32);
-    std::vector<const heif_encoder_descriptor *> out;
-    for (int i = 0; i < n && i < 32; i++)
-        if (raw[i])
-            out.push_back(raw[i]);
-    return out;
+    constexpr int kHardCap = 1024;
+    int cap = 32;
+    for (;;) {
+        std::vector<const heif_encoder_descriptor *> raw(static_cast<size_t>(cap), nullptr);
+        const int n = heif_get_encoder_descriptors(fmt, nullptr, raw.data(), cap);
+        std::vector<const heif_encoder_descriptor *> out;
+        for (int i = 0; i < n && i < cap; i++)
+            if (raw[static_cast<size_t>(i)])
+                out.push_back(raw[static_cast<size_t>(i)]);
+        if (n < cap)
+            return out; // 未满 ⇒ 无截断
+        if (cap >= kHardCap) {
+            log_error(kStage, kFile, "encoder descriptor list truncated at hard cap",
+                      {{"cap", std::to_string(kHardCap)}});
+            return out;
+        }
+        cap *= 2;
+    }
 }
 
 const heif_encoder_descriptor *find_descriptor(heif_compression_format fmt,
@@ -163,7 +181,9 @@ ParamDef param_def_from(heif_encoder *enc, const heif_encoder_parameter *p) {
             d.type = ParamType::Enum;
             for (int i = 0; i < nvalid; i++)
                 d.choices.emplace_back(std::to_string(values[i]), int64_t(values[i]));
-            d.def = int64_t(values[0]);
+            // R-230：默认值口径统一为**插件当前值**（与 Int/Bool/String 分支同源）；
+            // 旧口径取 values[0] ⇒ UI 默认值失真（插件默认未必是值集首项）。
+            d.def = int64_t(have_current ? current : values[0]);
             type_desc = "integer set";
         } else {
             d.type = ParamType::Int;
@@ -201,9 +221,16 @@ ParamDef param_def_from(heif_encoder *enc, const heif_encoder_parameter *p) {
         d.def = current;
         type_desc = d.choices.empty() ? "string (unconstrained)" : "string set";
     }
-    // Semantic core parameters stay in the visible tier; plugin knobs go to "advanced".
-    d.advanced =
-        !(d.key == "quality" || d.key == "lossless" || d.key == "chroma" || d.key == "preset");
+    // 核心/高级白名单（UX-10.3，M7-WP2）：**按插件真实参数面声明** —— 本函数只对插件
+    // 实际暴露的 key 调用（introspect_live 遍历 heif_encoder_list_parameters），故
+    // "key ∈ 核心集 ∧ 插件真的有它"天然是对表结果。核心集按 UX-10.2 重排：
+    //   x265（HEIF）：quality / lossless / chroma / preset / **tune**（画质取向提核心）；
+    //   SVT-AV1（AVIF）：quality / lossless / chroma / **speed / tune**（speed 是 SVT 的
+    //   速度主档，旧白名单等 `preset` 对 SVT 永不命中、speed 反被折进高级 —— 已修）；
+    //   libaom：同 SVT 集合与其实际键的交集。
+    // 其余插件旋钮（tu-intra-depth / complexity / threads / qp / min-q / max-q …）留高级。
+    d.advanced = !(d.key == "quality" || d.key == "lossless" || d.key == "chroma" ||
+                   d.key == "preset" || d.key == "speed" || d.key == "tune");
     d.tooltip = "libheif 运行时内省参数（heif_encoder_list_parameters，类型 " + type_desc + "）：" +
                 d.key + "。名称/范围/默认值均来自当前编码插件，M1 不硬编码。";
     return d;
@@ -246,8 +273,13 @@ ChromaLayout layout_for(heif_chroma c) {
 }
 
 int quantize(float v, int maxv) {
+    // R-089（M7-WP2）：量化口径统一为 **simd::quantize16**（float 乘加 + 截断，E6 标准舍入）。
+    // 本函数原是 chroma 平面的 `lround(clamp·maxv)`（double 半入），与 Y/alpha 的
+    // quantize16 并存 ⇒ 平面间最多差 1 LSB。现仅保留为**逐样本回退**（长度非整行的
+    // 边角），算子序列与 quantize16_ref 逐字一致（clamp → ×maxv+0.5 → 截断），
+    // 不再引入第二套舍入语义。
     const float x = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
-    return static_cast<int>(std::lround(x * static_cast<float>(maxv)));
+    return static_cast<int>(x * static_cast<float>(maxv) + 0.5f);
 }
 
 void store_sample(uint8_t *base, size_t stride, int bitdepth, int x, int y, int value) {
@@ -257,6 +289,13 @@ void store_sample(uint8_t *base, size_t stride, int bitdepth, int x, int y, int 
     else
         base[static_cast<size_t>(y) * stride + x] = static_cast<uint8_t>(value);
 }
+
+// ---------------------------------------------------------------------------
+// nclx 色彩描述与嵌入 ICC 的一致性（UX-14 A1，M7-WP2）
+// ---------------------------------------------------------------------------
+// 推导实现 = pp::nclx_for_icc()（codecs/heif_nclx.h，纯函数、可单测）。口径：nclx 必须
+// 描述像素实际所在的 RGB 空间（从 meta.icc_profile 反推 CICP 码；无 ICC → sRGB 现状；
+// 无法识别 → unspecified 不冒充 sRGB）。矩阵系数照写 BT.601 全范围（上方像素段的事实）。
 
 } // namespace
 
@@ -402,16 +441,12 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
                 se = heif_encoder_set_parameter_boolean(enc, p.key.c_str(), *bv ? 1 : 0);
                 break;
             }
-            case ParamType::Float: {
-                const double *dv = std::get_if<double>(&it->second);
-                const int64_t *iv = std::get_if<int64_t>(&it->second);
-                if (!dv && !iv) {
-                    rejected = "expected number";
-                    break;
-                }
-                se = heif_encoder_set_parameter_integer(
-                    enc, p.key.c_str(),
-                    static_cast<int>(std::lround(dv ? *dv : static_cast<double>(*iv))));
+            default: {
+                // R-298：原 `case ParamType::Float` 是死分支 —— param_def_from 只可能产出
+                // Int/Enum/Bool/String-E 四型（libheif 参数面无浮点型），旧代码还拿 integer
+                // setter 去承接浮点（语义两不像）。改为显式拒绝 + 记录：将来出现未支持
+                // 类型时不再静默丢参（也不再假装"已接线"）。
+                rejected = "unsupported parameter type";
                 break;
             }
             }
@@ -497,6 +532,34 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
         const int ch = (h + layout.ch_off) / layout.ch_div;
         const bool has_alpha = (nch == 2 || nch == 4);
 
+        // ---- I4 / UX-10.1（M7-WP2）：编码档位反查 ----
+        // 插件不接受 profile 参数（档位由位深/色度/静止图自动推导），但 UI 档位行允许用户
+        // 显式选定（ParamSet 保留键 kHeifProfileParamKey，见 codecs/heif_profile.h）。
+        // 编码前用**同一规则源** derive_heif_profile 反查：产出档位与选定不一致 ⇒ 拒绝
+        // 并报中文错误（不静默出错档位）。Auto（或未选）= 不校验。
+        // 本输出恒为静止图（still = true）。
+        {
+            const int chroma_idx = (layout.chroma == heif_chroma_444)   ? 3
+                                   : (layout.chroma == heif_chroma_422) ? 2
+                                   : (layout.chroma == heif_chroma_420) ? 1
+                                                                        : 0;
+            const bool avif = (format_id_ == "avif");
+            const HeifProfile derived = derive_heif_profile(avif, bitdepth, chroma_idx, true);
+            const auto want_v =
+                static_cast<HeifProfile>(param_int(req.target.params, kHeifProfileParamKey, 0));
+            if (want_v != HeifProfile::Auto && want_v != derived) {
+                std::string why;
+                (void)heif_profile_compatible(want_v, bitdepth, chroma_idx, true, &why);
+                return fail(why.empty() ? std::string("编码档位不一致") : why);
+            }
+            log_info(kStage, kFile, "heif profile (derived)",
+                     {{"format", format_id_},
+                      {"backend", backend_id_},
+                      {"profile", heif_profile_label(derived)},
+                      {"bitdepth", std::to_string(bitdepth)},
+                      {"chroma", std::to_string(chroma_idx)}});
+        }
+
         // Known upstream limitation (measured with SVT-AV1 4.1.0 through libheif 1.23.1):
         // a >8-bit encode that carries an alpha plane fails inside the SVT plugin AND leaves
         // the heap corrupted, so the very next allocation/free aborts the process (observed:
@@ -578,6 +641,9 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
         std::vector<uint16_t> yq(w);
         std::vector<uint16_t> aq(w);
         for (int y = 0; y < h; ++y) {
+            // R-163：`EncodeRequest::cancelled` 真实消费 —— 行级提前退出（写盘前无半成品）。
+            if (req.cancelled && req.cancelled())
+                return fail("encode cancelled");
             const OIIO::ROI rroi(ispec.x, ispec.x + w, ispec.y + y, ispec.y + y + 1, 0, 1, 0, nch);
             if (!req.img.get_pixels(rroi, OIIO::TypeDesc::FLOAT, rowf.data()))
                 return fail("cannot read pixels (row " + std::to_string(y) +
@@ -610,6 +676,12 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
             }
         }
         // box-downsample the chroma planes (2x2 for 420, 2x1 for 422, none for 444)
+        // R-089（M7-WP2）：chroma 平面量化统一走 **pp::simd::quantize16**（与 Y/alpha 同一
+        // 舍入口径），逐行量化替代逐样本 `quantize(lround)` —— 平面间不再有 1 LSB 口径差。
+        std::vector<float> cbrow(static_cast<size_t>(cw));
+        std::vector<float> crrow(static_cast<size_t>(cw));
+        std::vector<uint16_t> cbq(static_cast<size_t>(cw));
+        std::vector<uint16_t> crq(static_cast<size_t>(cw));
         for (int cy = 0; cy < ch; cy++) {
             for (int cx = 0; cx < cw; cx++) {
                 float scb = 0.0f, scr = 0.0f;
@@ -629,18 +701,28 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
                     }
                 }
                 const float inv = n > 0 ? 1.0f / static_cast<float>(n) : 0.0f;
+                cbrow[static_cast<size_t>(cx)] = scb * inv;
+                crrow[static_cast<size_t>(cx)] = scr * inv;
+            }
+            pp::simd::quantize16(cbrow.data(), cbq.data(), static_cast<size_t>(cw), maxv);
+            pp::simd::quantize16(crrow.data(), crq.data(), static_cast<size_t>(cw), maxv);
+            for (int cx = 0; cx < cw; cx++) {
                 store_sample(planes[1].base, planes[1].stride, bitdepth, cx, cy,
-                             quantize(scb * inv, maxv));
+                             cbq[static_cast<size_t>(cx)]);
                 store_sample(planes[2].base, planes[2].stride, bitdepth, cx, cy,
-                             quantize(scr * inv, maxv));
+                             crq[static_cast<size_t>(cx)]);
             }
         }
 
         // ---- colour description: nclx + optional ICC (E5) ----
+        // UX-14 A1（M7-WP2）：nclx 的 primaries/TRC 从**实际嵌入的 ICC** 反推（见
+        // nclx_for_icc）—— 与 colr 组里的 ICC 同源同义，不再恒写 sRGB；
+        // 矩阵系数照旧 BT.601 全范围（上方 YCbCr 变换确实用它）。
         heif_color_profile_nclx nclx{};
         nclx.version = 1;
-        nclx.color_primaries = heif_color_primaries_ITU_R_BT_709_5; // sRGB primaries
-        nclx.transfer_characteristics = heif_transfer_characteristic_IEC_61966_2_1; // sRGB TRC
+        const NclxDesc nclx_desc = nclx_for_icc(req.meta.icc_profile);
+        nclx.color_primaries = nclx_desc.primaries;
+        nclx.transfer_characteristics = nclx_desc.trc;
         nclx.matrix_coefficients = heif_matrix_coefficients_ITU_R_BT_601_6; // matrix used above
         nclx.full_range_flag = 1;
         const heif_error ne = heif_image_set_nclx_color_profile(img, &nclx);
@@ -690,14 +772,25 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
         }
 
         // ---- write ----
+        // R-163：写盘前最后一次取消检查（行级检查见像素段；此处覆盖长 encode 段之后）。
+        if (req.cancelled && req.cancelled())
+            return fail("encode cancelled");
+        // R-003（M7-WP2 接线）：流式产物先写**同目录临时文件**（fsops::atomic_temp_path），
+        // 成功后 commit_temp_file 原子替换最终路径；任一步失败 discard_temp_file 清场 ——
+        // 不再在最终路径上留半成品、Overwrite 也不再先毁旧好文件。
         struct Sink {
             FILE *f = nullptr;
             uint64_t bytes = 0;
             std::string error;
         } sink;
-        sink.f = std::fopen(req.target.out_path.string().c_str(), "wb");
-        if (!sink.f)
+        const std::filesystem::path tmp_path = atomic_temp_path(req.target.out_path);
+        if (tmp_path.empty())
+            return fail("cannot derive temp path for: " + req.target.out_path.string());
+        sink.f = std::fopen(tmp_path.string().c_str(), "wb");
+        if (!sink.f) {
+            discard_temp_file(tmp_path);
             return fail("cannot open output file: " + req.target.out_path.string());
+        }
         heif_writer writer{};
         writer.writer_api_version = 1;
         writer.write = [](heif_context *, const void *data, size_t size,
@@ -714,14 +807,29 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
         e = heif_context_write(ctx, &writer, &sink);
         const int close_rc = std::fclose(sink.f);
         sink.f = nullptr;
+        auto fail_tmp = [&](const std::string &msg) {
+            discard_temp_file(tmp_path);
+            return fail(msg);
+        };
         if (e.code != heif_error_Ok)
-            return fail("heif_context_write failed: " + heif_error_text(e));
+            return fail_tmp("heif_context_write failed: " + heif_error_text(e));
         if (!sink.error.empty())
-            return fail("write error: " + sink.error);
+            return fail_tmp("write error: " + sink.error);
         if (close_rc != 0)
-            return fail("fclose failed for " + req.target.out_path.string());
+            return fail_tmp("fclose failed for " + req.target.out_path.string());
         if (sink.bytes == 0)
-            return fail("heif_context_write produced 0 bytes");
+            return fail_tmp("heif_context_write produced 0 bytes");
+        {
+            std::error_code ec;
+            const uint64_t disk_bytes =
+                static_cast<uint64_t>(std::filesystem::file_size(tmp_path, ec));
+            if (ec || disk_bytes != sink.bytes)
+                return fail_tmp("temp output size mismatch: wrote " + std::to_string(sink.bytes) +
+                                ", on disk " + std::to_string(disk_bytes));
+            std::string cerr;
+            if (!commit_temp_file(tmp_path, req.target.out_path, &cerr))
+                return fail_tmp("commit failed: " + cerr);
+        }
 
         res.bytes = sink.bytes;
         log_debug(kStage, kFile, "encoded",
@@ -759,10 +867,11 @@ PP_REGISTER_ENCODER("heif", "x265", make_heif_x265);
 PP_REGISTER_ENCODER("avif", "svt-av1", make_avif_svt);
 PP_REGISTER_ENCODER("avif", "libaom", make_avif_aom);
 
-// No link anchors here (M2-T13): self-registration is guaranteed by the link form, not by
-// referenced symbols — every consumer links pp_core whole-archive via the
-// pp_core_registered interface target (CMakeLists §2b), so both T7 TUs register
-// unconditionally.
+// No link anchors here (M2-T13 起即如此；R-051/M7-WP2 起其余编码器的锚点轨已整体删除):
+// self-registration is guaranteed by the link form, not by referenced symbols — every
+// consumer links pp_core whole-archive via the pp_core_registered interface target
+// (CMakeLists §2b), so both T7 TUs register unconditionally. 注册缺失的诊断由
+// encoders.cpp 的期望键断言承担（R-051）。
 
 namespace {
 
@@ -905,6 +1014,12 @@ std::mutex &probe_mutex() {
     static std::mutex m;
     return m;
 }
+// R-305（M7-WP2）：probe 缓存**失效策略显式化** ——
+//   * 有效范围 = 进程生命周期：编码插件集在 libheif 加载后不再变化（插件静态链接 /
+//     插件目录在启动时扫描一次），同一 (format, backend) 的位深能力是确定值；
+//   * 键 = "format/backend"，值 = 探测结论（"8"|"8,10"|"8,10,12"）；同进程内并发只读 +
+//     首次双检写入（probe_mutex）；
+//   * 如需在插件热替换后重探（当前无此产品能力），调用方应走新进程 —— 不提供隐式 TTL。
 std::map<std::string, std::string> &probe_cache() {
     static std::map<std::string, std::string> c;
     return c;

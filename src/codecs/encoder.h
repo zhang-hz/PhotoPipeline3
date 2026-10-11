@@ -47,9 +47,14 @@ struct EncodeRequest {
     OIIO::ImageBuf &img;        // float32，通道 1/2/3/4（orient+color 后）
     const OutputTarget &target; // [重排] 替代 params/outBitDepth/outPath
     const MetadataPayloads &meta;
+    // R-163（M7-WP2）：本字段**被编码器真实消费** —— 各编码器在编码循环内检查并提前退出
+    // （返回 `EncodeResult{bytes=0, error="encode cancelled"}`，写盘前退出 ⇒ 无半成品）。
+    // 空 std::function = 永不取消（0.2/0.3.0 现状），语义幂等。
     std::function<bool()> cancelled;
     ProgressFn progress; // 追加：真实行级进度（尽力而为）
-    int encode_threads;  // 追加：E3 分配的内部线程数（≥1）
+    // R-111（M7-WP2）：默认值 = 1 —— 与契约"≥1"及 pipeline.h 的同名默认一致；聚合初始化
+    // 省略本字段时得 1（旧行为得 0，与契约矛盾）。
+    int encode_threads = 1; // 追加：E3 分配的内部线程数（≥1）
 };
 
 struct EncodeResult {

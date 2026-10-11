@@ -679,6 +679,111 @@ int main() {
         }
     }
 
+    // ================= M7-WP2（断言只增）：R-208 / R-209 / R-244/245/246 / R-206 =================
+    {
+        const std::string c = "m7wp2-locks";
+        // R-244/245/246：JPEG 三个假控件的锁定谓词（数据驱动禁用）。
+        {
+            const Slot j = slot("jpeg", "jpegli", "dct");
+            const pp::ParamDef *arith = param_of(*j.t, "arith_code");
+            const pp::ParamDef *xyb = param_of(*j.t, "xyb_mode");
+            const pp::ParamDef *dct = param_of(*j.t, "dct_method");
+            check(arith && xyb && dct, c, "jpeg 三参数缺失");
+            if (arith && xyb && dct) {
+                const pp::ParamSet empty;
+                const auto la = pp::eval_lock(*arith, empty);
+                const auto lx = pp::eval_lock(*xyb, empty);
+                const auto ld = pp::eval_lock(*dct, empty);
+                check(la.has_value() && std::holds_alternative<bool>(*la) &&
+                          std::get<bool>(*la) == false,
+                      c, "arith_code 应恒锁 false（R-244）");
+                check(lx.has_value() && std::holds_alternative<bool>(*lx) &&
+                          std::get<bool>(*lx) == false,
+                      c, "xyb_mode 应恒锁 false（R-245）");
+                check(ld.has_value() && std::holds_alternative<int64_t>(*ld) &&
+                          std::get<int64_t>(*ld) == 0,
+                      c, "dct_method 应恒锁 0（R-246，兼容层默认值）");
+                // 锁定值 == 表默认值 ⇒ 对默认参数集零改写（回归零漂移）。
+                pp::ParamSet d = pp::default_params(*j.f, "jpegli", "dct", false);
+                const auto changed = pp::apply_locks(*j.f, "jpegli", "dct", false, d);
+                check(!contains(changed, "arith_code") && !contains(changed, "xyb_mode") &&
+                          !contains(changed, "dct_method"),
+                      c, "默认参数集不应被锁定改写，changed=[" + join(changed) + "]");
+                // 禁用原因写进 tooltip（"不静默灰"口径）。
+                check(arith->tooltip.find("已禁用") != std::string::npos &&
+                          xyb->tooltip.find("已禁用") != std::string::npos &&
+                          dct->tooltip.find("已禁用") != std::string::npos,
+                      c, "三参数 tooltip 应含禁用原因");
+            }
+        }
+        // R-208：select_tech / declares_lossless 单源收敛（原 presets 与 params 双实现）。
+        {
+            const Slot w = slot("webp", "libwebp", "");
+            check(w.b != nullptr, c, "webp backend missing");
+            if (w.b) {
+                check(pp::select_tech(*w.b, "", true) != nullptr &&
+                          pp::select_tech(*w.b, "", true)->id == "lossless",
+                      c, "select_tech 空 id + lossless 应选 lossless_capable 技术");
+                check(pp::select_tech(*w.b, "lossy", true)->id == "lossy", c,
+                      "select_tech 显式 id 应命中");
+            }
+            check(pp::declares_lossless(*pp::find_format("webp"), "libwebp", "lossy"), c,
+                  "webp 应声明显式 lossless 参数");
+            check(pp::declares_lossless(*pp::find_format("jxl"), "libjxl", "modular"), c,
+                  "jxl 应声明显式 lossless 参数");
+            check(!pp::declares_lossless(*pp::find_format("jpeg"), "jpegli", "dct"), c,
+                  "jpeg 不应声明显式 lossless 参数");
+            check(pp::declares_lossless(*pp::find_format("heif"), "x265", ""), c,
+                  "heif（内省面）应视为声明");
+        }
+        // R-209：镜像 ParamDef 去重后的行值一致性（工厂单点声明的编译后事实）。
+        {
+            const Slot vd = slot("jxl", "libjxl", "vardct");
+            const Slot md = slot("jxl", "libjxl", "modular");
+            for (const char *key :
+                 {"effort", "decoding_speed", "codestream_level", "resampling", "group_order"}) {
+                const pp::ParamDef *a = param_of(*vd.t, key);
+                const pp::ParamDef *b = param_of(*md.t, key);
+                check(a != nullptr && b != nullptr, c, std::string("jxl 镜像参数缺失: ") + key);
+                if (a && b) {
+                    check(a->key == b->key && a->type == b->type && a->def == b->def &&
+                              a->lo == b->lo && a->hi == b->hi && a->step == b->step &&
+                              a->choices == b->choices && a->advanced == b->advanced,
+                          c, std::string("jxl 镜像参数行值漂移: ") + key);
+                }
+            }
+            const Slot wl = slot("webp", "libwebp", "lossy");
+            const Slot wn = slot("webp", "libwebp", "lossless");
+            const pp::ParamDef *mq = param_of(*wl.t, "method");
+            const pp::ParamDef *mn = param_of(*wn.t, "method");
+            check(mq && mn && mq->def == mn->def && mq->lo == mn->lo && mq->hi == mn->hi, c,
+                  "webp method 两技术行值应一致");
+            // 一键两义拆清：quality 键保留（预设兼容），但两面标签/tooltip 必须区分语义。
+            const pp::ParamDef *qq = param_of(*wl.t, "quality");
+            const pp::ParamDef *qn = param_of(*wn.t, "quality");
+            check(qq && qn && qq->label != qn->label, c, "webp quality 两面标签应区分（一键两义）");
+            check(qq && qn && qq->tooltip.find("一键两义") != std::string::npos &&
+                      qn->tooltip.find("一键两义") != std::string::npos,
+                  c, "webp quality tooltip 应含一键两义注记");
+        }
+        // R-206：单源规则表的两通道文案逐字保留（en=validate_params / zh=cross_validate）。
+        {
+            const Slot t = slot("tiff", "oiio", "codec");
+            pp::ParamSet s = pp::default_params(*t.f, "oiio", "codec", false);
+            s["tiff_tile_width"] = int64_t(20); // 非 16 倍数
+            const std::string en = pp::validate_params(*t.f, "oiio", "codec", false, s);
+            check(en.find("must be a positive multiple of 16") != std::string::npos, c,
+                  "validate_params 英文文案应保留，got: " + en);
+            const Slot wl = slot("webp", "libwebp", "lossy");
+            pp::ParamSet w = pp::default_params(*wl.f, "libwebp", "lossy", false);
+            w["qmin"] = int64_t(80);
+            w["qmax"] = int64_t(10);
+            const std::vector<std::string> zh = pp::cross_validate(w, "webp", "lossy");
+            check(contains(zh, "qmin 不能大于 qmax"), c,
+                  "cross_validate 中文文案应保留，got [" + join(zh) + "]");
+        }
+    }
+
     if (g_fail == 0)
         std::printf("test_params: OK\n");
     else

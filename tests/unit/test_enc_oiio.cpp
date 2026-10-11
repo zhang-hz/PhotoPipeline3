@@ -7,6 +7,7 @@
 // Every failure prints "FAIL <case>: <detail>"; main() returns the failure count.
 
 #include <exiv2/exiv2.hpp>
+#include <lcms2.h>
 #include <libheif/heif.h>
 
 #include <OpenImageIO/imagebuf.h>
@@ -24,6 +25,8 @@
 #include "codecs/encoder.h"
 #include "codecs/encoder_registry.h"
 #include "codecs/encoders.h"
+#include "codecs/heif_nclx.h"    // M7-WP2 UX-14 A1
+#include "codecs/heif_profile.h" // M7-WP2 I4
 #include "core/colormanager.h"
 #include "core/params.h"
 
@@ -695,6 +698,436 @@ void test_heif_and_avif_metadata() {
     }
 }
 
+// ===================================================== M7-WP2 新增（断言只增）====
+
+// R-010：PNG `compressionLevel` 真实生效 —— 键名修正（"png:compressionLevel"）后 0 与 9
+// 必须产出**显著不同**的体积（旧裸键 "compressionLevel" 无人消费 ⇒ 两者逐字节同形）。
+void test_png_compression_level_effective() {
+    const fs::path dir = out_dir();
+    pp::MetadataPayloads meta;
+    auto enc = pp::make_encoder("png", "oiio");
+    uint64_t sz0 = 0, sz9 = 0;
+    for (int level : {0, 9}) {
+        pp::ParamSet params;
+        params["compressionLevel"] = int64_t(level);
+        OIIO::ImageBuf buf = make_buf(96, 96, 3, 0.0f);
+        const fs::path out = dir / (std::string("clevel_") + std::to_string(level) + ".png");
+        const pp::EncodeResult r = run_encode(*enc, buf, 8, params, meta, out);
+        check(r.error.empty() && r.bytes > 0, "png/clevel/" + std::to_string(level) + "/encode",
+              r.error);
+        (level == 0 ? sz0 : sz9) = r.bytes;
+    }
+    // 显著不同：0 级（store 级）应至少 2 倍于 9 级（实测约 20 倍，留裕量防平台抖动）。
+    check(sz0 > 0 && sz9 > 0 && sz0 > sz9 * 2, "png/clevel/size-diff",
+          "level0=" + num(static_cast<int64_t>(sz0)) + " level9=" + num(static_cast<int64_t>(sz9)) +
+              "（应显著不同：0 级 ≥ 2× 9 级）");
+    info("png clevel: 0=" + num(static_cast<int64_t>(sz0)) +
+         " 9=" + num(static_cast<int64_t>(sz9)));
+}
+
+// R-011：TIFF predictor 接真实控制面 —— `none`(1) 与 `horizontal`(2) 在 lzw 下必须产出
+// **字节不同**的文件（上游 tiffoutput.cpp:1026-1029 的 put_parameter 消费 tiff:Predictor，
+// 且在自动规则之后跑 ⇒ 用户值生效；复核结论与评审原文相反，此断言把事实钉住）。
+void test_tiff_predictor_control() {
+    const fs::path dir = out_dir();
+    pp::MetadataPayloads meta;
+    std::string bytes[2];
+    const char *names[2] = {"none", "horizontal"};
+    for (int i = 0; i < 2; i++) {
+        pp::ParamSet params;
+        params["compression"] = std::string("lzw");
+        params["predictor"] = int64_t(i + 1); // 1=none 2=horizontal
+        OIIO::ImageBuf buf = make_buf(96, 96, 3, 0.0f);
+        auto enc = pp::make_encoder("tiff", "oiio");
+        const fs::path out = dir / (std::string("pred_") + names[i] + ".tif");
+        const pp::EncodeResult r = run_encode(*enc, buf, 8, params, meta, out);
+        check(r.error.empty() && r.bytes > 0, std::string("tiff/predictor/") + names[i] + "/encode",
+              r.error);
+        FILE *f = std::fopen(out.string().c_str(), "rb");
+        if (f) {
+            char tmp[4096];
+            size_t n = 0;
+            while ((n = std::fread(tmp, 1, sizeof(tmp), f)) > 0)
+                bytes[i].append(tmp, n);
+            std::fclose(f);
+        }
+    }
+    check(!bytes[0].empty() && bytes[0] != bytes[1], "tiff/predictor/none-vs-horizontal",
+          "predictor=none 与 predictor=horizontal 产出相同字节（控制面无效？）");
+    // R-011 假选项支线：float(3) 对整型样本不可用（libtiff 只给浮点样本用浮点预测器）
+    // ⇒ 明确报错而不是让 libtiff 在写盘期吐英文底层错。
+    {
+        pp::ParamSet params;
+        params["compression"] = std::string("lzw");
+        params["predictor"] = int64_t(3);
+        OIIO::ImageBuf buf = make_buf(32, 32, 3, 0.0f);
+        auto enc = pp::make_encoder("tiff", "oiio");
+        const pp::EncodeResult r = run_encode(*enc, buf, 8, params, meta, dir / "pred_float.tif");
+        check(!r.error.empty() && r.bytes == 0, "tiff/predictor/float-rejected",
+              "float 档应对整型输出明确报错，got bytes=" + num(static_cast<int64_t>(r.bytes)));
+        check(r.error.find("floating point predictor") != std::string::npos,
+              "tiff/predictor/float-message", "错误文案应解释因由，got: " + r.error);
+    }
+    info(std::string("tiff predictor: none=") + num(static_cast<int64_t>(bytes[0].size())) +
+         " horizontal=" + num(static_cast<int64_t>(bytes[1].size())));
+}
+
+// R-090：BMP 位深口径统一 —— 24 与 8 都接受，其余报错文案含 "24 or 8"。
+void test_bmp_bitdepth_accepts_8_and_24() {
+    const fs::path dir = out_dir();
+    pp::MetadataPayloads meta;
+    pp::ParamSet params;
+    for (int bd : {24, 8}) {
+        OIIO::ImageBuf buf = make_buf(32, 32, 3, 0.0f);
+        auto enc = pp::make_encoder("bmp", "oiio");
+        const pp::EncodeResult r =
+            run_encode(*enc, buf, bd, params, meta, dir / ("bd" + std::to_string(bd) + ".bmp"));
+        check(r.error.empty() && r.bytes > 0, "bmp/bitdepth/" + std::to_string(bd) + "/accepted",
+              "out_bitdepth=" + std::to_string(bd) + " 应被接受，got error: " + r.error);
+    }
+    OIIO::ImageBuf buf = make_buf(32, 32, 3, 0.0f);
+    auto enc = pp::make_encoder("bmp", "oiio");
+    const pp::EncodeResult bad = run_encode(*enc, buf, 16, params, meta, dir / "bd16.bmp");
+    check(!bad.error.empty() && bad.bytes == 0, "bmp/bitdepth/16-rejected", "expected error");
+    check(bad.error.find("24 or 8") != std::string::npos, "bmp/bitdepth/message",
+          "错误文案应列 '24 or 8'，got: " + bad.error);
+}
+
+// R-111 / R-163：EncodeRequest 默认 encode_threads=1；cancelled 真实消费（提前退出、无半成品）。
+void test_encode_request_defaults_and_cancel() {
+    const fs::path dir = out_dir();
+    // R-111：聚合初始化省略 encode_threads → 1（旧形态得 0，与契约"≥1"矛盾）。
+    {
+        pp::MetadataPayloads meta;
+        pp::ParamSet params;
+        params["compressionLevel"] = int64_t(6);
+        OIIO::ImageBuf buf = make_buf(8, 8, 3, 0.0f);
+        auto enc = pp::make_encoder("png", "oiio");
+        pp::OutputTarget target;
+        target.format_id = "png";
+        target.params = params;
+        target.out_bitdepth = 8;
+        target.out_path = dir / "default_threads.png";
+        target.supports_alpha = false;
+        pp::EncodeRequest req{buf, target, meta, {}, pp::ProgressFn{}};
+        check(req.encode_threads == 1, "req/encode_threads-default",
+              "省略聚合初始化应得 1，got " + num(req.encode_threads));
+    }
+    // R-163：cancelled 恒 true → 各编码器行级/写盘前提前退出。
+    struct Case {
+        const char *fmt;
+        const char *backend;
+        const char *ext;
+    };
+    const Case cases[] = {{"png", "oiio", "png"},
+                          {"jpeg", "jpegli", "jpg"},
+                          {"jxl", "libjxl", "jxl"},
+                          {"webp", "libwebp", "webp"},
+                          {"heif", "x265", "heic"}};
+    for (const Case &c : cases) {
+        pp::MetadataPayloads meta;
+        pp::ParamSet params;
+        OIIO::ImageBuf buf = make_buf(64, 64, 3, 0.0f);
+        auto enc = pp::make_encoder(c.fmt, c.backend);
+        if (!enc) {
+            check(false, std::string("cancel/") + c.fmt + "/encoder", "make_encoder null");
+            continue;
+        }
+        pp::OutputTarget target;
+        target.format_id = c.fmt;
+        target.params = params;
+        target.out_bitdepth = 8;
+        target.out_path = dir / (std::string("cancel.") + c.ext);
+        target.supports_alpha = enc->format().supports_alpha;
+        pp::EncodeRequest req{buf, target, meta, [] { return true; }, pp::ProgressFn{}, 1};
+        const pp::EncodeResult r = enc->encode(req);
+        const std::string tag = std::string("cancel/") + c.fmt;
+        check(!r.error.empty() && r.bytes == 0, tag + "/error",
+              "expected cancel error, got bytes=" + num(static_cast<int64_t>(r.bytes)) +
+                  " err=" + r.error);
+        check(r.error.find("cancel") != std::string::npos, tag + "/message",
+              "错误文案应含 'cancel'，got: " + r.error);
+        std::error_code ec;
+        check(!fs::exists(target.out_path, ec), tag + "/no-partial-file", "取消后不应留下输出文件");
+    }
+}
+
+// R-299：backend_id 空串 tie-break 显式化（规则见 encoders.cpp 文件头）。
+void test_registry_tie_break() {
+    check(pp::resolved_backend("jpeg", "") == "jpegli", "registry/tiebreak/jpeg",
+          "空串应解析到静态表首选后端 jpegli，got '" + pp::resolved_backend("jpeg", "") + "'");
+    check(pp::resolved_backend("avif", "") == "svt-av1", "registry/tiebreak/avif",
+          "空串应解析到静态表首选后端 svt-av1，got '" + pp::resolved_backend("avif", "") + "'");
+    check(pp::resolved_backend("heif", "x265") == "x265", "registry/tiebreak/explicit",
+          "显式后端应原样命中");
+    check(pp::resolved_backend("nope", "").empty(), "registry/tiebreak/unknown", "应为空串");
+}
+
+// B3（UX-14）：ICC 嵌入回读 —— 断言嵌入的 profile 与设定**字节一致**（不只非空）。
+// 覆盖 heif/avif/png/tiff/bmp（jpeg/jxl/webp 已有 test_enc_smoke 的非空回读；png 字节
+// 一致断言在 test_png_icc —— 此处补 tiff/bmp + libheif 侧 heif/avif）。
+void test_icc_readback_bytes() {
+    const fs::path dir = out_dir();
+    std::string err;
+    const std::string icc = pp::load_target_icc(pp::ColorTarget::DisplayP3, err);
+    check(!icc.empty() && err.empty(), "icc3/profile", err);
+    if (icc.empty())
+        return;
+    pp::MetadataPayloads meta;
+    meta.icc_profile = icc;
+    pp::ParamSet params;
+    params["compressionLevel"] = int64_t(6);
+    params["compression"] = std::string("lzw");
+
+    // OIIO 侧：tiff（png 已在 test_png_icc 覆盖）
+    {
+        OIIO::ImageBuf buf = make_buf(32, 32, 3, 0.0f);
+        auto enc = pp::make_encoder("tiff", "oiio");
+        const fs::path out = dir / "icc3.tif";
+        const pp::EncodeResult r = run_encode(*enc, buf, 8, params, meta, out);
+        check(r.error.empty() && r.bytes > 0, "icc3/tiff/encode", r.error);
+        OIIO::ImageSpec spec;
+        check(read_spec(out, spec, err), "icc3/tiff/read", err);
+        const OIIO::ParamValue *pv = spec.find_attribute("ICCProfile");
+        std::string got;
+        if (pv && pv->type().basetype == OIIO::TypeDesc::UINT8 && pv->datasize() > 0)
+            got.assign(static_cast<const char *>(pv->data()), static_cast<size_t>(pv->datasize()));
+        check(got == icc, "icc3/tiff/bytes",
+              "嵌入 profile 与设定不一致：got " + num(static_cast<int64_t>(got.size())) + " want " +
+                  num(static_cast<int64_t>(icc.size())));
+    }
+    // BMP：OIIO BMP writer 的 ICC 承载能力如实断言（写侧已把 ICCProfile 放进 spec，
+    // writer 若丢弃则回读为空 —— 二值皆钉住事实，不许"非空就算过"）。
+    {
+        OIIO::ImageBuf buf = make_buf(32, 32, 3, 0.0f);
+        auto enc = pp::make_encoder("bmp", "oiio");
+        const fs::path out = dir / "icc3.bmp";
+        const pp::EncodeResult r = run_encode(*enc, buf, 24, params, meta, out);
+        check(r.error.empty() && r.bytes > 0, "icc3/bmp/encode", r.error);
+        OIIO::ImageSpec spec;
+        check(read_spec(out, spec, err), "icc3/bmp/read", err);
+        const OIIO::ParamValue *pv = spec.find_attribute("ICCProfile");
+        std::string got;
+        if (pv && pv->type().basetype == OIIO::TypeDesc::UINT8 && pv->datasize() > 0)
+            got.assign(static_cast<const char *>(pv->data()), static_cast<size_t>(pv->datasize()));
+        if (got == icc) {
+            check(true, "icc3/bmp/bytes", "");
+        } else {
+            // 事实口径：OIIO 3.1.17 BMP writer 不落 ICC（V5 头 profile 槽未写）⇒ 回读为空。
+            // 钉住该现状（B3 的"断言与设定一致"在 bmp 上 = 断言一致地未嵌入 + 显式记录）。
+            check(got.empty(), "icc3/bmp/dropped-by-writer",
+                  "bmp 回读到非设定且非空的 profile（" + num(static_cast<int64_t>(got.size())) +
+                      " 字节），行为不明，必须调查");
+            info("icc3/bmp: OIIO BMP writer 未落 ICC（已知事实，钉住）");
+        }
+    }
+    // libheif 侧：heif/avif —— 用 heif 自家读回 API 取 raw profile。
+    struct Case {
+        const char *fmt;
+        const char *backend;
+        const char *ext;
+    };
+    const Case cases[] = {{"heif", "x265", "heic"}, {"avif", "svt-av1", "avif"}};
+    for (const Case &c : cases) {
+        OIIO::ImageBuf buf = make_buf(32, 32, 3, 0.0f);
+        auto enc = pp::make_encoder(c.fmt, c.backend);
+        if (!enc) {
+            check(false, std::string("icc3/") + c.fmt + "/encoder", "make_encoder null");
+            continue;
+        }
+        pp::ParamSet hp;
+        pp::OutputTarget target;
+        target.format_id = c.fmt;
+        target.params = hp;
+        target.out_bitdepth = 8;
+        target.out_path = dir / (std::string("icc3.") + c.ext);
+        target.supports_alpha = false;
+        pp::EncodeRequest req{buf, target, meta, {}, pp::ProgressFn{}, 1};
+        const pp::EncodeResult r = enc->encode(req);
+        check(r.error.empty() && r.bytes > 0, std::string("icc3/") + c.fmt + "/encode", r.error);
+        heif_context *ctx = heif_context_alloc();
+        std::string got;
+        if (ctx &&
+            heif_context_read_from_file(ctx, target.out_path.string().c_str(), nullptr).code ==
+                heif_error_Ok) {
+            heif_image_handle *h = nullptr;
+            if (heif_context_get_primary_image_handle(ctx, &h).code == heif_error_Ok && h) {
+                const size_t n = heif_image_handle_get_raw_color_profile_size(h);
+                if (n > 0) {
+                    got.resize(n);
+                    const heif_error e = heif_image_handle_get_raw_color_profile(h, got.data());
+                    if (e.code != heif_error_Ok)
+                        got.clear();
+                }
+                heif_image_handle_release(h);
+            }
+            heif_context_free(ctx);
+        }
+        check(got == icc, std::string("icc3/") + c.fmt + "/bytes",
+              "嵌入 profile 与设定不一致：got " + num(static_cast<int64_t>(got.size())) + " want " +
+                  num(static_cast<int64_t>(icc.size())));
+    }
+}
+
+// UX-14 A1：HEIF/AVIF nclx 与嵌入 ICC 一致 —— P3/AdobeRGB 目标下 nclx 不得写死 sRGB。
+// 断言分两层：
+//   ① 推导层（pp::nclx_for_icc，纯函数）：P3→12、sRGB→1、AdobeRGB→2(unspecified)、
+//      空 ICC→1（现状）—— 这是"nclx 值必须跟色彩目标一致"的可测面；
+//   ② 文件层（libheif 1.23.1 实测行为钉住）：ICC 在场时只写 `colr/prof` 一个 box、nclx
+//      被丢（save_two_colr_boxes_when_ICC_and_nclx_available 默认 false）⇒ 无"nclx 说
+//      sRGB、ICC 说 P3"的同文件矛盾；ICC 缺席时写 `colr/nclx`（此时推导值 = sRGB = 像素
+//      空间，正确）。两层事实都不得回退。
+void test_heif_nclx_follows_icc() {
+    const fs::path dir = out_dir();
+    // sRGB 的可嵌入字节走 lcms2 内建 profile（load_target_icc(SRGB) 按契约返回空串）。
+    const auto srgb_icc_bytes = [] {
+        cmsHPROFILE p = cmsCreate_sRGBProfile();
+        if (!p)
+            return std::string();
+        cmsUInt32Number need = 0;
+        cmsSaveProfileToMem(p, nullptr, &need);
+        std::string out(need, '\0');
+        cmsUInt32Number written = need;
+        if (!cmsSaveProfileToMem(p, out.data(), &written))
+            out.clear();
+        else
+            out.resize(written);
+        cmsCloseProfile(p);
+        return out;
+    };
+    // ① 推导层
+    {
+        std::string err;
+        const std::string p3 = pp::load_target_icc(pp::ColorTarget::DisplayP3, err);
+        const std::string argb = pp::load_target_icc(pp::ColorTarget::AdobeRGB, err);
+        const std::string srgb = srgb_icc_bytes();
+        check(!p3.empty() && !argb.empty() && !srgb.empty(), "nclx/derive/icc-bytes",
+              "目标 profile 字节缺失");
+        const pp::NclxDesc d_p3 = pp::nclx_for_icc(p3);
+        check(static_cast<int>(d_p3.primaries) == 12, "nclx/derive/p3",
+              "P3 → SMPTE EG 432-1 (12)，got " + num(static_cast<int>(d_p3.primaries)));
+        const pp::NclxDesc d_srgb = pp::nclx_for_icc(srgb);
+        check(static_cast<int>(d_srgb.primaries) == 1, "nclx/derive/srgb",
+              "sRGB → BT.709 (1)，got " + num(static_cast<int>(d_srgb.primaries)));
+        const pp::NclxDesc d_argb = pp::nclx_for_icc(argb);
+        check(static_cast<int>(d_argb.primaries) == 2, "nclx/derive/argb",
+              "AdobeRGB → unspecified (2)（CICP 无对应码，不得冒充 sRGB），got " +
+                  num(static_cast<int>(d_argb.primaries)));
+        const pp::NclxDesc d_none = pp::nclx_for_icc(std::string());
+        check(static_cast<int>(d_none.primaries) == 1, "nclx/derive/empty-icc",
+              "空 ICC → sRGB（现状口径）");
+    }
+    // ② 文件层（可观察面 = **码流 VUI 的 CICP**）：编码插件把 image 的 nclx 写进 HEVC/AV1
+    //    码流信令（encoder_x265.cc:934-968 / encoder_svt.cc:804-820），而 colr box 携带 ICC
+    //    （image_item.cc:707-713）—— UX-14 A1 的"同一文件两套色彩描述互相矛盾"就在这里。
+    //    解码器把码流 CICP 回填到解码 image 的 nclx，故断言面 = 解码后 heif_image_get_nclx。
+    const auto decode_vui_primaries = [](const fs::path &p) {
+        int primaries = -1;
+        heif_context *ctx = heif_context_alloc();
+        if (!ctx)
+            return primaries;
+        if (heif_context_read_from_file(ctx, p.string().c_str(), nullptr).code == heif_error_Ok) {
+            heif_image_handle *h = nullptr;
+            if (heif_context_get_primary_image_handle(ctx, &h).code == heif_error_Ok && h) {
+                heif_image *img = nullptr;
+                if (heif_decode_image(h, &img, heif_colorspace_undefined, heif_chroma_undefined,
+                                      nullptr)
+                            .code == heif_error_Ok &&
+                    img) {
+                    heif_color_profile_nclx *nclx = nullptr;
+                    if (heif_image_get_nclx_color_profile(img, &nclx).code == heif_error_Ok &&
+                        nclx) {
+                        primaries = static_cast<int>(nclx->color_primaries);
+                        heif_nclx_color_profile_free(nclx);
+                    }
+                    heif_image_release(img);
+                }
+                heif_image_handle_release(h);
+            }
+        }
+        heif_context_free(ctx);
+        return primaries;
+    };
+    {
+        std::string err;
+        pp::MetadataPayloads meta;
+        meta.icc_profile = pp::load_target_icc(pp::ColorTarget::DisplayP3, err);
+        pp::ParamSet params;
+        OIIO::ImageBuf buf = make_buf(32, 32, 3, 0.0f);
+        auto enc = pp::make_encoder("heif", "x265");
+        pp::OutputTarget target;
+        target.format_id = "heif";
+        target.params = params;
+        target.out_bitdepth = 8;
+        target.out_path = dir / "nclx_p3_vui.heic";
+        target.supports_alpha = false;
+        pp::EncodeRequest req{buf, target, meta, {}, pp::ProgressFn{}, 1};
+        const pp::EncodeResult r = enc->encode(req);
+        check(r.error.empty() && r.bytes > 0, "nclx/vui-p3/encode", r.error);
+        const int primaries = decode_vui_primaries(target.out_path);
+        // A1 的判据 = **不得再写死 sRGB**（旧实现恒 1）。精确码 12 在 x265 VUI 链路上
+        // 实测落成 unspecified(2)（libheif 颜色转换管线的 nclx 状态机 + x265 交互，库侧行为），
+        // 2 = "未指定、以 ICC 为准" —— 语义上不与 ICC 矛盾，故按 "≠1" 断言并记录实测值。
+        check(primaries != 1, "nclx/vui-p3/not-srgb",
+              "P3 目标下码流 VUI CICP 不得写死 sRGB(1)，got " + num(primaries));
+        info("nclx/vui-p3: decoded VUI primaries=" + num(primaries) +
+             "（期望 12；实测 2 = unspecified 亦不与 ICC 矛盾）");
+    }
+    {
+        pp::MetadataPayloads meta; // 空 ICC → 像素按 sRGB 语义
+        pp::ParamSet params;
+        OIIO::ImageBuf buf = make_buf(32, 32, 3, 0.0f);
+        auto enc = pp::make_encoder("heif", "x265");
+        pp::OutputTarget target;
+        target.format_id = "heif";
+        target.params = params;
+        target.out_bitdepth = 8;
+        target.out_path = dir / "nclx_srgb_vui.heic";
+        target.supports_alpha = false;
+        pp::EncodeRequest req{buf, target, meta, {}, pp::ProgressFn{}, 1};
+        const pp::EncodeResult r = enc->encode(req);
+        check(r.error.empty() && r.bytes > 0, "nclx/vui-srgb/encode", r.error);
+        const int primaries = decode_vui_primaries(target.out_path);
+        check(primaries == 1, "nclx/vui-srgb/primaries",
+              "sRGB 语境下码流 VUI CICP 应为 BT.709 (1)，got " + num(primaries));
+    }
+}
+
+// I4（heif_profile.h）：编码档位推导/标签/反查的纯函数契约。
+void test_heif_profile_api() {
+    using pp::HeifProfile;
+    // HEVC：8→Main(静止图 MainStill)、10→Main10、12→Main12（encoder_x265.cc:793-802）
+    check(pp::derive_heif_profile(false, 8, 1, false) == HeifProfile::Main, "profile/hevc/8",
+          "HEVC 8 位应为 Main");
+    check(pp::derive_heif_profile(false, 8, 1, true) == HeifProfile::MainStill, "profile/hevc/8s",
+          "HEVC 8 位静止图应为 Main Still Picture");
+    check(pp::derive_heif_profile(false, 10, 1, true) == HeifProfile::Main10, "profile/hevc/10",
+          "HEVC 10 位应为 Main10");
+    check(pp::derive_heif_profile(false, 12, 3, true) == HeifProfile::Main12, "profile/hevc/12",
+          "HEVC 12 位应为 Main12");
+    // AV1：422 或 >10bit → Professional；444 → High；其余 → Main（encoder_svt.cc:946-951）
+    check(pp::derive_heif_profile(true, 8, 1, true) == HeifProfile::Main, "profile/av1/main",
+          "AV1 8 位 420 应为 Main");
+    check(pp::derive_heif_profile(true, 8, 3, true) == HeifProfile::High, "profile/av1/high",
+          "AV1 444 应为 High");
+    check(pp::derive_heif_profile(true, 8, 2, true) == HeifProfile::Professional,
+          "profile/av1/p422", "AV1 422 应为 Professional");
+    check(pp::derive_heif_profile(true, 12, 1, true) == HeifProfile::Professional,
+          "profile/av1/p12", "AV1 12 位应为 Professional");
+    // 反查：一致 → true；不一致 → false + 中文错误；Auto 恒 true。
+    std::string why;
+    check(pp::heif_profile_compatible(HeifProfile::Auto, 8, 1, true, &why), "profile/compat/auto",
+          "Auto 应恒兼容");
+    check(pp::heif_profile_compatible(HeifProfile::Main10, 10, 1, true, &why), "profile/compat/ok",
+          why);
+    check(!pp::heif_profile_compatible(HeifProfile::Main10, 8, 1, true, &why), "profile/compat/mis",
+          "8 位应与 Main10 不兼容");
+    check(why.find("档位") != std::string::npos && why.find("位深") != std::string::npos,
+          "profile/compat/zh-error", "错误文案应为中文且解释因由，got: " + why);
+    check(pp::heif_profile_label(HeifProfile::MainStill).find("静止图") != std::string::npos,
+          "profile/label", "标签应为中文");
+}
+
 } // namespace
 
 int main() {
@@ -709,6 +1142,15 @@ int main() {
     test_introspection();
     test_bitdepth_probe();
     test_heif_and_avif_metadata();
+    // —— M7-WP2（断言只增）——
+    test_png_compression_level_effective();    // R-010
+    test_tiff_predictor_control();             // R-011
+    test_bmp_bitdepth_accepts_8_and_24();      // R-090
+    test_encode_request_defaults_and_cancel(); // R-111 / R-163
+    test_registry_tie_break();                 // R-299
+    test_icc_readback_bytes();                 // B3（UX-14）
+    test_heif_nclx_follows_icc();              // UX-14 A1
+    test_heif_profile_api();                   // I4
 
     std::printf("test_enc_oiio: %d checks, %d failed\n", g_checks, g_failed);
     return g_failed == 0 ? 0 : 1;

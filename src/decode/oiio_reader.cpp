@@ -15,6 +15,8 @@
 #include <string>
 #include <string_view>
 
+#include "core/logger.h" // R-304：seek_subimage 还原失败的如实记录
+
 namespace pp {
 namespace {
 
@@ -115,9 +117,14 @@ ProbeOutcome probe_file(const std::filesystem::path &p) {
 
     // Multipage/animated detection without decoding pixels: a second subimage
     // must exist (TIFF directory / GIF frame). Restore subimage 0 afterwards.
+    // R-304（M7-WP2）：seek_subimage 返回值不再裸丢 —— 切回 0 失败不影响已拷出的
+    // spec（下方 close() 即销毁句柄），但如实记录（debug 日志）供排查。
     out.info.is_multipage = in->seek_subimage(1, 0);
     if (out.info.is_multipage) {
-        in->seek_subimage(0, 0);
+        if (!in->seek_subimage(0, 0)) {
+            log_debug("decode", "oiio_reader.cpp", "seek_subimage(0) restore failed",
+                      {{"file", file}});
+        }
     }
 
     out.first_spec = spec;
@@ -135,6 +142,12 @@ DecodeOutcome decode_float(const std::filesystem::path &p, const ImageInfo &info
     DecodeOutcome out;
     clear_stale_oiio_error();
     const std::string file = p.string();
+    // R-304（M7-WP2）：`info` 的消费面**显式化**（旧注释半句带过，E9-16 称"半消费"）——
+    //   * `info.is_multipage`：多页/动图截断告警（下方）；
+    //   * 其余字段（width/height/channels/src_bitdepth/has_alpha/has_icc/format）本函数
+    //     **不消费**：解码以读到的 spec 为准（同一文件在 probe 与 decode 之间可能被改写，
+    //     spec 是这里的真相源）；调用方（pipeline）需要尺寸时用 out.buf.spec()。
+    //   如需"probe 与 decode 一致性校验"，应在 pipeline 侧比对（跨面，未在本波范围）。
 
     // Read the spec first so unsupported inputs are rejected before any pixel
     // allocation (init_spec() does not read or allocate pixels).

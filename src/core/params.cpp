@@ -35,18 +35,6 @@ ParamSet::const_iterator find_key(const ParamSet &s, std::string_view key) {
     return s.find(std::string(key));
 }
 
-// 技术选择：显式 id → find_tech；空 id → 首选（lossless 时优先 lossless_capable 的技术）
-const TechDef *select_tech(const BackendDef &b, std::string_view tech_id, bool lossless) {
-    if (!tech_id.empty())
-        return find_tech(b, tech_id);
-    if (lossless) {
-        for (const TechDef &t : b.techs)
-            if (t.lossless_capable)
-                return &t;
-    }
-    return b.techs.empty() ? nullptr : &b.techs.front();
-}
-
 std::string type_name(const ParamValue &v) {
     switch (v.index()) {
     case 0:
@@ -192,8 +180,9 @@ std::string effective_tech_id(const std::string &format_id, const std::string &t
     return t ? t->id : std::string();
 }
 
-// 该技术是否声明了显式无损参数（key = "lossless"，0.3.0/M4-T13 的 schema 面）
-bool declares_lossless_param(const TechDef *t) {
+// 该技术是否声明了显式无损参数（key = kLosslessParamKey，0.3.0/M4-T13 的 schema 面）。
+// R-208：与导出的 declares_lossless(f, backend, tech) 共用同一判定内核（tech 级）。
+bool tech_declares_lossless(const TechDef *t) {
     if (t == nullptr)
         return false;
     for (const ParamDef &p : t->params)
@@ -202,11 +191,157 @@ bool declares_lossless_param(const TechDef *t) {
     return false;
 }
 
+// ---------------------------------------------------------------------------
+// 跨字段规则单源（R-206/R-207，M7-WP2）
+// ---------------------------------------------------------------------------
+// 旧形态：TIFF tile 规则内嵌 validate_params（英文串），webp/jpeg 规则内嵌 cross_validate
+// （中文串）—— 同类约束两处实现、两种语言、裸字符串绑键（表改 key 规则静默失效）。
+// 现收敛为一张规则表：键引用走 params.h 的 kKey* 常量；两个通道各自渲染自己的语言
+// （en/zh 文本**逐字保留** 0.3.2 现文案，断言/日志零漂移）；通道归属（in_validate /
+// in_cross）显式化为数据，保持现行为 —— 把全部规则投递到两个通道会改变既有错误面
+// （如预设校验突然多出 qmin/qmax 拒绝），属行为变化，未裁定不做。
+struct CrossRule {
+    std::string_view format_id;    // 精确匹配；"" = 任意
+    std::string_view tech_id;      // 与 effective_tech_id 解析结果精确匹配；"" = 任意
+    bool require_all_keys = false; // true：全部键在场才判定（缺键 = 无法判定，跳过）
+    std::vector<std::string_view> keys;
+    std::function<std::string(const ParamSet &, bool english)> check; // "" = 未违反
+    bool in_validate = true;
+    bool in_cross = true;
+};
+
+const std::vector<CrossRule> &cross_rules() {
+    static const std::vector<CrossRule> rules = {
+        // TIFF tiling（§4.2/§4.7；原 validate_params 内嵌，英文文案逐字保留）
+        {std::string_view("tiff"),
+         std::string_view(),
+         false,
+         {kKeyTiffTileWidth},
+         [](const ParamSet &s, bool en) -> std::string {
+             const int64_t w = param_int(s, kKeyTiffTileWidth, 0);
+             if (w > 0 && w % 16 != 0)
+                 return en ? "param '" + std::string(kKeyTiffTileWidth) + "': value " +
+                                 std::to_string(w) + " must be a positive multiple of 16"
+                           : "param '" + std::string(kKeyTiffTileWidth) + "'：值 " +
+                                 std::to_string(w) + " 必须是 16 的正倍数";
+             return {};
+         },
+         true,
+         false},
+        {std::string_view("tiff"),
+         std::string_view(),
+         false,
+         {kKeyTiffTileHeight},
+         [](const ParamSet &s, bool en) -> std::string {
+             const int64_t h = param_int(s, kKeyTiffTileHeight, 0);
+             if (h > 0 && h % 16 != 0)
+                 return en ? "param '" + std::string(kKeyTiffTileHeight) + "': value " +
+                                 std::to_string(h) + " must be a positive multiple of 16"
+                           : "param '" + std::string(kKeyTiffTileHeight) + "'：值 " +
+                                 std::to_string(h) + " 必须是 16 的正倍数";
+             return {};
+         },
+         true,
+         false},
+        {std::string_view("tiff"),
+         std::string_view(),
+         false,
+         {kKeyTiffTileWidth, kKeyTiffTileHeight},
+         [](const ParamSet &s, bool en) -> std::string {
+             const int64_t w = param_int(s, kKeyTiffTileWidth, 0);
+             const int64_t h = param_int(s, kKeyTiffTileHeight, 0);
+             if ((w > 0) != (h > 0))
+                 return en ? "param '" + std::string(kKeyTiffTileWidth) + "'/'" +
+                                 std::string(kKeyTiffTileHeight) +
+                                 "': both must be > 0 (tiled) or 0 (strips)"
+                           : "param '" + std::string(kKeyTiffTileWidth) + "'/'" +
+                                 std::string(kKeyTiffTileHeight) +
+                                 "': 两者必须同为 > 0（tiled）或同为 0（strips）";
+             return {};
+         },
+         true,
+         false},
+        // 规则① webp + lossy：qmin ≤ qmax（原 cross_validate 内嵌，中文文案逐字保留）
+        {std::string_view("webp"),
+         std::string_view("lossy"),
+         true,
+         {kKeyQmin, kKeyQmax},
+         [](const ParamSet &s, bool en) -> std::string {
+             if (param_int(s, kKeyQmin, 0) > param_int(s, kKeyQmax, 0))
+                 return en ? "param '" + std::string(kKeyQmin) + "' must be <= '" +
+                                 std::string(kKeyQmax) + "'"
+                           : "qmin 不能大于 qmax";
+             return {};
+         },
+         false,
+         true},
+        // 规则② jpeg：启用渐进式时必须启用哈夫曼表优化（原 cross_validate 内嵌）
+        {std::string_view("jpeg"),
+         std::string_view(),
+         true,
+         {kKeyProgressive, kKeyOptimizeCoding},
+         [](const ParamSet &s, bool en) -> std::string {
+             if (param_bool(s, kKeyProgressive, false) && !param_bool(s, kKeyOptimizeCoding, true))
+                 return en ? "optimize_coding must be enabled when progressive is enabled"
+                           : "启用渐进式时必须启用哈夫曼表优化";
+             return {};
+         },
+         false,
+         true},
+    };
+    return rules;
+}
+
+bool rule_applies(const CrossRule &r, const std::string &format_id, const std::string &tech_id,
+                  const ParamSet &values) {
+    if (!r.format_id.empty() && r.format_id != format_id)
+        return false;
+    if (!r.tech_id.empty() && r.tech_id != effective_tech_id(format_id, tech_id))
+        return false;
+    if (r.require_all_keys) {
+        for (std::string_view k : r.keys)
+            if (values.find(std::string(k)) == values.end())
+                return false; // 缺键 = 无法判定（缺失=默认值，由 fill_defaults 负责）
+    }
+    return true;
+}
+
 } // namespace
 
 bool lossless_flag(const ParamSet &s) {
     // 显式 schema 参数优先；缺失（未声明该参数的格式，或 0.2 形态的调用方）→ 内部管道键
     return param_bool(s, kLosslessParamKey, param_bool(s, kLosslessKey, false));
+}
+
+// R-208（M7-WP2）：无损"显式 schema 参数"声明判定单源 —— 原 presets.cpp 的
+// `declares_lossless` 与本文件的 `declares_lossless_param` 语义并存（后者只看静态技术表，
+// 前者对 libheif 系恒真）。合并口径：
+//   * 静态表：匹配到的技术声明了 kLosslessParamKey 才算（jxl/webp 的 lossless_param 行）；
+//   * libheif 系（runtime_introspected）：技术来自运行时内省，静态表为空 → 视为声明
+//     （内省面本就暴露 `lossless` bool，enc_heif 消费它；0.3.0 v1 迁移口径一致）；
+//   * 其余格式（jpeg 无 lossless 技术、png/tiff/bmp 技术本身无损且不声明该参数）→ 不声明。
+bool declares_lossless(const FormatDef &f, const std::string &backend_id,
+                       const std::string &tech_id) {
+    const BackendDef *b = find_backend(f, backend_id);
+    if (!b)
+        return false;
+    if (b->runtime_introspected)
+        return true;
+    const TechDef *t = tech_id.empty() ? select_tech(*b, {}, false) : find_tech(*b, tech_id);
+    return tech_declares_lossless(t);
+}
+
+// R-208（M7-WP2）：技术选择单源 —— 原 params.cpp 内部 `select_tech` 与 presets.cpp 的
+// `pick_tech` 逐字重复（13 组镜像副本清单之一），现导出为唯一实现。
+const TechDef *select_tech(const BackendDef &b, std::string_view tech_id, bool lossless) {
+    if (!tech_id.empty())
+        return find_tech(b, tech_id);
+    if (lossless) {
+        for (const TechDef &t : b.techs)
+            if (t.lossless_capable)
+                return &t;
+    }
+    return b.techs.empty() ? nullptr : &b.techs.front();
 }
 
 const FormatDef *find_format(std::string_view id) {
@@ -321,7 +456,7 @@ std::vector<std::string> apply_locks(const FormatDef &f, const std::string &back
         s[std::string(kLosslessKey)] = lossless;
         changed.push_back(std::string(kLosslessKey));
     }
-    if (declares_lossless_param(t)) {
+    if (tech_declares_lossless(t)) {
         probe[std::string(kLosslessParamKey)] = lossless;
         const auto it = s.find(std::string(kLosslessParamKey));
         if (it == s.end() || !(it->second == ParamValue{lossless})) {
@@ -364,19 +499,13 @@ std::string validate_params(const FormatDef &f, const std::string &backend_id,
         if (!err.empty())
             return "param '" + p.key + "': " + err;
     }
-    // TIFF tiling（§4.2/§4.7）：>0 时必须是 16 的倍数；两参数须同时启用或同时为 0
-    if (f.id == "tiff") {
-        const int64_t w = param_int(s, "tiff_tile_width", 0);
-        const int64_t h = param_int(s, "tiff_tile_height", 0);
-        if (w > 0 && w % 16 != 0)
-            return "param 'tiff_tile_width': value " + std::to_string(w) +
-                   " must be a positive multiple of 16";
-        if (h > 0 && h % 16 != 0)
-            return "param 'tiff_tile_height': value " + std::to_string(h) +
-                   " must be a positive multiple of 16";
-        if ((w > 0) != (h > 0))
-            return "param 'tiff_tile_width'/'tiff_tile_height': both must be > 0 (tiled) or 0 "
-                   "(strips)";
+    // 跨字段规则（R-206：单源规则表；本通道取英文文案，逐字保留 0.3.2 现文案）。
+    for (const CrossRule &r : cross_rules()) {
+        if (!r.in_validate || !rule_applies(r, f.id, tech_id, s))
+            continue;
+        const std::string err = r.check(s, /*english=*/true);
+        if (!err.empty())
+            return err;
     }
     return {};
 }
@@ -388,25 +517,20 @@ std::vector<std::string> cross_validate(const ParamSet &values, const std::strin
                                         const std::string &tech_id) {
     std::vector<std::string> out;
 
-    // 规则① webp + lossy：qmin ≤ qmax（与 WebPValidateConfig 同名约束一致）。
-    // 两键缺一 → 无法判定（缺失=默认值，由 fill_defaults/validate_params 负责）。
-    if (format_id == "webp" && effective_tech_id(format_id, tech_id) == "lossy" &&
-        values.count("qmin") != 0 && values.count("qmax") != 0) {
-        if (param_int(values, "qmin", 0) > param_int(values, "qmax", 0))
-            out.push_back("qmin 不能大于 qmax");
-    }
-
-    // 规则② jpeg：启用渐进式时必须启用哈夫曼表优化。
-    // M2-T5 父裁定订正（§2.7 原文条件写反）：真实约束来自 jpegli ——
+    // 跨字段规则（R-206：单源规则表，见本文件 cross_rules()；本通道取中文文案，逐字保留
+    // 0.3.2 现文案）。规则①（webp qmin ≤ qmax）与规则②（jpeg 渐进式 ⇒ 哈夫曼表优化）已
+    // 收进规则表；规则②的条件订正依据（M2-T5 父裁定）：真实约束来自 jpegli ——
     //   tools/cjpegli.cc:146 `progressive_level > 0 && !optimize_coding` → 报
     //   "--fixed_code must be used together with -p 0"；
-    //   enc_jpegli.cpp:304 `cinfo.optimize_coding = (progressive || optimize_coding)`
-    //   ⇒ (true,true) 是规范化态、(true,false) 才是非法态。
-    // 因此 jpeg 两参数默认值（true/true，format_tables.cpp:88-100）天然不报（§4 T5）。
-    if (format_id == "jpeg" && values.count("progressive") != 0 &&
-        values.count("optimize_coding") != 0 && param_bool(values, "progressive", false) &&
-        !param_bool(values, "optimize_coding", true)) {
-        out.push_back("启用渐进式时必须启用哈夫曼表优化");
+    //   enc_jpegli.cpp `cinfo.optimize_coding = (progressive || optimize_coding)`
+    //   ⇒ (true,true) 是规范化态、(true,false) 才是非法态。两参数默认值（true/true）
+    //   天然不报（§4 T5）。
+    for (const CrossRule &r : cross_rules()) {
+        if (!r.in_cross || !rule_applies(r, format_id, tech_id, values))
+            continue;
+        const std::string msg = r.check(values, /*english=*/false);
+        if (!msg.empty())
+            out.push_back(msg);
     }
 
     // M4-T13 记账：**不**为"显式 lossless 参数 vs 技术能力"新增交叉规则。实测依据：

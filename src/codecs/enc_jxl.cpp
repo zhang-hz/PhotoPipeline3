@@ -39,6 +39,7 @@
 
 #include "codecs/encoder.h"
 #include "codecs/encoder_registry.h"
+#include "core/fsops.h" // R-003：write_atomic_file（原子落盘）
 #include "core/logger.h"
 #include "core/params.h"
 #include "core/simd/simd.h" // M4-W5-T19：量化热路径（§11.2）
@@ -256,8 +257,9 @@ private:
         // with the reserved key (§3.4) as the fallback; the parameter engine keeps the two in
         // sync (src/core/params.cpp apply_locks). A modular parameter set (built from the
         // modular tech) also selects the Modular path.
-        const bool lossless =
-            param_bool(params, "lossless", param_bool(params, "__lossless", false));
+        // R-295：读取统一走 pp::lossless_flag()（kLosslessKey/kLosslessParamKey 单源），
+        // 不再本地复刻两键优先级。
+        const bool lossless = lossless_flag(params);
         bool modular_params = false;
         for (const JxlParamMap &m : kFrameSettings) {
             if (m.tech == Tech::Modular && params.find(std::string(m.key)) != params.end()) {
@@ -518,20 +520,29 @@ private:
         if (req.target.out_bitdepth == 16) {
             pixels16.resize(npix);
             for (int y = 0; y < r.height; ++y) {
+                // R-163：cancelled 真实消费 —— 喂入循环内提前退出（尚未写盘，无半成品）。
+                if (req.cancelled && req.cancelled())
+                    return encode_error("jxl: encode cancelled");
                 const std::size_t base = static_cast<std::size_t>(y) * stride;
                 pp::simd::quantize16(r.px.data() + base, pixels16.data() + base, stride, 65535);
+                // R-086：喂入循环进度 **0.95 封顶** —— 之后还有压缩期
+                // （JxlEncoderProcessOutput 无进度回调，§3.1 "尽力而为"边界），
+                // 不得在压缩开始前直达 1.0（与合成路径 progress.cpp 的 0.95 口径一致）。
                 if (progress)
-                    progress(static_cast<float>(y + 1) / static_cast<float>(r.height));
+                    progress(0.95f * (static_cast<float>(y + 1) / static_cast<float>(r.height)));
             }
             pixel_data = pixels16.data();
             pixel_bytes = pixels16.size() * sizeof(uint16_t);
         } else {
             pixels8.resize(npix);
             for (int y = 0; y < r.height; ++y) {
+                // R-163：同上。
+                if (req.cancelled && req.cancelled())
+                    return encode_error("jxl: encode cancelled");
                 const std::size_t base = static_cast<std::size_t>(y) * stride;
                 pp::simd::quantize8(r.px.data() + base, pixels8.data() + base, stride);
                 if (progress)
-                    progress(static_cast<float>(y + 1) / static_cast<float>(r.height));
+                    progress(0.95f * (static_cast<float>(y + 1) / static_cast<float>(r.height)));
             }
             pixel_data = pixels8.data();
             pixel_bytes = pixels8.size();
@@ -597,14 +608,12 @@ private:
         }
 
         const std::string path = req.target.out_path.string();
-        std::FILE *fp = std::fopen(path.c_str(), "wb");
-        if (fp == nullptr) {
-            return encode_error("jxl: cannot open output file: " + path);
-        }
-        const std::size_t written = std::fwrite(out.data(), 1, total, fp);
-        const int close_rc = std::fclose(fp);
-        if (written != total || close_rc != 0) {
-            return encode_error("jxl: failed to write output file: " + path);
+        // R-003（M7-WP2 接线）：内存型产物走 fsops::write_atomic_file（原子落盘 + 失败清场）。
+        {
+            std::string werr;
+            const std::string_view payload(reinterpret_cast<const char *>(out.data()), total);
+            if (!write_atomic_file(req.target.out_path, payload, &werr))
+                return encode_error("jxl: failed to write output file: " + path + ": " + werr);
         }
 
         EncodeResult res;
@@ -623,5 +632,4 @@ PP_REGISTER_ENCODER("jxl", "libjxl", make_jxl);
 
 } // namespace pp
 
-// Link anchor: referenced by encoders.cpp (static-library dead-stripping guard).
-extern "C" void pp_link_encoder_jxl() {}
+// R-051（M7-WP2）：原 `pp_link_encoder_jxl` 链接锚点已删，理由同 enc_jpegli.cpp 尾注。

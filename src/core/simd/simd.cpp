@@ -15,6 +15,10 @@
 
 #include "core/simd/simd.h"
 
+#include <atomic>
+#include <cstdlib>
+#include <cstring>
+
 // 平台分派（仅"调用哪个 CPUID 入口"这一层；ISA 分派纪律见头文件注记）。
 #if defined(_MSC_VER)
 #include <intrin.h>
@@ -102,5 +106,54 @@ bool cpu_has_avx2() {
     static const bool cached = detect_avx2();
     return cached;
 }
+
+// —— R-303：标量回退测试开关（契约见 simd.h 的脚手架块）——
+namespace {
+std::atomic<int> &force_scalar_state() {
+    // 三态：0 = 未初始化（首查时采样 PP_SIMD_FORCE_SCALAR 环境变量）、1 = 关、2 = 开。
+    static std::atomic<int> state{0};
+    return state;
+}
+
+bool env_force_scalar() {
+#if defined(_MSC_VER)
+    // MSVC 的 getenv 带 C4996 弃用告警（/W4 面），走 _dupenv_s 保持新代码 0 告警。
+    char *buf = nullptr;
+    std::size_t len = 0;
+    if (_dupenv_s(&buf, &len, "PP_SIMD_FORCE_SCALAR") != 0 || buf == nullptr)
+        return false;
+    const bool on = !(std::strcmp(buf, "0") == 0 || std::strcmp(buf, "") == 0 ||
+                      std::strcmp(buf, "false") == 0);
+    std::free(buf);
+    return on;
+#else
+    const char *v = std::getenv("PP_SIMD_FORCE_SCALAR");
+    if (v == nullptr)
+        return false;
+    return !(std::strcmp(v, "0") == 0 || std::strcmp(v, "") == 0 || std::strcmp(v, "false") == 0);
+#endif
+}
+} // namespace
+
+void set_force_scalar(bool on) {
+    force_scalar_state().store(on ? 2 : 1, std::memory_order_relaxed);
+}
+
+bool force_scalar_enabled() {
+    std::atomic<int> &st = force_scalar_state();
+    int cur = st.load(std::memory_order_relaxed);
+    if (cur == 0) {
+        // 首次查询：环境变量采样一次；并发首查时允许两个线程都算一遍（同值，CAS 收口）。
+        const int want = env_force_scalar() ? 2 : 1;
+        int expected = 0;
+        if (!st.compare_exchange_strong(expected, want, std::memory_order_relaxed))
+            cur = expected;
+        else
+            cur = want;
+    }
+    return cur == 2;
+}
+
+bool use_avx2() { return cpu_has_avx2() && !force_scalar_enabled(); }
 
 } // namespace pp::simd

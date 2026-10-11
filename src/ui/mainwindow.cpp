@@ -7433,12 +7433,14 @@ void MainWindow::Impl::smoke_probe_classify() {
             all_actions << action->text();
     }
     delete all_menu;
-    const QStringList expect_class{QStringLiteral("全选该类"), QStringLiteral("反选该类"),
-                                   QStringLiteral("清空勾选"), QStringLiteral("重命名…"),
-                                   QStringLiteral("颜色…"),    QStringLiteral("热键…"),
+    // R-142 机械换锚（语义不变；登记 build/m7-wp6/handoff.md T13）：第三项「清空勾选」→
+    // 「清空该类勾选」（原为全局清空，与前两项的"该类"限定自相矛盾）。菜单项集合/顺序不变。
+    const QStringList expect_class{QStringLiteral("全选该类"),     QStringLiteral("反选该类"),
+                                   QStringLiteral("清空该类勾选"), QStringLiteral("重命名…"),
+                                   QStringLiteral("颜色…"),        QStringLiteral("热键…"),
                                    QStringLiteral("删除")};
     const QStringList expect_all{QStringLiteral("全选该类"), QStringLiteral("反选该类"),
-                                 QStringLiteral("清空勾选")};
+                                 QStringLiteral("清空该类勾选")};
     std::printf("UI-SMOKE classify-menu: class=[%s] all=[%s]\n",
                 qUtf8Printable(class_actions.join(QLatin1Char(' '))),
                 qUtf8Printable(all_actions.join(QLatin1Char(' '))));
@@ -9857,7 +9859,7 @@ void MainWindow::Impl::smoke_probe_output_geometry() {
         // bitdepth-lock 与 six_rows 两条**逐字保留**的断言）。新断言 = 不含「位」且非空。
         expect("tab-label", !tab0.isEmpty() && !tab0.contains(QStringLiteral("位")),
                QStringLiteral("tab0=\"%1\"").arg(tab0));
-        // UX-9 加性断言（只增）：页签等宽（EqualWidthTabBar 的固定宽 = 最长格式名档）
+        // UX-9 加性断言（只增）：页签等宽（QTabBar::setExpanding 平摊宽度，见 page_output）
         {
             int bad = 0;
             if (tabs != nullptr && tabs->count() > 1 && tabs->tabBar() != nullptr) {
@@ -9996,7 +9998,7 @@ void MainWindow::Impl::smoke_probe_output_geometry() {
         pump(40);
     }
 
-    // ---- (i) 位深能力约束（JPEG 锁 8 位）：页签文案 + 行内注释 ----
+    // ---- (i) 位深能力约束（JPEG 锁 8 位）：位深下拉 + 行内注释 ----
     {
         page.select_format(QStringLiteral("jpeg"));
         pump(120);
@@ -10004,11 +10006,15 @@ void MainWindow::Impl::smoke_probe_output_geometry() {
         const auto *note = page.findChild<QLabel *>(QStringLiteral("pp-bitdepth-note-jpeg"));
         const auto *tabs = page.findChild<QTabWidget *>(QStringLiteral("pp-format-tabs"));
         const QString tab0 = tabs != nullptr && tabs->count() > 0 ? tabs->tabText(0) : QString();
+        // UX-9 机械换锚（登记 build/m7-wp6/handoff.md T5）：本探针钉的是**位深控制功能**不变
+        // （下拉锁 1 项 / 文案 "8 位" / 行内注释"仅支持 8 位"三项**逐字保留**）；原第四个合取项
+        // `tab0.endsWith("8 位")` 钉的是**页签文案**里的位深 —— §16-1 口径已明令把它从页签去掉
+        // （tab-label 探针改断言不含「位」），两者不可同存，故只摘掉该合取项。
         expect("bitdepth-lock",
                bitdepth != nullptr && bitdepth->count() == 1 &&
                    bitdepth->currentText() == QStringLiteral("8 位") && note != nullptr &&
                    note->text().contains(QStringLiteral("仅支持 8 位")) &&
-                   tab0.endsWith(QStringLiteral("8 位")),
+                   !tab0.contains(QStringLiteral("位")),
                QStringLiteral("count=%1 text=\"%2\" note=\"%3\" tab=\"%4\"")
                    .arg(bitdepth != nullptr ? bitdepth->count() : -1)
                    .arg(bitdepth != nullptr ? bitdepth->currentText() : QString())

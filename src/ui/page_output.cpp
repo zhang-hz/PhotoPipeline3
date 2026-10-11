@@ -315,58 +315,6 @@ QString page_qss(const theme::Tokens &t) {
 
 // ---------------------------------------------------------------- 页面状态
 
-// UX-9（§16-1 口径）：页签**等宽** —— 宽度 = 最长格式名的文本宽 + 两侧内距（不随"位深"文案
-// 漂移；QTabBar 自身按文本宽排，"JPEG · 8 位" 与 "JPEG XL · 16 位" 宽不同是原缺陷）。
-// 自绘宽度走 tabSizeHint（不引 QSS —— UX-6「样式必须公共」的纪律下，几何类固定宽不属样式）。
-class EqualWidthTabBar : public QTabBar {
-public:
-    explicit EqualWidthTabBar(int fixed_w, QWidget *parent = nullptr)
-        : QTabBar(parent), fixed_w_(fixed_w) {
-        setExpanding(true); // 等宽 + 有多余空间时平摊（§16-1）
-        setUsesScrollButtons(false);
-        setDrawBase(true);
-    }
-
-    void set_fixed_width(int w) {
-        if (fixed_w_ == w)
-            return;
-        fixed_w_ = w;
-        updateGeometry();
-        update();
-    }
-
-protected:
-    QSize tabSizeHint(int index) const override {
-        const QSize base = QTabBar::tabSizeHint(index);
-        return QSize(fixed_w_ > 0 ? fixed_w_ : base.width(), base.height());
-    }
-
-private:
-    int fixed_w_ = 0;
-};
-
-// QTabWidget::setTabBar 是 protected → 需要一层子类才能换上等宽页签条
-// （不引 QSS：几何类固定宽不属样式，UX-6「样式必须公共」只管色/形，不管尺寸锚）。
-class EqualWidthTabWidget : public QTabWidget {
-public:
-    explicit EqualWidthTabWidget(QWidget *parent = nullptr) : QTabWidget(parent) {
-        setTabBar(new EqualWidthTabBar(0, this));
-    }
-    void set_tab_width(int w) {
-        if (auto *bar = dynamic_cast<EqualWidthTabBar *>(tabBar()))
-            bar->set_fixed_width(w);
-    }
-};
-
-// 页签固定宽的取值口径（单源）：最长格式名 + 两侧 16px 内距（与 QTabBar 默认 padding 同档）。
-int format_tab_width(const QStringList &labels) {
-    int w = 0;
-    const QFontMetrics fm(theme::font(theme::Typography::body_px, 600));
-    for (const QString &label : labels)
-        w = std::max(w, fm.horizontalAdvance(label));
-    return w + 32;
-}
-
 // ---------------------------------------------------------------------------
 // UX-10.1：HEIF/AVIF「编码档位 (Profile)」核心行（docs/ux-review-14.md §10.1 口径）
 //   profile = **编码档位**（HEVC 的 Main/Main10/Main12/Main Still Picture、AV1 的
@@ -872,8 +820,8 @@ struct Impl {
         changed_pill = header.pill;
         v->addWidget(header.row);
 
-        // UX-9：页签等宽（固定宽 = 最长格式名档；宽度随选中集合变化，见 apply_tab_width）
-        tabs = new EqualWidthTabWidget(param_card);
+        // UX-9（§16-1 口径）：页签**等宽** —— 宽度不随"· N 位"文案漂移（见 apply_tab_width）
+        tabs = new QTabWidget(param_card);
         tabs->setObjectName(QStringLiteral("pp-format-tabs"));
         tabs->setDocumentMode(true);
         add_format_button = new QToolButton(tabs);
@@ -1396,17 +1344,15 @@ struct Impl {
         apply_tab_width(); // UX-9：等宽随格式集合重算（文案已不含位深 → 宽度不随位深漂移）
     }
 
-    // UX-9：页签等宽的落地点（addTab/removeTab/改文案后都要走一次）
+    // UX-9：页签等宽的落地点（addTab/removeTab/改文案后都要走一次）。
+    // 口径 = `QTabBar::setExpanding(true)`：页签**平摊**页签条宽度 —— 天然等宽，且不留
+    // 右侧空白带（自绘 tabSizeHint 定宽的方案会让页签条右端露出平坦色块，gui_r2 的
+    // tabstrip/ctl-fill 探针判红；且 sizeHint 依赖自身 width() 会成布局反馈环）。
+    // 实测（build/m7-wp6）：本口径下 `tab-equal` 与 `tabstrip/ctl-fill` 两条探针同绿。
     void apply_tab_width() {
         if (tabs == nullptr || tabs->tabBar() == nullptr)
             return;
-        QStringList labels;
-        labels.reserve(static_cast<int>(selected.size()));
-        for (const std::string &id : selected)
-            labels << format_tab_label(id);
-        const int w = labels.isEmpty() ? 0 : format_tab_width(labels);
-        if (auto *bar = dynamic_cast<EqualWidthTabWidget *>(tabs))
-            bar->set_tab_width(w);
+        tabs->tabBar()->setExpanding(true);
     }
 
     void update_format_count() {

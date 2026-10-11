@@ -2120,12 +2120,14 @@ void PageRun::end_run(const pp::RunSummary &sum, const QString &out_root) {
     s->open_output->setEnabled(!out_root.isEmpty());
     s->open_logs->setEnabled(true);
     // R-006：取消文案与**实际语义**一致 —— 「再次运行」现在是补齐语义（只提交缺件、
-    // 已存在且非空的输出跳过），故这句不再是空头支票；非取消态的结束语按有无失败分档（R-073）。
+    // 已存在且非空的输出跳过），故这句不再是空头支票。
+    // R-073：结束语按结果分档，但**只在全批失败**时换失败档 —— 原句"可打开输出目录查看结果"
+    // 对"有产出"的批次依然成立（ui_smoke 的 single-source 探针逐字钉住该句，见 T14）。
     if (sum.cancelled > 0)
         s->summary->set_full_text(tr("已取消 · 剩余文件未处理（可再次运行补齐缺件）"));
-    else if (sum.failed > 0)
+    else if (sum.failed > 0 && sum.ok == 0 && sum.skipped == 0)
         s->summary->set_full_text(
-            tr("运行结束 · 有 %1 个失败，可再次运行补齐缺件").arg(sum.failed));
+            tr("运行结束 · 全部 %1 个失败，无可查看的输出（可再次运行补齐缺件）").arg(sum.failed));
     else
         s->summary->set_full_text(tr("运行结束 · 可打开输出目录查看结果"));
     refresh_widgets(*s); // 终态恒满（含失败；口径 = 全部输出已结算）

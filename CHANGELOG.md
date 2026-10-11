@@ -79,6 +79,14 @@ R2 可切卫星/混合图层、R3 搜索后地图内选点闭环、R4 坐标基�
 - **换地图源清残留图钉**：换源即清结果钉与主钉，不留「点不动」的旧钉（旧钉仍画在屏上却不能
   选中 / 回填）；行选与点钉同句反馈
 
+**工具链（`tools/env.py`，发行门禁取证修复）**
+
+- `env.py run` 只靠句柄继承 ⇒ **GUI 子系统**子进程（`photopipeline.exe` 为 `WIN32_EXECUTABLE`）
+  的标准句柄槽位不被继承赋值（实测 `GetStdHandle` 全为 NULL）—— `env.py run -- …photopipeline.exe
+  --version` 这类**捕获**调用静默 0 字节（应用按既有设计转去挂接父控制台，输出落在控制台）。
+  修复 = `run` 显式把本进程 stdin/stdout/stderr 交给子进程（`forward_std_streams()`）：
+  管道 / 重定向捕获恢复，控制台直跑所见不变，`--version` 逐字断言（`PhotoPipeline 0.3.2`）复通
+
 ### 已知
 
 - **T14 可选项未做**：离线瓦片落盘持久化（现为内存 LRU，断网只保留已浏览区）与多图 GPS 轨迹线

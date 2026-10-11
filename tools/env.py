@@ -27,6 +27,15 @@
   run     子命令退出码（命令不存在 → 127）
   print   0
   用法错   2
+
+M6-T17（REL-0.3.2 门禁取证）: `run` 现在把本进程的 stdin/stdout/stderr **显式**交给子进程
+（见 forward_std_streams()）。Windows 的句柄继承对 **GUI 子系统**子进程不生效 ——
+photopipeline.exe 是 WIN32_EXECUTABLE（CMakeLists.txt:251），继承式启动时其 GetStdHandle
+全为 NULL（同仓探针实测：console 子系统子进程拿到父进程的管道/文件句柄，GUI 子系统子进程
+拿到 NULL），于是 `env.py run -- build/release/photopipeline.exe --version` 这类**捕获**
+路径拿到 0 字节（应用走 main.cpp 的「挂接父控制台」分支，输出落在控制台，捕获侧看不见）。
+显式转发后 Popen 把这些流放进 STARTUPINFO/句柄表，GUI 子进程同样拿到 ⇒ 管道/重定向捕获
+恢复；控制台直跑所见不变（句柄指向同一目标）。
 """
 
 import locale
@@ -177,6 +186,26 @@ def build_env():
     return env
 
 
+def forward_std_streams():
+    """本进程的标准流 → subprocess 关键字参数（可用者才转发）。
+
+    Windows 为什么必需：句柄继承只管「句柄表」，**GUI 子系统**子进程的标准句柄槽位不被
+    继承赋值（GetStdHandle 全 NULL）；显式传 stdin/stdout/stderr 才让 Popen 通过
+    STARTUPINFO/句柄表把它们交给子进程 —— 否则 photopipeline.exe 的 `--version`（以及任何
+    写 stdout 的 GUI 路径）在 `env.py run` 的捕获下静默 0 字节（见文件头 M6-T17 段）。
+    POSIX 下与继承等价（同一 fd），故一并转发、只留一条代码路径；无 fileno 的流
+    （pythonw / 已被替换成 StringIO 等）跳过，回退为继承。
+    """
+    kwargs = {}
+    for name, stream in (('stdin', sys.stdin), ('stdout', sys.stdout), ('stderr', sys.stderr)):
+        try:
+            stream.fileno()
+        except (AttributeError, ValueError, OSError):  # None / 关闭 / StringIO(UnsupportedOperation)
+            continue
+        kwargs[name] = stream
+    return kwargs
+
+
 def main(argv):
     if not argv or argv[0] not in ('run', 'print'):
         sys.stderr.write(USAGE)
@@ -201,7 +230,7 @@ def main(argv):
         # 此处等价同步，run -- cl / cmake 才可用。
         os.environ['PATH'] = env['PATH']
     try:
-        return subprocess.run(command, env=env).returncode
+        return subprocess.run(command, env=env, **forward_std_streams()).returncode
     except OSError as exc:
         sys.stderr.write('env: {}: {}\n'.format(command[0], exc.strerror or exc))
         return 127

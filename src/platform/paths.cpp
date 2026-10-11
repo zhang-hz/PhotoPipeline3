@@ -167,10 +167,20 @@ std::filesystem::path executable_dir() {
 
 std::filesystem::path data_dir() { return data_dir_cached(); }
 
-std::filesystem::path settings_file() { return data_dir_cached() / "settings.ini"; }
+// M7-WP5（R-309）：派生路径统一经 path_under —— 空 data_dir（两分支都创建失败）时返回
+// **空路径**，不再静默产出 "settings.ini" 这类 CWD 相对名（旧实现 `path("") / name` 得到
+// 相对名 → 调用方在用户当前目录里读写设置/预设/日志，位置随启动目录漂移且不可发现）。
+// 回落策略已写明在 paths.h 的 path_under 契约里（各调用方按"空 = 无可用目录"兜底）。
+std::filesystem::path path_under(const std::filesystem::path &dir, const char *leaf) {
+    if (dir.empty() || leaf == nullptr || *leaf == '\0')
+        return {};
+    return dir / leaf;
+}
 
-std::filesystem::path presets_dir() { return data_dir_cached() / "presets"; }
+std::filesystem::path settings_file() { return path_under(data_dir_cached(), "settings.ini"); }
 
-std::filesystem::path logs_dir() { return data_dir_cached() / "logs"; }
+std::filesystem::path presets_dir() { return path_under(data_dir_cached(), "presets"); }
+
+std::filesystem::path logs_dir() { return path_under(data_dir_cached(), "logs"); }
 
 } // namespace pp::platform

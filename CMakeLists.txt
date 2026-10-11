@@ -185,6 +185,7 @@ file(GLOB_RECURSE PP_CORE_SOURCES CONFIGURE_DEPENDS
      ${CMAKE_SOURCE_DIR}/src/decode/*.cpp
      ${CMAKE_SOURCE_DIR}/src/codecs/*.cpp
      ${CMAKE_SOURCE_DIR}/src/platform/paths.cpp
+     ${CMAKE_SOURCE_DIR}/src/platform/secret.cpp  # M7-WP5（R-094）：密钥落盘保护（core/settings.cpp 消费，test_secret 随 pp_core 链接）
      ${CMAKE_SOURCE_DIR}/src/mapwidget/coord.cpp
      ${CMAKE_SOURCE_DIR}/src/mapwidget/layers.cpp  # M6-T1：瓦片源/图层 URL 事实表（纯函数，UI 侧 REMOVE_ITEM 剔除）
      ${CMAKE_SOURCE_DIR}/src/mapwidget/geocoder.cpp  # M6-T2：地理编码 URL/解析（纯函数，UI 侧 REMOVE_ITEM 剔除）
@@ -242,6 +243,7 @@ file(GLOB_RECURSE PP_UI_SOURCES CONFIGURE_DEPENDS
      ${CMAKE_SOURCE_DIR}/src/platform/*.cpp)
 list(REMOVE_ITEM PP_UI_SOURCES ${CMAKE_SOURCE_DIR}/src/ui/preset_io.cpp  # 已在 pp_core，避免重复符号
      ${CMAKE_SOURCE_DIR}/src/platform/paths.cpp ${CMAKE_SOURCE_DIR}/src/mapwidget/coord.cpp  # M1b：同上
+     ${CMAKE_SOURCE_DIR}/src/platform/secret.cpp  # M7-WP5：同上（编入 pp_core，避免 LNK2005 重复符号）
      ${CMAKE_SOURCE_DIR}/src/mapwidget/layers.cpp  # M6-T1：同上（编入 pp_core，UI 不再编译）
      ${CMAKE_SOURCE_DIR}/src/mapwidget/geocoder.cpp  # M6-T2：同上
      ${CMAKE_SOURCE_DIR}/src/mapwidget/providers.cpp  # M6-T3：同上（编入 pp_core，test_providers 方可链接）

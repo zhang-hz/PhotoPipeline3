@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // PhotoPipeline M3-D6 — Win11 Mica backdrop + immersive dark titlebar (design §6.6).
+// M7-WP5（UX-13）：+ 窗口圆角申请（DWMWA_WINDOW_CORNER_PREFERENCE，docs/ux-review-14.md §13）。
 
 #include "platform/mica.h"
 
@@ -15,6 +16,12 @@
 #endif
 #ifndef DWMSBT_MAINWINDOW
 #define DWMSBT_MAINWINDOW 2 // Mica（DWMSBT_NONE=1 / DWMSBT_TRANSIENTWINDOW=3 / AUTO=0）
+#endif
+#ifndef DWMWA_WINDOW_CORNER_PREFERENCE
+#define DWMWA_WINDOW_CORNER_PREFERENCE 33 // Win11（旧 SDK 头缺失时兜底）
+#endif
+#ifndef DWMWCP_ROUND
+#define DWMWCP_ROUND 2 // DWMWCP_DONOTROUND=1 / ROUNDSMALL=3
 #endif
 #endif
 
@@ -41,6 +48,25 @@ bool apply_window_backdrop(void *hwnd, bool dark_titlebar) {
     (void)hwnd;
     (void)dark_titlebar;
     return false; // 非 Windows：空操作（设计 §6.6 仅 Win11 实装）
+}
+#endif
+
+#ifdef _WIN32
+bool apply_window_corner(void *hwnd) {
+    if (hwnd == nullptr)
+        return false;
+    const HWND h = static_cast<HWND>(hwnd);
+    // UX-13：Win11 圆角须显式申请（无边框窗口默认无圆角）。Win10 无此属性 →
+    // DwmSetWindowAttribute 返回 E_INVALIDARG → **静默忽略**（保持系统默认，不降级其它行为）。
+    const int corner = DWMWCP_ROUND;
+    const HRESULT hr =
+        ::DwmSetWindowAttribute(h, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
+    return SUCCEEDED(hr);
+}
+#else
+bool apply_window_corner(void *hwnd) {
+    (void)hwnd;
+    return false; // 非 Windows：无 DWM（圆角由窗口管理器自理）
 }
 #endif
 

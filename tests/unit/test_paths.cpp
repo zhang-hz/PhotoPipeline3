@@ -183,6 +183,26 @@ int main() {
                     show(exe_dir).c_str(), show(data).c_str());
     }
 
+    // ---- M7-WP5 / R-309：空 data_dir 不再被静默转 CWD 相对路径 ----
+    // 旧实现 `path("") / "settings.ini"` 得到相对名 "settings.ini" → 调用方在用户当前目录里
+    // 读写设置（位置随启动目录漂移且不可发现）。新口径 = path_under 纯策略：空目录 → 空路径，
+    // 调用方按"空 = 无可用目录"兜底（契约见 platform/paths.h）。
+    {
+        check(pp::platform::path_under(data, "settings.ini") == settings, "r309/under-join",
+              show(pp::platform::path_under(data, "settings.ini")) + " != " + show(settings));
+        check(pp::platform::path_under(fs::path{}, "settings.ini").empty(),
+              "r309/empty-dir-empty-path",
+              "空目录必须给出空路径，而不是 CWD 相对名 'settings.ini'");
+        check(pp::platform::path_under(fs::path{}, "presets").empty(), "r309/empty-dir-presets",
+              "空目录必须给出空路径，而不是 CWD 相对名 'presets'");
+        check(pp::platform::path_under(data, nullptr).empty(), "r309/null-leaf", "leaf=nullptr");
+        check(pp::platform::path_under(data, "").empty(), "r309/empty-leaf", "leaf=空串");
+        // 正常路径下派生 API 绝不给出相对名（相对 = 会随 CWD 漂移）
+        check(settings.is_absolute() && presets.is_absolute() && logs.is_absolute(),
+              "r309/derived-absolute",
+              "settings=" + show(settings) + " presets=" + show(presets) + " logs=" + show(logs));
+    }
+
     if (g_failed == 0) {
         std::printf("test_paths: OK\n");
         return 0;

@@ -10,9 +10,12 @@
 
 #include "platform/frameless.h"
 
+#include "platform/mica.h" // apply_window_corner（UX-13 圆角与 DWM 属性同文件收口）
+
 #include <QCoreApplication>
 #include <QEvent>
 #include <QMouseEvent>
+#include <QPointer>
 #include <QWidget>
 #include <QWindow>
 
@@ -142,6 +145,16 @@ HitZone probe_native_hit_test(QWidget *window, const QPoint &physical_point, boo
 HitZone hit_test(const HitBox &box, const QPoint &p) noexcept {
     if (!box.window.contains(p))
         return HitZone::None;
+    // M7-WP5（R-312 + UX-7②）：**三钮命中优先于边缘缩放带**。旧序（边/角先判）把三钮的
+    // 顶部 6px 与右缘 6px 划给缩放 → 点关闭钮最上 6px 触发缩放、点了"没反应"。新序下
+    // 顶栏 6px 缩放带只在三钮之外生效（UX-7 逐字要求），三钮整面可点。
+    // 三钮先于拖拽：三钮同时也是 drag_excludes 成员，顺序不可颠倒。
+    if (!box.close_button.isNull() && box.close_button.contains(p))
+        return HitZone::CloseButton;
+    if (!box.max_button.isNull() && box.max_button.contains(p))
+        return HitZone::MaxButton;
+    if (!box.min_button.isNull() && box.min_button.contains(p))
+        return HitZone::MinButton;
     // 硬约束 2：最大化（全客户区）时缩放带收敛为 1px，仍然可命中
     const int border = box.maximized ? kResizeBorderMaximizedPx : std::max(box.border, 0);
     if (border <= 0)
@@ -166,13 +179,6 @@ HitZone hit_test(const HitBox &box, const QPoint &p) noexcept {
         return HitZone::Top;
     if (bottom)
         return HitZone::Bottom;
-    // 三钮先于拖拽：三钮同时也是 drag_excludes 成员，顺序不可颠倒
-    if (!box.close_button.isNull() && box.close_button.contains(p))
-        return HitZone::CloseButton;
-    if (!box.max_button.isNull() && box.max_button.contains(p))
-        return HitZone::MaxButton;
-    if (!box.min_button.isNull() && box.min_button.contains(p))
-        return HitZone::MinButton;
     if (box.caption.contains(p)) {
         // 硬约束 1：控件（步骤切换/图标钮/滑条…）区域不触发拖拽
         for (const QRect &exclude : box.drag_excludes) {
@@ -185,20 +191,23 @@ HitZone hit_test(const HitBox &box, const QPoint &p) noexcept {
 }
 
 struct Frameless::Impl {
-    QWidget *window = nullptr;
-    QWidget *caption = nullptr;
-    std::vector<QWidget *> explicit_excludes;
-    std::vector<QWidget *> drag_excludes; // 三钮 + 显式清单（去重后）
-    QWidget *min_button = nullptr;
-    QWidget *max_button = nullptr;
-    QWidget *close_button = nullptr;
+    // M7-WP5（R-310）：缓存的 QWidget* 全部改 QPointer —— 事件过滤器在控件销毁期仍可能
+    // 收到消息（销毁顺序：子控件先于父窗），裸指针判定 hit 是低概率 UB。QPointer 悬空即空，
+    // rect_of/build_box/trigger 全部把空当"该件不存在"，与"未接线"同语义。
+    QPointer<QWidget> window;
+    QPointer<QWidget> caption;
+    std::vector<QPointer<QWidget>> explicit_excludes;
+    std::vector<QPointer<QWidget>> drag_excludes; // 三钮 + 显式清单（去重后）
+    QPointer<QWidget> min_button;
+    QPointer<QWidget> max_button;
+    QPointer<QWidget> close_button;
     bool intercept = false;
     CaptionAction last_action = CaptionAction::Minimize;
     int action_count = 0;
 
     void refresh_excludes() {
         drag_excludes = explicit_excludes;
-        for (QWidget *button : {min_button, max_button, close_button}) {
+        for (const QPointer<QWidget> &button : {min_button, max_button, close_button}) {
             if (button != nullptr && std::find(drag_excludes.begin(), drag_excludes.end(),
                                                button) == drag_excludes.end())
                 drag_excludes.push_back(button);
@@ -209,8 +218,12 @@ struct Frameless::Impl {
     // caption_button=true → 纵向收敛到 §9.1/§3.3 的 46×32 命中带（居中的 kCaptionHitHeightPx 高）。
     // M5-T4 单轨（裁定 A1）：按钮可见面本身就是 46×32 → logical.height() == 32，收敛条件不成立，
     // 返回值就是按钮矩形本身（本函数**逻辑零改动**，只是"双轨收敛"随几何换锚不再触发）。
-    QRect rect_of(QWidget *child, bool physical, bool caption_button = false) const {
-        if (child == nullptr || window == nullptr)
+    // M7-WP5（R-308）：physical 分支**复用 to_physical** —— 旧实现对 topLeft 用 lround、
+    // 对 width/height 单独 lround（双轨取整），dpr=1.25 等分数比下与 to_physical 的
+    // "边取整后作差"能差 1px（命中盒与窗口盒不同源）。统一后全仓只有 to_physical 一处取整。
+    QRect rect_of(const QPointer<QWidget> &child, bool physical,
+                  bool caption_button = false) const {
+        if (child.isNull() || window.isNull())
             return QRect();
         const QPoint rel = child->mapToGlobal(QPoint(0, 0)) - window->mapToGlobal(QPoint(0, 0));
         QRect logical(rel, child->size());
@@ -220,20 +233,17 @@ struct Frameless::Impl {
         }
         if (!physical)
             return logical;
-        const qreal dpr = sane_dpr(window->devicePixelRatioF());
-        const QSize size(static_cast<int>(std::lround(logical.width() * dpr)),
-                         static_cast<int>(std::lround(logical.height() * dpr)));
-        return QRect(to_physical(logical.topLeft(), dpr), size);
+        return to_physical(logical, window->devicePixelRatioF());
     }
 
-    bool is_caption_button(const QWidget *child) const {
-        return child != nullptr &&
+    bool is_caption_button(const QPointer<QWidget> &child) const {
+        return !child.isNull() &&
                (child == min_button || child == max_button || child == close_button);
     }
 
     HitBox build_box(bool physical) const {
         HitBox box;
-        if (window == nullptr)
+        if (window.isNull())
             return box;
         const QPoint origin = window->mapToGlobal(QPoint(0, 0));
         const QRect logical_window(origin, window->size());
@@ -246,7 +256,7 @@ struct Frameless::Impl {
         box.min_button = shift(rect_of(min_button, physical, /*caption_button=*/true));
         box.max_button = shift(rect_of(max_button, physical, /*caption_button=*/true));
         box.close_button = shift(rect_of(close_button, physical, /*caption_button=*/true));
-        for (QWidget *child : drag_excludes) {
+        for (const QPointer<QWidget> &child : drag_excludes) {
             // 三钮的排除区 = **命中带**（M5-T4 单轨下 = 按钮矩形 46×32）：带外回落到 Caption
             // （拖拽），若整块排除会变成"点上去既不开窗也不拖窗"的死区。
             const QRect r = shift(rect_of(child, physical, is_caption_button(child)));
@@ -254,7 +264,7 @@ struct Frameless::Impl {
                 box.drag_excludes.push_back(r);
         }
         box.border = kResizeBorderPx;
-        box.maximized = window != nullptr && window->isMaximized();
+        box.maximized = window->isMaximized();
         return box;
     }
 };
@@ -311,7 +321,9 @@ Frameless *Frameless::attach(QWidget *window, QWidget *caption,
     window->setWindowFlag(Qt::FramelessWindowHint, true);
     auto *frameless = new Frameless(window, parent != nullptr ? parent : window);
     frameless->d_->caption = caption;
-    frameless->d_->explicit_excludes = std::move(drag_excludes);
+    frameless->d_->explicit_excludes.reserve(drag_excludes.size());
+    for (QWidget *excluded : drag_excludes)
+        frameless->d_->explicit_excludes.push_back(excluded);
     frameless->d_->refresh_excludes();
     if (QCoreApplication::instance() != nullptr) {
         if (native_hit_test_supported()) {
@@ -321,6 +333,27 @@ Frameless *Frameless::attach(QWidget *window, QWidget *caption,
             QCoreApplication::instance()->installEventFilter(frameless);
         }
     }
+#ifdef _WIN32
+    // M7-WP5（UX-7① + UX-13）：真无边框壳层收口。主窗 + 四弹窗（settings/exif/presets/map
+    // 同走 Frameless::attach）**同一函数同一口径**：
+    //   1) WS_THICKFRAME 显式保留（Win11 圆角与 DWM 阴影的来源；缺了就补，QPA 可能未置）；
+    //   2) SWP_FRAMECHANGED 重算一次非客户区 → WM_NCCALCSIZE 走下方过滤器的"整窗客户区"策略
+    //      （原生标题栏与复古三钮随之消失，见 nativeEventFilter）；
+    //   3) DWMWA_WINDOW_CORNER_PREFERENCE = ROUND（Win10 不支持 → 静默忽略）。
+    // offscreen 平台的 winId() 不是真窗口（IsWindow 为假）→ 整段跳过，--ui-smoke 行为不变。
+    {
+        const HWND handle = reinterpret_cast<HWND>(window->winId());
+        if (handle != nullptr && ::IsWindow(handle)) {
+            const LONG_PTR style = ::GetWindowLongPtrW(handle, GWL_STYLE);
+            if ((style & WS_THICKFRAME) == 0)
+                ::SetWindowLongPtrW(handle, GWL_STYLE, style | WS_THICKFRAME);
+            ::SetWindowPos(handle, nullptr, 0, 0, 0, 0,
+                           SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
+                               SWP_FRAMECHANGED);
+            apply_window_corner(handle);
+        }
+    }
+#endif
     return frameless;
 }
 
@@ -360,9 +393,9 @@ void Frameless::trigger(CaptionAction action) {
     ++d_->action_count;
     d_->last_action = action;
     emit caption_action(action);
-    if (d_->intercept || d_->window == nullptr)
+    if (d_->intercept || d_->window.isNull())
         return;
-    QWidget *window = d_->window;
+    QWidget *window = d_->window.data();
 #ifdef _WIN32
     // 能力表：Windows 三钮 = WM_SYSCOMMAND(SC_MINIMIZE/SC_MAXIMIZE/SC_CLOSE)
     const HWND handle = reinterpret_cast<HWND>(window->winId());
@@ -414,13 +447,36 @@ bool Frameless::eventFilter(QObject *watched, QEvent *event) {
 bool Frameless::nativeEventFilter(const QByteArray &event_type, void *message, qintptr *result) {
     (void)event_type;
 #ifdef _WIN32
-    if (message == nullptr || result == nullptr || d_->window == nullptr)
+    if (message == nullptr || result == nullptr || d_->window.isNull())
         return false;
     auto *msg = static_cast<MSG *>(message);
-    if (msg->message != WM_NCHITTEST)
-        return false;
     const HWND handle = reinterpret_cast<HWND>(d_->window->winId());
     if (handle == nullptr || msg->hwnd != handle)
+        return false;
+    // M7-WP5（UX-7①）：真无边框 = **非客户区收口**。只置 Qt::FramelessWindowHint 不处理本消息时，
+    // Windows 仍按 WS_CAPTION 族样式保留原生标题栏与复古三钮（temp_bug.png 上排）。此处把
+    // 客户区扩到整窗（rgrc[0] = 窗口矩形，返回 0）→ 原生 chrome 整体不存在；
+    // WS_THICKFRAME 保留（attach 已确保）→ DWM 阴影/圆角/八向缩放/Snap 全不受影响。
+    if (msg->message == WM_NCCALCSIZE) {
+        if (msg->wParam != 0) {
+            // wParam=TRUE：lParam = NCCALCSIZE_PARAMS*；rgrc[0] 入参 = 拟议的新窗口矩形，
+            // 出参 = 新客户区矩形。默认（非最大化）客户区 = 整窗。
+            auto *params = reinterpret_cast<NCCALCSIZE_PARAMS *>(msg->lParam);
+            if (params != nullptr && ::IsZoomed(msg->hwnd)) {
+                // 最大化时窗口矩形会超出显示器一圈（粗框藏在屏幕外）→ 整窗=客户区会让内容
+                // 出屏并盖住任务栏。钳到显示器工作区 = 原生最大化窗口的同款语义。
+                const HMONITOR monitor = ::MonitorFromWindow(msg->hwnd, MONITOR_DEFAULTTONEAREST);
+                MONITORINFO info{};
+                info.cbSize = sizeof(info);
+                if (monitor != nullptr && ::GetMonitorInfoW(monitor, &info))
+                    params->rgrc[0] = info.rcWork;
+            }
+        }
+        // wParam=FALSE：lParam = RECT*（单矩形）→ 同口径返回整窗（rgrc 保持原值即整窗）。
+        *result = 0;
+        return true;
+    }
+    if (msg->message != WM_NCHITTEST)
         return false;
     // WM_NCHITTEST 的 lParam = 屏幕**物理**像素（硬约束 3）
     const QPoint point(GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam));

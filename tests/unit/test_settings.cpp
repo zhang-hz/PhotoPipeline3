@@ -378,12 +378,19 @@ int main() {
         const std::string t2 = pp::settings_to_string(no_key);
         check(contains(t2, "amap_key= ") || t2.ends_with("amap_key="), "to-string/amap-key-empty",
               "snapshot=" + t2);
-        // Redaction is snapshot-only: the file keeps the real value.
+        // Redaction is snapshot-only; the file carries the real value —— R-094/M7-WP5 起以
+        // **封存形态**落盘（platform/secret：Windows DPAPI ppsec1: / 其它平台编码档 ppsec2:），
+        // 明文不再落盘（断言收紧：文件不得含明文，且必须能读回原值；老明文兼容见 test_secret）。
         const fs::path dir = make_temp_dir("settings_redact");
         const fs::path file = dir / "settings.ini";
         const std::string err = pp::save_settings(file, s);
-        check(err.empty() && contains(read_all(file), "amap_key=KEY-1234-abc"),
-              "to-string/save-keeps-cleartext", "err=" + err + " raw=" + read_all(file));
+        const std::string raw = read_all(file);
+        check(err.empty(), "to-string/save-no-error", "err=" + err);
+        check(!contains(raw, "KEY-1234-abc"), "to-string/save-no-cleartext",
+              "amap_key 明文落盘（R-094 未生效）： raw=" + raw);
+        check(contains(raw, "amap_key=ppsec"), "to-string/save-sealed", "raw=" + raw);
+        check(pp::load_settings(file).amap_key == s.amap_key, "to-string/save-roundtrip",
+              "got '" + pp::load_settings(file).amap_key + "'");
     }
 
     // ---- M7-WP1 · R-050（默认构造无文件系统副作用）+ R-028（tmp 名唯一、失败/成功都不留）----

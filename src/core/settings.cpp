@@ -19,10 +19,18 @@
 // （road|satellite|hybrid，默认 road）+ `map_sat_labels`（bool，默认 true）—— 同口径的加性
 // 追加（settings_pairs 末尾两行 + apply_pair 两个分支）；`map_style` 词表外/空值保留默认，
 // `amap_key` 脱敏规则与既有键语义一律不变。
+//
+// M7-WP5（R-094，docs/deep-review-0.3.2.md「key 明文存 settings」）：`amap_key` 落盘经
+// platform/secret 封装 —— 写侧 seal（Windows DPAPI / 其它平台编码档）→ **明文不再落盘**；
+// 读侧 unseal（无前缀的老明文原样兼容，首次保存即升级为封存形态）；保存侧对等价封存行逐字
+// 保留（DPAPI 封存非确定性 → 不换密文）、对解不开的封存行不冲空（换机/换账号不丢密文）；
+// 保存成功后 harden_file 收紧权限（非 Windows 0600）。其余键的读写语义与"未知键/注释原样
+// 保留"的字节口径零改动（test_settings 全字段往返随码换锚 amap_key 断言）。
 
 #include "core/settings.h"
 
-#include "core/fsops.h" // validate_output_template()（§4.2 模板校验，T15 加载期口径）
+#include "core/fsops.h"      // validate_output_template()（§4.2 模板校验，T15 加载期口径）
+#include "platform/secret.h" // M7-WP5 / R-094：amap_key 落盘封存（DPAPI/编码档，明文不落盘）
 
 #include <cctype> // std::tolower（A28 的 ui_theme_mode 词表解析）
 #include <cerrno>
@@ -116,8 +124,10 @@ std::vector<std::pair<std::string, std::string>> settings_pairs(const AppSetting
     kv.emplace_back("flatten_gray", format_double(s.flatten_gray));
     kv.emplace_back("log_level", s.log_level);
     kv.emplace_back("map_provider", s.map_provider);
-    kv.emplace_back("amap_key",
-                    (redact_secrets && !s.amap_key.empty()) ? std::string("<set>") : s.amap_key);
+    // —— R-094（M7-WP5）：日志快照照旧脱敏；**落盘值经 secret::seal**（明文不再落盘）——
+    kv.emplace_back("amap_key", (redact_secrets && !s.amap_key.empty())
+                                    ? std::string("<set>")
+                                    : pp::platform::secret::seal(s.amap_key));
     kv.emplace_back("tile_cache_mb", std::to_string(s.tile_cache_mb));
     kv.emplace_back("rotate_orientation", s.rotate_orientation ? "true" : "false");
     kv.emplace_back("last_format", s.last_format);
@@ -159,7 +169,10 @@ void apply_pair(AppSettings &s, const std::string &key, const std::string &value
         if (!value.empty())
             s.map_provider = value;
     } else if (key == "amap_key") {
-        s.amap_key = value; // empty is a legal value (no key configured)
+        // R-094（M7-WP5）：读侧解封（空值 = 未配置，恒为空）。三种存量形态：
+        //   * 封存串（ppsec1:/ppsec2:）→ 解封得明文；解不开（换机/换账号/损坏）→ 空；
+        //   * 0.3.2 及更早的明文 → 原样读入（老格式兼容；下次保存即升级为封存形态）。
+        s.amap_key = pp::platform::secret::unseal(value);
     } else if (key == "tile_cache_mb") {
         int v = 0;
         if (parse_int(value, v))
@@ -294,6 +307,24 @@ std::string save_settings(const std::filesystem::path &file, const AppSettings &
         for (std::size_t i = 0; i < pairs.size(); ++i) {
             if (pairs[i].first != key)
                 continue;
+            // —— R-094 密钥行特例（M7-WP5）：等价即原行逐字保留 ——
+            //   1) 老行是封存串且解封 == 新明文 → 保留原行（DPAPI 封存非确定性：否则每次
+            //      保存都换密文 → 文件字节无谓漂移，"保存两次不漂移"的口径失守）；
+            //   2) 老行是解不开的封存串（换机/换账号）且新值为空 → 保留原行，不把不可恢复的
+            //      密文冲成空值（用户回到原账号仍可解）；
+            //   3) 其余（老明文/值变化/新值非空）→ 写封存串 —— 老明文行在此**首次保存即升级**。
+            if (key == "amap_key") {
+                pp::platform::secret::StoredKind kind = pp::platform::secret::StoredKind::Empty;
+                const std::string old_plain = pp::platform::secret::unseal(value, &kind);
+                const bool equivalent =
+                    kind == pp::platform::secret::StoredKind::Sealed && old_plain == s.amap_key;
+                const bool preserve_corrupt =
+                    kind == pp::platform::secret::StoredKind::Corrupt && s.amap_key.empty();
+                if ((equivalent || preserve_corrupt) && !value.empty()) {
+                    seen[i] = true;
+                    break;
+                }
+            }
             line = key + "=" + pairs[i].second;
             seen[i] = true;
             break;
@@ -318,6 +349,9 @@ std::string save_settings(const std::filesystem::path &file, const AppSettings &
     std::string io_err;
     if (!write_atomic_file(file, text, &io_err))
         return "settings: " + io_err;
+    // R-094（M7-WP5）：承载密钥的文件收紧权限（非 Windows 0600；Windows no-op —— DPAPI 密文
+    // 自保护）。失败不阻断保存（权限是加固不是正确性前提），口径见 platform/secret.h。
+    (void)pp::platform::secret::harden_file(file);
     return {};
 }
 

@@ -9,7 +9,13 @@
 
 #include "ui/icons.h"
 
+// M7-WP5（R-271 测试接线）：apply(QAbstractButton*) 是本 TU 唯一的 QtWidgets 依赖面；
+// 单测 target 只链 pp_core（Qt6::Core/Gui），故 tests/unit/test_icons.cpp 以
+// PP_ICONS_TEST_NO_WIDGETS 编译本文件（只测解析/几何纯面）。生产构建不定义该宏 ——
+// 代码路径与函数面零改动（apply() 在生产构建里照常编译）。
+#ifndef PP_ICONS_TEST_NO_WIDGETS
 #include <QAbstractButton>
+#endif
 #include <QColor>
 #include <QIconEngine>
 #include <QPainter>
@@ -29,8 +35,9 @@ namespace {
 // ---------------------------------------------------------------------------
 // 1) 图标表：{枚举, 键, 描边 d, 填充 d}
 //    d 串 = assets/icons/<键>.svg 的 path[@d] 逐字（同名同形；--ui-smoke 的 icons 探针逐条比对）。
-//    取形来源：docs/mockups-v2/*.html 的内联 <svg>（顶栏 ☆/⚙、caption 三钮、文件工具行、
+//    取形来源：docs/mockups-v2/*.html 的内联 <svg>（顶栏 ☆/⚙、文件工具行、
 //    翻页 ◀▶、勾选 ✓、品牌相机）逐字/等比转录，其余按 §3.3 的 24 网格 + 1.5 等线宽语言新绘。
+//    caption 四字形例外（M7-WP5/UX-7④）：按 §3.3 的 WinUI3 10×10 字形盒重绘（见 kDefs 行内注）。
 // ---------------------------------------------------------------------------
 struct Def {
     Name name;
@@ -40,11 +47,16 @@ struct Def {
 };
 
 constexpr Def kDefs[] = {
-    {Name::CaptionMin, "caption-min", "M2.4 12H21.6", ""},
-    {Name::CaptionMax, "caption-max", "M3.6 3.6L20.4 3.6L20.4 20.4L3.6 20.4Z", ""},
-    {Name::CaptionRestore, "caption-restore",
-     "M3 7.5L16.5 7.5L16.5 21L3 21Z M7.5 7.5V3.0H21.0V16.5H16.5", ""},
-    {Name::CaptionClose, "caption-close", "M3.6 3.6L20.4 20.4M20.4 3.6L3.6 20.4", ""},
+    // M7-WP5（UX-7④，docs/ux-review-14.md §7「三钮视觉校准」）：caption 四字形按
+    // qt-gui-design-spec.md §3.3 重画 —— WinUI3 的 **10×10 字形盒**（kCaptionIconPx=10 的
+    // 图标盒 = 24 网格）。端点收 1.8 网格（= 半线宽 0.75px × 2.4 网格/px）→ 1.5px 圆帽描边的
+    // 墨迹恰好铺满 0–24 网格 = 10×10 字形盒；旧形（2.4/21.6、3.6/20.4）只占 7–8px，偏细偏小。
+    // 与 assets/icons/caption-*.svg 的 path[@d] 逐字同形（--ui-smoke icons 同源探针钉住）。
+    {Name::CaptionMin, "caption-min", "M1.8 12H22.2", ""},
+    {Name::CaptionMax, "caption-max", "M1.8 1.8H22.2V22.2H1.8Z", ""},
+    {Name::CaptionRestore, "caption-restore", "M1.8 6.6H17.4V22.2H1.8Z M6.6 6.6V1.8H22.2V17.4H17.4",
+     ""},
+    {Name::CaptionClose, "caption-close", "M1.8 1.8L22.2 22.2M22.2 1.8L1.8 22.2", ""},
     {Name::Star, "star", "M12 3.5l2.6 5.3 5.9.9-4.3 4.2 1 5.8L12 17l-5.2 2.7 1-5.8L3.5 9.7l5.9-.9z",
      ""},
     {Name::Gear, "gear",
@@ -375,7 +387,11 @@ QPainterPath path_from_d(const QString &d) {
                 QPointF c2(a[args - 4], a[args - 3]);
                 QPointF end(a[args - 2], a[args - 1]);
                 if (rel) {
-                    c1 += cur;
+                    if (up == u'C')
+                        c1 += cur; // C/c：两控制点都是相对量
+                    // M7-WP5（R-159）：S/s 的反射点是**绝对量**（SVG 规范 = 上一控制点关于
+                    // 当前点的镜像）—— 旧实现在 rel 分支把 c1 也加了 cur，反射点变
+                    // 3*cur-last_c2（双重偏移）。rel 只偏移 c2/end。
                     c2 += cur;
                     end += cur;
                 }
@@ -476,6 +492,7 @@ QIcon icon(Name name, const QColor &color, const QColor &disabled, qreal dpr) {
     return QIcon(new VectorEngine(name, color, disabled, dpr));
 }
 
+#ifndef PP_ICONS_TEST_NO_WIDGETS
 void apply(QAbstractButton *button, Name name, const QColor &color, const QColor &disabled,
            int px) {
     if (button == nullptr)
@@ -485,6 +502,7 @@ void apply(QAbstractButton *button, Name name, const QColor &color, const QColor
         button->setIconSize(QSize(px, px));
     button->setProperty(kIconNameProperty, QString::fromLatin1(key(name)));
 }
+#endif
 
 QPixmap pixmap(Name name, int px, const QColor &color, qreal dpr) {
     const qreal ratio = dpr > 0.01 ? dpr : 1.0;

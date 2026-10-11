@@ -40,6 +40,7 @@
 #include <QColor>
 #include <QComboBox>
 #include <QDoubleSpinBox>
+#include <QFrame>
 #include <QLabel>
 #include <QList>
 #include <QRectF>
@@ -49,6 +50,32 @@
 #include <QWidget>
 
 namespace pp::ui::formkit {
+
+// ---------------------------------------------------------------------------
+// 单行省略标签（R-020/R-320，M7-WP4）：ElidedLabel 的**唯一实现** —— 此前 7 份逐字拷贝
+// （exif_editor / mainwindow / page_meta / page_output / page_run / presets_dialog /
+// preview_panel）收敛到本类，行为与各拷贝逐位等价：
+//   * set_full_text：全文 + 动态属性 ppFullText（探针读语义值）+ tooltip（悬浮全文）+ 省略；
+//   * sizeHint 按全文申请宽（有空间就出全文），挤不下才出省略号（§9.3 禁折行）；
+//   * squeeze=true 时 minimumSizeHint 宽压到 0（preview_panel 口径：超长文件名把中栏撑宽前
+//     先省略）；默认 false（其余 6 份的默认压缩语义）。
+// ---------------------------------------------------------------------------
+class ElidedLabel : public QLabel {
+public:
+    explicit ElidedLabel(QWidget *parent = nullptr, bool squeeze = false);
+    void set_full_text(const QString &text);
+    QString full_text() const { return full_text_; }
+    QSize sizeHint() const override;
+    QSize minimumSizeHint() const override;
+
+protected:
+    void resizeEvent(QResizeEvent *event) override;
+
+private:
+    void apply_elide();
+    QString full_text_;
+    bool squeeze_ = false;
+};
 
 // ---------------------------------------------------------------------------
 // 几何对齐（C1 单源）：本头复述的栅格/度量值与 theme.h 令牌逐条一致 → 漂移即编译失败。
@@ -124,25 +151,16 @@ struct DoubleRow {
 
 DoubleRow double_row(QWidget *parent, const FieldCell &left, const FieldCell &right);
 
-// kv 双列行：两对 [标签 80 右对齐][字段轨]，值右对齐 + tabular（§4.2「数值」档）。
-struct KvRow {
-    QWidget *row = nullptr;
-    QLabel *key1 = nullptr;
-    QLabel *value1 = nullptr;
-    QLabel *key2 = nullptr;
-    QLabel *value2 = nullptr;
-};
-
-KvRow kv_row(QWidget *parent, const QString &key1, const QString &value1, const QString &key2,
-             const QString &value2, FieldWidth width = FieldWidth::Standard);
+// kv 双列行：R-212（M7-WP4）`kv_row` 已删（全仓零消费的死 API 面）——kv 值行需要时走
+// double_row + value 轨（kFkValue 钩子），不再留第二套构造器。
 
 // 表单布尔勾选框：13×13 r2 自绘（选中 = acc 填充 + 白勾；勾形是矢量路径 —— §3.3 禁字形图标），
 // 本体是 QCheckBox（无障碍角色 = checkbox，§11）；文字由本控件自己画在勾选框右侧（语序固定
 // "勾选框→文字"，点击文字同样切换）。
-class CheckBox : public QCheckBox {
+class CheckBox : public QCheckBox, public theme::Tokenized {
 public:
     explicit CheckBox(QWidget *parent = nullptr);
-    void set_tokens(const theme::Tokens &t);
+    void set_tokens(const theme::Tokens &t) override;
     QSize sizeHint() const override;
 
 protected:
@@ -197,10 +215,10 @@ struct DoubleSpinSpec {
 // `::*-arrow` 置空 → 平台不再画独立描边按钮格（见 theme::formkit_qss）。
 void paint_spin_arrows(QPainter &painter, QWidget *widget, const theme::Tokens &tokens);
 
-class Spin : public QSpinBox {
+class Spin : public QSpinBox, public theme::Tokenized {
 public:
     explicit Spin(QWidget *parent = nullptr);
-    void set_tokens(const theme::Tokens &t);
+    void set_tokens(const theme::Tokens &t) override;
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -209,10 +227,10 @@ private:
     theme::Tokens tokens_ = default_tokens();
 };
 
-class DSpin : public QDoubleSpinBox {
+class DSpin : public QDoubleSpinBox, public theme::Tokenized {
 public:
     explicit DSpin(QWidget *parent = nullptr);
-    void set_tokens(const theme::Tokens &t);
+    void set_tokens(const theme::Tokens &t) override;
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -224,15 +242,7 @@ private:
 QSpinBox *spin_box(QWidget *parent, const SpinSpec &spec, FieldWidth width = FieldWidth::Standard);
 QDoubleSpinBox *dspin_box(QWidget *parent, const DoubleSpinSpec &spec,
                           FieldWidth width = FieldWidth::Standard);
-
-// 单列数值行 = spin_box + frow（把"控件 + 单位槽 + 范围注释"一次摆好）
-struct SpinRow {
-    Row row;
-    QSpinBox *spin = nullptr;
-};
-
-SpinRow spin_row(QWidget *parent, const QString &label, const SpinSpec &spec,
-                 FieldWidth width = FieldWidth::Standard);
+// R-212（M7-WP4）：`spin_row`/`SpinRow` 已删（零消费）——数值行 = spin_box + frow 两步显式组合。
 
 // ---------------------------------------------------------------------------
 // 下拉（GUI-R2：QComboBox 的**唯一**构造点 —— 契约 C2 补齐）
@@ -249,10 +259,10 @@ struct ComboSpec {
 };
 
 // 自绘箭头的下拉本体（QComboBox；仅供 combo_box() 使用，调用点拿 QComboBox*）
-class Combo : public QComboBox {
+class Combo : public QComboBox, public theme::Tokenized {
 public:
     explicit Combo(QWidget *parent = nullptr);
-    void set_tokens(const theme::Tokens &t);
+    void set_tokens(const theme::Tokens &t) override;
 
 protected:
     void paintEvent(QPaintEvent *event) override; // 基类画盒/字后，右端补画 8px 矢量箭头
@@ -263,25 +273,17 @@ private:
 
 QComboBox *combo_box(QWidget *parent, const ComboSpec &spec = ComboSpec(),
                      FieldWidth width = FieldWidth::Standard);
-
-// 单列下拉行 = combo_box + frow（与 spin_row 同口径）
-struct ComboRow {
-    Row row;
-    QComboBox *combo = nullptr;
-};
-
-ComboRow combo_row(QWidget *parent, const QString &label, const ComboSpec &spec = ComboSpec(),
-                   FieldWidth width = FieldWidth::Standard);
+// R-212（M7-WP4）：`combo_row`/`ComboRow` 已删（零消费）——下拉行 = combo_box + frow 两步显式组合。
 
 // ---------------------------------------------------------------------------
 // 自绘控件（取色取形全走 theme.h 令牌；零平台分叉）
 // ---------------------------------------------------------------------------
 
 // 开关（R4 30×16 药丸 + 12 钮）：**仅**用于"立即生效的布尔"（§6 决策表）。
-class SwitchControl : public QAbstractButton {
+class SwitchControl : public QAbstractButton, public theme::Tokenized {
 public:
     explicit SwitchControl(QWidget *parent = nullptr);
-    void set_tokens(const theme::Tokens &t);
+    void set_tokens(const theme::Tokens &t) override;
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override { return sizeHint(); }
 
@@ -296,7 +298,7 @@ private:
 // **零宽度变化**（段尺寸固定）。段本体是 QAbstractButton（键盘/无障碍语义），容器自绘底与描边。
 // A27：段高由 Segment **自持**（sizeHint + fixedHeight = kSegH − 2，见 formkit_layout.h 的
 // seg_inner_h）—— QAbstractButton 无基类 sizeHint，调用点不得再自打段高补丁。
-class SegmentedControl : public QWidget {
+class SegmentedControl : public QWidget, public theme::Tokenized {
     Q_OBJECT
 public:
     explicit SegmentedControl(QWidget *parent = nullptr);
@@ -308,7 +310,7 @@ public:
     void set_current_index(int index); // 程序化设置（不发射信号）
     QWidget *segment(int index) const;
 
-    void set_tokens(const theme::Tokens &t);
+    void set_tokens(const theme::Tokens &t) override;
 
 signals:
     void current_changed(int index);
@@ -329,12 +331,12 @@ private:
 
 // 磁贴卡（多选集合唯一形态；整卡可点 + 预留对勾位）：固定宽、主字（12/700）+ 后缀（9.5），
 // 勾选只换底色/勾形，**不改宽**（§12-4）。
-class CheckableCard : public QAbstractButton {
+class CheckableCard : public QAbstractButton, public theme::Tokenized {
 public:
     explicit CheckableCard(QWidget *parent = nullptr);
 
     void set_labels(const QString &name, const QString &hint = QString());
-    void set_tokens(const theme::Tokens &t);
+    void set_tokens(const theme::Tokens &t) override;
     QSize sizeHint() const override;
 
 protected:
@@ -348,7 +350,7 @@ private:
 
 // 徽章 pill（R4 高 16 r3 9.5px/700）：四语义色 ok/warn/err + 中性计数（n）；accent 档保留。
 // 完成态**唯一形态** = completed()（绿胶囊"✓ 已完成"；§7.3/§8 —— 别处不得自造完成态胶囊）。
-class PillBadge : public QLabel {
+class PillBadge : public QLabel, public theme::Tokenized {
 public:
     enum class Tone { Neutral, Accent, Ok, Warn, Err };
 
@@ -356,7 +358,7 @@ public:
 
     void set_tone(Tone tone);
     Tone tone() const { return tone_; }
-    void set_tokens(const theme::Tokens &t);
+    void set_tokens(const theme::Tokens &t) override;
     QSize sizeHint() const override;
     // 前置矢量图标（M5-T3 加性扩展）：图标盒固定（kPillIconPx + 4px 间距）→ 有无图标都不改
     // 胶囊高度与语义；完成态的勾形即由此承载（"已完成" 文案里不再有 ✓ 字形）。
@@ -377,15 +379,16 @@ private:
     theme::Tokens tokens_ = default_tokens();
 };
 
-// 打标 chip（批量快捷打标唯一形态）：键帽（13×13 r2）+ 文字（10.5/600），固定宽 —— 勾选/悬停
-// 只换底色，不改宽（与磁贴同口径）。
-class ChipButton : public QAbstractButton {
+// 打标 chip（批量快捷打标唯一形态）：键帽（13×13 r2）+ 文字（§4.2 标签档 11/600；R-267：
+// 原注释"10.5/600"与实现的 11/600 不符，已按实现纠偏），固定宽 —— 勾选/悬停只换底色，
+// 不改宽（与磁贴同口径）。
+class ChipButton : public QAbstractButton, public theme::Tokenized {
 public:
     explicit ChipButton(QWidget *parent = nullptr);
 
     void set_key_text(const QString &key); // 键帽文字（"1"）
     QString key_text() const { return key_; }
-    void set_tokens(const theme::Tokens &t);
+    void set_tokens(const theme::Tokens &t) override;
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override { return sizeHint(); }
 
@@ -401,13 +404,13 @@ private:
 //   Pending（空）/ Active(实心 accent = 已写盘) / Active+synthetic（斜纹双色带 = 合成）/
 //   Done（绿 = 完成）/ Warn（琥珀 = 异常，0 字节）/ Failed（红 = 失败）。
 // 斜纹与实心必须可被像素取证区分 → 斜纹用 progress_fill_from/to 双色带（115°/6px/12px 令牌）。
-class ProgressStrip : public QWidget {
+class ProgressStrip : public QWidget, public theme::Tokenized {
 public:
     enum class Kind { Pending, Active, Done, Warn, Failed };
 
     explicit ProgressStrip(QWidget *parent = nullptr);
 
-    void set_tokens(const theme::Tokens &t);
+    void set_tokens(const theme::Tokens &t) override;
     void set_state(Kind kind, double frac, bool synthetic = false);
 
     Kind kind() const { return kind_; }
@@ -443,22 +446,43 @@ void paint_branch_indicator(QPainter &painter, const QRect &rect, bool has_child
 // 菜单勾选：icons::Check（矢量），居中于指示器盒。
 void paint_menu_check(QPainter &painter, const QRect &rect, const theme::Tokens &tokens);
 
-// 图标钮（R4 28×28 r4，悬停显底）。§11：图标钮必有 accessibleName + tooltip —— 由
-// set_action(text) 一次设齐（图标本体走 QAbstractButton::setIcon，见 icons.h）。
-class IconButton : public QAbstractButton {
-public:
-    explicit IconButton(QWidget *parent = nullptr);
+// R-212（M7-WP4）：`IconButton` 类已删（全仓零消费；图标钮实际建造点走 QToolButton +
+// icons::apply，见 mainwindow 的 make_icon_button）。R4 图标钮度量仍在 formkit_layout.h
+// （Control::IconButton = 28×28 r4），度量表不是死值。
 
-    void set_action(const QString &text); // tooltip + accessibleName（同文案）
-    void set_tokens(const theme::Tokens &t);
-    QSize sizeHint() const override;
-    QSize minimumSizeHint() const override { return sizeHint(); }
-
-protected:
-    void paintEvent(QPaintEvent *event) override;
-
-private:
-    theme::Tokens tokens_ = default_tokens();
+// ---------------------------------------------------------------------------
+// 卡片骨架单源（R-021/R-053/UX-6②，M7-WP4；接口规格 I6 主对话定稿）：卡头/卡体/make_card
+// 的四份同构（page_meta / page_output / page_run / mainwindow）合并为本处一份；
+// pill 统一 PillBadge（R-021 两条实现路线归一），hint 统一 ElidedLabel（§9.3）。
+// ---------------------------------------------------------------------------
+struct CardParts {
+    QFrame *frame = nullptr; // 卡壳（objectName "pp-card"；card_header 时为 nullptr）
+    QWidget *head = nullptr; // 卡头行（[标题][pill][stretch][hint]，内边距 kCardHead*）
+    QWidget *body = nullptr; // 卡体容器（内边距 kCardPadTop/X/Bottom；行 pitch 由 formkit 行承担）
+    QLabel *title = nullptr;
+    QLabel *pill = nullptr; // 实为 PillBadge（中性胶囊；card_pill() 取回类型）
+    QLabel *hint = nullptr; // 实为 ElidedLabel（card_hint() 取回类型）
+    PillBadge *pill_badge() const { return static_cast<PillBadge *>(pill); }
+    ElidedLabel *hint_label() const { return static_cast<ElidedLabel *>(hint); }
 };
+
+// 卡头（R-021：4 份卡头建造器的唯一出路）：标题（12/700）+ 可选中性 pill（无内容则隐藏）+
+// 右置 hint（右对齐、10px/500）；调用方拿 head->layout() 继续追加右侧件。
+CardParts card_header(QWidget *parent, const QString &title, const QString &pill_name = QString(),
+                      const QString &hint_name = QString());
+
+// 卡壳 + 卡头 + 卡体一次成型（R-053）：body 内边距 = kCardPadTop/X/Bottom（R1；原 page_meta
+// 的"卡体上 0"两制随单源收口）。
+CardParts make_card(QWidget *parent, const QString &title, const QString &pill_name = QString(),
+                    const QString &hint_name = QString());
+
+// 按钮唯一构造点（R-022/I6：保留 dialogkit 版上提至此，另两份删除）：R4 高 26 + 指针手 +
+// accessibleName + ppFk button/primary 钩子；objectName 由调用点按需再设。
+QAbstractButton *make_button(QWidget *parent, const QString &text, bool primary);
+
+// 卡片防压缩（UX-11）：QScrollArea(widgetResizable) 会把 Preferred 件压向 minimumSizeHint ——
+// 卡片按当前内容 sizeHint 钉下限 + (Preferred, Minimum)，滚动条只在**卡片整体超出**时出现。
+// 在卡片内容装配完成后调用（三页内容列各一次）。
+void lock_card_size(QFrame *card);
 
 } // namespace pp::ui::formkit

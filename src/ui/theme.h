@@ -69,8 +69,9 @@ struct Typography {
     static constexpr int badge_weight = 700;
     // §6.2 导航编号圆（内嵌数字圆）：字号/字重取 §4.2 徽标档 9.5/700（裁定 A4：tokens.css 的
     // 9px 作废）。M5-T4：v4 的 .step 三独立钮 → v6 一体式分段导航（单控件），命名随之换锚。
-    static constexpr double nav_num_px = 9.5;
-    static constexpr int nav_num_weight = 700;
+    // R-267（M7-WP4）：取值**引用**徽标档常量（原写死 9.5 的自重复清零）。
+    static constexpr double nav_num_px = badge_px;
+    static constexpr int nav_num_weight = badge_weight;
     // §6.2 导航段文案：tokens.css .nav-strip button 的 12px/600（§4.2 字阶表未列导航档，
     // 按 A11 口径取对照值；段宽 92 等宽由 Metrics 承担）。
     static constexpr double nav_text_px = 12.0;
@@ -171,8 +172,8 @@ struct Metrics {
     static constexpr int go_pad_x = 18;      // .btn-go{padding:0 18px}
     static constexpr int pill_radius = 3;    // §4.3 pill 3（计数/状态）
     // QSS 侧等效值：Qt 的 QSS border-radius 超过盒半高时退化为直角，故 QSS 一律用 ≤ 半高的
-    // 半径；v6 pill 本身 r3（盒高 16）→ 直接同一值，旧版 99→9 的钳位不再需要。
-    static constexpr int pill_radius_qss = pill_radius;
+    // 半径；v6 pill 本身 r3（盒高 16）→ 直接同一值（R-214：旧别名 pill_radius_qss 已删，取值
+    // 只剩 pill_radius 一处）。
     static constexpr int pill_h = 16;     // R4 徽章 pill 高 16
     static constexpr int pill_pad_x = 7;  // .pill{padding:0 7px}
     static constexpr int pill_pad_y = 0;  // 竖内距 0：16px 盒高 = 9.5px 字（≈13–14px）+ 2px 边
@@ -225,7 +226,30 @@ struct Metrics {
     // RepeatSpread 渐变；单列一个常量是为了让"115°/6px/12px"三个几何量都在 token 表里可查。
     static constexpr int synth_stripe_period_px = 12;
     static constexpr int input_h = 24; // R4 文本输入高 24（v4 28 → v6 24）
-    static constexpr int row_h = 32;   // M4 遗留取值（表单行 pitch 见 R1 = 28，真源 = formkit）
+    // R-112（M7-WP4）：M4 遗留死常量 `row_h = 32` 已删 —— 表单行 pitch 真源 = formkit_layout.h
+    // `kRowPitch = 28`（R1），零调用的第二行高不得与真源并存（R-216 双行高并存随之清零）。
+    // ---- 按钮/下拉盒内距（R-186/R-270 令牌化：QSS 魔法值全部走本表）----
+    // R-186：页内按钮 padding 12（page_run）vs 11（page_output/page_meta/dialogkit）双份漂移 →
+    // 统一为本表单源（主次按钮同一横向内距；主按钮实心靠底色区分，不靠内距）。
+    static constexpr int btn_pad_x = 12;
+    static constexpr int btn_h_content = btn_h - 2; // QSS min/max-height（内容盒 24 = 26 − 2×1 边）
+    static constexpr int combo_pad_x = 8;           // 下拉值区内距（.dd 文字 0 8px）
+    // 下拉箭头位宽（= ::drop-down width = combo_arrow_px×2 + 8）与值区右内距**同一取值**：
+    // R-270 点名的「combo 26 vs 24」两值漂移（padding-right 26 硬编码 vs 箭头位 24
+    // 计算值）随本行归一。
+    static constexpr int combo_arrow_slot = combo_arrow_px * 2 + 8;
+    // ---- 滚动条（UX-11：SPA 式细浮层 —— 轨道透明、滑块 6px、悬停加宽 8px；两主题一套、
+    // 弹窗与主窗一套，见 theme::scrollbar_qss）----
+    static constexpr int scroll_w = 6;           // 滑块/滚动条宽 6px（原 10px 实心轨退役）
+    static constexpr int scroll_w_hover = 8;     // 悬停加宽 8px
+    static constexpr int scroll_radius = 3;      // 滑块圆角 3（= 半宽）
+    static constexpr int scroll_handle_min = 24; // 滑块最小长度
+    // ---- 覆盖层几何（UX-6⑦：与 OverlayTokens 配套；浮层不随主题变）----
+    static constexpr int overlay_pad_x = 8; // 预览徽标 .pv-badge{padding:3px 8px}
+    static constexpr int overlay_pad_y = 3;
+    static constexpr int overlay_radius = 4;
+    static constexpr int zoombar_radius = 4; // .zoombar{border-radius:4px}
+    static constexpr int zoom_text_btn_pad_x = 6;
     // ---- §5 表单栅格（R1/R2；归 M5-T2 formkit：标签轴 80 / pitch 28 / 双列 24）----
     // 取值单源 = ui/formkit_layout.h（kLabelW/kRowPitch/kDoubleGap），formkit.h 以 static_assert
     // 与本表逐条对齐。A10/T11 退役的**迁移期双源**（M4 的 form_label_w=70 / form_row_h=32：
@@ -259,8 +283,9 @@ struct Tokens {
     QColor accent_dim;
     QColor accent_bd;
     QColor on_accent; // 强调底上的文字（v6：亮 #ffffff / 暗 #0c1b24）
-    // M4 遗留字段（既有对外 API 保留不删）：v6 主按钮字 = acc-on，QSS 已切 on_accent；
-    // 本字段继续以旧口径给值（两个主题都 #0c1b24），供既有探针/调用点读回。
+    // M4 遗留字段（R-214 复核后**保留**）：v6 主按钮字 = acc-on，QSS 已切 on_accent；本字段
+    // 继续以旧口径给值（两个主题都 #0c1b24）。消费点 = theme 自检探针（mainwindow.cpp 的
+    // tokens 取证行逐字钉住两主题取值）——"零读回"的自述已随复核更正，字段不是死值。
     QColor go_text;
     // 语义四色（§4.1 ok/warn/err + 末行「同色 8–10% 底 + 30–34% 描边 + 同色字」）
     QColor ok;
@@ -278,9 +303,9 @@ struct Tokens {
     QColor control_solid; // control 合成到窗口底（QPalette::Base/Button 用，不透明）
     // 骨架辅助（§4.1 表外既有字段，随对照值）
     QColor line; // 顶栏下沿/状态栏上沿 hairline（v6 = --card-bd 口径）
-    // M4 遗留字段（v6 复核结论：状态栏**无独立底色** —— tokens.css .statusbar 只有上沿
-    // --card-bd 分隔线，底 = 窗口底；QSS 已改透明。字段与取值保留供既有调用点读回，不删）
-    QColor bottom_bg;
+    // R-114（M7-WP4）：M4 遗留字段 `bottom_bg` 已删 —— v6 复核结论是状态栏**无独立底色**
+    // （tokens.css .statusbar 只有上沿 --card-bd 分隔线，底 = 窗口底；QSS 已改透明），
+    // "保留供既有调用点读回"自述经 grep 复核为**零读回**（src/ tests/ 全仓无消费点）。
     // §6.2 选中段数字圆底：tokens.css `.nav-strip button.on .n{background:rgba(255,255,255,.25);
     // border-color:transparent}`（双主题同值，画在 acc 填充之上；§4.1 表外，随对照值）
     QColor nav_num_sel_bg;
@@ -442,7 +467,6 @@ inline Tokens tokens(ThemeMode mode) {
         t.control = rgba(255, 255, 255, 0.07);           // --ctl
         t.control_bd = rgba(255, 255, 255, 0.12);        // --ctl-bd
         t.line = t.card_bd;                              // 顶栏/状态栏 hairline = --card-bd
-        t.bottom_bg = rgba(0, 0, 0, 0.14);               // 状态栏底（既有权重；T4 复核）
         t.progress_fill_from = QColor(0x3a, 0xa3, 0xdc); // 斜纹带 1
         t.progress_fill_to = QColor(0x4c, 0xc2, 0xff);   // 斜纹带 2
         t.shadow_color = QColor(0, 0, 0, 0);
@@ -477,10 +501,9 @@ inline Tokens tokens(ThemeMode mode) {
         t.err = QColor(0xc4, 0x2b, 0x3a);
         t.err_dim = rgba(196, 43, 58, 0.08);
         t.err_bd = rgba(196, 43, 58, 0.30);
-        t.control = QColor(0xee, 0xf0, 0xf4);   // --ctl
-        t.control_bd = rgba(0, 0, 0, 0.12);     // --ctl-bd
-        t.line = t.card_bd;                     // 顶栏/状态栏 hairline = --card-bd
-        t.bottom_bg = rgba(255, 255, 255, 0.5); // 状态栏底（既有权重；T4 复核）
+        t.control = QColor(0xee, 0xf0, 0xf4); // --ctl
+        t.control_bd = rgba(0, 0, 0, 0.12);   // --ctl-bd
+        t.line = t.card_bd;                   // 顶栏/状态栏 hairline = --card-bd
         // 斜纹双色带（C8 语义不变；run 页原型双主题同值）
         t.progress_fill_from = QColor(0x3a, 0xa3, 0xdc);
         t.progress_fill_to = QColor(0x4c, 0xc2, 0xff);
@@ -650,20 +673,39 @@ inline constexpr const char *kPillWarn = "warn";
 inline constexpr const char *kPillErr = "err";
 
 // M5-T2（**加性扩展**，登记见报告）：formkit（C2）的行内辅助件与数值控件的动态属性钩子。
-// 行构造器产出的标签轨/kv 值/单位槽/范围注释/勾选文字与 spinbox 只挂 `ppFk`，"表单栅格几何"
+// 行构造器产出的标签轨/kv 值/单位槽/范围注释与 spinbox 只挂 `ppFk`，"表单栅格几何"
 // 仍归 src/ui/formkit_layout.h（T2 契约），此处只负责**着色与盒度量**（颜色取自 §4 令牌）。
 // 既有页面无人设该属性 ⇒ 主题 QSS 增量对现网控件零影响。
+//
+// UX-6⑤ / R-054（M7-WP4）：三条钩子轨**收敛到 ppFk** —— 页内的 `ppMetaField`（page_meta）
+// 与 `ppField`（page_output / page_run / dialogkit）两条迁移期轨道退役，全部 setProperty 写
+// 本属性、QSS 选择器只认本属性（页面本地 kFieldProperty 常量改指 theme::kFkProperty，旧常量
+// 依 R-054 删除）。取值词表并入下面的 kFk* 家族（跨页同形词共用一条规则 = field_qss）。
 inline constexpr const char *kFkProperty = "ppFk";
 inline constexpr const char *kFkLabel = "label"; // 标签轨（§4.2 标签 11px / --txt2）
 inline constexpr const char *kFkValue = "value"; // kv 值（--txt；右对齐 tabular 由 C++ 落地）
 inline constexpr const char *kFkUnit = "unit";   // 16px 单位槽（§4.2 辅助 10px / --txt3）
 inline constexpr const char *kFkNote = "note";   // 10px 范围注释（§4.2 辅助 10px / --txt3）
-inline constexpr const char *kFkCheck = "check"; // check 行文字（§4.2 正文·值 / --txt）
-inline constexpr const char *kFkSpin = "spin";   // 数值控件（R4 spinbox 盒）
+// R-215（M7-WP4）：旧 kFkCheck（check 行文字）已删 —— 勾选行文字由 formkit::CheckBox 自绘
+// （C++ 侧取 --txt），该钩子与对应 QSS 规则全仓零 setProperty/零消费（死钩子 + 死规则）。
+inline constexpr const char *kFkSpin = "spin"; // 数值控件（R4 spinbox 盒）
 // 下拉（R4 combo 盒）。GUI-R2：下拉的样式钩子由本条**唯一**承载 —— 在此之前六个建造点各自
 // 挂 `ppField`/`ppMetaField`/不挂属性，导致同一控件四种高度、亮色下整只不绘制
 // （docs/gui-review-0.3.0-r2.md §1）。
 inline constexpr const char *kFkCombo = "combo"; // 下拉（R4 combo 盒）
+// ---- UX-6⑤ 并入的跨页字段词表（field_qss 的取值；页面 setProperty 一律引用这些常量）----
+inline constexpr const char *kFkInput = "input"; // 文本输入（mockup .tbx：--ctl 底 + --ctl-bd 边）
+inline constexpr const char *kFkView = "view";   // 只读生效值框（同 input 形态）
+inline constexpr const char *kFkRule = "rule";   // 规则输入框（同 input 形态）
+inline constexpr const char *kFkButton =
+    "button"; // 次按钮（原 ppField="button" / ppMetaField="btn"）
+inline constexpr const char *kFkPrimary = "primary"; // 主按钮（实心 acc）
+inline constexpr const char *kFkLink = "link";       // 文字链（accent，无框）
+inline constexpr const char *kFkLinkDanger =
+    "link-danger";                             // 破坏性文字链（err，无框；旧 "danger" 描边档退役）
+inline constexpr const char *kFkFold = "fold"; // 折叠行钮（chevron = 矢量图标）
+inline constexpr const char *kFkHint = "hint"; // 说明/提示（--txt3）
+inline constexpr const char *kFkSub = "sub";   // 次级说明（--txt3，同 hint）
 
 // 自绘控件（ItemDelegate / 自绘 pill）的三色取法：同一张 §4.1 末行规则，避免各处复写色值。
 struct PillPaint {
@@ -736,6 +778,478 @@ inline QString mod_qss(const Tokens &t) {
                .arg(Metrics::mod_weight);
 }
 
+// ---------------------------------------------------------------------------
+// 覆盖层（overlay）令牌组（UX-6⑦，M7-WP4）：压在**照片 / 地图**上的浮层配色。
+// **不随主题变**（两主题同值）：底下的像素可能是任意亮度（照片 / 卫星影像 / 路网），固定
+// 深浅配色是明暗两主题下都可读的唯一解 —— 属合法的固定色，但必须**单源 + 注明**：
+// 原先散在 preview_panel.cpp（kOverlay*/kZoom* 等 15 个字面量）与 page_meta.cpp（地图 HUD
+// rgba(255,255,255,190)/#404040 等）的写死色全部收编到本组，调用点只引用不写字面量。
+// ---------------------------------------------------------------------------
+struct OverlayTokens {
+    // 预览舞台浮层（深色半透明压在照片上）
+    const char *pv_fg = "#dfe6ec";            // .pv-badge 字色
+    const char *pv_bg = "rgba(10,12,16,62%)"; // .pv-badge 底
+    const char *pv_bd = "rgba(255,255,255,12%)";
+    const char *zoombar_bg = "rgba(18,20,26,85%)";        // .zoombar 底
+    const char *zoombar_bd = "rgba(255,255,255,13%)";     // .zoombar 描边
+    const char *zoombar_fg = "#c9ccd4";                   // .zoombar button 字
+    const char *zoom_level_fg = "#ececf0";                // .zoombar 读数
+    const char *zoom_hover_bg = "rgba(255,255,255,12%)";  // .zoombar button:hover
+    const char *zoom_active_bg = "rgba(255,255,255,18%)"; // 模式钮当前档
+    const char *zoom_sep_bg = "rgba(255,255,255,15%)";    // .zoombar .sep
+    const char *stage_hint_fg = "rgba(236,236,240,50%)";  // .canvas .hint
+    const char *empty_icon_fg = "rgba(223,230,236,60%)";  // 空态图标
+    const char *empty_text_fg = "rgba(236,236,240,78%)";  // 空态引导语
+    const char *photo_mat_bg = "#0d0f12";                 // 照片衬垫（比舞台底深一档）
+    // QColor 侧（QColor 不解析 CSS 的 rgba() 字面量）
+    QColor photo_mat_bd = QColor(255, 255, 255, 26); // = rgba(255,255,255,10%)
+    QColor empty_icon = QColor(223, 230, 236, 153);  // = rgba(223,230,236,60%)
+    // 地图 HUD / 缩放钮（白底浅字压在地图上）
+    const char *hud_bg = "rgba(255,255,255,190)";
+    const char *hud_bg_hover = "rgba(255,255,255,230)";
+    const char *hud_bg_dim = "rgba(255,255,255,150)";
+    QColor hud_fg = QColor(0x40, 0x40, 0x40);     // #404040
+    QColor hud_fg_dim = QColor(0x9a, 0x9a, 0x9a); // 禁用图标
+};
+inline const OverlayTokens &overlay_tokens() {
+    static const OverlayTokens k;
+    return k;
+}
+
+// 预览缩放条"当前模式档"的动态属性钩子（ppZoomActive）：**不是 checked**（修 1-19：缩放
+// 模式/比例切换由普通按钮承担，无勾选语义）；QSS 只按属性值换底色。单源在此
+// （preview_panel.cpp 原自持常量已并入，UX-6⑦）。
+inline constexpr const char *kZoomActiveProperty = "ppZoomActive";
+
+// ---------------------------------------------------------------------------
+// 字段类控件共享规则（UX-6④⑥，M7-WP4）：三条钩子轨并入 ppFk 后，**跨页同形**的输入框 /
+// 按钮 / 文字链 / 折叠钮 / 提示行规则只在本函数维护一份（原 page_meta / page_output /
+// page_run / dialogkit 四份拼装全部退役）。页专规则见 page_*_qss。
+// ---------------------------------------------------------------------------
+inline QString field_qss(const Tokens &t) {
+    const QString prop = QString::fromLatin1(kFkProperty);
+    const auto sel = [&prop](const char *value) {
+        return QStringLiteral("[%1=\"%2\"]").arg(prop, QString::fromLatin1(value));
+    };
+    QString qss;
+    // 输入类控件（mockup .tbx：--ctl 底 + --ctl-bd 边 + r3 + --txt 字；R4 高 24 = 内容盒 22
+    // + 上下各 1px 边 —— 盒高在此单源夹定，页面/弹窗都不再各自写 min/max-height）
+    const QString input_sel = QStringLiteral("QLineEdit") + sel(kFkInput) +
+                              QStringLiteral(", QLineEdit") + sel(kFkView) +
+                              QStringLiteral(", QLineEdit") + sel(kFkRule);
+    qss += input_sel + QStringLiteral(" { background: ") + css_color(t.control) +
+           QStringLiteral("; border: 1px solid ") + css_color(t.control_bd) +
+           QStringLiteral("; border-radius: ") + QString::number(t.radius_control) +
+           QStringLiteral("px; color: ") + css_color(t.text) +
+           QStringLiteral("; padding: 0 8px; min-height: ") +
+           QString::number(Metrics::input_h - 2) + QStringLiteral("px; max-height: ") +
+           QString::number(Metrics::input_h - 2) + QStringLiteral("px; }\n");
+    qss += input_sel + QStringLiteral(":disabled { color: ") + css_color(t.text3) +
+           QStringLiteral("; }\n");
+    // 次按钮（R4：高 26 + 描边 + --txt2 字；悬停提亮到 --txt）。R-186：横向内距单源 =
+    // Metrics::btn_pad_x（原 11/12 两值漂移归一）；**高度不在 QSS 夹**（盒高单源 =
+    // formkit::make_button 的 setFixedHeight(btn_h)，R-213 的 spin/combo 盒模型矛盾同口径处置）。
+    qss += QStringLiteral("QPushButton") + sel(kFkButton) + QStringLiteral(" { background: ") +
+           css_color(t.control) + QStringLiteral("; border: 1px solid ") + css_color(t.control_bd) +
+           QStringLiteral("; border-radius: ") + QString::number(Metrics::btn_radius) +
+           QStringLiteral("px; color: ") + css_color(t.text2) +
+           QStringLiteral("; font-weight: 600; padding: 0 ") + QString::number(Metrics::btn_pad_x) +
+           QStringLiteral("px; }\n");
+    qss += QStringLiteral("QPushButton") + sel(kFkButton) + QStringLiteral(":hover { color: ") +
+           css_color(t.text) + QStringLiteral("; }\n");
+    qss += QStringLiteral("QPushButton") + sel(kFkButton) +
+           QStringLiteral(":disabled { background: ") + css_color(t.control) +
+           QStringLiteral("; border-color: ") + css_color(t.control_bd) +
+           QStringLiteral("; color: ") + css_color(t.text3) + QStringLiteral("; }\n");
+    // 主按钮（R4：实心 acc 底 + acc-on 字；禁用 = 灰底灰字）
+    qss += QStringLiteral("QPushButton") + sel(kFkPrimary) + QStringLiteral(" { background: ") +
+           css_color(t.accent) + QStringLiteral("; border: 1px solid ") + css_color(t.accent) +
+           QStringLiteral("; border-radius: ") + QString::number(Metrics::btn_radius) +
+           QStringLiteral("px; color: ") + css_color(t.on_accent) +
+           QStringLiteral("; font-weight: 600; padding: 0 ") + QString::number(Metrics::btn_pad_x) +
+           QStringLiteral("px; }\n");
+    qss += QStringLiteral("QPushButton") + sel(kFkPrimary) +
+           QStringLiteral(":disabled { background: ") + css_color(t.control) +
+           QStringLiteral("; border-color: ") + css_color(t.control_bd) +
+           QStringLiteral("; color: ") + css_color(t.text3) + QStringLiteral("; }\n");
+    // 文字链（无框；accent 档与破坏性 err 档同形只换色 —— A39 ②「红只表达破坏性动作」）
+    const QString link_body = QStringLiteral(" { border: none; background: transparent; color: ");
+    qss += QStringLiteral("QToolButton") + sel(kFkLink) + QStringLiteral(", QPushButton") +
+           sel(kFkLink) + link_body + css_color(t.accent) +
+           QStringLiteral("; font-weight: 600; padding: 0 2px; }\n");
+    qss += QStringLiteral("QToolButton") + sel(kFkLink) + QStringLiteral(":disabled, QPushButton") +
+           sel(kFkLink) + QStringLiteral(":disabled { color: ") + css_color(t.text3) +
+           QStringLiteral("; }\n");
+    qss += QStringLiteral("QPushButton") + sel(kFkLinkDanger) + link_body + css_color(t.err) +
+           QStringLiteral("; font-weight: 600; padding: 0 2px; }\n");
+    qss += QStringLiteral("QPushButton") + sel(kFkLinkDanger) + QStringLiteral(":checked { ") +
+           QStringLiteral("background: ") + css_color(t.err_dim) +
+           QStringLiteral("; border-radius: ") + QString::number(t.radius_control) +
+           QStringLiteral("px; }\n");
+    qss += QStringLiteral("QPushButton") + sel(kFkLinkDanger) +
+           QStringLiteral(":disabled { color: ") + css_color(t.text3) + QStringLiteral("; }\n");
+    // 折叠行（chevron = 矢量图标 —— C3 禁字形）
+    qss += QStringLiteral("QToolButton") + sel(kFkFold) +
+           QStringLiteral(" { border: none; "
+                          "background: transparent; color: ") +
+           css_color(t.text2) + QStringLiteral("; font-weight: 600; }\n");
+    qss += QStringLiteral("QToolButton") + sel(kFkFold) + QStringLiteral(":disabled { color: ") +
+           css_color(t.text3) + QStringLiteral("; }\n");
+    // 说明/提示行（mockup .sub-hint）+ 非法值红字（ppInvalid 是独立语义属性，两条轨都认）
+    qss += QStringLiteral("QLabel") + sel(kFkHint) + QStringLiteral(", QLabel") + sel(kFkSub) +
+           QStringLiteral(" { color: ") + css_color(t.text3) + QStringLiteral("; }\n");
+    qss += QStringLiteral("QLabel") + sel(kFkHint) +
+           QStringLiteral("[ppInvalid=\"true\"] { color: ") + css_color(t.err) +
+           QStringLiteral("; }\n");
+    qss += QStringLiteral("QLabel[ppInvalid=\"true\"] { color: ") + css_color(t.err) +
+           QStringLiteral("; }\n");
+    return qss;
+}
+
+// ---------------------------------------------------------------------------
+// 滚动条（UX-11，M7-WP4）：SPA 式细浮层 —— 轨道透明、滑块 6px / r3、悬停加宽 8px 并加深；
+// 两端箭头钮/页槽全退役。**两主题一套、弹窗与主窗一套**（本函数是唯一出处：style_sheet() 与
+// dialogkit::dialog_qss 都引它，消除"弹窗 QSS 没有滚动条规则"的两套皮）。
+// ---------------------------------------------------------------------------
+inline QString scrollbar_qss(const Tokens &t) {
+    // 悬停加深：--ctl-bd 是半透明描边色，悬停态把它合成到窗口底（等价"更实"一档）
+    const QString handle = css_color(t.control_bd);
+    const QString handle_hover = css_color(composite(t.control_bd, t.window));
+    QString qss;
+    for (int o = 0; o < 2; ++o) {
+        const bool vert = (o == 0);
+        const QString orient = vert ? QStringLiteral("vertical") : QStringLiteral("horizontal");
+        const QString extent = vert ? QStringLiteral("width: ") +
+                                          QString::number(Metrics::scroll_w) + QStringLiteral("px")
+                                    : QStringLiteral("height: ") +
+                                          QString::number(Metrics::scroll_w) + QStringLiteral("px");
+        const QString extent_hover =
+            vert ? QStringLiteral("width: ") + QString::number(Metrics::scroll_w_hover) +
+                       QStringLiteral("px")
+                 : QStringLiteral("height: ") + QString::number(Metrics::scroll_w_hover) +
+                       QStringLiteral("px");
+        const QString min_extent =
+            vert ? QStringLiteral("min-height: ") + QString::number(Metrics::scroll_handle_min) +
+                       QStringLiteral("px")
+                 : QStringLiteral("min-width: ") + QString::number(Metrics::scroll_handle_min) +
+                       QStringLiteral("px");
+        const QString line_extent =
+            vert ? QStringLiteral("height: 0px") : QStringLiteral("width: 0px");
+        // 轨道透明（不占视觉）；滚动条本身只留 6px 滑块位
+        qss += QStringLiteral("QScrollBar:%1 { background: transparent; %2; margin: 0; }\n")
+                   .arg(orient, extent);
+        qss += QStringLiteral("QScrollBar:%1:hover { %2; }\n").arg(orient, extent_hover);
+        qss += QStringLiteral("QScrollBar::handle:%1 { background: ").arg(orient) + handle +
+               QStringLiteral("; border-radius: ") + QString::number(Metrics::scroll_radius) +
+               QStringLiteral("px; ") + min_extent + QStringLiteral("; }\n");
+        qss += QStringLiteral("QScrollBar::handle:%1:hover { background: ").arg(orient) +
+               handle_hover + QStringLiteral("; }\n");
+        qss += QStringLiteral("QScrollBar::add-line:%1, QScrollBar::sub-line:%1 { %2; background: "
+                              "none; border: none; }\n")
+                   .arg(orient, line_extent);
+        qss += QStringLiteral("QScrollBar::add-page:%1, QScrollBar::sub-page:%1 { background: "
+                              "transparent; }\n")
+                   .arg(orient);
+    }
+    return qss;
+}
+
+// 卡壳/卡题/hint（§4.3 r6 + §4.1 card；style_sheet 与各页自足口径共用一份）
+inline QString card_qss(const Tokens &t) {
+    QString qss;
+    qss += QStringLiteral("QFrame#pp-card { background: ") + css_color(t.card) +
+           QStringLiteral("; border: 1px solid ") + css_color(t.card_bd) +
+           QStringLiteral("; border-radius: ") + QString::number(t.radius_card) +
+           QStringLiteral("px; }\n");
+    qss += QStringLiteral("QLabel#pp-card-title { color: ") + css_color(t.text) +
+           QStringLiteral("; }\n");
+    qss += QStringLiteral("QLabel#pp-card-hint { color: ") + css_color(t.text3) +
+           QStringLiteral("; }\n");
+    return qss;
+}
+
+// ---------------------------------------------------------------------------
+// 页专规则（UX-6⑥，M7-WP4）：真正只属于某页的 QSS —— 按用户要求"在公共样式文件里开一个新的
+// 样式"，全部落在本文件（theme::xxx_qss），页内不再自己拼 QSS 字符串；每段注明**为何不能公共**
+// （只锚本页 objectName / 本页语义属性，公共化会误伤它页）。跨页同形规则已上提 field_qss。
+// ---------------------------------------------------------------------------
+
+// 元数据页专（生效对照 .tline / 搜索结果 / 地图 HUD / 分类 chip）：选择器只锚 pp-meta-* 与
+// 本页语义值（old/new/arrow/…），公共化会把"原值删除线"误加到别页同名词上 → 不能公共。
+inline QString page_meta_qss(const Tokens &t) {
+    const QString prop = QString::fromLatin1(kFkProperty);
+    const auto sel = [&prop](const char *value) {
+        return QStringLiteral("QLabel[%1=\"%2\"]").arg(prop, QString::fromLatin1(value));
+    };
+    const OverlayTokens &ov = overlay_tokens();
+    QString qss;
+    // 生效对照（mockup .tline）：原 = 删除线 + --txt2；新 = 强调色（.mod 时再叠强调边框）；
+    // 箭头/注释/来源 = --txt3；多选小表名 = --txt
+    qss += sel("old") + QStringLiteral(" { color: ") + css_color(t.text2) + QStringLiteral("; }\n");
+    qss +=
+        sel("new") + QStringLiteral(" { color: ") + css_color(t.accent) + QStringLiteral("; }\n");
+    qss += sel("arrow") + QStringLiteral(", ") + sel("note") + QStringLiteral(", ") +
+           sel("multi-more") + QStringLiteral(" { color: ") + css_color(t.text3) +
+           QStringLiteral("; }\n");
+    qss += sel("multi-name") + QStringLiteral(" { color: ") + css_color(t.text) +
+           QStringLiteral("; }\n");
+    // 空态一行（§8：中性灰说明；绝不警示色）
+    qss +=
+        sel("empty") + QStringLiteral(" { color: ") + css_color(t.text3) + QStringLiteral("; }\n");
+    // M6-T8 搜索区：结果列表 / 联想下拉（--ctl 底 + --ctl-bd 边 + r3；选中 = --acc-dim 底，
+    // 悬停 = --card-hi 底 —— 与卡片/控件同一套令牌）
+    const QString list_rule = QStringLiteral("QListWidget#pp-meta-gps-search-results, "
+                                             "QListWidget#pp-meta-gps-suggest");
+    qss += list_rule + QStringLiteral(" { background: ") + css_color(t.control) +
+           QStringLiteral("; border: 1px solid ") + css_color(t.control_bd) +
+           QStringLiteral("; border-radius: ") + QString::number(t.radius_control) +
+           QStringLiteral("px; color: ") + css_color(t.text) +
+           QStringLiteral("; outline: none; }\n");
+    qss += list_rule + QStringLiteral("::item { padding: 2px 4px; border-radius: ") +
+           QString::number(t.radius_control) + QStringLiteral("px; }\n");
+    qss += list_rule + QStringLiteral("::item:hover { background: ") + css_color(t.card_hi) +
+           QStringLiteral("; }\n");
+    qss += list_rule + QStringLiteral("::item:selected { background: ") + css_color(t.accent_dim) +
+           QStringLiteral("; color: ") + css_color(t.text) + QStringLiteral("; }\n");
+    // 结果行内文案（名称 = --txt；地址/距离 = --txt3）+ 地址回显行（--txt2）
+    qss += sel("result-name") + QStringLiteral(" { color: ") + css_color(t.text) +
+           QStringLiteral("; }\n");
+    qss += sel("result-addr") + QStringLiteral(", ") + sel("result-dist") +
+           QStringLiteral(" { color: ") + css_color(t.text3) + QStringLiteral("; }\n");
+    qss += sel("address") + QStringLiteral(" { color: ") + css_color(t.text2) +
+           QStringLiteral("; }\n");
+    // M6-T12 地图覆盖层（§5.3）：光标读数 chip + 「－/＋」缩放钮 —— **定位色固定**（overlay
+    // 令牌组：白底 α190 + 深灰字/图标，与 mapwidget 的版权行/图钉气泡同口径）：两者都压在地图
+    // 上（可能是影像/卫星/路网，明暗主题都可能落在其上），固定白底是两主题下都可读的唯一解。
+    qss += QStringLiteral("QLabel[") + prop + QStringLiteral("=\"map-hud\"] { background: ") +
+           QString::fromLatin1(ov.hud_bg) + QStringLiteral("; border-radius: ") +
+           QString::number(t.radius_control) + QStringLiteral("px; color: ") +
+           css_color(ov.hud_fg) + QStringLiteral("; padding: 1px 5px; }\n");
+    qss += QStringLiteral("QToolButton[") + prop + QStringLiteral("=\"map-zoom\"] { background: ") +
+           QString::fromLatin1(ov.hud_bg) + QStringLiteral("; border: 1px solid ") +
+           css_color(t.card_bd) + QStringLiteral("; border-radius: ") +
+           QString::number(t.radius_control) + QStringLiteral("px; }\n");
+    qss += QStringLiteral("QToolButton[") + prop +
+           QStringLiteral("=\"map-zoom\"]:hover { background: ") +
+           QString::fromLatin1(ov.hud_bg_hover) + QStringLiteral("; }\n");
+    qss += QStringLiteral("QToolButton[") + prop +
+           QStringLiteral("=\"map-zoom\"]:disabled { background: ") +
+           QString::fromLatin1(ov.hud_bg_dim) + QStringLiteral("; }\n");
+    // 分类 chip（与 formkit::ChipButton 同色同源：未选 = 透明底 + --ctl-bd；悬停 = --ctl 底；
+    // 选中 = --acc-dim 底 + --acc-bd 边 + --txt 字）
+    qss += QStringLiteral("QPushButton[") + prop +
+           QStringLiteral("=\"chip\"] { background: "
+                          "transparent; border: 1px solid ") +
+           css_color(t.control_bd) + QStringLiteral("; border-radius: ") +
+           QString::number(t.radius_control) + QStringLiteral("px; color: ") + css_color(t.text2) +
+           QStringLiteral("; padding: 0 9px; }\n");
+    qss += QStringLiteral("QPushButton[") + prop +
+           QStringLiteral("=\"chip\"]:hover { background: ") + css_color(t.control) +
+           QStringLiteral("; }\n");
+    qss += QStringLiteral("QPushButton[") + prop +
+           QStringLiteral("=\"chip\"]:checked { background: ") + css_color(t.accent_dim) +
+           QStringLiteral("; border-color: ") + css_color(t.accent_bd) +
+           QStringLiteral("; color: ") + css_color(t.text) + QStringLiteral("; }\n");
+    qss += QStringLiteral("QPushButton[") + prop + QStringLiteral("=\"chip\"]:disabled { color: ") +
+           css_color(t.text3) + QStringLiteral("; border-color: ") + css_color(t.control_bd) +
+           QStringLiteral("; }\n");
+    // 真警告（GPS 坐标无效）：A6 —— 原硬编码 0xcc8800 收口为 warn 令牌
+    qss += QStringLiteral("QLabel#gps_warning { color: ") + css_color(t.warn) +
+           QStringLiteral("; }\n");
+    qss += QStringLiteral("QWidget#pp-meta-content { background: transparent; }\n");
+    return qss;
+}
+
+// 输出页专（格式页签 / 「＋ 添加格式…」）：QTabBar 规则只服务本页页签（弹窗页签在 dialogkit
+// 另有 kTabUnderlinePx 档）→ 不能公共。
+inline QString page_output_qss(const Tokens &t) {
+    QString qss;
+    // 格式页签（mockup .dlg-tab：11.5/600 + 选中 = --txt 字 + 2px acc 下划线；页签行有分隔基线
+    // —— 修 2-21）。GUI-R2：QTabBar / QTabWidget 本体**必须显式透明** —— 否则各自吃 palette 的
+    // --ctl 底，在页签行画出两条 29px 灰带（设计稿这一行是白底 + 底部发丝线，没有任何色带）。
+    qss += QStringLiteral("QTabWidget#pp-format-tabs, QTabBar#pp-format-tabs { background: "
+                          "transparent; border: none; }\n");
+    qss += QStringLiteral("QTabBar { background: transparent; border: none; }\n");
+    qss +=
+        QStringLiteral("QTabWidget#pp-format-tabs::pane { border: none; border-top: 1px solid ") +
+        css_color(t.line) + QStringLiteral("; }\n");
+    qss += QStringLiteral("QTabBar::tab { background: transparent; color: ") + css_color(t.text2) +
+           QStringLiteral("; padding: 5px 12px 6px; margin-right: 2px; border: none; "
+                          "border-bottom: 2px solid transparent; font-weight: 600; }\n");
+    qss += QStringLiteral("QTabBar::tab:first { margin-left: ") +
+           QString::number(Metrics::card_pad_x) + QStringLiteral("px; }\n");
+    qss += QStringLiteral("QTabBar::tab:selected { color: ") + css_color(t.text) +
+           QStringLiteral("; border-bottom-color: ") + css_color(t.accent) +
+           QStringLiteral("; }\n");
+    qss += QStringLiteral("QTabBar::tab:hover { color: ") + css_color(t.text) +
+           QStringLiteral("; }\n");
+    // 「＋ 添加格式…」（修 2-21：可用态 = 文字链式 accent，不再灰字像禁用）
+    qss += QStringLiteral("QToolButton#pp-add-format { border: none; background: transparent; "
+                          "color: ") +
+           css_color(t.accent) +
+           QStringLiteral("; padding: 0 10px; font-weight: 600; border-radius: ") +
+           QString::number(Metrics::btn_radius) + QStringLiteral("px; }\n");
+    qss += QStringLiteral("QToolButton#pp-add-format:hover { background: ") +
+           css_color(t.accent_dim) + QStringLiteral("; }\n");
+    qss += QStringLiteral("QToolButton#pp-add-format:disabled { color: ") + css_color(t.text3) +
+           QStringLiteral("; background: transparent; }\n");
+    // 容器透明（窗口底渐变透出）
+    qss += QStringLiteral("QWidget#pp-output-content { background: transparent; }\n");
+    qss += QStringLiteral("QScrollArea#pp-output-scroll { background: transparent; }\n");
+    qss += QStringLiteral("QScrollArea#pp-output-scroll > QWidget > QWidget { background: "
+                          "transparent; }\n");
+    return qss;
+}
+
+// 运行页专（ppRun 语义色阶 / 表头 / 日志尾框）：ppRun 是本页的行语义属性（表头/组名/输出名/
+// 原因/摘要五档），公共化会与别页 QLabel 撞值 → 不能公共。
+inline QString page_run_qss(const Tokens &t) {
+    const QString run = QStringLiteral("ppRun");
+    const auto run_rule = [&run](const char *value, const QColor &color) {
+        return QStringLiteral("QLabel[") + run + QStringLiteral("=\"") +
+               QString::fromLatin1(value) + QStringLiteral("\"] { color: ") + css_color(color) +
+               QStringLiteral("; }\n");
+    };
+    QString qss;
+    // 表头/名称/原因/摘要（静态档：随页重建换色，无需 C++ 侧逐值写色）
+    qss += run_rule("thead", t.text3);
+    qss += run_rule("gname", t.text);
+    qss += run_rule("oname", t.text2);
+    qss += run_rule("reason", t.err);
+    qss += run_rule("summary", t.text2);
+    // 表头下沿（表头是 QFrame；骨架 QSS 只管 pp-card）
+    qss += QStringLiteral("QFrame#pp-run-thead { border-bottom: 1px solid ") +
+           css_color(t.card_bd) + QStringLiteral("; background: transparent; }\n");
+    // 日志尾框（等宽内容由控件字体承担；框 = 卡内高亮底 + 描边 + 画布圆角档）
+    qss += QStringLiteral("QFrame#pp-run-log-box { background: ") + css_color(t.card_hi) +
+           QStringLiteral("; border: 1px solid ") + css_color(t.card_bd) +
+           QStringLiteral("; border-radius: ") + QString::number(Metrics::stage_radius) +
+           QStringLiteral("px; }\n");
+    // 容器透明（窗口底渐变透出）
+    qss += QStringLiteral("QWidget#pp-run-content { background: transparent; }\n");
+    qss += QStringLiteral("QScrollArea#pp-run-scroll { background: transparent; }\n");
+    qss += QStringLiteral("QScrollArea#pp-run-scroll > QWidget > QWidget { background: "
+                          "transparent; }\n");
+    return qss;
+}
+
+// 预览面板专（舞台浮层：徽标 / 缩放条 / 空态 / 翻图钮 / 热键条）：全部压在照片上的浮层，
+// 配色走 overlay 令牌组（不随主题变）→ 与主题化控件规则混在 style_sheet 里会互相污染 → 不能公共。
+inline QString preview_panel_qss(const Tokens &t) {
+    const OverlayTokens &ov = overlay_tokens();
+    QString qss;
+    qss += QStringLiteral("QLabel#pp-preview-badge { color: %1; background: %2; border: 1px solid "
+                          "%3; border-radius: %4px; padding: %5px %6px; }\n")
+               .arg(QString::fromLatin1(ov.pv_fg), QString::fromLatin1(ov.pv_bg),
+                    QString::fromLatin1(ov.pv_bd))
+               .arg(Metrics::overlay_radius)
+               .arg(Metrics::overlay_pad_y)
+               .arg(Metrics::overlay_pad_x);
+    // 缩放控件组（§8「悬浮右下单一控件组」；v2 .zoombar）：深色半透明底 + 1px 描边 + r4；
+    // 各钮 28×28 透明底、悬停显底、当前模式档由 ppZoomActive 高亮（无勾选语义，修 1-19）
+    qss += QStringLiteral("QWidget#pp-preview-zoombar { background: %1; border: 1px solid %2; "
+                          "border-radius: %3px; }\n")
+               .arg(QString::fromLatin1(ov.zoombar_bg), QString::fromLatin1(ov.zoombar_bd))
+               .arg(Metrics::zoombar_radius);
+    qss += QStringLiteral("QToolButton#pp-preview-zoom-out, QToolButton#pp-preview-zoom-in, "
+                          "QToolButton#pp-preview-zoom-fit, QToolButton#pp-preview-zoom-1to1 { "
+                          "background: transparent; border: none; border-radius: %1px; }\n")
+               .arg(Metrics::icon_btn_radius);
+    qss += QStringLiteral(
+               "QToolButton#pp-preview-zoom-out:hover, QToolButton#pp-preview-zoom-in:hover, "
+               "QToolButton#pp-preview-zoom-fit:hover, "
+               "QToolButton#pp-preview-zoom-1to1:hover { background: %1; }\n")
+               .arg(QString::fromLatin1(ov.zoom_hover_bg));
+    qss +=
+        QStringLiteral("QToolButton#pp-preview-zoom-fit[%1=\"true\"], "
+                       "QToolButton#pp-preview-zoom-1to1[%1=\"true\"] { background: %2; }\n")
+            .arg(QString::fromLatin1(kZoomActiveProperty), QString::fromLatin1(ov.zoom_active_bg));
+    // A39 ④：模式钮 = 文字形态 → 字色取 .zoombar button（与 −/＋ 图标同色），左右内距 = v2
+    // .zoombar 的 `padding:0 6px`（钮宽已按文本 + 内距定死，此处只补色/内距）。
+    qss += QStringLiteral("QToolButton#pp-preview-zoom-fit, QToolButton#pp-preview-zoom-1to1 { "
+                          "color: %1; padding: 0 %2px; }\n")
+               .arg(QString::fromLatin1(ov.zoombar_fg))
+               .arg(Metrics::zoom_text_btn_pad_x);
+    qss += QStringLiteral("QFrame#pp-preview-zoom-sep { background: %1; border: none; }\n")
+               .arg(QString::fromLatin1(ov.zoom_sep_bg));
+    qss += QStringLiteral("QLabel#pp-preview-zoom-level { color: %1; }\n")
+               .arg(QString::fromLatin1(ov.zoom_level_fg));
+    // 左下操作提示（§8 逐字）与空态（§8：图标 + 引导语；修 1-16）
+    qss += QStringLiteral("QLabel#pp-preview-hint { color: %1; }\n")
+               .arg(QString::fromLatin1(ov.stage_hint_fg));
+    qss += QStringLiteral("QLabel#pp-preview-empty-text { color: %1; }\n")
+               .arg(QString::fromLatin1(ov.empty_text_fg));
+    // 翻图钮 28×28（修 1-21）：R4 图标钮样式（悬停显底；禁用 = 灰图标，与打标 chip 同档禁用）
+    qss += QStringLiteral("QToolButton#pp-preview-prev, QToolButton#pp-preview-next { color: %1; "
+                          "background: %2; border: 1px solid %3; border-radius: %4px; }\n"
+                          "QToolButton#pp-preview-prev:hover, QToolButton#pp-preview-next:hover { "
+                          "background: %5; color: %6; }\n")
+               .arg(css_color(t.text2), css_color(t.control), css_color(t.control_bd))
+               .arg(Metrics::icon_btn_radius)
+               .arg(css_color(t.control), css_color(t.text));
+    qss += QStringLiteral("QToolButton#pp-preview-prev:disabled, "
+                          "QToolButton#pp-preview-next:disabled { color: %1; }\n")
+               .arg(css_color(t.text3));
+    qss += QStringLiteral("QLabel#pp-preview-pos, QLabel#pp-preview-name, "
+                          "QLabel#pp-preview-keyhint-label { color: %1; }\n")
+               .arg(css_color(t.text3));
+    // A17（T11）：打标 chip 的形态 = formkit::ChipButton 自绘（键帽 13×13 r2 + 文字；底色/描边/
+    // 禁用态都在 formkit 内取 tokens）→ 这里不再有 chip 的 QSS 双实现；只为**分隔线**与
+    // 「清除」文字链补两条规则（修 1-20：清除是破坏性动作，与打标 chip 用分隔线隔开）。
+    qss += QStringLiteral("QFrame#pp-preview-key-sep { background: %1; border: none; }\n")
+               .arg(css_color(t.control_bd));
+    qss += QStringLiteral("QToolButton#pp-preview-clear { color: %1; background: transparent; "
+                          "border: none; padding: 0 %2px; }\n"
+                          "QToolButton#pp-preview-clear:hover { color: %3; }\n"
+                          "QToolButton#pp-preview-clear:disabled { color: %4; }\n")
+               .arg(css_color(t.text3))
+               .arg(Metrics::zoom_text_btn_pad_x)
+               .arg(css_color(t.text2), css_color(t.text3));
+    qss += QStringLiteral("QLabel#pp-preview-keyhint-label:disabled { color: %1; }\n")
+               .arg(css_color(t.text3));
+    return qss;
+}
+
+// ---------------------------------------------------------------------------
+// 令牌重放（I6 / R-064，M7-WP4）：自绘控件持有令牌副本，主题切换必须逐个 set_tokens ——
+// 此前 paramform / page_output / settings_dialog 三处各写一份遍历且**都漏了 formkit 的
+// Combo/Spin/DSpin 箭头**（R-064：主题切换后箭头残留旧主题色）。本处单点扫树重放：
+//   * 实现 theme::Tokenized 的自绘控件（formkit 全族）逐个 set_tokens；
+//   * 挂 kFk*/kPill*/kMod*/kStatusTone 动态属性的控件 repolish（属性选择器重新求值）。
+// 调用方（页面/弹窗/paramform）只调本函数一次，不再自持遍历。
+// ---------------------------------------------------------------------------
+struct Tokenized {
+    virtual ~Tokenized() = default;
+    virtual void set_tokens(const Tokens &t) = 0;
+};
+
+inline void replay_tokens(QWidget *root, const Tokens &t) {
+    if (root == nullptr)
+        return;
+    const QList<QWidget *> widgets = root->findChildren<QWidget *>();
+    for (QWidget *w : widgets) {
+        if (auto *tz = dynamic_cast<Tokenized *>(w))
+            tz->set_tokens(t);
+    }
+    // 属性钩子控件：QSS 属性选择器在 unpolish/polish 后重新求值（窗口样式表变更时 Qt 会
+    // 自动重算；页面自设样式表的场景由本处兜底）
+    static const char *const kHookProps[] = {kFkProperty, kPillProperty, kModProperty,
+                                             kStatusToneProperty};
+    for (QWidget *w : widgets) {
+        bool hooked = false;
+        for (const char *prop : kHookProps) {
+            if (w->property(prop).isValid()) {
+                hooked = true;
+                break;
+            }
+        }
+        if (hooked)
+            repolish(w);
+    }
+    if (auto *tz = dynamic_cast<Tokenized *>(root))
+        tz->set_tokens(t);
+}
+
 // formkit（C2）辅助件与数值控件的 QSS（M5-T2 加性扩展，登记见报告）。
 //   * 标签轨 / kv 值 / 单位槽 / 范围注释 / 勾选文字：只给**颜色**（字号与对齐由 C++ 侧
 //     theme::font(...) + setAlignment 落地 —— QSS 的 font-size 只吃整数，§4.2 的 11.5/9.5/10.5
@@ -754,7 +1268,6 @@ inline QString formkit_qss(const Tokens &t) {
     QString qss;
     qss += label_rule(kFkLabel, t.text2);
     qss += label_rule(kFkValue, t.text);
-    qss += label_rule(kFkCheck, t.text);
     qss += label_rule(kFkUnit, t.text3);
     qss += label_rule(kFkNote, t.text3);
     const QString spin =
@@ -806,12 +1319,16 @@ inline QString formkit_qss(const Tokens &t) {
            QStringLiteral("; border: 1px solid ") + css_color(t.control_bd) +
            QStringLiteral("; border-radius: ") + QString::number(t.radius_control) +
            QStringLiteral("px; color: ") + css_color(t.text) +
-           QStringLiteral("; padding: 0 8px; padding-right: 26px; }\n");
+           // R-270：盒内距令牌化（combo_pad_x）；值区右内距 = 箭头位宽 combo_arrow_slot ——
+           // 原「padding-right: 26px 硬编码 vs 箭头位 24 计算值」两值漂移随本行归一（同源取值）。
+           QStringLiteral("; padding: 0 ") + QString::number(Metrics::combo_pad_x) +
+           QStringLiteral("px; padding-right: ") + QString::number(Metrics::combo_arrow_slot) +
+           QStringLiteral("px; }\n");
     qss += combo + QStringLiteral(":disabled { color: ") + css_color(t.text3) +
            QStringLiteral("; }\n");
-    // 箭头位 24px（= combo_arrow_px×2 + 8）：只给几何，不画分隔线/按钮底
+    // 箭头位（= combo_arrow_slot = combo_arrow_px×2 + 8）：只给几何，不画分隔线/按钮底
     qss += combo + QStringLiteral("::drop-down { border: none; background: transparent; width: ") +
-           QString::number(Metrics::combo_arrow_px * 2 + 8) + QStringLiteral("px; }\n");
+           QString::number(Metrics::combo_arrow_slot) + QStringLiteral("px; }\n");
     qss += combo + QStringLiteral("::down-arrow { image: none; width: 0px; height: 0px; }\n");
     // 下拉**弹层**（GUI-R2 举一反三：此前零规则 = 平台默认弹出列表，与本体两套皮）
     qss += combo + QStringLiteral(" QAbstractItemView { background: ") + css_color(t.card) +
@@ -875,13 +1392,8 @@ inline QString style_sheet(const Tokens &t) {
                           "background: transparent; border: none; color: ") +
            css_color(t.icon_disabled_fg) + QStringLiteral("; }\n");
     // 卡片（§4.3 r6 + --card-bd 描边；§4.1 shadow 由 ui 侧 QGraphicsDropShadowEffect 落地）
-    qss += QStringLiteral("QFrame#pp-card { background: ") + card +
-           QStringLiteral("; border: 1px solid ") + card_bd + QStringLiteral("; border-radius: ") +
-           radius_card + QStringLiteral("px; }\n");
-    qss += QStringLiteral("QLabel#pp-card-title { color: ") + css_color(t.text) +
-           QStringLiteral("; }\n");
-    qss += QStringLiteral("QLabel#pp-card-hint { color: ") + css_color(t.text3) +
-           QStringLiteral("; }\n");
+    // UX-6⑥：卡壳/卡题/hint 三规则收口 card_qss（与各页自足口径同一份）
+    qss += card_qss(t);
     // 徽章 pill（§4.1 末行 + R4 高 16 r3）：色调全表
     qss += pill_qss(t);
     // 预览舞台（§4.1 画布底 #16181d 不随主题变 + §4.3 画布 r4）
@@ -946,29 +1458,9 @@ inline QString style_sheet(const Tokens &t) {
            QStringLiteral("; }\n");
     // splitter 手柄 = 列间距（§4.3 卡间距 8），透明不抢视觉
     qss += QStringLiteral("QSplitter#pp-splitter::handle { background: transparent; }\n");
-    // 滚动条（GUI-R2 举一反三：审查 1-50 就点过名，此前**零 QSS 规则** = 平台默认复古样式）。
-    // 令牌化：细轨（10px）+ 圆角滑块（--ctl-bd）+ 隐藏两端箭头钮/页槽。
-    for (int o = 0; o < 2; ++o) {
-        const bool vert = (o == 0);
-        const QString orient = vert ? QStringLiteral("vertical") : QStringLiteral("horizontal");
-        const QString extent =
-            vert ? QStringLiteral("width: 10px") : QStringLiteral("height: 10px");
-        const QString min_extent =
-            vert ? QStringLiteral("min-height: 24px") : QStringLiteral("min-width: 24px");
-        const QString line_extent =
-            vert ? QStringLiteral("height: 0px") : QStringLiteral("width: 0px");
-        qss += QStringLiteral("QScrollBar:%1 { background: transparent; %2; margin: 0; }\n")
-                   .arg(orient, extent);
-        qss += QStringLiteral("QScrollBar::handle:%1 { background: ").arg(orient) +
-               css_color(t.control_bd) + QStringLiteral("; border-radius: 5px; ") + min_extent +
-               QStringLiteral("; }\n");
-        qss += QStringLiteral("QScrollBar::add-line:%1, QScrollBar::sub-line:%1 { %2; background: "
-                              "none; border: none; }\n")
-                   .arg(orient, line_extent);
-        qss += QStringLiteral("QScrollBar::add-page:%1, QScrollBar::sub-page:%1 { background: "
-                              "transparent; }\n")
-                   .arg(orient);
-    }
+    // 滚动条（GUI-R2 举一反三起点；UX-11 换锚为 SPA 式细浮层）：唯一出处 = theme::scrollbar_qss
+    // （轨道透明 / 滑块 6px / 悬停 8px；两主题一套、弹窗与主窗一套）。
+    qss += scrollbar_qss(t);
     // GUI-R2 举一反三：平台默认皮的令牌化（此前这四类**零 QSS 规则**）
     // ① 右键/上下文菜单（分类打标、筛选、参数、异常列表 …）
     qss += QStringLiteral("QMenu { background: ") + css_color(t.card) +
@@ -1023,6 +1515,8 @@ inline QString style_sheet(const Tokens &t) {
     qss += QStringLiteral("QGroupBox::indicator { width: 16px; height: 16px; }\n"); // 勾选同走矢量
     // formkit（C2）行内辅助件 + R4 数值控件（M5-T2 加性扩展；选择器只认 ppFk）
     qss += formkit_qss(t);
+    // 字段类控件共享规则（UX-6④⑥：输入/按钮/文字链/折叠/提示，选择器只认 ppFk）
+    qss += field_qss(t);
     // 改动值 .mod（动态属性钩子）
     qss += mod_qss(t);
     return qss;

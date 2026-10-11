@@ -21,9 +21,11 @@
 //     * 缩略图（make_thumbnail，M1b 冻结）：resample（双线性）+ ThumbImage（紧凑 vector）；
 //     * 预览（decode_preview/decode_preview_detailed/PreviewCache）：LANCZOS3 + QImage。
 //   两条通道共用同一份「通道展开 / 灰度→RGB / alpha→白底 / 不放大」实现（expand_to_rgba8 +
-//   fit_target），只有滤波器和输出容器不同；共享内嵌预览候选规则（find_preview，≥64px）。
+//   fit_target），只有滤波器和输出容器不同；内嵌预览候选规则共用 find_preview，但**门槛分通道**
+//   （UX-3：缩略图 64px / 预览 1600px，见 core/thumbs.h）。
 //   §6.1 细则的落地口径与边界（逐条对应，见 core/thumbs.h 的落地处置块）：
-//     * 内嵌预览优先，候选门槛 = kPreviewEmbeddedMinLongEdge（64px，与缩略图同值）；
+//     * 内嵌预览优先，候选门槛 = kPreviewEmbeddedMinLongEdge（预览通道 1600px；缩略图通道
+//       = kThumbEmbeddedMinLongEdge 64px，M1b 冻结行为零变化）；
 //     * 短于 max_px 的内嵌预览按原生尺寸呈现（**不放大**）；≥ max_px 时 LANCZOS3 精确降采样；
 //     * 无内嵌预览 → 复用**既有冻结的全解码入口** decode_float（读整图 float32；管线与预览
 //       不会出现两套解码口径）→ LANCZOS3 降采样（实测：48MP 全解码 ≈ 0.33s，见 test_thumbs）；
@@ -64,9 +66,10 @@
 namespace pp {
 namespace {
 
-// §2.1 step 2: only embedded previews whose long edge is >= 64 px are considered.
-// 0.3.0：数字的唯一来源是冻结头里的 kPreviewEmbeddedMinLongEdge（缩略图与预览共用一个门槛）。
-constexpr std::size_t kMinPreviewLongEdge = static_cast<std::size_t>(kPreviewEmbeddedMinLongEdge);
+// §2.1 step 2: only embedded previews whose long edge is >= the channel threshold are considered.
+// UX-3（M7-WP4）：门槛**分通道**——缩略图通道 kThumbEmbeddedMinLongEdge（64，M1b 冻结行为
+// 零变化）；预览通道 kPreviewEmbeddedMinLongEdge（1600：内嵌预览小于 1600 一律放弃，走整图
+// float32 解码降采样）。两个数字的唯一来源仍是 core/thumbs.h。
 
 struct TargetSize {
     int w = 0;
@@ -217,16 +220,17 @@ bool preview_bytes_to_thumb(const void *data, std::size_t size, const std::strin
     return to_rgba8(buf, target, out);
 }
 
-// §2.1 step 2: largest embedded preview with a long edge >= 64 px. Exiv2 fills width/height
-// by decoding the preview itself, so 0 (unknown) means "cannot check the rule" -> skip; the
-// full decode below still produces a valid thumbnail in that case.
-bool find_preview(const Exiv2::Image &image, Exiv2::PreviewProperties &out) {
+// §2.1 step 2: largest embedded preview with a long edge >= `min_long_edge` px (per-channel
+// threshold, UX-3). Exiv2 fills width/height by decoding the preview itself, so 0 (unknown)
+// means "cannot check the rule" -> skip; the full decode below still produces a valid result.
+bool find_preview(const Exiv2::Image &image, Exiv2::PreviewProperties &out,
+                  std::size_t min_long_edge) {
     const Exiv2::PreviewManager manager(image);
     const Exiv2::PreviewPropertiesList props = manager.getPreviewProperties(); // ascending
     for (auto it = props.rbegin(); it != props.rend(); ++it) {
         if (it->width_ == 0 || it->height_ == 0)
             continue;
-        if (std::max(it->width_, it->height_) < kMinPreviewLongEdge)
+        if (static_cast<std::size_t>(std::max(it->width_, it->height_)) < min_long_edge)
             continue;
         out = *it;
         return true;
@@ -236,7 +240,8 @@ bool find_preview(const Exiv2::Image &image, Exiv2::PreviewProperties &out) {
 
 // Returns true only when a usable thumbnail was produced from an embedded preview; every
 // failure (no Exiv2 support for the container, no preview, undecodable preview) falls
-// through silently to the full decode (step 3).
+// through silently to the full decode (step 3). 门槛 = kThumbEmbeddedMinLongEdge（UX-3：
+// 缩略图通道 64px，M1b 冻结行为零变化）。
 bool try_embedded_preview(const std::filesystem::path &src, int target, ThumbImage &out) {
     try {
         Exiv2::Image::UniquePtr image = Exiv2::ImageFactory::open(src.string());
@@ -245,7 +250,7 @@ bool try_embedded_preview(const std::filesystem::path &src, int target, ThumbIma
         image->readMetadata();
 
         Exiv2::PreviewProperties props;
-        if (!find_preview(*image, props))
+        if (!find_preview(*image, props, static_cast<std::size_t>(kThumbEmbeddedMinLongEdge)))
             return false;
 
         const Exiv2::PreviewManager manager(*image);
@@ -326,8 +331,10 @@ bool scale_to_rgba8(const OIIO::ImageBuf &src, int max_px, QImage &out) {
     return true;
 }
 
-// §6.1「先内嵌预览」：Exiv2 候选（find_preview，≥64px 取最大）经 OIIO 内存读为 float32 后
-// 走同一条 LANCZOS3/不放大/白底路径。任何失败（无候选/容器不支持/预览不可解）静默回退全解码。
+// §6.1「先内嵌预览」：Exiv2 候选（find_preview，门槛 = kPreviewEmbeddedMinLongEdge = 1600，
+// UX-3）经 OIIO 内存读为 float32 后走同一条 LANCZOS3/不放大/白底路径。任何失败（无候选/
+// 容器不支持/预览不可解/候选小于 1600px）静默回退全解码 —— from_embedded 只在真用了
+// 足够大的内嵌图时才置真（由本函数返回值决定）。
 bool try_embedded_preview_image(const std::filesystem::path &src, int max_px, QImage &out) {
     try {
         Exiv2::Image::UniquePtr image = Exiv2::ImageFactory::open(src.string());
@@ -336,7 +343,7 @@ bool try_embedded_preview_image(const std::filesystem::path &src, int max_px, QI
         image->readMetadata();
 
         Exiv2::PreviewProperties props;
-        if (!find_preview(*image, props))
+        if (!find_preview(*image, props, static_cast<std::size_t>(kPreviewEmbeddedMinLongEdge)))
             return false;
 
         const Exiv2::PreviewManager manager(*image);

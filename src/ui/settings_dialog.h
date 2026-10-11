@@ -57,7 +57,8 @@ inline constexpr int kFocusRingPad = 2; // 环画在控件盒外 2px（不压控
 
 // 控件选择器词汇（与 ui/page_output.cpp 的 ppField 取值同源：input / combo / button /
 // primary / hint。弹窗内同义控件用同一组钩子 → 三弹窗与主页面的控件语言一致）。
-inline constexpr const char *kFieldProperty = "ppField";
+inline constexpr const char *kFieldProperty =
+    theme::kFkProperty; // UX-6⑤/R-054：钩子轨并入 ppFk（旧 ppField 轨退役）
 inline constexpr const char *kFieldInput = "input";
 inline constexpr const char *kFieldCombo = "combo";
 inline constexpr const char *kFieldButton = "button";
@@ -126,7 +127,8 @@ private:
 
     QList<Tab *> tabs_;
     int current_ = -1;
-    theme::Tokens tokens_ = theme::tokens(theme::ThemeMode::Dark);
+    // UX-12（M7-WP4）：初值取当前生效档（原硬编码 Dark → 亮色下选中标题画暗 text 近乎不可见）
+    theme::Tokens tokens_ = theme::tokens(theme::preferred_theme_mode());
 };
 
 // 焦点环（§11）：跟随宿主的焦点控件，在其外 2px 自绘 accent 1px 圆角描边。
@@ -148,7 +150,8 @@ private:
     void sync(); // 焦点/几何变化 → 重定位（隐藏：焦点不在本宿主内）
     QWidget *host_ = nullptr;
     QWidget *target_ = nullptr;
-    theme::Tokens tokens_ = theme::tokens(theme::ThemeMode::Dark);
+    // UX-12（M7-WP4）：初值取当前生效档（原硬编码 Dark → 亮色下选中标题画暗 text 近乎不可见）
+    theme::Tokens tokens_ = theme::tokens(theme::preferred_theme_mode());
 };
 
 // 26px 按钮工厂（R4 按钮高 26；主按钮实心 acc + acc-on 字 + 主操作居右，次按钮描边）。

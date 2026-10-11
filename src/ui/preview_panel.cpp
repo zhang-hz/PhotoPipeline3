@@ -117,28 +117,29 @@ constexpr int kEmptyGap = 8;
 // #0d0f12（比画布底 #16181d 略深一档）、1px 浅描边勾出照片区轮廓、r2。
 constexpr int kPhotoMatPad = 6;
 constexpr int kPhotoMatRadius = 2;
-// 舞台内元素是**主题无关**的深色舞台配色（mockup 固定值；舞台底 #16181d = tokens.stage_bg）
-const char *const kOverlayFg = "#dfe6ec";            // .pv-badge 字色
-const char *const kOverlayBg = "rgba(10,12,16,62%)"; // rgba(10,12,16,.62)
-const char *const kOverlayBd = "rgba(255,255,255,12%)";
-const char *const kZoomBarBg = "rgba(18,20,26,85%)";      // .zoombar{background:rgba(18,20,26,.85)}
-const char *const kZoomBarBd = "rgba(255,255,255,13%)";   // .zoombar 描边
-const char *const kZoomBarFg = "#c9ccd4";                 // .zoombar button{color:#c9ccd4}
-const char *const kZoomLevelFg = "#ececf0";               // .zoombar{color:#ececf0}
-const char *const kZoomHoverBg = "rgba(255,255,255,12%)"; // .zoombar button:hover
-const char *const kZoomActiveBg = "rgba(255,255,255,18%)"; // 模式钮的当前档高亮（见 zoom 注释）
-const char *const kZoomSepBg = "rgba(255,255,255,15%)";    // .zoombar .sep
-const char *const kStageHintFg =
-    "rgba(236,236,240,50%)"; // .canvas .hint{color:rgba(236,236,240,.5)}
-const char *const kEmptyIconFg = "rgba(223,230,236,60%)"; // 空态图标（深色舞台上的中性浅色）
-const char *const kEmptyTextFg = "rgba(236,236,240,78%)"; // 空态引导语（比 .canvas .hint 更可读）
-const char *const kPhotoMatBg = "#0d0f12";                // v1 舞台底色调（比画布底 #16181d 略深）
+// 舞台内元素是**主题无关**的深色舞台配色（mockup 固定值；舞台底 #16181d = tokens.stage_bg）。
+// UX-6⑦（M7-WP4）：写死色全部收编 theme.h 的 **overlay 令牌组**（覆盖层压在照片上，不随主题
+// 变 —— 值逐字不变，取值单源在 theme::overlay_tokens()）；下方别名只作本页短名转发。
+const char *const kOverlayFg = theme::overlay_tokens().pv_fg;
+const char *const kOverlayBg = theme::overlay_tokens().pv_bg;
+const char *const kOverlayBd = theme::overlay_tokens().pv_bd;
+const char *const kZoomBarBg = theme::overlay_tokens().zoombar_bg;
+const char *const kZoomBarBd = theme::overlay_tokens().zoombar_bd;
+const char *const kZoomBarFg = theme::overlay_tokens().zoombar_fg;
+const char *const kZoomLevelFg = theme::overlay_tokens().zoom_level_fg;
+const char *const kZoomHoverBg = theme::overlay_tokens().zoom_hover_bg;
+const char *const kZoomActiveBg = theme::overlay_tokens().zoom_active_bg;
+const char *const kZoomSepBg = theme::overlay_tokens().zoom_sep_bg;
+const char *const kStageHintFg = theme::overlay_tokens().stage_hint_fg;
+const char *const kEmptyIconFg = theme::overlay_tokens().empty_icon_fg;
+const char *const kEmptyTextFg = theme::overlay_tokens().empty_text_fg;
+const char *const kPhotoMatBg = theme::overlay_tokens().photo_mat_bg;
 // 衬垫/空态图标的 QColor 侧（QColor 不解析 CSS 的 rgba() 字面量，故与 QSS 串并列单列）
-const QColor kPhotoMatBdColor(255, 255, 255, 26); // = rgba(255,255,255,10%)（10% × 255 ≈ 26）
-const QColor kEmptyIconColor(223, 230, 236, 153); // = rgba(223,230,236,60%)
+const QColor &kPhotoMatBdColor = theme::overlay_tokens().photo_mat_bd;
+const QColor &kEmptyIconColor = theme::overlay_tokens().empty_icon;
 // 缩放模式钮的「当前档」动态属性钩子（ppZoomActive）：**不是 checked**（修 1-19：缩放模式/比例
 // 切换由普通按钮承担，无勾选语义）；QSS 只按属性值换底色。
-constexpr const char *kZoomActiveProperty = "ppZoomActive";
+constexpr const char *kZoomActiveProperty = theme::kZoomActiveProperty; // UX-6⑦：单源在 theme.h
 // 缩放阶梯（§8 缩放条「− | 100% | ＋」；滚轮/± 钮在同一张梯子上步进 —— 100 档 = 1:1 同值）
 constexpr int kZoomLadder[] = {10, 25, 50, 75, 100, 150, 200, 400, 800};
 constexpr int kZoomLadderCount = int(sizeof(kZoomLadder) / sizeof(kZoomLadder[0]));
@@ -150,44 +151,11 @@ QString T(const char *s) { return QCoreApplication::translate("PreviewPanel", s)
 // 258/537/601 不得被中栏内容的最小宽顶开）。
 // NOTE：mainwindow.cpp 的同名助手在匿名 namespace 内、跨 TU 不可见；抽出公共头会动清单外文件面，
 //       故本面板自带一份等价的小实现。
-class ElideLabel : public QLabel {
+// R-320（M7-WP4）：第 7 份拷贝收敛到 formkit::ElidedLabel —— 本面板特有的
+// "minimumSizeHint 宽压到 0"（超长文件名不撑宽中栏）由 squeeze 构造档承载，实现只剩一份。
+class ElideLabel : public formkit::ElidedLabel {
 public:
-    explicit ElideLabel(QWidget *parent = nullptr) : QLabel(parent) {}
-    void set_full_text(const QString &text) {
-        full_ = text;
-        updateGeometry();
-        apply_elide();
-    }
-    QString full_text() const { return full_; }
-    QSize sizeHint() const override {
-        const QSize base = QLabel::sizeHint();
-        if (full_.isEmpty())
-            return base;
-        return QSize(fontMetrics().horizontalAdvance(full_) + 2, base.height());
-    }
-    QSize minimumSizeHint() const override {
-        return QSize(0, QLabel::minimumSizeHint().height()); // 可压到 0（靠 set_full_text 的省略）
-    }
-
-protected:
-    void resizeEvent(QResizeEvent *event) override {
-        QLabel::resizeEvent(event);
-        apply_elide();
-    }
-
-private:
-    void apply_elide() {
-        if (full_.isEmpty()) {
-            QLabel::clear();
-            return;
-        }
-        if (width() <= 0) {
-            QLabel::setText(full_);
-            return;
-        }
-        QLabel::setText(fontMetrics().elidedText(full_, Qt::ElideRight, std::max(0, width())));
-    }
-    QString full_;
+    explicit ElideLabel(QWidget *parent = nullptr) : formkit::ElidedLabel(parent, true) {}
 };
 
 // 热键提示里的 chip / 名称（§9.3 禁折行）：自然宽度用 sizeHint，但允许被压缩到 0
@@ -958,82 +926,10 @@ void PreviewPanel::Impl::build_ui() {
 }
 
 void PreviewPanel::Impl::apply_style() {
-    // 只给本面板自有的 pp-* 钩子写样式（舞台框 #pp-preview-stage 归 ui/theme.h 的骨架 QSS）。
-    QString qss;
-    qss += QStringLiteral("QLabel#pp-preview-badge { color: %1; background: %2; border: 1px solid "
-                          "%3; border-radius: %4px; padding: %5px %6px; }\n")
-               .arg(QString::fromLatin1(kOverlayFg), QString::fromLatin1(kOverlayBg),
-                    QString::fromLatin1(kOverlayBd))
-               .arg(kOverlayRadius)
-               .arg(kOverlayPadY)
-               .arg(kOverlayPadX);
-    // 缩放控件组（§8「悬浮右下单一控件组」；v2 .zoombar）：深色半透明底 + 1px 描边 + r4；
-    // 各钮 28×28 透明底、悬停显底、当前模式档由 ppZoomActive 高亮（无勾选语义，修 1-19）
-    qss += QStringLiteral("QWidget#pp-preview-zoombar { background: %1; border: 1px solid %2; "
-                          "border-radius: %3px; }\n")
-               .arg(QString::fromLatin1(kZoomBarBg), QString::fromLatin1(kZoomBarBd))
-               .arg(kZoomBarRadius);
-    qss += QStringLiteral("QToolButton#pp-preview-zoom-out, QToolButton#pp-preview-zoom-in, "
-                          "QToolButton#pp-preview-zoom-fit, QToolButton#pp-preview-zoom-1to1 { "
-                          "background: transparent; border: none; border-radius: %1px; }\n")
-               .arg(theme::Metrics::icon_btn_radius);
-    qss += QStringLiteral(
-               "QToolButton#pp-preview-zoom-out:hover, QToolButton#pp-preview-zoom-in:hover, "
-               "QToolButton#pp-preview-zoom-fit:hover, "
-               "QToolButton#pp-preview-zoom-1to1:hover { background: %1; }\n")
-               .arg(QString::fromLatin1(kZoomHoverBg));
-    qss += QStringLiteral("QToolButton#pp-preview-zoom-fit[%1=\"true\"], "
-                          "QToolButton#pp-preview-zoom-1to1[%1=\"true\"] { background: %2; }\n")
-               .arg(QString::fromLatin1(kZoomActiveProperty), QString::fromLatin1(kZoomActiveBg));
-    // A39 ④：模式钮 = 文字形态 → 字色取 .zoombar button 的 #c9ccd4（与 −/＋ 图标同色），
-    // 左右内距 = v2 .zoombar 的 `padding:0 6px`（钮宽已按文本 + 内距定死，此处只补色/内距）。
-    qss += QStringLiteral("QToolButton#pp-preview-zoom-fit, QToolButton#pp-preview-zoom-1to1 { "
-                          "color: %1; padding: 0 %2px; }\n")
-               .arg(QString::fromLatin1(kZoomBarFg))
-               .arg(kZoomTextBtnPadX);
-    qss += QStringLiteral("QFrame#pp-preview-zoom-sep { background: %1; border: none; }\n")
-               .arg(QString::fromLatin1(kZoomSepBg));
-    qss += QStringLiteral("QLabel#pp-preview-zoom-level { color: %1; }\n")
-               .arg(QString::fromLatin1(kZoomLevelFg));
-    // 左下操作提示（§8 逐字）与空态（§8：图标 + 引导语；修 1-16）
-    qss += QStringLiteral("QLabel#pp-preview-hint { color: %1; }\n")
-               .arg(QString::fromLatin1(kStageHintFg));
-    qss += QStringLiteral("QLabel#pp-preview-empty-text { color: %1; }\n")
-               .arg(QString::fromLatin1(kEmptyTextFg));
-    // 翻图钮 28×28（修 1-21）：R4 图标钮样式（悬停显底；禁用 = 灰图标，与打标 chip 同档禁用）
-    qss += QStringLiteral("QToolButton#pp-preview-prev, QToolButton#pp-preview-next { color: %1; "
-                          "background: %2; border: 1px solid %3; border-radius: %4px; }\n"
-                          "QToolButton#pp-preview-prev:hover, QToolButton#pp-preview-next:hover { "
-                          "background: %5; color: %6; }\n")
-               .arg(theme::css_color(tokens.text2), theme::css_color(tokens.control),
-                    theme::css_color(tokens.control_bd))
-               .arg(theme::Metrics::icon_btn_radius)
-               .arg(theme::css_color(tokens.control), theme::css_color(tokens.text));
-    qss += QStringLiteral("QToolButton#pp-preview-prev:disabled, "
-                          "QToolButton#pp-preview-next:disabled { color: %1; }\n")
-               .arg(theme::css_color(tokens.text3));
-    // M5-T3：图标取色不吃 QSS（QIcon 是位图/矢量渲染色）→ 随 tokens 显式重放，与上面的
-    // color 规则同源（normal = --txt2 / disabled = --txt3）。
-    icons::apply(prev, icons::Name::Prev, tokens.text2, tokens.text3, kNavIconPx);
-    icons::apply(next, icons::Name::Next, tokens.text2, tokens.text3, kNavIconPx);
-    qss += QStringLiteral("QLabel#pp-preview-pos, QLabel#pp-preview-name, "
-                          "QLabel#pp-preview-keyhint-label { color: %1; }\n")
-               .arg(theme::css_color(tokens.text3));
-    // A17（T11）：打标 chip 的形态 = formkit::ChipButton 自绘（键帽 13×13 r2 + 文字；底色/描边/
-    // 禁用态都在 formkit 内取 tokens）→ 这里不再有 chip 的 QSS 双实现；只为**分隔线**与
-    // 「清除」文字链补两条规则（修 1-20：清除是破坏性动作，与打标 chip 用分隔线隔开）。
-    qss += QStringLiteral("QFrame#pp-preview-key-sep { background: %1; border: none; }\n")
-               .arg(theme::css_color(tokens.control_bd));
-    qss += QStringLiteral("QToolButton#pp-preview-clear { color: %1; background: transparent; "
-                          "border: none; padding: 0 %2px; }\n"
-                          "QToolButton#pp-preview-clear:hover { color: %3; }\n"
-                          "QToolButton#pp-preview-clear:disabled { color: %4; }\n")
-               .arg(theme::css_color(tokens.text3))
-               .arg(kKeyChipPadX)
-               .arg(theme::css_color(tokens.text2), theme::css_color(tokens.text3));
-    qss += QStringLiteral("QLabel#pp-preview-keyhint-label:disabled { color: %1; }\n")
-               .arg(theme::css_color(tokens.text3));
-    q->setStyleSheet(qss);
+    // UX-6⑥（M7-WP4）：本面板 QSS 全部收编 theme::preview_panel_qss（覆盖层固定色 =
+    // theme::overlay_tokens()，不随主题变；选择器只锚本面板 pp-* —— 见 theme.h 的"为何不能公共"）。
+    q->setStyleSheet(theme::preview_panel_qss(tokens));
+
     // A17：chip 是自绘件（不吃 QSS）→ 令牌在这里显式重放（与骨架 QSS 同一次主题切换）
     for (formkit::ChipButton *chip : chips) {
         if (chip != nullptr)

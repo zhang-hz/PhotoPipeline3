@@ -27,6 +27,23 @@ inline constexpr int kCardPadTop = 10;
 inline constexpr int kCardPadBottom = 12;
 
 // ---------------------------------------------------------------------------
+// 卡头 / 状态行 / 折叠 / 组尾几何（UX-6①，M7-WP4：docs/ux-review-14.md §6 改进方案 1）。
+// 收编此前散在 4 个 TU 的自拷字面量（卡头 12,9,12,7 与间距 8 的四份复制、状态行/折叠/组尾的
+// 页内字面量）—— 取值单源在此，调用点只引用不写字面量。
+// 例外登记（§5 R1 的唯一例外）：kListRowH / kTableHeadH **不入 28 行节奏**——列表结果行与
+// 表头不是"信息行"（行高由列表/表格自身承担），在 docs/qt-gui-design-spec.md §5 显式登记。
+// ---------------------------------------------------------------------------
+inline constexpr int kCardHeadPadTop = 9; // 卡头内边距上（原 4 份 (12,9,12,7) 的 9）
+inline constexpr int kCardHeadPadBottom =
+    7;                                   // 卡头内边距下（…的 7；左右 = theme::Metrics::card_pad_x）
+inline constexpr int kCardHeadGap = 8;   // 卡头标题/pill/hint 间距（= theme::Metrics::group_gap）
+inline constexpr int kStatusPadY = 4;    // 状态/提示行竖内距
+inline constexpr int kFoldPadBottom = 6; // 折叠行下内距
+inline constexpr int kGroupPadBottom = 10; // 组尾内距
+inline constexpr int kListRowH = 36;       // 列表结果行（GPS 搜索结果/联想）——§5 R1 例外
+inline constexpr int kTableHeadH = 24;     // 表头行高 —— §5 R1 **唯一例外**（表头不是信息行）
+
+// ---------------------------------------------------------------------------
 // R2 字段轨（§5 R2）：固定轨道网格，控件**必须撑满其轨**
 //   单列行：[ 标签 80px 右对齐 ][12px][ 字段轨 ]
 //   双列行：[ 80 ][12][ 轨 ][24px][ 80 ][12][ 轨 ]   ← 第二标签在固定 x，不随内容漂移

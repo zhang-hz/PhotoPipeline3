@@ -195,7 +195,8 @@ struct ParamForm::Impl {
     FormSelection sel;                    // 已解析（非空）的当前选择
     pp::ParamSet values;                  // 工作集（含保留键 "__lossless"）
     std::string pre_lossless_tech;        // 本表单自动切走前的技术（取消无损时切回）
-    theme::Tokens tokens = theme::tokens(theme::ThemeMode::Dark);
+    // R-009 同族（M7-WP4）：构造期 tokens 取当前生效档（原硬编码 Dark）
+    theme::Tokens tokens = theme::tokens(theme::preferred_theme_mode());
 
     QVBoxLayout *root = nullptr;
     // 选择行（M5-T8：一律 formkit 行栅格 —— 后端行 / 技术行 / 无损行）
@@ -211,7 +212,6 @@ struct ParamForm::Impl {
     formkit::Row adv_row; // 高级参数折叠行：[高级参数][12][chevron + 摘要]
     QToolButton *adv_toggle = nullptr;
     QWidget *adv_host = nullptr; // 折叠内容（默认隐藏）
-    QScrollArea *adv_scroll = nullptr;
     QWidget *adv_body = nullptr;
     QVBoxLayout *adv_box = nullptr;
     QLineEdit *adv_search = nullptr;
@@ -463,7 +463,6 @@ struct ParamForm::Impl {
         adv_toggle = nullptr;
         delete adv_host;
         adv_host = nullptr;
-        adv_scroll = nullptr;
         adv_body = nullptr;
         adv_box = nullptr;
         adv_search = nullptr;
@@ -524,19 +523,15 @@ struct ParamForm::Impl {
                 update_row_states(); // 过滤只影响视图，不是值变化 → 不发信号
             });
         }
-        adv_scroll = new QScrollArea(adv_host);
-        adv_scroll->setObjectName(QStringLiteral("pp-advanced-scroll"));
-        adv_scroll->setWidgetResizable(true);
-        adv_scroll->setFrameShape(QFrame::NoFrame);
-        adv_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        adv_scroll->setMaximumHeight(formkit::kRowPitch * 8); // 限高内滚（2-42）
-        adv_body = new QWidget(adv_scroll);
+        // UX-8（M7-WP4，paramform 归本包）：**废除卡内嵌滚动** —— 原 224px（kRowPitch×8）硬限
+        // + QScrollArea 内滚使"展开后只有一小条"，且与外层整页滚动两层相抢。高级区高度 =
+        // 内容自然高，滚动只剩整页一层（§8 统一原则）。
+        adv_body = new QWidget(adv_host);
         adv_body->setObjectName(QStringLiteral("pp-advanced-body"));
         adv_box = new QVBoxLayout(adv_body);
         adv_box->setContentsMargins(0, 0, 0, 0);
         adv_box->setSpacing(0);
-        adv_scroll->setWidget(adv_body);
-        hv->addWidget(adv_scroll);
+        hv->addWidget(adv_body);
 
         if (const pp::TechDef *t = tech()) {
             // 子分组：标题紧接本组参数行（按 kSubGroupOrder 顺序；空组不出头；标题 12px 缩进
@@ -1033,12 +1028,9 @@ struct ParamForm::Impl {
 
     void set_tokens(const theme::Tokens &t) {
         tokens = t;
-        if (lossless_check != nullptr)
-            lossless_check->set_tokens(t);
-        for (Row &r : rows) {
-            if (r.def != nullptr && r.def->type == pp::ParamType::Bool && r.editor != nullptr)
-                static_cast<formkit::CheckBox *>(r.editor)->set_tokens(t);
-        }
+        // R-064（M7-WP4）：自绘件重放收口 theme::replay_tokens 单点 —— 原逐件遍历只覆盖
+        // 勾选框、漏 formkit Combo/Spin/DSpin 的箭头（主题切换后箭头残留旧主题色）。
+        theme::replay_tokens(q, t);
         set_fold_icon(adv_toggle, adv_toggle != nullptr && adv_toggle->isChecked());
         if (adv_rule != nullptr)
             adv_rule->setStyleSheet(QStringLiteral("background: ") + theme::css_color(t.line) +

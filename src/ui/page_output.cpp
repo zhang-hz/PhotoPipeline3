@@ -293,44 +293,9 @@ QString human_bytes(qint64 bytes) {
 // ---------------------------------------------------------------- 小控件
 
 // 单行省略标签（§9.3「全界面禁止文案折行（超长省略号）」；与 mainwindow/page_meta 同口径）
-class ElidedLabel : public QLabel {
-public:
-    explicit ElidedLabel(QWidget *parent = nullptr) : QLabel(parent) { setWordWrap(false); }
-    void set_full_text(const QString &text) {
-        full_text_ = text;
-        setProperty("ppFullText", text); // 自验/走查读语义值（显示文本可能被省略成 "…"）
-        setToolTip(text);
-        updateGeometry();
-        apply_elide();
-    }
-    QString full_text() const { return full_text_; }
-    QSize sizeHint() const override {
-        const QSize base = QLabel::sizeHint();
-        if (full_text_.isEmpty())
-            return base;
-        return QSize(fontMetrics().horizontalAdvance(full_text_) + 2, base.height());
-    }
-
-protected:
-    void resizeEvent(QResizeEvent *event) override {
-        QLabel::resizeEvent(event);
-        apply_elide();
-    }
-
-private:
-    void apply_elide() {
-        if (full_text_.isEmpty()) {
-            QLabel::clear();
-            return;
-        }
-        if (width() <= 0) {
-            QLabel::setText(full_text_);
-            return;
-        }
-        QLabel::setText(fontMetrics().elidedText(full_text_, Qt::ElideRight, std::max(0, width())));
-    }
-    QString full_text_;
-};
+// R-020/R-320（M7-WP4）：ElidedLabel 的 7 份逐字拷贝收敛到 formkit 唯一实现
+// （本文件原 30+ 行自拷类删除；行为逐位等价 —— 全文 + ppFullText + tooltip + 省略号）。
+using ElidedLabel = formkit::ElidedLabel;
 
 // ---------------------------------------------------------------- 页面样式
 // tokens 单源 = ui/theme.h；本页只把 tokens 铺到自己的控件上（与 PageMeta/PreviewPanel 同口径）。
@@ -338,90 +303,13 @@ private:
 // 注：磁贴（formkit::CheckableCard）、开关（formkit::SwitchControl）、分段（SegmentedControl）、
 // 胶囊（PillBadge）与全部行内标签/值/注释（ppFk 钩子）都不在此处 —— 它们自带令牌副本或走
 // theme.h 的 formkit_qss 全局规则（C1 单源；A6：本页不再有任何硬编码色值）。
-constexpr const char *kFieldProperty = "ppField";
+constexpr const char *kFieldProperty =
+    theme::kFkProperty; // UX-6⑤/R-054：三条钩子轨并入 ppFk（旧 ppField 轨退役）
 
 QString page_qss(const theme::Tokens &t) {
-    const auto css = [](const QColor &c) { return theme::css_color(c); };
-    const QString mod = QString::fromLatin1(kFieldProperty);
-    QString qss;
-    // 输入类控件（mockup .tbx / .dd：--ctl 底 + --ctl-bd 边 + r3 + --txt 字）
-    const auto control_rule = [&](const QString &selector) {
-        return selector + QStringLiteral(" { background: ") + css(t.control) +
-               QStringLiteral("; border: 1px solid ") + css(t.control_bd) +
-               QStringLiteral("; border-radius: ") +
-               QString::number(theme::Metrics::control_radius) + QStringLiteral("px; color: ") +
-               css(t.text) + QStringLiteral("; padding: 0 8px; }\n");
-    };
-    qss += control_rule(QStringLiteral("QLineEdit[") + mod + QStringLiteral("=\"input\"]"));
-    // 下拉规则已随 GUI-R2 收口到 theme::formkit_qss 的 `ppFk="combo"`（本页不再自带 QComboBox
-    // 规则） 次按钮（R4：高 26 + 描边 + --txt2 字；悬停提亮到 --txt）
-    qss += QStringLiteral("QPushButton[") + mod + QStringLiteral("=\"button\"] { background: ") +
-           css(t.control) + QStringLiteral("; border: 1px solid ") + css(t.control_bd) +
-           QStringLiteral("; border-radius: ") + QString::number(theme::Metrics::btn_radius) +
-           QStringLiteral("px; color: ") + css(t.text2) +
-           QStringLiteral("; font-weight: 600; padding: 0 11px; }\n");
-    qss += QStringLiteral("QPushButton[") + mod + QStringLiteral("=\"button\"]:hover { color: ") +
-           css(t.text) + QStringLiteral("; }\n");
-    qss += QStringLiteral("QPushButton[") + mod +
-           QStringLiteral("=\"button\"]:disabled { background: ") + css(t.control) +
-           QStringLiteral("; border-color: ") + css(t.control_bd) + QStringLiteral("; color: ") +
-           css(t.text3) + QStringLiteral("; }\n");
-    // 主按钮（R4：实心 acc 底 + acc-on 字；禁用 = 灰底灰字）
-    qss += QStringLiteral("QPushButton[") + mod + QStringLiteral("=\"primary\"] { background: ") +
-           css(t.accent) + QStringLiteral("; border: 1px solid ") + css(t.accent) +
-           QStringLiteral("; border-radius: ") + QString::number(theme::Metrics::btn_radius) +
-           QStringLiteral("px; color: ") + css(t.on_accent) +
-           QStringLiteral("; font-weight: 600; padding: 0 11px; }\n");
-    qss += QStringLiteral("QPushButton[") + mod +
-           QStringLiteral("=\"primary\"]:disabled { background: ") + css(t.control) +
-           QStringLiteral("; border-color: ") + css(t.control_bd) + QStringLiteral("; color: ") +
-           css(t.text3) + QStringLiteral("; }\n");
-    // 折叠行（高级参数：chevron 为矢量图标 —— C3 禁字形）
-    qss += QStringLiteral("QToolButton[") + mod +
-           QStringLiteral("=\"fold\"] { border: none; background: transparent; color: ") +
-           css(t.text2) + QStringLiteral("; font-weight: 600; }\n");
-    qss += QStringLiteral("QToolButton[") + mod + QStringLiteral("=\"fold\"]:disabled { color: ") +
-           css(t.text3) + QStringLiteral("; }\n");
-    // 说明/提示（mockup .sub-hint / .card-h .hint）
-    qss += QStringLiteral("QLabel[") + mod + QStringLiteral("=\"hint\"], QLabel[") + mod +
-           QStringLiteral("=\"sub\"] { color: ") + css(t.text3) + QStringLiteral("; }\n");
-    qss += QStringLiteral("QLabel[") + mod +
-           QStringLiteral("=\"hint\"][ppInvalid=\"true\"] { color: ") + css(t.err) +
-           QStringLiteral("; }\n");
-    qss += QStringLiteral("QLabel[ppInvalid=\"true\"] { color: ") + css(t.err) +
-           QStringLiteral("; }\n");
-    // 格式页签（mockup .dlg-tab：11.5/600 + 选中 = --txt 字 + 2px acc 下划线；页签行有分隔基线
-    // —— 修 2-21）。GUI-R2：QTabBar / QTabWidget 本体**必须显式透明** —— 否则各自吃 palette 的
-    // --ctl 底，在页签行画出两条 29px 灰带（设计稿这一行是白底 + 底部发丝线，没有任何色带）。
-    qss += QStringLiteral("QTabWidget#pp-format-tabs, QTabBar#pp-format-tabs { background: "
-                          "transparent; border: none; }\n");
-    qss += QStringLiteral("QTabBar { background: transparent; border: none; }\n");
-    qss +=
-        QStringLiteral("QTabWidget#pp-format-tabs::pane { border: none; border-top: 1px solid ") +
-        css(t.line) + QStringLiteral("; }\n");
-    qss += QStringLiteral("QTabBar::tab { background: transparent; color: ") + css(t.text2) +
-           QStringLiteral("; padding: 5px 12px 6px; margin-right: 2px; border: none; "
-                          "border-bottom: 2px solid transparent; font-weight: 600; }\n");
-    qss += QStringLiteral("QTabBar::tab:first { margin-left: ") +
-           QString::number(theme::Metrics::card_pad_x) + QStringLiteral("px; }\n");
-    qss += QStringLiteral("QTabBar::tab:selected { color: ") + css(t.text) +
-           QStringLiteral("; border-bottom-color: ") + css(t.accent) + QStringLiteral("; }\n");
-    qss += QStringLiteral("QTabBar::tab:hover { color: ") + css(t.text) + QStringLiteral("; }\n");
-    // 「＋ 添加格式…」（修 2-21：可用态 = 文字链式 accent，不再灰字像禁用）
-    qss += QStringLiteral("QToolButton#pp-add-format { border: none; background: transparent; "
-                          "color: ") +
-           css(t.accent) + QStringLiteral("; padding: 0 10px; font-weight: 600; border-radius: ") +
-           QString::number(theme::Metrics::btn_radius) + QStringLiteral("px; }\n");
-    qss += QStringLiteral("QToolButton#pp-add-format:hover { background: ") + css(t.accent_dim) +
-           QStringLiteral("; }\n");
-    qss += QStringLiteral("QToolButton#pp-add-format:disabled { color: ") + css(t.text3) +
-           QStringLiteral("; background: transparent; }\n");
-    // 容器透明（窗口底渐变透出）
-    qss += QStringLiteral("QWidget#pp-output-content { background: transparent; }\n");
-    qss += QStringLiteral("QScrollArea#pp-output-scroll { background: transparent; }\n");
-    qss += QStringLiteral("QScrollArea#pp-output-scroll > QWidget > QWidget { background: "
-                          "transparent; }\n");
-    return qss;
+    // UX-6⑥（M7-WP4）：跨页同形规则 = theme::field_qss（输入/按钮/文字链/折叠/提示/ppInvalid），
+    // 页专规则（格式页签/「＋ 添加格式…」/容器透明）= theme::page_output_qss —— 页内不再拼 QSS。
+    return theme::field_qss(t) + theme::page_output_qss(t);
 }
 
 // ---------------------------------------------------------------- 页面状态
@@ -574,30 +462,15 @@ struct Impl {
 
     CardHeader make_header(QWidget *card, const QString &title, const QString &pill_name,
                            const QString &hint_name) {
+        // R-021/R-053（M7-WP4）：卡头几何单源 = formkit::card_header（原 30 行自拷建造器退役；
+        // pill 单走 PillBadge、hint 单走 ElidedLabel；卡头内边距 9/7 与间距 8 = formkit_layout
+        // 常量）
+        const formkit::CardParts parts = formkit::card_header(card, title, pill_name, hint_name);
         CardHeader out;
-        out.row = new QWidget(card);
-        auto *layout = new QHBoxLayout(out.row);
-        layout->setContentsMargins(theme::Metrics::card_pad_x, 9, theme::Metrics::card_pad_x, 7);
-        layout->setSpacing(theme::Metrics::group_gap);
-        out.title = new QLabel(title, out.row);
-        out.title->setObjectName(QStringLiteral("pp-card-title"));
-        out.title->setFont(
-            theme::font(theme::Typography::card_title_px, theme::Typography::card_title_weight));
-        layout->addWidget(out.title);
-        out.pill = new formkit::PillBadge(out.row);
-        if (!pill_name.isEmpty())
-            out.pill->setObjectName(pill_name);
-        out.pill->set_tone(formkit::PillBadge::Tone::Neutral); // 1-24/1-25：卡头右置一律中性
-        out.pill->setVisible(false);
-        layout->addWidget(out.pill);
-        layout->addStretch(1);
-        out.hint = new ElidedLabel(out.row);
-        if (!hint_name.isEmpty())
-            out.hint->setObjectName(hint_name);
-        out.hint->setProperty(kFieldProperty, QStringLiteral("hint"));
-        out.hint->setFont(theme::font(theme::Typography::hint_px, 500));
-        out.hint->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        layout->addWidget(out.hint, 1);
+        out.row = parts.head;
+        out.title = parts.title;
+        out.pill = parts.pill_badge();
+        out.hint = parts.hint_label();
         return out;
     }
 

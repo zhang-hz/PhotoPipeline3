@@ -79,44 +79,9 @@ QString sanitize_name(const QString &in) {
 // ui/page_meta.cpp / ui/exif_editor.cpp 的 ElidedLabel 同口径）：本对话框原先在空列表提示上
 // 开了**自动折行**，T13 清零 → 单行 + 省略号 + 悬浮全文。
 // 文案与 objectName 不变（§2.7 #28d）；列表非空时由 update_empty_hint 隐藏。
-class ElidedLabel : public QLabel {
-public:
-    explicit ElidedLabel(QWidget *parent = nullptr) : QLabel(parent) { setWordWrap(false); }
-    void set_full_text(const QString &text) {
-        full_text_ = text;
-        setProperty("ppFullText", text);
-        setToolTip(text);
-        updateGeometry(); // sizeHint 随全文变化（否则布局按"已省略文本"定宽 → 永远省略）
-        apply_elide();
-    }
-    QString full_text() const { return full_text_; }
-    QSize sizeHint() const override {
-        const QSize base = QLabel::sizeHint();
-        if (full_text_.isEmpty())
-            return base;
-        return QSize(fontMetrics().horizontalAdvance(full_text_) + 2, base.height());
-    }
-
-protected:
-    void resizeEvent(QResizeEvent *event) override {
-        QLabel::resizeEvent(event);
-        apply_elide();
-    }
-
-private:
-    void apply_elide() {
-        if (full_text_.isEmpty()) {
-            QLabel::clear();
-            return;
-        }
-        if (width() <= 0) { // 布局尚未定宽：先出全文，resizeEvent 时再省略
-            QLabel::setText(full_text_);
-            return;
-        }
-        QLabel::setText(fontMetrics().elidedText(full_text_, Qt::ElideRight, std::max(0, width())));
-    }
-    QString full_text_;
-};
+// R-020/R-320（M7-WP4）：ElidedLabel 的 7 份逐字拷贝收敛到 formkit 唯一实现
+// （本文件原 30+ 行自拷类删除；行为逐位等价 —— 全文 + ppFullText + tooltip + 省略号）。
+using ElidedLabel = formkit::ElidedLabel;
 
 // §9.1 U6-FIX：空列表提示可见性（列表为空才显示）
 void update_empty_hint(const QDialog *dlg) {

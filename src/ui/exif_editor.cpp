@@ -102,44 +102,9 @@ constexpr int kMultilineThreshold = 60; // §2.12：长 ASCII > 60 → QPlainTex
 // ui/page_meta.cpp 的 ElidedLabel 同口径）：本编辑器原先有 4 处开了**自动折行**
 // （值区标题/说明/提示/读取错误），M4-T12 一并清零 → 单行 + 省略号 + 悬浮全文。
 // （M4-T15 收尾自证：全仓 `setWordWrap(false)` 之外再无开启折行的调用点。）
-class ElidedLabel : public QLabel {
-public:
-    explicit ElidedLabel(QWidget *parent = nullptr) : QLabel(parent) { setWordWrap(false); }
-    void set_full_text(const QString &text) {
-        full_text_ = text;
-        setProperty("ppFullText", text);
-        setToolTip(text);
-        updateGeometry();
-        apply_elide();
-    }
-    QString full_text() const { return full_text_; }
-    QSize sizeHint() const override {
-        const QSize base = QLabel::sizeHint();
-        if (full_text_.isEmpty())
-            return base;
-        return QSize(fontMetrics().horizontalAdvance(full_text_) + 2, base.height());
-    }
-
-protected:
-    void resizeEvent(QResizeEvent *event) override {
-        QLabel::resizeEvent(event);
-        apply_elide();
-    }
-
-private:
-    void apply_elide() {
-        if (full_text_.isEmpty()) {
-            QLabel::clear();
-            return;
-        }
-        if (width() <= 0) {
-            QLabel::setText(full_text_);
-            return;
-        }
-        QLabel::setText(fontMetrics().elidedText(full_text_, Qt::ElideRight, std::max(0, width())));
-    }
-    QString full_text_;
-};
+// R-020/R-320（M7-WP4）：ElidedLabel 的 7 份逐字拷贝收敛到 formkit 唯一实现
+// （本文件原 30+ 行自拷类删除；行为逐位等价 —— 全文 + ppFullText + tooltip + 省略号）。
+using ElidedLabel = formkit::ElidedLabel;
 
 // 弹窗文案取词（ExifEditor 上下文；dialogkit/本文件的辅助件共用）
 QString T(const char *s) { return ExifEditor::tr(s); }

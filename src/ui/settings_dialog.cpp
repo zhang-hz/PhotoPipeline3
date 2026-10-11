@@ -435,22 +435,10 @@ QString dialog_qss(const theme::Tokens &t) {
     qss += QStringLiteral("QStackedWidget#%1, QStackedWidget#%1 > QWidget { background: "
                           "transparent; }\n")
                .arg(QLatin1String(kPagesName));
-    // 输入类控件（mockup .tbx / .dd：--ctl 底 + --ctl-bd 边 + r3 + --txt 字；R4 高 24）
-    const auto control_rule = [&](const QString &selector) {
-        return selector + QStringLiteral(" { background: ") + css(t.control) +
-               QStringLiteral("; border: 1px solid ") + css(t.control_bd) +
-               QStringLiteral("; border-radius: ") +
-               QString::number(theme::Metrics::control_radius) + QStringLiteral("px; color: ") +
-               css(t.text) +
-               QStringLiteral("; padding: 0 8px; min-height: 22px; max-height: 22px; }\n");
-    };
-    qss += control_rule(QStringLiteral("QLineEdit[") + field + QStringLiteral("=\"") +
-                        QLatin1String(kFieldInput) + QStringLiteral("\"]"));
-    // 下拉规则已随 GUI-R2 收口到 theme::formkit_qss 的 `ppFk="combo"`（弹窗不再自带 QComboBox
-    // 规则）
-    qss += QStringLiteral("QLineEdit[") + field + QStringLiteral("=\"") +
-           QLatin1String(kFieldInput) + QStringLiteral("\"]:disabled { color: ") + css(t.text3) +
-           QStringLiteral("; }\n");
+    // UX-6⑥（M7-WP4）：输入/按钮/提示的跨页同形规则并入 theme::field_qss（原 11px padding
+    // 等页内自拷值随之归一）；弹窗滚动条补 theme::scrollbar_qss —— UX-11「弹窗与主窗一套」。
+    qss += theme::field_qss(t);
+    qss += theme::scrollbar_qss(t);
     // 多行文本（关于页清单）：--ctl 底 + 等宽字（字族由 C++ 侧给）
     qss += QStringLiteral("QPlainTextEdit { background: ") + css(t.control) +
            QStringLiteral("; border: 1px solid ") + css(t.control_bd) +
@@ -468,36 +456,6 @@ QString dialog_qss(const theme::Tokens &t) {
            QStringLiteral("; color: ") + css(t.text3) +
            QStringLiteral("; border: none; border-bottom: 1px solid ") + css(t.card_bd) +
            QStringLiteral("; padding: 4px 8px; }\n");
-    // 按钮（R4 高 26 = min-height 24 + 上下各 1px 边；次 = 描边 + --txt2，主 = 实心 acc + acc-on）
-    qss += QStringLiteral("QPushButton[") + field + QStringLiteral("=\"") +
-           QLatin1String(kFieldButton) + QStringLiteral("\"] { background: ") + css(t.control) +
-           QStringLiteral("; border: 1px solid ") + css(t.control_bd) +
-           QStringLiteral("; "
-                          "border-radius: ") +
-           QString::number(theme::Metrics::btn_radius) + QStringLiteral("px; color: ") +
-           css(t.text2) +
-           QStringLiteral("; font-weight: 600; padding: 0 11px; min-height: "
-                          "24px; max-height: 24px; }\n");
-    qss += QStringLiteral("QPushButton[") + field + QStringLiteral("=\"") +
-           QLatin1String(kFieldButton) + QStringLiteral("\"]:hover { color: ") + css(t.text) +
-           QStringLiteral("; }\n");
-    qss += QStringLiteral("QPushButton[") + field + QStringLiteral("=\"") +
-           QLatin1String(kFieldButton) + QStringLiteral("\"]:disabled { background: ") +
-           css(t.control) + QStringLiteral("; border-color: ") + css(t.control_bd) +
-           QStringLiteral("; color: ") + css(t.text3) + QStringLiteral("; }\n");
-    qss += QStringLiteral("QPushButton[") + field + QStringLiteral("=\"") + primary +
-           QStringLiteral("\"] { background: ") + css(t.accent) +
-           QStringLiteral("; border: 1px "
-                          "solid ") +
-           css(t.accent) + QStringLiteral("; border-radius: ") +
-           QString::number(theme::Metrics::btn_radius) + QStringLiteral("px; color: ") +
-           css(t.on_accent) +
-           QStringLiteral("; font-weight: 600; padding: 0 14px; min-height: "
-                          "24px; max-height: 24px; }\n");
-    qss += QStringLiteral("QPushButton[") + field + QStringLiteral("=\"") + primary +
-           QStringLiteral("\"]:disabled { background: ") + css(t.control) +
-           QStringLiteral("; border-color: ") + css(t.control_bd) + QStringLiteral("; color: ") +
-           css(t.text3) + QStringLiteral("; }\n");
     // 页签（下划线式；EXIF 编辑器的 QTabWidget 与设置弹窗自绘页签同一视觉口径 —— 修 4-06）
     qss += QStringLiteral("QTabWidget::pane { border: none; border-top: 1px solid ") + css(t.line) +
            QStringLiteral("; }\n");
@@ -526,9 +484,6 @@ QString dialog_qss(const theme::Tokens &t) {
            QStringLiteral("px; margin: -4px 0; border-radius: 99px; background: ") +
            css(theme::composite(t.card, t.window)) + QStringLiteral("; border: 2px solid ") +
            css(t.accent) + QStringLiteral("; }\n");
-    // 备注 / 提示（与 page_output 的 ppField="hint" 词汇同源）
-    qss += QStringLiteral("QLabel[") + field + QStringLiteral("=\"") + QLatin1String(kFieldHint) +
-           QStringLiteral("\"] { color: ") + css(t.text3) + QStringLiteral("; }\n");
     // §11「焦点环自绘（accent 1px，禁用系统虚线框）」：系统焦点框一律关掉 —— 可见的焦点指示
     // 只有 dialogkit::FocusRing 一处（accent 1px 自绘环）。
     qss += QStringLiteral("QPushButton, QToolButton, QCheckBox, QRadioButton, QLineEdit, "
@@ -803,13 +758,8 @@ void FocusRing::paintEvent(QPaintEvent *) {
 }
 
 QPushButton *make_button(QWidget *parent, const QString &text, bool primary) {
-    auto *button = new QPushButton(text, parent);
-    button->setFixedHeight(theme::Metrics::btn_h); // R4 按钮高 26（A7）
-    button->setCursor(Qt::PointingHandCursor);
-    button->setFocusPolicy(Qt::StrongFocus);
-    button->setAccessibleName(text);
-    hook_field(button, primary ? kFieldPrimary : kFieldButton);
-    return button;
+    // R-022（M7-WP4）：三份 make_button 收敛 formkit::make_button（本处只剩类型收敛转发）
+    return static_cast<QPushButton *>(formkit::make_button(parent, text, primary));
 }
 
 // —— C7 几何探针（值表驱动；§7.4 逐条 + A21 页签序）——
@@ -1593,21 +1543,10 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
                 theme::set_persisted_theme_mode(id.toLatin1());
                 const theme::Tokens t = theme::tokens(theme::preferred_theme_mode());
                 setStyleSheet(dk::dialog_qss(t));
-                // 自绘件与行内辅助件随令牌重放（QSS 覆盖不到的走 set_tokens）
-                if (mode != nullptr)
-                    mode->set_tokens(t);
-                if (rotate_box != nullptr)
-                    rotate_box->set_tokens(t);
-                if (sat_labels_box != nullptr)
-                    sat_labels_box->set_tokens(t); // M6-T11：混合叠标注勾选框随令牌重放
-                if (swatch != nullptr)
-                    swatch->set_tokens(t);
-                if (auto *ring = dynamic_cast<dk::FocusRing *>(
-                        findChild<QWidget *>(QLatin1String(dk::kFocusRingName))))
-                    ring->set_tokens(t);
-                if (auto *badge = dynamic_cast<formkit::PillBadge *>(
-                        findChild<QWidget *>(QStringLiteral("app_version"))))
-                    badge->set_tokens(t);
+                // R-064（M7-WP4）：自绘件令牌重放收口 theme::replay_tokens **单点**（原逐件
+                // 调用漏 formkit Combo/Spin/DSpin 箭头 → 主题切换后箭头残留旧主题色；且漏
+                // UnderlineTabs → UX-12 亮色页签标题色错）。Tokenized 全族 + 属性钩子 repolish。
+                theme::replay_tokens(this, t);
                 dk::restyle_title_bar(
                     dk::TitleBar{findChild<QFrame *>(QLatin1String(dk::kTitleBarName)),
                                  findChild<QLabel *>(QStringLiteral("pp-dlg-title")),

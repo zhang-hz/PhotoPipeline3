@@ -15,10 +15,16 @@
 //   * 内嵌预览优先 + 「长边 ≥ max_px → 精确降采样」+「短于 max_px → 原生尺寸不放大」；
 //   * LANCZOS3 降采样正确性（合成渐变 fixture：尺寸精确、边缘像素落在渐变端点、无 letterbox）；
 //   * 全解码分支（无内嵌预览）的同一组断言；
-//   * LRU 逐出（容量 3 的定向用例 + §6.1 默认 16 张上限的 17 文件用例）；
+//   * LRU 逐出（容量 3 的定向用例 + 默认上限的 17 文件用例）；
 //   * 48MP（8000×6000）三档实测耗时（目标 250ms）：**只打印实际值与判定，不作硬断言**
 //     （任务书口径：不达报实际值并说明）；硬断言的只有"出图/尺寸/像素正确"。
 //   * 通道规则单一实现：decode_preview 与 make_thumbnail 在不缩放的同一路径上逐像素相等。
+//
+// UX-3（M7-WP4）追加/换锚段：内嵌预览门槛**分通道**（缩略图 64px 零变化 / 预览 1600px 起用），
+//   * 「小内嵌预览被预览通道放弃、走整图解码」定向用例（320px 内嵌 + 整图大图 → from_embedded
+//     == false 且输出长边 = min(整图长边, kPreviewCacheMaxPx)）；
+//   * 原「64px 门槛内」用例换锚为**两通道分叉**断言（缩略图仍用 64px 内嵌 / 预览放弃）；
+//   * 默认 LRU 上限断言改用符号常量（kPreviewCacheCapacity / kPreviewCacheMaxPx）。
 //
 // fixture 口径（实测记录）：大内嵌预览（2600×2000，170KB）**必须挂 TIFF 宿主**——Exiv2 的
 // JPEG/PNG 宿主走 EXIF APP1 的 64KB 上限（实测 attach 后 PreviewManager 报 previews=0），
@@ -506,14 +512,70 @@ int main() {
         check(gradient_endpoints_ok(small.image, 12, &detail64), "preview03/embedded-64-pixels",
               detail64);
 
-        // 门槛行为：长边恰 64px 的 IFD1 预览仍在门槛内（≥64 → 用；不放大 → 64px）
+        // 门槛行为（UX-3 换锚：门槛分通道，两通道分叉）：长边 64px 的 IFD1 预览
+        //   * 缩略图通道（门槛 kThumbEmbeddedMinLongEdge = 64）：仍在门槛内 → 用内嵌图（不放大
+        //     → 64px），M1b 冻结行为零变化；
+        //   * 预览通道（门槛 kPreviewEmbeddedMinLongEdge = 1600）：放弃内嵌预览 → 走整图解码。
         const fs::path dir = make_temp_dir("thumbs_preview_threshold");
         const fs::path host64 = build_preview_fixture(corpus, dir);
         if (!host64.empty()) {
             const pp::PreviewImage p64 = pp::decode_preview_detailed(host64, 2048);
-            check(p64.from_embedded && p64.image.width() == 64, "preview03/embedded-min-64px",
-                  "长边 64px 的预览应在门槛内（不放大 → 64px），got " + dims(p64.image) +
-                      " from_embedded=" + (p64.from_embedded ? "1" : "0"));
+            check(!p64.from_embedded, "preview03/reject-embedded-below-1600",
+                  "长边 64px 的内嵌预览在预览通道应被放弃（门槛 1600），got from_embedded=1");
+            check(!p64.image.isNull(), "preview03/reject-then-full-decode",
+                  "放弃内嵌预览后应回退整图解码出图，error=" + p64.error);
+            const pp::ThumbOutcome t64 = pp::make_thumbnail(host64, 96);
+            check(t64.thumb.from_embedded && t64.thumb.width == 64, "thumb03/embedded-min-64px",
+                  "缩略图通道门槛仍 64px（长边 64px 的内嵌预览应当被用、不放大），got " +
+                      dims(t64.thumb) + " from_embedded=" + (t64.thumb.from_embedded ? "1" : "0"));
+        }
+    }
+
+    // ---- (2b) UX-3 定向：内嵌 320px + 整图大图 → from_embedded==false 且输出按 kPreviewCacheMaxPx
+    // ---- 内嵌预览 320px < 1600 门槛 → 预览通道必须放弃内嵌图、走整图 float32 解码 + LANCZOS3。
+    // 「输出长边 4096」的可断言前提 = 整图长边 > 4096（不放大口径下整图 4000px 的输出长边恒
+    // 4000）， 故主用例取整图 5000×3500（断言长边 == kPreviewCacheMaxPx == 4096），并附整图
+    // 4000×3000 的 不放大口径用例（断言输出 4000×3000）。
+    {
+        const fs::path dir = make_temp_dir("thumbs_preview_small_embedded");
+        const fs::path preview320 = dir / "gradient_320x240.jpg";
+        check(write_gradient_file(preview320, 320, 240, "jpg"), "preview03/fixture-preview-320",
+              "write failed: " + show(preview320));
+        const fs::path tif_big = dir / "gradient_5000x3500.tif";
+        check(write_gradient_file(tif_big, 5000, 3500, "tif"), "preview03/fixture-5000x3500",
+              "write failed: " + show(tif_big));
+        const fs::path host =
+            attach_embedded_preview(tif_big, preview320, dir, "host_5000_small_embedded.tif");
+        check(embedded_preview_long_edge(host) == 320, "preview03/fixture-attach-320",
+              "embedded preview long edge = " + std::to_string(embedded_preview_long_edge(host)) +
+                  " (expect 320)");
+        if (!host.empty()) {
+            const pp::PreviewImage p = pp::decode_preview_detailed(host, pp::kPreviewCacheMaxPx);
+            check(!p.image.isNull() && p.error.empty(), "preview03/small-embedded-image",
+                  "error=" + p.error);
+            check(!p.from_embedded, "preview03/small-embedded-rejected",
+                  "内嵌 320px < 1600 → 必须放弃内嵌预览（from_embedded=false），got 1");
+            check(std::max(p.image.width(), p.image.height()) == pp::kPreviewCacheMaxPx,
+                  "preview03/small-embedded-out-4096",
+                  "期望输出长边 kPreviewCacheMaxPx=" + std::to_string(pp::kPreviewCacheMaxPx) +
+                      "（整图 5000×3500 降采样），got " + dims(p.image));
+            // 缩略图通道不受影响：320 ≥ 64 → 仍用内嵌图（M1b 冻结行为零变化）
+            const pp::ThumbOutcome t = pp::make_thumbnail(host, 96);
+            check(t.thumb.from_embedded, "thumb03/320px-embedded-still-used",
+                  "缩略图通道应仍用 320px 内嵌图（门槛 64），got from_embedded=0 " + dims(t.thumb));
+        }
+        // 不放大口径：整图长边 4000（< kPreviewCacheMaxPx）时输出 = 原生 4000×3000
+        const fs::path tif_4000 = dir / "gradient_4000x3000.tif";
+        check(write_gradient_file(tif_4000, 4000, 3000, "tif"), "preview03/fixture-4000x3000",
+              "write failed: " + show(tif_4000));
+        const fs::path host2 =
+            attach_embedded_preview(tif_4000, preview320, dir, "host_4000_small_embedded.tif");
+        if (!host2.empty()) {
+            const pp::PreviewImage q = pp::decode_preview_detailed(host2, pp::kPreviewCacheMaxPx);
+            check(!q.from_embedded && q.image.width() == 4000 && q.image.height() == 3000,
+                  "preview03/small-embedded-4000-no-upscale",
+                  "期望 4000x3000（不放大），got " + dims(q.image) +
+                      " from_embedded=" + (q.from_embedded ? "1" : "0"));
         }
     }
 
@@ -586,9 +648,10 @@ int main() {
               "hits=" + std::to_string(cache.hits()) + " size=" + std::to_string(cache.size()));
     }
 
-    // ---- (5b) §6.1 默认上限：16 张 / 2048px（17 个文件 → 恰好逐出 1 个最旧）----
+    // ---- (5b) 默认上限（UX-3 起 = kPreviewCacheCapacity 张 / kPreviewCacheMaxPx px）：
+    //          17 个文件 → 恰好逐出 17 − capacity 个最旧（断言按符号常量取值，换档不再漂）----
     {
-        pp::PreviewCache cache; // 默认 = kPreviewCacheCapacity(16) / kPreviewCacheMaxPx(2048)
+        pp::PreviewCache cache; // 默认 = kPreviewCacheCapacity / kPreviewCacheMaxPx
         check(cache.capacity() == pp::kPreviewCacheCapacity &&
                   cache.max_px() == pp::kPreviewCacheMaxPx,
               "lru/defaults",
@@ -612,9 +675,12 @@ int main() {
                 ++loaded;
         }
         check(loaded == 17, "lru/17-loaded", "loaded=" + std::to_string(loaded));
-        check(cache.size() == 16, "lru/16-capacity", "size=" + std::to_string(cache.size()));
-        check(cache.evictions() == 1, "lru/17-evictions",
-              "evictions=" + std::to_string(cache.evictions()));
+        check(cache.size() == pp::kPreviewCacheCapacity, "lru/capacity-bound",
+              "size=" + std::to_string(cache.size()) +
+                  " cap=" + std::to_string(pp::kPreviewCacheCapacity));
+        check(cache.evictions() == 17 - pp::kPreviewCacheCapacity, "lru/17-evictions",
+              "evictions=" + std::to_string(cache.evictions()) +
+                  " (expect 17 - cap = " + std::to_string(17 - pp::kPreviewCacheCapacity) + ")");
         check(!cache.get(files.front()).image.isNull() && cache.misses() == 18,
               "lru/first-evicted-is-miss",
               "misses=" + std::to_string(cache.misses()) + " (17 fills + 1 evicted re-get)");

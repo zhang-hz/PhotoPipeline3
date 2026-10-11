@@ -104,20 +104,21 @@ using pp::StageWeights;
 
 namespace fk = formkit;
 
-constexpr int kFlushMs = 60;      // §7.4：GUI 节流 60ms 刷新
-constexpr int kLogTailLines = 4;  // §7.3：日志尾 4 行（warn/err 着色）
-constexpr int kMarkW = 16;        // 状态标记盒宽（矢量图标 12 居中）
-constexpr int kMarkPx = 12;       // 标记图标边长
-constexpr int kCellGap = 6;       // 表内列距（尺规单源：探针 run-geom 按同一张表取证）
-constexpr int kRowPadX = 12;      // 表左右内距（= 卡内边距 12）
-constexpr int kOutIndent = 18;    // 逐输出行名称缩进（mockup padding-left:18px）
-constexpr int kReasonIndent = 36; // 失败原因行缩进（缩进行之下再一级）
-constexpr int kBarColW = 88;      // 进度列
-constexpr int kSizeColW = 60;     // 大小列
-constexpr int kSpeedColW = 48;    // 速度列（压缩比）
-constexpr int kTimeColW = 48;     // 耗时列
-constexpr int kStatusColW = 132;  // 状态列（胶囊右对齐；容下「编码 16000/16000 行」）
-constexpr int kTableHeadH = 24;   // 表头行高（表头不是信息行，不入 R1 的 28 节奏）
+constexpr int kFlushMs = 60;     // §7.4：GUI 节流 60ms 刷新
+constexpr int kLogTailLines = 4; // §7.3：日志尾 4 行（warn/err 着色）
+constexpr int kMarkW = 16;       // 状态标记盒宽（矢量图标 12 居中）
+constexpr int kMarkPx = 12;      // 标记图标边长
+constexpr int kCellGap =
+    fk::kInlineGap; // 表内列距（UX-6④：= formkit kInlineGap；探针 run-geom 按同一张表取证）
+constexpr int kRowPadX = theme::Metrics::card_pad_x; // 表左右内距（UX-6④：= 卡内边距 12）
+constexpr int kOutIndent = 18;                       // 逐输出行名称缩进（mockup padding-left:18px）
+constexpr int kReasonIndent = 36;                    // 失败原因行缩进（缩进行之下再一级）
+constexpr int kBarColW = 88;                         // 进度列
+constexpr int kSizeColW = 60;                        // 大小列
+constexpr int kSpeedColW = 48;                       // 速度列（压缩比）
+constexpr int kTimeColW = 48;                        // 耗时列
+constexpr int kStatusColW = 132;             // 状态列（胶囊右对齐；容下「编码 16000/16000 行」）
+constexpr int kTableHeadH = fk::kTableHeadH; // 表头行高（UX-6①：§5 R1 唯一例外，表头不是信息行）
 
 // 页内动态属性（页面 QSS 的锚；只锚本页控件，不误伤它页）
 constexpr const char *kRunLabelProperty = "ppRun";
@@ -132,46 +133,9 @@ constexpr const char *kRunSummary = "summary"; // 卡底摘要句
 // ===========================================================================
 
 // 单行省略标签（§9.3「全界面禁止文案折行」；与 page_meta/page_output 同口径）
-class ElidedLabel : public QLabel {
-public:
-    explicit ElidedLabel(QWidget *parent = nullptr) : QLabel(parent) { setWordWrap(false); }
-    void set_full_text(const QString &text) {
-        if (full_text_ == text)
-            return; // 同值早退（60ms flush 的高频路径）
-        full_text_ = text;
-        setProperty("ppFullText", text); // 探针/走查读语义值（显示文本可能被省略成 "…"）
-        setToolTip(text);
-        updateGeometry();
-        apply_elide();
-    }
-    QString full_text() const { return full_text_; }
-    QSize sizeHint() const override {
-        const QSize base = QLabel::sizeHint();
-        if (full_text_.isEmpty())
-            return base;
-        return QSize(fontMetrics().horizontalAdvance(full_text_) + 2, base.height());
-    }
-
-protected:
-    void resizeEvent(QResizeEvent *event) override {
-        QLabel::resizeEvent(event);
-        apply_elide();
-    }
-
-private:
-    void apply_elide() {
-        if (full_text_.isEmpty()) {
-            QLabel::clear();
-            return;
-        }
-        if (width() <= 0) {
-            QLabel::setText(full_text_);
-            return;
-        }
-        QLabel::setText(fontMetrics().elidedText(full_text_, Qt::ElideRight, std::max(0, width())));
-    }
-    QString full_text_;
-};
+// R-020/R-320（M7-WP4）：ElidedLabel 的 7 份逐字拷贝收敛到 formkit 唯一实现
+// （本文件原 30+ 行自拷类删除；行为逐位等价 —— 全文 + ppFullText + tooltip + 省略号）。
+using ElidedLabel = formkit::ElidedLabel;
 
 // 总览合成条（§7.3「进度(合成条)」）：QProgressBar 子类 —— **无障碍角色仍是 progressbar、
 // 暴露值 = 显示的百分比**（修 3-07），自绘分段（mockup `.pbar i.done|i.warn|i.fail|i.comp`）。
@@ -253,7 +217,7 @@ public:
         color_ = color;
         refresh();
     }
-    icons::Name mark_name() const { return name_; }
+    // R-113（M7-WP4）：死访问器 mark_name() 已删（全仓零调用）
 
 protected:
     bool event(QEvent *e) override {
@@ -1342,67 +1306,13 @@ void refresh_widgets(RunState &s) {
 // 页面 QSS（tokens 单源 = ui/theme.h；选择器只锚 ppRun/ppField/本页 objectName）
 // ===========================================================================
 
-constexpr const char *kFieldProperty = "ppField";
+constexpr const char *kFieldProperty =
+    theme::kFkProperty; // UX-6⑤/R-054：三条钩子轨并入 ppFk（旧 ppField 轨退役）
 
 QString page_qss(const theme::Tokens &t) {
-    const auto css = [](const QColor &c) { return theme::css_color(c); };
-    const QString run = QString::fromLatin1(kRunLabelProperty);
-    const auto run_rule = [&run, &css](const char *value, const QColor &color) {
-        return QStringLiteral("QLabel[") + run + QStringLiteral("=\"") +
-               QString::fromLatin1(value) + QStringLiteral("\"] { color: ") + css(color) +
-               QStringLiteral("; }\n");
-    };
-    QString qss;
-    // 表头/名称/原因/摘要（静态档：随页重建换色，无需 C++ 侧逐值写色）
-    qss += run_rule(kRunHead, t.text3);
-    qss += run_rule(kRunGName, t.text);
-    qss += run_rule(kRunOName, t.text2);
-    qss += run_rule(kRunReason, t.err);
-    qss += run_rule(kRunSummary, t.text2);
-    // 表头下沿（表头是 QFrame；骨架 QSS 只管 pp-card）
-    qss += QStringLiteral("QFrame#pp-run-thead { border-bottom: 1px solid ") + css(t.card_bd) +
-           QStringLiteral("; background: transparent; }\n");
-    // 按钮（R4 高 26 + A7）：次按钮描边、危险钮描边红字、文字链无框 —— 三级动作各一副面孔
-    const auto button_rule = [&css](const char *value, const QString &extra) {
-        return QStringLiteral("QPushButton[") + QString::fromLatin1(kFieldProperty) +
-               QStringLiteral("=\"") + QString::fromLatin1(value) + QStringLiteral("\"] { ") +
-               extra + QStringLiteral("; border-radius: ") +
-               QString::number(theme::Metrics::btn_radius) + QStringLiteral("px; }\n");
-    };
-    qss +=
-        button_rule("button", QStringLiteral("background: transparent; border: 1px solid ") +
-                                  css(t.control_bd) + QStringLiteral("; color: ") + css(t.text2) +
-                                  QStringLiteral("; font-weight: 600; padding: 0 12px"));
-    qss += QStringLiteral("QPushButton[") + QString::fromLatin1(kFieldProperty) +
-           QStringLiteral("=\"button\"]:hover { color: ") + css(t.text) +
-           QStringLiteral("; background: ") + css(t.control) + QStringLiteral("; }\n");
-    qss += QStringLiteral("QPushButton[") + QString::fromLatin1(kFieldProperty) +
-           QStringLiteral("=\"button\"]:disabled { color: ") + css(t.text3) +
-           QStringLiteral("; border-color: ") + css(t.control_bd) + QStringLiteral("; }\n");
-    // A39 ②（W-R-T13）：破坏性动作 = 红文字链（与 accent 文字链同形，仅换色 = 令牌 err；
-    // 「语义色只表达语义」§2.4 → 红色只在破坏性动作上出现）。红描边钮（旧 danger）退役。
-    qss += button_rule("link-danger",
-                       QStringLiteral("background: transparent; border: none; color: ") +
-                           css(t.err) + QStringLiteral("; font-weight: 600; padding: 0 2px"));
-    qss += QStringLiteral("QPushButton[") + QString::fromLatin1(kFieldProperty) +
-           QStringLiteral("=\"link-danger\"]:disabled { color: ") + css(t.text3) +
-           QStringLiteral("; }\n");
-    qss += button_rule("link", QStringLiteral("background: transparent; border: none; color: ") +
-                                   css(t.accent) +
-                                   QStringLiteral("; font-weight: 600; padding: 0 2px"));
-    qss += QStringLiteral("QPushButton[") + QString::fromLatin1(kFieldProperty) +
-           QStringLiteral("=\"link\"]:disabled { color: ") + css(t.text3) + QStringLiteral("; }\n");
-    // 日志尾框（等宽内容由控件字体承担；框 = 卡内高亮底 + 描边 + 画布圆角档）
-    qss += QStringLiteral("QFrame#pp-run-log-box { background: ") + css(t.card_hi) +
-           QStringLiteral("; border: 1px solid ") + css(t.card_bd) +
-           QStringLiteral("; border-radius: ") + QString::number(theme::Metrics::stage_radius) +
-           QStringLiteral("px; }\n");
-    // 容器透明（窗口底渐变透出）
-    qss += QStringLiteral("QWidget#pp-run-content { background: transparent; }\n");
-    qss += QStringLiteral("QScrollArea#pp-run-scroll { background: transparent; }\n");
-    qss += QStringLiteral("QScrollArea#pp-run-scroll > QWidget > QWidget { background: "
-                          "transparent; }\n");
-    return qss;
+    // UX-6⑥（M7-WP4）：跨页同形规则 = theme::field_qss（按钮/文字链三级动作），页专规则
+    // （ppRun 五档语义色/表头/日志尾框/容器透明）= theme::page_run_qss —— 页内不再拼 QSS。
+    return theme::field_qss(t) + theme::page_run_qss(t);
 }
 
 // ===========================================================================
@@ -1880,7 +1790,8 @@ PageRun::PageRun(QWidget *parent) : QWidget(parent) {
     registry().insert(this, s);
     connect(this, &QObject::destroyed, this, [this]() { delete registry().take(this); });
 
-    s->tokens = theme::tokens(theme::ThemeMode::Dark);
+    // R-009（M7-WP4）：构造期 tokens 取**当前生效档**（原硬编码 Dark → 浅色主题整页深色绘制）
+    s->tokens = theme::tokens(theme::preferred_theme_mode());
     auto *outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
     auto *scroll = new QScrollArea(this);

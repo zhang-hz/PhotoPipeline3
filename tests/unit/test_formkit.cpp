@@ -176,6 +176,22 @@ int main() {
     check(fk::kTileH > fk::kCheckPx && fk::kTilePadX * 2 + fk::kCheckPx < fk::kTileH + 100,
           "r12-4/tile-slot-fits", "对勾位与磁贴高不自洽");
 
+    // ---- UX-6①（M7-WP4）：卡头/状态/折叠/组尾几何常量（4 份自拷字面量的单源收口）----
+    check_eq(fk::kCardHeadPadTop, 9, "ux6/card-head-pad-top-9");
+    check_eq(fk::kCardHeadPadBottom, 7, "ux6/card-head-pad-bottom-7");
+    check_eq(fk::kCardHeadGap, 8, "ux6/card-head-gap-8");
+    check_eq(fk::kStatusPadY, 4, "ux6/status-pad-y-4");
+    check_eq(fk::kFoldPadBottom, 6, "ux6/fold-pad-bottom-6");
+    check_eq(fk::kGroupPadBottom, 10, "ux6/group-pad-bottom-10");
+    // §5 R1 例外登记：列表结果行 36 / 表头 24 不入 28 行节奏（列表行/表头不是"信息行"）
+    check_eq(fk::kListRowH, 36, "ux6/list-row-h-36-r1-exception");
+    check_eq(fk::kTableHeadH, 24, "ux6/table-head-h-24-r1-exception");
+    check(fk::kListRowH != fk::kRowPitch && fk::kTableHeadH != fk::kRowPitch,
+          "ux6/r1-exceptions-not-pitch", "例外值不得与 28 行节奏同值（否则不是例外）");
+    check_eq(fk::kCardHeadPadTop + fk::kCardHeadPadBottom, 16, "ux6/card-head-pad-sum-16");
+    check(fk::kTableHeadH < fk::kRowPitch && fk::kListRowH > fk::kRowPitch, "ux6/exception-order",
+          "表头 24 < 28 < 列表行 36 的档序不对");
+
     // ---- 行内不越界：标签轨 + 列距 + 标准轨 ≤ 右栏卡内宽（R2 的可用性边界）----
     check(fk::field_track_x() + fk::kFieldStd <= 587 - 2 * 1 - 2 * 12, "r2/std-row-fits-right-col",
           "标准档单列行未装进右栏卡内宽");

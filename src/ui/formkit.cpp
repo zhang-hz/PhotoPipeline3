@@ -30,6 +30,8 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPen>
+#include <QPushButton>
+#include <QResizeEvent>
 #include <QSizePolicy>
 
 #include <algorithm>
@@ -92,15 +94,8 @@ QLabel *range_note(QWidget *parent, const QString &text) {
     return label;
 }
 
-// kv 值（§4.2 正文·值 11.5 + 数值档：tabular + 右对齐）
-QLabel *value_label(QWidget *parent, const QString &text) {
-    auto *label = new QLabel(text, parent);
-    label->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkValue));
-    label->setFont(theme::font(theme::Typography::body_px, QFont::Normal, /*tabular=*/true));
-    label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    label->setWordWrap(false);
-    return label;
-}
+// kv 值（§4.2 正文·值 11.5 + 数值档：tabular + 右对齐）—— R-212 随 kv_row 一并退役
+// （零消费）；需要值轨时用 track_label + kFkValue 钩子。
 
 // R2 控件宽：短/标准 = 定值（轨即控件宽）；长 = 撑满轨（由轨的 stretch 分配剩余宽）
 void apply_field_width(QWidget *field, FieldWidth width) {
@@ -243,28 +238,6 @@ DoubleRow double_row(QWidget *parent, const FieldCell &left, const FieldCell &ri
     return out;
 }
 
-KvRow kv_row(QWidget *parent, const QString &key1, const QString &value1, const QString &key2,
-             const QString &value2, FieldWidth width) {
-    QLabel *const value1_label = value_label(parent, value1);
-    QLabel *const value2_label = value_label(parent, value2);
-    FieldCell left;
-    left.label = key1;
-    left.width = width;
-    left.field = value1_label;
-    FieldCell right;
-    right.label = key2;
-    right.width = width;
-    right.field = value2_label;
-    const DoubleRow row = double_row(parent, left, right);
-    KvRow out;
-    out.row = row.row;
-    out.key1 = row.label1;
-    out.key2 = row.label2;
-    out.value1 = value1_label;
-    out.value2 = value2_label;
-    return out;
-}
-
 CheckRow check_row(QWidget *parent, const QString &label, const QString &text,
                    const QString &object_name) {
     CheckRow out;
@@ -308,13 +281,6 @@ QDoubleSpinBox *dspin_box(QWidget *parent, const DoubleSpinSpec &spec, FieldWidt
     return spin;
 }
 
-SpinRow spin_row(QWidget *parent, const QString &label, const SpinSpec &spec, FieldWidth width) {
-    SpinRow out;
-    out.spin = spin_box(parent, spec, width);
-    out.row = frow(parent, label, out.spin, width, spec.unit, spec.note);
-    return out;
-}
-
 // ---------------------------------------------------------------------------
 // 下拉（GUI-R2：QComboBox 的唯一构造点）
 // ---------------------------------------------------------------------------
@@ -355,13 +321,6 @@ QComboBox *combo_box(QWidget *parent, const ComboSpec &spec, FieldWidth width) {
         combo->setAccessibleName(spec.accessible); // §11：控件必有 accessibleName
     apply_field_width(combo, width);
     return combo;
-}
-
-ComboRow combo_row(QWidget *parent, const QString &label, const ComboSpec &spec, FieldWidth width) {
-    ComboRow out;
-    out.combo = combo_box(parent, spec, width);
-    out.row = frow(parent, label, out.combo, width);
-    return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -1015,57 +974,6 @@ void ProgressStrip::paintEvent(QPaintEvent *) {
 }
 
 // ---------------------------------------------------------------------------
-// 图标钮（R4 28×28 r4；§11：必有 accessibleName + tooltip）
-// ---------------------------------------------------------------------------
-IconButton::IconButton(QWidget *parent) : QAbstractButton(parent) {
-    setObjectName(QStringLiteral("pp-fk-icon"));
-    setCursor(Qt::PointingHandCursor);
-    setAttribute(Qt::WA_Hover, true);
-    setFocusPolicy(Qt::StrongFocus);
-    setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-}
-
-void IconButton::set_action(const QString &text) {
-    setToolTip(text);        // §11：图标钮必有 tooltip
-    setAccessibleName(text); // §11：图标钮必有 accessibleName
-}
-
-void IconButton::set_tokens(const theme::Tokens &t) {
-    tokens_ = t;
-    update();
-}
-
-QSize IconButton::sizeHint() const { return QSize(kIconBtn, kIconBtn); }
-
-void IconButton::paintEvent(QPaintEvent *) {
-    QPainter p(this);
-    p.setRenderHint(QPainter::Antialiasing, true);
-    const theme::Tokens &t = tokens_;
-    const bool dim = !isEnabled();
-    QColor bg = Qt::transparent;
-    if (dim)
-        bg = t.icon_disabled_bg;
-    else if (isDown())
-        bg = theme::composite(t.control_bd, t.control);
-    else if (isChecked())
-        bg = t.accent_dim;
-    else if (underMouse())
-        bg = t.control; // 悬停显底（R4）
-    if (bg.alpha() > 0) {
-        p.setPen(Qt::NoPen);
-        p.setBrush(bg);
-        p.drawRoundedRect(QRectF(rect()), kIconBtnRadius, kIconBtnRadius);
-    }
-    if (!icon().isNull()) {
-        // 禁用态按 .dim 口径整钮变暗（QSS 无控件级不透明度；此处等价用 painter 不透明度）
-        if (dim)
-            p.setOpacity(theme::Metrics::icon_dim_opacity);
-        icon().paint(&p, rect(), Qt::AlignCenter, dim ? QIcon::Disabled : QIcon::Normal,
-                     isChecked() ? QIcon::On : QIcon::Off);
-    }
-}
-
-// ---------------------------------------------------------------------------
 // 表单布尔勾选框（13×13 r2 自绘 + 右侧文字）
 // ---------------------------------------------------------------------------
 CheckBox::CheckBox(QWidget *parent) : QCheckBox(parent) {
@@ -1102,6 +1010,135 @@ void CheckBox::paintEvent(QPaintEvent *) {
     const int text_w = std::max(0, width() - text_x);
     p.drawText(QRect(text_x, 0, text_w, height()), Qt::AlignLeft | Qt::AlignVCenter,
                QFontMetrics(font()).elidedText(text(), Qt::ElideRight, text_w));
+}
+
+// ---------------------------------------------------------------------------
+// 单行省略标签（R-020/R-320，M7-WP4）：7 份逐字拷贝的唯一实现（行为与各拷贝逐位等价）
+// ---------------------------------------------------------------------------
+ElidedLabel::ElidedLabel(QWidget *parent, bool squeeze) : QLabel(parent), squeeze_(squeeze) {
+    setWordWrap(false); // §9.3 禁折行（QLabel 默认即 false，此处显式钉住）
+}
+
+void ElidedLabel::set_full_text(const QString &text) {
+    if (full_text_ == text)
+        return; // 同值早退（page_run 60ms flush 的高频路径；其余调用点行为等价）
+    full_text_ = text;
+    setProperty("ppFullText", text); // 探针可读的语义值（显示文本可能省略成 "…"）
+    setToolTip(text);                // 悬浮全文
+    updateGeometry();                // sizeHint 随全文变化（否则布局按"已省略文本"定宽 → 永远省略）
+    apply_elide();
+}
+
+QSize ElidedLabel::sizeHint() const {
+    const QSize base = QLabel::sizeHint();
+    if (full_text_.isEmpty())
+        return base;
+    // 布局按**全文**申请宽度（有空间就出全文），只在挤不下时省略
+    return QSize(fontMetrics().horizontalAdvance(full_text_) + 2, base.height());
+}
+
+QSize ElidedLabel::minimumSizeHint() const {
+    if (!squeeze_)
+        return QLabel::minimumSizeHint();                // 默认压缩语义（6 份拷贝口径）
+    return QSize(0, QLabel::minimumSizeHint().height()); // 可压到 0（preview_panel 口径）
+}
+
+void ElidedLabel::resizeEvent(QResizeEvent *event) {
+    QLabel::resizeEvent(event);
+    apply_elide();
+}
+
+void ElidedLabel::apply_elide() {
+    if (full_text_.isEmpty()) {
+        QLabel::clear();
+        return;
+    }
+    if (width() <= 0) { // 布局尚未定宽：先出全文，resizeEvent 时再省略
+        QLabel::setText(full_text_);
+        return;
+    }
+    QLabel::setText(fontMetrics().elidedText(full_text_, Qt::ElideRight, std::max(0, width())));
+}
+
+// ---------------------------------------------------------------------------
+// 卡片骨架单源（R-021/R-053/UX-6②；接口规格 I6 主对话定稿）
+// ---------------------------------------------------------------------------
+CardParts card_header(QWidget *parent, const QString &title, const QString &pill_name,
+                      const QString &hint_name) {
+    CardParts out;
+    out.head = new QWidget(parent);
+    out.head->setObjectName(QStringLiteral("pp-card-head"));
+    auto *layout = new QHBoxLayout(out.head);
+    // 卡头内边距 12,9,12,7 的四份自拷字面量（R-117/R-119）→ formkit_layout 常量单源
+    layout->setContentsMargins(theme::Metrics::card_pad_x, kCardHeadPadTop,
+                               theme::Metrics::card_pad_x, kCardHeadPadBottom);
+    layout->setSpacing(kCardHeadGap);
+    out.title = new QLabel(title, out.head);
+    out.title->setObjectName(QStringLiteral("pp-card-title"));
+    out.title->setFont(
+        theme::font(theme::Typography::card_title_px, theme::Typography::card_title_weight));
+    layout->addWidget(out.title);
+    auto *pill = new PillBadge(out.head); // R-021：pill 单走 PillBadge（两条实现路线归一）
+    if (!pill_name.isEmpty())
+        pill->setObjectName(pill_name);
+    pill->set_tone(PillBadge::Tone::Neutral); // 1-24/1-25：卡头右置一律中性
+    pill->setVisible(false);                  // 原型里有内容才画药丸
+    layout->addWidget(pill);
+    out.pill = pill;
+    layout->addStretch(1);
+    auto *hint = new ElidedLabel(out.head);
+    if (!hint_name.isEmpty())
+        hint->setObjectName(hint_name);
+    hint->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkHint));
+    hint->setFont(theme::font(theme::Typography::hint_px, 500));
+    hint->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    layout->addWidget(hint, 1);
+    out.hint = hint;
+    return out;
+}
+
+CardParts make_card(QWidget *parent, const QString &title, const QString &pill_name,
+                    const QString &hint_name) {
+    CardParts out;
+    out.frame = new QFrame(parent);
+    out.frame->setObjectName(QStringLiteral("pp-card")); // theme 骨架 QSS：QFrame#pp-card
+    auto *v = new QVBoxLayout(out.frame);
+    v->setContentsMargins(0, 0, 0, 0);
+    v->setSpacing(0);
+    const CardParts head = card_header(out.frame, title, pill_name, hint_name);
+    out.head = head.head;
+    out.title = head.title;
+    out.pill = head.pill;
+    out.hint = head.hint;
+    v->addWidget(out.head);
+    // 卡体（R1：上内边距 10、下 12 —— 原 page_meta"卡体上 0"两制随单源收口）；行 pitch 由
+    // formkit 行容器承担 → 行间无额外 gap
+    out.body = new QWidget(out.frame);
+    auto *body_box = new QVBoxLayout(out.body);
+    body_box->setContentsMargins(theme::Metrics::card_pad_x, theme::Metrics::card_pad_top,
+                                 theme::Metrics::card_pad_x, theme::Metrics::card_pad_bottom);
+    body_box->setSpacing(0);
+    v->addWidget(out.body);
+    return out;
+}
+
+QAbstractButton *make_button(QWidget *parent, const QString &text, bool primary) {
+    // R-022/I6：dialogkit 版上提至此（另两份删除）；objectName 由调用点按需再设。
+    auto *button = new QPushButton(text, parent);
+    button->setFixedHeight(theme::Metrics::btn_h); // R4 按钮高 26（A7）
+    button->setCursor(Qt::PointingHandCursor);
+    button->setFocusPolicy(Qt::StrongFocus);
+    button->setAccessibleName(text);
+    button->setProperty(theme::kFkProperty,
+                        QString::fromLatin1(primary ? theme::kFkPrimary : theme::kFkButton));
+    return button;
+}
+
+void lock_card_size(QFrame *card) {
+    if (card == nullptr)
+        return;
+    card->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
+    card->setMinimumHeight(card->sizeHint().height());
 }
 
 } // namespace pp::ui::formkit

@@ -331,44 +331,9 @@ QString natural_bytes(qint64 bytes) {
 }
 
 // 单行省略标签（§9.3「全界面禁止文案折行（超长省略号）」）：保存全文，按当前宽度省略
-class ElidedLabel : public QLabel {
-public:
-    explicit ElidedLabel(QWidget *parent = nullptr) : QLabel(parent) {}
-    void set_full_text(const QString &text) {
-        full_text_ = text;
-        updateGeometry(); // sizeHint 随全文变化（否则布局按"已省略文本"定宽 → 永远省略）
-        apply_elide();
-    }
-    QString full_text() const { return full_text_; }
-    // 布局按**全文**申请宽度（有空间就出全文），只在挤不下时省略；
-    // minimumSizeHint 保持 QLabel 默认（可被压缩 → resizeEvent 触发省略）
-    QSize sizeHint() const override {
-        QSize base = QLabel::sizeHint();
-        if (full_text_.isEmpty())
-            return base;
-        return QSize(fontMetrics().horizontalAdvance(full_text_) + 2, base.height());
-    }
-
-protected:
-    void resizeEvent(QResizeEvent *event) override {
-        QLabel::resizeEvent(event);
-        apply_elide();
-    }
-
-private:
-    void apply_elide() {
-        if (full_text_.isEmpty()) {
-            QLabel::clear();
-            return;
-        }
-        if (width() <= 0) { // 布局尚未定宽：先出全文，resizeEvent 时再省略
-            QLabel::setText(full_text_);
-            return;
-        }
-        QLabel::setText(fontMetrics().elidedText(full_text_, Qt::ElideRight, std::max(0, width())));
-    }
-    QString full_text_;
-};
+// R-020/R-320（M7-WP4）：ElidedLabel 的 7 份逐字拷贝收敛到 formkit 唯一实现
+// （本文件原 30+ 行自拷类删除；行为逐位等价 —— 全文 + ppFullText + tooltip + 省略号）。
+using ElidedLabel = formkit::ElidedLabel;
 
 // 卡头（mockup .card-h）：标题（12.5px/700）+ 可选徽标位（.pill，无内容则隐藏）+
 // 右侧 hint 位（调用方拿 row->layout() 继续追加，右对齐）
@@ -1818,7 +1783,11 @@ void MainWindow::build_ui() {
     d.file_count->setObjectName(QStringLiteral("pp-file-count"));
     d.unsupported = new ElidedLabel(card_head);
     d.unsupported->setObjectName(QStringLiteral("pp-card-hint"));
-    d.unsupported->setStyleSheet(QStringLiteral("color:#dd8800"));
+    // R-059（M7-WP4）：写死色 #dd8800 收口 warn 令牌（A6 令牌收口裁定；formkit.h「不写色值
+    // 字面量」纪律）—— 与状态栏警醒档同源取色。
+    d.unsupported->setStyleSheet(
+        QStringLiteral("color: ") +
+        theme::css_color(theme::tokens(theme::preferred_theme_mode()).warn));
     d.unsupported->setVisible(false);
     d.file_hint = new ElidedLabel(card_head);
     d.file_hint->setObjectName(QStringLiteral("pp-card-hint"));
@@ -3697,9 +3666,11 @@ void MainWindow::Impl::wait_thumbs(int timeout_ms) {
 // ---------------------------------------------------------------------------
 void MainWindow::Impl::smoke_probe_gui_r2() {
     // ---- (1) 下拉一致性 ----
-    // 期望：每个 QComboBox 都挂**唯一**样式钩子（ppField="combo"；ppMetaField 为迁移期遗留名，
-    // 同样接受），高度与 Metrics::combo_h 同档（±2 容 border-box），且**明暗两档实拍都有内容**
-    // （亮色下 ParamForm 的下拉曾整只不绘制 —— 非背景像素 0/19604，见报告 §1.1 表）。
+    // 期望：每个 QComboBox 都挂**唯一**样式钩子（ppFk="combo"，theme::kFkCombo —— R-058 修：
+    // 此前头注释写"ppField/ppMetaField 同样接受"与实现相反，实现只认 ppFk；三条钩子轨已按
+    // UX-6⑤ 收敛到 ppFk），高度与 Metrics::combo_h 同档（±2 容
+    // border-box），且**明暗两档实拍都有内容** （亮色下 ParamForm 的下拉曾整只不绘制 —— 非背景像素
+    // 0/19604，见报告 §1.1 表）。
     {
         int checked = 0, hook_miss = 0, height_bad = 0, invisible = 0;
         QStringList detail, heights;
@@ -7886,7 +7857,7 @@ void MainWindow::Impl::smoke_probe_run_geometry() {
         expect("log-mono",
                family == QString::fromLatin1(theme::Typography::family_mono) && shown_lines == 4 &&
                    open_full != nullptr && open_full->text() == QStringLiteral("查看完整日志…") &&
-                   open_full->property("ppField").toString() == QStringLiteral("link"),
+                   open_full->property(theme::kFkProperty).toString() == QStringLiteral("link"),
                QStringLiteral("family=\"%1\" lines=%2 link=%3")
                    .arg(family)
                    .arg(shown_lines)
@@ -8014,7 +7985,7 @@ void MainWindow::Impl::smoke_probe_run_geometry() {
         auto *again = page.findChild<QPushButton *>(QStringLiteral("pp-run-again"));
         const auto is_field = [](QPushButton *button, const char *value) {
             return button != nullptr &&
-                   button->property("ppField").toString() == QString::fromLatin1(value);
+                   button->property(theme::kFkProperty).toString() == QString::fromLatin1(value);
         };
         // W-R-T13（A39 ②）机械换锚：破坏性动作由「红描边钮（danger）」改**红文字链**
         // （link-danger：border:none + color = 令牌 err）。断言本体（三级动作各一副面孔 +
@@ -8022,13 +7993,18 @@ void MainWindow::Impl::smoke_probe_run_geometry() {
         // **旧 danger 描边档必须已退役**（否定断言——旧形态不得回潮）。
         const bool tiers = is_field(open_logs, "link") && is_field(open_output, "link") &&
                            is_field(cancel, "link-danger") && is_field(again, "button");
+        // UX-6⑤ 换锚（语义不变）：钩子轨并入 ppFk 后选择器文本改 ppFk；破坏性文字链仍须
+        // 无框 + err 色（拆两次 contains，容忍公共规则里的中间修饰），旧 danger 描边档与
+        // ppField/ppMetaField 两条退役轨都必须**不出现**（否定断言——旧形态不得回潮）。
         const QString sheet = page.styleSheet();
-        const int rule_at = sheet.indexOf(QStringLiteral("QPushButton[ppField=\"link-danger\"]"));
+        const int rule_at = sheet.indexOf(QStringLiteral("QPushButton[ppFk=\"link-danger\"]"));
+        const QString link_rule = rule_at >= 0 ? sheet.mid(rule_at, 200) : QString();
         const bool link_qss =
-            rule_at >= 0 &&
-            sheet.mid(rule_at, 200)
-                .contains(QStringLiteral("border: none; color: ") + theme::css_color(tokens.err));
-        const bool danger_retired = !sheet.contains(QStringLiteral("ppField=\"danger\""));
+            rule_at >= 0 && link_rule.contains(QStringLiteral("border: none")) &&
+            link_rule.contains(QStringLiteral("color: ") + theme::css_color(tokens.err));
+        const bool danger_retired = !sheet.contains(QStringLiteral("=\"danger\"")) &&
+                                    !sheet.contains(QStringLiteral("ppField")) &&
+                                    !sheet.contains(QStringLiteral("ppMetaField"));
         // 文字链本体：无框（QSS 已成文）+ **不挂图标**（与另两条文字链同形；旧 danger 钮的 ■ 退役）
         const bool link_icons_off = cancel != nullptr && open_logs != nullptr &&
                                     open_output != nullptr && cancel->icon().isNull() &&

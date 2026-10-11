@@ -70,13 +70,26 @@ ThumbOutcome make_thumbnail(const std::filesystem::path &src, int target_long_ed
 // PP-FROZEN(0.3.0) §3.6 · 输入预览（0.3.0 追加块；追加在文件末尾，既有声明一字不动）
 // ============================================================================================
 
-// §6.1「≥64px」：内嵌预览可用性门槛。与实现侧既有的 kMinPreviewLongEdge 同值同义（唯一的
-// 门槛来源；thumbnails 与 preview 两个通道共用同一数字，防止两条路径漂移）。
-inline constexpr int kPreviewEmbeddedMinLongEdge = 64;
+// ---------------------------------------------------------------------------
+// 内嵌预览门槛：**两条通道各自一把**（UX-3，M7-WP4；裁定登记见 build/m7-wp4/handoff.md）。
+// 0.3.0 落地时两条通道共用一个 64px 门槛（§6.1「≥64px」），结果 160×120 / 320×240 的
+// EXIF/MPF 缩略图被预览面板当预览用（拉到 487px 预览区显示 = 明显发糊）。拆开后：
+//   * 缩略图通道（make_thumbnail，M1b 冻结行为）：门槛 64px **零变化**（只画 46×46，160px
+//     内嵌图完全够）；
+//   * 预览通道（decode_preview/decode_preview_detailed/PreviewCache）：内嵌预览长边
+//     < 1600 一律放弃，走整图 float32 解码 + LANCZOS3 降到 kPreviewCacheMaxPx 内。
+// 两值都在本头公共处（单源不破）；实现侧 thumbs.cpp 的 find_preview 按通道传门槛。
+// ---------------------------------------------------------------------------
+inline constexpr int kThumbEmbeddedMinLongEdge = 64;     // 缩略图通道（行为零变化）
+inline constexpr int kPreviewEmbeddedMinLongEdge = 1600; // 预览通道（0.3.0 为 64，UX-3 拆开）
 
-// §6.1「LRU 内存缓存（16 张 2048px 上限）」的两个上限（单源；UI 侧不另写字面量）。
-inline constexpr std::size_t kPreviewCacheCapacity = 16;
-inline constexpr int kPreviewCacheMaxPx = 2048;
+// 预览 LRU 的两个上限（单源；UI 侧不另写字面量）。
+// 历史口径（§6.1 逐字）= 「LRU 内存缓存（16 张 2048px 上限）」；UX-3 起改为 8 张 / 4096px：
+// 预览上限 2048 → 4096 配合 1:1 / 800% 缩放，LRU 容量 16 → 8 以守内存。
+// NOTE(内存口径)：4096² RGBA8 ≈ 64MB/张（实际按图像比例）× 8 张 = 512MB 峰值上限；
+// 8 张满额且全部 4096² 时才到该上限，常态远低于此（缩放后长边 ≤ 4096、宽高比决定面积）。
+inline constexpr std::size_t kPreviewCacheCapacity = 8;
+inline constexpr int kPreviewCacheMaxPx = 4096;
 
 // `decode_preview()` 的完整结果（= 一次解码的全部可显示/可诊断信息）。返回类型是 QImage 的
 // 冻结形态只给像素，故文件名/尺寸/位深/色彩空间这些**面板要显示的字面信息**由本结构承载
@@ -102,8 +115,9 @@ QImage decode_preview(const std::filesystem::path &src, int max_px);
 //   * 一律不放大、不做色彩变换、失败不抛异常（error 非空 + image null）。
 PreviewImage decode_preview_detailed(const std::filesystem::path &src, int max_px);
 
-// §6.1「LRU 内存缓存（16 张 2048px 上限）」：按源路径缓存的最近使用池，
-// **逐出最旧（LRU）**；容量与 max_px 由构造参数给定（默认 = §6.1 的 16 / 2048）。
+// 预览 LRU（§6.1「LRU 内存缓存」；UX-3 起默认 8 张 / 4096px，见上）：按源路径缓存的最近使用池，
+// **逐出最旧（LRU）**；容量与 max_px 由构造参数给定（默认 = kPreviewCacheCapacity /
+// kPreviewCacheMaxPx）。
 //   * get() 命中 → 提升为最近使用并返回；未命中 → 解码（decode_preview_detailed）+ 插入；
 //   * 插入后条目数 > capacity → 逐出最近最少使用的条目（evictions 计数）；
 //   * 线程安全（内部互斥；解码在锁外进行，故 2 个预览 worker 可并发 miss）；

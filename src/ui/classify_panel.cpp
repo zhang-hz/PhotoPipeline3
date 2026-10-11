@@ -74,11 +74,14 @@ private:
 // —— 2 列 kv-grid 几何（A15：mockups-v2 形态，值逐条照 tokens.css `.kv-grid` 与 meta.html）——
 //   `.kv-grid{grid-template-columns:1fr auto 1fr auto;grid-auto-rows:28px;gap:0 12px}` +
 //   卡体 `padding:8px 12px 10px`；单元 = [色点 9][6px][名][弹性][计数胶囊]（`.kv-v` + `.dot`）。
-constexpr int kRowHeight = 28;  // R1 行 pitch 28（= grid-auto-rows:28px；chip 22 / 胶囊 16 装得下）
-constexpr int kGridColumns = 2; // 2 列 kv-grid（A15）
-constexpr int kColGap = 12;     // 列距 12（tokens.css `gap:0 12px`）
-constexpr int kCellGap = 6;     // 单元内间距 6（`.kv-v .dot{margin-right:6px}` + `gap:6px`）
-constexpr int kPadX = 12;       // 卡体内边距左右 12（mockup card-b padding:8px 12px 10px）
+// UX-6④（M7-WP4）：自拷字面量改引用公共常量（同值 → 几何零变化；单源 = formkit_layout /
+// theme::Metrics）。kPadTop/kPadBottom 8/4 是 mockup card-b 的偏离值（评审改进方案建议改
+// 10/12 对齐 R1），换值需同步重锚 classify 几何探针 —— 登记 build/m7-wp4/handoff.md 待裁。
+constexpr int kRowHeight = formkit::kRowPitch;    // R1 行 pitch 28（= grid-auto-rows:28px）
+constexpr int kGridColumns = 2;                   // 2 列 kv-grid（A15）
+constexpr int kColGap = formkit::kColGap;         // 列距 12（tokens.css `gap:0 12px`）
+constexpr int kCellGap = formkit::kInlineGap;     // 单元内间距 6（`.kv-v .dot{margin-right:6px}`）
+constexpr int kPadX = theme::Metrics::card_pad_x; // 卡体内边距左右 12（mockup card-b）
 constexpr int kPadTop = 8;
 constexpr int kPadBottom = 4; // + 卡布局自身下边距 6 = 10（与 mockup 的 card-b 底边距对齐）
 // 计数胶囊预留宽（3 位数字量级）：chip 宽上限按"单元 − 色点 − 间距 − 预留"算 → 计数从 9 涨到

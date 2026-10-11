@@ -155,7 +155,8 @@ using formkit::FieldWidth;
 constexpr const char *kStateProperty = "pp_meta_state";
 constexpr const char *kStateObjectName = "pp_meta_state";
 // 页面级动态属性钩子（QSS 选择器锚）：与 theme.h 的 ppFk/ppMod 并列，页面私有不外泄。
-constexpr const char *kFieldProperty = "ppMetaField";
+constexpr const char *kFieldProperty =
+    theme::kFkProperty; // UX-6⑤/R-054：三条钩子轨并入 ppFk（旧 ppMetaField 轨退役）
 
 // §7.1 时间卡的对照行主字段（core/metadata.h 的字段表：ExifTool 名）；另两字段进标签 tooltip。
 constexpr const char *kPrimaryTimeSource = "DateTimeOriginal";
@@ -232,45 +233,9 @@ constexpr const char *kNoKeywordsText = QT_TR_NOOP("无关键字");
 // 同口径）
 // ---------------------------------------------------------------------------
 
-class ElidedLabel : public QLabel {
-public:
-    explicit ElidedLabel(QWidget *parent = nullptr) : QLabel(parent) { setWordWrap(false); }
-    void set_full_text(const QString &text) {
-        full_text_ = text;
-        // 探针可读的**语义值**（显示文本可能按宽度省略成 "…"；自验断言按此口径比对）
-        setProperty("ppFullText", text);
-        setToolTip(text);
-        updateGeometry(); // sizeHint 随全文变化（否则布局按"已省略文本"定宽 → 永远省略）
-        apply_elide();
-    }
-    QString full_text() const { return full_text_; }
-    QSize sizeHint() const override {
-        const QSize base = QLabel::sizeHint();
-        if (full_text_.isEmpty())
-            return base;
-        return QSize(fontMetrics().horizontalAdvance(full_text_) + 2, base.height());
-    }
-
-protected:
-    void resizeEvent(QResizeEvent *event) override {
-        QLabel::resizeEvent(event);
-        apply_elide();
-    }
-
-private:
-    void apply_elide() {
-        if (full_text_.isEmpty()) {
-            QLabel::clear();
-            return;
-        }
-        if (width() <= 0) { // 布局尚未定宽：先出全文，resizeEvent 时再省略
-            QLabel::setText(full_text_);
-            return;
-        }
-        QLabel::setText(fontMetrics().elidedText(full_text_, Qt::ElideRight, std::max(0, width())));
-    }
-    QString full_text_;
-};
+// R-020/R-320（M7-WP4）：ElidedLabel 的 7 份逐字拷贝收敛到 formkit 唯一实现
+// （本文件原 30+ 行自拷类删除；行为逐位等价 —— 全文 + ppFullText + tooltip + 省略号）。
+using ElidedLabel = formkit::ElidedLabel;
 
 // ---------------------------------------------------------------------------
 // 文本格式化（只做显示层排版；数值本身来自 preview_effective / probe 摘要）
@@ -1931,135 +1896,17 @@ void apply_state(MetaState *st, const pp::BatchRules &r) {
 void apply_style(MetaState *st) {
     const theme::Tokens &t = st->tokens;
     const auto css = [](const QColor &c) { return theme::css_color(c); };
-    const QString field = QString::fromLatin1(kFieldProperty);
 
+    // UX-6⑥（M7-WP4）：本页 QSS 全部收编进 theme.h —— 跨页同形规则 = theme::field_qss/
+    // card_qss/formkit_qss/mod_qss/pill_qss，页专规则 = theme::page_meta_qss（含"为何不能
+    // 公共"注释）；页内不再拼 QSS 字符串。与窗口 QSS 同值同源，重复规则无副作用（页面自足）。
     QString qss;
-    // formkit 行内辅助件（ppFk：标签轨/值/单位/注释 + R4 spin 盒）+ .mod + 胶囊：页面自足
-    // （独立冒烟实例不再依赖窗口 QSS；与窗口 QSS 同值同源，重复规则无副作用）
     qss += theme::formkit_qss(t);
     qss += theme::mod_qss(t);
     qss += theme::pill_qss(t);
-    // 卡头（mockup .card-h .t / .hint）
-    qss += QStringLiteral("QLabel#pp-card-title { color: ") + css(t.text) + QStringLiteral("; }\n");
-    qss += QStringLiteral("QLabel#pp-card-hint { color: ") + css(t.text3) + QStringLiteral("; }\n");
-    // 只读生效值框 / 规则输入框（mockup .gps-in / .tbx：--ctl 底 + --ctl-bd 边 + r3 + 高 24）
-    qss += QStringLiteral("QLineEdit[") + field + QStringLiteral("=\"view\"], QLineEdit[") + field +
-           QStringLiteral("=\"rule\"] { background: ") + css(t.control) +
-           QStringLiteral("; border: 1px solid ") + css(t.control_bd) +
-           QStringLiteral("; border-radius: ") + QString::number(t.radius_control) +
-           QStringLiteral("px; color: ") + css(t.text) + QStringLiteral("; padding: 0 8px; }\n");
-    qss += QStringLiteral("QLineEdit[") + field +
-           QStringLiteral("=\"view\"]:disabled, QLineEdit[") + field +
-           QStringLiteral("=\"rule\"]:disabled { color: ") + css(t.text3) + QStringLiteral("; }\n");
-    // 下拉规则已随 GUI-R2 收口到 theme::formkit_qss 的 `ppFk="combo"`（本页不再自带 QComboBox
-    // 规则） 次按钮（R4：高 26 + 描边；A7）
-    qss += QStringLiteral("QPushButton[") + field + QStringLiteral("=\"btn\"] { background: ") +
-           css(t.control) + QStringLiteral("; border: 1px solid ") + css(t.control_bd) +
-           QStringLiteral("; border-radius: ") + QString::number(t.radius_control) +
-           QStringLiteral("px; color: ") + css(t.text2) +
-           QStringLiteral("; padding: 0 11px; font-weight: 600; }\n");
-    qss += QStringLiteral("QPushButton[") + field + QStringLiteral("=\"btn\"]:disabled { color: ") +
-           css(t.text3) + QStringLiteral("; background: transparent; border-color: ") +
-           css(t.control_bd) + QStringLiteral("; }\n");
-    // 文字链（无框）与危险链（清除 GPS = 红链；红只表达破坏性动作 §4.1）
-    qss += QStringLiteral("QToolButton[") + field +
-           QStringLiteral("=\"link\"] { border: none; background: transparent; color: ") +
-           css(t.accent) + QStringLiteral("; font-weight: 600; padding: 0 2px; }\n");
-    qss += QStringLiteral("QPushButton[") + field +
-           QStringLiteral("=\"danger\"] { border: none; background: transparent; color: ") +
-           css(t.err) + QStringLiteral("; font-weight: 600; padding: 0 2px; }\n");
-    qss += QStringLiteral("QPushButton[") + field +
-           QStringLiteral("=\"danger\"]:checked { "
-                          "background: ") +
-           css(t.err_dim) + QStringLiteral("; border-radius: ") +
-           QString::number(t.radius_control) + QStringLiteral("px; }\n");
-    // 折叠行（插入符 = 矢量图标）
-    qss += QStringLiteral("QToolButton[") + field +
-           QStringLiteral("=\"fold\"] { border: none; background: transparent; color: ") +
-           css(t.text2) + QStringLiteral("; font-weight: 600; }\n");
-    // 说明/提示行（mockup .sub-hint）
-    qss += QStringLiteral("QLabel[") + field + QStringLiteral("=\"sub\"], QLabel[") + field +
-           QStringLiteral("=\"hint\"] { color: ") + css(t.text3) + QStringLiteral("; }\n");
-    // 生效对照（mockup .tline）：原 = 删除线 + --txt2；新 = 强调色（.mod 时再叠强调边框）；
-    // 箭头/注释/来源 = --txt3；多选小表名 = --txt
-    qss += QStringLiteral("QLabel[") + field + QStringLiteral("=\"old\"] { color: ") +
-           css(t.text2) + QStringLiteral("; }\n");
-    qss += QStringLiteral("QLabel[") + field + QStringLiteral("=\"new\"] { color: ") +
-           css(t.accent) + QStringLiteral("; }\n");
-    qss += QStringLiteral("QLabel[") + field + QStringLiteral("=\"arrow\"], QLabel[") + field +
-           QStringLiteral("=\"note\"], QLabel[") + field +
-           QStringLiteral("=\"multi-more\"] "
-                          "{ color: ") +
-           css(t.text3) + QStringLiteral("; }\n");
-    qss += QStringLiteral("QLabel[") + field + QStringLiteral("=\"multi-name\"] { color: ") +
-           css(t.text) + QStringLiteral("; }\n");
-    // 空态一行（§8：中性灰说明；绝不警示色）
-    qss += QStringLiteral("QLabel[") + field + QStringLiteral("=\"empty\"] { color: ") +
-           css(t.text3) + QStringLiteral("; }\n");
-    // M6-T8 搜索区：结果列表 / 联想下拉（--ctl 底 + --ctl-bd 边 + r3；选中 = --acc-dim 底，
-    // 悬停 = --card-hi 底 —— 与卡片/控件同一套令牌）
-    const QString list_rule = QStringLiteral("QListWidget#pp-meta-gps-search-results, "
-                                             "QListWidget#pp-meta-gps-suggest");
-    qss += list_rule + QStringLiteral(" { background: ") + css(t.control) +
-           QStringLiteral("; border: 1px solid ") + css(t.control_bd) +
-           QStringLiteral("; border-radius: ") + QString::number(t.radius_control) +
-           QStringLiteral("px; color: ") + css(t.text) + QStringLiteral("; outline: none; }\n");
-    qss += list_rule + QStringLiteral("::item { padding: 2px 4px; border-radius: ") +
-           QString::number(t.radius_control) + QStringLiteral("px; }\n");
-    qss += list_rule + QStringLiteral("::item:hover { background: ") + css(t.card_hi) +
-           QStringLiteral("; }\n");
-    qss += list_rule + QStringLiteral("::item:selected { background: ") + css(t.accent_dim) +
-           QStringLiteral("; color: ") + css(t.text) + QStringLiteral("; }\n");
-    // 结果行内文案（名称 = --txt；地址/距离 = --txt3）+ 地址回显行（--txt2）
-    qss += QStringLiteral("QLabel[") + field + QStringLiteral("=\"result-name\"] { color: ") +
-           css(t.text) + QStringLiteral("; }\n");
-    qss += QStringLiteral("QLabel[") + field + QStringLiteral("=\"result-addr\"], QLabel[") +
-           field + QStringLiteral("=\"result-dist\"] { color: ") + css(t.text3) +
-           QStringLiteral("; }\n");
-    qss += QStringLiteral("QLabel[") + field + QStringLiteral("=\"address\"] { color: ") +
-           css(t.text2) + QStringLiteral("; }\n");
-    // M6-T12 地图覆盖层（§5.3）：光标读数 chip + 「－/＋」缩放钮 —— **定位色固定**（白底 α190 +
-    // 深灰字/图标，与 mapwidget 的版权行/图钉气泡同口径）：两者都压在地图上（可能是影像/卫星/
-    // 路网，明暗主题都可能落在其上），固定白底是两主题下都可读的唯一解；结构色仍走令牌。
-    const QString hud_bg = QStringLiteral("rgba(255, 255, 255, 190)");
-    const QString hud_fg = QStringLiteral("#404040");
-    qss += QStringLiteral("QLabel[") + field + QStringLiteral("=\"map-hud\"] { background: ") +
-           hud_bg + QStringLiteral("; border-radius: ") + QString::number(t.radius_control) +
-           QStringLiteral("px; color: ") + hud_fg + QStringLiteral("; padding: 1px 5px; }\n");
-    qss += QStringLiteral("QToolButton[") + field +
-           QStringLiteral("=\"map-zoom\"] { background: ") + hud_bg +
-           QStringLiteral("; border: 1px solid ") + css(t.card_bd) +
-           QStringLiteral("; border-radius: ") + QString::number(t.radius_control) +
-           QStringLiteral("px; }\n");
-    qss += QStringLiteral("QToolButton[") + field +
-           QStringLiteral("=\"map-zoom\"]:hover { background: rgba(255, 255, 255, 230); }\n");
-    qss += QStringLiteral("QToolButton[") + field +
-           QStringLiteral("=\"map-zoom\"]:disabled { background: rgba(255, 255, 255, 150); }\n");
-    // 分类 chip（与 formkit::ChipButton 同色同源：未选 = 透明底 + --ctl-bd；悬停 = --ctl 底；
-    // 选中 = --acc-dim 底 + --acc-bd 边 + --txt 字）
-    qss += QStringLiteral("QPushButton[") + field +
-           QStringLiteral("=\"chip\"] { background: transparent; border: 1px solid ") +
-           css(t.control_bd) + QStringLiteral("; border-radius: ") +
-           QString::number(formkit::kChipRadius) + QStringLiteral("px; color: ") + css(t.text2) +
-           QStringLiteral("; padding: 0 9px; }\n");
-    qss += QStringLiteral("QPushButton[") + field +
-           QStringLiteral("=\"chip\"]:hover { background: ") + css(t.control) +
-           QStringLiteral("; }\n");
-    qss += QStringLiteral("QPushButton[") + field +
-           QStringLiteral("=\"chip\"]:checked { background: ") + css(t.accent_dim) +
-           QStringLiteral("; border-color: ") + css(t.accent_bd) + QStringLiteral("; color: ") +
-           css(t.text) + QStringLiteral("; }\n");
-    qss += QStringLiteral("QPushButton[") + field +
-           QStringLiteral("=\"chip\"]:disabled { color: ") + css(t.text3) +
-           QStringLiteral("; border-color: ") + css(t.control_bd) + QStringLiteral("; }\n");
-    // 真警告（GPS 坐标无效）：A6 —— 原硬编码 0xcc8800 收口为 warn 令牌
-    qss += QStringLiteral("QLabel#gps_warning { color: ") + css(t.warn) + QStringLiteral("; }\n");
-    // 卡片（§4.3 r6 + --card-bd 描边）
-    qss += QStringLiteral("QFrame#pp-card { background: ") + css(t.card) +
-           QStringLiteral("; border: 1px solid ") + css(t.card_bd) +
-           QStringLiteral("; border-radius: ") + QString::number(t.radius_card) +
-           QStringLiteral("px; }\n");
-    qss += QStringLiteral("QWidget#pp-meta-content { background: transparent; }\n");
+    qss += theme::card_qss(t);
+    qss += theme::field_qss(t);
+    qss += theme::page_meta_qss(t);
     st->page->setStyleSheet(qss);
 
     // 地图离线 banner 的**宿主侧**收口（修 1-38/1-39：中性灰说明 + 括号进 tooltip；
@@ -2092,17 +1939,20 @@ void apply_style(MetaState *st) {
     }
     // M6-T12：地图缩放钮的矢量图标随令牌重放（覆盖层固定白底 → 图标恒取深灰 #404040）
     if (st->zoom_in != nullptr) {
-        icons::apply(st->zoom_in, icons::Name::ZoomIn, QColor(0x40, 0x40, 0x40),
-                     QColor(0x9a, 0x9a, 0x9a), kMapZoomIconPx);
+        icons::apply(st->zoom_in, icons::Name::ZoomIn, theme::overlay_tokens().hud_fg,
+                     theme::overlay_tokens().hud_fg_dim,
+                     kMapZoomIconPx); // overlay 令牌组（不随主题变）
     }
     if (st->zoom_out != nullptr) {
-        icons::apply(st->zoom_out, icons::Name::ZoomOut, QColor(0x40, 0x40, 0x40),
-                     QColor(0x9a, 0x9a, 0x9a), kMapZoomIconPx);
+        icons::apply(st->zoom_out, icons::Name::ZoomOut, theme::overlay_tokens().hud_fg,
+                     theme::overlay_tokens().hud_fg_dim,
+                     kMapZoomIconPx); // overlay 令牌组（不随主题变）
     }
     // M6-T13：展开钮同档（覆盖层固定白底 → 图标恒取深灰 #404040）
     if (st->map_expand != nullptr) {
-        icons::apply(st->map_expand, icons::Name::ZoomFit, QColor(0x40, 0x40, 0x40),
-                     QColor(0x9a, 0x9a, 0x9a), kMapZoomIconPx);
+        icons::apply(st->map_expand, icons::Name::ZoomFit, theme::overlay_tokens().hud_fg,
+                     theme::overlay_tokens().hud_fg_dim,
+                     kMapZoomIconPx); // overlay 令牌组（不随主题变）
     }
     // M6-T10：坐标行 WGS-84 标签的 Info 矢量图标随令牌重放（QLabel 承载的 QPixmap 取色不吃 QSS）
     if (st->datum_icon != nullptr) {
@@ -2214,15 +2064,8 @@ CardHeader make_header(MetaState *st, QWidget *parent, const QString &title,
     return out;
 }
 
-// 卡体（R1：下内边距 12；上侧由卡头下沿承担）
-QVBoxLayout *card_body(QWidget *card) {
-    auto *body = new QWidget(card);
-    auto *v = new QVBoxLayout(body);
-    v->setContentsMargins(theme::Metrics::card_pad_x, 0, theme::Metrics::card_pad_x,
-                          theme::Metrics::card_pad_bottom);
-    v->setSpacing(0);
-    return v;
-}
+// R-056（M7-WP4）：死函数 card_body(QWidget*) 已删（grep 复核全仓零调用；卡体由
+// formkit::make_card 单源承担，R1 上 10 / 下 12 —— 原"上 0 由卡头下沿承担"两制收口）。
 
 ElidedLabel *make_info_value(QWidget *parent, const QString &object_name) {
     auto *value = new ElidedLabel(parent);
@@ -2614,7 +2457,7 @@ QWidget *build_gps_card(MetaState *st, QWidget *parent) {
         st->pick_map->setToolTip(PageMeta::tr("取地图中心为坐标（可先拖拽地图定位）"));
         st->clear_gps = new QPushButton(PageMeta::tr("清除 GPS"), group.widget());
         st->clear_gps->setObjectName(QStringLiteral("pp-meta-gps-clear"));
-        st->clear_gps->setProperty(kFieldProperty, QStringLiteral("danger"));
+        st->clear_gps->setProperty(kFieldProperty, QString::fromLatin1(theme::kFkLinkDanger));
         st->clear_gps->setCheckable(true);
         st->clear_gps->setFixedHeight(theme::Metrics::btn_h);
         st->clear_gps->setCursor(Qt::PointingHandCursor);

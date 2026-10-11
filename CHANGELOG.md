@@ -1,5 +1,92 @@
 # 变更日志
 
+## [0.3.2] — 2026-10-11
+
+**GPS 地图升级版（M6）**：把「内嵌地图选点」从**能用**升级到**地图 App 水平** —— R1 搜索搜得出、
+R2 可切卫星/混合图层、R3 搜索后地图内选点闭环、R4 坐标基准透明可信，另补一批体验优化（R5）。
+两条关键口径：① **选点坐标 = WGS-84** —— 高德火星偏移（GCJ-02）已在地理编码边界内部抵消，
+**未加密**、可直接写 EXIF（实测量级 ~555 m 的偏移只存在于显示层，写回值经往返断言零漂移）；
+② **引擎零改动** —— `src/codecs` / `src/decode` 零 diff，`src/core` 仅 `settings.{h,cpp}` 纯加性
+追加 `map_style` / `map_sat_labels` 两键（0 删、老 INI 缺键回落默认、行为零变化），由金样
+**20/20** 与全语料 regression **zero diff** 双重背书。版本单源 = `CMakeLists.txt:19` = **0.3.2**。
+验收证据与偏差登记见 [docs/m6-report.md](docs/m6-report.md)。
+
+### 新增
+
+**瓦片图层模型 + 地理编码（T1–T3，模型解耦）**
+
+- **图层模型**（`src/mapwidget/layers.{h,cpp}`）：`TileStyle{Road, Satellite, Hybrid}` +
+  `TileSource`（**amap / osm / esri** × 瓦片 URL 事实表）；Hybrid = 影像（amap style=6）+
+  标注（style=7）**双层同帧**绘制；缓存 key 加图层维度、版权行随有效源单源（D1）
+- **地理编码**（`src/mapwidget/geocoder.{h,cpp}`）：amap / nominatim ×
+  search / suggest / reverse URL 事实表 + `parse_*`（**出参一律 WGS-84**，amap 分支内部
+  GCJ→WGS）；`providers` 降级为薄适配层（**冻结 `providers.h` 签名与 `search_url` 逐字节保留**）；
+  新单测 `test_layers` / `test_geocoder` / `test_providers`（URL 事实逐字断言）
+
+**地图控件（T4–T6）**
+
+- 图层切换「矢量 / 卫星 / 混合」（缓存 key 加 layer、`select_source` 回退、版权行随有效源）
+- 搜索结果**编号气泡图钉**（实心圆 + 编号，主钉置顶）；**点钉命中**（最近钉 ≤13px 优先于取点）
+  + `pin_clicked` 信号（冻结头加性追认 A1）
+
+**GPS 卡搜索与选点闭环（T7–T9）**
+
+- **搜索（App 级）**：联想（输入 200ms 防抖 → 下拉建议）、周边偏置 **`around` 20 条**
+  （`accept-language=zh`）、**6 类目分类 chips** 一键搜、**可点结果列表**（名称 / 地址 / 距离）、
+  地址回显行（逆地理）；`run_suggest` / `run_reverse` + `suggest_finished` /
+  `reverse_finished` / `search_results_ready`（追认 A2）；每类单在途、abort 旧请求、8s 超时、
+  错误分类提示（被墙 / 无 Key / 无结果 / 解析失败）
+- **选点闭环**：搜索 → 多钉 + 列表 → 点钉 / 点行 → 主钉 + 规则框**回填 WGS-84** → 微调 →
+  「地图选点」取中心 → 逆地理确认
+
+**坐标基准透明（T10，R4）**
+
+- GPS 卡坐标显示行「**WGS-84（标准 GPS）**」标签 + Info 矢量图标 + tooltip；十进制 ↔ **DMS**
+  切换（只显示 / 复制，**不改写入值**）、复制到剪贴板、坐标框右键菜单；`out_of_china` 盒边缘
+  0.5° 带内**精度提示**（tooltip + 状态行）；新 `src/mapwidget/dms.{h,cpp}` +
+  `test_dms`（往返 / 格式逐字 / 粗盒边界带）
+
+**图层记忆与地图 UX（T11–T13，R5）**
+
+- **图层记忆**：设置页新「地图」页签；`map_style` / `map_sat_labels` 跨进程持久化
+  （`settings.{h,cpp}` 加性追加：默认 = 现行为、老 INI 可读；`amap_key` 脱敏不变）
+- 缩放「－ / ＋」、左下**比例尺**、光标 **WGS-84 坐标 chip**（约 100ms 节流）；**大地图对话框**
+  （「展开」= **同一只 MapWidget 重挂载**，不新建第二只地图 / 不复制状态；挂回复位 + 尺寸记忆）
+  （追认 A3）；`src/ui/map_dialog.{h,cpp}`
+- **回归探针**：离线 `--ui-smoke` 新增 `meta-loop`（**选点值 = WGS-84 断言**）/ `map-hud` /
+  `meta-map-expand`（14/14）等；冻结末行与截图 12 张不变
+
+**密钥防泄漏纪律（`8071a08`）**
+
+- `.gitignore` 增补 14 行（`.zcode/secrets/`、`amap_key*` 等）—— 高德 Key **不入库**（用户自填，
+  设置页密文录入）；全历史 blob 泄漏扫描 0 命中（[docs/m6-report.md](docs/m6-report.md) §6）
+
+### 修复
+
+**「搜索搜不出来」根治（R1）**
+
+- 实测三层根因（[docs/m6-map-upgrade.md](docs/m6-map-upgrade.md) §2.1）：① 默认源 OSM 系大陆
+  **不可达**（Nominatim SSL 握手失败）→ 搜索恒报「请求失败」；② 高德服务可达但需 Key；③ 即便
+  Nominatim 通，旧事实表（单 `q=` 全文 / `limit=6` / 无中文参数）也不到地图 App 水平
+- 搜索管线迁 `Geocoder`：**换用可达的高德 Web 服务 + 参数/编码收口** —— `place/text` 事实表
+  （`keywords` 百分号编码、`city=`、`offset=20`、`page=1`、`extensions=all`、`accept-language=zh`，
+  URL 事实逐字入测试）；**周边偏置 `around`**（视口中心、半径随 zoom，请求按该源基准转换）→
+  **20 条按距离升序**；**0 结果回退全文**搜索；未填 Key 时搜索 / 联想 / 逆地理三路**明确指引、
+  零请求**
+
+**残留图钉（选点闭环）**
+
+- **换地图源清残留图钉**：换源即清结果钉与主钉，不留「点不动」的旧钉（旧钉仍画在屏上却不能
+  选中 / 回填）；行选与点钉同句反馈
+
+### 已知
+
+- **T14 可选项未做**：离线瓦片落盘持久化（现为内存 LRU，断网只保留已浏览区）与多图 GPS 轨迹线
+- 免 Key 兜底 Nominatim/OSM 保留但大陆**不可达**（客观被墙）→ 错误分类文案「大陆不可达，请切
+  高德」；**BD-09（百度）未引入**（现无百度源）
+- 高德 Key 仍为「用户自填」口径（不入库）；免费额度内自用，**超限表现未做压力实测**
+- 自动化止于像素 / 几何 / 明暗等价层；真机手感与观感的人工目检未做
+
 ## [0.3.1] — 2026-10-10
 
 **GUI 缺陷根治版**：对 0.3.0 做可视化排查（真实平台渲染双主题实拍 + 像素级取证），根治四类

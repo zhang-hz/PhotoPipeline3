@@ -30,7 +30,22 @@ caption 单轨 46×32；壳层顶栏 44 + 状态栏 30；**栏宽固定轴 330 /
 逐条探针、偏差与未决项见 [docs/m5-report.md](docs/m5-report.md)，开发期裁定见
 [docs/m5-adjudications.md](docs/m5-adjudications.md)。
 
-**0.3.1（当前版本）= GUI 缺陷根治版**：对 0.3.0 做可视化排查（真实平台双主题实拍 + 像素级取证），
+**0.3.2（当前版本）= GPS 地图升级版（M6）**：把「内嵌地图选点」从能用升级到**地图 App 水平**——
+R1 搜索搜得出（改用可达的**高德 Web 服务**事实表：`place/text` + 周边偏置 **`around` 20 条**按距离升序 +
+6 类目 chips + 联想 / 逆地理 / 可点结果列表）、R2 矢量 / 卫星 / **混合图层**（Hybrid = 影像 + 标注双层
+同帧绘制）、R3 搜索 → 点钉 / 点行 → **回填**的**地图内选点闭环**、R4 **坐标基准透明**（GPS 卡
+「**WGS-84（标准 GPS）**」标签、十进制 ↔ DMS、复制到剪贴板；高德火星偏移（GCJ-02）已在地理编码
+边界内部抵消，**选点值 = 未加密 WGS-84，可直接写 EXIF**）、R5 体验优化（图层记忆 + 设置页「地图」
+页签、缩放「－ / ＋」、比例尺、光标 WGS-84 坐标 chip、**大地图对话框**（「展开」= 同一只 MapWidget
+重挂载））。**引擎零改动**（`src/codecs` / `src/decode` 零 diff；`src/core` 仅 `settings.{h,cpp}`
+**加性**追加 `map_style` / `map_sat_labels` 两键，0 删、老 INI 缺键回落默认），由金样 **20/20** 与
+全语料 regression **zero diff** 双重背书；离线 `--ui-smoke` 新增 `meta-loop`（**选点值 = WGS-84 断言**）/
+`map-hud` / `meta-map-expand`（14/14），冻结末行与截图 12 张不变。**高德 Key 用户自填、不入库**
+（设置页密文录入；`.gitignore` 增补 + 全历史 blob 泄漏扫描 0 命中）。验收证据与偏差登记见
+[docs/m6-report.md](docs/m6-report.md)，开发期裁定见 [docs/m6-adjudications.md](docs/m6-adjudications.md)，
+逐条变更见 [CHANGELOG.md](CHANGELOG.md) `[0.3.2]`。
+
+**0.3.1 = GUI 缺陷根治版**：对 0.3.0 做可视化排查（真实平台双主题实拍 + 像素级取证），
 根治四类用户可见缺陷 —— 亮色下拉整只不绘制 / 格式卡错位 / 弹窗 ✕ 无效 / 文件列表多一枚勾选框，
 并按「设计要求自绘、实现却让平台画」把**平台代画存量 10 项**一次收口（下拉与数值框矢量箭头、
 树展开符、菜单勾选、滚动条、下拉弹层、菜单 / 报错框 / 提示框 / 分组盒令牌化）。同时新增
@@ -418,7 +433,7 @@ chmod +x PhotoPipeline-<版本>-x86_64.AppImage
 
 ## 发行版（Windows）
 
-**M3 起提供 Windows x64 免安装产物**（0.2.0 为首个 Windows 版本，当前版本 0.3.0）；与 Linux 的 AppImage 同一引擎
+**M3 起提供 Windows x64 免安装产物**（0.2.0 为首个 Windows 版本，当前版本 0.3.2）；与 Linux 的 AppImage 同一引擎
 与界面，差异只在打包形态（zip vs AppImage）与平台运行时（MSVC 运行时 / Qt msvc2022_64）。
 
 ### 下载与运行
@@ -458,7 +473,7 @@ chmod +x PhotoPipeline-<版本>-x86_64.AppImage
 ### 命令行
 
 ```powershell
-.\photopipeline.exe --version      # → PhotoPipeline 0.3.0（单行 + 退出码 0；非 dev 门控，发布构建亦可用）
+.\photopipeline.exe --version      # → PhotoPipeline 0.3.2（单行 + 退出码 0；非 dev 门控，发布构建亦可用）
 .\photopipeline.exe                # 图形界面
 .\photopipeline.exe --ui-smoke     # 无头 UI 走查（offscreen，产出 12 张截图；仅 PP_BUILD_DEV=ON 的构建）
 .\photopipeline.exe --dev ...      # 开发 harness：全语料矩阵 / 回归基线入口（同上，仅 dev 构建）

@@ -161,21 +161,33 @@ int main() {
     check(!osm->label_url(3, 5, 6).isValid() && !esri->label_url(3, 5, 6).isValid(),
           "label/unsupported-empty", "osm/esri 无标注层,应返回空 QUrl");
 
-    // amap 子域轮换:连续 8 次 Road 调用应覆盖 01..04 且全部落在范围内。
-    bool seen[4] = {false, false, false, false};
-    bool in_range = true;
-    for (int i = 0; i < 8; ++i) {
-        const int n =
+    // R-220 换锚（M7-WP7，裁定登记 build/m7-wp7/handoff.md）：子域由「进程级原子游标轮换」
+    // 改为「瓦片坐标的纯函数」—— 断言同步改为①同瓦片恒同子域（纯/可复现）②不同瓦片覆盖
+    // 01..04（分摊面不塌）。旧断言（同瓦片 8 连调覆盖 4 子域）钉的是被有意移除的全局状态。
+    {
+        const int n0 =
             amap_subdomain(amap->tile_url(3, 5, 6, TileStyle::Road), QStringLiteral("webrd"));
-        if (n < 1 || n > 4) {
-            in_range = false;
-            break;
+        bool stable = true;
+        for (int i = 0; i < 8; ++i) {
+            if (amap_subdomain(amap->tile_url(3, 5, 6, TileStyle::Road), QStringLiteral("webrd")) !=
+                n0) {
+                stable = false;
+            }
         }
-        seen[n - 1] = true;
+        check(stable && n0 >= 1 && n0 <= 4, "amap/subdomain/pure",
+              "同瓦片必须恒同子域（纯函数）且落在 01..04: " +
+                  q(amap->tile_url(3, 5, 6, TileStyle::Road).host()));
+        bool seen[4] = {false, false, false, false};
+        for (int x = 0; x < 8; ++x) {
+            const int n =
+                amap_subdomain(amap->tile_url(3, x, 6, TileStyle::Road), QStringLiteral("webrd"));
+            if (n >= 1 && n <= 4) {
+                seen[n - 1] = true;
+            }
+        }
+        check(seen[0] && seen[1] && seen[2] && seen[3], "amap/subdomain/coverage",
+              "不同瓦片未覆盖全部 4 个子域（分摊面塌了）");
     }
-    check(in_range, "amap/subdomain/range", "轮换子域越出 01..04");
-    check(seen[0] && seen[1] && seen[2] && seen[3], "amap/subdomain/rotation-coverage",
-          "8 次 Road 调用未覆盖全部 4 个子域");
     for (int i = 0; i < 4; ++i) {
         check(amap_subdomain(amap->tile_url(3, 5, 6, TileStyle::Satellite),
                              QStringLiteral("webst")) >= 1 &&

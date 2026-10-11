@@ -36,4 +36,11 @@ QStringList provider_ids();
 QString parse_search(const QString &provider_id, const QByteArray &body,
                      std::vector<SearchResult> &out);
 
+// ---- M7-WP7 加性追认（R-158；裁定登记 build/m7-wp7/handoff.md）-----------------
+// 解析入口的**非歧义名**：与 geocoder 的 `parse_search(body, geocoder_id, out)` 划清边界
+// （两者曾同名且参数序相反 —— 手滑温床）。既有 `parse_search(provider_id, body, out)` 保留
+// 并转发到本函数，冻结签名/行为零改动。生产与新测试一律用本名。
+QString parse_provider_search(const QString &provider_id, const QByteArray &body,
+                              std::vector<SearchResult> &out);
+
 } // namespace pp::map

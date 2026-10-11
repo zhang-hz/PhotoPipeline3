@@ -87,18 +87,33 @@ MapDialog::MapDialog(QWidget *parent) : QDialog(parent) {
     ring->set_tokens(tokens);
 }
 
+MapDialog::~MapDialog() {
+    release(); // R-261：析构兜底 —— adopt/release 成对，调用方漏调 release 也不丢复原
+}
+
 void MapDialog::adopt(pp::map::MapWidget *map) {
     if (map == nullptr) {
         return;
     }
+    release(); // 换接管先复原旧契约（幂等）
     map_ = map;
     if (map->parentWidget() != slot_) {
         map->setParent(slot_);
     }
-    // 卡片里的 136px 固定高只在卡片生效：放开上限让地图随对话框伸缩（回程由调用方复原）
+    // 卡片里的固定高只在卡片生效：放开上限让地图随对话框伸缩（R-261：约束记账在本类，
+    // release()/析构成对复原 —— 不再把复原义务单边推给调用方）
+    adopt_max_height_ = map->maximumHeight();
     map->setMaximumHeight(QWIDGETSIZE_MAX);
     slot_line_->addWidget(map, 1);
     map->show();
+}
+
+void MapDialog::release() {
+    if (map_ == nullptr) {
+        return;
+    }
+    map_->setMaximumHeight(adopt_max_height_); // 复原 adopt 放开的几何约束
+    map_ = nullptr;
 }
 
 } // namespace pp::ui

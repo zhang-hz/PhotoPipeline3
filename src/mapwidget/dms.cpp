@@ -11,16 +11,19 @@
 //      （59.9995' → 下一度的 0.000'）由「千分之一分」整数量化天然处理，不做浮点进位特判。
 //   2) dms_to_deg：兼容 "N 39°54.246'" / "39°54.246'N" / 秒形态 "N 39°54'14.8\"" / 纯十进制度
 //      （"39.9042" / "-74.006"）；度分秒三段任一可缺，分、秒必须 ≥0 且 <60，尾随垃圾即拒绝。
-//   3) coord_precision_suspect：与 coord.cpp:28 的 `out_of_china` 共用**同一粗矩形**
-//      （lon 72.004–137.8347 / lat 0.8293–55.8271；两处口径必须一致，改一处须同时改另一处）。
-//      判定落法（dms.h 头注「粗包围盒边缘/外 → true」的展开）：
+//   3) coord_precision_suspect：与 coord.cpp 的 `out_of_china` 共用**同一粗矩形**（常量
+//      单源 = coord.h 的 kChinaBBox*，M7-WP7/R-307 收口，不再双份维护）。
+//      判定落法（dms.h 头注的展开；R-105 修正过"外→true"的失实头注）：
 //        - 盒内深处        → false（偏移两向一致，正常显示/写入）；
 //        - 盒外（境外）    → false（coord.cpp 两向 identity，无"界内界外不一致"可提示）；
 //        - 盒内贴近任一边界 → true（**盒边缘一带** = 距任一边 ≤ kEdgeBandDeg）。
-//      该带 = 国境线/港澳台边缘带：GCJ-02 偏移"归零/应用"在地图源与逆变换之间不一致，
-//      可致几十米级误差 —— UI 据此提示「该区域坐标精度存疑」（§4.5 边界精度提示）。
+//      该带只说明「靠近粗包围盒边界」（R-046：不是真实国境线/港澳台边界判定）：GCJ-02
+//      偏移"归零/应用"在地图源与逆变换之间不一致，可致几十米级误差 —— UI 据此提示
+//      「该区域坐标精度存疑」（§4.5 边界精度提示；文案同 R-046 口径）。
 
 #include "mapwidget/dms.h"
+
+#include "mapwidget/coord.h" // R-307：粗包围盒常量单源（kChinaBBox*）
 
 #include <QChar>
 #include <QtGlobal>
@@ -32,12 +35,6 @@
 namespace pp::map {
 namespace {
 
-// 与 coord.cpp:28 out_of_china 同款粗矩形（mainland + Hainan）
-constexpr double kChinaLonMin = 72.004;
-constexpr double kChinaLonMax = 137.8347;
-constexpr double kChinaLatMin = 0.8293;
-constexpr double kChinaLatMax = 55.8271;
-
 // 「盒边缘一带」的带宽（度）：盒内距任一边 ≤ 该值即判存疑（≈55 km；任务书 §4.5 授权 0.5°）
 constexpr double kEdgeBandDeg = 0.5;
 
@@ -45,7 +42,8 @@ constexpr double kMinutesPerDegree = 60.0;
 constexpr int kMilliPerMinute = 1000; // 「千分之一分」量化刻度
 
 bool inside_rough_box(double lat, double lon) {
-    return !(lon < kChinaLonMin || lon > kChinaLonMax || lat < kChinaLatMin || lat > kChinaLatMax);
+    return !(lon < kChinaBBoxLonMin || lon > kChinaBBoxLonMax || lat < kChinaBBoxLatMin ||
+             lat > kChinaBBoxLatMax);
 }
 
 // 度符号 / 分 / 秒标记（ASCII 一律收；排印撇也兼容 —— 只认符号不认写法）
@@ -221,8 +219,8 @@ bool coord_precision_suspect(double lat, double lon) {
     if (!inside_rough_box(lat, lon)) {
         return false; // 粗盒外（境外）：coord.cpp 两向 identity，无"界内界外不一致"
     }
-    const double edge_dist =
-        std::min({lat - kChinaLatMin, kChinaLatMax - lat, lon - kChinaLonMin, kChinaLonMax - lon});
+    const double edge_dist = std::min({lat - kChinaBBoxLatMin, kChinaBBoxLatMax - lat,
+                                       lon - kChinaBBoxLonMin, kChinaBBoxLonMax - lon});
     return edge_dist <= kEdgeBandDeg; // 盒边缘一带（含边界本身）
 }
 

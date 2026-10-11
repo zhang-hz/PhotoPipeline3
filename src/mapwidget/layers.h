@@ -21,6 +21,9 @@ struct TileSource {
 };
 
 const TileSource *tile_source_by_id(const QString &id);
+// R-158（M7-WP7）：C1 适配映射单源 —— 地图源 id → 瓦片源（"amap"→amap；其余含未知→osm）。
+// providers.cpp / mapwidget.cpp 共同消费，不再各自持拷贝。
+const TileSource *tile_source_for_provider(const QString &provider_id);
 QStringList tile_source_ids();
 QStringList styles_for(const QString &source_id);
 QString tile_style_name(TileStyle);              // "road"|"satellite"|"hybrid"

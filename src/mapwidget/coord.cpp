@@ -25,8 +25,11 @@ constexpr int kMaxInverseIterations = 10;
 constexpr double kInverseToleranceDeg = 1e-13;
 
 // Rough China bounding box (mainland + Hainan): outside it the offset is defined to be zero.
+// M7-WP7 / R-307: the box constants are single-source in coord.h (shared with dms.cpp's
+// coord_precision_suspect) — no second literal copy here any more.
 bool out_of_china(double lat, double lon) {
-    return lon < 72.004 || lon > 137.8347 || lat < 0.8293 || lat > 55.8271;
+    return lon < kChinaBBoxLonMin || lon > kChinaBBoxLonMax || lat < kChinaBBoxLatMin ||
+           lat > kChinaBBoxLatMax;
 }
 
 double transform_lat(double x, double y) {

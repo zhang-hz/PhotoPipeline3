@@ -179,6 +179,10 @@ int main() {
     }
 
     // ---- 逆地理 URL:amap location 为 {lon},{lat}(源基准);nominatim lat/lon ----
+    // R-219 换锚（M7-WP7，裁定登记 build/m7-wp7/handoff.md）：reverse_url 入参语义由
+    // "源基准（调用方预转 GCJ-02）"改为「**WGS-84 入参、URL 边界内转换**」—— 与 search_url
+    // 的 near 同一约定。断言改钉「location == wgs84_to_gcj02(入参)」+「不得原样透传 WGS-84」，
+    // scheme/host/path/key/extensions 逐字保留（只换锚不降强度）。
     const QUrl regeo = amap->reverse_url(39.990464, 116.481488, QStringLiteral("KEY123"));
     check(regeo.scheme() == QLatin1String("https") &&
               regeo.host() == QLatin1String("restapi.amap.com") &&
@@ -186,9 +190,22 @@ int main() {
           "amap/reverse/scheme-host-path", "got " + q(regeo.toString()));
     {
         const QUrlQuery query(regeo);
-        check(query.queryItemValue(QStringLiteral("location")) ==
-                  QLatin1String("116.481488,39.990464"),
-              "amap/reverse/location-lon-lat", "location 应为 {lon},{lat}");
+        const QStringList loc =
+            query.queryItemValue(QStringLiteral("location")).split(QLatin1Char(','));
+        check(loc.size() == 2, "amap/reverse/location-lon-lat",
+              "location 应为 {lon},{lat}: " + q(query.queryItemValue(QStringLiteral("location"))));
+        if (loc.size() == 2) {
+            const double loc_lon = loc.at(0).toDouble();
+            const double loc_lat = loc.at(1).toDouble();
+            const std::pair<double, double> gcj = pp::map::wgs84_to_gcj02(39.990464, 116.481488);
+            check(near_eq(loc_lat, gcj.first, 1e-6) && near_eq(loc_lon, gcj.second, 1e-6),
+                  "amap/reverse/location-converted",
+                  "location 应等于 wgs84_to_gcj02(入参 WGS-84) 的 {lon},{lat}: " +
+                      q(query.queryItemValue(QStringLiteral("location"))));
+            check(std::fabs(loc_lat - 39.990464) > 1e-4 || std::fabs(loc_lon - 116.481488) > 1e-4,
+                  "amap/reverse/location-not-passthrough",
+                  "入参 WGS-84 不得原样上线上（GCJ-02 偏移须已施加）");
+        }
         check(query.queryItemValue(QStringLiteral("key")) == QLatin1String("KEY123") &&
                   query.queryItemValue(QStringLiteral("extensions")) == QLatin1String("all"),
               "amap/reverse/key-extensions", "key/extensions=all 漂移");

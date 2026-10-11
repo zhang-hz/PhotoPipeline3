@@ -105,30 +105,36 @@ int main() {
     check(amap_tile2.query() == QLatin1String("lang=zh_cn&size=1&scale=1&style=8&x=65&y=42&z=11"),
           "amap/tile/query/second-sample", "got " + q(amap_tile2.query()));
 
-    // 子域轮换:连续 8 次调用应覆盖 01..04 且全部落在范围内(每进程一条轮换序列)。
-    bool seen[4] = {false, false, false, false};
-    bool in_range = true;
-    for (int i = 0; i < 8; ++i) {
-        const int n = amap_subdomain(amap->tile_url(3, 5, 6));
-        if (n < 1 || n > 4) {
-            in_range = false;
-            break;
+    // R-220 换锚（M7-WP7，裁定登记）：子域改为瓦片坐标的纯函数（同瓦片恒同、不同瓦片覆盖
+    // 01..04）—— 旧断言钉的是已移除的进程级轮换游标。
+    {
+        const int n0 = amap_subdomain(amap->tile_url(3, 5, 6));
+        bool stable = true;
+        for (int i = 0; i < 8; ++i) {
+            if (amap_subdomain(amap->tile_url(3, 5, 6)) != n0) {
+                stable = false;
+            }
         }
-        seen[n - 1] = true;
+        check(stable && n0 >= 1 && n0 <= 4, "amap/tile/subdomain-pure",
+              "同瓦片必须恒同子域（纯函数）且落在 01..04: " + q(amap->tile_url(3, 5, 6).host()));
+        bool seen[4] = {false, false, false, false};
+        for (int x = 0; x < 8; ++x) {
+            const int n = amap_subdomain(amap->tile_url(3, x, 6));
+            if (n >= 1 && n <= 4) {
+                seen[n - 1] = true;
+            }
+        }
+        check(seen[0] && seen[1] && seen[2] && seen[3], "amap/tile/subdomain-coverage",
+              "不同瓦片未覆盖全部 4 个子域");
     }
-    check(in_range, "amap/tile/subdomain-range", "轮换子域越出 01..04");
-    check(seen[0] && seen[1] && seen[2] && seen[3], "amap/tile/subdomain-rotation-coverage",
-          "8 次调用未覆盖全部 4 个子域");
 
     // 委托语义(Single source of truth):T3 后 tile_url 即 TileSource::tile_url(..., Road)。
-    // amap 子域由共享轮换计数器给出(逐次调用值不同),故按 path/query + 去掉 "webrd0n" 的 host 比对。
+    // R-220 后子域 = 瓦片坐标的纯函数（两侧恒同）→ 整条 URL 逐字节可比。
     const QUrl modeled_tile =
         pp::map::tile_source_by_id(QStringLiteral("amap"))->tile_url(3, 5, 6, TileStyle::Road);
-    const QString amap_tile_tail = amap_tile.host().mid(7); // "webrd0n" 之后 = ".is.autonavi.com"
-    check(amap_tile.path() == modeled_tile.path() && amap_tile.query() == modeled_tile.query() &&
-              !amap_tile_tail.isEmpty() && amap_tile_tail == modeled_tile.host().mid(7),
-          "amap/tile/delegates-to-layers",
-          "tile_url 应等于 TileSource::tile_url(..., Road): " + q(modeled_tile.toString()));
+    check(amap_tile == modeled_tile, "amap/tile/delegates-to-layers",
+          "tile_url 应与 TileSource::tile_url(..., Road) 逐字节一致: " +
+              q(modeled_tile.toString()));
     check(osm->tile_url(3, 5, 6) ==
               pp::map::tile_source_by_id(QStringLiteral("osm"))->tile_url(3, 5, 6, TileStyle::Road),
           "osm/tile/delegates-to-layers", "osm tile_url 应与 TileSource 逐字节一致");
@@ -233,6 +239,25 @@ int main() {
         }
         check(same, "parse/delegates-to-geocoder",
               "parse_search 应为 Geocoder parse_search 的 title/lat/lon 回映射");
+    }
+
+    // R-158（M7-WP7 只增断言）：非歧义名 parse_provider_search = 冻结名 parse_search 的
+    // 同一实现（旧名转发），行为逐项一致。
+    {
+        std::vector<SearchResult> via_new_name;
+        const QString error_new =
+            pp::map::parse_provider_search(QStringLiteral("amap"), amap_body, via_new_name);
+        std::vector<SearchResult> via_frozen_name;
+        const QString error_old =
+            pp::map::parse_search(QStringLiteral("amap"), amap_body, via_frozen_name);
+        bool same = error_new == error_old && via_new_name.size() == via_frozen_name.size();
+        for (std::size_t i = 0; same && i < via_new_name.size(); ++i) {
+            same = via_new_name[i].title == via_frozen_name[i].title &&
+                   via_new_name[i].lat == via_frozen_name[i].lat &&
+                   via_new_name[i].lon == via_frozen_name[i].lon;
+        }
+        check(same, "parse/provider-search-alias",
+              "parse_provider_search 与冻结名 parse_search 必须同一行为");
     }
 
     // ---- 错误分类(文案与 M1b 同源;out 一律清空)----

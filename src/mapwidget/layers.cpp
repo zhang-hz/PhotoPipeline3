@@ -12,29 +12,40 @@
 //   esri Sat/Hybrid  https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/
 //                  MapServer/tile/{z}/{y}/{x}   (y before x; Hybrid reuses the imagery layer)
 //
+// M7-WP7（R-158/R-220/R-224，追认见 build/m7-wp7/handoff.md）：
+//   * R-220 纯函数化：子域 n 由瓦片坐标**确定性派生**（(x+y+z) mod 4 + 1）—— 同瓦片恒同
+//     子域（可缓存/可复现），相邻瓦片自然分摊到 4 个子域；不再掺全局 atomic 游标
+//     （原文档承诺"纯函数 URL 事实表"，游标使 URL 依赖调用序）。
+//   * R-224 表驱动：源事实（id/label/基准/版权/支持集/URL 构造器）收敛进 kSources 单表；
+//     supports/tile_url/label_url/tile_source_by_id 的 4 处字符串 if 链全部改查表，加源 =
+//     加一行。URL 事实（host/path/query 模板）逐字不动。
+//   * R-158 单源：`tile_source_for_provider`（地图源 id → 瓦片源的 C1 适配映射）在此**唯一**
+//     定义，providers.cpp / mapwidget.cpp 共同消费（此前两 TU 各拷一份）。
+//
 // Attribution（§9-X5 合规）：地图右下版权行由 mapwidget 读取 TileSource::attribution 绘制，
 // 本文件的构造是**唯一定义处**。amap=「© 高德地图」、osm=「© OpenStreetMap contributors」、
 // esri=「© Esri, Maxar, Earthstar Geographics」。
 
 #include "mapwidget/layers.h"
 
-#include <atomic>
+#include <cstdint>
 
 namespace pp::map {
 namespace {
 
-// webrd01..04 / webst01..04 rotation. The URL builders are const, so the cursor is
-// file-static: one rotation sequence per process — same precedent as providers.cpp.
-std::atomic<unsigned> g_amap_subdomain_cursor{0};
+// webrd01..04 / webst01..04 的 4 子域（URL 事实表 n 的取值域）。
+constexpr int kAmapSubdomains = 4;
 
-unsigned next_amap_subdomain() {
-    return 1u + (g_amap_subdomain_cursor.fetch_add(1, std::memory_order_relaxed) % 4u);
+// R-220：子域 = 瓦片坐标的纯函数（同瓦片恒同子域）。ASCII 事实不变（0{n}，n=1..4）。
+int amap_subdomain(int z, int x, int y) {
+    const auto mix = std::int64_t(x) + std::int64_t(y) + std::int64_t(z);
+    return 1 + int((mix < 0 ? -mix : mix) % kAmapSubdomains);
 }
 
 QUrl amap_road_url(int z, int x, int y) {
     return QUrl(QStringLiteral("https://webrd0%1.is.autonavi.com/appmaptile"
                                "?lang=zh_cn&size=1&scale=1&style=8&x=%2&y=%3&z=%4")
-                    .arg(next_amap_subdomain())
+                    .arg(amap_subdomain(z, x, y))
                     .arg(x)
                     .arg(y)
                     .arg(z));
@@ -43,7 +54,7 @@ QUrl amap_road_url(int z, int x, int y) {
 QUrl amap_satellite_url(int z, int x, int y) {
     return QUrl(QStringLiteral("https://webst0%1.is.autonavi.com/appmaptile?style=6"
                                "&x=%2&y=%3&z=%4")
-                    .arg(next_amap_subdomain())
+                    .arg(amap_subdomain(z, x, y))
                     .arg(x)
                     .arg(y)
                     .arg(z));
@@ -52,7 +63,7 @@ QUrl amap_satellite_url(int z, int x, int y) {
 QUrl amap_label_url(int z, int x, int y) {
     return QUrl(QStringLiteral("https://webst0%1.is.autonavi.com/appmaptile?style=7"
                                "&x=%2&y=%3&z=%4")
-                    .arg(next_amap_subdomain())
+                    .arg(amap_subdomain(z, x, y))
                     .arg(x)
                     .arg(y)
                     .arg(z));
@@ -71,81 +82,106 @@ QUrl esri_imagery_url(int z, int x, int y) {
                     .arg(x));
 }
 
-const TileSource &amap_source() {
-    static const TileSource s{QStringLiteral("amap"), QStringLiteral("高德地图"), true,
-                              QStringLiteral("© 高德地图")};
-    return s;
+using UrlBuilder = QUrl (*)(int, int, int);
+
+// R-224 源事实表（**单表**）：加源 = 加一行。styles 位图 = Road(1)/Satellite(2)/Hybrid(4)；
+// 三个 URL 构造器槽按层语义取用（road / satellite+hybrid 影像 / hybrid 标注；nullptr = 无）。
+struct SourceSpec {
+    TileSource source;
+    int styles = 0;
+    UrlBuilder road = nullptr;
+    UrlBuilder imagery = nullptr;
+    UrlBuilder labels = nullptr;
+};
+
+int style_bit(TileStyle style) {
+    switch (style) {
+    case TileStyle::Satellite:
+        return 2;
+    case TileStyle::Hybrid:
+        return 4;
+    case TileStyle::Road:
+        break;
+    }
+    return 1;
 }
 
-const TileSource &osm_source() {
-    static const TileSource s{QStringLiteral("osm"), QStringLiteral("OpenStreetMap"), false,
-                              QStringLiteral("© OpenStreetMap contributors")};
-    return s;
+const SourceSpec *k_sources() {
+    static const SourceSpec table[] = {
+        {TileSource{QStringLiteral("amap"), QStringLiteral("高德地图"), true,
+                    QStringLiteral("© 高德地图")},
+         1 | 2 | 4, &amap_road_url, &amap_satellite_url, &amap_label_url},
+        {TileSource{QStringLiteral("osm"), QStringLiteral("OpenStreetMap"), false,
+                    QStringLiteral("© OpenStreetMap contributors")},
+         1, &osm_road_url, nullptr, nullptr},
+        {TileSource{QStringLiteral("esri"), QStringLiteral("Esri 影像"), false,
+                    QStringLiteral("© Esri, Maxar, Earthstar Geographics")},
+         2 | 4, nullptr, &esri_imagery_url, nullptr},
+    };
+    return table;
 }
 
-const TileSource &esri_source() {
-    static const TileSource s{QStringLiteral("esri"), QStringLiteral("Esri 影像"), false,
-                              QStringLiteral("© Esri, Maxar, Earthstar Geographics")};
-    return s;
+constexpr std::size_t kSourceCount = 3;
+
+const SourceSpec *spec_of(const QString &id) {
+    const SourceSpec *const table = k_sources();
+    for (std::size_t i = 0; i < kSourceCount; ++i) {
+        if (table[i].source.id == id) {
+            return &table[i];
+        }
+    }
+    return nullptr;
 }
 
 } // namespace
 
 bool TileSource::supports(TileStyle style) const {
-    if (id == QLatin1String("amap")) {
-        return true; // Road / Satellite / Hybrid 全支持
-    }
-    if (id == QLatin1String("osm")) {
-        return style == TileStyle::Road;
-    }
-    if (id == QLatin1String("esri")) {
-        return style == TileStyle::Satellite || style == TileStyle::Hybrid; // 纯影像源
-    }
-    return false;
+    const SourceSpec *const spec = spec_of(id);
+    return spec != nullptr && (spec->styles & style_bit(style)) != 0;
 }
 
 QUrl TileSource::tile_url(int z, int x, int y, TileStyle style) const {
     if (!supports(style)) {
         return {}; // 调用方先查 supports()(UI 会回退),不支持组合不给 URL
     }
-    if (id == QLatin1String("amap")) {
-        if (style == TileStyle::Road) {
-            return amap_road_url(z, x, y);
-        }
-        return amap_satellite_url(z, x, y); // Satellite;Hybrid 的影像层同为 style=6
+    const SourceSpec *const spec = spec_of(id);
+    if (spec == nullptr) {
+        return {};
     }
-    if (id == QLatin1String("osm")) {
-        return osm_road_url(z, x, y);
+    if (style == TileStyle::Road) {
+        return spec->road != nullptr ? spec->road(z, x, y) : QUrl();
     }
-    return esri_imagery_url(z, x, y); // esri:Satellite 与 Hybrid 复用同一影像层
+    // Satellite 与 Hybrid 的影像层同一条（Hybrid 的 tile_url = 影像层；标注走 label_url）
+    return spec->imagery != nullptr ? spec->imagery(z, x, y) : QUrl();
 }
 
 QUrl TileSource::label_url(int z, int x, int y) const {
-    if (id == QLatin1String("amap")) {
-        return amap_label_url(z, x, y);
-    }
-    return {}; // osm/esri 无独立标注层
+    const SourceSpec *const spec = spec_of(id);
+    return spec != nullptr && spec->labels != nullptr ? spec->labels(z, x, y) : QUrl();
 }
 
 const TileSource *tile_source_by_id(const QString &id) {
-    if (id == QLatin1String("amap")) {
-        return &amap_source();
-    }
-    if (id == QLatin1String("osm")) {
-        return &osm_source();
-    }
-    if (id == QLatin1String("esri")) {
-        return &esri_source();
-    }
-    return nullptr;
+    const SourceSpec *const spec = spec_of(id);
+    return spec != nullptr ? &spec->source : nullptr;
+}
+
+// R-158 单源：C1 适配映射（地图源 id → 瓦片源）。非 amap（含未知 id）沿用旧兜底语义（osm）。
+const TileSource *tile_source_for_provider(const QString &provider_id) {
+    return tile_source_by_id(provider_id == QLatin1String("amap") ? QStringLiteral("amap")
+                                                                  : QStringLiteral("osm"));
 }
 
 QStringList tile_source_ids() {
-    return {QStringLiteral("amap"), QStringLiteral("osm"), QStringLiteral("esri")};
+    QStringList out;
+    const SourceSpec *const table = k_sources();
+    for (std::size_t i = 0; i < kSourceCount; ++i) {
+        out << table[i].source.id;
+    }
+    return out;
 }
 
 QStringList styles_for(const QString &source_id) {
-    const TileSource *source = tile_source_by_id(source_id);
+    const TileSource *const source = tile_source_by_id(source_id);
     if (source == nullptr) {
         return {};
     }

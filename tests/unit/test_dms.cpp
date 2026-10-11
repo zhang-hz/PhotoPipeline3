@@ -17,6 +17,7 @@
 
 #include <QString>
 
+#include "mapwidget/coord.h" // R-307：粗包围盒常量单源（kChinaBBox*）
 #include "mapwidget/dms.h"
 
 namespace {
@@ -210,6 +211,20 @@ int main() {
     }
     check(!coord_precision_suspect(std::nan(""), 116.0), "box/nan-lat", "NaN 不应判存疑");
     check(!coord_precision_suspect(39.9, std::nan("")), "box/nan-lon", "NaN 不应判存疑");
+
+    // ---- 5. R-307 常量单源（M7-WP7 只增断言）：coord.h 的 kChinaBBox* = 本文件边界带判定
+    //      的同一盒（此前 coord.cpp 与 dms.cpp 双份字面量），值与文档口径逐字一致 ----
+    check(pp::map::kChinaBBoxLonMin == 72.004 && pp::map::kChinaBBoxLonMax == 137.8347 &&
+              pp::map::kChinaBBoxLatMin == 0.8293 && pp::map::kChinaBBoxLatMax == 55.8271,
+          "bbox/single-source",
+          "kChinaBBox* 值漂移: " + num(pp::map::kChinaBBoxLonMin) + "/" +
+              num(pp::map::kChinaBBoxLonMax) + "/" + num(pp::map::kChinaBBoxLatMin) + "/" +
+              num(pp::map::kChinaBBoxLatMax));
+    // 由常量推导的边界带样本（与 box/band-edge 同判据、不同来源 —— 钉住两处同一盒）
+    check(coord_precision_suspect(pp::map::kChinaBBoxLatMax - 0.5, 116.0), "bbox/derived-band",
+          "距北界恰 0.5°（含界）应判存疑");
+    check(!coord_precision_suspect(pp::map::kChinaBBoxLatMax - 0.6, 116.0), "bbox/derived-deep",
+          "距北界 0.6°（带外）不应判存疑");
 
     if (g_failed == 0) {
         std::printf(

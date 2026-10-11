@@ -67,6 +67,15 @@ public slots:
     void search_select(int index);         // pick result -> center+marker+point_selected
     void run_suggest(const QString &query);
     void run_reverse(double lat, double lon);
+    // ---- M7-WP7 加性追认（R-223；裁定登记 build/m7-wp7/handoff.md）-----------------
+    // 按**稳定键**选结果（pp::map::result_key：title+规范化坐标）：跨层对齐不再依赖序号。
+    // 与 search_select(index) 同语义（居中 + 主钉 + point_selected）；键未命中 = 不动作。
+    void search_select_key(const QString &key);
+
+signals:
+    // ---- M7-WP7 加性追认（R-223）：结果图钉命中的稳定键回报（与 pin_clicked(index) 并发；
+    // index 面为冻结行为零改动，消费方按键对齐）。 ----
+    void pin_selected(const QString &key);
 
 private:
     struct Impl;

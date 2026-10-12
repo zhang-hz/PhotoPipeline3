@@ -11,7 +11,7 @@ M0 交付仓库骨架、冻结接口、链接探针与金标语料。**M1a 交�
 逐输出冲突解析）；
 ④ **逐文件进度**（JPEG/JXL/PNG/TIFF 真实行级 + WebP/HEIF/AVIF 合成进度斜纹标识；逐输出行）；
 ⑤ **自适应并行**（交错启动可配置 + `alloc_threads` 线程预算；读数为**估算口径**——成立的是
-`active ≤ W ≤ T` 与 `ΣE ≤ T`，SynthPump/x265 库内线程不入账，见 CHANGELOG [未发布]「已知」）；
+`active ≤ W ≤ T` 与 `ΣE ≤ T`，SynthPump/x265 库内线程不入账，见 CHANGELOG [0.3.3]「已知」）；
 ⑥ **GUI 重构**（无边框窗口 + 自绘 caption 三钮、三栏骨架：文件/分类 + 预览 + 三页内容区、
 明暗双主题 tokens）；
 ⑦ **CI 工业化**（pr-fast / main-full / nightly / release 四道，job 与整轮双 ≤20min 硬约束、
@@ -32,19 +32,19 @@ caption 单轨 46×32；壳层顶栏 44 + 状态栏 30；**栏宽固定轴 330 /
 逐条探针、偏差与未决项见 [docs/m5-report.md](docs/m5-report.md)，开发期裁定见
 [docs/m5-adjudications.md](docs/m5-adjudications.md)。
 
-**0.3.3（开发中）= M7 工程收口轮**：发布前深度评审（331 条）+ UI 14 项评审的批量整改与结构重构。
+**0.3.3（当前版本）= M7 工程收口轮**：发布前深度评审（331 条）+ UI 14 项评审的批量整改与结构重构。
 用户可见变化：**数据安全根治**（输出路径命中源文件即拒绝、写盘原子化、元数据写失败=失败、
 密钥 DPAPI 封存）、**HEIF/AVIF 编码档位核心行**（Main/Main10/Main12/… 直接呈现 + 位深联动）、
 时间/GPS/隐私三卡**启用开关**、文件列表与运行卡**右键菜单**（含勾选全部/反选）、**预览分辨率
 提升**（内嵌预览门槛 1600px、缓存 4096px）、**GPS 卡地图 App 化**（浮层结果、分类下拉、地图
 260px）、**窗口真无边框 + Win11 圆角**（原生标题栏消失、三钮可点）、滚动条细浮层、格式页签去
 位深文案并等宽、版本徽标/翻图打标/过滤态双击等交互缺陷修复。逐条变更见 [CHANGELOG.md](CHANGELOG.md)
-`[未发布]`，331+14 覆盖台账与验收证据见 [docs/m7-report.md](docs/m7-report.md)，裁定汇总见
+`[0.3.3]`，331+14 覆盖台账与验收证据见 [docs/m7-report.md](docs/m7-report.md)，裁定汇总见
 [docs/m7-adjudications.md](docs/m7-adjudications.md)。**色彩可选项（色域映射/抖动/渲染意图/
 线性光重采样）本轮未实现**，接口数据面已备、行为未入树，界面不提供开关（口径如实，勿按已发布
 文档预期）。
 
-**0.3.2（当前版本）= GPS 地图升级版（M6）**：把「内嵌地图选点」从能用升级到**地图 App 水平**——
+**0.3.2 = GPS 地图升级版（M6）**：把「内嵌地图选点」从能用升级到**地图 App 水平**——
 R1 搜索搜得出（改用可达的**高德 Web 服务**事实表：`place/text` + 周边偏置 **`around` 20 条**按距离升序 +
 6 类目 chips + 联想 / 逆地理 / 可点结果列表）、R2 矢量 / 卫星 / **混合图层**（Hybrid = 影像 + 标注双层
 同帧绘制）、R3 搜索 → 点钉 / 点行 → **回填**的**地图内选点闭环**、R4 **坐标基准透明**（GPS 卡
@@ -450,7 +450,7 @@ chmod +x PhotoPipeline-<版本>-x86_64.AppImage
 
 ## 发行版（Windows）
 
-**M3 起提供 Windows x64 免安装产物**（0.2.0 为首个 Windows 版本，当前版本 0.3.2）；与 Linux 的 AppImage 同一引擎
+**M3 起提供 Windows x64 免安装产物**（0.2.0 为首个 Windows 版本，当前版本 0.3.3）；与 Linux 的 AppImage 同一引擎
 与界面，差异只在打包形态（zip vs AppImage）与平台运行时（MSVC 运行时 / Qt msvc2022_64）。
 
 ### 下载与运行
@@ -490,7 +490,7 @@ chmod +x PhotoPipeline-<版本>-x86_64.AppImage
 ### 命令行
 
 ```powershell
-.\photopipeline.exe --version      # → PhotoPipeline 0.3.2（单行 + 退出码 0；非 dev 门控，发布构建亦可用）
+.\photopipeline.exe --version      # → PhotoPipeline 0.3.3（单行 + 退出码 0；非 dev 门控，发布构建亦可用）
 .\photopipeline.exe                # 图形界面
 .\photopipeline.exe --ui-smoke     # 无头 UI 走查（offscreen，产出 12 张截图；仅 PP_BUILD_DEV=ON 的构建）
 .\photopipeline.exe --dev ...      # 开发 harness：全语料矩阵 / 回归基线入口（同上，仅 dev 构建）

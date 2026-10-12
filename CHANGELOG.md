@@ -1,13 +1,13 @@
 # 变更日志
 
-## [未发布]
+## [0.3.3] — 2026-10-12
 
 **M7 工程收口轮（M7-WP1…WP11）**：发布前深度评审（`docs/deep-review-0.3.2.md`，331 条 R-id）与
 UI 14 项评审（`docs/ux-review-14.md`）的批量整改 + 结构重构。两条口径：① **数据安全双 P0 根治**
 （输出路径不得命中源文件；元数据写回原子化、失败=失败不再报成功）；② 整改与重构以金样
 **20/20** + 全语料回归 **zero diff** 背书（默认行为零变化；能力类新项一律 opt-in）。
 331+14 逐条覆盖台账见 `docs/m7-report.md` 附录，开发期裁定汇总见 `docs/m7-adjudications.md`。
-（发行段定稿由发行工作包完成。）
+版本单源 = `CMakeLists.txt:19` = **0.3.3**。
 
 ### 新增
 
@@ -158,10 +158,31 @@ UI 14 项评审（`docs/ux-review-14.md`）的批量整改 + 结构重构。两�
   精确 12 需给 libheif 传 `output_nclx_profile`（会改输出字节，待裁定）
 - Windows 真机验收清单（拖拽/双击最大化/八向缩放/Snap/三钮/圆角/多显示器 DPI 等 10 项）
   须人工签收；offscreen `--ui-smoke` 无法替代
-- Linux 回归基线（`tools/baseline/golden.log`）本机（Windows）不做文本替换移植，须在 Linux
-  宿主重播种后确认（R-015 纪律）；发行后首个 nightly 必看
+- Linux 回归基线（`tools/baseline/golden.log`）仅随版本 bump 定点替换 12 行
+  `version {lib=app version=…}`（0.3.2 → 0.3.3，同 `6d98e2e` 先例做法）；M7 的行为行
+  （TU 标签迁移 180 行 + heif profile 46 行等）**未移植** —— 须在 Linux 宿主全量重播种后
+  确认（R-015 纪律）；发行后首个 nightly 必看
 - 深度评审 P1 面余量（R-025/026/066/068/072 等）与结构性债（page_meta/page_output/mapwidget
   拆分、RTL、契约强类型化）逐条登记在 `docs/m7-report.md` 覆盖台账，未静默丢弃
+
+### 发行
+
+- Windows：`PhotoPipeline-0.3.3-win64.zip` —— **34,727,624 B**（本机 sha256 `4a3ec25d…`，105 条目；
+  zip 不承诺字节可复现，CI 产物指纹另计），`make_winzip.py` 五项门禁（A 闭包 / B 来源 /
+  C 结构 / D 许可 / E-1 启动版本断言）
+- Linux：`PhotoPipeline-0.3.3-x86_64.AppImage` + `PhotoPipeline-0.3.3-deps.txt`
+  （`tools/appimage-check-closure.sh` 闭包清单）—— 由 tag 触发的 `release.yml` `appimage` job
+  在 Linux runner 产出（本机 Windows 不构建）
+- 第 4 附件：`PhotoPipeline-0.3.3-SHA256SUMS.txt`（三个发布件的 sha256，逐字取自下载件）
+- **发布链路**：tag `v0.3.3` 推送触发 `release.yml`（appimage → probe-appimage /
+  winzip → probe-winzip → publish）；publish 前置探测 = Release 查重 + tag↔版本断言 +
+  产物 `--version` 逐字断言；发布说明取本节**之前**的 `[0.3.3]` 正文（止于本小节）
+- 发行前门禁（本机实跑，2026-10-12）：`ci-format` violations=0（152 文件）·
+  `ctest --test-dir build/release-dev` **35/35**（含 `ui_smoke` 冻结行）· 金样
+  `SMOKE total=20 pass=20 fail=0` · 全语料回归 **zero diff**（Windows 基线重播种 12 行
+  version 行，逐行归因 = 版本行 12 / 行为 0）· `make_winzip` 五门禁全过（E-2 offscreen
+  走查未带 `--smoke-exe` 未跑；`release.yml` winzip job 带 `--smoke-exe` 复验）· 密钥扫描 0 命中
+- 「已发行」终态与 CI 产物指纹留待**发行后收口**提交登记（`d049d22` 先例）
 
 ## [0.3.2] — 2026-10-11
 

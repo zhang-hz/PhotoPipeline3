@@ -10,11 +10,12 @@
 #include <variant>
 #include <vector>
 
-#include "ui/byte_text.h"       // M7-R2.1-F3（R-254）：字节自然语读数单源
-#include "ui/format_policy.h"   // M7-R2E2（B.3）：输出页格式能力/预选策略纯核
-#include "ui/run_rows_model.h"  // M7-WP9（B.2）：运行页行模型纯语义
-#include "ui/run_status_text.h" // M7-WP9（B.2）：运行页文案/数值格式纯函数
-#include "ui/time_tag_keys.h"   // M7-R2.1-F3（R-197）：时间标签集合单表
+#include "ui/byte_text.h"              // M7-R2.1-F3（R-254）：字节自然语读数单源
+#include "ui/format_policy.h"          // M7-R2E2（B.3）：输出页格式能力/预选策略纯核
+#include "ui/format_selection_model.h" // M7-R2.1-F3（R-189）：「已选格式」唯一真相
+#include "ui/run_rows_model.h"         // M7-WP9（B.2）：运行页行模型纯语义
+#include "ui/run_status_text.h"        // M7-WP9（B.2）：运行页文案/数值格式纯函数
+#include "ui/time_tag_keys.h"          // M7-R2.1-F3（R-197）：时间标签集合单表
 
 #include "core/params.h"
 #include "core/types.h"
@@ -316,6 +317,35 @@ int main() {
         check(!is_wall_clock_time_key("Exif.Photo.OffsetTime") &&
                   !is_wall_clock_time_key("Xmp.xmp.MetadataDate"),
               "清除谓词只认墙钟 5 键");
+    }
+
+    // 9. M7-R2.1-F3 / R-189：FormatSelection「已选格式」唯一真相（断言只增；1–8 节逐字不动）。
+    //    四表示（顺序表/磁贴勾选/页签序/现役）的集合侧语义 + R-266 游离槽真值表。
+    {
+        using pp::ui::fmtsel::FormatSelection;
+        FormatSelection s({"jpeg", "webp", "jxl", "png"});
+        check(s.empty() && s.active() == "jxl" && !s.active_in_set(),
+              "初始：空集 + 现役默认 jxl（游离）");
+        check(s.toggle("png", true), "toggle(选中) 有变更");
+        check(s.toggle("jpeg", true) && s.active() == "jpeg",
+              "后选者为现役（原 active_id=id 语义）");
+        check(!s.toggle("png", true), "重复选中 no-op");
+        check(s.size() == 2 && s.items()[0] == "jpeg" && s.items()[1] == "png",
+              "规范顺序 = 磁贴顺序（jpeg 排 png 前）");
+        check(s.toggle("jpeg", false) && s.active() == "png" && s.active_in_set(),
+              "R-266：移除现役 → 集合非空时现役前移首位");
+        check(s.toggle("png", false) && s.empty() && s.active() == "png" && !s.active_in_set(),
+              "R-266：空集游离槽 = 被移除 id，且不判现役");
+        check(s.toggle("webp", true) && s.active() == "webp" && s.active_in_set(),
+              "重勾选任一格式复位为现役");
+        check(!s.set_active("jpeg") && !s.set_active("webp"), "set_active：不在集合/同值均 no-op");
+        check(s.at(0) == "webp" && s.at(5).empty() && s.at(-1).empty(), "at() 越界返回空串");
+        FormatSelection p({"jpeg", "webp"});
+        p.toggle("webp", true);
+        p.reset_items({"webp", "jpeg"});
+        check(p.size() == 2 && p.items()[0] == "jpeg" && p.items()[1] == "webp" &&
+                  p.active() == "webp",
+              "reset_items：重建规范序且不动现役（apply_preset 路径）");
     }
 
     if (g_failed == 0) {

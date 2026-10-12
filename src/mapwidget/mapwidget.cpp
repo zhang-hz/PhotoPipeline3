@@ -67,6 +67,7 @@
 #include "mapwidget/map_renderer.h" // B.5 ④：整帧纯绘制（M7R22G2）
 #include "mapwidget/map_view.h"     // B.5 ①：投影/基准纯核（pp_core 单源）
 #include "mapwidget/tile_cache.h"   // B.5 ②：TileKey/LRU/预算纯核（M7R22G2）
+#include "mapwidget/tile_fetcher.h" // B.5 ③：瓦片抓取器（M7R22G2）
 
 #include "mapwidget/geocoder.h"
 #include "mapwidget/layers.h"
@@ -111,15 +112,11 @@ namespace {
 // 点击阈值 → map_interact.h；HUD 字号/比例尺档系/镜像 → map_renderer.cpp；此处只剩装配面。
 constexpr int kMinZoom = 2;
 constexpr int kMaxZoom = 18;
-constexpr int kMaxConcurrentFetches = 4;   // frozen: concurrency <= 4
-constexpr int kFailureBannerThreshold = 3; // frozen: >= 3 consecutive failures -> banner
 constexpr qint64 kBytesPerMb = 1024 * 1024;
 constexpr int kDefaultCacheMb = 64;     // frozen default byte budget
-constexpr int kRequestTimeoutMs = 8000; // frozen: request timeout 8 s
+constexpr int kRequestTimeoutMs = 8000; // frozen: request timeout 8 s（B.5 ⑤ 前仍供搜索管线）
 constexpr int kSearchZoomFloor = 12;    // ruling 2026-09-19: a search hit zooms to >= 12
 constexpr int kCursorThrottleMs = 100;  // M6-T12：光标坐标信号的节流窗
-// R-101（M7-WP7）：瓦片失败后的**延迟重抓**窗（一次性定时器；离线不排）。
-constexpr int kTileRetryDelayMs = 750;
 
 // 投影族（clamp_lat/world_span/wrap_tile_x/latlon_to_world/world_to_latlon）→
 // map_view.{h,cpp}（B.5 ①；同命名空间 pp::map，调用点零改动）。
@@ -132,32 +129,9 @@ constexpr int kTileRetryDelayMs = 750;
 // Tile cache key → tile_cache.h（B.5 ②，M7R22G2：TileKey/qHash/LRU/预算纯核单源；
 // M6-T5 的 {source, layer} 维度与 LRU/字节预算语义逐位不变）。
 
-// 图层键 → URL 的唯一出口（缓存命中判定与抓取共用同一个 key）。「road」走 Road 路网，
-// 「satellite」走影像层（Hybrid 的底层同为影像），「label」走 Hybrid 标注叠加层；
-// 源不支持该层（osm 无影像层、esri 无标注层）时返回空 URL —— 调用方据此不发请求。
-static QUrl tile_url_for(const TileKey &key) {
-    const TileSource *const source = tile_source_by_id(key.source);
-    if (source == nullptr) {
-        return {};
-    }
-    if (key.layer == QLatin1String(kLayerLabel)) {
-        return source->label_url(key.zoom, key.x, key.y);
-    }
-    if (key.layer == QLatin1String(kLayerSatellite)) {
-        // 影像层：优先 Satellite；只支持 Hybrid 的源退用其影像层（当前源皆支持前者）。
-        return source->tile_url(key.zoom, key.x, key.y,
-                                source->supports(TileStyle::Satellite) ? TileStyle::Satellite
-                                                                       : TileStyle::Hybrid);
-    }
-    return source->tile_url(key.zoom, key.x, key.y, TileStyle::Road); // 路网层：只按 Road 取
-}
+// 图层键 → URL 的唯一出口 → tile_fetcher.cpp（B.5 ③：抓取侧唯一出口）。
 
 struct MapWidget::Impl {
-    struct PendingTile {
-        QNetworkReply *reply = nullptr;
-        TileKey key; // 完成的瓦片按这个键入缓存（source/layer/zoom/x/y）
-    };
-
     // Receives the QWidget events the frozen header cannot declare overrides for.
     struct EventFilter : QObject {
         explicit EventFilter(Impl *owner) : QObject(owner->q), impl(owner) {}
@@ -190,12 +164,9 @@ struct MapWidget::Impl {
     // pressed/dragging 四件收敛为 DragState；坐标仍按原实现 toPoint() 截断后进机，
     // 位移/阈值算术逐位一致）。
     interact::DragState drag;
-    int consecutive_failures = 0;
-    bool retry_scheduled = false;       // R-101：失败重抓定时器在途（不叠加）
-    bool fetch_flush_scheduled = false; // R-221：paint 只登记缺瓦片，flush 定时器在途
-    std::vector<TileKey> fetch_wanted;  // R-221：本次可视区登记的待抓瓦片（paint 外发请求）
-
-    std::vector<PendingTile> pending;
+    // B.5 ③（M7R22G2）：瓦片抓取 = tile_fetcher.{h,cpp}（pending/并发/离线门闸 + 失败 streak +
+    // 延迟重抓 + R-221 paint 只登记；构造与回调接线在 MapWidget ctor）
+    std::unique_ptr<TileFetcher> fetcher;
     // B.5 ②（M7R22G2）：缓存 = tile_cache.h 纯核（LRU/预算语义逐位不变；默认预算 kDefaultCacheMb）
     TileCache<QPixmap> cache{qint64(kDefaultCacheMb) * kBytesPerMb};
 
@@ -264,18 +235,17 @@ struct MapWidget::Impl {
         return screen + center_world() - QPointF(q->width() / 2.0, q->height() / 2.0);
     }
 
-    // ---- tile cache（B.5 ②：LRU/预算纯核 → tile_cache.h；此处只留解码 + 失败语义）----
+    // ---- tile cache（B.5 ②：LRU/预算纯核 → tile_cache.h；此处只留解码）--------------
     const QPixmap *find_tile(const TileKey &key) { return cache.find(key); }
 
     void evict_to_budget() { cache.evict_to_budget(); }
 
-    // R-161（M7-WP7）：返回**解码成功** —— 失败 streak 只被成功瓦片复位；坏 payload
-    // 不再"当场抵消"连续失败计数（banner 阈值对 200+ 坏 body 终于可触发）。
+    // R-161（M7-WP7）：返回**解码成功** —— 失败 streak 只被成功瓦片复位（失败计数归
+    // tile_fetcher；坏 payload 不抵消连续失败，banner 阈值对 200+ 坏 body 终于可触发）。
     bool insert_tile(const TileKey &key, const QByteArray &data) {
         QPixmap pixmap;
         if (!pixmap.loadFromData(data)) {
-            note_failure(); // undecodable payload = failed tile, stays grey
-            return false;
+            return false; // undecodable payload = failed tile, stays grey（失败计数在 fetcher）
         }
         // Ruling 2026-09-19: the cache keeps decoded pixmaps only (the compressed bytes are
         // dropped after decoding) and the budget is charged for the decoded footprint, so
@@ -285,120 +255,7 @@ struct MapWidget::Impl {
         return true;
     }
 
-    // ---- fetching ---------------------------------------------------------------
-    bool is_pending(const TileKey &key) const {
-        for (const PendingTile &t : pending) {
-            if (t.key == key) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    void request_tile(const TileKey &key) {
-        if (offline || provider == nullptr || nam == nullptr) {
-            return; // frozen: offline sends no request at all
-        }
-        if (pending.size() >= size_t(kMaxConcurrentFetches) || is_pending(key)) {
-            return;
-        }
-        const QUrl url = tile_url_for(key);
-        if (url.isEmpty()) {
-            return; // 该源没有这一图层（如 esri 的标注层）：不发空 URL 请求
-        }
-        // UA 仍由 provider 单源给出（M6-T5 不改每 provider 的 UA 串；回退源的瓦片也带本 provider
-        // 的 UA，OSM/Nominatim 使用政策要求的非空 UA 语义不变）。
-        QNetworkRequest request(url);
-        request.setRawHeader("User-Agent", provider->user_agent().toUtf8());
-        request.setTransferTimeout(std::chrono::milliseconds(kRequestTimeoutMs));
-        QNetworkReply *const reply = nam->get(request);
-        pending.push_back(PendingTile{reply, key});
-        notify_pending();
-        QObject::connect(reply, &QNetworkReply::finished, q,
-                         [this, reply] { on_tile_finished(reply); });
-    }
-
-    // R-221（M7-WP7）：paint **不再发网络请求**（paint 幂等化）。缺瓦片只登记进 fetch_wanted
-    // （集合语义、可重复登记），0ms 一次性定时器在 paint 之外统一 flush（真正的 nam->get）。
-    void queue_tile(const TileKey &key) {
-        for (const TileKey &known : fetch_wanted) {
-            if (known == key) {
-                return;
-            }
-        }
-        fetch_wanted.push_back(key);
-        if (!fetch_flush_scheduled) {
-            fetch_flush_scheduled = true;
-            QTimer::singleShot(0, q, [this] { flush_tile_fetches(); });
-        }
-    }
-
-    void flush_tile_fetches() {
-        fetch_flush_scheduled = false;
-        std::vector<TileKey> wanted;
-        wanted.swap(fetch_wanted); // 先清后抓：抓取期间新登记的走下一轮 flush
-        for (const TileKey &key : wanted) {
-            request_tile(key);
-        }
-    }
-
-    void on_tile_finished(QNetworkReply *reply) {
-        const auto it = std::find_if(pending.begin(), pending.end(),
-                                     [reply](const PendingTile &t) { return t.reply == reply; });
-        if (it == pending.end()) {
-            reply->deleteLater();
-            return;
-        }
-        const PendingTile entry = *it;
-        pending.erase(it);
-        notify_pending();
-
-        const QByteArray body = reply->readAll();
-        const QNetworkReply::NetworkError error = reply->error();
-        reply->deleteLater();
-
-        // Cancelled because the widget went offline: not a connectivity failure.
-        if (error == QNetworkReply::OperationCanceledError && offline) {
-            return;
-        }
-        if (error != QNetworkReply::NoError || body.isEmpty()) {
-            note_failure();
-            schedule_tile_retry(); // R-101：灰块不再"等下次任意重绘才补抓"
-            return;
-        }
-        // R-161：坏 payload（insert_tile 失败）不复位 streak、不撤 banner；成功才复位。
-        if (insert_tile(entry.key, body)) {
-            consecutive_failures = 0;
-            set_banner_visible(false);
-        } else {
-            schedule_tile_retry();
-        }
-        q->update();
-    }
-
-    void notify_pending() { emit q->tiles_pending_changed(int(pending.size())); }
-
-    void note_failure() {
-        ++consecutive_failures;
-        if (consecutive_failures >= kFailureBannerThreshold) {
-            set_banner_visible(true);
-        }
-    }
-
-    // R-101（M7-WP7）：失败后**延迟重抓** —— 一次性定时器到点再 update()（paint 只排队、
-    // flush 在 paint 外发请求，见 on_paint/flush_tile_fetches）；离线/重复调度不叠加。
-    void schedule_tile_retry() {
-        if (offline || retry_scheduled) {
-            return;
-        }
-        retry_scheduled = true;
-        QTimer::singleShot(kTileRetryDelayMs, q, [this] {
-            retry_scheduled = false;
-            if (!offline) {
-                q->update(); // 重绘 → 缺瓦片重新入抓取队列（定点重抓）
-            }
-        });
-    }
+    // ---- fetching（B.5 ③，M7R22G2：pending/门闸/失败重抓 → tile_fetcher.{h,cpp}）----
 
     // ---- offline banner (QLabel overlay, never a dialog) -------------------------
     void layout_banner() {
@@ -696,22 +553,6 @@ struct MapWidget::Impl {
         });
     }
 
-    void abort_fetches() {
-        const std::vector<QNetworkReply *> in_flight = [this] {
-            std::vector<QNetworkReply *> v;
-            v.reserve(pending.size());
-            for (const PendingTile &t : pending) {
-                v.push_back(t.reply);
-            }
-            return v;
-        }();
-        for (QNetworkReply *const reply : in_flight) {
-            if (reply != nullptr) {
-                reply->abort(); // finished() handler removes the pending entry
-            }
-        }
-    }
-
     // ---- event handling (invoked by EventFilter) ---------------------------------
     void on_paint();
     void on_resize();
@@ -766,8 +607,8 @@ void MapWidget::Impl::on_paint() {
     }
     st.find_tile = [this](const TileKey &key) { return find_tile(key); };
     st.on_missing = [this](const TileKey &key) {
-        queue_tile(key); // R-221：paint 只登记；flush 在 paint 外发请求
-                         // （no-op when offline / already pending / 4 in flight）
+        fetcher->queue(key); // R-221：paint 只登记；flush 在 paint 外发请求
+                             // （no-op when offline / already pending / 4 in flight）
     };
     st.pins.reserve(result_pins.size());
     for (const Pin &pin : result_pins) {
@@ -871,6 +712,14 @@ MapWidget::MapWidget(QWidget *parent) : QWidget(parent), impl_(std::make_unique<
     d.q = this;
     d.provider = provider_by_id(QStringLiteral("osm"));
     d.nam = new QNetworkAccessManager(this);
+    // B.5 ③（M7R22G2）：瓦片抓取器接线（sink = 解码+入缓存；横幅/重绘/计数回调回本件）
+    d.fetcher = std::make_unique<TileFetcher>(
+        this, d.nam,
+        TileFetcher::Callbacks{
+            [&d](const TileKey &key, const QByteArray &body) { return d.insert_tile(key, body); },
+            [this](int pending_count) { emit tiles_pending_changed(pending_count); },
+            [&d](bool visible) { d.set_banner_visible(visible); }, [this] { update(); }});
+    d.fetcher->set_provider(d.provider);
 
     // M5-T12/A30（§8 状态色语义）：离线 banner **中性化** —— 文案去括号（说明进 tooltip，§2.6
     // 「实现细节/补充说明进 tooltip」）、底色/字色去**警示黄**（琥珀语义只留 0 字节那类真警告）。
@@ -895,14 +744,9 @@ MapWidget::MapWidget(QWidget *parent) : QWidget(parent), impl_(std::make_unique<
 
 MapWidget::~MapWidget() {
     Impl &d = *impl_;
-    for (const Impl::PendingTile &t : d.pending) {
-        if (t.reply != nullptr) {
-            t.reply->disconnect(); // never re-enter the handler while tearing down
-            t.reply->abort();
-            t.reply->deleteLater();
-        }
+    if (d.fetcher) {
+        d.fetcher->teardown(); // never re-enter the handler while tearing down
     }
-    d.pending.clear();
     // 在途的搜索/联想/逆地理请求：先断开 finished（销毁期不再重入处理器）再 abort。
     for (QNetworkReply *const reply : {d.search_reply, d.suggest_reply, d.reverse_reply}) {
         if (reply != nullptr) {
@@ -929,6 +773,7 @@ void MapWidget::set_provider(const QString &id) {
     const std::pair<double, double> datum = d.wgs_to_datum(wgs.first, wgs.second);
     d.center_lat = clamp_lat(datum.first);
     d.center_lon = datum.second;
+    d.fetcher->set_provider(next); // B.5 ③：UA 单源随 provider
     update();
 }
 
@@ -946,12 +791,13 @@ void MapWidget::set_offline(bool off) {
         return;
     }
     d.offline = off;
+    d.fetcher->set_offline(off); // B.5 ③：离线门闸随开关
     if (off) {
         d.abort_geocoding(); // 搜索/联想/逆地理一并在途取消（离线不发请求）
-        d.abort_fetches();
+        d.fetcher->abort_all();
         d.set_banner_visible(true); // offline degradation notice (design §6.5 / walkthrough §8.3)
     } else {
-        d.consecutive_failures = 0;
+        d.fetcher->reset_failures();
         d.set_banner_visible(false);
     }
     update();

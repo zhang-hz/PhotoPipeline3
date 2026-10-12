@@ -6,7 +6,6 @@
 #include "ui/meta_format.h"
 
 #include "mapwidget/dms.h" // M6-T10：坐标显示格式化（度分；deg_to_dms 单源）
-#include "ui/page_meta.h"  // PageMeta::tr（迁移不改翻译上下文）
 
 #include <QString>
 #include <QStringList>
@@ -18,6 +17,24 @@
 #include <memory>
 #include <optional>
 #include <string>
+
+// —— tr 上下文（M7-R2.1-F2 迁移口径：保持 PageMeta，翻译查表键不变）———————
+// M7R22G2（tests/unit/test_meta_format.cpp 接线；test_icons.cpp 的 PP_ICONS_TEST_NO_WIDGETS
+// 同款先例）：单测 target 只链 pp_core（Qt6::Core/Gui）→ 以 PP_META_FORMAT_TEST_NO_WIDGETS
+// 编译本 TU 时收窄掉唯一 QtWidgets 依赖面（ui/page_meta.h）；tr_page 两种展开的**查表键逐字
+// 相同**（moc 展开的 PageMeta::tr ≡ QCoreApplication::translate("PageMeta", s, nullptr, -1)），
+// 生产路径行为零变化（调用点 PageMeta::tr → tr_page 仅改名）。
+#ifdef PP_META_FORMAT_TEST_NO_WIDGETS
+#include <QCoreApplication>
+namespace {
+QString tr_page(const char *s) { return QCoreApplication::translate("PageMeta", s); }
+} // namespace
+#else
+#include "ui/page_meta.h" // PageMeta::tr（迁移不改翻译上下文）
+namespace {
+QString tr_page(const char *s) { return pp::ui::PageMeta::tr(s); }
+} // namespace
+#endif
 
 namespace pp::ui::meta {
 
@@ -59,9 +76,9 @@ QString format_size(qint64 bytes) {
 QString channels_text(const pp::ImageInfo &info) {
     switch (info.channels) {
     case 1:
-        return info.has_alpha ? PageMeta::tr("灰度 + α") : PageMeta::tr("灰度");
+        return info.has_alpha ? tr_page("灰度 + α") : tr_page("灰度");
     case 2:
-        return PageMeta::tr("灰度 + α");
+        return tr_page("灰度 + α");
     case 3:
         return QStringLiteral("RGB");
     case 4:
@@ -149,8 +166,8 @@ QString white_balance_text(const Exiv2::ExifData &exif) {
     const std::string wb = exif_text(exif, "Exif.Photo.WhiteBalance");
     if (!wb.empty()) {
         const int v = std::atoi(wb.c_str());
-        parts << (v == 0 ? PageMeta::tr("自动")
-                         : (v == 1 ? PageMeta::tr("手动") : QString::fromStdString(wb)));
+        parts << (v == 0 ? tr_page("自动")
+                         : (v == 1 ? tr_page("手动") : QString::fromStdString(wb)));
     }
     const std::string kelvin = exif_text(exif, "Exif.Photo.ColorTemperature");
     if (!kelvin.empty()) {
@@ -226,13 +243,13 @@ QString delta_text(const pp::TimeShift &shift) {
                      .arg(std::abs(value))
                      .arg(unit);
     };
-    add(shift.years, PageMeta::tr("y"));
-    add(shift.months, PageMeta::tr("mo"));
-    add(shift.days, PageMeta::tr("d"));
-    add(shift.hours, PageMeta::tr("h"));
-    add(shift.minutes, PageMeta::tr("m"));
-    add(shift.seconds, PageMeta::tr("s"));
-    return parts.isEmpty() ? PageMeta::tr("±0") : parts.join(QStringLiteral(" "));
+    add(shift.years, tr_page("y"));
+    add(shift.months, tr_page("mo"));
+    add(shift.days, tr_page("d"));
+    add(shift.hours, tr_page("h"));
+    add(shift.minutes, tr_page("m"));
+    add(shift.seconds, tr_page("s"));
+    return parts.isEmpty() ? tr_page("±0") : parts.join(QStringLiteral(" "));
 }
 
 } // namespace pp::ui::meta

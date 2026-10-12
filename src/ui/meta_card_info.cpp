@@ -154,6 +154,12 @@ QWidget *build_info_card(MetaState *st, QWidget *parent) {
     // R-180：kv 行 → 值槽的**具名映射**（原 i*2 / i*2+1 双侧算术约定）
     constexpr InfoSlot kInfoRowLeft[4] = {kInfoTime, kInfoLens, kInfoSize, kInfoFile};
     constexpr InfoSlot kInfoRowRight[4] = {kInfoCamera, kInfoExposure, kInfoColor, kInfoGps};
+    // F2 残余 ⑥-3（M7R22G2）：键表/槽表/行映射**编译期对拍** —— InfoSlot 词表变动时不再靠
+    // 「恰好对上」维持（kv 键表 = 8 值槽 + 白平衡 + 评级；双侧行映射覆盖全部值槽）。
+    static_assert(std::tuple_size_v<decltype(keys)> == size_t(kInfoSlotCount) + 2,
+                  "kv 键表 == kInfoSlotCount + 2（8 值槽 + 白平衡 + 评级）");
+    static_assert(std::size(kInfoRowLeft) + std::size(kInfoRowRight) == size_t(kInfoSlotCount),
+                  "kv 双侧行映射覆盖全部 info_value 值槽");
     for (int i = 0; i < 5; ++i) {
         formkit::FieldCell left;
         formkit::FieldCell right;
@@ -241,7 +247,11 @@ contextmenu::InfoCardIntents info_card_intents(MetaState *st) {
             PageMeta::tr("拍摄时间"), PageMeta::tr("相机"), PageMeta::tr("镜头"),
             PageMeta::tr("曝光"),     PageMeta::tr("尺寸"), PageMeta::tr("色彩"),
             PageMeta::tr("文件"),     PageMeta::tr("GPS"),  PageMeta::tr("白平衡")};
-        for (int i = 0; i < 9; ++i) {
+        // F2 残余 ⑥-3（M7R22G2）：copy_all 键表 ↔ kInfoSlotCount **编译期对拍**
+        // （8 值槽 + 白平衡槽；tests/unit/test_meta_format.cpp 同判据复述双端钉住）。
+        static_assert(std::tuple_size_v<decltype(keys)> == size_t(kInfoSlotCount) + 1,
+                      "copy_all 键表 == kInfoSlotCount + 1（8 值槽 + 白平衡）");
+        for (int i = 0; i < static_cast<int>(std::size(keys)); ++i) {
             // R-180：槽界 = InfoSlot 词表（原裸常量 8）
             ElidedLabel *value =
                 i < kInfoSlotCount ? st->info.info_value[std::size_t(i)] : st->info.info_wb;

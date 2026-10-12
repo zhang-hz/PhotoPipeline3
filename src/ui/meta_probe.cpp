@@ -41,7 +41,7 @@ void ProbeScanner::apply_result(quint64 generation, const std::vector<ProbeSnaps
         set_hook(st_, "pp_meta_follow_stale_dropped", stale_dropped_);
         return;
     }
-    st_->probes = probes;
+    st_->follow.probes = probes;
     pending_ = false;
     set_hook(st_, "pp_meta_follow_pending", false);
     emit changed();
@@ -51,17 +51,17 @@ void ProbeScanner::apply_result(quint64 generation, const std::vector<ProbeSnaps
 // GUI 线程只做值拷贝 + 挂 watcher，立即返回；结果回填前校验序号。
 void ProbeScanner::request_scan() {
     QStringList paths;
-    const int limit = std::min(static_cast<int>(st_->items.size()), kMultiRowCap);
+    const int limit = std::min(static_cast<int>(st_->follow.items.size()), kMultiRowCap);
     for (int i = 0; i < limit; ++i) {
-        paths << st_->items.at(i).path;
+        paths << st_->follow.items.at(i).path;
     }
     const quint64 generation = ++generation_;
-    st_->probes.clear();
+    st_->follow.probes.clear();
     pending_ = !paths.isEmpty();
     set_hook(st_, "pp_meta_follow_pending", pending_);
     set_hook(st_, "pp_meta_follow_name",
-             st_->items.isEmpty() ? QString() : st_->items.first().path);
-    set_hook(st_, "pp_meta_follow_count", static_cast<int>(st_->items.size()));
+             st_->follow.items.isEmpty() ? QString() : st_->follow.items.first().path);
+    set_hook(st_, "pp_meta_follow_count", static_cast<int>(st_->follow.items.size()));
     if (paths.isEmpty()) {
         emit changed();
         return;
@@ -79,8 +79,8 @@ void ProbeScanner::request_scan() {
 
 // 自由函数面保持（meta_state.h 声明；调用点零改动）：转发到 scanner。
 void request_probe_scan(MetaState *st) {
-    if (st != nullptr && st->probe != nullptr) {
-        st->probe->request_scan();
+    if (st != nullptr && st->follow.probe != nullptr) {
+        st->follow.probe->request_scan();
     }
 }
 

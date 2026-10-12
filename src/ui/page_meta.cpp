@@ -154,79 +154,19 @@ namespace pp::ui {
 namespace meta {
 
 using formkit::FieldWidth;
-
-// ---------------------------------------------------------------------------
-// 跟随项 probe → meta_probe.{h,cpp}（B.1 拆分步 B4：ProbeScanner 唯一 IO 宿主，R-181）
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// 生效值刷新（纯函数重算；每次规则变化即时刷新）
-// ---------------------------------------------------------------------------
-
-QString follow_hint(const MetaState *st) {
-    if (st->items.isEmpty()) {
-        return PageMeta::tr("无文件");
-    }
-    const QString name = QFileInfo(st->items.first().path).fileName();
-    const int total = st->batch_files.size();
-    const int index = st->batch_files.indexOf(st->items.first().path) + 1; // 1-based；0 = 未找到
-    if (st->items.size() >= 2) {
-        return PageMeta::tr("已选 %1 个 · %2").arg(st->items.size()).arg(name);
-    }
-    if (total > 0 && index > 0) {
-        return QStringLiteral("%1 (%2/%3)").arg(name).arg(index).arg(total);
-    }
-    return name;
-}
-
-void refresh_effective(MetaState *st) {
-    st->info_hint->set_full_text(follow_hint(st));
-    // 时间卡范围胶囊（mockup「影响 12 / 24」的语义位）：页面知道的只有批内文件数，除数/被除数
-    // 同源 → 不编造"N / M"。
-    st->time_pill->setText(PageMeta::tr("影响 %1 个文件").arg(st->batch_files.size()));
-    if (st->probe->pending()) {
-        refresh_info_card(st, {});
-        refresh_time_section(st, {});
-        refresh_gps_section(st, nullptr);
-        refresh_keywords(st);
-        return;
-    }
-    const pp::BatchRules rules = build_rules(st);
-    std::vector<pp::EffectivePreview> previews;
-    previews.reserve(st->probes.size());
-    for (std::size_t i = 0; i < st->probes.size(); ++i) {
-        const std::optional<pp::MetadataOverride> exception =
-            i < std::size_t(st->items.size()) ? st->items.at(int(i)).exception
-                                              : std::optional<pp::MetadataOverride>();
-
-        previews.push_back(
-            pp::preview_effective(st->probes[i].meta, rules, exception)); // §5.1 唯一合成源
-    }
-    refresh_info_card(st, previews);
-    refresh_time_section(st, previews);
-    refresh_gps_section(st, previews.empty() ? nullptr : &previews.front());
-    refresh_keywords(st);
-}
-
-void refresh_all(MetaState *st) {
-    refresh_time_inputs(st);
-    refresh_gps_inputs(st);
-    refresh_privacy_inputs(st);
-    refresh_gps_warning(st);
-    refresh_effective(st);
-}
+// B1（M7-R2.1-F2）：follow_hint / refresh_effective / refresh_all → meta_state.cpp
 
 void build_ui(PageMeta *page) {
     auto *st = new MetaState();
-    st->page = page;
+    st->core.page = page;
     st->setObjectName(QString::fromLatin1(kStateObjectName));
     st->setParent(page);
     page->setProperty(kStateProperty, QVariant::fromValue(static_cast<QObject *>(st)));
-    st->probe = new ProbeScanner(st);
+    st->follow.probe = new ProbeScanner(st);
     // B4（R-181）：扫描发起/回填的**唯一** connect（同线程 direct = 既有 refresh_effective
     // 调用序逐位不变）。
-    QObject::connect(st->probe, &ProbeScanner::changed, st, [st] { refresh_effective(st); });
-    st->tokens = theme::tokens(theme::preferred_theme_mode());
+    QObject::connect(st->follow.probe, &ProbeScanner::changed, st, [st] { refresh_effective(st); });
+    st->core.tokens = theme::tokens(theme::preferred_theme_mode());
 
     auto *outer = new QVBoxLayout(page);
     outer->setContentsMargins(0, 0, 0, 0);
@@ -244,7 +184,7 @@ void build_ui(PageMeta *page) {
     QFrame *time_card = qobject_cast<QFrame *>(build_time_card(st, content));
     QFrame *gps_card = qobject_cast<QFrame *>(build_gps_card(st, content));
     QFrame *switch_card = qobject_cast<QFrame *>(build_switches_card(st, content));
-    st->cards = {info_card, time_card, gps_card, switch_card};
+    st->core.cards = {info_card, time_card, gps_card, switch_card};
     // UX-1②③④⑤（M7-R2D1）：一卡一菜单 —— 各接一行（意图构造 = *_card_intents）
     contextmenu::attach_card_menu(
         info_card, [st] { return contextmenu::info_card_actions(info_card_intents(st)); });
@@ -283,14 +223,14 @@ void PageMeta::apply_rules(const pp::BatchRules &r) { apply_state(state_of(this)
 
 void PageMeta::set_batch_files(const QStringList &paths) {
     MetaState *st = state_of(this);
-    st->batch_files = paths;
+    st->follow.batch_files = paths;
     refresh_effective(st); // 「影响 N 个文件」与 (i/N) 跟随提示
 }
 
 void PageMeta::set_selection(const QList<MetaSelectionItem> &items, bool from_selection) {
     MetaState *st = state_of(this);
-    st->items = items;
-    st->from_selection = from_selection;
+    st->follow.items = items;
+    st->follow.from_selection = from_selection;
     request_probe_scan(st); // 只对跟随项取 probe（异步 + 序号守卫）
     refresh_all(st);
 }
@@ -307,21 +247,21 @@ void PageMeta::set_selected_files(const QStringList &paths) {
 
 void PageMeta::set_exception_summary(const QStringList &paths) {
     MetaState *st = state_of(this);
-    st->exc_list->clear();
+    st->privacy.exc_list->clear();
     for (const QString &path : paths) {
-        st->exc_list->addItem(path);
+        st->privacy.exc_list->addItem(path);
     }
-    st->exc_label->setText(paths.isEmpty() ? tr("无例外文件")
-                                           : tr("%1 个文件带元数据例外").arg(paths.size()));
+    st->privacy.exc_label->setText(paths.isEmpty() ? tr("无例外文件")
+                                                   : tr("%1 个文件带元数据例外").arg(paths.size()));
     // 例外计数 = 卡头中性胶囊（1-24/1-25：右置元素统一规格；链接文案保持「例外…」）；
     // 无例外 → 不显示（§2.5「未发生的量不显示」）
-    st->privacy_pill->setText(tr("例外 %1").arg(paths.size()));
-    st->privacy_pill->setVisible(!paths.isEmpty());
+    st->privacy.privacy_pill->setText(tr("例外 %1").arg(paths.size()));
+    st->privacy.privacy_pill->setVisible(!paths.isEmpty());
 }
 
 void PageMeta::set_tokens(const theme::Tokens &tokens) {
     MetaState *st = state_of(this);
-    st->tokens = tokens;
+    st->core.tokens = tokens;
     apply_style(st);
 }
 
@@ -332,14 +272,14 @@ void PageMeta::set_map_provider(const QString &provider_id, const QString &amap_
     // 登记 handoff「跨界需求」）。
     const QStringList known = pp::map::provider_ids();
     const QString id = known.contains(provider_id) ? provider_id : QStringLiteral("osm");
-    st->map->set_provider(id);
-    st->map->set_amap_key(amap_key);
-    st->map->set_cache_mb(cache_mb);
-    if (st->provider != nullptr) {
-        const QSignalBlocker blocker(st->provider);
-        const int index = st->provider->findData(id);
+    st->gps.map->set_provider(id);
+    st->gps.map->set_amap_key(amap_key);
+    st->gps.map->set_cache_mb(cache_mb);
+    if (st->gps.provider != nullptr) {
+        const QSignalBlocker blocker(st->gps.provider);
+        const int index = st->gps.provider->findData(id);
         if (index >= 0) {
-            st->provider->setCurrentIndex(index);
+            st->gps.provider->setCurrentIndex(index);
         }
     }
     // R-045：换源清理两路共用 clear_search_state（此处信号被挡不走下拉回调 → 补一次清理，

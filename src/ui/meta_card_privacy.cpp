@@ -46,15 +46,15 @@ namespace pp::ui::meta {
 
 // 关键字胶囊组（§7.1「关键字 胶囊组」）：跟随项的 XMP dc:subject；超过 3 枚 → 「+N」
 void refresh_keywords(MetaState *st) {
-    if (st->keyword_row == nullptr) {
+    if (st->privacy.keyword_row == nullptr) {
         return;
     }
     // 胶囊是**重建件**：本函数每次刷新都换一批 —— 令牌重放清单先清空（否则 apply_style 会对
     // 已 deleteLater 的旧胶囊取 tokens → 悬垂指针）
-    st->keyword_pills.clear();
+    st->core.keyword_pills.clear();
     // 说明位是常驻子控件（与 multi_more 同口径：重复入列/误删会造成悬垂引用）→ 只清胶囊
-    while (st->keyword_row->count() > 1) {
-        QLayoutItem *item = st->keyword_row->takeAt(1);
+    while (st->privacy.keyword_row->count() > 1) {
+        QLayoutItem *item = st->privacy.keyword_row->takeAt(1);
         if (QWidget *widget = item->widget()) {
             widget->hide();
             widget->setParent(nullptr);
@@ -63,37 +63,39 @@ void refresh_keywords(MetaState *st) {
         delete item;
     }
     QStringList keywords;
-    if (!st->probes.empty() && !st->items.isEmpty()) {
-        keywords = keywords_of(st->probes.front().meta);
+    if (!st->follow.probes.empty() && !st->follow.items.isEmpty()) {
+        keywords = keywords_of(st->follow.probes.front().meta);
     }
-    st->keyword_none->setVisible(keywords.isEmpty());
+    st->privacy.keyword_none->setVisible(keywords.isEmpty());
     constexpr int kShown = 3;
     for (int i = 0; i < std::min<int>(kShown, keywords.size()); ++i) {
-        auto *pill = formkit::PillBadge::of(st->keyword_box, formkit::PillBadge::Tone::Neutral,
-                                            keywords.at(i));
+        auto *pill = formkit::PillBadge::of(st->privacy.keyword_box,
+                                            formkit::PillBadge::Tone::Neutral, keywords.at(i));
         pill->setObjectName(QStringLiteral("pp-meta-keyword-%1").arg(i));
-        pill->set_tokens(st->tokens);
-        st->keyword_pills.append(pill);
-        st->keyword_row->addWidget(pill, 0, Qt::AlignVCenter);
+        pill->set_tokens(st->core.tokens);
+        st->core.keyword_pills.append(pill);
+        st->privacy.keyword_row->addWidget(pill, 0, Qt::AlignVCenter);
     }
     if (keywords.size() > kShown) {
-        auto *more = formkit::PillBadge::of(st->keyword_box, formkit::PillBadge::Tone::Neutral,
-                                            QStringLiteral("+%1").arg(keywords.size() - kShown));
+        auto *more =
+            formkit::PillBadge::of(st->privacy.keyword_box, formkit::PillBadge::Tone::Neutral,
+                                   QStringLiteral("+%1").arg(keywords.size() - kShown));
         more->setObjectName(QStringLiteral("pp-meta-keyword-more"));
-        more->set_tokens(st->tokens);
-        st->keyword_pills.append(more);
-        st->keyword_row->addWidget(more, 0, Qt::AlignVCenter);
+        more->set_tokens(st->core.tokens);
+        st->core.keyword_pills.append(more);
+        st->privacy.keyword_row->addWidget(more, 0, Qt::AlignVCenter);
     }
 }
 
 // UX-5：隐私与文件时间卡的置灰（开关/标签编辑入口；例外列表是只读面不动）
 void refresh_privacy_inputs(MetaState *st) {
-    const bool card_on = st->privacy_enable == nullptr || st->privacy_enable->isChecked();
-    st->strip->setEnabled(card_on);
-    st->mtime->setEnabled(card_on);
-    st->link_tags->setEnabled(card_on);
-    st->link_keywords->setEnabled(card_on);
-    st->add_tag->setEnabled(card_on);
+    const bool card_on =
+        st->privacy.privacy_enable == nullptr || st->privacy.privacy_enable->isChecked();
+    st->privacy.strip->setEnabled(card_on);
+    st->privacy.mtime->setEnabled(card_on);
+    st->privacy.link_tags->setEnabled(card_on);
+    st->privacy.link_keywords->setEnabled(card_on);
+    st->privacy.add_tag->setEnabled(card_on);
 }
 
 QWidget *build_switches_card(MetaState *st, QWidget *parent) {
@@ -104,8 +106,8 @@ QWidget *build_switches_card(MetaState *st, QWidget *parent) {
     const CardHeader header = make_header(st, card, PageMeta::tr("隐私与文件时间"),
                                           QStringLiteral("pp-meta-privacy-pill"), QString(),
                                           QStringLiteral("pp-meta-privacy-enable")); // UX-5
-    st->privacy_pill = header.pill;
-    st->privacy_enable = header.enable;
+    st->privacy.privacy_pill = header.pill;
+    st->privacy.privacy_enable = header.enable;
     v->addWidget(header.row);
 
     auto *body = new QWidget(card);
@@ -126,8 +128,8 @@ QWidget *build_switches_card(MetaState *st, QWidget *parent) {
         TrackGroup group = make_group(body);
         auto *sw = new formkit::SwitchControl(group.widget());
         sw->setObjectName(object_name);
-        sw->set_tokens(st->tokens);
-        st->switches.append(sw);
+        sw->set_tokens(st->core.tokens);
+        st->core.switches.append(sw);
         *out = sw;
         group.add(sw);
         group.gap(theme::Metrics::group_gap);
@@ -142,128 +144,130 @@ QWidget *build_switches_card(MetaState *st, QWidget *parent) {
         const formkit::Row row = formkit::frow(body, label, group.widget(), FieldWidth::Flex);
         return row.row;
     };
-    bv->addWidget(switch_row(PageMeta::tr("隐私剥除"), QStringLiteral("privacy_strip"), &st->strip,
-                             PageMeta::tr("输出前移除全部 EXIF / XMP，保留 ICC"),
-                             QStringLiteral("privacy_strip_link"), PageMeta::tr("标签编辑…"),
-                             &st->link_tags));
-    bv->addWidget(switch_row(PageMeta::tr("时间同步"), QStringLiteral("mtime_sync"), &st->mtime,
-                             PageMeta::tr("输出 mtime 跟随拍摄时间"),
+    bv->addWidget(switch_row(
+        PageMeta::tr("隐私剥除"), QStringLiteral("privacy_strip"), &st->privacy.strip,
+        PageMeta::tr("输出前移除全部 EXIF / XMP，保留 ICC"), QStringLiteral("privacy_strip_link"),
+        PageMeta::tr("标签编辑…"), &st->privacy.link_tags));
+    bv->addWidget(switch_row(PageMeta::tr("时间同步"), QStringLiteral("mtime_sync"),
+                             &st->privacy.mtime, PageMeta::tr("输出 mtime 跟随拍摄时间"),
                              QStringLiteral("mtime_sync_link"), PageMeta::tr("例外…"),
-                             &st->link_exc));
+                             &st->privacy.link_exc));
     // 关键字（§7.1：胶囊组 + 「编辑…」链）
     {
         TrackGroup group = make_group(body);
         // 胶囊组本体 = 独立子容器（随跟随项重建；说明位/胶囊都在它内部）
-        st->keyword_box = new QWidget(group.widget());
-        st->keyword_row = new QHBoxLayout(st->keyword_box);
-        st->keyword_row->setContentsMargins(0, 0, 0, 0);
-        st->keyword_row->setSpacing(formkit::kInlineGap);
-        st->keyword_none = new ElidedLabel(st->keyword_box);
-        st->keyword_none->setObjectName(QStringLiteral("pp-meta-keyword-none"));
-        st->keyword_none->setProperty(kFieldProperty, fieldprop::kNote);
-        st->keyword_none->setFont(theme::font(theme::Typography::hint_px, QFont::Normal));
-        st->keyword_none->set_full_text(PageMeta::tr(kNoKeywordsText));
-        st->keyword_row->addWidget(st->keyword_none, 0, Qt::AlignVCenter);
-        group.add(st->keyword_box);
+        st->privacy.keyword_box = new QWidget(group.widget());
+        st->privacy.keyword_row = new QHBoxLayout(st->privacy.keyword_box);
+        st->privacy.keyword_row->setContentsMargins(0, 0, 0, 0);
+        st->privacy.keyword_row->setSpacing(formkit::kInlineGap);
+        st->privacy.keyword_none = new ElidedLabel(st->privacy.keyword_box);
+        st->privacy.keyword_none->setObjectName(QStringLiteral("pp-meta-keyword-none"));
+        st->privacy.keyword_none->setProperty(kFieldProperty, fieldprop::kNote);
+        st->privacy.keyword_none->setFont(theme::font(theme::Typography::hint_px, QFont::Normal));
+        st->privacy.keyword_none->set_full_text(PageMeta::tr(kNoKeywordsText));
+        st->privacy.keyword_row->addWidget(st->privacy.keyword_none, 0, Qt::AlignVCenter);
+        group.add(st->privacy.keyword_box);
         group.stretch();
-        st->link_keywords = make_link(group.widget(), QStringLiteral("pp-meta-keywords-link"),
-                                      PageMeta::tr("编辑…"));
-        group.add(st->link_keywords);
+        st->privacy.link_keywords = make_link(
+            group.widget(), QStringLiteral("pp-meta-keywords-link"), PageMeta::tr("编辑…"));
+        group.add(st->privacy.link_keywords);
         const formkit::Row row =
             formkit::frow(body, PageMeta::tr("关键字"), group.widget(), FieldWidth::Flex);
         bv->addWidget(row.row);
     }
 
     // 标签编辑（折叠；「标签编辑…」/「编辑…」入口）
-    st->tag_host = new QWidget(card);
-    st->tag_host->setObjectName(QStringLiteral("pp-meta-tag-host"));
-    auto *tv = new QVBoxLayout(st->tag_host);
+    st->privacy.tag_host = new QWidget(card);
+    st->privacy.tag_host->setObjectName(QStringLiteral("pp-meta-tag-host"));
+    auto *tv = new QVBoxLayout(st->privacy.tag_host);
     tv->setContentsMargins(theme::Metrics::card_pad_x, 0, theme::Metrics::card_pad_x, 8);
-    auto *rows_host = new QWidget(st->tag_host);
+    auto *rows_host = new QWidget(st->privacy.tag_host);
     rows_host->setObjectName(QStringLiteral("tag_rows_host"));
-    st->tag_rows = new QVBoxLayout(rows_host);
-    st->tag_rows->setContentsMargins(0, 0, 0, 0);
-    st->tag_rows->setSpacing(theme::Metrics::group_gap);
+    st->privacy.tag_rows = new QVBoxLayout(rows_host);
+    st->privacy.tag_rows->setContentsMargins(0, 0, 0, 0);
+    st->privacy.tag_rows->setSpacing(theme::Metrics::group_gap);
     tv->addWidget(rows_host);
-    st->add_tag =
-        make_button(st->tag_host, QStringLiteral("tag_add_button"), PageMeta::tr("添加标签"));
-    tv->addWidget(st->add_tag, 0, Qt::AlignLeft);
-    st->tag_host->setVisible(false);
-    v->addWidget(st->tag_host);
+    st->privacy.add_tag = make_button(st->privacy.tag_host, QStringLiteral("tag_add_button"),
+                                      PageMeta::tr("添加标签"));
+    tv->addWidget(st->privacy.add_tag, 0, Qt::AlignLeft);
+    st->privacy.tag_host->setVisible(false);
+    v->addWidget(st->privacy.tag_host);
 
     // 例外列表（折叠；「例外…」入口）
-    st->exc_host = new QWidget(card);
-    st->exc_host->setObjectName(QStringLiteral("pp-meta-exception-host"));
-    auto *xv = new QVBoxLayout(st->exc_host);
+    st->privacy.exc_host = new QWidget(card);
+    st->privacy.exc_host->setObjectName(QStringLiteral("pp-meta-exception-host"));
+    auto *xv = new QVBoxLayout(st->privacy.exc_host);
     xv->setContentsMargins(theme::Metrics::card_pad_x, 0, theme::Metrics::card_pad_x, 8);
-    st->exc_label = new QLabel(PageMeta::tr("无例外文件"), st->exc_host);
-    st->exc_label->setObjectName(QStringLiteral("exception_label"));
-    st->exc_label->setProperty(kFieldProperty, fieldprop::kSub);
-    st->exc_label->setFont(theme::font(theme::Typography::hint_px, QFont::Normal));
-    xv->addWidget(st->exc_label);
-    st->exc_list = new QListWidget(st->exc_host);
-    st->exc_list->setObjectName(QStringLiteral("exception_list"));
-    st->exc_list->setContextMenuPolicy(Qt::CustomContextMenu);
-    st->exc_list->setMaximumHeight(120);
-    xv->addWidget(st->exc_list);
-    st->exc_host->setVisible(false);
-    v->addWidget(st->exc_host);
+    st->privacy.exc_label = new QLabel(PageMeta::tr("无例外文件"), st->privacy.exc_host);
+    st->privacy.exc_label->setObjectName(QStringLiteral("exception_label"));
+    st->privacy.exc_label->setProperty(kFieldProperty, fieldprop::kSub);
+    st->privacy.exc_label->setFont(theme::font(theme::Typography::hint_px, QFont::Normal));
+    xv->addWidget(st->privacy.exc_label);
+    st->privacy.exc_list = new QListWidget(st->privacy.exc_host);
+    st->privacy.exc_list->setObjectName(QStringLiteral("exception_list"));
+    st->privacy.exc_list->setContextMenuPolicy(Qt::CustomContextMenu);
+    st->privacy.exc_list->setMaximumHeight(120);
+    xv->addWidget(st->privacy.exc_list);
+    st->privacy.exc_host->setVisible(false);
+    v->addWidget(st->privacy.exc_host);
 
-    QObject::connect(st->strip, &formkit::SwitchControl::toggled, st, [st](bool) {
-        if (!st->loading) {
+    QObject::connect(st->privacy.strip, &formkit::SwitchControl::toggled, st, [st](bool) {
+        if (!st->core.loading) {
             refresh_effective(st);
             notify_rules_changed(st);
         }
     });
     // UX-5：卡头「启用」开关 —— 关 = 整卡不参与规则（置灰 + build_rules 跳过）
-    QObject::connect(st->privacy_enable, &formkit::SwitchControl::toggled, st, [st](bool) {
-        if (!st->loading) {
+    QObject::connect(st->privacy.privacy_enable, &formkit::SwitchControl::toggled, st, [st](bool) {
+        if (!st->core.loading) {
             refresh_privacy_inputs(st);
             refresh_effective(st);
             notify_rules_changed(st);
         }
     });
-    QObject::connect(st->mtime, &formkit::SwitchControl::toggled, st, [st](bool) {
-        if (!st->loading) {
+    QObject::connect(st->privacy.mtime, &formkit::SwitchControl::toggled, st, [st](bool) {
+        if (!st->core.loading) {
             refresh_effective(st);
             notify_rules_changed(st);
         }
     });
     const auto toggle_tags = [st] {
-        const bool on = !st->tag_host->isVisible();
-        st->tag_host->setVisible(on);
-        set_fold_icon(st, st->link_tags, on);
-        set_fold_icon(st, st->link_keywords, on);
+        const bool on = !st->privacy.tag_host->isVisible();
+        st->privacy.tag_host->setVisible(on);
+        set_fold_icon(st, st->privacy.link_tags, on);
+        set_fold_icon(st, st->privacy.link_keywords, on);
     };
-    QObject::connect(st->link_tags, &QToolButton::clicked, st, [toggle_tags] { toggle_tags(); });
-    QObject::connect(st->link_keywords, &QToolButton::clicked, st,
+    QObject::connect(st->privacy.link_tags, &QToolButton::clicked, st,
                      [toggle_tags] { toggle_tags(); });
-    QObject::connect(st->link_exc, &QToolButton::clicked, st, [st] {
-        const bool on = !st->exc_host->isVisible();
-        st->exc_host->setVisible(on);
-        set_fold_icon(st, st->link_exc, on);
+    QObject::connect(st->privacy.link_keywords, &QToolButton::clicked, st,
+                     [toggle_tags] { toggle_tags(); });
+    QObject::connect(st->privacy.link_exc, &QToolButton::clicked, st, [st] {
+        const bool on = !st->privacy.exc_host->isVisible();
+        st->privacy.exc_host->setVisible(on);
+        set_fold_icon(st, st->privacy.link_exc, on);
     });
-    QObject::connect(st->add_tag, &QPushButton::clicked, st, [st] {
+    QObject::connect(st->privacy.add_tag, &QPushButton::clicked, st, [st] {
         add_tag_row(st, QString(), QString());
-        st->tag_host->setVisible(true);
+        st->privacy.tag_host->setVisible(true);
         notify_rules_changed(st);
     });
-    QObject::connect(st->exc_list, &QListWidget::itemDoubleClicked, st,
+    QObject::connect(st->privacy.exc_list, &QListWidget::itemDoubleClicked, st,
                      [st](QListWidgetItem *item) {
                          if (item != nullptr) {
-                             emit st->page->open_editor_requested(item->text());
+                             emit st->core.page->open_editor_requested(item->text());
                          }
                      });
-    QObject::connect(st->exc_list, &QListWidget::customContextMenuRequested, st,
+    QObject::connect(st->privacy.exc_list, &QListWidget::customContextMenuRequested, st,
                      [st](const QPoint &pos) {
-                         QListWidgetItem *item = st->exc_list->itemAt(pos);
+                         QListWidgetItem *item = st->privacy.exc_list->itemAt(pos);
                          if (item == nullptr) {
                              return;
                          }
-                         QMenu menu(st->exc_list);
+                         QMenu menu(st->privacy.exc_list);
                          QAction *clear = menu.addAction(PageMeta::tr("清除例外"));
-                         if (menu.exec(st->exc_list->viewport()->mapToGlobal(pos)) == clear) {
-                             emit st->page->clear_exception_requested(item->text());
+                         if (menu.exec(st->privacy.exc_list->viewport()->mapToGlobal(pos)) ==
+                             clear) {
+                             emit st->core.page->clear_exception_requested(item->text());
                          }
                      });
     return card;
@@ -271,25 +275,25 @@ QWidget *build_switches_card(MetaState *st, QWidget *parent) {
 
 contextmenu::PrivacyCardIntents privacy_card_intents(MetaState *st) {
     contextmenu::PrivacyCardIntents in;
-    in.running = st->page == nullptr || !st->page->isEnabled();
-    in.enabled = st->privacy_enable != nullptr && st->privacy_enable->isChecked();
+    in.running = st->core.page == nullptr || !st->core.page->isEnabled();
+    in.enabled = st->privacy.privacy_enable != nullptr && st->privacy.privacy_enable->isChecked();
     in.enable_toggle = [st] {
-        if (st->privacy_enable != nullptr)
-            st->privacy_enable->toggle();
+        if (st->privacy.privacy_enable != nullptr)
+            st->privacy.privacy_enable->toggle();
     };
-    in.strip_privacy = st->strip != nullptr && st->strip->isChecked();
+    in.strip_privacy = st->privacy.strip != nullptr && st->privacy.strip->isChecked();
     in.strip_privacy_toggle = [st] {
-        if (st->strip != nullptr)
-            st->strip->toggle();
+        if (st->privacy.strip != nullptr)
+            st->privacy.strip->toggle();
     };
-    in.sync_mtime = st->mtime != nullptr && st->mtime->isChecked();
+    in.sync_mtime = st->privacy.mtime != nullptr && st->privacy.mtime->isChecked();
     in.sync_mtime_toggle = [st] {
-        if (st->mtime != nullptr)
-            st->mtime->toggle();
+        if (st->privacy.mtime != nullptr)
+            st->privacy.mtime->toggle();
     };
     in.edit_keywords = [st] {
-        if (st->link_keywords != nullptr)
-            st->link_keywords->click();
+        if (st->privacy.link_keywords != nullptr)
+            st->privacy.link_keywords->click();
     };
     return in;
 }

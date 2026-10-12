@@ -277,18 +277,35 @@ private:
     theme::Tokens tokens_ = formkit::default_tokens();
 };
 
-struct MetaState : QObject {
+// —— Core：页面锚 / 加载协议 / 主题令牌 / 卡片与重放清单 ——
+struct CoreState {
+
     PageMeta *page = nullptr;
     bool loading = false; // apply_rules 期间抑制信号与重复刷新
     theme::Tokens tokens;
 
     std::array<QFrame *, 4> cards{};
-    // ---- UX-5（M7-WP7）：三卡「启用」开关（卡头右置 SwitchControl 30×16）----
-    // 语义：关闭 = 该卡整卡不参与规则（build_rules 跳过）+ 卡内规则控件置灰；打开 = 按当前
-    // 参数装配。新会话初态 = 关（值为空 → 输出零变化）；恢复含值旧状态 = 开（apply_state）。
-    formkit::SwitchControl *time_enable = nullptr;
-    formkit::SwitchControl *gps_enable_switch = nullptr; // objectName pp-meta-gps-enable
-    formkit::SwitchControl *privacy_enable = nullptr;
+
+    // ---- 主题重放的控件集（持有 tokens 副本的自绘控件）----
+    QList<formkit::PillBadge *> pills;         // 常驻胶囊（卡头/GPS 值格）
+    QList<formkit::PillBadge *> keyword_pills; // 关键字胶囊（随跟随项重建 → 每次刷新重填）
+    QList<formkit::SwitchControl *> switches;
+};
+
+// —— 跟随数据（§5.2）——
+struct FollowModel {
+
+    // ---- 跟随数据（§5.2）----
+    QStringList batch_files;
+    QList<MetaSelectionItem> items; // 跟随项（选中项；无选中 → 首个文件）
+    bool from_selection = false;    // false = 无选中 → 首个文件（提示 "(1/N)"）
+    std::vector<ProbeSnapshot> probes;
+    // B4（R-181）：generation/pending/stale 归 ProbeScanner（唯一 IO 宿主）；本处只持句柄。
+    ProbeScanner *probe = nullptr;
+};
+
+// —— 卡片 ① 关键信息（kv 双列 5 行 + 空态一行）——
+struct InfoCardState {
 
     // ---- 卡片 ① 关键信息（kv 双列 5 行 + 空态一行）----
     formkit::PillBadge *info_pill = nullptr;
@@ -301,6 +318,14 @@ struct MetaState : QObject {
     formkit::PillBadge *info_gps_pill = nullptr;
     QWidget *info_empty_row = nullptr;
     ElidedLabel *info_empty = nullptr;
+};
+
+// —— 卡片 ② 时间偏移 ——
+struct TimeCardState {
+    // ---- UX-5（M7-WP7）：三卡「启用」开关（卡头右置 SwitchControl 30×16）----
+    // 语义：关闭 = 该卡整卡不参与规则（build_rules 跳过）+ 卡内规则控件置灰；打开 = 按当前
+    // 参数装配。新会话初态 = 关（值为空 → 输出零变化）；恢复含值旧状态 = 开（apply_state）。
+    formkit::SwitchControl *time_enable = nullptr;
 
     // ---- 卡片 ② 时间偏移 ----
     formkit::PillBadge *time_pill = nullptr;
@@ -324,6 +349,11 @@ struct MetaState : QObject {
     QWidget *multi_host = nullptr;
     QGridLayout *multi_grid = nullptr;
     ElidedLabel *multi_more = nullptr;
+};
+
+// —— 卡片 ③ GPS ——
+struct GpsCardState {
+    formkit::SwitchControl *gps_enable_switch = nullptr; // objectName pp-meta-gps-enable
 
     // ---- 卡片 ③ GPS ----
     formkit::PillBadge *gps_pill = nullptr;
@@ -365,8 +395,6 @@ struct MetaState : QObject {
     QWidget *datum_row = nullptr;              // 坐标行（M6-T12：光标坐标读数的 tooltip 承载面）
     formkit::ChipButton *dms_toggle = nullptr; // DMS 切换（chip；与右键菜单同一收口）
     QToolButton *copy_coords = nullptr;        // 复制当前格式坐标（文字链）
-    // ---- M6-T12/13 加性：地图覆盖层 + 大地图（B6：状态归 MapOverlayController）----
-    MapOverlayController overlay;
     QToolButton *rule_toggle = nullptr;
     QWidget *rule_host = nullptr;
     QWidget *rule_altdir_row = nullptr; // 更多字段折叠的两行（gps_wiring 的折叠接线用）
@@ -378,6 +406,11 @@ struct MetaState : QObject {
     QLineEdit *alt = nullptr;
     QLineEdit *dir = nullptr;
     QLineEdit *ts = nullptr;
+};
+
+// —— 卡片 ④ 隐私与文件时间 ——
+struct PrivacyCardState {
+    formkit::SwitchControl *privacy_enable = nullptr;
 
     // ---- 卡片 ④ 隐私与文件时间 ----
     formkit::PillBadge *privacy_pill = nullptr;
@@ -398,23 +431,26 @@ struct MetaState : QObject {
     QPushButton *add_tag = nullptr;
     QLabel *exc_label = nullptr;
     QListWidget *exc_list = nullptr;
+};
 
-    // ---- 跟随数据（§5.2）----
-    QStringList batch_files;
-    QList<MetaSelectionItem> items; // 跟随项（选中项；无选中 → 首个文件）
-    bool from_selection = false;    // false = 无选中 → 首个文件（提示 "(1/N)"）
-    std::vector<ProbeSnapshot> probes;
-    // B4（R-181）：generation/pending/stale 归 ProbeScanner（唯一 IO 宿主）；本处只持句柄。
-    ProbeScanner *probe = nullptr;
+// R-177（B1）：上帝结构拆为 Core + FollowModel + 四卡子聚合（上方六个具名聚合；
+// 本结构只做**组合 + 状态锚**）。Q_OBJECT = 动态属性锚的显式化（state_of 走 qobject_cast）。
+struct MetaState : QObject {
+    Q_OBJECT
+public:
+    CoreState core;
+    FollowModel follow;
+    InfoCardState info;
+    TimeCardState time;
+    GpsCardState gps;
+    PrivacyCardState privacy;
+    // ---- M6-T12/13 加性：地图覆盖层 + 大地图（B6：状态归 MapOverlayController）----
+    MapOverlayController overlay;
 
-    // ---- 主题重放的控件集（持有 tokens 副本的自绘控件）----
-    QList<formkit::PillBadge *> pills;         // 常驻胶囊（卡头/GPS 值格）
-    QList<formkit::PillBadge *> keyword_pills; // 关键字胶囊（随跟随项重建 → 每次刷新重填）
-    QList<formkit::SwitchControl *> switches;
-
+    // 常驻胶囊登记（tokens 重放清单；构建器调用点不变）
     void add_pill(formkit::PillBadge *pill) {
-        pill->set_tokens(tokens);
-        pills.append(pill);
+        pill->set_tokens(core.tokens);
+        core.pills.append(pill);
     }
 };
 

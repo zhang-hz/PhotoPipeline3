@@ -35,27 +35,28 @@ namespace pp::ui::meta {
 
 RuleInputs rule_inputs(const MetaState *st) {
     RuleInputs in;
-    in.time_enabled = st->time_enable != nullptr && st->time_enable->isChecked();
-    in.gps_enabled = st->gps_enable->isChecked();
-    in.privacy_enabled = st->privacy_enable != nullptr && st->privacy_enable->isChecked();
-    in.seg_index = st->seg->current_index();
+    in.time_enabled = st->time.time_enable != nullptr && st->time.time_enable->isChecked();
+    in.gps_enabled = st->gps.gps_enable->isChecked();
+    in.privacy_enabled =
+        st->privacy.privacy_enable != nullptr && st->privacy.privacy_enable->isChecked();
+    in.seg_index = st->time.seg->current_index();
     for (std::size_t i = 0; i < in.delta.size(); ++i) {
-        in.delta[i] = st->delta[i]->value();
+        in.delta[i] = st->time.delta[i]->value();
     }
-    in.tz_from_min = st->tz_from->currentData().toInt();
-    in.tz_to_min = st->tz_to->currentData().toInt();
-    in.gps_clear = st->clear_gps->isChecked();
-    in.lat = st->lat->text();
-    in.lon = st->lon->text();
-    in.alt = st->alt->text();
-    in.dir = st->dir->text();
-    in.ts = st->ts->text();
-    in.tags.reserve(std::size_t(st->tag_edits.size()));
-    for (const auto &row : st->tag_edits) {
+    in.tz_from_min = st->time.tz_from->currentData().toInt();
+    in.tz_to_min = st->time.tz_to->currentData().toInt();
+    in.gps_clear = st->gps.clear_gps->isChecked();
+    in.lat = st->gps.lat->text();
+    in.lon = st->gps.lon->text();
+    in.alt = st->gps.alt->text();
+    in.dir = st->gps.dir->text();
+    in.ts = st->gps.ts->text();
+    in.tags.reserve(std::size_t(st->privacy.tag_edits.size()));
+    for (const auto &row : st->privacy.tag_edits) {
         in.tags.emplace_back(row.first->text(), row.second->text());
     }
-    in.strip_privacy = st->strip->isChecked();
-    in.sync_mtime = st->mtime->isChecked();
+    in.strip_privacy = st->privacy.strip->isChecked();
+    in.sync_mtime = st->privacy.mtime->isChecked();
     return in;
 }
 
@@ -258,9 +259,9 @@ void commit_rule_change(MetaState *st) {
 // ---------------------------------------------------------------------------
 
 void clear_tag_rows(MetaState *st) {
-    st->tag_edits.clear(); // R-180：显式清单与布局同生共死
-    while (st->tag_rows->count() > 0) {
-        QLayoutItem *item = st->tag_rows->takeAt(0);
+    st->privacy.tag_edits.clear(); // R-180：显式清单与布局同生共死
+    while (st->privacy.tag_rows->count() > 0) {
+        QLayoutItem *item = st->privacy.tag_rows->takeAt(0);
         if (QWidget *w = item->widget()) {
             w->hide();
             w->setParent(nullptr);
@@ -294,15 +295,15 @@ void add_tag_row(MetaState *st, const QString &key, const QString &value) {
     remove->setFixedSize(formkit::kIconBtn, formkit::kIconBtn); // 图标钮 28×28（R4）
     remove->setToolTip(PageMeta::tr("删除此行"));
     remove->setAccessibleName(PageMeta::tr("删除此行")); // §11：图标钮必有 accessibleName
-    icons::apply(remove, icons::Name::Clear, st->tokens.text2, st->tokens.text3, 12);
+    icons::apply(remove, icons::Name::Clear, st->core.tokens.text2, st->core.tokens.text3, 12);
 
     lay->addWidget(key_edit, 2);
     lay->addWidget(value_edit, 3);
     lay->addWidget(remove, 0);
-    st->tag_rows->addWidget(row);
+    st->privacy.tag_rows->addWidget(row);
     // R-180（B3）：行内编辑器**显式登记**（键值对清单）——build_rules/rule_inputs
     // 不再 findChild("tag_key") 反查 objectName 隐式约定；objectName 仍留给探针。
-    st->tag_edits.push_back({key_edit, value_edit});
+    st->privacy.tag_edits.push_back({key_edit, value_edit});
 
     QObject::connect(key_edit, &QLineEdit::textChanged, st, [st] {
         notify_rules_changed(st);
@@ -313,10 +314,10 @@ void add_tag_row(MetaState *st, const QString &key, const QString &value) {
         refresh_effective(st);
     });
     QObject::connect(remove, &QPushButton::clicked, st, [st, row, key_edit] {
-        st->tag_rows->removeWidget(row);
-        for (int i = 0; i < st->tag_edits.size(); ++i) {
-            if (st->tag_edits[i].first == key_edit) {
-                st->tag_edits.removeAt(i); // 与布局同序同行移除
+        st->privacy.tag_rows->removeWidget(row);
+        for (int i = 0; i < st->privacy.tag_edits.size(); ++i) {
+            if (st->privacy.tag_edits[i].first == key_edit) {
+                st->privacy.tag_edits.removeAt(i); // 与布局同序同行移除
                 break;
             }
         }
@@ -328,43 +329,44 @@ void add_tag_row(MetaState *st, const QString &key, const QString &value) {
 }
 
 void apply_state(MetaState *st, const pp::BatchRules &r) {
-    const bool prev_loading = st->loading;
-    st->loading = true;
+    const bool prev_loading = st->core.loading;
+    st->core.loading = true;
 
     if (r.time_shift.has_value()) {
         const pp::TimeShift &s = *r.time_shift;
-        st->seg->set_current_index(s.mode == pp::TimeShift::Mode::Delta ? 0 : 1);
-        st->delta[0]->setValue(s.years);
-        st->delta[1]->setValue(s.months);
-        st->delta[2]->setValue(s.days);
-        st->delta[3]->setValue(s.hours);
-        st->delta[4]->setValue(s.minutes);
-        st->delta[5]->setValue(s.seconds);
-        select_timezone(st->tz_from, s.from_offset_min);
-        select_timezone(st->tz_to, s.to_offset_min);
+        st->time.seg->set_current_index(s.mode == pp::TimeShift::Mode::Delta ? 0 : 1);
+        st->time.delta[0]->setValue(s.years);
+        st->time.delta[1]->setValue(s.months);
+        st->time.delta[2]->setValue(s.days);
+        st->time.delta[3]->setValue(s.hours);
+        st->time.delta[4]->setValue(s.minutes);
+        st->time.delta[5]->setValue(s.seconds);
+        select_timezone(st->time.tz_from, s.from_offset_min);
+        select_timezone(st->time.tz_to, s.to_offset_min);
     } else {
         // 无时间规则 = 全零 Δ（noop；与"未配置"在两条路径上等价）
-        st->seg->set_current_index(0);
-        for (QSpinBox *spin : st->delta) {
+        st->time.seg->set_current_index(0);
+        for (QSpinBox *spin : st->time.delta) {
             spin->setValue(0);
         }
     }
 
-    st->clear_gps->setChecked(r.gps_clear);
+    st->gps.clear_gps->setChecked(r.gps_clear);
     if (r.gps.has_value()) {
-        st->lat->setText(format_6(r.gps->lat));
-        st->lon->setText(format_6(r.gps->lon));
-        st->alt->setText(r.gps->altitude.has_value() ? format_6(*r.gps->altitude) : QString());
-        st->dir->setText(r.gps->direction.has_value() ? format_6(*r.gps->direction) : QString());
-        st->ts->setText(r.gps->timestamp.has_value() ? QString::fromStdString(*r.gps->timestamp)
-                                                     : QString());
-        st->gps_status->setText(PageMeta::tr("已载入批量 GPS 规则"));
+        st->gps.lat->setText(format_6(r.gps->lat));
+        st->gps.lon->setText(format_6(r.gps->lon));
+        st->gps.alt->setText(r.gps->altitude.has_value() ? format_6(*r.gps->altitude) : QString());
+        st->gps.dir->setText(r.gps->direction.has_value() ? format_6(*r.gps->direction)
+                                                          : QString());
+        st->gps.ts->setText(r.gps->timestamp.has_value() ? QString::fromStdString(*r.gps->timestamp)
+                                                         : QString());
+        st->gps.gps_status->setText(PageMeta::tr("已载入批量 GPS 规则"));
     } else {
-        st->lat->clear();
-        st->lon->clear();
-        st->alt->clear();
-        st->dir->clear();
-        st->ts->clear();
+        st->gps.lat->clear();
+        st->gps.lon->clear();
+        st->gps.alt->clear();
+        st->gps.dir->clear();
+        st->gps.ts->clear();
     }
 
     clear_tag_rows(st);
@@ -377,8 +379,8 @@ void apply_state(MetaState *st, const pp::BatchRules &r) {
                     edit.value.has_value() ? QString::fromStdString(*edit.value) : QString());
     }
 
-    st->strip->setChecked(r.strip_privacy);
-    st->mtime->setChecked(r.sync_mtime);
+    st->privacy.strip->setChecked(r.strip_privacy);
+    st->privacy.mtime->setChecked(r.sync_mtime);
 
     // UX-5：恢复**含值旧状态 = 开**（旧预设缺 *_enabled 键 → 默认 true，带值即开关置开）；
     // 显式 *_enabled=false 优先（预设里明确关掉的卡不复活）。新会话/空值 = 关（零变化）。
@@ -386,11 +388,11 @@ void apply_state(MetaState *st, const pp::BatchRules &r) {
     const bool gps_on = r.gps_enabled && (r.gps.has_value() || r.gps_clear);
     const bool privacy_on = r.privacy_enabled && (r.strip_privacy || r.sync_mtime ||
                                                   !r.exif_edits.empty() || !r.xmp_edits.empty());
-    st->time_enable->setChecked(time_on);
-    st->privacy_enable->setChecked(privacy_on);
+    st->time.time_enable->setChecked(time_on);
+    st->privacy.privacy_enable->setChecked(privacy_on);
     set_gps_rule_enabled(st, gps_on);
 
-    st->loading = prev_loading;
+    st->core.loading = prev_loading;
     refresh_all(st);
 }
 

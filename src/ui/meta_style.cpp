@@ -54,15 +54,20 @@ QString map_banner_qss(const theme::Tokens &t) {
 // ---------------------------------------------------------------------------
 
 void apply_icons(MetaState *st) {
-    const theme::Tokens &t = st->tokens;
+    const theme::Tokens &t = st->core.tokens;
     // M5-T3：矢量图标随 tokens 重放（QIcon 取色不吃 QSS 的 color）；M6-T8 加：搜索钮放大镜
-    set_fold_icon(st, st->rule_toggle, st->rule_toggle != nullptr && st->rule_toggle->isChecked());
-    set_fold_icon(st, st->more_toggle, st->more_toggle != nullptr && st->more_toggle->isChecked());
-    set_fold_icon(st, st->link_tags, st->tag_host != nullptr && st->tag_host->isVisible());
-    set_fold_icon(st, st->link_exc, st->exc_host != nullptr && st->exc_host->isVisible());
-    set_fold_icon(st, st->link_keywords, st->tag_host != nullptr && st->tag_host->isVisible());
-    if (st->search_btn != nullptr) {
-        icons::apply(st->search_btn, icons::Name::Search, t.text2, t.text3, 12);
+    set_fold_icon(st, st->gps.rule_toggle,
+                  st->gps.rule_toggle != nullptr && st->gps.rule_toggle->isChecked());
+    set_fold_icon(st, st->gps.more_toggle,
+                  st->gps.more_toggle != nullptr && st->gps.more_toggle->isChecked());
+    set_fold_icon(st, st->privacy.link_tags,
+                  st->privacy.tag_host != nullptr && st->privacy.tag_host->isVisible());
+    set_fold_icon(st, st->privacy.link_exc,
+                  st->privacy.exc_host != nullptr && st->privacy.exc_host->isVisible());
+    set_fold_icon(st, st->privacy.link_keywords,
+                  st->privacy.tag_host != nullptr && st->privacy.tag_host->isVisible());
+    if (st->gps.search_btn != nullptr) {
+        icons::apply(st->gps.search_btn, icons::Name::Search, t.text2, t.text3, 12);
     }
     // M6-T12：地图缩放钮的矢量图标随令牌重放（覆盖层固定白底 → 图标恒取深灰 #404040）
     if (st->overlay.zoom_in != nullptr) {
@@ -82,17 +87,18 @@ void apply_icons(MetaState *st) {
                      kMapZoomIconPx); // overlay 令牌组（不随主题变）
     }
     // M6-T10：坐标行 WGS-84 标签的 Info 矢量图标随令牌重放（QLabel 承载的 QPixmap 取色不吃 QSS）
-    if (st->datum_icon != nullptr) {
-        st->datum_icon->setPixmap(icons::pixmap(icons::Name::Info, kDatumIconPx, t.text3,
-                                                st->datum_icon->devicePixelRatioF()));
+    if (st->gps.datum_icon != nullptr) {
+        st->gps.datum_icon->setPixmap(icons::pixmap(icons::Name::Info, kDatumIconPx, t.text3,
+                                                    st->gps.datum_icon->devicePixelRatioF()));
     }
-    if (st->dms_toggle != nullptr) {
-        const QSignalBlocker blocker(st->dms_toggle); // 主题重放不动显示档，只保持控件态与档一致
-        st->dms_toggle->setChecked(st->dms_mode);
-        st->dms_toggle->set_tokens(t); // R-184：chip = formkit 自绘件（令牌随主题重放）
+    if (st->gps.dms_toggle != nullptr) {
+        const QSignalBlocker blocker(
+            st->gps.dms_toggle); // 主题重放不动显示档，只保持控件态与档一致
+        st->gps.dms_toggle->setChecked(st->gps.dms_mode);
+        st->gps.dms_toggle->set_tokens(t); // R-184：chip = formkit 自绘件（令牌随主题重放）
     }
     for (QPushButton *remove :
-         st->page->findChildren<QPushButton *>(QStringLiteral("tag_remove"))) {
+         st->core.page->findChildren<QPushButton *>(QStringLiteral("tag_remove"))) {
         icons::apply(remove, icons::Name::Clear, t.text2, t.text3, 12);
     }
 }
@@ -104,7 +110,7 @@ void set_fold_icon(MetaState *st, QToolButton *button, bool expanded) {
     }
     button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     icons::apply(button, expanded ? icons::Name::ChevronDown : icons::Name::ChevronRight,
-                 st->tokens.text3, st->tokens.text3, 12);
+                 st->core.tokens.text3, st->core.tokens.text3, 12);
 }
 
 // ---------------------------------------------------------------------------
@@ -114,14 +120,14 @@ void set_fold_icon(MetaState *st, QToolButton *button, bool expanded) {
 void apply_style(MetaState *st) {
     // B7（R-179）：QSS 纯合成 / banner QSS / 图标重放 已拆出（qss_for / map_banner_qss /
     // apply_icons）；本函数只做编排：样式串下发 → banner 收口 → 图标与令牌重放 → 阴影。
-    const theme::Tokens &t = st->tokens;
+    const theme::Tokens &t = st->core.tokens;
 
-    st->page->setStyleSheet(qss_for(t));
+    st->core.page->setStyleSheet(qss_for(t));
 
     // 地图离线 banner 的**宿主侧**收口（修 1-38/1-39：中性灰说明 + 括号进 tooltip；
     // mapwidget 文件零改动 —— 令牌/文案由本页铺）
-    if (st->map != nullptr) {
-        const QList<QLabel *> labels = st->map->findChildren<QLabel *>();
+    if (st->gps.map != nullptr) {
+        const QList<QLabel *> labels = st->gps.map->findChildren<QLabel *>();
         for (QLabel *banner : labels) {
             if (!banner->text().contains(PageMeta::tr("地图离线"))) {
                 continue;
@@ -135,32 +141,33 @@ void apply_style(MetaState *st) {
 
     apply_icons(st);
     // 自绘控件（胶囊/开关/分段/评级）持令牌副本
-    for (formkit::PillBadge *pill : st->pills) {
+    for (formkit::PillBadge *pill : st->core.pills) {
         pill->set_tokens(t);
     }
-    for (formkit::PillBadge *pill : st->keyword_pills) {
+    for (formkit::PillBadge *pill : st->core.keyword_pills) {
         pill->set_tokens(t);
     }
-    for (formkit::SwitchControl *sw : st->switches) {
+    for (formkit::SwitchControl *sw : st->core.switches) {
         sw->set_tokens(t);
     }
-    if (st->seg != nullptr) {
-        st->seg->set_tokens(t);
+    if (st->time.seg != nullptr) {
+        st->time.seg->set_tokens(t);
     }
-    if (st->layer_seg != nullptr) {
-        st->layer_seg->set_tokens(t); // M6-T8：图层 Seg 自绘（段填充/字色取令牌）
+    if (st->gps.layer_seg != nullptr) {
+        st->gps.layer_seg->set_tokens(t); // M6-T8：图层 Seg 自绘（段填充/字色取令牌）
     }
-    if (st->info_rating != nullptr) {
-        st->info_rating->set_tokens(t);
+    if (st->info.info_rating != nullptr) {
+        st->info.info_rating->set_tokens(t);
     }
     // M6-T8：结果行重排（图钉图标取 --acc；空态占位取 --txt3 —— 与 QSS 同一次主题重放）
-    if (st->search_results != nullptr) {
+    if (st->gps.search_results != nullptr) {
         fill_result_rows(st);
     }
 
     // 浅色卡阴影（§4.1 shadow；深色无阴影）
-    const qreal dpr = st->page->devicePixelRatioF() > 0.01 ? st->page->devicePixelRatioF() : 1.0;
-    for (QFrame *card : st->cards) {
+    const qreal dpr =
+        st->core.page->devicePixelRatioF() > 0.01 ? st->core.page->devicePixelRatioF() : 1.0;
+    for (QFrame *card : st->core.cards) {
         if (card == nullptr) {
             continue;
         }

@@ -24,11 +24,11 @@ namespace pp::ui::meta {
 // 复原）。对话框每次展开新建（主题档/尺寸记忆按时读/写本状态）。
 // 卡片位：地图离场期间放**同高空占位**（模态期卡片不上下抖动；关闭时移除）。
 void open_map_expanded_view(MetaState *st) {
-    if (st == nullptr || st->map == nullptr || st->overlay.map_host == nullptr ||
+    if (st == nullptr || st->gps.map == nullptr || st->overlay.map_host == nullptr ||
         st->overlay.map_line == nullptr) {
         return;
     }
-    MapDialog dialog(st->map->window());
+    MapDialog dialog(st->gps.map->window());
     if (st->overlay.map_dialog_size.isValid()) {
         dialog.resize(st->overlay.map_dialog_size); // 上次调整的尺寸（跨展开记忆）
     }
@@ -39,18 +39,18 @@ void open_map_expanded_view(MetaState *st) {
     placeholder->setObjectName(QString::fromLatin1(kMapPlaceholderName));
     placeholder->setFixedHeight(kMapHeight);
     st->overlay.map_line->addWidget(placeholder, 1, Qt::AlignVCenter);
-    dialog.adopt(st->map);
+    dialog.adopt(st->gps.map);
     dialog.exec();    // 模态：返回即已关闭（Esc / 底栏关闭 / 标题栏 ✕ 同效）
     dialog.release(); // R-261：与 adopt 成对（对话框侧复原几何约束；析构另有兜底）
     // 挂回卡片行：先撤占位（占位不参与任何信号链，同步删）再挂 map；随后几何约束逐位复原
     // （宿主 + 行槽 + objectName 随控件、无需重挂）。UX-4 stretch（M7-R2-B）：复位口径 = 与
     // 初建同源（min 260 + 可拉伸），不再 setFixedHeight —— 探针断言改 `>= 260` + geometry 逐位。
-    st->map->setParent(st->overlay.map_host);
+    st->gps.map->setParent(st->overlay.map_host);
     delete placeholder;
-    st->overlay.map_line->addWidget(st->map, 1);
-    st->map->setMinimumHeight(kMapHeight);
-    st->map->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    st->map->show();
+    st->overlay.map_line->addWidget(st->gps.map, 1);
+    st->gps.map->setMinimumHeight(kMapHeight);
+    st->gps.map->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    st->gps.map->show();
     if (st->overlay.map_expand != nullptr) {
         st->overlay.map_expand->setVisible(true);
     }

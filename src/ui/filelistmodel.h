@@ -129,6 +129,12 @@ struct ScannedPath {
 //      layoutChanged + GroupKeyRole 去抖）。
 //   8. 折叠记忆与展开态一致：restore_selection 必须先于 expandAll（顺序不变量，调用方 =
 //      mainwindow 的 apply_group_view_state）。
+//   状态写入权（R-205「×12 态」侧收口，M7-R2.1-F3 补全；FileState 现形 14 值 = 原 12
+//   + Progress + DoneWithErrors）：Queued 只由 add_paths 置初值；运行态（Probing…Writing、
+//   Progress）与终态（Done / Skipped / Failed / Cancelled / DoneWithErrors）只经
+//   set_state()（调用方 = mainwindow 的文件事件回放）写入；唯一例外 = apply_thumb 的
+//   探测失败补判（Queued→Failed，带 stale-guard + 状态序守卫，R-227）——
+//   除此以外任何代码不得直写 FileRow::state（破坏 = 与不变量 2/3 一起把管线状态盖掉）。
 // ============================================================================================
 
 class FileListModel : public QAbstractListModel {

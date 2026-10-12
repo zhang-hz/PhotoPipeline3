@@ -21,7 +21,9 @@
 //     树行没有边框可画，故取"强调边框+强调色字"的字色一档）。
 //   * 值留空 = 删除该标签（remove 编辑）。
 //   * 时间三态“清除”：MetadataOverride 没有对应字段，语义化为对时间标签的 remove 编辑
-//     （EXIF 3 + XMP 2；见报告 next-needed）；GPS“清除”= gps_clear；隐私剥除 = optional<bool>。
+//     （键集 = ui/time_tag_keys.h 的 wall_clock 5 键，与引擎写路径同集；命中〔批〕的
+//     touched 9 键见同表 —— R-197 4 份真相单表收口）；GPS“清除”= gps_clear；
+//     隐私剥除 = optional<bool>。
 //   * 自验开关（不改冻结头）：动态属性 "pp_exif_editor_suppress_modal" = true 时，所有
 //     QMessageBox 改为把内容写进动态属性（"pp_last_validation_errors" / "pp_last_warning"），
 //     offscreen 自验程序据此断言“校验失败不 accept”，不会阻塞在模态框上。
@@ -84,6 +86,7 @@
 #include "platform/frameless.h" // M5-T10：无边框接线（与主窗/设置弹窗同一机制）
 #include "ui/formkit.h"         // M5-T10：勾选框（忽略批量规则）走 formkit 单实现
 #include "ui/settings_dialog.h" // M5-T10：dialogkit（标题栏/页签样式/按钮/焦点环/QSS）
+#include "ui/time_tag_keys.h"   // R-197（M7-R2.1-F3）：时间标签集合单表（清除/命中双角色）
 
 namespace pp::ui {
 namespace {
@@ -189,9 +192,56 @@ private:
     theme::Tokens tokens_ = theme::tokens(theme::preferred_theme_mode());
 };
 
-const char *const kExifTimeKeys[3] = {"Exif.Photo.DateTimeOriginal", "Exif.Photo.DateTimeDigitized",
-                                      "Exif.Image.DateTime"};
-const char *const kXmpTimeKeys[2] = {"Xmp.xmp.CreateDate", "Xmp.xmp.ModifyDate"};
+// R-197（M7-R2.1-F3）：时间标签集合 4 份真相收敛为 ui/time_tag_keys.h 单表（清除集 =
+// wall_clock 5 键、命中集 = touched 9 键，逐键角色显式）；原 kExifTimeKeys/kXmpTimeKeys 与
+// is_exif_time_key/is_xmp_time_key 的字面量全部退役（清除 3+2 vs 命中 6+3 的静默漂移消除）。
+
+// R-199（M7-R2.1-F3）：三态机/二态机组合框的**唯一真相 = itemData**（构造时 addItem 文本 +
+// 枚举值，与 R-190 同一收口法）—— 读回 currentData()、落值 findData()；原
+// currentIndex()==1/2 魔法索引全部退役（deep-review R-199/E5-09「调序即全对话框错位」）。
+enum class TriMode { Inherit = 0, Override = 1, Clear = 2 };       // 时间 / GPS 三态
+enum class TimeMethod { Delta = 0, TimeZone = 1 };                 // 时间方式二态
+enum class PrivacyMode { Inherit = 0, ForceOn = 1, ForceOff = 2 }; // 隐私剥除三态
+
+void add_tri_items(QComboBox *cb, const QString &inherit, const QString &over,
+                   const QString &clear) {
+    cb->addItem(inherit, static_cast<int>(TriMode::Inherit));
+    cb->addItem(over, static_cast<int>(TriMode::Override));
+    cb->addItem(clear, static_cast<int>(TriMode::Clear));
+}
+
+void set_tri(QComboBox *cb, TriMode mode) {
+    const int i = cb->findData(static_cast<int>(mode));
+    if (i >= 0)
+        cb->setCurrentIndex(i);
+}
+
+TriMode tri_of(const QComboBox *cb) {
+    const QVariant v = cb->currentData();
+    return v.isValid() ? static_cast<TriMode>(v.toInt()) : TriMode::Inherit;
+}
+
+void set_method(QComboBox *cb, TimeMethod m) {
+    const int i = cb->findData(static_cast<int>(m));
+    if (i >= 0)
+        cb->setCurrentIndex(i);
+}
+
+TimeMethod method_of(const QComboBox *cb) {
+    const QVariant v = cb->currentData();
+    return v.isValid() ? static_cast<TimeMethod>(v.toInt()) : TimeMethod::Delta;
+}
+
+void set_privacy(QComboBox *cb, PrivacyMode m) {
+    const int i = cb->findData(static_cast<int>(m));
+    if (i >= 0)
+        cb->setCurrentIndex(i);
+}
+
+PrivacyMode privacy_of(const QComboBox *cb) {
+    const QVariant v = cb->currentData();
+    return v.isValid() ? static_cast<PrivacyMode>(v.toInt()) : PrivacyMode::Inherit;
+}
 
 // 本文件下拉的唯一构造点（GUI-R2）：走 formkit::combo_box —— 钩子/高/箭头/字体/无障碍
 // 一律单源（原 dress_combo 已随之退役）。调用点不得再 `new QComboBox`（formkit.h 契约 C2）。
@@ -301,15 +351,10 @@ bool is_long_text_type(Exiv2::TypeId t) {
 }
 
 // —— 〔批〕判定 ——
-bool is_exif_time_key(const std::string &k) {
-    return k == "Exif.Photo.DateTimeOriginal" || k == "Exif.Photo.DateTimeDigitized" ||
-           k == "Exif.Image.DateTime" || k == "Exif.Photo.OffsetTime" ||
-           k == "Exif.Photo.OffsetTimeOriginal" || k == "Exif.Photo.OffsetTimeDigitized";
-}
-
-bool is_xmp_time_key(const std::string &k) {
-    return k == "Xmp.xmp.CreateDate" || k == "Xmp.xmp.ModifyDate" || k == "Xmp.xmp.MetadataDate";
-}
+// R-197：is_exif_time_key / is_xmp_time_key（命中集 = touched 9 键）收敛为
+// ui/time_tag_keys.h 单表谓词（原两处字面量退役）。
+using timetags::is_exif_time_key;
+using timetags::is_xmp_time_key;
 
 bool edits_hit(const std::vector<pp::TagEdit> &v, const std::string &key) {
     return std::any_of(v.begin(), v.end(), [&](const pp::TagEdit &e) { return e.key == key; });
@@ -477,7 +522,10 @@ struct ExifEditor::Impl {
     void init_from_existing();
 
     void add_row_item(Row r);
-    void ensure_row(const std::string &key, bool is_xmp, Exiv2::TypeId chosen);
+    // R-196c/R-198（M7-R2.1-F3）：Row 填充/派生字段单点（原三处各填一份）
+    void add_source_row(const Exiv2::Metadatum &d, bool is_xmp);
+    void finalize_row(Row &r, Exiv2::TypeId fallback_type);
+    void ensure_row(const std::string &key, bool is_xmp, Exiv2::TypeId fallback_type);
     QTreeWidgetItem *group_parent(const std::string &key, bool is_xmp);
 
     void on_index_selection(ValuePane &vp, const QModelIndex &idx);
@@ -492,7 +540,8 @@ struct ExifEditor::Impl {
     void refresh_all_rows();
 
     void apply_exif_filter();
-    void apply_xmp_filter(); // M2-T7 #29：与 apply_exif_filter 同构（仅作用 is_xmp 行）
+    void apply_xmp_filter(); // M2-T7 #29：XMP 页搜索（R-196：与 apply_exif_filter 共用单点）
+    void apply_tree_filter(QTreeWidget *tree, const QString &needle, bool is_xmp); // R-196 过滤单点
     void add_exif_by_number();
     void add_xmp_by_path();
     Exiv2::TypeId type_from_combo() const;
@@ -718,6 +767,33 @@ void ExifEditor::Impl::refresh_all_rows() {
 
 // —— 树构造 ——
 
+// R-198 / R-196c（M7-R2.1-F3）：Row 派生字段填充单点 —— 显示名 / lang_alt / 只读 / 类型
+// 回落（原 populate_exif_tree / populate_xmp_tree / ensure_row 三处各填一份 = R-196c
+// 「Row 填充三处」；TypeId 触点收敛于此 + type_from_combo/is_long_text_type 两谓词）。
+// fallback_type = exif_type 下拉的**真实作用**（ExifKey 构造失败或类型未知时的回落类型），
+// 选择几乎不影响行为是既有语义 —— 名实一致，不假装它是类型系统入口（R-198）。
+void ExifEditor::Impl::finalize_row(Row &r, Exiv2::TypeId fallback_type) {
+    if (r.type == Exiv2::invalidTypeId)
+        r.type = r.is_xmp ? Exiv2::xmpText : fallback_type;
+    const char *tn = Exiv2::TypeInfo::typeName(r.type);
+    r.type_name = tn ? tn : "Unknown";
+    r.lang_alt = (r.type == Exiv2::langAlt);
+    r.read_only = !r.is_xmp && exif_row_read_only(r.key);
+}
+
+// R-196c：源元数据 → Row → 树项的单点（原 populate_exif_tree / populate_xmp_tree 两处逐字
+// 同款的字段搬运；Exifdatum/Xmpdatum 同为 Exiv2::Metadatum）。
+void ExifEditor::Impl::add_source_row(const Exiv2::Metadatum &d, bool is_xmp) {
+    Row r;
+    r.key = d.key();
+    r.is_xmp = is_xmp;
+    r.in_source = true;
+    r.src_value = metadatum_text(d);
+    r.type = d.typeId();
+    finalize_row(r, is_xmp ? Exiv2::xmpText : Exiv2::asciiString);
+    add_row_item(std::move(r));
+}
+
 void ExifEditor::Impl::add_row_item(Row r) {
     r.item = new QTreeWidgetItem(group_parent(r.key, r.is_xmp));
     r.item->setData(0, kKeyRole, QString::fromStdString(r.key));
@@ -776,41 +852,20 @@ void ExifEditor::Impl::populate_exif_tree() {
     maker_node->setData(0, kNodeRole, kGroupNode);
 
     const Exiv2::ExifData &exif = meta.exif;
-    for (const Exiv2::Exifdatum &d : exif) {
-        Row r;
-        r.key = d.key();
-        r.is_xmp = false;
-        r.in_source = true;
-        r.src_value = metadatum_text(d);
-        r.type = d.typeId();
-        const char *tn = Exiv2::TypeInfo::typeName(r.type);
-        r.type_name = tn ? tn : "Unknown";
-        r.lang_alt = (r.type == Exiv2::langAlt);
-        r.read_only = exif_row_read_only(r.key);
-        add_row_item(std::move(r));
-    }
+    for (const Exiv2::Exifdatum &d : exif)
+        add_source_row(d, false); // R-196c：Row 填充单点（原逐字段搬运）
     exif_tree->expandAll();
 }
 
 void ExifEditor::Impl::populate_xmp_tree() {
     const Exiv2::XmpData &xmp = meta.xmp;
-    for (const Exiv2::Xmpdatum &d : xmp) {
-        Row r;
-        r.key = d.key();
-        r.is_xmp = true;
-        r.in_source = true;
-        r.src_value = metadatum_text(d);
-        r.type = d.typeId();
-        const char *tn = Exiv2::TypeInfo::typeName(r.type);
-        r.type_name = tn ? tn : "Unknown";
-        r.lang_alt = (r.type == Exiv2::langAlt);
-        r.read_only = false;
-        add_row_item(std::move(r));
-    }
+    for (const Exiv2::Xmpdatum &d : xmp)
+        add_source_row(d, true); // R-196c：Row 填充单点
     xmp_tree->expandAll();
 }
 
-void ExifEditor::Impl::ensure_row(const std::string &key, bool is_xmp, Exiv2::TypeId chosen) {
+void ExifEditor::Impl::ensure_row(const std::string &key, bool is_xmp,
+                                  Exiv2::TypeId fallback_type) {
     if (rows.find(key) != rows.end())
         return;
     Row r;
@@ -828,7 +883,7 @@ void ExifEditor::Impl::ensure_row(const std::string &key, bool is_xmp, Exiv2::Ty
                 r.type = ek.defaultTypeId();
             }
         } catch (...) {
-            r.type = chosen;
+            r.type = fallback_type;
         }
     } else {
         try {
@@ -842,15 +897,10 @@ void ExifEditor::Impl::ensure_row(const std::string &key, bool is_xmp, Exiv2::Ty
                 r.type = Exiv2::XmpProperties::propertyType(xk);
             }
         } catch (...) {
-            r.type = chosen;
+            r.type = fallback_type;
         }
     }
-    if (r.type == Exiv2::invalidTypeId)
-        r.type = is_xmp ? Exiv2::xmpText : chosen;
-    const char *tn = Exiv2::TypeInfo::typeName(r.type);
-    r.type_name = tn ? tn : "Unknown";
-    r.lang_alt = (r.type == Exiv2::langAlt);
-    r.read_only = !is_xmp && exif_row_read_only(key);
+    finalize_row(r, fallback_type); // R-198/R-196c：派生字段填充单点
     add_row_item(std::move(r));
 }
 
@@ -864,11 +914,13 @@ void ExifEditor::Impl::on_index_selection(ValuePane &vp, const QModelIndex &idx)
     show_row(vp, idx.data(kKeyRole).toString().toStdString());
 }
 
-void ExifEditor::Impl::apply_exif_filter() {
-    const QString needle = exif_search->text().trimmed();
+// R-196（M7-R2.1-F3）：过滤双胞胎（apply_exif_filter / apply_xmp_filter 逐字同构）收敛为
+// apply_tree_filter 单点 —— 命中可见 / 非命中隐藏 / 组内无命中 → 组隐藏 / 空搜索串全恢复
+// （M2-T7 #29 的 XMP 页搜索语义逐字不变；XMP 树顶层项即命名空间分组）。
+void ExifEditor::Impl::apply_tree_filter(QTreeWidget *tree, const QString &needle, bool is_xmp) {
     for (auto &[key, row] : rows) {
         (void)key;
-        if (row.is_xmp || !row.item)
+        if (row.is_xmp != is_xmp || !row.item)
             continue;
         row.item->setHidden(!needle.isEmpty() &&
                             !row.item->text(0).contains(needle, Qt::CaseInsensitive));
@@ -885,39 +937,18 @@ void ExifEditor::Impl::apply_exif_filter() {
         }
         return any;
     };
-    for (int i = 0; i < exif_tree->topLevelItemCount(); ++i) {
-        QTreeWidgetItem *node = exif_tree->topLevelItem(i);
+    for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+        QTreeWidgetItem *node = tree->topLevelItem(i);
         node->setHidden(!node_visible(node));
     }
 }
 
-// M2-T7 #29：XMP 页搜索（与 apply_exif_filter 同构：命中可见 / 非命中隐藏 /
-// 组内无命中 → 组隐藏；空搜索串 → 全部恢复）。XMP 树的顶层项即命名空间分组。
+void ExifEditor::Impl::apply_exif_filter() {
+    apply_tree_filter(exif_tree, exif_search->text().trimmed(), false);
+}
+
 void ExifEditor::Impl::apply_xmp_filter() {
-    const QString needle = xmp_search->text().trimmed();
-    for (auto &[key, row] : rows) {
-        (void)key;
-        if (!row.is_xmp || !row.item)
-            continue;
-        row.item->setHidden(!needle.isEmpty() &&
-                            !row.item->text(0).contains(needle, Qt::CaseInsensitive));
-    }
-    std::function<bool(QTreeWidgetItem *)> node_visible = [&](QTreeWidgetItem *node) -> bool {
-        bool any = false;
-        for (int i = 0; i < node->childCount(); ++i) {
-            QTreeWidgetItem *child = node->child(i);
-            const bool vis = (child->data(0, kNodeRole).toInt() == kLeaf) ? !child->isHidden()
-                                                                          : node_visible(child);
-            child->setHidden(!vis);
-            if (vis)
-                any = true;
-        }
-        return any;
-    };
-    for (int i = 0; i < xmp_tree->topLevelItemCount(); ++i) {
-        QTreeWidgetItem *node = xmp_tree->topLevelItem(i);
-        node->setHidden(!node_visible(node));
-    }
+    apply_tree_filter(xmp_tree, xmp_search->text().trimmed(), true);
 }
 
 // —— 按编号 / 路径添加 ——
@@ -1135,9 +1166,9 @@ QWidget *ExifEditor::Impl::make_xmp_tab() {
 }
 
 void ExifEditor::Impl::update_time_mode() {
-    const int mode = time_mode->currentIndex();
-    time_params->setEnabled(mode == 1);
-    const bool delta = time_method->currentIndex() == 0;
+    // R-199：三态/二态读回走 itemData（原 currentIndex()==1/2 魔法索引）
+    time_params->setEnabled(tri_of(time_mode) == TriMode::Override);
+    const bool delta = method_of(time_method) == TimeMethod::Delta;
     time_delta_box->setVisible(delta);
     time_tz_box->setVisible(!delta);
     refresh_effective_values();
@@ -1145,7 +1176,7 @@ void ExifEditor::Impl::update_time_mode() {
 
 pp::TimeShift ExifEditor::Impl::time_shift_from_widgets() const {
     pp::TimeShift ts;
-    if (time_method->currentIndex() == 1) {
+    if (method_of(time_method) == TimeMethod::TimeZone) { // R-199
         ts.mode = pp::TimeShift::Mode::TimezoneSemantic;
         ts.from_offset_min = tz_from->currentData().toInt();
         ts.to_offset_min = tz_to->currentData().toInt();
@@ -1161,7 +1192,7 @@ pp::TimeShift ExifEditor::Impl::time_shift_from_widgets() const {
 }
 
 void ExifEditor::Impl::update_gps_mode() {
-    gps_params->setEnabled(gps_mode->currentIndex() == 1);
+    gps_params->setEnabled(tri_of(gps_mode) == TriMode::Override); // R-199
     refresh_effective_values();
 }
 
@@ -1278,9 +1309,8 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     time_row->addWidget(time_label);
     time_mode = make_combo(QStringLiteral("time_mode"), T("时间偏移"),
                            T("本文件的时间处理：继承批量规则 / 覆盖 / 清除时间标签"));
-    time_mode->addItem(T("继承批量规则"));
-    time_mode->addItem(T("覆盖"));
-    time_mode->addItem(T("清除"));
+    add_tri_items(time_mode, T("继承批量规则"), T("覆盖"),
+                  T("清除")); // R-199：itemData = TriMode（唯一真相）
     time_row->addWidget(time_mode);
     time_row->addStretch(1);
     tv->addWidget(wrap_row28(time_row));
@@ -1295,8 +1325,8 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     method_row->addWidget(method_label);
     time_method = make_combo(QStringLiteral("time_method"), T("方式"),
                              T("Δ 偏移 = 直接加减时间差；时区语义 = 按「从/到」时区换算"));
-    time_method->addItem(T("Δ 偏移（时钟拨错）"));
-    time_method->addItem(T("时区语义（旅行照片）"));
+    time_method->addItem(T("Δ 偏移（时钟拨错）"), static_cast<int>(TimeMethod::Delta)); // R-199
+    time_method->addItem(T("时区语义（旅行照片）"), static_cast<int>(TimeMethod::TimeZone));
     method_row->addWidget(time_method);
     method_row->addStretch(1);
     tp->addWidget(wrap_row28(method_row));
@@ -1394,9 +1424,8 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     gps_row->addWidget(gps_label);
     gps_mode = make_combo(QStringLiteral("gps_mode"), T("GPS"),
                           T("本文件的 GPS 处理：继承批量规则 / 覆盖 / 清除"));
-    gps_mode->addItem(T("继承批量规则"));
-    gps_mode->addItem(T("覆盖"));
-    gps_mode->addItem(T("清除 GPS"));
+    add_tri_items(gps_mode, T("继承批量规则"), T("覆盖"),
+                  T("清除 GPS")); // R-199：itemData = TriMode（唯一真相）
     gps_row->addWidget(gps_mode);
     gps_row->addStretch(1);
     gv->addWidget(wrap_row28(gps_row));
@@ -1488,9 +1517,9 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     privacy_row->addWidget(privacy_label);
     privacy_mode = make_combo(QStringLiteral("privacy_mode"), T("隐私剥除"),
                               T("本文件的隐私剥除：继承批量规则 / 强制开 / 强制关"));
-    privacy_mode->addItem(T("继承批量规则"));
-    privacy_mode->addItem(T("强制开"));
-    privacy_mode->addItem(T("强制关"));
+    privacy_mode->addItem(T("继承批量规则"), static_cast<int>(PrivacyMode::Inherit)); // R-199
+    privacy_mode->addItem(T("强制开"), static_cast<int>(PrivacyMode::ForceOn));
+    privacy_mode->addItem(T("强制关"), static_cast<int>(PrivacyMode::ForceOff));
     privacy_row->addWidget(privacy_mode);
     privacy_row->addStretch(1);
     pv->addWidget(wrap_row28(privacy_row));
@@ -1653,10 +1682,10 @@ void ExifEditor::Impl::init_from_existing() {
         ensure_row(e.key, true, Exiv2::xmpText);
 
     if (ex.time_shift.has_value()) {
-        time_mode->setCurrentIndex(1);
+        set_tri(time_mode, TriMode::Override); // R-199：落值走 findData（非魔法索引）
         const pp::TimeShift &ts = *ex.time_shift;
         if (ts.mode == pp::TimeShift::Mode::TimezoneSemantic) {
-            time_method->setCurrentIndex(1);
+            set_method(time_method, TimeMethod::TimeZone);
             const int i1 = tz_from->findData(ts.from_offset_min);
             if (i1 >= 0)
                 tz_from->setCurrentIndex(i1);
@@ -1664,7 +1693,7 @@ void ExifEditor::Impl::init_from_existing() {
             if (i2 >= 0)
                 tz_to->setCurrentIndex(i2);
         } else {
-            time_method->setCurrentIndex(0);
+            set_method(time_method, TimeMethod::Delta);
             time_spin[0]->setValue(ts.years);
             time_spin[1]->setValue(ts.months);
             time_spin[2]->setValue(ts.days);
@@ -1675,9 +1704,9 @@ void ExifEditor::Impl::init_from_existing() {
     }
 
     if (ex.gps_clear) {
-        gps_mode->setCurrentIndex(2);
+        set_tri(gps_mode, TriMode::Clear); // R-199
     } else if (ex.gps.has_value()) {
-        gps_mode->setCurrentIndex(1);
+        set_tri(gps_mode, TriMode::Override);
         const pp::GpsData &g = *ex.gps;
         gps_lat->setText(QString::number(g.lat, 'f', 6));
         gps_lon->setText(QString::number(g.lon, 'f', 6));
@@ -1696,7 +1725,8 @@ void ExifEditor::Impl::init_from_existing() {
     }
 
     if (ex.strip_privacy.has_value())
-        privacy_mode->setCurrentIndex(*ex.strip_privacy ? 1 : 2);
+        set_privacy(privacy_mode,
+                    *ex.strip_privacy ? PrivacyMode::ForceOn : PrivacyMode::ForceOff); // R-199
 
     update_dms();
     refresh_all_rows();
@@ -1729,6 +1759,20 @@ void ExifEditor::Impl::warn(const QString &title, const QString &text) {
     QMessageBox::warning(q, title, text);
 }
 
+// R-196（M7-R2.1-F3）：remove 编辑的 upsert 单点（原时间清除 EXIF/XMP 双循环逐字同款）。
+void upsert_remove_edit(std::vector<pp::TagEdit> &edits, const std::string &key) {
+    pp::TagEdit e;
+    e.key = key;
+    e.remove = true;
+    auto it = std::find_if(edits.begin(), edits.end(),
+                           [&](const pp::TagEdit &x) { return x.key == key; });
+    if (it != edits.end()) {
+        *it = e;
+    } else {
+        edits.push_back(e);
+    }
+}
+
 pp::MetadataOverride ExifEditor::Impl::build_override(std::vector<std::string> *errors) const {
     pp::MetadataOverride ov;
     ov.ignore_batch = ignore_check->isChecked();
@@ -1736,42 +1780,25 @@ pp::MetadataOverride ExifEditor::Impl::build_override(std::vector<std::string> *
     ov.xmp_edits = xmp_edits;
 
     // 时间三态：覆盖 = time_shift；清除 = 对时间标签的 remove 编辑（MetadataOverride 无
-    // time_clear）
-    const int tmode = time_mode->currentIndex();
-    if (tmode == 1) {
+    // time_clear）。R-199：读回 itemData；R-196/R-197：清除集 = time_tag_keys.h 的
+    // wall_clock 子集（5 键，与引擎写路径同集），EXIF/XMP 双循环收敛为 upsert_remove_edit。
+    const TriMode tmode = tri_of(time_mode);
+    if (tmode == TriMode::Override) {
         ov.time_shift = time_shift_from_widgets();
-    } else if (tmode == 2) {
-        for (const char *k : kExifTimeKeys) {
-            pp::TagEdit e;
-            e.key = k;
-            e.remove = true;
-            auto it = std::find_if(ov.exif_edits.begin(), ov.exif_edits.end(),
-                                   [&](const pp::TagEdit &x) { return x.key == e.key; });
-            if (it != ov.exif_edits.end()) {
-                *it = e;
-            } else {
-                ov.exif_edits.push_back(e);
-            }
-        }
-        for (const char *k : kXmpTimeKeys) {
-            pp::TagEdit e;
-            e.key = k;
-            e.remove = true;
-            auto it = std::find_if(ov.xmp_edits.begin(), ov.xmp_edits.end(),
-                                   [&](const pp::TagEdit &x) { return x.key == e.key; });
-            if (it != ov.xmp_edits.end()) {
-                *it = e;
-            } else {
-                ov.xmp_edits.push_back(e);
-            }
+    } else if (tmode == TriMode::Clear) {
+        for (std::size_t i = 0; i < timetags::kTimeTagCount; ++i) {
+            const timetags::TimeTag &tag = timetags::kTimeTags[i];
+            if (!tag.wall_clock)
+                continue;
+            upsert_remove_edit(tag.xmp ? ov.xmp_edits : ov.exif_edits, tag.key);
         }
     }
 
     // GPS 三态：覆盖（校验经纬度与可选字段）/ 清除
-    const int gmode = gps_mode->currentIndex();
-    if (gmode == 2) {
+    const TriMode gmode = tri_of(gps_mode);
+    if (gmode == TriMode::Clear) {
         ov.gps_clear = true;
-    } else if (gmode == 1) {
+    } else if (gmode == TriMode::Override) {
         bool ok_lat = false, ok_lon = false;
         const double lat = gps_lat->text().trimmed().toDouble(&ok_lat);
         const double lon = gps_lon->text().trimmed().toDouble(&ok_lon);
@@ -1824,15 +1851,12 @@ pp::MetadataOverride ExifEditor::Impl::build_override(std::vector<std::string> *
         }
     }
 
-    switch (privacy_mode->currentIndex()) {
-    case 1:
+    // R-199：隐私三态读回 itemData（Inherit → 不落值，语义逐字不变）
+    const PrivacyMode pmode = privacy_of(privacy_mode);
+    if (pmode == PrivacyMode::ForceOn) {
         ov.strip_privacy = true;
-        break;
-    case 2:
+    } else if (pmode == PrivacyMode::ForceOff) {
         ov.strip_privacy = false;
-        break;
-    default:
-        break;
     }
     return ov;
 }

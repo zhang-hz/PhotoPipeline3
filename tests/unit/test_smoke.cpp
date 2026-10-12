@@ -14,6 +14,7 @@
 #include "ui/format_policy.h"   // M7-R2E2（B.3）：输出页格式能力/预选策略纯核
 #include "ui/run_rows_model.h"  // M7-WP9（B.2）：运行页行模型纯语义
 #include "ui/run_status_text.h" // M7-WP9（B.2）：运行页文案/数值格式纯函数
+#include "ui/time_tag_keys.h"   // M7-R2.1-F3（R-197）：时间标签集合单表
 
 #include "core/params.h"
 #include "core/types.h"
@@ -280,6 +281,41 @@ int main() {
               "natural_bytes(1TB) == 1.0 TB");
         check(natural_bytes(1024ull * 1024 * 1024 * 1024 * 1024) == QStringLiteral("1.0 PB"),
               "natural_bytes(1PB) == 1.0 PB（单位表末档）");
+    }
+
+    // 8. M7-R2.1-F3 / R-197：时间标签集合单表（断言只增；既有 1–7 节逐字不动）。
+    //    touched = 9 键（命中集，〔批〕标记）；wall_clock = 5 键（清除集，与引擎写路径
+    //    core/metadata.cpp 的 kExifTimeKeys[3] + kXmpTimeKeys[2] 逐键同集）。
+    {
+        using pp::ui::timetags::is_exif_time_key;
+        using pp::ui::timetags::is_wall_clock_time_key;
+        using pp::ui::timetags::is_xmp_time_key;
+        using pp::ui::timetags::kTimeTagCount;
+        using pp::ui::timetags::kTimeTags;
+        check(kTimeTagCount == 9, "touched 时间键 == 9（命中集单表）");
+        std::size_t wall = 0;
+        for (std::size_t i = 0; i < kTimeTagCount; ++i) {
+            if (kTimeTags[i].wall_clock)
+                ++wall;
+        }
+        check(wall == 5, "wall_clock 时间键 == 5（清除集单表）");
+        check(is_wall_clock_time_key("Exif.Photo.DateTimeOriginal") &&
+                  is_wall_clock_time_key("Exif.Photo.DateTimeDigitized") &&
+                  is_wall_clock_time_key("Exif.Image.DateTime") &&
+                  is_wall_clock_time_key("Xmp.xmp.CreateDate") &&
+                  is_wall_clock_time_key("Xmp.xmp.ModifyDate"),
+              "wall_clock 5 键 == 引擎写路径 kExifTimeKeys[3]+kXmpTimeKeys[2]");
+        check(is_exif_time_key("Exif.Photo.OffsetTimeOriginal"),
+              "命中含 OffsetTime*（touched 9 键口径）");
+        check(!is_wall_clock_time_key("Exif.Photo.OffsetTimeOriginal"),
+              "清除不含 OffsetTime*（现状字节级一致）");
+        check(is_xmp_time_key("Xmp.xmp.MetadataDate"), "命中含 Xmp MetadataDate");
+        check(!is_wall_clock_time_key("Xmp.xmp.MetadataDate"), "清除不含 MetadataDate");
+        check(!is_exif_time_key("Exif.Image.Make") && !is_xmp_time_key("Xmp.dc.title"),
+              "非时间键不命中");
+        check(!is_wall_clock_time_key("Exif.Photo.OffsetTime") &&
+                  !is_wall_clock_time_key("Xmp.xmp.MetadataDate"),
+              "清除谓词只认墙钟 5 键");
     }
 
     if (g_failed == 0) {

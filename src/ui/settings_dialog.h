@@ -19,8 +19,13 @@
 #include <QWidget>
 
 QT_BEGIN_NAMESPACE
+class QCheckBox;
+class QComboBox;
 class QLabel;
+class QLineEdit;
 class QPushButton;
+class QSlider;
+class QSpinBox;
 QT_END_NAMESPACE
 
 namespace pp::ui {
@@ -199,6 +204,25 @@ private:
                             QWidget *parent);
     QWidget *build_about_page(const theme::Tokens &tokens, QWidget *parent);
     formkit::SegmentedControl *theme_mode_seg_ = nullptr;
+    // ---- R-201 后半（M7R22G2，加性追认）：对象图成员化 ----------------------------
+    // settings()/恢复默认/主题重放/滑杆-色块联动不再 findChild 字符串（对象图成员化 =
+    // 「objectName 字符串维系」的收口）；objectName 本身仍是探针/走查的外部契约，
+    // settings_geom_probe 的黑盒 findChild 取数面**逐字不变**。公开 API 零改动。
+    dialogkit::TitleBar title_bar_; // ctor 一次性接线 + 主题重放
+    QComboBox *workers_ = nullptr;
+    QSpinBox *budget_ = nullptr;
+    QSpinBox *stagger_ = nullptr;
+    QComboBox *thread_budget_ = nullptr;
+    QSlider *flatten_ = nullptr;
+    QWidget *flatten_preview_ = nullptr; // Swatch（动态 cast 用，同原 findChild 口径）
+    QCheckBox *rotate_ = nullptr;
+    QComboBox *map_provider_ = nullptr;
+    QComboBox *map_style_ = nullptr;
+    QCheckBox *map_sat_labels_ = nullptr;
+    QLineEdit *amap_key_ = nullptr;
+    QSpinBox *tile_cache_mb_ = nullptr;
+    QComboBox *log_level_ = nullptr;
+    QComboBox *folder_structure_ = nullptr;
 };
 
 } // namespace pp::ui

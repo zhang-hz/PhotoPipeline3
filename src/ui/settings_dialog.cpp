@@ -1123,6 +1123,7 @@ QWidget *SettingsDialog::build_output_page(const pp::AppSettings &current, QWidg
         structure_spec.object_name = QLatin1String(kFolderStructure);
         structure_spec.accessible = T("分文件夹默认结构");
         auto *structure = formkit::combo_box(page_out, structure_spec);
+        folder_structure_ = structure; // R-201 后半：对象图成员化
         {
             const auto add_item = [structure](const QString &text, const QString &tmpl) {
                 structure->addItem(text, tmpl);
@@ -1185,6 +1186,7 @@ QWidget *SettingsDialog::build_run_page(const theme::Tokens &tokens, const pp::A
             make_auto_combo(page_run, QLatin1String(kWorkers), current.workers, kWorkersMax,
                             T("同时处理的文件数上限（worker）；自动 = 按线程预算与逻辑核数自适应，"
                               "且与「线程预算」联动（读数为估算口径）"));
+        workers_ = workers; // R-201 后半：对象图成员化
         const formkit::Row workers_row = formkit::frow(
             page_run, T("并行"), workers, formkit::FieldWidth::Standard, QString(), T("0 = 自动"));
         bind_row(workers_row, workers);
@@ -1194,6 +1196,7 @@ QWidget *SettingsDialog::build_run_page(const theme::Tokens &tokens, const pp::A
         auto *budget =
             make_spin(page_run, QLatin1String(kBudgetGb), 0, kBudgetMax, current.budget_gb, true,
                       T("内存预算上限；0 = 自动（RAM 的一半，上限 8 GB）"));
+        budget_ = budget; // R-201 后半：对象图成员化
         const formkit::Row budget_row =
             formkit::frow(page_run, T("内存预算"), budget, formkit::FieldWidth::Standard,
                           QStringLiteral("GB"), T("0 = 自动"));
@@ -1204,6 +1207,7 @@ QWidget *SettingsDialog::build_run_page(const theme::Tokens &tokens, const pp::A
         auto *stagger =
             make_spin(page_run, QLatin1String(kStaggerMs), 0, kStaggerMax, current.stagger_ms, true,
                       T("worker 取件后的最小启动间隔（§8.1）；0 = 关闭交错（立即启动）"));
+        stagger_ = stagger; // R-201 后半：对象图成员化
         stagger->setSingleStep(10);
         const formkit::Row stagger_row = formkit::frow(
             page_run, T("交错启动"), stagger, formkit::FieldWidth::Standard, T("ms"), T("0–2000"));
@@ -1214,6 +1218,7 @@ QWidget *SettingsDialog::build_run_page(const theme::Tokens &tokens, const pp::A
         auto *threads = make_auto_combo(
             page_run, QLatin1String(kThreadBudget), current.thread_budget, kThreadBudgetMax,
             T("总活跃线程上限 T（§8.2，含编码器内部线程）；自动 = 逻辑核数"));
+        thread_budget_ = threads; // R-201 后半：对象图成员化
         const formkit::Row threads_row =
             formkit::frow(page_run, T("线程预算"), threads, formkit::FieldWidth::Standard,
                           QString(), T("0 = 自动"));
@@ -1228,6 +1233,7 @@ QWidget *SettingsDialog::build_run_page(const theme::Tokens &tokens, const pp::A
         ar->setSpacing(formkit::kInlineGap);
         auto *flatten = new QSlider(Qt::Horizontal, alpha_track);
         flatten->setObjectName(QLatin1String(kFlattenGray));
+        flatten_ = flatten; // R-201 后半：对象图成员化
         flatten->setRange(0, kSliderMax);
         const int gray0 = gray_to_slider(current.flatten_gray);
         flatten->setValue(gray0);
@@ -1235,6 +1241,7 @@ QWidget *SettingsDialog::build_run_page(const theme::Tokens &tokens, const pp::A
         flatten->setAccessibleName(T("alpha 合成底色"));
         auto *swatch = new Swatch(alpha_track);
         swatch->set_tokens(tokens);
+        flatten_preview_ = swatch; // R-201 后半：对象图成员化
         swatch->set_gray(slider_to_gray(gray0)); // 修 4-15：色块 = 滑杆值的灰度映射
         swatch->setToolTip(T("alpha 合成底色预览（与滑杆值一致）"));
         ar->addWidget(inline_slot(alpha_track, T("黑")));
@@ -1248,8 +1255,8 @@ QWidget *SettingsDialog::build_run_page(const theme::Tokens &tokens, const pp::A
         bind_row(alpha_row, flatten);
         v->addWidget(alpha_row.row);
         connect(flatten, &QSlider::valueChanged, this, [this](int v) {
-            if (auto *sw =
-                    dynamic_cast<Swatch *>(findChild<QWidget *>(QLatin1String(kFlattenPreview))))
+            // R-201 后半：对象图成员化（原 findChild<kFlattenPreview> 字符串查找退役）
+            if (auto *sw = dynamic_cast<Swatch *>(flatten_preview_))
                 sw->set_gray(slider_to_gray(v)); // 滑杆 → 色块（同一映射函数，单源）
         });
 
@@ -1259,6 +1266,7 @@ QWidget *SettingsDialog::build_run_page(const theme::Tokens &tokens, const pp::A
                                QLatin1String(kRotateOrientation));
         auto *rotate_box = rotate.box;
         rotate_box->setChecked(current.rotate_orientation); // 默认开（settings 默认 true）
+        rotate_ = rotate_box; // R-201 后半：对象图成员化
         rotate_box->setToolTip(T("按 EXIF 方向自动旋转输出；关闭则保留原始像素方向"));
         rotate_box->setAccessibleName(T("按 EXIF 方向自动旋转输出"));
         rotate_box->set_tokens(tokens);
@@ -1288,6 +1296,7 @@ QWidget *SettingsDialog::build_map_page(const theme::Tokens &tokens, const pp::A
         map_provider_spec.accessible = T("底图提供方");
         map_provider_spec.tooltip = T("底图来源；高德需填 Web 服务 Key");
         auto *provider = formkit::combo_box(page_map, map_provider_spec);
+        map_provider_ = provider; // R-201 后半：对象图成员化
         provider->addItem(T("OpenStreetMap（内置）"), QStringLiteral("osm"));
         provider->addItem(T("高德地图"), QStringLiteral("amap"));
         {
@@ -1305,6 +1314,7 @@ QWidget *SettingsDialog::build_map_page(const theme::Tokens &tokens, const pp::A
         layer_spec.accessible = T("图层");
         layer_spec.tooltip = T("地图图层：矢量路网 / 卫星影像 / 混合（影像 + 标注）");
         auto *layer = formkit::combo_box(page_map, layer_spec);
+        map_style_ = layer; // R-201 后半：对象图成员化
         layer->addItem(T("矢量"), map_style_ids().at(0)); // R-137：id 走 layers.h 单源词表
         layer->addItem(T("卫星"), map_style_ids().at(1));
         layer->addItem(T("混合"), map_style_ids().at(2));
@@ -1320,6 +1330,7 @@ QWidget *SettingsDialog::build_map_page(const theme::Tokens &tokens, const pp::A
                                QLatin1String(kMapSatLabels));
         auto *sat_labels_box = sat_labels.box;
         sat_labels_box->setChecked(current.map_sat_labels);
+        map_sat_labels_ = sat_labels_box; // R-201 后半：对象图成员化
         sat_labels_box->setToolTip(T("混合图层在影像上叠加道路与地名标注（关闭 = 纯影像）"));
         sat_labels_box->setAccessibleName(T("混合图层在影像上叠加道路与地名标注"));
         sat_labels_box->set_tokens(tokens);
@@ -1327,6 +1338,7 @@ QWidget *SettingsDialog::build_map_page(const theme::Tokens &tokens, const pp::A
 
         auto *amap_key = new QLineEdit(page_map);
         amap_key->setObjectName(QLatin1String(kAmapKey));
+        amap_key_ = amap_key; // R-201 后半：对象图成员化
         amap_key->setEchoMode(QLineEdit::Password); // 不回显明文
         amap_key->setText(QString::fromStdString(current.amap_key));
         amap_key->setPlaceholderText(T("在高德开放平台申请"));
@@ -1345,6 +1357,7 @@ QWidget *SettingsDialog::build_map_page(const theme::Tokens &tokens, const pp::A
         auto *tile_cache =
             make_spin(page_map, QLatin1String(kTileCacheMb), kTileCacheMin, kTileCacheMax,
                       current.tile_cache_mb, false, T("地图瓦片的本地缓存上限"));
+        tile_cache_mb_ = tile_cache; // R-201 后半：对象图成员化
         const formkit::Row tile_row =
             formkit::frow(page_map, T("瓦片缓存"), tile_cache, formkit::FieldWidth::Standard,
                           QStringLiteral("MB"), T("16–512"));
@@ -1356,6 +1369,7 @@ QWidget *SettingsDialog::build_map_page(const theme::Tokens &tokens, const pp::A
         level_spec.accessible = T("日志级别");
         level_spec.tooltip = T("日志详细程度；trace 最详细");
         auto *level = formkit::combo_box(page_map, level_spec);
+        log_level_ = level; // R-201 后半：对象图成员化
         level->addItem(QStringLiteral("trace"), QLatin1String(kLevelIds[0]));
         level->addItem(QStringLiteral("debug"), QLatin1String(kLevelIds[1]));
         level->addItem(QStringLiteral("info"), QLatin1String(kLevelIds[2]));
@@ -1491,8 +1505,8 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
     card_line->setContentsMargins(0, 0, 0, 0);
     card_line->setSpacing(0);
 
-    const dk::TitleBar title_bar = dk::make_title_bar(card, icons::Name::Image, T("设置"));
-    card_line->addWidget(title_bar.widget);
+    title_bar_ = dk::make_title_bar(card, icons::Name::Image, T("设置")); // R-201 后半：成员化
+    card_line->addWidget(title_bar_.widget);
 
     auto *tabs = new dk::UnderlineTabs(card);
     auto *pages = new QStackedWidget(card);
@@ -1562,48 +1576,50 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
     connect(ok_btn, &QPushButton::clicked, this, &QDialog::accept);
 
     // 恢复默认（§7.4）：把**可编辑面**复位到 AppSettings 默认（不改 last_* / class_file）
+    // R-201 后半（M7R22G2）：对象图成员化 —— 逐控件 findChild 字符串查找退役，null 守卫
+    // 语义保留（成员未建 = 该字段跳过，与 findChild 失败同语义）。
     connect(defaults_btn, &QPushButton::clicked, this, [this] {
         const pp::AppSettings def;
-        if (auto *w = findChild<QComboBox *>(QLatin1String(kWorkers))) {
+        if (QComboBox *w = workers_) {
             const int idx = w->findData(def.workers);
             w->setCurrentIndex(idx >= 0 ? idx : 0);
         }
-        if (auto *w = findChild<QSpinBox *>(QLatin1String(kBudgetGb)))
+        if (QSpinBox *w = budget_)
             w->setValue(def.budget_gb);
-        if (auto *w = findChild<QSpinBox *>(QLatin1String(kStaggerMs)))
+        if (QSpinBox *w = stagger_)
             w->setValue(def.stagger_ms);
-        if (auto *w = findChild<QComboBox *>(QLatin1String(kThreadBudget))) {
+        if (QComboBox *w = thread_budget_) {
             const int idx = w->findData(def.thread_budget);
             w->setCurrentIndex(idx >= 0 ? idx : 0);
         }
-        if (auto *w = findChild<QSpinBox *>(QLatin1String(kTileCacheMb)))
+        if (QSpinBox *w = tile_cache_mb_)
             w->setValue(def.tile_cache_mb);
-        if (auto *w = findChild<QLineEdit *>(QLatin1String(kAmapKey)))
+        if (QLineEdit *w = amap_key_)
             w->setText(QString::fromStdString(def.amap_key));
-        if (auto *w = findChild<QCheckBox *>(QLatin1String(kRotateOrientation)))
+        if (QCheckBox *w = rotate_)
             w->setChecked(def.rotate_orientation);
-        if (auto *w = findChild<QSlider *>(QLatin1String(kFlattenGray)))
+        if (QSlider *w = flatten_)
             w->setValue(gray_to_slider(def.flatten_gray));
-        if (auto *w = findChild<QComboBox *>(QLatin1String(kMapProvider))) {
+        if (QComboBox *w = map_provider_) {
             const int idx = w->findData(QString::fromStdString(def.map_provider));
             w->setCurrentIndex(idx >= 0 ? idx : 0);
         }
         // M6-T11（C6）：图层档 / 混合叠标注也属可编辑面 → 复位到默认（road / true）
-        if (auto *w = findChild<QComboBox *>(QLatin1String(kMapStyle)))
+        if (QComboBox *w = map_style_)
             w->setCurrentIndex(map_style_index(QString::fromStdString(def.map_style)));
-        if (auto *w = findChild<QCheckBox *>(QLatin1String(kMapSatLabels)))
+        if (QCheckBox *w = map_sat_labels_)
             w->setChecked(def.map_sat_labels);
-        if (auto *w = findChild<QComboBox *>(QLatin1String(kLogLevel))) {
+        if (QComboBox *w = log_level_) {
             const int idx = w->findData(QString::fromStdString(def.log_level));
             w->setCurrentIndex(idx >= 0 ? idx : w->findData(QStringLiteral("info")));
         }
-        if (auto *w = findChild<QComboBox *>(QLatin1String(kFolderStructure))) {
+        if (QComboBox *w = folder_structure_) {
             const int idx = w->findData(QString::fromStdString(def.output_template));
             w->setCurrentIndex(idx >= 0 ? idx : 0);
         }
         // A28：主题档也是可编辑面 → 复位到默认档（system = 跟随系统）。程序化 set_current_index
         // 不发射信号 → 与其余字段同一"确定后才落地"语义（不即时改主题）。
-        if (auto *w = findChild<formkit::SegmentedControl *>(QLatin1String(kThemeMode)))
+        if (formkit::SegmentedControl *w = theme_mode_seg_)
             w->set_current_index(theme_mode_index(QString::fromStdString(def.ui_theme_mode)));
     });
 
@@ -1626,11 +1642,8 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
                 // 调用漏 formkit Combo/Spin/DSpin 箭头 → 主题切换后箭头残留旧主题色；且漏
                 // UnderlineTabs → UX-12 亮色页签标题色错）。Tokenized 全族 + 属性钩子 repolish。
                 theme::replay_tokens(this, t);
-                dk::restyle_title_bar(
-                    dk::TitleBar{findChild<QFrame *>(QLatin1String(dk::kTitleBarName)),
-                                 findChild<QLabel *>(QStringLiteral("pp-dlg-title")),
-                                 findChild<QPushButton *>(QStringLiteral("pp-dlg-close"))},
-                    t);
+                // R-201 后半：标题栏三件走成员（原三处 findChild 字符串退役）
+                dk::restyle_title_bar(title_bar_, t);
             });
 
     // R-249（M7-R2D2）：主题"选后立即生效"但取消必须**回滚** —— 上面的切换槽即时写了
@@ -1675,8 +1688,8 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
     }));
 
     // 无边框接线（拖拽 / 八向缩放入口与主窗同一机制：platform/frameless）
-    pp::platform::Frameless::attach(this, title_bar.widget, {title_bar.close});
-    dk::bind_close_button(title_bar, this); // GUI-R2 修 3：caption ✕ 必须真关窗
+    pp::platform::Frameless::attach(this, title_bar_.widget, {title_bar_.close});
+    dk::bind_close_button(title_bar_, this); // GUI-R2 修 3：caption ✕ 必须真关窗
 }
 
 pp::AppSettings SettingsDialog::settings() const {
@@ -1685,42 +1698,44 @@ pp::AppSettings SettingsDialog::settings() const {
     if (result() != QDialog::Accepted)
         return s;
 
-    if (const auto *w = findChild<QComboBox *>(QLatin1String(kWorkers))) {
+    // R-201 后半（M7R22G2）：对象图成员化 —— 读回走成员指针（objectName 查找退役；
+    // null 守卫语义保留 = 成员未建则保持快照值，与原 findChild 失败同语义）。
+    if (const QComboBox *w = workers_) {
         s.workers = std::clamp(w->currentData().toInt(), 0, kWorkersMax);
     }
-    if (const auto *w = findChild<QSpinBox *>(QLatin1String(kBudgetGb))) {
+    if (const QSpinBox *w = budget_) {
         s.budget_gb = w->value();
     }
-    if (const auto *w = findChild<QSlider *>(QLatin1String(kFlattenGray))) {
+    if (const QSlider *w = flatten_) {
         s.flatten_gray = static_cast<double>(w->value()) / kSliderMax; // 0.01 步长
     }
-    if (const auto *w = findChild<QCheckBox *>(QLatin1String(kRotateOrientation))) {
+    if (const QCheckBox *w = rotate_) {
         s.rotate_orientation = w->isChecked();
     }
-    if (const auto *w = findChild<QComboBox *>(QLatin1String(kMapProvider))) {
+    if (const QComboBox *w = map_provider_) {
         const QString id = w->currentData().toString();
         if (!id.isEmpty())
             s.map_provider = id.toStdString();
     }
-    if (const auto *w = findChild<QLineEdit *>(QLatin1String(kAmapKey))) {
+    if (const QLineEdit *w = amap_key_) {
         s.amap_key = w->text().toStdString();
     }
-    if (const auto *w = findChild<QSpinBox *>(QLatin1String(kTileCacheMb))) {
+    if (const QSpinBox *w = tile_cache_mb_) {
         s.tile_cache_mb = w->value();
     }
-    if (const auto *w = findChild<QComboBox *>(QLatin1String(kLogLevel))) {
+    if (const QComboBox *w = log_level_) {
         const QString id = w->currentData().toString();
         if (!id.isEmpty())
             s.log_level = id.toStdString();
     }
     // M4-T15 §9.3 追加项读回（交错启动 / 线程预算 / 分文件夹默认结构）
-    if (const auto *w = findChild<QSpinBox *>(QLatin1String(kStaggerMs))) {
+    if (const QSpinBox *w = stagger_) {
         s.stagger_ms = std::clamp(w->value(), 0, kStaggerMax);
     }
-    if (const auto *w = findChild<QComboBox *>(QLatin1String(kThreadBudget))) {
+    if (const QComboBox *w = thread_budget_) {
         s.thread_budget = std::clamp(w->currentData().toInt(), 0, kThreadBudgetMax);
     }
-    if (const auto *w = findChild<QComboBox *>(QLatin1String(kFolderStructure))) {
+    if (const QComboBox *w = folder_structure_) {
         const QString tmpl = w->currentData().toString();
         if (!tmpl.isEmpty()) {
             s.output_template = tmpl.toStdString();
@@ -1729,16 +1744,16 @@ pp::AppSettings SettingsDialog::settings() const {
     }
     // A28：主题三档写回 —— 从**段选中态**取值（与其它字段"从控件取值"同口径；信号是否发射
     // 不影响落库，程序化 set_current_index 同样成立）。
-    if (const auto *w = findChild<formkit::SegmentedControl *>(QLatin1String(kThemeMode))) {
+    if (const formkit::SegmentedControl *w = theme_mode_seg_) {
         s.ui_theme_mode = theme_mode_id(w->current_index()).toStdString();
     }
     // M6-T11（C6）：图层档 / 混合叠标注写回（同"从控件取值"口径）
-    if (const auto *w = findChild<QComboBox *>(QLatin1String(kMapStyle))) {
+    if (const QComboBox *w = map_style_) {
         const QString id = w->currentData().toString();
         if (!id.isEmpty())
             s.map_style = id.toStdString();
     }
-    if (const auto *w = findChild<QCheckBox *>(QLatin1String(kMapSatLabels))) {
+    if (const QCheckBox *w = map_sat_labels_) {
         s.map_sat_labels = w->isChecked();
     }
     // last_format / last_preset / last_out_root 不被本对话框编辑 → 保持构造快照

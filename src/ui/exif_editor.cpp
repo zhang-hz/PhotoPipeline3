@@ -33,6 +33,7 @@
 // theme.h 依赖包含者先引入 <QApplication>（qApp->style()；见 ui/classify_panel.h 同注）
 #include <QApplication>
 
+#include "mapwidget/dms.h" // R-099：DMS 文案单源 pp::map::deg_to_dms（M7-R2D2）
 #include "ui/theme.h" // M4-T12：.mod 样式（theme::set_mod / mod_qss）；M5-T10：令牌 + dialogkit
 
 #include <QAbstractItemView>
@@ -333,27 +334,33 @@ QString offset_label(int minutes) {
         .arg(a % 60, 2, 10, QChar(u'0'));
 }
 
-// 31°13'49.4"N / 121°28'25.3"E（§3.2：度分秒一位小数）
-QString dms_component(double v, bool lat) {
-    const char *hemi = lat ? (v < 0 ? "S" : "N") : (v < 0 ? "W" : "E");
-    const double a = std::fabs(v);
-    int deg = static_cast<int>(a);
-    double m = (a - deg) * 60.0;
-    int min = static_cast<int>(m);
-    double sec = std::round((m - min) * 60.0 * 10.0) / 10.0;
-    if (sec >= 60.0) {
-        sec -= 60.0;
-        ++min;
-    }
-    if (min >= 60) {
-        min -= 60;
-        ++deg;
-    }
-    return QStringLiteral("%1°%2'%3\"%4")
-        .arg(deg)
-        .arg(min, 2, 10, QChar(u'0'))
-        .arg(sec, 0, 'f', 1)
-        .arg(QString::fromLatin1(hemi));
+// ---------------------------------------------------------------------------
+// UX-6③（M7-R2D2）：行高 28 节奏（formkit::kRowPitch 单源）—— 行容器**逐行包壳**。
+// 审计（docs/ux-review-14.md §6-A）：本文件此前零 setFixedHeight，行高由 24px 控件 +
+// QGroupBox padding 自算，全文件不守 28 节奏（"每个卡片行距不一样"投诉的最大来源）。
+//   * wrap_row28(QLayout*)：布局行（QHBoxLayout）包进固定高 28 容器；
+//   * wrap_field28(QWidget*)：表单行（QFormLayout）字段包进固定高 28 容器（标签仍在表单
+//     标签列右对齐，不改对齐语义；控件 24 高在 28 行内垂直居中）。
+// 双行栅格（Δ 偏移 6 列 × 2 行）按 2×kRowPitch 钉高，保持 28 的整数倍节奏。
+// ---------------------------------------------------------------------------
+QWidget *wrap_row28(QLayout *line) {
+    auto *host = new QWidget();
+    auto *outer = new QVBoxLayout(host);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(0);
+    outer->addLayout(line);
+    host->setFixedHeight(formkit::kRowPitch);
+    return host;
+}
+
+QWidget *wrap_field28(QWidget *field) {
+    auto *host = new QWidget();
+    auto *outer = new QVBoxLayout(host);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(0);
+    outer->addWidget(field, 0, Qt::AlignVCenter);
+    host->setFixedHeight(formkit::kRowPitch);
+    return host;
 }
 
 } // namespace
@@ -1041,7 +1048,7 @@ QWidget *ExifEditor::Impl::make_exif_tab() {
     hook_button(add_button, /*primary=*/false); // R4 按钮 26（A7）
     add->addWidget(add_button);
     add->addStretch(1);
-    v->addLayout(add);
+    v->addWidget(wrap_row28(add));
 
     QObject::connect(add_button, &QPushButton::clicked, q, [this] { add_exif_by_number(); });
     QObject::connect(exif_number, &QLineEdit::returnPressed, q, [this] { add_exif_by_number(); });
@@ -1103,7 +1110,7 @@ QWidget *ExifEditor::Impl::make_xmp_tab() {
     add_button->setObjectName(QStringLiteral("add_xmp_button"));
     hook_button(add_button, /*primary=*/false);
     add->addWidget(add_button);
-    v->addLayout(add);
+    v->addWidget(wrap_row28(add));
 
     QObject::connect(add_button, &QPushButton::clicked, q, [this] { add_xmp_by_path(); });
     QObject::connect(xmp_path, &QLineEdit::returnPressed, q, [this] { add_xmp_by_path(); });
@@ -1153,8 +1160,8 @@ void ExifEditor::Impl::update_dms() {
     const double lat = gps_lat->text().trimmed().toDouble(&ok_lat);
     const double lon = gps_lon->text().trimmed().toDouble(&ok_lon);
     if (ok_lat && ok_lon && lat >= -90.0 && lat <= 90.0 && lon >= -180.0 && lon <= 180.0) {
-        gps_dms->setText(dms_component(lat, true) + QStringLiteral(" ") +
-                         dms_component(lon, false));
+        gps_dms->setText(pp::map::deg_to_dms(lat, true) + QStringLiteral(" ") +
+                         pp::map::deg_to_dms(lon, false)); // R-099：第三轨统一走 deg_to_dms
     } else {
         gps_dms->setText(QStringLiteral("—"));
     }
@@ -1266,7 +1273,7 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     time_mode->addItem(T("清除"));
     time_row->addWidget(time_mode);
     time_row->addStretch(1);
-    tv->addLayout(time_row);
+    tv->addWidget(wrap_row28(time_row));
 
     time_params = new QWidget();
     auto *tp = new QVBoxLayout(time_params);
@@ -1282,7 +1289,7 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     time_method->addItem(T("时区语义（旅行照片）"));
     method_row->addWidget(time_method);
     method_row->addStretch(1);
-    tp->addLayout(method_row);
+    tp->addWidget(wrap_row28(method_row));
 
     time_delta_box = new QWidget();
     auto *grid = new QGridLayout(time_delta_box);
@@ -1302,6 +1309,7 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
         dress_spin(time_spin[i], labels[i]);
         grid->addWidget(time_spin[i], 1, i);
     }
+    time_delta_box->setFixedHeight(formkit::kRowPitch * 2); // UX-6③：双行栅格 = 2×28
     tp->addWidget(time_delta_box);
 
     time_tz_box = new QWidget();
@@ -1331,6 +1339,7 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     tz->addWidget(tz_to_label);
     tz->addWidget(tz_to);
     tz->addStretch(1);
+    time_tz_box->setFixedHeight(formkit::kRowPitch); // UX-6③：行高 28
     tp->addWidget(time_tz_box);
     tv->addWidget(time_params);
     // M4-T15（§5.2 + mockup .tline）：原（删除线）→ 生效（强调色，改动值另加 .mod 边框）
@@ -1359,6 +1368,7 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
         eh->addWidget(time_effective, 0);
         eh->addStretch(1);
         eh->addWidget(time_effective_src, 0);
+        eff_row->setFixedHeight(formkit::kRowPitch); // UX-6③：行高 28
         tv->addWidget(eff_row);
     }
     v->addWidget(time_group);
@@ -1379,7 +1389,7 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     gps_mode->addItem(T("清除 GPS"));
     gps_row->addWidget(gps_mode);
     gps_row->addStretch(1);
-    gv->addLayout(gps_row);
+    gv->addWidget(wrap_row28(gps_row));
 
     gps_params = new QWidget();
     auto *gp = new QVBoxLayout(gps_params);
@@ -1401,13 +1411,13 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     lon_validator->setLocale(QLocale::c());
     gps_lon->setValidator(lon_validator);
     dress_edit(gps_lon, T("经度"), T("十进制经度（-180..180，6 位小数）"));
-    coord->addRow(T("纬度"), gps_lat);
-    coord->addRow(T("经度"), gps_lon);
+    coord->addRow(T("纬度"), wrap_field28(gps_lat));
+    coord->addRow(T("经度"), wrap_field28(gps_lon));
     gps_dms = new QLabel(QStringLiteral("—"));
     gps_dms->setObjectName(QStringLiteral("gps_dms"));
     gps_dms->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkNote)); // A6：令牌 txt3
     gps_dms->setFont(theme::font(theme::Typography::body_px, QFont::Normal, /*tabular=*/true));
-    coord->addRow(T("DMS"), gps_dms);
+    coord->addRow(T("DMS"), wrap_field28(gps_dms));
     gp->addLayout(coord);
 
     gps_more = new QGroupBox(T("更多字段"));
@@ -1426,9 +1436,9 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     dress_edit(gps_alt, T("海拔"), T("海拔（米，可空）"));
     dress_edit(gps_dir, T("方位角"), T("方位角（0–359.99 度，可空）"));
     dress_edit(gps_ts, T("时间戳"), T("GPS 时间戳（YYYY:MM:DD HH:MM:SS，可空）"));
-    more_form->addRow(T("海拔 (m)"), gps_alt);
-    more_form->addRow(T("方位角 (°)"), gps_dir);
-    more_form->addRow(T("时间戳"), gps_ts);
+    more_form->addRow(T("海拔 (m)"), wrap_field28(gps_alt));
+    more_form->addRow(T("方位角 (°)"), wrap_field28(gps_dir));
+    more_form->addRow(T("时间戳"), wrap_field28(gps_ts));
     gp->addWidget(gps_more);
     gv->addWidget(gps_params);
     // M4-T15（§5.2 + mockup .tline）：原坐标（删除线）→ 生效坐标（强调色/改动值带 .mod）。
@@ -1452,6 +1462,7 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
         eh->addWidget(arrow, 0);
         eh->addWidget(gps_effective, 0);
         eh->addStretch(1);
+        eff_row->setFixedHeight(formkit::kRowPitch); // UX-6③：行高 28
         gv->addWidget(eff_row);
     }
     v->addWidget(gps_group);
@@ -1472,7 +1483,7 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     privacy_mode->addItem(T("强制关"));
     privacy_row->addWidget(privacy_mode);
     privacy_row->addStretch(1);
-    pv->addLayout(privacy_row);
+    pv->addWidget(wrap_row28(privacy_row));
     auto *priority = new QLabel(T("优先级最高的规则"));
     priority->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkNote)); // A6：令牌 txt3
     priority->setFont(theme::font(theme::Typography::hint_px));
@@ -1567,7 +1578,7 @@ void ExifEditor::Impl::build() {
     ignore_check->setChecked(existing.has_value() && existing->ignore_batch);
     ignore->set_tokens(tokens); // formkit 自绘勾选框（13×13 + 矢量勾）
     top->addWidget(ignore_check);
-    body_line->addLayout(top);
+    body_line->addWidget(wrap_row28(top));
 
     if (!meta.error.empty()) {
         auto *err = new ElidedLabel();
@@ -1598,7 +1609,7 @@ void ExifEditor::Impl::build() {
     cancel->setText(T("取消"));
     hook_button(cancel, /*primary=*/false);
     button_row->addWidget(buttons);
-    body_line->addLayout(button_row);
+    body_line->addWidget(wrap_row28(button_row));
 
     root->addWidget(body, 1);
 

@@ -26,8 +26,9 @@
 // 冻结契约（PP-FROZEN，见 page_output.h 的追加面说明）：既有方法签名/语义不变；既有"冻结行为"逐条
 // 保留：位深可选集 = FormatDef.bitdepths ∩ probe_bitdepth_support()（heif/avif，按 (format,backend)
 // 进程内缓存）；introspect_backends() 结果按静态表顺序归一；avif + alpha 预选 = 触发条件求值
-// （用户手动改过后端 → user_backend_override）；预设落值后同样求值；select_format()
-// 仍是冒烟/走查钩子。
+// （用户手动改过后端 → user_backend_override）；预设落值后同样求值【M7-R2D2 修订（R-066）：
+// 预设落值路径**跳过**预选（in_preset_apply 语义位）—— 预设记录的后端为权威值，不再静默改写
+// svt-av1→libaom（裁定登记 build/m7r2-d2/handoff.md）】；select_format() 仍是冒烟/走查钩子。
 //
 // 依赖 M5-T8 追加面：`set_input_count(files)`（预估卡的输入面；MainWindow 在 refresh_status 里喂入
 // 勾选数，页面据此算「预计输出 = 勾选数 × 已选格式数」；**不发信号**，其余预估项无实测依据 →
@@ -72,16 +73,19 @@
 #include <QStorageInfo>
 #include <QTabBar>
 #include <QTabWidget>
+#include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QWidget>
 
 #include "codecs/encoders.h"
 #include "codecs/heif_profile.h" // UX-10.1：编码档位纯函数单源（WP2 I4）
+#include "core/error_text.h"     // R-070/273：错误中文映射单源（M7-R2B；本包接线）
 #include "core/fsops.h"
 #include "core/params.h"
-#include "ui/formkit.h" // C2：行构造器（R1–R4）+ 自绘控件（磁贴/开关/胶囊）
-#include "ui/icons.h"   // M5-T3：折叠插入符 /「添加格式…」的 ＋ 一律矢量图标（C3）
+#include "ui/contextmenu.h" // UX-1 ⑥⑦⑨：公共右键菜单件（actions 单源）
+#include "ui/formkit.h"     // C2：行构造器（R1–R4）+ 自绘控件（磁贴/开关/胶囊）
+#include "ui/icons.h"       // M5-T3：折叠插入符 /「添加格式…」的 ＋ 一律矢量图标（C3）
 #include "ui/paramform.h"
 #include "ui/theme.h"
 
@@ -105,26 +109,10 @@ const FormatEntry kFormats[] = {
 constexpr int kFormatCount = static_cast<int>(sizeof(kFormats) / sizeof(kFormats[0]));
 constexpr int kFormatColumns = 4; // 2×4（§7.2）
 
-// §2.9.2：逐格式高质量档默认位深
-int default_bitdepth(const std::string &id) {
-    if (id == "jpeg")
-        return 8;
-    if (id == "jxl")
-        return 16;
-    if (id == "png")
-        return 16;
-    if (id == "tiff")
-        return 16;
-    if (id == "webp")
-        return 8;
-    if (id == "bmp")
-        return 24;
-    if (id == "heif")
-        return 10;
-    if (id == "avif")
-        return 10;
-    return 8;
-}
+// §2.9.2：逐格式高质量档默认位深 —— R-238（M7-R2D2）：三套口径收敛，本页消费**单源**
+// `pp::default_bitdepth_for`（core/pipeline.h；--dev / bench / UI 装配链同一份）。
+// 原 12 行逐字段复制删除（值域：jpeg 8 / jxl 16 / png 16 / tiff 16 / webp 8 / bmp 24(bpp) /
+// heif·avif 10 / 其余 8）。
 
 bool contains(const std::vector<int> &v, int x) {
     return std::find(v.begin(), v.end(), x) != v.end();
@@ -408,6 +396,9 @@ struct FormatState {
     QComboBox *profile = nullptr;   // pp-profile-combo（首项「自动」）
     QLabel *profile_note = nullptr; // 推导结果 / 兼容性提示（warn 色）
     bool profile_user_set = false;  // 用户手选过档位（反向联动改位深时不覆盖手选项）
+    // R-135（M7-R2D2）：表单不认的键（预设带入的未知键 / 跨技术键）—— 落值时记存，
+    // snapshot/spec_of 原样带回，load→save 往返不丢（form values 同名键覆盖之）。
+    pp::ParamSet extra;
 };
 
 struct Impl {
@@ -417,9 +408,13 @@ struct Impl {
     bool metadata_only = false;
     bool batch_has_alpha = false;
     bool user_backend_override = false; // §9.1：用户手动改过后端（set_batch_has_alpha 清除）
-    std::string last_backend;           // 最近一次已知后端（区分用户手动改动）
-    std::string active_id = "jxl";      // 当前页签 / 仅元数据模式的单一格式
-    std::vector<std::string> selected;  // 已选格式（规范顺序 = 磁贴顺序）
+    // R-066（M7-R2D2）：预设应用路径**跳过** avif+alpha 预选 —— 预设里记录的后端是权威值，
+    // 落值后被 evaluate_avif_alpha_preselect 静默改写 svt-av1→libaom 会让 load→save 往返丢字段
+    // （deep-review R-066）。置位期间预选求值直接返回 false（override 语义位）。
+    bool in_preset_apply = false;
+    std::string last_backend;          // 最近一次已知后端（区分用户手动改动）
+    std::string active_id = "jxl";     // 当前页签 / 仅元数据模式的单一格式
+    std::vector<std::string> selected; // 已选格式（规范顺序 = 磁贴顺序）
     std::map<std::string, FormatState> states;
     int input_count = 0; // 预估卡输入面（勾选文件数；MainWindow 喂入）
 
@@ -460,6 +455,8 @@ struct Impl {
     ElidedLabel *est_size = nullptr;
     ElidedLabel *est_time = nullptr;
     ElidedLabel *est_disk = nullptr;
+    QTimer *disk_timer = nullptr; // R-228：剩余磁盘查询去抖（statvfs 不挂逐键 textChanged）
+    QString color_tip_base;       // R-318：色彩目标 tooltip 基线（禁用态换原因、启用态恢复）
 
     // ------------------------------------------------------------ 查询
 
@@ -509,6 +506,12 @@ struct Impl {
         auto *outer = new QVBoxLayout(q);
         outer->setContentsMargins(0, 0, 0, 0);
 
+        // R-228：剩余磁盘查询去抖（输入停 400ms 后查一次；见 refresh_disk）
+        disk_timer = new QTimer(q);
+        disk_timer->setSingleShot(true);
+        disk_timer->setInterval(400);
+        QObject::connect(disk_timer, &QTimer::timeout, q, [this] { refresh_disk(); });
+
         auto *scroll = new QScrollArea(q);
         scroll->setObjectName(QStringLiteral("pp-output-scroll"));
         scroll->setWidgetResizable(true);
@@ -527,6 +530,10 @@ struct Impl {
         v->addWidget(build_param_card(content));
         v->addWidget(build_preset_card(content));
         v->addStretch(1);
+        // UX-11（M7-R2D2）：卡片防压缩 —— QScrollArea(widgetResizable) 会把 Preferred 件压向
+        // minimumSizeHint，卡片按当前内容 sizeHint 钉下限；滚动条只在卡片整体超出时出现。
+        for (QFrame *card : {format_card, global_card, param_card, preset_card})
+            formkit::lock_card_size(card);
     }
 
     // 卡壳（§4.3 r6 + --card-bd 描边/阴影走 theme QSS；卡头 = 标题 12/700 + 中性 pill + hint）
@@ -579,13 +586,11 @@ struct Impl {
 
     QPushButton *make_button(QWidget *parent, const QString &text, const QString &object_name,
                              bool primary) {
-        auto *button = new QPushButton(text, parent);
+        // R-022 余量（M7-R2D2）：按钮唯一构造点 = formkit::make_button（R4 高 26 + 指针手 +
+        // accessibleName + ppFk button/primary 钩子）；本页只剩 objectName 与字号补挂。
+        auto *button = static_cast<QPushButton *>(formkit::make_button(parent, text, primary));
         button->setObjectName(object_name);
-        button->setFixedHeight(theme::Metrics::btn_h); // R4 按钮高 26（A7）
-        button->setCursor(Qt::PointingHandCursor);
         button->setFont(theme::font(theme::Typography::body_px, QFont::DemiBold));
-        button->setProperty(kFieldProperty,
-                            primary ? QStringLiteral("primary") : QStringLiteral("button"));
         button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         return button;
     }
@@ -753,6 +758,7 @@ struct Impl {
             color_combo->setToolTip(PageOutput::tr(
                 "保持原样 = 不改动嵌入的 ICC 色彩描述；其余档位按目标色域转换并写入新的 ICC。"
                 "仅元数据模式下不生效（不做色彩转换）"));
+            color_tip_base = color_combo->toolTip(); // R-318：禁用/启用切换时按基线恢复
             const formkit::Row row = formkit::frow(global_card, PageOutput::tr("色彩目标"),
                                                    color_combo, FieldWidth::Standard);
             row.row->setObjectName(QStringLiteral("pp-color-row"));
@@ -948,6 +954,7 @@ struct Impl {
         }
         v->addWidget(body.host);
         update_estimate();
+        refresh_disk();        // R-228：磁盘读数独立通道（初值一次）
         sync_preset_buttons(); // 初始无当前预设 → 保存/删除禁用并给出原因（修 2-25）
         return preset_card;
     }
@@ -982,6 +989,7 @@ struct Impl {
         QObject::connect(out_root_edit, &QLineEdit::textChanged, q, [this](const QString &) {
             update_template_example();
             update_estimate();
+            schedule_disk_refresh(); // R-228：statvfs 去抖，不逐键查询
             emit q->config_changed();
         });
         QObject::connect(conflict_combo, &QComboBox::currentIndexChanged, q,
@@ -1046,6 +1054,87 @@ struct Impl {
             if (!path.isEmpty())
                 emit q->preset_delete_requested(path);
         });
+
+        // ---- UX-1 卡⑥⑦⑨（docs/ux-review-14.md §1 表）：一卡一 actions 构造函数（⑧在
+        //      paramform 自身）；items 惰性构造 → 运行中置灰实时反映 lock_for_run 语义 ----
+        attach_card_menu(format_card, [this] {
+            contextmenu::FormatCardIntents in;
+            in.check_all_formats = [this] {
+                for (const FormatEntry &e : kFormats)
+                    if (!is_selected(e.id))
+                        toggle_format(e.id, true, /*user=*/true);
+            };
+            in.clear_formats = [this] {
+                for (const FormatEntry &e : kFormats)
+                    if (is_selected(e.id))
+                        toggle_format(e.id, false, /*user=*/true);
+            };
+            in.restore_defaults = [this] {
+                // 恢复默认格式 = §2.9.1 默认单选 jxl（0.3.0 默认面）
+                for (const FormatEntry &e : kFormats) {
+                    const bool want = std::string(e.id) == "jxl";
+                    if (is_selected(e.id) != want)
+                        toggle_format(e.id, want, /*user=*/true);
+                }
+            };
+            in.running = !q->isEnabled();
+            return contextmenu::format_card_actions(in);
+        });
+        attach_card_menu(global_card, [this] {
+            contextmenu::GlobalCardIntents in;
+            in.reset_defaults = [this] {
+                {
+                    const QSignalBlocker blocker(conflict_combo);
+                    conflict_combo->setCurrentIndex(0); // 默认 自动加序号（§3.2）
+                }
+                {
+                    const QSignalBlocker blocker(color_combo);
+                    color_combo->setCurrentIndex(0); // 默认 保持原样
+                }
+                template_edit->setText(QStringLiteral("$format/$dir/$file")); // → 联动/信号
+                emit q->config_changed();
+            };
+            in.browse_out_root = [this] { browse_button->click(); };
+            in.running = !q->isEnabled();
+            return contextmenu::global_card_actions(in);
+        });
+        attach_card_menu(preset_card, [this] {
+            contextmenu::PresetCardIntents in;
+            in.save_as = [this] { emit q->preset_saveas_requested(); };
+            in.overwrite_save = [this] {
+                const int index = preset_combo->currentIndex();
+                const QString path =
+                    index >= 0 ? preset_combo->itemData(index, Qt::UserRole).toString() : QString();
+                if (path.isEmpty())
+                    emit q->preset_saveas_requested(); // 未选预设 → 走命名保存
+                else
+                    emit q->preset_save_requested(preset_combo->itemText(index));
+            };
+            in.delete_preset = [this] {
+                const int index = preset_combo->currentIndex();
+                const QString path =
+                    index >= 0 ? preset_combo->itemData(index, Qt::UserRole).toString() : QString();
+                if (!path.isEmpty())
+                    emit q->preset_delete_requested(path);
+            };
+            in.running = !q->isEnabled();
+            return contextmenu::preset_card_actions(in);
+        });
+    }
+
+    // UX-1（M7-R2D2）：卡片右键菜单 —— 公共件 ui/contextmenu（与 page_run 同一口径；
+    // items 惰性构造，右键时才求值）。
+    void attach_card_menu(QWidget *host,
+                          const std::function<std::vector<contextmenu::Item>()> &items) {
+        if (host == nullptr)
+            return;
+        host->setContextMenuPolicy(Qt::CustomContextMenu);
+        QObject::connect(host, &QWidget::customContextMenuRequested, host,
+                         [host, items](const QPoint &pos) {
+                             QMenu *m = contextmenu::menu(host, items());
+                             m->setAttribute(Qt::WA_DeleteOnClose);
+                             m->popup(host->mapToGlobal(pos));
+                         });
     }
 
     // 变量表菜单（点击变量即插入到模板光标处；§8：变量语法必有
@@ -1099,8 +1188,13 @@ struct Impl {
             snapshot_state(id);
             remove_tab(id);
             selected.erase(std::remove(selected.begin(), selected.end(), id), selected.end());
-            if (active_id == id)
+            if (active_id == id) {
+                // R-266：集合非空 → 现役页签前移首位；集合为空 → active_id 保留**最后格式**作
+                // 仅元数据模式的回退槽（§3.2 恒 1 项；config_base 的空集分支消费）—— 该值此时
+                // 是"游离"状态，显示面不得把它当现役页签（refresh_changed_pill 按 is_selected
+                // 收口），重勾选任一格式即复位为现役。
                 active_id = selected.empty() ? id : selected.front();
+            }
         }
         sync_tiles();
         sync_tab_current();
@@ -1196,6 +1290,15 @@ struct Impl {
             formkit::ComboSpec bit_spec;
             bit_spec.object_name = QStringLiteral("pp-bitdepth-combo");
             bit_spec.accessible = PageOutput::tr("位深");
+            // R-211（M7-R2D2）：位深单位标签消费**单源** pp::bitdepth_unit_label（"bps"/"bpp"，
+            // UI 侧不再按格式自翻单位）。控件文案仍为「N 位」（bitdepth-lock 探针逐字钉住），
+            // 单位语义进 tooltip（R-070 口径：实现细节进 tooltip）。
+            bit_spec.tooltip =
+                PageOutput::tr("输出位深（单位：%1 = %2）")
+                    .arg(QString::fromStdString(std::string(pp::bitdepth_unit_label(id))))
+                    .arg(pp::bitdepth_unit(id) == pp::BitdepthUnit::BitsPerPixel
+                             ? PageOutput::tr("每像素位数")
+                             : PageOutput::tr("每采样位数"));
             st.bitdepth = formkit::combo_box(st.page, bit_spec);
             // 行内 10px 注释位 = 格式能力约束说明（R3：提示不占标签位；占位符 " " 保证注释位存在）
             const formkit::Row row =
@@ -1231,9 +1334,9 @@ struct Impl {
         QObject::connect(st.form, &ParamForm::selection_changed, q,
                          [this, id](const FormSelection &) { on_param_selection_changed(id); });
         QObject::connect(st.form, &ParamForm::changed, q, [this, id] {
+            update_profile_note(id); // UX-10.1 反向联动：改色度 → 档位行推导/校验重算
             refresh_changed_pill();
             refresh_tab_labels();
-            Q_UNUSED(id);
             emit q->config_changed();
         });
         QObject::connect(st.bitdepth, &QComboBox::currentIndexChanged, q,
@@ -1280,7 +1383,9 @@ struct Impl {
         const FormSelection sel = st->form->selection();
         st->spec.backend_id = sel.backend;
         st->spec.tech_id = sel.tech;
-        st->spec.params = st->form->values();
+        st->spec.params = st->extra; // R-135：先回填表单不认的键，再叠 form values（同名后者胜）
+        for (const auto &[k, v] : st->form->values())
+            st->spec.params[k] = v;
         st->spec.params[std::string(pp::kLosslessKey)] = sel.lossless;
         st->spec.out_bitdepth = bitdepth_of(id);
         // UX-10.1：编码档位随快照落盘（保留键 __heif_profile = HeifProfile 序号；
@@ -1300,10 +1405,11 @@ struct Impl {
     }
 
     // 卡头中性 pill：当前页签格式「已改 N」（值 ≠ 表内默认的参数项数；修 2-07 计数用中性档）
+    // R-266：active_id 游离（集合空）时不显示陈旧计数 —— 现役判据 = is_selected。
     void refresh_changed_pill() {
         if (changed_pill == nullptr)
             return;
-        const int changed = changed_param_count(active_id);
+        const int changed = is_selected(active_id) ? changed_param_count(active_id) : 0;
         changed_pill->setText(PageOutput::tr("已改 %1").arg(changed));
         changed_pill->setVisible(changed > 0);
     }
@@ -1407,8 +1513,8 @@ struct Impl {
     }
 
     // 档位选定 → 位深/色度限幅（位深限幅在 set_bitdepth_options 里与格式能力求交；
-    // 色度是 ParamForm 的表内参数，这里只做**校验**：heif_profile_compatible 反查不通过
-    // 就把中文错误放进档位注释位，不静默改写用户的色度选择 —— 一控件一义）。
+    // 色度限幅落 ParamForm 的枚举行视图（UX-10.1 残余，M7-R2D2）：置灰 + 禁用原因，不静默
+    // 改写用户的色度选择 —— 不一致由 heif_profile_compatible 的中文错误承担（一控件一义）。
     void on_profile_changed(const std::string &id) {
         FormatState *st = state_of(id);
         if (st == nullptr || st->profile == nullptr)
@@ -1419,12 +1525,38 @@ struct Impl {
         emit q->config_changed();
     }
 
+    // UX-10.1 残余：档位 → 色度限幅联动（选定 Main 不给 4:4:4 等）。允许集 = 存在某个允许位深
+    // 使 heif_profile_compatible(want, d, c, still=true) 通过 —— 与校验同一份规则源
+    // （codecs/heif_profile.h）；「自动」不限幅（空集 = 全可选）。
+    void apply_chroma_limits(const std::string &id) {
+        FormatState *st = state_of(id);
+        if (st == nullptr || st->form == nullptr)
+            return;
+        const pp::HeifProfile want = current_profile(id);
+        std::vector<int64_t> allowed;
+        if (want != pp::HeifProfile::Auto) {
+            std::vector<int> depths = profile_allowed_bitdepths(want);
+            if (depths.empty())
+                depths = {8, 10, 12};
+            for (int c = 0; c <= 3; ++c) {
+                for (const int d : depths) {
+                    if (pp::heif_profile_compatible(want, d, c, /*still=*/true, nullptr)) {
+                        allowed.push_back(c);
+                        break;
+                    }
+                }
+            }
+        }
+        st->form->limit_enum_choices(std::string("chroma"), allowed,
+                                     PageOutput::tr("【已禁用：当前编码档位不支持该色度】"));
+    }
+
     // 档位注释位：「自动」显示插件自选的**推导结果**；手选档位与当前设置不一致时给中文错误；
     // 非 Main 档位给 warn 色兼容性提示（§8「禁用不静默灰」）。
     // 色调三档（色值一律取自 tokens，本页不写色值字面量）：
     //   * 非法组合 → ppInvalid="true"（theme::field_qss 的红字轨，已有钩子）；
-    //   * 兼容性提示 → QPalette 指 tokens.warn（公共 warn 钩子尚未进 theme.h，属跨界需求；
-    //     这里不挂 kFkHint —— 那条 QSS 的 text3 会把 palette 色覆盖掉）；
+    //   * 兼容性提示 → X5 公共 warn 钩子 theme::kFkWarn（M7-R2D2 落地；原 QPalette 自拼被
+    //     kFkHint 的 --txt3 规则覆盖，两轨抢色 —— 现统一走 QSS 钩子轨）；
     //   * 其余 → kFkHint（--txt3）。
     // 基类型显式 uint8_t（三值枚举；performance-enum-size，值域/语义零变化）。
     enum class NoteTone : std::uint8_t { Hint, Warn, Error };
@@ -1458,15 +1590,14 @@ struct Impl {
         st->profile_note->setText(note);
         st->profile_note->setProperty("ppInvalid",
                                       tone == NoteTone::Error ? QStringLiteral("true") : QString());
-        st->profile_note->setProperty(
-            theme::kFkProperty, tone == NoteTone::Hint ? QLatin1String(theme::kFkHint) : QString());
-        QPalette pal = st->profile_note->palette();
-        pal.setColor(QPalette::WindowText, tone == NoteTone::Warn    ? tokens.warn
-                                           : tone == NoteTone::Error ? tokens.err
-                                                                     : tokens.text3);
-        st->profile_note->setPalette(pal);
-        st->profile_note->style()->unpolish(st->profile_note);
-        st->profile_note->style()->polish(st->profile_note);
+        st->profile_note->setProperty(theme::kFkProperty,
+                                      tone == NoteTone::Hint   ? QLatin1String(theme::kFkHint)
+                                      : tone == NoteTone::Warn ? QLatin1String(theme::kFkWarn)
+                                                               : QString());
+        theme::repolish(st->profile_note);
+        // UX-10.1 残余：档位 → 色度限幅联动（本注释位刷新点即联动收敛点 —— 档位/位深/色度
+        // 任一变化都会走到这里）
+        apply_chroma_limits(id);
     }
 
     // ------------------------------------------------------------ 位深
@@ -1517,7 +1648,7 @@ struct Impl {
         } else if (keep_if_valid && contains(allowed, current)) {
             resolved = current;
         } else {
-            resolved = default_bitdepth(f->id);
+            resolved = pp::default_bitdepth_for(f->id); // R-238：默认位深单源
             if (!contains(allowed, resolved))
                 resolved = contains(allowed, 8) ? 8 : allowed.front(); // §2.9.2
         }
@@ -1549,8 +1680,21 @@ struct Impl {
             sel.tech = spec.tech_id;
             sel.lossless = lossless;
             st->form->set_selection(sel);
-            st->form->set_values(spec.params);
-            st->form->set_values(spec.params); // 二次落值：切技术后补齐同键项（幂等）
+            st->form->set_values(spec.params); // R-265：原"二次落值"死码删除 —— set_values 幂等，
+                                               // 第二遍零增量（魔法依赖：靠重复调用补齐切技术后的
+                                               // 同键项，实际一次已覆盖；见 build/m7r2-d2/handoff）
+            // R-135：表单不认的键（未知键/跨技术键）记存 —— snapshot/spec_of 原样带回，
+            // load→save 往返不再丢键（保留键 "__" 另有承载面，不入本表）。
+            st->extra.clear();
+            {
+                const pp::ParamSet owned = st->form->values();
+                for (const auto &[k, v] : spec.params) {
+                    if (k.rfind("__", 0) == 0)
+                        continue;
+                    if (owned.find(k) == owned.end())
+                        st->extra[k] = v;
+                }
+            }
             // UX-10.1：还原编码档位（保留键 __heif_profile；缺省 = Auto）
             if (st->profile != nullptr) {
                 const int want =
@@ -1586,14 +1730,16 @@ struct Impl {
                 const pp::TechDef *t = tech_by_id(backends, spec.backend_id, "");
                 spec.tech_id = t != nullptr ? t->id : std::string();
                 spec.params = default_params_for(id, spec.backend_id, spec.tech_id, false);
-                spec.out_bitdepth = default_bitdepth(id);
+                spec.out_bitdepth = pp::default_bitdepth_for(id); // R-238：默认位深单源
             }
             return spec;
         }
         const FormSelection sel = st->form->selection();
         spec.backend_id = sel.backend;
         spec.tech_id = sel.tech;
-        spec.params = st->form->values();
+        spec.params = st->extra; // R-135：表单不认的键原样带回（同名键由 form values 覆盖）
+        for (const auto &[k, v] : st->form->values())
+            spec.params[k] = v;
         spec.params[std::string(pp::kLosslessKey)] = sel.lossless; // 内部管道键（引擎侧）
         spec.out_bitdepth = bitdepth_of(id);
         // UX-10.1：编码档位随 spec 下发（保留键 __heif_profile）
@@ -1615,16 +1761,30 @@ struct Impl {
         FormatState *st = state_of(id);
         if (st == nullptr || st->alpha_hint == nullptr)
             return;
-        const bool show =
+        // R-066：提示分两态如实显示 —— 文案自称「已选择 libaom 后端」只在后端确为 libaom 时
+        // 出现（预设路径跳过预选后可能仍是 svt-av1，此时不能宣称已改后端，改为指向改后端）。
+        const bool combo =
             !metadata_only && batch_has_alpha && id == "avif" && bitdepth_of(id) == 10;
-        st->alpha_hint->setVisible(show);
+        const std::string backend = backend_id(id);
+        if (combo && backend == "libaom") {
+            st->alpha_hint->set_full_text(
+                PageOutput::tr("10 位 + 含 alpha：已选择 libaom 后端（SVT-AV1 不支持该组合）"));
+            st->alpha_hint->setVisible(true);
+        } else if (combo && backend == "svt-av1") {
+            st->alpha_hint->set_full_text(
+                PageOutput::tr("10 位 + 含 alpha：SVT-AV1 不支持该组合（请改用 libaom 后端）"));
+            st->alpha_hint->setVisible(true);
+        } else {
+            st->alpha_hint->setVisible(false);
+        }
     }
 
     // §9.1 [高]：**触发条件求值**（不依赖 set_batch_has_alpha 单点触发）。
     // 条件：avif ∧ batch_has_alpha ∧ 位深==10 ∧ 后端==svt-av1 ∧ 用户未手动改过后端。
+    // R-066：预设落值路径（in_preset_apply）不预选 —— 预设后端为权威值，不静默改写。
     bool evaluate_avif_alpha_preselect(const std::string &id) {
         FormatState *st = state_of(id);
-        if (st == nullptr || st->form == nullptr || user_backend_override)
+        if (st == nullptr || st->form == nullptr || user_backend_override || in_preset_apply)
             return false;
         if (!batch_has_alpha || id != "avif")
             return false;
@@ -1651,6 +1811,15 @@ struct Impl {
         param_card->setEnabled(enabled);
         // v0.2 语义（M1b §2.9）：仅元数据不做色彩转换 → 色彩目标一并禁用
         color_combo->setEnabled(enabled);
+        // R-318：禁用态给原因（"不静默灰"口径全量推广）—— 置灰区 tooltip 标明禁用原因，
+        // 复用既有说明行（pp-format-note）的语义，不静默灰。
+        {
+            const QString reason =
+                PageOutput::tr("【已禁用：仅元数据模式不做色彩转换、不改输出格式（保持原格式）】");
+            tiles_host->setToolTip(enabled ? QString() : reason);
+            param_card->setToolTip(enabled ? QString() : reason);
+            color_combo->setToolTip(enabled ? color_tip_base : reason);
+        }
         mode_note->setVisible(metadata_only);
         {
             const QSignalBlocker blocker(mode_seg);
@@ -1665,12 +1834,11 @@ struct Impl {
 
     // ------------------------------------------------------------ 模板 / 示例
 
+    // R-136/R-321/R-322（M7-R2D2）：split_by_format 的派生判据**单源** = pp::template_has_format
+    // （core/pipeline.h；含 $format 段即 true）—— 本页原「逐段比对」副本与 settings_dialog 的
+    // 复制件同批退役，CLI/GUI/持久化三处判据合一（R-145 根源之一）。
     static bool template_has_format(const QString &tmpl) {
-        const QStringList segs = tmpl.split(QLatin1Char('/'), Qt::SkipEmptyParts);
-        for (const QString &seg : segs)
-            if (seg == QLatin1String("$format"))
-                return true;
-        return false;
+        return pp::template_has_format(tmpl.toStdString());
     }
 
     void sync_split_switch(const QString &tmpl) {
@@ -1707,8 +1875,11 @@ struct Impl {
         if (!pp::validate_output_template(tmpl.toStdString(), &err)) {
             template_example->setProperty("ppInvalid", true);
             theme::repolish(template_example);
-            template_example->set_full_text(
-                PageOutput::tr("模板无效：%1").arg(QString::fromStdString(err)));
+            // R-070/273：错误分类映射中文（error_text.h 单源），原始引擎串进 tooltip
+            const std::string zh = pp::error_text_zh(err);
+            const QString shown = QString::fromStdString(zh.empty() ? err : zh);
+            template_example->set_full_text(PageOutput::tr("模板无效：%1").arg(shown));
+            template_example->setToolTip(QString::fromStdString(err)); // 原文（含动态段）
             return;
         }
         template_example->setProperty("ppInvalid", false);
@@ -1732,8 +1903,9 @@ struct Impl {
                 rel.remove(0, 2);
             samples << QStringLiteral("…/") +
                            rel; // 根目录前缀以 "…" 表示（与模板语法同族，无 <根>）
-            if (samples.size() == 2)
-                break;
+            // R-265：原"取两份样本"死码 —— 显示面只用 first + 「等 N 个输出路径」计数，
+            // 第二样本永不呈现 → 只取一份（文案/示例输出逐字不变）。
+            break;
         }
         if (selected.empty()) {
             template_example->set_full_text(PageOutput::tr("选择输出格式后显示输出路径示例"));
@@ -1764,6 +1936,18 @@ struct Impl {
         est_output->setToolTip(PageOutput::tr("每个已选文件都会为每个已选格式生成一个输出文件"));
         est_size->set_full_text(PageOutput::tr("—"));
         est_time->set_full_text(PageOutput::tr("—"));
+        if (preset_hint != nullptr)
+            preset_hint->set_full_text(input_count > 0
+                                           ? PageOutput::tr("基于选中 %1 个文件").arg(input_count)
+                                           : QString());
+    }
+
+    // R-228（M7-R2D2）：剩余磁盘 = QStorageInfo 查询（statvfs 级系统调用）**脱离逐键 textChanged**
+    // —— 打字时每字符 stat 会在网络盘上卡 GUI。输入停 400ms 后由 singleShot 定时器统一查一次；
+    // 程序化换根（set_out_root / 初值）同步查一次（单次调用）。
+    void refresh_disk() {
+        if (est_disk == nullptr)
+            return;
         const QString root = out_root_edit != nullptr ? out_root_edit->text().trimmed() : QString();
         QString disk = PageOutput::tr("—");
         QString disk_tip = PageOutput::tr("填写输出根目录后显示可用空间");
@@ -1778,10 +1962,11 @@ struct Impl {
         }
         est_disk->set_full_text(disk);
         est_disk->setToolTip(disk_tip);
-        if (preset_hint != nullptr)
-            preset_hint->set_full_text(input_count > 0
-                                           ? PageOutput::tr("基于选中 %1 个文件").arg(input_count)
-                                           : QString());
+    }
+
+    void schedule_disk_refresh() {
+        if (disk_timer != nullptr)
+            disk_timer->start(); // singleShot 400ms：输入停顿后统一查一次
     }
 
     // 修 2-25：保存/删除的可用态随"是否有当前预设"走，禁用原因写进 tooltip（不静默灰）
@@ -1884,6 +2069,7 @@ void PageOutput::set_out_root(const QString &dir) {
     impl_->out_root_edit->setText(dir);
     impl_->update_template_example();
     impl_->update_estimate();
+    impl_->refresh_disk(); // R-228：程序化换根同步查一次（非逐键路径）
     emit config_changed();
 }
 
@@ -1907,6 +2093,7 @@ void PageOutput::apply_preset(const pp::PresetData &p) {
     pp::normalize_preset(preset); // 先用当前格式表补齐
     if (!pp::validate_preset(preset).empty())
         return; // 校验失败 → 不应用，保持原状（加载失败显式报错由调用方负责，R31）
+    const std::string prev_active = impl_->active_id; // R-133：发射按「若变」约定
 
     // 已选集合 = 预设的 outputs（规范顺序）；逐项落值
     impl_->selected.clear();
@@ -1929,12 +2116,15 @@ void PageOutput::apply_preset(const pp::PresetData &p) {
         impl_->build_tab(id);
     if (!impl_->selected.empty())
         impl_->active_id = impl_->selected.front();
+    // R-066：预设落值期间抑制 avif+alpha 预选（预设后端 = 权威值，不静默改写）
+    impl_->in_preset_apply = true;
     for (const pp::OutputFormatSpec &spec : preset.outputs) {
         if (!impl_->is_selected(spec.format_id))
             continue;
         impl_->states[spec.format_id].spec = spec;
         impl_->apply_state_to_form(spec.format_id, spec);
     }
+    impl_->in_preset_apply = false;
     impl_->sync_tiles();
     impl_->sync_tab_current();
     impl_->update_format_count();
@@ -1958,7 +2148,10 @@ void PageOutput::apply_preset(const pp::PresetData &p) {
     impl_->update_estimate();
     impl_->refresh_tab_labels();
     impl_->refresh_changed_pill();
-    if (!impl_->selected.empty())
+    // R-133：发射按 docs/m1b-tasks.md:535「若变」约定 —— 现役格式真变了才发（原无条件发射）。
+    // 消费方现状：全仓零 connect（孤儿信号）；接线归主窗（跨界，见 handoff 跨界需求），
+    // 本信号属冻结面不可删（加性面维持，发射语义收口）。
+    if (!impl_->selected.empty() && impl_->active_id != prev_active)
         emit format_changed(QString::fromStdString(impl_->active_id));
     emit config_changed();
 }
@@ -2005,8 +2198,11 @@ QString PageOutput::ready_to_start() const {
     // §4.2（复核项 10）：非法路径模板必须在 ready_to_start 硬阻断（未知符号 / .. / 绝对路径）
     {
         std::string tmpl_err;
-        if (!pp::validate_output_template(impl_->template_text().toStdString(), &tmpl_err))
-            return QString::fromStdString(tmpl_err);
+        if (!pp::validate_output_template(impl_->template_text().toStdString(), &tmpl_err)) {
+            // R-070/273：模板预检错误走中文映射单源（未命中回退引擎原文，不编造文案）
+            const std::string zh = pp::error_text_zh(tmpl_err);
+            return QString::fromStdString(zh.empty() ? tmpl_err : zh);
+        }
         if (impl_->template_text().trimmed().isEmpty())
             return tr("路径模板不能为空");
     }
@@ -2026,7 +2222,15 @@ void PageOutput::select_format(const QString &format_id) {
     if (pp::find_format(id) == nullptr)
         return;
     // 冒烟/走查钩子：收敛为单选并激活该页签（多选走磁贴点击）
-    QSignalBlocker blocker(impl_->tiles[static_cast<std::size_t>(Impl::tile_index(id))]);
+    // R-226：tiles[] 潜伏越界防御 —— tile_index() 对 UI 表外 id 返回 kFormatCount，旧代码
+    // tiles[tile_index(id)] 直接越界读（kFormats 与 core 格式表两表分裂即 UB）。现 tiles[]
+    // 不再按下标取（R-265：原 QSignalBlocker 本就冗余 —— 置值只发生在 sync_tiles 的自阻断内），
+    // 表外 id 继续走通用路径；断言锚点：UI 表外 id 不得进入磁贴下标路径。
+    {
+        const int tile = Impl::tile_index(id);
+        Q_ASSERT(tile >= 0 && tile < kFormatCount);
+        (void)tile;
+    }
     for (const FormatEntry &e : kFormats) {
         if (e.id != id && impl_->is_selected(e.id))
             impl_->toggle_format(e.id, false, /*user=*/false);

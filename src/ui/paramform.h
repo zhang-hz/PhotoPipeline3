@@ -51,6 +51,14 @@ public:
     // ---- PP-FROZEN(0.3.0) 追加面（M5-T8）----
     void set_tokens(const theme::Tokens &tokens); // 主题令牌（自绘控件/图标/折叠区颜色）
 
+    // ---- PP-FROZEN 加性追加（M7-R2D2；裁定登记 build/m7r2-d2/handoff.md）----
+    // UX-10.1 档位 → 色度限幅（docs/ux-review-14.md §10.1-2）：把 `key` 枚举行的可选项收窄到
+    // `allowed`（按 ParamValue 取值），其余项**置灰 + 禁用原因 tooltip**（不静默改写当前选择，
+    // 不一致由调用方按 heif_profile_compatible 报中文错误）；`allowed` 为空 = 清除限幅（全可选）。
+    // 值变化仍走 changed()；本接口只动视图（不发信号、不改工作集）。
+    void limit_enum_choices(const std::string &key, const std::vector<int64_t> &allowed,
+                            const QString &disabled_reason);
+
 signals:
     void selection_changed(const pp::ui::FormSelection &sel); // user action only
     void changed();                                           // any value/selection change

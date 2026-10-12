@@ -96,7 +96,10 @@ void bind_close_button(const TitleBar &bar, QDialog *dialog);
 // 下划线页签（§7.4 / tokens.css .dlg-tabs）：段 = QAbstractButton（键盘可达、角色 = button
 // group），选中段 2px accent 下划线 + 通栏 hairline 基线；**不用 QTabWidget**（修 4-05：
 // 无障碍树重复 Tab 节点；页签序由 texts() 逐字取证）。
-class UnderlineTabs : public QWidget {
+// UX-12 残余（M7-R2D2）：实现 theme::Tokenized —— theme::replay_tokens 的单点重放可直达本件
+// （主题切换槽调 replay_tokens(this) 时页签标题/基线色随令牌换档；亮色档标题取亮 text/text2，
+// 修复「亮色下选中标题画暗色近乎不可见」的重放缺口）。
+class UnderlineTabs : public QWidget, public theme::Tokenized {
     Q_OBJECT
 public:
     explicit UnderlineTabs(QWidget *parent = nullptr);
@@ -106,7 +109,7 @@ public:
     int current_index() const;
     QStringList texts() const;        // 页签序（逐字；探针取证）
     QWidget *tab_at(int index) const; // 段控件（探针读 accessibleName/几何用）
-    void set_tokens(const theme::Tokens &t);
+    void set_tokens(const theme::Tokens &t) override;
 
     QSize sizeHint() const override;
 
@@ -133,11 +136,12 @@ private:
 
 // 焦点环（§11）：跟随宿主的焦点控件，在其外 2px 自绘 accent 1px 圆角描边。
 // 系统虚线框由 dialog_qss 的 `outline: none` 关闭（一处规则）；本件只负责"画在哪"。
-class FocusRing : public QWidget {
+// UX-12 举一反三（M7-R2D2）：同 UnderlineTabs —— 实现 theme::Tokenized，主题重放单点可达。
+class FocusRing : public QWidget, public theme::Tokenized {
 public:
     explicit FocusRing(QWidget *host); // host = 顶层弹窗
 
-    void set_tokens(const theme::Tokens &t);
+    void set_tokens(const theme::Tokens &t) override;
     QColor pen_color() const { return tokens_.accent; } // 探针：描边色 = 令牌 accent
     QWidget *target() const { return target_; }
     QRect target_rect() const; // 焦点控件在宿主坐标下的盒（探针复核环位 = 盒外 2px）

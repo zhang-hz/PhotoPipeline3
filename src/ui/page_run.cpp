@@ -58,8 +58,9 @@
 // 不含私有成员（§2.13）。本文件无 Q_OBJECT 类（行内控件不发信号），故不含 *.moc 包含
 // （与 page_meta.cpp / page_output.cpp 同口径）。
 #include "ui/page_run.h"
-#include "ui/contextmenu.h" // UX-1：公共右键菜单件（一卡一 actions 构造函数）
-#include "ui/term_words.h"  // R-139：终态词表 term_words 单源（列表/运行页/状态栏共用一张）
+#include "core/error_text.h" // R-070/273：失败原因行中文映射单源（M7-R2B；本包接线）
+#include "ui/contextmenu.h"  // UX-1：公共右键菜单件（一卡一 actions 构造函数）
+#include "ui/term_words.h"   // R-139：终态词表 term_words 单源（列表/运行页/状态栏共用一张）
 
 #include <algorithm>
 #include <cmath>
@@ -481,6 +482,7 @@ struct RunState {
     ElidedLabel *budget = nullptr;     // 线程预算
     ElidedLabel *tally = nullptr;      // 汇总（成功/异常/失败/跳过/取消）
     ElidedLabel *memory = nullptr;     // 峰值内存
+    ElidedLabel *threads = nullptr;    // 峰值线程（R-078：threads_total_est 估算口径）
     QPushButton *open_logs = nullptr;
     QPushButton *open_output = nullptr;
     QPushButton *cancel = nullptr;
@@ -524,6 +526,7 @@ struct RunState {
     bool has_summary = false;
     double summary_total_ms = 0.0, summary_mb_s = 0.0, summary_avg_ms = 0.0;
     quint64 summary_peak_bytes = 0; // A29：RunSummary::peak_bytes（像素预算峰值，单源）
+    int summary_threads_est = 0;    // R-078：RunSummary::threads_total_est（峰值活跃线程估算）
 };
 
 QHash<const PageRun *, RunState *> &registry() {
@@ -1029,11 +1032,17 @@ void render_out_row(RunState &s, FileRow &file, int index) {
     // 失败行：下方「└ 原因：…」行（§7.3 逐字）
     const bool failed = out.kind == OutKind::Failed;
     if (failed) {
+        // R-070/273：错误分类映射中文（core/error_text.h 单源，R2B 备表）；未命中回退引擎原文
+        // （不编造文案），原始串进 tooltip（分类中文 + 原文进 tooltip/日志口径）。
+        const std::string err = out.error.toStdString();
+        const std::string zh = err.empty() ? std::string() : pp::error_text_zh(err);
+        const QString shown = QString::fromStdString(zh.empty() ? err : zh);
         const QString text =
-            PageRun::tr("└ 原因：%1").arg(out.error.isEmpty() ? PageRun::tr("未报告") : out.error);
+            PageRun::tr("└ 原因：%1").arg(shown.isEmpty() ? PageRun::tr("未报告") : shown);
         if (out.applied_reason != text) {
             out.applied_reason = text;
             out.reason->set_full_text(text);
+            out.reason->setToolTip(err.empty() ? text : QString::fromStdString(err));
         }
     }
     if (out.reason_shown != failed) {
@@ -1143,13 +1152,18 @@ void refresh_widgets(RunState &s) {
     s.workers->set_full_text(s.running || s.finished
                                  ? PageRun::tr("%1 / %2").arg(inflight).arg(pool)
                                  : QStringLiteral("—"));
-    // §8.2 的分配读数（实现细节）进 tooltip（修 3-05；§2.6：实现细节进 tooltip）
+    // §8.2 的分配读数（实现细节）进 tooltip（修 3-05；§2.6：实现细节进 tooltip）。
+    // R-065/R-237（M7-R2D2 文案统一）：并行上限与「线程预算」的耦合如实写明 —— workers=自动时
+    // 并行数按线程预算与逻辑核数自适应，不是独立常量。
     if (!s.running || s.files.isEmpty()) {
-        s.workers->setToolTip(PageRun::tr("正在处理的文件数 / 可并行上限"));
+        s.workers->setToolTip(
+            PageRun::tr("正在处理的文件数 / 可并行上限\n"
+                        "并行上限随「线程预算」联动（并行=自动时按线程预算与逻辑核数折算）"));
     } else {
         const pp::Alloc alloc = pp::alloc_threads(budget, remaining, inflight);
         s.workers->setToolTip(
-            PageRun::tr("正在处理的文件数 / 可并行上限\n当前分配：%1 文件并行 + %2 编码多线程")
+            PageRun::tr("正在处理的文件数 / 可并行上限\n当前分配：%1 文件并行 + %2 编码多线程"
+                        "\n并行上限随「线程预算」联动（并行=自动时按线程预算与逻辑核数折算）")
                 .arg(alloc.files)
                 .arg(alloc.encode_threads));
     }
@@ -1163,10 +1177,15 @@ void refresh_widgets(RunState &s) {
     // 线程预算读数（W-R-T13 / A39 ①；修 4-12「同一设置跨界面同名同词」）：自动档的值 = 设置
     // 弹窗同词「自动」（settings·运行页签的「线程预算」下拉首项 + 行注「0 = 自动」）→ 运行页
     // 值形如「自动（16 核）」；旧「自适应（16 核）」措辞作废（review 3-04 的同值不同说）。
+    // R-065/R-237（M7-R2D2）：语义改实 —— T 是**总活跃线程上限**（含编码器内部线程，§8.2），
+    // 不是"核心数上限"；值文案与「自动 = 按本机核心数」字样为 ui_smoke run-overview 探针
+    // 逐字钉住（不动），语义句并入 tooltip。
     s.budget->set_full_text(s.plan.thread_budget > 0
                                 ? PageRun::tr("固定 %1 核").arg(s.plan.thread_budget)
                                 : PageRun::tr("自动（%1 核）").arg(hardware_threads()));
-    s.budget->setToolTip(PageRun::tr("编码可用的处理器核心数上限；自动 = 按本机核心数"));
+    s.budget->setToolTip(
+        PageRun::tr("总活跃线程上限 T（§8.2，含编码器内部线程；worker+编码线程峰值可到 2W）；"
+                    "自动 = 按本机核心数"));
     s.tally->set_full_text(tally_text(tally));
     s.tally->setToolTip(PageRun::tr("按输出计：成功 / 0 字节异常 / 失败 / 跳过 / 取消"));
     // 峰值内存（A29：解冻加性字段 RunSummary::peak_bytes → 接**真实读数**；与引擎
@@ -1174,6 +1193,15 @@ void refresh_widgets(RunState &s) {
     s.memory->set_full_text(s.has_summary ? fmt_mem_bytes(s.summary_peak_bytes)
                                           : QStringLiteral("—"));
     s.memory->setToolTip(PageRun::tr("本次运行的像素预算峰值（解码/合成期的最大并发占用）"));
+    // 峰值线程（R-078）：RunSummary::threads_total_est = peak_active_files +
+    // peak_sum_encode_threads（估算口径；SynthPump/x265 库内池不入账）；未采集显「—」
+    if (s.threads != nullptr) {
+        s.threads->set_full_text(s.has_summary ? QString::number(s.summary_threads_est)
+                                               : QStringLiteral("—"));
+        s.threads->setToolTip(
+            PageRun::tr("本次运行的峰值活跃线程估算（worker 主线程 + 编码器内部线程的实测峰值之和；"
+                        "SynthPump 采样线程与 x265 库内线程池不入账 —— 估算口径）"));
+    }
 
     // ---- 总览：状态胶囊（§8 四档；完成态唯一形态 = 绿胶囊「已完成」）----
     StatusText pill;
@@ -1285,42 +1313,9 @@ void attach_card_menu(QWidget *host, const std::function<std::vector<contextmenu
                      });
 }
 
-QFrame *make_card(QWidget *parent, const QString &title) {
-    auto *card = new QFrame(parent);
-    card->setObjectName(QStringLiteral("pp-card")); // theme 骨架 QSS：QFrame#pp-card
-    auto *v = new QVBoxLayout(card);
-    v->setContentsMargins(0, 0, 0, 0);
-    v->setSpacing(0);
-    auto *head = new QWidget(card);
-    auto *h = new QHBoxLayout(head);
-    h->setContentsMargins(12, 9, 12, 7);
-    h->setSpacing(8);
-    auto *title_label = new QLabel(title, head);
-    title_label->setObjectName(QStringLiteral("pp-card-title"));
-    title_label->setFont(
-        theme::font(theme::Typography::card_title_px, theme::Typography::card_title_weight));
-    h->addWidget(title_label);
-    v->addWidget(head);
-    return card;
-}
-
-// 卡头行布局（标题已在 make_card；这里接着挂胶囊与右置 hint）
-QHBoxLayout *card_head(QFrame *card) {
-    auto *head = qobject_cast<QWidget *>(card->layout()->itemAt(0)->widget());
-    return head != nullptr ? qobject_cast<QHBoxLayout *>(head->layout()) : nullptr;
-}
-
-// 卡体（R1：上内边距 10 / 下 12；行 pitch 28 由 formkit 承担）
-QWidget *make_card_body(QFrame *card) {
-    auto *v = qobject_cast<QVBoxLayout *>(card->layout());
-    auto *body = new QWidget(card);
-    auto *body_v = new QVBoxLayout(body);
-    body_v->setContentsMargins(theme::Metrics::card_pad_x, theme::Metrics::card_pad_top,
-                               theme::Metrics::card_pad_x, theme::Metrics::card_pad_bottom);
-    body_v->setSpacing(0);
-    v->addWidget(body);
-    return body;
-}
+// R-021/R-053 余量（M7-R2D2）：卡壳/卡头/卡体**单源** = formkit::make_card（本文件原
+// make_card / card_head / make_card_body 三件套自拷删除；几何逐值等价 —— 卡头 12,9,12,7 +
+// 间距 8、卡体 12,10,12,12，均走 formkit_layout 常量）。调用点各持一份 CardParts。
 
 // 数值列（§4.2 数值档：右对齐 + tabular）
 ElidedLabel *make_num_cell(QWidget *parent, const QString &object_name, int width) {
@@ -1459,21 +1454,17 @@ QWidget *make_table_head(QWidget *parent) {
 
 // 总览卡（§7.3 第一行：进度合成条 ｜ kv 八项 ｜ 操作行 + 摘要句）
 void build_overview_card(QWidget *parent, RunState *s) {
-    s->overview = make_card(parent, PageRun::tr("运行总览"));
-    QHBoxLayout *head = card_head(s->overview);
-    s->state_pill = new fk::PillBadge(s->overview);
-    s->state_pill->setObjectName(QStringLiteral("pp-run-state-pill"));
+    const formkit::CardParts parts =
+        formkit::make_card(parent, PageRun::tr("运行总览"), QStringLiteral("pp-run-state-pill"),
+                           QStringLiteral("pp-run-progress-hint"));
+    s->overview = parts.frame;
+    s->state_pill = parts.pill_badge();
+    s->state_pill->setVisible(true); // card_header 初值隐藏（有内容才画）；状态胶囊常驻
     s->state_pill->set_tokens(s->tokens);
     s->state_pill->setText(PageRun::tr("就绪"));
-    head->addWidget(s->state_pill);
-    head->addStretch(1);
-    s->progress_hint = new ElidedLabel(s->overview);
-    s->progress_hint->setObjectName(QStringLiteral("pp-run-progress-hint"));
-    s->progress_hint->setFont(theme::font(theme::Typography::hint_px, 500));
-    s->progress_hint->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    head->addWidget(s->progress_hint, 1);
+    s->progress_hint = parts.hint_label();
 
-    QWidget *body = make_card_body(s->overview);
+    QWidget *body = parts.body;
     auto *body_v = qobject_cast<QVBoxLayout *>(body->layout());
 
     // 行 1：进度（R2 单列行：标签轨 + 轨内 = 合成条 + 百分比读数）
@@ -1542,6 +1533,22 @@ void build_overview_card(QWidget *parent, RunState *s) {
             body_v->addWidget(row.row);
             *line.left.out = static_cast<ElidedLabel *>(left.field);
             *line.right.out = static_cast<ElidedLabel *>(right.field);
+        }
+        // R-078（M7-R2D2）：峰值线程读数行 —— 消费 RunSummary::threads_total_est（WP8 加性
+        // 字段）；未结束/未采集显「—」不编数（M5-A24 口径），估算口径进 tooltip。
+        {
+            auto *value = new ElidedLabel(body);
+            value->setObjectName(QStringLiteral("pp-run-threads"));
+            value->setFont(
+                theme::font(theme::Typography::body_px, QFont::Normal, /*tabular=*/true));
+            value->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+            value->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkValue));
+            value->setText(QStringLiteral("—"));
+            s->threads = value;
+            const fk::Row row =
+                fk::frow(body, PageRun::tr("峰值线程"), value, fk::FieldWidth::Flex);
+            row.row->setObjectName(QStringLiteral("pp-run-threads-row"));
+            body_v->addWidget(row.row);
         }
     }
 
@@ -1615,17 +1622,13 @@ void build_overview_card(QWidget *parent, RunState *s) {
 
 // 任务进度卡（§7.3 第二行：表头 + 分组行 + 逐输出行 + 失败原因行）
 void build_tasks_card(QWidget *parent, RunState *s) {
-    s->tasks = make_card(parent, PageRun::tr("任务进度"));
-    QHBoxLayout *head = card_head(s->tasks);
-    head->addStretch(1);
-    s->tasks_hint = new ElidedLabel(s->tasks);
-    s->tasks_hint->setObjectName(QStringLiteral("pp-run-tasks-hint"));
-    s->tasks_hint->setFont(theme::font(theme::Typography::hint_px, 500));
-    s->tasks_hint->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    const formkit::CardParts parts = formkit::make_card(parent, PageRun::tr("任务进度"), QString(),
+                                                        QStringLiteral("pp-run-tasks-hint"));
+    s->tasks = parts.frame;
+    s->tasks_hint = parts.hint_label();
     s->tasks_hint->set_full_text(PageRun::tr("实心=已写盘 · 斜纹=合成中")); // mockup 逐字
-    head->addWidget(s->tasks_hint, 1);
 
-    QWidget *body = make_card_body(s->tasks);
+    QWidget *body = parts.body;
     auto *body_v = qobject_cast<QVBoxLayout *>(body->layout());
     s->table_head = make_table_head(body);
     body_v->addWidget(s->table_head);
@@ -1645,15 +1648,12 @@ void build_tasks_card(QWidget *parent, RunState *s) {
 
 // 日志尾卡（§7.3 第三行：等宽 4 行 + 查看完整日志…；卡头右置 = 日志名 + 文字链）
 void build_logs_card(QWidget *parent, RunState *s) {
-    s->logs = make_card(parent, PageRun::tr("日志尾"));
-    QHBoxLayout *head = card_head(s->logs);
-    head->addStretch(1);
-    s->log_name = new ElidedLabel(s->logs);
-    s->log_name->setObjectName(QStringLiteral("pp-run-log-name"));
-    s->log_name->setFont(theme::font(theme::Typography::hint_px, 500));
-    s->log_name->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    const formkit::CardParts parts = formkit::make_card(parent, PageRun::tr("日志尾"), QString(),
+                                                        QStringLiteral("pp-run-log-name"));
+    s->logs = parts.frame;
+    s->log_name = parts.hint_label();
     s->log_name->setProperty(kRunLabelProperty, QString::fromLatin1(kRunHead));
-    head->addWidget(s->log_name, 1);
+    QHBoxLayout *head = qobject_cast<QHBoxLayout *>(parts.head->layout());
     s->open_full_log = new QPushButton(PageRun::tr("查看完整日志…"), s->logs);
     s->open_full_log->setObjectName(QStringLiteral("pp-run-open-full-log"));
     s->open_full_log->setProperty(kFieldProperty, QStringLiteral("link"));
@@ -1664,7 +1664,7 @@ void build_logs_card(QWidget *parent, RunState *s) {
     s->open_full_log->setToolTip(PageRun::tr("在文件管理器中打开日志文件"));
     head->addWidget(s->open_full_log);
 
-    QWidget *body = make_card_body(s->logs);
+    QWidget *body = parts.body;
     auto *body_v = qobject_cast<QVBoxLayout *>(body->layout());
     auto *box = new QFrame(body);
     box->setObjectName(QStringLiteral("pp-run-log-box"));
@@ -1780,6 +1780,11 @@ PageRun::PageRun(QWidget *parent) : QWidget(parent) {
     v->addWidget(s->tasks);
     v->addWidget(s->logs);
     v->addStretch(1);
+    // UX-11（M7-R2D2）：卡片防压缩 —— 滚动区(widgetResizable) 把 Preferred 件压向
+    // minimumSizeHint；三卡按当前内容 sizeHint 钉下限，滚动条只在卡片整体超出时出现。
+    formkit::lock_card_size(s->overview);
+    formkit::lock_card_size(s->tasks);
+    formkit::lock_card_size(s->logs);
 
     // ---- UX-1（M7-WP6）：三张卡各一个右键菜单（公共件 = ui/contextmenu）----
     attach_card_menu(s->overview, [this, s] {
@@ -2008,7 +2013,8 @@ void PageRun::end_run(const pp::RunSummary &sum, const QString &out_root) {
     s->summary_total_ms = sum.total_ms;
     s->summary_mb_s = sum.throughput_mb_s;
     s->summary_avg_ms = sum.avg_file_ms;
-    s->summary_peak_bytes = sum.peak_bytes; // A29（加性字段；M4 前恒 0 → 读数「—」）
+    s->summary_peak_bytes = sum.peak_bytes;         // A29（加性字段；M4 前恒 0 → 读数「—」）
+    s->summary_threads_est = sum.threads_total_est; // R-078（WP8 加性字段；估算口径见 tooltip）
     if (sum.cancelled > 0)
         s->cancel_requested = true;
     // 防御性收尾：未收到终态事件的行按结果定稿（正常路径调度器对每文件恰好发一次终态）
@@ -2071,6 +2077,7 @@ void PageRun::reset() {
     s->summary_mb_s = 0.0;
     s->summary_avg_ms = 0.0;
     s->summary_peak_bytes = 0;
+    s->summary_threads_est = 0;
     for (FileRow &file : s->files) {
         delete file.group;
         for (OutRow &out : file.outs) {

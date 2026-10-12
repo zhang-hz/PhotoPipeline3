@@ -5886,18 +5886,20 @@ void MainWindow::Impl::smoke_probe_output_geometry() {
                    .arg(search != nullptr ? search->placeholderText() : QString()));
         groups_jxl = groups;
         expect("advanced-groups", groups >= 3, QStringLiteral("groups=%1").arg(groups));
-        // 组内数值 = 短 88（2-33）；组内外标签列同轴（2-32）
+        // 组内数值 = 标准 160（UX-8 §8-3：折叠区数值行宽与核心区一致，「折叠 = 88」第二档废除；
+        // M7-R2-A 换锚 kFieldShort→kFieldStd，断言语义不变 = "折叠区数值控件宽 == 约定字段宽档"）
+        // ；组内外标签列同轴（2-32）
         int adv_spins = 0;
         int adv_bad = 0;
         if (host != nullptr) {
             for (QSpinBox *spin : host->findChildren<QSpinBox *>()) {
                 ++adv_spins;
-                if (spin->width() != formkit::kFieldShort)
+                if (spin->width() != formkit::kFieldStd)
                     ++adv_bad;
             }
             for (QDoubleSpinBox *spin : host->findChildren<QDoubleSpinBox *>()) {
                 ++adv_spins;
-                if (spin->width() != formkit::kFieldShort)
+                if (spin->width() != formkit::kFieldStd)
                     ++adv_bad;
             }
         }
@@ -5905,7 +5907,7 @@ void MainWindow::Impl::smoke_probe_output_geometry() {
                QStringLiteral("spins=%1 bad=%2 want=%3")
                    .arg(adv_spins)
                    .arg(adv_bad)
-                   .arg(formkit::kFieldShort));
+                   .arg(formkit::kFieldStd));
         expect("label-axis",
                row_label_x(QStringLiteral("pp-param-row-effort")) >= 0 &&
                    row_label_x(QStringLiteral("pp-param-row-effort")) ==

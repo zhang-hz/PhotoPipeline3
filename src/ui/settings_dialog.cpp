@@ -54,12 +54,15 @@
 
 #include <algorithm>
 #include <cmath>
+#include <fstream>
 #include <functional>
 #include <utility>
 
 #include "core/logger.h"
 #include "core/version.h"
+#include "mapwidget/layers.h"   // R-137：map_style 词表单源（tile_style_name）
 #include "platform/frameless.h" // 无边框接线（拖拽/八向缩放；与主窗同一机制）
+#include "platform/paths.h"     // R-072：settings_file() 读写自检
 #include "ui/formkit.h"
 #include "ui/icons.h"
 #include "ui/theme.h"
@@ -180,14 +183,19 @@ QString theme_mode_id(int index) { return QLatin1String(kThemeModeIds[std::clamp
 
 // —— M6-T11（C6/§5.2）：图层三档的词表 ↔ 下拉项序单源映射（段序/项序 = 矢量 / 卫星 / 混合；
 //    落盘值 = AppSettings.map_style 词表 road|satellite|hybrid，与 GPS 卡图层 Seg 的三态同序）——
-constexpr const char *kMapStyleIds[] = {"road", "satellite", "hybrid"};
+// R-137（M7-R2D2）：词表**单源** = mapwidget/layers.h 的 tile_style_name —— 本文件不再拼写
+// "road"/"satellite"/"hybrid" 字面量（原四处并存靠注释维系同序；settings.cpp / mainwindow.cpp
+// 的副本属跨界，见 handoff）。本映射只负责 UI 段序。
+const QStringList &map_style_ids() {
+    static const QStringList ids = {pp::map::tile_style_name(pp::map::TileStyle::Road),
+                                    pp::map::tile_style_name(pp::map::TileStyle::Satellite),
+                                    pp::map::tile_style_name(pp::map::TileStyle::Hybrid)};
+    return ids;
+}
 
 int map_style_index(const QString &id) {
-    for (int i = 0; i < 3; ++i) {
-        if (id == QLatin1String(kMapStyleIds[i]))
-            return i;
-    }
-    return 0; // 词表外/空 → 矢量（与 core 的"值不合法 → 保留默认"同口径）
+    const int idx = map_style_ids().indexOf(id);
+    return idx >= 0 ? idx : 0; // 词表外/空 → 矢量（与 core 的"值不合法 → 保留默认"同口径）
 }
 
 // —— 滑杆 ↔ 灰度（§7.4 alpha 行；修 4-15：旧实现把"滑杆值"直接当灰度用，最右端（白）
@@ -242,6 +250,43 @@ pp::AppSettings original_values(const QObject *o) {
     s.map_style = o->property(kOrigMapStyle).toString().toStdString();
     s.map_sat_labels = o->property(kOrigMapSatLabels).toBool();
     return s;
+}
+
+// R-072（M7-R2D2）：settings.ini 自检（读/写/损坏）—— 返回**问题描述**（空 = 无问题）。
+// 读 = 打开即读逐行数坏行（非注释且无 '=' 的行按 split_line 同判据）；写 = 以 append 方式
+// 探测可写性（不写一字节、不改 mtime 语义面以外的内容）。文件不存在 = 首次运行，无问题。
+QString settings_io_problem() {
+    const std::filesystem::path file = pp::platform::settings_file();
+    if (file.empty())
+        return QString(); // 无可用目录（platform 口径）：加载/落盘各有回退，不在此提示
+    std::error_code ec;
+    if (!std::filesystem::exists(file, ec))
+        return QString();
+    int bad_lines = 0;
+    {
+        std::ifstream in(file, std::ios::binary);
+        if (!in)
+            return T("设置文件无法读取：本次以默认值运行（%1）")
+                .arg(QString::fromStdString(file.string()));
+        std::string line;
+        while (std::getline(in, line)) {
+            const std::string t = line.substr(0, line.find_last_not_of(" \t\r\n") + 1);
+            const std::string head = t.substr(t.find_first_not_of(" \t"));
+            if (head.empty() || head[0] == '#')
+                continue;
+            if (head.find('=') == std::string::npos)
+                ++bad_lines;
+        }
+    }
+    {
+        std::ofstream out(file, std::ios::app | std::ios::binary);
+        if (!out)
+            return T("设置文件只读：本次修改将不会保存（%1）")
+                .arg(QString::fromStdString(file.string()));
+    }
+    if (bad_lines > 0)
+        return T("设置文件有 %1 行无法解析（已忽略，其余正常读取）").arg(bad_lines);
+    return QString();
 }
 
 // —— 弹窗套件的局部实现件（dialogkit 的公开面见 ui/settings_dialog.h）——
@@ -1186,12 +1231,16 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
             structure->setCurrentIndex(idx);
         }
         // 长文本字段（模板串）→ R2 长档 flex（160 档会吞掉模板串）
+        // R-138（M7-R2D2）：生效时机**标注** —— 本项只在下次启动生效（accept 只落主题/日志/
+        // 地图，消费点在启动期装配），与主题/地图的"即时生效"不同，如实写明（不冒充即时）。
         const QString structure_tip =
             T("新建批次的输出目录结构默认值（§4.2 路径模板；可在输出页逐批次改）。\n"
-              "$format = 格式目录名，$dir = 源相对目录，$file = 文件名.新扩展名");
+              "$format = 格式目录名，$dir = 源相对目录，$file = 文件名.新扩展名\n"
+              "生效时机：下次启动生效（已在进行/已建的批次不受影响）");
         structure->setToolTip(structure_tip);
         const formkit::Row structure_row =
-            formkit::frow(page_out, T("分文件夹默认结构"), structure, formkit::FieldWidth::Flex);
+            formkit::frow(page_out, T("分文件夹默认结构"), structure, formkit::FieldWidth::Flex,
+                          QString(), T("下次启动生效"));
         bind_row(structure_row, structure);
         v->addWidget(structure_row.row);
         v->addStretch(1);
@@ -1330,9 +1379,9 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
         layer_spec.accessible = T("图层");
         layer_spec.tooltip = T("地图图层：矢量路网 / 卫星影像 / 混合（影像 + 标注）");
         auto *layer = formkit::combo_box(page_map, layer_spec);
-        layer->addItem(T("矢量"), QLatin1String(kMapStyleIds[0]));
-        layer->addItem(T("卫星"), QLatin1String(kMapStyleIds[1]));
-        layer->addItem(T("混合"), QLatin1String(kMapStyleIds[2]));
+        layer->addItem(T("矢量"), map_style_ids().at(0)); // R-137：id 走 layers.h 单源词表
+        layer->addItem(T("卫星"), map_style_ids().at(1));
+        layer->addItem(T("混合"), map_style_ids().at(2));
         layer->setCurrentIndex(map_style_index(QString::fromStdString(current.map_style)));
         const formkit::Row layer_row =
             formkit::frow(page_map, T("图层"), layer, formkit::FieldWidth::Standard);
@@ -1357,7 +1406,11 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
         amap_key->setPlaceholderText(T("在高德开放平台申请"));
         amap_key->setFont(theme::font(theme::Typography::body_px));
         hook_field(amap_key, dk::kFieldInput);
-        amap_key->setToolTip(T("高德 Web 服务 Key（不回显明文）"));
+        // R-077 余量（M7-R2D2）：空 Key 的**引导文案**（请求预检已在地图侧 a6e29f6 落地）——
+        // 填写处直接指向后果与去处，不再让用户撞原始错误码。
+        amap_key->setToolTip(T("高德 Web 服务 Key（不回显明文）。留空时高德底图/搜索不可用，"
+                               "地图页会提示「未配置高德 Key，请到 设置›地图 填写」；"
+                               "可先用内置 OpenStreetMap"));
         const formkit::Row key_row =
             formkit::frow(page_map, T("高德 Web 服务 Key"), amap_key, formkit::FieldWidth::Flex);
         bind_row(key_row, amap_key);
@@ -1476,6 +1529,19 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
     auto *ok_btn = dk::make_button(footer, T("确定"), /*primary=*/true);
     ok_btn->setObjectName(QLatin1String(dk::kOkName));
     ok_btn->setDefault(true);
+    // R-072（M7-R2D2）：settings.ini 读/写/损坏失败的**非阻塞提示**（读失败回默认、写失败
+    // 丢改动全程静默是 deep-review R-072）—— 打开设置即自检一次，命中才显示这条底栏提示，
+    // 不阻塞任何操作；未命中不显示（未发生的量不显示）。
+    {
+        auto *io_hint = new formkit::ElidedLabel(footer);
+        io_hint->setObjectName(QStringLiteral("pp-dlg-io-hint"));
+        io_hint->setProperty(dk::kFieldProperty, QString::fromLatin1(theme::kFkWarn));
+        io_hint->setFont(theme::font(theme::Typography::hint_px));
+        const QString io_problem = settings_io_problem();
+        io_hint->set_full_text(io_problem);
+        io_hint->setVisible(!io_problem.isEmpty());
+        footer_line->addWidget(io_hint);
+    }
     footer_line->addWidget(defaults_btn);
     footer_line->addStretch(1);
     footer_line->addWidget(cancel_btn);
@@ -1562,6 +1628,22 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
                                  findChild<QPushButton *>(QStringLiteral("pp-dlg-close"))},
                     t);
             });
+
+    // R-249（M7-R2D2）：主题"选后立即生效"但取消必须**回滚** —— 上面的切换槽即时写了
+    // env（PP_UI_THEME）与进程级持久化档（theme::set_persisted_theme_mode），取消不回滚会
+    // 让 env/static/ini 三方分裂、下次「确定」把被取消的选择永久写入。非确定路径（取消 /
+    // 关闭 / Esc）→ 回滚到构造快照档（kOrigUiThemeMode）。
+    connect(this, &QDialog::finished, this, [this](int result) {
+        if (result == QDialog::Accepted)
+            return;
+        const QString orig = property(kOrigUiThemeMode).toString();
+        const QString id = orig.isEmpty() ? QStringLiteral("system") : orig;
+        if (id == QLatin1String("light") || id == QLatin1String("dark"))
+            qputenv("PP_UI_THEME", id.toLatin1());
+        else
+            qunsetenv("PP_UI_THEME"); // 跟随系统：撤掉强制档
+        theme::set_persisted_theme_mode(id.toLatin1());
+    });
 
     // §11：自绘焦点环（accent 1px；系统虚线框由 dialog_qss 的 outline:none 关闭）
     auto *ring = new dk::FocusRing(this);

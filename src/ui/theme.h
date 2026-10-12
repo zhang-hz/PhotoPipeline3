@@ -238,6 +238,24 @@ struct Metrics {
     // R-270 点名的「combo 26 vs 24」两值漂移（padding-right 26 硬编码 vs 箭头位 24
     // 计算值）随本行归一。
     static constexpr int combo_arrow_slot = combo_arrow_px * 2 + 8;
+    // ---- 菜单项 / 页签内距（R-270 余量：QSS 内联魔法值一律走本表，不再在规则里写字面量）----
+    // QMenu{padding:4px 2px} / QMenu::item{padding:5px 24px 5px 12px} / separator{margin:4px 10px}
+    // / indicator{16×16}；QTabBar::tab{padding:5px 12px 6px; margin-right:2px}（页签下划线 2px =
+    // dialogkit::kTabUnderlinePx 同值，弹窗页签档在 dialogkit 自有常量，两处取值各自成因）。
+    static constexpr int menu_frame_pad_y = 4;
+    static constexpr int menu_frame_pad_x = 2;
+    static constexpr int menu_item_pad_top = 5;
+    static constexpr int menu_item_pad_right = 24;
+    static constexpr int menu_item_pad_bottom = 5;
+    static constexpr int menu_item_pad_left = 12;
+    static constexpr int menu_sep_margin_y = 4;
+    static constexpr int menu_sep_margin_x = 10;
+    static constexpr int menu_indicator_px = 16;
+    static constexpr int tab_pad_top = 5;
+    static constexpr int tab_pad_x = 12;
+    static constexpr int tab_pad_bottom = 6;
+    static constexpr int tab_gap = 2;
+    static constexpr int tab_underline_px = 2;
     // ---- 滚动条（UX-11：SPA 式细浮层 —— 轨道透明、滑块 6px、悬停加宽 8px；两主题一套、
     // 弹窗与主窗一套，见 theme::scrollbar_qss）----
     static constexpr int scroll_w = 6;           // 滑块/滚动条宽 6px（原 10px 实心轨退役）
@@ -706,6 +724,10 @@ inline constexpr const char *kFkLinkDanger =
 inline constexpr const char *kFkFold = "fold"; // 折叠行钮（chevron = 矢量图标）
 inline constexpr const char *kFkHint = "hint"; // 说明/提示（--txt3）
 inline constexpr const char *kFkSub = "sub";   // 次级说明（--txt3，同 hint）
+// X5（M7-R2D2，裁定登记 build/m7r2-d2/handoff.md）：warn 色**公共钩子** —— 警示类行内提示
+// （UX-10.1 编码档位兼容性提示等）统一挂本轨取 tokens.warn；此前该场景由调用点自拼 QPalette，
+// 会被 kFkHint 的 --txt3 规则覆盖（两轨抢色）。ppInvalid（红）优先级仍高于本轨（见 field_qss）。
+inline constexpr const char *kFkWarn = "warn"; // 警示提示（--warn）
 
 // 自绘控件（ItemDelegate / 自绘 pill）的三色取法：同一张 §4.1 末行规则，避免各处复写色值。
 struct PillPaint {
@@ -898,6 +920,10 @@ inline QString field_qss(const Tokens &t) {
     // 说明/提示行（mockup .sub-hint）+ 非法值红字（ppInvalid 是独立语义属性，两条轨都认）
     qss += QStringLiteral("QLabel") + sel(kFkHint) + QStringLiteral(", QLabel") + sel(kFkSub) +
            QStringLiteral(" { color: ") + css_color(t.text3) + QStringLiteral("; }\n");
+    // X5：警示提示公共钩子（--warn）。排在 ppInvalid 两规则**之前** —— 同为单属性选择器、
+    // 后者胜出：同一标签同时挂 warn + ppInvalid=true 时红字优先（错误 > 警示）。
+    qss += QStringLiteral("QLabel") + sel(kFkWarn) + QStringLiteral(" { color: ") +
+           css_color(t.warn) + QStringLiteral("; }\n");
     qss += QStringLiteral("QLabel") + sel(kFkHint) +
            QStringLiteral("[ppInvalid=\"true\"] { color: ") + css_color(t.err) +
            QStringLiteral("; }\n");
@@ -1074,8 +1100,12 @@ inline QString page_output_qss(const Tokens &t) {
         QStringLiteral("QTabWidget#pp-format-tabs::pane { border: none; border-top: 1px solid ") +
         css_color(t.line) + QStringLiteral("; }\n");
     qss += QStringLiteral("QTabBar::tab { background: transparent; color: ") + css_color(t.text2) +
-           QStringLiteral("; padding: 5px 12px 6px; margin-right: 2px; border: none; "
-                          "border-bottom: 2px solid transparent; font-weight: 600; }\n");
+           QStringLiteral("; padding: ") + QString::number(Metrics::tab_pad_top) +
+           QStringLiteral("px ") + QString::number(Metrics::tab_pad_x) + QStringLiteral("px ") +
+           QString::number(Metrics::tab_pad_bottom) + QStringLiteral("px; margin-right: ") +
+           QString::number(Metrics::tab_gap) + QStringLiteral("px; border: none; border-bottom: ") +
+           QString::number(Metrics::tab_underline_px) +
+           QStringLiteral("px solid transparent; font-weight: 600; }\n");
     qss += QStringLiteral("QTabBar::tab:first { margin-left: ") +
            QString::number(Metrics::card_pad_x) + QStringLiteral("px; }\n");
     qss += QStringLiteral("QTabBar::tab:selected { color: ") + css_color(t.text) +
@@ -1466,18 +1496,27 @@ inline QString style_sheet(const Tokens &t) {
     qss += QStringLiteral("QMenu { background: ") + css_color(t.card) +
            QStringLiteral("; border: 1px solid ") + css_color(t.card_bd) +
            QStringLiteral("; border-radius: ") + QString::number(t.radius_control) +
-           QStringLiteral("px; padding: 4px 2px; }\n");
-    qss += QStringLiteral("QMenu::item { padding: 5px 24px 5px 12px; border-radius: ") +
-           QString::number(t.radius_control) + QStringLiteral("px; color: ") + css_color(t.text) +
-           QStringLiteral("; }\n");
+           QStringLiteral("px; padding: ") + QString::number(Metrics::menu_frame_pad_y) +
+           QStringLiteral("px ") + QString::number(Metrics::menu_frame_pad_x) +
+           QStringLiteral("px; }\n");
+    qss += QStringLiteral("QMenu::item { padding: ") + QString::number(Metrics::menu_item_pad_top) +
+           QStringLiteral("px ") + QString::number(Metrics::menu_item_pad_right) +
+           QStringLiteral("px ") + QString::number(Metrics::menu_item_pad_bottom) +
+           QStringLiteral("px ") + QString::number(Metrics::menu_item_pad_left) +
+           QStringLiteral("px; border-radius: ") + QString::number(t.radius_control) +
+           QStringLiteral("px; color: ") + css_color(t.text) + QStringLiteral("; }\n");
     qss += QStringLiteral("QMenu::item:selected { background: ") + css_color(t.accent_dim) +
            QStringLiteral("; color: ") + css_color(t.text) + QStringLiteral("; }\n");
     qss += QStringLiteral("QMenu::item:disabled { color: ") + css_color(t.text3) +
            QStringLiteral("; }\n");
     qss += QStringLiteral("QMenu::separator { height: 1px; background: ") + css_color(t.line) +
-           QStringLiteral("; margin: 4px 10px; }\n");
+           QStringLiteral("; margin: ") + QString::number(Metrics::menu_sep_margin_y) +
+           QStringLiteral("px ") + QString::number(Metrics::menu_sep_margin_x) +
+           QStringLiteral("px; }\n");
     // 勾选由代理样式画矢量（formkit::paint_menu_check）；这里只给指示器留几何位
-    qss += QStringLiteral("QMenu::indicator { width: 16px; height: 16px; }\n");
+    qss += QStringLiteral("QMenu::indicator { width: ") +
+           QString::number(Metrics::menu_indicator_px) + QStringLiteral("px; height: ") +
+           QString::number(Metrics::menu_indicator_px) + QStringLiteral("px; }\n");
     // GUI-R2：工具钮**不画下拉箭头**（设计稿 output.html 的 .ftools 里 ＋/−/筛选 都是纯图标钮，
     // 只有「按月份 ▾」那枚下拉带箭头）。＋/筛选 确有菜单，但语义由 tooltip（"添加文件 / 文件夹"、
     // "筛选…"）承担 —— 加/减/筛 三枚钮上挂箭头是实现自己长出来的。

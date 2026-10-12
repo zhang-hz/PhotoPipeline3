@@ -119,7 +119,8 @@ ElidedLabel *make_info_value(QWidget *parent, const QString &object_name) {
     value->setObjectName(object_name);
     value->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkValue));
     value->setFont(theme::font(theme::Typography::body_px, QFont::Normal, /*tabular=*/true));
-    value->setAlignment(Qt::AlignLeft | Qt::AlignVCenter); // kv 值：正文语序（mockup .kv-v 左起）
+    // kv 值：正文语序（mockup .kv-v 从首端起）；R-218：逻辑首端（LTR=左 / RTL=右）
+    value->setAlignment(Qt::AlignLeading | Qt::AlignVCenter);
     return value;
 }
 

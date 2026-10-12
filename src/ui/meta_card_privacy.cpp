@@ -189,7 +189,7 @@ QWidget *build_switches_card(MetaState *st, QWidget *parent) {
     tv->addWidget(rows_host);
     st->privacy.add_tag = make_button(st->privacy.tag_host, QStringLiteral("tag_add_button"),
                                       PageMeta::tr("添加标签"));
-    tv->addWidget(st->privacy.add_tag, 0, Qt::AlignLeft);
+    tv->addWidget(st->privacy.add_tag, 0, Qt::AlignLeading); // R-218：逻辑首端
     st->privacy.tag_host->setVisible(false);
     v->addWidget(st->privacy.tag_host);
 

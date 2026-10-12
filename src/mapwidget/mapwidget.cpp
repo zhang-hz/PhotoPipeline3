@@ -142,6 +142,21 @@ const char *const kLayerLabel = "label";
 
 double clamp_lat(double lat) { return std::clamp(lat, -kMaxMercatorLat, kMaxMercatorLat); }
 
+// R-218（M7-R2.1-F2）：自绘 HUD 的逻辑坐标**单点镜像** —— RTL 下 leading=右缘，
+// LTR 恒等（原样返回）。地理内容（瓦片/图钉/主钉投影坐标）不镜像；镜像只作用于
+// HUD 盒/文字/线段这类界面构件。
+QRect mirror_x(const QWidget *q, const QRect &r) {
+    if (q->layoutDirection() != Qt::RightToLeft) {
+        return r;
+    }
+    return QRect(q->width() - r.x() - r.width(), r.y(), r.width(), r.height());
+}
+
+// 点镜像（线段端点按像素取镜像：x' = W - 1 - x；LTR 恒等）
+int mirror_px(const QWidget *q, int x) {
+    return q->layoutDirection() == Qt::RightToLeft ? q->width() - 1 - x : x;
+}
+
 double world_span(int zoom) { return double(kTileSize) * double(std::int64_t(1) << zoom); }
 
 int wrap_tile_x(int x, int tile_count) {
@@ -383,19 +398,20 @@ struct MapWidget::Impl {
         const int box_w = 2 * pad + metrics.horizontalAdvance(zero) + gap + bar_px + gap +
                           metrics.horizontalAdvance(label);
         const int box_h = metrics.height() + 4;
-        const QRect box(6, h - 6 - box_h, box_w, box_h);
+        // R-218：盒与内容一律逻辑坐标 + 单点镜像（LTR 恒等；RTL 下贴右缘、内容右起）
+        const QRect box = mirror_x(q, QRect(6, h - 6 - box_h, box_w, box_h));
         painter.fillRect(box, QColor(255, 255, 255, 190));
         painter.setPen(QColor(0x40, 0x40, 0x40));
         const int mid_y = box.y() + box_h / 2;
         int x = box.x() + pad;
-        painter.drawText(QRect(x, box.y(), metrics.horizontalAdvance(zero), box_h),
+        painter.drawText(mirror_x(q, QRect(x, box.y(), metrics.horizontalAdvance(zero), box_h)),
                          Qt::AlignLeft | Qt::AlignVCenter, zero);
         x += metrics.horizontalAdvance(zero) + gap;
-        painter.drawLine(x, mid_y, x + bar_px, mid_y); // 段线 + 两端刻度
-        painter.drawLine(x, mid_y - 3, x, mid_y + 3);
-        painter.drawLine(x + bar_px, mid_y - 3, x + bar_px, mid_y + 3);
+        painter.drawLine(mirror_px(q, x), mid_y, mirror_px(q, x + bar_px), mid_y); // 段线+刻度
+        painter.drawLine(mirror_px(q, x), mid_y - 3, mirror_px(q, x), mid_y + 3);
+        painter.drawLine(mirror_px(q, x + bar_px), mid_y - 3, mirror_px(q, x + bar_px), mid_y + 3);
         x += bar_px + gap;
-        painter.drawText(QRect(x, box.y(), metrics.horizontalAdvance(label), box_h),
+        painter.drawText(mirror_x(q, QRect(x, box.y(), metrics.horizontalAdvance(label), box_h)),
                          Qt::AlignLeft | Qt::AlignVCenter, label);
         painter.restore();
     }
@@ -1011,9 +1027,13 @@ void MapWidget::Impl::on_paint() {
             painter.drawEllipse(pos, double(kPinRadius), double(kPinRadius));
             const QString full = pin.label.isEmpty() ? QString::number(pin.index) : pin.label;
             const QString text = pin_metrics.elidedText(full, Qt::ElideRight, kPinBubbleTextMax);
-            const QRectF bubble(pos.x() + kPinRadius + 1,
-                                pos.y() - kPinRadius - pin_metrics.height() - 2,
-                                pin_metrics.horizontalAdvance(text) + 8, pin_metrics.height() + 2);
+            // R-218：气泡贴钉的**逻辑首侧**（LTR=钉右 / RTL=钉左）；钉心（地理投影）不镜像
+            const double bubble_w = pin_metrics.horizontalAdvance(text) + 8;
+            const double bubble_x = q->layoutDirection() == Qt::RightToLeft
+                                        ? pos.x() - kPinRadius - 1 - bubble_w
+                                        : pos.x() + kPinRadius + 1;
+            const QRectF bubble(bubble_x, pos.y() - kPinRadius - pin_metrics.height() - 2, bubble_w,
+                                pin_metrics.height() + 2);
             painter.setPen(QPen(accent, 1));
             painter.setBrush(QColor(255, 255, 255, 230)); // 白底：卫星影像上仍可读
             painter.drawRoundedRect(bubble, 3, 3);
@@ -1049,8 +1069,9 @@ void MapWidget::Impl::on_paint() {
         font.setPointSize(kHudPointSize);
         painter.setFont(font);
         const QFontMetrics metrics(font);
-        const QRect box(w - metrics.horizontalAdvance(credit) - 8, h - metrics.height() - 6,
-                        metrics.horizontalAdvance(credit) + 6, metrics.height() + 2);
+        const QRect box =
+            mirror_x(q, QRect(w - metrics.horizontalAdvance(credit) - 8, h - metrics.height() - 6,
+                              metrics.horizontalAdvance(credit) + 6, metrics.height() + 2));
         painter.fillRect(box, QColor(255, 255, 255, 190));
         painter.setPen(QColor(0x40, 0x40, 0x40));
         painter.drawText(box, Qt::AlignCenter, credit);

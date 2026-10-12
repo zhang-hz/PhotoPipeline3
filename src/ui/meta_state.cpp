@@ -84,7 +84,7 @@ QLabel *unit_slot(QWidget *parent, const QString &text) {
     auto *label = new QLabel(text, parent);
     label->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkUnit));
     label->setFont(theme::font(theme::Typography::hint_px));
-    label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    label->setAlignment(Qt::AlignLeading | Qt::AlignVCenter); // R-218：逻辑首端（LTR=左）
     label->setFixedWidth(formkit::kUnitSlotW);
     return label;
 }
@@ -97,7 +97,7 @@ ElidedLabel *note_label(QWidget *parent, const QString &object_name) {
     }
     label->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkNote));
     label->setFont(theme::font(theme::Typography::hint_px));
-    label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    label->setAlignment(Qt::AlignLeading | Qt::AlignVCenter); // R-218：逻辑首端（LTR=左）
     return label;
 }
 
@@ -213,7 +213,7 @@ CardHeader make_header(MetaState *st, QWidget *parent, const QString &title,
     }
     out.hint->setProperty(kFieldProperty, fieldprop::kHint);
     out.hint->setFont(theme::font(theme::Typography::hint_px, 500));
-    out.hint->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    out.hint->setAlignment(Qt::AlignTrailing | Qt::AlignVCenter); // R-218：逻辑尾端（LTR=右）
     layout->addWidget(out.hint, 1);
     if (!enable_name.isEmpty()) {
         // UX-5：卡头右置「启用」开关（formkit::SwitchControl 30×16；初态 = 关）

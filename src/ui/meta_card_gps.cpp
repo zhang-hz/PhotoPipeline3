@@ -695,13 +695,14 @@ void build_gps_map_section(MetaState *st, QWidget *body, QVBoxLayout *bv) {
     st->gps.layer_seg->add_segment(PageMeta::tr("混合"),
                                    QStringLiteral("pp-meta-gps-layer-hybrid"));
     plate_line->addWidget(st->gps.layer_seg);
-    top_line->addWidget(st->overlay.layer_plate, 0, Qt::AlignLeft | Qt::AlignTop);
+    // R-218：覆盖层四角贴靠一律逻辑坐标（leading/trailing）——RTL 镜像；LTR 恒等
+    top_line->addWidget(st->overlay.layer_plate, 0, Qt::AlignLeading | Qt::AlignTop);
     top_line->addStretch(1);
     st->overlay.map_expand =
         make_map_hud_button(st->gps.map, QStringLiteral("pp-meta-map-expand"), icons::Name::ZoomFit,
                             PageMeta::tr(kMapExpandText));
     st->overlay.map_expand->setToolTip(PageMeta::tr(kMapExpandTooltipText));
-    top_line->addWidget(st->overlay.map_expand, 0, Qt::AlignRight | Qt::AlignTop);
+    top_line->addWidget(st->overlay.map_expand, 0, Qt::AlignTrailing | Qt::AlignTop);
     overlay->addLayout(top_line);
     // UX-4①：联想下拉 + 搜索结果 = **地图浮层**（默认隐藏；有结果显示；选中/清空/换源/失焦
     // 隐藏）。objectName 保留（pp-meta-gps-suggest / pp-meta-gps-search-results /
@@ -745,7 +746,7 @@ void build_gps_map_section(MetaState *st, QWidget *body, QVBoxLayout *bv) {
     st->overlay.map_loading->setToolTip(PageMeta::tr("正在加载地图瓦片"));
     st->overlay.map_loading->setAttribute(Qt::WA_TransparentForMouseEvents, true);
     st->overlay.map_loading->setVisible(false);
-    overlay->addWidget(st->overlay.map_loading, 0, Qt::AlignLeft);
+    overlay->addWidget(st->overlay.map_loading, 0, Qt::AlignLeading);
     overlay->addStretch(1);
     // 底行：光标读数 + 「－/＋」缩放钮（右下；左下留给 mapwidget 自绘比例尺）
     auto *bottom_line = new QHBoxLayout();
@@ -759,7 +760,7 @@ void build_gps_map_section(MetaState *st, QWidget *body, QVBoxLayout *bv) {
     st->overlay.map_cursor->setAttribute(Qt::WA_TransparentForMouseEvents,
                                          true); // 不吃地图鼠标事件
     bottom_line->addStretch(1);
-    bottom_line->addWidget(st->overlay.map_cursor, 0, Qt::AlignRight | Qt::AlignBottom);
+    bottom_line->addWidget(st->overlay.map_cursor, 0, Qt::AlignTrailing | Qt::AlignBottom);
     st->overlay.zoom_out = make_map_hud_button(st->gps.map, QStringLiteral("pp-meta-map-zoom-out"),
                                                icons::Name::ZoomOut, PageMeta::tr(kMapZoomOutText));
     st->overlay.zoom_in = make_map_hud_button(st->gps.map, QStringLiteral("pp-meta-map-zoom-in"),
@@ -786,7 +787,7 @@ void build_gps_rule_section(MetaState *st, QWidget *card, QVBoxLayout *v) {
         auto *toggle_row = new QHBoxLayout();
         toggle_row->setContentsMargins(theme::Metrics::card_pad_x, 0, theme::Metrics::card_pad_x,
                                        6);
-        toggle_row->addWidget(st->gps.rule_toggle, 0, Qt::AlignLeft);
+        toggle_row->addWidget(st->gps.rule_toggle, 0, Qt::AlignLeading);
         toggle_row->addStretch(1);
         v->addLayout(toggle_row);
     }
@@ -837,7 +838,7 @@ void build_gps_rule_section(MetaState *st, QWidget *card, QVBoxLayout *v) {
     {
         auto *more_row = new QHBoxLayout();
         more_row->setContentsMargins(0, 0, 0, 0);
-        more_row->addWidget(st->gps.more_toggle, 0, Qt::AlignLeft);
+        more_row->addWidget(st->gps.more_toggle, 0, Qt::AlignLeading);
         more_row->addStretch(1);
         rule_v->addLayout(more_row);
     }

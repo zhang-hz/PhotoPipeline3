@@ -214,7 +214,8 @@ public:
     DeltaSpin(QWidget *parent, const QString &object_name) : QSpinBox(parent) {
         setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkSpin));
         setFont(theme::font(theme::Typography::body_px, QFont::Normal, /*tabular=*/true));
-        setAlignment(Qt::AlignRight | Qt::AlignVCenter); // §4.2「数值」：右对齐
+        // §4.2「数值」：尾部对齐（R-218：逻辑坐标 —— LTR=右 / RTL=左；LTR 恒等）
+        setAlignment(Qt::AlignTrailing | Qt::AlignVCenter);
         setFixedSize(formkit::kFieldShort, formkit::kControlH);
         setObjectName(object_name);
         setRange(-99, 99); // §7.1 注释「−99…+99」= 范围（R3：范围入注释）
@@ -255,9 +256,12 @@ protected:
         p.setRenderHint(QPainter::Antialiasing, true);
         const QPainterPath star = icons::path(icons::Name::Star);
         const double scale = double(kStarPx) / icons::kGrid;
+        // R-218：星序 = 逻辑序（首星在 leading 端）——RTL 镜像排布；LTR 恒等（x' = x）。
+        const bool rtl = layoutDirection() == Qt::RightToLeft;
         for (int i = 0; i < 5; ++i) {
             QTransform transform;
-            transform.translate(i * (kStarPx + kStarGap), 0);
+            const int logical_x = i * (kStarPx + kStarGap);
+            transform.translate(rtl ? width() - kStarPx - logical_x : logical_x, 0);
             transform.scale(scale, scale);
             const QPainterPath boxed = transform.map(star);
             if (i < rating_) {

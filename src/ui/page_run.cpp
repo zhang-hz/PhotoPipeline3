@@ -416,8 +416,12 @@ struct CellCache {
     }
 };
 
-struct OutRow {
-    QWidget *row = nullptr;
+// R-187（M7-R2.1-F3）：行控件束单源 —— 组行（FileRow）与逐输出行（OutRow）原各带一份逐字
+// 同款的「7 控件 + 数值缓存 + 应用缓存」束（deep-review R-187/E3-08「双 struct 双份控件
+// 束」）。收敛为唯一 RowBundle，两 struct 嵌入（既有成员名逐字可用，消费点零改动；仅组行
+// 数值缓存命名归一 size_cell → size_cache 3 处）。行容器不入束（组行叫 group、输出行叫
+// row），失败原因行是输出行专属。
+struct RowBundle {
     RunMarkLabel *mark = nullptr;
     ElidedLabel *name = nullptr;
     fk::ProgressStrip *bar = nullptr;
@@ -425,6 +429,17 @@ struct OutRow {
     ElidedLabel *speed = nullptr;
     ElidedLabel *time = nullptr;
     fk::PillBadge *status = nullptr;
+    // 数值列缓存（文本 + 色；§4.2 数值档 = 右对齐 + tabular）
+    CellCache size_cache, speed_cache, time_cache;
+    // 已应用缓存（避免同值重写触发 style/repaint）
+    QString applied_status;
+    fk::PillBadge::Tone applied_tone = fk::PillBadge::Tone::Neutral;
+    bool applied_icon_set = false;
+    icons::Name applied_icon = icons::Name::Pending;
+};
+
+struct OutRow : RowBundle {
+    QWidget *row = nullptr;
     QWidget *reason_row = nullptr; // 失败行的「└ 原因：…」行（默认隐藏）
     ElidedLabel *reason = nullptr;
     // 进度（§7.2 段内 frac）
@@ -438,26 +453,13 @@ struct OutRow {
     qint64 bytes = 0;
     double ratio = 0.0, ms = 0.0;
     QString error;
-    // 已应用缓存（避免同值重写触发 style/repaint）
-    CellCache size_cache, speed_cache, time_cache;
-    QString applied_status, applied_reason;
-    fk::PillBadge::Tone applied_tone = fk::PillBadge::Tone::Neutral;
-    bool applied_icon_set = false;
-    icons::Name applied_icon = icons::Name::Pending;
+    QString applied_reason;
     bool reason_shown = false;
 };
 
-struct FileRow {
+struct FileRow : RowBundle {
     QWidget *group = nullptr;
-    RunMarkLabel *mark = nullptr;
-    ElidedLabel *name = nullptr;
-    fk::ProgressStrip *bar = nullptr;
-    ElidedLabel *size = nullptr;
-    ElidedLabel *speed = nullptr;
-    ElidedLabel *time = nullptr;
-    fk::PillBadge *status = nullptr;
     QVector<OutRow> outs;
-    CellCache size_cell, speed_cell, time_cell;
     // 共享段（§7.2 前三行；一次）
     float shared_probe = 0.f, shared_decode = 0.f, shared_orient = 0.f, shared_color = 0.f;
     Stage shared_stage = Stage::Probe;
@@ -465,11 +467,24 @@ struct FileRow {
     pp::FileState state = pp::FileState::Queued;
     int width = 0, height = 0;
     qint64 src_bytes = 0;
-    QString applied_status;
-    fk::PillBadge::Tone applied_tone = fk::PillBadge::Tone::Neutral;
-    bool applied_icon_set = false;
-    icons::Name applied_icon = icons::Name::Pending;
 };
+
+// R-187（M7-R2.1-F3）：OutKind（逐输出）/ pp::FileState（逐文件）平行状态机的**互译单点**
+// （原 apply_terminal 内联 switch；deep-review R-187/E3-08）。映射真值表：
+//   FileState::Done → Done｜Skipped → Skipped｜Cancelled → Cancelled｜
+//   其余（Failed/DoneWithErrors/中途异常等一切未列值）→ Failed。
+OutKind out_kind_of_file_state(pp::FileState state) {
+    switch (state) {
+    case pp::FileState::Done:
+        return OutKind::Done;
+    case pp::FileState::Skipped:
+        return OutKind::Skipped;
+    case pp::FileState::Cancelled:
+        return OutKind::Cancelled;
+    default:
+        return OutKind::Failed;
+    }
+}
 
 struct RunState {
     PageRun *page = nullptr;
@@ -937,20 +952,8 @@ void apply_terminal(RunState &s, FileRow &file, const pp::FileEvent &ev) {
                 out.kind = OutKind::Failed;
         }
         if (!settled_kind(out.kind)) {
-            switch (ev.state) {
-            case pp::FileState::Done:
-                out.kind = OutKind::Done;
-                break;
-            case pp::FileState::Skipped:
-                out.kind = OutKind::Skipped;
-                break;
-            case pp::FileState::Cancelled:
-                out.kind = OutKind::Cancelled;
-                break;
-            default:
-                out.kind = OutKind::Failed;
-                break;
-            }
+            // R-187：平行状态机互译单点（原内联 switch 抽为 out_kind_of_file_state）
+            out.kind = out_kind_of_file_state(ev.state);
         }
         if (out.kind == OutKind::Failed && out.error.isEmpty())
             out.error = file_error; // 文件级失败（plan/decode）→ 逐输出行回落到聚合原因
@@ -1075,15 +1078,15 @@ void render_file_row(RunState &s, FileRow &file) {
     file.status->setToolTip(st.tip); // A39 ③：组行排队 pill 的 tooltip（其余状态清空）
 
     const GroupFacts facts = group_facts(file);
-    file.size_cell.apply(file.size,
-                         facts.bytes > 0 ? fmt_bytes(static_cast<quint64>(facts.bytes))
-                                         : QStringLiteral("—"),
-                         facts.bytes > 0 ? s.tokens.text : s.tokens.text3);
-    file.speed_cell.apply(file.speed, ratio_text(facts.ratio),
-                          facts.ratio > 0 ? s.tokens.text : s.tokens.text3);
+    file.size_cache.apply(file.size,
+                          facts.bytes > 0 ? fmt_bytes(static_cast<quint64>(facts.bytes))
+                                          : QStringLiteral("—"),
+                          facts.bytes > 0 ? s.tokens.text : s.tokens.text3);
+    file.speed_cache.apply(file.speed, ratio_text(facts.ratio),
+                           facts.ratio > 0 ? s.tokens.text : s.tokens.text3);
     file.speed->setToolTip(speed_tip(file.src_bytes, facts.bytes, facts.ratio));
-    file.time_cell.apply(file.time, facts.ms > 0.0 ? fmt_secs(facts.ms) : QStringLiteral("—"),
-                         facts.ms > 0.0 ? s.tokens.text : s.tokens.text3);
+    file.time_cache.apply(file.time, facts.ms > 0.0 ? fmt_secs(facts.ms) : QStringLiteral("—"),
+                          facts.ms > 0.0 ? s.tokens.text : s.tokens.text3);
 
     // 分组条：失败 > 0 字节异常 > 终态 > 进行中/排队（C8 档位）
     bool any_failed = false;
@@ -1114,13 +1117,15 @@ void render_file_row(RunState &s, FileRow &file) {
     file.bar->set_state(kind, frac, false);
 }
 
-void refresh_widgets(RunState &s) {
-    const int total_outputs = static_cast<int>(s.files.size()) * s.formats;
-    const double frac = s.finished ? 1.0 : run_frac(s);
-    const Tally tally = run_tally(s);
-    const int settled = settled_outputs(s);
+// R-188（M7-R2.1-F3）：refresh_widgets 原 160 行单函数吃 7 个语义段（deep-review R-188/E3-09
+// 「60ms 节流核心无法局部推理」）→ 按语义拆 7 个段函数（同 R-253 mainwindow 语义分段先例）：
+// ① 进度合成条 ② kv 时间/吞吐/平均 ③ 调度读数（并行/交错/线程预算）④ 汇总/峰值
+// ⑤ 状态胶囊 ⑥ 操作行 ⑦ 任务表 + 日志尾。共享读数一次算好传入、段调用顺序与原文逐字
+// 一致 —— 行为零变化。入口 refresh_widgets 在段后定义（60ms flush 的统一入口不变）。
 
-    // ---- 总览：进度合成条 + 百分比（值 = 显示百分比，修 3-07）----
+// 段①（R-188）：总览 —— 进度合成条 + 百分比 + 计数提示
+void refresh_overview_progress(RunState &s, int total_outputs, double frac, const Tally &tally,
+                               int settled) {
     const int percent_now = s.finished ? 100 : static_cast<int>(std::lround(frac * 100.0));
     if (s.progress->value() != percent_now)
         s.progress->setValue(percent_now);
@@ -1135,8 +1140,10 @@ void refresh_widgets(RunState &s) {
     s.progress_hint->set_full_text(
         total_outputs > 0 ? PageRun::tr("%1 / %2 个输出").arg(settled).arg(total_outputs)
                           : QString());
+}
 
-    // ---- 总览 kv（§7.3 八项；指标单源 + 未发生的量显示 "—"）----
+// 段②（R-188）：总览 kv —— 总耗时 / 吞吐 / 平均（指标单源 + 未发生的量显示 "—"）
+void refresh_overview_metrics(RunState &s) {
     const qint64 live_ms = s.clock.isValid() ? s.clock.elapsed() : 0;
     const qint64 total_ms = (s.finished && s.has_summary) ? static_cast<qint64>(s.summary_total_ms)
                                                           : (live_ms > 0 ? live_ms : 0);
@@ -1157,7 +1164,10 @@ void refresh_widgets(RunState &s) {
     s.average->set_full_text(avg_ms > 0 ? PageRun::tr("%1 ms/文件").arg(avg_ms, 0, 'f', 0)
                                         : QStringLiteral("—"));
     s.average->setToolTip(PageRun::tr("每个文件的平均处理时间"));
+}
 
+// 段③（R-188）：总览 kv —— 并行 / 交错启动 / 线程预算（§8.2 分配读数进 tooltip）
+void refresh_overview_sched(RunState &s) {
     const int budget = s.plan.thread_budget > 0 ? s.plan.thread_budget : hardware_threads();
     const int pool = s.plan.workers > 0 ? s.plan.workers : budget;
     const int inflight =
@@ -1202,6 +1212,10 @@ void refresh_widgets(RunState &s) {
     s.budget->setToolTip(
         PageRun::tr("总活跃线程上限 T（§8.2，含编码器内部线程；worker+编码线程峰值可到 2W）；"
                     "自动 = 按本机核心数"));
+}
+
+// 段④（R-188）：总览 kv —— 汇总 / 峰值内存 / 峰值线程
+void refresh_overview_counts(RunState &s, const Tally &tally) {
     s.tally->set_full_text(tally_text(tally));
     s.tally->setToolTip(PageRun::tr("按输出计：成功 / 0 字节异常 / 失败 / 跳过 / 取消"));
     // 峰值内存（A29：解冻加性字段 RunSummary::peak_bytes → 接**真实读数**；与引擎
@@ -1218,8 +1232,10 @@ void refresh_widgets(RunState &s) {
             PageRun::tr("本次运行的峰值活跃线程估算（worker 主线程 + 编码器内部线程的实测峰值之和；"
                         "SynthPump 采样线程与 x265 库内线程池不入账 —— 估算口径）"));
     }
+}
 
-    // ---- 总览：状态胶囊（§8 四档；完成态唯一形态 = 绿胶囊「已完成」）----
+// 段⑤（R-188）：总览 —— 状态胶囊（§8 四档；完成态唯一形态 = 绿胶囊「已完成」）
+void refresh_state_pill(RunState &s, const Tally &tally) {
     StatusText pill;
     if (s.running) {
         pill.text = PageRun::tr("进行中");
@@ -1260,8 +1276,10 @@ void refresh_widgets(RunState &s) {
     }
     apply_pill(s.state_pill, pill, s.applied_state_text, s.applied_state_tone,
                s.applied_state_icon_set, s.applied_state_icon);
+}
 
-    // ---- 总览：操作行（三级动作 + 运行期语义）----
+// 段⑥（R-188）：总览 —— 操作行（三级动作 + 运行期语义）
+void refresh_action_row(RunState &s) {
     if (s.running && s.cancel_requested) {
         s.cancel->setEnabled(false);
         s.cancel->setVisible(true);
@@ -1277,8 +1295,10 @@ void refresh_widgets(RunState &s) {
     s.run_again->setEnabled(!s.running);
     s.run_again->setToolTip(s.running ? PageRun::tr("运行中：结束后可用")
                                       : PageRun::tr("按当前设置再运行一批"));
+}
 
-    // ---- 任务表 ----
+// 段⑦（R-188）：任务表（组行 + 逐输出行）与日志尾卡
+void refresh_task_table(RunState &s) {
     for (FileRow &file : s.files) {
         render_file_row(s, file);
         for (int j = 0; j < file.outs.size(); ++j)
@@ -1292,6 +1312,21 @@ void refresh_widgets(RunState &s) {
     s.log_lines->set_lines(s.log_tail);
     s.log_name->set_full_text(s.log_tail.isEmpty() ? QString() : s.log_name_text);
     s.open_full_log->setEnabled(!s.log_tail.isEmpty() || !s.log_name_text.isEmpty());
+}
+
+// R-188：60ms flush 的统一入口 —— 共享读数一次计算 + 段①…⑦ 按原序调用（行为零变化）。
+void refresh_widgets(RunState &s) {
+    const int total_outputs = static_cast<int>(s.files.size()) * s.formats;
+    const double frac = s.finished ? 1.0 : run_frac(s);
+    const Tally tally = run_tally(s);
+    const int settled = settled_outputs(s);
+    refresh_overview_progress(s, total_outputs, frac, tally, settled); // 段①
+    refresh_overview_metrics(s);                                       // 段②
+    refresh_overview_sched(s);                                         // 段③
+    refresh_overview_counts(s, tally);                                 // 段④
+    refresh_state_pill(s, tally);                                      // 段⑤
+    refresh_action_row(s);                                             // 段⑥
+    refresh_task_table(s);                                             // 段⑦
 }
 
 // ===========================================================================

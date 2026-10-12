@@ -146,6 +146,7 @@
 #include "mapwidget/layers.h"   // M6-T8：图层支持性提示（tile_source_by_id / TileStyle）
 #include "mapwidget/mapwidget.h"
 #include "mapwidget/providers.h" // 地图源下拉的 id/label 单源（provider_ids/provider_by_id）
+#include "ui/contextmenu.h"      // M7-R2D1 / UX-1②③④⑤：公共右键菜单件（attach_card_menu）
 #include "ui/theme.h"
 
 namespace pp::ui {
@@ -658,9 +659,9 @@ struct MetaState : QObject {
     std::optional<pp::GpsData> shown_gps; // 生效坐标缓存（DMS 切换只重排这一份，不重算 preview）
     QLabel *datum_icon = nullptr;         // 「WGS-84（标准 GPS）」前置 Info 矢量图标
     QLabel *datum_label = nullptr;
-    QWidget *datum_row = nullptr;       // 坐标行（M6-T12：光标坐标读数的 tooltip 承载面）
-    QPushButton *dms_toggle = nullptr;  // DMS 切换（chip；与右键菜单同一收口）
-    QToolButton *copy_coords = nullptr; // 复制当前格式坐标（文字链）
+    QWidget *datum_row = nullptr;              // 坐标行（M6-T12：光标坐标读数的 tooltip 承载面）
+    formkit::ChipButton *dms_toggle = nullptr; // DMS 切换（chip；与右键菜单同一收口）
+    QToolButton *copy_coords = nullptr;        // 复制当前格式坐标（文字链）
     // ---- M6-T12 加性（§5.3/§7-T12：地图体验件 —— 缩放 ± / 光标坐标读数）----
     QToolButton *zoom_out = nullptr; // 地图覆盖层：缩小（矢量图标钮）
     QToolButton *zoom_in = nullptr;  // 地图覆盖层：放大
@@ -961,19 +962,18 @@ QLineEdit *make_rule_field(QWidget *parent, const QString &object_name) {
     return edit;
 }
 
-// 分类 chip（M6-T8/§5.1「分类 chips」）：**可勾选的文字 chip** —— 高/半径取 formkit 的 chip 度量
-// （kChipH/kChipRadius），配色走本页 `ppMetaField="chip"` QSS（与 formkit::ChipButton 同色同源：
-// 未选 = 透明底 + --ctl-bd；悬停 = --ctl 底；选中 = --acc-dim 底 + --acc-bd 边）。互斥选中由
-// QButtonGroup 持有；无键帽、无字形。
-QPushButton *make_chip(QWidget *parent, const QString &object_name, const QString &text) {
-    auto *chip = new QPushButton(text, parent);
+// 可勾选文字 chip（M6-T8/§5.1「分类 chips」；现存用点 = DMS 显示档切换）。
+// R-184（M7-R2D1）：原实现是 formkit::ChipButton 的**手工复刻**（同度量/同色 QSS，人工对齐，
+// deep-review E2-05「第二套 chip 渲染」）—— 现收编公共件（唯一渲染路径：键帽空 = 无键帽、
+// tokens 自绘；本页 QSS 的 chip 规则随之不再参与本控件）。
+formkit::ChipButton *make_chip(QWidget *parent, const QString &object_name, const QString &text) {
+    auto *chip = new formkit::ChipButton(parent);
     chip->setObjectName(object_name);
-    chip->setProperty(kFieldProperty, QStringLiteral("chip"));
+    chip->setText(text);
     chip->setCheckable(true);
     chip->setCursor(Qt::PointingHandCursor);
     chip->setFixedHeight(formkit::kChipH);
-    chip->setFont(theme::font(theme::Typography::small_px, QFont::DemiBold));
-    chip->setToolTip(PageMeta::tr("按类目搜索：%1").arg(text));
+    chip->setToolTip(text);
     return chip;
 }
 
@@ -1017,12 +1017,14 @@ void open_map_expanded_view(MetaState *st) {
     dialog.adopt(st->map);
     dialog.exec();    // 模态：返回即已关闭（Esc / 底栏关闭 / 标题栏 ✕ 同效）
     dialog.release(); // R-261：与 adopt 成对（对话框侧复原几何约束；析构另有兜底）
-    // 挂回卡片行：先撤占位（占位不参与任何信号链，同步删）再挂 map；随后固定高逐位复原
-    // （宿主 + 行槽 + objectName 随控件、无需重挂）
+    // 挂回卡片行：先撤占位（占位不参与任何信号链，同步删）再挂 map；随后几何约束逐位复原
+    // （宿主 + 行槽 + objectName 随控件、无需重挂）。UX-4 stretch（M7-R2-B）：复位口径 = 与
+    // 初建同源（min 260 + 可拉伸），不再 setFixedHeight —— 探针断言改 `>= 260` + geometry 逐位。
     st->map->setParent(st->map_host);
     delete placeholder;
-    st->map_line->addWidget(st->map, 1, Qt::AlignVCenter);
-    st->map->setFixedHeight(kMapHeight);
+    st->map_line->addWidget(st->map, 1);
+    st->map->setMinimumHeight(kMapHeight);
+    st->map->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     st->map->show();
     if (st->map_expand != nullptr) {
         st->map_expand->setVisible(true);
@@ -2117,6 +2119,7 @@ void apply_style(MetaState *st) {
     if (st->dms_toggle != nullptr) {
         const QSignalBlocker blocker(st->dms_toggle); // 主题重放不动显示档，只保持控件态与档一致
         st->dms_toggle->setChecked(st->dms_mode);
+        st->dms_toggle->set_tokens(t); // R-184：chip = formkit 自绘件（令牌随主题重放）
     }
     for (QPushButton *remove :
          st->page->findChildren<QPushButton *>(QStringLiteral("tag_remove"))) {
@@ -2707,7 +2710,12 @@ void build_gps_map_section(MetaState *st, QWidget *body, QVBoxLayout *bv) {
     TrackGroup group = make_group(body);
     st->map = new pp::map::MapWidget(group.widget());
     st->map->setObjectName(QStringLiteral("pp-meta-map"));
-    st->map->setFixedHeight(kMapHeight); // UX-4⑤：136 → 260（§16-2 已定档）
+    // UX-4 stretch（M7-R2-B，主对话授权）：260px **起步**（§16-2 定档下限）+ 卡内拉伸吃富余空间
+    // （ux-review §4 改进方案 5：「地图改 stretch=1 吃掉腾出的空间」）；不引入卡内滚动（页面
+    // QScrollArea 是唯一滚动面）。原 setFixedHeight(260) 把富余高度挡在卡外（stretch 只是设计
+    // 稿语句）—— 现 min 260 + 纵向 Expanding，行/卡 stretch=1 逐级把富余喂给地图。
+    st->map->setMinimumHeight(kMapHeight);
+    st->map->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     group.add(st->map, 1);
     st->map_host = group.widget(); // M6-T13：重挂载的原位（挂回时同一宿主 + 同一行槽）
     st->map_line = group.line;
@@ -2807,7 +2815,8 @@ void build_gps_map_section(MetaState *st, QWidget *body, QVBoxLayout *bv) {
     bottom_line->addWidget(st->zoom_out);
     bottom_line->addWidget(st->zoom_in);
     overlay->addLayout(bottom_line);
-    bv->addWidget(group.widget());
+    // UX-4 stretch（M7-R2-B）：地图行 stretch=1 —— 卡体富余高全归地图（不吃行节奏）
+    bv->addWidget(group.widget(), 1);
 }
 
 // 批量 GPS 规则折叠面（修 1-37：纯折叠行，默认折叠；内为规则编辑面）
@@ -3150,7 +3159,7 @@ void gps_wiring(MetaState *st) {
                      [st](int pending) { st->map_loading->setVisible(pending > 0); });
     // M6-T10（§4.5 R4）：显示档切换钮 + 复制链 + 坐标框右键菜单 —— 三条入口同一收口
     // （set_dms_mode / copy_coords）；右键菜单同时承担"复制"（只读框的默认菜单不可用）
-    QObject::connect(st->dms_toggle, &QPushButton::toggled, st,
+    QObject::connect(st->dms_toggle, &QAbstractButton::toggled, st,
                      [st](bool on) { set_dms_mode(st, on); });
     QObject::connect(st->copy_coords, &QToolButton::clicked, st, [st] { copy_coords(st); });
     for (QLineEdit *edit : {st->view_lat, st->view_lon}) {
@@ -3425,6 +3434,127 @@ QWidget *build_switches_card(MetaState *st, QWidget *parent) {
     return card;
 }
 
+// ---------------------------------------------------------------------------
+// M7-R2D1 / UX-1②③④⑤（docs/ux-review-14.md §1 表）：元数据页四卡右键菜单。
+//   * 意图一律走**既有控件/收口**（按钮 click / 开关 toggle / 既有静态函数），不新增第二套
+//     行为路径；菜单内容 = contextmenu 的四类 actions（12 类表逐条）；
+//   * 运行中置灰（intents.running）= 页面级 G5 禁用的读数 —— lock_for_run 对 page_meta
+//     setEnabled(false) 时右键事件本就不达（与分类行「运行中不弹菜单」同效果），置灰是双保险；
+//   * 「时间偏移·从文件读取时间」= 跟随项重读源文件（request_probe_scan；对照行随之刷新），
+//     「GPS·地图选点」= 展开大地图点选（同一 map 控件，点图即取点），「GPS·取地图中心」= 既有
+//     「地图选点」按钮的同一条链路（apply_picked_point(center)）—— 选择已记 handoff 裁定登记。
+// ---------------------------------------------------------------------------
+
+contextmenu::InfoCardIntents info_card_intents(MetaState *st) {
+    contextmenu::InfoCardIntents in;
+    in.running = st->page == nullptr || !st->page->isEnabled();
+    in.copy_all = [st] {
+        QStringList lines;
+        const std::array<QString, 9> keys = {
+            PageMeta::tr("拍摄时间"), PageMeta::tr("相机"), PageMeta::tr("镜头"),
+            PageMeta::tr("曝光"),     PageMeta::tr("尺寸"), PageMeta::tr("色彩"),
+            PageMeta::tr("文件"),     PageMeta::tr("GPS"),  PageMeta::tr("白平衡")};
+        for (int i = 0; i < 9; ++i) {
+            ElidedLabel *value = i < 8 ? st->info_value[std::size_t(i)] : st->info_wb;
+            if (value == nullptr || value->full_text().isEmpty())
+                continue;
+            lines << QStringLiteral("%1: %2").arg(keys[std::size_t(i)], value->full_text());
+        }
+        if (QClipboard *clip = QApplication::clipboard())
+            clip->setText(lines.join(QLatin1Char('\n')));
+    };
+    in.reload = [st] { request_probe_scan(st); };
+    return in;
+}
+
+contextmenu::TimeCardIntents time_card_intents(MetaState *st) {
+    contextmenu::TimeCardIntents in;
+    in.running = st->page == nullptr || !st->page->isEnabled();
+    in.enabled = st->time_enable != nullptr && st->time_enable->isChecked();
+    in.enable_toggle = [st] {
+        if (st->time_enable != nullptr)
+            st->time_enable->toggle();
+    };
+    const auto reset_defaults = [st] {
+        st->loading = true; // 程序化复位：不逐控件发 rules_changed（末尾统一发一次）
+        if (st->seg != nullptr)
+            st->seg->set_current_index(0); // 模式 = Δ 偏移
+        for (QSpinBox *spin : st->delta) {
+            if (spin != nullptr)
+                spin->setValue(0);
+        }
+        if (st->tz_from != nullptr)
+            select_timezone(st->tz_from, 480);
+        if (st->tz_to != nullptr)
+            select_timezone(st->tz_to, 480);
+        st->loading = false;
+        refresh_time_inputs(st);
+        refresh_effective(st);
+        notify_rules_changed(st);
+    };
+    in.reset_defaults = reset_defaults;
+    in.read_from_file = [st] { request_probe_scan(st); };
+    in.clear_rules = [st, reset_defaults] {
+        reset_defaults();
+        if (st->time_enable != nullptr && st->time_enable->isChecked())
+            st->time_enable->toggle(); // 清除规则 = 复位 + 整卡退出规则（build_rules 跳过）
+    };
+    return in;
+}
+
+contextmenu::GpsCardIntents gps_card_intents(MetaState *st) {
+    contextmenu::GpsCardIntents in;
+    in.running = st->page == nullptr || !st->page->isEnabled();
+    in.enabled = st->gps_enable_switch != nullptr && st->gps_enable_switch->isChecked();
+    in.enable_toggle = [st] {
+        if (st->gps_enable_switch != nullptr)
+            st->gps_enable_switch->toggle();
+    };
+    in.read_from_file = [st] {
+        if (st->read_gps != nullptr)
+            st->read_gps->click();
+    };
+    in.pick_on_map = [st] { open_map_expanded_view(st); };
+    in.take_map_center = [st] {
+        if (st->pick_map != nullptr)
+            st->pick_map->click();
+    };
+    in.copy_coords = [st] {
+        if (st->copy_coords != nullptr)
+            st->copy_coords->click();
+    };
+    in.clear_gps = [st] {
+        if (st->clear_gps != nullptr)
+            st->clear_gps->click();
+    };
+    return in;
+}
+
+contextmenu::PrivacyCardIntents privacy_card_intents(MetaState *st) {
+    contextmenu::PrivacyCardIntents in;
+    in.running = st->page == nullptr || !st->page->isEnabled();
+    in.enabled = st->privacy_enable != nullptr && st->privacy_enable->isChecked();
+    in.enable_toggle = [st] {
+        if (st->privacy_enable != nullptr)
+            st->privacy_enable->toggle();
+    };
+    in.strip_privacy = st->strip != nullptr && st->strip->isChecked();
+    in.strip_privacy_toggle = [st] {
+        if (st->strip != nullptr)
+            st->strip->toggle();
+    };
+    in.sync_mtime = st->mtime != nullptr && st->mtime->isChecked();
+    in.sync_mtime_toggle = [st] {
+        if (st->mtime != nullptr)
+            st->mtime->toggle();
+    };
+    in.edit_keywords = [st] {
+        if (st->link_keywords != nullptr)
+            st->link_keywords->click();
+    };
+    return in;
+}
+
 void build_ui(PageMeta *page) {
     auto *st = new MetaState();
     st->page = page;
@@ -3450,11 +3580,21 @@ void build_ui(PageMeta *page) {
     QFrame *gps_card = qobject_cast<QFrame *>(build_gps_card(st, content));
     QFrame *switch_card = qobject_cast<QFrame *>(build_switches_card(st, content));
     st->cards = {info_card, time_card, gps_card, switch_card};
+    // UX-1②③④⑤（M7-R2D1）：一卡一菜单 —— 各接一行（意图构造 = *_card_intents）
+    contextmenu::attach_card_menu(
+        info_card, [st] { return contextmenu::info_card_actions(info_card_intents(st)); });
+    contextmenu::attach_card_menu(
+        time_card, [st] { return contextmenu::time_card_actions(time_card_intents(st)); });
+    contextmenu::attach_card_menu(
+        gps_card, [st] { return contextmenu::gps_card_actions(gps_card_intents(st)); });
+    contextmenu::attach_card_menu(
+        switch_card, [st] { return contextmenu::privacy_card_actions(privacy_card_intents(st)); });
     v->addWidget(info_card);
     v->addWidget(time_card);
-    v->addWidget(gps_card);
+    // UX-4 stretch（M7-R2-B）：富余高归 GPS 卡 → 逐级到地图（ux-review §4-5「吃掉腾出的空间」）；
+    // 尾部 addStretch(1) 撤除 —— 富余不再被尾部空档截留（内容不足一屏时地图吃满右栏）。
+    v->addWidget(gps_card, 1);
     v->addWidget(switch_card);
-    v->addStretch(1);
     scroll->setWidget(content);
 
     apply_style(st);

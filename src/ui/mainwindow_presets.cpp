@@ -190,7 +190,15 @@ void MainWindow::Impl::save_preset_named(const QString &name) {
         warn_preset_op(w, PresetOp::Save, QString::fromStdString(verr));
         return;
     }
-    const std::filesystem::path path = pp::platform::presets_dir() / (name.toStdString() + ".json");
+    // WP5 跨界 2（M7-R2D1）：`presets_dir() / name` 在空 data_dir 时退化成 **CWD 相对名**
+    // （operator/ 对空路径只留尾段）→ 预设会被写到进程工作目录、后续删除按相对名误删 CWD 文件。
+    // paths 层已把空目录收成空路径（path_under），这里补**调用方**守卫：目录不可用 = 显式报错。
+    const std::filesystem::path dir = pp::platform::presets_dir();
+    if (dir.empty()) {
+        warn_preset_op(w, PresetOp::Save, MainWindow::tr("预设目录不可用（数据目录为空）"));
+        return;
+    }
+    const std::filesystem::path path = dir / (name.toStdString() + ".json");
     const std::string err = pp::ui::save_preset(path, preset);
     if (!err.empty()) {
         warn_preset_op(w, PresetOp::Save, QString::fromStdString(err));
@@ -203,7 +211,14 @@ void MainWindow::Impl::save_preset_named(const QString &name) {
 void MainWindow::Impl::delete_preset_file(const QString &path) {
     if (path.isEmpty())
         return;
-    const QString name = QFileInfo(path).completeBaseName();
+    // WP5 跨界 2（M7-R2D1）：删除按**绝对**路径执行 —— 空 presets_dir 场景下拼出的 CWD 相对名
+    // 不得成为删除目标（QFile::remove("x.json") 会删掉工作目录里的同名文件）。
+    const QFileInfo info(path);
+    if (info.isRelative()) {
+        warn_preset_op(w, PresetOp::Delete, MainWindow::tr("拒绝删除相对路径预设（%1）").arg(path));
+        return;
+    }
+    const QString name = info.completeBaseName();
     const QMessageBox::StandardButton answer = QMessageBox::question(
         w, MainWindow::tr("删除预设"), MainWindow::tr("确定删除预设“%1”？").arg(name),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::No);

@@ -18,6 +18,7 @@
 
 #include "ui/preview_panel.h"
 
+#include <QAbstractItemView> // R-314：←/→ 在列表焦点下让位（分组节键盘折叠）
 #include <QAbstractSpinBox>
 #include <QApplication>
 #include <QComboBox>
@@ -64,9 +65,10 @@
 #include <utility>
 #include <vector>
 
-#include "ui/formkit.h" // A17/T11：打标 chip = formkit::ChipButton（§6.1 批量快捷打标唯一形态）
-#include "ui/icons.h"   // M5-T3：翻图钮/缩放 chip 的图标一律矢量绘制（C3）
-#include "ui/theme.h"   // 只在实现里引（头文件前置声明 theme::Tokens 的原因见 preview_panel.h）
+#include "core/logger.h" // R-278：出图诊断走 logger（原 std::printf 绕过日志面）
+#include "ui/formkit.h"  // A17/T11：打标 chip = formkit::ChipButton（§6.1 批量快捷打标唯一形态）
+#include "ui/icons.h"    // M5-T3：翻图钮/缩放 chip 的图标一律矢量绘制（C3）
+#include "ui/theme.h"    // 只在实现里引（头文件前置声明 theme::Tokens 的原因见 preview_panel.h）
 
 namespace pp::ui {
 namespace {
@@ -731,15 +733,18 @@ struct PreviewPanel::Impl {
     // 缩放状态（模式/比例/平移）**只在舞台里一份**（PreviewView）—— M5-T6：旧的 bool zoom_fit
     // 副本已收敛（单一数据源：面板读 view->zoom_fit()/zoom_percent()，避免两处状态漂移）
     bool locked = false; // G5 运行期只读（锁打标热键）
-    bool hotkeys_enabled = true;
+    // M7-R2D1 / R-278：hotkeys_enabled（set_hotkeys_enabled 的死开关）已随死 API 清理移除。
     const pp::ClassRegistry *classes = nullptr; // 不持有（T11 的注册表实例）
 
     // 加载状态机：attempted_path = 最近一次已发起的请求路径（幂等去重 + 防失败重试风暴；
     // 需要强制重取时走公开的 reload()）；loaded_path = 最近一次**成功出图**的路径
-    // （信息行与「已有图」的判据）。
+    // （信息行与「已有图」的判据）；failed_path/failed_error = 最近一次**失败**的请求
+    // （R-277：信息行据此显「无法预览：…」，不再恒显「载入中…」）。
     QString attempted_path;
     QString loaded_path;
     QString info_text;
+    QString failed_path;
+    QString failed_error;
 
     // 控件
     PreviewView *view = nullptr;
@@ -1059,27 +1064,32 @@ void PreviewPanel::Impl::on_loaded(int index, std::chrono::steady_clock::time_po
         view->set_placeholder(T("无法预览：") + QString::fromStdString(result.error));
         loaded_path.clear();
         info_text.clear();
-        std::printf("preview: index=%d load_ms=%lld failed err=\"%s\"\n", index, ms,
-                    result.error.c_str());
-        std::fflush(stdout);
+        // R-277：记住失败（信息行不再恒显「载入中…」—— 见 current_info_text）
+        failed_path = index >= 0 && index < files.size() ? files.at(index) : QString();
+        failed_error = QString::fromStdString(result.error);
+        // R-278：出图诊断收 logger（原 std::printf 绕过日志面；内容口径不变）
+        pp::log_warn("preview", failed_path.toStdString(),
+                     "load failed (" + std::to_string(ms) + " ms): " + result.error);
         emit q->display_changed();
-        emit q->preview_loaded(index, ms, false);
         return;
     }
     view->set_image(result.image);
     loaded_path = index >= 0 && index < files.size() ? files.at(index) : QString();
+    failed_path.clear(); // R-277：成功出图即清算失败档
+    failed_error.clear();
     // 信息行（§6.1「文件名/尺寸/位深/色彩空间随图显示」；尺寸/位深 = 源文件 probe 摘要）
     info_text = QStringLiteral("%1×%2 · %3 bit · %4")
                     .arg(result.info.width)
                     .arg(result.info.height)
                     .arg(result.info.src_bitdepth)
                     .arg(QString::fromStdString(result.color_space));
-    std::printf("preview: index=%d px=%dx%d from_embedded=%d load_ms=%lld info=\"%s\"\n", index,
-                result.image.width(), result.image.height(), result.from_embedded ? 1 : 0, ms,
-                qUtf8Printable(info_text));
-    std::fflush(stdout);
+    // R-278：出图诊断收 logger（250ms 目标取证口径不变，级别 = debug）
+    pp::log_debug("preview", loaded_path.toStdString(),
+                  "loaded " + std::to_string(result.image.width()) + "x" +
+                      std::to_string(result.image.height()) +
+                      (result.from_embedded ? " from_embedded=1" : " from_embedded=0") + " (" +
+                      std::to_string(ms) + " ms) info=" + info_text.toStdString());
     emit q->display_changed();
-    emit q->preview_loaded(index, ms, true);
 }
 
 bool PreviewPanel::Impl::hotkey_taken(QChar ch) const {
@@ -1117,17 +1127,23 @@ bool PreviewPanel::Impl::route_key(QObject *watched, QEvent *event) {
     }
     switch (key_event->key()) {
     case Qt::Key_Left: // §6.1 翻图热键
-        q->previous();
+    case Qt::Key_Right: {
+        // R-314：焦点在列表视图（QTreeView/QListView…）时把 ←/→ **让给视图** —— 原应用级路由
+        // 无条件吞方向键 → 分组节的键盘折叠/展开永远不可达。非列表焦点下翻图语义不变。
+        if (focus != nullptr && qobject_cast<QAbstractItemView *>(focus) != nullptr)
+            return false;
+        if (key_event->key() == Qt::Key_Left)
+            q->previous();
+        else
+            q->next();
         return true;
-    case Qt::Key_Right:
-        q->next();
-        return true;
+    }
     default:
         break;
     }
     const QString text = key_event->text();
-    if (hotkeys_enabled && !locked && text.size() == 1 && hotkey_taken(text.at(0))) {
-        emit_hotkey(text.at(0).toLatin1()); // 打标接线位（T11 接通）
+    if (!locked && text.size() == 1 && hotkey_taken(text.at(0))) {
+        emit_hotkey(text.at(0).toLatin1()); // 打标接线位（T11 接通；数字键两路都认）
         return true;
     }
     return false;
@@ -1204,7 +1220,7 @@ void PreviewPanel::set_locked(bool locked) {
     d.update_keyhint_enabled(); // 运行期只读：打标热键置灰（G5 语义零改动）
 }
 
-void PreviewPanel::set_hotkeys_enabled(bool on) { impl_->hotkeys_enabled = on; }
+// M7-R2D1 / R-278：set_hotkeys_enabled / current_path 已随死 API 清理移除（零消费）。
 
 QString PreviewPanel::current_file_name() const {
     const Impl &d = *impl_;
@@ -1217,8 +1233,12 @@ QString PreviewPanel::current_info_text() const {
     const Impl &d = *impl_;
     if (d.current < 0 || d.current >= d.files.size())
         return {};
-    if (d.loaded_path == d.files.at(d.current))
+    const QString &current_path = d.files.at(d.current);
+    if (d.loaded_path == current_path)
         return d.info_text;
+    // R-277：加载失败不再恒显「载入中…」—— 与舞台的「无法预览」同判（失败档随成功出图清算）
+    if (d.failed_path == current_path)
+        return d.failed_error.isEmpty() ? tr("无法预览") : tr("无法预览：%1").arg(d.failed_error);
     return tr("载入中…");
 }
 
@@ -1227,13 +1247,6 @@ QString PreviewPanel::current_position_text() const {
     if (d.current < 0 || d.current >= d.files.size())
         return {};
     return QStringLiteral("%1 / %2").arg(d.current + 1).arg(d.files.size());
-}
-
-QString PreviewPanel::current_path() const {
-    const Impl &d = *impl_;
-    if (d.current < 0 || d.current >= d.files.size())
-        return {};
-    return d.files.at(d.current);
 }
 
 bool PreviewPanel::image_visible() const {

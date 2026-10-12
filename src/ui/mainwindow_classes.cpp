@@ -135,10 +135,9 @@ void MainWindow::Impl::load_classes() {
         return;
     std::string err;
     if (!classes.load(std::filesystem::path(classes_file.toStdString()), &err)) {
-        // 损坏的注册表：**不改动用户文件**、保持默认模板并在 stderr 明说（不静默）
-        std::fprintf(stderr, "ui: classes.json load failed (%s): %s\n",
-                     classes_file.toUtf8().constData(), err.c_str());
-        std::fflush(stderr);
+        // 损坏的注册表：**不改动用户文件**、保持默认模板并明说（不静默）。
+        // R-278：诊断输出收 logger（原 std::fprintf 绕过日志面）
+        pp::log_warn("ui", classes_file.toStdString(), "classes.json load failed: " + err);
     }
 }
 
@@ -147,9 +146,7 @@ void MainWindow::Impl::save_classes() {
         return;
     std::string err;
     if (!classes.save(std::filesystem::path(classes_file.toStdString()), &err)) {
-        std::fprintf(stderr, "ui: classes.json save failed (%s): %s\n",
-                     classes_file.toUtf8().constData(), err.c_str());
-        std::fflush(stderr);
+        pp::log_warn("ui", classes_file.toStdString(), "classes.json save failed: " + err);
         return;
     }
     // §6.1：预览面板的热键提示表随注册表（增删改名/热键）动态重生成
@@ -182,16 +179,10 @@ void MainWindow::Impl::apply_class_to_selection(const QString &class_id) {
     for (const std::size_t row : targets)
         model->set_class(row, class_id.toStdString()); // 一文件一分类（空 id = 清除归属）
     save_classes(); // 打标即写 registry（一次落盘；逐行写会放大 IO）
-    sync_class_views(targets.front());
     w->refresh_status();
 }
 
-void MainWindow::Impl::sync_class_views(std::size_t row) {
-    if (classify_panel == nullptr)
-        return;
-    const QString class_id =
-        row < model->size() ? QString::fromStdString(model->class_id_of(row)) : QString();
-    classify_panel->set_current_class_id(class_id); // .cls-row.on 跟随选中（§5.2 同一条跟随口径）
-}
+// M7-R2D1 / R-143：sync_class_views（选中项 → 分类面板高亮）随 `.on` 拆态为过滤档而移除 ——
+// 归属可见面 = 行内分类色点（FileListModel::Qt::DecorationRole），不再有第二条高亮通道。
 
 } // namespace pp::ui

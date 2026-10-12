@@ -27,14 +27,18 @@
 //     照片衬垫把 letterbox 与画布底略作区分（修 3-21）；小图放大默认最近邻（修 3-20）；
 //     翻图钮 28×28（修 1-21）；无文件时打标 chip 与翻图钮同档禁用（修 1-22）。
 //   * 热键提示表 = `pp::ClassRegistry` 的 classes（hotkey ≠ 0）+ 保留的 `0 清除` 一枚，**动态生成**
-//     （T8 的 classify 接口消费点）；打标动作本身留给 W2-T11：本面板只发 `class_hotkey(QChar)`，
-//     并由 `set_hotkeys_enabled(false)` 给 T11 留出「改由分类面板自管热键」的开关。
+//     （T8 的 classify 接口消费点）；打标动作本身留给 W2-T11：本面板只发 `class_hotkey(QChar)`
+//     （M7-R2D1/R-278：零消费的 `set_hotkeys_enabled` 开关已随死 API 清理移除 —— 打标热键的
+//     开关面只有 `set_locked`（G5 运行期只读）一条）。
 //   * 运行期（G5）语义：`set_locked(true)` 只锁**打标热键**（分类只读）；翻图/缩放仍可用（预览本身
 //     无修改语义）。与 mainwindow 的 lock_for_run 连线。
 //   * 键盘路由：←/→/数字 走**应用级事件过滤器**（`QApplication::installEventFilter`）而不是
 //     QShortcut —— QListView/QAbstractItemView 会以 ShortcutOverride 吃掉方向键（列表有焦点时
 //     快捷键根本不触发）；过滤器只在「焦点窗口 == 本面板窗口、焦点不在文本输入控件、无模态/弹窗」
 //     时消费按键，故搜索框里正常输入数字/方向键不受影响。
+//   * M7-R2D1 / R-314：焦点在 **QAbstractItemView（文件列表树等）** 时 ←/→ **不拦**（原应用级路由
+//     把方向键全吞 → 分组节的键盘折叠/展开不可达）—— 翻图热键在非列表焦点下不变；数字打标
+//     两路都认（冒烟 `preview-hotkey` 以文件树为发送目标）。
 #pragma once
 
 #include "core/classify.h"
@@ -90,14 +94,16 @@ public:
     void set_class_registry(const pp::ClassRegistry *registry);
     // 运行期只读（G5）：锁打标热键（提示表置灰），翻图/缩放不受影响。
     void set_locked(bool locked);
-    // T11 若自管热键（自己的 QShortcut/事件过滤器）→ 关掉本面板的热键消费，避免按键歧义。
-    void set_hotkeys_enabled(bool on);
+    // M7-R2D1 / R-278 死 API 清理（零消费，全仓 grep 仅定义处）：
+    //   * `set_hotkeys_enabled(bool)` —— 从未被调用；热键开关只有 set_locked 一条；
+    //   * `current_path()` —— 零消费（消费方一律走 current_index + 列表模型）；
+    //   * `preview_loaded(int,qint64,bool)` 信号 —— 零连接（250ms 取证目标已由 mN-report 落档）。
 
     // 卡头显示用（mainwindow 读取后写 pill / hint 两枚标签）
-    QString current_file_name() const;     // 文件名（无选中 → 空）
-    QString current_info_text() const;     // "4032×3024 · 8 bit · Display P3"（载入前为空）
+    QString current_file_name() const; // 文件名（无选中 → 空）
+    QString current_info_text() const; // "4032×3024 · 8 bit · Display P3"（载入前「载入中…」；
+                                       // 加载失败 → 「无法预览：…」——R-277：不再恒显「载入中…」）
     QString current_position_text() const; // "1 / 24"（空列表 → ""）
-    QString current_path() const;
 
     // 自检/诊断（不改变状态）
     bool image_visible() const;    // 当前项是否已有图（含缓存命中）
@@ -109,10 +115,10 @@ public slots:
     void reload(); // 强制重取当前项（缓存命中即瞬时）
 
 signals:
-    void display_changed();                             // 文件名/信息行/位置变化 → 卡头刷新
-    void zoom_changed(bool fit);                        // 缩放变化（载荷 = 是否处于适应档）
-    void class_hotkey(QChar key);                       // 打标接线位（T11 接通；'0' = 清除）
-    void preview_loaded(int index, qint64 ms, bool ok); // 出图诊断（250ms 目标取证）
+    void display_changed();       // 文件名/信息行/位置变化 → 卡头刷新
+    void zoom_changed(bool fit);  // 缩放变化（载荷 = 是否处于适应档）
+    void class_hotkey(QChar key); // 打标接线位（T11 接通；'0' = 清除）
+    // M7-R2D1 / R-278：preview_loaded(index, ms, ok)（出图诊断信号）零连接，随死 API 清理移除。
     // R-151（翻图/打标对象错位）：**仅**翻图动作（←/→/翻图钮）后发一次，载荷 = 新的当前项
     // （列表行号）。消费方据此把左栏选中同步过来 —— "所见即所标"。display_changed 不发它：
     // 那是选中驱动的跟随刷新，反向同步会吞掉多选（多选 → 预览只显示首个）。加性信号。

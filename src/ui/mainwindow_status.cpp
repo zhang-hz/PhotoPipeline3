@@ -130,6 +130,10 @@ using theme::preferred_theme_mode;
 
 // A19（T11，§3.2 骨架行）：底栏「剩余磁盘」段的自然语读数（1024 进制；B/KB 整数、MB 起一位
 // 小数 —— 与 §7.2 预估卡的磁盘读数同族口径，见 ui/page_output.cpp 的 human_bytes）。
+// R-264（M7-R2D1）：本函数与 page_output.cpp 的 human_bytes **逐字同款**（双实现登记于
+// deep-review R-254）。收敛需动非本包文件面（human_bytes 在 page_output.cpp 匿名命名空间；
+// fmt 族单源 run_status_text.h 的精度/档位口径不同且盘符格式被 smoke 探针
+// `^\d+(\.\d)? (B|KB|MB|GB|TB|PB)$` 钉住）→ 已登记 handoff「跨界需求」，本包不动格式。
 QString natural_bytes(qint64 bytes) {
     constexpr double kKiB = 1024.0;
     static const char *const kUnits[] = {"B", "KB", "MB", "GB", "TB", "PB"};
@@ -196,6 +200,12 @@ void MainWindow::refresh_status() {
 void MainWindow::Impl::refresh_status_summary(std::size_t count, std::size_t checked,
                                               std::size_t exceptions, const QString &reason) {
     Impl &d = *this;
+    // UX-2（M7-R2D1）：一次性过滤态提示优先显示（非阻塞；kStatusNoteMs 后回落正常状态行）
+    if (!d.status_note.isEmpty()) {
+        d.status->set_full_text(d.status_note);
+        d.apply_status_tone(theme::kToneNeutral);
+        return;
+    }
     QString text;
     const char *tone = theme::kToneNeutral;
     if (d.running) {
@@ -252,6 +262,15 @@ void MainWindow::Impl::refresh_status_summary(std::size_t count, std::size_t che
     }
     d.status->set_full_text(text); // §9.3：超长省略号（不折行）
     d.apply_status_tone(tone);
+    // R-144（M7-R2D1）：失败段**下钻** —— 点击转运行页（原因行所在）；失败清单落盘出处进
+    // tooltip（write_failure_list 在收尾时落 logs/）。非失败态不挂 tooltip/手型。
+    const bool drillable = !d.running && d.run_failed > 0;
+    d.status->setCursor(drillable ? Qt::PointingHandCursor : Qt::ArrowCursor);
+    d.status->setToolTip(drillable
+                             ? MainWindow::tr("点击转到运行页查看失败原因\n失败清单：%1")
+                                   .arg(d.failure_list_path.isEmpty() ? MainWindow::tr("（未落盘）")
+                                                                      : d.failure_list_path)
+                             : QString());
 }
 
 // 段2（R-253）：底栏第二段 = 运行中 ETA / 空闲产出量摘要（含悬浮明细）。
@@ -289,16 +308,24 @@ void MainWindow::Impl::refresh_status_output_segment(std::size_t checked) {
     }
 }
 
-// 段4（R-253）：卡头计数徽标（文件数 / 不支持数）。
+// 段4（R-253）：卡头计数徽标（文件数 / 不支持数 / 未能读取数）。
 void MainWindow::Impl::refresh_status_badges(std::size_t count, std::size_t unsupported_files) {
     Impl &d = *this;
     // 卡头计数徽标（mockup .pill 内是纯数字）
     d.file_count->set_full_text(QString::number(count));
     d.file_count->setVisible(true);
-    d.unsupported->set_full_text(unsupported_files > 0
-                                     ? MainWindow::tr("（%1 个不支持）").arg(unsupported_files)
-                                     : QString());
-    d.unsupported->setVisible(unsupported_files > 0);
+    // R-148（M7-R2D1）：目录枚举/读取失败与不支持数同一条 hint 面（任一为 0 时不出该段，
+    // 既有「（N 个不支持）」文案逐字不变）
+    QStringList parts;
+    if (unsupported_files > 0)
+        parts << MainWindow::tr("%1 个不支持").arg(unsupported_files);
+    const std::size_t unreadable = model != nullptr ? model->unreadable_count() : 0;
+    if (unreadable > 0)
+        parts << MainWindow::tr("%1 项未能读取").arg(unreadable);
+    d.unsupported->set_full_text(
+        parts.isEmpty() ? QString()
+                        : MainWindow::tr("（%1）").arg(parts.join(QStringLiteral(" · "))));
+    d.unsupported->setVisible(!parts.isEmpty());
 }
 
 // 段5（R-253）：CTA（开始运行/运行中读数）与工具钮（移除/清除筛选）可用态。

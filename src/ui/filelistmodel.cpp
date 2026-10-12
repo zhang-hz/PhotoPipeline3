@@ -6,6 +6,9 @@
 //     大小写不敏感；点文件/点目录跳过；不支持的普通文件只计数不入列（§2.8 v1.1：
 //     按 lexically_normal 路径去重，重复 add 不重复累计；clear() 同时归零集合与计数）；
 //     lexically_normal 去重；新增行入缩略图队列（endInsertRows 之后行号才有效）
+//   - M7-R2D1 加性（R-025/148/149/026）：目录扫盘搬后台（GUI 不冻结；PP_UI_NO_STATE 下保持
+//     同步供 smoke 走查确定性）；去重键 = 弱规范化 + 大小写折叠（别名归一）；枚举/读取失败
+//     计入「N 项未能读取」；分组摘要回填走路径 → 行号哈希
 //   - M2-T16b：每个 add_paths 批次内按路径字典序排序（跨批次仍为追加语义）
 //   - StateTextRole 文本与徽标颜色共用本 TU 的 §3.1 十二态表（唯一来源）
 //   - apply_thumb stale-guard：row 越界或 path 不匹配 → 丢弃（删行/清空后的在途结果）
@@ -207,6 +210,10 @@ void paint_selection(QPainter *painter, const QRect &item_rect, const theme::Tok
 }
 
 constexpr int kGroupCountAlphaPct = 80; // .cnt{opacity:.8}（节头计数）
+// R-280：行尾分类色点边长（原裸字面量 8）—— mockup `.chip-dot{width:8px;height:8px}`。
+constexpr int kChipDotPx = 8;
+// R-280：分组结构重建去抖（原裸字面量 30ms）—— 摘要/键逐行落定 → 合并为一次重建。
+constexpr int kRebuildDebounceMs = 30;
 
 std::filesystem::path fs_path(const QString &s) {
     return std::filesystem::path(s.toStdString()).lexically_normal();
@@ -215,6 +222,22 @@ QString fs_string(const std::filesystem::path &p) { return QString::fromStdStrin
 
 // 目录自走/去重/stale-guard 全部走同一规范化形式（lexically_normal 字符串）
 QString norm_string(const QString &s) { return fs_string(fs_path(s)); }
+
+// R-149：同文件别名去重键 —— **弱规范化 + 大小写折叠**（Windows 大小写不敏感；8.3 短名 /
+// UNC 前缀 / 符号链接由 weakly_canonical 收敛到同一实体名）。弱规范化只解析存在的前缀、
+// 不因尾段缺失而失败；取不到（盘符不存在等）→ 退化 lexically_normal。显示路径不改（行内
+// 仍显示用户拖入的那条），只有**去重判据**走本键 —— 同文件以别名二次入列/二次输出由此挡掉。
+QString dedup_key(const std::filesystem::path &p) {
+    std::error_code ec;
+    std::filesystem::path canon = std::filesystem::weakly_canonical(p, ec);
+    if (ec || canon.empty())
+        canon = p.lexically_normal();
+    QString key = fs_string(canon);
+#ifdef _WIN32
+    key = key.toLower(); // Windows 路径大小写折叠（Linux/macOS 大小写敏感，不折叠）
+#endif
+    return key;
+}
 
 // 扩展名白名单（大小写不敏感，pp::input_extensions() 的项不含点）
 bool is_supported_ext(const std::filesystem::path &p) {
@@ -227,9 +250,12 @@ bool is_supported_ext(const std::filesystem::path &p) {
     return std::find(exts.begin(), exts.end(), ext) != exts.end();
 }
 
-// 单个输入项 → 候选文件（目录递归；点文件/点目录跳过；不支持者按去重路径计数，v1.1）
+// 单个输入项 → 候选文件（目录递归；点文件/点目录跳过；不支持者按去重路径计数，v1.1）。
+// R-148：枚举/读取失败的输入项**计数**（原实现静默忽略，用户不知道漏了什么）——目录打不开 /
+// 枚举中断 / 输入项不存在或不可读，各计 1 项「未能读取」。
 void collect_from(const std::filesystem::path &input, std::vector<std::filesystem::path> &files,
-                  std::set<QString> &unsupported_seen, std::size_t &unsupported) {
+                  std::set<QString> &unsupported_seen, std::size_t &unsupported,
+                  std::size_t &unreadable) {
     // 不支持文件：仅首次遇到（自上次 clear 以来）才计数（§2.8 v1.1 裁定）
     const auto count_unsupported = [&](const std::filesystem::path &p) {
         if (unsupported_seen.insert(fs_string(p.lexically_normal())).second)
@@ -239,12 +265,16 @@ void collect_from(const std::filesystem::path &input, std::vector<std::filesyste
     if (std::filesystem::is_directory(input, ec)) {
         std::filesystem::recursive_directory_iterator it(
             input, std::filesystem::directory_options::skip_permission_denied, ec);
-        if (ec)
-            return; // 目录打不开（权限/竞态）→ 忽略该输入项
+        if (ec) {
+            ++unreadable; // R-148：目录打不开（权限/竞态）→ 计入「未能读取」
+            return;
+        }
         const std::filesystem::recursive_directory_iterator end;
         for (; it != end; it.increment(ec)) {
-            if (ec)
-                break; // 目录项枚举失败 → 停止该子树
+            if (ec) {
+                ++unreadable; // R-148：枚举中断（该子树的剩余项读不到）
+                break;
+            }
             const std::filesystem::path &p = it->path();
             const std::string name = p.filename().string();
             if (!name.empty() && name.front() == '.') { // 点文件/点目录
@@ -254,8 +284,11 @@ void collect_from(const std::filesystem::path &input, std::vector<std::filesyste
                 continue;
             }
             std::error_code type_ec;
-            if (!it->is_regular_file(type_ec))
+            if (!it->is_regular_file(type_ec)) {
+                if (type_ec)
+                    ++unreadable; // R-148：条目 stat 失败（被删/无权限）
                 continue;
+            }
             if (is_supported_ext(p)) {
                 files.push_back(p.lexically_normal());
             } else {
@@ -264,15 +297,79 @@ void collect_from(const std::filesystem::path &input, std::vector<std::filesyste
         }
         return;
     }
-    if (std::filesystem::is_regular_file(input, ec)) {
+    std::error_code file_ec;
+    if (std::filesystem::is_regular_file(input, file_ec)) {
         if (is_supported_ext(input)) {
             files.push_back(input.lexically_normal());
         } else {
             count_unsupported(input);
         }
+        return;
     }
-    // 不存在/非普通文件 → 忽略（冻结接口无错误通道；unsupported_count 只统计普通文件）
+    // R-148：不存在/非普通文件/不可读 → 计入「未能读取」（原为静默忽略）
+    ++unreadable;
 }
+
+// R-025：一次 add_paths 的扫盘产物（worker 线程产出、GUI 线程消费；纯数据）。
+// 批内排序与逐文件 stat/去重键都在 worker 完成 —— GUI 线程只剩成批插入。
+struct ScanBatch {
+    std::vector<ScannedPath> files;
+    std::vector<QString> unsupported_keys;
+    std::size_t unreadable = 0;
+};
+
+ScanBatch scan_inputs(const QStringList &paths) {
+    ScanBatch batch;
+    std::vector<std::filesystem::path> found;
+    std::set<QString> unsupported_seen;
+    std::size_t unsupported = 0;
+    for (const QString &p : paths) {
+        if (p.isEmpty())
+            continue;
+        collect_from(fs_path(p), found, unsupported_seen, unsupported, batch.unreadable);
+    }
+    // M2-T16b：批次内按路径字典序排序后再追加 —— UI 行序不再依赖 readdir 顺序。
+    std::sort(found.begin(), found.end(),
+              [](const std::filesystem::path &a, const std::filesystem::path &b) {
+                  return a.string() < b.string();
+              });
+    batch.files.reserve(found.size());
+    for (const std::filesystem::path &f : found) {
+        ScannedPath item;
+        item.path = fs_string(f);
+        item.dedup_key = dedup_key(f); // R-149：别名归一（worker 内做，GUI 零 IO）
+        std::error_code size_ec;
+        const std::uintmax_t bytes = std::filesystem::file_size(f, size_ec);
+        item.size_bytes = size_ec ? -1 : static_cast<qint64>(bytes); // M5-T5 行内「大小」
+        batch.files.push_back(std::move(item));
+    }
+    batch.unsupported_keys.assign(unsupported_seen.begin(), unsupported_seen.end());
+    return batch;
+}
+
+// R-025：后台扫盘任务（串行走 scan_pool_，与 EXIF 摘要同池 —— 都是只读 IO，不与缩略图/转码
+// 抢核）。结果经 Qt 队列投递回 GUI 线程（context = 模型自身，模型析构则事件自动作废）。
+class AddPathsRunnable : public QRunnable {
+public:
+    AddPathsRunnable(FileListModel *model, QStringList paths)
+        : model_(model), paths_(std::move(paths)) {
+        setAutoDelete(true);
+    }
+    void run() override {
+        ScanBatch batch = scan_inputs(paths_);
+        FileListModel *const model = model_;
+        QMetaObject::invokeMethod(
+            model,
+            [model, batch] {
+                model->apply_scanned_paths(batch.files, batch.unsupported_keys, batch.unreadable);
+            },
+            Qt::QueuedConnection);
+    }
+
+private:
+    FileListModel *model_ = nullptr;
+    QStringList paths_;
+};
 
 } // namespace
 
@@ -362,53 +459,61 @@ bool FileListModel::setData(const QModelIndex &idx, const QVariant &value, int r
 void FileListModel::add_paths(const QStringList &paths) {
     if (paths.isEmpty())
         return;
-
-    std::vector<std::filesystem::path> files;
-    std::size_t unsupported = 0;
-    for (const QString &p : paths) {
-        if (p.isEmpty())
-            continue;
-        collect_from(fs_path(p), files, unsupported_paths_, unsupported);
+    // R-025：目录递归扫盘（recursive_directory_iterator + 逐文件 stat + 别名归一）搬后台 ——
+    // 大目录/网络盘拖入不再冻结 GUI（poll/取消不走）。回填见 apply_scanned_paths。
+    // smoke/dev harness（PP_UI_NO_STATE）保持**同步**：dev_ui_smoke 在 add_paths 返回后立即
+    // 走查（无等待点），异步会让探针读到空列表成为竞态 —— 判据确定性优先（裁定见 handoff）。
+    if (qEnvironmentVariableIsSet("PP_UI_NO_STATE")) {
+        const ScanBatch batch = scan_inputs(paths);
+        apply_scanned_paths(batch.files, batch.unsupported_keys, batch.unreadable);
+        return;
     }
+    if (scan_pool_ == nullptr) {
+        scan_pool_ = new QThreadPool(this);
+        scan_pool_->setMaxThreadCount(1); // 串行：扫盘/EXIF 摘要都是只读 IO，不与转码抢核
+    }
+    scan_pool_->start(new AddPathsRunnable(this, paths));
+}
 
-    // M2-T16b：批次内按路径字典序排序后再追加 —— UI 行序不再依赖 readdir 顺序（可预测，并使
-    // 01-meta.png 等截图 / T9 回归基线确定化）。跨批次仍是追加语义：多次 add 的先后顺序保留。
-    std::sort(files.begin(), files.end(),
-              [](const std::filesystem::path &a, const std::filesystem::path &b) {
-                  return a.string() < b.string();
-              });
-
-    // 去重：已入列（known_paths_）与本批次内重复都跳过
-    std::vector<std::filesystem::path> fresh;
+void FileListModel::apply_scanned_paths(const std::vector<ScannedPath> &files,
+                                        const std::vector<QString> &unsupported_keys,
+                                        std::size_t unreadable) {
+    // 去重：已入列（known_paths_）与本批次内重复都跳过（R-149：键 = 别名归一键）
+    std::vector<const ScannedPath *> fresh;
     std::set<QString> batch_keys;
-    for (const std::filesystem::path &f : files) {
-        const QString key = fs_string(f);
-        if (known_paths_.contains(key) || !batch_keys.insert(key).second)
+    for (const ScannedPath &f : files) {
+        if (known_paths_.contains(f.dedup_key) || !batch_keys.insert(f.dedup_key).second)
             continue;
-        fresh.push_back(f);
+        fresh.push_back(&f);
     }
 
     const std::size_t first_new = rows_.size();
     if (!fresh.empty()) {
         beginInsertRows(QModelIndex(), int(first_new), int(first_new + fresh.size() - 1));
         rows_.reserve(rows_.size() + fresh.size());
-        for (const std::filesystem::path &f : fresh) {
+        for (const ScannedPath *f : fresh) {
             FileRow row;
-            row.entry.src = f;
-            row.entry.base_dir = f.parent_path(); // §2.8：base_dir = src.parent
-            // M5-T5（§7.5 行内「大小」）：入列时一次 stat（与自走的 is_regular_file 同把锁；
-            // 失败 → -1 = 未知，行内不显示"大小"而不是显示 0）
-            std::error_code size_ec;
-            const std::uintmax_t bytes = std::filesystem::file_size(f, size_ec);
-            row.size_bytes = size_ec ? -1 : static_cast<qint64>(bytes);
-            known_paths_.insert(fs_string(f));
+            row.entry.src = fs_path(f->path);
+            row.entry.base_dir = row.entry.src.parent_path(); // §2.8：base_dir = src.parent
+            row.size_bytes = f->size_bytes; // M5-T5：stat 已在 worker 做（-1 = 未知，不显 0）
+            row.dedup_key = f->dedup_key;
+            known_paths_.insert(f->dedup_key);
+            row_by_key_[row.entry.src.string()] = rows_.size(); // R-026：路径 → 行号
             rows_.push_back(std::move(row));
         }
         endInsertRows();
         // R-024：增量计数（新行默认 checked = true、无例外）
         checked_ += fresh.size();
     }
-    unsupported_ += unsupported;
+    // R-148：枚举/读取失败计入「N 项未能读取」
+    unreadable_ += unreadable;
+    // 不支持计数：按去重键只记首次（v1.1 口径；键集合与旧行为同源）
+    std::size_t unsupported_new = 0;
+    for (const QString &key : unsupported_keys) {
+        if (unsupported_paths_.insert(key).second)
+            ++unsupported_new;
+    }
+    unsupported_ += unsupported_new;
 
     // 新增行 → 缩略图入队（此时行号已生效）
     if (thumbs_) {
@@ -418,7 +523,7 @@ void FileListModel::add_paths(const QStringList &paths) {
     }
     if (!fresh.empty())
         scan_group_sources(); // M4-T11：新增行的分组摘要（月份/相机型号）异步补扫
-    if (!fresh.empty() || unsupported != 0)
+    if (!fresh.empty() || unsupported_new != 0 || unreadable != 0)
         emit content_changed();
 }
 
@@ -457,7 +562,7 @@ void FileListModel::remove_rows(const QList<int> &rows) {
         const int last = it->second;
         beginRemoveRows(QModelIndex(), first, last);
         for (int r = last; r >= first; --r) {
-            known_paths_.erase(fs_string(rows_[std::size_t(r)].entry.src));
+            known_paths_.erase(rows_[std::size_t(r)].dedup_key); // R-149：别名归一键
             if (rows_[std::size_t(r)].checked && checked_ > 0)
                 --checked_; // R-024：增量计数
             if (rows_[std::size_t(r)].has_exception() && exceptions_ > 0)
@@ -466,6 +571,10 @@ void FileListModel::remove_rows(const QList<int> &rows) {
         }
         endRemoveRows();
     }
+    // R-026：行号漂移 → 路径 → 行号表整体重建（删除是用户动作尺度，O(n) 可接受）
+    row_by_key_.clear();
+    for (std::size_t i = 0; i < rows_.size(); ++i)
+        row_by_key_[rows_[i].entry.src.string()] = i;
     // 在途/排队结果由 apply_thumb stale-guard（行号漂移 → path 不匹配）丢弃；
     // 行号下移后重新入队仍缺探测信息的行（否则被删行之后的行会永久失去缩略图）
     enqueue_pending_thumbs();
@@ -475,13 +584,15 @@ void FileListModel::remove_rows(const QList<int> &rows) {
 void FileListModel::clear() {
     if (thumbs_)
         thumbs_->clear_pending(); // 在途结果 → stale（apply_thumb 亦按越界丢弃）
-    const bool changed = !rows_.empty() || unsupported_ != 0;
+    const bool changed = !rows_.empty() || unsupported_ != 0 || unreadable_ != 0;
     beginResetModel();
     rows_.clear();
     known_paths_.clear();
     unsupported_paths_.clear(); // v1.1：去重集合与计数一起归零
     unsupported_ = 0;
-    checked_ = 0; // R-024：增量计数归零
+    unreadable_ = 0;     // R-148：与其它计数一起归零
+    row_by_key_.clear(); // R-026
+    checked_ = 0;        // R-024：增量计数归零
     exceptions_ = 0;
     endResetModel();
     if (changed)
@@ -498,6 +609,8 @@ const FileRow &FileListModel::row(std::size_t i) const {
 }
 
 std::size_t FileListModel::unsupported_count() const { return unsupported_; }
+
+std::size_t FileListModel::unreadable_count() const { return unreadable_; } // R-148
 
 std::size_t FileListModel::exception_count() const {
     // R-024：增量计数（原 O(n) 全表扫；运行期逐文件事件 × refresh_status 会反复压 GUI 线程）
@@ -854,19 +967,16 @@ void FileListModel::apply_group_scan(int row, const QString &path, const std::st
     if (scan_pending_ > 0)
         --scan_pending_;
     scan_inflight_.erase(norm_string(path));
-    // stale-guard：按**路径**回填（行号会因删行漂移；路径唯一 → 行号无关）
+    // stale-guard：按**路径**回填（行号会因删行漂移；路径唯一 → 行号无关）。
+    // R-026：路径 → 行号哈希 O(1)（原全表扫 + 逐行 std::string→QString 构造，1 万行 ≈ 亿次）
     int target = -1;
     if (row >= 0 && std::size_t(row) < rows_.size() &&
         fs_string(rows_[std::size_t(row)].entry.src) == norm_string(path)) {
         target = row; // 快路径（无删行时的常态）
     } else {
-        const QString key = norm_string(path);
-        for (std::size_t i = 0; i < rows_.size(); ++i) {
-            if (fs_string(rows_[i].entry.src) == key) {
-                target = int(i);
-                break;
-            }
-        }
+        const auto it = row_by_key_.find(norm_string(path).toStdString());
+        if (it != row_by_key_.end() && it->second < rows_.size())
+            target = int(it->second);
     }
     if (target < 0)
         return; // 行已不在列表（删行/清空）→ 丢弃
@@ -954,6 +1064,20 @@ QString FileDelegate::join_items(const QStringList &items, const QFontMetrics &f
     return out;
 }
 
+// R-276：行几何的**唯一输入口径** —— 视口右缘收口（竖滚动条出现后 item 比可见视口宽 ~14px，
+// 右对齐胶囊/色点会被裁或错位）。两路绘制（FileDelegate::paint / FileGroupDelegate 色点）
+// 一律先经本函数，再进 row_rects（收口规则只写这一份）。
+QRect FileDelegate::visible_row_rect(const QRect &item_rect, const QAbstractItemView *view) {
+    QRect row_rect = item_rect;
+    if (view != nullptr) {
+        const int visible_right =
+            view->horizontalScrollBar()->value() + view->viewport()->width() - 1;
+        if (row_rect.right() > visible_right)
+            row_rect.setRight(visible_right);
+    }
+    return row_rect;
+}
+
 FileDelegate::RowRects FileDelegate::row_rects(const QRect &item_rect, int pill_w, bool has_flag) {
     RowRects rects;
     const int thumb_px = theme::Metrics::thumb_px; // R4 缩略图 46（§7.5）
@@ -999,15 +1123,10 @@ void FileDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option,
         style->drawControl(QStyle::CE_ItemViewItem, &bg_opt, painter, widget);
     }
 
-    QRect row_rect = opt.rect;
     // 事实（U4 实测）：QListView/QTreeView 用"未含竖滚动条"的视口宽度调 sizeHint，竖滚动条出现
-    // 后 item 比可见视口宽 ~14px → 右对齐胶囊会被裁掉。以可见视口右边界收口（M1b 口径不变）。
-    if (const QAbstractItemView *view = qobject_cast<const QAbstractItemView *>(widget)) {
-        const int visible_right =
-            view->horizontalScrollBar()->value() + view->viewport()->width() - 1;
-        if (row_rect.right() > visible_right)
-            row_rect.setRight(visible_right);
-    }
+    // 后 item 比可见视口宽 ~14px → 右对齐胶囊会被裁掉。收口规则单源 = visible_row_rect（R-276）。
+    const QRect row_rect =
+        visible_row_rect(opt.rect, qobject_cast<const QAbstractItemView *>(widget));
     if (row_rect.width() <= 0 || row_rect.height() <= 0)
         return;
 
@@ -1156,7 +1275,8 @@ QString group_label(pp::GroupMode mode, const QString &key) {
 FileGroupProxyModel::FileGroupProxyModel(QObject *parent) : QAbstractProxyModel(parent) {
     debounce_ = new QTimer(this);
     debounce_->setSingleShot(true);
-    debounce_->setInterval(30); // 摘要/键逐行落定 → 30ms 去抖合并为一次重建
+    debounce_->setInterval(
+        kRebuildDebounceMs); // 摘要/键逐行落定 → 去抖合并为一次重建（R-280 命名）
     connect(debounce_, &QTimer::timeout, this, [this] { rebuild(); });
 }
 
@@ -1412,12 +1532,8 @@ bool FileGroupProxyModel::is_collapsed(const QString &group_key) const {
     return collapsed_.contains(group_key);
 }
 
-QStringList FileGroupProxyModel::collapsed_keys() const {
-    QStringList out;
-    for (const QString &key : collapsed_)
-        out << key;
-    return out;
-}
+// M7-R2D1 / R-278：collapsed_keys() 已随死 API 清理移除（零消费；折叠记忆只有 is_collapsed
+// 一个消费面）
 
 // ============================================================================================
 // M4-T11 · FileGroupDelegate（勾选列 + 行内容列 + 分组节头）
@@ -1506,17 +1622,18 @@ void FileGroupDelegate::paint(QPainter *painter, const QStyleOptionViewItem &opt
     const QColor dot_color = deco.value<QColor>();
     if (!dot_color.isValid())
         return;
-    QRect area = option.rect.adjusted(FileDelegate::kRowInsetL, FileDelegate::kRowInsetY,
-                                      -FileDelegate::kRowInsetR, FileDelegate::kRowInsetY);
-    if (area.width() <= 0 || area.height() <= 0)
-        return;
     const QString state_label = index.data(FileListModel::StateTextRole).toString();
     const bool has_exception = index.data(FileListModel::ExceptionRole).toBool();
+    // R-276：与 FileDelegate::paint 同一条输入口径（视口右缘收口后的行矩形）—— 原先这里用
+    // 未收口的 option.rect，竖滚动条出现后色点与胶囊错位。
+    const QRect row_rect = FileDelegate::visible_row_rect(
+        option.rect, qobject_cast<const QAbstractItemView *>(option.widget));
+    if (row_rect.width() <= 0 || row_rect.height() <= 0)
+        return;
     const FileDelegate::RowRects rects =
-        row_rects(option.rect, state_pill_width(state_label), has_exception);
-    const int dot_size = 8; // .chip-dot{width:8px;height:8px}
-    const QRect dot(rects.pill.left() - FileDelegate::kPillGap - dot_size,
-                    option.rect.center().y() - dot_size / 2, dot_size, dot_size);
+        row_rects(row_rect, state_pill_width(state_label), has_exception);
+    const QRect dot(rects.pill.left() - FileDelegate::kPillGap - kChipDotPx,
+                    row_rect.center().y() - kChipDotPx / 2, kChipDotPx, kChipDotPx);
     if (dot.left() < rects.thumb.right() + 1)
         return; // 空间不足（极窄列）→ 不画，避免压到文件名
     painter->save();

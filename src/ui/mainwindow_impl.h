@@ -141,6 +141,7 @@ using ElidedLabel = formkit::ElidedLabel;
 // 运行轮询/状态合并刷新间隔（原 mainwindow.cpp 匿名命名空间；拆 TU 后多域共用，constexpr 单源）
 constexpr int kPollIntervalMs = 150; // §2.14：运行轮询间隔
 constexpr int kStatusFlushMs = 150;  // R-024：状态栏合并刷新间隔（100–200ms 档）
+constexpr int kStatusNoteMs = 4000;  // UX-2：状态栏一次性过滤态提示的驻留（非阻塞）
 
 // 文案翻译单点（历史名 T；context = "MainWindow"，与原实现逐字同源）
 inline QString T(const char *s) { return QCoreApplication::translate("MainWindow", s); }
@@ -731,6 +732,9 @@ private:
 
 // caption 三钮（§3.1/§3.3：46×32、透明底、悬停灰、关闭悬停 #c42b1c 白字）。关闭悬停色在
 // tokens/QSS 里（theme::Tokens::close_hover / close_hover_fg）。
+// R-279（M7-R2D1）：本类是 caption 钮的**唯一实现**（图标名/双色/命中带通用）；
+// settings_dialog.cpp 的 CaptionCloseButton 是它的第二份手拷（固定关图标、无命中带）——
+// 收编需动非本包文件面，已登记 handoff「跨界需求」（两实现合并的落点建议 = 本类直用）。
 //
 // **单轨（M5-T4，裁定 A1）**：可见面与命中区同为 46×32（theme::Metrics::caption_btn_h ==
 // caption_btn_hit_h == platform::kCaptionHitHeightPx）。命中带 = 按钮矩形（居中的 32px 带在顶栏
@@ -868,19 +872,28 @@ public:
         exceptions_only_ = on;
         invalidateFilter();
     }
+    // M7-R2D1 / R-143 加性：分类过滤档（空 = 不过滤；chip 点击经 mainwindow 落到这里）
+    void set_class_filter(const QString &class_id) {
+        if (class_filter_ == class_id)
+            return;
+        class_filter_ = class_id;
+        invalidateFilter();
+    }
+    QString class_filter() const { return class_filter_; }
     bool checked_only() const { return checked_only_; }
     bool exceptions_only() const { return exceptions_only_; }
-    bool filtering() const { return checked_only_ || exceptions_only_; }
+    bool filtering() const { return checked_only_ || exceptions_only_ || !class_filter_.isEmpty(); }
     void clear_filters() {
         set_checked_only(false);
         set_exceptions_only(false);
+        set_class_filter(QString());
     }
 
 protected:
     bool filterAcceptsRow(int source_row, const QModelIndex &source_parent) const override {
         if (!QSortFilterProxyModel::filterAcceptsRow(source_row, source_parent))
             return false; // 搜索（文件名，大小写不敏感）
-        if (!checked_only_ && !exceptions_only_)
+        if (!checked_only_ && !exceptions_only_ && class_filter_.isEmpty())
             return true;
         const QModelIndex idx = sourceModel() != nullptr
                                     ? sourceModel()->index(source_row, 0, source_parent)
@@ -891,12 +904,16 @@ protected:
             return false;
         if (exceptions_only_ && !idx.data(FileListModel::ExceptionRole).toBool())
             return false;
+        if (!class_filter_.isEmpty() &&
+            idx.data(FileListModel::ClassIdRole).toString() != class_filter_)
+            return false;
         return true;
     }
 
 private:
     bool checked_only_ = false;
     bool exceptions_only_ = false;
+    QString class_filter_; // R-143：分类过滤档（空 = 全部）
 };
 
 // ---------------------------------------------------------------------------
@@ -961,22 +978,23 @@ struct MainWindow::Impl {
     ElidedLabel *unsupported = nullptr;
     ElidedLabel *file_hint = nullptr; // 卡头 hint（仅运行期「运行中锁定」；教学文案已入空态 1-12）
     QLineEdit *search = nullptr;
-    QToolButton *add_btn = nullptr;       // ＋（添加文件…/添加文件夹… 菜单）
-    QToolButton *remove_sel = nullptr;    // −（移除所选；无选择时**隐藏**，1-08）
-    QToolButton *filter_btn = nullptr;    // 筛选…（M5-T5 工具行第三钮；菜单由其父对象持有）
-    QAction *filter_checked = nullptr;    // 仅显示已勾选
-    QAction *filter_exceptions = nullptr; // 仅显示有例外的文件
-    QAction *filter_clear = nullptr;      // 清除筛选
-    QWidget *tools_row = nullptr;         // 工具行容器（常驻五件：搜索/添加/移除/筛选/分组）
-    QStackedWidget *file_stack = nullptr; // 文件区两页：0 = 列表，1 = 空态投放区（修 1-06）
-    QWidget *empty_state = nullptr;       // 空态页
-    QFrame *drop_zone = nullptr;          // 投放区（accent-bd 框 + accent-dim 底）
-    QLabel *drop_icon = nullptr;          // 投放引导图标（矢量）
-    ElidedLabel *drop_text = nullptr;     // 投放引导文案（§8 逐字）
-    QPushButton *empty_add = nullptr;     // 空态的显式「添加文件…」钮（§8）
-    QAction *add_files_action = nullptr;  // ＋ 菜单项：添加文件…
-    QAction *add_dir_action = nullptr;    // ＋ 菜单项：添加文件夹…
-    QAction *clear_action = nullptr;      // ＋ 菜单项：清空列表
+    QToolButton *add_btn = nullptr;        // ＋（添加文件…/添加文件夹… 菜单）
+    QToolButton *remove_sel = nullptr;     // −（移除所选；无选择时**隐藏**，1-08）
+    QToolButton *filter_btn = nullptr;     // 筛选…（M5-T5 工具行第三钮；菜单由其父对象持有）
+    QAction *filter_checked = nullptr;     // 仅显示已勾选
+    QAction *filter_exceptions = nullptr;  // 仅显示有例外的文件
+    QAction *filter_clear = nullptr;       // 清除筛选
+    QToolButton *check_menu_btn = nullptr; // UX-2：勾选操作钮（pp-check-menu；三项菜单）
+    QWidget *tools_row = nullptr;          // 工具行容器（常驻五件：搜索/添加/移除/筛选/分组）
+    QStackedWidget *file_stack = nullptr;  // 文件区两页：0 = 列表，1 = 空态投放区（修 1-06）
+    QWidget *empty_state = nullptr;        // 空态页
+    QFrame *drop_zone = nullptr;           // 投放区（accent-bd 框 + accent-dim 底）
+    QLabel *drop_icon = nullptr;           // 投放引导图标（矢量）
+    ElidedLabel *drop_text = nullptr;      // 投放引导文案（§8 逐字）
+    QPushButton *empty_add = nullptr;      // 空态的显式「添加文件…」钮（§8）
+    QAction *add_files_action = nullptr;   // ＋ 菜单项：添加文件…
+    QAction *add_dir_action = nullptr;     // ＋ 菜单项：添加文件夹…
+    QAction *clear_action = nullptr;       // ＋ 菜单项：清空列表
     // ---- M4-T11：分类面板（§6.2）----
     ClassifyPanel *classify_panel = nullptr;
     ElidedLabel *classify_hint = nullptr; // "1–9 键打标" / "运行中只读"（G5）
@@ -998,6 +1016,9 @@ struct MainWindow::Impl {
     // ---- 底栏 ----
     ElidedLabel *status = nullptr;
     QPushButton *start = nullptr;
+    // M7-R2D1 / UX-2：状态栏一次性非阻塞提示（过滤态勾选的作用域说明；kStatusNoteMs 后回落）
+    QString status_note;
+    QTimer *status_note_timer = nullptr;
 
     // ---- 运行状态 ----
     std::unique_ptr<pp::Scheduler> sched;
@@ -1005,6 +1026,9 @@ struct MainWindow::Impl {
     // M4-T14：日志尾卡喂入（§9.3「日志尾卡（5 行滚动 + 跳转）」）——单一持有者 = MainWindow：
     // 运行期每 500ms 读最新 run-*.log 的末尾若干行推给运行页（页只渲染，不做文件 IO）
     QTimer *log_tail = nullptr;
+    // R-081（M7-R2D1）：日志尾读取在途门槛 + 补读标记（IO 在 worker，结果经 QFutureWatcher 回 GUI）
+    bool log_tail_inflight = false;
+    bool log_tail_rerun = false;
     QTimer *status_flush = nullptr; // R-024：运行期状态栏合并刷新（singleShot 150ms）
     bool running = false;
     // 完成检测（§2.14 的"轮询 !running()"机制不可用：pp::Scheduler::running() 只在 wait() 内清零，
@@ -1023,6 +1047,9 @@ struct MainWindow::Impl {
     std::vector<bool> run_seen;
     // R-006/R-146：「再次运行」= 补齐语义（只提交缺件 + Skip 冲突策略）；由 on_run_again 置位
     bool run_again_pending = false;
+    // ---- M7-R2D1 / R-144 加性：失败清单（运行期收集 → 收尾落盘 logs/，状态栏可下钻）----
+    QStringList run_failure_lines; // "路径\t原因"（逐终态失败/部分成功文件）
+    QString failure_list_path;     // 最近一次落盘路径（状态栏 tooltip 出处）
     // M4-T11：本批提交的**模型行号**（ev.index 是提交序号 → 需映射回列表行更新状态）
     std::vector<std::size_t> run_rows;
     QString last_selected_path; // 分组重建后恢复选中（重建 = 模型 reset，选中会丢）
@@ -1072,6 +1099,11 @@ struct MainWindow::Impl {
     void push_log_tail();        // M4-T14：run-*.log 末尾 5 行 → 运行页日志尾卡
     void handle_file_event(const pp::FileEvent &ev);
     void schedule_status_refresh(); // R-024：合并刷新（singleShot 起搏）
+    // ---- M7-R2D1 加性（UX-2 / R-144 / R-081；既有签名逐字不变）----
+    enum class CheckOp { All, None, Invert }; // UX-2：勾选批量操作（作用于当前可见行）
+    void apply_visible_checks(CheckOp op);
+    void set_status_note(const QString &note); // UX-2：过滤态一次性提示（非阻塞）
+    void write_failure_list();                 // R-144：失败清单落盘（logs/；只读源、不覆盖源）
     void restore_selection_by_path(const QString &path);
     void restore_selection_by_paths(const QStringList &paths); // R-153：整组恢复
     void select_row(int row);                                  // R-151：翻图同步选中
@@ -1103,7 +1135,7 @@ struct MainWindow::Impl {
     void load_classes(); // classes.json → 注册表（失败仅告警，保持默认）
     void save_classes(); // 注册表 → classes.json（打标/CRUD 即写）
     void apply_class_to_selection(const QString &class_id); // 热键/菜单打标（选中集或当前项）
-    void sync_class_views(std::size_t row);                 // 面板高亮 + 预览热键表刷新
+    // M7-R2D1 / R-143：sync_class_views（选中项 → 分类面板高亮）随 chip `.on` 拆态（= 过滤档）移除
     void rebuild_group_view();     // 分组结构变化后：跨列节头 + 展开态 + 选中恢复
     void apply_group_view_state(); // 上述状态的落地（推迟到下一轮事件循环）
     void set_group_mode(pp::GroupMode mode);

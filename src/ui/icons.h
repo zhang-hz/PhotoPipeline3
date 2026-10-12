@@ -85,6 +85,8 @@ enum class Name {
     Stop,           // 已取消（■）
     Pending,        // 排队（…）
     Active,         // 进行中（◐）
+    // —— M7-R2D1 / UX-2 加性追加（既有 37 枚不重排）——
+    CheckAll, // 勾选全部（两行勾 + 两行槽；工具行 pp-check-menu）
 };
 
 // 填充口径：Stroke = 只描边（默认）；Fill = 只填充（实心图标：▶ 播放、■ 停止、… 排队点）

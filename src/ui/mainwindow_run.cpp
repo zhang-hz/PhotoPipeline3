@@ -23,6 +23,7 @@
 #include <QClipboard> // UX-1：「复制路径」等菜单动作
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QDateTime> // R-144：失败清单时间戳文件名
 #include <QDesktopServices>
 #include <QDialog> // M6-T13：meta-map-expand 探针在模态循环内取证大地图对话框
 #include <QDir>
@@ -37,6 +38,7 @@
 #include <QFont>
 #include <QFontMetrics> // M5-T14：offline-banner 环带取样的文字盒（QFontMetricsF 同头）
 #include <QFrame>
+#include <QFutureWatcher> // R-081：日志尾异步读回 GUI 线程
 #include <QGraphicsDropShadowEffect>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -59,7 +61,8 @@
 #include <QPixmap>
 #include <QProgressBar>
 #include <QProxyStyle> // M5-T14：文件列表系统焦点框抑制（QTreeView::drawRow 的焦点框调用不带
-                       // widget → QSS outline:none 无效；见 FileViewFocusFrameStyle 说明）
+#include <QtConcurrent/QtConcurrentRun> // R-081：日志尾 IO 下后台
+// widget → QSS outline:none 无效；见 FileViewFocusFrameStyle 说明）
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScreen>
@@ -169,6 +172,49 @@ bool entry_outputs_complete(const pp::FileEntry &entry, const pp::RunConfig &cfg
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// M7-R2D1 / 0 字节补齐语义（deep-review R-006 余量；WP6 handoff 残余 #6）：
+//   预检把「已存在但 0 字节」算缺件（会提交），但 conflict=Skip 下引擎对"已存在"一律跳过 ⇒
+//   自家残次品永远不会被重编码。补齐语义 = **跑前移除 0 字节产物**（不是成品，删除即缺件归位），
+//   随后引擎正常写入。普通运行的 Skip 语义**不动**（只在「再次运行」分支调用）。
+//   红线：源文件只读、输出不得覆盖源文件 —— 与源同一实体的路径绝不触碰（equivalent 识破
+//   符号链接/大小写/8.3 短名）；只删 size==0 的产物，非空成品原样跳过。
+// ---------------------------------------------------------------------------
+std::size_t remove_zero_byte_outputs(const pp::FileEntry &entry, const pp::RunConfig &cfg) {
+    std::size_t removed = 0;
+    for (const pp::OutputFormatSpec &spec : cfg.outputs) {
+        const pp::FormatDef *fmt = pp::find_format(spec.format_id);
+        if (fmt == nullptr)
+            continue;
+        pp::PathCtx ctx;
+        ctx.format_dir = fmt->id;
+        ctx.rel_dir = pp::relative_dir(entry.src, entry.base_dir);
+        ctx.stem = entry.src.stem().string();
+        ctx.ext = fmt->ext;
+        const std::filesystem::path desired =
+            pp::render_output_path(cfg.output_template, ctx, cfg.out_root);
+        if (desired.empty())
+            continue;
+        std::error_code ec;
+        const std::uintmax_t size = std::filesystem::file_size(desired, ec);
+        if (ec || size != 0)
+            continue; // 不存在 = 正常缺件；非空 = 成品（Skip 语义不动）
+        std::error_code eq_ec;
+        if (std::filesystem::equivalent(desired, entry.src, eq_ec) && !eq_ec)
+            continue; // 红线：目标即源文件 —— 绝不删
+        std::error_code rm_ec;
+        if (std::filesystem::remove(desired, rm_ec) && !rm_ec) {
+            ++removed;
+            pp::log_info("ui", entry.src.string(),
+                         "rerun: removed 0-byte output " + desired.string());
+        } else {
+            pp::log_warn("ui", entry.src.string(),
+                         "rerun: cannot remove 0-byte output " + desired.string());
+        }
+    }
+    return removed;
+}
+
 QString path_text(const std::filesystem::path &p) {
     return QFileInfo(QString::fromStdString(p.string())).fileName();
 }
@@ -196,11 +242,10 @@ bool bytes_are_valid_utf8(const std::string &bytes) {
 void open_local_path_bytes(const std::filesystem::path &p, const char *what) {
     const std::string bytes = p.string();
     if (!bytes_are_valid_utf8(bytes)) {
-        std::fprintf(stderr,
-                     "ui: cannot open %s: path contains non-UTF-8 bytes; open it from a shell "
-                     "instead (raw: %s)\n",
-                     what, bytes.c_str());
-        std::fflush(stderr);
+        // R-278：诊断输出收 logger（原 std::fprintf 绕过日志面）
+        pp::log_warn("ui", bytes,
+                     std::string("cannot open ") + what +
+                         ": path contains non-UTF-8 bytes; open it from a shell instead");
         return;
     }
     QDesktopServices::openUrl(
@@ -382,6 +427,9 @@ void MainWindow::on_start() {
                 ++complete_dropped;
                 continue;
             }
+            // 0 字节补齐（M7-R2D1）：自家残次品先移除（缺件归位），引擎随后正常重做；
+            // 非空成品与源文件绝不触碰（remove_zero_byte_outputs 的守卫）
+            remove_zero_byte_outputs(entries[k], cfg);
             keep_rows.push_back(run_rows[k]);
             keep_entries.push_back(std::move(entries[k]));
         }
@@ -468,8 +516,10 @@ void MainWindow::on_start() {
     d.run_done = 0;
     d.run_failed = 0;
     d.run_skipped = 0;
-    d.run_partial = 0;   // R-076
-    d.run_cancelled = 0; // R-140
+    d.run_partial = 0;           // R-076
+    d.run_cancelled = 0;         // R-140
+    d.run_failure_lines.clear(); // R-144：本批失败清单重新收集
+    d.failure_list_path.clear();
 
     d.sched = std::make_unique<pp::Scheduler>(cfg, std::move(entries));
     d.sched->set_event_callback([this](const pp::FileEvent &ev) {
@@ -537,8 +587,35 @@ void MainWindow::on_scheduler_done() {
     d.sched.reset();
     lock_for_run(false);
     impl_->on_content_changed();
-    impl_->push_log_tail(); // 结束态再读一次（末几行含 summary/收尾日志）
+    impl_->write_failure_list(); // R-144：失败清单落盘（状态栏 tooltip 给出处）
+    impl_->push_log_tail();      // 结束态再读一次（末几行含 summary/收尾日志）
     refresh_status();
+}
+
+// R-144（M7-R2D1）：失败清单落盘 —— logs/failed-<时间戳>.txt，一行一条「路径\t原因」。
+// 只写日志目录（源文件只读红线不受影响）；logs 不可用 = 静默放弃（状态栏 tooltip 显示「未落盘」）。
+void MainWindow::Impl::write_failure_list() {
+    if (run_failure_lines.isEmpty())
+        return;
+    const std::filesystem::path dir = pp::platform::logs_dir();
+    if (dir.empty()) {
+        pp::log_warn("ui", "failure-list", "logs dir unavailable; failure list not written");
+        return;
+    }
+    const std::string stamp =
+        QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss")).toStdString();
+    const std::filesystem::path file = dir / ("failed-" + stamp + ".txt");
+    std::ofstream out(file, std::ios::binary | std::ios::trunc);
+    if (!out) {
+        pp::log_warn("ui", file.string(), "cannot write failure list");
+        return;
+    }
+    for (const QString &line : run_failure_lines)
+        out << line.toStdString() << '\n';
+    out.close();
+    failure_list_path = QString::fromStdString(file.string());
+    pp::log_info("ui", file.string(),
+                 "failure list written: " + std::to_string(run_failure_lines.size()) + " item(s)");
 }
 
 void MainWindow::lock_for_run(bool lock) {
@@ -586,28 +663,32 @@ void MainWindow::lock_for_run(bool lock) {
 void MainWindow::Impl::open_logs() {
     const std::filesystem::path dir = pp::platform::logs_dir();
     if (dir.empty()) {
-        std::fprintf(stderr, "ui: cannot open logs: data_dir()/logs is unavailable (empty path)\n");
-        std::fflush(stderr);
+        // R-278：诊断输出收 logger（原 std::fprintf 绕过日志面）
+        pp::log_warn("ui", "logs", "cannot open logs: data_dir()/logs is unavailable (empty path)");
         return;
     }
     const std::filesystem::path newest = newest_run_log(dir);
     open_local_path_bytes(newest.empty() ? dir : newest, "logs");
 }
 
-void MainWindow::Impl::push_log_tail() {
-    // §7.3「日志尾卡（等宽 4 行真实尾部 + 查看完整日志…）」：单一持有者 = MainWindow（页只渲染）。
-    // 读法 = 尾部 8KB 窗口（避免整读大日志）→ 按行切 → **丢掉窗口首行的半截行** → 取末 4 行。
-    // 日志格式 = core/logger.cpp 的 `%H:%M:%S.%e [%l] [%t] %v`（与 mockup .loglines 同形）。
-    const std::filesystem::path dir = pp::platform::logs_dir();
-    if (dir.empty()) {
-        page_run->set_log_tail(QStringList(), QString());
-        return;
-    }
+namespace {
+
+// R-081：日志尾读取（目录枚举 + 8KB 尾窗）—— 纯 IO 载荷，可在 worker 线程执行
+struct LogTailPayload {
+    QStringList lines;
+    QString name;
+};
+
+LogTailPayload read_log_tail(const std::filesystem::path &dir) {
+    // §7.3「日志尾卡（等宽 4 行真实尾部 + 查看完整日志…）」读法 = 尾部 8KB 窗口（避免整读大
+    // 日志）→ 按行切 → **丢掉窗口首行的半截行** → 取末 4 行。日志格式 = core/logger.cpp 的
+    // `%H:%M:%S.%e [%l] [%t] %v`（与 mockup .loglines 同形）。
+    LogTailPayload payload;
+    if (dir.empty())
+        return payload;
     const std::filesystem::path file = newest_run_log(dir);
-    if (file.empty()) {
-        page_run->set_log_tail(QStringList(), QString());
-        return;
-    }
+    if (file.empty())
+        return payload;
     QStringList lines;
     std::ifstream in(file, std::ios::binary);
     if (in) {
@@ -635,7 +716,35 @@ void MainWindow::Impl::push_log_tail() {
                 lines.removeFirst();
         }
     }
-    page_run->set_log_tail(lines, QString::fromStdString(file.filename().string()));
+    payload.lines = lines;
+    payload.name = QString::fromStdString(file.filename().string());
+    return payload;
+}
+
+} // namespace
+
+void MainWindow::Impl::push_log_tail() {
+    // R-081（M7-R2D1）：500ms 节奏的目录枚举 + 8KB 读搬出 GUI 线程（网络盘可卡 poll/取消）。
+    // 结果经 QFutureWatcher 回 GUI 线程喂 page_run（页只渲染，不做文件 IO 的口径不变）。
+    // 单在途 + 补读：读在途时到来的请求只记一笔，归并后补一轮（收尾兜底读不会被吃掉）。
+    if (log_tail_inflight) {
+        log_tail_rerun = true;
+        return;
+    }
+    log_tail_inflight = true;
+    const std::filesystem::path dir = pp::platform::logs_dir();
+    auto *watcher = new QFutureWatcher<LogTailPayload>(w);
+    QObject::connect(watcher, &QFutureWatcherBase::finished, w, [this, watcher] {
+        watcher->deleteLater();
+        log_tail_inflight = false;
+        const LogTailPayload payload = watcher->result();
+        page_run->set_log_tail(payload.lines, payload.name);
+        if (log_tail_rerun) {
+            log_tail_rerun = false;
+            push_log_tail();
+        }
+    });
+    watcher->setFuture(QtConcurrent::run([dir] { return read_log_tail(dir); }));
 }
 
 void MainWindow::Impl::handle_file_event(const pp::FileEvent &ev) {
@@ -699,6 +808,22 @@ void MainWindow::Impl::handle_file_event(const pp::FileEvent &ev) {
         model->set_state(row, state);
         if (zero_bytes) // R-069：终态事件带 0 字节事实回传列表
             model->set_zero_byte_output(row, true);
+        // R-144（M7-R2D1）：失败/部分成功的逐文件原因 → 失败清单行（收尾落盘；状态栏下钻用）
+        if ((state == pp::FileState::Failed || state == pp::FileState::DoneWithErrors) &&
+            ev.result != nullptr) {
+            QStringList reasons;
+            if (!ev.result->error.empty())
+                reasons << QString::fromStdString(ev.result->error);
+            for (const pp::OutputResult &out : ev.result->outputs) {
+                if (!out.ok && !out.error.empty()) {
+                    reasons << QStringLiteral("%1: %2").arg(QString::fromStdString(out.format_id),
+                                                            QString::fromStdString(out.error));
+                }
+            }
+            run_failure_lines << QStringLiteral("%1\t%2").arg(
+                QString::fromStdString(model->row(row).entry.src.string()),
+                reasons.join(QStringLiteral(" / ")));
+        }
     }
     page_run->on_event(ev);
     // R-024：逐文件事件洪峰合并刷新 —— 运行期不再每条事件都跑一次全量 refresh_status

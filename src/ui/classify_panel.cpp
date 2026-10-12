@@ -124,7 +124,7 @@ struct ClassifyPanel::Impl {
     theme::Tokens fallback = formkit::default_tokens();
     const theme::Tokens &paint_tokens() const { return has_tokens ? tokens : fallback; }
     bool locked = false;
-    QString current_class_id; // 空 = 无分类（高亮「全部」）
+    QString filter_class_id; // R-143：当前过滤档（空 = 「全部」= 无过滤；`.on` 单义）
     // 单元部件（M5-T5：色点 + 打标 chip + 中性计数胶囊；A15：2 列 kv-grid 排布）；index 0 =
     // 「全部」
     struct Row {
@@ -238,12 +238,14 @@ void ClassifyPanel::set_locked(bool locked) {
 
 bool ClassifyPanel::locked() const { return impl_->locked; }
 
-void ClassifyPanel::set_current_class_id(const QString &class_id) {
-    if (impl_->current_class_id == class_id)
+void ClassifyPanel::set_filter_class_id(const QString &class_id) {
+    if (impl_->filter_class_id == class_id)
         return;
-    impl_->current_class_id = class_id;
+    impl_->filter_class_id = class_id;
     impl_->apply_row_styles();
 }
+
+QString ClassifyPanel::filter_class_id() const { return impl_->filter_class_id; }
 
 // ---------------------------------------------------------------------------
 // 行构建 / 样式
@@ -285,20 +287,34 @@ void ClassifyPanel::Impl::rebuild_rows() {
         dot_label->setObjectName(QStringLiteral("pp-class-dot"));
         dot_label->set_color(dot);
         // 打标 chip（formkit 唯一形态）：键帽 = 热键位（无热键 → 不画键帽）、文字 = 类名；
-        // 展示件 —— 鼠标事件穿透（右键菜单仍归**单元**），宽度只由类名决定（§12-4 零形变）；
+        // R-143：chip = **过滤档开关**（左键 = 按该类过滤/再点清除；右键菜单仍归**单元** ——
+        // 按钮对 ContextMenu 事件不消费，沿父链落到行）；宽度只由类名决定（§12-4 零形变）；
         // 宽上限 = 单元可用宽（长名截断；全名/热键进 tooltip + accessibleName，§8/§11）
         auto *chip = new formkit::ChipButton(row);
         chip->setObjectName(QStringLiteral("pp-class-chip"));
         chip->set_key_text(keycap);
         chip->setText(label);
-        chip->setAttribute(Qt::WA_TransparentForMouseEvents, true);
         chip->setFocusPolicy(Qt::NoFocus);
-        chip->setCursor(Qt::ArrowCursor);
+        chip->setCursor(Qt::PointingHandCursor);
         chip->setFixedWidth(std::min(chip->sizeHint().width(), chip_max_width()));
-        chip->setToolTip(keycap.isEmpty() ? label
-                                          : ClassifyPanel::tr("%1 · 热键 %2").arg(label, keycap));
-        chip->setAccessibleName(label); // §11：展示件也报可读名
+        chip->setToolTip(
+            keycap.isEmpty()
+                ? ClassifyPanel::tr("%1（点击按此类筛选）").arg(label)
+                : ClassifyPanel::tr("%1 · 热键 %2（点击按此类筛选）").arg(label, keycap));
+        chip->setAccessibleName(label); // §11：可读名
         chip->set_tokens(paint_tokens());
+        {
+            // R-143：点击 = 过滤档切换（当前档再点 / 「全部」= 清除过滤）；G5 运行中只读
+            const QString row_id = id;
+            QObject::connect(chip, &QAbstractButton::clicked, panel, [this, row_id] {
+                if (locked)
+                    return;
+                const QString next = (row_id == filter_class_id) ? QString() : row_id;
+                filter_class_id = next;
+                apply_row_styles();
+                emit panel->class_filter_requested(next);
+            });
+        }
         // 计数 = 中性胶囊（§2.7：计数不表状态、禁蓝色实心；1-11/1-13）
         auto *cnt = formkit::PillBadge::count(row, count);
         cnt->setObjectName(QStringLiteral("pp-class-count"));
@@ -364,6 +380,20 @@ void ClassifyPanel::Impl::rebuild_rows() {
     new_btn->setVisible(true);
 
     apply_cell_metrics(); // 宽度定尺（面板宽已知时；后续 resize 走 resizeEvent）
+    // R-143：过滤档指向的类被删除 → 过滤档清算（否则无 chip 点亮、列表却只剩空集）
+    if (!filter_class_id.isEmpty()) {
+        bool found = false;
+        for (const Row &entry : rows) {
+            if (entry.id == filter_class_id) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            filter_class_id.clear();
+            emit panel->class_filter_requested(QString());
+        }
+    }
     apply_row_styles();
 }
 
@@ -392,12 +422,13 @@ void ClassifyPanel::Impl::apply_cell_metrics() {
 }
 
 void ClassifyPanel::Impl::apply_row_style(int row) {
+    // R-143：`.on` = **过滤档**（「全部」.on ⇔ 无分类过滤）—— 单义，不再与"无分类/无选中"共用
     const bool active =
-        row == 0 ? current_class_id.isEmpty() : rows[std::size_t(row)].id == current_class_id;
+        row == 0 ? filter_class_id.isEmpty() : rows[std::size_t(row)].id == filter_class_id;
     Row &entry = rows[std::size_t(row)];
     if (entry.chip == nullptr)
         return;
-    // `.on` = 当前选中项的归属（§5.2 跟随口径）：chip 选中态换底/换字色，**不改宽**（§12-4）
+    // chip 选中态换底/换字色，**不改宽**（§12-4）
     entry.chip->setChecked(active);
 }
 

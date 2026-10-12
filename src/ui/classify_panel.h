@@ -27,13 +27,16 @@
 //   * 卡片框/卡头由 mainwindow 承载（与本窗口其余卡片同一 pp-card 口径）；本类只出**卡体**。
 //
 // 交互（§6.2 的落地口径；未逐字处已记偏差账）：
-//   * **右键菜单**（唯一交互入口）：类行 = 「全选该类 / 反选该类 / 清空勾选」+（非「全部」行）
+//   * **右键菜单**（组织/圈选入口）：类行 = 「全选该类 / 反选该类 / 清空该类勾选」+（非「全部」行）
 //     「重命名… / 颜色… / 热键… / 删除」；「全部」行只有前三项（保留虚拟分类不可增删改名/设色/
 //     设热键 —— core/classify 的强校验，本类不绕过）。
 //   * **打标**走预览面板的热键接线位（`PreviewPanel::class_hotkey` → mainwindow 写注册表），
-//     「0 = 清除」；chip 是**展示件**（鼠标事件穿透到行、无点击语义 —— 仍不新增"点击即打标"），
-//     `.on`（chip 选中态）= 当前选中项的归属高亮（§5.2 同一条跟随口径；无选中/多选混合 → 高亮
-//     「全部」）——静态外观与 mockup（默认「全部」高亮）一致。
+//     「0 = 清除」。
+//   * M7-R2D1 / R-143（deep-review「全部 chip 高亮二义 + chip 零点击死端」）：chip = **过滤档开关**
+//     —— 左键点击 = 列表按该类过滤（再点/点「全部」= 清除过滤），`class_filter_requested` 由
+//     mainwindow 接到左栏过滤代理（消费入口落地：面板不再"像筛选器却点不动"）。`.on` 语义随之
+//     **拆态单义** = 当前过滤档（「全部」.on ⇔ 无分类过滤，不再与"无分类/无选中"共用通道）；
+//     原「选中项归属高亮」由行内分类色点（DecorationRole）承担，不再占 chip 通道。
 //   * 运行期只读（G5）：`set_locked(true)` → 行与「＋ 新建分类…」置灰、右键菜单不弹（mockup
 //     run-dark 的 `.cls-new .mini-btn.dim` + hint「运行中只读」）。
 //
@@ -77,8 +80,10 @@ public:
     void set_locked(bool locked);
     bool locked() const;
 
-    // 当前选中项的类别（`.cls-row.on` 高亮；空串 = 无分类 → 高亮「全部」）
-    void set_current_class_id(const QString &class_id);
+    // M7-R2D1 / R-143：`.on` = **过滤档**（空串 = 「全部」= 无过滤）。原 set_current_class_id
+    // （选中项归属高亮）随 .on 拆态退役 —— 归属可见面 = 行内分类色点（FileListModel 装饰角色）。
+    void set_filter_class_id(const QString &class_id);
+    QString filter_class_id() const;
 
     // ---- 圈选（§6.2 分类行右键菜单的三项；公开 = 菜单与冒烟共用同一实现）----
     void check_class(const QString &class_id);  // 全选该类（class_id 空 = 「全部」= 全部文件）
@@ -114,6 +119,9 @@ signals:
     // 被拒操作（热键冲突 / 保留 id / 空名 …）的**非模态**反馈：不弹对话框（弹出会阻塞脚本化
     // 走查；面板的对话框只出现在用户主动打开的重命名/颜色/删除菜单项里）
     void error_occurred(const QString &message);
+    // —— M7-R2D1 / R-143 加性信号 —— chip 点击 = 过滤档切换（空串 = 「全部」= 清除过滤）；
+    // 消费方（mainwindow）接到左栏过滤代理后回灌 set_filter_class_id 维持 `.on` 单义。
+    void class_filter_requested(const QString &class_id);
 
 protected:
     // A15：栏宽可调（左栏 280–400）→ 单元宽/chip 宽上限随面板宽重算（网格 2 列等宽，

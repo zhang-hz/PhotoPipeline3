@@ -6,6 +6,7 @@
 #include <QImage>
 #include <QObject>
 #include <QString>
+#include <memory> // R-279（M7-R2D1）：std::unique_ptr<Impl> 用而未引（此前靠传递包含侥幸编译）
 
 namespace pp::ui {
 

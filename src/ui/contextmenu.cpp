@@ -5,6 +5,7 @@
 
 #include <QCoreApplication>
 #include <QMenu>
+#include <QWidget> // attach_card_menu：policy + popup
 
 namespace pp::ui::contextmenu {
 namespace {
@@ -45,6 +46,21 @@ QMenu *menu(QWidget *parent, const std::vector<Item> &items) {
     for (const Item &item : items)
         make_action(m, item);
     return m;
+}
+
+void attach_card_menu(QWidget *card, ItemsBuilder builder) {
+    if (card == nullptr || !builder)
+        return;
+    card->setContextMenuPolicy(Qt::CustomContextMenu);
+    QObject::connect(card, &QWidget::customContextMenuRequested, card,
+                     [card, builder](const QPoint &pos) {
+                         const std::vector<Item> items = builder();
+                         if (items.empty())
+                             return;
+                         QMenu *m = menu(card, items);
+                         m->setAttribute(Qt::WA_DeleteOnClose);
+                         m->popup(card->mapToGlobal(pos));
+                     });
 }
 
 // ---------------------------------------------------------------------------

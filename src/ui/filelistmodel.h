@@ -58,11 +58,13 @@
 #include "ui/thumbnails.h" // M1b-U4: +1 line vs §2.8 frozen text (Thumbnailer must be declared for AUTOMOC; see report)
 #include <QAbstractListModel>
 #include <QAbstractProxyModel>
+#include <QHash>
 #include <QImage>
 #include <QString>
 #include <QStringList>
 #include <QStyledItemDelegate>
 #include <QTreeView>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
@@ -90,7 +92,18 @@ struct FileRow {
     // 三处状态面（列表胶囊 / 运行页 / 状态栏）对"完成但产物 0 字节"必须同判：列表胶囊不再
     // 显示绿色「已完成」，改显「0 字节」+ 琥珀（与运行页的「异常/0 字节」同色调）。
     bool zero_byte_output = false;
+    // ---- M7-R2D1 / R-149 加性字段：入列时的别名归一键（弱规范化 + 大小写折叠）----
+    // 移除/去重按本键对表（known_paths_ 的成员键），避免逐行重算 weakly_canonical 的 IO。
+    QString dedup_key;
     bool has_exception() const { return entry.exception.has_value(); }
+};
+
+// —— M7-R2D1 / R-025 加性追加：后台扫盘产物（worker → GUI 回填载荷；纯数据，无行为）——
+// 目录递归 + 逐文件 stat + 去重键计算都在 worker 完成（GUI 不冻结），本结构随 Qt 队列投递。
+struct ScannedPath {
+    QString path;           // 规范化显示路径（→ FileRow::entry.src）
+    QString dedup_key;      // R-149：弱规范化 + 大小写折叠的别名归一键
+    qint64 size_bytes = -1; // M5-T5 行内「大小」（-1 = 未知）
 };
 
 class FileListModel : public QAbstractListModel {
@@ -206,6 +219,18 @@ public:
     void apply_group_scan(int row, const QString &path, const std::string &datetime,
                           const std::string &camera);
 
+    // —— M7-R2D1 / R-148 加性追加（既有签名逐字不变）——
+    // 目录枚举/读取失败的输入项计数（自上次 clear；0 = 全部可读）。原实现对无权限/竞态的输入
+    // 项静默忽略（collect_from 注释自认），用户不知道漏了什么 → 与 unsupported_count() 同一
+    // 展示面（卡头 hint）给「N 项未能读取」。
+    std::size_t unreadable_count() const;
+
+    // —— M7-R2D1 / R-025 加性追加：后台扫盘的回填入口（AddPathsRunnable 回调；GUI 线程执行）。
+    // 逐项按 dedup_key 幂等去重（已入列 / 本批次内重复都跳过），随后与 add_paths 同一条插入
+    // 路径（排序语义 = 批内字典序，批次顺序 = 调用序，与同步旧口径逐行一致）。
+    void apply_scanned_paths(const std::vector<ScannedPath> &files,
+                             const std::vector<QString> &unsupported_keys, std::size_t unreadable);
+
 signals:
     void content_changed(); // count/unsupported/anything summary-worthy
     void exception_changed(std::size_t i);
@@ -217,9 +242,12 @@ private:
     void emit_row_data_changed(std::size_t i, const QVector<int> &roles);
 
     std::vector<FileRow> rows_;
-    std::set<QString> known_paths_;       // lexically_normal strings
+    std::set<QString> known_paths_; // dedup keys（R-149：弱规范化 + 大小写折叠，见 dedup_key）
     std::set<QString> unsupported_paths_; // M1b v1.1: dedup unsupported counts (2026-09-20 ruling)
     std::size_t unsupported_ = 0;
+    // ---- M7-R2D1 加性字段（R-148 / R-026；既有字段与语义一字不动）----
+    std::size_t unreadable_ = 0;                    // R-148：目录枚举/读取失败的输入项计数
+    std::map<std::string, std::size_t> row_by_key_; // R-026：路径 → 行号（摘要回填 O(1) 查找）
     // ---- M7-WP6 / R-024 加性字段：勾选数 / 例外数的**增量计数**（原 checked_count() 与
     // exception_count() 各走一次 O(n) 扫描，运行期逐文件事件 × 每次 refresh_status 会把
     // 两条全表扫压到 GUI 线程）。维护点 = set_checked / set_all_checked / set_exception /
@@ -279,6 +307,12 @@ public:
     static QColor selection_fill(const theme::Tokens &t);
     static QColor selection_bar(const theme::Tokens &t);
 
+    // —— M7-R2D1 / R-276 加性追加（既有签名逐字不变）——
+    // 行几何的**唯一输入口径**：item_rect 先经「可见视口右缘收口」再进 row_rects。此前
+    // FileDelegate::paint 用收口后的矩形而 FileGroupDelegate 的色点用未收口的 option.rect →
+    // 竖滚动条出现后色点与胶囊错位（deep-review R-276/E6-09）。两路绘制一律经本函数取矩形。
+    static QRect visible_row_rect(const QRect &item_rect, const QAbstractItemView *view);
+
 private:
     theme::Tokens tokens_ = theme::tokens(theme::preferred_theme_mode());
 };
@@ -295,7 +329,9 @@ class FileGroupProxyModel : public QAbstractProxyModel {
     Q_OBJECT
 public:
     // 节内可见文件数（节头 "· N" 的数值来源；int）。属**新增代理**的 role，非 FileListModel 面。
-    enum { GroupCountRole = Qt::UserRole + 300 };
+    // R-280：基址裸字面量（UserRole+300）命名化 —— 值逐位不变（1024 + 300 = 1324）。
+    static constexpr int kGroupRoleBase = Qt::UserRole + 300;
+    enum { GroupCountRole = kGroupRoleBase };
 
     static constexpr int kCheckColumn = 0; // 勾选列
     static constexpr int kRowColumn = 1;   // 行内容列
@@ -329,7 +365,8 @@ public:
     // 折叠记忆（键 = 组键；重建后由 view 侧复位）：过滤/摘要变化不丢用户的折叠操作
     void set_collapsed(const QString &group_key, bool collapsed);
     bool is_collapsed(const QString &group_key) const;
-    QStringList collapsed_keys() const;
+    // M7-R2D1 / R-278：collapsed_keys()（零消费死 API，全仓 grep 仅定义处）已移除 ——
+    // 折叠记忆的消费面只有 is_collapsed()（apply_group_view_state 逐键查询）。
 
     // 节名格式化用的分组模式（键由源模型出；本代理只负责节名文案）。二者由 mainwindow 同点设置。
     void set_group_mode(pp::GroupMode mode);

@@ -388,6 +388,14 @@ MainWindow::Impl::Impl(MainWindow *owner, const pp::AppSettings &s)
     status_flush = new QTimer(w);
     status_flush->setSingleShot(true);
     status_flush->setInterval(kStatusFlushMs);
+    // UX-2：状态栏一次性过滤态提示（kStatusNoteMs 后回落正常状态行）
+    status_note_timer = new QTimer(w);
+    status_note_timer->setSingleShot(true);
+    status_note_timer->setInterval(kStatusNoteMs);
+    connect(status_note_timer, &QTimer::timeout, w, [this] {
+        status_note.clear();
+        w->refresh_status();
+    });
 
     filter = new Filter(this);
     w->installEventFilter(filter);
@@ -403,7 +411,7 @@ MainWindow::Impl::~Impl() {
     }
 }
 
-bool MainWindow::Impl::handle_event(QObject * /*watched*/, QEvent *event) {
+bool MainWindow::Impl::handle_event(QObject *watched, QEvent *event) {
     switch (event->type()) {
     case QEvent::DragEnter: {
         auto *e = static_cast<QDragEnterEvent *>(event);
@@ -466,6 +474,14 @@ bool MainWindow::Impl::handle_event(QObject * /*watched*/, QEvent *event) {
         // 构造期 devicePixelRatioF() 还是 1，必须等真窗口出现后按实际 dpr 重算。
         refresh_theme();
         return false;
+    case QEvent::MouseButtonPress:
+        // R-144（M7-R2D1）：状态栏「N 项失败」下钻 —— 点击跳转运行页（失败原因所在页）；
+        // 失败清单落盘路径在该段 tooltip（write_failure_list）。
+        if (watched == status && run_failed > 0 && !running) {
+            w->set_current_page(3);
+            return true;
+        }
+        return false;
     default:
         break;
     }
@@ -505,6 +521,10 @@ void MainWindow::build_ui() {
     // 已装；迟装 = 先建部件绕过焦点框抑制代理，M5-T14 的成因说明）。此处断言前置条件成立。
     Q_ASSERT(dynamic_cast<FileViewFocusFrameStyle *>(QApplication::style()) != nullptr);
     Impl &d = *impl_;
+    // R-251：tokens 先填后用 —— 原状 d.tokens 在 refresh_theme()（build_ui 末尾）才落地，早期
+    // 控件（＋/−/筛选图标、caption 三钮取色）读到的是**未填充**默认令牌，靠末尾重放掩盖；同一
+    // 函数里两种写法（d.tokens vs theme::tokens(preferred_theme_mode())）就此收敛为一条取值链。
+    d.tokens = theme::tokens(d.theme_mode);
     setWindowTitle(QStringLiteral("PhotoPipeline"));
     setAcceptDrops(true);
     // §9.1 尺寸基准：最小窗口 1180×720 / 1440×900 校准（屏幕不足时收敛到可用区）
@@ -751,6 +771,27 @@ void MainWindow::build_ui() {
     d.filter_checked = act_filter_checked;
     d.filter_exceptions = act_filter_exceptions;
     d.filter_clear = act_filter_clear;
+    // UX-2（M7-R2D1）：勾选操作钮（pp-check-menu）—— 高频批量勾选不必依赖右键。菜单三项 =
+    // 勾选全部 / 取消全部勾选 / 反选勾选（与文件列表右键同一组意图，作用于**可见行**）；
+    // 快捷键进 tooltip（Ctrl+A 全选行 / Ctrl+Shift+A 勾选全部 / Ctrl+D 取消全部勾选）。
+    auto *check_btn = new QToolButton(d.tools_row);
+    check_btn->setObjectName(QStringLiteral("pp-check-menu"));
+    check_btn->setToolTip(
+        tr("勾选操作（Ctrl+A 全选行 · Ctrl+Shift+A 勾选全部 · Ctrl+D 取消全部勾选）"));
+    check_btn->setAccessibleName(tr("勾选操作"));
+    icons::apply(check_btn, icons::Name::CheckAll, d.tokens.text2, QColor(), 12);
+    check_btn->setPopupMode(QToolButton::InstantPopup);
+    check_btn->setFixedHeight(theme::Metrics::btn_h);
+    check_btn->setFixedWidth(theme::Metrics::icon_btn);
+    auto *check_menu = new QMenu(check_btn);
+    QAction *act_check_all = check_menu->addAction(tr("勾选全部"));
+    QAction *act_uncheck_all = check_menu->addAction(tr("取消全部勾选"));
+    QAction *act_invert_checks = check_menu->addAction(tr("反选勾选"));
+    act_check_all->setToolTip(tr("勾选全部（Ctrl+Shift+A）"));
+    act_uncheck_all->setToolTip(tr("取消全部勾选（Ctrl+D）"));
+    act_invert_checks->setToolTip(tr("反选勾选"));
+    check_btn->setMenu(check_menu);
+    d.check_menu_btn = check_btn;
     // GUI-R2：左栏下拉同样走 formkit 唯一构造点（原先逐控件 setStyleSheet 是第六条样式路径）
     {
         formkit::ComboSpec group_spec;
@@ -768,6 +809,7 @@ void MainWindow::build_ui() {
     tools->addWidget(add_btn);
     tools->addWidget(remove_btn);
     tools->addWidget(filter_btn);
+    tools->addWidget(check_btn);
     tools->addWidget(d.group_mode);
     pv->addWidget(d.tools_row);
     d.add_btn = add_btn;
@@ -899,6 +941,8 @@ void MainWindow::build_ui() {
     d.status->setObjectName(QStringLiteral("pp-status"));
     d.status->setFont(theme::font(theme::Typography::small_px)); // 状态栏 11px
     d.status->set_full_text(tr("未添加文件"));
+    // R-144：状态栏失败段可下钻（点击 → 运行页）—— 走窗口同一只事件过滤器（handle_event）
+    d.status->installEventFilter(d.filter);
     d.status_sep = new QFrame(d.bottombar); // 段间分隔（修 5-13：栏内分区）
     d.status_sep->setObjectName(QStringLiteral("pp-status-sep"));
     d.status_sep->setAttribute(Qt::WA_StyledBackground, true);
@@ -1014,13 +1058,15 @@ void MainWindow::wire() {
         // R-153：原实现 clear_filters + 两次 setChecked 各自触发 apply_filter（最多 3 连刷）。
         // 这里屏蔽两枚开关的 toggled，只走一次 apply_filter。
         Impl &impl_ref = *impl_;
-        impl_ref.proxy->clear_filters();
+        impl_ref.proxy->clear_filters(); // R-143：含分类过滤档（chip `.on` 随之归「全部」）
         {
             const QSignalBlocker b1(impl_ref.filter_checked);
             const QSignalBlocker b2(impl_ref.filter_exceptions);
             impl_ref.filter_checked->setChecked(false);
             impl_ref.filter_exceptions->setChecked(false);
         }
+        if (impl_ref.classify_panel != nullptr)
+            impl_ref.classify_panel->set_filter_class_id(QString());
         apply_filter();
     });
     connect(d.search, &QLineEdit::textChanged, this, [this](const QString &text) {
@@ -1089,9 +1135,59 @@ void MainWindow::wire() {
             [this] { impl_->save_classes(); });
     // 被拒操作的非模态反馈（不弹对话框：面板的对话框只在用户主动打开的菜单项里）
     connect(d.classify_panel, &ClassifyPanel::error_occurred, this, [](const QString &message) {
-        std::fprintf(stderr, "ui: classify: %s\n", message.toUtf8().constData());
-        std::fflush(stderr);
+        // R-278：诊断输出收 logger（原 std::fprintf 绕过日志面）
+        pp::log_warn("ui", "classify", message.toStdString());
     });
+    // M7-R2D1 / R-143：chip 过滤档 → 左栏过滤代理（列表按类过滤；「全部」/再点 = 清除）
+    connect(d.classify_panel, &ClassifyPanel::class_filter_requested, this,
+            [this](const QString &class_id) {
+                Impl &impl_ref = *impl_;
+                impl_ref.proxy->set_class_filter(class_id);
+                impl_ref.groups->rebuild();
+                impl_ref.rebuild_group_view();
+                impl_ref.apply_empty_state();
+                refresh_status();
+            });
+
+    // ---- UX-2（M7-R2D1）：批量勾选入口 —— 工具钮菜单 + 快捷键（同一组意图，作用于可见行）----
+    if (d.check_menu_btn != nullptr && d.check_menu_btn->menu() != nullptr) {
+        const QList<QAction *> check_actions = d.check_menu_btn->menu()->actions();
+        if (check_actions.size() == 3) {
+            connect(check_actions[0], &QAction::triggered, this,
+                    [this] { impl_->apply_visible_checks(Impl::CheckOp::All); });
+            connect(check_actions[1], &QAction::triggered, this,
+                    [this] { impl_->apply_visible_checks(Impl::CheckOp::None); });
+            connect(check_actions[2], &QAction::triggered, this,
+                    [this] { impl_->apply_visible_checks(Impl::CheckOp::Invert); });
+        }
+    }
+    // 快捷键挂在**文件列表**焦点域（WidgetWithChildrenShortcut）：文本输入控件里 Ctrl+A 等
+    // 仍归控件自己（搜索框选中文字），不被应用级快捷键抢走。
+    {
+        QAction *select_all = new QAction(tr("全选行"), this);
+        select_all->setShortcut(QKeySequence::SelectAll); // Ctrl+A（Qt 标准）
+        select_all->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+        select_all->setToolTip(tr("全选行（Ctrl+A）"));
+        d.view->addAction(select_all);
+        connect(select_all, &QAction::triggered, this, [this] {
+            if (impl_->view != nullptr)
+                impl_->view->selectAll();
+        });
+        QAction *quick_check = new QAction(tr("勾选全部"), this);
+        quick_check->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_A));
+        quick_check->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+        quick_check->setToolTip(tr("勾选全部（Ctrl+Shift+A）"));
+        d.view->addAction(quick_check);
+        connect(quick_check, &QAction::triggered, this,
+                [this] { impl_->apply_visible_checks(Impl::CheckOp::All); });
+        QAction *quick_uncheck = new QAction(tr("取消全部勾选"), this);
+        quick_uncheck->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_D));
+        quick_uncheck->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+        quick_uncheck->setToolTip(tr("取消全部勾选（Ctrl+D）"));
+        d.view->addAction(quick_uncheck);
+        connect(quick_uncheck, &QAction::triggered, this,
+                [this] { impl_->apply_visible_checks(Impl::CheckOp::None); });
+    }
 
     // ---- M4-T10：中栏预览面板接线（§6.1）----
     // 卡头（pill = 文件名，hint = 尺寸·位深·色彩空间）由面板的 display_changed 驱动；
@@ -1179,10 +1275,9 @@ void MainWindow::wire() {
     // R-006/R-146：改经 on_run_again（补齐语义 + 含失败先确认），不再直接 on_start。
     connect(d.page_run, &PageRun::run_again_requested, this, &MainWindow::on_run_again);
 
-    // ---- UX-1（M7-WP6）：文件列表右键菜单（公共件 = ui/contextmenu）+ UX-2 勾选三项 ----
-    // 菜单内容见 docs/ux-review-14.md §1 表第 ① 行；运行中按 G5 只读置灰（lock_for_run）。
-    d.view->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(d.view, &QWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
+    // ---- UX-1（M7-WP6/M7-R2D1）：文件列表右键菜单（公共件 = ui/contextmenu::attach_card_menu）
+    // ---- + UX-2 勾选三项。菜单内容见 docs/ux-review-14.md §1 表第 ① 行；运行中按 G5 只读置灰。
+    contextmenu::attach_card_menu(d.view, [this] {
         Impl &d2 = *impl_;
         // UX-2：勾选三项作用于**当前可见（过滤后）**的行（§2 改进方案 1）。运行集是全局的，
         // 故作用域写进菜单文案（有筛选时显示"（可见 N 行）"）—— 不静默扩大作用面。
@@ -1198,18 +1293,9 @@ void MainWindow::wire() {
         const bool filtered = d2.proxy->filtering() || !d2.search->text().isEmpty();
         contextmenu::FileListIntents in;
         in.running = d2.running;
-        in.check_all = [&d2, visible_rows] {
-            for (const std::size_t row : visible_rows())
-                d2.model->set_checked(row, true);
-        };
-        in.uncheck_all = [&d2, visible_rows] {
-            for (const std::size_t row : visible_rows())
-                d2.model->set_checked(row, false);
-        };
-        in.invert_checks = [&d2, visible_rows] {
-            for (const std::size_t row : visible_rows())
-                d2.model->set_checked(row, !d2.model->is_checked(row));
-        };
+        in.check_all = [&d2] { d2.apply_visible_checks(Impl::CheckOp::All); };
+        in.uncheck_all = [&d2] { d2.apply_visible_checks(Impl::CheckOp::None); };
+        in.invert_checks = [&d2] { d2.apply_visible_checks(Impl::CheckOp::Invert); };
         in.edit_exif = [this] {
             if (impl_->view != nullptr && impl_->view->currentIndex().isValid())
                 open_exif_editor_row(
@@ -1247,9 +1333,7 @@ void MainWindow::wire() {
                     item.text += scope;
             }
         }
-        QMenu *m = contextmenu::menu(d2.view, items);
-        m->setAttribute(Qt::WA_DeleteOnClose);
-        m->popup(d2.view->viewport()->mapToGlobal(pos));
+        return items;
     });
 }
 
@@ -1478,6 +1562,11 @@ void MainWindow::Impl::theme_replay_panels() {
     // M4-T13：输出页（磁贴/药丸开关/卡片 QSS/页签/浅色卡阴影）随 tokens 重放
     if (page_output != nullptr)
         page_output->set_tokens(tokens);
+    // R-009 收尾（M7-R2D1）：运行页令牌随主题切换重放 —— 原 theme_replay_panels 只重放
+    // preview/classify/page_meta/page_output
+    // 四件，主题切换后运行页仍持构造期令牌（浅色下整页深色）。
+    if (page_run != nullptr)
+        page_run->set_tokens(tokens);
     // M4-T11：左栏控件样式（mockup .mini-btn / .search / .combo；tokens 单源）
     {
         const QString mini =
@@ -1872,7 +1961,7 @@ void MainWindow::Impl::sync_selection() {
         last_selected_path = paths.first();
         last_selected_paths = paths; // R-153：整组快照（多选重建后整组恢复）
     }
-    sync_class_views(first_row >= 0 ? std::size_t(first_row) : std::size_t(-1));
+    // M7-R2D1 / R-143：sync_class_views 已随 chip `.on` 拆态（= 过滤档）移除
 }
 
 // M4-T12：跟随项快照（§5.2「probe 摘要已在文件添加时收集」——本函数只做搬运，零 IO/零探测）
@@ -1920,6 +2009,48 @@ void MainWindow::Impl::remove_selected() {
         return;
     std::sort(rows.begin(), rows.end());
     model->remove_rows(rows);
+}
+
+// ---------------------------------------------------------------------------
+// M7-R2D1 / UX-2：批量勾选（工具钮菜单 + 快捷键 + 右键三项共用的唯一落地）
+//   * 作用面 = **当前可见（过滤后）**的行（docs/ux-review-14.md §2 改进方案 1/4）；
+//   * 状态复用 FileListModel 既有勾选面（set_all_checked / set_checked / is_checked），
+//     不加第二套勾选状态；
+//   * 过滤生效时给一次非阻塞作用域提示（R-067：勾 5 行还是 24 行 —— 文案说清）。
+// ---------------------------------------------------------------------------
+void MainWindow::Impl::apply_visible_checks(CheckOp op) {
+    if (model == nullptr || proxy == nullptr || running)
+        return; // G5：运行中面板锁定（菜单/快捷键双兜底）
+    std::vector<std::size_t> visible;
+    visible.reserve(std::size_t(std::max(0, proxy->rowCount())));
+    for (int r = 0; r < proxy->rowCount(); ++r) {
+        const QModelIndex src = proxy->mapToSource(proxy->index(r, 0));
+        if (src.isValid())
+            visible.push_back(std::size_t(src.row()));
+    }
+    const bool filtered = proxy->filtering() || (search != nullptr && !search->text().isEmpty());
+    if (!filtered && op != CheckOp::Invert) {
+        model->set_all_checked(op == CheckOp::All); // 可见 = 全部 → 单次信号（O(1) 计数同步）
+    } else {
+        for (const std::size_t row : visible) {
+            const bool on = op == CheckOp::All    ? true
+                            : op == CheckOp::None ? false
+                                                  : !model->is_checked(row);
+            model->set_checked(row, on);
+        }
+    }
+    if (filtered) {
+        set_status_note(MainWindow::tr("勾选操作作用于可见 %1 行（筛选生效中；参与运行集仍是全局）")
+                            .arg(visible.size()));
+    }
+}
+
+// UX-2：状态栏一次性非阻塞提示（kStatusNoteMs 后由定时器回落正常状态行）
+void MainWindow::Impl::set_status_note(const QString &note) {
+    status_note = note;
+    if (status_note_timer != nullptr)
+        status_note_timer->start();
+    w->refresh_status();
 }
 
 } // namespace pp::ui

@@ -7771,10 +7771,13 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
                           QStringLiteral("占位高 260=%1 关闭后已移除=%2") // UX-4⑤ 换锚
                               .arg(first.card_kept ? 1 : 0)
                               .arg(first.placeholder_removed ? 1 : 0));
-            // 关闭后：挂回卡片（同实例 + 同宿主 + 固定高 260 + 几何/落点逐位复原 + 状态保持）
+            // 关闭后：挂回卡片（同实例 + 同宿主 + 高度 ≥260 + 几何/落点逐位复原 + 状态保持）
             // UX-4⑤ 换锚：kMapHeight 136 → 260（ux-review §16-2 定档）
+            // M7-R2-B 换锚（主对话授权）：`map->height() == 260` → `>= 260` —— UX-4 stretch 后地图
+            // 260px 起步、随富余空间拉伸（smoke 视口 587×900 下实测 274）；字面量 ==260 钉的是旧
+            // 固定高实现，布局真不变量 = geometry 逐位复原（下一行，逐字保留）。
             expand_expect("restored-card",
-                          page.isAncestorOf(map) && map->isVisible() && map->height() == 260 &&
+                          page.isAncestorOf(map) && map->isVisible() && map->height() >= 260 &&
                               map->geometry() == card_geom &&
                               map->mapTo(&page, QPoint(0, 0)) == card_pos,
                           QStringLiteral("h=%1 vis=%2 geom=(%3,%4 %5x%6) 基线=(%7,%8 %9x%10)")
@@ -7827,7 +7830,10 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
                               .arg(second.dialog_size.width())
                               .arg(second.dialog_size.height()));
             expand_expect("restored-card-2",
-                          page.isAncestorOf(map) && map->height() == 260 && // UX-4⑤ 换锚
+                          page.isAncestorOf(map) &&
+                              map->height() >= 260 && // UX-4⑤ 换锚
+                                                      // M7-R2-B：==260 → ≥260（stretch 后
+                                                      // 260 是下限；geometry 逐位不变）
                               map->geometry() == card_geom && map->isVisible(),
                           QStringLiteral("h=%1 geom=(%2,%3 %4x%5)")
                               .arg(map->height())

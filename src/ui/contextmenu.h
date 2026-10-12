@@ -174,4 +174,13 @@ struct LogTailIntents {
 };
 std::vector<Item> log_tail_actions(const LogTailIntents &in);
 
+// ---------------------------------------------------------------------------
+// 卡片右键接线（M7-R2D1 / UX-1 改进方案 2 的公共落地）：一卡一菜单 = **一行 attach_card_menu**。
+//   * builder 每次弹出前现算 items（使能/勾选态取当下值）；运行中置灰由 intents.running 承担
+//     （调用方按 lock_for_run 语义给；与分类行「运行中不弹菜单」同口径的效果由页面级禁用承担）；
+//   * 生命周期：menu() 产物 WA_DeleteOnClose + popup（与各卡既有接线同口径，父 = card）。
+// ---------------------------------------------------------------------------
+using ItemsBuilder = std::function<std::vector<Item>()>;
+void attach_card_menu(QWidget *card, ItemsBuilder builder);
+
 } // namespace pp::ui::contextmenu

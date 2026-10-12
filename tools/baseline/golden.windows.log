@@ -1194,7 +1194,7 @@ EXIT 4 (failed files)
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/anim.gif need_bytes=131072 capacity_bytes=<bytes> used_bytes=131072 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265 encode_threads=1}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=heif backend=x265 profile="Main10（10 位）" bitdepth=10 chroma=1}
-[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/anim.gif out=".cache/regression/out-full-heif\\base\\anim.heic" format=heif ok=true bytes=796 encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/anim.gif out=".cache/regression/out-full-heif\\base\\anim.heic" format=heif ok=true bytes=816 encode_ms=<ms> metawrite_ms=<ms> warnings=1}
 [warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/anim.gif out=".cache/regression/out-full-heif\\base\\anim.heic" detail="multipage or animated input: only the first page was decoded"}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/anim.gif outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [sched] [scheduler.cpp] file start {index=1 src=tests/golden/base/bmp24.bmp stagger_offset_ms=<ms> stagger_ms=<ms>}
@@ -1202,7 +1202,7 @@ EXIT 4 (failed files)
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/bmp24.bmp need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265 encode_threads=1}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=heif backend=x265 profile="Main10（10 位）" bitdepth=10 chroma=1}
-[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/bmp24.bmp out=".cache/regression/out-full-heif\\base\\bmp24.heic" format=heif ok=true bytes=537 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/bmp24.bmp out=".cache/regression/out-full-heif\\base\\bmp24.heic" format=heif ok=true bytes=557 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/bmp24.bmp outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [sched] [scheduler.cpp] file start {index=2 src=tests/golden/base/gray16.png stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=2 alloc_files=16 encode_threads=1 active_files=1 sum_encode_threads=1 thread_budget=16}
@@ -1251,7 +1251,7 @@ EXIT 4 (failed files)
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/multi.tif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265 encode_threads=1}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=heif backend=x265 profile="Main10（10 位）" bitdepth=10 chroma=1}
-[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/multi.tif out=".cache/regression/out-full-heif\\base\\multi.heic" format=heif ok=true bytes=1204 encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/multi.tif out=".cache/regression/out-full-heif\\base\\multi.heic" format=heif ok=true bytes=1224 encode_ms=<ms> metawrite_ms=<ms> warnings=1}
 [warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/multi.tif out=".cache/regression/out-full-heif\\base\\multi.heic" detail="multipage or animated input: only the first page was decoded"}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/multi.tif outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [sched] [scheduler.cpp] file start {index=8 src=tests/golden/base/photo.jpg stagger_offset_ms=<ms> stagger_ms=<ms>}
@@ -1259,14 +1259,14 @@ EXIT 4 (failed files)
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/photo.jpg need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265 encode_threads=1}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=heif backend=x265 profile="Main10（10 位）" bitdepth=10 chroma=1}
-[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/photo.jpg out=".cache/regression/out-full-heif\\base\\photo.heic" format=heif ok=true bytes=696 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/photo.jpg out=".cache/regression/out-full-heif\\base\\photo.heic" format=heif ok=true bytes=716 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/photo.jpg outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [sched] [scheduler.cpp] file start {index=9 src=tests/golden/base/rgb16.png stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=9 alloc_files=16 encode_threads=1 active_files=1 sum_encode_threads=1 thread_budget=16}
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb16.png need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265 encode_threads=1}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=heif backend=x265 profile="Main10（10 位）" bitdepth=10 chroma=1}
-[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/rgb16.png out=".cache/regression/out-full-heif\\base\\rgb16.heic" format=heif ok=true bytes=696 encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/rgb16.png out=".cache/regression/out-full-heif\\base\\rgb16.heic" format=heif ok=true bytes=716 encode_ms=<ms> metawrite_ms=<ms> warnings=1}
 [warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/rgb16.png out=".cache/regression/out-full-heif\\base\\rgb16.heic" detail="source bit depth 16 -> output bit depth 10"}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb16.png outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [sched] [scheduler.cpp] file start {index=10 src=tests/golden/base/rgb16.tif stagger_offset_ms=<ms> stagger_ms=<ms>}
@@ -1274,7 +1274,7 @@ EXIT 4 (failed files)
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb16.tif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265 encode_threads=1}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=heif backend=x265 profile="Main10（10 位）" bitdepth=10 chroma=1}
-[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/rgb16.tif out=".cache/regression/out-full-heif\\base\\rgb16.heic" format=heif ok=true bytes=848 encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/rgb16.tif out=".cache/regression/out-full-heif\\base\\rgb16.heic" format=heif ok=true bytes=868 encode_ms=<ms> metawrite_ms=<ms> warnings=1}
 [warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/rgb16.tif out=".cache/regression/out-full-heif\\base\\rgb16.heic" detail="source bit depth 16 -> output bit depth 10"}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb16.tif outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [sched] [scheduler.cpp] file start {index=11 src=tests/golden/base/rgb8.png stagger_offset_ms=<ms> stagger_ms=<ms>}
@@ -1282,21 +1282,21 @@ EXIT 4 (failed files)
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb8.png need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265 encode_threads=1}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=heif backend=x265 profile="Main10（10 位）" bitdepth=10 chroma=1}
-[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/rgb8.png out=".cache/regression/out-full-heif\\base\\rgb8.heic" format=heif ok=true bytes=696 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/rgb8.png out=".cache/regression/out-full-heif\\base\\rgb8.heic" format=heif ok=true bytes=716 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb8.png outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [sched] [scheduler.cpp] file start {index=12 src=tests/golden/base/rgb8.tif stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=12 alloc_files=15 encode_threads=1 active_files=1 sum_encode_threads=1 thread_budget=16}
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb8.tif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265 encode_threads=1}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=heif backend=x265 profile="Main10（10 位）" bitdepth=10 chroma=1}
-[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/rgb8.tif out=".cache/regression/out-full-heif\\base\\rgb8.heic" format=heif ok=true bytes=848 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/rgb8.tif out=".cache/regression/out-full-heif\\base\\rgb8.heic" format=heif ok=true bytes=868 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb8.tif outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [sched] [scheduler.cpp] file start {index=13 src=tests/golden/base/rgba16.png stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=13 alloc_files=14 encode_threads=1 active_files=1 sum_encode_threads=1 thread_budget=16}
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgba16.png need_bytes=131072 capacity_bytes=<bytes> used_bytes=131072 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265 encode_threads=1}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=heif backend=x265 profile="Main10（10 位）" bitdepth=10 chroma=1}
-[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/rgba16.png out=".cache/regression/out-full-heif\\base\\rgba16.heic" format=heif ok=true bytes=1100 encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/rgba16.png out=".cache/regression/out-full-heif\\base\\rgba16.heic" format=heif ok=true bytes=1120 encode_ms=<ms> metawrite_ms=<ms> warnings=1}
 [warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/rgba16.png out=".cache/regression/out-full-heif\\base\\rgba16.heic" detail="source bit depth 16 -> output bit depth 10"}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgba16.png outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [sched] [scheduler.cpp] file start {index=14 src=tests/golden/base/rgba8.png stagger_offset_ms=<ms> stagger_ms=<ms>}
@@ -1304,14 +1304,14 @@ EXIT 4 (failed files)
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgba8.png need_bytes=131072 capacity_bytes=<bytes> used_bytes=131072 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265 encode_threads=1}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=heif backend=x265 profile="Main10（10 位）" bitdepth=10 chroma=1}
-[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/rgba8.png out=".cache/regression/out-full-heif\\base\\rgba8.heic" format=heif ok=true bytes=1100 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/rgba8.png out=".cache/regression/out-full-heif\\base\\rgba8.heic" format=heif ok=true bytes=1120 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgba8.png outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [sched] [scheduler.cpp] file start {index=15 src=tests/golden/base/targa.tga stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=15 alloc_files=12 encode_threads=1 active_files=1 sum_encode_threads=1 thread_budget=16}
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/targa.tga need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265 encode_threads=1}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=heif backend=x265 profile="Main10（10 位）" bitdepth=10 chroma=1}
-[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/targa.tga out=".cache/regression/out-full-heif\\base\\targa.heic" format=heif ok=true bytes=537 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/targa.tga out=".cache/regression/out-full-heif\\base\\targa.heic" format=heif ok=true bytes=557 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/targa.tga outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [sched] [scheduler.cpp] file start {index=16 src=tests/golden/edge/cmyk.tif stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] file start {index=17 src=tests/golden/edge/corrupt_trunc.jpg stagger_offset_ms=<ms> stagger_ms=<ms>}
@@ -1321,14 +1321,14 @@ EXIT 4 (failed files)
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/edge/测试📸unicode.png need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265 encode_threads=2}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=heif backend=x265 profile="Main10（10 位）" bitdepth=10 chroma=1}
-[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/edge/测试📸unicode.png out=".cache/regression/out-full-heif\\edge\\测试📸unicode.heic" format=heif ok=true bytes=696 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/edge/测试📸unicode.png out=".cache/regression/out-full-heif\\edge\\测试📸unicode.heic" format=heif ok=true bytes=716 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/edge/测试📸unicode.png outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [sched] [scheduler.cpp] file start {index=20 src=tests/golden/meta/avif_exif.avif stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=20 alloc_files=7 encode_threads=2 active_files=1 sum_encode_threads=2 thread_budget=16}
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/avif_exif.avif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265 encode_threads=2}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=heif backend=x265 profile="Main10（10 位）" bitdepth=10 chroma=1}
-[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/meta/avif_exif.avif out=".cache/regression/out-full-heif\\meta\\avif_exif.heic" format=heif ok=true bytes=733 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/meta/avif_exif.avif out=".cache/regression/out-full-heif\\meta\\avif_exif.heic" format=heif ok=true bytes=753 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/avif_exif.avif outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [sched] [scheduler.cpp] file start {index=21 src=tests/golden/meta/cmyk.tif stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] file start {index=22 src=tests/golden/meta/exif_full.jpg stagger_offset_ms=<ms> stagger_ms=<ms>}
@@ -1336,14 +1336,14 @@ EXIT 4 (failed files)
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/exif_full.jpg need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265 encode_threads=3}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=heif backend=x265 profile="Main10（10 位）" bitdepth=10 chroma=1}
-[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/meta/exif_full.jpg out=".cache/regression/out-full-heif\\meta\\exif_full.heic" format=heif ok=true bytes=734 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/meta/exif_full.jpg out=".cache/regression/out-full-heif\\meta\\exif_full.heic" format=heif ok=true bytes=754 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/exif_full.jpg outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [sched] [scheduler.cpp] file start {index=23 src=tests/golden/meta/heif_exif.heic stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=23 alloc_files=4 encode_threads=4 active_files=1 sum_encode_threads=4 thread_budget=16}
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/heif_exif.heic need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265 encode_threads=4}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=heif backend=x265 profile="Main10（10 位）" bitdepth=10 chroma=1}
-[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/meta/heif_exif.heic out=".cache/regression/out-full-heif\\meta\\heif_exif.heic" format=heif ok=true bytes=728 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/meta/heif_exif.heic out=".cache/regression/out-full-heif\\meta\\heif_exif.heic" format=heif ok=true bytes=748 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/heif_exif.heic outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [sched] [scheduler.cpp] file start {index=24 src=tests/golden/meta/jxl_exif.jxl stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=24 alloc_files=3 encode_threads=5 active_files=1 sum_encode_threads=5 thread_budget=16}
@@ -1358,55 +1358,55 @@ EXIT 4 (failed files)
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/webp_lossless.webp need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265 encode_threads=8}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=heif backend=x265 profile="Main10（10 位）" bitdepth=10 chroma=1}
-[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/meta/webp_lossless.webp out=".cache/regression/out-full-heif\\meta\\webp_lossless.heic" format=heif ok=true bytes=463 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/meta/webp_lossless.webp out=".cache/regression/out-full-heif\\meta\\webp_lossless.heic" format=heif ok=true bytes=483 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/webp_lossless.webp outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [sched] [scheduler.cpp] file start {index=26 src=tests/golden/meta/webp_lossy.webp stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=26 alloc_files=1 encode_threads=16 active_files=1 sum_encode_threads=16 thread_budget=16}
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/webp_lossy.webp need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; default pool kept {format=heif backend=x265 encode_threads=16}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=heif backend=x265 profile="Main10（10 位）" bitdepth=10 chroma=1}
-[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/meta/webp_lossy.webp out=".cache/regression/out-full-heif\\meta\\webp_lossy.heic" format=heif ok=true bytes=472 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/meta/webp_lossy.webp out=".cache/regression/out-full-heif\\meta\\webp_lossy.heic" format=heif ok=true bytes=492 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/webp_lossy.webp outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [scheduler] [scheduler.cpp] e3 report {thread_budget=16 stagger_ms=<ms> peak_active_files=1 peak_sum_encode_threads=16 active_files_end=0 files_done=27}
-[info] [tid] [run] [dev_cli.cpp] run summary {files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=23814 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
+[info] [tid] [run] [dev_cli.cpp] run summary {files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=24154 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
 photopipeline --dev
   format=heif backend=(first) tech=(first) lossless=false bitdepth=10 color=keep conflict=overwrite
   out=.cache/regression/out-full-heif workers=1 files=27 metadata_only=false params=[]
 
 file                                           state          bytes        ms  warnings
-tests/golden/base/anim.gif ok 796 <ms> MultipageTruncated
-tests/golden/base/bmp24.bmp ok 537 <ms>
+tests/golden/base/anim.gif ok 816 <ms> MultipageTruncated
+tests/golden/base/bmp24.bmp ok 557 <ms>
 tests/golden/base/gray16.png ok 1297 <ms> GrayToRgbEncoded,DepthDowngrade
 tests/golden/base/gray16.tif ok 1437 <ms> GrayToRgbEncoded,DepthDowngrade
 tests/golden/base/gray8.png ok 1297 <ms> GrayToRgbEncoded
 tests/golden/base/graya8.png ok 1701 <ms> GrayToRgbEncoded
 tests/golden/base/jxl8.jxl ok 1213 <ms>
-tests/golden/base/multi.tif ok 1204 <ms> MultipageTruncated
-tests/golden/base/photo.jpg ok 696 <ms>
-tests/golden/base/rgb16.png ok 696 <ms> DepthDowngrade
-tests/golden/base/rgb16.tif ok 848 <ms> DepthDowngrade
-tests/golden/base/rgb8.png ok 696 <ms>
-tests/golden/base/rgb8.tif ok 848 <ms>
-tests/golden/base/rgba16.png ok 1100 <ms> DepthDowngrade
-tests/golden/base/rgba8.png ok 1100 <ms>
-tests/golden/base/targa.tga ok 537 <ms>
+tests/golden/base/multi.tif ok 1224 <ms> MultipageTruncated
+tests/golden/base/photo.jpg ok 716 <ms>
+tests/golden/base/rgb16.png ok 716 <ms> DepthDowngrade
+tests/golden/base/rgb16.tif ok 868 <ms> DepthDowngrade
+tests/golden/base/rgb8.png ok 716 <ms>
+tests/golden/base/rgb8.tif ok 868 <ms>
+tests/golden/base/rgba16.png ok 1120 <ms> DepthDowngrade
+tests/golden/base/rgba8.png ok 1120 <ms>
+tests/golden/base/targa.tga ok 557 <ms>
 tests/golden/edge/cmyk.tif failed 0 <ms>
     error: probe failed: CMYK input is not supported
 tests/golden/edge/corrupt_trunc.jpg failed 0 <ms>
     error: probe failed: JPEG error: <repo>\vcpkg\buildtrees\libjpeg-turbo\src\56c1f52a20-f26ed ("tests/golden/edge/corrupt_trunc.jpg")
 tests/golden/edge/corrupt_zero.png failed 0 <ms>
     error: probe failed: Not a PNG file
-tests/golden/edge/测试📸unicode.png ok 696 <ms>
-tests/golden/meta/avif_exif.avif ok 733 <ms>
+tests/golden/edge/测试📸unicode.png ok 716 <ms>
+tests/golden/meta/avif_exif.avif ok 753 <ms>
 tests/golden/meta/cmyk.tif failed 0 <ms>
     error: probe failed: CMYK input is not supported
-tests/golden/meta/exif_full.jpg ok 734 <ms>
-tests/golden/meta/heif_exif.heic ok 728 <ms>
+tests/golden/meta/exif_full.jpg ok 754 <ms>
+tests/golden/meta/heif_exif.heic ok 748 <ms>
 tests/golden/meta/jxl_exif.jxl ok 3985 <ms>
-tests/golden/meta/webp_lossless.webp ok 463 <ms>
-tests/golden/meta/webp_lossy.webp ok 472 <ms>
+tests/golden/meta/webp_lossless.webp ok 483 <ms>
+tests/golden/meta/webp_lossy.webp ok 492 <ms>
 
-SUMMARY files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=23814 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>
+SUMMARY files=27 ok=23 failed=4 skipped=0 cancelled=0 bytes=24154 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>
 EXIT 4 (failed files)
 ### run full-avif rc=8 args=--format avif
 [info] [tid] [encode] [enc_heif.cpp] bit depth probe {format=avif backend="" supported=8,10,12 unsupported=""}
@@ -1437,7 +1437,7 @@ EXIT 4 (failed files)
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=1 alloc_files=16 encode_threads=1 active_files=1 sum_encode_threads=1 thread_budget=16}
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/bmp24.bmp need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=avif backend=svt-av1 profile=Main（兼容性最好） bitdepth=10 chroma=1}
-[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/bmp24.bmp out=".cache/regression/out-full-avif\\base\\bmp24.avif" format=avif ok=true bytes=955 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/bmp24.bmp out=".cache/regression/out-full-avif\\base\\bmp24.avif" format=avif ok=true bytes=975 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/bmp24.bmp outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [sched] [scheduler.cpp] file start {index=2 src=tests/golden/base/gray16.png stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=2 alloc_files=16 encode_threads=1 active_files=1 sum_encode_threads=1 thread_budget=16}
@@ -1481,40 +1481,40 @@ EXIT 4 (failed files)
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=7 alloc_files=16 encode_threads=1 active_files=1 sum_encode_threads=1 thread_budget=16}
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/multi.tif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=avif backend=svt-av1 profile=Main（兼容性最好） bitdepth=10 chroma=1}
-[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/multi.tif out=".cache/regression/out-full-avif\\base\\multi.avif" format=avif ok=true bytes=1622 encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/multi.tif out=".cache/regression/out-full-avif\\base\\multi.avif" format=avif ok=true bytes=1642 encode_ms=<ms> metawrite_ms=<ms> warnings=1}
 [warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/multi.tif out=".cache/regression/out-full-avif\\base\\multi.avif" detail="multipage or animated input: only the first page was decoded"}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/multi.tif outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [sched] [scheduler.cpp] file start {index=8 src=tests/golden/base/photo.jpg stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=8 alloc_files=16 encode_threads=1 active_files=1 sum_encode_threads=1 thread_budget=16}
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/photo.jpg need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=avif backend=svt-av1 profile=Main（兼容性最好） bitdepth=10 chroma=1}
-[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/photo.jpg out=".cache/regression/out-full-avif\\base\\photo.avif" format=avif ok=true bytes=1114 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/photo.jpg out=".cache/regression/out-full-avif\\base\\photo.avif" format=avif ok=true bytes=1134 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/photo.jpg outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [sched] [scheduler.cpp] file start {index=9 src=tests/golden/base/rgb16.png stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=9 alloc_files=16 encode_threads=1 active_files=1 sum_encode_threads=1 thread_budget=16}
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb16.png need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=avif backend=svt-av1 profile=Main（兼容性最好） bitdepth=10 chroma=1}
-[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/rgb16.png out=".cache/regression/out-full-avif\\base\\rgb16.avif" format=avif ok=true bytes=1114 encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/rgb16.png out=".cache/regression/out-full-avif\\base\\rgb16.avif" format=avif ok=true bytes=1134 encode_ms=<ms> metawrite_ms=<ms> warnings=1}
 [warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/rgb16.png out=".cache/regression/out-full-avif\\base\\rgb16.avif" detail="source bit depth 16 -> output bit depth 10"}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb16.png outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [sched] [scheduler.cpp] file start {index=10 src=tests/golden/base/rgb16.tif stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=10 alloc_files=16 encode_threads=1 active_files=1 sum_encode_threads=1 thread_budget=16}
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb16.tif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=avif backend=svt-av1 profile=Main（兼容性最好） bitdepth=10 chroma=1}
-[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/rgb16.tif out=".cache/regression/out-full-avif\\base\\rgb16.avif" format=avif ok=true bytes=1266 encode_ms=<ms> metawrite_ms=<ms> warnings=1}
+[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/rgb16.tif out=".cache/regression/out-full-avif\\base\\rgb16.avif" format=avif ok=true bytes=1286 encode_ms=<ms> metawrite_ms=<ms> warnings=1}
 [warning] [tid] [pipeline] [pipeline.cpp] output warning {src=tests/golden/base/rgb16.tif out=".cache/regression/out-full-avif\\base\\rgb16.avif" detail="source bit depth 16 -> output bit depth 10"}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb16.tif outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [sched] [scheduler.cpp] file start {index=11 src=tests/golden/base/rgb8.png stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=11 alloc_files=16 encode_threads=1 active_files=1 sum_encode_threads=1 thread_budget=16}
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb8.png need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=avif backend=svt-av1 profile=Main（兼容性最好） bitdepth=10 chroma=1}
-[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/rgb8.png out=".cache/regression/out-full-avif\\base\\rgb8.avif" format=avif ok=true bytes=1114 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/rgb8.png out=".cache/regression/out-full-avif\\base\\rgb8.avif" format=avif ok=true bytes=1134 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb8.png outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [sched] [scheduler.cpp] file start {index=12 src=tests/golden/base/rgb8.tif stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=12 alloc_files=15 encode_threads=1 active_files=1 sum_encode_threads=1 thread_budget=16}
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/rgb8.tif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=avif backend=svt-av1 profile=Main（兼容性最好） bitdepth=10 chroma=1}
-[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/rgb8.tif out=".cache/regression/out-full-avif\\base\\rgb8.avif" format=avif ok=true bytes=1266 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/rgb8.tif out=".cache/regression/out-full-avif\\base\\rgb8.avif" format=avif ok=true bytes=1286 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/rgb8.tif outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [sched] [scheduler.cpp] file start {index=13 src=tests/golden/base/rgba16.png stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=13 alloc_files=14 encode_threads=1 active_files=1 sum_encode_threads=1 thread_budget=16}
@@ -1535,7 +1535,7 @@ EXIT 4 (failed files)
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=15 alloc_files=12 encode_threads=1 active_files=1 sum_encode_threads=1 thread_budget=16}
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/base/targa.tga need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=avif backend=svt-av1 profile=Main（兼容性最好） bitdepth=10 chroma=1}
-[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/targa.tga out=".cache/regression/out-full-avif\\base\\targa.avif" format=avif ok=true bytes=955 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/base/targa.tga out=".cache/regression/out-full-avif\\base\\targa.avif" format=avif ok=true bytes=975 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/base/targa.tga outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [sched] [scheduler.cpp] file start {index=16 src=tests/golden/edge/cmyk.tif stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] file start {index=17 src=tests/golden/edge/corrupt_trunc.jpg stagger_offset_ms=<ms> stagger_ms=<ms>}
@@ -1544,26 +1544,26 @@ EXIT 4 (failed files)
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=19 alloc_files=8 encode_threads=2 active_files=1 sum_encode_threads=2 thread_budget=16}
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/edge/测试📸unicode.png need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=avif backend=svt-av1 profile=Main（兼容性最好） bitdepth=10 chroma=1}
-[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/edge/测试📸unicode.png out=".cache/regression/out-full-avif\\edge\\测试📸unicode.avif" format=avif ok=true bytes=1114 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/edge/测试📸unicode.png out=".cache/regression/out-full-avif\\edge\\测试📸unicode.avif" format=avif ok=true bytes=1134 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/edge/测试📸unicode.png outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [sched] [scheduler.cpp] file start {index=20 src=tests/golden/meta/avif_exif.avif stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=20 alloc_files=7 encode_threads=2 active_files=1 sum_encode_threads=2 thread_budget=16}
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/avif_exif.avif need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=avif backend=svt-av1 profile=Main（兼容性最好） bitdepth=10 chroma=1}
-[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/meta/avif_exif.avif out=".cache/regression/out-full-avif\\meta\\avif_exif.avif" format=avif ok=true bytes=588 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/meta/avif_exif.avif out=".cache/regression/out-full-avif\\meta\\avif_exif.avif" format=avif ok=true bytes=608 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/avif_exif.avif outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [sched] [scheduler.cpp] file start {index=21 src=tests/golden/meta/cmyk.tif stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] file start {index=22 src=tests/golden/meta/exif_full.jpg stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=22 alloc_files=5 encode_threads=3 active_files=1 sum_encode_threads=3 thread_budget=16}
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/exif_full.jpg need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=avif backend=svt-av1 profile=Main（兼容性最好） bitdepth=10 chroma=1}
-[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/meta/exif_full.jpg out=".cache/regression/out-full-avif\\meta\\exif_full.avif" format=avif ok=true bytes=589 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/meta/exif_full.jpg out=".cache/regression/out-full-avif\\meta\\exif_full.avif" format=avif ok=true bytes=609 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/exif_full.jpg outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [sched] [scheduler.cpp] file start {index=23 src=tests/golden/meta/heif_exif.heic stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=23 alloc_files=4 encode_threads=4 active_files=1 sum_encode_threads=4 thread_budget=16}
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/heif_exif.heic need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=avif backend=svt-av1 profile=Main（兼容性最好） bitdepth=10 chroma=1}
-[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/meta/heif_exif.heic out=".cache/regression/out-full-avif\\meta\\heif_exif.avif" format=avif ok=true bytes=588 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/meta/heif_exif.heic out=".cache/regression/out-full-avif\\meta\\heif_exif.avif" format=avif ok=true bytes=608 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/heif_exif.heic outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [sched] [scheduler.cpp] file start {index=24 src=tests/golden/meta/jxl_exif.jxl stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=24 alloc_files=3 encode_threads=5 active_files=1 sum_encode_threads=5 thread_budget=16}
@@ -1576,16 +1576,16 @@ EXIT 4 (failed files)
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=25 alloc_files=2 encode_threads=8 active_files=1 sum_encode_threads=8 thread_budget=16}
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/webp_lossless.webp need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=avif backend=svt-av1 profile=Main（兼容性最好） bitdepth=10 chroma=1}
-[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/meta/webp_lossless.webp out=".cache/regression/out-full-avif\\meta\\webp_lossless.avif" format=avif ok=true bytes=318 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/meta/webp_lossless.webp out=".cache/regression/out-full-avif\\meta\\webp_lossless.avif" format=avif ok=true bytes=338 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/webp_lossless.webp outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [sched] [scheduler.cpp] file start {index=26 src=tests/golden/meta/webp_lossy.webp stagger_offset_ms=<ms> stagger_ms=<ms>}
 [info] [tid] [sched] [scheduler.cpp] thread alloc {index=26 alloc_files=1 encode_threads=16 active_files=1 sum_encode_threads=16 thread_budget=16}
 [info] [tid] [pipeline] [pipeline.cpp] pixel budget acquired {src=tests/golden/meta/webp_lossy.webp need_bytes=98304 capacity_bytes=<bytes> used_bytes=98304 peak_bytes=131072}
 [info] [tid] [encode] [enc_heif.cpp] heif profile (derived) {format=avif backend=svt-av1 profile=Main（兼容性最好） bitdepth=10 chroma=1}
-[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/meta/webp_lossy.webp out=".cache/regression/out-full-avif\\meta\\webp_lossy.avif" format=avif ok=true bytes=319 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
+[info] [tid] [pipeline] [pipeline.cpp] output done {src=tests/golden/meta/webp_lossy.webp out=".cache/regression/out-full-avif\\meta\\webp_lossy.avif" format=avif ok=true bytes=339 encode_ms=<ms> metawrite_ms=<ms> warnings=0}
 [info] [tid] [pipeline] [pipeline.cpp] file done {src=tests/golden/meta/webp_lossy.webp outputs=1 ok_outputs=1 bytes=0 decode_ms=<ms> orient_ms=<ms> color_ms=<ms> flatten_ms=<ms> encode_ms=<ms> metawrite_ms=<ms> verdict=Done warnings=0}
 [info] [tid] [scheduler] [scheduler.cpp] e3 report {thread_budget=16 stagger_ms=<ms> peak_active_files=1 peak_sum_encode_threads=16 active_files_end=0 files_done=27}
-[info] [tid] [run] [dev_cli.cpp] run summary {files=27 ok=19 failed=8 skipped=0 cancelled=0 bytes=23680 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
+[info] [tid] [run] [dev_cli.cpp] run summary {files=27 ok=19 failed=8 skipped=0 cancelled=0 bytes=23960 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>}
 Svt[info]: -------------------------------------------
 Svt[info]: SVT [version]:	SVT-AV1 Encoder Lib v4.2.0
 Svt[info]: SVT [build]  :	Visual Studio 2026 64 bit
@@ -2034,41 +2034,41 @@ Svt[info]: -------------------------------------------
 file                                           state          bytes        ms  warnings
 tests/golden/base/anim.gif failed 0 <ms> MultipageTruncated
     error: encode failed: svt-av1 does not support 10-bit with alpha; use backend libaom
-tests/golden/base/bmp24.bmp ok 955 <ms>
+tests/golden/base/bmp24.bmp ok 975 <ms>
 tests/golden/base/gray16.png ok 1715 <ms> GrayToRgbEncoded,DepthDowngrade
 tests/golden/base/gray16.tif ok 1855 <ms> GrayToRgbEncoded,DepthDowngrade
 tests/golden/base/gray8.png ok 1715 <ms> GrayToRgbEncoded
 tests/golden/base/graya8.png failed 0 <ms> GrayToRgbEncoded
     error: encode failed: svt-av1 does not support 10-bit with alpha; use backend libaom
 tests/golden/base/jxl8.jxl ok 1631 <ms>
-tests/golden/base/multi.tif ok 1622 <ms> MultipageTruncated
-tests/golden/base/photo.jpg ok 1114 <ms>
-tests/golden/base/rgb16.png ok 1114 <ms> DepthDowngrade
-tests/golden/base/rgb16.tif ok 1266 <ms> DepthDowngrade
-tests/golden/base/rgb8.png ok 1114 <ms>
-tests/golden/base/rgb8.tif ok 1266 <ms>
+tests/golden/base/multi.tif ok 1642 <ms> MultipageTruncated
+tests/golden/base/photo.jpg ok 1134 <ms>
+tests/golden/base/rgb16.png ok 1134 <ms> DepthDowngrade
+tests/golden/base/rgb16.tif ok 1286 <ms> DepthDowngrade
+tests/golden/base/rgb8.png ok 1134 <ms>
+tests/golden/base/rgb8.tif ok 1286 <ms>
 tests/golden/base/rgba16.png failed 0 <ms> DepthDowngrade
     error: encode failed: svt-av1 does not support 10-bit with alpha; use backend libaom
 tests/golden/base/rgba8.png failed 0 <ms>
     error: encode failed: svt-av1 does not support 10-bit with alpha; use backend libaom
-tests/golden/base/targa.tga ok 955 <ms>
+tests/golden/base/targa.tga ok 975 <ms>
 tests/golden/edge/cmyk.tif failed 0 <ms>
     error: probe failed: CMYK input is not supported
 tests/golden/edge/corrupt_trunc.jpg failed 0 <ms>
     error: probe failed: JPEG error: <repo>\vcpkg\buildtrees\libjpeg-turbo\src\56c1f52a20-f26ed ("tests/golden/edge/corrupt_trunc.jpg")
 tests/golden/edge/corrupt_zero.png failed 0 <ms>
     error: probe failed: Not a PNG file
-tests/golden/edge/测试📸unicode.png ok 1114 <ms>
-tests/golden/meta/avif_exif.avif ok 588 <ms>
+tests/golden/edge/测试📸unicode.png ok 1134 <ms>
+tests/golden/meta/avif_exif.avif ok 608 <ms>
 tests/golden/meta/cmyk.tif failed 0 <ms>
     error: probe failed: CMYK input is not supported
-tests/golden/meta/exif_full.jpg ok 589 <ms>
-tests/golden/meta/heif_exif.heic ok 588 <ms>
+tests/golden/meta/exif_full.jpg ok 609 <ms>
+tests/golden/meta/heif_exif.heic ok 608 <ms>
 tests/golden/meta/jxl_exif.jxl ok 3842 <ms>
-tests/golden/meta/webp_lossless.webp ok 318 <ms>
-tests/golden/meta/webp_lossy.webp ok 319 <ms>
+tests/golden/meta/webp_lossless.webp ok 338 <ms>
+tests/golden/meta/webp_lossy.webp ok 339 <ms>
 
-SUMMARY files=27 ok=19 failed=8 skipped=0 cancelled=0 bytes=23680 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>
+SUMMARY files=27 ok=19 failed=8 skipped=0 cancelled=0 bytes=23960 total_ms=<ms> throughput_mb_s=<val> avg_file_ms=<ms>
 EXIT 8 (failed files)
 ### run meta-jpeg rc=4 args=--format jpeg
 [info] [tid] [run] [dev_cli.cpp] run start {outputs=jpeg output_count=1 template=$dir/$file lossless=false color=keep conflict=overwrite workers=1 files=16 metadata_only=true out=.cache/regression/out-meta-jpeg params="adaptive_quantization=true arith_code=false chroma=444 cicp_transfer_function=2 dct_method=0 distance=1 optimize_coding=true progressive=true psnr_target=0 quality=90 quality_mode=distance restart_in_rows=0 smoothing_factor=0 std_quant_tables=false xyb_mode=false"}

@@ -84,6 +84,9 @@ public:
     // mirror_base_changed；set_ 为程序化不发信号（同组既有 set_* 口径）。
     QString mirror_base() const;
     void set_mirror_base(const QString &base); // programmatic (no signal)
+    // —— M7-R2.1-F4 / UX-14 C1–C4 加性：色彩四选项读回（线性光重采样同时透传预览通道）。
+    // 其余三档经 config_base() 进 RunConfig；本读回供主窗同步预览缓存。
+    bool linear_resample() const;
 
 signals:
     // R-133（M7-R2.1-F4）：format_changed 孤儿信号**删除**（任务明文「接线或删除」+ R2D1-A3

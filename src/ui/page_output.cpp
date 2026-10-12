@@ -850,6 +850,14 @@ pp::RunConfig PageOutput::config_base() const {
             cfg.outputs.push_back(impl_->spec_of(id));
     }
     cfg.color = impl_->color_target();
+    // M7-R2.1-F4：色彩四选项（UX-14 C1–C4）——默认值 = 现行为（0/false），能力类 opt-in
+    cfg.color_intent = impl_->intent_combo != nullptr ? impl_->intent_combo->currentData().toInt() : 0;
+    cfg.color_dither8 =
+        impl_->dither8_switch != nullptr && impl_->dither8_switch->isChecked();
+    cfg.gamut_mapping =
+        impl_->gamut_combo != nullptr ? impl_->gamut_combo->currentData().toInt() : 0;
+    cfg.linear_resample =
+        impl_->linear_switch != nullptr && impl_->linear_switch->isChecked();
     cfg.conflict = impl_->conflict();
     cfg.metadata_only = impl_->metadata_only;
     cfg.output_template = impl_->template_text().toStdString();
@@ -1159,6 +1167,12 @@ void PageOutput::set_current_preset(const QString &path) {
         }
     }
     impl_->sync_preset_buttons();
+}
+
+// M7-R2.1-F4：线性光重采样开关读回（预览通道透传用；默认 false = 现行为）
+bool PageOutput::linear_resample() const {
+    OutputPageImpl *impl_ = impl_of(this);
+    return impl_->linear_switch != nullptr && impl_->linear_switch->isChecked();
 }
 
 // R-319（M7-R2.1-F4）：镜像基准目录（opt-in；空 = 现行为）

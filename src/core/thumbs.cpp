@@ -557,6 +557,7 @@ struct PreviewCache::Impl {
 
     std::size_t capacity = kPreviewCacheCapacity;
     int max_px = kPreviewCacheMaxPx;
+    bool linear_resample = false; // C4 UI 面（M7-R2.1-F4）：未命中解码的线性光重采样开关
     mutable std::mutex mu;
     std::list<Entry> lru;                                       // front = MRU，back = LRU
     std::map<std::string, std::list<Entry>::iterator> index;    // key → LRU 位置
@@ -589,7 +590,7 @@ PreviewImage PreviewCache::get(const std::filesystem::path &src) {
     }
 
     // 解码在锁外（2 个预览 worker 可并发 miss，不互相阻塞）
-    PreviewImage result = decode_preview_detailed(src, im.max_px);
+    PreviewImage result = decode_preview_detailed(src, im.max_px, im.linear_resample);
     if (!result.error.empty() || result.image.isNull())
         return result; // 失败结果不入缓存（文件暂时读不了不该被钉死）
 
@@ -628,6 +629,23 @@ std::size_t PreviewCache::size() const {
 std::size_t PreviewCache::capacity() const { return impl_->capacity; }
 
 int PreviewCache::max_px() const { return impl_->max_px; }
+
+// C4 UI 面（M7-R2.1-F4）：linear_resample 透传开关 —— 切换值时清空缓存（旧档解码条目与
+// 新档不可混用）；默认 false = 既有路径逐字不变。
+void PreviewCache::set_linear_resample(bool on) {
+    Impl &im = *impl_;
+    const std::lock_guard<std::mutex> lock(im.mu);
+    if (im.linear_resample == on)
+        return;
+    im.linear_resample = on;
+    im.lru.clear();
+    im.index.clear();
+}
+
+bool PreviewCache::linear_resample() const {
+    const std::lock_guard<std::mutex> lock(impl_->mu);
+    return impl_->linear_resample;
+}
 
 std::size_t PreviewCache::hits() const {
     const std::lock_guard<std::mutex> lock(impl_->mu);

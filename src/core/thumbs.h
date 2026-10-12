@@ -139,6 +139,13 @@ public:
     // **不入缓存**（避免把"文件暂时读不了"钉死）。
     PreviewImage get(const std::filesystem::path &src);
 
+    // —— M7-R2.1-F4 / C4 UI 面加性（末尾追加；裁定登记 docs/m7-adjudications.md 十一节）——
+    // linear_resample（UX-14 C4）透传开关：真 = 未命中解码走 decode_preview_detailed 的
+    // 线性光重采样（仅显示面）；默认 false = 既有路径逐字不变。切换值时**清空缓存**（旧档
+    // 解码的条目与新档不可混用）。
+    void set_linear_resample(bool on);
+    bool linear_resample() const;
+
     std::size_t size() const;         // 当前条目数
     std::size_t capacity() const;     // 上限（条目数）
     int max_px() const;               // 长边上限（透传给解码）

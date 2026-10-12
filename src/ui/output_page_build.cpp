@@ -271,6 +271,82 @@ QWidget *OutputPageImpl::build_global_card(QWidget *parent) {
         row.row->setObjectName(QStringLiteral("pp-color-row"));
         body.box->addWidget(row.row);
     }
+    // M7-R2.1-F4：色彩四选项（UX-14 C1–C4 的 UI 面；能力类 opt-in，默认值 = 现行为）。
+    // 口径与默认值见 docs/m7r2-plan.md §2（C1 色域映射 / C2 抖动 / C3 渲染意图 / C4 线性光）。
+    {
+        formkit::ComboSpec intent_spec;
+        intent_spec.object_name = QStringLiteral("pp-intent-combo");
+        intent_spec.accessible = PageOutput::tr("渲染意图");
+        intent_combo = formkit::combo_box(global_card, intent_spec);
+        intent_combo->addItem(PageOutput::tr("相对比色 + 黑点补偿（默认）"), 0);
+        intent_combo->addItem(PageOutput::tr("感知"), 1);
+        intent_combo->addItem(PageOutput::tr("绝对比色"), 2);
+        intent_combo->addItem(PageOutput::tr("饱和度"), 3);
+        intent_combo->setCurrentIndex(0);
+        intent_combo->setFixedHeight(theme::Metrics::combo_h);
+        intent_combo->setProperty(kFieldProperty, QStringLiteral("combo"));
+        intent_combo->setToolTip(PageOutput::tr(
+            "色彩转换的渲染意图（UX-14 C3）：默认档 = 现行为（相对比色 + 黑点补偿）；"
+            "感知/绝对/饱和为可选能力档。带 A2B/B2A 表的 ICC 才有可见差异"));
+        const formkit::Row row = formkit::frow(global_card, PageOutput::tr("渲染意图"),
+                                               intent_combo, FieldWidth::Standard);
+        row.row->setObjectName(QStringLiteral("pp-intent-row"));
+        body.box->addWidget(row.row);
+    }
+    {
+        formkit::ComboSpec gamut_spec;
+        gamut_spec.object_name = QStringLiteral("pp-gamut-combo");
+        gamut_spec.accessible = PageOutput::tr("色域映射");
+        gamut_combo = formkit::combo_box(global_card, gamut_spec);
+        gamut_combo->addItem(PageOutput::tr("无（硬裁；默认）"), 0);
+        gamut_combo->addItem(PageOutput::tr("软膝"), 1);
+        gamut_combo->addItem(PageOutput::tr("Lab 明度收敛"), 2);
+        gamut_combo->setCurrentIndex(0);
+        gamut_combo->setFixedHeight(theme::Metrics::combo_h);
+        gamut_combo->setProperty(kFieldProperty, QStringLiteral("combo"));
+        gamut_combo->setToolTip(PageOutput::tr(
+            "目标色域外像素的映射策略（UX-14 C1）：默认「无」= 现行为（硬裁）；软膝/明度收敛为"
+            "可选能力档，只处理越界像素、不动 alpha"));
+        const formkit::Row row = formkit::frow(global_card, PageOutput::tr("色域映射"), gamut_combo,
+                                               FieldWidth::Standard);
+        row.row->setObjectName(QStringLiteral("pp-gamut-row"));
+        body.box->addWidget(row.row);
+    }
+    {
+        dither8_switch = new formkit::SwitchControl(global_card);
+        dither8_switch->setObjectName(QStringLiteral("pp-dither8-switch"));
+        dither8_switch->set_tokens(tokens);
+        dither8_switch->setToolTip(PageOutput::tr(
+            "8bit 输出的 TPDF 量化抖动（UX-14 C2，±0.5 LSB，确定性）：默认关 = 量化路径逐字"
+            "不变；开启仅作用于 8bit 量化段，10/12/16bit 不受影响"));
+        QWidget *field = make_flex_field(global_card, {dither8_switch});
+        const formkit::Row row = formkit::frow(global_card, PageOutput::tr("8bit 抖动"), field,
+                                               FieldWidth::Flex);
+        row.row->setObjectName(QStringLiteral("pp-dither8-row"));
+        body.box->addWidget(row.row);
+    }
+    {
+        linear_switch = new formkit::SwitchControl(global_card);
+        linear_switch->setObjectName(QStringLiteral("pp-linear-switch"));
+        linear_switch->set_tokens(tokens);
+        linear_switch->setToolTip(PageOutput::tr(
+            "预览/缩略图的线性光重采样（UX-14 C4，仅显示面）：默认关 = 预览重采样路径逐字不变；"
+            "开启后降采样在线性光中进行（sRGB EOTF → 线性 → LANCZOS3 → 逆 EOTF），输出像素不受影响"));
+        QWidget *field = make_flex_field(global_card, {linear_switch});
+        const formkit::Row row = formkit::frow(global_card, PageOutput::tr("线性光重采样"), field,
+                                               FieldWidth::Flex);
+        row.row->setObjectName(QStringLiteral("pp-linear-row"));
+        body.box->addWidget(row.row);
+    }
+    // 色彩四选项变更 → config_changed（主窗据此同步预览通道 + 状态行；同组既有口径）
+    QObject::connect(dither8_switch, &formkit::SwitchControl::toggled, q,
+                     [this](bool) { emit q->config_changed(); });
+    QObject::connect(linear_switch, &formkit::SwitchControl::toggled, q,
+                     [this](bool) { emit q->config_changed(); });
+    QObject::connect(intent_combo, &QComboBox::currentIndexChanged, q,
+                     [this](int) { emit q->config_changed(); });
+    QObject::connect(gamut_combo, &QComboBox::currentIndexChanged, q,
+                     [this](int) { emit q->config_changed(); });
     // 分文件夹（独立布尔（立即生效）= 开关；标签归左列 —— 修 2-11；与 $format 段联动）
     {
         split_switch = new formkit::SwitchControl(global_card);

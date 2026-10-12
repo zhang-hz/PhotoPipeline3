@@ -94,6 +94,10 @@ public:
     void set_class_registry(const pp::ClassRegistry *registry);
     // 运行期只读（G5）：锁打标热键（提示表置灰），翻图/缩放不受影响。
     void set_locked(bool locked);
+
+    // —— M7-R2.1-F4 / C4 加性（既有签名逐字不变）：线性光重采样（UX-14 C4，仅显示面）
+    // 透传给 PreviewCache（切换即清缓存重解）；默认 false = 既有预览路径逐字不变。
+    void set_linear_resample(bool on);
     // M7-R2D1 / R-278 死 API 清理（零消费，全仓 grep 仅定义处）：
     //   * `set_hotkeys_enabled(bool)` —— 从未被调用；热键开关只有 set_locked 一条；
     //   * `current_path()` —— 零消费（消费方一律走 current_index + 列表模型）；

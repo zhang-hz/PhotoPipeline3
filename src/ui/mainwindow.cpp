@@ -1263,7 +1263,11 @@ void MainWindow::wire() {
     connect(d.page_meta, &PageMeta::clear_exception_requested, this,
             [this](const QString &path) { impl_->clear_exception(path); });
 
-    connect(d.page_output, &PageOutput::config_changed, this, [this] { refresh_status(); });
+    connect(d.page_output, &PageOutput::config_changed, this, [this] {
+        // UX-14 C4：线性光重采样同时透传预览通道（同值 no-op；切换即清缓存重解）
+        impl_->preview_panel->set_linear_resample(impl_->page_output->linear_resample());
+        refresh_status();
+    });
     // R-319（M7-R2.1-F4）：镜像基准目录 → 文件列表行 base_dir（收集/重算两触点在模型侧）
     connect(d.page_output, &PageOutput::mirror_base_changed, this,
             [this](const QString &base) { impl_->model->set_mirror_base(base); });

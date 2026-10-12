@@ -1220,6 +1220,15 @@ void PreviewPanel::set_locked(bool locked) {
     d.update_keyhint_enabled(); // 运行期只读：打标热键置灰（G5 语义零改动）
 }
 
+// M7-R2.1-F4 / C4：线性光重采样透传（切换即清缓存 + 当前图重解；同值 no-op）
+void PreviewPanel::set_linear_resample(bool on) {
+    Impl &d = *impl_;
+    if (d.cache == nullptr || d.cache->linear_resample() == on)
+        return;
+    d.cache->set_linear_resample(on);
+    reload();
+}
+
 // M7-R2D1 / R-278：set_hotkeys_enabled / current_path 已随死 API 清理移除（零消费）。
 
 QString PreviewPanel::current_file_name() const {

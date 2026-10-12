@@ -339,6 +339,11 @@ struct OutputPageImpl {
     QFrame *global_card = nullptr;
     QLineEdit *out_root_edit = nullptr;
     QLineEdit *base_edit = nullptr; // R-319：镜像基准目录（可选；空 = 现行为）
+    // M7-R2.1-F4 色彩四选项（UX-14 C1–C4）：opt-in 控件，默认值 = 现行为（0/false）
+    QComboBox *intent_combo = nullptr;       // C3 渲染意图（0=相对比色+黑点补偿…3=饱和度）
+    QComboBox *gamut_combo = nullptr;        // C1 色域映射（0=无（硬裁）/1=软膝/2=Lab 明度收敛）
+    formkit::SwitchControl *dither8_switch = nullptr;  // C2 8bit 量化抖动
+    formkit::SwitchControl *linear_switch = nullptr;   // C4 线性光重采样（仅显示面）
     QPushButton *browse_button = nullptr;
     QComboBox *conflict_combo = nullptr;
     QComboBox *color_combo = nullptr;

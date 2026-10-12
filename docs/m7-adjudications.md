@@ -356,3 +356,11 @@
 | # | 裁定 | 理由 | 实施归属 |
 |---|---|---|---|
 | M7-ADJ-tag-move-2（F7 消耗尝试） | **二次移动仍未执行，授权保持未消耗**：F7 按流程 1–4 走完预检（`/releases/tags/v0.3.3` 404、releases 列表无 v0.3.3、`ls-remote` 核对 v0.3.3 → `cb181ee`/`^{}`=`b1af371`）、push main（`0555947..e1017fe`，HEAD `e1017fe6`）、本机复核（ci-format `violations=0` 187 文件 + `make_winzip --smoke-exe` 五门禁 rc=0 含 E-2 冻结行逐字）；**但流程 3 前提「linux job 必须绿」未满足**：main-full **#48（run 38308098290）completed/failure**——唯一失败 = linux（全 ctest+金样）**step 15 release-dev ctest 的 `ui_smoke` 一条**（F1 遥测注解逐字 `CTEST-FAIL-SUMMARY 1 tests: ui_smoke`；step 13 release ctest 全过）。二分归因：#47 @ `0555947` 同 job **success** ⇒ 失败由 `0555947..e1017fe`（R2.1 F2–F4）引入（`tests/ui_smoke.py` 与 `.github/` 零改动，变化全在 `src/ui/` 探针/几何面）。修复须改 `src/ui/`/`tests/` = 独占文件面外（任务书「不改 src/ 与 tools/」+ 纪律 3）⇒ 按纪律 9 **停止上报**：tag 保持 `b1af371`（收口 `ls-remote` 复核未动）、release.yml 未触发（最新仍 #13 cancelled）、GitHub Release 未创建（收口复检 404）。**授权未消耗**：待 ui_smoke 修复、main-full 全绿后由后续发行包按同一条件执行（预检零 Release 零资产 / 原子 + `ls-remote` 核对 / 此后不得再动） | ① 判据不可绕过（纪律 9）：「linux job 必须绿」是 tag 移动的明文前提，红灯期移动 = 把一次性授权烧在坏树上（此后不得再动 = 无第三次机会）；② 修复跨界不可「顺手改」（纪律 3）；③ 停在零资产状态无新增不可逆性（tag 仍可按 M7-ADJ-tag-move-2 条件移动，`b1af371..e1017fe` 全在历史）；④ 未采用空提交复跑辨瞬态——取证更支持确定性回归（#47 绿/#48 红与 src/ui 大改同步）且空提交污染历史，留主对话裁决 | R2.1-F7 |
+
+## 十四、R2.2 轮裁定登记（M7-R2.2，2026-10-13；G3 判据小项与文档补录）
+
+> 任务书出处 = 会话内分派书（G3 包）；原始登记 = `build/m7r22-g3/handoff.md`「裁定登记」节。
+
+| # | 裁定 | 理由 | 实施归属 |
+|---|---|---|---|
+| M7R22G3-1 | **SCHEMA `state` 值表加性补 `done_with_errors`（冻结面加性 + 追认）**：`tests/golden/SCHEMA.md` progress_trace 事件字段表 `state` 行**逐字不动**，其后**新增一行**补 `done_with_errors`（`FileState::DoneWithErrors` 的小写名；多输出部分成功的源文件级终态） | ① 事实缺口：`FileState::DoneWithErrors` 自 M7-WP1/I7 起为 `src/core/pipeline.h` 枚举**末尾加性值**，`src/dev_cli.cpp` `state_text`（M7-R2.1-F4）已按「`FileState` 的小写名」词表口径落 `"done_with_errors"`，而 SCHEMA 值表 13 值未列本值（F4 ③-3 登记余量、F5 ③-1 转交 G3 收口）；② 走「加性 + 追认」：新值以**新表行**追加，v1 既有值表行逐字不动、词表口径不变、断言零放松、金样/夹具零改动（SCHEMA.md 非语料非夹具） | G3（`tests/golden/SCHEMA.md`） |

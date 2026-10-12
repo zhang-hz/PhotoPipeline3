@@ -57,6 +57,7 @@
 | `seq` | number | 全局单调序号（写入顺序 = 递达顺序） |
 | `file` | number | 批内文件下标（= `FileEvent::index`，按输入顺序） |
 | `state` | string | `queued`/`probing`/`decoding`/`orienting`/`coloring`/`flattening`/`encoding`/`writing`/`progress`/`done`/`skipped`/`failed`/`cancelled`（`FileState` 的小写名） |
+| `state`（**加性追加** M7R22G3-1） | string | `done_with_errors`（`FileState::DoneWithErrors` 的小写名；多输出**部分成功**的源文件级终态）——上行 v1 词表行**逐字不动**，本值系加性补档（枚举 = `src/core/pipeline.h` 末尾加性值，M7-WP1/I7；`state_text` 分支 = `src/dev_cli.cpp`，M7-R2.1-F4），命名沿用「`FileState` 的小写名」词表口径 |
 | `output_index` | number | `-1` = 源文件级（probe/decode/orient/color）；`≥0` = 输出级（`RunConfig.outputs` 的配置顺序下标） |
 | `stage` | string | `Probe`/`Decode`/`Orient`/`Color`/`Flatten`/`Encode`/`MetaWrite`/`Done` |
 | `stage_frac` | number | 阶段内 0..1 |

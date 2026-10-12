@@ -426,106 +426,6 @@ jobs:
             echo -e "ctest release-dev (含 ui_smoke)\t$(( T3 - T2 ))"
           } >> "$RUNNER_TEMP/pp-steps.tsv"
 
-      - name: ctest 失败注解遥测（M7R21F1-1：失败测试名 + 失败断言行 → ::error 注解 + summary）
-        # 判据可见性改进，永久保留（裁定登记 M7R21F1-1；二版修订 M7R21F1-1b：一版把 LastTest.log
-        # 里所有 "Testing:" 段都登记为失败，且 ::error 注解每步只保留前 10 条 ⇒ 真失败名被截断；
-        # 二版只登记真失败（摘要块 + LastTestsFailed.log + FAIL 断言行所在段），注解总数封顶 10，
-        # 并把**全量明细写入 $GITHUB_STEP_SUMMARY**（run 页面免鉴权可读，不受注解上限约束）。
-        # 提取源 = ctest stdout 的 "The following tests FAILED" 摘要块 + LastTestsFailed.log 的
-        # 失败测试名 + LastTest.log 里逐用例 `FAIL <case>: <detail>` 断言行；每条断言行回查
-        # tests/unit/<test>.cpp 的行号（查不到回落 line=1）。失败断言格式见 tests/unit/*.cpp 头注释。
-        if: failure()
-        run: |
-          python3 - <<'PY'
-          import os, re
-          rt = os.environ.get("RUNNER_TEMP", "")
-          failed = []          # 真失败测试名（保序去重）
-          fail_lines = {}      # 测试名 -> ["FAIL <case>: <detail>", ...]
-          def note(name):
-              name = (name or "").strip()
-              if name and name not in failed:
-                  failed.append(name)
-                  fail_lines.setdefault(name, [])
-          for log in [os.path.join(rt, "ctest-release.log"), os.path.join(rt, "ctest-release-dev.log")]:
-              if not os.path.isfile(log):
-                  continue
-              for ln in open(log, encoding="utf-8", errors="replace"):
-                  m = re.match(r"\s*\d+ - (\S+) \((Failed|Timeout|Subprocess aborted|SEGFAULT|Exception)\)", ln)
-                  if m:
-                      note(m.group(1))
-          for f in ["build/release/Testing/Temporary/LastTestsFailed.log",
-                    "build/release-dev/Testing/Temporary/LastTestsFailed.log"]:
-              if not os.path.isfile(f):
-                  continue
-              for ln in open(f, encoding="utf-8", errors="replace"):
-                  if ":" in ln:
-                      note(ln.split(":", 1)[1])
-          for f in ["build/release/Testing/Temporary/LastTest.log",
-                    "build/release-dev/Testing/Temporary/LastTest.log"]:
-              if not os.path.isfile(f):
-                  continue
-              cur = None
-              for ln in open(f, encoding="utf-8", errors="replace"):
-                  m = re.search(r"Testing: (\S+)", ln)
-                  if m:
-                      cur = m.group(1)
-                  m = re.match(r"FAIL (\S+): (.*)", ln.rstrip())
-                  if m and cur:
-                      note(cur)                       # 断言失败必为真失败
-                      fail_lines.setdefault(cur, []).append(ln.rstrip())
-          def src_of(test):
-              src = "tests/unit/%s.cpp" % test
-              if not os.path.isfile(src):
-                  cand = "tests/%s.py" % test
-                  src = cand if os.path.isfile(cand) else src
-              return src
-          def line_of(src, case):
-              m = re.match(r"FAIL ([^:]+):", case)
-              if m and os.path.isfile(src):
-                  needle = m.group(1).split("/")[-1]
-                  try:
-                      for i, s in enumerate(open(src, encoding="utf-8", errors="replace"), 1):
-                          if needle in s:
-                              return i
-                  except OSError:
-                      pass
-              return 1
-          names = sorted(failed)
-          print("CTEST-ANNOT: failed-tests=%d detail-lines=%d" % (
-              len(names), sum(len(v) for v in fail_lines.values())))
-          for t in names:
-              print("CTEST-ANNOT-NAME %s" % t)
-              for fl in fail_lines[t]:
-                  print("  " + fl)
-          # summary：run 页面免鉴权可读，全量明细不受注解上限约束
-          sp = os.environ.get("GITHUB_STEP_SUMMARY", "")
-          if sp:
-              with open(sp, "a", encoding="utf-8") as fh:
-                  fh.write("## ctest 失败遥测（M7R21F1-1）\n\n")
-                  fh.write("失败测试（%d）：%s\n\n" % (len(names), ", ".join(names) or "（无）"))
-                  for t in names:
-                      fh.write("### %s\n\n" % t)
-                      for fl in (fail_lines[t] or ["(无 FAIL 断言行；明细见 build/<name>/Testing/Temporary/LastTest.log)"]):
-                          fh.write("    " + fl + "\n")
-                      fh.write("\n")
-          # 注解：第 1 条 = 总名单（保证可见），随后逐失败测试逐断言行（总数封顶 10）
-          emitted = 0
-          if names:
-              first = names[0]
-              print("::error file=%s,line=1::CTEST-FAIL-SUMMARY %d tests: %s" % (
-                  src_of(first), len(names), ", ".join(names)))
-              emitted += 1
-          for t in names:
-              src = src_of(t)
-              lines = fail_lines[t] or ["(无 FAIL 断言行；明细见 LastTest.log)"]
-              for fl in lines:
-                  if emitted >= 10:
-                      break
-                  print("::error file=%s,line=%d::CTEST-FAIL %s %s" % (src, line_of(src, fl), t, fl))
-                  emitted += 1
-          if len(names) > 9:
-              print("::notice::CTEST-FAIL 明细超注解上限 10，全量见本 run 的 Step Summary（免鉴权可读）")
-          PY
 
       - name: UI-SMOKE 冻结行取证（原文入 summary）
         # 与 ctest 的 ui_smoke 条目同一断言（tests/ui_smoke.py 的冻结末行 = `UI-SMOKE OK shots=12 pages=3`，
@@ -553,6 +453,193 @@ jobs:
           printf '%s' "$line" | grep -qE '^SMOKE total=20 pass=20 fail=0 ' || {
             echo "::error::金样口径不符（期望 total=20 pass=20 fail=0）: $line"; exit 1; }
 
+      - name: ctest 失败注解遥测（M7R21F1-1：失败测试名 + 失败断言行 → ::error 注解 + summary）
+        # 判据可见性改进，永久保留（裁定登记 M7R21F1-1 / M7R21F1-1b / M7R22G1-1）。
+        # 三版（M7R22G1-1）三处修正：
+        #   ① 提取式补 **ui_smoke 失败行形态**：tests/ui_smoke.py 的反序驱动行 `ui_smoke: FAIL (…)`
+        #      + C++ 断言通道 `UI-SMOKE FAIL <reason>`（smoke_probes.cpp smoke_fail）+ 计数行
+        #      `UI-SMOKE FAILED <n>` —— 二版只认单测正序 `FAIL <case>: <detail>`，ui_smoke 失败
+        #      一律落「无 FAIL 断言行」兜底（反序不匹配，不表征失败形态；实证
+        #      docs/m7-evidence/m7r21-release.md §3.3）。
+        #   ② 覆盖 **release-dev ctest 步（不只 release 步）**：提取源 = release / release-dev 两棵
+        #      ctest 树的 stdout + LastTestsFailed.log + LastTest.log，外加 ui_smoke 直跑原始输出
+        #      （ui-smoke-raw.log，UI-SMOKE 冻结行取证步）；本步因此**后置到全部测试步之后**——
+        #      ctest release / ctest release-dev（含 ui_smoke）/ UI-SMOKE 冻结行 / 金样任一步
+        #      失败都取到证（`if: failure()` 在步序末端 = 覆盖所有前置测试步）。
+        #   ③ **CTEST-FAIL-SUMMARY 首条注解必含具体探针名/断言行**：断言行 + ui_smoke 段的
+        #      **尾探针行**（该段最后一条 UI-SMOKE 自检行 = 断言失败/崩溃/超时的定位锚）双锚；
+        #      全量明细照旧写 $GITHUB_STEP_SUMMARY（免鉴权、不受注解上限约束）。
+        if: failure()
+        run: |
+          python3 - <<'PY'
+          import os, re
+          rt = os.environ.get("RUNNER_TEMP", "")
+          failed = []          # 真失败测试名（保序去重）
+          fail_lines = {}      # 测试名 -> 失败行/上下文行清单（保序）
+          tail_probe = {}      # 测试名 -> 该段最后一条 UI-SMOKE 自检行（失败形态定位锚）
+          def note(name):
+              name = (name or "").strip()
+              if name and name not in failed:
+                  failed.append(name)
+                  fail_lines.setdefault(name, [])
+          def add(name, line):
+              note(name)
+              fail_lines.setdefault(name, []).append(line)
+          # ── 失败行形态（M7R22G1-1 三版提取式）────────────────────────────────
+          #   单测正序      FAIL <case>: <detail>          （tests/unit/*.cpp 头注释行式）
+          #   ui_smoke 断言 UI-SMOKE FAIL <reason>         （smoke_probes.cpp smoke_fail 通道）
+          #   ui_smoke 计数 UI-SMOKE FAILED <n>
+          #   ui_smoke 驱动 ui_smoke: FAIL (<detail>)      （tests/ui_smoke.py，反序形态）
+          #   ui_smoke 自检 UI-SMOKE <probe-tag>: …        （非失败行；只取段尾锚）
+          RE_UNIT = re.compile(r"FAIL (\S+): (.*)")
+          RE_UIS_ASSERT = re.compile(r"UI-SMOKE FAIL (.*)")
+          RE_UIS_COUNT = re.compile(r"UI-SMOKE FAILED (\d+)")
+          RE_UIS_DRV = re.compile(r"ui_smoke: FAIL (.*)")
+          RE_UIS_PROBE = re.compile(r"UI-SMOKE ([A-Za-z0-9][A-Za-z0-9_.+-]*)\s*:")
+          def scan_output(ln, cur):
+              ln = ln.rstrip()
+              if not cur:
+                  return
+              if RE_UNIT.match(ln) or RE_UIS_ASSERT.match(ln) or \
+                 RE_UIS_COUNT.match(ln) or RE_UIS_DRV.match(ln):
+                  add(cur, ln)
+                  return
+              if RE_UIS_PROBE.match(ln):
+                  tail_probe[cur] = ln
+          # ① ctest stdout 的 "The following tests FAILED" 摘要块（两棵树）
+          for log in [os.path.join(rt, "ctest-release.log"), os.path.join(rt, "ctest-release-dev.log")]:
+              if not os.path.isfile(log):
+                  continue
+              for ln in open(log, encoding="utf-8", errors="replace"):
+                  m = re.match(r"\s*\d+ - (\S+) \((Failed|Timeout|Subprocess aborted|SEGFAULT|Exception)\)", ln)
+                  if m:
+                      note(m.group(1))
+          # ② LastTestsFailed.log（两棵树）
+          for f in ["build/release/Testing/Temporary/LastTestsFailed.log",
+                    "build/release-dev/Testing/Temporary/LastTestsFailed.log"]:
+              if not os.path.isfile(f):
+                  continue
+              for ln in open(f, encoding="utf-8", errors="replace"):
+                  if ":" in ln:
+                      note(ln.split(":", 1)[1])
+          # ③ 逐用例断言行（LastTest.log 两棵树 + ui_smoke 直跑原始输出）
+          for f in ["build/release/Testing/Temporary/LastTest.log",
+                    "build/release-dev/Testing/Temporary/LastTest.log",
+                    os.path.join(rt, "ui-smoke-raw.log")]:
+              if not os.path.isfile(f):
+                  continue
+              cur = None
+              is_raw = f.endswith("ui-smoke-raw.log")
+              for ln in open(f, encoding="utf-8", errors="replace"):
+                  m = re.search(r"Testing: (\S+)", ln)
+                  if m:
+                      cur = m.group(1)
+                  elif is_raw and cur is None:
+                      cur = "ui_smoke"   # 直跑原始输出无 Testing: 头，归属 ui_smoke
+                  scan_output(ln, cur)
+          def src_of(test):
+              src = "tests/unit/%s.cpp" % test
+              if not os.path.isfile(src):
+                  cand = "tests/%s.py" % test
+                  src = cand if os.path.isfile(cand) else src
+              return src
+          def strip_prefix(fl):
+              return fl[len("[tail-probe] "):] if fl.startswith("[tail-probe] ") else fl
+          def src_for(test, fl):
+              # UI-SMOKE 自检行 / 断言行的出处 = src/ui/smoke_probes.cpp（探针面）
+              if strip_prefix(fl).startswith("UI-SMOKE"):
+                  return "src/ui/smoke_probes.cpp"
+              return src_of(test)
+          def needle_of(fl):
+              core = strip_prefix(fl)
+              if core.startswith("UI-SMOKE FAIL "):
+                  # smoke_fail(tr("…")) 字面量前缀（截到替换值前）→ 探针源行
+                  return core[len("UI-SMOKE FAIL "):].split("：")[0][:16]
+              m = RE_UIS_PROBE.match(core)
+              if m:
+                  return "UI-SMOKE %s:" % m.group(1)   # 自检行 → printf 行
+              m = RE_UNIT.match(core)
+              if m:
+                  return m.group(1).split("/")[-1]
+              m = RE_UIS_DRV.match(core)
+              if m:
+                  return m.group(1)[:16]
+              return ""
+          def line_of(src, needle):
+              if needle and os.path.isfile(src):
+                  try:
+                      for i, s in enumerate(open(src, encoding="utf-8", errors="replace"), 1):
+                          if needle in s:
+                              return i
+                  except OSError:
+                      pass
+              return 1
+          # 尾探针行兜底：断言行缺失（崩溃/超时/驱动级失败）时给出定位锚，不落「无 FAIL 断言行」空话
+          for t in list(fail_lines):
+              if t in failed and not fail_lines[t]:
+                  if t in tail_probe:
+                      fail_lines[t].append("[tail-probe] " + tail_probe[t])
+                  else:
+                      fail_lines[t].append("(无 FAIL 断言行且无 UI-SMOKE 自检行；明细见 LastTest.log)")
+          def headline(t):
+              # 首条注解必含「具体探针名/断言行」：断言行 + 驱动行 + 尾探针行 三锚并列
+              lines = fail_lines.get(t) or []
+              parts = []
+              a = next((l for l in lines if l.startswith("UI-SMOKE FAIL ")), None)
+              d = next((l for l in lines if l.startswith("ui_smoke: FAIL ")), None)
+              if a:
+                  parts.append(a)
+              if d:
+                  parts.append(d)
+              if t in tail_probe:
+                  parts.append("[tail-probe] " + tail_probe[t])
+              if not parts:
+                  parts = lines[:1]
+              return " || ".join(parts)
+          names = sorted(failed)
+          print("CTEST-ANNOT: failed-tests=%d detail-lines=%d" % (
+              len(names), sum(len(v) for v in fail_lines.values())))
+          for t in names:
+              print("CTEST-ANNOT-NAME %s" % t)
+              for fl in fail_lines[t]:
+                  print("  " + fl)
+          # summary：run 页面免鉴权可读，全量明细不受注解上限约束
+          sp = os.environ.get("GITHUB_STEP_SUMMARY", "")
+          if sp:
+              with open(sp, "a", encoding="utf-8") as fh:
+                  fh.write("## ctest 失败遥测（M7R21F1-1）\n\n")
+                  fh.write("失败测试（%d）：%s\n\n" % (len(names), ", ".join(names) or "（无）"))
+                  for t in names:
+                      fh.write("### %s\n\n" % t)
+                      for fl in (fail_lines[t] or ["(无 FAIL 断言行；明细见 build/<name>/Testing/Temporary/LastTest.log)"]):
+                          fh.write("    " + fl + "\n")
+                      if t in tail_probe and not any(fl.startswith("[tail-probe] ") for fl in fail_lines[t]):
+                          fh.write("    [tail-probe] " + tail_probe[t] + "\n")
+                      fh.write("\n")
+          # 注解：第 1 条 = 总名单 + 首个失败的探针名/断言行（保证可见），随后逐失败测试逐断言行（总数封顶 10）
+          emitted = 0
+          if names:
+              first = names[0]
+              anchor = next((l for l in fail_lines[first] if l.startswith("UI-SMOKE FAIL ")),
+                            (fail_lines[first] or [""])[0])
+              asrc = src_for(first, anchor)
+              print("::error file=%s,line=%d::CTEST-FAIL-SUMMARY %d tests: %s || %s" % (
+                  asrc, line_of(asrc, needle_of(anchor)), len(names), ", ".join(names),
+                  headline(first)[:300]))
+              emitted += 1
+          for t in names:
+              src = src_of(t)
+              lines = fail_lines[t] or ["(无 FAIL 断言行；明细见 LastTest.log)"]
+              for fl in lines:
+                  if emitted >= 10:
+                      break
+                  fsrc = src_for(t, fl)
+                  print("::error file=%s,line=%d::CTEST-FAIL %s %s" % (
+                      fsrc, line_of(fsrc, needle_of(fl)), t, fl[:200]))
+                  emitted += 1
+          if len(names) > 9:
+              print("::notice::CTEST-FAIL 明细超注解上限 10，全量见本 run 的 Step Summary（免鉴权可读）")
+          PY
       - name: ccache 统计
         if: always()
         run: |

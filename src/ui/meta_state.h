@@ -55,6 +55,14 @@ class MapWidget;
 } // namespace pp::map
 
 namespace pp::ui {
+
+namespace contextmenu {
+struct InfoCardIntents;
+struct TimeCardIntents;
+struct GpsCardIntents;
+struct PrivacyCardIntents;
+} // namespace contextmenu
+
 namespace meta {
 
 // ---------------------------------------------------------------------------
@@ -167,6 +175,8 @@ using ElidedLabel = formkit::ElidedLabel;
 // tr 上下文保持 PageMeta、输出逐字节不变）
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
+using formkit::FieldWidth; // 页内行构造统一入口（R2/R3 栅格；原 page_meta.cpp 同款）
+
 // 页内小控件
 // ---------------------------------------------------------------------------
 
@@ -483,6 +493,14 @@ QWidget *build_info_card(MetaState *st, QWidget *parent);
 QWidget *build_time_card(MetaState *st, QWidget *parent);
 QWidget *build_gps_card(MetaState *st, QWidget *parent);
 QWidget *build_switches_card(MetaState *st, QWidget *parent);
+
+// —— 卡右键菜单意图（各 meta_card_*.cpp；M7-R2D1 / UX-1②③④⑤）——
+//   意图一律走**既有控件/收口**（按钮 click / 开关 toggle / 既有静态函数），不新增第二套
+//   行为路径；菜单内容 = contextmenu 的四类 actions（12 类表逐条）。
+contextmenu::InfoCardIntents info_card_intents(MetaState *st);
+contextmenu::TimeCardIntents time_card_intents(MetaState *st);
+contextmenu::GpsCardIntents gps_card_intents(MetaState *st);
+contextmenu::PrivacyCardIntents privacy_card_intents(MetaState *st);
 
 } // namespace meta
 } // namespace pp::ui

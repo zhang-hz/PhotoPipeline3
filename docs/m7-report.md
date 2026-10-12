@@ -467,11 +467,11 @@ R-171/R-002（write-warnings、meta-write-fail）、R-097（png_ok 硬断言）�
   代表未做——性能收益本身无机器判据面，该口径已移入 §4.2 性能面行（口径说明，非未做项）。
 - TSan 坏捕获正对照（R-027）本机 Windows 无法执行，验证点=首轮 Linux nightly tsan job。
 - Linux AppImage 构建、Windows 真机验收（§2.4 十项）：本机不可替代，待人工签收（同 E6）。
-- **R2.1 未跑（如实）**：① 全语料回归 `tools/regression.py` 在 R2.1 四包窗口未跑（F2/F3/F4
-  各包按分工归波次收口；引擎写盘点 R-007 归一有金样 20/20 背书，F4 handoff ⑥-6）；
-  ② F1 的 8 条 Linux ctest 失败未能逐名归因（匿名日志 403 + 遥测一版截断；可代码级归因的
-  2 条 = test_fsops 平台样例已修，其余 ≤7 条成因无法从现有证据判定——遥测二版 summary 通道
-  下次红灯可直接点名，F1 handoff ⑥-1）。
+- **R2.1 未跑（如实）**：① ~~全语料回归 `tools/regression.py` 在 R2.1 四包窗口未跑~~ →
+  **已由 F6 终门禁（2026-10-13）补跑**：`regression: zero diff (baseline reproduced)`
+  （首轮，未重播种；§7.5 判据 6）；② F1 的 8 条 Linux ctest 失败未能逐名归因（匿名日志 403
+  + 遥测一版截断；可代码级归因的 2 条 = test_fsops 平台样例已修，其余 ≤7 条成因无法从现有
+  证据判定——遥测二版 summary 通道下次红灯可直接点名，F1 handoff ⑥-1）。
 
 ---
 
@@ -657,11 +657,13 @@ a「形参组结构化」为主 + b「授权重播种 + 归因」兜底），仓
 
 ---
 
-## 7. R2.1 轮交付（M7-R2.1-F1…F4，2026-10-12～13）
+## 7. R2.1 轮交付（M7-R2.1-F1…F6，2026-10-12～13）
 
 > R2.1 轮 = R2 发行暂停后的收口窗：Linux 回归修复（F1）、R2E1 重做（F2）、R2E2 结构余量（F3）、
-> 跨界面收口批（F4）。逐条终态已并入附录 A/B（**R2.1 终态四档**）；裁定见 adjudications
-> 十一/十二节；验证证据三段式摘录见 [docs/m7-evidence/m7r21-f{1,2,3,4}-gates.md](m7-evidence/)。
+> 跨界面收口批（F4）、文档与台账终稿（F5）、终门禁复核（F6）。逐条终态已并入附录 A/B（**R2.1
+> 终态四档**）；裁定见 adjudications 十一/十二节；验证证据三段式摘录见
+> [docs/m7-evidence/m7r21-f{1,2,3,4}-gates.md](m7-evidence/) 与终门禁
+> [docs/m7-evidence/m7r21-gate.md](m7-evidence/m7r21-gate.md)。
 > **本章只给各包交付清单与验证证据，逐条 R-id 去向以附录 A/B 为准。**
 
 ### 7.1 F1「Linux 回归定位与修复」（4 提交：`3339492`/`b673ee4`/`d4099bd`/`0555947`）
@@ -742,13 +744,32 @@ a「形参组结构化」为主 + b「授权重播种 + 归因」兜底），仓
 
 ### 7.5 R2.1 验收结论与残余（如实）
 
-- **四包判据全绿**（各包专属树实跑，读数摘录见上）；冻结行 `SMOKE total=20 pass=20 fail=0`、
-  `UI-SMOKE OK shots=12 pages=3`、`--version` 单行、`pp_verify` VERIFY 行式**逐字不动**；
-  金样/夹具零改动。
-- **残余（如实）**：① 全语料回归 `tools/regression.py` 本窗口未跑（§4.3）；② F1 八条 Linux
-  失败中 ≤7 条成因不可判定（§4.3、F1 handoff ⑥-1）；③ 结构余量未尽项——B.5 mapwidget
-  步②–⑥、R-254 的 T()/tr() 与 Impl 分舱、R-256 后半 ev.index、R-201 后半对象图成员化、
-  R-183 后半行部件复用级解耦、UX-8 组折叠头整行可点（§4.2 / 附录 A 格内注记）；
+**六包判据全绿**（F1–F4 各包专属树实跑，读数摘录见上；F5 纯文档；**F6 终门禁于 2026-10-13
+在门禁树 `build/release-dev` 全量实跑**）。冻结行 `SMOKE total=20 pass=20 fail=0`、
+`UI-SMOKE OK shots=12 pages=3`、`--version` 单行、`pp_verify` VERIFY 行式**逐字不动**；
+金样/夹具/回归基线零改动。
+
+**R2.1 终门禁验收证据（M7-R2.1-GATE / F6，2026-10-13，门禁树 `build/release-dev`；
+逐条取证三段式见 [docs/m7-evidence/m7r21-gate.md](m7-evidence/m7r21-gate.md)）**：
+
+| # | 判据 | 命令 | 终值 | 过/不过 |
+|---|---|---|---|---|
+| 1 | 格式 | `"C:/Program Files/Git/bin/bash.exe" tools/ci-format.sh` | `violations=0`（187 文件，钉版 clang-format 23.1.1） | **过** |
+| 2 | 门禁树构建 | `python tools/env.py run -- cmake --build build/release-dev` | exit 0；复跑 `ninja: no work to do.` | **过** |
+| 3 | ctest 全绿 | `python tools/env.py run -- ctest --test-dir build/release-dev --output-on-failure` | `100% tests passed out of 35`（46.10s） | **过** |
+| 3b | ui_smoke 冻结行 | `… ctest --test-dir build/release-dev -R ui_smoke -V` | `UI-SMOKE OK shots=12 pages=3` 逐字 | **过** |
+| 4 | 金样 20 对 | `python tools/env.py run -- python tests/golden/smoke.py build/release-dev` | `SMOKE total=20 pass=20 fail=0` 逐字 | **过** |
+| 5 | tidy 棘轮只减不增 + 零 NOLINT 新增 | `python tools/env.py run -- python tools/ci-tidy.py build/release-dev` | `TIDY total=263 baseline=263 files=75 violations=0 seed=0`（基线文件零改动）；NOLINT 指令 grep = 0 命中 | **过** |
+| 6 | 回归 zero diff | `python tools/env.py run -- python tools/regression.py` | `regression: zero diff (baseline reproduced)`（2448 vs 2448，**首轮**；未 `--update`） | **过** |
+| 7 | 密钥 0 命中 | `python build/m7r21-f6/leak_scan.py` + `git grep` 工作树 | 值形态 sk / amap-value / hex32 两面 = 0（名字面仅键名/字段名/文档） | **过** |
+
+- **fallout = 0**：八项首轮全绿，无修复、无换锚裁定、无基线重播种。回归失败槽位（full-*
+  `failed=4` = 2×cmyk + 2×corrupt、full-avif 另 +4 = svt-av1 十位 alpha 边界、meta-*
+  `failed=4` = Exiv2 只读面）逐槽与基线一致，归因见 gate 文档 §②-6。
+- **残余（如实）**：① ~~全语料回归本窗口未跑~~ → **已由 F6 终门禁补跑闭合**（zero diff）；
+  ② F1 八条 Linux 失败中 ≤7 条成因不可判定（§4.3、F1 handoff ⑥-1）；③ 结构余量未尽项——
+  B.5 mapwidget 步②–⑥、R-254 的 T()/tr() 与 Impl 分舱、R-256 后半 ev.index、R-201 后半
+  对象图成员化、R-183 后半行部件复用级解耦、UX-8 组折叠头整行可点（§4.2 / 附录 A 格内注记）；
   ④ 探针需求未落项——0 字节双跑、R-144 失败清单、format_selection_model 往返、RTL 深水区、
   ProbeContext 全面接入、色彩四选项档位探针等（F4 handoff ⑤，9 条）。
 - **发行状态不变**：0.3.3 仍未发行（tag `v0.3.3` 停在 `b1af371` 零 Release 零资产）；

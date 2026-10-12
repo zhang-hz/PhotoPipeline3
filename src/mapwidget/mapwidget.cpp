@@ -63,8 +63,9 @@
 //     and search_select_key() picks results by key.
 
 #include "mapwidget/mapwidget.h"
-#include "mapwidget/map_view.h"   // B.5 ①：投影/基准纯核（pp_core 单源）
-#include "mapwidget/tile_cache.h" // B.5 ②：TileKey/LRU/预算纯核（M7R22G2）
+#include "mapwidget/map_interact.h" // B.5 ⑥：交互状态机纯函数（M7R22G2）
+#include "mapwidget/map_view.h"     // B.5 ①：投影/基准纯核（pp_core 单源）
+#include "mapwidget/tile_cache.h"   // B.5 ②：TileKey/LRU/预算纯核（M7R22G2）
 
 #include "mapwidget/geocoder.h"
 #include "mapwidget/layers.h"
@@ -226,10 +227,10 @@ struct MapWidget::Impl {
     QLabel *banner = nullptr;
     EventFilter *filter = nullptr;
 
-    QPoint press_pos;
-    QPoint last_drag_pos;
-    bool pressed = false;
-    bool dragging = false;
+    // B.5 ⑥（M7R22G2）：按键三态机 → map_interact.h 纯核（原 press_pos/last_drag_pos/
+    // pressed/dragging 四件收敛为 DragState；坐标仍按原实现 toPoint() 截断后进机，
+    // 位移/阈值算术逐位一致）。
+    interact::DragState drag;
     int consecutive_failures = 0;
     bool retry_scheduled = false;       // R-101：失败重抓定时器在途（不叠加）
     bool fetch_flush_scheduled = false; // R-221：paint 只登记缺瓦片，flush 定时器在途
@@ -989,81 +990,57 @@ void MapWidget::Impl::on_paint() {
 }
 
 bool MapWidget::Impl::on_mouse_press(QMouseEvent *event) {
-    if (event->button() != Qt::LeftButton) {
-        return false;
-    }
-    pressed = true;
-    dragging = false;
-    press_pos = event->position().toPoint();
-    last_drag_pos = press_pos;
-    return true;
+    // B.5 ⑥（M7R22G2）：事件 → 交互状态机纯核（语义 = 原实现逐位；坐标 toPoint() 截断不变）
+    const interact::PointerStep step = interact::pointer_step(
+        drag, interact::PointerKind::Press, QPointF(event->position().toPoint()),
+        event->button() == Qt::LeftButton, false);
+    drag = step.state;
+    return step.consume;
 }
 
 bool MapWidget::Impl::on_mouse_move(QMouseEvent *event) {
     // M6-T12：光标坐标回显（悬停与拖拽都算"移动"，约 100 ms 节流；不动拖拽/点击语义）。
     emit_cursor_readout(event->position());
-    if (!pressed || !(event->buttons() & Qt::LeftButton)) {
-        return false;
+    const interact::PointerStep step = interact::pointer_step(
+        drag, interact::PointerKind::Move, QPointF(event->position().toPoint()), false,
+        (event->buttons() & Qt::LeftButton) != 0);
+    drag = step.state;
+    if (step.action == interact::PointerAction::Pan) {
+        // The map content follows the cursor: the centre moves by -delta in world pixels.
+        const interact::Viewport next =
+            interact::pan(interact::Viewport{center_lat, center_lon, zoom}, step.pan_delta);
+        center_lat = next.center_lat;
+        center_lon = next.center_lon;
+        q->update();
     }
-    const QPoint pos = event->position().toPoint();
-    if (!dragging && QLineF(QPointF(press_pos), QPointF(pos)).length() >= kClickThresholdPx) {
-        dragging = true;
-        // First pan step: apply the whole press->cursor delta so nothing is swallowed by the
-        // 4 px click threshold.
-        last_drag_pos = press_pos;
-    }
-    if (dragging) {
-        const QPoint delta = pos - last_drag_pos;
-        last_drag_pos = pos;
-        if (!delta.isNull()) {
-            // The map content follows the cursor: the centre moves by -delta in world pixels.
-            const std::pair<double, double> next =
-                world_to_latlon(center_world() - QPointF(delta.x(), delta.y()), zoom);
-            center_lat = clamp_lat(next.first);
-            center_lon = next.second;
-            q->update();
-        }
-    }
-    return true;
+    return step.consume;
 }
 
 bool MapWidget::Impl::on_mouse_release(QMouseEvent *event) {
-    if (event->button() != Qt::LeftButton || !pressed) {
-        return false;
-    }
-    const QPoint pos = event->position().toPoint();
-    const double moved = QLineF(QPointF(press_pos), QPointF(pos)).length();
-    const bool was_drag = dragging;
-    pressed = false;
-    dragging = false;
-    if (!was_drag && moved < kClickThresholdPx) {
+    const QPointF pos(event->position().toPoint()); // 截断口径与原实现逐位一致
+    const interact::PointerStep step = interact::pointer_step(
+        drag, interact::PointerKind::Release, pos, event->button() == Qt::LeftButton,
+        (event->buttons() & Qt::LeftButton) != 0);
+    drag = step.state;
+    if (step.action == interact::PointerAction::Click) {
         // M6-T6 命中优先于取点（§4.4）：对最近结果钉做屏距判定 —— 光标与钉心 ≤
         // kMarkerRadius + 6 px 即命中（钉位与绘制同一管线，所见即所点）。并列时先者优先。
-        const Pin *hit = nullptr;
-        double best_dist = 0.0;
+        std::vector<QPointF> pin_screen;
+        pin_screen.reserve(result_pins.size());
         for (const Pin &pin : result_pins) {
             const std::pair<double, double> datum = wgs_to_datum(pin.lat, pin.lon);
-            const QPointF pin_pos =
-                world_to_screen(latlon_to_world(datum.first, datum.second, zoom));
-            const double dist = QLineF(pin_pos, QPointF(pos)).length();
-            if (dist > kPinHitRadius) {
-                continue;
-            }
-            if (hit == nullptr || dist < best_dist) {
-                hit = &pin;
-                best_dist = dist;
-            }
+            pin_screen.push_back(world_to_screen(latlon_to_world(datum.first, datum.second, zoom)));
         }
-        if (hit != nullptr) {
-            const Pin picked = *hit;               // 命中钉副本（set_marker 不改 result_pins）
-            q->set_marker(picked.lat, picked.lon); // 主钉落到该结果点（含重绘）
-            emit q->pin_clicked(picked.index);     // 回报结果索引；点钉不算「取点」（冻结行为）
+        const int hit = interact::hit_test_pins(pin_screen, pos, kPinHitRadius);
+        if (hit >= 0) {
+            const Pin picked = result_pins[std::size_t(hit)]; // 命中钉副本（set_marker 不改 pins）
+            q->set_marker(picked.lat, picked.lon);            // 主钉落到该结果点（含重绘）
+            emit q->pin_clicked(picked.index); // 回报结果索引；点钉不算「取点」（冻结行为）
             // R-223：另报稳定键（title+坐标）—— 消费方按键对齐列表行，不再依赖序号同代。
             emit q->pin_selected(result_key(picked.label, picked.lat, picked.lon));
             return true;
         }
-        const std::pair<double, double> datum =
-            world_to_latlon(screen_to_world(QPointF(pos)), zoom);
+        const std::pair<double, double> datum = world_to_latlon(screen_to_world(pos), zoom);
         const std::pair<double, double> wgs = datum_to_wgs(datum.first, datum.second);
         marker_set = true;
         marker_lat = wgs.first;
@@ -1071,29 +1048,22 @@ bool MapWidget::Impl::on_mouse_release(QMouseEvent *event) {
         q->update();
         emit q->point_selected(wgs.first, wgs.second);
     }
-    return true;
+    return step.consume;
 }
 
 bool MapWidget::Impl::on_wheel(QWheelEvent *event) {
     const int dy = event->angleDelta().y();
-    if (dy == 0) {
-        return false;
-    }
-    const int target = std::clamp(zoom + (dy > 0 ? 1 : -1), kMinZoom, kMaxZoom);
-    if (target != zoom) {
-        // Keep the geographic point under the cursor pinned while the zoom level changes.
-        const QPointF cursor = event->position();
-        const std::pair<double, double> anchor = world_to_latlon(screen_to_world(cursor), zoom);
-        zoom = target;
-        const QPointF anchor_world = latlon_to_world(anchor.first, anchor.second, zoom);
-        const QPointF center =
-            anchor_world - (cursor - QPointF(q->width() / 2.0, q->height() / 2.0));
-        const std::pair<double, double> next = world_to_latlon(center, zoom);
-        center_lat = clamp_lat(next.first);
-        center_lon = next.second;
+    // B.5 ⑥：光标锚点缩放走纯几何（frozen 语义：光标下地理点不动；dy==0 = 原 return false）
+    const interact::Viewport next =
+        interact::wheel_zoom(interact::Viewport{center_lat, center_lon, zoom}, dy,
+                             event->position(), QSize(q->width(), q->height()), kMinZoom, kMaxZoom);
+    if (next.zoom != zoom) {
+        center_lat = next.center_lat;
+        center_lon = next.center_lon;
+        zoom = next.zoom;
         q->update();
     }
-    return true;
+    return dy != 0;
 }
 
 MapWidget::MapWidget(QWidget *parent) : QWidget(parent), impl_(std::make_unique<Impl>()) {

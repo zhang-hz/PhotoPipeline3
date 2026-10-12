@@ -13,8 +13,9 @@
 #include <string>
 
 #include "mapwidget/coord.h"
-#include "mapwidget/map_view.h"   // B.5 ①（M7-R2.1-F2）：投影/基准纯核（pp_core）
-#include "mapwidget/tile_cache.h" // B.5 ②（M7-R2.2-G2）：TileKey/LRU/预算纯核（header-only）
+#include "mapwidget/map_interact.h" // B.5 ⑥（M7-R2.2-G2）：交互状态机纯函数（header-only）
+#include "mapwidget/map_view.h"     // B.5 ①（M7-R2.1-F2）：投影/基准纯核（pp_core）
+#include "mapwidget/tile_cache.h"   // B.5 ②（M7-R2.2-G2）：TileKey/LRU/预算纯核（header-only）
 
 namespace {
 
@@ -191,6 +192,89 @@ int main() {
         TileCache<int> big(10);
         big.insert(a, 1, 999);
         check(big.size() == 0, "tile_cache/oversized-entry-evicted", "expected immediate evict");
+    }
+
+    // ---- M7-R2.2-G2 / 附录 B.5 ⑥：交互状态机真值表 ----
+    {
+        namespace ix = pp::map::interact;
+        using ix::PointerAction;
+        using ix::PointerKind;
+        using ix::PointerStep;
+        ix::DragState s;
+        // press：左键进机；非左键不消费不动状态
+        PointerStep st = ix::pointer_step(s, PointerKind::Press, QPointF(10, 10), true, false);
+        check(st.action == PointerAction::Consume && st.consume && st.state.pressed,
+              "interact/press-left", "expected consumed pressed state");
+        s = st.state;
+        st = ix::pointer_step(s, PointerKind::Press, QPointF(50, 50), false, false);
+        check(st.action == PointerAction::Ignore && !st.consume && st.state.pressed == s.pressed,
+              "interact/press-other-button", "expected ignore + state unchanged");
+        // move：阈值内 = 消费无平移；出阈值 = 首拖整段位移补全
+        st = ix::pointer_step(s, PointerKind::Move, QPointF(12, 10), false, true);
+        check(st.action == PointerAction::Consume && !st.state.dragging,
+              "interact/move-under-threshold", "expected no drag yet");
+        st = ix::pointer_step(s, PointerKind::Move, QPointF(30, 10), false, true);
+        check(st.action == PointerAction::Pan && st.state.dragging &&
+                  st.pan_delta == QPointF(20, 0),
+              "interact/drag-begin-full-delta", "expected pan delta 20,0 (press->cursor once)");
+        // 后续 move：增量 = 相邻两点差
+        s = st.state;
+        st = ix::pointer_step(s, PointerKind::Move, QPointF(35, 16), false, true);
+        check(st.action == PointerAction::Pan && st.pan_delta == QPointF(5, 6),
+              "interact/drag-step-delta", "expected 5,6");
+        // move 未按左键 = 不消费
+        s = st.state;
+        st = ix::pointer_step(s, PointerKind::Move, QPointF(90, 90), false, false);
+        check(st.action == PointerAction::Ignore && !st.consume, "interact/move-not-held",
+              "expected ignore");
+        // release：拖拽后抬起 = Consume 不算点击；小幅抬起 = Click；未按下抬起 = Ignore
+        s = st.state;
+        st = ix::pointer_step(s, PointerKind::Release, QPointF(40, 20), true, true);
+        check(st.action == PointerAction::Consume && !st.state.pressed && !st.state.dragging,
+              "interact/release-after-drag", "expected no click");
+        st = ix::pointer_step(ix::DragState{}, PointerKind::Press, QPointF(5, 5), true, false);
+        s = st.state;
+        st = ix::pointer_step(s, PointerKind::Release, QPointF(6, 5), true, false);
+        check(st.action == PointerAction::Click, "interact/release-small-move", "expected click");
+        st = ix::pointer_step(ix::DragState{}, PointerKind::Release, QPointF(0, 0), true, false);
+        check(st.action == PointerAction::Ignore, "interact/release-without-press",
+              "expected ignore");
+        // 滚轮档位：±1 / clamp / dy=0
+        check(ix::wheel_target_zoom(10, 120, 2, 18) == 11, "interact/wheel-up", "expected 11");
+        check(ix::wheel_target_zoom(10, -120, 2, 18) == 9, "interact/wheel-down", "expected 9");
+        check(ix::wheel_target_zoom(18, 120, 2, 18) == 18, "interact/wheel-clamp-hi",
+              "expected 18");
+        check(ix::wheel_target_zoom(4, 0, 2, 18) == 4, "interact/wheel-zero", "expected 4");
+        // pan：地图内容跟手 = 世界中心位移 == −delta（往返对拍）
+        const ix::Viewport v0{31.23, 121.47, 12};
+        const ix::Viewport v1 = ix::pan(v0, QPointF(7, -3));
+        const QPointF w0 = pp::map::latlon_to_world(v0.center_lat, v0.center_lon, v0.zoom);
+        const QPointF w1 = pp::map::latlon_to_world(v1.center_lat, v1.center_lon, v1.zoom);
+        check(std::fabs((w0.x() - w1.x()) - 7) < 1e-6 && std::fabs((w0.y() - w1.y()) + 3) < 1e-6,
+              "interact/pan-world-delta", "centre must move by -delta in world px");
+        // wheel_zoom：光标下地理点不动（锚点保持）
+        const QPointF cursor(200, 120);
+        const QSize size(800, 600);
+        const QPointF cw = pp::map::latlon_to_world(v0.center_lat, v0.center_lon, v0.zoom);
+        const QPointF cursor_world = cw + cursor - QPointF(size.width() / 2.0, size.height() / 2.0);
+        const std::pair<double, double> anchor = pp::map::world_to_latlon(cursor_world, 12);
+        const ix::Viewport vz = ix::wheel_zoom(v0, 120, cursor, size, 2, 18);
+        check(vz.zoom == 13, "interact/wheel-zoom-step", "expected zoom 13");
+        const QPointF cwz = pp::map::latlon_to_world(vz.center_lat, vz.center_lon, vz.zoom);
+        const QPointF cursor_world_z =
+            cwz + cursor - QPointF(size.width() / 2.0, size.height() / 2.0);
+        const std::pair<double, double> anchor_z = pp::map::world_to_latlon(cursor_world_z, 13);
+        check(std::fabs(anchor_z.first - anchor.first) < 1e-9 &&
+                  std::fabs(anchor_z.second - anchor.second) < 1e-9,
+              "interact/wheel-anchor-pinned", "cursor geographic point must not move");
+        // 图钉命中：最近者优先 / 并列先者优先 / 半径外不命中
+        const std::vector<QPointF> pins = {QPointF(100, 100), QPointF(110, 100), QPointF(300, 300)};
+        check(ix::hit_test_pins(pins, QPointF(101, 100), 13.0) == 0, "interact/pin-hit-nearest",
+              "expected pin 0");
+        check(ix::hit_test_pins(pins, QPointF(105, 100), 13.0) == 0, "interact/pin-hit-tie-first",
+              "expected pin 0 (tie keeps first)");
+        check(ix::hit_test_pins(pins, QPointF(400, 400), 13.0) == -1, "interact/pin-miss",
+              "expected -1");
     }
 
     if (g_failed == 0) {

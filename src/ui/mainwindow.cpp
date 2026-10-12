@@ -1819,38 +1819,56 @@ void MainWindow::Impl::restore_session() {
 }
 
 // M6-T11（§5.2 R5 / C6）：图层档（矢量/卫星/混合）的跨进程记忆。
-//   * 回填（本函数）：settings.map_style → GPS 卡图层 Seg + map->set_tile_style；调用点 =
+// R-256（M7-R2.1-F3）：原 apply_map_style 一名三职（一次性接线 + 落盘副作用 + 回填），
+// 名实不符 —— 拆为两个诚实命名的函数（行为逐字不变，调用点两个仍是 apply_map_style）：
+//   * bind_map_layer_writeback()：Seg 换层写回 settings 的**一次性接线**（幂等门槛）；
+//   * on_map_layer_changed()：写回动作本体（settings.map_style + 立即落盘）；
+//   * apply_map_style()：只剩**回填**（settings → Seg + 地图）；调用点 =
 //     启动期 restore_session（在 set_map_provider 之后 —— 支持性提示按最终源判定）与设置
 //     对话框 accept 之后（档可在设置页被改）。
-//   * 写回：Seg 换层（用户点段）→ settings.map_style + 立即落盘；首次调用接线，此后常驻。
-//   * M6-T12 加性：同一次调用下发 `map_sat_labels`（混合「叠标注」开关）——
+//   * M6-T12 加性：同一次回填下发 `map_sat_labels`（混合「叠标注」开关）——
 //     settings.map_sat_labels → map->set_sat_labels（启动与设置变更即这两个调用点）。
 // 单源：段序 → 图层的映射仍是 page_meta 的 layer_style_of（本处不重复枚举枚举值），故回填
 // 先「点段」= 与用户同一条链路（set_tile_style + 图层支持性提示 + 自验钩子一并落地），随后
 // 再按 kMapStyles 直达一次 set_tile_style（同值幂等，是"档 = 图"的兜底直落）。两行的组合
 // 语义 =「记忆的图层必须真的显示出来」：段在目标档而图未跟（或反之）都会让用户看到与档
 // 不符的图层。
+
+// R-256：换层写回动作本体（原 apply_map_style 内匿名 lambda 的字面搬出，逐字不变）。
+void MainWindow::Impl::on_map_layer_changed(int index) {
+    const std::string id = kMapStyles[std::clamp(index, 0, 2)].id;
+    if (settings.map_style == id) {
+        return; // 程序化回填（set_current_index）不发射信号；同值也不落盘
+    }
+    settings.map_style = id;
+    // 立即落盘：跨进程记忆不依赖正常退出（与 open_settings 的"立即落盘"同口径；
+    // 写回的是内存档当时的全量值，与 closeEvent 的 save_session 同源）
+    pp::save_settings(pp::platform::settings_file(), settings);
+}
+
+// R-256：一次性接线（R-252 时序锚点④「map 首调接线」：换层写回 settings 的接线只在首次
+// 成功找到 Seg 时建立一次，map_layer_bound 幂等门槛；重复 connect = 同一次换层写多次盘）。
+void MainWindow::Impl::bind_map_layer_writeback() {
+    if (map_layer_bound) {
+        return;
+    }
+    auto *seg =
+        page_meta->findChild<formkit::SegmentedControl *>(QStringLiteral("pp-meta-gps-layer"));
+    if (seg == nullptr) {
+        return; // 无图层 Seg（防御性；GPS 卡为常驻卡）—— 保持未绑定，下次调用重试
+    }
+    map_layer_bound = true;
+    QObject::connect(seg, &formkit::SegmentedControl::current_changed, w,
+                     [this](int index) { on_map_layer_changed(index); });
+}
+
 void MainWindow::Impl::apply_map_style() {
+    bind_map_layer_writeback(); // R-256：一次性接线独立成函数（原混在本函数内）
     auto *seg =
         page_meta->findChild<formkit::SegmentedControl *>(QStringLiteral("pp-meta-gps-layer"));
     if (seg == nullptr) {
         return; // 无图层 Seg（防御性；GPS 卡为常驻卡）
     }
-    if (!map_layer_bound) {
-        map_layer_bound = true;
-        QObject::connect(seg, &formkit::SegmentedControl::current_changed, w, [this](int index) {
-            const std::string id = kMapStyles[std::clamp(index, 0, 2)].id;
-            if (settings.map_style == id) {
-                return; // 程序化回填（set_current_index）不发射信号；同值也不落盘
-            }
-            settings.map_style = id;
-            // 立即落盘：跨进程记忆不依赖正常退出（与 open_settings 的"立即落盘"同口径；
-            // 写回的是内存档当时的全量值，与 closeEvent 的 save_session 同源）
-            pp::save_settings(pp::platform::settings_file(), settings);
-        });
-    }
-    // R-252 时序锚点④「map 首调接线」：换层写回 settings 的接线只在首次调用建立一次
-    // （map_layer_bound 幂等门槛）；重复 connect = 同一次换层写多次盘。
     Q_ASSERT(map_layer_bound);
     const int index = map_style_index(settings.map_style);
     if (seg->current_index() != index) {

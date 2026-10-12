@@ -1059,7 +1059,8 @@ struct MainWindow::Impl {
     QString last_preset_path;
     QStringList cached_paths; // 行集合签名（避免每次状态变化都重扫时间预览）
     bool cached_alpha = false;
-    // M6-T11（§5.2 R5）：图层档记忆的写回接线只接一次（apply_map_style 幂等，可反复调用）
+    // M6-T11（§5.2 R5）：图层档记忆的写回接线只接一次（R-256：门槛归 bind_map_layer_writeback()，
+    // apply_map_style 幂等、可反复调用）
     bool map_layer_bound = false;
 
     // ---- 拖放 / closeEvent 事件过滤器（冻结头不允许覆写虚函数）----
@@ -1100,7 +1101,12 @@ struct MainWindow::Impl {
     void restore_session();
     // M6-T11（§5.2 R5）：settings.map_style → GPS 卡图层 Seg + map->set_tile_style
     // （启动期与设置对话框 accept 后各一次；首次调用同时接线"换层写回 settings"）
+    // R-256（M7-R2.1-F3）：接线/写回/回填三职拆开命名 —— bind_map_layer_writeback() =
+    // 一次性接线（map_layer_bound 幂等）；on_map_layer_changed() = 写回动作本体
+    // （settings + 立即落盘）；apply_map_style() = 纯回填（签名与调用点逐位不变）。
     void apply_map_style();
+    void bind_map_layer_writeback();
+    void on_map_layer_changed(int index);
     void open_logs();
     QString disk_free_segment(); // A19（T11）：底栏「剩余磁盘」段（输出根 → 源目录 → 工作目录）
     void push_log_tail();        // M4-T14：run-*.log 末尾 5 行 → 运行页日志尾卡

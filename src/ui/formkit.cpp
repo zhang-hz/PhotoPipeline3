@@ -295,13 +295,15 @@ void Combo::set_tokens(const theme::Tokens &t) {
     update();
 }
 
-// 基类画盒/当前项文字；右端补画 8px 矢量箭头（`::drop-down/::down-arrow` 已在 QSS 里清空
-// 平台绘制，见 theme::formkit_qss）。箭头形只有一份 —— icons::ChevronDown（C3 单源）。
+// 基类画盒/当前项文字；trailing 端补画 8px 矢量箭头（`::drop-down/::down-arrow` 已在 QSS 里
+// 清空平台绘制，见 theme::formkit_qss）。箭头形只有一份 —— icons::ChevronDown（C3 单源）。
+// R-218 余量成对镜像（M7R22G2）：箭头位贴 trailing 侧（LTR=右 / RTL=左）—— 与 theme.h 的
+// combo padding-trailing / ::drop-down 位同向；LTR 几何逐位不变。
 void Combo::paintEvent(QPaintEvent *event) {
     QComboBox::paintEvent(event);
     QPainter p(this);
     const int box = theme::Metrics::combo_arrow_px * 2 + 8; // 箭头位宽（= ::drop-down width）
-    const QRectF slot(width() - box, 0, box, height());
+    const QRectF slot(layoutDirection() == Qt::RightToLeft ? 0 : width() - box, 0, box, height());
     const QColor color = isEnabled() ? tokens_.text2 : tokens_.text3;
     icons::paint(p, icons::Name::ChevronDown,
                  slot.adjusted((box - theme::Metrics::combo_arrow_px) / 2.0, 0,
@@ -333,7 +335,10 @@ void paint_spin_arrows(QPainter &painter, QWidget *widget, const theme::Tokens &
     if (widget == nullptr)
         return;
     const int col = theme::Metrics::spin_arrow_w; // 17
-    const QRectF box(widget->width() - col, 0, col, widget->height());
+    // R-218 余量成对镜像（M7R22G2）：箭头列贴 trailing 侧（LTR=右 / RTL=左）—— 与 theme.h 的
+    // spin ::*-button subcontrol-position 同向；LTR 几何逐位不变。
+    const QRectF box(widget->layoutDirection() == Qt::RightToLeft ? 0 : widget->width() - col, 0,
+                     col, widget->height());
     const QColor line = tokens.line;
     const QColor arrow = widget->isEnabled() ? tokens.text2 : tokens.text3;
     painter.save();

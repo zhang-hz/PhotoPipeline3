@@ -386,6 +386,34 @@ inline QString css_color(const QColor &c) {
         .arg(static_cast<int>(std::lround(c.alphaF() * 100.0)));
 }
 
+// ---------------------------------------------------------------------------
+// R-218 余量（M7R22G2）：QSS 非对称几何**逻辑化** —— 方向感知单点。
+// ---------------------------------------------------------------------------
+// QSS 没有 logical 属性，非对称几何（padding/margin 单侧、left/right 定位、
+// subcontrol-position 侧词）只能出**按方向的物理版本**：LTR 产出串逐字节不变
+// （qss_dir() 缺省即应用方向；LTR 分支拼串与旧字面量完全同字节），RTL 镜像物理侧。
+// 方向读取口径与 dialogkit::dialog_qss 的 R2E2 先例一致（QApplication::layoutDirection()）。
+// 命中面（全文自查 + R-218 余量清单）：combo padding-right / QTabBar::tab margin-right 与
+// :first margin-left / spin 箭头列 subcontrol-position / QGroupBox::title left /
+// QToolButton::menu-indicator subcontrol-position。**成对自绘**（formkit::Combo 箭头、
+// paint_spin_arrows 箭头列）随 widget->layoutDirection() 同步镜像（formkit.cpp，
+// LTR 恒等）——只翻 QSS 不翻自绘会让 RTL 下值区与箭头错位。
+inline Qt::LayoutDirection qss_dir() { return QApplication::layoutDirection(); }
+// 物理侧词：trailing = LTR 的 right / RTL 的 left；leading 对偶
+inline QString qss_trailing_side() {
+    return QLatin1String(qss_dir() == Qt::RightToLeft ? "left" : "right");
+}
+inline QString qss_leading_side() {
+    return QLatin1String(qss_dir() == Qt::RightToLeft ? "right" : "left");
+}
+// 单侧属性名（base = "padding" / "margin"）：trailing/leading 侧的物理属性名
+inline QString qss_trailing_prop(const char *base) {
+    return QLatin1String(base) + QLatin1Char('-') + qss_trailing_side();
+}
+inline QString qss_leading_prop(const char *base) {
+    return QLatin1String(base) + QLatin1Char('-') + qss_leading_side();
+}
+
 // 把半透明前景 over 合成到不透明背景 under 上（QPalette 不接受半透明色）
 inline QColor composite(const QColor &over, const QColor &under) {
     const qreal a = over.alphaF();
@@ -1102,12 +1130,16 @@ inline QString page_output_qss(const Tokens &t) {
     qss += QStringLiteral("QTabBar::tab { background: transparent; color: ") + css_color(t.text2) +
            QStringLiteral("; padding: ") + QString::number(Metrics::tab_pad_top) +
            QStringLiteral("px ") + QString::number(Metrics::tab_pad_x) + QStringLiteral("px ") +
-           QString::number(Metrics::tab_pad_bottom) + QStringLiteral("px; margin-right: ") +
-           QString::number(Metrics::tab_gap) + QStringLiteral("px; border: none; border-bottom: ") +
+           QString::number(Metrics::tab_pad_bottom) + QStringLiteral("px; ") +
+           // R-218 余量（M7R22G2）：页签间距贴 trailing（LTR=margin-right / RTL=margin-left，
+           // 值 2px 不变；LTR 产出串逐字节不变）
+           qss_trailing_prop("margin") + QStringLiteral(": ") + QString::number(Metrics::tab_gap) +
+           QStringLiteral("px; border: none; border-bottom: ") +
            QString::number(Metrics::tab_underline_px) +
            QStringLiteral("px solid transparent; font-weight: 600; }\n");
-    qss += QStringLiteral("QTabBar::tab:first { margin-left: ") +
-           QString::number(Metrics::card_pad_x) + QStringLiteral("px; }\n");
+    // R-218 余量（M7R22G2）：页签条 leading 缩进贴 leading 侧（LTR=margin-left / RTL=margin-right）
+    qss += QStringLiteral("QTabBar::tab:first { ") + qss_leading_prop("margin") +
+           QStringLiteral(": ") + QString::number(Metrics::card_pad_x) + QStringLiteral("px; }\n");
     qss += QStringLiteral("QTabBar::tab:selected { color: ") + css_color(t.text) +
            QStringLiteral("; border-bottom-color: ") + css_color(t.accent) +
            QStringLiteral("; }\n");
@@ -1320,15 +1352,14 @@ inline QString formkit_qss(const Tokens &t) {
         spin + QStringLiteral("::up-button, ") + dspin + QStringLiteral("::up-button");
     const QString down_sel =
         spin + QStringLiteral("::down-button, ") + dspin + QStringLiteral("::down-button");
-    qss += up_sel +
-           QStringLiteral(" { subcontrol-origin: border; subcontrol-position: top right; "
-                          "width: ") +
+    qss += up_sel + QStringLiteral(" { subcontrol-origin: border; subcontrol-position: top ") +
+           // R-218 余量（M7R22G2）：箭头列贴 trailing 侧（LTR=top right / RTL=top left）
+           qss_trailing_side() + QStringLiteral("; width: ") +
            QString::number(Metrics::spin_arrow_w) + QStringLiteral("px; height: ") +
            QString::number(Metrics::spin_arrow_h) +
            QStringLiteral("px; border: none; background: transparent; }\n");
-    qss += down_sel +
-           QStringLiteral(" { subcontrol-origin: border; subcontrol-position: bottom right; "
-                          "width: ") +
+    qss += down_sel + QStringLiteral(" { subcontrol-origin: border; subcontrol-position: bottom ") +
+           qss_trailing_side() + QStringLiteral("; width: ") +
            QString::number(Metrics::spin_arrow_w) + QStringLiteral("px; height: ") +
            QString::number(Metrics::spin_arrow_h) +
            QStringLiteral("px; border: none; background: transparent; }\n");
@@ -1349,16 +1380,23 @@ inline QString formkit_qss(const Tokens &t) {
            QStringLiteral("; border: 1px solid ") + css_color(t.control_bd) +
            QStringLiteral("; border-radius: ") + QString::number(t.radius_control) +
            QStringLiteral("px; color: ") + css_color(t.text) +
-           // R-270：盒内距令牌化（combo_pad_x）；值区右内距 = 箭头位宽 combo_arrow_slot ——
-           // 原「padding-right: 26px 硬编码 vs 箭头位 24 计算值」两值漂移随本行归一（同源取值）。
+           // R-270：盒内距令牌化（combo_pad_x）；值区内距 trailing 侧 = 箭头位宽
+           // combo_arrow_slot —— 原「padding-right: 26px 硬编码 vs 箭头位 24 计算值」两值
+           // 漂移随本行归一（同源取值）。R-218 余量（M7R22G2）：trailing 侧逻辑化
+           // （LTR=padding-right / RTL=padding-left，值不变；LTR 产出串逐字节不变）。
            QStringLiteral("; padding: 0 ") + QString::number(Metrics::combo_pad_x) +
-           QStringLiteral("px; padding-right: ") + QString::number(Metrics::combo_arrow_slot) +
-           QStringLiteral("px; }\n");
+           QStringLiteral("px; ") + qss_trailing_prop("padding") + QStringLiteral(": ") +
+           QString::number(Metrics::combo_arrow_slot) + QStringLiteral("px; }\n");
     qss += combo + QStringLiteral(":disabled { color: ") + css_color(t.text3) +
            QStringLiteral("; }\n");
     // 箭头位（= combo_arrow_slot = combo_arrow_px×2 + 8）：只给几何，不画分隔线/按钮底
-    qss += combo + QStringLiteral("::drop-down { border: none; background: transparent; width: ") +
-           QString::number(Metrics::combo_arrow_slot) + QStringLiteral("px; }\n");
+    // R-218 余量（M7R22G2）：::drop-down 默认位 top right 不随向 —— RTL 显式挪 trailing
+    // （top left）；LTR 分支不加属性（产出串逐字节不变）。
+    qss += combo + QStringLiteral("::drop-down { border: none; background: transparent;") +
+           (qss_dir() == Qt::RightToLeft ? QStringLiteral(" subcontrol-position: top left;")
+                                         : QString()) +
+           QStringLiteral(" width: ") + QString::number(Metrics::combo_arrow_slot) +
+           QStringLiteral("px; }\n");
     qss += combo + QStringLiteral("::down-arrow { image: none; width: 0px; height: 0px; }\n");
     // 下拉**弹层**（GUI-R2 举一反三：此前零规则 = 平台默认弹出列表，与本体两套皮）
     qss += combo + QStringLiteral(" QAbstractItemView { background: ") + css_color(t.card) +
@@ -1520,8 +1558,10 @@ inline QString style_sheet(const Tokens &t) {
     // GUI-R2：工具钮**不画下拉箭头**（设计稿 output.html 的 .ftools 里 ＋/−/筛选 都是纯图标钮，
     // 只有「按月份 ▾」那枚下拉带箭头）。＋/筛选 确有菜单，但语义由 tooltip（"添加文件 / 文件夹"、
     // "筛选…"）承担 —— 加/减/筛 三枚钮上挂箭头是实现自己长出来的。
+    // R-218 余量（M7R22G2）：菜单指示位贴 trailing（LTR=bottom right / RTL=bottom left）
     qss += QStringLiteral("QToolButton::menu-indicator { image: none; width: 0px; height: 0px; "
-                          "subcontrol-origin: padding; subcontrol-position: bottom right; }\n");
+                          "subcontrol-origin: padding; subcontrol-position: bottom ") +
+           qss_trailing_side() + QStringLiteral("; }\n");
     // ② 报错/询问框（on_start 的 6 个闸门、预设读写失败 …）—— 原生皮下是复古灰
     qss +=
         QStringLiteral("QMessageBox { background: ") + css_color(t.card) + QStringLiteral("; }\n");
@@ -1547,10 +1587,11 @@ inline QString style_sheet(const Tokens &t) {
            QStringLiteral("px; margin-top: 12px; padding: 8px "
                           "8px 8px 8px; color: ") +
            css_color(t.text) + QStringLiteral("; }\n");
-    qss +=
-        QStringLiteral("QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 6px; "
-                       "color: ") +
-        css_color(t.text2) + QStringLiteral("; }\n");
+    // R-218 余量（M7R22G2）：组盒标题贴 leading（LTR=left: 8px / RTL=right: 8px；
+    // LTR 产出串逐字节不变）
+    qss += QStringLiteral("QGroupBox::title { subcontrol-origin: margin; ") + qss_leading_side() +
+           QStringLiteral(": 8px; padding: 0 6px; color: ") + css_color(t.text2) +
+           QStringLiteral("; }\n");
     qss += QStringLiteral("QGroupBox::indicator { width: 16px; height: 16px; }\n"); // 勾选同走矢量
     // formkit（C2）行内辅助件 + R4 数值控件（M5-T2 加性扩展；选择器只认 ppFk）
     qss += formkit_qss(t);

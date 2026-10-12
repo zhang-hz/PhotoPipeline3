@@ -4,7 +4,8 @@
 // 行为规格落地（docs/m1b-tasks.md §2.6 条 1..8）：
 //   1. 顶部选择行：后端（backends.size()>1）/ 技术（当前后端 techs.size()>1）/
 //      无损（当前后端存在 lossless_capable 技术——条 2 的 jpeg 反例即隐藏）。
-//   2. 无损 = 保留键 "__lossless"（m1-tasks §3.4）：勾选写工作集并 pp::apply_locks；
+//   2. 无损 = 保留键 kLosslessKey（= pp::kLosslessKey，m1-tasks §3.4；键值单源，不在本文件
+//      重抄字面量）：勾选写工作集并 pp::apply_locks；
 //      当前技术不可无损 → 自动切首个 lossless_capable 技术（jxl→modular、webp→lossless）；
 //      取消时若该切换是本表单自动做的（pre_lossless_tech 记忆）则切回原技术。
 //      技术下拉在无损开启期间把非 lossless_capable 项置灰（disabled item）。

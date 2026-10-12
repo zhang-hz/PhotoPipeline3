@@ -265,8 +265,9 @@ ParamValue param_from_json(const QJsonValue &v, const ParamDef *def) {
     case QJsonValue::String:
         return ParamValue{utf8(v.toString())};
     case QJsonValue::Double: {
+        constexpr double kMaxExactInt = 9007199254740992.0; // 2^53（JSON 安全整数上限，R-272 命名）
         const double d = v.toDouble();
-        if (d == std::floor(d) && std::abs(d) <= 9.007199254740992e15)
+        if (d == std::floor(d) && std::abs(d) <= kMaxExactInt)
             return ParamValue{static_cast<int64_t>(d)};
         return ParamValue{d};
     }

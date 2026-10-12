@@ -57,8 +57,10 @@ public:
     };
 
     void set_tokens(const theme::Tokens &tokens);
-    void set_plan(const RunPlan &plan); // begin_run 之前调用（之后调用无效：行已建）
-    // 日志尾卡：lines = 末尾若干行（页只渲染末 5 行）；log_name = 卡头 hint（空 → 不显示）
+    void set_plan(const RunPlan &plan); // begin_run 之前调用；运行期亦会被读（行文案/压缩比
+    // 按 plan 计算）——旧注「之后调用无效」失实（R-240 纠偏）
+    // 日志尾卡：lines = 末尾若干行（页只渲染末 4 行，kLogTailLines=4）；log_name = 卡头 hint（空 →
+    // 不显示）
     void set_log_tail(const QStringList &lines, const QString &log_name);
 
     int progress_percent() const; // §7.1 运行级总进度（0..100；-1 = 未开始）

@@ -80,8 +80,8 @@ inline std::string default_class_file() {
 //     `output_template = "$format/$dir/$file"`（§4.2）、`split_by_format = false`；
 //   INI 键名 = 字段名；`output_template` 的非法值在加载期丢弃（保留默认，见 settings.cpp）。
 struct AppSettings {
-    int workers = 0;           // 0=物理核数
-    int budget_gb = 0;         // 0=自动 min(RAM×50%, 8GB)
+    int workers = 0;   // 0=自动（线程预算或逻辑核数，见 scheduler alloc_threads；非物理核数）
+    int budget_gb = 0; // 0=自动 min(RAM×50%, 8GB)
     double flatten_gray = 1.0; // alpha 合成底色
     std::string log_level = "info";
     std::string map_provider = "osm"; // "osm" | "amap"

@@ -72,7 +72,7 @@ std::vector<std::filesystem::path> collect_inputs(const std::vector<std::filesys
                                                   const std::vector<std::string> &exts,
                                                   std::vector<std::string> &errors);
 
-// 输入扩展名白名单（10 种输入）：tif/tiff/png/jpg/jpeg/jxl/heic/heif/avif/webp/bmp/gif/tga
+// 输入扩展名白名单（13 种扩展名）：tif/tiff/png/jpg/jpeg/jxl/heic/heif/avif/webp/bmp/gif/tga
 const std::vector<std::string> &input_extensions();
 
 // 替换扩展名（保留目录与 stem）

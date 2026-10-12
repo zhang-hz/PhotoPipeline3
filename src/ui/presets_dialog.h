@@ -18,7 +18,7 @@ public:
                            const QString &suggested_name, QWidget *parent = nullptr);
     Action action() const;
     QString name() const; // load target / save-as name / delete target
-    QString path() const; // corresponding file path (already sanitized for save-as)
+    QString path() const; // Load/Delete = preset file path; SaveAs = empty (dir derived by caller)
 };
 
 } // namespace pp::ui

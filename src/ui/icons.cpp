@@ -401,7 +401,8 @@ QPainterPath path_from_d(const QString &d) {
             }
             continue;
         }
-        // 未支持的命令字母：跳过（不应出现 —— kDefs 的表只用到上述子集）
+        // 未支持的命令字母：**截断**——停止解析并返回已解析部分（不是"跳过该字母继续"；
+        // 不应出现 —— kDefs 的表只用到上述子集）
         return path;
     }
     return path;

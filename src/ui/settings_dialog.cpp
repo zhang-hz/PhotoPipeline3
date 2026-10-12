@@ -157,7 +157,8 @@ bool template_has_format(const QString &tmpl) {
 }
 
 // 日志级别 5 档（§2.10 冻结；LogLevel 的第 6 档 critical 不出现，值非法 → 回退 info，
-// 与 main.cpp 的 parse_log_level 一致）。itemData = 落盘值，itemText = 展示文案。
+// 与单源 pp::log_level_from_text（core/logger.h，R-157）一致）。itemData = 落盘值，itemText =
+// 展示文案。
 constexpr const char *kLevelIds[] = {"trace", "debug", "info", "warn", "error"};
 
 // §4.2 联动开关值：split_by_format = 模板含 $format 段（GUI 判据单源 = page_output 同名函数）。
@@ -1208,11 +1209,13 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
         v->setContentsMargins(dk::kBodyPadX, dk::kBodyPadTop, dk::kBodyPadX, dk::kBodyPadBottom);
         v->setSpacing(0);
 
-        // 并行（= 运行页 kv「并行」；修 4-12）：worker 数上限；0 = 自动（物理核数）。
-        // 修 4-08：禁用 spinbox 承载「自动（物理核数）」文本魔法值 → 自动/数值 下拉。
+        // 并行（= 运行页 kv「并行」；修 4-12）：worker 数上限；0 = 自动（线程预算或逻辑核数，
+        // **不是**物理核数——R-065/R-237 口径修正，与调度器 alloc_threads 同源）。
+        // 修 4-08：禁用 spinbox 承载「自动（…）」文本魔法值 → 自动/数值 下拉。
         auto *workers =
             make_auto_combo(page_run, QLatin1String(kWorkers), current.workers, kWorkersMax,
-                            T("同时处理的文件数上限（worker）；自动 = 物理核数"));
+                            T("同时处理的文件数上限（worker）；自动 = 按线程预算与逻辑核数自适应，"
+                              "且与「线程预算」联动（读数为估算口径）"));
         const formkit::Row workers_row = formkit::frow(
             page_run, T("并行"), workers, formkit::FieldWidth::Standard, QString(), T("0 = 自动"));
         bind_row(workers_row, workers);

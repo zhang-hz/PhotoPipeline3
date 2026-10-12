@@ -10,14 +10,16 @@ M0 交付仓库骨架、冻结接口、链接探针与金标语料。**M1a 交�
 ③ **多格式输出**（1 输入 → N 格式，解码仅一次；输出路径模板 `$format/$dir/$file/$name/$ext`；
 逐输出冲突解析）；
 ④ **逐文件进度**（JPEG/JXL/PNG/TIFF 真实行级 + WebP/HEIF/AVIF 合成进度斜纹标识；逐输出行）；
-⑤ **自适应并行**（交错启动可配置 + `alloc_threads` 线程预算，总活跃线程 ≤ T）；
+⑤ **自适应并行**（交错启动可配置 + `alloc_threads` 线程预算；读数为**估算口径**——成立的是
+`active ≤ W ≤ T` 与 `ΣE ≤ T`，SynthPump/x265 库内线程不入账，见 CHANGELOG [未发布]「已知」）；
 ⑥ **GUI 重构**（无边框窗口 + 自绘 caption 三钮、三栏骨架：文件/分类 + 预览 + 三页内容区、
 明暗双主题 tokens）；
 ⑦ **CI 工业化**（pr-fast / main-full / nightly / release 四道，job 与整轮双 ≤20min 硬约束、
 clang-format 硬门禁 + clang-tidy 棘轮 + sanitizer 三路）；
 ⑧ **依赖一把全升**（Qt 6.11.2 / OIIO 3.1.17 / libjxl 0.12 / exiv2 0.28.9 / x265 4.3 / SVT-AV1 4.2 …）；
 ⑨ **AVX2 性能基线**（x86-64-v3 + 5 对自研热路径 SIMD：flatten / quantize / transpose / downscale / interleave）。
-金样断言级 **20 对**、ctest **28 条**（release）/ **29 条**（release-dev，含 UI 冒烟）、UI 冒烟冻结行 `UI-SMOKE OK shots=12 pages=3`。
+金样断言级 **20 对**、ctest 条目以 `ctest -N` 实测为准（2026-10-12 实测 **34 条**（release）/
+**35 条**（release-dev，含 UI 冒烟））、UI 冒烟冻结行 `UI-SMOKE OK shots=12 pages=3`。
 
 **M5（GUI 刷新 v6，折入 0.3.0，版本号不变）**：视觉体系与排版全量重做——单源规范
 [docs/qt-gui-design-spec.md](docs/qt-gui-design-spec.md)（v6）+ 视觉终稿 [docs/mockups-v2/](docs/mockups-v2/)
@@ -29,6 +31,18 @@ caption 单轨 46×32；壳层顶栏 44 + 状态栏 30；**栏宽固定轴 330 /
 **引擎零改动**（`src/core`/`src/codecs`/`src/decode` 未触碰，只做视觉与排版）。验收证据、§12 十七条
 逐条探针、偏差与未决项见 [docs/m5-report.md](docs/m5-report.md)，开发期裁定见
 [docs/m5-adjudications.md](docs/m5-adjudications.md)。
+
+**0.3.3（开发中）= M7 工程收口轮**：发布前深度评审（331 条）+ UI 14 项评审的批量整改与结构重构。
+用户可见变化：**数据安全根治**（输出路径命中源文件即拒绝、写盘原子化、元数据写失败=失败、
+密钥 DPAPI 封存）、**HEIF/AVIF 编码档位核心行**（Main/Main10/Main12/… 直接呈现 + 位深联动）、
+时间/GPS/隐私三卡**启用开关**、文件列表与运行卡**右键菜单**（含勾选全部/反选）、**预览分辨率
+提升**（内嵌预览门槛 1600px、缓存 4096px）、**GPS 卡地图 App 化**（浮层结果、分类下拉、地图
+260px）、**窗口真无边框 + Win11 圆角**（原生标题栏消失、三钮可点）、滚动条细浮层、格式页签去
+位深文案并等宽、版本徽标/翻图打标/过滤态双击等交互缺陷修复。逐条变更见 [CHANGELOG.md](CHANGELOG.md)
+`[未发布]`，331+14 覆盖台账与验收证据见 [docs/m7-report.md](docs/m7-report.md)，裁定汇总见
+[docs/m7-adjudications.md](docs/m7-adjudications.md)。**色彩可选项（色域映射/抖动/渲染意图/
+线性光重采样）本轮未实现**，接口数据面已备、行为未入树，界面不提供开关（口径如实，勿按已发布
+文档预期）。
 
 **0.3.2（当前版本）= GPS 地图升级版（M6）**：把「内嵌地图选点」从能用升级到**地图 App 水平**——
 R1 搜索搜得出（改用可达的**高德 Web 服务**事实表：`place/text` + 周边偏置 **`around` 20 条**按距离升序 +
@@ -159,7 +173,7 @@ build/m1-dev/photopipeline --dev tests/golden/meta/exif_full.jpg --out .cache/ou
 ### 测试命令
 
 ```bash
-# 单测 + M0 工具 + 金样自检 + linkprobe（release 树共 28 条 ctest 条目）
+# 单测 + M0 工具 + 金样自检 + linkprobe（条目数以 ctest -N 实测为准；2026-10-12 实测 34 条）
 ctest --test-dir build/release --output-on-failure
 
 # 金标语料（27 fixture，幂等；PP_MKFIXTURES= 指向本次构建的 pp_mkfixtures）
@@ -270,7 +284,7 @@ QT_QPA_PLATFORM=offscreen build/release-dev/photopipeline \
 
 ```bash
 tools/make_appimage.sh [OUT_DIR]     # 默认 dist/
-# env: PP_BUILD_DIR（默认 build/m2-release）、QT_DIR（默认从产物 ldd 反查 Qt）
+# env: PP_BUILD_DIR（默认 build/release，与 make_winzip.py 同口径）、QT_DIR（默认从产物 ldd 反查 Qt）
 # 产物: <OUT_DIR>/PhotoPipeline-<版本>-x86_64.AppImage + PhotoPipeline.AppDir/（先删后建，可重跑）
 ```
 
@@ -288,6 +302,9 @@ tools/make_appimage.sh [OUT_DIR]     # 默认 dist/
   ③ `AppRun` 存在且 desktop 的 `Exec=`/`Icon=` 与冻结文本逐行一致；④ 从产物解包确认
   `usr/share/licenses/` 内 ≥30 个 port 的 `copyright` + 本项目 `LICENSE`。
 - 不承诺字节可复现（squashfs 超级块时间戳/mtime 参与），同结构不同 sha 按现状接受。
+- **设计取舍**（R-121 登记）：CMakeLists 全文**无 `install()`**，打包器（make_appimage.sh /
+  make_winzip.py）直读构建树组装产物——两器默认构建目录已统一 `build/release`。引入 install()
+  属构建面重构，未在本轮范围。
 
 ## M1b 桌面 UI
 
@@ -336,7 +353,7 @@ python tools/env.py run -- cmake --build --preset release
 ```bash
 python tools/env.py run -- cmake --preset release-dev -B build/release-dev -DVCPKG_MANIFEST_INSTALL=OFF
 python tools/env.py run -- cmake --build build/release-dev
-python tools/env.py run -- ctest --test-dir build/release-dev --output-on-failure    # 29 条 = 28 引擎 + ui_smoke
+python tools/env.py run -- ctest --test-dir build/release-dev --output-on-failure    # 条目以 ctest -N 实测为准（35 条 = 34 引擎 + ui_smoke，2026-10-12）
 # 或手动跑（offscreen，产出 12 张走查截图）：
 QT_QPA_PLATFORM=offscreen ./build/release-dev/photopipeline \
     --ui-smoke --inputs tests/golden/base --shots .cache/ui-review
@@ -491,7 +508,7 @@ chmod +x PhotoPipeline-<版本>-x86_64.AppImage
 python tools\bootstrap.py                                     # 一键引导：Qt(win64_msvc2022_64) + vcpkg(pinned) + 仓库内工具链
 python tools\env.py run -- cmake --preset release             # 配置（env.py 注入 vcvars/Qt/cmake/ninja）
 python tools\env.py run -- cmake --build --preset release     # 构建（产物 build\release\photopipeline.exe）
-python tools\env.py run -- ctest --preset release             # 28 条单测
+python tools\env.py run -- ctest --preset release             # 单测（条目以 ctest -N 实测为准，2026-10-12 为 34 条）
 python tools\env.py run -- python tests\golden\smoke.py build\release-dev                       # 20 对金样（需 release-dev 树）
 python tools\env.py run -- python tools\make_winzip.py dist --smoke-exe build\release-dev\photopipeline.exe   # 打包 zip
 ```

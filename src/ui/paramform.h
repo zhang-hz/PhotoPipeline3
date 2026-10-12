@@ -18,8 +18,8 @@
 
 namespace pp::ui {
 
-// 前置声明（不拉 ui/theme.h：theme.h 依赖包含者先引入 <QApplication>，而本头会被 AUTOMOC 的
-// mocs_compilation.cpp 直接包含 —— 与 ui/page_output.h / page_meta.h 同口径）
+// 前置声明（不拉 ui/theme.h：只为减头重/依赖面 —— theme.h 自 M5-A5 起已自含 <QApplication>，
+// 本头又会被 AUTOMOC 的 mocs_compilation.cpp 直接包含；与 ui/page_output.h / page_meta.h 同口径）
 namespace theme {
 struct Tokens;
 }

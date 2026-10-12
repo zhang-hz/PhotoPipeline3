@@ -212,9 +212,9 @@ QWidget *OutputPageImpl::build_global_card(QWidget *parent) {
         base_edit->setFixedHeight(theme::Metrics::input_h);
         base_edit->setProperty(kFieldProperty, QStringLiteral("input"));
         base_edit->setPlaceholderText(PageOutput::tr("留空 = 各输入文件所在目录"));
-        base_edit->setToolTip(PageOutput::tr(
-            "镜像路径基准目录（可选）：基准目录内的输入按相对路径镜像输出树；"
-            "留空 = 每个输入文件所在目录（现行为）。与 --dev 的 --base 同语义"));
+        base_edit->setToolTip(
+            PageOutput::tr("镜像路径基准目录（可选）：基准目录内的输入按相对路径镜像输出树；"
+                           "留空 = 每个输入文件所在目录（现行为）。与 --dev 的 --base 同语义"));
         QWidget *field = make_flex_field(global_card, {base_edit});
         const formkit::Row row =
             formkit::frow(global_card, PageOutput::tr("基准目录"), field, FieldWidth::Flex);
@@ -320,8 +320,8 @@ QWidget *OutputPageImpl::build_global_card(QWidget *parent) {
             "8bit 输出的 TPDF 量化抖动（UX-14 C2，±0.5 LSB，确定性）：默认关 = 量化路径逐字"
             "不变；开启仅作用于 8bit 量化段，10/12/16bit 不受影响"));
         QWidget *field = make_flex_field(global_card, {dither8_switch});
-        const formkit::Row row = formkit::frow(global_card, PageOutput::tr("8bit 抖动"), field,
-                                               FieldWidth::Flex);
+        const formkit::Row row =
+            formkit::frow(global_card, PageOutput::tr("8bit 抖动"), field, FieldWidth::Flex);
         row.row->setObjectName(QStringLiteral("pp-dither8-row"));
         body.box->addWidget(row.row);
     }
@@ -331,10 +331,11 @@ QWidget *OutputPageImpl::build_global_card(QWidget *parent) {
         linear_switch->set_tokens(tokens);
         linear_switch->setToolTip(PageOutput::tr(
             "预览/缩略图的线性光重采样（UX-14 C4，仅显示面）：默认关 = 预览重采样路径逐字不变；"
-            "开启后降采样在线性光中进行（sRGB EOTF → 线性 → LANCZOS3 → 逆 EOTF），输出像素不受影响"));
+            "开启后降采样在线性光中进行（sRGB EOTF → 线性 → LANCZOS3 → 逆 "
+            "EOTF），输出像素不受影响"));
         QWidget *field = make_flex_field(global_card, {linear_switch});
-        const formkit::Row row = formkit::frow(global_card, PageOutput::tr("线性光重采样"), field,
-                                               FieldWidth::Flex);
+        const formkit::Row row =
+            formkit::frow(global_card, PageOutput::tr("线性光重采样"), field, FieldWidth::Flex);
         row.row->setObjectName(QStringLiteral("pp-linear-row"));
         body.box->addWidget(row.row);
     }

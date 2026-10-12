@@ -64,7 +64,7 @@
 #include "mapwidget/layers.h"   // R-137：map_style 词表单源（tile_style_name）
 #include "platform/frameless.h" // 无边框接线（拖拽/八向缩放；与主窗同一机制）
 #include "platform/paths.h"     // R-072：settings_file() 读写自检
-#include "ui/caption_button.h" // R-279：caption 钮唯一实现（收编主窗 CaptionButton）
+#include "ui/caption_button.h"  // R-279：caption 钮唯一实现（收编主窗 CaptionButton）
 #include "ui/formkit.h"
 #include "ui/icons.h"
 #include "ui/leading_indent.h" // R-218（M7-R2E2）：逻辑边距（标题栏）单源

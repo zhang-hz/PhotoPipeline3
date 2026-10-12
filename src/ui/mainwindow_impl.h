@@ -12,7 +12,7 @@
 #pragma once
 
 #include "ui/caption_button.h" // R-279：caption 三钮唯一实现（原内嵌类收编；settings 同用）
-#include "ui/formkit.h"        // M5-T7：meta-geom 探针读回卡头胶囊（formkit::PillBadge）与 R1/R2 几何
+#include "ui/formkit.h" // M5-T7：meta-geom 探针读回卡头胶囊（formkit::PillBadge）与 R1/R2 几何
 #include "ui/icons.h"
 #include "ui/mainwindow.h"
 

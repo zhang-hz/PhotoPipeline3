@@ -193,7 +193,8 @@ namespace {
 
 // R-319（M7-R2.1-F4）：行 base_dir 推导单点 —— 基准目录**包含**该文件 → 基准目录，否则
 // src.parent（同 dev_cli choose_base 的单基准语义；空基准 = 现行为逐字不变）。
-std::filesystem::path derive_base_dir(const std::filesystem::path &src, const QString &mirror_base) {
+std::filesystem::path derive_base_dir(const std::filesystem::path &src,
+                                      const QString &mirror_base) {
     if (mirror_base.isEmpty())
         return src.parent_path();
     const std::filesystem::path base = fs_path(mirror_base);

@@ -851,13 +851,12 @@ pp::RunConfig PageOutput::config_base() const {
     }
     cfg.color = impl_->color_target();
     // M7-R2.1-F4：色彩四选项（UX-14 C1–C4）——默认值 = 现行为（0/false），能力类 opt-in
-    cfg.color_intent = impl_->intent_combo != nullptr ? impl_->intent_combo->currentData().toInt() : 0;
-    cfg.color_dither8 =
-        impl_->dither8_switch != nullptr && impl_->dither8_switch->isChecked();
+    cfg.color_intent =
+        impl_->intent_combo != nullptr ? impl_->intent_combo->currentData().toInt() : 0;
+    cfg.color_dither8 = impl_->dither8_switch != nullptr && impl_->dither8_switch->isChecked();
     cfg.gamut_mapping =
         impl_->gamut_combo != nullptr ? impl_->gamut_combo->currentData().toInt() : 0;
-    cfg.linear_resample =
-        impl_->linear_switch != nullptr && impl_->linear_switch->isChecked();
+    cfg.linear_resample = impl_->linear_switch != nullptr && impl_->linear_switch->isChecked();
     cfg.conflict = impl_->conflict();
     cfg.metadata_only = impl_->metadata_only;
     cfg.output_template = impl_->template_text().toStdString();

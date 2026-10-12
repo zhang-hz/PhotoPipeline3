@@ -48,7 +48,6 @@
 #include <QFont>
 #include <QFormLayout>
 #include <QFutureWatcher> // R-081：read_metadata 后台化
-#include <QtConcurrent/QtConcurrentRun> // R-081：read_metadata IO 下后台
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -73,6 +72,7 @@
 #include <QTreeWidgetItem>
 #include <QVBoxLayout>
 #include <QVariant>
+#include <QtConcurrent/QtConcurrentRun> // R-081：read_metadata IO 下后台
 
 #include <algorithm>
 #include <cmath>
@@ -443,7 +443,7 @@ struct ExifEditor::Impl {
     QString src;
     pp::BatchRules batch;
     std::optional<pp::MetadataOverride> existing;
-    pp::SourceMeta meta; // 只读源元数据（pp::read_metadata 结果）
+    pp::SourceMeta meta;       // 只读源元数据（pp::read_metadata 结果）
     bool meta_loading = false; // R-081：后台读取中 —— 未完成时 accept 拒绝（防基底空写回）
     theme::Tokens tokens = theme::tokens(theme::preferred_theme_mode()); // M5-T10：弹窗令牌（单源）
     TagItemDelegate *delegate = nullptr; // M5-T10：行首 pill「批」+ 改值强调色字（A8）

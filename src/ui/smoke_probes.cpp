@@ -5378,8 +5378,8 @@ void MainWindow::Impl::smoke_probe_class_filter() {
     pump(80);
     expect(visible_rows() == all_visible,
            QStringLiteral("再点清除过滤（%1 vs %2）").arg(visible_rows()).arg(all_visible));
-    std::printf("UI-SMOKE classify-filter: checked=%d bad=%d filter=\"%s\" rows=%llu\n", checked, bad,
-                qUtf8Printable(filter), static_cast<unsigned long long>(visible_rows()));
+    std::printf("UI-SMOKE classify-filter: checked=%d bad=%d filter=\"%s\" rows=%llu\n", checked,
+                bad, qUtf8Printable(filter), static_cast<unsigned long long>(visible_rows()));
     std::fflush(stdout);
 }
 
@@ -5423,10 +5423,11 @@ void MainWindow::Impl::smoke_probe_edit_target() {
                QStringLiteral("映射链落回源行（row=%1）").arg(src_row));
         if (src_row >= 0 && src_row < static_cast<int>(model->size())) {
             const QString base = QFileInfo(QString::fromStdString(
-                                              model->row(std::size_t(src_row)).entry.src.string()))
+                                               model->row(std::size_t(src_row)).entry.src.string()))
                                      .fileName();
-            expect(shown.contains(base),
-                   QStringLiteral("R-152 所见即所编（视图 \"%1\" ↔ 源行 \"%2\"）").arg(shown, base));
+            expect(
+                shown.contains(base),
+                QStringLiteral("R-152 所见即所编（视图 \"%1\" ↔ 源行 \"%2\"）").arg(shown, base));
         }
     } else {
         expect(false, QStringLiteral("过滤后应有可见行"));
@@ -5453,8 +5454,8 @@ void MainWindow::Impl::smoke_probe_edit_target() {
             }
         }
         if (!sel.isEmpty())
-            view->selectionModel()->select(
-                sel, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+            view->selectionModel()->select(sel, QItemSelectionModel::ClearAndSelect |
+                                                    QItemSelectionModel::Rows);
         if (search != nullptr && picked.size() == 2) {
             search->setText(QStringLiteral("png"));
             pump(150);
@@ -5521,7 +5522,8 @@ void MainWindow::Impl::smoke_probe_settings_tabs_light() {
                 if (qAlpha(c) < 200)
                     continue;
                 if (skip.isValid() && std::abs(qRed(c) - skip.red()) <= 3 &&
-                    std::abs(qGreen(c) - skip.green()) <= 3 && std::abs(qBlue(c) - skip.blue()) <= 3)
+                    std::abs(qGreen(c) - skip.green()) <= 3 &&
+                    std::abs(qBlue(c) - skip.blue()) <= 3)
                     continue;
                 ++hist[c];
             }
@@ -5568,17 +5570,15 @@ void MainWindow::Impl::smoke_probe_settings_tabs_light() {
     };
     if (auto *sel = dlg.findChild<QAbstractButton *>(QStringLiteral("pp-tab-general"))) {
         const QColor got = dominant_glyph(sel);
-        expect(near(got, lt.text),
-               QStringLiteral("选中标题像素 == 亮 text（got %1 want %2）")
-                   .arg(got.name(), lt.text.name()));
+        expect(near(got, lt.text), QStringLiteral("选中标题像素 == 亮 text（got %1 want %2）")
+                                       .arg(got.name(), lt.text.name()));
     } else {
         expect(false, QStringLiteral("pp-tab-general 缺失"));
     }
     if (auto *unsel = dlg.findChild<QAbstractButton *>(QStringLiteral("pp-tab-output"))) {
         const QColor got = dominant_glyph(unsel);
-        expect(near(got, lt.text2),
-               QStringLiteral("未选中标题像素 == 亮 text2（got %1 want %2）")
-                   .arg(got.name(), lt.text2.name()));
+        expect(near(got, lt.text2), QStringLiteral("未选中标题像素 == 亮 text2（got %1 want %2）")
+                                        .arg(got.name(), lt.text2.name()));
     } else {
         expect(false, QStringLiteral("pp-tab-output 缺失"));
     }

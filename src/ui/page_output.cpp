@@ -282,7 +282,7 @@ void OutputPageImpl::build_tab(const std::string &id) {
     // avif 10bit+alpha 预选提示（原 pp-alpha-hint 语义，位置随格式页签）
     st.alpha_hint = new ElidedLabel(st.page);
     st.alpha_hint->setObjectName(QStringLiteral("pp-alpha-hint"));
-    st.alpha_hint->setProperty(kFieldProperty, QStringLiteral("hint"));
+    st.alpha_hint->setProperty(kFieldProperty, QString::fromLatin1(theme::kFkHint));
     st.alpha_hint->setFont(theme::font(theme::Typography::hint_px));
     st.alpha_hint->setMinimumHeight(formkit::kRowPitch);
     set_leading_indent(st.alpha_hint, formkit::kLabelW + formkit::kColGap); // R-218：逻辑边距

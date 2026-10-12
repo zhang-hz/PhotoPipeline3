@@ -1612,7 +1612,7 @@ void build_overview_card(QWidget *parent, RunState *s) {
         const auto link = [host](const QString &text, const QString &object_name) {
             auto *button = new QPushButton(text, host);
             button->setObjectName(object_name);
-            button->setProperty(kFieldProperty, QStringLiteral("link"));
+            button->setProperty(kFieldProperty, QString::fromLatin1(theme::kFkLink));
             button->setFont(theme::font(theme::Typography::body_px, 600));
             button->setFixedHeight(theme::Metrics::btn_h);
             button->setCursor(Qt::PointingHandCursor);
@@ -1628,7 +1628,7 @@ void build_overview_card(QWidget *parent, RunState *s) {
         s->cancel->setObjectName(QStringLiteral("pp-run-cancel"));
         // W-R-T13（A39 ②）：破坏性动作 = **红文字链**（视觉终稿动作层级：导航链 / 破坏性红链 /
         // 结果次钮三副面孔）。红描边钮形态退役（旧 "danger" 属性值不再出现在本页 QSS）。
-        s->cancel->setProperty(kFieldProperty, QStringLiteral("link-danger"));
+        s->cancel->setProperty(kFieldProperty, QString::fromLatin1(theme::kFkLinkDanger));
         s->cancel->setFont(theme::font(theme::Typography::body_px, 600));
         s->cancel->setFixedHeight(theme::Metrics::btn_h); // R4/A7 按钮高 26
         s->cancel->setCursor(Qt::PointingHandCursor);
@@ -1638,7 +1638,7 @@ void build_overview_card(QWidget *parent, RunState *s) {
         hl->addStretch(1);
         s->run_again = new QPushButton(PageRun::tr("再次运行"), host);
         s->run_again->setObjectName(QStringLiteral("pp-run-again"));
-        s->run_again->setProperty(kFieldProperty, QStringLiteral("button"));
+        s->run_again->setProperty(kFieldProperty, QString::fromLatin1(theme::kFkButton));
         s->run_again->setFont(theme::font(theme::Typography::body_px, 600));
         s->run_again->setFixedHeight(theme::Metrics::btn_h);
         s->run_again->setCursor(Qt::PointingHandCursor);
@@ -1707,7 +1707,7 @@ void build_logs_card(QWidget *parent, RunState *s) {
     QHBoxLayout *head = qobject_cast<QHBoxLayout *>(parts.head->layout());
     s->open_full_log = new QPushButton(PageRun::tr("查看完整日志…"), s->logs);
     s->open_full_log->setObjectName(QStringLiteral("pp-run-open-full-log"));
-    s->open_full_log->setProperty(kFieldProperty, QStringLiteral("link"));
+    s->open_full_log->setProperty(kFieldProperty, QString::fromLatin1(theme::kFkLink));
     s->open_full_log->setFont(theme::font(theme::Typography::body_px, 600));
     s->open_full_log->setFixedHeight(theme::Metrics::btn_h);
     s->open_full_log->setCursor(Qt::PointingHandCursor);

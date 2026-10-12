@@ -118,7 +118,7 @@ QWidget *OutputPageImpl::build_format_card(QWidget *parent) {
         auto *note =
             new QLabel(PageOutput::tr("转码 = 生成新文件 · 仅元数据 = 原地写入"), format_card);
         note->setObjectName(QStringLiteral("pp-mode-hint"));
-        note->setProperty(kFieldProperty, QStringLiteral("hint"));
+        note->setProperty(kFieldProperty, QString::fromLatin1(theme::kFkHint));
         note->setFont(theme::font(theme::Typography::hint_px));
         QWidget *field = make_flex_field(format_card, {mode_seg, note});
         const formkit::Row row =
@@ -129,7 +129,7 @@ QWidget *OutputPageImpl::build_format_card(QWidget *parent) {
     // 仅元数据说明行（互斥语义零改动：格式多选/格式参数卡置灰并出说明）
     mode_note = new ElidedLabel(format_card);
     mode_note->setObjectName(QStringLiteral("pp-format-note"));
-    mode_note->setProperty(kFieldProperty, QStringLiteral("hint"));
+    mode_note->setProperty(kFieldProperty, QString::fromLatin1(theme::kFkHint));
     mode_note->setFont(theme::font(theme::Typography::hint_px));
     mode_note->setMinimumHeight(formkit::kRowPitch);
     set_leading_indent(mode_note,
@@ -192,7 +192,7 @@ QWidget *OutputPageImpl::build_global_card(QWidget *parent) {
         out_root_edit = new QLineEdit(global_card);
         out_root_edit->setObjectName(QStringLiteral("pp-out-root-edit"));
         out_root_edit->setFixedHeight(theme::Metrics::input_h);
-        out_root_edit->setProperty(kFieldProperty, QStringLiteral("input"));
+        out_root_edit->setProperty(kFieldProperty, QString::fromLatin1(theme::kFkInput));
         out_root_edit->setPlaceholderText(PageOutput::tr("留空无法开始运行：请选择输出根目录"));
         out_root_edit->setToolTip(PageOutput::tr("所有输出都落在这个目录下（按路径模板分层）"));
         browse_button = make_button(global_card, PageOutput::tr("浏览…"),
@@ -210,7 +210,7 @@ QWidget *OutputPageImpl::build_global_card(QWidget *parent) {
         base_edit = new QLineEdit(global_card);
         base_edit->setObjectName(QStringLiteral("pp-base-edit"));
         base_edit->setFixedHeight(theme::Metrics::input_h);
-        base_edit->setProperty(kFieldProperty, QStringLiteral("input"));
+        base_edit->setProperty(kFieldProperty, QString::fromLatin1(theme::kFkInput));
         base_edit->setPlaceholderText(PageOutput::tr("留空 = 各输入文件所在目录"));
         base_edit->setToolTip(
             PageOutput::tr("镜像路径基准目录（可选）：基准目录内的输入按相对路径镜像输出树；"
@@ -238,7 +238,7 @@ QWidget *OutputPageImpl::build_global_card(QWidget *parent) {
                                 static_cast<int>(pp::ConflictPolicy::Overwrite));
         conflict_combo->setCurrentIndex(0);
         conflict_combo->setFixedHeight(theme::Metrics::combo_h);
-        conflict_combo->setProperty(kFieldProperty, QStringLiteral("combo"));
+        conflict_combo->setProperty(kFieldProperty, QString::fromLatin1(theme::kFkCombo));
         conflict_combo->setToolTip(
             PageOutput::tr("目标文件已存在时：自动加序号（IMG_1.jpg）/ 跳过 / 覆盖"));
         const formkit::Row row = formkit::frow(global_card, PageOutput::tr("同名冲突"),
@@ -261,7 +261,7 @@ QWidget *OutputPageImpl::build_global_card(QWidget *parent) {
                              static_cast<int>(pp::ColorTarget::AdobeRGB));
         color_combo->setCurrentIndex(0);
         color_combo->setFixedHeight(theme::Metrics::combo_h);
-        color_combo->setProperty(kFieldProperty, QStringLiteral("combo"));
+        color_combo->setProperty(kFieldProperty, QString::fromLatin1(theme::kFkCombo));
         color_combo->setToolTip(PageOutput::tr(
             "保持原样 = 不改动嵌入的 ICC 色彩描述；其余档位按目标色域转换并写入新的 ICC。"
             "仅元数据模式下不生效（不做色彩转换）"));
@@ -284,7 +284,7 @@ QWidget *OutputPageImpl::build_global_card(QWidget *parent) {
         intent_combo->addItem(PageOutput::tr("饱和度"), 3);
         intent_combo->setCurrentIndex(0);
         intent_combo->setFixedHeight(theme::Metrics::combo_h);
-        intent_combo->setProperty(kFieldProperty, QStringLiteral("combo"));
+        intent_combo->setProperty(kFieldProperty, QString::fromLatin1(theme::kFkCombo));
         intent_combo->setToolTip(PageOutput::tr(
             "色彩转换的渲染意图（UX-14 C3）：默认档 = 现行为（相对比色 + 黑点补偿）；"
             "感知/绝对/饱和为可选能力档。带 A2B/B2A 表的 ICC 才有可见差异"));
@@ -303,7 +303,7 @@ QWidget *OutputPageImpl::build_global_card(QWidget *parent) {
         gamut_combo->addItem(PageOutput::tr("Lab 明度收敛"), 2);
         gamut_combo->setCurrentIndex(0);
         gamut_combo->setFixedHeight(theme::Metrics::combo_h);
-        gamut_combo->setProperty(kFieldProperty, QStringLiteral("combo"));
+        gamut_combo->setProperty(kFieldProperty, QString::fromLatin1(theme::kFkCombo));
         gamut_combo->setToolTip(PageOutput::tr(
             "目标色域外像素的映射策略（UX-14 C1）：默认「无」= 现行为（硬裁）；软膝/明度收敛为"
             "可选能力档，只处理越界像素、不动 alpha"));
@@ -358,7 +358,7 @@ QWidget *OutputPageImpl::build_global_card(QWidget *parent) {
                            "多个格式会写进同一目录"));
         auto *text = new QLabel(PageOutput::tr("按文件格式分文件夹"), global_card);
         text->setObjectName(QStringLiteral("pp-split-label"));
-        text->setProperty(kFieldProperty, QStringLiteral("sub"));
+        text->setProperty(kFieldProperty, QString::fromLatin1(theme::kFkSub));
         text->setFont(theme::font(theme::Typography::body_px));
         QWidget *field = make_flex_field(global_card, {split_switch, text});
         const formkit::Row row =
@@ -371,7 +371,7 @@ QWidget *OutputPageImpl::build_global_card(QWidget *parent) {
         template_edit = new QLineEdit(global_card);
         template_edit->setObjectName(QStringLiteral("pp-template-edit"));
         template_edit->setFixedHeight(theme::Metrics::input_h);
-        template_edit->setProperty(kFieldProperty, QStringLiteral("input"));
+        template_edit->setProperty(kFieldProperty, QString::fromLatin1(theme::kFkInput));
         template_edit->setPlaceholderText(QStringLiteral("$format/$dir/$file"));
         template_edit->setToolTip(template_tooltip());
         template_edit->setText(QStringLiteral("$format/$dir/$file"));
@@ -388,7 +388,7 @@ QWidget *OutputPageImpl::build_global_card(QWidget *parent) {
     {
         template_example = new ElidedLabel(global_card);
         template_example->setObjectName(QStringLiteral("pp-template-example"));
-        template_example->setProperty(kFieldProperty, QStringLiteral("sub"));
+        template_example->setProperty(kFieldProperty, QString::fromLatin1(theme::kFkSub));
         template_example->setFont(theme::font(theme::Typography::hint_px));
         const formkit::Row row = formkit::frow(global_card, PageOutput::tr("输出示例"),
                                                template_example, FieldWidth::Flex);

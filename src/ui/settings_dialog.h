@@ -57,13 +57,15 @@ inline constexpr int kFocusRingPad = 2; // 环画在控件盒外 2px（不压控
 
 // 控件选择器词汇（与 ui/page_output.cpp 的 ppField 取值同源：input / combo / button /
 // primary / hint。弹窗内同义控件用同一组钩子 → 三弹窗与主页面的控件语言一致）。
+// M7R22G2（R-179 余量收口）：取值常量直接指 theme::kFk* 词表单源（值逐字不变，
+// 原六处字面量退役 —— 同一事实只定义一次）。
 inline constexpr const char *kFieldProperty =
     theme::kFkProperty; // UX-6⑤/R-054：钩子轨并入 ppFk（旧 ppField 轨退役）
-inline constexpr const char *kFieldInput = "input";
-inline constexpr const char *kFieldCombo = "combo";
-inline constexpr const char *kFieldButton = "button";
-inline constexpr const char *kFieldPrimary = "primary";
-inline constexpr const char *kFieldHint = "hint";
+inline constexpr const char *kFieldInput = theme::kFkInput;
+inline constexpr const char *kFieldCombo = theme::kFkCombo;
+inline constexpr const char *kFieldButton = theme::kFkButton;
+inline constexpr const char *kFieldPrimary = theme::kFkPrimary;
+inline constexpr const char *kFieldHint = theme::kFkHint;
 
 // objectName（探针/走查定位；§10 测试钩子 pp-*）
 inline constexpr const char *kTitleBarName = "pp-dlg-titlebar";

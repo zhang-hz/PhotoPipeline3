@@ -641,28 +641,39 @@ int main() {
 
         // 259/255 长度硬线解除：超长整串 / 超长段不再被 validate_output_filename 拦截
         // （保留名/非法字符/尾随点空格防线保留）。
+        // 断言面平台同构（M7R21F1-3）：validate_output_filename 的组件级规则跨平台逐字一致
+        // （fsops.cpp 无 #ifdef），故样例必须在两侧解析出**相同组件序列**——POSIX 的 fs::path
+        // 不切分 `\`、`C:\out` 整串是一个组件（含 `:`，会被非法字符防线误拒），样例根按平台
+        // 拼写（#ifdef 分支），断言两侧逐条相同、严格度不变。
+#ifdef _WIN32
+        const fs::path vof_root = fs::path("C:\\out");
+        const char *vof_sep = "\\";
+#else
+        const fs::path vof_root = fs::path("out");
+        const char *vof_sep = "/";
+#endif
         std::string long_seg(260, 'a');
         long_seg += ".jpg";
-        const fs::path long_component = fs::path("C:\\out") / long_seg;
+        const fs::path long_component = vof_root / long_seg;
         std::string err;
         check(pp::validate_output_filename(long_component, &err), "m7r2b/vof-long-component",
               "单段 >255 不应再判负，err=" + err);
-        std::string deep = "C:\\out";
+        std::string deep = vof_root.string();
         for (int i = 0; i < 8; ++i)
-            deep += "\\" + std::string(60, 'b');
-        deep += "\\x.jpg";
+            deep += vof_sep + std::string(60, 'b');
+        deep += std::string(vof_sep) + "x.jpg";
         check(deep.size() > 300, "m7r2b/vof-long-setup", "样例路径应 >300 字符");
         check(pp::validate_output_filename(fs::path(deep), &err), "m7r2b/vof-long-whole",
               "整串 >259 不应再判负，err=" + err);
         // 防线保留：非法字符 / 尾随点空格 / 保留设备名仍拒。
-        check(!pp::validate_output_filename(fs::path("C:\\out\\a?b.jpg"), &err),
-              "m7r2b/vof-illegal-char", "非法字符必须仍判负");
-        check(!pp::validate_output_filename(fs::path("C:\\out\\trailing."), &err),
-              "m7r2b/vof-trailing-dot", "尾随点必须仍判负");
-        check(!pp::validate_output_filename(fs::path("C:\\out\\trailing "), &err),
+        check(!pp::validate_output_filename(vof_root / "a?b.jpg", &err), "m7r2b/vof-illegal-char",
+              "非法字符必须仍判负");
+        check(!pp::validate_output_filename(vof_root / "trailing.", &err), "m7r2b/vof-trailing-dot",
+              "尾随点必须仍判负");
+        check(!pp::validate_output_filename(vof_root / "trailing ", &err),
               "m7r2b/vof-trailing-space", "尾随空格必须仍判负");
-        check(!pp::validate_output_filename(fs::path("C:\\out\\CON.txt"), &err),
-              "m7r2b/vof-reserved", "保留设备名必须仍判负");
+        check(!pp::validate_output_filename(vof_root / "CON.txt", &err), "m7r2b/vof-reserved",
+              "保留设备名必须仍判负");
 
         // 长路径真实写读闭环：>300 字符输出路径经 write_atomic_file 可落盘（写入口已归一）。
         // 测试侧建目录同样按归一口径调用（超长路径下 MSVC std::filesystem 裸调用会撞 MAX_PATH）。

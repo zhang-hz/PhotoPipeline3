@@ -113,7 +113,12 @@ QImage decode_preview(const std::filesystem::path &src, int max_px);
 //     经 OIIO 内存读为 float32 → LANCZOS3 缩放到 max_px 内；
 //   * 否则 OIIO 读整图（ImageCache 分块、单线程）→ LANCZOS3 缩放到 max_px 内；
 //   * 一律不放大、不做色彩变换、失败不抛异常（error 非空 + image null）。
-PreviewImage decode_preview_detailed(const std::filesystem::path &src, int max_px);
+// —— M7-R2A / C4 加性追加（末位缺省参数；裁定登记 build/m7r2-a/handoff.md）——
+// linear_resample=true：降采样在**线性光**里做（sRGB EOTF → 线性 → LANCZOS3 → 逆 EOTF），
+// 仅显示面（预览/缩略图）、opt-in；默认 false = 既有路径逐字不变（test_thumbs/test_simd
+// 的位精确与 OIIO 对拍断言不动）。
+PreviewImage decode_preview_detailed(const std::filesystem::path &src, int max_px,
+                                     bool linear_resample = false);
 
 // 预览 LRU（§6.1「LRU 内存缓存」；UX-3 起默认 8 张 / 4096px，见上）：按源路径缓存的最近使用池，
 // **逐出最旧（LRU）**；容量与 max_px 由构造参数给定（默认 = kPreviewCacheCapacity /

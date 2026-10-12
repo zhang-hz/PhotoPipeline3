@@ -93,6 +93,22 @@ std::uint8_t to_u8(float v) {
     return static_cast<std::uint8_t>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f));
 }
 
+// —— C4（UX-14 C4，M7-R2A）：线性光重采样的 sRGB EOTF 对（IEC 61966-2-1；仅显示面、opt-in）——
+// 降采样前 sRGB→线性、降采样后线性→sRGB（LANCZOS3 在线性光里做面积平均才是物理正确的
+// 缩小）。域外值夹进 [0,1] 再过曲线（显示面的量化前域外值无意义）。默认路径不走本对。
+float srgb_to_linear(float x) {
+    const float v = std::clamp(x, 0.0f, 1.0f);
+    return v <= 0.04045f ? v / 12.92f : std::pow((v + 0.055f) / 1.055f, 2.4f);
+}
+float linear_to_srgb(float y) {
+    const float v = std::clamp(y, 0.0f, 1.0f);
+    return v <= 0.0031308f ? v * 12.92f : 1.055f * std::pow(v, 1.0f / 2.4f) - 0.055f;
+}
+void eotf_inplace(std::vector<float> &px, float (*fn)(float)) {
+    for (float &v : px)
+        v = fn(v);
+}
+
 // 通道展开（缩略图与预览的**唯一实现**）：1..4 通道 float32 → 8bit RGBA。
 // 规则（§2.1 step 5，两条通道逐字一致）：gray → RGB；gray+alpha → RGB；alpha 合成到白底；
 // 输出 alpha 恒 255；不做色彩变换（sRGB 假定）。dst_stride 让 ThumbImage 的紧凑 vector 与
@@ -137,7 +153,10 @@ void expand_to_rgba8(const float *px, int width, int height, int nch, std::uint8
 
 // Decode 1..4 channel float pixels into 8-bit RGBA on a white background, downsampled so
 // that the longest edge is <= target (steps 4/5). Returns false if no thumbnail can be made.
-bool to_rgba8(const OIIO::ImageBuf &src, int target, ThumbImage &out) {
+// C4（M7-R2A）：linear_resample=true 时降采样在线性光里做（EOTF → 线性 → 重采样 → 逆 EOTF）；
+// 默认 false = 既有路径逐字不变。缩略图通道（make_thumbnail，M1b 冻结）恒走默认值。
+bool to_rgba8(const OIIO::ImageBuf &src, int target, ThumbImage &out,
+              bool linear_resample = false) {
     if (!src.initialized())
         return false;
     const OIIO::ImageSpec &spec = src.spec();
@@ -155,18 +174,38 @@ bool to_rgba8(const OIIO::ImageBuf &src, int target, ThumbImage &out) {
 
     OIIO::ImageBuf scaled;
     const OIIO::ImageBuf *work = &src;
+    bool resampled = false;
     if (ts.w != sw || ts.h != sh) {
         OIIO::ImageBuf dst(OIIO::ImageSpec(ts.w, ts.h, nch, OIIO::TypeFloat));
-        if (!OIIO::ImageBufAlgo::resample(dst, src, /*interpolate=*/true, roi))
+        const OIIO::ImageBuf *resample_src = &src;
+        OIIO::ImageBuf lin;
+        if (linear_resample) {
+            // C4：sRGB → 线性（重采样在线性光里做面积平均）；只在真降采样时启用。
+            std::vector<float> lin_px(static_cast<std::size_t>(sw) * static_cast<std::size_t>(sh) *
+                                      static_cast<std::size_t>(nch));
+            if (!src.get_pixels(OIIO::ROI(0, sw, 0, sh), OIIO::TypeFloat, lin_px.data()))
+                return false;
+            eotf_inplace(lin_px, srgb_to_linear);
+            OIIO::ImageSpec linspec = spec;
+            linspec.set_format(OIIO::TypeFloat);
+            lin.reset(linspec);
+            if (!lin.set_pixels(OIIO::ROI(0, sw, 0, sh), OIIO::TypeFloat, lin_px.data()))
+                return false;
+            resample_src = &lin;
+        }
+        if (!OIIO::ImageBufAlgo::resample(dst, *resample_src, /*interpolate=*/true, roi))
             return false;
         scaled = std::move(dst);
         work = &scaled;
+        resampled = true;
     }
 
     const std::size_t pixels = static_cast<std::size_t>(ts.w) * static_cast<std::size_t>(ts.h);
     std::vector<float> px(pixels * static_cast<std::size_t>(nch));
     if (!work->get_pixels(roi, OIIO::TypeFloat, px.data()))
         return false;
+    if (linear_resample && resampled)
+        eotf_inplace(px, linear_to_srgb); // 逆 EOTF 回显示编码
 
     out.width = ts.w;
     out.height = ts.h;
@@ -287,7 +326,7 @@ bool try_embedded_preview(const std::filesystem::path &src, int target, ThumbIma
 //   * 线程面（W2-fix 第 12 条的修订，如实记录）：原 nthreads=0 的多线程并行落在 OIIO 内部；
 //     自研两遍实现当前**单线程**（§11.2 未要求 downscale 并行）。耗时实测见 T19 selfChecks
 //     （48MP→2048 与 W2-fix 记录的 OIIO 单段 499ms 基线对照）。
-bool scale_to_rgba8(const OIIO::ImageBuf &src, int max_px, QImage &out) {
+bool scale_to_rgba8(const OIIO::ImageBuf &src, int max_px, QImage &out, bool linear_resample) {
     const OIIO::ImageSpec spec = src.spec(); // 文件型 ImageBuf：此处触发惰性 spec 读取
     const int sw = spec.width;
     const int sh = spec.height;
@@ -309,17 +348,24 @@ bool scale_to_rgba8(const OIIO::ImageBuf &src, int max_px, QImage &out) {
         // （语义不变，内存 +1 帧 —— 如实记账，见 T19 偏差账）。
         std::vector<float> owned;
         const float *src_px = nullptr;
-        if (src.localpixels() != nullptr && spec.format == OIIO::TypeDesc::FLOAT) {
+        if (!linear_resample && src.localpixels() != nullptr &&
+            spec.format == OIIO::TypeDesc::FLOAT) {
             src_px = static_cast<const float *>(src.localpixels());
         } else {
+            // C4（M7-R2A）：linear_resample=true 必须拷贝 + sRGB→线性（原缓冲不可改写）；
+            // 重采样（LANCZOS3）在线性光里做，收尾逆 EOTF 回显示编码。默认 false 不走本路。
             owned.resize(static_cast<std::size_t>(sw) * static_cast<std::size_t>(sh) *
                          static_cast<std::size_t>(nch));
             const OIIO::ROI full(0, sw, 0, sh);
             if (!src.get_pixels(full, OIIO::TypeFloat, owned.data()))
                 return false;
+            if (linear_resample)
+                eotf_inplace(owned, srgb_to_linear);
             src_px = owned.data();
         }
         pp::simd::downscale(src_px, sw, sh, nch, px.data(), ts.w, ts.h, nch);
+        if (linear_resample)
+            eotf_inplace(px, linear_to_srgb); // 逆 EOTF 回显示编码
     }
 
     QImage image(ts.w, ts.h, QImage::Format_RGBA8888);
@@ -335,7 +381,8 @@ bool scale_to_rgba8(const OIIO::ImageBuf &src, int max_px, QImage &out) {
 // UX-3）经 OIIO 内存读为 float32 后走同一条 LANCZOS3/不放大/白底路径。任何失败（无候选/
 // 容器不支持/预览不可解/候选小于 1600px）静默回退全解码 —— from_embedded 只在真用了
 // 足够大的内嵌图时才置真（由本函数返回值决定）。
-bool try_embedded_preview_image(const std::filesystem::path &src, int max_px, QImage &out) {
+bool try_embedded_preview_image(const std::filesystem::path &src, int max_px, QImage &out,
+                                bool linear_resample) {
     try {
         Exiv2::Image::UniquePtr image = Exiv2::ImageFactory::open(src.string());
         if (!image)
@@ -356,7 +403,7 @@ bool try_embedded_preview_image(const std::filesystem::path &src, int max_px, QI
         OIIO::ImageBuf buf;
         if (!preview_bytes_to_buf(preview.pData(), preview.size(), hint, buf))
             return false;
-        return scale_to_rgba8(buf, max_px, out);
+        return scale_to_rgba8(buf, max_px, out, linear_resample);
     } catch (const Exiv2::Error &) {
         return false;
     } catch (const std::exception &) {
@@ -373,11 +420,11 @@ bool try_embedded_preview_image(const std::filesystem::path &src, int max_px, QI
 //   既有的 NOTE(perf) 同口径（管线自身的像素预算是 2×frame，预览池 ≤2 张在途 → 峰值与管线同量级；
 //   稳态由 LRU 上限约束）。"读整图为 float32"是铁律「内部全程 float32」的直接后果。
 bool decode_full_to_rgba8(const std::filesystem::path &src, const ImageInfo &info, int max_px,
-                          QImage &out) {
+                          QImage &out, bool linear_resample) {
     const DecodeOutcome decoded = decode_float(src, info);
     if (!decoded.error.empty() || !decoded.buf.initialized())
         return false;
-    return scale_to_rgba8(decoded.buf, max_px, out);
+    return scale_to_rgba8(decoded.buf, max_px, out, linear_resample);
 }
 
 // 源色彩空间**描述名**（只读元数据；像素路径不做任何变换）：
@@ -453,7 +500,8 @@ ThumbOutcome make_thumbnail(const std::filesystem::path &src, int target_long_ed
 // PP-FROZEN(0.3.0) §3.6 · 输入预览（0.3.0 追加面；见 core/thumbs.h 的冻结形态与 §6.1 摘录）
 // ============================================================================================
 
-PreviewImage decode_preview_detailed(const std::filesystem::path &src, int max_px) {
+PreviewImage decode_preview_detailed(const std::filesystem::path &src, int max_px,
+                                     bool linear_resample) {
     PreviewImage out;
     if (max_px <= 0)
         max_px = kPreviewCacheMaxPx; // 非法入参 → 冻结口径的默认上限（不抛异常）
@@ -469,12 +517,12 @@ PreviewImage decode_preview_detailed(const std::filesystem::path &src, int max_p
 
     try {
         // §6.1「优先内嵌预览」
-        if (try_embedded_preview_image(src, max_px, out.image)) {
+        if (try_embedded_preview_image(src, max_px, out.image, linear_resample)) {
             out.from_embedded = true;
             return out;
         }
         // §6.1「否则 OIIO 读整图后 LANCZOS3 降采样到 max_px 内」
-        if (!decode_full_to_rgba8(src, probe.info, max_px, out.image)) {
+        if (!decode_full_to_rgba8(src, probe.info, max_px, out.image, linear_resample)) {
             out.image = QImage();
             out.error = "preview decode failed: " + src.filename().string();
         }

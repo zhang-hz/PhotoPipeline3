@@ -339,7 +339,13 @@ EncodeResult OiioEncoder::encode(const EncodeRequest &req) {
             uint8_t *dst =
                 pixels.data() + static_cast<std::size_t>(y) * n * static_cast<std::size_t>(bps);
             if (bps == 1) {
-                pp::simd::quantize8(rowf.data(), dst, n);
+                // UX-14 C2（M7-R2A）：dither8=true 时 8bit 量化走 TPDF 抖动；默认 false 逐字不变。
+                if (req.dither8)
+                    pp::simd::quantize8_dithered(rowf.data(), dst, n, 0,
+                                                 static_cast<std::uint32_t>(y),
+                                                 static_cast<std::uint32_t>(nch));
+                else
+                    pp::simd::quantize8(rowf.data(), dst, n);
             } else { // bps == 2：输出面本身即 u16 数组（xstride = nch·2）→ 直接落写
                 pp::simd::quantize16(rowf.data(), reinterpret_cast<uint16_t *>(dst), n, 65535);
             }

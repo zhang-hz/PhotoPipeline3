@@ -36,4 +36,10 @@ int orientation_from_spec(const OIIO::ImageSpec &spec);
 // 内嵌 ICC：从 spec 的 "ICCProfile" 属性取字节；无 → 空
 std::string icc_from_spec(const OIIO::ImageSpec &spec);
 
+// —— M7-R2A / D2 加性追加（末尾；裁定登记 build/m7r2-a/handoff.md）——
+// Exif.Photo.ColorSpace（0xA001，OIIO 属性 "Exif:ColorSpace"）：1 = sRGB、2 = AdobeRGB；
+// 缺失/其它值 → 0。消费点 = pipeline 的 src_icc 装配（无 ICC 且 ==2 → 合成 AdobeRGB
+// profile；=1/缺失 → 现状），EXIF 语义见 CIPA DC-008-2012 的 Exif.Photo.ColorSpace 定义。
+int exif_colorspace_from_spec(const OIIO::ImageSpec &spec);
+
 } // namespace pp

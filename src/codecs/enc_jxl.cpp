@@ -493,7 +493,13 @@ private:
                 if (req.cancelled && req.cancelled())
                     return enc::encode_error("jxl: encode cancelled");
                 const std::size_t base = static_cast<std::size_t>(y) * stride;
-                pp::simd::quantize8(r.px.data() + base, pixels8.data() + base, stride);
+                // UX-14 C2（M7-R2A）：dither8=true 时 8bit 量化走 TPDF 抖动；默认 false 逐字不变。
+                if (req.dither8)
+                    pp::simd::quantize8_dithered(r.px.data() + base, pixels8.data() + base, stride,
+                                                 0, static_cast<std::uint32_t>(y),
+                                                 static_cast<std::uint32_t>(r.channels));
+                else
+                    pp::simd::quantize8(r.px.data() + base, pixels8.data() + base, stride);
                 if (progress)
                     progress(0.95f * (static_cast<float>(y + 1) / static_cast<float>(r.height)));
             }

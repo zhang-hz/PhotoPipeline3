@@ -43,6 +43,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <string>
 #include <system_error>
@@ -729,6 +730,63 @@ int main() {
             probe_ms, decode_ms, dec_ok ? 1 : 0, ms_full > decode_ms ? ms_full - decode_ms : -1,
             ms_native, ms_embedded);
         std::fflush(stdout);
+    }
+
+    // ---- (7) C4（M7-R2A）：linear_resample 线性光重采样（仅显示面、opt-in）----
+    // 2×1 黑白行降采样到 1×1：sRGB 域平均 ≈ 128；线性光平均 0.5 → 逆 EOTF ≈ 0.735 ≈ 188。
+    // 两值差距 > 30 —— 判别力与滤波器细节无关（LANCZOS3 边缘 clamp 的微扰不影响判定）。
+    {
+        const fs::path dir = make_temp_dir("thumbs_linear_resample");
+        const fs::path two = dir / "black_white_2x1.png";
+        {
+            auto out = OIIO::ImageOutput::create(two.string());
+            bool ok = out != nullptr;
+            if (ok) {
+                OIIO::ImageSpec spec(2, 1, 3, OIIO::TypeUInt8);
+                const unsigned char px[6] = {0, 0, 0, 255, 255, 255};
+                ok = out->open(two.string(), spec) && out->write_image(OIIO::TypeUInt8, px);
+                out->close();
+            }
+            check(ok, "c4/fixture-2x1", "2×1 黑白 PNG 合成失败");
+        }
+        if (fs::exists(two)) {
+            const pp::PreviewImage off = pp::decode_preview_detailed(two, 1, false);
+            const pp::PreviewImage on = pp::decode_preview_detailed(two, 1, true);
+            check(!off.image.isNull() && !on.image.isNull(), "c4/images",
+                  "off=" + off.error + " on=" + on.error);
+            check(off.image.width() == 1 && on.image.width() == 1, "c4/size-1x1",
+                  dims(off.image) + " / " + dims(on.image));
+            const int v_off = qRed(off.image.pixel(0, 0));
+            const int v_on = qRed(on.image.pixel(0, 0));
+            std::printf(
+                "test_thumbs: c4 linear_resample 2x1->1x1: srgb-domain=%d linear-domain=%d\n",
+                v_off, v_on);
+            check(v_off >= 100 && v_off <= 150, "c4/srgb-domain-average",
+                  "sRGB 域平均应 ≈128，got " + std::to_string(v_off));
+            check(v_on >= 165 && v_on <= 210, "c4/linear-domain-average",
+                  "线性光平均→逆 EOTF 应 ≈188，got " + std::to_string(v_on));
+            check(v_on >= v_off + 30, "c4/linear-vs-srgb-gap",
+                  "线性光路径应显著亮于 sRGB 域路径，got " + std::to_string(v_on) + " vs " +
+                      std::to_string(v_off));
+            // 默认路径逐字不变：省略参数 == 显式 false（QImage 字节一致）。
+            const pp::PreviewImage dflt = pp::decode_preview_detailed(two, 1);
+            check(!dflt.image.isNull() && dflt.image.sizeInBytes() == off.image.sizeInBytes() &&
+                      std::memcmp(dflt.image.bits(), off.image.bits(),
+                                  static_cast<std::size_t>(off.image.sizeInBytes())) == 0,
+                  "c4/default-unchanged", "省略参数的默认路径与显式 false 不一致");
+        }
+        // 不缩放场景：EOTF 对跳过（往返恒等）→ 两开关输出逐字一致。
+        const fs::path g4 = dir / "gradient_4x4.png";
+        check(write_gradient_file(g4, 4, 4, "png"), "c4/fixture-4x4", "4×4 合成失败");
+        if (fs::exists(g4)) {
+            const pp::PreviewImage a = pp::decode_preview_detailed(g4, 100, false);
+            const pp::PreviewImage b = pp::decode_preview_detailed(g4, 100, true);
+            check(!a.image.isNull() && a.image.width() == 4, "c4/no-scale-size", dims(a.image));
+            check(a.image.sizeInBytes() == b.image.sizeInBytes() &&
+                      std::memcmp(a.image.bits(), b.image.bits(),
+                                  static_cast<std::size_t>(a.image.sizeInBytes())) == 0,
+                  "c4/no-scale-identical", "不缩放时两开关输出应逐字一致");
+        }
     }
 
     if (g_failed == 0) {

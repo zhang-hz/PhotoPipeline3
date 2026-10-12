@@ -651,6 +651,27 @@ bool stage_probe(RunFileContext &ctx) {
                  {{"src", ctx.fe.src.string()}, {"error", ctx.srcmeta.error}});
     if (ctx.src_icc.empty())
         ctx.src_icc = ctx.srcmeta.icc; // R13 chain: embedded ICC first
+    // ---- D2（M7-R2A）：Exif.Photo.ColorSpace(0xA001) → 无 ICC 时的源 profile 合成 ----
+    // 无嵌入 ICC 且 EXIF 显式声明 AdobeRGB（0xA001 == 2）→ 走 colormanager 的 AdobeRGB
+    // profile 合成入口（load_target_icc）取 ICC 字节；=1/缺失 → 现状（sRGB 假定路径不动）。
+    // 依据 CIPA DC-008：Exif.Photo.ColorSpace 声明的是像素实际所在空间 —— "无 ICC" 不再
+    // 一律等于 "sRGB"。
+    if (ctx.src_icc.empty() && spec != nullptr) {
+        const int exif_cs = exif_colorspace_from_spec(*spec);
+        if (exif_cs == 2) {
+            std::string adobe_err;
+            const std::string adobe = load_target_icc(ColorTarget::AdobeRGB, adobe_err);
+            if (!adobe.empty()) {
+                ctx.src_icc = adobe;
+                log_info(kStage, kFile, "Exif ColorSpace=AdobeRGB -> synthesized AdobeRGB profile",
+                         {{"src", ctx.fe.src.string()}});
+            } else {
+                log_warn(kStage, kFile,
+                         "Exif ColorSpace=AdobeRGB but profile synthesis failed; assumed sRGB",
+                         {{"src", ctx.fe.src.string()}, {"error", adobe_err}});
+            }
+        }
+    }
     // ---- R13 middle step (issue #7, M2-T6 §2.8): CICP → source profile ----
     // See the M2-T6 landing note: OIIO always publishes a JXL ICCProfile (synthesized from
     // CICP), so CICP presence — not an empty src_icc — marks a source without its own ICC.
@@ -1019,13 +1040,15 @@ bool stage_encode_loop(RunFileContext &ctx) {
         ctx.stage(FileState::Encoding, Stage::Encode, static_cast<int>(pt.cfg_index));
         Clock::time_point t0 = Clock::now();
         // EncodeRequest 字段序（encoder.h §3.1）：img, target, meta, cancelled, progress,
-        // encode_threads。W1-T6：progress = ProgressMux 的输出级回调（真实行级 → 直接汇流；
-        // 无回调格式 → 走合成估算，编码期间由 SynthPump 按 20ms 采样，§7.3）；
+        // encode_threads, dither8。W1-T6：progress = ProgressMux 的输出级回调（真实行级 →
+        // 直接汇流；无回调格式 → 走合成估算，编码期间由 SynthPump 按 20ms 采样，§7.3）；
         // encode_threads = W1-T7 起由调度器 E3 分配（`RunScope::encode_threads`，§8.2），
-        // 无 scope（单测直调）恒 1 = 0.2 行为。
+        // 无 scope（单测直调）恒 1 = 0.2 行为。dither8 = UX-14 C2（M7-R2A）：RunConfig 的
+        // color_dither8 进编码器 8bit 量化段（默认 false = 逐字不变）。
         const int enc_threads = encode_threads_of(ctx.ev.scope);
-        EncodeRequest req{ctx.work.buf,  pt.target,    ctx.meta,
-                          ctx.cancelled, out_progress, enc_threads};
+        EncodeRequest req{ctx.work.buf,         pt.target,    ctx.meta,
+                          ctx.cancelled,        out_progress, enc_threads,
+                          ctx.cfg.color_dither8};
         EncodeResult er;
         {
             SynthPump pump(ctx.mux.get(), synth_pump);
@@ -1057,6 +1080,25 @@ bool stage_encode_loop(RunFileContext &ctx) {
         row.progress_reported = pstats.reported;
         row.progress_max_row = pstats.max_row;
         if (!enc_ok) {
+            // R-163 残余（E3，M7-R2A）：取消 vs 失败的 verdict 归类**单点**收口 —— 编码器因
+            // cancel 提前退出（cancelled() 为真，或错误串是取消语义）时走与各阶段 is_cancelled
+            // 检查点一致的 Cancelled 终态（set_output_state 唯一迁移 + error_kind_of 唯一判据
+            // 双轨对齐），不再误归 Failed、不再虚报 encode 错误（旧口径：错误串被 "encode
+            // failed: " 前缀重写 ⇒ error_kind_of 判 Encode、verdict 判 Failed/ DoneWithErrors）。
+            const bool cancelled_row = is_cancelled(ctx.cancelled) ||
+                                       er.error.find("encode cancelled") != std::string::npos;
+            if (cancelled_row) {
+                row.error = "encode cancelled"; // 规范化：error_kind_of 的既有判据即命中 Cancelled
+                row.error_kind = error_kind_of(row.error);
+                set_output_state(row, OutputState::Cancelled);
+                ctx.mux->on_output_failed(pt.cfg_index); // 进度停在已完成，不虚增
+                log_info(kStage, kFile, "encode cancelled",
+                         {{"src", ctx.fe.src.string()},
+                          {"out", row.out.string()},
+                          {"detail", er.error}});
+                ctx.finalize(FileOutcome::Verdict::Cancelled);
+                return false; // 取消：不再处理后续 target（与各阶段检查点同语义）
+            }
             row.error = "encode failed: " +
                         (er.error.empty() ? std::string("encoder produced no data") : er.error);
             row.error_kind = ErrorKind::Encode;
@@ -1099,6 +1141,15 @@ bool stage_encode_loop(RunFileContext &ctx) {
             // BMP has no metadata container; T5 skips silently, the pipeline reports it (§4.8).
             row.warnings.push_back(
                 Warning{WarningKind::MetadataDropped, "bmp output carries no metadata container"});
+            // B3（UX-14 B3 余量 / E2，M7-R2A）：OIIO BMP writer 不落 ICC（V5 头 profile 槽
+            // 未写，测试钉住事实见 test_enc_oiio 的 ICC 回读）—— 色彩目标 ≠ keep 时目标 ICC
+            // 无法随 BMP 承载，必须显式警示（不静默丢色描述）。
+            if (ctx.cfg.color != ColorTarget::KeepOriginal) {
+                row.warnings.push_back(
+                    Warning{WarningKind::EmbedIccUnsupported,
+                            "bmp output cannot embed the ICC profile (color target " +
+                                to_string(ctx.cfg.color) + ")"});
+            }
         }
         set_output_state(row, OutputState::Ok); // R-172 单点迁移
         ctx.mux->on_output_metawrite_done(

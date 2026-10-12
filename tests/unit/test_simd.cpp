@@ -479,6 +479,63 @@ void test_force_scalar_dispatch() {
     check(!pp::simd::force_scalar_enabled(), "simd/switch/restore", "恢复默认失败");
 }
 
+// ============================ M7-R2A 新增（断言只增）============================
+// UX-14 C2：quantize8_dithered —— ref/avx2 逐位相等（R-303 脚手架）、确定性（回归幂等）、
+// TPDF 幅度 ±0.5 LSB（|dithered − plain| ≤ 1 LSB 且双向抖动）；默认 quantize8 路径不动。
+void test_quantize8_dithered() {
+    // ① ref/avx2/分派入口逐位相等。n=257 非 8 对齐（尾块）+ nch=3（通道相位接续）——
+    //    尾块的全局样本序号错位会在这里现形。
+    Rng r(0x5a00u);
+    const std::vector<float> src = random_floats(r, 257, true); // 含越界值/NaN
+    std::vector<std::uint8_t> a(257, 0xCD), b(257, 0xAB), d(257, 0xEF), s(257, 0x11);
+    pp::simd::quantize8_dithered_ref(src.data(), a.data(), 257, 2, 7, 3);
+    pp::simd::quantize8_dithered_avx2(src.data(), b.data(), 257, 2, 7, 3);
+    check(u8_equal(a, b), "dither8/ref-avx2-bitwise", "ref 与 avx2 不一致");
+    pp::simd::quantize8_dithered(src.data(), d.data(), 257, 2, 7, 3);
+    check(u8_equal(a, d), "dither8/dispatch-bitwise", "分派入口与 ref 不一致");
+    pp::simd::set_force_scalar(true);
+    pp::simd::quantize8_dithered(src.data(), s.data(), 257, 2, 7, 3);
+    check(u8_equal(a, s), "dither8/force-scalar-is-ref", "强制标量后分派入口应与 ref 逐位一致");
+    pp::simd::set_force_scalar(false);
+
+    // ② 确定性：同输入、同坐标两次调用逐位一致（哈希只依赖 (x,y,c) ⇒ 回归幂等）。
+    std::vector<std::uint8_t> again(257, 0x22);
+    pp::simd::quantize8_dithered_ref(src.data(), again.data(), 257, 2, 7, 3);
+    check(u8_equal(a, again), "dither8/deterministic", "两次调用输出不一致");
+    // 坐标依赖：同值不同 (x0,y) 噪声不同（位置哈希真的在起作用）。
+    std::vector<std::uint8_t> moved(257, 0x33);
+    pp::simd::quantize8_dithered_ref(src.data(), moved.data(), 257, 3, 7, 3);
+    check(!u8_equal(a, moved), "dither8/position-dependent", "x0 平移后输出完全相同（哈希未参与）");
+
+    // ③ TPDF 幅度：|dithered − plain| ≤ 1 LSB。
+    std::vector<std::uint8_t> plain(257, 0x44);
+    pp::simd::quantize8_ref(src.data(), plain.data(), 257);
+    int max_delta = 0;
+    for (std::size_t i = 0; i < 257; ++i)
+        max_delta = std::max(max_delta, std::abs(int(a[i]) - int(plain[i])));
+    check(max_delta <= 1, "dither8/amplitude-1-lsb",
+          "max |dithered - plain| = " + std::to_string(max_delta));
+    // 常量 0.5 场（64×64×3）：0.5·255+0.5 = 128.0，噪声 ±0.5 LSB ⇒ 截断落 127/128，
+    // TPDF 双向 ⇒ 两值都必须出现（实测计数打印留证）。
+    const std::size_t n2 = 64 * 64 * 3;
+    std::vector<float> half(n2, 0.5f);
+    std::vector<std::uint8_t> out2(n2, 0x55);
+    pp::simd::quantize8_dithered_ref(half.data(), out2.data(), n2, 0, 0, 3);
+    int n127 = 0, n128 = 0;
+    for (std::uint8_t v : out2) {
+        if (v == 127)
+            ++n127;
+        else if (v == 128)
+            ++n128;
+    }
+    std::printf("test_simd: dither8 constant-0.5 field -> 127x%d 128x%d (of %zu)\n", n127, n128,
+                n2);
+    check(n127 > 0 && n128 > 0, "dither8/tpdf-both-directions",
+          "127x" + std::to_string(n127) + " 128x" + std::to_string(n128) + "（TPDF 应双向抖动）");
+    check(n127 + n128 == static_cast<int>(n2), "dither8/field-range",
+          "常量场出现 127/128 之外的值");
+}
+
 } // namespace
 
 int main() {
@@ -508,6 +565,9 @@ int main() {
     test_downscale_min_width();       // R-033
     test_interleave_2to2_and_guard(); // R-297
     test_force_scalar_dispatch();     // R-303
+
+    // —— M7-R2A（断言只增）——
+    test_quantize8_dithered(); // UX-14 C2
 
     if (g_failed == 0) {
         std::printf("test_simd: OK (探测层 + 5 对 avx2/ref 一致性；W5-T19)\n");

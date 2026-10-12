@@ -241,7 +241,13 @@ private:
                 static_cast<std::size_t>(r.width) * static_cast<std::size_t>(out_channels);
             pp::simd::interleave(src_row, r.channels, rowf.data(), out_channels,
                                  static_cast<std::size_t>(r.width));
-            pp::simd::quantize8(rowf.data(), dst_row, row_n);
+            // UX-14 C2（M7-R2A）：dither8=true 时 8bit 量化走 TPDF 抖动；默认 false 逐字不变。
+            if (req.dither8)
+                pp::simd::quantize8_dithered(rowf.data(), dst_row, row_n, 0,
+                                             static_cast<std::uint32_t>(y),
+                                             static_cast<std::uint32_t>(out_channels));
+            else
+                pp::simd::quantize8(rowf.data(), dst_row, row_n);
         }
 
         WebPPicture pic;

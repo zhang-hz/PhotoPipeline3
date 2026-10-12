@@ -88,6 +88,24 @@ void quantize16_ref(const float *src, std::uint16_t *dst, std::size_t n, int max
 void quantize16_avx2(const float *src, std::uint16_t *dst, std::size_t n, int maxv);
 void quantize16(const float *src, std::uint16_t *dst, std::size_t n, int maxv);
 
+// —— 2b) quantize8_dithered：8bit TPDF 抖动量化（UX-14 C2，M7-R2A 加性；opt-in）——
+//   契约（docs/ux-review-14.md §14 C2，设计由主对话定稿）：
+//     * 布局 = 交织行面：样本 i（0 起）属像素 x = x0 + i / nch、通道 c = i % nch；
+//       调用方传 (x0, y, nch)（编码器逐行调用面恒 x0=0），哈希只依赖 (x, y, c) ⇒
+//       **确定性**（同输入同输出、跨运行/跨线程幂等，回归可重放）。
+//     * TPDF 噪声 = h1(x,y,c) + h2(x,y,c) - 1，幅度 ±0.5 LSB：h1/h2 是 (x,y,c) 的
+//       整数哈希映到 [0,1)（见 kernels.cpp 的 dither_hash/h1/h2 单源），两串不同 seed。
+//     * 量化 = quantize8 的算子序列**加一项噪声**：((clamp(v)·255 + 0.5) + noise) 截断
+//       （左结合逐字序；NaN/非正 → 0 与 quantize8 同判据；结果恒 ∈ [0,255]）。
+//   默认路径（color_dither8=false）**不经过本函数**：quantize8 逐字节不变（test_simd 的
+//   位精确断言不动）。成对交付 + set_force_scalar 测试开关照 R-303 脚手架办理。
+void quantize8_dithered_ref(const float *src, std::uint8_t *dst, std::size_t n, std::uint32_t x0,
+                            std::uint32_t y, std::uint32_t nch);
+void quantize8_dithered_avx2(const float *src, std::uint8_t *dst, std::size_t n, std::uint32_t x0,
+                             std::uint32_t y, std::uint32_t nch);
+void quantize8_dithered(const float *src, std::uint8_t *dst, std::size_t n, std::uint32_t x0,
+                        std::uint32_t y, std::uint32_t nch);
+
 // —— 3) transpose：8×8 分块平面转置（EXIF 5/7 的 orientation 转置面）——
 //   src：sw×sh 行主序（src[y*sw + x]）→ dst：sh 宽 × sw 高（dst[x*sh + y] = src[y*sw + x]）。
 //   纯数据搬运（无算术）⇒ 逐位相等是构造性成立的。单通道平面；多通道调用方自行逐通道调用。

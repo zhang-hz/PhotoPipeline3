@@ -32,6 +32,9 @@ enum class WarningKind {
     MetadataDropped,    // target container has no metadata (BMP)
     TimeFieldMissing,   // time fields absent, shift skipped
     GrayToRgbEncoded,   // grayscale encoded as RGB (webp/heif/avif)
+    // —— M7-R2A / B3 加性追加（**末尾**；既有值的数值与语义零变化；裁定登记
+    // build/m7r2-a/handoff.md）—— 目标容器不承载 ICC（BMP：OIIO writer 事实，E2）。
+    EmbedIccUnsupported,
 };
 
 struct Warning {

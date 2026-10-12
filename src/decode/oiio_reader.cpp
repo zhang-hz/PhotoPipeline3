@@ -45,6 +45,9 @@ bool ascii_iequals(std::string_view a, std::string_view b) noexcept {
 //   tiff:PhotometricInterpretation = 5       (int, PHOTOMETRIC_SEPARATED)
 // The alternate spellings are checked defensively (docs/m1-tasks.md §4.3
 // assumed 4 separated channels + a "tiff:photometric" string; see api-deltas).
+// D1（M7-R2A）：JPEG 的 CMYK/YCCK 同径拒收 —— OIIO jpeginput.cpp 对 4 分量 JPEG 置
+//   jpeg:ColorSpace = "CMYK"（Adobe APP14 transform=0）/ "YCbCrK"（transform=2，YCCK），
+//   同样是"CMYK 输入不支持"的事实面（错误串逐字复用，tools/baseline/golden.log:189 钉住）。
 bool spec_is_cmyk(const OIIO::ImageSpec &spec) {
     if (ascii_iequals(spec.get_string_attribute("tiff:ColorSpace"), "CMYK")) {
         return true;
@@ -56,6 +59,12 @@ bool spec_is_cmyk(const OIIO::ImageSpec &spec) {
         return true;
     }
     if (ascii_iequals(spec.get_string_attribute("tiff:photometric"), "separated")) {
+        return true;
+    }
+    if (ascii_iequals(spec.get_string_attribute("jpeg:ColorSpace"), "CMYK")) {
+        return true;
+    }
+    if (ascii_iequals(spec.get_string_attribute("jpeg:ColorSpace"), "YCbCrK")) {
         return true;
     }
     return false;
@@ -214,6 +223,14 @@ std::string icc_from_spec(const OIIO::ImageSpec &spec) {
         return {};
     }
     return std::string(static_cast<const char *>(pv->data()), static_cast<std::size_t>(bytes));
+}
+
+int exif_colorspace_from_spec(const OIIO::ImageSpec &spec) {
+    // Exif.Photo.ColorSpace (0xA001) is a SHORT; OIIO exposes it as "Exif:ColorSpace".
+    // Only the two defined values are reported (1 = sRGB, 2 = AdobeRGB); anything
+    // else (absent, 0, >2) is reported as 0 = unknown.
+    const int v = spec.get_int_attribute("Exif:ColorSpace", 0);
+    return (v == 1 || v == 2) ? v : 0;
 }
 
 } // namespace pp

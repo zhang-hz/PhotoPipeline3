@@ -22,8 +22,10 @@ struct ColorOutcome {
 
 // —— M7-WP1 / I3 加性追加（裁定登记 build/m7-wp1/handoff.md）——
 // 色彩变换可选项。默认值 = 现行为逐字等价（intent=0 → RelativeColorimetric + BPC、
-// dither8=false、gamut_mapping=0 = 无色域映射、linear_resample=false）；能力档位的引擎侧
-// 消费归 WP8/WP10（与 pipeline.h RunConfig 的同名字段 I8 对应），本波只落数据面。
+// dither8=false、gamut_mapping=0 = 无色域映射、linear_resample=false）。
+// 消费分工（M7-R2A 起落地）：intent（C3）/ gamut_mapping（C1）在 ColorManager::transform；
+// dither8（C2）在编码器 to_u8 量化段（simd::quantize8_dithered）；linear_resample（C4）在
+// 显示面（thumbs 的 decode_preview_detailed）—— 与 pipeline.h RunConfig 同名字段（I8）对应。
 struct ColorOptions {
     int intent = 0;
     bool dither8 = false;

@@ -82,6 +82,21 @@ endif()
 # vcpkg 依赖侧的同一组 flags 由 overlay triplet（triplets/x64-*-avx2.cmake）注入 —— 两处口径一致。
 include("${CMAKE_SOURCE_DIR}/cmake/avx2.cmake")
 
+# R-302（M7-R2A）：构建选项级 FP 收缩关闭 —— core/simd 热路径 TU（kernels.cpp / resample.cpp）
+# 的位精确论证（ref 的 std::fma ⇔ avx2 的 _mm256_fmadd_ps、mul/add 同序）对 **FP 收缩**不设防，
+# 编译器把 `a*b+c` 融成 FMA 会让 ref 自身的舍入次数与契约描述不符（跨编译器对拍面可分叉）。
+# 与既有 `#pragma STDC FP_CONTRACT OFF`（TU 内语义）**并存**：本开关管构建面（pragma 被忽略
+# 或未生效时仍有防线）。MSVC 显式 /fp:precise（默认即 precise，显式化防默认漂移）；
+# GCC/Clang 显式 -ffp-contract=off。只作用于这两条热路径 TU，不外溢。
+set(PP_SIMD_FP_TUS
+    ${CMAKE_SOURCE_DIR}/src/core/simd/kernels.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/simd/resample.cpp)
+if(MSVC)
+    set_source_files_properties(${PP_SIMD_FP_TUS} PROPERTIES COMPILE_OPTIONS "/fp:precise")
+else()
+    set_source_files_properties(${PP_SIMD_FP_TUS} PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
+endif()
+
 # M4-T13b（D-W3-1 取证）：ASAN 开关的 flags 注入点。必须放在 avx2.cmake 之后
 # （要在 INTERFACE 目标上追加 /GL-、/LTCG:OFF —— 同一列表内后者生效，/arch:AVX2 保持不变）
 # 且在任何 target 定义之前（add_compile_options 只作用于其后定义的 target）。

@@ -240,6 +240,103 @@ void quantize16(const float *src, std::uint16_t *dst, std::size_t n, int maxv) {
 }
 
 // ============================================================================================
+// 2b) quantize8_dithered —— 8bit TPDF 抖动量化（UX-14 C2，M7-R2A 加性；契约见 simd.h）
+// ============================================================================================
+// 哈希单源（ref/avx2 共用同一实现 ⇒ 噪声逐位一致）：整数混合 (x,y,c,seed) → 24bit → [0,1)。
+// h1/h2 = 两个不同 seed 的同款哈希；TPDF 噪声 = 0.5·(h1 + h2 - 1) ∈ (-0.5, 0.5) LSB。
+// 纯整数 + 24bit→float 精确转换 ⇒ 跨平台/跨运行确定性（回归幂等的构造性保证）。
+namespace {
+inline std::uint32_t dither_hash(std::uint32_t x, std::uint32_t y, std::uint32_t c,
+                                 std::uint32_t seed) {
+    std::uint32_t h =
+        (x * 0x9E3779B1u) ^ (y * 0x85EBCA77u) ^ (c * 0xC2B2AE3Du) ^ (seed * 0x27D4EB2Fu);
+    h ^= h >> 15;
+    h *= 0x2545F491u;
+    h ^= h >> 13;
+    h *= 0x35A98F3Du;
+    h ^= h >> 16;
+    return h;
+}
+inline float hash_to_unit(std::uint32_t h) {
+    return static_cast<float>(h >> 8) * (1.0f / 16777216.0f); // [0,1)：24bit 整数 → float 精确
+}
+inline float dither_noise(std::uint32_t x, std::uint32_t y, std::uint32_t c) {
+    const float h1 = hash_to_unit(dither_hash(x, y, c, 0xA511E9B3u));
+    const float h2 = hash_to_unit(dither_hash(x, y, c, 0x9E3779B9u));
+    return 0.5f * (h1 + h2 - 1.0f);
+}
+// 标量语义段（ref 主体与 avx2 尾块共用）：idx0 = 本段首样本的**全局**样本序号
+// （(x,c) 由全局序号派生，尾块接续时通道相位不丢）。
+void dithered_range(const float *src, std::uint8_t *dst, std::size_t n, std::uint32_t x0,
+                    std::uint32_t y, std::uint32_t nch, std::size_t idx0) {
+    for (std::size_t j = 0; j < n; ++j) {
+        const std::size_t idx = idx0 + j;
+        const std::uint32_t x = x0 + static_cast<std::uint32_t>(idx / nch);
+        const std::uint32_t c = static_cast<std::uint32_t>(idx % nch);
+        const float noise = dither_noise(x, y, c);
+        const float v = src[j];
+        const float cl = (v > 0.0f) ? (v < 1.0f ? v : 1.0f) : 0.0f; // NaN → 0（同 quantize8）
+        const float q = (cl * 255.0f + 0.5f) + noise;               // 左结合：mul → add → add
+        // 噪声上限 + 浮点舍入可让 q 逼近 256.0f（float 上界），饱和到 255 防截断回绕。
+        const float sat = (q > 255.0f) ? 255.0f : q;
+        dst[j] = static_cast<std::uint8_t>(sat);
+    }
+}
+} // namespace
+
+void quantize8_dithered_ref(const float *src, std::uint8_t *dst, std::size_t n, std::uint32_t x0,
+                            std::uint32_t y, std::uint32_t nch) {
+    assert(nch >= 1);
+    if (nch < 1)
+        return;
+    dithered_range(src, dst, n, x0, y, nch, 0);
+}
+
+void quantize8_dithered_avx2(const float *src, std::uint8_t *dst, std::size_t n, std::uint32_t x0,
+                             std::uint32_t y, std::uint32_t nch) {
+    assert(nch >= 1);
+    if (nch < 1)
+        return;
+    const __m256 zero = _mm256_setzero_ps();
+    const __m256 one = _mm256_set1_ps(1.0f);
+    const __m256 scale = _mm256_set1_ps(255.0f);
+    const __m256 half = _mm256_set1_ps(0.5f);
+    const __m256 top = _mm256_set1_ps(255.0f);
+    std::size_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+        // 噪声逐 lane 标量取（同一 dither_noise 单源 ⇒ 与 ref 逐位一致），float 侧全向量。
+        alignas(32) float noise[8];
+        for (int l = 0; l < 8; ++l) {
+            const std::size_t idx = i + static_cast<std::size_t>(l);
+            noise[l] = dither_noise(x0 + static_cast<std::uint32_t>(idx / nch), y,
+                                    static_cast<std::uint32_t>(idx % nch));
+        }
+        const __m256 v = _mm256_loadu_ps(src + i);
+        const __m256 ord = _mm256_cmp_ps(v, v, _CMP_ORD_Q); // NaN → 0（同 quantize8 判据）
+        __m256 cl = _mm256_min_ps(_mm256_max_ps(v, zero), one);
+        cl = _mm256_and_ps(cl, ord);
+        const __m256 q =
+            _mm256_add_ps(_mm256_add_ps(_mm256_mul_ps(cl, scale), half), _mm256_loadu_ps(noise));
+        const __m256 sat = _mm256_min_ps(q, top); // 上限饱和（下限由 clamp(v)≥0 构造成立）
+        const __m256i iv = _mm256_cvttps_epi32(sat);
+        const __m128i p16 =
+            _mm_packus_epi32(_mm256_castsi256_si128(iv), _mm256_extracti128_si256(iv, 1));
+        const __m128i p8 = _mm_packus_epi16(p16, p16);
+        _mm_storel_epi64(reinterpret_cast<__m128i *>(dst + i), p8);
+    }
+    if (i < n) // 尾块：同一语义的标量面（全局样本序号接续，通道相位不丢）
+        dithered_range(src + i, dst + i, n - i, x0, y, nch, i);
+}
+
+void quantize8_dithered(const float *src, std::uint8_t *dst, std::size_t n, std::uint32_t x0,
+                        std::uint32_t y, std::uint32_t nch) {
+    if (use_avx2())
+        quantize8_dithered_avx2(src, dst, n, x0, y, nch);
+    else
+        quantize8_dithered_ref(src, dst, n, x0, y, nch);
+}
+
+// ============================================================================================
 // 3) transpose —— 8×8 分块平面转置（EXIF 5/7 的 orientation 面）
 // ============================================================================================
 // 纯数据搬运（无算术）⇒ ref 与 avx2 的逐位相等是构造性的。

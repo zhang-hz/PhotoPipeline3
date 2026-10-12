@@ -330,9 +330,18 @@ private:
             // 展开（gray → 1 通道；RGB(A) → 3 通道）→ 量化到 JSAMPLE 行
             pp::simd::interleave(src, r.channels, rowf.data(), comps,
                                  static_cast<std::size_t>(r.width));
-            pp::simd::quantize8(rowf.data(), row.data(),
-                                static_cast<std::size_t>(r.width) *
-                                    static_cast<std::size_t>(comps));
+            // UX-14 C2（M7-R2A）：dither8=true 时 8bit 量化走 TPDF 抖动（契约见 simd.h 的
+            // quantize8_dithered）；默认 false = quantize8 逐字不变。
+            {
+                const std::size_t row_n =
+                    static_cast<std::size_t>(r.width) * static_cast<std::size_t>(comps);
+                if (req.dither8)
+                    pp::simd::quantize8_dithered(rowf.data(), row.data(), row_n, 0,
+                                                 static_cast<std::uint32_t>(y),
+                                                 static_cast<std::uint32_t>(comps));
+                else
+                    pp::simd::quantize8(rowf.data(), row.data(), row_n);
+            }
             JSAMPROW rows[1] = {row.data()};
             if (jpegli_write_scanlines(&cinfo, rows, 1) != 1) {
                 jpegli_abort_compress(&cinfo);

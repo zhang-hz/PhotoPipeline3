@@ -204,16 +204,20 @@ ParamDef param_def_from(heif_encoder *enc, const heif_encoder_parameter *p) {
         d.def = current;
         type_desc = d.choices.empty() ? "string (unconstrained)" : "string set";
     }
-    // 核心/高级白名单（UX-10.3，M7-WP2）：**按插件真实参数面声明** —— 本函数只对插件
-    // 实际暴露的 key 调用（introspect_live 遍历 heif_encoder_list_parameters），故
-    // "key ∈ 核心集 ∧ 插件真的有它"天然是对表结果。核心集按 UX-10.2 重排：
-    //   x265（HEIF）：quality / lossless / chroma / preset / **tune**（画质取向提核心）；
-    //   SVT-AV1（AVIF）：quality / lossless / chroma / **speed / tune**（speed 是 SVT 的
-    //   速度主档，旧白名单等 `preset` 对 SVT 永不命中、speed 反被折进高级 —— 已修）；
-    //   libaom：同 SVT 集合与其实际键的交集。
+    // 核心/高级白名单（UX-10.2/10.3，M7-R2A 对表收口）：核心集**按插件真实参数面逐插件**
+    // 声明（旧口径是跨插件并集 + 内省过滤：SVT 无 preset 却共享 x265 的 preset 核心位、
+    // x265 无 speed 却共享 SVT 的 speed 核心位 —— 两向错位都靠"插件恰好不暴露"掩盖，
+    // 不是对表）。现口径：
+    //   x265（HEIF）：quality / lossless / chroma / **preset** / tune（画质取向提核心）；
+    //   SVT-AV1 / libaom（AVIF）：quality / lossless / chroma / **speed** / tune
+    //   （speed 是 SVT 的速度主档；**SVT 无 preset**）；libaom 同集合与其实际键的交集。
     // 其余插件旋钮（tu-intra-depth / complexity / threads / qp / min-q / max-q …）留高级。
-    d.advanced = !(d.key == "quality" || d.key == "lossless" || d.key == "chroma" ||
-                   d.key == "preset" || d.key == "speed" || d.key == "tune");
+    const char *plugin_name = heif_encoder_get_name(enc);
+    const std::string plugin = plugin_name ? plugin_name : "";
+    const bool is_x265 = plugin.find("x265") != std::string::npos;
+    d.advanced =
+        !(d.key == "quality" || d.key == "lossless" || d.key == "chroma" || d.key == "tune" ||
+          (is_x265 && d.key == "preset") || (!is_x265 && d.key == "speed"));
     d.tooltip = "libheif 运行时内省参数（heif_encoder_list_parameters，类型 " + type_desc + "）：" +
                 d.key + "。名称/范围/默认值均来自当前编码插件，M1 不硬编码。";
     return d;
@@ -731,8 +735,20 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
         }
 
         // ---- encode ----
+        // UX-14 A1 精确码（E1 残余收口，M7-R2A）：显式给 heif_context_encode_image 传
+        // heif_encoding_options.output_nclx_profile —— 旧口径只 set image 的 nclx，libheif 的
+        // 颜色转换管线在编码时丢它（x265 VUI 链路实测 P3 落 unspecified(2)）；输出 nclx 显式
+        // 传入后码流 VUI CICP **精确**跟随 nclx_for_icc 推导值（sRGB→1、P3→12；AdobeRGB 按
+        // CICP 表无对应码 → unspecified，不冒充）。所有权（libheif 1.23.5 heif_encoding.cc）：
+        // heif_encoding_options_free 只 delete 结构体、不解引用 output_nclx_profile ⇒ 栈上
+        // nclx 活过本次 encode 即安全。
+        heif_encoding_options *enc_opts = heif_encoding_options_alloc();
+        if (enc_opts != nullptr)
+            enc_opts->output_nclx_profile = &nclx;
         heif_image_handle *handle = nullptr;
-        e = heif_context_encode_image(ctx, img, enc, nullptr, &handle);
+        e = heif_context_encode_image(ctx, img, enc, enc_opts, &handle);
+        if (enc_opts != nullptr)
+            heif_encoding_options_free(enc_opts);
         if (e.code != heif_error_Ok) {
             std::string msg = "heif_context_encode_image failed: " + heif_error_text(e);
             if (format_id_ == "avif" && backend_id_ == "svt-av1" && bitdepth == 10 && has_alpha)

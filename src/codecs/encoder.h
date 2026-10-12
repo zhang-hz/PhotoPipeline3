@@ -55,6 +55,12 @@ struct EncodeRequest {
     // R-111（M7-WP2）：默认值 = 1 —— 与契约"≥1"及 pipeline.h 的同名默认一致；聚合初始化
     // 省略本字段时得 1（旧行为得 0，与契约矛盾）。
     int encode_threads = 1; // 追加：E3 分配的内部线程数（≥1）
+    // —— M7-R2A / UX-14 C2 加性追加（**末尾**；裁定登记 build/m7r2-a/handoff.md）——
+    // 8bit 量化段的 TPDF 抖动开关（RunConfig::color_dither8 / ColorOptions::dither8 同名同义）。
+    // 默认 false = 现行为逐字不变（quantize8 标准舍入无抖动）；true 且目标 8bit 时各编码器的
+    // to_u8 量化段改走 simd::quantize8_dithered（契约见 core/simd/simd.h）。与 cancelled /
+    // encode_threads 同类：运行期全局档位经请求面进编码器（W2-A1 先例的加性模式）。
+    bool dither8 = false;
 };
 
 struct EncodeResult {

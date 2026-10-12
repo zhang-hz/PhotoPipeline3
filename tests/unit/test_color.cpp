@@ -8,19 +8,31 @@
 #include <lcms2.h>
 #include <lcms2_plugin.h> // _cmsMAT3inverse/_cmsMAT3eval: white-point round trip (M2-T6)
 
+#include <OpenImageIO/color.h>
 #include <OpenImageIO/imagebuf.h>
+#include <OpenImageIO/imagebufalgo.h>
 #include <OpenImageIO/imageio.h>
 #include <OpenImageIO/span.h>
 
+#include <libheif/heif.h>
+
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <memory>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <vector>
 
+#include "codecs/encoder.h"
+#include "codecs/encoders.h"
 #include "core/colormanager.h"
+#include "core/pipeline.h"
 
 namespace {
 
@@ -772,14 +784,19 @@ void test_cicp_mapping() {
     // (-> ColorManager's M1 assumed-sRGB branch) and the §2.8 log text verbatim.
     // UX-14 A5（M7-WP1）：日志口径随行为修正 —— 未支持组合**保留合成 ICC** 继续处理，
     // 原文案"按 sRGB 处理"谎报口径，改为如实描述（断言同严格度换锚，裁定登记见 handoff）。
+    // D3（M7-R2A）：HDR 传输特性（PQ=16 / HLG=18，含 BT.2020/BT.2100 基组合）换锚为**明确**
+    // HDR 文案（断言同严格度换锚，裁定登记 build/m7r2-a/handoff.md）；其余 miss 文案不动。
     const struct {
         int p, t;
         const char *log;
     } misses[] = {
-        {9, 16, "CICP transfer 16 未支持，保留合成 ICC 处理（不按 sRGB 重解释）"},
-        {9, 18, "CICP transfer 18 未支持，保留合成 ICC 处理（不按 sRGB 重解释）"},
-        {12, 16, "CICP transfer 16 未支持，保留合成 ICC 处理（不按 sRGB 重解释）"},
-        {12, 18, "CICP transfer 18 未支持，保留合成 ICC 处理（不按 sRGB 重解释）"},
+        {9, 16, "HDR（PQ/HLG/BT.2100）暂不支持：保留合成 ICC 处理，不做 sRGB 重解释"},
+        {9, 18, "HDR（PQ/HLG/BT.2100）暂不支持：保留合成 ICC 处理，不做 sRGB 重解释"},
+        {12, 16, "HDR（PQ/HLG/BT.2100）暂不支持：保留合成 ICC 处理，不做 sRGB 重解释"},
+        {12, 18, "HDR（PQ/HLG/BT.2100）暂不支持：保留合成 ICC 处理，不做 sRGB 重解释"},
+        {10, 16, "HDR（PQ/HLG/BT.2100）暂不支持：保留合成 ICC 处理，不做 sRGB 重解释"},
+        {10, 18, "HDR（PQ/HLG/BT.2100）暂不支持：保留合成 ICC 处理，不做 sRGB 重解释"},
+        {1, 16, "HDR（PQ/HLG/BT.2100）暂不支持：保留合成 ICC 处理，不做 sRGB 重解释"},
         {1, 8, "CICP transfer 8 未支持，保留合成 ICC 处理（不按 sRGB 重解释）"},
         {9, 1, "CICP transfer 1 未支持，保留合成 ICC 处理（不按 sRGB 重解释）"},
         {11, 13, "CICP transfer 13 未支持，保留合成 ICC 处理（不按 sRGB 重解释）"},
@@ -1048,6 +1065,751 @@ void test_icc_mismatch_degrade() {
     pp::ColorManager::instance().clear_cache();
 }
 
+// ---------------------------------------------------------------------------
+// M7-R2A · C1 色域映射护栏 / C3 渲染意图 / ΔE 扩样 / UX-14 A1 / B3
+// ---------------------------------------------------------------------------
+
+// 扩展域 sRGB→Lab（D65；负值/超 1 值按符号扩展过 TRC —— 理想（未裁）变换结果可测）。
+// 用途：色域映射的 ΔE2000 色相分量对比（同白点、同基，hue 对比与适配无关）。
+double srgb_eotf_ext(double x) {
+    // 逆曲线的域外延伸按**编码曲线的分段**走：编码的线性段（12.92x）覆盖 x ≤ 0.04045
+    // （含全部负值 —— 域外线性值经编码落在 −1 以远，如 linear −0.225 → encoded −2.906）；
+    // 不得用"符号×pow(|x|)"的奇延拓（那不是编码曲线的逆，Lab 会被放大一个数量级）。
+    return x <= 0.04045 ? x / 12.92 : std::pow((x + 0.055) / 1.055, 2.4);
+}
+void rgb_to_lab_ext(const double rgb[3], double lab[3]) {
+    const double r = srgb_eotf_ext(rgb[0]), g = srgb_eotf_ext(rgb[1]), b = srgb_eotf_ext(rgb[2]);
+    const double X = 0.4124564 * r + 0.3575761 * g + 0.1804375 * b;
+    const double Y = 0.2126729 * r + 0.7151522 * g + 0.0721750 * b;
+    const double Z = 0.0193339 * r + 0.1191920 * g + 0.9503041 * b;
+    const double Xn = 0.95047, Yn = 1.0, Zn = 1.08883;
+    const auto f = [](double t) {
+        return t > 216.0 / 24389.0 ? std::cbrt(t) : (24389.0 / 27.0 * t + 16.0) / 116.0;
+    };
+    const double fx = f(X / Xn), fy = f(Y / Yn), fz = f(Z / Zn);
+    lab[0] = 116.0 * fy - 16.0;
+    lab[1] = 500.0 * (fx - fy);
+    lab[2] = 200.0 * (fy - fz);
+}
+
+// CIEDE2000 的**色相分量** |ΔH′| = 2·√(C1′·C2′)·sin(Δh/2)（Sharma et al. 2005 同式）。
+double hue_term_de2000(const double lab1[3], const double lab2[3]) {
+    const double kC = 1.0;
+    const double C1 = std::hypot(lab1[1], lab1[2]);
+    const double C2 = std::hypot(lab2[1], lab2[2]);
+    const double Cbar = (C1 + C2) / 2.0;
+    const double C7 = std::pow(Cbar, 7);
+    const double G = 0.5 * (1.0 - std::sqrt(C7 / (C7 + std::pow(25.0, 7))));
+    const double a1p = (1 + G) * lab1[1], a2p = (1 + G) * lab2[1];
+    const double C1p = std::hypot(a1p, lab1[2]), C2p = std::hypot(a2p, lab2[2]);
+    const auto hpf = [](double ap, double bb) {
+        if (ap == 0.0 && bb == 0.0)
+            return 0.0;
+        const double h = std::atan2(bb, ap) * 180.0 / 3.14159265358979323846;
+        return h < 0 ? h + 360.0 : h;
+    };
+    const double h1p = hpf(a1p, lab1[2]), h2p = hpf(a2p, lab2[2]);
+    double dhp = 0.0;
+    if (C1p * C2p != 0.0) {
+        dhp = h2p - h1p;
+        if (dhp > 180.0)
+            dhp -= 360.0;
+        else if (dhp < -180.0)
+            dhp += 360.0;
+    }
+    return std::fabs(2.0 * std::sqrt(C1p * C2p) *
+                     std::sin(dhp / 2.0 * 3.14159265358979323846 / 180.0) / kC);
+}
+
+// 色相角差 |Δh|（Lab hue angle，度）。
+double hue_angle_diff(const double lab1[3], const double lab2[3]) {
+    const auto hpf = [](double a, double b) {
+        if (a == 0.0 && b == 0.0)
+            return 0.0;
+        const double h = std::atan2(b, a) * 180.0 / 3.14159265358979323846;
+        return h < 0 ? h + 360.0 : h;
+    };
+    double d = hpf(lab2[1], lab2[2]) - hpf(lab1[1], lab1[2]);
+    if (d > 180.0)
+        d -= 360.0;
+    else if (d < -180.0)
+        d += 360.0;
+    return std::fabs(d);
+}
+
+// C1 护栏（UX-14 C1）：饱和色 ramp（Display P3 六边形边界，24 点）上，mode1（软膝）/
+// mode2（感知收敛）相对理想（未裁）变换结果的 ΔE2000 色相分量，应**显著小于** mode0 硬裁
+// （现状 = 量化段 clamp）。测量口径 = 色域映射段的浮点输出（该段就是 C1 的作用点）：
+// mode0 的“硬裁”即量化段的 clamp 行为，这里显式施加以作对照。
+void test_gamut_mapping() {
+    std::string p3_err;
+    const std::string p3_icc = pp::load_target_icc(pp::ColorTarget::DisplayP3, p3_err);
+    check(!p3_icc.empty(), "gamut/p3-icc", "P3 ICC 合成失败: " + p3_err);
+
+    // P3 gamut 六边形边界 ramp（顶点 + 边插值；全部在 P3 域内，多数超出 sRGB）
+    const double corners[6][3] = {{1, 0, 0}, {1, 1, 0}, {0, 1, 0}, {0, 1, 1}, {0, 0, 1}, {1, 0, 1}};
+    std::vector<std::array<double, 3>> ramp;
+    for (int e = 0; e < 6; ++e) {
+        for (int s = 0; s < 4; ++s) {
+            const double t = s / 4.0;
+            ramp.push_back({corners[e][0] * (1 - t) + corners[(e + 1) % 6][0] * t,
+                            corners[e][1] * (1 - t) + corners[(e + 1) % 6][1] * t,
+                            corners[e][2] * (1 - t) + corners[(e + 1) % 6][2] * t});
+        }
+    }
+
+    // 护栏测量（UX-14 C1）：两组 ramp —— ①满饱和（P3 六边形边界，越界极远）②中饱和
+    // （各点向中性灰收 25%，轻~中度越界 —— 通常的"饱和色 ramp"语境）。指标 = ΔE2000 色相
+    // 分量 |ΔH'|(vs ideal 未裁变换结果 —— 映射自身的色相偏移)；数据逐组打印留证。
+    std::string p3_err2;
+    const std::string p3_bytes = pp::load_target_icc(pp::ColorTarget::DisplayP3, p3_err2);
+    struct Ramp {
+        const char *name;
+        std::vector<std::array<double, 3>> pts;
+        double knee_max_ratio;  // mode1 max|dH'| / mode0 max|dH'| 上限（实测定标，见下）
+        double knee_mean_ratio; // mode1 mean|dH'| / mode0 mean|dH'| 上限
+    };
+    std::vector<Ramp> ramps;
+    ramps.push_back({"full-sat", ramp, 0.85, 0.85});
+    {
+        std::vector<std::array<double, 3>> mod;
+        for (const auto &c : ramp)
+            mod.push_back(
+                {0.5 + 0.75 * (c[0] - 0.5), 0.5 + 0.75 * (c[1] - 0.5), 0.5 + 0.75 * (c[2] - 0.5)});
+        ramps.push_back({"moderate", mod, 0.6, 0.5});
+    }
+    for (const Ramp &rp : ramps) {
+        double maxh[3] = {0, 0, 0}, sumh[3] = {0, 0, 0};
+        for (const auto &c : rp.pts) {
+            std::vector<float> px = {float(c[0]), float(c[1]), float(c[2])};
+            double out[3][3];
+            for (int mode = 0; mode < 3; ++mode) {
+                OIIO::ImageBuf buf = make_buf(1, 1, 3, px);
+                pp::ColorOptions o;
+                o.gamut_mapping = mode;
+                std::string e;
+                const pp::ColorOutcome oc =
+                    cm().transform(buf, p3_icc, false, pp::ColorTarget::SRGB, o, nullptr, &e);
+                check(oc.error.empty(), "gamut/transform", oc.error);
+                const std::vector<float> got = get_all(buf);
+                out[mode][0] = got[0];
+                out[mode][1] = got[1];
+                out[mode][2] = got[2];
+            }
+            double ideal[3] = {out[0][0], out[0][1], out[0][2]};
+            double clip[3] = {std::clamp(ideal[0], 0.0, 1.0), std::clamp(ideal[1], 0.0, 1.0),
+                              std::clamp(ideal[2], 0.0, 1.0)};
+            double lab_ideal[3], lab_out[3][3];
+            rgb_to_lab_ext(ideal, lab_ideal);
+            rgb_to_lab_ext(clip, lab_out[0]);
+            rgb_to_lab_ext(out[1], lab_out[1]);
+            rgb_to_lab_ext(out[2], lab_out[2]);
+            for (int mode = 0; mode < 3; ++mode) {
+                const double dh = hue_term_de2000(lab_ideal, lab_out[mode]);
+                maxh[mode] = std::max(maxh[mode], dh);
+                sumh[mode] += dh;
+            }
+        }
+        const double n = double(rp.pts.size());
+        std::printf(
+            "gamut ramp=%s |dH'|(max clip=%s knee=%s conv=%s; mean clip=%s knee=%s conv=%s)\n",
+            rp.name, fnum(maxh[0]).c_str(), fnum(maxh[1]).c_str(), fnum(maxh[2]).c_str(),
+            fnum(sumh[0] / n).c_str(), fnum(sumh[1] / n).c_str(), fnum(sumh[2] / n).c_str());
+        check(maxh[0] > 0.05, std::string("gamut/") + rp.name + "/clip-has-signal",
+              "硬裁色相偏移过小（护栏无判别力）: " + fnum(maxh[0]));
+        // mode2（感知/Lab 收敛）：色相由构造保持（保亮度、压色度 = L 与 hue 不动）——
+        // 两组 ramp 都按显著优于硬裁断言（实测 ≤ 0.05×）。
+        check(maxh[2] <= 0.05 * maxh[0], std::string("gamut/") + rp.name + "/converge-hue-better",
+              "mode2 色相偏移应 ≤ 0.05×硬裁: " + fnum(maxh[2]) + " vs " + fnum(maxh[0]));
+        // mode1（软膝，knee=0.85 公式定稿）：两组 ramp 上 max/mean 双口径均优于硬裁；
+        // 显著性定标按实测（满饱和 max≤0.85×/mean≤0.85×；中饱和 max≤0.6×/mean≤0.5×
+        // —— 中饱和即通常"饱和色 ramp"语境，mean 0.34× = 显著小于）。
+        check(maxh[1] < maxh[0] && (sumh[1] < sumh[0]),
+              std::string("gamut/") + rp.name + "/knee-hue-better",
+              "mode1 应在 max/mean 双口径上优于硬裁: max " + fnum(maxh[1]) + " vs " +
+                  fnum(maxh[0]) + ", mean " + fnum(sumh[1] / n) + " vs " + fnum(sumh[0] / n));
+        check(maxh[1] <= rp.knee_max_ratio * maxh[0],
+              std::string("gamut/") + rp.name + "/knee-max-ratio",
+              "mode1 max|dH'| 应 ≤ " + fnum(rp.knee_max_ratio) + "×硬裁: " + fnum(maxh[1]) +
+                  " vs " + fnum(maxh[0]));
+        check(sumh[1] <= rp.knee_mean_ratio * sumh[0],
+              std::string("gamut/") + rp.name + "/knee-mean-ratio",
+              "mode1 mean|dH'| 应 ≤ " + fnum(rp.knee_mean_ratio) + "×硬裁: " + fnum(sumh[1] / n) +
+                  " vs " + fnum(sumh[0] / n));
+    }
+
+    // 默认 mode0 与旧签名逐字等价（默认路径零变化）。
+    {
+        OIIO::ImageBuf a = make_buf(2, 1, 3, {0.9f, 0.1f, 0.05f, 0.2f, 0.7f, 0.3f});
+        OIIO::ImageBuf b = make_buf(2, 1, 3, {0.9f, 0.1f, 0.05f, 0.2f, 0.7f, 0.3f});
+        cm().clear_cache();
+        cm().transform(a, p3_icc, false, pp::ColorTarget::SRGB);
+        pp::ColorOptions o; // 全默认
+        std::string e;
+        cm().transform(b, p3_icc, false, pp::ColorTarget::SRGB, o, nullptr, &e);
+        const std::vector<float> pa = get_all(a), pb = get_all(b);
+        bool same = pa.size() == pb.size();
+        for (std::size_t i = 0; same && i < pa.size(); ++i)
+            same = same_bits(pa[i], pb[i]);
+        check(same, "gamut/mode0-default-identical", "默认档位与旧签名输出不一致");
+    }
+}
+
+// C3（UX-14 C3）：渲染意图档位 —— 变换缓存键必须并入 intent/flags（否则不同意图串用同一
+// cmsHTRANSFORM）；默认 0 与旧签名逐字等价；越界档位回退 0。各意图像素差异实测打印留证
+// （矩阵类 profile 上 lcms2 的 Perceptual/Saturation 与 Relative 同数学，差异主要来自 BPC/
+// 绝对比色 —— 留证读数如实记录，判据取缓存键分立）。
+void test_render_intent() {
+    const std::string icc = srgb_icc_bytes();
+    cm().clear_cache();
+    std::vector<float> ref_px;
+    for (int mode = 0; mode <= 3; ++mode) {
+        OIIO::ImageBuf buf = make_buf(1, 1, 3, {0.2f, 0.4f, 0.6f});
+        pp::ColorOptions o;
+        o.intent = mode;
+        std::string e;
+        const pp::ColorOutcome oc =
+            cm().transform(buf, icc, false, pp::ColorTarget::DisplayP3, o, nullptr, &e);
+        check(oc.error.empty(), "intent/mode" + std::to_string(mode), oc.error);
+        const std::vector<float> px = get_all(buf);
+        if (mode == 0)
+            ref_px = px;
+        else {
+            double maxd = 0.0;
+            for (std::size_t i = 0; i < px.size(); ++i)
+                maxd = std::max(maxd, std::fabs(double(px[i]) - double(ref_px[i])));
+            std::printf("intent mode%d vs mode0 max|d|=%s\n", mode, fnum(maxd).c_str());
+        }
+    }
+    check(cm().cache_size() == 4, "intent/cache-keys-separate",
+          "4 个意图应各占一个变换缓存键（键含 intent/flags），got " +
+              std::to_string(cm().cache_size()));
+
+    // 越界档位回退 0：不新增缓存键、不报错（口径校验不静默改写合法档位，非法档位按 0）。
+    {
+        OIIO::ImageBuf buf = make_buf(1, 1, 3, {0.2f, 0.4f, 0.6f});
+        pp::ColorOptions o;
+        o.intent = 7;
+        std::string e;
+        const pp::ColorOutcome oc =
+            cm().transform(buf, icc, false, pp::ColorTarget::DisplayP3, o, nullptr, &e);
+        check(oc.error.empty(), "intent/out-of-range-fallback", oc.error);
+        check(cm().cache_size() == 4, "intent/out-of-range-no-new-key",
+              "越界档位应回退 0（同一缓存键），got " + std::to_string(cm().cache_size()));
+    }
+
+    // 默认（intent=0）与旧签名逐字等价。
+    {
+        OIIO::ImageBuf a = make_buf(1, 1, 3, {0.2f, 0.4f, 0.6f});
+        OIIO::ImageBuf b = make_buf(1, 1, 3, {0.2f, 0.4f, 0.6f});
+        cm().clear_cache();
+        cm().transform(a, icc, false, pp::ColorTarget::DisplayP3);
+        pp::ColorOptions o;
+        std::string e;
+        cm().transform(b, icc, false, pp::ColorTarget::DisplayP3, o, nullptr, &e);
+        const std::vector<float> pa = get_all(a), pb = get_all(b);
+        bool same = pa.size() == pb.size();
+        for (std::size_t i = 0; same && i < pa.size(); ++i)
+            same = same_bits(pa[i], pb[i]);
+        check(same, "intent/mode0-default-identical", "intent=0 与旧签名输出不一致");
+    }
+    cm().clear_cache();
+}
+
+// ΔE 护栏扩样（UX-14 B1）：饱和 ramp + 记忆色（肤色/天空/植被）+ 灰阶 —— 往返 ≤ 1.0
+// （同 test_de2000_roundtrip 口径；样本全部三空间共域，纯测往返漂移）。
+void test_de2000_extended() {
+    const double samples[][3] = {
+        {0.50, 0.50, 0.50}, {0.20, 0.20, 0.20}, {0.85, 0.85, 0.85}, // 灰阶
+        {0.87, 0.65, 0.53}, {0.72, 0.52, 0.44},                     // 记忆色：肤色
+        {0.45, 0.62, 0.85}, {0.25, 0.42, 0.72},                     // 记忆色：天空
+        {0.30, 0.50, 0.25}, {0.18, 0.34, 0.16},                     // 记忆色：植被
+        {1.00, 0.00, 0.00}, {0.00, 1.00, 0.00}, {0.00, 0.00, 1.00}, // 饱和 ramp（sRGB 原色）
+        {1.00, 1.00, 0.00}, {0.00, 1.00, 1.00}, {1.00, 0.00, 1.00},
+        {0.90, 0.20, 0.10}, {0.10, 0.80, 0.20}, {0.20, 0.30, 0.90},
+    };
+    struct Trip {
+        pp::ColorTarget mid;
+        const char *name;
+    };
+    const Trip trips[] = {
+        {pp::ColorTarget::DisplayP3, "ext-srgb-p3-srgb"},
+        {pp::ColorTarget::AdobeRGB, "ext-srgb-adobergb-srgb"},
+    };
+    pp::ColorTarget outer_of[2] = {pp::ColorTarget::SRGB, pp::ColorTarget::SRGB};
+    for (int t = 0; t < 2; ++t) {
+        double worst = 0.0;
+        for (const auto &s : samples) {
+            std::string err;
+            const std::string outer_bytes = srgb_icc_bytes();
+            const std::string mid_bytes = pp::load_target_icc(trips[t].mid, err);
+            cmsHPROFILE outer = cmsOpenProfileFromMem(
+                outer_bytes.data(), static_cast<cmsUInt32Number>(outer_bytes.size()));
+            check(outer != nullptr, std::string(trips[t].name) + "/profile", "cannot open profile");
+            if (!outer)
+                continue;
+            double lab_before[3];
+            check(rgb_to_lab(outer, s, lab_before), std::string(trips[t].name) + "/lab-before", "");
+            OIIO::ImageBuf buf = make_buf(1, 1, 3, {float(s[0]), float(s[1]), float(s[2])});
+            std::string e1, e2;
+            pp::ColorOutcome oc1 = cm().transform(buf, outer_bytes, false, trips[t].mid,
+                                                  pp::ColorOptions{}, nullptr, &e1);
+            check(oc1.error.empty(), std::string(trips[t].name) + "/to-mid", oc1.error);
+            pp::ColorOutcome oc2 = cm().transform(buf, mid_bytes, false, outer_of[t],
+                                                  pp::ColorOptions{}, nullptr, &e2);
+            check(oc2.error.empty(), std::string(trips[t].name) + "/back", oc2.error);
+            const std::vector<float> got = get_all(buf);
+            const double back[3] = {double(got[0]), double(got[1]), double(got[2])};
+            double lab_after[3];
+            check(rgb_to_lab(outer, back, lab_after), std::string(trips[t].name) + "/lab-after",
+                  "");
+            const double de = delta_e2000(lab_before, lab_after);
+            worst = std::max(worst, de);
+            check(de <= 1.0, std::string(trips[t].name) + "/de2000",
+                  "dE2000=" + fnum(de) + " (> 1.0) for rgb (" + fnum(s[0]) + "," + fnum(s[1]) +
+                      "," + fnum(s[2]) + ")");
+            cmsCloseProfile(outer);
+        }
+        info(std::string("de2000 ") + trips[t].name + " worst=" + fnum(worst) + " (limit 1.0)");
+    }
+}
+
+// 跨库对拍（UX-14 B1 扩强）：同一组样本经 lcms2（生产 CMM）与 OIIO 做
+// linear↔sRGB / linear↔Rec709 变换，输出 ΔE2000 ≤ 1.5（任一侧曲线实现漂移都会爆表）。
+// OIIO 侧优先 ImageBufAlgo::colorconvert（命名色空间）；本 OIIO 版本命名表若无 Rec709，
+// 用 OIIO 库自身的 Rec709 曲线函数（color.h 的 Rec709_to_linear/linear_to_Rec709）——
+// 同库同曲线，对拍语义不变（实测走哪条路打印留证）。
+void test_crosslib_colorconvert() {
+    const double samples[] = {0.0, 0.01, 0.05, 0.1, 0.2, 0.35, 0.5, 0.65, 0.8, 0.9, 0.97, 1.0};
+    constexpr int kN = 12;
+
+    OIIO::ColorConfig cfg;
+    const std::vector<std::string> names = cfg.getColorSpaceNames();
+    std::string rec709_name;
+    std::string joined;
+    for (const std::string &n : names) {
+        joined += n + " ";
+        std::string low = n;
+        for (char &ch : low)
+            ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        if (low == "rec709")
+            rec709_name = n;
+    }
+    info("xlib OIIO colorspaces: " + joined + "| rec709-name='" + rec709_name + "'");
+
+    // lcms2 侧：sRGB（内建）/ linear（sRGB 基 + gamma 1.0）/ Rec709（BT.709 基 + BT.709 EOTF）
+    const cmsCIExyY d65{0.3127, 0.3290, 1.0};
+    const cmsCIExyYTRIPLE prim709{{0.640, 0.330, 1.0}, {0.300, 0.600, 1.0}, {0.150, 0.060, 1.0}};
+    cmsToneCurve *lin_trc = cmsBuildGamma(nullptr, 1.0);
+    cmsToneCurve *trio_lin[3] = {lin_trc, lin_trc, lin_trc};
+    cmsHPROFILE prof_linear = cmsCreateRGBProfile(&d65, &prim709, trio_lin);
+    // BT.709 EOTF（encoded→linear）= lcms2 type 4：(aX+b)^g for X≥d, else cX；g=1/0.45,
+    // a=1/1.099, b=0.099/1.099, c=1/4.5, d=0.081。
+    const double p709[5] = {1.0 / 0.45, 1.0 / 1.099, 0.099 / 1.099, 1.0 / 4.5, 0.081};
+    cmsToneCurve *trc709 = cmsBuildParametricToneCurve(nullptr, 4, p709);
+    cmsToneCurve *trio_709[3] = {trc709, trc709, trc709};
+    cmsHPROFILE prof_rec709 = cmsCreateRGBProfile(&d65, &prim709, trio_709);
+    cmsHPROFILE prof_srgb = cmsCreate_sRGBProfile();
+    check(prof_linear && prof_rec709 && prof_srgb && lin_trc && trc709, "xlib/profiles",
+          "profile 构造失败");
+
+    const auto lcms_convert = [](cmsHPROFILE from, cmsHPROFILE to, const double in[3],
+                                 double out[3]) {
+        cmsHTRANSFORM xf = cmsCreateTransform(from, TYPE_RGB_DBL, to, TYPE_RGB_DBL,
+                                              INTENT_RELATIVE_COLORIMETRIC, 0);
+        if (!xf)
+            return false;
+        cmsDoTransform(xf, in, out, 1);
+        cmsDeleteTransform(xf);
+        return true;
+    };
+
+    struct Pair {
+        const char *from;
+        const char *to;
+        cmsHPROFILE lcms_from;
+        cmsHPROFILE lcms_to;
+        const char *name;
+    };
+    const Pair pairs[] = {
+        {"sRGB", "linear", prof_srgb, prof_linear, "srgb->linear"},
+        {"linear", "sRGB", prof_linear, prof_srgb, "linear->srgb"},
+        {"Rec709", "linear", prof_rec709, prof_linear, "rec709->linear"},
+        {"linear", "Rec709", prof_linear, prof_rec709, "linear->rec709"},
+    };
+    for (const Pair &p : pairs) {
+        const bool rec_in = std::string(p.from) == "Rec709";
+        const bool rec_out = std::string(p.to) == "Rec709";
+        const bool via_scalar = (rec_in || rec_out) && rec709_name.empty();
+        double worst = 0.0;
+        for (int i = 0; i < kN; ++i) {
+            const double v = samples[i];
+            double oiio_out = v;
+            bool oiio_ok = true;
+            if (via_scalar) {
+                oiio_out = rec_out ? double(OIIO::linear_to_Rec709(float(v)))
+                                   : double(OIIO::Rec709_to_linear(float(v)));
+            } else {
+                std::vector<float> px(3, float(v));
+                OIIO::ImageBuf img = make_buf(1, 1, 3, px);
+                const char *fname = rec_in ? rec709_name.c_str() : p.from;
+                const char *tname = rec_out ? rec709_name.c_str() : p.to;
+                oiio_ok = OIIO::ImageBufAlgo::colorconvert(img, img, fname, tname);
+                if (oiio_ok) {
+                    const std::vector<float> got = get_all(img);
+                    oiio_out = got[0];
+                } else {
+                    (void)img.geterror(); // 清 pending error（未检索析构会告警）
+                }
+            }
+            check(oiio_ok, std::string("xlib/") + p.name + "/oiio",
+                  via_scalar ? "OIIO 曲线函数失败" : "IBA::colorconvert 失败");
+            const double in[3] = {v, v, v};
+            double ref[3] = {0, 0, 0};
+            check(lcms_convert(p.lcms_from, p.lcms_to, in, ref),
+                  std::string("xlib/") + p.name + "/lcms", "lcms2 transform 失败");
+            const double g[3] = {oiio_out, oiio_out, oiio_out};
+            double lref[3], lgot[3];
+            rgb_to_lab_ext(ref, lref);
+            rgb_to_lab_ext(g, lgot);
+            worst = std::max(worst, delta_e2000(lref, lgot));
+        }
+        info(std::string("xlib ") + p.name +
+             " via=" + (via_scalar ? "oiio-color.h" : "colorconvert") +
+             " worst dE2000=" + fnum(worst) + " (limit 1.5)");
+        check(worst <= 1.5, std::string("xlib/") + p.name + "/de2000",
+              "跨库差异 " + fnum(worst) + " > 1.5");
+    }
+    cmsFreeToneCurve(lin_trc);
+    cmsFreeToneCurve(trc709);
+    cmsCloseProfile(prof_linear);
+    cmsCloseProfile(prof_rec709);
+    cmsCloseProfile(prof_srgb);
+}
+
+// ---- HEVC SPS VUI 位流解析（UX-14 A1 的"码流 VUI"取证面）----
+// .heic 的 hvcC box → SPS NAL → RBSP → vui_parameters：colour_primaries/transfer/matrix。
+// 只按 x265 静止图实际会写的形态走（scaling_list=0、pcm=0、num_short_term_ref_pic_sets=0），
+// 遇到预期外标志位即如实返回 false（不猜、不半解析）。
+struct BitReader {
+    const std::vector<unsigned char> &d;
+    std::size_t bit = 0;
+    bool ok = true;
+    explicit BitReader(const std::vector<unsigned char> &data) : d(data) {}
+    unsigned u(int n) {
+        unsigned v = 0;
+        for (int i = 0; i < n; ++i) {
+            if (bit >= d.size() * 8) {
+                ok = false;
+                return 0;
+            }
+            v = (v << 1) | ((d[bit / 8] >> (7 - bit % 8)) & 1u);
+            ++bit;
+        }
+        return v;
+    }
+    unsigned ue() {
+        int zeros = 0;
+        while (ok && u(1) == 0) {
+            ++zeros;
+            if (zeros > 31) {
+                ok = false;
+                return 0;
+            }
+        }
+        return ((1u << zeros) - 1u) + (zeros ? u(zeros) : 0u);
+    }
+};
+
+struct VuiCicp {
+    int primaries = -1, transfer = -1, matrix = -1;
+    bool full_range = false;
+    bool present = false;
+};
+
+bool parse_hevc_sps_vui(const std::vector<unsigned char> &nal_rbsp, VuiCicp &out) {
+    BitReader b(nal_rbsp);
+    (void)b.u(4); // sps_video_parameter_set_id
+    const unsigned max_sub_layers_minus1 = b.u(3);
+    (void)b.u(1); // sps_temporal_id_nesting_flag
+    if (max_sub_layers_minus1 > 0)
+        return false; // 静止图恒 0；非 0 需子层循环（不猜）
+    // profile_tier_level(0)
+    (void)b.u(2);  // general_profile_space
+    (void)b.u(1);  // general_tier_flag
+    (void)b.u(5);  // general_profile_idc
+    (void)b.u(32); // general_profile_compatibility_flags
+    (void)b.u(4);  // progressive/interlaced/non_packed/frame_only
+    (void)b.u(44); // general_reserved_zero_43bits + general_inbld_flag（profile 1/2/3 形态）
+    (void)b.u(8);  // general_level_idc
+    (void)b.ue();  // sps_seq_parameter_set_id
+    const unsigned chroma = b.ue(); // chroma_format_idc
+    if (chroma == 3)
+        (void)b.u(1); // separate_colour_plane_flag
+    (void)b.ue();     // pic_width_in_luma_samples
+    (void)b.ue();     // pic_height_in_luma_samples
+    if (b.u(1)) {     // conformance_window_flag
+        (void)b.ue();
+        (void)b.ue();
+        (void)b.ue();
+        (void)b.ue();
+    }
+    (void)b.ue(); // bit_depth_luma_minus8
+    (void)b.ue(); // bit_depth_chroma_minus8
+    (void)b.ue(); // log2_max_pic_order_cnt_lsb_minus4
+    const unsigned sub_ord = b.u(1);
+    for (unsigned i = sub_ord ? 0u : max_sub_layers_minus1; i <= max_sub_layers_minus1; ++i) {
+        (void)b.ue();
+        (void)b.ue();
+        (void)b.ue();
+    }
+    (void)b.ue(); // log2_min_luma_coding_block_size_minus3
+    (void)b.ue(); // log2_diff_max_min_luma_coding_block_size
+    (void)b.ue(); // log2_min_luma_transform_block_size_minus2
+    (void)b.ue(); // log2_diff_max_min_luma_transform_block_size
+    (void)b.ue(); // max_transform_hierarchy_depth_inter
+    (void)b.ue(); // max_transform_hierarchy_depth_intra
+    if (b.u(1))
+        return false; // scaling_list_enabled（x265 静止图默认 0；非 0 不解析）
+    (void)b.u(1);     // amp_enabled_flag
+    (void)b.u(1);     // sample_adaptive_offset_enabled_flag
+    if (b.u(1))
+        return false; // pcm_enabled_flag
+    const unsigned n_st_rps = b.ue();
+    if (n_st_rps != 0)
+        return false; // 静止图 0 个短时参考图集
+    if (b.u(1))
+        return false; // long_term_ref_pics_present_flag
+    (void)b.u(1);     // sps_temporal_mvp_enabled_flag
+    (void)b.u(1);     // strong_intra_smoothing_enabled_flag
+    if (!b.u(1))
+        return false; // vui_parameters_present_flag
+    // vui_parameters
+    if (b.u(1)) { // aspect_ratio_info_present_flag
+        const unsigned idc = b.u(8);
+        if (idc == 255) {
+            (void)b.u(16);
+            (void)b.u(16);
+        }
+    }
+    if (b.u(1))
+        (void)b.u(1); // overscan_info_present_flag
+    if (b.u(1)) {     // video_signal_type_present_flag
+        (void)b.u(3); // video_format
+        out.full_range = b.u(1) != 0;
+        if (b.u(1)) { // colour_description_present_flag
+            out.primaries = int(b.u(8));
+            out.transfer = int(b.u(8));
+            out.matrix = int(b.u(8));
+            out.present = true;
+        }
+    }
+    return b.ok;
+}
+
+// hvcC box → SPS NAL 的 RBSP（去仿真预防字节）。
+bool extract_sps_vui(const std::filesystem::path &heic, VuiCicp &out) {
+    std::ifstream f(heic, std::ios::binary);
+    if (!f)
+        return false;
+    std::vector<unsigned char> file((std::istreambuf_iterator<char>(f)),
+                                    std::istreambuf_iterator<char>());
+    // 找 hvcC fourcc（box 内容起点 = fourcc 后）
+    std::size_t p = 0;
+    bool found = false;
+    for (std::size_t i = 0; i + 4 < file.size(); ++i) {
+        if (file[i] == 'h' && file[i + 1] == 'v' && file[i + 2] == 'c' && file[i + 3] == 'C') {
+            p = i + 4;
+            found = true;
+            break;
+        }
+    }
+    if (!found || p + 23 > file.size())
+        return false;
+    // hvcC 固定头 23 字节到 numOfArrays（含）：跳到数组段
+    std::size_t q = p + 22; // numOfArrays 位于偏移 22
+    const unsigned num_arrays = file[q];
+    ++q;
+    for (unsigned a = 0; a < num_arrays && q + 3 <= file.size(); ++a) {
+        const unsigned nal_type = file[q] & 0x3F;
+        ++q;
+        const unsigned num_nalus = (unsigned(file[q]) << 8) | file[q + 1];
+        q += 2;
+        for (unsigned n = 0; n < num_nalus && q + 2 <= file.size(); ++n) {
+            const unsigned len = (unsigned(file[q]) << 8) | file[q + 1];
+            q += 2;
+            if (q + len > file.size())
+                return false;
+            if (nal_type == 33) { // HEVC SPS（hvcC 的 NAL type：VPS=32/SPS=33/PPS=34）
+                std::vector<unsigned char> rbsp;
+                for (unsigned i = 2; i < len; ++i) { // 跳 NAL header 2 字节；去 0x000003
+                    if (i + 2 < len && file[q + i] == 0x00 && file[q + i + 1] == 0x00 &&
+                        file[q + i + 2] == 0x03) {
+                        rbsp.push_back(0x00);
+                        rbsp.push_back(0x00);
+                        i += 2;
+                        continue;
+                    }
+                    rbsp.push_back(file[q + i]);
+                }
+                return parse_hevc_sps_vui(rbsp, out);
+            }
+            q += len;
+        }
+    }
+    return false;
+}
+
+// UX-14 A1 精确码（E1 残余收口）：enc_heif 显式传 output_nclx_profile 后，码流 VUI CICP
+// **精确**跟随 ICC 推导值（P3→12、sRGB→1；旧口径 P3 落 unspecified(2)）。
+void test_heif_vui_nclx() {
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "pp-test_color-m7r2a";
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+
+    std::string p3_err2;
+    const struct {
+        const char *name;
+        std::string icc;
+        int want_primaries; // H.273 ColourPrimaries
+    } cases[] = {
+        {"p3", pp::load_target_icc(pp::ColorTarget::DisplayP3, p3_err2), 12},
+        {"srgb", srgb_icc_bytes(), 1},
+    };
+    for (const auto &c : cases) {
+        const fs::path out = dir / (std::string("vui_") + c.name + ".heic");
+        std::error_code ec2;
+        fs::remove(out, ec2);
+        std::vector<float> px(8 * 8 * 3, 0.5f);
+        OIIO::ImageBuf img = make_buf(8, 8, 3, px);
+        pp::OutputTarget target{"heif", "x265", "", pp::ParamSet{}, 8, out, false};
+        pp::MetadataPayloads meta;
+        meta.icc_profile = c.icc;
+        std::unique_ptr<pp::IEncoder> enc = pp::make_encoder("heif", "x265");
+        check(enc != nullptr, std::string("vui/") + c.name + "/encoder", "make_encoder(heif,x265)");
+        if (!enc)
+            continue;
+        pp::EncodeRequest req{img, target, meta, {}, {}, 1, false};
+        const pp::EncodeResult er = enc->encode(req);
+        check(er.error.empty() && fs::exists(out), std::string("vui/") + c.name + "/encode",
+              er.error);
+        // 判据（UX-14 A1）：**码流 VUI** 的 CICP primaries —— 位流直读（hvcC→SPS→VUI），
+        // 不经解码器回填（解码侧 nclx 的填充策略随库版本漂移，见 info 行对照）。
+        if (er.error.empty() && fs::exists(out)) {
+            VuiCicp vui;
+            const bool parsed = extract_sps_vui(out, vui);
+            check(parsed, std::string("vui/") + c.name + "/sps-parse",
+                  "SPS VUI 解析失败（形态预期外）");
+            std::printf("vui/%s: bitstream VUI primaries=%d transfer=%d matrix=%d full=%d%s\n",
+                        c.name, vui.primaries, vui.transfer, vui.matrix, vui.full_range ? 1 : 0,
+                        parsed ? "" : " (unparsed)");
+            if (parsed && vui.present) {
+                check(vui.primaries == c.want_primaries,
+                      std::string("vui/") + c.name + "/bitstream-primaries",
+                      "码流 VUI primaries=" + std::to_string(vui.primaries) + "，期望 " +
+                          std::to_string(c.want_primaries));
+            }
+        }
+
+        heif_context *ctx = heif_context_alloc();
+        check(ctx != nullptr, std::string("vui/") + c.name + "/ctx", "heif_context_alloc");
+        if (!ctx)
+            continue;
+        const heif_error re = heif_context_read_from_file(ctx, out.string().c_str(), nullptr);
+        check(re.code == heif_error_Ok, std::string("vui/") + c.name + "/read",
+              std::string(re.message ? re.message : ""));
+        heif_image_handle *handle = nullptr;
+        if (re.code == heif_error_Ok) {
+            heif_context_get_primary_image_handle(ctx, &handle);
+            // 可观察面 = **解码后 image 的 nclx**（解码器把码流 VUI/CICP 回填进解码 image，
+            // 与 WP2 的 test_enc_oiio 同口径）。handle 侧只携带 colr box（ICC 在场时 nclx
+            // 不落 colr → handle 查询报 "Color profile does not exist"）。
+            heif_image *decoded = nullptr;
+            const heif_error de =
+                handle ? heif_decode_image(handle, &decoded, heif_colorspace_undefined,
+                                           heif_chroma_undefined, nullptr)
+                       : re;
+            check(de.code == heif_error_Ok && decoded != nullptr,
+                  std::string("vui/") + c.name + "/decode",
+                  std::string(de.message ? de.message : ""));
+            heif_color_profile_nclx *nclx = nullptr;
+            const heif_error ne = decoded ? heif_image_get_nclx_color_profile(decoded, &nclx) : de;
+            check(ne.code == heif_error_Ok && nclx != nullptr,
+                  std::string("vui/") + c.name + "/nclx",
+                  std::string(ne.message ? ne.message : ""));
+            if (nclx != nullptr) {
+                // 解码侧 nclx 的填充策略随库版本漂移（colr/ICC 合成 vs VUI 回填）——**判据取
+                // 码流 VUI**（上方位流直读），本行仅留证对照。
+                std::printf("vui/%s: decoded-image nclx primaries=%d\n", c.name,
+                            int(nclx->color_primaries));
+                heif_nclx_color_profile_free(nclx);
+            }
+            if (decoded)
+                heif_image_release(decoded);
+            if (handle)
+                heif_image_handle_release(handle);
+        }
+        heif_context_free(ctx);
+    }
+}
+
+// B3（UX-14 B3 余量 / E2）：色彩目标 ≠ keep 且输出含 BMP 时必须给 EmbedIccUnsupported 警示
+// （OIIO BMP writer 不承载 ICC —— 事实已在 test_enc_oiio 钉住）；keep 下不虚报。
+void test_bmp_icc_warning() {
+    namespace fs = std::filesystem;
+    // corpus：与 test_decode 同径向上找 tests/golden。
+    fs::path corpus;
+    {
+        std::error_code ec;
+        fs::path p = fs::current_path(ec);
+        for (int i = 0; i < 8 && !p.empty(); ++i) {
+            if (fs::is_directory(p / "tests" / "golden"))
+                corpus = p / "tests" / "golden";
+            if (!p.has_parent_path() || p.parent_path() == p)
+                break;
+            p = p.parent_path();
+        }
+    }
+    check(!corpus.empty(), "bmp3/corpus", "tests/golden not found");
+    if (corpus.empty())
+        return;
+    const fs::path dir = fs::temp_directory_path() / "pp-test_color-m7r2a" / "bmp-warn";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+
+    const auto run_bmp = [&](pp::ColorTarget color, const fs::path &out_root) {
+        pp::FileEntry fe;
+        fe.src = corpus / "base" / "rgb8.png";
+        fe.base_dir = corpus / "base";
+        pp::RunConfig cfg;
+        cfg.out_root = out_root;
+        cfg.outputs.push_back(pp::OutputFormatSpec{"bmp", "oiio", "", pp::ParamSet{}, 24});
+        cfg.color = color;
+        cfg.conflict = pp::ConflictPolicy::Overwrite;
+        cfg.output_template = "$dir/$file";
+        return pp::run_one_file(fe, cfg, pp::EventFn{});
+    };
+
+    const pp::FileOutcome with_srgb = run_bmp(pp::ColorTarget::SRGB, dir / "srgb");
+    check(with_srgb.verdict == pp::FileOutcome::Verdict::Done, "bmp3/srgb-verdict", "非 Done");
+    if (!with_srgb.file.outputs.empty()) {
+        bool warned = false;
+        for (const pp::Warning &w : with_srgb.file.outputs[0].warnings)
+            warned = warned || w.kind == pp::WarningKind::EmbedIccUnsupported;
+        check(warned, "bmp3/srgb-warn", "色彩目标=srgb 输出 BMP 必须给 EmbedIccUnsupported 警示");
+    }
+    const pp::FileOutcome with_keep = run_bmp(pp::ColorTarget::KeepOriginal, dir / "keep");
+    check(with_keep.verdict == pp::FileOutcome::Verdict::Done, "bmp3/keep-verdict", "非 Done");
+    if (!with_keep.file.outputs.empty()) {
+        bool warned = false;
+        for (const pp::Warning &w : with_keep.file.outputs[0].warnings)
+            warned = warned || w.kind == pp::WarningKind::EmbedIccUnsupported;
+        check(!warned, "bmp3/keep-no-warn", "色彩目标=keep 不该报 EmbedIccUnsupported");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -1067,6 +1829,14 @@ int main() {
     test_concurrent_transforms();
     test_de2000_roundtrip();
     test_icc_mismatch_degrade();
+
+    // —— M7-R2A（断言只增）——
+    test_gamut_mapping();         // C1 色域映射护栏
+    test_render_intent();         // C3 渲染意图 + 缓存键
+    test_de2000_extended();       // ΔE 扩样（饱和 ramp/记忆色）
+    test_crosslib_colorconvert(); // 跨库对拍（lcms2 vs OIIO）
+    test_heif_vui_nclx();         // UX-14 A1 精确码
+    test_bmp_icc_warning();       // B3 BMP 不承载 ICC 警示
 
     std::printf("test_color: %d checks, %d failed\n", g_checks, g_failed);
     return g_failed == 0 ? 0 : 1;

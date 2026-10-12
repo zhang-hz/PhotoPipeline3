@@ -10,10 +10,17 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
+#include <exiv2/exiv2.hpp>
+#include <jpegli/encode.h>
+
+#include "core/colormanager.h"
+#include "core/pipeline.h"
 #include "core/types.h"
 #include "decode/oiio_reader.h"
 
@@ -77,6 +84,8 @@ const char *warning_name(pp::WarningKind kind) {
         return "TimeFieldMissing";
     case pp::WarningKind::GrayToRgbEncoded:
         return "GrayToRgbEncoded";
+    case pp::WarningKind::EmbedIccUnsupported:
+        return "EmbedIccUnsupported";
     }
     return "?";
 }
@@ -398,6 +407,271 @@ int main() {
         spec.attribute("Orientation", 9);
         check(pp::orientation_from_spec(spec) == 1, "orientation/out-of-range-9",
               "9 is outside 1..8 and must yield 1");
+    }
+
+    // ---- D1（M7-R2A）：JPEG CMYK/YCCK 一致拒收 —— 合成夹具（勿动 tests/golden）----
+    {
+        namespace fsys = std::filesystem;
+        const fsys::path tmp = fsys::temp_directory_path() / "pp-test_decode-m7r2a";
+        std::error_code ec;
+        fsys::create_directories(tmp, ec);
+
+        // 合成 CMYK JPEG（勿动 tests/golden）：jpegli 写 JCS_CMYK + Adobe APP14 transform=0
+        // （libjpeg 语义：jpegli_set_colorspace(JCS_CMYK) 置 write_Adobe_marker）。
+        // YCCK 变体 = 只把 APP14 transform 字节 0→2（扫描数据不变，色彩信令变 YCbCrK）。
+        auto write_cmyk = [&](const fsys::path &p, bool ycck) -> bool {
+            struct jpeg_compress_struct cinfo;
+            struct jpeg_error_mgr jerr;
+            cinfo.err = jpegli_std_error(&jerr);
+            jpegli_create_compress(&cinfo);
+            unsigned char *out_buf = nullptr;
+            unsigned long out_size = 0;
+            jpegli_mem_dest(&cinfo, &out_buf, &out_size);
+            cinfo.image_width = 24;
+            cinfo.image_height = 16;
+            cinfo.input_components = 4;
+            cinfo.in_color_space = JCS_CMYK;
+            jpegli_set_defaults(&cinfo);
+            jpegli_set_colorspace(&cinfo, JCS_CMYK); // Adobe APP14 transform=0（CMYK 信令）
+            cinfo.write_Adobe_marker = TRUE;
+            jpegli_start_compress(&cinfo, TRUE);
+            std::vector<unsigned char> row(24u * 4u);
+            for (int y = 0; y < 16; ++y) {
+                for (int x = 0; x < 24; ++x) {
+                    row[static_cast<std::size_t>(x) * 4 + 0] = static_cast<unsigned char>(x * 9);
+                    row[static_cast<std::size_t>(x) * 4 + 1] = static_cast<unsigned char>(y * 13);
+                    row[static_cast<std::size_t>(x) * 4 + 2] = static_cast<unsigned char>(x + y);
+                    row[static_cast<std::size_t>(x) * 4 + 3] = static_cast<unsigned char>(x * y);
+                }
+                JSAMPROW rows[1] = {row.data()};
+                jpegli_write_scanlines(&cinfo, rows, 1);
+            }
+            jpegli_finish_compress(&cinfo);
+            std::vector<char> bytes(reinterpret_cast<char *>(out_buf),
+                                    reinterpret_cast<char *>(out_buf) + out_size);
+            jpegli_destroy_compress(&cinfo);
+            std::free(out_buf);
+            if (ycck) {
+                // Adobe APP14 段布局：FF EE 00 0E 'A' 'd' 'o' 'b' 'e' <ver:2> <flags0:2>
+                // <flags1:2> <transform:1> —— transform 位于段首 FF 起第 15 字节。
+                bool patched = false;
+                for (std::size_t i = 0; i + 15 < bytes.size(); ++i) {
+                    const auto *u = reinterpret_cast<const unsigned char *>(bytes.data());
+                    if (u[i] == 0xFF && u[i + 1] == 0xEE && u[i + 2] == 0x00 && u[i + 3] == 0x0E &&
+                        u[i + 4] == 'A' && u[i + 5] == 'd' && u[i + 6] == 'o' && u[i + 7] == 'b' &&
+                        u[i + 8] == 'e') {
+                        bytes[i + 15] = 2; // transform = 2 (YCCK)
+                        patched = true;
+                        break;
+                    }
+                }
+                if (!patched)
+                    return false;
+            }
+            std::ofstream f(p, std::ios::binary | std::ios::trunc);
+            if (!f)
+                return false;
+            f.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+            return f.good();
+        };
+
+        const fsys::path cmyk_jpg = tmp / "synth_cmyk.jpg";
+        const fsys::path ycck_jpg = tmp / "synth_ycck.jpg";
+        check(write_cmyk(cmyk_jpg, false), "d1/synth-cmyk",
+              "CMYK JPEG 合成失败（OIIO 4 通道写入）");
+        check(write_cmyk(ycck_jpg, true), "d1/synth-ycck",
+              "YCCK 信令打补丁失败（APP14 transform）");
+
+        struct Case {
+            const char *name;
+            fsys::path path;
+            const char *colorspace; // OIIO 读回的 jpeg:ColorSpace 事实
+        };
+        const Case cases[] = {
+            {"d1/cmyk", cmyk_jpg, "CMYK"},
+            {"d1/ycck", ycck_jpg, "YCbCrK"},
+        };
+        for (const Case &c : cases) {
+            if (!fsys::exists(c.path))
+                continue; // 合成失败已在上方断言点名
+            // 夹具事实钉住：OIIO 读回的 jpeg:ColorSpace 必须是信令值（YCCK = YCbCrK）。
+            auto in = OIIO::ImageInput::open(c.path.string());
+            check(in != nullptr, std::string(c.name) + "/open", "合成 JPEG 打不开");
+            if (in) {
+                const std::string cs = in->spec().get_string_attribute("jpeg:ColorSpace");
+                check(cs == c.colorspace, std::string(c.name) + "/fixture-colorspace",
+                      "jpeg:ColorSpace = '" + cs + "'，期望 '" + c.colorspace + "'");
+                in->close();
+            }
+            // 拒收口径逐字复用（tools/baseline/golden.log:189 钉住，禁改文案）。
+            const pp::ProbeOutcome po = pp::probe_file(c.path);
+            check(po.error == "CMYK input is not supported", std::string(c.name) + "/probe",
+                  "expected 'CMYK input is not supported', got '" + po.error + "'");
+            const pp::DecodeOutcome d = pp::decode_float(c.path, po.info);
+            check(d.error == "CMYK input is not supported", std::string(c.name) + "/decode",
+                  "expected 'CMYK input is not supported', got '" + d.error + "'");
+            check(!d.buf.initialized(), std::string(c.name) + "/no-buf", "拒收后不得产出像素缓冲");
+        }
+    }
+
+    // ---- D2（M7-R2A）：Exif.Photo.ColorSpace(0xA001) → 无 ICC 时的 AdobeRGB 合成 ----
+    {
+        // ① 提取函数（纯 spec 面）：1→1、2→2、缺失/0/越界→0。
+        OIIO::ImageSpec spec;
+        check(pp::exif_colorspace_from_spec(spec) == 0, "d2/spec-absent", "缺失属性应为 0");
+        spec.attribute("Exif:ColorSpace", 1);
+        check(pp::exif_colorspace_from_spec(spec) == 1, "d2/spec-srgb", "1 应映射 1");
+        spec.attribute("Exif:ColorSpace", 2);
+        check(pp::exif_colorspace_from_spec(spec) == 2, "d2/spec-adobergb", "2 应映射 2");
+        spec.attribute("Exif:ColorSpace", 0);
+        check(pp::exif_colorspace_from_spec(spec) == 0, "d2/spec-zero", "0 应映射 0");
+        spec.attribute("Exif:ColorSpace", 5);
+        check(pp::exif_colorspace_from_spec(spec) == 0, "d2/spec-out-of-range", "越界值应映射 0");
+
+        // ② 文件面：EXIF 真写进 JPEG 后，probe 的 first_spec 必须读回 2。
+        namespace fsys = std::filesystem;
+        const fsys::path tmp = fsys::temp_directory_path() / "pp-test_decode-m7r2a";
+        std::error_code ec;
+        fsys::create_directories(tmp, ec);
+        const fsys::path adobe_jpg = tmp / "exif_adobe.jpg";
+        {
+            auto out = OIIO::ImageOutput::create(adobe_jpg.string());
+            bool ok = out != nullptr;
+            if (ok) {
+                OIIO::ImageSpec wspec(32, 24, 3, OIIO::TypeUInt8);
+                std::vector<unsigned char> px(32u * 24u * 3u, 128);
+                ok = out->open(adobe_jpg.string(), wspec) &&
+                     out->write_image(OIIO::TypeUInt8, px.data());
+                out->close();
+            }
+            check(ok, "d2/file-write", "测试 JPEG 合成失败");
+            if (ok) {
+                Exiv2::Image::UniquePtr img = Exiv2::ImageFactory::open(adobe_jpg.string());
+                img->readMetadata();
+                img->exifData()["Exif.Photo.ColorSpace"] = static_cast<uint16_t>(2);
+                img->writeMetadata();
+            }
+        }
+        if (fsys::exists(adobe_jpg)) {
+            const pp::ProbeOutcome po = pp::probe_file(adobe_jpg);
+            check(po.error.empty(), "d2/file-probe", po.error);
+            check(po.first_spec.has_value(), "d2/file-spec", "first_spec 缺失");
+            if (po.first_spec) {
+                check(pp::exif_colorspace_from_spec(*po.first_spec) == 2, "d2/file-exif-colorspace",
+                      "EXIF ColorSpace=2 未从 spec 读回");
+            }
+        }
+
+        // ③ 装配面（pipeline 的 src_icc 装配段）：无 ICC + EXIF=2 → 输出 ICC == 合成
+        //    AdobeRGB profile 字节（=1/缺失 → 现状：keep 下无 ICC 可嵌）。
+        std::string adobe_err;
+        const std::string adobe_icc = pp::load_target_icc(pp::ColorTarget::AdobeRGB, adobe_err);
+        check(!adobe_icc.empty(), "d2/adobe-profile", "AdobeRGB 合成入口失败: " + adobe_err);
+
+        auto run_keep = [&](const fsys::path &src, const fsys::path &out_root) {
+            pp::FileEntry fe;
+            fe.src = src;
+            fe.base_dir = src.parent_path();
+            pp::RunConfig cfg;
+            cfg.out_root = out_root;
+            cfg.outputs.push_back(pp::OutputFormatSpec{"png", "oiio", "", pp::ParamSet{}, 8});
+            cfg.color = pp::ColorTarget::KeepOriginal;
+            cfg.conflict = pp::ConflictPolicy::Overwrite;
+            cfg.output_template = "$dir/$file";
+            return pp::run_one_file(fe, cfg, pp::EventFn{});
+        };
+
+        if (fsys::exists(adobe_jpg) && !adobe_icc.empty()) {
+            const pp::FileOutcome oc = run_keep(adobe_jpg, tmp / "out-adobe");
+            check(oc.verdict == pp::FileOutcome::Verdict::Done, "d2/e2e-verdict",
+                  "verdict 非 Done");
+            if (!oc.file.outputs.empty() && oc.file.outputs[0].ok) {
+                const pp::ProbeOutcome outp = pp::probe_file(oc.file.outputs[0].out);
+                const std::string out_icc =
+                    outp.first_spec ? pp::icc_from_spec(*outp.first_spec) : std::string();
+                check(out_icc == adobe_icc, "d2/e2e-icc-adobe",
+                      "输出 ICC 与合成 AdobeRGB 字节不一致（" +
+                          num(static_cast<long long>(out_icc.size())) + "B vs " +
+                          num(static_cast<long long>(adobe_icc.size())) + "B）");
+            } else {
+                check(false, "d2/e2e-output", "输出未产出");
+            }
+        }
+
+        // 对照（=1/缺失 → 现状）：同像素、EXIF=1 的 JPEG 在 keep 下无 ICC 可嵌。
+        const fsys::path srgb_jpg = tmp / "exif_srgb.jpg";
+        if (fsys::exists(adobe_jpg)) {
+            std::error_code ec2;
+            fsys::copy_file(adobe_jpg, srgb_jpg, fsys::copy_options::overwrite_existing, ec2);
+            Exiv2::Image::UniquePtr img = Exiv2::ImageFactory::open(srgb_jpg.string());
+            img->readMetadata();
+            img->exifData()["Exif.Photo.ColorSpace"] = static_cast<uint16_t>(1);
+            img->writeMetadata();
+            const pp::FileOutcome oc = run_keep(srgb_jpg, tmp / "out-srgb");
+            check(oc.verdict == pp::FileOutcome::Verdict::Done, "d2/e2e-srgb-verdict",
+                  "verdict 非 Done");
+            if (!oc.file.outputs.empty() && oc.file.outputs[0].ok) {
+                const pp::ProbeOutcome outp = pp::probe_file(oc.file.outputs[0].out);
+                const std::string out_icc =
+                    outp.first_spec ? pp::icc_from_spec(*outp.first_spec) : std::string();
+                check(out_icc.empty(), "d2/e2e-srgb-no-icc",
+                      "EXIF=1（sRGB）+ keep = 现状：不该合成 ICC，实得 " +
+                          num(static_cast<long long>(out_icc.size())) + "B");
+            }
+        }
+    }
+
+    // ---- R-163 残余（E3，M7-R2A）：编码中取消的 verdict 归类单点化 ----
+    // 编码器因 cancel 提前退出（返回 "... encode cancelled"）时，pipeline 必须归
+    // **Cancelled**（不是 Failed）：verdict / 行状态 / error_kind 三面一致（set_output_state
+    // + error_kind_of 既有机制）。取消时机 = 编码行循环内（cancelled() 前 10 次返回 false，
+    // 之后 true —— 64 行 JPEG 的行级检查点保证取消发生在 encode 中段）。
+    {
+        namespace fsys = std::filesystem;
+        const fsys::path tmp = fsys::temp_directory_path() / "pp-test_decode-m7r2a";
+        std::error_code ec;
+        fsys::create_directories(tmp, ec);
+        const fsys::path src = tmp / "cancel_src.png";
+        {
+            auto out = OIIO::ImageOutput::create(src.string());
+            bool ok = out != nullptr;
+            if (ok) {
+                OIIO::ImageSpec wspec(64, 64, 3, OIIO::TypeUInt8);
+                std::vector<unsigned char> px(64u * 64u * 3u, 90);
+                ok = out->open(src.string(), wspec) && out->write_image(OIIO::TypeUInt8, px.data());
+                out->close();
+            }
+            check(ok, "r163/fixture", "cancel 夹具合成失败");
+        }
+        if (fsys::exists(src)) {
+            pp::FileEntry fe;
+            fe.src = src;
+            fe.base_dir = tmp;
+            pp::RunConfig cfg;
+            cfg.out_root = tmp / "out-cancel";
+            cfg.outputs.push_back(pp::OutputFormatSpec{"jpeg", "jpegli", "", pp::ParamSet{}, 8});
+            cfg.conflict = pp::ConflictPolicy::Overwrite;
+            cfg.output_template = "$dir/$file";
+            int calls = 0;
+            pp::RunScope scope;
+            scope.cancelled = [&calls]() { return ++calls > 10; };
+            pp::EventFn ev{nullptr, &scope};
+            const pp::FileOutcome oc = pp::run_one_file(fe, cfg, ev);
+            check(oc.verdict == pp::FileOutcome::Verdict::Cancelled, "r163/verdict",
+                  "编码中取消应归 Cancelled");
+            check(oc.file.cancelled, "r163/file-flag", "FileResult::cancelled 应为真");
+            if (!oc.file.outputs.empty()) {
+                const pp::OutputResult &row = oc.file.outputs[0];
+                check(row.state == pp::OutputState::Cancelled, "r163/row-state",
+                      "行状态应为 Cancelled（set_output_state 单点）");
+                check(row.error_kind == pp::ErrorKind::Cancelled, "r163/row-kind",
+                      "error_kind 应为 Cancelled（error_kind_of 单点）");
+                check(row.error == "encode cancelled", "r163/row-error",
+                      "取消行错误串应为规范化的 encode cancelled，got '" + row.error + "'");
+            } else {
+                check(false, "r163/rows", "无输出行");
+            }
+        }
     }
 
     std::printf("test_decode: %d checks, %d failure(s)\n", g_checks, g_failed);

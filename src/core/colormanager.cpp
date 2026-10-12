@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <cstring>
 #include <iterator>
 #include <list>
@@ -35,9 +36,31 @@ namespace {
 
 constexpr const char *kLogFile = "colormanager.cpp";
 
-// Fixed intent/flags (§3.6 numeric contract).
+// Fixed intent/flags (§3.6 numeric contract) —— C3 档位 0 的映射（现状逐字，含金样 20 对）。
 constexpr int kIntent = INTENT_RELATIVE_COLORIMETRIC;
 constexpr cmsUInt32Number kTransformFlags = cmsFLAGS_BLACKPOINTCOMPENSATION;
+
+// —— C3（UX-14 C3，M7-R2A）：渲染意图档位 → lcms2 (intent, flags) ——
+// 设计口径（主对话定稿，禁止改算法口径）：0 → RC+BPC（现状）/ 1 → Perceptual /
+// 2 → Absolute Colorimetric（**不叠 BPC**）/ 3 → Saturation。1/3 按字面不叠 BPC
+// （仅 0 携带 BPC；2 明示不叠 —— 绝对比色自带黑点语义）。越界档位按 0 处理（合法档位
+// 不静默改写；档位校验归 validate_run_config 面）。
+struct IntentFlags {
+    int intent;
+    cmsUInt32Number flags;
+};
+IntentFlags intent_flags_of(int mode) {
+    switch (mode) {
+    case 1:
+        return {INTENT_PERCEPTUAL, 0};
+    case 2:
+        return {INTENT_ABSOLUTE_COLORIMETRIC, 0};
+    case 3:
+        return {INTENT_SATURATION, 0};
+    default:
+        return {kIntent, kTransformFlags};
+    }
+}
 
 // Every transform runs in float32 (TYPE_GRAY_FLT / TYPE_RGB_FLT); the LRU key
 // carries the transform bit depth so a future 8/16-bit path cannot collide.
@@ -85,21 +108,32 @@ const TargetSpec *target_spec(ColorTarget t) {
     return nullptr;
 }
 
+// —— R-296（M7-R2A）：CICP 映射**表驱动**单源 ——
+// §2.8 冻结枚举的每对 (primaries, transfer) 恰好一行；map_cicp_source（命中判定 + 日志）与
+// cicp_profile_spec（源 profile 规格）都从本表取值 ⇒ 加一对映射 = 加一行（+ 枚举末尾追加
+// CicpSource 值；需新规格时再加一个 TargetSpec 常量），联动点 ≤ 3 处（<4）。
+// 既有五对的行为（含 name 文案与 src_icc 生成）逐字不变。
+struct CicpRow {
+    int primaries, transfer;
+    CicpSource source;
+    const char *name;
+    const TargetSpec *spec; // nullptr = 不生成 profile（sRGB 走 lcms2 内建）
+};
+
+constexpr CicpRow kCicpTable[] = {
+    {1, 13, CicpSource::Srgb, "sRGB", nullptr},
+    {12, 13, CicpSource::DisplayP3, "Display P3", &kP3Spec},
+    {12, 1, CicpSource::DisplayP3Gamma22, "Display P3", &kP3Gamma22Spec},
+    {9, 8, CicpSource::Bt2020Linear, "BT.2020 linear", &kBt2020LinearSpec},
+    {9, 13, CicpSource::Bt2020SrgbTrc, "BT.2020 sRGB-TRC", &kBt2020SrgbSpec},
+};
+
 // M2-T6 §2.8: the source-profile spec behind every recognized CICP pair (nullptr for
 // Srgb — lcms2's built-in — and for Unsupported, which never gets a profile).
 const TargetSpec *cicp_profile_spec(CicpSource s) {
-    switch (s) {
-    case CicpSource::DisplayP3:
-        return &kP3Spec;
-    case CicpSource::DisplayP3Gamma22:
-        return &kP3Gamma22Spec;
-    case CicpSource::Bt2020Linear:
-        return &kBt2020LinearSpec;
-    case CicpSource::Bt2020SrgbTrc:
-        return &kBt2020SrgbSpec;
-    case CicpSource::Srgb:
-    case CicpSource::Unsupported:
-        break;
+    for (const CicpRow &row : kCicpTable) {
+        if (row.source == s)
+            return row.spec;
     }
     return nullptr;
 }
@@ -348,7 +382,7 @@ private:
 };
 
 std::shared_ptr<XfEntry> build_entry(const std::string &src_icc, bool gray_input,
-                                     ColorTarget target, std::string &err,
+                                     ColorTarget target, int intent_mode, std::string &err,
                                      std::string *degrade_note = nullptr) {
     // Destination first: its bytes are also needed for the canonical-source rule below.
     std::string dst_err;
@@ -450,8 +484,9 @@ std::shared_ptr<XfEntry> build_entry(const std::string &src_icc, bool gray_input
     }
 
     const cmsUInt32Number in_type = gray_input ? TYPE_GRAY_FLT : TYPE_RGB_FLT;
-    cmsHTRANSFORM xf =
-        cmsCreateTransform(src, in_type, dst, TYPE_RGB_FLT, kIntent, kTransformFlags);
+    // C3：意图/flags 按档位映射（0 = §3.6 现状逐字）。
+    const IntentFlags ifx = intent_flags_of(intent_mode);
+    cmsHTRANSFORM xf = cmsCreateTransform(src, in_type, dst, TYPE_RGB_FLT, ifx.intent, ifx.flags);
     cmsCloseProfile(src);
     cmsCloseProfile(dst);
     if (xf == nullptr) {
@@ -513,6 +548,184 @@ OIIO::ImageBuf make_like(const OIIO::ImageBuf &src, int out_ch, const std::vecto
     return out;
 }
 
+// ---------------------------------------------------------------------------
+// C1（UX-14 C1，M7-R2A）：色域映射（ColorOptions::gamut_mapping）
+// ---------------------------------------------------------------------------
+// 设计口径（主对话定稿，禁止改算法口径）：
+//   mode0 = 现状硬裁（变换输出原样，量化段 clamp —— 默认档位逐字节不变）；
+//   mode1 = 软裁：cmsDoTransform 后对越界分量软膝压缩（knee=0.85：
+//           x>0.85 → y=0.85+0.15·tanh((x-0.85)/0.15)；负侧对称）；
+//   mode2 = 感知：越界像素向明度轴收敛（保明度、压色度）。
+// 只作用于变换后的 RGB 三分量；alpha 不经手（§5.2）。
+float soft_knee(float x) {
+    constexpr float kKnee = 0.85f;
+    constexpr float kRange = 0.15f;
+    if (x > kKnee)
+        return kKnee + kRange * std::tanh((x - kKnee) / kRange);
+    if (x < -kKnee)
+        return -kKnee - kRange * std::tanh((-x - kKnee) / kRange);
+    return x;
+}
+
+// ---- mode2：向明度轴收敛（保亮度、压色度）----
+// "明度轴" = Lab 的 L 轴（a=b=0）。口径 = L 不变、(a,b) 向 0 等比收敛（色度压缩），直到
+// 回投的目标 RGB 落回 [0,1]³；色相与明度由构造保持（与理想（未裁）结果的 ΔE2000 色相
+// 分量 ≈ 0 —— 护栏的构造性保证）。Lab 空间按**目标色域**的基 + TRC 构造（D65；sRGB/P3 =
+// sRGB TRC，AdobeRGB = 纯 gamma 2.2）。只处理越界像素（域内像素不动）。
+struct LabSpace {
+    double m[9];    // linear RGB → XYZ（列主基）
+    double minv[9]; // XYZ → linear RGB
+    bool gamma22 = false;
+};
+
+LabSpace lab_space_for(ColorTarget t) {
+    // 目标基（xy，D65）：sRGB / AdobeRGB 用标准基；P3 用 kP3Spec 的基。
+    double rx = 0.640, ry = 0.330, gx = 0.300, gy = 0.600, bx = 0.150, by = 0.060;
+    bool g22 = false;
+    if (t == ColorTarget::DisplayP3) {
+        rx = kP3Spec.rx;
+        ry = kP3Spec.ry;
+        gx = kP3Spec.gx;
+        gy = kP3Spec.gy;
+        bx = kP3Spec.bx;
+        by = kP3Spec.by;
+    } else if (t == ColorTarget::AdobeRGB) {
+        rx = kAdobeSpec.rx;
+        ry = kAdobeSpec.ry;
+        gx = kAdobeSpec.gx;
+        gy = kAdobeSpec.gy;
+        bx = kAdobeSpec.bx;
+        by = kAdobeSpec.by;
+        g22 = true;
+    }
+    const double col[3][3] = {{rx / ry, gx / gy, bx / by},
+                              {1, 1, 1},
+                              {(1 - rx - ry) / ry, (1 - gx - gy) / gy, (1 - bx - by) / by}};
+    const double w[3] = {0.3127 / 0.3290, 1.0, (1 - 0.3127 - 0.3290) / 0.3290};
+    // s = C⁻¹·w（3×3 手工求逆：伴随矩阵/行列式）
+    const double *c = &col[0][0];
+    const double det = c[0] * (c[4] * c[8] - c[5] * c[7]) - c[1] * (c[3] * c[8] - c[5] * c[6]) +
+                       c[2] * (c[3] * c[7] - c[4] * c[6]);
+    LabSpace sp;
+    sp.gamma22 = g22;
+    if (det == 0.0)
+        return sp;
+    const double inv[9] = {(c[4] * c[8] - c[5] * c[7]) / det, (c[2] * c[7] - c[1] * c[8]) / det,
+                           (c[1] * c[5] - c[2] * c[4]) / det, (c[5] * c[6] - c[3] * c[8]) / det,
+                           (c[0] * c[8] - c[2] * c[6]) / det, (c[2] * c[3] - c[0] * c[5]) / det,
+                           (c[3] * c[7] - c[4] * c[6]) / det, (c[1] * c[6] - c[0] * c[7]) / det,
+                           (c[0] * c[4] - c[1] * c[3]) / det};
+    double s[3];
+    for (int i = 0; i < 3; ++i)
+        s[i] = inv[3 * i + 0] * w[0] + inv[3 * i + 1] * w[1] + inv[3 * i + 2] * w[2];
+    // 行主序 m[3i+j] = A[i][j]（与下方求逆公式的约定一致）
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+            sp.m[3 * i + j] = col[i][j] * s[j];
+    // minv = (C·diag(s))⁻¹
+    const double *m = sp.m;
+    const double mdet = m[0] * (m[4] * m[8] - m[5] * m[7]) - m[3] * (m[1] * m[8] - m[2] * m[7]) +
+                        m[6] * (m[1] * m[5] - m[2] * m[4]);
+    if (mdet == 0.0)
+        return sp;
+    sp.minv[0] = (m[4] * m[8] - m[5] * m[7]) / mdet;
+    sp.minv[1] = (m[2] * m[7] - m[1] * m[8]) / mdet;
+    sp.minv[2] = (m[1] * m[5] - m[2] * m[4]) / mdet;
+    sp.minv[3] = (m[5] * m[6] - m[3] * m[8]) / mdet;
+    sp.minv[4] = (m[0] * m[8] - m[2] * m[6]) / mdet;
+    sp.minv[5] = (m[2] * m[3] - m[0] * m[5]) / mdet;
+    sp.minv[6] = (m[3] * m[7] - m[4] * m[6]) / mdet;
+    sp.minv[7] = (m[1] * m[6] - m[0] * m[7]) / mdet;
+    sp.minv[8] = (m[0] * m[4] - m[1] * m[3]) / mdet;
+    return sp;
+}
+
+double decode_trc(double x, bool gamma22) {
+    if (gamma22) {
+        const double s = x < 0.0 ? -1.0 : 1.0;
+        return s * std::pow(std::fabs(x), 2.2);
+    }
+    return x <= 0.04045 ? x / 12.92 : std::pow((x + 0.055) / 1.055, 2.4);
+}
+double encode_trc(double y, bool gamma22) {
+    if (gamma22) {
+        const double s = y < 0.0 ? -1.0 : 1.0;
+        return s * std::pow(std::fabs(y), 1.0 / 2.2);
+    }
+    return y <= 0.0031308 ? y * 12.92 : 1.055 * std::pow(y, 1.0 / 2.4) - 0.055;
+}
+
+void rgb_to_lab(const LabSpace &sp, const double rgb[3], double lab[3]) {
+    const double lin[3] = {decode_trc(rgb[0], sp.gamma22), decode_trc(rgb[1], sp.gamma22),
+                           decode_trc(rgb[2], sp.gamma22)};
+    const double X = sp.m[0] * lin[0] + sp.m[1] * lin[1] + sp.m[2] * lin[2];
+    const double Y = sp.m[3] * lin[0] + sp.m[4] * lin[1] + sp.m[5] * lin[2];
+    const double Z = sp.m[6] * lin[0] + sp.m[7] * lin[1] + sp.m[8] * lin[2];
+    const auto f = [](double t) {
+        return t > 216.0 / 24389.0 ? std::cbrt(t) : (24389.0 / 27.0 * t + 16.0) / 116.0;
+    };
+    const double fx = f(X / 0.95047), fy = f(Y / 1.0), fz = f(Z / 1.08883);
+    lab[0] = 116.0 * fy - 16.0;
+    lab[1] = 500.0 * (fx - fy);
+    lab[2] = 200.0 * (fy - fz);
+}
+
+void lab_to_rgb(const LabSpace &sp, const double lab[3], double rgb[3]) {
+    const double fy = (lab[0] + 16.0) / 116.0;
+    const double fx = fy + lab[1] / 500.0;
+    const double fz = fy - lab[2] / 200.0;
+    const auto finv = [](double t) {
+        const double t3 = t * t * t;
+        return t3 > 216.0 / 24389.0 ? t3 : (116.0 * t - 16.0) * (27.0 / 24389.0);
+    };
+    const double X = 0.95047 * finv(fx), Y = 1.0 * finv(fy), Z = 1.08883 * finv(fz);
+    const double lin[3] = {sp.minv[0] * X + sp.minv[1] * Y + sp.minv[2] * Z,
+                           sp.minv[3] * X + sp.minv[4] * Y + sp.minv[5] * Z,
+                           sp.minv[6] * X + sp.minv[7] * Y + sp.minv[8] * Z};
+    for (int i = 0; i < 3; ++i)
+        rgb[i] = encode_trc(lin[i], sp.gamma22);
+}
+
+void converge_to_lightness(const LabSpace &sp, float &r, float &g, float &b) {
+    if (r >= 0.0f && r <= 1.0f && g >= 0.0f && g <= 1.0f && b >= 0.0f && b <= 1.0f)
+        return; // 域内像素不动
+    const double in[3] = {double(r), double(g), double(b)};
+    double lab[3];
+    rgb_to_lab(sp, in, lab);
+    lab[0] = std::clamp(lab[0], 0.0, 100.0); // 不可表示明度夹到最近可表示值
+    // s ∈ [0,1]：Lab(L, s·a, s·b) 回投目标 RGB 落回 [0,1]³ 的最大系数（二分；色相与 L 保持）
+    double lo = 0.0, hi = 1.0;
+    for (int it = 0; it < 16; ++it) {
+        const double mid = 0.5 * (lo + hi);
+        const double l2[3] = {lab[0], mid * lab[1], mid * lab[2]};
+        double out[3];
+        lab_to_rgb(sp, l2, out);
+        const bool ok = out[0] >= -1e-9 && out[0] <= 1.0 + 1e-9 && out[1] >= -1e-9 &&
+                        out[1] <= 1.0 + 1e-9 && out[2] >= -1e-9 && out[2] <= 1.0 + 1e-9;
+        if (ok)
+            lo = mid;
+        else
+            hi = mid;
+    }
+    const double l3[3] = {lab[0], lo * lab[1], lo * lab[2]};
+    double out[3];
+    lab_to_rgb(sp, l3, out);
+    r = static_cast<float>(std::clamp(out[0], 0.0, 1.0));
+    g = static_cast<float>(std::clamp(out[1], 0.0, 1.0));
+    b = static_cast<float>(std::clamp(out[2], 0.0, 1.0));
+}
+
+void apply_gamut_mapping(float *rgb, std::size_t npix, int mode, ColorTarget target) {
+    if (mode == 1) {
+        for (std::size_t i = 0; i < 3 * npix; ++i)
+            rgb[i] = soft_knee(rgb[i]);
+    } else if (mode == 2) {
+        const LabSpace sp = lab_space_for(target);
+        for (std::size_t i = 0; i < npix; ++i)
+            converge_to_lightness(sp, rgb[3 * i], rgb[3 * i + 1], rgb[3 * i + 2]);
+    }
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -567,36 +780,33 @@ std::string load_target_icc(ColorTarget t, std::string &err) {
 // ---------------------------------------------------------------------------
 
 CicpMapping map_cicp_source(const Cicp &cicp) {
-    // Hit line is frozen as `CICP (<p>,<t>) → <profile 名>`; the miss text is the
-    // §2.8 sentence and reports the transfer value only.
-    const auto hit = [&cicp](CicpSource s, const char *name) {
-        CicpMapping m;
-        m.source = s;
-        m.name = name;
-        m.src_icc = cicp_source_icc(s);
-        m.log_line = "CICP (" + std::to_string(cicp.primaries) + "," +
-                     std::to_string(cicp.transfer) + ") → " + name;
-        return m;
-    };
-
-    // Exactly the four listed pairs; matrix/full_range deliberately do not participate.
-    if (cicp.primaries == 1 && cicp.transfer == 13)
-        return hit(CicpSource::Srgb, "sRGB");
-    if (cicp.primaries == 12 && cicp.transfer == 13)
-        return hit(CicpSource::DisplayP3, "Display P3");
-    if (cicp.primaries == 12 && cicp.transfer == 1)
-        return hit(CicpSource::DisplayP3Gamma22, "Display P3");
-    if (cicp.primaries == 9 && cicp.transfer == 8)
-        return hit(CicpSource::Bt2020Linear, "BT.2020 linear");
-    if (cicp.primaries == 9 && cicp.transfer == 13)
-        return hit(CicpSource::Bt2020SrgbTrc, "BT.2020 sRGB-TRC");
+    // R-296（M7-R2A）：命中判定走 kCicpTable 单源（加一对 = 加一行）。
+    // Hit line is frozen as `CICP (<p>,<t>) → <profile 名>`; matrix/full_range
+    // deliberately do not participate (§2.8).
+    for (const CicpRow &row : kCicpTable) {
+        if (row.primaries == cicp.primaries && row.transfer == cicp.transfer) {
+            CicpMapping m;
+            m.source = row.source;
+            m.name = row.name;
+            m.src_icc = cicp_source_icc(row.source);
+            m.log_line = "CICP (" + std::to_string(cicp.primaries) + "," +
+                         std::to_string(cicp.transfer) + ") → " + row.name;
+            return m;
+        }
+    }
 
     CicpMapping miss; // source stays Unsupported, src_icc stays empty -> assumed sRGB (M1)
     // UX-14 A5（M7-WP1）：日志与行为一致 —— 未支持的 CICP 组合**不构造** sRGB 假定，
     // pipeline 保留 OIIO 合成的 ICC 继续处理（见 pipeline.cpp 的 CICP 中间步：miss 时
     // src_icc 不被覆盖）。原文案"按 sRGB 处理"与行为不符（谎报处理口径），已改。
-    miss.log_line = "CICP transfer " + std::to_string(cicp.transfer) +
-                    " 未支持，保留合成 ICC 处理（不按 sRGB 重解释）";
+    // D3（M7-R2A）：HDR 传输特性（PQ=16 / HLG=18，含 BT.2020/BT.2100 基的组合）给**明确**
+    // 文案 —— 负面清单不建 HDR 管线、也不拒收：保留合成 ICC 处理、不做 sRGB 重解释。
+    if (cicp.transfer == 16 || cicp.transfer == 18) {
+        miss.log_line = "HDR（PQ/HLG/BT.2100）暂不支持：保留合成 ICC 处理，不做 sRGB 重解释";
+    } else {
+        miss.log_line = "CICP transfer " + std::to_string(cicp.transfer) +
+                        " 未支持，保留合成 ICC 处理（不按 sRGB 重解释）";
+    }
     return miss;
 }
 
@@ -627,9 +837,16 @@ ColorOutcome ColorManager::transform(OIIO::ImageBuf &buf, const std::string &src
 ColorOutcome ColorManager::transform(OIIO::ImageBuf &buf, const std::string &src_icc,
                                      bool src_is_gray, ColorTarget target, const ColorOptions &opts,
                                      std::vector<Warning> *out_warnings, std::string *err) {
-    // I3：opts 的能力档位（意图/抖动/色域映射/线性光）引擎侧消费归 WP8/WP10；本波默认值下
-    // 与旧行为逐字等价，这里只做接线与口径校验（不静默改写调用方给的档位）。
-    (void)opts;
+    // I3 能力档位的消费分工（M7-R2A 起）：intent（C3，本函数 = 变换缓存键 + lcms2 意图）、
+    // gamut_mapping（C1，变换后 RGB 后处理）在本层消费；dither8（C2）在编码器 to_u8 量化段
+    // 消费（simd::quantize8_dithered）；linear_resample（C4）在显示面（thumbs）消费。
+    // 默认值（0/false/0/false）与旧 `ColorOptions{}` 逐字等价 → 默认路径零行为变化。
+    int intent_mode = opts.intent;
+    if (intent_mode < 0 || intent_mode > 3) {
+        log_warn("color", kLogFile, "unknown render intent mode; falling back to 0",
+                 {{"intent", std::to_string(intent_mode)}});
+        intent_mode = 0;
+    }
     if (err != nullptr)
         err->clear();
     const auto note = [out_warnings](WarningKind kind, const std::string &detail) {
@@ -692,19 +909,23 @@ ColorOutcome ColorManager::transform(OIIO::ImageBuf &buf, const std::string &src
     }
 
     // ---- transform cache: (source ICC SHA1 | assumed kind, target, in-channels, bitdepth) ----
+    // C3：键必须并入 intent/flags —— 否则不同渲染意图串用同一 cmsHTRANSFORM（flags 由
+    // intent_mode 唯一派生，两者都入键 = 键与变换语义一一对应）。
+    const IntentFlags ifx = intent_flags_of(intent_mode);
     const std::string src_key =
         src_icc.empty()
             ? (gray_input ? std::string("assumed:gray-srgb") : std::string("assumed:srgb"))
             : "icc:" + OIIO::SHA1::digest(src_icc.data(), src_icc.size());
     const std::string key = src_key + "|" + std::to_string(static_cast<int>(target)) + "|" +
-                            std::to_string(color_in) + "|" + std::to_string(kTransformBits);
+                            std::to_string(color_in) + "|" + std::to_string(kTransformBits) + "|" +
+                            std::to_string(ifx.intent) + "|" + std::to_string(ifx.flags);
 
     std::shared_ptr<XfEntry> entry = impl_->cache.get(key);
     const bool hit = (entry != nullptr);
     if (!entry) {
         std::string build_err;
         std::string degrade_note;
-        entry = build_entry(src_icc, gray_input, target, build_err, &degrade_note);
+        entry = build_entry(src_icc, gray_input, target, intent_mode, build_err, &degrade_note);
         if (!entry) {
             oc.error = build_err;
             return oc;
@@ -774,6 +995,8 @@ ColorOutcome ColorManager::transform(OIIO::ImageBuf &buf, const std::string &src
 
         std::vector<float> rgb(3 * npix); // single GRAY_FLT -> RGB_FLT call
         cmsDoTransform(entry->xf, gray.data(), rgb.data(), count);
+        // C1：色域映射（mode0 = 硬裁现状 = 无操作；灰度升维后为中性轴，模式 1/2 亦无损中性）
+        apply_gamut_mapping(rgb.data(), npix, opts.gamut_mapping, target);
 
         std::vector<float> out(std::size_t(out_ch) * npix);
         for (std::size_t i = 0; i < npix; ++i) {
@@ -795,6 +1018,8 @@ ColorOutcome ColorManager::transform(OIIO::ImageBuf &buf, const std::string &src
             return oc;
         }
         cmsDoTransform(entry->xf, in.data(), out.data(), count);
+        // C1：色域映射（mode0 = 硬裁现状 = 无操作，逐字节不变）
+        apply_gamut_mapping(out.data(), npix, opts.gamut_mapping, target);
         if (!write_planes(buf, 0, 3, out.data())) {
             oc.error = "cannot write the colour planes";
             return oc;

@@ -372,9 +372,8 @@ struct MetaState : QObject {
     QList<MetaSelectionItem> items; // 跟随项（选中项；无选中 → 首个文件）
     bool from_selection = false;    // false = 无选中 → 首个文件（提示 "(1/N)"）
     std::vector<ProbeSnapshot> probes;
-    bool probe_pending = false;
-    quint64 probe_generation = 0;
-    int probe_stale_dropped = 0;
+    // B4（R-181）：generation/pending/stale 归 ProbeScanner（唯一 IO 宿主）；本处只持句柄。
+    ProbeScanner *probe = nullptr;
 
     // ---- 主题重放的控件集（持有 tokens 副本的自绘控件）----
     QList<formkit::PillBadge *> pills;         // 常驻胶囊（卡头/GPS 值格）

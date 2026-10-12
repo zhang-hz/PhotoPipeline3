@@ -109,8 +109,6 @@
 #include <QDoubleValidator>
 #include <QFileInfo>
 #include <QFrame>
-#include <QFuture>
-#include <QFutureWatcher>
 #include <QGraphicsDropShadowEffect>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -129,7 +127,6 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QVariant>
-#include <QtConcurrent/QtConcurrentRun>
 
 #include <algorithm>
 #include <array>
@@ -137,7 +134,6 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
-#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
@@ -412,65 +408,8 @@ pp::BatchRules build_rules(const MetaState *st) {
 }
 
 // ---------------------------------------------------------------------------
-// 跟随项 probe（异步；M2-T7 序号守卫口径：过期结果一律丢弃、不得乱序回填）
+// 跟随项 probe → meta_probe.{h,cpp}（B.1 拆分步 B4：ProbeScanner 唯一 IO 宿主，R-181）
 // ---------------------------------------------------------------------------
-
-std::vector<ProbeSnapshot> scan_probes(const QStringList &paths) {
-    std::vector<ProbeSnapshot> out;
-    out.reserve(std::size_t(paths.size()));
-    for (const QString &path : paths) {
-        ProbeSnapshot snapshot;
-        snapshot.path = path;
-        snapshot.meta = pp::read_metadata(std::filesystem::path(path.toStdString()));
-        snapshot.ok = snapshot.meta.error.empty();
-        out.push_back(std::move(snapshot));
-    }
-    return out;
-}
-
-void refresh_effective(MetaState *st); // 定义见下（扫描回填要用）
-
-void apply_probe_result(MetaState *st, quint64 generation,
-                        const std::vector<ProbeSnapshot> &probes) {
-    if (generation != st->probe_generation) {
-        ++st->probe_stale_dropped;
-        set_hook(st, "pp_meta_follow_stale_dropped", st->probe_stale_dropped);
-        return;
-    }
-    st->probes = probes;
-    st->probe_pending = false;
-    set_hook(st, "pp_meta_follow_pending", false);
-    refresh_effective(st);
-}
-
-// 只对**跟随项**取 probe（≤ 8：多选小表的行数上限；单文件跟随 = 1 次读）。
-// GUI 线程只做值拷贝 + 挂 watcher，立即返回；结果回填前校验序号。
-void request_probe_scan(MetaState *st) {
-    QStringList paths;
-    const int limit = std::min(static_cast<int>(st->items.size()), kMultiRowCap);
-    for (int i = 0; i < limit; ++i) {
-        paths << st->items.at(i).path;
-    }
-    const quint64 generation = ++st->probe_generation;
-    st->probes.clear();
-    st->probe_pending = !paths.isEmpty();
-    set_hook(st, "pp_meta_follow_pending", st->probe_pending);
-    set_hook(st, "pp_meta_follow_name", st->items.isEmpty() ? QString() : st->items.first().path);
-    set_hook(st, "pp_meta_follow_count", static_cast<int>(st->items.size()));
-    if (paths.isEmpty()) {
-        refresh_effective(st);
-        return;
-    }
-    auto *watcher = new QFutureWatcher<std::vector<ProbeSnapshot>>(st);
-    QObject::connect(watcher, &QFutureWatcher<std::vector<ProbeSnapshot>>::finished, st,
-                     [st, watcher, generation] {
-                         const std::vector<ProbeSnapshot> result = watcher->future().result();
-                         watcher->deleteLater();
-                         apply_probe_result(st, generation, result);
-                     });
-    watcher->setFuture(QtConcurrent::run([paths] { return scan_probes(paths); }));
-    refresh_effective(st); // 在途：先清空显示（不留上一批的陈旧文本）
-}
 
 // ---------------------------------------------------------------------------
 // 生效值刷新（纯函数重算；每次规则变化即时刷新）
@@ -883,7 +822,7 @@ void refresh_effective(MetaState *st) {
     // 时间卡范围胶囊（mockup「影响 12 / 24」的语义位）：页面知道的只有批内文件数，除数/被除数
     // 同源 → 不编造"N / M"。
     st->time_pill->setText(PageMeta::tr("影响 %1 个文件").arg(st->batch_files.size()));
-    if (st->probe_pending) {
+    if (st->probe->pending()) {
         refresh_info_card(st, {});
         refresh_time_section(st, {});
         refresh_gps_section(st, nullptr);
@@ -2790,6 +2729,10 @@ void build_ui(PageMeta *page) {
     st->setObjectName(QString::fromLatin1(kStateObjectName));
     st->setParent(page);
     page->setProperty(kStateProperty, QVariant::fromValue(static_cast<QObject *>(st)));
+    st->probe = new ProbeScanner(st);
+    // B4（R-181）：扫描发起/回填的**唯一** connect（同线程 direct = 既有 refresh_effective
+    // 调用序逐位不变）。
+    QObject::connect(st->probe, &ProbeScanner::changed, st, [st] { refresh_effective(st); });
     st->tokens = theme::tokens(theme::preferred_theme_mode());
 
     auto *outer = new QVBoxLayout(page);

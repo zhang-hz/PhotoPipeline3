@@ -20,6 +20,7 @@
 #include <QWindow>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 
 #ifdef _WIN32
@@ -36,6 +37,17 @@ qreal sane_dpr(qreal dpr) noexcept { return dpr > 0.01 ? dpr : 1.0; }
 } // namespace
 
 #ifdef _WIN32
+namespace {
+// Win32 平台互操作的显式安全转换封装（M7R21F4-0，tidy performance-no-int-to-ptr 收口）：
+// WId/LPARAM 为整数句柄载体、HWND/NCCALCSIZE_PARAMS* 为指针 —— int↔ptr 惯用式此前散写
+// reinterpret_cast 五处。std::bit_cast 位拷贝与 reinterpret_cast 逐位等价（同宽整数↔
+// 指针的 trivially-copyable 位复制），行为零变化；调用点收口为命名函数，语义可检索。
+inline HWND hwnd_of(WId id) { return std::bit_cast<HWND>(id); }
+inline NCCALCSIZE_PARAMS *nccalc_params_of(LPARAM lparam) {
+    return std::bit_cast<NCCALCSIZE_PARAMS *>(lparam);
+}
+} // namespace
+
 // 命中区 → Win32 HT* 常量（能力表逐行：HTCAPTION / HTLEFT…HTBOTTOMRIGHT / HTMAXBUTTON）
 int native_hit_code(HitZone zone) {
     switch (zone) {
@@ -124,7 +136,7 @@ HitZone probe_native_hit_test(QWidget *window, const QPoint &physical_point, boo
 #ifdef _WIN32
     if (window == nullptr)
         return HitZone::None;
-    const HWND handle = reinterpret_cast<HWND>(window->winId());
+    const HWND handle = hwnd_of(window->winId());
     // offscreen 平台的 winId() 不是真窗口（IsWindow 为假）→ 无原生命中测试可言，如实返回
     if (handle == nullptr || !::IsWindow(handle))
         return HitZone::None;
@@ -342,7 +354,7 @@ Frameless *Frameless::attach(QWidget *window, QWidget *caption,
     //   3) DWMWA_WINDOW_CORNER_PREFERENCE = ROUND（Win10 不支持 → 静默忽略）。
     // offscreen 平台的 winId() 不是真窗口（IsWindow 为假）→ 整段跳过，--ui-smoke 行为不变。
     {
-        const HWND handle = reinterpret_cast<HWND>(window->winId());
+        const HWND handle = hwnd_of(window->winId());
         if (handle != nullptr && ::IsWindow(handle)) {
             const LONG_PTR style = ::GetWindowLongPtrW(handle, GWL_STYLE);
             if ((style & WS_THICKFRAME) == 0)
@@ -398,7 +410,7 @@ void Frameless::trigger(CaptionAction action) {
     QWidget *window = d_->window.data();
 #ifdef _WIN32
     // 能力表：Windows 三钮 = WM_SYSCOMMAND(SC_MINIMIZE/SC_MAXIMIZE/SC_CLOSE)
-    const HWND handle = reinterpret_cast<HWND>(window->winId());
+    const HWND handle = hwnd_of(window->winId());
     if (handle != nullptr) {
         ::SendMessageW(handle, WM_SYSCOMMAND, static_cast<WPARAM>(syscommand_for(action)), 0);
         return;
@@ -450,7 +462,7 @@ bool Frameless::nativeEventFilter(const QByteArray &event_type, void *message, q
     if (message == nullptr || result == nullptr || d_->window.isNull())
         return false;
     auto *msg = static_cast<MSG *>(message);
-    const HWND handle = reinterpret_cast<HWND>(d_->window->winId());
+    const HWND handle = hwnd_of(d_->window->winId());
     if (handle == nullptr || msg->hwnd != handle)
         return false;
     // M7-WP5（UX-7①）：真无边框 = **非客户区收口**。只置 Qt::FramelessWindowHint 不处理本消息时，
@@ -461,7 +473,7 @@ bool Frameless::nativeEventFilter(const QByteArray &event_type, void *message, q
         if (msg->wParam != 0) {
             // wParam=TRUE：lParam = NCCALCSIZE_PARAMS*；rgrc[0] 入参 = 拟议的新窗口矩形，
             // 出参 = 新客户区矩形。默认（非最大化）客户区 = 整窗。
-            auto *params = reinterpret_cast<NCCALCSIZE_PARAMS *>(msg->lParam);
+            auto *params = nccalc_params_of(msg->lParam);
             if (params != nullptr && ::IsZoomed(msg->hwnd)) {
                 // 最大化时窗口矩形会超出显示器一圈（粗框藏在屏幕外）→ 整窗=客户区会让内容
                 // 出屏并盖住任务栏。钳到显示器工作区 = 原生最大化窗口的同款语义。

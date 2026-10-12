@@ -199,9 +199,11 @@ private:
 // R-199（M7-R2.1-F3）：三态机/二态机组合框的**唯一真相 = itemData**（构造时 addItem 文本 +
 // 枚举值，与 R-190 同一收口法）—— 读回 currentData()、落值 findData()；原
 // currentIndex()==1/2 魔法索引全部退役（deep-review R-199/E5-09「调序即全对话框错位」）。
-enum class TriMode { Inherit = 0, Override = 1, Clear = 2 };       // 时间 / GPS 三态
-enum class TimeMethod { Delta = 0, TimeZone = 1 };                 // 时间方式二态
-enum class PrivacyMode { Inherit = 0, ForceOn = 1, ForceOff = 2 }; // 隐私剥除三态
+// M7R21F4-0：三枚举基型 int→uint8_t（tidy performance-enum-size，值域 0..2 适配；R-197/199
+// 收敛新增的三个 file-local 枚举，读写面 static_cast<int> 照旧，行为零变化）。
+enum class TriMode : std::uint8_t { Inherit = 0, Override = 1, Clear = 2 };       // 时间 / GPS 三态
+enum class TimeMethod : std::uint8_t { Delta = 0, TimeZone = 1 };                 // 时间方式二态
+enum class PrivacyMode : std::uint8_t { Inherit = 0, ForceOn = 1, ForceOff = 2 }; // 隐私剥除三态
 
 void add_tri_items(QComboBox *cb, const QString &inherit, const QString &over,
                    const QString &clear) {

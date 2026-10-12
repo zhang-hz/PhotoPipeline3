@@ -3782,11 +3782,17 @@ QString probe_bar_histogram(const QImage &img) {
 }
 
 // 探针用的事件构造
-pp::FileEvent probe_progress(int index, int out_index, pp::Stage stage, float frac, bool synth) {
+// M7R21F4-0（NOLINT 处置翻案）：index/out_index = 文件行 + 输出序号，同为 int 易混 ——
+// 按「同型形参对 → 参数组结构化」收拢成命名组 EventRow（基线内同类告警一并收口）。
+struct EventRow {
+    int index = 0;
+    int out_index = -1;
+};
+pp::FileEvent probe_progress(const EventRow &row, pp::Stage stage, float frac, bool synth) {
     pp::FileEvent ev{};
-    ev.index = static_cast<std::size_t>(index);
+    ev.index = static_cast<std::size_t>(row.index);
     ev.state = pp::FileState::Progress;
-    ev.progress.output_index = out_index;
+    ev.progress.output_index = row.out_index;
     ev.progress.stage = stage;
     ev.progress.stage_frac = frac;
     ev.progress.overall_frac = frac;
@@ -3877,11 +3883,11 @@ void MainWindow::Impl::smoke_probe_run(const QString &shots_dir) {
                                    QStringLiteral("IMG_2732.jpg"), QStringLiteral("scan_012.png")});
     pump(120);
     // 文件 0：共享段（probe/decode/color）→ JPEG 真实行级 78% + WebP 合成 52%
-    page->on_event(probe_progress(0, -1, pp::Stage::Probe, 1.0f, false));
-    page->on_event(probe_progress(0, -1, pp::Stage::Decode, 1.0f, false));
-    page->on_event(probe_progress(0, -1, pp::Stage::Color, 1.0f, false));
-    page->on_event(probe_progress(0, 0, pp::Stage::Encode, 0.78f, false));
-    page->on_event(probe_progress(0, 1, pp::Stage::Encode, 0.52f, true));
+    page->on_event(probe_progress({0, -1}, pp::Stage::Probe, 1.0f, false));
+    page->on_event(probe_progress({0, -1}, pp::Stage::Decode, 1.0f, false));
+    page->on_event(probe_progress({0, -1}, pp::Stage::Color, 1.0f, false));
+    page->on_event(probe_progress({0, 0}, pp::Stage::Encode, 0.78f, false));
+    page->on_event(probe_progress({0, 1}, pp::Stage::Encode, 0.52f, true));
     // 文件 1：共享段 → JPEG 进行中 30% → 终态失败（逐输出原因 + 文件级聚合原因同文案）；
     //         WebP 侧 ok 但 0 字节 —— 3-10 的「异常不得落绿色完成态」样本
     {
@@ -3895,8 +3901,8 @@ void MainWindow::Impl::smoke_probe_run(const QString &shots_dir) {
         failed.outputs[0].t.encode_ms = 640;
         failed.outputs[1].format_id = "webp";
         failed.outputs[1].ok = true; // ok 但 0 字节（修 3-10 的"PNG 0 KB"同款）
-        page->on_event(probe_progress(1, -1, pp::Stage::Decode, 1.0f, false));
-        page->on_event(probe_progress(1, 0, pp::Stage::Encode, 0.30f, false));
+        page->on_event(probe_progress({1, -1}, pp::Stage::Decode, 1.0f, false));
+        page->on_event(probe_progress({1, 0}, pp::Stage::Encode, 0.30f, false));
         page->on_event(probe_terminal(1, pp::FileState::Failed, failed));
     }
     // 文件 2：无事件 = 交错排队（stagger_ms=150）→ pill 收「排队」（A39 ③：交错启动语义
@@ -3918,7 +3924,7 @@ void MainWindow::Impl::smoke_probe_run(const QString &shots_dir) {
         done.outputs[1].out_bytes = 233472; // 228 KB
         done.outputs[1].t.encode_ms = 850;
         done.outputs[1].t.metawrite_ms = 50; // 0.9s；ratio = 5.6×
-        page->on_event(probe_progress(3, -1, pp::Stage::Decode, 1.0f, false));
+        page->on_event(probe_progress({3, -1}, pp::Stage::Decode, 1.0f, false));
         page->on_event(probe_terminal(3, pp::FileState::Done, done));
     }
     // 文件 4：终态完成但**一个输出 0 字节** → 组行「异常」+ 该行琥珀（修 3-10；绿色只给真成功）
@@ -3935,7 +3941,7 @@ void MainWindow::Impl::smoke_probe_run(const QString &shots_dir) {
         zero.outputs[1].format_id = "webp";
         zero.outputs[1].ok = true; // 0 字节（palette 无像素写入）
         zero.outputs[1].t.encode_ms = 0;
-        page->on_event(probe_progress(4, -1, pp::Stage::Decode, 1.0f, false));
+        page->on_event(probe_progress({4, -1}, pp::Stage::Decode, 1.0f, false));
         page->on_event(probe_terminal(4, pp::FileState::Done, zero));
     }
     pump(250); // 60ms flush + 布局
@@ -4136,8 +4142,8 @@ void MainWindow::Impl::smoke_probe_run(const QString &shots_dir) {
             page, &PageRun::cancel_requested, page, [&cancel_hits]() { ++cancel_hits; });
         page->begin_run(
             2, QStringList{QStringLiteral("IMG_2731.jpg"), QStringLiteral("IMG_2732.jpg")});
-        page->on_event(probe_progress(0, -1, pp::Stage::Decode, 1.0f, false));
-        page->on_event(probe_progress(0, 0, pp::Stage::Encode, 0.42f, false));
+        page->on_event(probe_progress({0, -1}, pp::Stage::Decode, 1.0f, false));
+        page->on_event(probe_progress({0, 0}, pp::Stage::Encode, 0.42f, false));
         pump(120);
         auto *cancel = page->findChild<QPushButton *>(QStringLiteral("pp-run-cancel"));
         if (cancel == nullptr || !cancel->isEnabled()) {
@@ -4179,9 +4185,9 @@ void MainWindow::Impl::smoke_probe_run(const QString &shots_dir) {
         page->begin_run(
             4, QStringList{QStringLiteral("IMG_2731.jpg"), QStringLiteral("scan_007.png"),
                            QStringLiteral("P1010888.RW2.jpg"), QStringLiteral("IMG_2732.jpg")});
-        page->on_event(probe_progress(0, -1, pp::Stage::Decode, 1.0f, false));
-        page->on_event(probe_progress(0, 0, pp::Stage::Encode, 0.78f, false));
-        page->on_event(probe_progress(0, 1, pp::Stage::Encode, 0.52f, true));
+        page->on_event(probe_progress({0, -1}, pp::Stage::Decode, 1.0f, false));
+        page->on_event(probe_progress({0, 0}, pp::Stage::Encode, 0.78f, false));
+        page->on_event(probe_progress({0, 1}, pp::Stage::Encode, 0.52f, true));
         pump(250);
         QWidget *light_bar = page->findChild<QWidget *>(QStringLiteral("pp-run-bar-0-1"));
         const BarPixels light_synth =
@@ -4252,7 +4258,7 @@ void MainWindow::Impl::smoke_probe_run_geometry() {
         done.outputs[0].t.encode_ms = 890;
         done.outputs[1].format_id = "webp";
         done.outputs[1].ok = true; // 0 字节
-        page.on_event(probe_progress(0, -1, pp::Stage::Decode, 1.0f, false));
+        page.on_event(probe_progress({0, -1}, pp::Stage::Decode, 1.0f, false));
         page.on_event(probe_terminal(0, pp::FileState::Done, done));
 
         pp::FileResult failed;
@@ -4262,7 +4268,7 @@ void MainWindow::Impl::smoke_probe_run_geometry() {
         failed.outputs[0].error = QStringLiteral("16→8 位降档被禁止").toStdString();
         failed.outputs[1].format_id = "webp";
         failed.outputs[1].error = QStringLiteral("16→8 位降档被禁止").toStdString();
-        page.on_event(probe_progress(1, -1, pp::Stage::Decode, 1.0f, false));
+        page.on_event(probe_progress({1, -1}, pp::Stage::Decode, 1.0f, false));
         page.on_event(probe_terminal(1, pp::FileState::Failed, failed));
     }
     {
@@ -4893,16 +4899,20 @@ QWidget *menu_host_of(QWidget *from) {
 }
 
 // 卡菜单断言：非分隔项逐条对齐 contextmenu 构造面（词表单源）+ 首项文案钉字面量（防回归）
-// M7-R2-GATE（tidy bugprone-easily-swappable-parameters）：checked/bad = 断言计数出参对
-// （核过数/坏数），探针签名保持波次冻结形态、不为消音改形参序。
-// NOLINTBEGIN(bugprone-easily-swappable-parameters)
+// M7R21F4-0（NOLINT 处置翻案，替代 R2G 的行级消音）：checked/bad = 断言计数出参对
+// （核过数/坏数），同为 int& 易混 —— 按「同型形参对 → 参数组结构化」收拢成命名组 Tally，
+// 探针输出行（UI-SMOKE … checked=/bad=）逐字不变。
+struct Tally {
+    int checked = 0;
+    int bad = 0;
+};
 void expect_card_menu(const QString &tag, QWidget *host, const QString &first_text,
                       const std::vector<contextmenu::Item> &want,
-                      const std::function<void(const QString &)> &fail, int &checked, int &bad) {
+                      const std::function<void(const QString &)> &fail, Tally &tally) {
     const auto expect = [&](bool ok, const QString &what) {
-        ++checked;
+        ++tally.checked;
         if (!ok) {
-            ++bad;
+            ++tally.bad;
             fail(QStringLiteral("context-menu：%1 %2").arg(tag, what));
         }
     };
@@ -4928,7 +4938,6 @@ void expect_card_menu(const QString &tag, QWidget *host, const QString &first_te
                .arg(got.isEmpty() ? QStringLiteral("<空>") : got.first(), first_text));
     menu->close();
 }
-// NOLINTEND(bugprone-easily-swappable-parameters)
 
 } // namespace
 
@@ -5063,8 +5072,7 @@ void MainWindow::Impl::smoke_probe_check_all() {
 
 // —— UX-1：卡片右键菜单（context-menu）：①②③④⑤⑥⑦⑧⑨⑩⑪⑫ 逐卡弹一次 ——
 void MainWindow::Impl::smoke_probe_context_menus() {
-    int checked = 0;
-    int bad = 0;
+    Tally tally;
     const std::function<void(const QString &)> fail = [this](const QString &reason) {
         smoke_fail(reason);
     };
@@ -5120,10 +5128,10 @@ void MainWindow::Impl::smoke_probe_context_menus() {
                      contextmenu::log_tail_actions(contextmenu::LogTailIntents{})});
     for (const CardMenu &card : cards) {
         expect_card_menu(QString::fromLatin1(card.tag), card.host, card.first, card.want, fail,
-                         checked, bad);
+                         tally);
     }
     std::printf("UI-SMOKE context-menu: cards=%d checked=%d bad=%d\n",
-                static_cast<int>(cards.size()), checked, bad);
+                static_cast<int>(cards.size()), tally.checked, tally.bad);
     std::fflush(stdout);
 }
 
@@ -7943,23 +7951,30 @@ void MainWindow::Impl::probe_meta_sec_j(const MetaProbeCtx &c, const QString &sh
             map->set_offline(true);
             pump(80);
 
-            const auto make_result = [](const QString &title, const QString &address, double lat,
-                                        double lon, double distance_m) {
+            // M7R21F4-0：lat/lon/distance_m 三同型 double 易混（tidy 基线内告警）——
+            // 按「同型形参对 → 参数组结构化」收拢成命名组 GeoRow。
+            struct GeoRow {
+                double lat = 0.0;
+                double lon = 0.0;
+                double distance_m = -1.0;
+            };
+            const auto make_result = [](const QString &title, const QString &address,
+                                        const GeoRow &pos) {
                 pp::map::GeocodeResult result;
                 result.title = title;
                 result.address = address;
-                result.lat = lat;
-                result.lon = lon;
-                result.distance_m = distance_m;
+                result.lat = pos.lat;
+                result.lon = pos.lon;
+                result.distance_m = pos.distance_m;
                 return result;
             };
             const std::vector<pp::map::GeocodeResult> results = {
-                make_result(QStringLiteral("探针结果甲"), QStringLiteral("北京市东城区"), 39.9087,
-                            116.3975, -1.0),
-                make_result(QStringLiteral("探针结果乙"), QStringLiteral("上海市黄浦区"), 31.2304,
-                            121.4737, 250.0),
-                make_result(QStringLiteral("探针结果丙"), QStringLiteral("深圳市福田区"), 22.5431,
-                            114.0579, -1.0),
+                make_result(QStringLiteral("探针结果甲"), QStringLiteral("北京市东城区"),
+                            {39.9087, 116.3975, -1.0}),
+                make_result(QStringLiteral("探针结果乙"), QStringLiteral("上海市黄浦区"),
+                            {31.2304, 121.4737, 250.0}),
+                make_result(QStringLiteral("探针结果丙"), QStringLiteral("深圳市福田区"),
+                            {22.5431, 114.0579, -1.0}),
             };
             std::vector<pp::map::MapWidget::Pin> pins;
             pins.reserve(results.size());

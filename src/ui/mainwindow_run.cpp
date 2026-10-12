@@ -744,9 +744,11 @@ void MainWindow::Impl::push_log_tail() {
             push_log_tail();
         }
     });
-    // M7-R2-GATE（tidy bugprone-exception-escape）：QtConcurrent 任务体的异常由 Qt 捕获进
-    // QFuture（result() 处再抛），非"逃逸出线程入口"；同文件 :531 既有同形任务为基线内先例。
-    // NOLINTNEXTLINE(bugprone-exception-escape)
+    // M7R21F4-0（NOLINT 处置翻案）：原 R2G 对本 lambda bugprone-exception-escape 的行级
+    // 消音已撤销（M7-ADJ-tidy-reseed 要求零抑制）。QtConcurrent 任务体的异常由 Qt 捕获进
+    // QFuture（result() 处再抛）；修法（lambda 内 try/catch 吞异常）= 行为变化，非零行为
+    // 修复不可采 —— 按 M7-ADJ-tidy-reseed 口径入 tidy 基线重播种（本文件 1→2，与同文件
+    // :531 既有同形任务同册归因），不再在代码里消音。
     watcher->setFuture(QtConcurrent::run([dir] { return read_log_tail(dir); }));
 }
 

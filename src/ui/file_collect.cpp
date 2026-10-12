@@ -50,30 +50,32 @@ namespace pp::ui {
 // 单个输入项 → 候选文件（目录递归；点文件/点目录跳过；不支持者按去重路径计数，v1.1）。
 // R-148：枚举/读取失败的输入项**计数**（原实现静默忽略，用户不知道漏了什么）——目录打不开 /
 // 枚举中断 / 输入项不存在或不可读，各计 1 项「未能读取」。
-// M7-R2-GATE（tidy bugprone-easily-swappable-parameters）：unsupported/unreadable = 两个语义
-// 各别的出参计数（不支持 vs 未能读取），唯一调用点（本文件 scan_inputs）实参名逐一对应；
-// 形参序按语义分组保持，不为消音而重排。
-// NOLINTBEGIN(bugprone-easily-swappable-parameters)
+// M7R21F4-0（NOLINT 处置翻案，替代 R2G 的行级消音）：unsupported/unreadable = 两个语义
+// 各别的出参计数（不支持 vs 未能读取），同为 size_t& 易混 —— 按「同型形参对 → 参数组
+// 结构化」收拢成命名组 ScanTally（文件内私有 struct），替代 NOLINT 消音。
+struct ScanTally {
+    std::size_t unsupported = 0;
+    std::size_t unreadable = 0;
+};
 void collect_from(const std::filesystem::path &input, std::vector<std::filesystem::path> &files,
-                  std::set<QString> &unsupported_seen, std::size_t &unsupported,
-                  std::size_t &unreadable) {
+                  std::set<QString> &unsupported_seen, ScanTally &tally) {
     // 不支持文件：仅首次遇到（自上次 clear 以来）才计数（§2.8 v1.1 裁定）
     const auto count_unsupported = [&](const std::filesystem::path &p) {
         if (unsupported_seen.insert(fs_string(p.lexically_normal())).second)
-            ++unsupported;
+            ++tally.unsupported;
     };
     std::error_code ec;
     if (std::filesystem::is_directory(input, ec)) {
         std::filesystem::recursive_directory_iterator it(
             input, std::filesystem::directory_options::skip_permission_denied, ec);
         if (ec) {
-            ++unreadable; // R-148：目录打不开（权限/竞态）→ 计入「未能读取」
+            ++tally.unreadable; // R-148：目录打不开（权限/竞态）→ 计入「未能读取」
             return;
         }
         const std::filesystem::recursive_directory_iterator end;
         for (; it != end; it.increment(ec)) {
             if (ec) {
-                ++unreadable; // R-148：枚举中断（该子树的剩余项读不到）
+                ++tally.unreadable; // R-148：枚举中断（该子树的剩余项读不到）
                 break;
             }
             const std::filesystem::path &p = it->path();
@@ -87,7 +89,7 @@ void collect_from(const std::filesystem::path &input, std::vector<std::filesyste
             std::error_code type_ec;
             if (!it->is_regular_file(type_ec)) {
                 if (type_ec)
-                    ++unreadable; // R-148：条目 stat 失败（被删/无权限）
+                    ++tally.unreadable; // R-148：条目 stat 失败（被删/无权限）
                 continue;
             }
             if (is_supported_ext(p)) {
@@ -108,20 +110,20 @@ void collect_from(const std::filesystem::path &input, std::vector<std::filesyste
         return;
     }
     // R-148：不存在/非普通文件/不可读 → 计入「未能读取」（原为静默忽略）
-    ++unreadable;
+    ++tally.unreadable;
 }
-// NOLINTEND(bugprone-easily-swappable-parameters)
 
 ScanBatch scan_inputs(const QStringList &paths) {
     ScanBatch batch;
     std::vector<std::filesystem::path> found;
     std::set<QString> unsupported_seen;
-    std::size_t unsupported = 0;
+    ScanTally tally;
     for (const QString &p : paths) {
         if (p.isEmpty())
             continue;
-        collect_from(fs_path(p), found, unsupported_seen, unsupported, batch.unreadable);
+        collect_from(fs_path(p), found, unsupported_seen, tally);
     }
+    batch.unreadable = tally.unreadable;
     // M2-T16b：批次内按路径字典序排序后再追加 —— UI 行序不再依赖 readdir 顺序。
     std::sort(found.begin(), found.end(),
               [](const std::filesystem::path &a, const std::filesystem::path &b) {

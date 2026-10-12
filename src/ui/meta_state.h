@@ -478,6 +478,7 @@ void clear_multi_rows(MetaState *st);
 
 // —— GPS 卡（meta_card_gps.cpp；B5）——
 void fill_result_rows(MetaState *st);
+void refresh_layer_hint(MetaState *st);
 void clear_search_state(MetaState *st);
 void apply_picked_point(MetaState *st, double lat, double lon, const QString &status);
 

@@ -1398,6 +1398,18 @@ std::string effective_datetime(const Exiv2::ExifData &exif, const Exiv2::XmpData
     return {};
 }
 
+// R-204（M7-R2.1-F4）：机型单源访问器 —— Exif.Image.Model 首尾空白裁剪，缺失 = 空串。
+// 裁剪口径与原 group_scan.cpp 手写段逐字符一致（" \t\r\n" 四字符集），行为零变化。
+std::string camera_model(const SourceMeta &meta) {
+    const auto it = meta.exif.findKey(Exiv2::ExifKey("Exif.Image.Model"));
+    if (it == meta.exif.end())
+        return {};
+    std::string camera = it->toString();
+    const std::size_t b = camera.find_first_not_of(" \t\r\n");
+    const std::size_t e = camera.find_last_not_of(" \t\r\n");
+    return (b == std::string::npos) ? std::string() : camera.substr(b, e - b + 1);
+}
+
 // ===========================================================================
 // internal helpers that need external (test) visibility
 // ===========================================================================

@@ -79,6 +79,10 @@ const char *kDevUsage =
     "  --base DIR              mirror-path base directory (repeatable)\n"
     "  --log-level LVL         trace|debug|info|warn|error\n"
     "  -h, --help              this text\n"
+    "NOTE (R-145): --dev default values intentionally differ from the GUI ——\n"
+    "      --conflict default = overwrite (GUI default = rename; pass --conflict rename for\n"
+    "      GUI semantics), and the single-output template derives to $dir/$file (GUI default\n"
+    "      = $format/$dir/$file; pass --template '$format/$dir/$file' for GUI semantics).\n"
     "sidecars (--dev only): <out>/<每个产物>.pp.json（逐输出断言面）、\n"
     "                       <out>/progress-trace.jsonl（进度事件流，W1-T6；schema 见 "
     "tests/golden/SCHEMA.md）\n"
@@ -361,52 +365,25 @@ bool parse_dev_options(int argc, char **argv, DevOptions &o, std::string &err) {
     return true;
 }
 
+// R-239（M7-R2.1-F4）：词表映射上收 core 单源（pp::parse_conflict_policy），本地副本转发
+// （词表 skip|overwrite|rename 逐字不变；默认值分歧见 --help 的 R-145 醒目标注）。
 bool parse_conflict(std::string_view s, pp::ConflictPolicy &out) {
-    if (s == "skip") {
-        out = pp::ConflictPolicy::Skip;
-        return true;
-    }
-    if (s == "overwrite") {
-        out = pp::ConflictPolicy::Overwrite;
-        return true;
-    }
-    if (s == "rename") {
-        out = pp::ConflictPolicy::Rename;
-        return true;
-    }
-    return false;
+    return pp::parse_conflict_policy(s, out);
 }
 
 // R-236：conflict 的**生效值**文本（= CLI 词表；预设覆盖后与 CLI 原文可能不同）。
-const char *conflict_text(pp::ConflictPolicy p) {
-    switch (p) {
-    case pp::ConflictPolicy::Skip:
-        return "skip";
-    case pp::ConflictPolicy::Overwrite:
-        return "overwrite";
-    case pp::ConflictPolicy::Rename:
-        return "rename";
-    }
-    return "rename";
-}
+// R-239（M7-R2.1-F4）：词表映射上收 core 单源（pp::conflict_policy_name），本地副本转发。
+const char *conflict_text(pp::ConflictPolicy p) { return pp::conflict_policy_name(p); }
 
 // --param KEY=VALUE → typed ParamValue using the format's parameter table. Keys that are not in
 // the table are kept as strings so the encoder can report them through its E9 warning path.
+// R-195 转发（M7-R2.1-F4）：ParamDef 查找走 pp::lookup_param_def 单源（first-wins）；旧
+// set_param 双层循环覆盖 def 指针 = last-wins（同 key 多声明时与 GUI 侧解析出不同 def）退役。
+// 单源语义：tech 指名 = 命中技术内 first-wins、该技术不声明时回退后端全技术并集（first-wins）。
 bool set_param(pp::ParamSet &s, const pp::FormatDef &f, const std::string &backend,
                const std::string &tech, const std::string &key, const std::string &raw,
                std::string &err) {
-    const pp::ParamDef *def = nullptr;
-    const pp::BackendDef *b = pp::find_backend(f, backend);
-    if (b) {
-        for (const pp::TechDef &t : b->techs) {
-            if (!tech.empty() && t.id != tech)
-                continue;
-            for (const pp::ParamDef &p : t.params) {
-                if (p.key == key)
-                    def = &p;
-            }
-        }
-    }
+    const pp::ParamDef *def = pp::lookup_param_def(f, backend, tech, key);
     if (!def) {
         s[key] = raw; // unknown → encoder E9 warning (log_warn, no WarningKind)
         pp::log_warn("harness", "dev_cli.cpp", "unknown parameter key; forwarded to encoder",
@@ -631,8 +608,12 @@ private:
             return "cancelled";
         case pp::FileState::Progress:
             return "progress";
-            // 注：DoneWithErrors 走 default（"unknown"）—— 与旧 main.cpp 逐字一致；该状态
-            // 当前不可达（scheduler 把 DoneWithErrors verdict 映射为 FileState::Done）。
+        case pp::FileState::DoneWithErrors:
+            // R-076 连带补档（M7-R2.1-F4，R2B ③-2）：引擎侧 DoneWithErrors 有损映射已根治
+            // （scheduler 直达本态），旧注释「当前不可达」失 trace 会落 "unknown" 的尾巴。
+            // 取名 "done_with_errors" = SCHEMA.md state 词表「FileState 的小写名」口径；
+            // SCHEMA 值表未列本值属登记余量（tests/golden 冻结面不动），见 handoff。
+            return "done_with_errors";
         }
         return "unknown";
     }

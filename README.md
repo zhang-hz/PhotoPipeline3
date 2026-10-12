@@ -146,9 +146,12 @@ photopipeline --dev <input...> --out <dir> [options]
   --preset FILE          载入预设 JSON（命令行选项优先）
   --param KEY=VALUE      覆盖单个参数（可多次）
   --meta KEY=VALUE       写入/覆盖元数据标签（可多次；Exiv2 全名，如 Exif.Image.Artist）
-  --workers N            并发 worker 数（默认物理核数；dev 默认 1 便于日志对照）
+  --workers N            并发 worker 数（0 = 自动：线程预算或逻辑核数；dev 默认 1 便于日志对照）
   --base DIR             镜像路径基准目录（可多次；默认各输入文件所在目录）
   --log-level LVL        trace|debug|info|warn|error
+注意（R-145）：--dev 默认值有意与 GUI 不同 —— --conflict 默认 overwrite（GUI 默认 rename，
+  显式传 --conflict rename 即同 GUI 语义）；单输出模板派生为 $dir/$file（GUI 默认
+  $format/$dir/$file，显式传 --template '$format/$dir/$file' 即同 GUI 语义）。
 退出码 = 失败文件数（0=全部成功）；stdout 末尾打印汇总表（成功/失败/跳过/取消、总耗时、吞吐 MB/s）
 sidecar（--dev 专有）：<out>/<每个产物>.pp.json（逐输出断言面）、
                        <out>/progress-trace.jsonl（进度事件流；schema 见 tests/golden/SCHEMA.md）

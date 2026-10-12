@@ -168,26 +168,11 @@ bool skeleton_state_disabled() {
 using theme::preferred_theme_mode;
 
 // —— M6-T11（§5.2 R5 / 契约 C6 的消费面）：图层档的跨进程记忆 ——
-// 档词表 = AppSettings.map_style（road|satellite|hybrid），与 GPS 卡图层 Seg 的三态段序
-// （矢量|卫星|混合；objectName pp-meta-gps-layer，C7 冻结面）**同序同义**，也与
-// mapwidget/layers.h 的 TileStyle 枚举同序。本表 = 该序在外壳侧的唯一登记处（core 侧词表在
-// settings.cpp 的 apply_pair；页面侧段序在 page_meta.cpp 的三段构造）。
-struct MapStyleRow {
-    const char *id;
-    pp::map::TileStyle style;
-};
-constexpr MapStyleRow kMapStyles[] = {
-    {"road", pp::map::TileStyle::Road},           // 0 矢量
-    {"satellite", pp::map::TileStyle::Satellite}, // 1 卫星
-    {"hybrid", pp::map::TileStyle::Hybrid},       // 2 混合
-};
-
+// R-137（M7-R2.1-F4）：本地 MapStyleRow/kMapStyles 档位表退役 —— 档位索引走 layers 单源
+// API（tile_style_from_name；词表与序在 core/settings.h 的 kMapStyleIds，name↔enum 映射在
+// mapwidget/layers.cpp）。词表外/空 → 矢量（Road=0，与 core「值不合法 → 保留默认」同口径）。
 int map_style_index(const std::string &id) {
-    for (int i = 0; i < 3; ++i) {
-        if (id == kMapStyles[i].id)
-            return i;
-    }
-    return 0; // 词表外/空 → 矢量（与 core「值不合法 → 保留默认」同口径）
+    return static_cast<int>(pp::map::tile_style_from_name(QString::fromStdString(id)));
 }
 
 // 会话态文件（QSettings INI）：与 settings.ini 同目录（data_dir() 保证已存在）
@@ -1279,6 +1264,9 @@ void MainWindow::wire() {
             [this](const QString &path) { impl_->clear_exception(path); });
 
     connect(d.page_output, &PageOutput::config_changed, this, [this] { refresh_status(); });
+    // R-319（M7-R2.1-F4）：镜像基准目录 → 文件列表行 base_dir（收集/重算两触点在模型侧）
+    connect(d.page_output, &PageOutput::mirror_base_changed, this,
+            [this](const QString &base) { impl_->model->set_mirror_base(base); });
     connect(d.page_output, &PageOutput::manage_presets_requested, this,
             &MainWindow::manage_presets);
     connect(d.page_output, &PageOutput::open_settings_requested, this, &MainWindow::open_settings);
@@ -1859,13 +1847,13 @@ void MainWindow::Impl::restore_session() {
 //     settings.map_sat_labels → map->set_sat_labels（启动与设置变更即这两个调用点）。
 // 单源：段序 → 图层的映射仍是 page_meta 的 layer_style_of（本处不重复枚举枚举值），故回填
 // 先「点段」= 与用户同一条链路（set_tile_style + 图层支持性提示 + 自验钩子一并落地），随后
-// 再按 kMapStyles 直达一次 set_tile_style（同值幂等，是"档 = 图"的兜底直落）。两行的组合
+// 再按词表下标序直达一次 set_tile_style（同值幂等，是"档 = 图"的兜底直落）。两行的组合
 // 语义 =「记忆的图层必须真的显示出来」：段在目标档而图未跟（或反之）都会让用户看到与档
 // 不符的图层。
 
 // R-256：换层写回动作本体（原 apply_map_style 内匿名 lambda 的字面搬出，逐字不变）。
 void MainWindow::Impl::on_map_layer_changed(int index) {
-    const std::string id = kMapStyles[std::clamp(index, 0, 2)].id;
+    const std::string id = pp::kMapStyleIds[std::clamp(index, 0, 2)]; // R-137 词表单源
     if (settings.map_style == id) {
         return; // 程序化回填（set_current_index）不发射信号；同值也不落盘
     }
@@ -1906,7 +1894,8 @@ void MainWindow::Impl::apply_map_style() {
         }
     }
     if (auto *map = page_meta->findChild<pp::map::MapWidget *>(QStringLiteral("pp-meta-map"))) {
-        map->set_tile_style(kMapStyles[index].style); // 档 → 图直达（§5.2；幂等）
+        map->set_tile_style(static_cast<pp::map::TileStyle>(
+            index)); // 档 → 图直达（§5.2；幂等）；下标序 = TileStyle 枚举序（R-137 单源）
         // M6-T12（§5.2/§7-T12 R5）：`map_sat_labels`（混合「叠标注」开关，T11 落地存储）的
         // 消费面 —— 启动与「设置·地图」变更后各下发一次（本函数两个调用点即这两处）；
         // mapwidget 侧只影响 Hybrid 的 label 层（false = 只画影像层），其余绘制零改动。

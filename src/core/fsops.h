@@ -145,10 +145,20 @@ std::vector<std::filesystem::path> collect_inputs(
 // —— M7-R2B 加性追加（R-007 长路径 `\\?\` 归一收口；裁定登记 build/m7r2-b/handoff.md）——
 // Windows 长路径归一：**绝对**路径归一为 `\\?\` 扩展形式（drive 形态 `C:\x` → `\\?\C:\x`；
 // UNC 形态 `\\server\share\x` → `\\?\UNC\server\share\x`），绕过 MAX_PATH=260 的 open 上限
-// （fopen/Exiv2 写入口统一经本函数，见 metadata.cpp 的 exiv2_apply 族；codecs 侧 fopen
-// 调用点属跨界面，登记 handoff「跨界需求」）。幂等：已带 `\\?\`（或 `\\.\` 设备命名空间）
+// （fopen/Exiv2 写入口统一经本函数，见 metadata.cpp 的 exiv2_apply 族；codecs 侧写盘点
+// 已随 M7-R2.1-F4 收口——enc_heif fopen / enc_oiio open / resolve_conflict exists 探测）。
+// 幂等：已带 `\\?\`（或 `\\.\` 设备命名空间）
 // 前缀原样返回；相对路径/空路径原样返回（无稳定绝对语义，不归一）；非 Windows 恒原样返回
 // （POSIX 无 MAX_PATH）。分隔符归一为 `\`（`\\?\` 命名空间不接受 `/`）。
 std::filesystem::path normalize_extended_path(const std::filesystem::path &p);
+
+// —— M7-R2.1-F4 / R-239 加性追加（末尾；裁定登记 docs/m7-adjudications.md 十一节）——
+// ConflictPolicy ↔ 文本映射**单源**（词表 skip|overwrite|rename，与 SCHEMA/预设 JSON/CLI
+// 既有词表逐字相同）。旧三套副本（dev_cli.cpp parse_conflict/conflict_text、preset_io.cpp
+// parse_conflict_name/conflict_name）转发到本组；page_output 侧是 itemData 枚举往返（无
+// 文本表）不涉。默认值分歧（dev=overwrite / GUI=rename / JSON=rename）不由映射层收口——
+// R-145 取「--help 醒目标注」路线。既有签名/行为零改动。
+const char *conflict_policy_name(ConflictPolicy p);
+bool parse_conflict_policy(std::string_view s, ConflictPolicy &out);
 
 } // namespace pp

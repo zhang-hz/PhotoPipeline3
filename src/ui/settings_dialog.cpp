@@ -64,6 +64,7 @@
 #include "mapwidget/layers.h"   // R-137：map_style 词表单源（tile_style_name）
 #include "platform/frameless.h" // 无边框接线（拖拽/八向缩放；与主窗同一机制）
 #include "platform/paths.h"     // R-072：settings_file() 读写自检
+#include "ui/caption_button.h" // R-279：caption 钮唯一实现（收编主窗 CaptionButton）
 #include "ui/formkit.h"
 #include "ui/icons.h"
 #include "ui/leading_indent.h" // R-218（M7-R2E2）：逻辑边距（标题栏）单源
@@ -337,41 +338,8 @@ private:
     QColor color_;
 };
 
-// caption 关闭钮（46×32；§3.3：透明底、悬停 #c42b1c 白字 —— 图标取色吃不到 QSS 的 :hover，
-// 故悬停换色由本控件显式落地，与主窗 CaptionButton 同一口径）
-class CaptionCloseButton : public QPushButton {
-public:
-    CaptionCloseButton(const QColor &normal, const QColor &hover, QWidget *parent = nullptr)
-        : QPushButton(parent), normal_(normal), hover_(hover) {
-        setText(QString());
-        setAttribute(Qt::WA_Hover, true);
-        setCursor(Qt::PointingHandCursor);
-        setFocusPolicy(Qt::NoFocus);
-        apply_icon(false);
-    }
-    void set_colors(const QColor &normal, const QColor &hover) {
-        normal_ = normal;
-        hover_ = hover;
-        apply_icon(underMouse());
-    }
-
-protected:
-    void enterEvent(QEnterEvent *event) override {
-        QPushButton::enterEvent(event);
-        apply_icon(true);
-    }
-    void leaveEvent(QEvent *event) override {
-        QPushButton::leaveEvent(event);
-        apply_icon(false);
-    }
-
-private:
-    void apply_icon(bool hovered) {
-        icons::apply(this, icons::Name::CaptionClose, hovered ? hover_ : normal_, QColor(), 12);
-    }
-    QColor normal_;
-    QColor hover_;
-};
+// caption 关闭钮 = ui/caption_button.h 的 CaptionButton（R-279 收编，唯一实现）；
+// 弹窗侧沿用同一 46×32 单轨与图标名 CaptionClose（图标 12px 漂移随合并归位 10px §3.3）。
 
 // alpha 合成底色预览块（§7.4：色块必须与滑杆值一致）。自绘 = 灰度即真值（无 QSS/调色板中间层）；
 // ppGray 动态属性供探针读回（修 4-15 的取证点）。
@@ -567,7 +535,9 @@ TitleBar make_title_bar(QWidget *parent, icons::Name icon, const QString &title)
     text->setWordWrap(false);
     line->addWidget(text, 0, Qt::AlignVCenter);
     line->addStretch(1);
-    auto *close = new CaptionCloseButton(t.text, t.close_hover_fg, bar);
+    auto *close = new CaptionButton(icons::Name::CaptionClose, t.text, t.close_hover_fg, bar);
+    close->setCursor(Qt::PointingHandCursor); // 弹窗壳层既有习惯（主窗三钮默认箭头，各自保留）
+    close->setFocusPolicy(Qt::NoFocus);
     close->setObjectName(QStringLiteral("pp-dlg-close"));
     close->setToolTip(T("关闭"));
     close->setAccessibleName(T("关闭")); // §11：图标钮必有 accessibleName + tooltip
@@ -586,7 +556,7 @@ void restyle_title_bar(const TitleBar &bar, const theme::Tokens &t) {
         if (auto *label = dynamic_cast<IconLabel *>(icon))
             label->set_color(t.accent);
     }
-    if (auto *close = dynamic_cast<CaptionCloseButton *>(bar.close))
+    if (auto *close = dynamic_cast<CaptionButton *>(bar.close))
         close->set_colors(t.text, t.close_hover_fg);
 }
 

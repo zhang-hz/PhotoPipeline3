@@ -78,9 +78,18 @@ public:
     void set_output_template(const QString &tmpl); // programmatic (no signal)
     bool split_by_format() const;
     void set_split_by_format(bool on); // programmatic (no signal)：开 → 模板插 $format 段
+    // —— M7-R2.1-F4 / R-319 加性（既有签名逐字不变；裁定登记 docs/m7-adjudications.md
+    // 十一节）：镜像基准目录（CLI `--base` 的 GUI 面，opt-in）。空 = 现行为（各输入文件
+    // 所在目录）；非空 = 基准目录包含的输入按其折算相对输出树。改动即发
+    // mirror_base_changed；set_ 为程序化不发信号（同组既有 set_* 口径）。
+    QString mirror_base() const;
+    void set_mirror_base(const QString &base); // programmatic (no signal)
 
 signals:
-    void format_changed(const QString &format_id);
+    // R-133（M7-R2.1-F4）：format_changed 孤儿信号**删除**（任务明文「接线或删除」+ R2D1-A3
+    // 零消费声明删除先例，裁定追认 docs/m7-adjudications.md 十一节）—— 声明 + 2 处发射 +
+    // 零 connect 全链退役；config_changed 承载原「变化」通知（toggle/现役变更都发），既有
+    // 消费面（mainwindow refresh_status）行为逐字不变。
     void config_changed(); // anything summary-worthy
     void manage_presets_requested();
     void open_settings_requested();
@@ -90,6 +99,7 @@ signals:
     void preset_saveas_requested();                  // 另存…（MainWindow 走 PresetsDialog 命名）
     void preset_delete_requested(const QString &path);
     void output_template_changed(const QString &tmpl); // 模板变化（设置持久化/走查）
+    void mirror_base_changed(const QString &base);     // R-319：镜像基准目录变化（空 = 清除）
 };
 
 } // namespace pp::ui

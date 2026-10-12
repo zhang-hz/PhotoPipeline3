@@ -243,7 +243,8 @@ void apply_pair(AppSettings &s, const std::string &key, const std::string &value
         std::string v = value;
         for (char &c : v)
             c = ascii_lower(c);
-        if (v == "road" || v == "satellite" || v == "hybrid")
+        // R-137（M7-R2.1-F4）：词表判定走 pp::kMapStyleIds 单源（is_map_style_id）。
+        if (is_map_style_id(v))
             s.map_style = v;
     } else if (key == "map_sat_labels") {
         // C6：混合图层的「叠标注」开关（哑存储：只做既有布尔词表解析；消费归 UI/W-M5）。

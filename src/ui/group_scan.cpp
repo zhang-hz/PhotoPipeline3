@@ -66,13 +66,9 @@ public:
             const pp::SourceMeta meta =
                 pp::read_metadata(std::filesystem::path(path_.toStdString()));
             datetime = pp::effective_datetime(meta.exif, meta.xmp);
-            const auto it = meta.exif.findKey(Exiv2::ExifKey("Exif.Image.Model"));
-            if (it != meta.exif.end()) {
-                camera = it->toString();
-                const std::size_t b = camera.find_first_not_of(" \t\r\n");
-                const std::size_t e = camera.find_last_not_of(" \t\r\n");
-                camera = (b == std::string::npos) ? std::string() : camera.substr(b, e - b + 1);
-            }
+            // R-204（M7-R2.1-F4）：机型读取走 core/metadata 单源访问器 camera_model()，
+            // 本 TU 不再直操 Exiv2 key 面（裁剪口径随访问器逐字符一致，行为零变化）。
+            camera = pp::camera_model(meta);
         } catch (...) {
             // 摘要失败 = 无字段（归入「无分组」；分组绝不因读失败而抛错/阻断）
             datetime.clear();

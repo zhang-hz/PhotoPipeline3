@@ -42,9 +42,11 @@
 //   零改动 → §3.6 面的既有冻结语义不变（与 A28 的 ui_theme_mode「末尾追加 = 冻结面登记」
 //   同口径）。
 #pragma once
+#include <cstddef>
 #include <filesystem>
 #include <map>
 #include <string>
+#include <string_view>
 
 #include "platform/paths.h" // platform::data_dir()（§3.6：class_file 默认 data_dir()/classes.json）
 
@@ -144,5 +146,24 @@ struct AppSettings {
 AppSettings load_settings(const std::filesystem::path &file);
 std::string save_settings(const std::filesystem::path &file, const AppSettings &s);
 std::string settings_to_string(const AppSettings &s); // 日志快照用
+
+// —— M7-R2.1-F4 / R-137 加性追加（末尾；裁定登记 docs/m7-adjudications.md 十一节）——
+// map_style 词表**单源**（road|satellite|hybrid；下标序 = GPS 卡图层 Seg 段序「矢量|卫星|
+// 混合」= mapwidget/layers.h 的 TileStyle 枚举序）。旧四处并存（settings.cpp 持久层校验 /
+// mainwindow.cpp 档位表 / settings_dialog Seg / layers.cpp name↔enum）靠注释维系同序 ——
+// 收口为：**词表与序在本表**；settings.cpp 校验读本表；mapwidget/layers.cpp 的
+// tile_style_name/from_name 读本表（name↔enum 映射的消费面仍是 layers API）；mainwindow
+// 档位索引走 layers API（本地 MapStyleRow 表退役）。分层注记：core 不反向依赖 mapwidget，
+// 评审「以 layers.h 为单源」在 settings.cpp 侧受分层约束 → 调整为「词表在 core、映射在
+// layers」（layers.cpp 为 mapwidget 侧唯一映射实现，字符串字面量随本表退役）。
+inline constexpr const char *kMapStyleIds[] = {"road", "satellite", "hybrid"};
+inline constexpr std::size_t kMapStyleCount = 3;
+inline bool is_map_style_id(std::string_view v) {
+    for (std::size_t i = 0; i < kMapStyleCount; ++i) {
+        if (v == kMapStyleIds[i])
+            return true;
+    }
+    return false;
+}
 
 } // namespace pp

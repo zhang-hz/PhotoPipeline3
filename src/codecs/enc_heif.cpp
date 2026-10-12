@@ -218,6 +218,11 @@ ParamDef param_def_from(heif_encoder *enc, const heif_encoder_parameter *p) {
     d.advanced =
         !(d.key == "quality" || d.key == "lossless" || d.key == "chroma" || d.key == "tune" ||
           (is_x265 && d.key == "preset") || (!is_x265 && d.key == "speed"));
+    // M7-R2.1-F4（R2D2 ③-6 余量收口）：ParamDef.group 显式声明（A19 词表单源）——
+    // 核心集 → kGroupCore（不入子分组折叠）；其余插件旋钮 → kGroupEncodeTools。旧口径
+    // group 缺省空串、由 paramform 回落「编码工具」（paramform.cpp subgroup_of 的空串分支），
+    // 归属判据从消费端回落改为声明面显式，分组结果逐项不变。
+    d.group = d.advanced ? pp::kGroupEncodeTools : pp::kGroupCore;
     d.tooltip = "libheif 运行时内省参数（heif_encoder_list_parameters，类型 " + type_desc + "）：" +
                 d.key + "。名称/范围/默认值均来自当前编码插件，M1 不硬编码。";
     return d;
@@ -795,7 +800,7 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
         const std::filesystem::path tmp_path = atomic_temp_path(req.target.out_path);
         if (tmp_path.empty())
             return fail("cannot derive temp path for: " + req.target.out_path.string());
-        sink.f = std::fopen(tmp_path.string().c_str(), "wb");
+        sink.f = std::fopen(normalize_extended_path(tmp_path).string().c_str(), "wb");
         if (!sink.f) {
             discard_temp_file(tmp_path);
             return fail("cannot open output file: " + req.target.out_path.string());

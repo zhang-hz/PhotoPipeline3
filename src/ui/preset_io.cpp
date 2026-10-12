@@ -174,32 +174,12 @@ bool has_json_suffix(const std::string &name) {
 // —— ConflictPolicy 与 JSON 字符串的映射（§3.6 / §3.15）——
 // color target 的映射**不再在本文件重复**：统一走 core 的 pp::to_string / pp::parse_color_target
 // （src/core/colormanager.h；M2-T7b 销账 #24 的重复字面量）。
-const char *conflict_name(ConflictPolicy c) {
-    switch (c) {
-    case ConflictPolicy::Skip:
-        return "skip";
-    case ConflictPolicy::Overwrite:
-        return "overwrite";
-    case ConflictPolicy::Rename:
-        return "rename";
-    }
-    return "rename";
-}
+// R-239（M7-R2.1-F4）：conflict 词表映射同样上收 core 单源（pp::conflict_policy_name /
+// pp::parse_conflict_policy），本地副本转发（JSON 词表 skip|overwrite|rename 逐字不变）。
+const char *conflict_name(ConflictPolicy c) { return pp::conflict_policy_name(c); }
 
 bool parse_conflict_name(const std::string &s, ConflictPolicy &out) {
-    if (s == "skip") {
-        out = ConflictPolicy::Skip;
-        return true;
-    }
-    if (s == "overwrite") {
-        out = ConflictPolicy::Overwrite;
-        return true;
-    }
-    if (s == "rename") {
-        out = ConflictPolicy::Rename;
-        return true;
-    }
-    return false;
+    return pp::parse_conflict_policy(s, out);
 }
 
 // —— ParamValue ⇄ JSON ——
@@ -216,24 +196,13 @@ QJsonValue to_json(const ParamValue &v) {
 }
 
 // 表内查找参数定义（优先选中技术；tech_id 空=首选技术）；找不到返回 nullptr
+// R-195 转发（M7-R2.1-F4）：查找逻辑单源 = pp::lookup_param_def（first-wins，params.h 加性
+// 块口径）；本地第二份手写实现退役（与单源逐条等价：命中技术内 first-wins、该技术不声明时
+// 回退后端全技术并集 first-wins）。
 const ParamDef *lookup_param_def(const std::string &format_id, const std::string &backend_id,
                                  const std::string &tech_id, const std::string &key) {
     const FormatDef *f = find_format(format_id);
-    if (!f)
-        return nullptr;
-    const BackendDef *b = find_backend(*f, backend_id);
-    if (!b)
-        return nullptr;
-    if (const TechDef *t = find_tech(*b, tech_id)) {
-        for (const ParamDef &p : t->params)
-            if (p.key == key)
-                return &p;
-    }
-    for (const TechDef &t : b->techs)
-        for (const ParamDef &p : t.params)
-            if (p.key == key)
-                return &p;
-    return nullptr;
+    return f != nullptr ? pp::lookup_param_def(*f, backend_id, tech_id, key) : nullptr;
 }
 
 // 按表内类型还原 variant（保证 preset 往返类型精确）；无 schema 信息时按 JSON 类型推断

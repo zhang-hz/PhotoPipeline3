@@ -77,11 +77,11 @@
 #include <utility>
 #include <vector>
 
-#include <exiv2/exiv2.hpp> // Exif.Image.Model（分组摘要；经 core/metadata.h 传递引入）
-
+// R-204（M7-R2.1-F4）：分组摘要已随 R-200 拆分移入 group_scan.cpp（读取走 pp::camera_model
+// 单源访问器），本 TU 不再触碰 Exiv2/metadata 面 —— 原 <exiv2/exiv2.hpp> 与 core/metadata.h
+// 两个残留 include 一并退场（R-204「UI 直接操作 Exiv2 类型」收口）。
 #include "core/fsops.h"
-#include "core/metadata.h" // pp::read_metadata / pp::effective_datetime（分组摘要的来源）
-#include "ui/theme.h"      // 令牌单源（排印/语义色/行内度量；M5-T5/A6 起本 TU 全面消费）
+#include "ui/theme.h" // 令牌单源（排印/语义色/行内度量；M5-T5/A6 起本 TU 全面消费）
 
 #include "ui/filelistmodel_util.h" // R-200：共享纯件 + Runnable 工厂（私有头）
 
@@ -189,6 +189,32 @@ void FileListModel::add_paths(const QStringList &paths) {
     scan_pool_->start(make_add_paths_task(this, paths)); // R-200：工厂跨 TU
 }
 
+namespace {
+
+// R-319（M7-R2.1-F4）：行 base_dir 推导单点 —— 基准目录**包含**该文件 → 基准目录，否则
+// src.parent（同 dev_cli choose_base 的单基准语义；空基准 = 现行为逐字不变）。
+std::filesystem::path derive_base_dir(const std::filesystem::path &src, const QString &mirror_base) {
+    if (mirror_base.isEmpty())
+        return src.parent_path();
+    const std::filesystem::path base = fs_path(mirror_base);
+    return pp::is_inside(src, base) ? base : src.parent_path();
+}
+
+} // namespace
+
+// R-319：镜像基准目录（opt-in；设置即重算既有行，收集面沿用同一推导）
+void FileListModel::set_mirror_base(const QString &base) {
+    if (mirror_base_ == base)
+        return;
+    mirror_base_ = base;
+    for (FileRow &row : rows_)
+        row.entry.base_dir = derive_base_dir(row.entry.src, mirror_base_);
+    if (!rows_.empty())
+        emit dataChanged(index(0, 0), index(int(rows_.size() - 1), 0));
+}
+
+QString FileListModel::mirror_base() const { return mirror_base_; }
+
 void FileListModel::apply_scanned_paths(const std::vector<ScannedPath> &files,
                                         const std::vector<QString> &unsupported_keys,
                                         std::size_t unreadable) {
@@ -208,7 +234,8 @@ void FileListModel::apply_scanned_paths(const std::vector<ScannedPath> &files,
         for (const ScannedPath *f : fresh) {
             FileRow row;
             row.entry.src = fs_path(f->path);
-            row.entry.base_dir = row.entry.src.parent_path(); // §2.8：base_dir = src.parent
+            // §2.8：base_dir = src.parent；R-319 镜像基准（含则基准、不含回退 parent）
+            row.entry.base_dir = derive_base_dir(row.entry.src, mirror_base_);
             row.size_bytes = f->size_bytes; // M5-T5：stat 已在 worker 做（-1 = 未知，不显 0）
             row.dedup_key = f->dedup_key;
             known_paths_.insert(f->dedup_key);

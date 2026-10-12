@@ -133,6 +133,11 @@ Row frow(QWidget *parent, const QString &label, QWidget *field,
          FieldWidth width = FieldWidth::Standard, const QString &unit = QString(),
          const QString &note = QString());
 
+// R-269（M7-R2.1-F4）：note 轨占位单源 —— 行无注释文案但要保留注释轨占位（同卡各行
+// 轨位对齐稳定）时传本常量（单个 ASCII 空格）；替代散写的 QStringLiteral(" ") 魔法字面量
+// （paramform 技术行 / page_output 两行）。取值逐字节不变，纯命名收口。
+inline const QString kNotePlaceholder = QStringLiteral(" ");
+
 // 双列行的一格：[80 右对齐标签][轨：控件 (+ 单位槽 16)]
 struct FieldCell {
     QString label;

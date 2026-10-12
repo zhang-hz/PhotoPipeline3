@@ -201,10 +201,22 @@ void build_ui(PageMeta *page) {
     // 尾部 addStretch(1) 撤除 —— 富余不再被尾部空档截留（内容不足一屏时地图吃满右栏）。
     v->addWidget(gps_card, 1);
     v->addWidget(switch_card);
+    // UX-11 余量收口（M7-R2.1-F4）：page_meta 侧卡片防压缩 —— 与 page_output 四卡 /
+    // page_run 三卡同口径（QScrollArea(widgetResizable) 会把 Preferred 件压向
+    // minimumSizeHint，卡片按当前内容 sizeHint 钉下限；stretch 1 的 GPS 卡富余高照旧归它）。
     scroll->setWidget(content);
 
     apply_style(st);
     refresh_all(st);
+    // UX-11 余量收口（M7-R2.1-F4）：page_meta 侧卡片防压缩 —— 与 page_output 四卡 /
+    // page_run 三卡同口径（QScrollArea(widgetResizable) 会把 Preferred 件压向
+    // minimumSizeHint，卡片按当前内容 sizeHint 钉下限）。两处按判据取舍（如实登记）：
+    //   * 位置在 refresh_all **之后** —— sizeHint 取刷新态内容（关键字胶囊等动态件），
+    //     建树瞬时的过期 hint 钉高会破坏 meta-geom 的行距 28 不变量（实测踩坑）；
+    //   * **GPS 卡不锁** —— 它是 UX-4 stretch 的富余高载体（v->addWidget(gps_card, 1)），
+    //     动态高被 meta-map-expand 的恢复基线（260/262）与 map 高度探针钉住，锁高与之互斥。
+    for (QFrame *card : {info_card, time_card, switch_card})
+        formkit::lock_card_size(card);
 }
 
 } // namespace meta

@@ -338,6 +338,7 @@ struct OutputPageImpl {
     // 卡 ② 全局
     QFrame *global_card = nullptr;
     QLineEdit *out_root_edit = nullptr;
+    QLineEdit *base_edit = nullptr; // R-319：镜像基准目录（可选；空 = 现行为）
     QPushButton *browse_button = nullptr;
     QComboBox *conflict_combo = nullptr;
     QComboBox *color_combo = nullptr;

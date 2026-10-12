@@ -47,6 +47,8 @@
 #include <QFileInfo>
 #include <QFont>
 #include <QFormLayout>
+#include <QFutureWatcher> // R-081：read_metadata 后台化
+#include <QtConcurrent/QtConcurrentRun> // R-081：read_metadata IO 下后台
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -442,6 +444,7 @@ struct ExifEditor::Impl {
     pp::BatchRules batch;
     std::optional<pp::MetadataOverride> existing;
     pp::SourceMeta meta; // 只读源元数据（pp::read_metadata 结果）
+    bool meta_loading = false; // R-081：后台读取中 —— 未完成时 accept 拒绝（防基底空写回）
     theme::Tokens tokens = theme::tokens(theme::preferred_theme_mode()); // M5-T10：弹窗令牌（单源）
     TagItemDelegate *delegate = nullptr; // M5-T10：行首 pill「批」+ 改值强调色字（A8）
 
@@ -1864,6 +1867,12 @@ pp::MetadataOverride ExifEditor::Impl::build_override(std::vector<std::string> *
 }
 
 void ExifEditor::Impl::on_accept() {
+    // R-081：后台读取未完成时拒绝 accept —— meta 空基底上 apply_edits 会把其余元数据写丢
+    // （数据破坏面）；读完自动恢复可提交（模态下用户重按即可）。
+    if (meta_loading) {
+        report_errors({"元数据读取中，请稍候再提交"}); // 中文界面口径（§1.4）
+        return;
+    }
     std::vector<std::string> errors;
     const pp::MetadataOverride ov = build_override(&errors);
     // 校验只作用于 read_metadata 的副本；源文件与源元数据永不修改
@@ -1888,12 +1897,32 @@ ExifEditor::ExifEditor(const QString &src, const pp::BatchRules &batch,
     impl_->src = src;
     impl_->batch = batch;
     impl_->existing = existing;
-    impl_->meta = pp::read_metadata(std::filesystem::path(src.toStdString()));
-
     impl_->build();
-    impl_->populate_exif_tree();
-    impl_->populate_xmp_tree();
-    impl_->init_from_existing();
+
+    // R-081（M7-R2.1-F4）：构造期 read_metadata 后台化 —— 大文件/慢盘上同步读会卡 GUI；
+    // 读取在 QtConcurrent 后台完成，回填回调里填两棵树 + 应用单文件例外。PP_UI_NO_STATE
+    // （smoke/dev harness）下保持同步 —— 探针无等待点，异步会成竞态（R2D1-A2 同口径）。
+    const std::filesystem::path path(src.toStdString());
+    if (qEnvironmentVariableIsSet("PP_UI_NO_STATE")) {
+        impl_->meta = pp::read_metadata(path);
+        impl_->populate_exif_tree();
+        impl_->populate_xmp_tree();
+        impl_->init_from_existing();
+        impl_->refresh_effective_values(); // build() 时尚无 meta，读完补刷（生效值回显）
+        return;
+    }
+    impl_->meta_loading = true;
+    auto *watcher = new QFutureWatcher<pp::SourceMeta>(this);
+    QObject::connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher] {
+        watcher->deleteLater();
+        impl_->meta = watcher->result();
+        impl_->meta_loading = false;
+        impl_->populate_exif_tree();
+        impl_->populate_xmp_tree();
+        impl_->init_from_existing();
+        impl_->refresh_effective_values(); // build() 时尚无 meta，读完补刷（生效值回显）
+    });
+    watcher->setFuture(QtConcurrent::run([path] { return pp::read_metadata(path); }));
 }
 
 ExifEditor::~ExifEditor() = default;

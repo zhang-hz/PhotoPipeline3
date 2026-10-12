@@ -284,7 +284,10 @@ OutputPlan resolve_conflict(const std::filesystem::path &desired, ConflictPolicy
     }
     const auto exists_on_disk = [](const std::filesystem::path &p) {
         std::error_code ec;
-        return std::filesystem::exists(p, ec);
+        // R-007 余量收口（M7-R2.1-F4）：exists 探测经 normalize_extended_path 归一——超长
+        // 路径下未归一的 exists() 恒假（Skip 判据失真 = 幽灵跳过面）；常规路径归一前后探测
+        // 结果逐值相同（`\\?\` 前缀下 Win32 exists 语义不变）。
+        return std::filesystem::exists(normalize_extended_path(p), ec);
     };
     // Rename/Overwrite 的避让面 = 磁盘 + 硬保留 + 软保留（既有语义逐字不变）。
     const auto taken_any = [&](const std::filesystem::path &p) {
@@ -658,6 +661,35 @@ std::filesystem::path normalize_extended_path(const std::filesystem::path &p) {
 #else
     return p; // POSIX 无 MAX_PATH：恒原样（同一语义面，测试按平台断言）
 #endif
+}
+
+// R-239（M7-R2.1-F4）：ConflictPolicy ↔ 文本映射单源（fsops.h 加性块口径；词表逐字不变）。
+const char *conflict_policy_name(ConflictPolicy p) {
+    switch (p) {
+    case ConflictPolicy::Skip:
+        return "skip";
+    case ConflictPolicy::Overwrite:
+        return "overwrite";
+    case ConflictPolicy::Rename:
+        return "rename";
+    }
+    return "rename";
+}
+
+bool parse_conflict_policy(std::string_view s, ConflictPolicy &out) {
+    if (s == "skip") {
+        out = ConflictPolicy::Skip;
+        return true;
+    }
+    if (s == "overwrite") {
+        out = ConflictPolicy::Overwrite;
+        return true;
+    }
+    if (s == "rename") {
+        out = ConflictPolicy::Rename;
+        return true;
+    }
+    return false;
 }
 
 bool validate_output_filename(const std::filesystem::path &p, std::string *err) {

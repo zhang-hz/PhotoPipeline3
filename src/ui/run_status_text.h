@@ -16,6 +16,7 @@
 #include <algorithm>
 
 #include "core/pipeline.h" // pp::Stage / pp::FileState
+#include "ui/byte_text.h"  // R-264：字节显示事实单源（fmt_bytes/fmt_mem_bytes 转发）
 
 namespace pp::ui::runpage {
 
@@ -63,31 +64,15 @@ QString fmt_mb_s(double v) {
 }
 
 // 字节口径（修 3-10：不做 KB 四舍五入 —— 0 字节就是 0 B，<1 KB 显真实字节）
-QString fmt_bytes(quint64 bytes) {
-    if (bytes == 0)
-        return QStringLiteral("0 B");
-    if (bytes < 1024)
-        return QCoreApplication::translate("PageRun", "%1 B").arg(bytes);
-    const double kb = static_cast<double>(bytes) / 1024.0;
-    if (kb < 1024.0)
-        return QCoreApplication::translate("PageRun", "%1 KB").arg(kb, 0, 'f', 0);
-    return QCoreApplication::translate("PageRun", "%1 MB").arg(kb / 1024.0, 0, 'f', 2);
-}
+// R-264（M7-R2.1-F4）：实现收敛进 ui/byte_text.h 单源（file_bytes），本处保留 runpage 旧名
+// 转发（调用点零改动；输出逐字节不变，格式不换锚）。
+QString fmt_bytes(quint64 bytes) { return byte_text::file_bytes(bytes); }
 
 QString fmt_secs(double ms) { return QStringLiteral("%1s").arg(ms / 1000.0, 0, 'f', 1); }
 
 // 峰值内存读数（A29）：量级换档 B→KB→MB→GB；0 = 本次无像素预算读数 → 「—」（§2.5 未发生的量）
-QString fmt_mem_bytes(quint64 bytes) {
-    if (bytes == 0)
-        return QStringLiteral("—");
-    const double kb = static_cast<double>(bytes) / 1024.0;
-    if (kb < 1024.0)
-        return QCoreApplication::translate("PageRun", "%1 KB").arg(kb, 0, 'f', 0);
-    const double mb = kb / 1024.0;
-    if (mb < 1024.0)
-        return QCoreApplication::translate("PageRun", "%1 MB").arg(mb, 0, 'f', 1);
-    return QCoreApplication::translate("PageRun", "%1 GB").arg(mb / 1024.0, 0, 'f', 2);
-}
+// R-264（M7-R2.1-F4）：实现收敛进 ui/byte_text.h 单源（peak_mem_bytes），同上转发。
+QString fmt_mem_bytes(quint64 bytes) { return byte_text::peak_mem_bytes(bytes); }
 
 // 行名：只显示文件名（调用方可能传完整路径）
 QString row_name(const QString &name) {

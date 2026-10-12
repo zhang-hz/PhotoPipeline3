@@ -147,8 +147,8 @@ void OutputPageImpl::toggle_format(const std::string &id, bool on, bool user) {
         return;
     if (on) {
         build_tab(id);
-        if (user)
-            emit q->format_changed(QString::fromStdString(id));
+        // R-133：format_changed 已随孤儿信号删除（config_changed 在本函数末尾统一发射）
+        (void)user;
     } else {
         snapshot_state(id);
         remove_tab(id);
@@ -233,7 +233,7 @@ void OutputPageImpl::build_tab(const std::string &id) {
                                 static_cast<int>(options[i].profile));
         const formkit::Row row =
             formkit::frow(st.page, PageOutput::tr("编码档位"), st.profile, FieldWidth::Standard,
-                          QString(), QStringLiteral(" "));
+                          QString(), formkit::kNotePlaceholder);
         row.row->setObjectName(QStringLiteral("pp-profile-row"));
         st.profile_note = row.note;
         st.profile_note->setObjectName(QStringLiteral("pp-profile-note-") +
@@ -263,7 +263,7 @@ void OutputPageImpl::build_tab(const std::string &id) {
         // 行内 10px 注释位 = 格式能力约束说明（R3：提示不占标签位；占位符 " " 保证注释位存在）
         const formkit::Row row =
             formkit::frow(st.page, PageOutput::tr("位深"), st.bitdepth, FieldWidth::Standard,
-                          QString(), QStringLiteral(" "));
+                          QString(), formkit::kNotePlaceholder);
         row.row->setObjectName(QStringLiteral("pp-bitdepth-row"));
         st.bitdepth_note = row.note;
         st.bitdepth_note->setObjectName(QStringLiteral("pp-bitdepth-note-") +
@@ -971,11 +971,10 @@ void PageOutput::apply_preset(const pp::PresetData &p) {
     impl_->update_estimate();
     impl_->refresh_tab_labels();
     impl_->refresh_changed_pill();
-    // R-133：发射按 docs/m1b-tasks.md:535「若变」约定 —— 现役格式真变了才发（原无条件发射）。
-    // 消费方现状：全仓零 connect（孤儿信号）；接线归主窗（跨界，见 handoff 跨界需求），
-    // 本信号属冻结面不可删（加性面维持，发射语义收口）。
-    if (!impl_->sel.empty() && impl_->sel.active() != prev_active)
-        emit format_changed(QString::fromStdString(impl_->sel.active()));
+    // R-133（M7-R2.1-F4）：format_changed 已删除（孤儿信号零 connect；任务明文「接线或
+    // 删除」取删除，R2D1-A3 零消费声明删除先例）。现役变更通知走 config_changed（消费方 =
+    // mainwindow refresh_status，行为逐字不变）。
+    (void)prev_active;
     emit config_changed();
 }
 
@@ -1160,6 +1159,20 @@ void PageOutput::set_current_preset(const QString &path) {
         }
     }
     impl_->sync_preset_buttons();
+}
+
+// R-319（M7-R2.1-F4）：镜像基准目录（opt-in；空 = 现行为）
+QString PageOutput::mirror_base() const {
+    OutputPageImpl *impl_ = impl_of(this);
+    return impl_->base_edit != nullptr ? impl_->base_edit->text().trimmed() : QString();
+}
+
+void PageOutput::set_mirror_base(const QString &base) {
+    OutputPageImpl *impl_ = impl_of(this);
+    if (impl_->base_edit == nullptr || impl_->base_edit->text().trimmed() == base.trimmed())
+        return;
+    const QSignalBlocker blocker(impl_->base_edit); // 程序化不发信号（同组 set_* 口径）
+    impl_->base_edit->setText(base);
 }
 
 QString PageOutput::output_template() const {

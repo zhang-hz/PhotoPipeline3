@@ -44,7 +44,6 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
-#include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStandardItemModel>
@@ -483,7 +482,7 @@ struct ParamForm::Impl {
         {
             const formkit::Row row =
                 formkit::frow(q, ParamForm::tr("技术"), tech_combo, formkit::FieldWidth::Standard,
-                              QString(), QStringLiteral(" "));
+                              QString(), formkit::kNotePlaceholder);
             row.row->setObjectName(QStringLiteral("pp-tech-row"));
             tech_row = row;
             root->addWidget(row.row);

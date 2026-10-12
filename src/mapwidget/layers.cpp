@@ -28,6 +28,8 @@
 
 #include "mapwidget/layers.h"
 
+#include "core/settings.h" // R-137：map_style 词表单源（kMapStyleIds）
+
 #include <cstdint>
 
 namespace pp::map {
@@ -195,25 +197,20 @@ QStringList styles_for(const QString &source_id) {
 }
 
 QString tile_style_name(TileStyle style) {
-    switch (style) {
-    case TileStyle::Road:
-        return QStringLiteral("road");
-    case TileStyle::Satellite:
-        return QStringLiteral("satellite");
-    case TileStyle::Hybrid:
-        return QStringLiteral("hybrid");
-    }
-    return QStringLiteral("road");
+    // R-137（M7-R2.1-F4）：字符串词表单源 = pp::kMapStyleIds（core/settings.h；下标序 =
+    // TileStyle 枚举序）。本函数只做下标映射，字面量退役（四处并存 → 一处定义）。
+    const std::size_t i = static_cast<std::size_t>(style);
+    return QString::fromLatin1(i < pp::kMapStyleCount ? pp::kMapStyleIds[i] : pp::kMapStyleIds[0]);
 }
 
 TileStyle tile_style_from_name(const QString &name) {
-    if (name == QLatin1String("satellite")) {
-        return TileStyle::Satellite;
+    // R-137（M7-R2.1-F4）：字符串词表单源 = pp::kMapStyleIds（下标序 = TileStyle 枚举序）；
+    // 未知值 → Road（口径不变：旧实现 "road" 及一切未知值同落 Road）。
+    for (std::size_t i = 0; i < pp::kMapStyleCount; ++i) {
+        if (name == QLatin1String(pp::kMapStyleIds[i]))
+            return static_cast<TileStyle>(i);
     }
-    if (name == QLatin1String("hybrid")) {
-        return TileStyle::Hybrid;
-    }
-    return TileStyle::Road; // "road" 及一切未知值
+    return TileStyle::Road;
 }
 
 } // namespace pp::map

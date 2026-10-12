@@ -262,6 +262,14 @@ public:
     void apply_scanned_paths(const std::vector<ScannedPath> &files,
                              const std::vector<QString> &unsupported_keys, std::size_t unreadable);
 
+    // —— M7-R2.1-F4 / R-319 加性追加（既有签名逐字不变；裁定登记 docs/m7-adjudications.md
+    // 十一节）：镜像基准目录（CLI `--base` 的 GUI 面；opt-in —— 空 = 现行为，逐行
+    // base_dir = src.parent）。非空 = 该目录**包含**的行 base_dir 取基准目录（同 dev_cli
+    // choose_base 单基准语义：含则基准、不含回退 src.parent）；设置即对既有行重算、后续
+    // 收集沿用（R2D2 ③-3 草图「收集/重算」两触点）。
+    void set_mirror_base(const QString &base);
+    QString mirror_base() const;
+
 signals:
     void content_changed(); // count/unsupported/anything summary-worthy
     void exception_changed(std::size_t i);
@@ -274,6 +282,7 @@ private:
 
     std::vector<FileRow> rows_;
     std::set<QString> known_paths_; // dedup keys（R-149：弱规范化 + 大小写折叠，见 dedup_key）
+    QString mirror_base_;           // R-319：镜像基准目录（空 = src.parent 语义）
     std::set<QString> unsupported_paths_; // M1b v1.1: dedup unsupported counts (2026-09-20 ruling)
     std::size_t unsupported_ = 0;
     // ---- M7-R2D1 加性字段（R-148 / R-026；既有字段与语义一字不动）----

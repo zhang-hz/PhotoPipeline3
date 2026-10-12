@@ -204,6 +204,26 @@ QWidget *OutputPageImpl::build_global_card(QWidget *parent) {
         row.row->setObjectName(QStringLiteral("pp-root-row"));
         body.box->addWidget(row.row);
     }
+    // R-319（M7-R2.1-F4）：镜像基准目录（opt-in；CLI --base 的 GUI 面）—— 留空 = 现行为
+    // （各输入文件所在目录），非空 = 基准目录包含的输入按其折算 $dir 相对输出树。
+    {
+        base_edit = new QLineEdit(global_card);
+        base_edit->setObjectName(QStringLiteral("pp-base-edit"));
+        base_edit->setFixedHeight(theme::Metrics::input_h);
+        base_edit->setProperty(kFieldProperty, QStringLiteral("input"));
+        base_edit->setPlaceholderText(PageOutput::tr("留空 = 各输入文件所在目录"));
+        base_edit->setToolTip(PageOutput::tr(
+            "镜像路径基准目录（可选）：基准目录内的输入按相对路径镜像输出树；"
+            "留空 = 每个输入文件所在目录（现行为）。与 --dev 的 --base 同语义"));
+        QWidget *field = make_flex_field(global_card, {base_edit});
+        const formkit::Row row =
+            formkit::frow(global_card, PageOutput::tr("基准目录"), field, FieldWidth::Flex);
+        row.row->setObjectName(QStringLiteral("pp-base-row"));
+        body.box->addWidget(row.row);
+        QObject::connect(base_edit, &QLineEdit::textChanged, q, [this](const QString &text) {
+            emit q->mirror_base_changed(text.trimmed());
+        });
+    }
     // 同名冲突（枚举 = 下拉）
     {
         formkit::ComboSpec conflict_spec;
@@ -487,7 +507,8 @@ void OutputPageImpl::wire() {
             return;
         reproject_format_selection();
         update_template_example();
-        emit q->format_changed(QString::fromStdString(id));
+        // R-133：format_changed 已随孤儿信号删除（现役切换通知走 config_changed，消费方
+        // = mainwindow refresh_status，行为逐字不变）。
         emit q->config_changed();
     });
     QObject::connect(add_format_button, &QToolButton::clicked, q, [this] {

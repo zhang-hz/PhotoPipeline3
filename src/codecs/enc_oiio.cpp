@@ -369,7 +369,9 @@ EncodeResult OiioEncoder::encode(const EncodeRequest &req) {
             discard_temp_file(tmp_path);
             return fail(msg);
         };
-        if (!out->open(tmp_path.string(), spec))
+        // R-007 余量收口（M7-R2.1-F4）：写盘点经 normalize_extended_path 归一 `\\?\`
+        // （超长路径可真实落盘；常规路径归一前后写盘行为逐字节不变）。
+        if (!out->open(normalize_extended_path(tmp_path).string(), spec))
             return fail_tmp("OIIO open failed for " + req.target.out_path.string() + ": " +
                             out->geterror());
         const OIIO::stride_t xstride = static_cast<OIIO::stride_t>(nch) * bps;

@@ -221,4 +221,9 @@ void apply_edits(Exiv2::ExifData &exif, Exiv2::XmpData &xmp, const std::vector<T
 // 读取"拍摄时间"（DateTimeOriginal → DateTime → Xmp.xmp:CreateDate）
 std::string effective_datetime(const Exiv2::ExifData &exif, const Exiv2::XmpData &xmp);
 
+// —— M7-R2.1-F4 / R-204 加性访问器（末尾追加；裁定登记 docs/m7-adjudications.md 十一节）——
+// 机型单源读取（Exif.Image.Model，首尾空白裁剪；缺失/读失败 = 空串）。UI 侧（分组摘要等）
+// 不再直操 Exiv2 key 面（R-204：core/metadata 抽象被绕过的收口），既有签名/行为零改动。
+std::string camera_model(const SourceMeta &meta);
+
 } // namespace pp

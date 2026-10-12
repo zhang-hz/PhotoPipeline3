@@ -4,7 +4,7 @@
 > 冻结接口（PP-FROZEN）的加性扩展走「加性 + 追认」，逐条登记于此。实施归属列括号内为登记来源
 > （各工作包 handoff 的「裁定登记」节原样汇总，编号连续化；原文见 `build/m7-wpN/handoff.md`）。
 > 汇总人 = WP11；裁定人 = 主对话（各 WP 报出后经波次收口追认）。
-> **编号命名空间**：本表 A/B/C/D/E 与 M7-ADJ-*/WP12-B*/WP13-B*（R1）以及 `R2A-A*`/`M7R2B-*`/`R2C-W*`/`R2D1-A*`/`M7-R2-A`/`M7-R2-B`/`M7R2D2-*`/`M7R2E2-*`/`R2G-G*`/`R2F-X*`/`R2F-C*`（R2）以及 `M7R21F4-*`（R2.1，十一节）均为**裁定表编号**；`D-n` 为 AGENTS §9 实现期发现缺陷号（如 R2G-G5 承载的 D-1）；勿与 `ux-review-14.md`
+> **编号命名空间**：本表 A/B/C/D/E 与 M7-ADJ-*/WP12-B*/WP13-B*（R1）以及 `R2A-A*`/`M7R2B-*`/`R2C-W*`/`R2D1-A*`/`M7-R2-A`/`M7-R2-B`/`M7R2D2-*`/`M7R2E2-*`/`R2G-G*`/`R2F-X*`/`R2F-C*`（R2）以及 `M7R21F1-*`/`M7R21F2-*`/`M7R21F3-*`/`M7R21F4-*`（R2.1，十一/十二节）均为**裁定表编号**；`D-n` 为 AGENTS §9 实现期发现缺陷号（如 R2G-G5 承载的 D-1，已由 M7R21F1-2 根治）；勿与 `ux-review-14.md`
 > §14 的色彩分级子项（A1–D3）及 `deep-review-0.3.2.md` 附录 B 的拆解蓝图（B.1–B.8）混读
 > ——三套编号独立，详见 `m7-report.md` 文首「编号命名空间」注。「任务书 / WP 任务包」引述
 > 出处 = [docs/m7r2-plan.md](m7r2-plan.md)（R2 轮方案真源 + 附 A「任务书引述出处对照」，
@@ -162,7 +162,7 @@
 
 | # | 裁定 | 理由 | 实施归属 |
 |---|---|---|---|
-| M7-ADJ-tidy-reseed | **tidy 棘轮基线重播种**（`tools/baseline/clang-tidy.tsv`，283/62 → **264/71**）：`ci-tidy.py --update` 落盘，基线 diff 与本提交同在；**frameless.cpp 5→6 为唯一一处既有条目级放宽**（Win32 `reinterpret_cast<HWND>(winId())` / `NCCALCSIZE_PARAMS*` 等 int↔ptr 平台互操作惯用式 + `attach(QWidget*,QWidget*)` 同型参数对，发行门禁期不做签名重构）；总告警 283→264 严格收紧；17 条残余逐条归因（M7 拆 TU 机械迁移 6 / M6 未入基线存量 2 / 发行期禁改的异常路径 2 / 平台惯用式与有意为之 7；等价分解=非 frameless 11 条 + frameless 6 条，见 m7-report §3.7），明细见 `m7-report.md` §3.7 与 `build/m7-wp12/handoff.md`。**NOLINT 抑制案否决**（仓库零先例、抑制注释在关键位点埋回归盲区）。**R2 轮追记（R2G `6a6e043`）**：「NOLINT 案否决 / 仓库零先例」口径已**不再成立**——R2G 终门禁 tidy fallout 采行级 NOLINT 消音 11 条（八节 R2G-G2），本仓自此有 NOLINT 先例；两裁定不矛盾但前后有别：WP12 期否决的是「为压计数而加抑制」，R2G 期在「棘轮只减不增、禁 `--update`」约束下选定「修码 + 消音」（含翻案替代方案与成本），逐条理由注释在代码内。**R2.1 追记（M7R21F4-0，R2G 消音翻案）**：R2G 的 11 处行级 NOLINT 已**全部撤销**（`M7-R2.1-F4`）——同型形参对改参数组结构化（`DitherGrid`/`ScanTally`/`Tally`/`EventRow`/`GeoRow`），Win32 int↔ptr 惯用式改显式安全转换封装（frameless `hwnd_of`/`nccalc_params_of`，std::bit_cast 位拷贝逐位等价），AVX2 内核 6 条 + QtConcurrent 任务 lambda 1 条无零行为修法，按本裁定口径 `ci-tidy --update` 重播种 + 逐条归因（十节 M7R21F4-0 附表；总量 264→264 逐文件只减不增口径下的零增长重播种）。**「仓库零抑制」自此恢复成立**；R2 追记「本仓自此有 NOLINT 先例」仅覆盖 `6a6e043` 至本次翻案之间的历史区间，WP12 期的「否决 NOLINT / 零抑制」口径重新为现行口径。 | 主对话裁决（escalate 问答，条件五条：总量只减 / frameless 放宽逐条理由+本表登记 / 归因随提交正文 / 复跑 exit 0+读数入报告 / 不动 CI 判据与检查集、不加抑制）；触发背景：B.6 四 TU + mainwindow 五域拆 TU 把 mainwindow.cpp(14→1)/main.cpp(8→1) 既有告警机械迁入 10 个基线外 TU，file-keyed 棘轮无法表达「告警随代码搬家」，与「新文件须 0」口径不可兼容 | WP12 |
+| M7-ADJ-tidy-reseed | **tidy 棘轮基线重播种**（`tools/baseline/clang-tidy.tsv`，283/62 → **264/71**）：`ci-tidy.py --update` 落盘，基线 diff 与本提交同在；**frameless.cpp 5→6 为唯一一处既有条目级放宽**（Win32 `reinterpret_cast<HWND>(winId())` / `NCCALCSIZE_PARAMS*` 等 int↔ptr 平台互操作惯用式 + `attach(QWidget*,QWidget*)` 同型参数对，发行门禁期不做签名重构）；总告警 283→264 严格收紧；17 条残余逐条归因（M7 拆 TU 机械迁移 6 / M6 未入基线存量 2 / 发行期禁改的异常路径 2 / 平台惯用式与有意为之 7；等价分解=非 frameless 11 条 + frameless 6 条，见 m7-report §3.7），明细见 `m7-report.md` §3.7 与 `build/m7-wp12/handoff.md`。**NOLINT 抑制案否决**（仓库零先例、抑制注释在关键位点埋回归盲区）。**R2 轮追记（R2G `6a6e043`）**：「NOLINT 案否决 / 仓库零先例」口径已**不再成立**——R2G 终门禁 tidy fallout 采行级 NOLINT 消音 11 条（八节 R2G-G2），本仓自此有 NOLINT 先例；两裁定不矛盾但前后有别：WP12 期否决的是「为压计数而加抑制」，R2G 期在「棘轮只减不增、禁 `--update`」约束下选定「修码 + 消音」（含翻案替代方案与成本），逐条理由注释在代码内。**R2.1 追记（M7R21F4-0，R2G 消音翻案）**：R2G 的 11 处行级 NOLINT 已**全部撤销**（`M7-R2.1-F4`）——同型形参对改参数组结构化（`DitherGrid`/`ScanTally`/`Tally`/`EventRow`/`GeoRow`），Win32 int↔ptr 惯用式改显式安全转换封装（frameless `hwnd_of`/`nccalc_params_of`，std::bit_cast 位拷贝逐位等价），AVX2 内核 6 条 + QtConcurrent 任务 lambda 1 条无零行为修法，按本裁定口径 `ci-tidy --update` 重播种 + 逐条归因（十一节 M7R21F4-0/-0-1 附表；两次重播种 264/76 → **263/75**，总量 264→**263** 只减不增，终读数 `TIDY total=263 baseline=263 files=75 violations=0 seed=0`）。**「仓库零抑制」自此恢复成立**；R2 追记「本仓自此有 NOLINT 先例」仅覆盖 `6a6e043` 至本次翻案之间的历史区间，WP12 期的「否决 NOLINT / 零抑制」口径重新为现行口径。 | 主对话裁决（escalate 问答，条件五条：总量只减 / frameless 放宽逐条理由+本表登记 / 归因随提交正文 / 复跑 exit 0+读数入报告 / 不动 CI 判据与检查集、不加抑制）；触发背景：B.6 四 TU + mainwindow 五域拆 TU 把 mainwindow.cpp(14→1)/main.cpp(8→1) 既有告警机械迁入 10 个基线外 TU，file-keyed 棘轮无法表达「告警随代码搬家」，与「新文件须 0」口径不可兼容 | WP12 |
 | WP12-B1 | tidy 棘轮 fallout 的 **38 条修复全部行为零变化**（显式转换 / 删未用量 / 枚举基型 / 按值拷贝 / 字符串拼接序 / 舍入式拆命名临时量保持算子序），金样 20/20 + 回归 zero diff + ctest 35/35 双背书 | 零行为机械修复 | WP12 |
 | WP12-B2 | **行为变化（测试面）**：4 个新单测（test_geocoder/test_icons/test_providers/test_secret）的 `main` 包 try/catch——**异常逃逸路径**由 terminate（崩溃）变为打印 `FAILED (unexpected exception)` + 返回 1；仅测试代码、仅崩溃路径，成功与断言路径逐字不动，ctest 判定不变。产品代码的 exception-escape（colormanager `~ErrSync`、mainwindow_run 事件回调 λ）**未动**（修法=吞异常=行为变化，主对话裁决「发行门禁期禁改」） | tidy `exception-escape(main)` 告警的唯一非零行为修复；行为变化按 §6.2 纪律入本表（m7-report §3.7 引用即此条） | WP12 |
 
@@ -199,7 +199,7 @@
 | # | 类型 | 内容 | 理由 / 依据 |
 |---|---|---|---|
 | M7R2B-1 | 加性（PP-FROZEN） | `scheduler.h` 尾部 `file_state_of()`；`params.h` 尾部 `find_param/lookup_param_def/BitdepthUnit/bitdepth_unit(_label/_bpp/_bps)`；`fsops.h` 尾部 `normalize_extended_path()` | R-076/195/211/007 单源收口导出面；末尾追加先例同 WP2/WP5/WP8 |
-| M7R2B-2 | 行为变化 | 跨字段规则通道归属退场：validate_params 与 cross_validate 共用全部规则（各自语言文案） | R-206「改道定稿」任务明文；en/zh 冻结文案逐字保留 |
+| M7R2B-2 | 行为变化 | 跨字段规则通道归属退场：validate_params 与 cross_validate 共用全部规则（各自语言文案）——**取代二节 B7**（R1 期「保留双通道归属」口径的追认链终点） | R-206「改道定稿」任务明文；en/zh 冻结文案逐字保留；B7 ↔ 本条双向互指 |
 | M7R2B-3 | 行为变化 + 断言换锚 | `validate_output_filename` 解除 259/255 长度硬线；test_fsops `invalid/*-too-long` 换锚 `r007/long-*-accepted` | R-007 任务明文；旧断言与任务直接矛盾（WP5-A6 先例，非放宽） |
 | M7R2B-4 | 行为变化 | validate_preset 补 cross_validate 判定；fsops/metadata 写入口归一 `\\?\`；settings map_provider 词表外回落 "osm"；default_class_file 空 data_dir 返回空串 | R-231/R-007/R-104/WP5 跨界 1 明文；默认/常规路径字节级不变 |
 | M7R2B-5 | 登记（维持待解冻） | R-211/R-325 强类型路线（bps/bpp 拆字段、metadata_only 非空容器包装）**不做** | 会改冻结签名；维持 WP8 C8「登记待解冻」，需一次性解冻裁定表 |
@@ -258,7 +258,7 @@
 | R2G-G2 | **NOLINT 新惯例首次进仓**（与 M7-ADJ-tidy-reseed 的「否决案」前后有别，见六节 R2 追记） | 消音 11 条 = `kernels.cpp` AVX2 intrinsics ×6 + `dithered_range` 形参组 ×2 + `collect_from`/`expect_card_menu` 出参对 ×2 + QtConcurrent 任务 lambda ×1；每处注释写明理由与出处，只覆盖 R2 新增行 | 三类理由：①结构性误报（AVX2 硬线，AGENTS §1.4）②同文件基线内同类先例口径 ③探针签名冻结形态。**翻案替代方案**（成本=换处置+重跑 tidy）：a) 形参组结构化小 struct；b) 主对话授权 `--update` 重播种 + 归因 |
 | R2G-G3 | 行为零变化 | `apply_gamut_mapping` 形参序调整（colormanager 非冻结面，函数在 cpp 匿名空间） | 金样 20/20 + 回归 zero diff 证明输出逐字节不变 |
 | R2G-G4 | 回归首跑 DIFF **不重播种** | 归因 0 行真实变化（OS 瞬态文件锁 `Access is denied` @ `fsops.cpp:541` rename，同二进制复跑 ×2 zero diff） | R-015：重播种仅用于真实行为变化；瞬态环境噪声不落基线 |
-| R2G-G5 | **D-1（实现期发现，AGENTS §9 编号系首例）** | 输出名碰撞（`base/rgb16.png` 与 `base/rgb16.tif` 的 `$dir/$file` 模板同产 `rgb16.jpg`，conflict=overwrite）的 rename 替换路径对 OS 瞬态锁敏感，与并发负载同现一次 | 登记为已知差异：**未加锁重试机制**（行为新增，超 R2G「修复 fallout」范围）；根治=原子提交加锁重试，待裁定 |
+| R2G-G5 | **D-1（实现期发现，AGENTS §9 编号系首例）** | 输出名碰撞（`base/rgb16.png` 与 `base/rgb16.tif` 的 `$dir/$file` 模板同产 `rgb16.jpg`，conflict=overwrite）的 rename 替换路径对 OS 瞬态锁敏感，与并发负载同现一次 | 登记为已知差异：**未加锁重试机制**（行为新增，超 R2G「修复 fallout」范围）；根治=原子提交加锁重试，待裁定。**R2.1 追记：已根治（M7R21F1-2，`0555947`）**——`commit_temp_file` rename 有界重试（仅 Windows 共享违规类 5/32/33、≤3 次、退避 25/50/75ms；非瞬态与 POSIX 一次失败即出，失败消息/返回值口径逐字不变），D-1 从「登记」转「已修」（十二节 M7R21F1-2） |
 
 ## 九、误识别关闭与受约束登记（R2 轮四类审视，plan §1）
 
@@ -287,7 +287,7 @@
 | # | 类型 | 内容 | 理由 / 依据 |
 |---|---|---|---|
 | M7R21F4-0 | **处置翻案（主对话裁定）** | 撤销 R2G-G2 的 **11 处行级 NOLINT 消音**（kernels.cpp 2 块 / file_collect.cpp 1 块 / smoke_probes.cpp 1 块 / mainwindow_run.cpp 1 行），恢复「仓库零抑制」。替代处置：**零行为修复 14 处**——① 同型形参对 → 参数组结构化/命名包装 9 处：`dithered_range` → `DitherGrid`（kernels，2 告警）、`collect_from` 出参对 → `ScanTally`（file_collect，1）、`expect_card_menu` 出参对 → `Tally`（smoke_probes，1）、`probe_progress` 行对 → `EventRow`（smoke_probes 基线内，1）、make_result lambda 三 double → `GeoRow`（smoke_probes 基线内，1）、exif_editor 三枚举基型 int→uint8_t（F3 R-197/199 新增告警，3）；② Win32 int↔ptr 惯用式 → 显式安全转换封装 5 处：frameless `hwnd_of`/`nccalc_params_of`（std::bit_cast 位拷贝与 reinterpret_cast 逐位等价）。**无零行为修法 7 处**（AVX2 内核 portability-simd-intrinsics ×6 = AGENTS §1.4 AVX2 硬线下的结构性误报，换修法=换内核；QtConcurrent 任务 lambda bugprone-exception-escape ×1 = 修法是 try/catch 吞异常 = 行为变化）→ 按 M7-ADJ-tidy-reseed 口径 `ci-tidy --update` 重播种 + 逐条归因（下表） | WP12 期 M7-ADJ-tidy-reseed 明文否决 NOLINT（「零抑制」口径），R2G 在「棘轮只减不增、禁 --update」约束下采取消音并自注「翻案替代方案」；本轮主对话裁定执行该翻案（M7R21F4-0），取替代方案 a（结构化）为主 + b（授权重播种）兜底 |
-| M7R21F4-0-1 | **tidy 基线重播种（逐文件归因）** | `tools/baseline/clang-tidy.tsv` 264/71 → **264/76**（`TIDY-UPDATE total=264`；总量零增长 = 「总量只减不增」满足）。逐文件放宽登记：kernels.cpp 31→**37**（+6，avx2 内核 portability 告警随消音撤销显形，无零行为修法）、mainwindow_run.cpp 1→**2**（+1，第二个 QtConcurrent 任务 lambda exception-escape，与基线内 :531 同形同因）、page_run.cpp 5→**6**（+1，R2 波后新增、非本包文件面，登记待属主零行为修复后回收）、meta_state.cpp 0→**7** / meta_format.cpp 0→**4** / meta_card_privacy.cpp 0→**3** / filegroup_proxy.cpp 0→**2** / map_view.cpp 0→**1** / output_page_build.cpp 0→**1** / output_template_ui.cpp 0→**1**（19 条 = F2/F3 拆 TU **机械迁移**：page_meta 16→1、page_output 7→5、filelistmodel 2→0、mapwidget 5→4 的告警随代码搬家，file-keyed 棘轮「新文件须 0」不可兼容，同 M7-ADJ-tidy-reseed 触发背景）。逐文件收紧：frameless.cpp 6→**1**（−5，int↔ptr 封装；余 1 = `attach(QWidget*,QWidget*)` 同型参数对，公开壳层 API 签名重构不做，沿 WP12「发行期不做签名重构」口径维持基线内登记）、smoke_probes.cpp 2→**0**、exif_editor.cpp 5→**2**（−3，回基线值）、page_meta.cpp 16→**1**（−15）、page_output.cpp 7→**5**、filelistmodel.cpp 2→**0**、mapwidget.cpp 5→**4** | M7-ADJ-tidy-reseed 五条件逐条满足：总量只减（264→264 零增长）/ 放宽逐条理由 + 本表登记 / 归因随提交正文 / 复跑 exit 0 + 读数入报告（handoff ⑤）/ 不动 CI 判据与检查集、不加抑制（NOLINT 零残留，`grep -r NOLINT src/` = 0） |
+| M7R21F4-0-1 | **tidy 基线重播种（逐文件归因）** | `tools/baseline/clang-tidy.tsv` 264/71 → **264/76**（`TIDY-UPDATE total=264`；总量零增长 = 「总量只减不增」满足）。逐文件放宽登记：kernels.cpp 31→**37**（+6，avx2 内核 portability 告警随消音撤销显形，无零行为修法）、mainwindow_run.cpp 1→**2**（+1，第二个 QtConcurrent 任务 lambda exception-escape，与基线内 :531 同形同因）、page_run.cpp 5→**6**（+1，R2 波后新增、非本包文件面，登记待属主零行为修复后回收）、meta_state.cpp 0→**7** / meta_format.cpp 0→**4** / meta_card_privacy.cpp 0→**3** / filegroup_proxy.cpp 0→**2** / map_view.cpp 0→**1** / output_page_build.cpp 0→**1** / output_template_ui.cpp 0→**1**（19 条 = F2/F3 拆 TU **机械迁移**：page_meta 16→1、page_output 7→5、filelistmodel 2→0、mapwidget 5→4 的告警随代码搬家，file-keyed 棘轮「新文件须 0」不可兼容，同 M7-ADJ-tidy-reseed 触发背景）。逐文件收紧：frameless.cpp 6→**1**（−5，int↔ptr 封装；余 1 = `attach(QWidget*,QWidget*)` 同型参数对，公开壳层 API 签名重构不做，沿 WP12「发行期不做签名重构」口径维持基线内登记）、smoke_probes.cpp 2→**0**、exif_editor.cpp 5→**2**（−3，回基线值）、page_meta.cpp 16→**1**（−15）、page_output.cpp 7→**5**、filelistmodel.cpp 2→**0**、mapwidget.cpp 5→**4** | M7-ADJ-tidy-reseed 五条件逐条满足：总量只减（本轮 264→264 零增长；R-081 连带补记后再播种 264→263，终读数 263/75，见 M7R21F4-10）/ 放宽逐条理由 + 本表登记 / 归因随提交正文 / 复跑 exit 0 + 读数入报告（handoff ⑤）/ 不动 CI 判据与检查集、不加抑制（NOLINT 指令零残留，`grep -rE "NOLINT(BEGIN|END|NEXTLINE)?\(" src/ tools/ tests/` = 0） |
 
 ### 11.2 M7-R2.1-F4 其余裁定（跨界收口批 / 色彩四选项 / 探针批，2026-10-13）
 
@@ -303,3 +303,46 @@
 | M7R21F4-8 | 冻结面加性文本 | `--dev` usage 增 R-145 醒目标注（dev/GUI 默认面分歧：conflict=overwrite vs rename、单输出模板 $dir/$file vs $format/$dir/$file）；README 中文面同步 + R-065「默认物理核数」措辞改实 | 评审修法二选一取「--help 醒目标注」（R2D2 ③-2 指定路线）；R-237/283 曾同口径改 usage 文本 |
 | M7R21F4-9 | 行为边界披露 | R-195 三调用点转发 `pp::lookup_param_def`（first-wins 单源）：preset_io 本地实现、dev_cli set_param last-wins 循环退役；**边界语义差异**：tech 指名但该技术不声明该键时，由「报错/保留字符串」变为「回退后端全技术并集」（单源既定语义） | R-195 收敛口径 = 「全部调用面经本函数」；词表/决胜规则统一为 first-wins |
 | M7R21F4-10 | tidy 基线补记 | R-081 异步化新增 QtConcurrent 任务 lambda bugprone-exception-escape ×1（exif_editor.cpp :1925）→ 重播种 exif_editor 2→3（修法 = 吞异常 = 行为变化，同 WP12-B2/M7R21F4-0 口径不采）；**总量 263 ≤ 264 不增** | 十一节 M7R21F4-0-1 同一口径的连带登记（本条为该包验证期发现，非 R2G 消音翻案面） |
+
+## 十二、R2.1 轮裁定登记（M7-R2.1-F1/F2/F3 包，2026-10-12～13）
+
+> 任务书出处 = 会话内分派书（F1/F2/F3 包）；编号命名空间 = `M7R21F1-*`/`M7R21F2-*`/`M7R21F3-*`。
+> 验证读数摘录见 `docs/m7-evidence/m7r21-f{1,2,3}-gates.md`。F4 各条见十一节。
+
+### 12.1 F1（Linux 回归定位与修复；提交 `3339492`/`b673ee4`/`d4099bd`/`0555947`）
+
+| # | 类型 | 内容 | 理由 / 依据 |
+|---|---|---|---|
+| M7R21F1-1 | 判据可见性（**永久保留**） | linux ctest 失败注解遥测 v1：失败测试名 + 失败断言行 → `::error` 注解（`.github/workflows/main-full.yml` 仅注解遥测一处） | 匿名日志 API 403、check-runs 注解接口公开可读；失败明细必须免鉴权可见才能闭环 Linux-only 回归。非临时探针，是判据可见性改进 |
+| M7R21F1-1b | 遥测二版口径 | 失败集合只收真失败（摘要块 + LastTestsFailed.log + FAIL 断言行所在段）；注解总数封顶 10 且首条 = `CTEST-FAIL-SUMMARY` 名单汇总；**全量明细写 `$GITHUB_STEP_SUMMARY`** | 一版实证（run #46）：LastTest.log 全段登记泛滥 35 条 + GitHub 每步仅存前 10 条注解 ⇒ 真失败名被截断；summary 通道免鉴权、无上限 |
+| M7R21F1-2 | 行为（鲁棒性）| `fsops::commit_temp_file` rename **有界重试**：仅 Windows 共享违规类（GetLastError 5/32/33）、≤3 次、退避 25/50/75ms；非瞬态错误与 POSIX 一次失败即出；失败消息与返回值口径逐字不变（fsops.h 零改动 = 无冻结面扩展） | **D-1 根治**（R2G-G5 的「待裁定」收口）：瞬态文件锁是 fsops write_atomic/commit 真实鲁棒性缺口（m7-report §6.4-1 原登记「不修」，F1 任务书令修）；有限重试不改成功/失败语义 |
+| M7R21F1-3 | 断言样例换拼写（判据不变） | test_fsops R-007 长路径断言样例按平台拼写（`#ifdef _WIN32`：WIN32 根 = `C:\out` / POSIX 根 = `out`，分隔符同理），两侧断言逐条相同、严格度不变 | POSIX 的 fs::path 不切分 `\`，`C:\out\…` 整串是**一个**含 `:` 的组件、被 validate_output_filename 非法字符防线误拒 ⇒ Linux 必红；被测规则跨平台逐字一致、无 #ifdef，样例必须同构才测到同一规则。**断言不放宽**（只换样例拼写） |
+
+### 12.2 F2（R2E1 重做：page_meta + mapwidget RTL 与结构拆分；12 提交 `b83f185`…`d6360f6`）
+
+| # | 类型 | 内容 | 理由 / 依据 |
+|---|---|---|---|
+| M7R21F2-1 | 冻结面零改动 | `page_meta.h` **逐字节未动**；B.1 拆分全部走新增内部头（`src/ui/meta_*.{h,cpp}`） | B.1 硬约束「page_meta.h 逐字节冻结，拆分只动 .cpp」；新能力入新文件（同 F2-A1 handoff 口径） |
+| M7R21F2-2 | 结构载体选择 | MetaState 拆分载体 = 六具名聚合 + 组合成员（core/follow/info/time/gps/privacy + overlay），非蓝图字面的「B1 单文件重组」 | 聚合按域成文（各自契约注释、各卡 TU 归属明确）；925 处访问点编译器全量核对 |
+| M7R21F2-3 | 加性 + 显式化 | MetaState 加 Q_OBJECT（moc 面新增）；`state_of` 动态属性锚改 `qobject_cast` + `Q_ASSERT` | R-177 后半「动态属性 static_cast 藏状态」显式化；属性未挂 = nullptr 与既有空态一致 |
+| M7R21F2-4 | 行为零变化锚定 | RuleInputs 值聚合 + 兼容薄重载（`build_rules`/`current_time_shift(const MetaState*)` 保留，调用点零改动） | B3 定稿「入参改值聚合」；纯函数面可单测（R-181 规则半边收口） |
+| M7R21F2-5 | 隐式约定显式化 | tag 行改 `MetaState::tag_edits` 显式键值对清单（add_tag_row 登记/移除钮同序移除/clear 清空），`findChild("tag_key")` 消灭；objectName 保留给探针 | R-180；行为逐位不变（顺序 = 布局顺序） |
+| M7R21F2-6 | 词表单源 | `kFieldProperty` 取值收敛 `fieldprop::` 常量表（20 档）；QSS 选择器锚值逐字不变 | R-179「stringly 20+ 种值」收口；本面 31 处 setProperty 字面量换具名 |
+| M7R21F2-7 | 坐标基准红线注记 | mapwidget 自绘 HUD 镜像**只作用于界面构件**（比例尺/版权/气泡），瓦片/图钉/主钉等地理投影内容不镜像 | 公共坐标 WGS-84 语义不随语言翻转；R-218 的「镜像」限界面几何 |
+| M7R21F2-8 | 词表覆盖 | `meta_probe_context.h` 的 `objname::` 词表含 8 个 info 值槽名（原 raw `const char*` 数组） | 词表单源必须覆盖全部在用 objectName（含非 QStringLiteral 用法） |
+| M7R21F2-9 | 探针纪律 | 临时 RTL 探针（`build/m7r21-f2/rtl_probe.cpp`）不入库；常驻化规格入 F4 探针需求 | 纪律 5「临时探针放 build/」；常驻探针由 F4 统一落地 |
+
+### 12.3 F3（R2E2 结构余量；10 提交 `6250b3b`…`0ca8c62`）
+
+| # | 类型 | 内容 | 理由 / 依据 |
+|---|---|---|---|
+| M7R21F3-1 | 新文件 | `byte_text.h`/`time_tag_keys.h`/`format_selection_model.h`/`filelistmodel_util.h`/`page_output_impl.h` + `output_page_build/output_template_ui/filedelegate/filegroup_proxy/filegroup_delegate/file_collect/group_scan.cpp` | 任务条目明文命名或拆分必然产物；header-only（R-109 路线）或逐字搬移；CMake glob 自动收编，CMakeLists 零改动 |
+| M7R21F3-2 | 加性（PP-FROZEN `page_run.h`） | `~PageRun() override` 声明（R-185 注册表收敛为 unique_ptr RAII 所需） | 加性 + 追认；既有签名零改动 |
+| M7R21F3-3 | 加性（PP-FROZEN `settings_dialog.h`） | private 五个 `build_*_page` 声明 + `theme_mode_seg_` 成员 + formkit 前置声明 | 加性 + 追认；公开 API（ctor + settings()）逐字不变 |
+| M7R21F3-4 | 注释级（PP-FROZEN `filelistmodel.h`） | 契约块补「状态写入权」条目（Queued=add_paths；运行/终态只经 set_state；apply_thumb 探测失败补判为唯一例外） | R-205 收口成文；代码零改动 |
+| M7R21F3-5 | 行为零变化锚定 | FormatSelection 的 R-266 游离槽语义逐字保留（空集保留被移除 id 作回退槽、不判现役） | test_smoke 第 9 节真值表钉住 |
+| M7R21F3-6 | 同值幂等重放 | reproject_format_selection 含 refresh_tab_labels/sync_tiles 等原路径未调的幂等重放 | 值不变、无信号（QSignalBlocker）；4 sync 坍缩为 reproject 的必要组成 |
+| M7R21F3-7 | 行为零变化锚定 | R-192 per-format 后端覆盖：set_batch_has_alpha 逐格式清 = 原全局清；换格式不再误判 | 修假阳假阴是 R-192 明文（缺陷修复方向） |
+| M7R21F3-8 | 行为零变化锚定 | R-254 选中映射判据统一（越界行过滤提前；remove_rows 内部本就过滤） | 稳定态逐值相同 |
+| M7R21F3-9 | 机械搬移 | R-255 跨节共享定义（pick_lat/pick_lon/GPS 胶囊 lambdas）从 (d)/(e) 间挪到前置 | 逐字搬移；ctx 分发；12 个 meta-* 探针输出行不变 |
+| M7R21F3-10 | **行为变化（明文授权）** | R-259：运行中关闭的 join 期增加反馈（状态行「正在等待在途任务收尾…」+ 等待光标 + 一次同步重绘），阻塞期从析构挪到关闭路径 | 任务条目明文（R-259 =「析构期 join 无反馈」）；wait 幂等、~MainWindow 收口序不变 |

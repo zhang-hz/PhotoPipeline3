@@ -10,7 +10,8 @@
 
 1. **命名**：`m7r2-<pkg>-<主题>.md`。`<pkg>` = 任务包名（小写，如 `c`、`rel`、`f`）；
    `<主题>` = 证据内容（如 `winzip-gates`、`ci-budget-timings`）。跨包通用的文档
-   （如 `release-runbook.md`）不带包前缀。
+   （如 `release-runbook.md`）不带包前缀。**R2.1 轮**沿同构命名 `m7r21-<pkg>-<主题>.md`
+   （`<pkg>` = `f1`…`f4`，与 `build/m7r21-fN/` 任务目录同名）。
 2. **内容三段式**：① **命令行**（逐字可复跑，含 `python tools/env.py run --` 包装）；
    ② **读数/结果摘录**（关键行逐字保留，长输出截断注明 `…`）；③ **结论与判据**（过/不过、
    差异归因）。失败也照实写——失败证据比成功证据更贵。
@@ -33,4 +34,8 @@
 | `m7r2-e2-gates.md` | R2E2 | RTL 与结构拆分门禁读数（ctest 35/35、第 3 波 5 探针逐行、金样 20/20） |
 | `m7r2-gate-regression-reseed.md` | R2-gate | 回归基线重播种 132 行逐行归因（A1 nclx 精确信令）+ M7 窗口 4 次重播种上下文 |
 | `m7r2-gate.md` | R2G | R2 终门禁全量判据取证（format/build/ctest/ui-smoke/金样/tidy/回归/密钥 八项 + tidy 棘轮 fallout 修复 23 条清单 + 首跑瞬态回归 diff 归因） |
+| `m7r21-f1-gates.md` | R2.1-F1 | Linux 回归定位与修复门禁读数（main-full #47 linux 绿 + 失败注解遥测二版 + test_fsops 平台样例 + rename 有界重试） |
+| `m7r21-f2-gates.md` | R2.1-F2 | R2E1 重做（page_meta 拆分 + RTL）门禁读数（ctest 35/35、地图域 5/5、meta 四探针与锚逐字节、B2 15/15 逐字、RTL 临时探针四查） |
+| `m7r21-f3-gates.md` | R2.1-F3 | R2E2 结构余量门禁读数（ctest 35/35、test_smoke 第 7/8/9 节、金样 20/20、meta-* 探针逐字） |
+| `m7r21-f4-gates.md` | R2.1-F4 | 跨面包收口门禁读数（NOLINT 翻案后零抑制 + tidy 263/75、色彩四选项 GUI、第 4 波探针 4 节、金样 20/20） |
 | `temp_bug.png` | （评审证据图） | UX-7 原生三钮与自绘三钮同框复现图（`docs/ux-review-14.md` §7 现象证据；原在项目根，随评审件入库移入本目录） |

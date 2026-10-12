@@ -13,6 +13,7 @@
 #include <string>
 
 #include "mapwidget/coord.h"
+#include "mapwidget/map_view.h" // B.5 ①（M7-R2.1-F2）：投影/基准纯核（pp_core）
 
 namespace {
 
@@ -109,6 +110,50 @@ int main() {
               std::string("identity/gcj-wgs/") + city.name,
               "expected (" + num(city.lat) + ", " + num(city.lon) + "), got (" + num(inv.first) +
                   ", " + num(inv.second) + ")");
+    }
+
+    // ---- M7-R2.1-F2 / 附录 B.5 ①：map_view 投影与基准边界（断言只增不减）----
+    // 4. clamp_lat 夹入 Mercator 有效带（越带取 ±85.05112877980659）。
+    check(pp::map::clamp_lat(89.0) == pp::map::kMaxMercatorLat, "map_view/clamp-lat-hi",
+          "expected kMaxMercatorLat, got " + num(pp::map::clamp_lat(89.0)));
+    check(pp::map::clamp_lat(-89.0) == -pp::map::kMaxMercatorLat, "map_view/clamp-lat-lo",
+          "expected -kMaxMercatorLat, got " + num(pp::map::clamp_lat(-89.0)));
+    check(pp::map::clamp_lat(12.5) == 12.5, "map_view/clamp-lat-id",
+          "expected 12.5, got " + num(pp::map::clamp_lat(12.5)));
+
+    // 5. wrap_tile_x 东西环绕（负 x 回卷；南北向不环绕是调用方语义，此处只钉回卷）。
+    check(pp::map::wrap_tile_x(5, 4) == 1, "map_view/wrap-x-pos",
+          "expected 1, got " + num(pp::map::wrap_tile_x(5, 4)));
+    check(pp::map::wrap_tile_x(-1, 4) == 3, "map_view/wrap-x-neg",
+          "expected 3, got " + num(pp::map::wrap_tile_x(-1, 4)));
+
+    // 6. 投影往返：latlon→world→latlon 误差 < 1e-9 deg（三城 × 三档 zoom）。
+    for (const City &city : kCities) {
+        for (const int z : {2, 8, 14}) {
+            const QPointF w = pp::map::latlon_to_world(city.lat, city.lon, z);
+            const std::pair<double, double> back = pp::map::world_to_latlon(w, z);
+            const double err =
+                std::max(std::fabs(back.first - city.lat), std::fabs(back.second - city.lon));
+            check(err < 1e-9,
+                  std::string("map_view/proj-roundtrip/") + city.name + "@z" + std::to_string(z),
+                  "error " + num(err) + " deg >= 1e-9");
+        }
+    }
+
+    // 7. world_span 逐档 = 256·2^z；datum 边界 gcj02=false 恒等、true 与 coord 单源等价。
+    check(pp::map::world_span(0) == 256.0 && pp::map::world_span(4) == 4096.0,
+          "map_view/world-span", "expected 256/4096");
+    {
+        const std::pair<double, double> id = pp::map::wgs_to_datum(31.23, 121.47, false);
+        check(id.first == 31.23 && id.second == 121.47, "map_view/datum-id",
+              "gcj02=false must be identity");
+        const std::pair<double, double> conv = pp::map::wgs_to_datum(31.23, 121.47, true);
+        const std::pair<double, double> ref = pp::map::wgs84_to_gcj02(31.23, 121.47);
+        check(conv.first == ref.first && conv.second == ref.second, "map_view/datum-eq",
+              "wgs_to_datum(gcj02=true) must equal wgs84_to_gcj02");
+        const std::pair<double, double> back = pp::map::datum_to_wgs(conv.first, conv.second, true);
+        check(std::fabs(back.first - 31.23) < 1e-8 && std::fabs(back.second - 121.47) < 1e-8,
+              "map_view/datum-roundtrip", "error too large");
     }
 
     if (g_failed == 0) {

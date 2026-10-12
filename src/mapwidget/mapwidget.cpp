@@ -63,6 +63,7 @@
 //     and search_select_key() picks results by key.
 
 #include "mapwidget/mapwidget.h"
+#include "mapwidget/map_view.h" // B.5 ①：投影/基准纯核（pp_core 单源）
 
 #include "mapwidget/geocoder.h"
 #include "mapwidget/layers.h"
@@ -103,14 +104,12 @@ namespace pp::map {
 
 namespace {
 
-constexpr int kTileSize = 256;
+// kTileSize / kPi / kMaxMercatorLat → map_view.h（B.5 ①：投影纯核单源）
 constexpr int kMinZoom = 2;
 constexpr int kMaxZoom = 18;
 constexpr int kMaxConcurrentFetches = 4;   // frozen: concurrency <= 4
 constexpr int kFailureBannerThreshold = 3; // frozen: >= 3 consecutive failures -> banner
 constexpr double kClickThresholdPx = 4.0;  // frozen: press/release displacement < 4 px = click
-constexpr double kMaxMercatorLat = 85.05112877980659;
-constexpr double kPi = 3.14159265358979323846;
 constexpr qint64 kBytesPerMb = 1024 * 1024;
 constexpr int kDefaultCacheMb = 64;     // frozen default byte budget
 constexpr int kRequestTimeoutMs = 8000; // frozen: request timeout 8 s
@@ -140,8 +139,6 @@ const char *const kLayerRoad = "road";
 const char *const kLayerSatellite = "satellite";
 const char *const kLayerLabel = "label";
 
-double clamp_lat(double lat) { return std::clamp(lat, -kMaxMercatorLat, kMaxMercatorLat); }
-
 // R-218（M7-R2.1-F2）：自绘 HUD 的逻辑坐标**单点镜像** —— RTL 下 leading=右缘，
 // LTR 恒等（原样返回）。地理内容（瓦片/图钉/主钉投影坐标）不镜像；镜像只作用于
 // HUD 盒/文字/线段这类界面构件。
@@ -157,27 +154,8 @@ int mirror_px(const QWidget *q, int x) {
     return q->layoutDirection() == Qt::RightToLeft ? q->width() - 1 - x : x;
 }
 
-double world_span(int zoom) { return double(kTileSize) * double(std::int64_t(1) << zoom); }
-
-int wrap_tile_x(int x, int tile_count) {
-    const int m = x % tile_count;
-    return m < 0 ? m + tile_count : m;
-}
-
-QPointF latlon_to_world(double lat, double lon, int zoom) {
-    const double span = world_span(zoom);
-    const double s = std::sin(clamp_lat(lat) / 180.0 * kPi);
-    return {(lon + 180.0) / 360.0 * span,
-            (0.5 - std::log((1.0 + s) / (1.0 - s)) / (4.0 * kPi)) * span};
-}
-
-std::pair<double, double> world_to_latlon(QPointF world, int zoom) {
-    const double span = world_span(zoom);
-    const double n = kPi * (1.0 - 2.0 * world.y() / span);
-    // R-103（M7-WP7）：世界方块外（上下灰区）的 y 会给出 |lat|→90 的越带纬度；Mercator 有效
-    // 带 = ±85.0511…（与 latlon_to_world 的 clamp_lat 同界）。取点/拖拽/光标读数都经此处。
-    return {clamp_lat(std::atan(std::sinh(n)) * 180.0 / kPi), world.x() / span * 360.0 - 180.0};
-}
+// 投影族（clamp_lat/world_span/wrap_tile_x/latlon_to_world/world_to_latlon）→
+// map_view.{h,cpp}（B.5 ①；同命名空间 pp::map，调用点零改动）。
 
 // C1 适配映射单源（R-158）：provider id → 地理编码源由 geocoder.cpp 的
 // `geocoder_for_provider(QString)` 唯一定义；本 TU 原来的第二份拷贝已删，调用点直接用单源。
@@ -418,17 +396,11 @@ struct MapWidget::Impl {
 
     // ---- datum boundary (frozen: conversion only at the boundary) ----------------
     std::pair<double, double> wgs_to_datum(double lat, double lon) const {
-        if (provider != nullptr && provider->gcj02) {
-            return wgs84_to_gcj02(lat, lon);
-        }
-        return {lat, lon};
+        return pp::map::wgs_to_datum(lat, lon, provider != nullptr && provider->gcj02);
     }
 
     std::pair<double, double> datum_to_wgs(double lat, double lon) const {
-        if (provider != nullptr && provider->gcj02) {
-            return gcj02_to_wgs84(lat, lon);
-        }
-        return {lat, lon};
+        return pp::map::datum_to_wgs(lat, lon, provider != nullptr && provider->gcj02);
     }
 
     // ---- geometry ---------------------------------------------------------------

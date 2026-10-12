@@ -206,6 +206,7 @@ file(GLOB_RECURSE PP_CORE_SOURCES CONFIGURE_DEPENDS
      ${CMAKE_SOURCE_DIR}/src/mapwidget/geocoder.cpp  # M6-T2：地理编码 URL/解析（纯函数，UI 侧 REMOVE_ITEM 剔除）
      ${CMAKE_SOURCE_DIR}/src/mapwidget/providers.cpp  # M6-T3：providers 薄适配层（T1/T2 模型的消费者；UI 侧 REMOVE_ITEM 剔除，test_providers 随 pp_core 链接）
      ${CMAKE_SOURCE_DIR}/src/mapwidget/dms.cpp  # M6-T10：坐标显示格式化（度分输出/逆解析/粗盒边界带；纯函数，UI 侧 REMOVE_ITEM 剔除，test_dms 随 pp_core 链接）
+     ${CMAKE_SOURCE_DIR}/src/mapwidget/map_view.cpp  # B.5 ①（M7-R2.1-F2）：地图投影/基准纯核（UI 侧 REMOVE_ITEM 剔除，test_gcj02 随 pp_core 链接）
      ${CMAKE_SOURCE_DIR}/src/ui/preset_io.cpp)   # 唯一 Qt 适配层（JSON），UI/harness/测试三处复用
 add_library(pp_core STATIC ${PP_CORE_SOURCES})
 # M2-T11 §2.2：生成的 core/version.h（构建目录）随 src 一并 PUBLIC 传播
@@ -262,7 +263,8 @@ list(REMOVE_ITEM PP_UI_SOURCES ${CMAKE_SOURCE_DIR}/src/ui/preset_io.cpp  # 已�
      ${CMAKE_SOURCE_DIR}/src/mapwidget/layers.cpp  # M6-T1：同上（编入 pp_core，UI 不再编译）
      ${CMAKE_SOURCE_DIR}/src/mapwidget/geocoder.cpp  # M6-T2：同上
      ${CMAKE_SOURCE_DIR}/src/mapwidget/providers.cpp  # M6-T3：同上（编入 pp_core，test_providers 方可链接）
-     ${CMAKE_SOURCE_DIR}/src/mapwidget/dms.cpp)  # M6-T10：同上（编入 pp_core，test_dms 方可链接）
+     ${CMAKE_SOURCE_DIR}/src/mapwidget/dms.cpp  # M6-T10：同上（编入 pp_core，test_dms 方可链接）
+     ${CMAKE_SOURCE_DIR}/src/mapwidget/map_view.cpp)  # B.5 ①：同上（编入 pp_core，test_gcj02 方可链接）
 add_executable(photopipeline src/main.cpp ${PP_UI_SOURCES})
 if(WIN32)
     # M3-D2/D5/D6: 嵌入应用清单（UTF-8 代码页）；GUI 子系统（双击无控制台，

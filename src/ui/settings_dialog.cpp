@@ -1076,90 +1076,30 @@ GeomProbeReport settings_geom_probe(const QDialog &dialog) {
 // SettingsDialog
 // ===========================================================================
 
-SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) : QDialog(parent) {
-    setWindowTitle(T("设置"));
-
-    // 构造快照（含无对应控件的字段：last_*）
-    setProperty(kOrigWorkers, current.workers);
-    setProperty(kOrigBudgetGb, current.budget_gb);
-    setProperty(kOrigFlattenGray, current.flatten_gray);
-    setProperty(kOrigRotate, current.rotate_orientation);
-    setProperty(kOrigMapProvider, QString::fromStdString(current.map_provider));
-    setProperty(kOrigAmapKey, QString::fromStdString(current.amap_key));
-    setProperty(kOrigTileCacheMb, current.tile_cache_mb);
-    setProperty(kOrigLogLevel, QString::fromStdString(current.log_level));
-    setProperty(kOrigLastFormat, QString::fromStdString(current.last_format));
-    setProperty(kOrigLastPreset, QString::fromStdString(current.last_preset));
-    setProperty(kOrigLastOutRoot, QString::fromStdString(current.last_out_root));
-    // M4-T15 §9.3 追加项的快照（非确定路径回填 + settings() 完整结构）
-    setProperty(kOrigStaggerMs, current.stagger_ms);
-    setProperty(kOrigThreadBudget, current.thread_budget);
-    setProperty(kOrigOutputTemplate, QString::fromStdString(current.output_template));
-    setProperty(kOrigSplitByFormat, current.split_by_format);
-    setProperty(kOrigUiThemeMode, QString::fromStdString(current.ui_theme_mode)); // A28
-    // M6-T11（C6）：图层档 / 混合叠标注的快照（非确定路径回填 + settings() 完整结构）
-    setProperty(kOrigMapStyle, QString::fromStdString(current.map_style));
-    setProperty(kOrigMapSatLabels, current.map_sat_labels);
-
-    theme::Tokens tokens = theme::tokens(theme::preferred_theme_mode());
-    setFixedWidth(dk::kDialogWidth); // §7.4：660px 宽（居中见首次 show）
-    setStyleSheet(dk::dialog_qss(tokens));
-
-    // 主题重放需要的自绘件指针（通用页签的主题段在本构造末尾接线，见 "主题切换"）
-    formkit::SegmentedControl *mode = nullptr;
-    formkit::CheckBox *rotate_box = nullptr;     // 占位（check_row 的勾选框）
-    formkit::CheckBox *sat_labels_box = nullptr; // M6-T11：混合叠标注（check_row 的勾选框）
-    Swatch *swatch = nullptr;
-
-    // ---- 卡片骨架（§7.4：自绘标题栏 40 + 下划线页签 + 正文 + 底栏 48）----
-    auto *card = new QFrame(this);
-    card->setObjectName(QStringLiteral("pp-dlg-card"));
-    auto *card_line = new QVBoxLayout(card);
-    card_line->setContentsMargins(0, 0, 0, 0);
-    card_line->setSpacing(0);
-
-    const dk::TitleBar title_bar = dk::make_title_bar(card, icons::Name::Image, T("设置"));
-    card_line->addWidget(title_bar.widget);
-
-    auto *tabs = new dk::UnderlineTabs(card);
-    auto *pages = new QStackedWidget(card);
-    pages->setObjectName(QLatin1String(dk::kPagesName));
-    card_line->addWidget(tabs);
-    card_line->addWidget(pages, 1);
-
-    auto *footer = new QFrame(card);
-    footer->setObjectName(QLatin1String(dk::kFooterName));
-    footer->setFixedHeight(dk::kFooterH);
-    auto *footer_line = new QHBoxLayout(footer);
-    footer_line->setContentsMargins(dk::kFooterPadX, 0, dk::kFooterPadX, 0);
-    footer_line->setSpacing(theme::Metrics::group_gap); // 8（tokens.css .dlg-ft{gap:8px}）
-
-    // 页签序 = A21（输出在运行之前，与主步骤 元数据→输出→运行 同序）
-    tabs->add_tab(T("通用"), QStringLiteral("pp-tab-general"));
-    tabs->add_tab(T("输出"), QStringLiteral("pp-tab-output"));
-    tabs->add_tab(T("运行"), QStringLiteral("pp-tab-run"));
-    tabs->add_tab(T("地图"), QStringLiteral("pp-tab-map"));
-    tabs->add_tab(T("关于"), QStringLiteral("pp-tab-about"));
-
+// ------------------------------------------------------------------
+// R-061/R-201（M7-R2.1-F3）：general 页构造（自 ctor 563 行单函数按页签拆出；
+// 页内容/顺序/接线逐字不变，行为零变化）
+QWidget *SettingsDialog::build_general_page(const theme::Tokens &tokens,
+                                            const pp::AppSettings &current, QWidget *parent) {
     // ------------------------------------------------------------------
     // 页 0：通用（修 4-20：主题收纳于此；语言 = 无 i18n 实现 → 不摆空行）
     // ------------------------------------------------------------------
-    auto *general = new QWidget(pages);
+    auto *general = new QWidget(parent);
     general->setObjectName(QLatin1String(kPageGeneral));
     {
         auto *v = new QVBoxLayout(general);
         v->setContentsMargins(dk::kBodyPadX, dk::kBodyPadTop, dk::kBodyPadX, dk::kBodyPadBottom);
         v->setSpacing(0); // R1：行间无额外 gap
 
-        mode = new formkit::SegmentedControl(general);
-        mode->setObjectName(QLatin1String(kThemeMode));
-        mode->setToolTip(T("应用主题；跟随系统 = 随 Windows 明暗设置（选后立即生效）"));
-        mode->setAccessibleName(T("主题"));
-        mode->add_segment(T("跟随系统"), QStringLiteral("pp-theme-system"));
-        mode->add_segment(T("亮色"), QStringLiteral("pp-theme-light"));
-        mode->add_segment(T("暗色"), QStringLiteral("pp-theme-dark"));
-        for (int i = 0; i < mode->count(); ++i) {
-            auto *segment = qobject_cast<QAbstractButton *>(mode->segment(i));
+        theme_mode_seg_ = new formkit::SegmentedControl(general);
+        theme_mode_seg_->setObjectName(QLatin1String(kThemeMode));
+        theme_mode_seg_->setToolTip(T("应用主题；跟随系统 = 随 Windows 明暗设置（选后立即生效）"));
+        theme_mode_seg_->setAccessibleName(T("主题"));
+        theme_mode_seg_->add_segment(T("跟随系统"), QStringLiteral("pp-theme-system"));
+        theme_mode_seg_->add_segment(T("亮色"), QStringLiteral("pp-theme-light"));
+        theme_mode_seg_->add_segment(T("暗色"), QStringLiteral("pp-theme-dark"));
+        for (int i = 0; i < theme_mode_seg_->count(); ++i) {
+            auto *segment = qobject_cast<QAbstractButton *>(theme_mode_seg_->segment(i));
             if (segment != nullptr) {
                 segment->setAccessibleName(T("主题") + QStringLiteral("：") + segment->text());
                 segment->setToolTip(segment->text());
@@ -1168,8 +1108,9 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
         // 当前档 = 单源口径（A28）：PP_UI_THEME 强制档 > 持久化档（AppSettings.ui_theme_mode，
         // 启动期已注入 theme.h）> 跟随系统 —— 与 theme::preferred_theme_mode() 同一判据顺序，
         // 只是保留"跟随系统"这一档（theme_mode_id() 给原始档名）。
-        mode->set_current_index(theme_mode_index(QString::fromLatin1(theme::theme_mode_id())));
-        mode->set_tokens(tokens);
+        theme_mode_seg_->set_current_index(
+            theme_mode_index(QString::fromLatin1(theme::theme_mode_id())));
+        theme_mode_seg_->set_tokens(tokens);
 
         // A27（T11）：段高由 formkit::Segment **自持**（sizeHint/fixedHeight = kSegH − 2）——
         // 调用点临时补丁（setFixedHeight）已撤销；此处不再对段做任何几何修补。
@@ -1179,22 +1120,27 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
         auto *mh = new QHBoxLayout(mode_holder);
         mh->setContentsMargins(0, 0, 0, 0);
         mh->setSpacing(0);
-        mh->addWidget(mode, 0, Qt::AlignVCenter);
+        mh->addWidget(theme_mode_seg_, 0, Qt::AlignVCenter);
         mh->addStretch(1);
 
         const formkit::Row row =
             formkit::frow(general, T("主题"), mode_holder, formkit::FieldWidth::Flex);
         row.row->setObjectName(QLatin1String(kRowTheme));
-        bind_row(row, mode);
+        bind_row(row, theme_mode_seg_);
         v->addWidget(row.row);
         v->addStretch(1);
     }
-    pages->addWidget(general);
+    return general;
+}
 
+// ------------------------------------------------------------------
+// R-061/R-201（M7-R2.1-F3）：output 页构造（自 ctor 563 行单函数按页签拆出；
+// 页内容/顺序/接线逐字不变，行为零变化）
+QWidget *SettingsDialog::build_output_page(const pp::AppSettings &current, QWidget *parent) {
     // ------------------------------------------------------------------
     // 页 1：输出（M4-T15 §9.3 追加项③：分文件夹默认结构）
     // ------------------------------------------------------------------
-    auto *page_out = new QWidget(pages);
+    auto *page_out = new QWidget(parent);
     page_out->setObjectName(QLatin1String(kPageOutput));
     {
         auto *v = new QVBoxLayout(page_out);
@@ -1244,14 +1190,19 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
         v->addWidget(structure_row.row);
         v->addStretch(1);
     }
-    pages->addWidget(page_out);
+    return page_out;
+}
 
+// ------------------------------------------------------------------
+// R-061/R-201（M7-R2.1-F3）：run 页构造（自 ctor 563 行单函数按页签拆出；
+// 页内容/顺序/接线逐字不变，行为零变化）
+QWidget *SettingsDialog::build_run_page(const theme::Tokens &tokens, const pp::AppSettings &current,
+                                        QWidget *parent) {
     // ------------------------------------------------------------------
     // 页 2：运行（§7.4 数值行；修 4-08 语义控件；4-12 与运行页同名同词）
     // ------------------------------------------------------------------
-    auto *page_run = new QWidget(pages);
+    auto *page_run = new QWidget(parent);
     page_run->setObjectName(QLatin1String(kPageRun));
-    QSlider *flatten = nullptr;
     {
         auto *v = new QVBoxLayout(page_run);
         v->setContentsMargins(dk::kBodyPadX, dk::kBodyPadTop, dk::kBodyPadX, dk::kBodyPadBottom);
@@ -1305,14 +1256,14 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
         auto *ar = new QHBoxLayout(alpha_track);
         ar->setContentsMargins(0, 0, 0, 0);
         ar->setSpacing(formkit::kInlineGap);
-        flatten = new QSlider(Qt::Horizontal, alpha_track);
+        auto *flatten = new QSlider(Qt::Horizontal, alpha_track);
         flatten->setObjectName(QLatin1String(kFlattenGray));
         flatten->setRange(0, kSliderMax);
         const int gray0 = gray_to_slider(current.flatten_gray);
         flatten->setValue(gray0);
         flatten->setToolTip(T("alpha 合成底色灰度：0 = 黑，100 = 白"));
         flatten->setAccessibleName(T("alpha 合成底色"));
-        swatch = new Swatch(alpha_track);
+        auto *swatch = new Swatch(alpha_track);
         swatch->set_tokens(tokens);
         swatch->set_gray(slider_to_gray(gray0)); // 修 4-15：色块 = 滑杆值的灰度映射
         swatch->setToolTip(T("alpha 合成底色预览（与滑杆值一致）"));
@@ -1336,7 +1287,7 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
         const formkit::CheckRow rotate =
             formkit::check_row(page_run, T("EXIF 方向"), T("按 EXIF 方向自动旋转输出"),
                                QLatin1String(kRotateOrientation));
-        rotate_box = rotate.box;
+        auto *rotate_box = rotate.box;
         rotate_box->setChecked(current.rotate_orientation); // 默认开（settings 默认 true）
         rotate_box->setToolTip(T("按 EXIF 方向自动旋转输出；关闭则保留原始像素方向"));
         rotate_box->setAccessibleName(T("按 EXIF 方向自动旋转输出"));
@@ -1344,12 +1295,18 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
         v->addWidget(rotate.row);
         v->addStretch(1);
     }
-    pages->addWidget(page_run);
+    return page_run;
+}
 
+// ------------------------------------------------------------------
+// R-061/R-201（M7-R2.1-F3）：map 页构造（自 ctor 563 行单函数按页签拆出；
+// 页内容/顺序/接线逐字不变，行为零变化）
+QWidget *SettingsDialog::build_map_page(const theme::Tokens &tokens, const pp::AppSettings &current,
+                                        QWidget *parent) {
     // ------------------------------------------------------------------
     // 页 3：地图（§2.10 冻结四项；单位入槽、范围入注释）
     // ------------------------------------------------------------------
-    auto *page_map = new QWidget(pages);
+    auto *page_map = new QWidget(parent);
     page_map->setObjectName(QLatin1String(kPageMap));
     {
         auto *v = new QVBoxLayout(page_map);
@@ -1391,7 +1348,7 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
         const formkit::CheckRow sat_labels =
             formkit::check_row(page_map, T("混合叠标注"), T("混合图层在影像上叠加道路与地名标注"),
                                QLatin1String(kMapSatLabels));
-        sat_labels_box = sat_labels.box;
+        auto *sat_labels_box = sat_labels.box;
         sat_labels_box->setChecked(current.map_sat_labels);
         sat_labels_box->setToolTip(T("混合图层在影像上叠加道路与地名标注（关闭 = 纯影像）"));
         sat_labels_box->setAccessibleName(T("混合图层在影像上叠加道路与地名标注"));
@@ -1450,12 +1407,17 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
         v->addWidget(level_row.row);
         v->addStretch(1);
     }
-    pages->addWidget(page_map);
+    return page_map;
+}
 
+// ------------------------------------------------------------------
+// R-061/R-201（M7-R2.1-F3）：about 页构造（自 ctor 563 行单函数按页签拆出；
+// 页内容/顺序/接线逐字不变，行为零变化）
+QWidget *SettingsDialog::build_about_page(const theme::Tokens &tokens, QWidget *parent) {
     // ------------------------------------------------------------------
     // 页 4：关于（版本唯一来源 = core/version.h；库清单只读等宽；许可全文 tooltip）
     // ------------------------------------------------------------------
-    auto *page_about = new QWidget(pages);
+    auto *page_about = new QWidget(parent);
     page_about->setObjectName(QLatin1String(kPageAbout));
     {
         auto *v = new QVBoxLayout(page_about);
@@ -1517,7 +1479,80 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
         license->setToolTip(license->text());
         v->addWidget(license);
     }
-    pages->addWidget(page_about);
+    return page_about;
+}
+
+SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) : QDialog(parent) {
+    setWindowTitle(T("设置"));
+
+    // 构造快照（含无对应控件的字段：last_*）
+    setProperty(kOrigWorkers, current.workers);
+    setProperty(kOrigBudgetGb, current.budget_gb);
+    setProperty(kOrigFlattenGray, current.flatten_gray);
+    setProperty(kOrigRotate, current.rotate_orientation);
+    setProperty(kOrigMapProvider, QString::fromStdString(current.map_provider));
+    setProperty(kOrigAmapKey, QString::fromStdString(current.amap_key));
+    setProperty(kOrigTileCacheMb, current.tile_cache_mb);
+    setProperty(kOrigLogLevel, QString::fromStdString(current.log_level));
+    setProperty(kOrigLastFormat, QString::fromStdString(current.last_format));
+    setProperty(kOrigLastPreset, QString::fromStdString(current.last_preset));
+    setProperty(kOrigLastOutRoot, QString::fromStdString(current.last_out_root));
+    // M4-T15 §9.3 追加项的快照（非确定路径回填 + settings() 完整结构）
+    setProperty(kOrigStaggerMs, current.stagger_ms);
+    setProperty(kOrigThreadBudget, current.thread_budget);
+    setProperty(kOrigOutputTemplate, QString::fromStdString(current.output_template));
+    setProperty(kOrigSplitByFormat, current.split_by_format);
+    setProperty(kOrigUiThemeMode, QString::fromStdString(current.ui_theme_mode)); // A28
+    // M6-T11（C6）：图层档 / 混合叠标注的快照（非确定路径回填 + settings() 完整结构）
+    setProperty(kOrigMapStyle, QString::fromStdString(current.map_style));
+    setProperty(kOrigMapSatLabels, current.map_sat_labels);
+
+    theme::Tokens tokens = theme::tokens(theme::preferred_theme_mode());
+    setFixedWidth(dk::kDialogWidth); // §7.4：660px 宽（居中见首次 show）
+    setStyleSheet(dk::dialog_qss(tokens));
+
+    // R-061/R-201（M7-R2.1-F3）：主题段指针随 build_general_page 落在 theme_mode_seg_；
+    // 原四个局部指针（rotate_box/sat_labels_box/swatch）为遗留跨页声明，随拆分消解。
+
+    // ---- 卡片骨架（§7.4：自绘标题栏 40 + 下划线页签 + 正文 + 底栏 48）----
+    auto *card = new QFrame(this);
+    card->setObjectName(QStringLiteral("pp-dlg-card"));
+    auto *card_line = new QVBoxLayout(card);
+    card_line->setContentsMargins(0, 0, 0, 0);
+    card_line->setSpacing(0);
+
+    const dk::TitleBar title_bar = dk::make_title_bar(card, icons::Name::Image, T("设置"));
+    card_line->addWidget(title_bar.widget);
+
+    auto *tabs = new dk::UnderlineTabs(card);
+    auto *pages = new QStackedWidget(card);
+    pages->setObjectName(QLatin1String(dk::kPagesName));
+    card_line->addWidget(tabs);
+    card_line->addWidget(pages, 1);
+
+    auto *footer = new QFrame(card);
+    footer->setObjectName(QLatin1String(dk::kFooterName));
+    footer->setFixedHeight(dk::kFooterH);
+    auto *footer_line = new QHBoxLayout(footer);
+    footer_line->setContentsMargins(dk::kFooterPadX, 0, dk::kFooterPadX, 0);
+    footer_line->setSpacing(theme::Metrics::group_gap); // 8（tokens.css .dlg-ft{gap:8px}）
+
+    // 页签序 = A21（输出在运行之前，与主步骤 元数据→输出→运行 同序）
+    tabs->add_tab(T("通用"), QStringLiteral("pp-tab-general"));
+    tabs->add_tab(T("输出"), QStringLiteral("pp-tab-output"));
+    tabs->add_tab(T("运行"), QStringLiteral("pp-tab-run"));
+    tabs->add_tab(T("地图"), QStringLiteral("pp-tab-map"));
+    tabs->add_tab(T("关于"), QStringLiteral("pp-tab-about"));
+
+    // R-061/R-201（M7-R2.1-F3）：ctor 563 行单函数按 5 页签拆 build_*_page()（B.6/A.6
+    // 蓝图切割点）—— 页内容/顺序/接线逐字不变；跨页耦合只剩主题段信号源
+    // theme_mode_seg_（其余 rotate_box/sat_labels_box/swatch/flatten 本就只在页内使用，
+    // 随拆分降为页内局部；主题 lambda 的四个捕获为遗留无用捕获，一并清掉 —— 零行为变化）。
+    pages->addWidget(build_general_page(tokens, current, pages));
+    pages->addWidget(build_output_page(current, pages));
+    pages->addWidget(build_run_page(tokens, current, pages));
+    pages->addWidget(build_map_page(tokens, current, pages));
+    pages->addWidget(build_about_page(tokens, pages));
 
     // ---- 底栏（§7.4：[恢复默认] ……… [取消][确定]；主按钮实心居右）----
     auto *defaults_btn = dk::make_button(footer, T("恢复默认"), /*primary=*/false);
@@ -1604,8 +1639,8 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
 
     // ---- 主题切换（通用页签，修 4-20 + A28）：即时生效（本对话框就地重放）+ 持久化
     //      （写进 AppSettings.ui_theme_mode，见 settings()）----
-    connect(mode, &formkit::SegmentedControl::current_changed, this,
-            [this, swatch, rotate_box, sat_labels_box, mode](int index) {
+    connect(theme_mode_seg_, &formkit::SegmentedControl::current_changed, this,
+            [this](int index) /* R-061/R-201：原四捕获为遗留无用捕获，清除 */ {
                 // A28：档位 → 档名单源映射；"跟随系统"= 撤掉强制档 + 清持久化覆盖
                 const QString id = theme_mode_id(index);
                 if (id == QLatin1String("light") || id == QLatin1String("dark"))

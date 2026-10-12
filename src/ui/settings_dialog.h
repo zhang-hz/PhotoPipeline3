@@ -174,11 +174,29 @@ GeomProbeReport settings_geom_probe(const QDialog &dialog);
 
 } // namespace dialogkit
 
+namespace formkit {
+class SegmentedControl; // R-061/R-201：主题段指针成员（定义在 ui/formkit.h）
+}
+
 class SettingsDialog : public QDialog {
     Q_OBJECT
 public:
     explicit SettingsDialog(const pp::AppSettings &current, QWidget *parent = nullptr);
     pp::AppSettings settings() const; // edited values (OK or Apply)
+
+private:
+    // ---- R-061/R-201（M7-R2.1-F3，加性追认）：ctor 563 行单函数按 5 页签拆 build_*_page() ----
+    // 既有公开 API（构造 + settings()）逐字不变；页内容/顺序/接线零变化。跨页耦合只剩
+    // 主题段信号源 theme_mode_seg_（其余页内控件本就只在页内使用，随拆分降为页内局部）。
+    QWidget *build_general_page(const theme::Tokens &tokens, const pp::AppSettings &current,
+                                QWidget *parent);
+    QWidget *build_output_page(const pp::AppSettings &current, QWidget *parent);
+    QWidget *build_run_page(const theme::Tokens &tokens, const pp::AppSettings &current,
+                            QWidget *parent);
+    QWidget *build_map_page(const theme::Tokens &tokens, const pp::AppSettings &current,
+                            QWidget *parent);
+    QWidget *build_about_page(const theme::Tokens &tokens, QWidget *parent);
+    formkit::SegmentedControl *theme_mode_seg_ = nullptr;
 };
 
 } // namespace pp::ui

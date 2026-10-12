@@ -242,14 +242,21 @@ jobs:
 
   warm:
     runs-on: ubuntu-24.04
-    # 冷路径估算: vcpkg 41 port 全量 ≈34 min + Qt ≈3 min + 两棵树 ≈6 min + 依赖自检 <1 min ⇒ 60 min。
+    # 冷路径估算: vcpkg 41 port 全量 ≈34 min + Qt ≈3 min + 两棵树 ≈6 min + 依赖自检 <1min ⇒ 60 min。
     timeout-minutes: 60         # §12.6 豁免：播种非门禁基础设施
-    env:
-      # M4-CI-fix3（F）: 本 job 原先只在「Qt 就绪断言」步骤上挂 QT_DIR，job 级为空 —— 而 CMakeLists.txt:47-59
-      # 读的正是 env QT_DIR（为空 ⇒ 回落 ${CMAKE_SOURCE_DIR}/.toolchain/Qt/<ver>/gcc_64，播种路径下不存在）
-      # ⇒ find_package(Qt6) 找不到 Qt6Config.cmake（run 36043530845 本 job step12 实测:
-      # vcpkg/scripts/buildsystems/vcpkg.cmake:939 (_find_package) 报错，Call Stack CMakeLists.txt:149）。
-      # 值与四道流水线的 linux job 逐字一致（main-full.yml:303/703/1087 同款）。
+    # M4-CI-fix3（F）→ R-063 收口 → M7-R2-C 修复（R2C-warm-yml）: QT_DIR 的供给机制沿革如下——
+    #   ① M4-CI-fix3（F）: 本 job 原先只在「Qt 就绪断言」步骤上挂 QT_DIR，job 级为空 —— 而
+    #      CMakeLists.txt:47-59 读的正是 env QT_DIR（为空 ⇒ 回落 .toolchain/Qt/<ver>/gcc_64，
+    #      播种路径下不存在）⇒ find_package(Qt6) 找不到 Qt6Config.cmake（run 36043530845 本 job
+    #      step12 实测: vcpkg/scripts/buildsystems/vcpkg.cmake:939 (_find_package) 报错）。
+    #   ② R-063（18fb355）: 去版本字面量，删掉 job 级 `QT_DIR: …/Qt/<ver>/gcc_64` 值行、改由
+    #      checkout 后「Qt 路径」步骤经 GITHUB_ENV 注入（jobs.<job_id>.env 不可用 env 上下文拼
+    #      QT_VERSION，已查证 GitHub contexts 表；机制与 main-full.yml 的 linux job 同款）。
+    #      但 R-063 只删了值行、把空壳 `env:` 键留了下来 —— YAML 上 env= null，GitHub Actions
+    #      校验报「Line 247 Unexpected value」，warm-cache 轮次 #9–#13 全部解析期秒败（0 job），
+    #      播种通道自 18fb355 起实际断供（vcpkg 二进制缓存无法重播种 ⇒ 后续 Windows job 源码重建）。
+    #   ③ M7-R2-C 修复: 删除非法空 `env:` 键（本注释保留沿革归因）；QT_DIR 由下方「Qt 路径」
+    #      步骤经 GITHUB_ENV 注入，行为与四道流水线 linux job 逐字一致，零行为变化。
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - name: Qt 路径（QT_VERSION 单源 = tools/versions.env；R-063 去版本字面量）

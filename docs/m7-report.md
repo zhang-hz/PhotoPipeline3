@@ -772,3 +772,32 @@ python tools/env.py run -- ctest --test-dir build/m7-wp11-rel -N  # 34（diff �
 ---
 
 *报告完。终门禁数据已由 WP12 于 2026-10-12 补入 §2.3（八项全绿）；本报告 WP11 收口、WP12 终验。*
+
+### 3.8 发行偏差（WP13，M7-ADJ-tag-move，主对话裁决）
+
+- **链路（如实）**：R-122 断言钉住 vcpkg.json 版本漂移 → 失败 tag 移动一次（97cd9da → b1af371）→ 重发布。逐步证据：
+  1. WP13 版本 bump 只改 `CMakeLists.txt:19`，`vcpkg.json "version"` 漏同改（当时 grep 复核面未含 `*.json`）；
+     `tools/ci-versions-check.py` 第 3 项（R-122，M7-WP3 引入）在 release.yml `appimage` job 6s 断言红
+     （release #12 = run 38197049543 @ 97cd9da；报错逐字 `版本不一致: CMakeLists project VERSION=0.3.3
+     vs vcpkg.json version=0.3.2 （R-122）`，本机复跑同文）。
+  2. `M7-REL-0.3.3-gate-fix2`（b1af371）按 R-122 契约同改 `vcpkg.json` → 0.3.3；阴阳性对照：
+     临时 worktree（97cd9da 树）`ci-versions-check` **FAIL**（同 CI 报错逐字）/ 主树（b1af371）**OK (10 keys, expect=2)**。
+  3. 移动前取证（裁决条件 1）：`gh release view` gh CLI 未认证（如实记录，同 d049d22 先例状态）；
+     匿名核对 releases 列表**无 v0.3.3**（最新 v0.3.2）、`/releases/tag/v0.3.3` 仅 2 个自动源码包资产
+     （真发布 = 6 资产，对照 v0.3.2）、release #12 **publish 未执行** ⇒ 零 Release、零资产。
+  4. 主对话裁决（escalate）：批准**一次**移动，条件七条（含「再红于任何新原因即停上报、禁止二次移动」）。
+  5. 移动（裁决条件 3）：`git tag -d v0.3.3 && git tag -a v0.3.3 -F … b1af371` +
+     `git push --force origin refs/tags/v0.3.3`（单 ref 原子更新）；`git ls-remote --tags origin` 核对
+     `refs/tags/v0.3.3` = tag 对象 `cb181ee`，`^{}` = `b1af371`。
+  6. 重推触发 release #13（run 38198290373 @ b1af371）→ 发布结果见 §3.8 末行。
+- **影响面**：产物二进制零影响（`vcpkg.json` 版本字段不进产物；两棵树 `--version` 同为 `PhotoPipeline 0.3.3`）；
+  金样 20/20 + 回归 zero diff + ctest 35/35 双背书不受影响（在 gate-fix 一并实跑）。
+- **发布结果**：（2026-10-12 实况）appimage 6m56s 绿（AppImage artifact 49 MB；probe-appimage 32s 绿）；
+  winzip job **20m16s 撞 `timeout-minutes: 20` 硬顶被 cancelled** —— 步骤级取证
+  （API `actions/jobs/114646130378`）：Qt/vcpkg 缓存 restore 均 success、暖度断言（≥20 archive）过、
+  语料断言过；step 12「configure + build release」跑 19m11s（03:06:42 → 03:25:53）未完被取消，
+  step 13–16（release-dev 子集 / make_winzip / 指纹 / 上传）全 skipped ⇒ probe-winzip、publish
+  **skipped** ⇒ **GitHub Release v0.3.3 未创建**（releases 列表复核仍止于 v0.3.2）。
+  按裁决条件 5（再红于新原因即停、禁止二次移动 tag）已停止发布动作，残余上报等裁决；
+  可选处置（需主对话授权）：同 tag 重跑 release.yml（不涉 tag 移动；winzip 预算 15 min、
+  本次 build 单步 19m+，或需调整预算/缓存后再跑）。

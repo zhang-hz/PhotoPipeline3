@@ -185,7 +185,10 @@ UI 14 项评审（`docs/ux-review-14.md`）的批量整改 + 结构重构。两�
   `tools/ci-versions-check.py`（R-122 单源一致性）通过 · 密钥扫描 0 命中
 - `vcpkg.json` `version` 与 `CMakeLists.txt:19` **同改** 0.3.3（R-122 契约「版本 bump 必须
   同改」；`ci-versions-check.py` 第 3 项在 CI 钉住，首推 tag 时该项红灯后补齐）
-- 「已发行」终态与 CI 产物指纹留待**发行后收口**提交登记（`d049d22` 先例）
+- 「已发行」终态与 CI 产物指纹留待**发行后收口**提交登记（`d049d22` 先例）；2026-10-12 实况：
+  release #13（tag `v0.3.3` → `b1af371`）winzip job 撞 `timeout-minutes: 20` 硬顶被取消
+  （build 单步 19m11s 未完）、publish 跳过 ⇒ GitHub Release 未创建，处置待主对话裁决
+  （全链见 [docs/m7-report.md](docs/m7-report.md) §3.8）
 
 ## [0.3.2] — 2026-10-11
 

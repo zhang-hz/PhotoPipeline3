@@ -426,6 +426,79 @@ jobs:
             echo -e "ctest release-dev (含 ui_smoke)\t$(( T3 - T2 ))"
           } >> "$RUNNER_TEMP/pp-steps.tsv"
 
+      - name: ctest 失败注解遥测（M7R21F1-1：失败测试名 + 失败断言行 → ::error 注解）
+        # 判据可见性改进，永久保留（裁定登记 M7R21F1-1）：ctest 失败时把失败测试名与失败断言行
+        # 翻译成 GitHub 注解（check-runs 注解接口公开可读，匿名日志 403 时也能读出失败明细）。
+        # 提取源 = ctest stdout 的 "The following tests FAILED" 摘要块 + LastTestsFailed.log 的
+        # 失败测试名 + LastTest.log 里逐用例 `FAIL <case>: <detail>` 断言行；每条断言行回查
+        # tests/unit/<test>.cpp 的行号（查不到回落 line=1）。失败断言格式见 tests/unit/*.cpp 头注释。
+        if: failure()
+        run: |
+          python3 - <<'PY'
+          import os, re
+          rt = os.environ.get("RUNNER_TEMP", "")
+          fails = {}
+          def add(name, line=None):
+              name = (name or "").strip()
+              if not name:
+                  return
+              fails.setdefault(name, [])
+              if line:
+                  fails[name].append(line)
+          for log in [os.path.join(rt, "ctest-release.log"), os.path.join(rt, "ctest-release-dev.log")]:
+              if not os.path.isfile(log):
+                  continue
+              for ln in open(log, encoding="utf-8", errors="replace"):
+                  m = re.match(r"\s*\d+ - (\S+) \((Failed|Timeout|Subprocess aborted|SEGFAULT|Exception)\)", ln)
+                  if m:
+                      add(m.group(1))
+          for f in ["build/release/Testing/Temporary/LastTestsFailed.log",
+                    "build/release-dev/Testing/Temporary/LastTestsFailed.log"]:
+              if not os.path.isfile(f):
+                  continue
+              for ln in open(f, encoding="utf-8", errors="replace"):
+                  if ":" in ln:
+                      add(ln.split(":", 1)[1])
+          for f in ["build/release/Testing/Temporary/LastTest.log",
+                    "build/release-dev/Testing/Temporary/LastTest.log"]:
+              if not os.path.isfile(f):
+                  continue
+              cur = None
+              for ln in open(f, encoding="utf-8", errors="replace"):
+                  m = re.search(r"Testing: (\S+)", ln)
+                  if m:
+                      cur = m.group(1)
+                      add(cur)
+                  m = re.match(r"FAIL (\S+): (.*)", ln.rstrip())
+                  if m and cur:
+                      add(cur, ln.rstrip())
+          emitted = 0
+          for test in sorted(fails):
+              src = "tests/unit/%s.cpp" % test
+              if not os.path.isfile(src):
+                  cand = "tests/%s.py" % test
+                  src = cand if os.path.isfile(cand) else src
+              for fl in (fails[test] or [None])[:10]:
+                  line_no, msg = 1, "(无 FAIL 断言行；明细见 build/<name>/Testing/Temporary/LastTest.log)"
+                  if fl:
+                      msg = fl
+                      m = re.match(r"FAIL ([^:]+):", fl)
+                      if m and os.path.isfile(src):
+                          needle = m.group(1).split("/")[-1]
+                          try:
+                              for i, s in enumerate(open(src, encoding="utf-8", errors="replace"), 1):
+                                  if needle in s:
+                                      line_no = i
+                                      break
+                          except OSError:
+                              pass
+                  print("::error file=%s,line=%d::CTEST-FAIL %s %s" % (src, line_no, test, msg))
+                  emitted += 1
+          print("CTEST-ANNOT: failed-tests=%d annotations=%d" % (len(fails), emitted))
+          for t in sorted(fails):
+              print("CTEST-ANNOT-NAME %s" % t)
+          PY
+
       - name: UI-SMOKE 冻结行取证（原文入 summary）
         # 与 ctest 的 ui_smoke 条目同一断言（tests/ui_smoke.py 的冻结末行 = `UI-SMOKE OK shots=12 pages=3`，
         # M4-T14 起 12 张；本步把**原文**取到 summary 里，ctest 仍是权威门禁）。

@@ -21,8 +21,9 @@
 //     树行没有边框可画，故取"强调边框+强调色字"的字色一档）。
 //   * 值留空 = 删除该标签（remove 编辑）。
 //   * 时间三态“清除”：MetadataOverride 没有对应字段，语义化为对时间标签的 remove 编辑
-//     （键集 = ui/time_tag_keys.h 的 wall_clock 5 键，与引擎写路径同集；命中〔批〕的
-//     touched 9 键见同表 —— R-197 4 份真相单表收口）；GPS“清除”= gps_clear；
+//     （键集 = ui/time_tag_keys.h 的 **touched 全部 9 键**，与〔批〕命中面/shift 触达面同集
+//     —— M7R22G2-0 主对话裁定，2026-10-13；原「只清 wall_clock 5 键」换锚，消「清除 3 键
+//     vs 命中 9 键」漂移。R-197 4 份真相单表收口见同表）；GPS“清除”= gps_clear；
 //     隐私剥除 = optional<bool>。
 //   * 自验开关（不改冻结头）：动态属性 "pp_exif_editor_suppress_modal" = true 时，所有
 //     QMessageBox 改为把内容写进动态属性（"pp_last_validation_errors" / "pp_last_warning"），
@@ -194,9 +195,10 @@ private:
     theme::Tokens tokens_ = theme::tokens(theme::preferred_theme_mode());
 };
 
-// R-197（M7-R2.1-F3）：时间标签集合 4 份真相收敛为 ui/time_tag_keys.h 单表（清除集 =
-// wall_clock 5 键、命中集 = touched 9 键，逐键角色显式）；原 kExifTimeKeys/kXmpTimeKeys 与
-// is_exif_time_key/is_xmp_time_key 的字面量全部退役（清除 3+2 vs 命中 6+3 的静默漂移消除）。
+// R-197（M7-R2.1-F3）：时间标签集合 4 份真相收敛为 ui/time_tag_keys.h 单表（逐键角色显式）；
+// 原 kExifTimeKeys/kXmpTimeKeys 与 is_exif_time_key/is_xmp_time_key 的字面量全部退役
+// （清除 3+2 vs 命中 6+3 的静默漂移消除）。M7R22G2-0（主对话裁定）：清除集 = touched 全部
+// 9 键（与命中面同集；原「清除 = wall_clock 5 键」行为换锚，裁定登记见 build/m7r22-g2/handoff.md）。
 
 // R-199（M7-R2.1-F3）：三态机/二态机组合框的**唯一真相 = itemData**（构造时 addItem 文本 +
 // 枚举值，与 R-190 同一收口法）—— 读回 currentData()、落值 findData()；原
@@ -1785,15 +1787,18 @@ pp::MetadataOverride ExifEditor::Impl::build_override(std::vector<std::string> *
     ov.xmp_edits = xmp_edits;
 
     // 时间三态：覆盖 = time_shift；清除 = 对时间标签的 remove 编辑（MetadataOverride 无
-    // time_clear）。R-199：读回 itemData；R-196/R-197：清除集 = time_tag_keys.h 的
-    // wall_clock 子集（5 键，与引擎写路径同集），EXIF/XMP 双循环收敛为 upsert_remove_edit。
+    // time_clear）。R-199：读回 itemData；R-196/R-197：EXIF/XMP 双循环收敛为
+    // upsert_remove_edit。M7R22G2-0（主对话裁定，2026-10-13）：清除集 = time_tag_keys.h 的
+    // **touched 全部 9 键**（OffsetTime* 3 + Xmp MetadataDate 一并 remove），与〔批〕命中面 /
+    // shift 触达面同集 —— 消「清除 3 键 vs 命中 9 键」漂移；原「只清 wall_clock 5 键」换锚
+    //（裁定登记 + 断言换锚 + 回归归因见 build/m7r22-g2/handoff.md）。
     const TriMode tmode = tri_of(time_mode);
     if (tmode == TriMode::Override) {
         ov.time_shift = time_shift_from_widgets();
     } else if (tmode == TriMode::Clear) {
         for (std::size_t i = 0; i < timetags::kTimeTagCount; ++i) {
             const timetags::TimeTag &tag = timetags::kTimeTags[i];
-            if (!tag.wall_clock)
+            if (!timetags::is_time_clear_key(tag.key, tag.xmp))
                 continue;
             upsert_remove_edit(tag.xmp ? ov.xmp_edits : ov.exif_edits, tag.key);
         }

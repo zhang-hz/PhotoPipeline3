@@ -285,10 +285,14 @@ int main() {
     }
 
     // 8. M7-R2.1-F3 / R-197：时间标签集合单表（断言只增；既有 1–7 节逐字不动）。
-    //    touched = 9 键（命中集，〔批〕标记）；wall_clock = 5 键（清除集，与引擎写路径
+    //    touched = 9 键（命中集，〔批〕标记）；wall_clock = 5 键（墙钟子集 = 引擎写路径
     //    core/metadata.cpp 的 kExifTimeKeys[3] + kXmpTimeKeys[2] 逐键同集）。
+    //    M7R22G2-0（主对话行为裁定，2026-10-13）：清除集 = touched 全部 9 键（与命中面同集）
+    //    —— 原「清除不含 OffsetTime*/MetadataDate」「清除谓词只认墙钟 5 键」三条断言随行为
+    //    换锚（见 build/m7r22-g2/handoff.md「裁定登记」M7R22G2-0）。
     {
         using pp::ui::timetags::is_exif_time_key;
+        using pp::ui::timetags::is_time_clear_key;
         using pp::ui::timetags::is_wall_clock_time_key;
         using pp::ui::timetags::is_xmp_time_key;
         using pp::ui::timetags::kTimeTagCount;
@@ -299,7 +303,7 @@ int main() {
             if (kTimeTags[i].wall_clock)
                 ++wall;
         }
-        check(wall == 5, "wall_clock 时间键 == 5（清除集单表）");
+        check(wall == 5, "wall_clock 时间键 == 5（墙钟子集单表；M7R22G2-0 起非清除集）");
         check(is_wall_clock_time_key("Exif.Photo.DateTimeOriginal") &&
                   is_wall_clock_time_key("Exif.Photo.DateTimeDigitized") &&
                   is_wall_clock_time_key("Exif.Image.DateTime") &&
@@ -308,15 +312,30 @@ int main() {
               "wall_clock 5 键 == 引擎写路径 kExifTimeKeys[3]+kXmpTimeKeys[2]");
         check(is_exif_time_key("Exif.Photo.OffsetTimeOriginal"),
               "命中含 OffsetTime*（touched 9 键口径）");
-        check(!is_wall_clock_time_key("Exif.Photo.OffsetTimeOriginal"),
-              "清除不含 OffsetTime*（现状字节级一致）");
+        // M7R22G2-0 换锚：清除连带 OffsetTime*（原断言「清除不含 OffsetTime*（现状字节级
+        // 一致）」随行为裁定撤销，改为钉新语义 —— 严格度不降，键数只增）。
+        check(is_time_clear_key("Exif.Photo.OffsetTimeOriginal", false),
+              "清除含 OffsetTime*（M7R22G2-0：清除 = touched 9 键）");
         check(is_xmp_time_key("Xmp.xmp.MetadataDate"), "命中含 Xmp MetadataDate");
-        check(!is_wall_clock_time_key("Xmp.xmp.MetadataDate"), "清除不含 MetadataDate");
+        check(is_time_clear_key("Xmp.xmp.MetadataDate", true),
+              "清除含 MetadataDate（M7R22G2-0 换锚）");
         check(!is_exif_time_key("Exif.Image.Make") && !is_xmp_time_key("Xmp.dc.title"),
               "非时间键不命中");
-        check(!is_wall_clock_time_key("Exif.Photo.OffsetTime") &&
+        // M7R22G2-0 换锚：清除谓词 = touched 全集；wall_clock 标志退居角色标注（仍只认
+        // 墙钟 5 键，与清除集解耦）。
+        check(is_time_clear_key("Exif.Photo.OffsetTime", false) &&
+                  is_time_clear_key("Xmp.xmp.MetadataDate", true) &&
+                  !is_wall_clock_time_key("Exif.Photo.OffsetTime") &&
                   !is_wall_clock_time_key("Xmp.xmp.MetadataDate"),
-              "清除谓词只认墙钟 5 键");
+              "清除谓词 = touched 全集；wall_clock 标志只认墙钟 5 键（与清除集解耦）");
+        check(is_time_clear_key("Exif.Photo.DateTimeOriginal", false) &&
+                  is_time_clear_key("Exif.Photo.OffsetTimeDigitized", false) &&
+                  is_time_clear_key("Xmp.xmp.CreateDate", true) &&
+                  is_time_clear_key("Xmp.xmp.ModifyDate", true),
+              "清除集覆盖墙钟 5 键 + OffsetTime* 3 + MetadataDate（9 键全清）");
+        check(!is_time_clear_key("Exif.Image.Make", false) &&
+                  !is_time_clear_key("Xmp.dc.title", true),
+              "清除集不含非时间键");
     }
 
     // 9. M7-R2.1-F3 / R-189：FormatSelection「已选格式」唯一真相（断言只增；1–8 节逐字不动）。

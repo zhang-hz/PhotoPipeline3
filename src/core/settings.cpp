@@ -166,8 +166,16 @@ void apply_pair(AppSettings &s, const std::string &key, const std::string &value
         if (!value.empty())
             s.log_level = value;
     } else if (key == "map_provider") {
-        if (!value.empty())
-            s.map_provider = value;
+        // R-104（M7-R2B）：持久层词表回落（对照 map_style / ui_theme_mode 的"值不合法 →
+        // 保留默认"口径）—— 词表 = osm|amap（单源 = mapwidget/providers.h `provider_ids()`，
+        // core 不上望 mapwidget，此处镜像同集并注释锚定；UI 侧回落已由 M7-WP7 落）。
+        // 词表外/空值 → 保留默认（osm）：手改 INI 写 foo 时下拉不再落空留脏值。
+        // 大小写不敏感（手改配置文件容错）。
+        std::string v = value;
+        for (char &c : v)
+            c = ascii_lower(c);
+        if (v == "osm" || v == "amap")
+            s.map_provider = v;
     } else if (key == "amap_key") {
         // R-094（M7-WP5）：读侧解封（空值 = 未配置，恒为空）。三种存量形态：
         //   * 封存串（ppsec1:/ppsec2:）→ 解封得明文；解不开（换机/换账号/损坏）→ 空；

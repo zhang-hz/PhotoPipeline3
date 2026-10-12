@@ -367,7 +367,10 @@ std::string exiv2_apply(const std::filesystem::path &file, const Exiv2::ExifData
     if (exif != nullptr)
         log_makernote(*exif, "MetaWrite");
     try {
-        Exiv2::Image::UniquePtr img = Exiv2::ImageFactory::open(file.string());
+        // R-007（M7-R2B）：Exiv2 open 入口经 normalize_extended_path 归一 `\\?\`（长路径可写；
+        // 单源在 core/fsops，codecs 侧 fopen 调用点另行登记）。
+        Exiv2::Image::UniquePtr img =
+            Exiv2::ImageFactory::open(normalize_extended_path(file).string());
         if (!img)
             return "exiv2: cannot open " + file.string();
         img->readMetadata();
@@ -402,7 +405,9 @@ std::string exiv2_apply_atomic(const std::filesystem::path &file, const Exiv2::E
     if (tmp.empty())
         return "exiv2: cannot build temp name for " + file.string();
     std::error_code cp_ec;
-    fs::copy_file(file, tmp, fs::copy_options::overwrite_existing, cp_ec);
+    // R-007：fs 入口归一（超长路径的暂存拷贝同样可落盘）。
+    fs::copy_file(normalize_extended_path(file), normalize_extended_path(tmp),
+                  fs::copy_options::overwrite_existing, cp_ec);
     if (cp_ec) {
         discard_temp_file(tmp);
         return "exiv2: cannot stage " + file.string() + " -> " + tmp.string() + ": " +
@@ -431,7 +436,10 @@ bool key_exif_landed(const std::filesystem::path &file, const Exiv2::ExifData &w
     if (expect.empty())
         return true;
     try {
-        Exiv2::Image::UniquePtr img = Exiv2::ImageFactory::open(file.string());
+        // R-007（M7-R2B）：Exiv2 open 入口经 normalize_extended_path 归一 `\\?\`（长路径可写；
+        // 单源在 core/fsops，codecs 侧 fopen 调用点另行登记）。
+        Exiv2::Image::UniquePtr img =
+            Exiv2::ImageFactory::open(normalize_extended_path(file).string());
         if (!img)
             return false;
         img->readMetadata();
@@ -763,7 +771,9 @@ std::string reinterpret_timezone(const std::string &exif_dt, int from_min, int t
 SourceMeta read_metadata(const std::filesystem::path &p) {
     SourceMeta m;
     try {
-        Exiv2::Image::UniquePtr img = Exiv2::ImageFactory::open(p.string());
+        // R-007（M7-R2B）：读入口同口径归一 `\\?\`（长路径源文件可读；与写入口同一单源）。
+        Exiv2::Image::UniquePtr img =
+            Exiv2::ImageFactory::open(normalize_extended_path(p).string());
         if (!img) {
             m.error = "exiv2: cannot open " + p.string();
             return m;

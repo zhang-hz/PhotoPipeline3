@@ -64,6 +64,8 @@ struct FormatDef {
     // 单位随格式翻转，取值/校验处（pipeline plan_targets、presets validate、UI 位深行、
     // enc_oiio bmp 分支）按格式各自解释。彻底根治需拆字段/强类型（涉及 UI 与 pipeline），
     // 本波按评审口径先显式化（本注释 + format_tables bmp 行 + enc_oiio 错误文案），登记裁定。
+    // M7-R2B 补齐：单位判定与 bps↔bpp 换算收敛为单源函数 bitdepth_unit/bitdepth_unit_label/
+    // bitdepth_bpp/bitdepth_bps（见本文件尾部加性块，R-211）；取值/校验处不再各自翻转单位。
     std::vector<int> bitdepths; // {8} / {8,16} / bmp: {8,24}（单位见上）
     bool supports_alpha = false;
     bool supports_gray = false;
@@ -154,5 +156,38 @@ inline constexpr std::string_view kKeyProgressive = "progressive";
 inline constexpr std::string_view kKeyOptimizeCoding = "optimize_coding";
 inline constexpr std::string_view kKeyTiffTileWidth = "tiff_tile_width";
 inline constexpr std::string_view kKeyTiffTileHeight = "tiff_tile_height";
+
+// —— M7-R2B 加性追认（裁定登记 build/m7r2-b/handoff.md「裁定登记」节）：以下声明**追加在
+//    既有声明之后**，既有签名零改动、既有行为零改动。——
+//
+// R-195：ParamDef 查找决胜规则**单源（first-wins）**。旧形态两套实现且决胜相反——
+// paramform.cpp `find_param` / preset_io.cpp `lookup_param_def` 首命中即返回（first-wins），
+// dev_cli.cpp `set_param` 循环覆盖 def 指针（last-wins）；同 key 多声明（jxl vardct/modular
+// 镜像、webp lossy/lossless 镜像）时两处解析出不同 ParamDef。收敛口径 = **first-wins**：
+// 同一 TechDef::params 序内首条命中为准（表序即优先级），另一处转发到本函数（跨界需求登记）。
+const ParamDef *find_param(const TechDef &t, std::string_view key);
+// 全链查找单源（format → backend → tech → key）：优先**命中技术**内 first-wins；该技术不声明
+// 时回退到后端全部技术的并集扫描（同为 first-wins，表序优先）。找不到返回 nullptr。
+// （preset_io.cpp 的 lookup_param_def 即本语义的第二份手写实现，待转发。）
+const ParamDef *lookup_param_def(const FormatDef &f, const std::string &backend_id,
+                                 const std::string &tech_id, std::string_view key);
+
+// R-211：out_bitdepth 双语义（8/16 bps vs bmp 24 bpp）的**单位单源**（加性；不拆字段——
+// 拆字段涉 UI+pipeline 冻结面，维持「登记待解冻」，见 handoff 裁定登记）。
+// 单位判定：bmp = 每**像素**位数（bpp：24 = RGB 24bpp = 每样本 8 位；8 = 灰度 8bpp）；
+// 其余格式 = 每**样本**位数（bps：8/16 或 8/10/12）。
+enum class BitdepthUnit : unsigned char { BitsPerSample, BitsPerPixel };
+BitdepthUnit bitdepth_unit(std::string_view format_id);
+// 显示单位标签数据（UI 位深行/tooltip 消费，R2D2）："bps" | "bpp"。
+std::string_view bitdepth_unit_label(std::string_view format_id);
+// 换算单源（RGB 三样本打包口径）：
+//   * bitdepth_bpp：存储值 → 每像素位数。非 bmp：bps × 3（8→24、16→48）；bmp：存储值已是
+//     bpp → 恒等（8→8、24→24）。
+//   * bitdepth_bps：存储值 → 每样本位数。非 bmp：恒等；bmp：24 bpp（RGB）→ 8 bps，
+//     8 bpp（灰度 8 位/样本）→ 8 bps。
+//   灰度口径注记：非 bmp 的 ×3 假定 RGB 打包（灰度 = ×1，由调用方按 supports_gray/实际通道
+//   折算）；bmp 的 {8,24} 两值语义由上式精确覆盖（测试钉住）。
+int bitdepth_bpp(std::string_view format_id, int bitdepth);
+int bitdepth_bps(std::string_view format_id, int bitdepth);
 
 } // namespace pp

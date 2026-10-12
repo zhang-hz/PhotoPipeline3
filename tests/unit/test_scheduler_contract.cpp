@@ -1036,6 +1036,85 @@ int main() {
         }
     }
 
+    // ===== M7-R2B 新增断言（R-076 / R-078；断言只增，上方既有段逐字不动）=====
+    // ---- R-076：终态映射单源（Verdict → FileState 五值全表）----
+    {
+        check(pp::file_state_of(pp::FileOutcome::Verdict::Done) == pp::FileState::Done,
+              "m7r2b/r076-map-done", "Done → Done");
+        check(pp::file_state_of(pp::FileOutcome::Verdict::DoneWithErrors) ==
+                  pp::FileState::DoneWithErrors,
+              "m7r2b/r076-map-partial",
+              "多输出部分成功必须独立档 DoneWithErrors（旧口径有损映射为 Done）");
+        check(pp::file_state_of(pp::FileOutcome::Verdict::Failed) == pp::FileState::Failed,
+              "m7r2b/r076-map-failed", "Failed → Failed");
+        check(pp::file_state_of(pp::FileOutcome::Verdict::Skipped) == pp::FileState::Skipped,
+              "m7r2b/r076-map-skipped", "Skipped → Skipped");
+        check(pp::file_state_of(pp::FileOutcome::Verdict::Cancelled) == pp::FileState::Cancelled,
+              "m7r2b/r076-map-cancelled", "Cancelled → Cancelled");
+    }
+
+    // ---- R-076 端到端 + R-078 线程读数：2 输出（1 成 1 败）实跑 ----
+    {
+        pp::RunConfig cfg;
+        cfg.output_template = "$dir/$file";
+        cfg.out_root = tmp / "m7r2b-partial";
+        cfg.conflict = pp::ConflictPolicy::Rename; // 两输出同格式同名 → 序号避让
+        cfg.workers = 2;
+        pp::OutputFormatSpec ok;
+        ok.format_id = "jpeg";
+        ok.out_bitdepth = 8;
+        pp::OutputFormatSpec bad = ok;
+        // jpegli 不实现算术编码（enc_jpegli：arith_code → encode_error，R-244 事实）→
+        // 该输出编码期必败、另一输出成功 = DoneWithErrors 的稳定触发面。
+        bad.params["arith_code"] = true;
+        cfg.outputs.push_back(ok);
+        cfg.outputs.push_back(bad);
+
+        pp::Scheduler sched(cfg, entries_for({inputs[0]}, corpus));
+        std::mutex ev_mu;
+        std::vector<pp::FileEvent> events;
+        sched.set_event_callback([&](const pp::FileEvent &ev) {
+            std::lock_guard<std::mutex> lk(ev_mu);
+            events.push_back(ev);
+        });
+        sched.start();
+        sched.wait();
+
+        bool partial = false;
+        {
+            std::lock_guard<std::mutex> lk(ev_mu);
+            for (const pp::FileEvent &ev : events) {
+                if (ev.result == nullptr)
+                    continue;
+                if (ev.state == pp::FileState::DoneWithErrors)
+                    partial = true;
+                check(ev.state == pp::file_state_of(pp::verdict_of_rows(*ev.result)),
+                      "m7r2b/r076-event-state",
+                      "终态事件状态应与 verdict 单源一致（R-076 映射根治）");
+            }
+        }
+        check(partial, "m7r2b/r076-partial-event", "1 成 1 败应发出 DoneWithErrors 终态事件");
+
+        const std::vector<pp::FileResult> &res = sched.results();
+        check(res.size() == 1 && !res[0].ok && !res[0].outputs.empty(), "m7r2b/r076-result-shape",
+              "部分成功的文件 FileResult.ok=false（0.2 失败计数语义不变）");
+
+        // R-078：线程读数实测口径 —— threads_total_est = worker 主线程 + 编码线程两族峰值之和
+        // （估算：两族峰值不一定同时刻；SynthPump 采样线程 / x265 库内线程池不入账）。
+        const pp::RunSummary sum = sched.summary();
+        check(sum.threads_total_est ==
+                  sum.peak_active_files + static_cast<int>(sum.peak_sum_encode_threads),
+              "m7r2b/r078-threads-est",
+              "threads_total_est 应 = peak_active_files + peak_sum_encode_threads，got " +
+                  std::to_string(sum.threads_total_est) + " / " +
+                  std::to_string(sum.peak_active_files) + " + " +
+                  std::to_string(sum.peak_sum_encode_threads));
+        check(sum.peak_active_files >= 1 && sum.peak_active_files <= 2, "m7r2b/r078-peak-files",
+              "峰值并发文件数应落 [1, workers]，got " + std::to_string(sum.peak_active_files));
+        check(sum.threads_total_est >= 1, "m7r2b/r078-threads-est-positive",
+              "实跑批的线程估算读数应为正");
+    }
+
     if (g_failed == 0) {
         std::printf("test_scheduler_contract: all checks passed\n");
     } else {

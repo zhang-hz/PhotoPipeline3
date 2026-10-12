@@ -964,6 +964,191 @@ int main() {
               "UTF-8 path listing bytes");
     }
 
+    // ===== M7-R2B 新增断言（断言只增；上方既有段逐字不动）=====
+    // 8b) R-231：validate_preset 全量校验负例（跨字段规则 + 未知键显式拒绝并报中文，
+    //     与 cross_validate 口径一致；既有 en 文案不放宽不改写）。
+    case_begin("8b) R-231 validate_preset 全量校验负例");
+    {
+        const std::string c = "m7r2b-r231-validate-preset";
+        auto preset_of = [](const OutputFormatSpec &spec) {
+            PresetData p;
+            p.version = 2;
+            p.name = "r231";
+            p.output_template = "$dir/$file";
+            p.split_by_format = false;
+            p.outputs.push_back(spec);
+            return p;
+        };
+
+        // 未知键 → 显式拒绝、报中文（与 cross_validate 的"未知参数："口径逐字一致）。
+        {
+            OutputFormatSpec spec;
+            spec.format_id = "jpeg";
+            spec.backend_id = "jpegli";
+            spec.tech_id = "dct";
+            spec.out_bitdepth = 8;
+            spec.params = default_params(*find_format("jpeg"), "jpegli", "dct", false);
+            spec.params["bogus"] = std::string("1");
+            const PresetData p = preset_of(spec);
+            const std::string err = validate_preset(p);
+            check(err == "未知参数：bogus", c,
+                  "未知键应报中文并逐字同 cross_validate，got: " + err);
+            const std::vector<std::string> cross = cross_validate(spec.params, "jpeg", "dct");
+            check(!cross.empty() && cross.front() == err, c,
+                  "两通道未知键判负与文案应一致，cross=[" + join(cross) + "]");
+        }
+        // 跨字段规则（webp qmin/qmax）→ 预设通道判负（en 文案保留）+ cross 通道判负（zh 文案）。
+        {
+            OutputFormatSpec spec;
+            spec.format_id = "webp";
+            spec.backend_id = "libwebp";
+            spec.tech_id = "lossy";
+            spec.out_bitdepth = 8;
+            spec.params = default_params(*find_format("webp"), "libwebp", "lossy", false);
+            spec.params["qmin"] = int64_t(100);
+            spec.params["qmax"] = int64_t(50);
+            const PresetData p = preset_of(spec);
+            const std::string err = validate_preset(p);
+            check(err.find("must be <= ") != std::string::npos, c,
+                  "跨字段违规应判负（en 文案逐字保留），got: " + err);
+            const std::vector<std::string> cross = cross_validate(spec.params, "webp", "lossy");
+            check(contains(cross, "qmin 不能大于 qmax"), c,
+                  "cross 通道 zh 文案逐字保留，[" + join(cross) + "]");
+        }
+        // 跨字段规则（tiff tile 非 16 倍数）→ 预设通道判负（en 文案逐字保留）。
+        {
+            OutputFormatSpec spec;
+            spec.format_id = "tiff";
+            spec.backend_id = "oiio";
+            spec.tech_id = "codec";
+            spec.out_bitdepth = 16;
+            spec.params = default_params(*find_format("tiff"), "oiio", "codec", false);
+            spec.params["tiff_tile_width"] = int64_t(20);
+            spec.params["tiff_tile_height"] = int64_t(16);
+            const std::string err = validate_preset(preset_of(spec));
+            check(err.find("must be a positive multiple of 16") != std::string::npos, c,
+                  "tiff tile 违规应判负（en 文案逐字保留），got: " + err);
+        }
+        // 位深/格式/后端/版本既有负例口径不放宽（回归钉）。
+        {
+            OutputFormatSpec spec;
+            spec.format_id = "jpeg";
+            spec.backend_id = "jpegli";
+            spec.tech_id = "dct";
+            spec.out_bitdepth = 12; // jpeg 不支持 12
+            const std::string err = validate_preset(preset_of(spec));
+            check(err.find("bitdepth 12 is not supported") != std::string::npos, c,
+                  "位深负例口径不应变，got: " + err);
+        }
+        // 多输出：错误消息带 output #N: 前缀（负例锚既有体例）。
+        {
+            PresetData p;
+            p.version = 2;
+            p.name = "multi";
+            p.output_template = "$dir/$file";
+            OutputFormatSpec ok;
+            ok.format_id = "jpeg";
+            ok.backend_id = "jpegli";
+            ok.tech_id = "dct";
+            ok.out_bitdepth = 8;
+            ok.params = default_params(*find_format("jpeg"), "jpegli", "dct", false);
+            OutputFormatSpec bad = ok;
+            bad.params["bogus"] = std::string("1");
+            p.outputs.push_back(ok);
+            p.outputs.push_back(bad);
+            const std::string err = validate_preset(p);
+            check(err == "output #1: 未知参数：bogus", c,
+                  "多输出未知键应带 #N 前缀并报中文，got: " + err);
+        }
+    }
+
+    // 8c) R-206（M7-R2B 改道定稿）：**同输入两通道判负一致**强测试 —— 共享规则域
+    // （跨字段规则 + 未知键）上 validate_preset（preset 通道）⇔ cross_validate（交叉通道）。
+    case_begin("8c) R-206 同输入两通道判负一致");
+    {
+        const std::string c = "m7r2b-r206-two-channel-agree";
+        struct Row {
+            const char *name;
+            const char *fmt;
+            const char *backend;
+            const char *tech;
+            int bitdepth;
+            std::function<void(ParamSet &)> mutate;
+            bool negative;
+        };
+        const std::vector<Row> rows = {
+            {"clean-jpeg", "jpeg", "jpegli", "dct", 8, [](ParamSet &) {}, false},
+            {"clean-webp", "webp", "libwebp", "lossy", 8, [](ParamSet &) {}, false},
+            {"clean-tiff", "tiff", "oiio", "codec", 16, [](ParamSet &) {}, false},
+            {"webp-qmin-qmax", "webp", "libwebp", "lossy", 8,
+             [](ParamSet &s) {
+                 s["qmin"] = int64_t(100);
+                 s["qmax"] = int64_t(50);
+             },
+             true},
+            {"jpeg-progressive", "jpeg", "jpegli", "dct", 8,
+             [](ParamSet &s) { s["optimize_coding"] = false; }, true},
+            {"tiff-tile-w", "tiff", "oiio", "codec", 16,
+             [](ParamSet &s) {
+                 s["tiff_tile_width"] = int64_t(17);
+                 s["tiff_tile_height"] = int64_t(16);
+             },
+             true},
+            {"tiff-tile-pair", "tiff", "oiio", "codec", 16,
+             [](ParamSet &s) {
+                 s["tiff_tile_width"] = int64_t(32);
+                 s["tiff_tile_height"] = int64_t(0);
+             },
+             true},
+            {"unknown-key", "jpeg", "jpegli", "dct", 8,
+             [](ParamSet &s) { s["bogus"] = std::string("1"); }, true},
+        };
+        for (const Row &r : rows) {
+            OutputFormatSpec spec;
+            spec.format_id = r.fmt;
+            spec.backend_id = r.backend;
+            spec.tech_id = r.tech;
+            spec.out_bitdepth = r.bitdepth;
+            spec.params = default_params(*find_format(r.fmt), r.backend, r.tech, false);
+            r.mutate(spec.params);
+            PresetData p;
+            p.version = 2;
+            p.name = "agree";
+            p.output_template = "$dir/$file";
+            p.outputs.push_back(spec);
+            const std::string err = validate_preset(p);
+            const std::vector<std::string> cross = cross_validate(spec.params, r.fmt, r.tech);
+            const bool preset_bad = !err.empty();
+            const bool cross_bad = !cross.empty();
+            check(preset_bad == cross_bad, c,
+                  std::string(r.name) + "：两通道判负应一致（preset=" +
+                      (preset_bad ? "bad" : "ok") + " cross=" + (cross_bad ? "bad" : "ok") +
+                      "）err=" + err + " [" + join(cross) + "]");
+            check(preset_bad == r.negative, c,
+                  std::string(r.name) + "：期望判负=" + (r.negative ? "1" : "0") + "，got " +
+                      (preset_bad ? "1" : "0") + " err=" + err);
+        }
+        // 域外注记（防误读"全域一致"）：per-key 越界只归 preset 通道（schema 域）——
+        // cross_validate 契约域 = 跨字段 + 未知参数（M2-T5 冻结形态），不查单键范围。
+        {
+            OutputFormatSpec spec;
+            spec.format_id = "jxl";
+            spec.backend_id = "libjxl";
+            spec.tech_id = "modular";
+            spec.out_bitdepth = 16;
+            spec.params = default_params(*find_format("jxl"), "libjxl", "modular", false);
+            spec.params["effort"] = int64_t(99); // 超出 [0,9]
+            PresetData p;
+            p.version = 2;
+            p.name = "perkey";
+            p.output_template = "$dir/$file";
+            p.outputs.push_back(spec);
+            check(!validate_preset(p).empty(), c, "per-key 越界应归 preset 通道判负");
+            check(cross_validate(spec.params, "jxl", "modular").empty(), c,
+                  "per-key 越界不在 cross 通道契约域（显式钉住域边界）");
+        }
+    }
+
     case_begin("9) 收尾（清理 + 汇总）");
     fs::remove_all(root, ec);
     if (g_fail == 0)

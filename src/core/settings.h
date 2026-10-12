@@ -57,10 +57,13 @@ namespace pp {
 // clang-format on
 //   路径单源（§6.2 的"持久化 `data_dir()/classes.json`"经本字段落地）：默认值 = 本函数，
 //   `core/classify` 的 save/load 只收路径参数（不自行拼 data_dir()），故改设置即改注册表位置。
-//   `data_dir()` 不可用（两分支都创建失败）→ 退化为相对名 "classes.json"（与 settings_file()
-//   同口径的降级：调用方按相对路径处理，本层不抛异常）。
+//   `data_dir()` 不可用（两分支都创建失败）→ **返回空串**（M7-R2B / WP5 跨界 1 收口，R-309
+//   同款病灶）：不再拼 CWD 相对名 "classes.json"（旧降级会把注册表静默写进当前工作目录）。
+//   回落语义显式化：空串 = **无默认位置**（与 settings_file()/presets_dir()/logs_dir() 的空
+//   路径口径同一，见 platform/paths.h `path_under` 契约）—— 消费方按空路径处理（不落盘/报错），
+//   本层不抛异常。派生走 platform::path_under 单源（WP5 A1）。
 inline std::string default_class_file() {
-    return (std::filesystem::path(platform::data_dir()) / "classes.json").string();
+    return platform::path_under(platform::data_dir(), "classes.json").string();
 }
 
 // PP-FROZEN(0.3.0) §3.6 · AppSettings（`stagger_ms`/`thread_budget` 两项，**追加在结构体末尾**，

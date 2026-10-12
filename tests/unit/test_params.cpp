@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "codecs/encoders.h"
+#include "core/error_text.h"
 #include "core/params.h"
 
 namespace {
@@ -782,6 +783,201 @@ int main() {
             check(contains(zh, "qmin 不能大于 qmax"), c,
                   "cross_validate 中文文案应保留，got [" + join(zh) + "]");
         }
+    }
+
+    // ===== M7-R2B 新增断言（断言只增；上方既有段逐字不动）=====
+    // 19) R-195：ParamDef 查找决胜规则**单源（first-wins）** + 决胜测试。
+    {
+        const std::string c = "m7r2b-find-param-first-wins";
+        pp::TechDef t;
+        pp::ParamDef a;
+        a.key = "dup";
+        a.label = "first";
+        pp::ParamDef b;
+        b.key = "dup";
+        b.label = "second";
+        t.params.push_back(a);
+        t.params.push_back(b);
+        const pp::ParamDef *hit = pp::find_param(t, "dup");
+        check(hit != nullptr && hit->label == "first", c,
+              "first-wins：同 key 双声明应命中表序首条（旧行为两实现决胜相反，R-195）");
+        check(pp::find_param(t, "missing") == nullptr, c, "缺失键应返回 nullptr");
+        // 全链 lookup：命中技术内 first-wins → 不声明时回退后端并集（同为 first-wins）。
+        const Slot jv = slot("jxl", "libjxl", "vardct");
+        const Slot jm = slot("jxl", "libjxl", "modular");
+        check(jv.f && jv.t && jm.t, c, "前提失败：jxl vardct/modular 技术");
+        const pp::ParamDef *tech_hit = pp::lookup_param_def(*jv.f, "libjxl", "vardct", "epf");
+        check(tech_hit != nullptr, c, "lookup(vardct, epf) 应命中（vardct 声明 epf）");
+        check(param_of(*jm.t, "epf") == nullptr, c, "前提失败：modular 不应声明 epf");
+        const pp::ParamDef *fallback = pp::lookup_param_def(*jm.f, "libjxl", "modular", "epf");
+        check(fallback != nullptr && tech_hit != nullptr && fallback->label == tech_hit->label, c,
+              "回退并集扫描应命中同一定义（first-wins、表序优先）");
+        check(pp::lookup_param_def(*jv.f, "libjxl", "vardct", "nope") == nullptr, c,
+              "未知键应返回 nullptr");
+    }
+
+    // 20) R-206（M7-R2B 改道定稿）：**同输入两通道判负一致**强测试 —— 共享规则域（跨字段规则）
+    // 上 validate_params（preset 通道，en 文案）与 cross_validate（zh 通道）判定必须一致，
+    // 两通道唯一差异 = 文案表现层。矩阵逐规则含"违反/满足"两态 + 干净集。
+    {
+        const std::string c = "m7r2b-r206-two-channel-agree";
+        struct Row {
+            const char *name;
+            std::function<pp::ParamSet()> build;
+            bool negative;
+        };
+        const Slot wl = slot("webp", "libwebp", "lossy");
+        const Slot j = slot("jpeg", "jpegli", "dct");
+        const Slot t = slot("tiff", "oiio", "codec");
+        check(wl.t && j.t && t.t, c, "前提失败：webp/jpg/tiff 技术");
+        std::vector<Row> rows;
+        rows.push_back({"webp-qmin-qmax-violate",
+                        [&wl]() {
+                            pp::ParamSet s = pp::default_params(*wl.f, "libwebp", "lossy", false);
+                            s["qmin"] = int64_t(100);
+                            s["qmax"] = int64_t(50);
+                            return s;
+                        },
+                        true});
+        rows.push_back({"webp-qmin-qmax-ok",
+                        [&wl]() {
+                            pp::ParamSet s = pp::default_params(*wl.f, "libwebp", "lossy", false);
+                            s["qmin"] = int64_t(90);
+                            s["qmax"] = int64_t(100);
+                            return s;
+                        },
+                        false});
+        rows.push_back({"jpeg-progressive-violate",
+                        [&j]() {
+                            pp::ParamSet s = pp::default_params(*j.f, "jpegli", "dct", false);
+                            s["optimize_coding"] = false;
+                            return s;
+                        },
+                        true});
+        rows.push_back({"jpeg-progressive-ok",
+                        [&j]() { return pp::default_params(*j.f, "jpegli", "dct", false); },
+                        false});
+        rows.push_back({"tiff-tile-w-violate",
+                        [&t]() {
+                            pp::ParamSet s = pp::default_params(*t.f, "oiio", "codec", false);
+                            s["tiff_tile_width"] = int64_t(17);
+                            s["tiff_tile_height"] = int64_t(16);
+                            return s;
+                        },
+                        true});
+        rows.push_back({"tiff-tile-ok",
+                        [&t]() {
+                            pp::ParamSet s = pp::default_params(*t.f, "oiio", "codec", false);
+                            s["tiff_tile_width"] = int64_t(32);
+                            s["tiff_tile_height"] = int64_t(16);
+                            return s;
+                        },
+                        false});
+        rows.push_back({"tiff-tile-half-violate",
+                        [&t]() {
+                            pp::ParamSet s = pp::default_params(*t.f, "oiio", "codec", false);
+                            s["tiff_tile_width"] = int64_t(32); // 高缺 → both>0/0 不成对
+                            s["tiff_tile_height"] = int64_t(0);
+                            return s;
+                        },
+                        true});
+        for (const Row &r : rows) {
+            const pp::ParamSet s = r.build();
+            const pp::FormatDef *f = nullptr;
+            std::string backend, tech;
+            if (r.name[0] == 'w') {
+                f = wl.f;
+                backend = "libwebp";
+                tech = "lossy";
+            } else if (r.name[0] == 'j') {
+                f = j.f;
+                backend = "jpegli";
+                tech = "dct";
+            } else {
+                f = t.f;
+                backend = "oiio";
+                tech = "codec";
+            }
+            const bool en_bad = !pp::validate_params(*f, backend, tech, false, s).empty();
+            const std::vector<std::string> zh = pp::cross_validate(s, f->id, tech);
+            const bool zh_bad = !zh.empty();
+            check(en_bad == zh_bad, c,
+                  std::string(r.name) + "：两通道判负应一致（en=" + (en_bad ? "bad" : "ok") +
+                      " zh=" + (zh_bad ? "bad" : "ok") + "）[" + join(zh) + "]");
+            check(en_bad == r.negative, c,
+                  std::string(r.name) + "：期望判负=" + (r.negative ? "1" : "0") + "，got " +
+                      (en_bad ? "1" : "0") + " [" +
+                      pp::validate_params(*f, backend, tech, false, s) + "]");
+        }
+        // 文案表现层差异 = 语言（en/zh 冻结文案逐字，R-206/WP2 既有断言在上文 14/15/18 段）。
+        // 未知键域外注记：validate_params **不**判未知键（--dev --param 未知键转交编码器 E9 的
+        // 冻结语义）；未知键判定在 cross_validate + validate_preset（R-231，test_presets 钉）。
+        const Slot jl = slot("jpeg", "jpegli", "dct");
+        pp::ParamSet u = pp::default_params(*jl.f, "jpegli", "dct", false);
+        u["bogus"] = std::string("1");
+        check(pp::validate_params(*jl.f, "jpegli", "dct", false, u).empty(), c,
+              "未知键不归 validate_params（域外，dev --param 冻结语义）");
+        check(!pp::cross_validate(u, "jpeg", "dct").empty(), c,
+              "未知键归 cross_validate（R-231 preset 通道另钉）");
+    }
+
+    // 21) R-211：位深单位判定与 bps↔bpp 换算单源（8/16 bps 与 BMP 24 bpp 的换算钉住）。
+    {
+        const std::string c = "m7r2b-r211-bitdepth-units";
+        check(pp::bitdepth_unit("bmp") == pp::BitdepthUnit::BitsPerPixel, c, "bmp 单位应为 bpp");
+        check(pp::bitdepth_unit("png") == pp::BitdepthUnit::BitsPerSample, c, "png 单位应为 bps");
+        check(pp::bitdepth_unit_label("bmp") == "bpp", c, "bmp 显示标签应为 bpp");
+        check(pp::bitdepth_unit_label("jpeg") == "bps", c, "jpeg 显示标签应为 bps");
+        check(pp::bitdepth_unit_label("heif") == "bps", c, "heif 显示标签应为 bps");
+        // bps → bpp（RGB 三样本打包口径）：8/16 bps → 24/48 bpp；bmp 存储值已是 bpp → 恒等。
+        check(pp::bitdepth_bpp("png", 8) == 24, c, "8 bps → 24 bpp");
+        check(pp::bitdepth_bpp("png", 16) == 48, c, "16 bps → 48 bpp");
+        check(pp::bitdepth_bpp("jxl", 8) == 24 && pp::bitdepth_bpp("jxl", 16) == 48, c,
+              "jxl 同 bps 口径");
+        check(pp::bitdepth_bpp("bmp", 24) == 24, c, "BMP 24 bpp → 24 bpp（恒等）");
+        check(pp::bitdepth_bpp("bmp", 8) == 8, c, "BMP 8 bpp（灰度）→ 8 bpp（恒等）");
+        // bpp → bps：bmp 24 bpp（RGB）→ 8 bps；8 bpp（灰度 8 位/样本）→ 8 bps。
+        check(pp::bitdepth_bps("bmp", 24) == 8, c, "BMP 24 bpp → 8 bps");
+        check(pp::bitdepth_bps("bmp", 8) == 8, c, "BMP 8 bpp → 8 bps");
+        check(pp::bitdepth_bps("png", 8) == 8 && pp::bitdepth_bps("png", 16) == 16, c,
+              "非 bmp 存储值即 bps（恒等）");
+    }
+
+    // 22) core/error_text.h（R-070/273）：ErrorKind 中文映射 + 模板预检/失败原因 lookup。
+    {
+        const std::string c = "m7r2b-error-text";
+        check(pp::error_kind_text(pp::ErrorKind::Encode) == "编码失败", c, "kind/encode");
+        check(pp::error_kind_text(pp::ErrorKind::Config) == "配置错误", c, "kind/config");
+        check(pp::error_kind_text(pp::ErrorKind::Cancelled) == "已取消", c, "kind/cancelled");
+        check(pp::error_kind_text(pp::ErrorKind::Unknown) == "未知错误", c, "kind/unknown");
+        // R-070 场景 1：模板预检 8 条全覆盖（validate_output_template 文案 → 中文）。
+        const char *tmpl_en[] = {
+            "output template: template is empty",
+            "output template: absolute paths are not allowed",
+            "output template: '\\' separators are not allowed (use '/')",
+            "output template: drive-qualified paths are not allowed",
+            "output template: '..' is not allowed",
+            "output template: '$' is not followed by a symbol name",
+            "output template: last segment must produce a file name (use $file/$name/$ext)",
+        };
+        for (const char *en : tmpl_en) {
+            const std::string zh = pp::error_text_zh(en);
+            check(!zh.empty(), c, std::string("模板预检文案未覆盖: ") + en);
+        }
+        const std::string sym = pp::error_text_zh("output template: unknown symbol '$foo'");
+        check(sym.find("未知符号") != std::string::npos && sym.find("$foo") != std::string::npos, c,
+              "unknown symbol 应保留符号名，got: " + sym);
+        // R-070 场景 2：失败原因前缀族（与 error_kind_of 判据同源）。
+        check(pp::error_text_zh("decode failed: png: bad crc") == "解码失败", c, "reason/decode");
+        check(pp::error_text_zh("encode failed: x") == "编码失败", c, "reason/encode");
+        check(pp::error_text_zh("encode cancelled") == "编码已取消", c, "reason/cancel");
+        check(pp::error_text_zh("probe failed: x") == "探测失败", c, "reason/probe");
+        check(pp::error_text_zh("metadata write failed: x") == "元数据写入失败", c,
+              "reason/metawrite");
+        check(pp::error_text_zh("output path is empty") == "输出路径为空", c, "reason/io");
+        // 未命中 → 空串（调用方回退原文，不编造）。
+        check(pp::error_text_zh("something entirely new").empty(), c, "未命中应回退空串");
+        check(pp::error_text_zh("").empty(), c, "空串输入应回退空串");
     }
 
     if (g_fail == 0)

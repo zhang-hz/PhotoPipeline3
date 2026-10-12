@@ -75,6 +75,15 @@ std::string validate_preset(const PresetData &p) {
                                                 lossless_flag(spec.params), spec.params);
         if (!err.empty())
             return with_output_index(i, total, err);
+        // R-231（M7-R2B）：全量校验补全 —— 过去"未知键与跨字段规则全不查，运行期才爆"的弱门禁
+        // 到此收口。cross_validate 通道（zh 文案）与 preset 通道共用单源规则（R-206 改道定稿：
+        // 共用规则、仅文案表现层差异）：未知键**显式拒绝**（"未知参数：" + key，与 cross_validate
+        // 口径逐字一致）+ 跨字段规则复核。validate_params 在前 = 既有 en 文案/判负顺序逐字保留
+        // （不放宽、不改写）；本通道只补判前者未覆盖的新增面（未知键等）。
+        const std::vector<std::string> cross_msgs =
+            cross_validate(spec.params, spec.format_id, spec.tech_id);
+        if (!cross_msgs.empty())
+            return with_output_index(i, total, cross_msgs.front());
     }
     return {};
 }

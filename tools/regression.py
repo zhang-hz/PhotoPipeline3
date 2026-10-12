@@ -7,7 +7,10 @@
 # usage:
 #   python tools/regression.py [BUILD_DIR] [--update]
 #                              [--platform linux|windows] [--baseline FILE]
-#                              [--attrib-lines N]
+#                              [--attrib-lines N] [--self-check]
+#
+#   --self-check  行型归类自检（不跑语料、不碰基线）：对合成样例行断言 line_kind/line_key
+#                 分类（含 E8 的 dev_cli*.cpp 新 TU 锚点）；全过 exit 0，有失败 exit 1。
 #
 #   BUILD_DIR   default $BUILD_DIR or <repo>/build/release-dev; must contain the
 #               dev harness binary `photopipeline` (built with -DPP_BUILD_DEV=ON).
@@ -332,9 +335,17 @@ def count_changed(diff_lines):
 KINDS = (
     ('header', re.compile(r'^# ')),
     ('section', re.compile(r'^### run ')),
-    ('version', re.compile(r'^\[info\] \[tid\] \[run\] \[main\.cpp\] version \{')),
-    ('run-start', re.compile(r'^\[info\] \[tid\] \[run\] \[main\.cpp\] run start \{')),
-    ('run-summary', re.compile(r'^\[info\] \[tid\] \[run\] \[main\.cpp\] run summary \{')),
+    # E8（M7-R2B）：行型表的 [main.cpp] 锚点在 main.cpp 拆四 TU（main/dev_cli/dev_bench/
+    # dev_ui_smoke，E5/R-193）后误分类 —— version/run-start/run-summary 三行改由 dev_cli.cpp
+    # 发出，旧锚点不再命中 → 全落 'info' 桶（归因表把版本行/汇总行错记成 info 变化）。映射更新为
+    # 新 TU 名集（保留 main.cpp 兼容拆分前的历史基线）；三行的采集/归一化口径零改动。
+    # 归类判据由 --self-check 机械化（回归行型归类测试，见 self_check()）。
+    ('version', re.compile(r'^\[info\] \[tid\] \[run\] \[(?:main|dev_cli|dev_bench|dev_ui_smoke)'
+                           r'\.cpp\] version \{')),
+    ('run-start', re.compile(r'^\[info\] \[tid\] \[run\] \[(?:main|dev_cli|dev_bench|dev_ui_smoke)'
+                             r'\.cpp\] run start \{')),
+    ('run-summary', re.compile(r'^\[info\] \[tid\] \[run\] \[(?:main|dev_cli|dev_bench|dev_ui_smoke)'
+                               r'\.cpp\] run summary \{')),
     ('scheduler', re.compile(r'^\[info\] \[tid\] \[scheduler\] \[scheduler\.cpp\]')),
     ('budget', re.compile(r'\] pixel budget acquired \{')),
     ('file-done', re.compile(r'\] file done \{')),
@@ -603,6 +614,52 @@ def print_attribution(attr, samples_per_bucket):
               file=sys.stderr)
 
 
+def self_check():
+    """E8（M7-R2B）：行型归类自检 —— 对合成样例行断言 line_kind/line_key（不跑语料/不碰基线）。
+
+    主判据 = 每条样例的期望行型（含 main.cpp 拆分后的 dev_cli/dev_bench/dev_ui_smoke 新 TU
+    锚点：version/run-start/run-summary 三行的采集面已迁至 dev_cli.cpp，旧 [main.cpp] 锚点
+    会让它们落 'info' 桶）。exit 0 = 全过；exit 1 = 有断言失败。
+    """
+    cases = [
+        # (样例行, 期望行型, 期望细分键)
+        ('[info] [tid] [run] [dev_cli.cpp] version {lib=jpegli version=3.0.1}', 'version',
+         'lib=jpegli'),
+        ('[info] [tid] [run] [dev_cli.cpp] version {lib=jxl version=0.11.1}', 'version', 'lib=jxl'),
+        ('[info] [tid] [run] [main.cpp] version {lib=webp version=1.4.0}', 'version', 'lib=webp'),
+        ('[info] [tid] [run] [dev_bench.cpp] version {lib=x version=1}', 'version', 'lib=x'),
+        ('[info] [tid] [run] [dev_ui_smoke.cpp] version {lib=y version=1}', 'version', 'lib=y'),
+        ('[info] [tid] [run] [dev_cli.cpp] run start {format=jxl workers=1}', 'run-start',
+         'schema=format'),
+        ('[info] [tid] [run] [dev_cli.cpp] run start {outputs=2}', 'run-start', 'schema=outputs'),
+        ('[info] [tid] [run] [main.cpp] run start {format=png}', 'run-start', 'schema=format'),
+        ('[info] [tid] [run] [dev_cli.cpp] run summary {files=3 ok=3}', 'run-summary', 'files=3'),
+        ('[info] [tid] [run] [main.cpp] run summary {files=1}', 'run-summary', 'files=1'),
+        # 非 run 三行的既有行型不因锚点更新而漂移（顺序敏感：先特殊后一般）。
+        ('[info] [tid] [scheduler] [scheduler.cpp] e3 report {W=2}', 'scheduler', ''),
+        ('[info] [tid] [pipeline] [pipeline.cpp] file done {src=a.png outputs=1 ok_outputs=1}',
+         'file-done', 'outputs=1'),
+        ('[info] [tid] [pipeline] [pipeline.cpp] output done {src=a.png out="x" bytes=10}',
+         'output-done', 'outputs=1'),
+        ('[info] [tid] [dev_cli.cpp] other message {x=1}', 'info', ''),
+        ('SUMMARY files=3 ok=3 failed=0 skipped=0 cancelled=0', 'summary', ''),
+        ('EXIT 0', 'exit', ''),
+        ('photo.png ok 1234 <ms>', 'row', 'state=ok'),
+        ('photo.png failed 0 <ms>', 'row', 'state=failed'),
+        ('    error: encode failed: boom', 'row-detail', 'error'),
+    ]
+    failed = 0
+    for line, want_kind, want_key in cases:
+        got_kind = line_kind(line)
+        got_key = line_key(line)
+        if got_kind != want_kind or got_key != want_key:
+            failed += 1
+            print('regression self-check FAIL: line={!r} kind={} (want {}) key={!r} (want {!r})'
+                  .format(line, got_kind, want_kind, got_key, want_key))
+    print('regression self-check: cases=%d fail=%d' % (len(cases), failed))
+    return 1 if failed else 0
+
+
 def main(argv):
     global BIN, CORPUS, BASE_CORPUS, BASELINE
 
@@ -617,6 +674,9 @@ def main(argv):
         arg = argv[i]
         if arg == '--update':
             update = 1
+        elif arg == '--self-check':
+            # E8：行型归类自检（不跑语料、不碰基线；其余参数忽略）。
+            return self_check()
         elif arg in ('-h', '--help'):
             usage()
             return 0

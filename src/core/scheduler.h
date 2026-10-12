@@ -195,4 +195,13 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
+// —— M7-R2B 加性追认（R-076；裁定登记 build/m7r2-b/handoff.md「裁定登记」节）——
+// 终态映射**单源**：FileOutcome::Verdict → FileState（scheduler.cpp finish() 的唯一映射点，
+// test_scheduler_contract 钉住五值全表）。旧形态 finish() 把 Verdict::DoneWithErrors 有损映射
+// 为 FileState::Done（注释自认 FileState 无该值）；M7-WP1 I7 已把 FileState::DoneWithErrors
+// 加性落地（pipeline.h），本函数恢复一一配对（多输出部分成功 = 独立档，不再并入 Done；
+// FileResult.ok=false 的 0.2 失败计数语义不变）。UI 侧计数/呈现通道 WP6 已备
+// （mainwindow_run handle_file_event / filelistmodel kStateStyle / page_run）。
+FileState file_state_of(FileOutcome::Verdict v);
+
 } // namespace pp

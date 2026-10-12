@@ -420,6 +420,45 @@ int main() {
               "temp files left behind: " + std::to_string(leftovers));
     }
 
+    // ===== M7-R2B 新增断言（R-104 词表回落 / WP5 跨界 1 default_class_file；断言只增）=====
+    {
+        // R-104：map_provider 持久层词表回落（对照 map_style 口径：词表外/空值 → 保留默认）。
+        const fs::path dir = make_temp_dir("settings_m7r2b");
+        const fs::path file = dir / "settings.ini";
+        write_file(file, "map_provider=foo\n");
+        pp::AppSettings s = pp::load_settings(file);
+        check(s.map_provider == "osm", "m7r2b/r104-unknown-fallback",
+              "词表外值应保留默认 osm，got " + show(s.map_provider));
+        write_file(file, "map_provider=AMAP\n");
+        s = pp::load_settings(file);
+        check(s.map_provider == "amap", "m7r2b/r104-case-insensitive",
+              "词表值大小写不敏感，got " + show(s.map_provider));
+        write_file(file, "map_provider=osm\n");
+        s = pp::load_settings(file);
+        check(s.map_provider == "osm", "m7r2b/r104-osm", "合法值原样收");
+        write_file(file, "map_provider=\n");
+        s = pp::load_settings(file);
+        check(s.map_provider == "osm", "m7r2b/r104-empty-fallback", "空值应保留默认 osm");
+        // 既有键零改动：合法值经 save→load 往返保持。
+        pp::AppSettings r;
+        r.map_provider = "amap";
+        check(pp::save_settings(file, r).empty(), "m7r2b/r104-save", "");
+        check(pp::load_settings(file).map_provider == "amap", "m7r2b/r104-roundtrip",
+              "合法值应往返保持");
+
+        // WP5 跨界 1（R-309 同款病灶收口）：default_class_file 走 platform::path_under 单源 ——
+        // 空 data_dir 时返回空串（不再拼 CWD 相对名）；非空时 = data_dir()/classes.json。
+        check(pp::default_class_file() ==
+                  pp::platform::path_under(pp::platform::data_dir(), "classes.json").string(),
+              "m7r2b/class-file-path-under",
+              "default_class_file 必须走 path_under 单源（空 data_dir → 空串）");
+        check(fs::path(pp::default_class_file()).filename() == "classes.json" ||
+                  pp::default_class_file().empty(),
+              "m7r2b/class-file-leaf",
+              "叶子名应为 classes.json（或空 = 无默认位置），got " +
+                  show(pp::default_class_file()));
+    }
+
     if (g_failed == 0) {
         std::printf("test_settings: OK\n");
         return 0;

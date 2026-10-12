@@ -192,22 +192,21 @@ bool tech_declares_lossless(const TechDef *t) {
 }
 
 // ---------------------------------------------------------------------------
-// 跨字段规则单源（R-206/R-207，M7-WP2）
+// 跨字段规则单源（R-206/R-207，M7-WP2 建表；M7-R2B 收敛双通道）
 // ---------------------------------------------------------------------------
 // 旧形态：TIFF tile 规则内嵌 validate_params（英文串），webp/jpeg 规则内嵌 cross_validate
 // （中文串）—— 同类约束两处实现、两种语言、裸字符串绑键（表改 key 规则静默失效）。
-// 现收敛为一张规则表：键引用走 params.h 的 kKey* 常量；两个通道各自渲染自己的语言
-// （en/zh 文本**逐字保留** 0.3.2 现文案，断言/日志零漂移）；通道归属（in_validate /
-// in_cross）显式化为数据，保持现行为 —— 把全部规则投递到两个通道会改变既有错误面
-// （如预设校验突然多出 qmin/qmax 拒绝），属行为变化，未裁定不做。
+// M7-WP2 收敛为一张规则表 + 双通道归属数据（in_validate / in_cross）；
+// **M7-R2B（R-206 改道定稿）**：通道归属退场 —— preset 通道（validate_params，en 文案）与
+// cross_validate 通道（zh 文案）**共用全部规则**，两通道唯一差异 = 文案表现层（语言），
+// 「同输入两通道判负一致」由 test_params/test_presets 强测试钉住。既有 en/zh 文本**逐字保留**
+// （不放宽、不改写）；行为面新增 = 两通道各自补齐了过去缺失的规则判定（登记裁定）。
 struct CrossRule {
     std::string_view format_id;    // 精确匹配；"" = 任意
     std::string_view tech_id;      // 与 effective_tech_id 解析结果精确匹配；"" = 任意
     bool require_all_keys = false; // true：全部键在场才判定（缺键 = 无法判定，跳过）
     std::vector<std::string_view> keys;
     std::function<std::string(const ParamSet &, bool english)> check; // "" = 未违反
-    bool in_validate = true;
-    bool in_cross = true;
 };
 
 const std::vector<CrossRule> &cross_rules() {
@@ -225,9 +224,7 @@ const std::vector<CrossRule> &cross_rules() {
                            : "param '" + std::string(kKeyTiffTileWidth) + "'：值 " +
                                  std::to_string(w) + " 必须是 16 的正倍数";
              return {};
-         },
-         true,
-         false},
+         }},
         {std::string_view("tiff"),
          std::string_view(),
          false,
@@ -240,9 +237,7 @@ const std::vector<CrossRule> &cross_rules() {
                            : "param '" + std::string(kKeyTiffTileHeight) + "'：值 " +
                                  std::to_string(h) + " 必须是 16 的正倍数";
              return {};
-         },
-         true,
-         false},
+         }},
         {std::string_view("tiff"),
          std::string_view(),
          false,
@@ -258,9 +253,7 @@ const std::vector<CrossRule> &cross_rules() {
                                  std::string(kKeyTiffTileHeight) +
                                  "': 两者必须同为 > 0（tiled）或同为 0（strips）";
              return {};
-         },
-         true,
-         false},
+         }},
         // 规则① webp + lossy：qmin ≤ qmax（原 cross_validate 内嵌，中文文案逐字保留）
         {std::string_view("webp"),
          std::string_view("lossy"),
@@ -272,9 +265,7 @@ const std::vector<CrossRule> &cross_rules() {
                                  std::string(kKeyQmax) + "'"
                            : "qmin 不能大于 qmax";
              return {};
-         },
-         false,
-         true},
+         }},
         // 规则② jpeg：启用渐进式时必须启用哈夫曼表优化（原 cross_validate 内嵌）
         {std::string_view("jpeg"),
          std::string_view(),
@@ -285,9 +276,7 @@ const std::vector<CrossRule> &cross_rules() {
                  return en ? "optimize_coding must be enabled when progressive is enabled"
                            : "启用渐进式时必须启用哈夫曼表优化";
              return {};
-         },
-         false,
-         true},
+         }},
     };
     return rules;
 }
@@ -367,6 +356,51 @@ const TechDef *find_tech(const BackendDef &b, std::string_view id) {
         if (t.id == id)
             return &t;
     return nullptr;
+}
+
+// R-195（M7-R2B）：ParamDef 查找决胜规则单源 —— **first-wins**（表序 = 优先级）。
+// 旧双实现决胜相反（paramform/preset_io 首命中返回 vs dev_cli set_param 循环覆盖 =
+// last-wins）；收敛后全部调用面经本函数（跨界转发登记见 handoff「跨界需求」）。
+const ParamDef *find_param(const TechDef &t, std::string_view key) {
+    for (const ParamDef &p : t.params)
+        if (p.key == key)
+            return &p;
+    return nullptr;
+}
+
+const ParamDef *lookup_param_def(const FormatDef &f, const std::string &backend_id,
+                                 const std::string &tech_id, std::string_view key) {
+    const BackendDef *b = find_backend(f, backend_id);
+    if (!b)
+        return nullptr;
+    if (const TechDef *t = find_tech(*b, tech_id))
+        if (const ParamDef *p = find_param(*t, key))
+            return p;                 // 命中技术内 first-wins
+    for (const TechDef &t : b->techs) // 回退：后端全部技术并集扫描（first-wins，表序优先）
+        if (const ParamDef *p = find_param(t, key))
+            return p;
+    return nullptr;
+}
+
+// R-211（M7-R2B）：位深单位判定与 bps↔bpp 换算单源（口径见 params.h 尾部加性块）。
+BitdepthUnit bitdepth_unit(std::string_view format_id) {
+    return format_id == "bmp" ? BitdepthUnit::BitsPerPixel : BitdepthUnit::BitsPerSample;
+}
+
+std::string_view bitdepth_unit_label(std::string_view format_id) {
+    return bitdepth_unit(format_id) == BitdepthUnit::BitsPerPixel ? "bpp" : "bps";
+}
+
+int bitdepth_bpp(std::string_view format_id, int bitdepth) {
+    // 存储值 → 每像素位数（RGB 三样本打包口径）：bmp 存储值已是 bpp → 恒等；其余 bps × 3。
+    return bitdepth_unit(format_id) == BitdepthUnit::BitsPerPixel ? bitdepth : bitdepth * 3;
+}
+
+int bitdepth_bps(std::string_view format_id, int bitdepth) {
+    // 存储值 → 每样本位数：非 bmp 恒等；bmp 24 bpp（RGB）→ 8 bps、8 bpp（灰度）→ 8 bps。
+    if (bitdepth_unit(format_id) != BitdepthUnit::BitsPerPixel)
+        return bitdepth;
+    return bitdepth == 24 ? 8 : bitdepth;
 }
 
 std::optional<ParamValue> eval_lock(const ParamDef &p, const ParamSet &s) {
@@ -499,9 +533,10 @@ std::string validate_params(const FormatDef &f, const std::string &backend_id,
         if (!err.empty())
             return "param '" + p.key + "': " + err;
     }
-    // 跨字段规则（R-206：单源规则表；本通道取英文文案，逐字保留 0.3.2 现文案）。
+    // 跨字段规则（R-206：单源规则表，M7-R2B 起两通道共用全部规则；本通道取英文文案，
+    // 逐字保留 0.3.2 现文案）。
     for (const CrossRule &r : cross_rules()) {
-        if (!r.in_validate || !rule_applies(r, f.id, tech_id, s))
+        if (!rule_applies(r, f.id, tech_id, s))
             continue;
         const std::string err = r.check(s, /*english=*/true);
         if (!err.empty())
@@ -517,16 +552,17 @@ std::vector<std::string> cross_validate(const ParamSet &values, const std::strin
                                         const std::string &tech_id) {
     std::vector<std::string> out;
 
-    // 跨字段规则（R-206：单源规则表，见本文件 cross_rules()；本通道取中文文案，逐字保留
-    // 0.3.2 现文案）。规则①（webp qmin ≤ qmax）与规则②（jpeg 渐进式 ⇒ 哈夫曼表优化）已
-    // 收进规则表；规则②的条件订正依据（M2-T5 父裁定）：真实约束来自 jpegli ——
+    // 跨字段规则（R-206：单源规则表，见本文件 cross_rules()；M7-R2B 起两通道共用全部规则，
+    // 本通道取中文文案，逐字保留 0.3.2 现文案）。规则①（webp qmin ≤ qmax）与规则②（jpeg
+    // 渐进式 ⇒ 哈夫曼表优化）已收进规则表；规则②的条件订正依据（M2-T5 父裁定）：真实约束来自
+    // jpegli ——
     //   tools/cjpegli.cc:146 `progressive_level > 0 && !optimize_coding` → 报
     //   "--fixed_code must be used together with -p 0"；
     //   enc_jpegli.cpp `cinfo.optimize_coding = (progressive || optimize_coding)`
     //   ⇒ (true,true) 是规范化态、(true,false) 才是非法态。两参数默认值（true/true）
     //   天然不报（§4 T5）。
     for (const CrossRule &r : cross_rules()) {
-        if (!r.in_cross || !rule_applies(r, format_id, tech_id, values))
+        if (!rule_applies(r, format_id, tech_id, values))
             continue;
         const std::string msg = r.check(values, /*english=*/false);
         if (!msg.empty())

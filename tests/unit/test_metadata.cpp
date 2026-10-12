@@ -596,6 +596,38 @@ void test_build_plan() {
           "plan/xmp-tz/create", show(xmp_str(q2.xmp, "Xmp.xmp.CreateDate")));
     check(xmp_str(q2.xmp, "Xmp.xmp.ModifyDate") == "2024-03-02T09:30:00+09:00",
           "plan/xmp-tz/modify", show(xmp_str(q2.xmp, "Xmp.xmp.ModifyDate")));
+
+    // ---- R-325（M7-R2B）：TimeShift 双模式字段组互斥 —— C.2 契约面第 7 项从"枚举+注释"
+    //      翻译为断言（契约进断言，不靠注释维持）：TimezoneSemantic 忽略 Delta 字段组；
+    //      Delta 忽略 Timezone 偏移组（不写 OffsetTime*）。
+    {
+        pp::BatchRules a;
+        pp::TimeShift tz_dirty;
+        tz_dirty.mode = pp::TimeShift::Mode::TimezoneSemantic;
+        tz_dirty.from_offset_min = 480;
+        tz_dirty.to_offset_min = 540;
+        tz_dirty.years = 3; // Delta 组脏值：必须被忽略
+        tz_dirty.hours = 5;
+        a.time_shift = tz_dirty;
+        const pp::MetadataPlan pa = pp::build_plan(src, a, std::nullopt);
+        check(exif_str(pa.exif, kDto) == "2024:03:01 11:00:00" &&
+                  exif_str(pa.exif, "Exif.Photo.OffsetTime") == "+09:00",
+              "plan/r325-tz-ignores-delta",
+              "TimezoneSemantic 必须忽略 Delta 字段组，got " + show(exif_str(pa.exif, kDto)));
+
+        pp::BatchRules b;
+        pp::TimeShift delta_dirty;
+        delta_dirty.mode = pp::TimeShift::Mode::Delta;
+        delta_dirty.hours = 1;
+        delta_dirty.from_offset_min = -300; // Timezone 组脏值：必须被忽略
+        delta_dirty.to_offset_min = 600;
+        b.time_shift = delta_dirty;
+        const pp::MetadataPlan pb = pp::build_plan(src, b, std::nullopt);
+        check(exif_str(pb.exif, kDto) == "2024:03:01 11:00:00", "plan/r325-delta-ignores-tz",
+              show(exif_str(pb.exif, kDto)));
+        check(!has_exif(pb.exif, "Exif.Photo.OffsetTime"), "plan/r325-delta-no-offset",
+              "Delta 模式不得写 OffsetTime*（双模式字段组互斥）");
+    }
 }
 
 void test_payloads() {

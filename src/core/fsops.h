@@ -109,8 +109,10 @@ bool write_atomic_file(const std::filesystem::path &target, std::string_view dat
 //   * 每个路径段：非法字符 `< > : " | ? *` 与 ASCII 控制字符（0x00–0x1F）；
 //   * 每个路径段不得以点/空格结尾（Windows 静默截断面）；
 //   * 保留设备名（大小写不敏感、含带扩展名形态 CON.txt）：CON/PRN/AUX/NUL/COM1–9/LPT1–9；
-//   * 长度：单段 ≤ 255、整串 ≤ 259（MAX_PATH−1；写路径的 fopen/Exiv2 无 `\\?\` 归一，
-//     超长路径必然在 open 处失败 → 按评审 R-007 在渲染后**预检**拦截并给可读错误）；
+//   * 长度：**M7-R2B 解除 259/255 硬线**（R-007 收口）—— 写入口统一经 normalize_extended_path()
+//     归一 `\\?\` 扩展形式后超长路径（>260 整串 / >255 段）可真实落盘，长度不再按 MAX_PATH
+//     预检拦截；保留名/非法字符/尾随点空格仍拒（这些在 `\\?\` 形式下会被**字面保留**而非
+//     静默截断，属真实数据破坏面，防线不撤）；
 //   * 末段必须是文件名（非空）。
 // 判负 → false 且 *err 为非空英文描述；err 可为 nullptr。
 bool validate_output_filename(const std::filesystem::path &p, std::string *err);
@@ -139,5 +141,14 @@ OutputPlan resolve_conflict(const std::filesystem::path &desired, ConflictPolicy
 std::vector<std::filesystem::path> collect_inputs(
     const std::vector<std::filesystem::path> &roots, const std::vector<std::string> &exts,
     const std::vector<std::filesystem::path> &exclude_roots, std::vector<std::string> &errors);
+
+// —— M7-R2B 加性追加（R-007 长路径 `\\?\` 归一收口；裁定登记 build/m7r2-b/handoff.md）——
+// Windows 长路径归一：**绝对**路径归一为 `\\?\` 扩展形式（drive 形态 `C:\x` → `\\?\C:\x`；
+// UNC 形态 `\\server\share\x` → `\\?\UNC\server\share\x`），绕过 MAX_PATH=260 的 open 上限
+// （fopen/Exiv2 写入口统一经本函数，见 metadata.cpp 的 exiv2_apply 族；codecs 侧 fopen
+// 调用点属跨界面，登记 handoff「跨界需求」）。幂等：已带 `\\?\`（或 `\\.\` 设备命名空间）
+// 前缀原样返回；相对路径/空路径原样返回（无稳定绝对语义，不归一）；非 Windows 恒原样返回
+// （POSIX 无 MAX_PATH）。分隔符归一为 `\`（`\\?\` 命名空间不接受 `/`）。
+std::filesystem::path normalize_extended_path(const std::filesystem::path &p);
 
 } // namespace pp

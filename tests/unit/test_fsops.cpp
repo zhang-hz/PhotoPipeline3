@@ -482,19 +482,26 @@ int main() {
                 check(!err.empty(), std::string(c.name) + "/message", "no error message");
             }
         }
-        // 长度：单段 >255、整串 >259 都要判负
+        // 长度（**断言换锚 · M7-R2B / R-007 收口**）：旧断言钉"单段 >255、整串 >259 判负"
+        // （MAX_PATH 预检拦截）。R-007 任务明文解除该硬线（写入口经 normalize_extended_path
+        // 归一 `\\?\` 后超长路径可真实落盘），行为变化经任务书授权 → 本两条**换锚为接受**
+        // （判据收紧方向：长度不再当非法，保留名/非法字符/尾随点空格防线不动）。
+        // 换锚登记：build/m7r2-b/handoff.md「裁定登记」节。
         std::string long_component = "out/";
         long_component.append(300, 'x');
         long_component += ".jpg";
-        check(!pp::validate_output_filename(fs::path(long_component), nullptr),
-              "invalid/component-too-long", "300-char component must be rejected");
+        check(pp::validate_output_filename(fs::path(long_component), nullptr),
+              "r007/long-component-accepted",
+              "300-char component must be accepted (length hard line lifted)");
         std::string long_total = "out/";
         for (int i = 0; i < 40; ++i)
             long_total += "abcdefghij/";
         long_total += "photo.jpg";
         check(long_total.size() > 259 &&
-                  !pp::validate_output_filename(fs::path(long_total), nullptr),
-              "invalid/total-too-long", "total " + std::to_string(long_total.size()) + " chars");
+                  pp::validate_output_filename(fs::path(long_total), nullptr),
+              "r007/long-total-accepted",
+              "total " + std::to_string(long_total.size()) +
+                  " chars must be accepted (length hard line lifted)");
         // err 可为 nullptr
         check(pp::validate_output_filename(fs::path("out/ok.jpg"), nullptr), "valid/null-err",
               "valid path rejected with nullptr err");
@@ -608,6 +615,76 @@ int main() {
                       "invalid template must render to an empty path");
             }
         }
+    }
+
+    // ===== M7-R2B 新增断言（R-007 长路径 `\\?\` 归一 + 259/255 硬线解除；断言只增）=====
+    {
+        // normalize_extended_path：幂等 / 相对不归一 / Windows 绝对与 UNC 归一。
+        check(pp::normalize_extended_path({}).empty(), "m7r2b/np-empty", "空路径应原样返回");
+        check(pp::normalize_extended_path("a/b.txt") == fs::path("a/b.txt"), "m7r2b/np-relative",
+              "相对路径不归一");
+#ifdef _WIN32
+        check(pp::normalize_extended_path("C:\\out\\x.jpg") == fs::path("\\\\?\\C:\\out\\x.jpg"),
+              "m7r2b/np-drive", "drive 绝对路径应归一 \\\\?\\ 形式");
+        check(pp::normalize_extended_path("\\\\server\\share\\x.jpg") ==
+                  fs::path("\\\\?\\UNC\\server\\share\\x.jpg"),
+              "m7r2b/np-unc", "UNC 应归一 \\\\?\\UNC\\ 形式");
+        check(pp::normalize_extended_path("C:/out/y.jpg") == fs::path("\\\\?\\C:\\out\\y.jpg"),
+              "m7r2b/np-sep", "分隔符应归一为 '\\'（\\\\?\\ 命名空间不接受 '/'）");
+        // 幂等：已归一的路径原样返回。
+        const fs::path once = pp::normalize_extended_path("C:\\out\\x.jpg");
+        check(pp::normalize_extended_path(once) == once, "m7r2b/np-idempotent", show(once));
+#else
+        check(pp::normalize_extended_path("/tmp/x.jpg") == fs::path("/tmp/x.jpg"), "m7r2b/np-posix",
+              "非 Windows 恒原样返回");
+#endif
+
+        // 259/255 长度硬线解除：超长整串 / 超长段不再被 validate_output_filename 拦截
+        // （保留名/非法字符/尾随点空格防线保留）。
+        std::string long_seg(260, 'a');
+        long_seg += ".jpg";
+        const fs::path long_component = fs::path("C:\\out") / long_seg;
+        std::string err;
+        check(pp::validate_output_filename(long_component, &err), "m7r2b/vof-long-component",
+              "单段 >255 不应再判负，err=" + err);
+        std::string deep = "C:\\out";
+        for (int i = 0; i < 8; ++i)
+            deep += "\\" + std::string(60, 'b');
+        deep += "\\x.jpg";
+        check(deep.size() > 300, "m7r2b/vof-long-setup", "样例路径应 >300 字符");
+        check(pp::validate_output_filename(fs::path(deep), &err), "m7r2b/vof-long-whole",
+              "整串 >259 不应再判负，err=" + err);
+        // 防线保留：非法字符 / 尾随点空格 / 保留设备名仍拒。
+        check(!pp::validate_output_filename(fs::path("C:\\out\\a?b.jpg"), &err),
+              "m7r2b/vof-illegal-char", "非法字符必须仍判负");
+        check(!pp::validate_output_filename(fs::path("C:\\out\\trailing."), &err),
+              "m7r2b/vof-trailing-dot", "尾随点必须仍判负");
+        check(!pp::validate_output_filename(fs::path("C:\\out\\trailing "), &err),
+              "m7r2b/vof-trailing-space", "尾随空格必须仍判负");
+        check(!pp::validate_output_filename(fs::path("C:\\out\\CON.txt"), &err),
+              "m7r2b/vof-reserved", "保留设备名必须仍判负");
+
+        // 长路径真实写读闭环：>300 字符输出路径经 write_atomic_file 可落盘（写入口已归一）。
+        // 测试侧建目录同样按归一口径调用（超长路径下 MSVC std::filesystem 裸调用会撞 MAX_PATH）。
+        const fs::path root = make_temp_dir("m7r2b_longpath");
+        fs::path deep_dir = root;
+        for (int i = 0; i < 5; ++i)
+            deep_dir /= std::string(60, 'c');
+        std::error_code ec;
+        fs::create_directories(pp::normalize_extended_path(deep_dir), ec);
+        check(!ec, "m7r2b/long-mkdir", ec.message());
+        const fs::path target = deep_dir / (std::string(40, 'd') + ".txt");
+        check(target.string().size() > 300, "m7r2b/long-setup",
+              "目标路径应 >300 字符，got " + std::to_string(target.string().size()));
+        std::string werr;
+        check(pp::write_atomic_file(target, "long-path-payload", &werr), "m7r2b/long-write",
+              "超长路径写入失败: " + werr);
+        check(fs::exists(pp::normalize_extended_path(target), ec), "m7r2b/long-exists",
+              "超长路径产物不存在");
+        std::string perr;
+        check(pp::probe_output_root(deep_dir, &perr), "m7r2b/long-probe-root",
+              "超长输出根探针失败: " + perr);
+        fs::remove_all(root, ec);
     }
 
     if (g_failed == 0) {

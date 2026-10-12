@@ -531,11 +531,12 @@ bool commit_temp_file(const std::filesystem::path &tmp, const std::filesystem::p
         return fail("atomic commit: empty path");
     }
     std::error_code ec;
-    if (!std::filesystem::exists(tmp, ec) || ec) {
+    // R-007：fs 入口经 normalize_extended_path 归一（超长路径可 rename/exists）。
+    if (!std::filesystem::exists(normalize_extended_path(tmp), ec) || ec) {
         return fail("atomic commit: temp file missing: " + tmp.string());
     }
     // 标准语义：rename 覆盖已存在目标（POSIX rename / MSVC std::filesystem::rename）。
-    std::filesystem::rename(tmp, target, ec);
+    std::filesystem::rename(normalize_extended_path(tmp), normalize_extended_path(target), ec);
     if (ec) {
         return fail("atomic commit: cannot replace " + target.string() + ": " + ec.message());
     }
@@ -547,7 +548,8 @@ void discard_temp_file(const std::filesystem::path &tmp) noexcept {
         return;
     }
     std::error_code ec;
-    std::filesystem::remove(tmp, ec); // 清场尽力而为；失败不抛不报（noexcept 契约）
+    // R-007：fs 入口归一（超长路径的清场同样尽力而为）。
+    std::filesystem::remove(normalize_extended_path(tmp), ec); // 失败不抛不报（noexcept 契约）
 }
 
 bool write_atomic_file(const std::filesystem::path &target, std::string_view data,
@@ -569,7 +571,8 @@ bool write_atomic_file(const std::filesystem::path &target, std::string_view dat
         return fail("atomic write: cannot build temp name for " + target.string());
     }
     {
-        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        // R-007：写入口经 normalize_extended_path 归一 `\\?\`（超长路径可落盘）。
+        std::ofstream out(normalize_extended_path(tmp), std::ios::binary | std::ios::trunc);
         if (!out) {
             discard_temp_file(tmp);
             return fail("atomic write: cannot create " + tmp.string());
@@ -586,7 +589,8 @@ bool write_atomic_file(const std::filesystem::path &target, std::string_view dat
     }
     // 字节校验（R-003 口径）：落盘 size 必须精确等于 data.size()，否则视为写失败并清场。
     std::error_code ec;
-    const std::uintmax_t written = std::filesystem::file_size(tmp, ec);
+    // R-007：fs 入口归一（超长路径的 size/status/permissions 同口径）。
+    const std::uintmax_t written = std::filesystem::file_size(normalize_extended_path(tmp), ec);
     if (ec || written != static_cast<std::uintmax_t>(data.size())) {
         discard_temp_file(tmp);
         return fail("atomic write: byte count mismatch on " + tmp.string() + " (wrote " +
@@ -594,16 +598,37 @@ bool write_atomic_file(const std::filesystem::path &target, std::string_view dat
     }
     // 继承既有目标的权限位（preset_io 的既有行为收口到这里：覆盖不改权限）。
     std::error_code st_ec;
-    const std::filesystem::file_status st = std::filesystem::status(target, st_ec);
+    const std::filesystem::file_status st =
+        std::filesystem::status(normalize_extended_path(target), st_ec);
     if (!st_ec && std::filesystem::exists(st)) {
         std::error_code pm_ec;
-        std::filesystem::permissions(tmp, st.permissions(), pm_ec);
+        std::filesystem::permissions(normalize_extended_path(tmp), st.permissions(), pm_ec);
     }
     if (!commit_temp_file(tmp, target, err)) {
         discard_temp_file(tmp);
         return false;
     }
     return true;
+}
+
+// R-007（M7-R2B）：Windows 长路径 `\\?\` 归一（契约与幂等语义见 fsops.h 加性块）。
+std::filesystem::path normalize_extended_path(const std::filesystem::path &p) {
+#ifdef _WIN32
+    if (p.empty())
+        return p;
+    std::filesystem::path q = p;
+    q.make_preferred(); // `\\?\` 命名空间不接受 '/' → 统一为 '\'
+    const std::wstring w = q.wstring();
+    if (w.rfind(L"\\\\?\\", 0) == 0 || w.rfind(L"\\\\.\\", 0) == 0)
+        return q; // 已归一 / 设备命名空间：幂等直通
+    if (!p.is_absolute())
+        return q; // 相对路径不归一（无稳定绝对语义，调用方自担 CWD 依赖）
+    if (w.rfind(L"\\\\", 0) == 0)
+        return std::filesystem::path(L"\\\\?\\UNC\\" + w.substr(2)); // UNC → \\?\UNC\...
+    return std::filesystem::path(L"\\\\?\\" + w);
+#else
+    return p; // POSIX 无 MAX_PATH：恒原样（同一语义面，测试按平台断言）
+#endif
 }
 
 bool validate_output_filename(const std::filesystem::path &p, std::string *err) {
@@ -622,22 +647,14 @@ bool validate_output_filename(const std::filesystem::path &p, std::string *err) 
     if (p.filename().empty()) {
         return fail("output path has no file name: " + p.string());
     }
-    // 长度（R-007）：整串 ≤ 259（MAX_PATH−1）。写路径的 fopen/Exiv2 无 `\\?\` 归一，超长
-    // 路径必然在 open 处失败 → 渲染后即预检拦截，不再逐文件跑到底。
-    const std::string whole = p.generic_string();
-    if (whole.size() > 259) {
-        return fail("output path is too long (" + std::to_string(whole.size()) +
-                    " > 259 chars): " + whole);
-    }
+    // 长度硬线（259 整串 / 255 单段）**M7-R2B 解除**（R-007 收口）：写入口统一经
+    // normalize_extended_path() 归一 `\\?\` 后超长路径可真实落盘，长度不再预检拦截；
+    // 保留名/非法字符/尾随点空格防线保留（见 fsops.h 本函数契约）。
     for (const std::filesystem::path &comp : p) {
         if (comp.empty() || comp == p.root_name() || comp == p.root_directory()) {
             continue; // 盘符/根分隔符不参与文件名规则
         }
         const std::string s = comp.string();
-        if (s.size() > 255) {
-            return fail("output path component is too long (" + std::to_string(s.size()) +
-                        " > 255 chars): " + s);
-        }
         for (const char c : s) {
             const unsigned char u = static_cast<unsigned char>(c);
             if (u < 0x20) {
@@ -672,18 +689,21 @@ bool probe_output_root(const std::filesystem::path &dir, std::string *err) {
         return fail("output root is empty");
     }
     std::error_code ec;
-    std::filesystem::create_directories(dir, ec);
+    // R-007：fs 入口归一（超长输出根同样可建可探）。
+    const std::filesystem::path dir_x = normalize_extended_path(dir);
+    std::filesystem::create_directories(dir_x, ec);
     if (ec) {
         return fail("output root is not creatable: " + dir.string() + ": " + ec.message());
     }
-    const std::filesystem::file_status st = std::filesystem::status(dir, ec);
+    const std::filesystem::file_status st = std::filesystem::status(dir_x, ec);
     if (ec || !std::filesystem::is_directory(st)) {
         return fail("output root is not a directory: " + dir.string());
     }
     // 试写探针（唯一名，写后即删）：只读介质/配额/共享限制在这里就暴露。
     const std::filesystem::path probe = dir / ("pp-write-probe." + unique_suffix() + ".tmp");
     {
-        std::ofstream out(probe, std::ios::binary | std::ios::trunc);
+        // R-007：写入口经 normalize_extended_path 归一（超长输出根同样可探）。
+        std::ofstream out(normalize_extended_path(probe), std::ios::binary | std::ios::trunc);
         if (!out) {
             return fail("output root is not writable: " + dir.string());
         }

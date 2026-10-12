@@ -233,18 +233,16 @@ struct Scheduler::Impl {
     void emit_stage(std::size_t i, FileState s) { emit_event(i, FileEvent{i, s, nullptr, {}}); }
 
     // Stores the terminal result and emits the terminal event (pointer into results()).
-    // 终态映射（§4.1 聚合 / §3.3 事件）：DoneWithErrors 落到 FileState::Done（FileState 无该值，
-    // 属 §3.3 表外缺口，T7 定稿）；FileResult.ok=false 让 RunSummary 与 dev harness 的失败计数
-    // 仍把"任一输出失败"的文件算作失败（0.2 语义）。
+    // 终态映射（§4.1 聚合 / §3.3 事件）：Verdict → FileState 走 file_state_of 单源（R-076，
+    // M7-R2B：DoneWithErrors → FileState::DoneWithErrors，多输出部分成功独立档；旧口径把它
+    // 有损映射为 Done，注释自认 FileState 无该值 —— 表缺口已由 M7-WP1 I7 加性补齐）。
+    // FileResult.ok=false 让 RunSummary 与 dev harness 的失败计数仍把"任一输出失败"的文件
+    // 算作失败（0.2 语义，零改动）。
     // W1-T6：终态事件附**最后进度高水位**（消费端无需另存进度流；W2/W3 运行页读终态即得终值）。
     // W1-T7：终态同时是"完成"计数点（§8.2 的 remaining/inflight 口径）—— 每条终态路径都经此，
     // 故 done 与 results 槽位在同一临界区内推进（并发闸的宽度只会随之收缩，不会漏计）。
     void finish(std::size_t i, FileOutcome outcome) {
-        const FileState state =
-            outcome.verdict == FileOutcome::Verdict::Cancelled ? FileState::Cancelled
-            : outcome.verdict == FileOutcome::Verdict::Skipped ? FileState::Skipped
-            : outcome.verdict == FileOutcome::Verdict::Failed  ? FileState::Failed
-                                                               : FileState::Done;
+        const FileState state = file_state_of(outcome.verdict);
         FileResult r = std::move(outcome.file);
         EventCb c;
         ProgressInfo pi;
@@ -617,6 +615,24 @@ RunSummary Scheduler::summary() const {
     s.threads_total_est =
         static_cast<int>(static_cast<long long>(d.peak_active_files) + d.peak_sum_encode_threads);
     return s;
+}
+
+// R-076（M7-R2B）：终态映射单源（五值全表；test_scheduler_contract 钉住）。
+// DoneWithErrors → FileState::DoneWithErrors = 一一配对（M7-WP1 I7 的枚举值在此接上消费面）。
+FileState file_state_of(FileOutcome::Verdict v) {
+    switch (v) {
+    case FileOutcome::Verdict::Done:
+        return FileState::Done;
+    case FileOutcome::Verdict::DoneWithErrors:
+        return FileState::DoneWithErrors;
+    case FileOutcome::Verdict::Failed:
+        return FileState::Failed;
+    case FileOutcome::Verdict::Skipped:
+        return FileState::Skipped;
+    case FileOutcome::Verdict::Cancelled:
+        return FileState::Cancelled;
+    }
+    return FileState::Failed; // 不可达（枚举全列举）；防御性兜底不改变既有语义
 }
 
 } // namespace pp

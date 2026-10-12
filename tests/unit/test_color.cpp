@@ -1161,8 +1161,6 @@ void test_gamut_mapping() {
     // 护栏测量（UX-14 C1）：两组 ramp —— ①满饱和（P3 六边形边界，越界极远）②中饱和
     // （各点向中性灰收 25%，轻~中度越界 —— 通常的"饱和色 ramp"语境）。指标 = ΔE2000 色相
     // 分量 |ΔH'|(vs ideal 未裁变换结果 —— 映射自身的色相偏移)；数据逐组打印留证。
-    std::string p3_err2;
-    const std::string p3_bytes = pp::load_target_icc(pp::ColorTarget::DisplayP3, p3_err2);
     struct Ramp {
         const char *name;
         std::vector<std::array<double, 3>> pts;
@@ -1173,6 +1171,7 @@ void test_gamut_mapping() {
     ramps.push_back({"full-sat", ramp, 0.85, 0.85});
     {
         std::vector<std::array<double, 3>> mod;
+        mod.reserve(ramp.size());
         for (const auto &c : ramp)
             mod.push_back(
                 {0.5 + 0.75 * (c[0] - 0.5), 0.5 + 0.75 * (c[1] - 0.5), 0.5 + 0.75 * (c[2] - 0.5)});
@@ -1681,7 +1680,7 @@ void test_heif_vui_nclx() {
         const fs::path out = dir / (std::string("vui_") + c.name + ".heic");
         std::error_code ec2;
         fs::remove(out, ec2);
-        std::vector<float> px(8 * 8 * 3, 0.5f);
+        std::vector<float> px(std::size_t{8} * 8 * 3, 0.5f);
         OIIO::ImageBuf img = make_buf(8, 8, 3, px);
         pp::OutputTarget target{"heif", "x265", "", pp::ParamSet{}, 8, out, false};
         pp::MetadataPayloads meta;

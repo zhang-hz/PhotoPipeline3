@@ -4893,6 +4893,9 @@ QWidget *menu_host_of(QWidget *from) {
 }
 
 // 卡菜单断言：非分隔项逐条对齐 contextmenu 构造面（词表单源）+ 首项文案钉字面量（防回归）
+// M7-R2-GATE（tidy bugprone-easily-swappable-parameters）：checked/bad = 断言计数出参对
+// （核过数/坏数），探针签名保持波次冻结形态、不为消音改形参序。
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
 void expect_card_menu(const QString &tag, QWidget *host, const QString &first_text,
                       const std::vector<contextmenu::Item> &want,
                       const std::function<void(const QString &)> &fail, int &checked, int &bad) {
@@ -4925,6 +4928,7 @@ void expect_card_menu(const QString &tag, QWidget *host, const QString &first_te
                .arg(got.isEmpty() ? QStringLiteral("<空>") : got.first(), first_text));
     menu->close();
 }
+// NOLINTEND(bugprone-easily-swappable-parameters)
 
 } // namespace
 

@@ -305,7 +305,7 @@ void ClassifyPanel::Impl::rebuild_rows() {
         chip->set_tokens(paint_tokens());
         {
             // R-143：点击 = 过滤档切换（当前档再点 / 「全部」= 清除过滤）；G5 运行中只读
-            const QString row_id = id;
+            const QString &row_id = id;
             QObject::connect(chip, &QAbstractButton::clicked, panel, [this, row_id] {
                 if (locked)
                     return;

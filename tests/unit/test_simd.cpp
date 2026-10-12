@@ -517,7 +517,7 @@ void test_quantize8_dithered() {
           "max |dithered - plain| = " + std::to_string(max_delta));
     // 常量 0.5 场（64×64×3）：0.5·255+0.5 = 128.0，噪声 ±0.5 LSB ⇒ 截断落 127/128，
     // TPDF 双向 ⇒ 两值都必须出现（实测计数打印留证）。
-    const std::size_t n2 = 64 * 64 * 3;
+    const std::size_t n2 = std::size_t{64} * 64 * 3;
     std::vector<float> half(n2, 0.5f);
     std::vector<std::uint8_t> out2(n2, 0x55);
     pp::simd::quantize8_dithered_ref(half.data(), out2.data(), n2, 0, 0, 3);

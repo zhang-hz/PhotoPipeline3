@@ -275,6 +275,10 @@ bool is_supported_ext(const std::filesystem::path &p) {
 // 单个输入项 → 候选文件（目录递归；点文件/点目录跳过；不支持者按去重路径计数，v1.1）。
 // R-148：枚举/读取失败的输入项**计数**（原实现静默忽略，用户不知道漏了什么）——目录打不开 /
 // 枚举中断 / 输入项不存在或不可读，各计 1 项「未能读取」。
+// M7-R2-GATE（tidy bugprone-easily-swappable-parameters）：unsupported/unreadable = 两个语义
+// 各别的出参计数（不支持 vs 未能读取），唯一调用点（本文件 scan_inputs）实参名逐一对应；
+// 形参序按语义分组保持，不为消音而重排。
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
 void collect_from(const std::filesystem::path &input, std::vector<std::filesystem::path> &files,
                   std::set<QString> &unsupported_seen, std::size_t &unsupported,
                   std::size_t &unreadable) {
@@ -331,6 +335,7 @@ void collect_from(const std::filesystem::path &input, std::vector<std::filesyste
     // R-148：不存在/非普通文件/不可读 → 计入「未能读取」（原为静默忽略）
     ++unreadable;
 }
+// NOLINTEND(bugprone-easily-swappable-parameters)
 
 // R-025：一次 add_paths 的扫盘产物（worker 线程产出、GUI 线程消费；纯数据）。
 // 批内排序与逐文件 stat/去重键都在 worker 完成 —— GUI 线程只剩成批插入。

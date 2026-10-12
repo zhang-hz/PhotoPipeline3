@@ -444,6 +444,46 @@ python tools/env.py run -- ctest --test-dir build/m7-wp11-rel -N  # 34（diff �
 | 9 | M7-GATE 索引按 R2C 对照表修正 | **闭环**：751f479 归 M7-GATE（三提交）+ WP12 同提交双角色注明；补 dec7a1d/572a86e/97cd9da/b1af371/a4cf0fc 五行；「两次重播种」限定 M7-GATE scope、全窗口 4 次（§3.5）；行序注明非 git 时间序；d882fe6 口径统一「日志面 46 / 产物字节 0」 | 文首索引表、§3.5 |
 | 10 | 格式命令占位符补实 | **闭环**：§2.1 与 §5 格式命令均列全 10 文件清单（无占位符；`<本包 10 个改动文件>` 由 dec7a1d 补实后本轮 grep 复核 0 残留）；R2 证据摘录命令同样逐字可复跑 | §2.1/§5、docs/m7-evidence/* |
 
+### 6.4 R2 验收结论（终门禁 M7-R2-GATE，2026-10-12，门禁树 build/release-dev）
+
+> 本节 = R2 轮（R2A…R2F + R2-gate）收口后的**终门禁实跑**；逐条命令与输出摘录真源 =
+> [docs/m7-evidence/m7r2-gate.md](m7-evidence/m7r2-gate.md)（三段式，原件在 `build/m7r2-g/*.log`）。
+> 本轮口径：**判据零改动、基线零改动、冻结行逐字不动**；唯一代码改动 = tidy 棘轮 fallout 修复
+> （23 条新增告警，行为零改动，金样 20/20 + 回归 zero diff 双背书）。
+
+逐条判据与实测结果（全部实跑；修码后全量复验一组，两组结论一致）：
+
+| # | 命令 | 结果 |
+|---|---|---|
+| 1 | `bash tools/ci-format.sh`（Git bash） | **`violations=0`**（钉版 clang-format 23.1.1，155 文件全源 0 diff；修码后复验同值） |
+| 2 | `python tools/env.py run -- cmake --preset release-dev -B build/release-dev -DVCPKG_MANIFEST_INSTALL=OFF && … cmake --build build/release-dev` | exit 0（修码后重建 build2.log 同绿） |
+| 3 | `python tools/env.py run -- ctest --test-dir build/release-dev --output-on-failure` | **100% tests passed out of 35**（45.27s / 修码后 45.89s） |
+| 3b | `python tools/env.py run -- ctest --test-dir build/release-dev -R ui_smoke -V` | 冻结行逐字 **`UI-SMOKE OK shots=12 pages=3`**（末行 `UI-SMOKE pass`；两轮逐字一致） |
+| 4 | `python tools/env.py run -- python tests/golden/smoke.py build/release-dev` | **`SMOKE total=20 pass=20 fail=0`** 逐字（20/20 VERIFY OK；两轮同值，金样与夹具零改动） |
+| 5 | `python tools/env.py run -- python tools/ci-tidy.py build/release-dev` | 首跑红 `TIDY total=287 baseline=264 violations=13`（R2 各包漏跑 tidy 的 +23 fallout）→ 修复后 **`TIDY total=264 baseline=264 files=71 violations=0 seed=0`**（棘轮只减不增：基线文件零改动、未用 `--update`） |
+| 6 | `python tools/env.py run -- python tools/regression.py` | **`regression: zero diff (baseline reproduced)`**（2448 vs 2448；修码前后各一轮）。首跑曾 `DIFF FOUND (54 lines)`，逐行归因 = `full-jpeg` 节 `rgb16.tif` 收尾 rename 遇 OS 瞬态锁（`atomic commit: cannot replace …: Access is denied.`，`fsops.cpp:541`）级联 4 类计数；同二进制复跑 ×2 均 zero diff ⇒ **瞬态环境噪声，0 行真实变化，不重播种** |
+| 7 | 密钥扫描（`docs/m6-report.md` §6 口径：`git log --all -p` 全历史 254,927 行 + 工作树 `git grep`） | 值形态 **0 命中**：`sk-[A-Za-z0-9]{16,}`=0、`amap_key\s*[=:]\s*<16+字符值>`=0、`\b[0-9a-f]{32}\b`=0；`amap_key` 名字面 228（历史）/104（工作树）命中全为键名/字段名/文档 |
+
+tidy fallout 修复口径（详单见证据文件 §③）：**修码 12 条**（机械修正：显式乘法提升 / qsizetype
+收窄 / const 引用 / 死代码删除 / 形参序以 scoped enum 分隔）+ **消音 11 条**（NOLINT + 契约注释：
+6×AVX2 内核 intrinsics 结构性误报 + 2×内核形参组同文件先例口径 + 3×出参对/探针签名/QtConcurrent
+任务面）；消音只覆盖 R2 新增行，存量告警计数面原样（kernels 31 条保留）⇒ 总数恰回 264 = 基线。
+
+#### 未覆盖 / 未决（如实）
+
+1. **回归首跑瞬态锁**（已归因、不修）：输出名碰撞（`base/rgb16.png` 与 `base/rgb16.tif` 的
+   `$dir/$file` 模板同产 `base/rgb16.jpg`，conflict=overwrite）的 rename 替换路径对瞬态文件锁
+   敏感，与并发负载同现一次。判定为环境噪声（同二进制 ×2 zero diff）；**未加锁重试机制**
+   （属行为新增，超本包「修复 fallout」范围），登记为已知差异。
+2. **tidy 消音 11 条的口径裁定**（本包裁定登记，`build/m7r2-g/handoff.md`）：NOLINT 为**零语义面**
+   处置（注释级，基线/判据零改动），亦可在主对话改判为「形参组结构化 / `--update` 重播种 +
+   归因」任一方案；两方案的替代成本已写入 handoff，供复核翻案。
+3. **真机验收（§2.4）不在本门禁面**：offscreen 判据无法替代的 10 项仍待人工签收（UX-7/UX-13）。
+4. **CI 远端面未跑**：`main-full`/`nightly` 的 tidy 棘轮与 20min 预算读数以 R2C 取证
+   （`m7r2-c-ci-budget-timings.md`）为准；本包判据为本地门禁树实跑，与 CI 同判据同工具。
+5. **发布链**（R2REL）不在本包 scope：v0.3.3 winzip 预算超时的处置仍按 §3.8 停在
+   「等裁决」状态，本门禁不动。
+
 ---
 
 # 附录 A：覆盖台账 —— deep-review R-001～R-331（逐条去向）

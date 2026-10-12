@@ -744,6 +744,9 @@ void MainWindow::Impl::push_log_tail() {
             push_log_tail();
         }
     });
+    // M7-R2-GATE（tidy bugprone-exception-escape）：QtConcurrent 任务体的异常由 Qt 捕获进
+    // QFuture（result() 处再抛），非"逃逸出线程入口"；同文件 :531 既有同形任务为基线内先例。
+    // NOLINTNEXTLINE(bugprone-exception-escape)
     watcher->setFuture(QtConcurrent::run([dir] { return read_log_tail(dir); }));
 }
 

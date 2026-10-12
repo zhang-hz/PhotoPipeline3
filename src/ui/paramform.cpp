@@ -1082,7 +1082,7 @@ struct ParamForm::Impl {
         if (t == nullptr)
             return;
         for (const QString &line : lines) {
-            const int eq = line.indexOf(QLatin1Char('='));
+            const qsizetype eq = line.indexOf(QLatin1Char('='));
             if (eq <= 0)
                 continue;
             const std::string key = line.left(eq).trimmed().toStdString();

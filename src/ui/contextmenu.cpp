@@ -48,7 +48,7 @@ QMenu *menu(QWidget *parent, const std::vector<Item> &items) {
     return m;
 }
 
-void attach_card_menu(QWidget *card, ItemsBuilder builder) {
+void attach_card_menu(QWidget *card, const ItemsBuilder &builder) {
     if (card == nullptr || !builder)
         return;
     card->setContextMenuPolicy(Qt::CustomContextMenu);

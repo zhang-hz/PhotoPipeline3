@@ -435,7 +435,7 @@ int main() {
             jpegli_set_colorspace(&cinfo, JCS_CMYK); // Adobe APP14 transform=0（CMYK 信令）
             cinfo.write_Adobe_marker = TRUE;
             jpegli_start_compress(&cinfo, TRUE);
-            std::vector<unsigned char> row(24u * 4u);
+            std::vector<unsigned char> row(std::size_t{24} * 4);
             for (int y = 0; y < 16; ++y) {
                 for (int x = 0; x < 24; ++x) {
                     row[static_cast<std::size_t>(x) * 4 + 0] = static_cast<unsigned char>(x * 9);
@@ -539,7 +539,7 @@ int main() {
             bool ok = out != nullptr;
             if (ok) {
                 OIIO::ImageSpec wspec(32, 24, 3, OIIO::TypeUInt8);
-                std::vector<unsigned char> px(32u * 24u * 3u, 128);
+                std::vector<unsigned char> px(std::size_t{32} * 24 * 3, 128);
                 ok = out->open(adobe_jpg.string(), wspec) &&
                      out->write_image(OIIO::TypeUInt8, px.data());
                 out->close();
@@ -637,7 +637,7 @@ int main() {
             bool ok = out != nullptr;
             if (ok) {
                 OIIO::ImageSpec wspec(64, 64, 3, OIIO::TypeUInt8);
-                std::vector<unsigned char> px(64u * 64u * 3u, 90);
+                std::vector<unsigned char> px(std::size_t{64} * 64 * 3, 90);
                 ok = out->open(src.string(), wspec) && out->write_image(OIIO::TypeUInt8, px.data());
                 out->close();
             }

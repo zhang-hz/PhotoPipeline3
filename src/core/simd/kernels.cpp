@@ -267,6 +267,10 @@ inline float dither_noise(std::uint32_t x, std::uint32_t y, std::uint32_t c) {
 }
 // 标量语义段（ref 主体与 avx2 尾块共用）：idx0 = 本段首样本的**全局**样本序号
 // （(x,c) 由全局序号派生，尾块接续时通道相位不丢）。
+// M7-R2-GATE（tidy bugprone-easily-swappable-parameters）：x0/y/nch/idx0 = 样本网格坐标与
+// 段内全局相位，语义各别、两处调用点实参同名直传；形参序保持与同文件 flatten_ref /
+// quantize16_ref / interleave_ref 同口径（基线内同类告警既有先例），不为消音而重排。
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
 void dithered_range(const float *src, std::uint8_t *dst, std::size_t n, std::uint32_t x0,
                     std::uint32_t y, std::uint32_t nch, std::size_t idx0) {
     for (std::size_t j = 0; j < n; ++j) {
@@ -282,6 +286,7 @@ void dithered_range(const float *src, std::uint8_t *dst, std::size_t n, std::uin
         dst[j] = static_cast<std::uint8_t>(sat);
     }
 }
+// NOLINTEND(bugprone-easily-swappable-parameters)
 } // namespace
 
 void quantize8_dithered_ref(const float *src, std::uint8_t *dst, std::size_t n, std::uint32_t x0,
@@ -292,6 +297,10 @@ void quantize8_dithered_ref(const float *src, std::uint8_t *dst, std::size_t n, 
     dithered_range(src, dst, n, x0, y, nch, 0);
 }
 
+// M7-R2-GATE（tidy portability-simd-intrinsics）：AVX2 硬线（AGENTS.md §1.4 / docs/design.md
+// ——x86-64-v3 无 pre-AVX2 回退），本函数即 SIMD 内核面，该检查为结构性误报；与同文件既有
+// 内核同口径（基线内 20+ 条同族告警），仅对本函数消音、不动存量计数面。
+// NOLINTBEGIN(portability-simd-intrinsics)
 void quantize8_dithered_avx2(const float *src, std::uint8_t *dst, std::size_t n, std::uint32_t x0,
                              std::uint32_t y, std::uint32_t nch) {
     assert(nch >= 1);
@@ -327,6 +336,7 @@ void quantize8_dithered_avx2(const float *src, std::uint8_t *dst, std::size_t n,
     if (i < n) // 尾块：同一语义的标量面（全局样本序号接续，通道相位不丢）
         dithered_range(src + i, dst + i, n - i, x0, y, nch, i);
 }
+// NOLINTEND(portability-simd-intrinsics)
 
 void quantize8_dithered(const float *src, std::uint8_t *dst, std::size_t n, std::uint32_t x0,
                         std::uint32_t y, std::uint32_t nch) {

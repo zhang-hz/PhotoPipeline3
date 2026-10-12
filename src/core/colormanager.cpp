@@ -715,7 +715,9 @@ void converge_to_lightness(const LabSpace &sp, float &r, float &g, float &b) {
     b = static_cast<float>(std::clamp(out[2], 0.0, 1.0));
 }
 
-void apply_gamut_mapping(float *rgb, std::size_t npix, int mode, ColorTarget target) {
+// 参数序经 M7-R2-GATE 收口（tidy bugprone-easily-swappable-parameters）：npix 与 mode
+// 两个可隐换算整型之间插 ColorTarget（scoped enum）分隔，形参相邻对不再同型可换。
+void apply_gamut_mapping(float *rgb, std::size_t npix, ColorTarget target, int mode) {
     if (mode == 1) {
         for (std::size_t i = 0; i < 3 * npix; ++i)
             rgb[i] = soft_knee(rgb[i]);
@@ -996,7 +998,7 @@ ColorOutcome ColorManager::transform(OIIO::ImageBuf &buf, const std::string &src
         std::vector<float> rgb(3 * npix); // single GRAY_FLT -> RGB_FLT call
         cmsDoTransform(entry->xf, gray.data(), rgb.data(), count);
         // C1：色域映射（mode0 = 硬裁现状 = 无操作；灰度升维后为中性轴，模式 1/2 亦无损中性）
-        apply_gamut_mapping(rgb.data(), npix, opts.gamut_mapping, target);
+        apply_gamut_mapping(rgb.data(), npix, target, opts.gamut_mapping);
 
         std::vector<float> out(std::size_t(out_ch) * npix);
         for (std::size_t i = 0; i < npix; ++i) {
@@ -1019,7 +1021,7 @@ ColorOutcome ColorManager::transform(OIIO::ImageBuf &buf, const std::string &src
         }
         cmsDoTransform(entry->xf, in.data(), out.data(), count);
         // C1：色域映射（mode0 = 硬裁现状 = 无操作，逐字节不变）
-        apply_gamut_mapping(out.data(), npix, opts.gamut_mapping, target);
+        apply_gamut_mapping(out.data(), npix, target, opts.gamut_mapping);
         if (!write_planes(buf, 0, 3, out.data())) {
             oc.error = "cannot write the colour planes";
             return oc;

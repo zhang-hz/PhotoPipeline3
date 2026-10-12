@@ -196,7 +196,7 @@ const QStringList &map_style_ids() {
 }
 
 int map_style_index(const QString &id) {
-    const int idx = map_style_ids().indexOf(id);
+    const int idx = static_cast<int>(map_style_ids().indexOf(id));
     return idx >= 0 ? idx : 0; // 词表外/空 → 矢量（与 core 的"值不合法 → 保留默认"同口径）
 }
 

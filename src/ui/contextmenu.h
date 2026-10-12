@@ -181,6 +181,6 @@ std::vector<Item> log_tail_actions(const LogTailIntents &in);
 //   * 生命周期：menu() 产物 WA_DeleteOnClose + popup（与各卡既有接线同口径，父 = card）。
 // ---------------------------------------------------------------------------
 using ItemsBuilder = std::function<std::vector<Item>()>;
-void attach_card_menu(QWidget *card, ItemsBuilder builder);
+void attach_card_menu(QWidget *card, const ItemsBuilder &builder);
 
 } // namespace pp::ui::contextmenu

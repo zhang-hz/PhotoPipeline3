@@ -1194,6 +1194,17 @@ struct MainWindow::Impl {
     // GUI-R2（docs/gui-review-0.3.0-r2.md 回归探针，只增）：下拉一致性 / 格式卡对齐 /
     // 弹窗 caption 关闭钮 / 运行重入守卫 —— 四条自检行各钉一轮排查的一条结论。
     void smoke_probe_gui_r2();
+    // —— M7-R2E2（第 3 波常驻探针；只增，冻结断言面不动）——
+    // R-218：RTL 逻辑坐标/镜像关系（row_rects/check_rect 单源重载 + 逻辑边距随向）
+    void smoke_probe_rtl_mirror();
+    // UX-2：勾选批量三态计数 + 过滤作用面 + 快捷键可达（check-all）
+    void smoke_probe_check_all();
+    // UX-1：卡片右键菜单项数 + 首项文案（context-menu；①⑥⑦⑧⑨⑩⑪⑫）
+    void smoke_probe_context_menus();
+    // R-070/R-078：失败原因行取样 + 峰值线程行（run-reason）
+    void smoke_probe_run_reason();
+    // UX-8/UX-10.1：高级二级折叠 + 编码档位限幅联动（folds）
+    void smoke_probe_advanced_folds();
     static QString repo_root();
 #endif // PP_BUILD_DEV
 };

@@ -145,12 +145,19 @@ public:
         opt.text.clear(); // 文本自绘（底/选中/缩进仍走基类）
         QStyledItemDelegate::paint(painter, opt, index);
 
+        // R-218（M7-R2E2）：行内几何走逻辑坐标（pill 贴 leading）+ 单点镜像；LTR 逐字节不变。
+        const bool rtl = opt.direction == Qt::RightToLeft;
+        const auto mirror_x = [&opt](int x, int w) {
+            return opt.rect.left() + opt.rect.right() - (x + w - 1);
+        };
         int left = opt.rect.left() + 2;
         if (batch) { // 中性 pill「批」（R4 高 16 r3 + 9.5px/700；色 = 中性档）
             const theme::PillPaint paint = theme::pill_paint(tokens_, theme::kPillNeutral);
             const int w = pill_width();
-            const QRectF box(left, opt.rect.center().y() - theme::Metrics::pill_h / 2.0 + 0.5, w,
-                             theme::Metrics::pill_h);
+            QRectF box(left, opt.rect.center().y() - theme::Metrics::pill_h / 2.0 + 0.5, w,
+                       theme::Metrics::pill_h);
+            if (rtl)
+                box.moveLeft(mirror_x(left, w));
             painter->save();
             painter->setRenderHint(QPainter::Antialiasing, true);
             painter->setPen(QPen(paint.bd, 1.0));
@@ -167,10 +174,13 @@ public:
         painter->save();
         painter->setFont(font);
         painter->setPen(changed ? tokens_.accent : tokens_.text);
-        const QRect text_rect(left, opt.rect.top(), std::max(0, opt.rect.right() - left),
-                              opt.rect.height());
-        painter->drawText(text_rect, Qt::AlignLeft | Qt::AlignVCenter,
-                          QFontMetrics(font).elidedText(text, Qt::ElideRight, text_rect.width()));
+        const int tw = std::max(0, opt.rect.right() - left);
+        QRect text_rect(left, opt.rect.top(), tw, opt.rect.height());
+        if (rtl)
+            text_rect.moveLeft(mirror_x(left, tw));
+        painter->drawText(text_rect, (rtl ? Qt::AlignRight : Qt::AlignLeft) | Qt::AlignVCenter,
+                          QFontMetrics(font).elidedText(text, rtl ? Qt::ElideLeft : Qt::ElideRight,
+                                                        text_rect.width()));
         painter->restore();
     }
 

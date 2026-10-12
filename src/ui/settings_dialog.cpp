@@ -45,6 +45,7 @@
 #include <QPainter>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QShowEvent>
 #include <QSlider>
 #include <QSpinBox>
@@ -65,6 +66,7 @@
 #include "platform/paths.h"     // R-072：settings_file() 读写自检
 #include "ui/formkit.h"
 #include "ui/icons.h"
+#include "ui/leading_indent.h" // R-218（M7-R2E2）：逻辑边距（标题栏）单源
 #include "ui/theme.h"
 
 namespace pp::ui {
@@ -505,10 +507,14 @@ QString dialog_qss(const theme::Tokens &t) {
     // 页签（下划线式；EXIF 编辑器的 QTabWidget 与设置弹窗自绘页签同一视觉口径 —— 修 4-06）
     qss += QStringLiteral("QTabWidget::pane { border: none; border-top: 1px solid ") + css(t.line) +
            QStringLiteral("; }\n");
+    // R-218（M7-R2E2）：页签间距贴 leading —— LTR=margin-right / RTL=margin-left（值 2px 不变；
+    // LTR 产出串逐字节不变）。
+    const QString tab_margin =
+        QStringLiteral("; padding: 5px 12px 6px; margin-") +
+        QLatin1String(QApplication::layoutDirection() == Qt::RightToLeft ? "left" : "right") +
+        QStringLiteral(": 2px; border: none; ");
     qss += QStringLiteral("QTabBar::tab { background: transparent; color: ") + css(t.text2) +
-           QStringLiteral("; padding: 5px 12px 6px; margin-right: 2px; border: none; "
-                          "border-bottom: ") +
-           QString::number(kTabUnderlinePx) +
+           tab_margin + QStringLiteral("border-bottom: ") + QString::number(kTabUnderlinePx) +
            QStringLiteral("px solid transparent; font-weight: "
                           "600; }\n");
     qss += QStringLiteral("QTabBar::tab:selected { color: ") + css(t.text) +
@@ -549,7 +555,8 @@ TitleBar make_title_bar(QWidget *parent, icons::Name icon, const QString &title)
     bar->setObjectName(QLatin1String(kTitleBarName));
     bar->setFixedHeight(kTitleBarH);
     auto *line = new QHBoxLayout(bar);
-    line->setContentsMargins(kTitlePadLeft, 0, 4, 0);
+    // R-218（M7-R2E2）：标题栏内距走逻辑边距（LTR=左起 / RTL 镜像）；LTR 值逐字节不变。
+    set_logical_margins(bar, kTitlePadLeft, 4);
     line->setSpacing(theme::Metrics::brand_gap); // tokens.css .dlg-tb{gap:8px}
     auto *icon_label = new IconLabel(icon, kTitleIconPx, bar);
     icon_label->setObjectName(QStringLiteral("pp-dlg-title-icon"));
@@ -618,15 +625,18 @@ protected:
     void nextCheckState() override {} // 勾选态由 UnderlineTabs 统一持有
 
     void keyPressEvent(QKeyEvent *event) override {
+        // R-218（M7-R2E2）：左右方向键随布局方向镜像（RTL 下「下一页签」在视觉左侧）；
+        // LTR 路径逐字节不变。
+        const int fwd = layoutDirection() == Qt::RightToLeft ? -1 : +1;
         switch (event->key()) {
         case Qt::Key_Right:
         case Qt::Key_Down:
-            owner_->step(+1);
+            owner_->step(fwd);
             event->accept();
             return;
         case Qt::Key_Left:
         case Qt::Key_Up:
-            owner_->step(-1);
+            owner_->step(-fwd);
             event->accept();
             return;
         default:
@@ -829,6 +839,16 @@ GeomProbeReport settings_geom_probe(const QDialog &dialog) {
     const auto *page_run = dialog.findChild<QWidget *>(QLatin1String(kPageRun));
     const auto *mode = dialog.findChild<formkit::SegmentedControl *>(QLatin1String(kThemeMode));
 
+    // R-281：QSS 规则存在性 —— 语义级匹配（选择器 + background 色值逐字；排版空白宽容）
+    const QString qss_text = dialog.styleSheet();
+    const auto ok_filled_qss = [&qss_text, &t] {
+        const QRegularExpression re(
+            QStringLiteral("QPushButton\\[%1=\"%2\"\\]\\s*\\{\\s*background:\\s*%3")
+                .arg(QLatin1String(kFieldProperty), QLatin1String(kFieldPrimary),
+                     QRegularExpression::escape(theme::css_color(t.accent))));
+        return re.match(qss_text).hasMatch();
+    };
+
     struct Expect {
         const char *name;
         int got;
@@ -873,15 +893,10 @@ GeomProbeReport settings_geom_probe(const QDialog &dialog) {
              ? 1
              : 0,
          1},
-        // 主按钮实心 = QSS 规则存在且底色 = 令牌 accent（A6：色值单源）
-        {"ok_filled_qss",
-         dialog.styleSheet().contains(QStringLiteral("QPushButton[%1=\"%2\"] { background: %3")
-                                          .arg(QLatin1String(kFieldProperty),
-                                               QLatin1String(kFieldPrimary),
-                                               theme::css_color(t.accent)))
-             ? 1
-             : 0,
-         1},
+        // 主按钮实心 = QSS 规则存在且底色 = 令牌 accent（A6：色值单源）。
+        // R-281（M7-R2E2）：原断言与 QSS 串的**排版格式**（空格/换行）硬绑定 —— 语义不变换锚为
+        // 空白宽容正则（选择器属性名/值/色值仍逐字匹配，严格度不降）。
+        {"ok_filled_qss", ok_filled_qss() ? 1 : 0, 1},
         // §11：焦点环存在 + 系统虚线框关掉（outline: none）
         {"focus_ring",
          dialog.findChild<QWidget *>(QLatin1String(kFocusRingName)) != nullptr ? 1 : 0, 1},
@@ -933,10 +948,14 @@ GeomProbeReport settings_geom_probe(const QDialog &dialog) {
                            .arg(e.got)
                            .arg(e.want);
     }
+    // —— 焦点环跟随（§11）：环位 = 焦点控件盒外 2px，描边色 = 令牌 accent ——
+    // R-275（M7-R2E2）：本段原在函数尾部整段重复一遍（+ 誓语 `if (...) (void)page_general;`
+    // 死句），checked 虚 +3 —— 重复段已删、计数只留本处一次（断言集合不变、只增不减口径不变）。
     if (mode != nullptr) {
         if (QWidget *first = mode->segment(0)) {
+            // R-281：不 pump 事件循环 —— FocusRing 同步挂在 focusChanged（直接连接）上，
+            // setFocus 当拍即 sync()；探针不再有进程级副作用。
             first->setFocus(Qt::OtherFocusReason);
-            QApplication::processEvents();
             auto *ring = dynamic_cast<FocusRing *>(
                 dialog.findChild<QWidget *>(QLatin1String(kFocusRingName)));
             out.checked += 3;
@@ -1010,6 +1029,8 @@ GeomProbeReport settings_geom_probe(const QDialog &dialog) {
                             want_tabs.join(QLatin1Char('/')));
     }
     // —— alpha 行三方一致（修 4-15/4-16：滑杆值 / 预览色块 / 端标同源同侧）——
+    // R-281：本段是**行为取证**（非几何）—— 两端取值 = save → set → read → restore 四步，
+    // 终态还原为进探针时的值（下方 setValue(keep)），不给被检对象留残留状态。
     if (slider != nullptr && swatch != nullptr && page_run != nullptr) {
         const int keep = slider->value();
         const QLabel *black = nullptr;
@@ -1045,28 +1066,6 @@ GeomProbeReport settings_geom_probe(const QDialog &dialog) {
         }
     } else {
         out.bad << QStringLiteral("alpha_row=missing");
-    }
-    // —— 焦点环跟随（§11）：环位 = 焦点控件盒外 2px，描边色 = 令牌 accent ——
-    if (mode != nullptr && page_general != nullptr)
-        (void)page_general;
-    if (mode != nullptr) {
-        if (QWidget *first = mode->segment(0)) {
-            first->setFocus(Qt::OtherFocusReason);
-            QApplication::processEvents();
-            auto *ring = dynamic_cast<FocusRing *>(
-                dialog.findChild<QWidget *>(QLatin1String(kFocusRingName)));
-            out.checked += 3;
-            if (ring == nullptr || ring->target() != first)
-                out.bad << QStringLiteral("focus_ring_target=wrong");
-            else if (ring->geometry() != ring->target_rect().adjusted(-kFocusRingPad,
-                                                                      -kFocusRingPad, kFocusRingPad,
-                                                                      kFocusRingPad))
-                out.bad << QStringLiteral("focus_ring_geom=wrong");
-            else if (ring->pen_color() != t.accent)
-                out.bad << QStringLiteral("focus_ring_color=%1(期望 %2)")
-                               .arg(theme::css_color(ring->pen_color()),
-                                    theme::css_color(t.accent));
-        }
     }
     return out;
 }

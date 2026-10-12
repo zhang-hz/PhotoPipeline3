@@ -106,6 +106,31 @@ struct ScannedPath {
     qint64 size_bytes = -1; // M5-T5 行内「大小」（-1 = 未知）
 };
 
+// ============================================================================================
+// R-326 / R-205（M7-R2E2）：FileRow 状态矩阵与 FileListModel **不变量成文**（单点声明）
+// Contract: docs/deep-review-0.3.2.md 附录 C.1（15 条中本文件拥有的 1–8；9–11 归 preview_panel、
+// 12 归 mainwindow、13 归 thumbnails、14 归 settings_dialog、15 为跨面同步纪律）
+// —— 原散落于各成员注释的「不变量 + 破坏入口」在此单点成文；实现处以 `Inv N` 引用本节。
+// 状态矩阵（R-205）：FileRow = 7 正交维度（probe_ok / state 12 态 / checked / exception /
+// zero_byte_output / group_scanned / thumb 非空），名义组合 >1500，由下列不变量收敛。
+//   1. known_paths_ == 行集去重键互异｜破坏入口：remove_rows 的 erase 键与 apply_scanned_paths/
+//      add_paths 插入键须同为 dedup_key 口径（Windows 大小写折叠后互异）。
+//   2. probe_ok==true ⟺ error 空且 info 有效；!probe_ok∧error≠∅ = 终态失败永不重新入队
+//      （Inv 3 的入口）｜破坏入口：apply_thumb 覆写（R-227 已按 stale-guard + 状态序守卫）。
+//   3. FileState 与探测耦合：Failed 只由「探测失败且未进流水线」或调度器写入｜破坏入口同 2。
+//   4. checked 默认 true；checked_count ≤ size；check_class/invert_class 只动命中类行
+//      （checked_/exceptions_ 增量计数与逐点改动同步维护）。
+//   5. scan_pending_ == scan_inflight_.size()；group_scanned 置位永不重扫（磁盘变更不感知，
+//      设计口径）｜破坏入口：erase 键与插入键同值（= 1 的同一口径）。
+//   6. GroupKeyRole 只由 group_mode×GroupSource 决定；过滤不改键；set_group_mode 必发全量
+//      dataChanged。
+//   7. 代理层 groups_/row_group_/row_pos_ 与源行号严格同代（rebuild 原子，beginResetModel
+//      包裹）｜破坏入口：新源结构变化信号未接线（现接 rowsInserted/rowsRemoved/modelReset/
+//      layoutChanged + GroupKeyRole 去抖）。
+//   8. 折叠记忆与展开态一致：restore_selection 必须先于 expandAll（顺序不变量，调用方 =
+//      mainwindow 的 apply_group_view_state）。
+// ============================================================================================
+
 class FileListModel : public QAbstractListModel {
     Q_OBJECT
 public:
@@ -313,6 +338,12 @@ public:
     // 竖滚动条出现后色点与胶囊错位（deep-review R-276/E6-09）。两路绘制一律经本函数取矩形。
     static QRect visible_row_rect(const QRect &item_rect, const QAbstractItemView *view);
 
+    // —— M7-R2E2 / R-218 加性追加（既有签名逐字不变；末尾追加式扩展）——
+    // RTL 逻辑坐标/镜像（docs/deep-review-0.3.2.md R-218/E4-16）：行几何的方向感知重载 ——
+    // rtl=false 与三参版逐值相同；rtl=true 四矩形绕 item_rect 中线镜像。镜像关系由 ui_smoke
+    // 的 rtl-mirror 探针钉死（同名单源：绘制与探针调同一函数）。
+    static RowRects row_rects(const QRect &item_rect, int pill_w, bool has_flag, bool rtl);
+
 private:
     theme::Tokens tokens_ = theme::tokens(theme::preferred_theme_mode());
 };
@@ -438,6 +469,9 @@ public:
 
     // 勾选框几何（mockup .cbx：13px r2；左内距 6px、纵向居中）——冒烟点击命中用同一函数
     static QRect check_rect(const QRect &item_rect);
+    // —— M7-R2E2 / R-218 加性追加（既有签名逐字不变；末尾追加式扩展）——
+    // RTL 镜像重载：rtl=false 与单参版逐值相同；绘制与 FileTreeView 命中判定同一条几何。
+    static QRect check_rect(const QRect &item_rect, bool rtl);
     // 勾选列宽（单源：内距 + theme::Metrics::checkbox_px + 间隙；mainwindow 不再手写 6+15+8）
     static int check_column_width();
     static constexpr int kGroupHeaderHeight = 26; // .ghead{padding:7px 6px 4px} + 10px 行高

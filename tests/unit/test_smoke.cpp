@@ -10,6 +10,7 @@
 #include <variant>
 #include <vector>
 
+#include "ui/format_policy.h"   // M7-R2E2（B.3）：输出页格式能力/预选策略纯核
 #include "ui/run_rows_model.h"  // M7-WP9（B.2）：运行页行模型纯语义
 #include "ui/run_status_text.h" // M7-WP9（B.2）：运行页文案/数值格式纯函数
 
@@ -193,6 +194,67 @@ int main() {
         check(write_stage_text(pp::Stage::Flatten) == QString::fromUtf8("合成"), "write(Flatten)");
         check(write_stage_text(pp::Stage::MetaWrite) == QString::fromUtf8("写入"),
               "write(MetaWrite)");
+    }
+
+    // 6. M7-R2E2 / 附录 B.3「format_policy」（断言只增；既有 1–5 节逐字不动）：
+    //    R-191 单源谓词真值表 + 位深交集 + 后端归一序 + 载荷解析（docs/deep-review-0.3.2.md
+    //    R-189/R-191/E3-13；UI 侧 page_output.cpp 同一函数消费）。
+    {
+        using pp::ui::fmtpolicy::alpha_combo;
+        using pp::ui::fmtpolicy::avif_preselect_needed;
+        using pp::ui::fmtpolicy::intersect_bitdepths;
+        using pp::ui::fmtpolicy::merge_backend_order;
+        using pp::ui::fmtpolicy::parse_csv_ints;
+
+        // 6.1 载荷解析（坏 token 跳过；空串 → 空集）
+        const std::vector<int> csv = parse_csv_ints("8,10,16");
+        check(csv.size() == 3 && csv[0] == 8 && csv[1] == 10 && csv[2] == 16,
+              "parse_csv_ints(\"8,10,16\") == {8,10,16}");
+        check(parse_csv_ints("").empty(), "parse_csv_ints(空) == 空");
+        check(parse_csv_ints("8,abc,16").size() == 2, "parse_csv_ints 坏 token 跳过");
+
+        // 6.2 位深交集（静态集顺序保持；探测缺项剔除）
+        const std::vector<int> inter = intersect_bitdepths({8, 10, 16}, {16, 8});
+        check(inter.size() == 2 && inter[0] == 8 && inter[1] == 16, "intersect_bitdepths 保静态序");
+        check(intersect_bitdepths({8}, {16}).empty(), "intersect_bitdepths 空交 = 空");
+
+        // 6.3 后端归一序（静态序优先；内省独有项随后）
+        std::vector<pp::BackendDef> statics;
+        pp::BackendDef svt;
+        svt.id = "svt-av1";
+        pp::BackendDef aom;
+        aom.id = "libaom";
+        statics.push_back(svt);
+        statics.push_back(aom);
+        std::vector<pp::BackendDef> live;
+        pp::BackendDef extra;
+        extra.id = "kvazaar";
+        live.push_back(aom);
+        live.push_back(extra);
+        live.push_back(svt);
+        const std::vector<pp::BackendDef> merged = merge_backend_order(statics, live);
+        check(merged.size() == 3 && merged[0].id == "svt-av1" && merged[1].id == "libaom" &&
+                  merged[2].id == "kvazaar",
+              "merge_backend_order 静态序优先 + 内省独有项追加");
+
+        // 6.4 alpha_combo 真值表（R-191：提示可见性 / 预选共同前置的唯一实现）
+        check(alpha_combo("avif", false, true, 10), "alpha_combo(avif,alpha,10) == true");
+        check(!alpha_combo("avif", true, true, 10), "alpha_combo(仅元数据) == false");
+        check(!alpha_combo("avif", false, false, 10), "alpha_combo(无 alpha) == false");
+        check(!alpha_combo("avif", false, true, 8), "alpha_combo(8bit) == false");
+        check(!alpha_combo("heif", false, true, 10), "alpha_combo(非 avif) == false");
+
+        // 6.5 avif 预选触发条件（§9.1 + R-066：用户手改 / 预设落值不预选）
+        check(avif_preselect_needed("avif", false, true, 10, "svt-av1", false, false, true),
+              "preselect(条件齐) == true");
+        check(!avif_preselect_needed("avif", false, true, 10, "svt-av1", true, false, true),
+              "preselect(用户改过后端) == false");
+        check(!avif_preselect_needed("avif", false, true, 10, "svt-av1", false, true, true),
+              "preselect(预设落值中) == false");
+        check(!avif_preselect_needed("avif", false, true, 10, "libaom", false, false, true),
+              "preselect(后端非 svt-av1) == false");
+        check(!avif_preselect_needed("avif", false, true, 10, "svt-av1", false, false, false),
+              "preselect(无 libaom) == false");
     }
 
     if (g_failed == 0) {

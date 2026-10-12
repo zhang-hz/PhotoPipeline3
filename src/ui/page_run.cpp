@@ -99,6 +99,7 @@
 #include "core/progress.h"      // StageWeights（§7.2 单源）
 #include "ui/formkit.h"         // M5-T9：行构造器（C2）+ 胶囊/进度条（C8）/令牌（C1）
 #include "ui/icons.h"           // M5-T3：状态标记/取消钮 ■ 一律矢量图标（C3）
+#include "ui/leading_indent.h"  // R-218（M7-R2E2）：逻辑边距（行首缩进）单源
 #include "ui/run_rows_model.h"  // M7-WP9（B.2）：行模型纯语义（runpage）
 #include "ui/run_status_text.h" // M7-WP9（B.2）：文案/数值格式纯函数（runpage）
 #include "ui/theme.h"
@@ -144,6 +145,9 @@ constexpr const char *kRunSummary = "summary"; // 卡底摘要句
 // R-020/R-320（M7-WP4）：ElidedLabel 的 7 份逐字拷贝收敛到 formkit 唯一实现
 // （本文件原 30+ 行自拷类删除；行为逐位等价 —— 全文 + ppFullText + tooltip + 省略号）。
 using ElidedLabel = formkit::ElidedLabel;
+
+// R-218（M7-R2E2）：行首缩进 = 逻辑边距（leading 在左）—— 单源在 ui/leading_indent.h
+// （LTR 落左 / RTL 落右 + LayoutDirectionChange 重放；LTR 初值逐字节不变）。
 
 // 总览合成条（§7.3「进度(合成条)」）：QProgressBar 子类 —— **无障碍角色仍是 progressbar、
 // 暴露值 = 显示的百分比**（修 3-07），自绘分段（mockup `.pbar i.done|i.warn|i.fail|i.comp`）。
@@ -191,14 +195,16 @@ protected:
         p.setPen(Qt::NoPen);
         const double seg[5] = {done_, warn_, failed_, other_, active_};
         const QColor colors[5] = {t.ok, t.warn, t.err, t.text3, t.accent};
-        qreal x = track.left();
+        // R-218（M7-R2E2）：段从行首（leading）铺起 —— LTR=左缘、RTL=右缘；LTR 路径逐字节不变。
+        const bool rtl = layoutDirection() == Qt::RightToLeft;
+        qreal x = rtl ? track.right() : track.left();
         for (int i = 0; i < 5; ++i) {
             const qreal w = track.width() * std::clamp(seg[i], 0.0, 1.0);
             if (w <= 0.0)
                 continue;
             p.setBrush(colors[i]);
-            p.drawRect(QRectF(x, track.top(), w, track.height()));
-            x += w;
+            p.drawRect(QRectF(rtl ? x - w : x, track.top(), w, track.height()));
+            x += rtl ? -w : w;
         }
     }
 
@@ -1405,7 +1411,7 @@ RowSkeleton make_row_skeleton(QWidget *parent, const RowNames &names, const them
     out.name->setProperty(kRunLabelProperty,
                           QString::fromLatin1(output_row ? kRunOName : kRunGName));
     if (output_row)
-        out.name->setContentsMargins(kOutIndent, 0, 0, 0); // mockup：只缩名称列
+        set_leading_indent(out.name, kOutIndent); // mockup：只缩名称列（R-218：逻辑边距）
     line->addWidget(out.name, 1);
     out.bar = new fk::ProgressStrip(out.row);
     out.bar->setObjectName(names.bar);
@@ -1731,7 +1737,7 @@ void build_rows(RunState *s, const QStringList &names) {
             out.reason->setObjectName(QStringLiteral("pp-run-reason-text-%1-%2").arg(i).arg(j));
             out.reason->setFont(theme::font(theme::Typography::small_px));
             out.reason->setProperty(kRunLabelProperty, QString::fromLatin1(kRunReason));
-            out.reason->setContentsMargins(kReasonIndent, 0, 0, 0);
+            set_leading_indent(out.reason, kReasonIndent); // R-218：逻辑边距（LTR=左/RTL=右）
             auto *reason_line = qobject_cast<QHBoxLayout *>(out.reason_row->layout());
             reason_line->addWidget(out.reason, 1);
             out.reason_row->setVisible(false);

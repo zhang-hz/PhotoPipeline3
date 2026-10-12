@@ -196,17 +196,39 @@ void draw_state_pill(QPainter *painter, const QRect &box, const theme::Tokens &t
     painter->restore();
 }
 
-// 选中面（修 3-17）：两列各画自己那半；左缘 2px 强调条只画在行首列（列 0）
+// 选中面（修 3-17）：两列各画自己那半；行首（leading）2px 强调条只画在行首列（列 0）。
+// R-218（M7-R2E2）：强调条贴**行首**（RTL = 物理右缘）；LTR 路径逐字节不变。
 void paint_selection(QPainter *painter, const QRect &item_rect, const theme::Tokens &t,
-                     bool first_column) {
+                     bool first_column, bool rtl) {
     painter->save();
     painter->fillRect(item_rect, FileDelegate::selection_fill(t));
     if (first_column) {
-        painter->fillRect(QRect(item_rect.left(), item_rect.top(), FileDelegate::kSelectionBarW,
-                                item_rect.height()),
-                          FileDelegate::selection_bar(t));
+        const int bar_x =
+            rtl ? item_rect.right() - FileDelegate::kSelectionBarW + 1 : item_rect.left();
+        painter->fillRect(
+            QRect(bar_x, item_rect.top(), FileDelegate::kSelectionBarW, item_rect.height()),
+            FileDelegate::selection_bar(t));
     }
     painter->restore();
+}
+
+// ============================================================================================
+// R-218（M7-R2E2）：RTL 逻辑坐标/镜像（docs/deep-review-0.3.2.md R-218/E4-16）
+//   自绘几何一律先在**逻辑坐标**（leading 在左）算好，再经 mirror_x 单点镜像到物理坐标；
+//   rtl=false 时全部原样返回 —— LTR 路径逐字节不变（golden/ui_smoke 冻结面背书）。
+//   镜像关系由 ui_smoke 的 rtl-mirror 探针钉死。
+// ============================================================================================
+
+// 物理 x' = bounds.left() + bounds.right() - r.right()（绕 bounds 中线镜像；LTR 恒等）
+QRect mirror_x(const QRect &r, const QRect &bounds) {
+    return QRect(bounds.left() + bounds.right() - r.right(), r.top(), r.width(), r.height());
+}
+
+bool rtl_of(const QStyleOptionViewItem &opt) { return opt.direction == Qt::RightToLeft; }
+
+// 行内文本对齐：leading 对齐（LTR = 左 / RTL = 右；与镜像后的信息区配套）
+Qt::Alignment text_align(bool rtl) {
+    return rtl ? Qt::Alignment(Qt::AlignRight) : Qt::Alignment(Qt::AlignLeft);
 }
 
 constexpr int kGroupCountAlphaPct = 80; // .cnt{opacity:.8}（节头计数）
@@ -1064,16 +1086,25 @@ QString FileDelegate::join_items(const QStringList &items, const QFontMetrics &f
     return out;
 }
 
-// R-276：行几何的**唯一输入口径** —— 视口右缘收口（竖滚动条出现后 item 比可见视口宽 ~14px，
-// 右对齐胶囊/色点会被裁或错位）。两路绘制（FileDelegate::paint / FileGroupDelegate 色点）
+// R-276：行几何的**唯一输入口径** —— 视口尾缘收口（竖滚动条出现后 item 比可见视口宽 ~14px，
+// 尾对齐胶囊/色点会被裁或错位）。两路绘制（FileDelegate::paint / FileGroupDelegate 色点）
 // 一律先经本函数，再进 row_rects（收口规则只写这一份）。
+// R-218（M7-R2E2）：收口边随方向镜像 —— LTR 收右缘（竖滚动条在右）/ RTL 收左缘（滚动条在左）；
+// LTR 分支逐字节不变（旧式只收右缘）。
 QRect FileDelegate::visible_row_rect(const QRect &item_rect, const QAbstractItemView *view) {
     QRect row_rect = item_rect;
     if (view != nullptr) {
+        const bool rtl = view->layoutDirection() == Qt::RightToLeft;
         const int visible_right =
             view->horizontalScrollBar()->value() + view->viewport()->width() - 1;
-        if (row_rect.right() > visible_right)
-            row_rect.setRight(visible_right);
+        if (!rtl) {
+            if (row_rect.right() > visible_right)
+                row_rect.setRight(visible_right);
+        } else {
+            const int visible_left = view->horizontalScrollBar()->value();
+            if (row_rect.left() < visible_left)
+                row_rect.setLeft(visible_left);
+        }
     }
     return row_rect;
 }
@@ -1097,6 +1128,21 @@ FileDelegate::RowRects FileDelegate::row_rects(const QRect &item_rect, int pill_
     const int text_x = rects.thumb.left() + thumb_px + kThumbTextGap;
     rects.text = QRect(text_x, item_rect.top() + kRowInsetY, std::max(0, right - text_x),
                        item_rect.height() - 2 * kRowInsetY);
+    return rects;
+}
+
+// R-218 / M7-R2E2 加性重载：rtl=false 与三参版逐值相同；rtl=true 四矩形绕 item_rect 中线镜像
+// （逻辑坐标算好再单点镜像；ui_smoke 的 rtl-mirror 探针钉死镜像关系）。
+FileDelegate::RowRects FileDelegate::row_rects(const QRect &item_rect, int pill_w, bool has_flag,
+                                               bool rtl) {
+    RowRects rects = row_rects(item_rect, pill_w, has_flag);
+    if (rtl) {
+        rects.thumb = mirror_x(rects.thumb, item_rect);
+        rects.pill = mirror_x(rects.pill, item_rect);
+        rects.text = mirror_x(rects.text, item_rect);
+        if (!rects.flag.isEmpty())
+            rects.flag = mirror_x(rects.flag, item_rect);
+    }
     return rects;
 }
 
@@ -1136,7 +1182,9 @@ void FileDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option,
 
     const QString state_label = index.data(FileListModel::StateTextRole).toString();
     const bool has_exception = index.data(FileListModel::ExceptionRole).toBool();
-    const RowRects rects = row_rects(row_rect, state_pill_width(state_label), has_exception);
+    // R-218：几何走逻辑坐标 + 单点镜像（RTL 时缩略图/信息区/胶囊/例外标记整体镜像）
+    const bool rtl = rtl_of(opt);
+    const RowRects rects = row_rects(row_rect, state_pill_width(state_label), has_exception, rtl);
 
     // 左：46×46 缩略图（r4 圆角；无缩略图 → --ctl 占位块，mockup .thumb{background:var(--ctl)}）
     painter->save();
@@ -1200,20 +1248,20 @@ void FileDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option,
         painter->setFont(name_draw_font);
         painter->setPen(t.text);
         painter->drawText(QRect(rects.text.left(), y, rects.text.width(), name_h),
-                          Qt::AlignLeft | Qt::AlignVCenter,
+                          text_align(rtl) | Qt::AlignVCenter,
                           name_fm.elidedText(name, Qt::ElideMiddle, rects.text.width()));
         y += name_h;
         painter->setFont(info_draw_font);
         painter->setPen(t.text3);
         if (!line2.isEmpty()) {
             painter->drawText(QRect(rects.text.left(), y, rects.text.width(), info_h),
-                              Qt::AlignLeft | Qt::AlignVCenter, line2);
+                              text_align(rtl) | Qt::AlignVCenter, line2);
             y += info_h;
         }
         if (!line3.isEmpty()) {
             painter->setPen(line3_is_error ? t.err : t.text3);
             painter->drawText(QRect(rects.text.left(), y, rects.text.width(), info_h),
-                              Qt::AlignLeft | Qt::AlignVCenter, line3);
+                              text_align(rtl) | Qt::AlignVCenter, line3);
         }
         painter->restore();
     }
@@ -1325,14 +1373,19 @@ void FileGroupProxyModel::schedule_rebuild() {
 void FileGroupProxyModel::on_source_data_changed(const QModelIndex &top_left,
                                                  const QModelIndex &bottom_right,
                                                  const QVector<int> &roles) {
-    // 文件行数据变化 → 原样转发给视图（勾选/缩略图/状态都靠它刷新）
+    // 文件行数据变化 → 原样转发给视图（勾选/缩略图/状态都靠它刷新）。
+    // R-203（M7-R2E2）：代理是两列结构（勾选列 + 行内容列），转发不得只出列 0 —— 此前只发
+    // mapFromSource 的单格，列 1 靠视图整行重绘续命（deep-review R-203/E6-08）。现按行发
+    // [列 0, 列 1] 的 dataChanged 区间（行数/roles 语义逐字不变）。
     if (sourceModel() == nullptr)
         return;
     for (int r = top_left.row(); r <= bottom_right.row(); ++r) {
         const QModelIndex src = sourceModel()->index(r, 0);
         const QModelIndex proxy = mapFromSource(src);
-        if (proxy.isValid())
-            emit dataChanged(proxy, proxy, roles);
+        if (proxy.isValid()) {
+            const QModelIndex last = index(proxy.row(), kColumnCount - 1, proxy.parent());
+            emit dataChanged(proxy, last.isValid() ? last : proxy, roles);
+        }
     }
     // 分组键变化 → 结构可能要变（去抖合并；不做逐行重建）
     for (int role : roles) {
@@ -1547,6 +1600,12 @@ QRect FileGroupDelegate::check_rect(const QRect &item_rect) {
                  box, box);
 }
 
+// R-218 / M7-R2E2 加性重载：rtl=false 与单参版逐值相同；rtl=true 镜像到列内另一侧。
+QRect FileGroupDelegate::check_rect(const QRect &item_rect, bool rtl) {
+    const QRect box = check_rect(item_rect);
+    return rtl ? mirror_x(box, item_rect) : box;
+}
+
 int FileGroupDelegate::check_column_width() {
     return kCheckInset + theme::Metrics::checkbox_px + kCheckGap;
 }
@@ -1567,11 +1626,19 @@ void FileGroupDelegate::paint(QPainter *painter, const QStyleOptionViewItem &opt
         font.setLetterSpacing(QFont::AbsoluteSpacing, 0.4f);
         painter->setFont(font);
         const QFontMetrics fm(font);
+        // R-218：文本锚点走逻辑坐标 + 单点镜像（RTL 时右起）；LTR 路径逐字节不变。
+        const bool rtl = rtl_of(option);
         const int left = option.rect.left() + kCheckInset;
         const int baseline_y = option.rect.top() + 7; // .ghead{padding:7px 6px 4px}
-        QColor label_color = t.text3;                 // = --txt3
-        painter->setPen(label_color);
-        painter->drawText(QPoint(left, baseline_y + fm.ascent()), text);
+        const auto draw_at = [&](int logical_x, const QString &s, const QColor &c) {
+            const int w = fm.horizontalAdvance(s);
+            const int x =
+                rtl ? (option.rect.left() + option.rect.right() - logical_x - w + 1) : logical_x;
+            painter->setPen(c);
+            painter->drawText(QPoint(x, baseline_y + fm.ascent()), s);
+        };
+        QColor label_color = t.text3; // = --txt3
+        draw_at(left, text, label_color);
         // 计数部分（.cnt{opacity:.8}）：覆盖重绘 " · N"（尾部），色更淡
         if (count >= 0) {
             const QString suffix = FileGroupProxyModel::header_text(QString(), count).mid(1);
@@ -1579,8 +1646,7 @@ void FileGroupDelegate::paint(QPainter *painter, const QStyleOptionViewItem &opt
             const QString prefix = text.left(cut);
             const int prefix_w = fm.horizontalAdvance(prefix);
             label_color.setAlphaF(float(kGroupCountAlphaPct) / 100.0f);
-            painter->setPen(label_color);
-            painter->drawText(QPoint(left + prefix_w, baseline_y + fm.ascent()), suffix);
+            draw_at(left + prefix_w, suffix, label_color);
         }
         painter->restore();
         return;
@@ -1596,10 +1662,11 @@ void FileGroupDelegate::paint(QPainter *painter, const QStyleOptionViewItem &opt
         QStyle *style = opt.widget != nullptr ? opt.widget->style() : QApplication::style();
         style->drawControl(QStyle::CE_ItemViewItem, &opt, painter, opt.widget);
         if (selected)
-            paint_selection(painter, option.rect, t, /*first_column=*/true);
+            paint_selection(painter, option.rect, t, /*first_column=*/true, rtl_of(option));
 
         // .cbx 13×13 r2（mockup：未勾选 = --ctl-bd 边框 + --card 底；勾选 = accent 填充 + 勾形）
-        const QRect box = check_rect(option.rect);
+        // R-218：勾选框贴行首（RTL = 镜像到列内另一侧）；命中判定同一条几何（check_rect 重载）
+        const QRect box = check_rect(option.rect, rtl_of(option));
         const bool on = index.data(Qt::CheckStateRole).toInt() == int(Qt::Checked);
         painter->save();
         painter->setRenderHint(QPainter::Antialiasing, true);
@@ -1624,18 +1691,22 @@ void FileGroupDelegate::paint(QPainter *painter, const QStyleOptionViewItem &opt
         return;
     const QString state_label = index.data(FileListModel::StateTextRole).toString();
     const bool has_exception = index.data(FileListModel::ExceptionRole).toBool();
-    // R-276：与 FileDelegate::paint 同一条输入口径（视口右缘收口后的行矩形）—— 原先这里用
+    // R-276：与 FileDelegate::paint 同一条输入口径（视口尾缘收口后的行矩形）—— 原先这里用
     // 未收口的 option.rect，竖滚动条出现后色点与胶囊错位。
     const QRect row_rect = FileDelegate::visible_row_rect(
         option.rect, qobject_cast<const QAbstractItemView *>(option.widget));
     if (row_rect.width() <= 0 || row_rect.height() <= 0)
         return;
+    // R-218：色点贴胶囊之前 —— 逻辑坐标算好再单点镜像（空间不足判据同一条，镜像前后等价）
+    const bool rtl = rtl_of(option);
     const FileDelegate::RowRects rects =
         row_rects(row_rect, state_pill_width(state_label), has_exception);
-    const QRect dot(rects.pill.left() - FileDelegate::kPillGap - kChipDotPx,
-                    row_rect.center().y() - kChipDotPx / 2, kChipDotPx, kChipDotPx);
+    QRect dot(rects.pill.left() - FileDelegate::kPillGap - kChipDotPx,
+              row_rect.center().y() - kChipDotPx / 2, kChipDotPx, kChipDotPx);
     if (dot.left() < rects.thumb.right() + 1)
         return; // 空间不足（极窄列）→ 不画，避免压到文件名
+    if (rtl)
+        dot = mirror_x(dot, row_rect);
     painter->save();
     painter->setRenderHint(QPainter::Antialiasing, true);
     painter->setPen(Qt::NoPen);
@@ -1677,7 +1748,8 @@ void FileTreeView::mouseReleaseEvent(QMouseEvent *event) {
             if (index.data(FileGroupProxyModel::GroupCountRole).isValid()) {
                 setExpanded(index, !isExpanded(index)); // 节头：单击即展开/折叠
             } else if (index.column() == FileGroupProxyModel::kCheckColumn &&
-                       FileGroupDelegate::check_rect(visualRect(index))
+                       FileGroupDelegate::check_rect(visualRect(index),
+                                                     layoutDirection() == Qt::RightToLeft)
                            .contains(event->position().toPoint())) {
                 const bool on = index.data(Qt::CheckStateRole).toInt() == int(Qt::Checked);
                 if (QAbstractItemModel *m = model()) {

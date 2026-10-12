@@ -133,6 +133,7 @@
 #include "ui/contextmenu.h" // UX-1：公共右键菜单件（单一构造点 + 12 类卡 actions）
 #include "ui/exif_editor.h"
 #include "ui/filelistmodel.h"
+#include "ui/leading_indent.h"  // R-218（M7-R2E2）：逻辑边距（标题栏）单源
 #include "ui/mainwindow_impl.h" // M7-WP9：Impl/壳层件共享层（探针 TU 同视图）
 #include "ui/page_meta.h"
 #include "ui/page_output.h"
@@ -557,8 +558,9 @@ void MainWindow::build_ui() {
     d.titlebar->setObjectName(QStringLiteral("pp-titlebar"));
     d.titlebar->setFixedHeight(theme::Metrics::toolbar_height);
     auto *top = new QHBoxLayout(d.titlebar);
-    top->setContentsMargins(theme::Metrics::titlebar_pad_left, 0,
-                            theme::Metrics::titlebar_pad_right, 0);
+    // R-218（M7-R2E2）：标题栏内距走逻辑边距（LTR 左 pad_left / RTL 镜像）；LTR 值逐字节不变。
+    set_logical_margins(d.titlebar, theme::Metrics::titlebar_pad_left,
+                        theme::Metrics::titlebar_pad_right);
     top->setSpacing(theme::Metrics::toolbar_gap); // .toolbar{gap:12px}
 
     // 品牌区（§3.3）：图标 20（矢量，accent）+ 标题 13/700 + 版本 pill 9.5（§4.2 徽标档）

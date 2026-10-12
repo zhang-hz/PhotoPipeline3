@@ -9,6 +9,17 @@
 // 迁移前逐字节等价。
 #include "ui/mainwindow_impl.h"
 
+#include "ui/contextmenu.h"    // UX-1：卡片右键菜单面（词表单源）
+#include "ui/leading_indent.h" // R-218：逻辑边距单源
+#include <QAbstractScrollArea>
+#include <QComboBox>
+#include <QContextMenuEvent>
+#include <QHBoxLayout>
+#include <QKeySequence>
+#include <QLabel>
+#include <QMenu>
+#include <QToolButton>
+
 #include <cstdio>
 #include <cstdlib>
 
@@ -4833,6 +4844,406 @@ void MainWindow::Impl::smoke_probe_verification() {
                        .arg(bad.join(QLatin1Char(' '))));
 }
 
+// ===========================================================================
+// M7-R2E2 · 第 3 波常驻探针（只增；冻结断言面 / 截图清单 / 冻结行逐字不动）
+// 需求来源：build/m7r2-d1/handoff.md ⑤（context-menu / check-all）、
+// build/m7r2-d2/handoff.md ⑤（context-menu / R-070 / R-078 / UX-8）、UX-10.1、R-218。
+// 口径（M5-A26）：逐探针一行自检 `UI-SMOKE <tag>:`；不新增截图（shots=12 冻结）。
+// ===========================================================================
+
+namespace {
+
+// UX-1：向宿主发 ContextMenu 事件 → attach_card_menu 的槽构造菜单（父 = 宿主）→ 取回断言。
+// 菜单 WA_DeleteOnClose：探针断言完 close() 即销毁，不留弹窗。
+QMenu *popup_card_menu(QWidget *host) {
+    if (host == nullptr)
+        return nullptr;
+    const auto last_menu = [host] {
+        // 「按分类打标 →」子菜单也是 host 的 findChildren 结果 —— 取**顶层**菜单（父 == host）
+        const QList<QMenu *> menus = host->findChildren<QMenu *>();
+        for (QMenu *m : menus) {
+            if (m->parentWidget() == host)
+                return m;
+        }
+        return menus.isEmpty() ? nullptr : menus.first();
+    };
+    const auto send_context = [](QWidget *target) {
+        QContextMenuEvent ev(QContextMenuEvent::Mouse, QPoint(4, 4));
+        QApplication::sendEvent(target, &ev);
+    };
+    send_context(host);
+    QMenu *menu = last_menu();
+    if (menu != nullptr)
+        return menu;
+    // QAbstractScrollArea（文件列表树）：ContextMenu 的自然落点是 viewport —— 补投一次
+    if (auto *scroll = qobject_cast<QAbstractScrollArea *>(host)) {
+        send_context(scroll->viewport());
+        menu = last_menu();
+    }
+    return menu;
+}
+
+// attach_card_menu 的宿主 = 自身/祖先中 contextMenuPolicy == CustomContextMenu 的最近者
+QWidget *menu_host_of(QWidget *from) {
+    for (QWidget *w = from; w != nullptr; w = w->parentWidget()) {
+        if (w->contextMenuPolicy() == Qt::CustomContextMenu)
+            return w;
+    }
+    return nullptr;
+}
+
+// 卡菜单断言：非分隔项逐条对齐 contextmenu 构造面（词表单源）+ 首项文案钉字面量（防回归）
+void expect_card_menu(const QString &tag, QWidget *host, const QString &first_text,
+                      const std::vector<contextmenu::Item> &want,
+                      const std::function<void(const QString &)> &fail, int &checked, int &bad) {
+    const auto expect = [&](bool ok, const QString &what) {
+        ++checked;
+        if (!ok) {
+            ++bad;
+            fail(QStringLiteral("context-menu：%1 %2").arg(tag, what));
+        }
+    };
+    QMenu *menu = popup_card_menu(host);
+    expect(menu != nullptr, QStringLiteral("菜单未弹出"));
+    if (menu == nullptr)
+        return;
+    QStringList got;
+    for (QAction *action : menu->actions()) {
+        if (!action->isSeparator())
+            got << action->text();
+    }
+    QStringList want_texts;
+    for (const contextmenu::Item &item : want) {
+        if (!item.separator)
+            want_texts << item.text;
+    }
+    expect(got == want_texts,
+           QStringLiteral("项集合 %1（期望 %2）")
+               .arg(got.join(QLatin1Char('/')), want_texts.join(QLatin1Char('/'))));
+    expect(!got.isEmpty() && got.first() == first_text,
+           QStringLiteral("首项 %1（期望 %2）")
+               .arg(got.isEmpty() ? QStringLiteral("<空>") : got.first(), first_text));
+    menu->close();
+}
+
+} // namespace
+
+// —— R-218：RTL 逻辑坐标/镜像（rtl-mirror）：镜像关系 + 逻辑边距随向，LTR 逐字节不变 ——
+void MainWindow::Impl::smoke_probe_rtl_mirror() {
+    int checked = 0;
+    int bad = 0;
+    const auto expect = [&](bool ok, const QString &what) {
+        ++checked;
+        if (!ok) {
+            ++bad;
+            smoke_fail(MainWindow::tr("rtl-mirror：%1").arg(what));
+        }
+    };
+    const QRect row(0, 0, 320, FileDelegate::kFileRowHeight);
+    const auto mirror = [&row](const QRect &r) {
+        return QRect(row.left() + row.right() - r.right(), r.top(), r.width(), r.height());
+    };
+    // 1) 行几何单源重载（FileDelegate::row_rects）：RTL 四矩形 = LTR 绕行矩形中线镜像
+    const FileDelegate::RowRects ltr = FileDelegate::row_rects(row, 48, true);
+    const FileDelegate::RowRects rtl = FileDelegate::row_rects(row, 48, true, true);
+    expect(rtl.thumb == mirror(ltr.thumb), QStringLiteral("row_rects.thumb 镜像"));
+    expect(rtl.pill == mirror(ltr.pill), QStringLiteral("row_rects.pill 镜像"));
+    expect(rtl.text == mirror(ltr.text), QStringLiteral("row_rects.text 镜像"));
+    expect(rtl.flag == mirror(ltr.flag), QStringLiteral("row_rects.flag 镜像"));
+    const FileDelegate::RowRects same = FileDelegate::row_rects(row, 48, true, false);
+    expect(same.thumb == ltr.thumb && same.pill == ltr.pill && same.text == ltr.text &&
+               same.flag == ltr.flag,
+           QStringLiteral("row_rects(rtl=false) 与三参版逐值相同"));
+    // 2) 勾选框几何（绘制与命中同一条）
+    const QRect check_ltr = FileGroupDelegate::check_rect(row);
+    expect(FileGroupDelegate::check_rect(row, true) == mirror(check_ltr),
+           QStringLiteral("check_rect 镜像"));
+    expect(FileGroupDelegate::check_rect(row, false) == check_ltr,
+           QStringLiteral("check_rect(rtl=false) 与单参版逐值相同"));
+    // 3) 逻辑边距（ui/leading_indent.h 单源）：方向切换重放（LTR 值 = 原 setContentsMargins）
+    {
+        QWidget scratch;
+        auto *lay = new QHBoxLayout(&scratch);
+        set_logical_margins(&scratch, 8, 4);
+        QMargins m = lay->contentsMargins();
+        expect(m.left() == 8 && m.right() == 4 && m.top() == 0 && m.bottom() == 0,
+               QStringLiteral("逻辑边距 LTR 落 leading"));
+        scratch.setLayoutDirection(Qt::RightToLeft);
+        m = lay->contentsMargins();
+        expect(m.left() == 4 && m.right() == 8, QStringLiteral("逻辑边距 RTL 镜像重放"));
+    }
+    {
+        QWidget scratch; // 无布局 → widget 路径（page_run 行缩进 / page_output 对轨缩进）
+        set_leading_indent(&scratch, 18);
+        QMargins m = scratch.contentsMargins();
+        expect(m.left() == 18 && m.right() == 0, QStringLiteral("行首缩进 LTR"));
+        scratch.setLayoutDirection(Qt::RightToLeft);
+        m = scratch.contentsMargins();
+        expect(m.left() == 0 && m.right() == 18, QStringLiteral("行首缩进 RTL 镜像"));
+    }
+    std::printf("UI-SMOKE rtl-mirror: checked=%d bad=%d\n", checked, bad);
+    std::fflush(stdout);
+}
+
+// —— UX-2：勾选批量三态计数 + 过滤作用面 + 快捷键可达（check-all）——
+void MainWindow::Impl::smoke_probe_check_all() {
+    int checked = 0;
+    int bad = 0;
+    const auto expect = [&](bool ok, const QString &what) {
+        ++checked;
+        if (!ok) {
+            ++bad;
+            smoke_fail(MainWindow::tr("check-all：%1").arg(what));
+        }
+    };
+    if (model == nullptr || proxy == nullptr || view == nullptr) {
+        smoke_fail(MainWindow::tr("check-all：文件列表未就绪"));
+        std::printf("UI-SMOKE check-all: checked=1 bad=1\n");
+        std::fflush(stdout);
+        return;
+    }
+    const std::size_t rows = model->size();
+    expect(rows > 0, QStringLiteral("列表非空（语料已入列）"));
+    // 三态计数（UX-2 语义）：全选 → rows；取消 → 0；反选逐档往返
+    model->set_all_checked(true);
+    expect(model->checked_count() == rows, QStringLiteral("勾选全部 → checked==rows"));
+    apply_visible_checks(CheckOp::None);
+    expect(model->checked_count() == 0, QStringLiteral("取消全部 → 0"));
+    apply_visible_checks(CheckOp::Invert);
+    expect(model->checked_count() == rows, QStringLiteral("反选（空集）→ rows"));
+    apply_visible_checks(CheckOp::Invert);
+    expect(model->checked_count() == 0, QStringLiteral("反选（全集）→ 0"));
+    // 过滤作用面 = 可见过滤行；勾选与过滤正交（过滤外行的勾选不因操作而动）
+    const QString prev_search = search != nullptr ? search->text() : QString();
+    if (search != nullptr) {
+        model->set_all_checked(true);
+        search->setText(QStringLiteral("png"));
+        pump(150);
+        std::size_t visible = 0;
+        for (std::size_t i = 0; i < rows; ++i) {
+            if (proxy->mapFromSource(model->index(static_cast<int>(i), 0)).isValid())
+                ++visible;
+        }
+        expect(visible > 0 && visible < rows, QStringLiteral("过滤后可见行 0<visible<rows"));
+        apply_visible_checks(CheckOp::None);
+        std::size_t visible_checked_left = 0;
+        std::size_t hidden_touched = 0;
+        for (std::size_t i = 0; i < rows; ++i) {
+            const bool is_visible =
+                proxy->mapFromSource(model->index(static_cast<int>(i), 0)).isValid();
+            if (is_visible && model->is_checked(i))
+                ++visible_checked_left;
+            if (!is_visible && !model->is_checked(i))
+                ++hidden_touched;
+        }
+        expect(visible_checked_left == 0, QStringLiteral("取消全部只作用于可见行"));
+        expect(hidden_touched == 0, QStringLiteral("过滤外行勾选不动（正交）"));
+        search->setText(prev_search);
+        pump(150);
+        model->set_all_checked(true);
+    }
+    // 快捷键可达（Ctrl+A / Ctrl+Shift+A / Ctrl+D；WidgetWithChildrenShortcut 挂列表焦点域）
+    QStringList seqs;
+    for (QAction *action : view->actions())
+        seqs << action->shortcut().toString();
+    expect(seqs.contains(QKeySequence(QKeySequence::SelectAll).toString()),
+           QStringLiteral("Ctrl+A 全选行可达"));
+    expect(seqs.contains(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_A).toString()),
+           QStringLiteral("Ctrl+Shift+A 勾选全部可达"));
+    expect(seqs.contains(QKeySequence(Qt::CTRL | Qt::Key_D).toString()),
+           QStringLiteral("Ctrl+D 取消全部勾选可达"));
+    std::printf("UI-SMOKE check-all: checked=%d bad=%d rows=%llu\n", checked, bad,
+                static_cast<unsigned long long>(rows));
+    std::fflush(stdout);
+}
+
+// —— UX-1：卡片右键菜单（context-menu）：①②③④⑤⑥⑦⑧⑨⑩⑪⑫ 逐卡弹一次 ——
+void MainWindow::Impl::smoke_probe_context_menus() {
+    int checked = 0;
+    int bad = 0;
+    const std::function<void(const QString &)> fail = [this](const QString &reason) {
+        smoke_fail(reason);
+    };
+    const auto host_of = [](QWidget *root, const char *descendant) {
+        return root != nullptr
+                   ? menu_host_of(root->findChild<QWidget *>(QString::fromLatin1(descendant)))
+                   : nullptr;
+    };
+    struct CardMenu {
+        const char *tag;
+        QWidget *host;
+        QString first;
+        std::vector<contextmenu::Item> want;
+    };
+    std::vector<CardMenu> cards;
+    // ① 文件列表（宿主 = view）
+    cards.push_back({"file-list", view, QString::fromUtf8("勾选全部"),
+                     contextmenu::file_list_actions(contextmenu::FileListIntents{})});
+    // ②③④⑤ 元数据页四卡（宿主 = 卡框；卡头 pill 为稳定锚）
+    cards.push_back({"meta-info", host_of(page_meta, "pp-meta-info-pill"),
+                     QString::fromUtf8("复制全部信息"),
+                     contextmenu::info_card_actions(contextmenu::InfoCardIntents{})});
+    cards.push_back({"meta-time", host_of(page_meta, "pp-meta-time-pill"),
+                     QString::fromUtf8("启用"),
+                     contextmenu::time_card_actions(contextmenu::TimeCardIntents{})});
+    cards.push_back({"meta-gps", host_of(page_meta, "pp-meta-gps-pill"), QString::fromUtf8("启用"),
+                     contextmenu::gps_card_actions(contextmenu::GpsCardIntents{})});
+    cards.push_back({"meta-privacy", host_of(page_meta, "pp-meta-privacy-pill"),
+                     QString::fromUtf8("启用"),
+                     contextmenu::privacy_card_actions(contextmenu::PrivacyCardIntents{})});
+    // ⑥⑦⑨ 输出页三卡
+    cards.push_back({"out-format", host_of(page_output, "pp-tiles"), QString::fromUtf8("全选格式"),
+                     contextmenu::format_card_actions(contextmenu::FormatCardIntents{})});
+    cards.push_back({"out-global", host_of(page_output, "pp-out-root-edit"),
+                     QString::fromUtf8("重置为默认"),
+                     contextmenu::global_card_actions(contextmenu::GlobalCardIntents{})});
+    cards.push_back({"out-preset", host_of(page_output, "pp-preset-row"),
+                     QString::fromUtf8("另存为预设…"),
+                     contextmenu::preset_card_actions(contextmenu::PresetCardIntents{})});
+    // ⑧ 格式参数卡（宿主 = ParamForm 自身；从核心区向上找）
+    cards.push_back({"param-card", host_of(page_output, "pp-core-area"),
+                     QString::fromUtf8("重置为默认"),
+                     contextmenu::param_card_actions(contextmenu::ParamCardIntents{})});
+    // ⑩⑪⑫ 运行页三卡
+    cards.push_back({"run-overview", host_of(page_run, "pp-run-state-pill"),
+                     QString::fromUtf8("查看完整日志…"),
+                     contextmenu::run_overview_actions(contextmenu::RunOverviewIntents{})});
+    cards.push_back({"run-task", host_of(page_run, "pp-run-tasks-hint"),
+                     QString::fromUtf8("复制失败原因"),
+                     contextmenu::task_row_actions(contextmenu::TaskRowIntents{})});
+    cards.push_back({"run-logs", host_of(page_run, "pp-run-log-name"),
+                     QString::fromUtf8("复制日志"),
+                     contextmenu::log_tail_actions(contextmenu::LogTailIntents{})});
+    for (const CardMenu &card : cards) {
+        expect_card_menu(QString::fromLatin1(card.tag), card.host, card.first, card.want, fail,
+                         checked, bad);
+    }
+    std::printf("UI-SMOKE context-menu: cards=%d checked=%d bad=%d\n",
+                static_cast<int>(cards.size()), checked, bad);
+    std::fflush(stdout);
+}
+
+// —— R-070/R-078：失败原因行取样 + 峰值线程行（run-reason）——
+void MainWindow::Impl::smoke_probe_run_reason() {
+    int checked = 0;
+    int bad = 0;
+    const auto expect = [&](bool ok, const QString &what) {
+        ++checked;
+        if (!ok) {
+            ++bad;
+            smoke_fail(MainWindow::tr("run-reason：%1").arg(what));
+        }
+    };
+    if (page_run == nullptr) {
+        smoke_fail(MainWindow::tr("run-reason：运行页未就绪"));
+        std::printf("UI-SMOKE run-reason: checked=1 bad=1\n");
+        std::fflush(stdout);
+        return;
+    }
+    // R-078：峰值线程行（结束态读数非「—」+ tooltip 写明估算口径）
+    const auto *threads = page_run->findChild<QLabel *>(QStringLiteral("pp-run-threads"));
+    const auto *threads_row = page_run->findChild<QWidget *>(QStringLiteral("pp-run-threads-row"));
+    expect(threads != nullptr && threads_row != nullptr, QStringLiteral("峰值线程行存在"));
+    if (threads != nullptr) {
+        expect(threads->text() != QStringLiteral("—"),
+               QStringLiteral("结束态峰值线程非「—」（got %1）").arg(threads->text()));
+        expect(threads->toolTip().contains(QStringLiteral("估算")),
+               QStringLiteral("tooltip 写明估算口径"));
+    }
+    // R-070：失败原因行「└ 原因：%1」—— 中文分类可见 + 原始引擎串进 tooltip
+    int reason_seen = 0;
+    QString sample_text;
+    QString sample_tip;
+    for (QLabel *label : page_run->findChildren<QLabel *>()) {
+        if (!label->objectName().startsWith(QLatin1String("pp-run-reason-text-")))
+            continue;
+        ++reason_seen;
+        if (sample_text.isEmpty()) {
+            sample_text = label->text();
+            sample_tip = label->toolTip();
+        }
+    }
+    expect(reason_seen > 0, QStringLiteral("失败原因行存在（03d 探针态四类同行）"));
+    if (!sample_text.isEmpty()) {
+        expect(sample_text.contains(QStringLiteral("└ 原因：")),
+               QStringLiteral("原因行含「└ 原因：%1」").arg(sample_text));
+        const QChar head = sample_text.size() > 5 ? sample_text.at(5) : QChar();
+        expect(head.isLetter() && head.unicode() > 127,
+               QStringLiteral("原因行分类为中文（R-070 error_text）"));
+        expect(!sample_tip.isEmpty(), QStringLiteral("原始引擎串进 tooltip"));
+    }
+    std::printf("UI-SMOKE run-reason: checked=%d bad=%d reasons=%d\n", checked, bad, reason_seen);
+    std::fflush(stdout);
+}
+
+// —— UX-8/UX-10.1：高级二级折叠 + 编码档位限幅联动（folds）——
+void MainWindow::Impl::smoke_probe_advanced_folds() {
+    int checked = 0;
+    int bad = 0;
+    const auto expect = [&](bool ok, const QString &what) {
+        ++checked;
+        if (!ok) {
+            ++bad;
+            smoke_fail(MainWindow::tr("folds：%1").arg(what));
+        }
+    };
+    if (page_output == nullptr) {
+        smoke_fail(MainWindow::tr("folds：输出页未就绪"));
+        std::printf("UI-SMOKE folds: checked=1 bad=1\n");
+        std::fflush(stdout);
+        return;
+    }
+    const QString prev = page_output->current_format();
+    page_output->select_format(QStringLiteral("jxl")); // 静态表参数面：子分组最全
+    // UX-8：子分组折叠头（pp-advanced-group-N）+ 默认只展开首组 + 「N 项」计数
+    // （组数随格式参数面而定 —— 内省格式（heif/avif）无 group 回落单组属实况，见 R-2D2 UX-8）
+    int groups_seen = 0;
+    int expanded = 0;
+    int counted = 0;
+    for (int g = 0; g < 4; ++g) {
+        QWidget *header =
+            page_output->findChild<QWidget *>(QStringLiteral("pp-advanced-group-%1").arg(g));
+        if (header == nullptr)
+            continue;
+        ++groups_seen;
+        for (QToolButton *toggle : header->findChildren<QToolButton *>()) {
+            if (toggle->isCheckable()) {
+                if (toggle->isChecked())
+                    ++expanded;
+                break;
+            }
+        }
+        for (QLabel *label : header->findChildren<QLabel *>()) {
+            if (label->text().contains(QStringLiteral("项"))) {
+                ++counted;
+                break;
+            }
+        }
+    }
+    expect(groups_seen >= 1, QStringLiteral("子分组折叠头存在（got %1）").arg(groups_seen));
+    expect(expanded == 1, QStringLiteral("默认只展开首组（got %1）").arg(expanded));
+    expect(counted == groups_seen,
+           QStringLiteral("折叠头「N 项」计数齐（got %1/%2）").arg(counted).arg(groups_seen));
+    // UX-10.1：编码档位（pp-profile-combo）→ 档位说明/兼容性提示行
+    page_output->select_format(QStringLiteral("avif"));
+    auto *profile = page_output->findChild<QComboBox *>(QStringLiteral("pp-profile-combo"));
+    expect(profile != nullptr, QStringLiteral("avif 页签有编码档位行"));
+    if (profile != nullptr && profile->count() >= 3) {
+        profile->setCurrentIndex(2); // High（4:4:4）—— 兼容性提示必非空（ux-review §10.1-4）
+        pump(60);
+        const auto *note = page_output->findChild<QLabel *>(QStringLiteral("pp-profile-note-avif"));
+        expect(note != nullptr, QStringLiteral("档位说明行存在（pp-profile-note-*）"));
+        if (note != nullptr) {
+            expect(!note->text().isEmpty() || !note->toolTip().isEmpty(),
+                   QStringLiteral("非 Main 档位给兼容性说明（%1）").arg(note->text()));
+        }
+    }
+    if (!prev.isEmpty())
+        page_output->select_format(prev);
+    std::printf("UI-SMOKE folds: checked=%d bad=%d groups=%d\n", checked, bad, groups_seen);
+    std::fflush(stdout);
+}
+
 void MainWindow::Impl::smoke_run(const QString &shots_dir) {
     // ---- M4-T9 骨架自检（窗口行为矩阵可自动化部分；先跑，之后截图归位 1440×900）----
     smoke_probe_lifecycle();
@@ -5244,6 +5655,12 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
     smoke_probe_run_geometry();
     // M5-T13（W-G4 验收）：§12-13 亮暗布局等价 + §12-14 hint 禁折行（探针只增；结束归位）
     smoke_probe_verification();
+    // ---- M7-R2E2：第 3 波常驻探针（R-218 / UX-1 / UX-2 / R-070 / R-078 / UX-8 / UX-10.1）----
+    smoke_probe_rtl_mirror();
+    smoke_probe_check_all();
+    smoke_probe_context_menus();
+    smoke_probe_run_reason();
+    smoke_probe_advanced_folds();
 
     // ---- 对话框三连（构造 → show → processEvents → grab → close，绝不 exec）----
     { // 04-settings.png：设置对话框

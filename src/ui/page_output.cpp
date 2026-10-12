@@ -83,9 +83,11 @@
 #include "core/error_text.h"     // R-070/273：错误中文映射单源（M7-R2B；本包接线）
 #include "core/fsops.h"
 #include "core/params.h"
-#include "ui/contextmenu.h" // UX-1 ⑥⑦⑨：公共右键菜单件（actions 单源）
-#include "ui/formkit.h"     // C2：行构造器（R1–R4）+ 自绘控件（磁贴/开关/胶囊）
-#include "ui/icons.h"       // M5-T3：折叠插入符 /「添加格式…」的 ＋ 一律矢量图标（C3）
+#include "ui/contextmenu.h"    // UX-1 ⑥⑦⑨：公共右键菜单件（actions 单源）
+#include "ui/format_policy.h"  // R-191/B.3：位深交集/后端归一/avif 谓词纯核单源
+#include "ui/formkit.h"        // C2：行构造器（R1–R4）+ 自绘控件（磁贴/开关/胶囊）
+#include "ui/icons.h"          // M5-T3：折叠插入符 /「添加格式…」的 ＋ 一律矢量图标（C3）
+#include "ui/leading_indent.h" // R-218（M7-R2E2）：逻辑边距（对轨缩进）单源
 #include "ui/paramform.h"
 #include "ui/theme.h"
 
@@ -122,27 +124,7 @@ bool contains_str(const std::vector<std::string> &v, const std::string &s) {
     return std::find(v.begin(), v.end(), s) != v.end();
 }
 
-std::vector<int> parse_csv_ints(const std::string &csv) {
-    std::vector<int> out;
-    std::size_t pos = 0;
-    while (pos <= csv.size()) {
-        const std::size_t comma = csv.find(',', pos);
-        const std::size_t len = (comma == std::string::npos) ? std::string::npos : comma - pos;
-        const std::string tok = csv.substr(pos, len);
-        if (!tok.empty()) {
-            int value = 0;
-            const char *first = tok.data();
-            const char *last = tok.data() + tok.size();
-            const std::from_chars_result res = std::from_chars(first, last, value);
-            if (res.ec == std::errc() && res.ptr == last)
-                out.push_back(value);
-        }
-        if (comma == std::string::npos)
-            break;
-        pos = comma + 1;
-    }
-    return out;
-}
+// R-191（M7-R2E2）：parse_csv_ints / 位深交集 / 后端归一抽入 ui/format_policy.h 纯核单源
 
 // §2.9.2：可选位深 = 静态允许集 ∩ 运行期探测（非 libheif 格式即静态集）。
 // §2.9.7：探测结果按 (format, backend) 进程内缓存一次（GUI 线程独占，无需锁）。
@@ -153,11 +135,9 @@ std::vector<int> allowed_bitdepths(const pp::FormatDef &f, const std::string &ba
     const auto key = std::make_pair(f.id, backend);
     auto it = cache.find(key);
     if (it == cache.end()) {
-        const std::vector<int> probed = parse_csv_ints(pp::probe_bitdepth_support(f.id, backend));
-        std::vector<int> allowed;
-        for (const int d : f.bitdepths)
-            if (contains(probed, d))
-                allowed.push_back(d);
+        const std::vector<int> probed =
+            fmtpolicy::parse_csv_ints(pp::probe_bitdepth_support(f.id, backend));
+        std::vector<int> allowed = fmtpolicy::intersect_bitdepths(f.bitdepths, probed);
         it = cache.emplace(key, std::move(allowed)).first;
     }
     // 探测无可用结果（异常环境）→ 回退静态集，UI 至少可用（引擎侧仍会明确报错）
@@ -179,15 +159,7 @@ std::vector<pp::BackendDef> effective_backends(const pp::FormatDef &f) {
     auto it = cache.find(f.id);
     if (it == cache.end()) {
         const std::vector<pp::BackendDef> live = pp::introspect_backends(f.id);
-        std::vector<pp::BackendDef> ordered;
-        for (const pp::BackendDef &sb : f.backends)
-            for (const pp::BackendDef &lb : live)
-                if (lb.id == sb.id)
-                    ordered.push_back(lb);
-        for (const pp::BackendDef &lb : live)
-            if (std::none_of(ordered.begin(), ordered.end(),
-                             [&](const pp::BackendDef &b) { return b.id == lb.id; }))
-                ordered.push_back(lb);
+        std::vector<pp::BackendDef> ordered = fmtpolicy::merge_backend_order(f.backends, live);
         it = cache.emplace(f.id, std::move(ordered)).first;
     }
     return it->second.empty() ? f.backends : it->second;
@@ -215,57 +187,10 @@ const pp::TechDef *tech_by_id(const std::vector<pp::BackendDef> &list, const std
 }
 
 // §3.2 组合框映射（顺序即冻结文案顺序）
-pp::ConflictPolicy conflict_from_index(int idx) {
-    switch (idx) {
-    case 1:
-        return pp::ConflictPolicy::Skip;
-    case 2:
-        return pp::ConflictPolicy::Overwrite;
-    default:
-        return pp::ConflictPolicy::Rename; // 默认 自动加序号
-    }
-}
+// R-190（M7-R2E2）：冲突/色彩下拉的**唯一真相 = itemData**（构造时 addItem 文本 + 枚举值）。
+// 原「index 映射表」（conflict_from_index/to_index、color_from_index/to_index 四件）退役 ——
+// 读回走 currentData()、落值走 findData()，调序不再静默串档（deep-review R-190/E3-11）。
 
-int conflict_to_index(pp::ConflictPolicy p) {
-    switch (p) {
-    case pp::ConflictPolicy::Skip:
-        return 1;
-    case pp::ConflictPolicy::Overwrite:
-        return 2;
-    case pp::ConflictPolicy::Rename:
-    default:
-        return 0;
-    }
-}
-
-pp::ColorTarget color_from_index(int idx) {
-    switch (idx) {
-    case 1:
-        return pp::ColorTarget::SRGB;
-    case 2:
-        return pp::ColorTarget::DisplayP3;
-    case 3:
-        return pp::ColorTarget::AdobeRGB;
-    default:
-        return pp::ColorTarget::KeepOriginal; // 默认 保持原样
-    }
-}
-
-int color_to_index(pp::ColorTarget t) {
-    switch (t) {
-    case pp::ColorTarget::SRGB:
-        return 1;
-    case pp::ColorTarget::DisplayP3:
-        return 2;
-    case pp::ColorTarget::AdobeRGB:
-        return 3;
-    case pp::ColorTarget::KeepOriginal:
-    default:
-        return 0;
-    }
-}
-
-// 人类可读容量（剩余磁盘读数；自然语，不显示裸字节）
 QString human_bytes(qint64 bytes) {
     constexpr double kKiB = 1024.0;
     const char *const units[] = {"B", "KB", "MB", "GB", "TB", "PB"};
@@ -489,11 +414,17 @@ struct Impl {
     }
 
     pp::ColorTarget color_target() const {
-        return color_from_index(color_combo != nullptr ? color_combo->currentIndex() : 0);
+        // R-190：值 = itemData（枚举本体）；无选中/无控件 → 构造默认「保持原样」
+        if (color_combo == nullptr || color_combo->currentIndex() < 0)
+            return pp::ColorTarget::KeepOriginal;
+        return static_cast<pp::ColorTarget>(color_combo->currentData().toInt());
     }
 
     pp::ConflictPolicy conflict() const {
-        return conflict_from_index(conflict_combo != nullptr ? conflict_combo->currentIndex() : 0);
+        // R-190：值 = itemData（枚举本体）；无选中/无控件 → 构造默认「自动加序号」
+        if (conflict_combo == nullptr || conflict_combo->currentIndex() < 0)
+            return pp::ConflictPolicy::Rename;
+        return static_cast<pp::ConflictPolicy>(conflict_combo->currentData().toInt());
     }
 
     QString template_text() const {
@@ -644,7 +575,8 @@ struct Impl {
         mode_note->setProperty(kFieldProperty, QStringLiteral("hint"));
         mode_note->setFont(theme::font(theme::Typography::hint_px));
         mode_note->setMinimumHeight(formkit::kRowPitch);
-        mode_note->setContentsMargins(formkit::kLabelW + formkit::kColGap, 0, 0, 0);
+        set_leading_indent(mode_note,
+                           formkit::kLabelW + formkit::kColGap); // R-218：逻辑边距（对轨缩进）
         mode_note->set_full_text(
             PageOutput::tr("仅元数据：同容器零重编码，输出格式多选已禁用（保持原格式）"));
         mode_note->setVisible(false);
@@ -858,14 +790,17 @@ struct Impl {
         protected:
             bool eventFilter(QObject *watched, QEvent *event) override {
                 const QEvent::Type t = event->type();
-                if (watched == tabs_ &&
-                    (t == QEvent::Resize || t == QEvent::LayoutRequest || t == QEvent::Show)) {
+                if (watched == tabs_ && (t == QEvent::Resize || t == QEvent::LayoutRequest ||
+                                         t == QEvent::Show || t == QEvent::LayoutDirectionChange)) {
                     QTabBar *bar = tabs_->tabBar();
                     if (bar != nullptr && btn_ != nullptr) {
                         const QPoint org = bar->mapTo(tabs_, QPoint(0, 0));
                         const int y = org.y() + (bar->height() - btn_->height()) / 2;
-                        const QRect want(org.x() + bar->width() - btn_->width(), y, btn_->width(),
-                                         btn_->height());
+                        // R-218（M7-R2E2）：按钮贴页签带的 leading 端（LTR=右 / RTL=左）；
+                        // LTR 路径逐字节不变。
+                        const bool rtl = tabs_->layoutDirection() == Qt::RightToLeft;
+                        const int x = rtl ? org.x() : org.x() + bar->width() - btn_->width();
+                        const QRect want(x, y, btn_->width(), btn_->height());
                         if (btn_->geometry() != want)
                             btn_->setGeometry(want);
                     }
@@ -1325,7 +1260,7 @@ struct Impl {
         st.alpha_hint->setProperty(kFieldProperty, QStringLiteral("hint"));
         st.alpha_hint->setFont(theme::font(theme::Typography::hint_px));
         st.alpha_hint->setMinimumHeight(formkit::kRowPitch);
-        st.alpha_hint->setContentsMargins(formkit::kLabelW + formkit::kColGap, 0, 0, 0);
+        set_leading_indent(st.alpha_hint, formkit::kLabelW + formkit::kColGap); // R-218：逻辑边距
         st.alpha_hint->set_full_text(
             PageOutput::tr("10 位 + 含 alpha：已选择 libaom 后端（SVT-AV1 不支持该组合）"));
         st.alpha_hint->setVisible(false);
@@ -1763,8 +1698,10 @@ struct Impl {
             return;
         // R-066：提示分两态如实显示 —— 文案自称「已选择 libaom 后端」只在后端确为 libaom 时
         // 出现（预设路径跳过预选后可能仍是 svt-av1，此时不能宣称已改后端，改为指向改后端）。
+        // R-191（M7-R2E2）：组合谓词单源 = fmtpolicy::alpha_combo（与 update_metadata_only_state
+        // 的内联副本收敛；两态文案语义不动）
         const bool combo =
-            !metadata_only && batch_has_alpha && id == "avif" && bitdepth_of(id) == 10;
+            fmtpolicy::alpha_combo(id, metadata_only, batch_has_alpha, bitdepth_of(id));
         const std::string backend = backend_id(id);
         if (combo && backend == "libaom") {
             st->alpha_hint->set_full_text(
@@ -1784,17 +1721,16 @@ struct Impl {
     // R-066：预设落值路径（in_preset_apply）不预选 —— 预设后端为权威值，不静默改写。
     bool evaluate_avif_alpha_preselect(const std::string &id) {
         FormatState *st = state_of(id);
-        if (st == nullptr || st->form == nullptr || user_backend_override || in_preset_apply)
-            return false;
-        if (!batch_has_alpha || id != "avif")
-            return false;
-        if (bitdepth_of(id) != 10)
+        if (st == nullptr || st->form == nullptr)
             return false;
         const FormSelection sel = st->form->selection();
-        if (sel.backend != "svt-av1")
-            return false;
         const pp::FormatDef *f = pp::find_format(id);
-        if (f == nullptr || !has_backend(effective_backends(*f), "libaom"))
+        const bool libaom_available = f != nullptr && has_backend(effective_backends(*f), "libaom");
+        // R-191（M7-R2E2）：触发条件单源 = fmtpolicy::avif_preselect_needed（谓词真值表入
+        // tests/unit/test_smoke.cpp；求值成功后的改写动作留本处）
+        if (!fmtpolicy::avif_preselect_needed(id, metadata_only, batch_has_alpha, bitdepth_of(id),
+                                              sel.backend, user_backend_override, in_preset_apply,
+                                              libaom_available))
             return false;
         FormSelection next = sel;
         next.backend = "libaom";
@@ -1827,8 +1763,8 @@ struct Impl {
         }
         for (const auto &[id, st] : states) {
             if (st.alpha_hint != nullptr)
-                st.alpha_hint->setVisible(!metadata_only && batch_has_alpha && id == "avif" &&
-                                          bitdepth_of(id) == 10);
+                st.alpha_hint->setVisible(
+                    fmtpolicy::alpha_combo(id, metadata_only, batch_has_alpha, bitdepth_of(id)));
         }
     }
 
@@ -2133,11 +2069,13 @@ void PageOutput::apply_preset(const pp::PresetData &p) {
     // 全局字段
     {
         const QSignalBlocker blocker(impl_->color_combo);
-        impl_->color_combo->setCurrentIndex(color_to_index(preset.color_target));
+        impl_->color_combo->setCurrentIndex(
+            impl_->color_combo->findData(static_cast<int>(preset.color_target))); // R-190
     }
     {
         const QSignalBlocker blocker(impl_->conflict_combo);
-        impl_->conflict_combo->setCurrentIndex(conflict_to_index(preset.conflict));
+        impl_->conflict_combo->setCurrentIndex(
+            impl_->conflict_combo->findData(static_cast<int>(preset.conflict))); // R-190
     }
     {
         const QSignalBlocker blocker(impl_->template_edit);

@@ -6599,70 +6599,43 @@ void MainWindow::Impl::smoke_probe_output_geometry() {
     pump(80);
 }
 
-void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
-    const QString repo = repo_root();
-    const QString fixture =
-        repo.isEmpty() ? QString() : repo + QStringLiteral("/tests/golden/meta/exif_full.jpg");
-    if (fixture.isEmpty() || !QFileInfo::exists(fixture)) {
-        smoke_fail(MainWindow::tr("元数据页自检：金样 fixture 缺失（%1）").arg(fixture));
-        return;
-    }
-    PageMeta page;
-    page.set_tokens(tokens);
-    page.resize(theme::Metrics::right_width, theme::Metrics::calibrated_h);
-    page.show();
-    pump(150);
-    if (auto *map = page.findChild<pp::map::MapWidget *>()) {
-        map->set_offline(true); // 与本窗口 set_offline_maps(true) 同口径（探针不发请求）
-    }
-    const auto label = [&page](const QString &name) {
-        const auto *widget = page.findChild<QLabel *>(name);
-        return widget != nullptr ? widget->text() : QString();
-    };
-    // 语义值：ElidedLabel 把全文挂在 ppFullText 上（显示文本按宽度省略，见 page_meta.cpp）
-    const auto full = [&page](const QString &name) {
-        const auto *widget = page.findChild<QLabel *>(name);
-        if (widget == nullptr) {
-            return QString();
-        }
-        const QVariant value = widget->property("ppFullText");
-        return value.isValid() ? value.toString() : widget->text();
-    };
-    const auto edit_text = [&page](const QString &name) {
-        const auto *widget = page.findChild<QLineEdit *>(name);
-        return widget != nullptr ? widget->text() : QString();
-    };
-    const auto placeholder = [&page](const QString &name) {
-        const auto *widget = page.findChild<QLineEdit *>(name);
-        return widget != nullptr ? widget->placeholderText() : QString();
-    };
-    const auto wait_probe = [this, &page] {
-        return wait_for([&page] { return !page.property("pp_meta_follow_pending").toBool(); },
-                        10000);
-    };
-    // "YYYY:MM:DD hh:mm:ss" → "YYYY-MM-DD hh:mm:ss"（页面的显示口径；与 page_meta.cpp 同式）
-    const auto shown_form = [](QString text) {
-        if (text.size() >= 10) {
-            QString date = text.left(10);
-            date.replace(QLatin1Char(':'), QLatin1Char('-'));
-            text = date + text.mid(10);
-        }
-        return text;
-    };
-    const auto write_side_time = [&fixture](const pp::BatchRules &rules) {
-        const pp::SourceMeta src = pp::read_metadata(std::filesystem::path(fixture.toStdString()));
-        const pp::MetadataPlan plan = pp::build_plan(src, rules, std::nullopt);
-        return QString::fromStdString(pp::effective_datetime(plan.exif, plan.xmp));
-    };
+// R-255（M7-R2.1-F3）：smoke_probe_meta 分节共享前置（fixture / 页面 / 取值 lambdas）。
+// 原 1675 行单函数/深 10（deep-review R-255/E1-13）→ 12 个分节方法**逐字搬移**
+// （断言/输出行与顺序不变；节体零文本改动，共享件以局部别名承接）。
+struct MetaProbeCtx {
+    PageMeta *page = nullptr;
+    QString repo;
+    QString fixture;
+    std::function<QString(const QString &)> label;
+    std::function<QString(const QString &)> full;
+    std::function<QString(const QString &)> edit_text;
+    std::function<QString(const QString &)> placeholder;
+    std::function<bool()> wait_probe;
+    std::function<QString(QString)> shown_form;
+    std::function<QString(const pp::BatchRules &)> write_side_time;
+    double pick_lat = 0.0;
+    double pick_lon = 0.0;
+    std::function<QString()> gps_badge;
+    std::function<bool()> gps_badge_visible;
+};
 
-    page.set_batch_files(QStringList{fixture});
-    page.set_selection(QList<MetaSelectionItem>{meta_probe_item(fixture)}, /*from_selection=*/true);
-    if (!wait_probe()) {
-        smoke_fail(MainWindow::tr("元数据页自检：跟随项 probe 未在 10s 内回填"));
-        return;
-    }
-    pump(80);
-
+// R-255：smoke_probe_meta 分节 sec_a（自原函数逐字搬移；断言/输出行不变）
+void MainWindow::Impl::probe_meta_sec_a(const MetaProbeCtx &c, const QString &shots_dir) {
+    // R-255：共享前置局部别名（ctx 承接；节体逐字不变）
+    PageMeta &page = *c.page;
+    const QString &repo = c.repo;
+    const QString &fixture = c.fixture;
+    const auto &label = c.label;
+    const auto &full = c.full;
+    const auto &edit_text = c.edit_text;
+    const auto &placeholder = c.placeholder;
+    const auto &wait_probe = c.wait_probe;
+    const auto &shown_form = c.shown_form;
+    const auto &write_side_time = c.write_side_time;
+    const double pick_lat = c.pick_lat;
+    const double pick_lon = c.pick_lon;
+    const auto &gps_badge = c.gps_badge;
+    const auto &gps_badge_visible = c.gps_badge_visible;
     // ---- (a) 无规则：原值 = 生效值（未修改时两值相同也显示）+ 来源字段标注 ----
     {
         const QString old_shown = full(QStringLiteral("pp-meta-time-old-0"));
@@ -6717,7 +6690,24 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
             }
         }
     }
-
+}
+// R-255：smoke_probe_meta 分节 sec_b（自原函数逐字搬移；断言/输出行不变）
+void MainWindow::Impl::probe_meta_sec_b(const MetaProbeCtx &c, const QString &shots_dir) {
+    // R-255：共享前置局部别名（ctx 承接；节体逐字不变）
+    PageMeta &page = *c.page;
+    const QString &repo = c.repo;
+    const QString &fixture = c.fixture;
+    const auto &label = c.label;
+    const auto &full = c.full;
+    const auto &edit_text = c.edit_text;
+    const auto &placeholder = c.placeholder;
+    const auto &wait_probe = c.wait_probe;
+    const auto &shown_form = c.shown_form;
+    const auto &write_side_time = c.write_side_time;
+    const double pick_lat = c.pick_lat;
+    const double pick_lon = c.pick_lon;
+    const auto &gps_badge = c.gps_badge;
+    const auto &gps_badge_visible = c.gps_badge_visible;
     // ---- (b) Δ+2h：显示生效值 == build_plan 写入值 == test_effective 金值 ----
     {
         pp::BatchRules rules;
@@ -6760,7 +6750,24 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
             std::fflush(stdout);
         }
     }
-
+}
+// R-255：smoke_probe_meta 分节 sec_c（自原函数逐字搬移；断言/输出行不变）
+void MainWindow::Impl::probe_meta_sec_c(const MetaProbeCtx &c, const QString &shots_dir) {
+    // R-255：共享前置局部别名（ctx 承接；节体逐字不变）
+    PageMeta &page = *c.page;
+    const QString &repo = c.repo;
+    const QString &fixture = c.fixture;
+    const auto &label = c.label;
+    const auto &full = c.full;
+    const auto &edit_text = c.edit_text;
+    const auto &placeholder = c.placeholder;
+    const auto &wait_probe = c.wait_probe;
+    const auto &shown_form = c.shown_form;
+    const auto &write_side_time = c.write_side_time;
+    const double pick_lat = c.pick_lat;
+    const double pick_lon = c.pick_lon;
+    const auto &gps_badge = c.gps_badge;
+    const auto &gps_badge_visible = c.gps_badge_visible;
     // ---- (c) 时区语义（+08:00 → +09:00）：墙钟 +1h，同样与写入值对拍 ----
     {
         pp::BatchRules rules;
@@ -6781,10 +6788,25 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
                 MainWindow::tr("时区语义生效值不符（shown=%1 write=%2）").arg(shown, written));
         }
     }
-
+}
+// R-255：smoke_probe_meta 分节 sec_d（自原函数逐字搬移；断言/输出行不变）
+void MainWindow::Impl::probe_meta_sec_d(const MetaProbeCtx &c, const QString &shots_dir) {
+    // R-255：共享前置局部别名（ctx 承接；节体逐字不变）
+    PageMeta &page = *c.page;
+    const QString &repo = c.repo;
+    const QString &fixture = c.fixture;
+    const auto &label = c.label;
+    const auto &full = c.full;
+    const auto &edit_text = c.edit_text;
+    const auto &placeholder = c.placeholder;
+    const auto &wait_probe = c.wait_probe;
+    const auto &shown_form = c.shown_form;
+    const auto &write_side_time = c.write_side_time;
+    const double pick_lat = c.pick_lat;
+    const double pick_lon = c.pick_lon;
+    const auto &gps_badge = c.gps_badge;
+    const auto &gps_badge_visible = c.gps_badge_visible;
     // ---- (d) GPS 规则：生效坐标显示 + 地图 center_on 生效坐标 + 单钉（D4）----
-    const double pick_lat = 22.5431;
-    const double pick_lon = 114.0579;
     {
         pp::BatchRules rules;
         pp::GpsData gps;
@@ -6818,17 +6840,24 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
                            .arg(centered ? 1 : 0));
         }
     }
-
-    // 卡头 GPS 状态胶囊（M5-T7/修 1-33：状态 = 独立徽标，不再是 placeholder 文案）
-    const auto gps_badge = [&page] {
-        const auto *label = page.findChild<QLabel *>(QStringLiteral("pp-meta-gps-pill"));
-        return label != nullptr ? label->text() : QString();
-    };
-    const auto gps_badge_visible = [&page] {
-        const auto *label = page.findChild<QLabel *>(QStringLiteral("pp-meta-gps-pill"));
-        return label != nullptr && label->isVisible();
-    };
-
+}
+// R-255：smoke_probe_meta 分节 sec_e（自原函数逐字搬移；断言/输出行不变）
+void MainWindow::Impl::probe_meta_sec_e(const MetaProbeCtx &c, const QString &shots_dir) {
+    // R-255：共享前置局部别名（ctx 承接；节体逐字不变）
+    PageMeta &page = *c.page;
+    const QString &repo = c.repo;
+    const QString &fixture = c.fixture;
+    const auto &label = c.label;
+    const auto &full = c.full;
+    const auto &edit_text = c.edit_text;
+    const auto &placeholder = c.placeholder;
+    const auto &wait_probe = c.wait_probe;
+    const auto &shown_form = c.shown_form;
+    const auto &write_side_time = c.write_side_time;
+    const double pick_lat = c.pick_lat;
+    const double pick_lon = c.pick_lon;
+    const auto &gps_badge = c.gps_badge;
+    const auto &gps_badge_visible = c.gps_badge_visible;
     // ---- (e) 隐私剥除：时间/GPS 生效值 → 「将被移除」（§5.1；M5-T7：状态落卡头胶囊，
     //   占位符只留输入示例 → 生效值框 placeholder 恒空）----
     {
@@ -6854,7 +6883,24 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
                            .arg(time_text, gps_lat, gps_hint, badge));
         }
     }
-
+}
+// R-255：smoke_probe_meta 分节 sec_f（自原函数逐字搬移；断言/输出行不变）
+void MainWindow::Impl::probe_meta_sec_f(const MetaProbeCtx &c, const QString &shots_dir) {
+    // R-255：共享前置局部别名（ctx 承接；节体逐字不变）
+    PageMeta &page = *c.page;
+    const QString &repo = c.repo;
+    const QString &fixture = c.fixture;
+    const auto &label = c.label;
+    const auto &full = c.full;
+    const auto &edit_text = c.edit_text;
+    const auto &placeholder = c.placeholder;
+    const auto &wait_probe = c.wait_probe;
+    const auto &shown_form = c.shown_form;
+    const auto &write_side_time = c.write_side_time;
+    const double pick_lat = c.pick_lat;
+    const double pick_lon = c.pick_lon;
+    const auto &gps_badge = c.gps_badge;
+    const auto &gps_badge_visible = c.gps_badge_visible;
     // ---- (f) 清除 GPS：生效坐标空 + 「将清除 GPS」+ 钉清除，且**视口保持不动**（D4/§5.2）----
     {
         pp::BatchRules rules;
@@ -6885,7 +6931,24 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
                            .arg(kept ? 1 : 0));
         }
     }
-
+}
+// R-255：smoke_probe_meta 分节 sec_g（自原函数逐字搬移；断言/输出行不变）
+void MainWindow::Impl::probe_meta_sec_g(const MetaProbeCtx &c, const QString &shots_dir) {
+    // R-255：共享前置局部别名（ctx 承接；节体逐字不变）
+    PageMeta &page = *c.page;
+    const QString &repo = c.repo;
+    const QString &fixture = c.fixture;
+    const auto &label = c.label;
+    const auto &full = c.full;
+    const auto &edit_text = c.edit_text;
+    const auto &placeholder = c.placeholder;
+    const auto &wait_probe = c.wait_probe;
+    const auto &shown_form = c.shown_form;
+    const auto &write_side_time = c.write_side_time;
+    const double pick_lat = c.pick_lat;
+    const double pick_lon = c.pick_lon;
+    const auto &gps_badge = c.gps_badge;
+    const auto &gps_badge_visible = c.gps_badge_visible;
     // ---- (g) 多选（12 选）→ 逐行小表：上限 8 行 + 「…还有 4 个」（§5.2）----
     {
         QStringList paths;
@@ -6950,7 +7013,24 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
             }
         }
     }
-
+}
+// R-255：smoke_probe_meta 分节 sec_g2（自原函数逐字搬移；断言/输出行不变）
+void MainWindow::Impl::probe_meta_sec_g2(const MetaProbeCtx &c, const QString &shots_dir) {
+    // R-255：共享前置局部别名（ctx 承接；节体逐字不变）
+    PageMeta &page = *c.page;
+    const QString &repo = c.repo;
+    const QString &fixture = c.fixture;
+    const auto &label = c.label;
+    const auto &full = c.full;
+    const auto &edit_text = c.edit_text;
+    const auto &placeholder = c.placeholder;
+    const auto &wait_probe = c.wait_probe;
+    const auto &shown_form = c.shown_form;
+    const auto &write_side_time = c.write_side_time;
+    const double pick_lat = c.pick_lat;
+    const double pick_lon = c.pick_lon;
+    const auto &gps_badge = c.gps_badge;
+    const auto &gps_badge_visible = c.gps_badge_visible;
     // ---- (g2) EXIF 编辑器：例外生效值回显 + .mod（§9.2；T12 step 8）----
     {
         pp::BatchRules rules;
@@ -7084,7 +7164,24 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
         editor.reject();
         pump(120);
     }
-
+}
+// R-255：smoke_probe_meta 分节 sec_h（自原函数逐字搬移；断言/输出行不变）
+void MainWindow::Impl::probe_meta_sec_h(const MetaProbeCtx &c, const QString &shots_dir) {
+    // R-255：共享前置局部别名（ctx 承接；节体逐字不变）
+    PageMeta &page = *c.page;
+    const QString &repo = c.repo;
+    const QString &fixture = c.fixture;
+    const auto &label = c.label;
+    const auto &full = c.full;
+    const auto &edit_text = c.edit_text;
+    const auto &placeholder = c.placeholder;
+    const auto &wait_probe = c.wait_probe;
+    const auto &shown_form = c.shown_form;
+    const auto &write_side_time = c.write_side_time;
+    const double pick_lat = c.pick_lat;
+    const double pick_lon = c.pick_lon;
+    const auto &gps_badge = c.gps_badge;
+    const auto &gps_badge_visible = c.gps_badge_visible;
     // ---- (h) 无选中 → 首个文件 + 「(1/N)」提示（§5.2）----
     {
         const QStringList batch{fixture, repo + QStringLiteral("/tests/golden/base/rgb8.png"),
@@ -7105,7 +7202,24 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
             smoke_fail(MainWindow::tr("无选中跟随提示不符（got=%1 want=%2）").arg(hint, expected));
         }
     }
-
+}
+// R-255：smoke_probe_meta 分节 sec_i（自原函数逐字搬移；断言/输出行不变）
+void MainWindow::Impl::probe_meta_sec_i(const MetaProbeCtx &c, const QString &shots_dir) {
+    // R-255：共享前置局部别名（ctx 承接；节体逐字不变）
+    PageMeta &page = *c.page;
+    const QString &repo = c.repo;
+    const QString &fixture = c.fixture;
+    const auto &label = c.label;
+    const auto &full = c.full;
+    const auto &edit_text = c.edit_text;
+    const auto &placeholder = c.placeholder;
+    const auto &wait_probe = c.wait_probe;
+    const auto &shown_form = c.shown_form;
+    const auto &write_side_time = c.write_side_time;
+    const double pick_lat = c.pick_lat;
+    const double pick_lon = c.pick_lon;
+    const auto &gps_badge = c.gps_badge;
+    const auto &gps_badge_visible = c.gps_badge_visible;
     // ---- (i) M5-T7 C7 几何探针（v6 §7.1 + R1–R4；值表驱动 checked/bad）----
     //   卡内行 pitch 28 / 标签轨 80 / 日期时间 spin 88 / 生效行 acc 值（像素取证）/ 空态收敛 /
     //   双列第二标签起点（R2：第二标签固定 x + 24px 间档）/ 操作行在地图上方（修 1-37）/
@@ -7772,7 +7886,24 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
                            .arg(meta_bad.join(QLatin1Char(' '))));
         }
     }
-
+}
+// R-255：smoke_probe_meta 分节 sec_j（自原函数逐字搬移；断言/输出行不变）
+void MainWindow::Impl::probe_meta_sec_j(const MetaProbeCtx &c, const QString &shots_dir) {
+    // R-255：共享前置局部别名（ctx 承接；节体逐字不变）
+    PageMeta &page = *c.page;
+    const QString &repo = c.repo;
+    const QString &fixture = c.fixture;
+    const auto &label = c.label;
+    const auto &full = c.full;
+    const auto &edit_text = c.edit_text;
+    const auto &placeholder = c.placeholder;
+    const auto &wait_probe = c.wait_probe;
+    const auto &shown_form = c.shown_form;
+    const auto &write_side_time = c.write_side_time;
+    const double pick_lat = c.pick_lat;
+    const double pick_lon = c.pick_lon;
+    const auto &gps_badge = c.gps_badge;
+    const auto &gps_badge_visible = c.gps_badge_visible;
     // ---- (j) M6-T9 选点闭环（R3/§4.4）：搜索→多钉+可点列表→点钉/点行→主钉+规则框回填→
     //   地图微调→「地图选点」取中心→逆地理确认。全程离线（探针不发请求）：搜索成功路径的
     //   两步输出由探针等价地喂入 —— 图钉面 `set_result_pins`（公开加性 API），列表面直发
@@ -7987,7 +8118,24 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
                 MainWindow::tr("选点闭环（R3/§4.4）不符：%1").arg(loop_bad.join(QLatin1Char(' '))));
         }
     }
-
+}
+// R-255：smoke_probe_meta 分节 sec_k（自原函数逐字搬移；断言/输出行不变）
+void MainWindow::Impl::probe_meta_sec_k(const MetaProbeCtx &c, const QString &shots_dir) {
+    // R-255：共享前置局部别名（ctx 承接；节体逐字不变）
+    PageMeta &page = *c.page;
+    const QString &repo = c.repo;
+    const QString &fixture = c.fixture;
+    const auto &label = c.label;
+    const auto &full = c.full;
+    const auto &edit_text = c.edit_text;
+    const auto &placeholder = c.placeholder;
+    const auto &wait_probe = c.wait_probe;
+    const auto &shown_form = c.shown_form;
+    const auto &write_side_time = c.write_side_time;
+    const double pick_lat = c.pick_lat;
+    const double pick_lon = c.pick_lon;
+    const auto &gps_badge = c.gps_badge;
+    const auto &gps_badge_visible = c.gps_badge_visible;
     // ---- (k) M6-T13 大地图（§7-T13 R5）：覆盖层「展开」→ 模态对话框内是**同一只** MapWidget
     //   （重挂载：图层/图钉/视口/在途请求随控件走，零同步）→ 底栏「关闭」（真实用户路径）→
     //   挂回卡片并复位固定高（几何逐位复原、objectName 不变）。探针全程离线（(j) 段已
@@ -8273,6 +8421,112 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
                            .arg(expand_bad.join(QLatin1Char(' '))));
         }
     }
+}
+
+void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
+    const QString repo = repo_root();
+    const QString fixture =
+        repo.isEmpty() ? QString() : repo + QStringLiteral("/tests/golden/meta/exif_full.jpg");
+    if (fixture.isEmpty() || !QFileInfo::exists(fixture)) {
+        smoke_fail(MainWindow::tr("元数据页自检：金样 fixture 缺失（%1）").arg(fixture));
+        return;
+    }
+    PageMeta page;
+    page.set_tokens(tokens);
+    page.resize(theme::Metrics::right_width, theme::Metrics::calibrated_h);
+    page.show();
+    pump(150);
+    if (auto *map = page.findChild<pp::map::MapWidget *>()) {
+        map->set_offline(true); // 与本窗口 set_offline_maps(true) 同口径（探针不发请求）
+    }
+    const auto label = [&page](const QString &name) {
+        const auto *widget = page.findChild<QLabel *>(name);
+        return widget != nullptr ? widget->text() : QString();
+    };
+    // 语义值：ElidedLabel 把全文挂在 ppFullText 上（显示文本按宽度省略，见 page_meta.cpp）
+    const auto full = [&page](const QString &name) {
+        const auto *widget = page.findChild<QLabel *>(name);
+        if (widget == nullptr) {
+            return QString();
+        }
+        const QVariant value = widget->property("ppFullText");
+        return value.isValid() ? value.toString() : widget->text();
+    };
+    const auto edit_text = [&page](const QString &name) {
+        const auto *widget = page.findChild<QLineEdit *>(name);
+        return widget != nullptr ? widget->text() : QString();
+    };
+    const auto placeholder = [&page](const QString &name) {
+        const auto *widget = page.findChild<QLineEdit *>(name);
+        return widget != nullptr ? widget->placeholderText() : QString();
+    };
+    const auto wait_probe = [this, &page] {
+        return wait_for([&page] { return !page.property("pp_meta_follow_pending").toBool(); },
+                        10000);
+    };
+    // "YYYY:MM:DD hh:mm:ss" → "YYYY-MM-DD hh:mm:ss"（页面的显示口径；与 page_meta.cpp 同式）
+    const auto shown_form = [](QString text) {
+        if (text.size() >= 10) {
+            QString date = text.left(10);
+            date.replace(QLatin1Char(':'), QLatin1Char('-'));
+            text = date + text.mid(10);
+        }
+        return text;
+    };
+    const auto write_side_time = [&fixture](const pp::BatchRules &rules) {
+        const pp::SourceMeta src = pp::read_metadata(std::filesystem::path(fixture.toStdString()));
+        const pp::MetadataPlan plan = pp::build_plan(src, rules, std::nullopt);
+        return QString::fromStdString(pp::effective_datetime(plan.exif, plan.xmp));
+    };
+
+    page.set_batch_files(QStringList{fixture});
+    page.set_selection(QList<MetaSelectionItem>{meta_probe_item(fixture)}, /*from_selection=*/true);
+    if (!wait_probe()) {
+        smoke_fail(MainWindow::tr("元数据页自检：跟随项 probe 未在 10s 内回填"));
+        return;
+    }
+    pump(80);
+
+    // R-255：跨节共享定义（原散在 (d)/(e) 间）——随 ctx 分发给各分节
+    const double pick_lat = 22.5431;
+    const double pick_lon = 114.0579;
+    // 卡头 GPS 状态胶囊（M5-T7/修 1-33：状态 = 独立徽标，不再是 placeholder 文案）
+    const auto gps_badge = [&page] {
+        const auto *label = page.findChild<QLabel *>(QStringLiteral("pp-meta-gps-pill"));
+        return label != nullptr ? label->text() : QString();
+    };
+    const auto gps_badge_visible = [&page] {
+        const auto *label = page.findChild<QLabel *>(QStringLiteral("pp-meta-gps-pill"));
+        return label != nullptr && label->isVisible();
+    };
+    // R-255：共享前置入 ctx；分节调用顺序与原行序一致（输出逐字不变）
+    MetaProbeCtx c;
+    c.page = &page;
+    c.repo = repo;
+    c.fixture = fixture;
+    c.label = label;
+    c.full = full;
+    c.edit_text = edit_text;
+    c.placeholder = placeholder;
+    c.wait_probe = wait_probe;
+    c.shown_form = shown_form;
+    c.write_side_time = write_side_time;
+    c.pick_lat = pick_lat;
+    c.pick_lon = pick_lon;
+    c.gps_badge = gps_badge;
+    c.gps_badge_visible = gps_badge_visible;
+    probe_meta_sec_a(c, shots_dir);
+    probe_meta_sec_b(c, shots_dir);
+    probe_meta_sec_c(c, shots_dir);
+    probe_meta_sec_d(c, shots_dir);
+    probe_meta_sec_e(c, shots_dir);
+    probe_meta_sec_f(c, shots_dir);
+    probe_meta_sec_g(c, shots_dir);
+    probe_meta_sec_g2(c, shots_dir);
+    probe_meta_sec_h(c, shots_dir);
+    probe_meta_sec_i(c, shots_dir);
+    probe_meta_sec_j(c, shots_dir);
+    probe_meta_sec_k(c, shots_dir);
 
     page.hide();
     pump(80);

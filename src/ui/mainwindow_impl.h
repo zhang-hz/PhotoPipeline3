@@ -131,6 +131,9 @@
 
 namespace pp::ui {
 
+// R-255（M7-R2.1-F3）：smoke_probe_meta 分节共享前置（定义在 smoke_probes.cpp，探针域专用）
+struct MetaProbeCtx;
+
 // 平台壳层别名（与原 mainwindow.cpp 匿名命名空间同义；头内置于 pp::ui 作用域供两 TU 共用）
 namespace plat = pp::platform;
 
@@ -1223,6 +1226,26 @@ struct MainWindow::Impl {
     void smoke_probe_run_reason();
     // UX-8/UX-10.1：高级二级折叠 + 编码档位限幅联动（folds）
     void smoke_probe_advanced_folds();
+    // R-255（M7-R2.1-F3）：smoke_probe_meta 原 1675 行/深 10 → 12 个分节方法（逐字搬移；
+    // 断言/输出行与顺序不变；共享前置 = MetaProbeCtx）
+    void probe_meta_sec_a(const MetaProbeCtx &c, const QString &shots_dir); // (a) 基线/几何/信息行
+    void probe_meta_sec_b(const MetaProbeCtx &c,
+                          const QString &shots_dir); // (b) Δ+2h 生效值对拍 + .mod 截图
+    void probe_meta_sec_c(const MetaProbeCtx &c, const QString &shots_dir); // (c) 时区语义
+    void probe_meta_sec_d(const MetaProbeCtx &c,
+                          const QString &shots_dir); // (d) GPS 规则 + center_on
+    void probe_meta_sec_e(const MetaProbeCtx &c, const QString &shots_dir); // (e) 隐私剥除
+    void probe_meta_sec_f(const MetaProbeCtx &c,
+                          const QString &shots_dir); // (f) 清除 GPS + 视口保持
+    void probe_meta_sec_g(const MetaProbeCtx &c, const QString &shots_dir); // (g) 多选小表
+    void probe_meta_sec_g2(const MetaProbeCtx &c,
+                           const QString &shots_dir); // (g2) EXIF 编辑器生效值
+    void probe_meta_sec_h(const MetaProbeCtx &c, const QString &shots_dir); // (h) 无选中回退提示
+    void probe_meta_sec_i(const MetaProbeCtx &c,
+                          const QString &shots_dir); // (i) C7 几何探针（值表驱动）
+    void probe_meta_sec_j(const MetaProbeCtx &c, const QString &shots_dir); // (j) 选点闭环（M6-T9）
+    void probe_meta_sec_k(const MetaProbeCtx &c,
+                          const QString &shots_dir); // (k) 大地图展开/复原（M6-T13）
     static QString repo_root();
 #endif // PP_BUILD_DEV
 };

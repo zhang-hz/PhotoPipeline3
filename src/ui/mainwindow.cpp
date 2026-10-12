@@ -459,6 +459,10 @@ bool MainWindow::Impl::handle_event(QObject *watched, QEvent *event) {
             }
             if (sched)
                 sched->cancel();
+            // R-259（M7-R2.1-F3）：把同步 join 挪到「窗口还看得见」的关闭路径并给出反馈 ——
+            // 原实现只异步 cancel 就放行关闭，真正的 wait() 落在 ~MainWindow（界面已进入销毁，
+            // 无任何反馈，用户只看到假死）。
+            join_workers_with_feedback();
         }
         w->save_session();
         return false; // 放行默认关闭路径
@@ -507,7 +511,8 @@ MainWindow::MainWindow(const pp::AppSettings &settings, QWidget *parent)
 
 // R-107：显式收尾序（原 `= default` 靠"析构期无事件循环"的巧合保证正确性）。
 // ① 取消在途批次（幂等）→ ② 阻塞等 worker 退出 → ③ 置空事件回调（此后不再有回调落回
-// 已在析构的 this）→ ④ 释放调度器。closeEvent 只做异步 cancel，析构路径必须自己收口。
+// 已在析构的 this）→ ④ 释放调度器。关闭路径已带反馈同步 join（R-259），析构路径仍自己
+// 收口一次（cancel/wait 幂等兜底：非 Close 事件的销毁路径也走这里）。
 MainWindow::~MainWindow() {
     if (impl_ && impl_->sched) {
         impl_->sched->cancel();
@@ -515,6 +520,30 @@ MainWindow::~MainWindow() {
         impl_->sched->set_event_callback({});
         impl_->sched.reset();
     }
+}
+
+// R-259（M7-R2.1-F3）：join 期反馈 —— 运行中关闭确认后，在阻塞 join 之前先把「正在收尾」
+// 呈现出来：状态行（有计数就带 N/M，未发生的量不编数）+ 等待光标 + **一次同步重绘**
+// （repaint 不开事件循环 → 无重入面）；随后 sched->wait()（幂等 —— scheduler.cpp 明示
+// UI 与 ~Scheduler 都会调 wait()、报告只出一次）。~MainWindow 的收口序逐字保留作兜底。
+void MainWindow::Impl::join_workers_with_feedback() {
+    if (!sched)
+        return;
+    if (status != nullptr) {
+        QString text = MainWindow::tr("正在等待在途任务收尾…");
+        if (run_total > 0 && run_terminal < run_total) {
+            text = MainWindow::tr("正在等待在途任务收尾… %1/%2")
+                       .arg(static_cast<qulonglong>(run_terminal))
+                       .arg(static_cast<qulonglong>(run_total));
+        }
+        status->set_full_text(text);
+    }
+    QApplication::setOverrideCursor(QCursor(Qt::WaitCursor));
+    if (w != nullptr)
+        w->repaint(); // 反馈必须先于阻塞可见（同步重绘一次即够）
+    pp::log_info("ui", "close", "join with feedback: waiting for in-flight files");
+    sched->wait();
+    QApplication::restoreOverrideCursor();
 }
 
 void MainWindow::build_ui() {

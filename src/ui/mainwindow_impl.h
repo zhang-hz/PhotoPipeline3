@@ -29,6 +29,7 @@
 #include <QClipboard> // UX-1：「复制路径」等菜单动作
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QCursor> // R-259：join 期等待光标
 #include <QDesktopServices>
 #include <QDialog> // M6-T13：meta-map-expand 探针在模态循环内取证大地图对话框
 #include <QDir>
@@ -1120,6 +1121,10 @@ struct MainWindow::Impl {
     void restore_selection_by_path(const QString &path);
     void restore_selection_by_paths(const QStringList &paths); // R-153：整组恢复
     void select_row(int row);                                  // R-151：翻图同步选中
+    // R-259（M7-R2.1-F3）：运行中关闭确认后的同步 join 带反馈（状态行 + 等待光标 + 一次
+    // 同步重绘）—— 阻塞期从 ~MainWindow（界面已无反馈）挪到关闭路径（窗口仍可见）；
+    // wait() 幂等，析构收口序逐字保留作兜底。
+    void join_workers_with_feedback();
 
     // M4-T9 骨架：主题 / 三栏持久化 / caption 行为
     void refresh_theme();

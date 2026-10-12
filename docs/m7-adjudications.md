@@ -346,3 +346,13 @@
 | M7R21F3-8 | 行为零变化锚定 | R-254 选中映射判据统一（越界行过滤提前；remove_rows 内部本就过滤） | 稳定态逐值相同 |
 | M7R21F3-9 | 机械搬移 | R-255 跨节共享定义（pick_lat/pick_lon/GPS 胶囊 lambdas）从 (d)/(e) 间挪到前置 | 逐字搬移；ctx 分发；12 个 meta-* 探针输出行不变 |
 | M7R21F3-10 | **行为变化（明文授权）** | R-259：运行中关闭的 join 期增加反馈（状态行「正在等待在途任务收尾…」+ 等待光标 + 一次同步重绘），阻塞期从析构挪到关闭路径 | 任务条目明文（R-259 =「析构期 join 无反馈」）；wait 幂等、~MainWindow 收口序不变 |
+
+## 十三、发行裁定（M7-R2.1-F7，2026-10-13）
+
+> 任务书出处 = 会话内分派书（F7 包「发布 0.3.3」）；实况证据真源 =
+> [docs/m7-evidence/m7r21-release.md](m7-evidence/m7r21-release.md)（预检/push/main-full #48/
+> 本机复核/停止决策逐步可复跑）。
+
+| # | 裁定 | 理由 | 实施归属 |
+|---|---|---|---|
+| M7-ADJ-tag-move-2（F7 消耗尝试） | **二次移动仍未执行，授权保持未消耗**：F7 按流程 1–4 走完预检（`/releases/tags/v0.3.3` 404、releases 列表无 v0.3.3、`ls-remote` 核对 v0.3.3 → `cb181ee`/`^{}`=`b1af371`）、push main（`0555947..e1017fe`，HEAD `e1017fe6`）、本机复核（ci-format `violations=0` 187 文件 + `make_winzip --smoke-exe` 五门禁 rc=0 含 E-2 冻结行逐字）；**但流程 3 前提「linux job 必须绿」未满足**：main-full **#48（run 38308098290）completed/failure**——唯一失败 = linux（全 ctest+金样）**step 15 release-dev ctest 的 `ui_smoke` 一条**（F1 遥测注解逐字 `CTEST-FAIL-SUMMARY 1 tests: ui_smoke`；step 13 release ctest 全过）。二分归因：#47 @ `0555947` 同 job **success** ⇒ 失败由 `0555947..e1017fe`（R2.1 F2–F4）引入（`tests/ui_smoke.py` 与 `.github/` 零改动，变化全在 `src/ui/` 探针/几何面）。修复须改 `src/ui/`/`tests/` = 独占文件面外（任务书「不改 src/ 与 tools/」+ 纪律 3）⇒ 按纪律 9 **停止上报**：tag 保持 `b1af371`（收口 `ls-remote` 复核未动）、release.yml 未触发（最新仍 #13 cancelled）、GitHub Release 未创建（收口复检 404）。**授权未消耗**：待 ui_smoke 修复、main-full 全绿后由后续发行包按同一条件执行（预检零 Release 零资产 / 原子 + `ls-remote` 核对 / 此后不得再动） | ① 判据不可绕过（纪律 9）：「linux job 必须绿」是 tag 移动的明文前提，红灯期移动 = 把一次性授权烧在坏树上（此后不得再动 = 无第三次机会）；② 修复跨界不可「顺手改」（纪律 3）；③ 停在零资产状态无新增不可逆性（tag 仍可按 M7-ADJ-tag-move-2 条件移动，`b1af371..e1017fe` 全在历史）；④ 未采用空提交复跑辨瞬态——取证更支持确定性回归（#47 绿/#48 红与 src/ui 大改同步）且空提交污染历史，留主对话裁决 | R2.1-F7 |

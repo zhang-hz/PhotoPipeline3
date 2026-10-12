@@ -52,6 +52,7 @@ git 时间序对照见 R2C 对照表 `build/m7r2-c/handoff.md` 附录）：
 | R2.1-F2 R2E1 重做（page_meta + mapwidget） | 12 提交 `b83f185`…`d6360f6` | B.1 page_meta 拆分十步 + R-218 RTL（本面）+ ProbeContext/词表（R-180/182/258）+ B.5① map_view（§7.2） |
 | R2.1-F3 R2E2 结构余量 | 10 提交 `6250b3b`…`0ca8c62` | R-254/256/259/185/187/188/196–201/205/255 + B.3 format_selection_model（R-189/192）+ filelistmodel/settings TU 拆分（§7.3） |
 | R2.1-F4 跨面包收口 | 7 提交 `dcedf4c`…`81d0b34` | NOLINT 处置翻案（M7R21F4-0）+ 跨界小项 14 条 + 色彩四选项 GUI 接线 + 第 4 波探针批 + 评审本体入库（§7.4） |
+| R2.1-F7 发行第二班 | 本提交（报告类） | 发布 0.3.3 重走：预检/推送（`0555947..e1017fe`）/本机复核全绿 → main-full **#48 红（linux `ui_smoke` 一条，F2–F4 引入）** ⇒ 按纪律停在 tag 移动前，`M7-ADJ-tag-move-2` 授权未消耗（§3.10） |
 
 **编号命名空间（多套并存，勿混读）**：① `R-nnn` = deep-review 条目（`docs/deep-review-0.3.2.md`）；
 ② `UX-n` = ux-review 条目（`docs/ux-review-14.md`），其内部另有**色彩分级子项 A1–D3**（§14，
@@ -393,7 +394,43 @@ R-171/R-002（write-warnings、meta-write-fail）、R-097（png_ok 硬断言）�
 - **残余（如实）**：① 8 条 Linux ctest 失败未定位/未修（跨界，需 Linux 宿主或 CI 日志权限）；
   ② 0.3.3 未发行，`### 发行` 小节「已发行 + CI 产物指纹」终态收口留待真发布后补
   （`d049d22` 先例口径不变）；③ warm-cache 通道 #9–#13 全解析期秒败（R2C 修复后**无触发轮**，
-  gh CLI 未认证无法 dispatch，runbook §5-1 未复核——本轮以 main-full 播种替代，已在证据 §4.4 注明）。
+  gh CLI 未认证无法 dispatch，runbook §5-1 未复核——本轮以 main-full 播种替代，已在证据 §4.4 注记）。
+
+### 3.10 发行实况（M7-R2.1-F7 第二班，2026-10-13）：**停在 main-full linux ui_smoke 红，tag 仍未移动**
+
+> 任务书 = 「修复后发布 0.3.3」（F7 包；明文允许 git push、授权消耗 `M7-ADJ-tag-move-2`）；
+> 实况证据真源 = [docs/m7-evidence/m7r21-release.md](m7-evidence/m7r21-release.md)（预检/push/
+> main-full #48/本机复核/停止决策逐步可复跑）。**GitHub Release URL：不存在**
+> （`/releases/tags/v0.3.3` 预检 404、收口复检 404）。
+
+- **预检（移动前，全过）**：`/releases/tags/v0.3.3` = **404**（零 Release ⇒ 零资产）；releases
+  列表止于 v0.3.2（无 v0.3.3 条目）；`git ls-remote --tags` 核对 v0.3.3 → `cb181ee`/`^{}`=`b1af371`
+  （自首次移动后未动）。
+- **push 与 main-full**：`git push origin main`（`0555947..e1017fe`，**HEAD `e1017fe6`**，27 提交
+  F1–F6+GATE）→ **main-full #48（run 38308098290）completed/failure**（21:02:24 → 21:23:01Z）：
+  唯一失败 = **linux（全 ctest+金样）step 15「release-dev ctest」中的 `ui_smoke` 一条**
+  （F1 遥测注解逐字 `CTEST-FAIL-SUMMARY 1 tests: ui_smoke` / `CTEST-FAIL ui_smoke (无 FAIL 断言行…)`；
+  step 13 release ctest **全过**；「无 FAIL 断言行」是遥测提取式 `FAIL name: msg`（main-full.yml:472）
+  与 ui_smoke 失败行形态 `ui_smoke: FAIL (…)`（tests/ui_smoke.py:510）**反序不匹配**的兜底，不表征
+  崩溃/超时——见证据 §3.3）。**二分归因**：#47 @ `0555947` 同 job **success** ⇒ 失败由
+  `0555947..e1017fe`（R2.1 F2–F4）引入的 Linux 侧回归（`tests/ui_smoke.py` 与 `.github/` 零改动，
+  变化全在 `src/ui/`；候选根因 = F4 第 4 波常驻探针 / F2-F3 几何改动，**推断未实证**）。逐条断言
+  明细需 Linux 宿主或鉴权日志（job logs 匿名 403）。
+- **本机复核（流程 4，全绿）**：`ci-format` **violations=0**（187 文件）· `make_winzip.py
+  --smoke-exe` 五门禁 **rc=0**（E-2 冻结行 `UI-SMOKE OK shots=12 pages=3` 逐字；打包面
+  `build/release` 增量重建 226 步至 HEAD；E-2 的 dev exe = `build/release-dev/photopipeline.exe`
+  **只读**拷入 staging 运行，对门禁树零写入）。
+- **缓存播种面（流程 3 第二目的）达成**：winzip 19m59s / windows 17m03s / tidy 18m03s 全绿且
+  vcpkg save 步完整（vcpkgwin- / Qt(msvc2022_64)）；linux 侧 Qt(gcc_64) save 因 job 失败 skipped
+  （仅影响 appimage 侧）。
+- **停止决策（流程 3 前提未达成 + 纪律 3/9）**：tag `v0.3.3` **未移动**（收口 `ls-remote` 复核仍
+  `cb181ee`/`^{}`=`b1af371`）、release.yml **未触发**（最新仍 #13 `completed/cancelled`）、
+  GitHub Release 未创建。`M7-ADJ-tag-move-2` **授权保持未消耗**（adjudications 十三节）。
+- **残余（如实）**：① `ui_smoke` 一条 Linux 失败未定位/未修（跨界：`src/ui/` 探针或几何面——
+  修复包入口 = Linux 宿主复跑 `QT_QPA_PLATFORM=offscreen python3 tests/ui_smoke.py
+  build/release-dev` 或 CI 日志权限取 `LastTest.log`；二分锚点 #47 绿 / #48 红）；
+  ② 0.3.3 未发行，「已发行 + CI 产物指纹」终态收口继续留待真发布后（`d049d22` 先例口径不变）；
+  ③ 未采用空提交重触发辨瞬态（取证支持确定性回归 + 空提交污染历史），留主对话裁决。
 
 ---
 

@@ -301,6 +301,15 @@
   未触发、**GitHub Release 仍未创建**；二次移动授权（M7-ADJ-tag-move-2）在案未消耗，待 Linux
   失败修复且 main-full 绿后执行（全链见 [docs/m7-report.md](docs/m7-report.md) §3.9 与
   [docs/m7-evidence/m7r2-release.md](docs/m7-evidence/m7r2-release.md)）
+- **R2.1-F7 发行第二班实况（2026-10-13）**：F1 已修上轮 8 条 Linux ctest（main-full #47 linux 绿）
+  且 F1–F6 门禁全绿后重走发行链——预检（零 Release 零资产、tag `b1af371` 未动）/ 推送 main
+  （`0555947..e1017fe`）/ 本机复核（ci-format `violations=0` 187 文件 + make_winzip 五门禁
+  rc=0 含 E-2 冻结行逐字）全绿；但 main-full **#48 红**——linux job 唯一失败 = release-dev 树
+  **`ui_smoke` 一条**（二分：#47 同 job 绿 ⇒ R2.1 F2–F4 波次引入的 Linux 侧回归，候选面为
+  F4 第 4 波常驻探针/F2-F3 几何改动，推断未实证）⇒ **再次停止发行**：tag 未移动（仍 b1af371）、
+  release.yml 未触发、**GitHub Release 仍未创建**；`M7-ADJ-tag-move-2` 授权继续未消耗，待
+  ui_smoke 修复且 main-full 全绿后执行（全链见 [docs/m7-report.md](docs/m7-report.md) §3.10 与
+  [docs/m7-evidence/m7r21-release.md](docs/m7-evidence/m7r21-release.md)）
 
 ## [0.3.2] — 2026-10-11
 

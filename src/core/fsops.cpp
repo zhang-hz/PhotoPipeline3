@@ -26,6 +26,7 @@
 #include <random>
 #include <set>
 #include <system_error>
+#include <thread>
 #include <utility>
 
 #ifdef _WIN32
@@ -506,6 +507,26 @@ bool is_reserved_device_name(std::string_view comp) {
     return false;
 }
 
+// 瞬态文件锁识别（M7R21F1-2，D-1 收口）：Windows 上 rename 替换可能撞共享违规类瞬态锁
+// （杀软/索引器/并发同名输出短时持有目标；实测 `Access is denied` @ fsops commit rename，
+// build/m7r2-g/handoff.md G4 / docs/m7-report.md §6.4-1）。std::filesystem 的 error_code
+// 在 Windows 取自 GetLastError（std::system_category）：ERROR_ACCESS_DENIED(5) /
+// ERROR_SHARING_VIOLATION(32) / ERROR_LOCK_VIOLATION(33) 三类视为可重试瞬态；
+// 其余平台无此错误面，恒 false（POSIX rename 语义不受影响）。
+bool is_transient_share_error(const std::error_code &ec) {
+#ifdef _WIN32
+    return ec.category() == std::system_category() &&
+           (ec.value() == 5 || ec.value() == 32 || ec.value() == 33);
+#else
+    (void)ec;
+    return false;
+#endif
+}
+
+// rename 有界重试预算：最多 3 次重试（合计 4 次尝试），退避 25/50/75ms。有限次数 = 不改变
+// 失败语义（超预算后仍走原有失败消息与返回值口径）。
+constexpr int kRenameRetryMax = 3;
+
 } // namespace
 
 std::filesystem::path atomic_temp_path(const std::filesystem::path &target) {
@@ -536,11 +557,19 @@ bool commit_temp_file(const std::filesystem::path &tmp, const std::filesystem::p
         return fail("atomic commit: temp file missing: " + tmp.string());
     }
     // 标准语义：rename 覆盖已存在目标（POSIX rename / MSVC std::filesystem::rename）。
-    std::filesystem::rename(normalize_extended_path(tmp), normalize_extended_path(target), ec);
-    if (ec) {
-        return fail("atomic commit: cannot replace " + target.string() + ": " + ec.message());
+    // 瞬态锁有界重试（M7R21F1-2）：仅 Windows 共享违规类错误、至多 kRenameRetryMax 次；
+    // 非瞬态错误与非 Windows 一次失败即出（行为语义与失败消息逐字不变）。
+    for (int attempt = 0;; ++attempt) {
+        std::filesystem::rename(normalize_extended_path(tmp), normalize_extended_path(target), ec);
+        if (!ec) {
+            return true;
+        }
+        if (attempt >= kRenameRetryMax || !is_transient_share_error(ec)) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(25 * (attempt + 1)));
     }
-    return true;
+    return fail("atomic commit: cannot replace " + target.string() + ": " + ec.message());
 }
 
 void discard_temp_file(const std::filesystem::path &tmp) noexcept {

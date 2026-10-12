@@ -313,8 +313,12 @@ OutputPlan resolve_conflict(const std::filesystem::path &desired, ConflictPolicy
     const std::string stem = desired.stem().string();
     const std::string ext = desired.extension().string();
     for (int i = 1; i <= 10000; ++i) {
-        const std::filesystem::path cand =
-            desired.parent_path() / (stem + " (" + std::to_string(i) + ")" + ext);
+        std::string name = stem; // += 逐段拼接（同串同值；避免循环内临时串连加）
+        name += " (";
+        name += std::to_string(i);
+        name += ")";
+        name += ext;
+        const std::filesystem::path cand = desired.parent_path() / name;
         if (!taken_any(cand)) {
             plan.out_path = cand;
             plan.rename_index = i;

@@ -537,7 +537,6 @@ int run_bench(int argc, char **argv) {
         // DRAM；判定档）/ 4096²（268MB，DRAM 放大档）。比值随工作集下降 = 内存带宽触顶的直接证据。
         const int sizes[4] = {256, 1024, 2048, 4096};
         double primary_ratio = 0.0;
-        std::string primary_detail;
         for (int si = 0; si < 4; ++si) {
             const std::size_t npix = static_cast<std::size_t>(sizes[si]) * sizes[si];
             std::vector<float> src(npix * 4);

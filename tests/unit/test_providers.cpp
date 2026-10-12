@@ -57,7 +57,7 @@ int amap_subdomain(const QUrl &url) {
 
 } // namespace
 
-int main() {
+int run_cases() {
     // ---- 注册表(冻结:{"osm","amap"},顺序不变)----
     const TileProvider *osm = pp::map::provider_by_id(QStringLiteral("osm"));
     const TileProvider *amap = pp::map::provider_by_id(QStringLiteral("amap"));
@@ -293,4 +293,15 @@ int main() {
     }
     std::printf("test_providers: FAILED (%d assertion(s))\n", g_failed);
     return g_failed;
+}
+
+int main() {
+    // main 不得让异常外泄（外泄=terminate，bugprone-exception-escape）：run_cases 整体罩住；
+    // 异常路径返回 1（非零=失败，ctest 判定不变），断言与成功路径逐字不动。
+    try {
+        return run_cases();
+    } catch (...) {
+        std::printf("test_providers: FAILED (unexpected exception)\n");
+        return 1;
+    }
 }

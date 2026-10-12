@@ -2272,8 +2272,8 @@ QWidget *build_info_card(MetaState *st, QWidget *parent) {
     for (int i = 0; i < 5; ++i) {
         formkit::FieldCell left;
         formkit::FieldCell right;
-        left.label = keys[std::size_t(i * 2)];
-        right.label = keys[std::size_t(i * 2 + 1)];
+        left.label = keys[std::size_t(i) * 2];
+        right.label = keys[std::size_t(i) * 2 + 1];
         if (i == 4) {
             // 第 5 行：白平衡 / 评级（矢量星；无评级 → 「—」）
             st->info_wb = make_info_value(body, QStringLiteral("pp-meta-info-wb"));
@@ -2288,11 +2288,11 @@ QWidget *build_info_card(MetaState *st, QWidget *parent) {
             right.field = rating.widget();
         } else {
             ElidedLabel *left_value =
-                make_info_value(body, QString::fromLatin1(hooks[std::size_t(i * 2)]));
+                make_info_value(body, QString::fromLatin1(hooks[std::size_t(i) * 2]));
             ElidedLabel *right_value =
-                make_info_value(body, QString::fromLatin1(hooks[std::size_t(i * 2 + 1)]));
-            st->info_value[std::size_t(i * 2)] = left_value;
-            st->info_value[std::size_t(i * 2 + 1)] = right_value;
+                make_info_value(body, QString::fromLatin1(hooks[std::size_t(i) * 2 + 1]));
+            st->info_value[std::size_t(i) * 2] = left_value;
+            st->info_value[std::size_t(i) * 2 + 1] = right_value;
             left.field = left_value;
             if (i == 3) {
                 // 第 4 行右格：GPS 值 + 「已有」胶囊（mockup .kv-v.cells + .pill.ok）
@@ -2379,7 +2379,7 @@ QWidget *build_time_card(MetaState *st, QWidget *parent) {
                 group.gap(theme::Metrics::group_gap);
             }
             auto *spin = new DeltaSpin(group.widget(), QString::fromLatin1(hooks[std::size_t(i)]));
-            st->delta[std::size_t(first_index + i)] = spin;
+            st->delta[std::size_t(first_index) + std::size_t(i)] = spin;
             group.add(spin);
             group.gap(formkit::kInlineGap);
             group.add(unit_slot(group.widget(), units[std::size_t(i)]));

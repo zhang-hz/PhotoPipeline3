@@ -622,7 +622,7 @@ void MainWindow::Impl::push_log_tail() {
             buf.resize(static_cast<std::size_t>(in.gcount()));
             QString text = QString::fromUtf8(buf.data(), static_cast<int>(buf.size()));
             if (start > 0) {
-                const int first_break = text.indexOf(QLatin1Char('\n'));
+                const int first_break = static_cast<int>(text.indexOf(QLatin1Char('\n')));
                 text = first_break >= 0 ? text.mid(first_break + 1) : QString();
             }
             const QStringList all = text.split(QLatin1Char('\n'));

@@ -126,7 +126,8 @@ public:
     // 给 window 装接线并置 Qt::FramelessWindowHint（设计 §9.1「无系统边框/系统标题栏」）。
     // 返回对象挂在 parent（缺省 = window）下；window == nullptr → 返回 nullptr。
     static Frameless *attach(QWidget *window, QWidget *caption,
-                             std::vector<QWidget *> drag_excludes, QObject *parent = nullptr);
+                             const std::vector<QWidget *> &drag_excludes,
+                             QObject *parent = nullptr);
     ~Frameless() override;
 
     void set_caption_buttons(QWidget *minimize, QWidget *maximize, QWidget *close);

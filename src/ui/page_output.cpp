@@ -41,6 +41,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <cstdint>
 #include <map>
 #include <set>
 #include <string>
@@ -1425,7 +1426,8 @@ struct Impl {
     //   * 兼容性提示 → QPalette 指 tokens.warn（公共 warn 钩子尚未进 theme.h，属跨界需求；
     //     这里不挂 kFkHint —— 那条 QSS 的 text3 会把 palette 色覆盖掉）；
     //   * 其余 → kFkHint（--txt3）。
-    enum class NoteTone { Hint, Warn, Error };
+    // 基类型显式 uint8_t（三值枚举；performance-enum-size，值域/语义零变化）。
+    enum class NoteTone : std::uint8_t { Hint, Warn, Error };
     void update_profile_note(const std::string &id) {
         FormatState *st = state_of(id);
         if (st == nullptr || st->profile == nullptr || st->profile_note == nullptr)

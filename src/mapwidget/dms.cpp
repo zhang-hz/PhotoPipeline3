@@ -109,8 +109,9 @@ QString deg_to_dms(double deg, bool is_lat) {
     // 「千分之一分」整数量化：分/度的进位（59.9995' → 下一度 0.000'）由取模天然完成
     const long long milli =
         std::llround(std::fabs(deg) * kMinutesPerDegree * double(kMilliPerMinute));
-    const long long degree = milli / (kMilliPerMinute * 60);
-    const long long minute_milli = milli % (kMilliPerMinute * 60);
+    const long long milli_per_degree = static_cast<long long>(kMilliPerMinute) * 60;
+    const long long degree = milli / milli_per_degree;
+    const long long minute_milli = milli % milli_per_degree;
     const QChar hemi = is_lat ? (negative ? QLatin1Char('S') : QLatin1Char('N'))
                               : (negative ? QLatin1Char('W') : QLatin1Char('E'));
     return QStringLiteral("%1 %2°%3'")

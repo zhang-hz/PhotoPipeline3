@@ -974,7 +974,6 @@ void test_de2000_roundtrip() {
 // ---------------------------------------------------------------------------
 void test_icc_mismatch_degrade() {
     pp::ColorManager::instance().clear_cache();
-    std::string err;
     const std::string rgb_icc = srgb_icc_bytes();
     const std::string gray_icc = gray_icc_bytes(2.2);
 

@@ -21,7 +21,7 @@ using theme::preferred_theme_mode;
 constexpr int kThumbWaitMs = 10000; // §4.3：缩略图队列空上限
 constexpr int kRunWaitMs = 120000;  // U10 冻结：冒烟实跑上限
 constexpr int kSmokeShotCount = 12;
-constexpr qint64 kMinShotBytes = 10 * 1024;
+constexpr qint64 kMinShotBytes = 10LL * 1024; // LL 起手=64 位乘法（值不变 10240）
 
 // 冒烟截图清单（顺序与名称逐字节固定；M4-T14 起 = 12 张：§4.3 冻结 8 张 + 运行页 4 张）
 //   * 03-run / 03b-run-done：**真实运行**下的运行页（运行中锁定态 / 结束态）；
@@ -118,8 +118,8 @@ QString smoke_fixture_label(const std::filesystem::path &p, const QString &repo_
 // 变化，产物仍是真实渲染（空白图 <2KB，照旧被拦下；实测 5679 / 10214 / 7186 字节）。
 qint64 min_shot_bytes(int index) {
     if (index == kShotRunIdle || index == kShotRunRows || index == kShotRunCancel)
-        return 4 * 1024;
-    return index >= kShotSettings ? 2 * 1024 : kMinShotBytes;
+        return 4LL * 1024;
+    return index >= kShotSettings ? 2LL * 1024 : kMinShotBytes;
 }
 } // namespace
 
@@ -1534,7 +1534,7 @@ void MainWindow::Impl::smoke_probe_frameless() {
             QApplication::sendEvent(target, &release);
         };
         send_click(cap_close, QPoint(cap_close->width() / 2, outside_y)); // 带外
-        const int routed_after_outside = band_routed.size();
+        const int routed_after_outside = static_cast<int>(band_routed.size());
         send_click(cap_close, QPoint(cap_close->width() / 2, widget.height() / 2)); // 带内
         QObject::disconnect(band_conn);
         frameless->set_intercept_actions(false);
@@ -2595,7 +2595,8 @@ void MainWindow::Impl::smoke_probe_preview_geometry() {
         const QColor badge_px = sample(QPoint(14, 14));
         const bool translucent = !near(badge_px, stage_token, 3);
         const QString sheet = preview_panel->styleSheet();
-        const int badge_rule = sheet.indexOf(QStringLiteral("QLabel#pp-preview-badge"));
+        const int badge_rule =
+            static_cast<int>(sheet.indexOf(QStringLiteral("QLabel#pp-preview-badge")));
         const bool bordered =
             badge_rule >= 0 &&
             sheet.mid(badge_rule, 160).contains(QStringLiteral("border: 1px solid"));
@@ -4387,7 +4388,8 @@ void MainWindow::Impl::smoke_probe_run_geometry() {
         QLabel *lines = page.findChild<QLabel *>(QStringLiteral("pp-run-log-lines"));
         const QString family = lines != nullptr ? lines->font().family() : QString();
         const int shown_lines =
-            lines != nullptr ? lines->text().split(QStringLiteral("<br>")).size() : 0;
+            lines != nullptr ? static_cast<int>(lines->text().split(QStringLiteral("<br>")).size())
+                             : 0;
         auto *open_full = page.findChild<QPushButton *>(QStringLiteral("pp-run-open-full-log"));
         expect("log-mono",
                family == QString::fromLatin1(theme::Typography::family_mono) && shown_lines == 4 &&
@@ -4532,7 +4534,8 @@ void MainWindow::Impl::smoke_probe_run_geometry() {
         // 无框 + err 色（拆两次 contains，容忍公共规则里的中间修饰），旧 danger 描边档与
         // ppField/ppMetaField 两条退役轨都必须**不出现**（否定断言——旧形态不得回潮）。
         const QString sheet = page.styleSheet();
-        const int rule_at = sheet.indexOf(QStringLiteral("QPushButton[ppFk=\"link-danger\"]"));
+        const int rule_at =
+            static_cast<int>(sheet.indexOf(QStringLiteral("QPushButton[ppFk=\"link-danger\"]")));
         const QString link_rule = rule_at >= 0 ? sheet.mid(rule_at, 200) : QString();
         const bool link_qss =
             rule_at >= 0 && link_rule.contains(QStringLiteral("border: none")) &&

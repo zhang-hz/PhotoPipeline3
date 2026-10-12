@@ -89,7 +89,7 @@ void check_roundtrip(const std::string &plain, const std::string &case_name) {
 
 } // namespace
 
-int main() {
+int run_cases() {
     // ---- 封存/解封往返 ----
     check_roundtrip("", "secret/empty");
     check_roundtrip("KEY-1234-abc", "secret/ascii");
@@ -216,4 +216,15 @@ int main() {
     }
     std::printf("test_secret: FAILED (%d)\n", g_failed);
     return g_failed;
+}
+
+int main() {
+    // main 不得让异常外泄（外泄=terminate，bugprone-exception-escape）：run_cases 整体罩住；
+    // 异常路径返回 1（非零=失败，ctest 判定不变），断言与成功路径逐字不动。
+    try {
+        return run_cases();
+    } catch (...) {
+        std::printf("test_secret: FAILED (unexpected exception)\n");
+        return 1;
+    }
 }

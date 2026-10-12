@@ -54,7 +54,7 @@ std::string show_element(const QPainterPath &p, int i) {
 
 } // namespace
 
-int main() {
+int run_cases() {
     // ---- R-159：相对 s 的反射控制点（双重偏移回归钉）----
     // "M0 0s1 1 2 0s3 -1 4 0"：
     //   s#1：c1 = 2*(0,0)-(0,0) = (0,0)；c2 = (1,1)；end = (2,0)
@@ -213,4 +213,15 @@ int main() {
     }
     std::printf("test_icons: FAILED (%d)\n", g_failed);
     return g_failed;
+}
+
+int main() {
+    // main 不得让异常外泄（外泄=terminate，bugprone-exception-escape）：run_cases 整体罩住；
+    // 异常路径返回 1（非零=失败，ctest 判定不变），断言与成功路径逐字不动。
+    try {
+        return run_cases();
+    } catch (...) {
+        std::printf("test_icons: FAILED (unexpected exception)\n");
+        return 1;
+    }
 }

@@ -128,7 +128,8 @@ namespace pp::ui {
 namespace {
 using theme::preferred_theme_mode;
 
-enum class PresetOp { Load, Save, Delete };
+// 基类型显式 uint8_t（三值枚举；performance-enum-size，值域/语义零变化）。
+enum class PresetOp : std::uint8_t { Load, Save, Delete };
 void warn_preset_op(QWidget *parent, PresetOp op, const QString &detail) {
     const char *title = op == PresetOp::Load   ? "载入预设失败"
                         : op == PresetOp::Save ? "保存预设失败"

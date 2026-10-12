@@ -314,7 +314,7 @@ Frameless::~Frameless() {
 }
 
 Frameless *Frameless::attach(QWidget *window, QWidget *caption,
-                             std::vector<QWidget *> drag_excludes, QObject *parent) {
+                             const std::vector<QWidget *> &drag_excludes, QObject *parent) {
     if (window == nullptr)
         return nullptr;
     // 设计 §9.1：最终 GUI 不带系统边框/系统标题栏

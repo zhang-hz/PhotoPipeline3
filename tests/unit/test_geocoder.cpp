@@ -42,7 +42,7 @@ bool near_eq(double a, double b, double eps = 1e-12) { return std::fabs(a - b) <
 
 } // namespace
 
-int main() {
+int run_cases() {
     // ---- 注册表与字段(§4.2:amap 需 Key+GCJ-02;nominatim 免 Key+WGS-84)----
     const Geocoder *amap = pp::map::geocoder_by_id(QStringLiteral("amap"));
     const Geocoder *nominatim = pp::map::geocoder_by_id(QStringLiteral("nominatim"));
@@ -375,4 +375,15 @@ int main() {
     }
     std::printf("test_geocoder: FAILED (%d assertion(s))\n", g_failed);
     return g_failed;
+}
+
+int main() {
+    // main 不得让异常外泄（外泄=terminate，bugprone-exception-escape）：run_cases 整体罩住；
+    // 异常路径返回 1（非零=失败，ctest 判定不变），断言与成功路径逐字不动。
+    try {
+        return run_cases();
+    } catch (...) {
+        std::printf("test_geocoder: FAILED (unexpected exception)\n");
+        return 1;
+    }
 }

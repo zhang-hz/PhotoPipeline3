@@ -20,7 +20,8 @@
 | WP9 UI 结构拆分 | `594d93f` | 探针迁出 + mainwindow 五域（R-048/049 等） |
 | M7-GATE | `d882fe6`、`59de09d` | 回归基线重播种（逐行归因，见提交正文） |
 | WP10 色彩行为 | **未交付** | 见 §3.1（ColorManager 消费未入树） |
-| WP11 长尾清扫与文档（本包） | 本提交 | docs/**、CHANGELOG、README + P3 注释/文案/常量小修 |
+| WP11 长尾清扫与文档 | `f3e1903` | docs/**、CHANGELOG、README + P3 注释/文案/常量小修 |
+| WP12 终门禁复核（本包） | 本提交 | 全量判据取证（§2）+ tidy 棘轮收口（M7-ADJ-tidy-reseed，§3.7）+ 棘轮 fallout 修复 38 条 |
 
 ---
 
@@ -82,7 +83,7 @@
 ## 2. 验收结论（命令 + 结果逐条取证）
 
 > 本节由 WP11 先落结构与本包实跑数据；**终门禁（全量 ctest / 金样 / 回归 / format / tidy）
-> 由 WP12 在波次收口统一补数**，届时在此追加并注明命令与时间。以下为本包（WP11）实跑。
+> 由 WP12 在波次收口统一补数**，已于 2026-10-12 补齐（§2.3）。以下为 WP11 本包实跑。
 
 ### 2.1 本包实跑（2026-10-12）
 
@@ -110,16 +111,23 @@
 - M7-GATE：回归 zero diff（两次重播种均按 R-015 先归因后落盘，闭合证明见提交正文）+
   金样 20/20 + `ctest --preset release` + format violations=0。
 
-### 2.3 待 WP12 补数（结构留位）
+### 2.3 终门禁（WP12，2026-10-12，门禁树 build/release-dev，取证日志 build/m7-wp12/*.log）
 
-> WP11 已在自己的树 `build/m7-wp11` 实测 ctest 35/35（§2.1）；以下为**波次收口口径**
-> （release-dev 门禁树 + 金样 + 回归 + 全仓 format/tidy）的终数，由 WP12 统一补。
+逐条命令与实测结果（全部实跑；fix 后复验一组，两组结论一致）：
 
-- [ ] 全量 `ctest --test-dir build/release-dev --output-on-failure`（WP11 自树实测 35/35，门禁树待复核）
-- [ ] 金样 `python tests/golden/smoke.py build/release-dev`（预期 `SMOKE total=20 pass=20 fail=0`）
-- [ ] 回归 `python tools/regression.py`（预期 zero diff；基线已含两次 M7 重播种）
-- [ ] `bash tools/ci-format.sh`（预期 violations=0）+ `python tools/ci-tidy.py build/release-dev`（棘轮只减不增）
-- [ ] `QT_QPA_PLATFORM=offscreen … --ui-smoke`（预期 `UI-SMOKE OK shots=12 pages=3`）
+| # | 命令 | 结果 |
+|---|---|---|
+| 1 | `python tools/env.py run -- cmake --preset release-dev -B build/release-dev -DVCPKG_MANIFEST_INSTALL=OFF && python tools/env.py run -- cmake --build build/release-dev` | exit 0（gate-build.log；fallout 修复后重建 gate-build3.log 同绿） |
+| 2 | `python tools/env.py run -- ctest --test-dir build/release-dev --output-on-failure` | **100% tests passed out of 35**（44.2s；fallout 修复后复跑 35/35，`ui_smoke` Passed 29.9s）——「33 条」为任务书旧口径，实测 35 详见 §3.2 |
+| 3 | `python tools/env.py run -- ctest --test-dir build/release-dev -R ui_smoke -V` | 冻结行逐字 `UI-SMOKE OK shots=12 pages=3`（12 张截图全列、末行 `UI-SMOKE pass`） |
+| 4 | `python tools/env.py run -- python tests/golden/smoke.py build/release-dev` | **`SMOKE total=20 pass=20 fail=0`** 逐字（20/20 VERIFY OK；fix 后复跑同值） |
+| 5 | `python tools/env.py run -- python tools/regression.py` | **zero diff**（`normalized 2448 lines vs baseline 2448 lines`，baseline reproduced；无需重播种。fix 后复跑同结论） |
+| 6 | `bash tools/ci-format.sh`（Git bash） | **violations=0**（钉版 clang-format 23.1.1，152 文件全源 0 diff；fix 后复跑同值） |
+| 7 | `python tools/env.py run -- python tools/ci-tidy.py build/release-dev` | **`TIDY total=264 baseline=264 files=71 violations=0 seed=0`**（棘轮通过）。首跑红 24 组/302 告警 → 修复 38 条（302→264）→ 余 10 组 17 条经主对话裁定重播种（M7-ADJ-tidy-reseed，§3.7） |
+| 8 | 密钥扫描（`git log --all -p` 全历史 240,346 行） | 值形态模式 **0 命中**：`sk-[A-Za-z0-9]{16,}`=0、`amap_key\s*[=:]\s*<16+字符值>`=0、`\b[0-9a-f]{32}\b`=0；`amap_key` 名字面 214 命中全为键名/字段名/文档（与 m6-report §6 口径一致，样例见 build/m7-wp12/leak_scan.py 输出） |
+
+证据路径：`build/m7-wp12/gate-*.log`（configure/build/ctest/uis-verbose/golden/regression/format/tidy 各轮日志）、
+`build/m7-wp12/blame{1,2}.txt`（43 条告警逐行 blame 归因）、`build/m7-wp12/handoff.md`（落点与归因台账）。
 
 ### 2.4 真机验收（offscreen 无法替代，须人工签收）
 
@@ -177,6 +185,29 @@ R-171/R-002（write-warnings、meta-write-fail）、R-097（png_ok 硬断言）�
 - WP6-T15（页签等宽改案）、WP9-W9-8（死码接线）等实现改案已在 adjudications 二节逐条登记。
 - WP11 只动注释/文案/常量命名级代码 + 独占文档面；`logic` 一律登记（红线 3）。
 
+### 3.7 tidy 棘轮收口（WP12，M7-ADJ-tidy-reseed，主对话裁决）
+
+- **事实**：M7 首跑 `ci-tidy.py build/release-dev` 红 24 组违规（总 302 > 基线 283）；逐行 blame 归因
+  （`build/m7-wp12/blame{1,2}.txt`）后，38 条属**可零行为修复**（显式转换/未用变量/枚举基型
+  `std::uint8_t`/循环变量按值/字符串拼接改 `+=`/拖拽排除表改 const&/4 个新单测 main 包 try-catch/
+  enc_heif 舍入式拆命名临时量保持算子序/enc_jpegli 有意吞掉显式化），已全修（302→264）。
+  唯一行为差异（登记 WP12-B2）：4 个新单测 main 的**异常逃逸路径**由 terminate→`FAILED`+返回 1
+  （仅测试代码、仅崩溃路径；成功与断言路径逐字不动，ctest 判定不变）。
+- **残余 17 条（10 组）不可零行为修复**（逐条归因见 handoff ②-残余表）：8× easily-swappable
+  （内部同型参数对，修法=签名重构）、2× exception-escape（`~ErrSync`/事件回调 λ，修法=异常路径
+  吞掉=行为变化，发行门禁期禁改）、5× Win32 int↔ptr（`reinterpret_cast<HWND>(winId())`/
+  `NCCALCSIZE_PARAMS*` 平台互操作惯用式，frameless）、1× memcmp-float（dev_bench 逐位比对=
+  bit-exact 判据本体，改值比较会漏 ±0/NaN）、1× 白盒 include（test_icons 的 M3 铁律六单实现
+  测试接线，有意为之）。机械迁移闭合对账：mainwindow.cpp 14→1、main.cpp 8→1，迁出计数与
+  新载体承载同源。
+- **裁定 M7-ADJ-tidy-reseed**（主对话授权，条件五条全落实）：`--update` 重播种
+  `tools/baseline/clang-tidy.tsv` **283/62 → 264/71**——① 总告警只减不增（283→264 严格收紧）；
+  ② **frameless.cpp 5→6 是唯一一处每文件级放宽**（Win32 惯用式 + 发行期不做签名重构，登记于
+  adjudications 六节）；③ 11 条逐条归因（M7 拆 TU 机械迁移 / M6 未入基线存量 / 有意为之）随
+  提交正文与 handoff 在册；④ 复跑 `TIDY total=264 baseline=264 files=71 violations=0 seed=0`；
+  ⑤ CI 判据、.clang-tidy 检查集零改动、零 NOLINT 抑制。**NOLINT 案否决**（仓库零先例、抑制
+  注释会埋回归盲区）。
+
 ---
 
 ## 4. 未覆盖 / 未决项（如实）
@@ -213,9 +244,10 @@ R-171/R-002（write-warnings、meta-write-fail）、R-097（png_ok 硬断言）�
 
 ### 4.3 未跑 / 无法跑
 
-- 终门禁五项（§2.3）归 WP12；本包只跑了 §2.1 之列。
+- ~~终门禁五项（§2.3）归 WP12~~ → **已由 WP12 于 2026-10-12 全部实跑**（§2.3 八项全绿）。
 - TSan 坏捕获正对照（R-027）本机 Windows 无法执行，验证点=首轮 Linux nightly tsan job。
 - R-025/026 等性能项无自动化判据（改动本身也未做，见附录 A）。
+- Linux AppImage 构建、Windows 真机验收（§2.4 十项）：本机不可替代，待人工签收（同 E6）。
 
 ---
 
@@ -244,6 +276,7 @@ python tools/env.py run -- ctest --test-dir build/m7-wp11-rel -N  # 34（diff �
 
 证据路径：各包 handoff = `build/m7-wpN/handoff.md`（验证命令与结果逐条在册）；
 门禁取证 = `build/m7-gate/*.log`（回归归因/金样/ctest/format）；
+终门禁取证 = `build/m7-wp12/gate-*.log`（八项判据逐条）+ `build/m7-wp12/blame{1,2}.txt`（tidy 43 条归因）；
 回归归因 = `.cache/regression/attribution.log`（R-015 护栏产出）。
 
 ---
@@ -660,4 +693,4 @@ python tools/env.py run -- ctest --test-dir build/m7-wp11-rel -N  # 34（diff �
 
 ---
 
-*报告完。终门禁数据由 WP12 在 §2.3 追加；本报告由 WP11 于 2026-10-12 收口。*
+*报告完。终门禁数据已由 WP12 于 2026-10-12 补入 §2.3（八项全绿）；本报告 WP11 收口、WP12 终验。*

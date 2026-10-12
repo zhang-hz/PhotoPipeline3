@@ -219,7 +219,7 @@ QString parse_search(const QByteArray &body, const QString &geocoder_id,
             return QCoreApplication::translate("pp::map", "高德搜索失败：%1").arg(info);
         }
         const QJsonArray pois = root.value(QStringLiteral("pois")).toArray();
-        for (const QJsonValue &v : pois) {
+        for (const QJsonValue v : pois) { // 按值=显式拷贝（迭代器引用类型是代理，不绑 const&）
             const QJsonObject poi = v.toObject();
             double lat = 0;
             double lon = 0;
@@ -244,7 +244,7 @@ QString parse_search(const QByteArray &body, const QString &geocoder_id,
     if (!doc.isArray()) {
         return msg("搜索响应解析失败：顶层不是 JSON 数组");
     }
-    for (const QJsonValue &v : doc.array()) {
+    for (const QJsonValue v : doc.array()) { // 按值=显式拷贝（同上）
         const QJsonObject item = v.toObject();
         bool lat_ok = false;
         bool lon_ok = false;
@@ -292,7 +292,7 @@ QString parse_suggest(const QByteArray &body, const QString &geocoder_id,
         return QCoreApplication::translate("pp::map", "高德联想失败：%1").arg(info);
     }
     const QJsonArray tips = root.value(QStringLiteral("tips")).toArray();
-    for (const QJsonValue &v : tips) {
+    for (const QJsonValue v : tips) { // 按值=显式拷贝（同上）
         const QJsonObject tip = v.toObject();
         SuggestItem item;
         item.title = tip.value(QStringLiteral("name")).toString();

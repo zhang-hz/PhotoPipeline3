@@ -351,6 +351,7 @@ private:
                     progress(0.95f * (static_cast<float>(y + 1) / static_cast<float>(r.height)));
                 } catch (...) {
                     // 进度回调不参与编码成败（§3.1 "尽力而为"）：吞掉并继续。
+                    (void)0; // 吞掉是设计行为（R-087）；空语句仅为「有意吞掉」的显式化
                 }
             }
         }

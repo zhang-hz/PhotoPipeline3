@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <map>
 #include <mutex>
 #include <string>
@@ -213,7 +214,8 @@ float file_frac_from(float shared_weighted, const OutputProgress *outs, std::siz
 
 struct ProgressMux::Impl {
     // R-287：输出状态机（旧 started/done/skipped/failed 四布尔的合法组合闭包）。
-    enum class OutState { Unbound, Bound, Encoded, MetaDone, Skipped, Failed };
+    // 基类型显式 uint8_t（六值枚举；performance-enum-size，值域/语义零变化）。
+    enum class OutState : std::uint8_t { Unbound, Bound, Encoded, MetaDone, Skipped, Failed };
     struct Out {
         float enc_frac = 0.f;  // 编码段（§7.2 encode 50%）
         float meta_frac = 0.f; // 落盘段（§7.2 metawrite 10%）
@@ -412,7 +414,8 @@ ProgressFn ProgressMux::bind_output(std::size_t index, std::string_view format_i
                 ++o.samples;
                 o.enc_frac = std::max(o.enc_frac, f);
                 if (dd.h > 0)
-                    o.max_row = std::max(o.max_row, static_cast<int>(std::lround(f * dd.h)));
+                    o.max_row = std::max(
+                        o.max_row, static_cast<int>(std::lround(f * static_cast<float>(dd.h))));
                 enc_now = o.enc_frac;
             }
             dd.emit_seq(static_cast<int>(index), Stage::Encode, enc_now, /*force=*/false);

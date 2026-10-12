@@ -151,3 +151,9 @@
 | E6 | WP5 真机验收 10 项（Snap/Aero/圆角/多显示器…） | offscreen 无法替代 | Windows 真机人工签收清单（m7-report §2.4） |
 | E7 | Linux 回归基线重播种 | Windows 机不做文本替换移植（R-015 反面先例） | Linux 宿主 / nightly update_baseline 通道 |
 | E8 | regression.py:335-337 行型表钉 `[main.cpp]`（TU 迁移后误分类） | 归因护栏自计数失真已人工纠正口径 | 修分类器=改判据工具，另行裁定 |
+
+## 六、终门禁裁定（WP12，2026-10-12）
+
+| # | 裁定 | 理由 | 实施归属 |
+|---|---|---|---|
+| M7-ADJ-tidy-reseed | **tidy 棘轮基线重播种**（`tools/baseline/clang-tidy.tsv`，283/62 → **264/71**）：`ci-tidy.py --update` 落盘，基线 diff 与本提交同在；**frameless.cpp 5→6 为唯一一处既有条目级放宽**（Win32 `reinterpret_cast<HWND>(winId())` / `NCCALCSIZE_PARAMS*` 等 int↔ptr 平台互操作惯用式 + `attach(QWidget*,QWidget*)` 同型参数对，发行门禁期不做签名重构）；总告警 283→264 严格收紧；17 条残余逐条归因（M7 拆 TU 机械迁移 6 / M6 未入基线存量 2 / 发行期禁改的异常路径 2 / 平台惯用式与有意为之 7），明细见 `m7-report.md` §3.7 与 `build/m7-wp12/handoff.md`。**NOLINT 抑制案否决**（仓库零先例、抑制注释在关键位点埋回归盲区）。 | 主对话裁决（escalate 问答，条件五条：总量只减 / frameless 放宽逐条理由+本表登记 / 归因随提交正文 / 复跑 exit 0+读数入报告 / 不动 CI 判据与检查集、不加抑制）；触发背景：B.6 四 TU + mainwindow 五域拆 TU 把 mainwindow.cpp(14→1)/main.cpp(8→1) 既有告警机械迁入 10 个基线外 TU，file-keyed 棘轮无法表达「告警随代码搬家」，与「新文件须 0」口径不可兼容 | WP12 |

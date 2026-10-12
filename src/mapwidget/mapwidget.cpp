@@ -665,13 +665,13 @@ struct MapWidget::Impl {
         const QString needle = QStringLiteral("key=");
         int pos = 0;
         while (pos < detail.size()) {
-            const int hit = detail.indexOf(needle, pos, Qt::CaseInsensitive);
+            const int hit = static_cast<int>(detail.indexOf(needle, pos, Qt::CaseInsensitive));
             if (hit < 0) {
                 out += detail.mid(pos);
                 break;
             }
             out += detail.mid(pos, hit - pos + needle.size()); // 保留 "key=" 本身
-            int end = hit + needle.size();
+            int end = static_cast<int>(hit + needle.size());
             while (end < detail.size()) {
                 const QChar c = detail.at(end);
                 if (c == QLatin1Char('&') || c.isSpace()) {
@@ -728,7 +728,7 @@ struct MapWidget::Impl {
         QNetworkReply *const reply =
             nam->get(make_request(geocoder->search_url(query, amap_key, near)));
         search_reply = reply;
-        const QString fallback_query = query; // 周边无果时回退全文用
+        const QString &fallback_query = query; // 周边无果时回退全文用（下游 lambda 按值捕获=拷贝）
         QObject::connect(
             reply, &QNetworkReply::finished, q, [this, reply, geocoder, with_near, fallback_query] {
                 const bool current = (search_reply == reply);

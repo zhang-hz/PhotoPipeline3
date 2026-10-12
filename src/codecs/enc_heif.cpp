@@ -262,7 +262,10 @@ int quantize(float v, int maxv) {
     // 边角），算子序列与 quantize16_ref 逐字一致（clamp → ×maxv+0.5 → 截断），
     // 不再引入第二套舍入语义。
     const float x = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
-    return static_cast<int>(x * static_cast<float>(maxv) + 0.5f);
+    // 算子序列保持 clamp → ×maxv+0.5 → 截断（禁止 lround 替换：与 quantize16_ref 逐字同序）；
+    // 拆命名临时量仅为可读性/告警面，浮点运算序零变化。
+    const float scaled = x * static_cast<float>(maxv) + 0.5f;
+    return static_cast<int>(scaled);
 }
 
 void store_sample(uint8_t *base, size_t stride, int bitdepth, int x, int y, int value) {

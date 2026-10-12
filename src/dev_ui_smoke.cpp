@@ -35,7 +35,7 @@ const char *kUiSmokeUsage =
 // 可执行文件目录：复用 pp::platform::executable_dir()（Linux 读 /proc/self/exe，
 // Windows 读 GetModuleFileNameW —— M3 单一实现，不再各自探测）；空结果回退 argv[0]。
 fs::path executable_directory(const char *argv0) {
-    const fs::path exe_dir = pp::platform::executable_dir();
+    fs::path exe_dir = pp::platform::executable_dir(); // 非 const：return 处允许隐式移动
     if (!exe_dir.empty())
         return exe_dir;
     std::error_code ec;

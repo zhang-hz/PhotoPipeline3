@@ -4939,7 +4939,19 @@ void expect_card_menu(const QString &tag, QWidget *host, const QString &first_te
     expect(!got.isEmpty() && got.first() == first_text,
            QStringLiteral("首项 %1（期望 %2）")
                .arg(got.isEmpty() ? QStringLiteral("<空>") : got.first(), first_text));
+    // 补强（M7R22G1-8）：分隔线**全序**逐位（want 的 separator 旗标序 == 菜单实际）——
+    // 原判据跳过分隔线只比文本序列；分隔线落位自此钉住。
+    QStringList want_full;
+    for (const contextmenu::Item &item : want)
+        want_full << (item.separator ? QStringLiteral("<sep>") : item.text);
+    QStringList got_full;
+    for (QAction *action : menu->actions())
+        got_full << (action->isSeparator() ? QStringLiteral("<sep>") : action->text());
+    expect(got_full == want_full,
+           QStringLiteral("含分隔线全序 %1（期望 %2）")
+               .arg(got_full.join(QLatin1Char('/')), want_full.join(QLatin1Char('/'))));
     menu->close();
+    expect(!menu->isVisible(), QStringLiteral("菜单已收（无残留弹层）"));
 }
 
 // —— G1 探针总集公共件（M7R22G1-3/-4）：渲染取样与墨迹盒 ——
@@ -5513,6 +5525,96 @@ void probe_rtl_deep(MainWindow *w, const std::function<void(const QString &)> &f
     std::fflush(stdout);
 }
 
+// —— UX-14 C1–C4 色彩四选项档位探针（M7R22G1-7）：pp-intent-combo / pp-gamut-combo /
+//   pp-dither8-switch / pp-linear-switch —— ① 默认值 = 现行为逐字（intent 0 / gamut 0 /
+//   dither8 off / linear off；M7R21F4-4 接线口径「全 opt-in 默认关 = 现行为」）+ 档位数
+//   （0..3 / 0..2）；② 切换后 config_base() 读回断言 + linear_resample() 同源读回；
+//   ③ 归位默认并复读（不留残态）。自由函数取数面。
+void probe_color_options(PageOutput *page_output,
+                         const std::function<void(const QString &)> &fail) {
+    int checked = 0;
+    int bad = 0;
+    const auto expect = [&](bool ok, const QString &what) {
+        ++checked;
+        if (!ok) {
+            ++bad;
+            fail(QStringLiteral("color-options：%1").arg(what));
+        }
+    };
+    if (page_output == nullptr) {
+        fail(QStringLiteral("color-options：输出页未就绪"));
+        std::printf("UI-SMOKE color-options: checked=1 bad=1\n");
+        std::fflush(stdout);
+        return;
+    }
+    QComboBox *intent = page_output->findChild<QComboBox *>(QStringLiteral("pp-intent-combo"));
+    QComboBox *gamut = page_output->findChild<QComboBox *>(QStringLiteral("pp-gamut-combo"));
+    auto *dither8 = page_output->findChild<QAbstractButton *>(QStringLiteral("pp-dither8-switch"));
+    auto *linear = page_output->findChild<QAbstractButton *>(QStringLiteral("pp-linear-switch"));
+    const bool in_place =
+        intent != nullptr && gamut != nullptr && dither8 != nullptr && linear != nullptr;
+    expect(in_place, QStringLiteral("四控件在位（intent=%1 gamut=%2 dither8=%3 linear=%4）")
+                         .arg(intent != nullptr ? 1 : 0)
+                         .arg(gamut != nullptr ? 1 : 0)
+                         .arg(dither8 != nullptr ? 1 : 0)
+                         .arg(linear != nullptr ? 1 : 0));
+    if (!in_place) {
+        std::printf("UI-SMOKE color-options: checked=%d bad=%d\n", checked, bad);
+        std::fflush(stdout);
+        return;
+    }
+    const auto cfg4 = [page_output]() {
+        const pp::RunConfig cfg = page_output->config_base();
+        return QStringLiteral("intent %1 gamut %2 dither8 %3 linear %4")
+            .arg(cfg.color_intent)
+            .arg(cfg.gamut_mapping)
+            .arg(cfg.color_dither8 ? 1 : 0)
+            .arg(cfg.linear_resample ? 1 : 0);
+    };
+    // ① 档位数（0..3 / 0..2，M7R21F4-4）+ 默认值 = 现行为
+    expect(intent->count() == 4 && gamut->count() == 3,
+           QStringLiteral("档位数（intent %1=4 / gamut %2=3）")
+               .arg(intent->count())
+               .arg(gamut->count()));
+    expect(intent->currentIndex() == 0 && gamut->currentIndex() == 0 && !dither8->isChecked() &&
+               !linear->isChecked(),
+           QStringLiteral("默认档 = 现行为（%1）").arg(cfg4()));
+    {
+        const pp::RunConfig cfg = page_output->config_base();
+        expect(cfg.color_intent == 0 && cfg.gamut_mapping == 0 && !cfg.color_dither8 &&
+                   !cfg.linear_resample,
+               QStringLiteral("config_base 默认读回（%1）").arg(cfg4()));
+    }
+    // ② 切换（用户路径 click / setCurrentIndex）→ config_base 读回
+    intent->setCurrentIndex(2);
+    gamut->setCurrentIndex(1);
+    dither8->click();
+    linear->click();
+    smoke_pump(60);
+    {
+        const pp::RunConfig cfg = page_output->config_base();
+        expect(cfg.color_intent == 2 && cfg.gamut_mapping == 1 && cfg.color_dither8 &&
+                   cfg.linear_resample && page_output->linear_resample(),
+               QStringLiteral("切换后读回（%1; linear_resample()=%2）")
+                   .arg(cfg4())
+                   .arg(page_output->linear_resample() ? 1 : 0));
+    }
+    // ③ 归位默认 + 复读
+    intent->setCurrentIndex(0);
+    gamut->setCurrentIndex(0);
+    dither8->click();
+    linear->click();
+    smoke_pump(60);
+    {
+        const pp::RunConfig cfg = page_output->config_base();
+        expect(cfg.color_intent == 0 && cfg.gamut_mapping == 0 && !cfg.color_dither8 &&
+                   !cfg.linear_resample,
+               QStringLiteral("归位后 config_base 复读（%1）").arg(cfg4()));
+    }
+    std::printf("UI-SMOKE color-options: checked=%d bad=%d\n", checked, bad);
+    std::fflush(stdout);
+}
+
 // —— UX-2：勾选批量三态计数 + 过滤作用面 + 快捷键可达（check-all）——
 void MainWindow::Impl::smoke_probe_check_all() {
     int checked = 0;
@@ -5580,6 +5682,30 @@ void MainWindow::Impl::smoke_probe_check_all() {
            QStringLiteral("Ctrl+Shift+A 勾选全部可达"));
     expect(seqs.contains(QKeySequence(Qt::CTRL | Qt::Key_D).toString()),
            QStringLiteral("Ctrl+D 取消全部勾选可达"));
+    // 补强（M7R22G1-8）：快捷键动作**执行语义**（不只注册面）——触发「勾选全部/取消全部」
+    // 动作并断言勾选计数随之变化（Ctrl+A 是视图选择面，不在勾选计数判据内）。
+    QAction *act_check_all = nullptr;
+    QAction *act_uncheck_all = nullptr;
+    for (QAction *action : view->actions()) {
+        const QString seq = action->shortcut().toString();
+        if (seq == QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_A).toString())
+            act_check_all = action;
+        if (seq == QKeySequence(Qt::CTRL | Qt::Key_D).toString())
+            act_uncheck_all = action;
+    }
+    model->set_all_checked(false);
+    if (act_check_all != nullptr)
+        act_check_all->trigger();
+    pump(60);
+    expect(model->checked_count() == rows,
+           QStringLiteral("「勾选全部」动作执行 → checked==rows（got %1）")
+               .arg(model->checked_count()));
+    if (act_uncheck_all != nullptr)
+        act_uncheck_all->trigger();
+    pump(60);
+    expect(model->checked_count() == 0,
+           QStringLiteral("「取消全部」动作执行 → 0（got %1）").arg(model->checked_count()));
+    model->set_all_checked(true); // 归位（保持本探针原终态 = 全选）
     std::printf("UI-SMOKE check-all: checked=%d bad=%d rows=%llu\n", checked, bad,
                 static_cast<unsigned long long>(rows));
     std::fflush(stdout);
@@ -5923,30 +6049,37 @@ void MainWindow::Impl::smoke_probe_edit_target() {
         search->setText(QStringLiteral("png"));
         pump(150);
     }
-    QModelIndex vidx; // 首个**可见文件行**（分组树顶层是节头 → 从源行正向映射取）
-    for (std::size_t i = 0; i < model->size() && !vidx.isValid(); ++i) {
+    // R-152（M7R22G1-9 深度）：过滤态下**每个**可见文件行的双击映射链都落回同名源行
+    // （原只查首行；「双击编辑错文件」类缺陷要求全可见面一致）。
+    int vis_rows = 0;
+    int map_bad = 0;
+    QStringList map_diag;
+    for (std::size_t i = 0; i < model->size(); ++i) {
         const QModelIndex pidx = proxy->mapFromSource(model->index(static_cast<int>(i), 0));
         const QModelIndex gidx = groups->mapFromSource(pidx);
-        if (gidx.isValid())
-            vidx = gidx;
-    }
-    if (vidx.isValid()) {
-        const QModelIndex src_idx = proxy->mapToSource(groups->mapToSource(vidx));
+        if (!gidx.isValid())
+            continue;
+        ++vis_rows;
+        const QModelIndex src_idx = proxy->mapToSource(groups->mapToSource(gidx));
         const int src_row = src_idx.row();
-        const QString shown = view->model()->data(vidx, FileListModel::NameRole).toString();
-        expect(src_row >= 0 && src_row < static_cast<int>(model->size()),
-               QStringLiteral("映射链落回源行（row=%1）").arg(src_row));
-        if (src_row >= 0 && src_row < static_cast<int>(model->size())) {
-            const QString base = QFileInfo(QString::fromStdString(
-                                               model->row(std::size_t(src_row)).entry.src.string()))
-                                     .fileName();
-            expect(
-                shown.contains(base),
-                QStringLiteral("R-152 所见即所编（视图 \"%1\" ↔ 源行 \"%2\"）").arg(shown, base));
+        const QString shown = view->model()->data(gidx, FileListModel::NameRole).toString();
+        if (src_row < 0 || src_row >= static_cast<int>(model->size())) {
+            ++map_bad;
+            map_diag << QStringLiteral("row%1:越界%2").arg(i).arg(src_row);
+            continue;
         }
-    } else {
-        expect(false, QStringLiteral("过滤后应有可见行"));
+        const QString base =
+            QFileInfo(QString::fromStdString(model->row(std::size_t(src_row)).entry.src.string()))
+                .fileName();
+        if (!shown.contains(base)) {
+            ++map_bad;
+            map_diag << QStringLiteral("row%1:\"%2\"↔\"%3\"").arg(i).arg(shown, base);
+        }
     }
+    expect(vis_rows > 0, QStringLiteral("过滤后应有可见行（got %1）").arg(vis_rows));
+    expect(map_bad == 0, QStringLiteral("R-152 所见即所编（全 %1 可见行映射一致；%2）")
+                             .arg(vis_rows)
+                             .arg(map_diag.join(QLatin1Char(' '))));
     if (search != nullptr) {
         search->setText(prev_search);
         pump(150);
@@ -5993,6 +6126,23 @@ void MainWindow::Impl::smoke_probe_edit_target() {
                    .arg(still)
                    .arg(picked.size())
                    .arg(diag.join(QLatin1Char(' '))));
+        // R-153 回归深度（M7R22G1-9）：第二轮重建（清过滤 → 再过滤）——恢复协议可重复，
+        // 两选仍保留（「选中恢复先于 expandAll」顺序契约对二次重建同样成立）。
+        if (search != nullptr && picked.size() == 2) {
+            search->setText(QString());
+            pump(150);
+            search->setText(QStringLiteral("png"));
+            pump(150);
+        }
+        int still2 = 0;
+        for (int row : picked) {
+            const QModelIndex pidx = proxy->mapFromSource(model->index(row, 0));
+            const QModelIndex gidx = groups->mapFromSource(pidx);
+            if (gidx.isValid() && view->selectionModel()->isSelected(gidx))
+                ++still2;
+        }
+        expect(still2 == picked.size() && picked.size() == 2,
+               QStringLiteral("R-153 二轮重建多选仍保留（%1/%2）").arg(still2).arg(picked.size()));
         if (search != nullptr) {
             search->setText(QString());
             pump(150);
@@ -6650,6 +6800,7 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
         };
         probe_format_roundtrip(page_output, g1_fail);
         probe_rtl_deep(w, g1_fail);
+        probe_color_options(page_output, g1_fail);
     }
 
     // ---- 对话框三连（构造 → show → processEvents → grab → close，绝不 exec）----

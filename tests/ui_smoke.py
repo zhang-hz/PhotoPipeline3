@@ -422,6 +422,7 @@ G1_LINE_PREFIXES = (
     'UI-SMOKE settings-tabs-light:',
     'UI-SMOKE format-roundtrip:',
     'UI-SMOKE rtl-deep:',
+    'UI-SMOKE color-options:',
 )
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

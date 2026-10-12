@@ -13,7 +13,8 @@
 #include <string>
 
 #include "mapwidget/coord.h"
-#include "mapwidget/map_view.h" // B.5 ①（M7-R2.1-F2）：投影/基准纯核（pp_core）
+#include "mapwidget/map_view.h"   // B.5 ①（M7-R2.1-F2）：投影/基准纯核（pp_core）
+#include "mapwidget/tile_cache.h" // B.5 ②（M7-R2.2-G2）：TileKey/LRU/预算纯核（header-only）
 
 namespace {
 
@@ -154,6 +155,42 @@ int main() {
         const std::pair<double, double> back = pp::map::datum_to_wgs(conv.first, conv.second, true);
         check(std::fabs(back.first - 31.23) < 1e-8 && std::fabs(back.second - 121.47) < 1e-8,
               "map_view/datum-roundtrip", "error too large");
+    }
+
+    // ---- M7-R2.2-G2 / 附录 B.5 ②：TileCache LRU/预算真值表（载荷 = int 哑载荷）----
+    {
+        using pp::map::TileCache;
+        using pp::map::TileKey;
+        TileCache<int> c(100);
+        const TileKey a{"src", "road", 4, 1, 2};
+        const TileKey b{"src", "road", 4, 2, 2};
+        const TileKey d{"src", "road", 4, 3, 2};
+        check(c.find(a) == nullptr && c.size() == 0, "tile_cache/empty-find", "expected miss");
+        c.insert(a, 1, 60);
+        check(c.bytes() == 60 && c.size() == 1, "tile_cache/accounting",
+              "bytes=" + std::to_string(c.bytes()));
+        check(c.find(a) != nullptr && *c.find(a) == 1, "tile_cache/hit", "expected payload 1");
+        // LRU：touch a → b 入缓存超预算 → 逐出最久未用 = a
+        c.insert(b, 2, 60);
+        check(c.size() == 1 && c.find(a) == nullptr && c.find(b) != nullptr && *c.find(b) == 2,
+              "tile_cache/lru-evict-oldest", "expected b survived, a evicted");
+        // 队序：insert(d) 后 d 队头、b 队尾 → 超预算逐出 b（d 存活）
+        c.insert(d, 3, 60);
+        check(c.size() == 1 && c.find(d) != nullptr, "tile_cache/touch-order",
+              "expected d survived (b was older after touch-free inserts)");
+        // 同键替换：footprint 记账更新、不双计
+        TileCache<int> r(1000);
+        r.insert(a, 7, 40);
+        r.insert(a, 8, 25);
+        check(r.bytes() == 25 && r.size() == 1 && *r.find(a) == 8, "tile_cache/replace-same-key",
+              "bytes=" + std::to_string(r.bytes()));
+        // 预算收紧即逐出（set_budget 内含 evict）
+        r.set_budget(10);
+        check(r.size() == 0 && r.bytes() == 0, "tile_cache/set-budget-evict", "expected emptied");
+        // 单件超预算：入后即被逐出（与原 evict_to_budget 循环逐位同义）
+        TileCache<int> big(10);
+        big.insert(a, 1, 999);
+        check(big.size() == 0, "tile_cache/oversized-entry-evicted", "expected immediate evict");
     }
 
     if (g_failed == 0) {

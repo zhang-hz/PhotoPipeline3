@@ -63,7 +63,8 @@
 //     and search_select_key() picks results by key.
 
 #include "mapwidget/mapwidget.h"
-#include "mapwidget/map_view.h" // B.5 ①：投影/基准纯核（pp_core 单源）
+#include "mapwidget/map_view.h"   // B.5 ①：投影/基准纯核（pp_core 单源）
+#include "mapwidget/tile_cache.h" // B.5 ②：TileKey/LRU/预算纯核（M7R22G2）
 
 #include "mapwidget/geocoder.h"
 #include "mapwidget/layers.h"
@@ -162,36 +163,12 @@ int mirror_px(const QWidget *q, int x) {
 
 } // namespace
 
-// Tile cache key. Declared at namespace scope (not in the anonymous namespace) so that QHash
-// finds qHash() by argument-dependent lookup; it stays private to this translation unit.
-// M6-T5：维度由 {provider} 扩为 {source, layer}（layer ∈ road/satellite/label），使 Hybrid 的
-// 影像层与标注层、以及回退源（osm 的卫星走 esri）各有独立条目；LRU/字节预算逻辑不变。
-struct TileKey {
-    QString source; // 瓦片源 id："amap" | "osm" | "esri"
-    QString layer;  // "road" | "satellite" | "label"
-    int zoom = 0;
-    int x = 0;
-    int y = 0;
-};
-
-inline bool operator==(const TileKey &a, const TileKey &b) {
-    return a.zoom == b.zoom && a.x == b.x && a.y == b.y && a.source == b.source &&
-           a.layer == b.layer;
-}
-
-inline size_t qHash(const TileKey &k, size_t seed = 0) {
-    size_t h = qHash(k.source, seed);
-    h = h * 1000003u + qHash(k.layer);
-    h = h * 1000003u + size_t(k.zoom);
-    h = h * 1000003u + size_t(k.x);
-    h = h * 1000003u + size_t(k.y);
-    return h;
-}
+// Tile cache key → tile_cache.h（B.5 ②，M7R22G2：TileKey/qHash/LRU/预算纯核单源；
+// M6-T5 的 {source, layer} 维度与 LRU/字节预算语义逐位不变）。
 
 // 图层键 → URL 的唯一出口（缓存命中判定与抓取共用同一个 key）。「road」走 Road 路网，
 // 「satellite」走影像层（Hybrid 的底层同为影像），「label」走 Hybrid 标注叠加层；
 // 源不支持该层（osm 无影像层、esri 无标注层）时返回空 URL —— 调用方据此不发请求。
-// static：TileKey 需在匿名命名空间外（ADL 找 qHash），本辅助函数随之留在此处但仅本 TU 可见。
 static QUrl tile_url_for(const TileKey &key) {
     const TileSource *const source = tile_source_by_id(key.source);
     if (source == nullptr) {
@@ -219,12 +196,6 @@ struct MapWidget::Impl {
     struct PaintLayer {
         const TileSource *source = nullptr;
         QString layer;
-    };
-
-    struct CacheEntry {
-        QPixmap pixmap;
-        qint64 footprint = 0; // decoded bytes charged against the budget
-        std::list<TileKey>::iterator lru_pos;
     };
 
     // Receives the QWidget events the frozen header cannot declare overrides for.
@@ -265,10 +236,8 @@ struct MapWidget::Impl {
     std::vector<TileKey> fetch_wanted;  // R-221：本次可视区登记的待抓瓦片（paint 外发请求）
 
     std::vector<PendingTile> pending;
-    std::list<TileKey> lru; // front = most recently used
-    QHash<TileKey, CacheEntry> cache;
-    qint64 cache_bytes = 0;
-    qint64 cache_budget = qint64(kDefaultCacheMb) * kBytesPerMb;
+    // B.5 ②（M7R22G2）：缓存 = tile_cache.h 纯核（LRU/预算语义逐位不变；默认预算 kDefaultCacheMb）
+    TileCache<QPixmap> cache{qint64(kDefaultCacheMb) * kBytesPerMb};
 
     std::vector<SearchResult> results;
 
@@ -414,30 +383,12 @@ struct MapWidget::Impl {
         return screen + center_world() - QPointF(q->width() / 2.0, q->height() / 2.0);
     }
 
-    // ---- tile cache (LRU, byte budget) ------------------------------------------
-    const QPixmap *find_tile(const TileKey &key) {
-        const auto it = cache.find(key);
-        if (it == cache.end()) {
-            return nullptr;
-        }
-        lru.splice(lru.begin(), lru, it->lru_pos); // touch: move to most-recently-used
-        it->lru_pos = lru.begin();
-        return &it->pixmap;
-    }
+    // ---- tile cache（B.5 ②：LRU/预算纯核 → tile_cache.h；此处只留解码 + 失败语义）----
+    const QPixmap *find_tile(const TileKey &key) { return cache.find(key); }
 
-    void evict_to_budget() {
-        while (cache_bytes > cache_budget && !lru.empty()) {
-            const TileKey oldest = lru.back();
-            lru.pop_back();
-            const auto it = cache.find(oldest);
-            if (it != cache.end()) {
-                cache_bytes -= it->footprint;
-                cache.erase(it);
-            }
-        }
-    }
+    void evict_to_budget() { cache.evict_to_budget(); }
 
-    // R-161（M7-WP7）：返回**是否真的入缓存** —— 失败 streak 只被成功瓦片复位；坏 payload
+    // R-161（M7-WP7）：返回**解码成功** —— 失败 streak 只被成功瓦片复位；坏 payload
     // 不再"当场抵消"连续失败计数（banner 阈值对 200+ 坏 body 终于可触发）。
     bool insert_tile(const TileKey &key, const QByteArray &data) {
         QPixmap pixmap;
@@ -449,20 +400,7 @@ struct MapWidget::Impl {
         // dropped after decoding) and the budget is charged for the decoded footprint, so
         // set_cache_mb() really bounds process memory: 64 MB ~= 256 tiles of 256x256 ARGB32.
         const qint64 footprint = qint64(pixmap.width()) * qint64(pixmap.height()) * 4;
-        const auto existing = cache.find(key);
-        if (existing != cache.end()) {
-            cache_bytes -= existing->footprint;
-            lru.erase(existing->lru_pos);
-            cache.erase(existing);
-        }
-        lru.push_front(key);
-        CacheEntry entry;
-        entry.pixmap = pixmap;
-        entry.footprint = footprint;
-        entry.lru_pos = lru.begin();
-        cache_bytes += footprint;
-        cache.insert(key, entry);
-        evict_to_budget();
+        cache.insert(key, std::move(pixmap), footprint);
         return true;
     }
 
@@ -1228,8 +1166,7 @@ void MapWidget::set_amap_key(const QString &key) { impl_->amap_key = key; }
 
 void MapWidget::set_cache_mb(int mb) {
     Impl &d = *impl_;
-    d.cache_budget = qint64(std::max(0, mb)) * kBytesPerMb;
-    d.evict_to_budget();
+    d.cache.set_budget(qint64(std::max(0, mb)) * kBytesPerMb); // 内含逐出（B.5 ②）
     update();
 }
 

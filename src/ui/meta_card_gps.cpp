@@ -657,8 +657,8 @@ void build_gps_map_section(MetaState *st, QWidget *body, QVBoxLayout *bv) {
     st->map->setMinimumHeight(kMapHeight);
     st->map->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     group.add(st->map, 1);
-    st->map_host = group.widget(); // M6-T13：重挂载的原位（挂回时同一宿主 + 同一行槽）
-    st->map_line = group.line;
+    st->overlay.map_host = group.widget(); // M6-T13：重挂载的原位（挂回时同一宿主 + 同一行槽）
+    st->overlay.map_line = group.line;
     // 覆盖层 = map 的子布局（不进卡内行节奏；控件是 map 的子件 → 重挂载时随 map 一并进
     // 对话框，无需重建）。
     auto *overlay = new QVBoxLayout(st->map);
@@ -670,27 +670,29 @@ void build_gps_map_section(MetaState *st, QWidget *body, QVBoxLayout *bv) {
     top_line->setSpacing(formkit::kInlineGap);
     // UX-4③：图层控件浮到地图左上角 —— 半透明浮层底板（公共 overlay 令牌 hud_bg，与
     // mapwidget 自绘 HUD 同口径；不随主题变）。
-    st->layer_plate = new QWidget(st->map);
-    st->layer_plate->setObjectName(QStringLiteral("pp-meta-map-layer-plate"));
-    st->layer_plate->setStyleSheet(QStringLiteral("background: %1; border: 1px solid %2; "
-                                                  "border-radius: 6px;")
-                                       .arg(QString::fromLatin1(theme::overlay_tokens().hud_bg),
-                                            QStringLiteral("rgba(0,0,0,0.12)")));
-    auto *plate_line = new QHBoxLayout(st->layer_plate);
+    st->overlay.layer_plate = new QWidget(st->map);
+    st->overlay.layer_plate->setObjectName(QStringLiteral("pp-meta-map-layer-plate"));
+    st->overlay.layer_plate->setStyleSheet(
+        QStringLiteral("background: %1; border: 1px solid %2; "
+                       "border-radius: 6px;")
+            .arg(QString::fromLatin1(theme::overlay_tokens().hud_bg),
+                 QStringLiteral("rgba(0,0,0,0.12)")));
+    auto *plate_line = new QHBoxLayout(st->overlay.layer_plate);
     plate_line->setContentsMargins(4, 3, 4, 3);
     plate_line->setSpacing(0);
-    st->layer_seg = new formkit::SegmentedControl(st->layer_plate);
+    st->layer_seg = new formkit::SegmentedControl(st->overlay.layer_plate);
     st->layer_seg->setObjectName(QStringLiteral("pp-meta-gps-layer"));
     st->layer_seg->add_segment(PageMeta::tr("矢量"), QStringLiteral("pp-meta-gps-layer-road"));
     st->layer_seg->add_segment(PageMeta::tr("卫星"), QStringLiteral("pp-meta-gps-layer-satellite"));
     st->layer_seg->add_segment(PageMeta::tr("混合"), QStringLiteral("pp-meta-gps-layer-hybrid"));
     plate_line->addWidget(st->layer_seg);
-    top_line->addWidget(st->layer_plate, 0, Qt::AlignLeft | Qt::AlignTop);
+    top_line->addWidget(st->overlay.layer_plate, 0, Qt::AlignLeft | Qt::AlignTop);
     top_line->addStretch(1);
-    st->map_expand = make_map_hud_button(st->map, QStringLiteral("pp-meta-map-expand"),
-                                         icons::Name::ZoomFit, PageMeta::tr(kMapExpandText));
-    st->map_expand->setToolTip(PageMeta::tr(kMapExpandTooltipText));
-    top_line->addWidget(st->map_expand, 0, Qt::AlignRight | Qt::AlignTop);
+    st->overlay.map_expand =
+        make_map_hud_button(st->map, QStringLiteral("pp-meta-map-expand"), icons::Name::ZoomFit,
+                            PageMeta::tr(kMapExpandText));
+    st->overlay.map_expand->setToolTip(PageMeta::tr(kMapExpandTooltipText));
+    top_line->addWidget(st->overlay.map_expand, 0, Qt::AlignRight | Qt::AlignTop);
     overlay->addLayout(top_line);
     // UX-4①：联想下拉 + 搜索结果 = **地图浮层**（默认隐藏；有结果显示；选中/清空/换源/失焦
     // 隐藏）。objectName 保留（pp-meta-gps-suggest / pp-meta-gps-search-results /
@@ -727,33 +729,34 @@ void build_gps_map_section(MetaState *st, QWidget *body, QVBoxLayout *bv) {
         overlay->addWidget(host);
     }
     // R-315：瓦片加载反馈 chip（tiles_pending_changed → 显示/隐藏）
-    st->map_loading = new QLabel(PageMeta::tr(kMapLoadingText), st->map);
-    st->map_loading->setObjectName(QStringLiteral("pp-meta-map-loading"));
-    st->map_loading->setProperty(kFieldProperty, QStringLiteral("map-hud"));
-    st->map_loading->setFont(theme::font(theme::Typography::hint_px, QFont::Normal));
-    st->map_loading->setToolTip(PageMeta::tr("正在加载地图瓦片"));
-    st->map_loading->setAttribute(Qt::WA_TransparentForMouseEvents, true);
-    st->map_loading->setVisible(false);
-    overlay->addWidget(st->map_loading, 0, Qt::AlignLeft);
+    st->overlay.map_loading = new QLabel(PageMeta::tr(kMapLoadingText), st->map);
+    st->overlay.map_loading->setObjectName(QStringLiteral("pp-meta-map-loading"));
+    st->overlay.map_loading->setProperty(kFieldProperty, QStringLiteral("map-hud"));
+    st->overlay.map_loading->setFont(theme::font(theme::Typography::hint_px, QFont::Normal));
+    st->overlay.map_loading->setToolTip(PageMeta::tr("正在加载地图瓦片"));
+    st->overlay.map_loading->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    st->overlay.map_loading->setVisible(false);
+    overlay->addWidget(st->overlay.map_loading, 0, Qt::AlignLeft);
     overlay->addStretch(1);
     // 底行：光标读数 + 「－/＋」缩放钮（右下；左下留给 mapwidget 自绘比例尺）
     auto *bottom_line = new QHBoxLayout();
     bottom_line->setContentsMargins(0, 0, 0, 0);
     bottom_line->setSpacing(formkit::kInlineGap);
-    st->map_cursor = new QLabel(PageMeta::tr(kMapCursorIdleText), st->map);
-    st->map_cursor->setObjectName(QStringLiteral("pp-meta-map-cursor"));
-    st->map_cursor->setProperty(kFieldProperty, QStringLiteral("map-hud"));
-    st->map_cursor->setFont(theme::font(theme::Typography::hint_px, QFont::Normal, true));
-    st->map_cursor->setToolTip(PageMeta::tr(kMapCursorTooltipText));
-    st->map_cursor->setAttribute(Qt::WA_TransparentForMouseEvents, true); // 不吃地图鼠标事件
+    st->overlay.map_cursor = new QLabel(PageMeta::tr(kMapCursorIdleText), st->map);
+    st->overlay.map_cursor->setObjectName(QStringLiteral("pp-meta-map-cursor"));
+    st->overlay.map_cursor->setProperty(kFieldProperty, QStringLiteral("map-hud"));
+    st->overlay.map_cursor->setFont(theme::font(theme::Typography::hint_px, QFont::Normal, true));
+    st->overlay.map_cursor->setToolTip(PageMeta::tr(kMapCursorTooltipText));
+    st->overlay.map_cursor->setAttribute(Qt::WA_TransparentForMouseEvents,
+                                         true); // 不吃地图鼠标事件
     bottom_line->addStretch(1);
-    bottom_line->addWidget(st->map_cursor, 0, Qt::AlignRight | Qt::AlignBottom);
-    st->zoom_out = make_map_hud_button(st->map, QStringLiteral("pp-meta-map-zoom-out"),
-                                       icons::Name::ZoomOut, PageMeta::tr(kMapZoomOutText));
-    st->zoom_in = make_map_hud_button(st->map, QStringLiteral("pp-meta-map-zoom-in"),
-                                      icons::Name::ZoomIn, PageMeta::tr(kMapZoomInText));
-    bottom_line->addWidget(st->zoom_out);
-    bottom_line->addWidget(st->zoom_in);
+    bottom_line->addWidget(st->overlay.map_cursor, 0, Qt::AlignRight | Qt::AlignBottom);
+    st->overlay.zoom_out = make_map_hud_button(st->map, QStringLiteral("pp-meta-map-zoom-out"),
+                                               icons::Name::ZoomOut, PageMeta::tr(kMapZoomOutText));
+    st->overlay.zoom_in = make_map_hud_button(st->map, QStringLiteral("pp-meta-map-zoom-in"),
+                                              icons::Name::ZoomIn, PageMeta::tr(kMapZoomInText));
+    bottom_line->addWidget(st->overlay.zoom_out);
+    bottom_line->addWidget(st->overlay.zoom_in);
     overlay->addLayout(bottom_line);
     // UX-4 stretch（M7-R2-B）：地图行 stretch=1 —— 卡体富余高全归地图（不吃行节奏）
     bv->addWidget(group.widget(), 1);
@@ -1077,17 +1080,18 @@ void gps_wiring(MetaState *st) {
                                   QString::fromLatin1(kLayerStyleKeys[std::size_t(style)]));
                      });
     // M6-T12（§5.3/§7-T12 体验件）：缩放钮 → map->zoom_in/zoom_out（视口中心锚点，中心不动）
-    QObject::connect(st->zoom_in, &QToolButton::clicked, st, [st] { st->map->zoom_in(); });
-    QObject::connect(st->zoom_out, &QToolButton::clicked, st, [st] { st->map->zoom_out(); });
+    QObject::connect(st->overlay.zoom_in, &QToolButton::clicked, st, [st] { st->map->zoom_in(); });
+    QObject::connect(st->overlay.zoom_out, &QToolButton::clicked, st,
+                     [st] { st->map->zoom_out(); });
     // M6-T13（§7-T13 R5）：展开钮 → 大地图对话框（同一 map 控件重挂载；模态，关闭即挂回）
-    QObject::connect(st->map_expand, &QToolButton::clicked, st,
+    QObject::connect(st->overlay.map_expand, &QToolButton::clicked, st,
                      [st] { open_map_expanded_view(st); });
     // 光标坐标读数（接 map 的 cursor_moved，WGS-84、约 100ms 节流）：地图覆盖层 chip 显示
     // 「光标: lat, lon」；同一读数另挂坐标行 tooltip（§2.6：细节进 tooltip）—— 只读回显，
     // 不写规则框、不动 gps_status（状态行留给选点/搜索结果等语义消息）。
     QObject::connect(st->map, &pp::map::MapWidget::cursor_moved, st, [st](double lat, double lon) {
         const QString text = PageMeta::tr("光标: %1, %2").arg(format_6(lat), format_6(lon));
-        st->map_cursor->setText(text);
+        st->overlay.map_cursor->setText(text);
         if (st->datum_row != nullptr) {
             st->datum_row->setToolTip(text);
         }
@@ -1096,7 +1100,7 @@ void gps_wiring(MetaState *st) {
     // search_finished **不接**：它与 search_results_ready 同一批数据（页面只消费后者，
     // 双接会把状态行刷两遍）—— 登记不接理由于 handoff。
     QObject::connect(st->map, &pp::map::MapWidget::tiles_pending_changed, st,
-                     [st](int pending) { st->map_loading->setVisible(pending > 0); });
+                     [st](int pending) { st->overlay.map_loading->setVisible(pending > 0); });
     // M6-T10（§4.5 R4）：显示档切换钮 + 复制链 + 坐标框右键菜单 —— 三条入口同一收口
     // （set_dms_mode / copy_coords）；右键菜单同时承担"复制"（只读框的默认菜单不可用）
     QObject::connect(st->dms_toggle, &QAbstractButton::toggled, st,

@@ -11,14 +11,15 @@
 #pragma once
 
 #include "core/metadata.h"
-#include "mapwidget/geocoder.h" // MetaState::results 元素类型（GeocodeResult）
-#include "ui/formkit.h"         // 表单行构造器 + 自绘件（PillBadge/SwitchControl/…）
-#include "ui/icons.h"           // RatingStars 形 = icons 库 star 路径（单源）
-#include "ui/meta_probe.h"      // ProbeSnapshot（FollowModel::probes 元素类型）
-#include "ui/meta_rules.h"      // RuleInputs + 规则装配声明面（B3）
-#include "ui/page_meta.h"       // MetaSelectionItem（FollowModel::items 元素类型）
-#include "ui/theme.h"           // theme::Tokens（MetaState 值成员）
-#include <QApplication>         // theme.h 要求包含者先引入
+#include "mapwidget/geocoder.h"  // MetaState::results 元素类型（GeocodeResult）
+#include "ui/formkit.h"          // 表单行构造器 + 自绘件（PillBadge/SwitchControl/…）
+#include "ui/icons.h"            // RatingStars 形 = icons 库 star 路径（单源）
+#include "ui/meta_map_overlay.h" // MapOverlayController（B6：覆盖层状态聚合）
+#include "ui/meta_probe.h"       // ProbeSnapshot（FollowModel::probes 元素类型）
+#include "ui/meta_rules.h"       // RuleInputs + 规则装配声明面（B3）
+#include "ui/page_meta.h"        // MetaSelectionItem（FollowModel::items 元素类型）
+#include "ui/theme.h"            // theme::Tokens（MetaState 值成员）
+#include <QApplication>          // theme.h 要求包含者先引入
 #include <QHash>
 #include <QList>
 #include <QObject>
@@ -328,8 +329,7 @@ struct MetaState : QObject {
     // ---- UX-4（M7-WP7）：地图 App 化 ----
     QPushButton *category_btn = nullptr; // 搜索框右侧「分类 ▾」（6 类目并入下拉）
     QMenu *category_menu = nullptr;      // 6 action（objectName pp-meta-gps-category-0..5 保留）
-    QWidget *layer_plate = nullptr;      // 图层 Seg 的地图浮层底板（半透明，overlay 令牌）
-    QLabel *map_loading = nullptr;       // R-315：瓦片加载反馈 chip（tiles_pending_changed）
+
     std::optional<std::pair<double, double>> last_centered; // R-047：仅生效坐标变化才 center_on
     QHash<QString, int> result_row_by_key;                  // R-223：稳定键 → 结果行（跨层对齐）
     // ---- M6-T10 加性（坐标基准透明化 R4：WGS-84 标签 / DMS 显示档 / 复制 / 边界精度提示）----
@@ -340,15 +340,8 @@ struct MetaState : QObject {
     QWidget *datum_row = nullptr;              // 坐标行（M6-T12：光标坐标读数的 tooltip 承载面）
     formkit::ChipButton *dms_toggle = nullptr; // DMS 切换（chip；与右键菜单同一收口）
     QToolButton *copy_coords = nullptr;        // 复制当前格式坐标（文字链）
-    // ---- M6-T12 加性（§5.3/§7-T12：地图体验件 —— 缩放 ± / 光标坐标读数）----
-    QToolButton *zoom_out = nullptr; // 地图覆盖层：缩小（矢量图标钮）
-    QToolButton *zoom_in = nullptr;  // 地图覆盖层：放大
-    QLabel *map_cursor = nullptr;    // 地图覆盖层左上：光标坐标读数（接 cursor_moved）
-    // ---- M6-T13 加性（§7-T13 R5：展开大地图 —— 同一 map 控件重挂载；默认不弹）----
-    QToolButton *map_expand = nullptr; // 地图覆盖层右上：打开「大地图」对话框
-    QWidget *map_host = nullptr;       // map 的卡片宿主（挂回用；与 map_line 同源）
-    QHBoxLayout *map_line = nullptr;   // map 在卡片里所占的行（重挂载的同一槽位）
-    QSize map_dialog_size;             // 上次调整的大地图尺寸（跨展开记忆）
+    // ---- M6-T12/13 加性：地图覆盖层 + 大地图（B6：状态归 MapOverlayController）----
+    MapOverlayController overlay;
     QToolButton *rule_toggle = nullptr;
     QWidget *rule_host = nullptr;
     QWidget *rule_altdir_row = nullptr; // 更多字段折叠的两行（gps_wiring 的折叠接线用）
@@ -482,8 +475,7 @@ void refresh_layer_hint(MetaState *st);
 void clear_search_state(MetaState *st);
 void apply_picked_point(MetaState *st, double lat, double lon, const QString &status);
 
-// —— 地图覆盖层（meta_map_overlay.cpp；B6）——
-void open_map_expanded_view(MetaState *st);
+// —— 地图覆盖层（meta_map_overlay.{h,cpp}；B6）：声明面在 ui/meta_map_overlay.h ——
 
 // —— 样式（meta_style.cpp；B7）——
 void apply_style(MetaState *st);

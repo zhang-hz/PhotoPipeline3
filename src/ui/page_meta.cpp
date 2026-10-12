@@ -156,45 +156,6 @@ namespace meta {
 using formkit::FieldWidth;
 
 // ---------------------------------------------------------------------------
-
-// M6-T13（§7-T13 R5）：展开大地图 —— **同一控件重挂载**：map 暂挂到对话框内容区（图层/图钉/
-// 视口/在途瓦片请求随控件走，零同步），exec() 返回后挂回卡片行并复位固定高（卡片几何逐位
-// 复原）。对话框每次展开新建（主题档/尺寸记忆按时读/写本状态）。
-// 卡片位：地图离场期间放**同高空占位**（模态期卡片不上下抖动；关闭时移除）。
-void open_map_expanded_view(MetaState *st) {
-    if (st == nullptr || st->map == nullptr || st->map_host == nullptr || st->map_line == nullptr) {
-        return;
-    }
-    MapDialog dialog(st->map->window());
-    if (st->map_dialog_size.isValid()) {
-        dialog.resize(st->map_dialog_size); // 上次调整的尺寸（跨展开记忆）
-    }
-    if (st->map_expand != nullptr) {
-        st->map_expand->setVisible(false); // 对话框自有「关闭」；展开期不重复该入口
-    }
-    auto *placeholder = new QWidget(st->map_host);
-    placeholder->setObjectName(QString::fromLatin1(kMapPlaceholderName));
-    placeholder->setFixedHeight(kMapHeight);
-    st->map_line->addWidget(placeholder, 1, Qt::AlignVCenter);
-    dialog.adopt(st->map);
-    dialog.exec();    // 模态：返回即已关闭（Esc / 底栏关闭 / 标题栏 ✕ 同效）
-    dialog.release(); // R-261：与 adopt 成对（对话框侧复原几何约束；析构另有兜底）
-    // 挂回卡片行：先撤占位（占位不参与任何信号链，同步删）再挂 map；随后几何约束逐位复原
-    // （宿主 + 行槽 + objectName 随控件、无需重挂）。UX-4 stretch（M7-R2-B）：复位口径 = 与
-    // 初建同源（min 260 + 可拉伸），不再 setFixedHeight —— 探针断言改 `>= 260` + geometry 逐位。
-    st->map->setParent(st->map_host);
-    delete placeholder;
-    st->map_line->addWidget(st->map, 1);
-    st->map->setMinimumHeight(kMapHeight);
-    st->map->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    st->map->show();
-    if (st->map_expand != nullptr) {
-        st->map_expand->setVisible(true);
-    }
-    st->map_dialog_size = dialog.size();
-}
-
-// ---------------------------------------------------------------------------
 // 跟随项 probe → meta_probe.{h,cpp}（B.1 拆分步 B4：ProbeScanner 唯一 IO 宿主，R-181）
 // ---------------------------------------------------------------------------
 
@@ -314,19 +275,19 @@ void apply_style(MetaState *st) {
         icons::apply(st->search_btn, icons::Name::Search, t.text2, t.text3, 12);
     }
     // M6-T12：地图缩放钮的矢量图标随令牌重放（覆盖层固定白底 → 图标恒取深灰 #404040）
-    if (st->zoom_in != nullptr) {
-        icons::apply(st->zoom_in, icons::Name::ZoomIn, theme::overlay_tokens().hud_fg,
+    if (st->overlay.zoom_in != nullptr) {
+        icons::apply(st->overlay.zoom_in, icons::Name::ZoomIn, theme::overlay_tokens().hud_fg,
                      theme::overlay_tokens().hud_fg_dim,
                      kMapZoomIconPx); // overlay 令牌组（不随主题变）
     }
-    if (st->zoom_out != nullptr) {
-        icons::apply(st->zoom_out, icons::Name::ZoomOut, theme::overlay_tokens().hud_fg,
+    if (st->overlay.zoom_out != nullptr) {
+        icons::apply(st->overlay.zoom_out, icons::Name::ZoomOut, theme::overlay_tokens().hud_fg,
                      theme::overlay_tokens().hud_fg_dim,
                      kMapZoomIconPx); // overlay 令牌组（不随主题变）
     }
     // M6-T13：展开钮同档（覆盖层固定白底 → 图标恒取深灰 #404040）
-    if (st->map_expand != nullptr) {
-        icons::apply(st->map_expand, icons::Name::ZoomFit, theme::overlay_tokens().hud_fg,
+    if (st->overlay.map_expand != nullptr) {
+        icons::apply(st->overlay.map_expand, icons::Name::ZoomFit, theme::overlay_tokens().hud_fg,
                      theme::overlay_tokens().hud_fg_dim,
                      kMapZoomIconPx); // overlay 令牌组（不随主题变）
     }

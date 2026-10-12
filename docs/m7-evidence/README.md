@@ -40,4 +40,5 @@
 | `m7r21-f3-gates.md` | R2.1-F3 | R2E2 结构余量门禁读数（ctest 35/35、test_smoke 第 7/8/9 节、金样 20/20、meta-* 探针逐字） |
 | `m7r21-f4-gates.md` | R2.1-F4 | 跨面包收口门禁读数（NOLINT 翻案后零抑制 + tidy 263/75、色彩四选项 GUI、第 4 波探针 4 节、金样 20/20） |
 | `m7r21-gate.md` | R2.1-F6 | R2.1 终门禁全量判据取证（format/build/ctest/ui-smoke/金样/tidy/回归/密钥 八项首轮全绿 + 回归失败槽位归因 + 冻结行附加核对；fallout=0） |
+| `m7r2-reader-notes.md` | （跨包，M7-R2.2-G3） | 报告独立校读意见原文补录：第二轮 19 行逐号（意见/处置/落点三列逐字，原件 `build/m7r2-f/handoff.md` 附表 + `2c50bfc` 正文互证）+ 第一轮 18 条原文不可复核的检索取证与补录位（m7-report §6.3 逐号对照复核面） |
 | `temp_bug.png` | （评审证据图） | UX-7 原生三钮与自绘三钮同框复现图（`docs/ux-review-14.md` §7 现象证据；原在项目根，随评审件入库移入本目录） |

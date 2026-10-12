@@ -5,7 +5,8 @@
 // M5-T7（W-G3）：界面按 docs/qt-gui-design-spec.md §7.1 重构为**四卡组**（关键信息 kv 双列 5 行 /
 //   时间偏移 3×spin88+生效对照行 / GPS 双列轨+地图+操作行 / 隐私与文件时间开关+链），全部信息行
 //   改走 formkit 行构造器（R1–R4 构造层强制）。**接口一字不动**：类签名、方法语义、三枚信号与
-//   全部 pp-* / pp_meta_* 自验钩子保持（探针面见 page_meta.cpp 头注释）。
+//   全部 pp-* / pp_meta_* 自验钩子保持（钩子/objectName 词表**单源** = ui/meta_probe_context.h
+//   的 `hook::`/`objname::`（M7-R2.1-F2，R-182/R-258 收口）；明细清单见 page_meta.cpp 头注释）。
 //
 // PP-FROZEN(0.3.0) —— 元数据页「生效值显示」（设计 §5.2 / §9.3；mockup meta-dark|meta-light）
 //   落地任务 = W3-T12。本文件 0.3.0 的**追加面**（既有方法签名/语义一字不动）：
@@ -25,8 +26,9 @@
 
 namespace pp::ui {
 
-// 前置声明（不拉 ui/theme.h：theme.h 依赖包含者先引入 <QApplication>，而本头会被 AUTOMOC 的
-// mocs_compilation.cpp 直接包含 —— 与 ui/classify_panel.h / preview_panel.h 同口径）
+// 前置声明（不拉 ui/theme.h：只为减头重/依赖面 —— theme.h 自 M5-A5 起已自含 <QApplication>，
+// 旧理由「依赖包含者先引入 <QApplication>」已失实（R-268 同病灶改实）；本头又会被 AUTOMOC 的
+// mocs_compilation.cpp 直接包含，做法与 ui/paramform.h 同口径）
 namespace theme {
 struct Tokens;
 }

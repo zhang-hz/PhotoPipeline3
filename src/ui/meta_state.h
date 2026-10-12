@@ -15,6 +15,7 @@
 #include "ui/formkit.h"         // 表单行构造器 + 自绘件（PillBadge/SwitchControl/…）
 #include "ui/icons.h"           // RatingStars 形 = icons 库 star 路径（单源）
 #include "ui/meta_probe.h"      // ProbeSnapshot（FollowModel::probes 元素类型）
+#include "ui/meta_rules.h"      // RuleInputs + 规则装配声明面（B3）
 #include "ui/page_meta.h"       // MetaSelectionItem（FollowModel::items 元素类型）
 #include "ui/theme.h"           // theme::Tokens（MetaState 值成员）
 #include <QApplication>         // theme.h 要求包含者先引入
@@ -363,6 +364,9 @@ struct MetaState : QObject {
     QWidget *tag_host = nullptr;
     QWidget *exc_host = nullptr;
     QVBoxLayout *tag_rows = nullptr;
+    // R-180（B3）：tag 行**显式键值对清单**（add_tag_row 登记 / clear_tag_rows 清空 /
+    // 移除钮同序移除）—— 替代 findChild("tag_key") 隐式约定；顺序 = tag_rows 布局顺序。
+    QList<std::pair<QLineEdit *, QLineEdit *>> tag_edits;
     QPushButton *add_tag = nullptr;
     QLabel *exc_label = nullptr;
     QListWidget *exc_list = nullptr;
@@ -446,18 +450,7 @@ CardHeader make_header(MetaState *st, QWidget *parent, const QString &title,
                        const QString &pill_name, const QString &hint_name,
                        const QString &enable_name = QString());
 
-// —— 规则装配（meta_rules.cpp；B3）——
-pp::TimeShift current_time_shift(const MetaState *st);
-pp::BatchRules build_rules(const MetaState *st);
-void apply_state(MetaState *st, const pp::BatchRules &r);
-void commit_rule_change(MetaState *st);
-bool parse_coord(const QLineEdit *edit, double lo, double hi, double &out);
-std::optional<double> parse_optional(const QLineEdit *edit, double lo, double hi);
-QString format_6(double v);
-void fill_timezone_combo(QComboBox *combo);
-void select_timezone(QComboBox *combo, int offset_min);
-void clear_tag_rows(MetaState *st);
-void add_tag_row(MetaState *st, const QString &key, const QString &value);
+// —— 规则装配（meta_rules.cpp；B3）：声明面整体在 ui/meta_rules.h ——
 
 // —— probe 异步扫描（meta_probe.cpp；B4）——
 void request_probe_scan(MetaState *st);

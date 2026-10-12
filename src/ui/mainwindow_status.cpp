@@ -108,6 +108,7 @@
 #include "platform/frameless.h"
 #include "platform/mica.h"
 #include "platform/paths.h"
+#include "ui/byte_text.h" // R-254（M7-R2.1-F3）：字节自然语读数单源（原 natural_bytes）
 #include "ui/classify_panel.h"
 #include "ui/contextmenu.h" // UX-1：公共右键菜单件（单一构造点 + 12 类卡 actions）
 #include "ui/exif_editor.h"
@@ -128,25 +129,10 @@ namespace pp::ui {
 namespace {
 using theme::preferred_theme_mode;
 
-// A19（T11，§3.2 骨架行）：底栏「剩余磁盘」段的自然语读数（1024 进制；B/KB 整数、MB 起一位
-// 小数 —— 与 §7.2 预估卡的磁盘读数同族口径，见 ui/page_output.cpp 的 human_bytes）。
-// R-264（M7-R2D1）：本函数与 page_output.cpp 的 human_bytes **逐字同款**（双实现登记于
-// deep-review R-254）。收敛需动非本包文件面（human_bytes 在 page_output.cpp 匿名命名空间；
-// fmt 族单源 run_status_text.h 的精度/档位口径不同且盘符格式被 smoke 探针
-// `^\d+(\.\d)? (B|KB|MB|GB|TB|PB)$` 钉住）→ 已登记 handoff「跨界需求」，本包不动格式。
-QString natural_bytes(qint64 bytes) {
-    constexpr double kKiB = 1024.0;
-    static const char *const kUnits[] = {"B", "KB", "MB", "GB", "TB", "PB"};
-    double value = double(bytes);
-    int unit = 0;
-    while (value >= kKiB && unit < 5) {
-        value /= kKiB;
-        ++unit;
-    }
-    return unit <= 1
-               ? QStringLiteral("%1 %2").arg(qint64(value)).arg(QLatin1String(kUnits[unit]))
-               : QStringLiteral("%1 %2").arg(value, 0, 'f', 1).arg(QLatin1String(kUnits[unit]));
-}
+// A19（T11，§3.2 骨架行）：底栏「剩余磁盘」段的自然语读数 —— R-254（M7-R2.1-F3）：
+// 原本文件 natural_bytes 与 page_output.cpp 的 human_bytes **逐字同款双实现**已收敛为
+// ui/byte_text.h 单源（输出逐字节不变；格式仍被 smoke 探针
+// `^\d+(\.\d)? (B|KB|MB|GB|TB|PB)$` 钉住）。fmt 族（run_status_text.h）是另一口径，见该头。
 
 // M4-T14：底栏 ETA 文案（mockup run-dark「ETA 约 00:23」）；秒 → mm:ss
 QString eta_text(int seconds) {
@@ -347,11 +333,14 @@ void MainWindow::Impl::refresh_status_controls(std::size_t count, std::size_t ch
         icons::apply(d.start, icons::Name::Play, d.tokens.on_accent, d.tokens.text3, 12);
     }
     d.start->setEnabled(can_start);
-    // 修 1-08：无选择时**隐藏**移除钮（非常驻禁用）；运行期由面板级 G5 锁定置灰
+    // 修 1-08：无选择时**隐藏**移除钮（非常驻禁用）；运行期由面板级 G5 锁定置灰。
+    // R-254（M7-R2.1-F3）：可见/可用两行判据（原 mainwindow.cpp sync_selection 与本处双写）
+    // 收敛到 apply_remove_sel_state() 单点；本处仍按「有任意选中索引」的廉价口径喂入
+    // （refresh_status 逐文件事件高频触发，不做两级代理映射），与 sync_selection 的
+    // 「有映射到有效行的选中」在稳定态逐值相同（差异仅限模型/视图失同步的瞬态）。
     const bool has_selection = d.view->selectionModel() != nullptr &&
                                !d.view->selectionModel()->selectedIndexes().isEmpty();
-    d.remove_sel->setVisible(has_selection);
-    d.remove_sel->setEnabled(!d.running && has_selection);
+    d.apply_remove_sel_state(has_selection);
     // 筛选菜单：无生效筛选时「清除筛选」不可点（其余两枚自身即状态）
     if (d.filter_clear != nullptr)
         d.filter_clear->setEnabled(d.proxy->filtering());
@@ -393,9 +382,10 @@ QString MainWindow::Impl::disk_free_segment() {
         disk_free_bytes = (info.isValid() && info.isReady()) ? info.bytesAvailable() : -1;
         disk_clock.restart();
     }
-    const QString text = disk_free_bytes >= 0
-                             ? MainWindow::tr("剩余磁盘 %1").arg(natural_bytes(disk_free_bytes))
-                             : MainWindow::tr("剩余磁盘 —");
+    const QString text =
+        disk_free_bytes >= 0
+            ? MainWindow::tr("剩余磁盘 %1").arg(byte_text::natural_bytes(disk_free_bytes))
+            : MainWindow::tr("剩余磁盘 —");
     // 读数出处进 tooltip（§2.6：单位/口径不占正文）
     disk_status->setToolTip(
         disk_free_bytes >= 0

@@ -83,6 +83,7 @@
 #include "core/error_text.h"     // R-070/273：错误中文映射单源（M7-R2B；本包接线）
 #include "core/fsops.h"
 #include "core/params.h"
+#include "ui/byte_text.h"      // R-254（M7-R2.1-F3）：字节自然语读数单源（原 human_bytes）
 #include "ui/contextmenu.h"    // UX-1 ⑥⑦⑨：公共右键菜单件（actions 单源）
 #include "ui/format_policy.h"  // R-191/B.3：位深交集/后端归一/avif 谓词纯核单源
 #include "ui/formkit.h"        // C2：行构造器（R1–R4）+ 自绘控件（磁贴/开关/胶囊）
@@ -191,19 +192,8 @@ const pp::TechDef *tech_by_id(const std::vector<pp::BackendDef> &list, const std
 // 原「index 映射表」（conflict_from_index/to_index、color_from_index/to_index 四件）退役 ——
 // 读回走 currentData()、落值走 findData()，调序不再静默串档（deep-review R-190/E3-11）。
 
-QString human_bytes(qint64 bytes) {
-    constexpr double kKiB = 1024.0;
-    const char *const units[] = {"B", "KB", "MB", "GB", "TB", "PB"};
-    double value = double(bytes);
-    int unit = 0;
-    while (value >= kKiB && unit < 5) {
-        value /= kKiB;
-        ++unit;
-    }
-    return unit <= 1
-               ? QStringLiteral("%1 %2").arg(qint64(value)).arg(QLatin1String(units[unit]))
-               : QStringLiteral("%1 %2").arg(value, 0, 'f', 1).arg(QLatin1String(units[unit]));
-}
+// R-254（M7-R2.1-F3）：原 human_bytes（与 mainwindow_status 的 natural_bytes 逐字同款的第二份
+// 实现）删除 —— 字节自然语读数单源 = ui/byte_text.h（输出逐字节不变；真值表入 test_smoke）。
 
 // ---------------------------------------------------------------- 小控件
 
@@ -1890,7 +1880,8 @@ struct Impl {
         if (!root.isEmpty()) {
             const QStorageInfo info(root);
             if (info.isValid() && info.isReady()) {
-                disk = PageOutput::tr("%1 可用").arg(human_bytes(info.bytesAvailable()));
+                disk =
+                    PageOutput::tr("%1 可用").arg(byte_text::natural_bytes(info.bytesAvailable()));
                 disk_tip = PageOutput::tr("输出根目录所在卷的可用空间：%1").arg(root);
             } else {
                 disk_tip = PageOutput::tr("无法读取输出根目录所在卷的可用空间：%1").arg(root);

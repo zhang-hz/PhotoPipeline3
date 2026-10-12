@@ -1924,22 +1924,41 @@ void MainWindow::Impl::apply_empty_state() {
         file_stack->setCurrentIndex(page);
 }
 
+// R-254（M7-R2.1-F3）：选中索引 → 源行号的唯一映射（两级代理 + 去重，首次出现序）。
+// 判据与 sync_selection 原实现逐字相同（row ≥ 0 且 < model->size()）；remove_selected
+// 原实现的越界行本就被 FileListModel::remove_rows 内部过滤（filelistmodel.cpp:557 起），
+// 故两处消费此单源后行为逐值不变。
+QList<int> MainWindow::Impl::selected_source_rows() const {
+    QList<int> rows;
+    if (view == nullptr || view->selectionModel() == nullptr)
+        return rows;
+    for (const QModelIndex &idx : view->selectionModel()->selectedIndexes()) {
+        const int row = proxy->mapToSource(groups->mapToSource(idx)).row();
+        if (row < 0 || static_cast<std::size_t>(row) >= model->size())
+            continue;
+        if (!rows.contains(row))
+            rows << row;
+    }
+    return rows;
+}
+
+// R-254：移除钮可见/可用判据的唯一写入点（原 sync_selection 与 refresh_status_controls
+// 各写一份「1-08：无选择即隐藏 + 运行中置灰」）。
+void MainWindow::Impl::apply_remove_sel_state(bool has_selection) {
+    remove_sel->setVisible(has_selection);
+    remove_sel->setEnabled(!running && has_selection);
+}
+
 void MainWindow::Impl::sync_selection() {
     QStringList paths;
     QList<MetaSelectionItem> items;
     int first_row = -1; // M4-T10：中栏预览跟随选中项（多选取首个）
     bool has = false;
-    if (view->selectionModel() != nullptr) {
+    {
         // M4-T11 的两列树（勾选列 + 行内容列）使 selectedIndexes() 对同一行返回多枚索引 →
-        // 先按源行号去重，再建跟随项（否则多选小表/预览会出现重复行；M4-T12 自验抓到）
-        std::vector<int> rows;
-        for (const QModelIndex &idx : view->selectionModel()->selectedIndexes()) {
-            const int row = proxy->mapToSource(groups->mapToSource(idx)).row();
-            if (row < 0 || static_cast<std::size_t>(row) >= model->size())
-                continue;
-            if (std::find(rows.begin(), rows.end(), row) == rows.end())
-                rows.push_back(row);
-        }
+        // 先按源行号去重（selected_source_rows()），再建跟随项（否则多选小表/预览会出现
+        // 重复行；M4-T12 自验抓到）。R-254：映射判据与 remove_selected 共用同一实现。
+        const QList<int> rows = selected_source_rows();
         for (const int row : rows) {
             if (first_row < 0)
                 first_row = row;
@@ -1956,8 +1975,7 @@ void MainWindow::Impl::sync_selection() {
     if (!has && !model->empty())
         items.append(meta_selection_item(model->row(0)));
     page_meta->set_selection(items, has);
-    remove_sel->setVisible(has); // 1-08：无选择即隐藏（与 refresh_status 同一口径）
-    remove_sel->setEnabled(!running && has);
+    apply_remove_sel_state(has); // 1-08：无选择即隐藏（与 refresh_status 同一口径）
     // M4-T11：分类面板高亮跟随选中（§5.2 同一条跟随口径）；分组重建后据此恢复选中
     if (has && !paths.isEmpty()) {
         last_selected_path = paths.first();
@@ -1999,14 +2017,9 @@ void MainWindow::Impl::clear_exception(const QString &path) {
 }
 
 void MainWindow::Impl::remove_selected() {
-    if (view->selectionModel() == nullptr)
-        return;
-    QList<int> rows;
-    for (const QModelIndex &idx : view->selectionModel()->selectedIndexes()) {
-        const int row = proxy->mapToSource(groups->mapToSource(idx)).row();
-        if (row >= 0 && !rows.contains(row))
-            rows << row;
-    }
+    // R-254（M7-R2.1-F3）：映射判据收敛到 selected_source_rows() 单源（原与 sync_selection
+    // 双写的两级代理映射 + 去重）；remove_rows 内部本就排序/去重/过滤（filelistmodel.cpp:557）。
+    QList<int> rows = selected_source_rows();
     if (rows.isEmpty())
         return;
     std::sort(rows.begin(), rows.end());

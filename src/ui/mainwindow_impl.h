@@ -1090,6 +1090,13 @@ struct MainWindow::Impl {
     void sync_exceptions();
     void clear_exception(const QString &path);
     void remove_selected();
+    // R-254（M7-R2.1-F3）：选中索引 → 源行号（两级代理映射 + 去重，首次出现序）——
+    // 原 sync_selection 与 remove_selected 各写一份的「判据」收敛为本单点；
+    // 口径 = row ≥ 0 且 < model->size()（与 sync_selection 原判据逐字相同；remove_rows
+    // 本就过滤越界行，故 remove_selected 消费此口径行为逐值不变）。
+    QList<int> selected_source_rows() const;
+    // R-254：移除钮「可见 = 有选中；可用 = 非运行且有选中」的写入单点（原两处双写）。
+    void apply_remove_sel_state(bool has_selection);
     void restore_session();
     // M6-T11（§5.2 R5）：settings.map_style → GPS 卡图层 Seg + map->set_tile_style
     // （启动期与设置对话框 accept 后各一次；首次调用同时接线"换层写回 settings"）

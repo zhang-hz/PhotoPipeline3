@@ -10,6 +10,7 @@
 #include <variant>
 #include <vector>
 
+#include "ui/byte_text.h"       // M7-R2.1-F3（R-254）：字节自然语读数单源
 #include "ui/format_policy.h"   // M7-R2E2（B.3）：输出页格式能力/预选策略纯核
 #include "ui/run_rows_model.h"  // M7-WP9（B.2）：运行页行模型纯语义
 #include "ui/run_status_text.h" // M7-WP9（B.2）：运行页文案/数值格式纯函数
@@ -255,6 +256,30 @@ int main() {
               "preselect(后端非 svt-av1) == false");
         check(!avif_preselect_needed("avif", false, true, 10, "svt-av1", false, false, false),
               "preselect(无 libaom) == false");
+    }
+
+    // 7. M7-R2.1-F3 / R-254：byte_text 字节自然语读数单源（断言只增；既有 1–6 节逐字不动）。
+    //    口径 = 1024 进制；B/KB 整数（截断）、MB 起一位小数；单位表 B|KB|MB|GB|TB|PB。
+    //    格式被 ui_smoke 的 `^\d+(\.\d)? (B|KB|MB|GB|TB|PB)$` 探针钉住（mainwindow 底栏
+    //    「剩余磁盘」/ page_output 磁盘可用行同一实现）。
+    {
+        using pp::ui::byte_text::natural_bytes;
+        check(natural_bytes(0) == QStringLiteral("0 B"), "natural_bytes(0) == 0 B");
+        check(natural_bytes(1) == QStringLiteral("1 B"), "natural_bytes(1) == 1 B");
+        check(natural_bytes(1023) == QStringLiteral("1023 B"), "natural_bytes(1023) == 1023 B");
+        check(natural_bytes(1024) == QStringLiteral("1 KB"), "natural_bytes(1KB) == 1 KB");
+        check(natural_bytes(1536) == QStringLiteral("1 KB"),
+              "natural_bytes(1.5KB) == 1 KB（B/KB 档截断，不四舍五入）");
+        check(natural_bytes(1024ull * 1024) == QStringLiteral("1.0 MB"),
+              "natural_bytes(1MB) == 1.0 MB（MB 起一位小数）");
+        check(natural_bytes(1234567) == QStringLiteral("1.2 MB"),
+              "natural_bytes(1234567) == 1.2 MB");
+        check(natural_bytes(1024ull * 1024 * 1024) == QStringLiteral("1.0 GB"),
+              "natural_bytes(1GB) == 1.0 GB");
+        check(natural_bytes(1024ull * 1024 * 1024 * 1024) == QStringLiteral("1.0 TB"),
+              "natural_bytes(1TB) == 1.0 TB");
+        check(natural_bytes(1024ull * 1024 * 1024 * 1024 * 1024) == QStringLiteral("1.0 PB"),
+              "natural_bytes(1PB) == 1.0 PB（单位表末档）");
     }
 
     if (g_failed == 0) {

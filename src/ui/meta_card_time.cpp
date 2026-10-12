@@ -4,6 +4,7 @@
 // Contract: docs/deep-review-0.3.2.md 附录 B.1（步序 B5）；契约面见 meta_state.h。
 // 内容 = build_time_card + refresh_time_section + refresh_time_inputs + clear_multi_rows
 //        + time_card_intents —— 自 page_meta.cpp 逐字迁出（M7-R2.1-F2；行为零变化）。
+#include "ui/meta_probe_context.h" // R-182/R-258：钩子/词表单源
 #include "ui/meta_state.h"
 
 #include "ui/contextmenu.h"
@@ -51,7 +52,8 @@ void clear_multi_rows(MetaState *st) {
         return;
     }
     while (QLayoutItem *item = st->time.multi_grid->takeAt(0)) {
-        if (item->widget() != nullptr && item->widget() != st->time.multi_more) {
+        // R-180：常驻件判定 = 显式标记（原指针比较的隐式约定；multi_more 构建时标记）
+        if (item->widget() != nullptr && !is_resident(item->widget())) {
             delete item->widget();
         }
         delete item;
@@ -79,8 +81,8 @@ void refresh_time_section(MetaState *st, const std::vector<pp::EffectivePreview>
         clear_multi_rows(st);
         st->time.multi_more->set_full_text(QString());
         st->time.multi_more->setVisible(false);
-        set_hook(st, "pp_meta_multi_rows", 0);
-        set_hook(st, "pp_meta_time_new", QString());
+        set_hook(st, hook::kMultiRows, 0);
+        set_hook(st, hook::kTimeNew, QString());
         return;
     }
 
@@ -112,9 +114,9 @@ void refresh_time_section(MetaState *st, const std::vector<pp::EffectivePreview>
                                                   : datetime_text(others[i]->effective));
         }
         st->time.effect_label->setToolTip(tip);
-        set_hook(st, "pp_meta_time_new",
+        set_hook(st, hook::kTimeNew,
                  st->time.time_new->full_text()); // 自验钩子（探针读生效时间）
-        set_hook(st, "pp_meta_multi_rows", 0);
+        set_hook(st, hook::kMultiRows, 0);
         return;
     }
 
@@ -132,13 +134,13 @@ void refresh_time_section(MetaState *st, const std::vector<pp::EffectivePreview>
         const pp::EffectivePreview &preview = previews[std::size_t(i)];
         const QString name = QFileInfo(st->follow.items.at(i).path).fileName();
         auto *name_label = new ElidedLabel(st->time.multi_host);
-        name_label->setObjectName(QStringLiteral("pp-meta-multi-name-%1").arg(i));
+        name_label->setObjectName(objname::kMultiName1.arg(i));
         name_label->setProperty(kFieldProperty, fieldprop::kMultiName);
         name_label->setFont(theme::font(theme::Typography::body_px, QFont::Normal));
         name_label->setMinimumHeight(formkit::kRowPitch);
         name_label->set_full_text(name);
         auto *old_label = new ElidedLabel(st->time.multi_host);
-        old_label->setObjectName(QStringLiteral("pp-meta-multi-old-%1").arg(i));
+        old_label->setObjectName(objname::kMultiOld1.arg(i));
         old_label->setProperty(kFieldProperty, fieldprop::kOld);
         QFont old_font = theme::font(theme::Typography::body_px, QFont::Normal, /*tabular=*/true);
         old_font.setStrikeOut(true);
@@ -146,11 +148,11 @@ void refresh_time_section(MetaState *st, const std::vector<pp::EffectivePreview>
         old_label->setMinimumHeight(formkit::kRowPitch);
         old_label->set_full_text(datetime_text(preview.datetime_original.original));
         auto *arrow = new QLabel(QStringLiteral("→"), st->time.multi_host);
-        arrow->setObjectName(QStringLiteral("pp-meta-multi-arrow"));
+        arrow->setObjectName(objname::kMultiArrow);
         arrow->setProperty(kFieldProperty, fieldprop::kArrow);
         arrow->setFont(theme::font(theme::Typography::body_px, QFont::Normal));
         auto *new_label = new ElidedLabel(st->time.multi_host);
-        new_label->setObjectName(QStringLiteral("pp-meta-multi-new-%1").arg(i));
+        new_label->setObjectName(objname::kMultiNew1.arg(i));
         new_label->setProperty(kFieldProperty, fieldprop::kNew);
         new_label->setFont(theme::font(theme::Typography::body_px, QFont::Bold, /*tabular=*/true));
         new_label->setMinimumHeight(formkit::kRowPitch);
@@ -170,9 +172,9 @@ void refresh_time_section(MetaState *st, const std::vector<pp::EffectivePreview>
     if (rest > 0) {
         st->time.multi_grid->addWidget(st->time.multi_more, rows, 0, 1, 4);
     }
-    set_hook(st, "pp_meta_multi_rows", rows);
+    set_hook(st, hook::kMultiRows, rows);
     // 自验钩子：多选时生效时间不落在"单文件生效时间"钩子上（探针据此区分两种形态）
-    set_hook(st, "pp_meta_time_new", rows > 0 ? QStringLiteral("<multi>") : QString());
+    set_hook(st, hook::kTimeNew, rows > 0 ? QStringLiteral("<multi>") : QString());
 }
 
 // ---------------------------------------------------------------------------
@@ -206,9 +208,8 @@ QWidget *build_time_card(MetaState *st, QWidget *parent) {
     v->setContentsMargins(0, 0, 0, 0);
     v->setSpacing(0);
     const CardHeader header =
-        make_header(st, card, PageMeta::tr("时间偏移"), QStringLiteral("pp-meta-time-pill"),
-                    QStringLiteral("pp-meta-time-hint"),
-                    QStringLiteral("pp-meta-time-enable")); // UX-5：卡头「启用」开关
+        make_header(st, card, PageMeta::tr("时间偏移"), objname::kTimePill, objname::kTimeHint,
+                    objname::kTimeEnable); // UX-5：卡头「启用」开关
     st->time.time_pill = header.pill;
     st->time.time_hint = header.hint;
     st->time.time_enable = header.enable;
@@ -225,9 +226,9 @@ QWidget *build_time_card(MetaState *st, QWidget *parent) {
     {
         TrackGroup group = make_group(body);
         st->time.seg = new formkit::SegmentedControl(group.widget());
-        st->time.seg->setObjectName(QStringLiteral("pp-meta-seg"));
-        st->time.seg->add_segment(PageMeta::tr("Δ 偏移"), QStringLiteral("pp-meta-seg-delta"));
-        st->time.seg->add_segment(PageMeta::tr("时区语义"), QStringLiteral("pp-meta-seg-tz"));
+        st->time.seg->setObjectName(objname::kSeg);
+        st->time.seg->add_segment(PageMeta::tr("Δ 偏移"), objname::kSegDelta);
+        st->time.seg->add_segment(PageMeta::tr("时区语义"), objname::kSegTz);
         group.add(st->time.seg);
         group.stretch();
         bv->addWidget(
@@ -272,8 +273,7 @@ QWidget *build_time_card(MetaState *st, QWidget *parent) {
         right.label = PageMeta::tr("到");
         for (const bool is_from : {true, false}) {
             formkit::ComboSpec spec;
-            spec.object_name =
-                is_from ? QStringLiteral("pp-meta-tz-from") : QStringLiteral("pp-meta-tz-to");
+            spec.object_name = is_from ? objname::kTzFrom : objname::kTzTo;
             spec.accessible = is_from ? PageMeta::tr("源时区") : PageMeta::tr("目标时区");
             spec.tooltip = is_from ? PageMeta::tr("源时区（EXIF 记录所用的时区）")
                                    : PageMeta::tr("目标时区（改写后的墙钟时区）");
@@ -286,7 +286,7 @@ QWidget *build_time_card(MetaState *st, QWidget *parent) {
         left.width = FieldWidth::Standard;
         right.width = FieldWidth::Standard;
         const formkit::DoubleRow row = formkit::double_row(body, left, right);
-        row.row->setObjectName(QStringLiteral("pp-meta-tz-row"));
+        row.row->setObjectName(objname::kTzRow);
         st->time.tz_row = row.row;
         st->time.tz_row->setVisible(false);
         bv->addWidget(st->time.tz_row);
@@ -296,7 +296,7 @@ QWidget *build_time_card(MetaState *st, QWidget *parent) {
     {
         TrackGroup group = make_group(body);
         st->time.time_old = new ElidedLabel(group.widget());
-        st->time.time_old->setObjectName(QStringLiteral("pp-meta-time-old-0"));
+        st->time.time_old->setObjectName(objname::kTimeOld0);
         st->time.time_old->setProperty(kFieldProperty, fieldprop::kOld);
         QFont old_font = theme::font(theme::Typography::body_px, QFont::Normal, /*tabular=*/true);
         old_font.setStrikeOut(true); // mockup .tline .old{text-decoration:line-through}
@@ -309,35 +309,35 @@ QWidget *build_time_card(MetaState *st, QWidget *parent) {
         group.add(st->time.time_arrow);
         group.gap(theme::Metrics::group_gap);
         st->time.time_new = new ElidedLabel(group.widget());
-        st->time.time_new->setObjectName(QStringLiteral("pp-meta-time-new-0"));
+        st->time.time_new->setObjectName(objname::kTimeNew0);
         st->time.time_new->setProperty(kFieldProperty, fieldprop::kNew);
         st->time.time_new->setFont(
             theme::font(theme::Typography::body_px, QFont::Bold, /*tabular=*/true));
         group.add(st->time.time_new);
         group.gap(theme::Metrics::group_gap);
-        st->time.time_note = note_label(group.widget(), QStringLiteral("pp-meta-time-note-0"));
+        st->time.time_note = note_label(group.widget(), objname::kTimeNote0);
         group.add(st->time.time_note);
         group.gap(formkit::kInlineGap);
-        st->time.time_src = note_label(group.widget(), QStringLiteral("pp-meta-time-src-0"));
+        st->time.time_src = note_label(group.widget(), objname::kTimeSrc0);
         group.add(st->time.time_src);
         group.stretch();
         const formkit::Row row =
             formkit::frow(body, PageMeta::tr("生效时间"), group.widget(), FieldWidth::Flex);
         st->time.effect_label = row.label;
-        row.row->setObjectName(QStringLiteral("pp-meta-effect-row"));
+        row.row->setObjectName(objname::kEffectRow);
         st->time.effect_row = row.row;
         bv->addWidget(st->time.effect_row);
     }
     // 空态一行（修 1-31：未选择文件 → 一行说明）
     {
         st->time.time_empty = new ElidedLabel(body);
-        st->time.time_empty->setObjectName(QStringLiteral("pp-meta-time-empty"));
+        st->time.time_empty->setObjectName(objname::kTimeEmpty);
         st->time.time_empty->setProperty(kFieldProperty, fieldprop::kEmpty);
         st->time.time_empty->setFont(theme::font(theme::Typography::body_px, QFont::Normal));
         st->time.time_empty->set_full_text(PageMeta::tr(kNoSelectionText));
         const formkit::Row row =
             formkit::frow(body, QString(), st->time.time_empty, FieldWidth::Flex);
-        row.row->setObjectName(QStringLiteral("pp-meta-time-empty-row"));
+        row.row->setObjectName(objname::kTimeEmptyRow);
         st->time.time_empty_row = row.row;
         st->time.time_empty_row->setVisible(false);
         bv->addWidget(st->time.time_empty_row);
@@ -345,7 +345,7 @@ QWidget *build_time_card(MetaState *st, QWidget *parent) {
     // 多选逐行小表（§5.2；上限 8 行 + 「…还有 N 个」）
     {
         st->time.multi_host = new QWidget(body);
-        st->time.multi_host->setObjectName(QStringLiteral("pp-meta-multi"));
+        st->time.multi_host->setObjectName(objname::kMulti);
         st->time.multi_grid = new QGridLayout(st->time.multi_host);
         st->time.multi_grid->setContentsMargins(0, 0, 0, 0);
         st->time.multi_grid->setHorizontalSpacing(theme::Metrics::form_col_gap);
@@ -355,7 +355,8 @@ QWidget *build_time_card(MetaState *st, QWidget *parent) {
         st->time.multi_grid->setColumnStretch(2, 0);
         st->time.multi_grid->setColumnStretch(3, 3);
         st->time.multi_more = new ElidedLabel(st->time.multi_host);
-        st->time.multi_more->setObjectName(QStringLiteral("pp-meta-multi-more"));
+        st->time.multi_more->setObjectName(objname::kMultiMore);
+        mark_resident(st->time.multi_more); // R-180：常驻子控件显式标记（禁删/禁重复入列）
         st->time.multi_more->setVisible(false);
         st->time.multi_more->setProperty(kFieldProperty, fieldprop::kMultiMore);
         st->time.multi_more->setFont(theme::font(theme::Typography::hint_px, QFont::Normal));
@@ -398,18 +399,19 @@ contextmenu::TimeCardIntents time_card_intents(MetaState *st) {
             st->time.time_enable->toggle();
     };
     const auto reset_defaults = [st] {
-        st->core.loading = true; // 程序化复位：不逐控件发 rules_changed（末尾统一发一次）
-        if (st->time.seg != nullptr)
-            st->time.seg->set_current_index(0); // 模式 = Δ 偏移
-        for (QSpinBox *spin : st->time.delta) {
-            if (spin != nullptr)
-                spin->setValue(0);
+        {
+            LoadingGuard guard(st); // R-180：程序化复位不逐控件发 rules_changed（末尾统一发一次）
+            if (st->time.seg != nullptr)
+                st->time.seg->set_current_index(0); // 模式 = Δ 偏移
+            for (QSpinBox *spin : st->time.delta) {
+                if (spin != nullptr)
+                    spin->setValue(0);
+            }
+            if (st->time.tz_from != nullptr)
+                select_timezone(st->time.tz_from, 480);
+            if (st->time.tz_to != nullptr)
+                select_timezone(st->time.tz_to, 480);
         }
-        if (st->time.tz_from != nullptr)
-            select_timezone(st->time.tz_from, 480);
-        if (st->time.tz_to != nullptr)
-            select_timezone(st->time.tz_to, 480);
-        st->core.loading = false;
         refresh_time_inputs(st);
         refresh_effective(st);
         notify_rules_changed(st);

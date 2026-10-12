@@ -5,6 +5,7 @@
 // 本 TU = 页面状态锚（state_of/set_hook）+ 共享胶水 + 表单行构造器 + 四卡共用卡头。
 // 实现自 page_meta.cpp **逐字迁出**（M7-R2.1-F2；行为零变化）。
 #include "ui/meta_state.h"
+#include "ui/meta_probe_context.h" // R-182/R-258：钩子/词表单源
 
 #include <QFileInfo>
 #include <QHBoxLayout>
@@ -179,7 +180,7 @@ QToolButton *make_map_hud_button(QWidget *parent, const QString &object_name, ic
 
 QFrame *make_card(QWidget *parent) {
     auto *card = new QFrame(parent);
-    card->setObjectName(QStringLiteral("pp-card")); // theme QSS：QFrame#pp-card
+    card->setObjectName(objname::kPpCard); // theme QSS：QFrame#pp-card
     return card;
 }
 
@@ -194,7 +195,7 @@ CardHeader make_header(MetaState *st, QWidget *parent, const QString &title,
     layout->setContentsMargins(theme::Metrics::card_pad_x, 9, theme::Metrics::card_pad_x, 7);
     layout->setSpacing(theme::Metrics::group_gap);
     out.title = new QLabel(title, out.row);
-    out.title->setObjectName(QStringLiteral("pp-card-title"));
+    out.title->setObjectName(objname::kPpCardTitle);
     out.title->setFont(
         theme::font(theme::Typography::card_title_px, theme::Typography::card_title_weight));
     layout->addWidget(out.title);

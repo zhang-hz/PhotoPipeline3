@@ -6,6 +6,7 @@
 // 只在本 TU 出现（page_meta 与各卡 TU 零 IO）；scan_probes 主体自 page_meta.cpp 逐字迁出。
 #include "ui/meta_probe.h"
 
+#include "ui/meta_probe_context.h" // R-182/R-258：钩子/词表单源
 #include "ui/meta_state.h" // MetaState（FollowModel::items/probes）+ set_hook + kMultiRowCap
 
 #include <QFuture>
@@ -38,12 +39,12 @@ ProbeScanner::ProbeScanner(MetaState *st) : QObject(st), st_(st) {}
 void ProbeScanner::apply_result(quint64 generation, const std::vector<ProbeSnapshot> &probes) {
     if (generation != generation_) {
         ++stale_dropped_;
-        set_hook(st_, "pp_meta_follow_stale_dropped", stale_dropped_);
+        set_hook(st_, hook::kFollowStaleDropped, stale_dropped_);
         return;
     }
     st_->follow.probes = probes;
     pending_ = false;
-    set_hook(st_, "pp_meta_follow_pending", false);
+    set_hook(st_, hook::kFollowPending, false);
     emit changed();
 }
 
@@ -58,10 +59,10 @@ void ProbeScanner::request_scan() {
     const quint64 generation = ++generation_;
     st_->follow.probes.clear();
     pending_ = !paths.isEmpty();
-    set_hook(st_, "pp_meta_follow_pending", pending_);
-    set_hook(st_, "pp_meta_follow_name",
+    set_hook(st_, hook::kFollowPending, pending_);
+    set_hook(st_, hook::kFollowName,
              st_->follow.items.isEmpty() ? QString() : st_->follow.items.first().path);
-    set_hook(st_, "pp_meta_follow_count", static_cast<int>(st_->follow.items.size()));
+    set_hook(st_, hook::kFollowCount, static_cast<int>(st_->follow.items.size()));
     if (paths.isEmpty()) {
         emit changed();
         return;

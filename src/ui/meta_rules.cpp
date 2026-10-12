@@ -8,6 +8,7 @@
 
 #include "mapwidget/dms.h" // R-100：坐标解析失败回退 dms_to_deg
 #include "ui/icons.h"
+#include "ui/meta_probe_context.h" // R-182/R-258：钩子/词表单源
 #include "ui/meta_state.h"
 #include "ui/page_meta.h"
 
@@ -273,25 +274,25 @@ void clear_tag_rows(MetaState *st) {
 
 void add_tag_row(MetaState *st, const QString &key, const QString &value) {
     auto *row = new QWidget();
-    row->setObjectName(QStringLiteral("tag_row"));
+    row->setObjectName(objname::kTagRow);
     auto *lay = new QHBoxLayout(row);
     lay->setContentsMargins(0, 0, 0, 0);
     lay->setSpacing(theme::Metrics::group_gap);
 
     auto *key_edit = new QLineEdit(row);
-    key_edit->setObjectName(QStringLiteral("tag_key"));
+    key_edit->setObjectName(objname::kTagKey);
     key_edit->setProperty(kFieldProperty, fieldprop::kRule);
     key_edit->setFixedHeight(formkit::kControlH);
     key_edit->setPlaceholderText(PageMeta::tr("Exif.Image.Artist 或 Xmp.dc.title"));
     key_edit->setText(key);
     auto *value_edit = new QLineEdit(row);
-    value_edit->setObjectName(QStringLiteral("tag_value"));
+    value_edit->setObjectName(objname::kTagValue);
     value_edit->setProperty(kFieldProperty, fieldprop::kRule);
     value_edit->setFixedHeight(formkit::kControlH);
     value_edit->setText(value);
     value_edit->setToolTip(PageMeta::tr("值留空 = 删除该标签"));
     auto *remove = new QPushButton(row);
-    remove->setObjectName(QStringLiteral("tag_remove"));
+    remove->setObjectName(objname::kTagRemove);
     remove->setFixedSize(formkit::kIconBtn, formkit::kIconBtn); // 图标钮 28×28（R4）
     remove->setToolTip(PageMeta::tr("删除此行"));
     remove->setAccessibleName(PageMeta::tr("删除此行")); // §11：图标钮必有 accessibleName
@@ -329,70 +330,72 @@ void add_tag_row(MetaState *st, const QString &key, const QString &value) {
 }
 
 void apply_state(MetaState *st, const pp::BatchRules &r) {
-    const bool prev_loading = st->core.loading;
-    st->core.loading = true;
+    { // R-180：加载协议 RAII（作用域尾恢复，再进 refresh_all —— 与原顺序逐字一致）
+        LoadingGuard guard(st);
 
-    if (r.time_shift.has_value()) {
-        const pp::TimeShift &s = *r.time_shift;
-        st->time.seg->set_current_index(s.mode == pp::TimeShift::Mode::Delta ? 0 : 1);
-        st->time.delta[0]->setValue(s.years);
-        st->time.delta[1]->setValue(s.months);
-        st->time.delta[2]->setValue(s.days);
-        st->time.delta[3]->setValue(s.hours);
-        st->time.delta[4]->setValue(s.minutes);
-        st->time.delta[5]->setValue(s.seconds);
-        select_timezone(st->time.tz_from, s.from_offset_min);
-        select_timezone(st->time.tz_to, s.to_offset_min);
-    } else {
-        // 无时间规则 = 全零 Δ（noop；与"未配置"在两条路径上等价）
-        st->time.seg->set_current_index(0);
-        for (QSpinBox *spin : st->time.delta) {
-            spin->setValue(0);
+        if (r.time_shift.has_value()) {
+            const pp::TimeShift &s = *r.time_shift;
+            st->time.seg->set_current_index(s.mode == pp::TimeShift::Mode::Delta ? 0 : 1);
+            st->time.delta[0]->setValue(s.years);
+            st->time.delta[1]->setValue(s.months);
+            st->time.delta[2]->setValue(s.days);
+            st->time.delta[3]->setValue(s.hours);
+            st->time.delta[4]->setValue(s.minutes);
+            st->time.delta[5]->setValue(s.seconds);
+            select_timezone(st->time.tz_from, s.from_offset_min);
+            select_timezone(st->time.tz_to, s.to_offset_min);
+        } else {
+            // 无时间规则 = 全零 Δ（noop；与"未配置"在两条路径上等价）
+            st->time.seg->set_current_index(0);
+            for (QSpinBox *spin : st->time.delta) {
+                spin->setValue(0);
+            }
         }
+
+        st->gps.clear_gps->setChecked(r.gps_clear);
+        if (r.gps.has_value()) {
+            st->gps.lat->setText(format_6(r.gps->lat));
+            st->gps.lon->setText(format_6(r.gps->lon));
+            st->gps.alt->setText(r.gps->altitude.has_value() ? format_6(*r.gps->altitude)
+                                                             : QString());
+            st->gps.dir->setText(r.gps->direction.has_value() ? format_6(*r.gps->direction)
+                                                              : QString());
+            st->gps.ts->setText(r.gps->timestamp.has_value()
+                                    ? QString::fromStdString(*r.gps->timestamp)
+                                    : QString());
+            st->gps.gps_status->setText(PageMeta::tr("已载入批量 GPS 规则"));
+        } else {
+            st->gps.lat->clear();
+            st->gps.lon->clear();
+            st->gps.alt->clear();
+            st->gps.dir->clear();
+            st->gps.ts->clear();
+        }
+
+        clear_tag_rows(st);
+        for (const pp::TagEdit &edit : r.exif_edits) {
+            add_tag_row(st, QString::fromStdString(edit.key),
+                        edit.value.has_value() ? QString::fromStdString(*edit.value) : QString());
+        }
+        for (const pp::TagEdit &edit : r.xmp_edits) {
+            add_tag_row(st, QString::fromStdString(edit.key),
+                        edit.value.has_value() ? QString::fromStdString(*edit.value) : QString());
+        }
+
+        st->privacy.strip->setChecked(r.strip_privacy);
+        st->privacy.mtime->setChecked(r.sync_mtime);
+
+        // UX-5：恢复**含值旧状态 = 开**（旧预设缺 *_enabled 键 → 默认 true，带值即开关置开）；
+        // 显式 *_enabled=false 优先（预设里明确关掉的卡不复活）。新会话/空值 = 关（零变化）。
+        const bool time_on = r.time_enabled && r.time_shift.has_value();
+        const bool gps_on = r.gps_enabled && (r.gps.has_value() || r.gps_clear);
+        const bool privacy_on =
+            r.privacy_enabled &&
+            (r.strip_privacy || r.sync_mtime || !r.exif_edits.empty() || !r.xmp_edits.empty());
+        st->time.time_enable->setChecked(time_on);
+        st->privacy.privacy_enable->setChecked(privacy_on);
+        set_gps_rule_enabled(st, gps_on);
     }
-
-    st->gps.clear_gps->setChecked(r.gps_clear);
-    if (r.gps.has_value()) {
-        st->gps.lat->setText(format_6(r.gps->lat));
-        st->gps.lon->setText(format_6(r.gps->lon));
-        st->gps.alt->setText(r.gps->altitude.has_value() ? format_6(*r.gps->altitude) : QString());
-        st->gps.dir->setText(r.gps->direction.has_value() ? format_6(*r.gps->direction)
-                                                          : QString());
-        st->gps.ts->setText(r.gps->timestamp.has_value() ? QString::fromStdString(*r.gps->timestamp)
-                                                         : QString());
-        st->gps.gps_status->setText(PageMeta::tr("已载入批量 GPS 规则"));
-    } else {
-        st->gps.lat->clear();
-        st->gps.lon->clear();
-        st->gps.alt->clear();
-        st->gps.dir->clear();
-        st->gps.ts->clear();
-    }
-
-    clear_tag_rows(st);
-    for (const pp::TagEdit &edit : r.exif_edits) {
-        add_tag_row(st, QString::fromStdString(edit.key),
-                    edit.value.has_value() ? QString::fromStdString(*edit.value) : QString());
-    }
-    for (const pp::TagEdit &edit : r.xmp_edits) {
-        add_tag_row(st, QString::fromStdString(edit.key),
-                    edit.value.has_value() ? QString::fromStdString(*edit.value) : QString());
-    }
-
-    st->privacy.strip->setChecked(r.strip_privacy);
-    st->privacy.mtime->setChecked(r.sync_mtime);
-
-    // UX-5：恢复**含值旧状态 = 开**（旧预设缺 *_enabled 键 → 默认 true，带值即开关置开）；
-    // 显式 *_enabled=false 优先（预设里明确关掉的卡不复活）。新会话/空值 = 关（零变化）。
-    const bool time_on = r.time_enabled && r.time_shift.has_value();
-    const bool gps_on = r.gps_enabled && (r.gps.has_value() || r.gps_clear);
-    const bool privacy_on = r.privacy_enabled && (r.strip_privacy || r.sync_mtime ||
-                                                  !r.exif_edits.empty() || !r.xmp_edits.empty());
-    st->time.time_enable->setChecked(time_on);
-    st->privacy.privacy_enable->setChecked(privacy_on);
-    set_gps_rule_enabled(st, gps_on);
-
-    st->core.loading = prev_loading;
     refresh_all(st);
 }
 

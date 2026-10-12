@@ -94,8 +94,9 @@
 //     与中性灰覆盖 QSS（修 1-38/1-39；mapwidget 文件零改动，令牌由本页铺）。
 #include "ui/page_meta.h"
 
-#include "ui/meta_format.h" // B2（M7-R2.1-F2）：显示格式化纯函数（meta_format）
-#include "ui/meta_state.h"  // B.1（M7-R2.1-F2）：拆分共享内核（MetaState/常量/构造器）
+#include "ui/meta_format.h"        // B2（M7-R2.1-F2）：显示格式化纯函数（meta_format）
+#include "ui/meta_probe_context.h" // R-182/R-258：钩子/词表单源
+#include "ui/meta_state.h"         // B.1（M7-R2.1-F2）：拆分共享内核（MetaState/常量/构造器）
 
 #include "ui/formkit.h"    // M5-T7：全部表单行走 formkit 行构造器（R1–R4 构造层强制）
 #include "ui/icons.h"      // 折叠插入符/删除钮一律矢量图标（C3）
@@ -176,7 +177,7 @@ void build_ui(PageMeta *page) {
     outer->addWidget(scroll);
 
     auto *content = new QWidget(scroll);
-    content->setObjectName(QStringLiteral("pp-meta-content"));
+    content->setObjectName(objname::kContent);
     auto *v = new QVBoxLayout(content);
     v->setContentsMargins(0, 0, 0, 0);
     v->setSpacing(theme::Metrics::gap); // 卡间距 8（§4.3）

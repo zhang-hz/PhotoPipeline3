@@ -458,6 +458,36 @@ public:
     }
 };
 
+// R-180（M7-R2.1-F2）：loading 协议**显式化** —— 手查/手恢复收口为 RAII 守卫（可嵌套；
+// 析构恢复进入前值）。判读点仍只在 notify_rules_changed（语义零变化）。
+struct LoadingGuard {
+    LoadingGuard(const LoadingGuard &) = delete;
+    LoadingGuard &operator=(const LoadingGuard &) = delete;
+
+    explicit LoadingGuard(MetaState *st) : st_(st), prev_(st->core.loading) {
+        st->core.loading = true;
+    }
+    ~LoadingGuard() { st_->core.loading = prev_; }
+
+private:
+    MetaState *st_;
+    bool prev_;
+};
+
+// R-180（M7-R2.1-F2）：关键信息值槽的**具名索引** —— 原 info_value[8] 双侧算术约定
+// （构建器 i*2/i*2+1 与刷新侧 [0..7] 裸下标）收口为同一词表；顺序 = 槽位定义顺序。
+enum InfoSlot : int {
+    kInfoTime = 0,
+    kInfoCamera = 1,
+    kInfoLens = 2,
+    kInfoExposure = 3,
+    kInfoSize = 4,
+    kInfoColor = 5,
+    kInfoFile = 6,
+    kInfoGps = 7,
+    kInfoSlotCount = 8,
+};
+
 // state_of：PageMeta 的动态属性锚（**契约保留**：探针面/注册表经此取页面状态）。
 // R-177（B1）：动态属性 static_cast 的显式化随 B1 落地（MetaState 带 Q_OBJECT + qobject_cast）。
 MetaState *state_of(const PageMeta *page);

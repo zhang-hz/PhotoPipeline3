@@ -4,6 +4,7 @@
 // Contract: docs/deep-review-0.3.2.md 附录 B.1（步序 B5）；契约面见 meta_state.h。
 // 内容 = build_info_card + make_info_value + refresh_info_card + info_card_intents
 // —— 自 page_meta.cpp 逐字迁出（M7-R2.1-F2；行为零变化）。
+#include "ui/meta_probe_context.h" // R-182/R-258：钩子/词表单源
 #include "ui/meta_state.h"
 
 #include "ui/contextmenu.h"
@@ -67,35 +68,35 @@ void refresh_info_card(MetaState *st, const std::vector<pp::EffectivePreview> &p
     const pp::ImageInfo &info = item.info;
 
     // 拍摄时间 = 源 DateTimeOriginal（只读源事实；生效值在时间卡里对照显示）
-    st->info.info_value[0]->set_full_text(
+    st->info.info_value[kInfoTime]->set_full_text(
         probe.ok ? datetime_text(preview.datetime_original.original) : QStringLiteral("—"));
-    st->info.info_value[1]->set_full_text(probe.ok ? camera_text(probe.meta.exif)
-                                                   : QStringLiteral("—"));
-    st->info.info_value[2]->set_full_text(probe.ok ? lens_text(probe.meta.exif)
-                                                   : QStringLiteral("—"));
-    st->info.info_value[3]->set_full_text(probe.ok ? exposure_text(probe.meta.exif)
-                                                   : QStringLiteral("—"));
+    st->info.info_value[kInfoCamera]->set_full_text(probe.ok ? camera_text(probe.meta.exif)
+                                                             : QStringLiteral("—"));
+    st->info.info_value[kInfoLens]->set_full_text(probe.ok ? lens_text(probe.meta.exif)
+                                                           : QStringLiteral("—"));
+    st->info.info_value[kInfoExposure]->set_full_text(probe.ok ? exposure_text(probe.meta.exif)
+                                                               : QStringLiteral("—"));
     if (item.probe_ok) {
-        st->info.info_value[4]->set_full_text(QStringLiteral("%1×%2 · %3 bit · %4")
-                                                  .arg(info.width)
-                                                  .arg(info.height)
-                                                  .arg(info.src_bitdepth)
-                                                  .arg(channels_text(info)));
-        st->info.info_value[5]->set_full_text(info.has_icc ? PageMeta::tr("内嵌 ICC 配置文件")
-                                                           : PageMeta::tr("无 ICC"));
-        st->info.info_value[6]->set_full_text(QStringLiteral("%1 · %2").arg(
+        st->info.info_value[kInfoSize]->set_full_text(QStringLiteral("%1×%2 · %3 bit · %4")
+                                                          .arg(info.width)
+                                                          .arg(info.height)
+                                                          .arg(info.src_bitdepth)
+                                                          .arg(channels_text(info)));
+        st->info.info_value[kInfoColor]->set_full_text(
+            info.has_icc ? PageMeta::tr("内嵌 ICC 配置文件") : PageMeta::tr("无 ICC"));
+        st->info.info_value[kInfoFile]->set_full_text(QStringLiteral("%1 · %2").arg(
             format_size(item.file_size), QString::fromStdString(info.format).toUpper()));
     } else {
-        st->info.info_value[4]->set_full_text(QStringLiteral("—"));
-        st->info.info_value[5]->set_full_text(QStringLiteral("—"));
-        st->info.info_value[6]->set_full_text(format_size(item.file_size));
+        st->info.info_value[kInfoSize]->set_full_text(QStringLiteral("—"));
+        st->info.info_value[kInfoColor]->set_full_text(QStringLiteral("—"));
+        st->info.info_value[kInfoFile]->set_full_text(format_size(item.file_size));
     }
     if (preview.gps.original.has_value()) {
-        st->info.info_value[7]->set_full_text(QStringLiteral("%1, %2").arg(
+        st->info.info_value[kInfoGps]->set_full_text(QStringLiteral("%1, %2").arg(
             coord_text(preview.gps.original->lat, 4), coord_text(preview.gps.original->lon, 4)));
         st->info.info_gps_pill->setVisible(true);
     } else {
-        st->info.info_value[7]->set_full_text(QStringLiteral("—"));
+        st->info.info_value[kInfoGps]->set_full_text(QStringLiteral("—"));
         st->info.info_gps_pill->setVisible(false);
     }
     // 白平衡 / 评级（§7.1 第 5 行）
@@ -130,8 +131,7 @@ QWidget *build_info_card(MetaState *st, QWidget *parent) {
     v->setContentsMargins(0, 0, 0, 0);
     v->setSpacing(0);
     const CardHeader header =
-        make_header(st, card, PageMeta::tr("关键信息"), QStringLiteral("pp-meta-info-pill"),
-                    QStringLiteral("pp-meta-info-hint"));
+        make_header(st, card, PageMeta::tr("关键信息"), objname::kInfoPill, objname::kInfoHint);
     st->info.info_pill = header.pill;
     st->info.info_hint = header.hint;
     v->addWidget(header.row);
@@ -147,9 +147,13 @@ QWidget *build_info_card(MetaState *st, QWidget *parent) {
         PageMeta::tr("拍摄时间"), PageMeta::tr("相机"), PageMeta::tr("镜头"), PageMeta::tr("曝光"),
         PageMeta::tr("尺寸"),     PageMeta::tr("色彩"), PageMeta::tr("文件"), PageMeta::tr("GPS"),
         PageMeta::tr("白平衡"),   PageMeta::tr("评级")};
-    const std::array<const char *, 8> hooks = {
-        "pp-meta-info-time", "pp-meta-info-camera", "pp-meta-info-lens", "pp-meta-info-exposure",
-        "pp-meta-info-size", "pp-meta-info-color",  "pp-meta-info-file", "pp-meta-info-gps"};
+    // R-180：值槽 → objectName 词表（objname:: 单源；槽序 = InfoSlot 词表）
+    static const std::array<QString, kInfoSlotCount> slot_name = {
+        objname::kInfoTime, objname::kInfoCamera, objname::kInfoLens, objname::kInfoExposure,
+        objname::kInfoSize, objname::kInfoColor,  objname::kInfoFile, objname::kInfoGps};
+    // R-180：kv 行 → 值槽的**具名映射**（原 i*2 / i*2+1 双侧算术约定）
+    constexpr InfoSlot kInfoRowLeft[4] = {kInfoTime, kInfoLens, kInfoSize, kInfoFile};
+    constexpr InfoSlot kInfoRowRight[4] = {kInfoCamera, kInfoExposure, kInfoColor, kInfoGps};
     for (int i = 0; i < 5; ++i) {
         formkit::FieldCell left;
         formkit::FieldCell right;
@@ -157,23 +161,23 @@ QWidget *build_info_card(MetaState *st, QWidget *parent) {
         right.label = keys[std::size_t(i) * 2 + 1];
         if (i == 4) {
             // 第 5 行：白平衡 / 评级（矢量星；无评级 → 「—」）
-            st->info.info_wb = make_info_value(body, QStringLiteral("pp-meta-info-wb"));
+            st->info.info_wb = make_info_value(body, objname::kInfoWb);
             left.field = st->info.info_wb;
             TrackGroup rating = make_group(body);
             st->info.info_rating = new RatingStars(rating.widget());
-            st->info.info_rating->setObjectName(QStringLiteral("pp-meta-info-rating"));
+            st->info.info_rating->setObjectName(objname::kInfoRating);
             rating.add(st->info.info_rating);
             st->info.info_rating_none = new QLabel(QStringLiteral("—"), rating.widget());
             rating.add(st->info.info_rating_none);
             rating.stretch();
             right.field = rating.widget();
         } else {
-            ElidedLabel *left_value =
-                make_info_value(body, QString::fromLatin1(hooks[std::size_t(i) * 2]));
-            ElidedLabel *right_value =
-                make_info_value(body, QString::fromLatin1(hooks[std::size_t(i) * 2 + 1]));
-            st->info.info_value[std::size_t(i) * 2] = left_value;
-            st->info.info_value[std::size_t(i) * 2 + 1] = right_value;
+            const InfoSlot left_slot = kInfoRowLeft[i];
+            const InfoSlot right_slot = kInfoRowRight[i];
+            ElidedLabel *left_value = make_info_value(body, slot_name[left_slot]);
+            ElidedLabel *right_value = make_info_value(body, slot_name[right_slot]);
+            st->info.info_value[left_slot] = left_value;
+            st->info.info_value[right_slot] = right_value;
             left.field = left_value;
             if (i == 3) {
                 // 第 4 行右格：GPS 值 + 「已有」胶囊（mockup .kv-v.cells + .pill.ok）
@@ -182,7 +186,7 @@ QWidget *build_info_card(MetaState *st, QWidget *parent) {
                 gps.gap(theme::Metrics::group_gap);
                 st->info.info_gps_pill = formkit::PillBadge::of(
                     gps.widget(), formkit::PillBadge::Tone::Ok, PageMeta::tr("已有"));
-                st->info.info_gps_pill->setObjectName(QStringLiteral("pp-meta-info-gps-pill"));
+                st->info.info_gps_pill->setObjectName(objname::kInfoGpsPill);
                 st->info.info_gps_pill->setVisible(false);
                 st->add_pill(st->info.info_gps_pill);
                 gps.add(st->info.info_gps_pill);
@@ -195,20 +199,20 @@ QWidget *build_info_card(MetaState *st, QWidget *parent) {
         left.width = FieldWidth::Flex;
         right.width = FieldWidth::Flex;
         const formkit::DoubleRow row = formkit::double_row(body, left, right);
-        row.row->setObjectName(QStringLiteral("pp-meta-info-row-%1").arg(i));
+        row.row->setObjectName(objname::kInfoRow1.arg(i));
         bv->addWidget(row.row);
         st->info.info_row[std::size_t(i)] = row.row;
     }
     // 空态一行（修 1-23）：未选择文件 → 一行说明（行高仍 28，栅格不错位）
     {
         st->info.info_empty = new ElidedLabel(body);
-        st->info.info_empty->setObjectName(QStringLiteral("pp-meta-info-empty"));
+        st->info.info_empty->setObjectName(objname::kInfoEmpty);
         st->info.info_empty->setProperty(kFieldProperty, fieldprop::kEmpty);
         st->info.info_empty->setFont(theme::font(theme::Typography::body_px, QFont::Normal));
         st->info.info_empty->set_full_text(PageMeta::tr(kNoSelectionText));
         const formkit::Row empty_row =
             formkit::frow(body, QString(), st->info.info_empty, FieldWidth::Flex);
-        empty_row.row->setObjectName(QStringLiteral("pp-meta-info-empty-row"));
+        empty_row.row->setObjectName(objname::kInfoEmptyRow);
         st->info.info_empty_row = empty_row.row;
         st->info.info_empty_row->setVisible(false);
         bv->addWidget(st->info.info_empty_row);
@@ -238,7 +242,9 @@ contextmenu::InfoCardIntents info_card_intents(MetaState *st) {
             PageMeta::tr("曝光"),     PageMeta::tr("尺寸"), PageMeta::tr("色彩"),
             PageMeta::tr("文件"),     PageMeta::tr("GPS"),  PageMeta::tr("白平衡")};
         for (int i = 0; i < 9; ++i) {
-            ElidedLabel *value = i < 8 ? st->info.info_value[std::size_t(i)] : st->info.info_wb;
+            // R-180：槽界 = InfoSlot 词表（原裸常量 8）
+            ElidedLabel *value =
+                i < kInfoSlotCount ? st->info.info_value[std::size_t(i)] : st->info.info_wb;
             if (value == nullptr || value->full_text().isEmpty())
                 continue;
             lines << QStringLiteral("%1: %2").arg(keys[std::size_t(i)], value->full_text());

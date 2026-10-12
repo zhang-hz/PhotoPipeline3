@@ -243,6 +243,14 @@
   release #13（tag `v0.3.3` → `b1af371`）winzip job 撞 `timeout-minutes: 20` 硬顶被取消
   （build 单步 19m11s 未完）、publish 跳过 ⇒ GitHub Release 未创建，处置待主对话裁决
   （全链见 [docs/m7-report.md](docs/m7-report.md) §3.8）
+- **R2REL 发行包实况（2026-10-12 晚）**：预检（零 Release 零资产）与本机门禁（ci-format 0 diff /
+  ci-versions-check OK / make_winzip 五门禁 + E-2 rc=0，冻结行逐字）全绿后推送 main
+  （`a4cf0fc..2c50bfc`）；main-full #44 **红**——linux（全 ctest+金样）`ctest --preset release`
+  **8 条失败**（二分：#41 @ b1af371 同 runner 绿 ⇒ M7-R2 波次引入的 Linux 侧回归）⇒ 按任务书
+  「main-full 红 ⇒ 修复推送或停止上报」分支**停止发行**：tag 未移动（保持 b1af371）、release.yml
+  未触发、**GitHub Release 仍未创建**；二次移动授权（M7-ADJ-tag-move-2）在案未消耗，待 Linux
+  失败修复且 main-full 绿后执行（全链见 [docs/m7-report.md](docs/m7-report.md) §3.9 与
+  [docs/m7-evidence/m7r2-release.md](docs/m7-evidence/m7r2-release.md)）
 
 ## [0.3.2] — 2026-10-11
 

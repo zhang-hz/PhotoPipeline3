@@ -271,3 +271,9 @@
 | R2F-C2 | 受约束口径闭环 | **非 Windows 密钥** | DPAPI 仅 Windows：非 Windows = `ppsec2:` 编码 + chmod 0600（B30/A12），口径如实「编码不是加密」；真加密需 keyring/libsecret（负面清单禁扩依赖）。Windows 侧 DPAPI 失败兜底退编码档（不落明文、不丢密钥，A13） | **受约束口径闭环** |
 | R2F-C3 | 受约束口径闭环 | **Linux golden.log 移植** | Windows 宿主不做基线文本替换移植（R-015 反面先例）；M7/R2 两轮行为行（TU 标签 180 + heif profile 46 + A1 nclx 132 + 版本行 12）均**未移植** Linux 基线 → 归 Linux 宿主 / nightly `update_baseline` 通道重播种后确认 | **受约束口径闭环** |
 | R2F-C4 | 受约束口径闭环 | **R-325 登记（强类型路线）** | 13 项契约核对已收口（校验器/单点/断言承载，R2B 核对表）；强类型包装（metadata_only↔outputs.size()==1 非空容器、bps/bpp 拆字段）会改 PP-FROZEN 签名 → 维持 C8/M7R2B-5「登记待解冻」，如走包装类型需一次性解冻裁定表 | **受约束口径闭环** |
+
+## 十、发行裁定（R2REL，2026-10-12）
+
+| # | 裁定 | 理由 | 实施归属 |
+|---|---|---|---|
+| M7-ADJ-tag-move-2 | **tag v0.3.3 二次移动授权在案、本轮未执行**：授权依据 = 用户明确指令「修复后发布 0.3.3」（任务书明文允许 git push、授权二次移动，条件同首次：预检零 Release 零资产 / 原子操作 + `ls-remote` 核对 / 移动后不得再动）。预检全过（`/releases/tags/v0.3.3` 404；release #13 publish skipped 零 Release 资产；`ls-remote` 核对 v0.3.3 → `cb181ee`/`^{}`=`b1af371`，证据 `docs/m7-evidence/m7r2-release.md` §1）；**但流程 3 的前提「main-full 绿」未满足**：push `2c50bfc` 后 main-full #44（run 38255712342）红——linux（全 ctest+金样）step 13 `ctest --preset release` **8 条失败**（退出码 8 = 失败测试数，本机 `ctest -R no_such_test` rc=0 反证「无测试」假说；构建成功）；二分对照 main-full **#41 @ b1af371 同 runner linux success** ⇒ **M7-R2 波次引入的 Linux 侧回归**（非 R2F-C3 登记的基线移植债）。按 ask 流程 3 分支「main-full 红 ⇒ 修复推送（允许）或停止上报」：修复须改 `src/**`/`tests/**`，**独占文件面外**（本包任务书「不得改 src/ 与 tools/」+ 纪律 3）⇒ **停止上报**，tag 保持 b1af371（零 Release 零资产），release.yml 未触发。授权未消耗：待 8 条 Linux 失败修复、main-full 绿后，可由后续发行包按同一条件执行移动 | ① 判据不可绕过（纪律 9）：main-full 绿是 tag 移动的明文前提，红灯期推 tag = 赌 release.yml 且违背门禁文化；② 修复跨界不可「顺手改」（纪律 3）；③ 停在零资产状态无新增不可逆性（tag 仍可按本条授权移动，`b1af371..2c50bfc` 全在历史） | R2REL |

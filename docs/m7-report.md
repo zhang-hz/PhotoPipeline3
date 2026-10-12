@@ -39,6 +39,7 @@ git 时间序对照见 R2C 对照表 `build/m7r2-c/handoff.md` 附录）：
 | R2E2 RTL 与结构拆分 | `52b9870` | R-218 RTL 镜像 + 第 3 波常驻探针 5 条 + R-190/191/203/275/281/326 |
 | R2F 台账终稿与文档 | `8a541de` | 上轮校读 18 条归并 10 主题闭环 + 覆盖台账 R2 终态 + 证据摘录 + plan/CHANGELOG/README |
 | R2G 终门禁复核 | `6a6e043` | 八项判据全绿 + tidy fallout 23 条修复（修码 12 + 消音 11）+ 回归瞬态锁归因（D-1 登记）；git 主题 `M7-R2-GATE`，与 R2-gate 是两个包 |
+| R2REL 发行包 | （本提交） | 发布 0.3.3：预检/本机门禁全绿 → push 后 main-full #44 **红（linux ctest 8 条，R2 波次引入）** ⇒ 按任务书分支停止上报，tag 未移动、Release 未建；M7-ADJ-tag-move-2 授权在案未消耗（§3.9） |
 
 **编号命名空间（三套并存，勿混读）**：① `R-nnn` = deep-review 条目（`docs/deep-review-0.3.2.md`）；
 ② `UX-n` = ux-review 条目（`docs/ux-review-14.md`），其内部另有**色彩分级子项 A1–D3**（§14，
@@ -319,6 +320,41 @@ R-171/R-002（write-warnings、meta-write-fail）、R-097（png_ok 硬断言）�
   按裁决条件 5（再红于新原因即停、禁止二次移动 tag）已停止发布动作，残余上报等裁决；
   可选处置（需主对话授权）：同 tag 重跑 release.yml（不涉 tag 移动；winzip 预算 15 min、
   本次 build 单步 19m+，或需调整预算/缓存后再跑）。
+
+### 3.9 发行终态（R2REL，2026-10-12）：**发行暂停于 main-full 红灯，tag 未移动**
+
+> 任务书 = 「修复后发布 0.3.3」（M7-R2REL 包）；实况证据真源 =
+> [docs/m7-evidence/m7r2-release.md](m7-evidence/m7r2-release.md)（预检/本机门禁/main-full 取证/
+> 停止决策逐步可复跑）。**GitHub Release URL：不存在**（`/releases/tags/v0.3.3` 预检 404 且本轮未发布）。
+
+- **预检（移动前，全过）**：`/releases/tags/v0.3.3` = **404**（零 Release）；release #13（run
+  38198290373 @ b1af371）winzip cancelled（20m16s 撞顶）、probe-winzip/publish **skipped**、
+  artifacts 仅 `PhotoPipeline-AppImage`（51,382,515 B，Actions 工件非 Release 资产）⇒ 零 Release 零资产；
+  `git ls-remote --tags` 核对 v0.3.3 → `cb181ee`/`^{}`=`b1af371`。
+- **本机门禁（全绿）**：`ci-format` **violations=0**（155 文件）· `ci-versions-check.py` **OK (10 keys,
+  expect=0)** · `make_winzip.py --smoke-exe` 五门禁 + E-2 **rc=0**（E-2 冻结行 `UI-SMOKE OK shots=12
+  pages=3` 逐字；E-2 的 dev exe 出自本包专属树 `build/m7r2-rel`，**未触碰 build/release-dev**）；
+  打包面 `build/release` 增量重建 202 步至 HEAD。
+- **推送与 main-full**：`git push origin main`（`a4cf0fc..2c50bfc`，HEAD `2c50bfc86fa6b53d0c6629e75aa60d40ab2e6ecc`）
+  → main-full **#44（run 38255712342）红**：唯一失败 = **linux（全 ctest+金样）step 13
+  `ctest --preset release` 8 条失败**（退出码 8 = 失败测试数；构建成功；其余 job 中
+  lint/appimage/tidy/audit/winzip/windows/cache-gc 全绿，gate 随 linux 红）。
+  **二分归因**：main-full #41 @ b1af371 同 runner「linux（全 ctest+金样）」**success**
+  ⇒ 8 条失败为 **M7-R2 波次引入的 Linux 侧回归**（Windows 同套件全绿；非 R2F-C3 的基线移植债——
+  那是 nightly 回归 golden.log 的登记）。逐条测试名需 Linux 宿主/鉴权日志（匿名 API 只到 job/step 级，
+  本机无 WSL），未定位到具体断言。
+- **缓存播种面（流程 3 目的）已达成**：winzip 19m45s / windows 19m50s / tidy 14m49s 全绿且 save 步完整
+  （vcpkgwin-/Qt(msvc2022_64) 播种；Windows 侧无 ccache 为查证事实）——若后续发行，winzip 的 20min
+  硬顶有暖度支撑。
+- **停止决策（ask 流程 3 明文分支）**：main-full 红 ⇒ 修复推送（允许）或停止上报。修复须改
+  `src/**`/`tests/**` = 本包独占文件面外（「不得改 src/ 与 tools/」），⇒ **停止上报**：
+  tag `v0.3.3` **未移动**（保持 `b1af371`，零 Release 零资产状态不变）、release.yml 未触发、
+  GitHub Release 未创建。授权登记 `M7-ADJ-tag-move-2`（adjudications 十节）：**授权在案未消耗**，
+  待 8 条 Linux 失败修复、main-full 绿后由后续发行包按同一条件执行。
+- **残余（如实）**：① 8 条 Linux ctest 失败未定位/未修（跨界，需 Linux 宿主或 CI 日志权限）；
+  ② 0.3.3 未发行，`### 发行` 小节「已发行 + CI 产物指纹」终态收口留待真发布后补
+  （`d049d22` 先例口径不变）；③ warm-cache 通道 #9–#13 全解析期秒败（R2C 修复后**无触发轮**，
+  gh CLI 未认证无法 dispatch，runbook §5-1 未复核——本轮以 main-full 播种替代，已在证据 §4.4 注明）。
 
 ---
 

@@ -15,10 +15,12 @@
 #include <QAbstractScrollArea>
 #include <QComboBox>
 #include <QContextMenuEvent>
+#include <QDirIterator>
 #include <QHBoxLayout>
 #include <QKeySequence>
 #include <QLabel>
 #include <QMenu>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QToolButton>
 
@@ -6801,6 +6803,187 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
         probe_format_roundtrip(page_output, g1_fail);
         probe_rtl_deep(w, g1_fail);
         probe_color_options(page_output, g1_fail);
+    }
+
+    // ---- M7-R2.2-G1：0 字节补齐双跑 + R-144 失败清单（真实编排；M7R22G1-10/-11）----
+    //   语义面 = R-006 / D1⑤-3 / M7-R2D1：「再次运行」= 逐文件预检只提交缺件（0 字节按缺件）、
+    //   跑前移除 0 字节产物（非空成品与源文件绝不触碰）、本轮冲突策略 Skip；
+    //   R-144 = 真实失败运行（损坏样本）→ run_failure_lines「路径\t原因」行式落盘
+    //   （write_failure_list）+ 状态栏「N 项失败」tooltip 出处/手型 + 点击下钻运行页。
+    //   真实用户路径 = pp-run-again 钮（on_run_again → run_again_pending → on_start 补齐分支）。
+    {
+        int z_checked = 0;
+        int z_bad = 0;
+        int f_checked = 0;
+        int f_bad = 0;
+        const auto z_expect = [&](bool ok, const QString &what) {
+            ++z_checked;
+            if (!ok) {
+                ++z_bad;
+                smoke_fail(MainWindow::tr("zero-byte-redo：%1").arg(what));
+            }
+        };
+        const auto f_expect = [&](bool ok, const QString &what) {
+            ++f_checked;
+            if (!ok) {
+                ++f_bad;
+                smoke_fail(MainWindow::tr("failure-list：%1").arg(what));
+            }
+        };
+        struct OutFact {
+            qint64 size = -1;
+            qint64 mtime = -1;
+        };
+        const auto scan_outputs = [&out_root]() {
+            QHash<QString, OutFact> map;
+            QDir root(out_root);
+            QDirIterator it(out_root, QDir::Files, QDirIterator::Subdirectories);
+            while (it.hasNext()) {
+                const QString path = it.next();
+                const QFileInfo info(path);
+                map.insert(root.relativeFilePath(path),
+                           OutFact{info.size(), info.lastModified().toMSecsSinceEpoch()});
+            }
+            return map;
+        };
+        const auto scan_sources = [this]() {
+            QHash<QString, qint64> map;
+            for (std::size_t i = 0; i < model->size(); ++i) {
+                const QString src = QString::fromStdString(model->row(i).entry.src.string());
+                map.insert(src, QFileInfo(src).size());
+            }
+            return map;
+        };
+        // ① 产物面台账 + 选 A（首个产物）截断 0 字节；B = 其余产物（同文件另一格式最强）
+        const QHash<QString, OutFact> before = scan_outputs();
+        z_expect(before.size() >= 2, QStringLiteral("实跑产物 ≥2（got %1）").arg(before.size()));
+        QStringList keys = before.keys();
+        keys.sort();
+        const QString key_a = keys.isEmpty() ? QString() : keys.first();
+        const QString path_a = out_root + QLatin1Char('/') + key_a;
+        {
+            QFile f(path_a);
+            if (f.open(QIODevice::WriteOnly | QIODevice::Truncate))
+                f.close();
+        }
+        z_expect(QFileInfo(path_a).size() == 0, QStringLiteral("A 已截断 0 字节"));
+        // ② 损坏样本（真实失败源；探针自建自清，不碰任何既有源文件）
+        const QString corrupt = QDir::tempPath() + QStringLiteral("/pp-ui-smoke-corrupt.jpg");
+        {
+            QFile f(corrupt);
+            if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                f.write(QByteArrayLiteral("\xff\xd8\xff\x00not-a-real-jpeg-payload"));
+                f.close();
+            }
+        }
+        const QHash<QString, qint64> src_before = scan_sources();
+        model->add_paths(QStringList{corrupt});
+        pump(80);
+        // ③ 「再次运行」（真实用户路径；run_failed==0 ⇒ on_run_again 无确认框）
+        auto *again = page_run->findChild<QAbstractButton *>(QStringLiteral("pp-run-again"));
+        z_expect(again != nullptr, QStringLiteral("pp-run-again 在位"));
+        if (again != nullptr)
+            again->click();
+        const bool finished = wait_for([this] { return !page_run->is_running(); }, kRunWaitMs);
+        z_expect(finished, QStringLiteral("补齐运行在 %1ms 内收尾").arg(kRunWaitMs));
+        pump(150);
+        // ④ 0 字节重做 / 非空不动 / 源只读
+        const QHash<QString, OutFact> after = scan_outputs();
+        const qint64 a_size = QFileInfo(path_a).size();
+        z_expect(a_size > 0, QStringLiteral("0 字节产物 A 重做非零（got %1）").arg(a_size));
+        int touched = 0;
+        for (auto it = before.constBegin(); it != before.constEnd(); ++it) {
+            if (it.key() == key_a)
+                continue;
+            const OutFact now = after.value(it.key());
+            if (now.size != it.value().size || now.mtime != it.value().mtime)
+                ++touched;
+        }
+        z_expect(touched == 0,
+                 QStringLiteral("非空成品不动（%1 个产物字节/mtime 逐位不变，A 除外）")
+                     .arg(before.size() - 1));
+        const QHash<QString, qint64> src_after = scan_sources();
+        int src_touched = 0;
+        for (auto it = src_before.constBegin(); it != src_before.constEnd(); ++it) {
+            if (!src_after.contains(it.key()) || src_after.value(it.key()) != it.value())
+                ++src_touched;
+        }
+        z_expect(src_touched == 0,
+                 QStringLiteral("源面只读（%1 个源 size 不变且不消失）").arg(src_before.size()));
+        // ⑤ R-144：失败清单行式 + 落盘逐行 + 状态栏下钻
+        f_expect(!run_failure_lines.isEmpty(),
+                 QStringLiteral("真实失败行入账（got %1）").arg(run_failure_lines.size()));
+        bool has_corrupt = false;
+        bool has_tab = false;
+        const QString corrupt_name = QFileInfo(corrupt).fileName();
+        for (const QString &line : run_failure_lines) {
+            // 路径形态跨平台（fs::native 分隔符）⇒ 按文件名命中（语义 = 该样本的失败行入账）
+            if (line.contains(corrupt_name))
+                has_corrupt = true;
+            if (line.contains(QLatin1Char('\t')))
+                has_tab = true;
+        }
+        f_expect(has_corrupt && has_tab,
+                 QStringLiteral("行式 = 路径\\t原因（corrupt 入账 %1 / tab %2）")
+                     .arg(has_corrupt ? 1 : 0)
+                     .arg(has_tab ? 1 : 0));
+        f_expect(!failure_list_path.isEmpty() && QFileInfo::exists(failure_list_path),
+                 QStringLiteral("失败清单已落盘（%1）").arg(failure_list_path));
+        QStringList file_lines;
+        {
+            QFile f(failure_list_path);
+            if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                while (!f.atEnd())
+                    file_lines << QString::fromUtf8(f.readLine()).chopped(1);
+            }
+        }
+        f_expect(file_lines == run_failure_lines,
+                 QStringLiteral("落盘逐行 == run_failure_lines（%1 vs %2 行）")
+                     .arg(file_lines.size())
+                     .arg(run_failure_lines.size()));
+        if (status != nullptr) {
+            // 瞬态状态备注（set_status_note + 定时器）会临时占用 tooltip/手型呈现位 ——
+            // 先清备注（同等待时器到点的等效动作）再验 R-144 的失败段下钻呈现。
+            set_status_note(QString());
+            pump(80);
+            f_expect(status->toolTip().contains(failure_list_path),
+                     QStringLiteral("状态栏 tooltip 含落盘出处（%1）").arg(status->toolTip()));
+            f_expect(status->cursor().shape() == Qt::PointingHandCursor,
+                     QStringLiteral("失败段手型（下钻入口）"));
+            // 下钻判定自适应页序（栈下标语法不入断言）：先测运行页栈位，再离开，再点击对比
+            w->set_current_page(3);
+            pump(60);
+            const int run_idx = stack != nullptr ? stack->currentIndex() : -1;
+            w->set_current_page(1);
+            pump(60);
+            QMouseEvent press(QEvent::MouseButtonPress, QPointF(4, 4), QPointF(4, 4),
+                              Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(status, &press);
+            pump(60);
+            f_expect(stack != nullptr && stack->currentIndex() == run_idx && run_idx >= 0,
+                     QStringLiteral("点击下钻到运行页（got %1 want %2）")
+                         .arg(stack != nullptr ? stack->currentIndex() : -1)
+                         .arg(run_idx));
+        } else {
+            f_expect(false, QStringLiteral("pp-status 缺失"));
+        }
+        // ⑥ 自清 + 归位：移除损坏行、删探针自建样本（run_failure_lines/failure_list_path
+        //    保留实况 = 下一轮 run-again 自己清算；不伪造归位）
+        for (std::size_t i = 0; i < model->size(); ++i) {
+            if (QString::fromStdString(model->row(i).entry.src.string()) == corrupt) {
+                QList<int> drop;
+                drop << int(i);
+                model->remove_rows(drop);
+                break;
+            }
+        }
+        QFile::remove(corrupt);
+        std::printf("UI-SMOKE zero-byte-redo: checked=%d bad=%d outputs=%d a=%lld\n", z_checked,
+                    z_bad, int(before.size()), static_cast<long long>(a_size));
+        std::fflush(stdout);
+        std::printf("UI-SMOKE failure-list: checked=%d bad=%d lines=%d\n", f_checked, f_bad,
+                    int(run_failure_lines.size()));
+        std::fflush(stdout);
     }
 
     // ---- 对话框三连（构造 → show → processEvents → grab → close，绝不 exec）----

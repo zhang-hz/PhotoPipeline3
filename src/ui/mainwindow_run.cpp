@@ -509,6 +509,12 @@ void MainWindow::on_start() {
     for (const std::size_t row : run_rows)
         d.model->set_state(row, pp::FileState::Queued); // 只复位本批（参与运行）行的状态
     d.run_rows = run_rows;                              // ev.index（提交序号）→ 列表行号的映射
+    // R-256 后半（M7R22G2）：提交时按序号快照源路径（稳定键；与 entries 同序），供
+    // handle_file_event 逐事件核对「行序不变」契约 + 漂移时按路径重定位。
+    d.run_row_paths.clear();
+    d.run_row_paths.reserve(entries.size());
+    for (const pp::FileEntry &e : entries)
+        d.run_row_paths.push_back(e.src);
     d.run_started = 0;                                  // R-250：单账本
     d.run_seen.assign(run_rows.size(), false);
     d.run_total = total;
@@ -754,11 +760,27 @@ void MainWindow::Impl::push_log_tail() {
 
 void MainWindow::Impl::handle_file_event(const pp::FileEvent &ev) {
     // M4-T11：ev.index = 提交序号（仅勾选文件）→ 映射回列表行号再落状态
-    if (ev.index < 0 || std::size_t(ev.index) >= run_rows.size())
+    if (ev.index < 0 || std::size_t(ev.index) >= run_rows.size() ||
+        std::size_t(ev.index) >= run_row_paths.size())
         return;
-    const std::size_t row = run_rows[std::size_t(ev.index)];
-    if (row >= model->size())
-        return;
+    // R-256 后半（M7R22G2）：「行序不变」隐式契约 → **显式校验 + 稳定键兜底** —— 核对映射
+    // 行仍是提交时的同一源文件（run_row_paths 快照）；行集漂移（增删/重排）时按路径重定位，
+    // 找不到即丢弃本事件的落行（计数账本仍按 ev.index 走，不受影响）。
+    std::size_t row = run_rows[std::size_t(ev.index)];
+    const std::filesystem::path &want = run_row_paths[std::size_t(ev.index)];
+    if (row >= model->size() || model->row(row).entry.src != want) {
+        constexpr std::size_t kNotFound = static_cast<std::size_t>(-1);
+        row = kNotFound;
+        for (std::size_t i = 0; i < model->size(); ++i) {
+            if (model->row(i).entry.src == want) {
+                row = i;
+                break;
+            }
+        }
+        if (row == kNotFound)
+            return;
+        run_rows[std::size_t(ev.index)] = row; // 重定位结果回写映射（后续事件直用）
+    }
     // R-250：单账本 —— "已取件"在此记账（离开 Queued 的第一个事件），inflight/queued 自算。
     if (ev.state != pp::FileState::Queued && std::size_t(ev.index) < run_seen.size() &&
         !run_seen[std::size_t(ev.index)]) {

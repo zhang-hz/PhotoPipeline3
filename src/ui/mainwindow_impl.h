@@ -994,6 +994,10 @@ struct MainWindow::Impl {
     QString failure_list_path;     // 最近一次落盘路径（状态栏 tooltip 出处）
     // M4-T11：本批提交的**模型行号**（ev.index 是提交序号 → 需映射回列表行更新状态）
     std::vector<std::size_t> run_rows;
+    // R-256 后半（M7R22G2）：每提交序号的**源路径快照**（与 run_rows/entries 同序）——
+    // ev.index→行号不再裸信「行序不变」：事件到达时核对映射行仍是同一文件，行集漂移时
+    // 按路径（稳定键）重定位，找不到即丢弃（状态绝不落到别的文件行上）。
+    std::vector<std::filesystem::path> run_row_paths;
     QString last_selected_path; // 分组重建后恢复选中（重建 = 模型 reset，选中会丢）
     // R-153（分组重建吞多选）：重建前快照**全部**选中路径（不止首个）—— 过滤/摘要/分组模式
     // 变化触发 modelReset 时多选整组恢复，批量打标/移除不再塌缩成 1 行。

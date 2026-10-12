@@ -4,7 +4,7 @@
 > 冻结接口（PP-FROZEN）的加性扩展走「加性 + 追认」，逐条登记于此。实施归属列括号内为登记来源
 > （各工作包 handoff 的「裁定登记」节原样汇总，编号连续化；原文见 `build/m7-wpN/handoff.md`）。
 > 汇总人 = WP11；裁定人 = 主对话（各 WP 报出后经波次收口追认）。
-> **编号命名空间**：本表 A/B/C/D/E 与 M7-ADJ-*/WP12-B* 均为**裁定表编号**；勿与 `ux-review-14.md`
+> **编号命名空间**：本表 A/B/C/D/E 与 M7-ADJ-*/WP12-B*/WP13-B*（R1）以及 `R2A-A*`/`M7R2B-*`/`R2C-W*`/`R2D1-A*`/`M7-R2-A`/`M7-R2-B`/`M7R2D2-*`/`M7R2E2-*`/`R2G-G*`/`R2F-X*`/`R2F-C*`（R2）均为**裁定表编号**；`D-n` 为 AGENTS §9 实现期发现缺陷号（如 R2G-G5 承载的 D-1）；勿与 `ux-review-14.md`
 > §14 的色彩分级子项（A1–D3）及 `deep-review-0.3.2.md` 附录 B 的拆解蓝图（B.1–B.8）混读
 > ——三套编号独立，详见 `m7-report.md` 文首「编号命名空间」注。「任务书 / WP 任务包」引述
 > 出处 = [docs/m7r2-plan.md](m7r2-plan.md)（R2 轮方案真源 + 附 A「任务书引述出处对照」，
@@ -56,7 +56,7 @@
 | B4 | `class_file` 默认改惰性空串（原默认构造即 mkdir） | R-050；消费点「空=默认」口径使然 | WP1（裁定 15） |
 | B5 | manifest `longPathAware` 用 SMI/**2016** 命名空间（元素自带 xmlns） | 误用 2019 前缀 SxS 拒启（实测踩坑修正） | WP1（裁定 16） |
 | B6 | dct_method 锁定值取 **0**（表默认）而非实际 FLOAT(2) | jpegli 不读该字段（行为等价），锁 2 会改写参数快照/预设字节 ⇒ 回归零漂移优先 | WP2（W2-A8） |
-| B7 | R-206 交叉校验保留 en/zh 双通道归属（不做全通道合并） | 合并 = 既有错误面变化，未裁定不做 | WP2（W2-A9） |
+| B7 | R-206 交叉校验保留 en/zh 双通道归属（不做全通道合并）——**R2 轮追记：本条已被 M7R2B-2 取代**（R-206「改道定稿」：通道归属退场、双通道共用规则，`5d19146`） | 合并 = 既有错误面变化，未裁定不做（R1 期口径；R2 期经任务明文改道） | WP2（W2-A9）→R2B |
 | B8 | UX-14 A1 nclx 推导改 ICC 反推（默认 sRGB 情境字节不变；P3/Adobe 情境改 VUI 信令） | 金样 20/20 背书；heif/avif 回归差异归因本条 + B9 | WP2（W2-A10） |
 | B9 | R-089 chroma 量化统一 quantize16（±1 LSB 级） | 平面间 1 LSB 口径差根治 | WP2（W2-A11） |
 | B10 | R-011 float predictor 显式拒绝（lzw/zip 下） | 旧 = libtiff 写盘期英文底层错；新 = 明确因由 | WP2（W2-A12） |
@@ -162,7 +162,7 @@
 
 | # | 裁定 | 理由 | 实施归属 |
 |---|---|---|---|
-| M7-ADJ-tidy-reseed | **tidy 棘轮基线重播种**（`tools/baseline/clang-tidy.tsv`，283/62 → **264/71**）：`ci-tidy.py --update` 落盘，基线 diff 与本提交同在；**frameless.cpp 5→6 为唯一一处既有条目级放宽**（Win32 `reinterpret_cast<HWND>(winId())` / `NCCALCSIZE_PARAMS*` 等 int↔ptr 平台互操作惯用式 + `attach(QWidget*,QWidget*)` 同型参数对，发行门禁期不做签名重构）；总告警 283→264 严格收紧；17 条残余逐条归因（M7 拆 TU 机械迁移 6 / M6 未入基线存量 2 / 发行期禁改的异常路径 2 / 平台惯用式与有意为之 7；等价分解=非 frameless 11 条 + frameless 6 条，见 m7-report §3.7），明细见 `m7-report.md` §3.7 与 `build/m7-wp12/handoff.md`。**NOLINT 抑制案否决**（仓库零先例、抑制注释在关键位点埋回归盲区）。 | 主对话裁决（escalate 问答，条件五条：总量只减 / frameless 放宽逐条理由+本表登记 / 归因随提交正文 / 复跑 exit 0+读数入报告 / 不动 CI 判据与检查集、不加抑制）；触发背景：B.6 四 TU + mainwindow 五域拆 TU 把 mainwindow.cpp(14→1)/main.cpp(8→1) 既有告警机械迁入 10 个基线外 TU，file-keyed 棘轮无法表达「告警随代码搬家」，与「新文件须 0」口径不可兼容 | WP12 |
+| M7-ADJ-tidy-reseed | **tidy 棘轮基线重播种**（`tools/baseline/clang-tidy.tsv`，283/62 → **264/71**）：`ci-tidy.py --update` 落盘，基线 diff 与本提交同在；**frameless.cpp 5→6 为唯一一处既有条目级放宽**（Win32 `reinterpret_cast<HWND>(winId())` / `NCCALCSIZE_PARAMS*` 等 int↔ptr 平台互操作惯用式 + `attach(QWidget*,QWidget*)` 同型参数对，发行门禁期不做签名重构）；总告警 283→264 严格收紧；17 条残余逐条归因（M7 拆 TU 机械迁移 6 / M6 未入基线存量 2 / 发行期禁改的异常路径 2 / 平台惯用式与有意为之 7；等价分解=非 frameless 11 条 + frameless 6 条，见 m7-report §3.7），明细见 `m7-report.md` §3.7 与 `build/m7-wp12/handoff.md`。**NOLINT 抑制案否决**（仓库零先例、抑制注释在关键位点埋回归盲区）。**R2 轮追记（R2G `6a6e043`）**：「NOLINT 案否决 / 仓库零先例」口径已**不再成立**——R2G 终门禁 tidy fallout 采行级 NOLINT 消音 11 条（八节 R2G-G2），本仓自此有 NOLINT 先例；两裁定不矛盾但前后有别：WP12 期否决的是「为压计数而加抑制」，R2G 期在「棘轮只减不增、禁 `--update`」约束下选定「修码 + 消音」（含翻案替代方案与成本），逐条理由注释在代码内。 | 主对话裁决（escalate 问答，条件五条：总量只减 / frameless 放宽逐条理由+本表登记 / 归因随提交正文 / 复跑 exit 0+读数入报告 / 不动 CI 判据与检查集、不加抑制）；触发背景：B.6 四 TU + mainwindow 五域拆 TU 把 mainwindow.cpp(14→1)/main.cpp(8→1) 既有告警机械迁入 10 个基线外 TU，file-keyed 棘轮无法表达「告警随代码搬家」，与「新文件须 0」口径不可兼容 | WP12 |
 | WP12-B1 | tidy 棘轮 fallout 的 **38 条修复全部行为零变化**（显式转换 / 删未用量 / 枚举基型 / 按值拷贝 / 字符串拼接序 / 舍入式拆命名临时量保持算子序），金样 20/20 + 回归 zero diff + ctest 35/35 双背书 | 零行为机械修复 | WP12 |
 | WP12-B2 | **行为变化（测试面）**：4 个新单测（test_geocoder/test_icons/test_providers/test_secret）的 `main` 包 try/catch——**异常逃逸路径**由 terminate（崩溃）变为打印 `FAILED (unexpected exception)` + 返回 1；仅测试代码、仅崩溃路径，成功与断言路径逐字不动，ctest 判定不变。产品代码的 exception-escape（colormanager `~ErrSync`、mainwindow_run 事件回调 λ）**未动**（修法=吞异常=行为变化，主对话裁决「发行门禁期禁改」） | tidy `exception-escape(main)` 告警的唯一非零行为修复；行为变化按 §6.2 纪律入本表（m7-report §3.7 引用即此条） | WP12 |
 
@@ -192,6 +192,7 @@
 | R2A-A8 | 断言面选择 | A1 判据取**码流 VUI 位流直读**，解码侧 `heif_image_get_nclx` 仅对照留证 | 解码侧回填随库漂移（实测 P3 位流=12 而回填=2）；判据原文=码流 |
 | R2A-A9 | 算法口径 | C1 mode2 = Lab 空间 L 轴收敛（保 L、压 C） | 设计「向明度轴收敛」字面；RGB 域备选实测色相偏 45° 否决 |
 | R2A-A10 | 测量路径换锚 | 跨库对拍 Rec709 侧用 OIIO `color.h` 曲线（本 OIIO ColorConfig 无 "Rec709" 名，实测） | 同库同曲线，对拍语义不变 |
+| R2A-A11 | 登记（量化面限定） | C2 抖动**只接** jpegli/webp/jxl/oiio 四家 to_u8 量化段；heif/avif 的 8bit 输出走 `quantize16(maxv=255)` 面**不接**（扩面需 `quantize16_dithered`，另裁） | plan §2-2 任务面口径；如实限定防「全部格式生效」误读；默认关下无行为差异 |
 
 ### 8.2 R2B（`5d19146`，核心与参数域尾单）
 
@@ -248,6 +249,16 @@
 | M7R2E2-5 | 断言换锚（同严） | settings_geom_probe QSS 断言换空白宽容正则（属性名/值/色值逐字） | R-281 明文；严格度不降 |
 | M7R2E2-6 | 死码删除 | page_output 四件 index 映射函数退役（itemData 单真相） | R-190 明文；读回落值语义逐值相同 |
 | M7R2E2-7 | 新文件 | `src/ui/format_policy.h`（B.3 纯核）、`src/ui/leading_indent.h`（R-218 逻辑边距） | header-only（R-109 路线）；glob 自动收编，CMakeLists 零改动 |
+
+### 8.7 R2G（`6a6e043`，终门禁复核；原始登记 `build/m7r2-g/handoff.md`，按 plan §4-9 汇入本表）
+
+| # | 类型 | 内容 | 理由 / 依据 |
+|---|---|---|---|
+| R2G-G1 | 判据处置 | tidy 新增告警**不走 `--update` 重播种**，走「修码 12 条 + 行级 NOLINT 消音 11 条（带契约注释）」 | 任务判据「棘轮只减不增」：`--update` 264→287 = 只增 = 放宽判据面；消音为注释级零语义面，基线文件零改动 |
+| R2G-G2 | **NOLINT 新惯例首次进仓**（与 M7-ADJ-tidy-reseed 的「否决案」前后有别，见六节 R2 追记） | 消音 11 条 = `kernels.cpp` AVX2 intrinsics ×6 + `dithered_range` 形参组 ×2 + `collect_from`/`expect_card_menu` 出参对 ×2 + QtConcurrent 任务 lambda ×1；每处注释写明理由与出处，只覆盖 R2 新增行 | 三类理由：①结构性误报（AVX2 硬线，AGENTS §1.4）②同文件基线内同类先例口径 ③探针签名冻结形态。**翻案替代方案**（成本=换处置+重跑 tidy）：a) 形参组结构化小 struct；b) 主对话授权 `--update` 重播种 + 归因 |
+| R2G-G3 | 行为零变化 | `apply_gamut_mapping` 形参序调整（colormanager 非冻结面，函数在 cpp 匿名空间） | 金样 20/20 + 回归 zero diff 证明输出逐字节不变 |
+| R2G-G4 | 回归首跑 DIFF **不重播种** | 归因 0 行真实变化（OS 瞬态文件锁 `Access is denied` @ `fsops.cpp:541` rename，同二进制复跑 ×2 zero diff） | R-015：重播种仅用于真实行为变化；瞬态环境噪声不落基线 |
+| R2G-G5 | **D-1（实现期发现，AGENTS §9 编号系首例）** | 输出名碰撞（`base/rgb16.png` 与 `base/rgb16.tif` 的 `$dir/$file` 模板同产 `rgb16.jpg`，conflict=overwrite）的 rename 替换路径对 OS 瞬态锁敏感，与并发负载同现一次 | 登记为已知差异：**未加锁重试机制**（行为新增，超 R2G「修复 fallout」范围）；根治=原子提交加锁重试，待裁定 |
 
 ## 九、误识别关闭与受约束登记（R2 轮四类审视，plan §1）
 

@@ -7,9 +7,10 @@
 > 自本文起指向本文件（附 A 给出 M7-WP 系分派书的引述内容摘录，换机可独立复核；各包逐条
 > 交付与验证证据见 `docs/m7-evidence/` 与各 `build/m7r2-*/handoff.md`）。
 > **编号命名空间**：`R-nnn` = `docs/deep-review-0.3.2.md`；`UX-n` = `docs/ux-review-14.md`
-> （其内部色彩分级子项写「UX-14 A1/C1…」式全称）；`A/B/C/D/E`、`M7-ADJ-*`、`WP12-B*`、
-> `R2A-A*`、`M7R2B-*`、`R2C-W*`、`M7-R2-A/B`、`M7R2D2-*`、`M7R2E2-*` = 裁定表编号
-> （`docs/m7-adjudications.md`）。
+> （其内部色彩分级子项写「UX-14 A1/C1…」式全称）；`A/B/C/D/E`、`M7-ADJ-*`、`WP12-B*`、`WP13-B*`、
+> `R2A-A*`、`M7R2B-*`、`R2C-W*`、`R2D1-A*`、`M7-R2-A/B`、`M7R2D2-*`、`M7R2E2-*`、`R2G-G*`、
+> `R2F-X*`、`R2F-C*` = 裁定表编号
+> （`docs/m7-adjudications.md`）；`D-n` = AGENTS §9 实现期发现缺陷号（如 D-1）。
 
 ---
 
@@ -31,7 +32,7 @@ M7-WP1…WP13 完成 331+14 条批量整改与文档收口后，剩余 finding �
 
 | 桶 | 判据 | 代表条目（R2 轮处置） |
 |---|---|---|
-| **① 本轮修复** | 评审发现属实、修法明确、不动引擎判据面或经授权换锚 | R-009/025/026/143/144/148/149/184/251/276/277/278/280/314、R-066/070/072/077/135/136/137/138/217/226/228/238/249/265/266/270/318、R-076/104/195/206/211/231、R-190/191/203/275/281/326、R-218（RTL）、UX-1 全 12 卡 / UX-2 全选入口 / UX-4 stretch / UX-6③ / UX-8 UI 半 / UX-10.1 / UX-11 / UX-12 重放链、UX-14 C1–C4 + A1 + B2 + D1–D3 |
+| **① 本轮修复** | 评审发现属实、修法明确、不动引擎判据面或经授权换锚 | R-009/025/026/143/144/148/149/184/251/276/277/278/280/314、R-066/070/072/077/135/136/137/138/217/226/228/238/249/265/266/270/318、R-076/104/195/206/211/231、R-190/191/203/275/281/326、R-218（RTL）、UX-1 卡①–⑨（⑩–⑫ 运行页三卡 = WP6 `d99df1b` 已接）/ UX-2 全选入口 / UX-4 stretch / UX-6③ / UX-8 UI 半 / UX-10.1 / UX-11 / UX-12 重放链、UX-14 C1–C4 + A1 + B2 + D1–D3 |
 | **② 误识别关闭** | 评审前提不成立（死码 / 无消费 / 任务书字面与实现矛盾），按证据证伪关闭，不为关闭而改码 | R-282 死码前提（BMP 分支 = §5.8 文档化 API + `test_post_write_formats` 钉住；`with_extension` = PP-FROZEN + test_fsops 4 例覆盖 → C1/C2 保留裁定）、R-011 证伪（`tiff:Predictor` 上游 OIIO 3.1.17 `tiffoutput.cpp:1026-1029` 真实消费；键名对齐已随 WP2 落地）、WP5-A10 任务书笔误（「一行」登记 → 实际两行才是可达做法，见附 A） |
 | **③ 受约束口径闭环** | 外部约束（库事实 / 平台 API / 冻结面 / 宿主能力）使原修法不可达，在约束下把口径收干净并如实登记 | **B3 BMP ICC**：OIIO BMP writer 不承载 ICC（测试钉现状）→ 产品口径取「警示」（`WarningKind::EmbedIccUnsupported`，keep 不虚报）；表内 tooltip 无可标注面（FormatDef 无 tooltip 字段）——受约束不扩冻结面。**非 Windows 密钥**：DPAPI 仅 Windows → 非 Windows = `ppsec2:` 编码 + 0600，口径如实「编码不是加密」（引入 keyring 属负面清单禁扩依赖）。**Linux golden.log 移植**：Windows 宿主不做文本替换移植（R-015 反面先例）→ 归 Linux 宿主 / nightly `update_baseline` 通道重播种。**R-325 强类型**：非空容器包装 / bps-bpp 拆字段会改 PP-FROZEN 签名 → 维持「登记待解冻」，以 `validate_run_config` 校验器 + `file_state_of`/`set_output_state` 单点替代 |
 | **④ 登记留后续** | 结构性重构 / 无判据面性能项 / 跨面设计题，本轮不做假收敛 | 大单元拆分余量（page_meta/page_output/mapwidget/SettingsDialog ctor/filelistmodel）、R-185/187/188/196–201/204/205、R-254/255/256/259、R-260/264/269/279 余量、R-319/327/329/330、R-068、R-133 消费端、R-137 余量、R-145/239 CLI 侧、R-108 UA、R-109 库化、R-281 余量、UX-12 像素档探针、R-317 不编数口径（M5-A24，非缺陷）、R-118 三处注释标注 |
@@ -72,11 +73,12 @@ M7-WP1…WP13 完成 331+14 条批量整改与文档收口后，剩余 finding �
 | 波 1（引擎/核心/工程，三包并行） | **R2A** 色彩能力与解码语义 | `c540630` | `src/core/colormanager.*`、`src/core/thumbs.*`、`src/core/simd/*`、`src/decode/oiio_reader.*`、`src/codecs/enc_heif.cpp` + `tests/unit/test_{color,simd,decode,thumbs}.cpp`；跨界最小加性：`core/types.h`（WarningKind）、`codecs/encoder.h`（dither8） | §2 的 14 项设计实施 |
 | | **R2B** 核心与参数域尾单 | `5d19146` | `src/core/{scheduler,params,fsops,presets,settings,metadata}.*`、新头 `src/core/error_text.h`、`tools/regression.py` + 7 个 core 单测 | R-076/231/206/195/211/007/104、error_text 中文单源、regression E8、R-325 核对 |
 | | **R2C** CI 与发布链 | `210fce5` | `.github/workflows/**`、`tools/ci-*.{py,sh}`、`tools/make_winzip.py`、`tools/make_appimage.sh`、`docs/m7-evidence/**`（新建） | warm-cache YAML 非法修复、发布链预算取证、winzip 五门禁、证据留存机制、M7-GATE 索引对照表 |
-| 波次收口门禁 | **R2-gate** | `09b5340` | `tools/baseline/*`（回归基线） | 132 行逐行归因重播种（A1 nclx +20B×31 + 级联 4 对），见 `docs/m7-evidence/m7r2-gate-regression-reseed.md` |
-| 波 2（UI 行为尾单，两包并行） | **R2D1** 主窗/列表/预览/分类/page_meta | `6e001da` | `src/ui/{mainwindow*,filelistmodel,preview_panel,classify_panel,page_meta,icons}.*`、`assets/icons/check-all.svg`；`smoke_probes.cpp` 仅 M7-R2-B 授权两处换锚 | R-009/025/026/143/144/148/149/184/251/276–280/314、0 字节补齐、UX-1①–⑤、UX-2、UX-4 stretch |
-| | **R2D2** 输出/运行/表单/编辑器/设置 | `27c9f40` | `src/ui/{page_output,page_run,paramform,exif_editor,settings_dialog}.*`、`src/ui/theme.h`；`smoke_probes.cpp` 仅 M7-R2-A 授权 spin-group 换锚 | R-066/070/072/077/133/135–138/226/228/238/249/265/266/318、UX-1⑥–⑫、UX-8/10.1/11/12、UX-6③、R-099/217/270、X5 |
+| 波次收口门禁 | **R2-gate** | `09b5340` | `tools/baseline/*`（回归基线） | 132 行 = 66 对逐行归因重播种（A1 nclx：62 对行级 +20B + 汇总级联 4 对），见 `docs/m7-evidence/m7r2-gate-regression-reseed.md` |
+| 波 2（UI 行为尾单，两包并行） | **R2D1** 主窗/列表/预览/分类/page_meta | `6e001da` | `src/ui/{mainwindow*,filelistmodel,preview_panel,classify_panel,page_meta,icons}.*`、`assets/icons/check-all.svg`；`smoke_probes.cpp` 仅 M7-R2-B 授权两处换锚 | R-009/025/026/143/144/148/149/184/251/276/277/278/280/314（非区间，R-279 不在列）、0 字节补齐、UX-1①–⑤、UX-2、UX-4 stretch |
+| | **R2D2** 输出/运行/表单/编辑器/设置 | `27c9f40` | `src/ui/{page_output,page_run,paramform,exif_editor,settings_dialog}.*`、`src/ui/theme.h`；`smoke_probes.cpp` 仅 M7-R2-A 授权 spin-group 换锚 | R-066/070/072/077/133/135–138/226/228/238/249/265/266/318、UX-1⑥–⑨（⑩–⑫ = WP6 `d99df1b` 已接）、UX-8/10.1/11/12、UX-6③、R-099/217/270、X5 |
 | 波 3（RTL 与结构拆分 + 常驻探针） | **R2E2** | `52b9870` | `src/ui/{page_output,filelistmodel,settings_dialog,exif_editor,mainwindow,page_run,smoke_probes}.*`、`tests/unit/test_smoke.cpp`、新头 `src/ui/{format_policy.h,leading_indent.h}` | R-218 RTL 镜像、第 3 波常驻探针 5 条、B.3 纯核 + R-190/191/203/275/281/326 |
-| 波 4（台账终稿与文档） | **R2F** | （本包） | `docs/**`、`CHANGELOG.md`、`README.md`（+ `src/ui/smoke_probes.cpp` 仅第 3 波遗留探针缺口，若有——本包任务清单未含探针实现，规格入 handoff「探针需求」） | 18 条校读终态闭环、m7r2-plan.md 出处收口、覆盖台账 R2 终态、证据摘录入 `docs/m7-evidence/`、CHANGELOG/README 口径、误识别/受约束登记 |
+| 波 4（台账终稿与文档） | **R2F** | `8a541de` | `docs/**`、`CHANGELOG.md`、`README.md`（+ `src/ui/smoke_probes.cpp` 仅第 3 波遗留探针缺口，若有——本包任务清单未含探针实现，规格入 handoff「探针需求」） | 上轮校读 18 条归并 10 主题闭环、m7r2-plan.md 出处收口、覆盖台账 R2 终态、证据摘录入 `docs/m7-evidence/`、CHANGELOG/README 口径、误识别/受约束登记 |
+| 终门禁收口 | **R2G**（git 主题 `M7-R2-GATE`，勿与 R2-gate `09b5340` 重播种包混） | `6a6e043` | 门禁树 `build/release-dev` + tidy fallout 修复面 | 八项判据全绿 + 修码 12/消音 11（R2G-G1…G4）+ 回归瞬态锁 **D-1** 登记（R2G-G5） |
 | 发行 | **R2REL** | （另行） | 发行链（`docs/m7-evidence/release-runbook.md`） | 按 runbook 发布 0.3.3+（失败即停纪律） |
 
 ---
@@ -117,6 +119,8 @@ M7-WP1…WP13 完成 331+14 条批量整改与文档收口后，剩余 finding �
 | WP11 README 清单含色彩四项 | 「WP10 色彩行为未交付（colormanager `(void)opts;`）——README 已按『不显示没发生的量』处理；若 WP10 后续落地，README/CHANGELOG 的『已知』条与 UX-14 C1–C4 台账需同步更新」；任务包 README 清单列了「色域映射/抖动/渲染意图/线性光重采样 opt-in 项」 | `build/m7-wp11/handoff.md` ③-4 / `docs/m7-report.md` §3.1 |
 | WP11 沿用「33 条」 | 任务包沿用评审日 `docs/ux-review-14.md:5` 的 `ctest 33/33` 基线数（实测 35/34 见 m7-report §3.2） | `build/m7-wp11/handoff.md` ① R-115 行 |
 | R2 轮各包任务书 | §2 十四项设计定稿 + §3 波次/包/文件面计划（本文件即出处） | 本文件 |
+| R2 任务书「X 系」实现改案 | **X1** = paramform UI 重做（子分组二级折叠/整行折叠头/折叠区行宽 160，UX-8，R2D2 `27c9f40` 落地）；**X3** = UX-1 右键菜单扩面（卡⑥–⑨ 与任务卡行级动作；⑩–⑫ 运行页三卡 WP6 已接；R2D1/R2D2 落地）；**X5** = `theme.h` 公共 warn 钩子 `kFkWarn` + field_qss 规则（R2D2 `27c9f40`，adjudications M7R2D2-5）；**X6** = UX-10.1 档位↔色度限幅联动（R2D2 `27c9f40`） | R2D1/R2D2 handoff ①②（`build/m7r2-d1/handoff.md`、`build/m7r2-d2/handoff.md`）；编号为会话内任务书 X 系，此处留存定义 |
+| 「WPn 跨界需求 k」对照 | WP5 跨界 1 = `core/settings.h default_class_file()` 空 data_dir 退化 CWD 相对名（→ R2B `5d19146` 收口）；WP5 跨界 2 = mainwindow 预设路径空目录病灶（→ R2D1 `6e001da` 守卫）；WP5 跨界 5 = `src/platform/mica.h` 主题切换监听 v1 口径维持（附录 D）；WP4 跨界需求 1 = UX-6① spec §5 R1 两档例外（→ D7）；WP3 跨界需求 2 = 无 `install()` 设计取舍（→ D9）；WP8 跨界需求 3 = 线程读数估算口径（→ D10） | 各 `build/m7-wpN/handoff.md` ③「跨界需求」节；编号随包内条序，此处留存定义 |
 
 ---
 

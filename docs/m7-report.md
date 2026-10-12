@@ -7,7 +7,7 @@
 [docs/m7-adjudications.md](m7-adjudications.md)；逐条用户可见变更见 [CHANGELOG.md](../CHANGELOG.md) `[0.3.3]`；
 R2 各包交付与门禁读数见「R2 轮交付」章节与 [docs/m7-evidence/](m7-evidence/)。
 
-工作包与提交索引（提交号以 `git log` 实测为准，2026-10-12，M7 窗口 19 提交全覆盖；
+工作包与提交索引（提交号以 `git log` 实测为准，2026-10-12：**R1 窗口 19 提交全覆盖**（WP1–WP13/REL 去重），另 R2 轮 9 提交（R2A `c540630`/R2B `5d19146`/R2C `210fce5`/R2-gate `09b5340`/R2D1 `6e001da`/R2D2 `27c9f40`/R2E2 `52b9870`/R2F `8a541de`/R2G `6a6e043`，见表末各行）；
 **条目数不在此表计**——各包条目数随计数口径（唯一主责 / 表内出现次数 / 任务包分派数）而异，
 逐条归属以附录 A 提交列为准。**行序 = 包编号序，非 git 时间序**：WP3 `18fb355` 实为 M7 首提交
 （早于 WP1/WP2），WP9 `594d93f` 早于 WP8 `40f3405` 一分钟，WP6-fix `e8b9bf1` 在 WP7 之后；
@@ -33,16 +33,17 @@ git 时间序对照见 R2C 对照表 `build/m7r2-c/handoff.md` 附录）：
 | R2A 色彩能力与解码语义 | `c540630` | 14 项技术设计实施（C1–C4/D1–D3/A1/UX-10.2/R-296/302/163/B3/ΔE，plan §2） |
 | R2B 核心与参数域尾单 | `5d19146` | R-076/231/206/195/211/007/104 + error_text.h + regression E8 |
 | R2C CI 与发布链 | `210fce5` | warm-cache YAML 修复 + 发布链取证 + 证据留存机制（docs/m7-evidence/） |
-| R2-gate 回归重播种 | `09b5340` | 132 行逐行归因（A1 nclx +20B×31 + 级联 4 对），见 m7-evidence |
-| R2D1 主窗/列表/预览/分类/page_meta | `6e001da` | R-009/025/026/143/144/148/149/184/251/276–280/314 + UX-1①-⑤/UX-2/UX-4 stretch |
-| R2D2 输出/运行/表单/编辑器/设置 | `27c9f40` | R-066/070/072/077/133/135–138/226/228/238/249/265/266/318 + UX-1⑥-⑫/8/10.1/11/12/6③ |
+| R2-gate 回归重播种 | `09b5340` | 132 行 = **66 对**逐行归因（A1 nclx：31 文件 output-done 与 in-place 两类行各 +20B 共 62 对 + 汇总级联 4 对），见 m7-evidence。**勿与 R2G 混**：R2-gate（git 主题 `M7-R2-gate`）= 重播种包 |
+| R2D1 主窗/列表/预览/分类/page_meta | `6e001da` | R-009/025/026/143/144/148/149/184/251/276/277/278/280/314 + UX-1①-⑤/UX-2/UX-4 stretch（276–280 为逐号列举非区间：R-279 不在列，见附录 A） |
+| R2D2 输出/运行/表单/编辑器/设置 | `27c9f40` | R-066/070/072/077/133/135–138/226/228/238/249/265/266/318 + UX-1⑥⑦⑧⑨/8/10.1/11/12/6③ + X5（git 主题口径；⑩–⑫ 运行页三卡=WP6 `d99df1b`） |
 | R2E2 RTL 与结构拆分 | `52b9870` | R-218 RTL 镜像 + 第 3 波常驻探针 5 条 + R-190/191/203/275/281/326 |
-| R2F 台账终稿与文档 | （本包，见「R2 轮交付」） | 18 条校读终态闭环 + 覆盖台账 R2 终态 + 证据摘录 + plan/CHANGELOG/README |
+| R2F 台账终稿与文档 | `8a541de` | 上轮校读 18 条归并 10 主题闭环 + 覆盖台账 R2 终态 + 证据摘录 + plan/CHANGELOG/README |
+| R2G 终门禁复核 | `6a6e043` | 八项判据全绿 + tidy fallout 23 条修复（修码 12 + 消音 11）+ 回归瞬态锁归因（D-1 登记）；git 主题 `M7-R2-GATE`，与 R2-gate 是两个包 |
 
 **编号命名空间（三套并存，勿混读）**：① `R-nnn` = deep-review 条目（`docs/deep-review-0.3.2.md`）；
 ② `UX-n` = ux-review 条目（`docs/ux-review-14.md`），其内部另有**色彩分级子项 A1–D3**（§14，
 如 A1=nclx、B1=ΔE 护栏、C1–C4=色域映射等）——本报告引用时一律写「UX-14 A1」式全称；
-③ `A1–A31/B1–B61/C1–C10/D1–D12/E1–E9/M7-ADJ-*/WP12-B*` = [docs/m7-adjudications.md](m7-adjudications.md)
+③ `A1–A31/B1–B61/C1–C10/D1–D12/E1–E9/M7-ADJ-*/WP12-B*/WP13-B*`（R1 轮）与 `R2A-A*`/`M7R2B-*`/`R2C-W*`/`R2D1-A*`/`M7-R2-A`/`M7-R2-B`/`M7R2D2-*`/`M7R2E2-*`/`R2G-G*`/`R2F-X*`/`R2F-C*`（R2 轮）及 `D-n`（AGENTS §9 实现期发现号，如 D-1） = [docs/m7-adjudications.md](m7-adjudications.md)
 裁定表编号；④ `B.1–B.8` = **deep-review 附录 B 的拆解蓝图**（B.1 page_meta / B.2 page_run /
 B.3 page_output / B.4 run_one_file / B.5 mapwidget / B.6 main.cpp / B.7 enc_common / B.8 契约收口，
 见 `docs/deep-review-0.3.2.md` §附录 B）。「任务书 / WP 分派清单」引述出处 =
@@ -67,7 +68,8 @@ B.3 page_output / B.4 run_one_file / B.5 mapwidget / B.6 main.cpp / B.7 enc_comm
 5. **地图链**（R-012 联想清算、R-013 key 脱敏、R-077 空 Key 预检、R-158/224 表驱动、
    R-219～223 契约收敛、R-161 等）+ UX-4 地图 App 化、UX-5 启用开关。
 6. **UI 14 项**：已修/大部完成 11 项（UX-3/4/5/6 大部/7/8 前半/9/10/11 大部/12 主修/13），
-   残余逐条登记（附录 B）。
+   残余逐条登记（附录 B）。**R2 轮追记**：R2D1/R2D2/R2E2 补齐后 14/14 全部**已修**
+   （终态见附录 B，余量以格内注记）。
 7. **工程/CI/供应链**：actions 钉 SHA、回归归因护栏、UBSan 假绿封堵、语料 sha256 锁、
    tidy 棘轮收紧、工具链钉版、发行包 NOTICE 等（WP3 全清，逐条见附录 A 提交列 `18fb355`）。
 8. **结构重构**（B.4/B.6/B.7/B.8 蓝图 + R-048/049）：run_one_file 十阶段、enc_common 五连
@@ -190,15 +192,15 @@ WP5 清单 10 项：拖拽移动 / 双击标题栏最大化 / 八向缩放（含
 | 全源格式（WP12） | `violations=0`（钉版 clang-format 23.1.1，152 文件） | `build/m7-wp12/gate-format2.log` |
 | tidy 棘轮（WP12） | `TIDY total=264 baseline=264 files=71 violations=0 seed=0` | `build/m7-wp12/gate-tidy2.log` |
 | 密钥扫描（WP12） | 值形态 `sk-[A-Za-z0-9]{16,}`=0、`amap_key\s*[=:]\s*<16+字符值>`=0、`\b[0-9a-f]{32}\b`=0（`amap_key` 名字面 214 命中全为键名/字段名/文档） | `build/m7-wp12/leak_scan.py` 输出 |
-| WP1 八单测 | `test_metadata: all cases passed` / `test_pipeline_contract: all checks passed` / `test_fsops: OK` / `test_classify: OK` / `test_settings: OK` / `test_effective: OK` / `test_color: 546 checks, 0 failed` / `test_pixelbudget: OK` | `build/m7-wp11`…各 WP handoff ④ 节（WP1 原件 `build/m7-wp1/handoff.md`） |
+| WP1 八单测 | `test_metadata: all cases passed` / `test_pipeline_contract: all checks passed` / `test_fsops: OK` / `test_classify: OK` / `test_settings: OK` / `test_effective: OK` / `test_color: 546 checks, 0 failed` / `test_pixelbudget: OK` | 各 WP handoff「④ 验证命令与结果」节逐字；WP1 原件 = `build/m7-wp1/handoff.md` ④（八单测行逐条） |
 | WP7 meta 探针 | `meta-geom: checked=22 bad=0` / `meta-loop: checked=11 bad=0` / `meta-map-expand: checked=14 bad=0` | `build/m7-wp7/handoff.md` ④ 节 |
 | WP11 ctest | `100% tests passed out of 35`（43.8s）+ `Total Tests: 35/34`（两树 -N） | 本包实跑（§2.1） |
 | R2A 金样/单测 | `SMOKE total=20 pass=20 fail=0`；`test_color: 1351 checks, 0 failed`；`test_decode: 642 checks, 0 failure(s)`；`bitstream VUI primaries=12` | [docs/m7-evidence/m7r2-a-gates.md](m7-evidence/m7r2-a-gates.md) |
 | R2B 单测/自检 | `100% tests passed out of 7`；`regression self-check: cases=19 fail=0` | [docs/m7-evidence/m7r2-b-gates.md](m7-evidence/m7r2-b-gates.md) |
 | R2D1 ctest/图标 | `100% tests passed out of 35`；icons `count=38 required=34 bad-svg=0` | [docs/m7-evidence/m7r2-d1-gates.md](m7-evidence/m7r2-d1-gates.md) |
 | R2D2 ctest/几何 | `100% tests passed out of 35`；`output-geom: checked=29 bad=0`；`settings-geom: checked=42 bad=0` | [docs/m7-evidence/m7r2-d2-gates.md](m7-evidence/m7r2-d2-gates.md) |
-| R2E2 ctest/探针 | `UI-SMOKE OK shots=12 pages=3`；`rtl-mirror: checked=11 bad=0`；`context-menu: cards=12 checked=36 bad=0`；`check-all: checked=11 bad=0 rows=16` | [docs/m7-evidence/m7r2-e2-gates.md](m7-evidence/m7r2-e2-gates.md) |
-| R2-gate 重播种归因 | `version-line changes=0 behavior changes=66 changed-lines=132`（heif/avif +20B×31 + 级联 4 对） | [docs/m7-evidence/m7r2-gate-regression-reseed.md](m7-evidence/m7r2-gate-regression-reseed.md) |
+| R2E2 ctest/探针 | `UI-SMOKE OK shots=12 pages=3`；`rtl-mirror: checked=11 bad=0`；`context-menu: cards=12 checked=36 bad=0`；`check-all: checked=11 bad=0 rows=16`；`run-reason: checked=4 bad=0 reasons=32`；`folds: checked=6 bad=0 groups=4`（五探针全摘） | [docs/m7-evidence/m7r2-e2-gates.md](m7-evidence/m7r2-e2-gates.md) |
+| R2-gate 重播种归因 | `version-line changes=0 behavior changes=66 changed-lines=132`（A1 nclx：62 对行级 +20B + 4 对汇总级联 = 66 对/132 行） | [docs/m7-evidence/m7r2-gate-regression-reseed.md](m7-evidence/m7r2-gate-regression-reseed.md) |
 
 ---
 
@@ -217,7 +219,7 @@ WP5 清单 10 项：拖拽移动 / 双击标题栏最大化 / 八向缩放（含
   待后续工作包。
 - **R2 轮追记（2026-10-12）**：**C1–C4 行为实现已由 R2A（`c540630`）交付**（14 项技术设计定稿
   = plan §2：色域映射三档 / 8bit TPDF 抖动 / 渲染意图四档 / 线性光重采样，全部默认关=旧行为
-  逐字节一致，金样 20/20 背书）。本节「未交付」结论对 R1 轮成立、已被 R2 取代；**GUI 开关
+  与既有行为逐字等价——金样 20/20 为断言级判据、非字节比对，字节级口径见 §6.2-1）。本节「未交付」结论对 R1 轮成立、已被 R2 取代；**GUI 开关
   仍未接线**（引擎面 RunConfig 四字段可配、界面不提供开关）——README/CHANGELOG 已按此口径
   改写（R2 轮交付章节 §6.2）。
 
@@ -251,7 +253,7 @@ R-171/R-002（write-warnings、meta-write-fail）、R-097（png_ok 硬断言）�
 - `59de09d`：184 行 = 机械标签迁移 180（main.cpp→dev_cli.cpp，行为 0）+ 真实行为 4
   （R-162 错误消双记）。闭合证明：transformed(baseline) == current 逐字节相等。
 - 全窗口（git log 实测）另有两次：`97cd9da`（0.3.3 版本 bump，版本行 12 / 行为 0）、
-  `09b5340`（R2-gate，132 行 = A1 nclx 精确信令 heif/avif +20B×31 + 级联 4 对；逐行归因见
+  `09b5340`（R2-gate，132 行 = A1 nclx 精确信令：31 文件 × output-done/in-place 两类行各 +20B（62 对）+ 汇总级联 4 对 = **66 对/132 行**；逐行归因见
   `docs/m7-evidence/m7r2-gate-regression-reseed.md`）。「基线两次重播种」**仅在 M7-GATE
   scope（d882fe6/59de09d）内成立**，与全量 git log 对齐须按四次计。
 
@@ -286,8 +288,37 @@ R-171/R-002（write-warnings、meta-write-fail）、R-097（png_ok 硬断言）�
   （机械迁移 6 + M6 存量 2 + 异常路径 2 + 有意为之 1）+ frameless 6 条（条件②承载）**，
   早稿「11 条（三类目）」即非 frameless 子集且漏列「发行期禁改的异常路径 2」类目，本节按
   四类明列统一口径；④ 复跑 `TIDY total=264 baseline=264 files=71 violations=0 seed=0`；
-  ⑤ CI 判据、.clang-tidy 检查集零改动、零 NOLINT 抑制。**NOLINT 案否决**（仓库零先例、抑制
+  ⑤ CI 判据、.clang-tidy 检查集零改动、零 NOLINT 抑制。（**R2 轮追记**：「零 NOLINT」自 R2G 起不再成立——R2G 终门禁 tidy fallout 采行级 NOLINT 消音 11 条，见 §6.4 与 adjudications 八节R2G-G2；本行为 WP12 期裁定原状，勿作现行口径。）**NOLINT 案否决**（仓库零先例、抑制
   注释会埋回归盲区）。
+
+### 3.8 发行偏差（WP13，M7-ADJ-tag-move，主对话裁决）
+
+- **链路（如实）**：R-122 断言钉住 vcpkg.json 版本漂移 → 失败 tag 移动一次（97cd9da → b1af371）→ 重发布。逐步证据：
+  1. WP13 版本 bump 只改 `CMakeLists.txt:19`，`vcpkg.json "version"` 漏同改（当时 grep 复核面未含 `*.json`）；
+     `tools/ci-versions-check.py` 第 3 项（R-122，M7-WP3 引入）在 release.yml `appimage` job 6s 断言红
+     （release #12 = run 38197049543 @ 97cd9da；报错逐字 `版本不一致: CMakeLists project VERSION=0.3.3
+     vs vcpkg.json version=0.3.2 （R-122）`，本机复跑同文）。
+  2. `M7-REL-0.3.3-gate-fix2`（b1af371）按 R-122 契约同改 `vcpkg.json` → 0.3.3；阴阳性对照：
+     临时 worktree（97cd9da 树）`ci-versions-check` **FAIL**（同 CI 报错逐字）/ 主树（b1af371）**OK (10 keys, expect=2)**。
+  3. 移动前取证（裁决条件 1）：`gh release view` gh CLI 未认证（如实记录，同 d049d22 先例状态）；
+     匿名核对 releases 列表**无 v0.3.3**（最新 v0.3.2）、`/releases/tag/v0.3.3` 仅 2 个自动源码包资产
+     （真发布 = 6 资产，对照 v0.3.2）、release #12 **publish 未执行** ⇒ 零 Release、零资产。
+  4. 主对话裁决（escalate）：批准**一次**移动，条件七条（含「再红于任何新原因即停上报、禁止二次移动」）。
+  5. 移动（裁决条件 3）：`git tag -d v0.3.3 && git tag -a v0.3.3 -F … b1af371` +
+     `git push --force origin refs/tags/v0.3.3`（单 ref 原子更新）；`git ls-remote --tags origin` 核对
+     `refs/tags/v0.3.3` = tag 对象 `cb181ee`，`^{}` = `b1af371`。
+  6. 重推触发 release #13（run 38198290373 @ b1af371）→ 发布结果见 §3.8 末行。
+- **影响面**：产物二进制零影响（`vcpkg.json` 版本字段不进产物；两棵树 `--version` 同为 `PhotoPipeline 0.3.3`）；
+  金样 20/20 + 回归 zero diff + ctest 35/35 双背书不受影响（在 gate-fix 一并实跑）。
+- **发布结果**：（2026-10-12 实况）appimage 6m56s 绿（AppImage artifact 49 MB；probe-appimage 32s 绿）；
+  winzip job **20m16s 撞 `timeout-minutes: 20` 硬顶被 cancelled** —— 步骤级取证
+  （API `actions/jobs/114646130378`）：Qt/vcpkg 缓存 restore 均 success、暖度断言（≥20 archive）过、
+  语料断言过；step 12「configure + build release」跑 19m11s（03:06:42 → 03:25:53）未完被取消，
+  step 13–16（release-dev 子集 / make_winzip / 指纹 / 上传）全 skipped ⇒ probe-winzip、publish
+  **skipped** ⇒ **GitHub Release v0.3.3 未创建**（releases 列表复核仍止于 v0.3.2）。
+  按裁决条件 5（再红于新原因即停、禁止二次移动 tag）已停止发布动作，残余上报等裁决；
+  可选处置（需主对话授权）：同 tag 重跑 release.yml（不涉 tag 移动；winzip 预算 15 min、
+  本次 build 单步 19m+，或需调整预算/缓存后再跑）。
 
 ---
 
@@ -355,7 +386,8 @@ R-171/R-002（write-warnings、meta-write-fail）、R-097（png_ok 硬断言）�
 
 - ~~终门禁五项（§2.3）归 WP12~~ → **已由 WP12 于 2026-10-12 全部实跑**（§2.3 八项全绿）。
 - TSan 坏捕获正对照（R-027）本机 Windows 无法执行，验证点=首轮 Linux nightly tsan job。
-- R-025/026 等性能项无自动化判据（改动本身也未做，见附录 A）。
+- R-025/026 性能项**已由 R2D1 完成**（`6e001da`，见 §4.2 与附录 A）；「无自动化判据」的性质
+  不变（性能收益无机器判据面），仅作口径说明，不再表示未做。
 - Linux AppImage 构建、Windows 真机验收（§2.4 十项）：本机不可替代，待人工签收（同 E6）。
 
 ---
@@ -397,7 +429,7 @@ python tools/env.py run -- ctest --test-dir build/m7-wp11-rel -N  # 34（diff �
 
 ---
 
-## 6. R2 轮交付（M7-R2A…R2F，2026-10-12；方案真源 = [docs/m7r2-plan.md](m7r2-plan.md)）
+## 6. R2 轮交付（M7-R2A…R2G，2026-10-12；方案真源 = [docs/m7r2-plan.md](m7r2-plan.md)）
 
 > R2 轮 = 收口后尾单清扫 + 能力补强 + 台账终稿。逐条终态见附录 A/B（本章只给各包交付清单与
 > 验证证据）；裁定见 adjudications 八/九节；证据摘录见 [docs/m7-evidence/](m7-evidence/)。
@@ -406,30 +438,46 @@ python tools/env.py run -- ctest --test-dir build/m7-wp11-rel -N  # 34（diff �
 
 | 包 | 提交 | 交付（条目详见附录 A/B 对应行） | 验证证据 |
 |---|---|---|---|
-| **R2A** 色彩能力与解码语义 | `c540630` | 14 项技术设计（plan §2）：C1 色域映射三档 / C2 8bit TPDF 抖动 / C3 渲染意图四档 / C4 线性光重采样（默认关=旧行为逐字节一致）；D1 CMYK/YCCK 一致拒收 / D2 EXIF ColorSpace / D3 HDR 诚实口径；UX-14 A1 nclx 精确码（E1 闭环）；UX-10.2 逐插件白名单；R-296 CICP 表驱动（E9）；R-302 构建级 FP 收缩关闭；R-163 取消归类（E3）；B3 BMP ICC 警示（E2 口径）；ΔE 护栏扩强 + 跨库对拍（UX-14 B1/B2） | `docs/m7-evidence/m7r2-a-gates.md` |
+| **R2A** 色彩能力与解码语义 | `c540630` | 14 项技术设计（plan §2）：C1 色域映射三档 / C2 8bit TPDF 抖动（**仅 jpegli/webp/jxl/oiio 的 to_u8 量化段**；heif/avif 走 quantize16 面不接，登记 R2A-A11）/ C3 渲染意图四档 / C4 线性光重采样（默认关=未启用时与既有行为逐字等价）；D1 CMYK/YCCK 一致拒收 / D2 EXIF ColorSpace / D3 HDR 诚实口径；UX-14 A1 nclx 精确码（E1 闭环）；UX-10.2 逐插件白名单；R-296 CICP 表驱动（E9）；R-302 构建级 FP 收缩关闭；R-163 取消归类（E3）；B3 BMP ICC 警示（E2 口径）；ΔE 护栏扩强 + 跨库对拍（UX-14 B1/B2） | `docs/m7-evidence/m7r2-a-gates.md` |
 | **R2B** 核心与参数域尾单 | `5d19146` | R-076 终态映射单源 `file_state_of`；R-231 validate_preset 强化；R-206 双通道共用规则；R-195 查找 first-wins 单源；R-211 位深单位单源；R-007 `\\?\` 归一 + 259/255 硬线解除（E5）；R-104 持久层词表回落；WP5 跨界 1（default_class_file 空目录）；error_text.h 中文单源（R-070/273 core 面）；regression E8 行型表 + `--self-check`；R-325 13 项契约核对 | `docs/m7-evidence/m7r2-b-gates.md` |
 | **R2C** CI 与发布链 | `210fce5` | warm-cache YAML 非法修复（空 `env:` 键）；发布链预算取证 + `release-runbook.md`；make_winzip 五门禁 + E-2 本地全跑；`docs/m7-evidence/` 证据留存机制；M7-GATE 提交索引对照表（本报告索引已按其修正） | `docs/m7-evidence/m7r2-c-*.md`、`release-runbook.md` |
-| **R2-gate** | `09b5340` | 回归基线重播种 132 行逐行归因（A1 nclx +20B×31 + 级联 4 对，无第五类） | `docs/m7-evidence/m7r2-gate-regression-reseed.md` |
+| **R2-gate** | `09b5340` | 回归基线重播种 132 行 = 66 对逐行归因（A1 nclx：31 文件 output-done/in-place 两类行各 +20B 共 62 对 + 汇总级联 4 对，无第五类） | `docs/m7-evidence/m7r2-gate-regression-reseed.md` |
 | **R2D1** 主窗/列表/预览/分类/page_meta | `6e001da` | R-009 令牌重放收尾（§4.1-1 闭环）；R-025/026 性能；R-143/144/148/149；R-184/251/276/277/278/280/314；WP5 跨界 2（预设路径守卫）；0 字节补齐语义；UX-1①-⑤ / UX-2 全选入口 / UX-4 stretch | `docs/m7-evidence/m7r2-d1-gates.md` |
-| **R2D2** 输出/运行/表单/编辑器/设置 | `27c9f40` | R-066/070/072/077/133/135/136/137/138/226/228/238/249/265/266/318；R-217 编辑器工厂；R-270 余量令牌化；R-099 第三轨；R-211 UI 消费；R-195 paramform 转发；UX-1⑥-⑫ / UX-8 UI 半 / UX-10.1 / UX-11 / UX-12 重放链 / UX-6③；X5 warn 钩子 | `docs/m7-evidence/m7r2-d2-gates.md` |
+| **R2D2** 输出/运行/表单/编辑器/设置 | `27c9f40` | R-066/070/072/077/133/135/136/137/138/226/228/238/249/265/266/318；R-217 编辑器工厂；R-270 余量令牌化；R-099 第三轨；R-211 UI 消费；R-195 paramform 转发（半：preset_io/dev_cli 余量登记）；UX-1⑥-⑨（⑩–⑫ 运行页三卡已随 WP6 `d99df1b` 接线）/ UX-8 UI 半 / UX-10.1 / UX-11 / UX-12 重放链 / UX-6③；X5 warn 钩子 | `docs/m7-evidence/m7r2-d2-gates.md` |
 | **R2E2** RTL 与结构拆分 | `52b9870` | R-218 RTL 镜像（LTR 逐字节不变）；第 3 波常驻探针 5 条（rtl-mirror/check-all/context-menu/run-reason/folds）；R-190/191/203/275/281/326；B.3 纯核 `format_policy.h` | `docs/m7-evidence/m7r2-e2-gates.md` |
-| **R2F** 台账终稿与文档 | （本包） | 18 条校读终态闭环（§6.3）；覆盖台账 331+14 四档终态；`docs/m7r2-plan.md` 出处收口；证据摘录入 `docs/m7-evidence/`；CHANGELOG [0.3.3] 补记 + README 用户口径；误识别关闭 3 项 + 受约束 4 项入 adjudications 九节 | 本章 + `build/m7r2-f/handoff.md` |
+| **R2F** 台账终稿与文档 | `8a541de` | 上轮校读 18 条归并 10 主题闭环（§6.3）；覆盖台账 331+14 四档终态；`docs/m7r2-plan.md` 出处收口；证据摘录入 `docs/m7-evidence/`；CHANGELOG [0.3.3] 补记 + README 用户口径；误识别关闭 3 项 + 受约束 4 项入 adjudications 九节（台账主标签分别为 3/1，成员对照见附录 A 表头） | 本章 + `build/m7r2-f/handoff.md` |
+| **R2G** 终门禁复核 | `6a6e043` | 八项判据全绿 + tidy 棘轮 fallout 23 条修复（修码 12 + 消音 11；裁定 R2G-G1…G4 汇入 adjudications 八节）+ 回归瞬态锁归因（**D-1** 登记）；git 主题 `M7-R2-GATE`，与 R2-gate `09b5340`（重播种包）勿混 | `docs/m7-evidence/m7r2-gate.md` |
 
 ### 6.2 口径变化（用户可见/文档可见）
 
-1. **色彩能力四选项入树**（C1–C4）：引擎行为实现 + 护栏断言，**默认关**（默认路径与 0.3.2
-   逐字节一致，金样 20/20 背书）；**GUI 开关未接线**（RunConfig 四字段引擎面可配，界面不提供
-   开关——不宣称界面新选项，「未发生的量不显示」）。原 §3.1「WP10 未交付」结论随之取代。
+1. **色彩能力四选项入树**（C1–C4）：引擎行为实现 + 护栏断言，**默认关**——各选项未启用时
+   与既有行为**逐字等价**（mode0 / 抖动 false / 意图 0 / 线性光 false 的等价断言背书）。
+   **口径限定（勿过度归因）**：金样 20/20 是断言级判据，**不构成与 0.3.2 的字节级零变化背书**；
+   M7/R2 默认路径另有两处已归因的字节变化——UX-14 A1 nclx 使无 ICC 的 heif/avif +20B/文件
+   （§3.5、R2-gate 归因）、B9 chroma 量化统一 ±1 LSB 级（adjudications B9）——与 §1.1-8
+   「zero diff 是重播种之后的读数，不构成零变化背书」口径一致。C2 抖动仅接
+   **jpegli/webp/jxl/oiio 的 to_u8 量化段**，heif/avif 的 8bit 量化路径（quantize16 面）
+   **不接**（登记 R2A-A11，勿读作全部格式生效）。**GUI 开关未接线**（RunConfig 四字段引擎面
+   可配，界面不提供开关——不宣称界面新选项，「未发生的量不显示」）。原 §3.1「WP10 未交付」
+   结论随之取代。
 2. **HDR / CMYK 口径**：PQ/HLG 输入不重解释为 sRGB（miss 文案明示「暂不支持」，不建 HDR 管线）；
    JPEG CMYK/YCCK 一致拒收（错误串逐字沿用）。
 3. **RTL 支持**（R-218）：自绘几何/内距/QSS 非对称值随布局方向镜像，LTR 逐字节不变。
-4. **右键菜单/全选**（UX-1/UX-2）：12 卡全接线 + 工具行 check-all + 快捷键三态。
+4. **右键菜单/全选**（UX-1/UX-2）：12 卡全接线（①–⑤ `6e001da`、⑥–⑨ `27c9f40`、⑩–⑫ 运行页三卡 = WP6 `d99df1b`）+ 工具行 check-all + 快捷键三态。
 5. **结构拆分**：`format_policy.h`/`leading_indent.h`/`error_text.h` 三个 header-only 单源；
    回归行型表扩新 TU 锚点。
-6. **断言换锚两处**（均主对话授权、同严格度）：M7-R2-A `spin-group` 88→160；M7-R2-B
-   map 高度 260 锚 `==`→`>=`。金样/夹具零改动，冻结行逐字不变。
+6. **断言换锚登记**：R2 轮共 **6 条**换锚类登记（R2A-A6 HDR miss 文案换锚 7 改 3 增、
+   R2A-A10 跨库对拍测量路径换锚、M7R2B-3 test_fsops 长度硬线断言换锚、M7-R2-A、M7-R2-B、
+   M7R2E2-5 settings_geom QSS 换锚），其中**主对话授权 2 处**（M7-R2-A `spin-group` 88→160、
+   M7-R2-B map 高度 260 锚 `==`→`>=`）。金样/夹具零改动，冻结行逐字不变。
 
-### 6.3 18 条校读意见终态（逐条闭环）
+### 6.3 上轮校读 18 条 → 归并 10 主题终态（逐主题闭环；归并映射见表后）
+
+> 上轮校读共 **18 条**细分意见，按主题归并为下表 **10 组**（原始 18 条为会话内校读文本、
+> **未入 docs/**，逐号对照以主对话记录为准——登记为残余）；表后「归并映射」把每组覆盖的
+> 细分要点逐条列出（可核粒度，条条有去向）。机械核对（行数/四档计数/grep）为 R2F 会话
+> 2026-10-12 实跑，命令与输出见 `build/m7r2-f/handoff.md` ④；deep-review 汇总行笔误的核对
+> 对象 `docs/deep-review-0.3.2.md` 当前 untracked（残余）。
 
 | # | 意见主题 | 终态 | 落点 |
 |---|---|---|---|
@@ -444,6 +492,21 @@ python tools/env.py run -- ctest --test-dir build/m7-wp11-rel -N  # 34（diff �
 | 9 | M7-GATE 索引按 R2C 对照表修正 | **闭环**：751f479 归 M7-GATE（三提交）+ WP12 同提交双角色注明；补 dec7a1d/572a86e/97cd9da/b1af371/a4cf0fc 五行；「两次重播种」限定 M7-GATE scope、全窗口 4 次（§3.5）；行序注明非 git 时间序；d882fe6 口径统一「日志面 46 / 产物字节 0」 | 文首索引表、§3.5 |
 | 10 | 格式命令占位符补实 | **闭环**：§2.1 与 §5 格式命令均列全 10 文件清单（无占位符；`<本包 10 个改动文件>` 由 dec7a1d 补实后本轮 grep 复核 0 残留）；R2 证据摘录命令同样逐字可复跑 | §2.1/§5、docs/m7-evidence/* |
 
+**归并映射（18 条细分 → 10 主题；细分要点逐条列出）**：
+
+| 主题 | 覆盖的细分要点（每条均已在上表终态/落点内闭环） |
+|---|---|
+| #1 计数口径 | ①附录 A 分节计数 2/33/144/152；②「33 条」旧口径出处注记（ux-review-14.md:5）；③§3.7「17 条 / 11 条」两套分解调和为四类明列；④deep-review §1 汇总行 32/145 笔误注记（逐条标签 33/144）；⑤终态四档 345 行计数自检 |
+| #2 E 映射 | ①§4.1（a）↔ adjudications 五节逐条对齐；②E1≠R-296 甄别（VUI 精确码 vs 表驱动）；③E2/E8 补入；④R-099/R-104 按附录 A 标签移出跨界清单 |
+| #3 悬空引用 | ①A3 的「见 D34」改指 D12/§3.1（全文 0 活引用）；②WP12-B2 落进 adjudications 六节并被 §3.7 引用 |
+| #4 去向标签四档化 | ①标签口径补全（对账登记/结案入定义）→ 收敛为终态四档；②R-279/302/309 混用标签改单标签+注记；③331+14=345 行全部落档（本轮含 R-184/195/273 三行纠偏） |
+| #5 附录 C 折算口径声明 | ①逐行 5/1/1/6 明示；②二分摘要 6/7 的折算规则（大部收敛→收敛、部分收敛→登记）成文 |
+| #6 D11 交叉引用 | ①§1.2/附录 C 头标注 D11；②D11 明细指回附录 C（双向互指） |
+| #7 工作包条数口径 | ①索引表去「等 N 条」计数、注明三口径（唯一主责/表内出现次数/分派数）；②WP12 提交号 `751f479` 补列 |
+| #8 路径风格统一 | ①附录 D 四处补 `src/` 前缀；②R-118 行路径前缀；③docs 内链 href 改文件相对路径 |
+| #9 M7-GATE 索引 | ①`751f479` 归属 M7-GATE（三提交）+ WP12 双角色注明；②补 dec7a1d/572a86e/97cd9da/b1af371/a4cf0fc 五行；③「两次重播种」限定 M7-GATE scope（全窗口 4 次）；④行序注明非 git 时间序；⑤`d882fe6` 口径统一「日志面 46 / 产物字节 0」 |
+| #10 格式命令占位符 | ①§2.1 格式命令补实 10 文件清单；②§5 复现节同补（并注明与全源 152 文件是两次不同覆盖面检查） |
+
 ### 6.4 R2 验收结论（终门禁 M7-R2-GATE，2026-10-12，门禁树 build/release-dev）
 
 > 本节 = R2 轮（R2A…R2F + R2-gate）收口后的**终门禁实跑**；逐条命令与输出摘录真源 =
@@ -455,12 +518,12 @@ python tools/env.py run -- ctest --test-dir build/m7-wp11-rel -N  # 34（diff �
 
 | # | 命令 | 结果 |
 |---|---|---|
-| 1 | `bash tools/ci-format.sh`（Git bash） | **`violations=0`**（钉版 clang-format 23.1.1，155 文件全源 0 diff；修码后复验同值） |
+| 1 | `bash tools/ci-format.sh`（Git bash） | **`violations=0`**（钉版 clang-format 23.1.1，155 文件全源 0 diff；修码后复验同值。与 §2.3 #6 的 152 文件是两轮读数，差额 3 = R2 新增 `src/core/error_text.h`/`src/ui/format_policy.h`/`src/ui/leading_indent.h`） |
 | 2 | `python tools/env.py run -- cmake --preset release-dev -B build/release-dev -DVCPKG_MANIFEST_INSTALL=OFF && … cmake --build build/release-dev` | exit 0（修码后重建 build2.log 同绿） |
 | 3 | `python tools/env.py run -- ctest --test-dir build/release-dev --output-on-failure` | **100% tests passed out of 35**（45.27s / 修码后 45.89s） |
 | 3b | `python tools/env.py run -- ctest --test-dir build/release-dev -R ui_smoke -V` | 冻结行逐字 **`UI-SMOKE OK shots=12 pages=3`**（末行 `UI-SMOKE pass`；两轮逐字一致） |
 | 4 | `python tools/env.py run -- python tests/golden/smoke.py build/release-dev` | **`SMOKE total=20 pass=20 fail=0`** 逐字（20/20 VERIFY OK；两轮同值，金样与夹具零改动） |
-| 5 | `python tools/env.py run -- python tools/ci-tidy.py build/release-dev` | 首跑红 `TIDY total=287 baseline=264 violations=13`（R2 各包漏跑 tidy 的 +23 fallout）→ 修复后 **`TIDY total=264 baseline=264 files=71 violations=0 seed=0`**（棘轮只减不增：基线文件零改动、未用 `--update`） |
+| 5 | `python tools/env.py run -- python tools/ci-tidy.py build/release-dev` | 首跑红 `TIDY total=287 baseline=264 files=72 violations=13 seed=0`（violations=13 = 违规文件组数：12 文件超基线 + 1 基线外新文件 contextmenu.cpp；告警增量 **+23 = 287−264**，逐文件分解见 `m7r2-gate.md` §②）（R2 各包漏跑 tidy 的 fallout）→ 修复后 **`TIDY total=264 baseline=264 files=71 violations=0 seed=0`**（棘轮只减不增：基线文件零改动、未用 `--update`） |
 | 6 | `python tools/env.py run -- python tools/regression.py` | **`regression: zero diff (baseline reproduced)`**（2448 vs 2448；修码前后各一轮）。首跑曾 `DIFF FOUND (54 lines)`，逐行归因 = `full-jpeg` 节 `rgb16.tif` 收尾 rename 遇 OS 瞬态锁（`atomic commit: cannot replace …: Access is denied.`，`fsops.cpp:541`）级联 4 类计数；同二进制复跑 ×2 均 zero diff ⇒ **瞬态环境噪声，0 行真实变化，不重播种** |
 | 7 | 密钥扫描（`docs/m6-report.md` §6 口径：`git log --all -p` 全历史 254,927 行 + 工作树 `git grep`） | 值形态 **0 命中**：`sk-[A-Za-z0-9]{16,}`=0、`amap_key\s*[=:]\s*<16+字符值>`=0、`\b[0-9a-f]{32}\b`=0；`amap_key` 名字面 228（历史）/104（工作树）命中全为键名/字段名/文档 |
 
@@ -474,8 +537,11 @@ tidy fallout 修复口径（详单见证据文件 §③）：**修码 12 条**�
 1. **回归首跑瞬态锁**（已归因、不修）：输出名碰撞（`base/rgb16.png` 与 `base/rgb16.tif` 的
    `$dir/$file` 模板同产 `base/rgb16.jpg`，conflict=overwrite）的 rename 替换路径对瞬态文件锁
    敏感，与并发负载同现一次。判定为环境噪声（同二进制 ×2 zero diff）；**未加锁重试机制**
-   （属行为新增，超本包「修复 fallout」范围），登记为已知差异。
-2. **tidy 消音 11 条的口径裁定**（本包裁定登记，`build/m7r2-g/handoff.md`）：NOLINT 为**零语义面**
+   （属行为新增，超本包「修复 fallout」范围），登记为已知差异 **D-1**（AGENTS §9 实现期发现号，
+   本仓首例；裁定登记 = adjudications 八节 R2G-G5）。
+2. **tidy 消音 11 条的口径裁定**（已汇入 `docs/m7-adjudications.md` 八节 R2G-G1/G2——R2G 各包裁定
+   按 `m7r2-plan.md` §4-9 汇入 adjudications，不再只留 gitignored handoff；原始登记仍存
+   `build/m7r2-g/handoff.md`）：NOLINT 为**零语义面**
    处置（注释级，基线/判据零改动），亦可在主对话改判为「形参组结构化 / `--update` 重播种 +
    归因」任一方案；两方案的替代成本已写入 handoff，供复核翻案。
 3. **真机验收（§2.4）不在本门禁面**：offscreen 判据无法替代的 10 项仍待人工签收（UX-7/UX-13）。
@@ -499,7 +565,12 @@ tidy fallout 修复口径（详单见证据文件 §③）：**修码 12 条**�
 行数自检：A.1=2 + A.2=33 + A.3=144 + A.4=152 = **331**（python 正则逐行核过，见提交正文；
 与 deep-review 逐条优先级标签一致——其 §1 汇总行「P1=32、P2=145」系评审本体笔误，逐条标签
 实为 P1=33、P2=144，只读不改、此处注明）。终态四档计数自检（R2F，python 正则核过）：
-331+14 = 345 行 = 已修 294 + 登记 47 + 误识别关闭 3 + 受约束口径闭环 1。
+331+14 = 345 行 = **已修 297 + 登记 44 + 误识别关闭 3 + 受约束口径闭环 1**。
+**成员对照（防「3↔3」「4↔1」误读）**：「误识别关闭 3」= 台账主标签成员 R-011/R-282/R-331；
+九节 R2F-X1–X3 的第三项「WP5-A10 任务书笔误」落在 R-052 行（主标签=登记，笔误面以 R2F-X3
+注记）——两组各 3 条、成员差 R-331 vs R-052。「受约束口径闭环 1」= 主标签仅 R-325；九节
+R2F-C1–C4 其余三项（B3 BMP ICC、非 Windows 密钥、Linux golden.log）以注记并入 UX-14 /
+R-094 / R-015 的「已修」行（4 项受约束登记 vs 1 个受约束主标签）。
 
 ## A.1 P0（2 条）
 
@@ -626,7 +697,7 @@ tidy fallout 修复口径（详单见证据文件 §③）：**修码 12 条**�
 | R-181 | **登记** | UI 内嵌 IO / exif_text 不可单测（B2 未做） |
 | R-182 | **登记** | 测试钩子入侵公开 API（objectName 三方契约） |
 | R-183 | **登记** | classify_panel 重建协议脆弱 |
-| R-184 | **登记** | make_chip 复刻 ChipButton 未合并 |
+| R-184 | **已修** `6e001da` | make_chip 收编 formkit::ChipButton 唯一渲染路径（R2D1，`src/ui/page_meta.cpp:962-975`）；deep-review 病灶记在 classify_panel，实际双实现落点在 page_meta |
 | R-185 | **登记** | pimpl 两套解法未统一 |
 | R-186 | **已修** `7472b97`+`27c9f40` | button padding 单源；卡构造双份随 R-021 登记 |
 | R-187 | **已修** `594d93f`（双 struct 登记） | run_rows_model 抽数据语义；OutRow/FileRow 双 struct **登记** |
@@ -637,7 +708,7 @@ tidy fallout 修复口径（详单见证据文件 §③）：**修码 12 条**�
 | R-192 | **登记** | 后端覆盖标记归属 |
 | R-193 | **已修** `40f3405` | main.cpp 拆四 TU |
 | R-194 | **已修** `12ce994`（UTF-8/FILE* 登记） | 原子写收敛 fsops；UTF-8 校验/FILE* 读**登记** |
-| R-195 | **登记** | ParamDef 查找双实现（first/last-wins 相反） |
+| R-195 | **已修** `5d19146`+`27c9f40`（余量登记） | first-wins 单源 `pp::find_param/lookup_param_def`（`5d19146`）+ paramform 转发（`27c9f40`）；preset_io/dev_cli 两调用点转发**登记**（dev_cli 仍 last-wins，R2B ③-1 余量） |
 | R-196 | **登记** | exif_editor 三对孪生 |
 | R-197 | **登记** | 时间标签集合 4 份真相 |
 | R-198 | **登记** | EXIF 类型系统触点 6 处 |
@@ -792,7 +863,7 @@ tidy fallout 修复口径（详单见证据文件 §③）：**修码 12 条**�
 | R-270 | **已修** `7472b97`+`27c9f40` | Metrics 补 menu_*/tab_* 令牌化（`27c9f40`） |
 | R-271 | **已修** `25b60b3` | icons 解析器单测（+ PP_ICONS_TEST_NO_WIDGETS） |
 | R-272 | **已修** `40f3405`+`f3e1903` | 死 include 随拆分消除 + bench 魔法数命名 + kMaxExactInt |
-| R-273 | **登记** | 错误文案通道分裂（随 R-070 跨界） |
+| R-273 | **已修** `5d19146`+`27c9f40` | 错误文案通道随 R-070 同批收口：`core/error_text.h` 中文单源（`5d19146`）+ UI 失败原因行/模板预检接线（原文进 tooltip，`27c9f40`，run-reason 探针钉） |
 | R-274 | **已修** `40f3405` | --bench-cases 清单精确匹配 |
 | R-275 | **已修** `52b9870` | 重复段删除、checked 42→39 虚计数修正（`52b9870`） |
 | R-276 | **已修** `6e001da` | visible_row_rect 单源两路统一（`6e001da`） |
@@ -871,7 +942,7 @@ tidy fallout 修复口径（详单见证据文件 §③）：**修码 12 条**�
 | UX-11 滚动条 | **已修** `7472b97`+`27c9f40`（page_meta 侧登记） | 6px 细浮层+弹窗同皮（`7472b97`）+ lock_card_size 接线 page_output 四卡/page_run 三卡（`27c9f40`）；page_meta 侧**登记**（两包分工缝隙） |
 | UX-12 亮色页签 | **已修** `7472b97`+`27c9f40`（像素档探针登记） | tokens 初值+replay 补 tabs（`7472b97`）+ UnderlineTabs/FocusRing 重放链（`27c9f40`）；像素档探针**登记** |
 | UX-13 圆角 | **已修** `25b60b3` | DWMWA_WINDOW_CORNER_PREFERENCE（Win10 静默忽略）；同 UX-7 真机验收 |
-| UX-14 色彩质量 | **已修** `33d09a8`+`12ce994`+`c540630`（E1/E2 口径闭环，详见 R2 轮交付） | A1 `33d09a8`+`c540630`（VUI 精确码闭环 E1）/ A2 `12ce994` / A3 `33d09a8` / A4 `33d09a8` / A5 `12ce994` / B1 `12ce994`+`c540630`（ΔE 扩强+跨库对拍 B2）/ B3 `33d09a8`+`c540630`（BMP 警示口径，受约束 R2F-C1）/ C1–C4 `c540630`（色域映射/抖动/意图/线性光，默认关）/ D1–D3 `c540630`（CMYK 拒收/EXIF ColorSpace/HDR 诚实口径） |
+| UX-14 色彩质量 | **已修** `33d09a8`+`12ce994`+`c540630`（E1/E2 口径闭环，详见 R2 轮交付） | UX-14 §14 分级子项（全称引注）：**UX-14 A1** nclx 与 ICC 矛盾 `33d09a8`+`c540630`（闭环 E1）/ **UX-14 A2** 灰度-RGB ICC 整文件失败 `12ce994` / **UX-14 A3** PNG compressionLevel 键名 `33d09a8`（=R-010）/ **UX-14 A4** TIFF predictor `33d09a8`（=R-011，评审诊断被证伪）/ **UX-14 A5** CICP 日志口径 `12ce994` / **UX-14 B1** ΔE 护栏 `12ce994`+`c540630`（扩强）/ **UX-14 B2** 跨库对拍 `c540630` / **UX-14 B3** ICC 回读扩面+BMP 警示 `33d09a8`+`c540630`（BMP 受约束 R2F-C1）/ **UX-14 C1–C4** 色域映射/8bit 抖动/渲染意图/线性光 `c540630`（默认关；C2 仅 to_u8 四家，R2A-A11）/ **UX-14 D1–D3** CMYK 拒收/EXIF ColorSpace/HDR 诚实口径 `c540630` |
 
 ---
 
@@ -915,31 +986,3 @@ tidy fallout 修复口径（详单见证据文件 §③）：**修码 12 条**�
 *报告完。终门禁数据已由 WP12 于 2026-10-12 补入 §2.3（八项全绿）；本报告 WP11 收口、WP12 终验、
 R2F 台账终稿（R2 轮交付 §6 + 331+14 四档终态 + 证据入 docs/m7-evidence/）。*
 
-### 3.8 发行偏差（WP13，M7-ADJ-tag-move，主对话裁决）
-
-- **链路（如实）**：R-122 断言钉住 vcpkg.json 版本漂移 → 失败 tag 移动一次（97cd9da → b1af371）→ 重发布。逐步证据：
-  1. WP13 版本 bump 只改 `CMakeLists.txt:19`，`vcpkg.json "version"` 漏同改（当时 grep 复核面未含 `*.json`）；
-     `tools/ci-versions-check.py` 第 3 项（R-122，M7-WP3 引入）在 release.yml `appimage` job 6s 断言红
-     （release #12 = run 38197049543 @ 97cd9da；报错逐字 `版本不一致: CMakeLists project VERSION=0.3.3
-     vs vcpkg.json version=0.3.2 （R-122）`，本机复跑同文）。
-  2. `M7-REL-0.3.3-gate-fix2`（b1af371）按 R-122 契约同改 `vcpkg.json` → 0.3.3；阴阳性对照：
-     临时 worktree（97cd9da 树）`ci-versions-check` **FAIL**（同 CI 报错逐字）/ 主树（b1af371）**OK (10 keys, expect=2)**。
-  3. 移动前取证（裁决条件 1）：`gh release view` gh CLI 未认证（如实记录，同 d049d22 先例状态）；
-     匿名核对 releases 列表**无 v0.3.3**（最新 v0.3.2）、`/releases/tag/v0.3.3` 仅 2 个自动源码包资产
-     （真发布 = 6 资产，对照 v0.3.2）、release #12 **publish 未执行** ⇒ 零 Release、零资产。
-  4. 主对话裁决（escalate）：批准**一次**移动，条件七条（含「再红于任何新原因即停上报、禁止二次移动」）。
-  5. 移动（裁决条件 3）：`git tag -d v0.3.3 && git tag -a v0.3.3 -F … b1af371` +
-     `git push --force origin refs/tags/v0.3.3`（单 ref 原子更新）；`git ls-remote --tags origin` 核对
-     `refs/tags/v0.3.3` = tag 对象 `cb181ee`，`^{}` = `b1af371`。
-  6. 重推触发 release #13（run 38198290373 @ b1af371）→ 发布结果见 §3.8 末行。
-- **影响面**：产物二进制零影响（`vcpkg.json` 版本字段不进产物；两棵树 `--version` 同为 `PhotoPipeline 0.3.3`）；
-  金样 20/20 + 回归 zero diff + ctest 35/35 双背书不受影响（在 gate-fix 一并实跑）。
-- **发布结果**：（2026-10-12 实况）appimage 6m56s 绿（AppImage artifact 49 MB；probe-appimage 32s 绿）；
-  winzip job **20m16s 撞 `timeout-minutes: 20` 硬顶被 cancelled** —— 步骤级取证
-  （API `actions/jobs/114646130378`）：Qt/vcpkg 缓存 restore 均 success、暖度断言（≥20 archive）过、
-  语料断言过；step 12「configure + build release」跑 19m11s（03:06:42 → 03:25:53）未完被取消，
-  step 13–16（release-dev 子集 / make_winzip / 指纹 / 上传）全 skipped ⇒ probe-winzip、publish
-  **skipped** ⇒ **GitHub Release v0.3.3 未创建**（releases 列表复核仍止于 v0.3.2）。
-  按裁决条件 5（再红于新原因即停、禁止二次移动 tag）已停止发布动作，残余上报等裁决；
-  可选处置（需主对话授权）：同 tag 重跑 release.yml（不涉 tag 移动；winzip 预算 15 min、
-  本次 build 单步 19m+，或需调整预算/缓存后再跑）。

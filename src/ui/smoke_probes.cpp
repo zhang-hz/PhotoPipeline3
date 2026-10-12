@@ -5256,6 +5256,367 @@ void MainWindow::Impl::smoke_probe_advanced_folds() {
     std::fflush(stdout);
 }
 
+// ===== M7-R2.1-F4 探针批（第 4 波；R2F ⑤ 未落地项）=============================
+// 出处：R2D1 ⑤ / R2D2 ⑤ / R2E2 ⑤ / R2F ⑤ 的「探针需求」；已落地项（context-menu /
+// check-all / folds / run-reason / rtl-mirror / UX-4 stretch map≥260）不重复。
+
+// R-148「N 项未能读取」+ R-149 别名去重（intake）：
+//   * 不存在的输入项 → unreadable_count +1 且卡头 hint 出「N 项未能读取」；
+//   * 同一文件的冗余路径形态（dir/./file）→ 不重复入列（弱规范化去重键）。
+void MainWindow::Impl::smoke_probe_intake() {
+    int checked = 0;
+    int bad = 0;
+    const auto expect = [&](bool ok, const QString &what) {
+        ++checked;
+        if (!ok) {
+            ++bad;
+            smoke_fail(MainWindow::tr("intake：%1").arg(what));
+        }
+    };
+    if (model == nullptr) {
+        smoke_fail(MainWindow::tr("intake：文件列表未就绪"));
+        std::printf("UI-SMOKE intake: checked=1 bad=1\n");
+        std::fflush(stdout);
+        return;
+    }
+    const std::size_t rows0 = model->size();
+    const std::size_t unread0 = model->unreadable_count();
+    model->add_paths(QStringList{QStringLiteral("/nonexistent/pp-smoke-missing.png")});
+    expect(model->unreadable_count() == unread0 + 1,
+           QStringLiteral("R-148 不存在输入计入未能读取（got %1）").arg(model->unreadable_count()));
+    const QString hint_text = unsupported != nullptr ? unsupported->text() : QString();
+    expect(hint_text.contains(QStringLiteral("项未能读取")),
+           QStringLiteral("R-148 卡头 hint 同面出「N 项未能读取」（got \"%1\"）").arg(hint_text));
+    if (rows0 > 0) {
+        const std::string src0 = model->row(0).entry.src.string();
+        const QFileInfo fi(QString::fromStdString(src0));
+        const QString alias =
+            fi.path() + QStringLiteral("/./") + fi.fileName(); // 冗余路径形态（两平台同实体）
+        model->add_paths(QStringList{alias});
+        expect(model->size() == rows0,
+               QStringLiteral("R-149 别名不重复入列（rows %1→%2）").arg(rows0).arg(model->size()));
+        if (model->size() > rows0) { // 失败自净（别名误入列时把新增行摘掉，后续探针不受污染）
+            QList<int> extras;
+            for (int i = static_cast<int>(rows0); i < static_cast<int>(model->size()); ++i)
+                extras << i;
+            model->remove_rows(extras);
+        }
+    }
+    std::printf("UI-SMOKE intake: checked=%d bad=%d rows=%llu unread=%llu hint=%d\n", checked, bad,
+                static_cast<unsigned long long>(model->size()),
+                static_cast<unsigned long long>(model->unreadable_count()),
+                hint_text.contains(QStringLiteral("项未能读取")) ? 1 : 0);
+    std::fflush(stdout);
+}
+
+// R-143：chip = 过滤档开关（点击 → 列表按该类过滤；再点/点「全部」= 清除）+ `.on` 拆态单义
+// （当前过滤档，不再与"无分类/无选中"共用通道）。
+// 取第 n 个 chip（findChildren 序不稳定 → 按文本/键帽序不判据；n=1 = 「全部」外首个真类）
+QAbstractButton *pick_chip(const QList<QAbstractButton *> &chips, int n) {
+    int seen = 0;
+    for (QAbstractButton *chip : chips) {
+        if (seen == n)
+            return chip;
+        ++seen;
+    }
+    return nullptr;
+}
+
+void MainWindow::Impl::smoke_probe_class_filter() {
+    int checked = 0;
+    int bad = 0;
+    const auto expect = [&](bool ok, const QString &what) {
+        ++checked;
+        if (!ok) {
+            ++bad;
+            smoke_fail(MainWindow::tr("classify-filter：%1").arg(what));
+        }
+    };
+    const auto visible_rows = [this]() {
+        std::size_t n = 0;
+        for (std::size_t i = 0; i < model->size(); ++i)
+            if (proxy->mapFromSource(model->index(static_cast<int>(i), 0)).isValid())
+                ++n;
+        return n;
+    };
+    if (model == nullptr || proxy == nullptr || classify_panel == nullptr) {
+        smoke_fail(MainWindow::tr("classify-filter：列表/面板未就绪"));
+        std::printf("UI-SMOKE classify-filter: checked=1 bad=1\n");
+        std::fflush(stdout);
+        return;
+    }
+    // ChipButton 无自身 Q_OBJECT（formkit 自绘件惯例）→ 按基类 QAbstractButton 查
+    // R-183 探针纪律：**不跨 pump 缓存部件指针** —— 面板重建（refresh_timer → rebuild_rows）
+    // 走 hide + deleteLater，事件循环回到主层即析构旧代；每次点击前重新取件。
+    const auto chips_now = [this]() {
+        return classify_panel->findChildren<QAbstractButton *>(QStringLiteral("pp-class-chip"));
+    };
+    expect(chips_now().size() >= 2,
+           QStringLiteral("chip 面存在（got %1）").arg(chips_now().size()));
+    if (chips_now().size() < 2)
+        return;
+    const std::size_t all_visible = visible_rows();
+    if (QAbstractButton *chip = pick_chip(chips_now(), 1))
+        chip->click(); // 首个真类（「全部」= chips_now().at(0)）
+    pump(80);
+    const QString filter = proxy != nullptr ? proxy->class_filter() : QString();
+    expect(!filter.isEmpty(), QStringLiteral("点 chip 后过滤档生效（got \"%1\"）").arg(filter));
+    std::size_t expect_n = 0;
+    for (std::size_t i = 0; i < model->size(); ++i)
+        if (model->data(model->index(static_cast<int>(i), 0), FileListModel::ClassIdRole)
+                .toString() == filter)
+            ++expect_n;
+    expect(visible_rows() == expect_n,
+           QStringLiteral("过滤后可见行 == 该类行（%1 vs %2）").arg(visible_rows()).arg(expect_n));
+    int on_count = 0;
+    for (QAbstractButton *chip : chips_now())
+        if (chip->isChecked())
+            ++on_count;
+    expect(on_count == 1, QStringLiteral(".on 拆态单义（got %1）").arg(on_count));
+    if (QAbstractButton *chip = pick_chip(chips_now(), 1))
+        chip->click(); // 再点 = 清除
+    pump(80);
+    expect(visible_rows() == all_visible,
+           QStringLiteral("再点清除过滤（%1 vs %2）").arg(visible_rows()).arg(all_visible));
+    std::printf("UI-SMOKE classify-filter: checked=%d bad=%d filter=\"%s\" rows=%llu\n", checked, bad,
+                qUtf8Printable(filter), static_cast<unsigned long long>(visible_rows()));
+    std::fflush(stdout);
+}
+
+// R-152 过滤态双击编辑对象正确（view 行 → 源行映射 = 双击处理链，指向所见对象）
+// + R-153 分组重建多选整组恢复（两选跨重建保留）。
+void MainWindow::Impl::smoke_probe_edit_target() {
+    int checked = 0;
+    int bad = 0;
+    const auto expect = [&](bool ok, const QString &what) {
+        ++checked;
+        if (!ok) {
+            ++bad;
+            smoke_fail(MainWindow::tr("edit-target：%1").arg(what));
+        }
+    };
+    if (model == nullptr || groups == nullptr || view == nullptr || model->size() < 2) {
+        smoke_fail(MainWindow::tr("edit-target：列表未就绪/行数不足"));
+        std::printf("UI-SMOKE edit-target: checked=1 bad=1\n");
+        std::fflush(stdout);
+        return;
+    }
+    // R-152：过滤态（搜索缩集合）下取首可见 view 行，走双击处理链映射回源行，
+    // 断言源行文件名与视图显示一致（对象不错位）。
+    const QString prev_search = search != nullptr ? search->text() : QString();
+    if (search != nullptr) {
+        search->setText(QStringLiteral("png"));
+        pump(150);
+    }
+    QModelIndex vidx; // 首个**可见文件行**（分组树顶层是节头 → 从源行正向映射取）
+    for (std::size_t i = 0; i < model->size() && !vidx.isValid(); ++i) {
+        const QModelIndex pidx = proxy->mapFromSource(model->index(static_cast<int>(i), 0));
+        const QModelIndex gidx = groups->mapFromSource(pidx);
+        if (gidx.isValid())
+            vidx = gidx;
+    }
+    if (vidx.isValid()) {
+        const QModelIndex src_idx = proxy->mapToSource(groups->mapToSource(vidx));
+        const int src_row = src_idx.row();
+        const QString shown = view->model()->data(vidx, FileListModel::NameRole).toString();
+        expect(src_row >= 0 && src_row < static_cast<int>(model->size()),
+               QStringLiteral("映射链落回源行（row=%1）").arg(src_row));
+        if (src_row >= 0 && src_row < static_cast<int>(model->size())) {
+            const QString base = QFileInfo(QString::fromStdString(
+                                              model->row(std::size_t(src_row)).entry.src.string()))
+                                     .fileName();
+            expect(shown.contains(base),
+                   QStringLiteral("R-152 所见即所编（视图 \"%1\" ↔ 源行 \"%2\"）").arg(shown, base));
+        }
+    } else {
+        expect(false, QStringLiteral("过滤后应有可见行"));
+    }
+    if (search != nullptr) {
+        search->setText(prev_search);
+        pump(150);
+    }
+    // R-153：多选两行 → **搜索过滤重建**（评审场景原文「多选 5 行后敲过滤字符不再塌缩成 1 行」）
+    // → 两选保留（被过滤隐藏的行不越权恢复 —— 两行都命中过滤串，故都应保留）。
+    if (view->selectionModel() != nullptr) {
+        view->selectionModel()->clearSelection();
+        QList<int> picked;
+        QItemSelection sel;
+        for (std::size_t i = 0; i < model->size() && picked.size() < 2; ++i) {
+            const std::string src = model->row(i).entry.src.string();
+            if (src.find(".png") == std::string::npos)
+                continue; // 与下方过滤串同判据（隐藏即不恢复 → 选样须命中）
+            const QModelIndex pidx = proxy->mapFromSource(model->index(static_cast<int>(i), 0));
+            const QModelIndex gidx = groups->mapFromSource(pidx);
+            if (gidx.isValid()) {
+                sel.select(gidx, gidx);
+                picked << static_cast<int>(i);
+            }
+        }
+        if (!sel.isEmpty())
+            view->selectionModel()->select(
+                sel, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+        if (search != nullptr && picked.size() == 2) {
+            search->setText(QStringLiteral("png"));
+            pump(150);
+        }
+        int still = 0;
+        QStringList diag;
+        for (int row : picked) {
+            const QModelIndex pidx = proxy->mapFromSource(model->index(row, 0));
+            const QModelIndex gidx = groups->mapFromSource(pidx);
+            const bool ok = gidx.isValid() && view->selectionModel()->isSelected(gidx);
+            if (ok)
+                ++still;
+            diag << QStringLiteral("%1:%2/%3")
+                        .arg(row)
+                        .arg(gidx.isValid() ? 1 : 0)
+                        .arg(view->selectionModel()->isSelected(gidx) ? 1 : 0);
+        }
+        expect(still == picked.size() && picked.size() == 2,
+               QStringLiteral("R-153 过滤重建多选保留（%1/%2 diag %3）")
+                   .arg(still)
+                   .arg(picked.size())
+                   .arg(diag.join(QLatin1Char(' '))));
+        if (search != nullptr) {
+            search->setText(QString());
+            pump(150);
+        }
+        view->selectionModel()->clearSelection();
+    }
+    std::printf("UI-SMOKE edit-target: checked=%d bad=%d\n", checked, bad);
+    std::fflush(stdout);
+}
+
+// UX-12 像素档（D2⑤-2）：亮色档 UnderlineTabs 选中/未选中标题绘制像素 == 亮 text / 亮 text2，
+// 基线 hairline == 亮 card_bd（R2D2 修的是重放链，像素档由本探针钉）。
+void MainWindow::Impl::smoke_probe_settings_tabs_light() {
+    int checked = 0;
+    int bad = 0;
+    const auto expect = [&](bool ok, const QString &what) {
+        ++checked;
+        if (!ok) {
+            ++bad;
+            smoke_fail(MainWindow::tr("settings-tabs-light：%1").arg(what));
+        }
+    };
+    const theme::Tokens lt = theme::tokens(theme::ThemeMode::Light);
+    SettingsDialog dlg(settings, w);
+    auto *tabs = dlg.findChild<dialogkit::UnderlineTabs *>(QLatin1String("pp-dlg-tabs"));
+    expect(tabs != nullptr, QStringLiteral("pp-dlg-tabs 存在"));
+    if (tabs == nullptr) {
+        std::printf("UI-SMOKE settings-tabs-light: checked=%d bad=%d\n", checked, bad);
+        std::fflush(stdout);
+        return;
+    }
+    tabs->set_tokens(lt);
+    dlg.show();
+    pump(120);
+    // 标题绘制像素：抓单 tab 按钮 → 非透明像素直方图的众数 = 纯字色（抗锯齿内部像素）
+    // 直方图众数；skip = 背景色（抓图含部件背后的对话框底，字形色 = 非背景里的众数）
+    const auto mode_except = [](const QImage &img, const QColor &skip, bool *found) {
+        QHash<QRgb, int> hist;
+        for (int y = 0; y < img.height(); ++y)
+            for (int x = 0; x < img.width(); ++x) {
+                const QRgb c = img.pixel(x, y);
+                if (qAlpha(c) < 200)
+                    continue;
+                if (skip.isValid() && std::abs(qRed(c) - skip.red()) <= 3 &&
+                    std::abs(qGreen(c) - skip.green()) <= 3 && std::abs(qBlue(c) - skip.blue()) <= 3)
+                    continue;
+                ++hist[c];
+            }
+        QRgb best = 0;
+        int best_n = 0;
+        for (auto it = hist.constBegin(); it != hist.constEnd(); ++it)
+            if (it.value() > best_n) {
+                best_n = it.value();
+                best = it.key();
+            }
+        if (found != nullptr)
+            *found = best_n > 0;
+        return QColor(best);
+    };
+    const auto mode_of = [](const QImage &img) {
+        QHash<QRgb, int> hist;
+        for (int y = 0; y < img.height(); ++y)
+            for (int x = 0; x < img.width(); ++x) {
+                const QRgb c = img.pixel(x, y);
+                if (qAlpha(c) < 200)
+                    continue;
+                ++hist[c];
+            }
+        QRgb best = 0;
+        int best_n = 0;
+        for (auto it = hist.constBegin(); it != hist.constEnd(); ++it)
+            if (it.value() > best_n) {
+                best_n = it.value();
+                best = it.key();
+            }
+        return QColor(best);
+    };
+    const auto dominant_glyph = [&](QWidget *btn) {
+        QImage img = btn->grab().toImage();
+        // 选中段下缘 2px 是 accent 下划线（paintEvent）—— 标题字形取样需让开该带
+        if (img.height() > 6)
+            img = img.copy(0, 0, img.width(), img.height() - 4);
+        bool found = false;
+        return mode_except(img, mode_of(img), &found);
+    };
+    const auto near = [](const QColor &a, const QColor &b) {
+        return std::abs(a.red() - b.red()) <= 6 && std::abs(a.green() - b.green()) <= 6 &&
+               std::abs(a.blue() - b.blue()) <= 6;
+    };
+    if (auto *sel = dlg.findChild<QAbstractButton *>(QStringLiteral("pp-tab-general"))) {
+        const QColor got = dominant_glyph(sel);
+        expect(near(got, lt.text),
+               QStringLiteral("选中标题像素 == 亮 text（got %1 want %2）")
+                   .arg(got.name(), lt.text.name()));
+    } else {
+        expect(false, QStringLiteral("pp-tab-general 缺失"));
+    }
+    if (auto *unsel = dlg.findChild<QAbstractButton *>(QStringLiteral("pp-tab-output"))) {
+        const QColor got = dominant_glyph(unsel);
+        expect(near(got, lt.text2),
+               QStringLiteral("未选中标题像素 == 亮 text2（got %1 want %2）")
+                   .arg(got.name(), lt.text2.name()));
+    } else {
+        expect(false, QStringLiteral("pp-tab-output 缺失"));
+    }
+    // 基线 hairline（tab 件下缘）== 亮 card_bd
+    {
+        const QImage img = tabs->grab().toImage();
+        const QColor bg = mode_of(img);
+        QHash<QRgb, int> hist;
+        const int y = img.height() - 1;
+        for (int x = 0; x < img.width(); ++x) {
+            const QRgb c = img.pixel(x, y);
+            if (qAlpha(c) < 40)
+                continue;
+            ++hist[c];
+        }
+        QRgb best = 0;
+        int best_n = 0;
+        for (auto it = hist.constBegin(); it != hist.constEnd(); ++it)
+            if (it.value() > best_n) {
+                best_n = it.value();
+                best = it.key();
+            }
+        const QColor got(best);
+        // card_bd 带 alpha（亮档 = rgba(0,0,0,.09)）→ 期望值 = 与实测背景的合成
+        // （抓图像素是合成结果；与 token 的绘制色相等即「hairline == 亮 card_bd」语义）
+        const qreal a = lt.card_bd.alphaF();
+        const QColor want(int(std::lround(bg.red() * (1.0 - a) + lt.card_bd.red() * a)),
+                          int(std::lround(bg.green() * (1.0 - a) + lt.card_bd.green() * a)),
+                          int(std::lround(bg.blue() * (1.0 - a) + lt.card_bd.blue() * a)));
+        expect(near(got, want),
+               QStringLiteral("基线 hairline == 亮 card_bd 合成（got %1 want %2 bg %3）")
+                   .arg(got.name(), want.name(), bg.name()));
+    }
+    dlg.close();
+    std::printf("UI-SMOKE settings-tabs-light: checked=%d bad=%d\n", checked, bad);
+    std::fflush(stdout);
+}
+
 void MainWindow::Impl::smoke_run(const QString &shots_dir) {
     // ---- M4-T9 骨架自检（窗口行为矩阵可自动化部分；先跑，之后截图归位 1440×900）----
     smoke_probe_lifecycle();
@@ -5673,6 +6034,11 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
     smoke_probe_context_menus();
     smoke_probe_run_reason();
     smoke_probe_advanced_folds();
+    // ---- M7-R2.1-F4 第 4 波常驻探针（R-148/149、R-143、R-152/153、UX-12 像素档）----
+    smoke_probe_intake();
+    smoke_probe_class_filter();
+    smoke_probe_edit_target();
+    smoke_probe_settings_tabs_light();
 
     // ---- 对话框三连（构造 → show → processEvents → grab → close，绝不 exec）----
     { // 04-settings.png：设置对话框

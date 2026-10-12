@@ -1472,8 +1472,15 @@ void MainWindow::Impl::restore_selection_by_paths(const QStringList &paths) {
         return;
     view->selectionModel()->select(selection,
                                    QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
-    if (first.isValid())
-        view->setCurrentIndex(first);
+    if (first.isValid()) {
+        // R-153 尾单（M7-R2.1-F4，回归探针抓到）：view->setCurrentIndex 的默认选择命令会把
+        // 刚恢复的**整组选中**塌缩成 first 一行（QAbstractItemView::setCurrentIndex →
+        // selectionCommand = ClearAndSelect）。改为 selectionModel::setCurrentIndex(NoUpdate)
+        // 只设当前项 + 显式 scrollTo —— 「scrollTo 展开祖先」的既有收益保留（见上注顺序契约），
+        // 选中面保持 restore 建立的整组。
+        view->selectionModel()->setCurrentIndex(first, QItemSelectionModel::NoUpdate);
+        view->scrollTo(first);
+    }
 }
 
 // R-151：翻图（PreviewPanel::navigated）同步左栏选中 —— "所见即所标"。

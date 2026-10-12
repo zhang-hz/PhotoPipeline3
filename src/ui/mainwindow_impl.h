@@ -1164,6 +1164,11 @@ struct MainWindow::Impl {
     void smoke_probe_run_reason();
     // UX-8/UX-10.1：高级二级折叠 + 编码档位限幅联动（folds）
     void smoke_probe_advanced_folds();
+    // M7-R2.1-F4 第 4 波常驻探针（R-148/149 · R-143 · R-152/153 · UX-12 像素档）
+    void smoke_probe_intake();
+    void smoke_probe_class_filter();
+    void smoke_probe_edit_target();
+    void smoke_probe_settings_tabs_light();
     // R-255（M7-R2.1-F3）：smoke_probe_meta 原 1675 行/深 10 → 12 个分节方法（逐字搬移；
     // 断言/输出行与顺序不变；共享前置 = MetaProbeCtx）
     void probe_meta_sec_a(const MetaProbeCtx &c, const QString &shots_dir); // (a) 基线/几何/信息行

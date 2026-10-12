@@ -260,6 +260,10 @@ void ClassifyPanel::Impl::rebuild_rows() {
     while (QLayoutItem *item = grid->takeAt(0)) {
         if (QWidget *w = item->widget()) {
             w->hide();
+            // R-183（M7-R2.1-F4，E2-11 修法前半）：重建协议与 deleteLater 解耦 —— 旧代退出
+            // 可见面的**同时**断开其信号面（悬垂点击不再触发旧 handler）；析构仍走 deleteLater
+            // （立即 delete 会在行部件自身信号发射栈内留下悬垂发送者，见上注）。
+            QObject::disconnect(w, nullptr, panel, nullptr);
             w->deleteLater();
         }
         delete item;

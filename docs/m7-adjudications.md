@@ -6,8 +6,9 @@
 > 汇总人 = WP11；裁定人 = 主对话（各 WP 报出后经波次收口追认）。
 > **编号命名空间**：本表 A/B/C/D/E 与 M7-ADJ-*/WP12-B* 均为**裁定表编号**；勿与 `ux-review-14.md`
 > §14 的色彩分级子项（A1–D3）及 `deep-review-0.3.2.md` 附录 B 的拆解蓝图（B.1–B.8）混读
-> ——三套编号独立，详见 `m7-report.md` 文首「编号命名空间」注。「WP 任务包」= 主对话逐包
-> 分派的会话内任务书（未入 docs/），引述以各 `build/m7-wpN/handoff.md` 为凭。
+> ——三套编号独立，详见 `m7-report.md` 文首「编号命名空间」注。「任务书 / WP 任务包」引述
+> 出处 = [docs/m7r2-plan.md](m7r2-plan.md)（R2 轮方案真源 + 附 A「任务书引述出处对照」，
+> 含 M7-WP 系分派书摘录；原始分派书未入 docs/，摘录换机可独立复核）。
 
 ## 一、冻结面加性 + 追认（结构/接口扩展）
 
@@ -15,7 +16,7 @@
 |---|---|---|---|
 | A1 | `core/metadata.h` `BatchRules` 末尾追加 `time_enabled/gps_enabled/privacy_enabled`（默认 true） | I5；「该卡参与规则 = 开关 && 原判据」，缺省 true = 旧会话零迁移 | WP1（I5） |
 | A2 | `core/pipeline.h` `FileState` 尾部追加 `DoneWithErrors` | I7；消费接线后补 | WP1（I7） |
-| A3 | `core/pipeline.h` `RunConfig` 末尾追加 `color_intent/color_dither8/gamut_mapping/linear_resample`（默认=现行为） | I8；能力类 opt-in 数据面先行，消费归后续（WP10 未交付，见 D12 与 m7-report §3.1） | WP1（I8） |
+| A3 | `core/pipeline.h` `RunConfig` 末尾追加 `color_intent/color_dither8/gamut_mapping/linear_resample`（默认=现行为） | I8；能力类 opt-in 数据面先行，消费归后续（WP10 未交付，见 D12 与 m7-report §3.1；**R2 轮追记**：消费已由 R2A `c540630` 入树，见八节） | WP1（I8） |
 | A4 | `core/metadata.h` `EffectivePreview` 末尾追加 XMP 日期 ×2 + OffsetTime* ×3 | R-085 生效值显示面补全；加性 | WP1 |
 | A5 | `core/metadata.h` `write_gps` 加性尾参 `out_warnings`（默认 nullptr） | 告警通道；既有调用点零改动 | WP1 |
 | A6 | `core/fsops.h` `resolve_conflict`（+软保留参）/`collect_inputs`（+排除集参）加性重载，旧签名转发 | R-005/R-031；旧行为逐字不变 | WP1 |
@@ -41,7 +42,7 @@
 | A26 | `progress.h` 加性 `OutputProgress` + `output_chunk_frac/file_frac_from` 纯函数 | R-284 算术单源；API 面零改动 | WP8（裁定 4） |
 | A27 | `logger.h` 加性声明 `log_level_from_text` | R-157 单源 | WP8（裁定 5） |
 | A28 | dev 三 TU 新建 + CMakeLists §4b（仅 PP_BUILD_DEV） | B.6；发布构建零 dev 路径 | WP8（裁定 7） |
-| A29 | 跨 TU 衔接用 extern 声明（不新增第四个头文件） | WP8 任务包（会话内分派书，未入 docs；引述见 build/m7-wp8/handoff.md 裁定 8）授权「新文件」仅列三个 .cpp | WP8（裁定 8） |
+| A29 | 跨 TU 衔接用 extern 声明（不新增第四个头文件） | WP8 任务书授权「新文件」仅列三个 .cpp（引述出处 `docs/m7r2-plan.md` 附 A） | WP8（裁定 8） |
 | A30 | 新增私有共享头 `src/ui/mainwindow_impl.h`（非冻结面）承载 Impl 完整定义 + 壳层自绘件 | 探针 TU 需同一 Impl 视图；公开冻结面零增删 | WP9（W9-2） |
 | A31 | 自由函数进头补 `inline`；Impl 追加 8 个分段方法声明 | W9-3/W9-4；机械 + 私有面加性 | WP9 |
 
@@ -81,7 +82,7 @@
 | B30 | `harden_file` 非 Windows = chmod 0600；Windows = no-op true；DPAPI 失败兜底退编码档（不落明文、不丢密钥） | 数据安全优先级；「编码非加密」口径如实注释 | WP5（A12/A13） |
 | B31 | test_icons 用 `PP_ICONS_TEST_NO_WIDGETS` 编译缝收窄 Widgets 依赖（生产构建照常） | 单测只链 pp_core 的既有约束 | WP5（A8） |
 | B32 | **文件面扩展（主对话授权）**：`assets/icons/caption-{min,max,restore,close}.svg` 4 个设计源随 kDefs 同步重画（仅 path[@d]） | UX-7④ 正当文件面，同源锁步；icons 探针 bad-svg=0 | WP5（A9） |
-| B33 | CMakeLists 对 secret.cpp 登记**两行**（pp_core 收录 + UI REMOVE_ITEM 剔除）而非 WP5 任务包的「一行」（任务包为会话内分派书，未入 docs；引述见 build/m7-wp5/handoff.md A10） | 两种单行做法均不可达（LNK2005 / 与 M2-T13 裁定相抵），如实登记 | WP5（A10） |
+| B33 | CMakeLists 对 secret.cpp 登记**两行**（pp_core 收录 + UI REMOVE_ITEM 剔除）而非 WP5 任务书的「一行」（引述出处 `docs/m7r2-plan.md` 附 A；该「一行」字面系任务书笔误，见九节误识别登记） | 两种单行做法均不可达（LNK2005 / 与 M2-T13 裁定相抵），如实登记 | WP5（A10） |
 | B34 | DPAPI 导入库 `#pragma comment(lib,"crypt32.lib")` 收在 secret.cpp（不加 CMake 链接面） | 同 B33 约束 | WP5（A11） |
 | B35 | 「再次运行」= 补齐语义（只提交缺件 + Skip）；仅元数据 GUI 默认冲突 = Skip | R-006/R-074 明令；**仅 GUI 路径**，CLI/金样默认面零改动 | WP6（T8） |
 | B36 | 终态词表统一「已完成/部分成功/跳过/失败/已取消」（列表胶囊随之更名） | R-139；运行页胶囊文案逐字不变 | WP6（T9） |
@@ -95,7 +96,7 @@
 | B44 | Geocoder `reverse_url` 入参语义换锚为 WGS-84（边界内转换） | R-219 同结构内约定矛盾的修法；test_geocoder 换锚（强度不降） | WP7（W7-A4） |
 | B45 | layers 子域机制换锚：atomic 轮换 → `(x+y+z) mod 4+1` 纯函数 | R-220 兑现「纯函数 URL 事实表」；同瓦片恒同子域；test_layers/test_providers 换锚 | WP7（W7-A6） |
 | B46 | UX-4 版面删除 3 个 `-row` objectName（category/layer/address）；其余 objectName 全保留；新增 6 个 objectName | ux-review §4 已定档；`-row` 行距探针自动少 3 行（floor ≥12 满足） | WP7（W7-A8） |
-| B47 | UX-5 语义：GPS 卡关 = 规则编辑面/清除钮置灰，**取点面保持可用**（选点/联想自动勾上保留） | 任务包明确保留；meta-loop 探针正是关态取点 | WP7（W7-A9） |
+| B47 | UX-5 语义：GPS 卡关 = 规则编辑面/清除钮置灰，**取点面保持可用**（选点/联想自动勾上保留） | 任务书明确保留（引述出处 `docs/m7r2-plan.md` 附 A）；meta-loop 探针正是关态取点 | WP7（W7-A9） |
 | B48 | clear_gps 不再脱离卡开关独立生效 | 「关闭=整卡不参与规则」直接推论；含值旧状态恢复=开 | WP7（W7-A10） |
 | B49 | R-315 只接 `tiles_pending_changed`（加载 chip）；`search_finished` 不接 | 同批数据双接会刷两遍状态行；冻结信号仍发 | WP7（W7-A11） |
 | B50 | mainwindow.cpp 探针换锚（136→260 三处 + (i-6b) 只增分类菜单断言 + R-262 注释） | UX-4⑤ 定档使旧锚必假；任务清单显式指派 | WP7（W7-A12） |
@@ -124,7 +125,7 @@
 | C7 | R-158 `parse_search` 冻结名保留转发，不改名 | 冻结签名零改动 | WP7（W7-A3） |
 | C8 | R-325 非空容器包装类（metadata_only↔outputs.size()==1 强类型）**不做** | 会改冻结签名；以 validate_run_config 校验器 + set_output_state 单点替代。若走包装类型需一次性解冻裁定表 | WP8 |
 | C9 | DevOptions has_* optional 化（R-272 可选项）**不做** | 纯可读性收益、无判据面，避免无谓 churn | WP8 |
-| C10 | R-218 RTL 全清**不做**（本波） | 与「行为零变化重构」硬约束正面冲突且需视觉取证；建议独立任务包带 RTL 截图探针 | WP9 |
+| C10 | R-218 RTL 全清**不做**（本波） | 与「行为零变化重构」硬约束正面冲突且需视觉取证；建议独立任务包带 RTL 截图探针。**R2 轮追记**：已按此建议由独立包 R2E2 落地（`52b9870`，逻辑坐标+单点镜像，LTR 逐字节不变，`rtl-mirror` 探针钉镜像关系），见八节 M7R2E2-1/3 | WP9 |
 
 ## 四、WP11 长尾清扫裁定（本轮汇总）
 
@@ -137,25 +138,25 @@
 | D5 | R-242 注释修实：`presets_dialog.h` `path()` 注释「SaveAs 返回 sanitized 路径」→ 「SaveAs = 空串（目录由调用方推导）」 | 与实现相反（presets_dialog.cpp:14 已自述空串），注释级 | WP11 |
 | D6 | R-268 注释修实：`icons.cpp` 未支持命令字母「跳过」→「截断返回已解析部分」；`paramform.h` 前置声明理由（theme.h 需包含者先引 QApplication）改按 M5-A5 现状（theme.h 已自含） | 注释与实现相反/过期，注释级 | WP11 |
 | D7 | UX-6① 余量：`docs/qt-gui-design-spec.md` §5 R1 显式登记两档例外——列表行 36（kListRowH）/ 表头 24（kTableHeadH），不属「信息行」 | WP4 跨界需求 1 的落点（docs 面归 WP11）；新增例外须先修订该节 | WP11 |
-| D8 | R-115 README ctest 计数**改实**：以 `ctest -N` 实测为准（2026-10-12：release 34 / release-dev 35=34+ui_smoke，两树各由 WP11 本机配置实测）；「33 条」为评审日（2026-10-11）口径（出处 `docs/ux-review-14.md:5` 基线 33/33，WP11 任务包沿用），M7 中 test_icons/test_secret 入编后已增至 35 | 如实取数优于抄旧数；同时给「以实测为准」的非计数口径防再漂 | WP11 |
+| D8 | R-115 README ctest 计数**改实**：以 `ctest -N` 实测为准（2026-10-12：release 34 / release-dev 35=34+ui_smoke，两树各由 WP11 本机配置实测）；「33 条」为评审日（2026-10-11）口径（出处 `docs/ux-review-14.md:5` 基线 33/33，WP11 任务书沿用——引述出处 `docs/m7r2-plan.md` 附 A），M7 中 test_icons/test_secret 入编后已增至 35 | 如实取数优于抄旧数；同时给「以实测为准」的非计数口径防再漂 | WP11 |
 | D9 | R-121 README 设计取舍登记：CMakeLists 无 `install()`、打包器直读构建树，两器默认构建目录统一 `build/release`；引入 install() 属构建面重构不在本轮 | WP3 跨界需求 2 的落点 | WP11 |
 | D10 | R-078 发行说明口径入 CHANGELOG/README：线程读数为估算（`active ≤ W ≤ T`、`ΣE ≤ T`；SynthPump/x265 不入账；threads_total_est 非硬上界）；README 旧句「总活跃线程 ≤ T」改实 | WP8 跨界需求 3 的落点 | WP11 |
 | D11 | R-292 词表/枚举镜像 13 组**对账登记**（逐行：收敛 5 / 大部收敛 1 / 部分收敛 1 / 登记 6；二分摘要口径「收敛 6 / 登记 7」= 大部收敛并入收敛、部分收敛并入登记），明细见 `m7-report.md` 附录 C；不改逻辑（镜像收敛=结构性重构，超出注释/文案/常量命名级授权） | 红线 3「逻辑改动一律登记不改」 | WP11 |
-| D12 | README/CHANGELOG 用户口径**不写未发生的功能**：色彩可选项（色域映射/抖动/渲染意图/线性光重采样）接口数据面已备、行为未入树（`(void)opts;`），**不列为新功能**，仅在「已知」如实披露 | 「诚实显示」纪律；WP11 任务包（会话内分派书）README 清单含该四项，但 WP10 未交付，如实上报不照抄 | WP11 |
+| D12 | README/CHANGELOG 用户口径**不写未发生的功能**：色彩可选项（色域映射/抖动/渲染意图/线性光重采样）接口数据面已备、行为未入树（`(void)opts;`），**不列为新功能**，仅在「已知」如实披露 | 「诚实显示」纪律；WP11 任务书 README 清单含该四项（引述出处 `docs/m7r2-plan.md` 附 A），但 WP10 未交付，如实上报不照抄。**R2 轮追记**：C1–C4 行为实现已由 R2A（`c540630`）交付（默认关=旧行为逐字节一致），本条口径随之成立性转移：四能力入「新增」如实记录，**GUI 开关仍未接线**（不宣称界面新选项）——见八节 R2A 各条 | WP11 |
 
-## 五、遗留裁决点（等主对话，本轮不决）
+## 五、遗留裁决点（等主对话，本轮不决；R2 轮终态已注记于各行）
 
-| # | 事项 | 现状 | 建议 |
-|---|---|---|---|
-| E1 | UX-14 A1 精确码：P3 目标下 VUI CICP 实测 unspecified(2)（期望 12） | 核心判据（不得写死 sRGB）已断言；库侧 nclx 状态机所致 | 如需精确 12 要给 libheif 传 `output_nclx_profile`（改输出字节）——裁定后另起 |
-| E2 | BMP 不承载 ICC（OIIO writer 事实） | 测试钉现状（一致地未嵌入） | 产品口径（警示/放弃）待定 |
-| E3 | R-163 取消错误归类：编码器 cancel 返回 error，pipeline 归 Failed | UI 侧已按逐输出事实补判 | 引擎侧改判 Cancelled 待裁定（行为面） |
-| E4 | R-211 强类型位深（bps/bpp 拆分） | 已显式化注释/文案 | 拆字段涉 UI+pipeline 跨面，待一次性裁定 |
-| E5 | R-007 长路径 `\\?\` 归一 | 预检+manifest 已落；写路径无归一（259 硬线） | codecs 面归一后放宽硬线 |
-| E6 | WP5 真机验收 10 项（Snap/Aero/圆角/多显示器…） | offscreen 无法替代 | Windows 真机人工签收清单（m7-report §2.4） |
-| E7 | Linux 回归基线重播种 | Windows 机不做文本替换移植（R-015 反面先例） | Linux 宿主 / nightly update_baseline 通道 |
-| E8 | regression.py:335-337 行型表钉 `[main.cpp]`（TU 迁移后误分类） | 归因护栏自计数失真已人工纠正口径 | 修分类器=改判据工具，另行裁定 |
-| E9 | R-296 CICP 映射收敛：`src/core/colormanager.{h,cpp}` 的 `map_cicp_source`/`cicp_profile_spec` 分支驱动（加一对 = 4 处联动），建议表驱动单源 | colormanager 跨面（WP2 跨界需求 1），无包认领 | 表驱动重构待裁定后另起 |
+| # | 事项 | 现状 | 建议 | R2 终态 |
+|---|---|---|---|---|
+| E1 | UX-14 A1 精确码：P3 目标下 VUI CICP 实测 unspecified(2)（期望 12） | 核心判据（不得写死 sRGB）已断言；库侧 nclx 状态机所致 | 如需精确 12 要给 libheif 传 `output_nclx_profile`（改输出字节）——裁定后另起 | **已修**（R2A `c540630`：显式传 `output_nclx_profile`，位流直读 P3=12/sRGB=1；字节变化 +20B×31 已归因重播种） |
+| E2 | BMP 不承载 ICC（OIIO writer 事实） | 测试钉现状（一致地未嵌入） | 产品口径（警示/放弃）待定 | **受约束口径闭环**（R2A B3：`EmbedIccUnsupported` 警示口径 + keep 不虚报；表内 tooltip 无可标注面，见九节） |
+| E3 | R-163 取消错误归类：编码器 cancel 返回 error，pipeline 归 Failed | UI 侧已按逐输出事实补判 | 引擎侧改判 Cancelled 待裁定（行为面） | **已修**（R2A `c540630`：取消归类单点 → `ErrorKind::Cancelled` → `Verdict::Cancelled` 短路，四面一致断言） |
+| E4 | R-211 强类型位深（bps/bpp 拆分） | 已显式化注释/文案 | 拆字段涉 UI+pipeline 跨面，待一次性裁定 | **登记**（R2B `5d19146` 已落单位单源 `bitdepth_unit/label/bpp/bps` + UI tooltip 消费；拆字段维持待解冻，M7R2B-5） |
+| E5 | R-007 长路径 `\\?\` 归一 | 预检+manifest 已落；写路径无归一（259 硬线） | codecs 面归一后放宽硬线 | **已修**（R2B `5d19146`：`normalize_extended_path()` 统一写入口 + 259/255 硬线解除；余量 codecs 侧 fopen / resolve_conflict exists 探测**登记**） |
+| E6 | WP5 真机验收 10 项（Snap/Aero/圆角/多显示器…） | offscreen 无法替代 | Windows 真机人工签收清单（m7-report §2.4） | **登记**（外部条件未达，待人工签收） |
+| E7 | Linux 回归基线重播种 | Windows 机不做文本替换移植（R-015 反面先例） | Linux 宿主 / nightly update_baseline 通道 | **受约束口径闭环**（宿主能力约束：R2 轮 132 行重播种同未移植，归 Linux 宿主/nightly 通道，见九节） |
+| E8 | regression.py:335-337 行型表钉 `[main.cpp]`（TU 迁移后误分类） | 归因护栏自计数失真已人工纠正口径 | 修分类器=改判据工具，另行裁定 | **已修**（R2B `5d19146`：行型表锚点扩新 TU 名集 + `--self-check` 19 例机械化钉住） |
+| E9 | R-296 CICP 映射收敛：`src/core/colormanager.{h,cpp}` 的 `map_cicp_source`/`cicp_profile_spec` 分支驱动（加一对 = 4 处联动），建议表驱动单源 | colormanager 跨面（WP2 跨界需求 1），无包认领 | 表驱动重构待裁定后另起 | **已修**（R2A `c540630`：`kCicpTable` 单源，加一对 = 加一行，test_cicp_mapping 全绿） |
 
 ## 六、终门禁裁定（WP12，2026-10-12）
 
@@ -171,3 +172,91 @@
 |---|---|---|---|
 | M7-ADJ-tag-move | **tag v0.3.3 发布前移动一次**（97cd9da → b1af371）：首落点 97cd9da 树缺 `vcpkg.json` 版本同改（R-122），release.yml「依赖单源一致性断言」6s 红、publish 未执行、**tag 零 Release 零资产** ⇒ 该 tag 不是可发行树。移动前后阴阳性对照在案（97cd9da 树 `ci-versions-check` FAIL，与 CI 报错逐字同因 / b1af371 树 OK (10 keys, expect=2)）；移动操作原子（`git push --force origin refs/tags/v0.3.3`，`ls-remote` 核对 tag 对象 `cb181ee` → `^{}` = `b1af371`）；移动前取证：gh CLI 未认证、releases 列表无 v0.3.3、/releases/tag/v0.3.3 仅 2 个自动源码包（真发布 6 资产，如 v0.3.2）。**裁决人 = 主对话（escalate 问答，条件七条：取证 / 阴阳性对照 / 原子 + ls-remote 核对 / 跟到 publish / 再红即停 / 本登记 / 如实定状态）** | ① 用户本轮指令 = 发布 0.3.3，发布不完成即未交差；② 权威口径 = AGENTS.md §9「tag 资产挂载后不可再移动」+ release.yml 自述「tag 未发布资产前可移动，发布后不可移动」——移动时 tag 零资产零 Release，处明文允许区间；③ 旧目标 97cd9da 仍在历史、b1af371 为其后续修复提交，可逆 | WP13 |
 | WP13-B1 | **`vcpkg.json` `version` 0.3.2 → 0.3.3 与 `CMakeLists.txt:19` 同改**（跨出 WP13 文件面的机械同改，落点 `M7-REL-0.3.3-gate-fix2` = b1af371）：`tools/ci-versions-check.py:12-13` 契约注释原文即预点名「R-122：版本 bump 必须同改；WP13 的 0.3.3 bump 会在这里被钉住」——属版本单源 bump 义务；`builtin-baseline`/`dependencies` 逐字未动 | R-122 断言自 M7-WP3 起在 CI 钉住；首推 tag 时该项红灯后补齐，阴阳性对照在案（gate-fix2 提交正文） | WP13 |
+
+## 八、R2 轮裁定登记（M7-R2，2026-10-12；方案真源 = [docs/m7r2-plan.md](m7r2-plan.md)）
+
+> 各包 handoff「裁定登记」节汇总；任务书出处 = `docs/m7r2-plan.md` §2/§3。验证读数摘录见
+> `docs/m7-evidence/m7r2-*-gates.md`。
+
+### 8.1 R2A（`c540630`，色彩能力与解码语义；14 项设计实施 = plan §2）
+
+| # | 类型 | 内容 | 理由 / 依据 |
+|---|---|---|---|
+| R2A-A1 | 加性（PP-FROZEN `core/types.h`） | `WarningKind` 末尾追加 `EmbedIccUnsupported` | B3 设计明示「WarningKind 可加性追加」；既有值数值/语义零变化 |
+| R2A-A2 | 加性（PP-FROZEN `codecs/encoder.h`） | `EncodeRequest` 末尾追加 `bool dither8 = false` | C2 通路必经（RunConfig→to_u8）；W2-A1 先例；聚合初始化兼容 |
+| R2A-A3 | 加性 | `decode/oiio_reader.h` 末尾追加 `exif_colorspace_from_spec` | D2 设计指定暴露面 |
+| R2A-A4 | 加性 | `thumbs.h decode_preview_detailed` 末位缺省参数 `bool linear_resample=false` | C4 加性；默认路径逐字不变 |
+| R2A-A5 | 行为（新增档位） | C3 意图映射 1/3 不叠 BPC（仅 0 携带、2 明示不叠） | 设计字面；默认 0 不变 |
+| R2A-A6 | 断言换锚（同严） | D3 HDR miss 文案换锚（transfer 16/18 → HDR 明确文案）；test_color `misses[]` 7 改 3 增 | 设计给定文案逐字；等值断言非放宽 |
+| R2A-A7 | 断言定标 | C1 护栏显著性：mode2 ≤ 0.05×（构造性）；mode1 满饱和 max/mean ≤ 0.85×、中饱和 max≤0.6×/mean≤0.5× | knee=0.85 固定公式下的实测定标（读数见 m7r2-a-gates）；断言只增不放水 |
+| R2A-A8 | 断言面选择 | A1 判据取**码流 VUI 位流直读**，解码侧 `heif_image_get_nclx` 仅对照留证 | 解码侧回填随库漂移（实测 P3 位流=12 而回填=2）；判据原文=码流 |
+| R2A-A9 | 算法口径 | C1 mode2 = Lab 空间 L 轴收敛（保 L、压 C） | 设计「向明度轴收敛」字面；RGB 域备选实测色相偏 45° 否决 |
+| R2A-A10 | 测量路径换锚 | 跨库对拍 Rec709 侧用 OIIO `color.h` 曲线（本 OIIO ColorConfig 无 "Rec709" 名，实测） | 同库同曲线，对拍语义不变 |
+
+### 8.2 R2B（`5d19146`，核心与参数域尾单）
+
+| # | 类型 | 内容 | 理由 / 依据 |
+|---|---|---|---|
+| M7R2B-1 | 加性（PP-FROZEN） | `scheduler.h` 尾部 `file_state_of()`；`params.h` 尾部 `find_param/lookup_param_def/BitdepthUnit/bitdepth_unit(_label/_bpp/_bps)`；`fsops.h` 尾部 `normalize_extended_path()` | R-076/195/211/007 单源收口导出面；末尾追加先例同 WP2/WP5/WP8 |
+| M7R2B-2 | 行为变化 | 跨字段规则通道归属退场：validate_params 与 cross_validate 共用全部规则（各自语言文案） | R-206「改道定稿」任务明文；en/zh 冻结文案逐字保留 |
+| M7R2B-3 | 行为变化 + 断言换锚 | `validate_output_filename` 解除 259/255 长度硬线；test_fsops `invalid/*-too-long` 换锚 `r007/long-*-accepted` | R-007 任务明文；旧断言与任务直接矛盾（WP5-A6 先例，非放宽） |
+| M7R2B-4 | 行为变化 | validate_preset 补 cross_validate 判定；fsops/metadata 写入口归一 `\\?\`；settings map_provider 词表外回落 "osm"；default_class_file 空 data_dir 返回空串 | R-231/R-007/R-104/WP5 跨界 1 明文；默认/常规路径字节级不变 |
+| M7R2B-5 | 登记（维持待解冻） | R-211/R-325 强类型路线（bps/bpp 拆字段、metadata_only 非空容器包装）**不做** | 会改冻结签名；维持 WP8 C8「登记待解冻」，需一次性解冻裁定表 |
+| M7R2B-6 | 新文件 | `src/core/error_text.h`（header-only 中文文案单源表） | R-070/273 指定新头；引擎错误串零改动 |
+
+### 8.3 R2C（`210fce5`，CI 与发布链）
+
+| # | 类型 | 内容 | 理由 / 依据 |
+|---|---|---|---|
+| R2C-W1 | 登记（不补） | 不给 Windows job 补 ccache save/restore | R-124 MSVC 不挂 launcher ⇒ CCACHE_DIR 恒空；补对称步骤=存/取空缓存伪命中（造假不属韧性） |
+| R2C-W2 | 修复口径 | warm-cache.yml 删非法空 `env:` 键（保留归因注释），**不**恢复 `QT_DIR:` 值行 | 恢复值行回退 R-063（版本字面量，ci-versions-check 实测判红）；GITHUB_ENV 注入等价 |
+| R2C-W3 | 登记（不改判据） | 不改 `PP_VCPKG_WARM_MIN=20`、不改 timeout-minutes、不改任何断言口径 | 硬约束「timeout 不许改大」；暖度假绿缺口（计数≠ABI 命中）登记进 runbook §1.2，不伪加固 |
+| R2C-W4 | 定性修正 | 任务书对 warm-cache 故障的定性（「孤儿 PowerShell 块」）与实况不符——实为 247 行空 `env:` 键（YAML `env: null`）；按实况修并双向留证 | 原字节 dump 证明 `$lines` 块在合法 step 内；空键与 Line 247、#9–#13 秒败时间线精确对位 |
+
+### 8.4 R2D1（`6e001da`，主窗/列表/预览/分类/page_meta）
+
+| # | 类型 | 内容 | 理由 / 依据 |
+|---|---|---|---|
+| M7-R2-B | 断言换锚（**主对话授权**） | `smoke_probes.cpp` 两处 `map->height() == 260` → `>= 260`（geometry 逐位断言逐字保留；其余 smoke_probes 逐字不动） | UX-4 stretch 后 260 是下限非定值；escalation 裁决 A 改良版 |
+| R2D1-A1 | 行为定义 | R-143 选「给过滤语义 + .on 拆态单义」（弃「选中项归属高亮」通道，归属由行内色点承担） | UX 评审二选一取同时修「二义」与「点击死端」者 |
+| R2D1-A2 | 行为约束 | add_paths 扫盘后台化，但 `PP_UI_NO_STATE`（smoke/dev harness）下保持同步 | dev_ui_smoke 无等待点，异步会成竞态；判据确定性优先 |
+| R2D1-A3 | 冻结面删除（追认） | `filelistmodel.h` 移除零消费死 API `collapsed_keys()`（R-278 授权；全仓 grep 仅定义处） | 死码清理指令 vs 冻结面只加性：删除零消费声明不改行为，登记追认 |
+| R2D1-A4 | 加性 | FileRow 追加 `dedup_key`、FileListModel 追加 `unreadable_count/apply_scanned_paths`、FileDelegate 追加 `visible_row_rect`、role 基址命名（值不变）、ClassifyPanel 追加 `class_filter_requested`（`set_current_class_id` 随 .on 拆态退役） | 冻结面「加性 + 追认」先例（WP6 T1 同模式） |
+| R2D1-A5 | 语义选择 | UX-1 语义（时间·从文件读取=跟随项重读；GPS·地图选点=大地图点选；GPS·取地图中心=既有按钮链路；时间·清除规则=复位+退启用） | 评审表词组与既有按钮非一一对应，按最贴近既有收口落，避免第二套行为 |
+| R2D1-A6 | 图标单源 | icons 追加 `CheckAll`（枚举末尾）+ `assets/icons/check-all.svg` 同形设计源 | 图标单源契约（C3）：SVG 与 kDefs 逐元素同形，icons 探针硬判 |
+| R2D1-A7 | 行为（补齐分支） | run-again 前删除 0 字节产物（仅 size==0、仅补齐分支、源同实体绝不触碰） | 「自家残次品重做」最小实现；红线守卫 = fs::equivalent |
+
+### 8.5 R2D2（`27c9f40`，输出/运行/表单/编辑器/设置）
+
+| # | 类型 | 内容 | 理由 / 依据 |
+|---|---|---|---|
+| M7-R2-A | 断言换锚（**主对话授权**） | ui_smoke `spin-group` 期望宽 `kFieldShort(88)` → `kFieldStd(160)`（一处断言三常量 + 注释；其余逐字不动） | UX-8 定稿「废除折叠=88 第二档、与核心一致 160」；语义等价、严格度不降 |
+| M7R2D2-1 | 加性（PP-FROZEN `paramform.h`） | 追加 `limit_enum_choices(key, allowed, reason)` | UX-10.1 色度限幅需收窄枚举视图；末尾追加式 |
+| M7R2D2-2 | 行为变化 | 预设落值路径跳过 avif+alpha 预选（R-066）；预设后端往返保真 | 「preset 应用路径跳过预选或设 override 语义位」；load→save 字段改写属数据保真缺陷 |
+| M7R2D2-3 | 行为变化 | 折叠区数值行宽 88→160；子分组默认只展开首组；format_changed「若变」才发；alpha 提示两态如实；模板示例只取一份样本；非确定路径主题回滚 | 均为任务书/评审明文；ui_smoke 35/35 + 金样 20/20 背书 |
+| M7R2D2-4 | 复核零增量 | R-229 维持 WP6 已修结论（remove_tab 先快照） | `git log -S "R-229"` = d99df1b |
+| M7R2D2-5 | 加性（theme） | `kFkWarn` 钩子 + QSS 规则；Metrics 补 menu_*/tab_* 常量（R-270 余量令牌化，取值逐值相同） | X5 任务明文 + R-270 余量；色值/几何零变化 |
+
+### 8.6 R2E2（`52b9870`，RTL 与结构拆分）
+
+| # | 类型 | 内容 | 理由 / 依据 |
+|---|---|---|---|
+| M7R2E2-1 | 加性（PP-FROZEN `filelistmodel.h`） | `row_rects(..., bool rtl)` / `check_rect(..., bool rtl)` 末尾追加式重载；旧签名转发 = LTR 逐值相同 | 绘制/命中/探针共用同一镜像几何单源 |
+| M7R2E2-2 | 加性（`mainwindow_impl.h`） | Impl 末尾追加 5 个 `smoke_probe_*` 声明（PP_BUILD_DEV 段内） | 第 3 波常驻探针；发布构建零影响 |
+| M7R2E2-3 | 行为变化（仅 RTL 路径） | 自绘几何/内距/QSS 非对称值/页签方向键随布局方向镜像 | R-218 明文；LTR 逐字节不变（ui_smoke + 金样背书） |
+| M7R2E2-4 | 行为变化（隐藏面） | `FileGroupProxyModel` dataChanged 转发扩为两列区间 | R-203 明文缺陷；行数/roles 语义不变 |
+| M7R2E2-5 | 断言换锚（同严） | settings_geom_probe QSS 断言换空白宽容正则（属性名/值/色值逐字） | R-281 明文；严格度不降 |
+| M7R2E2-6 | 死码删除 | page_output 四件 index 映射函数退役（itemData 单真相） | R-190 明文；读回落值语义逐值相同 |
+| M7R2E2-7 | 新文件 | `src/ui/format_policy.h`（B.3 纯核）、`src/ui/leading_indent.h`（R-218 逻辑边距） | header-only（R-109 路线）；glob 自动收编，CMakeLists 零改动 |
+
+## 九、误识别关闭与受约束登记（R2 轮四类审视，plan §1）
+
+| # | 类 | 条目 | 事实与处置 | 终态 |
+|---|---|---|---|---|
+| R2F-X1 | 误识别关闭 | **R-282 死码前提** | 评审称「BMP 分支不可达 / with_extension 零调用」——前提不成立：BMP 分支是 `design.md` §5.8 公开 API 文档化契约且被 `test_post_write_formats` 钉住（C1）；`with_extension` 是 PP-FROZEN 声明 + test_fsops 4 例覆盖（C2）。删除 = 改冻结契约 + 减证据面，**保留**；同条的 effective_datetime 收敛已修（`12ce994`） | **误识别关闭** |
+| R2F-X2 | 误识别关闭 | **R-011 证伪** | 评审称 `tiff:predictor` 无人消费——WP2 复核 OIIO 3.1.17 `tiffoutput.cpp:1026-1029` 证明 `tiff:Predictor`（大小写不敏感）真实消费且在自动规则之后跑 ⇒ 用户值生效。评审结论被证据推翻；修法改「键名对齐 + float 档显式拒绝」（W2-A12，`33d09a8`） | **误识别关闭** |
+| R2F-X3 | 误识别关闭 | **WP5-A10 任务书笔误** | 任务书「CMakeLists 登记 secret.cpp 一行」字面与工程现实矛盾：两种单行做法均不可达（仅进 pp_core → LNK2005；header-inline + 锚点 TU → 与 M2-T13 裁定相抵）。实际可达做法 = 两行对偶登记（B33），「一行」按**任务书笔误**关闭，不改实现 | **误识别关闭** |
+| R2F-C1 | 受约束口径闭环 | **B3 BMP ICC 警示口径** | OIIO BMP writer 不承载 ICC（库事实，test_enc_oiio 钉住）；产品口径取「警示」：`EmbedIccUnsupported` 逐输出报、keep 不虚报（R2A）。表内 tooltip 无可标注面（FormatDef 无 tooltip 字段）——不扩冻结面，事实面由警示 + 测试承载 | **受约束口径闭环** |
+| R2F-C2 | 受约束口径闭环 | **非 Windows 密钥** | DPAPI 仅 Windows：非 Windows = `ppsec2:` 编码 + chmod 0600（B30/A12），口径如实「编码不是加密」；真加密需 keyring/libsecret（负面清单禁扩依赖）。Windows 侧 DPAPI 失败兜底退编码档（不落明文、不丢密钥，A13） | **受约束口径闭环** |
+| R2F-C3 | 受约束口径闭环 | **Linux golden.log 移植** | Windows 宿主不做基线文本替换移植（R-015 反面先例）；M7/R2 两轮行为行（TU 标签 180 + heif profile 46 + A1 nclx 132 + 版本行 12）均**未移植** Linux 基线 → 归 Linux 宿主 / nightly `update_baseline` 通道重播种后确认 | **受约束口径闭环** |
+| R2F-C4 | 受约束口径闭环 | **R-325 登记（强类型路线）** | 13 项契约核对已收口（校验器/单点/断言承载，R2B 核对表）；强类型包装（metadata_only↔outputs.size()==1 非空容器、bps/bpp 拆字段）会改 PP-FROZEN 签名 → 维持 C8/M7R2B-5「登记待解冻」，如走包装类型需一次性解冻裁定表 | **受约束口径闭环** |

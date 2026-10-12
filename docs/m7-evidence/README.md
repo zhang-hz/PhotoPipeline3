@@ -26,3 +26,9 @@
 | `release-runbook.md` | （通用） | 发布链操作手册：暖度验证、tag 前置条件、公共 API 轮询、失败即停 |
 | `m7r2-c-winzip-gates.md` | R2C | make_winzip 五门禁本地全跑读数（含 E-2 offscreen 走查） |
 | `m7r2-c-ci-budget-timings.md` | R2C | 发布链/主干道预算实况取证（公共 API job/step 耗时 + warm-cache 秒败 + 缓存链地图） |
+| `m7r2-a-gates.md` | R2A | 色彩能力与解码语义门禁读数（ctest 35/35、金样 20/20、test_color 1351、test_decode 642、A1 位流 VUI、回归归因 heif/avif +20B×31） |
+| `m7r2-b-gates.md` | R2B | 核心与参数域尾单门禁读数（7 目标子集、金样 20/20、regression --self-check 19 例、test_color 他包在途注记） |
+| `m7r2-d1-gates.md` | R2D1 | 主窗/列表/预览/分类/page_meta 门禁读数（ctest 35/35、ui_smoke 冻结行、icons bad-svg=0、M7-R2-B 换锚） |
+| `m7r2-d2-gates.md` | R2D2 | 输出/运行/表单/编辑器/设置 门禁读数（ctest 35/35、output-geom/settings-geom、M7-R2-A 换锚） |
+| `m7r2-e2-gates.md` | R2E2 | RTL 与结构拆分门禁读数（ctest 35/35、第 3 波 5 探针逐行、金样 20/20） |
+| `m7r2-gate-regression-reseed.md` | R2-gate | 回归基线重播种 132 行逐行归因（A1 nclx 精确信令）+ M7 窗口 4 次重播种上下文 |

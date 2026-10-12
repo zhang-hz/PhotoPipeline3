@@ -64,6 +64,7 @@
 
 #include "mapwidget/mapwidget.h"
 #include "mapwidget/map_interact.h" // B.5 ⑥：交互状态机纯函数（M7R22G2）
+#include "mapwidget/map_renderer.h" // B.5 ④：整帧纯绘制（M7R22G2）
 #include "mapwidget/map_view.h"     // B.5 ①：投影/基准纯核（pp_core 单源）
 #include "mapwidget/tile_cache.h"   // B.5 ②：TileKey/LRU/预算纯核（M7R22G2）
 
@@ -106,55 +107,19 @@ namespace pp::map {
 
 namespace {
 
-// kTileSize / kPi / kMaxMercatorLat → map_view.h（B.5 ①：投影纯核单源）
+// 常量分家（B.5 ②④⑥，M7R22G2）：TileKey 层词表 → tile_cache.h；钉/主钉几何 → map_renderer.h；
+// 点击阈值 → map_interact.h；HUD 字号/比例尺档系/镜像 → map_renderer.cpp；此处只剩装配面。
 constexpr int kMinZoom = 2;
 constexpr int kMaxZoom = 18;
 constexpr int kMaxConcurrentFetches = 4;   // frozen: concurrency <= 4
 constexpr int kFailureBannerThreshold = 3; // frozen: >= 3 consecutive failures -> banner
-constexpr double kClickThresholdPx = 4.0;  // frozen: press/release displacement < 4 px = click
 constexpr qint64 kBytesPerMb = 1024 * 1024;
 constexpr int kDefaultCacheMb = 64;     // frozen default byte budget
 constexpr int kRequestTimeoutMs = 8000; // frozen: request timeout 8 s
-// R-311（M7-WP7）：HUD 字号**一处命名**。原实现比例尺借用 kCopyrightPointSize（"版权行字号"
-// 被两个不相干 HUD 元素共用，命名失实）；现统一为 kHudPointSize —— 地图自绘 HUD（比例尺 +
-// 版权行）同字号同白底 α190。HUD 双轨机制在本文件头「Drawing」段落定：mapwidget 自绘 =
-// 比例尺/版权行（贴角、随图重绘）；宿主覆盖层（page_meta 的 chip/钮）= 交互控件（reparent
-// 随地图走）—— 两轨各管各，色令牌分别取 kHudPointSize 同档与 overlay_tokens。
-constexpr int kHudPointSize = 6;     // frozen: 6 pt credit label (and scale bar, R-311 rename)
-constexpr int kSearchZoomFloor = 12; // ruling 2026-09-19: a search hit zooms to >= 12
-constexpr int kMarkerRadius = 7;
-constexpr int kMarkerArm = 5;
-// M6-T6 结果图钉（§4.4）：实心圆半径 / 编号气泡字号与文本像素上限 / 命中阈值（光标-钉心屏距）。
-constexpr int kPinRadius = 5;
-constexpr int kPinBubblePointSize = 7;
-constexpr int kPinBubbleTextMax = 64; // 长地名省略，避免气泡盖住大片地图
-constexpr double kPinHitRadius = kMarkerRadius + 6;
-// M6-T12 体验件（§5.3 / §7-T12）：光标坐标信号的节流窗 / 比例尺（左下）的目标段长与档系。
-constexpr int kCursorThrottleMs = 100;
-constexpr int kScaleBarTargetPx = 60;           // 取档前的目标段长（实际段长 = 取整档反算）
-constexpr double kScaleBarMppZ0 = 156543.03392; // z=0、256 px 瓦片下的赤道米/像素
+constexpr int kSearchZoomFloor = 12;    // ruling 2026-09-19: a search hit zooms to >= 12
+constexpr int kCursorThrottleMs = 100;  // M6-T12：光标坐标信号的节流窗
 // R-101（M7-WP7）：瓦片失败后的**延迟重抓**窗（一次性定时器；离线不排）。
 constexpr int kTileRetryDelayMs = 750;
-
-// M6-T5 缓存 key 的 layer 维度（§4.1）：路网 / 影像 / Hybrid 标注叠加层。
-const char *const kLayerRoad = "road";
-const char *const kLayerSatellite = "satellite";
-const char *const kLayerLabel = "label";
-
-// R-218（M7-R2.1-F2）：自绘 HUD 的逻辑坐标**单点镜像** —— RTL 下 leading=右缘，
-// LTR 恒等（原样返回）。地理内容（瓦片/图钉/主钉投影坐标）不镜像；镜像只作用于
-// HUD 盒/文字/线段这类界面构件。
-QRect mirror_x(const QWidget *q, const QRect &r) {
-    if (q->layoutDirection() != Qt::RightToLeft) {
-        return r;
-    }
-    return QRect(q->width() - r.x() - r.width(), r.y(), r.width(), r.height());
-}
-
-// 点镜像（线段端点按像素取镜像：x' = W - 1 - x；LTR 恒等）
-int mirror_px(const QWidget *q, int x) {
-    return q->layoutDirection() == Qt::RightToLeft ? q->width() - 1 - x : x;
-}
 
 // 投影族（clamp_lat/world_span/wrap_tile_x/latlon_to_world/world_to_latlon）→
 // map_view.{h,cpp}（B.5 ①；同命名空间 pp::map，调用点零改动）。
@@ -191,12 +156,6 @@ struct MapWidget::Impl {
     struct PendingTile {
         QNetworkReply *reply = nullptr;
         TileKey key; // 完成的瓦片按这个键入缓存（source/layer/zoom/x/y）
-    };
-
-    // 本帧要绘制的图层（source + layer 键；Hybrid = 影像 + 标注两条）。
-    struct PaintLayer {
-        const TileSource *source = nullptr;
-        QString layer;
     };
 
     // Receives the QWidget events the frozen header cannot declare overrides for.
@@ -250,43 +209,13 @@ struct MapWidget::Impl {
     bool sat_labels_ = true;
     QElapsedTimer cursor_clock;
 
-    // ---- M6-T5 图层选择 ----------------------------------------------------------
-    // select_source(style)：给定图层 → 有效瓦片源。当前 provider 的源支持该图层则用它；
-    // 不支持时（如 osm 无卫星/混合层）回退 esri（esri 支持 Satellite/Hybrid）；Road 永远用当前源。
-    //
-    // 基准不漂（契约 C3）：回退只发生在 osm → esri 之间，二者栅格皆 WGS-84；amap 三图层同为
-    // GCJ-02。内部中心基准面只由 provider->gcj02 决定，与所选源无关 —— 切图层/回退**不做**
-    // 任何 datum 转换，center_lat/lon 与 marker 的 WGS 坐标逐位不变。
+    // ---- M6-T5 图层选择 / 本帧图层栈（B.5 ④，M7R22G2：纯件 → map_renderer.{h,cpp}）----
     const TileSource *select_source(TileStyle style) const {
-        const TileSource *const current =
-            provider != nullptr ? tile_source_by_id(provider->id) : nullptr;
-        if (style == TileStyle::Road) {
-            return current; // 路网：永远当前源（不参与回退）
-        }
-        if (current != nullptr && current->supports(style)) {
-            return current;
-        }
-        return tile_source_by_id(QStringLiteral("esri")); // 卫星/混合回退：esri 二者皆支持
+        return pp::map::select_source(provider, style);
     }
 
-    // 本帧图层栈（自下而上）：Road → road；Satellite → satellite；Hybrid → satellite + label。
-    // 无标注层的源（osm/esri）返回空 label_url → 该层无 URL 不请求，即「无标注层则跳过」。
-    // M6-T12：Hybrid 的标注层受 sat_labels_（set_sat_labels）控制 —— false = 只画影像层。
     std::vector<PaintLayer> paint_layers() const {
-        std::vector<PaintLayer> stack;
-        const TileSource *const source = select_source(tile_style_);
-        if (source == nullptr) {
-            return stack;
-        }
-        if (tile_style_ == TileStyle::Road) {
-            stack.push_back(PaintLayer{source, QString::fromLatin1(kLayerRoad)});
-            return stack;
-        }
-        stack.push_back(PaintLayer{source, QString::fromLatin1(kLayerSatellite)});
-        if (tile_style_ == TileStyle::Hybrid && sat_labels_) {
-            stack.push_back(PaintLayer{source, QString::fromLatin1(kLayerLabel)});
-        }
-        return stack;
+        return pp::map::paint_layers(provider, tile_style_, sat_labels_);
     }
 
     // ---- M6-T12 体验件（§5.3 / §7-T12） -----------------------------------------
@@ -313,56 +242,7 @@ struct MapWidget::Impl {
         emit q->cursor_moved(wgs.first, wgs.second);
     }
 
-    // 左下比例尺（§5.3）：当前 zoom/纬度下的「米每像素」把 ~60 px 段长折成 1/2/5 × 10^k 的整
-    // 档（100 m / 500 m / 1 km …），再按该档反算实际段长绘制；白底 α190 + 6pt 与右下版权行同
-    // 口径（卫星底图上仍可读）。纬度取视口中心（同一比例尺的横轴近菱形，取中心纬度即用户所在档）。
-    void draw_scale_bar(QPainter &painter, int h) const {
-        const double mpp = kScaleBarMppZ0 * std::cos(clamp_lat(center_lat) / 180.0 * kPi) /
-                           double(std::int64_t(1) << zoom);
-        if (!(mpp > 0.0) || !std::isfinite(mpp)) {
-            return;
-        }
-        const double raw_m = double(kScaleBarTargetPx) * mpp;
-        const double mag = std::pow(10.0, std::floor(std::log10(raw_m)));
-        double nice_m = mag;
-        for (const double factor : {1.0, 2.0, 5.0}) {
-            if (mag * factor <= raw_m) {
-                nice_m = mag * factor;
-            }
-        }
-        const QString label = nice_m >= 1000.0
-                                  ? QStringLiteral("%1 km").arg(nice_m / 1000.0, 0, 'g', 4)
-                                  : QStringLiteral("%1 m").arg(nice_m, 0, 'g', 4);
-        const QString zero = QStringLiteral("0");
-        const int bar_px = std::max(8, int(std::lround(nice_m / mpp)));
-
-        painter.save();
-        QFont font = painter.font();
-        font.setPointSize(kHudPointSize);
-        painter.setFont(font);
-        const QFontMetrics metrics(font);
-        const int pad = 5;
-        const int gap = 4;
-        const int box_w = 2 * pad + metrics.horizontalAdvance(zero) + gap + bar_px + gap +
-                          metrics.horizontalAdvance(label);
-        const int box_h = metrics.height() + 4;
-        // R-218：盒与内容一律逻辑坐标 + 单点镜像（LTR 恒等；RTL 下贴右缘、内容右起）
-        const QRect box = mirror_x(q, QRect(6, h - 6 - box_h, box_w, box_h));
-        painter.fillRect(box, QColor(255, 255, 255, 190));
-        painter.setPen(QColor(0x40, 0x40, 0x40));
-        const int mid_y = box.y() + box_h / 2;
-        int x = box.x() + pad;
-        painter.drawText(mirror_x(q, QRect(x, box.y(), metrics.horizontalAdvance(zero), box_h)),
-                         Qt::AlignLeft | Qt::AlignVCenter, zero);
-        x += metrics.horizontalAdvance(zero) + gap;
-        painter.drawLine(mirror_px(q, x), mid_y, mirror_px(q, x + bar_px), mid_y); // 段线+刻度
-        painter.drawLine(mirror_px(q, x), mid_y - 3, mirror_px(q, x), mid_y + 3);
-        painter.drawLine(mirror_px(q, x + bar_px), mid_y - 3, mirror_px(q, x + bar_px), mid_y + 3);
-        x += bar_px + gap;
-        painter.drawText(mirror_x(q, QRect(x, box.y(), metrics.horizontalAdvance(label), box_h)),
-                         Qt::AlignLeft | Qt::AlignVCenter, label);
-        painter.restore();
-    }
+    // 比例尺/版权/图钉/主钉/格网/瓦片的整帧绘制 → map_renderer.cpp（B.5 ④ 纯绘制）。
 
     // ---- datum boundary (frozen: conversion only at the boundary) ----------------
     std::pair<double, double> wgs_to_datum(double lat, double lon) const {
@@ -873,120 +753,40 @@ void MapWidget::Impl::on_paint() {
     if (w <= 0 || h <= 0) {
         return;
     }
-    QPainter painter(q);
-    painter.fillRect(q->rect(), QColor(0xe9, 0xe9, 0xe9));
-
-    const QPointF center = center_world();
-    const double left = center.x() - w / 2.0;
-    const double top = center.y() - h / 2.0;
-
-    // Thin grid on the tile lattice marks the not-yet-loaded area.
-    painter.setPen(QPen(QColor(0xd2, 0xd2, 0xd2), 1));
-    for (double wx = std::floor(left / kTileSize) * kTileSize; wx - left <= w; wx += kTileSize) {
-        const int sx = int(std::lround(wx - left));
-        painter.drawLine(sx, 0, sx, h);
-    }
-    for (double wy = std::floor(top / kTileSize) * kTileSize; wy - top <= h; wy += kTileSize) {
-        const int sy = int(std::lround(wy - top));
-        painter.drawLine(0, sy, w, sy);
-    }
-
+    // B.5 ④（M7R22G2）：整帧绘制 → map_renderer::paint_map（纯绘制；此处只装配状态快照）。
+    // 投影（datum → world → screen）在快照装配时做完 —— 纯绘制不碰基准边界。
+    RenderState st;
+    st.size = QSize(w, h);
+    st.center_world = center_world();
+    st.center_lat = center_lat;
+    st.zoom = zoom;
+    st.rtl = q->layoutDirection() == Qt::RightToLeft;
     if (provider != nullptr) {
-        const int tile_count = int(std::int64_t(1) << zoom);
-        const int x0 = int(std::floor(left / kTileSize));
-        const int x1 = int(std::floor((left + w - 1) / kTileSize));
-        const int y0 = int(std::floor(top / kTileSize));
-        const int y1 = int(std::floor((top + h - 1) / kTileSize));
-        // M6-T5：逐层绘制（Hybrid 的影像层在前 = 在下，标注层在后 = 叠在上面）；每层各有自己的
-        // 缓存条目（key 含 layer）。缺瓦片仍留灰底网格，抓取仍受 ≤4 并发 / 8s 超时 / 离线不发约束。
-        for (const PaintLayer &layer : paint_layers()) {
-            for (int ty = y0; ty <= y1; ++ty) {
-                if (ty < 0 || ty >= tile_count) {
-                    continue; // no vertical wrap on a slippy map
-                }
-                for (int tx = x0; tx <= x1; ++tx) {
-                    const TileKey key{layer.source->id, layer.layer, zoom,
-                                      wrap_tile_x(tx, tile_count), ty};
-                    const int sx = int(std::lround(tx * double(kTileSize) - left));
-                    const int sy = int(std::lround(ty * double(kTileSize) - top));
-                    if (const QPixmap *const tile = find_tile(key)) {
-                        painter.drawPixmap(sx, sy, kTileSize, kTileSize, *tile);
-                    } else {
-                        queue_tile(key); // R-221：paint 只登记；flush 在 paint 外发请求
-                                         // （no-op when offline / already pending / 4 in flight）
-                    }
-                }
-            }
-        }
+        st.layers = paint_layers();
     }
-
-    // M6-T6 结果图钉（§4.4）：实心圆 + 编号气泡，坐标管线和主钉一致（WGS-84 → datum → world
-    // → screen）。画在瓦片之上、主 marker 之下 —— 主钉最后画，恒在钉堆顶层。
-    if (!result_pins.empty()) {
-        painter.save();
-        painter.setRenderHint(QPainter::Antialiasing, true);
-        QFont pin_font = painter.font();
-        pin_font.setPointSize(kPinBubblePointSize);
-        painter.setFont(pin_font);
-        const QFontMetrics pin_metrics(pin_font);
-        const QColor accent(0x2b, 0x6c, 0xb0); // 中性强调色
-        for (const Pin &pin : result_pins) {
-            const std::pair<double, double> datum = wgs_to_datum(pin.lat, pin.lon);
-            const QPointF pos = world_to_screen(latlon_to_world(datum.first, datum.second, zoom));
-            painter.setPen(Qt::NoPen);
-            painter.setBrush(accent);
-            painter.drawEllipse(pos, double(kPinRadius), double(kPinRadius));
-            const QString full = pin.label.isEmpty() ? QString::number(pin.index) : pin.label;
-            const QString text = pin_metrics.elidedText(full, Qt::ElideRight, kPinBubbleTextMax);
-            // R-218：气泡贴钉的**逻辑首侧**（LTR=钉右 / RTL=钉左）；钉心（地理投影）不镜像
-            const double bubble_w = pin_metrics.horizontalAdvance(text) + 8;
-            const double bubble_x = q->layoutDirection() == Qt::RightToLeft
-                                        ? pos.x() - kPinRadius - 1 - bubble_w
-                                        : pos.x() + kPinRadius + 1;
-            const QRectF bubble(bubble_x, pos.y() - kPinRadius - pin_metrics.height() - 2, bubble_w,
-                                pin_metrics.height() + 2);
-            painter.setPen(QPen(accent, 1));
-            painter.setBrush(QColor(255, 255, 255, 230)); // 白底：卫星影像上仍可读
-            painter.drawRoundedRect(bubble, 3, 3);
-            painter.setPen(accent);
-            painter.drawText(bubble, Qt::AlignCenter, text);
-        }
-        painter.restore();
+    st.find_tile = [this](const TileKey &key) { return find_tile(key); };
+    st.on_missing = [this](const TileKey &key) {
+        queue_tile(key); // R-221：paint 只登记；flush 在 paint 外发请求
+                         // （no-op when offline / already pending / 4 in flight）
+    };
+    st.pins.reserve(result_pins.size());
+    for (const Pin &pin : result_pins) {
+        const std::pair<double, double> datum = wgs_to_datum(pin.lat, pin.lon);
+        st.pins.push_back(
+            RenderPin{world_to_screen(latlon_to_world(datum.first, datum.second, zoom)), pin.label,
+                      pin.index});
     }
-
-    // Marker last (WGS-84 -> datum -> world -> screen).
+    st.marker_set = marker_set;
     if (marker_set) {
         const std::pair<double, double> datum = wgs_to_datum(marker_lat, marker_lon);
-        const QPointF pos = world_to_screen(latlon_to_world(datum.first, datum.second, zoom));
-        painter.setRenderHint(QPainter::Antialiasing, true);
-        painter.setPen(QPen(QColor(0xd0, 0x22, 0x22), 2));
-        painter.drawLine(QPointF(pos.x() - kMarkerRadius - kMarkerArm, pos.y()),
-                         QPointF(pos.x() + kMarkerRadius + kMarkerArm, pos.y()));
-        painter.drawLine(QPointF(pos.x(), pos.y() - kMarkerRadius - kMarkerArm),
-                         QPointF(pos.x(), pos.y() + kMarkerRadius + kMarkerArm));
-        painter.drawEllipse(pos, double(kMarkerRadius), double(kMarkerRadius));
-        painter.setRenderHint(QPainter::Antialiasing, false);
+        st.marker_pos = world_to_screen(latlon_to_world(datum.first, datum.second, zoom));
     }
-
-    // M6-T12：左下比例尺（§5.3）—— 与右下版权行同在瓦片/图钉/主钉之上，互为左右角标。
-    draw_scale_bar(painter, h);
-
-    // Bottom-right credit label —— 文案单源 = 有效源的 attribution（D1：唯一定义处在 layers.cpp；
-    // 卫星/混合回退到 esri 影像时报 esri 版权）。§4.1：卫星底图偏暗，白底 α190 保留可读性。
+    // 版权行文案单源 = 有效源的 attribution（D1：唯一定义处在 layers.cpp；卫星/混合回退到
+    // esri 影像时报 esri 版权）。
     const TileSource *const credit_source = select_source(tile_style_);
-    const QString credit = credit_source != nullptr ? credit_source->attribution : QString();
-    if (!credit.isEmpty()) {
-        QFont font = painter.font();
-        font.setPointSize(kHudPointSize);
-        painter.setFont(font);
-        const QFontMetrics metrics(font);
-        const QRect box =
-            mirror_x(q, QRect(w - metrics.horizontalAdvance(credit) - 8, h - metrics.height() - 6,
-                              metrics.horizontalAdvance(credit) + 6, metrics.height() + 2));
-        painter.fillRect(box, QColor(255, 255, 255, 190));
-        painter.setPen(QColor(0x40, 0x40, 0x40));
-        painter.drawText(box, Qt::AlignCenter, credit);
-    }
+    st.credit = credit_source != nullptr ? credit_source->attribution : QString();
+    QPainter painter(q);
+    paint_map(painter, st);
 }
 
 bool MapWidget::Impl::on_mouse_press(QMouseEvent *event) {

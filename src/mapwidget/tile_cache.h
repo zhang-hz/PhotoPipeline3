@@ -22,6 +22,11 @@
 
 namespace pp::map {
 
+// M6-T5 缓存 key 的 layer 维度词表（§4.1）：路网 / 影像 / Hybrid 标注叠加层。
+inline constexpr const char *kLayerRoad = "road";
+inline constexpr const char *kLayerSatellite = "satellite";
+inline constexpr const char *kLayerLabel = "label";
+
 // 缓存 key。namespace 域（非匿名）：qHash 须经 ADL 被 QHash 找到（原 mapwidget.cpp 同因）。
 struct TileKey {
     QString source; // 瓦片源 id："amap" | "osm" | "esri"

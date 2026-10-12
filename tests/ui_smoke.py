@@ -235,6 +235,15 @@ GUI-R2（docs/gui-review-0.3.0-r2.md 可视化排查回归）:
   * 判据硬判（smoke_fail）；行内 `checked=N bad=M` 与取证值由 C++ 侧给出。既有前缀清单零改动、
     冻结末行不变（截图仍 12 张）。
   * **本节为缺陷回归**：0.3.0 现状会红 —— 每条红即报告里对应问题的活证据。
+
+M7-R2.2-G1（G1 探针总集与 Linux ui_smoke 定点修复）:
+  * 追加 `G1_LINE_PREFIXES` 十一行齐备断言（只增；冻结末行/既有清单零改动）：
+    wave-3/4 常驻探针行收编进回归通道（rtl-mirror / check-all / context-menu / run-reason /
+    folds / intake / classify-filter / edit-target / settings-tabs-light —— 此前只在 C++
+    smoke_fail 硬判、python 侧无「行齐备」防线 ⇒ 断言被静默跳过不可见；即「context-menu /
+    check-all 补强」与 R-152/153 回归通道的齐备性补强），并随本批新增
+    `format-roundtrip`（R-189/192 format_selection_model 往返）与 `rtl-deep`
+    （R-218 深水区：QLabel 数值列右对齐 RTL 随向定论）两行。
 """
 
 import os
@@ -399,6 +408,22 @@ M6T13_LINE_PREFIXES = (
     'UI-SMOKE meta-map-expand:',
 )
 
+# M7-R2.2-G1（G1 探针总集）自检行（前缀匹配，缺任一 → FAIL）：wave-3/4 常驻探针行齐备性
+# 收编 + 本批新增两行（format-roundtrip / rtl-deep）；见文件头 M7-R2.2-G1 节。
+G1_LINE_PREFIXES = (
+    'UI-SMOKE rtl-mirror:',
+    'UI-SMOKE check-all:',
+    'UI-SMOKE context-menu:',
+    'UI-SMOKE run-reason:',
+    'UI-SMOKE folds:',
+    'UI-SMOKE intake:',
+    'UI-SMOKE classify-filter:',
+    'UI-SMOKE edit-target:',
+    'UI-SMOKE settings-tabs-light:',
+    'UI-SMOKE format-roundtrip:',
+    'UI-SMOKE rtl-deep:',
+)
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 build_dir = sys.argv[1] if len(sys.argv) > 1 else 'build/release-dev'
@@ -452,6 +477,7 @@ def main():
         gui_r2_seen = set()
         m6t9_seen = set()
         m6t13_seen = set()
+        g1_seen = set()
         with open(log_path, 'w', encoding='utf-8', newline='') as log_fp:
             for line in proc.stdout:
                 sys.stdout.write(line)
@@ -504,6 +530,9 @@ def main():
                 for prefix in M6T13_LINE_PREFIXES:
                     if line.startswith(prefix):
                         m6t13_seen.add(prefix)
+                for prefix in G1_LINE_PREFIXES:
+                    if line.startswith(prefix):
+                        g1_seen.add(prefix)
         status = proc.wait()
 
         if status != 0:
@@ -587,6 +616,11 @@ def main():
         missing = [p for p in M6T13_LINE_PREFIXES if p not in m6t13_seen]
         if missing:
             print('ui_smoke: FAIL (missing M6-T13 map-expand self-check lines: {})'.format(
+                ', '.join(missing)), file=sys.stderr)
+            return 1
+        missing = [p for p in G1_LINE_PREFIXES if p not in g1_seen]
+        if missing:
+            print('ui_smoke: FAIL (missing G1 probe self-check lines: {})'.format(
                 ', '.join(missing)), file=sys.stderr)
             return 1
         print('UI-SMOKE pass')

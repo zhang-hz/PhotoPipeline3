@@ -11,6 +11,7 @@
 
 #include "ui/contextmenu.h"    // UX-1：卡片右键菜单面（词表单源）
 #include "ui/leading_indent.h" // R-218：逻辑边距单源
+#include "ui/meta_state.h" // M7R22G1-3：meta::RatingStars/DeltaSpin/unit_slot/note_label（rtl-mirror 四查）
 #include <QAbstractScrollArea>
 #include <QComboBox>
 #include <QContextMenuEvent>
@@ -18,6 +19,7 @@
 #include <QKeySequence>
 #include <QLabel>
 #include <QMenu>
+#include <QPainter>
 #include <QToolButton>
 
 #include <algorithm>
@@ -4940,6 +4942,107 @@ void expect_card_menu(const QString &tag, QWidget *host, const QString &first_te
     menu->close();
 }
 
+// —— G1 探针总集公共件（M7R22G1-3/-4）：渲染取样与墨迹盒 ——
+// （源 = build/m7r21-f2/rtl_probe.cpp 临时探针同款常驻化；只渲染**局部实例**，不触主窗）
+// 出参一律结构化（同型出参对会被 bugprone-easily-swappable-parameters 点名，F4 先例 Tally）。
+
+// 自由函数版 pump（Impl::pump 同体；G1 探针是自由函数，不入 mainwindow_impl.h）
+void smoke_pump(int ms) {
+    QElapsedTimer timer;
+    timer.start();
+    do {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        QThread::msleep(1);
+    } while (timer.elapsed() < ms);
+}
+
+QImage smoke_render_widget(QWidget &w) {
+    w.ensurePolished();
+    QImage img(w.size(), QImage::Format_ARGB32);
+    img.fill(Qt::white);
+    QPainter painter(&img);
+    w.render(&painter);
+    painter.end();
+    return img;
+}
+
+struct SmokeSpan {
+    int lo = -1;
+    int hi = -1;
+    bool found = false;
+};
+
+struct SmokeBox {
+    int x0 = -1;
+    int y0 = -1;
+    int x1 = -1;
+    int y1 = -1;
+    bool found = false;
+};
+
+// 星形着色像素（accent ±40 通道带）的水平包围盒
+void smoke_accent_bbox(const QImage &img, const QColor &accent, SmokeSpan *out) {
+    SmokeSpan span;
+    for (int y = 0; y < img.height(); ++y) {
+        for (int x = 0; x < img.width(); ++x) {
+            const QColor c = img.pixelColor(x, y);
+            if (std::abs(c.red() - accent.red()) < 40 &&
+                std::abs(c.green() - accent.green()) < 40 &&
+                std::abs(c.blue() - accent.blue()) < 40 && c.alpha() > 200) {
+                if (!span.found || x < span.lo)
+                    span.lo = x;
+                if (!span.found || x > span.hi)
+                    span.hi = x;
+                span.found = true;
+            }
+        }
+    }
+    if (out != nullptr)
+        *out = span;
+}
+
+// 近白像素（HUD 比例尺盒）的包围盒
+void smoke_white_bbox(const QImage &img, SmokeBox *out) {
+    SmokeBox box;
+    for (int y = 0; y < img.height(); ++y) {
+        for (int x = 0; x < img.width(); ++x) {
+            const QColor c = img.pixelColor(x, y);
+            if (c.red() >= 235 && c.green() >= 235 && c.blue() >= 235) {
+                if (!box.found || x < box.x0)
+                    box.x0 = x;
+                if (!box.found || y < box.y0)
+                    box.y0 = y;
+                if (!box.found || x > box.x1)
+                    box.x1 = x;
+                if (!box.found || y > box.y1)
+                    box.y1 = y;
+                box.found = true;
+            }
+        }
+    }
+    if (out != nullptr)
+        *out = box;
+}
+
+// 文本墨迹盒（非白像素）的水平包围盒 —— rtl-deep 的渲染取样
+void smoke_ink_span(const QImage &img, SmokeSpan *out) {
+    SmokeSpan span;
+    for (int y = 0; y < img.height(); ++y) {
+        for (int x = 0; x < img.width(); ++x) {
+            const QColor c = img.pixelColor(x, y);
+            if (c.red() < 235 || c.green() < 235 || c.blue() < 235) {
+                if (!span.found || x < span.lo)
+                    span.lo = x;
+                if (!span.found || x > span.hi)
+                    span.hi = x;
+                span.found = true;
+            }
+        }
+    }
+    if (out != nullptr)
+        *out = span;
+}
+
 } // namespace
 
 // —— R-218：RTL 逻辑坐标/镜像（rtl-mirror）：镜像关系 + 逻辑边距随向，LTR 逐字节不变 ——
@@ -4995,7 +5098,418 @@ void MainWindow::Impl::smoke_probe_rtl_mirror() {
         m = scratch.contentsMargins();
         expect(m.left() == 0 && m.right() == 18, QStringLiteral("行首缩进 RTL 镜像"));
     }
-    std::printf("UI-SMOKE rtl-mirror: checked=%d bad=%d\n", checked, bad);
+    // —— 扩充四查（M7R22G1-3；F2⑤-1 常驻化：build/m7r21-f2/rtl_probe.cpp 临时探针的四查）——
+    //   ① stars-mirror：RatingStars 星位（逻辑首端）LTR↔RTL 水平镜像；
+    //   ② hud-mirror：MapWidget 自绘 HUD 比例尺盒镜像（盒宽随字体回退变化 ⇒ 判据全为
+    //      关系式 + 左缘锚，不钉绝对宽；F2 实测注记「盒宽受缺失字体回退放大」）；
+    //   ③ logical-align 读回：DeltaSpin/unit_slot/note_label 的逻辑对齐旗标；
+    //   ④ geom-mirror：PageMeta 固定宽控件（DeltaSpin）行内 LTR↔RTL 镜像。
+    //  R-044 / M7R22G1-3 容差：像素/几何镜像判据 ±2px（字体敏感几何档）；关系式仍钉语义。
+    //  四查全部用**局部实例**（RatingStars/MapWidget/PageMeta/scratch），不触主窗布局方向。
+    int sub_stars_bad = 0;
+    int sub_hud_bad = 0;
+    int sub_align_bad = 0;
+    int sub_geom_bad = 0;
+    const auto sub = [&](bool ok, int *bucket, const QString &what) {
+        ++checked;
+        if (!ok) {
+            ++bad;
+            ++*bucket;
+            smoke_fail(MainWindow::tr("rtl-mirror：%1").arg(what));
+        }
+    };
+    { // ① stars-mirror：rating=1 → 仅逻辑首星着色；着色盒 = LTR 盒的水平镜像
+        meta::RatingStars ltr;
+        meta::RatingStars rtl;
+        ltr.setLayoutDirection(Qt::LeftToRight);
+        rtl.setLayoutDirection(Qt::RightToLeft);
+        ltr.set_tokens(tokens);
+        rtl.set_tokens(tokens);
+        ltr.set_rating(1);
+        rtl.set_rating(1);
+        ltr.resize(ltr.sizeHint());
+        rtl.resize(rtl.sizeHint());
+        const QImage a = smoke_render_widget(ltr);
+        const QImage b = smoke_render_widget(rtl);
+        SmokeSpan sa;
+        SmokeSpan sb;
+        smoke_accent_bbox(a, tokens.accent, &sa);
+        smoke_accent_bbox(b, tokens.accent, &sb);
+        const int ww = a.width();
+        const bool ok = sa.found && sb.found && std::abs(sb.lo - (ww - 1 - sa.hi)) <= 2 &&
+                        std::abs(sb.hi - (ww - 1 - sa.lo)) <= 2 && std::abs(ww - b.width()) <= 2;
+        sub(ok, &sub_stars_bad,
+            QStringLiteral("stars-mirror w=%1 ltr=[%2,%3] rtl=[%4,%5] mirror=[%6,%7]")
+                .arg(ww)
+                .arg(sa.lo)
+                .arg(sa.hi)
+                .arg(sb.lo)
+                .arg(sb.hi)
+                .arg(ww - 1 - sa.hi)
+                .arg(ww - 1 - sa.lo));
+    }
+    { // ② hud-mirror：离线 MapWidget（provider 空 = 仅比例尺盒；banner 隐藏不判）
+        pp::map::MapWidget ltr;
+        pp::map::MapWidget rtl;
+        ltr.set_offline(true);
+        rtl.set_offline(true);
+        for (QLabel *l : ltr.findChildren<QLabel *>())
+            l->hide();
+        for (QLabel *l : rtl.findChildren<QLabel *>())
+            l->hide();
+        ltr.resize(400, 300);
+        rtl.resize(400, 300);
+        ltr.setLayoutDirection(Qt::LeftToRight);
+        rtl.setLayoutDirection(Qt::RightToLeft);
+        const QImage a = smoke_render_widget(ltr);
+        const QImage b = smoke_render_widget(rtl);
+        SmokeBox ba;
+        SmokeBox bb;
+        smoke_white_bbox(a, &ba);
+        smoke_white_bbox(b, &bb);
+        const bool ok = ba.found && bb.found && std::abs(bb.x0 - (400 - 1 - ba.x1)) <= 2 &&
+                        std::abs(bb.x1 - (400 - 1 - ba.x0)) <= 2 && std::abs(bb.y0 - ba.y0) <= 2 &&
+                        std::abs(bb.y1 - ba.y1) <= 2 &&
+                        std::abs((ba.x1 - ba.x0) - (bb.x1 - bb.x0)) <= 2 &&
+                        std::abs(ba.x0 - 6) <= 2 && std::abs(bb.x1 - (400 - 1 - 6)) <= 2;
+        sub(ok, &sub_hud_bad,
+            QStringLiteral("hud-mirror box ltr=[%1,%2,%3,%4] rtl=[%5,%6,%7,%8]")
+                .arg(ba.x0)
+                .arg(ba.y0)
+                .arg(ba.x1)
+                .arg(ba.y1)
+                .arg(bb.x0)
+                .arg(bb.y0)
+                .arg(bb.x1)
+                .arg(bb.y1));
+    }
+    { // ③ logical-align 读回：对齐一律逻辑旗标（F2 对齐逻辑化的存量读回）
+        meta::DeltaSpin spin(nullptr, QStringLiteral("probe-rtl-spin"));
+        sub(spin.alignment() == (Qt::AlignTrailing | Qt::AlignVCenter), &sub_align_bad,
+            QStringLiteral("DeltaSpin 对齐 = AlignTrailing（got 0x%1）")
+                .arg(unsigned(spin.alignment()), 0, 16));
+        QLabel *unit = meta::unit_slot(nullptr, QStringLiteral("u"));
+        sub(unit->alignment() == (Qt::AlignLeading | Qt::AlignVCenter), &sub_align_bad,
+            QStringLiteral("unit_slot 对齐 = AlignLeading（got 0x%1）")
+                .arg(unsigned(unit->alignment()), 0, 16));
+        meta::ElidedLabel *note = meta::note_label(nullptr);
+        sub(note->alignment() == (Qt::AlignLeading | Qt::AlignVCenter), &sub_align_bad,
+            QStringLiteral("note_label 对齐 = AlignLeading（got 0x%1）")
+                .arg(unsigned(note->alignment()), 0, 16));
+        delete unit;
+        delete note;
+    }
+    { // ④ geom-mirror：PageMeta 固定宽控件（DeltaSpin）行内镜像（自相对关系，±2px）
+        PageMeta ltr;
+        PageMeta rtl;
+        ltr.set_tokens(tokens);
+        rtl.set_tokens(tokens);
+        ltr.resize(800, 1200);
+        rtl.resize(800, 1200);
+        ltr.setLayoutDirection(Qt::LeftToRight);
+        rtl.setLayoutDirection(Qt::RightToLeft);
+        const auto activate_all = [](QWidget &root) {
+            if (root.layout() != nullptr)
+                root.layout()->activate();
+            for (QWidget *child : root.findChildren<QWidget *>()) {
+                if (child->layout() != nullptr)
+                    child->layout()->activate();
+            }
+        };
+        activate_all(ltr);
+        activate_all(rtl);
+        pump(60);
+        activate_all(ltr);
+        activate_all(rtl);
+        const char *names[] = {"pp-meta-delta-years", "pp-meta-delta-hours"};
+        for (const char *name : names) {
+            const QString qn = QString::fromLatin1(name);
+            QWidget *wl = ltr.findChild<QWidget *>(qn);
+            QWidget *wr = rtl.findChild<QWidget *>(qn);
+            if (wl == nullptr || wr == nullptr) {
+                sub(false, &sub_geom_bad, QStringLiteral("geom-mirror %1 缺失").arg(qn));
+                continue;
+            }
+            const QRect gl = wl->geometry();
+            const QRect gr = wr->geometry();
+            const int row_w = wl->parentWidget() != nullptr ? wl->parentWidget()->width() : -1;
+            const int row_wr = wr->parentWidget() != nullptr ? wr->parentWidget()->width() : -1;
+            const int mirrored_x = row_w - gl.x() - gl.width();
+            sub(row_w == row_wr && std::abs(gr.x() - mirrored_x) <= 2 && gr.width() == gl.width() &&
+                    gr.y() == gl.y() && gr.height() == gl.height(),
+                &sub_geom_bad,
+                QStringLiteral("geom-mirror %1 ltr=(%2,%3 %4x%5 row=%6) rtl=(%7,%8 %9x%10 row=%11) "
+                               "mirror-x=%12")
+                    .arg(qn)
+                    .arg(gl.x())
+                    .arg(gl.y())
+                    .arg(gl.width())
+                    .arg(gl.height())
+                    .arg(row_w)
+                    .arg(gr.x())
+                    .arg(gr.y())
+                    .arg(gr.width())
+                    .arg(gr.height())
+                    .arg(row_wr)
+                    .arg(mirrored_x));
+        }
+    }
+    std::printf("UI-SMOKE rtl-mirror: checked=%d bad=%d stars=%d hud=%d align=%d geom=%d\n",
+                checked, bad, sub_stars_bad, sub_hud_bad, sub_align_bad, sub_geom_bad);
+    std::fflush(stdout);
+}
+
+// —— R-189/192：format_selection_model 往返（M7R22G1-5；m7r2-e2 ⑤-5 / F3 ⑤-1 常驻化）——
+//   「4 sync 坍缩为 reproject」的 UI 级往返：任一 toggle 后四面一致 = ①磁贴勾选 ②页签序
+//   （pp-format-page-<id> 序）③现役投影（PageOutput::current_format）④现役表单归位
+//   （pp-param-form 挂在现役页）。自由函数（探针声明不入 mainwindow_impl.h，取数面 = 显式
+//   参数）；操作走磁贴 click = 真实用户路径；结束归位初态，不留残态给后续探针。
+namespace {
+
+struct FmtSnap {
+    QStringList checked; // 磁贴勾选集（磁贴规范序）
+    QStringList tabs;    // 页签 id 序（pp-format-page-<id>）
+    QString active;      // current_format()
+    QString form_page;   // 现役表单所在页 id（"" = 未找到）
+    QString tab_current; // 现役页签 id
+};
+
+FmtSnap fmt_snap(PageOutput *page_output) {
+    FmtSnap s;
+    if (page_output == nullptr)
+        return s;
+    const QWidget *host = page_output->findChild<QWidget *>(QStringLiteral("pp-tiles"));
+    if (host != nullptr) {
+        for (const QAbstractButton *tile : host->findChildren<QAbstractButton *>()) {
+            const QString name = tile->objectName();
+            if (!name.startsWith(QStringLiteral("pp-format-")))
+                continue;
+            if (tile->isChecked())
+                s.checked << name.mid(10);
+        }
+    }
+    const auto *tabs = page_output->findChild<QTabWidget *>(QStringLiteral("pp-format-tabs"));
+    if (tabs != nullptr) {
+        for (int i = 0; i < tabs->count(); ++i) {
+            const QWidget *page = tabs->widget(i);
+            const QString n = page != nullptr ? page->objectName() : QString();
+            if (n.startsWith(QStringLiteral("pp-format-page-"))) {
+                s.tabs << n.mid(15);
+                if (i == tabs->currentIndex())
+                    s.tab_current = n.mid(15);
+            }
+        }
+    }
+    s.active = page_output->current_format();
+    const QWidget *form = page_output->findChild<QWidget *>(QStringLiteral("pp-param-form"));
+    for (const QWidget *p = form != nullptr ? form->parentWidget() : nullptr; p != nullptr;
+         p = p->parentWidget()) {
+        const QString n = p->objectName();
+        if (n.startsWith(QStringLiteral("pp-format-page-"))) {
+            s.form_page = n.mid(15);
+            break;
+        }
+    }
+    return s;
+}
+
+} // namespace
+
+void probe_format_roundtrip(PageOutput *page_output,
+                            const std::function<void(const QString &)> &fail) {
+    int checked = 0;
+    int bad = 0;
+    const auto expect = [&](bool ok, const QString &what) {
+        ++checked;
+        if (!ok) {
+            ++bad;
+            fail(QStringLiteral("format-roundtrip：%1").arg(what));
+        }
+    };
+    if (page_output == nullptr) {
+        fail(QStringLiteral("format-roundtrip：输出页未就绪"));
+        std::printf("UI-SMOKE format-roundtrip: checked=1 bad=1\n");
+        std::fflush(stdout);
+        return;
+    }
+    const auto tile_of = [page_output](const QString &id) -> QAbstractButton * {
+        QWidget *host = page_output->findChild<QWidget *>(QStringLiteral("pp-tiles"));
+        return host != nullptr
+                   ? host->findChild<QAbstractButton *>(QStringLiteral("pp-format-") + id)
+                   : nullptr;
+    };
+    const auto first_unchecked = [page_output]() {
+        QString id;
+        const QWidget *host = page_output->findChild<QWidget *>(QStringLiteral("pp-tiles"));
+        if (host != nullptr) {
+            for (const QAbstractButton *tile : host->findChildren<QAbstractButton *>()) {
+                const QString name = tile->objectName();
+                if (name.startsWith(QStringLiteral("pp-format-")) && !tile->isChecked()) {
+                    id = name.mid(10);
+                    break;
+                }
+            }
+        }
+        return id;
+    };
+    const auto expect_consistent = [&](const FmtSnap &s, const QString &step) {
+        expect(s.tabs == s.checked,
+               QStringLiteral("%1 页签序==磁贴勾选集（tabs %2 vs checked %3）")
+                   .arg(step, s.tabs.join(QLatin1Char(',')), s.checked.join(QLatin1Char(','))));
+        expect(!s.checked.isEmpty() && s.tab_current == s.active && s.form_page == s.active,
+               QStringLiteral("%1 现役投影一致（active %2 tab %3 form %4）")
+                   .arg(step, s.active, s.tab_current, s.form_page));
+    };
+    const FmtSnap s0 = fmt_snap(page_output);
+    expect_consistent(s0, QStringLiteral("初态"));
+    const QString x = first_unchecked();
+    expect(!x.isEmpty(), QStringLiteral("存在未勾选磁贴（可 toggle）"));
+    if (x.isEmpty()) {
+        std::printf("UI-SMOKE format-roundtrip: checked=%d bad=%d\n", checked, bad);
+        std::fflush(stdout);
+        return;
+    }
+    // 步骤 1：toggle X 开 → R-189（现役 = 新开项）+ 四面一致
+    if (QAbstractButton *tile = tile_of(x))
+        tile->click();
+    smoke_pump(80);
+    FmtSnap s1 = fmt_snap(page_output);
+    expect(s1.checked.contains(x) && s1.checked.size() == s0.checked.size() + 1,
+           QStringLiteral("toggle 开 %1 入集（%2）").arg(x, s1.checked.join(QLatin1Char(','))));
+    expect(s1.active == x, QStringLiteral("R-189 开 %1 后现役=新开项（got %2）").arg(x, s1.active));
+    expect_consistent(s1, QStringLiteral("开 %1 后").arg(x));
+    // 步骤 2：再开 Y → 现役 = Y；步骤 3：关现役 Y → 现役落点取证 + 四面一致
+    const QString y = first_unchecked();
+    QString off_active;
+    QString off_front;
+    if (!y.isEmpty()) {
+        if (QAbstractButton *tile = tile_of(y))
+            tile->click();
+        smoke_pump(80);
+        const FmtSnap s2 = fmt_snap(page_output);
+        expect(s2.active == y,
+               QStringLiteral("R-189 开 %1 后现役=新开项（got %2）").arg(y, s2.active));
+        expect_consistent(s2, QStringLiteral("开 %1 后").arg(y));
+        if (QAbstractButton *tile = tile_of(y))
+            tile->click();
+        smoke_pump(80);
+        const FmtSnap s3 = fmt_snap(page_output);
+        expect(!s3.checked.contains(y) && !s3.tabs.contains(y),
+               QStringLiteral("关 %1 出集（%2）").arg(y, s3.checked.join(QLatin1Char(','))));
+        // 关现役后的现役落点：R-266 模型契约 =「现役前移首位（规范序首项）」（format_selection_
+        // model.h 头注；模型真值表 tests/unit/test_smoke.cpp 钉），UI 实际 = 页签滑动邻接位
+        // （remove_tab → currentChanged 末写者覆盖；R-189 重排 toggle_format 顺序后形成 ——
+        // 751f479 的旧序是 remove_tab 后显式 front 赋值，末写者 = front）。两者分歧 = 跨界
+        // 发现（M7R22G1-6，交 page_output 属主裁定）：本探针按 e2⑤-5 规格只判「四面一致 +
+        // 现役 ∈ 剩余集合」，两读数（off-active/off-front）进取证行，不把争议语义钉成断言。
+        off_active = s3.active;
+        off_front = s3.tabs.isEmpty() ? QStringLiteral("<空>") : s3.tabs.first();
+        expect(s3.tabs.contains(s3.active),
+               QStringLiteral("关现役后现役 ∈ 剩余集合（got %1 tabs %2 front %3）")
+                   .arg(s3.active, s3.tabs.join(QLatin1Char(',')), off_front));
+        expect_consistent(s3, QStringLiteral("关 %1 后").arg(y));
+    }
+    // 归位：toggle X 关 → 集合回到初态；现役按初态回拨（页签点击 = 用户路径）
+    if (QAbstractButton *tile = tile_of(x))
+        tile->click();
+    smoke_pump(80);
+    FmtSnap fin = fmt_snap(page_output);
+    if (fin.active != s0.active) {
+        if (auto *tabs = page_output->findChild<QTabWidget *>(QStringLiteral("pp-format-tabs"))) {
+            for (int i = 0; i < tabs->count(); ++i) {
+                const QWidget *pg = tabs->widget(i);
+                if (pg != nullptr &&
+                    pg->objectName() == QStringLiteral("pp-format-page-") + s0.active) {
+                    tabs->setCurrentIndex(i);
+                    break;
+                }
+            }
+        }
+        smoke_pump(80);
+        fin = fmt_snap(page_output);
+    }
+    expect(fin.checked == s0.checked && fin.tabs == s0.tabs && fin.active == s0.active,
+           QStringLiteral("归位初态（checked %1 vs %2）")
+               .arg(fin.checked.join(QLatin1Char(',')), s0.checked.join(QLatin1Char(','))));
+    std::printf("UI-SMOKE format-roundtrip: checked=%d bad=%d x=%s y=%s off-active=%s front=%s\n",
+                checked, bad, qUtf8Printable(x), qUtf8Printable(y), qUtf8Printable(off_active),
+                qUtf8Printable(off_front));
+    std::fflush(stdout);
+}
+
+// —— R-218 深水区（M7R22G1-4；m7r2-e2 ⑤-6 常驻化）：QLabel 数值列右对齐在 RTL 下的随向
+//   行为**定论** —— Qt 标准控件 QLabel（及继承其 paintEvent 的 formkit::ElidedLabel）
+//   渲染走 QStyle::visualAlignment ⇒ 左/右对齐**自动随向镜像**，无需显式 visualAlignment。
+//   判据 = 同一对齐的 LTR/RTL 字形墨迹盒互为水平镜像（±2px，R-044 字体敏感几何容差）：
+//   三档（QLabel AlignRight / QLabel AlignLeft / ElidedLabel AlignRight）逐档钉住 +
+//   应用数值列（pp-run-size-*/speed-*/time-*）旗标读回（右对齐 + QLabel 血统 ⇒ 随定论镜像）。
+void probe_rtl_deep(MainWindow *w, const std::function<void(const QString &)> &fail) {
+    int checked = 0;
+    int bad = 0;
+    const auto expect = [&](bool ok, const QString &what) {
+        ++checked;
+        if (!ok) {
+            ++bad;
+            fail(QStringLiteral("rtl-deep：%1").arg(what));
+        }
+    };
+    // 同一标签在 LTR/RTL 下渲染取样：墨迹盒互为水平镜像（±2px）
+    const auto mirror_case = [&](const QString &tag, QLabel &label, Qt::Alignment align) {
+        label.setAlignment(align | Qt::AlignVCenter);
+        label.setFixedSize(200, 40);
+        SmokeSpan ltr;
+        SmokeSpan rtl;
+        label.setLayoutDirection(Qt::LeftToRight);
+        smoke_ink_span(smoke_render_widget(label), &ltr);
+        label.setLayoutDirection(Qt::RightToLeft);
+        smoke_ink_span(smoke_render_widget(label), &rtl);
+        expect(ltr.found && rtl.found && std::abs(rtl.lo - (200 - 1 - ltr.hi)) <= 2 &&
+                   std::abs(rtl.hi - (200 - 1 - ltr.lo)) <= 2,
+               QStringLiteral("%1 墨迹盒 LTR↔RTL 镜像（ltr=[%2,%3] rtl=[%4,%5] mirror=[%6,%7]）")
+                   .arg(tag)
+                   .arg(ltr.lo)
+                   .arg(ltr.hi)
+                   .arg(rtl.lo)
+                   .arg(rtl.hi)
+                   .arg(200 - 1 - ltr.hi)
+                   .arg(200 - 1 - ltr.lo));
+    };
+    {
+        QLabel label;
+        label.setText(QStringLiteral("8888"));
+        mirror_case(QStringLiteral("QAlignRight"), label, Qt::AlignRight);
+    }
+    {
+        QLabel label;
+        label.setText(QStringLiteral("8888"));
+        mirror_case(QStringLiteral("QAlignLeft"), label, Qt::AlignLeft);
+    }
+    {
+        meta::ElidedLabel label;
+        label.setText(QStringLiteral("8888"));
+        mirror_case(QStringLiteral("EAlignRight"), label, Qt::AlignRight);
+    }
+    // 应用面读回：运行页数值列（右对齐）—— 结论（自动镜像）挂在同名控件族上
+    int cols = 0;
+    int cols_bad = 0;
+    if (w != nullptr) {
+        for (QLabel *label : w->findChildren<QLabel *>()) {
+            const QString name = label->objectName();
+            if (!(name.startsWith(QStringLiteral("pp-run-size-")) ||
+                  name.startsWith(QStringLiteral("pp-run-speed-")) ||
+                  name.startsWith(QStringLiteral("pp-run-time-"))))
+                continue;
+            ++cols;
+            if ((label->alignment() & Qt::AlignRight) == 0)
+                ++cols_bad;
+        }
+    }
+    expect(cols >= 1 && cols_bad == 0,
+           QStringLiteral("数值列旗标右对齐（cols=%1 bad=%2；QLabel 血统 ⇒ RTL 自动镜像，"
+                          "无需显式 visualAlignment）")
+               .arg(cols)
+               .arg(cols_bad));
+    std::printf("UI-SMOKE rtl-deep: checked=%d bad=%d cols=%d\n", checked, bad, cols);
     std::fflush(stdout);
 }
 
@@ -6129,6 +6643,14 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
     smoke_probe_class_filter();
     smoke_probe_edit_target();
     smoke_probe_settings_tabs_light();
+    // ---- M7-R2.2-G1 探针总集（format_selection_model 往返 / R-218 深水区）----
+    {
+        const std::function<void(const QString &)> g1_fail = [this](const QString &reason) {
+            smoke_fail(reason);
+        };
+        probe_format_roundtrip(page_output, g1_fail);
+        probe_rtl_deep(w, g1_fail);
+    }
 
     // ---- 对话框三连（构造 → show → processEvents → grab → close，绝不 exec）----
     { // 04-settings.png：设置对话框

@@ -33,3 +33,4 @@
 | `m7r2-e2-gates.md` | R2E2 | RTL 与结构拆分门禁读数（ctest 35/35、第 3 波 5 探针逐行、金样 20/20） |
 | `m7r2-gate-regression-reseed.md` | R2-gate | 回归基线重播种 132 行逐行归因（A1 nclx 精确信令）+ M7 窗口 4 次重播种上下文 |
 | `m7r2-gate.md` | R2G | R2 终门禁全量判据取证（format/build/ctest/ui-smoke/金样/tidy/回归/密钥 八项 + tidy 棘轮 fallout 修复 23 条清单 + 首跑瞬态回归 diff 归因） |
+| `temp_bug.png` | （评审证据图） | UX-7 原生三钮与自绘三钮同框复现图（`docs/ux-review-14.md` §7 现象证据；原在项目根，随评审件入库移入本目录） |

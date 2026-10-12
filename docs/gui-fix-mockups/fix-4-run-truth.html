@@ -1,0 +1,69 @@
+<!doctype html><html><head><meta charset="utf-8"><title>fix-4 运行页数据真实性</title><style>
+:root{--card:#fff;--card-bd:rgba(0,0,0,.08);--txt:#1b1c20;--txt2:#5d5f68;--txt3:#8b8d96;--acc:#0067c0;--acc-dim:rgba(0,103,192,.10);--acc-bd:rgba(0,103,192,.35);--ok:#1d7a3e;--ok-dim:rgba(29,122,62,.10);--ok-bd:rgba(29,122,62,.35);--warn:#9a6a00;--err:#c42b3a;--bad:#c94f5f;--bad-dim:rgba(201,79,95,.10);--bad-bd:rgba(201,79,95,.35);--ctl:#eef0f4;--ctl-bd:rgba(0,0,0,.12)}
+html,body{margin:0;width:1280px}
+body{font-family:"Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI",sans-serif;font-size:12.5px;color:var(--txt);background:linear-gradient(150deg,#e9ecf2,#e3e5ea 45%,#e7efe9)}
+.hd{padding:14px 22px 8px;display:flex;align-items:baseline;gap:10px}
+.hd h1{font-size:15px;margin:0}.hd .sub{color:var(--txt3);font-size:11px}
+.row{display:flex;gap:14px;padding:6px 22px 10px}
+.p{flex:1;background:var(--card);border:1px solid var(--card-bd);border-radius:8px;box-shadow:0 1px 4px rgba(16,24,40,.06);padding:12px 14px}
+.p h2{font-size:12.5px;margin:0 0 10px;display:flex;align-items:center;gap:8px}
+.tag{font-size:10px;font-weight:700;padding:1px 8px;border-radius:99px}
+.tag.bad{color:var(--bad);background:var(--bad-dim);border:1px solid var(--bad-bd)}
+.tag.good{color:var(--ok);background:var(--ok-dim);border:1px solid var(--ok-bd)}
+.note{font-size:10.5px;color:var(--txt2);margin-top:9px;line-height:1.6}.note b{color:var(--ok)}.note i{color:var(--bad);font-style:normal}
+.kv{display:grid;grid-template-columns:70px 1fr 70px 1fr;gap:6px 10px;color:var(--txt2);margin:6px 0}
+.kv .k{color:var(--txt3);text-align:right}
+.kv .v{color:#a9aab4}
+.kv .v.dark{color:var(--txt2)}
+.sum{font-size:11px;color:var(--txt3);border-top:1px dashed var(--ctl-bd);padding-top:8px;margin-top:8px}
+.pbar{height:8px;border-radius:99px;background:var(--ctl);overflow:hidden;display:flex;align-items:stretch;margin:5px 0}
+.pbar i{display:block;height:100%}
+.prow{display:flex;align-items:center;gap:10px;margin:9px 0}
+.prow .nm{width:56px;color:var(--txt2)}
+.prow .bar{flex:1}
+.prow .mt{width:150px;text-align:right;color:var(--txt3);font-size:11px;font-variant-numeric:tabular-nums}
+.logline{font-family:Consolas,monospace;font-size:11px;color:var(--txt2);background:#f6f7fa;border:1px solid var(--card-bd);border-radius:4px;padding:3px 8px;margin:4px 0;white-space:nowrap;overflow:hidden}
+.mark{border:1.5px solid var(--bad-bd);background:var(--bad-dim);border-radius:6px;padding:8px 10px}
+.mark-g{border:1.5px solid var(--ok-bd);background:var(--ok-dim);border-radius:6px;padding:8px 10px}
+</style></head><body>
+<div class="hd"><h1>修复示意 #4 · 运行页数据真实性（3×P0）</h1><span class="sub">已用时≠总耗时 · 0 字节绿成功 · 日志头尾矛盾 —— 依据 run-dark.png 定稿：进度条 8px r=99（实心=真实/斜纹=合成/绿=完成/红=失败）</span></div>
+<div class="row">
+
+<div class="p"><h2><span class="tag bad">现状</span> 运行总览 / 任务进度 / 日志尾</h2>
+  <div class="kv">
+    <span class="k">进度</span><span class="v dark">▬▬▬▬▬▬ 100%</span>
+    <span class="k">已用时</span><span class="v">00:00</span>
+    <span class="k">吞吐</span><span class="v">0.0 MB/s</span>
+    <span class="k">交错</span><span class="v">150 ms</span>
+    <span class="k">并行</span><span class="v">0 / 16 workers</span>
+    <span class="k">线程预算</span><span class="v">自适应（16 核）</span>
+    <span class="k">当前分配</span><span class="v">—</span><span></span>
+  </div>
+  <div class="sum">成功 1 · 失败 0 · 跳过 0 · 取消 0 · 总耗时 0.2 s · 吞吐 0.0 MB/s · 平均 159 ms/文件</div>
+  <div class="prow"><span class="nm">JXL</span><span class="bar"><span class="pbar"><i style="width:100%;background:#28a745"></i></span></span><span class="mt">1 KB&nbsp; 0.6× · 0.1s</span></div>
+  <div class="prow"><span class="nm">PNG</span><span class="bar"><span class="pbar"><i style="width:100%;background:#28a745"></i></span></span><span class="mt">0 KB&nbsp; 1.5× · 0.0s</span></div>
+  <div style="color:var(--txt3);font-size:11.5px;margin-top:6px">日志尾&nbsp;&nbsp;<span style="float:right">run-20260924-234158.log</span></div>
+  <div style="color:var(--txt3);font-size:11.5px">（尚无运行日志）</div>
+  <div class="note"><i>✗①</i> 已用时 00:00 与 总耗时 0.2 s 同屏矛盾 &nbsp; <i>✗②</i> PNG <b style="color:var(--bad)">0 KB</b> 却整条绿色成功 &nbsp; <i>✗③</i> 头部有日志名、内容"尚无运行日志" &nbsp; <i>✗④</i> "阶段权重+行级子进度"实现细节文案</div>
+</div>
+
+<div class="p"><h2><span class="tag good">建议</span> 单一指标源 / 异常输出警示 / 真实日志尾</h2>
+  <div class="kv">
+    <span class="k">进度</span><span class="v dark">▬▬▬▬▬▬ 2/2</span>
+    <span class="k">总耗时</span><span class="v dark">0.2 s</span>
+    <span class="k">吞吐</span><span class="v dark">4.2 MB/s</span>
+    <span class="k">平均</span><span class="v dark">159 ms/文件</span>
+    <span class="k">并行</span><span class="v dark">4 / 16</span>
+    <span class="k">交错</span><span class="v dark">150 ms</span>
+    <span class="k">线程预算</span><span class="v dark">自动（16 核）</span>
+    <span class="k">当前分配</span><span class="v dark">已完成 · 全部释放</span>
+  </div>
+  <div class="sum">成功 2 · 失败 0 · 跳过 0 · 取消 0 &nbsp;·&nbsp; "已用时"仅运行中显示（倒计时态）</div>
+  <div class="prow"><span class="nm">JXL</span><span class="bar"><span class="pbar"><i style="width:100%;background:var(--ok)"></i></span></span><span class="mt">1 KB&nbsp; 0.6× · 0.1s</span></div>
+  <div class="prow"><span class="nm">PNG</span><span class="bar"><span class="pbar"><i style="width:64%;background:var(--warn)"></i><i style="width:36%;background:repeating-linear-gradient(45deg,rgba(154,106,0,.35) 0 6px,transparent 6px 12px)"></i></span></span><span class="mt" style="color:var(--warn)">0 字节 ! · 1.5× · 0.0s</span></div>
+  <div style="color:var(--txt3);font-size:11.5px;margin-top:6px">日志尾&nbsp;&nbsp;<span style="float:right">run-20260924-234158.log · 查看完整日志…</span></div>
+  <div class="logline">[23:41:58.21] encode jxl … 1.0 KB 0.6×</div>
+  <div class="logline">[23:41:58.34] encode png … 0 B（palette8 位无像素写入）</div>
+  <div class="note"><b>✓①</b> 指标单源：总耗时/吞吐/平均进栅格，"已用时"仅运行中出现 &nbsp; <b>✓②</b> 0 字节=琥珀警示条+"0 字节 !"标注（失败红条/斜纹=合成，spec 口径） &nbsp; <b>✓③</b> 日志尾显示真实尾部行（等宽 5 行滚动）+跳转 &nbsp; <b>✓④</b> 删实现细节文案，改"逐输出进度"</div>
+</div></div>
+</body></html>

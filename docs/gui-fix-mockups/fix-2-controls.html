@@ -1,0 +1,138 @@
+<!doctype html><html><head><meta charset="utf-8"><title>fix-2 控件与表单规范</title><style>
+:root{--card:#fff;--card-bd:rgba(0,0,0,.08);--txt:#1b1c20;--txt2:#5d5f68;--txt3:#8b8d96;--acc:#0067c0;--acc-dim:rgba(0,103,192,.10);--acc-bd:rgba(0,103,192,.35);--ok:#1d7a3e;--ok-dim:rgba(29,122,62,.10);--ok-bd:rgba(29,122,62,.35);--bad:#c94f5f;--bad-dim:rgba(201,79,95,.10);--bad-bd:rgba(201,79,95,.35);--ctl:#eef0f4;--ctl-bd:rgba(0,0,0,.12)}
+html,body{margin:0;width:1280px}
+body{font-family:"Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI",sans-serif;font-size:12.5px;color:var(--txt);background:linear-gradient(150deg,#e9ecf2,#e3e5ea 45%,#e7efe9)}
+.hd{padding:14px 22px 8px;display:flex;align-items:baseline;gap:10px}
+.hd h1{font-size:15px;margin:0}.hd .sub{color:var(--txt3);font-size:11px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:6px 22px 14px}
+.p{background:var(--card);border:1px solid var(--card-bd);border-radius:8px;box-shadow:0 1px 4px rgba(16,24,40,.06);padding:10px 12px}
+.p h2{font-size:12px;margin:0 0 8px;display:flex;align-items:center;gap:8px}
+.tag{font-size:10px;font-weight:700;padding:1px 7px;border-radius:99px}
+.tag.bad{color:var(--bad);background:var(--bad-dim);border:1px solid var(--bad-bd)}
+.tag.good{color:var(--ok);background:var(--ok-dim);border:1px solid var(--ok-bd)}
+.ba{display:flex;gap:10px;align-items:flex-start}
+.ba>div{flex:1}
+.lbl{font-size:10px;color:var(--txt3);margin-bottom:5px}
+.note{font-size:10px;color:var(--txt2);margin-top:7px;line-height:1.55}.note b{color:var(--ok)}
+/* 现状件 */
+.cbx-pill{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--ctl-bd);background:var(--ctl);border-radius:99px;padding:4px 12px;font-size:12px;color:var(--txt2)}
+.cbx-pill.on{background:var(--acc-dim);border-color:var(--acc-bd);color:var(--txt)}
+.cbx-pill .box{width:14px;height:14px;border:1px solid var(--ctl-bd);border-radius:3px;background:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:9px;color:#fff}
+.cbx-pill.on .box{background:var(--acc);border-color:var(--acc)}
+.spin{display:flex;align-items:center;border:1px solid var(--ctl-bd);background:#fff;border-radius:4px;height:30px;width:100%}
+.spin .v{flex:1;padding:0 10px;color:var(--txt2)}
+.spin .ar{width:22px;display:flex;flex-direction:column;border-left:1px solid var(--ctl-bd)}
+.spin .ar span{flex:1;display:flex;align-items:center;justify-content:center;font-size:9px;color:var(--txt3)}
+.spin .ar span+span{border-top:1px solid var(--ctl-bd)}
+.frow0{display:flex;align-items:center;height:55px;gap:0}
+.frow0 .lb{width:130px;color:var(--txt2)}
+.frow0 .fd{flex:1}
+/* 建议件 */
+.seg{display:inline-flex;border:1px solid var(--ctl-bd);border-radius:99px;overflow:hidden;background:var(--ctl)}
+.seg div{padding:4px 14px;font-size:12px;color:var(--txt2);font-weight:600}
+.seg div.on{background:var(--acc);color:#fff}
+.step3{display:inline-flex;align-items:center;border:1px solid var(--ctl-bd);border-radius:4px;background:#fff;height:32px;overflow:hidden}
+.step3 button{width:30px;height:100%;border:0;background:var(--ctl);color:var(--txt2);font-size:14px}
+.step3 .v{width:64px;text-align:center;font-variant-numeric:tabular-nums;border-left:1px solid var(--ctl-bd);border-right:1px solid var(--ctl-bd);line-height:32px}
+.sw{width:34px;height:18px;border-radius:99px;background:var(--acc);position:relative;display:inline-block}
+.sw::after{content:"";position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:99px;background:#fff}
+.sw.off{background:#c9ccd4}.sw.off::after{right:auto;left:2px}
+.cbx{width:15px;height:15px;border-radius:3px;background:var(--acc);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:10px}
+.cbx.off{background:#fff;border:1px solid var(--ctl-bd)}
+.frow{display:flex;align-items:center;height:32px}
+.frow .lb{width:70px;text-align:right;color:var(--txt2);margin-right:12px}
+.frow .fd{flex:1}
+.dim{color:var(--acc);font-size:9.5px;font-weight:700}
+.badge-ok{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:700;color:var(--ok);background:var(--ok-dim);border:1px solid var(--ok-bd);border-radius:99px;padding:1px 8px}
+.badge-n{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:700;color:var(--txt2);background:var(--ctl);border:1px solid var(--ctl-bd);border-radius:99px;padding:1px 8px}
+.green-txt{color:#1d7a3e;font-weight:600}
+.fmt-card{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--ctl-bd);background:#fff;border-radius:6px;padding:6px 10px;color:var(--txt3)}
+.fmt-card.on{background:var(--acc-dim);border-color:var(--acc-bd);color:var(--txt)}
+.dd{display:flex;align-items:center;border:1px solid var(--ctl-bd);background:#fff;border-radius:4px;height:32px;padding:0 10px;color:var(--txt);gap:8px}
+.dd .ph{color:var(--txt3)}
+</style></head><body>
+<div class="hd"><h1>修复示意 #2 · 控件语义与表单栅格</h1><span class="sub">硬约束依据：v0.3.0-design.md §9.3「70px 右对齐标签 + 12px 列距 + 32px 行高，禁混用多套栅格」+ §9.2 控件规格</span></div>
+<div class="grid">
+
+<div class="p"><h2><span class="tag bad">现状</span>→<span class="tag good">建议</span> 互斥模式：checkbox 胶囊 → 分段控件</h2>
+  <div class="ba">
+    <div><div class="lbl">现状（3 处）</div>
+      <span class="cbx-pill on"><span class="box">✓</span>Δ 偏移</span>
+      <span class="cbx-pill" style="margin-left:6px"><span class="box"></span>时区语义</span>
+    </div>
+    <div><div class="lbl">建议</div>
+      <span class="seg"><div class="on">Δ 偏移</div><div>时区语义</div></span>
+    </div>
+  </div>
+  <div class="note">互斥模式用 <b>分段控件（药丸选中）</b>；checkbox 只表达独立布尔。适用于 Δ 偏移/时区语义、转码/仅元数据。</div>
+</div>
+
+<div class="p"><h2><span class="tag bad">现状</span>→<span class="tag good">建议</span> 数值输入：全宽 spinbox → 紧凑步进器</h2>
+  <div class="ba">
+    <div><div class="lbl">现状（值贴左、箭头挂最右）</div>
+      <div class="spin"><span class="v">7</span><span class="ar"><span>▲</span><span>▼</span></span></div>
+    </div>
+    <div><div class="lbl">建议（内容宽度 + tooltip 范围）</div>
+      <span class="step3"><button>−</button><span class="v">7</span><button>+</button></span>
+    </div>
+  </div>
+  <div class="note">"宽框+小值"消失；范围/单位进悬浮提示。<b>魔法值换文案</b>：自动 → 下拉「自动（物理核数）/2/4/8」。</div>
+</div>
+
+<div class="p"><h2><span class="tag bad">现状</span>→<span class="tag good">建议</span> 表单栅格：多套混用 → 单一标签轴</h2>
+  <div class="ba">
+    <div><div class="lbl">现状（左对齐标签 + ~90px 空隙 + 55px 行）</div>
+      <div class="frow0"><span class="lb">交错启动</span><span class="fd"><span class="cbx-pill" style="border-radius:4px">150 ms ……</span></span></div>
+    </div>
+    <div><div class="lbl">建议（70px 右对齐 + 12px 列距 + 32px 行高）</div>
+      <div class="frow"><span class="lb">交错启动</span><span class="fd"><span class="step3"><button>−</button><span class="v">150 ms</span><button>+</button></span></span></div>
+      <div class="frow"><span class="lb">线程预算</span><span class="fd"><span class="dd">自动（逻辑核）<span style="margin-left:auto;color:var(--txt3)">▾</span></span></span></div>
+    </div>
+  </div>
+  <div class="note"><span style="color:var(--acc);font-weight:700">—— 70px ——</span><span style="color:var(--acc);font-weight:700">12px</span> 全部字段共用同一标签轴（设置弹窗/输出页/高级参数同栅格）。</div>
+</div>
+
+<div class="p"><h2><span class="tag bad">现状</span>→<span class="tag good">建议</span> 开关语汇：三种并存 → 三类定则</h2>
+  <div class="ba">
+    <div><div class="lbl">现状（同屏三种）</div>
+      <span class="sw"></span><span style="margin:0 8px">按文件格式分文件夹</span><br>
+      <span class="cbx-pill" style="margin-top:6px"><span class="box">✓</span>无损</span>
+    </div>
+    <div><div class="lbl">建议</div>
+      <span class="sw"></span> 立即生效的布尔=开关 34×18<br>
+      <span class="cbx" style="margin-top:6px">✓</span> 表单布尔=复选 15px r=3 填充 accent<br>
+      <span class="seg" style="margin-top:6px"><div class="on">A</div><div>B</div></span> 互斥=分段
+    </div>
+  </div>
+  <div class="note">语序统一为<b>「勾选框 → 标签」</b>，同行 32px 高、左对齐，杜绝"标签悬空 + 右侧 380px 空白"。</div>
+</div>
+
+<div class="p"><h2><span class="tag bad">现状</span>→<span class="tag good">建议</span> 徽章体系：三套 → 一套</h2>
+  <div class="ba">
+    <div><div class="lbl">现状（同概念三种）</div>
+      <span class="badge-n" style="color:#0067c0;background:var(--acc-dim);border-color:var(--acc-bd)">已完成</span>
+      <span class="green-txt" style="margin:0 8px">完成</span><span style="color:#1d7a3e">✓</span>
+    </div>
+    <div><div class="lbl">建议</div>
+      <span class="badge-ok">✓ 已完成</span>
+      <span class="badge-n" style="margin-left:6px">已选 2</span>
+    </div>
+  </div>
+  <div class="note">完成=<b>绿胶囊</b>；计数=<b>中性胶囊</b>（不用蓝色，蓝色只给可交互）；进行中=accent 描边。</div>
+</div>
+
+<div class="p"><h2><span class="tag bad">现状</span>→<span class="tag good">建议</span> 格式磁贴：三态混淆 → 三态清晰</h2>
+  <div class="ba">
+    <div><div class="lbl">现状（未选中=灰字≈禁用）</div>
+      <span class="fmt-card">JPEG&nbsp; .jpg</span>
+      <span class="fmt-card on" style="margin-left:6px"><span class="cbx" style="width:13px;height:13px;font-size:8px">✓</span>JPEG XL&nbsp; .jxl</span>
+    </div>
+    <div><div class="lbl">建议（整卡可点 + 角标对勾）</div>
+      <span class="fmt-card" style="color:var(--txt)">JPEG<span style="color:var(--txt3);font-size:10px">.jpg</span></span>
+      <span class="fmt-card on" style="margin-left:6px;color:var(--txt)">JPEG XL<span style="color:var(--acc);font-size:10px">.jxl</span><span style="color:var(--acc);margin-left:2px">✓</span></span>
+    </div>
+  </div>
+  <div class="note">未选中保持正文对比度；禁用另设（降透明度+禁用光标）。内嵌 checkbox 与底色不再双重指示。</div>
+</div>
+
+</div></body></html>

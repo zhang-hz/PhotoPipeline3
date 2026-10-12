@@ -1,0 +1,77 @@
+<!doctype html><html><head><meta charset="utf-8"><title>fix-5 空状态设计</title><style>
+:root{--card:#fff;--card-bd:rgba(0,0,0,.08);--txt:#1b1c20;--txt2:#5d5f68;--txt3:#8b8d96;--acc:#0067c0;--acc-dim:rgba(0,103,192,.10);--acc-bd:rgba(0,103,192,.35);--ok:#1d7a3e;--ok-dim:rgba(29,122,62,.10);--ok-bd:rgba(29,122,62,.35);--bad:#c94f5f;--bad-dim:rgba(201,79,95,.10);--bad-bd:rgba(201,79,95,.35);--ctl:#eef0f4;--ctl-bd:rgba(0,0,0,.12)}
+html,body{margin:0;width:1280px}
+body{font-family:"Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI",sans-serif;font-size:12.5px;color:var(--txt);background:linear-gradient(150deg,#e9ecf2,#e3e5ea 45%,#e7efe9)}
+.hd{padding:14px 22px 8px;display:flex;align-items:baseline;gap:10px}
+.hd h1{font-size:15px;margin:0}.hd .sub{color:var(--txt3);font-size:11px}
+.grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;padding:6px 22px 8px}
+.p{background:var(--card);border:1px solid var(--card-bd);border-radius:8px;box-shadow:0 1px 4px rgba(16,24,40,.06);padding:10px 12px}
+.p h2{font-size:12px;margin:0 0 8px;display:flex;align-items:center;gap:8px}
+.tag{font-size:10px;font-weight:700;padding:1px 7px;border-radius:99px}
+.tag.bad{color:var(--bad);background:var(--bad-dim);border:1px solid var(--bad-bd)}
+.tag.good{color:var(--ok);background:var(--ok-dim);border:1px solid var(--ok-bd)}
+.note{font-size:10px;color:var(--txt2);margin-top:8px;line-height:1.55}.note b{color:var(--ok)}
+.ba{display:flex;gap:10px}
+.ba>div{flex:1}
+.lbl{font-size:10px;color:var(--txt3);margin-bottom:5px}
+.stage0{height:150px;background:#000;border-radius:6px;display:flex;align-items:center;justify-content:center;color:#777;font-size:11px;position:relative}
+.badge0{position:absolute;left:8px;top:8px;background:#000;color:#bbb;font-size:9.5px;padding:2px 7px;border-radius:4px}
+.stage1{height:150px;background:#22252b;border:1px dashed rgba(255,255,255,.18);border-radius:6px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;color:#a9aab4;font-size:11px;text-align:center;padding:0 14px}
+.list0{height:150px;border:1px solid var(--ctl-bd);border-radius:6px;background:#fff;position:relative}
+.list0 .sb{position:absolute;right:3px;top:12px;width:5px;height:40px;background:#d8dae0;border-radius:9px}
+.list0 .pm{position:absolute;left:8px;top:8px;display:flex;gap:4px}
+.pmb{width:22px;height:20px;border:1px solid var(--ctl-bd);border-radius:4px;color:#5d5f68;font-size:11px;display:flex;align-items:center;justify-content:center}
+.list1{height:150px;border:1px solid var(--acc-bd);background:var(--acc-dim);border-radius:6px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--txt2);font-size:11px}
+.addbtn{border:1px solid var(--acc-bd);background:#fff;color:var(--acc);border-radius:99px;padding:5px 14px;font-weight:700;font-size:11px}
+.g0,.g1{border:1px solid var(--ctl-bd);border-radius:6px;padding:8px;background:#fff}
+.fld{height:28px;border:1px solid var(--ctl-bd);border-radius:4px;background:#fff;color:var(--txt3);display:flex;align-items:center;padding:0 8px;font-size:11px;margin:5px 0}
+.fld .u{margin-left:auto;color:var(--txt3)}
+.fld .val{color:var(--txt)}
+</style></head><body>
+<div class="hd"><h1>修复示意 #5 · 空状态设计（定稿未覆盖 → 新设计）</h1><span class="sub">黑画布 / 空白列表 / 5×重复占位符 —— mockups 只画了"有内容态"，空态首次给出</span></div>
+<div class="grid">
+
+<div class="p"><h2><span class="tag bad">现状</span>→<span class="tag good">建议</span> 预览画布</h2>
+  <div class="ba">
+    <div><div class="lbl">现状（纯黑+小字+无效角标）</div>
+      <div class="stage0"><span class="badge0">输入 · 未修改像素</span>未选中文件</div></div>
+    <div><div class="lbl">建议（深灰舞台+引导）</div>
+      <div class="stage1">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#7a7b86" stroke-width="1.5"><rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="9" cy="10" r="1.5"/><path d="M5 17l4.5-4.5 3 3L16 12l3 3"/></svg>
+        将照片拖到此处<br>或点击左上角 ＋ 添加
+      </div></div>
+  </div>
+  <div class="note">画布底 <b>#22252b</b>（dark token）替代纯黑；"未修改像素"角标仅在有图时出现。</div>
+</div>
+
+<div class="p"><h2><span class="tag bad">现状</span>→<span class="tag good">建议</span> 文件列表</h2>
+  <div class="ba">
+    <div><div class="lbl">现状（空白+滚动条+22px ＋/−）</div>
+      <div class="list0"><div class="pm"><div class="pmb">＋</div><div class="pmb">−</div></div><div class="sb"></div></div></div>
+    <div><div class="lbl">建议（投放区 + 明确按钮）</div>
+      <div class="list1">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#0067c0" stroke-width="1.5"><path d="M12 16V5M8 9l4-4 4 4"/><path d="M4 15v3a2 2 0 002 2h12a2 2 0 002-2v-3"/></svg>
+        拖入照片或文件夹<br><span class="addbtn">＋ 添加文件…</span>
+      </div></div>
+  </div>
+  <div class="note">空态不渲染滚动条；＋/− 改带 tooltip 的图标钮或显式<b>"添加文件…"</b>按钮，命中区 ≥28px。</div>
+</div>
+
+<div class="p"><h2><span class="tag bad">现状</span>→<span class="tag good">建议</span> GPS 字段</h2>
+  <div class="ba">
+    <div><div class="lbl">现状（5×同一句占位）</div>
+      <div class="g0">
+        <div style="font-size:10px;color:var(--txt3)">纬度</div><div class="fld">无 GPS，规则将写入</div>
+        <div style="font-size:10px;color:var(--txt3)">海拔</div><div class="fld">无 GPS，规则将写入</div>
+      </div></div>
+    <div><div class="lbl">建议（示例值占位 + 卡级徽标）</div>
+      <div class="g1">
+        <div style="font-size:10px;color:var(--txt3)">纬度 <span class="addbtn" style="float:right;padding:0 6px;font-size:9px">无 GPS · 规则将写入</span></div>
+        <div class="fld"><span>31.2304</span><span class="u">°</span></div>
+        <div style="font-size:10px;color:var(--txt3)">海拔</div><div class="fld"><span>12.0</span><span class="u">m</span></div>
+      </div></div>
+  </div>
+  <div class="note">占位符只放<b>输入示例+单位</b>；"无 GPS · 规则将写入"收敛为卡头徽标（1 次）。输出根目录/预设下拉同则：给"未选择"占位。</div>
+</div>
+
+</div></body></html>

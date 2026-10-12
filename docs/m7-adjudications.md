@@ -4,6 +4,10 @@
 > 冻结接口（PP-FROZEN）的加性扩展走「加性 + 追认」，逐条登记于此。实施归属列括号内为登记来源
 > （各工作包 handoff 的「裁定登记」节原样汇总，编号连续化；原文见 `build/m7-wpN/handoff.md`）。
 > 汇总人 = WP11；裁定人 = 主对话（各 WP 报出后经波次收口追认）。
+> **编号命名空间**：本表 A/B/C/D/E 与 M7-ADJ-*/WP12-B* 均为**裁定表编号**；勿与 `ux-review-14.md`
+> §14 的色彩分级子项（A1–D3）及 `deep-review-0.3.2.md` 附录 B 的拆解蓝图（B.1–B.8）混读
+> ——三套编号独立，详见 `m7-report.md` 文首「编号命名空间」注。「WP 任务包」= 主对话逐包
+> 分派的会话内任务书（未入 docs/），引述以各 `build/m7-wpN/handoff.md` 为凭。
 
 ## 一、冻结面加性 + 追认（结构/接口扩展）
 
@@ -11,7 +15,7 @@
 |---|---|---|---|
 | A1 | `core/metadata.h` `BatchRules` 末尾追加 `time_enabled/gps_enabled/privacy_enabled`（默认 true） | I5；「该卡参与规则 = 开关 && 原判据」，缺省 true = 旧会话零迁移 | WP1（I5） |
 | A2 | `core/pipeline.h` `FileState` 尾部追加 `DoneWithErrors` | I7；消费接线后补 | WP1（I7） |
-| A3 | `core/pipeline.h` `RunConfig` 末尾追加 `color_intent/color_dither8/gamut_mapping/linear_resample`（默认=现行为） | I8；能力类 opt-in 数据面先行，消费归后续（见 D34） | WP1（I8） |
+| A3 | `core/pipeline.h` `RunConfig` 末尾追加 `color_intent/color_dither8/gamut_mapping/linear_resample`（默认=现行为） | I8；能力类 opt-in 数据面先行，消费归后续（WP10 未交付，见 D12 与 m7-report §3.1） | WP1（I8） |
 | A4 | `core/metadata.h` `EffectivePreview` 末尾追加 XMP 日期 ×2 + OffsetTime* ×3 | R-085 生效值显示面补全；加性 | WP1 |
 | A5 | `core/metadata.h` `write_gps` 加性尾参 `out_warnings`（默认 nullptr） | 告警通道；既有调用点零改动 | WP1 |
 | A6 | `core/fsops.h` `resolve_conflict`（+软保留参）/`collect_inputs`（+排除集参）加性重载，旧签名转发 | R-005/R-031；旧行为逐字不变 | WP1 |
@@ -37,7 +41,7 @@
 | A26 | `progress.h` 加性 `OutputProgress` + `output_chunk_frac/file_frac_from` 纯函数 | R-284 算术单源；API 面零改动 | WP8（裁定 4） |
 | A27 | `logger.h` 加性声明 `log_level_from_text` | R-157 单源 | WP8（裁定 5） |
 | A28 | dev 三 TU 新建 + CMakeLists §4b（仅 PP_BUILD_DEV） | B.6；发布构建零 dev 路径 | WP8（裁定 7） |
-| A29 | 跨 TU 衔接用 extern 声明（不新增第四个头文件） | 任务书「新文件」仅列三个 .cpp | WP8（裁定 8） |
+| A29 | 跨 TU 衔接用 extern 声明（不新增第四个头文件） | WP8 任务包（会话内分派书，未入 docs；引述见 build/m7-wp8/handoff.md 裁定 8）授权「新文件」仅列三个 .cpp | WP8（裁定 8） |
 | A30 | 新增私有共享头 `src/ui/mainwindow_impl.h`（非冻结面）承载 Impl 完整定义 + 壳层自绘件 | 探针 TU 需同一 Impl 视图；公开冻结面零增删 | WP9（W9-2） |
 | A31 | 自由函数进头补 `inline`；Impl 追加 8 个分段方法声明 | W9-3/W9-4；机械 + 私有面加性 | WP9 |
 
@@ -77,7 +81,7 @@
 | B30 | `harden_file` 非 Windows = chmod 0600；Windows = no-op true；DPAPI 失败兜底退编码档（不落明文、不丢密钥） | 数据安全优先级；「编码非加密」口径如实注释 | WP5（A12/A13） |
 | B31 | test_icons 用 `PP_ICONS_TEST_NO_WIDGETS` 编译缝收窄 Widgets 依赖（生产构建照常） | 单测只链 pp_core 的既有约束 | WP5（A8） |
 | B32 | **文件面扩展（主对话授权）**：`assets/icons/caption-{min,max,restore,close}.svg` 4 个设计源随 kDefs 同步重画（仅 path[@d]） | UX-7④ 正当文件面，同源锁步；icons 探针 bad-svg=0 | WP5（A9） |
-| B33 | CMakeLists 对 secret.cpp 登记**两行**（pp_core 收录 + UI REMOVE_ITEM 剔除）而非任务书「一行」 | 两种单行做法均不可达（LNK2005 / 与 M2-T13 裁定相抵），如实登记 | WP5（A10） |
+| B33 | CMakeLists 对 secret.cpp 登记**两行**（pp_core 收录 + UI REMOVE_ITEM 剔除）而非 WP5 任务包的「一行」（任务包为会话内分派书，未入 docs；引述见 build/m7-wp5/handoff.md A10） | 两种单行做法均不可达（LNK2005 / 与 M2-T13 裁定相抵），如实登记 | WP5（A10） |
 | B34 | DPAPI 导入库 `#pragma comment(lib,"crypt32.lib")` 收在 secret.cpp（不加 CMake 链接面） | 同 B33 约束 | WP5（A11） |
 | B35 | 「再次运行」= 补齐语义（只提交缺件 + Skip）；仅元数据 GUI 默认冲突 = Skip | R-006/R-074 明令；**仅 GUI 路径**，CLI/金样默认面零改动 | WP6（T8） |
 | B36 | 终态词表统一「已完成/部分成功/跳过/失败/已取消」（列表胶囊随之更名） | R-139；运行页胶囊文案逐字不变 | WP6（T9） |
@@ -133,11 +137,11 @@
 | D5 | R-242 注释修实：`presets_dialog.h` `path()` 注释「SaveAs 返回 sanitized 路径」→ 「SaveAs = 空串（目录由调用方推导）」 | 与实现相反（presets_dialog.cpp:14 已自述空串），注释级 | WP11 |
 | D6 | R-268 注释修实：`icons.cpp` 未支持命令字母「跳过」→「截断返回已解析部分」；`paramform.h` 前置声明理由（theme.h 需包含者先引 QApplication）改按 M5-A5 现状（theme.h 已自含） | 注释与实现相反/过期，注释级 | WP11 |
 | D7 | UX-6① 余量：`docs/qt-gui-design-spec.md` §5 R1 显式登记两档例外——列表行 36（kListRowH）/ 表头 24（kTableHeadH），不属「信息行」 | WP4 跨界需求 1 的落点（docs 面归 WP11）；新增例外须先修订该节 | WP11 |
-| D8 | R-115 README ctest 计数**改实**：以 `ctest -N` 实测为准（2026-10-12：release 34 / release-dev 35=34+ui_smoke，两树各由 WP11 本机配置实测）；任务书「33 条」为评审日（2026-10-11）口径，M7 中 test_icons/test_secret 入编后已增至 35 | 如实取数优于抄旧数；同时给「以实测为准」的非计数口径防再漂 | WP11 |
+| D8 | R-115 README ctest 计数**改实**：以 `ctest -N` 实测为准（2026-10-12：release 34 / release-dev 35=34+ui_smoke，两树各由 WP11 本机配置实测）；「33 条」为评审日（2026-10-11）口径（出处 `docs/ux-review-14.md:5` 基线 33/33，WP11 任务包沿用），M7 中 test_icons/test_secret 入编后已增至 35 | 如实取数优于抄旧数；同时给「以实测为准」的非计数口径防再漂 | WP11 |
 | D9 | R-121 README 设计取舍登记：CMakeLists 无 `install()`、打包器直读构建树，两器默认构建目录统一 `build/release`；引入 install() 属构建面重构不在本轮 | WP3 跨界需求 2 的落点 | WP11 |
 | D10 | R-078 发行说明口径入 CHANGELOG/README：线程读数为估算（`active ≤ W ≤ T`、`ΣE ≤ T`；SynthPump/x265 不入账；threads_total_est 非硬上界）；README 旧句「总活跃线程 ≤ T」改实 | WP8 跨界需求 3 的落点 | WP11 |
-| D11 | R-292 词表/枚举镜像 13 组**对账登记**（收敛 6 组 / 登记 7 组），明细见 `m7-report.md` §3；不改逻辑（镜像收敛=结构性重构，超出注释/文案/常量命名级授权） | 红线 3「逻辑改动一律登记不改」 | WP11 |
-| D12 | README/CHANGELOG 用户口径**不写未发生的功能**：色彩可选项（色域映射/抖动/渲染意图/线性光重采样）接口数据面已备、行为未入树（`(void)opts;`），**不列为新功能**，仅在「已知」如实披露 | 「诚实显示」纪律；任务书 README 清单含该四项，但 WP10 未交付，如实上报不照抄 | WP11 |
+| D11 | R-292 词表/枚举镜像 13 组**对账登记**（逐行：收敛 5 / 大部收敛 1 / 部分收敛 1 / 登记 6；二分摘要口径「收敛 6 / 登记 7」= 大部收敛并入收敛、部分收敛并入登记），明细见 `m7-report.md` 附录 C；不改逻辑（镜像收敛=结构性重构，超出注释/文案/常量命名级授权） | 红线 3「逻辑改动一律登记不改」 | WP11 |
+| D12 | README/CHANGELOG 用户口径**不写未发生的功能**：色彩可选项（色域映射/抖动/渲染意图/线性光重采样）接口数据面已备、行为未入树（`(void)opts;`），**不列为新功能**，仅在「已知」如实披露 | 「诚实显示」纪律；WP11 任务包（会话内分派书）README 清单含该四项，但 WP10 未交付，如实上报不照抄 | WP11 |
 
 ## 五、遗留裁决点（等主对话，本轮不决）
 
@@ -151,9 +155,12 @@
 | E6 | WP5 真机验收 10 项（Snap/Aero/圆角/多显示器…） | offscreen 无法替代 | Windows 真机人工签收清单（m7-report §2.4） |
 | E7 | Linux 回归基线重播种 | Windows 机不做文本替换移植（R-015 反面先例） | Linux 宿主 / nightly update_baseline 通道 |
 | E8 | regression.py:335-337 行型表钉 `[main.cpp]`（TU 迁移后误分类） | 归因护栏自计数失真已人工纠正口径 | 修分类器=改判据工具，另行裁定 |
+| E9 | R-296 CICP 映射收敛：`src/core/colormanager.{h,cpp}` 的 `map_cicp_source`/`cicp_profile_spec` 分支驱动（加一对 = 4 处联动），建议表驱动单源 | colormanager 跨面（WP2 跨界需求 1），无包认领 | 表驱动重构待裁定后另起 |
 
 ## 六、终门禁裁定（WP12，2026-10-12）
 
 | # | 裁定 | 理由 | 实施归属 |
 |---|---|---|---|
-| M7-ADJ-tidy-reseed | **tidy 棘轮基线重播种**（`tools/baseline/clang-tidy.tsv`，283/62 → **264/71**）：`ci-tidy.py --update` 落盘，基线 diff 与本提交同在；**frameless.cpp 5→6 为唯一一处既有条目级放宽**（Win32 `reinterpret_cast<HWND>(winId())` / `NCCALCSIZE_PARAMS*` 等 int↔ptr 平台互操作惯用式 + `attach(QWidget*,QWidget*)` 同型参数对，发行门禁期不做签名重构）；总告警 283→264 严格收紧；17 条残余逐条归因（M7 拆 TU 机械迁移 6 / M6 未入基线存量 2 / 发行期禁改的异常路径 2 / 平台惯用式与有意为之 7），明细见 `m7-report.md` §3.7 与 `build/m7-wp12/handoff.md`。**NOLINT 抑制案否决**（仓库零先例、抑制注释在关键位点埋回归盲区）。 | 主对话裁决（escalate 问答，条件五条：总量只减 / frameless 放宽逐条理由+本表登记 / 归因随提交正文 / 复跑 exit 0+读数入报告 / 不动 CI 判据与检查集、不加抑制）；触发背景：B.6 四 TU + mainwindow 五域拆 TU 把 mainwindow.cpp(14→1)/main.cpp(8→1) 既有告警机械迁入 10 个基线外 TU，file-keyed 棘轮无法表达「告警随代码搬家」，与「新文件须 0」口径不可兼容 | WP12 |
+| M7-ADJ-tidy-reseed | **tidy 棘轮基线重播种**（`tools/baseline/clang-tidy.tsv`，283/62 → **264/71**）：`ci-tidy.py --update` 落盘，基线 diff 与本提交同在；**frameless.cpp 5→6 为唯一一处既有条目级放宽**（Win32 `reinterpret_cast<HWND>(winId())` / `NCCALCSIZE_PARAMS*` 等 int↔ptr 平台互操作惯用式 + `attach(QWidget*,QWidget*)` 同型参数对，发行门禁期不做签名重构）；总告警 283→264 严格收紧；17 条残余逐条归因（M7 拆 TU 机械迁移 6 / M6 未入基线存量 2 / 发行期禁改的异常路径 2 / 平台惯用式与有意为之 7；等价分解=非 frameless 11 条 + frameless 6 条，见 m7-report §3.7），明细见 `m7-report.md` §3.7 与 `build/m7-wp12/handoff.md`。**NOLINT 抑制案否决**（仓库零先例、抑制注释在关键位点埋回归盲区）。 | 主对话裁决（escalate 问答，条件五条：总量只减 / frameless 放宽逐条理由+本表登记 / 归因随提交正文 / 复跑 exit 0+读数入报告 / 不动 CI 判据与检查集、不加抑制）；触发背景：B.6 四 TU + mainwindow 五域拆 TU 把 mainwindow.cpp(14→1)/main.cpp(8→1) 既有告警机械迁入 10 个基线外 TU，file-keyed 棘轮无法表达「告警随代码搬家」，与「新文件须 0」口径不可兼容 | WP12 |
+| WP12-B1 | tidy 棘轮 fallout 的 **38 条修复全部行为零变化**（显式转换 / 删未用量 / 枚举基型 / 按值拷贝 / 字符串拼接序 / 舍入式拆命名临时量保持算子序），金样 20/20 + 回归 zero diff + ctest 35/35 双背书 | 零行为机械修复 | WP12 |
+| WP12-B2 | **行为变化（测试面）**：4 个新单测（test_geocoder/test_icons/test_providers/test_secret）的 `main` 包 try/catch——**异常逃逸路径**由 terminate（崩溃）变为打印 `FAILED (unexpected exception)` + 返回 1；仅测试代码、仅崩溃路径，成功与断言路径逐字不动，ctest 判定不变。产品代码的 exception-escape（colormanager `~ErrSync`、mainwindow_run 事件回调 λ）**未动**（修法=吞异常=行为变化，主对话裁决「发行门禁期禁改」） | tidy `exception-escape(main)` 告警的唯一非零行为修复；行为变化按 §6.2 纪律入本表（m7-report §3.7 引用即此条） | WP12 |

@@ -64,6 +64,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map> // R-185：注册表 pimpl（与 page_output 同款 std::map + unique_ptr）
+#include <memory>
 #include <thread>
 
 #include <QApplication> // theme.h 的 style_mirrors_system_accent() 用 qApp->style()
@@ -535,12 +537,20 @@ struct RunState {
     int summary_threads_est = 0;    // R-078：RunSummary::threads_total_est（峰值活跃线程估算）
 };
 
-QHash<const PageRun *, RunState *> &registry() {
-    static QHash<const PageRun *, RunState *> store;
+// R-185（M7-R2.1-F3）：注册表 pimpl 两套解法统一为 RAII —— 原 page_run 走 QHash<裸指针> +
+// 裸 new + destroyed 信号手动 delete/take，page_output 走 unique_ptr（deep-review R-185/E3-06
+// 「同一注册表 pimpl 两套解法」）。现两页同款：std::map<页指针, std::unique_ptr<State>> +
+// 访问器 *_of() + **析构 erase**（所有权归注册表，无手动 delete）。
+// 指针键注册表：析构擦除 → 无悬挂/别名；GUI 线程独占，无需锁。
+std::map<const PageRun *, std::unique_ptr<RunState>> &registry() {
+    static std::map<const PageRun *, std::unique_ptr<RunState>> store;
     return store;
 }
 
-RunState *state_of(const PageRun *page) { return registry().value(page, nullptr); }
+RunState *state_of(const PageRun *page) {
+    const auto it = registry().find(page);
+    return it == registry().end() ? nullptr : it->second.get();
+}
 
 // 0 字节完成的输出 = **异常**（§8/§7.3；修 3-10）：条/标记/胶囊一律琥珀，绝不落绿色成功态
 // —— 判定单源 = runpage::out_zero_bytes（ui/run_rows_model.h）。
@@ -1755,12 +1765,19 @@ void build_rows(RunState *s, const QStringList &names) {
 // PageRun（公开面）
 // ===========================================================================
 
+// R-185：析构擦除（与 PageOutput::~PageOutput 同款）——unique_ptr 自动释放 RunState；
+// 释放时点在 ~PageRun 体内（原 destroyed 信号 delete/take 在 ~QObject 段；RunState 析构
+// 无副作用、全部访问点对 state_of 判空，两时点等价）。
+PageRun::~PageRun() { registry().erase(this); }
+
 PageRun::PageRun(QWidget *parent) : QWidget(parent) {
-    Q_ASSERT(!registry().contains(this));
-    RunState *s = new RunState;
+    Q_ASSERT(registry().find(this) == registry().end());
+    // R-185：RAII 注册表 —— unique_ptr 所有权入表（原裸 new + destroyed 信号 delete/take；
+    // 释放点收敛到 ~PageRun 的 registry().erase，与 PageOutput 同款）
+    auto owned = std::make_unique<RunState>();
+    RunState *s = owned.get();
     s->page = this;
-    registry().insert(this, s);
-    connect(this, &QObject::destroyed, this, [this]() { delete registry().take(this); });
+    registry().emplace(this, std::move(owned));
 
     // R-009（M7-WP4）：构造期 tokens 取**当前生效档**（原硬编码 Dark → 浅色主题整页深色绘制）
     s->tokens = theme::tokens(theme::preferred_theme_mode());

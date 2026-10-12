@@ -41,6 +41,9 @@ class PageRun : public QWidget {
     Q_OBJECT
 public:
     explicit PageRun(QWidget *parent = nullptr);
+    // R-185（M7-R2.1-F3，加性追认）：显式析构承载注册表 pimpl 的 RAII 收口
+    // （registry().erase(this) —— 与 PageOutput::~PageOutput 同款；既有签名零改动）
+    ~PageRun() override;
 
     // ---- PP-FROZEN(0.3.0) 追加面（M4-T14）----
     // 运行计划（§3.4/§7.2/§8.1/§8.2）：逐源文件的尺寸/字节 + 输出格式清单 + 调度读数。

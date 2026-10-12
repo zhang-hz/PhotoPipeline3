@@ -1914,6 +1914,8 @@ struct Impl {
 };
 
 // 指针键注册表：析构擦除 → 无悬挂/别名；GUI 线程独占，无需锁。
+// R-185（M7-R2.1-F3）：注册表 pimpl 两套解法统一 —— page_run 已收敛到本同款
+// （std::map + unique_ptr + 析构 erase + *_of() 访问器），不再有裸 new/手动 delete。
 std::map<const PageOutput *, std::unique_ptr<Impl>> &registry() {
     static std::map<const PageOutput *, std::unique_ptr<Impl>> store;
     return store;

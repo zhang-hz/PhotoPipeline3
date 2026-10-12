@@ -181,7 +181,10 @@ UI 14 项评审（`docs/ux-review-14.md`）的批量整改 + 结构重构。两�
   `ctest --test-dir build/release-dev` **35/35**（含 `ui_smoke` 冻结行）· 金样
   `SMOKE total=20 pass=20 fail=0` · 全语料回归 **zero diff**（Windows 基线重播种 12 行
   version 行，逐行归因 = 版本行 12 / 行为 0）· `make_winzip` 五门禁全过（E-2 offscreen
-  走查未带 `--smoke-exe` 未跑；`release.yml` winzip job 带 `--smoke-exe` 复验）· 密钥扫描 0 命中
+  走查未带 `--smoke-exe` 未跑；`release.yml` winzip job 带 `--smoke-exe` 复验）·
+  `tools/ci-versions-check.py`（R-122 单源一致性）通过 · 密钥扫描 0 命中
+- `vcpkg.json` `version` 与 `CMakeLists.txt:19` **同改** 0.3.3（R-122 契约「版本 bump 必须
+  同改」；`ci-versions-check.py` 第 3 项在 CI 钉住，首推 tag 时该项红灯后补齐）
 - 「已发行」终态与 CI 产物指纹留待**发行后收口**提交登记（`d049d22` 先例）
 
 ## [0.3.2] — 2026-10-11

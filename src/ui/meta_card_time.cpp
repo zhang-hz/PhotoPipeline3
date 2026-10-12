@@ -131,13 +131,13 @@ void refresh_time_section(MetaState *st, const std::vector<pp::EffectivePreview>
         const QString name = QFileInfo(st->items.at(i).path).fileName();
         auto *name_label = new ElidedLabel(st->multi_host);
         name_label->setObjectName(QStringLiteral("pp-meta-multi-name-%1").arg(i));
-        name_label->setProperty(kFieldProperty, QStringLiteral("multi-name"));
+        name_label->setProperty(kFieldProperty, fieldprop::kMultiName);
         name_label->setFont(theme::font(theme::Typography::body_px, QFont::Normal));
         name_label->setMinimumHeight(formkit::kRowPitch);
         name_label->set_full_text(name);
         auto *old_label = new ElidedLabel(st->multi_host);
         old_label->setObjectName(QStringLiteral("pp-meta-multi-old-%1").arg(i));
-        old_label->setProperty(kFieldProperty, QStringLiteral("old"));
+        old_label->setProperty(kFieldProperty, fieldprop::kOld);
         QFont old_font = theme::font(theme::Typography::body_px, QFont::Normal, /*tabular=*/true);
         old_font.setStrikeOut(true);
         old_label->setFont(old_font);
@@ -145,11 +145,11 @@ void refresh_time_section(MetaState *st, const std::vector<pp::EffectivePreview>
         old_label->set_full_text(datetime_text(preview.datetime_original.original));
         auto *arrow = new QLabel(QStringLiteral("→"), st->multi_host);
         arrow->setObjectName(QStringLiteral("pp-meta-multi-arrow"));
-        arrow->setProperty(kFieldProperty, QStringLiteral("arrow"));
+        arrow->setProperty(kFieldProperty, fieldprop::kArrow);
         arrow->setFont(theme::font(theme::Typography::body_px, QFont::Normal));
         auto *new_label = new ElidedLabel(st->multi_host);
         new_label->setObjectName(QStringLiteral("pp-meta-multi-new-%1").arg(i));
-        new_label->setProperty(kFieldProperty, QStringLiteral("new"));
+        new_label->setProperty(kFieldProperty, fieldprop::kNew);
         new_label->setFont(theme::font(theme::Typography::body_px, QFont::Bold, /*tabular=*/true));
         new_label->setMinimumHeight(formkit::kRowPitch);
         new_label->set_full_text(preview.strip_privacy
@@ -293,20 +293,20 @@ QWidget *build_time_card(MetaState *st, QWidget *parent) {
         TrackGroup group = make_group(body);
         st->time_old = new ElidedLabel(group.widget());
         st->time_old->setObjectName(QStringLiteral("pp-meta-time-old-0"));
-        st->time_old->setProperty(kFieldProperty, QStringLiteral("old"));
+        st->time_old->setProperty(kFieldProperty, fieldprop::kOld);
         QFont old_font = theme::font(theme::Typography::body_px, QFont::Normal, /*tabular=*/true);
         old_font.setStrikeOut(true); // mockup .tline .old{text-decoration:line-through}
         st->time_old->setFont(old_font);
         group.add(st->time_old);
         group.gap(theme::Metrics::group_gap);
         st->time_arrow = new QLabel(QStringLiteral("→"), group.widget());
-        st->time_arrow->setProperty(kFieldProperty, QStringLiteral("arrow"));
+        st->time_arrow->setProperty(kFieldProperty, fieldprop::kArrow);
         st->time_arrow->setFont(theme::font(theme::Typography::body_px, QFont::Normal));
         group.add(st->time_arrow);
         group.gap(theme::Metrics::group_gap);
         st->time_new = new ElidedLabel(group.widget());
         st->time_new->setObjectName(QStringLiteral("pp-meta-time-new-0"));
-        st->time_new->setProperty(kFieldProperty, QStringLiteral("new"));
+        st->time_new->setProperty(kFieldProperty, fieldprop::kNew);
         st->time_new->setFont(
             theme::font(theme::Typography::body_px, QFont::Bold, /*tabular=*/true));
         group.add(st->time_new);
@@ -328,7 +328,7 @@ QWidget *build_time_card(MetaState *st, QWidget *parent) {
     {
         st->time_empty = new ElidedLabel(body);
         st->time_empty->setObjectName(QStringLiteral("pp-meta-time-empty"));
-        st->time_empty->setProperty(kFieldProperty, QStringLiteral("empty"));
+        st->time_empty->setProperty(kFieldProperty, fieldprop::kEmpty);
         st->time_empty->setFont(theme::font(theme::Typography::body_px, QFont::Normal));
         st->time_empty->set_full_text(PageMeta::tr(kNoSelectionText));
         const formkit::Row row = formkit::frow(body, QString(), st->time_empty, FieldWidth::Flex);
@@ -352,7 +352,7 @@ QWidget *build_time_card(MetaState *st, QWidget *parent) {
         st->multi_more = new ElidedLabel(st->multi_host);
         st->multi_more->setObjectName(QStringLiteral("pp-meta-multi-more"));
         st->multi_more->setVisible(false);
-        st->multi_more->setProperty(kFieldProperty, QStringLiteral("multi-more"));
+        st->multi_more->setProperty(kFieldProperty, fieldprop::kMultiMore);
         st->multi_more->setFont(theme::font(theme::Typography::hint_px, QFont::Normal));
         st->multi_host->setVisible(false);
         bv->addWidget(st->multi_host);

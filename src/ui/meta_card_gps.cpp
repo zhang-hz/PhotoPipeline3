@@ -338,21 +338,21 @@ QWidget *make_result_row(MetaState *st, int index, const pp::map::GeocodeResult 
     top->addWidget(pin, 0, Qt::AlignVCenter);
     auto *name = new ElidedLabel(row);
     name->setObjectName(QStringLiteral("pp-meta-gps-result-name-%1").arg(index));
-    name->setProperty(kFieldProperty, QStringLiteral("result-name"));
+    name->setProperty(kFieldProperty, fieldprop::kResultName);
     name->setFont(theme::font(theme::Typography::body_px, QFont::Normal));
     name->set_full_text(result.title);
     top->addWidget(name, 1);
     const QString distance = distance_text(result.distance_m);
     if (!distance.isEmpty()) {
         auto *dist = new QLabel(distance, row);
-        dist->setProperty(kFieldProperty, QStringLiteral("result-dist"));
+        dist->setProperty(kFieldProperty, fieldprop::kResultDist);
         dist->setFont(theme::font(theme::Typography::hint_px, QFont::Normal));
         top->addWidget(dist, 0, Qt::AlignVCenter);
     }
     v->addLayout(top);
     auto *address = new ElidedLabel(row);
     address->setObjectName(QStringLiteral("pp-meta-gps-result-address-%1").arg(index));
-    address->setProperty(kFieldProperty, QStringLiteral("result-addr"));
+    address->setProperty(kFieldProperty, fieldprop::kResultAddr);
     address->setFont(theme::font(theme::Typography::hint_px, QFont::Normal));
     address->set_full_text(result.address);
     auto *bottom = new QHBoxLayout();
@@ -513,7 +513,7 @@ void build_gps_coord_section(MetaState *st, QWidget *body, QVBoxLayout *bv) {
         group.gap(formkit::kInlineGap);
         st->datum_label = new QLabel(PageMeta::tr("WGS-84（标准 GPS）"), group.widget());
         st->datum_label->setObjectName(QStringLiteral("pp-meta-gps-datum"));
-        st->datum_label->setProperty(kFieldProperty, QStringLiteral("sub"));
+        st->datum_label->setProperty(kFieldProperty, fieldprop::kSub);
         st->datum_label->setFont(theme::font(theme::Typography::hint_px, QFont::Normal));
         st->datum_label->setToolTip(PageMeta::tr(kDatumTooltipText));
         group.add(st->datum_label);
@@ -731,7 +731,7 @@ void build_gps_map_section(MetaState *st, QWidget *body, QVBoxLayout *bv) {
     // R-315：瓦片加载反馈 chip（tiles_pending_changed → 显示/隐藏）
     st->overlay.map_loading = new QLabel(PageMeta::tr(kMapLoadingText), st->map);
     st->overlay.map_loading->setObjectName(QStringLiteral("pp-meta-map-loading"));
-    st->overlay.map_loading->setProperty(kFieldProperty, QStringLiteral("map-hud"));
+    st->overlay.map_loading->setProperty(kFieldProperty, fieldprop::kMapHud);
     st->overlay.map_loading->setFont(theme::font(theme::Typography::hint_px, QFont::Normal));
     st->overlay.map_loading->setToolTip(PageMeta::tr("正在加载地图瓦片"));
     st->overlay.map_loading->setAttribute(Qt::WA_TransparentForMouseEvents, true);
@@ -744,7 +744,7 @@ void build_gps_map_section(MetaState *st, QWidget *body, QVBoxLayout *bv) {
     bottom_line->setSpacing(formkit::kInlineGap);
     st->overlay.map_cursor = new QLabel(PageMeta::tr(kMapCursorIdleText), st->map);
     st->overlay.map_cursor->setObjectName(QStringLiteral("pp-meta-map-cursor"));
-    st->overlay.map_cursor->setProperty(kFieldProperty, QStringLiteral("map-hud"));
+    st->overlay.map_cursor->setProperty(kFieldProperty, fieldprop::kMapHud);
     st->overlay.map_cursor->setFont(theme::font(theme::Typography::hint_px, QFont::Normal, true));
     st->overlay.map_cursor->setToolTip(PageMeta::tr(kMapCursorTooltipText));
     st->overlay.map_cursor->setAttribute(Qt::WA_TransparentForMouseEvents,
@@ -766,7 +766,7 @@ void build_gps_map_section(MetaState *st, QWidget *body, QVBoxLayout *bv) {
 void build_gps_rule_section(MetaState *st, QWidget *card, QVBoxLayout *v) {
     st->rule_toggle = new QToolButton(card);
     st->rule_toggle->setObjectName(QStringLiteral("pp-meta-gps-rule-toggle"));
-    st->rule_toggle->setProperty(kFieldProperty, QStringLiteral("fold"));
+    st->rule_toggle->setProperty(kFieldProperty, fieldprop::kFold);
     st->rule_toggle->setText(PageMeta::tr("批量 GPS 规则"));
     st->rule_toggle->setCheckable(true);
     st->rule_toggle->setChecked(false);
@@ -818,7 +818,7 @@ void build_gps_rule_section(MetaState *st, QWidget *card, QVBoxLayout *v) {
                                           PageMeta::tr("经度"), st->lon, QStringLiteral("°")));
     st->more_toggle = new QToolButton(rule_body);
     st->more_toggle->setObjectName(QStringLiteral("gps_more_toggle"));
-    st->more_toggle->setProperty(kFieldProperty, QStringLiteral("fold"));
+    st->more_toggle->setProperty(kFieldProperty, fieldprop::kFold);
     st->more_toggle->setText(PageMeta::tr("更多字段"));
     st->more_toggle->setCheckable(true);
     st->more_toggle->setChecked(false);
@@ -1182,7 +1182,7 @@ QWidget *build_gps_card(MetaState *st, QWidget *parent) {
     // tooltip 与右键「复制地址」取值；隐藏不占行节奏）。
     st->address_value = new ElidedLabel(body);
     st->address_value->setObjectName(QStringLiteral("pp-meta-gps-address"));
-    st->address_value->setProperty(kFieldProperty, QStringLiteral("address"));
+    st->address_value->setProperty(kFieldProperty, fieldprop::kAddress);
     st->address_value->setFont(theme::font(theme::Typography::body_px, QFont::Normal));
     st->address_value->set_full_text(QStringLiteral("—"));
     st->address_value->setVisible(false);
@@ -1194,7 +1194,7 @@ QWidget *build_gps_card(MetaState *st, QWidget *parent) {
     v->addWidget(body);
     st->gps_status = new QLabel(card);
     st->gps_status->setObjectName(QStringLiteral("gps_status"));
-    st->gps_status->setProperty(kFieldProperty, QStringLiteral("sub"));
+    st->gps_status->setProperty(kFieldProperty, fieldprop::kSub);
     st->gps_status->setFont(theme::font(theme::Typography::hint_px, QFont::Normal));
     st->gps_status->setContentsMargins(theme::Metrics::card_pad_x, 4, theme::Metrics::card_pad_x,
                                        4);

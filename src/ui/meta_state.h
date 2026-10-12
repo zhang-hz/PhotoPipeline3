@@ -176,6 +176,31 @@ using ElidedLabel = formkit::ElidedLabel;
 // tr 上下文保持 PageMeta、输出逐字节不变）
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
+// R-179（B7）：kFieldProperty 的取值**常量表**（原 20 种字面量 stringly 散落各构建器）——
+// 值串 = QSS 选择器锚，逐字不变（仅换具名常量）；新增档位 = 加一行。
+namespace fieldprop {
+inline const QString kAddress = QStringLiteral("address");
+inline const QString kArrow = QStringLiteral("arrow");
+inline const QString kBtn = QStringLiteral("btn");
+inline const QString kEmpty = QStringLiteral("empty");
+inline const QString kFold = QStringLiteral("fold");
+inline const QString kHint = QStringLiteral("hint");
+inline const QString kLink = QStringLiteral("link");
+inline const QString kMapHud = QStringLiteral("map-hud");
+inline const QString kMapZoom = QStringLiteral("map-zoom");
+inline const QString kMultiMore = QStringLiteral("multi-more");
+inline const QString kMultiName = QStringLiteral("multi-name");
+inline const QString kNew = QStringLiteral("new");
+inline const QString kNote = QStringLiteral("note");
+inline const QString kOld = QStringLiteral("old");
+inline const QString kResultAddr = QStringLiteral("result-addr");
+inline const QString kResultDist = QStringLiteral("result-dist");
+inline const QString kResultName = QStringLiteral("result-name");
+inline const QString kRule = QStringLiteral("rule");
+inline const QString kSub = QStringLiteral("sub");
+inline const QString kView = QStringLiteral("view");
+} // namespace fieldprop
+
 using formkit::FieldWidth; // 页内行构造统一入口（R2/R3 栅格；原 page_meta.cpp 同款）
 
 // 页内小控件

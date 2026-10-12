@@ -132,7 +132,7 @@ QWidget *build_switches_card(MetaState *st, QWidget *parent) {
         group.add(sw);
         group.gap(theme::Metrics::group_gap);
         auto *note = new QLabel(sub, group.widget());
-        note->setProperty(kFieldProperty, QStringLiteral("sub"));
+        note->setProperty(kFieldProperty, fieldprop::kSub);
         note->setFont(theme::font(theme::Typography::hint_px, QFont::Normal));
         group.add(note);
         group.stretch();
@@ -160,7 +160,7 @@ QWidget *build_switches_card(MetaState *st, QWidget *parent) {
         st->keyword_row->setSpacing(formkit::kInlineGap);
         st->keyword_none = new ElidedLabel(st->keyword_box);
         st->keyword_none->setObjectName(QStringLiteral("pp-meta-keyword-none"));
-        st->keyword_none->setProperty(kFieldProperty, QStringLiteral("note"));
+        st->keyword_none->setProperty(kFieldProperty, fieldprop::kNote);
         st->keyword_none->setFont(theme::font(theme::Typography::hint_px, QFont::Normal));
         st->keyword_none->set_full_text(PageMeta::tr(kNoKeywordsText));
         st->keyword_row->addWidget(st->keyword_none, 0, Qt::AlignVCenter);
@@ -198,7 +198,7 @@ QWidget *build_switches_card(MetaState *st, QWidget *parent) {
     xv->setContentsMargins(theme::Metrics::card_pad_x, 0, theme::Metrics::card_pad_x, 8);
     st->exc_label = new QLabel(PageMeta::tr("无例外文件"), st->exc_host);
     st->exc_label->setObjectName(QStringLiteral("exception_label"));
-    st->exc_label->setProperty(kFieldProperty, QStringLiteral("sub"));
+    st->exc_label->setProperty(kFieldProperty, fieldprop::kSub);
     st->exc_label->setFont(theme::font(theme::Typography::hint_px, QFont::Normal));
     xv->addWidget(st->exc_label);
     st->exc_list = new QListWidget(st->exc_host);

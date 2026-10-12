@@ -279,13 +279,13 @@ void add_tag_row(MetaState *st, const QString &key, const QString &value) {
 
     auto *key_edit = new QLineEdit(row);
     key_edit->setObjectName(QStringLiteral("tag_key"));
-    key_edit->setProperty(kFieldProperty, QStringLiteral("rule"));
+    key_edit->setProperty(kFieldProperty, fieldprop::kRule);
     key_edit->setFixedHeight(formkit::kControlH);
     key_edit->setPlaceholderText(PageMeta::tr("Exif.Image.Artist 或 Xmp.dc.title"));
     key_edit->setText(key);
     auto *value_edit = new QLineEdit(row);
     value_edit->setObjectName(QStringLiteral("tag_value"));
-    value_edit->setProperty(kFieldProperty, QStringLiteral("rule"));
+    value_edit->setProperty(kFieldProperty, fieldprop::kRule);
     value_edit->setFixedHeight(formkit::kControlH);
     value_edit->setText(value);
     value_edit->setToolTip(PageMeta::tr("值留空 = 删除该标签"));

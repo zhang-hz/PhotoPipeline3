@@ -99,7 +99,7 @@ ElidedLabel *note_label(QWidget *parent, const QString &object_name) {
 QToolButton *make_link(QWidget *parent, const QString &object_name, const QString &text) {
     auto *link = new QToolButton(parent);
     link->setObjectName(object_name);
-    link->setProperty(kFieldProperty, QStringLiteral("link"));
+    link->setProperty(kFieldProperty, fieldprop::kLink);
     link->setText(text);
     link->setAutoRaise(true);
     link->setCursor(Qt::PointingHandCursor);
@@ -112,7 +112,7 @@ QToolButton *make_link(QWidget *parent, const QString &object_name, const QStrin
 QPushButton *make_button(QWidget *parent, const QString &object_name, const QString &text) {
     auto *button = new QPushButton(text, parent);
     button->setObjectName(object_name);
-    button->setProperty(kFieldProperty, QStringLiteral("btn"));
+    button->setProperty(kFieldProperty, fieldprop::kBtn);
     button->setFixedHeight(theme::Metrics::btn_h);
     button->setCursor(Qt::PointingHandCursor);
     return button;
@@ -122,7 +122,7 @@ QPushButton *make_button(QWidget *parent, const QString &object_name, const QStr
 QLineEdit *make_view_field(QWidget *parent, const QString &object_name) {
     auto *edit = new QLineEdit(parent);
     edit->setObjectName(object_name);
-    edit->setProperty(kFieldProperty, QStringLiteral("view"));
+    edit->setProperty(kFieldProperty, fieldprop::kView);
     edit->setReadOnly(true);
     edit->setFixedHeight(formkit::kControlH);
     edit->setFont(theme::font(theme::Typography::body_px, QFont::Normal, /*tabular=*/true));
@@ -133,7 +133,7 @@ QLineEdit *make_view_field(QWidget *parent, const QString &object_name) {
 QLineEdit *make_rule_field(QWidget *parent, const QString &object_name) {
     auto *edit = new QLineEdit(parent);
     edit->setObjectName(object_name);
-    edit->setProperty(kFieldProperty, QStringLiteral("rule"));
+    edit->setProperty(kFieldProperty, fieldprop::kRule);
     edit->setFixedHeight(formkit::kControlH);
     return edit;
 }
@@ -160,7 +160,7 @@ QToolButton *make_map_hud_button(QWidget *parent, const QString &object_name, ic
                                  const QString &tip) {
     auto *button = new QToolButton(parent);
     button->setObjectName(object_name);
-    button->setProperty(kFieldProperty, QStringLiteral("map-zoom"));
+    button->setProperty(kFieldProperty, fieldprop::kMapZoom);
     button->setToolTip(tip);
     button->setAccessibleName(tip);
     button->setFixedSize(kMapZoomBtnPx, kMapZoomBtnPx);
@@ -205,7 +205,7 @@ CardHeader make_header(MetaState *st, QWidget *parent, const QString &title,
     if (!hint_name.isEmpty()) {
         out.hint->setObjectName(hint_name);
     }
-    out.hint->setProperty(kFieldProperty, QStringLiteral("hint"));
+    out.hint->setProperty(kFieldProperty, fieldprop::kHint);
     out.hint->setFont(theme::font(theme::Typography::hint_px, 500));
     out.hint->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     layout->addWidget(out.hint, 1);

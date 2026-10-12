@@ -200,7 +200,7 @@ QWidget *build_info_card(MetaState *st, QWidget *parent) {
     {
         st->info_empty = new ElidedLabel(body);
         st->info_empty->setObjectName(QStringLiteral("pp-meta-info-empty"));
-        st->info_empty->setProperty(kFieldProperty, QStringLiteral("empty"));
+        st->info_empty->setProperty(kFieldProperty, fieldprop::kEmpty);
         st->info_empty->setFont(theme::font(theme::Typography::body_px, QFont::Normal));
         st->info_empty->set_full_text(PageMeta::tr(kNoSelectionText));
         const formkit::Row empty_row =

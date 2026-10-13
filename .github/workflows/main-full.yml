@@ -8,7 +8,8 @@ name: main-full
 #   拓扑（设计 §12.1「主干全量道」）:
 #     lint（fmt 门禁）─┬→ tidy（clang-tidy 棘轮）─┐
 #                      ├→ linux （全 ctest + 金样 20 对 + UI-SMOKE 取证 + soname 自检）─→ appimage
-#                      ├→ windows（全 ctest + 金样 20 对 + offscreen ui_smoke）──────────→ winzip
+#                      ├→ windows（release 全量 ctest）─────────────┬→ winzip（打包段）
+#                      ├→ windows-dev（release-dev 子集 + ui_smoke + 金样）─────────────┘
 #                      └→ audit （许可 ≥30 + SPDX 100%）                    ↑
 #                                    cache-gc（构建/打包 job 全结束后）───────┘
 #                      └────────────→ gate（总闸：全绿 + 预算校准表）
@@ -29,13 +30,20 @@ name: main-full
 #       被验证过的构建产物），winzip 只跑打包段（make_winzip 五门禁 + E-2，估 <8min）。
 #       代价 = winzip 段挂到 windows 之后、整轮 wall 变长，逐job 全部 ≤20min 硬顶；读数与偏差
 #       如实记录 docs/m7-evidence/release-runbook.md「job 预算工程解」节。appimage 维持扁平不动。
+#     ★ G7 二轮（#57 遥测归因）：windows job 自身亦越过 20min 硬顶（#57 step 12 build+ctest
+#       872s + step 13 release-dev 子集构建 4m35s 未完即被取消；#54 同段合计 16m23s 绿——纯
+#       runner 速度波动 + 工作量超载，本包零 C++ 改动）。处置再拆：release-dev 段（子集构建 +
+#       ui_smoke + 金样 + 冻结行断言）整体迁入新 job `windows-dev`，判据逐步逐字零改动；
+#       winzip 改 needs: [windows, windows-dev] 并下载双 artifact（winzip-build-input +
+#       winzip-smoke-exe）——打包对象 = 两侧测试全绿的产物（「被验证过」双重背书）。
 #
 #   ── job 预算表（设计 §12.3；硬顶 = 每 job timeout-minutes: 20，禁放宽）──────────────
 #     | job      | 平台          | 预算   | 内容                                                    |
 #     | lint     | ubuntu-24.04  | 1 min  | clang-format --dry-run -Werror 全源 0 diff（D15）        |
 #     | tidy     | windows-2025  | 12 min | clang-tidy 棘轮（bugprone/performance/portability；§12.2）|
 #     | linux    | ubuntu-24.04  | 12 min | 全 ctest（release + release-dev 含 ui_smoke）+ 金样 20 对 |
-#     | windows  | windows-2025  | 15 min | 全 ctest（release + -R ui_smoke）+ 金样 20 对            |
+#     | windows  | windows-2025  | 15 min | release 全量 ctest + 上传 winzip-build-input（G7 二轮拆段）|
+#     | windows-dev | windows-2025 | 7 min | release-dev 子集构建 + ui_smoke + 金样 20 对 + 上传 winzip-smoke-exe |
 #     | appimage | ubuntu-24.04  | 12 min | AppImage 打包（4 项内置烟测）+ 产物启动烟测               |
 #     | winzip   | windows-2025  | 15 min | 下载 windows 已验证构建树 + win64.zip 打包（5 项内置门禁/烟测）+ 产物指纹（G7 拆段后只跑打包段）|
 #     | audit    | ubuntu-24.04  | 3 min  | 许可 ≥30 + SPDX 100%（collect_licenses.py --check）      |
@@ -825,65 +833,29 @@ jobs:
           Add-Content "$env:RUNNER_TEMP\pp-steps.tsv" "ctest release`t$($T3 - $T2)"
           if ($rc -ne 0) { exit $rc }
 
-      - name: configure release-dev + build 金样子集（photopipeline + pp_verify）
-        # 金样 driver 与 ui_smoke 只需要 photopipeline / pp_verify；Windows 上不构建全量 release-dev
-        # （MSVC 无 ccache，全量两棵树会吃掉 15 min 预算；Linux 侧承担"全量 ctest"另一份覆盖）。
-        run: |
-          $T0 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-          python tools/env.py run -- cmake --preset release-dev
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/env.py run -- cmake --build build/release-dev --target photopipeline pp_verify
-          $rc = $LASTEXITCODE
-          Add-Content "$env:RUNNER_TEMP\pp-steps.tsv" "configure+build release-dev 子集(photopipeline,pp_verify)`t$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $T0)"
-          if ($rc -ne 0) { exit $rc }
-
-      - name: ctest -R ui_smoke（release-dev 树；offscreen）
-        # ui_smoke 的 ctest 条目只在 PP_BUILD_DEV=ON 时注册（CMakeLists.txt:239），且只需要
-        # photopipeline（子集已建）⇒ Windows 侧同样取得冻结行门禁（不依赖 winzip job 的 E-2）。
-        run: |
-          $T0 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-          python tools/env.py run -- ctest --preset release-dev -R ui_smoke --output-on-failure 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\ui-smoke-ctest.log"
-          $rc = $LASTEXITCODE
-          Add-Content "$env:RUNNER_TEMP\pp-steps.tsv" "ctest -R ui_smoke`t$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $T0)"
-          if ($rc -ne 0) { exit $rc }
-
-      - name: 金样 20 对（python tests/golden/smoke.py）
-        run: |
-          $T0 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-          python tools/env.py run -- python tests/golden/smoke.py build/release-dev 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\golden.log"
-          $rc = $LASTEXITCODE
-          Add-Content "$env:RUNNER_TEMP\pp-steps.tsv" "golden smoke (20 对)`t$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $T0)"
-          if ($rc -ne 0) { exit $rc }
-
-      - name: 金样冻结行断言（防假绿）
-        run: |
-          $line = (Get-Content "$env:RUNNER_TEMP\golden.log" | Where-Object { $_ -match '^SMOKE total=' } | Select-Object -Last 1)
-          Write-Output "冻结行: $line（期望 total=20 pass=20 fail=0）"
-          if ($line -notmatch '^SMOKE total=20 pass=20 fail=0 ') { Write-Error "金样口径不符: $line"; exit 1 }
-
       - name: 打包输入树组装（winzip-build-input：已验证构建树 + vcpkg 运行时依赖/许可面）
-        # M7-R2.3-G7（方案 A 产物复用）：winzip job 不再自行 configure+build，改吃本 job
+        # M7-R2.3-G7（产物复用）：winzip job 不再自行 configure+build，改吃本 job
         # **全量 ctest 绿**的构建树（打包对象必须是被验证过的构建产物）。内容/命名/链路图 =
         # docs/m7-evidence/release-runbook.md「job 预算工程解」节。
         #   build/release/photopipeline.exe + *.dll  = make_winzip 的 PP_BUILD_DIR 输入面
         #     （*.dll = vcpkg app-local 部署的运行时依赖，含非传递闭包点 jxl_threads.dll）
-        #   build/release-dev/photopipeline.exe      = E-2 --smoke-exe（--ui-smoke 走查）
         #   vcpkg_installed/x64-windows-avx2/share/  = 许可面（collect_licenses 门禁 D 输入；
         #     triplet 单源 = CMakePresets.json:18 VCPKG_TARGET_TRIPLET）
+        #   （E-2 --smoke-exe = build/release-dev/photopipeline.exe 由 windows-dev 经
+        #     artifact `winzip-smoke-exe` 传递——release-dev 子集构建已拆出本 job，见文件头）
         run: |
           $in = Join-Path $env:RUNNER_TEMP "winzip-input"
           Remove-Item -Recurse -Force $in -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force -Path "$in\build\release", "$in\build\release-dev", "$in\vcpkg_installed\x64-windows-avx2\share" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$in\build\release", "$in\vcpkg_installed\x64-windows-avx2\share" | Out-Null
           Copy-Item build\release\photopipeline.exe "$in\build\release\"
           Copy-Item (Get-ChildItem build\release\*.dll).FullName "$in\build\release\"
-          Copy-Item build\release-dev\photopipeline.exe "$in\build\release-dev\"
           Copy-Item -Recurse vcpkg_installed\x64-windows-avx2\share\* "$in\vcpkg_installed\x64-windows-avx2\share\"
           $dlls = @(Get-ChildItem "$in\build\release" -Filter *.dll).Count
           $share = @(Get-ChildItem "$in\vcpkg_installed\x64-windows-avx2\share" -Recurse -File).Count
           if ($dlls -lt 1 -or -not (Test-Path "$in\build\release\jxl_threads.dll")) {
             Write-Error "winzip-build-input 组装不完整: dll=$dlls、jxl_threads.dll 缺失（A′ 非传递闭包点必须显式随传）"; exit 1
           }
-          Write-Output "winzip-input OK: build/release dll=$dlls（含 jxl_threads.dll）+ photopipeline.exe、release-dev smoke exe、vcpkg share=$share 文件"
+          Write-Output "winzip-input OK: build/release dll=$dlls（含 jxl_threads.dll）+ photopipeline.exe、vcpkg share=$share 文件"
 
       - name: 上传打包输入树（winzip-build-input，供 winzip job 复用）
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
@@ -932,12 +904,181 @@ jobs:
           }
           $ctestLine = (Get-Content "$env:RUNNER_TEMP\ctest-release.log" -ErrorAction SilentlyContinue |
                         Where-Object { $_ -match '^[0-9]+% tests passed' } | Select-Object -Last 1)
+          $lines += ""
+          $lines += "**ctest release**: $ctestLine"
+          $lines += ""
+          $lines += "ui_smoke / 金样 20 对已随 release-dev 段迁至 windows-dev job（G7 二轮拆段，判据零改动）"
+          $lines | Add-Content "$env:GITHUB_STEP_SUMMARY"
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # windows-dev（预算 7 min）: release-dev 子集构建（photopipeline + pp_verify）+ ui_smoke + 金样
+  #   M7-R2.3-G7 二轮拆段（#57 实测归因）: windows job 的 release-dev 子集构建 4m35s +
+  #   ui_smoke/金样与 windows 的 build+ctest（#57 实测 872s）叠加后越过 20min 硬顶（#57 在
+  #   step 13 被取消）⇒ 按 §12.3「拆 job」把 release-dev 段整体拆出。判据零改动：ctest -R
+  #   ui_smoke、金样 20 对、冻结行断言逐步逐字迁移；winzip 的 E-2 smoke exe 经 artifact
+  #   `winzip-smoke-exe` 传递。Qt 缓存只 restore（单写者 = windows job）。
+  # ────────────────────────────────────────────────────────────────────────────
+  windows-dev:
+    name: windows-dev（ui_smoke+金样）
+    runs-on: windows-2025
+    timeout-minutes: 20         # 硬顶（预算 7 min）
+    needs: lint
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - name: Qt 路径（QT_VERSION 单源 = tools/versions.env；R-063 去版本字面量）
+        run: |
+          "QT_DIR=$env:GITHUB_WORKSPACE\Qt\$env:QT_VERSION\msvc2022_64" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Qt ${{ env.QT_VERSION }} 缓存（restore，单写者=windows job）
+        id: qt-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: ${{ github.workspace }}/Qt/${{ env.QT_VERSION }}/msvc2022_64
+          key: qt-${{ env.QT_VERSION }}-win64_msvc2022_64-${{ runner.os }}-${{ runner.arch }}
+          restore-keys: qt-${{ env.QT_VERSION }}-win64_msvc2022_64-
+
+      - name: Qt 就绪断言（缺失 ⇒ 早失败，指路 warm-cache）
+        run: |
+          $paths = @(
+            "$env:QT_DIR\bin\Qt6Core.dll",
+            "$env:QT_DIR\plugins\platforms\qwindows.dll",
+            "$env:QT_DIR\plugins\platforms\qoffscreen.dll"
+          )
+          $missing = @($paths | Where-Object { -not (Test-Path $_) })
+          if ($missing.Count -gt 0) {
+            Write-Error "Qt 缺失（未播种）: $($missing -join ', ')"
+            Write-Error "→ 先跑 Actions → warm-cache → Run workflow 播种 Qt $env:QT_VERSION / win64_msvc2022_64（设计 §12.4）"
+            exit 1
+          }
+          Write-Output "Qt OK @ $env:QT_DIR"
+
+      - name: Qt bin 注入 PATH（供任何启动 exe 的步骤使用）
+        run: |
+          "$env:QT_DIR\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          Write-Output "added: $env:QT_DIR\bin"
+
+      - name: vcpkg ${{ env.VCPKG_TAG }}（pinned）
+        run: |
+          git clone https://github.com/microsoft/vcpkg "$env:VCPKG_ROOT"
+          git -C "$env:VCPKG_ROOT" checkout "$env:VCPKG_TAG"
+          $wantSha = (Select-String -Path tools/versions.env -Pattern '^VCPKG_SHA=(.+)$').Matches.Groups[1].Value.Trim()
+          $gotSha = (git -C "$env:VCPKG_ROOT" rev-parse HEAD).Trim()
+          if ($gotSha -ne $wantSha) { Write-Error "vcpkg HEAD $gotSha != VCPKG_SHA $wantSha（R-091）"; exit 1 }
+          & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
+
+      - name: 缓存目录预建
+        run: New-Item -ItemType Directory -Force -Path "$env:VCPKG_DEFAULT_BINARY_CACHE" | Out-Null
+
+      - name: vcpkg binary cache（restore）
+        id: vcpkg-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: ${{ github.workspace }}/.cache/vcpkg-binary
+          key: vcpkgwin-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            vcpkgwin-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-
+            vcpkgwin-
+
+      - name: vcpkg 缓存暖度断言（miss ⇒ 早失败，指路 warm-cache）
+        run: |
+          $n = @(Get-ChildItem -Recurse -File "$env:VCPKG_DEFAULT_BINARY_CACHE" -Filter *.zip -ErrorAction SilentlyContinue).Count
+          Write-Output "vcpkg binary cache archives = $n（判据 ≥ $env:PP_VCPKG_WARM_MIN）"
+          if ($n -lt [int]$env:PP_VCPKG_WARM_MIN) {
+            Write-Error "vcpkg 二进制缓存未播种（archive=$n）—— 继续跑就是冷构建（≈40 min），直接击穿硬顶。"
+            Write-Error "→ 先跑 Actions → warm-cache → Run workflow 播种 Qt $env:QT_VERSION / win64_msvc2022_64（设计 §12.4）"
+            exit 1
+          }
+
+      - name: 语料存在性断言（不重新生成）
+        run: |
+          $n = @(git ls-files tests/golden/base).Count
+          $m = @(git ls-files tests/golden/smoke | Where-Object { $_ -like '*.json' }).Count
+          if ($n -lt 16) { Write-Error "语料缺失: tests/golden/base = $n 个（期望 ≥16）"; exit 1 }
+          if ($m -lt 20) { Write-Error "金样断言缺失: tests/golden/smoke/*.json = $m 个（期望 ≥20）"; exit 1 }
+          Write-Output "语料 OK: base=$n 文件、smoke 断言=$m 个（均已入库，未重新生成）"
+
+      - name: configure + build release-dev 子集（photopipeline + pp_verify）
+        # 金样 driver 与 ui_smoke 只需要 photopipeline / pp_verify（自 windows job 逐步迁出）。
+        run: |
+          $T0 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+          python tools/env.py run -- cmake --preset release-dev
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/env.py run -- cmake --build build/release-dev --target photopipeline pp_verify
+          $rc = $LASTEXITCODE
+          Add-Content "$env:RUNNER_TEMP\pp-steps.tsv" "configure+build release-dev 子集(photopipeline,pp_verify)`t$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $T0)"
+          if ($rc -ne 0) { exit $rc }
+
+      - name: ctest -R ui_smoke（release-dev 树；offscreen）
+        # ui_smoke 的 ctest 条目只在 PP_BUILD_DEV=ON 时注册（CMakeLists.txt:239），且只需要
+        # photopipeline（子集已建）⇒ 冻结行门禁照旧（判据零改动，仅随 release-dev 段迁出）。
+        run: |
+          $T0 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+          python tools/env.py run -- ctest --preset release-dev -R ui_smoke --output-on-failure 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\ui-smoke-ctest.log"
+          $rc = $LASTEXITCODE
+          Add-Content "$env:RUNNER_TEMP\pp-steps.tsv" "ctest -R ui_smoke`t$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $T0)"
+          if ($rc -ne 0) { exit $rc }
+
+      - name: 金样 20 对（python tests/golden/smoke.py）
+        run: |
+          $T0 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+          python tools/env.py run -- python tests/golden/smoke.py build/release-dev 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\golden.log"
+          $rc = $LASTEXITCODE
+          Add-Content "$env:RUNNER_TEMP\pp-steps.tsv" "golden smoke (20 对)`t$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $T0)"
+          if ($rc -ne 0) { exit $rc }
+
+      - name: 金样冻结行断言（防假绿）
+        run: |
+          $line = (Get-Content "$env:RUNNER_TEMP\golden.log" | Where-Object { $_ -match '^SMOKE total=' } | Select-Object -Last 1)
+          Write-Output "冻结行: $line（期望 total=20 pass=20 fail=0）"
+          if ($line -notmatch '^SMOKE total=20 pass=20 fail=0 ') { Write-Error "金样口径不符: $line"; exit 1 }
+
+      - name: 上传 E-2 smoke exe（winzip-smoke-exe，供 winzip job 复用）
+        # E-2 --smoke-exe = build/release-dev/photopipeline.exe；布局保持 build/release-dev/…
+        # （下载到 workspace 根即还原，make_winzip 命令零适配）。
+        run: |
+          $in = Join-Path $env:RUNNER_TEMP "winzip-smoke"
+          Remove-Item -Recurse -Force $in -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path "$in\build\release-dev" | Out-Null
+          Copy-Item build\release-dev\photopipeline.exe "$in\build\release-dev\"
+          Write-Output "winzip-smoke-exe OK: build/release-dev/photopipeline.exe（$((Get-Item "$in\build\release-dev\photopipeline.exe").Length) bytes）"
+
+      - name: 上传打包 smoke exe（winzip-smoke-exe）
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: winzip-smoke-exe
+          path: ${{ runner.temp }}/winzip-smoke
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: vcpkg binary cache（save）
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: ${{ github.workspace }}/.cache/vcpkg-binary
+          key: vcpkgwin-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: 汇总 → $GITHUB_STEP_SUMMARY
+        if: always()
+        run: |
+          $lines = @()
+          $lines += "## windows-dev job 汇总（预算 7 min / 硬顶 20 min；G7 二轮拆段）"
+          $lines += ""
+          $lines += "| 项目 | 值 |"
+          $lines += "| --- | --- |"
+          $lines += "| run | $($env:GITHUB_RUN_ID) #$($env:GITHUB_RUN_ATTEMPT) |"
+          $lines += "| 产出 | winzip-smoke-exe（build/release-dev/photopipeline.exe，E-2 输入）|"
+          $lines += ""
+          $lines += "| 阶段 | 秒 |"
+          $lines += "| --- | --- |"
+          if (Test-Path "$env:RUNNER_TEMP\pp-steps.tsv") {
+            Import-Csv -Path "$env:RUNNER_TEMP\pp-steps.tsv" -Delimiter "`t" -Header step,sec |
+              ForEach-Object { $lines += "| $($_.step) | $($_.sec) |" }
+          }
           $uiLine = (Get-Content "$env:RUNNER_TEMP\ui-smoke-ctest.log" -ErrorAction SilentlyContinue |
                      Where-Object { $_ -match '^[0-9]+% tests passed' } | Select-Object -Last 1)
           $goldenLine = (Get-Content "$env:RUNNER_TEMP\golden.log" -ErrorAction SilentlyContinue |
                          Where-Object { $_ -match '^SMOKE total=' } | Select-Object -Last 1)
-          $lines += ""
-          $lines += "**ctest release**: $ctestLine"
           $lines += ""
           $lines += "**ctest -R ui_smoke**: $uiLine"
           $lines += ""
@@ -1151,17 +1292,18 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ────────────────────────────────────────────────────────────────────────────
-  # winzip（预算 15 min；G7 后只跑打包段）: 下载 windows 已验证构建树（winzip-build-input）
-  #   + win64.zip 打包（5 项内置门禁/烟测）+ 产物指纹 + artifact。
-  #   needs: windows（M7-R2.3-G7 产物复用——打包对象 = 本 run 内 windows job 全量 ctest 绿的
-  #   构建树；lint 经 windows 传递）。Qt 写者 = windows job。vcpkg 暖度断言逐步保留（缓存链
-  #   照旧 restore→断言；vcpkg install 与其 clone/bootstrap/save 跟着构建段留在 windows 侧）。
+  # winzip（预算 15 min；G7 后只跑打包段）: 下载已验证构建树（winzip-build-input +
+  #   winzip-smoke-exe）+ win64.zip 打包（5 项内置门禁/烟测）+ 产物指纹 + artifact。
+  #   needs: [windows, windows-dev]（M7-R2.3-G7 产物复用——打包对象 = 本 run 内 windows 全量
+  #   ctest 绿的 release 树 + windows-dev ui_smoke/金样绿的 smoke exe，两侧测试全过才打包）。
+  #   Qt 写者 = windows job。vcpkg 暖度断言逐步保留（缓存链照旧 restore→断言；vcpkg install
+  #   与其 clone/bootstrap/save 跟着构建段留在 windows/windows-dev 侧）。
   # ────────────────────────────────────────────────────────────────────────────
   winzip:
     name: winzip
     runs-on: windows-2025
     timeout-minutes: 20         # 硬顶（预算 15 min）
-    needs: windows
+    needs: [windows, windows-dev]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - name: Qt 路径（QT_VERSION 单源 = tools/versions.env；R-063 去版本字面量）
@@ -1226,11 +1368,18 @@ jobs:
           Write-Output "语料 OK: base=$n 文件（已入库，未重新生成）"
 
       - name: 下载打包输入树（winzip-build-input：windows job 已验证构建树）
-        # M7-R2.3-G7（方案 A）：打包对象 = 同 run windows job 全量 ctest 绿的构建树 + vcpkg
-        # 运行时依赖/许可面（内容与命名见 runbook「job 预算工程解」节）；本 job 不再 configure+build。
+        # M7-R2.3-G7（产物复用）：打包对象 = 同 run windows job 全量 ctest 绿的 release 树 +
+        # vcpkg 运行时依赖/许可面（内容与命名见 runbook「job 预算工程解」节）；本 job 不再
+        # configure+build。E-2 smoke exe 由下个步骤（winzip-smoke-exe）提供。
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
         with:
           name: winzip-build-input
+          path: .
+
+      - name: 下载 E-2 smoke exe（winzip-smoke-exe：windows-dev ui_smoke/金样绿的 dev 产物）
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: winzip-smoke-exe
           path: .
 
       - name: 输入面断言（缺项列名早失败；布局 = runbook「job 预算工程解」）
@@ -1440,7 +1589,7 @@ jobs:
   # ────────────────────────────────────────────────────────────────────────────
   cache-gc:
     name: cache-gc
-    needs: [linux, windows, appimage, winzip, tidy]
+    needs: [linux, windows, windows-dev, appimage, winzip, tidy]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 20         # 硬顶（预算 1 min）
@@ -1461,7 +1610,7 @@ jobs:
     name: gate（总闸）
     runs-on: ubuntu-24.04
     timeout-minutes: 20         # 硬顶（本 job ≈30 s）
-    needs: [lint, tidy, linux, windows, appimage, winzip, audit, cache-gc]
+    needs: [lint, tidy, linux, windows, windows-dev, appimage, winzip, audit, cache-gc]
     if: always()
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
@@ -1473,6 +1622,7 @@ jobs:
           R_TIDY: ${{ needs.tidy.result }}
           R_LINUX: ${{ needs.linux.result }}
           R_WINDOWS: ${{ needs.windows.result }}
+          R_WINDOWS_DEV: ${{ needs.windows-dev.result }}
           R_APPIMAGE: ${{ needs.appimage.result }}
           R_WINZIP: ${{ needs.winzip.result }}
           R_AUDIT: ${{ needs.audit.result }}
@@ -1488,6 +1638,7 @@ jobs:
             echo "| tidy | ${R_TIDY} | 12 min（表外增补：§12.2 静态分析棘轮）|"
             echo "| linux | ${R_LINUX} | 12 min（§12.3）|"
             echo "| windows | ${R_WINDOWS} | 15 min（§12.3）|"
+            echo "| windows-dev | ${R_WINDOWS_DEV} | 7 min（G7 二轮拆段：release-dev 子集 + ui_smoke/金样）|"
             echo "| appimage | ${R_APPIMAGE} | 12 min（§12.3）|"
             echo "| winzip | ${R_WINZIP} | 15 min（§12.3）|"
             echo "| audit | ${R_AUDIT} | 3 min（§12.3「audit/cache-gc」）|"
@@ -1500,14 +1651,14 @@ jobs:
           if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" \
                > "$RUNNER_TEMP/jobs.json" 2>/dev/null; then
             python3 tools/ci-budget.py "$RUNNER_TEMP/jobs.json" \
-              --budget "lint=1,tidy=12,linux=12,windows=15,appimage=12,winzip=15,audit=3,cache-gc=1,gate=1" \
+              --budget "lint=1,tidy=12,linux=12,windows=15,windows-dev=7,appimage=12,winzip=15,audit=3,cache-gc=1,gate=1" \
               --wall-limit 20 --title "main-full 预算校准（设计 §12.3）" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "" >> "$GITHUB_STEP_SUMMARY"
             echo "_预算校准表不可得（jobs API 读取失败）；各 job 阶段耗时见各自 job 汇总。_" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          for r in "$R_LINT" "$R_TIDY" "$R_LINUX" "$R_WINDOWS" "$R_APPIMAGE" "$R_WINZIP" "$R_AUDIT"; do
+          for r in "$R_LINT" "$R_TIDY" "$R_LINUX" "$R_WINDOWS" "$R_WINDOWS_DEV" "$R_APPIMAGE" "$R_WINZIP" "$R_AUDIT"; do
             [ "$r" = "success" ] || { echo "::error::主干全量道未全绿（$r）—— 见各 job 汇总"; exit 1; }
           done
           # cache-gc 允许 failure/cancelled（清理失败不得伪造红），但必须**跑过**（skipped 不行）。

@@ -13,15 +13,22 @@ name: main-full
 #                                    cache-gc（构建/打包 job 全结束后）───────┘
 #                      └────────────→ gate（总闸：全绿 + 预算校准表）
 #
-#   ── 与设计 §12.1 图示的**唯一口径说明（重要）**──────────────────────────────────
+#   ── 与设计 §12.1 图示的**唯一口径说明（重要；M7-R2.3-G7 修订）**──────────────────
 #     §12.1 的图示把 linux/windows 画在 appimage/winzip 之前，若照字面串成 needs，关键路径 =
 #     lint 1 + linux 12 + appimage 12 = 25min（windows 侧 1+15+15 = 31min）——**结构性超过 §12.6
 #     的 20min 硬顶**，与 §12.3「整轮超 20min → 重排 DAG 关键路径」直接冲突。故本文件按 §12.3 的
-#     处置条款**扁平化 needs**：打包 job 与平台 job 并行（两侧各自 checkout + 各自构建，无产物依赖；
+#     处置条款**扁平化 needs**：appimage 与平台 job 并行（各自 checkout + 各自构建，无产物依赖；
 #     M3 的 build-test.yml 里 appimage/winzip 同样是零 needs 的独立 job）；"平台绿才允许打包" 这层
 #     语义改由末端 gate 承担（红灯 ⇒ gate 红 ⇒ 不发布；且 main-full 的 artifact 只是验证件，
-#     发行件一律由 release.yml 从 tag 重建）。若 §12.3 的实测显示关键路径有余量，恢复串行只需给
-#     appimage/winzip 各加一行 `needs: linux` / `needs: windows`。
+#     发行件一律由 release.yml 从 tag 重建）。
+#     ★ M7-R2.3-G7（winzip 预算工程解）例外——winzip 恢复 `needs: windows`（产物复用）：
+#       winzip 的「configure+build」段随代码增长越过 20min 硬顶（main-full #54：build 13m05s→
+#       14m20s 未完即撞 timeout-minutes:20 被取消；release 链同命令同 runner 推算 ≈21-22min）。
+#       按 §12.3「单 job 超 20min → 拆 job 或砍步骤（禁止放宽时限）」走**产物复用**：
+#       windows job 把全量 ctest 绿的构建树传成 artifact `winzip-build-input`（打包对象必须是
+#       被验证过的构建产物），winzip 只跑打包段（make_winzip 五门禁 + E-2，估 <8min）。
+#       代价 = winzip 段挂到 windows 之后、整轮 wall 变长，逐job 全部 ≤20min 硬顶；读数与偏差
+#       如实记录 docs/m7-evidence/release-runbook.md「job 预算工程解」节。appimage 维持扁平不动。
 #
 #   ── job 预算表（设计 §12.3；硬顶 = 每 job timeout-minutes: 20，禁放宽）──────────────
 #     | job      | 平台          | 预算   | 内容                                                    |
@@ -30,12 +37,15 @@ name: main-full
 #     | linux    | ubuntu-24.04  | 12 min | 全 ctest（release + release-dev 含 ui_smoke）+ 金样 20 对 |
 #     | windows  | windows-2025  | 15 min | 全 ctest（release + -R ui_smoke）+ 金样 20 对            |
 #     | appimage | ubuntu-24.04  | 12 min | AppImage 打包（4 项内置烟测）+ 产物启动烟测               |
-#     | winzip   | windows-2025  | 15 min | win64.zip 打包（5 项内置门禁/烟测）+ 产物指纹             |
+#     | winzip   | windows-2025  | 15 min | 下载 windows 已验证构建树 + win64.zip 打包（5 项内置门禁/烟测）+ 产物指纹（G7 拆段后只跑打包段）|
 #     | audit    | ubuntu-24.04  | 3 min  | 许可 ≥30 + SPDX 100%（collect_licenses.py --check）      |
 #     | cache-gc | ubuntu-24.04  | 1 min  | 滚动缓存清理（幂等，失败不红 job）                        |
 #     | gate     | ubuntu-24.04  | 1 min  | 汇总 + 预算校准表（tools/ci-budget.py）                  |
-#     关键路径预算 = lint 1 + max(linux 12, windows 15, appimage 12, winzip 15, tidy 12, audit 3)
-#                  + gate 1 = **17 min ≤ 20min 硬顶**（§12.6）。
+#     关键路径预算 = lint 1 + max(linux 12, windows 15, appimage 12, tidy 12, audit 3) + gate 1
+#                  = **17 min ≤ 20min 硬顶**（§12.6；G7 前拓扑）。
+#     ★ G7 后 winzip 挂 windows 串行（产物复用）：关键路径 = lint 1 + windows 15 + winzip 打包段
+#       + gate 1。per-job 硬顶（timeout-minutes: 20）全部保住；整轮 wall 读数与偏差见
+#       runbook「job 预算工程解」节（§12.3 超预算处置：单 job 超 → 拆 job/砍步骤，禁放宽时限）。
 #     ★ 实测 wall-clock 以**首个 main 推送/首个每日轮次**为准：runner 速度/网络本地无法实测
 #       （M3 的预算表同样由线上实测校准）。本文件只钉住"预算表 + 硬顶 + 拓扑"；首跑后用 gate 的
 #       预算校准表（§12.3 处置条款）决定是否拆 job / 砍步骤 / 重排关键路径 —— **禁止放宽时限**。
@@ -147,7 +157,8 @@ jobs:
   #   * 平台 = windows-2025（§12.5 Windows-first；且基线的 fingerprint 记的是 windows-msvc 平台族）
   #   * **不需要 build**：只 configure 导出 compile_commands.json（clang-tidy 用编译参数解析源码）；
   #     68 个 TU（src|tests|tools 全部 .cpp）本机 16 核实测 80 s ⇒ GH 4 核估算 ≈4–6 min。
-  #   * 不在关键路径上的前置：与 linux/windows/appimage/winzip 并行，但结论进末端 gate。
+  #   * 不在关键路径上的前置：与 linux/windows/appimage 并行（winzip 自 G7 起挂 windows 之后），
+  #     但结论进末端 gate。
   # ────────────────────────────────────────────────────────────────────────────
   tidy:
     name: tidy（clang-tidy 棘轮）
@@ -850,6 +861,38 @@ jobs:
           Write-Output "冻结行: $line（期望 total=20 pass=20 fail=0）"
           if ($line -notmatch '^SMOKE total=20 pass=20 fail=0 ') { Write-Error "金样口径不符: $line"; exit 1 }
 
+      - name: 打包输入树组装（winzip-build-input：已验证构建树 + vcpkg 运行时依赖/许可面）
+        # M7-R2.3-G7（方案 A 产物复用）：winzip job 不再自行 configure+build，改吃本 job
+        # **全量 ctest 绿**的构建树（打包对象必须是被验证过的构建产物）。内容/命名/链路图 =
+        # docs/m7-evidence/release-runbook.md「job 预算工程解」节。
+        #   build/release/photopipeline.exe + *.dll  = make_winzip 的 PP_BUILD_DIR 输入面
+        #     （*.dll = vcpkg app-local 部署的运行时依赖，含非传递闭包点 jxl_threads.dll）
+        #   build/release-dev/photopipeline.exe      = E-2 --smoke-exe（--ui-smoke 走查）
+        #   vcpkg_installed/x64-windows-avx2/share/  = 许可面（collect_licenses 门禁 D 输入；
+        #     triplet 单源 = CMakePresets.json:18 VCPKG_TARGET_TRIPLET）
+        run: |
+          $in = Join-Path $env:RUNNER_TEMP "winzip-input"
+          Remove-Item -Recurse -Force $in -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path "$in\build\release", "$in\build\release-dev", "$in\vcpkg_installed\x64-windows-avx2\share" | Out-Null
+          Copy-Item build\release\photopipeline.exe "$in\build\release\"
+          Copy-Item (Get-ChildItem build\release\*.dll).FullName "$in\build\release\"
+          Copy-Item build\release-dev\photopipeline.exe "$in\build\release-dev\"
+          Copy-Item -Recurse vcpkg_installed\x64-windows-avx2\share\* "$in\vcpkg_installed\x64-windows-avx2\share\"
+          $dlls = @(Get-ChildItem "$in\build\release" -Filter *.dll).Count
+          $share = @(Get-ChildItem "$in\vcpkg_installed\x64-windows-avx2\share" -Recurse -File).Count
+          if ($dlls -lt 1 -or -not (Test-Path "$in\build\release\jxl_threads.dll")) {
+            Write-Error "winzip-build-input 组装不完整: dll=$dlls、jxl_threads.dll 缺失（A′ 非传递闭包点必须显式随传）"; exit 1
+          }
+          Write-Output "winzip-input OK: build/release dll=$dlls（含 jxl_threads.dll）+ photopipeline.exe、release-dev smoke exe、vcpkg share=$share 文件"
+
+      - name: 上传打包输入树（winzip-build-input，供 winzip job 复用）
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: winzip-build-input
+          path: ${{ runner.temp }}/winzip-input
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Qt ${{ env.QT_VERSION }} 缓存（save，单写者=本 job）
         if: always() && steps.qt-cache.outputs.cache-hit != 'true'
         continue-on-error: true
@@ -1108,14 +1151,17 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ────────────────────────────────────────────────────────────────────────────
-  # winzip（预算 15 min）: release 构建 + win64.zip 打包（5 项内置门禁/烟测）+ artifact
-  #   needs 只挂 lint（同 appimage 的 DAG 扁平化口径）；Qt 写者 = windows job。
+  # winzip（预算 15 min；G7 后只跑打包段）: 下载 windows 已验证构建树（winzip-build-input）
+  #   + win64.zip 打包（5 项内置门禁/烟测）+ 产物指纹 + artifact。
+  #   needs: windows（M7-R2.3-G7 产物复用——打包对象 = 本 run 内 windows job 全量 ctest 绿的
+  #   构建树；lint 经 windows 传递）。Qt 写者 = windows job。vcpkg 暖度断言逐步保留（缓存链
+  #   照旧 restore→断言；vcpkg install 与其 clone/bootstrap/save 跟着构建段留在 windows 侧）。
   # ────────────────────────────────────────────────────────────────────────────
   winzip:
     name: winzip
     runs-on: windows-2025
     timeout-minutes: 20         # 硬顶（预算 15 min）
-    needs: lint
+    needs: windows
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - name: Qt 路径（QT_VERSION 单源 = tools/versions.env；R-063 去版本字面量）
@@ -1150,15 +1196,6 @@ jobs:
           "$env:QT_DIR\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
           Write-Output "added: $env:QT_DIR\bin"
 
-      - name: vcpkg ${{ env.VCPKG_TAG }}（pinned）
-        run: |
-          git clone https://github.com/microsoft/vcpkg "$env:VCPKG_ROOT"
-          git -C "$env:VCPKG_ROOT" checkout "$env:VCPKG_TAG"
-          $wantSha = (Select-String -Path tools/versions.env -Pattern '^VCPKG_SHA=(.+)$').Matches.Groups[1].Value.Trim()
-          $gotSha = (git -C "$env:VCPKG_ROOT" rev-parse HEAD).Trim()
-          if ($gotSha -ne $wantSha) { Write-Error "vcpkg HEAD $gotSha != VCPKG_SHA $wantSha（R-091）"; exit 1 }
-          & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
-
       - name: 缓存目录预建
         run: New-Item -ItemType Directory -Force -Path "$env:VCPKG_DEFAULT_BINARY_CACHE" | Out-Null
 
@@ -1178,7 +1215,7 @@ jobs:
           Write-Output "vcpkg binary cache archives = $n（判据 ≥ $env:PP_VCPKG_WARM_MIN）"
           if ($n -lt [int]$env:PP_VCPKG_WARM_MIN) {
             Write-Error "vcpkg 二进制缓存未播种（archive=$n）—— 冷构建 ≈40 min，直接击穿硬顶。"
-            Write-Error "→ 先跑 Actions → warm-cache → Run workflow 播种（设计 §12.4 / R24）。"
+            Write-Error "→ 先跑 Actions → warm-cache → Run workflow（workflow_dispatch）播种（设计 §12.4 / R24）。"
             exit 1
           }
 
@@ -1188,25 +1225,28 @@ jobs:
           if ($n -lt 16) { Write-Error "语料缺失: tests/golden/base = $n 个（期望 ≥16）"; exit 1 }
           Write-Output "语料 OK: base=$n 文件（已入库，未重新生成）"
 
-      - name: configure + build release
-        run: |
-          $T0 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-          python tools/env.py run -- cmake --preset release
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/env.py run -- cmake --build --preset release
-          $rc = $LASTEXITCODE
-          Add-Content "$env:RUNNER_TEMP\pp-steps.tsv" "configure+build release`t$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $T0)"
-          if ($rc -ne 0) { exit $rc }
+      - name: 下载打包输入树（winzip-build-input：windows job 已验证构建树）
+        # M7-R2.3-G7（方案 A）：打包对象 = 同 run windows job 全量 ctest 绿的构建树 + vcpkg
+        # 运行时依赖/许可面（内容与命名见 runbook「job 预算工程解」节）；本 job 不再 configure+build。
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: winzip-build-input
+          path: .
 
-      - name: configure + build release-dev 子集（photopipeline，供 E-2 offscreen 走查）
+      - name: 输入面断言（缺项列名早失败；布局 = runbook「job 预算工程解」）
         run: |
-          $T0 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-          python tools/env.py run -- cmake --preset release-dev
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/env.py run -- cmake --build build/release-dev --target photopipeline
-          $rc = $LASTEXITCODE
-          Add-Content "$env:RUNNER_TEMP\pp-steps.tsv" "configure+build release-dev 子集(photopipeline)`t$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $T0)"
-          if ($rc -ne 0) { exit $rc }
+          $missing = @()
+          foreach ($p in @('build\release\photopipeline.exe', 'build\release-dev\photopipeline.exe',
+                           'build\release\jxl_threads.dll', 'vcpkg_installed\x64-windows-avx2\share')) {
+            if (-not (Test-Path $p)) { $missing += $p }
+          }
+          $dlls = @(Get-ChildItem build\release\*.dll -ErrorAction SilentlyContinue).Count
+          if ($dlls -lt 1) { $missing += 'build\release\*.dll' }
+          if ($missing.Count -gt 0) {
+            Write-Error "winzip 输入面缺失: $($missing -join ', ')（winzip-build-input 布局不符，见 docs/m7-evidence/release-runbook.md「job 预算工程解」）"
+            exit 1
+          }
+          Write-Output "输入面 OK: build/release dll=$dlls（含 jxl_threads.dll 非传递闭包点）+ photopipeline.exe、release-dev smoke exe、vcpkg share 许可面"
 
       - name: 打包 win64 zip（tools/make_winzip.py，内置五门禁/烟测）
         # 门禁 A 闭包 / B Qt 来源 sha256 / C 结构 / D 许可（写盘前 + zip 内；≥30 与 AppImage 同口径）
@@ -1242,14 +1282,6 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: vcpkg binary cache（save）
-        if: always()
-        continue-on-error: true
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
-        with:
-          path: ${{ github.workspace }}/.cache/vcpkg-binary
-          key: vcpkgwin-${{ hashFiles('vcpkg.json', 'vcpkg-overlay/**') }}-${{ hashFiles('triplets/**') }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
-
       - name: 汇总 → $GITHUB_STEP_SUMMARY
         if: always()
         env:
@@ -1259,10 +1291,11 @@ jobs:
           $log = @(Get-Content "$env:RUNNER_TEMP\winzip.log" -ErrorAction SilentlyContinue)
           function GateLine($pattern) { ($log | Where-Object { $_ -match $pattern } | Select-Object -Last 1) }
           $lines = @()
-          $lines += "## winzip job 汇总（预算 15 min / 硬顶 20 min）"
+          $lines += "## winzip job 汇总（预算 15 min / 硬顶 20 min；G7 后只跑打包段）"
           $lines += ""
           $lines += "| 项目 | 值 |"
           $lines += "| --- | --- |"
+          $lines += "| 打包对象 | winzip-build-input（windows job 全量 ctest 绿的构建树，M7-R2.3-G7 产物复用）|"
           $lines += "| Qt 缓存精确命中 | $($env:QT_HIT) |"
           $lines += "| vcpkg 二进制缓存精确命中 | $($env:VCPKG_HIT) |"
           $lines += "| 产物 | $($env:ZIP_NAME) |"
@@ -1447,7 +1480,7 @@ jobs:
         run: |
           set +e
           {
-            echo "## main-full gate（设计 §12.6：整轮硬 ≤20min；关键路径预算 = lint 1 + max(构建/打包 lane 15) + gate 1 = 17min）"
+            echo "## main-full gate（设计 §12.6：整轮硬 ≤20min；关键路径 = lint 1 + max(构建/打包 lane 15) + gate 1 = 17min；G7 起 winzip 挂 windows 串行（产物复用），winzip 读数见其 job 汇总）"
             echo ""
             echo "| job | 结论 | 预算 |"
             echo "| --- | --- | --- |"

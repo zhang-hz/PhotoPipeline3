@@ -39,6 +39,9 @@ env 覆盖:
   * 烟测 E（启动）: staging 内 exe 跑 --version → 冻结行 `PhotoPipeline <ver>` + rc 0；
     给出 --smoke-exe 时追加 E-2（offscreen --ui-smoke，断言 `UI-SMOKE OK shots=12 pages=3`；
     冻结行 M4-W3-T14 起为 shots=12，来源 tests/ui_smoke.py 的 FROZEN_LINE）。
+    E-3（M7-R2.4）真机启动探针：staging exe 走**真实 qwindows 平台**，断言可见主窗出现 +
+    顶层窗口数不超阈 + 进程存活（0.3.3 打不开 P0 的机械化判据；offscreen 不触达真实建窗
+    路径，E-2 看不见这类缺陷），冻结行前缀 `WIN-LAUNCH OK`（tools/win_launch_probe.py 同源）。
     **烟测状态隔离（M4-W4-T18）**: portable 模式（src/platform/paths.cpp 的可写探测）
     使 data_dir() = exe 目录，故走查会把 `classes.json` / `presets/` / `logs/` 写进 staging；
     实测未清理时 `classes.json`（内含本机 tests/golden/base 的 assignment）会随 zip 出货。
@@ -82,6 +85,7 @@ sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FROZEN_UI_SMOKE = 'UI-SMOKE OK shots=12 pages=3'   # M4-W3-T14 起 12 张（与 tests/ui_smoke.py 同源）
+FROZEN_WIN_LAUNCH = 'WIN-LAUNCH OK'  # M7-R2.4 真机启动探针冻结行前缀（tools/win_launch_probe.py 同源）
 VERSION_RE = re.compile(r'^PhotoPipeline \d+\.\d+\.\d+$')
 
 # 门禁 A 判据（M3-T11 v2.2 / R2）：不再维护硬编码系统 DLL 白名单（永远列不全），
@@ -702,6 +706,21 @@ def main(argv):
             if os.path.exists(dev_smoke):
                 os.remove(dev_smoke)
             shutil.rmtree(shots_dir, ignore_errors=True)
+
+    # ---- 12a) 烟测 E-3（M7-R2.4）：真机启动探针（真实 qwindows 平台）----
+    # 0.3.3 打不开 P0 的机械化判据：offscreen（E-2）不触达真实建窗路径，看不见"递归建窗 /
+    # 窗口不可见"类缺陷。探针断言 = 可见主窗出现 + 顶层窗口数不超阈（风暴守卫）+ 进程存活；
+    # 运行态写入 staging 的部分由 12b 快照还原统一清除。
+    probe = subprocess.run(
+        [sys.executable, os.path.join(ROOT, 'tools', 'win_launch_probe.py'),
+         os.path.join(staging, 'photopipeline.exe')],
+        cwd=staging, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    probe_out = probe.stdout.decode('utf-8', 'replace').strip()
+    if probe.returncode != 0 or FROZEN_WIN_LAUNCH not in probe_out:
+        sys.stdout.write(probe_out)
+        die('烟测 E-3 失败: win_launch_probe exit {}（缺冻结行 {!r}）'.format(
+            probe.returncode, FROZEN_WIN_LAUNCH))
+    note('烟测 E-3: {} (exit 0, 真实 qwindows 平台)'.format(probe_out))
 
     # ---- 12b) 烟测状态隔离（M4-W4-T18）: E-1/E-2 新增的一切路径一律删除，快照必须逐项还原 ----
     # 说明: 该清除必须留在**部署布局**内做（E-2 的 DLL 靠 exe 同目录解析，换目录跑就不是

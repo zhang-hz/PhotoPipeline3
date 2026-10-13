@@ -354,6 +354,8 @@ Frameless *Frameless::attach(QWidget *window, QWidget *caption,
     //   3) DWMWA_WINDOW_CORNER_PREFERENCE = ROUND（Win10 不支持 → 静默忽略）。
     // offscreen 平台的 winId() 不是真窗口（IsWindow 为假）→ 整段跳过，--ui-smoke 行为不变。
     {
+        // M7-R2.4：此处 winId() 是**唯一**有意建窗点（先把原生窗建起来才能改样式）；
+        // 递归风险已根治 —— 创建期投递的消息进过滤器只读 internalWinId()=0 直接放行。
         const HWND handle = hwnd_of(window->winId());
         if (handle != nullptr && ::IsWindow(handle)) {
             const LONG_PTR style = ::GetWindowLongPtrW(handle, GWL_STYLE);
@@ -409,8 +411,9 @@ void Frameless::trigger(CaptionAction action) {
         return;
     QWidget *window = d_->window.data();
 #ifdef _WIN32
-    // 能力表：Windows 三钮 = WM_SYSCOMMAND(SC_MINIMIZE/SC_MAXIMIZE/SC_CLOSE)
-    const HWND handle = hwnd_of(window->winId());
+    // 能力表：Windows 三钮 = WM_SYSCOMMAND(SC_MINIMIZE/SC_MAXIMIZE/SC_CLOSE)。
+    // M7-R2.4：只读句柄（不建窗），理由同 nativeEventFilter 处注释。
+    const HWND handle = hwnd_of(window->internalWinId());
     if (handle != nullptr) {
         ::SendMessageW(handle, WM_SYSCOMMAND, static_cast<WPARAM>(syscommand_for(action)), 0);
         return;
@@ -462,7 +465,12 @@ bool Frameless::nativeEventFilter(const QByteArray &event_type, void *message, q
     if (message == nullptr || result == nullptr || d_->window.isNull())
         return false;
     auto *msg = static_cast<MSG *>(message);
-    const HWND handle = hwnd_of(d_->window->winId());
+    // M7-R2.4（0.3.3 打不开 P0 根治）：**过滤器内禁用 winId()**。winId() 在窗口创建期
+    // （attach 的 winId() → CreateWindowEx 同步投递 WM_NCCALCSIZE → 本过滤器）因 data.winid
+    // 尚未赋值而重入 createWinId() → 递归建窗直至栈崩（0.3.3 Windows 启动即挂的根因）。
+    // internalWinId() 只读当前句柄、永不建窗（qwidget.h:221 取值语义）；未建窗 = 0 →
+    // 消息放行 Qt，语义 = "该窗口尚无原生句柄可拦截"。同因禁用 trigger() 的 winId()。
+    const HWND handle = hwnd_of(d_->window->internalWinId());
     if (handle == nullptr || msg->hwnd != handle)
         return false;
     // M7-WP5（UX-7①）：真无边框 = **非客户区收口**。只置 Qt::FramelessWindowHint 不处理本消息时，

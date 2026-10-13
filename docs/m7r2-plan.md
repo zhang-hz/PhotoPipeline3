@@ -10,7 +10,8 @@
 > （其内部色彩分级子项写「UX-14 A1/C1…」式全称）；`A/B/C/D/E`、`M7-ADJ-*`、`WP12-B*`、`WP13-B*`、
 > `R2A-A*`、`M7R2B-*`、`R2C-W*`、`R2D1-A*`、`M7-R2-A/B`、`M7R2D2-*`、`M7R2E2-*`、`R2G-G*`、
 > `R2F-X*`、`R2F-C*` = 裁定表编号
-> （`docs/m7-adjudications.md`）；`D-n` = AGENTS §9 实现期发现缺陷号（如 D-1）。
+> （`docs/m7-adjudications.md`）；R2.1/R2.2/R2.3 轮续用同构编号 `M7R21F*`/`M7R22G*`/`M7R23G*`
+> （adjudications 十一/十二节 / 十四节 / 十六节）；`D-n` = AGENTS §9 实现期发现缺陷号（如 D-1）。
 
 ---
 
@@ -56,6 +57,16 @@ ev.index 显式校验、R-201 后半对象图成员化、R-183 后半行部件�
 值表加性补 `done_with_errors`（M7R22G3-1）、校读意见原文补录（m7r2-reader-notes）。
 逐条交付与读数见 `docs/m7-report.md` §8 与 `docs/m7-evidence/m7r22-g*`；**终态以 m7-report
 附录 A/B（R2.2 终态四档）为准**。
+
+**R2.3 追记（2026-10-13）**：R2.3 轮（M7-R2.3-G7…G9，任务书 = 会话内分派书）收两组——
+① **G7 winzip 预算工程解**（M7R23G7-0：产物复用/拆 job，CI 判据零改动、timeout-minutes 不动、
+`tools/make_winzip.py` 零改动）：R2.2-G6 第三班撞 20min 硬顶的处置落地（main-full #58/#59
+全绿实证 per-job ≤20min，winzip 97s/89s），runbook §7 承载工程解记录；② **G8 尾单清理**：
+R-266 关现役语义归位（M7R23G8-1，修 R-189 漂移，断言只增）、R-318 两处禁用态 tooltip、
+R-268/R-260 注释收口、dialogkit TitleBar icon（M7R23G8-2）、ProbeContext 全面迁移（词表
+**13** 键，M7R23G8-3）、R-253 build_ui/wire 分段。另登记 M7R23G9-1（`Exif.Photo.ColorTemperature`
+受约束口径，M7R22G2 ③-2 衍生）。逐条交付与读数见 `docs/m7-report.md` §9 与
+`docs/m7-evidence/m7r23-g*`；**终态以 m7-report 附录 A/B（R2.3 终态四档）为准**。
 
 ---
 
@@ -142,6 +153,6 @@ ev.index 显式校验、R-201 后半对象图成员化、R-183 后半行部件�
 
 ---
 
-*本文件随 R2 轮交付维护（R2.1/R2.2 追记载 §1）；修订请在提交正文说明。R2/R2.1/R2.2 逐条
-交付与验证证据：`docs/m7-report.md`「R2 轮交付」「R2.1 轮交付」「R2.2 轮交付」章节 +
-`docs/m7-evidence/`。*
+*本文件随 R2 轮交付维护（R2.1/R2.2/R2.3 追记载 §1）；修订请在提交正文说明。R2/R2.1/R2.2/
+R2.3 逐条交付与验证证据：`docs/m7-report.md`「R2 轮交付」「R2.1 轮交付」「R2.2 轮交付」
+「R2.3 轮交付」章节 + `docs/m7-evidence/`。*

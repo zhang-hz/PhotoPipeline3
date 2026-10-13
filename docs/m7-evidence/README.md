@@ -13,6 +13,8 @@
    （如 `release-runbook.md`）不带包前缀。**R2.1 轮**沿同构命名 `m7r21-<pkg>-<主题>.md`
    （`<pkg>` = `f1`…`f6`，与 `build/m7r21-fN/` 任务目录同名）；**R2.2 轮**沿同构命名
    `m7r22-<pkg>-<主题>.md`（`<pkg>` = `g1`…`g4`，与 `build/m7r22-gN/` 任务目录同名）；
+   **R2.3 轮**沿同构命名 `m7r23-<pkg>-<主题>.md`（`<pkg>` = `g7`…`g9`，与 `build/m7r23-gN/`
+   任务目录同名）；
    跨包终门禁沿 R2G 先例命名
    `m7r2-gate.md` → `m7r21-gate.md`（不带包前缀）。
 2. **内容三段式**：① **命令行**（逐字可复跑，含 `python tools/env.py run --` 包装）；
@@ -48,4 +50,7 @@
 | `m7r22-g3-gates.md` | R2.2-G3 | 判据小项与文档补录门禁读数（全量 ctest 35/35、SCHEMA 加性双自检 numstat 1/0 + STATE_ROW_BYTE_IDENTICAL、pp_verify selftest 39、校读补录 ROW_COMPARE diff=0） |
 | `m7r22-g4-gates.md` | R2.2-G4 | 文档终稿复核读数（合流 HEAD 复跑 ui_smoke/金样/回归三判据 + 台账计数自检 326/15/3/1 + 文档事实取证 grep 表 + 发行状态「待发布」） |
 | `m7r22-gate.md` | R2.2-G5 | R2.2 终门禁全量判据取证（format 196 文件 0 diff / build 幂等 / tidy 棘轮收口 263→262 重播种逐条归因 + fallout 修 5 登记 1 / ctest 36/36 / 金样 20/20 / 回归 zero diff（R-197 预期 diff 未出现归因）/ 密钥两面 0 命中 / 冻结行附加核对） |
+| `m7r23-g7-gates.md` | R2.3-G7 | winzip 预算工程解门禁读数（五门禁+E-2 本地 rc=0 逐步读数 + main-full #57 撞顶归因 / **#58/#59 全绿逐 job 读数**（winzip 97s/89s）+ 判据零改动盘点） |
+| `m7r23-g8-gates.md` | R2.3-G8 | 尾单清理门禁读数（ctest 36/36、ui_smoke 冻结行 + format-roundtrip 16/0（R-266 归位）、金样 20/20、tidy 262/76 持平、字面量 0 站点、逐交付→机械锚对应表） |
+| `m7r23-g9-gates.md` | R2.3-G9 | 文档收口自检读数（台账计数 345=326/15/3/1、链接自检、四点名项再核对（R-266/R-153/E5/B.5）、事实取证 grep 表） |
 | `temp_bug.png` | （评审证据图） | UX-7 原生三钮与自绘三钮同框复现图（`docs/ux-review-14.md` §7 现象证据；原在项目根，随评审件入库移入本目录） |

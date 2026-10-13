@@ -4,7 +4,7 @@
 > 冻结接口（PP-FROZEN）的加性扩展走「加性 + 追认」，逐条登记于此。实施归属列括号内为登记来源
 > （各工作包 handoff 的「裁定登记」节原样汇总，编号连续化；原文见 `build/m7-wpN/handoff.md`）。
 > 汇总人 = WP11；裁定人 = 主对话（各 WP 报出后经波次收口追认）。
-> **编号命名空间**：本表 A/B/C/D/E 与 M7-ADJ-*/WP12-B*/WP13-B*（R1）以及 `R2A-A*`/`M7R2B-*`/`R2C-W*`/`R2D1-A*`/`M7-R2-A`/`M7-R2-B`/`M7R2D2-*`/`M7R2E2-*`/`R2G-G*`/`R2F-X*`/`R2F-C*`（R2）以及 `M7R21F1-*`/`M7R21F2-*`/`M7R21F3-*`/`M7R21F4-*`（R2.1，十一/十二节）以及 `M7R22G1-*`/`M7R22G2-*`/`M7R22G3-1`/`M7R22G5-1`（R2.2，十四节）均为**裁定表编号**；`D-n` 为 AGENTS §9 实现期发现缺陷号（如 R2G-G5 承载的 D-1，已由 M7R21F1-2 根治）；勿与 `ux-review-14.md`
+> **编号命名空间**：本表 A/B/C/D/E 与 M7-ADJ-*/WP12-B*/WP13-B*（R1）以及 `R2A-A*`/`M7R2B-*`/`R2C-W*`/`R2D1-A*`/`M7-R2-A`/`M7-R2-B`/`M7R2D2-*`/`M7R2E2-*`/`R2G-G*`/`R2F-X*`/`R2F-C*`（R2）以及 `M7R21F1-*`/`M7R21F2-*`/`M7R21F3-*`/`M7R21F4-*`（R2.1，十一/十二节）以及 `M7R22G1-*`/`M7R22G2-*`/`M7R22G3-1`/`M7R22G5-1`（R2.2，十四节）以及 `M7R23G7-*`/`M7R23G8-*`/`M7R23G9-*`（R2.3，十六节）均为**裁定表编号**；`D-n` 为 AGENTS §9 实现期发现缺陷号（如 R2G-G5 承载的 D-1，已由 M7R21F1-2 根治）；勿与 `ux-review-14.md`
 > §14 的色彩分级子项（A1–D3）及 `deep-review-0.3.2.md` 附录 B 的拆解蓝图（B.1–B.8）混读
 > ——三套编号独立，详见 `m7-report.md` 文首「编号命名空间」注。「任务书 / WP 任务包」引述
 > 出处 = [docs/m7r2-plan.md](m7r2-plan.md)（R2 轮方案真源 + 附 A「任务书引述出处对照」，
@@ -374,7 +374,7 @@
 | M7R22G1-3 | 探针扩充（常驻） | rtl-mirror 扩充四查常驻化（stars/hud/logical-align/geom-mirror；±2px 镜像容差；HUD 不钉绝对宽只钉关系式+左缘锚） | F2⑤-1 规格；F2 实测注记「盒宽受缺失字体回退放大」⇒ 绝对宽不可钉 |
 | M7R22G1-4 | 探针定论 | rtl-deep：QLabel/ElidedLabel（继承 QLabel paintEvent）内部 QStyle::visualAlignment 自动随向镜像，无需显式 visualAlignment；±2px 容差 | e2⑤-6 的「未实测」问题定论；关系断言抗字体回退 |
 | M7R22G1-5 | 探针（判据取舍） | format-roundtrip 按 e2⑤-5 规格判「四面一致 + toggle-on 现役=新开项（R-189）」；关现役落点**取证不判据** | 见 M7R22G1-6 的分歧发现 |
-| M7R22G1-6 | **跨界发现（不判据，交 page_output 属主）** | 关现役后的现役落点 UI 实际 = 页签滑动邻接位（remove_tab → currentChanged 末写者覆盖），与 `format_selection_model.h` 的 R-266 契约「现役前移首位」分歧。751f479 旧序 = remove_tab **后**显式 front 赋值（末写者=front）；R-189（F3）重排 toggle_format 顺序（sel.toggle 先行）后信号胜 ⇒ 疑似 R-189 引入的语义漂移。读数：off-active=webp front=jpeg（实测）。建议修法 = remove_tab 后重申 front 或信号屏蔽 | 模型真值表（tests/unit/test_smoke.cpp）钉 front-move；UI 组合层分歧不在本包文件面 |
+| M7R22G1-6 | **跨界发现（不判据，交 page_output 属主）** | 关现役后的现役落点 UI 实际 = 页签滑动邻接位（remove_tab → currentChanged 末写者覆盖），与 `format_selection_model.h` 的 R-266 契约「现役前移首位」分歧。751f479 旧序 = remove_tab **后**显式 front 赋值（末写者=front）；R-189（F3）重排 toggle_format 顺序（sel.toggle 先行）后信号胜 ⇒ 疑似 R-189 引入的语义漂移。读数：off-active=webp front=jpeg（实测）。建议修法 = remove_tab 后重申 front 或信号屏蔽。**R2.3 追记：已由 M7R23G8-1 归位**（`4c9d7db` 采「remove_tab 后重申 front」修法，见十六节；读数归位 off-active=jpeg front=jpeg） | 模型真值表（tests/unit/test_smoke.cpp）钉 front-move；UI 组合层分歧不在本包文件面 |
 | M7R22G1-7 | 探针 | color-options 档位断言 = 4/3 档 + 默认值=现行为 + config_base 往返（M7R21F4-4 口径） | F4⑤-7 规格 |
 | M7R22G1-8 | 探针补强（断言只增） | context-menu/check-all 补强 = 分隔线全序 + 收菜单无残留 + 快捷键动作执行语义 | F4⑥-1 的「已落地」项做深度补强 |
 | M7R22G1-9 | 探针加深 | R-152/153 回归深度 = 全可见行映射 + 二轮重建保留 | e2⑤-2 规格的机械化加深 |
@@ -393,7 +393,7 @@
 | M7R22G2-3 | 跨面触碰（`meta_card_info.cpp`） | 3 条 static_assert 对拍 + 循环界 `std::size`（值不变） | F2 残余 ⑥-3 本体：对拍必须在表侧才咬合；测试侧复述双端钉 |
 | M7R22G2-4 | 跨面触碰（`test_gcj02.cpp`） | 新断言 29 条（tile_cache LRU/预算 8 + 交互状态机 21） | 任务验证明文「test_gcj02 新断言」；B.5②⑥ 纯核的判据面 |
 | M7R22G2-5 | 加性（PP-FROZEN `settings_dialog.h`） | private 对象图成员 15 件 + `new_cell/…`（公开 API 逐字不变） | 同 M7R21F3-3 先例（加性追认）；R-201 后半 findChild 字符串退役的载体 |
-| M7R22G2-6 | 行为零变化锚定 | R-256 行序不变稳态逐事件同值；R-201 null 守卫同义；R-183 稳态值表逐值同旧（ui_smoke classify 六探针逐值）；B.5 全五步绘制/交互/网络逐位 | 各条验证段（G2 handoff ④） |
+| M7R22G2-6 | 行为零变化锚定 | R-256 行序不变稳态逐事件同值；R-201 null 守卫同义；R-183 稳态值表逐值同旧（ui_smoke classify 六探针逐值）；B.5 步②–⑥ 全五步绘制/交互/网络逐位 | 各条验证段（G2 handoff ④） |
 | M7R22G2-7 | 查表键不变声明 | R-254(1/2) T() 统一：成员函数 tr() 与 T() 同上下文逐字键不变；辅助类裸 tr() 归一上下文（仓库零 .ts/.qm，运行期无差） | 若未来接入 .ts，辅助类键需按 "MainWindow" 上下文重新导出（登记） |
 
 ### 14.3 G3（判据小项与文档补录；3 提交 `3c35c00`/`39942bf`/`55b13a1`）
@@ -418,3 +418,42 @@
 | # | 裁定 | 理由 | 实施归属 |
 |---|---|---|---|
 | M7-ADJ-tag-move-2（G6 消耗尝试） | **三次移动仍未执行，授权保持未消耗**：G6 按流程 1–4 走完预检（`/releases/tags/v0.3.3` 404、releases 列表无 v0.3.3、`ls-remote` 核对 v0.3.3 → `cb181ee`/`^{}`=`b1af371`）、push main（`4addc51..35c4410`，HEAD `35c4410d704e`）、本机复核（ci-format `violations=0` 196 文件 + `make_winzip --smoke-exe` 五门禁 rc=0 含 E-2 冻结行逐字）；**流程 3 明文前提「linux job 全绿（含 release-dev ui_smoke）」达成**（main-full #54 linux 11m40s success，step 15/16 ui_smoke 与冻结行取证全绿，G1 修复实证），**但「main-full 至绿」未达成**：#54 总闸 failure = **winzip job 撞 `timeout-minutes: 20` 硬顶被取消**（step 12 build release 14m20s success → step 13 dev 子集 4m42s 在建撞顶 → step 14 make_winzip skipped；归因 = **代码量**：对照 #48 同 job 19m59s 绿 / build 13m05s→14m20s，`e1017fe..35c4410` G1 探针批 + G2 拆 TU 编译面增长；暖度假绿排除 = 暖度断言 1s 过、vcpkg restore 命中；Windows 无 ccache 重跑同型）。**停止决策**（不执行移动）+ 不可逆性论证：release.yml winzip 与 main-full winzip 两个构建步**逐字同命令**（`cmake --build --preset release` + `cmake --build build/release-dev --target photopipeline`，两 workflow 实读对照）、同 runner 同 20min 硬顶（`release.yml:293`）⇒ 本树预计 **≈21–22min > 20min**，放行移动则 publish 大概率 skipped（release #13 同型先例：winzip 20m16s 撞顶 ⇒ probe/publish skipped 零 Release）；而移动后**不得再动 + 禁止第三次移动** ⇒ 移动 = 把唯一授权烧在发不出的树上，0.3.3 卡死「tag 已动、零 Release、无第三次机会」死角。收口 `ls-remote` 复核 tag 仍 `cb181ee`/`^{}`=`b1af371`，release.yml 未触发 | ① 判据不可绕过/不放宽（纪律 9）：流程 3 的判据是「main-full 至绿」，linux 绿只是明文前提之一，总闸红即未达成；② runbook §6 失败即停触发项逐字命中「任一 job 撞 timeout-minutes: 20 被取消 ⇒ 停止发布链；归因（暖度/预算/代码量）后再处置」，归因 = 代码量，处置权在预算/设计口径；③ 不可逆性不对称：停 = 授权保留、无新增不可逆（`b1af371..35c4410` 全在历史）；移 = ~15% 成功率赌上唯一机会；④ 两班先例（十节 R2REL、十三节 F7）同一裁决口径：停在坏状态之前；⑤ 未采用「放行移动赌 runner 变快」——实测对照（#48 vs #54）+ 同命令同硬顶推算支持确定性超预算，非瞬态 | R2.2-G6（`docs/m7-evidence/m7r22-release.md` §3–§5；跨界预算处置需求见 §7） |
+
+## 十六、R2.3 轮裁定登记（M7-R2.3，2026-10-13；G7 winzip 预算工程解 + G8 尾单清理 + G9 文档收口）
+
+> 任务书出处 = 会话内分派书（G7/G8/G9 包）；原始登记 = `build/m7r23-g{7,8}/handoff.md`
+> 「裁定登记」节（逐字汇入，本表为唯一对账面）；验证读数摘录见
+> [docs/m7-evidence/m7r23-g7-gates.md](m7-evidence/m7r23-g7-gates.md)、
+> [m7r23-g8-gates.md](m7-evidence/m7r23-g8-gates.md)。G9（文档收口）零行为改动、零冻结面
+> 扩展；其唯一口径决定 = M7R23G9-1（受约束登记，M7R22G2 ③-2 衍生）。R2.3 消的是「已修」行内
+> 余量注记（R-266 分歧 / R-318 两面 / R-260·268 界外注记 / R-201 dialogkit 余量 / R-253 分段
+> 余量），**主标签零改判、四档计数不变**（326/15/3/1，见 m7-report 附录 A 表头注）。
+
+### 16.1 G7（winzip 预算工程解；3 提交 `83a9cb5`/`fa871c8`/`fe3b43f`）
+
+| # | 类型 | 内容 | 理由 / 依据 |
+|---|---|---|---|
+| M7R23G7-0 | **主对话裁定（判据零改动）** | winzip 预算超出走**产物复用/拆 job**：打包侧消费**已被验证的**构建产物（双 artifact），release-dev 子集段（构建 + ui_smoke + 金样）迁独立 job（main-full `windows-dev` / release.yml `winzip-build-dev`）；**不改 CI 判据、不放宽任何 timeout-minutes（全 20 未动）、不减五门禁与 E-2 `--smoke-exe`**；`tools/make_winzip.py` 零改动（「仅参数/输入面小改」授权未消耗） | 十五节 M7-ADJ-tag-move-2（G6 消耗尝试）残余①「release 链 winzip job 预算超出（≈21–22min > 20min）待裁定」的工程解；per-job ≤20min 由 main-full **#58/#59 双轮全绿**实证（winzip 97s/89s，m7r23-g7-gates.md ②）；「打包对象必须是被验证过的构建产物」经 winzip `needs: [windows, windows-dev]` 双背书后打包（G7-7） |
+| G7-1 | 判据逐步保留的范围解释 | 打包侧（winzip / winzip-pack）**逐步保留**「缓存目录预建 + vcpkg binary cache(restore) + vcpkg 缓存暖度断言」（断言文本/判据 ≥20 逐字不动）；vcpkg clone/bootstrap（R-091 SHA 断言）与 binary cache save 随 vcpkg install 留在各构建段 job | 打包段不再调用 vcpkg 二进制（运行时依赖走 artifact）；clone 是 install 的前置而非断言的前置。ccache 链零改动（Windows 无 ccache = R-124 查证事实） |
+| G7-2 | ci-budget 键同步（报告性配置，非门禁） | main-full：`windows-dev=7` 追加；release：`winzip-build=15,winzip-build-dev=7,winzip-pack=8` 替换旧 `winzip=15` | job 增改名后旧键失配会整列打「—」；ci-budget 脚本头明文「超预算只是报告事实」，timeout-minutes 全部维持 20 未动 |
+| G7-3 | artifact 命名与布局 | 双 artifact：`winzip-build-input`（release 树 + 许可面）/ `winzip-smoke-exe`（dev smoke exe）；单目录 staging（`$RUNNER_TEMP`）上传、下载 `path: .` 还原原布局 | 消除 upload-artifact 多路径 LCA 语义的不确定性；`PP_BUILD_DIR`/`--smoke-exe` 命令逐字不变 |
+| G7-4 | 不传 `vcpkg_installed/bin`（281MB） | 只传 share（3.5MB）；运行时 DLL 以 app-local 的 `build/release/*.dll`（40 个，含 jxl_threads.dll）随树传递 | make_winzip 的 vcpkg 只读面 = collect_licenses 的 share 与 jxl_threads 兜底（主源在构建树）；57MB vs 340MB |
+| G7-5 | `docs/m7-evidence/release-runbook.md` 增补 | 「job 预算工程解」节（两轮归因 / 复用链路图 / 双 artifact 命名 / #58 每 job 读数）+ §1 事实地图口径修正 | 任务书第 4 项点名；独占文件面之外的唯一改动，由任务书直接指派 |
+| G7-6 | ui_smoke/金样的归属 | 随 release-dev 段整体迁入 windows-dev（判据逐步逐字迁移，冻结行断言不动）；winzip 仍独立跑 E-2 | 测试与其所测构建树同 job；E-2 是打包产物级判据，保持在打包段 |
+| G7-7 | 「打包对象必须是被验证过的构建产物」的实现 | winzip `needs: [windows, windows-dev]`——windows 全量 ctest 绿（release 树）+ windows-dev ui_smoke/金样绿（smoke exe）双背书后才打包 | needs 成功语义 = 两侧测试先绿；gate 再总闸 |
+
+### 16.2 G8（尾单清理；4 提交 `4c9d7db`/`af7687f`/`9b37f75`/`0b9a4bb`）
+
+| # | 类型 | 内容 | 理由 / 依据 |
+|---|---|---|---|
+| M7R23G8-1 | **行为修正（修 R-189 语义漂移；R-266 契约归位）** | 关现役后现役落点 = R-266「现役前移首位」（`toggle_format` remove_tab 后按契约重申 front：`closing_active && !sel.empty()` → `sel.set_active(sel.items().front())`）；原「页签滑动邻接位」口径废止。format-roundtrip 探针由「取证不判据」升为**断言钉住**（断言只增） | 模型真值表 tests/unit/test_smoke.cpp 钉 front-move（M7R22G1-6 的模型侧口径不变）；UI 组合层向契约归位。回归影响面 = GUI 页签现役落点，`--dev` 语料回归不经 page_output 交互面 |
+| M7R23G8-2 | 加性（PP-FROZEN `settings_dialog.h`） | `dialogkit::TitleBar` 末尾追加 `icon` 成员（构造期直赋）；restyle_title_bar 退役 `pp-dlg-title-icon` findChild 反向伸入 | M7R22G2 ③-1 点名的收口修法原文（「可加性扩 TitleBar 结构（icon 指针）收口」）；objectName/公开 API 逐字不变 |
+| M7R23G8-3 | 词表加性（`meta_probe_context.h`） | objname:: 补 **13** 键 + 2 辅助常量（kInfoRow0 派生 / kPpMetaPrefix 前缀；文件新增常量 15 条 = 13+2，git diff 实测，词表 111→126；值串逐字与既有 objectName 一致）；smoke_probes 迁移 100 站点 + hook 8 处类型化访问器，meta 族字面量清零 | ProbeContext 全面迁移的必然产物；「加性 + 追认」（只增常量，不改既有值串）。新键数与任务书「11」的差额 = G1 前缀口径漏计 privacy_strip/mtime_sync 两族 4 键，如实报 13 |
+| M7R23G8-4 | 断言只增 | format-roundtrip +1 断言（R-266 关现役后现役前移首位 active==front），checked 15→16 | 行为修正须有机械化探针钉住（AGENTS §6.1 单测随码走）；严格度只增不减 |
+| M7R23G8-5 | 行为零变化锚定 | R-253 分段逐字搬移（调用序/接线 context 对象不变；MainWindow 冻结头签名零改动）；R-318 tooltip 双态与 page_output 同款；R-268/R-260 注释级；dialogkit objectName 不变；词表迁移值串逐字不变 | G8 handoff ④ 各条验证段（ctest 36/36 + ui_smoke 冻结行 + 金样 20/20 + tidy 262/76，m7r23-g8-gates.md ①） |
+
+### 16.3 G9（文档收口；M7R22G2 ③-2 衍生受约束登记）
+
+| # | 类型 | 内容 | 理由 / 依据 |
+|---|---|---|---|
+| M7R23G9-1 | **受约束登记（Exiv2 钉版限制；防御分支保留）** | `white_balance_text` 的色温拼接分支（`src/ui/meta_format.cpp:172-175` 消费 `Exif.Photo.ColorTemperature`）经 ExifData **恒不可达**：本 Exiv2（vcpkg 钉版）键表不接受该键（ExifKey 构造即抛 `Invalid tag name or ifdId 'ColorTemperature', ifdId 5`）⇒ `exif_text` 同键恒空串 ⇒ **色温显示从不出现**。产品口径 = 受约束登记：不升级/不换 Exiv2（依赖钉版纪律）、不加兜底假数据，**防御分支保留**（只读消费、零副作用，键可构造时自然生效）；test_meta_format wb 真值表**不立色温夹具**（`tests/unit/test_meta_format.cpp:214-216` 注释如实注明不构造理由） | M7R22G2 ③-2 跨界需求原案（「产品口径是否按『不存在的功能』披露/删码，交主对话裁定；本包只在 test_meta_format 如实注明不立夹具」）；披露口径取「色温段从不出现（受 Exiv2 钉版约束）」入 CHANGELOG「已知」，既不虚报功能也不删防御代码 |

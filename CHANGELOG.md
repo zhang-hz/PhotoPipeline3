@@ -345,15 +345,30 @@ R2.2 轮（M7-R2.2-G1…G4）**：发布前
   release.yml 未触发、**GitHub Release 仍未创建**；`M7-ADJ-tag-move-2` 授权继续未消耗，待
   ui_smoke 修复且 main-full 全绿后执行（全链见 [docs/m7-report.md](docs/m7-report.md) §3.10 与
   [docs/m7-evidence/m7r21-release.md](docs/m7-evidence/m7r21-release.md)）
-- **发行状态（R2.2 收口时点，2026-10-13）：待发布**。0.3.3 仍未发行：tag `v0.3.3` 停在
+- **M7-R2.2-G6 发行第三班实况（2026-10-13）**：G1 已修 Linux `ui_smoke` 且 R2.2 八项门禁
+  全绿后重走发行链——预检（零 Release 零资产、tag `b1af371` 未动）/ 推送 main
+  （`4addc51..35c4410`）/ 本机复核（ci-format `violations=0` 196 文件 + make_winzip 五门禁
+  rc=0 含 E-2 冻结行逐字）全绿；**linux job 全绿达成**（main-full #54，含 release-dev
+  `ui_smoke`，11m40s）——但 main-full **#54 总闸红**：唯一失败 = **winzip job 撞
+  `timeout-minutes: 20` 硬顶被取消**（build release 14m20s + dev 子集 4m42s 在建时撞顶；
+  归因 = 代码量增长：对照 #48 同 job 19m59s 绿、build 步 13m05s → 14m20s）⇒ runbook §6
+  「任一 job 撞 20min 被取消 ⇒ 停止发布链」命中，**第三次停止发行**：tag 未移动（仍
+  `b1af371`）、release.yml 未触发、**GitHub Release 仍未创建**；`M7-ADJ-tag-move-2` 授权
+  继续未消耗。附实测推算：release.yml winzip 与 main-full winzip 构建步逐字同命令，本树
+  预计 ≈21–22min > 20min 硬顶 ⇒ 即便放行 tag 移动，publish 亦大概率 skipped（release #13
+  同型先例：winzip 20m16s 撞顶、publish skipped 零 Release），移动 = 烧掉唯一一次授权且
+  0.3.3 卡死「tag 已动零 Release 无第三次机会」死角（全链见
+  [docs/m7-report.md](docs/m7-report.md) §3.11 与
+  [docs/m7-evidence/m7r22-release.md](docs/m7-evidence/m7r22-release.md)）
+- **发行状态（G6 第三班后，2026-10-13）：待发布**。0.3.3 仍未发行：tag `v0.3.3` 停在
   `b1af371`（零 Release 零资产）、release.yml 未触发、GitHub Release 未创建；`M7-ADJ-tag-move-2`
-  二次移动授权在案未消耗。**发布条件（三条同时满足方可执行）**：① R2.2 合流树（含 G2 格式
-  收口 `4dee5c8`）推送后 **main-full linux（全 ctest+金样）job 绿**——R-044 容差修复与
-  R2.2 探针批的 Linux 读数以此为准（若仍红按遥测三版注解逐字定位后修复再推）；② 发行前
-  本机门禁全绿（ci-format / ctest / 金样 / 回归 zero diff / make_winzip 五门禁 / 版本单源 /
-  密钥扫描，口径同 R2.1-F7 流程）；③ tag 移动按 `M7-ADJ-tag-move-2` 条件执行（预检零 Release
-  零资产 / 原子操作 + `ls-remote` 核对 / 移动后不得再动）。发行包 = G6（按
-  `docs/m7-evidence/release-runbook.md`）；「已发行 + CI 产物指纹」终态收口留待真发布后
+  二次移动授权在案未消耗。上轮发布条件 ①（main-full linux 含 ui_smoke 绿）**已达成**（#54
+  实证）、②（本机门禁全绿）已达成；**新增前置**：③ **release 链 winzip job 预算处置**
+  ——该 job 在当前树实测/推算 ≈21–22min > 20min 硬顶（`.github/` 构建步与 main-full 逐字
+  同命令），须先经裁定处置（预算重标定 `docs/v0.3.0-design.md` §12.3/§12.6 口径，或 winzip
+  job 减负，二者均在本包文件面外）才可动 tag；④ tag 移动按 `M7-ADJ-tag-move-2` 条件执行
+  （预检零 Release 零资产 / 原子操作 + `ls-remote` 核对 / **移动后不得再动**，故 ③ 未处置
+  前推 tag = 赌 ~15% 成功率烧授权，不做）。「已发行 + CI 产物指纹」终态收口留待真发布后
   （`d049d22` 先例口径不变）
 
 ## [0.3.2] — 2026-10-11

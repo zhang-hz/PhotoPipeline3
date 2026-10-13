@@ -65,6 +65,7 @@ git 时间序对照见 R2C 对照表 `build/m7r2-c/handoff.md` 附录）：
 | R2.2-G2 结构余量与语义裁定落地 | 15 提交 `12234f1`…`4dee5c8` | R-197 行为裁定落地（清除连带 touched 9 键，M7R22G2-0）+ B.5 mapwidget 拆分步②–⑥（tile_cache/map_interact/map_renderer/tile_fetcher/geocode_client）+ R-254/256/201/183 各余量 + kFieldProperty/theme.h logical/test_meta_format（§8.2） |
 | R2.2-G3 判据小项与文档补录 | 3 提交 `3c35c00`/`39942bf`/`55b13a1` | SCHEMA `state` 值表加性补 `done_with_errors`（M7R22G3-1）+ 校读意见原文补录 m7r2-reader-notes + R-269/242/268/260 小项复核与注释收口 + R-317/318 核查（§8.3） |
 | R2.2-G4 文档终稿 | 本提交（报告类） | R2.2 交付增章（§8）+ 台账终态四档 + 裁定汇入十四节 + CHANGELOG/README 口径 + 发行状态「待发布」（§8.4） |
+| R2.2-G6 发行第三班 | 本提交（报告类） | 发布 0.3.3 再走：预检/推送（`4addc51..35c4410`）/本机复核全绿，**linux（含 ui_smoke）达成** → main-full **#54 总闸红 = winzip 撞 20min 硬顶**（归因代码量增长）⇒ runbook §6 停止发布链，tag 未移动，`M7-ADJ-tag-move-2` 授权未消耗（§3.11） |
 
 **编号命名空间（多套并存，勿混读）**：① `R-nnn` = deep-review 条目（`docs/deep-review-0.3.2.md`）；
 ② `UX-n` = ux-review 条目（`docs/ux-review-14.md`），其内部另有**色彩分级子项 A1–D3**（§14，
@@ -448,6 +449,59 @@ R-171/R-002（write-warnings、meta-write-fail）、R-097（png_ok 硬断言）�
   build/release-dev` 或 CI 日志权限取 `LastTest.log`；二分锚点 #47 绿 / #48 红）；
   ② 0.3.3 未发行，「已发行 + CI 产物指纹」终态收口继续留待真发布后（`d049d22` 先例口径不变）；
   ③ 未采用空提交重触发辨瞬态（取证支持确定性回归 + 空提交污染历史），留主对话裁决。
+
+### 3.11 发行实况（M7-R2.2-G6 第三班，2026-10-13）：**停在 main-full winzip 撞 20min 硬顶，tag 仍未移动**
+
+> 任务书 = 「修复后发布 0.3.3」（G6 包；明文允许 git push、授权消耗 `M7-ADJ-tag-move-2`）；
+> 实况证据真源 = [docs/m7-evidence/m7r22-release.md](m7-evidence/m7r22-release.md)（预检/push/
+> main-full #54/本机复核/撞顶归因/停止决策逐步可复跑）。**GitHub Release URL：不存在**
+> （`/releases/tags/v0.3.3` 预检 404）。
+
+- **预检（移动前，全过）**：`/releases/tags/v0.3.3` = **404**（零 Release ⇒ 零资产）；releases
+  列表止于 v0.3.2（无 v0.3.3 条目）；`git ls-remote --tags` 核对 v0.3.3 → `cb181ee`/`^{}`=`b1af371`
+  （自首次移动后未动）；附加 `ci-versions-check` = `OK (10 keys, expect=0)`。
+- **push 与 main-full**：`git push origin 35c4410d704e…:main`（`4addc51..35c4410`，**HEAD
+  `35c4410d704e181f29e25aafb7eb7cfb204eeee2`**，区间 9 提交 = G2 4 + G4 2 + GATE 2 + G2 格式
+  收口 1，纯快进）→ **main-full #54（run 38338314518）completed/failure**（02:44:18 →
+  03:05:17Z，21m）：
+  - **流程 3 明文前提达成**：**linux（全 ctest+金样）success**（11m40s）——step 13 release
+    ctest 全量绿、**step 15 release-dev ctest（含 `ui_smoke`）绿**、step 16 UI-SMOKE 冻结行
+    取证绿、step 17 金样 20 对绿、step 18 冻结行断言绿、step 19 失败注解遥测 skipped
+    （无失败）。**G1 的 Linux `ui_smoke` 修复经 main-full 实证**（R2REL 的 8 条 + F7 的 1 条
+    均不再现）。
+  - **总闸红 = winzip job 撞 `timeout-minutes: 20` 硬顶被取消**（02:44:31 → 03:04:57，
+    20m26s）：step 12「configure + build release」success **14m20s** → step 13「release-dev
+    子集（photopipeline，供 E-2）」**cancelled 4m42s（在建时撞顶）** → step 14 make_winzip
+    **skipped**；其余 job 全绿（lint 9s / audit 86s / appimage 6m46s / windows 16m23s /
+    tidy 11m18s / cache-gc 8s）。
+  - **归因 = 代码量（编译时长增长），非暖度**（runbook §6 三分法）：暖度断言 1s 过、vcpkg
+    restore 命中（暖度假绿排除）；对照 main-full **#48**（R2.1 树，同 job **success 19m59s**）
+    步级：build release **13m05s → 14m20s（+1m15s）**、dev 子集 4m30s（完）vs 4m42s（未完）——
+    增量与 `e1017fe..35c4410`（G1 探针批 + G2 拆 TU）编译面增长同步；Windows runner 无
+    ccache（R-124），重跑同型确定性撞顶，空提交/复跑不可解。
+- **本机复核（流程 4，全绿）**：`ci-format` **violations=0**（196 文件）· `make_winzip.py
+  --smoke-exe` 五门禁 **rc=0**（E-2 冻结行 `UI-SMOKE OK shots=12 pages=3` 逐字；打包面
+  `build/release` 增量重建至 HEAD + 幂等 `ninja: no work to do.`；E-2 的 dev exe =
+  `build/release-dev/photopipeline.exe` **只读**拷入 staging 运行，对门禁树零写入）。
+  本机产物指纹：`PhotoPipeline-0.3.3-win64.zip` 34,801,005 B / sha256 `6bc3c2b1…` / 105 条目
+  （zip 不承诺字节可复现，发行指纹以 Release 附件为准）。
+- **停止决策（流程 3 未至绿 + runbook §6 失败即停 + 不可逆性论证）**：tag `v0.3.3` **未移动**
+  （收口 `ls-remote` 复核仍 `cb181ee`/`^{}`=`b1af371`）、release.yml **未触发**、GitHub
+  Release 未创建。`M7-ADJ-tag-move-2` **授权保持未消耗**（adjudications 十五节）。关键
+  不可逆性论证：release.yml winzip 与 main-full winzip 的两个构建步**逐字同命令**（两
+  workflow 实读对照）、同 runner 同 20min 硬顶 ⇒ 本树预计 **≈21–22min > 20min**，即便放行
+  tag 移动，publish 亦大概率 skipped（release #13 同型先例 20m16s 撞顶 ⇒ 零 Release）；
+  而 tag 移动「此后不得再动 + 禁止第三次移动」⇒ 移动即把唯一授权烧在发不出的树上，
+  0.3.3 卡死「tag 已动、零 Release、无第三次机会」死角。两班先例（§3.9/§3.10）同一口径：
+  **停在坏状态之前，保留授权**。
+- **残余（如实）**：① release 链 winzip job 预算超出（实测/推算 ≈21–22min vs 20min 硬顶，
+  0.3.1/0.3.2 时代 17.7min 已被代码增长吃穿）——**跨界**，处置选项 = 预算重标定
+  （`docs/v0.3.0-design.md` §12.3 预算 vs §12.6「timeout-minutes 不许改大」的口径修订，
+  runbook §3 与 d049d22 已挂账）或 winzip job 减负（动 `.github/`），均非 G6 文件面，
+  待裁定；② 0.3.3 未发行，「已发行 + CI 产物指纹」终态收口继续留待真发布后（`d049d22`
+  先例口径不变）；③ 03:1x 复取 run 级 conclusion 时撞匿名限流 403（60/60，reset
+  03:40:07Z）——run 级终态以 job 级 9/9 全量读数推定（gate failure ⇒ run failure），取证
+  缺口如实登记。
 
 ---
 
@@ -1038,8 +1092,11 @@ a「形参组结构化」为主 + b「授权重播种 + 归因」兜底），仓
   7. **维持登记的结构债**（R2.2 不改判）：UX-8 组折叠头整行可点、R-202 三套异步脚手架、
      R-325 强类型、R-330 两页骨架、enc_heif 四职责、B.2 page_run 拆分、R-292 镜像副本余组、
      R-034/052/068/079/080/093/134/147/291/327/329 等（附录 A/B 格内注记为准）。
-  8. **0.3.3 未发行**：tag `v0.3.3` 停在 `b1af371`（零 Release 零资产）；`M7-ADJ-tag-move-2`
-     授权在案未消耗。**发行状态 = 待发布**，条件见 CHANGELOG [0.3.3]「发行」节末条。
+  8. **0.3.3 未发行**（G6 第三班后更新）：tag `v0.3.3` 停在 `b1af371`（零 Release 零资产）；
+     `M7-ADJ-tag-move-2` 授权在案未消耗。G6 已达成原条件①（main-full #54 linux 含
+     `ui_smoke` 绿）与②（本机门禁全绿），但新增前置 = **release 链 winzip job 预算处置**
+     （本树实测/推算 ≈21–22min > 20min 硬顶，§3.11）——处置属设计/`.github/` 口径，
+     跨界待裁定。**发行状态 = 待发布**，条件见 CHANGELOG [0.3.3]「发行」节末条。
   9. **tidy 棘轮登记项待后续回收**（G5 收口，M7R22G5-1）：test_meta_format `bugprone-
      suspicious-include` =1（同型同因 test_icons；替代修法 = CMake 目标级接线两处同清零）+
      F4 三组维持登记（page_run +1 签名重构面 / exif_editor +1 无零行为修法 / 拆 TU 机械迁移

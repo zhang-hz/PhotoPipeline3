@@ -198,7 +198,8 @@ private:
 // R-197（M7-R2.1-F3）：时间标签集合 4 份真相收敛为 ui/time_tag_keys.h 单表（逐键角色显式）；
 // 原 kExifTimeKeys/kXmpTimeKeys 与 is_exif_time_key/is_xmp_time_key 的字面量全部退役
 // （清除 3+2 vs 命中 6+3 的静默漂移消除）。M7R22G2-0（主对话裁定）：清除集 = touched 全部
-// 9 键（与命中面同集；原「清除 = wall_clock 5 键」行为换锚，裁定登记见 build/m7r22-g2/handoff.md）。
+// 9 键（与命中面同集；原「清除 = wall_clock 5 键」行为换锚，裁定登记见
+// build/m7r22-g2/handoff.md）。
 
 // R-199（M7-R2.1-F3）：三态机/二态机组合框的**唯一真相 = itemData**（构造时 addItem 文本 +
 // 枚举值，与 R-190 同一收口法）—— 读回 currentData()、落值 findData()；原
@@ -1791,7 +1792,7 @@ pp::MetadataOverride ExifEditor::Impl::build_override(std::vector<std::string> *
     // upsert_remove_edit。M7R22G2-0（主对话裁定，2026-10-13）：清除集 = time_tag_keys.h 的
     // **touched 全部 9 键**（OffsetTime* 3 + Xmp MetadataDate 一并 remove），与〔批〕命中面 /
     // shift 触达面同集 —— 消「清除 3 键 vs 命中 9 键」漂移；原「只清 wall_clock 5 键」换锚
-    //（裁定登记 + 断言换锚 + 回归归因见 build/m7r22-g2/handoff.md）。
+    // （裁定登记 + 断言换锚 + 回归归因见 build/m7r22-g2/handoff.md）。
     const TriMode tmode = tri_of(time_mode);
     if (tmode == TriMode::Override) {
         ov.time_shift = time_shift_from_widgets();

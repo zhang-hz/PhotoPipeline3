@@ -1241,7 +1241,7 @@ QWidget *SettingsDialog::build_run_page(const theme::Tokens &tokens, const pp::A
         flatten->setAccessibleName(T("alpha 合成底色"));
         auto *swatch = new Swatch(alpha_track);
         swatch->set_tokens(tokens);
-        flatten_preview_ = swatch; // R-201 后半：对象图成员化
+        flatten_preview_ = swatch;               // R-201 后半：对象图成员化
         swatch->set_gray(slider_to_gray(gray0)); // 修 4-15：色块 = 滑杆值的灰度映射
         swatch->setToolTip(T("alpha 合成底色预览（与滑杆值一致）"));
         ar->addWidget(inline_slot(alpha_track, T("黑")));
@@ -1266,7 +1266,7 @@ QWidget *SettingsDialog::build_run_page(const theme::Tokens &tokens, const pp::A
                                QLatin1String(kRotateOrientation));
         auto *rotate_box = rotate.box;
         rotate_box->setChecked(current.rotate_orientation); // 默认开（settings 默认 true）
-        rotate_ = rotate_box; // R-201 后半：对象图成员化
+        rotate_ = rotate_box;                               // R-201 后半：对象图成员化
         rotate_box->setToolTip(T("按 EXIF 方向自动旋转输出；关闭则保留原始像素方向"));
         rotate_box->setAccessibleName(T("按 EXIF 方向自动旋转输出"));
         rotate_box->set_tokens(tokens);
@@ -1314,7 +1314,7 @@ QWidget *SettingsDialog::build_map_page(const theme::Tokens &tokens, const pp::A
         layer_spec.accessible = T("图层");
         layer_spec.tooltip = T("地图图层：矢量路网 / 卫星影像 / 混合（影像 + 标注）");
         auto *layer = formkit::combo_box(page_map, layer_spec);
-        map_style_ = layer; // R-201 后半：对象图成员化
+        map_style_ = layer;                               // R-201 后半：对象图成员化
         layer->addItem(T("矢量"), map_style_ids().at(0)); // R-137：id 走 layers.h 单源词表
         layer->addItem(T("卫星"), map_style_ids().at(1));
         layer->addItem(T("混合"), map_style_ids().at(2));
@@ -1338,7 +1338,7 @@ QWidget *SettingsDialog::build_map_page(const theme::Tokens &tokens, const pp::A
 
         auto *amap_key = new QLineEdit(page_map);
         amap_key->setObjectName(QLatin1String(kAmapKey));
-        amap_key_ = amap_key; // R-201 后半：对象图成员化
+        amap_key_ = amap_key;                       // R-201 后半：对象图成员化
         amap_key->setEchoMode(QLineEdit::Password); // 不回显明文
         amap_key->setText(QString::fromStdString(current.amap_key));
         amap_key->setPlaceholderText(T("在高德开放平台申请"));

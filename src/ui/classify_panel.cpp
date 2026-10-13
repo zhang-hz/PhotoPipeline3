@@ -132,10 +132,12 @@ struct ClassifyPanel::Impl {
         QString id; // "" = 「全部」
         formkit::ChipButton *chip = nullptr;
         formkit::PillBadge *count = nullptr;
+        DotLabel *dot = nullptr; // R-183 后半：复用改配的色点句柄
     };
     std::vector<Row> rows;
     QGridLayout *grid = nullptr; // 2 列 kv-grid（A15；单元行 28 / 列距 12）
     QPushButton *new_btn = nullptr;
+    QWidget *new_cell = nullptr; // R-183 后半：「＋ 新建分类…」格（跨重建复用）
     QTimer *refresh_timer = nullptr;
 
     void rebuild_rows();
@@ -252,23 +254,38 @@ QString ClassifyPanel::filter_class_id() const { return impl_->filter_class_id; 
 // ---------------------------------------------------------------------------
 
 void ClassifyPanel::Impl::rebuild_rows() {
-    // 清旧格（含「＋ 新建分类…」的活动格）：**先 hide 再 deleteLater** —— deleteLater 要等事件
-    // 循环回到主层才会真正析构，而本面板的重建由 0ms 定时器/信号驱动、冒烟走 processEvents
-    // （不派发 DeferredDelete）→ 旧代部件会以**旧几何**继续可见并在同槽位叠画（实测伪影：
-    // 分类首行的"双圆角框 + 双 ＋"）。hide() 让旧代立即退出可见面，析构仍走 deleteLater
-    // （不在这里直接 delete：重建可能发生在行部件自己的信号发射栈内，立即析构 = 悬垂发送者）。
-    while (QLayoutItem *item = grid->takeAt(0)) {
-        if (QWidget *w = item->widget()) {
-            w->hide();
-            // R-183（M7-R2.1-F4，E2-11 修法前半）：重建协议与 deleteLater 解耦 —— 旧代退出
-            // 可见面的**同时**断开其信号面（悬垂点击不再触发旧 handler）；析构仍走 deleteLater
-            // （立即 delete 会在行部件自身信号发射栈内留下悬垂发送者，见上注）。
-            QObject::disconnect(w, nullptr, panel, nullptr);
-            w->deleteLater();
+    // R-183 后半（M7R22G2）：行部件**复用级**解耦 —— 重建不再"清一色销毁再新建"，而是复用
+    // 既有行部件（就地改配 id/类名/键帽/计数/色点/tooltip/令牌），只有**行数变少**的富余行
+    // 才走「hide + 断信号 + deleteLater」退出。E2-11 的病根（重建协议与 deleteLater 时序深度
+    // 绑定、探针持件即碎、旧代叠画伪影）随复用消失：稳态下部件身份跨重建稳定。富余行沿用
+    // F4 前半口径（hide 先退出可见面、断信号面、deleteLater 析构 —— 不立即 delete：重建可能
+    // 发生在行部件自己的信号发射栈内，立即析构 = 悬垂发送者）。
+    //
+    // 规格表（视觉序 = 先「全部」后各类）与原 add_row 逐项同源（文案/键帽/计数/色点同码）。
+    struct Spec {
+        QString id;
+        QString label;
+        QString keycap;
+        int count = 0;
+        QColor dot;
+    };
+    std::vector<Spec> specs;
+    const int total = model != nullptr ? int(model->size()) : 0;
+    specs.push_back(Spec{QString(), ClassifyPanel::tr("全部"), QString(), total, kAllDot});
+    if (registry != nullptr) {
+        for (const pp::ClassDef &c : registry->classes) {
+            specs.push_back(Spec{QString::fromStdString(c.id), QString::fromStdString(c.name),
+                                 c.hotkey != 0 ? QString(QChar(c.hotkey)) : QString(),
+                                 int(model != nullptr ? model->class_file_count(c.id) : 0),
+                                 QColor(QRgb(c.rgb & 0xFFFFFFu))});
         }
-        delete item;
     }
-    rows.clear();
+
+    // 旧格只出布局（部件保留复用）；布局项随 place 重排。**不再**逐件 hide/deleteLater ——
+    // 叠画伪影（分类首行"双圆角框 + 双 ＋"）在复用语义下无从发生。
+    while (QLayoutItem *item = grid->takeAt(0)) {
+        delete item; // 只摘布局项，不碰 widget
+    }
 
     // A15（mockups-v2 形态）：单元按**视觉序**填格（左→右、上→下），2 列 / 行 pitch 28
     int slot = 0;
@@ -278,8 +295,13 @@ void ClassifyPanel::Impl::rebuild_rows() {
         ++slot;
     };
 
-    const auto add_row = [&](const QString &id, const QString &label, const QString &keycap,
-                             int count, const QColor &dot) {
+    // 复用或新建行部件（index = 槽位）。点击/右键按 index 回读 rows[index].id —— 件不随重建
+    // 更换，捕获面不必跟着重建走（原 add_row 每次按值捕获 row_id 的做法随之退役）。
+    const auto ensure_row = [&](int index) -> Row & {
+        if (index < int(rows.size())) {
+            return rows[std::size_t(index)];
+        }
+        const int self = index; // 点击/右键回读 rows[self].id（复用后件不换、捕获不追重建）
         auto *row = new QWidget(panel);
         row->setObjectName(QStringLiteral("pp-class-row"));
         row->setFixedHeight(kRowHeight); // R1：行 pitch 28（= grid-auto-rows:28px）
@@ -289,30 +311,22 @@ void ClassifyPanel::Impl::rebuild_rows() {
         lay->setSpacing(kCellGap);
         auto *dot_label = new DotLabel(row);
         dot_label->setObjectName(QStringLiteral("pp-class-dot"));
-        dot_label->set_color(dot);
         // 打标 chip（formkit 唯一形态）：键帽 = 热键位（无热键 → 不画键帽）、文字 = 类名；
         // R-143：chip = **过滤档开关**（左键 = 按该类过滤/再点清除；右键菜单仍归**单元** ——
         // 按钮对 ContextMenu 事件不消费，沿父链落到行）；宽度只由类名决定（§12-4 零形变）；
         // 宽上限 = 单元可用宽（长名截断；全名/热键进 tooltip + accessibleName，§8/§11）
         auto *chip = new formkit::ChipButton(row);
         chip->setObjectName(QStringLiteral("pp-class-chip"));
-        chip->set_key_text(keycap);
-        chip->setText(label);
         chip->setFocusPolicy(Qt::NoFocus);
         chip->setCursor(Qt::PointingHandCursor);
-        chip->setFixedWidth(std::min(chip->sizeHint().width(), chip_max_width()));
-        chip->setToolTip(
-            keycap.isEmpty()
-                ? ClassifyPanel::tr("%1（点击按此类筛选）").arg(label)
-                : ClassifyPanel::tr("%1 · 热键 %2（点击按此类筛选）").arg(label, keycap));
-        chip->setAccessibleName(label); // §11：可读名
-        chip->set_tokens(paint_tokens());
         {
             // R-143：点击 = 过滤档切换（当前档再点 / 「全部」= 清除过滤）；G5 运行中只读
-            const QString &row_id = id;
-            QObject::connect(chip, &QAbstractButton::clicked, panel, [this, row_id] {
+            QObject::connect(chip, &QAbstractButton::clicked, panel, [this, self] {
                 if (locked)
                     return;
+                if (self >= int(rows.size()))
+                    return;
+                const QString &row_id = rows[std::size_t(self)].id;
                 const QString next = (row_id == filter_class_id) ? QString() : row_id;
                 filter_class_id = next;
                 apply_row_styles();
@@ -320,68 +334,89 @@ void ClassifyPanel::Impl::rebuild_rows() {
             });
         }
         // 计数 = 中性胶囊（§2.7：计数不表状态、禁蓝色实心；1-11/1-13）
-        auto *cnt = formkit::PillBadge::count(row, count);
+        auto *cnt = formkit::PillBadge::count(row, 0);
         cnt->setObjectName(QStringLiteral("pp-class-count"));
-        cnt->set_tokens(paint_tokens());
         lay->addWidget(dot_label);
         lay->addWidget(chip);
         lay->addStretch(1); // 计数贴单元右缘（mockup 的 `1fr auto` 列对）
         lay->addWidget(cnt);
-        const int index = int(rows.size());
         connect(row, &QWidget::customContextMenuRequested, panel,
-                [this, index, row](const QPoint &pos) {
+                [this, self, row](const QPoint &pos) {
                     if (locked)
                         return; // G5：运行中只读（不弹菜单）
-                    QMenu *menu = panel->build_row_menu(index);
+                    QMenu *menu = panel->build_row_menu(self);
                     menu->setAttribute(Qt::WA_DeleteOnClose, true);
                     menu->exec(row->mapToGlobal(pos));
                 });
-        place(row);
-        rows.push_back(Row{row, id, chip, cnt});
+        rows.push_back(Row{row, QString(), chip, cnt, dot_label});
+        return rows.back();
     };
 
-    // 首格 = 「全部」（保留虚拟分类；计数 = 模型行数；无热键 → 无键帽）
-    const int total = model != nullptr ? int(model->size()) : 0;
-    add_row(QString(), ClassifyPanel::tr("全部"), QString(), total, kAllDot);
-    if (registry != nullptr) {
-        for (const pp::ClassDef &c : registry->classes) {
-            add_row(QString::fromStdString(c.id), QString::fromStdString(c.name),
-                    c.hotkey != 0 ? QString(QChar(c.hotkey)) : QString(),
-                    int(model != nullptr ? model->class_file_count(c.id) : 0),
-                    QColor(QRgb(c.rgb & 0xFFFFFFu)));
+    for (std::size_t i = 0; i < specs.size(); ++i) {
+        const Spec &spec = specs[i];
+        Row &entry = ensure_row(int(i));
+        // 就地改配（复用路径；取值与原 add_row 逐位一致）
+        entry.id = spec.id;
+        entry.dot->set_color(spec.dot);
+        entry.chip->set_key_text(spec.keycap);
+        entry.chip->setText(spec.label);
+        entry.chip->setFixedWidth(std::min(entry.chip->sizeHint().width(), chip_max_width()));
+        entry.chip->setToolTip(
+            spec.keycap.isEmpty()
+                ? ClassifyPanel::tr("%1（点击按此类筛选）").arg(spec.label)
+                : ClassifyPanel::tr("%1 · 热键 %2（点击按此类筛选）").arg(spec.label, spec.keycap));
+        entry.chip->setAccessibleName(spec.label); // §11：可读名
+        entry.chip->set_tokens(paint_tokens());
+        entry.count->setText(QString::number(spec.count));
+        entry.count->set_tokens(paint_tokens());
+        place(entry.widget);
+    }
+
+    // 富余行（行数变少，如删类）：F4 前半口径退出 —— hide + 断信号面 + deleteLater。
+    while (int(rows.size()) > int(specs.size())) {
+        Row extra = rows.back();
+        rows.pop_back();
+        if (extra.widget != nullptr) {
+            extra.widget->hide();
+            QObject::disconnect(extra.widget, nullptr, panel, nullptr);
+            extra.widget->deleteLater();
         }
     }
 
     // 「＋ 新建分类…」= 文字链（R4「文字链无框」+ mockup `.btn.lnk`；高 = btn_h，裁定 A7）；
     // M5-T3 起 ＋ = 矢量图标。A15：位置 = 网格的**下一个空位**（与 mockup 的
-    // `<button class="btn lnk">…</button>` 同格位，不再自占整行）。
-    auto *btn = new QPushButton(ClassifyPanel::tr("新建分类…"), panel);
-    btn->setObjectName(QStringLiteral("pp-class-new"));
-    btn->setToolTip(ClassifyPanel::tr("新建分类…"));
-    btn->setAccessibleName(ClassifyPanel::tr("新建分类…")); // §11
-    icons::apply(btn, icons::Name::Add, paint_tokens().accent, paint_tokens().text3, 12);
-    btn->setFixedHeight(theme::Metrics::btn_h); // 裁定 A7（R4 按钮高 26）
-    btn->setEnabled(!locked);
-    connect(btn, &QPushButton::clicked, panel, [this] {
-        if (locked)
-            return;
-        bool ok = false;
-        const QString name = QInputDialog::getText(panel, ClassifyPanel::tr("新建分类"),
-                                                   ClassifyPanel::tr("分类名称："),
-                                                   QLineEdit::Normal, QString(), &ok);
-        if (ok && !name.trimmed().isEmpty())
-            panel->new_class(name.trimmed());
-    });
-    auto *btn_cell = new QWidget(panel);
-    btn_cell->setObjectName(QStringLiteral("pp-class-new-cell"));
-    auto *btn_lay = new QHBoxLayout(btn_cell);
-    btn_lay->setContentsMargins(0, 0, 0, 0);
-    btn_lay->setSpacing(0);
-    btn_lay->addWidget(btn);
-    btn_lay->addStretch(1); // 文字链左对齐（mockup `style="text-align:left"`）
-    place(btn_cell);
-    new_btn = btn; // 供 set_locked/apply_row_styles 复用（成员持有，不额外父子关系）
+    // `<button class="btn lnk">…</button>` 同格位，不再自占整行）。R-183 后半：与行部件同
+    // 口径**跨重建复用**（首建后不再换件；图标/锁定态每轮重放）。
+    if (new_btn == nullptr) {
+        auto *btn = new QPushButton(ClassifyPanel::tr("新建分类…"), panel);
+        btn->setObjectName(QStringLiteral("pp-class-new"));
+        btn->setToolTip(ClassifyPanel::tr("新建分类…"));
+        btn->setAccessibleName(ClassifyPanel::tr("新建分类…")); // §11
+        btn->setFixedHeight(theme::Metrics::btn_h);             // 裁定 A7（R4 按钮高 26）
+        connect(btn, &QPushButton::clicked, panel, [this] {
+            if (locked)
+                return;
+            bool ok = false;
+            const QString name = QInputDialog::getText(panel, ClassifyPanel::tr("新建分类"),
+                                                       ClassifyPanel::tr("分类名称："),
+                                                       QLineEdit::Normal, QString(), &ok);
+            if (ok && !name.trimmed().isEmpty())
+                panel->new_class(name.trimmed());
+        });
+        auto *btn_cell = new QWidget(panel);
+        btn_cell->setObjectName(QStringLiteral("pp-class-new-cell"));
+        auto *btn_lay = new QHBoxLayout(btn_cell);
+        btn_lay->setContentsMargins(0, 0, 0, 0);
+        btn_lay->setSpacing(0);
+        btn_lay->addWidget(btn);
+        btn_lay->addStretch(1); // 文字链左对齐（mockup `style="text-align:left"`）
+        new_btn = btn;          // 供 set_locked/apply_row_styles 复用（成员持有，不额外父子关系）
+        new_cell = btn_cell;
+    }
+    icons::apply(new_btn, icons::Name::Add, paint_tokens().accent, paint_tokens().text3, 12);
+    new_btn->setEnabled(!locked);
     new_btn->setVisible(true);
+    place(new_cell);
 
     apply_cell_metrics(); // 宽度定尺（面板宽已知时；后续 resize 走 resizeEvent）
     // R-143：过滤档指向的类被删除 → 过滤档清算（否则无 chip 点亮、列表却只剩空集）

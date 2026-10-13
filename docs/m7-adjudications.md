@@ -468,3 +468,17 @@
 | # | 裁定 | 理由 | 实施归属 |
 |---|---|---|---|
 | M7-ADJ-tag-move-2（G10 **正式消耗**） | **二次移动已执行，授权消耗完毕**：前提全过——预检 `/releases/tags/v0.3.3` 404（零 Release 零资产，移动前 07:01Z 复检仍 404）、`ls-remote` 核对 v0.3.3 → `cb181ee`/`^{}`=`b1af371`、push main（`fe3b43f..6b571cb`，HEAD `6b571cb`）、**main-full #60 全绿**（completed/success，十 job 含总闸，17m11s）、本机复核全绿（ci-format violations=0 196 文件 + make_winzip 五门禁 rc=0 含 E-2 冻结行逐字）。原子执行 `git tag -f -a v0.3.3 -F tagmsg.txt 6b571cb`（注解原文保留）+ `git push --force origin refs/tags/v0.3.3` → `+ cb181ee...0aba959 (forced update)`；`ls-remote` 核对 tag 对象 **`0aba959`** → `^{}` = **`6b571cb`**（= 任务书「指向新 HEAD」）。release.yml run 38360204850 七 job 全绿、publish 执行，**GitHub Release v0.3.3 已创建**（published 2026-10-13T07:19:43Z，4 资产，API digest ↔ 下载件 SHA256SUMS.txt 逐字交叉一致）。**此后 tag 落点不得再动（含任何红灯情形）——任务书步骤 8「禁止第三次移动」自此生效** | ① 用户明确指令「修复后发布 0.3.3」= 任务书授权原文；② 三条件逐条满足（预检零 Release 零资产 / 原子 + ls-remote 核对 / 移动后不得再动），与十节首次移动同口径；③ 前置「main-full 至绿」经 #60 实测达成（非放宽）——G7 工程解（M7R23G7-0）消化三班残余③后，判据可诚实达成；④ 移动后即刻跟到 publish 并核对 Release 资产（十节条件六「跟到 publish」），发布链无死角 | G10（[m7r23-release.md](m7-evidence/m7r23-release.md) §1–§6；CHANGELOG [0.3.3]「发行终态」条 + m7-report §3.12） |
+
+## 十八、0.3.4 热修裁定（M7-R2.4，2026-10-13）
+
+> 背景 = 0.3.3 Windows 发行件「双击打不开」P0（M7-WP5 无边框收口的 `winId()` 重入递归建窗）。
+> 任务书出处 = 会话内用户指令四条：「1 先进行修复 2 为什么门禁没有发现 3 开发测试为什么没有发现
+> 4 发布0.3.4」——明文授权修复 + 发布（含 git push / tag / Release）。根因与归因真源 =
+> [docs/0.3.4-report.md](0.3.4-report.md)。
+
+| # | 裁定 | 理由 | 实施归属 |
+|---|---|---|---|
+| M7R24-1 | **frameless 过滤器/路由句柄只读化**：`nativeEventFilter` 与 `trigger()` 的句柄来源 `winId()`（会隐式建窗）改为 `internalWinId()`（只读当前句柄、永不建窗）；未建窗 = 0 → 消息放行 Qt。冻结面零改动（frameless 非 PP-FROZEN 面；`--version`/SMOKE/UI-SMOKE 冻结行/SCHEMA 逐字未动） | 根因定位：窗口创建期（`CreateWindowEx` 同步投递 `WM_NCCALCSIZE`）`winId()` 重入 `createWinId()` 递归建窗直至栈崩（0.3.3 打不开 P0）；句柄只读化从机制上消灭"消息处理期隐式建窗"整类隐患，行为面零变化（金样 20/20 + 回归 zero diff + ui-smoke 冻结行背书） | R2.4-G1（[0.3.4-report.md](0.3.4-report.md) §1–§2） |
+| M7R24-2 | **winzip 门禁 5 → 6**：新增 E-3 真机启动探针（`tools/win_launch_probe.py`，冻结行前缀 `WIN-LAUNCH OK`），staging exe 走真实 qwindows 平台断言「可见主窗 + 顶层窗口数不超阈 + 进程存活」 | 判据只增不减：offscreen 判据（金样/--ui-smoke/ctest）不触达真实建窗路径，此类缺陷需要真实平台判据；探针自带阳性对照（0.3.3 坏包被拦 `window-storm windows=47>32`，修复后 `WIN-LAUNCH OK windows=6 visible=1`），本地与 CI 同一判据 | R2.4-G1（同上 §2） |
+| M7R24-3 | **回归基线重播种 0.3.4**：`golden.windows.log` 走 `--update`（R-015 归因护栏先行）、`golden.log` 机械换锚 `version=0.3.3→0.3.4`；归因 = **版本行 12 / 行为 0** | 版本单源 bump 的既有体例（先例 97cd9da「0.3.3 重播种：12 行逐行归因：版本行 12 / 行为 0」）；版本串是日志行内容、非行为面，语义零变化 | R2.4-G2 |
+| M7R24-4 | **发行授权与 tag 纪律**：用户明文「发布 0.3.4」= push/tag/Release 授权；tag `v0.3.4` 指向发行树（修复 + 门禁 + 版本 0.3.4 + 口径），**报告类提交不入 tag**（收口报告与产物指纹在 tag 后补记）；v0.3.3 tag 落点与 Release 记录**不再改动**（坏件只做口径标注） | 对齐 §9 发行纪律与 M7-ADJ-tag-move-2 终态条款（tag 资产挂载后不可移动）；0.3.3 坏件的处置取「标注 + 引导换 0.3.4」最小面 | R2.4-G3（CHANGELOG [0.3.4]「发行」节） |

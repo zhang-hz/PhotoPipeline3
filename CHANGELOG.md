@@ -1,5 +1,48 @@
 # 变更日志
 
+## [0.3.4] — 2026-10-13
+
+**M7-R2.4 热修轮**：0.3.3 Windows 发行件「双击打不开」P0 热修 + 该类缺陷的机械化防线。
+根因一句话：M7-WP5 无边框收口把句柄获取从 `winId()`（会隐式建窗）换成在
+`nativeEventFilter` 里对**每条**原生消息调用 `winId()`，窗口创建期（`CreateWindowEx` 同步投递
+`WM_NCCALCSIZE`）因 `data.winid` 尚未赋值而**重入 `createWinId()` 递归建窗直至栈崩**（约 277 层
+耗尽栈；每层泄漏一对隐藏顶层窗 + Qt 6.11 `_q_titlebar` 伴生窗），窗口全程不可见 → 用户侧 =
+双击无反应、数秒后进程死亡（ntdll `0xc000041d` / `0xc0000005`）。offscreen 判据（金样 /
+`--ui-smoke` / ctest）不触达真实建窗路径，0.3.3 全线门禁绿灯放行；真机验收清单（UX-7/UX-13）
+当时标注"待人工签收"未签收，是流程侧直接原因。版本单源 = `CMakeLists.txt:19` = **0.3.4**。
+
+### 修复
+
+- **Windows 启动即挂（0.3.3 打不开，P0）**：`Frameless::nativeEventFilter` 与 `trigger()` 的
+  句柄来源改为 `internalWinId()`（只读当前句柄、**永不建窗**；`qwidget.h` 取值语义），未建窗 = 0
+  → 消息放行 Qt —— 消息处理期不再有任何隐式建窗面。触达面仅 `src/platform/frameless.cpp`
+  （引擎 `src/core`/`src/codecs`/`src/decode` 零改动）；金样 **20/20** + 全语料回归 **zero diff** +
+  `--ui-smoke` 冻结行逐字不变背书行为零变化。
+
+### 变更
+
+- **winzip 门禁 5 → 6**：新增 **E-3 真机启动探针** `tools/win_launch_probe.py`（冻结行前缀
+  `WIN-LAUNCH OK`，与 SMOKE/UI-SMOKE 同一冻结纪律）——staging exe 走**真实 qwindows 平台**，
+  断言「可见主窗出现 + 顶层窗口数不超阈（递归建窗风暴守卫）+ 进程存活」。阳性对照实测：
+  0.3.3 坏包被拦（`WIN-LAUNCH FAIL … reason=window-storm windows=47>32`），修复后
+  `WIN-LAUNCH OK windows=6 visible=1`。本类缺陷 offscreen 永不可见，此探针补上判据面的结构性
+  盲区（本地与 CI 同一条判据）。
+
+### 已知
+
+- **0.3.3 的 Windows zip 为坏件（启动即挂）**：请改用 0.3.4；按发行纪律 v0.3.3 tag 落点与
+  Release 记录不再改动，只在 README/CHANGELOG 标注口径。
+- 门禁归因与"为何漏过"的完整分析见 `docs/0.3.4-report.md`（§3 门禁盲区 / §4 开发期盲区）。
+
+### 发行
+
+- 发行授权 = 用户明文「发布 0.3.4」（2026-10-13）；tag `v0.3.4` 指向发行树（含 P0 修复 +
+  E-3 探针门禁 + 版本单源 0.3.4），报告类提交不入 tag。
+- 发行链路沿用 tag 触发 `release.yml`（appimage → probe-appimage / winzip → probe-winzip →
+  publish）；winzip 门禁自本版起为**六项**（A 闭包 / B 来源 / C 结构 / D 许可 / E-1 启动版本 /
+  E-2 offscreen ui-smoke / **E-3 真机启动探针**）。
+- 产物指纹与发布终态在 tag 后的收口提交补记（体例同 `[0.3.3]`）。
+
 ## [0.3.3] — 2026-10-12
 
 **M7 工程收口轮（M7-WP1…WP13）+ R2 轮（M7-R2A…R2F）+ R2.1 轮（M7-R2.1-F1…F4）+

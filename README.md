@@ -32,7 +32,15 @@ caption 单轨 46×32；壳层顶栏 44 + 状态栏 30；**栏宽固定轴 330 /
 逐条探针、偏差与未决项见 [docs/m5-report.md](docs/m5-report.md)，开发期裁定见
 [docs/m5-adjudications.md](docs/m5-adjudications.md)。
 
-**0.3.3（当前版本）= M7 工程收口轮 + R2 尾单轮 + R2.1 收口轮 + R2.2 收口轮 + R2.3 收口轮**：发布前深度
+**0.3.4（当前版本）= M7-R2.4 热修轮**：0.3.3 Windows 发行件「双击打不开」P0 热修——无边框
+收口（M7-WP5）曾在窗口创建期递归建窗（`nativeEventFilter` 内 `winId()` 重入）直至栈崩，
+现句柄只读化（`internalWinId()`）根治，触达面仅 `src/platform/frameless.cpp`；同时新增
+**winzip 门禁 E-3 真机启动探针**（`tools/win_launch_probe.py`，真实 qwindows 平台断言可见
+主窗 + 窗口数不超阈 + 进程存活），补上 offscreen 判据看不见真机建窗缺陷的结构性盲区。
+**0.3.3 的 Windows zip 为坏件**（启动即挂），请改用 0.3.4。逐条变更见
+[CHANGELOG.md](CHANGELOG.md) `[0.3.4]`，根因/证据/门禁归因见 [docs/0.3.4-report.md](docs/0.3.4-report.md)。
+
+**0.3.3 = M7 工程收口轮 + R2 尾单轮 + R2.1 收口轮 + R2.2 收口轮 + R2.3 收口轮**：发布前深度
 评审（331 条）+ UI 14 项评审的批量整改、结构重构与能力补强。用户可见变化：**数据安全根治**
 （输出路径命中源文件即拒绝、写盘原子化、元数据写失败=失败、密钥 DPAPI 封存）、**HEIF/AVIF
 编码档位核心行**（Main/Main10/Main12/… 直接呈现 + 位深联动）、时间/GPS/隐私三卡**启用开关**、
@@ -51,9 +59,8 @@ LTR 逐字节不变，地图瓦片/图钉等地理内容不随语言翻转）、
 R2 轮方案见 [docs/m7r2-plan.md](docs/m7r2-plan.md)。**色彩能力四选项（色域映射 / 8bit 抖动 /
 渲染意图 / 线性光重采样）已入引擎并在界面提供开关**——**输出页全局卡**四行（默认全关 =
 行为不变；0.3.x 默认路径另有两处已归因字节变化，见 CHANGELOG「变更」节）；8bit 抖动仅作用
-于 JPEG/WebP/JXL 及 OIIO 系四家的 8bit 量化段（HEIF/AVIF 的 8bit 路径不接）。**发行状态：
-0.3.3 待发布**（tag 未移动、Release 未创建；winzip 预算前置已由 R2.3-G7 处置，余条件见
-CHANGELOG [0.3.3]「发行」节）。
+于 JPEG/WebP/JXL 及 OIIO 系四家的 8bit 量化段（HEIF/AVIF 的 8bit 路径不接）。**发行状态：0.3.3 已发布**（2026-10-13；其 Windows zip 有启动 P0，已由 0.3.4 热修，
+请使用 0.3.4）。
 
 **0.3.2 = GPS 地图升级版（M6）**：把「内嵌地图选点」从能用升级到**地图 App 水平**——
 R1 搜索搜得出（改用可达的**高德 Web 服务**事实表：`place/text` + 周边偏置 **`around` 20 条**按距离升序 +
@@ -464,7 +471,7 @@ chmod +x PhotoPipeline-<版本>-x86_64.AppImage
 
 ## 发行版（Windows）
 
-**M3 起提供 Windows x64 免安装产物**（0.2.0 为首个 Windows 版本，当前版本 0.3.3）；与 Linux 的 AppImage 同一引擎
+**M3 起提供 Windows x64 免安装产物**（0.2.0 为首个 Windows 版本，当前版本 0.3.4）；与 Linux 的 AppImage 同一引擎
 与界面，差异只在打包形态（zip vs AppImage）与平台运行时（MSVC 运行时 / Qt msvc2022_64）。
 
 ### 下载与运行
@@ -504,7 +511,7 @@ chmod +x PhotoPipeline-<版本>-x86_64.AppImage
 ### 命令行
 
 ```powershell
-.\photopipeline.exe --version      # → PhotoPipeline 0.3.3（单行 + 退出码 0；非 dev 门控，发布构建亦可用）
+.\photopipeline.exe --version      # → PhotoPipeline 0.3.4（单行 + 退出码 0；非 dev 门控，发布构建亦可用）
 .\photopipeline.exe                # 图形界面
 .\photopipeline.exe --ui-smoke     # 无头 UI 走查（offscreen，产出 12 张截图；仅 PP_BUILD_DEV=ON 的构建）
 .\photopipeline.exe --dev ...      # 开发 harness：全语料矩阵 / 回归基线入口（同上，仅 dev 构建）

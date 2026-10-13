@@ -53,10 +53,10 @@
 
 namespace pp::ui {
 
-// 前置声明（不拉 ui/theme.h）：theme.h 依赖包含者先引入 <QApplication>（qApp->style()），
-// 而本头会被 AUTOMOC 的 mocs_compilation.cpp 直接包含 —— 在头里 include theme.h 会把
-// qApp 钉成 QGuiApplication 而编译失败（mainwindow.h 同口径：头文件不引 theme.h）。
-// 值的完整定义只在 preview_panel.cpp 里需要。
+// 前置声明（不拉 ui/theme.h：只为减头重/依赖面 —— theme.h 自 M5-A5 起已自含 <QApplication>，
+// 旧理由「依赖包含者先引入 <QApplication> / qApp 钉成 QGuiApplication」已失实（R-268 同病灶
+// 改实）；本头又会被 AUTOMOC 的 mocs_compilation.cpp 直接包含，做法与 ui/paramform.h /
+// page_meta.h 同口径。值的完整定义只在 preview_panel.cpp 里需要。
 namespace theme {
 struct Tokens;
 }

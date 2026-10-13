@@ -59,8 +59,9 @@ namespace pp::ui {
 
 class FileListModel;
 
-// 前置声明（不拉 ui/theme.h）：theme.h 依赖包含者先引入 <QApplication>（qApp->style()），
-// 而本头会被 AUTOMOC 的 mocs_compilation.cpp 直接包含（mainwindow.h 同口径）。
+// 前置声明（不拉 ui/theme.h：只为减头重/依赖面 —— theme.h 自 M5-A5 起已自含 <QApplication>，
+// 旧理由「依赖包含者先引入 <QApplication>」已失实（R-268 同病灶改实）；本头又会被 AUTOMOC 的
+// mocs_compilation.cpp 直接包含，做法与 ui/paramform.h / page_meta.h 同口径）。
 namespace theme {
 struct Tokens;
 }

@@ -95,6 +95,8 @@ void update_empty_hint(const QDialog *dlg) {
 // 按钮可用性（主对话 2026-09-19 裁定；§2.10 更新版）：
 //   载入/删除 = 列表有选中（预设路径本就是合法文件，与名称清洗无关）
 //   另存为   = 清洗后名字非空（空名无法构成 <名>.json）
+// R-318（M7-R2.3-G8）：禁用态**补原因 tooltip**（「不静默灰」口径，照 page_output
+// sync_preset_buttons 同款双态文案）——可用态保留构造期动作说明，禁用态改说原因。
 void refresh_buttons(const QDialog *dlg) {
     QListWidget *list = list_of(dlg);
     QLineEdit *edit = name_of(dlg);
@@ -102,12 +104,21 @@ void refresh_buttons(const QDialog *dlg) {
         return;
     const bool has_selection = list->currentItem() != nullptr;
     const bool has_name = !sanitize_name(edit->text()).isEmpty();
-    if (QPushButton *b = button_of(dlg, kLoad))
+    if (QPushButton *b = button_of(dlg, kLoad)) {
         b->setEnabled(has_selection);
-    if (QPushButton *b = button_of(dlg, kSaveAs))
+        b->setToolTip(has_selection ? PresetsDialog::tr("载入选中的预设")
+                                    : PresetsDialog::tr("未选中预设：请先在列表中选择一项"));
+    }
+    if (QPushButton *b = button_of(dlg, kSaveAs)) {
         b->setEnabled(has_name);
-    if (QPushButton *b = button_of(dlg, kDelete))
+        b->setToolTip(has_name ? PresetsDialog::tr("按名称保存为新的预设")
+                               : PresetsDialog::tr("名称为空：请先填写预设名"));
+    }
+    if (QPushButton *b = button_of(dlg, kDelete)) {
         b->setEnabled(has_selection);
+        b->setToolTip(has_selection ? PresetsDialog::tr("删除选中的预设（需确认）")
+                                    : PresetsDialog::tr("未选中预设：无可删除项"));
+    }
 }
 
 // 记录动作结果并关闭对话框（MainWindow 在 exec()==Accepted 后取 action()/name()/path()）

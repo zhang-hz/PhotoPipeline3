@@ -538,6 +538,8 @@ struct ParamForm::Impl {
     }
 
     // 无损开启期间：非 lossless_capable 技术置灰（条 2）
+    // R-318（M7-R2.3-G8）：置灰条目补**条目级原因 tooltip**（「不静默灰」口径）——悬停即见
+    // 「为何不可选」；恢复可选时清空，不留陈旧原因。
     void update_tech_items_enabled() {
         auto *model = qobject_cast<QStandardItemModel *>(tech_combo->model());
         const pp::BackendDef *b = backend();
@@ -547,8 +549,12 @@ struct ParamForm::Impl {
             QStandardItem *item = model->item(i);
             if (!item)
                 continue;
-            item->setEnabled(!sel.lossless ||
-                             b->techs[static_cast<std::size_t>(i)].lossless_capable);
+            const bool enabled =
+                !sel.lossless || b->techs[static_cast<std::size_t>(i)].lossless_capable;
+            item->setEnabled(enabled);
+            item->setToolTip(enabled
+                                 ? QString()
+                                 : ParamForm::tr("已开启无损输出：该技术不支持无损编码，不可选"));
         }
     }
 

@@ -64,7 +64,11 @@
 //   控件走（零同步），关闭后挂回卡片行并复位固定高（卡片几何逐位复原；`pp-meta-map`
 //   objectName 随控件、不变）。对话框默认不弹（只在点「展开」时出现）；尺寸跨展开记忆。
 //
-// 自验钩子（--ui-smoke 的 meta-geom / meta-* 探针读；非用户可见）：
+// 自验钩子（--ui-smoke 的 meta-geom / meta-* 探针读；非用户可见）。本清单是人读明细
+// **本体**（R-260：寄生从接口头 page_meta.h 移出后落此，见 meta_probe_context.h 头注）；
+// 机读单源 = ui/meta_probe_context.h 的 `hook::`/`objname::` 词表 + `ProbeContext` 访问器
+// （写侧 set_hook/setObjectName 与读侧探针一律走单源表；本清单只作契约文档，值串以单源表
+// 为准，`<>` 记法在表中展开成 `%1` 模式或逐键常量）：
 //   * 动态属性（同时挂 MetaState 与页面本身）：pp_meta_follow_count / pp_meta_follow_name /
 //     pp_meta_follow_pending / pp_meta_follow_stale_dropped / pp_meta_time_new /
 //     pp_meta_gps_effective / pp_meta_multi_rows；M6-T8 加性：pp_meta_gps_layer（"road"|

@@ -92,6 +92,10 @@ struct TitleBar {
     QWidget *widget = nullptr;
     QLabel *title = nullptr;
     QPushButton *close = nullptr; // 46×32，悬停 #c42b1c（§3.3），必有 accessibleName+tooltip
+    // M7R23G8-2（R-201 余量，加性追认）：标题栏矢量图标句柄成员化 —— 原 restyle_title_bar
+    // 靠 findChild("pp-dlg-title-icon") 反向伸入（M7R22G2 ③-1 点名），收口为构造期直赋；
+    // objectName 不变（探针/走查契约不变）。追加在结构体末尾（保聚合初始化兼容）。
+    QWidget *icon = nullptr; // 17px 矢量图标（§7.4；restyle 换色不吃 QSS）
 };
 TitleBar make_title_bar(QWidget *parent, icons::Name icon, const QString &title);
 // 主题重放：标题栏的矢量图标换色 + 关闭 caption 两态色（图标取色不吃 QSS）

@@ -546,16 +546,16 @@ TitleBar make_title_bar(QWidget *parent, icons::Name icon, const QString &title)
     out.widget = bar;
     out.title = text;
     out.close = close;
+    out.icon = icon_label; // M7R23G8-2：图标句柄成员化（原 restyle 靠 findChild 反查）
     return out;
 }
 
 void restyle_title_bar(const TitleBar &bar, const theme::Tokens &t) {
     if (bar.widget == nullptr)
         return;
-    if (auto *icon = bar.widget->findChild<QWidget *>(QStringLiteral("pp-dlg-title-icon"))) {
-        if (auto *label = dynamic_cast<IconLabel *>(icon))
-            label->set_color(t.accent);
-    }
+    // M7R23G8-2：图标走 TitleBar 成员（findChild 反向伸入收口；objectName 不变）
+    if (auto *label = dynamic_cast<IconLabel *>(bar.icon))
+        label->set_color(t.accent);
     if (auto *close = dynamic_cast<CaptionButton *>(bar.close))
         close->set_colors(t.text, t.close_hover_fg);
 }

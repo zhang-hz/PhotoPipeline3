@@ -863,13 +863,16 @@ private:
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Impl：控件树 + 运行状态 + 冒烟断言
+// R-254 余量(2/2)（M7R22G2）：Impl ~120 成员**五舱分域** —— deep-review E1「装配函数分段 +
+// Impl 分舱（Chrome/FilePanel/RunState/Session/Smoke）」蓝图落地。舱 = 聚合基类（非虚、
+// 零行为、纯数据），Impl 多继承持有：**访问面零改动**（d.xxx / impl_->xxx / 探针 d.xxx
+// 全部经继承可见，消费方零 diff）；声明按域归位，成员皆为独立缺省初始化（无跨成员依赖），
+// 构造/析构序 = 基类声明序，与原平面声明序等价。
 // ---------------------------------------------------------------------------
+namespace mw_cabin {
 
-struct MainWindow::Impl {
-    MainWindow *w = nullptr;
-    pp::AppSettings settings;
-
+// 壳层：主题 + 无边框 + 三栏 + 顶栏/页面栈/底栏 + 中栏预览卡头
+struct Chrome {
     // ---- M4-T9 骨架：主题 + 无边框 + 三栏 ----
     theme::ThemeMode theme_mode = theme::ThemeMode::Dark; // 明暗跟随系统（§9.2 末行）
     theme::Tokens tokens;                                 // 当前主题 tokens（refresh_theme 落地）
@@ -904,9 +907,29 @@ struct MainWindow::Impl {
     QFrame *preview_card = nullptr;      // 中栏卡框（内嵌 T10 的 PreviewPanel）
     // ---- M4-T10：常驻输入预览面板（§6.1）+ 分类注册表（热键表数据源）----
     PreviewPanel *preview_panel = nullptr;
+    // ---- 顶栏 / 页面 ----
+    QAction *nav_meta = nullptr;
+    QAction *nav_output = nullptr;
+    QAction *nav_run = nullptr;
+    QAction *settings_action = nullptr;
+    QActionGroup *nav_group = nullptr;
+    QStackedWidget *stack = nullptr;
+    PageMeta *page_meta = nullptr;
+    PageOutput *page_output = nullptr;
+    PageRun *page_run = nullptr;
+
+    // ---- 底栏 ----
+    ElidedLabel *status = nullptr;
+    QPushButton *start = nullptr;
+    // M7-R2D1 / UX-2：状态栏一次性非阻塞提示（过滤态勾选的作用域说明；kStatusNoteMs 后回落）
+    QString status_note;
+    QTimer *status_note_timer = nullptr;
+};
+
+// 左栏：文件面板（模型/视图/工具行/空态）+ 分类面板与注册表
+struct FilePanel {
     // 分类注册表的**当前实例**（T10 只读消费：热键提示表；T11 接管 CRUD/持久化/打标与勾选语义）
     pp::ClassRegistry classes;
-
     // ---- 左：文件面板（M1b 内容 + M4-T11 勾选/分组 + M5-T5 工具行/空态）----
     QWidget *panel = nullptr;
     FileListModel *model = nullptr;
@@ -943,25 +966,10 @@ struct MainWindow::Impl {
     QString classes_file;                 // classes.json 路径（settings.class_file；§6.2 单源）
     bool applying_group_state =
         false; // 正在程序化落地展开态（期间的 collapsed/expanded 不记为用户操作）
+};
 
-    // ---- 顶栏 / 页面 ----
-    QAction *nav_meta = nullptr;
-    QAction *nav_output = nullptr;
-    QAction *nav_run = nullptr;
-    QAction *settings_action = nullptr;
-    QActionGroup *nav_group = nullptr;
-    QStackedWidget *stack = nullptr;
-    PageMeta *page_meta = nullptr;
-    PageOutput *page_output = nullptr;
-    PageRun *page_run = nullptr;
-
-    // ---- 底栏 ----
-    ElidedLabel *status = nullptr;
-    QPushButton *start = nullptr;
-    // M7-R2D1 / UX-2：状态栏一次性非阻塞提示（过滤态勾选的作用域说明；kStatusNoteMs 后回落）
-    QString status_note;
-    QTimer *status_note_timer = nullptr;
-
+// 运行：调度器 + 单账本计数 + 日志尾/状态起搏 + 失败清单 + ev.index→行映射
+struct RunState {
     // ---- 运行状态 ----
     std::unique_ptr<pp::Scheduler> sched;
     QTimer *poll = nullptr;
@@ -998,6 +1006,10 @@ struct MainWindow::Impl {
     // ev.index→行号不再裸信「行序不变」：事件到达时核对映射行仍是同一文件，行集漂移时
     // 按路径（稳定键）重定位，找不到即丢弃（状态绝不落到别的文件行上）。
     std::vector<std::filesystem::path> run_row_paths;
+};
+
+// 会话：选中记忆 + 预设记忆 + 时间预览缓存 + 图层写回接线门槛
+struct Session {
     QString last_selected_path; // 分组重建后恢复选中（重建 = 模型 reset，选中会丢）
     // R-153（分组重建吞多选）：重建前快照**全部**选中路径（不止首个）—— 过滤/摘要/分组模式
     // 变化触发 modelReset 时多选整组恢复，批量打标/移除不再塌缩成 1 行。
@@ -1008,6 +1020,26 @@ struct MainWindow::Impl {
     // M6-T11（§5.2 R5）：图层档记忆的写回接线只接一次（R-256：门槛归 bind_map_layer_writeback()，
     // apply_map_style 幂等、可反复调用）
     bool map_layer_bound = false;
+};
+
+// 探针（PP_BUILD_DEV）：--ui-smoke 自检面
+struct Smoke {
+#ifdef PP_BUILD_DEV
+    // ---- 冒烟 ----
+    QStringList smoke_failures;
+    int smoke_shots = 0;
+#endif // PP_BUILD_DEV
+};
+
+} // namespace mw_cabin
+
+struct MainWindow::Impl : mw_cabin::Chrome,
+                          mw_cabin::FilePanel,
+                          mw_cabin::RunState,
+                          mw_cabin::Session,
+                          mw_cabin::Smoke {
+    MainWindow *w = nullptr;
+    pp::AppSettings settings;
 
     // ---- 拖放 / closeEvent 事件过滤器（冻结头不允许覆写虚函数）----
     struct Filter : QObject {
@@ -1018,12 +1050,6 @@ struct MainWindow::Impl {
         }
     };
     Filter *filter = nullptr;
-
-#ifdef PP_BUILD_DEV
-    // ---- 冒烟 ----
-    QStringList smoke_failures;
-    int smoke_shots = 0;
-#endif // PP_BUILD_DEV
 
     Impl(MainWindow *owner, const pp::AppSettings &s);
     ~Impl();

@@ -326,8 +326,10 @@ bool parse_log_level_text(const std::string &s, pp::LogLevel &out) {
 
 } // namespace
 
-MainWindow::Impl::Impl(MainWindow *owner, const pp::AppSettings &s)
-    : w(owner), settings(s), theme_mode(apply_startup_theme(s.ui_theme_mode)) {
+MainWindow::Impl::Impl(MainWindow *owner, const pp::AppSettings &s) : w(owner), settings(s) {
+    // R-254 余量(2/2)（M7R22G2）：theme_mode 随五舱分域归 mw_cabin::Chrome（基类成员不进
+    // 派生类初始化表）→ 以构造体首句赋值承载，语义与原初始化表逐位等价（此前无读点）。
+    theme_mode = apply_startup_theme(s.ui_theme_mode);
     // M5-T14（§12-12/§11）：文件列表系统焦点框抑制 = **应用样式层收口**（见
     // FileViewFocusFrameStyle 的成因说明）。安装点 = 本窗口任何子部件之前：其后创建的部件在
     // 铺样式/被 QSS 包装时都以本代理为底座（refresh_theme 的骨架 QSS 亦在之后落地）。

@@ -4,7 +4,7 @@
 范围：`docs/deep-review-0.3.2.md`（R-001～R-331）与 `docs/ux-review-14.md`（UX-1～UX-14）的批量整改、
 结构重构与文档收口（M7-WP1…WP13）+ **R2 轮尾单与能力补强**（M7-R2A…R2F，方案真源 =
 [docs/m7r2-plan.md](m7r2-plan.md)）+ **R2.1 轮收口与结构余量**（M7-R2.1-F1…F4，见 §7）+
-**R2.2 轮探针总集与结构余量**（M7-R2.2-G1…G4，见 §8）。
+**R2.2 轮探针总集与结构余量**（M7-R2.2-G1…G5，见 §8）。
 **覆盖台账见附录 A/B（331+14 逐条 R2.2 终态四档，无一遗漏）**；裁定汇总见
 [docs/m7-adjudications.md](m7-adjudications.md)；逐条用户可见变更见 [CHANGELOG.md](../CHANGELOG.md) `[0.3.3]`；
 R2/R2.1/R2.2 各包交付与门禁读数见「R2 轮交付」（§6）、「R2.1 轮交付」（§7）、「R2.2 轮交付」（§8）
@@ -14,14 +14,15 @@ R2/R2.1/R2.2 各包交付与门禁读数见「R2 轮交付」（§6）、「R2.1
 （WP1–WP13/REL 去重）、**R2 轮 11 提交**（R2A `c540630`/R2B `5d19146`/R2C `210fce5`/R2-gate
 `09b5340`/R2D1 `6e001da`/R2D2 `27c9f40`/R2E2 `52b9870`/R2F `8a541de`/R2F2 `2c50bfc`/R2G `6a6e043`/R2REL `01cbd74`）、
 **R2.1 轮 37 提交**（F1×4/F2×12/F3×10/F4×7/F5×3/GATE×1，git 实测 `01cbd74..e1017fe` = 37；
-早稿「33 提交」= F1–F4 小计，区间计数 27 的对账见 §3.10）、**R2.2 轮 24 提交**
-（G1×5/G2×15/G3×3/G4×1，见表末各行与 §8）。
+早稿「33 提交」= F1–F4 小计，区间计数 27 的对账见 §3.10）、**R2.2 轮 27 提交**
+（G1×5/G2×15/G3×3/G4×2/G5×2，见表末各行与 §8；早稿「24 提交（G4×1）」未计 G4 校读修订
+`25d7cb5` 与 G5 两条，git 实测 25 + G5×2 = 27）。
 **包名 ↔ git SCOPE 命名对照**（勿混读）：R2F = `M7-R2-F:`（`8a541de`）、R2F2 = `M7-R2-F2:`
 （`2c50bfc`，独立校读第二轮）、R2G = `M7-R2-GATE:`（`6a6e043`）、R2-gate = `M7-R2-gate`
 （`09b5340`，重播种包，**与 R2G 是两个包**）、R2REL = `M7-R2REL:`（`01cbd74`）、R2.1 各包 =
-`M7-R2.1-F1…F4:`、R2.2 各包 = `M7-R2.2-G1…G4:`。**G5/G6 = R2.2 任务书的后续两包**（G4 成稿
-时均未启动）：**G6 = 0.3.3 发行包**（明文授权推送，全文「G6 发行包」即指此；条件见 CHANGELOG
-[0.3.3]「发行」节），**G5** 的分派内容不在 G4 任务书内、本报告不定义（不臆造其职责）。
+`M7-R2.1-F1…F4:`、R2.2 各包 = `M7-R2.2-G1…G5:`。**G5 = 终门禁复核**（git SCOPE
+`M7-R2.2-GATE:`，§8.4；全量判据取证 + tidy 棘轮收口 + fallout 修复）；**G6 = 0.3.3 发行包**
+（明文授权推送，全文「G6 发行包」即指此；条件见 CHANGELOG [0.3.3]「发行」节）。
 **条目数不在此表计**——各包条目数随计数口径（唯一主责 / 表内出现次数 /
 任务包分派数）而异，逐条归属以附录 A 提交列为准。**行序 = 包编号序，非 git 时间序**：WP3 `18fb355` 实为 M7 首提交
 （早于 WP1/WP2），WP9 `594d93f` 早于 WP8 `40f3405` 一分钟，WP6-fix `e8b9bf1` 在 WP7 之后；
@@ -847,14 +848,16 @@ a「形参组结构化」为主 + b「授权重播种 + 归因」兜底），仓
 
 ---
 
-## 8. R2.2 轮交付（M7-R2.2-G1…G4，2026-10-13）
+## 8. R2.2 轮交付（M7-R2.2-G1…G5，2026-10-13）
 
 > R2.2 轮 = R2.1 发行第二班停止后的收口窗：G1 探针总集与 Linux ui_smoke 定点修复（失败遥测
 > 三版 + R-044 AA 容差机制 + 积压探针 8/9 条）、G2 结构余量与语义裁定落地（R-197 行为裁定 +
 > B.5 mapwidget 步②–⑥ + R-254/256/201/183 各余量）、G3 判据小项与文档补录（SCHEMA 加性 +
-> 校读原文补录 + 小项复核）、G4 文档终稿（本章）。逐条终态已并入附录 A/B（**R2.2 终态四档**，
+> 校读原文补录 + 小项复核）、G4 文档终稿、G5 终门禁复核（全量判据取证 + tidy 棘轮收口 +
+> fallout 修复，§8.4）。逐条终态已并入附录 A/B（**R2.2 终态四档**，
 > 主标签计数不变、余量注记收口）；裁定见 adjudications 十四节（M7R22G1-1…-11 / M7R22G2-0…-7 /
-> M7R22G3-1）；验证证据摘录见 [docs/m7-evidence/](m7-evidence/) 的 `m7r22-g{1,2,3,4}-gates.md`。
+> M7R22G3-1 / M7R22G5-1）；验证证据摘录见 [docs/m7-evidence/](m7-evidence/) 的
+> `m7r22-g{1,2,3,4}-gates.md` 与 `m7r22-gate.md`。
 > **本章只给各包交付清单与验证证据，逐条 R-id 去向以附录 A/B 为准。**
 
 ### 8.1 G1「探针总集与 Linux ui_smoke 定点修复」（5 提交：`bbe5101`/`fd5b838`/`07cc8c5`/`297d22b`/`4addc51`）
@@ -960,8 +963,46 @@ a「形参组结构化」为主 + b「授权重播种 + 归因」兜底），仓
 
 ### 8.4 R2.2 验收结论与残余（如实）
 
-**G4 复核读数（2026-10-13；树 = `build/m7r22-g2` @ `4dee5c8` = G1+G2+G3 合流 HEAD，重建
-`ninja: no work to do` 确认构建面齐）**：
+**G5 终门禁复核读数（2026-10-13 终态；门禁树 = `build/release-dev` @ HEAD，git 主题
+`M7-R2.2-GATE:`；全量取证三段式见 [m7r22-gate.md](m7-evidence/m7r22-gate.md)）**：
+
+| # | 判据 | 命令 | 终值 | 过/不过 |
+|---|---|---|---|---|
+| 1 | 全源格式 | `bash tools/ci-format.sh` | `ci-format: check 196 files … violations=0` / `OK —— 全源 0 diff`（钉版 23.1.1） | **过** |
+| 2 | release-dev 全量编译 | `cmake --preset release-dev -B build/release-dev -DVCPKG_MANIFEST_INSTALL=OFF` + `cmake --build`（+ 幂等复跑） | exit 0；复跑 `ninja: no work to do.` | **过** |
+| 3 | tidy 棘轮 + NOLINT 零新增 | `python tools/ci-tidy.py build/release-dev` | `TIDY total=262 baseline=262 files=76 violations=0 seed=0`（收口重播种 263/75 → 262/76，逐条归因见下）；`grep -rEn "NOLINT…"` 0 命中 | **过** |
+| 4 | ctest 全量 | `ctest --test-dir build/release-dev --output-on-failure` | **100% tests passed out of 36**（48.02s） | **过** |
+| 5 | ui_smoke 冻结行 + G1 探针批 | `python tests/ui_smoke.py build/release-dev` | `UI-SMOKE OK shots=12 pages=3` 逐字 + `UI-SMOKE pass`；G1 探针行全绿（settings-tabs-light `t=1.00 resid=0` / format-roundtrip 15/0 / rtl-mirror 18/0 / rtl-deep 4/0 / color-options 6/0 / check-all 13/0 / context-menu 60/0 / zero-byte-redo 7/0 outputs=26 / failure-list 7/0 lines=1） | **过** |
+| 6 | 金样 20 对 | `python tests/golden/smoke.py build/release-dev` | `SMOKE total=20 pass=20 fail=0` 逐字 | **过** |
+| 7 | 全语料回归 | `python tools/regression.py` | `regression: zero diff (baseline reproduced)`（normalized 2448 vs 2448，未 `--update`；归因见下） | **过** |
+| 8 | 密钥扫描 | `python build/m7r22-g5/leak_scan.py`（git 全历史）+ `worktree_scan.py`（tracked 值形态） | sk-key / amap-value / hex32 两面 **0 命中**（`amap_key` 名字面 280 行历史 / 122 行工作树均为键名/字段名/文档） | **过** |
+| 9 | 冻结行附加 | `build/release-dev/photopipeline.exe --version`、`pp_verify.exe --selftest` | `PhotoPipeline 0.3.3` 单行输出格式逐字；`VERIFY selftest OK (39 probes, 0 unexpected)` 行式逐字 | **过** |
+
+- **tidy 棘轮收口（授权 M7R22G2-0 衍生，M7-ADJ-tidy-reseed 口径，逐条归因）**：R2.2 新增代码
+  fallout 6 条 = **修 5**（test_meta_format 加宽乘法 `1024*1024→1024LL*1024` + 复述枚举基型
+  `int→uint8_t`；geocode_client / tile_fetcher 不必要拷贝→引用别名 / `std::move` 后 erase；
+  test_gcj02 main 异常逃逸→`run_cases` + try/catch 包装，test_icons 先例）+ **登记 1**
+  （test_meta_format `bugprone-suspicious-include`——G2 M7R22G2-2 单实现接线（`#include
+  "ui/meta_format.cpp"`）的结构性告警，与基线内 test_icons=1 **同型同因**；替代修法 = CMake
+  目标级接线（`target_sources`+`target_compile_definitions`）可两处同清零，发行门禁期不动
+  测试接线，登记交后续）。重播种 `tools/baseline/clang-tidy.tsv` 263/75 → **262/76**
+  （**总量 −1 只减不增**；唯一逐文件放宽 = test_meta_format 0→**1** 已登记；收紧侧
+  mapwidget 4→**3**（B.5③⑤ 拆分搬出）、classify_panel 3→**2**（R-183 后半））。**F4 登记
+  待回收三组维持登记、逐条归因**：page_run +1（`:1127` swappable-params，R2.1-F3 新增；签名
+  重构沿 WP12 口径不做）、exif_editor +1（`:1931` QtConcurrent lambda exception-escape，修法
+  = 吞异常 = 行为变化不采）、F2/F3 拆 TU 机械迁移 19 条（easily-swappable ×8 / narrowing ×4 /
+  no-automatic-move ×3 / empty-catch ×2 / misplaced-widening ×2）。五条件核对逐条过（总量只减
+  / 放宽逐条理由+登记 / 归因随提交正文 / 复跑 `violations=0 seed=0` / 不动 CI 判据与检查集、
+  不加抑制），全文见 [m7r22-gate.md](m7-evidence/m7r22-gate.md) ③-2/③-3。
+- **回归归因（任务书注「R-197 行为变化 diff 预期存在」，实测未出现）**：R-197（M7R22G2-0）的
+  换锚面 = `exif_editor` `TriMode::Clear`（GUI 例外编辑，TagEdit remove），`--dev` 语料回归
+  不经过 exif_editor 路径——G2 ④ 已给同结论，本包 HEAD 终态复跑再次印证（2448 vs 2448）。
+  **无 diff 可逐行归因、未 `--update`、回归基线零改动**。
+- **G5 的 fallout 修复零行为依据**：金样 20/20 + 回归 zero diff + ctest 36/36 + ui_smoke 冻结行
+  四背书（全部重跑于修复后终态树）；产品行为改动为零（3 处测试文件 + 2 处 mapwidget 纯件的
+  拷贝→别名/搬移，语义同拷贝）。
+- **G4 中段复核读数（2026-10-13；树 = `build/m7r22-g2` @ `4dee5c8` = G1+G2+G3 合流 HEAD，重建
+`ninja: no work to do` 确认构建面齐；历史记录，终态以 G5 上表为准）**：
 
 | # | 判据 | 命令 | 终值 | 过/不过 |
 |---|---|---|---|---|
@@ -999,10 +1040,15 @@ a「形参组结构化」为主 + b「授权重播种 + 归因」兜底），仓
      R-034/052/068/079/080/093/134/147/291/327/329 等（附录 A/B 格内注记为准）。
   8. **0.3.3 未发行**：tag `v0.3.3` 停在 `b1af371`（零 Release 零资产）；`M7-ADJ-tag-move-2`
      授权在案未消耗。**发行状态 = 待发布**，条件见 CHANGELOG [0.3.3]「发行」节末条。
-- **G4 未跑（如实）**：ci-format 全源 / ci-tidy 棘轮 / ctest 全量 / make_winzip / 密钥扫描等
-  全门禁归波次收口与 G6 发行包把关；G1/G2/G3 各包实跑读数在 §8.1–8.3 逐包引证（出处 =
-  各 handoff ④ + `docs/m7-evidence/m7r22-g*-gates.md` 摘录）。G4 实跑仅上表 4 项 +
-  事实 grep 复核（见 [m7r22-g4-gates.md](m7-evidence/m7r22-g4-gates.md)）。
+  9. **tidy 棘轮登记项待后续回收**（G5 收口，M7R22G5-1）：test_meta_format `bugprone-
+     suspicious-include` =1（同型同因 test_icons；替代修法 = CMake 目标级接线两处同清零）+
+     F4 三组维持登记（page_run +1 签名重构面 / exif_editor +1 无零行为修法 / 拆 TU 机械迁移
+     19 条中 empty-catch ×2 无零行为修法、swappable ×8 需签名重构、余 ×9 为机械修法面）。
+- **G5 未跑（如实）**：`make_winzip` 五门禁（发行打包面，归 G6 发行包把关）；Linux 侧读数
+  （本包 Windows 宿主，残余①④ 的 Linux 实证仍是条件①）。G4 时点的「未跑」清单（ci-format
+  全源 / ci-tidy / ctest 全量 / 密钥扫描）已由 G5 终门禁全部补跑闭合（本节 G5 表 1–9）；
+  G1/G2/G3/G4 各包实跑读数仍在 §8.1–8.3 逐包引证（出处 = 各 handoff ④ +
+  `docs/m7-evidence/m7r22-g*-gates.md` 摘录）。
 
 ---
 

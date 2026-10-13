@@ -4,7 +4,7 @@
 > 冻结接口（PP-FROZEN）的加性扩展走「加性 + 追认」，逐条登记于此。实施归属列括号内为登记来源
 > （各工作包 handoff 的「裁定登记」节原样汇总，编号连续化；原文见 `build/m7-wpN/handoff.md`）。
 > 汇总人 = WP11；裁定人 = 主对话（各 WP 报出后经波次收口追认）。
-> **编号命名空间**：本表 A/B/C/D/E 与 M7-ADJ-*/WP12-B*/WP13-B*（R1）以及 `R2A-A*`/`M7R2B-*`/`R2C-W*`/`R2D1-A*`/`M7-R2-A`/`M7-R2-B`/`M7R2D2-*`/`M7R2E2-*`/`R2G-G*`/`R2F-X*`/`R2F-C*`（R2）以及 `M7R21F1-*`/`M7R21F2-*`/`M7R21F3-*`/`M7R21F4-*`（R2.1，十一/十二节）以及 `M7R22G1-*`/`M7R22G2-*`/`M7R22G3-1`（R2.2，十四节）均为**裁定表编号**；`D-n` 为 AGENTS §9 实现期发现缺陷号（如 R2G-G5 承载的 D-1，已由 M7R21F1-2 根治）；勿与 `ux-review-14.md`
+> **编号命名空间**：本表 A/B/C/D/E 与 M7-ADJ-*/WP12-B*/WP13-B*（R1）以及 `R2A-A*`/`M7R2B-*`/`R2C-W*`/`R2D1-A*`/`M7-R2-A`/`M7-R2-B`/`M7R2D2-*`/`M7R2E2-*`/`R2G-G*`/`R2F-X*`/`R2F-C*`（R2）以及 `M7R21F1-*`/`M7R21F2-*`/`M7R21F3-*`/`M7R21F4-*`（R2.1，十一/十二节）以及 `M7R22G1-*`/`M7R22G2-*`/`M7R22G3-1`/`M7R22G5-1`（R2.2，十四节）均为**裁定表编号**；`D-n` 为 AGENTS §9 实现期发现缺陷号（如 R2G-G5 承载的 D-1，已由 M7R21F1-2 根治）；勿与 `ux-review-14.md`
 > §14 的色彩分级子项（A1–D3）及 `deep-review-0.3.2.md` 附录 B 的拆解蓝图（B.1–B.8）混读
 > ——三套编号独立，详见 `m7-report.md` 文首「编号命名空间」注。「任务书 / WP 任务包」引述
 > 出处 = [docs/m7r2-plan.md](m7r2-plan.md)（R2 轮方案真源 + 附 A「任务书引述出处对照」，
@@ -357,13 +357,13 @@
 |---|---|---|---|
 | M7-ADJ-tag-move-2（F7 消耗尝试） | **二次移动仍未执行，授权保持未消耗**：F7 按流程 1–4 走完预检（`/releases/tags/v0.3.3` 404、releases 列表无 v0.3.3、`ls-remote` 核对 v0.3.3 → `cb181ee`/`^{}`=`b1af371`）、push main（`0555947..e1017fe`，HEAD `e1017fe6`）、本机复核（ci-format `violations=0` 187 文件 + `make_winzip --smoke-exe` 五门禁 rc=0 含 E-2 冻结行逐字）；**但流程 3 前提「linux job 必须绿」未满足**：main-full **#48（run 38308098290）completed/failure**——唯一失败 = linux（全 ctest+金样）**step 15 release-dev ctest 的 `ui_smoke` 一条**（F1 遥测注解逐字 `CTEST-FAIL-SUMMARY 1 tests: ui_smoke`；step 13 release ctest 全过）。二分归因：#47 @ `0555947` 同 job **success** ⇒ 失败由 `0555947..e1017fe`（R2.1 F2–F4）引入（`tests/ui_smoke.py` 与 `.github/` 零改动，变化全在 `src/ui/` 探针/几何面）。修复须改 `src/ui/`/`tests/` = 独占文件面外（任务书「不改 src/ 与 tools/」+ 纪律 3）⇒ 按纪律 9 **停止上报**：tag 保持 `b1af371`（收口 `ls-remote` 复核未动）、release.yml 未触发（最新仍 #13 cancelled）、GitHub Release 未创建（收口复检 404）。**授权未消耗**：待 ui_smoke 修复、main-full 全绿后由后续发行包按同一条件执行（预检零 Release 零资产 / 原子 + `ls-remote` 核对 / 此后不得再动） | ① 判据不可绕过（纪律 9）：「linux job 必须绿」是 tag 移动的明文前提，红灯期移动 = 把一次性授权烧在坏树上（此后不得再动 = 无第三次机会）；② 修复跨界不可「顺手改」（纪律 3）；③ 停在零资产状态无新增不可逆性（tag 仍可按 M7-ADJ-tag-move-2 条件移动，`b1af371..e1017fe` 全在历史）；④ 未采用空提交复跑辨瞬态——取证更支持确定性回归（#47 绿/#48 红与 src/ui 大改同步）且空提交污染历史，留主对话裁决 | R2.1-F7 |
 
-## 十四、R2.2 轮裁定登记（M7-R2.2，2026-10-13；G1/G2/G3 三包 + G4 文档终稿）
+## 十四、R2.2 轮裁定登记（M7-R2.2，2026-10-13；G1/G2/G3 三包 + G4 文档终稿 + G5 终门禁）
 
-> 任务书出处 = 会话内分派书（G1/G2/G3 包）；原始登记 = `build/m7r22-g{1,2,3}/handoff.md`
+> 任务书出处 = 会话内分派书（G1/G2/G3/G5 包）；原始登记 = `build/m7r22-g{1,2,3,5}/handoff.md`
 > 「裁定登记」节（逐字汇入，本表为唯一对账面）；验证读数摘录见
-> [docs/m7-evidence/m7r22-g*-gates.md](m7-evidence/)。G4（文档终稿）零行为改动、零冻结面
-> 扩展，无新裁定。**R2.2 终态四档计数不变**（326/15/3/1，主标签零改判；R2.2 消的是「已修」
-> 行内的余量注记，见 m7-report 附录 A 表头注）。
+> [docs/m7-evidence/m7r22-g*-gates.md](m7-evidence/) 与 `m7r22-gate.md`。G4（文档终稿）零行为
+> 改动、零冻结面扩展，无新裁定。**R2.2 终态四档计数不变**（326/15/3/1，主标签零改判；R2.2 消
+> 的是「已修」行内的余量注记，见 m7-report 附录 A 表头注）。
 
 ### 14.1 G1（探针总集与 Linux ui_smoke 定点修复；5 提交 `bbe5101`/`fd5b838`/`07cc8c5`/`297d22b`/`4addc51`）
 
@@ -401,3 +401,9 @@
 | # | 裁定 | 理由 | 实施归属 |
 |---|---|---|---|
 | M7R22G3-1 | **SCHEMA `state` 值表加性补 `done_with_errors`（冻结面加性 + 追认）**：`tests/golden/SCHEMA.md` progress_trace 事件字段表 `state` 行**逐字不动**，其后**新增一行**补 `done_with_errors`（`FileState::DoneWithErrors` 的小写名；多输出部分成功的源文件级终态） | ① 事实缺口：`FileState::DoneWithErrors` 自 M7-WP1/I7 起为 `src/core/pipeline.h` 枚举**末尾加性值**，`src/dev_cli.cpp` `state_text`（M7-R2.1-F4）已按「`FileState` 的小写名」词表口径落 `"done_with_errors"`，而 SCHEMA 值表 13 值未列本值（F4 ③-3 登记余量、F5 ③-1 转交 G3 收口）；② 走「加性 + 追认」：新值以**新表行**追加，v1 既有值表行逐字不动、词表口径不变、断言零放松、金样/夹具零改动（SCHEMA.md 非语料非夹具） | G3（`tests/golden/SCHEMA.md`） |
+
+### 14.4 G5（终门禁复核；git 主题 `M7-R2.2-GATE:`，2 提交）
+
+| # | 裁定 | 理由 | 实施归属 |
+|---|---|---|---|
+| M7R22G5-1 | **tidy 棘轮基线收口重播种（授权 M7R22G2-0 衍生；M7-ADJ-tidy-reseed 口径）**：`tools/baseline/clang-tidy.tsv` 263/75 → **262/76**（`TIDY-UPDATE total=262`）。逐文件放宽登记（唯一）：`tests/unit/test_meta_format.cpp` 0→**1**（`bugprone-suspicious-include`——G2 M7R22G2-2 单实现接线 `#include "ui/meta_format.cpp"` 的结构性告警，与基线内 `tests/unit/test_icons.cpp=1` **同型同因**；替代修法 = CMake 目标级接线（`target_sources` + `target_compile_definitions`）可两处同清零，发行门禁期不动测试接线，登记交后续）。逐文件收紧：`mapwidget.cpp` 4→**3**（B.5③⑤ 拆分搬出）、`classify_panel.cpp` 3→**2**（R-183 后半）。fallout 修复 5 条（test_meta_format 加宽乘法/枚举基型、geocode_client/tile_fetcher 不必要拷贝、test_gcj02 main 异常逃逸——全零行为）。**F4 登记待回收三组（M7R21F4-0-1/-10）维持登记、逐条归因**：page_run +1（`refresh_overview_progress` swappable-params，签名重构沿 WP12 口径不做）、exif_editor +1（QtConcurrent lambda exception-escape，修法=吞异常=行为变化不采）、F2/F3 拆 TU 机械迁移 19 条（easily-swappable ×8 / narrowing ×4 / no-automatic-move ×3 / empty-catch ×2 / misplaced-widening ×2；empty-catch 与 swappable 无零行为/非签名重构修法） | 任务书明文授权「按 M7-ADJ-tidy-reseed 口径 `ci-tidy --update` 重播种 + 逐条归因（总量只减不增、逐文件放宽登记）」；五条件逐条满足：总量 263→262 只减 / 唯一放宽逐条理由 + 本表登记 / 归因随提交正文 / 复跑 `TIDY total=262 baseline=262 files=76 violations=0 seed=0` exit 0 / 不动 CI 判据与检查集、NOLINT 零新增（grep 0 命中） | G5（`tools/baseline/clang-tidy.tsv` + 4 处零行为修复；明细 [m7r22-gate.md](m7-evidence/m7r22-gate.md) ③-2/③-3） |

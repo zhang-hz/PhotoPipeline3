@@ -47,4 +47,5 @@
 | `m7r22-g2-gates.md` | R2.2-G2 | 结构余量与语义裁定门禁读数（ctest 36/36、金样 20/20、回归 zero diff 2448、R-197 换锚归因、B.5 拆分收口读数、全源格式 0 diff） |
 | `m7r22-g3-gates.md` | R2.2-G3 | 判据小项与文档补录门禁读数（全量 ctest 35/35、SCHEMA 加性双自检 numstat 1/0 + STATE_ROW_BYTE_IDENTICAL、pp_verify selftest 39、校读补录 ROW_COMPARE diff=0） |
 | `m7r22-g4-gates.md` | R2.2-G4 | 文档终稿复核读数（合流 HEAD 复跑 ui_smoke/金样/回归三判据 + 台账计数自检 326/15/3/1 + 文档事实取证 grep 表 + 发行状态「待发布」） |
+| `m7r22-gate.md` | R2.2-G5 | R2.2 终门禁全量判据取证（format 196 文件 0 diff / build 幂等 / tidy 棘轮收口 263→262 重播种逐条归因 + fallout 修 5 登记 1 / ctest 36/36 / 金样 20/20 / 回归 zero diff（R-197 预期 diff 未出现归因）/ 密钥两面 0 命中 / 冻结行附加核对） |
 | `temp_bug.png` | （评审证据图） | UX-7 原生三钮与自绘三钮同框复现图（`docs/ux-review-14.md` §7 现象证据；原在项目根，随评审件入库移入本目录） |

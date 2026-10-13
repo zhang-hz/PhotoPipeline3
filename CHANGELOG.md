@@ -36,12 +36,19 @@
 
 ### 发行
 
-- 发行授权 = 用户明文「发布 0.3.4」（2026-10-13）；tag `v0.3.4` 指向发行树（含 P0 修复 +
+- 发行授权 = 用户明文「发布 0.3.4」（2026-10-13）；tag `v0.3.4` → `d1f878b`（发行树，含 P0 修复 +
   E-3 探针门禁 + 版本单源 0.3.4），报告类提交不入 tag。
-- 发行链路沿用 tag 触发 `release.yml`（appimage → probe-appimage / winzip → probe-winzip →
-  publish）；winzip 门禁自本版起为**六项**（A 闭包 / B 来源 / C 结构 / D 许可 / E-1 启动版本 /
-  E-2 offscreen ui-smoke / **E-3 真机启动探针**）。
-- 产物指纹与发布终态在 tag 后的收口提交补记（体例同 `[0.3.3]`）。
+- **发行终态（2026-10-13T11:37:39Z 已发布）**：tag 推送触发 `release.yml` run 38389821897
+  **七 job 全绿**（appimage / winzip-build / winzip-build-dev / probe-appimage / winzip-pack /
+  probe-winzip / publish；winzip-pack 内即本版新增的 E-3 真机启动探针，随发行链首跑即绿）；
+  GitHub Release v0.3.4 四资产，API digest ↔ 下载件 `SHA256SUMS.txt` 逐字交叉一致：
+  - `PhotoPipeline-0.3.4-win64.zip` **33,732,633 B**（sha256 `86e17914…`）—— make_winzip 六项
+    门禁（A 闭包 / B 来源 / C 结构 / D 许可 / E-1 启动版本 / E-2 offscreen ui-smoke / E-3 真机启动）
+  - `PhotoPipeline-0.3.4-x86_64.AppImage` **52,062,712 B**（sha256 `da6f7ba5…`）+
+    `PhotoPipeline-0.3.4-deps.txt` **2,439 B**（sha256 `e8c80b3d…`）
+  - `PhotoPipeline-0.3.4-SHA256SUMS.txt` **293 B**（sha256 `2e04b874…`）
+- 发布说明取本节**之前**的 `[0.3.4]` 正文（止于本小节）；收口报告 = `docs/0.3.4-report.md`
+  （tag 后补记，含门禁/开发期双归因）。
 
 ## [0.3.3] — 2026-10-12
 

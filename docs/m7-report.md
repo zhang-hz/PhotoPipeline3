@@ -462,7 +462,8 @@ R-171/R-002（write-warnings、meta-write-fail）、R-097（png_ok 硬断言）�
   （自首次移动后未动）；附加 `ci-versions-check` = `OK (10 keys, expect=0)`。
 - **push 与 main-full**：`git push origin 35c4410d704e…:main`（`4addc51..35c4410`，**HEAD
   `35c4410d704e181f29e25aafb7eb7cfb204eeee2`**，区间 9 提交 = G2 4 + G4 2 + GATE 2 + G2 格式
-  收口 1，纯快进）→ **main-full #54（run 38338314518）completed/failure**（02:44:18 →
+  收口 1，纯快进）→ **main-full #54（run 38338314518）completed/cancelled**（run 级取消态随
+  winzip，job 级 gate = failure；02:44:18 →
   03:05:17Z，21m）：
   - **流程 3 明文前提达成**：**linux（全 ctest+金样）success**（11m40s）——step 13 release
     ctest 全量绿、**step 15 release-dev ctest（含 `ui_smoke`）绿**、step 16 UI-SMOKE 冻结行
@@ -500,8 +501,9 @@ R-171/R-002（write-warnings、meta-write-fail）、R-097（png_ok 硬断言）�
   runbook §3 与 d049d22 已挂账）或 winzip job 减负（动 `.github/`），均非 G6 文件面，
   待裁定；② 0.3.3 未发行，「已发行 + CI 产物指纹」终态收口继续留待真发布后（`d049d22`
   先例口径不变）；③ 03:1x 复取 run 级 conclusion 时撞匿名限流 403（60/60，reset
-  03:40:07Z）——run 级终态以 job 级 9/9 全量读数推定（gate failure ⇒ run failure），取证
-  缺口如实登记。
+  03:40:07Z）——限流复位后 03:40Z 复取实测 **run 级 = `completed/cancelled`**（取消态随
+  winzip；gate job = failure），限流期间的「run failure」推定措辞已在证据 §3.1 勘误更正，
+  同为非绿、不影响停止决策。
 
 ---
 

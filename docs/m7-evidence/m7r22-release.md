@@ -129,10 +129,12 @@ python tools/env.py run -- python tools/make_winzip.py --smoke-exe build/release
 - 轮询命令（公共 API 免鉴权，间隔 ≥5min，见 §8）：`workflows/main-full.yml/runs?per_page=3`
   → `actions/runs/38338314518/jobs?per_page=20`；02:44 首拍（定位）→ 02:47 / 02:48 / 02:54 /
   02:59 / 03:04 / 03:11（终态）。02:44:18 → 03:05:17Z 全轮到达终态 **21m**（40min 上限内，
-  无需继续等待）。03:11 拍到 job 级全完成：**completed / failure**（gate 总闸随 winzip）。
-  03:1x 复取 run 级结论时撞**匿名限流 403**（`X-RateLimit-Used: 60` / `Remaining: 0`，
-  reset 03:40:07Z）——run 级 conclusion 以 job 级全量读数为准（9 job 终态齐、gate failure
-  ⇒ run failure，无歧义），如实登记取证缺口。
+  无需继续等待）。03:11 拍到 job 级全完成；03:1x 复取 run 级结论时撞**匿名限流 403**
+  （`X-RateLimit-Used: 60` / `Remaining: 0`，reset 03:40:07Z），限流复位后 03:40Z 复取：
+  **run 级 conclusion = `completed / cancelled`**（winzip 被 timeout 取消所致的 run 级取消态；
+  job 级 gate = failure）——**非绿**，流程 3「至绿」判据未达成的结论不变。
+  （登记勘误：限流期间曾以 job 级读数推定「run failure」，实测 run 级为 `cancelled`，
+  推定措辞以此更正；两者同为非绿，不影响停止决策。）
 
 ### 3.2 job 级读数（`actions/runs/38338314518/jobs`，03:11Z 拍）
 
@@ -189,9 +191,10 @@ winzip job 步级（02:44:31 起算，cap = 20min）：
 
 ## 5. tag v0.3.3 二次移动（M7-ADJ-tag-move-2）—— **未执行（授权保持未消耗）**
 
-- 流程 5 的前置 = 流程 3「轮询 main-full **至绿**」：#54 终态 **completed/failure**（gate 总闸
-  failure，§3.2）⇒ 前置**未达成**。明文前提「linux job 全绿（含 ui_smoke）」确已达成（§3.3），
-  但判据是「main-full 至绿」，不是「linux 绿」——**不放宽判据**（纪律 9）。
+- 流程 5 的前置 = 流程 3「轮询 main-full **至绿**」：#54 终态 **completed/cancelled**（run 级
+  取消态随 winzip；job 级 gate = failure，§3.1–3.2）⇒ 前置**未达成**。明文前提「linux job
+  全绿（含 ui_smoke）」确已达成（§3.3），但判据是「main-full 至绿」，不是「linux 绿」——
+  **不放宽判据**（纪律 9）。
 - 叠加不可逆性论证（即使按宽口径放行也应停）：tag 移动**此后不得再动** + **禁止第三次移动**
   （M7-ADJ-tag-move-2 条件 + 任务书步骤 8）。§3.4 推算 release 链 winzip **≈21–22min >
   20min 硬顶**，撞顶 ⇒ publish skipped ⇒ **Release 不创建**；移动即把一次性授权烧在
@@ -213,9 +216,12 @@ winzip job 步级（02:44:31 起算，cap = 20min）：
 ## 6. release.yml 实况（tag 推送后）—— **未触发**
 
 - 无 tag 推送 ⇒ 无 release.yml 新轮次（前情最新仍为 **#13 run 38198290373 @ b1af3716
-  completed/cancelled**，其后无新 run；03:23Z 后限流复检未做，以 §1.1/§1.2 预检 404 + 无
-  tag 动作推定 Release 状态不变）。
-- GitHub Release v0.3.3 **仍未创建**（预检 §1.1 = 404；本轮无任何发布动作）。
+  completed/cancelled**，其后无新 run）。
+- GitHub Release v0.3.3 **仍未创建**：预检 §1.1 = 404，**收口复检 = 404**（2026-10-13
+  03:40Z，`curl …/releases/tags/v0.3.3`，限流复位后实测）。
+- 收口文档提交（`e0a1c2c`）推送触发 **main-full #55**（run 38342162697 @ `e0a1c2c81b63`，
+  created 03:32:04Z，03:40Z 拍时 in_progress）——docs-only 提交不改编译面，预期同型红于
+  winzip 预算；本包不跟踪该轮（发行判读以 #54 为准）。
 
 ## 7. 处置与跨界需求
 
@@ -232,6 +238,8 @@ winzip job 步级（02:44:31 起算，cap = 20min）：
   （winzip 被取消但 step 17 save 已跑完 15s）；Qt(msvc2022_64) save（windows job step 17）与
   Qt(gcc_64) save（linux job step 21）均 **skipped**（键已存在/条件所致——Qt 缓存由既往轮
   播种且本轮 restore 全部命中，暖度断言 1s 过，非断供形态；appimage job 6m46s 绿亦为暖度实证）。
+- 取证缺口（如实，已补）：03:1x 复取 run 级 conclusion 时撞匿名限流 403，03:40Z 复位后复取
+  为 `completed/cancelled`（勘误见 §3.1）；缺口期间的 job 级读数（§3.2–3.4）均实测无误。
 
 ## 8. 复现命令索引（逐字）
 

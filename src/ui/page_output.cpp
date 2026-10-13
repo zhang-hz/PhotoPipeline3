@@ -143,6 +143,7 @@ void OutputPageImpl::toggle_format(const std::string &id, bool on, bool user) {
         return;
     // R-189：集合/现役变更只走 FormatSelection（含 R-266 游离槽语义，逐字等价）；
     // no-op 早退同原「on == was」。投影统一在末尾 reproject_format_selection()。
+    const bool closing_active = (!on && id == sel.active());
     if (!sel.toggle(id, on))
         return;
     if (on) {
@@ -152,6 +153,12 @@ void OutputPageImpl::toggle_format(const std::string &id, bool on, bool user) {
     } else {
         snapshot_state(id);
         remove_tab(id);
+        // M7R23G8-1（修 R-189 语义漂移，M7R22G1-6）：remove_tab → QTabWidget::removeTab 发出的
+        // currentChanged 会把现役写成页签滑动邻接位（该 handler 的 set_active 是末写者），覆盖
+        // FormatSelection::toggle 的 R-266「现役前移首位」。此处按契约重申 front（同
+        // apply_preset 的既有末写者序；751f479 旧序语义归位，模型真值表 test_smoke 不动）。
+        if (closing_active && !sel.empty())
+            sel.set_active(sel.items().front());
     }
     reproject_format_selection();
     update_metadata_only_state();

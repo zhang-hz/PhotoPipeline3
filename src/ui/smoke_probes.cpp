@@ -5411,16 +5411,18 @@ void probe_format_roundtrip(PageOutput *page_output,
         expect(!s3.checked.contains(y) && !s3.tabs.contains(y),
                QStringLiteral("关 %1 出集（%2）").arg(y, s3.checked.join(QLatin1Char(','))));
         // 关现役后的现役落点：R-266 模型契约 =「现役前移首位（规范序首项）」（format_selection_
-        // model.h 头注；模型真值表 tests/unit/test_smoke.cpp 钉），UI 实际 = 页签滑动邻接位
-        // （remove_tab → currentChanged 末写者覆盖；R-189 重排 toggle_format 顺序后形成 ——
-        // 751f479 的旧序是 remove_tab 后显式 front 赋值，末写者 = front）。两者分歧 = 跨界
-        // 发现（M7R22G1-6，交 page_output 属主裁定）：本探针按 e2⑤-5 规格只判「四面一致 +
-        // 现役 ∈ 剩余集合」，两读数（off-active/off-front）进取证行，不把争议语义钉成断言。
+        // model.h 头注；模型真值表 tests/unit/test_smoke.cpp 钉）。M7R23G8-1 修复 R-189 语义
+        // 漂移（M7R22G1-6 跨界发现）：原 remove_tab → currentChanged 末写者把现役写成页签滑动
+        // 邻接位（实测 off-active=webp front=jpeg），现 toggle_format 在 remove_tab 后显式重申
+        // front —— 两读数归位一致，此处按契约钉断言（断言只增）。
         off_active = s3.active;
         off_front = s3.tabs.isEmpty() ? QStringLiteral("<空>") : s3.tabs.first();
         expect(s3.tabs.contains(s3.active),
                QStringLiteral("关现役后现役 ∈ 剩余集合（got %1 tabs %2 front %3）")
                    .arg(s3.active, s3.tabs.join(QLatin1Char(',')), off_front));
+        expect(s3.active == off_front,
+               QStringLiteral("R-266 关现役后现役前移首位（got %1 front %2）")
+                   .arg(s3.active, off_front));
         expect_consistent(s3, QStringLiteral("关 %1 后").arg(y));
     }
     // 归位：toggle X 关 → 集合回到初态；现役按初态回拨（页签点击 = 用户路径）

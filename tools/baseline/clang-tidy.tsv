@@ -6,7 +6,7 @@
 # schema=1
 # REC  <fingerprint>	<platform>	<compiler>	<tool>	<checks>	<total>	<files>	<generated_at>
 # FILE <fingerprint>	<relpath>	<count>            （只记 count>0；缺行 = 0）
-REC	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	windows-msvc	MSVC 14.51.36231	clang-tidy 21.1.0	-*,bugprone-*,performance-*,portability-*	263	75	2026-10-12T19:48:06Z
+REC	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	windows-msvc	MSVC 14.51.36231	clang-tidy 21.1.0	-*,bugprone-*,performance-*,portability-*	262	76	2026-10-13T02:10:40Z
 FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/codecs/enc_heif.cpp	2
 FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/codecs/enc_jxl.cpp	2
 FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/codecs/enc_oiio.cpp	1
@@ -30,10 +30,10 @@ FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	sr
 FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/mapwidget/dms.cpp	1
 FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/mapwidget/geocoder.cpp	1
 FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/mapwidget/map_view.cpp	1
-FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/mapwidget/mapwidget.cpp	4
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/mapwidget/mapwidget.cpp	3
 FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/mapwidget/providers.cpp	1
 FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/platform/frameless.cpp	1
-FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/ui/classify_panel.cpp	3
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/ui/classify_panel.cpp	2
 FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/ui/exif_editor.cpp	3
 FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/ui/filegroup_proxy.cpp	2
 FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	src/ui/formkit.cpp	6
@@ -65,6 +65,7 @@ FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	te
 FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	tests/unit/test_fsops.cpp	1
 FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	tests/unit/test_icons.cpp	1
 FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	tests/unit/test_logger.cpp	3
+FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	tests/unit/test_meta_format.cpp	1
 FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	tests/unit/test_metadata.cpp	2
 FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	tests/unit/test_params.cpp	11
 FILE	windows-msvc|clang-tidy 21.1.0|-*,bugprone-*,performance-*,portability-*	tests/unit/test_paths.cpp	1

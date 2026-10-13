@@ -118,7 +118,7 @@ void TileFetcher::on_tile_finished(QNetworkReply *reply) {
         reply->deleteLater();
         return;
     }
-    const PendingTile entry = *it;
+    const PendingTile entry = std::move(*it); // 随后 erase 同元素：搬空再析构，与拷贝同可观测
     pending_.erase(it);
     notify_pending();
 

@@ -196,7 +196,7 @@ void GeocodeClient::start_search(const Geocoder *geocoder, const QString &query,
     }
     const std::optional<std::pair<double, double>> near =
         with_near ? std::optional<std::pair<double, double>>(center_wgs) : std::nullopt;
-    const QString fallback_query = query; // 周边无果时回退全文用（下游按值捕获 = 拷贝）
+    const QString &fallback_query = query; // 回退全文用（本地仅别名；下游按值捕获 = 拷贝）
     RequestConfig cfg;
     cfg.url = geocoder->search_url(query, amap_key_, near);
     cfg.what = MapWidget::tr("搜索");

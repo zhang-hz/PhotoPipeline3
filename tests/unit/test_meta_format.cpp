@@ -18,6 +18,7 @@
 #define PP_META_FORMAT_TEST_NO_WIDGETS
 #include "ui/meta_format.cpp" // 单实现：与生产同一份代码
 
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <optional>
@@ -52,7 +53,7 @@ void check_q(const QString &got, const QString &want, const std::string &case_na
 // 产品侧同一对拍另有编译期 static_assert 钉在 meta_card_info.cpp 表侧（双端同判据）。
 namespace slots {
 
-enum InfoSlotCopy : int {
+enum InfoSlotCopy : std::uint8_t {
     kInfoTime = 0,
     kInfoCamera = 1,
     kInfoLens = 2,
@@ -123,9 +124,9 @@ void test_format_size() {
     check_q(meta::format_size(-5), QStringLiteral("—"), "format_size/负数 → —");
     check_q(meta::format_size(512), QStringLiteral("0.5 KB"), "format_size/512B → 0.5 KB");
     check_q(meta::format_size(1024), QStringLiteral("1.0 KB"), "format_size/1KB → 1.0 KB");
-    check_q(meta::format_size(1024 * 1024), QStringLiteral("1.00 MB"),
+    check_q(meta::format_size(1024LL * 1024), QStringLiteral("1.00 MB"),
             "format_size/1MB 边界 → 1.00 MB（MB 起两位小数）");
-    check_q(meta::format_size(1024 * 1024 - 1), QStringLiteral("1024.0 KB"),
+    check_q(meta::format_size(1024LL * 1024 - 1), QStringLiteral("1024.0 KB"),
             "format_size/1MB−1 仍在 KB 档");
     check_q(meta::format_size(1572864), QStringLiteral("1.50 MB"), "format_size/1.5MB");
 }

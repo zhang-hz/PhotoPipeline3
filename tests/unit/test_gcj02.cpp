@@ -66,7 +66,7 @@ const City kOutside[] = {
 
 } // namespace
 
-int main() {
+static int run_cases() {
     // 1. wgs -> gcj: nonzero offset of the right order of magnitude, three frozen cities.
     for (const City &city : kCities) {
         const std::pair<double, double> gcj = pp::map::wgs84_to_gcj02(city.lat, city.lon);
@@ -284,4 +284,15 @@ int main() {
     }
     std::printf("test_gcj02: FAILED (%d assertion(s))\n", g_failed);
     return 1;
+}
+
+int main() {
+    // main 不得让异常外泄（外泄=terminate，bugprone-exception-escape）：run_cases 整体罩住；
+    // 异常路径返回 1（非零=失败，ctest 判定不变），断言与成功路径逐字不动。
+    try {
+        return run_cases();
+    } catch (...) {
+        std::printf("test_gcj02: FAILED (unexpected exception)\n");
+        return 1;
+    }
 }

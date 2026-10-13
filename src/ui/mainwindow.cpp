@@ -533,38 +533,15 @@ void MainWindow::Impl::join_workers_with_feedback() {
     QApplication::restoreOverrideCursor();
 }
 
-void MainWindow::build_ui() {
-    // R-252 时序锚点①「style 先装」：FileViewFocusFrameStyle 须先于任何子部件安装（Impl 构造
-    // 已装；迟装 = 先建部件绕过焦点框抑制代理，M5-T14 的成因说明）。此处断言前置条件成立。
-    Q_ASSERT(dynamic_cast<FileViewFocusFrameStyle *>(QApplication::style()) != nullptr);
-    Impl &d = *impl_;
-    // R-251：tokens 先填后用 —— 原状 d.tokens 在 refresh_theme()（build_ui 末尾）才落地，早期
-    // 控件（＋/−/筛选图标、caption 三钮取色）读到的是**未填充**默认令牌，靠末尾重放掩盖；同一
-    // 函数里两种写法（d.tokens vs theme::tokens(preferred_theme_mode())）就此收敛为一条取值链。
-    d.tokens = theme::tokens(d.theme_mode);
-    setWindowTitle(QStringLiteral("PhotoPipeline"));
-    setAcceptDrops(true);
-    // §9.1 尺寸基准：最小窗口 1180×720 / 1440×900 校准（屏幕不足时收敛到可用区）
-    setMinimumSize(theme::Metrics::min_window_w, theme::Metrics::min_window_h);
-    {
-        QRect available(0, 0, theme::Metrics::calibrated_w, theme::Metrics::calibrated_h);
-        if (const QScreen *screen = QGuiApplication::primaryScreen())
-            available = screen->availableGeometry();
-        const int max_w = std::max(theme::Metrics::min_window_w, available.width() - 40);
-        const int max_h = std::max(theme::Metrics::min_window_h, available.height() - 40);
-        resize(std::clamp(theme::Metrics::calibrated_w, theme::Metrics::min_window_w, max_w),
-               std::clamp(theme::Metrics::calibrated_h, theme::Metrics::min_window_h, max_h));
-    }
+// ---------------------------------------------------------------------------
+// R-253（M7-R2.3-G8 后半）：build_ui / wire 的**语义分段**（同 refresh_theme/
+// refresh_status 的 M7-WP9 先例）：每段 = 原函数一段逐字搬移（`Impl &d = *this` 承接
+// 原 `d.` 形态；lambda 内原 `impl_->` 前缀收进 Impl 直呼；Qt 接线 context = w 不变），
+// 调用顺序与行为零变化；MainWindow 冻结头签名零改动（分段是 Impl 私有件）。
+// ---------------------------------------------------------------------------
 
-    // ---- 根容器（窗口底：mockup body 渐变；深色 = Mica 兜底色）----
-    auto *central = new QWidget(this);
-    d.root = central;
-    central->setObjectName(QStringLiteral("pp-root"));
-    central->setAttribute(Qt::WA_StyledBackground, true);
-    auto *outer = new QVBoxLayout(central);
-    outer->setContentsMargins(0, 0, 0, 0);
-    outer->setSpacing(0);
-
+void MainWindow::Impl::build_titlebar(QWidget *central, QVBoxLayout *outer) {
+    Impl &d = *this;
     // ---- 顶栏（兼标题栏，§3.1/§3.3）：44px 三段式 ----
     //   品牌区（图标 20 + 标题 13/700 + 版本 pill 9.5）｜ 导航区（一体式分段导航，§6.2）｜
     //   工具与窗口控制区（左推：☆ 收藏、⚙ 设置 28×28；caption 三连 46×32）。
@@ -601,11 +578,11 @@ void MainWindow::build_ui() {
     title_row->addWidget(version);
     top->addLayout(title_row);
 
-    d.nav_group = new QActionGroup(this);
+    d.nav_group = new QActionGroup(w);
     d.nav_group->setExclusive(true);
-    d.nav_meta = new QAction(T("元数据"), this);
-    d.nav_output = new QAction(T("输出"), this);
-    d.nav_run = new QAction(T("运行"), this);
+    d.nav_meta = new QAction(T("元数据"), w);
+    d.nav_output = new QAction(T("输出"), w);
+    d.nav_run = new QAction(T("运行"), w);
     for (QAction *action : {d.nav_meta, d.nav_output, d.nav_run}) {
         action->setCheckable(true);
         d.nav_group->addAction(action);
@@ -623,9 +600,9 @@ void MainWindow::build_ui() {
     top->addStretch(1);
     // M5-T3：QAction 只承载提示/使能（图标 = 矢量引擎，见 make_icon_button）；setText 保留
     // 「收藏当前设置 / 设置」供 QAction 语义与探针读回（按钮本体 ToolButtonIconOnly，不出文本）。
-    d.presets_action = new QAction(T("收藏当前设置"), this);
+    d.presets_action = new QAction(T("收藏当前设置"), w);
     d.presets_action->setToolTip(T("收藏当前设置"));
-    d.settings_action = new QAction(T("设置"), this);
+    d.settings_action = new QAction(T("设置"), w);
     d.settings_action->setToolTip(T("设置"));
     d.presets_btn = make_icon_button(d.titlebar, d.presets_action, "pp-presets", icons::Name::Star);
     d.settings_btn =
@@ -656,20 +633,10 @@ void MainWindow::build_ui() {
     right_row->addLayout(caps);
     top->addLayout(right_row);
     outer->addWidget(d.titlebar);
+}
 
-    // ---- 三栏骨架（§3.2）：左 330（280–400 可调）| 中弹性 | 右 587（520–680 可调）----
-    auto *main_area = new QWidget(central);
-    auto *main_layout = new QHBoxLayout(main_area);
-    main_layout->setContentsMargins(theme::Metrics::main_pad_x, theme::Metrics::main_pad_top,
-                                    theme::Metrics::main_pad_x, theme::Metrics::main_pad_bottom);
-    main_layout->setSpacing(0);
-    d.splitter = new QSplitter(Qt::Horizontal, main_area);
-    d.splitter->setObjectName(QStringLiteral("pp-splitter"));
-    d.splitter->setHandleWidth(theme::Metrics::gap); // 列间距 = mockup .main gap:10px
-    d.splitter->setChildrenCollapsible(false);
-    main_layout->addWidget(d.splitter);
-    outer->addWidget(main_area, 1);
-
+void MainWindow::Impl::build_left_column() {
+    Impl &d = *this;
     // 左栏（T11 落地；§3.2 左栏基线 330 / 280–400 可调）：文件卡（勾选+分组）+ 分类卡（§6.2）
     d.left_col = new QWidget(d.splitter);
     d.left_col->setObjectName(QStringLiteral("pp-left-col"));
@@ -889,7 +856,10 @@ void MainWindow::build_ui() {
     d.classify_panel->setToolTip(T("1–9 键打标")); // 面板内 hover 也可及（1-14 的引导层）
     classify_layout->addWidget(d.classify_panel);
     left_col_layout->addWidget(d.classify_card, 0);
+}
 
+void MainWindow::Impl::build_preview_card() {
+    Impl &d = *this;
     // 中栏卡：输入预览（T10：卡头 = 文件名徽标 + 尺寸/位深/色彩空间 hint；卡体 = PreviewPanel）
     d.preview_card = new QFrame(d.splitter);
     d.preview_card->setObjectName(QStringLiteral("pp-card"));
@@ -912,7 +882,10 @@ void MainWindow::build_ui() {
     preview_layout->addWidget(preview_head);
     d.preview_panel = new PreviewPanel(d.preview_card); // 舞台/翻图/缩放/徽标/热键提示
     preview_layout->addWidget(d.preview_panel, 1);
+}
 
+void MainWindow::Impl::build_page_stack() {
+    Impl &d = *this;
     // 右栏：步骤内容区（QStacked 三页，W3 填内容）
     d.stack = new QStackedWidget(d.splitter);
     d.stack->setObjectName(QStringLiteral("pp-stack"));
@@ -936,7 +909,10 @@ void MainWindow::build_ui() {
     d.splitter->setStretchFactor(2, theme::Metrics::right_stretch);
     d.splitter->setSizes(
         {theme::Metrics::left_width, theme::Metrics::mid_width_1440, theme::Metrics::right_width});
+}
 
+void MainWindow::Impl::build_bottom_bar(QWidget *central, QVBoxLayout *outer) {
+    Impl &d = *this;
     // ---- 底栏（§3.1 状态栏 30px）：状态词 · 输出摘要 · [▶ 开始运行] ----
     // 与内容区以 hairline 分隔（修 5-13/§5-13，QSS 的 border-top）；栏内三种重量元素**分区**：
     // 状态点 + 状态词（语义色 + 600 字重）｜ 分隔细线 ｜ 输出摘要（--txt3 次级）｜ 实心主 CTA
@@ -991,90 +967,74 @@ void MainWindow::build_ui() {
     d.start->setDefault(true);
     bottom->addWidget(d.start);
     outer->addWidget(d.bottombar);
-
-    setCentralWidget(central);
-
-    // ---- 无边框接线（§9.1 能力表）：顶栏 = 拖拽/HTCAPTION 区；交互控件全部排除 ----
-    // 导航区 = 一整件（ShellNav 单控件）→ 整块排除（含段间 hairline 位，§9.1 硬约束 1）。
-    d.frameless = plat::Frameless::attach(this, d.titlebar, {d.nav, d.presets_btn, d.settings_btn});
-    if (d.frameless != nullptr)
-        d.frameless->set_caption_buttons(d.cap_min, d.cap_max, d.cap_close);
-
-    // 分类注册表 → 预览面板的热键提示表（§6.1「热键表随分类注册表动态生成」，消费 W1-T8 的
-    // classify 接口）。T10 只**只读消费**：注册表实例由本窗口持有，T11 接管 CRUD/持久化/打标
-    // 与勾选语义时共用同一实例（面板自动跟随，无需改面板）。
-    d.preview_panel->set_class_registry(&d.classes);
-    // M4-T11：左栏分类面板（§6.2）——同一注册表与同一文件模型（单源；分类只做组织 + 圈选）
-    d.classify_panel->set_registry(&d.classes);
-    d.classify_panel->set_model(d.model);
-
-    d.refresh_theme(); // tokens 落地（明暗跟随系统）
 }
 
-void MainWindow::wire() {
-    Impl &d = *impl_;
-
-    connect(d.nav_meta, &QAction::triggered, this, [this] { set_current_page(1); });
-    connect(d.nav_output, &QAction::triggered, this, [this] { set_current_page(2); });
-    connect(d.nav_run, &QAction::triggered, this, [this] { set_current_page(3); });
-    connect(d.settings_action, &QAction::triggered, this, &MainWindow::open_settings);
-    connect(d.presets_action, &QAction::triggered, this, &MainWindow::manage_presets);
+void MainWindow::Impl::wire_chrome() {
+    Impl &d = *this;
+    QObject::connect(d.nav_meta, &QAction::triggered, w, [this] { w->set_current_page(1); });
+    QObject::connect(d.nav_output, &QAction::triggered, w, [this] { w->set_current_page(2); });
+    QObject::connect(d.nav_run, &QAction::triggered, w, [this] { w->set_current_page(3); });
+    QObject::connect(d.settings_action, &QAction::triggered, w, &MainWindow::open_settings);
+    QObject::connect(d.presets_action, &QAction::triggered, w, &MainWindow::manage_presets);
 
     // caption 三钮 → platform/frameless（§9.1 能力表：Windows = WM_SYSCOMMAND(SC_*)；
     // 其它平台 = showMinimized/showMaximized/close）
     if (d.frameless != nullptr) {
-        connect(d.cap_min, &QPushButton::clicked, this,
-                [this] { impl_->frameless->trigger(plat::CaptionAction::Minimize); });
-        connect(d.cap_max, &QPushButton::clicked, this, [this] {
-            impl_->frameless->trigger(plat::CaptionAction::Maximize);
-            impl_->update_caption_buttons();
+        QObject::connect(d.cap_min, &QPushButton::clicked, w,
+                         [this] { frameless->trigger(plat::CaptionAction::Minimize); });
+        QObject::connect(d.cap_max, &QPushButton::clicked, w, [this] {
+            frameless->trigger(plat::CaptionAction::Maximize);
+            update_caption_buttons();
         });
-        connect(d.cap_close, &QPushButton::clicked, this,
-                [this] { impl_->frameless->trigger(plat::CaptionAction::Close); });
+        QObject::connect(d.cap_close, &QPushButton::clicked, w,
+                         [this] { frameless->trigger(plat::CaptionAction::Close); });
     }
     // 明暗跟随系统（§9.2 末行）：系统色板变化 → 重新落地 tokens
-    connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this,
-            [this](Qt::ColorScheme) { impl_->set_theme_mode(preferred_theme_mode()); });
+    QObject::connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, w,
+                     [this](Qt::ColorScheme) { set_theme_mode(preferred_theme_mode()); });
+}
 
-    connect(d.add_files_action, &QAction::triggered, this, [this] {
+void MainWindow::Impl::wire_file_panel() {
+    Impl &d = *this;
+    QObject::connect(d.add_files_action, &QAction::triggered, w, [this] {
         const QStringList files = QFileDialog::getOpenFileNames(
-            this, T("添加文件"), QString(),
+            w, T("添加文件"), QString(),
             T("图片 (*.jpg *.jpeg *.png *.tif *.tiff *.webp *.jxl *.heic *.heif *.avif *.bmp "
               "*.gif *.tga);;所有文件 (*)"));
         if (!files.isEmpty())
-            add_paths(files);
+            w->add_paths(files);
     });
-    connect(d.add_dir_action, &QAction::triggered, this, [this] {
-        const QString dir = QFileDialog::getExistingDirectory(this, T("添加文件夹"));
+    QObject::connect(d.add_dir_action, &QAction::triggered, w, [this] {
+        const QString dir = QFileDialog::getExistingDirectory(w, T("添加文件夹"));
         if (!dir.isEmpty())
-            add_paths(QStringList{dir});
+            w->add_paths(QStringList{dir});
     });
-    connect(d.clear_action, &QAction::triggered, this, [this] { impl_->model->clear(); });
+    QObject::connect(d.clear_action, &QAction::triggered, w, [this] { model->clear(); });
     // M5-T5：空态投放区的显式「添加文件…」钮复用同一入口（§8「显式按钮」；功能零分叉）
-    connect(d.empty_add, &QPushButton::clicked, this,
-            [this] { impl_->add_files_action->trigger(); });
-    connect(d.remove_sel, &QToolButton::clicked, this, [this] { impl_->remove_selected(); });
+    QObject::connect(d.empty_add, &QPushButton::clicked, w,
+                     [this] { add_files_action->trigger(); });
+    QObject::connect(d.remove_sel, &QToolButton::clicked, w, [this] { remove_selected(); });
     // M5-T5 筛选（修 1-07 的语义可读性）：三项 = 两个可见性开关 + 清除。
     // 过滤只改可见性（§6.2 正交口径）：勾选集合/计数/分组键都不变；分组视图随可见性重建。
     const auto apply_filter = [this] {
-        Impl &impl_ref = *impl_;
+        Impl &impl_ref = *this;
         impl_ref.groups->rebuild();
         impl_ref.rebuild_group_view();
         impl_ref.apply_empty_state();
-        refresh_status();
+        w->refresh_status();
     };
-    connect(d.filter_checked, &QAction::toggled, this, [this, apply_filter](bool on) {
-        impl_->proxy->set_checked_only(on);
+    QObject::connect(d.filter_checked, &QAction::toggled, w, [this, apply_filter](bool on) {
+        proxy->set_checked_only(on);
         apply_filter();
     });
-    connect(d.filter_exceptions, &QAction::toggled, this, [this, apply_filter](bool on) {
-        impl_->proxy->set_exceptions_only(on);
+    QObject::connect(d.filter_exceptions, &QAction::toggled, w, [this, apply_filter](bool on) {
+        proxy->set_exceptions_only(on);
         apply_filter();
     });
-    connect(d.filter_clear, &QAction::triggered, this, [this, apply_filter] {
+    QObject::connect(d.filter_clear, &QAction::triggered, w, [this, apply_filter] {
         // R-153：原实现 clear_filters + 两次 setChecked 各自触发 apply_filter（最多 3 连刷）。
         // 这里屏蔽两枚开关的 toggled，只走一次 apply_filter。
-        Impl &impl_ref = *impl_;
+        Impl &impl_ref = *this;
         impl_ref.proxy->clear_filters(); // R-143：含分类过滤档（chip `.on` 随之归「全部」）
         {
             const QSignalBlocker b1(impl_ref.filter_checked);
@@ -1086,131 +1046,142 @@ void MainWindow::wire() {
             impl_ref.classify_panel->set_filter_class_id(QString());
         apply_filter();
     });
-    connect(d.search, &QLineEdit::textChanged, this, [this](const QString &text) {
-        Impl &impl_ref = *impl_;
+    QObject::connect(d.search, &QLineEdit::textChanged, w, [this](const QString &text) {
+        Impl &impl_ref = *this;
         impl_ref.proxy->setFilterFixedString(text);
         impl_ref.groups
             ->rebuild(); // 过滤 = 可见性变化 → 分组节重建（勾选状态住在源模型，不受影响）
         impl_ref.rebuild_group_view();
     });
-    connect(d.view, &QTreeView::doubleClicked, this, [this](const QModelIndex &idx) {
-        Impl &impl_ref = *impl_;
+}
+
+void MainWindow::Impl::wire_view_and_model() {
+    Impl &d = *this;
+    QObject::connect(d.view, &QTreeView::doubleClicked, w, [this](const QModelIndex &idx) {
+        Impl &impl_ref = *this;
         if (!idx.isValid() || impl_ref.groups->is_group(idx))
             return;
         // R-152（数据完整性）：过滤态下 idx 是**分组代理**行号，必须走完整的
         // proxy->mapToSource(groups->mapToSource(idx)) 链才能拿到根 FileListModel 行号
         // （与 :2701/:3377/:3444 三处同口径）。原先漏 proxy 一层 → 搜索/仅勾选过滤后双击
         // 打开的 EXIF 编辑器把例外写到**别的文件**上。
-        open_exif_editor_row(impl_ref.proxy->mapToSource(impl_ref.groups->mapToSource(idx)).row());
+        w->open_exif_editor_row(
+            impl_ref.proxy->mapToSource(impl_ref.groups->mapToSource(idx)).row());
     });
-    connect(d.view->selectionModel(), &QItemSelectionModel::selectionChanged, this,
-            [this] { impl_->sync_selection(); });
+    QObject::connect(d.view->selectionModel(), &QItemSelectionModel::selectionChanged, w,
+                     [this] { sync_selection(); });
     // 折叠记忆（§6.2）：过滤/摘要重建后不丢用户的展开态。程序化落地（apply_group_view_state）
     // 期间的 collapsed/expanded 不记为用户操作（否则"重建 → 程序折叠 → 记忆被自己清掉"）。
-    connect(d.view, &QTreeView::collapsed, this, [this](const QModelIndex &idx) {
-        Impl &impl_ref = *impl_;
+    QObject::connect(d.view, &QTreeView::collapsed, w, [this](const QModelIndex &idx) {
+        Impl &impl_ref = *this;
         if (impl_ref.applying_group_state)
             return;
         if (idx.isValid() && impl_ref.groups->is_group(idx))
             impl_ref.groups->set_collapsed(impl_ref.groups->group_key_at(idx.row()), true);
     });
-    connect(d.view, &QTreeView::expanded, this, [this](const QModelIndex &idx) {
-        Impl &impl_ref = *impl_;
+    QObject::connect(d.view, &QTreeView::expanded, w, [this](const QModelIndex &idx) {
+        Impl &impl_ref = *this;
         if (impl_ref.applying_group_state)
             return;
         if (idx.isValid() && impl_ref.groups->is_group(idx))
             impl_ref.groups->set_collapsed(impl_ref.groups->group_key_at(idx.row()), false);
     });
     // 分组模式（§6.2：月份 | 相机型号 | 源格式 + 无分组）——键由模型出、节名由代理出
-    connect(d.group_mode, &QComboBox::currentIndexChanged, this, [this](int) {
-        Impl &impl_ref = *impl_;
+    QObject::connect(d.group_mode, &QComboBox::currentIndexChanged, w, [this](int) {
+        Impl &impl_ref = *this;
         impl_ref.set_group_mode(pp::GroupMode(impl_ref.group_mode->currentData().toInt()));
     });
     // G5（2026-09-20 R1 修订）：底栏开始按钮运行中保持"开始"且禁用 → 取消唯一入口 = 运行页
-    connect(d.start, &QPushButton::clicked, this, &MainWindow::on_start);
+    QObject::connect(d.start, &QPushButton::clicked, w, &MainWindow::on_start);
 
-    connect(d.model, &FileListModel::content_changed, this,
-            [this] { impl_->on_content_changed(); });
-    connect(d.model, &FileListModel::exception_changed, this, [this](std::size_t) {
-        impl_->sync_exceptions();
+    QObject::connect(d.model, &FileListModel::content_changed, w, [this] { on_content_changed(); });
+    QObject::connect(d.model, &FileListModel::exception_changed, w, [this](std::size_t) {
+        sync_exceptions();
         // M4-T12：例外是 preview_effective 的第三个入参（§5.1 源 ⊕ 批量 ⊕ 例外）→ 例外一变，
         // 生效值显示必须随之刷新（跟随项快照里带的就是这一份例外）
-        impl_->sync_selection();
+        sync_selection();
     });
     // M4-T11：勾选集合变化 → 底栏"已选 N / M"由 content_changed → refresh_status 承担；分类面板
     // 的高亮只跟随**选中项**（sync_selection 里刷新），与勾选集合无关（勾选不改变归属）。
     // 分组摘要批次就绪 → 分组视图重建（节头/节数变化；重建后恢复展开态与选中）
-    connect(d.model, &FileListModel::group_source_changed, this,
-            [this] { impl_->rebuild_group_view(); });
+    QObject::connect(d.model, &FileListModel::group_source_changed, w,
+                     [this] { rebuild_group_view(); });
     // 分组结构变化（重建/reset）→ 跨列节头 + 展开态 + 选中恢复
-    connect(d.groups, &QAbstractItemModel::modelReset, this,
-            [this] { impl_->rebuild_group_view(); });
+    QObject::connect(d.groups, &QAbstractItemModel::modelReset, w,
+                     [this] { rebuild_group_view(); });
 
     // ---- M4-T11：分类面板接线（§6.2）----
     // CRUD/颜色/热键改动 → 立即落盘 classes.json（§6.2「打标即写 registry」的持久化面）
-    connect(d.classify_panel, &ClassifyPanel::registry_changed, this,
-            [this] { impl_->save_classes(); });
+    QObject::connect(d.classify_panel, &ClassifyPanel::registry_changed, w,
+                     [this] { save_classes(); });
     // 被拒操作的非模态反馈（不弹对话框：面板的对话框只在用户主动打开的菜单项里）
-    connect(d.classify_panel, &ClassifyPanel::error_occurred, this, [](const QString &message) {
-        // R-278：诊断输出收 logger（原 std::fprintf 绕过日志面）
-        pp::log_warn("ui", "classify", message.toStdString());
-    });
+    QObject::connect(d.classify_panel, &ClassifyPanel::error_occurred, w,
+                     [](const QString &message) {
+                         // R-278：诊断输出收 logger（原 std::fprintf 绕过日志面）
+                         pp::log_warn("ui", "classify", message.toStdString());
+                     });
     // M7-R2D1 / R-143：chip 过滤档 → 左栏过滤代理（列表按类过滤；「全部」/再点 = 清除）
-    connect(d.classify_panel, &ClassifyPanel::class_filter_requested, this,
-            [this](const QString &class_id) {
-                Impl &impl_ref = *impl_;
-                impl_ref.proxy->set_class_filter(class_id);
-                impl_ref.groups->rebuild();
-                impl_ref.rebuild_group_view();
-                impl_ref.apply_empty_state();
-                refresh_status();
-            });
+    QObject::connect(d.classify_panel, &ClassifyPanel::class_filter_requested, w,
+                     [this](const QString &class_id) {
+                         Impl &impl_ref = *this;
+                         impl_ref.proxy->set_class_filter(class_id);
+                         impl_ref.groups->rebuild();
+                         impl_ref.rebuild_group_view();
+                         impl_ref.apply_empty_state();
+                         w->refresh_status();
+                     });
+}
 
+void MainWindow::Impl::wire_check_actions() {
+    Impl &d = *this;
     // ---- UX-2（M7-R2D1）：批量勾选入口 —— 工具钮菜单 + 快捷键（同一组意图，作用于可见行）----
     if (d.check_menu_btn != nullptr && d.check_menu_btn->menu() != nullptr) {
         const QList<QAction *> check_actions = d.check_menu_btn->menu()->actions();
         if (check_actions.size() == 3) {
-            connect(check_actions[0], &QAction::triggered, this,
-                    [this] { impl_->apply_visible_checks(Impl::CheckOp::All); });
-            connect(check_actions[1], &QAction::triggered, this,
-                    [this] { impl_->apply_visible_checks(Impl::CheckOp::None); });
-            connect(check_actions[2], &QAction::triggered, this,
-                    [this] { impl_->apply_visible_checks(Impl::CheckOp::Invert); });
+            QObject::connect(check_actions[0], &QAction::triggered, w,
+                             [this] { apply_visible_checks(Impl::CheckOp::All); });
+            QObject::connect(check_actions[1], &QAction::triggered, w,
+                             [this] { apply_visible_checks(Impl::CheckOp::None); });
+            QObject::connect(check_actions[2], &QAction::triggered, w,
+                             [this] { apply_visible_checks(Impl::CheckOp::Invert); });
         }
     }
     // 快捷键挂在**文件列表**焦点域（WidgetWithChildrenShortcut）：文本输入控件里 Ctrl+A 等
     // 仍归控件自己（搜索框选中文字），不被应用级快捷键抢走。
     {
-        QAction *select_all = new QAction(T("全选行"), this);
+        QAction *select_all = new QAction(T("全选行"), w);
         select_all->setShortcut(QKeySequence::SelectAll); // Ctrl+A（Qt 标准）
         select_all->setShortcutContext(Qt::WidgetWithChildrenShortcut);
         select_all->setToolTip(T("全选行（Ctrl+A）"));
         d.view->addAction(select_all);
-        connect(select_all, &QAction::triggered, this, [this] {
-            if (impl_->view != nullptr)
-                impl_->view->selectAll();
+        QObject::connect(select_all, &QAction::triggered, w, [this] {
+            if (view != nullptr)
+                view->selectAll();
         });
-        QAction *quick_check = new QAction(T("勾选全部"), this);
+        QAction *quick_check = new QAction(T("勾选全部"), w);
         quick_check->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_A));
         quick_check->setShortcutContext(Qt::WidgetWithChildrenShortcut);
         quick_check->setToolTip(T("勾选全部（Ctrl+Shift+A）"));
         d.view->addAction(quick_check);
-        connect(quick_check, &QAction::triggered, this,
-                [this] { impl_->apply_visible_checks(Impl::CheckOp::All); });
-        QAction *quick_uncheck = new QAction(T("取消全部勾选"), this);
+        QObject::connect(quick_check, &QAction::triggered, w,
+                         [this] { apply_visible_checks(Impl::CheckOp::All); });
+        QAction *quick_uncheck = new QAction(T("取消全部勾选"), w);
         quick_uncheck->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_D));
         quick_uncheck->setShortcutContext(Qt::WidgetWithChildrenShortcut);
         quick_uncheck->setToolTip(T("取消全部勾选（Ctrl+D）"));
         d.view->addAction(quick_uncheck);
-        connect(quick_uncheck, &QAction::triggered, this,
-                [this] { impl_->apply_visible_checks(Impl::CheckOp::None); });
+        QObject::connect(quick_uncheck, &QAction::triggered, w,
+                         [this] { apply_visible_checks(Impl::CheckOp::None); });
     }
+}
 
+void MainWindow::Impl::wire_preview_and_timers() {
+    Impl &d = *this;
     // ---- M4-T10：中栏预览面板接线（§6.1）----
     // 卡头（pill = 文件名，hint = 尺寸·位深·色彩空间）由面板的 display_changed 驱动；
     // 热键提示表在 build_ui 里已 set_class_registry(&classes)（动态生成）。
-    connect(d.preview_panel, &PreviewPanel::display_changed, this, [this] {
-        Impl &impl_ref = *impl_;
+    QObject::connect(d.preview_panel, &PreviewPanel::display_changed, w, [this] {
+        Impl &impl_ref = *this;
         const QString file_name = impl_ref.preview_panel->current_file_name();
         impl_ref.preview_pill->set_full_text(file_name);
         impl_ref.preview_pill->setVisible(!file_name.isEmpty()); // 原型：有内容才画药丸
@@ -1218,12 +1189,12 @@ void MainWindow::wire() {
     });
     // R-151（翻图/打标对象错位）：←/→ 翻图同步左栏选中 —— 热键打标作用于"所见"的那一张。
     // （仅翻图动作发 navigated；选中驱动的 set_current 不发，故不会吞多选。）
-    connect(d.preview_panel, &PreviewPanel::navigated, this,
-            [this](int index) { impl_->select_row(index); });
+    QObject::connect(d.preview_panel, &PreviewPanel::navigated, w,
+                     [this](int index) { select_row(index); });
     // 打标接线（W2-T11 接通）：预览面板的 `class_hotkey`（'1'..'9' 打标 / '0' 清除）→ 注册表。
     // 归属对象 = 当前选中集（多选 = 批量打标，与勾选/批量语义一致）；无选中 → 预览当前项。
-    connect(d.preview_panel, &PreviewPanel::class_hotkey, this, [this](QChar key) {
-        Impl &impl_ref = *impl_;
+    QObject::connect(d.preview_panel, &PreviewPanel::class_hotkey, w, [this](QChar key) {
+        Impl &impl_ref = *this;
         const char k = key.toLatin1();
         if (k == '0') {
             impl_ref.apply_class_to_selection(QString());
@@ -1239,70 +1210,77 @@ void MainWindow::wire() {
 
     // 探测完成 → alpha 预检。注意：这不是 U4 的 ready→apply_thumb 连接（那个由模型内部自理），
     // 只是消费方对同一信号只读旁路，不与模型竞争写入。
-    connect(d.thumbs, &Thumbnailer::ready, this,
-            [this](int, const QString &, const pp::ImageInfo &info, bool ok, const QString &,
-                   const QImage &) {
-                if (!ok || !info.has_alpha || impl_->running || impl_->cached_alpha)
-                    return;
-                impl_->cached_alpha = true;
-                impl_->page_output->set_batch_has_alpha(true);
-            });
+    QObject::connect(d.thumbs, &Thumbnailer::ready, w,
+                     [this](int, const QString &, const pp::ImageInfo &info, bool ok,
+                            const QString &, const QImage &) {
+                         if (!ok || !info.has_alpha || running || cached_alpha)
+                             return;
+                         cached_alpha = true;
+                         page_output->set_batch_has_alpha(true);
+                     });
 
-    connect(d.poll, &QTimer::timeout, this, [this] {
-        if (impl_->sched && impl_->run_total > 0 && impl_->run_terminal >= impl_->run_total) {
-            on_scheduler_done();
+    QObject::connect(d.poll, &QTimer::timeout, w, [this] {
+        if (sched && run_total > 0 && run_terminal >= run_total) {
+            w->on_scheduler_done();
         }
     });
     // M4-T14：日志尾（运行期每 500ms；结束态由 on_scheduler_done 再读一次兜底）
-    connect(d.log_tail, &QTimer::timeout, this, [this] { impl_->push_log_tail(); });
+    QObject::connect(d.log_tail, &QTimer::timeout, w, [this] { push_log_tail(); });
     // R-024：状态栏合并刷新（运行期逐文件事件洪峰 → 150ms 一次全量刷新）
-    connect(d.status_flush, &QTimer::timeout, this, [this] { refresh_status(); });
+    QObject::connect(d.status_flush, &QTimer::timeout, w, [this] { w->refresh_status(); });
+}
 
-    connect(d.page_meta, &PageMeta::rules_changed, this, [this] { refresh_status(); });
-    connect(d.page_meta, &PageMeta::open_editor_requested, this,
-            &MainWindow::open_exif_editor_path);
-    connect(d.page_meta, &PageMeta::clear_exception_requested, this,
-            [this](const QString &path) { impl_->clear_exception(path); });
+void MainWindow::Impl::wire_pages() {
+    Impl &d = *this;
+    QObject::connect(d.page_meta, &PageMeta::rules_changed, w, [this] { w->refresh_status(); });
+    QObject::connect(d.page_meta, &PageMeta::open_editor_requested, w,
+                     &MainWindow::open_exif_editor_path);
+    QObject::connect(d.page_meta, &PageMeta::clear_exception_requested, w,
+                     [this](const QString &path) { clear_exception(path); });
 
-    connect(d.page_output, &PageOutput::config_changed, this, [this] {
+    QObject::connect(d.page_output, &PageOutput::config_changed, w, [this] {
         // UX-14 C4：线性光重采样同时透传预览通道（同值 no-op；切换即清缓存重解）
-        impl_->preview_panel->set_linear_resample(impl_->page_output->linear_resample());
-        refresh_status();
+        preview_panel->set_linear_resample(page_output->linear_resample());
+        w->refresh_status();
     });
     // R-319（M7-R2.1-F4）：镜像基准目录 → 文件列表行 base_dir（收集/重算两触点在模型侧）
-    connect(d.page_output, &PageOutput::mirror_base_changed, this,
-            [this](const QString &base) { impl_->model->set_mirror_base(base); });
-    connect(d.page_output, &PageOutput::manage_presets_requested, this,
-            &MainWindow::manage_presets);
-    connect(d.page_output, &PageOutput::open_settings_requested, this, &MainWindow::open_settings);
+    QObject::connect(d.page_output, &PageOutput::mirror_base_changed, w,
+                     [this](const QString &base) { model->set_mirror_base(base); });
+    QObject::connect(d.page_output, &PageOutput::manage_presets_requested, w,
+                     &MainWindow::manage_presets);
+    QObject::connect(d.page_output, &PageOutput::open_settings_requested, w,
+                     &MainWindow::open_settings);
     // M4-T13：预设卡（mockup output-dark 的「预设」卡）——文件 I/O 与 rules 合并的单一持有者仍是
     // MainWindow（与 manage_presets 同一批私有实现），页面只发意图信号。
-    connect(d.page_output, &PageOutput::preset_load_requested, this,
-            [this](const QString &path) { impl_->load_preset_file(path); });
-    connect(d.page_output, &PageOutput::preset_save_requested, this,
-            [this](const QString &name) { impl_->save_preset_named(name); });
-    connect(d.page_output, &PageOutput::preset_saveas_requested, this,
-            [this] { manage_presets(); });
-    connect(d.page_output, &PageOutput::preset_delete_requested, this,
-            [this](const QString &path) { impl_->delete_preset_file(path); });
-    connect(d.page_output, &PageOutput::output_template_changed, this,
-            [this](const QString &) { refresh_status(); });
+    QObject::connect(d.page_output, &PageOutput::preset_load_requested, w,
+                     [this](const QString &path) { load_preset_file(path); });
+    QObject::connect(d.page_output, &PageOutput::preset_save_requested, w,
+                     [this](const QString &name) { save_preset_named(name); });
+    QObject::connect(d.page_output, &PageOutput::preset_saveas_requested, w,
+                     [this] { w->manage_presets(); });
+    QObject::connect(d.page_output, &PageOutput::preset_delete_requested, w,
+                     [this](const QString &path) { delete_preset_file(path); });
+    QObject::connect(d.page_output, &PageOutput::output_template_changed, w,
+                     [this](const QString &) { w->refresh_status(); });
 
-    connect(d.page_run, &PageRun::cancel_requested, this, &MainWindow::on_cancel);
-    connect(d.page_run, &PageRun::open_output_requested, this, [](const QString &dir) {
+    QObject::connect(d.page_run, &PageRun::cancel_requested, w, &MainWindow::on_cancel);
+    QObject::connect(d.page_run, &PageRun::open_output_requested, w, [](const QString &dir) {
         if (!dir.isEmpty())
             QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
     });
-    connect(d.page_run, &PageRun::open_logs_requested, this, [this] { impl_->open_logs(); });
+    QObject::connect(d.page_run, &PageRun::open_logs_requested, w, [this] { open_logs(); });
     // M5-T9（§7.3 操作行「再次运行」）：页只发意图 —— 回收 = 与底栏「开始运行」同一条路径
     // （预检/锁定/调度/状态都在外壳，on_start 里已有全部守卫）。
     // R-006/R-146：改经 on_run_again（补齐语义 + 含失败先确认），不再直接 on_start。
-    connect(d.page_run, &PageRun::run_again_requested, this, &MainWindow::on_run_again);
+    QObject::connect(d.page_run, &PageRun::run_again_requested, w, &MainWindow::on_run_again);
+}
 
+void MainWindow::Impl::wire_file_menu() {
+    Impl &d = *this;
     // ---- UX-1（M7-WP6/M7-R2D1）：文件列表右键菜单（公共件 = ui/contextmenu::attach_card_menu）
     // ---- + UX-2 勾选三项。菜单内容见 docs/ux-review-14.md §1 表第 ① 行；运行中按 G5 只读置灰。
     contextmenu::attach_card_menu(d.view, [this] {
-        Impl &d2 = *impl_;
+        Impl &d2 = *this;
         // UX-2：勾选三项作用于**当前可见（过滤后）**的行（§2 改进方案 1）。运行集是全局的，
         // 故作用域写进菜单文案（有筛选时显示"（可见 N 行）"）—— 不静默扩大作用面。
         const auto visible_rows = [&d2] {
@@ -1321,14 +1299,12 @@ void MainWindow::wire() {
         in.uncheck_all = [&d2] { d2.apply_visible_checks(Impl::CheckOp::None); };
         in.invert_checks = [&d2] { d2.apply_visible_checks(Impl::CheckOp::Invert); };
         in.edit_exif = [this] {
-            if (impl_->view != nullptr && impl_->view->currentIndex().isValid())
-                open_exif_editor_row(
-                    impl_->proxy
-                        ->mapToSource(impl_->groups->mapToSource(impl_->view->currentIndex()))
-                        .row());
+            if (view != nullptr && view->currentIndex().isValid())
+                w->open_exif_editor_row(
+                    proxy->mapToSource(groups->mapToSource(view->currentIndex())).row());
         };
-        in.remove_selected = [this] { impl_->remove_selected(); };
-        in.clear_list = [this] { impl_->model->clear(); };
+        in.remove_selected = [this] { remove_selected(); };
+        in.clear_list = [this] { model->clear(); };
         // 「按分类打标 →」子菜单：分类注册表动态生成（含"清除归属"）
         for (const pp::ClassDef &c : d2.classes.classes) {
             in.tag_targets.emplace_back(QString::fromStdString(c.name), [&d2, id = c.id] {
@@ -1359,6 +1335,88 @@ void MainWindow::wire() {
         }
         return items;
     });
+}
+
+void MainWindow::build_ui() {
+    // R-252 时序锚点①「style 先装」：FileViewFocusFrameStyle 须先于任何子部件安装（Impl 构造
+    // 已装；迟装 = 先建部件绕过焦点框抑制代理，M5-T14 的成因说明）。此处断言前置条件成立。
+    Q_ASSERT(dynamic_cast<FileViewFocusFrameStyle *>(QApplication::style()) != nullptr);
+    Impl &d = *impl_;
+    // R-251：tokens 先填后用 —— 原状 d.tokens 在 refresh_theme()（build_ui 末尾）才落地，早期
+    // 控件（＋/−/筛选图标、caption 三钮取色）读到的是**未填充**默认令牌，靠末尾重放掩盖；同一
+    // 函数里两种写法（d.tokens vs theme::tokens(preferred_theme_mode())）就此收敛为一条取值链。
+    d.tokens = theme::tokens(d.theme_mode);
+    setWindowTitle(QStringLiteral("PhotoPipeline"));
+    setAcceptDrops(true);
+    // §9.1 尺寸基准：最小窗口 1180×720 / 1440×900 校准（屏幕不足时收敛到可用区）
+    setMinimumSize(theme::Metrics::min_window_w, theme::Metrics::min_window_h);
+    {
+        QRect available(0, 0, theme::Metrics::calibrated_w, theme::Metrics::calibrated_h);
+        if (const QScreen *screen = QGuiApplication::primaryScreen())
+            available = screen->availableGeometry();
+        const int max_w = std::max(theme::Metrics::min_window_w, available.width() - 40);
+        const int max_h = std::max(theme::Metrics::min_window_h, available.height() - 40);
+        resize(std::clamp(theme::Metrics::calibrated_w, theme::Metrics::min_window_w, max_w),
+               std::clamp(theme::Metrics::calibrated_h, theme::Metrics::min_window_h, max_h));
+    }
+
+    // ---- 根容器（窗口底：mockup body 渐变；深色 = Mica 兜底色）----
+    auto *central = new QWidget(this);
+    d.root = central;
+    central->setObjectName(QStringLiteral("pp-root"));
+    central->setAttribute(Qt::WA_StyledBackground, true);
+    auto *outer = new QVBoxLayout(central);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(0);
+
+    d.build_titlebar(central, outer);
+
+    // ---- 三栏骨架（§3.2）：左 330（280–400 可调）| 中弹性 | 右 587（520–680 可调）----
+    auto *main_area = new QWidget(central);
+    auto *main_layout = new QHBoxLayout(main_area);
+    main_layout->setContentsMargins(theme::Metrics::main_pad_x, theme::Metrics::main_pad_top,
+                                    theme::Metrics::main_pad_x, theme::Metrics::main_pad_bottom);
+    main_layout->setSpacing(0);
+    d.splitter = new QSplitter(Qt::Horizontal, main_area);
+    d.splitter->setObjectName(QStringLiteral("pp-splitter"));
+    d.splitter->setHandleWidth(theme::Metrics::gap); // 列间距 = mockup .main gap:10px
+    d.splitter->setChildrenCollapsible(false);
+    main_layout->addWidget(d.splitter);
+    outer->addWidget(main_area, 1);
+
+    d.build_left_column();
+    d.build_preview_card();
+    d.build_page_stack();
+    d.build_bottom_bar(central, outer);
+
+    setCentralWidget(central);
+
+    // ---- 无边框接线（§9.1 能力表）：顶栏 = 拖拽/HTCAPTION 区；交互控件全部排除 ----
+    // 导航区 = 一整件（ShellNav 单控件）→ 整块排除（含段间 hairline 位，§9.1 硬约束 1）。
+    d.frameless = plat::Frameless::attach(this, d.titlebar, {d.nav, d.presets_btn, d.settings_btn});
+    if (d.frameless != nullptr)
+        d.frameless->set_caption_buttons(d.cap_min, d.cap_max, d.cap_close);
+
+    // 分类注册表 → 预览面板的热键提示表（§6.1「热键表随分类注册表动态生成」，消费 W1-T8 的
+    // classify 接口）。T10 只**只读消费**：注册表实例由本窗口持有，T11 接管 CRUD/持久化/打标
+    // 与勾选语义时共用同一实例（面板自动跟随，无需改面板）。
+    d.preview_panel->set_class_registry(&d.classes);
+    // M4-T11：左栏分类面板（§6.2）——同一注册表与同一文件模型（单源；分类只做组织 + 圈选）
+    d.classify_panel->set_registry(&d.classes);
+    d.classify_panel->set_model(d.model);
+
+    d.refresh_theme(); // tokens 落地（明暗跟随系统）
+}
+
+void MainWindow::wire() {
+    Impl &d = *impl_;
+    d.wire_chrome();
+    d.wire_file_panel();
+    d.wire_view_and_model();
+    d.wire_check_actions();
+    d.wire_preview_and_timers();
+    d.wire_pages();
+    d.wire_file_menu();
 }
 
 // ---------------------------------------------------------------------------

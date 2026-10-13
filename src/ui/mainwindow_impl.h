@@ -1101,6 +1101,20 @@ struct MainWindow::Impl : mw_cabin::Chrome,
     void refresh_theme();
     // R-253（M7-WP9）：refresh_theme/refresh_status 的**语义分段**（原单函数同管多事 →
     // 每段一个方法；调用顺序与语义逐字保持，行为零变化）。
+    // R-253 后半（M7-R2.3-G8）：build_ui/wire 同口径分段 —— 每段 = 原函数一段逐字搬移，
+    // 调用顺序与行为零变化；MainWindow 冻结头签名零改动（分段落 Impl 私有件）。
+    void build_titlebar(QWidget *central, QVBoxLayout *outer);
+    void build_left_column();
+    void build_preview_card();
+    void build_page_stack();
+    void build_bottom_bar(QWidget *central, QVBoxLayout *outer);
+    void wire_chrome();
+    void wire_file_panel();
+    void wire_view_and_model();
+    void wire_check_actions();
+    void wire_preview_and_timers();
+    void wire_pages();
+    void wire_file_menu();
     void theme_apply_base();
     void theme_replay_panels();
     void theme_replay_chrome();

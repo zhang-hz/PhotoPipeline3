@@ -457,3 +457,14 @@
 | # | 类型 | 内容 | 理由 / 依据 |
 |---|---|---|---|
 | M7R23G9-1 | **受约束登记（Exiv2 钉版限制；防御分支保留）** | `white_balance_text` 的色温拼接分支（`src/ui/meta_format.cpp:172-175` 消费 `Exif.Photo.ColorTemperature`）经 ExifData **恒不可达**：本 Exiv2（vcpkg 钉版）键表不接受该键（ExifKey 构造即抛 `Invalid tag name or ifdId 'ColorTemperature', ifdId 5`）⇒ `exif_text` 同键恒空串 ⇒ **色温显示从不出现**。产品口径 = 受约束登记：不升级/不换 Exiv2（依赖钉版纪律）、不加兜底假数据，**防御分支保留**（只读消费、零副作用，键可构造时自然生效）；test_meta_format wb 真值表**不立色温夹具**（`tests/unit/test_meta_format.cpp:214-216` 注释如实注明不构造理由） | M7R22G2 ③-2 跨界需求原案（「产品口径是否按『不存在的功能』披露/删码，交主对话裁定；本包只在 test_meta_format 如实注明不立夹具」）；披露口径取「色温段从不出现（受 Exiv2 钉版约束）」入 CHANGELOG「已知」，既不虚报功能也不删防御代码 |
+
+## 十七、发行裁定（M7-R2.3-G10，2026-10-13）
+
+> 任务书出处 = 会话内分派书（G10 包「发布 0.3.3」，明文允许 git push、授权消耗
+> `M7-ADJ-tag-move-2`）；实况证据真源 =
+> [docs/m7-evidence/m7r23-release.md](m7-evidence/m7r23-release.md)（预检/push/main-full #60/
+> 本机复核/tag 移动/release 链/Release 指纹逐步可复跑）。
+
+| # | 裁定 | 理由 | 实施归属 |
+|---|---|---|---|
+| M7-ADJ-tag-move-2（G10 **正式消耗**） | **二次移动已执行，授权消耗完毕**：前提全过——预检 `/releases/tags/v0.3.3` 404（零 Release 零资产，移动前 07:01Z 复检仍 404）、`ls-remote` 核对 v0.3.3 → `cb181ee`/`^{}`=`b1af371`、push main（`fe3b43f..6b571cb`，HEAD `6b571cb`）、**main-full #60 全绿**（completed/success，十 job 含总闸，17m11s）、本机复核全绿（ci-format violations=0 196 文件 + make_winzip 五门禁 rc=0 含 E-2 冻结行逐字）。原子执行 `git tag -f -a v0.3.3 -F tagmsg.txt 6b571cb`（注解原文保留）+ `git push --force origin refs/tags/v0.3.3` → `+ cb181ee...0aba959 (forced update)`；`ls-remote` 核对 tag 对象 **`0aba959`** → `^{}` = **`6b571cb`**（= 任务书「指向新 HEAD」）。release.yml run 38360204850 七 job 全绿、publish 执行，**GitHub Release v0.3.3 已创建**（published 2026-10-13T07:19:43Z，4 资产，API digest ↔ 下载件 SHA256SUMS.txt 逐字交叉一致）。**此后 tag 落点不得再动（含任何红灯情形）——任务书步骤 8「禁止第三次移动」自此生效** | ① 用户明确指令「修复后发布 0.3.3」= 任务书授权原文；② 三条件逐条满足（预检零 Release 零资产 / 原子 + ls-remote 核对 / 移动后不得再动），与十节首次移动同口径；③ 前置「main-full 至绿」经 #60 实测达成（非放宽）——G7 工程解（M7R23G7-0）消化三班残余③后，判据可诚实达成；④ 移动后即刻跟到 publish 并核对 Release 资产（十节条件六「跟到 publish」），发布链无死角 | G10（[m7r23-release.md](m7-evidence/m7r23-release.md) §1–§6；CHANGELOG [0.3.3]「发行终态」条 + m7-report §3.12） |

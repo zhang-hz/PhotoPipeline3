@@ -331,13 +331,14 @@ R2.2 轮（M7-R2.2-G1…G6）+ R2.3 轮（M7-R2.3-G7…G9）**：发布前
 
 ### 发行
 
-- Windows：`PhotoPipeline-0.3.3-win64.zip` —— **34,727,624 B**（本机 sha256 `4a3ec25d…`，105 条目；
-  zip 不承诺字节可复现，CI 产物指纹另计），`make_winzip.py` 五项门禁（A 闭包 / B 来源 /
-  C 结构 / D 许可 / E-1 启动版本断言）
-- Linux：`PhotoPipeline-0.3.3-x86_64.AppImage` + `PhotoPipeline-0.3.3-deps.txt`
-  （`tools/appimage-check-closure.sh` 闭包清单）—— 由 tag 触发的 `release.yml` `appimage` job
-  在 Linux runner 产出（本机 Windows 不构建）
-- 第 4 附件：`PhotoPipeline-0.3.3-SHA256SUMS.txt`（三个发布件的 sha256，逐字取自下载件）
+- Windows：`PhotoPipeline-0.3.3-win64.zip` —— **33,732,900 B**（sha256 `0074d2f9…`，Release
+  附件逐字；zip 不承诺字节可复现，本机打包 34,801,903 B / `3f41297e…` 仅供参考），
+  `make_winzip.py` 五项门禁（A 闭包 / B 来源 / C 结构 / D 许可 / E-1 启动版本断言）
+- Linux：`PhotoPipeline-0.3.3-x86_64.AppImage` **52,062,712 B**（sha256 `3e8bb822…`）+
+  `PhotoPipeline-0.3.3-deps.txt` **2,439 B**（sha256 `e8c80b3d…`，`tools/appimage-check-closure.sh`
+  闭包清单）—— 由 tag 触发的 `release.yml` `appimage` job 在 Linux runner 产出（本机 Windows 不构建）
+- 第 4 附件：`PhotoPipeline-0.3.3-SHA256SUMS.txt` **293 B**（sha256 `0e7ded56…`；三个发布件的
+  sha256，逐字取自下载件）
 - **发布链路**：tag `v0.3.3` 推送触发 `release.yml`（appimage → probe-appimage /
   winzip → probe-winzip → publish）；publish 前置探测 = Release 查重 + tag↔版本断言 +
   产物 `--version` 逐字断言；发布说明取本节**之前**的 `[0.3.3]` 正文（止于本小节）
@@ -349,10 +350,10 @@ R2.2 轮（M7-R2.2-G1…G6）+ R2.3 轮（M7-R2.3-G7…G9）**：发布前
   `tools/ci-versions-check.py`（R-122 单源一致性）通过 · 密钥扫描 0 命中
 - `vcpkg.json` `version` 与 `CMakeLists.txt:19` **同改** 0.3.3（R-122 契约「版本 bump 必须
   同改」；`ci-versions-check.py` 第 3 项在 CI 钉住，首推 tag 时该项红灯后补齐）
-- 「已发行」终态与 CI 产物指纹留待**发行后收口**提交登记（`d049d22` 先例）；2026-10-12 实况：
-  release #13（tag `v0.3.3` → `b1af371`）winzip job 撞 `timeout-minutes: 20` 硬顶被取消
-  （build 单步 19m11s 未完）、publish 跳过 ⇒ GitHub Release 未创建，处置待主对话裁决
-  （全链见 [docs/m7-report.md](docs/m7-report.md) §3.8）
+- 「已发行」终态与 CI 产物指纹于**发行后收口提交**登记（`d049d22` 先例，落地见本节末
+  「发行终态」条）；2026-10-12 实况（历史）：release #13（tag `v0.3.3` → `b1af371`）winzip
+  job 撞 `timeout-minutes: 20` 硬顶被取消（build 单步 19m11s 未完）、publish 跳过 ⇒
+  GitHub Release 未创建，处置待主对话裁决（全链见 [docs/m7-report.md](docs/m7-report.md) §3.8）
 - **R2REL 发行包实况（2026-10-12 晚）**：预检（零 Release 零资产）与本机门禁（ci-format 0 diff /
   ci-versions-check OK / make_winzip 五门禁 + E-2 rc=0，冻结行逐字）全绿后推送 main
   （`a4cf0fc..2c50bfc`）；main-full #44 **红**——linux（全 ctest+金样）`ctest --preset release`
@@ -403,6 +404,24 @@ R2.2 轮（M7-R2.2-G1…G6）+ R2.3 轮（M7-R2.3-G7…G9）**：发布前
   release-runbook.md` §4 补读数（不编数）。前置④ tag 移动条件不变（`M7-ADJ-tag-move-2`：
   预检零 Release 零资产 / 原子操作 + `ls-remote` 核对 / 移动后不得再动）。发行状态仍 =
   **待发布**
+- **发行终态（M7-R2.3-G10 第四班，2026-10-13）：已发行**（`d049d22` 先例的「已发行 +
+  CI 产物指纹」收口即本条；取代上方两条「待发布」状态快照，历史实况条目不变）：
+  **`v0.3.3` tag → 发行树 `6b571cb`**（tag 对象 `0aba959`；`M7-ADJ-tag-move-2` 二次移动
+  授权就此消耗，条件全满足：预检零 Release 零资产 / 原子 `git push --force origin
+  refs/tags/v0.3.3` + `ls-remote` 核对 / 此后不再移动）；GitHub Release **已创建**
+  （<https://github.com/zhang-hz/PhotoPipeline3/releases/tag/v0.3.3>，
+  published 2026-10-13T07:19:43Z，4 资产指纹见本节首三条，API `digest` ↔ 下载件
+  `SHA256SUMS.txt` 逐字交叉一致）；发布说明 = 本节**之前**的 `[0.3.3]` 正文（release.yml ④
+  口径）。发行前核对（实跑）：**main-full #60 十 job 含总闸全绿** @ `6b571cb`（lint /
+  linux 全 ctest+金样 / appimage / audit / windows-dev / windows / tidy / winzip / cache-gc /
+  gate，整轮 17m11s）+ 本机 `ci-format` violations=0（196 文件）+ `make_winzip --smoke-exe`
+  五门禁 rc=0（E-2 冻结行 `UI-SMOKE OK shots=12 pages=3` 逐字）；release 道七 job 全绿
+  （appimage 4.6 / winzip-build **14.8** / winzip-build-dev **6.3** / winzip-pack **1.4** /
+  probe-appimage 0.7 / probe-winzip 0.2 / publish 0.7 min），前置探测（Release 查重 +
+  tag↔版本 + 下载件 `--version` 逐字）全过，关键路径 winzip-build+pack+probe-winzip+publish
+  = **17.1min ≤ 20min 硬顶**（winzip-build 14.8 贴近 15min 预算——G7 拆段三段实测读数
+  就此补齐 runbook §7.4 挂账项）（全链见 [docs/m7-report.md](docs/m7-report.md) §3.12 与
+  [docs/m7-evidence/m7r23-release.md](docs/m7-evidence/m7r23-release.md)）
 
 ## [0.3.2] — 2026-10-11
 

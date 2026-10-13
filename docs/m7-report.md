@@ -518,6 +518,59 @@ R-171/R-002（write-warnings、meta-write-fail）、R-097（png_ok 硬断言）�
   winzip；gate job = failure），限流期间的「run failure」推定措辞已在证据 §3.1 勘误更正，
   同为非绿、不影响停止决策。
 
+### 3.12 发行实况（M7-R2.3-G10 第四班，2026-10-13）：**已发行**——0.3.3 发布完成，tag 落点冻结
+
+> 任务书 = 「修复后发布 0.3.3」（G10 包；明文允许 git push、授权消耗 `M7-ADJ-tag-move-2`）；
+> 实况证据真源 = [docs/m7-evidence/m7r23-release.md](m7-evidence/m7r23-release.md)（预检/push/
+> main-full #60/本机复核/tag 移动/release 链/Release 指纹逐步可复跑）。
+> **GitHub Release URL：<https://github.com/zhang-hz/PhotoPipeline3/releases/tag/v0.3.3>**
+> （published 2026-10-13T07:19:43Z，4 资产）。
+
+- **预检（移动前，全过）**：`/releases/tags/v0.3.3` = **404**（零 Release ⇒ 零资产，07:01Z
+  移动前复检仍 404）；releases 列表止于 v0.3.2（无 v0.3.3 条目）；`git ls-remote --tags`
+  核对 v0.3.3 → `cb181ee`/`^{}`=`b1af371`（与任务书预检要求逐字一致，自首次移动后未动）。
+  附：三班的匿名 API 限流问题本轮改用本机 Git Credential Manager 凭据做 Bearer 认证
+  （凭据不落文件不入提交；5000 次/时，未再撞限流）。
+- **push 与 main-full**：`git push origin 6b571cb362c22c50bba7e8ef259f371e2f0e2e44:main`
+  （`fe3b43f..6b571cb`，**HEAD `6b571cb362c22c50bba7e8ef259f371e2f0e2e44`**，G9 文档收口
+  1 提交，纯快进）→ **main-full #60（run 38358227651）completed/success**（06:42:27 →
+  06:59:38Z，17m11s）：**十 job 含总闸全绿**（lint 0.1 / linux 全 ctest+金样 7.1 / appimage
+  5.0 / audit 1.4 / windows-dev 7.8 / windows 10.8 / tidy 16.7 / **winzip 1.4** / cache-gc /
+  gate）——流程 3「main-full 至绿」**达成**（三班先例口径不放宽，此处如实达成而非放行）。
+- **本机复核（流程 4，全绿）**：`ci-format` **violations=0**（196 文件）· `make_winzip.py
+  --smoke-exe` 五门禁 **rc=0**（E-2 冻结行 `UI-SMOKE OK shots=12 pages=3` 逐字；`build/release`
+  增量重建 36 步至 HEAD，E-2 的 dev exe = `build/release-dev/photopipeline.exe` **只读**，
+  源态一致性经 `.ninja_log` 14:00 重建 25 UI obj + 全 tracked 文件 mtime 佐证）。本机产物
+  指纹：`PhotoPipeline-0.3.3-win64.zip` 34,801,903 B / sha256 `3f41297e…` / 105 条目
+  （zip 不承诺字节可复现，发行指纹以 Release 附件为准）。
+- **tag v0.3.3 二次移动（`M7-ADJ-tag-move-2` 正式消耗）**：前提全过（预检零 Release 零资产 /
+  main-full 全绿 / 本机门禁全绿）后原子执行 `git tag -f -a v0.3.3 -F tagmsg.txt 6b571cb`
+  （注解原文保留）+ `git push --force origin refs/tags/v0.3.3` →
+  `+ cb181ee...0aba959 (forced update)`；`ls-remote` 核对 **tag 对象 `0aba959` → `^{}` =
+  `6b571cb`**（发行树 = main HEAD）。**授权就此消耗；tag 落点此后不得再动（含 release 红灯，
+  任务书步骤 8 禁止第三次移动）**。
+- **release.yml #（run 38360204850）completed/success**（07:02:27 → 07:19:47Z，17m20s，
+  七 job 全绿）：appimage 4.6 / **winzip-build 14.8** / **winzip-build-dev 6.3** /
+  **winzip-pack 1.4**（双 artifact 消费 + make_winzip 五门禁/E-2 + 指纹）/ probe-appimage
+  0.7 / probe-winzip 0.2 / **publish 0.7**（查重 → 下载件 `--version` 校验 → tag↔版本断言 →
+  生成发布说明 + SHA256SUMS → `gh release create`）；关键路径
+  winzip-build+pack+probe-winzip+publish = **17.1min ≤ 20min 硬顶**。**G7 工程解
+  （产物复用/拆 job）release 侧首跑实测读数就此补齐**（runbook §7.4 挂账的「无 tag 轮实测」
+  项：14.8 / 6.3 / 1.4 min，三段均 ≤20min 硬顶、均在预算内；winzip-build 14.8 贴近 15min
+  预算，慢 runner 波动下仍受 20min 硬顶约束）。
+- **GitHub Release 与资产指纹（交叉核对一致）**：4 资产 =
+  `PhotoPipeline-0.3.3-win64.zip` **33,732,900 B**（sha256 `0074d2f9…`）·
+  `PhotoPipeline-0.3.3-x86_64.AppImage` **52,062,712 B**（sha256 `3e8bb822…`）·
+  `PhotoPipeline-0.3.3-deps.txt` **2,439 B**（sha256 `e8c80b3d…`）·
+  `PhotoPipeline-0.3.3-SHA256SUMS.txt` **293 B**（sha256 `0e7ded56…`）；API `digest` 字段与
+  下载件 `SHA256SUMS.txt` 内容**逐字一致**（`d049d22` 先例口径：指纹取自下载件，非本地推算）。
+- **残余（如实）**：① 轮询纪律滑脱两次（main-full 一次 27s、release 一次 3m28s，
+  均 <5min 间隔）——多拍读数无实质影响（配额 5000/时），但「≥5min 间隔」纪律未逐拍满足，
+  登记不粉饰；② runbook `docs/m7-evidence/release-runbook.md` §7.4 的 release 侧三段读数
+  挂账项已有实测（本节），**补入手册属跨界**（该文件非 G10 独占面），待归属方处理；
+  ③ 本节所在收口提交为报告类，**不入 tag**（AGENTS.md §9；发布说明取 tag 树 CHANGELOG
+  正文，与收口文本不矛盾）。
+
 ---
 
 ## 4. 未覆盖 / 未决项（如实）

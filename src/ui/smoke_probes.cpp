@@ -11,6 +11,7 @@
 
 #include "ui/contextmenu.h"    // UX-1：卡片右键菜单面（词表单源）
 #include "ui/leading_indent.h" // R-218：逻辑边距单源
+#include "ui/meta_probe_context.h" // R-182/R-258 + M7-R2.3-G8：钩子/词表单源 + ProbeContext（读侧全面迁移）
 #include "ui/meta_state.h" // M7R22G1-3：meta::RatingStars/DeltaSpin/unit_slot/note_label（rtl-mirror 四查）
 #include <QAbstractScrollArea>
 #include <QComboBox>
@@ -5235,9 +5236,9 @@ void MainWindow::Impl::smoke_probe_rtl_mirror() {
         pump(60);
         activate_all(ltr);
         activate_all(rtl);
-        const char *names[] = {"pp-meta-delta-years", "pp-meta-delta-hours"};
-        for (const char *name : names) {
-            const QString qn = QString::fromLatin1(name);
+        const QString names[] = {meta::objname::kDeltaYears, meta::objname::kDeltaHours};
+        for (const QString &name : names) {
+            const QString qn = name;
             QWidget *wl = ltr.findChild<QWidget *>(qn);
             QWidget *wr = rtl.findChild<QWidget *>(qn);
             if (wl == nullptr || wr == nullptr) {
@@ -5721,10 +5722,8 @@ void MainWindow::Impl::smoke_probe_context_menus() {
     const std::function<void(const QString &)> fail = [this](const QString &reason) {
         smoke_fail(reason);
     };
-    const auto host_of = [](QWidget *root, const char *descendant) {
-        return root != nullptr
-                   ? menu_host_of(root->findChild<QWidget *>(QString::fromLatin1(descendant)))
-                   : nullptr;
+    const auto host_of = [](QWidget *root, const QString &descendant) {
+        return root != nullptr ? menu_host_of(root->findChild<QWidget *>(descendant)) : nullptr;
     };
     struct CardMenu {
         const char *tag;
@@ -5737,15 +5736,16 @@ void MainWindow::Impl::smoke_probe_context_menus() {
     cards.push_back({"file-list", view, QString::fromUtf8("勾选全部"),
                      contextmenu::file_list_actions(contextmenu::FileListIntents{})});
     // ②③④⑤ 元数据页四卡（宿主 = 卡框；卡头 pill 为稳定锚）
-    cards.push_back({"meta-info", host_of(page_meta, "pp-meta-info-pill"),
+    cards.push_back({"meta-info", host_of(page_meta, meta::objname::kInfoPill),
                      QString::fromUtf8("复制全部信息"),
                      contextmenu::info_card_actions(contextmenu::InfoCardIntents{})});
-    cards.push_back({"meta-time", host_of(page_meta, "pp-meta-time-pill"),
+    cards.push_back({"meta-time", host_of(page_meta, meta::objname::kTimePill),
                      QString::fromUtf8("启用"),
                      contextmenu::time_card_actions(contextmenu::TimeCardIntents{})});
-    cards.push_back({"meta-gps", host_of(page_meta, "pp-meta-gps-pill"), QString::fromUtf8("启用"),
+    cards.push_back({"meta-gps", host_of(page_meta, meta::objname::kGpsPill),
+                     QString::fromUtf8("启用"),
                      contextmenu::gps_card_actions(contextmenu::GpsCardIntents{})});
-    cards.push_back({"meta-privacy", host_of(page_meta, "pp-meta-privacy-pill"),
+    cards.push_back({"meta-privacy", host_of(page_meta, meta::objname::kPrivacyPill),
                      QString::fromUtf8("启用"),
                      contextmenu::privacy_card_actions(contextmenu::PrivacyCardIntents{})});
     // ⑥⑦⑨ 输出页三卡
@@ -7290,9 +7290,10 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
     if (!model->empty()) {
         sync_selection();
         pump(150);
-        const int follow_count = page_meta->property("pp_meta_follow_count").toInt();
-        const QString follow_name = page_meta->property("pp_meta_follow_name").toString();
-        const auto *hint = page_meta->findChild<QLabel *>(QStringLiteral("pp-meta-info-hint"));
+        const meta::ProbeContext probe_meta(page_meta);
+        const int follow_count = probe_meta.follow_count();
+        const QString follow_name = probe_meta.follow_name();
+        const auto *hint = page_meta->findChild<QLabel *>(meta::objname::kInfoHint);
         const QString hint_text = hint != nullptr && hint->property("ppFullText").isValid()
                                       ? hint->property("ppFullText").toString()
                                       : (hint != nullptr ? hint->text() : QString());
@@ -7960,18 +7961,16 @@ void MainWindow::Impl::probe_meta_sec_a(const MetaProbeCtx &c, const QString &sh
     const auto &gps_badge_visible = c.gps_badge_visible;
     // ---- (a) 无规则：原值 = 生效值（未修改时两值相同也显示）+ 来源字段标注 ----
     {
-        const QString old_shown = full(QStringLiteral("pp-meta-time-old-0"));
-        const QString new_shown = full(QStringLiteral("pp-meta-time-new-0"));
-        const QString src_shown = full(QStringLiteral("pp-meta-time-src-0"));
-        const bool first_field_unmodified =
-            !page.findChild<QLabel *>(QStringLiteral("pp-meta-time-new-0"))
-                 ->property(theme::kModProperty)
-                 .toBool();
+        const QString old_shown = full(meta::objname::kTimeOld0);
+        const QString new_shown = full(meta::objname::kTimeNew0);
+        const QString src_shown = full(meta::objname::kTimeSrc0);
+        const bool first_field_unmodified = !page.findChild<QLabel *>(meta::objname::kTimeNew0)
+                                                 ->property(theme::kModProperty)
+                                                 .toBool();
         std::printf("UI-SMOKE meta-geometry: page=%dx%d old-w=%d new-w=%d src-w=%d\n", page.width(),
-                    page.height(),
-                    page.findChild<QLabel *>(QStringLiteral("pp-meta-time-old-0"))->width(),
-                    page.findChild<QLabel *>(QStringLiteral("pp-meta-time-new-0"))->width(),
-                    page.findChild<QLabel *>(QStringLiteral("pp-meta-time-src-0"))->width());
+                    page.height(), page.findChild<QLabel *>(meta::objname::kTimeOld0)->width(),
+                    page.findChild<QLabel *>(meta::objname::kTimeNew0)->width(),
+                    page.findChild<QLabel *>(meta::objname::kTimeSrc0)->width());
         std::fflush(stdout);
         std::printf("UI-SMOKE meta-baseline: old=%s new=%s src=%s unmodified=%d\n",
                     qUtf8Printable(old_shown), qUtf8Printable(new_shown), qUtf8Printable(src_shown),
@@ -7985,11 +7984,10 @@ void MainWindow::Impl::probe_meta_sec_a(const MetaProbeCtx &c, const QString &sh
         // 关键信息卡（只读）：8 个字段**逐格有显示**（空 = 缺陷；"—" = 源里确无该字段）。
         // fixture exif_full.jpg 只带 Artist/DateTimeOriginal/GPS（本文件头注释已列）→
         // 相机/镜头/曝光 三格**合法**为 "—"，其余五格必须是真值。
-        const QStringList keys = {
-            QStringLiteral("pp-meta-info-time"), QStringLiteral("pp-meta-info-camera"),
-            QStringLiteral("pp-meta-info-lens"), QStringLiteral("pp-meta-info-exposure"),
-            QStringLiteral("pp-meta-info-size"), QStringLiteral("pp-meta-info-color"),
-            QStringLiteral("pp-meta-info-file"), QStringLiteral("pp-meta-info-gps")};
+        const QStringList keys = {meta::objname::kInfoTime, meta::objname::kInfoCamera,
+                                  meta::objname::kInfoLens, meta::objname::kInfoExposure,
+                                  meta::objname::kInfoSize, meta::objname::kInfoColor,
+                                  meta::objname::kInfoFile, meta::objname::kInfoGps};
         QStringList values;
         for (const QString &key : keys) {
             values << full(key);
@@ -8039,15 +8037,15 @@ void MainWindow::Impl::probe_meta_sec_b(const MetaProbeCtx &c, const QString &sh
         rules.time_shift = shift;
         page.apply_rules(rules);
         pump(80);
-        const QString shown = full(QStringLiteral("pp-meta-time-new-0"));
+        const QString shown = full(meta::objname::kTimeNew0);
         const QString written = shown_form(write_side_time(rules));
-        const bool spin_mod = page.findChild<QSpinBox *>(QStringLiteral("pp-meta-delta-hours"))
+        const bool spin_mod = page.findChild<QSpinBox *>(meta::objname::kDeltaHours)
                                   ->property(theme::kModProperty)
                                   .toBool();
-        const bool idle_spin_mod = page.findChild<QSpinBox *>(QStringLiteral("pp-meta-delta-years"))
+        const bool idle_spin_mod = page.findChild<QSpinBox *>(meta::objname::kDeltaYears)
                                        ->property(theme::kModProperty)
                                        .toBool();
-        const bool new_mod = page.findChild<QLabel *>(QStringLiteral("pp-meta-time-new-0"))
+        const bool new_mod = page.findChild<QLabel *>(meta::objname::kTimeNew0)
                                  ->property(theme::kModProperty)
                                  .toBool();
         std::printf("UI-SMOKE meta-effective: shown=%s write=%s golden=2024-03-01 12:00:00 "
@@ -8100,7 +8098,7 @@ void MainWindow::Impl::probe_meta_sec_c(const MetaProbeCtx &c, const QString &sh
         rules.time_shift = shift;
         page.apply_rules(rules);
         pump(80);
-        const QString shown = full(QStringLiteral("pp-meta-time-new-0"));
+        const QString shown = full(meta::objname::kTimeNew0);
         const QString written = shown_form(write_side_time(rules));
         std::printf("UI-SMOKE meta-timezone: shown=%s write=%s golden=2024-03-01 11:00:00\n",
                     qUtf8Printable(shown), qUtf8Printable(written));
@@ -8138,14 +8136,14 @@ void MainWindow::Impl::probe_meta_sec_d(const MetaProbeCtx &c, const QString &sh
         page.apply_rules(rules);
         pump(120);
         auto *map = page.findChild<pp::map::MapWidget *>();
-        const QString lat_text = edit_text(QStringLiteral("pp-meta-gps-lat"));
-        const QString lon_text = edit_text(QStringLiteral("pp-meta-gps-lon"));
+        const QString lat_text = edit_text(meta::objname::kPpMetaGpsLat);
+        const QString lon_text = edit_text(meta::objname::kPpMetaGpsLon);
         const bool marker = map != nullptr && map->has_marker();
         const double center_lat = map != nullptr ? map->center_lat() : 0.0;
         const double center_lon = map != nullptr ? map->center_lon() : 0.0;
         const bool centered =
             std::fabs(center_lat - pick_lat) < 1e-3 && std::fabs(center_lon - pick_lon) < 1e-3;
-        const bool mod = page.findChild<QLineEdit *>(QStringLiteral("pp-meta-gps-lat"))
+        const bool mod = page.findChild<QLineEdit *>(meta::objname::kPpMetaGpsLat)
                              ->property(theme::kModProperty)
                              .toBool();
         std::printf("UI-SMOKE meta-gps: lat=%s lon=%s marker=%d center=%.6f,%.6f centered=%d "
@@ -8191,9 +8189,9 @@ void MainWindow::Impl::probe_meta_sec_e(const MetaProbeCtx &c, const QString &sh
         rules.strip_privacy = true;
         page.apply_rules(rules);
         pump(80);
-        const QString time_text = full(QStringLiteral("pp-meta-time-new-0"));
-        const QString gps_lat = edit_text(QStringLiteral("pp-meta-gps-lat"));
-        const QString gps_hint = placeholder(QStringLiteral("pp-meta-gps-lat"));
+        const QString time_text = full(meta::objname::kTimeNew0);
+        const QString gps_lat = edit_text(meta::objname::kPpMetaGpsLat);
+        const QString gps_hint = placeholder(meta::objname::kPpMetaGpsLat);
         const QString badge = gps_badge();
         std::printf("UI-SMOKE meta-strip: time=%s gps-value=%s gps-placeholder=%s badge=%s\n",
                     qUtf8Printable(time_text), qUtf8Printable(gps_lat), qUtf8Printable(gps_hint),
@@ -8232,8 +8230,8 @@ void MainWindow::Impl::probe_meta_sec_f(const MetaProbeCtx &c, const QString &sh
         const double center_before_lon = map != nullptr ? map->center_lon() : 0.0;
         page.apply_rules(rules);
         pump(120);
-        const QString gps_lat = edit_text(QStringLiteral("pp-meta-gps-lat"));
-        const QString gps_hint = placeholder(QStringLiteral("pp-meta-gps-lat"));
+        const QString gps_lat = edit_text(meta::objname::kPpMetaGpsLat);
+        const QString gps_hint = placeholder(meta::objname::kPpMetaGpsLat);
         const QString badge = gps_badge();
         const bool marker = map != nullptr && map->has_marker();
         const bool kept = map != nullptr &&
@@ -8304,12 +8302,12 @@ void MainWindow::Impl::probe_meta_sec_g(const MetaProbeCtx &c, const QString &sh
                 smoke_fail(MainWindow::tr("元数据页自检：多选 probe 未在 10s 内回填"));
             }
             pump(120);
-            const int rows = page.property("pp_meta_multi_rows").toInt();
-            const QString more = full(QStringLiteral("pp-meta-multi-more"));
-            const QString row0_name = full(QStringLiteral("pp-meta-multi-name-0"));
-            const QString row0_old = full(QStringLiteral("pp-meta-multi-old-0"));
-            const QString row0_new = full(QStringLiteral("pp-meta-multi-new-0"));
-            const bool single_rows_hidden = full(QStringLiteral("pp-meta-time-old-0")).isEmpty();
+            const int rows = meta::ProbeContext(&page).multi_rows();
+            const QString more = full(meta::objname::kMultiMore);
+            const QString row0_name = full(meta::objname::kMultiName1.arg(0));
+            const QString row0_old = full(meta::objname::kMultiOld1.arg(0));
+            const QString row0_new = full(meta::objname::kMultiNew1.arg(0));
+            const bool single_rows_hidden = full(meta::objname::kTimeOld0).isEmpty();
             std::printf("UI-SMOKE meta-multi: rows=%d more=%s row0=%s | %s -> %s "
                         "single-hidden=%d\n",
                         rows, qUtf8Printable(more), qUtf8Printable(row0_name),
@@ -8375,7 +8373,7 @@ void MainWindow::Impl::probe_meta_sec_g2(const MetaProbeCtx &c, const QString &s
         }
         pump(200);
         const auto *time_label = editor.findChild<QLabel *>(QStringLiteral("time_effective"));
-        const auto *gps_label = editor.findChild<QLabel *>(QStringLiteral("gps_effective"));
+        const auto *gps_label = editor.findChild<QLabel *>(meta::objname::kGpsEffectiveLabel);
         const QString time_text = time_label != nullptr ? time_label->text() : QString();
         const QString gps_text = gps_label != nullptr ? gps_label->text() : QString();
         const bool time_mod =
@@ -8515,7 +8513,7 @@ void MainWindow::Impl::probe_meta_sec_h(const MetaProbeCtx &c, const QString &sh
             smoke_fail(MainWindow::tr("元数据页自检：无选中回退的 probe 未回填"));
         }
         pump(80);
-        const QString hint = full(QStringLiteral("pp-meta-info-hint"));
+        const QString hint = full(meta::objname::kInfoHint);
         std::printf("UI-SMOKE meta-follow-fallback: hint=%s\n", qUtf8Printable(hint));
         std::fflush(stdout);
         const QString expected =
@@ -8563,17 +8561,14 @@ void MainWindow::Impl::probe_meta_sec_i(const MetaProbeCtx &c, const QString &sh
             pump(80);
             bool rows_hidden = true;
             for (int i = 0; i < 5; ++i) {
-                const auto *row =
-                    page.findChild<QWidget *>(QStringLiteral("pp-meta-info-row-%1").arg(i));
+                const auto *row = page.findChild<QWidget *>(meta::objname::kInfoRow1.arg(i));
                 if (row == nullptr || row->isVisible())
                     rows_hidden = false;
             }
-            const auto *empty_row =
-                page.findChild<QWidget *>(QStringLiteral("pp-meta-info-empty-row"));
-            const auto *empty_text = page.findChild<QLabel *>(QStringLiteral("pp-meta-info-empty"));
-            const auto *time_empty_row =
-                page.findChild<QWidget *>(QStringLiteral("pp-meta-time-empty-row"));
-            const auto *view_lat = page.findChild<QLineEdit *>(QStringLiteral("pp-meta-gps-lat"));
+            const auto *empty_row = page.findChild<QWidget *>(meta::objname::kInfoEmptyRow);
+            const auto *empty_text = page.findChild<QLabel *>(meta::objname::kInfoEmpty);
+            const auto *time_empty_row = page.findChild<QWidget *>(meta::objname::kTimeEmptyRow);
+            const auto *view_lat = page.findChild<QLineEdit *>(meta::objname::kPpMetaGpsLat);
             const bool ok =
                 rows_hidden && empty_row != nullptr && empty_row->isVisible() &&
                 empty_text != nullptr &&
@@ -8597,8 +8592,8 @@ void MainWindow::Impl::probe_meta_sec_i(const MetaProbeCtx &c, const QString &sh
             smoke_fail(MainWindow::tr("元数据页自检：几何探针的 probe 未回填"));
         }
         pump(120);
-        auto *time_new_label = page.findChild<QLabel *>(QStringLiteral("pp-meta-time-new-0"));
-        auto *time_old_label = page.findChild<QLabel *>(QStringLiteral("pp-meta-time-old-0"));
+        auto *time_new_label = page.findChild<QLabel *>(meta::objname::kTimeNew0);
+        auto *time_old_label = page.findChild<QLabel *>(meta::objname::kTimeOld0);
         const auto color_distance = [](const QImage &image, const QColor &want) {
             int best = 1 << 30;
             for (int y = 0; y < image.height(); ++y) {
@@ -8639,7 +8634,7 @@ void MainWindow::Impl::probe_meta_sec_i(const MetaProbeCtx &c, const QString &sh
         // (i-2b) §3.2：页内容不得反向撑大栏宽（内容宽 ≤ 页面宽；超出 = 右栏内横滚）
         QSize content_size;
         {
-            const auto *content = page.findChild<QWidget *>(QStringLiteral("pp-meta-content"));
+            const auto *content = page.findChild<QWidget *>(meta::objname::kContent);
             if (content != nullptr) {
                 content_size = QSize(content->size().width(), content->minimumSizeHint().height());
             }
@@ -8662,7 +8657,7 @@ void MainWindow::Impl::probe_meta_sec_i(const MetaProbeCtx &c, const QString &sh
             QList<QWidget *> rows = page.findChildren<QWidget *>(QStringLiteral("pp-fk-row"));
             for (QWidget *widget : page.findChildren<QWidget *>()) {
                 const QString name = widget->objectName();
-                if (name.startsWith(QStringLiteral("pp-meta-")) &&
+                if (name.startsWith(meta::objname::kPpMetaPrefix) &&
                     name.endsWith(QStringLiteral("-row")) && !rows.contains(widget)) {
                     rows.append(widget);
                 }
@@ -8691,10 +8686,11 @@ void MainWindow::Impl::probe_meta_sec_i(const MetaProbeCtx &c, const QString &sh
             meta_expect("label-track", labels_seen >= 12 && labels_bad == 0,
                         QStringLiteral("labels=%1 bad=%2").arg(labels_seen).arg(labels_bad));
             int spin_bad = 0;
-            for (const char *name :
-                 {"pp-meta-delta-years", "pp-meta-delta-months", "pp-meta-delta-days",
-                  "pp-meta-delta-hours", "pp-meta-delta-minutes", "pp-meta-delta-seconds"}) {
-                const auto *spin = page.findChild<QSpinBox *>(QString::fromLatin1(name));
+            for (const QString &name :
+                 {meta::objname::kDeltaYears, meta::objname::kDeltaMonths,
+                  meta::objname::kDeltaDays, meta::objname::kDeltaHours,
+                  meta::objname::kDeltaMinutes, meta::objname::kDeltaSeconds}) {
+                const auto *spin = page.findChild<QSpinBox *>(name);
                 if (spin == nullptr || spin->width() != formkit::kFieldShort ||
                     spin->height() != formkit::kControlH)
                     ++spin_bad;
@@ -8708,7 +8704,7 @@ void MainWindow::Impl::probe_meta_sec_i(const MetaProbeCtx &c, const QString &sh
 
         // (i-4) 双列第二标签起点（R2/A2）：160 档 = second_label_x(160)；kv 行 = 值轨右缘 + 24
         {
-            const auto *tz_row = page.findChild<QWidget *>(QStringLiteral("pp-meta-tz-row"));
+            const auto *tz_row = page.findChild<QWidget *>(meta::objname::kTzRow);
             int tz_label2_x = -1;
             if (tz_row != nullptr) {
                 for (QLabel *label : tz_row->findChildren<QLabel *>()) {
@@ -8725,13 +8721,10 @@ void MainWindow::Impl::probe_meta_sec_i(const MetaProbeCtx &c, const QString &sh
                             .arg(tz_label2_x)
                             .arg(formkit::second_label_x(formkit::kFieldStd)));
             // kv 双列行：第二标签 x 全行一致（不随内容漂移）+ = A2 的 [轨][24][80][12] 递推
-            const auto *camera_value =
-                page.findChild<QLabel *>(QStringLiteral("pp-meta-info-camera"));
-            const auto *exposure_value =
-                page.findChild<QLabel *>(QStringLiteral("pp-meta-info-exposure"));
-            const auto *color_value =
-                page.findChild<QLabel *>(QStringLiteral("pp-meta-info-color"));
-            const auto *gps_value = page.findChild<QLabel *>(QStringLiteral("pp-meta-info-gps"));
+            const auto *camera_value = page.findChild<QLabel *>(meta::objname::kInfoCamera);
+            const auto *exposure_value = page.findChild<QLabel *>(meta::objname::kInfoExposure);
+            const auto *color_value = page.findChild<QLabel *>(meta::objname::kInfoColor);
+            const auto *gps_value = page.findChild<QLabel *>(meta::objname::kInfoGps);
             const auto page_x = [&page](const QWidget *widget) {
                 return widget->mapTo(&page, QPoint(0, 0)).x();
             };
@@ -8741,7 +8734,7 @@ void MainWindow::Impl::probe_meta_sec_i(const MetaProbeCtx &c, const QString &sh
                                  page_x(exposure_value) == col2 && page_x(color_value) == col2 &&
                                  page_x(gps_value) == col2;
             // kv 行 0 的列结构（A2 逐字）：[80 标签][12][轨][24][80 第二标签][12][轨]
-            const auto *row0 = page.findChild<QWidget *>(QStringLiteral("pp-meta-info-row-0"));
+            const auto *row0 = page.findChild<QWidget *>(meta::objname::kInfoRow0);
             int l1 = -1, l2 = -1, t1_x = -1, t1_w = -1, t2_x = -1, t2_w = -1;
             if (row0 != nullptr) {
                 int label_seen = 0;
@@ -8786,24 +8779,24 @@ void MainWindow::Impl::probe_meta_sec_i(const MetaProbeCtx &c, const QString &sh
 
         // (i-5) 卡头右置一律中性胶囊（1-24/1-25）+ GPS 状态徽标（修 1-33/「已有 GPS」）
         {
-            const auto tone_of = [&page](const char *name) {
-                const auto *label = page.findChild<QLabel *>(QString::fromLatin1(name));
+            const auto tone_of = [&page](const QString &name) {
+                const auto *label = page.findChild<QLabel *>(name);
                 if (label == nullptr)
                     return -1;
                 // 卡头胶囊由本页构造（PillBadge）→ 静态下转安全；取色调键
                 return int(static_cast<const formkit::PillBadge *>(label)->tone());
             };
             const bool neutral =
-                tone_of("pp-meta-info-pill") == int(formkit::PillBadge::Tone::Neutral) &&
-                tone_of("pp-meta-time-pill") == int(formkit::PillBadge::Tone::Neutral) &&
-                tone_of("pp-meta-gps-pill") == int(formkit::PillBadge::Tone::Neutral) &&
-                tone_of("pp-meta-privacy-pill") == int(formkit::PillBadge::Tone::Neutral);
+                tone_of(meta::objname::kInfoPill) == int(formkit::PillBadge::Tone::Neutral) &&
+                tone_of(meta::objname::kTimePill) == int(formkit::PillBadge::Tone::Neutral) &&
+                tone_of(meta::objname::kGpsPill) == int(formkit::PillBadge::Tone::Neutral) &&
+                tone_of(meta::objname::kPrivacyPill) == int(formkit::PillBadge::Tone::Neutral);
             meta_expect("header-pill-neutral", neutral,
                         QStringLiteral("info=%1 time=%2 gps=%3 privacy=%4")
-                            .arg(tone_of("pp-meta-info-pill"))
-                            .arg(tone_of("pp-meta-time-pill"))
-                            .arg(tone_of("pp-meta-gps-pill"))
-                            .arg(tone_of("pp-meta-privacy-pill")));
+                            .arg(tone_of(meta::objname::kInfoPill))
+                            .arg(tone_of(meta::objname::kTimePill))
+                            .arg(tone_of(meta::objname::kGpsPill))
+                            .arg(tone_of(meta::objname::kPrivacyPill)));
             // 金样带 GPS 且无规则 → 状态胶囊 = 「已有 GPS」（独立徽标，非 placeholder）
             meta_expect("gps-state-badge",
                         gps_badge_visible() && gps_badge() == QStringLiteral("已有 GPS"),
@@ -8813,20 +8806,19 @@ void MainWindow::Impl::probe_meta_sec_i(const MetaProbeCtx &c, const QString &sh
             // 隐私与文件时间（§7.1）：开关 30×16 + 说明 + 文字链（高 26）；关键字行带「编辑…」
             {
                 int switch_rows = 0;
-                for (const char *name : {"privacy_strip", "mtime_sync"}) {
-                    const auto *button =
-                        page.findChild<QAbstractButton *>(QString::fromLatin1(name));
+                for (const QString &name :
+                     {meta::objname::kPrivacyStrip, meta::objname::kMtimeSync}) {
+                    const auto *button = page.findChild<QAbstractButton *>(name);
                     if (button != nullptr && button->width() == formkit::kSwitchW &&
                         button->height() == formkit::kSwitchH && button->isCheckable()) {
                         ++switch_rows;
                     }
                 }
                 const auto *tags_link =
-                    page.findChild<QToolButton *>(QStringLiteral("privacy_strip_link"));
-                const auto *exc_link =
-                    page.findChild<QToolButton *>(QStringLiteral("mtime_sync_link"));
+                    page.findChild<QToolButton *>(meta::objname::kPrivacyStripLink);
+                const auto *exc_link = page.findChild<QToolButton *>(meta::objname::kMtimeSyncLink);
                 const auto *keywords_link =
-                    page.findChild<QToolButton *>(QStringLiteral("pp-meta-keywords-link"));
+                    page.findChild<QToolButton *>(meta::objname::kKeywordsLink);
                 const bool links_ok =
                     tags_link != nullptr && tags_link->text() == QStringLiteral("标签编辑…") &&
                     tags_link->height() == theme::Metrics::btn_h && exc_link != nullptr &&
@@ -8845,7 +8837,7 @@ void MainWindow::Impl::probe_meta_sec_i(const MetaProbeCtx &c, const QString &sh
                 {
                     QWidget *card = nullptr;
                     const auto *strip_now =
-                        page.findChild<QAbstractButton *>(QStringLiteral("privacy_strip"));
+                        page.findChild<QAbstractButton *>(meta::objname::kPrivacyStrip);
                     for (QWidget *p = strip_now != nullptr ? strip_now->parentWidget() : nullptr;
                          p != nullptr; p = p->parentWidget()) {
                         if (p->objectName() == QStringLiteral("pp-card")) {
@@ -8887,11 +8879,10 @@ void MainWindow::Impl::probe_meta_sec_i(const MetaProbeCtx &c, const QString &sh
 
         // (i-6) 修 1-37：地图操作行固定在地图上方（核心动作不落进内滚盲区）+ 折叠行默认折叠
         {
-            const auto *ops_row = page.findChild<QWidget *>(QStringLiteral("pp-meta-gps-ops-row"));
-            const auto *map = page.findChild<pp::map::MapWidget *>(QStringLiteral("pp-meta-map"));
-            const auto *rule_host = page.findChild<QWidget *>(QStringLiteral("pp-meta-gps-rule"));
-            const auto *rule_toggle =
-                page.findChild<QToolButton *>(QStringLiteral("pp-meta-gps-rule-toggle"));
+            const auto *ops_row = page.findChild<QWidget *>(meta::objname::kGpsOpsRow);
+            const auto *map = page.findChild<pp::map::MapWidget *>(meta::objname::kMap);
+            const auto *rule_host = page.findChild<QWidget *>(meta::objname::kGpsRule);
+            const auto *rule_toggle = page.findChild<QToolButton *>(meta::objname::kGpsRuleToggle);
             const bool above =
                 ops_row != nullptr && map != nullptr &&
                 ops_row->mapTo(&page, QPoint(0, 0)).y() < map->mapTo(&page, QPoint(0, 0)).y();
@@ -8907,9 +8898,10 @@ void MainWindow::Impl::probe_meta_sec_i(const MetaProbeCtx &c, const QString &sh
                             .arg(rule_host != nullptr && rule_host->isVisible() ? 1 : 0));
             // 操作行/搜索钮高 26（A7 按钮换锚）
             int btn_bad = 0;
-            for (const char *name : {"pp-meta-gps-read", "pp-meta-gps-pick", "pp-meta-gps-clear",
-                                     "pp-meta-gps-search-button"}) {
-                const auto *button = page.findChild<QPushButton *>(QString::fromLatin1(name));
+            for (const QString &name :
+                 {meta::objname::kGpsRead, meta::objname::kGpsPick, meta::objname::kGpsClear,
+                  meta::objname::kGpsSearchButton}) {
+                const auto *button = page.findChild<QPushButton *>(name);
                 if (button == nullptr || button->height() != theme::Metrics::btn_h)
                     ++btn_bad;
             }
@@ -8921,8 +8913,7 @@ void MainWindow::Impl::probe_meta_sec_i(const MetaProbeCtx &c, const QString &sh
         //   objectName pp-meta-gps-category-0..5 由菜单 action 继承；探针断言菜单项数 == 6
         //   且逐一在位（ux-review §4 改进方案 ② 的取证口径）。
         {
-            const auto *cat_btn =
-                page.findChild<QPushButton *>(QStringLiteral("pp-meta-gps-category-menu"));
+            const auto *cat_btn = page.findChild<QPushButton *>(meta::objname::kGpsCategoryMenu);
             const QMenu *menu = cat_btn != nullptr ? cat_btn->menu() : nullptr;
             int items = 0;
             bool names_ok = menu != nullptr;
@@ -8930,8 +8921,8 @@ void MainWindow::Impl::probe_meta_sec_i(const MetaProbeCtx &c, const QString &sh
                 const QList<QAction *> actions = menu->actions();
                 items = int(actions.size());
                 for (int i = 0; i < actions.size(); ++i) {
-                    names_ok = names_ok && actions.at(i)->objectName() ==
-                                               QStringLiteral("pp-meta-gps-category-%1").arg(i);
+                    names_ok = names_ok &&
+                               actions.at(i)->objectName() == meta::objname::kGpsCategory1.arg(i);
                 }
             }
             meta_expect("category-menu", items == 6 && names_ok,
@@ -8946,7 +8937,7 @@ void MainWindow::Impl::probe_meta_sec_i(const MetaProbeCtx &c, const QString &sh
         //   故此处除文案/tooltip/令牌灰外，另做两路取证：(a) banner 调色板不得是原警示黄
         //   #fff1b8；(b) banner 实拍像素中不得出现原警示黄（阈值 40）。
         {
-            const auto *map = page.findChild<pp::map::MapWidget *>(QStringLiteral("pp-meta-map"));
+            const auto *map = page.findChild<pp::map::MapWidget *>(meta::objname::kMap);
             QString text;
             QString tip;
             QString sheet;
@@ -9073,8 +9064,7 @@ void MainWindow::Impl::probe_meta_sec_i(const MetaProbeCtx &c, const QString &sh
 
         // (i-8) A27（T11 缺陷根治受益面）：时间卡模式分段 —— 段自持高（= kSegH − 2）且可见可选
         {
-            const auto *seg =
-                page.findChild<formkit::SegmentedControl *>(QStringLiteral("pp-meta-seg"));
+            const auto *seg = page.findChild<formkit::SegmentedControl *>(meta::objname::kSeg);
             int seg_h = -1;
             int seg_w = -1;
             bool visible = false;
@@ -9114,10 +9104,10 @@ void MainWindow::Impl::probe_meta_sec_i(const MetaProbeCtx &c, const QString &sh
         //   读数 = 信号值 = 6 位小数；坐标行 tooltip 同读数）+ 比例尺（mapwidget 自绘：左下白底
         //   α190 段的像素取证）。原样保留 §2.5 的滚轮/拖拽/点击三件套探针（(j) 段）。
         {
-            auto *zoom_map = page.findChild<pp::map::MapWidget *>(QStringLiteral("pp-meta-map"));
-            auto *zoom_in = page.findChild<QToolButton *>(QStringLiteral("pp-meta-map-zoom-in"));
-            auto *zoom_out = page.findChild<QToolButton *>(QStringLiteral("pp-meta-map-zoom-out"));
-            auto *cursor_label = page.findChild<QLabel *>(QStringLiteral("pp-meta-map-cursor"));
+            auto *zoom_map = page.findChild<pp::map::MapWidget *>(meta::objname::kMap);
+            auto *zoom_in = page.findChild<QToolButton *>(meta::objname::kMapZoomIn);
+            auto *zoom_out = page.findChild<QToolButton *>(meta::objname::kMapZoomOut);
+            auto *cursor_label = page.findChild<QLabel *>(meta::objname::kMapCursor);
             const auto zoom_button_ok = [](const QToolButton *button, const char *icon_key) {
                 return button != nullptr && button->width() == 24 && button->height() == 24 &&
                        button->text().isEmpty() && !button->icon().isNull() &&
@@ -9155,8 +9145,7 @@ void MainWindow::Impl::probe_meta_sec_i(const MetaProbeCtx &c, const QString &sh
                 const QString want_cursor = QStringLiteral("光标: %1, %2")
                                                 .arg(QString::number(31.230400, 'f', 6),
                                                      QString::number(121.473700, 'f', 6));
-                const auto *datum_row =
-                    page.findChild<QWidget *>(QStringLiteral("pp-meta-gps-datum-row"));
+                const auto *datum_row = page.findChild<QWidget *>(meta::objname::kGpsDatumRow);
                 meta_expect("map-cursor-readout",
                             cursor_label->text() == want_cursor && datum_row != nullptr &&
                                 datum_row->toolTip() == want_cursor,
@@ -9242,13 +9231,13 @@ void MainWindow::Impl::probe_meta_sec_j(const MetaProbeCtx &c, const QString &sh
             if (!ok)
                 loop_bad << QStringLiteral("%1(%2)").arg(QString::fromLatin1(name), detail);
         };
-        auto *map = page.findChild<pp::map::MapWidget *>(QStringLiteral("pp-meta-map"));
-        auto *combo = page.findChild<QComboBox *>(QStringLiteral("pp-meta-gps-provider"));
-        auto *list = page.findChild<QListWidget *>(QStringLiteral("pp-meta-gps-search-results"));
-        auto *pick = page.findChild<QPushButton *>(QStringLiteral("pp-meta-gps-pick"));
-        auto *status_label = page.findChild<QLabel *>(QStringLiteral("gps_status"));
-        auto *lat_edit = page.findChild<QLineEdit *>(QStringLiteral("gps_lat"));
-        auto *lon_edit = page.findChild<QLineEdit *>(QStringLiteral("gps_lon"));
+        auto *map = page.findChild<pp::map::MapWidget *>(meta::objname::kMap);
+        auto *combo = page.findChild<QComboBox *>(meta::objname::kGpsProvider);
+        auto *list = page.findChild<QListWidget *>(meta::objname::kGpsSearchResults);
+        auto *pick = page.findChild<QPushButton *>(meta::objname::kGpsPick);
+        auto *status_label = page.findChild<QLabel *>(meta::objname::kGpsStatus);
+        auto *lat_edit = page.findChild<QLineEdit *>(meta::objname::kGpsLat);
+        auto *lon_edit = page.findChild<QLineEdit *>(meta::objname::kGpsLon);
         if (map == nullptr || combo == nullptr || list == nullptr || pick == nullptr ||
             status_label == nullptr || lat_edit == nullptr || lon_edit == nullptr) {
             loop_expect("controls", false, QStringLiteral("闭环控件缺失"));
@@ -9305,10 +9294,10 @@ void MainWindow::Impl::probe_meta_sec_j(const MetaProbeCtx &c, const QString &sh
                 "results-list",
                 list->count() == int(results.size()) &&
                     (list->item(0) != nullptr && list->itemWidget(list->item(0)) != nullptr) &&
-                    page.property("pp_meta_gps_results").toInt() == int(results.size()),
+                    meta::ProbeContext(&page).gps_results() == int(results.size()),
                 QStringLiteral("rows=%1 hook=%2")
                     .arg(list->count())
-                    .arg(page.property("pp_meta_gps_results").toInt()));
+                    .arg(meta::ProbeContext(&page).gps_results()));
             loop_expect("results-status",
                         status_label->text() ==
                             QStringLiteral("搜索到 %1 个结果").arg(results.size()),
@@ -9369,9 +9358,9 @@ void MainWindow::Impl::probe_meta_sec_j(const MetaProbeCtx &c, const QString &sh
                             .arg(list->currentRow())
                             .arg(status_label->text()));
             loop_expect("pin-reverse-offline",
-                        page.property("pp_meta_gps_address").toString() ==
+                        meta::ProbeContext(&page).gps_address() ==
                             QStringLiteral("离线模式：逆地理不可用"),
-                        page.property("pp_meta_gps_address").toString());
+                        meta::ProbeContext(&page).gps_address());
 
             // ③ 地图微调（自由取点）→ 回填 + 主钉随之 + 状态
             click_at(map, view_center + QPoint(-60, 40));
@@ -9420,10 +9409,10 @@ void MainWindow::Impl::probe_meta_sec_j(const MetaProbeCtx &c, const QString &sh
                 pump(120);
                 loop_expect(
                     "switch-clears-list",
-                    page.property("pp_meta_gps_results").toInt() == 0 && list->count() == 1 &&
+                    meta::ProbeContext(&page).gps_results() == 0 && list->count() == 1 &&
                         (list->item(0) != nullptr && list->itemWidget(list->item(0)) == nullptr),
                     QStringLiteral("hook=%1 rows=%2")
-                        .arg(page.property("pp_meta_gps_results").toInt())
+                        .arg(meta::ProbeContext(&page).gps_results())
                         .arg(list->count()));
                 map->center_on(results[2].lat, results[2].lon, 14);
                 pump(80);
@@ -9481,8 +9470,8 @@ void MainWindow::Impl::probe_meta_sec_k(const MetaProbeCtx &c, const QString &sh
                 expand_bad << QStringLiteral("%1(%2)").arg(QString::fromLatin1(name), detail);
             }
         };
-        auto *expand_btn = page.findChild<QToolButton *>(QStringLiteral("pp-meta-map-expand"));
-        auto *map = page.findChild<pp::map::MapWidget *>(QStringLiteral("pp-meta-map"));
+        auto *expand_btn = page.findChild<QToolButton *>(meta::objname::kMapExpand);
+        auto *map = page.findChild<pp::map::MapWidget *>(meta::objname::kMap);
         const bool expand_controls_ok =
             expand_btn != nullptr && map != nullptr && expand_btn->parentWidget() == map;
         expand_expect(
@@ -9541,14 +9530,13 @@ void MainWindow::Impl::probe_meta_sec_k(const MetaProbeCtx &c, const QString &sh
             };
             const auto find_map_dialog = []() -> QDialog * {
                 if (auto *modal = qobject_cast<QDialog *>(QApplication::activeModalWidget())) {
-                    if (modal->objectName() == QStringLiteral("pp-meta-map-dialog")) {
+                    if (modal->objectName() == meta::objname::kMapDialog) {
                         return modal;
                     }
                 }
                 const QWidgetList tops = QApplication::topLevelWidgets();
                 for (QWidget *top : tops) {
-                    if (top != nullptr &&
-                        top->objectName() == QStringLiteral("pp-meta-map-dialog")) {
+                    if (top != nullptr && top->objectName() == meta::objname::kMapDialog) {
                         return qobject_cast<QDialog *>(top);
                     }
                 }
@@ -9568,12 +9556,11 @@ void MainWindow::Impl::probe_meta_sec_k(const MetaProbeCtx &c, const QString &sh
                         }
                         out->modal = dialog->isVisible() && dialog->isModal();
                         out->title_ok = dialog->windowTitle() == QStringLiteral("地图");
-                        out->close_btn = dialog->findChild<QPushButton *>(
-                                             QStringLiteral("pp-meta-map-close")) != nullptr;
+                        out->close_btn =
+                            dialog->findChild<QPushButton *>(meta::objname::kMapClose) != nullptr;
                         out->caption_close = dialog->findChild<QPushButton *>(
                                                  QStringLiteral("pp-dlg-close")) != nullptr;
-                        auto *inside =
-                            dialog->findChild<pp::map::MapWidget *>(QStringLiteral("pp-meta-map"));
+                        auto *inside = dialog->findChild<pp::map::MapWidget *>(meta::objname::kMap);
                         out->same_control = inside != nullptr && inside == map;
                         if (inside != nullptr) {
                             out->map_size = inside->size();
@@ -9623,13 +9610,13 @@ void MainWindow::Impl::probe_meta_sec_k(const MetaProbeCtx &c, const QString &sh
                         }
                         out->dialog_size = dialog->size();
                         // 展开期卡片位 = 同高空占位（模态期卡片不抖动）
-                        const auto *placeholder =
-                            page.findChild<QWidget *>(QStringLiteral("pp-meta-map-placeholder"));
+                        const auto *placeholder = page.findChild<QWidget *>(
+                            QString::fromLatin1(meta::kMapPlaceholderName));
                         out->card_kept =
                             placeholder != nullptr &&
                             placeholder->height() == 260; // UX-4⑤ 换锚（kMapHeight 136→260）
-                        if (auto *close = dialog->findChild<QPushButton *>(
-                                QStringLiteral("pp-meta-map-close"))) {
+                        if (auto *close =
+                                dialog->findChild<QPushButton *>(meta::objname::kMapClose)) {
                             close->click(); // 真实用户路径：底栏「关闭」
                         } else {
                             dialog->reject(); // 兜底：绝不让探针卡在模态循环里
@@ -9638,7 +9625,8 @@ void MainWindow::Impl::probe_meta_sec_k(const MetaProbeCtx &c, const QString &sh
                 expand_btn->click(); // 同步：内部 exec() 直到对话框关闭才返回
                 pump(80);
                 out->placeholder_removed =
-                    page.findChild<QWidget *>(QStringLiteral("pp-meta-map-placeholder")) == nullptr;
+                    page.findChild<QWidget *>(QString::fromLatin1(meta::kMapPlaceholderName)) ==
+                    nullptr;
             };
 
             ExpandCycle first;
@@ -9702,9 +9690,8 @@ void MainWindow::Impl::probe_meta_sec_k(const MetaProbeCtx &c, const QString &sh
                               .arg(map->marker_lat(), 0, 'f', 6)
                               .arg(map->marker_lon(), 0, 'f', 6));
             expand_expect("restored-objectname",
-                          map->objectName() == QStringLiteral("pp-meta-map") &&
-                              page.findChild<pp::map::MapWidget *>(QStringLiteral("pp-meta-map")) ==
-                                  map &&
+                          map->objectName() == meta::objname::kMap &&
+                              page.findChild<pp::map::MapWidget *>(meta::objname::kMap) == map &&
                               expand_btn->isVisible() && expand_btn->parentWidget() == map,
                           QStringLiteral("name=\"%1\" expand-vis=%2")
                               .arg(map->objectName())
@@ -9790,8 +9777,7 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
         return widget != nullptr ? widget->placeholderText() : QString();
     };
     const auto wait_probe = [this, &page] {
-        return wait_for([&page] { return !page.property("pp_meta_follow_pending").toBool(); },
-                        10000);
+        return wait_for([&page] { return !meta::ProbeContext(&page).follow_pending(); }, 10000);
     };
     // "YYYY:MM:DD hh:mm:ss" → "YYYY-MM-DD hh:mm:ss"（页面的显示口径；与 page_meta.cpp 同式）
     const auto shown_form = [](QString text) {
@@ -9821,11 +9807,11 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
     const double pick_lon = 114.0579;
     // 卡头 GPS 状态胶囊（M5-T7/修 1-33：状态 = 独立徽标，不再是 placeholder 文案）
     const auto gps_badge = [&page] {
-        const auto *label = page.findChild<QLabel *>(QStringLiteral("pp-meta-gps-pill"));
+        const auto *label = page.findChild<QLabel *>(meta::objname::kGpsPill);
         return label != nullptr ? label->text() : QString();
     };
     const auto gps_badge_visible = [&page] {
-        const auto *label = page.findChild<QLabel *>(QStringLiteral("pp-meta-gps-pill"));
+        const auto *label = page.findChild<QLabel *>(meta::objname::kGpsPill);
         return label != nullptr && label->isVisible();
     };
     // R-255：共享前置入 ctx；分节调用顺序与原行序一致（输出逐字不变）

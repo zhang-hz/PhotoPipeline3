@@ -4,12 +4,13 @@
 // Contract: docs/deep-review-0.3.2.md R-182（测试钩子入侵公开 API + 宿主 findChild 反向伸入
 // 页面，objectName 三方事实契约）与 R-258（探针与产品共 TU/私有耦合的后半收口）。
 // 口径（additive：既有行为零变化，钩子/词表值串逐字不变）：
-//   * `hook::` = 自验钩子（动态属性）名**单源** —— set_hook 写入 / 探针读取 / page_meta.h
-//     清单三方同一词表；
+//   * `hook::` = 自验钩子（动态属性）名**单源** —— set_hook 写入 / 探针读取 / 明细清单三方
+//     同一词表；清单**本体**在 page_meta.cpp 头注释（R-260 余量收口：不寄生接口头
+//     page_meta.h，旧口径「page_meta.h 清单」已失实）—— 人读明细清单与机读常量表同源；
 //   * `objname::` = pp-meta-* / tag_* 等 objectName **单源** —— 构建器 setObjectName 与
 //     探针 findChild 同源（三方事实契约收口成一张表）；
 //   * `ProbeContext` = 探针侧**类型化只读访问器**（替代宿主散写 property()/findChild 字符串）。
-// 消费方：页面构建器（写侧，本包落地）+ --ui-smoke 探针（读侧，F4 波次按「探针需求」接入）。
+// 消费方：页面构建器（写侧）+ --ui-smoke 探针（读侧；M7-R2.3-G8 全面迁移收尾）。
 #pragma once
 
 #include "ui/page_meta.h"
@@ -43,6 +44,9 @@ inline const QString kExceptionLabel = QStringLiteral("exception_label");
 inline const QString kExceptionList = QStringLiteral("exception_list");
 inline const QString kGpsAlt = QStringLiteral("gps_alt");
 inline const QString kGpsDir = QStringLiteral("gps_dir");
+// EXIF 编辑器「生效」值标签（exif_editor.cpp 同名 objectName；区别于 hook::kGpsEffective
+// 动态属性 —— 一个是编辑器标签 objectName，一个是页面钩子属性名。M7-R2.3-G8 词表补缺）
+inline const QString kGpsEffectiveLabel = QStringLiteral("gps_effective");
 inline const QString kGpsEnable = QStringLiteral("gps_enable");
 inline const QString kGpsLat = QStringLiteral("gps_lat");
 inline const QString kGpsLon = QStringLiteral("gps_lon");
@@ -53,6 +57,13 @@ inline const QString kGpsWarning = QStringLiteral("gps_warning");
 inline const QString kPpCard = QStringLiteral("pp-card");
 inline const QString kPpCardTitle = QStringLiteral("pp-card-title");
 inline const QString kContent = QStringLiteral("pp-meta-content");
+// 时间偏移六个 spin（meta_card_time 的 DeltaSpin 列；M7-R2.3-G8 词表补缺）
+inline const QString kDeltaDays = QStringLiteral("pp-meta-delta-days");
+inline const QString kDeltaHours = QStringLiteral("pp-meta-delta-hours");
+inline const QString kDeltaMinutes = QStringLiteral("pp-meta-delta-minutes");
+inline const QString kDeltaMonths = QStringLiteral("pp-meta-delta-months");
+inline const QString kDeltaSeconds = QStringLiteral("pp-meta-delta-seconds");
+inline const QString kDeltaYears = QStringLiteral("pp-meta-delta-years");
 inline const QString kEffectRow = QStringLiteral("pp-meta-effect-row");
 inline const QString kExceptionHost = QStringLiteral("pp-meta-exception-host");
 inline const QString kGpsAddress = QStringLiteral("pp-meta-gps-address");
@@ -106,6 +117,8 @@ inline const QString kInfoLens = QStringLiteral("pp-meta-info-lens");
 inline const QString kInfoPill = QStringLiteral("pp-meta-info-pill");
 inline const QString kInfoRating = QStringLiteral("pp-meta-info-rating");
 inline const QString kInfoRow1 = QStringLiteral("pp-meta-info-row-%1");
+// kv 行 0（= 上行 %1 模式取 0 的派生值；不另写值串 —— M7-R2.3-G8 词表补缺）
+inline const QString kInfoRow0 = kInfoRow1.arg(0);
 inline const QString kInfoSize = QStringLiteral("pp-meta-info-size");
 inline const QString kInfoTime = QStringLiteral("pp-meta-info-time");
 inline const QString kInfoWb = QStringLiteral("pp-meta-info-wb");
@@ -114,12 +127,19 @@ inline const QString kKeywordMore = QStringLiteral("pp-meta-keyword-more");
 inline const QString kKeywordNone = QStringLiteral("pp-meta-keyword-none");
 inline const QString kKeywordsLink = QStringLiteral("pp-meta-keywords-link");
 inline const QString kMap = QStringLiteral("pp-meta-map");
+inline const QString kMapClose = QStringLiteral("pp-meta-map-close");
 inline const QString kMapCursor = QStringLiteral("pp-meta-map-cursor");
+inline const QString kMapDialog = QStringLiteral("pp-meta-map-dialog");
 inline const QString kMapExpand = QStringLiteral("pp-meta-map-expand");
 inline const QString kMapLayerPlate = QStringLiteral("pp-meta-map-layer-plate");
 inline const QString kMapLoading = QStringLiteral("pp-meta-map-loading");
 inline const QString kMapZoomIn = QStringLiteral("pp-meta-map-zoom-in");
 inline const QString kMapZoomOut = QStringLiteral("pp-meta-map-zoom-out");
+// 文件时间同步开关（mtime_sync；M7-R2.3-G8 词表补缺）
+inline const QString kMtimeSync = QStringLiteral("mtime_sync");
+// 文件时间同步行文字链（mtime_sync_link；同批补缺。写侧现为 meta_card_privacy.cpp 字面量，
+// 收口交 page_meta 属主 —— 本表先把读侧单源立住）
+inline const QString kMtimeSyncLink = QStringLiteral("mtime_sync_link");
 inline const QString kMulti = QStringLiteral("pp-meta-multi");
 inline const QString kMultiArrow = QStringLiteral("pp-meta-multi-arrow");
 inline const QString kMultiMore = QStringLiteral("pp-meta-multi-more");
@@ -128,6 +148,10 @@ inline const QString kMultiNew1 = QStringLiteral("pp-meta-multi-new-%1");
 inline const QString kMultiOld1 = QStringLiteral("pp-meta-multi-old-%1");
 inline const QString kPrivacyEnable = QStringLiteral("pp-meta-privacy-enable");
 inline const QString kPrivacyPill = QStringLiteral("pp-meta-privacy-pill");
+// 隐私剥除开关（privacy_strip；M7-R2.3-G8 词表补缺）
+inline const QString kPrivacyStrip = QStringLiteral("privacy_strip");
+// 隐私剥除行文字链（privacy_strip_link；同批补缺，写侧见 kMtimeSyncLink 注）
+inline const QString kPrivacyStripLink = QStringLiteral("privacy_strip_link");
 inline const QString kSeg = QStringLiteral("pp-meta-seg");
 inline const QString kSegDelta = QStringLiteral("pp-meta-seg-delta");
 inline const QString kSegTz = QStringLiteral("pp-meta-seg-tz");
@@ -150,6 +174,9 @@ inline const QString kTagRemove = QStringLiteral("tag_remove");
 inline const QString kTagRow = QStringLiteral("tag_row");
 inline const QString kTagRowsHost = QStringLiteral("tag_rows_host");
 inline const QString kTagValue = QStringLiteral("tag_value");
+// pp-meta-* 名字空间**前缀**（探针按 startsWith 归拢一族控件时用；不是 objectName 本体。
+// M7-R2.3-G8 词表补缺）
+inline const QString kPpMetaPrefix = QStringLiteral("pp-meta-");
 } // namespace objname
 
 // R-180：常驻子控件**显式标记**（重复入列/误删 = 悬垂；原约定只活在注释里 → 值标记 + 断言）

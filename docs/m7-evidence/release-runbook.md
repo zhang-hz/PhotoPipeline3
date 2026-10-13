@@ -20,7 +20,8 @@ push main ──→ main-full（lint/tidy/linux/windows/appimage/winzip/audit/ca
                  │  ③ 各 Windows job save vcpkgwin-*（滚动键，末段 run_id）
 tag v* 推送 ──→ release.yml
                  ├ appimage（12min 预算）：restore Qt(gcc_64)/vcpkg-/ccache-Linux- → 构建 → 4 项烟测
-                 ├ winzip  （15min 预算）：restore Qt(msvc2022_64)/vcpkgwin- → 构建 → make_winzip 五门禁
+                 ├ winzip-build（15min 预算）：构建两树 → 上传 winzip-build-input（§7）
+                 ├ winzip-pack（8min 预算）：下载 winzip-build-input → make_winzip 五门禁（§7）
                  ├ probe-appimage / probe-winzip：下载产物独立 --version 断言（§12.7 ②）
                  └ publish：查重（§12.7 ①）→ tag↔版本 → gh release create（§12.7 ③）+ CHANGELOG 说明 + SHA256SUMS
 ```
@@ -38,7 +39,7 @@ tag v* 推送 ──→ release.yml
 `CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang"` 时挂接，MSVC（cl.exe）**不挂**、回退无缓存构建
 （理由：ccache 探针是 GCC 风格参数，MSVC 挂 launcher = 坏缓存直接全构建红）。因此：
 - `main-full` 的 windows/winzip/tidy job **不写** `CCACHE_DIR`（实为空目录）；
-- `release.yml` 的 winzip job **无** ccache restore/save 步（与设计一致，非缺失）；
+- `release.yml` 的 winzip-build/winzip-pack job **无** ccache restore/save 步（与设计一致，非缺失）；
 - 任何「给 Windows job 补 ccache save/restore」的改动都只能存/取**空缓存**——`restore` 会
   「命中」一个空条目但编译速度零收益，是伪命中。**本包裁定不补**（见 handoff「裁定登记」）。
   Windows 构建提速的正道在引擎面（R-124 解冻重议），不在 workflow 对称性。
@@ -131,6 +132,115 @@ for j in json.load(sys.stdin)['jobs']:
 | 任一 job 撞 `timeout-minutes: 20` 被取消 | 停止发布链；归因（暖度/预算/代码量）后再处置；**不许改大 timeout**（§12.6 硬约束） |
 | tag 轮次出现任何**新原因**红 | 按 M7-ADJ-tag-move 裁决条件：停止、上报、**禁止二次移动 tag**（已发布的 tag 不可移动） |
 | publish 前 `gh release view` 显示该 tag 已有 Release | 显式失败即本意（§12.7 ①）；人工处置，不得 `--force` |
+
+---
+
+## 7. job 预算工程解（M7-R2.3-G7，2026-10-13）
+
+> **解决的问题**：winzip「构建+打包」单 job 越过 20min 硬顶（`timeout-minutes: 20`，§12.6 不许改大）。
+> **手段**（主对话裁定 M7R23G7-0）：**产物复用 / 拆 job**——不改 CI 判据、不放宽任何 timeout-minutes、
+> 不减五门禁与 E-2 `--smoke-exe`、打包对象必须是被验证过的构建产物。
+
+### 7.1 拆分理由（实测依据，两轮归因）
+
+| 证据 | 读数 | 出处 |
+|---|---|---|
+| main-full #54 winzip job | 「configure+build release」13m05s→14m20s + release-dev 子集段 282s 未完即撞 20min 硬顶；五门禁/E-2 一步未跑 | 任务书 M7R23G7 背景；#54 jobs API step 级取证（2026-10-13） |
+| main-full #57（一轮修复 83a9cb5）windows job | step 12（configure+build+ctest release）**872s** + step 13（release-dev 子集）272s 未完即被取消（20m01s）；同段 #54 全绿时 612s+275s（合计 16m23s）——83a9cb5 零 C++ 改动 ⇒ **runner 速度波动（612s vs 872s）+ lane 工作量超载**，不是代码增长 | #57 jobs API step 级取证 |
+| release 链 winzip | 同命令同 runner 同硬顶，实测推算 ≈21-22min（17m43s/17m39s 时代余量仅 ~2min） | 任务书；§3 表 release #10/#11/#13 |
+| 历史余量 | #37 winzip 14m53s → #39 17m58s → #54/#57 撞顶（单调恶化） | §3 表（m7r2-c 取证） |
+| 处置条款 | 单 job 超 20min → **拆 job 或砍步骤（禁止放宽时限）** | design §12.3 末行 |
+
+「砍步骤」不可行——五门禁 A/B/C/D + E-1/E-2 是硬判据（本手册 §1.2、m7r2-c-winzip-gates.md），不许减
+⇒ 只剩**拆段/产物复用**。打包段实测本机 <4min（§7.4 本地行）；膨胀源 = 构建段（release 构建
+860-872s + release-dev 子集 275-282s，且随 runner 波动 ±40%），故两轮拆出三个段：
+
+1. **一轮**：winzip 的「构建+打包」拆段，打包吃同 run 已构建树（winzip 不再 configure+build）；
+2. **二轮**（#57 归因）：windows/winzip-build 里的 **release-dev 子集段**再拆成独立 job
+   （windows-dev / winzip-build-dev，与主构建并行），每个 job 的工作量 = 一段构建 + 最小外围，
+   对 runner 波动留出 ≥3min 余量。
+
+### 7.2 复用链路图（终稿）
+
+**main-full（打包吃「已验证」产物，双背书）**：
+
+```
+lint ─┬→ windows（release 构建 + ctest release 全量，绿）
+      │      └─ 上传 winzip-build-input（release 树 + 许可面）
+      ├→ windows-dev（release-dev 子集构建 + ctest -R ui_smoke + 金样 20 对 + 冻结行断言，绿）
+      │      └─ 上传 winzip-smoke-exe（build/release-dev/photopipeline.exe）
+      └→ winzip（needs: [windows, windows-dev]——两侧测试全绿才打包）
+             ├─ 下载 winzip-build-input + winzip-smoke-exe → .（还原原布局）
+             ├─ 输入面断言（缺项列名早失败）
+             └─ make_winzip 五门禁 + E-2（命令逐字不变）→ PhotoPipeline-win64.zip → gate
+```
+
+**release.yml（同 run 内无既有 Windows 构建 job ⇒ 自拆三段）**：
+
+```
+winzip-build（release 构建 + 上传 winzip-build-input）─┐
+winzip-build-dev（release-dev 子集 + 上传 winzip-smoke-exe）─┴→ winzip-pack
+        （下载双 artifact + 输入面断言 + make_winzip 五门禁 + E-2）
+                └→ probe-winzip（§12.7 ② 独立 --version）──→ publish
+```
+
+### 7.3 artifact 传递的内容与命名
+
+| 项 | `winzip-build-input` | `winzip-smoke-exe` |
+|---|---|---|
+| 生产者 | main-full `windows`（测试绿后）/ release `winzip-build` | main-full `windows-dev`（ui_smoke+金样绿后）/ release `winzip-build-dev` |
+| 消费者 | `winzip` / `winzip-pack`（`needs` 硬依赖，双件齐才打包） | 同左 |
+| 保留期 | main-full 14 天 / release 30 天 | 同左 |
+| 布局（artifact 根 = 下载到 workspace 根，`PP_BUILD_DIR`/`--smoke-exe` 零适配） | `build/release/photopipeline.exe`＋`build/release/*.dll`（40 个，vcpkg app-local 运行时依赖，**含非传递闭包点 `jxl_threads.dll`**）＋`vcpkg_installed/x64-windows-avx2/share/**`（许可面，门禁 D 输入，317 文件/3.5MB；triplet 单源 = `CMakePresets.json:18`） | `build/release-dev/photopipeline.exe`（E-2 `--smoke-exe`） |
+| 裸量 | ≈57MB（本地实测：release exe 3.0MB + 40 dll 50.4MB + share 3.5MB） | ≈3.9MB |
+
+- **不**传：`vcpkg_installed/bin`（281MB——运行时 DLL 已 app-local 在 `build/release/*.dll`）、
+  `lib/include/debug`、Qt（Qt 缓存链照旧 restore，windeployqt/门禁 B 输入）、
+  CRT（vcvars → `Microsoft.VC*.CRT` app-local，`resolve_crt_dir` 照旧）。
+- 消费侧输入面断言：`build/release/photopipeline.exe`、`build/release-dev/photopipeline.exe`、
+  `build/release/jxl_threads.dll`、`vcpkg_installed/x64-windows-avx2/share` 与 dll≥1；缺项列名早失败。
+- `tools/make_winzip.py` **零改动**（`PP_BUILD_DIR` 默认 `build/release`、`--smoke-exe` 显式路径与
+  布局天然兼容）。
+
+**缓存纪律保留（裁定要求「保留现有 vcpkg 暖度断言与 ccache 链」）**：
+
+- 打包侧（`winzip` / `winzip-pack`）「缓存目录预建 + vcpkg binary cache(restore) +
+  vcpkg 缓存暖度断言」三步**逐字保留**（判据 ≥20 档、指路 warm-cache 的文案不变）；
+- vcpkg 的 clone/bootstrap（R-091 钉版 SHA 断言）与 binary cache **save**（安装侧写者）跟随
+  `vcpkg install` 留在构建段（windows / windows-dev / winzip-build / winzip-build-dev）——
+  打包段不再调用 vcpkg 二进制；
+- ccache 链零改动（Linux 写者/读者照旧；Windows 无 ccache = R-124 查证事实，§1.1）；
+- Qt 单写者不变（windows job；windows-dev / winzip-* 只 restore）。
+
+### 7.4 每 job 预算读数
+
+**main-full #58（fa871c8，2026-10-13 05:10Z，全绿——G7 终稿拓扑首跑）**：
+
+| job | 预算 | #58 实测 | 读数 |
+|---|---|---|---|
+| lint | 1 min | 9s | ✓ |
+| tidy | 12 min | 1114s = 18m34s | ⚠ 超预算 +6.5min（硬顶内）；预算漂移属既有事实（#57 同段 16m16s），与 G7 无关，登记不修 |
+| linux | 12 min | 661s = 11m01s | ✓ |
+| windows（release 构建 + ctest 全量） | 15 min | 699s = 11m39s | ✓（#57 慢 runner 同段 872s ⇒ 慢端推算 ≈16-17min，仍在硬顶内） |
+| windows-dev（release-dev 子集 + ui_smoke + 金样） | 7 min | 374s = 6m14s | ✓ |
+| appimage | 12 min | 279s = 4m39s | ✓ |
+| winzip（打包段：双 artifact + 五门禁 + E-2） | 15 min | **97s = 1m37s**（make_winzip 步 48s） | ✓（原「构建+打包」20min 撞顶 → 打包段 1.6min） |
+| audit | 3 min | 75s = 1m15s | ✓ |
+| cache-gc / gate | 1 / 1 min | 5s / 8s | ✓ |
+| **整轮 wall** | 20 min 硬顶 | **19m03s**（05:10:10→05:29:13） | ✓（本轮关键路径 = tidy 18m34s；windows+winzip 链 = 796s = 13m16s） |
+
+**本地五门禁等效读数（2026-10-13，build/m7r23-g7/local-winzip.log，`make_winzip.py` 零改动）**：
+`python tools/env.py run -- python tools/make_winzip.py --smoke-exe build/release-dev/photopipeline.exe`
+→ rc=0：闭包门禁 A 68 PE/105 导入名（staging 51·apiset 17·system 37）、来源门禁 B 5 个 Qt6*.dll
+sha256 逐一一致、结构断言 C 齐备（imageformats=4/tls=2）、许可断言 D 35 copyright（≥30）、
+烟测 E-1 `PhotoPipeline 0.3.3`、烟测 E-2 `UI-SMOKE OK shots=12 pages=3`、产物内复核 35 copyright
++ 解压即用 --version；zip 34,801,005 B / 105 条目。
+
+**如实说明**：① release 侧三段（winzip-build / winzip-build-dev / winzip-pack）只有预算值，
+**无 tag 轮实测**（不编数——发行轮首跑后按 §4 命令补读数）；② 一轮修复（83a9cb5）在 main-full #57
+失败：windows job 撞 20min 硬顶（归因见 §7.1 行 2），二轮拆段（fa871c8）后 #58 全绿；③ 整轮 wall
+的余量是 runner 波动的函数（#58 windows 699s vs #57 同段 872s），慢 runner 轮次 wall 可能再逼近
+或越过 20min 口径——per-job 硬顶在两种波动下均守住。
 
 ---
 

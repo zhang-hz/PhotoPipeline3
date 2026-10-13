@@ -357,9 +357,46 @@
 |---|---|---|---|
 | M7-ADJ-tag-move-2（F7 消耗尝试） | **二次移动仍未执行，授权保持未消耗**：F7 按流程 1–4 走完预检（`/releases/tags/v0.3.3` 404、releases 列表无 v0.3.3、`ls-remote` 核对 v0.3.3 → `cb181ee`/`^{}`=`b1af371`）、push main（`0555947..e1017fe`，HEAD `e1017fe6`）、本机复核（ci-format `violations=0` 187 文件 + `make_winzip --smoke-exe` 五门禁 rc=0 含 E-2 冻结行逐字）；**但流程 3 前提「linux job 必须绿」未满足**：main-full **#48（run 38308098290）completed/failure**——唯一失败 = linux（全 ctest+金样）**step 15 release-dev ctest 的 `ui_smoke` 一条**（F1 遥测注解逐字 `CTEST-FAIL-SUMMARY 1 tests: ui_smoke`；step 13 release ctest 全过）。二分归因：#47 @ `0555947` 同 job **success** ⇒ 失败由 `0555947..e1017fe`（R2.1 F2–F4）引入（`tests/ui_smoke.py` 与 `.github/` 零改动，变化全在 `src/ui/` 探针/几何面）。修复须改 `src/ui/`/`tests/` = 独占文件面外（任务书「不改 src/ 与 tools/」+ 纪律 3）⇒ 按纪律 9 **停止上报**：tag 保持 `b1af371`（收口 `ls-remote` 复核未动）、release.yml 未触发（最新仍 #13 cancelled）、GitHub Release 未创建（收口复检 404）。**授权未消耗**：待 ui_smoke 修复、main-full 全绿后由后续发行包按同一条件执行（预检零 Release 零资产 / 原子 + `ls-remote` 核对 / 此后不得再动） | ① 判据不可绕过（纪律 9）：「linux job 必须绿」是 tag 移动的明文前提，红灯期移动 = 把一次性授权烧在坏树上（此后不得再动 = 无第三次机会）；② 修复跨界不可「顺手改」（纪律 3）；③ 停在零资产状态无新增不可逆性（tag 仍可按 M7-ADJ-tag-move-2 条件移动，`b1af371..e1017fe` 全在历史）；④ 未采用空提交复跑辨瞬态——取证更支持确定性回归（#47 绿/#48 红与 src/ui 大改同步）且空提交污染历史，留主对话裁决 | R2.1-F7 |
 
-## 十四、R2.2 轮裁定登记（M7-R2.2，2026-10-13；G3 判据小项与文档补录）
+## 十四、R2.2 轮裁定登记（M7-R2.2，2026-10-13；G1/G2/G3 三包 + G4 文档终稿）
 
-> 任务书出处 = 会话内分派书（G3 包）；原始登记 = `build/m7r22-g3/handoff.md`「裁定登记」节。
+> 任务书出处 = 会话内分派书（G1/G2/G3 包）；原始登记 = `build/m7r22-g{1,2,3}/handoff.md`
+> 「裁定登记」节（逐字汇入，本表为唯一对账面）；验证读数摘录见
+> [docs/m7-evidence/m7r22-g*-gates.md](m7-evidence/)。G4（文档终稿）零行为改动、零冻结面
+> 扩展，无新裁定。**R2.2 终态四档计数不变**（326/15/3/1，主标签零改判；R2.2 消的是「已修」
+> 行内的余量注记，见 m7-report 附录 A 表头注）。
+
+### 14.1 G1（探针总集与 Linux ui_smoke 定点修复；5 提交 `bbe5101`/`fd5b838`/`07cc8c5`/`297d22b`/`4addc51`）
+
+| # | 类型 | 内容 | 理由 / 依据 |
+|---|---|---|---|
+| M7R22G1-1 | 判据可见性（**永久保留**） | 失败遥测三版：提取式补 4 种失败行形态（单测正序 `FAIL <case>: <detail>` / C++ 断言 `UI-SMOKE FAIL <reason>` / 计数 `UI-SMOKE FAILED <n>` / 反序驱动 `ui_smoke: FAIL (…)`）+ ui_smoke 段**尾探针行**锚（崩溃/超时定位）；覆盖 release + release-dev 两棵树（stdout/LastTestsFailed/LastTest）+ ui-smoke-raw.log，遥测步后置到全部测试步之后（`if: failure()`）；`CTEST-FAIL-SUMMARY` 首条注解带探针名/断言行（断言+驱动+尾探针三锚），Step Summary 全量明细照旧 | main-full #48 实证「反序不匹配 ⇒ 无 FAIL 断言行兜底不表征失败形态」（[m7-evidence/m7r21-release.md](m7-evidence/m7r21-release.md) §3.3）；判据可见性 = M7R21F1-1 永久保留的延续 |
+| M7R22G1-2 | **判据加固（AA 容差机制）** | settings-tabs-light 像素档 R-044 容差落地：判据①原众数 ±6 保留（充分条件）+ ②字形内核（非背景像素最深 15% 逐通道中位数）沿 bg→want 覆盖度 t≥0.5 + 逐通道残差 ≤12 + ③内核须更接近 want 而非互斥对照令牌（text↔text2）；自检行加 mode/est/t/resid 取证 | R-044「字体敏感断言给容差」的落地；Linux 灰阶 AA 实测（run 38314701500 注解：选中 #1e2028/#1b1c20、未选中 #222638/#5d5f68）为同色 AA 漂移非语义差异；断言只增不减、语义仍钉 |
+| M7R22G1-3 | 探针扩充（常驻） | rtl-mirror 扩充四查常驻化（stars/hud/logical-align/geom-mirror；±2px 镜像容差；HUD 不钉绝对宽只钉关系式+左缘锚） | F2⑤-1 规格；F2 实测注记「盒宽受缺失字体回退放大」⇒ 绝对宽不可钉 |
+| M7R22G1-4 | 探针定论 | rtl-deep：QLabel/ElidedLabel（继承 QLabel paintEvent）内部 QStyle::visualAlignment 自动随向镜像，无需显式 visualAlignment；±2px 容差 | e2⑤-6 的「未实测」问题定论；关系断言抗字体回退 |
+| M7R22G1-5 | 探针（判据取舍） | format-roundtrip 按 e2⑤-5 规格判「四面一致 + toggle-on 现役=新开项（R-189）」；关现役落点**取证不判据** | 见 M7R22G1-6 的分歧发现 |
+| M7R22G1-6 | **跨界发现（不判据，交 page_output 属主）** | 关现役后的现役落点 UI 实际 = 页签滑动邻接位（remove_tab → currentChanged 末写者覆盖），与 `format_selection_model.h` 的 R-266 契约「现役前移首位」分歧。751f479 旧序 = remove_tab **后**显式 front 赋值（末写者=front）；R-189（F3）重排 toggle_format 顺序（sel.toggle 先行）后信号胜 ⇒ 疑似 R-189 引入的语义漂移。读数：off-active=webp front=jpeg（实测）。建议修法 = remove_tab 后重申 front 或信号屏蔽 | 模型真值表（tests/unit/test_smoke.cpp）钉 front-move；UI 组合层分歧不在本包文件面 |
+| M7R22G1-7 | 探针 | color-options 档位断言 = 4/3 档 + 默认值=现行为 + config_base 往返（M7R21F4-4 口径） | F4⑤-7 规格 |
+| M7R22G1-8 | 探针补强（断言只增） | context-menu/check-all 补强 = 分隔线全序 + 收菜单无残留 + 快捷键动作执行语义 | F4⑥-1 的「已落地」项做深度补强 |
+| M7R22G1-9 | 探针加深 | R-152/153 回归深度 = 全可见行映射 + 二轮重建保留 | e2⑤-2 规格的机械化加深 |
+| M7R22G1-10 | 探针（真实编排） | 0 字节补齐双跑按 R-006/M7-R2D1 语义真实编排（pp-run-again 用户路径；损坏样本自建自清） | F4⑤-1/D1⑤-3 规格；不改任何既有断言 |
+| M7R22G1-11 | 探针 | R-144 失败清单并入双跑（真实失败样本 → `路径\t原因` 行式落盘 + 状态栏 tooltip 出处/手型 + 点击下钻断言） | F4⑤-2 规格；行式契约 = `mainwindow_impl.h` 失败清单行格式 |
+
+### 14.2 G2（结构余量与语义裁定落地；15 提交 `12234f1`/`0208651`/`8c90c54`/`9f01cb1`/`6d5d07e`/`fa60b38`/`77e3c90`/`d677c52`/`05181ac`/`847a83d`/`4c81bd0`/`0552023`/`ec1e3ba`/`7541683`/`4dee5c8`）
+
+| # | 类型 | 内容 | 理由 / 依据 |
+|---|---|---|---|
+| M7R22G2-0 | **行为变化（主对话裁定）** | R-197 时间「清除」= **连带 touched 全部 9 键**（OffsetTime* 3 + Xmp MetadataDate 一并 remove），与〔批〕命中面 / shift 触达面同集，消「清除 3 键 vs 命中 9 键」漂移；原「清除只动 wall_clock 5 键」口径**换锚** | 主对话裁定 M7R22G2-0 明文；语义安全核 = `apply_edits` 对缺席键 remove 为 no-op（`core/metadata.cpp:1299-1301` 实读），无新错误面 |
+| M7R22G2-0-1 | 跨面触碰（`time_tag_keys.h`） | 契约块改写 + 加性谓词 `is_time_clear_key`（= touched 全集） | R-197 语义的单源面；该文件即 R-197 载体（F3 产出），换锚的必然产物 |
+| M7R22G2-0-2 | 跨面触碰（`test_smoke.cpp` 第 8 节） | 断言换锚 3 条 + 新增 2 条（断言只增不减、严格度不降）：「清除不含 OffsetTime*/MetadataDate」「清除谓词只认墙钟 5 键」→「清除含 OffsetTime*/MetadataDate」「清除谓词 = touched 全集」+ 9 键全清覆盖 / 非时间键不入清集 | 行为裁定的测试锚必须随动（原 3 条钉旧语义 = 会撒谎）；任务条目明文「测试断言换锚登记」 |
+| M7R22G2-1 | 跨面触碰（`formkit.cpp`，成对自绘） | Combo 箭头位 / paint_spin_arrows 箭头列按 `widget->layoutDirection()` 贴 trailing（LTR 逐位不变） | 只翻 QSS 不翻自绘会让 RTL 值区与箭头错位；theme.h 非对称几何改 logical 的必要对应面 |
+| M7R22G2-2 | 跨面触碰（`meta_format.cpp`） | `PP_META_FORMAT_TEST_NO_WIDGETS` 编译开关 + `tr_page` 改名（查表键逐字相同） | test_icons `PP_ICONS_TEST_NO_WIDGETS` 同款先例；test_meta_format 15 纯函数单测的唯一可行接线（单测 target 只链 pp_core） |
+| M7R22G2-3 | 跨面触碰（`meta_card_info.cpp`） | 3 条 static_assert 对拍 + 循环界 `std::size`（值不变） | F2 残余 ⑥-3 本体：对拍必须在表侧才咬合；测试侧复述双端钉 |
+| M7R22G2-4 | 跨面触碰（`test_gcj02.cpp`） | 新断言 29 条（tile_cache LRU/预算 8 + 交互状态机 21） | 任务验证明文「test_gcj02 新断言」；B.5②⑥ 纯核的判据面 |
+| M7R22G2-5 | 加性（PP-FROZEN `settings_dialog.h`） | private 对象图成员 15 件 + `new_cell/…`（公开 API 逐字不变） | 同 M7R21F3-3 先例（加性追认）；R-201 后半 findChild 字符串退役的载体 |
+| M7R22G2-6 | 行为零变化锚定 | R-256 行序不变稳态逐事件同值；R-201 null 守卫同义；R-183 稳态值表逐值同旧（ui_smoke classify 六探针逐值）；B.5 全五步绘制/交互/网络逐位 | 各条验证段（G2 handoff ④） |
+| M7R22G2-7 | 查表键不变声明 | R-254(1/2) T() 统一：成员函数 tr() 与 T() 同上下文逐字键不变；辅助类裸 tr() 归一上下文（仓库零 .ts/.qm，运行期无差） | 若未来接入 .ts，辅助类键需按 "MainWindow" 上下文重新导出（登记） |
+
+### 14.3 G3（判据小项与文档补录；3 提交 `3c35c00`/`39942bf`/`55b13a1`）
 
 | # | 裁定 | 理由 | 实施归属 |
 |---|---|---|---|

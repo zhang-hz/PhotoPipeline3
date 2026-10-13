@@ -46,6 +46,17 @@ UX-11 page_meta 侧、UX-12 像素档探针、UX-14 C1–C4 界面入口；R2.1 
 （逐条交付与读数见 `docs/m7-report.md` §7 与 `docs/m7-evidence/m7r21-f*`），本文件 §1 分桶表
 的 R2 期判读保留为历史快照，**终态以 m7-report 附录 A/B（R2.1 终态四档）为准**。
 
+**R2.2 追记（2026-10-13）**：R2.2 轮（M7-R2.2-G1…G4，任务书 = 会话内分派书）再收两组遗留——
+① 结构余量五项（R2.1 §7.5 残余③）：B.5 mapwidget 步②–⑥（tile_cache/map_interact/
+map_renderer/tile_fetcher/geocode_client）、R-254 的 T()/tr() 统一 + Impl 五舱分域、R-256 后半
+ev.index 显式校验、R-201 后半对象图成员化、R-183 后半行部件复用级解耦（G2，15 提交）；
+② 探针总集 8/9 条（R2.1 残余④）+ 失败遥测三版 + settings-tabs-light R-044 AA 容差机制
+（G1，5 提交；ProbeContext 全面接入因 11 键词表缺口未落）。另：R-197 行为裁定落地
+（M7R22G2-0：时间清除 = 连带 touched 全部 9 键，原 wall_clock 5 键口径换锚）、SCHEMA `state`
+值表加性补 `done_with_errors`（M7R22G3-1）、校读意见原文补录（m7r2-reader-notes）。
+逐条交付与读数见 `docs/m7-report.md` §8 与 `docs/m7-evidence/m7r22-g*`；**终态以 m7-report
+附录 A/B（R2.2 终态四档）为准**。
+
 ---
 
 ## 2. 14 项技术设计定稿（色彩能力与解码语义面；R2A = `c540630` 实施）
@@ -131,5 +142,6 @@ UX-11 page_meta 侧、UX-12 像素档探针、UX-14 C1–C4 界面入口；R2.1 
 
 ---
 
-*本文件随 R2 轮交付维护；修订请在提交正文说明。R2 逐条交付与验证证据：`docs/m7-report.md`
-「R2 轮交付」章节 + `docs/m7-evidence/`。*
+*本文件随 R2 轮交付维护（R2.1/R2.2 追记载 §1）；修订请在提交正文说明。R2/R2.1/R2.2 逐条
+交付与验证证据：`docs/m7-report.md`「R2 轮交付」「R2.1 轮交付」「R2.2 轮交付」章节 +
+`docs/m7-evidence/`。*

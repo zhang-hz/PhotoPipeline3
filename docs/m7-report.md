@@ -1,21 +1,24 @@
 # M7 收口报告 —— 工程收口轮（深度评审 331 条 + UI 14 项整改）
 
-日期：2026-10-12（R2.1 增章 2026-10-13）｜ 版本口径：`CMakeLists.txt:19` = **0.3.3**（`572a86e` M7-REL-0.3.3-prep 起）
+日期：2026-10-12（R2.1 增章 2026-10-13；R2.2 增章 2026-10-13）｜ 版本口径：`CMakeLists.txt:19` = **0.3.3**（`572a86e` M7-REL-0.3.3-prep 起）
 范围：`docs/deep-review-0.3.2.md`（R-001～R-331）与 `docs/ux-review-14.md`（UX-1～UX-14）的批量整改、
 结构重构与文档收口（M7-WP1…WP13）+ **R2 轮尾单与能力补强**（M7-R2A…R2F，方案真源 =
-[docs/m7r2-plan.md](m7r2-plan.md)）+ **R2.1 轮收口与结构余量**（M7-R2.1-F1…F4，见 §7）。
-**覆盖台账见附录 A/B（331+14 逐条 R2.1 终态，无一遗漏）**；裁定汇总见
+[docs/m7r2-plan.md](m7r2-plan.md)）+ **R2.1 轮收口与结构余量**（M7-R2.1-F1…F4，见 §7）+
+**R2.2 轮探针总集与结构余量**（M7-R2.2-G1…G4，见 §8）。
+**覆盖台账见附录 A/B（331+14 逐条 R2.2 终态四档，无一遗漏）**；裁定汇总见
 [docs/m7-adjudications.md](m7-adjudications.md)；逐条用户可见变更见 [CHANGELOG.md](../CHANGELOG.md) `[0.3.3]`；
-R2/R2.1 各包交付与门禁读数见「R2 轮交付」（§6）、「R2.1 轮交付」（§7）与 [docs/m7-evidence/](m7-evidence/)。
+R2/R2.1/R2.2 各包交付与门禁读数见「R2 轮交付」（§6）、「R2.1 轮交付」（§7）、「R2.2 轮交付」（§8）
+与 [docs/m7-evidence/](m7-evidence/)。
 
 工作包与提交索引（提交号以 `git log` 实测为准，2026-10-13 复核：**R1 窗口 19 提交全覆盖**
 （WP1–WP13/REL 去重）、**R2 轮 11 提交**（R2A `c540630`/R2B `5d19146`/R2C `210fce5`/R2-gate
 `09b5340`/R2D1 `6e001da`/R2D2 `27c9f40`/R2E2 `52b9870`/R2F `8a541de`/R2F2 `2c50bfc`/R2G `6a6e043`/R2REL `01cbd74`）、
-**R2.1 轮 33 提交**（F1×4/F2×12/F3×10/F4×7，见表末各行与 §7）。
+**R2.1 轮 33 提交**（F1×4/F2×12/F3×10/F4×7，见表末各行与 §7）、**R2.2 轮 24 提交**
+（G1×5/G2×15/G3×3/G4×1，见表末各行与 §8）。
 **包名 ↔ git SCOPE 命名对照**（勿混读）：R2F = `M7-R2-F:`（`8a541de`）、R2F2 = `M7-R2-F2:`
 （`2c50bfc`，独立校读第二轮）、R2G = `M7-R2-GATE:`（`6a6e043`）、R2-gate = `M7-R2-gate`
 （`09b5340`，重播种包，**与 R2G 是两个包**）、R2REL = `M7-R2REL:`（`01cbd74`）、R2.1 各包 =
-`M7-R2.1-F1…F4:`。**条目数不在此表计**——各包条目数随计数口径（唯一主责 / 表内出现次数 /
+`M7-R2.1-F1…F4:`、R2.2 各包 = `M7-R2.2-G1…G4:`。**条目数不在此表计**——各包条目数随计数口径（唯一主责 / 表内出现次数 /
 任务包分派数）而异，逐条归属以附录 A 提交列为准。**行序 = 包编号序，非 git 时间序**：WP3 `18fb355` 实为 M7 首提交
 （早于 WP1/WP2），WP9 `594d93f` 早于 WP8 `40f3405` 一分钟，WP6-fix `e8b9bf1` 在 WP7 之后；
 git 时间序对照见 R2C 对照表 `build/m7r2-c/handoff.md` 附录）：
@@ -53,6 +56,10 @@ git 时间序对照见 R2C 对照表 `build/m7r2-c/handoff.md` 附录）：
 | R2.1-F3 R2E2 结构余量 | 10 提交 `6250b3b`…`0ca8c62` | R-254/256/259/185/187/188/196–201/205/255 + B.3 format_selection_model（R-189/192）+ filelistmodel/settings TU 拆分（§7.3） |
 | R2.1-F4 跨面包收口 | 7 提交 `dcedf4c`…`81d0b34` | NOLINT 处置翻案（M7R21F4-0）+ 跨界小项 14 条 + 色彩四选项 GUI 接线 + 第 4 波探针批 + 评审本体入库（§7.4） |
 | R2.1-F7 发行第二班 | 本提交（报告类） | 发布 0.3.3 重走：预检/推送（`0555947..e1017fe`）/本机复核全绿 → main-full **#48 红（linux `ui_smoke` 一条，F2–F4 引入）** ⇒ 按纪律停在 tag 移动前，`M7-ADJ-tag-move-2` 授权未消耗（§3.10） |
+| R2.2-G1 探针总集与 Linux ui_smoke 定点修复 | 5 提交 `bbe5101`/`fd5b838`/`07cc8c5`/`297d22b`/`4addc51` | 失败遥测三版（M7R22G1-1）+ settings-tabs-light R-044 AA 容差机制（M7R22G1-2）+ 积压探针 8/9 条落地（format-roundtrip/rtl-deep/rtl-mirror 四查/color-options/R-152·153 深度/context-menu·check-all/0 字节双跑/R-144 失败清单，§8.1） |
+| R2.2-G2 结构余量与语义裁定落地 | 15 提交 `12234f1`…`4dee5c8` | R-197 行为裁定落地（清除连带 touched 9 键，M7R22G2-0）+ B.5 mapwidget 拆分步②–⑥（tile_cache/map_interact/map_renderer/tile_fetcher/geocode_client）+ R-254/256/201/183 各余量 + kFieldProperty/theme.h logical/test_meta_format（§8.2） |
+| R2.2-G3 判据小项与文档补录 | 3 提交 `3c35c00`/`39942bf`/`55b13a1` | SCHEMA `state` 值表加性补 `done_with_errors`（M7R22G3-1）+ 校读意见原文补录 m7r2-reader-notes + R-269/242/268/260 小项复核与注释收口 + R-317/318 核查（§8.3） |
+| R2.2-G4 文档终稿 | 本提交（报告类） | R2.2 交付增章（§8）+ 台账终态四档 + 裁定汇入十四节 + CHANGELOG/README 口径 + 发行状态「待发布」（§8.4） |
 
 **编号命名空间（多套并存，勿混读）**：① `R-nnn` = deep-review 条目（`docs/deep-review-0.3.2.md`）；
 ② `UX-n` = ux-review 条目（`docs/ux-review-14.md`），其内部另有**色彩分级子项 A1–D3**（§14，
@@ -64,7 +71,9 @@ B.3 page_output / B.4 run_one_file / B.5 mapwidget / B.6 main.cpp / B.7 enc_comm
 （如 X5 = `theme.h` 公共 warn 钩子 `kFkWarn`，R2D2 `27c9f40`）与 `WPn 跨界需求 k` = 各 WP
 handoff ③「跨界需求」节条序——**定义真源 = [docs/m7r2-plan.md](m7r2-plan.md) 附 A** 末两行
 （X 系与 WPn 跨界对照表，含实施归属）。`WPn` 本身 = R1 轮工作包编号（WP1…WP13），
-`R2An`/`R2.1-Fn` = R2/R2.1 轮任务包编号（本报告索引表）。「任务书 / WP 分派清单」引述出处 =
+`R2An`/`R2.1-Fn`/`R2.2-Gn` = R2/R2.1/R2.2 轮任务包编号（本报告索引表）。R2.2 轮裁定编号 =
+`M7R22G1-1…-11`/`M7R22G2-0…-7`（含 -0-1/-0-2）/`M7R22G3-1`（adjudications 十四节）。
+「任务书 / WP 分派清单」引述出处 =
 [docs/m7r2-plan.md](m7r2-plan.md)（R2 轮方案真源；附 A「任务书引述出处对照」留存 M7-WP 系
 分派书摘录，换机可独立复核——原始分派书未入 docs/；R2.1 各包任务书 = 会话内分派书，
 逐条内容见 §7 与 `build/m7r21-fN/handoff.md`）。
@@ -474,8 +483,10 @@ R-171/R-002（write-warnings、meta-write-fail）、R-097（png_ok 硬断言）�
 
 - 大单元拆分余量：page_meta（B.1）**已由 R2.1-F2 消**（`38af841` 等十步）；page_output（B.3）
   **大部已消**（format_selection_model + output_page_build/output_template_ui，`edfc6e4`）；
-  mapwidget（B.5）**步①已落**（`d6360f6`，步②–⑥登记）；settings ctor 563 行 **已拆**
-  （`334c8c1`）；filelistmodel 6 类 **已拆 TU**（`355e1f2`）；enc_heif 四职责维持登记。
+  mapwidget（B.5）**六步全落**（步① `d6360f6` + 步②–⑥ **R2.2-G2** `77e3c90`/`d677c52`/
+  `05181ac`/`847a83d`/`4c81bd0`，mapwidget.cpp 1444→760 行）；settings ctor 563 行 **已拆**
+  （`334c8c1`）；filelistmodel 6 类 **已拆 TU**（`355e1f2`）；enc_heif 四职责维持登记；
+  B.2 page_run 拆分、B.3 尾维持登记。
 - UI 建造器余量：page_meta/mainwindow 卡壳-卡头-卡体未换 formkit 单源（R-021/022/053/117/119
   余量）——**R2D2 已收 page_output（make_button 委托）与 page_run（三件套删除、直构
   formkit::make_card）**；exif_editor 行高 28 节奏（UX-6③）**已由 R2D2 完成**。
@@ -496,6 +507,9 @@ R-171/R-002（write-warnings、meta-write-fail）、R-097（png_ok 硬断言）�
   （`src/platform/mica.h:11`、`src/core/settings.h:38`、`src/core/simd/simd.h:17` 三处未标，
   `src/mapwidget/providers.cpp` 已随 WP7 收口）。
 - R-317 预估卡两项恒「—」：维持「未发生的量不显示」（M5-A24 口径），非缺陷。
+  （**R2.2 追记**：G3 核查与色彩四选项文案一致性无冲突，维持登记；R-318 另有 2 个未覆盖面
+  登记——presets_dialog 三按钮禁用原因 tooltip、paramform 技术条目条目级 tooltip，见附录 A
+  R-318 行。）
 
 ### 4.3 未跑 / 无法跑
 
@@ -813,16 +827,168 @@ a「形参组结构化」为主 + b「授权重播种 + 归因」兜底），仓
   对象图成员化、R-183 后半行部件复用级解耦、UX-8 组折叠头整行可点（§4.2 / 附录 A 格内注记）；
   ④ 探针需求未落项——0 字节双跑、R-144 失败清单、format_selection_model 往返、RTL 深水区、
   ProbeContext 全面接入、色彩四选项档位探针等（F4 handoff ⑤，9 条）。
+  **（R2.2 追记：③ 除 UX-8 外五项、④ 除 ProbeContext 全面接入外 8 条已由 R2.2-G1/G2 消，
+  处置与残余见 §8；UX-8 与 ProbeContext 两项维持未落。）**
 - **发行状态不变**：0.3.3 仍未发行（tag `v0.3.3` 停在 `b1af371` 零 Release 零资产）；
   M7-ADJ-tag-move-2 授权在案未消耗（§3.9）。
 
 ---
 
+## 8. R2.2 轮交付（M7-R2.2-G1…G4，2026-10-13）
+
+> R2.2 轮 = R2.1 发行第二班停止后的收口窗：G1 探针总集与 Linux ui_smoke 定点修复（失败遥测
+> 三版 + R-044 AA 容差机制 + 积压探针 8/9 条）、G2 结构余量与语义裁定落地（R-197 行为裁定 +
+> B.5 mapwidget 步②–⑥ + R-254/256/201/183 各余量）、G3 判据小项与文档补录（SCHEMA 加性 +
+> 校读原文补录 + 小项复核）、G4 文档终稿（本章）。逐条终态已并入附录 A/B（**R2.2 终态四档**，
+> 主标签计数不变、余量注记收口）；裁定见 adjudications 十四节（M7R22G1-1…-11 / M7R22G2-0…-7 /
+> M7R22G3-1）；验证证据摘录见 [docs/m7-evidence/](m7-evidence/) 的 `m7r22-g{1,2,3,4}-gates.md`。
+> **本章只给各包交付清单与验证证据，逐条 R-id 去向以附录 A/B 为准。**
+
+### 8.1 G1「探针总集与 Linux ui_smoke 定点修复」（5 提交：`bbe5101`/`fd5b838`/`07cc8c5`/`297d22b`/`4addc51`）
+
+- **失败遥测三版（M7R22G1-1，`bbe5101`，永久保留）**：提取式补 4 种失败行形态（单测正序
+  `FAIL <case>: <detail>` / C++ 断言 `UI-SMOKE FAIL <reason>` / 计数 `UI-SMOKE FAILED <n>` /
+  反序驱动 `ui_smoke: FAIL (…)`）+ ui_smoke 段**尾探针行**锚（崩溃/超时定位）；覆盖 release +
+  release-dev 两棵树 + ui-smoke-raw.log，遥测步后置（`if: failure()`）；`CTEST-FAIL-SUMMARY`
+  首条注解带探针名/断言行（断言+驱动+尾探针三锚）。#48 实证的「反序不匹配 ⇒ 无 FAIL 断言行
+  兜底不表征失败形态」缺口就此闭环。
+- **settings-tabs-light R-044 AA 容差机制（M7R22G1-2，`fd5b838`）**：判据①原众数 ±6 保留
+  （充分条件）+ ②字形内核（非背景像素最深 15% 逐通道中位数）沿 bg→want 覆盖度 t≥0.5 +
+  逐通道残差 ≤12 + ③内核须更接近 want 而非互斥对照令牌（text↔text2）；自检行加
+  mode/est/t/resid 取证。R-044「字体敏感断言给容差」的判据落地，断言只增不减、语义仍钉。
+- **探针批 1（`07cc8c5`）**：format-roundtrip（R-189/192 四面一致往返，M7R22G1-5）+
+  rtl-deep（QLabel/ElidedLabel 随向镜像定论 ±2px，M7R22G1-4）+ rtl-mirror 扩充四查
+  （stars/hud/logical-align/geom-mirror 常驻化，M7R22G1-3）+ `tests/ui_smoke.py`
+  `G1_LINE_PREFIXES` 齐备性收编 11 行。
+- **探针批 2（`297d22b`）**：color-options（UX-14 C1–C4 档位数/默认值=现行为/config_base
+  读回/归位，M7R22G1-7）+ R-152/153 回归深度（全可见行映射 + 二轮重建，M7R22G1-9）+
+  context-menu 分隔线全序/收菜单 + check-all 动作执行语义（M7R22G1-8）。
+- **探针批 3（`4addc51`）**：0 字节补齐双跑（R-006/M7-R2D1 语义真实编排：run-again 预检只
+  提交缺件 + 跑前移除 0 字节产物 + 本轮 Skip + 非空成品/源面逐位不动，M7R22G1-10）+
+  R-144 失败清单（真实损坏样本失败运行 → `路径\t原因` 行式落盘 + 状态栏 tooltip 出处/手型 +
+  点击下钻运行页，M7R22G1-11）。
+- **跨界发现（不判据，M7R22G1-6）**：关现役后的现役落点 UI = 页签滑动邻接位（remove_tab →
+  currentChanged 末写者覆盖），与 format_selection_model 的 R-266 契约「现役前移首位」分歧，
+  疑似 R-189 引入语义漂移（读数 off-active=webp front=jpeg）——修法归属 page_output 属主，
+  见 §8.4 残余②。
+- **验证**（Windows 侧实跑，摘录 [m7r22-g1-gates.md](m7-evidence/m7r22-g1-gates.md)）：
+  ui_smoke 冻结行 `UI-SMOKE OK shots=12 pages=3` + 新探针行全绿（终态 uis10：rtl-mirror 18/0 /
+  format-roundtrip 15/0 / rtl-deep 4/0 / color-options 6/0 / check-all 13/0 / context-menu 60/0 /
+  zero-byte-redo 7/0 / failure-list 7/0）；金样 `SMOKE total=20 pass=20 fail=0`；ctest 36/36；
+  遥测提取器自测 4 路假数据全过（首条注解带探针名/断言源行）；main-full run 38314701500 @
+  `bbe5101` 注解逐字点名 `UI-SMOKE FAIL settings-tabs-light…` 断言行（遥测三版达成设计目的）。
+  **Linux 侧容差修复/新探针读数未取得**（见 §8.4 残余①）。
+
+### 8.2 G2「结构余量与语义裁定落地」（15 提交：`12234f1`/`0208651`/`8c90c54`/`9f01cb1`/`6d5d07e`/`fa60b38`/`77e3c90`/`d677c52`/`05181ac`/`847a83d`/`4c81bd0`/`0552023`/`ec1e3ba`/`7541683`/`4dee5c8`）
+
+- **R-197 行为裁定落地（M7R22G2-0，`12234f1`）**：时间「清除」= **连带 touched 全部 9 键**
+  （OffsetTime* 3 + Xmp MetadataDate 一并 remove），与〔批〕命中面/shift 触达面同集，消
+  「清除 3 键 vs 命中 9 键」漂移；原「清除只动 wall_clock 5 键」口径换锚。落点 = exif_editor
+  build_override 的 Clear 循环经新谓词 `timetags::is_time_clear_key`（time_tag_keys.h 加性）；
+  test_smoke 第 8 节换锚 3 条 + 新增 2 条（断言只增不减）。回归归因：GUI 例外编辑面不经
+  `--dev` 回归路径，实测 zero diff 印证、无需重播种。
+- **B.5 mapwidget 拆分步②–⑥**（deep-review 附录 B.5 蓝图余量，行为零变化）：② tile_cache
+  （`77e3c90`，LRU/预算纯核模板化，mapwidget 原六件退役）→ ⑥ map_interact（`d677c52`，
+  pointer_step/pan/wheel_zoom/hit_test_pins 三态机纯函数化）→ ④ map_renderer（`05181ac`，
+  整帧纯绘制 + HUD 单点镜像）→ ③ tile_fetcher（`847a83d`，pending/并发≤4/超时/离线门闸/
+  失败重抓）→ ⑤ geocode_client（`4c81bd0`，一条 handler 骨架 + search/suggest/reverse 三配置，
+  R-158 三份拷贝收口）。**收口读数**：mapwidget.cpp 1444 → **760 行**（G4 `wc -l` 复核 760；
+  handoff 记 759）；MapWidget::Impl 165 行；CMakeLists 零改动。
+- **R-256 后半（`6d5d07e`）**：ev.index→行号「行序不变」脆弱契约改显式校验 + 路径稳定键兜底
+  （提交时按序号快照 `run_row_paths`，漂移时按路径重定位；稳态逐事件结果与原实现逐位相同）。
+- **R-201 后半（`fa60b38`）**：settings()/恢复默认/主题重放对象图成员化（settings_dialog.h
+  加性 15 成员，findChild 字符串退役 32 处，null 守卫语义保留；settings_geom_probe 黑盒
+  findChild 按设计保留）。
+- **R-254 余量（`0552023` + `ec1e3ba`）**：mainwindow 家族 114 站点 T()/tr() 混用统一（查表
+  键逐字不变）+ Impl ~120 成员五舱分域（mw_cabin::Chrome/FilePanel/RunState/Session/Smoke
+  聚合基类，访问面零改动、消费方含 smoke_probes 零 diff）。
+- **R-183 后半（`7541683`）**：classify_panel 行部件复用级解耦（rebuild_rows 规格表 + 就地
+  改配，稳态零换件；「＋ 新建分类…」格同口径；富余行才走 hide/deleteLater）。
+- **词表与几何收口**：page_output/page_run kFieldProperty 16 处字面量收敛 `theme::kFk*` 七档
+  （`0208651`，值逐字不变；任务书「9 处」系 F2 拆分前计数）；theme.h 共享 QSS 非对称几何改
+  logical 侧词 + formkit 成对自绘（`8c90c54`，RTL 感知、LTR 逐字节不变，M7R22G2-1）。
+- **test_meta_format（`9f01cb1`）**：meta_format 15 纯函数真值表（F2 探针需求 ④-3）+
+  info_value 槽表↔kInfoSlotCount 对拍（产品侧 static_assert×3 + 测试侧复述，F2 残余 ⑥-3）。
+- **R-204/R-099 闭环核验（零改动）**：camera_model 加性访问器已在 `93001a9` 落地、group_scan
+  无 exiv2.hpp include；exif_editor 已走 `pp::map::deg_to_dms`（`27c9f40`），dms_component
+  不存在——两条无余项。
+- **验证**（摘录 [m7r22-g2-gates.md](m7-evidence/m7r22-g2-gates.md)）：ctest **36/36**（35 既有 +
+  test_meta_format）+ ui_smoke 冻结行（classify 六探针逐值绿）+ 金样 **20/20** + 回归
+  **zero diff**（2448 行，未重播种）+ `ci-format` 全源 0 diff + test_gcj02 新断言 29 /
+  test_meta_format 38 全绿。
+
+### 8.3 G3「判据小项与文档补录」（3 提交：`3c35c00`/`39942bf`/`55b13a1`）
+
+- **SCHEMA `state` 值表加性补 `done_with_errors`（M7R22G3-1，`3c35c00`）**：`tests/golden/
+  SCHEMA.md` 既有值表行逐字不动 + 其后新增一行（`FileState::DoneWithErrors` 小写名；多输出
+  部分成功终态）；机械自检 = `git diff --numstat` 1/0 + `fc /b` 逐字节比对
+  `STATE_ROW_BYTE_IDENTICAL`。断言零放松、金样/夹具零改动。
+- **校读意见原文补录（`39942bf`）**：新建 [m7r2-reader-notes.md](m7-evidence/m7r2-reader-notes.md)
+  ——第二轮 19 行意见逐号原文（三列逐字抄录自 `build/m7r2-f/handoff.md` 附表；计数如实：
+  「18 条」标题 vs 表体 19 行照实保留）+ 第一轮 18 条原文**不可复核**的检索取证（§2）+
+  补录位（§3）；m7-report §6.3 映射口径①改实（两轮分立）。
+- **小项清理（`55b13a1` + 逐项复核）**：R-269（kNotePlaceholder 单源/死 include/启发式删除）、
+  R-242（path() 注释改实）、R-268（icons「截断」/paramform 前置声明理由）复核**零增量**
+  （已落于 `93001a9`/`f3e1903`/`27c9f40`）；R-260 本包收口 = page_meta.h 钩子清单改引单源
+  `meta_probe_context.h` + 同病灶前置声明理由改实（仅注释）。
+- **R-317/R-318 核查（零改动）**：R-317 维持**登记/非缺陷**（预估卡「不编数」与色彩四选项
+  「不承诺估值」文案一致性核过）；R-318 三面已落实证（paramform 锁定行/限幅项 + page_output
+  置灰区）+ **两个未覆盖面登记**（presets_dialog 三按钮禁用原因 tooltip、paramform 技术条目
+  条目级 tooltip——任务口径「只登记」，见 §8.4 残余⑤）。
+- **验证**（摘录 [m7r22-g3-gates.md](m7-evidence/m7r22-g3-gates.md)）：全量 ctest **35/35**（G3
+  专属树，含 ui_smoke）+ ui_smoke 冻结行逐字 + SCHEMA 加性自检两项 + `pp_verify --selftest`
+  `VERIFY selftest OK (39 probes, 0 unexpected)` + page_meta.h 钉版格式无额外变化。
+
+### 8.4 R2.2 验收结论与残余（如实）
+
+**G4 复核读数（2026-10-13；树 = `build/m7r22-g2` @ `4dee5c8` = G1+G2+G3 合流 HEAD，重建
+`ninja: no work to do` 确认构建面齐）**：
+
+| # | 判据 | 命令 | 终值 | 过/不过 |
+|---|---|---|---|---|
+| 1 | ui_smoke 冻结行 + G1 探针批 | `python tools/env.py run -- python tests/ui_smoke.py build/m7r22-g2` | `UI-SMOKE OK shots=12 pages=3` 逐字 + `UI-SMOKE pass`；G1 探针行全绿（settings-tabs-light 取证 `mode=#1b1c20 est=#1b1c20 t=1.00 resid=0` / format-roundtrip 15/0 / rtl-mirror 18/0 / zero-byte-redo 7/0 outputs=26 / failure-list 7/0 lines=1 等） | **过** |
+| 2 | 金样 20 对 | `python tools/env.py run -- python tests/golden/smoke.py build/m7r22-g2` | `SMOKE total=20 pass=20 fail=0` 逐字 | **过** |
+| 3 | 全语料回归 | `python tools/env.py run -- python tools/regression.py build/m7r22-g2` | `regression: zero diff (baseline reproduced)`（normalized 2448 vs 2448，未 `--update`） | **过** |
+| 4 | 台账计数自检 | python 正则逐行核附录 A/B | 331+14 = 345 行 = **已修 326 + 登记 15 + 误识别关闭 3 + 受约束口径闭环 1**（与 R2.1 终态同数——R2.2 消的是「已修」行内余量注记，主标签零改判） | **过** |
+
+- **冻结行逐字不动**：`SMOKE total=20 pass=20 fail=0`、`UI-SMOKE OK shots=12 pages=3`（G4 复跑
+  实证）；`--version` 单行、`pp_verify` VERIFY 行式本窗口零触碰面；金样/夹具/回归基线零改动
+  （回归 zero diff、无重播种）。
+- **残余（如实）**：
+  1. **G1 终判据未达成：main-full linux 绿读数未取得**。R-044 容差修复与三批探针的 Linux 侧
+     验证被 lint 红阻断（linux job skipped；红全部来自 G2 当时未过钉版格式的已提交文件）。
+     G2 已于 `4dee5c8` 收口格式（全源 0 diff），但 **G4 时点 `origin/main` = `4addc51`，
+     `4addc51..HEAD` 共 5 提交（含格式收口）未推送**（G1/G2/G3/G4 均无推送授权）。待 G6 发行
+     包推送后任一轮 main-full 即可取得 linux 读数；若容差修复在 Linux 仍红，遥测三版注解会
+     逐字点名断言行。G4 无法查询 CI（`gh` 未认证），最近 CI 读数 = G1 handoff ④ 在案 run。
+  2. **R-266 UI 分歧（M7R22G1-6）未修**：关现役后现役落点 = 页签滑动邻接位 vs 契约「现役前移
+     首位」，疑似 R-189 引入语义漂移；跨界（page_output 属主），建议修法在案
+     （adjudications 14.1）。format-roundtrip 探针不锁争议语义，修后不会反红。
+  3. **ProbeContext 全面迁移（F4⑤-6/F2⑤-2）未落**：85 处 meta 族字面量中 41+3+1 可即刻迁、
+     **11 键缺词表**（跨界 meta_probe_context.h）；如实登记不做半迁移。
+  4. **Linux 侧新探针读数未取得**（0 字节双跑/失败清单/三批探针/AA 容差均只在 Windows 实跑
+     + G4 Windows 复跑）；平台敏感判据已按 R-044 落容差，Linux 实证待 lint 绿后一轮。
+  5. **R-318 两个未覆盖面**（G3 登记）：presets_dialog 三按钮禁用原因 tooltip、paramform
+     技术条目条目级 tooltip——在 G3 文件面内但任务口径「只登记」，待属主确认后另起提交。
+  6. **第一轮校读 18 条原文不可复核**（G3 残余）：无任何记录载体，检索取证入
+     m7r2-reader-notes §2，补录位 §3 留空，待主对话/校读方提供。
+  7. **维持登记的结构债**（R2.2 不改判）：UX-8 组折叠头整行可点、R-202 三套异步脚手架、
+     R-325 强类型、R-330 两页骨架、enc_heif 四职责、B.2 page_run 拆分、R-292 镜像副本余组、
+     R-034/052/068/079/080/093/134/147/291/327/329 等（附录 A/B 格内注记为准）。
+  8. **0.3.3 未发行**：tag `v0.3.3` 停在 `b1af371`（零 Release 零资产）；`M7-ADJ-tag-move-2`
+     授权在案未消耗。**发行状态 = 待发布**，条件见 CHANGELOG [0.3.3]「发行」节末条。
+- **G4 未跑（如实）**：ci-format 全源 / ci-tidy 棘轮 / ctest 全量 / make_winzip / 密钥扫描等
+  全门禁归波次收口与 G6 发行包把关；G1/G2/G3 各包实跑读数在 §8.1–8.3 逐包引证（出处 =
+  各 handoff ④ + `docs/m7-evidence/m7r22-g*-gates.md` 摘录）。G4 实跑仅上表 4 项 +
+  事实 grep 复核（见 [m7r22-g4-gates.md](m7-evidence/m7r22-g4-gates.md)）。
+
+---
+
 # 附录 A：覆盖台账 —— deep-review R-001～R-331（逐条去向）
 
-去向口径（每行**只标一个**主标签；余量以格内注记说明）。**R2.1 终态四档**（2026-10-13 终态，
-331+14 全部条目落档）：**已修**（含提交哈希，R1/R2/R2.1 代次可并列；余量以格内「余量登记」
-注记）/ **误识别关闭**（评审前提不成立、被证据证伪，不为关闭而改码）/ **受约束口径闭环**
+去向口径（每行**只标一个**主标签；余量以格内注记说明）。**R2.2 终态四档**（2026-10-13 终态，
+331+14 全部条目落档）：**已修**（含提交哈希，R1/R2/R2.1/R2.2 代次可并列；余量以格内「余量登记」
+注记，R2.2 已收余量改注「已由 R2.2 消」）/ **误识别关闭**（评审前提不成立、被证据证伪，不为关闭而改码）/ **受约束口径闭环**
 （平台、依赖、冻结面等外部约束下按约束收口并登记，裁定表九节 R2F-C*）/ **登记**（已知差异/
 结构性债，理由在案）。R1 轮历史标签到四档的折算（本表已全部改写为终态标签，此注供旧版本
 对照）：「部分」→ 主修已落且余量注记者并入**已修**、主修未尽者并入**登记**；「跨界」→
@@ -830,9 +996,13 @@ R2/R2.1 认领者**已修**、未认领**登记**；「对账登记」（R-292�
 「结案」（R-331）→ **误识别关闭**（结论性条目随唯一实缺陷闭合）。评审本体只读未改；本表为
 唯一对账面。行数自检：A.1=2 + A.2=33 + A.3=144 + A.4=152 = **331**（python 正则逐行核过；
 与 deep-review 逐条优先级标签一致——其 §1 汇总行「P1=32、P2=145」系评审本体笔误，逐条标签
-实为 P1=33、P2=144，只读不改、此处注明）。终态四档计数自检（F5 2026-10-13，python 正则
-核过）：331+14 = 345 行 = **已修 326 + 登记 15 + 误识别关闭 3 + 受约束口径闭环 1**
-（R2 终态为 297/44/3/1；R2.1 认领 28 条「登记→已修」+ R-183 1 条，见 §7）。
+实为 P1=33、P2=144，只读不改、此处注明）。终态四档计数自检（F5 2026-10-13 首核、G4
+2026-10-13 复核，python 正则逐行核过）：331+14 = 345 行 = **已修 326 + 登记 15 + 误识别关闭 3 +
+受约束口径闭环 1**（R2 终态为 297/44/3/1；R2.1 认领 28 条「登记→已修」+ R-183 1 条，见 §7）。
+**R2.2 追记**：R2.2 轮（G2/G3）收口的是「已修」行内的**余量注记**（B.5 步②–⑥、R-254 T()/tr() 与
+Impl 分舱、R-256 后半、R-201 后半、R-183 后半、R-197 行为裁定换锚、R-317/318 核查注记），
+**主标签零改判、四档计数不变**（326/15/3/1，G4 复核一致）——15 条「登记」主标签条目
+（R-034/052/068/079/080/093/134/147/202/291/292/317/327/329/330）R2.2 均未认领。
 **成员对照（防「3↔3」「4↔1」误读；逐成员列全）**：
 - 「误识别关闭 3」（台账主标签）= **R-011 / R-282 / R-331**；
 - 九节 R2F-X1–X3（三条误识别登记）= **X1=R-282 死码前提 / X2=R-011 证伪 / X3=WP5-A10
@@ -881,7 +1051,7 @@ R2/R2.1 认领者**已修**、未认领**登记**；「对账登记」（R-292�
 | R-152 | **已修** `d99df1b` | 双击 mapToSource 补全 |
 | R-153 | **已修** `d99df1b` | 多选整组快照/恢复 |
 | R-154 | **已修** `d99df1b` | 运行中拒收 drop |
-| R-155 | **已修** `594d93f`/`40f3405`/`a6e29f6`/`38af841`/`edfc6e4`/`d6360f6`（余量登记） | 9 处巨型拆 4 处（mainwindow/run_one_file/build_gps_card/main.cpp）；R2.1 再消 3 半项——B.1 page_meta（`38af841` 收尾）、B.3 format_selection_model + output TU 拆分（`edfc6e4`）、B.5 步① map_view（`d6360f6`）；余量=B.2/B.3 尾/B.5 步②–⑥ **登记** |
+| R-155 | **已修** `594d93f`/`40f3405`/`a6e29f6`/`38af841`/`edfc6e4`/`d6360f6`/`77e3c90`/`d677c52`/`05181ac`/`847a83d`/`4c81bd0` | 9 处巨型拆 4 处（mainwindow/run_one_file/build_gps_card/main.cpp）；R2.1 再消 3 半项——B.1 page_meta（`38af841` 收尾）、B.3 format_selection_model + output TU 拆分（`edfc6e4`）、B.5 步① map_view（`d6360f6`）；**B.5 步②–⑥ 已由 R2.2-G2 消**（tile_cache/map_interact/map_renderer/tile_fetcher/geocode_client 五件，`77e3c90`…`4c81bd0`，mapwidget.cpp 1444→760 行）；余量=B.2/B.3 尾 **登记** |
 | R-156 | **已修** `40f3405` | enc_common 收编 500 行拷贝 |
 | R-157 | **已修** `40f3405`+`594d93f` | log_level_from_text 单源 + UI 收口 |
 | R-158 | **已修** `a6e29f6` | 三塔收敛（W7-A3/A5） |
@@ -913,12 +1083,12 @@ R2/R2.1 认领者**已修**、未认领**登记**；「对账登记」（R-292�
 | R-041 | **已修** `18fb355` | sanitizer 夜间轮转 |
 | R-042 | **已修** `18fb355` | sanitizer env 下沉 job 级 |
 | R-043 | **已修** `18fb355` | pr-fast 补 ui-smoke 步骤 |
-| R-044 | **已修** `18fb355` | 口径如实化（`18fb355`）；像素容差本体在 C++ 探针承载（C6） |
+| R-044 | **已修** `18fb355`+`fd5b838` | 口径如实化（`18fb355`）；像素容差本体在 C++ 探针承载（C6）；**R2.2-G1 `fd5b838` 落 R-044 容差机制**——settings-tabs-light 像素档字形内核判据（t≥0.5 + 逐通道残差≤12 + 令牌互斥，原众数 ±6 保留为充分条件，自检行 mode/est/t/resid 取证，M7R22G1-2） |
 | R-045 | **已修** `a6e29f6` | clear_search_state 两路共用 |
 | R-046 | **已修** `a6e29f6` | 精度存疑文案对齐几何 |
 | R-047 | **已修** `a6e29f6` | 仅坐标变化才 center_on |
 | R-048 | **已修** `594d93f` | 探针迁出 + PP_BUILD_DEV 门控（发布树 0 命中取证） |
-| R-049 | **已修** `594d93f`（余量登记） | mainwindow 五域拆 TU；Impl 分舱**登记**（R2.1 另拆 output_page_build/output_template_ui/filelistmodel 六类，不涉 mainwindow Impl） |
+| R-049 | **已修** `594d93f`+`ec1e3ba` | mainwindow 五域拆 TU；Impl ~120 成员五舱分域（mw_cabin::Chrome/FilePanel/RunState/Session/Smoke 聚合基类，访问面零改动）**已由 R2.2-G2 消**（`ec1e3ba`）；R2.1 另拆 output_page_build/output_template_ui/filelistmodel 六类 |
 | R-050 | **已修** `12ce994` | class_file 惰性默认（B4） |
 | R-051 | **已修** `33d09a8` | anchor 轨删除 + 注册表期望键断言 |
 | R-052 | **登记**（两行对偶=可达做法；任务书「一行」笔误误识别关闭 R2F-X3） | CMakeLists 源清单双维护未收口（两行对偶登记 B33）；任务书「一行」字面=笔误，误识别关闭 R2F-X3 |
@@ -964,11 +1134,11 @@ R2/R2.1 认领者**已修**、未认领**登记**；「对账登记」（R-292�
 | R-176 | **已修** `40f3405` | ErrorKind + error_kind_of 前缀判据单源 |
 | R-177 | **已修** `38af841` | MetaState 拆 Core/FollowModel/四卡子聚合（`38af841`，R2.1-F2 B1 收尾）；925 处访问点单遍改写，state_of 改 qobject_cast + Q_ASSERT |
 | R-178 | **已修** `a6e29f6` | commit_rule_change 四连刷收口 |
-| R-179 | **已修** `7472b97` | apply_style QSS 收口进 theme（field_qss 等） |
+| R-179 | **已修** `7472b97`+`0208651` | apply_style QSS 收口进 theme（field_qss 等）；**R2.2-G2 `0208651`** page_output/page_run kFieldProperty 16 处字面量收敛 `theme::kFk*` 七档词表单源（值逐字不变） |
 | R-180 | **已修** `9bd01b6`+`6bd2c15` | RuleInputs 值聚合 + tag 行显式清单（`9bd01b6`）+ LoadingGuard RAII / InfoSlot 具名索引 / 常驻子控件标记（`6bd2c15`，R2.1-F2） |
 | R-181 | **已修** `b83f185`+`bb5290c` | 显示格式化纯函数 meta_format 可单测（`b83f185`）+ UI 内嵌 IO 剥离进 meta_probe（`bb5290c`，page_meta 与各卡 TU 零 IO） |
 | R-182 | **已修** `6bd2c15` | objectName 三方事实契约收口 `meta_probe_context.h` 词表单源（111 名）+ ProbeContext 类型化访问器（`6bd2c15`） |
-| R-183 | **已修** `d737cb4`（余量登记） | rebuild_rows 旧代 teardown 与 deleteLater 解耦（断信号面）+ 探针不跨 pump 缓存部件指针（`d737cb4`，M7R21F4-6）；余量=「行部件复用」级解耦**登记**（结构性重构） |
+| R-183 | **已修** `d737cb4`+`7541683` | rebuild_rows 旧代 teardown 与 deleteLater 解耦（断信号面）+ 探针不跨 pump 缓存部件指针（`d737cb4`，M7R21F4-6）；「行部件复用」级解耦**已由 R2.2-G2 消**（`7541683`：rebuild_rows 规格表 + 就地改配，稳态零换件、部件身份跨重建稳定） |
 | R-184 | **已修** `6e001da` | make_chip 收编 formkit::ChipButton 唯一渲染路径（R2D1；实现随后随 B.1 拆分迁至 `src/ui/meta_state.cpp:152`，R2.1-F2）；deep-review 病灶记在 classify_panel，实际双实现落点在 page_meta |
 | R-185 | **已修** `60742b0` | page_run 注册表收敛 `std::map + unique_ptr` RAII（`60742b0`，R2.1-F3；page_run.h 加性 `~PageRun()`，M7R21F3-2） |
 | R-186 | **已修** `7472b97`+`27c9f40` | button padding 单源；卡构造双份随 R-021 登记 |
@@ -982,11 +1152,11 @@ R2/R2.1 认领者**已修**、未认领**登记**；「对账登记」（R-292�
 | R-194 | **已修** `12ce994`（UTF-8/FILE* 登记） | 原子写收敛 fsops；UTF-8 校验/FILE* 读**登记** |
 | R-195 | **已修** `5d19146`+`27c9f40`+`93001a9` | first-wins 单源 `pp::find_param/lookup_param_def`（`5d19146`）+ paramform 转发（`27c9f40`）+ preset_io/dev_cli 两调用点转发、last-wins 循环退役（`93001a9`，M7R21F4-9 边界语义披露）——三调用点全收口 |
 | R-196 | **已修** `c900f39` | exif_editor 三对孪生收敛（过滤 `apply_tree_filter` / 时间清除 `upsert_remove_edit` / Row 填充 `add_source_row`+`finalize_row`，`c900f39`） |
-| R-197 | **已修** `c900f39`（行为裁定登记） | 时间标签集合 4 份真相 → `time_tag_keys.h` 9 键单表（wall_clock 清除集 5 键与引擎写路径同集，test_smoke 第 8 节钉）；「清除是否连带 OffsetTime*」行为语义维持现状**登记**（F3 ③-4，待裁定） |
+| R-197 | **已修** `c900f39`+`12234f1`（行为变化 M7R22G2-0） | 时间标签集合 4 份真相 → `time_tag_keys.h` 9 键单表（`c900f39`）；**R2.2-G2 `12234f1` 落主对话行为裁定（M7R22G2-0）**：时间「清除」= 连带 touched 全部 9 键（OffsetTime* 3 + Xmp MetadataDate 一并 remove），原「清除只动 wall_clock 5 键」口径换锚；谓词 `is_time_clear_key` 加性入 time_tag_keys.h，test_smoke 第 8 节换锚 3 + 增 2（断言只增不减），回归 zero diff 归因 = GUI 例外编辑面不经 `--dev` 路径 |
 | R-198 | **已修** `c900f39` | EXIF 类型触点收敛 finalize_row；exif_type 下拉参数更名 fallback_type 并如实注释（`c900f39`） |
 | R-199 | **已修** `c900f39` | TriMode/TimeMethod/PrivacyMode 枚举 + itemData 单真相，currentIndex()==1/2 魔法索引退役（`c900f39`） |
 | R-200 | **已修** `355e1f2` | filelistmodel 一 TU 6 类按所有权拆 TU（filedelegate/filegroup_proxy/filegroup_delegate/file_collect/group_scan，`355e1f2`）；跨 TU 共享纯件收 `filelistmodel_util.h` |
-| R-201 | **已修** `334c8c1`（余量登记） | SettingsDialog ctor 拆 build_general/output/run/map/about 五页（`334c8c1`）；余量=settings()/恢复默认 lambda 的 findChild 字符串对象图成员化**登记** |
+| R-201 | **已修** `334c8c1`+`fa60b38` | SettingsDialog ctor 拆 build_general/output/run/map/about 五页（`334c8c1`）；settings()/恢复默认 lambda/主题重放的 findChild 字符串对象图成员化**已由 R2.2-G2 消**（`fa60b38`：settings_dialog.h 加性 15 成员，32 处 findChild 退役，null 守卫语义保留） |
 | R-202 | **登记** | 三套异步脚手架 |
 | R-203 | **已修** `52b9870` | dataChanged 按行发 [列0,列1] 区间（`52b9870`） |
 | R-204 | **已修** `93001a9` | core/metadata.h 加性访问器 `camera_model()`（`93001a9`，M7R21F4-7）；group_scan 转发、filelistmodel 双残留 include 退场 |
@@ -1003,7 +1173,7 @@ R2/R2.1 认领者**已修**、未认领**登记**；「对账登记」（R-292�
 | R-215 | **已修** `7472b97` | kFkCheck 死钩子+死 QSS 删除 |
 | R-216 | **已修** `7472b97` | 双行高并存清零（真源 kRowPitch=28） |
 | R-217 | **已修** `27c9f40` | make_editor 工厂收敛三处平行 switch（`27c9f40`） |
-| R-218 | **已修** `52b9870`+`40c385e` | R2E2（`52b9870`）：逻辑坐标+单点镜像，LTR 逐字节不变，rtl-mirror 探针钉关系；R2.1-F2（`40c385e`）：page_meta/mapwidget 本面——对齐逻辑化 11 处 + RatingStars 星序 + HUD 单点镜像（地理投影不镜像，M7R21F2-7） |
+| R-218 | **已修** `52b9870`+`40c385e`+`8c90c54` | R2E2（`52b9870`）：逻辑坐标+单点镜像，LTR 逐字节不变，rtl-mirror 探针钉关系；R2.1-F2（`40c385e`）：page_meta/mapwidget 本面——对齐逻辑化 11 处 + RatingStars 星序 + HUD 单点镜像（地理投影不镜像，M7R21F2-7）；**R2.2-G2 `8c90c54`** theme.h 共享 QSS 七处非对称几何改 logical 侧词 + formkit 成对自绘（Combo 箭头位/spin 箭头列，M7R22G2-1）+ R2.2-G1 rtl-mirror 四查/rtl-deep 探针常驻（M7R22G1-3/-4） |
 | R-219 | **已修** `a6e29f6` | reverse_url 入参 WGS-84 单约定（B44） |
 | R-220 | **已修** `a6e29f6` | 子域纯函数（B45） |
 | R-221 | **已修** `a6e29f6` | paint 幂等（请求移出绘制） |
@@ -1027,7 +1197,7 @@ R2/R2.1 认领者**已修**、未认领**登记**；「对账登记」（R-292�
 | R-239 | **已修** `93001a9` | ConflictPolicy↔文本映射上收 core 单源（fsops.h 加性 `conflict_policy_name/parse_conflict_policy`，`93001a9`，M7R21F4-7）；dev_cli/preset_io 四副本全转发 |
 | R-240 | **已修** `f3e1903`+`594d93f` | 三处注释相反本包改实（日志尾/列宽尺规/set_plan）；warn_preset_op 接线 `594d93f`（W9-8） |
 | R-241 | **已修** `d99df1b` | remove_tab 注释纠偏（git -S 取证） |
-| R-242 | **已修** WP11（D5） | path() 注释改实 |
+| R-242 | **已修** WP11（D5）（R2.2-G3 复核零增量） | path() 注释改实（presets_dialog.h:21 与实现一致）；R2.2-G3 复核**零增量** |
 | R-243 | **已修** `40f3405` | bench-report.json 转义 |
 | R-244 | **已修** `33d09a8` | arith_code 恒锁 + 禁用原因 |
 | R-245 | **已修** `33d09a8` | xyb_mode 恒锁 + 禁用原因 |
@@ -1116,13 +1286,13 @@ R2/R2.1 认领者**已修**、未认领**登记**；「对账登记」（R-292�
 | R-149 | **已修** `6e001da` | dedup_key 弱规范化 + Windows 大小写折叠（`6e001da`） |
 | R-252 | **已修** `594d93f` | 五条时序约定补 Q_ASSERT 锚点 |
 | R-253 | **已修** `594d93f` | refresh_status/theme 分段 |
-| R-254 | **已修** `6250b3b`（余量登记） | remove_sel 判据/选中映射单点 + natural_bytes/human_bytes 收敛 `byte_text.h` 单源（`6250b3b`，输出逐字节不变）；余量=T()/tr() 混用、Impl 120 成员分舱**登记** |
+| R-254 | **已修** `6250b3b`+`0552023`+`ec1e3ba` | remove_sel 判据/选中映射单点 + natural_bytes/human_bytes 收敛 `byte_text.h` 单源（`6250b3b`，输出逐字节不变）；T()/tr() 混用（`0552023`，114 站点统一、查表键不变）与 Impl ~120 成员分舱（`ec1e3ba`，mw_cabin 五舱）**已由 R2.2-G2 消** |
 | R-255 | **已修** `0ca8c62`（余量登记） | smoke_probe_meta 1675 行/深 10 → 12 个分节方法（`0ca8c62`，节体零文本改动）；余量=sec_i 几何分节 ~650 行（值表驱动）**登记**不阻塞 |
-| R-256 | **已修** `5cf7ddd`（余量登记） | apply_map_style 三职拆名（bind_map_layer_writeback/on_map_layer_changed/apply_map_style，`5cf7ddd`）；余量=ev.index→行号「行序不变」脆弱契约**登记**（后半） |
+| R-256 | **已修** `5cf7ddd`+`6d5d07e` | apply_map_style 三职拆名（bind_map_layer_writeback/on_map_layer_changed/apply_map_style，`5cf7ddd`）；ev.index→行号「行序不变」脆弱契约**已由 R2.2-G2 消**（`6d5d07e`：run_row_paths 快照显式校验 + 路径稳定键兜底，稳态逐事件结果逐位相同） |
 | R-257 | **已修** `594d93f`（错误三态登记） | mainwindow.h:45 注释修正（B57）；错误三态**登记** |
 | R-258 | **已修** `594d93f`+`6bd2c15` | 探针与产品分 TU（`594d93f`）+ ProbeContext 访问器层收口 objectName 散写（`6bd2c15`，后半） |
 | R-259 | **已修** `69c08e1` | 关闭路径带反馈同步 join（状态行 + 等待光标；阻塞期从析构挪到关闭路径，`69c08e1`，M7R21F3-10 明文授权行为变化） |
-| R-260 | **已修** `93001a9`（复核） | classify_panel.h 头注释「职责两说」改实（ClassRegistry 实体在 core/classify）；page_meta.h 钩子清单寄生随 F2 meta_probe_context 收口（`93001a9` 复核） |
+| R-260 | **已修** `93001a9`+`55b13a1`（复核） | classify_panel.h 头注释「职责两说」改实（ClassRegistry 实体在 core/classify）；page_meta.h 钩子清单寄生随 F2 meta_probe_context 收口（`93001a9` 复核）+ **R2.2-G3 `55b13a1`** page_meta.h 注释改引单源 `meta_probe_context.h`（寄生副本引用面收口；page_meta.cpp 28 行清单本体界外维持） |
 | R-261 | **已修** `a6e29f6` | MapDialog::release 复原双边化 |
 | R-262 | **已修** `a6e29f6` | 「限扫 200」注释改对（≤8） |
 | R-263 | **已修** `d99df1b` | 重命名预填显示名 |
@@ -1130,8 +1300,8 @@ R2/R2.1 认领者**已修**、未认领**登记**；「对账登记」（R-292�
 | R-265 | **已修** `27c9f40` | 三连删除（`27c9f40`：二次 set_values / QSignalBlocker / 第二样本） |
 | R-266 | **已修** `27c9f40` | 仅元数据回退槽语义收口 + is_selected 判现役（`27c9f40`） |
 | R-267 | **已修** `7472b97` | nav_num 引用 badge 单源 + ChipButton 注释纠偏 |
-| R-268 | **已修** `f3e1903` | icons/paramform 两处注释改实；余见 R-269 |
-| R-269 | **已修** `27c9f40`+`93001a9` | 词根启发式删除、子分组改读 ParamDef.group（`27c9f40`）；note 占位魔法空格收口 `formkit::kNotePlaceholder`（`93001a9`，3 处） |
+| R-268 | **已修** `f3e1903`+`55b13a1` | icons/paramform 两处注释改实（`f3e1903`）+ **R2.2-G3 `55b13a1`** page_meta.h 前置声明理由改实（同病灶，M5-A5 起失实的旧理由；page_output.h/classify_panel.h/preview_panel.h 同病灶界外维持登记）；余见 R-269 |
+| R-269 | **已修** `27c9f40`+`93001a9`（R2.2-G3 复核零增量） | 词根启发式删除、子分组改读 ParamDef.group（`27c9f40`）；note 占位魔法空格收口 `formkit::kNotePlaceholder`（`93001a9`，3 处）；死 include QScrollArea 亦已清（`93001a9`）——R2.2-G3 逐项复核**零增量** |
 | R-270 | **已修** `7472b97`+`27c9f40` | Metrics 补 menu_*/tab_* 令牌化（`27c9f40`） |
 | R-271 | **已修** `25b60b3` | icons 解析器单测（+ PP_ICONS_TEST_NO_WIDGETS） |
 | R-272 | **已修** `40f3405`+`f3e1903` | 死 include 随拆分消除 + bench 魔法数命名 + kMaxExactInt |
@@ -1179,8 +1349,8 @@ R2/R2.1 认领者**已修**、未认领**登记**；「对账登记」（R-292�
 | R-314 | **已修** `6e001da` | QAbstractItemView 焦点下 ←/→ 让给视图（`6e001da`） |
 | R-315 | **已修** `a6e29f6`（B49 注记） | tiles_pending_changed 接加载 chip；search_finished 不接（B49 裁定） |
 | R-316 | **已修** `33d09a8` | param-catalog 12 处漂移对齐 |
-| R-317 | **登记** | 预估卡两项恒「—」——维持不编数（M5-A24 口径，非缺陷） |
-| R-318 | **已修** `33d09a8`+`27c9f40` | 三面全量推广（`27c9f40`：paramform 锁定行/限幅项 + page_output 置灰区） |
+| R-317 | **登记**（R2.2-G3 核查维持） | 预估卡两项恒「—」——维持不编数（M5-A24 口径，非缺陷）；R2.2-G3 核查 = 预估卡「不编数」与色彩四选项「不承诺估值」tooltip 文案一致性核过、无冲突，**维持登记/非缺陷** |
+| R-318 | **已修** `33d09a8`+`27c9f40`（R2.2-G3 核查注记） | 三面全量推广（`27c9f40`：paramform 锁定行/限幅项 + page_output 置灰区）；R2.2-G3 核查另发现 **2 个未覆盖面登记**——presets_dialog 三按钮禁用态无原因 tooltip、paramform 技术条目置灰无条目级 tooltip（行级原因可见、非静默灰），修法一行级、待属主确认后另起提交 |
 | R-319 | **已修** `93001a9` | --base GUI 入口端到端（全局卡「基准目录」行 pp-base-edit + PageOutput mirror_base 面 + FileListModel::set_mirror_base 收集/重算两触点，derive_base_dir 单点；opt-in 空=现行为、会话级不持久化，M7R21F4-2） |
 | R-320 | **已修** `7472b97` | 第 7 份 ElidedLabel（并入 R-020） |
 | R-321 | **已修** `27c9f40` | GUI 两处判据退役改调 core 单源（`27c9f40`） |
@@ -1212,7 +1382,7 @@ R2/R2.1 认领者**已修**、未认领**登记**；「对账登记」（R-292�
 | UX-9 格式卡 | **已修** `d99df1b`+`e8b9bf1` | 页签去位深 + 等宽（T15 改案）+ 磁贴去位深文本；位深控制功能逐字保留（B39/B43） |
 | UX-10 编码档位 | **已修** `33d09a8`+`d99df1b`+`27c9f40`+`c540630` | 10.1 核心行+联动+落盘反查（`33d09a8`+`d99df1b`）+ 色度限幅联动（`27c9f40`）+ 10.2 逐插件白名单（`c540630`） |
 | UX-11 滚动条 | **已修** `7472b97`+`27c9f40`+`93001a9` | 6px 细浮层+弹窗同皮（`7472b97`）+ lock_card_size 接线 page_output 四卡/page_run 三卡（`27c9f40`）+ page_meta 侧 info/time/switch 三卡（`93001a9`；GPS 卡不锁 = UX-4 stretch 富余高载体，M7R21F4-5 取舍注记） |
-| UX-12 亮色页签 | **已修** `7472b97`+`27c9f40`+`d737cb4` | tokens 初值+replay 补 tabs（`7472b97`）+ UnderlineTabs/FocusRing 重放链（`27c9f40`）+ settings-tabs-light 像素档探针 4 断言（`d737cb4`，第 4 波） |
+| UX-12 亮色页签 | **已修** `7472b97`+`27c9f40`+`d737cb4`+`fd5b838` | tokens 初值+replay 补 tabs（`7472b97`）+ UnderlineTabs/FocusRing 重放链（`27c9f40`）+ settings-tabs-light 像素档探针 4 断言（`d737cb4`，第 4 波）+ **R2.2-G1 `fd5b838`** 该像素档落 R-044 AA 容差机制（字形内核 t≥0.5/残差≤12/令牌互斥，Linux 灰阶 AA 漂移不再误红，M7R22G1-2） |
 | UX-13 圆角 | **已修** `25b60b3` | DWMWA_WINDOW_CORNER_PREFERENCE（Win10 静默忽略）；同 UX-7 真机验收 |
 | UX-14 色彩质量 | **已修** `33d09a8`+`12ce994`+`c540630`（E1/E2 口径闭环，详见 R2 轮交付） | UX-14 §14 分级子项（全称引注）：**UX-14 A1** nclx 与 ICC 矛盾 `33d09a8`+`c540630`（闭环 E1）/ **UX-14 A2** 灰度-RGB ICC 整文件失败 `12ce994` / **UX-14 A3** PNG compressionLevel 键名 `33d09a8`（=R-010）/ **UX-14 A4** TIFF predictor `33d09a8`（=R-011，评审诊断被证伪）/ **UX-14 A5** CICP 日志口径 `12ce994` / **UX-14 B1** ΔE 护栏 `12ce994`+`c540630`（扩强）/ **UX-14 B2** 跨库对拍 `c540630` / **UX-14 B3** ICC 回读扩面+BMP 警示 `33d09a8`+`c540630`（BMP 受约束 R2F-C1）/ **UX-14 C1–C4** 色域映射/8bit 抖动/渲染意图/线性光 `c540630`（引擎面，默认关）+ GUI 四控件接线 `6ff43f9`（opt-in 默认关 = 现行为；C2 仅 to_u8 四家，裁定落点 R2A-A11）/ **UX-14 D1–D3** CMYK 拒收/EXIF ColorSpace/HDR 诚实口径 `c540630` |
 
@@ -1235,7 +1405,7 @@ R2/R2.1 认领者**已修**、未认领**登记**；「对账登记」（R-292�
 | 7 | param-catalog ↔ format_tables | 12 处漂移已对齐（R-316）；三方一致性无机器保障 | **部分收敛** `33d09a8`；机制缺口**登记** |
 | 8 | 谓词回退值 ↔ ParamDef.def | 无一致性断言 | **登记**（逻辑一致性约束，非注释/文案/常量级） |
 | 9 | kJpegliCommit ↔ vcpkg REF | 双事实需人肉同步 | **登记**（跨文件事实对） |
-| 10 | LRU ×3（colormanager/thumbs/mapwidget） | 三份实现 | **登记**（结构性，B.5 蓝图可顺带） |
+| 10 | LRU ×3（colormanager/thumbs/mapwidget） | 三份实现 | **登记**（结构性，B.5 蓝图可顺带）；R2.2-G2 B.5② 已把 mapwidget 一份抽成 `tile_cache.h` 模板纯核（LRU/预算单源化于 mapwidget 域），colormanager/thumbs 两份**未并**，三份合一维持登记 |
 | 11 | trim/ascii_lower ×2 | 两份实现 | **登记**（工具函数归位属逻辑改动） |
 | 12 | ui_theme_mode ×3 | settings/theme/对话框三处词表 | **登记**（收敛涉行为面） |
 | 13 | ColorTarget 互逆对 | to_string/parse 手写互逆 | **登记**（强类型/表驱动属逻辑改动） |

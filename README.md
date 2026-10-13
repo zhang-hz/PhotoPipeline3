@@ -32,23 +32,26 @@ caption 单轨 46×32；壳层顶栏 44 + 状态栏 30；**栏宽固定轴 330 /
 逐条探针、偏差与未决项见 [docs/m5-report.md](docs/m5-report.md)，开发期裁定见
 [docs/m5-adjudications.md](docs/m5-adjudications.md)。
 
-**0.3.3（当前版本）= M7 工程收口轮 + R2 尾单轮 + R2.1 收口轮**：发布前深度评审（331 条）+
-UI 14 项评审的批量整改、结构重构与能力补强。用户可见变化：**数据安全根治**（输出路径命中
-源文件即拒绝、写盘原子化、元数据写失败=失败、密钥 DPAPI 封存）、**HEIF/AVIF 编码档位核心行**
-（Main/Main10/Main12/… 直接呈现 + 位深联动）、时间/GPS/隐私三卡**启用开关**、**12 卡右键
-菜单 + 全选入口**（文件列表/元数据四卡/输出四卡/运行三卡逐卡右键菜单；工具行「勾选」钮 +
-Ctrl+A / Ctrl+Shift+A / Ctrl+D，作用于可见行）、**预览分辨率提升**（内嵌预览门槛 1600px、
-缓存 4096px）、**GPS 卡地图 App 化**（浮层结果、分类下拉、地图 260px 且吃满富余高度）、
-**窗口真无边框 + Win11 圆角**（原生标题栏消失、三钮可点）、滚动条细浮层、格式页签去位深
-文案并等宽、**RTL 布局支持**（从右到左布局下自绘几何/内距/非对称样式随方向镜像；LTR 逐字节
-不变，地图瓦片/图钉等地理内容不随语言翻转）、失败原因下钻与中文分类、参数区子分组折叠与
-「已禁用：原因」提示、版本徽标/翻图打标/过滤态双击等交互缺陷修复。
-逐条变更见 [CHANGELOG.md](CHANGELOG.md) `[0.3.3]`，331+14 覆盖台账（终态四档）与验收证据见
-[docs/m7-report.md](docs/m7-report.md)，裁定汇总见 [docs/m7-adjudications.md](docs/m7-adjudications.md)，
+**0.3.3（当前版本）= M7 工程收口轮 + R2 尾单轮 + R2.1 收口轮 + R2.2 收口轮**：发布前深度
+评审（331 条）+ UI 14 项评审的批量整改、结构重构与能力补强。用户可见变化：**数据安全根治**
+（输出路径命中源文件即拒绝、写盘原子化、元数据写失败=失败、密钥 DPAPI 封存）、**HEIF/AVIF
+编码档位核心行**（Main/Main10/Main12/… 直接呈现 + 位深联动）、时间/GPS/隐私三卡**启用开关**、
+**12 卡右键菜单 + 全选入口**（文件列表/元数据四卡/输出四卡/运行三卡逐卡右键菜单；工具行
+「勾选」钮 + Ctrl+A / Ctrl+Shift+A / Ctrl+D，作用于可见行）、**预览分辨率提升**（内嵌预览
+门槛 1600px、缓存 4096px）、**GPS 卡地图 App 化**（浮层结果、分类下拉、地图 260px 且吃满
+富余高度）、**窗口真无边框 + Win11 圆角**（原生标题栏消失、三钮可点）、滚动条细浮层、格式
+页签去位深文案并等宽、**RTL 布局支持**（从右到左布局下自绘几何/内距/非对称样式随方向镜像；
+LTR 逐字节不变，地图瓦片/图钉等地理内容不随语言翻转）、失败原因下钻与中文分类、参数区
+子分组折叠与「已禁用：原因」提示、版本徽标/翻图打标/过滤态双击等交互缺陷修复；R2.2 轮再收
+**EXIF 编辑器时间「清除」语义换锚**（连带 OffsetTime*/XMP MetadataDate 共 9 键，与批量规则
+命中面同集）与分类面板重建零换件（闪烁/误连根除）。
+逐条变更见 [CHANGELOG.md](CHANGELOG.md) `[0.3.3]`，331+14 覆盖台账（R2.2 终态四档）与验收
+证据见 [docs/m7-report.md](docs/m7-report.md)，裁定汇总见 [docs/m7-adjudications.md](docs/m7-adjudications.md)，
 R2 轮方案见 [docs/m7r2-plan.md](docs/m7r2-plan.md)。**色彩能力四选项（色域映射 / 8bit 抖动 /
 渲染意图 / 线性光重采样）已入引擎并在界面提供开关**——**输出页全局卡**四行（默认全关 =
 行为不变；0.3.x 默认路径另有两处已归因字节变化，见 CHANGELOG「变更」节）；8bit 抖动仅作用
-于 JPEG/WebP/JXL 及 OIIO 系四家的 8bit 量化段（HEIF/AVIF 的 8bit 路径不接）。
+于 JPEG/WebP/JXL 及 OIIO 系四家的 8bit 量化段（HEIF/AVIF 的 8bit 路径不接）。**发行状态：
+0.3.3 待发布**（tag 未移动、Release 未创建；条件见 CHANGELOG [0.3.3]「发行」节）。
 
 **0.3.2 = GPS 地图升级版（M6）**：把「内嵌地图选点」从能用升级到**地图 App 水平**——
 R1 搜索搜得出（改用可达的**高德 Web 服务**事实表：`place/text` + 周边偏置 **`around` 20 条**按距离升序 +
@@ -565,8 +568,8 @@ python tools\env.py run -- python tools\make_winzip.py dist --smoke-exe build\re
 - [docs/m6-map-upgrade.md](docs/m6-map-upgrade.md) — M6 地图升级契约（C1–C10：瓦片图层/地理编码/选点闭环/坐标口径）
 - [docs/m6-report.md](docs/m6-report.md) / [docs/m6-adjudications.md](docs/m6-adjudications.md) — M6 收口报告与裁定记录
 - [docs/m7r2-plan.md](docs/m7r2-plan.md) — **M7-R2 轮方案**（遗留 finding 四类审视表 / 14 项技术设计定稿 / 波次·包·文件面计划 / 纪律；「任务书」引述出处收口）
-- [docs/m7-report.md](docs/m7-report.md) — **M7 收口报告**（331+14 覆盖台账四档终态、八项终门禁取证、R2/R2.1 轮交付、偏差与未决项）
-- [docs/m7-adjudications.md](docs/m7-adjudications.md) — M7 开发期裁定记录（A/B/C/D/E 各节 + R2 轮八/九节 + R2.1 轮十一/十二节：冻结面加性、行为变化、误识别关闭、受约束登记）
+- [docs/m7-report.md](docs/m7-report.md) — **M7 收口报告**（331+14 覆盖台账四档终态、八项终门禁取证、R2/R2.1/R2.2 轮交付、偏差与未决项）
+- [docs/m7-adjudications.md](docs/m7-adjudications.md) — M7 开发期裁定记录（A/B/C/D/E 各节 + R2 轮八/九节 + R2.1 轮十一/十二节 + R2.2 轮十四节：冻结面加性、行为变化、误识别关闭、受约束登记）
 - [docs/m7-evidence/](docs/m7-evidence/) — M7 证据留存目录（各包门禁读数摘录 + 发布链 runbook，换机可复核）
 
 ## 许可

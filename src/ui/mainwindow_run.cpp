@@ -133,7 +133,7 @@ using theme::preferred_theme_mode;
 
 // ---------------------------------------------------------------------------
 // M7-WP6 / R-055：错误弹窗文案抽助手
-//   原状：`tr("无法开始")` ×5（on_start 五个分支）、`tr("未勾选任何文件")` 双源（on_start /
+//   原状：`T("无法开始")` ×5（on_start 五个分支）、`T("未勾选任何文件")` 双源（on_start /
 //   refresh_status）、预设成败标题各 2 处（load_preset_file / save_preset_named /
 //   delete_preset_file）。同一文案不再散落多处 —— 改一处即全改。
 // ---------------------------------------------------------------------------
@@ -292,16 +292,16 @@ void MainWindow::on_start() {
     const bool run_again = d.run_again_pending; // R-006/R-146：「再次运行」的补齐语义分支
     d.run_again_pending = false;
     if (d.running) {
-        warn_cannot_start(this, tr("正在运行"));
+        warn_cannot_start(this, T("正在运行"));
         return;
     }
     if (d.model->empty()) {
-        warn_cannot_start(this, tr("没有文件"));
+        warn_cannot_start(this, T("没有文件"));
         return;
     }
     // M4-T11（§6.2/D2）：勾选 = 参与运行集合 —— 未勾选任何文件 = 无参与文件
     if (d.model->checked_count() == 0) {
-        warn_cannot_start(this, tr("未勾选任何文件"));
+        warn_cannot_start(this, T("未勾选任何文件"));
         return;
     }
     const QString reason = d.page_output->ready_to_start();
@@ -335,7 +335,7 @@ void MainWindow::on_start() {
         const std::filesystem::path out_root(cfg.out_root);
         if (out_root.empty() || !pp::probe_output_root(out_root, &root_err)) {
             warn_cannot_start(
-                this, tr("输出目录不可用：%1\n\n请更换输出根目录后重试。")
+                this, T("输出目录不可用：%1\n\n请更换输出根目录后重试。")
                           .arg(QString::fromStdString(root_err.empty() ? "目录为空" : root_err)));
             return;
         }
@@ -372,15 +372,15 @@ void MainWindow::on_start() {
         if (!lat_ok || !lon_ok || !ts_ok) {
             QStringList bad;
             if (!lat_ok)
-                bad << tr("纬度 %1 超出 [-90, 90]").arg(gps.lat);
+                bad << T("纬度 %1 超出 [-90, 90]").arg(gps.lat);
             if (!lon_ok)
-                bad << tr("经度 %1 超出 [-180, 180]").arg(gps.lon);
+                bad << T("经度 %1 超出 [-180, 180]").arg(gps.lon);
             if (!ts_ok)
-                bad << tr("时间戳「%1」不是 YYYY:MM:DD HH:MM:SS 形态")
+                bad << T("时间戳「%1」不是 YYYY:MM:DD HH:MM:SS 形态")
                            .arg(QString::fromStdString(*gps.timestamp));
             const QMessageBox::StandardButton answer = QMessageBox::warning(
-                this, tr("GPS 规则预检"),
-                tr("批量 GPS 规则存在无效字段：\n%1\n\n继续运行将不写入 GPS。仍要继续吗？")
+                this, T("GPS 规则预检"),
+                T("批量 GPS 规则存在无效字段：\n%1\n\n继续运行将不写入 GPS。仍要继续吗？")
                     .arg(bad.join(QLatin1Char('\n'))),
                 QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
             if (answer != QMessageBox::Yes)
@@ -403,9 +403,9 @@ void MainWindow::on_start() {
         }
         if (hidden > 0) {
             const QMessageBox::StandardButton answer = QMessageBox::question(
-                this, tr("参与集含隐藏文件"),
-                tr("当前筛选条件下参与集含 %1 个被过滤隐藏的文件，它们仍会参与本次运行。\n\n"
-                   "仍要继续吗？")
+                this, T("参与集含隐藏文件"),
+                T("当前筛选条件下参与集含 %1 个被过滤隐藏的文件，它们仍会参与本次运行。\n\n"
+                  "仍要继续吗？")
                     .arg(hidden),
                 QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
             if (answer != QMessageBox::Yes)
@@ -438,8 +438,8 @@ void MainWindow::on_start() {
         cfg.conflict = pp::ConflictPolicy::Skip;
         if (entries.empty()) {
             QMessageBox::information(
-                this, tr("再次运行"),
-                tr("没有缺件：全部 %1 个文件的输出已存在且非空，无需重跑。").arg(complete_dropped));
+                this, T("再次运行"),
+                T("没有缺件：全部 %1 个文件的输出已存在且非空，无需重跑。").arg(complete_dropped));
             return;
         }
     }
@@ -456,11 +456,11 @@ void MainWindow::on_start() {
         if (!bad.isEmpty()) {
             const QString head = bad.mid(0, 20).join(QLatin1Char('\n'));
             const QString more =
-                bad.size() > 20 ? tr("\n…（其余 %1 个省略）").arg(bad.size() - 20) : QString();
+                bad.size() > 20 ? T("\n…（其余 %1 个省略）").arg(bad.size() - 20) : QString();
             const QMessageBox::StandardButton answer = QMessageBox::warning(
-                this, tr("仅元数据预检"),
-                tr("以下 %1 个文件的格式不支持仅元数据（输出将保持源格式：JPEG / PNG / TIFF / "
-                   "WebP）：\n%2%3\n\n仍要继续吗？")
+                this, T("仅元数据预检"),
+                T("以下 %1 个文件的格式不支持仅元数据（输出将保持源格式：JPEG / PNG / TIFF / "
+                  "WebP）：\n%2%3\n\n仍要继续吗？")
                     .arg(bad.size())
                     .arg(head, more),
                 QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
@@ -515,7 +515,7 @@ void MainWindow::on_start() {
     d.run_row_paths.reserve(entries.size());
     for (const pp::FileEntry &e : entries)
         d.run_row_paths.push_back(e.src);
-    d.run_started = 0;                                  // R-250：单账本
+    d.run_started = 0; // R-250：单账本
     d.run_seen.assign(run_rows.size(), false);
     d.run_total = total;
     d.run_terminal = 0;
@@ -558,9 +558,9 @@ void MainWindow::on_run_again() {
         return;
     if (d.run_failed > 0 || d.run_partial > 0) {
         const QMessageBox::StandardButton answer =
-            QMessageBox::question(this, tr("再次运行"),
-                                  tr("上一批有 %1 个失败、%2 个部分成功。再次运行只补跑缺失的输出"
-                                     "（已存在且非空的输出跳过，不会重新编码）。\n\n仍要继续吗？")
+            QMessageBox::question(this, T("再次运行"),
+                                  T("上一批有 %1 个失败、%2 个部分成功。再次运行只补跑缺失的输出"
+                                    "（已存在且非空的输出跳过，不会重新编码）。\n\n仍要继续吗？")
                                       .arg(d.run_failed)
                                       .arg(d.run_partial),
                                   QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
@@ -655,10 +655,10 @@ void MainWindow::lock_for_run(bool lock) {
     if (d.classify_panel != nullptr)
         d.classify_panel->set_locked(lock);
     if (d.classify_hint != nullptr)
-        d.classify_hint->set_full_text(lock ? tr("运行中只读") : QString());
+        d.classify_hint->set_full_text(lock ? T("运行中只读") : QString());
     // M5-T5（1-12）：教学文案已入空态；卡头 hint 只保留运行期锁定反馈
     if (d.file_hint != nullptr)
-        d.file_hint->set_full_text(lock ? tr("运行中锁定") : QString());
+        d.file_hint->set_full_text(lock ? T("运行中锁定") : QString());
     if (d.group_mode != nullptr)
         d.group_mode->setEnabled(!lock); // mockup run-dark：分组下拉置灰
     if (lock)

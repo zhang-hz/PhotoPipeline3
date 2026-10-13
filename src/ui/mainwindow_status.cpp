@@ -216,33 +216,32 @@ void MainWindow::Impl::refresh_status_summary(std::size_t count, std::size_t che
                            bucket(term_words::kRunning, inflight),
                            bucket(term_words::kQueued, queued)}
                    .join(QStringLiteral(" · ")) +
-               MainWindow::tr("（按文件）");
+               T("（按文件）");
         // 运行中：绿 = 进行中；已出现失败/例外 → 琥珀（预警，不打断 —— mockup run-dark 底栏
         // 的「进行中 · 1 异常 · 3 失败」正是琥珀档）
         tone = (d.run_failed > 0 || exceptions > 0) ? theme::kToneWarn : theme::kToneOk;
     } else if (count == 0) {
-        text = MainWindow::tr("未添加文件"); // 空态 = 中性（§8：空/无事发生；不得用红）
+        text = T("未添加文件"); // 空态 = 中性（§8：空/无事发生；不得用红）
     } else if (!reason.isEmpty()) {
         // W-R-T13（A39 ⑤）：预检未过（输出页的阻塞原因）= 警告档，不是失败 —— 但**选中数不被
         // 警告吞掉**：有勾选时读数照报（「已选 N / M · 未设置输出根目录」），警告接在其后；
         // 没有勾选时无可报的读数 → 只出原因（原行为）。
-        text = checked > 0 ? MainWindow::tr("已选 %1 / %2 · %3").arg(checked).arg(count).arg(reason)
-                           : reason;
+        text = checked > 0 ? T("已选 %1 / %2 · %3").arg(checked).arg(count).arg(reason) : reason;
         tone = theme::kToneWarn;
     } else if (checked == 0) {
         // M4-T11（§6.2/D2）：勾选 = 参与运行集合；未勾选 = 无参与文件（中性：无事发生）
-        text = MainWindow::tr("未勾选任何文件");
+        text = T("未勾选任何文件");
     } else if (d.run_failed > 0) {
         // 上一轮运行有失败项（§8：红 = 失败，唯一允许红的语义）
-        text = MainWindow::tr("%1 项失败").arg(d.run_failed);
+        text = T("%1 项失败").arg(d.run_failed);
         tone = theme::kToneErr;
     } else {
         // §3.2 底栏 = 选中摘要 · 输出摘要 · [▶ 开始运行]（mockup："已选 12 / 24 · 就绪"）
-        text = MainWindow::tr("已选 %1 / %2 · 就绪").arg(checked).arg(count);
+        text = T("已选 %1 / %2 · 就绪").arg(checked).arg(count);
         tone = theme::kToneOk;
     }
     if (exceptions > 0) {
-        text += MainWindow::tr(" · %1 个例外").arg(exceptions);
+        text += T(" · %1 个例外").arg(exceptions);
         if (tone != theme::kToneErr)
             tone = theme::kToneWarn; // 例外 = 警告档（琥珀），仍不升到红
     }
@@ -252,11 +251,10 @@ void MainWindow::Impl::refresh_status_summary(std::size_t count, std::size_t che
     // tooltip（write_failure_list 在收尾时落 logs/）。非失败态不挂 tooltip/手型。
     const bool drillable = !d.running && d.run_failed > 0;
     d.status->setCursor(drillable ? Qt::PointingHandCursor : Qt::ArrowCursor);
-    d.status->setToolTip(drillable
-                             ? MainWindow::tr("点击转到运行页查看失败原因\n失败清单：%1")
-                                   .arg(d.failure_list_path.isEmpty() ? MainWindow::tr("（未落盘）")
-                                                                      : d.failure_list_path)
-                             : QString());
+    d.status->setToolTip(
+        drillable ? T("点击转到运行页查看失败原因\n失败清单：%1")
+                        .arg(d.failure_list_path.isEmpty() ? T("（未落盘）") : d.failure_list_path)
+                  : QString());
 }
 
 // 段2（R-253）：底栏第二段 = 运行中 ETA / 空闲产出量摘要（含悬浮明细）。
@@ -270,8 +268,8 @@ void MainWindow::Impl::refresh_status_output_segment(std::size_t checked) {
     if (d.output_status != nullptr) {
         if (d.running) {
             const int eta = d.page_run->eta_seconds();
-            d.output_status->set_full_text(eta >= 0 ? MainWindow::tr("ETA 约 %1").arg(eta_text(eta))
-                                                    : MainWindow::tr("ETA 约 —"));
+            d.output_status->set_full_text(eta >= 0 ? T("ETA 约 %1").arg(eta_text(eta))
+                                                    : T("ETA 约 —"));
             d.output_status->setToolTip(QString());
         } else {
             QStringList labels;
@@ -283,11 +281,11 @@ void MainWindow::Impl::refresh_status_output_segment(std::size_t checked) {
             const QString list = labels.join(QStringLiteral(" + "));
             // 有参与文件 → 「· N 个文件」（N = 勾选数）；一个都没勾 → 「· M 个格式」（避免
             // "0 个文件"式的空读数 —— fix-3-status 两行的同一条口径）。
-            d.output_status->set_full_text(
-                checked > 0 ? MainWindow::tr("输出：%1 · %2 个文件").arg(list).arg(checked)
-                            : MainWindow::tr("输出：%1 · %2 个格式").arg(list).arg(formats));
+            d.output_status->set_full_text(checked > 0
+                                               ? T("输出：%1 · %2 个文件").arg(list).arg(checked)
+                                               : T("输出：%1 · %2 个格式").arg(list).arg(formats));
             d.output_status->setToolTip(
-                MainWindow::tr("格式：%1\n模板：%2\n输出根目录：%3\n同名冲突：%4")
+                T("格式：%1\n模板：%2\n输出根目录：%3\n同名冲突：%4")
                     .arg(list, d.page_output->output_template(), d.page_output->out_root(),
                          conflict_label(d.page_output->config_base().conflict)));
         }
@@ -304,13 +302,12 @@ void MainWindow::Impl::refresh_status_badges(std::size_t count, std::size_t unsu
     // 既有「（N 个不支持）」文案逐字不变）
     QStringList parts;
     if (unsupported_files > 0)
-        parts << MainWindow::tr("%1 个不支持").arg(unsupported_files);
+        parts << T("%1 个不支持").arg(unsupported_files);
     const std::size_t unreadable = model != nullptr ? model->unreadable_count() : 0;
     if (unreadable > 0)
-        parts << MainWindow::tr("%1 项未能读取").arg(unreadable);
+        parts << T("%1 项未能读取").arg(unreadable);
     d.unsupported->set_full_text(
-        parts.isEmpty() ? QString()
-                        : MainWindow::tr("（%1）").arg(parts.join(QStringLiteral(" · "))));
+        parts.isEmpty() ? QString() : T("（%1）").arg(parts.join(QStringLiteral(" · "))));
     d.unsupported->setVisible(!parts.isEmpty());
 }
 
@@ -325,11 +322,10 @@ void MainWindow::Impl::refresh_status_controls(std::size_t count, std::size_t ch
     const bool can_start = !d.running && count > 0 && checked > 0 && reason.isEmpty();
     if (d.running) {
         const int pct = d.page_run->progress_percent();
-        d.start->setText(pct >= 0 ? MainWindow::tr("运行中… %1%").arg(pct)
-                                  : MainWindow::tr("运行中…"));
+        d.start->setText(pct >= 0 ? T("运行中… %1%").arg(pct) : T("运行中…"));
         d.start->setIcon(QIcon()); // 状态读数态不挂图标（mockup run-dark 的 .go 只出读数）
     } else {
-        d.start->setText(MainWindow::tr("开始运行"));
+        d.start->setText(T("开始运行"));
         icons::apply(d.start, icons::Name::Play, d.tokens.on_accent, d.tokens.text3, 12);
     }
     d.start->setEnabled(can_start);
@@ -382,17 +378,14 @@ QString MainWindow::Impl::disk_free_segment() {
         disk_free_bytes = (info.isValid() && info.isReady()) ? info.bytesAvailable() : -1;
         disk_clock.restart();
     }
-    const QString text =
-        disk_free_bytes >= 0
-            ? MainWindow::tr("剩余磁盘 %1").arg(byte_text::natural_bytes(disk_free_bytes))
-            : MainWindow::tr("剩余磁盘 —");
+    const QString text = disk_free_bytes >= 0
+                             ? T("剩余磁盘 %1").arg(byte_text::natural_bytes(disk_free_bytes))
+                             : T("剩余磁盘 —");
     // 读数出处进 tooltip（§2.6：单位/口径不占正文）
     disk_status->setToolTip(
         disk_free_bytes >= 0
-            ? MainWindow::tr("%1所在卷的可用空间：%2")
-                  .arg(from_out_root ? MainWindow::tr("输出根目录") : MainWindow::tr("源目录"),
-                       root)
-            : MainWindow::tr("无法读取卷的可用空间：%1").arg(root));
+            ? T("%1所在卷的可用空间：%2").arg(from_out_root ? T("输出根目录") : T("源目录"), root)
+            : T("无法读取卷的可用空间：%1").arg(root));
     disk_status->set_full_text(text);
     return text;
 }

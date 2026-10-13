@@ -515,9 +515,9 @@ void MainWindow::Impl::join_workers_with_feedback() {
     if (!sched)
         return;
     if (status != nullptr) {
-        QString text = MainWindow::tr("正在等待在途任务收尾…");
+        QString text = T("正在等待在途任务收尾…");
         if (run_total > 0 && run_terminal < run_total) {
-            text = MainWindow::tr("正在等待在途任务收尾… %1/%2")
+            text = T("正在等待在途任务收尾… %1/%2")
                        .arg(static_cast<qulonglong>(run_terminal))
                        .arg(static_cast<qulonglong>(run_total));
         }
@@ -601,9 +601,9 @@ void MainWindow::build_ui() {
 
     d.nav_group = new QActionGroup(this);
     d.nav_group->setExclusive(true);
-    d.nav_meta = new QAction(tr("元数据"), this);
-    d.nav_output = new QAction(tr("输出"), this);
-    d.nav_run = new QAction(tr("运行"), this);
+    d.nav_meta = new QAction(T("元数据"), this);
+    d.nav_output = new QAction(T("输出"), this);
+    d.nav_run = new QAction(T("运行"), this);
     for (QAction *action : {d.nav_meta, d.nav_output, d.nav_run}) {
         action->setCheckable(true);
         d.nav_group->addAction(action);
@@ -621,10 +621,10 @@ void MainWindow::build_ui() {
     top->addStretch(1);
     // M5-T3：QAction 只承载提示/使能（图标 = 矢量引擎，见 make_icon_button）；setText 保留
     // 「收藏当前设置 / 设置」供 QAction 语义与探针读回（按钮本体 ToolButtonIconOnly，不出文本）。
-    d.presets_action = new QAction(tr("收藏当前设置"), this);
-    d.presets_action->setToolTip(tr("收藏当前设置"));
-    d.settings_action = new QAction(tr("设置"), this);
-    d.settings_action->setToolTip(tr("设置"));
+    d.presets_action = new QAction(T("收藏当前设置"), this);
+    d.presets_action->setToolTip(T("收藏当前设置"));
+    d.settings_action = new QAction(T("设置"), this);
+    d.settings_action->setToolTip(T("设置"));
     d.presets_btn = make_icon_button(d.titlebar, d.presets_action, "pp-presets", icons::Name::Star);
     d.settings_btn =
         make_icon_button(d.titlebar, d.settings_action, "pp-settings", icons::Name::Gear);
@@ -637,11 +637,11 @@ void MainWindow::build_ui() {
     // 白字（tokens.close_hover_fg）。 初值用 preferred_theme_mode() 的令牌，refresh_theme()
     // 末尾按当前主题重放（明暗切换即换色）。
     const theme::Tokens boot = theme::tokens(preferred_theme_mode());
-    d.cap_min = make_caption_button(d.titlebar, icons::Name::CaptionMin, tr("最小化"), "pp-cap-min",
+    d.cap_min = make_caption_button(d.titlebar, icons::Name::CaptionMin, T("最小化"), "pp-cap-min",
                                     boot.text, boot.text);
-    d.cap_max = make_caption_button(d.titlebar, icons::Name::CaptionMax, tr("最大化"), "pp-cap-max",
+    d.cap_max = make_caption_button(d.titlebar, icons::Name::CaptionMax, T("最大化"), "pp-cap-max",
                                     boot.text, boot.text);
-    d.cap_close = make_caption_button(d.titlebar, icons::Name::CaptionClose, tr("关闭"),
+    d.cap_close = make_caption_button(d.titlebar, icons::Name::CaptionClose, T("关闭"),
                                       "pp-cap-close", boot.text, boot.close_hover_fg);
     caps->addWidget(d.cap_min);
     caps->addWidget(d.cap_max);
@@ -697,7 +697,7 @@ void MainWindow::build_ui() {
 
     // 卡头：标题 + 计数徽标（**中性** pill，§2.7/1-11）+ 右端 hint（不支持的格式数 / 运行期锁定）
     QLabel *panel_title = nullptr;
-    auto *card_head = make_card_header(d.panel, tr("文件"), &panel_title, &d.file_count);
+    auto *card_head = make_card_header(d.panel, T("文件"), &panel_title, &d.file_count);
     d.file_count->setObjectName(QStringLiteral("pp-file-count"));
     d.unsupported = new ElidedLabel(card_head);
     d.unsupported->setObjectName(QStringLiteral("pp-card-hint"));
@@ -731,25 +731,25 @@ void MainWindow::build_ui() {
     tools->setSpacing(6); // .ftools{gap:6px}
     d.search = new QLineEdit(d.tools_row);
     d.search->setObjectName(QStringLiteral("pp-search"));
-    d.search->setPlaceholderText(tr("搜索文件名…")); // 1-10：省略号 = …（非三句点）
+    d.search->setPlaceholderText(T("搜索文件名…")); // 1-10：省略号 = …（非三句点）
     d.search->setClearButtonEnabled(true);
     d.search->setFixedHeight(theme::Metrics::input_h);
     auto *add_btn = new QToolButton(d.tools_row);
     add_btn->setObjectName(QStringLiteral("pp-add"));
-    add_btn->setToolTip(tr("添加文件 / 文件夹"));
-    add_btn->setAccessibleName(tr("添加文件 / 文件夹")); // §11：图标钮必有 accessibleName
+    add_btn->setToolTip(T("添加文件 / 文件夹"));
+    add_btn->setAccessibleName(T("添加文件 / 文件夹")); // §11：图标钮必有 accessibleName
     icons::apply(add_btn, icons::Name::Add, d.tokens.text2, QColor(), 12);
     add_btn->setPopupMode(QToolButton::InstantPopup);
     // 裁定 A7（R4 表按钮高 26）：＋/− 是**按钮**，此前挂 input_h(24) 是 M4 遗留 → 换锚 btn_h。
     add_btn->setFixedHeight(theme::Metrics::btn_h);
     add_btn->setFixedWidth(theme::Metrics::icon_btn); // R4 图标钮宽 28
     auto *add_menu = new QMenu(add_btn);
-    QAction *act_add_files = add_menu->addAction(tr("添加文件…"));
+    QAction *act_add_files = add_menu->addAction(T("添加文件…"));
     act_add_files->setObjectName(QStringLiteral("pp-add-files"));
-    QAction *act_add_dir = add_menu->addAction(tr("添加文件夹…"));
+    QAction *act_add_dir = add_menu->addAction(T("添加文件夹…"));
     act_add_dir->setObjectName(QStringLiteral("pp-add-dir"));
     add_menu->addSeparator();
-    QAction *act_clear = add_menu->addAction(tr("清空列表"));
+    QAction *act_clear = add_menu->addAction(T("清空列表"));
     act_clear->setObjectName(QStringLiteral("pp-clear-all"));
     add_btn->setMenu(add_menu);
     d.add_files_action = act_add_files;
@@ -757,8 +757,8 @@ void MainWindow::build_ui() {
     d.clear_action = act_clear;
     auto *remove_btn = new QToolButton(d.tools_row);
     remove_btn->setObjectName(QStringLiteral("pp-remove-sel"));
-    remove_btn->setToolTip(tr("移除所选"));
-    remove_btn->setAccessibleName(tr("移除所选")); // §11
+    remove_btn->setToolTip(T("移除所选"));
+    remove_btn->setAccessibleName(T("移除所选")); // §11
     icons::apply(remove_btn, icons::Name::Remove, d.tokens.text2, QColor(), 12);
     remove_btn->setFixedHeight(theme::Metrics::btn_h); // 裁定 A7（同 ＋）
     remove_btn->setFixedWidth(theme::Metrics::icon_btn);
@@ -769,19 +769,19 @@ void MainWindow::build_ui() {
     // 与搜索/勾选/分组正交（§6.2 的正交口径，语义零新增：代理只读既有 roles）。
     auto *filter_btn = new QToolButton(d.tools_row);
     filter_btn->setObjectName(QStringLiteral("pp-filter"));
-    filter_btn->setToolTip(tr("筛选…"));
-    filter_btn->setAccessibleName(tr("筛选…")); // §11
+    filter_btn->setToolTip(T("筛选…"));
+    filter_btn->setAccessibleName(T("筛选…")); // §11
     icons::apply(filter_btn, icons::Name::Filter, d.tokens.text2, QColor(), 12);
     filter_btn->setPopupMode(QToolButton::InstantPopup);
     filter_btn->setFixedHeight(theme::Metrics::btn_h); // 裁定 A7
     filter_btn->setFixedWidth(theme::Metrics::icon_btn);
     auto *filter_menu = new QMenu(filter_btn);
-    QAction *act_filter_checked = filter_menu->addAction(tr("仅显示已勾选"));
+    QAction *act_filter_checked = filter_menu->addAction(T("仅显示已勾选"));
     act_filter_checked->setCheckable(true);
-    QAction *act_filter_exceptions = filter_menu->addAction(tr("仅显示有例外的文件"));
+    QAction *act_filter_exceptions = filter_menu->addAction(T("仅显示有例外的文件"));
     act_filter_exceptions->setCheckable(true);
     filter_menu->addSeparator();
-    QAction *act_filter_clear = filter_menu->addAction(tr("清除筛选"));
+    QAction *act_filter_clear = filter_menu->addAction(T("清除筛选"));
     filter_btn->setMenu(filter_menu);
     d.filter_btn = filter_btn;
     d.filter_checked = act_filter_checked;
@@ -793,34 +793,34 @@ void MainWindow::build_ui() {
     auto *check_btn = new QToolButton(d.tools_row);
     check_btn->setObjectName(QStringLiteral("pp-check-menu"));
     check_btn->setToolTip(
-        tr("勾选操作（Ctrl+A 全选行 · Ctrl+Shift+A 勾选全部 · Ctrl+D 取消全部勾选）"));
-    check_btn->setAccessibleName(tr("勾选操作"));
+        T("勾选操作（Ctrl+A 全选行 · Ctrl+Shift+A 勾选全部 · Ctrl+D 取消全部勾选）"));
+    check_btn->setAccessibleName(T("勾选操作"));
     icons::apply(check_btn, icons::Name::CheckAll, d.tokens.text2, QColor(), 12);
     check_btn->setPopupMode(QToolButton::InstantPopup);
     check_btn->setFixedHeight(theme::Metrics::btn_h);
     check_btn->setFixedWidth(theme::Metrics::icon_btn);
     auto *check_menu = new QMenu(check_btn);
-    QAction *act_check_all = check_menu->addAction(tr("勾选全部"));
-    QAction *act_uncheck_all = check_menu->addAction(tr("取消全部勾选"));
-    QAction *act_invert_checks = check_menu->addAction(tr("反选勾选"));
-    act_check_all->setToolTip(tr("勾选全部（Ctrl+Shift+A）"));
-    act_uncheck_all->setToolTip(tr("取消全部勾选（Ctrl+D）"));
-    act_invert_checks->setToolTip(tr("反选勾选"));
+    QAction *act_check_all = check_menu->addAction(T("勾选全部"));
+    QAction *act_uncheck_all = check_menu->addAction(T("取消全部勾选"));
+    QAction *act_invert_checks = check_menu->addAction(T("反选勾选"));
+    act_check_all->setToolTip(T("勾选全部（Ctrl+Shift+A）"));
+    act_uncheck_all->setToolTip(T("取消全部勾选（Ctrl+D）"));
+    act_invert_checks->setToolTip(T("反选勾选"));
     check_btn->setMenu(check_menu);
     d.check_menu_btn = check_btn;
     // GUI-R2：左栏下拉同样走 formkit 唯一构造点（原先逐控件 setStyleSheet 是第六条样式路径）
     {
         formkit::ComboSpec group_spec;
         group_spec.object_name = QStringLiteral("pp-group-mode");
-        group_spec.accessible = tr("分组方式");
-        group_spec.tooltip = tr("分组方式"); // 1-09：工具行并入后，语义提示进 tooltip
+        group_spec.accessible = T("分组方式");
+        group_spec.tooltip = T("分组方式"); // 1-09：工具行并入后，语义提示进 tooltip
         d.group_mode = formkit::combo_box(d.tools_row, group_spec);
     }
     d.group_mode->setSizeAdjustPolicy(QComboBox::AdjustToContentsOnFirstShow);
-    d.group_mode->addItem(tr("按月份"), int(pp::GroupMode::Month));
-    d.group_mode->addItem(tr("按相机型号"), int(pp::GroupMode::Camera));
-    d.group_mode->addItem(tr("按源格式"), int(pp::GroupMode::SourceFormat));
-    d.group_mode->addItem(tr("无分组"), int(pp::GroupMode::None));
+    d.group_mode->addItem(T("按月份"), int(pp::GroupMode::Month));
+    d.group_mode->addItem(T("按相机型号"), int(pp::GroupMode::Camera));
+    d.group_mode->addItem(T("按源格式"), int(pp::GroupMode::SourceFormat));
+    d.group_mode->addItem(T("无分组"), int(pp::GroupMode::None));
     tools->addWidget(d.search, 1);
     tools->addWidget(add_btn);
     tools->addWidget(remove_btn);
@@ -873,10 +873,9 @@ void MainWindow::build_ui() {
     classify_layout->setContentsMargins(0, 0, 0, 6);
     classify_layout->setSpacing(0);
     QLabel *classify_title = nullptr;
-    QWidget *classify_head =
-        make_card_header(d.classify_card, tr("分类"), &classify_title, nullptr);
+    QWidget *classify_head = make_card_header(d.classify_card, T("分类"), &classify_title, nullptr);
     // M5-T5（1-14）：「1–9 键打标」不再常驻标题行 → 移入 tooltip（卡片标题 + 分类面板两处可及）
-    classify_title->setToolTip(tr("1–9 键打标"));
+    classify_title->setToolTip(T("1–9 键打标"));
     d.classify_hint = new ElidedLabel(classify_head);
     d.classify_hint->setObjectName(QStringLiteral("pp-card-hint"));
     d.classify_hint->setFont(theme::font(theme::Typography::hint_px));
@@ -885,7 +884,7 @@ void MainWindow::build_ui() {
         head_layout->addWidget(d.classify_hint);
     classify_layout->addWidget(classify_head);
     d.classify_panel = new ClassifyPanel(d.classify_card);
-    d.classify_panel->setToolTip(tr("1–9 键打标")); // 面板内 hover 也可及（1-14 的引导层）
+    d.classify_panel->setToolTip(T("1–9 键打标")); // 面板内 hover 也可及（1-14 的引导层）
     classify_layout->addWidget(d.classify_panel);
     left_col_layout->addWidget(d.classify_card, 0);
 
@@ -901,7 +900,7 @@ void MainWindow::build_ui() {
     preview_layout->setSpacing(0);
     QLabel *preview_title = nullptr;
     QWidget *preview_head =
-        make_card_header(d.preview_card, tr("输入预览"), &preview_title, &d.preview_pill);
+        make_card_header(d.preview_card, T("输入预览"), &preview_title, &d.preview_pill);
     d.preview_pill->setObjectName(QStringLiteral("pp-preview-pill")); // §9.3 pp-* 测试钩子
     d.preview_hint = new ElidedLabel(preview_head);
     d.preview_hint->setObjectName(QStringLiteral("pp-card-hint"));
@@ -956,7 +955,7 @@ void MainWindow::build_ui() {
     d.status = new ElidedLabel(d.bottombar); // §9.3：超长文案省略号，不折行
     d.status->setObjectName(QStringLiteral("pp-status"));
     d.status->setFont(theme::font(theme::Typography::small_px)); // 状态栏 11px
-    d.status->set_full_text(tr("未添加文件"));
+    d.status->set_full_text(T("未添加文件"));
     // R-144：状态栏失败段可下钻（点击 → 运行页）—— 走窗口同一只事件过滤器（handle_event）
     d.status->installEventFilter(d.filter);
     d.status_sep = new QFrame(d.bottombar); // 段间分隔（修 5-13：栏内分区）
@@ -981,7 +980,7 @@ void MainWindow::build_ui() {
     bottom->addWidget(d.disk_sep);
     bottom->addWidget(d.disk_status);
     bottom->addStretch(1);
-    d.start = new QPushButton(tr("开始运行"), d.bottombar);
+    d.start = new QPushButton(T("开始运行"), d.bottombar);
     d.start->setObjectName(QStringLiteral("pp-start"));
     // 图标 = icons::play（矢量 ▶，mockup statusbar .btn-go 的 ▶）；色 = acc-on（实心 CTA 上的字色）
     icons::apply(d.start, icons::Name::Play, d.tokens.on_accent, d.tokens.text3, 12);
@@ -1037,14 +1036,14 @@ void MainWindow::wire() {
 
     connect(d.add_files_action, &QAction::triggered, this, [this] {
         const QStringList files = QFileDialog::getOpenFileNames(
-            this, tr("添加文件"), QString(),
-            tr("图片 (*.jpg *.jpeg *.png *.tif *.tiff *.webp *.jxl *.heic *.heif *.avif *.bmp "
-               "*.gif *.tga);;所有文件 (*)"));
+            this, T("添加文件"), QString(),
+            T("图片 (*.jpg *.jpeg *.png *.tif *.tiff *.webp *.jxl *.heic *.heif *.avif *.bmp "
+              "*.gif *.tga);;所有文件 (*)"));
         if (!files.isEmpty())
             add_paths(files);
     });
     connect(d.add_dir_action, &QAction::triggered, this, [this] {
-        const QString dir = QFileDialog::getExistingDirectory(this, tr("添加文件夹"));
+        const QString dir = QFileDialog::getExistingDirectory(this, T("添加文件夹"));
         if (!dir.isEmpty())
             add_paths(QStringList{dir});
     });
@@ -1180,26 +1179,26 @@ void MainWindow::wire() {
     // 快捷键挂在**文件列表**焦点域（WidgetWithChildrenShortcut）：文本输入控件里 Ctrl+A 等
     // 仍归控件自己（搜索框选中文字），不被应用级快捷键抢走。
     {
-        QAction *select_all = new QAction(tr("全选行"), this);
+        QAction *select_all = new QAction(T("全选行"), this);
         select_all->setShortcut(QKeySequence::SelectAll); // Ctrl+A（Qt 标准）
         select_all->setShortcutContext(Qt::WidgetWithChildrenShortcut);
-        select_all->setToolTip(tr("全选行（Ctrl+A）"));
+        select_all->setToolTip(T("全选行（Ctrl+A）"));
         d.view->addAction(select_all);
         connect(select_all, &QAction::triggered, this, [this] {
             if (impl_->view != nullptr)
                 impl_->view->selectAll();
         });
-        QAction *quick_check = new QAction(tr("勾选全部"), this);
+        QAction *quick_check = new QAction(T("勾选全部"), this);
         quick_check->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_A));
         quick_check->setShortcutContext(Qt::WidgetWithChildrenShortcut);
-        quick_check->setToolTip(tr("勾选全部（Ctrl+Shift+A）"));
+        quick_check->setToolTip(T("勾选全部（Ctrl+Shift+A）"));
         d.view->addAction(quick_check);
         connect(quick_check, &QAction::triggered, this,
                 [this] { impl_->apply_visible_checks(Impl::CheckOp::All); });
-        QAction *quick_uncheck = new QAction(tr("取消全部勾选"), this);
+        QAction *quick_uncheck = new QAction(T("取消全部勾选"), this);
         quick_uncheck->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_D));
         quick_uncheck->setShortcutContext(Qt::WidgetWithChildrenShortcut);
-        quick_uncheck->setToolTip(tr("取消全部勾选（Ctrl+D）"));
+        quick_uncheck->setToolTip(T("取消全部勾选（Ctrl+D）"));
         d.view->addAction(quick_uncheck);
         connect(quick_uncheck, &QAction::triggered, this,
                 [this] { impl_->apply_visible_checks(Impl::CheckOp::None); });
@@ -1334,7 +1333,7 @@ void MainWindow::wire() {
                 d2.apply_class_to_selection(QString::fromStdString(id));
             });
         }
-        in.tag_targets.emplace_back(tr("清除归属"),
+        in.tag_targets.emplace_back(T("清除归属"),
                                     [&d2] { d2.apply_class_to_selection(QString()); });
         in.copy_path = [&d2] {
             const QModelIndex idx = d2.view != nullptr ? d2.view->currentIndex() : QModelIndex();
@@ -1350,7 +1349,7 @@ void MainWindow::wire() {
         std::vector<contextmenu::Item> items = contextmenu::file_list_actions(in);
         if (filtered) {
             // 作用域提示（UX-2：过滤出 5 行点"勾选全部"是勾 5 行还是 24 行 —— 文案说清）
-            const QString scope = tr("（可见 %1 行）").arg(visible_rows().size());
+            const QString scope = T("（可见 %1 行）").arg(visible_rows().size());
             for (contextmenu::Item &item : items) {
                 if (!item.separator && !item.text.isEmpty())
                     item.text += scope;
@@ -1725,7 +1724,7 @@ void MainWindow::Impl::update_caption_buttons() {
     // M5-T3：最大化/还原 = 换**矢量图标**（caption-max ↔ caption-restore），不再是 ❐/□ 字形
     auto *button = static_cast<CaptionButton *>(cap_max);
     button->set_icon_name(maximized ? icons::Name::CaptionRestore : icons::Name::CaptionMax);
-    const QString tip = maximized ? MainWindow::tr("向下还原") : MainWindow::tr("最大化");
+    const QString tip = maximized ? T("向下还原") : T("最大化");
     cap_max->setToolTip(tip);
     cap_max->setAccessibleName(tip); // §11：文案随状态变化，两者同步
 }
@@ -2102,8 +2101,8 @@ void MainWindow::Impl::apply_visible_checks(CheckOp op) {
         }
     }
     if (filtered) {
-        set_status_note(MainWindow::tr("勾选操作作用于可见 %1 行（筛选生效中；参与运行集仍是全局）")
-                            .arg(visible.size()));
+        set_status_note(
+            T("勾选操作作用于可见 %1 行（筛选生效中；参与运行集仍是全局）").arg(visible.size()));
     }
 }
 

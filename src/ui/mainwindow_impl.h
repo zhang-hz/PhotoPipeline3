@@ -197,7 +197,7 @@ public:
         setObjectName(QStringLiteral("pp-nav-strip"));
         // §11/A18：导航 = 交互控件 → 进入 Tab 链（A18 前为 NoFocus，键盘不可达）
         setFocusPolicy(Qt::StrongFocus);
-        setAccessibleName(tr("步骤导航")); // §11：控件可读名（nav-a11y 探针取证非空）
+        setAccessibleName(T("步骤导航")); // §11：控件可读名（nav-a11y 探针取证非空）
         setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         setMouseTracking(true);
         ensure_shell_nav_accessible_factory(); // §11/A18：tab/button group 语义的可访问接口
@@ -501,7 +501,7 @@ public:
         case QAccessible::Name:
             return a != nullptr ? a->text() : QString();
         case QAccessible::Description: // 语义补充：这是运行流程里的第几步
-            return QObject::tr("步骤 %1").arg(index_ + 1);
+            return T("步骤 %1").arg(index_ + 1);
         default:
             return QString();
         }

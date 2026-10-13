@@ -195,7 +195,7 @@ void MainWindow::Impl::save_preset_named(const QString &name) {
     // paths 层已把空目录收成空路径（path_under），这里补**调用方**守卫：目录不可用 = 显式报错。
     const std::filesystem::path dir = pp::platform::presets_dir();
     if (dir.empty()) {
-        warn_preset_op(w, PresetOp::Save, MainWindow::tr("预设目录不可用（数据目录为空）"));
+        warn_preset_op(w, PresetOp::Save, T("预设目录不可用（数据目录为空）"));
         return;
     }
     const std::filesystem::path path = dir / (name.toStdString() + ".json");
@@ -215,13 +215,13 @@ void MainWindow::Impl::delete_preset_file(const QString &path) {
     // 不得成为删除目标（QFile::remove("x.json") 会删掉工作目录里的同名文件）。
     const QFileInfo info(path);
     if (info.isRelative()) {
-        warn_preset_op(w, PresetOp::Delete, MainWindow::tr("拒绝删除相对路径预设（%1）").arg(path));
+        warn_preset_op(w, PresetOp::Delete, T("拒绝删除相对路径预设（%1）").arg(path));
         return;
     }
     const QString name = info.completeBaseName();
-    const QMessageBox::StandardButton answer = QMessageBox::question(
-        w, MainWindow::tr("删除预设"), MainWindow::tr("确定删除预设“%1”？").arg(name),
-        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    const QMessageBox::StandardButton answer =
+        QMessageBox::question(w, T("删除预设"), T("确定删除预设“%1”？").arg(name),
+                              QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
     if (answer != QMessageBox::Yes)
         return;
     if (!QFile::remove(path)) {

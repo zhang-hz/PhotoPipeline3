@@ -1,5 +1,71 @@
 # 变更日志
 
+## [0.3.5.alpha1] — 2026-10-14
+
+**预发布（alpha）**：GUI 渲染面缺陷根治 + **识图门禁**（用户两张红框截图 7 处缺陷 + 「没有识图步骤吗？」
+追问的正面回应）。根因一句话：`tests/ui_smoke.py` 头明写「**截图仅存档，不做像素比对**」——
+GUI 有测试但全是几何/语义断言，**渲染面（字形裁切 / 空图标 / 行错位 / 空盒）零机械判据**，
+全靠人眼，于是 0.3.3/0.3.4 全部门禁绿灯放行。版本单源 = `CMakeLists.txt:19-21` = **0.3.5.alpha1**
+（数字段 0.3.5 + 预发布标签 ".alpha1"；CMake `project(VERSION)` 只收数字段，标签拼在字符串侧）。
+
+### 新增
+
+- **识图门禁 `layout-audit`**（`smoke_probe_layout_audit`，`PP_BUILD_DEV` 门控；`tests/ui_smoke.py`
+  追加 `UI-SMOKE layout-audit:` 齐备行）：六类**几何 + 像素**断言 —— ① text-clip（下拉文本区墨迹
+  顶到切断线 / 磁贴主字被省略）② overlap（叶子控件全局矩形相交，裁到滚动视口内再比）
+  ③ blank-btn / ink-btn（纯图标钮无文案无图标、实拍内区墨迹 < 12px）④ overflow（越出父矩形）
+  ⑤ ghost（无名·无文案·无图标的裸空盒）⑥ card-blank / head-tall（卡体高于可见子件和）。
+  每一处用户红框都有阳性对照（修复前 bad>0 逐条复现，修复后 `checked=1027 bad=0`）。
+  12 张截图仍按原口径人工留档（不改"截图不比对"的既定取证口径）；**冻结末行逐字未动**。
+
+### 修复
+
+- **工具栏勾选操作钮白底**（debug1 ①）：`mini` QSS 选择器漏 `pp-check-menu` → 补进选择器，四钮同脸。
+- **「关键信息」卡头大片空白**（debug1 ②）：`formkit::lock_card_size` 用**一次性**
+  `setMinimumHeight(sizeHint)` 钉下限，隐藏行也计入 → 空态收起 5 行 kv 后卡体整片留白。
+- **预览「上一张/下一张」两块白方**（debug1 ③）：`make_nav` 只挂探针钩子、**从不 `icons::apply`**
+  → 随令牌重放矢量图标。
+- **格式磁贴「JPEG XL」→「JPEG…」**（debug2 ①）：磁贴 `paintEvent` 无后缀时也减 6px 列距 → 与
+  `sizeHint` 同式（后缀只在有后缀时让位）。
+- **「渲染意图」下拉硬裁成「相对比色 + 黑点补M」**（debug2 ②）：项文案 150px 塞进 160 标准轨的
+  132px 文本区 → 项文案改「相对比色+黑点补偿」，「（默认）」移入 R3 行尾注释槽随选择显隐。
+- **三行开关不同列**（debug2 ③）：`make_flex_field` 给首个控件 stretch 1，单开关被居中到字段中段
+  → 控件一律贴字段轨起点、富余宽归行尾。
+- **格式参数行互相重叠 + 杂散空盒**（debug2 ③/④）：锁高陈值反向侧（建卡时表单还空只钉 84px，
+  行建好后被压到 6px 节奏再被固定高弹回）→ 同卡头修复，重叠簇 20+ 条全消。
+- **左栏搜索框挤成「···」**（debug1 ① 旁）：306px 工具行装不下 4 钮 + 160 下拉 + 搜索框 →
+  分组下拉收短档 88（mockup 工具行口径），最长项「按相机型号」→「按机型」。
+
+### 变更
+
+- **`formkit::lock_card_size` 语义**：下限从"一次性钉数"改"实时 sizeHint 当下限"
+  （`QSizePolicy::Minimum`，无 ShrinkFlag ⇒ 父布局把 sizeHint 当下限）—— 下限随内容实时变化，
+  消灭"钉数陈值"整类缺陷（留白 / 压行两侧都出过）。
+- **三页页级滚动条常驻**（`page_meta` / `page_output` / `page_run`）：内容高随选中/运行态变化会把
+  竖滚动条"顶"出来/收回去，内容宽随之 ±15px，磁贴 2×4 栅格整体横移（用户可见的整卡回流 +
+  既有断言 `tile-zero-deform` 漂移）⇒ 常驻滚动条钉住内容宽。
+- **文案 2 处**（均有裁定登记 `docs/m7-adjudications.md` M7R25-3/4）：渲染意图项、分组项
+  「按相机型号」→「按机型」（节头仍用「相机型号」，`pp::GroupKey` 语义不变）。
+
+### 已知
+
+- **整图基线比对仍未做**（12 张截图仍只存档）：上感知哈希/逐像素比对需先解决跨平台字体渲染差异
+  （offscreen 的 CJK 以 tofu 满宽字形渲染，比真机墨迹宽约 10%），否则 CI 会红在字体上。
+- **text-clip 判据只覆盖下拉**：按钮/chip/分段钮自绘带描边，墨迹法分不清"描边"与"被裁的字"，
+  且宽度多随内容（结构上不裁）；其文本裁切暂无机械判据。
+- 弹窗（设置 / EXIF 编辑器 / 预设）不在 layout-audit 扫描面内（归既有 `dialog-close` /
+  `settings-dialog` 探针）。
+
+### 发行
+
+- 产物：Linux AppImage（x86_64）+ Windows 免安装 zip；**预发布（alpha）**，仅建议尝鲜/验证用。
+- 门禁（本地实测）：格式 violations=0 ｜ clang-tidy 262=基线 ｜ ctest 35/35 ｜ 金样
+  `SMOKE total=20 pass=20 fail=0` ｜ 回归 zero diff ｜ `--ui-smoke`
+  `layout-audit checked=1027 bad=0` + `UI-SMOKE OK shots=12 pages=3` 冻结行逐字不变。
+- 回归基线重播种 **0.3.5.alpha1**（归因：**版本行 12 / 行为 0**，逐文件 `golden.log` /
+  `golden.windows.log` 各 12 行均为版本串）。
+- 根因/证据/门禁归因见 [docs/m7r25-report.md](docs/m7r25-report.md)（含测试/门禁体系深查）。
+
 ## [0.3.4] — 2026-10-13
 
 **M7-R2.4 热修轮**：0.3.3 Windows 发行件「双击打不开」P0 热修 + 该类缺陷的机械化防线。

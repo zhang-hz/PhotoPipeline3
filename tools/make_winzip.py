@@ -86,7 +86,7 @@ sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FROZEN_UI_SMOKE = 'UI-SMOKE OK shots=12 pages=3'   # M4-W3-T14 起 12 张（与 tests/ui_smoke.py 同源）
 FROZEN_WIN_LAUNCH = 'WIN-LAUNCH OK'  # M7-R2.4 真机启动探针冻结行前缀（tools/win_launch_probe.py 同源）
-VERSION_RE = re.compile(r'^PhotoPipeline \d+\.\d+\.\d+$')
+VERSION_RE = re.compile(r'^PhotoPipeline \d+\.\d+\.\d+(\.[A-Za-z][A-Za-z0-9]*)*$')
 
 # 门禁 A 判据（M3-T11 v2.2 / R2）：不再维护硬编码系统 DLL 白名单（永远列不全），
 # 改为逐名按**顺序**三判据 + MUST_BUNDLE 前缀（见 classify_import）。

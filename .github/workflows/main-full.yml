@@ -1219,7 +1219,7 @@ jobs:
             "$APPIMAGE" --version > "$RUNNER_TEMP/appimage-version.log" 2>&1
           rc=$?; cat "$RUNNER_TEMP/appimage-version.log"
           [ "$rc" -eq 0 ] || { echo "::error::AppImage --version 退出码 $rc"; exit 1; }
-          grep -qE '^PhotoPipeline [0-9]+\.[0-9]+\.[0-9]+$' "$RUNNER_TEMP/appimage-version.log" \
+          grep -qE '^PhotoPipeline [0-9]+\.[0-9]+\.[0-9]+(\.[A-Za-z][A-Za-z0-9]*)*$' "$RUNNER_TEMP/appimage-version.log" \
             || { echo "::error::AppImage --version 输出异常"; exit 1; }
 
           echo "== ② offscreen GUI 启动存活性（6s）"

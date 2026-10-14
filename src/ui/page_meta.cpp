@@ -178,6 +178,9 @@ void build_ui(PageMeta *page) {
     auto *scroll = new QScrollArea(page);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
+    // 竖滚动条常驻：内容高随选中变化会把滚动条"顶"出来/收回去，内容宽随之 ±15px，
+    // 卡内等分栅格/对轨件整体横移（与 page_output / page_run 同口径）
+    scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
     outer->addWidget(scroll);
 
     auto *content = new QWidget(scroll);

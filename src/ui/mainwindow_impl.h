@@ -1213,6 +1213,9 @@ struct MainWindow::Impl : mw_cabin::Chrome,
     void smoke_probe_class_filter();
     void smoke_probe_edit_target();
     void smoke_probe_settings_tabs_light();
+    // R-识图1（M7-R2.4-G2）：布局审计 —— 裁切/重叠/空按钮/越界/空盒/卡体空旷 六类**渲染面**
+    // 几何 + 像素断言（debug/debug1.png + debug2.png 红框 7 处的机械化看守；只增）
+    void smoke_probe_layout_audit();
     // R-255（M7-R2.1-F3）：smoke_probe_meta 原 1675 行/深 10 → 12 个分节方法（逐字搬移；
     // 断言/输出行与顺序不变；共享前置 = MetaProbeCtx）
     void probe_meta_sec_a(const MetaProbeCtx &c, const QString &shots_dir); // (a) 基线/几何/信息行

@@ -1823,6 +1823,9 @@ PageRun::PageRun(QWidget *parent) : QWidget(parent) {
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    // 竖滚动条常驻：内容高随运行态变化会把滚动条"顶"出来/收回去，内容宽随之 ±15px，
+    // 行内等分列整体横移（与 page_output / page_meta 同口径）
+    scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
     outer->addWidget(scroll);
     auto *content = new QWidget(scroll);
     content->setObjectName(QStringLiteral("pp-run-content"));

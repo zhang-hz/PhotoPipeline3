@@ -421,7 +421,7 @@ struct OutputPageImpl {
                              bool primary);
 
     // 行内复合字段（flex 轨）：[本体 flex][附件…] —— 复合字段容器撑满轨，无浮空死区（R2）
-    QWidget *make_flex_field(QWidget *parent, QList<QWidget *> widgets);
+    QWidget *make_flex_field(QWidget *parent, const QList<QWidget *> &widgets);
 
     // 卡 ①：输出格式（转换模式分段 + 说明行 ｜ 8 格式磁贴 2×4）
     QWidget *build_format_card(QWidget *parent);

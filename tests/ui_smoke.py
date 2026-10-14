@@ -244,6 +244,17 @@ M7-R2.2-G1（G1 探针总集与 Linux ui_smoke 定点修复）:
     check-all 补强」与 R-152/153 回归通道的齐备性补强），并随本批新增
     `format-roundtrip`（R-189/192 format_selection_model 往返）与 `rtl-deep`
     （R-218 深水区：QLabel 数值列右对齐 RTL 随向定论）两行。
+
+M7-R2.4-G2（布局审计 · R-识图1 —— 识图步骤的机械化落点）:
+  * 起因 = debug/debug1.png + debug/debug2.png（2026-10-13，红框 7 处：图标钮白方 / 卡头大片
+    空白 / 翻图钮无图标 / "JPEG XL"→"JPEG…" / 下拉裁半字 / 开关列错位 / 行重叠 + 杂散空盒）。
+    本文件头此前明写「**截图仅存档，不做像素比对**」—— 也就是说全链路没有任何『识图』步骤，
+    渲染面缺陷只能靠人眼。本批把识图固化成常驻探针 `smoke_probe_layout_audit()`
+    （smoke_probes.cpp）：六类几何 + 像素断言（text-clip / overlap / blank-btn+ink-btn /
+    overflow / ghost / card-blank），任一命中 smoke_fail ⇒ 退出码 1。
+  * 追加 `LAYOUT_AUDIT_LINE_PREFIXES` 一行齐备断言（只增；冻结末行 `UI-SMOKE OK shots=12
+    pages=3` 与既有清单零改动）。12 张截图仍按原口径人工留档（不改"截图不比对"的既定取证
+    口径），但从此渲染面有机器看守。
 """
 
 import os
@@ -427,6 +438,15 @@ G1_LINE_PREFIXES = (
     'UI-SMOKE failure-list:',
 )
 
+# M7-R2.4-G2（布局审计 · R-识图1）自检行：**识图步骤的机械化落点**。起因 = debug/debug1.png +
+# debug/debug2.png（2026-10-13 红框 7 处）——本文件头明写「截图仅存档，不做像素比对」，于是
+# 渲染面的裁切/重叠/空按钮在全部门禁下无人看守。探针本体在 smoke_probes.cpp 的
+# smoke_probe_layout_audit()（几何 + 像素断言六类），行内 `checked=N bad=M` 由 C++ 侧给出；
+# 本脚本只要求该行存在（防断言被静默跳过）。冻结末行与既有清单零改动。
+LAYOUT_AUDIT_LINE_PREFIXES = (
+    'UI-SMOKE layout-audit:',
+)
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 build_dir = sys.argv[1] if len(sys.argv) > 1 else 'build/release-dev'
@@ -481,6 +501,7 @@ def main():
         m6t9_seen = set()
         m6t13_seen = set()
         g1_seen = set()
+        layout_audit_seen = set()
         with open(log_path, 'w', encoding='utf-8', newline='') as log_fp:
             for line in proc.stdout:
                 sys.stdout.write(line)
@@ -536,6 +557,9 @@ def main():
                 for prefix in G1_LINE_PREFIXES:
                     if line.startswith(prefix):
                         g1_seen.add(prefix)
+                for prefix in LAYOUT_AUDIT_LINE_PREFIXES:
+                    if line.startswith(prefix):
+                        layout_audit_seen.add(prefix)
         status = proc.wait()
 
         if status != 0:
@@ -624,6 +648,11 @@ def main():
         missing = [p for p in G1_LINE_PREFIXES if p not in g1_seen]
         if missing:
             print('ui_smoke: FAIL (missing G1 probe self-check lines: {})'.format(
+                ', '.join(missing)), file=sys.stderr)
+            return 1
+        missing = [p for p in LAYOUT_AUDIT_LINE_PREFIXES if p not in layout_audit_seen]
+        if missing:
+            print('ui_smoke: FAIL (missing layout-audit visual-check lines: {})'.format(
                 ', '.join(missing)), file=sys.stderr)
             return 1
         print('UI-SMOKE pass')

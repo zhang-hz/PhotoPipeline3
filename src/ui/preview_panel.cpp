@@ -940,6 +940,13 @@ void PreviewPanel::Impl::apply_style() {
         if (chip != nullptr)
             chip->set_tokens(tokens);
     }
+    // 翻图钮矢量图标随令牌取色（text2 / 禁用 text3）—— make_nav 只 setProperty(kIconNameProperty)
+    // 探针钩子、**从不 icons::apply** ⇒ 底条两块白方（debug/debug1.png 红框 3；
+    // layout-audit ③ ink-btn 钉守）。图标是矢量渲染色，不吃 QSS，必须显式重放。
+    if (prev != nullptr)
+        icons::apply(prev, icons::Name::Prev, tokens.text2, tokens.text3, kNavIconPx);
+    if (next != nullptr)
+        icons::apply(next, icons::Name::Next, tokens.text2, tokens.text3, kNavIconPx);
 }
 
 void PreviewPanel::Impl::rebuild_key_hints() {

@@ -679,7 +679,10 @@ void CheckableCard::paintEvent(QPaintEvent *) {
     const QFontMetrics hint_fm(hint_font);
     const int hint_w = hint_.isEmpty() ? 0 : hint_fm.horizontalAdvance(hint_);
     const int text_x = int(mark.right()) + kTileGap;
-    const QRect name_rect(text_x, 0, std::max(0, width() - text_x - kTilePadX - hint_w - kTileGap),
+    // 后缀只在**有后缀时**让位（含列距 kTileGap）—— 与 sizeHint 同式；无后缀时少让 6px 会把
+    // 最宽的主字（"JPEG XL"）省略成 "JPEG…"（debug/debug2.png 红框 1，layout-audit ① 钉守）。
+    const int hint_reserve = hint_w > 0 ? hint_w + kTileGap : 0;
+    const QRect name_rect(text_x, 0, std::max(0, width() - text_x - kTilePadX - hint_reserve),
                           height());
     p.setFont(name_font);
     p.setPen(dim ? theme::at_opacity(t.text, t.window, theme::Metrics::icon_dim_opacity)
@@ -1142,8 +1145,14 @@ QAbstractButton *make_button(QWidget *parent, const QString &text, bool primary)
 void lock_card_size(QFrame *card) {
     if (card == nullptr)
         return;
+    // 下限 = **实时 sizeHint**，用 sizePolicy 表达（Minimum 无 ShrinkFlag ⇒ 父布局把
+    // sizeHint 当下限，随内容实时变化），不再 setMinimumHeight(sizeHint) 钉一次性数值
+    // —— 那个数在内容一变就失效，两侧都出过可见缺陷（layout-audit ⑥/② 钉守）：
+    //   * 钉高时把**隐藏行**也计入 ⇒ 空态收起 5 行 kv 后卡体整片留白（debug1 红框 2）；
+    //   * 建卡时参数表单还空 ⇒ 只钉 84，等参数行建好后整卡被压到 84，行被布局压缩后又被
+    //     固定高弹回 ⇒ 28px 行按 6px 节奏互相重叠（debug2 红框 3/4）。
     card->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
-    card->setMinimumHeight(card->sizeHint().height());
+    card->setMinimumHeight(0); // 清掉历史钉数（陈旧锚本身就是病灶）
 }
 
 } // namespace pp::ui::formkit

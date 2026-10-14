@@ -26,6 +26,10 @@ void OutputPageImpl::build_ui() {
     auto *v = new QVBoxLayout(content);
     v->setContentsMargins(0, 0, 0, 0);
     v->setSpacing(theme::Metrics::gap); // §4.3 卡间距 8
+    // 滚动条常驻：内容高随所选格式变化会把竖滚动条"顶"出来/收回去，内容宽随之 ±15px，
+    // 磁贴 2×4 栅格（列 stretch 等分）整体横移 —— 与 tile-zero-deform「勾选零形变」冲突，
+    // 也是用户可见的整卡回流。常驻滚动条 ⇒ 内容宽恒定（与 page_meta / page_run 同口径）。
+    scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
     scroll->setWidget(content);
 
     v->addWidget(build_format_card(content));
@@ -85,13 +89,17 @@ QPushButton *OutputPageImpl::make_button(QWidget *parent, const QString &text,
     return button;
 }
 
-QWidget *OutputPageImpl::make_flex_field(QWidget *parent, QList<QWidget *> widgets) {
+QWidget *OutputPageImpl::make_flex_field(QWidget *parent, const QList<QWidget *> &widgets) {
     auto *host = new QWidget(parent);
     auto *h = new QHBoxLayout(host);
     h->setContentsMargins(0, 0, 0, 0);
     h->setSpacing(theme::Metrics::group_gap);
-    for (int i = 0; i < widgets.size(); ++i)
-        h->addWidget(widgets[i], i == 0 ? 1 : 0);
+    // 控件一律**贴字段轨起点**（与其它行同轴），富余宽归行尾 stretch —— 旧写法给首个控件
+    // stretch 1，单开关行的 30×16 开关被居中到字段中段，与「分文件夹」行的开关不同列
+    // （debug/debug2.png 红框 3；layout-audit ② 的列错位）。
+    for (QWidget *widget : widgets)
+        h->addWidget(widget, 0);
+    h->addStretch(1);
     return host;
 }
 
@@ -278,7 +286,11 @@ QWidget *OutputPageImpl::build_global_card(QWidget *parent) {
         intent_spec.object_name = QStringLiteral("pp-intent-combo");
         intent_spec.accessible = PageOutput::tr("渲染意图");
         intent_combo = formkit::combo_box(global_card, intent_spec);
-        intent_combo->addItem(PageOutput::tr("相对比色 + 黑点补偿（默认）"), 0);
+        // 文案进 160 标准轨（R2 同列同宽不许拉满）：「相对比色+黑点补偿」102px 墨迹可容，
+        // 旧串「相对比色 + 黑点补偿（默认）」150px 被硬裁成「相对比色 + 黑点补M」
+        // （debug/debug2.png 红框 2）。默认档标记移到行尾 10px 注释槽（R3：提示不占标签位），
+        // 随选择同步显示/隐藏 —— 未发生的量不显示（§诚实显示）。
+        intent_combo->addItem(PageOutput::tr("相对比色+黑点补偿"), 0);
         intent_combo->addItem(PageOutput::tr("感知"), 1);
         intent_combo->addItem(PageOutput::tr("绝对比色"), 2);
         intent_combo->addItem(PageOutput::tr("饱和度"), 3);
@@ -288,9 +300,16 @@ QWidget *OutputPageImpl::build_global_card(QWidget *parent) {
         intent_combo->setToolTip(PageOutput::tr(
             "色彩转换的渲染意图（UX-14 C3）：默认档 = 现行为（相对比色 + 黑点补偿）；"
             "感知/绝对/饱和为可选能力档。带 A2B/B2A 表的 ICC 才有可见差异"));
-        const formkit::Row row = formkit::frow(global_card, PageOutput::tr("渲染意图"),
-                                               intent_combo, FieldWidth::Standard);
+        const formkit::Row row =
+            formkit::frow(global_card, PageOutput::tr("渲染意图"), intent_combo,
+                          FieldWidth::Standard, QString(), PageOutput::tr("（默认）"));
         row.row->setObjectName(QStringLiteral("pp-intent-row"));
+        if (row.note != nullptr) {
+            QObject::connect(intent_combo, &QComboBox::currentIndexChanged, q,
+                             [note = row.note](int index) {
+                                 note->setText(index == 0 ? PageOutput::tr("（默认）") : QString());
+                             });
+        }
         body.box->addWidget(row.row);
     }
     {

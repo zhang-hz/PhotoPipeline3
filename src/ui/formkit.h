@@ -343,6 +343,8 @@ public:
     void set_labels(const QString &name, const QString &hint = QString());
     void set_tokens(const theme::Tokens &t) override;
     QSize sizeHint() const override;
+    // 只读回读（layout-audit 探针按 paint 口径量"主字是否被省略"，需要后缀宽）
+    const QString &hint_text() const { return hint_; }
 
 protected:
     void paintEvent(QPaintEvent *event) override;

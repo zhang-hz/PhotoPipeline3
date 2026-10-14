@@ -10,24 +10,35 @@
 #include "ui/mainwindow_impl.h"
 
 #include "ui/contextmenu.h"    // UX-1：卡片右键菜单面（词表单源）
+#include "ui/formkit.h"        // R-识图1：CheckableCard/ElidedLabel 回读（layout-audit ①③）
+#include "ui/formkit_layout.h" // R-识图1：磁贴/下拉可用宽口径单源（layout-audit ①）
 #include "ui/leading_indent.h" // R-218：逻辑边距单源
 #include "ui/meta_probe_context.h" // R-182/R-258 + M7-R2.3-G8：钩子/词表单源 + ProbeContext（读侧全面迁移）
 #include "ui/meta_state.h" // M7R22G1-3：meta::RatingStars/DeltaSpin/unit_slot/note_label（rtl-mirror 四查）
+#include <QAbstractButton>
 #include <QAbstractScrollArea>
+#include <QAbstractSpinBox>
+#include <QBoxLayout>
 #include <QComboBox>
 #include <QContextMenuEvent>
 #include <QDirIterator>
+#include <QFrame>
 #include <QHBoxLayout>
 #include <QKeySequence>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPushButton>
+#include <QSet>
+#include <QTabBar>
 #include <QToolButton>
 
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
 
 #ifdef PP_BUILD_DEV
 
@@ -7339,6 +7350,432 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
             smoke_fail(MainWindow::tr("截图计数 %1 ≠ %2").arg(smoke_shots).arg(kSmokeShotCount));
         }
     }
+
+    // ---- 布局审计（识图门禁）：放最末 —— 只读几何/实拍，不改任何终态 ----
+    smoke_probe_layout_audit();
+}
+
+// ---------------------------------------------------------------------------
+// 布局审计（识图门禁 · R-识图1，M7-R2.4-G2）——只增。
+//
+// 起因：debug/debug1.png + debug/debug2.png（2026-10-13，用户红框 7 处）——
+// tests/ui_smoke.py 头口径明写「截图仅存档，不做像素比对」：渲染面的裁切 / 重叠 / 空按钮
+// 在 format / tidy / ctest / gold smoke / regression / ui-smoke 全部门禁下无人看守。本探针
+// 把「识图」机械化成几何 + 像素断言（12 张截图仍按原口径人工留档；冻结末行逐字不变）：
+//   ① text-clip  控件画不下自己的文案：下拉 / 标签 / 按钮 / 磁贴 / 输入框占位符
+//                → "JPEG XL"→"JPEG…"（磁贴）、「相对比色 + 黑点补偿」被裁半字（下拉）
+//   ② overlap    两个叶子控件全局矩形相交 ≥8×8 → 技术行下拉压「无损编码」行
+//   ③ blank-btn  QToolButton/QPushButton 无文案无图标；纯图标钮内区墨迹 < 12px（实拍）
+//                → 预览「上一张/下一张」两块白方
+//   ④ overflow   叶子控件越出父矩形 ≥3px → 行高 28 装不下更高的控件（② 同根因的几何面）
+//   ⑤ ghost      无名·无文案·无图标的裸 QWidget/QFrame 空盒 ≥40×18 →「＋ 添加格式…」旁白框
+//   ⑥ card-blank pp-card 高 > 可见子件高和 + 24；卡头子件高 > 44 →「关键信息」卡头大片空白
+// 扫描口径：几何类判据（②④⑤⑥）只看**当前页可见**件（隐藏件几何是布局跳过后的陈值），
+// 三页逐页各扫一遍；文案 / 图标类判据（①③）不看可见性 —— 病灶藏在非当前页（与
+// combo-consistency 同源口径），明暗两档各一轮，重复命中按行文去重。
+// ---------------------------------------------------------------------------
+void MainWindow::Impl::smoke_probe_layout_audit() {
+    int checked = 0;
+    int bad = 0;
+    QStringList detail;
+    QSet<QString> seen;
+    const auto hit = [&](const QString &item) {
+        if (seen.contains(item))
+            return; // 明暗 × 翻页重复命中只记一次
+        seen.insert(item);
+        ++bad;
+        if (detail.size() < 8)
+            detail << item;
+        std::printf("UI-SMOKE layout-audit: %s\n", qUtf8Printable(item)); // 逐条取证（失败可定位）
+    };
+    const auto tag = [this](const QWidget *x) {
+        const QPoint p = x->mapTo(w, QPoint(0, 0)); // 全局（主窗口坐标）—— 重叠定位用
+        return QStringLiteral("%1#%2[%3x%4@%5,%6]")
+            .arg(QString::fromLatin1(x->metaObject()->className()),
+                 x->objectName().isEmpty() ? QStringLiteral("-") : x->objectName())
+            .arg(x->width())
+            .arg(x->height())
+            .arg(p.x())
+            .arg(p.y());
+    };
+    // 祖先链取证（overlap 定位用）：逐级 class#name[w×h@x,y]，直到主窗口
+    const auto chain = [this, &tag](const QWidget *x) {
+        QStringList parts;
+        for (const QWidget *p = x; p != nullptr && parts.size() < 5; p = p->parentWidget())
+            parts << (p == w ? QStringLiteral("WIN") : tag(p));
+        return parts.join(QStringLiteral(" < "));
+    };
+    // 墨迹水平范围（逻辑像素）：与**逐行众数底色**偏离 > 24 的像素包围盒；无墨 → {−1,−1}。
+    // 入参区域是**逻辑坐标**（控件坐标系），内部按 devicePixelRatio 换算到图像像素——
+    // 实拍图 dpr=2 时按物理像素取窗会只取到半幅，把背景算成墨迹。
+    // 逐行取底（不是全图众数）：禁用态控件与页面渐变底混合后底色非均匀，全图众数会把
+    // 大半底色判成墨迹（chips / 分段钮的假阳即此因）。
+    const auto ink_bounds = [](const QImage &img, const QRect &logical_region) {
+        struct Span {
+            double left = -1.0;
+            double right = -1.0;
+        };
+        Span out;
+        if (img.isNull() || img.width() < 2 || img.height() < 2)
+            return out;
+        const double dpr = img.devicePixelRatioF() > 0 ? img.devicePixelRatioF() : 1.0;
+        QRect r =
+            logical_region.isEmpty()
+                ? img.rect()
+                : QRect(QPoint(qRound(logical_region.x() * dpr), qRound(logical_region.y() * dpr)),
+                        QSize(qRound(logical_region.width() * dpr),
+                              qRound(logical_region.height() * dpr)));
+        r = r.intersected(img.rect());
+        if (r.isEmpty())
+            return out;
+        for (int yy = r.top(); yy <= r.bottom(); ++yy) {
+            QHash<QRgb, int> hist;
+            for (int xx = r.left(); xx <= r.right(); ++xx)
+                ++hist[img.pixel(xx, yy)];
+            QRgb modal = 0;
+            int best = -1;
+            for (auto it = hist.constBegin(); it != hist.constEnd(); ++it)
+                if (it.value() > best) {
+                    best = it.value();
+                    modal = it.key();
+                }
+            const int mr = qRed(modal), mg = qGreen(modal), mb = qBlue(modal);
+            for (int xx = r.left(); xx <= r.right(); ++xx) {
+                const QRgb p = img.pixel(xx, yy);
+                if (std::abs(qRed(p) - mr) + std::abs(qGreen(p) - mg) + std::abs(qBlue(p) - mb) <=
+                    24)
+                    continue;
+                const double lx = double(xx) / dpr;
+                if (out.left < 0.0 || lx < out.left)
+                    out.left = lx;
+                if (out.right < 0.0 || lx > out.right)
+                    out.right = lx;
+            }
+        }
+        return out;
+    };
+    const auto ink_span = [&ink_bounds](const QImage &img, const QRect &logical_region) {
+        const auto b = ink_bounds(img, logical_region);
+        return b.left < 0.0 ? 0.0 : b.right - b.left + 1.0;
+    };
+    const auto ink_right = [&ink_bounds](const QImage &img, const QRect &logical_region) {
+        return ink_bounds(img, logical_region).right;
+    };
+
+    const int page_before = stack != nullptr ? stack->currentIndex() : -1;
+    const theme::ThemeMode mode_before = theme_mode;
+    for (int theme_pass = 0; theme_pass < 2; ++theme_pass) {
+        set_theme_mode(theme_pass == 0 ? theme::ThemeMode::Dark : theme::ThemeMode::Light);
+        const int pages = stack != nullptr ? stack->count() : 1;
+        for (int page = 0; page < pages; ++page) {
+            if (stack != nullptr) {
+                stack->setCurrentIndex(page);
+                pump(60);
+            }
+            const QList<QWidget *> all = w->findChildren<QWidget *>();
+            QList<QWidget *> leaves;
+            for (QWidget *x : all) {
+                if (x == nullptr || x->window() != w)
+                    continue; // 弹窗是独立 top-level（几何归 dialog-close / settings-dialog）
+                if (x->width() < 4 || x->height() < 4)
+                    continue;
+                if (theme_pass == 0 && page == 0)
+                    ++checked;
+                // 下拉 / 微调框 / 行编辑 / 页签带 的内部件不判（Qt 自绘 chrome：清除钮、
+                // 页签滚动钮等）——几何与文案都由外框承担
+                bool internal = false;
+                for (QWidget *p = x->parentWidget(); p != nullptr && p != w;
+                     p = p->parentWidget()) {
+                    if (qobject_cast<const QComboBox *>(p) != nullptr ||
+                        qobject_cast<const QAbstractSpinBox *>(p) != nullptr ||
+                        qobject_cast<const QLineEdit *>(p) != nullptr ||
+                        qobject_cast<const QTabBar *>(p) != nullptr) {
+                        internal = true;
+                        break;
+                    }
+                }
+                if (internal)
+                    continue;
+                // 几何/文案判据只看**当前页可见**件：隐藏件（折叠段、空态收起行）几何是布局
+                // 跳过后的陈值，拿它比尺寸只会满屏假阳。三页逐页各扫一遍 ⇒ 非当前页照样过堂。
+                if (!x->isVisibleTo(w))
+                    continue;
+
+                // ---- ① text-clip（识图口径：**实绘墨迹顶到文本区右缘** + 内容声明比）----
+                // 判据两路，按控件分：
+                //   * 标签 / 文字钮 / 磁贴 —— 布局按**自身 sizeHint** 给宽，「宽 ≥ sizeHint」
+                //     即不裁；标签无内距、文字本就贴边，用"墨迹贴边"判会满屏假阳。
+                //   * 下拉 / 行编辑占位符 —— sizeHint 按**最宽项**算（含未选项），改用同字体
+                //     裸标签代量**当前文案**，加箭头/内距后与实占宽比。
+                // 自绘磁贴（CheckableCard）按 paintEvent 口径单列：它用 elidedText，被省略时
+                // 墨迹只是变短不会缺角（"JPEG XL"→"JPEG…"，debug2 红框 1）。
+                // （曾试过"参考件渲一遍比墨迹宽"：§4.2 的 11.5px 档走 setPointSizeF，参考件与
+                // 控件按各自 DPI 解析像素高不同 —— 实测同一文案 156 / 111，换算不可靠，弃。）
+                QString text;
+                int formula_need = -1;
+                int formula_avail = -1;
+                bool rich = false;
+                if (const auto *tile = dynamic_cast<const formkit::CheckableCard *>(x)) {
+                    text = tile->text();
+                    const QFontMetrics name_fm(
+                        theme::font(theme::Typography::card_title_px, QFont::Bold));
+                    const QFontMetrics hint_fm(theme::font(theme::Typography::badge_px));
+                    const int hint_w = tile->hint_text().isEmpty()
+                                           ? 0
+                                           : hint_fm.horizontalAdvance(tile->hint_text());
+                    formula_need = name_fm.horizontalAdvance(text);
+                    formula_avail = x->width() - 2 * formkit::kTilePadX - formkit::kCheckPx -
+                                    formkit::kTileGap -
+                                    (hint_w > 0 ? hint_w + formkit::kTileGap : 0);
+                } else if (const auto *line = qobject_cast<const QLineEdit *>(x)) {
+                    if (line->text().isEmpty())
+                        text = line->placeholderText();
+                } else if (dynamic_cast<const formkit::ElidedLabel *>(x) != nullptr) {
+                    text.clear(); // 省略即设计（§9.3 挤不下才出省略号）→ 不判
+                } else if (const auto *combo = qobject_cast<const QComboBox *>(x)) {
+                    text = combo->currentText();
+                } else if (const auto *btn = qobject_cast<const QAbstractButton *>(x)) {
+                    if (btn->icon().isNull()) // 带图标钮的墨迹混进图标 → 交 ③ 的实拍判
+                        text = btn->text();
+                } else if (const auto *label = qobject_cast<const QLabel *>(x)) {
+                    text = label->text();
+                    rich = label->textFormat() != Qt::PlainText;
+                }
+                const bool clip_candidate =
+                    !text.isEmpty() && !rich && formula_need < 0 &&
+                    x->sizePolicy().horizontalPolicy() == QSizePolicy::Fixed &&
+                    qobject_cast<const QComboBox *>(x) != nullptr; // 判据只认下拉（见下）
+                if (clip_candidate) {
+                    // 硬裁的可见签名 = **实绘墨迹顶到内容区右缘**（contentsRect 让出 24px
+                    // 箭头列）。判据**只认下拉**：①它是 D5 病灶类（文本轨 160 硬裁半字）；
+                    // ②它的文本区边界明确（箭头列起点）。按钮/chip/分段钮自绘且自带描边，
+                    // 墨迹法分不清"描边"与"被裁的字"，判了全是假阳；其宽度多随内容，结构上
+                    // 不裁。为什么不用度量/QImage 参考：点值字号在"控件度量"与"实绘"间解析
+                    // 不一致（实测同一文案 156 / 102，差 1.5×），offscreen 的 CJK 又以 tofu
+                    // 满宽字形渲染（比真机宽约 10%）—— 任何换算都会假阳。
+                    QRect area = x->contentsRect();
+                    if (qobject_cast<const QComboBox *>(x) != nullptr)
+                        area.setRight(area.right() - 24);
+                    const QImage shot = x->grab().toImage();
+                    const double span = ink_span(shot, area);
+                    const double right = ink_right(shot, area);
+                    const double left = right - span + 1.0;
+                    if (area.width() > 8 && left <= area.left() + 1.0 && right >= area.right())
+                        hit(QStringLiteral("text-clip:%1 墨迹=%2..%3 内容区=%4..%5 \"%6\"")
+                                .arg(tag(x))
+                                .arg(left, 0, 'f', 1)
+                                .arg(right, 0, 'f', 1)
+                                .arg(area.left())
+                                .arg(area.right())
+                                .arg(text.left(20)));
+                }
+                if (formula_need > formula_avail)
+                    hit(QStringLiteral("text-clip:%1 磁贴主字 need=%2 avail=%3 \"%4\"")
+                            .arg(tag(x))
+                            .arg(formula_need)
+                            .arg(formula_avail)
+                            .arg(text.left(20)));
+
+                // ---- ③ blank-btn / ink-btn（不看可见性）----
+                if (auto *btn = qobject_cast<QAbstractButton *>(x)) {
+                    const bool tool_like = qobject_cast<const QToolButton *>(x) != nullptr ||
+                                           qobject_cast<const QPushButton *>(x) != nullptr;
+                    if (tool_like) {
+                        const bool has_text = !btn->text().isEmpty();
+                        const bool has_icon =
+                            !btn->icon().isNull() ||
+                            !btn->property(icons::kIconNameProperty).toString().isEmpty();
+                        if (!has_text && !has_icon) {
+                            hit(QStringLiteral("blank-btn:%1 无文案无图标").arg(tag(x)));
+                        } else if (!has_text && has_icon) {
+                            // 像素取证：图标挂了但画不出来 = 同样是白方 → 内区（各缩 3px）
+                            // 必须有 ≥12 个非背景像素（外框描边不算墨）
+                            const QImage img = btn->grab().toImage();
+                            int ink = 0;
+                            QRgb modal = 0;
+                            if (!img.isNull()) {
+                                QHash<QRgb, int> hist;
+                                for (int yy = 0; yy < img.height(); ++yy)
+                                    for (int xx = 0; xx < img.width(); ++xx)
+                                        ++hist[img.pixel(xx, yy)];
+                                int best = -1;
+                                for (auto it = hist.constBegin(); it != hist.constEnd(); ++it)
+                                    if (it.value() > best) {
+                                        best = it.value();
+                                        modal = it.key();
+                                    }
+                                const int mr = qRed(modal), mg = qGreen(modal), mb = qBlue(modal);
+                                for (int yy = 3; yy + 3 < img.height(); ++yy) {
+                                    for (int xx = 3; xx + 3 < img.width(); ++xx) {
+                                        const QRgb p = img.pixel(xx, yy);
+                                        if (std::abs(qRed(p) - mr) + std::abs(qGreen(p) - mg) +
+                                                std::abs(qBlue(p) - mb) >
+                                            24)
+                                            ++ink;
+                                    }
+                                }
+                            }
+                            if (ink < 12)
+                                hit(QStringLiteral("ink-btn:%1 内区墨迹=%2").arg(tag(x)).arg(ink));
+                        }
+                    }
+                }
+
+                // ---- 几何类判据：只看当前页可见件（隐藏件几何是布局跳过后的陈值）----
+                if (!x->isVisibleTo(w))
+                    continue;
+                const bool is_leaf = qobject_cast<const QComboBox *>(x) != nullptr ||
+                                     qobject_cast<const QAbstractButton *>(x) != nullptr ||
+                                     qobject_cast<const QLineEdit *>(x) != nullptr ||
+                                     qobject_cast<const QAbstractSpinBox *>(x) != nullptr ||
+                                     qobject_cast<const QLabel *>(x) != nullptr;
+                bool under_tabbar = false;
+                for (QWidget *p = x->parentWidget(); p != nullptr; p = p->parentWidget())
+                    if (qobject_cast<const QTabBar *>(p) != nullptr) {
+                        under_tabbar = true;
+                        break;
+                    }
+                if (is_leaf && !under_tabbar) // 页签带上的角标定位件（AddFormatAligner）不判
+                    leaves << x;
+
+                // ---- ⑤ ghost ----
+                const QString cls = QString::fromLatin1(x->metaObject()->className());
+                if (x->children().isEmpty() && x->objectName().isEmpty() &&
+                    (cls == QLatin1String("QWidget") || cls == QLatin1String("QFrame")) &&
+                    x->width() >= 40 && x->height() >= 18)
+                    hit(QStringLiteral("ghost:%1 裸控件无名无文案").arg(tag(x)));
+            }
+
+            // ---- ② overlap ----
+            // 比**裁到滚动视口内**的矩形：卡片滚出视口下方时与底栏几何上相交，但用户看不见
+            // （滚动语义），不算重叠。
+            const auto visible_rect = [this](const QWidget *x) {
+                QRect r(x->mapTo(w, QPoint(0, 0)), x->size());
+                for (const QWidget *p = x->parentWidget(); p != nullptr && p != w;
+                     p = p->parentWidget()) {
+                    const auto *sa = qobject_cast<const QAbstractScrollArea *>(p);
+                    if (sa == nullptr || sa->viewport() == nullptr)
+                        continue;
+                    const QRect vr(sa->viewport()->mapTo(w, QPoint(0, 0)), sa->viewport()->size());
+                    r = r.intersected(vr);
+                }
+                return r;
+            };
+            for (int i = 0; i < leaves.size(); ++i) {
+                for (int j = i + 1; j < leaves.size(); ++j) {
+                    QWidget *a = leaves[i];
+                    QWidget *b = leaves[j];
+                    if (a->isAncestorOf(b) || b->isAncestorOf(a))
+                        continue;
+                    const QRect ra = visible_rect(a);
+                    const QRect rb = visible_rect(b);
+                    if (ra.isEmpty() || rb.isEmpty())
+                        continue;
+                    const QRect inter = ra.intersected(rb);
+                    if (inter.width() >= 8 && inter.height() >= 8)
+                        hit(QStringLiteral("overlap:%1 x %2 相交 %3x%4 (%5)")
+                                .arg(tag(a), tag(b))
+                                .arg(inter.width())
+                                .arg(inter.height())
+                                .arg(chain(a)));
+                }
+            }
+            // ---- ④ overflow ----
+            for (QWidget *x : leaves) {
+                QWidget *par = x->parentWidget();
+                if (par == nullptr || par == w)
+                    continue;
+                const auto *sa = qobject_cast<const QAbstractScrollArea *>(par->parentWidget());
+                if (sa != nullptr && sa->viewport() == par)
+                    continue; // 滚动视口内可超视口（滚动语义）
+                const QRect pr(par->mapTo(w, QPoint(0, 0)), par->size());
+                const QRect cr(x->mapTo(w, QPoint(0, 0)), x->size());
+                if (cr.left() < pr.left() - 3 || cr.top() < pr.top() - 3 ||
+                    cr.right() > pr.right() + 3 || cr.bottom() > pr.bottom() + 3)
+                    hit(QStringLiteral("overflow:%1 越出 %2")
+                            .arg(tag(x), QStringLiteral("%1#%2").arg(
+                                             QString::fromLatin1(par->metaObject()->className()),
+                                             par->objectName())));
+            }
+            // ---- ⑥ card-blank / head-tall / body-blank ----
+            // 卡体留白两处都会渲染成"大片空白"：卡整体高于子件和（head-tall 的几何面）、
+            // 卡内某层容器高于其**可见**子件和（空态收起 5 行 kv 后 body 仍按 5 行铺高，
+            // debug/debug1.png 红框 2 的「关键信息」卡头大片空白就是这条）。
+            for (QFrame *card : w->findChildren<QFrame *>()) {
+                if (card == nullptr || card->objectName() != QLatin1String("pp-card") ||
+                    !card->isVisibleTo(w))
+                    continue;
+                // 富余高载体（布局 stretch>0，如 UX-4 的 GPS 卡）不判 —— 空白是设计。
+                // QBoxLayout 无 Q_OBJECT ⇒ qobject_cast 用不上（static_assert），走 dynamic_cast。
+                QWidget *par = card->parentWidget();
+                const auto *box =
+                    par != nullptr ? dynamic_cast<const QBoxLayout *>(par->layout()) : nullptr;
+                if (box != nullptr) {
+                    const int idx = box->indexOf(card);
+                    if (idx >= 0 && box->stretch(idx) > 0)
+                        continue;
+                }
+                const std::function<void(QWidget *, int)> blank_walk = [&](QWidget *host,
+                                                                           int depth) {
+                    // 只查**布局托管**的容器：画布（pp-preview-stage 等）子件绝对定位、
+                    // 高度由画布自身语义决定，不属"留白"
+                    if (host == nullptr || depth > 2 || host->layout() == nullptr)
+                        return;
+                    int sum = 0;
+                    QStringList kid_tags;
+                    QList<QWidget *> kids;
+                    for (QObject *ch : host->children()) {
+                        auto *cw = qobject_cast<QWidget *>(ch);
+                        if (cw == nullptr || !cw->isVisibleTo(w))
+                            continue;
+                        sum += cw->height();
+                        kids << cw;
+                        if (kid_tags.size() < 4)
+                            kid_tags << tag(cw);
+                    }
+                    // 空白是设计的两种情形：布局给了 stretch / 放了 spacer
+                    bool absorbing = false;
+                    const QLayout *lay = host->layout();
+                    if (const auto *b = dynamic_cast<const QBoxLayout *>(lay))
+                        for (int i = 0; i < b->count(); ++i)
+                            absorbing = absorbing || b->stretch(i) > 0;
+                    if (lay != nullptr)
+                        for (int i = 0; i < lay->count(); ++i)
+                            absorbing = absorbing || lay->itemAt(i)->spacerItem() != nullptr;
+                    if (!absorbing && !kids.isEmpty() && host->height() - sum > 24)
+                        hit(QStringLiteral("card-blank:%1 高=%2 可见子件和=%3 [%4]")
+                                .arg(tag(host))
+                                .arg(host->height())
+                                .arg(sum)
+                                .arg(kid_tags.join(QLatin1Char(' '))));
+                    for (QWidget *k : kids)
+                        blank_walk(k, depth + 1);
+                };
+                blank_walk(card, 0);
+                int head_h = -1;
+                for (QObject *ch : card->children()) {
+                    const auto *cw = qobject_cast<QWidget *>(ch);
+                    if (cw == nullptr || !cw->isVisibleTo(w))
+                        continue;
+                    head_h = cw->height();
+                    break;
+                }
+                if (head_h > 44)
+                    hit(QStringLiteral("head-tall:%1 卡头高=%2").arg(tag(card)).arg(head_h));
+            }
+        }
+    }
+    if (stack != nullptr && page_before >= 0)
+        stack->setCurrentIndex(page_before);
+    set_theme_mode(mode_before);
+    pump(60);
+    std::printf("UI-SMOKE layout-audit: checked=%d bad=%d [%s]\n", checked, bad,
+                qUtf8Printable(detail.join(QLatin1Char(' '))));
+    std::fflush(stdout);
+    if (bad > 0)
+        smoke_fail(MainWindow::tr("布局审计（识图）命中 %1 处：%2")
+                       .arg(bad)
+                       .arg(detail.join(QLatin1Char(' '))));
 }
 
 // ---------------------------------------------------------------------------
@@ -7445,15 +7882,29 @@ void MainWindow::Impl::smoke_probe_output_geometry() {
         ys.erase(std::unique(ys.begin(), ys.end()), ys.end());
         int deform_ok = 0;
         int enabled_tiles = 0;
+        QStringList deform_detail;
         for (formkit::CheckableCard *tile : tiles) {
             const QSize size_before = tile->size();
             const QSize hint_before = tile->sizeHint();
             const QPoint pos_before = tile->mapTo(&page, QPoint(0, 0));
             tile->setChecked(!tile->isChecked());
             pump(40);
+            const QPoint pos_after = tile->mapTo(&page, QPoint(0, 0));
             if (tile->size() == size_before && tile->sizeHint() == hint_before &&
-                tile->mapTo(&page, QPoint(0, 0)) == pos_before)
+                pos_after == pos_before) {
                 ++deform_ok;
+            } else {
+                deform_detail << QStringLiteral("%1 %2→%3 @%4,%5→%6,%7 hint %8→%9")
+                                     .arg(tile->objectName())
+                                     .arg(size_before.width())
+                                     .arg(tile->size().width())
+                                     .arg(pos_before.x())
+                                     .arg(pos_before.y())
+                                     .arg(pos_after.x())
+                                     .arg(pos_after.y())
+                                     .arg(hint_before.width())
+                                     .arg(tile->sizeHint().width());
+            }
             tile->setChecked(!tile->isChecked()); // 还原（jxl 单选）
             pump(40);
             if (tile->isEnabled())
@@ -7465,7 +7916,10 @@ void MainWindow::Impl::smoke_probe_output_geometry() {
                    .arg(ys.size())
                    .arg(xs.size()));
         expect("tile-zero-deform", deform_ok == tiles.size(),
-               QStringLiteral("ok=%1/%2").arg(deform_ok).arg(tiles.size()));
+               QStringLiteral("ok=%1/%2 %3")
+                   .arg(deform_ok)
+                   .arg(tiles.size())
+                   .arg(deform_detail.join(QLatin1Char(' '))));
         expect("tile-normal", enabled_tiles == tiles.size(), // 未选中 = 正常对比度（非禁用态）
                QStringLiteral("enabled=%1/%2").arg(enabled_tiles).arg(tiles.size()));
     }

@@ -777,17 +777,21 @@ void MainWindow::Impl::build_left_column() {
     act_invert_checks->setToolTip(T("反选勾选"));
     check_btn->setMenu(check_menu);
     d.check_menu_btn = check_btn;
-    // GUI-R2：左栏下拉同样走 formkit 唯一构造点（原先逐控件 setStyleSheet 是第六条样式路径）
+    // GUI-R2：左栏下拉同样走 formkit 唯一构造点（原先逐控件 setStyleSheet 是第六条样式路径）。
+    // 字段宽 = **短档 88**（mockup 工具行的下拉本就是短档）：306px 行宽要装 4 个 28px 图标钮 +
+    // 下拉 + 搜索框，标准档 160 会把 pp-search 挤成 36px、占位符硬裁成「···」
+    // （debug/debug1.png 红框 1 旁；layout-audit ① pp-search 钉守）。短档下最长项须 ≤4 字
+    // （62px 文本区），故「按相机型号」→「按机型」；节头仍用「相机型号」（pp::GroupKey 语义不变）。
     {
         formkit::ComboSpec group_spec;
         group_spec.object_name = QStringLiteral("pp-group-mode");
         group_spec.accessible = T("分组方式");
         group_spec.tooltip = T("分组方式"); // 1-09：工具行并入后，语义提示进 tooltip
-        d.group_mode = formkit::combo_box(d.tools_row, group_spec);
+        d.group_mode = formkit::combo_box(d.tools_row, group_spec, formkit::FieldWidth::Short);
     }
     d.group_mode->setSizeAdjustPolicy(QComboBox::AdjustToContentsOnFirstShow);
     d.group_mode->addItem(T("按月份"), int(pp::GroupMode::Month));
-    d.group_mode->addItem(T("按相机型号"), int(pp::GroupMode::Camera));
+    d.group_mode->addItem(T("按机型"), int(pp::GroupMode::Camera));
     d.group_mode->addItem(T("按源格式"), int(pp::GroupMode::SourceFormat));
     d.group_mode->addItem(T("无分组"), int(pp::GroupMode::None));
     tools->addWidget(d.search, 1);
@@ -1659,12 +1663,14 @@ void MainWindow::Impl::theme_replay_panels() {
     // M4-T11：左栏控件样式（mockup .mini-btn / .search / .combo；tokens 单源）
     {
         const QString mini =
-            QStringLiteral("QToolButton#pp-add, QToolButton#pp-remove-sel, QToolButton#pp-filter "
+            QStringLiteral("QToolButton#pp-add, QToolButton#pp-remove-sel, QToolButton#pp-filter, "
+                           "QToolButton#pp-check-menu "
                            "{ background:%1; "
                            "border:1px solid %2; border-radius:%3px; color:%4; "
                            "font-weight:600; padding:0 %5px; }"
                            "QToolButton#pp-add:disabled, QToolButton#pp-remove-sel:disabled, "
-                           "QToolButton#pp-filter:disabled { color:%6; }")
+                           "QToolButton#pp-filter:disabled, QToolButton#pp-check-menu:disabled "
+                           "{ color:%6; }")
                 .arg(theme::css_color(tokens.control), theme::css_color(tokens.control_bd))
                 .arg(theme::Metrics::control_radius)
                 .arg(theme::css_color(tokens.text2), QString::number(theme::Metrics::pill_pad_x),
@@ -1681,6 +1687,9 @@ void MainWindow::Impl::theme_replay_panels() {
             remove_sel->setStyleSheet(mini);
         if (filter_btn != nullptr)
             filter_btn->setStyleSheet(mini);
+        // pp-check-menu 与同组三钮同一张脸（R2/UX-2；此前漏在 mini 名单外 → 白钮，debug1 红框 1）
+        if (check_menu_btn != nullptr)
+            check_menu_btn->setStyleSheet(mini);
         if (search != nullptr)
             search->setStyleSheet(input);
         // group_mode 不再逐控件 setStyleSheet —— GUI-R2：下拉样式单源 = theme::formkit_qss

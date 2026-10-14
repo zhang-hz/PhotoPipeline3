@@ -482,3 +482,18 @@
 | M7R24-2 | **winzip 门禁 5 → 6**：新增 E-3 真机启动探针（`tools/win_launch_probe.py`，冻结行前缀 `WIN-LAUNCH OK`），staging exe 走真实 qwindows 平台断言「可见主窗 + 顶层窗口数不超阈 + 进程存活」 | 判据只增不减：offscreen 判据（金样/--ui-smoke/ctest）不触达真实建窗路径，此类缺陷需要真实平台判据；探针自带阳性对照（0.3.3 坏包被拦 `window-storm windows=47>32`，修复后 `WIN-LAUNCH OK windows=6 visible=1`），本地与 CI 同一判据 | R2.4-G1（同上 §2） |
 | M7R24-3 | **回归基线重播种 0.3.4**：`golden.windows.log` 走 `--update`（R-015 归因护栏先行）、`golden.log` 机械换锚 `version=0.3.3→0.3.4`；归因 = **版本行 12 / 行为 0** | 版本单源 bump 的既有体例（先例 97cd9da「0.3.3 重播种：12 行逐行归因：版本行 12 / 行为 0」）；版本串是日志行内容、非行为面，语义零变化 | R2.4-G2 |
 | M7R24-4 | **发行授权与 tag 纪律**：用户明文「发布 0.3.4」= push/tag/Release 授权；tag `v0.3.4` 指向发行树（修复 + 门禁 + 版本 0.3.4 + 口径），**报告类提交不入 tag**（收口报告与产物指纹在 tag 后补记）；v0.3.3 tag 落点与 Release 记录**不再改动**（坏件只做口径标注） | 对齐 §9 发行纪律与 M7-ADJ-tag-move-2 终态条款（tag 资产挂载后不可移动）；0.3.3 坏件的处置取「标注 + 引导换 0.3.4」最小面 | R2.4-G3（CHANGELOG [0.3.4]「发行」节） |
+
+## M7R25 批（GUI 视觉缺陷根治 + 识图门禁；起因 = `debug/debug1.png` + `debug/debug2.png`）
+
+> 背景 = 用户两张红框截图（7 处可见缺陷）+ 追问「0.3.3 之后的发布没有任何测试吗？…没有识图步骤吗？」。
+> 真源 = [m7r25-report.md](m7r25-report.md)（缺陷逐条根因 + 门禁缺口审查）。判据只增不减：冻结行
+> `UI-SMOKE OK shots=12 pages=3` / `SMOKE total=20 pass=20 fail=0` / `--version` 逐字未动。
+
+| # | 裁定 | 理由 | 实施归属 |
+|---|---|---|---|
+| M7R25-1 | **`formkit::lock_card_size` 下限改实时 sizeHint**：不再 `setMinimumHeight(sizeHint)` 钉一次性数值，改 `setSizePolicy(Preferred, Minimum)`（无 ShrinkFlag ⇒ 父布局把 sizeHint 当下限，随内容实时变化）+ 清掉历史钉数 | 一次性钉数在内容一变就失效，两侧都出过可见缺陷：① 钉高时把隐藏行计入 ⇒ 空态收起 5 行 kv 后卡体整片留白（debug1 红框 2）；② 建卡时参数表单还空 ⇒ 只钉 84，等参数行建好后整卡被压到 84，28px 行被布局压缩后又被固定高弹回 ⇒ 按 6px 节奏互相重叠（debug2 红框 3/4）。layout-audit ⑥/② 钉守 | R25-1 |
+| M7R25-2 | **三页滚动条常驻**（`page_meta` / `page_output` / `page_run` 的页级 QScrollArea 均 `Qt::ScrollBarAlwaysOn`） | 内容高随选中/运行态变化会把竖滚动条"顶"出来/收回去，内容宽随之 ±15px，磁贴 2×4 栅格（列 stretch 等分）整体横移 —— 既是用户可见的整卡回流，也让既有断言 `tile-zero-deform`（勾选零形变含位置）漂移；常驻 ⇒ 内容宽恒定 | R25-2 |
+| M7R25-3 | **渲染意图项文案改短 + 默认标记入注释槽**：`相对比色 + 黑点补偿（默认）` → `相对比色+黑点补偿`，「（默认）」改由行尾 10px 注释槽按当前选择显示/隐藏 | R2 的 160 标准轨不许拉满（禁止同列不同宽）；旧串 150px 墨迹在 132px 文本区里被硬裁成「相对比色 + 黑点补M」（debug2 红框 2）。默认档标记移到 R3 的提示位，未选默认档时不显示（诚实显示） | R25-3 |
+| M7R25-4 | **左栏分组下拉改短档 88 + 最长项改「按机型」**（原「按相机型号」） | 306px 工具行要装 4 个 28px 图标钮 + 下拉 + 搜索框；标准档 160 会把 `pp-search` 挤成 36px、占位符硬裁成「···」（debug1 红框 1 旁）。短档即 mockup 工具行口径；短档文本区 62px 只容 ≤4 字，故最长项改「按机型」（节头仍用「相机型号」，`pp::GroupKey` 语义不变） | R25-4 |
+| M7R25-5 | **新增 layout-audit 常驻探针 + ui_smoke.py 追加齐备行**（`UI-SMOKE layout-audit:`）：六类几何/像素断言（text-clip / overlap / blank-btn+ink-btn / overflow / ghost / card-blank） | 用户点名「没有识图步骤吗」——`tests/ui_smoke.py` 头此前明写「截图仅存档，不做像素比对」，渲染面缺陷全靠人眼。探针把识图机械化：12 张截图仍按原口径人工留档（不改"不比对"的既定取证口径），但渲染面从此有机器看守。判据只增不减：冻结末行与既有清单零改动 | R25-5 |
+| M7R25-6 | **`make_flex_field` 拉伸语义修正**：控件一律贴字段轨起点、富余宽归行尾 stretch（旧写法给首个控件 stretch 1） | 单开关行的 30×16 开关被居中到字段中段，与「分文件夹」行的开关不同列（debug2 红框 3）；同列同轴是 R2 的硬口径 | R25-6 |

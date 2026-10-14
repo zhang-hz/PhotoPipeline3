@@ -59,6 +59,16 @@ GUI 有测试但全是几何/语义断言，**渲染面（字形裁切 / 空图�
 ### 发行
 
 - 产物：Linux AppImage（x86_64）+ Windows 免安装 zip；**预发布（alpha）**，仅建议尝鲜/验证用。
+- Release `v0.3.5.alpha1`（2026-10-14，target=main）四件资产，发行指纹（SHA256SUMS.txt 原文）：
+  * `PhotoPipeline-0.3.5.alpha1-x86_64.AppImage` 52054520 bytes
+    `23d8121c32454de845e73568de610235d7e9e569d290fc693969f491d3a36b7c`
+  * `PhotoPipeline-0.3.5.alpha1-win64.zip` 33733574 bytes
+    `80d76c21a935eab93d62e7a063e7dcad757d065f4bd73a6b2d4cdb3818231305`
+  * `PhotoPipeline-0.3.5.alpha1-deps.txt` 2439 bytes
+    `e8c80b3d61a4e0d41cde50eb3c04577688d7428cc189129b3331cf221407854d`
+  * `PhotoPipeline-0.3.5.alpha1-SHA256SUMS.txt` 314 bytes
+- CI `release` 运行（run #17，sha 61eade0）七 job 全绿：appimage / probe-appimage / winzip-build /
+  winzip-build-dev / winzip-pack / probe-winzip / publish；`main-full`（main @61eade0）同步全绿。
 - 门禁（本地实测）：格式 violations=0 ｜ clang-tidy 262=基线 ｜ ctest 35/35 ｜ 金样
   `SMOKE total=20 pass=20 fail=0` ｜ 回归 zero diff ｜ `--ui-smoke`
   `layout-audit checked=1027 bad=0` + `UI-SMOKE OK shots=12 pages=3` 冻结行逐字不变。

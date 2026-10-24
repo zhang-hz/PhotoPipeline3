@@ -60,12 +60,25 @@
 
 ### 发行
 
-- 产物：Linux AppImage（x86_64）+ Windows 免安装 zip；**预发布（alpha）**，仅建议尝鲜/验证用。
-- GitHub Release `v0.3.5.alpha2`（2026-10-25，target=main）：AppImage / win64.zip /
-  deps.txt / SHA256SUMS.txt 四件资产，指纹见发行后收口提交。
-- 门禁（本机实测）：格式 violations=0 ｜ clang-tidy 262=基线 ｜ ctest 36/36 ｜ 金样
-  `SMOKE total=20 pass=20 fail=0` ｜ 回归 zero diff ｜ `--ui-smoke` 冻结行
-  `UI-SMOKE OK shots=12 pages=3` + `layout-audit checked=1027 bad=0`。
+- tag `v0.3.5.alpha2`（annotated `3bf8a96` → commit `46fcb5c`）；`main-full` #79 全绿
+  （10/10 job），`release.yml` #18 全绿（7/7 job）。
+- GitHub Release `v0.3.5.alpha2`（published 2026-10-25T01:04:17+08:00，target=main）
+  4 资产，API digest ↔ 下载件 `SHA256SUMS.txt` 三方逐字一致：
+  - `PhotoPipeline-0.3.5.alpha2-win64.zip` **33,744,760 B**
+    sha256 `a4dc4a68eb6788a5b76deb2b045c601f3487fed9deb2dce8f9b71cc97e868768`
+  - `PhotoPipeline-0.3.5.alpha2-x86_64.AppImage` **52,058,616 B**
+    sha256 `eb6b18b3dbbdd223ef27de0094f992ef84d0e6191d45d63be3fc1c41f1e9b98e`
+  - `PhotoPipeline-0.3.5.alpha2-deps.txt` **2,439 B**
+    sha256 `e8c80b3d61a4e0d41cde50eb3c04577688d7428cc189129b3331cf221407854d`
+  - `PhotoPipeline-0.3.5.alpha2-SHA256SUMS.txt` **314 B**
+    sha256 `e52340554ae80a6516e8fbcda1f623375fcc5187cccf87597b2a7e83573610ff`
+- 解压 win64.zip 后 `PhotoPipeline/photopipeline.exe --version` =
+  `PhotoPipeline 0.3.5.alpha2`（exit 0）；AppImage 由 release 链 `probe-appimage` 断言通过。
+- 门禁（本机实测）：格式 violations=0 ｜ clang-tidy 262=基线 ｜ ctest release 35/35 ｜
+  ctest release-dev 36/36 ｜ 金样 `SMOKE total=20 pass=20 fail=0` ｜ 回归 zero diff ｜
+  `--ui-smoke` 冻结行 `UI-SMOKE OK shots=12 pages=3` + `layout-audit checked=1027 bad=0`。
+- 收口报告：[docs/0.3.5.alpha2-report.md](docs/0.3.5.alpha2-report.md)（tag 后补记，
+  报告类提交不入 tag）。
 
 ## [0.3.5.alpha1] — 2026-10-14
 

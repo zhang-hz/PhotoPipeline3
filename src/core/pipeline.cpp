@@ -656,8 +656,17 @@ bool stage_probe(RunFileContext &ctx) {
     // profile 合成入口（load_target_icc）取 ICC 字节；=1/缺失 → 现状（sRGB 假定路径不动）。
     // 依据 CIPA DC-008：Exif.Photo.ColorSpace 声明的是像素实际所在空间 —— "无 ICC" 不再
     // 一律等于 "sRGB"。
-    if (ctx.src_icc.empty() && spec != nullptr) {
-        const int exif_cs = exif_colorspace_from_spec(*spec);
+    if (ctx.src_icc.empty()) {
+        // R-313（0.3.6-alpha1）：OIIO 只在少数容器把 Exif:ColorSpace 抬进 ImageSpec；
+        // JPEG/TIFF 常见"无 ICC、仅 EXIF ColorSpace=2(AdobeRGB)"的文件会因此被误判为
+        // sRGB（输出色偏 + ICC 写成 sRGB）。spec 读不到时回落到 Exiv2 已读出的
+        // Exif.Photo.ColorSpace（同一份源事实，不新增读取路径）。
+        int exif_cs = spec != nullptr ? exif_colorspace_from_spec(*spec) : 0;
+        if (exif_cs == 0) {
+            const auto it = ctx.srcmeta.exif.findKey(Exiv2::ExifKey("Exif.Photo.ColorSpace"));
+            if (it != ctx.srcmeta.exif.end() && it->count() > 0 && it->toInt64() == 2)
+                exif_cs = 2;
+        }
         if (exif_cs == 2) {
             std::string adobe_err;
             const std::string adobe = load_target_icc(ColorTarget::AdobeRGB, adobe_err);

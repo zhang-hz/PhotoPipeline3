@@ -37,6 +37,8 @@
 
 #include "core/thumbs.h"
 
+#include <QByteArray>
+#include <QColorSpace>
 #include <QImage>
 
 #include <OpenImageIO/filesystem.h>
@@ -471,11 +473,14 @@ ThumbOutcome make_thumbnail(const std::filesystem::path &src, int target_long_ed
         return out;
     }
     out.probe_ok = true;
+    const std::string src_icc =
+        probe.first_spec.has_value() ? icc_from_spec(*probe.first_spec) : std::string();
 
     // 2) embedded preview first
     ThumbImage thumb;
     if (try_embedded_preview(src, target_long_edge, thumb)) {
         thumb.from_embedded = true;
+        thumb.icc = src_icc;
         out.thumb = std::move(thumb);
         return out;
     }
@@ -491,6 +496,7 @@ ThumbOutcome make_thumbnail(const std::filesystem::path &src, int target_long_ed
     thumb = ThumbImage{};
     if (to_rgba8(decoded.buf, target_long_edge, thumb)) {
         thumb.from_embedded = false;
+        thumb.icc = src_icc;
         out.thumb = std::move(thumb);
     }
     return out;
@@ -508,23 +514,40 @@ PreviewImage decode_preview_detailed(const std::filesystem::path &src, int max_p
 
     const ProbeOutcome probe = probe_file(src);
     out.info = probe.info;
-    out.color_space = color_space_name(
-        probe.first_spec.has_value() ? icc_from_spec(*probe.first_spec) : std::string());
+    const std::string icc =
+        probe.first_spec.has_value() ? icc_from_spec(*probe.first_spec) : std::string();
+    out.color_space = color_space_name(icc);
     if (!probe.error.empty()) {
         out.error = probe.error; // CMYK / 打不开 / …：probe 的英文详情（UI 侧加中文前缀）
         return out;
     }
 
+    // R-309（0.3.6-alpha1）：预览**显示面**色彩管理。旧口径"不做 ICC→sRGB 变换"把
+    // Adobe RGB / Display P3 源按 sRGB 直出 → 缩略图明显发灰（用户报告的 Adobe RGB 显示
+    // 问题）。这里不碰像素字节，只给 QImage 附上源 ICC 色彩空间，由 Qt 绘制时转换到
+    // 屏幕 sRGB（与 §6.1「色彩管理渲染」一致；无 ICC 时保持默认 = 现状）。
+    const auto attach_color_space = [&icc](QImage &image) {
+        if (image.isNull() || icc.empty())
+            return;
+        const QColorSpace cs = QColorSpace::fromIccProfile(
+            QByteArray(reinterpret_cast<const char *>(icc.data()), static_cast<int>(icc.size())));
+        if (cs.isValid())
+            image.setColorSpace(cs);
+    };
+
     try {
         // §6.1「优先内嵌预览」
         if (try_embedded_preview_image(src, max_px, out.image, linear_resample)) {
             out.from_embedded = true;
+            attach_color_space(out.image);
             return out;
         }
         // §6.1「否则 OIIO 读整图后 LANCZOS3 降采样到 max_px 内」
         if (!decode_full_to_rgba8(src, probe.info, max_px, out.image, linear_resample)) {
             out.image = QImage();
             out.error = "preview decode failed: " + src.filename().string();
+        } else {
+            attach_color_space(out.image);
         }
     } catch (const std::exception &e) {
         out.image = QImage();

@@ -498,3 +498,20 @@
 | M7R25-5 | **新增 layout-audit 常驻探针 + ui_smoke.py 追加齐备行**（`UI-SMOKE layout-audit:`）：六类几何/像素断言（text-clip / overlap / blank-btn+ink-btn / overflow / ghost / card-blank） | 用户点名「没有识图步骤吗」——`tests/ui_smoke.py` 头此前明写「截图仅存档，不做像素比对」，渲染面缺陷全靠人眼。探针把识图机械化：12 张截图仍按原口径人工留档（不改"不比对"的既定取证口径），但渲染面从此有机器看守。判据只增不减：冻结末行与既有清单零改动 | R25-5 |
 | M7R25-6 | **`make_flex_field` 拉伸语义修正**：控件一律贴字段轨起点、富余宽归行尾 stretch（旧写法给首个控件 stretch 1） | 单开关行的 30×16 开关被居中到字段中段，与「分文件夹」行的开关不同列（debug2 红框 3）；同列同轴是 R2 的硬口径 | R25-6 |
 | M7R25-7 | **`--version` 冻结行正则机械换锚**：`^PhotoPipeline \d+\.\d+\.\d+$` → `^PhotoPipeline \d+\.\d+\.\d+(\.[A-Za-z][A-Za-z0-9]*)*$`（三处同锚：`tools/make_winzip.py` 烟测 E-1、`.github/workflows/release.yml` appimage 烟测、`.github/workflows/main-full.yml` 同款） | 版本口径引入**预发布标签**（0.3.5.alpha1 = 数字段 + ".alpha1"）后，旧锚只认三段数字 ⇒ 发行链当场红（winzip E-1 实测拦截）。换锚**语义不变**（仍断言"`PhotoPipeline <version>` 单行"这一冻结格式），只是允许版本带一个可选标签段；§5.3「机械换锚（语义不变）须登记裁定」 | R25-7（REL-0.3.5.alpha1） |
+
+## 十九、0.3.5.alpha2 缺陷修复裁定（2026-10-25）
+
+> 背景 = 用户七条实测问题（高德搜索 / Adobe RGB / ICC / HEIF 无损与 10bit / 无边框三钮 /
+> 仅元数据图像字节保真）。原则：冻结面只走「加性 + 追认」；引擎行为变化由金样 20/20 +
+> 全语料回归 zero diff 双重背书；断言只增不减。
+
+| # | 裁定 | 理由 | 实施归属 |
+|---|---|---|---|
+| A2-1 | **`core/thumbs.h` `ThumbImage` 末尾加性追加 `std::string icc`** | 预览/缩略图需要源 ICC 才能在 UI 侧附 `QColorSpace`（Adobe RGB 显示缺陷）。字段追加在末尾、既有字段/聚合初始化兼容；像素字节不变，仅显示面 | REL-0.3.5.alpha2 |
+| A2-2 | **无边框三钮 `WM_NCHITTEST` 返回 `HTCLIENT`**（不再返回 `HTMINBUTTON/HTMAXBUTTON/HTCLOSE`） | 三钮是 Qt 客户区控件；返回 HT* 会让 Qt 平台插件吞掉点击（真机实测关闭既不触发 clicked 也不产生 WM_CLOSE）。改 HTCLIENT 由 QPushButton 处理 press/release/hover；代价 = 放弃 Win11 Snap Layouts 悬停菜单 | REL-0.3.5.alpha2 |
+| A2-3 | **HEIF 参数派发修复**：`ParamType::Enum` 按 `ParamValue` 实际类型分派 int/string setter；`lossless` 显式消费 `lossless`/`__lossless`；落盘后回读位深 | 旧实现把字符串 Enum 当整数丢弃（chroma/preset/tune 从未生效）、`--lossless` 只写内部键时对 HEIF 无效；位深回读防止静默 8bit。用户实测缺陷 + 金样/回归背书 | REL-0.3.5.alpha2 |
+| A2-4 | **HEIF/AVIF 容器 ICC 在 probe 边界补读**（libheif `heif_image_handle_get_raw_color_profile_*` 注入 `ImageSpec`） | OIIO heif reader 不暴露 `colr/prof` ICC ⇒ `has_icc=false`/预览 sRGB/“ICC 没了”的感知缺陷；补读不改变像素，输出仍由管线统一嵌 ICC | REL-0.3.5.alpha2 |
+| A2-5 | **搜索源与瓦片源解耦**：有高德 Key 时搜索/联想/逆地理一律高德；Key trim + `AMAP_KEY=`/引号兼容；错误码追加提示 | 默认 OSM 瓦片 + 高德 Key 的用户永远走 Nominatim（大陆不可达）⇒ “搜索失败”；本条为可达性修复，不改 URL 事实表 | REL-0.3.5.alpha2 |
+| A2-6 | **HEIF 档位文案改「Main10（10 位 · Intra）」** | x265 静止图固定写 Main10 Intra（idc=4，参考 T2.heic 相同）；位深确为 10。文案对齐真实信号，避免工具显示 Main 时被误判为 8 位 | REL-0.3.5.alpha2 |
+| A2-7 | **回归基线重播种 alpha2**：`golden.windows.log` 走 `--update`；`golden.log` 机械换锚 | 归因：版本行 12 + HEIF 档位日志标签 23；行为 0（无像素/元数据/字节变化） | REL-0.3.5.alpha2 |
+| A2-8 | **发行授权**：用户明文「发布0.3.5.alpha2」= 版本 bump + git push + tag `v0.3.5.alpha2` + GitHub Release 授权 | 对齐 §9 发行纪律；tag 指向发行树，报告类/收口提交不入 tag；tag 资产挂载后不可再移动 | REL-0.3.5.alpha2 |

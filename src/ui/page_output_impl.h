@@ -215,7 +215,7 @@ inline const ProfileOption *heif_profile_options(bool avif, int &count) {
     static const ProfileOption kHeif[] = {
         {pp::HeifProfile::Auto, "自动"},
         {pp::HeifProfile::Main, "Main（8 位 · 兼容性最好）"},
-        {pp::HeifProfile::Main10, "Main10（10 位）"},
+        {pp::HeifProfile::Main10, "Main10（10 位 · Intra）"},
         {pp::HeifProfile::Main12, "Main12（12 位）"},
         {pp::HeifProfile::MainStill, "Main Still Picture（8 位 · 静止图）"},
     };
@@ -264,7 +264,8 @@ inline QString profile_compat_hint(pp::HeifProfile p) {
     case pp::HeifProfile::MainStill:
         return PageOutput::tr("Main Still Picture：8 位静止图档，需较新解码器");
     case pp::HeifProfile::Main10:
-        return PageOutput::tr("Main10 需较新解码器（10 位）");
+        return PageOutput::tr(
+            "Main10：10 位，x265 静止图写 Main10 Intra 档（部分工具显示为 Main）");
     case pp::HeifProfile::Main12:
         return PageOutput::tr("Main12 需较新解码器（12 位）");
     case pp::HeifProfile::High:

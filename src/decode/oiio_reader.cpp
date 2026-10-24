@@ -9,6 +9,7 @@
 #include "decode/oiio_reader.h"
 
 #include <OpenImageIO/imageio.h>
+#include <libheif/heif.h>
 
 #include <cassert>
 #include <cstddef>
@@ -22,6 +23,38 @@ namespace {
 
 constexpr int kMinChannels = 1;
 constexpr int kMaxChannels = 4;
+
+// R-308（0.3.6-alpha1）：OIIO 的 HEIF/AVIF 读取器**不把容器 colr/prof 的 ICC 暴露成
+// ImageSpec 的 ICCProfile 属性**（实测 iinfo 无 ICCProfile，而 libheif 的
+// heif_image_handle_get_raw_color_profile_size 能读到同一份字节）⇒ probe 报
+// has_icc=false、预览走 "sRGB 假定"、管线的"保持原样"只能退回 Exiv2 元数据面。
+// 这里直接在 probe 边界补读容器 ICC，并注入 spec —— 下游 icc_from_spec / 预览 /
+// ImageInfo.has_icc 全部沿用同一份事实（不产生第二套读取路径）。
+std::string heif_container_icc(const std::string &file) {
+    heif_context *ctx = heif_context_alloc();
+    if (ctx == nullptr) {
+        return {};
+    }
+    std::string icc;
+    heif_image_handle *handle = nullptr;
+    const heif_error read = heif_context_read_from_file(ctx, file.c_str(), nullptr);
+    if (read.code == heif_error_Ok &&
+        heif_context_get_primary_image_handle(ctx, &handle).code == heif_error_Ok &&
+        handle != nullptr) {
+        const std::size_t n = heif_image_handle_get_raw_color_profile_size(handle);
+        if (n > 0 && n <= (1u << 20)) { // ICC 实际 < 4KB；上限只防异常容器
+            icc.resize(n);
+            if (heif_image_handle_get_raw_color_profile(handle, icc.data()).code != heif_error_Ok) {
+                icc.clear();
+            }
+        }
+    }
+    if (handle != nullptr) {
+        heif_image_handle_release(handle);
+    }
+    heif_context_free(ctx);
+    return icc;
+}
 
 // ASCII-only case-insensitive compare (OIIO metadata keys/values here are ASCII).
 bool ascii_iequals(std::string_view a, std::string_view b) noexcept {
@@ -111,7 +144,20 @@ ProbeOutcome probe_file(const std::filesystem::path &p) {
         return out;
     }
 
-    const OIIO::ImageSpec spec = in->spec(); // copy: valid after close()
+    OIIO::ImageSpec spec = in->spec(); // copy: valid after close()
+    const char *format_name = in->format_name();
+    out.info.format = format_name ? format_name : "";
+    // R-308：HEIF/AVIF 的容器 ICC 不在 OIIO spec 面（见 heif_container_icc 注释）——
+    // 在读取 spec 之后、判定 has_icc 之前补进 spec 副本，后续所有面（icc_from_spec、
+    // 预览色彩空间、管线 keep 分支）都拿到同一份字节。
+    if (icc_from_spec(spec).empty() && (out.info.format == "heif" || out.info.format == "avif")) {
+        const std::string icc = heif_container_icc(file);
+        if (!icc.empty()) {
+            spec.attribute("ICCProfile",
+                           OIIO::TypeDesc(OIIO::TypeDesc::UINT8, static_cast<int>(icc.size())),
+                           icc.data());
+        }
+    }
     out.info.width = spec.width;
     out.info.height = spec.height;
     out.info.channels = spec.nchannels;
@@ -121,8 +167,6 @@ ProbeOutcome probe_file(const std::filesystem::path &p) {
     // frame, i.e. an out-of-range index, hence the layout check as well.)
     out.info.has_alpha = spec.alpha_channel >= 0 || spec.nchannels == 2 || spec.nchannels == 4;
     out.info.has_icc = !icc_from_spec(spec).empty();
-    const char *format_name = in->format_name();
-    out.info.format = format_name ? format_name : "";
 
     // Multipage/animated detection without decoding pixels: a second subimage
     // must exist (TIFF directory / GIF frame). Restore subimage 0 afterwards.

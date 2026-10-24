@@ -36,6 +36,7 @@
 #include <OpenImageIO/imagebufalgo.h>
 #include <OpenImageIO/imageio.h>
 
+#include <QColorSpace>
 #include <QImage>
 
 #include <chrono>
@@ -457,6 +458,37 @@ int main() {
                   " ch=" + std::to_string(p.info.channels) + " fmt=" + p.info.format);
         check(p.color_space == "sRGB 假定", "preview03/rgb8-color-space",
               "expect 'sRGB 假定' (no ICC), got '" + p.color_space + "'");
+    }
+
+    // ---- (1a) R-309：带 ICC 的源（用户样本 T1.tif / _DSF3043.heic）预览必须携带色彩空间，
+    //      否则 Adobe RGB 被按 sRGB 直接显示（发灰）。可选样本不存在时跳过（CI 无 super/）。
+    {
+        const fs::path root = corpus.parent_path().parent_path();
+        const fs::path t1 = root / "super" / "T1.tif";
+        std::error_code ec;
+        if (fs::exists(t1, ec)) {
+            const pp::PreviewImage p = pp::decode_preview_detailed(t1, 256);
+            check(!p.image.isNull() && p.error.empty(), "preview03/icc-t1-image", p.error);
+            check(p.color_space.find("Adobe RGB") != std::string::npos, "preview03/icc-t1-name",
+                  "color_space='" + p.color_space + "'");
+            check(p.image.colorSpace().isValid(), "preview03/icc-t1-colorspace",
+                  "QImage has no color space attached");
+            std::printf("info preview03 icc-t1: color_space='%s' qcolorspace='%s'\n",
+                        p.color_space.c_str(),
+                        p.image.colorSpace().description().toStdString().c_str());
+        }
+        const fs::path heic = root / "super" / "_DSF3043.heic";
+        if (fs::exists(heic, ec)) {
+            const pp::PreviewImage p = pp::decode_preview_detailed(heic, 256);
+            check(!p.image.isNull() && p.error.empty(), "preview03/icc-heic-image", p.error);
+            check(p.color_space.find("Adobe RGB") != std::string::npos, "preview03/icc-heic-name",
+                  "color_space='" + p.color_space + "'");
+            check(p.image.colorSpace().isValid(), "preview03/icc-heic-colorspace",
+                  "QImage has no color space attached");
+            std::printf("info preview03 icc-heic: color_space='%s' qcolorspace='%s'\n",
+                        p.color_space.c_str(),
+                        p.image.colorSpace().description().toStdString().c_str());
+        }
     }
 
     // ---- (1b) 通道规则单一实现：不缩放的同一路径上，preview 与 thumbnail 逐像素相等 ----

@@ -53,12 +53,17 @@ int native_hit_code(HitZone zone) {
     switch (zone) {
     case HitZone::Caption:
         return HTCAPTION;
+    // R-316（0.3.6-alpha1）：三钮是 **Qt 自绘的客户区控件**，不是原生标题栏按钮。
+    // 返回 HTMINBUTTON/HTMAXBUTTON/HTCLOSE 会让 Windows 走非客户区消息
+    // （WM_NCLBUTTONDOWN…），Qt 的 Windows 平台插件在 FramelessWindowHint 下会吞掉这条
+    // 链路（实测：点关闭既不触发 clicked，也不产生 WM_CLOSE）——三钮成了纯装饰。Qt 的
+    // 官方口径是客户区控件走 HTCLIENT，由 QPushButton 自己处理 press/release/hover。
+    // 代价：Win11 最大化钮的 Snap Layouts 悬停菜单不再由系统提供（需要原生 HTMAXBUTTON），
+    // 换来的三钮 100% 可点；拖拽仍由顶栏空白处的 HTCAPTION 承担。
     case HitZone::MinButton:
-        return HTMINBUTTON;
     case HitZone::MaxButton:
-        return HTMAXBUTTON; // Win11 悬停 → Snap Layouts
     case HitZone::CloseButton:
-        return HTCLOSE;
+        return HTCLIENT;
     case HitZone::Left:
         return HTLEFT;
     case HitZone::Right:
@@ -358,9 +363,16 @@ Frameless *Frameless::attach(QWidget *window, QWidget *caption,
         // 递归风险已根治 —— 创建期投递的消息进过滤器只读 internalWinId()=0 直接放行。
         const HWND handle = hwnd_of(window->winId());
         if (handle != nullptr && ::IsWindow(handle)) {
+            // R-310（0.3.6-alpha1）：补齐 WS_MINIMIZEBOX/WS_MAXIMIZEBOX/WS_SYSMENU。
+            // 三钮的可点性最终由 R-316（HTCLIENT）保证；这几个样式位仍要保留 —— 它们让
+            // 窗口在任务栏/系统菜单里的最小化/最大化/关闭语义完整（Alt+F4、任务栏右键），
+            // 也避免第三方窗口管理器把窗口当成不可关闭。Qt 的 FramelessWindowHint 默认
+            // 不带这三个位。
             const LONG_PTR style = ::GetWindowLongPtrW(handle, GWL_STYLE);
-            if ((style & WS_THICKFRAME) == 0)
-                ::SetWindowLongPtrW(handle, GWL_STYLE, style | WS_THICKFRAME);
+            const LONG_PTR wanted =
+                style | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU;
+            if (wanted != style)
+                ::SetWindowLongPtrW(handle, GWL_STYLE, wanted);
             ::SetWindowPos(handle, nullptr, 0, 0, 0, 0,
                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
                                SWP_FRAMECHANGED);

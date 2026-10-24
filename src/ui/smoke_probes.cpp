@@ -1469,10 +1469,12 @@ void MainWindow::Impl::smoke_probe_frameless() {
         const NativeCase native_cases[] = {
             {"caption", titlebar->mapToGlobal(QPoint(drag_x, titlebar->height() / 2)),
              plat::HitZone::Caption},
-            {"close", cap_close->mapToGlobal(cap_close->rect().center()),
-             plat::HitZone::CloseButton},
-            {"max", cap_max->mapToGlobal(cap_max->rect().center()), plat::HitZone::MaxButton},
-            {"min", cap_min->mapToGlobal(cap_min->rect().center()), plat::HitZone::MinButton},
+            // R-316：三钮是 Qt 客户区控件 → 原生命中必须是 HTCLIENT（否则平台插件吞点击）。
+            // 几何命中（classify_logical）仍分别返回 CloseButton/MaxButton/MinButton，
+            // 由上面的 hit-live 断言覆盖；这里验的是"系统交给谁"。
+            {"close", cap_close->mapToGlobal(cap_close->rect().center()), plat::HitZone::Client},
+            {"max", cap_max->mapToGlobal(cap_max->rect().center()), plat::HitZone::Client},
+            {"min", cap_min->mapToGlobal(cap_min->rect().center()), plat::HitZone::Client},
             {"left", w->mapToGlobal(QPoint(0, w->height() / 2)), plat::HitZone::Left},
             {"right", w->mapToGlobal(right_edge), plat::HitZone::Right},
             {"bottom", w->mapToGlobal(bottom_edge), plat::HitZone::Bottom},

@@ -285,6 +285,27 @@ void store_sample(uint8_t *base, size_t stride, int bitdepth, int x, int y, int 
         base[static_cast<size_t>(y) * stride + x] = static_cast<uint8_t>(value);
 }
 
+// R-314（0.3.6-alpha1）：从**已写出的容器**回读主图位深（libheif 的 handle 在
+// heif_context_encode_image 刚返回时调用 get_luma_bits_per_pixel 会 AV —— 见调用点注释；
+// 落盘后重新 read_from_file 的 handle 是安全的，且这个口径就是解码器看到的事实）。
+int heif_file_luma_bits(const std::filesystem::path &p) {
+    heif_context *ctx = heif_context_alloc();
+    if (ctx == nullptr)
+        return -1;
+    int bits = -1;
+    heif_image_handle *handle = nullptr;
+    const std::string file = normalize_extended_path(p).string();
+    if (heif_context_read_from_file(ctx, file.c_str(), nullptr).code == heif_error_Ok &&
+        heif_context_get_primary_image_handle(ctx, &handle).code == heif_error_Ok &&
+        handle != nullptr) {
+        bits = heif_image_handle_get_luma_bits_per_pixel(handle);
+    }
+    if (handle != nullptr)
+        heif_image_handle_release(handle);
+    heif_context_free(ctx);
+    return bits;
+}
+
 // ---------------------------------------------------------------------------
 // nclx 色彩描述与嵌入 ICC 的一致性（UX-14 A1，M7-WP2）
 // ---------------------------------------------------------------------------
@@ -413,8 +434,7 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
             heif_error se = kHeifOk;
             std::string rejected;
             switch (p.type) {
-            case ParamType::Int:
-            case ParamType::Enum: {
+            case ParamType::Int: {
                 const int64_t *iv = std::get_if<int64_t>(&it->second);
                 if (!iv) {
                     rejected = "expected integer";
@@ -425,6 +445,26 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
                     break;
                 }
                 se = heif_encoder_set_parameter_integer(enc, p.key.c_str(), static_cast<int>(*iv));
+                break;
+            }
+            case ParamType::Enum: {
+                // R-306（0.3.6-alpha1）：Enum 有两个来源 —— 整数选择集（int64_t）与字符串
+                // 选择集（chroma / preset / tune 等，ParamValue 是 std::string）。旧实现把
+                // Enum 一律当整数派发 → 字符串参数全部报 "expected integer" 被丢弃，
+                // 于是 HEIF 的 chroma=444/422、preset、tune **从未生效**（libheif 插件按
+                // 默认 420/medium 编码，UI 选 4:4:4 实际仍是 4:2:0）。按值类型分派。
+                if (const int64_t *iv = std::get_if<int64_t>(&it->second)) {
+                    if (*iv < INT32_MIN || *iv > INT32_MAX) {
+                        rejected = "out of integer range";
+                        break;
+                    }
+                    se = heif_encoder_set_parameter_integer(enc, p.key.c_str(),
+                                                            static_cast<int>(*iv));
+                } else if (const std::string *sv = std::get_if<std::string>(&it->second)) {
+                    se = heif_encoder_set_parameter_string(enc, p.key.c_str(), sv->c_str());
+                } else {
+                    rejected = "expected integer or string";
+                }
                 break;
             }
             case ParamType::Bool: {
@@ -463,6 +503,20 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
             if (!recovered)
                 note_param("parameter ignored by backend: " + rejected, p.key,
                            enc::param_value_text(it->second));
+        }
+
+        // R-307（0.3.6-alpha1）：无损开关**显式消费** `lossless` / `__lossless` 两键。
+        // 旧实现只依赖内省参数表里恰好出现 "lossless" 这一条；dev harness 的
+        // `--lossless` 只写内部键 `__lossless`（静态格式表里 heif 的 techs 为空，
+        // apply_locks 无法补出显式键）→ `--lossless` 对 HEIF **完全无效**（产物与有损
+        // 逐字节相同），GUI 走内省表单时才有值。这里统一走 lossless_flag 单源并直接
+        // 调 libheif 的无损 setter（插件缺失该能力时报 warning，不静默改语义）。
+        {
+            const bool want_lossless = lossless_flag(req.target.params);
+            const heif_error le = heif_encoder_set_lossless(enc, want_lossless ? 1 : 0);
+            if (le.code != heif_error_Ok && want_lossless)
+                note_param("lossless requested but backend rejected it: " + heif_error_text(le),
+                           "lossless", "true");
         }
 
         // —— E3 线程映射（§3.1 正文，W1-T7 落地）——
@@ -770,6 +824,13 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
             }
         } handle_guard{handle};
 
+        // R-314（0.3.6-alpha1）：位深**回读校验**放在容器落盘之后（见下方 write 段）——
+        // 用户报告"选 10 位、产物仍是 Main(8 位)"；插件在少数组合下会静默降位。写完后
+        // 用 libheif 重新打开 tmp 文件读主图位深，与请求不一致即失败，不让"UI 写 10 位、
+        // 文件是 8 位"静默通过。（注：对 heif_context_encode_image 刚返回的 handle 调用
+        // heif_image_handle_get_luma_bits_per_pixel 在本机 libheif 1.23.5 上会 AV，
+        // 所以必须走"落盘后重新 read_from_file"这条路。）
+
         // ---- metadata (E7: strictly before heif_context_write) ----
         if (!req.meta.exif_blob.empty()) {
             const heif_error me =
@@ -840,6 +901,12 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
             if (ec || disk_bytes != sink.bytes)
                 return fail_tmp("temp output size mismatch: wrote " + std::to_string(sink.bytes) +
                                 ", on disk " + std::to_string(disk_bytes));
+            // R-314：容器落盘后回读真实位深（与请求不一致 = 静默降位，必须失败）。
+            const int got_bits = heif_file_luma_bits(tmp_path);
+            if (got_bits > 0 && got_bits != bitdepth)
+                return fail_tmp("encoder produced " + std::to_string(got_bits) + "-bit " +
+                                format_id_ + " but " + std::to_string(bitdepth) +
+                                "-bit was requested");
             std::string cerr;
             if (!commit_temp_file(tmp_path, req.target.out_path, &cerr))
                 return fail_tmp("commit failed: " + cerr);

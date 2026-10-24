@@ -12,6 +12,8 @@
 
 #include "core/thumbs.h" // 冻结头只给接口（不含 make_thumbnail/ThumbOutcome 声明）
 
+#include <QByteArray>
+#include <QColorSpace>
 #include <QMetaObject>
 #include <QMetaType>
 
@@ -41,7 +43,15 @@ QImage image_from_thumb(const pp::ThumbImage &t) {
         return {};
     const QImage view(t.rgba.data(), t.width, t.height, qsizetype(t.width) * 4,
                       QImage::Format_RGBA8888);
-    return view.copy();
+    QImage image = view.copy();
+    // R-309：缩略图同样按源 ICC 显示（像素字节不变，仅附色彩空间给 Qt 绘制期转换）。
+    if (!t.icc.empty()) {
+        const QColorSpace cs = QColorSpace::fromIccProfile(
+            QByteArray(reinterpret_cast<const char *>(t.icc.data()), int(t.icc.size())));
+        if (cs.isValid())
+            image.setColorSpace(cs);
+    }
+    return image;
 }
 
 } // namespace

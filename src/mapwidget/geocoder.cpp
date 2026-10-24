@@ -51,6 +51,27 @@ QString msg(const char *text) { return QCoreApplication::translate("pp::map", te
 
 QString encode(const QString &s) { return QString::fromLatin1(QUrl::toPercentEncoding(s)); }
 
+// R-312（0.3.6-alpha1）：高德错误码 → 可执行提示。旧实现只把 info 原样拼进"搜索失败"，
+// 用户看到 INVALID_USER_KEY / USERKEY_PLAT_NOMATCH 无从下手。这里只**追加**提示，
+// 原始 info 保留（逐字可检索），不改错误分类。
+QString amap_info_hint(const QString &info) {
+    if (info == QLatin1String("INVALID_USER_KEY") ||
+        info == QLatin1String("USERKEY_PLAT_NOMATCH")) {
+        return msg("（请确认 Key 是「Web 服务」类型，并在 设置›地图 中重新填写）");
+    }
+    if (info == QLatin1String("INVALID_USER_SCODE") ||
+        info == QLatin1String("INVALID_USER_SIGNATURE")) {
+        return msg("（该 Key 开启了数字签名：请在开放平台使用「Web 服务」Key 或关闭签名）");
+    }
+    if (info.contains(QLatin1String("OVER_LIMIT")) || info.contains(QLatin1String("QUOTA"))) {
+        return msg("（该 Key 的日配额/QPS 已超限）");
+    }
+    if (info == QLatin1String("INSUFFICIENT_PRIVILEGES")) {
+        return msg("（该 Key 未开通 Web 服务权限）");
+    }
+    return {};
+}
+
 // 6 decimals ≈ 0.1 m — matches the decimal-degree examples on the amap wire.
 QString coord_number(double v) { return QString::number(v, 'f', 6); }
 
@@ -216,7 +237,8 @@ QString parse_search(const QByteArray &body, const QString &geocoder_id,
             if (info.isEmpty()) {
                 info = msg("未知错误");
             }
-            return QCoreApplication::translate("pp::map", "高德搜索失败：%1").arg(info);
+            return QCoreApplication::translate("pp::map", "高德搜索失败：%1")
+                .arg(info + amap_info_hint(info));
         }
         const QJsonArray pois = root.value(QStringLiteral("pois")).toArray();
         for (const QJsonValue v : pois) { // 按值=显式拷贝（迭代器引用类型是代理，不绑 const&）
@@ -289,7 +311,8 @@ QString parse_suggest(const QByteArray &body, const QString &geocoder_id,
         if (info.isEmpty()) {
             info = msg("未知错误");
         }
-        return QCoreApplication::translate("pp::map", "高德联想失败：%1").arg(info);
+        return QCoreApplication::translate("pp::map", "高德联想失败：%1")
+            .arg(info + amap_info_hint(info));
     }
     const QJsonArray tips = root.value(QStringLiteral("tips")).toArray();
     for (const QJsonValue v : tips) { // 按值=显式拷贝（同上）
@@ -334,7 +357,8 @@ QString parse_reverse(const QByteArray &body, const QString &geocoder_id, QStrin
             if (info.isEmpty()) {
                 info = msg("未知错误");
             }
-            return QCoreApplication::translate("pp::map", "高德逆地理失败：%1").arg(info);
+            return QCoreApplication::translate("pp::map", "高德逆地理失败：%1")
+                .arg(info + amap_info_hint(info));
         }
         address_out = root.value(QStringLiteral("regeocode"))
                           .toObject()

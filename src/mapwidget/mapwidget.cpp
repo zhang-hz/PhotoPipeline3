@@ -224,6 +224,22 @@ struct MapWidget::Impl {
         return pp::map::datum_to_wgs(lat, lon, provider != nullptr && provider->gcj02);
     }
 
+    // R-312（0.3.6-alpha1）：搜索/联想/逆地理的**地理编码源**不再被瓦片源绑死。
+    // 旧映射 osm→nominatim 让"默认 OSM 底图 + 已填高德 Key"的用户永远走 Nominatim
+    // （大陆不可达）→ 用户看到的永远是"搜索失败"，而高德 Key 形同虚设。现口径：
+    //   * 配置了高德 Key（trim 后非空）→ 一律高德（大陆可达；与 docs/m6-map-upgrade.md
+    //     §4.2 的"默认源 amap"一致）；
+    //   * 未配置 Key 且当前是 OSM/其它 → 保持原映射（nominatim 兜底 + 原有失败指引）。
+    // amap 瓦片源本身仍映射到 amap（Key 为空时会走 missing_key 文案）。
+    const Geocoder *active_geocoder() const {
+        const Geocoder *g = geocoder_for_provider(provider != nullptr ? provider->id : QString());
+        if (!amap_key.trimmed().isEmpty() &&
+            (g == nullptr || g->id == QLatin1String("nominatim"))) {
+            g = geocoder_by_id(QStringLiteral("amap"));
+        }
+        return g;
+    }
+
     // ---- geometry ---------------------------------------------------------------
     QPointF center_world() const { return latlon_to_world(center_lat, center_lon, zoom); }
 
@@ -536,8 +552,20 @@ void MapWidget::set_provider(const QString &id) {
 }
 
 void MapWidget::set_amap_key(const QString &key) {
-    impl_->amap_key = key; // 预检面（needs_key_missing 随客户端读同值）
-    impl_->geocode->set_amap_key(key);
+    // R-312：设置框粘进来的 Key 常带首尾空白/换行（复制粘贴）；高德对这种 Key 一律回
+    // INVALID_USER_KEY，而 UI 只会显示"搜索失败"。预检面与请求面统一用 trim 后的值。
+    // 另兼容从 .env / secrets 文件整行粘贴的 "AMAP_KEY=xxxx" 形态（只取等号后的值）。
+    QString trimmed = key.trimmed();
+    const QString prefix = QStringLiteral("AMAP_KEY=");
+    if (trimmed.startsWith(prefix, Qt::CaseInsensitive))
+        trimmed = trimmed.mid(prefix.size()).trimmed();
+    if (trimmed.size() >= 2 &&
+        ((trimmed.startsWith(QLatin1Char('"')) && trimmed.endsWith(QLatin1Char('"'))) ||
+         (trimmed.startsWith(QLatin1Char('\'')) && trimmed.endsWith(QLatin1Char('\''))))) {
+        trimmed = trimmed.mid(1, trimmed.size() - 2).trimmed();
+    }
+    impl_->amap_key = trimmed; // 预检面（needs_key_missing 随客户端读同值）
+    impl_->geocode->set_amap_key(trimmed);
 }
 
 void MapWidget::set_cache_mb(int mb) {
@@ -620,8 +648,7 @@ void MapWidget::run_search(const QString &query) {
         emit search_finished({}, text);
         return;
     }
-    const Geocoder *const geocoder =
-        geocoder_for_provider(d.provider != nullptr ? d.provider->id : QString());
+    const Geocoder *const geocoder = d.active_geocoder();
     if (geocoder == nullptr) {
         const QString text = tr("未知的地理编码源");
         emit search_results_ready({}, text);
@@ -655,8 +682,7 @@ void MapWidget::run_suggest(const QString &query) {
         emit suggest_finished({}, tr("离线模式：联想不可用"));
         return;
     }
-    const Geocoder *const geocoder =
-        geocoder_for_provider(d.provider != nullptr ? d.provider->id : QString());
+    const Geocoder *const geocoder = d.active_geocoder();
     if (geocoder == nullptr) {
         emit suggest_finished({}, tr("未知的地理编码源"));
         return;
@@ -679,8 +705,7 @@ void MapWidget::run_reverse(double lat, double lon) {
         emit reverse_finished(QString(), tr("离线模式：逆地理不可用"));
         return;
     }
-    const Geocoder *const geocoder =
-        geocoder_for_provider(d.provider != nullptr ? d.provider->id : QString());
+    const Geocoder *const geocoder = d.active_geocoder();
     if (geocoder == nullptr) {
         emit reverse_finished(QString(), tr("未知的地理编码源"));
         return;

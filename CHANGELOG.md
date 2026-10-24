@@ -1,5 +1,72 @@
 # 变更日志
 
+## [0.3.5.alpha2] — 2026-10-25
+
+**预发布（alpha）**：七项用户实测问题逐条根治——① 高德搜索失败；② Adobe RGB 不能正确
+处理/显示；③ 色域「保持原样」后 ICC 看起来丢失；④ HEIF 勾选无损后的产物异常；
+⑤ HEIF 选 10bit 后文件仍显示 Main；⑥ 无边框窗口右上角三钮点不动；⑦「仅元数据 + 改 GPS」
+的图像逐字节保真缺少机械化测试。版本单源 = `CMakeLists.txt:19-24` = **0.3.5.alpha2**
+（数字段 0.3.5 + 预发布标签 ".alpha2"）。
+
+### 修复
+
+- **高德搜索失败**：搜索源不再被瓦片源绑死——配置了高德 Key 时搜索/联想/逆地理一律走
+  高德（此前默认 OSM 底图永远走 Nominatim，大陆不可达即「搜索失败」，高德 Key 形同虚设）；
+  Key 录入自动 trim，并兼容整行粘贴的 `AMAP_KEY=xxxx` 与引号包裹形态；高德错误码追加
+  可执行提示（Key 类型/数字签名/配额/权限），原始 `info` 保留可检索。
+- **Adobe RGB 显示**：预览与缩略图不再把 Adobe RGB/P3 源按 sRGB 直出（发灰）——给
+  `QImage` 附源 ICC 的 `QColorSpace`，由 Qt 绘制期转换到屏幕 sRGB，像素字节不变。
+- **Adobe RGB 处理**：无 ICC、仅 `Exif.Photo.ColorSpace=2` 的文件，OIIO spec 读不到该
+  属性时回落到 Exiv2 已读出的值并合成 Adobe RGB profile，避免误判 sRGB 造成输出色偏。
+- **输出 ICC「消失」**：ICC 一直在文件里（T1→HEIF 的 `colr/prof` 为 560B ADBE）；根因是
+  OIIO 的 HEIF/AVIF reader 不把容器 ICC 抬进 `ImageSpec`，本软件 probe 因此报
+  `has_icc=false`。现在 probe 边界用 libheif 补读 `colr/prof` 并注入 spec，预览/信息卡/
+  keep 分支拿到同一份字节。
+- **HEIF 无损开关无效**：部分路径只写内部键 `__lossless`，`enc_heif` 只认显式
+  `lossless` → `--lossless` 产物与有损逐字节相同。现在统一走 `lossless_flag()` 并直接
+  调 `heif_encoder_set_lossless()`；无损产物已实测与有损不同且可重新打开。
+- **HEIF 字符串参数被丢弃**：`ParamType::Enum` 一律当整数派发，`chroma=444/422`、
+  `preset`、`tune` 全部报 "expected integer" 后忽略。现按值类型分派整数/字符串 setter，
+  4:4:4 等参数真正落到 x265。
+- **HEIF 10bit 档位**：新增**落盘后位深回读校验**（libheif 重新打开 tmp 文件读主图位深），
+  后端若把 10 位静默降成 8 位直接失败；实测 SPS `bit_depth_luma_minus8=2`、回读
+  `lumabits=10`。`general_profile_idc=4` 是 x265 静止图的 Main10 Intra 信号（与参考
+  `super/T2.heic` 相同），不是 8 位 Main。
+- **无边框三钮点不动**：三钮是 Qt 客户区控件，却对 `WM_NCHITTEST` 返回
+  `HTMINBUTTON/HTMAXBUTTON/HTCLOSE`，Qt 的 FramelessWindowHint 链路吞掉非客户区点击。
+  改为 `HTCLIENT`，由 `QPushButton` 处理 press/release/hover；保留
+  `WS_MINIMIZEBOX/WS_MAXIMIZEBOX/WS_SYSMENU`。真机鼠标实测关闭/最大化/最小化三钮均生效。
+
+### 新增
+
+- **仅元数据图像字节保真测试**：走真实入口 `run_metadata_only`，写入 GPS（lat/lon/
+  altitude/direction）后解析 TIFF `StripOffsets/StripByteCounts`（或 Tile）并比较压缩图像
+  负载**逐字节**；覆盖 `tests/golden/base/rgb16.tif` 与可选 `super/T1.tif`
+  （137,053,848 B 全等，GPS 已写入）。
+- **ICC 探针**：`_DSF3043.heic` 的 HEIF 容器 ICC 在 probe 面可见（`has_icc=1`，560B
+  ADBE）；`T1.tif`/`_DSF3043.heic` 预览 `QImage` 均携带 `Adobe RGB (1998)` 色彩空间。
+
+### 变更
+
+- HEIF/AVIF 编码档位文案：**「Main10（10 位）」→「Main10（10 位 · Intra）」**，并在
+  兼容性提示中注明 x265 静止图写 Main10 Intra、部分工具显示为 Main（位深确实是 10 位）。
+
+### 已知
+
+- `super/T2.heic` 仍不可解码：其 HEVC RExt 工具体系超出 libde265 1.1.3 支持面，属解码器
+  上游限制；本版输出（含 10bit/4:4:4/无损）用同一解码器可正常 reopen。
+- 高德线上搜索只做了 URL/解析/错误分类与本机逻辑验证；本机 TLS 环境无法发真实请求，
+  最终以用户账号实测为准。
+
+### 发行
+
+- 产物：Linux AppImage（x86_64）+ Windows 免安装 zip；**预发布（alpha）**，仅建议尝鲜/验证用。
+- GitHub Release `v0.3.5.alpha2`（2026-10-25，target=main）：AppImage / win64.zip /
+  deps.txt / SHA256SUMS.txt 四件资产，指纹见发行后收口提交。
+- 门禁（本机实测）：格式 violations=0 ｜ clang-tidy 262=基线 ｜ ctest 36/36 ｜ 金样
+  `SMOKE total=20 pass=20 fail=0` ｜ 回归 zero diff ｜ `--ui-smoke` 冻结行
+  `UI-SMOKE OK shots=12 pages=3` + `layout-audit checked=1027 bad=0`。
+
 ## [0.3.5.alpha1] — 2026-10-14
 
 **预发布（alpha）**：GUI 渲染面缺陷根治 + **识图门禁**（用户两张红框截图 7 处缺陷 + 「没有识图步骤吗？」

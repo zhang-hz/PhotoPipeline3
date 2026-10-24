@@ -621,6 +621,28 @@ int main() {
         }
     }
 
+    // ---- R-308（0.3.6-alpha1）：HEIF/AVIF 容器 ICC 必须在 probe 面可见 ----
+    // OIIO 的 heif reader 不把 colr/prof 抬进 ImageSpec（实测 has_icc=false），我们在 probe
+    // 边界用 libheif 补读。用户样本 super/_DSF3043.heic 带 Adobe RGB(1998) ICC；不存在则跳过。
+    {
+        namespace fsys = std::filesystem;
+        const fsys::path root = corpus.parent_path().parent_path();
+        const fsys::path heic = root / "super" / "_DSF3043.heic";
+        std::error_code ec;
+        if (fsys::exists(heic, ec)) {
+            const pp::ProbeOutcome po = pp::probe_file(heic);
+            check(po.error.empty(), "heif-icc/probe", po.error);
+            check(po.info.has_icc, "heif-icc/has-icc",
+                  "probe 报 has_icc=false（容器 ICC 未被补读）");
+            const std::string icc =
+                po.first_spec ? pp::icc_from_spec(*po.first_spec) : std::string();
+            check(icc.size() >= 128 && icc.compare(4, 4, std::string("ADBE", 4)) == 0,
+                  "heif-icc/spec-bytes",
+                  "ICC 字节前缀/长度不符（size=" + num(static_cast<long long>(icc.size())) + "）");
+            std::printf("info heif-icc: has_icc=1 bytes=%zu\n", icc.size());
+        }
+    }
+
     // ---- R-163 残余（E3，M7-R2A）：编码中取消的 verdict 归类单点化 ----
     // 编码器因 cancel 提前退出（返回 "... encode cancelled"）时，pipeline 必须归
     // **Cancelled**（不是 Failed）：verdict / 行状态 / error_kind 三面一致（set_output_state

@@ -48,6 +48,9 @@ struct ThumbImage {
     int width = 0, height = 0;  // returned size (longest edge <= target)
     std::vector<uint8_t> rgba;  // width*height*4, 8-bit, sRGB-assumed, alpha on white
     bool from_embedded = false; // true = embedded preview used
+    // R-309（0.3.6-alpha1，末位加性追加）：源 ICC 字节（可空）。UI 侧据此给 QImage 附
+    // QColorSpace，让 Adobe RGB / P3 缩略图按源色彩空间显示（像素字节本身不变）。
+    std::string icc;
 };
 
 struct ThumbOutcome {

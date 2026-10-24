@@ -169,6 +169,102 @@ std::string pixel_hash(const fs::path &p) {
     }
 }
 
+// ------------------------------------------------------------------ TIFF image payload
+
+// R-311（0.3.6-alpha1）：metadata-only 的 TIFF 断言从"像素哈希相等"升级为**编码图像数据
+// 逐字节相等**。Exiv2 重写 TIFF 时会重排 IFD / 搬移 strip 起始偏移，但 StripOffsets(273)
+// + StripByteCounts(279)（或 TileOffsets 324 + TileByteCounts 325）指向的压缩像素负载必须
+// 一个字节都不变 —— 这正是"仅元数据 = 零重编码"的直接证据。T1.tif（用户样本）与
+// tests/golden/base/rgb16.tif 共用本解析器。
+std::vector<uint8_t> tiff_image_payload(const fs::path &p, std::string &err) {
+    const std::vector<uint8_t> b = read_bytes(p);
+    if (b.size() < 8) {
+        err = "file too small";
+        return {};
+    }
+    const bool little = b[0] == 'I' && b[1] == 'I';
+    const bool big = b[0] == 'M' && b[1] == 'M';
+    if (!little && !big) {
+        err = "not a TIFF (bad byte order)";
+        return {};
+    }
+    const auto u16 = [&](std::size_t o) -> uint32_t {
+        if (o + 2 > b.size())
+            return 0;
+        return little ? (uint32_t(b[o]) | (uint32_t(b[o + 1]) << 8))
+                      : ((uint32_t(b[o]) << 8) | uint32_t(b[o + 1]));
+    };
+    const auto u32 = [&](std::size_t o) -> uint32_t {
+        if (o + 4 > b.size())
+            return 0;
+        return little ? (uint32_t(b[o]) | (uint32_t(b[o + 1]) << 8) | (uint32_t(b[o + 2]) << 16) |
+                         (uint32_t(b[o + 3]) << 24))
+                      : ((uint32_t(b[o]) << 24) | (uint32_t(b[o + 1]) << 16) |
+                         (uint32_t(b[o + 2]) << 8) | uint32_t(b[o + 3]));
+    };
+    if (u16(2) != 42) { // classic TIFF; BigTIFF (43) is out of scope here
+        err = "not a classic TIFF (magic != 42)";
+        return {};
+    }
+    const uint32_t ifd = u32(4);
+    if (ifd + 2 > b.size()) {
+        err = "IFD offset out of range";
+        return {};
+    }
+    const uint32_t count = u16(ifd);
+    std::vector<uint32_t> strip_off, strip_len, tile_off, tile_len;
+    for (uint32_t i = 0; i < count; ++i) {
+        const std::size_t e = std::size_t(ifd) + 2 + std::size_t(i) * 12;
+        if (e + 12 > b.size()) {
+            err = "IFD entry out of range";
+            return {};
+        }
+        const uint16_t tag = static_cast<uint16_t>(u16(e));
+        const uint16_t type = static_cast<uint16_t>(u16(e + 2));
+        const uint32_t n = u32(e + 4);
+        const std::size_t unit = (type == 3) ? 2 : (type == 4) ? 4 : 0;
+        if (unit == 0 || n == 0 || n > 100000)
+            continue;
+        const std::size_t total = std::size_t(unit) * n;
+        const std::size_t base = total <= 4 ? e + 8 : u32(e + 8);
+        if (base + total > b.size())
+            continue;
+        std::vector<uint32_t> vals;
+        vals.reserve(n);
+        for (uint32_t k = 0; k < n; ++k) {
+            vals.push_back(unit == 2 ? u16(base + std::size_t(k) * 2)
+                                     : u32(base + std::size_t(k) * 4));
+        }
+        if (tag == 273)
+            strip_off = std::move(vals);
+        else if (tag == 279)
+            strip_len = std::move(vals);
+        else if (tag == 324)
+            tile_off = std::move(vals);
+        else if (tag == 325)
+            tile_len = std::move(vals);
+    }
+    const bool use_tiles = !tile_off.empty() && tile_off.size() == tile_len.size();
+    const std::vector<uint32_t> &offs = use_tiles ? tile_off : strip_off;
+    const std::vector<uint32_t> &lens = use_tiles ? tile_len : strip_len;
+    if (offs.empty() || offs.size() != lens.size()) {
+        err = "no strip/tile table found";
+        return {};
+    }
+    std::vector<uint8_t> payload;
+    for (std::size_t i = 0; i < offs.size(); ++i) {
+        const std::size_t off = offs[i];
+        const std::size_t len = lens[i];
+        if (off + len > b.size()) {
+            err = "strip/tile range out of file";
+            return {};
+        }
+        payload.insert(payload.end(), b.begin() + std::ptrdiff_t(off),
+                       b.begin() + std::ptrdiff_t(off + len));
+    }
+    return payload;
+}
+
 // ------------------------------------------------------------------ plan helpers
 
 pp::TimeShift delta(int years = 0, int months = 0, int days = 0, int hours = 0, int minutes = 0,
@@ -887,6 +983,86 @@ void test_metadata_only_other_containers(const fs::path &tmp) {
     }
 }
 
+// R-311（用户报告第 7 条）：仅元数据模式 + GPS 等元数据编辑后，输出 TIFF 的**图像数据**
+// （strip/tile 压缩负载）必须与输入逐字节相同。夹具走 tests/golden/base/rgb16.tif；
+// 仓库根存在 super/T1.tif（用户样本，UTF-8 真实照片）时追加同一断言（不存在则跳过，
+// 不把用户样本变成 CI 硬依赖）。
+void test_metadata_only_gps_preserves_image_bytes(const fs::path &tmp) {
+    struct Case {
+        fs::path src;
+        const char *name;
+        bool required;
+    };
+    std::vector<Case> cases;
+    cases.push_back({corpus() / "base" / "rgb16.tif", "fixture", true});
+    {
+        std::error_code ec;
+        const fs::path user = repo_root() / "super" / "T1.tif";
+        if (fs::exists(user, ec))
+            cases.push_back({user, "T1", false});
+    }
+    for (const Case &c : cases) {
+        const std::string tag = std::string("meta-only/gps-image-bytes/") + c.name;
+        std::error_code ec;
+        if (!fs::exists(c.src, ec)) {
+            if (c.required)
+                fail(tag + "/src", "missing source " + c.src.string());
+            continue;
+        }
+        const pp::SourceMeta meta = pp::read_metadata(c.src);
+        if (!meta.error.empty()) {
+            if (c.required)
+                fail(tag + "/read", meta.error);
+            continue;
+        }
+        pp::BatchRules rules;
+        rules.gps = pp::GpsData{39.9042, 116.4074, 50.0, 90.0, std::nullopt};
+        // 走**真实入口** run_metadata_only（= GUI 勾选「仅元数据」后的调度路径），
+        // 而不是只测底层 rewrite_metadata_only。
+        pp::FileEntry fe;
+        fe.src = c.src;
+        fe.base_dir = c.src.parent_path();
+        pp::RunConfig cfg;
+        cfg.out_root = tmp / (std::string("gps_image_bytes_") + c.name);
+        cfg.outputs.push_back(pp::OutputFormatSpec{"tiff", "oiio", "", pp::ParamSet{}, 16});
+        cfg.output_template = "$dir/$file";
+        cfg.conflict = pp::ConflictPolicy::Overwrite;
+        cfg.metadata_only = true;
+        cfg.rules = rules;
+        fs::remove_all(cfg.out_root, ec);
+        const pp::FileOutcome oc = pp::run_metadata_only(fe, cfg, pp::EventFn{});
+        check(oc.verdict == pp::FileOutcome::Verdict::Done && oc.file.ok, tag + "/run",
+              oc.file.error);
+        if (!oc.file.ok || oc.file.outputs.empty())
+            continue;
+        const fs::path out = oc.file.outputs.front().out;
+
+        // GPS 确实写入了（否则"图像不变"可能只是根本没改元数据）。
+        const pp::SourceMeta back = pp::read_metadata(out);
+        check(back.has_gps, tag + "/gps-written", "output has no GPS after edit");
+        check(exif_str(back.exif, "Exif.GPSInfo.GPSLatitudeRef") == "N", tag + "/gps-lat-ref",
+              show(exif_str(back.exif, "Exif.GPSInfo.GPSLatitudeRef")));
+        check(exif_str(back.exif, "Exif.GPSInfo.GPSLongitudeRef") == "E", tag + "/gps-lon-ref",
+              show(exif_str(back.exif, "Exif.GPSInfo.GPSLongitudeRef")));
+
+        std::string e1, e2;
+        const std::vector<uint8_t> before = tiff_image_payload(c.src, e1);
+        const std::vector<uint8_t> after = tiff_image_payload(out, e2);
+        check(e1.empty() && !before.empty(), tag + "/parse-src", e1);
+        check(e2.empty() && !after.empty(), tag + "/parse-out", e2);
+        check(before.size() == after.size(), tag + "/size",
+              std::to_string(before.size()) + " != " + std::to_string(after.size()));
+        const bool same = before.size() == after.size() &&
+                          std::memcmp(before.data(), after.data(), before.size()) == 0;
+        check(same, tag + "/bytes-identical",
+              "TIFF image payload changed (src=" + std::to_string(before.size()) +
+                  " out=" + std::to_string(after.size()) + " bytes)");
+        check(pixel_hash(c.src) == pixel_hash(out), tag + "/pixel-hash", "pixels changed");
+        std::printf("info %s: payload_src=%zu payload_out=%zu bytes_identical=%d\n", tag.c_str(),
+                    before.size(), after.size(), same ? 1 : 0);
+    }
+}
+
 void test_png_r1(const fs::path &tmp) {
     // R1 (closed by M1-T5b: the exiv2 port now builds with its "png" feature → zlib).
     // PNG uses the same post-encode Exiv2 path as JPEG/TIFF/WebP; the mirror/drop fallback in
@@ -1326,6 +1502,7 @@ int main() {
     test_effective_datetime();
     test_metadata_only(tmp);
     test_metadata_only_other_containers(tmp);
+    test_metadata_only_gps_preserves_image_bytes(tmp);
     test_png_r1(tmp);
     test_metadata_only_capability();
     test_mirror_helper();

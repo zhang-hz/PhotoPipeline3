@@ -73,7 +73,10 @@ inline std::string heif_profile_label(HeifProfile p) {
     case HeifProfile::Main:
         return "Main（兼容性最好）";
     case HeifProfile::Main10:
-        return "Main10（10 位）";
+        // x265 对静止图固定写 "main10-intra"（HEVC general_profile_idc=4 / Main10 Intra，
+        // 与用户参考 T2.heic 相同）；位深确实是 10。标签注明 Intra，避免工具显示 "Main"
+        // 时被误认为选错了位深（R-315）。
+        return "Main10（10 位 · Intra）";
     case HeifProfile::Main12:
         return "Main12（12 位）";
     case HeifProfile::MainStill:

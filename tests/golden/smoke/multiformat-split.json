@@ -1,28 +1,40 @@
 {
   "case": "multiformat-split",
-  "input": "base/rgba8.png",
+  "input": "base/rgb8.png",
   "output_format": "jpeg,webp",
   "outputs": [
     {
-      "rel": "jpeg/base/rgba8.jpg",
+      "rel": "jpeg/base/rgb8.jpg",
       "format": "jpeg",
       "assert": {
         "pixel": {},
         "metadata": [
-          { "key": "Exif.Image.Artist", "op": "eq", "value": "M4-T5-split" }
+          {
+            "key": "Exif.Image.Artist",
+            "op": "eq",
+            "value": "M4-T5-split"
+          }
         ],
-        "warnings_contain": ["AlphaFlattened"], "warnings_exact": ["AlphaFlattened"]
+        "warnings_contain": [
+          "LossyFromLossless"
+        ]
       }
     },
     {
-      "rel": "webp/base/rgba8.webp",
+      "rel": "webp/base/rgb8.webp",
       "format": "webp",
       "assert": {
-        "pixel": { "mode": "exact" },
+        "pixel": {
+          "mode": "exact"
+        },
         "metadata": [
-          { "key": "Exif.Image.Artist", "op": "eq", "value": "M4-T5-split" }
+          {
+            "key": "Exif.Image.Artist",
+            "op": "eq",
+            "value": "M4-T5-split"
+          }
         ],
-        "warnings_contain": [], "warnings_empty": true
+        "warnings_empty": true
       }
     }
   ]

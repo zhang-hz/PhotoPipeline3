@@ -32,7 +32,16 @@ caption 单轨 46×32；壳层顶栏 44 + 状态栏 30；**栏宽固定轴 330 /
 逐条探针、偏差与未决项见 [docs/m5-report.md](docs/m5-report.md)，开发期裁定见
 [docs/m5-adjudications.md](docs/m5-adjudications.md)。
 
-**0.3.5.alpha2（当前版本，预发布）= 七项实测缺陷修复**：HEIF 无损/10bit/色度与
+**0.3.5.alpha3（当前版本，预发布）= 全格式编码器配置审计修复批**：8 个格式逐参数核对暴露/
+生效/默认值/联动，修掉 JPEG 色度采样不生效、JXL 无损 `resampling`、WebP 假 `preset`、PNG
+ICC 自相矛盾、HEIF/AVIF 假默认值（`qp=0`）、BMP 假位深选择等；Alpha 明确不支持（统一拍平 +
+警示），TIFF 多页只取首图但保留合法缩略图 IFD1，仅元数据补 IPTC/COM 隐私剥除与 CMYK 支持。
+全量报告见 [docs/encoder-config-audit-2026-10-25.md](docs/encoder-config-audit-2026-10-25.md)，
+修复证据见 [docs/encoder-audit-fix-status-2026-10-25.md](docs/encoder-audit-fix-status-2026-10-25.md)。
+**预发布（alpha）**，仅建议尝鲜/验证用；逐条变更见 [CHANGELOG.md](CHANGELOG.md)
+`[0.3.5.alpha3]`。
+
+**0.3.5.alpha2（历史预发布）= 七项实测缺陷修复**：HEIF 无损/10bit/色度与
 preset/tune 参数真正生效 + 落盘位深回读校验；HEIF/AVIF 容器 ICC 在 probe/预览中可见；
 Adobe RGB 预览/缩略图按源 ICC 显示（含「无 ICC、仅 EXIF ColorSpace=2」的合成回退）；
 无边框窗口右上角三钮改客户区命中，真机鼠标实测可点；高德搜索源不再被瓦片源绑死
@@ -74,7 +83,7 @@ R2 轮方案见 [docs/m7r2-plan.md](docs/m7r2-plan.md)。**色彩能力四选项
 渲染意图 / 线性光重采样）已入引擎并在界面提供开关**——**输出页全局卡**四行（默认全关 =
 行为不变；0.3.x 默认路径另有两处已归因字节变化，见 CHANGELOG「变更」节）；8bit 抖动仅作用
 于 JPEG/WebP/JXL 及 OIIO 系四家的 8bit 量化段（HEIF/AVIF 的 8bit 路径不接）。**发行状态：0.3.3 已发布**（2026-10-13；其 Windows zip 有启动 P0，已由 0.3.4 热修，
-请使用 0.3.4 或更新版本；当前最新 = 0.3.5.alpha2 预发布）。
+请使用 0.3.4 或更新版本；当前最新 = 0.3.5.alpha3 预发布）。
 
 **0.3.2 = GPS 地图升级版（M6）**：把「内嵌地图选点」从能用升级到**地图 App 水平**——
 R1 搜索搜得出（改用可达的**高德 Web 服务**事实表：`place/text` + 周边偏置 **`around` 20 条**按距离升序 +
@@ -485,7 +494,7 @@ chmod +x PhotoPipeline-<版本>-x86_64.AppImage
 
 ## 发行版（Windows）
 
-**M3 起提供 Windows x64 免安装产物**（0.2.0 为首个 Windows 版本，当前版本 0.3.5.alpha2 预发布）；与 Linux 的 AppImage 同一引擎
+**M3 起提供 Windows x64 免安装产物**（0.2.0 为首个 Windows 版本，当前版本 0.3.5.alpha3 预发布）；与 Linux 的 AppImage 同一引擎
 与界面，差异只在打包形态（zip vs AppImage）与平台运行时（MSVC 运行时 / Qt msvc2022_64）。
 
 ### 下载与运行
@@ -525,7 +534,7 @@ chmod +x PhotoPipeline-<版本>-x86_64.AppImage
 ### 命令行
 
 ```powershell
-.\photopipeline.exe --version      # → PhotoPipeline 0.3.5.alpha2（单行 + 退出码 0；非 dev 门控，发布构建亦可用）
+.\photopipeline.exe --version      # → PhotoPipeline 0.3.5.alpha3（单行 + 退出码 0；非 dev 门控，发布构建亦可用）
 .\photopipeline.exe                # 图形界面
 .\photopipeline.exe --ui-smoke     # 无头 UI 走查（offscreen，产出 12 张截图；仅 PP_BUILD_DEV=ON 的构建）
 .\photopipeline.exe --dev ...      # 开发 harness：全语料矩阵 / 回归基线入口（同上，仅 dev 构建）

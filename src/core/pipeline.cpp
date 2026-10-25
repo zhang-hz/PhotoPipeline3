@@ -31,13 +31,13 @@
 //     后再从同一块内存读回 = 全黑图（静默数据损失，见 color_stage 的逐条注释）。
 //   * 逐 target 串行（同文件内），文件间并行由 scheduler 管。
 //
-// 编码顺序（§4.3）：supports_alpha 的 target 在前、false 的在后（稳定排序），保证做 alpha 的
-// 格式先拿到未拍平的像素；FileResult.outputs 仍按**配置顺序**记录（编码顺序是实现细节）。
+// 编码顺序：alpha 不支持（第二轮裁定）→ 所有 target 在 color 前已拍平，无需按
+// supports_alpha 排序；FileResult.outputs 仍按**配置顺序**记录。
 //
-// 其余冻结语义沿用 0.2（§4.8 gray/ICC、§3.5⑥ alpha、第 4 章 metadata、§3.4 reserved）：
+// 其余冻结语义沿用 0.2（§4.8 gray/ICC、第 4 章 metadata、§3.4 reserved）：
 //   * gray 源进入不支持灰度的格式 → Warning{GrayToRgbEncoded}；多输出时"任一 target 不支持
 //     灰度"即以 sRGB 为有效目标变换一次（color 全局共享，D5）；
-//   * alpha → 不支持 alpha 的 target 报 Warning{AlphaFlattened}；
+//   * alpha → 所有带 alpha 的输入在 color 前拍平，逐输出报 Warning{AlphaFlattened}；
 //   * BMP 丢元数据 + warning 不变；meta_plan 只构建一次（全局共享）。
 //   * 逐输出独立冲突解析（§4.4）：每 target 各调一次 resolve_conflict，reserved 快照按
 //     out_path 粒度由调用方登记。
@@ -64,6 +64,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -90,6 +91,9 @@
 #include "decode/oiio_reader.h"
 
 namespace pp {
+
+// Defined in metadata.cpp（第二轮裁定：转码元数据计划净化；不进冻结 metadata.h）。
+void sanitize_transcode_metadata(MetadataPlan &plan);
 
 // Defined in metadata.cpp (runtime capability probe; intentionally outside the frozen
 // header). The strong definition of the frozen predicate below delegates to it (§4.8).
@@ -340,15 +344,12 @@ bool orient_work(WorkImage &img, int orientation, std::string &err) {
 
 // Composite alpha onto a constant background (§5.5) — **原地**（§4.3 内存纪律：零额外帧）。
 // 2 通道 → 1（灰），4 → 3（RGB）。通道数只减不增，dst 索引恒 ≤ src 索引，故前向写入永不
-// 覆盖尚未读取的源像素（alpha 分量先读后写，同像素内亦安全）。像素值与 0.2 逐位相同。
+// 覆盖尚未读取的源像素（alpha 分量先读后写，同像素内亦安全）。
 //
-// M4-W5-T19 接线（design §11.2 热路径表首行）：合成循环改由 **pp::simd::flatten**（唯一
-// 运行期分派层，cpu_has_avx2() → avx2 / ref）承载 —— AVX2 向量 + FMA（具体迭代形态与
-//   三组候选的实测对照见 core/simd/kernels.cpp）。语义逐条不变：
-//   同一条式子（a = clamp(alpha,0,1)；c*a + bg*(1-a)）、同一底色 clamp、`src == dst` 的
-//   原地缩通道形态在 simd 层显式支持（simd.h 的别名契约）。唯一差异 = 乘加合一（FMA 单次
-//   舍入）⇒ 末位可能与 0.2 的 mul+add 不同；金样 20 对（含 alpha-jpeg / multiformat-split
-//   的 flatten 产物）为该口径的裁判，实测全绿（T19 selfChecks）。
+// 第二轮裁定（alpha 不支持）：OIIO 解码默认返回 associated（预乘）alpha，因此合成式是
+// **预乘空间**的 `dst = src + bg*(1-a)`；不要再用直通式 `src*a + bg*(1-a)`（会对已预乘的
+// RGB 二次乘 alpha）。JXL 直通源由 decode 层先补乘 alpha，保证进入本函数的缓冲是预乘的。
+// 具体向量形态见 core/simd/kernels.cpp；`src == dst` 的原地缩通道由 simd 层支持。
 bool flatten_alpha_in_place(WorkImage &img, float background, std::string &err) {
     const int ch = img.spec.nchannels;
     if (ch != 2 && ch != 4) {
@@ -486,11 +487,23 @@ bool plan_targets(const FileEntry &fe, const RunConfig &cfg,
         pt.target.backend_id = spec.backend_id;
         pt.target.tech_id = spec.tech_id;
         pt.target.params = spec.params;
+        // WEBP-02：tech=lossless 是"无损"的单一真源；即便复选框未勾，记录面也必须写
+        // lossless=true（否则侧车/预设与产物相反）。反向 tech=lossy+flag 由编码器显式拒绝。
+        if (fmt->id == "webp" && spec.tech_id == "lossless") {
+            pt.target.params[std::string(kLosslessParamKey)] = true;
+            pt.target.params[std::string(kLosslessKey)] = true;
+        }
         pt.target.out_bitdepth = spec.out_bitdepth;
         pt.target.out_path = plan.out_path;
         pt.target.supports_alpha = fmt->supports_alpha;
         out.push_back(std::move(pt));
         row.out = plan.out_path;
+        // JPEG-02：JPEG 没有无损模式；CLI/预设里的 lossless=true 不能静默变成"有损但记无损"。
+        if (fmt->id == "jpeg" && lossless_flag(spec.params)) {
+            row.warnings.push_back(Warning{
+                WarningKind::LossyFromLossless,
+                "jpeg has no lossless mode; the lossless flag is ignored (output is lossy)"});
+        }
     }
     return true;
 }
@@ -846,8 +859,39 @@ bool stage_orient(RunFileContext &ctx) {
     return true;
 }
 
-// ---- ⑦ color_stage（灰度/回拷判据收单点）----
+// ---- ⑦ color_stage（alpha 拍平 + 灰度/回拷判据收单点）----
 bool stage_color(RunFileContext &ctx) {
+    // 第二轮裁定：alpha 明确不支持。所有带 alpha 的输入在**色彩变换之前**拍平到背景，
+    // 产物永远不含 alpha；这样 lcms2 只处理不透明 RGB，避免对预乘值做非线性 TRC 变换。
+    // OIIO 解码默认返回 associated（预乘）alpha；JXL 直通源由 decode 层补乘（见 oiio_reader）。
+    const int in_ch = ctx.work.spec.nchannels;
+    if (in_ch == 2 || in_ch == 4) {
+        ctx.stage(FileState::Flattening, Stage::Flatten, -1);
+        ctx.mux->shared_stage(Stage::Flatten, 0.f);
+        const Clock::time_point ft0 = Clock::now();
+        std::string ferr;
+        if (!flatten_alpha_in_place(ctx.work, static_cast<float>(ctx.cfg.flatten_gray), ferr)) {
+            ctx.fail("flatten failed: " + ferr);
+            return false;
+        }
+        ctx.res.t.flatten_ms = ms_since(ft0);
+        const std::string detail = "alpha composited onto background " +
+                                   fmt_double(ctx.cfg.flatten_gray) +
+                                   " (alpha is not supported; output is opaque)";
+        for (const PlannedTarget &pt : ctx.targets) {
+            if (!pt.skip)
+                ctx.res.outputs[pt.cfg_index].warnings.push_back(
+                    Warning{WarningKind::AlphaFlattened, detail});
+        }
+        ctx.mux->shared_stage(Stage::Flatten, 1.f);
+        log_debug(
+            kStage, kFile, "alpha flattened before color",
+            {{"src", ctx.fe.src.string()},
+             {"channels", std::to_string(in_ch) + " -> " + std::to_string(ctx.work.spec.nchannels)},
+             {"background", fmt_double(ctx.cfg.flatten_gray)}});
+    } else {
+        ctx.mux->shared_skip(Stage::Flatten);
+    }
     const bool src_is_gray = (ctx.info.channels == 1 || ctx.info.channels == 2);
     // 灰度源：任一 target 不支持灰度 → 报 GrayToRgbEncoded，并把有效目标推成 sRGB
     // （多输出下"一次变换、全体共享"，行为对单输出与 0.2 逐字一致）。
@@ -966,6 +1010,9 @@ bool stage_meta(RunFileContext &ctx) {
     ctx.meta_plan = build_plan(ctx.srcmeta, ctx.cfg.rules, ctx.fe.exception);
     if (ctx.rotated && !ctx.meta_plan.exif.empty())
         ctx.meta_plan.exif["Exif.Image.Orientation"] = static_cast<uint16_t>(1); // §5.3
+    // 第二轮裁定：转码只保留 IFD0 标签 + 合法 IFD1 缩略图；删除多页页组（Image2/Image3/
+    // SubImage）与 IFD0 源结构标签。metadata-only 路径**不**调用（保留多页原链）。
+    sanitize_transcode_metadata(ctx.meta_plan);
     ctx.payloads = make_payloads(ctx.meta_plan);
     ctx.meta.exif_blob = ctx.payloads.exif_blob; // consumed by JXL/HEIF/AVIF only (E7)
     ctx.meta.xmp_rdf = ctx.payloads.xmp_rdf;
@@ -978,11 +1025,7 @@ bool stage_encode_loop(RunFileContext &ctx) {
     std::vector<std::size_t> order(ctx.targets.size());
     for (std::size_t i = 0; i < order.size(); ++i)
         order[i] = i;
-    std::stable_sort(order.begin(), order.end(), [&ctx](std::size_t a, std::size_t b) {
-        return ctx.targets[a].target.supports_alpha && !ctx.targets[b].target.supports_alpha;
-    });
 
-    const bool image_has_alpha = (ctx.work.spec.nchannels == 2 || ctx.work.spec.nchannels == 4);
     for (std::size_t pos = 0; pos < order.size(); ++pos) {
         const std::size_t idx = order[pos];
         const PlannedTarget &pt = ctx.targets[idx];
@@ -990,7 +1033,7 @@ bool stage_encode_loop(RunFileContext &ctx) {
         if (pt.skip) {
             set_output_state(row, OutputState::Skipped); // R-172 单点迁移
             ctx.mux->on_output_skipped(pt.cfg_index);    // §7.2：该输出全段记满（文件整体可达 1.0）
-            continue; // 跳过行不参与 flatten/告警（0.2 的 Skip 语义）
+            continue; // 跳过行不参与 encode/告警（0.2 的 Skip 语义）
         }
         // W1-T6：该输出进入编码段（§7.2 的 50%+10% 块）。绑定必须早于本输出的任何阶段
         // 事件 —— 合成标识（§7.3）以"格式是否在 k 表内"预置，编码返回后再按
@@ -998,51 +1041,20 @@ bool stage_encode_loop(RunFileContext &ctx) {
         const ProgressFn out_progress = ctx.mux->bind_output(pt.cfg_index, pt.target.format_id);
         const bool synth_pump = ctx.mux->synth_active(pt.cfg_index);
 
-        // §4.3：最后一个 alpha-preserving target 之后、首个 alpha-dropping target 之前原地
-        // flatten
-        const int cur_ch = ctx.work.spec.nchannels;
-        const bool buf_has_alpha = (cur_ch == 2 || cur_ch == 4);
-        if (image_has_alpha && !pt.target.supports_alpha) {
-            if (buf_has_alpha) {
-                ctx.stage(FileState::Flattening, Stage::Flatten, static_cast<int>(pt.cfg_index));
-                ctx.mux->output_stage(pt.cfg_index, Stage::Flatten);
-                Clock::time_point t0 = Clock::now();
-                std::string ferr;
-                if (!flatten_alpha_in_place(ctx.work, static_cast<float>(ctx.cfg.flatten_gray),
-                                            ferr)) {
-                    // 共享工作缓冲已不可信 → 本 target 与其余未处理 target 全部按输出级失败
-                    // 记录，再走聚合（§4.1：此时若已有输出成功 = DoneWithErrors，复核项 5）。
-                    const std::string msg = "flatten failed: " + ferr;
-                    log_error(kStage, kFile, msg, {{"src", ctx.fe.src.string()}});
-                    for (std::size_t rest = pos; rest < order.size(); ++rest) {
-                        OutputResult &r2 = ctx.res.outputs[ctx.targets[order[rest]].cfg_index];
-                        if (!r2.ok && !r2.skipped && r2.error.empty()) {
-                            r2.error = msg;
-                            r2.error_kind = ErrorKind::Flatten;
-                        }
-                    }
-                    break;
-                }
-                // R-289：Timing 聚合口径统一 —— 逐输出**累加**（与 encode_ms/metawrite_ms
-                // 同口径；flatten 至多发生一次，+= 与 = 在现行为下逐字等价）。
-                ctx.res.t.flatten_ms += ms_since(t0);
-            }
-            row.warnings.push_back(Warning{WarningKind::AlphaFlattened,
-                                           "alpha composited onto background " +
-                                               fmt_double(ctx.cfg.flatten_gray) + " for format '" +
-                                               pt.target.format_id + "'"});
-        }
         if (is_cancelled(ctx.cancelled)) {
             ctx.finalize(FileOutcome::Verdict::Cancelled);
             return false;
         }
 
         // ---- bit depth note (§5.7) ----
-        if (ctx.info.src_bitdepth > pt.target.out_bitdepth) {
+        // BMP-02：BMP 的 out_bitdepth 是 bpp（24），其余格式是 bps；必须换算到同单位再比较，
+        // 否则 16-bit 源 → BMP 24bpp（实际 8bps）不会告警。
+        const int out_bps = bitdepth_bps(pt.fmt->id, pt.target.out_bitdepth);
+        if (ctx.info.src_bitdepth > out_bps) {
             row.warnings.push_back(
                 Warning{WarningKind::DepthDowngrade,
                         "source bit depth " + std::to_string(ctx.info.src_bitdepth) +
-                            " -> output bit depth " + std::to_string(pt.target.out_bitdepth)});
+                            " -> output bit depth " + std::to_string(out_bps) + " bps"});
         }
 
         // ---- encode (§5.7)：单输出一次调用（§3.1）----
@@ -1151,9 +1163,9 @@ bool stage_encode_loop(RunFileContext &ctx) {
             row.warnings.push_back(
                 Warning{WarningKind::MetadataDropped, "bmp output carries no metadata container"});
             // B3（UX-14 B3 余量 / E2，M7-R2A）：OIIO BMP writer 不落 ICC（V5 头 profile 槽
-            // 未写，测试钉住事实见 test_enc_oiio 的 ICC 回读）—— 色彩目标 ≠ keep 时目标 ICC
-            // 无法随 BMP 承载，必须显式警示（不静默丢色描述）。
-            if (ctx.cfg.color != ColorTarget::KeepOriginal) {
+            // 未写，测试钉住事实见 test_enc_oiio 的 ICC 回读）—— 只要本次有 ICC 要嵌
+            // （keep 的源 ICC 或非 keep 的目标 ICC），BMP 都无法承载，必须显式警示。
+            if (!ctx.icc_to_embed.empty()) {
                 row.warnings.push_back(
                     Warning{WarningKind::EmbedIccUnsupported,
                             "bmp output cannot embed the ICC profile (color target " +
@@ -1322,38 +1334,45 @@ FileOutcome run_metadata_only(const FileEntry &fe, const RunConfig &cfg, EventFn
     };
 
     try {
-        // §3.2 硬校验：仅元数据模式与多输出互斥
+        // §3.2 硬校验：仅元数据模式与多输出互斥（outputs[0] 仍作配置容器，但其 format_id
+        // 不决定产物容器 —— 见下）。
         if (cfg.outputs.size() != 1)
             return fail("metadata-only mode requires exactly one output "
                         "(RunConfig::outputs.size() == 1)");
-        const OutputFormatSpec &spec = cfg.outputs.front();
+        // 仅元数据 = 零重编码：产物格式**必须跟随输入**。旧实现拿 cfg.outputs[0].format_id
+        // （UI 默认 jxl / 预设里的目标格式）做能力校验与命名，导致"选 jxl 跑仅元数据"要么
+        // 直接报 jxl 不支持、要么 $format 目录写成 jxl 而文件仍是 jpg。现改为源扩展名单源。
+        const FormatDef *fmt = format_for_source_path(fe.src);
+        if (fmt == nullptr)
+            return fail("cannot determine source format for metadata-only output: " +
+                        fe.src.extension().string());
         {
             OutputResult row;
-            row.format_id = spec.format_id;
-            row.backend_id = spec.backend_id;
-            row.tech_id = spec.tech_id;
+            row.format_id = fmt->id; // 真实产物格式（源格式），不是 UI 选中的目标格式
+            row.backend_id.clear();  // 仅元数据不解码/不编码 → 无后端/技术
+            row.tech_id.clear();
             res.outputs.push_back(std::move(row));
         }
         OutputResult &row = res.outputs.front();
-
-        // M2-T5 §2.7：交叉参数约束（仅元数据路径同样是"该文件失败，error=首条消息"）
-        if (const std::vector<std::string> msgs =
-                cross_validate(spec.params, spec.format_id, spec.tech_id);
-            !msgs.empty())
-            return fail(msgs.front());
 
         std::string tmpl_err;
         if (!validate_output_template(cfg.output_template, &tmpl_err))
             return fail(tmpl_err);
 
         stage(FileState::Probing, Stage::Probe);
-        const ProbeOutcome po = probe_file(fe.src);
-        if (!po.error.empty())
-            return fail("probe failed: " + po.error);
+        // X-METADATA-ONLY-07：仅元数据不解码像素，OIIO probe 的拒绝（CMYK/截断等）不应
+        // 阻断纯元数据重写；probe 失败只降级为“无尺寸信息”，真正的门槛是 read_metadata。
+        ProbeOutcome po = probe_file(fe.src);
+        if (!po.error.empty()) {
+            log_warn(kStage, kFile, "probe failed; continuing metadata-only",
+                     {{"src", fe.src.string()}, {"error", po.error}});
+            po.info = ImageInfo{};
+            po.info.format = fmt->id;
+        }
         const ImageInfo info = po.info; // §3.2：FileEntry 只读，不回填
         res.info = info;
         // W1-T6：进度枢纽 + §7.2 共享段（本路径不解码/不编码 → decode/orient/color/encode 记满）
-        mux = std::make_unique<ProgressMux>(info.width, info.height, 1);
+        mux = std::make_unique<ProgressMux>(std::max(1, info.width), std::max(1, info.height), 1);
         mux->set_event_callback([&ev](const FileEvent &e) {
             if (ev.on_event)
                 ev.on_event(e);
@@ -1364,9 +1383,6 @@ FileOutcome run_metadata_only(const FileEntry &fe, const RunConfig &cfg, EventFn
         mux->shared_skip(Stage::Color);
         mux->on_output_no_encode(0); // 无编码段 → 50% 记满（其余走 metawrite 10%）
 
-        const FormatDef *fmt = find_format(spec.format_id);
-        if (!fmt)
-            return fail("unknown output format '" + spec.format_id + "'");
         if (!format_supports_metadata_only(fmt->id)) {
             return fail("format '" + fmt->id +
                         "' does not support metadata-only rewrite (zero re-encode)");
@@ -1682,13 +1698,37 @@ std::string validate_run_config(const RunConfig &cfg) {
 }
 
 // R-175：PathCtx 组装单源（scheduler desired_keys / pipeline plan_targets / run_metadata_only）。
+// R-3xx（仅元数据格式跟随源）：metadata_only 下格式由**源扩展名**解析（不再沿用 UI/预设里
+// 选中的目标格式）——输出容器、$format 段、扩展名三者同源，避免"选 jxl 跑仅元数据"时
+// 引擎按 jxl 校验/命名而文件仍是 jpg 的两张皮。
+const FormatDef *format_for_source_path(const std::filesystem::path &src) {
+    std::string ext = src.extension().string();
+    if (!ext.empty() && ext.front() == '.')
+        ext.erase(ext.begin());
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (ext == "jpg" || ext == "jpeg")
+        return find_format("jpeg");
+    if (ext == "tif" || ext == "tiff")
+        return find_format("tiff");
+    if (ext == "heic" || ext == "heif")
+        return find_format("heif");
+    return find_format(ext); // png/webp/jxl/avif/bmp（gif/tga 无输出格式 → nullptr）
+}
+
 PathCtx path_ctx_for(const FileEntry &fe, const RunConfig &cfg, const FormatDef *fmt) {
     PathCtx ctx;
-    ctx.format_dir = fmt ? fmt->id : std::string();
+    if (cfg.metadata_only) {
+        // 同容器零重编码：格式/扩展名都以源文件为准（fmt 入参可能是 UI 选中的目标格式）。
+        const FormatDef *src_fmt = format_for_source_path(fe.src);
+        ctx.format_dir = src_fmt ? src_fmt->id : std::string();
+        ctx.ext = fe.src.extension().string();
+    } else {
+        ctx.format_dir = fmt ? fmt->id : std::string();
+        ctx.ext = fmt ? fmt->ext : std::string();
+    }
     ctx.rel_dir = relative_dir(fe.src, fe.base_dir);
     ctx.stem = fe.src.stem().string();
-    // 多格式输出恒为重编码路径：ctx.ext = 目标格式扩展名；仅元数据模式同容器 → 源扩展名。
-    ctx.ext = cfg.metadata_only ? fe.src.extension().string() : (fmt ? fmt->ext : std::string());
     return ctx;
 }
 
@@ -1705,7 +1745,11 @@ int default_bitdepth_for(std::string_view format_id) {
         return 8;
     if (format_id == "bmp")
         return 24;
-    if (format_id == "heif" || format_id == "avif")
+    // HEIF-03：默认 10 位会让默认产物落到 RExt（profile_idc=4）；8 位才是 Main Still Picture。
+    // AVIF 的 10 位仍是 AV1 Main，保持 10。
+    if (format_id == "heif")
+        return 8;
+    if (format_id == "avif")
         return 10;
     return 8;
 }

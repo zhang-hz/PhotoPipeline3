@@ -19,6 +19,7 @@
 #include <QAbstractScrollArea>
 #include <QAbstractSpinBox>
 #include <QBoxLayout>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QContextMenuEvent>
 #include <QDirIterator>
@@ -32,6 +33,7 @@
 #include <QPainter>
 #include <QPushButton>
 #include <QSet>
+#include <QStandardItemModel>
 #include <QTabBar>
 #include <QToolButton>
 
@@ -5894,6 +5896,39 @@ void MainWindow::Impl::smoke_probe_advanced_folds() {
     expect(expanded == 1, QStringLiteral("默认只展开首组（got %1）").arg(expanded));
     expect(counted == groups_seen,
            QStringLiteral("折叠头「N 项」计数齐（got %1/%2）").arg(counted).arg(groups_seen));
+    // R-3xx：收起子分组后折叠头必须仍在（旧实现把"无可见行"当"无行"，连头一起隐藏 →
+    // 收起一次后再也点不开，且其余子分组的选项永远显示不全）。
+    if (auto *adv_toggle = [&]() -> QToolButton * {
+            for (QToolButton *t :
+                 page_output->findChildren<QToolButton *>(QStringLiteral("pp-advanced-toggle"))) {
+                if (t->isVisible())
+                    return t;
+            }
+            return nullptr;
+        }()) {
+        adv_toggle->setChecked(true);
+        pump(80);
+        QWidget *first_visible = nullptr;
+        for (int g = 0; g < 4 && first_visible == nullptr; ++g) {
+            QWidget *header =
+                page_output->findChild<QWidget *>(QStringLiteral("pp-advanced-group-%1").arg(g));
+            if (header != nullptr && header->isVisible())
+                first_visible = header;
+        }
+        expect(first_visible != nullptr, QStringLiteral("展开高级后有可见子分组"));
+        if (first_visible != nullptr) {
+            auto *toggle = first_visible->findChild<QToolButton *>();
+            toggle->click();
+            pump(60);
+            const bool alive = first_visible->isVisible();
+            toggle->click();
+            pump(60);
+            const bool alive2 = first_visible->isVisible();
+            expect(alive && alive2, QStringLiteral("收起/再展开后折叠头仍在（alive=%1/%2）")
+                                        .arg(alive ? 1 : 0)
+                                        .arg(alive2 ? 1 : 0));
+        }
+    }
     // UX-10.1：编码档位（pp-profile-combo）→ 档位说明/兼容性提示行
     page_output->select_format(QStringLiteral("avif"));
     auto *profile = page_output->findChild<QComboBox *>(QStringLiteral("pp-profile-combo"));
@@ -5907,6 +5942,35 @@ void MainWindow::Impl::smoke_probe_advanced_folds() {
             expect(!note->text().isEmpty() || !note->toolTip().isEmpty(),
                    QStringLiteral("非 Main 档位给兼容性说明（%1）").arg(note->text()));
         }
+    }
+    // R-3xx：HEIF 无损 → 4:4:4 硬联动（4:2:0/4:2:2 会抽样色度，不是无损）。
+    page_output->select_format(QStringLiteral("heif"));
+    auto *heif_lossless = page_output->findChild<QCheckBox *>(QStringLiteral("pp-lossless-check"));
+    auto *heif_chroma = page_output->findChild<QComboBox *>(QStringLiteral("pp-param-chroma"));
+    expect(heif_lossless != nullptr && heif_chroma != nullptr,
+           QStringLiteral("heif 无损/色度控件存在"));
+    if (heif_lossless != nullptr && heif_chroma != nullptr) {
+        heif_lossless->setChecked(true);
+        pump(80);
+        const bool forced_444 = heif_chroma->currentText() == QStringLiteral("444");
+        bool limited = true;
+        bool four_enabled = false;
+        if (auto *model = qobject_cast<QStandardItemModel *>(heif_chroma->model())) {
+            for (int i = 0; i < heif_chroma->count() && i < 3; ++i) {
+                const bool on = model->item(i) != nullptr && model->item(i)->isEnabled();
+                if (heif_chroma->itemText(i) == QStringLiteral("444"))
+                    four_enabled = on;
+                else if (on)
+                    limited = false;
+            }
+        }
+        expect(forced_444,
+               QStringLiteral("无损强制 chroma=444（got %1）").arg(heif_chroma->currentText()));
+        expect(limited && four_enabled,
+               QStringLiteral("无损下仅 444 可选（420/422 置灰；444 enabled=%1）")
+                   .arg(four_enabled ? 1 : 0));
+        heif_lossless->setChecked(false);
+        pump(40);
     }
     if (!prev.isEmpty())
         page_output->select_format(prev);
@@ -8086,6 +8150,18 @@ void MainWindow::Impl::smoke_probe_output_geometry() {
                    .arg(search != nullptr ? search->placeholderText() : QString()));
         groups_jxl = groups;
         expect("advanced-groups", groups >= 3, QStringLiteral("groups=%1").arg(groups));
+        // R-3xx：所有子分组折叠头都必须可见（旧实现在收起态把"无可见行"当"无行"，把折叠头
+        // 一起隐藏 → 收起一次后再也点不开；同时其余子分组的选项永远显示不全）。
+        int visible_groups = 0;
+        if (host != nullptr) {
+            for (QWidget *widget : host->findChildren<QWidget *>()) {
+                if (widget->objectName().startsWith(QStringLiteral("pp-advanced-group-")) &&
+                    widget->isVisible())
+                    ++visible_groups;
+            }
+        }
+        expect("advanced-groups-visible", groups > 0 && visible_groups == groups,
+               QStringLiteral("visible=%1 groups=%2").arg(visible_groups).arg(groups));
         // 组内数值 = 标准 160（UX-8 §8-3：折叠区数值行宽与核心区一致，「折叠 = 88」第二档废除；
         // M7-R2-A 换锚 kFieldShort→kFieldStd，断言语义不变 = "折叠区数值控件宽 == 约定字段宽档"）
         // ；组内外标签列同轴（2-32）

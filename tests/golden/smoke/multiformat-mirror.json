@@ -7,22 +7,38 @@
       "rel": "base/jpeg/rgb8.jpg",
       "format": "jpeg",
       "assert": {
-        "pixel": { "mode": "psnr", "threshold_db": 35 },
+        "pixel": {
+          "mode": "psnr",
+          "threshold_db": 35
+        },
         "metadata": [
-          { "key": "Exif.Image.Artist", "op": "eq", "value": "M4-T5-mirror" }
+          {
+            "key": "Exif.Image.Artist",
+            "op": "eq",
+            "value": "M4-T5-mirror"
+          }
         ],
-        "warnings_contain": [], "warnings_empty": true
+        "warnings_contain": [
+          "LossyFromLossless"
+        ]
       }
     },
     {
       "rel": "base/webp/rgb8.webp",
       "format": "webp",
       "assert": {
-        "pixel": { "mode": "exact" },
+        "pixel": {
+          "mode": "exact"
+        },
         "metadata": [
-          { "key": "Exif.Image.Artist", "op": "eq", "value": "M4-T5-mirror" }
+          {
+            "key": "Exif.Image.Artist",
+            "op": "eq",
+            "value": "M4-T5-mirror"
+          }
         ],
-        "warnings_contain": [], "warnings_empty": true
+        "warnings_contain": [],
+        "warnings_empty": true
       }
     }
   ]

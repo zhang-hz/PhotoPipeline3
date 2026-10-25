@@ -30,6 +30,10 @@ struct ParamDef {
     //    契约：docs/ux-review-14.md §8 改进方案 2「分组由 schema 显式字段驱动，废除
     //    key 词根启发式（params.h ParamDef 加 group 字段；format_tables.cpp 82 条补 group）」。
     std::string group;
+    // —— 第二轮审计 AVIF-01 / HEIF complexity 加性字段（末尾；旧聚合初始化零影响）——
+    // libheif 的“可选覆盖”参数（has_default=false，如 SVT qp）不能把范围下限当默认值下发；
+    // false ⇒ default_params/fill_defaults/make_defaults 不写入该键，编码器按“未设置”处理。
+    bool has_default = true;
 };
 
 // —— M7-WP6 / UX-8：ParamDef::group 的取值域（单源词表）——
@@ -75,6 +79,10 @@ struct FormatDef {
 // Static format tables. libheif-based formats (heif/avif) have empty techs and
 // runtime_introspected=true; their params come from libheif at runtime (M1).
 const std::vector<FormatDef> &static_formats();
+
+// 运行时内省后端（heif/avif）：返回带 live tech/params 的 backend 列表。
+// 定义在 codecs/enc_heif.cpp；UI/dev CLI 的参数类型解析必须用它，不能只看静态表。
+std::vector<BackendDef> introspect_backends(std::string_view format_id);
 
 // PP-FROZEN(block): 追加在 static_formats() 声明之后
 // —— 参数引擎 ——

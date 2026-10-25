@@ -28,11 +28,14 @@ bool is_lossless(const ParamSet &s) {
 }
 bool not_lossless(const ParamSet &s) { return !is_lossless(s); }
 
+// JPEG-03：psnr_target>0 时 jpegli_set_psnr 覆盖 quality_mode/distance/quality，
+// 这三个控件不再生效 → 隐藏，避免"可调但被覆盖"。
+bool jpeg_psnr_off(const ParamSet &s) { return param_float(s, "psnr_target", 0.0) <= 0.0; }
 bool quality_mode_is_distance(const ParamSet &s) {
-    return param_str(s, "quality_mode", "distance") == "distance";
+    return jpeg_psnr_off(s) && param_str(s, "quality_mode", "distance") == "distance";
 }
 bool quality_mode_is_quality(const ParamSet &s) {
-    return param_str(s, "quality_mode", "distance") == "quality";
+    return jpeg_psnr_off(s) && param_str(s, "quality_mode", "distance") == "quality";
 }
 
 bool compression_is_zip(const ParamSet &s) { return param_str(s, "compression", "lzw") == "zip"; }
@@ -51,6 +54,12 @@ std::optional<ParamValue> lock_zero_when_lossless(const ParamSet &s) {
         return ParamValue{0.0};
     return std::nullopt;
 }
+std::optional<ParamValue> lock_one_when_lossless(const ParamSet &s) {
+    if (is_lossless(s))
+        return ParamValue{int64_t(1)};
+    return std::nullopt;
+}
+bool never_visible(const ParamSet &) { return false; }
 std::optional<ParamValue> lock_false_when_lossless(const ParamSet &s) {
     if (is_lossless(s))
         return ParamValue{false};
@@ -142,14 +151,15 @@ ParamDef jxl_codestream_level_param(bool lossy_only) {
     p.key = "codestream_level";
     p.label = "码流级别";
     p.type = ParamType::Enum;
-    p.def = int64_t(10);
+    // 第二轮审计 JXL-04：库默认 -1(auto)，显式 10 会给每个产物加 jxll box、无谓收窄兼容性。
+    p.def = int64_t(-1);
     p.choices = {{"auto", int64_t(-1)}, {"5", int64_t(5)}, {"10", int64_t(10)}};
     p.advanced = true;
     p.group = pp::kGroupEncodeTools;
     p.tooltip = "JPEG XL 码流级别（JxlEncoderSetCodestreamLevel，"
                 "jxl/encode.h:1348-1383）：-1=自动（库默认，按 basic "
                 "info 选择）、5=兼容性最广、10=解除限制（CMYK/32bit）；"
-                "catalog 默认 10。";
+                "默认 auto。";
     p.visible = lossy_only ? not_lossless : std::function<bool(const ParamSet &)>{};
     return p;
 }
@@ -168,8 +178,8 @@ ParamDef jxl_distance_param(bool vardct) {
         p.step = 0.1;
         p.tooltip = "目标 Butteraugli 距离（JxlEncoderSetFrameDistance，"
                     "jxl/encode.h:1428-1442）：范围 0–25、库默认 1.0、"
-                    "1.0=视觉无损、推荐 0.5–3.0；0.0 需配合 "
-                    "JxlEncoderSetFrameLossless 才是真无损。";
+                    "1.0=视觉无损、推荐 0.5–3.0；0 在 VarDCT 下走无损路径，"
+                    "请用「无损编码」复选框（JXL-05：0 的两种结局已收口）。";
         p.visible = not_lossless;
     } else {
         p.def = 0.0;
@@ -186,6 +196,7 @@ ParamDef jxl_distance_param(bool vardct) {
 }
 
 ParamDef jxl_resampling_param(bool lossy_only) {
+    (void)lossy_only;
     ParamDef p;
     p.key = "resampling";
     p.label = "编码前降采样";
@@ -201,8 +212,9 @@ ParamDef jxl_resampling_param(bool lossy_only) {
     p.tooltip = "编码前降采样（JXL_ENC_FRAME_SETTING_RESAMPLING，"
                 "jxl/encode.h:140-146）：-1=编码器自选（库默认，低质量时才"
                 "降采样）、1=不降采样、2/4/8=按倍数降采样并在解码端升采样；"
-                "会降低有效分辨率。VarDCT/Modular 通用。";
-    p.visible = lossy_only ? not_lossless : std::function<bool(const ParamSet &)>{};
+                "会降低有效分辨率。VarDCT/Modular 通用；无损时强制 1（JXL-01）。";
+    p.visible = not_lossless;
+    p.locked = lock_one_when_lossless;
     return p;
 }
 
@@ -290,8 +302,9 @@ const std::vector<FormatDef> &static_formats() {
                                  .advanced = false,
                                  .tooltip = "质量控制方式：distance=视觉距离（Butteraugli，jpegli 原生 "
                                             "jpegli_set_distance），quality=libjpeg 兼容质量分"
-                                            "（jpegli_set_quality，内部换算为距离）；二选一联动下方控件。",
-                                 .visible = {}, .locked = {}, .group = pp::kGroupCore},
+                                            "（jpegli_set_quality，内部换算为距离）；二选一联动下方控件。"
+                                            "psnr_target>0 时被 PSNR 搜索覆盖 → 隐藏。",
+                                 .visible = jpeg_psnr_off, .locked = {}, .group = pp::kGroupCore},
                         ParamDef{.key = "distance", .label = "视觉距离",
                                  .type = ParamType::Float, .def = 1.0, .lo = 0.3, .hi = 3.0,
                                  .step = 0.1, .choices = {}, .advanced = false,
@@ -397,17 +410,17 @@ const std::vector<FormatDef> &static_formats() {
                                             "取参考默认 0.01/0.1/25.0（lib/jpegli/encode.cc:84-87），"
                                             "头文件未规定上限（100 为 UI 上限）。【联动提示（R-247）："
                                             "设为 >0 后**静默覆盖**质量控制方式 / 视觉距离 / 质量三项"
-                                            "（距离由 PSNR 搜索决定，不再取用上方设定）】。",
-                                 .visible = {}, .locked = {}, .group = pp::kGroupEncodeTools},
-                        ParamDef{.key = "cicp_transfer_function", .label = "CICP 传递函数",
+                                            "（距离由 PSNR 搜索决定，不再取用上方设定）】。"
+                                            "【已知问题：库的系数域 PSNR 估计与 RGB 实测系统性偏低，"
+                                            "实测 40 目标约 35 dB；第二轮隐藏该控件，避免误导。】",
+                                 .visible = never_visible, .locked = {}, .group = pp::kGroupEncodeTools},
+                        ParamDef{.key = "cicp_transfer_function", .label = "传递函数码（仅量化表）",
                                  .type = ParamType::Int, .def = int64_t(2), .lo = 0, .hi = 18,
                                  .step = 1, .choices = {}, .advanced = true,
-                                 .tooltip = "输入传递函数 CICP/H.273 码（jpegli_set_cicp_transfer_function，"
-                                            "jpegli/encode.h:134-138，须在 jpegli_set_defaults 之前调用）："
-                                            "默认 2=unknown；jpegli 仅对 16=PQ、18=HLG 改变默认量化表"
-                                            "（lib/jpegli/quant.cc:525-526,577-579），其余码值被接受但无"
-                                            "效果（无校验）。本表 [0, 18] 为 **UI 范围**（R-294 边界出处："
-                                            "H.273 Table 3 已定义码域，库侧无校验）。",
+                                 .tooltip = "**不是色彩标记**：jpegli_set_cicp_transfer_function 只对 16=PQ/"
+                                            "18=HLG 改变默认量化表缩放（lib/jpegli/quant.cc:525-526,577-579），"
+                                            "不写 CICP/APP 标记；产物色彩仍由恒嵌 ICC 决定。默认 2=unknown。"
+                                            "除 16/18 外其余码值被接受但无效果；本表 [0, 18] 为 UI 范围。",
                                  .visible = {}, .locked = {}, .group = pp::kGroupEncodeTools},
                     } } } } },
             .bitdepths = {8},
@@ -440,10 +453,11 @@ const std::vector<FormatDef> &static_formats() {
                                                      "0–3=强度；catalog 默认 2。",
                                           .visible = not_lossless, .locked = {}, .group = pp::kGroupEncodeTools},
                                  ParamDef{.key = "keep_invisible", .label = "保留不可见像素",
-                                          .type = ParamType::Bool, .def = true, .choices = {}, .advanced = true,
+                                          .type = ParamType::Bool, .def = false, .choices = {}, .advanced = true,
                                           .tooltip = "保留不可见像素 RGB（JXL_ENC_FRAME_SETTING_KEEP_INVISIBLE，"
                                                      "jxl/encode.h:205-208）：库以 -1 表示默认（无损=1、"
-                                                     "有损=0）；Bool 无法表达 -1，本表取 true（更保真）。",
+                                                     "有损=0）；Bool 无法表达 -1。有损默认 false（避免 3.1× "
+                                                     "体积）；无损下该行隐藏。",
                                           .visible = not_lossless, .locked = {}, .group = pp::kGroupEncodeTools},
                                  ParamDef{.key = "dots", .label = "点阵生成",
                                           .type = ParamType::Bool, .def = true, .choices = {},
@@ -502,19 +516,17 @@ const std::vector<FormatDef> &static_formats() {
                                  jxl_codestream_level_param(false), // R-209
                                  jxl_distance_param(false),       // R-209
                                  ParamDef{.key = "color_transform", .label = "色彩变换",
-                                          .type = ParamType::Enum, .def = std::string("YCoCg"),
-                                          .choices = {{"None", std::string("None")},
+                                          .type = ParamType::Enum, .def = std::string("auto"),
+                                          .choices = {{"auto", std::string("auto")},
+                                                      {"None", std::string("None")},
                                                       {"YCoCg", std::string("YCoCg")},
                                                       {"XYB", std::string("XYB")},
                                                       {"YCbCr", std::string("YCbCr")}},
                                           .advanced = true,
-                                          .tooltip = "色彩变换：头文件分属两个选项——"
-                                                     "JXL_ENC_FRAME_SETTING_COLOR_TRANSFORM（-1 默认、"
-                                                     "0=XYB、1=none、2=YCbCr，jxl/encode.h:272-277）与 "
-                                                     "JXL_ENC_FRAME_SETTING_MODULAR_COLOR_SPACE（-1 默认、"
-                                                     "0–41=RCT 索引、6=YCoCg，jxl/encode.h:279-286）；"
-                                                     "XYB/None/YCbCr 走前者，YCoCg 走后者；无损需可逆变换"
-                                                     "（None 或 YCoCg），YCbCr 不做事后变换但声明数据为 YCbCr。",
+                                          .tooltip = "色彩变换：auto（-1，库默认）不设置，交给 libjxl 按 "
+                                                     "uses_original_profile 选择；None/XYB/YCbCr 在当前 C API "
+                                                     "下会被库覆写（等于不设置），只有 YCoCg 强制全局 RCT、"
+                                                     "通常更大。无损建议 auto。",
                                           .visible = {}, .locked = {}, .group = pp::kGroupEncodeTools},
                                  ParamDef{.key = "modular_group_size", .label = "组尺寸",
                                           .type = ParamType::Int, .def = int64_t(-1), .lo = -1,
@@ -551,9 +563,9 @@ const std::vector<FormatDef> &static_formats() {
                                           .hi = 11, .step = 1, .choices = {}, .advanced = true,
                                           .tooltip = "Brotli 努力（JXL_ENC_FRAME_SETTING_BROTLI_EFFORT，"
                                                      "jxl/encode.h:329-334）：-1=默认（brob box 取 4）、"
-                                                     "0 最快 … 11 最慢；头文件注明其服务 JPEG 重压缩与"
-                                                     "元数据 box，与 modular 编码无关。",
-                                          .visible = {}, .locked = {}, .group = pp::kGroupEncodeTools},
+                                                     "0 最快 … 11 最慢；本工具不产 brob/JPEG 重压缩 box，"
+                                                     "该参数无效果（JXL-09）→ 隐藏。",
+                                          .visible = never_visible, .locked = {}, .group = pp::kGroupEncodeTools},
                                  ParamDef{.key = "responsive", .label = "响应式渐进",
                                           .type = ParamType::Bool, .def = false, .choices = {},
                                           .advanced = true,
@@ -577,8 +589,8 @@ const std::vector<FormatDef> &static_formats() {
                                                      "-1=编码器默认、0–100=颜色数低于该百分比时启用局部调色板。",
                                           .visible = {}, .locked = {}, .group = pp::kGroupEncodeTools},
                                  ParamDef{.key = "modular_ma_tree_learning_percent", .label = "MA 树学习比例 %",
-                                          .type = ParamType::Int, .def = int64_t(-1), .lo = -1,
-                                          .hi = 200, .step = 1, .choices = {}, .advanced = true,
+                                          .type = ParamType::Float, .def = -1.0, .lo = -1.0,
+                                          .hi = 100.0, .step = 1.0, .choices = {}, .advanced = true,
                                           .tooltip = "MA 树学习的像素比例（JXL_ENC_FRAME_SETTING_"
                                                      "MODULAR_MA_TREE_LEARNING_PERCENT，jxl/encode.h:299-303）："
                                                      "-1=默认（50）、0=不做 MA 且解码更快、100=全部、>100 亦允许"
@@ -597,7 +609,8 @@ const std::vector<FormatDef> &static_formats() {
                                                 "1424；Modular+lossless 即真无损）"),
                               } } } } },
             .bitdepths = {8, 16},
-            .supports_alpha = true, .supports_gray = true,
+            // 第二轮裁定：alpha 明确不支持（不输出 alpha；输入在 color 前拍平）。
+            .supports_alpha = false, .supports_gray = true,
             .meta_path = "jxl-box" },
         FormatDef{
             .id = "png", .label = "PNG", .ext = "png",
@@ -614,9 +627,32 @@ const std::vector<FormatDef> &static_formats() {
                                                      "writer 无 interlace 属性（png_pvt.h:615-617 固定 "
                                                      "PNG_INTERLACE_NONE）。",
                                           .visible = {}, .locked = {}, .group = pp::kGroupCore},
+                                 ParamDef{.key = "compression", .label = "zlib 策略",
+                                          .type = ParamType::Enum, .def = std::string("default"),
+                                          .choices = {{"default", std::string("default")},
+                                                      {"filtered", std::string("filtered")},
+                                                      {"huffman", std::string("huffman")},
+                                                      {"rle", std::string("rle")},
+                                                      {"fixed", std::string("fixed")},
+                                                      {"pngfast", std::string("pngfast")},
+                                                      {"none", std::string("none")}},
+                                          .advanced = true,
+                                          .tooltip = "zlib 压缩策略（OIIO 属性 compression，"
+                                                     "pngoutput.cpp:170-190）；default=Z_DEFAULT_STRATEGY、"
+                                                     "filtered=Z_FILTERED、huffman=Z_HUFFMAN_ONLY、"
+                                                     "rle=Z_RLE、fixed=Z_FIXED、pngfast=最快、none=不压缩。",
+                                          .visible = {}, .locked = {}, .group = pp::kGroupEncodeTools},
+                                 ParamDef{.key = "filter", .label = "PNG 行滤波",
+                                          .type = ParamType::Int, .def = int64_t(0), .lo = 0,
+                                          .hi = 255, .step = 1, .choices = {}, .advanced = true,
+                                          .tooltip = "libpng 行滤波位掩码（OIIO 属性 png:filter，"
+                                                     "pngoutput.cpp:199-200）：0=PNG_NO_FILTERS（默认）、"
+                                                     "8=PNG_FILTER_NONE、0xF8=全滤波；具体收益依图像内容。",
+                                          .visible = {}, .locked = {}, .group = pp::kGroupEncodeTools},
                               } } } } },
             .bitdepths = {8, 16},
-            .supports_alpha = true, .supports_gray = true,
+            // 第二轮裁定：alpha 明确不支持（不输出 alpha；输入在 color 前拍平）。
+            .supports_alpha = false, .supports_gray = true,
             .meta_path = "exiv2" },
         FormatDef{
             .id = "tiff", .label = "TIFF", .ext = "tif",
@@ -629,15 +665,14 @@ const std::vector<FormatDef> &static_formats() {
                                           .choices = {{"none", std::string("none")},
                                                       {"lzw", std::string("lzw")},
                                                       {"zip", std::string("zip")},
-                                                      {"ccittrle", std::string("ccittrle")},
                                                       {"packbits", std::string("packbits")}},
                                           .advanced = false,
                                           .tooltip = "压缩方案（OIIO 属性 compression，"
                                                      "src/tiff.imageio/tiffoutput.cpp:660-673）。OIIO 3.1.14.0 "
-                                                     "输出名表：none/lzw/zip/ccittrle/packbits"
-                                                     "（tiffoutput.cpp:301-338）；deflate 是 zip 的别名（OIIO 只"
-                                                     "认 zip）；未知名静默回退 deflate（tiffoutput.cpp:339-344）。"
-                                                     "库默认 zip（tiffoutput.cpp:662），本表默认 lzw。",
+                                                     "输出名表：none/lzw/zip/packbits；deflate 是 zip 的别名"
+                                                     "（OIIO 只认 zip）；未知名静默回退 deflate。"
+                                                     "ccittrle 只支持 1 位样本、本管线永远产 8/16 位 → 已删除"
+                                                     "（TIFF-02）。库默认 zip，本表默认 lzw。",
                                           .visible = {}, .locked = {}, .group = pp::kGroupCore},
                                  ParamDef{.key = "deflate_level", .label = "Deflate 级别",
                                           .type = ParamType::Int, .def = int64_t(6), .lo = 1,
@@ -651,19 +686,14 @@ const std::vector<FormatDef> &static_formats() {
                                  ParamDef{.key = "predictor", .label = "预测器",
                                           .type = ParamType::Enum, .def = int64_t(2),
                                           .choices = {{"none", int64_t(1)},
-                                                      {"horizontal", int64_t(2)},
-                                                      {"float", int64_t(3)}},
+                                                      {"horizontal", int64_t(2)}},
                                           .advanced = true,
                                  .tooltip = "Predictor（OIIO 属性 tiff:Predictor，取整数；"
-                                            "libtiff PREDICTOR_NONE/HORIZONTAL/FLOATINGPOINT="
-                                            "1/2/3，tiff.h:304-306）。R-011 复核：控制面真实"
-                                            "生效（tiffoutput.cpp:1026-1029 put_parameter 在自动"
-                                            "规则 tiffoutput.cpp:685-701 之后跑，用户值覆盖自动"
-                                            "选择）；none/horizontal 在 lzw/zip 下产出不同字节"
-                                            "（test_enc_oiio 字节差断言）。【float(3) 在本管线"
-                                            "不可用：libtiff 浮点预测器仅支持浮点样本，本编码器"
-                                            "输出 8/16 位整型 ⇒ 选中即明确报错（R-011 假选项"
-                                            "支线处置）】。",
+                                            "libtiff PREDICTOR_NONE/HORIZONTAL=1/2，tiff.h:304-306）。"
+                                            "R-011 复核：控制面真实生效（tiffoutput.cpp:1026-1029 "
+                                            "put_parameter 在自动规则之后跑，用户值覆盖自动选择）；"
+                                            "none/horizontal 在 lzw/zip 下产出不同字节。float(3) 只支持"
+                                            "浮点样本，本编码器输出 8/16 位整型 → 已删除（TIFF-05）。",
                                           .visible = compression_is_lzw_or_zip, .locked = {}, .group = pp::kGroupEncodeTools},
                                  ParamDef{.key = "tiff_tile_width", .label = "Tile 宽度",
                                           .type = ParamType::Int, .def = int64_t(0), .lo = 0,
@@ -684,7 +714,8 @@ const std::vector<FormatDef> &static_formats() {
                                           .visible = {}, .locked = {}, .group = pp::kGroupEncodeTools},
                               } } } } },
             .bitdepths = {8, 16},
-            .supports_alpha = true, .supports_gray = true,
+            // 第二轮裁定：alpha 明确不支持（不输出 alpha；输入在 color 前拍平）。
+            .supports_alpha = false, .supports_gray = true,
             .meta_path = "exiv2" },
         FormatDef{
             .id = "webp", .label = "WebP", .ext = "webp",
@@ -702,20 +733,8 @@ const std::vector<FormatDef> &static_formats() {
                                                      "WebPConfigInit 默认 0，本表取 true（视觉透明档）。",
                                           .visible = {}, .locked = {}, .group = pp::kGroupCore},
                                  webp_method_param(false), // R-209
-                                 ParamDef{.key = "preset", .label = "内容预设",
-                                          .type = ParamType::Enum, .def = int64_t(2),
-                                          .choices = {{"default", int64_t(0)},
-                                                      {"picture", int64_t(1)},
-                                                      {"photo", int64_t(2)},
-                                                      {"drawing", int64_t(3)},
-                                                      {"icon", int64_t(4)},
-                                                      {"text", int64_t(5)}},
-                                          .advanced = true,
-                                          .tooltip = "内容预设（WebPPreset，webp/encode.h:157-166），经 "
-                                                     "WebPConfigPreset 应用：库默认 DEFAULT(0)，本表取 "
-                                                     "photo(2)。预设只调整有损参数（photo：sns 80、filter 30、"
-                                                     "sharpness 3，src/enc/config_enc.c）。",
-                                          .visible = {}, .locked = {}, .group = pp::kGroupEncodeTools},
+                                 // 第二轮审计 WEBP-03：preset 的字段随后被逐项覆盖，六档同字节；
+                                 // 删除该死控件（不再暴露 WebPConfigPreset 的内容预设）。
                                  ParamDef{.key = "sns_strength", .label = "空间噪声整形",
                                           .type = ParamType::Int, .def = int64_t(50), .lo = 0,
                                           .hi = 100, .step = 1, .choices = {}, .advanced = true,
@@ -765,26 +784,8 @@ const std::vector<FormatDef> &static_formats() {
                                                      "[1..4]）；库默认 4，photo 预设 4、text 预设 2"
                                                      "（src/enc/config_enc.c）。",
                                           .visible = {}, .locked = {}, .group = pp::kGroupEncodeTools},
-                                 ParamDef{.key = "alpha_compression", .label = "Alpha 压缩",
-                                          .type = ParamType::Bool, .def = true, .choices = {},
-                                          .advanced = true,
-                                          .tooltip = "Alpha 平面压缩（WebPConfig::alpha_compression，"
-                                                     "webp/encode.h:119-120）：true=WebP 无损压缩(1)、false=不压缩(0)；"
-                                                     "库默认 1；作用于有损路径的 Alpha 编码（src/enc/alpha_enc.c:385）。",
-                                          .visible = {}, .locked = {}, .group = pp::kGroupEncodeTools},
-                                 ParamDef{.key = "alpha_filtering", .label = "Alpha 预测滤波",
-                                          .type = ParamType::Int, .def = int64_t(1), .lo = 0,
-                                          .hi = 2, .step = 1, .choices = {}, .advanced = true,
-                                          .tooltip = "Alpha 预测滤波（WebPConfig::alpha_filtering，"
-                                                     "webp/encode.h:121-122）：0=none、1=fast（库默认）、2=best；"
-                                                     "头文件文档值为 0–2（WebPValidateConfig 仅校验 ≥0）。",
-                                          .visible = {}, .locked = {}, .group = pp::kGroupEncodeTools},
-                                 ParamDef{.key = "alpha_quality", .label = "Alpha 质量",
-                                          .type = ParamType::Int, .def = int64_t(100), .lo = 0,
-                                          .hi = 100, .step = 1, .choices = {}, .advanced = true,
-                                          .tooltip = "Alpha 平面质量（WebPConfig::alpha_quality，"
-                                                     "webp/encode.h:123-124）：0=最小体积 … 100=无损（库默认 100）。",
-                                          .visible = {}, .locked = {}, .group = pp::kGroupEncodeTools},
+                                 // 第二轮裁定：alpha 明确不支持 → 删除 alpha 专用参数（alpha_compression/
+                                 // alpha_filtering/alpha_quality）；编码器仍保留防御性默认读取，但产品面不再暴露。
                                  ParamDef{.key = "partitions", .label = "Token 分区数 log2",
                                           .type = ParamType::Int, .def = int64_t(0), .lo = 0,
                                           .hi = 3, .step = 1, .choices = {}, .advanced = true,
@@ -857,7 +858,8 @@ const std::vector<FormatDef> &static_formats() {
                                                 "或 tech_id=\"lossless\"；两者一致时无损生效"),
                               } } } } },
             .bitdepths = {8},
-            .supports_alpha = true, .supports_gray = false,
+            // 第二轮裁定：alpha 明确不支持（不输出 alpha；输入在 color 前拍平）。
+            .supports_alpha = false, .supports_gray = false,
             .meta_path = "exiv2" },
         FormatDef{
             .id = "bmp", .label = "BMP", .ext = "bmp",
@@ -880,7 +882,8 @@ const std::vector<FormatDef> &static_formats() {
                 .id = "x265", .label = "x265", .runtime_introspected = true,
                 .techs = {} } },
             .bitdepths = {8, 10, 12},
-            .supports_alpha = true, .supports_gray = false,
+            // 第二轮裁定：alpha 明确不支持（不输出 alpha；输入在 color 前拍平）。
+            .supports_alpha = false, .supports_gray = false,
             .meta_path = "libheif" },
         FormatDef{
             .id = "avif", .label = "AVIF", .ext = "avif",
@@ -890,7 +893,8 @@ const std::vector<FormatDef> &static_formats() {
                 BackendDef{ .id = "libaom", .label = "libaom", .runtime_introspected = true,
                             .techs = {} } },
             .bitdepths = {8, 10, 12},
-            .supports_alpha = true, .supports_gray = false,
+            // 第二轮裁定：alpha 明确不支持（不输出 alpha；输入在 color 前拍平）。
+            .supports_alpha = false, .supports_gray = false,
             .meta_path = "libheif" },
     };
     return fmts;

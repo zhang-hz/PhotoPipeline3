@@ -104,6 +104,12 @@ std::string diff_spec(std::size_t i, const pp::OutputFormatSpec &a, const pp::Ou
     if (pp::lossless_flag(a.params) != pp::lossless_flag(b.params))
         return tag + "lossless " + (pp::lossless_flag(a.params) ? "true" : "false") +
                " != " + (pp::lossless_flag(b.params) ? "true" : "false");
+    // HEIF/AVIF 档位是保留键，但由输出级 heif_profile 字段专门持久化 → 单独比较。
+    if (pp::param_int(a.params, "__heif_profile", 0) !=
+        pp::param_int(b.params, "__heif_profile", 0))
+        return tag + "heif_profile " +
+               std::to_string(pp::param_int(a.params, "__heif_profile", 0)) +
+               " != " + std::to_string(pp::param_int(b.params, "__heif_profile", 0));
     // 保留键（"__" 前缀）不落盘（M1-T2 §3.12 冻结口径：load 不还原、save 不写出）→
     // 持久化面比较时跳过；无损标志由上面的 lossless_flag 断言单独覆盖（显式 schema 参数）。
     const auto persisted_keys = [](const pp::ParamSet &s) {
@@ -152,6 +158,16 @@ std::string diff_preset(const pp::PresetData &a, const pp::PresetData &b) {
         return "color_target";
     if (a.conflict != b.conflict)
         return "conflict";
+    if (a.color_intent != b.color_intent)
+        return "color_intent";
+    if (a.color_dither8 != b.color_dither8)
+        return "color_dither8";
+    if (a.gamut_mapping != b.gamut_mapping)
+        return "gamut_mapping";
+    if (a.linear_resample != b.linear_resample)
+        return "linear_resample";
+    if (a.metadata_only != b.metadata_only)
+        return "metadata_only";
     if (a.rules.time_shift.has_value() != b.rules.time_shift.has_value())
         return "rules.time_shift presence";
     if (a.rules.time_shift && !same_timeshift(*a.rules.time_shift, *b.rules.time_shift))
@@ -230,6 +246,13 @@ pp::PresetData make_delta_preset() {
     p.split_by_format = true;
     p.color_target = ColorTarget::DisplayP3;
     p.conflict = ConflictPolicy::Rename;
+    p.color_intent = 2;
+    p.color_dither8 = true;
+    p.gamut_mapping = 1;
+    p.linear_resample = true;
+    p.metadata_only = true;
+    if (!p.outputs.empty())
+        p.outputs[0].params["__heif_profile"] = int64_t(2);
     TimeShift ts;
     ts.mode = TimeShift::Mode::Delta;
     ts.years = 1;
@@ -331,7 +354,8 @@ int main() {
         // schema 顶层键（v2）
         const QJsonObject o = parse_object(file, c);
         for (const char *k : {"version", "name", "outputs", "output_template", "split_by_format",
-                              "color_target", "conflict", "rules"})
+                              "color_target", "color_intent", "color_dither8", "gamut_mapping",
+                              "linear_resample", "metadata_only", "conflict", "rules"})
             check(o.contains(QLatin1String(k)), c, std::string("missing key '") + k + "'");
         check(o.value("version").toInteger(-1) == 2 && o.value("split_by_format").toBool(false), c,
               "version/split_by_format values");
@@ -340,6 +364,11 @@ int main() {
         check(o.value("color_target").toString() == "p3" &&
                   o.value("conflict").toString() == "rename",
               c, "color_target/conflict values");
+        check(
+            o.value("color_intent").toInteger(-1) == 2 && o.value("color_dither8").toBool(false) &&
+                o.value("gamut_mapping").toInteger(-1) == 1 &&
+                o.value("linear_resample").toBool(false) && o.value("metadata_only").toBool(false),
+            c, "color global fields values");
         // outputs[0]：format/backend/tech/bitdepth/params（含显式无损参数 lossless）
         const QJsonArray outputs = o.value("outputs").toArray();
         check(outputs.size() == 1, c, "outputs size " + std::to_string(outputs.size()));

@@ -93,12 +93,14 @@ constexpr JxlParamMap kFrameSettings[] = {
     {"modular_lossy_palette", JXL_ENC_FRAME_SETTING_LOSSY_PALETTE, ParamKind::Bool, Tech::Modular},
     {"brotli_effort", JXL_ENC_FRAME_SETTING_BROTLI_EFFORT, ParamKind::Int, Tech::Modular},
     {"responsive", JXL_ENC_FRAME_SETTING_RESPONSIVE, ParamKind::Bool, Tech::Modular},
+    // 这三个 id 只在 JxlEncoderFrameSettingsSetFloatOption 实现；旧 Int setter 会命中
+    // default → JXL_ENC_ERROR（第二轮审计 JXL-03）。默认 -1 跳过，非默认值走 float setter。
     {"channel_colors_global_percent", JXL_ENC_FRAME_SETTING_CHANNEL_COLORS_GLOBAL_PERCENT,
-     ParamKind::Int, Tech::Modular},
+     ParamKind::Float, Tech::Modular},
     {"channel_colors_group_percent", JXL_ENC_FRAME_SETTING_CHANNEL_COLORS_GROUP_PERCENT,
-     ParamKind::Int, Tech::Modular},
+     ParamKind::Float, Tech::Modular},
     {"modular_ma_tree_learning_percent", JXL_ENC_FRAME_SETTING_MODULAR_MA_TREE_LEARNING_PERCENT,
-     ParamKind::Int, Tech::Modular},
+     ParamKind::Float, Tech::Modular},
     {"modular_nb_prev_channels", JXL_ENC_FRAME_SETTING_MODULAR_NB_PREV_CHANNELS, ParamKind::Int,
      Tech::Modular},
 };
@@ -409,33 +411,42 @@ private:
             }
         }
 
-        // Modular colour transform: YCoCg travels as a modular colour space, the
-        // other three choices are the generic colour-transform option (§3.8 table).
+        // Modular colour transform: auto(-1) leaves libjxl's own choice (the only path that
+        // lets the encoder try all RCTs); 6 = YCoCg forces the global RCT; 0/1/2 are the
+        // generic option (libjxl overwrites them, so they are effectively explicit no-ops).
         if (modular) {
-            const std::string ct = param_str(params, "color_transform", "YCoCg");
-            int64_t id = JXL_ENC_FRAME_SETTING_COLOR_TRANSFORM;
-            int64_t value = 1; // None
-            if (ct == "XYB") {
-                value = 0;
-            } else if (ct == "None") {
-                value = 1;
-            } else if (ct == "YCbCr") {
-                value = 2;
-            } else { // YCoCg (default)
-                id = JXL_ENC_FRAME_SETTING_MODULAR_COLOR_SPACE;
-                value = 6;
-            }
-            st = JxlEncoderFrameSettingsSetOption(fs, static_cast<JxlEncoderFrameSettingId>(id),
-                                                  value);
-            if (st != JXL_ENC_SUCCESS) {
-                return enc::encode_error("jxl: color_transform=" + ct +
-                                         " rejected: " + status_name(st));
+            const std::string ct = param_str(params, "color_transform", "auto");
+            if (ct != "auto") {
+                int64_t id = JXL_ENC_FRAME_SETTING_COLOR_TRANSFORM;
+                int64_t value = 1;
+                if (ct == "XYB") {
+                    value = 0;
+                } else if (ct == "None") {
+                    value = 1;
+                } else if (ct == "YCbCr") {
+                    value = 2;
+                } else { // YCoCg
+                    id = JXL_ENC_FRAME_SETTING_MODULAR_COLOR_SPACE;
+                    value = 6;
+                }
+                st = JxlEncoderFrameSettingsSetOption(fs, static_cast<JxlEncoderFrameSettingId>(id),
+                                                      value);
+                if (st != JXL_ENC_SUCCESS) {
+                    return enc::encode_error("jxl: color_transform=" + ct +
+                                             " rejected: " + status_name(st));
+                }
             }
         }
 
         // Lossless overrides distance/modular/colour-transform; distance is still
         // applied explicitly for the lossy paths (§3.8 table).
         if (lossless) {
+            // JXL-01：无损承诺不得被 resampling 破坏。UI/交叉规则之外，编码器兜底锁 1。
+            st = JxlEncoderFrameSettingsSetOption(fs, JXL_ENC_FRAME_SETTING_RESAMPLING, 1);
+            if (st != JXL_ENC_SUCCESS) {
+                return enc::encode_error(std::string("jxl: cannot lock resampling for lossless: ") +
+                                         status_name(st));
+            }
             st = JxlEncoderSetFrameDistance(fs, 0.0f);
             if (st == JXL_ENC_SUCCESS) {
                 st = JxlEncoderSetFrameLossless(fs, JXL_TRUE);
@@ -446,6 +457,12 @@ private:
             }
         } else {
             const float distance = static_cast<float>(param_float(params, "distance", 1.0));
+            // JXL-05：VarDCT distance=0 在 libjxl 内部会走无损（有 ICC）或直接失败（无 ICC），
+            // 同一 UI 值两种结局。这里统一拒绝并指向「无损编码」复选框。
+            if (!modular && distance <= 0.0f) {
+                return enc::encode_error(
+                    "jxl: VarDCT distance=0 is ambiguous; use the lossless checkbox instead");
+            }
             st = JxlEncoderSetFrameDistance(fs, distance);
             if (st != JXL_ENC_SUCCESS) {
                 return enc::encode_error("jxl: distance " + std::to_string(distance) +

@@ -98,9 +98,25 @@ inline bool heif_profile_compatible(HeifProfile want, int bit_depth, int chroma,
                                     std::string *err_zh) {
     if (want == HeifProfile::Auto)
         return true;
+    // HEVC 的 4:4:4 是 **Main 4:4:4**（hvcC profile_idc=4），不是 Main/Main10/Main Still
+    // Picture —— 后者只覆盖 4:2:0/4:2:2。本表没有单列 Main 4:4:4 选项，因此显式选 HEVC
+    // 档位 + 4:4:4 必须判不一致（让用户改「自动」或改色度），不能显示"兼容"却编出另一档。
+    const bool hevc_profiles = want == HeifProfile::Main || want == HeifProfile::Main10 ||
+                               want == HeifProfile::Main12 || want == HeifProfile::MainStill;
+    if (hevc_profiles && chroma == 3) {
+        if (err_zh != nullptr) {
+            *err_zh = "所选编码档位「" + heif_profile_label(want) +
+                      "」不覆盖 4:4:4：HEVC 的 4:4:4 需要 Main 4:4:4 档位。请改选「自动」或"
+                      "把色度改为 4:2:0/4:2:2。";
+        }
+        return false;
+    }
     const HeifProfile heif_p = derive_heif_profile(false, bit_depth, chroma, still);
     const HeifProfile avif_p = derive_heif_profile(true, bit_depth, chroma, still);
-    if (heif_p == want || avif_p == want)
+    // HEIF-01：8 位静止图在 x265 里是 Main Still Picture；UI 的「Main」是同一可用族，
+    // 不能因为枚举不同就判 100% 失败。
+    if (heif_p == want || avif_p == want ||
+        (want == HeifProfile::Main && heif_p == HeifProfile::MainStill))
         return true;
     if (err_zh != nullptr) {
         *err_zh = "所选编码档位「" + heif_profile_label(want) + "」与当前设置不一致：位深 " +

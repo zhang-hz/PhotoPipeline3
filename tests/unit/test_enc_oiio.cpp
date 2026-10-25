@@ -1130,6 +1130,76 @@ void test_heif_profile_api() {
 
 } // namespace
 
+// R-3xx：HEIF 无损的硬联动/大图 grid 可解码性（本轮用户报告"无损 heic 打不开"的回归探针）。
+// 读取 hvcC 的 chromaFormat 低 2 位：1=4:2:0 / 2=4:2:2 / 3=4:4:4。
+int hevc_hvcc_chroma_format(const fs::path &p) {
+    std::FILE *f = std::fopen(p.string().c_str(), "rb");
+    if (f == nullptr)
+        return -1;
+    std::string bytes;
+    char buf[65536];
+    for (;;) {
+        const size_t n = std::fread(buf, 1, sizeof(buf), f);
+        if (n == 0)
+            break;
+        bytes.append(buf, n);
+    }
+    std::fclose(f);
+    const size_t pos = bytes.find("hvcC");
+    if (pos == std::string::npos || pos + 4 + 17 > bytes.size())
+        return -1;
+    return static_cast<unsigned char>(bytes[pos + 4 + 16]) & 0x03;
+}
+
+void test_heif_lossless_chroma_and_grid() {
+    if (pp::introspect_backends("heif").empty()) {
+        info("heif lossless/grid skipped (no encoder)");
+        return;
+    }
+    const fs::path dir = out_dir();
+    // ① 显式请求 4:2:0 + lossless → 编码器必须强制 4:4:4（否则是假无损）。
+    {
+        pp::ParamSet params;
+        params["lossless"] = true;
+        params["chroma"] = std::string("420");
+        auto enc = pp::make_encoder("heif", "x265");
+        check(enc != nullptr, "heif/lossless/chroma-encoder", "make_encoder null");
+        if (enc != nullptr) {
+            OIIO::ImageBuf src = make_buf(64, 64, 3, 0.0f);
+            const fs::path out = dir / "lossless_force444.heic";
+            const pp::EncodeResult r = run_encode(*enc, src, 8, params, {}, out);
+            check(r.error.empty(), "heif/lossless/encode", r.error);
+            check(hevc_hvcc_chroma_format(out) == 3, "heif/lossless/forced-444",
+                  "hvcC chroma_format=" + num(hevc_hvcc_chroma_format(out)) + " (want 3)");
+            OIIO::ImageBuf rb(out.string());
+            check(rb.read(0, 0, true, OIIO::TypeFloat), "heif/lossless/decode", OIIO::geterror());
+        }
+    }
+    // ② >16 Mi 像素：走标准 HEIF grid 分块（libde265 单图 4:4:4 无损解码上限），
+    //    产物必须能被普通解码器（OIIO/libheif）完整打开。
+    {
+        const int W = 4097, H = 4096; // 16.78 MP，刚好越过 2^24 阈值
+        pp::ParamSet params;
+        params["lossless"] = true;
+        params["chroma"] = std::string("444");
+        auto enc = pp::make_encoder("heif", "x265");
+        if (enc != nullptr) {
+            OIIO::ImageBuf src = make_buf(W, H, 3, 0.0f);
+            const fs::path out = dir / "lossless_grid.heic";
+            const pp::EncodeResult r = run_encode(*enc, src, 8, params, {}, out);
+            check(r.error.empty(), "heif/grid/encode", r.error);
+            check(r.bytes > 0, "heif/grid/bytes", "no bytes");
+            check(hevc_hvcc_chroma_format(out) == 3, "heif/grid/444",
+                  "hvcC chroma_format=" + num(hevc_hvcc_chroma_format(out)));
+            OIIO::ImageBuf rb(out.string());
+            const bool ok = rb.read(0, 0, true, OIIO::TypeFloat);
+            check(ok, "heif/grid/decode", OIIO::geterror());
+            check(ok && rb.spec().width == W && rb.spec().height == H, "heif/grid/dimensions",
+                  ok ? (num(rb.spec().width) + "x" + num(rb.spec().height)) : "read failed");
+        }
+    }
+}
+
 int main() {
     test_registry();
     test_png_roundtrip();
@@ -1151,6 +1221,7 @@ int main() {
     test_icc_readback_bytes();                 // B3（UX-14）
     test_heif_nclx_follows_icc();              // UX-14 A1
     test_heif_profile_api();                   // I4
+    test_heif_lossless_chroma_and_grid();      // 无损 4:4:4 + 大图 grid（R-3xx）
 
     std::printf("test_enc_oiio: %d checks, %d failed\n", g_checks, g_failed);
     return g_failed == 0 ? 0 : 1;

@@ -1,5 +1,83 @@
 # 变更日志
 
+## [0.3.5.alpha3] — 2026-10-25
+
+**预发布（alpha）**：全格式编码器配置审计后的修复批。审计覆盖 8 个输出格式的每个参数：
+是否暴露、是否真正生效、默认值是否合理、联动是否缺失、是否存在静默降级/假桩/不生效；
+并逐格式检查输出兼容性与「仅元数据」通路的字节保真。版本单源 = `CMakeLists.txt:19-24` =
+**0.3.5.alpha3**（数字段 0.3.5 + 预发布标签 ".alpha3"）。全量审计报告见
+[docs/encoder-config-audit-2026-10-25.md](docs/encoder-config-audit-2026-10-25.md)，修复
+状态与门禁证据见 [docs/encoder-audit-fix-status-2026-10-25.md](docs/encoder-audit-fix-status-2026-10-25.md)。
+
+### 变更（先读）
+
+- **Alpha 明确不支持**：8 个输出格式 `supports_alpha=false`，不再产出任何带 alpha 的文件；
+  带 alpha 的输入在**色彩管理之前**统一拍平到背景（预乘空间 `src + bg*(1-a)`，与
+  「先乘 alpha 再合成」的旧公式不同），每个输出行给出 `AlphaFlattened` 警示。JXL 直通
+  alpha 在解码边界按 `alpha_premultiplied` 补乘，读不到 basic info 时明确失败。
+- **TIFF 多页/动画不支持**：只取第一页并给 `MultipageTruncated` 警示；转码路径在元数据写入前
+  剥掉 `Exif.Image2/Image3`、`Exif.SubImage*` 与 IFD0 源结构标签。**真正的低分辨率缩略图
+  IFD1（`Exif.Thumbnail`）保留**；写盘前用 `probe_tiff_structure` 校验 IFD 链/偏移，
+  结构不合法不覆盖有效编码产物。仅元数据通路保持原 IFD 数与载荷。
+- **HEIF 默认位深 8**（Main Still / `heic`），AVIF 保持 10；AVIF 默认不再下发 `qp=0`
+  （默认产物 38,214 B → 1,975 B），`ParamDef::has_default` 区分「库有默认值」与
+  「可选覆盖参数」，不再把范围下限当默认值。
+- **预设补齐**：`color_intent` / `color_dither8` / `gamut_mapping` / `linear_resample` /
+  `metadata_only` 五个全局字段与输出级 `heif_profile` 现在随预设保存/加载（此前丢回默认）。
+
+### 修复
+
+- **JPEG**：色度采样因子改到 `jpegli_set_defaults` 之后、quality/distance 之前设置——
+  444/420 的量化表现在真正不同（此前两档 DQT 相同，`chroma` 形同虚设）；`psnr_target>0`
+  时隐藏互斥的 quality 行；`psnr_target` 因库系统性达不到目标而隐藏控件（CLI/预设仍可设）；
+  `cicp_transfer_function` 文案改为「仅量化表，不是色彩标记」；全局 lossless 打到 JPEG 腿时
+  发 `LossyFromLossless` 警示（不再静默有损）。
+- **JPEG XL**：无损锁定 `resampling=1`（含交叉规则）；三个 Modular 参数改用
+  `SetFloatOption`（此前按整数下发，小数被截断）；`color_transform` 增加 `auto` 默认
+  （不再默认 YCoCg，避免无损/近无损被隐式改色）；`codestream_level` 默认 auto；
+  `keep_invisible` 默认 false；隐藏 `brotli_effort`；VarDCT `distance<=0` 明确拒绝。
+- **WebP**：删除无效的 `preset` 与 alpha 专用参数；技术选择与 `lossless` 单一真源
+  （`tech=lossy` + `--lossless` 明确报错，`tech=lossless` 即无损）；无损下
+  `near_lossless<100` 强制 100 并记日志；侧车不再把 `lossless` 写成与产物相反的值。
+- **PNG / BMP**：有 ICC 时只写 `iCCP`（不再同写 sRGB/gAMA/cHRM 造成自相矛盾）；灰度/RGB
+  ICC 与输出通道不匹配时丢弃并记日志；新增 `compression`（zlib 策略）与 `filter`
+  （libpng 行滤波）参数并接线。BMP 深度降档告警改用 `bitdepth_bps`（16-bit 源现在会报
+  `DepthDowngrade`）；keep ICC 时告警；位深下拉改为只读「自动（按通道）」（不再给
+  8/24 假选择）；TIFF/PNG/BMP 隐藏恒无效的「无损编码」复选框。
+- **HEIF / AVIF**：`Main` 与 `MainStill` 视为同一可用族（8 位静止图不再 100% 失败）；
+  SVT-AV1 + 无损给出明确「改用 libaom」错误（不再产出坏件）；all-intra 下 speed>9 钳到 9；
+  无损时隐藏 quality；`alpha-quality` 不再暴露；`threads` 从 UI 隐藏（AVIF 由 E3 强制写、
+  x265 无该参数）；AVIF `Main` 允许 8/10 位（不再静默 10→8）。
+- **TIFF**：缺 `Exif.Image.DateTime` 时从 `Exif.Photo.DateTimeOriginal` 补写，编码器同时
+  写 OIIO `DateTime`（此前写的是编码时刻）；实测 `exif_full.jpg → TIFF` tag 306 =
+  `2024:03:01 10:00:00`。
+- **仅元数据**：worker 层跳过 OIIO probe（CMYK TIFF 等纯元数据源可处理）；probe 失败只降级为
+  「无尺寸信息」；隐私剥除同时清 IPTC(APP13) 与 COM（此前只清 EXIF+XMP）；GUI 不再把冲突
+  策略静默改成 Skip。
+- **入口一致性**：GUI 与 `--dev` 都排除 `out_root` 子树中的输入；`--dev --param` 对
+  HEIF/AVIF 等运行时内省后端按真实类型下发（quality 40/70/90 产物已不同）。
+
+### 新增
+
+- 运行页独立告警行（`pp-run-warn-*`）：降档/丢元数据/alpha 拍平/丢 ICC 等非失败告警可见，
+  失败原因行保持原口径。
+
+### 测试
+
+- `test_pipeline_contract` alpha 矩阵改为全格式「拍平 + 3 通道 + 每行 `AlphaFlattened`」；
+  `test_simd` flatten 真值改为预乘公式；`test_params` 无损 JXL `resampling` 期望 1；
+  `test_presets` 覆盖五个新全局字段 + `__heif_profile` 的 save→load 零丢失；
+  `test_metadata` 新增 IPTC/COM 隐私剥除与 WebP 隐私重写断言。
+- 金样 `webp-lossless`、`multiformat-split` 输入改用 `rgb8.png`（alpha 已不支持）；
+  三个 multiformat 的 JPEG 腿新增 `LossyFromLossless` 断言；夹具零改动。
+
+### 已知
+
+- HEIF/AVIF 的「无损」是 YCbCr 平面无损，不是 RGB 逐位无损（tooltip 已写明）；
+  x265 默认线程池无法从 libheif 参数面收紧；JPEG `psnr_target` 精度受库限制（控件已隐藏）；
+  TIFF `deflate_level` 在 `predictor=none` 时受 OIIO/libtiff 上游限制；PNG 8 位源默认
+  16 位属「禁止降级」策略。详见审计修复状态文档 §4。
+
 ## [0.3.5.alpha2] — 2026-10-25
 
 **预发布（alpha）**：七项用户实测问题逐条根治——① 高德搜索失败；② Adobe RGB 不能正确

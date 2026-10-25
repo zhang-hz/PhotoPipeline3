@@ -1,6 +1,6 @@
 {
   "case": "webp-lossless",
-  "input": "base/rgba8.png",
+  "input": "base/rgb8.png",
   "output_format": "webp",
   "assert": {
     "pixel": {

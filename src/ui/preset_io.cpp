@@ -23,8 +23,9 @@
 #include <utility>
 #include <vector>
 
-#include "core/colormanager.h" // pp::to_string/parse_color_target（color target 唯一映射源）
-#include "core/fsops.h"        // R-194/R-290：原子写单实现（write_atomic_file）
+#include "codecs/heif_profile.h" // kHeifProfileParamKey（输出级档位字段）
+#include "core/colormanager.h"   // pp::to_string/parse_color_target（color target 唯一映射源）
+#include "core/fsops.h"          // R-194/R-290：原子写单实现（write_atomic_file）
 #include "core/params.h"
 
 namespace pp::ui {
@@ -466,6 +467,15 @@ QJsonObject spec_to_json(const OutputFormatSpec &spec) {
     const bool declared = spec.params.find(std::string(pp::kLosslessParamKey)) != spec.params.end();
     if (!declared && pp::lossless_flag(spec.params))
         o.insert(QStringLiteral("lossless"), true); // 仅真值落盘（缺省 false = 不写，JSON 不膨胀）
+    // HEIF/AVIF 档位是保留键（__heif_profile），params_to_json 会跳过；这里用输出级
+    // 非保留字段承载，避免"选好档位存预设后丢回自动"。
+    const auto prof = spec.params.find(std::string(pp::kHeifProfileParamKey));
+    if (prof != spec.params.end()) {
+        if (const int64_t *v = std::get_if<int64_t>(&prof->second)) {
+            if (*v != 0)
+                o.insert(QStringLiteral("heif_profile"), static_cast<int>(*v));
+        }
+    }
     return o;
 }
 
@@ -485,6 +495,9 @@ bool spec_from_json(const QJsonValue &v, std::size_t index, OutputFormatSpec &ou
                           out.tech_id, out.params, perr)) {
         err = "outputs[" + std::to_string(index) + "]: " + perr;
         return false;
+    }
+    if (const QJsonValue hp = o.value(QStringLiteral("heif_profile")); hp.isDouble()) {
+        out.params[std::string(pp::kHeifProfileParamKey)] = static_cast<int64_t>(hp.toInteger(0));
     }
     // 无损标志落回**内部管道键**（谓词/编码器的输入面；保留键本身从不落盘）：
     //   * params 携带显式 schema 参数 → 取它的值（与运行时 lossless_flag 的处置顺序一致）；
@@ -544,6 +557,11 @@ std::string load_v2(const QJsonObject &root, PresetData &out) {
     p.output_template = utf8(root.value(QStringLiteral("output_template"))
                                  .toString(QStringLiteral("$format/$dir/$file")));
     p.split_by_format = root.value(QStringLiteral("split_by_format")).toBool(false);
+    p.color_intent = static_cast<int>(root.value(QStringLiteral("color_intent")).toInteger(0));
+    p.color_dither8 = root.value(QStringLiteral("color_dither8")).toBool(false);
+    p.gamut_mapping = static_cast<int>(root.value(QStringLiteral("gamut_mapping")).toInteger(0));
+    p.linear_resample = root.value(QStringLiteral("linear_resample")).toBool(false);
+    p.metadata_only = root.value(QStringLiteral("metadata_only")).toBool(false);
     if (!color_from_json(root, p.color_target, err))
         return err;
     if (!conflict_from_json(root, p.conflict, err))
@@ -578,6 +596,11 @@ std::string save_preset(const std::filesystem::path &file, const PresetData &p) 
     root.insert(QStringLiteral("outputs"), outputs);
     root.insert(QStringLiteral("output_template"), qs(p.output_template));
     root.insert(QStringLiteral("split_by_format"), p.split_by_format);
+    root.insert(QStringLiteral("color_intent"), p.color_intent);
+    root.insert(QStringLiteral("color_dither8"), p.color_dither8);
+    root.insert(QStringLiteral("gamut_mapping"), p.gamut_mapping);
+    root.insert(QStringLiteral("linear_resample"), p.linear_resample);
+    root.insert(QStringLiteral("metadata_only"), p.metadata_only);
     root.insert(QStringLiteral("color_target"), qs(pp::to_string(p.color_target)));
     root.insert(QStringLiteral("conflict"), QString::fromLatin1(conflict_name(p.conflict)));
     root.insert(QStringLiteral("rules"), rules_to_json(p.rules));

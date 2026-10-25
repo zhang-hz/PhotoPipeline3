@@ -104,6 +104,13 @@ int main() {
                                             " != " + (t.lossless_capable ? "true" : "false"));
                             continue;
                         }
+                        // JXL-01：无损时 resampling 由 lock 强制 1（默认表是 -1）。
+                        if (p.key == "resampling" && t.lossless_capable) {
+                            if (param_int(s, p.key, -1) != 1)
+                                fail(c, where + ": resampling = " + repr(s.at(p.key)) +
+                                            " != lossless lock 1");
+                            continue;
+                        }
                         if (!(s.at(p.key) == p.def))
                             fail(c, where + ": " + p.key + " = " + repr(s.at(p.key)) + " != def " +
                                         repr(p.def));

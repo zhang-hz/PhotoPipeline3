@@ -2,7 +2,7 @@
 
 > **这份文档是什么**:在本仓库工作的 AI 智能体与新协作者的总导航 + 纪律总纲。目标是让你不必读完 docs/ 下 1.1 万行文档,就能回答四个问题:**这个项目要什么、东西放在哪、哪些红线不能碰、干完活要留下什么证据**。
 > **权威链**:本文只是导航与纪律;细节真源永远是它指向的那份文档或代码。两者冲突时**以真源为准**,并顺手回来修订本文。
-> **版本口径**:0.3.5.alpha2(版本号单源 = `CMakeLists.txt:19-21`:数字段 `project(PhotoPipeline VERSION 0.3.5)` + 预发布标签 `PP_VERSION_LABEL`;CMake `project(VERSION)` 只收数字段,标签拼在字符串侧。任何其它地方出现的版本号都是引用,不是定义)。
+> **版本口径**:0.3.5.alpha3(版本号单源 = `CMakeLists.txt:19-21`:数字段 `project(PhotoPipeline VERSION 0.3.5)` + 预发布标签 `PP_VERSION_LABEL`;CMake `project(VERSION)` 只收数字段,标签拼在字符串侧。任何其它地方出现的版本号都是引用,不是定义)。
 
 ---
 
@@ -49,8 +49,8 @@ RAW/DNG 输入 · GIF 输出 · 图像编辑(缩放/裁剪/水印/锐化/降噪)
 
 | 项 | 状态 |
 |---|---|
-| 版本 | **0.3.5.alpha2**(0.3.5 预发布)已按 REL 流程发行;0.3.3 Windows zip 为坏件(启动 P0,见 `docs/0.3.4-report.md`);CHANGELOG `[0.3.5.alpha2]` 为终稿 |
-| 里程碑 | M0 环境/六 Spike/冻结面 → M1a 引擎 + M1b UI → M2 Linux 收口 → M3 Windows(=0.2.0) → M4/M5 = 0.3.0(九项需求 + GUI v6 刷新) → 0.3.1 GUI 缺陷根治 → M6 = 0.3.2 → M7 = 0.3.3(工程收口,Windows 启动 P0)→ 0.3.4 热修 → 0.3.5.alpha1/alpha2 预发布 |
+| 版本 | **0.3.5.alpha3**(0.3.5 预发布)按 REL 流程发行;0.3.3 Windows zip 为坏件(启动 P0,见 `docs/0.3.4-report.md`);`[0.3.5.alpha3]` 发行指纹/报告由 tag 后 close 提交补记(不入 tag) |
+| 里程碑 | M0 环境/六 Spike/冻结面 → M1a 引擎 + M1b UI → M2 Linux 收口 → M3 Windows(=0.2.0) → M4/M5 = 0.3.0(九项需求 + GUI v6 刷新) → 0.3.1 GUI 缺陷根治 → M6 = 0.3.2 → M7 = 0.3.3(工程收口,Windows 启动 P0)→ 0.3.4 热修 → 0.3.5.alpha1/alpha2 预发布 → 0.3.5.alpha3 全格式配置审计修复 |
 | 质量面 | 金样断言级 **20 对** 全绿;全语料回归 **zero diff**;ctest 36/36 全绿;`--ui-smoke` 冻结行未变 + 识图门禁 `layout-audit`(六类几何/像素断言,`checked=1027 bad=0`);winzip 门禁 6 项(E-3 真机启动探针 `WIN-LAUNCH OK`) |
 | **开放问题** | ① `docs/deep-review-0.3.2.md`:发布前深度评审,**2 个 P0(数据破坏)+ 20 P1** 待修;② `docs/ux-review-14.md`:14 项 UI 问题定位与改进方案(只读评审,**改动须经用户确认后另起提交**);③ `docs/m7r25-report.md` §5:识图门禁未覆盖项;④ libde265 对部分 HEVC RExt 码流(如 `super/T2.heic`)仍不可解码;⑤ 高德线上搜索仅账号实测可最终确认(本机 TLS 环境不可用);⑥ 详见 §11 已知债 |
 
@@ -104,14 +104,13 @@ triplets/               x64-windows-avx2 / x64-linux-avx2(只承载命名身份,
 
 ```
 probe(一次) → budget.acquire(2×frame)
-  → decode(float32) → orient(如启用) → color(全局目标,一次)
+  → decode(float32) → orient(如启用) → flatten(带 alpha 输入,一次) → color(全局目标,一次)
   → 按 targets 顺序逐个:
-      [首个破坏 alpha 的 target 前原地 flatten]
       encode(target, progress) → metawrite(target 写路径) → result[target]
   → mtime(一次,按生效 DateTimeOriginal) → release → 源文件终态事件
 ```
 
-**解码一次、编码 N 次**是多格式输出的性能核心;色彩变换全局共享。
+**解码一次、编码 N 次**是多格式输出的性能核心;alpha 拍平与色彩变换全局共享(alpha 明确不支持,输出恒无 alpha 通道)。
 
 ### 4.3 线程模型
 

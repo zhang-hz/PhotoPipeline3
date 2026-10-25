@@ -71,7 +71,8 @@ const char *kDevUsage =
     "                          default falls back to 8 with a warning)\n"
     "  --color TARGET          keep|srgb|p3|adobergb (default keep)\n"
     "  --conflict POLICY       skip|overwrite|rename (dev default overwrite)\n"
-    "  --metadata-only         metadata-only mode (zero re-encode)\n"
+    "  --metadata-only         metadata-only mode (zero re-encode; output container follows\n"
+    "                          each source file's own format/extension; --format is ignored)\n"
     "  --preset FILE           load a preset JSON (command line options win)\n"
     "  --param KEY=VALUE       override one parameter (repeatable; applies to every output)\n"
     "  --meta KEY=VALUE        set/overwrite one metadata tag (repeatable)\n"
@@ -384,6 +385,35 @@ bool set_param(pp::ParamSet &s, const pp::FormatDef &f, const std::string &backe
                const std::string &tech, const std::string &key, const std::string &raw,
                std::string &err) {
     const pp::ParamDef *def = pp::lookup_param_def(f, backend, tech, key);
+    // HEIF/AVIF 的参数只在运行时内省表里（静态 techs 为空）；dev CLI 若只看静态表，
+    // 所有整数/布尔键都会被字符串化 → quality 回退 90、speed/qp 失败。这里回退到 live 表。
+    std::vector<pp::BackendDef> live;
+    if (!def) {
+        for (const pp::BackendDef &b : f.backends) {
+            if (!b.runtime_introspected)
+                continue;
+            live = pp::introspect_backends(f.id);
+            for (const pp::BackendDef &lb : live) {
+                if (!backend.empty() && lb.id != backend)
+                    continue;
+                for (const pp::TechDef &lt : lb.techs) {
+                    if (!tech.empty() && lt.id != tech)
+                        continue;
+                    for (const pp::ParamDef &p : lt.params) {
+                        if (p.key == key) {
+                            def = &p;
+                            break;
+                        }
+                    }
+                    if (def)
+                        break;
+                }
+                if (def)
+                    break;
+            }
+            break;
+        }
+    }
     if (!def) {
         s[key] = raw; // unknown → encoder E9 warning (log_warn, no WarningKind)
         pp::log_warn("harness", "dev_cli.cpp", "unknown parameter key; forwarded to encoder",
@@ -856,14 +886,9 @@ int run_dev(int argc, char **argv) {
             pp::log_shutdown();
             return 2;
         }
-        if (!pp::format_supports_metadata_only(specs.front().format_id)) {
-            std::fprintf(stderr,
-                         "photopipeline --dev: format '%s' does not support --metadata-only "
-                         "(jpeg/png/tiff/webp only)\n",
-                         specs.front().format_id.c_str());
-            pp::log_shutdown();
-            return 2;
-        }
+        // 仅元数据模式 = 零重编码：产物格式跟随**每个源文件**的扩展名（run_metadata_only 内
+        // 解析）。因此这里不再拿 --format/预设里的目标格式做能力校验 —— 旧口径会让默认
+        // jxl 直接 exit 2，或让用户以为产物会被转成 jxl。不支持的源格式按文件失败并给消息。
     }
 
     // ---- inputs ----
@@ -872,8 +897,9 @@ int run_dev(int argc, char **argv) {
     for (const fs::path &in : o.inputs) {
         std::error_code iec;
         if (fs::is_directory(in, iec)) {
+            // X-METADATA-ONLY-01：输出根子树不得被当作输入（否则第二轮规则二次施加）。
             std::vector<fs::path> found =
-                pp::collect_inputs({in}, pp::input_extensions(), collect_errors);
+                pp::collect_inputs({in}, pp::input_extensions(), {o.out_root}, collect_errors);
             files.insert(files.end(), found.begin(), found.end());
         } else {
             files.push_back(in);

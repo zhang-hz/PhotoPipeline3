@@ -265,7 +265,7 @@ CASES = [
     "jxl-lossless|base/rgb8.png|base/rgb8.jxl|--format jxl --tech modular --lossless --meta Exif.Image.Artist=M2-T8-jxl",
     "png16-lossless|base/rgb16.png|base/rgb16.png|--format png --bitdepth 16 --meta Exif.Image.Artist=M2-T8-png16",
     "tiff16-lzw|base/rgb16.tif|base/rgb16.tif|--preset {0}/smoke/tiff16-lzw.preset.json --meta Exif.Image.Artist=M2-T8-tiff16".format(GOLDEN),
-    "webp-lossless|base/rgba8.png|base/rgba8.webp|--format webp --tech lossless --lossless --meta Exif.Image.Artist=M2-T8-webp",
+    "webp-lossless|base/rgb8.png|base/rgb8.webp|--format webp --tech lossless --lossless --meta Exif.Image.Artist=M2-T8-webp",
     "heif-lossy|base/rgb8.png|base/rgb8.heic|--format heif --backend x265 --meta Exif.Image.Artist=M2-T8-heif",
     "avif-lossy|base/rgb8.png|base/rgb8.avif|--format avif --backend svt-av1 --meta Exif.Image.Artist=M2-T8-avif",
     "bmp-exact|base/rgb8.png|base/rgb8.bmp|--format bmp --bitdepth 24 --meta Exif.Image.Artist=M2-T8-bmp",
@@ -281,7 +281,7 @@ CASES = [
     #  - split：$format/$dir/$file（分文件夹）；mirror：$dir/$format/$file；conflict：$format/$file
     #    + 两个同主名源（rgb8.png / rgb8.tif）撞同一最终路径 → 逐输出独立 rename。
     #  - 输入字段支持 ';' 分隔多源；产物字段支持 ',' 分隔多产物（多产物时第二参数 = 用例根目录）。
-    "multiformat-split|base/rgba8.png|jpeg/base/rgba8.jpg,webp/base/rgba8.webp|--outputs jpeg:jpegli,webp:libwebp --bitdepth 8 --lossless --meta Exif.Image.Artist=M4-T5-split",
+    "multiformat-split|base/rgb8.png|jpeg/base/rgb8.jpg,webp/base/rgb8.webp|--outputs jpeg:jpegli,webp:libwebp --bitdepth 8 --lossless --meta Exif.Image.Artist=M4-T5-split",
     "multiformat-mirror|base/rgb8.png|base/jpeg/rgb8.jpg,base/webp/rgb8.webp|--outputs jpeg:jpegli,webp:libwebp --bitdepth 8 --lossless --meta Exif.Image.Artist=M4-T5-mirror --template $dir/$format/$file",
     "multiformat-conflict|base/rgb8.png;base/rgb8.tif|jpeg/rgb8.jpg,jpeg/rgb8 (1).jpg,webp/rgb8.webp,webp/rgb8 (1).webp|--outputs jpeg:jpegli,webp:libwebp --bitdepth 8 --lossless --template $format/$file --conflict rename",
     # M4-T6（0.3.0 逐文件进度 §7）：产物断言 + 进度事件流断言（<out>/progress-trace.jsonl，

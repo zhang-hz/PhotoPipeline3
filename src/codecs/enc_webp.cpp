@@ -149,10 +149,17 @@ private:
         // kLosslessParamKey) and then to the reserved key __lossless (§3.4/§4.8).
         // 参数引擎保持两键同步（src/core/params.cpp apply_locks）。
         // R-295：两键读取统一走 pp::lossless_flag()（kLosslessKey/kLosslessParamKey 单源）。
-        const bool lossless =
-            (req.target.tech_id == "lossless")
-                ? true
-                : ((req.target.tech_id == "lossy") ? false : lossless_flag(params));
+        // 第二轮审计 WEBP-01/02：技术选择与 lossless 标志必须单一真源。
+        //   * tech=lossy + lossless=true 是矛盾组合 → 显式失败（不再静默出有损却记无损）；
+        //   * tech=lossless 即便标志未勾也产出无损，编码器按 tech 执行（记录面由 plan_targets
+        //   归一）。
+        const bool flag_lossless = lossless_flag(params);
+        if (req.target.tech_id == "lossy" && flag_lossless) {
+            return enc::encode_error(
+                "webp: lossless=true contradicts tech=lossy (choose tech=lossless or clear "
+                "the lossless flag)");
+        }
+        const bool lossless = (req.target.tech_id == "lossless") || flag_lossless;
         const bool alpha = r.channels == 2 || r.channels == 4;
 
         WebPConfig cfg;
@@ -160,16 +167,9 @@ private:
             return enc::encode_error("webp: WebPConfigInit failed (encoder ABI mismatch)");
         }
         if (!lossless) {
-            // Content preset first: WebPConfigPreset rewrites the lossy defaults,
-            // every explicit parameter below wins over it (§3.8 table).
-            const int64_t preset = param_int(params, "preset", 2);
-            if (preset < 0 || preset > 5) {
-                return enc::encode_error("webp: invalid preset value " + std::to_string(preset));
-            }
+            // WEBP-03：内容预设（WebPConfigPreset）已被删除——它改写的字段随后被逐项覆盖，
+            // 六档产物同字节。这里用 WebPConfigInit 的库默认作为基线，再由显式参数覆盖。
             const float quality = static_cast<float>(param_float(params, "quality", 90.0));
-            if (!WebPConfigPreset(&cfg, static_cast<WebPPreset>(preset), quality)) {
-                return enc::encode_error("webp: WebPConfigPreset failed");
-            }
             cfg.quality = quality;
             cfg.method = static_cast<int>(param_int(params, "method", 4));
             cfg.sns_strength = static_cast<int>(param_int(params, "sns_strength", 50));
@@ -195,7 +195,15 @@ private:
             cfg.quality = static_cast<float>(param_float(params, "quality", 80.0));
             cfg.method = static_cast<int>(param_int(params, "method", 4));
             cfg.exact = param_bool(params, "exact", true) ? 1 : 0;
-            cfg.near_lossless = static_cast<int>(param_int(params, "near_lossless", 100));
+            // WEBP-04：near_lossless<100 会让产物非逐位无损；既然勾了无损，强制 100 并记日志，
+            // 不再产出"记录 lossless=true、实际有损"的文件。
+            int near_lossless = static_cast<int>(param_int(params, "near_lossless", 100));
+            if (near_lossless < 100) {
+                log_warn("Encode", "enc_webp.cpp", "near_lossless forced to 100 for lossless",
+                         {{"near_lossless", std::to_string(near_lossless) + " -> 100"}});
+                near_lossless = 100;
+            }
+            cfg.near_lossless = near_lossless;
         }
         // —— E3 线程映射（§3.1 正文，W1-T7 落地）——
         //   webp = `thread_level = E>1`：E==1 → 0（单线程，0.2 行为逐字一致）；E>1 → 1。

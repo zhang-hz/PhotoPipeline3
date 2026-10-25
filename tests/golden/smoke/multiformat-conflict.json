@@ -8,9 +8,14 @@
       "format": "jpeg",
       "input": "base/rgb8.png",
       "assert": {
-        "pixel": { "mode": "psnr", "threshold_db": 35 },
+        "pixel": {
+          "mode": "psnr",
+          "threshold_db": 35
+        },
         "metadata": [],
-        "warnings_contain": [], "warnings_empty": true
+        "warnings_contain": [
+          "LossyFromLossless"
+        ]
       }
     },
     {
@@ -18,9 +23,14 @@
       "format": "jpeg",
       "input": "base/rgb8.tif",
       "assert": {
-        "pixel": { "mode": "psnr", "threshold_db": 35 },
+        "pixel": {
+          "mode": "psnr",
+          "threshold_db": 35
+        },
         "metadata": [],
-        "warnings_contain": [], "warnings_empty": true
+        "warnings_contain": [
+          "LossyFromLossless"
+        ]
       }
     },
     {
@@ -28,9 +38,12 @@
       "format": "webp",
       "input": "base/rgb8.png",
       "assert": {
-        "pixel": { "mode": "exact" },
+        "pixel": {
+          "mode": "exact"
+        },
         "metadata": [],
-        "warnings_contain": [], "warnings_empty": true
+        "warnings_contain": [],
+        "warnings_empty": true
       }
     },
     {
@@ -38,9 +51,12 @@
       "format": "webp",
       "input": "base/rgb8.tif",
       "assert": {
-        "pixel": { "mode": "exact" },
+        "pixel": {
+          "mode": "exact"
+        },
         "metadata": [],
-        "warnings_contain": [], "warnings_empty": true
+        "warnings_contain": [],
+        "warnings_empty": true
       }
     }
   ]

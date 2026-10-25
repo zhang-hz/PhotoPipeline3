@@ -123,7 +123,6 @@ std::string validate_one(const ParamDef &p, const ParamValue &v) {
 // ---------------------------------------------------------------------------
 // M2-T5 §2.7：cross_validate 的静态表 + 运行时内省键并集
 // ---------------------------------------------------------------------------
-
 // "该 format 全部技术声明的参数键并集"（未知参数判定的唯一依据）：
 //   * 静态表：**全部** backend × **全部** tech —— 同 format 其它技术声明的键因此合法
 //     （切技术/载入预设的残留键不得判未知，M2-T5 父裁定的关键防误报点）；
@@ -168,6 +167,14 @@ const DeclaredKeys &declared_keys(std::string_view format_id) {
     if (it == cache.end())
         it = cache.emplace(std::string(format_id), compute_declared_keys(format_id)).first;
     return it->second; // std::map 节点地址稳定；插入后不再改写 → 并发只读安全
+}
+
+// libheif 插件私有点位：`<plugin>:<option>` 透传键（见 codecs/enc_heif.cpp 的透传循环）。
+// 只对 libheif 系格式放行，其它格式仍按未知参数拒绝。
+bool is_plugin_passthrough_key(std::string_view format_id, const std::string &key) {
+    if (format_id != "heif" && format_id != "avif")
+        return false;
+    return key.rfind("x265:", 0) == 0 || key.rfind("svt:", 0) == 0 || key.rfind("aom:", 0) == 0;
 }
 
 // tech_id 空 = 首选技术（find_backend/find_tech 的既有约定：空 → 第一个）。
@@ -275,6 +282,17 @@ const std::vector<CrossRule> &cross_rules() {
              if (param_bool(s, kKeyProgressive, false) && !param_bool(s, kKeyOptimizeCoding, true))
                  return en ? "optimize_coding must be enabled when progressive is enabled"
                            : "启用渐进式时必须启用哈夫曼表优化";
+             return {};
+         }},
+        // 规则③ jxl：无损 + resampling>1 = 假无损（JXL-01；编码器另有兜底锁 1）
+        {std::string_view("jxl"),
+         std::string_view(),
+         false,
+         {kLosslessParamKey, "resampling"},
+         [](const ParamSet &s, bool en) -> std::string {
+             if (lossless_flag(s) && param_int(s, "resampling", -1) > 1)
+                 return en ? "lossless encoding cannot be combined with resampling > 1"
+                           : "无损模式下不能降采样（resampling 必须为 1）";
              return {};
          }},
     };
@@ -463,8 +481,10 @@ ParamSet default_params(const FormatDef &f, const std::string &backend_id,
     const TechDef *t = select_tech(*b, tech_id, lossless);
     if (!t)
         return s; // 运行时内省参数（heif/avif → T7 introspect_backends）
-    for (const ParamDef &p : t->params)
-        s[p.key] = p.def;
+    for (const ParamDef &p : t->params) {
+        if (p.has_default) // AVIF-01：可选覆盖参数（has_default=false）不写默认值
+            s[p.key] = p.def;
+    }
     apply_locks(f, backend_id, tech_id, lossless, s);
     return s;
 }
@@ -584,6 +604,9 @@ std::vector<std::string> cross_validate(const ParamSet &values, const std::strin
 
     // 规则③ 未知参数（M2-T5 父裁定新增）：该 format 全部技术声明的键并集之外的键。
     //   * 保留键（"__" 前缀，如 __lossless）是引擎内部键，不参与判定；
+    //   * libheif 插件的 `x265:` / `svt:` / `aom:` 透传键不在内省表里（heif_encoder_list_parameters
+    //     只列强类型参数），但插件 set_parameter_string 明确接受并转发给编码器 —— 对 heif/avif
+    //     不判未知（enc_heif 的透传路径消费；拒绝/拼错由插件的错误码回传并记日志）；
     //   * ParamSet 是 std::map → 迭代即字典序，多条消息天然稳定排序；
     //   * 该 format 任何技术都不认识的键才是未知（跨技术残留键在并集内 → 不报）。
     const DeclaredKeys &declared = declared_keys(format_id);
@@ -591,6 +614,8 @@ std::vector<std::string> cross_validate(const ParamSet &values, const std::strin
         for (const auto &[key, value] : values) {
             (void)value;
             if (key.rfind("__", 0) == 0)
+                continue;
+            if (is_plugin_passthrough_key(format_id, key))
                 continue;
             if (declared.keys.find(key) == declared.keys.end())
                 out.push_back("未知参数：" + key);
@@ -609,6 +634,8 @@ std::vector<std::string> fill_defaults(const FormatDef &f, const std::string &ba
     if (!t)
         return added;
     for (const ParamDef &p : t->params) {
+        if (!p.has_default)
+            continue; // 可选覆盖参数不得被填成范围下限（AVIF-01）
         if (s.find(p.key) == s.end()) {
             s[p.key] = p.def;
             added.push_back(p.key);

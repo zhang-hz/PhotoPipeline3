@@ -477,10 +477,18 @@ void OutputPageImpl::apply_chroma_limits(const std::string &id) {
     FormatState *st = state_of(id);
     if (st == nullptr || st->form == nullptr)
         return;
+    const bool lossless = st->form->selection().lossless;
     const pp::HeifProfile want = current_profile(id);
     std::vector<int64_t> allowed;
-    if (want != pp::HeifProfile::Auto) {
-        std::vector<int> depths = profile_allowed_bitdepths(want);
+    QString reason = PageOutput::tr("【已禁用：当前编码档位不支持该色度】");
+    if (lossless) {
+        // 无损只有 4:4:4 成立：4:2:0/4:2:2 在编码前就丢掉色度，x265 的 bLossless 只保
+        // YCbCr 平面，对 RGB 源仍是有损。限幅是**硬联动**（enc_heif 同样强制 444，预设/CLI
+        // 也绕不过去）；强制改写当前值在 update_profile_note 里做（本函数只动可选性）。
+        allowed.push_back(3);
+        reason = PageOutput::tr("【已禁用：无损输出要求 4:4:4（色度不抽样）】");
+    } else if (want != pp::HeifProfile::Auto) {
+        std::vector<int> depths = profile_allowed_bitdepths(want, id == "avif");
         if (depths.empty())
             depths = {8, 10, 12};
         for (int c = 0; c <= 3; ++c) {
@@ -492,25 +500,65 @@ void OutputPageImpl::apply_chroma_limits(const std::string &id) {
             }
         }
     }
-    st->form->limit_enum_choices(std::string("chroma"), allowed,
-                                 PageOutput::tr("【已禁用：当前编码档位不支持该色度】"));
+    std::vector<std::string> allowed_text;
+    for (const int64_t c : allowed) {
+        if (c == 1)
+            allowed_text.emplace_back("420");
+        else if (c == 2)
+            allowed_text.emplace_back("422");
+        else if (c == 3)
+            allowed_text.emplace_back("444");
+    }
+    // chroma 是**字符串**枚举（"420"/"422"/"444"）；整数版限幅对 string 选择匹配不到，
+    // 会把整列都置灰。这里走字符串重载；allowed 非空但无可映射项（如只允许 4:0:0）→
+    // 用一个不存在的哨兵值让三项全禁用，而不是误当成"清除限幅"。
+    if (!allowed.empty() && allowed_text.empty())
+        allowed_text.emplace_back("__none__");
+    st->form->limit_enum_choices_text(std::string("chroma"), allowed_text, reason);
 }
 
 void OutputPageImpl::update_profile_note(const std::string &id) {
     FormatState *st = state_of(id);
     if (st == nullptr || st->profile == nullptr || st->profile_note == nullptr)
         return;
+    // 无损 ⇒ 4:4:4（硬联动，与 enc_heif 同口径）：先把工作集里的 chroma 改写为 444，再让
+    // 下面的档位推导/色度限幅按真实值求值。set_values 是程序化接口（不发 changed 信号），
+    // 因此不会形成刷新环；改写后的值随 spec_of() 下发/落预设。
+    const bool lossless = st->form != nullptr && st->form->selection().lossless;
+    if (lossless && st->form != nullptr) {
+        pp::ParamSet patch;
+        patch[std::string("chroma")] = std::string("444");
+        st->form->set_values(patch);
+        // 4:4:4 需要 HEVC Main 4:4:4 / AV1 High·Professional，本档位下拉没有这些项；
+        // 用户先前手选的 Main/Main10/... 与无损联动后必然不一致 → 回到「自动」（唯一能
+        // 正确表达 4:4:4 的选择），避免开跑时才被编码器拒绝。用 signal blocker：这是联动
+        // 归一，不是用户改档；随后本函数按 Auto 重新推导说明。
+        if (st->profile != nullptr && st->profile->currentIndex() != 0) {
+            const QSignalBlocker blocker(st->profile);
+            st->profile->setCurrentIndex(0);
+            st->profile_user_set = false;
+        }
+    }
     const pp::HeifProfile want = current_profile(id);
     const int depth = st->bitdepth != nullptr ? st->bitdepth->currentData().toInt() : 8;
     const int chroma = current_chroma(id);
     // 本输出恒为静止图（与 enc_heif.cpp 的反查同口径：still = true）
     const pp::HeifProfile derived = pp::derive_heif_profile(id == "avif", depth, chroma, true);
+    QString derived_label = QString::fromStdString(pp::heif_profile_label(derived));
+    if (id == "heif" && chroma == 3) {
+        // HEVC 的 4:4:4 是 Main 4:4:4（hvcC profile_idc=4），不是 Main/Main Still Picture；
+        // derive_heif_profile 只按位深分档，这里按真实色度补正显示（与 enc_heif 日志同口径）。
+        derived_label = PageOutput::tr("Main 4:4:4（HEVC 4:4:4）");
+    }
     QString note;
     NoteTone tone = NoteTone::Hint;
     if (want == pp::HeifProfile::Auto) {
-        note = PageOutput::tr("插件自选 → %1")
-                   .arg(QString::fromStdString(pp::heif_profile_label(derived)));
-        if (derived != pp::HeifProfile::Main && derived != pp::HeifProfile::MainStill)
+        // 固定短句：档位推导结果放进 tooltip。若把 derived 拼进正文，8 位默认（Main Still）
+        // 会比 10 位默认多一段，足以触发页面滚动条出现，冻结的磁贴零形变探针会因布局横移失败。
+        note = PageOutput::tr("插件自选");
+        st->profile_note->setToolTip(PageOutput::tr("插件按位深/色度自选 → %1").arg(derived_label));
+        if (chroma == 3 ||
+            (derived != pp::HeifProfile::Main && derived != pp::HeifProfile::MainStill))
             tone = NoteTone::Warn;
     } else {
         std::string err_zh;
@@ -519,9 +567,21 @@ void OutputPageImpl::update_profile_note(const std::string &id) {
             tone = NoteTone::Error;
         } else {
             note = profile_compat_hint(want);
-            if (!note.isEmpty())
+            if (!note.isEmpty() || chroma == 3)
                 tone = NoteTone::Warn;
         }
+    }
+    if (lossless) {
+        // 折叠行内只放短句；完整口径（YCbCr 域无损、大图 grid 分块、4:4:4 兼容性）进 tooltip。
+        if (note.isEmpty())
+            note = PageOutput::tr("无损 → 4:4:4");
+        st->profile_note->setToolTip(
+            PageOutput::tr("HEIF/AVIF 无损：强制 4:4:4（4:2:0/4:2:2 会抽样色度，不是无损）。"
+                           "HEVC 的无损是 YCbCr 平面无损，RGB↔YCbCr 往返有舍入（不是逐位）；"
+                           "超过 16 MP 时自动改用标准 HEIF grid 分块，保证 libde265/OIIO 能打开。"
+                           "4:4:4 的查看器兼容性弱于 4:2:0。"));
+    } else {
+        st->profile_note->setToolTip(QString());
     }
     st->profile_note->setText(note);
     st->profile_note->setProperty("ppInvalid",
@@ -555,6 +615,17 @@ bool OutputPageImpl::set_bitdepth_options(const std::string &id, int forced, boo
     FormatState *st = state_of(id);
     if (f == nullptr || st == nullptr || st->bitdepth == nullptr)
         return false;
+    // BMP 的“位深”实际由通道数决定（灰度 8bpp / 彩色 24bpp），8/24 下拉不驱动 bpp。
+    // 不再暴露假选择：固定为“自动（按通道）”，disabled 展示。
+    if (id == "bmp") {
+        st->bitdepth->clear();
+        st->bitdepth->addItem(PageOutput::tr("自动（按通道）"), 24);
+        st->bitdepth->setCurrentIndex(0);
+        st->bitdepth->setEnabled(false);
+        if (st->bitdepth_note != nullptr)
+            st->bitdepth_note->setText(PageOutput::tr("灰度 → 8bpp，彩色 → 24bpp（由通道数决定）"));
+        return false;
+    }
     std::vector<int> allowed =
         allowed_bitdepths(*f, st->form != nullptr ? st->form->selection().backend : "");
     if (allowed.empty())
@@ -562,7 +633,7 @@ bool OutputPageImpl::set_bitdepth_options(const std::string &id, int forced, boo
     // UX-10.1：档位 → 位深限幅（与格式能力求交；「自动」不限幅）。
     // 限幅只收窄下拉选项，不静默改写用户已选的位深（keep_if_valid 语义不变）。
     {
-        const std::vector<int> cap = profile_allowed_bitdepths(current_profile(id));
+        const std::vector<int> cap = profile_allowed_bitdepths(current_profile(id), id == "avif");
         if (!cap.empty()) {
             std::vector<int> narrowed;
             narrowed.reserve(allowed.size());
@@ -980,6 +1051,27 @@ void PageOutput::apply_preset(const pp::PresetData &p) {
         const QSignalBlocker blocker(impl_->template_edit);
         impl_->template_edit->setText(QString::fromStdString(preset.output_template));
     }
+    // 第二轮：色彩四全局项 + 仅元数据模式恢复（缺省值 = 现行为，旧预设零漂移）。
+    if (impl_->intent_combo != nullptr) {
+        const QSignalBlocker blocker(impl_->intent_combo);
+        impl_->intent_combo->setCurrentIndex(impl_->intent_combo->findData(preset.color_intent));
+    }
+    if (impl_->gamut_combo != nullptr) {
+        const QSignalBlocker blocker(impl_->gamut_combo);
+        impl_->gamut_combo->setCurrentIndex(impl_->gamut_combo->findData(preset.gamut_mapping));
+    }
+    if (impl_->dither8_switch != nullptr) {
+        const QSignalBlocker blocker(impl_->dither8_switch);
+        impl_->dither8_switch->setChecked(preset.color_dither8);
+    }
+    if (impl_->linear_switch != nullptr) {
+        const QSignalBlocker blocker(impl_->linear_switch);
+        impl_->linear_switch->setChecked(preset.linear_resample);
+    }
+    if (p.metadata_only != impl_->metadata_only) {
+        const QSignalBlocker blocker(this);
+        set_metadata_only(p.metadata_only);
+    }
     impl_->sync_split_switch(QString::fromStdString(preset.output_template));
     impl_->update_template_example();
     impl_->update_estimate();
@@ -1003,6 +1095,13 @@ pp::PresetData PageOutput::collect_preset(const QString &name) const {
     p.split_by_format = OutputPageImpl::template_has_format(impl_->template_text());
     p.color_target = impl_->color_target();
     p.conflict = impl_->conflict();
+    // 第二轮：色彩四全局项 + 仅元数据模式也必须进预设（否则 save→load 产物不一致）。
+    const pp::RunConfig cfg = config_base();
+    p.color_intent = cfg.color_intent;
+    p.color_dither8 = cfg.color_dither8;
+    p.gamut_mapping = cfg.gamut_mapping;
+    p.linear_resample = cfg.linear_resample;
+    p.metadata_only = cfg.metadata_only;
     // rules 由 MainWindow 合并（§2.9）
     return p;
 }

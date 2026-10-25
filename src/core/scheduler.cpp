@@ -331,7 +331,9 @@ void Scheduler::Impl::worker() {
 
         // ---- probe (spec only) ----
         emit_stage(i, FileState::Probing);
-        if (!fe.probe_done) {
+        // X-METADATA-ONLY-07：仅元数据不解码像素，worker 层不做 OIIO probe（CMYK/截断源
+        // 不应被拒）；run_metadata_only 内部只在需要时做可选 probe。
+        if (!cfg.metadata_only && !fe.probe_done) {
             ProbeOutcome po = probe_file(fe.src);
             if (!po.error.empty()) {
                 FileOutcome o;

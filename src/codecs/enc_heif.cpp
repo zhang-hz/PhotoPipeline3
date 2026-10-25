@@ -15,6 +15,7 @@
 //     matrix is full-range BT.601 (matrix_coefficients = 6 / SMPTE 170M), which is what the
 //     nclx profile written next to the planes declares.
 #include <libheif/heif.h>
+#include <libheif/heif_tiling.h> // 大图无损：标准 HEIF grid（heif_context_add_grid_image）
 
 #include <algorithm>
 #include <cassert>
@@ -149,6 +150,16 @@ ParamDef param_def_from(heif_encoder *enc, const heif_encoder_parameter *p) {
     const char *name = heif_encoder_parameter_get_name(p);
     d.key = name ? name : "";
     d.label = d.key;
+    // AVIF-01：has_default=false 的“可选覆盖”参数（SVT qp 等）不得把范围下限当默认值；
+    // 由 params/paramform 跳过默认写入，编码器保持插件默认。
+    d.has_default = heif_encoder_has_default(enc, d.key.c_str()) != 0;
+    // HEIF-05：无损下 x265/SVT 的 quality 被 bLossless 覆盖，UI 不应继续可调。
+    if (d.key == "quality")
+        d.visible = [](const ParamSet &s) { return !lossless_flag(s); };
+    // E3 由调度器强制写入 threads（AVIF）；x265 根本没有该参数。UI 上再给一个可调旋钮
+    // 只会“看起来能设、实际被覆盖/不存在” → 隐藏；运行日志仍有 E 分配记录。
+    if (d.key == "threads")
+        d.visible = [](const ParamSet &) { return false; };
     const heif_encoder_parameter_type t = heif_encoder_parameter_get_type(p);
     std::string type_desc;
     if (t == heif_encoder_parameter_type_integer) {
@@ -232,8 +243,16 @@ ParamDef param_def_from(heif_encoder *enc, const heif_encoder_parameter *p) {
 std::vector<ParamDef> introspect_live(heif_encoder *enc) {
     std::vector<ParamDef> out;
     const heif_encoder_parameter *const *ps = heif_encoder_list_parameters(enc);
-    for (int i = 0; ps && ps[i]; i++)
+    for (int i = 0; ps && ps[i]; i++) {
+        const char *name = heif_encoder_parameter_get_name(ps[i]);
+        // 第二轮裁定：alpha 明确不支持；不暴露 alpha 专用参数（libaom 的 alpha-quality）。
+        if (name != nullptr) {
+            const std::string_view n{name};
+            if (n == "alpha-quality" || n == "alpha_quality")
+                continue;
+        }
         out.push_back(param_def_from(enc, ps[i]));
+    }
     return out;
 }
 
@@ -384,6 +403,11 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
             req.target.out_bitdepth != 12)
             return fail("unsupported bitdepth " + std::to_string(req.target.out_bitdepth) +
                         " for " + format_id_ + " (expected 8, 10 or 12)");
+        // 无损口径（R-307 的单源读取；在参数循环之前就要用）：
+        //   * 像素面只有 4:4:4 才能保住 RGB→YCbCr 的色度（4:2:0/4:2:2 是抽样，必然有损）；
+        //   * 因此下面会强制 chroma=444（含编码器参数与平面布局两处），并在编码前校验
+        //     后端确实暴露 chroma 参数（否则无法保证 4:4:4，直接失败而不是假装无损）。
+        const bool want_lossless = lossless_flag(req.target.params);
 
         heif_compression_format fmt = heif_compression_HEVC;
         if (!libheif_format(format_id_, fmt))
@@ -444,7 +468,14 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
                     rejected = "out of integer range";
                     break;
                 }
-                se = heif_encoder_set_parameter_integer(enc, p.key.c_str(), static_cast<int>(*iv));
+                int iv32 = static_cast<int>(*iv);
+                // AVIF-07：libsvt 对 all-intra 把 speed>9 全部映射到 M9；UI 的 10–13 是死档。
+                if (format_id_ == "avif" && p.key == "speed" && iv32 > 9) {
+                    note_param("svt-av1 all-intra maps speed>9 to 9", p.key,
+                               std::to_string(iv32) + " -> 9");
+                    iv32 = 9;
+                }
+                se = heif_encoder_set_parameter_integer(enc, p.key.c_str(), iv32);
                 break;
             }
             case ParamType::Enum: {
@@ -501,8 +532,30 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
                 recovered = heif_encoder_set_lossless(enc, v ? 1 : 0).code == heif_error_Ok;
             }
             if (!recovered)
-                note_param("parameter ignored by backend: " + rejected, p.key,
-                           enc::param_value_text(it->second));
+                // 已知参数被后端拒绝 = 用户显式配置没有生效。旧实现只记 warning 继续跑，
+                // 产物与 UI/预设不一致（"选 4:4:4 实际 4:2:0" 一类静默降级）。这里如实失败；
+                // 未知键（E9）仍只记日志、不失败（见下方 unrecognised 段）。
+                return fail("parameter '" + p.key + "' rejected by backend: " + rejected);
+        }
+
+        // R-3xx：插件私有点位透传（libheif 的 x265/svt/aom 插件都支持 `plugin:option` 形态的
+        // 字符串参数，但**不把它们列进 heif_encoder_list_parameters** —— 旧实现只遍历内省表，
+        // 因此预设/CLI 里的 `x265:...` 键会被当作未知键静默丢弃）。这里按前缀直接走
+        // heif_encoder_set_parameter_string；插件拒绝 = 显式配置未生效 → 失败（不静默降级）。
+        for (const auto &[key, value] : req.target.params) {
+            if (key.rfind("__", 0) == 0)
+                continue;
+            if (is_known(key))
+                continue;
+            const bool pass_through = key.rfind("x265:", 0) == 0 || key.rfind("svt:", 0) == 0 ||
+                                      key.rfind("aom:", 0) == 0;
+            if (!pass_through)
+                continue;
+            const std::string text = enc::param_value_text(value);
+            const heif_error pe = heif_encoder_set_parameter_string(enc, key.c_str(), text.c_str());
+            if (pe.code != heif_error_Ok)
+                return fail("plugin option '" + key +
+                            "' rejected by backend: " + heif_error_text(pe));
         }
 
         // R-307（0.3.6-alpha1）：无损开关**显式消费** `lossless` / `__lossless` 两键。
@@ -511,12 +564,35 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
         // apply_locks 无法补出显式键）→ `--lossless` 对 HEIF **完全无效**（产物与有损
         // 逐字节相同），GUI 走内省表单时才有值。这里统一走 lossless_flag 单源并直接
         // 调 libheif 的无损 setter（插件缺失该能力时报 warning，不静默改语义）。
+        if (want_lossless && format_id_ == "avif" && backend_id_ == "svt-av1") {
+            return fail("avif: svt-av1 has no lossless path (its plugin exposes no chroma and "
+                        "supports 4:2:0 only); choose backend libaom");
+        }
         {
-            const bool want_lossless = lossless_flag(req.target.params);
             const heif_error le = heif_encoder_set_lossless(enc, want_lossless ? 1 : 0);
             if (le.code != heif_error_Ok && want_lossless)
-                note_param("lossless requested but backend rejected it: " + heif_error_text(le),
-                           "lossless", "true");
+                return fail("lossless requested but backend rejected it: " + heif_error_text(le));
+        }
+        // 无损 ⇒ 4:4:4（强制联动，单一事实源）：
+        //   * 4:2:0/4:2:2 的色度抽样发生在编码之前，x265 的 bLossless 只保证 YCbCr 平面无损，
+        //     对 RGB 源仍是有损 —— 旧实现默认 chroma=420，所以"无损"产物 PSNR 只有 ~48dB；
+        //   * 强制值必须同时落在 **编码器参数**（query_input_colorspace2 用它决定 libheif
+        //     是否把输入转成 4:2:0）和 **本文件的平面布局** 两处，否则 libheif 会把 4:4:4
+        //     平面再降回 4:2:0。
+        //   * 后端不暴露 chroma（无法保证 4:4:4）→ 拒绝，不静默产出假无损。
+        if (want_lossless) {
+            if (!is_known("chroma"))
+                return fail("lossless requested but backend exposes no 'chroma' parameter; "
+                            "cannot guarantee 4:4:4 (true lossless)");
+            const heif_error ce = heif_encoder_set_parameter_string(enc, "chroma", "444");
+            if (ce.code != heif_error_Ok)
+                return fail("lossless requires chroma=444 but backend rejected it: " +
+                            heif_error_text(ce));
+            const std::string requested = param_str(req.target.params, "chroma", "420");
+            if (requested != "444")
+                note_param("lossless forces chroma 444 (requested " + requested +
+                               "; 4:2:0/4:2:2 would discard chroma and is not pixel-lossless)",
+                           "chroma", requested);
         }
 
         // —— E3 线程映射（§3.1 正文，W1-T7 落地）——
@@ -558,8 +634,12 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
         }
 
         // ---- chroma layout ----
+        // 无损强制 4:4:4（与上面的编码器参数强制同源；见该段注释）。有损沿用内省参数：
+        // 缺省 420 是 HEVC 的主流兼容面，显式选 444/422 时按真实平面布局编码。
         ChromaLayout layout = layout_for(heif_chroma_420);
-        if (is_known("chroma")) {
+        if (want_lossless) {
+            layout = layout_for(heif_chroma_444);
+        } else if (is_known("chroma")) {
             const std::string c = param_str(req.target.params, "chroma", "420");
             if (c == "444")
                 layout = layout_for(heif_chroma_444);
@@ -596,7 +676,9 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
             const HeifProfile derived = derive_heif_profile(avif, bitdepth, chroma_idx, true);
             const auto want_v =
                 static_cast<HeifProfile>(param_int(req.target.params, kHeifProfileParamKey, 0));
-            if (want_v != HeifProfile::Auto && want_v != derived) {
+            const bool main_family =
+                want_v == HeifProfile::Main && derived == HeifProfile::MainStill && !avif;
+            if (want_v != HeifProfile::Auto && want_v != derived && !main_family) {
                 std::string why;
                 (void)heif_profile_compatible(want_v, bitdepth, chroma_idx, true, &why);
                 return fail(why.empty() ? std::string("编码档位不一致") : why);
@@ -604,7 +686,12 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
             log_info(kStage, kFile, "heif profile (derived)",
                      {{"format", format_id_},
                       {"backend", backend_id_},
-                      {"profile", heif_profile_label(derived)},
+                      // HEVC 的 4:4:4 不是 Main/Main Still：hvcC 实测 general_profile_idc=4
+                      // （Main 4:4:4）。档位推导函数只按位深分档，这里按真实 chroma 补正日志，
+                      // 避免"选了 4:4:4 却报 Main Still Picture"的误导。
+                      {"profile", chroma_idx == 3 && format_id_ == "heif"
+                                      ? std::string("Main 4:4:4（HEVC 4:4:4）")
+                                      : heif_profile_label(derived)},
                       {"bitdepth", std::to_string(bitdepth)},
                       {"chroma", std::to_string(chroma_idx)}});
         }
@@ -801,21 +888,140 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
         // CICP 表无对应码 → unspecified，不冒充）。所有权（libheif 1.23.5 heif_encoding.cc）：
         // heif_encoding_options_free 只 delete 结构体、不解引用 output_nclx_profile ⇒ 栈上
         // nclx 活过本次 encode 即安全。
+        heif_image_handle *handle = nullptr;
+
+        // ---- 大图无损：HEIF 网格（grid）分块编码 ----
+        // libde265 的 4:4:4 / 高位深无损路径在 **单图 > 16 Mi 像素（2^24 luma samples）** 时
+        // 解码失败（实测：3902x4200=16.39MP 可解，3902x4500=17.56MP 报
+        // "Decoding the input data did not give a decompressed image"；10 位下阈值按同一
+        // luma 样本数收敛）。这不是 OIIO 的私有行为，而是 libheif→libde265 的解码上限。
+        // 标准 HEIF 的 grid 派生图把大图拆成多个独立 HEVC item（每块 <= 2048x2048），
+        // 解码器逐块解、libheif 再拼回整图 —— 既保住 4:4:4 真无损，也保住可打开性。
+        // 约束：grid 的每个 tile 必须同尺寸；边缘块用边缘像素填充，grid 的输出尺寸仍写
+        // 原图 w×h（libheif 解码时裁掉填充）。alpha 的 grid 承载未在本版验证 → 明确拒绝，
+        // 不静默产出打不开的文件。
+        const int64_t luma_samples = static_cast<int64_t>(w) * static_cast<int64_t>(h);
+        constexpr int64_t kSingleImageLosslessMaxSamples = 16LL * 1024 * 1024;
+        constexpr int kGridTileSize = 2048;
+        const bool lossless_grid = want_lossless && luma_samples > kSingleImageLosslessMaxSamples;
+        if (lossless_grid && has_alpha)
+            return fail("HEIF lossless with alpha above 16 MP is not decodable by libde265/OIIO "
+                        "(use AVIF/JXL/PNG lossless, or flatten alpha)");
         heif_encoding_options *enc_opts = heif_encoding_options_alloc();
         if (enc_opts != nullptr)
             enc_opts->output_nclx_profile = &nclx;
-        heif_image_handle *handle = nullptr;
-        e = heif_context_encode_image(ctx, img, enc, enc_opts, &handle);
-        if (enc_opts != nullptr)
-            heif_encoding_options_free(enc_opts);
-        if (e.code != heif_error_Ok) {
-            std::string msg = "heif_context_encode_image failed: " + heif_error_text(e);
-            if (format_id_ == "avif" && backend_id_ == "svt-av1" && bitdepth == 10 && has_alpha)
-                msg += " [svt-av1 does not support 10-bit with alpha; use backend libaom]";
-            else if (format_id_ == "heif" && bitdepth > 8)
-                msg += " [encoder does not support 10-bit input]";
-            return fail(msg);
+        if (lossless_grid) {
+            const uint32_t cols = static_cast<uint32_t>((w + kGridTileSize - 1) / kGridTileSize);
+            const uint32_t rows = static_cast<uint32_t>((h + kGridTileSize - 1) / kGridTileSize);
+            heif_image_handle *grid = nullptr;
+            e = heif_context_add_grid_image(ctx, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                                            cols, rows, enc_opts, &grid);
+            if (enc_opts != nullptr)
+                heif_encoding_options_free(enc_opts);
+            enc_opts = nullptr;
+            if (e.code != heif_error_Ok || grid == nullptr)
+                return fail("heif_context_add_grid_image failed: " + heif_error_text(e));
+            struct GridGuard {
+                heif_image_handle *h;
+                ~GridGuard() {
+                    if (h)
+                        heif_image_handle_release(h);
+                }
+            } grid_guard{grid};
+            // 4:4:4 下 Y/Cb/Cr 三平面同尺寸；从已生成的整图平面按块拷入（边缘 clamp 复制）。
+            struct TileRect {
+                int w = 0, h = 0, x0 = 0, y0 = 0;
+            };
+            const auto copy_tile_plane = [&](heif_image *tile, heif_channel ch,
+                                             const TileRect &rect, const PlaneRef &src) {
+                size_t dstride = 0;
+                uint8_t *dst = heif_image_get_plane2(tile, ch, &dstride);
+                if (dst == nullptr)
+                    return false;
+                for (int y = 0; y < rect.h; ++y) {
+                    const int sy = std::min(rect.y0 + y, h - 1);
+                    for (int x = 0; x < rect.w; ++x) {
+                        const int sx = std::min(rect.x0 + x, w - 1);
+                        if (bitdepth > 8) {
+                            reinterpret_cast<uint16_t *>(dst +
+                                                         static_cast<size_t>(y) * dstride)[x] =
+                                reinterpret_cast<const uint16_t *>(
+                                    src.base + static_cast<size_t>(sy) * src.stride)[sx];
+                        } else {
+                            dst[static_cast<size_t>(y) * dstride + x] =
+                                src.base[static_cast<size_t>(sy) * src.stride + sx];
+                        }
+                    }
+                }
+                return true;
+            };
+            for (uint32_t ty = 0; ty < rows; ++ty) {
+                for (uint32_t tx = 0; tx < cols; ++tx) {
+                    if (req.cancelled && req.cancelled()) {
+                        if (grid_guard.h != nullptr) {
+                            heif_image_handle_release(grid_guard.h);
+                            grid_guard.h = nullptr;
+                        }
+                        return fail("encode cancelled");
+                    }
+                    heif_image *tile = nullptr;
+                    e = heif_image_create(kGridTileSize, kGridTileSize, heif_colorspace_YCbCr,
+                                          heif_chroma_444, &tile);
+                    if (e.code != heif_error_Ok || tile == nullptr)
+                        return fail("heif_image_create(grid tile) failed: " + heif_error_text(e));
+                    struct TileGuard {
+                        heif_image *i;
+                        ~TileGuard() {
+                            if (i)
+                                heif_image_release(i);
+                        }
+                    } tile_guard{tile};
+                    const heif_channel chans[3] = {heif_channel_Y, heif_channel_Cb,
+                                                   heif_channel_Cr};
+                    bool tile_ok = true;
+                    for (int ci = 0; ci < 3 && tile_ok; ++ci) {
+                        e = heif_image_add_plane(tile, chans[ci], kGridTileSize, kGridTileSize,
+                                                 bitdepth);
+                        if (e.code != heif_error_Ok) {
+                            tile_ok = false;
+                            break;
+                        }
+                        const TileRect rect{kGridTileSize, kGridTileSize,
+                                            static_cast<int>(tx) * kGridTileSize,
+                                            static_cast<int>(ty) * kGridTileSize};
+                        tile_ok = copy_tile_plane(tile, chans[ci], rect, planes[ci]);
+                    }
+                    if (!tile_ok)
+                        return fail("cannot build HEIF lossless grid tile at (" +
+                                    std::to_string(tx) + "," + std::to_string(ty) + ")");
+                    (void)heif_image_set_nclx_color_profile(tile, &nclx);
+                    if (!req.meta.icc_profile.empty())
+                        (void)heif_image_set_raw_color_profile(
+                            tile, "prof", req.meta.icc_profile.data(), req.meta.icc_profile.size());
+                    e = heif_context_add_image_tile(ctx, grid, tx, ty, tile, enc);
+                    if (e.code != heif_error_Ok)
+                        return fail("heif_context_add_image_tile(" + std::to_string(tx) + "," +
+                                    std::to_string(ty) + ") failed: " + heif_error_text(e));
+                }
+            }
+            handle = grid;
+            grid_guard.h = nullptr; // 所有权转交 handle_guard（见下）
+        } else {
+            e = heif_context_encode_image(ctx, img, enc, enc_opts, &handle);
+            if (enc_opts != nullptr)
+                heif_encoding_options_free(enc_opts);
+            enc_opts = nullptr;
+            if (e.code != heif_error_Ok) {
+                std::string msg = "heif_context_encode_image failed: " + heif_error_text(e);
+                if (format_id_ == "avif" && backend_id_ == "svt-av1" && bitdepth == 10 && has_alpha)
+                    msg += " [svt-av1 does not support 10-bit with alpha; use backend libaom]";
+                else if (format_id_ == "heif" && bitdepth > 8)
+                    msg += " [encoder does not support 10-bit input]";
+                return fail(msg);
+            }
         }
+        if (handle == nullptr)
+            return fail("encoder produced no image handle");
         struct HandleGuard {
             heif_image_handle *h;
             ~HandleGuard() {

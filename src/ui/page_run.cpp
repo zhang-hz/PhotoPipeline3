@@ -442,6 +442,10 @@ struct OutRow : RowBundle {
     QWidget *row = nullptr;
     QWidget *reason_row = nullptr; // 失败行的「└ 原因：…」行（默认隐藏）
     ElidedLabel *reason = nullptr;
+    QWidget *warn_row = nullptr; // 成功但带 warning 的「⚠ …」行（默认隐藏；独立 objectName）
+    ElidedLabel *warn = nullptr;
+    QString applied_warning;
+    bool warn_shown = false;
     // 进度（§7.2 段内 frac）
     float enc = 0.f, meta = 0.f;
     bool started = false, synthetic = false;
@@ -453,6 +457,7 @@ struct OutRow : RowBundle {
     qint64 bytes = 0;
     double ratio = 0.0, ms = 0.0;
     QString error;
+    QString warnings; // 非失败行的降档/丢元数据/拍平等告警（第二轮：warning 必须有 UI 出口）
     QString applied_reason;
     bool reason_shown = false;
 };
@@ -944,6 +949,10 @@ void apply_terminal(RunState &s, FileRow &file, const pp::FileEvent &ev) {
                             : 0.0;
             out.ms = row->t.encode_ms + row->t.metawrite_ms;
             out.error = QString::fromStdString(row->error);
+            QStringList wl;
+            for (const pp::Warning &w : row->warnings)
+                wl << QString::fromStdString(w.detail);
+            out.warnings = wl.join(QStringLiteral("；"));
             if (out.error.isEmpty() && row->skipped)
                 out.kind = OutKind::Skipped;
             else if (out.error.isEmpty() && row->ok)
@@ -1048,8 +1057,10 @@ void render_out_row(RunState &s, FileRow &file, int index) {
     out.time_cache.apply(out.time, out.ms > 0.0 ? fmt_secs(out.ms) : QStringLiteral("—"),
                          out.ms > 0.0 ? s.tokens.text : s.tokens.text3);
 
-    // 失败行：下方「└ 原因：…」行（§7.3 逐字）
+    // 失败行：下方「└ 原因：…」行；成功行若有 warning（降档/丢元数据/拍平/丢 ICC），
+    // 同样出一行「⚠ …」——这是 WarningKind 在 UI 的唯一可见出口（第二轮 X-COMPLIANCE-08）。
     const bool failed = out.kind == OutKind::Failed;
+    const bool has_warning = !failed && !out.warnings.isEmpty();
     if (failed) {
         // R-070/273：错误分类映射中文（core/error_text.h 单源，R2B 备表）；未命中回退引擎原文
         // （不编造文案），原始串进 tooltip（分类中文 + 原文进 tooltip/日志口径）。
@@ -1067,6 +1078,19 @@ void render_out_row(RunState &s, FileRow &file, int index) {
     if (out.reason_shown != failed) {
         out.reason_shown = failed;
         out.reason_row->setVisible(failed);
+    }
+    // 成功行的 warning（降档/丢元数据/拍平/丢 ICC）单独一行；失败行不重复显示。
+    if (has_warning) {
+        const QString text = PageRun::tr("⚠ %1").arg(out.warnings);
+        if (out.applied_warning != text) {
+            out.applied_warning = text;
+            out.warn->set_full_text(text);
+            out.warn->setToolTip(text);
+        }
+    }
+    if (out.warn_shown != has_warning) {
+        out.warn_shown = has_warning;
+        out.warn_row->setVisible(has_warning);
     }
 }
 
@@ -1788,6 +1812,19 @@ void build_rows(RunState *s, const QStringList &names) {
             out.reason_row->setVisible(false);
             s->list_layout->addWidget(out.reason_row);
 
+            // 成功但带 warning 的提示行（独立 objectName，避免与失败原因探针混面）
+            out.warn_row = make_table_row(
+                s->list, QStringLiteral("pp-run-warn-%1-%2").arg(i).arg(j), fk::kRowPitch);
+            out.warn = new ElidedLabel(out.warn_row);
+            out.warn->setObjectName(QStringLiteral("pp-run-warn-text-%1-%2").arg(i).arg(j));
+            out.warn->setFont(theme::font(theme::Typography::small_px));
+            out.warn->setProperty(kRunLabelProperty, QString::fromLatin1(kRunReason));
+            set_leading_indent(out.warn, kReasonIndent);
+            auto *warn_line = qobject_cast<QHBoxLayout *>(out.warn_row->layout());
+            warn_line->addWidget(out.warn, 1);
+            out.warn_row->setVisible(false);
+            s->list_layout->addWidget(out.warn_row);
+
             file.outs.append(out);
         }
         s->files.append(file);
@@ -2144,6 +2181,7 @@ void PageRun::reset() {
         for (OutRow &out : file.outs) {
             delete out.row;
             delete out.reason_row;
+            delete out.warn_row;
         }
     }
     s->files.clear();

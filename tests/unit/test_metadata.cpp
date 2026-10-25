@@ -446,6 +446,55 @@ void test_privacy(const fs::path &tmp) {
     check(!back.has_time && !back.has_gps, "privacy/readback-flags", "time/gps must be gone");
     check(pixel_hash(out) == h0, "privacy/pixels-unchanged", "pixel hash changed");
 
+    // X-METADATA-ONLY-03：IPTC(APP13) 与 COM 也必须在隐私剥除时清掉。
+    {
+        const fs::path tagged = tmp / "privacy-iptc-src.jpg";
+        check(copy_fixture(jpg, tagged), "privacy/iptc-copy", tagged.string());
+        {
+            auto img = Exiv2::ImageFactory::open(tagged.string());
+            check(static_cast<bool>(img), "privacy/iptc-open", tagged.string());
+            if (img) {
+                img->readMetadata();
+                Exiv2::IptcData iptc;
+                iptc["Iptc.Application2.Caption"] = "secret-caption";
+                img->setIptcData(iptc);
+                img->setComment("secret-comment");
+                img->writeMetadata();
+            }
+        }
+        const pp::MetadataPlan p2 = pp::build_plan(pp::read_metadata(tagged), rules, std::nullopt);
+        const fs::path out2 = tmp / "privacy-iptc-out.jpg";
+        check(copy_fixture(tagged, out2), "privacy/iptc-out-copy", out2.string());
+        const std::string e2 = pp::rewrite_metadata_only(tagged, out2, p2, pp::make_payloads(p2));
+        check(e2.empty(), "privacy/iptc-rewrite", e2);
+        auto back2 = Exiv2::ImageFactory::open(out2.string());
+        check(static_cast<bool>(back2), "privacy/iptc-back-open", out2.string());
+        if (back2) {
+            back2->readMetadata();
+            check(back2->iptcData().empty(), "privacy/iptc-cleared",
+                  std::to_string(back2->iptcData().count()) + " IPTC item(s) left");
+            check(back2->comment().empty(), "privacy/com-cleared", back2->comment());
+        }
+    }
+
+    // 隐私剥除对非 JPEG 容器同样不能因 Exiv2 不支持 IPTC/COM 而整体失败。
+    {
+        const fs::path wsrc = corpus() / "meta" / "webp_lossy.webp";
+        std::error_code wec;
+        if (fs::exists(wsrc, wec)) {
+            const pp::SourceMeta ws = pp::read_metadata(wsrc);
+            const pp::MetadataPlan wp = pp::build_plan(ws, rules, std::nullopt);
+            const fs::path wout = tmp / "privacy.webp";
+            check(copy_fixture(wsrc, wout), "privacy/webp-copy", wout.string());
+            const std::string we = pp::rewrite_metadata_only(wsrc, wout, wp, pp::make_payloads(wp));
+            check(we.empty(), "privacy/webp-rewrite", we);
+            const pp::SourceMeta wb = pp::read_metadata(wout);
+            check(wb.error.empty() && wb.exif.empty() && wb.xmp.empty(), "privacy/webp-empty",
+                  "exif=" + std::to_string(wb.exif.count()) +
+                      " xmp=" + std::to_string(wb.xmp.count()));
+        }
+    }
+
     // three-state override: exception false beats a batch true
     pp::MetadataOverride keep;
     keep.strip_privacy = false;

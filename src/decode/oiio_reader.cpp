@@ -9,12 +9,18 @@
 #include "decode/oiio_reader.h"
 
 #include <OpenImageIO/imageio.h>
+#include <jxl/decode.h>
 #include <libheif/heif.h>
 
+#include <algorithm>
 #include <cassert>
 #include <cstddef>
+#include <cstdint>
+#include <fstream>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "core/logger.h" // R-304：seek_subimage 还原失败的如实记录
 
@@ -108,6 +114,65 @@ bool spec_is_cmyk(const OIIO::ImageSpec &spec) {
 int bitdepth_from_format(const OIIO::TypeDesc &t) noexcept {
     const std::size_t bytes = t.basesize();
     return bytes > 0 ? static_cast<int>(bytes) * 8 : 8;
+}
+
+// 第二轮裁定（alpha 不支持）：OIIO 对 JXL 不处理 alpha_premultiplied，返回的是码流原值。
+// 为了统一成 "flatten 输入 = associated（预乘）"，这里读 JXL basic info；若码流声明
+// alpha_premultiplied=false 且带 alpha，就在 decode 边界把 RGB 补乘 alpha。
+// 返回 nullopt = 读不到 basic info（调用方按最保守路径处理并日志）。
+std::optional<bool> jxl_alpha_premultiplied(const std::filesystem::path &p, bool &has_alpha) {
+    std::ifstream f(p, std::ios::binary);
+    if (!f)
+        return std::nullopt;
+    const std::vector<std::uint8_t> data((std::istreambuf_iterator<char>(f)),
+                                         std::istreambuf_iterator<char>());
+    if (data.empty())
+        return std::nullopt;
+    JxlDecoder *dec = JxlDecoderCreate(nullptr);
+    if (dec == nullptr)
+        return std::nullopt;
+    std::optional<bool> result;
+    has_alpha = false;
+    if (JxlDecoderSubscribeEvents(dec, JXL_DEC_BASIC_INFO) == JXL_DEC_SUCCESS &&
+        JxlDecoderSetInput(dec, data.data(), data.size()) == JXL_DEC_SUCCESS) {
+        JxlDecoderCloseInput(dec);
+        for (;;) {
+            const JxlDecoderStatus st = JxlDecoderProcessInput(dec);
+            if (st == JXL_DEC_BASIC_INFO) {
+                JxlBasicInfo info{};
+                if (JxlDecoderGetBasicInfo(dec, &info) == JXL_DEC_SUCCESS) {
+                    has_alpha = info.num_extra_channels > 0 && info.alpha_bits > 0;
+                    result = info.alpha_premultiplied != 0;
+                }
+                break;
+            }
+            if (st == JXL_DEC_SUCCESS || st == JXL_DEC_ERROR || st == JXL_DEC_NEED_MORE_INPUT)
+                break;
+        }
+    }
+    JxlDecoderDestroy(dec);
+    return result;
+}
+
+// RGB(A)/gray(A) 的 RGB/Y 分量原地补乘 alpha（float 缓冲）。
+void premultiply_alpha_in_place(OIIO::ImageBuf &buf) {
+    const OIIO::ImageSpec &spec = buf.spec();
+    const int ch = spec.nchannels;
+    if ((ch != 2 && ch != 4) || spec.format != OIIO::TypeDesc::FLOAT)
+        return;
+    float *px = static_cast<float *>(buf.localpixels());
+    if (px == nullptr)
+        return;
+    const int alpha =
+        (spec.alpha_channel >= 0 && spec.alpha_channel < ch) ? spec.alpha_channel : ch - 1;
+    const std::size_t npix =
+        static_cast<std::size_t>(spec.width) * static_cast<std::size_t>(spec.height);
+    for (std::size_t i = 0; i < npix; ++i) {
+        const std::size_t base = i * static_cast<std::size_t>(ch);
+        const float a = std::clamp(px[base + static_cast<std::size_t>(alpha)], 0.0f, 1.0f);
+        for (int c = 0; c < alpha; ++c)
+            px[base + static_cast<std::size_t>(c)] *= a;
+    }
 }
 
 // OIIO error strings may carry embedded newlines and duplicate nesting
@@ -240,6 +305,26 @@ DecodeOutcome decode_float(const std::filesystem::path &p, const ImageInfo &info
         return out;
     }
     assert(out.buf.spec().format == OIIO::TypeDesc::FLOAT);
+
+    // 第二轮裁定（alpha 不支持）：管线在 color 前按 associated（预乘）语义拍平。
+    // OIIO 的 JXL reader 不处理 alpha_premultiplied；码流声明非预乘时在边界补乘，
+    // 保证进入 flatten 的缓冲与其它格式一致。读不到 basic info → 明确失败（不猜）。
+    const bool is_jxl =
+        (info.format == "jpegxl" || info.format == "jxl" || p.extension() == ".jxl");
+    const OIIO::ImageSpec &decoded_spec = out.buf.spec();
+    const bool jxl_has_alpha = decoded_spec.alpha_channel >= 0 || decoded_spec.nchannels == 2 ||
+                               decoded_spec.nchannels == 4;
+    if (is_jxl && jxl_has_alpha) {
+        bool has_alpha = false;
+        const std::optional<bool> prem = jxl_alpha_premultiplied(p, has_alpha);
+        if (!prem.has_value()) {
+            out.error = "jxl: cannot read alpha_premultiplied from basic info; refusing to guess";
+            out.buf.clear();
+            return out;
+        }
+        if (has_alpha && !*prem)
+            premultiply_alpha_in_place(out.buf);
+    }
 
     if (info.is_multipage) {
         out.warnings.push_back(

@@ -66,9 +66,10 @@ bool cpu_has_avx2();
 
 // —— 1) flatten：alpha 合成到常量底色 + 原地缩通道（§4.3 / §5.5）——
 //   src：npix×ch 交织 float32（ch ∈ {2,4}）；dst：npix×out_ch（out_ch = ch == 2 ? 1 : 3）。
-//   语义逐字等于 pipeline 既有标量循环（src/core/pipeline.cpp flatten_alpha_in_place）：
+//   语义 = **associated（预乘）alpha** 的合成（第二轮裁定：alpha 不支持，输入在 color 前拍平）：
 //     a  = clamp(src[i*ch + ch - 1], 0, 1)
-//     dst[i*out_ch + c] = fma(src[i*ch + c], a, bg * (1 - a))    （c < out_ch；bg 已 clamp）
+//     dst[i*out_ch + c] = src[i*ch + c] + bg * (1 - a)    （c < out_ch；bg 已 clamp）
+//   src 已是预乘 RGB/Y；不要再乘 a（否则半透明区会二次变暗）。
 //   **允许别名（src == dst = 原地缩通道）**：逐块推进（块内先读后写，见 kernels.cpp 的形态说明）；
 //   out_ch < ch ⇒ 写指针恒落后于读指针（块 k 的写区 [24k, 24k+24) 与尚未读的源区间不相交），
 //   与 §4.3「零额外帧」内存纪律一致。

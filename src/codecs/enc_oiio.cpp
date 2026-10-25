@@ -28,7 +28,11 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
+#include <optional>
+
+#include <exiv2/exiv2.hpp>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -54,6 +58,38 @@ constexpr std::string_view kFile = "enc_oiio.cpp";
 // OIIO 3.1.14 TIFF writer name table (tiffoutput.cpp:301-338); "deflate" is only an alias
 // accepted by ImageSpec::decode_compression_metadata, unknown names silently fall back to
 // deflate -> we validate up front (task book: no silent fallback).
+// ICC header bytes 16..19 = data colour space signature ("RGB ", "GRAY", "CMYK").
+bool icc_profile_is_rgb(const std::string &icc) {
+    return icc.size() >= 20 && std::memcmp(icc.data() + 16, "RGB ", 4) == 0;
+}
+bool icc_profile_is_gray(const std::string &icc) {
+    return icc.size() >= 20 && std::memcmp(icc.data() + 16, "GRAY", 4) == 0;
+}
+
+// TIFF-07：OIIO writer 在 spec 没有 DateTime 时写“编码时刻”，产物不可复现。这里从源
+// EXIF 载荷取 DateTimeOriginal（缺失再取 DateTimeDigitized/DateTime），交给 writer。
+std::optional<std::string> exif_datetime_for_tiff(const std::string &blob) {
+    if (blob.size() < 8)
+        return std::nullopt;
+    Exiv2::ExifData exif;
+    try {
+        Exiv2::ExifParser::decode(exif, reinterpret_cast<const Exiv2::byte *>(blob.data()),
+                                  blob.size());
+    } catch (...) {
+        return std::nullopt;
+    }
+    for (const char *key :
+         {"Exif.Photo.DateTimeOriginal", "Exif.Photo.DateTimeDigitized", "Exif.Image.DateTime"}) {
+        const auto it = exif.findKey(Exiv2::ExifKey(key));
+        if (it != exif.end()) {
+            std::string v = it->toString();
+            if (!v.empty())
+                return v;
+        }
+    }
+    return std::nullopt;
+}
+
 bool tiff_compression_known(std::string_view name) {
     static constexpr std::string_view kNames[] = {"none", "lzw", "zip", "ccittrle", "packbits"};
     return std::any_of(std::begin(kNames), std::end(kNames),
@@ -246,6 +282,13 @@ EncodeResult OiioEncoder::encode(const EncodeRequest &req) {
             // R-010：键名 = "png:compressionLevel"（pngoutput.cpp:165-169 唯一读取点）。
             // 旧裸键 "compressionLevel" 全库无人消费 → UI「zlib 压缩级别」静默无效。
             spec.attribute("png:compressionLevel", clamped);
+            // PNG-03：OIIO 的 zlib 策略与 libpng filter 也是真实输出属性，补进 schema。
+            const std::string strategy = param_str(req.target.params, "compression", "default");
+            if (strategy != "default")
+                spec.attribute("compression", strategy);
+            const int64_t filter = param_int(req.target.params, "filter", 0);
+            if (filter > 0)
+                spec.attribute("png:filter", static_cast<int>(filter));
         } else if (format_id_ == "tiff") {
             const std::string compression = param_str(req.target.params, "compression", "lzw");
             if (!tiff_compression_known(compression))
@@ -295,14 +338,34 @@ EncodeResult OiioEncoder::encode(const EncodeRequest &req) {
             }
         }
         // png/tiff/bmp: no other parameters (bmp has none at all)
+        if (format_id_ == "tiff") {
+            if (const auto dt = exif_datetime_for_tiff(req.meta.exif_blob))
+                spec.attribute("DateTime", *dt);
+        }
 
         // ---- ICC (E5); EXIF/XMP deliberately not written here (E7) ----
         if (!req.meta.icc_profile.empty()) {
-            const size_t n = req.meta.icc_profile.size();
-            spec.attribute(
-                "ICCProfile", OIIO::TypeDesc(OIIO::TypeDesc::UINT8, static_cast<int>(n)),
-                OIIO::cspan<std::byte>(
-                    reinterpret_cast<const std::byte *>(req.meta.icc_profile.data()), n));
+            const bool gray_out = (nch <= 2);
+            const bool icc_rgb = icc_profile_is_rgb(req.meta.icc_profile);
+            const bool icc_gray = icc_profile_is_gray(req.meta.icc_profile);
+            // PNG-05：灰度 PNG 不能携带 RGB ICC（色彩类型与 profile 不匹配）；反向也拒绝。
+            const bool mismatch = (gray_out && icc_rgb) || (!gray_out && icc_gray);
+            if (mismatch) {
+                note_param("ICC profile colour space does not match channel layout; dropped",
+                           "ICCProfile",
+                           gray_out ? "gray output / RGB profile" : "RGB output / gray profile");
+            } else {
+                const size_t n = req.meta.icc_profile.size();
+                spec.attribute(
+                    "ICCProfile", OIIO::TypeDesc(OIIO::TypeDesc::UINT8, static_cast<int>(n)),
+                    OIIO::cspan<std::byte>(
+                        reinterpret_cast<const std::byte *>(req.meta.icc_profile.data()), n));
+                // PNG-02 / X-COMPLIANCE-05：OIIO 的 PNG writer 在未设置 oiio:ColorSpace 时
+                // 默认按 sRGB 写 sRGB/gAMA/cHRM，随后又写 iCCP → 色彩声明自相矛盾。
+                // 有 ICC 时把 ColorSpace 置为 "ICC"，让 writer 只写 iCCP。
+                if (format_id_ == "png")
+                    spec.attribute("oiio:ColorSpace", "ICC");
+            }
         }
 
         // ---- E9: unknown parameters are ignored with a warning ----

@@ -268,6 +268,28 @@ private:
         }
         jpegli_set_defaults(&cinfo);
 
+        // 色度采样因子必须在 quality/distance 之前设置：jpegli 的 SetQuantMatrices 在
+        // jpegli_set_quality/set_distance 时读取 IsYUV420(cinfo)；晚设会让 444/422/440
+        // 全部拿到 420 派生的量化表（第二轮审计 JPEG-01）。
+        if (!gray) {
+            int h_samp = 1;
+            int v_samp = 1;
+            if (p.chroma == "440") {
+                v_samp = 2;
+            } else if (p.chroma == "422") {
+                h_samp = 2;
+            } else if (p.chroma == "420") {
+                h_samp = 2;
+                v_samp = 2;
+            }
+            cinfo.comp_info[0].h_samp_factor = h_samp;
+            cinfo.comp_info[0].v_samp_factor = v_samp;
+            cinfo.comp_info[1].h_samp_factor = 1;
+            cinfo.comp_info[1].v_samp_factor = 1;
+            cinfo.comp_info[2].h_samp_factor = 1;
+            cinfo.comp_info[2].v_samp_factor = 1;
+        }
+
         // quality_mode selects exactly one of the two quality controls (§3.8).
         if (p.quality_mode == "quality") {
             jpegli_set_quality(&cinfo, p.quality, TRUE);
@@ -286,23 +308,6 @@ private:
         cinfo.dct_method = static_cast<J_DCT_METHOD>(p.dct_method);
         cinfo.smoothing_factor = p.smoothing_factor;
         jpegli_enable_adaptive_quantization(&cinfo, p.adaptive_quantization ? TRUE : FALSE);
-
-        // Chroma subsampling on the luma component (§3.8 table):
-        // 444 → 1,1 | 440 → 1,2 | 422 → 2,1 | 420 → 2,2 (jpeglib.h comp_info[]).
-        if (!gray) {
-            int h_samp = 1;
-            int v_samp = 1;
-            if (p.chroma == "440") {
-                v_samp = 2;
-            } else if (p.chroma == "422") {
-                h_samp = 2;
-            } else if (p.chroma == "420") {
-                h_samp = 2;
-                v_samp = 2;
-            }
-            cinfo.comp_info[0].h_samp_factor = h_samp;
-            cinfo.comp_info[0].v_samp_factor = v_samp;
-        }
 
         // R-087：mem 缓冲由 setjmp 之前的堆侧影子 mem_dest 跟踪（见上）。
         jpegli_mem_dest(&cinfo, &mem_dest->p, &mem_dest->n);

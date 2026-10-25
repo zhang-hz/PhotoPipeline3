@@ -214,6 +214,9 @@ struct ProfileOption {
 inline const ProfileOption *heif_profile_options(bool avif, int &count) {
     static const ProfileOption kHeif[] = {
         {pp::HeifProfile::Auto, "自动"},
+        // HEIF-01：8 位静止图在 x265 里恒为 Main Still Picture；此选项值仍叫 Main，
+        // 但 enc_heif/heif_profile_compatible 把 Main 与 MainStill 视为同一可用族，
+        // 不再出现“选了必失败”。（标签的中文修正在后续 UI 文案批处理中统一。）
         {pp::HeifProfile::Main, "Main（8 位 · 兼容性最好）"},
         {pp::HeifProfile::Main10, "Main10（10 位 · Intra）"},
         {pp::HeifProfile::Main12, "Main12（12 位）"},
@@ -236,11 +239,13 @@ inline const ProfileOption *heif_profile_options(bool avif, int &count) {
 // 档位 → 允许位深（联动限幅；空 = 不限）。口径与 heif_profile.h 的 derive 规则一致：
 // HEVC 只看位深（Main/MainStill→8、Main10→10、Main12→12）；AV1 的 Professional 还可以由
 // 4:2:2 命中（不限位深），故放宽到 {8,10,12}，最终判定交给 heif_profile_compatible。
-inline std::vector<int> profile_allowed_bitdepths(pp::HeifProfile p) {
+inline std::vector<int> profile_allowed_bitdepths(pp::HeifProfile p, bool avif = false) {
     switch (p) {
     case pp::HeifProfile::Auto:
         return {};
     case pp::HeifProfile::Main:
+        // AV1 Main 本含 8/10 位；HEVC Main 只对应 8 位（Main Still 也是 8 位）。
+        return avif ? std::vector<int>{8, 10} : std::vector<int>{8};
     case pp::HeifProfile::MainStill:
         return {8};
     case pp::HeifProfile::Main10:

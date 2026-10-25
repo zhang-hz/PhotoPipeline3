@@ -424,7 +424,7 @@ int main() {
         check(wide.peak() <= wide.capacity(), "budget/within-capacity", "peak > capacity");
     }
 
-    // ---- N. metadata-only capability matrix ----
+    // ---- N. metadata-only capability matrix + source-format resolution（R-3xx）----
     {
         check(pp::format_supports_metadata_only("jpeg"), "meta-only/jpeg", "expected true");
         check(pp::format_supports_metadata_only("png"), "meta-only/png", "expected true");
@@ -434,6 +434,41 @@ int main() {
         check(!pp::format_supports_metadata_only("heif"), "meta-only/heif", "expected false");
         check(!pp::format_supports_metadata_only("avif"), "meta-only/avif", "expected false");
         check(!pp::format_supports_metadata_only("bmp"), "meta-only/bmp", "expected false");
+
+        // 源扩展名 → 格式（仅元数据模式的"输出跟随输入"单源解析；大小写/别名都覆盖）
+        struct ExtCase {
+            const char *name;
+            const char *want;
+        };
+        const ExtCase exts[] = {{"a.jpg", "jpeg"},  {"A.JPEG", "jpeg"}, {"a.png", "png"},
+                                {"a.tif", "tiff"},  {"a.TIFF", "tiff"}, {"a.webp", "webp"},
+                                {"a.heic", "heif"}, {"a.HEIF", "heif"}, {"a.avif", "avif"},
+                                {"a.jxl", "jxl"},   {"a.bmp", "bmp"}};
+        for (const ExtCase &c : exts) {
+            const pp::FormatDef *f = pp::format_for_source_path(c.name);
+            check(f != nullptr && f->id == c.want, "meta-only/source-format",
+                  std::string(c.name) + " -> " + (f ? f->id : "(null)") + " want " + c.want);
+        }
+        check(pp::format_for_source_path("a.gif") == nullptr, "meta-only/source-gif",
+              "gif has no output format");
+        check(pp::format_for_source_path("noext") == nullptr, "meta-only/source-noext",
+              "extensionless path must not resolve");
+
+        // path_ctx_for：metadata_only 时 $format/扩展名都取源格式，忽略目标格式入参。
+        pp::FileEntry fe;
+        fe.src = "C:/in/photo.JPG";
+        fe.base_dir = "C:/in";
+        pp::RunConfig cfg;
+        cfg.metadata_only = true;
+        cfg.output_template = "$format/$dir/$file";
+        const pp::PathCtx ctx = pp::path_ctx_for(fe, cfg, pp::find_format("jxl"));
+        check(ctx.format_dir == "jpeg" && ctx.ext == ".JPG", "meta-only/path-ctx",
+              "format_dir=" + ctx.format_dir + " ext=" + ctx.ext);
+        const fs::path rendered =
+            pp::render_output_path(cfg.output_template, ctx, tmp / "meta-ctx");
+        check(rendered.filename() == "photo.JPG", "meta-only/path-file", rendered.generic_string());
+        check(rendered.parent_path().filename() == "jpeg", "meta-only/path-format-dir",
+              rendered.generic_string());
     }
 
     // ---- O. EXIF orientation → pixel rotation (and no rotation when disabled) ----
@@ -608,14 +643,19 @@ int main() {
         check(!ru.ok && ru.error == "未知参数：bogus", "cross-param/unknown",
               "error=[" + ru.error + "]");
 
-        // metadata-only path goes through the same guard
+        // 仅元数据模式**不消费目标格式的参数集**（产物跟随源格式，零编码）：bogus 参数
+        // 不应让运行失败；同时产物必须是源容器 png（不是 RunSpec 里的 jpeg）。
         RunSpec m;
         m.format = "jpeg";
         m.metadata_only = true;
         m.params = u.params;
         const pp::FileResult rm = run_spec(base / "rgb8.png", corpus, tmp / "cross-meta", m);
-        check(!rm.ok && rm.error == "未知参数：bogus", "cross-param/metadata-only",
-              "error=[" + rm.error + "]");
+        check(rm.ok, "cross-param/metadata-only-ignored", rm.error);
+        check(!rm.outputs.empty() && rm.outputs.front().format_id == "png",
+              "cross-param/metadata-only-source-format",
+              rm.outputs.empty() ? "no output rows" : rm.outputs.front().format_id);
+        check(rm.out.extension() == ".png", "cross-param/metadata-only-ext",
+              rm.out.generic_string());
 
         // clean defaults (the golden-smoke shape) must pass through untouched
         RunSpec clean;
@@ -820,10 +860,9 @@ int main() {
         check(t_jpeg != t_now, "mtime/not-current-time", "同步后的 mtime 不应等于未同步的当前时间");
     }
 
-    // ---- AB. flatten 编排矩阵（§4.3）----
+    // ---- AB. alpha 不支持：所有输出在 color 前统一拍平 ----
     {
-        // (1) 全 alpha-preserving：[webp(lossless), jxl(modular,lossless)] → 不 flatten、都保留
-        // alpha
+        // (1) [webp(lossless), jxl(modular,lossless)] → 两者都拍平为 3 通道并告警
         pp::ParamSet jxl_params;
         jxl_params["__lossless"] = true;
         RunSpec s;
@@ -835,20 +874,17 @@ int main() {
         s.extra_outputs.push_back(out_spec("jxl", "libjxl", "modular", 16, jxl_params));
         const pp::FileResult r = run_spec(base / "rgba8.png", corpus, tmp / "flat-none", s);
         check(r.ok, "flatten/none-ok", r.error);
-        check(!has_warning(r, pp::WarningKind::AlphaFlattened), "flatten/none-no-warning",
-              "全支持 alpha 的 targets 不应拍平");
+        check(has_warning(r, pp::WarningKind::AlphaFlattened), "flatten/none-warning",
+              "alpha 不支持：所有带 alpha 的输入都应拍平并告警");
         const OutInfo w = read_info(r.outputs[0].out);
         const OutInfo j = read_info(r.outputs[1].out);
-        check(w.ok && w.channels == 4, "flatten/none-webp-alpha",
+        check(w.ok && w.channels == 3, "flatten/none-webp-3ch",
               "channels=" + std::to_string(w.channels));
-        check(j.ok && j.channels == 4, "flatten/none-jxl-alpha",
+        check(j.ok && j.channels == 3, "flatten/none-jxl-3ch",
               "channels=" + std::to_string(j.channels));
-        std::string detail;
-        check(same_pixels(base / "rgba8.png", r.outputs[0].out, detail), "flatten/none-webp-exact",
-              detail);
     }
     {
-        // (2) [jpeg, webp]：jpeg（不支持 alpha）拍平且告警；webp 保持 alpha（§4.3 排序证据）
+        // (2) [jpeg, webp]：两者都拍平，各 1 条 AlphaFlattened
         RunSpec s;
         s.format = "jpeg";
         s.extra_outputs.push_back(out_spec("webp", "libwebp", "", 8));
@@ -864,15 +900,15 @@ int main() {
                 ++webp_warn;
         }
         check(jpeg_warn == 1, "flatten/jpeg-row-warning", std::to_string(jpeg_warn));
-        check(webp_warn == 0, "flatten/webp-row-no-warning", std::to_string(webp_warn));
+        check(webp_warn == 1, "flatten/webp-row-warning", std::to_string(webp_warn));
         check(read_info(r.outputs[0].out).channels == 3, "flatten/jpeg-3ch", "jpeg 应为 3 通道");
-        check(read_info(r.outputs[1].out).channels == 4, "flatten/webp-4ch",
-              "webp 必须拿到未拍平的像素（4 通道；§4.3 排序义务）");
+        check(read_info(r.outputs[1].out).channels == 3, "flatten/webp-3ch",
+              "webp 也必须是拍平后的 3 通道（alpha 不支持）");
         check(r.t.flatten_ms > 0, "flatten/time-recorded",
               "flatten_ms 应记录在文件级计时（一次共享拍平）");
     }
     {
-        // (2b) 配置顺序颠倒 [webp, jpeg] → 结果与 (2) 相同（内部按 supports_alpha 稳定排序）
+        // (2b) 配置顺序颠倒 [webp, jpeg]：仍是两个 3 通道，记录顺序为配置顺序
         RunSpec s;
         s.format = "webp";
         s.backend = "libwebp";
@@ -881,15 +917,15 @@ int main() {
         s.extra_outputs.push_back(out_spec("jpeg", "jpegli", "", 8));
         const pp::FileResult r = run_spec(base / "rgba8.png", corpus, tmp / "flat-webp-jpeg", s);
         check(r.ok, "flatten/reversed-ok", r.error);
-        check(read_info(r.outputs[0].out).channels == 4, "flatten/reversed-webp-4ch",
-              "配置顺序不影响编码顺序（webp 先编码、保留 alpha）");
+        check(read_info(r.outputs[0].out).channels == 3, "flatten/reversed-webp-3ch",
+              "webp 也必须拍平（alpha 不支持）");
         check(read_info(r.outputs[1].out).channels == 3, "flatten/reversed-jpeg-3ch",
-              "jpeg 后编码、拿到拍平像素");
+              "jpeg 3 通道");
         check(r.outputs[0].out.extension() == ".webp", "flatten/reversed-out-index",
               "FileResult.outputs 仍按配置顺序记录");
     }
     {
-        // (3) [jpeg, bmp] 全不支持 alpha → 首个 encode 前拍平，两行都告警
+        // (3) [jpeg, bmp] 两行都告警 + 3 通道
         RunSpec s;
         s.format = "jpeg";
         s.extra_outputs.push_back(out_spec("bmp", "oiio", "", 24));
@@ -1204,7 +1240,7 @@ int main() {
                   std::to_string(max_err) + " 超容差样本=" + std::to_string(over_tol));
     }
     {
-        // (b) RGBA 源（4 通道 → 颜色面原地、alpha 原样保留）
+        // (b) RGBA 源：alpha 不支持 → 先白底拍平，再做 assumed sRGB→sRGB（恒等）
         RunSpec s;
         s.format = "png";
         s.bitdepth = 8;
@@ -1215,8 +1251,7 @@ int main() {
         const std::vector<float> in = read_pixels(base / "rgba8.png", iw, ih, ic);
         int ow = 0, oh = 0, oc = 0;
         const std::vector<float> out = read_pixels(r.out, ow, oh, oc);
-        const bool geom =
-            !in.empty() && !out.empty() && iw == ow && ih == oh && ic == oc && ic == 4;
+        const bool geom = !in.empty() && !out.empty() && iw == ow && ih == oh && ic == 4 && oc == 3;
         check(geom, "color-srgb-rgba/geometry",
               "in=" + std::to_string(ic) + "ch " + std::to_string(iw) + "x" + std::to_string(ih) +
                   " out=" + std::to_string(oc) + "ch " + std::to_string(ow) + "x" +
@@ -1224,21 +1259,29 @@ int main() {
         std::size_t nonzero = 0, over_tol = 0;
         double max_err = 0.0;
         if (geom) {
-            for (std::size_t i = 0; i < out.size(); ++i) {
-                if (out[i] > 0.0f)
-                    ++nonzero;
-                const double d =
-                    std::fabs(static_cast<double>(out[i]) - static_cast<double>(in[i]));
-                max_err = std::max(max_err, d);
-                if (d > 1e-5)
-                    ++over_tol;
+            for (int y = 0; y < ih; ++y) {
+                for (int x = 0; x < iw; ++x) {
+                    const std::size_t si = (static_cast<std::size_t>(y) * iw + x) * 4;
+                    const std::size_t di = (static_cast<std::size_t>(y) * iw + x) * 3;
+                    const float a = std::clamp(in[si + 3], 0.0f, 1.0f);
+                    for (int c = 0; c < 3; ++c) {
+                        const float want = in[si + static_cast<std::size_t>(c)] * a + (1.0f - a);
+                        if (out[di + static_cast<std::size_t>(c)] > 0.0f)
+                            ++nonzero;
+                        const double d =
+                            std::fabs(static_cast<double>(out[di + c]) - static_cast<double>(want));
+                        max_err = std::max(max_err, d);
+                        if (d > 2.0 / 255.0)
+                            ++over_tol;
+                    }
+                }
             }
         }
         check(nonzero > 0, "color-srgb-rgba/non-zero",
-              "RGBA 源的非 keep 目标输出全零（全黑图 = 静默数据损失）：nonzero=" +
-                  std::to_string(nonzero) + "/" + std::to_string(out.size()));
-        check(geom && over_tol == 0, "color-srgb-rgba/identity<=1e-5",
-              "assumed sRGB → sRGB 应为恒等（含 alpha 原样保留）：max_err=" +
+              "RGBA 源拍平后输出全零（全黑图 = 静默数据损失）：nonzero=" + std::to_string(nonzero) +
+                  "/" + std::to_string(out.size()));
+        check(geom && over_tol == 0, "color-srgb-rgba/flatten-composite<=2lsb",
+              "白底合成应等于 in*a+(1-a)（alpha 不支持，输出不保留 alpha）：max_err=" +
                   std::to_string(max_err) + " 超容差样本=" + std::to_string(over_tol));
     }
 

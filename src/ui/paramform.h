@@ -58,6 +58,10 @@ public:
     // 值变化仍走 changed()；本接口只动视图（不发信号、不改工作集）。
     void limit_enum_choices(const std::string &key, const std::vector<int64_t> &allowed,
                             const QString &disabled_reason);
+    // M7-R2D2 加性扩展：字符串枚举（HEIF/AVIF 的 chroma = "420"/"422"/"444"）的同一限幅面。
+    // 整数版按 ParamValue 匹配，字符串版按 choices 的**显示值**匹配；两者语义一致（只动视图）。
+    void limit_enum_choices_text(const std::string &key, const std::vector<std::string> &allowed,
+                                 const QString &disabled_reason);
 
 signals:
     void selection_changed(const pp::ui::FormSelection &sel); // user action only

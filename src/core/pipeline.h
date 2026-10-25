@@ -260,7 +260,9 @@ struct FileOutcome {
 // 要求 outputs.size() == 1），run_one_file 本身拒绝 metadata_only 配置（复核项 11 措辞修正）。
 FileOutcome run_one_file(const FileEntry &, const RunConfig &, EventFn);
 
-// 仅元数据模式（零重编码）：仅 JPEG/PNG/TIFF/WebP；HEIF/AVIF/JXL 由上层拒绝
+// 仅元数据模式（零重编码）：产物容器**跟随源文件格式**（JPEG/PNG/TIFF/WebP 可重写；
+// HEIF/AVIF/JXL/BMP/GIF/TGA 等不支持 → 该文件失败并给出明确消息）。RunConfig::outputs
+// 仍要求恰好 1 项（配置容器），但其 format_id/params 不参与产物格式判定。
 FileOutcome run_metadata_only(const FileEntry &, const RunConfig &, EventFn);
 
 // 输入白名单校验（唯一入口，UI 与 harness 共用）
@@ -298,6 +300,10 @@ std::string validate_run_config(const RunConfig &cfg);
 // R-175：PathCtx 组装单源（scheduler 的 desired_keys 与 pipeline 的 plan_targets 共用）。
 // metadata_only 时 ext = 源扩展名（同容器），否则 = 目标格式扩展名。
 PathCtx path_ctx_for(const FileEntry &fe, const RunConfig &cfg, const FormatDef *fmt);
+
+// R-3xx（加性）：源扩展名 → 格式定义（仅元数据模式"输出跟随输入格式"的单源解析）。
+// 未知/无输出格式的扩展名（gif/tga）→ nullptr。大小写不敏感。
+const FormatDef *format_for_source_path(const std::filesystem::path &src);
 
 // 默认位深单源（R-238 的口径之一；--dev / bench / UI 装配链共用）：
 // jpeg 8 / jxl 16 / png 16 / tiff 16 / webp 8 / bmp 24（bpp 口径）/ heif·avif 10 / 其余 8。

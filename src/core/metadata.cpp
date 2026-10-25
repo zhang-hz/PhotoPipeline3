@@ -28,11 +28,15 @@
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <fstream>
+#include <limits>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 #include "core/fsops.h" // R-002/R-030：原子写四件套（临时文件 + rename）
 
@@ -359,11 +363,448 @@ void note_write_warning(std::vector<std::string> *out_warnings, const std::strin
         out_warnings->push_back(detail);
 }
 
+// ---------------------------------------------------------------------------
+// TIFF structure probe（第二轮裁定：多页不支持、缩略图支持）
+// ---------------------------------------------------------------------------
+// 只解析 IFD0/IFD1（不遍历 Exif/GPS 子目录计数），校验：
+//   * IFD 链目录数、IFD1 是否为 reduced-resolution 缩略图；
+//   * strip/tile/JPEG 数据偏移是否在文件内；
+//   * SubIFDs 数量（转码输出必须为 0）。
+// 读整个文件不划算（TIFF 可能数百 MB），这里按需 seek/read。
+struct TiffProbe {
+    bool ok = false;
+    int dirs = 0;
+    int sub_ifds = 0;
+    bool ifd1_thumbnail = false;
+    bool offsets_in_bounds = true;
+    std::string error;
+};
+
+class TiffReader {
+public:
+    explicit TiffReader(const std::filesystem::path &p) : f_(p, std::ios::binary) {
+        if (!f_)
+            return;
+        f_.seekg(0, std::ios::end);
+        const std::streamoff n = f_.tellg();
+        if (n < 0)
+            return;
+        size_ = static_cast<std::uint64_t>(n);
+        open_ = true;
+    }
+    bool open() const { return open_; }
+    std::uint64_t size() const { return size_; }
+
+    bool read_at(std::uint64_t off, void *dst, std::size_t n) {
+        if (off > size_ || n > size_ - off)
+            return false;
+        f_.clear();
+        f_.seekg(static_cast<std::streamoff>(off), std::ios::beg);
+        f_.read(static_cast<char *>(dst), static_cast<std::streamsize>(n));
+        return static_cast<std::size_t>(f_.gcount()) == n;
+    }
+
+private:
+    std::ifstream f_;
+    std::uint64_t size_ = 0;
+    bool open_ = false;
+};
+
+bool tiff_read_u16(TiffReader &r, std::uint64_t off, bool little, std::uint16_t &v) {
+    unsigned char b[2];
+    if (!r.read_at(off, b, sizeof(b)))
+        return false;
+    v = little ? static_cast<std::uint16_t>(b[0] | (b[1] << 8))
+               : static_cast<std::uint16_t>((b[0] << 8) | b[1]);
+    return true;
+}
+
+bool tiff_read_u32(TiffReader &r, std::uint64_t off, bool little, std::uint32_t &v) {
+    unsigned char b[4];
+    if (!r.read_at(off, b, sizeof(b)))
+        return false;
+    v = little
+            ? (static_cast<std::uint32_t>(b[0]) | (static_cast<std::uint32_t>(b[1]) << 8) |
+               (static_cast<std::uint32_t>(b[2]) << 16) | (static_cast<std::uint32_t>(b[3]) << 24))
+            : ((static_cast<std::uint32_t>(b[0]) << 24) | (static_cast<std::uint32_t>(b[1]) << 16) |
+               (static_cast<std::uint32_t>(b[2]) << 8) | static_cast<std::uint32_t>(b[3]));
+    return true;
+}
+
+bool tiff_read_u64(TiffReader &r, std::uint64_t off, bool little, std::uint64_t &v) {
+    unsigned char b[8];
+    if (!r.read_at(off, b, sizeof(b)))
+        return false;
+    v = 0;
+    if (little) {
+        for (int i = 7; i >= 0; --i)
+            v = (v << 8) | b[i];
+    } else {
+        for (int i = 0; i < 8; ++i)
+            v = (v << 8) | b[i];
+    }
+    return true;
+}
+
+// 读取一个 IFD entry 的数值数组；支持 SHORT/LONG/LONG8。返回 false = 越界/类型不支持。
+// `ref` 把字节序/类型/count/两个 value 字段打包，避免 6 个整型相邻参数被误换位。
+struct TiffValueRef {
+    bool little = false;
+    bool big = false;
+    std::uint16_t type = 0;
+    std::uint64_t count = 0;
+    std::uint64_t value_or_off = 0;
+    std::uint64_t value_field_off = 0;
+};
+
+bool tiff_read_values(TiffReader &r, const TiffValueRef &ref, std::vector<std::uint64_t> &out) {
+    const std::uint64_t unit = (ref.type == 3)                     ? 2
+                               : (ref.type == 4 || ref.type == 13) ? 4
+                               : (ref.type == 16)                  ? 8
+                                                                   : 0;
+    if (unit == 0 || ref.count == 0 || ref.count > 1000000)
+        return false;
+    const std::uint64_t bytes = unit * ref.count;
+    const std::uint64_t inline_max = ref.big ? 8 : 4;
+    // count*unit <= inline_max 时数值内联在 entry 的 value 字段里；否则 value 是文件偏移。
+    const std::uint64_t off = (bytes <= inline_max) ? ref.value_field_off : ref.value_or_off;
+    if (bytes > std::numeric_limits<std::size_t>::max())
+        return false;
+    std::vector<unsigned char> buf(static_cast<std::size_t>(bytes));
+    if (!r.read_at(off, buf.data(), buf.size()))
+        return false;
+    out.clear();
+    out.reserve(static_cast<std::size_t>(ref.count));
+    for (std::uint64_t i = 0; i < ref.count; ++i) {
+        std::uint64_t v = 0;
+        const unsigned char *p = buf.data() + static_cast<std::size_t>(i * unit);
+        if (ref.type == 3) {
+            v = ref.little ? static_cast<std::uint64_t>(p[0] | (p[1] << 8))
+                           : static_cast<std::uint64_t>((p[0] << 8) | p[1]);
+        } else if (ref.type == 4 || ref.type == 13) {
+            v = ref.little
+                    ? (static_cast<std::uint64_t>(p[0]) | (static_cast<std::uint64_t>(p[1]) << 8) |
+                       (static_cast<std::uint64_t>(p[2]) << 16) |
+                       (static_cast<std::uint64_t>(p[3]) << 24))
+                    : ((static_cast<std::uint64_t>(p[0]) << 24) |
+                       (static_cast<std::uint64_t>(p[1]) << 16) |
+                       (static_cast<std::uint64_t>(p[2]) << 8) | static_cast<std::uint64_t>(p[3]));
+        } else {
+            for (int k = 7; k >= 0; --k) {
+                const int idx = ref.little ? k : 7 - k;
+                v = (v << 8) | p[idx];
+            }
+        }
+        out.push_back(v);
+    }
+    return true;
+}
+
+TiffProbe probe_tiff_structure(const std::filesystem::path &p) {
+    TiffProbe out;
+    TiffReader r(p);
+    if (!r.open()) {
+        out.error = "cannot open TIFF";
+        return out;
+    }
+    unsigned char hdr[8];
+    if (r.size() < 8 || !r.read_at(0, hdr, 8)) {
+        out.error = "truncated TIFF header";
+        return out;
+    }
+    bool little = false, big = false;
+    if (hdr[0] == 'I' && hdr[1] == 'I')
+        little = true;
+    else if (hdr[0] == 'M' && hdr[1] == 'M')
+        little = false;
+    else {
+        out.error = "not a TIFF (bad byte order)";
+        return out;
+    }
+    const std::uint16_t magic = little ? static_cast<std::uint16_t>(hdr[2] | (hdr[3] << 8))
+                                       : static_cast<std::uint16_t>((hdr[2] << 8) | hdr[3]);
+    if (magic == 42)
+        big = false;
+    else if (magic == 43)
+        big = true;
+    else {
+        out.error = "not a TIFF (bad magic)";
+        return out;
+    }
+    std::uint64_t ifd = 0;
+    if (big) {
+        if (!tiff_read_u64(r, 8, little, ifd)) {
+            out.error = "truncated BigTIFF header";
+            return out;
+        }
+    } else {
+        std::uint32_t ifd32 = 0;
+        if (!tiff_read_u32(r, 4, little, ifd32)) {
+            out.error = "truncated TIFF header";
+            return out;
+        }
+        ifd = ifd32;
+    }
+    const std::uint16_t entry_size = big ? 20 : 12;
+    std::uint64_t main_w = 0, main_h = 0;
+    bool seen = false;
+    while (ifd != 0 && out.dirs < 16) {
+        if (ifd >= r.size()) {
+            out.error = "IFD offset out of bounds";
+            return out;
+        }
+        std::uint64_t n = 0;
+        if (big) {
+            if (!tiff_read_u64(r, ifd, little, n)) {
+                out.error = "truncated IFD count";
+                return out;
+            }
+        } else {
+            // classic TIFF：IFD entry count 是 2 字节 SHORT；BigTIFF 才是 8 字节。
+            std::uint16_t n16 = 0;
+            if (!tiff_read_u16(r, ifd, little, n16)) {
+                out.error = "truncated IFD count";
+                return out;
+            }
+            n = n16;
+        }
+        if (n > 4096) {
+            out.error = "IFD entry count unreasonable: ifd=" + std::to_string(ifd) +
+                        " n=" + std::to_string(n) + " size=" + std::to_string(r.size());
+            return out;
+        }
+        const std::uint64_t entries_off = ifd + (big ? 8 : 2);
+        if (entries_off > r.size() || n * entry_size > r.size() - entries_off) {
+            out.error = "IFD entries out of bounds";
+            return out;
+        }
+        std::uint64_t next = 0;
+        std::uint64_t dir_w = 0, dir_h = 0;
+        std::uint64_t newsub = 0;
+        bool has_newsub = false;
+        std::vector<std::uint64_t> strip_off, strip_len, tile_off, tile_len, jpeg_off, jpeg_len;
+        for (std::uint64_t i = 0; i < n; ++i) {
+            const std::uint64_t e = entries_off + i * entry_size;
+            unsigned char raw[20];
+            if (!r.read_at(e, raw, static_cast<std::size_t>(entry_size))) {
+                out.error = "truncated IFD entry";
+                return out;
+            }
+            const std::uint16_t tag = static_cast<std::uint16_t>(little ? (raw[0] | (raw[1] << 8))
+                                                                        : ((raw[0] << 8) | raw[1]));
+            const std::uint16_t type = static_cast<std::uint16_t>(
+                little ? (raw[2] | (raw[3] << 8)) : ((raw[2] << 8) | raw[3]));
+            std::uint64_t count = 0, value = 0;
+            if (big) {
+                for (int k = 7; k >= 0; --k)
+                    count = (count << 8) | raw[4 + (little ? k : 7 - k)];
+                for (int k = 7; k >= 0; --k)
+                    value = (value << 8) | raw[12 + (little ? k : 7 - k)];
+            } else {
+                for (int k = 3; k >= 0; --k)
+                    count = (count << 8) | raw[4 + (little ? k : 3 - k)];
+                for (int k = 3; k >= 0; --k)
+                    value = (value << 8) | raw[8 + (little ? k : 3 - k)];
+            }
+            const std::uint64_t value_off = e + (big ? 12 : 8);
+            if (tag == 0x0100 || tag == 0x0101) {
+                std::vector<std::uint64_t> v;
+                if (tiff_read_values(r, {little, big, type, count, value, value_off}, v) &&
+                    !v.empty()) {
+                    (tag == 0x0100 ? dir_w : dir_h) = v[0];
+                }
+            } else if (tag == 0x00FE) {
+                std::vector<std::uint64_t> v;
+                if (tiff_read_values(r, {little, big, type, count, value, value_off}, v) &&
+                    !v.empty()) {
+                    newsub = v[0];
+                    has_newsub = true;
+                }
+            } else if (tag == 0x0111 || tag == 0x0117 || tag == 0x0144 || tag == 0x0145 ||
+                       tag == 0x0201 || tag == 0x0202) {
+                std::vector<std::uint64_t> v;
+                if (!tiff_read_values(r, {little, big, type, count, value, value_off}, v)) {
+                    out.offsets_in_bounds = false;
+                    out.error = "bad array value in IFD";
+                    return out;
+                }
+                if (tag == 0x0111)
+                    strip_off = std::move(v);
+                else if (tag == 0x0117)
+                    strip_len = std::move(v);
+                else if (tag == 0x0144)
+                    tile_off = std::move(v);
+                else if (tag == 0x0145)
+                    tile_len = std::move(v);
+                else if (tag == 0x0201)
+                    jpeg_off = std::move(v);
+                else
+                    jpeg_len = std::move(v);
+            } else if (tag == 0x014A) {
+                std::vector<std::uint64_t> v;
+                if (tiff_read_values(r, {little, big, type, count, value, value_off}, v))
+                    out.sub_ifds += static_cast<int>(v.size());
+            }
+            // 通用越界：entry 的 value/count 字段本身已由 entry_size 校验；数据数组在
+            // 上面按 tag 读时校验。ExifIFD/GPSIFD 只需在文件内，不在本探针计数。
+            if (tag == 0x8769 || tag == 0x8825) {
+                if (value >= r.size()) {
+                    out.offsets_in_bounds = false;
+                    out.error = "Exif/GPS IFD offset out of bounds";
+                    return out;
+                }
+            }
+        }
+        const auto check_pairs = [&](const std::vector<std::uint64_t> &offs,
+                                     const std::vector<std::uint64_t> &lens) {
+            for (std::size_t k = 0; k < offs.size(); ++k) {
+                const std::uint64_t len = (k < lens.size()) ? lens[k] : 0;
+                if (len == 0)
+                    continue;
+                if (offs[k] == 0 || offs[k] > r.size() || len > r.size() - offs[k]) {
+                    out.offsets_in_bounds = false;
+                    return false;
+                }
+            }
+            return true;
+        };
+        if (!check_pairs(strip_off, strip_len) || !check_pairs(tile_off, tile_len) ||
+            !check_pairs(jpeg_off, jpeg_len)) {
+            out.error = "image data offset out of bounds";
+            return out;
+        }
+        if (out.dirs == 0) {
+            main_w = dir_w;
+            main_h = dir_h;
+        } else if (out.dirs == 1) {
+            const bool reduced = (has_newsub && (newsub & 1) != 0) ||
+                                 (dir_w > 0 && dir_h > 0 && main_w > 0 && main_h > 0 &&
+                                  dir_w < main_w && dir_h < main_h);
+            out.ifd1_thumbnail = reduced;
+        }
+        seen = true;
+        ++out.dirs;
+        const std::uint64_t next_off = ifd + (big ? 8 : 2) + n * entry_size;
+        if (big) {
+            if (!tiff_read_u64(r, next_off, little, next)) {
+                out.error = "truncated next-IFD pointer";
+                return out;
+            }
+        } else {
+            std::uint32_t next32 = 0;
+            if (!tiff_read_u32(r, next_off, little, next32)) {
+                out.error = "truncated next-IFD pointer";
+                return out;
+            }
+            next = next32;
+        }
+        if (next != 0 && next <= ifd) {
+            out.error = "IFD chain loop/backwards";
+            return out;
+        }
+        ifd = next;
+    }
+    if (!seen) {
+        out.error = "no IFD";
+        return out;
+    }
+    out.ok = true;
+    return out;
+}
+
+struct TiffExpect {
+    int min_dirs = 0;
+    int max_dirs = 0;
+    bool transcode = false;
+};
+
+// 转码输出净化：多页页组 / SubIFD 删除；合法 reduced-resolution 缩略图保留整组。
+// 仅对转码路径调用；metadata-only 必须保留原 IFD 链。
+void sanitize_transcode_metadata_impl(MetadataPlan &plan) {
+    Exiv2::ExifData &exif = plan.exif;
+    const auto find_int = [&exif](const char *key) -> std::optional<int64_t> {
+        const auto it = exif.findKey(Exiv2::ExifKey(key));
+        if (it == exif.end())
+            return std::nullopt;
+        try {
+            return it->toInt64();
+        } catch (...) {
+            return std::nullopt;
+        }
+    };
+    const std::optional<int64_t> mw = find_int("Exif.Image.ImageWidth");
+    const std::optional<int64_t> mh = find_int("Exif.Image.ImageLength");
+    const std::optional<int64_t> tw = find_int("Exif.Thumbnail.ImageWidth");
+    const std::optional<int64_t> th = find_int("Exif.Thumbnail.ImageLength");
+    const std::optional<int64_t> nsf = find_int("Exif.Thumbnail.NewSubfileType");
+    const bool has_thumb_data =
+        exif.findKey(Exiv2::ExifKey("Exif.Thumbnail.JPEGInterchangeFormat")) != exif.end() ||
+        exif.findKey(Exiv2::ExifKey("Exif.Thumbnail.StripOffsets")) != exif.end();
+    const bool reduced = (nsf.has_value() && (*nsf & 1) != 0) ||
+                         (tw.has_value() && th.has_value() && mw.has_value() && mh.has_value() &&
+                          *tw > 0 && *th > 0 && *mw > 0 && *mh > 0 && *tw < *mw && *th < *mh);
+    const bool keep_thumbnail = has_thumb_data && reduced;
+
+    const auto erase_prefix = [&exif](std::string_view prefix) {
+        for (auto it = exif.begin(); it != exif.end();) {
+            if (it->key().rfind(prefix, 0) == 0)
+                it = exif.erase(it);
+            else
+                ++it;
+        }
+    };
+    if (!keep_thumbnail)
+        erase_prefix("Exif.Thumbnail.");
+    // 多页/子图：Exiv2 的组名是 Image2/Image3（IFD2/IFD3）与 SubImage1..9（SubIFDs）。
+    erase_prefix("Exif.Image2.");
+    erase_prefix("Exif.Image3.");
+    erase_prefix("Exif.SubImage");
+
+    // IFD0 的源结构标签会覆盖新产物；删掉（缩略图的同名标签属于 Exif.Thumbnail，不受影响）。
+    static constexpr std::string_view kStructural[] = {
+        "Exif.Image.ImageWidth",
+        "Exif.Image.ImageLength",
+        "Exif.Image.BitsPerSample",
+        "Exif.Image.Compression",
+        "Exif.Image.PhotometricInterpretation",
+        "Exif.Image.StripOffsets",
+        "Exif.Image.RowsPerStrip",
+        "Exif.Image.StripByteCounts",
+        "Exif.Image.PlanarConfiguration",
+        "Exif.Image.Predictor",
+        "Exif.Image.TileWidth",
+        "Exif.Image.TileLength",
+        "Exif.Image.TileOffsets",
+        "Exif.Image.TileByteCounts",
+        "Exif.Image.SamplesPerPixel",
+        "Exif.Image.ExtraSamples",
+        "Exif.Image.SampleFormat",
+        "Exif.Image.NewSubfileType",
+        "Exif.Image.SubfileType",
+        "Exif.Image.FillOrder",
+        "Exif.Image.JPEGInterchangeFormat",
+        "Exif.Image.JPEGInterchangeFormatLength",
+        "Exif.Image.InterColorProfile",
+    };
+    for (const std::string_view k : kStructural) {
+        const auto it = exif.findKey(Exiv2::ExifKey(std::string(k)));
+        if (it != exif.end())
+            exif.erase(it);
+    }
+    // TIFF-07：Exiv2 后写会用 plan.exif 重建 IFD0；若 plan 没有 Exif.Image.DateTime，
+    // 编码器写进去的 tag 306 会被重写掉。这里从 DateTimeOriginal 补一份，保证可复现。
+    if (exif.findKey(Exiv2::ExifKey("Exif.Image.DateTime")) == exif.end()) {
+        const auto src = exif.findKey(Exiv2::ExifKey("Exif.Photo.DateTimeOriginal"));
+        if (src != exif.end() && !src->toString().empty())
+            exif["Exif.Image.DateTime"] = src->toString();
+    }
+}
+
 // Exiv2 read/modify/write **in place on `file`**；空容器 => remove that metadata section。
 // 注意：本函数可能截断重写（Exiv2 内部行为），调用方必须只把它用在**临时副本**上
 // （R-002：写回一律 临时文件 + rename，见 exiv2_apply_atomic / rewrite_metadata_only）。
 std::string exiv2_apply(const std::filesystem::path &file, const Exiv2::ExifData *exif,
-                        const Exiv2::XmpData *xmp) {
+                        const Exiv2::XmpData *xmp, bool clear_extra = false) {
     if (exif != nullptr)
         log_makernote(*exif, "MetaWrite");
     try {
@@ -374,6 +815,21 @@ std::string exiv2_apply(const std::filesystem::path &file, const Exiv2::ExifData
         if (!img)
             return "exiv2: cannot open " + file.string();
         img->readMetadata();
+        if (clear_extra) {
+            // 隐私剥除：EXIF/XMP 之外，IPTC（APP13）与 COM 也属于可识别内容。
+            // 用 set-empty 而非 clear*；容器不支持 IPTC/COM 时 Exiv2 会抛异常，这里逐项吞掉
+            // （该容器本来也没有可清的 IPTC/COM，不能因此让隐私剥除整体失败）。
+            try {
+                img->setIptcData(Exiv2::IptcData{});
+            } catch (...) {
+                (void)0; // 容器不支持 IPTC：本来无内容可清，隐私剥除继续
+            }
+            try {
+                img->setComment("");
+            } catch (...) {
+                (void)0; // 容器不支持 COM：同上
+            }
+        }
         if (exif == nullptr || exif->empty()) {
             img->clearExifData();
         } else {
@@ -399,7 +855,8 @@ std::string exiv2_apply(const std::filesystem::path &file, const Exiv2::ExifData
 // 是截断重写 —— 直接作用最终文件时，磁盘满/杀进程/文件被占会把已编码好的输出截断成坏文件。
 // 这里把改动落在同目录临时副本上，成功才 commit 覆盖；失败清场，目标文件保持原样。
 std::string exiv2_apply_atomic(const std::filesystem::path &file, const Exiv2::ExifData *exif,
-                               const Exiv2::XmpData *xmp) {
+                               const Exiv2::XmpData *xmp, const TiffExpect *tiff_expect = nullptr,
+                               bool clear_extra = false) {
     namespace fs = std::filesystem;
     const fs::path tmp = atomic_temp_path(file);
     if (tmp.empty())
@@ -413,10 +870,40 @@ std::string exiv2_apply_atomic(const std::filesystem::path &file, const Exiv2::E
         return "exiv2: cannot stage " + file.string() + " -> " + tmp.string() + ": " +
                cp_ec.message();
     }
-    const std::string err = exiv2_apply(tmp, exif, xmp);
+    const std::string err = exiv2_apply(tmp, exif, xmp, clear_extra);
     if (!err.empty()) {
         discard_temp_file(tmp);
         return err;
+    }
+    // 第二轮裁定：TIFF 多页/动画不支持、缩略图支持。元数据重写必须在 **commit 前** 验证
+    // 产物 IFD 结构；否则坏文件已经覆盖了原本有效的编码产物。
+    if (tiff_expect != nullptr) {
+        const TiffProbe probe = probe_tiff_structure(tmp);
+        bool bad = !probe.ok;
+        std::string why = probe.error;
+        if (!bad) {
+            if (probe.dirs < tiff_expect->min_dirs || probe.dirs > tiff_expect->max_dirs) {
+                bad = true;
+                why = "TIFF directory count " + std::to_string(probe.dirs) + " outside [" +
+                      std::to_string(tiff_expect->min_dirs) + "," +
+                      std::to_string(tiff_expect->max_dirs) + "]";
+            } else if (tiff_expect->transcode && probe.sub_ifds > 0) {
+                bad = true;
+                why = "TIFF output carries SubIFDs";
+            } else if (tiff_expect->transcode && probe.dirs == 2 && !probe.ifd1_thumbnail) {
+                bad = true;
+                why = "TIFF IFD1 is not a reduced-resolution thumbnail";
+            } else if (!probe.offsets_in_bounds) {
+                bad = true;
+                why = "TIFF image data offsets out of bounds";
+            }
+        }
+        if (bad) {
+            log_warn("MetaWrite", "metadata.cpp", "tiff probe rejected temp",
+                     {{"tmp", tmp.string()}, {"why", why}});
+            discard_temp_file(tmp);
+            return "exiv2: tiff structure check failed: " + why;
+        }
     }
     std::string commit_err;
     if (!commit_temp_file(tmp, file, &commit_err)) {
@@ -694,6 +1181,9 @@ int apply_time_shift(Exiv2::ExifData &exif, Exiv2::XmpData &xmp, const TimeShift
 
 } // namespace
 
+// 第二轮裁定：转码元数据净化（public 面，内部实现留在匿名 namespace）。
+void sanitize_transcode_metadata(MetadataPlan &plan) { sanitize_transcode_metadata_impl(plan); }
+
 // R1 fallback helper (defined at the bottom of this file): mirror the EXIF fields that a
 // container cannot carry into XMP. Outside the frozen interface; the unit test declares it too.
 std::size_t detail_mirror_key_exif_to_xmp(const Exiv2::ExifData &exif, Exiv2::XmpData &xmp);
@@ -831,6 +1321,7 @@ MetadataPlan build_plan(const SourceMeta &src, const BatchRules &rules,
     // 隐私剥除优先级最高：剥除后不得再写任何 EXIF/XMP 字段（§4.5）
     if (eff.strip_privacy) {
         strip_privacy(plan.exif, plan.xmp);
+        plan.strip_privacy = true;
         plan.has_time = false;
         plan.datetime_original.clear();
         return plan;
@@ -1020,13 +1511,18 @@ std::string write_metadata_exiv2(const std::filesystem::path &out_file, const Me
         log_info("MetaWrite", "metadata.cpp", "bmp output carries no metadata container");
         return {};
     }
-    if (plan.exif.empty() && plan.xmp.empty()) {
-        return {}; // nothing to write (e.g. privacy strip): the encoder output carries none
+    if (plan.exif.empty() && plan.xmp.empty() && !plan.strip_privacy) {
+        return {}; // nothing to write: the encoder output carries none
     }
 
     // R-002（P0）：写回改临时文件 + rename（exiv2_apply_atomic）。写失败 = 真失败：
     // 返回非空错误、目标文件保持编码产物原样（不再吞成 warning + 成功）。
-    std::string err = exiv2_apply_atomic(out_file, &plan.exif, &plan.xmp);
+    // 第二轮裁定：转码 TIFF 只允许 1 个 IFD，或 2 个 IFD 且 IFD1 是合法缩略图；
+    // 多页/SubIFD/越界偏移必须在 commit 前拒绝。
+    const bool is_tiff = (ext == ".tif" || ext == ".tiff");
+    const TiffExpect tiff_expect{1, 2, true};
+    std::string err = exiv2_apply_atomic(out_file, &plan.exif, &plan.xmp,
+                                         is_tiff ? &tiff_expect : nullptr, plan.strip_privacy);
     if (err.empty() && (!is_png || key_exif_landed(out_file, plan.exif)))
         return {};
 
@@ -1146,10 +1642,23 @@ std::string rewrite_metadata_only(const std::filesystem::path &src,
         discard_temp_file(tmp);
         return "copy " + src.string() + " -> " + out.string() + " failed: " + ec.message();
     }
-    const std::string err = exiv2_apply(tmp, &plan.exif, &plan.xmp);
+    const std::string err = exiv2_apply(tmp, &plan.exif, &plan.xmp, plan.strip_privacy);
     if (!err.empty()) {
         discard_temp_file(tmp);
         return err;
+    }
+    // 仅元数据：保留原 IFD 链（多页可保留）；断言目录数不变、偏移在界内。
+    const std::string ext = lower_copy(out.extension().string());
+    if (ext == ".tif" || ext == ".tiff") {
+        const TiffProbe before = probe_tiff_structure(src);
+        const TiffProbe after = probe_tiff_structure(tmp);
+        if (!before.ok || !after.ok || after.dirs != before.dirs ||
+            after.sub_ifds != before.sub_ifds || !after.offsets_in_bounds) {
+            discard_temp_file(tmp);
+            return "exiv2: metadata-only TIFF structure changed (" +
+                   std::string(before.error.empty() ? "ok" : before.error) + " -> " +
+                   std::string(after.error.empty() ? "ok" : after.error) + ")";
+        }
     }
     std::string commit_err;
     if (!commit_temp_file(tmp, out, &commit_err)) {

@@ -73,8 +73,10 @@ inline __m128i quantize8_avx2_8(__m256 v) {
 // ============================================================================================
 // 1) flatten —— alpha 合成到常量底色 + 原地缩通道
 // ============================================================================================
-// ref = 既有 pipeline 标量循环的逐字重写（src/core/pipeline.cpp flatten_alpha_in_place）：
-//   逐像素 a = clamp(alpha,0,1)；t = bg*(1-a)；dst[c] = fma(src[c], a, t)。
+// ref = associated（预乘）alpha 的合成：a = clamp(alpha,0,1)；t = bg*(1-a)；
+//   dst[c] = src[c] + t（src 已含 alpha；不要再乘 a）。
+// 第二轮裁定：alpha 不支持，管线在 color 前把输入拍平；OIIO 解码默认返回 associated，
+// 故这里按预乘空间合成（JXL 直通源由 decode 先补乘 alpha）。
 void flatten_ref(const float *src, float *dst, std::size_t npix, int ch, float bg) {
     assert(ch == 2 || ch == 4);
     if (ch != 2 && ch != 4)
@@ -87,8 +89,7 @@ void flatten_ref(const float *src, float *dst, std::size_t npix, int ch, float b
         const float a = std::clamp(src[s + static_cast<std::size_t>(ch - 1)], 0.0f, 1.0f);
         const float t = b * (1.0f - a);
         for (int c = 0; c < out_ch; ++c)
-            dst[d + static_cast<std::size_t>(c)] =
-                std::fma(src[s + static_cast<std::size_t>(c)], a, t);
+            dst[d + static_cast<std::size_t>(c)] = src[s + static_cast<std::size_t>(c)] + t;
     }
 }
 
@@ -129,8 +130,10 @@ void flatten_avx2(const float *src, float *dst, std::size_t npix, int ch, float 
                 _mm256_min_ps(one8, _mm256_max_ps(zero8, _mm256_shuffle_ps(y0, y0, 0xFF)));
             const __m256 a1 =
                 _mm256_min_ps(one8, _mm256_max_ps(zero8, _mm256_shuffle_ps(y1, y1, 0xFF)));
-            const __m256 w0 = _mm256_fmadd_ps(y0, a0, _mm256_mul_ps(bg8, _mm256_sub_ps(one8, a0)));
-            const __m256 w1 = _mm256_fmadd_ps(y1, a1, _mm256_mul_ps(bg8, _mm256_sub_ps(one8, a1)));
+            const __m256 t0 = _mm256_mul_ps(bg8, _mm256_sub_ps(one8, a0));
+            const __m256 t1 = _mm256_mul_ps(bg8, _mm256_sub_ps(one8, a1));
+            const __m256 w0 = _mm256_add_ps(y0, t0); // NOLINT(portability-simd-intrinsics)
+            const __m256 w1 = _mm256_add_ps(y1, t1); // NOLINT(portability-simd-intrinsics)
             _mm_storeu_ps(dst + i * 3, _mm256_castps256_ps128(w0));       // R0 G0 B0 (+垃圾)
             _mm_storeu_ps(dst + i * 3 + 3, _mm256_extractf128_ps(w0, 1)); // R1 G1 B1 (+垃圾)
             _mm_storeu_ps(dst + i * 3 + 6, _mm256_castps256_ps128(w1));   // R2 G2 B2 (+垃圾)
@@ -141,7 +144,8 @@ void flatten_avx2(const float *src, float *dst, std::size_t npix, int ch, float 
             const __m256 y = _mm256_loadu_ps(s0); // [R0 G0 B0 A0 R1 G1 B1 A1]
             const __m256 a =
                 _mm256_min_ps(one8, _mm256_max_ps(zero8, _mm256_shuffle_ps(y, y, 0xFF)));
-            const __m256 w = _mm256_fmadd_ps(y, a, _mm256_mul_ps(bg8, _mm256_sub_ps(one8, a)));
+            const __m256 t = _mm256_mul_ps(bg8, _mm256_sub_ps(one8, a));
+            const __m256 w = _mm256_add_ps(y, t); // NOLINT(portability-simd-intrinsics)
             _mm_storeu_ps(dst + i * 3, _mm256_castps256_ps128(w));
             _mm_storeu_ps(dst + i * 3 + 3, _mm256_extractf128_ps(w, 1));
         }
@@ -155,8 +159,10 @@ void flatten_avx2(const float *src, float *dst, std::size_t npix, int ch, float 
                 clamp_alpha(_mm_shuffle_ps(x0, x0, _MM_SHUFFLE(3, 3, 1, 1)), zero4, one4);
             const __m128 a1 =
                 clamp_alpha(_mm_shuffle_ps(x1, x1, _MM_SHUFFLE(3, 3, 1, 1)), zero4, one4);
-            const __m128 o0 = _mm_fmadd_ps(x0, a0, _mm_mul_ps(b4, _mm_sub_ps(one4, a0)));
-            const __m128 o1 = _mm_fmadd_ps(x1, a1, _mm_mul_ps(b4, _mm_sub_ps(one4, a1)));
+            const __m128 t0 = _mm_mul_ps(b4, _mm_sub_ps(one4, a0));
+            const __m128 t1 = _mm_mul_ps(b4, _mm_sub_ps(one4, a1));
+            const __m128 o0 = _mm_add_ps(x0, t0); // NOLINT(portability-simd-intrinsics)
+            const __m128 o1 = _mm_add_ps(x1, t1); // NOLINT(portability-simd-intrinsics)
             // 每半区取车道 0,2 → [V0 V1 V2 V3]（一次 16B 存储，无垃圾车道）
             _mm_storeu_ps(dst + i, _mm_shuffle_ps(o0, o1, _MM_SHUFFLE(2, 0, 2, 0)));
         }

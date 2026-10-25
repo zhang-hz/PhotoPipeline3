@@ -146,14 +146,16 @@ void test_flatten() {
             }
         }
     }
-    // ④ 手算真值：单像素 RGBA，a = 0.25，bg = 0.5 → c*0.25 + 0.5*0.75
+    // ④ 手算真值（第二轮裁定：flatten 输入是 associated/预乘）：
+    //    单像素 RGBA，a = 0.25，bg = 0.5 → src[c] + 0.5*0.75（不再乘 alpha）。
     {
         const float src[4] = {1.0f, 0.4f, 0.0f, 0.25f};
         float out[3] = {0, 0, 0};
         pp::simd::flatten(src, out, 1, 4, 0.5f);
-        const float e0 = std::fma(1.0f, 0.25f, 0.5f * 0.75f);
-        const float e1 = std::fma(0.4f, 0.25f, 0.5f * 0.75f);
-        const float e2 = std::fma(0.0f, 0.25f, 0.5f * 0.75f);
+        const float t = 0.5f * 0.75f;
+        const float e0 = 1.0f + t;
+        const float e1 = 0.4f + t;
+        const float e2 = 0.0f + t;
         check(out[0] == e0 && out[1] == e1 && out[2] == e2, "flatten/known-truth",
               "got [" + std::to_string(out[0]) + "," + std::to_string(out[1]) + "," +
                   std::to_string(out[2]) + "]");
@@ -165,7 +167,8 @@ void test_flatten() {
         const float s3[4] = {0.2f, 0.2f, 0.2f, -1.0f};
         float o3[3] = {0, 0, 0};
         pp::simd::flatten(s3, o3, 1, 4, 0.5f);
-        check(o3[0] == 0.5f, "flatten/alpha-clamp-lo", "got " + std::to_string(o3[0]));
+        // a=0 → 底色 0.5；预乘源 0.2 加底色 = 0.7（不是纯底色）。
+        check(o3[0] == 0.7f, "flatten/alpha-clamp-lo", "got " + std::to_string(o3[0]));
     }
 }
 

@@ -103,7 +103,8 @@
 
 #include "core/fsops.h" // R-006/R-073：补齐预检的路径渲染 + 输出根试建/试写探针
 #include "core/logger.h"
-#include "core/params.h" // R-006：find_format（补齐预检取目标扩展名）
+#include "core/params.h"   // R-006：find_format（补齐预检取目标扩展名）
+#include "core/pipeline.h" // 仅元数据：源格式解析 / path_ctx_for 单源
 #include "core/settings.h"
 #include "core/version.h" // R-150：版本徽标取 PP_VERSION_STRING（单源 = CMakeLists.txt:19 生成链）
 #include "decode/oiio_reader.h" // M4-T12：探针的 probe 摘要（与列表模型同一条 oiio probe 通道）
@@ -153,13 +154,10 @@ bool entry_outputs_complete(const pp::FileEntry &entry, const pp::RunConfig &cfg
         return false;
     for (const pp::OutputFormatSpec &spec : cfg.outputs) {
         const pp::FormatDef *fmt = pp::find_format(spec.format_id);
-        if (fmt == nullptr)
+        if (!cfg.metadata_only && fmt == nullptr)
             return false;
-        pp::PathCtx ctx;
-        ctx.format_dir = fmt->id;
-        ctx.rel_dir = pp::relative_dir(entry.src, entry.base_dir);
-        ctx.stem = entry.src.stem().string();
-        ctx.ext = fmt->ext;
+        // 与引擎同源：metadata-only 的路径按**源格式**渲染（$format/扩展名），不认目标格式。
+        const pp::PathCtx ctx = pp::path_ctx_for(entry, cfg, fmt);
         const std::filesystem::path desired =
             pp::render_output_path(cfg.output_template, ctx, cfg.out_root);
         if (desired.empty())
@@ -184,13 +182,9 @@ std::size_t remove_zero_byte_outputs(const pp::FileEntry &entry, const pp::RunCo
     std::size_t removed = 0;
     for (const pp::OutputFormatSpec &spec : cfg.outputs) {
         const pp::FormatDef *fmt = pp::find_format(spec.format_id);
-        if (fmt == nullptr)
+        if (!cfg.metadata_only && fmt == nullptr)
             continue;
-        pp::PathCtx ctx;
-        ctx.format_dir = fmt->id;
-        ctx.rel_dir = pp::relative_dir(entry.src, entry.base_dir);
-        ctx.stem = entry.src.stem().string();
-        ctx.ext = fmt->ext;
+        const pp::PathCtx ctx = pp::path_ctx_for(entry, cfg, fmt);
         const std::filesystem::path desired =
             pp::render_output_path(cfg.output_template, ctx, cfg.out_root);
         if (desired.empty())
@@ -220,10 +214,10 @@ QString path_text(const std::filesystem::path &p) {
 }
 
 bool is_metadata_only_format(const QString &suffix) {
-    static const QStringList ok{QStringLiteral("jpg"),  QStringLiteral("jpeg"),
-                                QStringLiteral("png"),  QStringLiteral("tif"),
-                                QStringLiteral("tiff"), QStringLiteral("webp")};
-    return ok.contains(suffix);
+    // 与引擎同源：扩展名 → 源格式 → 仅元数据能力（不再维护 UI 侧第二份白名单）。
+    const std::filesystem::path probe = std::filesystem::path("probe." + suffix.toStdString());
+    const pp::FormatDef *fmt = pp::format_for_source_path(probe);
+    return fmt != nullptr && pp::format_supports_metadata_only(fmt->id);
 }
 
 namespace {
@@ -322,11 +316,8 @@ void MainWindow::on_start() {
     cfg.stagger_ms = d.settings.stagger_ms;
     cfg.thread_budget = d.settings.thread_budget;
 
-    // R-074：仅元数据模式的冲突策略改 Skip（原默认 Rename 会静默产出 "photo (1).jpg" 副本，
-    // 新元数据落在副本上、用户拿旧文件交差）。仅作用于 GUI 下发路径；--dev/金样走 CLI 默认面
-    // （main.cpp 的 overwrite），回归基线零影响。
-    if (cfg.metadata_only)
-        cfg.conflict = pp::ConflictPolicy::Skip;
+    // X-METADATA-ONLY-02：仅元数据模式不再静默把冲突策略改成 Skip；下拉显示什么就执行什么。
+    // （旧行为会造成“界面选覆盖/改名，实际全部跳过”的两张皮。）
 
     // R-073：输出根预检（试建 + 试写探针，fsops::probe_output_root）—— 不可建/不可写时
     // 在**开跑之前**拦下，不再"逐文件失败跑到底、结束语还说可打开输出目录"。
@@ -346,10 +337,12 @@ void MainWindow::on_start() {
     // 0.3.0 多输出：逐输出求值（T13 起 outputs 可能 >1，UI 现在恒 1 项）。
     {
         std::vector<std::string> cross;
-        for (const pp::OutputFormatSpec &spec : cfg.outputs) {
-            const std::vector<std::string> msgs =
-                pp::cross_validate(spec.params, spec.format_id, spec.tech_id);
-            cross.insert(cross.end(), msgs.begin(), msgs.end());
+        if (!cfg.metadata_only) { // 仅元数据：无编码参数，不校验目标格式的参数集
+            for (const pp::OutputFormatSpec &spec : cfg.outputs) {
+                const std::vector<std::string> msgs =
+                    pp::cross_validate(spec.params, spec.format_id, spec.tech_id);
+                cross.insert(cross.end(), msgs.begin(), msgs.end());
+            }
         }
         if (!cross.empty()) {
             QStringList lines;
@@ -391,6 +384,33 @@ void MainWindow::on_start() {
     // 参与运行集合（M4-T11：勾选口径；顺序 = 列表行序）
     std::vector<std::size_t> run_rows = d.model->checked_rows();
     std::vector<pp::FileEntry> entries = d.model->checked_entries(); // 含单文件例外（引擎侧生效）
+
+    // X-METADATA-ONLY-01：输出根子树不得参与本轮输入（否则上一轮产物被当输入，规则二次施加）。
+    // 同时过滤 run_rows，保持“列表行 ↔ 运行集”一一对应。
+    {
+        const std::filesystem::path out_root(cfg.out_root);
+        if (!out_root.empty()) {
+            std::size_t skipped = 0;
+            std::vector<std::size_t> kept_rows;
+            std::vector<pp::FileEntry> kept;
+            kept_rows.reserve(run_rows.size());
+            kept.reserve(entries.size());
+            for (std::size_t i = 0; i < entries.size() && i < run_rows.size(); ++i) {
+                if (pp::is_inside(entries[i].src, out_root)) {
+                    ++skipped;
+                    continue;
+                }
+                kept_rows.push_back(run_rows[i]);
+                kept.push_back(std::move(entries[i]));
+            }
+            if (skipped > 0) {
+                pp::log_warn("run", "mainwindow_run.cpp", "skipped inputs under output root",
+                             {{"out_root", out_root.string()}, {"count", std::to_string(skipped)}});
+            }
+            run_rows.swap(kept_rows);
+            entries.swap(kept);
+        }
+    }
 
     // R-067：过滤视图与运行集语义冲突 —— 过滤只改可见行，勾选/运行集是全局的。
     // 运行前置提示"参与集含 N 个被过滤隐藏的文件"（唯一线索不再是底栏数字）。
@@ -479,8 +499,19 @@ void MainWindow::on_start() {
     // 输出格式清单（= 配置顺序，逐输出子行的格式 chip 与行数）+ 调度读数。
     {
         PageRun::RunPlan plan;
-        for (const pp::OutputFormatSpec &spec : cfg.outputs)
-            plan.format_ids << QString::fromStdString(spec.format_id);
+        if (cfg.metadata_only) {
+            // 仅元数据：产物格式跟随每个源文件（可能是混合批次）——运行页的格式 chip 必须
+            // 报真实源格式，不能报 UI 里那个被忽略的目标格式（旧口径会显示 jxl 而产物是 jpg）。
+            for (const pp::FileEntry &entry : entries) {
+                const pp::FormatDef *src_fmt = pp::format_for_source_path(entry.src);
+                const QString id = QString::fromStdString(src_fmt ? src_fmt->id : std::string("?"));
+                if (!plan.format_ids.contains(id))
+                    plan.format_ids << id;
+            }
+        } else {
+            for (const pp::OutputFormatSpec &spec : cfg.outputs)
+                plan.format_ids << QString::fromStdString(spec.format_id);
+        }
         plan.widths.reserve(static_cast<int>(total));
         plan.heights.reserve(static_cast<int>(total));
         plan.bytes.reserve(static_cast<int>(total));

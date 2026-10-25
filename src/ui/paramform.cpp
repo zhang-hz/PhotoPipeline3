@@ -399,7 +399,8 @@ struct ParamForm::Impl {
         bool advanced = false;
         SubGroup subgroup = SubGroup::Tools;
         bool locked = false;
-        bool shown = true; // 谓词可见 且 通过高级区搜索过滤（is_param_visible 口径）
+        bool eligible = true; // 谓词可见 且 通过高级区搜索过滤（**不含**子分组折叠态）
+        bool shown = true;    // eligible + 所在子分组已展开（is_param_visible 口径）
     };
     std::vector<Row> rows;
 
@@ -505,9 +506,17 @@ struct ParamForm::Impl {
             lossless_check = row.box;
             // T13 复核项 5：tooltip 同时点明两个承载面（显式 schema 参数 + 内部管道键），
             // 不再只说保留键 —— 用户面看到的是"无损输出"这一件事，落盘/下发/编码各自由两键承担。
-            lossless_check->setToolTip(ParamForm::tr(
-                "无损输出（显式 schema 参数 lossless：可落盘进预设、可校验；同时同步内部管道键 "
-                "__lossless 供参数谓词与编码器读取）；开启后视觉距离按 0 处理（忽略视觉距离）"));
+            lossless_check->setToolTip(
+                ParamForm::tr(
+                    "无损输出（显式 schema 参数 lossless：可落盘进预设、可校验；同时同步内部管道键 "
+                    "__lossless 供参数谓词与编码器读取）；开启后视觉距离按 0 "
+                    "处理（忽略视觉距离）") +
+                ((fmt->id == "heif" || fmt->id == "avif")
+                     ? ParamForm::tr("。本格式无损强制 4:4:4（4:2:0/4:2:2 会抽样色度，不是"
+                                     "无损）；HEVC/AV1 的无损是 YCbCr 平面无损，RGB↔YCbCr 往返"
+                                     "有舍入（不是逐位）；HEIF 超过 16 MP 会自动用标准 grid 分块"
+                                     "以避开 libde265 的单图解码上限")
+                     : QString()));
             root->addWidget(row.row);
         }
         QObject::connect(lossless_check, &formkit::CheckBox::toggled, q, [this](bool on) {
@@ -587,7 +596,17 @@ struct ParamForm::Impl {
         }
         update_tech_items_enabled();
         // 注意：isVisible() 会被祖先的可见性污染（构造期整页未 show → 恒 false）→ 用语义判据
-        const bool has_lossless = first_lossless_tech_in(b) != nullptr;
+        bool has_lossless = first_lossless_tech_in(b) != nullptr;
+        // TIFF/PNG/BMP 的压缩方案恒无损且不声明 lossless 参数：勾选框恒无效 →
+        // 不再显示"未勾选"的假控件（TIFF-06/PNG-08/BMP-06）。
+        if (has_lossless && !declares_lossless(*fmt, b->id, sel.tech) &&
+            (fmt->id == "tiff" || fmt->id == "png" || fmt->id == "bmp"))
+            has_lossless = false;
+        // AVIF + SVT-AV1 无无损通路：勾选框必须不可选（否则“可点但必失败”）。
+        if (has_lossless && fmt->id == "avif" && sel.backend == "svt-av1") {
+            has_lossless = false;
+            sel.lossless = false;
+        }
         lossless_check->setVisible(has_lossless);
         lossless_check->setChecked(sel.lossless);
         lossless_row.row->setVisible(has_lossless);
@@ -606,19 +625,21 @@ struct ParamForm::Impl {
     int count_advanced() const {
         int total = 0;
         for (const Row &r : rows)
-            if (r.advanced)
+            if (r.advanced && r.eligible)
                 ++total;
         return total;
     }
 
     // 高级区摘要（折叠头左侧 hint 行；mockup 同序）—— UX-8 起折叠头右侧只显「N 项」计数 + chevron。
+    // 只统计 **当前谓词/搜索过滤后仍可选** 的行：JXL 无损下 vardct-only 行全隐，若仍按表内
+    // 总数报「12 项」，用户点开只看到 3 行，会被当成"选项显示不全"。
     QString advanced_summary() const {
         if (count_advanced() == 0)
             return QString();
         QStringList names;
         for (const SubGroup g : kSubGroupOrder) {
             const bool any = std::any_of(rows.begin(), rows.end(), [g](const Row &r) {
-                return r.advanced && r.subgroup == g;
+                return r.advanced && r.eligible && r.subgroup == g;
             });
             if (any)
                 names << subgroup_title(g);
@@ -875,7 +896,8 @@ struct ParamForm::Impl {
         s[kLosslessKey] = sel.lossless;
         if (effective)
             for (const pp::ParamDef &p : effective->params)
-                s[p.key] = p.def;
+                if (p.has_default) // AVIF-01：可选覆盖参数不写默认值
+                    s[p.key] = p.def;
         return s;
     }
 
@@ -962,18 +984,20 @@ struct ParamForm::Impl {
         const QString filter = adv_search ? adv_search->text() : QString();
         const bool filter_active = !filter.isEmpty();
         for (Row &r : rows) {
-            bool shown = pp::eval_visible(*r.def, values); // 条 4：不可见 → 行隐藏
-            if (shown && r.advanced) {
-                if (filter_active) {
-                    const QString label = QString::fromStdString(r.def->label);
-                    const QString key = QString::fromStdString(r.key);
-                    shown = label.contains(filter, Qt::CaseInsensitive) ||
-                            key.contains(filter, Qt::CaseInsensitive); // 条 3：包含过滤
-                } else {
-                    // UX-8：二级折叠 —— 收起的子分组隐藏其行（搜索中则穿透折叠，见上）
-                    const int gi = static_cast<int>(r.subgroup);
-                    shown = gi >= 0 && gi < 4 && group_expanded[gi];
-                }
+            bool eligible = pp::eval_visible(*r.def, values); // 条 4：不可见 → 行隐藏
+            if (eligible && r.advanced && filter_active) {
+                const QString label = QString::fromStdString(r.def->label);
+                const QString key = QString::fromStdString(r.key);
+                eligible = label.contains(filter, Qt::CaseInsensitive) ||
+                           key.contains(filter, Qt::CaseInsensitive); // 条 3：包含过滤
+            }
+            r.eligible = eligible;
+            // 折叠只决定"行是否显示"，不参与"该子分组是否存在可见项"的判定 —— 否则收起
+            // 一个子分组会把它的折叠头也隐藏掉，用户再也点不开（原实现即此病灶）。
+            bool shown = eligible;
+            if (shown && r.advanced && !filter_active) {
+                const int gi = static_cast<int>(r.subgroup);
+                shown = gi >= 0 && gi < 4 && group_expanded[gi];
             }
             r.shown = shown;
             if (r.row != nullptr)
@@ -988,11 +1012,11 @@ struct ParamForm::Impl {
             if (r.def->type != pp::ParamType::Bool && r.editor != nullptr)
                 theme::set_mod(r.editor, deviates && !r.locked);
         }
-        // UX-8：子分组折叠头 —— 本组无可见行 → 连头隐藏（过滤后不留空标题）；
-        // 搜索中折叠态临时穿透（行已按过滤显示），收起/展开态与 chevron 同步。
+        // UX-8：子分组折叠头 —— 本组无**可选**行（谓词/搜索过滤后）→ 连头隐藏（过滤后不留
+        // 空标题）；折叠态不再影响折叠头的可见性（否则收起后无法再展开，见上）。
         for (const auto &[group, toggle] : subgroup_headers) {
             const bool any = std::any_of(rows.begin(), rows.end(), [group](const Row &r) {
-                return r.advanced && r.shown && static_cast<int>(r.subgroup) == group;
+                return r.advanced && r.eligible && static_cast<int>(r.subgroup) == group;
             });
             if (toggle == nullptr || toggle->parentWidget() == nullptr)
                 continue;
@@ -1003,6 +1027,18 @@ struct ParamForm::Impl {
                 toggle->setChecked(open);
             }
             set_fold_icon(toggle, open);
+        }
+        // 折叠头计数/摘要随谓词/搜索过滤实时更新（只报"点开真能看到"的行数）。
+        if (adv_toggle != nullptr) {
+            const int n = count_advanced();
+            adv_toggle->setText(ParamForm::tr("%1 项").arg(n));
+            adv_toggle->setEnabled(n > 0);
+            if (adv_row.row != nullptr) {
+                adv_row.row->setVisible(n > 0);
+                if (auto *summary =
+                        adv_row.row->findChild<QLabel *>(QStringLiteral("pp-advanced-summary")))
+                    static_cast<formkit::ElidedLabel *>(summary)->set_full_text(advanced_summary());
+            }
         }
     }
 
@@ -1041,7 +1077,41 @@ struct ParamForm::Impl {
         }
     }
 
-    // ---------------------------------------------------------------- UX-1 ⑧：格式参数卡右键
+    // 字符串枚举（chroma 等）：按 choices 的显示名/字符串值匹配。整数版对 string 选择
+    // 永远匹配不到（std::get_if<int64_t> 为空），会把整列都置灰 —— HEIF/AVIF 的
+    // 档位→色度联动与无损→4:4:4 联动都走本重载。
+    void apply_enum_limits_text(const std::string &key, const std::vector<std::string> &allowed,
+                                const QString &reason) {
+        if (allowed.empty())
+            enum_limits.erase(key);
+        else
+            enum_limits[key] = reason;
+        for (Row &r : rows) {
+            if (r.key != key || r.def->type != pp::ParamType::Enum || r.editor == nullptr)
+                continue;
+            auto *combo = qobject_cast<QComboBox *>(r.editor);
+            if (combo == nullptr)
+                continue;
+            for (int i = 0; i < combo->count() && i < static_cast<int>(r.def->choices.size());
+                 ++i) {
+                const auto &choice = r.def->choices[static_cast<std::size_t>(i)];
+                bool ok = allowed.empty();
+                if (!ok && std::find(allowed.begin(), allowed.end(), choice.first) != allowed.end())
+                    ok = true;
+                if (!ok) {
+                    if (const std::string *sv = std::get_if<std::string>(&choice.second))
+                        ok = std::find(allowed.begin(), allowed.end(), *sv) != allowed.end();
+                }
+                if (auto *model = qobject_cast<QStandardItemModel *>(combo->model())) {
+                    if (QStandardItem *item = model->item(i))
+                        item->setEnabled(ok);
+                }
+                combo->setItemData(i, ok ? QVariant() : reason, Qt::ToolTipRole);
+            }
+            r.editor->setToolTip(tooltip_for(r));
+        }
+    }
+
     // actions 单源 = contextmenu::param_card_actions（docs/ux-review-14.md §1 表第 ⑧ 行）。
     // 运行中置灰由调用方按 lock_for_run 语义给（这里以自身 enable 态折算；整卡在运行期被
     // lock_for_run 连页禁用时菜单本就不可达）。
@@ -1050,7 +1120,10 @@ struct ParamForm::Impl {
             for (const pp::ParamDef &p : t->params) {
                 if (is_reserved_key(p.key))
                     continue;
-                values[p.key] = p.def;
+                if (p.has_default)
+                    values[p.key] = p.def;
+                else
+                    values.erase(p.key); // 可选覆盖参数恢复为“未设置”
             }
         }
         refresh();
@@ -1163,7 +1236,10 @@ struct ParamForm::Impl {
             }
         if (!p)
             return;
-        values[key] = p->def;
+        if (p->has_default)
+            values[key] = p->def;
+        else
+            values.erase(key); // 可选覆盖参数恢复为“未设置”
         refresh();
         emit q->changed();
     }
@@ -1376,6 +1452,12 @@ void ParamForm::set_tokens(const theme::Tokens &tokens) { impl_->set_tokens(toke
 void ParamForm::limit_enum_choices(const std::string &key, const std::vector<int64_t> &allowed,
                                    const QString &disabled_reason) {
     impl_->apply_enum_limits(key, allowed, disabled_reason);
+}
+
+void ParamForm::limit_enum_choices_text(const std::string &key,
+                                        const std::vector<std::string> &allowed,
+                                        const QString &disabled_reason) {
+    impl_->apply_enum_limits_text(key, allowed, disabled_reason);
 }
 
 } // namespace pp::ui

@@ -46,6 +46,10 @@ std::string validate_preset(const PresetData &p) {
         return "unsupported preset version " + std::to_string(p.version) + " (expected 2)";
     if (p.outputs.empty())
         return "preset has no outputs";
+    if (p.color_intent < 0 || p.color_intent > 3)
+        return "preset color_intent out of range [0,3]";
+    if (p.gamut_mapping < 0 || p.gamut_mapping > 2)
+        return "preset gamut_mapping out of range [0,2]";
     // §4.2 模板校验（未知 $ 符号 / ".." / 绝对路径 = 非法）：预设里的非法模板直接判无效
     std::string tmpl_err;
     if (!validate_output_template(p.output_template, &tmpl_err))

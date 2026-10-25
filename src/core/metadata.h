@@ -85,6 +85,9 @@ struct MetadataPlan {
     std::vector<Warning> warnings;
     bool has_time = false;
     std::string datetime_original; // effective 值（mtime 同步用，可空）
+    // 第二轮 X-METADATA-ONLY-03：隐私剥除除了清 EXIF/XMP，还要清 IPTC(APP13)/COM。
+    // 默认 false；build_plan 在 strip_privacy 时置 true，写路径据此 clearIptcData/clearComment。
+    bool strip_privacy = false;
 };
 
 // effective = 源 ⊕ BatchRules ⊕ 例外（例外逐项覆盖；ignore_batch 先清空批量规则）

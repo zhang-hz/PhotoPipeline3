@@ -48,6 +48,13 @@ struct PresetData {
     ColorTarget color_target = ColorTarget::KeepOriginal;
     ConflictPolicy conflict = ConflictPolicy::Rename;
     BatchRules rules;
+    // —— 第二轮审计 X-WIRING-05/06 / X-PARAM-ENGINE-08 加性追加（末尾；旧 JSON 缺省=现行为）——
+    // 预设必须能复现“全部会影响产物的全局项”，否则 save→load 后产物不一致。
+    int color_intent = 0;         // 0=相对比色+BPC（默认）
+    bool color_dither8 = false;   // 8bit TPDF 抖动
+    int gamut_mapping = 0;        // 0=硬裁（默认）
+    bool linear_resample = false; // 仅预览
+    bool metadata_only = false;   // 仅元数据模式
 };
 
 // 0.2 单格式形态（schema v1）：**只用于迁移**。JSON 文本由 ui/preset_io 解析（src/core 零 Qt），

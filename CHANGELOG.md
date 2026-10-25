@@ -78,6 +78,32 @@
   TIFF `deflate_level` 在 `predictor=none` 时受 OIIO/libtiff 上游限制；PNG 8 位源默认
   16 位属「禁止降级」策略。详见审计修复状态文档 §4。
 
+### 发行
+
+- tag `v0.3.5.alpha3`（annotated `876f082` → commit `8813acc`）；`main-full` #84（10/10）
+  与 `release.yml` #19（7/7）全绿。
+- GitHub Release `v0.3.5.alpha3`（published 2026-10-25T15:36:29Z，target=main，4 资产）；
+  API digest ↔ 下载件 `SHA256SUMS.txt` 三方逐字一致：
+  - `PhotoPipeline-0.3.5.alpha3-win64.zip` **33,764,248 B**
+    sha256 `c8f6d4d320fb37ff4ad48ec31d02df4062e5e0d3a728ae659213f45041cbbdda`
+  - `PhotoPipeline-0.3.5.alpha3-x86_64.AppImage` **52,185,592 B**
+    sha256 `9a51f50216845b526d9da2235bfe253885388332a824ab950e820bc811892e0a`
+  - `PhotoPipeline-0.3.5.alpha3-deps.txt` **2,439 B**
+    sha256 `e8c80b3d61a4e0d41cde50eb3c04577688d7428cc189129b3331cf221407854d`
+  - `PhotoPipeline-0.3.5.alpha3-SHA256SUMS.txt` **314 B**
+    sha256 `5281e6a9a43f6bab6cbd6de9013ce4fe211de0599c8138938d449ae6d42b440f`
+- 解压 win64.zip 后 `PhotoPipeline/photopipeline.exe --version` =
+  `PhotoPipeline 0.3.5.alpha3`（exit 0）；AppImage 由 release 链 `probe-appimage` 断言。
+- 门禁（本机实测）：格式 violations=0 ｜ clang-tidy 262=基线 ｜ ctest release 35/35 ｜
+  ctest release-dev 36/36 ｜ 金样 `SMOKE total=20 pass=20 fail=0` ｜
+  `--ui-smoke` 冻结行 + `layout-audit checked=1061 bad=0` ｜ 回归双平台基线 zero diff
+  （Windows 为 runner 4 vCPU 形态，见下）。
+- 回归基线：Windows 2534 行（run 40203740581 维护通道 + 同 job zero diff 复核）；
+  Linux 2534 行（nightly 40202723658 update → 40203245936 复核 zero diff）。
+  本机 16 逻辑核与 4 vCPU 基线的 thread-shaped diff 属已知口径缺口（报告 §3）。
+- 收口报告：[docs/0.3.5.alpha3-report.md](docs/0.3.5.alpha3-report.md)（tag 后补记，
+  报告类提交不入 tag）。
+
 ## [0.3.5.alpha2] — 2026-10-25
 
 **预发布（alpha）**：七项用户实测问题逐条根治——① 高德搜索失败；② Adobe RGB 不能正确

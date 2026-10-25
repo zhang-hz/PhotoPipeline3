@@ -49,9 +49,9 @@ RAW/DNG 输入 · GIF 输出 · 图像编辑(缩放/裁剪/水印/锐化/降噪)
 
 | 项 | 状态 |
 |---|---|
-| 版本 | **0.3.5.alpha3**(0.3.5 预发布)按 REL 流程发行;0.3.3 Windows zip 为坏件(启动 P0,见 `docs/0.3.4-report.md`);`[0.3.5.alpha3]` 发行指纹/报告由 tag 后 close 提交补记(不入 tag) |
+| 版本 | **0.3.5.alpha3**(0.3.5 预发布)已发行:`main-full` #84 / `release.yml` #19 全绿,tag `v0.3.5.alpha3`;收口报告 `docs/0.3.5.alpha3-report.md`(tag 后 close 提交,不入 tag);0.3.3 Windows zip 为坏件(启动 P0,见 `docs/0.3.4-report.md`) |
 | 里程碑 | M0 环境/六 Spike/冻结面 → M1a 引擎 + M1b UI → M2 Linux 收口 → M3 Windows(=0.2.0) → M4/M5 = 0.3.0(九项需求 + GUI v6 刷新) → 0.3.1 GUI 缺陷根治 → M6 = 0.3.2 → M7 = 0.3.3(工程收口,Windows 启动 P0)→ 0.3.4 热修 → 0.3.5.alpha1/alpha2 预发布 → 0.3.5.alpha3 全格式配置审计修复 |
-| 质量面 | 金样断言级 **20 对** 全绿;全语料回归 **zero diff**;ctest 36/36 全绿;`--ui-smoke` 冻结行未变 + 识图门禁 `layout-audit`(六类几何/像素断言,`checked=1027 bad=0`);winzip 门禁 6 项(E-3 真机启动探针 `WIN-LAUNCH OK`) |
+| 质量面 | 金样断言级 **20 对** 全绿;全语料回归 **zero diff**(双平台基线均为 runner 4 vCPU 形态;本机 16 核直跑会出 thread-shaped diff,见 `docs/0.3.5.alpha3-report.md` §3);ctest 36/36 全绿;`--ui-smoke` 冻结行未变 + 识图门禁 `layout-audit`(六类几何/像素断言,`checked=1061 bad=0`);winzip 门禁 6 项(E-3 真机启动探针 `WIN-LAUNCH OK`) |
 | **开放问题** | ① `docs/deep-review-0.3.2.md`:发布前深度评审,**2 个 P0(数据破坏)+ 20 P1** 待修;② `docs/ux-review-14.md`:14 项 UI 问题定位与改进方案(只读评审,**改动须经用户确认后另起提交**);③ `docs/m7r25-report.md` §5:识图门禁未覆盖项;④ libde265 对部分 HEVC RExt 码流(如 `super/T2.heic`)仍不可解码;⑤ 高德线上搜索仅账号实测可最终确认(本机 TLS 环境不可用);⑥ 详见 §11 已知债 |
 
 ---

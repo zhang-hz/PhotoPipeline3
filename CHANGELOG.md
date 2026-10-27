@@ -100,6 +100,30 @@
 - 高德线上搜索仍以用户账号实测为准（非本轮范围）。
 
 
+### 发行
+
+- tag `v0.3.5`（annotated `9d6015e` → commit `3d22ef1`）；`main-full` #89（10/10）与
+  `release.yml` #20（7/7）全绿。
+- GitHub Release `v0.3.5`（published 2026-10-27T16:56:46Z，target=main，4 资产）；API digest ↔
+  下载件 `SHA256SUMS.txt` 三方逐字一致：
+  - `PhotoPipeline-0.3.5-win64.zip` **33,786,397 B**
+    sha256 `d6979074c47d93cdd89c18ac0a21ea48e1833d049bb33f846f0529c56dc29753`
+  - `PhotoPipeline-0.3.5-x86_64.AppImage` **52,132,344 B**
+    sha256 `b508ddfb2484bbe429ed25d3df10675e69d7d156962d23bb78146da8546f20fd`
+  - `PhotoPipeline-0.3.5-deps.txt` **2,439 B**
+    sha256 `e8c80b3d61a4e0d41cde50eb3c04577688d7428cc189129b3331cf221407854d`
+  - `PhotoPipeline-0.3.5-SHA256SUMS.txt` **293 B**
+    sha256 `f5967c7cfed2a8d4f302e68352e052705e6f71fe53bb7035924f3cd2cbc063ae`
+- 解压 win64.zip（105 条目）后 `PhotoPipeline/photopipeline.exe --version` =
+  `PhotoPipeline 0.3.5`（exit 0）；AppImage 由 release 链 probe/publish 断言。
+- 门禁（本机最终树）：format 196 files violations=0 ｜ tidy 262=262 violations=0 ｜
+  ctest release 35/35 ｜ ctest release-dev 36/36 ｜ 金样 `SMOKE total=20 pass=20 fail=0` ｜
+  ui-smoke 冻结行 + layout-audit checked=1069 bad=0 + format-card checked=81 bad=0 ｜
+  ui-traverse 115 截图/159 断言 ｜ winzip A–D+E-1/E-2/E-3 全过（zip 34,849,801 B）｜
+  回归（本机 16 核归因）：version 0 / thread 形态 504 / 路径形态 8 / 真实行为差异 0。
+- 发布前工作区清理：1511 项、释放 37.27 GB、git 跟踪文件零删除（详见报告 §1.1）。
+- 收口报告：[docs/0.3.5-report.md](docs/0.3.5-report.md)（tag 后补记，报告类提交不入 tag）。
+
 ## [0.3.5.alpha3] — 2026-10-25
 
 **预发布（alpha）**：全格式编码器配置审计后的修复批。审计覆盖 8 个输出格式的每个参数：

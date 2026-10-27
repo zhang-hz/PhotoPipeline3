@@ -38,7 +38,8 @@ caption 单轨 46×32；壳层顶栏 44 + 状态栏 30；**栏宽固定轴 330 /
 HEIF/AVIF 元数据回读兜底（修 grid 主图二次转码丢 EXIF/XMP）、HEIF/AVIF 真实位深显示、可选
 「补全现代 EXIF」（只补可推导字段，不编造）；③ **GUI 实测缺陷清理**——AVIF 标签、运行页溢出/
 状态、输出页页签错位/空白带/空态、折叠按钮主题、顶层菜单深色可读、输出目录权限 UAC 一键授权
-等，并新增 `--ui-traverse` 深走查门禁（115 截图 / 159 断言）。逐条变更见 [CHANGELOG.md](CHANGELOG.md) `[0.3.5]`。
+等，并新增 `--ui-traverse` 深走查门禁（115 截图 / 159 断言）。**发行状态：0.3.5 已发布**（2026-10-28；GitHub Release 4 资产），验收证据见
+[docs/0.3.5-report.md](docs/0.3.5-report.md)；逐条变更见 [CHANGELOG.md](CHANGELOG.md) `[0.3.5]`。
 
 **0.3.5.alpha3（历史预发布）= 全格式编码器配置审计修复批**：8 个格式逐参数核对暴露/
 生效/默认值/联动，修掉 JPEG 色度采样不生效、JXL 无损 `resampling`、WebP 假 `preset`、PNG

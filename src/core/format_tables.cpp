@@ -243,7 +243,7 @@ ParamDef webp_quality_param(bool lossless_tech) {
     p.advanced = false;
     p.group = pp::kGroupCore;
     if (lossless_tech) {
-        p.label = "努力（借 quality 参数）";
+        p.label = "压缩努力"; // 80px 标签轨放得下；"（借 quality 参数）" 进 tooltip
         p.def = int64_t(80);
         p.lo = 0;
         p.hi = 100;
@@ -437,7 +437,7 @@ const std::vector<FormatDef> &static_formats() {
                                  jxl_decoding_speed_param(true), // R-209
                                  jxl_codestream_level_param(true), // R-209
                                  jxl_distance_param(true),      // R-209
-                                 ParamDef{.key = "photon_noise", .label = "感光噪声模拟 (ISO)",
+                                 ParamDef{.key = "photon_noise", .label = "感光噪声",
                                           .type = ParamType::Float, .def = 0.0, .lo = 0.0,
                                           .hi = 6400.0, .step = 100.0, .choices = {}, .advanced = true,
                                           .tooltip = "Photon noise 胶片颗粒模拟"
@@ -660,7 +660,7 @@ const std::vector<FormatDef> &static_formats() {
                 .id = "oiio", .label = "OIIO", .runtime_introspected = false,
                 .techs = { TechDef{ .id = "codec", .label = "Compression", .lossless_capable = true,
                              .params = {
-                                 ParamDef{.key = "compression", .label = "压缩方案（技术选择器）",
+                                 ParamDef{.key = "compression", .label = "压缩方案",
                                           .type = ParamType::Enum, .def = std::string("lzw"),
                                           .choices = {{"none", std::string("none")},
                                                       {"lzw", std::string("lzw")},

@@ -2,7 +2,7 @@
 
 > **这份文档是什么**:在本仓库工作的 AI 智能体与新协作者的总导航 + 纪律总纲。目标是让你不必读完 docs/ 下 1.1 万行文档,就能回答四个问题:**这个项目要什么、东西放在哪、哪些红线不能碰、干完活要留下什么证据**。
 > **权威链**:本文只是导航与纪律;细节真源永远是它指向的那份文档或代码。两者冲突时**以真源为准**,并顺手回来修订本文。
-> **版本口径**:0.3.5.alpha3(版本号单源 = `CMakeLists.txt:19-21`:数字段 `project(PhotoPipeline VERSION 0.3.5)` + 预发布标签 `PP_VERSION_LABEL`;CMake `project(VERSION)` 只收数字段,标签拼在字符串侧。任何其它地方出现的版本号都是引用,不是定义)。
+> **版本口径**:0.3.5(版本号单源 = `CMakeLists.txt:19-24`:数字段 `project(PhotoPipeline VERSION 0.3.5)` + 预发布标签 `PP_VERSION_LABEL`(正式版为空串);CMake `project(VERSION)` 只收数字段,标签拼在字符串侧。任何其它地方出现的版本号都是引用,不是定义)。
 
 ---
 
@@ -45,14 +45,14 @@ RAW/DNG 输入 · GIF 输出 · 图像编辑(缩放/裁剪/水印/锐化/降噪)
 
 ---
 
-## 2. 当前状态(2026-10-25)
+## 2. 当前状态(2026-10-28)
 
 | 项 | 状态 |
 |---|---|
-| 版本 | **0.3.5.alpha3**(0.3.5 预发布)已发行:`main-full` #84 / `release.yml` #19 全绿,tag `v0.3.5.alpha3`;收口报告 `docs/0.3.5.alpha3-report.md`(tag 后 close 提交,不入 tag);0.3.3 Windows zip 为坏件(启动 P0,见 `docs/0.3.4-report.md`) |
-| 里程碑 | M0 环境/六 Spike/冻结面 → M1a 引擎 + M1b UI → M2 Linux 收口 → M3 Windows(=0.2.0) → M4/M5 = 0.3.0(九项需求 + GUI v6 刷新) → 0.3.1 GUI 缺陷根治 → M6 = 0.3.2 → M7 = 0.3.3(工程收口,Windows 启动 P0)→ 0.3.4 热修 → 0.3.5.alpha1/alpha2 预发布 → 0.3.5.alpha3 全格式配置审计修复 |
-| 质量面 | 金样断言级 **20 对** 全绿;全语料回归 **zero diff**(双平台基线均为 runner 4 vCPU 形态;本机 16 核直跑会出 thread-shaped diff,见 `docs/0.3.5.alpha3-report.md` §3);ctest 36/36 全绿;`--ui-smoke` 冻结行未变 + 识图门禁 `layout-audit`(六类几何/像素断言,`checked=1061 bad=0`);winzip 门禁 6 项(E-3 真机启动探针 `WIN-LAUNCH OK`) |
-| **开放问题** | ① `docs/deep-review-0.3.2.md`:发布前深度评审,**2 个 P0(数据破坏)+ 20 P1** 待修;② `docs/ux-review-14.md`:14 项 UI 问题定位与改进方案(只读评审,**改动须经用户确认后另起提交**);③ `docs/m7r25-report.md` §5:识图门禁未覆盖项;④ libde265 对部分 HEVC RExt 码流(如 `super/T2.heic`)仍不可解码;⑤ 高德线上搜索仅账号实测可最终确认(本机 TLS 环境不可用);⑥ 详见 §11 已知债 |
+| 版本 | **0.3.5**(0.3.5 正式版)按 REL 流程发行;`[0.3.5]` 发行指纹/报告由 tag 后 close 提交补记(不入 tag);0.3.3 Windows zip 为坏件(启动 P0,见 `docs/0.3.4-report.md`) |
+| 里程碑 | M0 环境/六 Spike/冻结面 → M1a 引擎 + M1b UI → M2 Linux 收口 → M3 Windows(=0.2.0) → M4/M5 = 0.3.0(九项需求 + GUI v6 刷新) → 0.3.1 GUI 缺陷根治 → M6 = 0.3.2 → M7 = 0.3.3(工程收口,Windows 启动 P0)→ 0.3.4 热修 → 0.3.5.alpha1/alpha2/alpha3 预发布 → 0.3.5 正式版(收口修复批) |
+| 质量面 | 金样断言级 **20 对** 全绿;全语料回归 **zero diff**(双平台 CI 基线为 runner 4 vCPU 形态;本机 16 核直跑出 thread-shaped diff,见 `docs/0.3.5.alpha3-report.md` §3);ctest **36/36**(release-dev)/**35/35**(release);`--ui-smoke` 冻结行未变 + 识图门禁 `layout-audit checked=1069 bad=0` + 格式卡交互 `format-card checked=81 bad=0`;新增深走查 `--ui-traverse`(115 截图/159 断言);winzip 门禁 6 项(E-3 真机启动探针 `WIN-LAUNCH OK`) |
+| **开放问题** | ① `docs/deep-review-0.3.2.md`:深度评审台账(**P0 ×2 已由 0.3.3 数据安全线 + 0.3.5 同目录输出修订收口**;P1/R3 条目为长期台账);② `docs/ux-review-14.md`:14 项 UI 问题定位与改进方案(只读评审,**改动须经用户确认后另起提交**);③ `docs/m7r25-report.md` §5:识图门禁未覆盖项;④ libde265 对部分 HEVC RExt 码流(如 `super/T2.heic`)仍不可解码;⑤ 高德线上搜索仅账号实测可最终确认(本机 TLS 环境不可用);⑥ 详见 §11 已知债 |
 
 ---
 
@@ -168,7 +168,7 @@ GUI / 地图 / 体验类里程碑(M5、M6 先例)以「`src/codecs`/`src/decode`
 ### 5.5 安全与数据
 
 - **密钥/凭据永不入库**(`.gitignore` 已列 14 行;`.zcode/secrets/`、`amap_key*`、`.env*`);调试凭据放 `.zcode/secrets/` 或本机环境变量。
-- 源文件**永远只读**(单文件编辑器亦然);输出不得覆盖源文件是用户数据安全线——当前已知 P0 缺口见 §11,修复属高优。
+- 源文件**永远只读**(单文件编辑器亦然);输出不得覆盖源文件是用户数据安全线——R-001(输出路径守卫)+ R-002(写回临时副本+rename)双重收口,见 §11 与 `docs/m7-adjudications.md` A3-2。
 - 打包全程**不联网**(appimagetool/runtime 入库 + `.sha512` 校验,缺了就硬失败,不静默在线下载)。
 
 ---
@@ -294,7 +294,7 @@ python tools/env.py run -- ctest --preset release
 
 **发行前高优(来自 `docs/deep-review-0.3.2.md`,2026-10-11):**
 
-- **P0 ×2(数据破坏,老问题非 M6 引入)**:① 输出路径可精确命中源文件(渲染路径后不与 `fs::equivalent` 比较 + 覆盖策略直写)→ 原图被重编码替换;② Exiv2 就地截断重写、写失败被吞成 warning 且 `ok=true` → 坏文件当成功。修复都是几行守卫(`plan_targets`/`run_metadata_only` 拒绝 `out==src`;写回走临时文件 + rename,失败必须 `ok=false`)。
+- **P0 ×2(数据破坏,老问题非 M6 引入;均已收口)**:① 输出路径可精确命中源文件 → 0.3.3 起 `plan_targets`/`run_metadata_only` 守卫 + 0.3.5 起命中源文件按普通冲突改名(源文件永不写,Overwrite 降级 Rename;单测 `r001/*`、`same-folder/*`);② Exiv2 就地截断重写/写失败被吞 → 0.3.3 起一律写临时副本再 rename,失败即失败(`ok=false`,`exiv2_apply_atomic`;截断只作用在临时副本上)。
 - **P1 代表项**:联想请求不清算(陈旧建议可点进写坐标闭环)、PageRun 硬编码 Dark 令牌(浅色主题整页深色)、classes.json 损坏被默认值覆写、回归防线机制缺口(重播种无护栏 / Windows 基线从不 diff / UBSan 假绿 / 金样不锁语料 / 棘轮可静默下线)。
 - **R3 裁决**(工程/GUI 综合):代码不是屎山(分层、注释纪律、错误处理属上游水平);真正的系统性问题是**「契约活在注释里」**与**上帝单元/复制粘贴维持的同构**。另有 4 条发行前值得修:版本徽标硬编码 0.3.0、过滤态双击编辑错文件、翻图/打标对象错位、分组重建吞多选。
 

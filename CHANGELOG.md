@@ -1,5 +1,105 @@
 # 变更日志
 
+## [0.3.5] — 2026-10-28
+
+**正式版**：0.3.5 系列的收口发行（`0.3.5.alpha3` 之后工作树的实测缺陷与体验修复批）。三块交付：
+① **同目录输出数据安全收口**（R-001 P0 的行为面扩展——源文件永不写；命中源文件按普通名字
+冲突改名，不再整文件失败）；② **元数据现代化**（HEIF/AVIF 元数据回读兜底、容器真实位深显示、
+可选「补全现代 EXIF」）；③ **GUI 实测缺陷清理**（输出页/运行页/顶层菜单/高级参数十余项）+
+新增 `--ui-traverse` 深走查门禁。版本单源 = `CMakeLists.txt:19-24` = **0.3.5**
+（`PP_VERSION_LABEL` 置空，正式版无预发布后缀）。
+
+### 变更（先读）
+
+- **同目录输出不再整文件失败，源文件仍永远只读**：渲染出的输出路径命中源文件时，旧行为整文件
+  报错 `output path collides with the source file`（「输入与输出同文件夹 + `$dir/$file` 模板」
+  完全不可用）。现按普通名字冲突处理：Rename 产出 `名称 (1).扩展名`，Skip 跳过该输出，
+  **Overwrite 降级为 Rename**；源文件永不被写（数据安全线不变）。转码与「仅元数据」两条路径
+  同口径；单测覆盖 Overwrite 最危险档 + 源文件字节不变。
+- **输出根子树里的输入不再静默丢弃**：旧实现把位于 `out_root` 下的输入一律过滤，`out_root` 是
+  输入目录或其父目录时整批输入被过滤成 `files=0`，界面只有一行日志。现仅在「输入扩展名与本轮
+  输出格式相同（可能是上一轮产物）」时一次性询问：照常处理（同名输出自动改名）/ 跳过；普通源
+  （扩展名不同）不再误判。过滤后为空则明确提示并中止。
+- **TIFF 缩略图不再误报多页**：带 reduced-resolution IFD1（`NewSubfileType` bit 0，TIFF 6.0
+  规范标记）的普通相机 TIFF 不再产生 `multipage or animated input` 警示（`super/T1.tif`
+  实测）。判据只认规范标记、不用尺寸，真多页夹具（`tests/golden/base/multi.tif`，无该标记）
+  仍判多页。
+- **HEIF/AVIF 元数据回读兜底**：Exiv2 的 BMFF 读取器读不到 **grid 主图**上的 Exif/XMP
+  （实测：lossless >16MP 的 HEIF 由 `heif_context_add_grid_image` 生成，libheif 能读出 52,644
+  字节 EXIF 而 Exiv2 为空）。现于 Exiv2 结果为空时按 libheif 容器 API 直读同一份 Exif/XMP，
+  修复「二次转码时元数据静默丢失」。
+- **HEIF/AVIF 位深显示改为容器真值**：OIIO 把 10/12 位样本统一暴露为 uint16，预览信息行与
+  元数据卡曾恒显示「16 bit」；现按容器 luma bits（8/10/12）覆盖 probe 结果。
+- **新增可选「补全现代 EXIF」**（默认关，元数据页「隐私与文件时间」卡）：只补**可从已有事实
+  推导**的字段——`ExifVersion`(2.32)、`PixelXDimension/YDimension` ↔ `ImageWidth/Length`
+  互补、GPS 存在时 `GPSVersionID` / `GPSMapDatum=WGS-84` / `GPSAltitudeRef` /
+  `GPSImgDirectionRef=T`；不编造拍摄时间、镜头、相机、位置等未知信息；隐私卡关闭时该开关不参与
+  规则；随预设持久化。
+- **输出目录权限不足时先申请权限（Windows）**：预检失败且错误含权限/拒绝访问（含
+  `output root is not writable`——目录已存在但当前用户无写权的主场景）时，先弹窗询问；
+  接受后经 UAC 执行 `icacls`，**仅对该输出目录**授予当前用户「修改」权限，然后重试预检——
+  不重启应用、不丢文件列表；UAC 取消或授权失败才显示原错误。非权限错误不触发 UAC；
+  路径/账户名含 `%` 时不做 cmd 提权（避免展开成错误目录），回落到原始错误。
+- **首次启动默认不启用 splash**：实测 Windows 首次顶层窗 `show()` 同步阻塞约 1.0s，splash 会把
+  主窗从 ~0.6s 拖到 1.6s；故默认关闭，仅保留 `PP_SHOW_SPLASH=1` 诊断开关与 `PP_STARTUP_TIMING`
+  分阶段时延打点。启动路径不增加阻塞工作。
+
+### 修复
+
+- **AVIF 标签**：OIIO 对 `.avif` 也返回容器名 `HEIF`（解码器同为 libheif），文件列表与元数据
+  「关键信息」改为按扩展名纠正：`.avif/.avifs → AVIF`，`.heic/.heif/.hif → HEIF`；未知扩展名
+  仍用 probe 结果。
+- **运行页**：① 日志尾长文本不再把右栏撑出窗口（宽度由布局分配，sizeHint 上限 320），状态/
+  大小/速度/耗时列完整可见；② 每批开始统一清空所有行旧状态，未勾选行显示「未选择」（中性），
+  不再残留上一轮「已完成/编码」胶囊与底栏计数自相矛盾。
+- **输出页**：① 格式参数卡不再提供「＋ 添加格式…」入口，增删统一走上方 8 个「输出格式」磁贴；
+  ② 页签标题/现役/页序一律按**页面自身 id** 解析（修「先选 JXL 再选 JPEG」标题与内容错位；
+  预设可把页签建在任意顺序 → 按规范序重排）；③ 页签高度按内容（短页签不再被最高页签撑出
+  175–200px 空白带），页签自然宽 + 滚动钮；④ 0 个已选格式时显示空态提示，底栏不再回退
+  「游离槽」BMP；⑤ 模板初值含 `$format` 时「分文件夹」开关与模板同步；⑥ BMP 容器不承载
+  EXIF/XMP 的格式级警示如实显示。
+- **高级参数**：折叠头统一挂 `fold` 属性——normal/hover/checked 全部透明底、中性文字（不再
+  落到平台蓝底蓝字），展开态只由 chevron 图标表达；「已改 N」基准改为**生效默认值**（锁定项与
+  运行时内省默认值不再误计），格式档位计入已改；某技术下无可见高级参数时折叠头与空折叠区一起
+  收掉；搜索 0 命中时折叠头保留（不丢收起/再展开入口）；子组展开把该组末行滚入视野；关无损/
+  跨后端切换不再串参数（AVIF 自动后端）。
+- **顶层弹窗主题**：`QMenu`（右键菜单 /「添加格式…」/ 变量表 / 分类菜单 / GPS 分类 / 清除例外）
+  是顶层窗口，不继承页面 QSS，且深色 `--card` 是 5% 白叠层——现显式 `contextmenu::style_menu()`
+  并把令牌合成到 window 底色，修「深色页右键菜单白底 + 近白字不可读」。
+- **参数标签**：HEIF/AVIF 内省参数 quality/speed/chroma/tune/preset/threads/qp/min-q/max-q
+  改为中文标签（其余键名保留，tooltip 注明来源）；精简 WebP 无损「压缩努力」、JXL「感光噪声」、
+  TIFF「压缩方案」等过长标签（原括注移入 tooltip）。
+- **其它**：仅元数据模式底栏显示「输出：保持原格式 · N 个文件」并给出格式多选禁用提示；输出
+  目录预检失败先落一条 warn（目录 + OS 错误）再弹窗，错误文案给出可操作提示。
+
+### 新增
+
+- `--ui-traverse` 深度走查模式：与 `--ui-smoke` 同窗口/同环境，额外跑滚动/折叠/重复点击/全选/
+  逐页签/预设矩阵（本机实测 **115 张截图、159 个切面断言**，末行
+  `UI-TRAVERSE OK shots=115 pages=3`）；**不改变冻结 `--ui-smoke` 面**（12 张截图与冻结末行不变）。
+- 元数据页「EXIF 补全」开关 + 说明行（只补可推导字段，见上）。
+- `--ui-traverse` 与「EXIF 补全」均已接线到 GUI 自检面。
+
+### 测试
+
+- ctest：release-dev **36/36**、release **35/35**；金样 `SMOKE total=20 pass=20 fail=0`。
+- 新增单测：`modernize/*`（只补可推导字段、不编造、关闭时不参与）、`tiff-ifd/*`（合成两目录
+  TIFF 钉住 `NewSubfileType` 判据 + 真多页/单页/用户样本对照）、`r001/*` 与 `same-folder/*`
+  （Overwrite 不写源、Rename 产物名、仅元数据同口径、源文件字节不变）。
+- UI：`--ui-smoke` 冻结行与 12 张截图不变；`layout-audit` 识图门禁读数见发行报告；
+  `--ui-traverse` 新增深走查门禁。
+- 金样/夹具零改动（`tests/golden/{base,edge,meta}` 与 `smoke/*.json` 无 diff）。
+
+### 已知
+
+- 回归基线为 CI runner 4 vCPU 形态（`thread_budget=4`）；本机 16 逻辑核直跑会出现 thread-shaped
+  diff（口径缺口，见 `docs/0.3.5.alpha3-report.md` §3），发行判据仍以 CI 两平台 zero diff 为准。
+- nightly 的 ASan/TSan 红与 regression-windows 旧红为既有基础设施问题（非本轮引入），不在发行门禁。
+- libde265 对部分 HEVC RExt 码流（如 `super/T2.heic`）仍不可解码；HEIF/AVIF 无损为 YCbCr 平面
+  无损（非 RGB 逐位，tooltip 已披露）；x265 线程池 / TIFF `deflate_level` 等上游限制沿用。
+- 高德线上搜索仍以用户账号实测为准（非本轮范围）。
+
+
 ## [0.3.5.alpha3] — 2026-10-25
 
 **预发布（alpha）**：全格式编码器配置审计后的修复批。审计覆盖 8 个输出格式的每个参数：

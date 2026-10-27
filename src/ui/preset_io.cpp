@@ -322,6 +322,7 @@ QJsonObject rules_to_json(const BatchRules &r) {
     o.insert(QStringLiteral("xmp_edits"), xmp);
     o.insert(QStringLiteral("strip_privacy"), r.strip_privacy);
     o.insert(QStringLiteral("sync_mtime"), r.sync_mtime);
+    o.insert(QStringLiteral("modernize_exif"), r.modernize_exif);
     return o;
 }
 
@@ -381,6 +382,7 @@ bool rules_from_json(const QJsonObject &o, BatchRules &r, std::string &err) {
     r.xmp_edits = edits_from_json(o.value(QStringLiteral("xmp_edits")));
     r.strip_privacy = o.value(QStringLiteral("strip_privacy")).toBool(false);
     r.sync_mtime = o.value(QStringLiteral("sync_mtime")).toBool(false);
+    r.modernize_exif = o.value(QStringLiteral("modernize_exif")).toBool(false);
     return true;
 }
 

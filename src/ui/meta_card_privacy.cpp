@@ -97,6 +97,8 @@ void refresh_privacy_inputs(MetaState *st) {
         st->privacy.privacy_enable == nullptr || st->privacy.privacy_enable->isChecked();
     st->privacy.strip->setEnabled(card_on);
     st->privacy.mtime->setEnabled(card_on);
+    if (st->privacy.modernize != nullptr)
+        st->privacy.modernize->setEnabled(card_on);
     st->privacy.link_tags->setEnabled(card_on);
     st->privacy.link_keywords->setEnabled(card_on);
     st->privacy.add_tag->setEnabled(card_on);
@@ -156,6 +158,37 @@ QWidget *build_switches_card(MetaState *st, QWidget *parent) {
                              &st->privacy.mtime, PageMeta::tr("输出 mtime 跟随拍摄时间"),
                              QStringLiteral("mtime_sync_link"), PageMeta::tr("例外…"),
                              &st->privacy.link_exc));
+    // 2026-10 可选能力：补全现代 EXIF。只补**可推导**字段；卡片关闭时不参与规则。
+    {
+        TrackGroup group = make_group(body);
+        auto *sw = new formkit::SwitchControl(group.widget());
+        sw->setObjectName(QStringLiteral("modernize_exif"));
+        sw->set_tokens(st->core.tokens);
+        st->core.switches.append(sw);
+        group.add(sw);
+        group.gap(theme::Metrics::group_gap);
+        auto *note = new formkit::ElidedLabel(group.widget());
+        note->setObjectName(QStringLiteral("pp-modernize-exif-note"));
+        note->setProperty(kFieldProperty, fieldprop::kSub);
+        note->setFont(theme::font(theme::Typography::hint_px, QFont::Normal));
+        note->set_full_text(PageMeta::tr("仅补可推导字段（版本/尺寸/GPS 基准），不编造拍摄信息"));
+        note->setToolTip(
+            PageMeta::tr("只补源文件缺失且能从已有事实推导的字段：ExifVersion、PixelXDimension/Y、"
+                         "GPSVersionID、GPSMapDatum、GPSAltitudeRef、GPSImgDirectionRef；"
+                         "不生成拍摄时间、镜头、相机、位置等未知信息。"));
+        group.add(note);
+        group.stretch();
+        const formkit::Row row =
+            formkit::frow(body, PageMeta::tr("EXIF 补全"), group.widget(), FieldWidth::Flex);
+        bv->addWidget(row.row);
+        st->privacy.modernize = sw;
+        QObject::connect(sw, &formkit::SwitchControl::toggled, st, [st](bool) {
+            if (!st->core.loading) {
+                refresh_effective(st);
+                notify_rules_changed(st);
+            }
+        });
+    }
     // 关键字（§7.1：胶囊组 + 「编辑…」链）
     {
         TrackGroup group = make_group(body);
@@ -269,6 +302,7 @@ QWidget *build_switches_card(MetaState *st, QWidget *parent) {
                              return;
                          }
                          QMenu menu(st->privacy.exc_list);
+                         contextmenu::style_menu(&menu);
                          QAction *clear = menu.addAction(PageMeta::tr("清除例外"));
                          if (menu.exec(st->privacy.exc_list->viewport()->mapToGlobal(pos)) ==
                              clear) {

@@ -150,6 +150,26 @@ ParamDef param_def_from(heif_encoder *enc, const heif_encoder_parameter *p) {
     const char *name = heif_encoder_parameter_get_name(p);
     d.key = name ? name : "";
     d.label = d.key;
+    // M7-R2.5：内省参数以 libheif/插件键名作标签，中文界面里出现 speed/quality/chroma/
+    // tune/preset 等英文行。只翻**常用键**（其余键名保留，tooltip 有来源说明）。
+    if (d.key == "quality")
+        d.label = "质量";
+    else if (d.key == "speed")
+        d.label = "速度";
+    else if (d.key == "chroma")
+        d.label = "色度采样";
+    else if (d.key == "tune")
+        d.label = "调优";
+    else if (d.key == "preset")
+        d.label = "预设";
+    else if (d.key == "threads")
+        d.label = "线程数";
+    else if (d.key == "qp")
+        d.label = "量化参数";
+    else if (d.key == "min-q")
+        d.label = "最小量化";
+    else if (d.key == "max-q")
+        d.label = "最大量化";
     // AVIF-01：has_default=false 的“可选覆盖”参数（SVT qp 等）不得把范围下限当默认值；
     // 由 params/paramform 跳过默认写入，编码器保持插件默认。
     d.has_default = heif_encoder_has_default(enc, d.key.c_str()) != 0;

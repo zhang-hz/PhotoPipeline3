@@ -17,11 +17,12 @@ if(NOT DEFINED VCPKG_TARGET_TRIPLET)
 endif()
 
 project(PhotoPipeline VERSION 0.3.5 LANGUAGES C CXX)
-# 预发布标签（**版本号单源 = 本节**，`CMakeLists.txt:19-21`；`--version` 输出 = PROJECT_VERSION
+# 预发布标签（**版本号单源 = 本节**，`CMakeLists.txt:19-24`；`--version` 输出 = PROJECT_VERSION
 # + 本标签）。CMake 的 project(VERSION) 只收数字段，"0.3.5.alpha3" 这类标签只能拼在字符串侧
 # （PP_VERSION_STRING）—— 定义点仍在此处，别处（CHANGELOG/README/AGENTS/打包脚本）一律引用。
 # 数字段（MAJOR.MINOR.PATCH）继续给 manifest / 语义比较用。
-set(PP_VERSION_LABEL ".alpha3")
+# 0.3.5 正式版：标签为空串 ⇒ 版本串 = "0.3.5"（预发布轮曾为 ".alpha1/.alpha2/.alpha3"）。
+set(PP_VERSION_LABEL "")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

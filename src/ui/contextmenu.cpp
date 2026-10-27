@@ -2,6 +2,7 @@
 // PhotoPipeline — 公共右键菜单件（M7-WP6 / UX-1）实现。
 // 契约与设计要点见 contextmenu.h 头注释（docs/ux-review-14.md §1）。
 #include "ui/contextmenu.h"
+#include "ui/theme.h"
 
 #include <QCoreApplication>
 #include <QMenu>
@@ -39,9 +40,18 @@ void make_action(QMenu *menu, const Item &item) {
 
 } // namespace
 
+void style_menu(QMenu *menu) {
+    if (menu == nullptr)
+        return;
+    menu->setStyleSheet(theme::style_sheet(theme::tokens(theme::preferred_theme_mode())));
+}
+
 QMenu *menu(QWidget *parent, const std::vector<Item> &items) {
     auto *m = new QMenu(parent);
     // 样式不新写：QMenu 走 theme::style_sheet() 的既有规则（WP4 收口后已单源）。
+    // M7-R2.5：弹出菜单是**顶层窗口**，不继承父页面 setStyleSheet(page_qss) 的子树立规则；
+    // 只靠 window 级样式在深色页上会退回平台白底（实测：深色页右键菜单白底+近白字，不可读）。
+    style_menu(m);
     // 菜单生命周期由调用方负责（惯例 = WA_DeleteOnClose + popup）。
     for (const Item &item : items)
         make_action(m, item);

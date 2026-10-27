@@ -84,8 +84,16 @@ void refresh_info_card(MetaState *st, const std::vector<pp::EffectivePreview> &p
                                                           .arg(channels_text(info)));
         st->info.info_value[kInfoColor]->set_full_text(
             info.has_icc ? PageMeta::tr("内嵌 ICC 配置文件") : PageMeta::tr("无 ICC"));
-        st->info.info_value[kInfoFile]->set_full_text(QStringLiteral("%1 · %2").arg(
-            format_size(item.file_size), QString::fromStdString(info.format).toUpper()));
+        // OIIO 对 AVIF 也报 "HEIF"；元数据页与文件列表同口径按扩展名纠正。
+        QString fmt = QString::fromStdString(info.format).toUpper();
+        const QString suffix = QFileInfo(item.path).suffix().toLower();
+        if (suffix == QStringLiteral("avif") || suffix == QStringLiteral("avifs"))
+            fmt = QStringLiteral("AVIF");
+        else if (suffix == QStringLiteral("heic") || suffix == QStringLiteral("heif") ||
+                 suffix == QStringLiteral("hif"))
+            fmt = QStringLiteral("HEIF");
+        st->info.info_value[kInfoFile]->set_full_text(
+            QStringLiteral("%1 · %2").arg(format_size(item.file_size), fmt));
     } else {
         st->info.info_value[kInfoSize]->set_full_text(QStringLiteral("—"));
         st->info.info_value[kInfoColor]->set_full_text(QStringLiteral("—"));

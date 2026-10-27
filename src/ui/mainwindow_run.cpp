@@ -87,6 +87,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -128,6 +129,23 @@
 
 #include "ui/mainwindow_impl.h" // Impl/壳层件共享层
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+// clang-format off
+#include <windows.h>
+#include <winnt.h>
+#ifndef EXTERN_C
+#define EXTERN_C extern "C"
+#endif
+#ifndef DECLSPEC_IMPORT
+#define DECLSPEC_IMPORT __declspec(dllimport)
+#endif
+#include <shellapi.h>
+// clang-format on
+#endif
+
 namespace pp::ui {
 namespace {
 using theme::preferred_theme_mode;
@@ -140,6 +158,100 @@ using theme::preferred_theme_mode;
 // ---------------------------------------------------------------------------
 void warn_cannot_start(QWidget *parent, const QString &reason) {
     QMessageBox::warning(parent, T("无法开始"), reason);
+}
+
+#ifdef _WIN32
+// 2026-10：输出目录权限不足时先**申请权限**（UAC + 只给该目录授予当前用户修改权），
+// 用户拒绝/申请失败后才回落到原错误。避免"直接报错、用户不知道还能授权"。
+bool error_looks_like_permission(const std::string &error) {
+    const QString e = QString::fromStdString(error).toLower();
+    // "not writable" 来自 probe_output_root 的试写分支（只有路径、不带 OS 错误文本）——
+    // 该分支恰好是「目录已存在但当前用户无写权」的主场景，必须触发申请流程，
+    // 否则兜底错误里「再次运行并授权」的提示是死路。
+    return e.contains(QStringLiteral("access is denied")) ||
+           e.contains(QStringLiteral("permission denied")) ||
+           e.contains(QStringLiteral("not writable")) || e.contains(QStringLiteral("不可写")) ||
+           e.contains(QStringLiteral("read-only")) || e.contains(QStringLiteral("只读")) ||
+           e.contains(QStringLiteral("拒绝访问")) || e.contains(QStringLiteral("权限不足")) ||
+           e.contains(QStringLiteral("权限"));
+}
+
+bool grant_output_dir_permission(QWidget *parent, const std::filesystem::path &root) {
+    if (root.empty())
+        return false;
+    const QString root_text = QString::fromStdWString(root.wstring());
+    const QMessageBox::StandardButton answer = QMessageBox::question(
+        parent, T("需要写入权限"),
+        T("输出目录当前不可写：\n%1\n\n是否申请管理员权限，仅为该目录授予当前用户"
+          "“修改”权限？\n\nUAC 被取消或授权失败时，仍会显示原始错误。")
+            .arg(root_text),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+    if (answer != QMessageBox::Yes)
+        return false;
+
+    wchar_t user[256] = {};
+    DWORD user_len = static_cast<DWORD>(std::size(user));
+    if (!::GetUserNameW(user, &user_len) || user_len == 0)
+        return false;
+    QString account = QString::fromWCharArray(user);
+    wchar_t domain[256] = {};
+    if (const DWORD n =
+            ::GetEnvironmentVariableW(L"USERDOMAIN", domain, static_cast<DWORD>(std::size(domain)));
+        n > 0 && n < std::size(domain)) {
+        account = QString::fromWCharArray(domain) + QLatin1Char('\\') + account;
+    }
+
+    // 目标目录可能尚不存在：cmd 内先按需创建，再授权；路径整体加引号。
+    // 安全边界（审计 R3）：cmd /c 会对 `%VAR%` 做环境变量展开、双引号是唯一分隔符。
+    // 路径/账户名含 `%` 时「授权错目录」是理论可达的，故直接放弃提权（回落到原始错误，
+    // 用户可改用不含 % 的目录）；双引号从路径剔除，避免参数截断。
+    if (root_text.contains(QLatin1Char('%')) || account.contains(QLatin1Char('%'))) {
+        pp::log_warn("run", "mainwindow_run.cpp",
+                     "permission elevation skipped: '%' in path/account (cmd expansion risk)",
+                     {{"out_root", root.string()}});
+        return false;
+    }
+    QString safe_root = root_text;
+    safe_root.replace(QLatin1Char('"'), QString());
+    const QString params =
+        QStringLiteral(
+            "/c if not exist \"%1\" mkdir \"%1\" & icacls \"%1\" /grant \"%2:(OI)(CI)M\"")
+            .arg(safe_root, account);
+
+    SHELLEXECUTEINFOW sei{};
+    sei.cbSize = sizeof(sei);
+    sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+    sei.lpVerb = L"runas";
+    sei.lpFile = L"cmd.exe";
+    sei.lpParameters = reinterpret_cast<LPCWSTR>(params.utf16());
+    sei.nShow = SW_HIDE;
+    if (!::ShellExecuteExW(&sei) || sei.hProcess == nullptr) {
+        pp::log_warn(
+            "run", "mainwindow_run.cpp", "permission elevation cancelled/failed",
+            {{"out_root", root.string()}, {"win_error", std::to_string(::GetLastError())}});
+        return false;
+    }
+    const DWORD wait = ::WaitForSingleObject(sei.hProcess, 120000);
+    DWORD code = 1;
+    ::GetExitCodeProcess(sei.hProcess, &code);
+    ::CloseHandle(sei.hProcess);
+    pp::log_warn("run", "mainwindow_run.cpp", "permission elevation finished",
+                 {{"out_root", root.string()},
+                  {"wait", std::to_string(wait)},
+                  {"exit", std::to_string(code)}});
+    return wait == WAIT_OBJECT_0 && code == 0;
+}
+#endif
+
+QString permission_error_text(const std::string &detail) {
+#ifdef _WIN32
+    return T("输出目录不可用：%1\n\n请更换输出根目录后重试；若该目录需要管理员权限，"
+             "可再次点击「开始运行」并在权限提示中选择“是”，然后在 UAC 窗口中允许。")
+        .arg(QString::fromStdString(detail));
+#else
+    return T("输出目录不可用：%1\n\n请更换有写入权限的输出根目录后重试。")
+        .arg(QString::fromStdString(detail));
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -324,10 +436,25 @@ void MainWindow::on_start() {
     {
         std::string root_err;
         const std::filesystem::path out_root(cfg.out_root);
-        if (out_root.empty() || !pp::probe_output_root(out_root, &root_err)) {
-            warn_cannot_start(
-                this, T("输出目录不可用：%1\n\n请更换输出根目录后重试。")
-                          .arg(QString::fromStdString(root_err.empty() ? "目录为空" : root_err)));
+        bool root_ok = !out_root.empty() && pp::probe_output_root(out_root, &root_err);
+        if (!root_ok) {
+            // 先申请权限（仅 Windows；用户拒绝/授权失败才报错）。
+#ifdef _WIN32
+            if (!root_err.empty() && error_looks_like_permission(root_err)) {
+                if (grant_output_dir_permission(this, out_root)) {
+                    root_err.clear();
+                    root_ok = pp::probe_output_root(out_root, &root_err);
+                }
+            }
+#endif
+        }
+        if (!root_ok) {
+            // 0.3.6-alpha1：预检失败原先**只在弹窗里出现、日志零记录**（事后无法定位用户
+            // 选了哪个目录、OS 报什么错）。这里先落一条 warn，再给可操作的提示。
+            const std::string detail = root_err.empty() ? "output root is empty" : root_err;
+            pp::log_warn("run", "mainwindow_run.cpp", "output root unavailable",
+                         {{"out_root", out_root.string()}, {"error", detail}});
+            warn_cannot_start(this, permission_error_text(detail));
             return;
         }
     }
@@ -385,31 +512,113 @@ void MainWindow::on_start() {
     std::vector<std::size_t> run_rows = d.model->checked_rows();
     std::vector<pp::FileEntry> entries = d.model->checked_entries(); // 含单文件例外（引擎侧生效）
 
-    // X-METADATA-ONLY-01：输出根子树不得参与本轮输入（否则上一轮产物被当输入，规则二次施加）。
-    // 同时过滤 run_rows，保持“列表行 ↔ 运行集”一一对应。
+    // X-METADATA-ONLY-01（0.3.6-alpha1 修订）：输出根子树里的输入**不再静默丢弃**。
+    // 旧实现把“位于 out_root 下”一律过滤 —— out_root = 输入目录（或它的父目录）时整批
+    // files=0（实测 run-20261025-231109：out_root=Downloads，唯一输入被判“在输出根下”），
+    // 且界面没有任何提示（只有一行日志）。新行为：先数出可疑项（位于 out_root 下，且扩展名
+    // 与本轮输出格式相同 —— 只有这类文件才可能是上一轮产物），一次性问用户：
+    //   Yes = 照常处理（同名输出由引擎强制改名「名称 (1).扩展名」，源文件永不被覆盖）
+    //   No  = 跳过这些输入（保持上一轮产物不被二次施加规则）
+    // 普通源（例如输出 HEIF 时的 .tif）扩展名不同，不再被误判、也不再询问。
+    bool skipped_under_out_root = false;
     {
         const std::filesystem::path out_root(cfg.out_root);
-        if (!out_root.empty()) {
-            std::size_t skipped = 0;
-            std::vector<std::size_t> kept_rows;
-            std::vector<pp::FileEntry> kept;
-            kept_rows.reserve(run_rows.size());
-            kept.reserve(entries.size());
+        if (!out_root.empty() && !entries.empty()) {
+            const auto lower_ascii = [](std::string s) {
+                for (char &c : s) {
+                    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                }
+                return s;
+            };
+            std::vector<std::string> out_exts;
+            if (!cfg.metadata_only) {
+                out_exts.reserve(cfg.outputs.size());
+                for (const pp::OutputFormatSpec &spec : cfg.outputs) {
+                    if (const pp::FormatDef *fmt = pp::find_format(spec.format_id)) {
+                        out_exts.push_back(lower_ascii(fmt->ext));
+                    }
+                }
+            }
+            std::vector<std::size_t> suspects;
             for (std::size_t i = 0; i < entries.size() && i < run_rows.size(); ++i) {
-                if (pp::is_inside(entries[i].src, out_root)) {
-                    ++skipped;
+                if (!pp::is_inside(entries[i].src, out_root)) {
                     continue;
                 }
-                kept_rows.push_back(run_rows[i]);
-                kept.push_back(std::move(entries[i]));
+                // 仅元数据模式的产物保持源格式：任何位于输出根下的输入都可能是上一轮产物。
+                bool suspect = cfg.metadata_only;
+                if (!suspect) {
+                    std::string ext = lower_ascii(entries[i].src.extension().string());
+                    if (!ext.empty() && ext.front() == '.') {
+                        ext.erase(ext.begin());
+                    }
+                    suspect = std::find(out_exts.begin(), out_exts.end(), ext) != out_exts.end();
+                }
+                if (suspect) {
+                    suspects.push_back(i);
+                }
             }
-            if (skipped > 0) {
-                pp::log_warn("run", "mainwindow_run.cpp", "skipped inputs under output root",
-                             {{"out_root", out_root.string()}, {"count", std::to_string(skipped)}});
+            if (!suspects.empty()) {
+                constexpr std::size_t kShow = 5;
+                QStringList shown;
+                for (std::size_t k = 0; k < suspects.size() && k < kShow; ++k) {
+                    shown << path_text(entries[suspects[k]].src);
+                }
+                const QString more = suspects.size() > kShow
+                                         ? T("\n…（其余 %1 个省略）").arg(suspects.size() - kShow)
+                                         : QString();
+                const QString body =
+                    cfg.metadata_only
+                        ? T("有 %1 个输入位于输出根目录内，可能是上一轮产物（仅元数据模式的产物"
+                            "保持源格式，无法按扩展名区分）：\n%2%3\n\n"
+                            "是：照常处理它们（同名输出会自动改名为「名称 (1).扩展名」，源文件"
+                            "不会被覆盖）\n"
+                            "否：跳过这些输入（不把上一轮产物当成本轮输入）")
+                              .arg(suspects.size())
+                              .arg(shown.join(QLatin1Char('\n')), more)
+                        : T("有 %1 个输入位于输出根目录内，且扩展名与本轮输出相同，可能是上一轮"
+                            "产物：\n%2%3\n\n"
+                            "是：照常处理它们（同名输出会自动改名为「名称 (1).扩展名」，源文件"
+                            "不会被覆盖）\n"
+                            "否：跳过这些输入（不把上一轮产物当成本轮输入）")
+                              .arg(suspects.size())
+                              .arg(shown.join(QLatin1Char('\n')), more);
+                const QMessageBox::StandardButton answer =
+                    QMessageBox::question(this, T("输入位于输出目录内"), body,
+                                          QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+                if (answer != QMessageBox::Yes) {
+                    skipped_under_out_root = true;
+                    std::vector<bool> drop(entries.size(), false);
+                    for (const std::size_t idx : suspects) {
+                        drop[idx] = true;
+                    }
+                    std::vector<std::size_t> kept_rows;
+                    std::vector<pp::FileEntry> kept;
+                    kept_rows.reserve(run_rows.size());
+                    kept.reserve(entries.size());
+                    for (std::size_t i = 0; i < entries.size(); ++i) {
+                        if (drop[i]) {
+                            continue;
+                        }
+                        kept_rows.push_back(run_rows[i]);
+                        kept.push_back(std::move(entries[i]));
+                    }
+                    run_rows.swap(kept_rows);
+                    entries.swap(kept);
+                }
+                pp::log_info("run", "mainwindow_run.cpp", "inputs under output root",
+                             {{"out_root", out_root.string()},
+                              {"count", std::to_string(suspects.size())},
+                              {"action", answer == QMessageBox::Yes ? "process" : "skip"}});
             }
-            run_rows.swap(kept_rows);
-            entries.swap(kept);
         }
+    }
+    if (entries.empty()) {
+        QMessageBox::information(
+            this, T("没有可运行的文件"),
+            skipped_under_out_root
+                ? T("所选输入全部位于输出根目录内，且被跳过。请更换输出根目录，或重新选择输入。")
+                : T("当前没有参与运行的输入文件（未勾选或全部被过滤）。"));
+        return;
     }
 
     // R-067：过滤视图与运行集语义冲突 —— 过滤只改可见行，勾选/运行集是全局的。
@@ -537,9 +746,12 @@ void MainWindow::on_start() {
         d.page_run->set_plan(plan);
     }
 
-    for (const std::size_t row : run_rows)
-        d.model->set_state(row, pp::FileState::Queued); // 只复位本批（参与运行）行的状态
-    d.run_rows = run_rows;                              // ev.index（提交序号）→ 列表行号的映射
+    // 2026-10 修复：只复位本批会让**未勾选**行保留上一轮的「已完成/编码」胶囊，而底栏只统计
+    // 本批 → 同一屏两套状态（bug1：文件列表 9 行中仅 .heic 勾选，其余仍显示上一轮状态）。
+    // 新批次开始即统一清空所有行的旧状态；未勾选行回到排队，不再冒充本轮结果。
+    for (std::size_t i = 0; i < d.model->size(); ++i)
+        d.model->set_state(i, pp::FileState::Queued);
+    d.run_rows = run_rows; // ev.index（提交序号）→ 列表行号的映射
     // R-256 后半（M7R22G2）：提交时按序号快照源路径（稳定键；与 entries 同序），供
     // handle_file_event 逐事件核对「行序不变」契约 + 漂移时按路径重定位。
     d.run_row_paths.clear();

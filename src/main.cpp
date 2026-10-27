@@ -25,10 +25,17 @@
 
 #include <QApplication>
 #include <QDebug>
+#include <QFont>
+#include <QPainter>
+#include <QPixmap>
+#include <QSplashScreen>
 #include <QString>
 
+#include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <memory>
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -65,6 +72,34 @@ bool std_handle_is_captured(DWORD which) {
 } // namespace
 #endif
 
+namespace {
+// 首次启动的即时反馈：MainWindow 需要构建三页/主题/缩略图线程，Windows 冷启动 + 杀软扫描
+// 时可能 1–3s 无窗口。先显示轻量 splash，主窗 show 后 finish；不改变任何启动顺序。
+QPixmap startup_splash_pixmap() {
+    QPixmap pm(460, 150);
+    pm.fill(QColor(34, 37, 43));
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    QFont title(QStringLiteral("Segoe UI Variable Text"));
+    title.setPixelSize(22);
+    title.setWeight(QFont::DemiBold);
+    p.setFont(title);
+    p.setPen(QColor(245, 247, 250));
+    p.drawText(QRect(26, 28, 408, 32), Qt::AlignLeft | Qt::AlignVCenter,
+               QStringLiteral("PhotoPipeline"));
+    QFont sub(QStringLiteral("Microsoft YaHei UI"));
+    sub.setPixelSize(12);
+    p.setFont(sub);
+    p.setPen(QColor(154, 160, 170));
+    p.drawText(QRect(26, 70, 408, 22), Qt::AlignLeft | Qt::AlignVCenter,
+               QStringLiteral("批量像素级转码 · 元数据手术台"));
+    p.setPen(QColor(104, 156, 226));
+    p.drawText(QRect(26, 108, 408, 20), Qt::AlignLeft | Qt::AlignVCenter,
+               QStringLiteral("正在加载 · %1").arg(QStringLiteral(PP_VERSION_STRING)));
+    return pm;
+}
+} // namespace
+
 int main(int argc, char **argv) {
 #ifdef _WIN32
     // M3-D5 (v2.0，取代 v1.4): 判据由"句柄是否有效"改为"句柄是否捕获型"。
@@ -98,7 +133,8 @@ int main(int argc, char **argv) {
     bool has_dev_switch = false;
     bool has_version = false;
     for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--dev") == 0 || std::strcmp(argv[i], "--ui-smoke") == 0) {
+        if (std::strcmp(argv[i], "--dev") == 0 || std::strcmp(argv[i], "--ui-smoke") == 0 ||
+            std::strcmp(argv[i], "--ui-traverse") == 0) {
             has_dev_switch = true;
         } else if (std::strcmp(argv[i], "--version") == 0) {
             has_version = true;
@@ -117,7 +153,7 @@ int main(int argc, char **argv) {
         if (std::strcmp(argv[i], "--dev") == 0) {
             return pp::dev::run_dev(argc, argv);
         }
-        if (std::strcmp(argv[i], "--ui-smoke") == 0) {
+        if (std::strcmp(argv[i], "--ui-smoke") == 0 || std::strcmp(argv[i], "--ui-traverse") == 0) {
             return pp::dev::run_ui_smoke(argc, argv);
         }
     }
@@ -127,7 +163,8 @@ int main(int argc, char **argv) {
     // with empty stdout/stderr), so without this check a release binary would just start the
     // GUI. Report the missing harness and fail with a non-zero exit code instead.
     for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--dev") == 0 || std::strcmp(argv[i], "--ui-smoke") == 0) {
+        if (std::strcmp(argv[i], "--dev") == 0 || std::strcmp(argv[i], "--ui-smoke") == 0 ||
+            std::strcmp(argv[i], "--ui-traverse") == 0) {
             std::fprintf(stderr,
                          "photopipeline: dev harness not built (rebuild with -DPP_BUILD_DEV=ON)\n");
             return 2;
@@ -137,10 +174,43 @@ int main(int argc, char **argv) {
 
     // §4.3 冻结启动顺序：style 尝试 → data_dir → load_settings → 日志级别 → log_init →
     //                    MainWindow(settings) → show → exec → log_shutdown
+    const auto startup_t0 = std::chrono::steady_clock::now();
+    const auto startup_ms = [&startup_t0] {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+                   std::chrono::steady_clock::now() - startup_t0)
+            .count();
+    };
     QApplication app(argc, argv);
+    if (std::getenv("PP_STARTUP_TIMING") != nullptr)
+        std::fprintf(stderr, "startup main: app=%lldms\n", static_cast<long long>(startup_ms()));
     if (QApplication::setStyle(QStringLiteral("Fluent")) == nullptr) {
         qInfo("PhotoPipeline: style 'Fluent' unavailable; keeping the default style");
     }
+    std::unique_ptr<QSplashScreen> splash;
+    // 实测：QSplashScreen 首次 show() 在 Windows 上会同步等待 DWM/首次顶层窗初始化
+    // （本机 ~1.0s），反而把主窗从 0.61s 拖到 1.6s；默认关闭，仅诊断时 PP_SHOW_SPLASH=1。
+    if (std::getenv("PP_SHOW_SPLASH") != nullptr) {
+        if (std::getenv("PP_STARTUP_TIMING") != nullptr)
+            std::fprintf(stderr, "startup main: splash_pre=%lldms\n",
+                         static_cast<long long>(startup_ms()));
+        QPixmap splash_pm = startup_splash_pixmap();
+        if (std::getenv("PP_STARTUP_TIMING") != nullptr)
+            std::fprintf(stderr, "startup main: splash_pixmap=%lldms\n",
+                         static_cast<long long>(startup_ms()));
+        splash = std::make_unique<QSplashScreen>(splash_pm);
+        splash->setAttribute(Qt::WA_ShowWithoutActivating, true);
+        if (std::getenv("PP_STARTUP_TIMING") != nullptr)
+            std::fprintf(stderr, "startup main: splash_ctor=%lldms\n",
+                         static_cast<long long>(startup_ms()));
+        splash->show();
+        if (std::getenv("PP_STARTUP_TIMING") != nullptr)
+            std::fprintf(stderr, "startup main: splash_show=%lldms\n",
+                         static_cast<long long>(startup_ms()));
+        if (std::getenv("PP_SPLASH_NO_PUMP") == nullptr)
+            QApplication::processEvents(); // 先把 splash 画出来，再继续构建主窗
+    }
+    if (std::getenv("PP_STARTUP_TIMING") != nullptr)
+        std::fprintf(stderr, "startup main: splash=%lldms\n", static_cast<long long>(startup_ms()));
     pp::platform::data_dir(); // 确保便携/回退目录存在（结果缓存）
     pp::AppSettings settings = pp::load_settings(pp::platform::settings_file());
     pp::LogLevel level = pp::LogLevel::Info;
@@ -152,8 +222,18 @@ int main(int argc, char **argv) {
     // 沿用 settings 值；未设置 → 与 M1b 行为完全一致）。GUI 与 --dev/--ui-smoke 同一入口。
     level = pp::level_from_env_or(level);
     pp::log_init(pp::platform::logs_dir(), level);
+    if (std::getenv("PP_STARTUP_TIMING") != nullptr)
+        std::fprintf(stderr, "startup main: settings_log=%lldms\n",
+                     static_cast<long long>(startup_ms()));
     pp::ui::MainWindow w(settings);
+    if (std::getenv("PP_STARTUP_TIMING") != nullptr)
+        std::fprintf(stderr, "startup main: mainwindow=%lldms\n",
+                     static_cast<long long>(startup_ms()));
     w.show();
+    if (splash)
+        splash->finish(&w);
+    if (std::getenv("PP_STARTUP_TIMING") != nullptr)
+        std::fprintf(stderr, "startup main: shown=%lldms\n", static_cast<long long>(startup_ms()));
     // M3-D6: Mica + 深色标题栏（非 Windows 平台在 mica.cpp 内为空操作）。
     // M4-W2-fix 第 11 条 / M5-T11（A28）：模式口径 = **与 GUI 同源**的
     // theme::preferred_theme_mode()，三档顺序 = **强制档 > 持久化档 > 跟随系统** —— 强制档 =

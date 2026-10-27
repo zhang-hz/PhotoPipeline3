@@ -44,10 +44,12 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStandardItemModel>
 #include <QStringList>
+#include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
 
@@ -59,9 +61,10 @@
 #include <optional>
 #include <utility>
 
-#include "ui/contextmenu.h" // UX-1 ⑧：格式参数卡右键菜单（actions 单源）
-#include "ui/formkit.h"     // C2：行构造器（R1–R4）+ 自绘勾选框（M5-T8）
-#include "ui/icons.h"       // 折叠插入符 = 矢量图标（C3；禁字形）
+#include "ui/contextmenu.h"    // UX-1 ⑧：格式参数卡右键菜单（actions 单源）
+#include "ui/formkit.h"        // C2：行构造器（R1–R4）+ 自绘勾选框（M5-T8）
+#include "ui/icons.h"          // 折叠插入符 = 矢量图标（C3；禁字形）
+#include "ui/leading_indent.h" // R-218：逻辑边距（空态提示与表单同轴）
 #include "ui/theme.h"
 
 namespace pp::ui {
@@ -361,6 +364,7 @@ struct ParamForm::Impl {
     FormSelection sel;                    // 已解析（非空）的当前选择
     pp::ParamSet values;                  // 工作集（含保留键 "__lossless"）
     std::string pre_lossless_tech;        // 本表单自动切走前的技术（取消无损时切回）
+    pp::ParamSet pre_lossless_values;     // 开无损前的用户值（取消时恢复，避免 444 残留）
     // R-009 同族（M7-WP4）：构造期 tokens 取当前生效档（原硬编码 Dark）
     theme::Tokens tokens = theme::tokens(theme::preferred_theme_mode());
 
@@ -384,6 +388,8 @@ struct ParamForm::Impl {
     QFrame *adv_rule = nullptr; // 折叠区顶缘 hairline（替代组框：无双层框线）
     // UX-8：子分组**二级折叠**（渐进/噪声/解码预算/编码工具）——(SubGroup 序号, 折叠钮)
     QList<QPair<int, QToolButton *>> subgroup_headers;
+    QList<QPair<int, QLabel *>> subgroup_counts;          // 组内「N 项」标签（随谓词/过滤动态刷新）
+    formkit::ElidedLabel *adv_empty = nullptr;            // 搜索无匹配时的空态说明
     bool group_expanded[4] = {true, false, false, false}; // 默认只展开第一组（kSubGroupOrder 序）
     // UX-10.1：枚举限幅（key → 禁用原因；空 = 无限幅）—— 由 limit_enum_choices 写入
     std::map<std::string, QString> enum_limits;
@@ -644,7 +650,8 @@ struct ParamForm::Impl {
             if (any)
                 names << subgroup_title(g);
         }
-        return names.join(QStringLiteral(" / "));
+        // 单组时组栏就在下面一行，摘要再写一次「编码工具」是重复标签（深走查 065/066/072/073）。
+        return names.size() > 1 ? names.join(QStringLiteral(" / ")) : QString();
     }
 
     int count_group(SubGroup g) const {
@@ -655,9 +662,26 @@ struct ParamForm::Impl {
         return n;
     }
 
+    // 把折叠区内某一行滚入视野（外层无 QScrollArea 时 no-op；延迟到本轮布局完成）。
+    void ensure_in_scroll(QWidget *target) {
+        if (target == nullptr)
+            return;
+        QWidget *parent = q->parentWidget();
+        while (parent != nullptr && qobject_cast<QScrollArea *>(parent) == nullptr)
+            parent = parent->parentWidget();
+        if (auto *scroll = qobject_cast<QScrollArea *>(parent)) {
+            QTimer::singleShot(0, q, [scroll, target] {
+                if (target != nullptr)
+                    scroll->ensureWidgetVisible(target, 0, 12);
+            });
+        }
+    }
+
     void build_rows() {
         rows.clear();
         subgroup_headers.clear();
+        subgroup_counts.clear();
+        adv_empty = nullptr; // 随 adv_host 一起 delete
         delete core_host;
         core_host = nullptr;
         core_box = nullptr;
@@ -686,6 +710,7 @@ struct ParamForm::Impl {
         //      右侧「N 项」计数 + chevron；无 QGroupBox → 无双层框线）----
         adv_toggle = new QToolButton(q);
         adv_toggle->setObjectName(QStringLiteral("pp-advanced-toggle"));
+        adv_toggle->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkFold));
         adv_toggle->setCheckable(true);
         adv_toggle->setChecked(false); // 起始折叠（§7.2「高级参数(展开)」）
         adv_toggle->setAutoRaise(true);
@@ -748,6 +773,16 @@ struct ParamForm::Impl {
         adv_box->setContentsMargins(0, 0, 0, 0);
         adv_box->setSpacing(0);
         hv->addWidget(adv_body);
+        // 搜索无匹配时的空态（旧实现只剩空白；且高级头被整体隐藏，连收起入口都消失）。
+        adv_empty = new formkit::ElidedLabel(adv_host);
+        adv_empty->setObjectName(QStringLiteral("pp-advanced-empty"));
+        adv_empty->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkHint));
+        adv_empty->setFont(theme::font(theme::Typography::hint_px));
+        adv_empty->setMinimumHeight(formkit::kRowPitch);
+        adv_empty->set_full_text(ParamForm::tr("没有匹配的高级参数：清空搜索框可查看全部"));
+        set_leading_indent(adv_empty, formkit::kLabelW + formkit::kColGap);
+        adv_empty->setVisible(false);
+        hv->addWidget(adv_empty);
 
         if (const pp::TechDef *t = tech()) {
             // UX-8：子分组**二级折叠**（渐进 / 噪声 / 解码预算 / 编码工具），分组判据 =
@@ -774,6 +809,7 @@ struct ParamForm::Impl {
                 hh->setContentsMargins(0, 0, 0, 0);
                 hh->setSpacing(formkit::kInlineGap);
                 auto *toggle = new QToolButton(header);
+                toggle->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkFold));
                 toggle->setCheckable(true);
                 toggle->setChecked(group_expanded[gi]);
                 toggle->setAutoRaise(true);
@@ -791,6 +827,7 @@ struct ParamForm::Impl {
                 count->setFont(theme::font(theme::Typography::hint_px));
                 hh->addWidget(count);
                 subgroup_headers.append({gi, toggle});
+                subgroup_counts.append({gi, count});
                 adv_box->addWidget(header);
                 new FoldRowClick(header, toggle); // 组折叠头同样整行可点
                 QObject::connect(toggle, &QToolButton::toggled, q, [this, gi, toggle](bool on) {
@@ -798,6 +835,15 @@ struct ParamForm::Impl {
                         group_expanded[gi] = on;
                     set_fold_icon(toggle, on);
                     update_row_states();
+                    if (!on)
+                        return;
+                    // 子组展开后把该组**最后一行**滚入视野：8 行的编码工具组一次全露出来，
+                    // 而不是只露前 4 行（多组全开时底部行不会无声落在视口外）。
+                    QWidget *last = nullptr;
+                    for (const Row &r : rows)
+                        if (r.advanced && static_cast<int>(r.subgroup) == gi && r.shown)
+                            last = r.row;
+                    ensure_in_scroll(last);
                 });
                 for (const pp::ParamDef *p : in_group)
                     add_row(*p);
@@ -827,6 +873,10 @@ struct ParamForm::Impl {
             set_fold_icon(adv_toggle, on);
             adv_toggle->setToolTip(on ? ParamForm::tr("收起高级参数")
                                       : ParamForm::tr("展开或收起高级参数（低频编码器选项）"));
+            if (!on)
+                return;
+            // 折叠区在参数卡底部，展开后内容往往落在视口外；滚到折叠区起点。
+            ensure_in_scroll(adv_host);
         });
         // §2.7：跨格式/技术重建后，红字区恒为参数组最后一行
         root->removeWidget(cross_error);
@@ -902,16 +952,32 @@ struct ParamForm::Impl {
     }
 
     // 技术/后端变化 → 重建工作集（默认值 + 同 key 同类型沿用旧值）与行控件
-    void rebuild_params() {
+    // M7-R2.4（格式卡「关无损后距离变 0」）：old_tech 提供**旧技术**的锁定谓词 —— 旧值若
+    // 来自锁定（如 JXL 无损把 distance 强制为 0.0），切换后不得当成用户选择沿用。
+    // 旧实现无条件沿用同 key 同类型值：关掉无损 → 技术回 VarDCT，distance 仍是 0.0 →
+    // 编码器报 "VarDCT distance=0 is ambiguous"，页面上看着"恢复默认"实际已不可编码。
+    // M7-R2.5（AVIF 自动后端切换串参数）：carry_values=false 用于**跨后端**重建 ——
+    // SVT-AV1 与 libaom 的同名键（speed/threads/tune…）默认值与值域都不同，按 key 沿用
+    // 会把 SVT 的 speed=12 带进 libaom（值域 0–9），UI 显示被钳到 9、工作集里仍是 12，
+    // 既造成「已改 3」假计数，也可能把越界值下发给编码器。
+    void rebuild_params(const pp::TechDef *old_tech = nullptr, bool carry_values = true) {
         const pp::ParamSet old = values;
         values = make_defaults();
-        if (const pp::TechDef *t = tech()) {
-            for (const auto &[k, v] : old) {
-                if (is_reserved_key(k))
-                    continue;
-                const pp::ParamDef *p = find_param(*t, k);
-                if (p && same_typed_value(*p, v))
+        if (carry_values) {
+            if (const pp::TechDef *t = tech()) {
+                for (const auto &[k, v] : old) {
+                    if (is_reserved_key(k))
+                        continue;
+                    const pp::ParamDef *p = find_param(*t, k);
+                    if (!p || !same_typed_value(*p, v))
+                        continue;
+                    if (old_tech != nullptr) {
+                        const pp::ParamDef *op = find_param(*old_tech, k);
+                        if (op != nullptr && pp::eval_lock(*op, old).has_value())
+                            continue; // 旧值是锁定强制值，不是用户选择 → 回新表默认
+                    }
                     values[k] = v;
+                }
             }
         }
         values[kLosslessKey] = sel.lossless;
@@ -983,8 +1049,11 @@ struct ParamForm::Impl {
     void update_row_states() {
         const QString filter = adv_search ? adv_search->text() : QString();
         const bool filter_active = !filter.isEmpty();
+        int advanced_total = 0; // 谓词可见的高级行（**不含**搜索过滤）—— 决定折叠头是否保留
+        std::map<int, int> group_visible;
         for (Row &r : rows) {
-            bool eligible = pp::eval_visible(*r.def, values); // 条 4：不可见 → 行隐藏
+            const bool predicate_visible = pp::eval_visible(*r.def, values); // 条 4
+            bool eligible = predicate_visible;
             if (eligible && r.advanced && filter_active) {
                 const QString label = QString::fromStdString(r.def->label);
                 const QString key = QString::fromStdString(r.key);
@@ -992,6 +1061,10 @@ struct ParamForm::Impl {
                            key.contains(filter, Qt::CaseInsensitive); // 条 3：包含过滤
             }
             r.eligible = eligible;
+            if (r.advanced && predicate_visible)
+                ++advanced_total;
+            if (r.advanced && eligible)
+                ++group_visible[static_cast<int>(r.subgroup)];
             // 折叠只决定"行是否显示"，不参与"该子分组是否存在可见项"的判定 —— 否则收起
             // 一个子分组会把它的折叠头也隐藏掉，用户再也点不开（原实现即此病灶）。
             bool shown = eligible;
@@ -1028,16 +1101,45 @@ struct ParamForm::Impl {
             }
             set_fold_icon(toggle, open);
         }
+        // 组内「N 项」跟随谓词/过滤刷新（旧实现建组时写死 → 头「3 项」/组「4 项」自相矛盾）。
+        for (const auto &[group, label] : subgroup_counts) {
+            if (label == nullptr)
+                continue;
+            label->setText(ParamForm::tr("%1 项").arg(group_visible[group]));
+        }
         // 折叠头计数/摘要随谓词/搜索过滤实时更新（只报"点开真能看到"的行数）。
         if (adv_toggle != nullptr) {
             const int n = count_advanced();
             adv_toggle->setText(ParamForm::tr("%1 项").arg(n));
-            adv_toggle->setEnabled(n > 0);
-            if (adv_row.row != nullptr) {
-                adv_row.row->setVisible(n > 0);
-                if (auto *summary =
-                        adv_row.row->findChild<QLabel *>(QStringLiteral("pp-advanced-summary")))
-                    static_cast<formkit::ElidedLabel *>(summary)->set_full_text(advanced_summary());
+            if (n == 0 && !filter_active) {
+                // 当前技术/无损档下没有任何可见高级参数：折叠头与空折叠区一起收掉
+                // （旧实现留下「高级参数 0 项」的空折叠面，点了也什么都没有）。
+                if (adv_toggle->isChecked()) {
+                    const QSignalBlocker blocker(adv_toggle);
+                    adv_toggle->setChecked(false);
+                }
+                adv_toggle->setVisible(false);
+                set_fold_icon(adv_toggle, false);
+                if (adv_host != nullptr)
+                    adv_host->setVisible(false);
+                if (adv_row.row != nullptr)
+                    adv_row.row->setVisible(false);
+                if (adv_empty != nullptr)
+                    adv_empty->setVisible(false);
+            } else {
+                // M7-R2.5：折叠头**不因搜索 0 命中而消失** —— 它承载收起/再展开入口；
+                // 只要还有谓词可见的高级行（或当前已展开）就保留，计数写 0。
+                adv_toggle->setVisible(true);
+                adv_toggle->setEnabled(advanced_total > 0 || adv_toggle->isChecked());
+                if (adv_row.row != nullptr) {
+                    adv_row.row->setVisible(advanced_total > 0 || adv_toggle->isChecked());
+                    if (auto *summary =
+                            adv_row.row->findChild<QLabel *>(QStringLiteral("pp-advanced-summary")))
+                        static_cast<formkit::ElidedLabel *>(summary)->set_full_text(
+                            advanced_summary());
+                }
+                if (adv_empty != nullptr)
+                    adv_empty->setVisible(filter_active && n == 0);
             }
         }
     }
@@ -1247,13 +1349,16 @@ struct ParamForm::Impl {
     // ---------------------------------------------------------------- 选择变化
 
     void apply_state(const std::string &backend_id, const std::string &tech_id, bool lossless) {
-        const bool rebuild = (backend_id != sel.backend) || (tech_id != sel.tech);
+        const bool backend_changed = (backend_id != sel.backend);
+        const bool rebuild = backend_changed || (tech_id != sel.tech);
+        const pp::TechDef *old_tech = tech(); // 必须在改 sel 前取（锁定谓词按旧技术求值）
         sel.backend = backend_id;
         sel.tech = tech_id;
         sel.lossless = lossless;
         if (rebuild) {
             populate_tech_combo();
-            rebuild_params();
+            // 跨后端：同名键的值域/语义不同，禁止沿用旧值；仅同后端换技术时沿用非锁定值。
+            rebuild_params(old_tech, /*carry_values=*/!backend_changed);
         }
         refresh();
     }
@@ -1268,6 +1373,7 @@ struct ParamForm::Impl {
         if (!b)
             return;
         pre_lossless_tech.clear();
+        pre_lossless_values.clear();
         std::string tech_id = b->techs.empty() ? std::string() : b->techs.front().id;
         bool lossless = sel.lossless;
         if (lossless) {
@@ -1293,6 +1399,7 @@ struct ParamForm::Impl {
             return;
         }
         pre_lossless_tech.clear(); // 手动改技术 → 不再记忆自动切换
+        pre_lossless_values.clear();
         apply_state(sel.backend, id, sel.lossless);
         emit q->selection_changed(sel);
         emit q->changed();
@@ -1303,7 +1410,11 @@ struct ParamForm::Impl {
             return;
         std::string tech_id = sel.tech;
         std::string memo = pre_lossless_tech;
+        bool restore_values = false;
         if (on) {
+            // 先记开无损前的用户值：HEIF/AVIF 的运行时技术自带 lossless_capable，
+            // 不触发换技术，但 chroma 仍会被强制 444；关无损时必须恢复。
+            pre_lossless_values = values;
             const pp::TechDef *ct = tech();
             if (!ct || !ct->lossless_capable) {
                 const pp::TechDef *lt = first_lossless_tech_in(backend());
@@ -1319,11 +1430,17 @@ struct ParamForm::Impl {
         } else if (!memo.empty() && memo != sel.tech && tech_by_id(memo)) {
             tech_id = memo; // 撤销本表单造成的那次自动切换
             memo.clear();
+            restore_values = !pre_lossless_values.empty();
         } else {
             memo.clear();
+            restore_values = !pre_lossless_values.empty();
         }
         pre_lossless_tech = memo;
         apply_state(sel.backend, tech_id, on);
+        if (restore_values) {
+            set_values(pre_lossless_values); // HEIF 的强制 chroma=444 等不应残留
+            pre_lossless_values.clear();
+        }
         emit q->selection_changed(sel);
         emit q->changed();
     }
@@ -1352,8 +1469,10 @@ struct ParamForm::Impl {
                     lossless = false;
             }
         }
-        if (backend_id != sel.backend)
+        if (backend_id != sel.backend) {
             pre_lossless_tech.clear();
+            pre_lossless_values.clear();
+        }
         apply_state(backend_id, tech_id, lossless); // 不发信号（条 7）
     }
 

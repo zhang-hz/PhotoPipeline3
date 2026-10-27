@@ -23,6 +23,7 @@
 #include "core/pipeline.h"
 #include "core/types.h"
 #include "decode/oiio_reader.h"
+#include "decode/tiff_ifd.h"
 
 namespace fs = std::filesystem;
 
@@ -693,6 +694,72 @@ int main() {
             } else {
                 check(false, "r163/rows", "无输出行");
             }
+        }
+    }
+
+    // ---- 0.3.6-alpha1：TIFF IFD1 reduced-resolution 缩略图 ≠ 多页 ----
+    // NewSubfileType(254) bit0 = 1 才是缩略图；真多页夹具（base/multi.tif，64x64+32x32，
+    // 无 254 标记）必须继续判多页。合成两目录 TIFF 钉住判据本身（勿动 tests/golden）。
+    {
+        namespace fsys = std::filesystem;
+        const fsys::path tmp = fsys::temp_directory_path() / "pp-test_decode-tiff-ifd";
+        std::error_code ec;
+        fsys::create_directories(tmp, ec);
+        const auto put16 = [](std::vector<unsigned char> &b, std::size_t off, unsigned v) {
+            b[off] = static_cast<unsigned char>(v & 0xFF);
+            b[off + 1] = static_cast<unsigned char>((v >> 8) & 0xFF);
+        };
+        const auto put32 = [](std::vector<unsigned char> &b, std::size_t off, unsigned v) {
+            b[off] = static_cast<unsigned char>(v & 0xFF);
+            b[off + 1] = static_cast<unsigned char>((v >> 8) & 0xFF);
+            b[off + 2] = static_cast<unsigned char>((v >> 16) & 0xFF);
+            b[off + 3] = static_cast<unsigned char>((v >> 24) & 0xFF);
+        };
+        // 小端经典 TIFF：IFD0 @8（1 条 ImageWidth），IFD1 @26（1 条 NewSubfileType）。
+        const auto write_tiff = [&](const fsys::path &p, unsigned subfiletype) {
+            std::vector<unsigned char> b(44, 0);
+            b[0] = 'I';
+            b[1] = 'I';
+            put16(b, 2, 42);
+            put32(b, 4, 8);
+            put16(b, 8, 1);    // IFD0 entry count
+            put16(b, 10, 256); // ImageWidth
+            put16(b, 12, 4);   // LONG
+            put32(b, 14, 1);   // count
+            put32(b, 18, 64);  // value
+            put32(b, 22, 26);  // next IFD
+            put16(b, 26, 1);   // IFD1 entry count
+            put16(b, 28, 254); // NewSubfileType
+            put16(b, 30, 4);   // LONG
+            put32(b, 32, 1);   // count
+            put32(b, 36, subfiletype);
+            put32(b, 40, 0); // next = 0
+            std::ofstream f(p, std::ios::binary | std::ios::trunc);
+            f.write(reinterpret_cast<const char *>(b.data()),
+                    static_cast<std::streamsize>(b.size()));
+            return static_cast<bool>(f);
+        };
+        const fsys::path thumb_tif = tmp / "thumb.tif";
+        const fsys::path page_tif = tmp / "page.tif";
+        check(write_tiff(thumb_tif, 1) && write_tiff(page_tif, 0), "tiff-ifd/fixture",
+              "合成 TIFF 写失败");
+        check(pp::tiff_ifd1_is_reduced_thumbnail(thumb_tif), "tiff-ifd/thumbnail",
+              "NewSubfileType=1 应判为缩略图");
+        check(!pp::tiff_ifd1_is_reduced_thumbnail(page_tif), "tiff-ifd/page",
+              "NewSubfileType=0 不应判为缩略图");
+        check(!pp::tiff_ifd1_is_reduced_thumbnail(corpus / "base/multi.tif"), "tiff-ifd/multi",
+              "多页夹具 multi.tif（无 254 标记）不得判为缩略图");
+        check(!pp::tiff_ifd1_is_reduced_thumbnail(corpus / "base/rgb8.tif"), "tiff-ifd/single",
+              "单页 TIFF 不得判为缩略图");
+        // 用户样本（super/T1.tif = _DSF3043.tif：IFD1 107x160，NewSubfileType=1）——
+        // 存在时用真文件钉住 probe 面不再误报多页。
+        const fsys::path t1 = corpus.parent_path().parent_path() / "super" / "T1.tif";
+        if (fsys::exists(t1, ec)) {
+            check(pp::tiff_ifd1_is_reduced_thumbnail(t1), "tiff-ifd/t1-ifd1",
+                  "super/T1.tif 的 IFD1 应判为缩略图");
+            const pp::ProbeOutcome po = pp::probe_file(t1);
+            check(po.error.empty() && !po.info.is_multipage, "tiff-ifd/t1-probe",
+                  "带缩略图 IFD1 的 TIFF 不应报 is_multipage");
         }
     }
 

@@ -271,23 +271,37 @@ void MainWindow::Impl::refresh_status_output_segment(std::size_t checked) {
             d.output_status->set_full_text(eta >= 0 ? T("ETA 约 %1").arg(eta_text(eta))
                                                     : T("ETA 约 —"));
             d.output_status->setToolTip(QString());
+        } else if (d.page_output->metadata_only()) {
+            // M7-R2.5：仅元数据 = 输出容器跟随每个源文件，格式多选被禁用；底栏不能继续报
+            // 现役页签的 JPEG XL（横幅已写"保持原格式"，两处自相矛盾）。
+            d.output_status->set_full_text(checked > 0
+                                               ? T("输出：保持原格式 · %1 个文件").arg(checked)
+                                               : T("输出：保持原格式"));
+            d.output_status->setToolTip(
+                T("仅元数据模式：输出沿用每个源文件自己的容器格式（零重编码）"));
         } else {
             QStringList labels;
             for (const pp::OutputFormatSpec &spec : d.page_output->config_base().outputs)
                 labels << format_label(QString::fromStdString(spec.format_id));
-            if (labels.isEmpty())
-                labels << format_label(d.page_output->current_format());
-            const int formats = std::max(1, static_cast<int>(labels.size()));
-            const QString list = labels.join(QStringLiteral(" + "));
-            // 有参与文件 → 「· N 个文件」（N = 勾选数）；一个都没勾 → 「· M 个格式」（避免
-            // "0 个文件"式的空读数 —— fix-3-status 两行的同一条口径）。
-            d.output_status->set_full_text(checked > 0
-                                               ? T("输出：%1 · %2 个文件").arg(list).arg(checked)
-                                               : T("输出：%1 · %2 个格式").arg(list).arg(formats));
-            d.output_status->setToolTip(
-                T("格式：%1\n模板：%2\n输出根目录：%3\n同名冲突：%4")
-                    .arg(list, d.page_output->output_template(), d.page_output->out_root(),
-                         conflict_label(d.page_output->config_base().conflict)));
+            if (labels.isEmpty()) {
+                // M7-R2.5：0 个已选格式时不得沿用"游离槽"现役格式（BMP）—— 旧实现
+                // 回退 current_format()，清空选择后底栏仍显示「输出：BMP · 16 个文件」，
+                // 与「已选 0 / 预计输出 —」自相矛盾。
+                d.output_status->set_full_text(T("输出：未选择格式"));
+                d.output_status->setToolTip(T("尚未选择输出格式：请在上方「输出格式」中勾选"));
+            } else {
+                const int formats = static_cast<int>(labels.size());
+                const QString list = labels.join(QStringLiteral(" + "));
+                // 有参与文件 → 「· N 个文件」（N = 勾选数）；一个都没勾 → 「· M 个格式」（避免
+                // "0 个文件"式的空读数 —— fix-3-status 两行的同一条口径）。
+                d.output_status->set_full_text(
+                    checked > 0 ? T("输出：%1 · %2 个文件").arg(list).arg(checked)
+                                : T("输出：%1 · %2 个格式").arg(list).arg(formats));
+                d.output_status->setToolTip(
+                    T("格式：%1\n模板：%2\n输出根目录：%3\n同名冲突：%4")
+                        .arg(list, d.page_output->output_template(), d.page_output->out_root(),
+                             conflict_label(d.page_output->config_base().conflict)));
+            }
         }
     }
 }

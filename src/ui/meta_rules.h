@@ -50,6 +50,7 @@ struct RuleInputs {
     // 隐私与文件时间
     bool strip_privacy = false;
     bool sync_mtime = false;
+    bool modernize_exif = false; // 补全现代 EXIF（可选；仅补可推导字段）
 };
 
 // GUI → 值聚合（**唯一**读控件点）

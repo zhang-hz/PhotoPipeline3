@@ -976,12 +976,16 @@ void PreviewPanel::Impl::rebuild_key_hints() {
         chip->setToolTip(T("快捷键 ") + key);
         chip->setAccessibleName(label);
         chip->set_tokens(tokens);
+        // M7-R2.5：1180 最小窗口下 QHBoxLayout 会把 chip 压成 13×18 空胶囊（文字全没）。
+        // 热键 chip 不可压缩，富余宽度由中间文件名的 ElideLabel 承担。
+        chip->setMinimumWidth(chip->sizeHint().width());
         keyhint_layout->addWidget(chip);
         chips.append(chip);
     };
     auto *title = new ClipLabel(T("快速打标"), keyhint);
     title->setObjectName(QStringLiteral("pp-preview-keyhint-label"));
     title->setFont(theme::font(theme::Typography::hint_px));
+    title->setMinimumWidth(title->sizeHint().width());
     keyhint_layout->addWidget(title);
     // 热键表 = 注册表的 classes（hotkey ≠ 0，§6.2）
     if (classes != nullptr) {
@@ -1008,8 +1012,11 @@ void PreviewPanel::Impl::rebuild_key_hints() {
     clear->setFont(theme::font(theme::Typography::small_px));
     clear->setToolTip(T("清除打标（快捷键 0）"));
     clear->setAccessibleName(clear->text());
+    clear->setMinimumWidth(clear->sizeHint().width());
     clear_hint = clear;
     keyhint_layout->addWidget(clear);
+    keyhint->setMinimumWidth(keyhint->sizeHint().width());
+    keyhint->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
     update_keyhint_enabled();
 }
 

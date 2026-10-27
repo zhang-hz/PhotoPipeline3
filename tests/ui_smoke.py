@@ -436,6 +436,9 @@ G1_LINE_PREFIXES = (
     'UI-SMOKE color-options:',
     'UI-SMOKE zero-byte-redo:',
     'UI-SMOKE failure-list:',
+    # 2026-10（0.3.5）：格式参数卡交互矩阵（页签序/空态/模板联动/跨后端不串参数；
+    # 普通 --ui-smoke 也跑，行由 smoke_probes.cpp 的 probe_format_card_interactions 给出）
+    'UI-SMOKE format-card:',
 )
 
 # M7-R2.4-G2（布局审计 · R-识图1）自检行：**识图步骤的机械化落点**。起因 = debug/debug1.png +

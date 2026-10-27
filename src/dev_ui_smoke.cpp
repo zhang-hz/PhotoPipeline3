@@ -28,8 +28,10 @@ namespace {
 
 const char *kUiSmokeUsage =
     "usage: photopipeline --ui-smoke [--inputs DIR] [--shots DIR]\n"
+    "       photopipeline --ui-traverse [--inputs DIR] [--shots DIR]\n"
     "  --inputs DIR   input directory (default <repo>/tests/golden/base)\n"
     "  --shots DIR    screenshot directory (default .cache/ui-review; empty = do not save)\n"
+    "  --ui-traverse  deep walkthrough: scroll/fold/repeat/select-all/shots (not the frozen gate)\n"
     "exit code 0 = all frozen assertions passed; 1 = smoke failure; 2 = usage/argument error\n";
 
 // 可执行文件目录：复用 pp::platform::executable_dir()（Linux 读 /proc/self/exe，
@@ -64,10 +66,15 @@ std::string find_repo_root(const char *argv0) {
 int run_ui_smoke(int argc, char **argv) {
     QString inputs;
     QString shots = QStringLiteral(".cache/ui-review");
+    bool deep = false;
     for (int i = 1; i < argc; ++i) {
         const std::string_view a = argv[i];
         if (a == "--ui-smoke")
             continue;
+        if (a == "--ui-traverse") {
+            deep = true;
+            continue;
+        }
         if (a == "--inputs" || a == "--shots") {
             if (i + 1 >= argc) {
                 std::fprintf(stderr, "photopipeline --ui-smoke: %s requires a value\n%s",
@@ -109,6 +116,8 @@ int run_ui_smoke(int argc, char **argv) {
     // M4-T9：PP_UI_NO_STATE = 不读写面板持久化（data_dir()/ui-state.ini）→ 冻结截图与
     // 开发机状态无关（冒烟只跑 offscreen；真实平台渲染走 --shots .cache/ui-review）。
     qputenv("PP_UI_NO_STATE", "1");
+    // --ui-traverse：同一窗口/同一环境，仅把走查体换成深度矩阵（不改变 --ui-smoke 冻结面）。
+    qputenv("PP_UI_DEEP", deep ? "1" : "0");
     pp::log_set_level(pp::level_from_env_or(pp::LogLevel::Info));
 
     QApplication app(argc, argv);

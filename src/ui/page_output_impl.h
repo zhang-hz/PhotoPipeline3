@@ -205,6 +205,11 @@ inline QString page_qss(const theme::Tokens &t) {
 // ---------------------------------------------------------------------------
 inline bool is_heif_family(const std::string &id) { return id == "heif" || id == "avif"; }
 
+// 页签页面的格式 id 动态属性（M7-R2.4）：页签文案 / 现役解析 / 序对齐都按**页面自身 id**
+// 取，不再用 "页签下标 == sel.at(下标)" 的隐式同序假设（该假设在「先选 jxl 再选 jpeg」时
+// 立即破裂：sel 按磁贴序排序，QTabWidget 按插入序追加 → JPEG 标题下显示 JXL 内容）。
+constexpr const char *kPageFormatIdProperty = "ppFormatId";
+
 struct ProfileOption {
     pp::HeifProfile profile;
     const char *label; // 中文标签（含兼容性说明，§10.1 逐字口径）
@@ -288,6 +293,7 @@ struct FormatState {
     QComboBox *bitdepth = nullptr;
     QLabel *bitdepth_note = nullptr; // 格式能力约束说明（行内 10px 注释位；如 "JPEG 仅支持 8 位"）
     ElidedLabel *alpha_hint = nullptr;
+    ElidedLabel *meta_hint = nullptr; // 格式级元数据承载能力警示（BMP：容器不承载 EXIF/XMP）
     // ---- UX-10.1：HEIF/AVIF 编码档位核心行（位深行之上；仅这两格有）----
     QComboBox *profile = nullptr;   // pp-profile-combo（首项「自动」）
     QLabel *profile_note = nullptr; // 推导结果 / 兼容性提示（warn 色）
@@ -363,6 +369,7 @@ struct OutputPageImpl {
     QTabWidget *tabs = nullptr;
     QToolButton *add_format_button = nullptr;
     formkit::PillBadge *changed_pill = nullptr;
+    ElidedLabel *empty_hint = nullptr; // 未选任何格式时的空态提示（M7-R2.5）
 
     // 卡 ④ 预设与预估
     QFrame *preset_card = nullptr;
@@ -471,6 +478,14 @@ struct OutputPageImpl {
     void sync_tiles();
 
     void sync_tab_current();
+
+    // 页签序对齐（M7-R2.4）：把每个已选格式的页面按 sel.items() 的规范序重排 —— 修正
+    // 「磁贴序 vs 插入序」两套顺序，保证页签标题/内容/现役三者永远同源。add/remove/
+    // preset 重建后都经 reproject 调用一次（同值幂等）。
+    void reconcile_tab_order();
+
+    // 「＋ 添加格式…」可用态：8 个全选时光标悬停给出原因（不静默无响应）。
+    void update_add_format_enabled();
 
     // 页签内的 ParamForm：只有**当前**页签的表单命名为 pp-param-form（冒烟/走查钩子），
     // 其余为 pp-param-form-<id> —— findChild 命中当前格式那一个。

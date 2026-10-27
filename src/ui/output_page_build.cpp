@@ -3,7 +3,61 @@
 // 拆分口径 = 行为零变化（方法体自 page_output.cpp 逐字搬移；公开面逐位不变）。
 #include "ui/page_output_impl.h"
 
+#include <QEvent>
+
 namespace pp::ui {
+
+namespace {
+
+// M7-R2.5：QTabWidget 的默认 sizeHint/minimumSizeHint 取**所有页**的最大值，导致短页签
+// （BMP 2 行）被撑成最高页签（JXL 13 项）的高度：格式参数卡出现 175–200px 空白带，
+// 预设与预估被顶出首屏。这里只按**当前页**计算高度（页签栏 + 当前页），切页/页内布局变化
+// 时 updateGeometry；其余尺寸仍沿用 QTabWidget。
+class CompactTabWidget : public QTabWidget {
+public:
+    explicit CompactTabWidget(QWidget *parent = nullptr) : QTabWidget(parent) {
+        QObject::connect(this, &QTabWidget::currentChanged, this,
+                         [this](int) { updateGeometry(); });
+    }
+
+    QSize sizeHint() const override { return compact(QTabWidget::sizeHint(), false); }
+    QSize minimumSizeHint() const override { return compact(QTabWidget::minimumSizeHint(), true); }
+
+protected:
+    void tabInserted(int index) override {
+        QTabWidget::tabInserted(index);
+        if (QWidget *page = widget(index))
+            page->installEventFilter(this);
+    }
+
+    bool eventFilter(QObject *watched, QEvent *event) override {
+        if (watched != this && event->type() == QEvent::LayoutRequest)
+            updateGeometry();
+        return QTabWidget::eventFilter(watched, event);
+    }
+
+private:
+    QSize compact(QSize base, bool minimum) const {
+        const QWidget *cur = currentWidget();
+        if (cur == nullptr)
+            return base;
+        int max_h = 0;
+        for (int i = 0; i < count(); ++i) {
+            const QWidget *page = widget(i);
+            if (page == nullptr)
+                continue;
+            max_h = std::max(max_h, minimum ? page->minimumSizeHint().height()
+                                            : page->sizeHint().height());
+        }
+        if (max_h <= 0)
+            return base;
+        const int cur_h = minimum ? cur->minimumSizeHint().height() : cur->sizeHint().height();
+        base.setHeight(base.height() - max_h + cur_h);
+        return base;
+    }
+};
+
+} // namespace
 
 void OutputPageImpl::build_ui() {
     auto *outer = new QVBoxLayout(q);
@@ -416,6 +470,10 @@ QWidget *OutputPageImpl::build_global_card(QWidget *parent) {
     }
     v->addWidget(body.host);
     update_template_example();
+    // M7-R2.4（缺陷 3）：模板初值 = "$format/$dir/$file"（默认按格式分文件夹），但开关
+    // 此前从未按初值同步 → 界面显示「分文件夹：关」而模板里明明有 $format，两者不联动。
+    // 这里在构造末尾（两个控件都已存在）按同一判据同步一次；此后 textChanged 路径照旧。
+    sync_split_switch(template_edit->text());
     return global_card;
 }
 
@@ -430,7 +488,7 @@ QWidget *OutputPageImpl::build_param_card(QWidget *parent) {
     v->addWidget(header.row);
 
     // UX-9（§16-1 口径）：页签**等宽** —— 宽度不随"· N 位"文案漂移（见 apply_tab_width）
-    tabs = new QTabWidget(param_card);
+    tabs = new CompactTabWidget(param_card);
     tabs->setObjectName(QStringLiteral("pp-format-tabs"));
     tabs->setDocumentMode(true);
     add_format_button = new QToolButton(tabs);
@@ -445,47 +503,28 @@ QWidget *OutputPageImpl::build_param_card(QWidget *parent) {
     add_format_button->setCursor(Qt::PointingHandCursor);
     add_format_button->setFixedHeight(theme::Metrics::btn_h); // R4 按钮高 26（A7）
     add_format_button->setFont(theme::font(theme::Typography::body_px, 500));
-    tabs->setCornerWidget(add_format_button, Qt::TopRightCorner);
-    // GUI-R2 修 2：QTabWidget 的 corner widget 由它自己的布局摆位，与页签带**不是同一绘制
-    // 单元**（实测 dy=10 / 实拍色带差 14px，两块圆角块中间还有缝）。这里在每次布局后把按钮
-    // **垂直居中**到页签带上（按钮高 26 是 A7 规格，不随页签带拉伸），保证「＋ 添加格式…」
-    // 与页签带同带；只在几何真变时写，避免布局环。
-    class AddFormatAligner : public QObject {
-    public:
-        AddFormatAligner(QTabWidget *tabs_, QToolButton *btn_)
-            : QObject(tabs_), tabs_(tabs_), btn_(btn_) {
-            tabs_->installEventFilter(this);
-        }
-
-    protected:
-        bool eventFilter(QObject *watched, QEvent *event) override {
-            const QEvent::Type t = event->type();
-            if (watched == tabs_ && (t == QEvent::Resize || t == QEvent::LayoutRequest ||
-                                     t == QEvent::Show || t == QEvent::LayoutDirectionChange)) {
-                QTabBar *bar = tabs_->tabBar();
-                if (bar != nullptr && btn_ != nullptr) {
-                    const QPoint org = bar->mapTo(tabs_, QPoint(0, 0));
-                    const int y = org.y() + (bar->height() - btn_->height()) / 2;
-                    // R-218（M7-R2E2）：按钮贴页签带的 leading 端（LTR=右 / RTL=左）；
-                    // LTR 路径逐字节不变。
-                    const bool rtl = tabs_->layoutDirection() == Qt::RightToLeft;
-                    const int x = rtl ? org.x() : org.x() + bar->width() - btn_->width();
-                    const QRect want(x, y, btn_->width(), btn_->height());
-                    if (btn_->geometry() != want)
-                        btn_->setGeometry(want);
-                }
-            }
-            return QObject::eventFilter(watched, event);
-        }
-
-    private:
-        QTabWidget *tabs_;
-        QToolButton *btn_;
-    };
-    new AddFormatAligner(tabs, add_format_button);
+    // 2026-10 用户裁定：格式参数卡不再提供「＋ 添加格式…」入口 —— 增删格式统一走上方
+    // 「输出格式」磁贴（8 格本身就是格式选择面）。保留对象与动作供旧探针/兼容路径找到，
+    // 但不进 corner 布局、不显示。
+    add_format_button->setVisible(false);
     tabs->setContentsMargins(0, 0, 0, 0);
     v->addWidget(tabs);
+    // M7-R2.5：0 个已选格式时 QTabWidget 无页签、corner 的「添加格式…」也随之不可见，
+    // 参数卡变成一块空白。给一个可操作的空态提示（与页签同缩进）。
+    empty_hint = new ElidedLabel(param_card);
+    empty_hint->setObjectName(QStringLiteral("pp-format-empty-hint"));
+    empty_hint->setProperty(kFieldProperty, QString::fromLatin1(theme::kFkHint));
+    empty_hint->setFont(theme::font(theme::Typography::hint_px));
+    empty_hint->setMinimumHeight(formkit::kRowPitch);
+    set_leading_indent(empty_hint, theme::Metrics::card_pad_x);
+    empty_hint->set_full_text(
+        PageOutput::tr("未选择输出格式：请在上方「输出格式」中勾选至少一个格式"));
+    empty_hint->setToolTip(
+        PageOutput::tr("至少选择一个输出格式后才能开始运行（仅元数据模式除外）"));
+    empty_hint->setVisible(false);
+    v->addWidget(empty_hint);
     refresh_changed_pill();
+    update_add_format_enabled();
     return param_card;
 }
 
@@ -597,8 +636,12 @@ void OutputPageImpl::wire() {
     QObject::connect(split_switch, &formkit::SwitchControl::toggled, q,
                      [this](bool on) { apply_split_to_template(on); });
     QObject::connect(tabs, &QTabWidget::currentChanged, q, [this](int index) {
-        // R-189：现役切换只走 FormatSelection（越界/同值早退逐字等价）；投影单点。
-        const std::string id = sel.at(index);
+        // M7-R2.4：现役 id 取**页面属性**（而不是 sel.at(index) 的同序假设）。页序若在
+        // 增删/预设重建的瞬间不同步，取到的也只会是"这个页面自己的格式"，不会串档。
+        const QWidget *page = tabs->widget(index);
+        const QString page_id =
+            page != nullptr ? page->property(kPageFormatIdProperty).toString() : QString();
+        const std::string id = page_id.isEmpty() ? sel.at(index) : page_id.toStdString();
         if (id.empty() || !sel.set_active(id))
             return;
         reproject_format_selection();
@@ -608,13 +651,23 @@ void OutputPageImpl::wire() {
         emit q->config_changed();
     });
     QObject::connect(add_format_button, &QToolButton::clicked, q, [this] {
-        // 「＋ 添加格式…」= 打开尚未选中的首个格式（磁贴顺序）；全部已选 → 无可用项
+        // M7-R2.4：按钮文案是「添加格式…」（带省略号 = 有后续选择），旧实现直接开**首个**
+        // 未选格式 —— 用户点一次 jpeg、再点一次 webp，完全无法预判。现在弹出未选格式菜单；
+        // 全选时菜单给出禁用项而不是静默无响应。
+        QMenu menu(add_format_button);
+        contextmenu::style_menu(&menu); // M7-R2.5：顶层弹窗不吃页面 QSS，显式套主题
         for (const FormatEntry &e : kFormats) {
-            if (!is_selected(e.id)) {
-                toggle_format(e.id, true, /*user=*/true);
-                return;
-            }
+            if (is_selected(e.id))
+                continue;
+            QAction *action = menu.addAction(PageOutput::tr(e.label));
+            QObject::connect(action, &QAction::triggered, q,
+                             [this, id = std::string(e.id)] { toggle_format(id, true, true); });
         }
+        if (menu.isEmpty()) {
+            QAction *none = menu.addAction(PageOutput::tr("8 个格式已全部添加"));
+            none->setEnabled(false);
+        }
+        menu.exec(add_format_button->mapToGlobal(QPoint(0, add_format_button->height())));
     });
     QObject::connect(preset_combo, &QComboBox::activated, q, [this](int index) {
         if (index < 0)

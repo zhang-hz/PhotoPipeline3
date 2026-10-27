@@ -272,7 +272,19 @@ public:
         setWordWrap(false);
         setAlignment(Qt::AlignLeft | Qt::AlignTop);
         setFont(mono_font(theme::Typography::mono_px));
+        // 2026-10 修复：日志行很长且 setWordWrap(false)，QLabel 的 sizeHint 会按**整行原文**
+        // 计算宽度 → 运行页右栏被日志卡撑出窗口（bug1 截图右侧列被裁）。日志尾是省略号
+        // 单行展示，宽度应由布局分配，不能反过来决定父卡宽度。
+        setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        setMinimumWidth(0);
     }
+
+    QSize sizeHint() const override {
+        QSize hint = QLabel::sizeHint();
+        hint.setWidth(std::min(hint.width(), 320));
+        return hint;
+    }
+    QSize minimumSizeHint() const override { return QSize(0, QLabel::minimumSizeHint().height()); }
     void set_tokens(const theme::Tokens &t) {
         tokens_ = t;
         render();
@@ -311,7 +323,7 @@ private:
         for (const QString &raw : lines_) {
             const QString shown =
                 width() > 0 ? fontMetrics().elidedText(raw, Qt::ElideRight, std::max(0, width()))
-                            : raw;
+                            : fontMetrics().elidedText(raw, Qt::ElideRight, 300);
             html << colorize(shown);
         }
         setText(html.join(QStringLiteral("<br>")));

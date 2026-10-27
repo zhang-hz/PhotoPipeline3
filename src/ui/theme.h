@@ -943,6 +943,18 @@ inline QString field_qss(const Tokens &t) {
            QStringLiteral(" { border: none; "
                           "background: transparent; color: ") +
            css_color(t.text2) + QStringLiteral("; font-weight: 600; }\n");
+    // 2026-10：折叠头是**图标指示展开态**，标题文字不随 checked 变蓝（旧实现 QToolButton
+    // 未挂 kFk=fold，checked 落到平台样式 → 标题按钮呈蓝底/蓝字）。三态都保持透明底、
+    // 文字中性色；展开与否只由 chevron 方向表达。
+    qss += QStringLiteral("QToolButton") + sel(kFkFold) +
+           QStringLiteral(":hover { background: transparent; color: ") + css_color(t.text) +
+           QStringLiteral("; }\n");
+    qss += QStringLiteral("QToolButton") + sel(kFkFold) +
+           QStringLiteral(":checked { background: transparent; color: ") + css_color(t.text) +
+           QStringLiteral("; }\n");
+    qss += QStringLiteral("QToolButton") + sel(kFkFold) +
+           QStringLiteral(":checked:hover { background: transparent; color: ") + css_color(t.text) +
+           QStringLiteral("; }\n");
     qss += QStringLiteral("QToolButton") + sel(kFkFold) + QStringLiteral(":disabled { color: ") +
            css_color(t.text3) + QStringLiteral("; }\n");
     // 说明/提示行（mockup .sub-hint）+ 非法值红字（ppInvalid 是独立语义属性，两条轨都认）
@@ -1531,8 +1543,13 @@ inline QString style_sheet(const Tokens &t) {
     qss += scrollbar_qss(t);
     // GUI-R2 举一反三：平台默认皮的令牌化（此前这四类**零 QSS 规则**）
     // ① 右键/上下文菜单（分类打标、筛选、参数、异常列表 …）
-    qss += QStringLiteral("QMenu { background: ") + css_color(t.card) +
-           QStringLiteral("; border: 1px solid ") + css_color(t.card_bd) +
+    // M7-R2.5：深色 --card 是 **5% 白叠层**（rgba(255,255,255,.05)），在页面内叠在窗口底上
+    // 才是深色；QMenu 是顶层窗口，5% 白直接落在透明/白底上 → 白底 + 近白字，完全不可读。
+    // 菜单背景/描边必须先把令牌合成到 window 上，得到一个**不透明**颜色。
+    const QColor menu_bg = composite(t.card, t.window);
+    const QColor menu_bd = composite(t.card_bd, t.window);
+    qss += QStringLiteral("QMenu { background: ") + css_color(menu_bg) +
+           QStringLiteral("; border: 1px solid ") + css_color(menu_bd) +
            QStringLiteral("; border-radius: ") + QString::number(t.radius_control) +
            QStringLiteral("px; padding: ") + QString::number(Metrics::menu_frame_pad_y) +
            QStringLiteral("px ") + QString::number(Metrics::menu_frame_pad_x) +
@@ -1543,8 +1560,9 @@ inline QString style_sheet(const Tokens &t) {
            QStringLiteral("px ") + QString::number(Metrics::menu_item_pad_left) +
            QStringLiteral("px; border-radius: ") + QString::number(t.radius_control) +
            QStringLiteral("px; color: ") + css_color(t.text) + QStringLiteral("; }\n");
-    qss += QStringLiteral("QMenu::item:selected { background: ") + css_color(t.accent_dim) +
-           QStringLiteral("; color: ") + css_color(t.text) + QStringLiteral("; }\n");
+    qss += QStringLiteral("QMenu::item:selected { background: ") +
+           css_color(composite(t.accent_dim, menu_bg)) + QStringLiteral("; color: ") +
+           css_color(t.text) + QStringLiteral("; }\n");
     qss += QStringLiteral("QMenu::item:disabled { color: ") + css_color(t.text3) +
            QStringLiteral("; }\n");
     qss += QStringLiteral("QMenu::separator { height: 1px; background: ") + css_color(t.line) +

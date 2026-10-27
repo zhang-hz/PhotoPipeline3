@@ -713,6 +713,7 @@ void MainWindow::Impl::build_left_column() {
     add_btn->setFixedHeight(theme::Metrics::btn_h);
     add_btn->setFixedWidth(theme::Metrics::icon_btn); // R4 图标钮宽 28
     auto *add_menu = new QMenu(add_btn);
+    contextmenu::style_menu(add_menu); // M7-R2.5：顶层弹窗显式套主题
     QAction *act_add_files = add_menu->addAction(T("添加文件…"));
     act_add_files->setObjectName(QStringLiteral("pp-add-files"));
     QAction *act_add_dir = add_menu->addAction(T("添加文件夹…"));
@@ -745,6 +746,7 @@ void MainWindow::Impl::build_left_column() {
     filter_btn->setFixedHeight(theme::Metrics::btn_h); // 裁定 A7
     filter_btn->setFixedWidth(theme::Metrics::icon_btn);
     auto *filter_menu = new QMenu(filter_btn);
+    contextmenu::style_menu(filter_menu); // M7-R2.5：顶层弹窗显式套主题
     QAction *act_filter_checked = filter_menu->addAction(T("仅显示已勾选"));
     act_filter_checked->setCheckable(true);
     QAction *act_filter_exceptions = filter_menu->addAction(T("仅显示有例外的文件"));
@@ -769,6 +771,7 @@ void MainWindow::Impl::build_left_column() {
     check_btn->setFixedHeight(theme::Metrics::btn_h);
     check_btn->setFixedWidth(theme::Metrics::icon_btn);
     auto *check_menu = new QMenu(check_btn);
+    contextmenu::style_menu(check_menu); // M7-R2.5：顶层弹窗显式套主题
     QAction *act_check_all = check_menu->addAction(T("勾选全部"));
     QAction *act_uncheck_all = check_menu->addAction(T("取消全部勾选"));
     QAction *act_invert_checks = check_menu->addAction(T("反选勾选"));

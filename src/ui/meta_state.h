@@ -420,6 +420,7 @@ struct PrivacyCardState {
     formkit::PillBadge *privacy_pill = nullptr;
     formkit::SwitchControl *strip = nullptr;
     formkit::SwitchControl *mtime = nullptr;
+    formkit::SwitchControl *modernize = nullptr; // 补全现代 EXIF（可选）
     QToolButton *link_tags = nullptr;
     QToolButton *link_exc = nullptr;
     QToolButton *link_keywords = nullptr;

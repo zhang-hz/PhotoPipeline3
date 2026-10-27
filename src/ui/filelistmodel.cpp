@@ -87,6 +87,23 @@
 
 namespace pp::ui {
 
+namespace {
+// 2026-10 修复：OIIO 对 AVIF 也报容器格式 "HEIF"（解码器同为 libheif），文件列表因此把
+// .avif 显示成 HEIF。显示面按**扩展名**纠正容器名；未知扩展名仍回退 probe 结果。
+QString display_format(const FileRow &r) {
+    if (!r.probe_ok)
+        return {};
+    std::string ext = r.entry.src.extension().string();
+    for (char &c : ext)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (ext == ".avif" || ext == ".avifs")
+        return QStringLiteral("AVIF");
+    if (ext == ".heic" || ext == ".heif" || ext == ".hif")
+        return QStringLiteral("HEIF");
+    return QString::fromStdString(r.info.format).toUpper();
+}
+} // namespace
+
 // ---------------------------------------------------------------- FileListModel
 
 FileListModel::FileListModel(QObject *parent) : QAbstractListModel(parent) {}
@@ -110,7 +127,7 @@ QVariant FileListModel::data(const QModelIndex &idx, int role) const {
         return r.probe_ok ? QStringLiteral("%1×%2").arg(r.info.width).arg(r.info.height)
                           : QString();
     case FormatRole:
-        return r.probe_ok ? QString::fromStdString(r.info.format).toUpper() : QString();
+        return display_format(r);
     case StateRole:
         return int(r.state);
     case StateTextRole:

@@ -14,6 +14,7 @@
 #include <charconv>
 #include <string>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #include "codecs/encoders.h" // pp::BackendDef / pp::TechDef
@@ -62,8 +63,15 @@ merge_backend_order(const std::vector<pp::BackendDef> &static_order,
     std::vector<pp::BackendDef> ordered;
     for (const pp::BackendDef &sb : static_order) {
         for (const pp::BackendDef &lb : live) {
-            if (lb.id == sb.id)
-                ordered.push_back(lb);
+            if (lb.id == sb.id) {
+                // M7-R2.5：内省标签可能很长（如 libheif 的 "AOMedia Project A…"），
+                // 160px 后端下拉会硬裁。静态表标签（libaom / SVT-AV1）是产品文案单源，
+                // 合并时以静态标签为准；id/参数/能力仍取运行时内省结果。
+                pp::BackendDef merged = lb;
+                if (!sb.label.empty())
+                    merged.label = sb.label;
+                ordered.push_back(std::move(merged));
+            }
         }
     }
     for (const pp::BackendDef &lb : live) {

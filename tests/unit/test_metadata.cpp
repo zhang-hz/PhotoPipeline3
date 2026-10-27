@@ -14,6 +14,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -410,6 +411,45 @@ void test_gps() {
             ++gps_left;
     }
     check(gps_left == 0, "gps/clear", std::to_string(gps_left) + " GPS tag(s) left");
+}
+
+void test_modernize_exif() {
+    // 仅补可推导字段：尺寸来自 ImageWidth/Length，GPS 基准来自已存在的坐标；
+    // 不凭空补拍摄时间/镜头/位置。
+    Exiv2::ExifData exif;
+    exif["Exif.Image.ImageWidth"] = std::uint32_t(4000);
+    exif["Exif.Image.ImageLength"] = std::uint32_t(3000);
+    pp::SourceMeta src;
+    src.exif = exif;
+    pp::BatchRules rules;
+    rules.modernize_exif = true;
+    const pp::MetadataPlan plan = pp::build_plan(src, rules, std::nullopt);
+    check(exif_str(plan.exif, "Exif.Photo.PixelXDimension") == "4000", "modernize/pixel-x",
+          show(exif_str(plan.exif, "Exif.Photo.PixelXDimension")));
+    check(exif_str(plan.exif, "Exif.Photo.PixelYDimension") == "3000", "modernize/pixel-y",
+          show(exif_str(plan.exif, "Exif.Photo.PixelYDimension")));
+    check(exif_str(plan.exif, "Exif.Photo.ExifVersion") == "48 50 51 50", "modernize/exif-version",
+          show(exif_str(plan.exif, "Exif.Photo.ExifVersion")));
+    check(exif_str(plan.exif, "Exif.Photo.DateTimeOriginal").empty(), "modernize/no-invention",
+          "DateTimeOriginal must stay absent");
+
+    Exiv2::ExifData gps_exif;
+    pp::GpsData g;
+    g.lat = 31.2304;
+    g.lon = 121.4737;
+    pp::write_gps(gps_exif, g);
+    pp::SourceMeta src_gps;
+    src_gps.exif = gps_exif;
+    const pp::MetadataPlan gps_plan = pp::build_plan(src_gps, rules, std::nullopt);
+    check(exif_str(gps_plan.exif, "Exif.GPSInfo.GPSMapDatum") == "WGS-84", "modernize/gps-datum",
+          show(exif_str(gps_plan.exif, "Exif.GPSInfo.GPSMapDatum")));
+    check(exif_str(gps_plan.exif, "Exif.GPSInfo.GPSVersionID") == "2 2 0 0",
+          "modernize/gps-version", show(exif_str(gps_plan.exif, "Exif.GPSInfo.GPSVersionID")));
+
+    rules.modernize_exif = false;
+    const pp::MetadataPlan off = pp::build_plan(src, rules, std::nullopt);
+    check(exif_str(off.exif, "Exif.Photo.PixelXDimension").empty(), "modernize/off",
+          show(exif_str(off.exif, "Exif.Photo.PixelXDimension")));
 }
 
 void test_privacy(const fs::path &tmp) {
@@ -1544,6 +1584,7 @@ int main() {
 
     test_read_metadata(tmp);
     test_gps();
+    test_modernize_exif();
     test_privacy(tmp);
     test_edits();
     test_build_plan();

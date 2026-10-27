@@ -1028,7 +1028,8 @@ struct Smoke {
     // ---- 冒烟 ----
     QStringList smoke_failures;
     int smoke_shots = 0;
-#endif // PP_BUILD_DEV
+    int deep_shots = 0; // --ui-traverse 截图计数（独立于冻结 12 张）
+#endif                  // PP_BUILD_DEV
 };
 
 } // namespace mw_cabin
@@ -1151,6 +1152,9 @@ struct MainWindow::Impl : mw_cabin::Chrome,
     void smoke_fail(const QString &reason);
     void smoke_grab(const QString &dir, const char *name, QWidget *target = nullptr);
     void smoke_run(const QString &shots_dir);
+    // M7-R2.5：--ui-traverse 深度走查（滚动/展开/重复点击/全选/逐页签/预设；100+ 截图）。
+    // 与 --ui-smoke 共用窗口与事件泵，但**不进入**冻结截图集/冻结末行。
+    void deep_run(const QString &shots_dir);
     void smoke_amap_boundary(pp::map::MapWidget *map);
     // M4-T9 骨架自检（窗口行为矩阵可自动化部分）
     void smoke_probe_skeleton();

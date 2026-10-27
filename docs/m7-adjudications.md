@@ -515,3 +515,26 @@
 | A2-6 | **HEIF 档位文案改「Main10（10 位 · Intra）」** | x265 静止图固定写 Main10 Intra（idc=4，参考 T2.heic 相同）；位深确为 10。文案对齐真实信号，避免工具显示 Main 时被误判为 8 位 | REL-0.3.5.alpha2 |
 | A2-7 | **回归基线重播种 alpha2**：`golden.windows.log` 走 `--update`；`golden.log` 机械换锚 | 归因：版本行 12 + HEIF 档位日志标签 23；行为 0（无像素/元数据/字节变化） | REL-0.3.5.alpha2 |
 | A2-8 | **发行授权**：用户明文「发布0.3.5.alpha2」= 版本 bump + git push + tag `v0.3.5.alpha2` + GitHub Release 授权 | 对齐 §9 发行纪律；tag 指向发行树，报告类/收口提交不入 tag；tag 资产挂载后不可再移动 | REL-0.3.5.alpha2 |
+
+## 二十、0.3.5 收口裁定（M7-R2.4/R2.5 尾单 + 0.3.6-alpha1 修复批，2026-10-27）
+> 背景 = 0.3.5.alpha3 之后工作树的一批实测缺陷修复（同目录输出数据安全、元数据现代化、GUI 实测
+> 缺陷、`--ui-traverse` 深走查），随 **0.3.5 正式版**一并收口。原则不变：冻结面只走「加性 + 追认」；
+> 引擎行为变化由 **金样 20/20 + 全语料回归 zero diff（CI 双平台）** 双重背书；断言只增不减。
+> 逐条证据与门禁读数见 tag 后 close 提交补记的 `docs/0.3.5-report.md`（报告类提交不入 tag）。
+
+| # | 裁定 | 理由 | 实施归属 |
+|---|---|---|---|
+| A3-1 | **`core/metadata.h` `BatchRules` 末尾加性追加 `bool modernize_exif = false`** | 可选「补全现代 EXIF」（只补可推导字段，默认关 = 旧行为零迁移）；冻结结构体末尾追加、位置式聚合初始化兼容；随预设持久化 | REL-0.3.5 |
+| A3-2 | **同目录输出语义修订（R-001 P0 行为面）**：`plan_targets`/`run_metadata_only` 命中源文件时不再整文件失败，改为按普通名字冲突处理（Rename 产出 `名称 (1).扩展名`；Skip 跳过；**Overwrite 降级 Rename**）；**源文件永不被写**不变 | 旧实现「输入与输出同文件夹 + `$dir/$file`」整批不可用（用户实测 T3.heic）；数据安全线（源只读）优先于冲突策略。单测覆盖 Overwrite 最危险档 + 源文件字节不变（`r001/*`、`same-folder/*`） | REL-0.3.5 |
+| A3-3 | **`decode/oiio_reader.cpp` probe 语义修订**：① TIFF IFD1 为 reduced-resolution 缩略图（`NewSubfileType` bit 0）时不计多页（新文件 `decode/tiff_ifd.h` header-only 承载探针，BigTIFF 保守仍按多页）；② HEIF/AVIF `src_bitdepth` 改按容器 luma bits（8/10/12）覆盖 OIIO uint16 推断 | 契约（`docs/m1-tasks.md` §3.5）语义扩展：真多页判据只认 TIFF 规范标记（`multi.tif` 仍判多页）；10bit HEIF/AVIF 不再显示 "16 bit"。单测钉住（`tiff-ifd/*`） | REL-0.3.5 |
+| A3-4 | **`core/format_tables.cpp` 参数展示文案精简**（WebP 无损「压缩努力」、JXL「感光噪声」、TIFF「压缩方案」3 处 `ParamDef.label`；原括注移入 tooltip） | 冻结头允许面 = visible/locked 谓词 + tooltip 文案；label 属展示面，登记追认。参数 `key/type/def/lo/hi/choices` 与 `FormatDef` 骨架零改动，金样/回归不受影响 | REL-0.3.5 |
+| A3-5 | **`codecs/enc_heif.cpp` 运行时内省参数中文标签**（quality/speed/chroma/tune/preset/threads/qp/min-q/max-q） | 内省参数不入冻结事实表；纯展示面本地化，零引擎语义变化（其余键名保留，tooltip 注明来源） | REL-0.3.5 |
+| A3-6 | **`--dev` CLI 面加性新增 `--ui-traverse`**（与 `--ui-smoke` 同入口/同窗口，独立 flag；默认不启用） | 深走查（115 截图 / 159 断言）是 `--ui-smoke` 冻结面之外的补充门禁；`--dev`/`--ui-smoke` 既有行为逐字节不变、冻结行未动；仅 `PP_BUILD_DEV=ON` 构建 | REL-0.3.5 |
+| A3-7 | **GUI 行为修订**：未勾选行状态显示「未选择」（中性 tone）、每批开始清空旧状态；运行页日志尾宽度由布局分配；AVIF 扩展名纠正标签 | 实测缺陷（bug1：未勾选行残留上一轮「已完成」，与底栏计数矛盾）；显示面修订，`--ui-smoke` 冻结行/截图不变，新增 `--ui-traverse` 断言覆盖 | REL-0.3.5 |
+| A3-8 | **输出页交互修订**：移除格式参数卡内「＋ 添加格式…」入口（用户裁定：增删统一走 8 个输出格式磁贴）；页签标题/现役/页序按页面自身 id 解析并按规范序重排；页签自然宽 + 内容高度 | M7-R2.4 实测错位缺陷（先选 JXL 再选 JPEG 时标题与内容不一致）与 M7-R2.5 空白带；纯 GUI 面，引擎零改动 | REL-0.3.5 |
+| A3-9 | **Windows 输出目录权限申请**：预检失败且错误含权限/拒绝访问时，弹窗询问 → UAC 执行 `cmd /c mkdir + icacls <root> /grant <current-user>:(OI)(CI)M` → 重试预检；拒绝/失败回落到原错误 | 安全面裁定：**仅对该输出目录**、**仅当前用户**授予「修改」权限，不请求更宽权限、不重启应用、不写源文件；非权限错误不触发；全程 `log_warn` 留痕（目录 + OS 错误/退出码） | REL-0.3.5 |
+| A3-10 | **GUI 私有共享头修订**：`ui/mainwindow_impl.h` / `ui/page_output_impl.h` 追加深走查计数器/空态控件成员；`ui/filelistmodel_util.h` 追加未勾选行状态分支 | 三者均**不属 PP-FROZEN 面**（文件头自述）；objectName/公开冻结面零改动，探针与断言只增不减 | REL-0.3.5 |
+| A3-11 | **回归基线**：`tools/baseline/golden.log` / `golden.windows.log` 仅做**版本行机械换锚**（`version=0.3.5.alpha3` → `version=0.3.5`，各 12 行）；最终 zero diff 由 CI 双平台（runner 4 vCPU 形态）复核 | 版本串单源 bump 的既有体例（先例 0.3.4/M7R24-3：版本行归因 = 12 / 行为 0）；本机 16 逻辑核与 runner 形态的 thread-shaped diff 属已登记口径缺口（0.3.5.alpha3 报告 §3） | REL-0.3.5 |
+| A3-12 | **Windows 输出目录权限申请补强**：`error_looks_like_permission` 增加 `not writable`/`不可写`/`read-only`/`只读` 匹配（`probe_output_root` 试写分支只报路径、不带 OS 错误文本，恰好是「目录已存在但当前用户无写权」的主场景）；提权命令构造前若路径/账户含 `%` 则放弃提权（cmd 环境变量展开风险）并回落到原错误 | 深度审计 R2/R3：原匹配使 UAC 功能在主要场景不触发（兜底文案却引导用户重试，死路）；`%` 展开是「授权错目录」理论可达面。判定：仅影响提权分支，源文件零写不变；不改 probe 既有错误文案 | REL-0.3.5 |
+| A3-13 | **`--ui-smoke` format-card-align 机械换锚**：入口「＋ 添加格式…」按用户裁定移除后，原几何断言改为「入口不可见 = add-format-removed」（checked 计数保留）；页签/空态/模板联动等新语义由本批新增 `format-card` 探针（81 项）接管。同批登记：`output-geom.tab-equal`（等宽页签旧断言）在「自然宽 + 滚动钮」新语义下已成真空断言，登记为下一轮换锚项（当前默认单格式使 count<=1 分支跳过，不会误红） | 「断言只增不减」口径下的机械换锚登记（先例 M7R23G8-4）。旧断言语义被产品裁定作废，新探针覆盖同一用户可见面；换锚不得静默进行，故登记 | REL-0.3.5 |
+| A3-14 | **`core/metadata.cpp` 新增 HEIF/AVIF 元数据回读兜底**（`read_heif_metadata_fallback`）：Exiv2 的 BMFF 读取器读不到 **grid 主图**上的 Exif/XMP 时，按 libheif 容器 API 直读同一份 Exif/XMP（只在 Exiv2 结果为空时触发，两路独立判空） | 修「二次转码时元数据静默丢失」（实测 lossless >16MP HEIF 由 `heif_context_add_grid_image` 生成，libheif 可读出 52,644 B EXIF 而 Exiv2 为空）；只读补齐、不改写/不复制语义；对非 grid / 可读夹具是空操作（回归 zero diff 背书）。未覆盖：grid 分支无自动化夹具（报告未覆盖项） | REL-0.3.5 |

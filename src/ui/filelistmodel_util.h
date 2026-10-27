@@ -87,10 +87,16 @@ inline bool row_zero_anomaly(const FileRow &r) {
 }
 
 inline QString row_state_text(const FileRow &r) {
+    // 2026-10：未勾选 = 不参与本轮批次，不得继续展示上一轮的「已完成/编码」等状态
+    // （bug1：9 行里只有 .heic 勾选，其他行仍显示旧状态，与底栏计数自相矛盾）。
+    if (!r.checked)
+        return QStringLiteral("未选择");
     return row_zero_anomaly(r) ? QString::fromUtf8(term_words::kZeroBytes) : state_text(r.state);
 }
 
 inline const char *row_state_tone(const FileRow &r) {
+    if (!r.checked)
+        return theme::kPillNeutral;
     return row_zero_anomaly(r) ? theme::kPillWarn : state_tone(r.state);
 }
 

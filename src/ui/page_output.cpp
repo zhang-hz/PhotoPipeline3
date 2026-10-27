@@ -169,6 +169,7 @@ void OutputPageImpl::toggle_format(const std::string &id, bool on, bool user) {
 
 void OutputPageImpl::reproject_format_selection() {
     sync_tiles();
+    reconcile_tab_order();
     sync_tab_current();
     update_format_count();
     refresh_tab_labels();
@@ -191,13 +192,46 @@ void OutputPageImpl::sync_tiles() {
 
 void OutputPageImpl::sync_tab_current() {
     const QSignalBlocker blocker(tabs);
-    for (int i = 0; i < static_cast<int>(sel.size()); ++i) {
-        if (sel.at(i) == sel.active()) {
+    const QString active = QString::fromStdString(sel.active());
+    for (int i = 0; i < tabs->count(); ++i) {
+        const QWidget *page = tabs->widget(i);
+        if (page != nullptr && page->property(kPageFormatIdProperty).toString() == active) {
             tabs->setCurrentIndex(i);
             break;
         }
     }
     update_form_object_names();
+}
+
+void OutputPageImpl::reconcile_tab_order() {
+    if (tabs == nullptr)
+        return;
+    const QSignalBlocker blocker(tabs);
+    for (int want = 0; want < static_cast<int>(sel.size()); ++want) {
+        FormatState *st = state_of(sel.at(want));
+        if (st == nullptr || st->page == nullptr)
+            continue;
+        const int have = tabs->indexOf(st->page);
+        if (have < 0 || have == want)
+            continue;
+        // removeTab 会把页面暂时从 QStackedWidget 摘出；insertTab 立即放回。信号已屏蔽，
+        // 现役索引由紧随其后的 sync_tab_current() 统一恢复。
+        const QString label = tabs->tabText(have);
+        tabs->removeTab(have);
+        tabs->insertTab(want, st->page, label);
+    }
+}
+
+void OutputPageImpl::update_add_format_enabled() {
+    if (add_format_button == nullptr)
+        return;
+    const bool room = sel.size() < static_cast<std::size_t>(kFormatCount);
+    const bool usable = room && !metadata_only;
+    add_format_button->setEnabled(usable);
+    add_format_button->setToolTip(
+        !room ? PageOutput::tr("8 个格式已全部添加")
+              : (metadata_only ? PageOutput::tr("仅元数据模式：输出格式多选已禁用")
+                               : PageOutput::tr("添加格式…（从尚未选中的格式中选择）")));
 }
 
 void OutputPageImpl::update_form_object_names() {
@@ -219,6 +253,8 @@ void OutputPageImpl::build_tab(const std::string &id) {
         return; // 已存在（取消勾选后重新勾选 → 复用快照重建）
     st.page = new QWidget(tabs);
     st.page->setObjectName(QStringLiteral("pp-format-page-") + QString::fromStdString(id));
+    // M7-R2.4：页签标题/现役/页序一律按页面自身 id 解析（不再依赖页签下标与 sel 同序）
+    st.page->setProperty(kPageFormatIdProperty, QString::fromStdString(id));
     auto *v = new QVBoxLayout(st.page);
     // 页签内容与卡片其余行同轴（卡内边距 12；R1 行 pitch 连续）
     v->setContentsMargins(theme::Metrics::card_pad_x, 0, theme::Metrics::card_pad_x,
@@ -280,6 +316,25 @@ void OutputPageImpl::build_tab(const std::string &id) {
         v->addWidget(row.row);
     }
 
+    // 格式级元数据承载能力（如实显示）：BMP 容器没有 EXIF/XMP 槽位（design.md §5.8），
+    // 编码后元数据必然丢弃。此前只在运行结果的 warning 里出现（"成功后才发现"），
+    // 这里在选择 BMP 页签时就把事实写出来，且给出不可绕过的原因。
+    if (id == "bmp") {
+        st.meta_hint = new ElidedLabel(st.page);
+        st.meta_hint->setObjectName(QStringLiteral("pp-meta-hint-bmp"));
+        st.meta_hint->setProperty(kFieldProperty, QString::fromLatin1(theme::kFkWarn));
+        st.meta_hint->setFont(theme::font(theme::Typography::hint_px));
+        st.meta_hint->setMinimumHeight(formkit::kRowPitch);
+        set_leading_indent(st.meta_hint, formkit::kLabelW + formkit::kColGap);
+        st.meta_hint->set_full_text(
+            PageOutput::tr("BMP 容器不承载 EXIF/XMP：转码后元数据丢弃（仅保留像素）"));
+        st.meta_hint->setToolTip(
+            PageOutput::tr("BMP 没有 EXIF/XMP 容器（Windows 位图规范只有 V5 头的 ICC 槽，且本"
+                           "写入器不落 ICC）。需要元数据请改用 PNG/TIFF/WebP/JPEG/JXL/HEIF/AVIF；"
+                           "「仅元数据」模式也不支持 BMP。"));
+        v->addWidget(st.meta_hint);
+    }
+
     // 行 2..6：技术 / 无损 / 核心参数 / 高级参数（ParamForm 一行一义）
     st.form = new ParamForm(*f, effective_backends(*f), st.page);
     st.form->setObjectName(QStringLiteral("pp-param-form-") + QString::fromStdString(id));
@@ -311,7 +366,17 @@ void OutputPageImpl::build_tab(const std::string &id) {
 
     // 初值：优先快照（取消勾选后重选），否则表内默认
     apply_state_to_form(id, st.spec);
-    tabs->addTab(st.page, format_tab_label(id));
+    // M7-R2.4：**按规范序插入**（不是 addTab 追加）。sel 的顺序 = 磁贴序，页签必须同序，
+    // 否则先选 JPEG XL 再勾 JPEG 时页签是 [JXL, JPEG] 而 sel 是 [JPEG, JXL] —— 标题
+    // 按 sel 写、内容按插入序摆，立刻出现"JPEG 标题下是 JXL 参数"。
+    int insert_at = static_cast<int>(sel.size()) - 1;
+    for (int i = 0; i < static_cast<int>(sel.size()); ++i) {
+        if (sel.at(i) == id) {
+            insert_at = i;
+            break;
+        }
+    }
+    tabs->insertTab(insert_at, st.page, format_tab_label(id));
     apply_tab_width(); // UX-9：等宽
     sync_tab_current();
 }
@@ -336,6 +401,7 @@ void OutputPageImpl::remove_tab(const std::string &id) {
     st->bitdepth = nullptr;
     st->bitdepth_note = nullptr;
     st->alpha_hint = nullptr;
+    st->meta_hint = nullptr;
     st->profile = nullptr; // UX-10.1
     st->profile_note = nullptr;
     apply_tab_width(); // UX-9：等宽
@@ -390,37 +456,95 @@ int OutputPageImpl::changed_param_count(const std::string &id) const {
     if (t == nullptr)
         return 0;
     const pp::ParamSet values = st->form->values();
+    // M7-R2.5：基准 = **生效默认值**（default_params + 锁定强制值），不是裸 ParamDef.def。
+    // 旧实现拿 p.def 直接比：PNG/TIFF 的锁定项、AVIF 内省默认值与插件实际默认不同、
+    // 无损开关的锁定值都被算成"用户已改" → 全新页签也出现「已改 2 / 已改 3 / 已改 8」。
+    // 这里按与 ParamForm::refresh() 同一顺序铺默认值+锁，锁出来的值不算用户改动；
+    // 无损复选框与编码档位是用户面独立项，单独计数。
+    pp::ParamSet base;
+    base[std::string(pp::kLosslessKey)] = fsel.lossless;
+    for (const pp::ParamDef &p : t->params) {
+        if (p.has_default)
+            base[p.key] = p.def;
+    }
+    pp::apply_locks(*f, fsel.backend, fsel.tech, fsel.lossless, base);
+    if (pp::find_param(*t, std::string(pp::kLosslessParamKey)) != nullptr)
+        base[std::string(pp::kLosslessParamKey)] = fsel.lossless;
+    for (int pass = 0; pass < 2; ++pass) {
+        for (const pp::ParamDef &p : t->params) {
+            if (const std::optional<pp::ParamValue> forced = pp::eval_lock(p, base))
+                base[p.key] = *forced;
+        }
+    }
     int count = 0;
     for (const pp::ParamDef &p : t->params) {
-        if (p.key.rfind("__", 0) == 0)
+        if (p.key.rfind("__", 0) == 0 || p.key == std::string(pp::kLosslessParamKey))
             continue;
         const auto it = values.find(p.key);
         if (it == values.end())
             continue;
-        const bool same_type = it->second.index() == p.def.index();
-        if (!same_type || !(it->second == p.def))
+        const auto bt = base.find(p.key);
+        if (bt == base.end()) {
+            ++count; // 可选覆盖参数（无默认）被用户显式设置
+            continue;
+        }
+        if (it->second.index() != bt->second.index() || !(it->second == bt->second))
             ++count;
     }
+    // 无损复选框本身（默认 false）是用户面改动；锁定参数的联动值已由 base 吸收。
+    if (fsel.lossless)
+        ++count;
+    // M7-R2.4：编码档位是保留键（__heif_profile）不进 t->params 循环，但它是用户可改的
+    // 格式参数 —— 旧实现改档位后卡头「已改 N」不变，计数漏项。非「自动」即算一处改动。
+    if (st->profile != nullptr && st->profile->currentIndex() > 0)
+        ++count;
     return count;
 }
 
 void OutputPageImpl::refresh_tab_labels() {
-    for (int i = 0; i < static_cast<int>(sel.size()); ++i)
-        tabs->setTabText(i, format_tab_label(sel.at(i)));
+    // M7-R2.4：标题由**页面自身 id** 决定（不再 `sel.at(i)` 按下标取）—— 即使页序因
+    // 增删/预设重建短暂不同步，标题也永远不会串到别的格式上。
+    for (int i = 0; i < tabs->count(); ++i) {
+        const QWidget *page = tabs->widget(i);
+        if (page == nullptr)
+            continue;
+        const QString page_id = page->property(kPageFormatIdProperty).toString();
+        if (page_id.isEmpty())
+            continue;
+        tabs->setTabText(i, format_tab_label(page_id.toStdString()));
+    }
     apply_tab_width(); // UX-9：等宽随格式集合重算（文案已不含位深 → 宽度不随位深漂移）
 }
 
 void OutputPageImpl::apply_tab_width() {
     if (tabs == nullptr || tabs->tabBar() == nullptr)
         return;
-    tabs->tabBar()->setExpanding(true);
+    QTabBar *bar = tabs->tabBar();
+    // M7-R2.4（选项卡布局回归）：回到**标准 QTabBar 行为** —— 页签按内容定宽、左对齐；
+    // 放不下时由 QTabBar 自己的滚动钮处理，当前页签由 Qt 滚入可视区。
+    // 旧实现无条件 setExpanding(true)（UX-9 的"等宽"自研口径）带来三类用户可见 bug：
+    //   * 单个页签被拉满整行、文字居中，看起来像标题而不是选项卡（与 mockup 的左对齐不符）；
+    //   * 8 个格式时 QTabBar 的 minimumSizeHint（8×自然宽）撑破卡片 → 整个输出页横向滚动、
+    //     格式磁贴第 3/4 列被裁、现役页签（BMP）留在可视区外；
+    //   * 空出的页签条区域被平台画成 --ctl 平色带（tabstrip/ctl-fill 探针抓到的 382px）。
+    // 现：自然宽 + 滚动钮 + 不画平台 base（底部发丝线由 ::pane 的 border-top 提供）；
+    // tabs 的水平 SizePolicy=Ignored，保证页签条再宽也不会把页面撑出横向滚动。
+    bar->setExpanding(false);
+    bar->setUsesScrollButtons(true);
+    bar->setElideMode(Qt::ElideRight);
+    bar->setDrawBase(false);
+    tabs->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    tabs->setMinimumWidth(0);
 }
 
 void OutputPageImpl::update_format_count() {
-    if (format_pill == nullptr)
-        return;
-    format_pill->setText(PageOutput::tr("已选 %1").arg(sel.size()));
-    format_pill->setVisible(true);
+    if (format_pill != nullptr) {
+        format_pill->setText(PageOutput::tr("已选 %1").arg(sel.size()));
+        format_pill->setVisible(true);
+    }
+    if (empty_hint != nullptr)
+        empty_hint->setVisible(sel.empty() && !metadata_only);
+    update_add_format_enabled();
 }
 
 void OutputPageImpl::on_param_selection_changed(const std::string &id) {
@@ -460,7 +584,26 @@ int OutputPageImpl::current_chroma(const std::string &id) const {
     const FormatState *st = state_of(id);
     if (st == nullptr || st->form == nullptr)
         return 1;
-    return int(pp::param_int(st->form->values(), std::string("chroma"), 1));
+    // M7-R2.4：libheif 的 chroma 是**字符串枚举**（"420"/"422"/"444"），旧实现用
+    // pp::param_int() 读 → 永远拿不到值而回落 1（4:2:0）。后果：档位注释/推导永远按
+    // 4:2:0 计算，选了 4:4:4 仍显示 Main；无损的 444 警告也永不出现。这里按真实类型读。
+    const pp::ParamSet values = st->form->values();
+    const auto it = values.find(std::string("chroma"));
+    if (it == values.end())
+        return 1;
+    if (const int64_t *v = std::get_if<int64_t>(&it->second))
+        return (*v >= 0 && *v <= 3) ? static_cast<int>(*v) : 1;
+    if (const std::string *s = std::get_if<std::string>(&it->second)) {
+        if (*s == "444")
+            return 3;
+        if (*s == "422")
+            return 2;
+        if (*s == "420")
+            return 1;
+        if (*s == "400" || *s == "monochrome")
+            return 0;
+    }
+    return 1;
 }
 
 void OutputPageImpl::on_profile_changed(const std::string &id) {
@@ -470,6 +613,7 @@ void OutputPageImpl::on_profile_changed(const std::string &id) {
     st->profile_user_set = st->profile->currentIndex() != 0; // 0 = 「自动」
     set_bitdepth_options(id, -1, /*keep_if_valid=*/true);
     update_profile_note(id);
+    refresh_changed_pill(); // M7-R2.4：档位计入「已改 N」（见 changed_param_count）
     emit q->config_changed();
 }
 
@@ -545,19 +689,33 @@ void OutputPageImpl::update_profile_note(const std::string &id) {
     // 本输出恒为静止图（与 enc_heif.cpp 的反查同口径：still = true）
     const pp::HeifProfile derived = pp::derive_heif_profile(id == "avif", depth, chroma, true);
     QString derived_label = QString::fromStdString(pp::heif_profile_label(derived));
-    if (id == "heif" && chroma == 3) {
-        // HEVC 的 4:4:4 是 Main 4:4:4（hvcC profile_idc=4），不是 Main/Main Still Picture；
-        // derive_heif_profile 只按位深分档，这里按真实色度补正显示（与 enc_heif 日志同口径）。
-        derived_label = PageOutput::tr("Main 4:4:4（HEVC 4:4:4）");
+    const QString depth_tag = depth == 8 ? QString() : QString::number(depth);
+    if (id == "heif") {
+        // HEVC 的 4:4:4 / 4:2:2 / 4:0:0 分别是 Main 4:4:4 / Main 4:2:2 / Main 4:0:0 族；
+        // derive_heif_profile 只按位深分档（x265 源码规则），这里按真实色度补正显示。
+        // 10/12 位时档位名本身带位深（Main10 / Main12），不能一律写成 "Main 4:4:4"。
+        if (chroma == 3)
+            derived_label = PageOutput::tr("Main%1 4:4:4（HEVC 4:4:4）").arg(depth_tag);
+        else if (chroma == 2)
+            derived_label = PageOutput::tr("Main%1 4:2:2（HEVC 4:2:2）").arg(depth_tag);
+        else if (chroma == 0)
+            derived_label = PageOutput::tr("Main%1 4:0:0（HEVC 4:0:0）").arg(depth_tag);
     }
+    const QString chroma_text = chroma == 3   ? QStringLiteral("4:4:4")
+                                : chroma == 2 ? QStringLiteral("4:2:2")
+                                : chroma == 0 ? QStringLiteral("4:0:0")
+                                              : QStringLiteral("4:2:0");
     QString note;
+    QString tooltip;
     NoteTone tone = NoteTone::Hint;
     if (want == pp::HeifProfile::Auto) {
         // 固定短句：档位推导结果放进 tooltip。若把 derived 拼进正文，8 位默认（Main Still）
         // 会比 10 位默认多一段，足以触发页面滚动条出现，冻结的磁贴零形变探针会因布局横移失败。
         note = PageOutput::tr("插件自选");
-        st->profile_note->setToolTip(PageOutput::tr("插件按位深/色度自选 → %1").arg(derived_label));
-        if (chroma == 3 ||
+        tooltip = PageOutput::tr("插件按 %1 位 / %2 自选 → %3")
+                      .arg(depth)
+                      .arg(chroma_text, derived_label);
+        if (chroma == 3 || chroma == 2 ||
             (derived != pp::HeifProfile::Main && derived != pp::HeifProfile::MainStill))
             tone = NoteTone::Warn;
     } else {
@@ -575,14 +733,15 @@ void OutputPageImpl::update_profile_note(const std::string &id) {
         // 折叠行内只放短句；完整口径（YCbCr 域无损、大图 grid 分块、4:4:4 兼容性）进 tooltip。
         if (note.isEmpty())
             note = PageOutput::tr("无损 → 4:4:4");
-        st->profile_note->setToolTip(
+        tooltip =
             PageOutput::tr("HEIF/AVIF 无损：强制 4:4:4（4:2:0/4:2:2 会抽样色度，不是无损）。"
                            "HEVC 的无损是 YCbCr 平面无损，RGB↔YCbCr 往返有舍入（不是逐位）；"
                            "超过 16 MP 时自动改用标准 HEIF grid 分块，保证 libde265/OIIO 能打开。"
-                           "4:4:4 的查看器兼容性弱于 4:2:0。"));
-    } else {
-        st->profile_note->setToolTip(QString());
+                           "4:4:4 的查看器兼容性弱于 4:2:0。");
     }
+    // M7-R2.4：tooltip 单点落盘 —— 旧实现先在「自动」分支写推导 tooltip、末尾非无损分支
+    // 又无条件 `setToolTip(QString())` 把它清掉，用户悬浮只看到空提示（推导结果永远不可见）。
+    st->profile_note->setToolTip(tooltip);
     st->profile_note->setText(note);
     st->profile_note->setProperty("ppInvalid",
                                   tone == NoteTone::Error ? QStringLiteral("true") : QString());
@@ -622,8 +781,12 @@ bool OutputPageImpl::set_bitdepth_options(const std::string &id, int forced, boo
         st->bitdepth->addItem(PageOutput::tr("自动（按通道）"), 24);
         st->bitdepth->setCurrentIndex(0);
         st->bitdepth->setEnabled(false);
-        if (st->bitdepth_note != nullptr)
-            st->bitdepth_note->setText(PageOutput::tr("灰度 → 8bpp，彩色 → 24bpp（由通道数决定）"));
+        if (st->bitdepth_note != nullptr) {
+            // 窄卡片下 24bpp 全句会被 QLabel 硬裁（无省略号）；短句 + 全文 tooltip。
+            st->bitdepth_note->setText(PageOutput::tr("灰度 8bpp / 彩色 24bpp"));
+            st->bitdepth_note->setToolTip(
+                PageOutput::tr("灰度 → 8bpp，彩色 → 24bpp（由通道数决定）"));
+        }
         return false;
     }
     std::vector<int> allowed =
@@ -826,6 +989,9 @@ void OutputPageImpl::update_metadata_only_state() {
             st.alpha_hint->setVisible(
                 fmtpolicy::alpha_combo(id, metadata_only, batch_has_alpha, bitdepth_of(id)));
     }
+    if (empty_hint != nullptr)
+        empty_hint->setVisible(sel.empty() && !metadata_only);
+    update_add_format_enabled();
 }
 
 void OutputPageImpl::update_estimate() {
@@ -847,7 +1013,7 @@ void OutputPageImpl::refresh_disk() {
     if (est_disk == nullptr)
         return;
     const QString root = out_root_edit != nullptr ? out_root_edit->text().trimmed() : QString();
-    QString disk = PageOutput::tr("—");
+    QString disk = PageOutput::tr("未设置根目录");
     QString disk_tip = PageOutput::tr("填写输出根目录后显示可用空间");
     if (!root.isEmpty()) {
         const QStorageInfo info(root);
@@ -1032,6 +1198,7 @@ void PageOutput::apply_preset(const pp::PresetData &p) {
     }
     impl_->in_preset_apply = false;
     impl_->sync_tiles();
+    impl_->reconcile_tab_order(); // M7-R2.4：预设可把页签建在任意顺序 → 按规范序对齐
     impl_->sync_tab_current();
     impl_->update_format_count();
     impl_->update_metadata_only_state();

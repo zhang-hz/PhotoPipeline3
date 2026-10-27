@@ -1289,8 +1289,10 @@ int main() {
     // M7-WP1 数据安全与原子写盘（R-001/R-004/R-007/R-030/R-235）
     // =========================================================================
     {
-        // R-001（P0）：v1 迁移默认模板 "$dir/$file" + 输出根 = 输入树 → 渲染出的输出路径
-        // 精确命中源文件 → 整文件失败（源文件永远只读；原图不得被重编码结果替换）。
+        // R-001（P0，0.3.6-alpha1 修订）：v1 迁移默认模板 "$dir/$file" + 输出根 = 输入树 →
+        // 渲染出的输出路径精确命中源文件。**源文件仍永远只读**，但同目录输出不再整文件
+        // 失败：源文件占着这个名字 = 普通名字冲突 → Rename 产出 "rgb8 (1).png"
+        // （Overwrite 同样降级为 Rename；Skip 才跳过）。
         // 注：夹具副本放在临时目录里做源（绝不让用例有能力写 tests/golden）。
         const fs::path work = tmp / "r001";
         std::error_code ec;
@@ -1300,10 +1302,12 @@ int main() {
         RunSpec s;
         s.format = "png"; // 目标扩展名 == 源扩展名 ⇒ "$dir/$file" 渲染结果精确命中源
         s.output_template = "$dir/$file";
+        s.conflict = pp::ConflictPolicy::Overwrite; // 最危险的一档：仍不得写回源
         const pp::FileResult r = run_spec(work / "in" / "rgb8.png", work / "in", work / "in", s);
-        check(!r.ok, "r001/must-fail", "out==src must fail the whole file, got ok=true");
-        check(r.error.find("collides with the source") != std::string::npos, "r001/error-text",
-              r.error);
+        check(r.ok, "r001/renamed-ok", r.error);
+        check(r.outputs.size() == 1 && r.outputs[0].out == work / "in" / "rgb8 (1).png",
+              "r001/renamed-path",
+              r.outputs.empty() ? std::string("<none>") : r.outputs[0].out.string());
         // 源文件零触碰
         int sw = 0, sh = 0, sc = 0;
         int cw = 0, ch = 0, cc = 0;
@@ -1311,18 +1315,53 @@ int main() {
         const std::vector<float> b = read_pixels(base / "rgb8.png", cw, ch, cc);
         check(!a.empty() && a == b, "r001/source-untouched", "source copy changed");
 
-        // metadata-only 同样拒绝 out==src（copy_file 就地覆盖 = 原图被改写）
+        // metadata-only 同口径：改名成副本，绝不就地覆盖源
+        const auto file_bytes = [](const fs::path &p) {
+            std::ifstream f(p, std::ios::binary);
+            f.seekg(0, std::ios::end);
+            const std::streamoff n = f.tellg();
+            std::vector<char> out(n > 0 ? static_cast<std::size_t>(n) : 0);
+            f.seekg(0);
+            if (!out.empty()) {
+                f.read(out.data(), static_cast<std::streamsize>(out.size()));
+            }
+            return out;
+        };
         fs::copy_file(corpus / "meta" / "exif_full.jpg", work / "in" / "exif_full.jpg",
                       fs::copy_options::overwrite_existing, ec);
+        const std::vector<char> before = file_bytes(work / "in" / "exif_full.jpg");
         RunSpec m;
         m.metadata_only = true;
         m.format = "jpeg";
         m.output_template = "$dir/$file";
+        m.conflict = pp::ConflictPolicy::Overwrite;
         const pp::FileResult rm =
             run_spec(work / "in" / "exif_full.jpg", work / "in", work / "in", m);
-        check(!rm.ok, "r001/metaonly-must-fail", "metadata-only out==src must fail");
-        check(rm.error.find("collides with the source") != std::string::npos,
-              "r001/metaonly-error-text", rm.error);
+        check(rm.ok, "r001/metaonly-renamed-ok", rm.error);
+        check(rm.outputs.size() == 1 && rm.outputs[0].out == work / "in" / "exif_full (1).jpg",
+              "r001/metaonly-renamed-path",
+              rm.outputs.empty() ? std::string("<none>") : rm.outputs[0].out.string());
+        check(file_bytes(work / "in" / "exif_full.jpg") == before, "r001/metaonly-source-untouched",
+              "metadata-only 改写了源文件");
+
+        // 同目录 + 同扩展名（HEIC 输入 → HEIF 输出）：同样只改名，不写回源
+        // （用户实测场景：super/T3.heic 与输出根同目录）。
+        fs::create_directories(work / "heic", ec);
+        const fs::path heic_src = work / "heic" / "in.heic";
+        fs::copy_file(corpus / "meta" / "heif_exif.heic", heic_src,
+                      fs::copy_options::overwrite_existing, ec);
+        const std::vector<char> heic_before = file_bytes(heic_src);
+        RunSpec h;
+        h.format = "heif";
+        h.bitdepth = 8;
+        h.conflict = pp::ConflictPolicy::Overwrite;
+        const pp::FileResult rh = run_spec(heic_src, work / "heic", work / "heic", h);
+        check(rh.ok, "r001/heic-renamed-ok", rh.error);
+        check(rh.outputs.size() == 1 && rh.outputs[0].out == work / "heic" / "in (1).heic",
+              "r001/heic-renamed-path",
+              rh.outputs.empty() ? std::string("<none>") : rh.outputs[0].out.string());
+        check(file_bytes(heic_src) == heic_before, "r001/heic-source-untouched",
+              "HEIC 源文件被改写");
     }
     {
         // R-007：渲染后的输出名预检（保留设备名 CON → 整文件失败，不再逐文件 open 失败到底）
@@ -1399,6 +1438,31 @@ int main() {
         check(progress_events > 0, "r235/output-progress-events",
               "all-skip early return must emit output-level progress events, got " +
                   std::to_string(progress_events));
+    }
+
+    // ---- 0.3.6-alpha1：同目录输出（渲染路径 == 源文件）不再整文件失败 ----
+    // 旧行为：plan_targets 直接报 "output path collides with the source file" → 输入与输出
+    // 同文件夹（$dir/$file）完全不可用。新行为：源文件永不写（数据安全线不变），
+    // Overwrite 也降级为 Rename → "rgb8 (1).png"。
+    {
+        const fs::path same_dir = fs::temp_directory_path() / "pp-test_pipeline-same-folder";
+        std::error_code ec;
+        fs::remove_all(same_dir, ec);
+        fs::create_directories(same_dir, ec);
+        const fs::path src = same_dir / "rgb8.png";
+        fs::copy_file(corpus / "base/rgb8.png", src, fs::copy_options::overwrite_existing, ec);
+        const std::uintmax_t src_bytes = fs::file_size(src, ec);
+        RunSpec s;
+        s.format = "png";
+        s.conflict = pp::ConflictPolicy::Overwrite;                    // 最危险的一档：仍不得写回源
+        const pp::FileResult r = run_spec(src, same_dir, same_dir, s); // 同目录 + $dir/$file
+        check(r.ok, "same-folder/ok", r.error);
+        const fs::path expected = same_dir / "rgb8 (1).png";
+        check(r.outputs.size() == 1 && r.outputs[0].out == expected, "same-folder/rename",
+              "期望改名为 rgb8 (1).png，got " +
+                  (r.outputs.empty() ? std::string("<none>") : r.outputs[0].out.string()));
+        check(fs::exists(expected, ec), "same-folder/exists", expected.string());
+        check(fs::file_size(src, ec) == src_bytes, "same-folder/source-intact", "源文件被改动");
     }
 
     if (g_failed == 0) {

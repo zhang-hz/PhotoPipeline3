@@ -58,6 +58,7 @@ RuleInputs rule_inputs(const MetaState *st) {
     }
     in.strip_privacy = st->privacy.strip->isChecked();
     in.sync_mtime = st->privacy.mtime->isChecked();
+    in.modernize_exif = st->privacy.modernize != nullptr && st->privacy.modernize->isChecked();
     return in;
 }
 
@@ -138,6 +139,7 @@ pp::BatchRules build_rules(const RuleInputs &in) {
         }
         rules.strip_privacy = in.strip_privacy;
         rules.sync_mtime = in.sync_mtime;
+        rules.modernize_exif = in.modernize_exif;
     }
     return rules;
 }
@@ -384,14 +386,16 @@ void apply_state(MetaState *st, const pp::BatchRules &r) {
 
         st->privacy.strip->setChecked(r.strip_privacy);
         st->privacy.mtime->setChecked(r.sync_mtime);
+        if (st->privacy.modernize != nullptr)
+            st->privacy.modernize->setChecked(r.modernize_exif);
 
         // UX-5：恢复**含值旧状态 = 开**（旧预设缺 *_enabled 键 → 默认 true，带值即开关置开）；
         // 显式 *_enabled=false 优先（预设里明确关掉的卡不复活）。新会话/空值 = 关（零变化）。
         const bool time_on = r.time_enabled && r.time_shift.has_value();
         const bool gps_on = r.gps_enabled && (r.gps.has_value() || r.gps_clear);
         const bool privacy_on =
-            r.privacy_enabled &&
-            (r.strip_privacy || r.sync_mtime || !r.exif_edits.empty() || !r.xmp_edits.empty());
+            r.privacy_enabled && (r.strip_privacy || r.sync_mtime || r.modernize_exif ||
+                                  !r.exif_edits.empty() || !r.xmp_edits.empty());
         st->time.time_enable->setChecked(time_on);
         st->privacy.privacy_enable->setChecked(privacy_on);
         set_gps_rule_enabled(st, gps_on);

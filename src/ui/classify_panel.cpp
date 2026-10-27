@@ -21,7 +21,7 @@
 //   * 颜色/热键对话框只作用于**已存在**的类；被注册表拒绝（热键冲突/保留 id）→ 无改动 +
 //     状态提示（QMessageBox），绝不静默。
 #include "ui/classify_panel.h"
-
+#include "ui/contextmenu.h" // M7-R2.5：分类行菜单主题化
 #include <QAction>
 #include <QApplication> // theme.h 依赖（qApp->style()）→ 必须先于 ui/theme.h
 #include <QColor>
@@ -632,6 +632,7 @@ bool ClassifyPanel::delete_class(const QString &id) {
 QMenu *ClassifyPanel::build_row_menu(int row) {
     Impl &d = *impl_;
     auto *menu = new QMenu(this);
+    contextmenu::style_menu(menu); // M7-R2.5：顶层弹窗显式套主题
     const std::string id = d.id_at(row);
     const QString class_id = QString::fromStdString(id);
     const bool is_all = id.empty();

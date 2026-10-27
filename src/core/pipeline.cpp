@@ -451,12 +451,22 @@ bool plan_targets(const FileEntry &fe, const RunConfig &cfg,
             err = "output path: template '" + cfg.output_template + "' produced no file name";
             return false;
         }
-        // R-001（P0）：渲染出的输出路径命中源文件 → 整文件失败（防"输出根=输入目录 +
-        // $dir/$file 模板 + 覆盖策略"把原图替换成重编码结果）。
-        if (same_output_as_source(desired, fe.src)) {
-            err = "output path collides with the source file (source is read-only): " +
-                  desired.string();
-            return false;
+        // R-001（P0）：渲染出的输出路径**永不**写回源文件（防"输出根=输入目录 + $dir/$file
+        // 模板 + 覆盖策略"把原图替换成重编码结果）。但"命中源文件"不再整文件失败 —— 源文件
+        // 占着这个名字只是一次普通的名字冲突：Rename 产出 "name (1).ext"，Skip 跳过该输出；
+        // Overwrite 同样降级为 Rename（只读源文件这条数据安全线优先于冲突策略）。
+        // 依据（0.3.6-alpha1 实测）：同目录把 T3.heic 转 DisplayP3，旧行为整文件报错
+        // "output path collides with the source file"，同目录输出完全不可用。
+        const bool source_collision = same_output_as_source(desired, fe.src);
+        const ConflictPolicy effective_conflict =
+            (source_collision && cfg.conflict != ConflictPolicy::Skip) ? ConflictPolicy::Rename
+                                                                       : cfg.conflict;
+        if (source_collision) {
+            log_warn(kStage, kFile,
+                     "output path collides with the source file; source is never written",
+                     {{"src", fe.src.string()},
+                      {"out", desired.string()},
+                      {"policy", std::string(conflict_policy_name(effective_conflict))}});
         }
         // R-007（P1）：渲染后统一做合法名/长度预检（保留名/非法字符/尾随点空格/长度），
         // 不再让非法名延后到写盘时逐文件失败到底。
@@ -469,7 +479,7 @@ bool plan_targets(const FileEntry &fe, const RunConfig &cfg,
         // R-005：硬保留 = 本文件更早 target 的未落盘路径；批内 reserved 为软保留（幽灵
         // 跳过防线：Skip 命中软保留而磁盘缺失时回退正常写入）。
         const OutputPlan plan =
-            resolve_conflict(desired, cfg.conflict, taken, reserved, conflict_err);
+            resolve_conflict(desired, effective_conflict, taken, reserved, conflict_err);
         if (!conflict_err.empty()) {
             err = "output path: " + conflict_err;
             return false;
@@ -1394,10 +1404,20 @@ FileOutcome run_metadata_only(const FileEntry &fe, const RunConfig &cfg, EventFn
         if (desired.empty())
             return fail("output path: template '" + cfg.output_template +
                         "' produced no file name");
-        // R-001（P0）：仅元数据模式同样拒绝 out==src（copy_file 就地覆盖 = 原图被改写）。
-        if (same_output_as_source(desired, fe.src))
-            return fail("output path collides with the source file (source is read-only): " +
-                        desired.string());
+        // R-001（P0）：仅元数据模式同样**不得写回源文件**；命中源文件按普通名字冲突处理
+        // （与 run_one_file 同口径：源文件占着这个名字 → Rename 产出 "name (1).ext"，
+        // Skip 跳过该输出，Overwrite 降级为 Rename —— 数据安全线优先于冲突策略）。
+        const bool source_collision = same_output_as_source(desired, fe.src);
+        const ConflictPolicy effective_conflict =
+            (source_collision && cfg.conflict != ConflictPolicy::Skip) ? ConflictPolicy::Rename
+                                                                       : cfg.conflict;
+        if (source_collision) {
+            log_warn(kStage, kFile,
+                     "output path collides with the source file; source is never written",
+                     {{"src", fe.src.string()},
+                      {"out", desired.string()},
+                      {"policy", std::string(conflict_policy_name(effective_conflict))}});
+        }
         // R-007：渲染后统一做合法名/长度预检（与 run_one_file 同口径）。
         std::string name_err;
         if (!validate_output_filename(desired, &name_err))
@@ -1406,7 +1426,7 @@ FileOutcome run_metadata_only(const FileEntry &fe, const RunConfig &cfg, EventFn
         // R-005：批内 reserved 为软保留（Skip 命中软保留而磁盘缺失 → 回退正常写入）。
         static const std::vector<fs::path> kNoHardReserved;
         const OutputPlan out_plan =
-            resolve_conflict(desired, cfg.conflict, kNoHardReserved, reserved, conflict_err);
+            resolve_conflict(desired, effective_conflict, kNoHardReserved, reserved, conflict_err);
         if (!conflict_err.empty())
             return fail("output path: " + conflict_err);
         row.out = out_plan.out_path;

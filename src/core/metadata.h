@@ -67,6 +67,9 @@ struct BatchRules {
     bool time_enabled = true;
     bool gps_enabled = true;
     bool privacy_enabled = true;
+    // 2026-10 追加：可选「补全现代 EXIF」——只补可从已有事实推导的字段（ExifVersion /
+    // 像素尺寸 / GPS 基准与高度方向基准），不编造拍摄时间、镜头、位置等未知信息。
+    bool modernize_exif = false;
     bool is_noop() const;
 };
 

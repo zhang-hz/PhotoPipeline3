@@ -9,6 +9,8 @@
 // 迁移前逐字节等价。
 #include "ui/mainwindow_impl.h"
 
+#include "codecs/encoders.h" // PP_DEEP_DEBUG：运行时内省参数默认值对拍
+
 #include "ui/contextmenu.h"    // UX-1：卡片右键菜单面（词表单源）
 #include "ui/formkit.h"        // R-识图1：CheckableCard/ElidedLabel 回读（layout-audit ①③）
 #include "ui/formkit_layout.h" // R-识图1：磁贴/下拉可用宽口径单源（layout-audit ①）
@@ -16,8 +18,10 @@
 #include "ui/meta_probe_context.h" // R-182/R-258 + M7-R2.3-G8：钩子/词表单源 + ProbeContext（读侧全面迁移）
 #include "ui/meta_state.h" // M7R22G1-3：meta::RatingStars/DeltaSpin/unit_slot/note_label（rtl-mirror 四查）
 #include <QAbstractButton>
+#include <QAbstractItemView>
 #include <QAbstractScrollArea>
 #include <QAbstractSpinBox>
+#include <QAction>
 #include <QBoxLayout>
 #include <QCheckBox>
 #include <QComboBox>
@@ -32,9 +36,11 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QSet>
 #include <QStandardItemModel>
 #include <QTabBar>
+#include <QTimer>
 #include <QToolButton>
 
 #include <algorithm>
@@ -162,26 +168,37 @@ void MainWindow::ui_smoke_walk(const QString &shots_dir) {
     // 无法定位卡在哪条探针）。本行不改变任何输出内容，只保证"跑到哪儿看得见"。
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     Impl &d = *impl_;
+    const bool deep = qEnvironmentVariableIsSet("PP_UI_DEEP") &&
+                      qEnvironmentVariable("PP_UI_DEEP") == QStringLiteral("1");
     setProperty("pp_ui_smoke_ran", true);
     setProperty("pp_ui_smoke_exit", 1);
     d.smoke_failures.clear();
     d.smoke_shots = 0;
+    d.deep_shots = 0;
     try {
-        d.smoke_run(shots_dir);
+        if (deep)
+            d.deep_run(shots_dir);
+        else
+            d.smoke_run(shots_dir);
     } catch (const std::exception &e) {
         d.smoke_fail(tr("未捕获异常：%1").arg(QString::fromUtf8(e.what())));
     } catch (...) {
         d.smoke_fail(tr("未捕获异常"));
     }
     if (d.smoke_failures.isEmpty()) {
-        std::printf("UI-SMOKE OK shots=%d pages=3\n", d.smoke_shots);
+        if (deep)
+            std::printf("UI-TRAVERSE OK shots=%d pages=3\n", d.deep_shots);
+        else
+            std::printf("UI-SMOKE OK shots=%d pages=3\n", d.smoke_shots);
         std::fflush(stdout);
         setProperty("pp_ui_smoke_exit", 0);
     } else {
         for (const QString &failure : d.smoke_failures) {
-            std::fprintf(stderr, "UI-SMOKE FAIL %s\n", qUtf8Printable(failure));
+            std::fprintf(stderr, "%s FAIL %s\n", deep ? "UI-TRAVERSE" : "UI-SMOKE",
+                         qUtf8Printable(failure));
         }
-        std::fprintf(stderr, "UI-SMOKE FAILED %d\n", static_cast<int>(d.smoke_failures.size()));
+        std::fprintf(stderr, "%s FAILED %d\n", deep ? "UI-TRAVERSE" : "UI-SMOKE",
+                     static_cast<int>(d.smoke_failures.size()));
         std::fflush(stderr);
     }
 }
@@ -354,6 +371,10 @@ void MainWindow::Impl::smoke_probe_gui_r2() {
             ++checked;
             ++bad;
             detail << QStringLiteral("missing-tabs-or-add");
+        } else if (!add->isVisible()) {
+            // 2026-10 用户裁定：格式参数卡取消「＋ 添加格式…」入口（走上方格式磁贴）。
+            ++checked;
+            detail << QStringLiteral("add-format-removed");
         } else {
             QTabBar *bar = tabs->tabBar();
             const QPoint bar_org = bar->mapTo(tabs, QPoint(0, 0));
@@ -5469,6 +5490,292 @@ void probe_format_roundtrip(PageOutput *page_output,
     std::fflush(stdout);
 }
 
+// —— M7-R2.4（用户报告的「格式参数卡片随便一点全是 bug」回归矩阵）——
+//   覆盖：① 页签标题/内容/现役三方同源（磁贴序 vs 插入序错位）；② 分文件夹开关与模板
+//   $format 段联动（初值 + 双向切换）；③ 增删格式（含删现役/删中间）后的页序；④ 8 格式
+//   全选/逐个移除；⑤ 仅元数据互斥置灰；⑥ BMP 元数据承载警示；⑦ HEIF 4:4:4 档位推导
+//   （chroma 字符串枚举读取）。全程走用户路径（磁贴 click / 页签 setCurrentIndex / 开关
+//   click），结束归位单选 jxl。不新增冻结截图（shots=12 不变）。
+void probe_format_card_interactions(MainWindow *w, PageOutput *page_output,
+                                    const QString &shots_dir,
+                                    const std::function<void(const QString &)> &fail) {
+    int checked = 0;
+    int bad = 0;
+    const auto expect = [&](bool ok, const QString &what) {
+        ++checked;
+        if (!ok) {
+            ++bad;
+            fail(QStringLiteral("format-card：%1").arg(what));
+        }
+    };
+    if (page_output == nullptr) {
+        fail(QStringLiteral("format-card：输出页未就绪"));
+        std::printf("UI-SMOKE format-card: checked=1 bad=1\n");
+        std::fflush(stdout);
+        return;
+    }
+    auto *tiles = page_output->findChild<QWidget *>(QStringLiteral("pp-tiles"));
+    auto *tabs = page_output->findChild<QTabWidget *>(QStringLiteral("pp-format-tabs"));
+    auto *split = page_output->findChild<QAbstractButton *>(QStringLiteral("pp-split-switch"));
+    if (tiles == nullptr || tabs == nullptr) {
+        fail(QStringLiteral("format-card：磁贴区/页签缺失"));
+        std::printf("UI-SMOKE format-card: checked=%d bad=%d\n", checked + 1, bad + 1);
+        std::fflush(stdout);
+        return;
+    }
+    const auto tile_of = [tiles](const QString &id) -> QAbstractButton * {
+        return tiles->findChild<QAbstractButton *>(QStringLiteral("pp-format-") + id);
+    };
+    // 走查截图（不占 12 张冻结集）：--shots 给定时逐关键态留证。
+    const auto shot = [w, &shots_dir](const char *name) {
+        if (w == nullptr || shots_dir.isEmpty())
+            return;
+        QDir().mkpath(shots_dir);
+        w->grab().save(QDir(shots_dir).filePath(QString::fromLatin1(name)));
+    };
+    if (w != nullptr) {
+        w->set_current_page(2);
+        smoke_pump(150);
+    }
+    const auto page_id_at = [tabs](int i) -> QString {
+        const QWidget *page = tabs->widget(i);
+        return page != nullptr ? page->property("ppFormatId").toString() : QString();
+    };
+    const auto form_page = [page_output]() -> QString {
+        const QWidget *form = page_output->findChild<QWidget *>(QStringLiteral("pp-param-form"));
+        for (const QWidget *p = form != nullptr ? form->parentWidget() : nullptr; p != nullptr;
+             p = p->parentWidget()) {
+            const QString n = p->objectName();
+            if (n.startsWith(QStringLiteral("pp-format-page-")))
+                return n.mid(15);
+        }
+        return QString();
+    };
+    const auto expect_layout = [&](const QString &step, const QStringList &want) {
+        QStringList got;
+        for (int i = 0; i < tabs->count(); ++i)
+            got << page_id_at(i);
+        expect(got == want,
+               QStringLiteral("%1 页签序=%2（期望 %3）")
+                   .arg(step, got.join(QLatin1Char(',')), want.join(QLatin1Char(','))));
+        // 标题 = 该页面自己的格式名（不是按下标取的另一格式）
+        for (int i = 0; i < tabs->count(); ++i) {
+            const pp::FormatDef *f = pp::find_format(page_id_at(i).toStdString());
+            const QString want_label =
+                f != nullptr ? QString::fromStdString(f->label) : page_id_at(i);
+            expect(tabs->tabText(i) == want_label,
+                   QStringLiteral("%1 页签 %2 标题=%3（期望 %4）")
+                       .arg(step, QString::number(i), tabs->tabText(i), want_label));
+        }
+        const QString cur = page_id_at(tabs->currentIndex());
+        expect(cur == page_output->current_format(),
+               QStringLiteral("%1 现役页签=%2 vs current_format=%3")
+                   .arg(step, cur, page_output->current_format()));
+        expect(form_page() == cur,
+               QStringLiteral("%1 现役表单所在页=%2（期望 %3）").arg(step, form_page(), cur));
+    };
+
+    // ① 分文件夹开关 ↔ 模板 $format（初值即必须一致）
+    expect(split != nullptr, QStringLiteral("分文件夹开关存在"));
+    if (split != nullptr) {
+        expect(page_output->split_by_format() == split->isChecked(),
+               QStringLiteral("初值联动（模板 %1 vs 开关 %2）")
+                   .arg(page_output->output_template().contains(QStringLiteral("$format")) ? 1 : 0)
+                   .arg(split->isChecked() ? 1 : 0));
+        const bool was = split->isChecked();
+        split->click();
+        smoke_pump(60);
+        expect(page_output->split_by_format() == !was,
+               QStringLiteral("关/开分文件夹后模板 %1").arg(split->isChecked() ? "有" : "无"));
+        split->click();
+        smoke_pump(60);
+        expect(
+            page_output->split_by_format() == was,
+            QStringLiteral("分文件夹开关往返归位（模板 %1）").arg(page_output->output_template()));
+    }
+
+    // ② 基线：单选 jxl → 再勾 jpeg（磁贴序 jpeg 在 jxl 之前 = 旧实现错位触发点）
+    page_output->select_format(QStringLiteral("jxl"));
+    smoke_pump(120);
+    expect_layout(QStringLiteral("单选 jxl"), {QStringLiteral("jxl")});
+    if (QAbstractButton *tile = tile_of(QStringLiteral("jpeg"))) {
+        tile->click();
+        smoke_pump(120);
+    }
+    expect_layout(QStringLiteral("jxl 后勾 jpeg"), {QStringLiteral("jpeg"), QStringLiteral("jxl")});
+    shot("08a-format-jpeg-first.png");
+    // 点第二个页签 → 现役必须是该页面自己的格式
+    if (tabs->count() >= 2) {
+        tabs->setCurrentIndex(1);
+        smoke_pump(80);
+        expect(page_output->current_format() == QStringLiteral("jxl"),
+               QStringLiteral("点页签 2（JXL）后现役=jxl（got %1）")
+                   .arg(page_output->current_format()));
+        shot("08b-format-tab-jxl.png");
+    }
+    if (tabs->count() >= 1) {
+        tabs->setCurrentIndex(0);
+        smoke_pump(80);
+        expect(page_output->current_format() == QStringLiteral("jpeg"),
+               QStringLiteral("点页签 1（JPEG）后现役=jpeg（got %1）")
+                   .arg(page_output->current_format()));
+    }
+
+    // ③ 增删：webp 插到中间、删现役中间项、删现役首项
+    if (QAbstractButton *tile = tile_of(QStringLiteral("webp"))) {
+        tile->click();
+        smoke_pump(120);
+    }
+    expect_layout(QStringLiteral("再勾 webp"),
+                  {QStringLiteral("jpeg"), QStringLiteral("webp"), QStringLiteral("jxl")});
+    if (QAbstractButton *tile = tile_of(QStringLiteral("webp"))) {
+        tile->click(); // 删现役中间项
+        smoke_pump(120);
+    }
+    expect_layout(QStringLiteral("删现役 webp"), {QStringLiteral("jpeg"), QStringLiteral("jxl")});
+    if (QAbstractButton *tile = tile_of(QStringLiteral("jpeg"))) {
+        tile->click(); // 删现役首项
+        smoke_pump(120);
+    }
+    expect_layout(QStringLiteral("删现役 jpeg"), {QStringLiteral("jxl")});
+
+    // ④ 8 格式全选（逐个磁贴）→ 页签序 = 磁贴规范序；再逐个移除（保留 jxl）
+    const QStringList all = {QStringLiteral("jpeg"), QStringLiteral("webp"), QStringLiteral("jxl"),
+                             QStringLiteral("heif"), QStringLiteral("avif"), QStringLiteral("png"),
+                             QStringLiteral("tiff"), QStringLiteral("bmp")};
+    for (const QString &id : all) {
+        if (id == QStringLiteral("jxl"))
+            continue;
+        if (QAbstractButton *tile = tile_of(id))
+            tile->click();
+        smoke_pump(40);
+    }
+    expect_layout(QStringLiteral("8 格式全选"), all);
+    shot("08c-format-all8.png");
+    {
+        auto *add = page_output->findChild<QToolButton *>(QStringLiteral("pp-add-format"));
+        expect(add != nullptr && !add->isEnabled(),
+               QStringLiteral("8 格式全选：添加格式钮禁用（不再静默无响应）"));
+    }
+    // ④b 逐个点击 8 个页签：标题所属格式 = 现役 = 表单所在页（每种点击模式）
+    for (int i = 0; i < tabs->count(); ++i) {
+        const QString id = page_id_at(i);
+        tabs->setCurrentIndex(i);
+        smoke_pump(40);
+        expect(!id.isEmpty() && page_output->current_format() == id,
+               QStringLiteral("点第 %1 个页签后现役=%2（期望 %3）")
+                   .arg(QString::number(i), page_output->current_format(), id));
+        expect(form_page() == id, QStringLiteral("点第 %1 个页签后表单页=%2（期望 %3）")
+                                      .arg(QString::number(i), form_page(), id));
+    }
+    for (const QString &id : all) {
+        if (id == QStringLiteral("jxl"))
+            continue;
+        if (QAbstractButton *tile = tile_of(id))
+            tile->click();
+        smoke_pump(40);
+    }
+    expect_layout(QStringLiteral("逐个移除"), {QStringLiteral("jxl")});
+    {
+        auto *add = page_output->findChild<QToolButton *>(QStringLiteral("pp-add-format"));
+        expect(add != nullptr && add->isEnabled(), QStringLiteral("移除后：添加格式钮恢复可用"));
+    }
+
+    // ⑤ 仅元数据：磁贴区 + 格式参数卡置灰、说明行可见、添加钮不可用；切回恢复
+    {
+        auto *param_card = tabs->parentWidget();
+        auto *note = page_output->findChild<QWidget *>(QStringLiteral("pp-format-note"));
+        auto *add = page_output->findChild<QToolButton *>(QStringLiteral("pp-add-format"));
+        page_output->set_metadata_only(true);
+        smoke_pump(80);
+        expect(param_card != nullptr && !param_card->isEnabled(),
+               QStringLiteral("仅元数据：格式参数卡置灰"));
+        expect(!tiles->isEnabled(), QStringLiteral("仅元数据：磁贴区置灰"));
+        expect(note != nullptr && !note->isHidden(), QStringLiteral("仅元数据：说明行可见"));
+        shot("08d-format-metadata-only.png");
+        expect(add != nullptr && !add->isEnabled(), QStringLiteral("仅元数据：添加格式钮不可用"));
+        page_output->set_metadata_only(false);
+        smoke_pump(80);
+        expect(param_card != nullptr && param_card->isEnabled(),
+               QStringLiteral("切回转码：格式参数卡恢复可用"));
+        expect(tiles->isEnabled(), QStringLiteral("切回转码：磁贴区恢复可用"));
+    }
+
+    // ⑥ BMP：元数据承载警示可见 + 位深下拉为「自动（按通道）」且禁用
+    page_output->select_format(QStringLiteral("bmp"));
+    smoke_pump(150);
+    {
+        auto *hint = page_output->findChild<QLabel *>(QStringLiteral("pp-meta-hint-bmp"));
+        auto *bit = page_output->findChild<QComboBox *>(QStringLiteral("pp-bitdepth-combo"));
+        expect(hint != nullptr && !hint->isHidden(), QStringLiteral("BMP 页：元数据丢弃警示可见"));
+        expect(bit != nullptr && !bit->isEnabled() &&
+                   bit->currentText().contains(QStringLiteral("自动")),
+               QStringLiteral("BMP 页：位深=自动（按通道）且禁用（got %1）")
+                   .arg(bit != nullptr ? bit->currentText() : QStringLiteral("<null>")));
+        shot("08e-format-bmp.png");
+    }
+
+    // ⑦ HEIF：chroma 字符串枚举 → 4:4:4 的档位推导必须反映在注释 tooltip
+    page_output->select_format(QStringLiteral("heif"));
+    smoke_pump(300);
+    {
+        auto *chroma = page_output->findChild<QComboBox *>(QStringLiteral("pp-param-chroma"));
+        auto *note = page_output->findChild<QLabel *>(QStringLiteral("pp-profile-note-heif"));
+        expect(chroma != nullptr, QStringLiteral("HEIF 页：chroma 下拉存在"));
+        if (chroma != nullptr) {
+            int idx = -1;
+            for (int i = 0; i < chroma->count(); ++i) {
+                if (chroma->itemText(i) == QStringLiteral("444")) {
+                    idx = i;
+                    break;
+                }
+            }
+            expect(idx >= 0, QStringLiteral("HEIF：chroma 含 444 档"));
+            if (idx >= 0) {
+                chroma->setCurrentIndex(idx);
+                smoke_pump(150);
+            }
+        }
+        expect(note != nullptr && note->toolTip().contains(QStringLiteral("4:4:4")),
+               QStringLiteral("HEIF：4:4:4 的档位推导（tooltip=%1）")
+                   .arg(note != nullptr ? note->toolTip() : QStringLiteral("<null>")));
+        shot("08f-format-heif-444.png");
+    }
+
+    // 收尾：归位单选 jxl
+    page_output->select_format(QStringLiteral("jxl"));
+    smoke_pump(150);
+    expect_layout(QStringLiteral("收尾 jxl"), {QStringLiteral("jxl")});
+
+    // ⑧ JXL 无损开关往返：关无损后 distance 必须是新表默认 1.0（旧实现把无损锁定的
+    //    0.0 当作用户值沿用 → VarDCT 报 "distance=0 is ambiguous"，页面看似默认却不可编码）
+    {
+        auto *lossless = page_output->findChild<QCheckBox *>(QStringLiteral("pp-lossless-check"));
+        auto *form = page_output->findChild<ParamForm *>(QStringLiteral("pp-param-form"));
+        expect(lossless != nullptr && form != nullptr,
+               QStringLiteral("JXL：无损复选框/参数表单在位"));
+        if (lossless != nullptr && form != nullptr) {
+            lossless->click(); // 开无损（自动切 modular）
+            smoke_pump(180);
+            lossless->click(); // 关无损（回 VarDCT）
+            smoke_pump(180);
+            const pp::ParamSet vals = form->values();
+            const auto it = vals.find(std::string("distance"));
+            double distance = -1.0;
+            if (it != vals.end()) {
+                if (const double *d = std::get_if<double>(&it->second))
+                    distance = *d;
+            }
+            expect(!form->selection().lossless,
+                   QStringLiteral("JXL：关无损后 selection.lossless=false"));
+            expect(std::abs(distance - 1.0) < 1e-9,
+                   QStringLiteral("JXL：关无损后 distance 回默认 1.0（got %1）").arg(distance));
+        }
+    }
+    std::printf("UI-SMOKE format-card: checked=%d bad=%d\n", checked, bad);
+    std::fflush(stdout);
+}
+
 // —— R-218 深水区（M7R22G1-4；m7r2-e2 ⑤-6 常驻化）：QLabel 数值列右对齐在 RTL 下的随向
 //   行为**定论** —— Qt 标准控件 QLabel（及继承其 paintEvent 的 formkit::ElidedLabel）
 //   渲染走 QStyle::visualAlignment ⇒ 左/右对齐**自动随向镜像**，无需显式 visualAlignment。
@@ -7419,6 +7726,613 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
 
     // ---- 布局审计（识图门禁）：放最末 —— 只读几何/实拍，不改任何终态 ----
     smoke_probe_layout_audit();
+
+    // ---- M7-R2.4：格式卡交互矩阵（必须在所有状态敏感探针之后 —— 它会切换格式/模板；
+    //   自身收尾归位单选 jxl，且不新增冻结截图）----
+    {
+        const std::function<void(const QString &)> fmt_fail = [this](const QString &reason) {
+            smoke_fail(reason);
+        };
+        probe_format_card_interactions(w, page_output, shots_dir, fmt_fail);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// --ui-traverse 深度走查（M7-R2.5）
+//
+// 与 --ui-smoke 的区别：不追求冻结行，而是把输出页的**每种用户可见操作**跑一遍并留证：
+//   滚动（页面/文件列表/页签条）｜高级参数展开/子组展开/搜索过滤｜8 格式逐页签｜
+//   位深/档位/色度/无损逐档｜重复点击 10+ 次｜全选/清除/恢复默认（真的右键菜单）｜
+//   添加格式弹窗｜仅元数据互斥｜预设 8 格式往返 3 次｜窄窗口溢出｜亮暗双主题。
+// 每张截图对应一个明确状态；结束时若截图数 < 100 直接判失败（本走查的验收下限）。
+// ---------------------------------------------------------------------------
+void MainWindow::Impl::deep_run(const QString &shots_dir) {
+    int checked = 0;
+    int bad = 0;
+    const auto expect = [&](bool ok, const QString &what) {
+        ++checked;
+        if (!ok) {
+            ++bad;
+            smoke_fail(QStringLiteral("deep：%1").arg(what));
+        }
+    };
+    const auto grab = [&](const QString &label, QWidget *target = nullptr) {
+        if (shots_dir.isEmpty())
+            return;
+        QDir().mkpath(shots_dir);
+        QWidget *src = target != nullptr ? target : static_cast<QWidget *>(w);
+        const QPixmap shot = src->grab();
+        const QString name =
+            QStringLiteral("%1-%2.png").arg(deep_shots + 1, 3, 10, QLatin1Char('0')).arg(label);
+        if (shot.isNull() || !shot.save(QDir(shots_dir).filePath(name), "PNG")) {
+            smoke_fail(MainWindow::tr("deep：截图保存失败：%1").arg(name));
+            return;
+        }
+        ++deep_shots;
+    };
+    const auto active_form = [&]() -> ParamForm * {
+        return w->findChild<ParamForm *>(QStringLiteral("pp-param-form"));
+    };
+    const auto form_page = [&]() -> QString {
+        const QWidget *form = w->findChild<QWidget *>(QStringLiteral("pp-param-form"));
+        for (const QWidget *p = form != nullptr ? form->parentWidget() : nullptr; p != nullptr;
+             p = p->parentWidget()) {
+            const QString n = p->objectName();
+            if (n.startsWith(QStringLiteral("pp-format-page-")))
+                return n.mid(15);
+        }
+        return QString();
+    };
+    w->set_current_page(2);
+    page_output->select_format(QStringLiteral("jxl"));
+    pump(300);
+    auto *out_scroll = w->findChild<QAbstractScrollArea *>(QStringLiteral("pp-output-scroll"));
+    auto *tabs = w->findChild<QTabWidget *>(QStringLiteral("pp-format-tabs"));
+    auto *tiles = w->findChild<QWidget *>(QStringLiteral("pp-tiles"));
+    if (page_output == nullptr || tabs == nullptr || tiles == nullptr) {
+        expect(false, QStringLiteral("输出页/tabs/tiles 缺失（深走查无法开始）"));
+        std::printf("UI-TRAVERSE deep: checked=%d bad=%d shots=%d\n", checked, bad, deep_shots);
+        std::fflush(stdout);
+        return;
+    }
+    const auto tab_id_at = [&](int i) -> QString {
+        const QWidget *page = tabs != nullptr ? tabs->widget(i) : nullptr;
+        return page != nullptr ? page->property("ppFormatId").toString() : QString();
+    };
+    const auto tile_of = [&](const QString &id) -> QAbstractButton * {
+        return tiles->findChild<QAbstractButton *>(QStringLiteral("pp-format-") + id);
+    };
+    const auto scroll_out = [&](int value) {
+        if (out_scroll == nullptr)
+            return;
+        out_scroll->verticalScrollBar()->setValue(value);
+        pump(70);
+    };
+    const auto scroll_out_frac = [&](double frac) {
+        if (out_scroll == nullptr)
+            return;
+        auto *sb = out_scroll->verticalScrollBar();
+        scroll_out(static_cast<int>(double(sb->maximum()) * frac));
+    };
+    const QStringList all_ids = {QStringLiteral("jpeg"), QStringLiteral("webp"),
+                                 QStringLiteral("jxl"),  QStringLiteral("heif"),
+                                 QStringLiteral("avif"), QStringLiteral("png"),
+                                 QStringLiteral("tiff"), QStringLiteral("bmp")};
+    const auto label_of = [](const QString &id) {
+        const pp::FormatDef *f = pp::find_format(id.toStdString());
+        return f != nullptr ? QString::fromStdString(f->label) : id;
+    };
+
+    // ================= A. 壳层 / 滚动 / 亮暗 =================
+    scroll_out(0);
+    grab(QStringLiteral("A01-output-top"));
+    scroll_out_frac(1.0);
+    grab(QStringLiteral("A02-output-bottom"));
+    scroll_out_frac(0.5);
+    grab(QStringLiteral("A03-output-middle"));
+    w->set_current_page(1);
+    pump(180);
+    sync_selection(); // 与真实窗口同口径：无显式选中时元数据页跟随首个文件
+    pump(120);
+    grab(QStringLiteral("A04-meta-page"));
+    w->set_current_page(3);
+    pump(180);
+    grab(QStringLiteral("A05-run-page"));
+    w->set_current_page(2);
+    pump(180);
+    scroll_out(0); // 文件列表截图保留输出页顶部态（A03 曾把页面滚到中部）
+    // 文件列表滚动（三档）
+    {
+        auto *view = w->findChild<QAbstractItemView *>(QStringLiteral("pp-file-view"));
+        if (view != nullptr) {
+            auto *sb = view->verticalScrollBar();
+            expect(sb->maximum() > 0,
+                   QStringLiteral("文件列表可滚动（max=%1）").arg(sb->maximum()));
+            sb->setValue(0);
+            pump(80);
+            grab(QStringLiteral("A06-filelist-top"));
+            sb->setValue(sb->maximum() / 2);
+            pump(80);
+            grab(QStringLiteral("A07-filelist-middle"));
+            sb->setValue(sb->maximum());
+            pump(80);
+            grab(QStringLiteral("A08-filelist-bottom"));
+            sb->setValue(0);
+            pump(80);
+        }
+    }
+    // 亮色主题输出页（整页/参数卡）
+    set_theme_mode(theme::ThemeMode::Light);
+    pump(300);
+    scroll_out(0);
+    grab(QStringLiteral("A09-light-output-top"));
+    scroll_out_frac(1.0);
+    grab(QStringLiteral("A10-light-output-bottom"));
+    set_theme_mode(theme::ThemeMode::Dark);
+    pump(300);
+    scroll_out(0);
+
+    // ================= B. 每个格式逐页签 / 逐档 =================
+    const QStringList formats = {QStringLiteral("jpeg"), QStringLiteral("webp"),
+                                 QStringLiteral("jxl"),  QStringLiteral("heif"),
+                                 QStringLiteral("avif"), QStringLiteral("png"),
+                                 QStringLiteral("tiff"), QStringLiteral("bmp")};
+    for (const QString &id : formats) {
+        page_output->select_format(id);
+        pump(280);
+        const QString tag = QStringLiteral("B-") + id;
+        expect(tabs->count() == 1,
+               QStringLiteral("%1：单选后页签=1（got %2）").arg(id).arg(tabs->count()));
+        expect(tab_id_at(tabs->currentIndex()) == id,
+               QStringLiteral("%1：现役页签=自身 id（got %2）")
+                   .arg(id, tab_id_at(tabs->currentIndex())));
+        expect(tabs->tabText(tabs->currentIndex()) == label_of(id),
+               QStringLiteral("%1：页签标题=格式名（got %2）")
+                   .arg(id, tabs->tabText(tabs->currentIndex())));
+        expect(form_page() == id,
+               QStringLiteral("%1：现役表单页=自身 id（got %2）").arg(id, form_page()));
+        scroll_out(0);
+        grab(tag + QStringLiteral("-01-top"));
+        scroll_out_frac(1.0);
+        grab(tag + QStringLiteral("-02-bottom"));
+        scroll_out(0);
+
+        ParamForm *form = active_form();
+        expect(form != nullptr, QStringLiteral("%1：ParamForm 在位").arg(id));
+        if (form == nullptr)
+            continue;
+        {
+            auto *pill = w->findChild<QLabel *>(QStringLiteral("pp-format-changed-pill"));
+            expect(pill == nullptr || !pill->isVisible() ||
+                       pill->text() == QStringLiteral("已改 0"),
+                   QStringLiteral("%1：首次打开不应有「已改 N」（got %2）")
+                       .arg(id, pill != nullptr ? pill->text() : QStringLiteral("<null>")));
+        }
+        // 调试开关：列出与内省 ParamDef 默认值不一致的参数（定位「已改 N」假阳性）。
+        if (qEnvironmentVariableIsSet("PP_DEEP_DEBUG")) {
+            const FormSelection fsel = form->selection();
+            const std::vector<pp::BackendDef> backs = pp::introspect_backends(id.toStdString());
+            const pp::TechDef *t = nullptr;
+            for (const pp::BackendDef &b : backs) {
+                if (b.id != fsel.backend)
+                    continue;
+                for (const pp::TechDef &tt : b.techs)
+                    if (tt.id == fsel.tech)
+                        t = &tt;
+            }
+            if (t != nullptr) {
+                const pp::ParamSet vals = form->values();
+                for (const pp::ParamDef &p : t->params) {
+                    const auto it = vals.find(p.key);
+                    if (it == vals.end())
+                        continue;
+                    if (it->second.index() == p.def.index() && it->second == p.def)
+                        continue;
+                    const auto txt = [](const pp::ParamValue &v) -> QString {
+                        if (const bool *b = std::get_if<bool>(&v))
+                            return *b ? QStringLiteral("true") : QStringLiteral("false");
+                        if (const int64_t *i = std::get_if<int64_t>(&v))
+                            return QString::number(static_cast<qint64>(*i));
+                        if (const double *d = std::get_if<double>(&v))
+                            return QString::number(*d, 'g', 12);
+                        if (const std::string *s = std::get_if<std::string>(&v))
+                            return QString::fromStdString(*s);
+                        return QStringLiteral("<variant>");
+                    };
+                    std::printf("DBG-MISMATCH %s key=%s def=%s val=%s has_default=%d\n",
+                                qUtf8Printable(id), p.key.c_str(), qUtf8Printable(txt(p.def)),
+                                qUtf8Printable(txt(it->second)), p.has_default ? 1 : 0);
+                }
+            }
+        }
+        // 高级参数：展开 → 子组逐个点开 → 搜索 → 收起
+        auto *adv = form->findChild<QToolButton *>(QStringLiteral("pp-advanced-toggle"));
+        if (adv != nullptr && !adv->isHidden() && adv->isEnabled()) {
+            adv->click();
+            pump(180);
+            auto *area = form->findChild<QWidget *>(QStringLiteral("pp-advanced-area"));
+            expect(area != nullptr && !area->isHidden(),
+                   QStringLiteral("%1：高级参数展开后内容可见").arg(id));
+            scroll_out_frac(1.0); // 高级区在参数卡底部：滚到底才能看到行
+            pump(100);
+            grab(tag + QStringLiteral("-03-advanced-open"));
+            if (area != nullptr) {
+                // 取第一行高级参数的 key 作为搜索词（保证命中，而不是空过滤态）
+                QString adv_key;
+                for (const QWidget *row : area->findChildren<QWidget *>()) {
+                    const QString n = row->objectName();
+                    if (n.startsWith(QStringLiteral("pp-param-row-"))) {
+                        adv_key = n.mid(13);
+                        break;
+                    }
+                }
+                const QList<QToolButton *> groups = area->findChildren<QToolButton *>();
+                int gi = 0;
+                for (QToolButton *g : groups) {
+                    if (g == nullptr || g->isHidden() || !g->isEnabled())
+                        continue;
+                    const bool before = g->isChecked();
+                    g->click();
+                    pump(120);
+                    expect(g->isChecked() != before,
+                           QStringLiteral("%1：子组 %2 点击后展开态翻转").arg(id).arg(gi));
+                    grab(tag + QStringLiteral("-04-group%1").arg(gi));
+                    ++gi;
+                }
+                expect(gi > 0, QStringLiteral("%1：至少一个高级子组可点").arg(id));
+                auto *search = form->findChild<QLineEdit *>(QStringLiteral("pp-advanced-search"));
+                if (search != nullptr) {
+                    search->setText(adv_key.isEmpty() ? QStringLiteral("a") : adv_key);
+                    pump(180);
+                    grab(tag + QStringLiteral("-05-search-match"));
+                    search->setText(QStringLiteral("zzzz-no-such-param"));
+                    pump(180);
+                    auto *empty = form->findChild<QLabel *>(QStringLiteral("pp-advanced-empty"));
+                    expect(empty != nullptr && !empty->isHidden(),
+                           QStringLiteral("%1：搜索 0 命中显示空态说明").arg(id));
+                    expect(adv != nullptr && !adv->isHidden(),
+                           QStringLiteral("%1：搜索 0 命中时高级折叠头仍可见（可收起）").arg(id));
+                    grab(tag + QStringLiteral("-06-search-empty"));
+                    search->clear();
+                    pump(120);
+                }
+            }
+            adv->click();
+            pump(140);
+            scroll_out(0);
+            grab(tag + QStringLiteral("-07-advanced-collapsed"));
+            expect(area == nullptr || area->isHidden(),
+                   QStringLiteral("%1：高级参数收起后内容隐藏").arg(id));
+        }
+        // 位深逐档
+        auto *bit = form->findChild<QComboBox *>(QStringLiteral("pp-bitdepth-combo"));
+        if (bit != nullptr) {
+            const int n = bit->count();
+            for (int i = 0; i < n; ++i) {
+                bit->setCurrentIndex(i);
+                pump(120);
+                grab(tag + QStringLiteral("-08-bit-%1").arg(i));
+            }
+            // 回到默认首项，避免后续档位测试被上一次位深影响
+            bit->setCurrentIndex(0);
+            pump(100);
+        }
+        // 无损开关（仅可见格式）
+        auto *lossless = form->findChild<QCheckBox *>(QStringLiteral("pp-lossless-check"));
+        if (lossless != nullptr && lossless->isVisibleTo(form)) {
+            lossless->click();
+            pump(260);
+            expect(form->selection().lossless,
+                   QStringLiteral("%1：勾无损后 selection.lossless=true").arg(id));
+            grab(tag + QStringLiteral("-09-lossless-on"));
+            lossless->click();
+            pump(260);
+            expect(!form->selection().lossless,
+                   QStringLiteral("%1：取消无损后 selection.lossless=false").arg(id));
+            if (id == QStringLiteral("heif") || id == QStringLiteral("avif")) {
+                const pp::ParamSet after = form->values();
+                const auto it = after.find(std::string("chroma"));
+                const std::string *chroma =
+                    it != after.end() ? std::get_if<std::string>(&it->second) : nullptr;
+                expect(chroma != nullptr && *chroma == "420",
+                       QStringLiteral("%1：取消无损后色度恢复 420（got %2）")
+                           .arg(id, chroma != nullptr ? QString::fromStdString(*chroma)
+                                                      : QStringLiteral("<missing>")));
+            }
+            grab(tag + QStringLiteral("-10-lossless-off"));
+        }
+        // HEIF/AVIF：编码档位逐档 + 色度逐档
+        if (id == QStringLiteral("heif") || id == QStringLiteral("avif")) {
+            auto *profile = form->findChild<QComboBox *>(QStringLiteral("pp-profile-combo"));
+            if (profile != nullptr) {
+                for (int i = 0; i < profile->count(); ++i) {
+                    profile->setCurrentIndex(i);
+                    pump(180);
+                    grab(tag + QStringLiteral("-11-profile-%1").arg(i));
+                }
+                profile->setCurrentIndex(0);
+                pump(140);
+            }
+            auto *chroma = form->findChild<QComboBox *>(QStringLiteral("pp-param-chroma"));
+            if (chroma != nullptr) {
+                auto *note = w->findChild<QLabel *>(QStringLiteral("pp-profile-note-") + id);
+                for (int i = 0; i < chroma->count(); ++i) {
+                    chroma->setCurrentIndex(i);
+                    pump(160);
+                    const QString value = chroma->itemText(i);
+                    if (note != nullptr && value == QStringLiteral("422")) {
+                        expect(note->toolTip().contains(QStringLiteral("4:2:2")),
+                               QStringLiteral("%1：4:2:2 档位推导 tooltip 含 4:2:2（got %2）")
+                                   .arg(id, note->toolTip()));
+                    }
+                    if (note != nullptr && value == QStringLiteral("444")) {
+                        expect(note->toolTip().contains(QStringLiteral("4:4:4")),
+                               QStringLiteral("%1：4:4:4 档位推导 tooltip 含 4:4:4（got %2）")
+                                   .arg(id, note->toolTip()));
+                    }
+                    grab(tag + QStringLiteral("-12-chroma-%1").arg(i));
+                }
+                chroma->setCurrentIndex(0);
+                pump(120);
+            }
+        }
+    }
+
+    // ================= C. 多格式 / 全选 / 重复点击 / 菜单 / 预设 =================
+    page_output->select_format(QStringLiteral("jxl"));
+    pump(180);
+    for (const QString &id : all_ids) {
+        if (id == QStringLiteral("jxl"))
+            continue;
+        if (QAbstractButton *tile = tile_of(id)) {
+            tile->click();
+            pump(45);
+        }
+    }
+    expect(tabs->count() == 8, QStringLiteral("全选：页签=8（got %1）").arg(tabs->count()));
+    for (int i = 0; i < tabs->count(); ++i)
+        expect(
+            tab_id_at(i) == all_ids.at(i),
+            QStringLiteral("全选：页签[%1]=%2（got %3）").arg(i).arg(all_ids.at(i), tab_id_at(i)));
+    scroll_out(0);
+    grab(QStringLiteral("C01-all8-top"));
+    scroll_out_frac(1.0);
+    grab(QStringLiteral("C02-all8-bottom"));
+    // 逐页签点击 + 截图
+    int h_bmp = 0;
+    int h_jxl = 0;
+    for (int i = 0; i < tabs->count(); ++i) {
+        const QString id = tab_id_at(i);
+        tabs->setCurrentIndex(i);
+        pump(90);
+        scroll_out(0);
+        if (id == QStringLiteral("bmp"))
+            h_bmp = tabs->height();
+        if (id == QStringLiteral("jxl"))
+            h_jxl = tabs->height();
+        expect(page_output->current_format() == id, QStringLiteral("C 点页签 %1：现役=%2（got %3）")
+                                                        .arg(i)
+                                                        .arg(id, page_output->current_format()));
+        expect(form_page() == id,
+               QStringLiteral("C 点页签 %1：表单页=%2（got %3）").arg(i).arg(id, form_page()));
+        grab(QStringLiteral("C03-tab-%1-%2").arg(i).arg(id));
+    }
+    expect(h_bmp > 0 && h_jxl > 0 && h_bmp < h_jxl,
+           QStringLiteral("8 页签：BMP 参数卡高度不被 JXL 撑高（bmp=%1 jxl=%2）")
+               .arg(h_bmp)
+               .arg(h_jxl));
+    // 窄窗口（页签溢出 / 横向滚动 / 滚动钮）
+    w->resize(960, 760);
+    pump(360);
+    scroll_out(0);
+    grab(QStringLiteral("C04-narrow-top"));
+    if (out_scroll != nullptr) {
+        expect(out_scroll->horizontalScrollBar()->maximum() == 0,
+               QStringLiteral("窄窗口：输出页无横向滚动（max=%1）")
+                   .arg(out_scroll->horizontalScrollBar()->maximum()));
+    }
+    scroll_out_frac(1.0);
+    grab(QStringLiteral("C05-narrow-bottom"));
+    {
+        // 窗口最小宽 1180（theme::Metrics::min_window_w）下 8 个页签仍可能刚好放得下；
+        // 再把页签条本身压到 320px，强制进入滚动钮态（真实用户拖窄右栏/缩小窗口同路径）。
+        const int old_max = tabs->maximumWidth();
+        tabs->setMaximumWidth(320);
+        pump(320);
+        grab(QStringLiteral("C06-tab-overflow"));
+        auto *bar = tabs->tabBar();
+        // Qt6 的页签滚动钮是 QTabBarPrivate::ScrollButton（QAbstractButton 派生），
+        // 不是 QToolButton —— 旧写法 findChildren<QToolButton*> 永远为空。
+        const QList<QAbstractButton *> buttons = bar->findChildren<QAbstractButton *>();
+        int clicked = 0;
+        for (QAbstractButton *b : buttons) {
+            if (b == nullptr || b->isHidden() || !b->isEnabled())
+                continue;
+            b->click();
+            pump(120);
+            grab(QStringLiteral("C07-tab-scroll-%1").arg(clicked++));
+        }
+        expect(clicked > 0, QStringLiteral("页签溢出：滚动钮可点（got %1）").arg(clicked));
+        tabs->setMaximumWidth(old_max);
+        pump(280);
+    }
+    w->resize(1440, 900);
+    pump(320);
+    // 重复点击：同一个磁贴 11 次（奇数 = 最终未选）→ 再 1 次（选中）
+    if (QAbstractButton *tile = tile_of(QStringLiteral("jpeg"))) {
+        for (int i = 0; i < 11; ++i) {
+            tile->click();
+            pump(15);
+        }
+        expect(!tile->isChecked(), QStringLiteral("重复点击 11 次：jpeg 最终未选"));
+        grab(QStringLiteral("C07-repeat-11"));
+        tile->click();
+        pump(80);
+        expect(tile->isChecked(), QStringLiteral("重复点击 12 次：jpeg 最终选中"));
+        grab(QStringLiteral("C08-repeat-12"));
+    }
+    // 右键菜单：全选 / 清除 / 恢复默认（真实菜单动作）
+    {
+        QWidget *host = menu_host_of(tiles);
+        if (host == nullptr)
+            host = tiles;
+        QMenu *menu = popup_card_menu(host);
+        expect(menu != nullptr, QStringLiteral("格式卡右键菜单可弹出"));
+        if (menu != nullptr) {
+            const QImage menu_img = menu->grab().toImage();
+            const QColor menu_bg =
+                menu_img.isNull() ? QColor() : menu_img.pixelColor(menu_img.width() / 2, 2);
+            expect(!menu_img.isNull() && menu_bg.lightness() < 160,
+                   QStringLiteral("右键菜单深色主题可读（bg=%1）").arg(menu_bg.name()));
+            grab(QStringLiteral("C09-context-menu"), menu);
+            menu->close();
+            pump(120);
+        }
+        const auto context_action = [&](const QString &text) -> bool {
+            QMenu *m = popup_card_menu(host);
+            if (m == nullptr)
+                return false;
+            for (QAction *a : m->actions()) {
+                if (a->text() == text) {
+                    a->trigger();
+                    m->close();
+                    pump(280);
+                    return true;
+                }
+            }
+            m->close();
+            return false;
+        };
+        expect(context_action(QStringLiteral("全选格式")),
+               QStringLiteral("右键：全选格式动作可执行"));
+        expect(tabs->count() == 8, QStringLiteral("右键全选后页签=8（got %1）").arg(tabs->count()));
+        grab(QStringLiteral("C10-context-all8"));
+        expect(context_action(QStringLiteral("清除选择")),
+               QStringLiteral("右键：清除选择动作可执行"));
+        expect(tabs->count() == 0, QStringLiteral("右键清除后页签=0（got %1）").arg(tabs->count()));
+        {
+            auto *hint = w->findChild<QLabel *>(QStringLiteral("pp-format-empty-hint"));
+            expect(hint != nullptr && !hint->isHidden(),
+                   QStringLiteral("清除选择后：参数卡空态提示可见"));
+            auto *status = w->findChild<QLabel *>(QStringLiteral("pp-output-status"));
+            expect(status != nullptr && !status->text().contains(QStringLiteral("BMP")) &&
+                       !status->text().contains(QStringLiteral("JPEG")),
+                   QStringLiteral("清除选择后：底栏不再显示游离格式（got %1）")
+                       .arg(status != nullptr ? status->text() : QStringLiteral("<null>")));
+        }
+        grab(QStringLiteral("C11-context-empty"));
+        expect(context_action(QStringLiteral("恢复默认格式")),
+               QStringLiteral("右键：恢复默认格式动作可执行"));
+        expect(tabs->count() == 1, QStringLiteral("恢复默认后页签=1（got %1）").arg(tabs->count()));
+        grab(QStringLiteral("C12-context-default"));
+    }
+    // 「添加格式」入口已按用户裁定移除：按钮对象保留兼容但必须不可见
+    {
+        auto *add = w->findChild<QToolButton *>(QStringLiteral("pp-add-format"));
+        expect(add != nullptr && !add->isVisible(),
+               QStringLiteral("格式参数卡「添加格式」入口已移除（对象存在但不可见）"));
+        grab(QStringLiteral("C13-add-format-removed"));
+    }
+    // 仅元数据互斥（全 8 + 单选各一次）
+    {
+        page_output->set_metadata_only(true);
+        pump(220);
+        auto *param_card = tabs->parentWidget();
+        expect(!tiles->isEnabled(), QStringLiteral("仅元数据：磁贴区置灰"));
+        expect(param_card != nullptr && !param_card->isEnabled(),
+               QStringLiteral("仅元数据：格式参数卡置灰"));
+        {
+            auto *status = w->findChild<QLabel *>(QStringLiteral("pp-output-status"));
+            expect(status != nullptr && status->text().contains(QStringLiteral("保持原格式")) &&
+                       !status->text().contains(QStringLiteral("JPEG")),
+                   QStringLiteral("仅元数据：底栏报保持原格式（got %1）")
+                       .arg(status != nullptr ? status->text() : QStringLiteral("<null>")));
+        }
+        scroll_out(0);
+        grab(QStringLiteral("C14-metadata-only-top"));
+        scroll_out_frac(1.0);
+        grab(QStringLiteral("C15-metadata-only-bottom"));
+        page_output->set_metadata_only(false);
+        pump(220);
+        expect(tiles->isEnabled(), QStringLiteral("切回转码：磁贴区恢复"));
+    }
+    // 预设：全 8 选中 → collect → apply 三次
+    {
+        page_output->select_format(QStringLiteral("jxl"));
+        pump(160);
+        for (const QString &id : all_ids) {
+            if (id == QStringLiteral("jxl"))
+                continue;
+            if (QAbstractButton *tile = tile_of(id)) {
+                tile->click();
+                pump(45);
+            }
+        }
+        pp::PresetData preset = page_output->collect_preset(QStringLiteral("deep"));
+        expect(preset.outputs.size() == 8,
+               QStringLiteral("预设 collect：8 个输出（got %1）").arg(preset.outputs.size()));
+        preset.output_template = "$format/$dir/$file";
+        preset.split_by_format = true;
+        preset.conflict = pp::ConflictPolicy::Overwrite;
+        preset.color_target = pp::ColorTarget::KeepOriginal;
+        const std::string verr = pp::validate_preset(preset);
+        expect(verr.empty(),
+               QStringLiteral("预设 8 格式校验通过（err=%1）").arg(QString::fromStdString(verr)));
+        page_output->apply_preset(preset);
+        pump(320);
+        expect(tabs->count() == 8,
+               QStringLiteral("预设 8 格式：页签=8（got %1）").arg(tabs->count()));
+        scroll_out(0);
+        grab(QStringLiteral("C16-preset-all8"));
+        for (int i = 0; i < 3; ++i) {
+            page_output->apply_preset(preset);
+            pump(200);
+            grab(QStringLiteral("C17-preset-reapply-%1").arg(i));
+        }
+        expect(tabs->count() == 8, QStringLiteral("预设重复应用 3 次后页签仍=8"));
+    }
+
+    // ================= D. 滚动扫描 / 亮暗 / 页签条 =================
+    page_output->select_format(QStringLiteral("jxl"));
+    pump(180);
+    for (const QString &id : all_ids) {
+        if (id == QStringLiteral("jxl"))
+            continue;
+        if (QAbstractButton *tile = tile_of(id)) {
+            tile->click();
+            pump(40);
+        }
+    }
+    expect(tabs->count() == 8, QStringLiteral("D：重建全 8 页签"));
+    scroll_out(0);
+    for (int pct : {0, 25, 50, 75, 100}) {
+        scroll_out_frac(double(pct) / 100.0);
+        grab(QStringLiteral("D01-scroll-%1").arg(pct));
+    }
+    set_theme_mode(theme::ThemeMode::Light);
+    pump(300);
+    scroll_out(0);
+    grab(QStringLiteral("D02-light-all8-top"));
+    scroll_out_frac(1.0);
+    grab(QStringLiteral("D03-light-all8-bottom"));
+    set_theme_mode(theme::ThemeMode::Dark);
+    pump(300);
+    scroll_out(0);
+    // 页签最后一个（自动滚入）→ 第一个（反向滚动）
+    tabs->setCurrentIndex(tabs->count() - 1);
+    pump(140);
+    grab(QStringLiteral("D04-last-tab"));
+    tabs->setCurrentIndex(0);
+    pump(140);
+    grab(QStringLiteral("D05-first-tab"));
+    // 收尾回单选 jxl，避免深走查把状态留给后续人工操作
+    page_output->select_format(QStringLiteral("jxl"));
+    pump(180);
+
+    if (!shots_dir.isEmpty())
+        expect(deep_shots >= 100, QStringLiteral("深度走查截图数 ≥100（got %1）").arg(deep_shots));
+    std::printf("UI-TRAVERSE deep: checked=%d bad=%d shots=%d\n", checked, bad, deep_shots);
+    std::fflush(stdout);
 }
 
 // ---------------------------------------------------------------------------
@@ -9338,8 +10252,8 @@ void MainWindow::Impl::probe_meta_sec_i(const MetaProbeCtx &c, const QString &sh
             // 隐私与文件时间（§7.1）：开关 30×16 + 说明 + 文字链（高 26）；关键字行带「编辑…」
             {
                 int switch_rows = 0;
-                for (const QString &name :
-                     {meta::objname::kPrivacyStrip, meta::objname::kMtimeSync}) {
+                for (const QString &name : {meta::objname::kPrivacyStrip, meta::objname::kMtimeSync,
+                                            QStringLiteral("modernize_exif")}) {
                     const auto *button = page.findChild<QAbstractButton *>(name);
                     if (button != nullptr && button->width() == formkit::kSwitchW &&
                         button->height() == formkit::kSwitchH && button->isCheckable()) {
@@ -9358,7 +10272,7 @@ void MainWindow::Impl::probe_meta_sec_i(const MetaProbeCtx &c, const QString &sh
                     keywords_link->text() == QStringLiteral("编辑…") &&
                     keywords_link->height() == theme::Metrics::btn_h;
                 meta_expect(
-                    "switch-rows", switch_rows == 2 && links_ok,
+                    "switch-rows", switch_rows == 3 && links_ok,
                     QStringLiteral("switches=%1 links=%2").arg(switch_rows).arg(links_ok ? 1 : 0));
 
                 // (i-5b) W-R-T13（A39 ⑥ 缺陷根治回执）：隐私卡**卡体在卡内布局里**。
@@ -9395,8 +10309,8 @@ void MainWindow::Impl::probe_meta_sec_i(const MetaProbeCtx &c, const QString &sh
                             ++pitch_bad;
                     }
                     const int first_y = rows.isEmpty() ? -1 : row_y(rows.first());
-                    const int want_h = formkit::kRowPitch * 4; // 卡头 1 行 + 卡体 3 行
-                    const bool body_ok = card != nullptr && rows.size() == 3 && pitch_bad == 0 &&
+                    const int want_h = formkit::kRowPitch * 5; // 卡头 1 行 + 卡体 4 行
+                    const bool body_ok = card != nullptr && rows.size() == 4 && pitch_bad == 0 &&
                                          first_y >= formkit::kRowPitch && card->height() >= want_h;
                     meta_expect("privacy-card-body", body_ok,
                                 QStringLiteral("card-h=%1 rows=%2 pitch-bad=%3 first-y=%4 want>=%5")

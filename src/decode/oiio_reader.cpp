@@ -22,7 +22,8 @@
 #include <string_view>
 #include <vector>
 
-#include "core/logger.h" // R-304：seek_subimage 还原失败的如实记录
+#include "core/logger.h"     // R-304：seek_subimage 还原失败的如实记录
+#include "decode/tiff_ifd.h" // TIFF IFD1 缩略图判定（NewSubfileType bit 0）
 
 namespace pp {
 namespace {
@@ -60,6 +61,29 @@ std::string heif_container_icc(const std::string &file) {
     }
     heif_context_free(ctx);
     return icc;
+}
+
+// M7-R2.4（预览位深）：OIIO 的 HEIF/AVIF 读取器把 10/12 位样本统一暴露为 uint16，于是
+// probe 的 src_bitdepth 恒为 16 —— 预览信息行把 10bit HEIF/AVIF 显示成 "16 bit"。
+// 这里按容器 API 回读**主图 luma 位深**（8/10/12），优先级高于 TypeDesc 推断。
+// 注：句柄来自 read_from_file（不是刚 encode 完的句柄），与 enc_heif 的延迟回读同一条
+// 安全路径（libheif 1.23.5 上刚 encode 的句柄调用会 AV）。
+int heif_container_bits(const std::string &file) {
+    heif_context *ctx = heif_context_alloc();
+    if (ctx == nullptr)
+        return -1;
+    int bits = -1;
+    heif_image_handle *handle = nullptr;
+    const heif_error read = heif_context_read_from_file(ctx, file.c_str(), nullptr);
+    if (read.code == heif_error_Ok &&
+        heif_context_get_primary_image_handle(ctx, &handle).code == heif_error_Ok &&
+        handle != nullptr) {
+        bits = heif_image_handle_get_luma_bits_per_pixel(handle);
+    }
+    if (handle != nullptr)
+        heif_image_handle_release(handle);
+    heif_context_free(ctx);
+    return (bits >= 1 && bits <= 16) ? bits : -1;
 }
 
 // ASCII-only case-insensitive compare (OIIO metadata keys/values here are ASCII).
@@ -227,6 +251,13 @@ ProbeOutcome probe_file(const std::filesystem::path &p) {
     out.info.height = spec.height;
     out.info.channels = spec.nchannels;
     out.info.src_bitdepth = bitdepth_from_format(spec.format);
+    // M7-R2.4：HEIF/AVIF 的 10/12 位在 OIIO spec 里是 uint16 —— 按容器真实位深覆盖，
+    // 否则预览信息行与元数据卡都显示 "16 bit"（用户可见的错误读数）。
+    if (out.info.format == "heif" || out.info.format == "avif") {
+        const int bits = heif_container_bits(file);
+        if (bits > 0)
+            out.info.src_bitdepth = bits;
+    }
     // ImageInfo::channels is the channel layout: 2 = gray+alpha, 4 = RGBA.
     // (The GIF reader of OIIO 3.1.14 reports alpha_channel == 4 for a 4-channel
     // frame, i.e. an out-of-range index, hence the layout check as well.)
@@ -239,6 +270,16 @@ ProbeOutcome probe_file(const std::filesystem::path &p) {
     // spec（下方 close() 即销毁句柄），但如实记录（debug 日志）供排查。
     out.info.is_multipage = in->seek_subimage(1, 0);
     if (out.info.is_multipage) {
+        // 0.3.6-alpha1：TIFF 的 IFD1 若是 reduced-resolution 缩略图（NewSubfileType bit 0），
+        // 它不是"第二页" —— 相机/Photoshop TIFF 普遍带 107x160 缩略图，旧实现把每条这类
+        // TIFF 都报成 multipage（实测 super/T1.tif）。判据只认规范标记，不用尺寸
+        // （真多页夹具 tests/golden/base/multi.tif 是 64x64 + 32x32，按尺寸会误判）。
+        if (out.info.format == "tiff" && tiff_ifd1_is_reduced_thumbnail(p)) {
+            out.info.is_multipage = false;
+            log_debug("decode", "oiio_reader.cpp",
+                      "tiff IFD1 is a reduced-resolution thumbnail; not multipage",
+                      {{"file", file}});
+        }
         if (!in->seek_subimage(0, 0)) {
             log_debug("decode", "oiio_reader.cpp", "seek_subimage(0) restore failed",
                       {{"file", file}});

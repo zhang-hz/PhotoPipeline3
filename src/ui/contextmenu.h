@@ -45,6 +45,12 @@ struct Item {
 // 单一构造点：把 items 装成 QMenu（父件负责 WA_DeleteOnClose + popup/exec 的生命周期）
 QMenu *menu(QWidget *parent, const std::vector<Item> &items);
 
+// M7-R2.5：给**直接构造**的 QMenu（不使用 menu() 的弹窗，如「添加格式…」/变量表/分类菜单）
+// 套上当前主题。QMenu 是顶层窗口，不继承页面 setStyleSheet(page_qss) 的子树立规则；
+// 实测深色页上会退回平台白底 + 近白字，菜单不可读。所有 new QMenu/QMenu 栈对象在 exec
+// 之前都要调用本函数。
+void style_menu(QMenu *menu);
+
 // ---------------------------------------------------------------------------
 // 12 类卡的 actions 构造函数（docs/ux-review-14.md §1 表逐条）
 // 每个构造函数只接收**意图回调**；没接的意图传空 std::function（对应菜单项置灰）。

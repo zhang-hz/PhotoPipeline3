@@ -18,8 +18,8 @@ M0 交付仓库骨架、冻结接口、链接探针与金标语料。**M1a 交�
 clang-format 硬门禁 + clang-tidy 棘轮 + sanitizer 三路）；
 ⑧ **依赖一把全升**（Qt 6.11.2 / OIIO 3.1.17 / libjxl 0.12 / exiv2 0.28.9 / x265 4.3 / SVT-AV1 4.2 …）；
 ⑨ **AVX2 性能基线**（x86-64-v3 + 5 对自研热路径 SIMD：flatten / quantize / transpose / downscale / interleave）。
-金样断言级 **20 对**、ctest 条目以 `ctest -N` 实测为准（2026-10-12 实测 **34 条**（release）/
-**35 条**（release-dev，含 UI 冒烟））、UI 冒烟冻结行 `UI-SMOKE OK shots=12 pages=3`。
+金样断言级 **20 对**、ctest 条目以 `ctest -N` 实测为准（2026-10-27 实测 **35 条**（release）/
+**36 条**（release-dev，含 UI 冒烟））、UI 冒烟冻结行 `UI-SMOKE OK shots=12 pages=3`。
 
 **M5（GUI 刷新 v6，折入 0.3.0，版本号不变）**：视觉体系与排版全量重做——单源规范
 [docs/qt-gui-design-spec.md](docs/qt-gui-design-spec.md)（v6）+ 视觉终稿 [docs/mockups-v2/](docs/mockups-v2/)
@@ -32,7 +32,15 @@ caption 单轨 46×32；壳层顶栏 44 + 状态栏 30；**栏宽固定轴 330 /
 逐条探针、偏差与未决项见 [docs/m5-report.md](docs/m5-report.md)，开发期裁定见
 [docs/m5-adjudications.md](docs/m5-adjudications.md)。
 
-**0.3.5.alpha3（当前版本，预发布）= 全格式编码器配置审计修复批**：8 个格式逐参数核对暴露/
+**0.3.5（当前版本，正式版）= 0.3.5 系列收口修复批**：0.3.5.alpha3 之后的实测缺陷与体验修复。
+三块交付：① **同目录输出数据安全收口**——输出路径命中源文件不再整文件失败，按普通名字冲突
+改名（`名称 (1).扩展名`），源文件永不写（Overwrite 也降级 Rename）；② **元数据现代化**——
+HEIF/AVIF 元数据回读兜底（修 grid 主图二次转码丢 EXIF/XMP）、HEIF/AVIF 真实位深显示、可选
+「补全现代 EXIF」（只补可推导字段，不编造）；③ **GUI 实测缺陷清理**——AVIF 标签、运行页溢出/
+状态、输出页页签错位/空白带/空态、折叠按钮主题、顶层菜单深色可读、输出目录权限 UAC 一键授权
+等，并新增 `--ui-traverse` 深走查门禁（115 截图 / 159 断言）。逐条变更见 [CHANGELOG.md](CHANGELOG.md) `[0.3.5]`。
+
+**0.3.5.alpha3（历史预发布）= 全格式编码器配置审计修复批**：8 个格式逐参数核对暴露/
 生效/默认值/联动，修掉 JPEG 色度采样不生效、JXL 无损 `resampling`、WebP 假 `preset`、PNG
 ICC 自相矛盾、HEIF/AVIF 假默认值（`qp=0`）、BMP 假位深选择等；Alpha 明确不支持（统一拍平 +
 警示），TIFF 多页只取首图但保留合法缩略图 IFD1，仅元数据补 IPTC/COM 隐私剥除与 CMYK 支持。
@@ -83,7 +91,7 @@ R2 轮方案见 [docs/m7r2-plan.md](docs/m7r2-plan.md)。**色彩能力四选项
 渲染意图 / 线性光重采样）已入引擎并在界面提供开关**——**输出页全局卡**四行（默认全关 =
 行为不变；0.3.x 默认路径另有两处已归因字节变化，见 CHANGELOG「变更」节）；8bit 抖动仅作用
 于 JPEG/WebP/JXL 及 OIIO 系四家的 8bit 量化段（HEIF/AVIF 的 8bit 路径不接）。**发行状态：0.3.3 已发布**（2026-10-13；其 Windows zip 有启动 P0，已由 0.3.4 热修，
-请使用 0.3.4 或更新版本；当前最新 = 0.3.5.alpha3 预发布）。
+请使用 0.3.4 或更新版本；当前最新 = 0.3.5 正式版）。
 
 **0.3.2 = GPS 地图升级版（M6）**：把「内嵌地图选点」从能用升级到**地图 App 水平**——
 R1 搜索搜得出（改用可达的**高德 Web 服务**事实表：`place/text` + 周边偏置 **`around` 20 条**按距离升序 +
@@ -494,7 +502,7 @@ chmod +x PhotoPipeline-<版本>-x86_64.AppImage
 
 ## 发行版（Windows）
 
-**M3 起提供 Windows x64 免安装产物**（0.2.0 为首个 Windows 版本，当前版本 0.3.5.alpha3 预发布）；与 Linux 的 AppImage 同一引擎
+**M3 起提供 Windows x64 免安装产物**（0.2.0 为首个 Windows 版本，当前版本 0.3.5）；与 Linux 的 AppImage 同一引擎
 与界面，差异只在打包形态（zip vs AppImage）与平台运行时（MSVC 运行时 / Qt msvc2022_64）。
 
 ### 下载与运行
@@ -534,7 +542,7 @@ chmod +x PhotoPipeline-<版本>-x86_64.AppImage
 ### 命令行
 
 ```powershell
-.\photopipeline.exe --version      # → PhotoPipeline 0.3.5.alpha3（单行 + 退出码 0；非 dev 门控，发布构建亦可用）
+.\photopipeline.exe --version      # → PhotoPipeline 0.3.5（单行 + 退出码 0；非 dev 门控，发布构建亦可用）
 .\photopipeline.exe                # 图形界面
 .\photopipeline.exe --ui-smoke     # 无头 UI 走查（offscreen，产出 12 张截图；仅 PP_BUILD_DEV=ON 的构建）
 .\photopipeline.exe --dev ...      # 开发 harness：全语料矩阵 / 回归基线入口（同上，仅 dev 构建）

@@ -3,6 +3,8 @@
 // 拆分口径 = 行为零变化（方法体自 page_output.cpp 逐字搬移；公开面逐位不变）。
 #include "ui/page_output_impl.h"
 
+#include "ui/contextmenu.h" // M7-R2.5：变量表菜单的主题化
+
 namespace pp::ui {
 
 QString OutputPageImpl::template_text() const {
@@ -30,6 +32,7 @@ void OutputPageImpl::show_vars_menu() {
         {"$ext", "扩展名"},
     };
     QMenu menu(q);
+    contextmenu::style_menu(&menu); // 深色页上的顶层弹窗必须显式套主题
     for (const Var &v : vars) {
         QAction *action = menu.addAction(QString::fromLatin1(v.token) + QStringLiteral(" · ") +
                                          PageOutput::tr(v.desc));

@@ -19,6 +19,8 @@
 #include "core/metadata.h"
 #include "core/filetime.h"
 
+#include <libheif/heif.h>
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -974,8 +976,10 @@ BatchRules effective_rules(const BatchRules &rules, const std::optional<Metadata
         eff.gps.reset();
         eff.gps_clear = false;
     }
-    if (!eff.privacy_enabled)
+    if (!eff.privacy_enabled) {
         eff.strip_privacy = false;
+        eff.modernize_exif = false; // 「补全现代 EXIF」是隐私/元数据卫生卡的可选能力
+    }
     if (ex.has_value()) {
         if (ex->time_shift.has_value())
             eff.time_shift = ex->time_shift; // 覆盖（inherit = nullopt）
@@ -1212,6 +1216,8 @@ bool BatchRules::is_noop() const {
         return false;
     if (strip_privacy || sync_mtime)
         return false;
+    if (modernize_exif)
+        return false;
     return true;
 }
 
@@ -1258,6 +1264,67 @@ std::string reinterpret_timezone(const std::string &exif_dt, int from_min, int t
 // read
 // ===========================================================================
 
+namespace {
+
+// M7-R2.4（HEIF/AVIF 元数据回读兜底）：Exiv2 的 BMFF 读取器读不到 **grid 主图**上的
+// Exif/XMP（实测：lossless >16MP 的 HEIF 由 heif_context_add_grid_image 生成，Exif
+// item 的 cdsc 指向 grid item；libheif 能读出 52644 字节 EXIF，Exiv2 的 exifData() 为空）。
+// 后果不是"写没写"，而是**下一次转码读不回来** → 元数据在二次转码时静默丢失。
+// 这里在 Exiv2 结果为空时按容器 API 直读同一份 Exif/XMP（不改写、不复制语义）。
+void read_heif_metadata_fallback(SourceMeta &m, const std::string &file) {
+    heif_context *ctx = heif_context_alloc();
+    if (ctx == nullptr)
+        return;
+    heif_image_handle *handle = nullptr;
+    const heif_error read = heif_context_read_from_file(ctx, file.c_str(), nullptr);
+    if (read.code == heif_error_Ok &&
+        heif_context_get_primary_image_handle(ctx, &handle).code == heif_error_Ok &&
+        handle != nullptr) {
+        const int n = heif_image_handle_get_number_of_metadata_blocks(handle, nullptr);
+        if (n > 0 && n <= 64) {
+            std::vector<heif_item_id> ids(static_cast<std::size_t>(n), 0);
+            const int got =
+                heif_image_handle_get_list_of_metadata_block_IDs(handle, nullptr, ids.data(), n);
+            for (int i = 0; i < got; ++i) {
+                const char *type = heif_image_handle_get_metadata_type(handle, ids[i]);
+                const std::size_t size = heif_image_handle_get_metadata_size(handle, ids[i]);
+                if (type == nullptr || size == 0 || size > (16u << 20))
+                    continue;
+                std::vector<unsigned char> buf(size, 0);
+                if (heif_image_handle_get_metadata(handle, ids[i], buf.data()).code !=
+                    heif_error_Ok)
+                    continue;
+                const std::string type_s(type);
+                if (type_s == "Exif" && m.exif.empty()) {
+                    // HEIF Exif item = 4 字节大端 TIFF 偏移 + Exif 数据（libheif 头注释同口径）
+                    std::size_t skip =
+                        size >= 4 ? (std::size_t(buf[0]) << 24 | std::size_t(buf[1]) << 16 |
+                                     std::size_t(buf[2]) << 8 | std::size_t(buf[3]))
+                                  : 0;
+                    if (4 + skip < size)
+                        Exiv2::ExifParser::decode(m.exif, buf.data() + 4 + skip, size - 4 - skip);
+                } else if (type_s == "mime" && m.xmp.empty()) {
+                    const char *ctype = heif_image_handle_get_metadata_content_type(handle, ids[i]);
+                    if (ctype == nullptr || std::string_view(ctype) != "application/rdf+xml")
+                        continue;
+                    const std::string packet(reinterpret_cast<const char *>(buf.data()), size);
+                    if (Exiv2::XmpParser::decode(m.xmp, packet) != 0)
+                        m.xmp.clear();
+                }
+            }
+        }
+    }
+    if (handle != nullptr)
+        heif_image_handle_release(handle);
+    heif_context_free(ctx);
+}
+
+bool is_heif_family_ext(const std::string &ext) {
+    return ext == ".heic" || ext == ".heif" || ext == ".hif" || ext == ".avif";
+}
+
+} // namespace
+
 SourceMeta read_metadata(const std::filesystem::path &p) {
     SourceMeta m;
     try {
@@ -1275,6 +1342,12 @@ SourceMeta read_metadata(const std::filesystem::path &p) {
             const Exiv2::DataBuf &icc = img->iccProfile();
             if (icc.size() > 0)
                 m.icc.assign(reinterpret_cast<const char *>(icc.c_data()), icc.size());
+        }
+        // M7-R2.4：BMFF（尤其 grid 主图）Exiv2 读不到的 Exif/XMP 由 libheif 容器 API 补齐。
+        // 两路独立判空（Exiv2 可能只读到其中一路，例如读得到 XMP 但读不到 Exif）。
+        if ((m.exif.empty() || m.xmp.empty()) &&
+            is_heif_family_ext(lower_copy(p.extension().string()))) {
+            read_heif_metadata_fallback(m, normalize_extended_path(p).string());
         }
     } catch (const Exiv2::Error &e) {
         m.error = std::string("exiv2: ") + e.what();
@@ -1303,6 +1376,85 @@ SourceMeta read_metadata(const std::filesystem::path &p) {
 // ===========================================================================
 // plan synthesis
 // ===========================================================================
+
+// 2026-10 可选功能「补全现代 EXIF」：只补**可由已有事实推导**的字段，绝不编造拍摄信息。
+// 现代相机/手机（截至 2026）普遍写 ExifVersion 2.32 / PixelXDimension / GPSVersionID /
+// GPSMapDatum / GPSAltitudeRef / GPSImgDirectionRef；老文件缺这些时可由尺寸或坐标基准补齐。
+namespace {
+
+void set_missing_text(Exiv2::ExifData &exif, const char *key, std::string_view value) {
+    const Exiv2::ExifKey k(key);
+    if (exif.findKey(k) == exif.end())
+        exif[k.key()] = std::string(value);
+}
+
+bool read_positive_uint(const Exiv2::ExifData &exif, const char *key, std::uint32_t &out) {
+    const auto it = exif.findKey(Exiv2::ExifKey(key));
+    if (it == exif.end())
+        return false;
+    try {
+        out = it->toUint32();
+        return out > 0;
+    } catch (const Exiv2::Error &) {
+        return false;
+    }
+}
+
+void complete_modern_exif(Exiv2::ExifData &exif) {
+    // ExifVersion 2.32：本程序写的是标准 EXIF 标签集；仅在源文件完全没有该标签时补。
+    // 该键类型 = UNDEFINED(4)，必须按 4 字节 undefined 写，不能按 ASCII（Exiv2 会吃掉前导 0）。
+    const Exiv2::ExifKey version_key("Exif.Photo.ExifVersion");
+    if (exif.findKey(version_key) == exif.end()) {
+        Exiv2::Value::UniquePtr value = Exiv2::Value::create(Exiv2::undefined);
+        const Exiv2::byte raw[4] = {'0', '2', '3', '2'};
+        value->read(raw, 4, Exiv2::bigEndian);
+        exif.add(version_key, value.get());
+    }
+
+    // 像素尺寸：现代 EXIF 用 PixelXDimension/PixelYDimension；旧文件常只有 ImageWidth/Length。
+    std::uint32_t w = 0;
+    std::uint32_t h = 0;
+    const bool has_w = read_positive_uint(exif, "Exif.Photo.PixelXDimension", w);
+    const bool has_h = read_positive_uint(exif, "Exif.Photo.PixelYDimension", h);
+    if (!has_w && read_positive_uint(exif, "Exif.Image.ImageWidth", w))
+        exif["Exif.Photo.PixelXDimension"] = w;
+    if (!has_h && read_positive_uint(exif, "Exif.Image.ImageLength", h))
+        exif["Exif.Photo.PixelYDimension"] = h;
+    // 反向补齐：老消费端只读 ImageWidth/Length 时也有尺寸（值来自已存在的 Pixel*，不是猜）。
+    std::uint32_t pw = 0;
+    std::uint32_t ph = 0;
+    if (read_positive_uint(exif, "Exif.Photo.PixelXDimension", pw) &&
+        !read_positive_uint(exif, "Exif.Image.ImageWidth", w))
+        exif["Exif.Image.ImageWidth"] = pw;
+    if (read_positive_uint(exif, "Exif.Photo.PixelYDimension", ph) &&
+        !read_positive_uint(exif, "Exif.Image.ImageLength", h))
+        exif["Exif.Image.ImageLength"] = ph;
+
+    // GPS 元数据：有坐标才补基准；本程序公共坐标恒为 WGS-84。
+    const bool has_gps = exif.findKey(Exiv2::ExifKey("Exif.GPSInfo.GPSLatitude")) != exif.end() ||
+                         exif.findKey(Exiv2::ExifKey("Exif.GPSInfo.GPSLongitude")) != exif.end();
+    if (has_gps) {
+        set_missing_text(exif, "Exif.GPSInfo.GPSVersionID", "2 2 0 0");
+        set_missing_text(exif, "Exif.GPSInfo.GPSMapDatum", "WGS-84");
+        const auto alt = exif.findKey(Exiv2::ExifKey("Exif.GPSInfo.GPSAltitude"));
+        const auto alt_ref = exif.findKey(Exiv2::ExifKey("Exif.GPSInfo.GPSAltitudeRef"));
+        if (alt != exif.end() && alt_ref == exif.end()) {
+            try {
+                exif["Exif.GPSInfo.GPSAltitudeRef"] = static_cast<std::uint16_t>(
+                    alt->toFloat() < 0.0 ? 1 : 0); // 0=海平面以上，1=以下
+            } catch (const Exiv2::Error &e) {
+                log_debug("MetaWrite", "metadata.cpp",
+                          "GPSAltitude unparsable; GPSAltitudeRef not synthesized",
+                          {{"error", e.what()}});
+            }
+        }
+        // 本程序/手机写入的 ImgDirection 为真北（T）；仅在方向存在时补基准。
+        if (exif.findKey(Exiv2::ExifKey("Exif.GPSInfo.GPSImgDirection")) != exif.end())
+            set_missing_text(exif, "Exif.GPSInfo.GPSImgDirectionRef", "T");
+    }
+}
+
+} // namespace
 
 MetadataPlan build_plan(const SourceMeta &src, const BatchRules &rules,
                         const std::optional<MetadataOverride> &ex) {
@@ -1368,6 +1520,8 @@ MetadataPlan build_plan(const SourceMeta &src, const BatchRules &rules,
 
     plan.datetime_original = effective_datetime(plan.exif, plan.xmp);
     plan.has_time = !plan.datetime_original.empty();
+    if (eff.modernize_exif)
+        complete_modern_exif(plan.exif);
     return plan;
 }
 

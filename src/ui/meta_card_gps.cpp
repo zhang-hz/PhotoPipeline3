@@ -613,6 +613,7 @@ void build_gps_search_row(MetaState *st, QWidget *body, QVBoxLayout *bv) {
         make_button(group.widget(), objname::kGpsCategoryMenu, PageMeta::tr(kCategoryButtonText));
     st->gps.category_btn->setToolTip(PageMeta::tr(kCategoryButtonTooltip));
     st->gps.category_menu = new QMenu(st->gps.category_btn);
+    contextmenu::style_menu(st->gps.category_menu); // M7-R2.5：顶层弹窗显式套主题
     st->gps.category_group = new QActionGroup(st->gps.category_btn);
     st->gps.category_group->setExclusive(true);
     for (int i = 0; i < int(kCategoryKeywords.size()); ++i) {
@@ -1120,6 +1121,7 @@ void gps_wiring(MetaState *st) {
         QObject::connect(edit, &QLineEdit::customContextMenuRequested, st,
                          [st, edit](const QPoint &pos) {
                              QMenu menu(edit);
+                             contextmenu::style_menu(&menu);
                              QAction *copy = menu.addAction(PageMeta::tr("复制坐标"));
                              QAction *dms = menu.addAction(PageMeta::tr("度分显示（DMS）"));
                              dms->setCheckable(true);
@@ -1141,6 +1143,7 @@ void gps_wiring(MetaState *st) {
                              return;
                          }
                          QMenu menu(st->gps.gps_status);
+                         contextmenu::style_menu(&menu);
                          QAction *copy = menu.addAction(PageMeta::tr(kCopyAddressText));
                          if (menu.exec(st->gps.gps_status->mapToGlobal(pos)) == copy) {
                              QApplication::clipboard()->setText(address);

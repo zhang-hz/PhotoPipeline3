@@ -31,3 +31,11 @@ __pycache__/
 *.pyc
 /nul
 docs/*$*.png
+
+# 2026-10-27 发布清理（REL-0.3.5）：本地非入库面收口
+# `super/` = 用户提供的实测样本（T1.tif/T2-T4.heic，几百 MB，docs 引用其文件名，但不入库）；
+# `buildm7r*` = 历史任务遗留构建树（与 build/ 同属 gitignored 生成物）；
+# `debug/*/` = 本地取证截图子目录（`debug/debug1.png`/`debug2.png` 两根级评审证据仍入库）。
+/super/
+/buildm7r*/
+/debug/*/

@@ -381,41 +381,63 @@ const char *conflict_text(pp::ConflictPolicy p) { return pp::conflict_policy_nam
 // R-195 转发（M7-R2.1-F4）：ParamDef 查找走 pp::lookup_param_def 单源（first-wins）；旧
 // set_param 双层循环覆盖 def 指针 = last-wins（同 key 多声明时与 GUI 侧解析出不同 def）退役。
 // 单源语义：tech 指名 = 命中技术内 first-wins、该技术不声明时回退后端全技术并集（first-wins）。
+// M8-B1（docs/m8-encoder-params-and-ssimulacra2-design.md §4.5 / C1/C7）：
+//   * 运行时内省后端（heif/avif）**先 introspect 再 lookup**（B0 起目录行并入 live tech
+//     参数面，原生键与 x265:/aom: 目录键同表）；空 backend = 静态首选后端（与 encoders.cpp
+//     的 resolve 口径一致）；
+//   * **清单外键 = 未收录参数**（显式错误，不再静默转发/被忽略）；静态格式（jpeg/png/…）
+//     保留既有 E9 语义（未知键转交编码器记日志）；
+//   * String 类型（JXL frame_name/intrinsic_size）= 原样字符串。
 bool set_param(pp::ParamSet &s, const pp::FormatDef &f, const std::string &backend,
                const std::string &tech, const std::string &key, const std::string &raw,
                std::string &err) {
-    const pp::ParamDef *def = pp::lookup_param_def(f, backend, tech, key);
-    // HEIF/AVIF 的参数只在运行时内省表里（静态 techs 为空）；dev CLI 若只看静态表，
-    // 所有整数/布尔键都会被字符串化 → quality 回退 90、speed/qp 失败。这里回退到 live 表。
+    bool runtime_format = false;
+    for (const pp::BackendDef &b : f.backends) {
+        if (b.runtime_introspected) {
+            runtime_format = true;
+            break;
+        }
+    }
+    const pp::ParamDef *def = nullptr;
+    // live 表必须活到函数结束（def 指向其 ParamDef；B1 首版把它放在 if 块内 → 悬垂指针，
+    // Enum choices 读到脏内存导致 "not a valid choice"，实测于 --param chroma=444）。
     std::vector<pp::BackendDef> live;
-    if (!def) {
-        for (const pp::BackendDef &b : f.backends) {
-            if (!b.runtime_introspected)
+    if (runtime_format) {
+        live = pp::introspect_backends(f.id);
+        std::string want = backend;
+        if (want.empty()) {
+            if (const pp::BackendDef *sb = pp::find_backend(f, ""))
+                want = sb->id;
+        }
+        for (const pp::BackendDef &lb : live) {
+            if (!want.empty() && lb.id != want)
                 continue;
-            live = pp::introspect_backends(f.id);
-            for (const pp::BackendDef &lb : live) {
-                if (!backend.empty() && lb.id != backend)
+            for (const pp::TechDef &lt : lb.techs) {
+                if (!tech.empty() && lt.id != tech)
                     continue;
-                for (const pp::TechDef &lt : lb.techs) {
-                    if (!tech.empty() && lt.id != tech)
-                        continue;
-                    for (const pp::ParamDef &p : lt.params) {
-                        if (p.key == key) {
-                            def = &p;
-                            break;
-                        }
-                    }
-                    if (def)
+                for (const pp::ParamDef &p : lt.params) {
+                    if (p.key == key) {
+                        def = &p;
                         break;
+                    }
                 }
                 if (def)
                     break;
             }
-            break;
+            if (def)
+                break;
         }
     }
+    if (!def)
+        def = pp::lookup_param_def(f, backend, tech, key);
     if (!def) {
-        s[key] = raw; // unknown → encoder E9 warning (log_warn, no WarningKind)
+        if (runtime_format) {
+            // C7/D-6：清单外键 = 预检错误（heif/avif 的 x265:/aom: 必须逐字收录；svt: 无通道）。
+            err = "param '" + key + "': 未收录参数（不在 M8 参数目录内；" + f.id +
+                  " 只接受目录内键）";
+            return false;
+        }
+        s[key] = raw; // 静态格式旧语义：unknown → encoder E9 warning (log_warn, no WarningKind)
         pp::log_warn("harness", "dev_cli.cpp", "unknown parameter key; forwarded to encoder",
                      {{"key", key}, {"value", raw}});
         return true;
@@ -457,6 +479,12 @@ bool set_param(pp::ParamSet &s, const pp::FormatDef &f, const std::string &backe
         }
         err = "param '" + key + "': '" + raw + "' is not a valid choice";
         return false;
+    }
+    case pp::ParamType::String: {
+        // M8-B1：T 文本行（JXL frame_name / intrinsic_size）——原样入库，语义校验在
+        // param_rules（J13/J14）与编码器兜底解析（enc_jxl）。
+        s[key] = raw;
+        return true;
     }
     }
     err = "param '" + key + "': unsupported type";

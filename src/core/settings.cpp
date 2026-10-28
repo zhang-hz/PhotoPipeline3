@@ -146,6 +146,8 @@ std::vector<std::pair<std::string, std::string>> settings_pairs(const AppSetting
     // —— M6-T11 追加（契约 C6；追加顺序 = 结构体末尾顺序）——
     kv.emplace_back("map_style", s.map_style);
     kv.emplace_back("map_sat_labels", s.map_sat_labels ? "true" : "false");
+    // —— M8 追加（契约 C6；追加顺序 = 结构体末尾顺序）——
+    kv.emplace_back("quality_score", s.quality_score ? "true" : "false");
     return kv;
 }
 
@@ -251,6 +253,11 @@ void apply_pair(AppSettings &s, const std::string &key, const std::string &value
         bool v = false;
         if (parse_bool(value, v))
             s.map_sat_labels = v;
+    } else if (key == "quality_score") {
+        // M8：输出评分开关（哑存储；Stage C 消费）。
+        bool v = false;
+        if (parse_bool(value, v))
+            s.quality_score = v;
     }
 }
 

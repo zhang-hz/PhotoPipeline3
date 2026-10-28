@@ -17,6 +17,7 @@
 #include "ui/run_status_text.h"        // M7-WP9（B.2）：运行页文案/数值格式纯函数
 #include "ui/time_tag_keys.h"          // M7-R2.1-F3（R-197）：时间标签集合单表
 
+#include "codecs/param_catalog/catalog.h" // M8-B2：目录 9 组词表单源（组词表语义适配）
 #include "core/params.h"
 #include "core/types.h"
 
@@ -84,15 +85,30 @@ int main() {
     //    契约 = docs/ux-review-14.md §8 改进方案 2「分组由 schema 显式字段驱动，
     //    废除 key 词根启发式」。判据：
     //    * 每条 ParamDef 的 group 必须落在 kGroup* 词表内（空串 = 未分类 = 缺陷）；
-    //    * 核心参数恒 kGroupCore；高级参数恒落四个子分组之一（二级折叠的四段）。
+    //    * 核心参数恒 kGroupCore；高级参数恒落子分组之一（二级折叠各段）。
+    //    M8-B2 语义适配（docs/m8-encoder-params-and-ssimulacra2-design.md §4.2 / C2）：B0 把
+    //    参数目录行并入静态表后，高级参数分组词表从 4 组扩到 **4 旧组 ∪ 9 目录组**（质量/码率、
+    //    分析工具、心理视觉、量化/变换、环路滤波、分块/线程、码流/兼容性、调试/实验、只读）；
+    //    判据本体不变（group 必须 ∈ 词表、core 恒 kGroupCore），只是词表按设计扩表。
     {
         const std::set<std::string> all_groups = {
             std::string(pp::kGroupCore), std::string(pp::kGroupProgressive),
             std::string(pp::kGroupNoise), std::string(pp::kGroupDecodeBudget),
-            std::string(pp::kGroupEncodeTools)};
+            std::string(pp::kGroupEncodeTools),
+            // —— M8-B2：目录 9 组词表（catalog.h 单源）——
+            std::string(pp::catalog::kGroupQuality), std::string(pp::catalog::kGroupAnalysis),
+            std::string(pp::catalog::kGroupPsy), std::string(pp::catalog::kGroupQuant),
+            std::string(pp::catalog::kGroupLoop), std::string(pp::catalog::kGroupThread),
+            std::string(pp::catalog::kGroupStream), std::string(pp::catalog::kGroupDebug),
+            std::string(pp::catalog::kGroupReadOnly)};
         const std::set<std::string> sub_groups = {
-            std::string(pp::kGroupProgressive), std::string(pp::kGroupNoise),
-            std::string(pp::kGroupDecodeBudget), std::string(pp::kGroupEncodeTools)};
+            std::string(pp::kGroupProgressive),      std::string(pp::kGroupNoise),
+            std::string(pp::kGroupDecodeBudget),     std::string(pp::kGroupEncodeTools),
+            std::string(pp::catalog::kGroupQuality), std::string(pp::catalog::kGroupAnalysis),
+            std::string(pp::catalog::kGroupPsy),     std::string(pp::catalog::kGroupQuant),
+            std::string(pp::catalog::kGroupLoop),    std::string(pp::catalog::kGroupThread),
+            std::string(pp::catalog::kGroupStream),  std::string(pp::catalog::kGroupDebug),
+            std::string(pp::catalog::kGroupReadOnly)};
         int params_seen = 0;
         for (const pp::FormatDef &f : fmts) {
             for (const pp::BackendDef &b : f.backends) {
@@ -104,7 +120,7 @@ int main() {
                                   "'）");
                         if (p.advanced) {
                             check(sub_groups.count(p.group) == 1,
-                                  f.id + "." + p.key + "（advanced）group ∈ 四个子分组（got '" +
+                                  f.id + "." + p.key + "（advanced）group ∈ 子分组词表（got '" +
                                       p.group + "'）");
                         } else {
                             check(p.group == std::string(pp::kGroupCore),

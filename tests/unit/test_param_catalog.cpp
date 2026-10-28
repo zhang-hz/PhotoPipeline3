@@ -96,7 +96,7 @@ constexpr Expected kExpected[] = {
 
 } // namespace
 
-int main() {
+int main() { // NOLINT(bugprone-exception-escape) — 测试入口允许异常终止（非产品路径）
     check(pp::catalog::kX265AnchorCount >= 200, "anchors/x265",
           "x265 anchors too small: " + std::to_string(pp::catalog::kX265AnchorCount));
     check(pp::catalog::kAomAnchorCount >= 120, "anchors/aom",

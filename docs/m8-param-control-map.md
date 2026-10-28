@@ -178,7 +178,7 @@
 | X4 | `rd<3` ⇒ `cu-lossless`/`tskip`/`tskip-fast` D；`rd-refine` 需 `rd≥5`；`tskip-fast` 依赖 `tskip` | D/H | UI |
 | X5 | `psy-rd>0` 且 `chroma=444` ⇒ 色度 QP 偏移（库行为） | W（tooltip） | UI |
 | X6 | `ssim-rd=1` 会清 `psy-rd` | W + 联动 D（二选一） | UI |
-| X7 | `tu-intra-depth>1` 才允许 `limit-tu`；二者与自适应 CTU 相关 | D；FILE 校验 | UI + FILE |
+| X7 | `tu-intra-depth>1` 才允许 `limit-tu`；**源码订正**：`limit-tu` 实际依赖 x265 内部 `tu-inter-depth`（未暴露键）⇒ 本项降级为 tooltip 说明，不做 UI 联动 | D；FILE 校验 | UI(tooltip) |
 | X8 | `qg-size` / `max-tu-size` ≤ 自适应 CTU | 越界 W（库会夹逼）；FILE 校验 | FILE |
 | X9 | `min-cu-size>8` 且宽高不整除 ⇒ padding/conformance window | W | FILE |
 | X10 | `sao=0` ⇒ `sao-non-deblock`/`limit-sao`/`selective-sao` D | D | UI |

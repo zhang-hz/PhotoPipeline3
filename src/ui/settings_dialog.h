@@ -227,6 +227,8 @@ private:
     QSpinBox *tile_cache_mb_ = nullptr;
     QComboBox *log_level_ = nullptr;
     QComboBox *folder_structure_ = nullptr;
+    // M8-B2（C11 加性）：质量评分开关（SSIMULACRA 2 分数；落盘字段 = AppSettings.quality_score）
+    QCheckBox *quality_score_ = nullptr;
 };
 
 } // namespace pp::ui

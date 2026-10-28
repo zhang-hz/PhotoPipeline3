@@ -67,6 +67,9 @@
 #include "ui/leading_indent.h" // R-218：逻辑边距（空态提示与表单同轴）
 #include "ui/theme.h"
 
+#include "codecs/param_catalog/catalog.h" // M8-B2：目录行形态/角色/作用域/分组单源
+#include "core/param_rules.h"             // M8-B0 规则引擎接口（B1 实现；B2 先本地最小集）
+
 namespace pp::ui {
 namespace {
 
@@ -95,6 +98,10 @@ bool same_typed_value(const pp::ParamDef &p, const pp::ParamValue &v) {
     case pp::ParamType::Enum:
         return std::any_of(p.choices.begin(), p.choices.end(),
                            [&v](const auto &c) { return c.second == v; });
+    case pp::ParamType::String:
+        // M8-B0 加性 ParamType::String（目录 Text 行，如 JXL frame_name/intrinsic_size）：
+        // 同类型 = 值为 std::string。
+        return std::holds_alternative<std::string>(v);
     }
     return false;
 }
@@ -137,7 +144,27 @@ QString tr_c(const char *text) { return QCoreApplication::translate("pp::ui::Par
 // R-269 点名的 key 词根启发式（progressive*/noise*/speed|budget）**删除** —— 同一参数的归组
 // 只由 format_tables 显式声明决定。内省参数（heif/avif）暂无 group 声明 → 回落「编码工具」
 // （= 旧启发式的"其余"档；跨面需求：enc_heif param_def_from 补 group，见 handoff）。
-enum class SubGroup { Progressive, Noise, Decode, Tools };
+//
+// M8-B2（docs/m8-encoder-params-and-ssimulacra2-design.md §4.2 / docs/m8-param-control-map.md）：
+// 分组词表从 UX-8 的 4 组扩到 **4 旧组 ∪ 9 目录组**。既有 4 组保持枚举顺序 0–3（
+// `pp-advanced-group-<N>` 的 N 是探针锚点，既有断言逐字不动）；目录 9 组续在 4–12。
+enum class SubGroup : std::uint8_t {
+    Progressive = 0,
+    Noise,
+    Decode,
+    Tools,
+    // —— M8-B2：目录 9 组（catalog.h kGroup* 单源）——
+    Quality,  // 质量/码率
+    Analysis, // 分析工具
+    Psy,      // 心理视觉
+    Quant,    // 量化/变换
+    Loop,     // 环路滤波
+    Thread,   // 分块/线程
+    Stream,   // 码流/兼容性
+    Debug,    // 调试/实验
+    ReadOnly, // 只读（上游固定/推导）
+};
+constexpr int kSubGroupCount = 13;
 
 SubGroup subgroup_of(const pp::ParamDef &p) {
     const std::string &g = p.group;
@@ -147,7 +174,28 @@ SubGroup subgroup_of(const pp::ParamDef &p) {
         return SubGroup::Noise;
     if (g == pp::kGroupDecodeBudget)
         return SubGroup::Decode;
-    return SubGroup::Tools; // kGroupEncodeTools / kGroupCore（核心不入折叠）/ 空（内省参数）
+    if (g == pp::kGroupEncodeTools)
+        return SubGroup::Tools;
+    // —— M8-B2：目录分组词表 ——
+    if (g == pp::catalog::kGroupQuality)
+        return SubGroup::Quality;
+    if (g == pp::catalog::kGroupAnalysis)
+        return SubGroup::Analysis;
+    if (g == pp::catalog::kGroupPsy)
+        return SubGroup::Psy;
+    if (g == pp::catalog::kGroupQuant)
+        return SubGroup::Quant;
+    if (g == pp::catalog::kGroupLoop)
+        return SubGroup::Loop;
+    if (g == pp::catalog::kGroupThread)
+        return SubGroup::Thread;
+    if (g == pp::catalog::kGroupStream)
+        return SubGroup::Stream;
+    if (g == pp::catalog::kGroupDebug)
+        return SubGroup::Debug;
+    if (g == pp::catalog::kGroupReadOnly)
+        return SubGroup::ReadOnly;
+    return SubGroup::Tools; // kGroupCore（核心不入折叠）/ 空（内省参数）
 }
 
 QString subgroup_title(SubGroup g) {
@@ -159,14 +207,35 @@ QString subgroup_title(SubGroup g) {
     case SubGroup::Decode:
         return tr_c("解码预算");
     case SubGroup::Tools:
-        break;
+        return tr_c("编码工具");
+    // —— M8-B2：目录 9 组（标题逐字 = catalog.h 词表，`--ui-smoke` 探针按文案取数）——
+    case SubGroup::Quality:
+        return QString::fromUtf8(pp::catalog::kGroupQuality);
+    case SubGroup::Analysis:
+        return QString::fromUtf8(pp::catalog::kGroupAnalysis);
+    case SubGroup::Psy:
+        return QString::fromUtf8(pp::catalog::kGroupPsy);
+    case SubGroup::Quant:
+        return QString::fromUtf8(pp::catalog::kGroupQuant);
+    case SubGroup::Loop:
+        return QString::fromUtf8(pp::catalog::kGroupLoop);
+    case SubGroup::Thread:
+        return QString::fromUtf8(pp::catalog::kGroupThread);
+    case SubGroup::Stream:
+        return QString::fromUtf8(pp::catalog::kGroupStream);
+    case SubGroup::Debug:
+        return QString::fromUtf8(pp::catalog::kGroupDebug);
+    case SubGroup::ReadOnly:
+        return QString::fromUtf8(pp::catalog::kGroupReadOnly);
     }
     return tr_c("编码工具");
 }
 
-// 子分组先后（= 折叠行摘要里的列出顺序，与 mockup「渐进 / 噪声 / 解码预算」同序）
-constexpr SubGroup kSubGroupOrder[] = {SubGroup::Progressive, SubGroup::Noise, SubGroup::Decode,
-                                       SubGroup::Tools};
+// 子分组先后（= 折叠行摘要里的列出顺序；旧 4 组在前保持既有观感，目录 9 组按设计表序续后）
+constexpr SubGroup kSubGroupOrder[kSubGroupCount] = {
+    SubGroup::Progressive, SubGroup::Noise, SubGroup::Decode,  SubGroup::Tools, SubGroup::Quality,
+    SubGroup::Analysis,    SubGroup::Psy,   SubGroup::Quant,   SubGroup::Loop,  SubGroup::Thread,
+    SubGroup::Stream,      SubGroup::Debug, SubGroup::ReadOnly};
 
 // R3 范围注释（10px；"1–10" / "0.0–25.0" / 魔法值档 "自动…3"）。
 // 小数位数随步长：步长 < 1 → 1 位小数（视觉距离 0.0–25.0），否则整数（感光噪声 0–6400）。
@@ -204,12 +273,17 @@ struct Editor {
     QWidget *row = nullptr;
     QLabel *label = nullptr;
     QWidget *widget = nullptr;
+    QLabel *note = nullptr; // R3 范围注释（M8-B2 动态域：JXL effort 10/11）
     std::function<void(const pp::ParamValue &)> apply; // 工作集值 → 控件（不发信号）
 };
 
 // on_change(key, value)：用户改值回调（构造期接线；程序化 apply 不触发）。
+// M8-B2：`cr` 非空 = 目录新增行（形态/角色来自 catalog，见 docs/m8-param-control-map.md）：
+//   * 新增布尔行（Form::Switch）→ **三态下拉 {跟随默认/开/关}**（不用双复选框）；
+//   * 其余类型仍走常规控件，由 add_row 在行首补「启用」勾选。
 Editor
 make_editor(const pp::ParamDef &p, QWidget *area, QObject *context, formkit::FieldWidth width,
+            const pp::catalog::CatalogRow *cr,
             const std::function<void(const std::string &, const pp::ParamValue &)> &on_change) {
     Editor ed;
     const QString tip = QString::fromStdString(p.tooltip);
@@ -242,6 +316,7 @@ make_editor(const pp::ParamDef &p, QWidget *area, QObject *context, formkit::Fie
         const formkit::Row row = formkit::frow(area, label_text, spin, width, QString(), spec.note);
         ed.row = row.row;
         ed.label = row.label;
+        ed.note = row.note;
         break;
     }
     case pp::ParamType::Float: {
@@ -268,9 +343,39 @@ make_editor(const pp::ParamDef &p, QWidget *area, QObject *context, formkit::Fie
         const formkit::Row row = formkit::frow(area, label_text, spin, width, QString(), spec.note);
         ed.row = row.row;
         ed.label = row.label;
+        ed.note = row.note;
         break;
     }
     case pp::ParamType::Bool: {
+        // M8-B2（已定裁定）：**新增**布尔行（目录 Form::Switch）= 三态下拉
+        // {跟随默认 / 开 / 关}（避免"启用勾选 + 开关"双复选框）；既有布尔行保持复选框。
+        // 索引约定：0=跟随默认（未下发）1=开 2=关；值 → 索引映射见 ed.apply。
+        if (cr != nullptr && cr->form == pp::catalog::Form::Switch) {
+            formkit::ComboSpec spec;
+            spec.object_name = QStringLiteral("pp-param-enable-") + QString::fromStdString(p.key);
+            spec.accessible = label_text;
+            spec.tooltip = tip;
+            auto *tri = formkit::combo_box(area, spec);
+            tri->addItem(tr_c("跟随默认"));
+            tri->addItem(tr_c("开"));
+            tri->addItem(tr_c("关"));
+            ed.widget = tri;
+            ed.apply = [tri](const pp::ParamValue &v) {
+                const bool *b = std::get_if<bool>(&v);
+                tri->setCurrentIndex(b == nullptr ? 0 : (*b ? 1 : 2));
+            };
+            QObject::connect(
+                tri, &QComboBox::currentIndexChanged, context, [on_change, key = p.key](int idx) {
+                    if (idx == 0)
+                        return; // 跟随默认 = 未下发（由 on_unset 通道处理，见 add_row）
+                    on_change(key, idx == 1);
+                });
+            const formkit::Row row = formkit::frow(area, label_text, tri, width);
+            ed.row = row.row;
+            ed.label = row.label;
+            ed.note = row.note;
+            break;
+        }
         // 2-34/2-35：布尔行 = 「勾选框→标签」紧凑同行（标签轨留空，网格不错位）
         const formkit::CheckRow row =
             formkit::check_row(area, QString(), label_text,
@@ -320,6 +425,30 @@ make_editor(const pp::ParamDef &p, QWidget *area, QObject *context, formkit::Fie
         const formkit::Row row = formkit::frow(area, label_text, combo, width);
         ed.row = row.row;
         ed.label = row.label;
+        ed.note = row.note;
+        break;
+    }
+    case pp::ParamType::String: {
+        // M8-B0 加性 ParamType::String（目录 Text 行）：QLineEdit 行，label/tooltip/on_change
+        // 与其它行一致（textEdited = 仅用户输入，程序化 setText 不触发 on_change）。
+        auto *edit = new QLineEdit(area);
+        edit->setObjectName(QStringLiteral("pp-param-") + QString::fromStdString(p.key));
+        edit->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkInput));
+        edit->setFixedHeight(formkit::kControlH);
+        edit->setToolTip(tip);
+        edit->setAccessibleName(label_text);
+        ed.widget = edit;
+        ed.apply = [edit](const pp::ParamValue &v) {
+            if (const std::string *s = std::get_if<std::string>(&v))
+                edit->setText(QString::fromStdString(*s));
+        };
+        QObject::connect(
+            edit, &QLineEdit::textEdited, context,
+            [on_change, key = p.key](const QString &text) { on_change(key, text.toStdString()); });
+        const formkit::Row row = formkit::frow(area, label_text, edit, width);
+        ed.row = row.row;
+        ed.label = row.label;
+        ed.note = row.note;
         break;
     }
     }
@@ -388,12 +517,32 @@ struct ParamForm::Impl {
     QFrame *adv_rule = nullptr; // 折叠区顶缘 hairline（替代组框：无双层框线）
     // UX-8：子分组**二级折叠**（渐进/噪声/解码预算/编码工具）——(SubGroup 序号, 折叠钮)
     QList<QPair<int, QToolButton *>> subgroup_headers;
-    QList<QPair<int, QLabel *>> subgroup_counts;          // 组内「N 项」标签（随谓词/过滤动态刷新）
-    formkit::ElidedLabel *adv_empty = nullptr;            // 搜索无匹配时的空态说明
-    bool group_expanded[4] = {true, false, false, false}; // 默认只展开第一组（kSubGroupOrder 序）
+    QList<QPair<int, QLabel *>> subgroup_counts;  // 组内「N 项」标签（随谓词/过滤动态刷新）
+    formkit::ElidedLabel *adv_empty = nullptr;    // 搜索无匹配时的空态说明
+    bool group_expanded[kSubGroupCount] = {true}; // 默认只展开第一组（kSubGroupOrder 序）
+    // M8-B2：高级区过滤开关（docs/m8-encoder-params-and-ssimulacra2-design.md §4.4-3）
+    formkit::CheckBox *filter_enabled = nullptr;  // 只看已启用
+    formkit::CheckBox *filter_settable = nullptr; // 只看可设置（隐藏只读行）
+    bool only_enabled = false;
+    bool only_settable = false;
     // UX-10.1：枚举限幅（key → 禁用原因；空 = 无限幅）—— 由 limit_enum_choices 写入
     std::map<std::string, QString> enum_limits;
     QLabel *cross_error = nullptr; // §2.7：交叉参数约束红字区（参数组底部；不折行）
+
+    // ---------------------------------------------------------------- M8-B2 目录/三态/RC/规则
+    // 规则求值上下文（set_param_context 注入 bitdepth/width/height；format/backend/tech/lossless
+    // 由表单自身每次求值前覆盖，保证 UI 实时态与预检同源）。
+    pp::ParamContext rule_ctx;
+    bool rule_ctx_set = false;
+    // RC 模式（G4 已定：显式模式下拉）——HEIF{质量/CRF/QP}、libaom{质量/CQ Level}、SVT{质量/QP}
+    enum class RcMode : std::uint8_t { Quality = 0, Crf, Qp, CqLevel };
+    RcMode rc_mode = RcMode::Quality;
+    bool rc_conflict = false;                   // 预设载入时同一后端出现多个 RC 路径键（预检错误）
+    std::string rc_conflict_detail;             // 冲突说明（中文）
+    QComboBox *rc_combo = nullptr;              // pp-param-rcmode-<format>
+    QWidget *rc_row = nullptr;                  // RC 模式行容器
+    std::vector<std::string> rule_errors_now;   // 当前求值错误（中文；预检消费）
+    std::vector<std::string> rule_warnings_now; // 当前求值警告（中文；tooltip/行内 hint）
 
     struct Row {
         const pp::ParamDef *def = nullptr; // 指向生效 TechDef 的 ParamDef（生命周期 >= 本控件）
@@ -407,6 +556,16 @@ struct ParamForm::Impl {
         bool locked = false;
         bool eligible = true; // 谓词可见 且 通过高级区搜索过滤（**不含**子分组折叠态）
         bool shown = true;    // eligible + 所在子分组已展开（is_param_visible 口径）
+        // ---- M8-B2：目录行三态（启用/跟随默认）与规则呈现 ----
+        bool from_catalog = false; // 目录新增行（Form/Scope/Role 来自 catalog）
+        bool readonly_row = false; // 只读行（R）：显示生效值，不可编辑、不进 values/预设
+        bool rc_managed = false;   // 由 RC 模式下拉统一启用/下发（无独立启用勾选）
+        bool unset = false;        // 目录行未启用（跟随编码器默认 → 不进 values()）
+        QWidget *enable = nullptr; // 启用勾选（N/D/T 目录行）或三态下拉（S 目录行）
+        QLabel *status = nullptr;  // 行内状态注记（「未启用」/「只读」/「锁定」/「禁用」）
+        QLabel *note = nullptr;    // R3 范围注释（M8-B2 动态域改写；既有行恒为静态文案）
+        std::string engine;        // 目录引擎名（搜索「引擎名」用）
+        QString reason;            // 目录/规则原因（tooltip 尾注）
     };
     std::vector<Row> rows;
 
@@ -453,6 +612,156 @@ struct ParamForm::Impl {
 
     const pp::TechDef *tech_by_id(const std::string &id) const {
         return find_tech_in(backend(), id);
+    }
+
+    // ------------------------------------------------ M8-B2：目录 / RC / 规则求值
+    // 目录行查询（key 为 GUI 键；未知 = 既有键）。B0 已把目录行并入 TechDef.params。
+    const pp::catalog::CatalogRow *catalog_row(const std::string &key) const {
+        const pp::BackendDef *b = backend();
+        if (b == nullptr)
+            return nullptr;
+        return pp::catalog::find_row(fmt->id, b->id, key);
+    }
+
+    // 目录行是否「新增行」：目录里有、且不是保留键（只读行以 "__" 开头，单独渲染）。
+    bool is_new_catalog_key(const std::string &key) const {
+        if (key.rfind("__", 0) == 0)
+            return false;
+        return catalog_row(key) != nullptr;
+    }
+
+    // RC 模式仅 HEIF(x265) / AVIF(libaom) / AVIF(SVT-AV1) 有（G4 已定显式下拉）。
+    bool rc_supported() const {
+        const pp::BackendDef *b = backend();
+        if (b == nullptr)
+            return false;
+        if (fmt->id == "heif")
+            return b->id == "x265";
+        if (fmt->id == "avif")
+            return b->id == "libaom" || b->id == "svt-av1";
+        return false;
+    }
+
+    static bool is_rc_path_key(const std::string &key) {
+        return key == "x265:crf" || key == "x265:qp" || key == "aom:cq-level" || key == "qp";
+    }
+
+    struct RcChoice {
+        RcMode mode;
+        QString label;
+        std::string key; // 该路径的数值行键（quality = 既有键）
+    };
+
+    std::vector<RcChoice> rc_choices() const {
+        std::vector<RcChoice> out;
+        const pp::BackendDef *b = backend();
+        if (b == nullptr)
+            return out;
+        out.push_back({RcMode::Quality, ParamForm::tr("质量"), "quality"});
+        if (fmt->id == "heif") {
+            out.push_back({RcMode::Crf, ParamForm::tr("CRF"), "x265:crf"});
+            out.push_back({RcMode::Qp, ParamForm::tr("QP"), "x265:qp"});
+        } else if (b->id == "libaom") {
+            out.push_back({RcMode::CqLevel, ParamForm::tr("CQ Level"), "aom:cq-level"});
+        } else if (b->id == "svt-av1") {
+            out.push_back({RcMode::Qp, ParamForm::tr("QP"), "qp"});
+        }
+        return out;
+    }
+
+    // 当前 RC 路径的数值键（quality 模式 = 既有 quality 行）。
+    std::string rc_active_key() const {
+        for (const RcChoice &c : rc_choices())
+            if (c.mode == rc_mode)
+                return c.key;
+        return "quality";
+    }
+
+    // 某个 RC 路径键是否「当前激活」（仅激活路径允许下发；其余留在工作集但不进 values()）。
+    bool rc_key_active(const std::string &key) const {
+        if (!rc_supported())
+            return true;
+        if (key == "quality") // M8-B2：既有 quality 行也受 RC 路径门控（CRF/QP 路径不下发）
+            return rc_mode == RcMode::Quality;
+        if (!is_rc_path_key(key))
+            return true;
+        return key == rc_active_key();
+    }
+
+    // 预设/参数集载入：按「存在的键」推断 RC 模式；同一后端出现多个 RC 路径键 ⇒ 冲突预检错误
+    // （docs/m8-param-control-map.md §8-2「出现冲突（如同时有 crf 与 qp）⇒ 预检错误」）。
+    void infer_rc_mode(const pp::ParamSet &incoming) {
+        if (!rc_supported())
+            return;
+        const std::vector<RcChoice> choices = rc_choices();
+        std::vector<RcMode> found;
+        QStringList keys;
+        for (const RcChoice &c : choices) {
+            if (c.mode == RcMode::Quality)
+                continue; // quality 恒有默认值，存在不代表用户选了该路径
+            if (incoming.find(c.key) != incoming.end()) {
+                found.push_back(c.mode);
+                keys << QString::fromStdString(c.key);
+            }
+        }
+        rc_conflict = false;
+        rc_conflict_detail.clear();
+        if (found.empty()) {
+            rc_mode = RcMode::Quality;
+            return;
+        }
+        rc_mode = found.front();
+        if (found.size() > 1) {
+            rc_conflict = true;
+            rc_conflict_detail =
+                ParamForm::tr("RC 模式冲突：本格式参数同时包含多个速率控制路径键（%1）——"
+                              "质量 / CRF / QP 只能选一个，请在载入后保留一条路径")
+                    .arg(keys.join(QStringLiteral("、")))
+                    .toStdString();
+        }
+    }
+
+    // 规则上下文（format/backend/tech/lossless 每次求值由表单自身覆盖）。
+    pp::ParamContext current_rule_ctx() const {
+        pp::ParamContext ctx = rule_ctx;
+        ctx.format_id = fmt->id;
+        ctx.backend_id = sel.backend;
+        ctx.tech_id = sel.tech;
+        ctx.lossless = sel.lossless;
+        return ctx;
+    }
+
+    // 单一规则求值入口（M8-B2 / C5：UI 实时态与预检**同源**）。
+    // B1 的 src/core/param_rules.cpp 已落地 ⇒ 统一走 pp::rules::evaluate()（本函数只剩
+    // 「值面过滤 + RC 模式冲突合并 + 错误→键映射」三件 UI 职责，不再自持规则表）。
+    pp::rules::RuleState rule_state; // 最近一次求值（hidden/disabled/locked/warnings/errors）
+    std::vector<std::string> rule_error_keys; // 与 rule_state.errors 平行（聚焦第一错行用）
+    void evaluate_rules() {
+        // 值面 = 会真正下发给编码器的集合（未启用目录行不在 values 里；RC 非激活路径键由
+        // public_values() 过滤 —— 规则看到的是"当前路径"，不会把切换前保留的旧路径值当冲突）。
+        rule_state = pp::rules::evaluate(current_rule_ctx(), public_values());
+        if (rc_conflict)
+            rule_state.errors.push_back(rc_conflict_detail); // 预设载入的 UI 层冲突（唯一来源）
+        // 错误消息 → 行键（消息文案含键名时定位到该行；否则空串 = RC 行/通用错误）
+        rule_error_keys.clear();
+        for (const std::string &msg : rule_state.errors) {
+            std::string best;
+            for (const Row &r : rows) {
+                if (r.key.size() > best.size() && msg.find(r.key) != std::string::npos)
+                    best = r.key;
+            }
+            rule_error_keys.push_back(best);
+        }
+    }
+
+    // 求值缓存（refresh/预检同源）：rule_state / rule_errors_now / rule_warnings_now。
+    void eval_rules() {
+        evaluate_rules();
+        rule_errors_now = rule_state.errors;
+        rule_warnings_now = rule_state.warnings;
+        if (rc_conflict && std::find(rule_errors_now.begin(), rule_errors_now.end(),
+                                     rc_conflict_detail) == rule_errors_now.end())
+            rule_errors_now.push_back(rc_conflict_detail);
     }
 
     // ---------------------------------------------------------------- 选择行
@@ -677,6 +986,57 @@ struct ParamForm::Impl {
         }
     }
 
+    // 子分组折叠头（[chevron + 组名] …… [N 项]；整行可点；12px 缩进 = 内容缩进，
+    // 行本体仍走 formkit 全局轴 → 组内外同轴，修 2-32）。M8-B2：抽成成员函数供
+    // 目录「只读（上游固定）」组复用（组序 = kSubGroupOrder，只读组恒最后）。
+    void make_group_header(SubGroup g, int count) {
+        const int gi = static_cast<int>(g);
+        auto *header = new QWidget(adv_body);
+        header->setObjectName(QStringLiteral("pp-advanced-group-") + QString::number(gi));
+        header->setContentsMargins(formkit::kColGap, 0, 0, 0);
+        header->setFixedHeight(formkit::kRowPitch);
+        auto *hh = new QHBoxLayout(header);
+        hh->setContentsMargins(0, 0, 0, 0);
+        hh->setSpacing(formkit::kInlineGap);
+        auto *toggle = new QToolButton(header);
+        toggle->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkFold));
+        toggle->setCheckable(true);
+        toggle->setChecked(group_expanded[gi]);
+        toggle->setAutoRaise(true);
+        toggle->setCursor(Qt::PointingHandCursor);
+        toggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        toggle->setFixedHeight(theme::Metrics::btn_h);
+        toggle->setFont(theme::font(theme::Typography::hint_px, QFont::Bold));
+        toggle->setText(subgroup_title(g));
+        toggle->setToolTip(ParamForm::tr("展开或收起该子分组"));
+        set_fold_icon(toggle, group_expanded[gi]);
+        hh->addWidget(toggle);
+        hh->addStretch(1);
+        auto *count_label = new QLabel(ParamForm::tr("%1 项").arg(count), header);
+        count_label->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkNote));
+        count_label->setFont(theme::font(theme::Typography::hint_px));
+        hh->addWidget(count_label);
+        subgroup_headers.append({gi, toggle});
+        subgroup_counts.append({gi, count_label});
+        adv_box->addWidget(header);
+        new FoldRowClick(header, toggle); // 组折叠头同样整行可点
+        QObject::connect(toggle, &QToolButton::toggled, q, [this, gi, toggle](bool on) {
+            if (gi >= 0 && gi < kSubGroupCount)
+                group_expanded[gi] = on;
+            set_fold_icon(toggle, on);
+            update_row_states();
+            if (!on)
+                return;
+            // 子组展开后把该组**最后一行**滚入视野：大组一次全露出来，
+            // 而不是只露前 4 行（多组全开时底部行不会无声落在视口外）。
+            QWidget *last = nullptr;
+            for (const Row &r : rows)
+                if (r.advanced && static_cast<int>(r.subgroup) == gi && r.shown)
+                    last = r.row;
+            ensure_in_scroll(last);
+        });
+    }
+
     void build_rows() {
         rows.clear();
         subgroup_headers.clear();
@@ -756,7 +1116,9 @@ struct ParamForm::Impl {
             adv_search->setObjectName(QStringLiteral("pp-advanced-search"));
             adv_search->setPlaceholderText(ParamForm::tr("在高级参数中搜索…"));
             adv_search->setClearButtonEnabled(true);
-            adv_search->setToolTip(ParamForm::tr("按参数名或键过滤高级参数（大小写不敏感）"));
+            // M8-B2：搜索面扩到「键 / 中文标签 / 引擎名」（原只有标签+键）
+            adv_search->setToolTip(
+                ParamForm::tr("按中文标签、参数键或引擎名过滤高级参数（大小写不敏感）"));
             const formkit::Row row = formkit::frow(adv_host, ParamForm::tr("搜索"), adv_search,
                                                    formkit::FieldWidth::Flex);
             row.row->setObjectName(QStringLiteral("pp-advanced-search-row"));
@@ -766,6 +1128,36 @@ struct ParamForm::Impl {
                     return;
                 update_row_states(); // 过滤只影响视图，不是值变化 → 不发信号
             });
+        }
+        // M8-B2：过滤行（docs/m8-encoder-params-and-ssimulacra2-design.md §4.4-3「只看已启用/
+        // 只看可设置」）。两个自绘勾选框同一行：[空标签轨][勾选框 只看已启用][勾选框 只看可设置]。
+        {
+            const formkit::CheckRow fe =
+                formkit::check_row(adv_host, QString(), ParamForm::tr("只看已启用"),
+                                   QStringLiteral("pp-adv-filter-enabled"));
+            filter_enabled = fe.box;
+            fe.row->setObjectName(QStringLiteral("pp-adv-filter-row"));
+            fe.box->setToolTip(ParamForm::tr("只显示已启用（会下发）的新增参数"));
+            fe.box->set_tokens(tokens);
+            auto *settle = new formkit::CheckBox(fe.row);
+            settle->setObjectName(QStringLiteral("pp-adv-filter-settable"));
+            settle->setText(ParamForm::tr("只看可设置"));
+            settle->setToolTip(ParamForm::tr("隐藏只读行（只读值仍显示在上游固定组里）"));
+            settle->set_tokens(tokens);
+            filter_settable = settle;
+            if (auto *line = qobject_cast<QHBoxLayout *>(fe.row->layout())) {
+                line->insertSpacing(std::max(0, line->count() - 1), formkit::kColGap);
+                line->insertWidget(std::max(0, line->count() - 1), settle, 0, Qt::AlignVCenter);
+            }
+            hv->addWidget(fe.row);
+            const auto wire_filter = [this](formkit::CheckBox *box, bool *flag) {
+                QObject::connect(box, &formkit::CheckBox::toggled, q, [this, flag](bool on) {
+                    *flag = on;
+                    update_row_states();
+                });
+            };
+            wire_filter(filter_enabled, &only_enabled);
+            wire_filter(filter_settable, &only_settable);
         }
         adv_body = new QWidget(adv_host);
         adv_body->setObjectName(QStringLiteral("pp-advanced-body"));
@@ -785,10 +1177,14 @@ struct ParamForm::Impl {
         hv->addWidget(adv_empty);
 
         if (const pp::TechDef *t = tech()) {
-            // UX-8：子分组**二级折叠**（渐进 / 噪声 / 解码预算 / 编码工具），分组判据 =
-            // ParamDef.group 单源；默认只展开第一组（重建 = 新参数集，展开态随之复位）。
+            // M8-B2/G4：RC 模式行 = 核心参数区首行（质量行之上；模式选择路径，而非独立参数行）。
+            build_rc_row();
+            // UX-8：子分组**二级折叠**，分组判据 = ParamDef.group 单源；默认只展开第一组
+            // （重建 = 新参数集，展开态随之复位）。只读组单独走目录（Scope != Settable）。
             bool first_group = true;
             for (const SubGroup g : kSubGroupOrder) {
+                if (g == SubGroup::ReadOnly)
+                    continue; // 只读行不来自 TechDef.params（目录 Scope != Settable，见下）
                 std::vector<const pp::ParamDef *> in_group;
                 for (const pp::ParamDef &p : t->params) {
                     if (p.advanced && p.key != kLosslessParamKey && subgroup_of(p) == g)
@@ -799,55 +1195,13 @@ struct ParamForm::Impl {
                 const int gi = static_cast<int>(g);
                 group_expanded[gi] = first_group;
                 first_group = false;
-                // 组折叠头：[chevron + 组名] …… [N 项]（整行可点；12px 缩进 = 内容缩进，
-                // 行本体仍走 formkit 全局轴 → 组内外同轴，修 2-32）
-                auto *header = new QWidget(adv_body);
-                header->setObjectName(QStringLiteral("pp-advanced-group-") + QString::number(gi));
-                header->setContentsMargins(formkit::kColGap, 0, 0, 0);
-                header->setFixedHeight(formkit::kRowPitch);
-                auto *hh = new QHBoxLayout(header);
-                hh->setContentsMargins(0, 0, 0, 0);
-                hh->setSpacing(formkit::kInlineGap);
-                auto *toggle = new QToolButton(header);
-                toggle->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkFold));
-                toggle->setCheckable(true);
-                toggle->setChecked(group_expanded[gi]);
-                toggle->setAutoRaise(true);
-                toggle->setCursor(Qt::PointingHandCursor);
-                toggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-                toggle->setFixedHeight(theme::Metrics::btn_h);
-                toggle->setFont(theme::font(theme::Typography::hint_px, QFont::Bold));
-                toggle->setText(subgroup_title(g));
-                toggle->setToolTip(ParamForm::tr("展开或收起该子分组"));
-                set_fold_icon(toggle, group_expanded[gi]);
-                hh->addWidget(toggle);
-                hh->addStretch(1);
-                auto *count = new QLabel(ParamForm::tr("%1 项").arg(int(in_group.size())), header);
-                count->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkNote));
-                count->setFont(theme::font(theme::Typography::hint_px));
-                hh->addWidget(count);
-                subgroup_headers.append({gi, toggle});
-                subgroup_counts.append({gi, count});
-                adv_box->addWidget(header);
-                new FoldRowClick(header, toggle); // 组折叠头同样整行可点
-                QObject::connect(toggle, &QToolButton::toggled, q, [this, gi, toggle](bool on) {
-                    if (gi >= 0 && gi < 4)
-                        group_expanded[gi] = on;
-                    set_fold_icon(toggle, on);
-                    update_row_states();
-                    if (!on)
-                        return;
-                    // 子组展开后把该组**最后一行**滚入视野：8 行的编码工具组一次全露出来，
-                    // 而不是只露前 4 行（多组全开时底部行不会无声落在视口外）。
-                    QWidget *last = nullptr;
-                    for (const Row &r : rows)
-                        if (r.advanced && static_cast<int>(r.subgroup) == gi && r.shown)
-                            last = r.row;
-                    ensure_in_scroll(last);
-                });
+                make_group_header(g, static_cast<int>(in_group.size()));
                 for (const pp::ParamDef *p : in_group)
                     add_row(*p);
             }
+            // 只读行（13 = x265 4 + libaom 6 + SVT 3；显示生效值/上游固定原因，不可编辑、
+            // 不进 values()/预设 —— docs/m8-param-control-map.md §3.3/§4.3/§5）
+            add_readonly_rows();
             // 核心参数（表内顺序）
             for (const pp::ParamDef &p : t->params) {
                 if (p.advanced || p.key == kLosslessParamKey)
@@ -883,6 +1237,208 @@ struct ParamForm::Impl {
         root->addWidget(cross_error);
     }
 
+    // 启用控件的接线（M8-B2）：N/D/T 目录行 = 行首「启用」勾选；S 目录行 = 三态下拉
+    // {跟随默认/开/关}（在 make_editor 里构造）。未启用 ⇒ 不进 values()（跟随编码器默认）。
+    void wire_enable_control(Row &r, const pp::ParamDef &p) {
+        if (r.enable == nullptr)
+            return;
+        // formkit::CheckBox = 自绘勾选框（QAbstractButton 血统，非 QCheckBox）——M8-B2 起
+        // 目录行启用勾选全走本族。
+        if (auto *box = qobject_cast<QAbstractButton *>(r.enable)) {
+            QObject::connect(box, &QAbstractButton::toggled, q, [this, key = r.key, p](bool on) {
+                if (syncing)
+                    return;
+                set_row_enabled(key, on, p);
+            });
+            return;
+        }
+        if (auto *tri = qobject_cast<QComboBox *>(r.enable)) {
+            QObject::connect(tri, &QComboBox::currentIndexChanged, q, [this, key = r.key](int idx) {
+                if (syncing)
+                    return;
+                if (idx == 0)
+                    values.erase(key);
+                else
+                    values[key] = idx == 1;
+                if (Row *row = find_row(key))
+                    row->unset = values.find(key) == values.end();
+                refresh();
+                emit q->changed();
+            });
+        }
+    }
+
+    Row *find_row(const std::string &key) {
+        for (Row &r : rows)
+            if (r.key == key)
+                return &r;
+        return nullptr;
+    }
+    const Row *find_row(const std::string &key) const {
+        for (const Row &r : rows)
+            if (r.key == key)
+                return &r;
+        return nullptr;
+    }
+
+    // 启用/未启用切换（N/D/T 目录行）——勾选 = 把目录默认值写入工作集；取消 = 移除（不下发）。
+    void set_row_enabled(const std::string &key, bool on, const pp::ParamDef &p) {
+        if (on)
+            values[key] = p.def;
+        else
+            values.erase(key);
+        if (Row *r = find_row(key))
+            r->unset = !on;
+        refresh();
+        emit q->changed();
+    }
+
+    // M8-B2/G4：RC 模式行（显式模式下拉；HEIF {质量/CRF/QP}、libaom {质量/CQ Level}、
+    // SVT {质量/QP}）。默认「质量」= 既有 quality 行 ⇒ 零行为变化。
+    void build_rc_row() {
+        if (!rc_supported())
+            return;
+        formkit::ComboSpec spec;
+        spec.object_name = QStringLiteral("pp-param-rcmode-") + QString::fromStdString(fmt->id);
+        spec.accessible = ParamForm::tr("速率控制模式");
+        spec.tooltip = ParamForm::tr(
+            "速率控制路径：质量（0–100，越大越好）/ CRF / QP 三选一；只显示当前路径的数值行，"
+            "其余路径不下发");
+        rc_combo = formkit::combo_box(core_host, spec);
+        rc_combo->setObjectName(QStringLiteral("pp-param-rcmode-") +
+                                QString::fromStdString(fmt->id));
+        for (const RcChoice &c : rc_choices())
+            rc_combo->addItem(c.label, static_cast<int>(c.mode));
+        rc_combo->setCurrentIndex(0);
+        const formkit::Row row =
+            formkit::frow(core_host, ParamForm::tr("速率控制"), rc_combo,
+                          formkit::FieldWidth::Standard, QString(), ParamForm::tr("默认质量"));
+        row.row->setObjectName(QStringLiteral("pp-param-rcmode-row-") +
+                               QString::fromStdString(fmt->id));
+        rc_row = row.row;
+        core_box->addWidget(row.row);
+        QObject::connect(rc_combo, &QComboBox::currentIndexChanged, q, [this](int idx) {
+            if (syncing || idx < 0)
+                return;
+            const std::vector<RcChoice> choices = rc_choices();
+            if (idx >= static_cast<int>(choices.size()))
+                return;
+            const RcMode mode = choices[static_cast<std::size_t>(idx)].mode;
+            if (mode == rc_mode)
+                return;
+            rc_mode = mode;
+            rc_conflict = false;
+            rc_conflict_detail.clear();
+            if (mode != RcMode::Quality) {
+                // 切到 CRF/QP 路径：该路径键若尚未有值 → 用目录默认写入（**不覆盖**用户已有值）
+                const std::string key = rc_active_key();
+                if (values.find(key) == values.end()) {
+                    if (const pp::TechDef *t = tech()) {
+                        if (const pp::ParamDef *p = pp::find_param(*t, key))
+                            values[key] = p->def;
+                    }
+                }
+            }
+            refresh();
+            emit q->changed();
+        });
+    }
+
+    void update_rc_row_state() {
+        if (rc_row == nullptr)
+            return;
+        const bool show = rc_supported() && !sel.lossless;
+        rc_row->setVisible(show);
+        if (rc_combo != nullptr) {
+            for (int i = 0; i < rc_combo->count(); ++i) {
+                if (rc_combo->itemData(i).toInt() == static_cast<int>(rc_mode)) {
+                    const QSignalBlocker blocker(rc_combo);
+                    rc_combo->setCurrentIndex(i);
+                    break;
+                }
+            }
+            QString tip = ParamForm::tr("速率控制路径（质量 / CRF / QP 三选一）；"
+                                        "只显示当前路径的数值行，其余路径不下发");
+            if (rc_conflict)
+                tip += QLatin1Char('\n') + QString::fromStdString(rc_conflict_detail);
+            for (const std::string &w : rule_warnings_now)
+                tip += QLatin1Char('\n') + QString::fromStdString(w);
+            rc_combo->setToolTip(tip);
+        }
+    }
+
+    // 只读行（目录 Scope == ReadOnly：x265 4 / libaom 6 / SVT 3）——显示上游固定/推导值 +
+    // 原因 tooltip，不可编辑、不进 values()/预设（docs/m8-param-control-map.md §3.3/§4.3/§5）。
+    // Scope::Forbidden / NoEffect 行**不出现**（"禁设行不出现" = C2 三态语义）。
+    void add_readonly_rows() {
+        const pp::BackendDef *b = backend();
+        if (b == nullptr)
+            return;
+        const pp::catalog::TechScope want =
+            sel.tech == "modular" ? pp::catalog::TechScope::Modular : pp::catalog::TechScope::Both;
+        std::vector<const pp::catalog::CatalogRow *> in_group;
+        for (const pp::catalog::CatalogRow &row : pp::catalog::catalog(fmt->id, b->id)) {
+            if (row.scope != pp::catalog::Scope::ReadOnly)
+                continue; // Settable 走正常行；Forbidden/NoEffect 不出现
+            if (row.tech != pp::catalog::TechScope::Both && row.tech != want)
+                continue;
+            in_group.push_back(&row);
+        }
+        if (in_group.empty())
+            return;
+        group_expanded[static_cast<int>(SubGroup::ReadOnly)] = false;
+        make_group_header(SubGroup::ReadOnly, static_cast<int>(in_group.size()));
+        for (const pp::catalog::CatalogRow *cr : in_group)
+            add_readonly_row(*cr);
+    }
+
+    void add_readonly_row(const pp::catalog::CatalogRow &cr) {
+        Row r;
+        r.def = &cr.def;
+        r.key = cr.def.key;
+        r.advanced = true;
+        r.subgroup = SubGroup::ReadOnly;
+        r.from_catalog = true;
+        r.readonly_row = true;
+        r.engine = cr.engine_key;
+        QString value_text = QString::fromStdString(std::string(pp::catalog::scope_name(cr.scope)));
+        if (!cr.def.choices.empty())
+            value_text = QString::fromStdString(cr.def.choices.front().first);
+        auto *value = new QLabel(adv_body);
+        value->setObjectName(QStringLiteral("pp-param-readonly-") +
+                             QString::fromStdString(cr.def.key));
+        value->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkNote));
+        value->setFont(theme::font(theme::Typography::hint_px));
+        value->setWordWrap(false);
+        value->setText(value_text);
+        // 只读行由目录驱动：原因（上游为何固定/推导）+ 目录说明进 tooltip（"不静默灰"口径）
+        const QString tip = ParamForm::tr("只读（上游固定/推导，不可编辑、不进预设）：") +
+                            QString::fromStdString(cr.reason) + QLatin1Char('\n') +
+                            QString::fromStdString(cr.def.tooltip);
+        value->setToolTip(tip);
+        const formkit::Row row = formkit::frow(adv_body, QString::fromStdString(cr.def.label),
+                                               value, formkit::FieldWidth::Flex);
+        r.row = row.row;
+        r.label = row.label;
+        r.editor = value;
+        if (r.label != nullptr) {
+            r.label->setToolTip(tip);
+            r.label->setObjectName(QStringLiteral("pp-label-") + QString::fromStdString(r.key));
+        }
+        // 行内状态注记「只读」
+        auto *status = new QLabel(r.row);
+        status->setObjectName(QStringLiteral("pp-param-status-") + QString::fromStdString(r.key));
+        status->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkNote));
+        status->setFont(theme::font(theme::Typography::hint_px));
+        status->setText(ParamForm::tr("只读（上游固定）"));
+        status->setToolTip(tip);
+        r.status = status;
+        if (auto *line = qobject_cast<QHBoxLayout *>(r.row->layout()))
+            line->addWidget(status, 0, Qt::AlignVCenter);
+        adv_box->addWidget(r.row);
+        rows.push_back(r);
+    }
+
     void add_row(const pp::ParamDef &p) {
         const QString tip = QString::fromStdString(p.tooltip);
         QWidget *area =
@@ -898,20 +1454,37 @@ struct ParamForm::Impl {
         r.key = p.key;
         r.advanced = p.advanced;
         r.subgroup = subgroup_of(p);
+        const pp::catalog::CatalogRow *cr =
+            is_new_catalog_key(p.key) ? catalog_row(p.key) : nullptr;
+        r.from_catalog = cr != nullptr;
+        r.rc_managed = cr != nullptr && !!rc_supported() && is_rc_path_key(p.key);
+        if (cr != nullptr) {
+            r.engine = cr->engine_key;
+            r.reason = QString::fromStdString(cr->reason);
+            if (r.rc_managed)
+                r.reason = ParamForm::tr("由「速率控制」模式下拉统一启用（不单独勾选）") +
+                           QLatin1Char('\n') + r.reason;
+        }
+        r.unset = r.from_catalog && !r.rc_managed && values.find(p.key) == values.end();
 
         // R-217：类型分发唯一落点 = make_editor（构造 + 行 + 接线 + 回写闭包）
-        Editor ed =
-            make_editor(p, area, q, width, [this](const std::string &key, const pp::ParamValue &v) {
-                if (syncing)
-                    return;
-                values[key] = v;
-                refresh();
-                emit q->changed();
-            });
+        Editor ed = make_editor(p, area, q, width, cr,
+                                [this](const std::string &key, const pp::ParamValue &v) {
+                                    if (syncing)
+                                        return;
+                                    values[key] = v;
+                                    if (Row *row = find_row(key))
+                                        row->unset = false;
+                                    refresh();
+                                    emit q->changed();
+                                });
         r.row = ed.row;
         r.label = ed.label;
         r.editor = ed.widget;
         r.apply = std::move(ed.apply);
+        r.note = ed.note;
+        if (r.row == nullptr || r.label == nullptr || r.editor == nullptr)
+            return; // 未支持类型防御（B0 后 ParamType 全覆盖，不应发生）
 
         r.row->setObjectName(QStringLiteral("pp-param-row-") + QString::fromStdString(p.key));
         elide_track_label(r.label);
@@ -928,8 +1501,78 @@ struct ParamForm::Impl {
                                      reset_to_default(key);
                              });
         }
+
+        if (r.from_catalog && !r.rc_managed) {
+            if (p.type == pp::ParamType::Bool && cr != nullptr &&
+                cr->form == pp::catalog::Form::Switch) {
+                // 三态下拉本身就是启用控制（make_editor 已构造）；索引 0 = 跟随默认。
+                r.enable = r.editor;
+                if (auto *combo = qobject_cast<QComboBox *>(r.editor)) {
+                    const QSignalBlocker blocker(combo);
+                    combo->setCurrentIndex(0);
+                }
+            } else {
+                // N/D/T 目录行：行首「启用」勾选（未勾 = 不下发，值控件置灰并显示默认值）
+                auto *box_widget = new formkit::CheckBox(r.row);
+                box_widget->setObjectName(QStringLiteral("pp-param-enable-") +
+                                          QString::fromStdString(p.key));
+                box_widget->setText(QString());
+                box_widget->setToolTip(
+                    ParamForm::tr("启用该项（未勾选 = 跟随编码器默认，不下发该参数）"));
+                box_widget->set_tokens(tokens);
+                box_widget->setChecked(false);
+                if (auto *line = qobject_cast<QHBoxLayout *>(r.row->layout())) {
+                    line->insertWidget(0, box_widget, 0, Qt::AlignVCenter);
+                    line->insertSpacing(1, formkit::kInlineGap);
+                }
+                r.enable = box_widget;
+                // 未启用时值控件显示目录默认值（可读但不可改）。初始回写必须屏蔽信号 ——
+                // apply 闭包走 setValue/setText，会触发 valueChanged → on_change 把"显示用
+                // 默认值"误写进工作集（三态语义被破：未启用却下发）。
+                if (r.apply) {
+                    const QSignalBlocker blocker(r.editor);
+                    r.apply(p.def);
+                }
+            }
+            wire_enable_control(r, p);
+        }
+        // 行内状态注记（「未启用」/「只读」/「锁定」/「禁用」；状态文本在 update_row_states 刷）
+        if (r.from_catalog) {
+            auto *status = new QLabel(r.row);
+            status->setObjectName(QStringLiteral("pp-param-status-") +
+                                  QString::fromStdString(p.key));
+            status->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkNote));
+            status->setFont(theme::font(theme::Typography::hint_px));
+            status->setWordWrap(false);
+            r.status = status;
+            if (auto *line = qobject_cast<QHBoxLayout *>(r.row->layout()))
+                line->addWidget(status, 0, Qt::AlignVCenter);
+        }
+        if (r.reason.isEmpty() && cr == nullptr)
+            r.reason = QString::fromStdString(p.tooltip);
+
         box->addWidget(r.row);
         rows.push_back(r);
+    }
+
+    // 首个预检错误行聚焦（M8-B2：`开始运行` 拒绝时调用；批量只报一次由调用方承担）。
+    void focus_first_error() {
+        if (rule_error_keys.empty())
+            return;
+        const std::string &key = rule_error_keys.front();
+        if (key.empty()) {
+            if (rc_combo != nullptr && rc_row != nullptr && rc_row->isVisible()) {
+                rc_combo->setFocus(Qt::OtherFocusReason);
+                ensure_in_scroll(rc_row);
+            }
+            return;
+        }
+        if (Row *r = find_row(key)) {
+            if (r->editor != nullptr) {
+                r->editor->setFocus(Qt::OtherFocusReason);
+                ensure_in_scroll(r->row);
+            }
+        }
     }
 
     // ---------------------------------------------------------------- 值 / 谓词
@@ -954,12 +1597,7 @@ struct ParamForm::Impl {
     // 技术/后端变化 → 重建工作集（默认值 + 同 key 同类型沿用旧值）与行控件
     // M7-R2.4（格式卡「关无损后距离变 0」）：old_tech 提供**旧技术**的锁定谓词 —— 旧值若
     // 来自锁定（如 JXL 无损把 distance 强制为 0.0），切换后不得当成用户选择沿用。
-    // 旧实现无条件沿用同 key 同类型值：关掉无损 → 技术回 VarDCT，distance 仍是 0.0 →
-    // 编码器报 "VarDCT distance=0 is ambiguous"，页面上看着"恢复默认"实际已不可编码。
-    // M7-R2.5（AVIF 自动后端切换串参数）：carry_values=false 用于**跨后端**重建 ——
-    // SVT-AV1 与 libaom 的同名键（speed/threads/tune…）默认值与值域都不同，按 key 沿用
-    // 会把 SVT 的 speed=12 带进 libaom（值域 0–9），UI 显示被钳到 9、工作集里仍是 12，
-    // 既造成「已改 3」假计数，也可能把越界值下发给编码器。
+    // M7-R2.5（AVIF 自动后端切换串参数）：carry_values=false 用于**跨后端**重建。
     void rebuild_params(const pp::TechDef *old_tech = nullptr, bool carry_values = true) {
         const pp::ParamSet old = values;
         values = make_defaults();
@@ -981,6 +1619,10 @@ struct ParamForm::Impl {
             }
         }
         values[kLosslessKey] = sel.lossless;
+        // M8-B2：换后端/技术 = 新参数面 —— RC 模式复位默认「质量」、冲突标记清除
+        rc_mode = RcMode::Quality;
+        rc_conflict = false;
+        rc_conflict_detail.clear();
         build_rows();
     }
 
@@ -990,6 +1632,17 @@ struct ParamForm::Impl {
         // §9.1：名为 "lossless" 的参数没有行，其值由"无损"复选框独占（heif/avif 内省参数）
         if (const pp::TechDef *t = tech(); t && find_param(*t, kLosslessParamKey))
             values[kLosslessParamKey] = sel.lossless;
+        // M8-B2/G4：切到 CRF/QP 路径后该键必须存在于工作集（首切时用目录默认写入；
+        // 之后不覆盖用户值 —— 「锚点切换不静默改用户值」）。
+        if (rc_supported() && rc_mode != RcMode::Quality) {
+            const std::string key = rc_active_key();
+            if (values.find(key) == values.end()) {
+                if (const pp::TechDef *t = tech()) {
+                    if (const pp::ParamDef *p = pp::find_param(*t, key))
+                        values[key] = p->def;
+                }
+            }
+        }
         pp::apply_locks(*fmt, sel.backend, sel.tech, sel.lossless, values);
         for (Row &r : rows) {
             const std::optional<pp::ParamValue> forced = pp::eval_lock(*r.def, values);
@@ -997,36 +1650,69 @@ struct ParamForm::Impl {
             if (forced)
                 values[r.key] = *forced; // 锁定 → 值显示为强制值（写入工作集）
         }
+        // M8-B2：规则求值（单一入口）。locked 强制值只对「已启用/既有」行写回工作集 ——
+        // 未启用的目录行保持「不下发」（跟随编码器默认），避免三态语义被规则悄悄破掉。
+        eval_rules();
+        for (const auto &[key, forced] : rule_state.locked) {
+            const bool enabled = !is_new_catalog_key(key) || values.find(key) != values.end();
+            if (enabled)
+                values[key] = forced;
+        }
+        // 目录行启用态以工作集是否存在该键为准（预设载入/重置/规则强制统一收口）
+        for (Row &r : rows) {
+            if (r.from_catalog && !r.readonly_row && !r.rc_managed)
+                r.unset = values.find(r.key) == values.end();
+        }
         sync_widgets();
         update_row_states();
         update_selectors();
+        update_rc_row_state();
         update_cross_error();
     }
 
     // §2.7：值变化时求值交叉约束；非空 → 红字逐条换行，空 → 隐藏。
     // 输入是 refresh() 已应用锁定后的工作集（= 真正会下发给编码器的值）。
     // §9.3：行内不折行；全文同时进悬浮提示（超长行按宽度硬裁，不换行、不撑宽布局）。
+    // M8-B2：合并规则引擎 errors（预检同源）——红字区 = 既有 cross_validate + 新规则错误。
     void update_cross_error() {
         if (!cross_error)
             return;
-        const std::vector<std::string> msgs = pp::cross_validate(values, fmt->id, sel.tech);
+        std::vector<std::string> msgs = pp::cross_validate(values, fmt->id, sel.tech);
+        for (const std::string &m : rule_errors_now) {
+            if (std::find(msgs.begin(), msgs.end(), m) == msgs.end())
+                msgs.push_back(m);
+        }
         QString text;
         for (const std::string &m : msgs) {
             if (!text.isEmpty())
                 text += QLatin1Char('\n');
             text += QString::fromStdString(m);
         }
+        QString tip = text;
+        for (const std::string &w : rule_warnings_now)
+            tip += QLatin1Char('\n') + QString::fromStdString(w);
         cross_error->setText(text);
-        cross_error->setToolTip(text);
+        cross_error->setToolTip(tip);
         cross_error->setVisible(!msgs.empty());
     }
 
     // R-318：禁用态必须给原因（"不静默灰"口径全量推广）——tooltip 组装单点：
-    // 基础 tooltip（ParamDef）+ 锁定前缀（eval_lock 强制）+ 枚举限幅原因（UX-10.1）。
+    // 基础 tooltip（ParamDef）+ 锁定前缀（eval_lock 强制）+ 枚举限幅原因（UX-10.1）+
+    // M8-B2 目录原因/规则禁用原因/三态「未启用」说明。
     QString tooltip_for(const Row &r) const {
         QString tip = QString::fromStdString(r.def->tooltip);
         if (r.locked)
             tip = ParamForm::tr("【已禁用：被同组参数约束锁定】") + tip;
+        if (!r.reason.isEmpty())
+            tip += QLatin1Char('\n') + r.reason;
+        if (r.from_catalog && !r.readonly_row && !r.rc_managed && r.unset)
+            tip +=
+                QLatin1Char('\n') + ParamForm::tr("当前未启用：该项不下发，编码器使用其内置默认值");
+        if (rule_state.disabled.count(r.key) != 0)
+            tip += QLatin1Char('\n') +
+                   ParamForm::tr("【已禁用：当前其它参数组合下该项无效（见联动规则）】");
+        if (rule_state.hidden.count(r.key) != 0)
+            tip += QLatin1Char('\n') + ParamForm::tr("【当前组合下该项不生效】");
         const auto it = enum_limits.find(r.key);
         if (it != enum_limits.end())
             tip = tip + QLatin1Char('\n') + it->second;
@@ -1037,31 +1723,79 @@ struct ParamForm::Impl {
         syncing = true;
         for (Row &r : rows) {
             const auto it = values.find(r.key);
-            if (it != values.end() && r.apply)
+            if (r.readonly_row) {
+                // 只读行：值来自目录（编辑器 = QLabel），不做工作集回写
+            } else if (it != values.end() && r.apply) {
                 r.apply(it->second); // R-217：回写走工厂闭包（零第二处 switch）
-            r.editor->setEnabled(!r.locked);
-            if (r.editor != nullptr)
+            } else if (r.from_catalog && r.enable != nullptr) {
+                // 目录行未启用：显示目录默认值（可读不可改）；三态下拉回「跟随默认」
+                if (auto *tri = qobject_cast<QComboBox *>(r.enable)) {
+                    tri->setCurrentIndex(0);
+                } else if (r.apply) {
+                    r.apply(r.def->def);
+                }
+            }
+            if (r.editor != nullptr) {
+                r.editor->setEnabled(!r.locked && !r.readonly_row);
                 r.editor->setToolTip(tooltip_for(r));
+            }
+            if (r.label != nullptr)
+                r.label->setToolTip(tooltip_for(r));
         }
         syncing = false;
     }
 
+    // 行是否「会下发」（只看已启用过滤的判据）：既有行恒下发；目录行看启用态/RC 路径。
+    bool row_is_enabled(const Row &r) const {
+        if (r.readonly_row)
+            return false;
+        if (!r.from_catalog)
+            return true;
+        if (r.rc_managed)
+            return rc_key_active(r.key);
+        return !r.unset;
+    }
+
+    // 目录行/RC 路径门的可见性（M8-B2）：无损 ⇒ RC 整组隐藏；RC 只显示当前路径数值行。
+    bool m8_row_visible(const Row &r) const {
+        if (r.readonly_row)
+            return true;
+        const bool is_rc_row = r.rc_managed || r.key == "quality";
+        if (!is_rc_row || !rc_supported())
+            return true;
+        if (sel.lossless)
+            return false; // 无损：RC 组（含既有 quality 行）整组隐藏
+        if (r.key == "quality")
+            return rc_mode == RcMode::Quality;
+        return rc_key_active(r.key);
+    }
+
     void update_row_states() {
-        const QString filter = adv_search ? adv_search->text() : QString();
+        const QString filter = adv_search ? adv_search->text().trimmed() : QString();
         const bool filter_active = !filter.isEmpty();
         int advanced_total = 0; // 谓词可见的高级行（**不含**搜索过滤）—— 决定折叠头是否保留
         std::map<int, int> group_visible;
         for (Row &r : rows) {
-            const bool predicate_visible = pp::eval_visible(*r.def, values); // 条 4
-            bool eligible = predicate_visible;
+            // 条 4：谓词 + M8-B2 规则 hidden + RC 路径门（只影响呈现，不改工作集）
+            const bool predicate_visible = r.readonly_row ? true : pp::eval_visible(*r.def, values);
+            const bool rule_hidden = rule_state.hidden.count(r.key) != 0;
+            const bool rcv = m8_row_visible(r);
+            bool eligible = predicate_visible && !rule_hidden && rcv;
             if (eligible && r.advanced && filter_active) {
+                // M8-B2：搜索面 = 中文标签 / 键 / 引擎名（大小写不敏感）
                 const QString label = QString::fromStdString(r.def->label);
                 const QString key = QString::fromStdString(r.key);
+                const QString engine = QString::fromStdString(r.engine);
                 eligible = label.contains(filter, Qt::CaseInsensitive) ||
-                           key.contains(filter, Qt::CaseInsensitive); // 条 3：包含过滤
+                           key.contains(filter, Qt::CaseInsensitive) ||
+                           engine.contains(filter, Qt::CaseInsensitive);
             }
+            if (eligible && only_enabled)
+                eligible = row_is_enabled(r);
+            if (eligible && only_settable)
+                eligible = !r.readonly_row;
             r.eligible = eligible;
-            if (r.advanced && predicate_visible)
+            if (r.advanced && predicate_visible && !rule_hidden && rcv)
                 ++advanced_total;
             if (r.advanced && eligible)
                 ++group_visible[static_cast<int>(r.subgroup)];
@@ -1070,11 +1804,75 @@ struct ParamForm::Impl {
             bool shown = eligible;
             if (shown && r.advanced && !filter_active) {
                 const int gi = static_cast<int>(r.subgroup);
-                shown = gi >= 0 && gi < 4 && group_expanded[gi];
+                shown = gi >= 0 && gi < kSubGroupCount && group_expanded[gi];
             }
             r.shown = shown;
             if (r.row != nullptr)
                 r.row->setVisible(shown);
+
+            // ---- M8-B2：三态（启用/跟随默认）与规则联动实时态 ----
+            const bool rule_disabled = rule_state.disabled.count(r.key) != 0;
+            const bool rule_locked = rule_state.locked.count(r.key) != 0;
+            const bool row_on = row_is_enabled(r);
+            if (!r.readonly_row) {
+                if (auto *box = qobject_cast<QAbstractButton *>(r.enable)) {
+                    if (box->isChecked() != row_on) {
+                        const QSignalBlocker blocker(box);
+                        box->setChecked(row_on);
+                    }
+                } else if (auto *tri = qobject_cast<QComboBox *>(r.enable)) {
+                    const auto itv = values.find(r.key);
+                    const int want = itv == values.end()
+                                         ? 0
+                                         : (std::get_if<bool>(&itv->second) != nullptr &&
+                                                    *std::get_if<bool>(&itv->second)
+                                                ? 1
+                                                : 2);
+                    if (tri->currentIndex() != want) {
+                        const QSignalBlocker blocker(tri);
+                        tri->setCurrentIndex(want);
+                    }
+                }
+                if (r.editor != nullptr) {
+                    // 未启用（跟随默认）⇒ 值控件置灰但显示默认值；规则锁定/禁用同样置灰。
+                    const bool editable = row_on && !r.locked && !rule_locked && !rule_disabled;
+                    r.editor->setEnabled(editable);
+                }
+            }
+            // 行内状态注记（"未启用"/"只读"/"锁定"/"禁用"；空 = 正常启用）
+            if (r.status != nullptr) {
+                QString status_text;
+                if (r.readonly_row)
+                    status_text = ParamForm::tr("只读（上游固定）");
+                else if (rule_locked || r.locked)
+                    status_text = ParamForm::tr("锁定");
+                else if (rule_disabled)
+                    status_text = ParamForm::tr("禁用");
+                else if (!row_on && !r.rc_managed)
+                    status_text = ParamForm::tr("未启用");
+                else if (r.rc_managed)
+                    status_text = ParamForm::tr("当前路径");
+                r.status->setText(status_text);
+                r.status->setVisible(!status_text.isEmpty() && shown);
+            }
+            // M8-B2 / J6：JXL effort 动态域 —— 仅启用「允许专家选项」才允许 11。
+            // 默认（expert_options 未启用）= 1–10 ⇒ 冻结断言 range-note 的 "1–10" 逐字不变。
+            if (fmt->id == "jxl" && r.key == "effort") {
+                const auto ex = values.find("expert_options");
+                const bool expert_on = ex != values.end() &&
+                                       std::get_if<bool>(&ex->second) != nullptr &&
+                                       *std::get_if<bool>(&ex->second);
+                if (auto *spin = qobject_cast<QSpinBox *>(r.editor)) {
+                    const int want_max = expert_on ? 11 : 10;
+                    if (spin->maximum() != want_max)
+                        spin->setMaximum(want_max);
+                }
+                if (r.note != nullptr) {
+                    const QString want = expert_on ? ParamForm::tr("1–11") : ParamForm::tr("1–10");
+                    if (r.note->text() != want)
+                        r.note->setText(want);
+                }
+            }
 
             const auto it = values.find(r.key);
             const bool deviates = it != values.end() && it->second.index() == r.def->def.index() &&
@@ -1083,7 +1881,9 @@ struct ParamForm::Impl {
             // 布尔行（自绘勾选框不吃 QSS，且无值文本可着色）与锁定项不打标记：该格式的改值
             // 总量由格式参数卡头的「已改 N」中性胶囊承担（§7.2/1-24）。
             if (r.def->type != pp::ParamType::Bool && r.editor != nullptr)
-                theme::set_mod(r.editor, deviates && !r.locked);
+                theme::set_mod(r.editor, deviates && row_on && !r.locked && !rule_disabled);
+            if (r.editor != nullptr)
+                r.editor->setToolTip(tooltip_for(r));
         }
         // UX-8：子分组折叠头 —— 本组无**可选**行（谓词/搜索过滤后）→ 连头隐藏（过滤后不留
         // 空标题）；折叠态不再影响折叠头的可见性（否则收起后无法再展开，见上）。
@@ -1094,7 +1894,8 @@ struct ParamForm::Impl {
             if (toggle == nullptr || toggle->parentWidget() == nullptr)
                 continue;
             toggle->parentWidget()->setVisible(any);
-            const bool open = (group >= 0 && group < 4 && group_expanded[group]) || filter_active;
+            const bool open =
+                (group >= 0 && group < kSubGroupCount && group_expanded[group]) || filter_active;
             if (toggle->isChecked() != open) {
                 const QSignalBlocker blocker(toggle);
                 toggle->setChecked(open);
@@ -1225,9 +2026,13 @@ struct ParamForm::Impl {
                 if (p.has_default)
                     values[p.key] = p.def;
                 else
-                    values.erase(p.key); // 可选覆盖参数恢复为“未设置”
+                    values.erase(p.key); // 可选覆盖参数 / 目录新增行恢复为“未启用”
             }
         }
+        // M8-B2：重置也把 RC 模式复位「质量」（其余路径键已随上面 erase 清除）
+        rc_mode = RcMode::Quality;
+        rc_conflict = false;
+        rc_conflict_detail.clear();
         refresh();
         emit q->changed();
     }
@@ -1281,6 +2086,10 @@ struct ParamForm::Impl {
             case pp::ParamType::Float:
                 v = text.toDouble();
                 break;
+            case pp::ParamType::String:
+                // M8-B0 加性 ParamType::String（目录 Text 行，如 frame_name）：粘贴 = 原样文本
+                v = text.toStdString();
+                break;
             case pp::ParamType::Enum: {
                 // 与 choices 的值同型匹配（优先数值/布尔文本，其余按字符串值）
                 bool matched = false;
@@ -1309,7 +2118,7 @@ struct ParamForm::Impl {
     void expand_all_advanced() {
         if (adv_toggle != nullptr && !adv_toggle->isChecked())
             adv_toggle->setChecked(true);
-        for (int i = 0; i < 4; ++i)
+        for (int i = 0; i < kSubGroupCount; ++i)
             group_expanded[i] = true;
         update_row_states();
     }
@@ -1341,7 +2150,7 @@ struct ParamForm::Impl {
         if (p->has_default)
             values[key] = p->def;
         else
-            values.erase(key); // 可选覆盖参数恢复为“未设置”
+            values.erase(key); // 可选覆盖参数 / 目录新增行恢复为“未启用”
         refresh();
         emit q->changed();
     }
@@ -1487,20 +2296,39 @@ struct ParamForm::Impl {
                 continue; // 保留键不从外部注入
             const pp::ParamDef *p = find_param(*t, k);
             if (!p)
-                continue; // 未知 key 忽略
+                continue; // 未知 key 忽略（跨后端/未收录键由预检侧报错）
             if (!same_typed_value(*p, v))
                 continue; // 同类型才应用
             values[k] = v;
+        }
+        // M8-B2：预设载入按「存在的键」推断 RC 模式；同后端多路径键 ⇒ 冲突预检错误。
+        infer_rc_mode(s);
+        // 目录行启用态 = 工作集是否有该键（未启用键载入后保持未启用）
+        for (Row &r : rows) {
+            if (r.from_catalog && !r.readonly_row && !r.rc_managed)
+                r.unset = values.find(r.key) == values.end();
         }
         refresh();
     }
 
     pp::ParamSet public_values() const {
         pp::ParamSet out;
-        for (const auto &[k, v] : values)
-            if (!is_reserved_key(k))
-                out.emplace(k, v);
+        for (const auto &[k, v] : values) {
+            if (is_reserved_key(k))
+                continue;
+            // M8-B2/G4：RC 非激活路径的键**禁止下发**（质量 / CRF / QP 三选一；切换回来的值
+            // 保留在工作集里，再切回时可恢复，不丢用户输入）。
+            if (!rc_key_active(k))
+                continue;
+            out.emplace(k, v);
+        }
         return out;
+    }
+
+    // M8-B2：预检读错（每次现算，保证与 UI 实时态同一份求值）。
+    std::vector<std::string> rule_errors() {
+        eval_rules();
+        return rule_errors_now;
     }
 
     bool is_visible(const std::string &key) const {
@@ -1578,5 +2406,17 @@ void ParamForm::limit_enum_choices_text(const std::string &key,
                                         const QString &disabled_reason) {
     impl_->apply_enum_limits_text(key, allowed, disabled_reason);
 }
+
+// ---------------------------------------------------------------- M8-B2 加性公开面
+
+void ParamForm::set_param_context(const pp::ParamContext &ctx) {
+    impl_->rule_ctx = ctx;
+    impl_->rule_ctx_set = true;
+    impl_->refresh(); // 位深/尺寸上下文变化 → 规则实时态重算
+}
+
+std::vector<std::string> ParamForm::rule_errors() { return impl_->rule_errors(); }
+
+void ParamForm::focus_first_rule_error() { impl_->focus_first_error(); }
 
 } // namespace pp::ui

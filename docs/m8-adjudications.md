@@ -21,6 +21,14 @@
 | M8-A14 | 目录只读键允许 `__` 前缀（KEY_RE 首字符含 `_`）；AOM 锚点抽取含 `ARG_DEF_ENUM`；x265 锚点校验接受通用 `no-` 别名 | Stage A 实测：只读键 `__x265:*`/`__aom:*`/`__svt:*` 被旧正则拒绝；libaom 4 个 enum 选项（dist-metric/sb-size/timing-info/tune-content）用 ARG_DEF_ENUM；x265 `no-deblock` 由通用前缀归一 | A4 已修生成器/测试 |
 | M8-A15 | x265 `no-deblock` 目录 engine=`no-deblock`（不是 `deblock`）；B1 直接下发 `x265:no-deblock=1`，不取反 | x265_param_parse 通用 `no-` 前缀；避免 GUI 语义反转 | A2 数据/B1 接线 |
 | M8-A16 | control-map X7 订正：`limit-tu` 依赖 x265 **tu-inter-depth**（非暴露键 `tu-intra-depth`）；tu-inter-depth 不暴露 ⇒ X7 降级为 tooltip 说明，不做 UI 联动 | `source/common/encoder.cpp` 源码事实；评审稿/control-map 笔误 | A2 note/B1 规则表 |
+| M8-A17 | JXL `effort` 上限 10→11（既有 ParamDef 域扩展；默认 7 不变）；`effort=11` 需 `expert_options`，由 B1 预检拦截 | control-map J6；libjxl `JxlEncoderAllowExpertOptions` 语义；既有默认/产物零回归 | B1 |
+| M8-A18 | B0 目录接入方式：JXL 追加进 `static_formats()` 的 tech params；HEIF/AVIF 追加进 `introspect_backends()` 的 live tech params；`declared_keys` 并入目录键 | C1 单源；UI/预设/--param/校验读同一份表；目录行 has_default=false ⇒ 默认产物零变化 | B0（d7490e1 后工作区） |
+| M8-A19 | UI 高级区分组扩展为目录 9 组词表；`tests/unit/test_smoke.cpp` 组断言按新词表做**语义适配**（仅接受并集，不放宽其它约束） | control-map §4.2；既有 5 组保留，目录行使用新词表 | B2 |
+| M8-A20 | B2 临时写作用域扩展：`src/ui/mainwindow_run.cpp` 仅允许在 `ready_to_start()` 失败分支加一行 `focus_first_rule_error()`；另 `settings.h/settings.cpp` 由 Lead 加性加 `quality_score`（默认 true），B2 只接线 UI | 运行前错误定位需要在 start 分支加副作用；避免把整文件划入 UI 卡 | Lead/B2 |
+| M8-A21 | B1 未落盘前，B2 允许在 ParamForm 内实现**单一入口**的最小规则集；B1 落地后切换为 `pp::rules::evaluate()`，不得两套并存 | 并行解耦；收口时以 rules 引擎为唯一源 | B2 收口/B1 集成 |
+| M8-A22 | `page_output.h` 加性公开方法 `focus_first_rule_error()`（B2 实际交付）；`mainwindow_run.cpp` 仅加一行调用 | 运行前错误定位需要跨文件；纯加性、既有签名零改动 | B2（已交付） |
+| M8-A23 | J5（`box_compress` 未开 ⇒ 隐藏 `brotli_effort`）**接受**：既有 `brotli_effort` 本就 `visible=never_visible`（JXL-09），规则只在 box_compress=1 时显示，零回归 | B2 报告张力核查；不改变既有键默认可见性 | B1 规则保持 |
+| M8-A24 | 规则引擎**不**改 `pipeline.cpp::validate_run_config`；预检走 `PageOutput::ready_to_start()`（GUI 批量开始运行）+ `validate_params`（dev/编码器兜底）。`--dev` 批量/跨字段预检为已知缺口，登记 D 阶段复核 | 避免改冻结 pipeline 主链路；B2 已在 start 分支拒绝并聚焦；C6 的“运行前”在 GUI 面成立 | B2/Lead |
 
 ## 登记回填
 

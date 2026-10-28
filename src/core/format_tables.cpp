@@ -10,6 +10,7 @@
 //   见该行注释），逐条登记 build/m7-wp2/handoff.md 裁定登记。
 //   对照见 docs/m4-report.md 勘误 n 与 docs/m1-tasks.md §3.4。
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "codecs/param_catalog/catalog.h" // M8-B0：JXL 目录行并入静态表
 #include "core/params.h"
 
 namespace pp {
@@ -117,13 +118,19 @@ ParamDef jxl_effort_param(bool lossy_only) {
     p.type = ParamType::Int;
     p.def = int64_t(7);
     p.lo = 1;
-    p.hi = 10;
+    // M8-A17（裁定登记 docs/m8-adjudications.md）：上限 10 → 11。libjxl 0.12 的
+    // JXL_ENC_FRAME_SETTING_EFFORT 在 JxlEncoderAllowExpertOptions() 后接受 [1..11]
+    // （encode.cc:1667-1686；目录行 expert_options 驱动）；11 = 像素无损最省但极慢。
+    // 默认值 7 不动 ⇒ 既有产物零变化；effort=11 需要 expert_options=1，由 B1 预检
+    // （param_rules J6）拦截、编码器兜底（JxlEncoderFrameSettingsSetOption 报错）。
+    p.hi = 11;
     p.step = 1;
     p.advanced = false;
     p.group = pp::kGroupCore;
     p.tooltip = "编码努力 effort（JXL_ENC_FRAME_SETTING_EFFORT，"
                 "jxl/encode.h:126-132）：1 lightning … 7 squirrel"
-                "（库默认）… 10 glacier，不影响解码速度。";
+                "（库默认）… 10 glacier；11 需先启用「允许专家选项」"
+                "（JxlEncoderAllowExpertOptions，M8-A17），不影响解码速度。";
     p.visible = lossy_only ? not_lossless : std::function<bool(const ParamSet &)>{};
     return p;
 }
@@ -287,7 +294,8 @@ ParamDef webp_method_param(bool lossless_tech) {
 } // namespace
 
 const std::vector<FormatDef> &static_formats() {
-    static const std::vector<FormatDef> fmts = {
+    static const std::vector<FormatDef> fmts = [] {
+        std::vector<FormatDef> v = {
         FormatDef{
             .id = "jpeg", .label = "JPEG", .ext = "jpg",
             .backends = { BackendDef{
@@ -896,7 +904,24 @@ const std::vector<FormatDef> &static_formats() {
             // 第二轮裁定：alpha 明确不支持（不输出 alpha；输入在 color 前拍平）。
             .supports_alpha = false, .supports_gray = false,
             .meta_path = "libheif" },
-    };
+        };
+        // M8-B0：JXL 目录行并入静态表（按 tech 过滤；目录行 has_default=false，既有产物零变化）。
+        for (FormatDef &f : v) {
+            if (f.id != "jxl")
+                continue;
+            for (BackendDef &b : f.backends) {
+                if (b.runtime_introspected)
+                    continue;
+                for (TechDef &t : b.techs) {
+                    const catalog::TechScope tech = t.id == "modular" ? catalog::TechScope::Modular
+                                                                      : catalog::TechScope::Vardct;
+                    std::vector<ParamDef> extra = catalog::param_defs(f.id, b.id, tech);
+                    t.params.insert(t.params.end(), extra.begin(), extra.end());
+                }
+            }
+        }
+        return v;
+    }();
     return fmts;
 }
 

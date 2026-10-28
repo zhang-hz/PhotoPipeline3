@@ -140,6 +140,9 @@ struct AppSettings {
     // 持久化面在本任务落地（设置对话框读写）；mapwidget 侧消费归 W-M5（§7 T13）——
     // 本版只保证跨进程读写往返，不动图层绘制。
     bool map_sat_labels = true;
+    // —— M8 追加（**末尾**；契约 C6 / A28 先例）：SSIMULACRA 2 输出评分开关。
+    // GUI 默认开；`--dev` 默认关（`--score` 开启）。评分逻辑/字段消费在 Stage C。
+    bool quality_score = true;
 };
 
 // 极简 INI：`key=value` 单层，`#` 注释；未知键保留原样写回（向前兼容）

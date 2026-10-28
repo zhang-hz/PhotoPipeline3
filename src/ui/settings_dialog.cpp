@@ -93,6 +93,8 @@ constexpr auto kLibraryVersions = "library_versions";
 constexpr auto kStaggerMs = "pp-stagger-ms";             // 交错启动 ms（0–2000）
 constexpr auto kThreadBudget = "pp-thread-budget";       // 线程预算（0=自动）
 constexpr auto kFolderStructure = "pp-folder-structure"; // 分文件夹默认结构（模板×开关）
+// —— M8-B2 §C11：质量评分（SSIMULACRA 2）设置行；落盘字段 = AppSettings.quality_score ——
+constexpr auto kQualityScore = "pp-quality-score";
 // —— M5-T10 新增（pp-* 钩子）——
 constexpr auto kThemeMode = "pp-theme-mode"; // 主题分段（通用页签）
 // —— M6-T11 新增（pp-* 钩子；C6 加键的「地图」页签控件）——
@@ -126,6 +128,7 @@ constexpr auto kOrigSplitByFormat = "pp_orig_split_by_format";
 constexpr auto kOrigUiThemeMode = "pp_orig_ui_theme_mode";   // A28：主题档构造快照
 constexpr auto kOrigMapStyle = "pp_orig_map_style";          // M6-T11：图层档构造快照
 constexpr auto kOrigMapSatLabels = "pp_orig_map_sat_labels"; // M6-T11：混合叠标注构造快照
+constexpr auto kOrigQualityScore = "pp_orig_quality_score";  // M8-B2：质量评分开关构造快照
 
 constexpr int kWorkersMax = 64;   // §2.10：QSpinBox(0..64) 同域
 constexpr int kBudgetMax = 64;    // §2.10：QSpinBox(0..64)
@@ -252,6 +255,7 @@ pp::AppSettings original_values(const QObject *o) {
     // M6-T11（C6）：图层档 / 混合叠标注
     s.map_style = o->property(kOrigMapStyle).toString().toStdString();
     s.map_sat_labels = o->property(kOrigMapSatLabels).toBool();
+    s.quality_score = o->property(kOrigQualityScore).toBool(); // M8-B2（C11）
     return s;
 }
 
@@ -1159,6 +1163,24 @@ QWidget *SettingsDialog::build_output_page(const pp::AppSettings &current, QWidg
                           QString(), T("下次启动生效"));
         bind_row(structure_row, structure);
         v->addWidget(structure_row.row);
+
+        // M8-B2（C11）：质量评分开关（SSIMULACRA 2）—— GUI 默认开；评分逻辑在 Stage C 接入，
+        // 当前只做"设置面框架"（字段已在 AppSettings 加性落地，本行完整读写；运行期消费留 C）。
+        {
+            const formkit::CheckRow score = formkit::check_row(
+                page_out, T("质量评分"), T("为每个输出计算 SSIMULACRA 2 质量分数（0–100）"),
+                QLatin1String(kQualityScore));
+            auto *score_box = score.box;
+            score_box->setChecked(current.quality_score); // GUI 默认开（--dev 默认关由 CLI 侧）
+            quality_score_ = score_box;                   // 对象图成员化（读回/恢复默认同一入口）
+            score_box->setToolTip(
+                T("为每个输出计算 SSIMULACRA 2 质量分数并显示在运行页（评价编码保真度：对比"
+                  "编码器输入，不是对比源文件；真无损应接近 100）。评分逻辑随 M8-C 接入，"
+                  "当前设置已保存、暂不影响运行。"));
+            score_box->setAccessibleName(T("质量评分"));
+            score_box->set_tokens(theme::tokens(theme::preferred_theme_mode()));
+            v->addWidget(score.row);
+        }
         v->addStretch(1);
     }
     return page_out;
@@ -1490,6 +1512,7 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
     // M6-T11（C6）：图层档 / 混合叠标注的快照（非确定路径回填 + settings() 完整结构）
     setProperty(kOrigMapStyle, QString::fromStdString(current.map_style));
     setProperty(kOrigMapSatLabels, current.map_sat_labels);
+    setProperty(kOrigQualityScore, current.quality_score); // M8-B2（C11）
 
     theme::Tokens tokens = theme::tokens(theme::preferred_theme_mode());
     setFixedWidth(dk::kDialogWidth); // §7.4：660px 宽（居中见首次 show）
@@ -1617,6 +1640,9 @@ SettingsDialog::SettingsDialog(const pp::AppSettings &current, QWidget *parent) 
             const int idx = w->findData(QString::fromStdString(def.output_template));
             w->setCurrentIndex(idx >= 0 ? idx : 0);
         }
+        // M8-B2（C11）：质量评分开关也属可编辑面 → 复位到默认（GUI 默认开）
+        if (QCheckBox *w = quality_score_)
+            w->setChecked(def.quality_score);
         // A28：主题档也是可编辑面 → 复位到默认档（system = 跟随系统）。程序化 set_current_index
         // 不发射信号 → 与其余字段同一"确定后才落地"语义（不即时改主题）。
         if (formkit::SegmentedControl *w = theme_mode_seg_)
@@ -1755,6 +1781,10 @@ pp::AppSettings SettingsDialog::settings() const {
     }
     if (const QCheckBox *w = map_sat_labels_) {
         s.map_sat_labels = w->isChecked();
+    }
+    // M8-B2（C11）：质量评分开关读回（字段已在 AppSettings 加性落地；评分消费在 Stage C）
+    if (const QCheckBox *w = quality_score_) {
+        s.quality_score = w->isChecked();
     }
     // last_format / last_preset / last_out_root 不被本对话框编辑 → 保持构造快照
     return s;

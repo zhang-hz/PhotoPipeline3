@@ -62,6 +62,11 @@ public:
     // "" = ready; else human-readable reason (Start button gating)
     QString ready_to_start() const;
 
+    // ---- PP-FROZEN 加性追加（M8-B2；追认登记 docs/m8-adjudications.md A20）----
+    // 运行前参数预检（C6）：`开始运行` 被 ready_to_start() 拒绝后调用一次 —— 切到输出页、
+    // 选中第一个有错误的格式页签、聚焦该格式第一个错误行。无错误 = 仅切页/滚动，无副作用。
+    void focus_first_rule_error();
+
     // smoke/test hooks
     QString current_format() const;               // 当前页签的格式（激活项）
     void select_format(const QString &format_id); // 程序化：已选集合收敛为 {format_id} 并激活

@@ -63,6 +63,16 @@ public:
     void limit_enum_choices_text(const std::string &key, const std::vector<std::string> &allowed,
                                  const QString &disabled_reason);
 
+    // ---- PP-FROZEN 加性追加（M8-B2；追认登记 docs/m8-adjudications.md A20）----
+    // M8 参数目录行（三态/只读/禁用）、RC 模式显式下拉（G4）、联动规则实时态（C5）与运行前
+    // 预检（C6）的 UI 承载面。均为**加性**：既有方法签名/语义零改动。
+    //   * set_param_context：运行上下文（位深/尺寸；format/backend/tech/lossless 由表单自身填）；
+    //   * rule_errors：当前规则求值错误（中文，预检与红字同源；批量只报一次由输出页承担）；
+    //   * focus_first_rule_error：预检拒绝时聚焦第一个错误行（无错误 = no-op）。
+    void set_param_context(const pp::ParamContext &ctx);
+    std::vector<std::string> rule_errors();
+    void focus_first_rule_error();
+
 signals:
     void selection_changed(const pp::ui::FormSelection &sel); // user action only
     void changed();                                           // any value/selection change

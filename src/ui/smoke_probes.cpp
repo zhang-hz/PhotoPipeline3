@@ -5942,6 +5942,369 @@ void probe_color_options(PageOutput *page_output,
     std::fflush(stdout);
 }
 
+// ---------------------------------------------------------------------------
+// M8-B2 加性探针：参数目录行三态 / RC 模式显式下拉 / 联动规则实时态 / 运行前预检 /
+// 预设往返 / settings quality_score 框架（docs/m8-encoder-params-and-ssimulacra2-design.md
+// §4.4/§4.6/§6 + docs/m8-param-control-map.md）。只增：不改既有断言、不增冻结截图。
+// 结束归位：单选 jxl + 输出根/搜索/过滤复位（后续 layout-audit 已在更早处完成）。
+// ---------------------------------------------------------------------------
+void probe_m8_params(MainWindow *w, PageOutput *page_output, const pp::AppSettings &settings,
+                     const QString &shots_dir, const std::function<void(const QString &)> &fail) {
+    int checked = 0;
+    int bad = 0;
+    const auto expect = [&](bool ok, const QString &what) {
+        ++checked;
+        if (!ok) {
+            ++bad;
+            fail(QStringLiteral("m8-params：%1").arg(what));
+        }
+    };
+    if (w == nullptr || page_output == nullptr) {
+        fail(QStringLiteral("m8-params：输出页未就绪"));
+        std::printf("UI-SMOKE m8-params: checked=1 bad=1\n");
+        std::fflush(stdout);
+        return;
+    }
+    auto *const tabs = page_output->findChild<QTabWidget *>(QStringLiteral("pp-format-tabs"));
+    const auto active_form = [page_output]() -> ParamForm * {
+        return page_output->findChild<ParamForm *>(QStringLiteral("pp-param-form"));
+    };
+    const auto values_of = [&]() -> pp::ParamSet {
+        ParamForm *f = active_form();
+        return f != nullptr ? f->values() : pp::ParamSet{};
+    };
+    const auto has_key = [&](const std::string &key) {
+        const pp::ParamSet v = values_of();
+        return v.find(key) != v.end();
+    };
+    const auto has_bool = [&](const std::string &key, bool want) {
+        const pp::ParamSet v = values_of();
+        const auto it = v.find(key);
+        const bool *b = it == v.end() ? nullptr : std::get_if<bool>(&it->second);
+        return b != nullptr && *b == want;
+    };
+    const auto widget_visible = [page_output](const QString &name) {
+        QWidget *x = page_output->findChild<QWidget *>(name);
+        return x != nullptr && x->isVisible();
+    };
+    const auto num_prefix = [](const QString &text) -> int {
+        // 「N 项」→ N（探针只读数不判文案）
+        const QString digits = text.section(QLatin1Char(' '), 0, 0).trimmed();
+        bool ok = false;
+        const int n = digits.toInt(&ok);
+        return ok ? n : -1;
+    };
+    const auto expand_groups = [page_output]() {
+        for (QWidget *header : page_output->findChildren<QWidget *>()) {
+            if (!header->objectName().startsWith(QStringLiteral("pp-advanced-group-")))
+                continue;
+            for (QToolButton *toggle : header->findChildren<QToolButton *>()) {
+                if (toggle->isCheckable() && !toggle->isChecked())
+                    toggle->click();
+                break;
+            }
+        }
+    };
+    const QString prev_root = page_output->out_root();
+
+    // ---- ① 目录行三态：N/D 新行「启用」勾选 ⇒ 勾选才下发；取消 ⇒ 不进 values() ----
+    page_output->select_format(QStringLiteral("heif"));
+    smoke_pump(400);
+    {
+        auto *box = page_output->findChild<QAbstractButton *>(
+            QStringLiteral("pp-param-enable-x265:psy-rd"));
+        expect(box != nullptr, QStringLiteral("HEIF 新数值行有启用勾选（pp-param-enable-*）"));
+        expect(box != nullptr && !box->isChecked(), QStringLiteral("新行默认未启用（跟随默认）"));
+        expect(!has_key("x265:psy-rd"), QStringLiteral("未启用键不进 values()"));
+        if (box != nullptr) {
+            box->click();
+            smoke_pump(250);
+            expect(box->isChecked() && has_key("x265:psy-rd"),
+                   QStringLiteral("勾选启用后键进 values()（got %1）").arg(has_key("x265:psy-rd")));
+            auto *editor =
+                page_output->findChild<QWidget *>(QStringLiteral("pp-param-x265:psy-rd"));
+            expect(editor != nullptr && editor->isEnabled(), QStringLiteral("启用后值控件可编辑"));
+            box->click();
+            smoke_pump(250);
+            expect(!box->isChecked() && !has_key("x265:psy-rd"),
+                   QStringLiteral("取消启用后键出 values()"));
+        }
+    }
+
+    // ---- ② 新增布尔行 = 三态下拉 {跟随默认/开/关}（JXL noise）----
+    page_output->select_format(QStringLiteral("jxl"));
+    smoke_pump(400);
+    {
+        auto *tri = page_output->findChild<QComboBox *>(QStringLiteral("pp-param-enable-noise"));
+        expect(tri != nullptr, QStringLiteral("JXL 新布尔行有三态下拉（pp-param-enable-noise）"));
+        if (tri != nullptr) {
+            expect(tri->count() == 3 && tri->currentIndex() == 0,
+                   QStringLiteral("三态 = 3 档且默认「跟随默认」（count=%1 idx=%2）")
+                       .arg(tri->count())
+                       .arg(tri->currentIndex()));
+            expect(!has_key("noise"), QStringLiteral("跟随默认 ⇒ noise 不下发"));
+            tri->setCurrentIndex(1); // 开
+            smoke_pump(200);
+            expect(has_bool("noise", true), QStringLiteral("三态「开」⇒ noise=true"));
+            tri->setCurrentIndex(2); // 关
+            smoke_pump(200);
+            expect(has_bool("noise", false), QStringLiteral("三态「关」⇒ noise=false"));
+            tri->setCurrentIndex(0); // 跟随默认
+            smoke_pump(200);
+            expect(!has_key("noise"), QStringLiteral("三态回「跟随默认」⇒ noise 不下发"));
+        }
+    }
+
+    // ---- ③ 只读行（上游固定）：显示生效值、不可编辑、不进 values() ----
+    page_output->select_format(QStringLiteral("heif"));
+    smoke_pump(400);
+    {
+        auto *status =
+            page_output->findChild<QLabel *>(QStringLiteral("pp-param-status-__x265:profile"));
+        auto *value =
+            page_output->findChild<QWidget *>(QStringLiteral("pp-param-readonly-__x265:profile"));
+        expect(status != nullptr && status->text() == QStringLiteral("只读（上游固定）"),
+               QStringLiteral("只读行状态注记 = 只读（上游固定）（got \"%1\"）")
+                   .arg(status != nullptr ? status->text() : QString()));
+        expect(value != nullptr && !value->isEnabled(), QStringLiteral("只读行生效值不可编辑"));
+        expect(!has_key("__x265:profile"), QStringLiteral("只读行不进 values()/预设"));
+        // 过滤：只看可设置 → 只读行隐藏（折叠头计数的可设置项减少）
+        auto *toggle = page_output->findChild<QToolButton *>(QStringLiteral("pp-advanced-toggle"));
+        const int before = toggle != nullptr ? num_prefix(toggle->text()) : -1;
+        auto *settable =
+            page_output->findChild<QAbstractButton *>(QStringLiteral("pp-adv-filter-settable"));
+        auto *enabled_filter =
+            page_output->findChild<QAbstractButton *>(QStringLiteral("pp-adv-filter-enabled"));
+        expect(settable != nullptr && enabled_filter != nullptr,
+               QStringLiteral("过滤开关在位（只看已启用/只看可设置）"));
+        if (settable != nullptr && toggle != nullptr) {
+            settable->click();
+            smoke_pump(150);
+            const int after = num_prefix(toggle->text());
+            expect(before >= 0 && after >= 0 && after <= before,
+                   QStringLiteral("只看可设置过滤生效（%1 → %2）").arg(before).arg(after));
+            settable->click();
+            smoke_pump(150);
+        }
+        if (enabled_filter != nullptr && toggle != nullptr) {
+            const int before2 = num_prefix(toggle->text());
+            enabled_filter->click();
+            smoke_pump(150);
+            const int after2 = num_prefix(toggle->text());
+            expect(
+                before2 >= 0 && after2 >= 0 && after2 < before2,
+                QStringLiteral("只看已启用过滤隐藏未启用新行（%1 → %2）").arg(before2).arg(after2));
+            enabled_filter->click();
+            smoke_pump(150);
+        }
+    }
+
+    // ---- ④ 9 组词表 / 搜索「键·中文标签·引擎名」/ 高级区展开 ----
+    {
+        auto *toggle = page_output->findChild<QToolButton *>(QStringLiteral("pp-advanced-toggle"));
+        if (toggle != nullptr && !toggle->isChecked())
+            toggle->click();
+        smoke_pump(150);
+        expand_groups();
+        smoke_pump(150);
+        int groups = 0;
+        for (QWidget *x : page_output->findChildren<QWidget *>()) {
+            if (x->objectName().startsWith(QStringLiteral("pp-advanced-group-")))
+                ++groups;
+        }
+        expect(groups >= 6, QStringLiteral("目录 9 组词表生效（HEIF 分组头 %1 ≥ 6）").arg(groups));
+        auto *search = page_output->findChild<QLineEdit *>(QStringLiteral("pp-advanced-search"));
+        expect(search != nullptr, QStringLiteral("高级参数搜索框在位"));
+        if (search != nullptr) {
+            ParamForm *form = active_form();
+            search->setText(QStringLiteral("psy-rd")); // 键 + 引擎名
+            smoke_pump(200);
+            expect(form != nullptr && form->is_param_visible("x265:psy-rd"),
+                   QStringLiteral("搜索「键/引擎名」命中 x265:psy-rd"));
+            search->setText(QStringLiteral("心理视觉")); // 中文标签（组内标签）
+            smoke_pump(200);
+            bool any_visible = false;
+            for (QWidget *x : page_output->findChildren<QWidget *>()) {
+                if (x->objectName().startsWith(QStringLiteral("pp-param-row-")) && x->isVisible()) {
+                    any_visible = true;
+                    break;
+                }
+            }
+            expect(any_visible, QStringLiteral("搜索「中文标签」有命中行"));
+            search->clear();
+            smoke_pump(200);
+        }
+    }
+
+    // ---- ⑤ RC 模式显式下拉（G4）：HEIF {质量/CRF/QP}；只显示当前路径；默认质量零变化 ----
+    page_output->select_format(QStringLiteral("heif"));
+    smoke_pump(400);
+    {
+        auto *rc = page_output->findChild<QComboBox *>(QStringLiteral("pp-param-rcmode-heif"));
+        expect(rc != nullptr && rc->count() == 3,
+               QStringLiteral("HEIF RC 模式下拉 {质量/CRF/QP}（count=%1）")
+                   .arg(rc != nullptr ? rc->count() : -1));
+        expect(rc != nullptr && rc->currentIndex() == 0, QStringLiteral("RC 默认路径 = 质量"));
+        expect(has_key("quality") && !has_key("x265:crf") && !has_key("x265:qp"),
+               QStringLiteral("质量路径：quality 下发、crf/qp 不下发"));
+        if (rc != nullptr) {
+            rc->setCurrentIndex(1); // CRF
+            smoke_pump(300);
+            expect(has_key("x265:crf") && !has_key("quality"),
+                   QStringLiteral("CRF 路径：crf 下发、quality 不下发（got crf=%1 quality=%2）")
+                       .arg(has_key("x265:crf") ? 1 : 0)
+                       .arg(has_key("quality") ? 1 : 0));
+            expect(widget_visible(QStringLiteral("pp-param-row-x265:crf")) &&
+                       !widget_visible(QStringLiteral("pp-param-row-quality")),
+                   QStringLiteral("只显示当前路径数值行"));
+            rc->setCurrentIndex(0); // 回质量
+            smoke_pump(300);
+            expect(!has_key("x265:crf") && has_key("quality"),
+                   QStringLiteral("切回质量路径恢复零行为"));
+        }
+        // 无损：RC 组整组隐藏（模式下拉 + 两条路径数值行均不可见）
+        auto *lossless =
+            page_output->findChild<QAbstractButton *>(QStringLiteral("pp-lossless-check"));
+        expect(lossless != nullptr, QStringLiteral("HEIF 无损开关在位（RC 组隐藏用例）"));
+        if (lossless != nullptr) {
+            lossless->click();
+            smoke_pump(350);
+            expect(!widget_visible(QStringLiteral("pp-param-rcmode-row-heif")),
+                   QStringLiteral("无损 ⇒ RC 模式下拉整行隐藏"));
+            expect(!widget_visible(QStringLiteral("pp-param-row-quality")),
+                   QStringLiteral("无损 ⇒ quality 行隐藏"));
+            expect(!has_key("x265:crf"), QStringLiteral("无损 ⇒ CRF 路径值不下发（整组隐藏）"));
+            lossless->click();
+            smoke_pump(350);
+            expect(widget_visible(QStringLiteral("pp-param-rcmode-row-heif")),
+                   QStringLiteral("关无损 ⇒ RC 模式组恢复"));
+        }
+    }
+    // AVIF：libaom {质量/CQ Level}、SVT {质量/QP}；只读展示行存在
+    page_output->select_format(QStringLiteral("avif"));
+    smoke_pump(500);
+    {
+        ParamForm *form = active_form();
+        const std::string backend = form != nullptr ? form->selection().backend : std::string();
+        auto *rc = page_output->findChild<QComboBox *>(QStringLiteral("pp-param-rcmode-avif"));
+        const QString want_second =
+            backend == "libaom" ? QStringLiteral("CQ Level") : QStringLiteral("QP");
+        expect(rc != nullptr && rc->count() == 2,
+               QStringLiteral("AVIF RC 模式下拉 2 档（backend=%1 count=%2）")
+                   .arg(QString::fromStdString(backend))
+                   .arg(rc != nullptr ? rc->count() : -1));
+        expect(rc != nullptr && rc->itemText(1) == want_second,
+               QStringLiteral("AVIF 第二路径 = %1（got \"%2\"）")
+                   .arg(want_second)
+                   .arg(rc != nullptr ? rc->itemText(1) : QString()));
+    }
+
+    // ---- ⑥ 运行前预检：规则错误 → 底部清单 + tab 徽标 + 开始运行拒绝 + 聚焦第一错 ----
+    {
+        page_output->set_out_root(QDir::tempPath() + QStringLiteral("/pp-m8-b2-probe-out"));
+        page_output->select_format(QStringLiteral("heif"));
+        smoke_pump(400);
+        ParamForm *form = active_form();
+        expect(form != nullptr, QStringLiteral("HEIF 表单在位（预检用例）"));
+        if (form != nullptr) {
+            pp::ParamSet bad;
+            bad["x265:qpmin"] = static_cast<int64_t>(40);
+            bad["x265:qpmax"] = static_cast<int64_t>(10);
+            form->set_values(bad); // 下限 > 上限（X1B）
+            smoke_pump(250);
+            const std::vector<std::string> errs = form->rule_errors();
+            expect(!errs.empty(), QStringLiteral("规则引擎报 x265 qpmin>qpmax（X1B）"));
+            const QString ready = page_output->ready_to_start();
+            expect(ready.contains(QStringLiteral("预检")),
+                   QStringLiteral("ready_to_start 拒绝并含中文预检说明（got \"%1\"）")
+                       .arg(ready.left(40)));
+            auto *box = page_output->findChild<QWidget *>(QStringLiteral("pp-rule-error-box-heif"));
+            auto *list =
+                page_output->findChild<QLabel *>(QStringLiteral("pp-rule-error-list-heif"));
+            expect(box != nullptr && box->isVisible() && list != nullptr && !list->text().isEmpty(),
+                   QStringLiteral("输出页底部错误清单可见（pp-rule-error-*）"));
+            bool badge = false;
+            if (tabs != nullptr) {
+                for (int i = 0; i < tabs->count(); ++i)
+                    badge = badge || tabs->tabText(i).contains(QStringLiteral("错误"));
+            }
+            expect(badge, QStringLiteral("格式 tab 错误数徽标"));
+            page_output->focus_first_rule_error();
+            smoke_pump(200);
+            expect(page_output->current_format() == QStringLiteral("heif"),
+                   QStringLiteral("聚焦后现役页签 = 第一个有错格式（got %1）")
+                       .arg(page_output->current_format()));
+            // 归位：修正参数（qpmax=50）→ 错误实时消失（联动实时态与预检同源）
+            pp::ParamSet fix;
+            fix["x265:qpmax"] = static_cast<int64_t>(50);
+            active_form()->set_values(fix);
+            smoke_pump(250);
+            expect(active_form() != nullptr && active_form()->rule_errors().empty(),
+                   QStringLiteral("修正参数后预检错误实时消失"));
+        }
+    }
+
+    // ---- ⑦ 预设往返：新键参与 outputs[i].params；未启用不写 ----
+    {
+        ParamForm *form = active_form();
+        expect(form != nullptr, QStringLiteral("HEIF 表单在位（预设用例）"));
+        if (form != nullptr) {
+            pp::ParamSet values;
+            values["x265:psy-rd"] = 1.5;
+            form->set_values(values); // 启用一个新增 Float 行
+            smoke_pump(200);
+            const pp::PresetData preset = page_output->collect_preset(QStringLiteral("m8-b2"));
+            bool has_psy = false;
+            bool has_unused = false;
+            if (!preset.outputs.empty()) {
+                const pp::ParamSet &params = preset.outputs.front().params;
+                has_psy = params.find("x265:psy-rd") != params.end();
+                has_unused = params.find("x265:aq-mode") != params.end(); // 未启用键不得写出
+            }
+            expect(has_psy, QStringLiteral("启用键参与预设序列化（x265:psy-rd）"));
+            expect(!has_unused, QStringLiteral("未启用键不写入预设（x265:aq-mode）"));
+            // 载入往返：apply_preset 后仍启用且值一致
+            page_output->apply_preset(preset);
+            smoke_pump(400);
+            form = active_form();
+            const pp::ParamSet round = form != nullptr ? form->values() : pp::ParamSet{};
+            const auto it = round.find("x265:psy-rd");
+            const double *v = it == round.end() ? nullptr : std::get_if<double>(&it->second);
+            expect(v != nullptr && std::abs(*v - 1.5) < 1e-9,
+                   QStringLiteral("预设 load→save 往返保留新键值（got %1）")
+                       .arg(v != nullptr ? *v : -1.0));
+        }
+    }
+
+    // ---- ⑧ settings：quality_score 行（GUI 默认开；本卡只做设置面框架）----
+    {
+        SettingsDialog dlg(settings, w);
+        auto *box = dlg.findChild<QCheckBox *>(QStringLiteral("pp-quality-score"));
+        expect(box != nullptr, QStringLiteral("设置页有 quality_score 行（pp-quality-score）"));
+        expect(box != nullptr && box->isChecked(), QStringLiteral("quality_score GUI 默认开"));
+        if (box != nullptr) {
+            const bool before = box->isChecked();
+            box->setChecked(!before);
+            dlg.accept(); // 走「确定」路径 → settings() 读回编辑值
+            expect(dlg.settings().quality_score == !before,
+                   QStringLiteral("quality_score 经 AppSettings 读回（%1 → %2）")
+                       .arg(before ? 1 : 0)
+                       .arg(dlg.settings().quality_score ? 1 : 0));
+        }
+    }
+
+    // ---- 归位：单选 jxl + 输出根还原（后续依赖项零残态）----
+    page_output->select_format(QStringLiteral("jxl"));
+    smoke_pump(250);
+    if (!prev_root.isEmpty() || !page_output->out_root().isEmpty())
+        page_output->set_out_root(prev_root);
+    std::printf("UI-SMOKE m8-params: checked=%d bad=%d\n", checked, bad);
+    std::fflush(stdout);
+    if (shots_dir.isEmpty()) {
+        // 本探针不新增冻结截图（shots=12 不变）；shots_dir 仅保留参数口径一致性。
+    }
+}
+
 // —— UX-2：勾选批量三态计数 + 过滤作用面 + 快捷键可达（check-all）——
 void MainWindow::Impl::smoke_probe_check_all() {
     int checked = 0;
@@ -7734,6 +8097,14 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
             smoke_fail(reason);
         };
         probe_format_card_interactions(w, page_output, shots_dir, fmt_fail);
+    }
+
+    // ---- M8-B2：参数 UI 三态/RC 模式/联动预检/预设往返（加性探针；自身收尾归位 jxl）----
+    {
+        const std::function<void(const QString &)> m8_fail = [this](const QString &reason) {
+            smoke_fail(reason);
+        };
+        probe_m8_params(w, page_output, settings, shots_dir, m8_fail);
     }
 }
 

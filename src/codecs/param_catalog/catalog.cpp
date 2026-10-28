@@ -52,9 +52,9 @@ ParamType param_type(Type t) {
     case Type::Bool:
         return ParamType::Bool;
     case Type::Enum:
-    case Type::Text:
-        // Stage A 占位：B0 把 Text 映射到 ParamType::String。目录合并前不进入 UI。
         return ParamType::Enum;
+    case Type::Text:
+        return ParamType::String;
     }
     return ParamType::Int;
 }
@@ -118,7 +118,7 @@ const CatalogTable &table() {
     static const CatalogTable built = [] {
         CatalogTable t;
         auto add = [&t](std::string_view format, std::string_view backend,
-                        std::vector<CatalogSpec> specs) {
+                        const std::vector<CatalogSpec> &specs) {
             std::vector<CatalogRow> rows;
             rows.reserve(specs.size());
             for (const CatalogSpec &s : specs)
@@ -146,6 +146,8 @@ const std::vector<CatalogRow> &catalog(std::string_view format_id, std::string_v
     return it == table().end() ? empty_rows() : it->second;
 }
 
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)：全链查找的三个 string_view
+// （format/backend/key）语义固定、调用点全部具名，属可读性成本而非缺陷。
 const CatalogRow *find_row(std::string_view format_id, std::string_view backend_id,
                            std::string_view key) {
     const auto &rows = catalog(format_id, backend_id);
@@ -153,6 +155,7 @@ const CatalogRow *find_row(std::string_view format_id, std::string_view backend_
                                  [key](const CatalogRow &r) { return r.def.key == key; });
     return it == rows.end() ? nullptr : &*it;
 }
+// NOLINTEND(bugprone-easily-swappable-parameters)
 
 bool has_key(std::string_view format_id, std::string_view backend_id, std::string_view key) {
     return find_row(format_id, backend_id, key) != nullptr;

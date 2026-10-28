@@ -37,9 +37,10 @@
 #include "codecs/encoder.h"
 #include "codecs/encoder_registry.h"
 #include "codecs/encoders.h"
-#include "codecs/heif_nclx.h"    // M7-WP2 UX-14 A1：nclx ← ICC 推导（纯函数）
-#include "codecs/heif_profile.h" // M7-WP2 I4：编码档位单源（UX-10.1/10.3）
-#include "core/fsops.h"          // R-003：atomic_temp_path / commit / discard
+#include "codecs/heif_nclx.h"             // M7-WP2 UX-14 A1：nclx ← ICC 推导（纯函数）
+#include "codecs/heif_profile.h"          // M7-WP2 I4：编码档位单源（UX-10.1/10.3）
+#include "codecs/param_catalog/catalog.h" // M8：目录行合并（x265:/aom: 透传键 + 只读行）
+#include "core/fsops.h"                   // R-003：atomic_temp_path / commit / discard
 #include "core/logger.h"
 #include "core/params.h"
 #include "core/simd/simd.h" // M4-W5-T19：交织 + 量化热路径（§11.2）
@@ -61,6 +62,31 @@ std::string heif_error_text(const heif_error &e) {
     s += " (heif_error code=" + std::to_string(static_cast<int>(e.code)) +
          " subcode=" + std::to_string(static_cast<int>(e.subcode)) + ")";
     return s;
+}
+
+// M8-B1（C7/§4.5）：插件透传值格式化。libheif 的 aom 插件把 `aom:<opt>` 原样交给
+// aom_codec_set_option()，后者用 strtoul 解析参数 → bool 只认数字 "0"/"1"（实测
+// "true" 报 "Invalid character 't'"）；x265 的 x265_atobool 同时接受 "true"/"false" 与
+// "1"/"0" —— 故统一发数字（两端都合法）。整数十进制、浮点 %.10g（x265 atof / aom
+// strtoul 之外的 aom 无浮点目录键）、字符串原样。
+std::string passthrough_value_text(const ParamValue &v) {
+    if (const bool *b = std::get_if<bool>(&v))
+        return *b ? "1" : "0";
+    if (const int64_t *i = std::get_if<int64_t>(&v))
+        return std::to_string(*i);
+    if (const double *d = std::get_if<double>(&v)) {
+        char buf[40];
+        std::snprintf(buf, sizeof(buf), "%.10g", *d);
+        return buf;
+    }
+    if (const std::string *s = std::get_if<std::string>(&v))
+        return *s;
+    return {};
+}
+
+// C3/C7：透传键必须是 `prefix:engine-name` 形态；x265:/aom:/svt: 是仅有的三个前缀名。
+bool is_passthrough_key(std::string_view key) {
+    return key.rfind("x265:", 0) == 0 || key.rfind("aom:", 0) == 0 || key.rfind("svt:", 0) == 0;
 }
 
 constexpr heif_error kHeifOk{heif_error_Ok, heif_suberror_Unspecified, nullptr};
@@ -558,24 +584,57 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
                 return fail("parameter '" + p.key + "' rejected by backend: " + rejected);
         }
 
-        // R-3xx：插件私有点位透传（libheif 的 x265/svt/aom 插件都支持 `plugin:option` 形态的
-        // 字符串参数，但**不把它们列进 heif_encoder_list_parameters** —— 旧实现只遍历内省表，
-        // 因此预设/CLI 里的 `x265:...` 键会被当作未知键静默丢弃）。这里按前缀直接走
-        // heif_encoder_set_parameter_string；插件拒绝 = 显式配置未生效 → 失败（不静默降级）。
+        // R-3xx / M8-B1（docs/m8-encoder-params-and-ssimulacra2-design.md §4.5 C3/C7）：
+        // 插件私有点位透传（libheif 的 x265/aom 插件都支持 `plugin:option` 形态的字符串
+        // 参数，但**不把它们列进 heif_encoder_list_parameters**）。M8 收口口径：
+        //   * **后端作用域**：HEIF/x265 只接受 `x265:`；AVIF/libaom 只接受 `aom:`；
+        //     `svt:` 不是合法透传通道（libheif 1.23.5 的 SVT 插件没有该分支，design F6）
+        //     ⇒ 其它前缀 = 显式配置错误 → 失败（不再静默丢弃 / 假接线）。
+        //   * **目录白名单**：透传键必须在 M8 参数目录里（catalog::has_key）——清单外/禁止
+        //     键由预检拦截，编码器侧仍兜底失败，绝不静默。
+        //   * **值格式化**：见 passthrough_value_text（bool → "1"/"0"，libaom 只认数字）。
+        std::string_view allowed_prefix;
+        if (backend_id_ == "x265")
+            allowed_prefix = "x265:";
+        else if (backend_id_ == "libaom")
+            allowed_prefix = "aom:";
+        const std::string backend_label =
+            backend_id_.empty() ? std::string("(first)") : backend_id_;
         for (const auto &[key, value] : req.target.params) {
             if (key.rfind("__", 0) == 0)
                 continue;
             if (is_known(key))
                 continue;
-            const bool pass_through = key.rfind("x265:", 0) == 0 || key.rfind("svt:", 0) == 0 ||
-                                      key.rfind("aom:", 0) == 0;
-            if (!pass_through)
+            if (!is_passthrough_key(key))
                 continue;
-            const std::string text = enc::param_value_text(value);
+            const bool prefix_ok = !allowed_prefix.empty() && key.rfind(allowed_prefix, 0) == 0;
+            if (!prefix_ok) {
+                std::string msg = "plugin option '";
+                msg += key;
+                msg += "' is not valid for backend '";
+                msg += backend_label;
+                msg += "' (";
+                msg += format_id_;
+                msg += "): HEIF/x265 accepts only 'x265:' options, AVIF/libaom only 'aom:'; "
+                       "'svt:' has no passthrough channel";
+                return fail(msg);
+            }
+            if (!catalog::has_key(format_id_, backend_id_, key)) {
+                std::string msg = "plugin option '";
+                msg += key;
+                msg += "' is not in the M8 parameter catalog (未收录参数); see "
+                       "docs/m8-param-exposure-review.md";
+                return fail(msg);
+            }
+            const std::string text = passthrough_value_text(value);
             const heif_error pe = heif_encoder_set_parameter_string(enc, key.c_str(), text.c_str());
-            if (pe.code != heif_error_Ok)
-                return fail("plugin option '" + key +
-                            "' rejected by backend: " + heif_error_text(pe));
+            if (pe.code != heif_error_Ok) {
+                std::string msg = "plugin option '";
+                msg += key;
+                msg += "' rejected by backend: ";
+                msg += heif_error_text(pe);
+                return fail(msg);
+            }
         }
 
         // R-307（0.3.6-alpha1）：无损开关**显式消费** `lossless` / `__lossless` 两键。
@@ -646,9 +705,13 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
         }
 
         // E9: unrecognised keys are ignored (never an error) and logged, not warned.
+        // M8-B1：插件透传前缀键已在上面按作用域/目录校验并下发（合法则已生效、非法已失败），
+        // 不再落 "unrecognised" 日志（旧实现会同时记一条误导性的忽略日志）。
         for (const auto &[key, value] : req.target.params) {
             if (key.rfind("__", 0) == 0)
                 continue; // reserved keys (§3.4)
+            if (is_passthrough_key(key))
+                continue; // handled above (scope + catalog enforced)
             if (!is_known(key))
                 note_param("unrecognised parameter ignored", key, enc::param_value_text(value));
         }
@@ -1356,6 +1419,9 @@ std::vector<BackendDef> introspect_backends(std::string_view format_id) {
             t.label = b.label;
             t.lossless_capable = heif_encoder_descriptor_supports_lossless_compression(desc) != 0;
             t.params = introspect_live(enc);
+            // M8-B0：目录行并入运行时参数面（UI/预设/--param/校验共用同一份表）。
+            std::vector<ParamDef> extra = catalog::param_defs(format_id, b.id);
+            t.params.insert(t.params.end(), extra.begin(), extra.end());
             b.techs.push_back(std::move(t));
             heif_encoder_release(enc);
         } else {

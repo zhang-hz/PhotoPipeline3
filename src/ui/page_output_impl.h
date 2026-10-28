@@ -305,6 +305,11 @@ struct FormatState {
     // R-135（M7-R2D2）：表单不认的键（预设带入的未知键 / 跨技术键）—— 落值时记存，
     // snapshot/spec_of 原样带回，load→save 往返不丢（form values 同名键覆盖之）。
     pp::ParamSet extra;
+    // ---- M8-B2：运行前预检错误清单（每格式 tab；规则引擎与 ParamForm 同一份求值）----
+    // 错误非空 ⇒ ready_to_start() 拒绝开始（中文、逐格式前缀；批量只报一次）并聚焦第一错行。
+    QWidget *rule_error_box = nullptr;    // pp-rule-error-box-<id>
+    QLabel *rule_error_list = nullptr;    // pp-rule-error-list-<id>
+    std::vector<std::string> rule_errors; // 当前错误（中文）
 };
 
 // R-189：FormatSelection 的规范顺序 = 磁贴顺序（kFormats 表序；与原 tile_index 排序同键）
@@ -527,6 +532,14 @@ struct OutputPageImpl {
     void on_param_selection_changed(const std::string &id);
 
     void on_bitdepth_changed(const std::string &id);
+
+    // ------------------------------------------------------------ M8-B2 运行前预检
+    // 上下文（位深/无损/后端/技术）→ ParamForm 规则引擎；错误清单 = 每格式 tab 底部 +
+    // tab 计数徽标；`开始运行` 拒绝与「聚焦第一错行」都走这一份求值（C5/C6 同源）。
+    void sync_rule_context(const std::string &id);
+    void update_rule_errors(const std::string &id);
+    void update_all_rule_errors();
+    void focus_first_error();
 
     // ------------------------------------------------------------ UX-10.1 编码档位
 

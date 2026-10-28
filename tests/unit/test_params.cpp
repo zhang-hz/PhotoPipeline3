@@ -90,7 +90,18 @@ int main() {
                     ++techs;
                     const std::string where = f.id + "/" + b.id + "/" + t.id;
                     const ParamSet s = default_params(f, b.id, t.id, t.lossless_capable);
+                    // M8-B1 语义适配（docs/m8-encoder-params-and-ssimulacra2-design.md §7/§4.1）：
+                    // 目录行（x265:/aom:/JXL 新键）一律 has_default=false（三态：未启用 =
+                    // 不下发）， 因此不参与「默认值全集」断言与 size 计数；既有行的断言逐字不变。
+                    std::size_t defaulted = 0;
                     for (const ParamDef &p : t.params) {
+                        if (!p.has_default) {
+                            if (has(s, p.key.c_str()))
+                                fail(c, where + ": has_default=false key must not be defaulted: " +
+                                            p.key);
+                            continue;
+                        }
+                        ++defaulted;
                         if (!has(s, p.key.c_str())) {
                             fail(c, where + ": missing key " + p.key);
                             continue;
@@ -115,9 +126,10 @@ int main() {
                             fail(c, where + ": " + p.key + " = " + repr(s.at(p.key)) + " != def " +
                                         repr(p.def));
                     }
-                    if (s.size() != t.params.size() + 1)
-                        fail(c, where + ": size " + std::to_string(s.size()) + " != params+1 (" +
-                                    std::to_string(t.params.size() + 1) + ")");
+                    if (s.size() != defaulted + 1)
+                        fail(c, where + ": size " + std::to_string(s.size()) +
+                                    " != has_default rows + 1 (" + std::to_string(defaulted + 1) +
+                                    ")");
                     if (param_bool(s, "__lossless", !t.lossless_capable) != t.lossless_capable)
                         fail(c, where + ": __lossless flag not set to " +
                                     (t.lossless_capable ? "true" : "false"));
@@ -277,7 +289,9 @@ int main() {
     {
         const Slot e = slot("jxl", "libjxl", "vardct");
         ParamSet s = default_params(*e.f, "libjxl", "vardct", false);
-        s["effort"] = int64_t(11);
+        // M8-A17：effort 域扩到 [1,11]（11 需 expert_options，由 param_rules J6 预检拦截），
+        // 故越界探针由 11 顺移为 12（语义不变：域外值必须被 validate_params 拒绝）。
+        s["effort"] = int64_t(12);
         std::string err = validate_params(*e.f, "libjxl", "vardct", false, s);
         check(!err.empty() && err.find("effort") != std::string::npos, "validate-range",
               "[" + err + "]");
@@ -408,8 +422,13 @@ int main() {
                   contains(added, "color_transform"),
               c, "missing keys reported: [" + join(added) + "]");
         check(param_int(s, "effort", 0) == 3, c, "existing value preserved");
-        check(s.size() == jxl.t->params.size(), c,
-              "size " + std::to_string(s.size()) + " != " + std::to_string(jxl.t->params.size()));
+        std::size_t defaulted = 0;
+        for (const pp::ParamDef &p : jxl.t->params)
+            if (p.has_default)
+                ++defaulted; // M8-B1：目录行 has_default=false ⇒ fill_defaults 不填（三态）
+        check(s.size() == defaulted, c,
+              "size " + std::to_string(s.size()) + " != has_default rows (" +
+                  std::to_string(defaulted) + ")");
         check(fill_defaults(*jxl.f, "libjxl", "modular", false, s).empty(), c,
               "second fill_defaults should add nothing");
         check(!has(s, "__lossless"), c, "fill_defaults must not inject reserved keys");
@@ -948,6 +967,50 @@ int main() {
         check(pp::bitdepth_bps("bmp", 8) == 8, c, "BMP 8 bpp → 8 bps");
         check(pp::bitdepth_bps("png", 8) == 8 && pp::bitdepth_bps("png", 16) == 16, c,
               "非 bmp 存储值即 bps（恒等）");
+    }
+
+    // ===== M8-B1 新增断言（断言只增；上方既有段逐字不动）=====
+    // 23) validate_params：运行时内省后端（heif/avif）改用 live tech 做范围/枚举校验
+    //     （旧实现 `runtime_introspected && techs.empty()` 直接 return {}，越界只在编码期失败）。
+    {
+        const std::string c = "m8b1-runtime-live-validation";
+        const Slot h = slot("heif", "x265", "");
+        check(h.f != nullptr, c, "前提失败：heif format");
+        // 原生内省键越界 → 报 param 名 + 范围（英文，preset 通道既有体例）。
+        ParamSet s;
+        s["quality"] = int64_t(200);
+        std::string err = validate_params(*h.f, "x265", "", false, s);
+        check(!err.empty() && err.find("quality") != std::string::npos &&
+                  err.find("[0, 100]") != std::string::npos,
+              c, "quality 越界必须报 param+范围，got [" + err + "]");
+        s["quality"] = int64_t(80);
+        check(validate_params(*h.f, "x265", "", false, s).empty(), c,
+              "quality=80 应通过，got [" + validate_params(*h.f, "x265", "", false, s) + "]");
+        // 目录行（x265: 透传键）同样按目录域校验。
+        ParamSet p;
+        p["x265:crf"] = 99.0;
+        err = validate_params(*h.f, "x265", "", false, p);
+        check(!err.empty() && err.find("x265:crf") != std::string::npos &&
+                  err.find("[0, 51]") != std::string::npos,
+              c, "x265:crf 越界必须报 param+范围，got [" + err + "]");
+        p["x265:crf"] = 20.0;
+        check(validate_params(*h.f, "x265", "", false, p).empty(), c,
+              "x265:crf=20 应通过，got [" + validate_params(*h.f, "x265", "", false, p) + "]");
+        // 空 backend = 静态首选后端（heif → x265；avif → svt-av1），与 encoders.cpp 同口径。
+        ParamSet svt;
+        svt["speed"] = int64_t(99);
+        const Slot av = slot("avif", "", "");
+        check(av.f != nullptr, c, "前提失败：avif format");
+        err = validate_params(*av.f, "", "", false, svt);
+        check(!err.empty() && err.find("speed") != std::string::npos, c,
+              "avif 空 backend（首选 svt-av1）speed=99 必须越界，got [" + err + "]");
+        // 未知键不归 validate_params（域外，冻结语义）：cross_validate 负责。
+        ParamSet u;
+        u["quality"] = int64_t(80);
+        u["bogus_key"] = std::string("x");
+        check(validate_params(*h.f, "x265", "", false, u).empty(), c,
+              "未知键不归 validate_params，got [" + validate_params(*h.f, "x265", "", false, u) +
+                  "]");
     }
 
     // 22) core/error_text.h（R-070/273）：ErrorKind 中文映射 + 模板预检/失败原因 lookup。

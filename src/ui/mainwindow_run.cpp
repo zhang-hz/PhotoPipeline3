@@ -413,6 +413,8 @@ void MainWindow::on_start() {
     const QString reason = d.page_output->ready_to_start();
     if (!reason.isEmpty()) {
         warn_cannot_start(this, reason);
+        // M8-B2（A20 授权）：预检拒绝后定位第一错行（输出页 → 首个有错格式页签 → 首个错误行）。
+        d.page_output->focus_first_rule_error();
         return;
     }
 

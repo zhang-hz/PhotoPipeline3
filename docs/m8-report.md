@@ -10,7 +10,7 @@
 |---|---|---|---|
 | K 启动 | 完成 | 并入 M8-A 提交 | `build/m8/k3-baseline/cmd.log` |
 | A 参数事实层 | 完成 | 待提交 | `build/m8/a4-{build2,ctest,smoke,regression,format}.log`、`build/m8/a4/reconcile.txt` |
-| B 引擎 + UI | 未开始 | 待定 | — |
+| B 引擎 + UI | 完成 | 待提交 | `build/m8/b-gate-*.log`、`build/m8/b1/`、`build/m8/b2/` |
 | C SSIMULACRA 2 | 未开始 | 待定 | — |
 | D 收口 | 未开始 | 待定 | — |
 
@@ -52,6 +52,36 @@
 4. A2 只读 4 行 role 按语义取（profile/keyint/input-csp=dependent，total-frames=independent；control-map 未规定，登记待 B1 统一）。
 5. 生成器在 Stage A 修复 4 处（登记 M8-A14/A15）：KEY_RE 允许 `__` 只读键；AOM anchors 含 `ARG_DEF_ENUM`；x265 `no-` 别名锚点；JXL text 行 `expected_format` 修正；另修正 anchors 计数字符串。
 6. A1 `intrinsic_size` 以 `form=text` 承载 x/y 对（“宽x高”），B1/B2 负责解析/校验；HDR 三值上界 10000 为 UI 约定（libjxl 不校验）。
+
+### B 引擎 + UI（完成）
+
+**B0（Lead，加性接入）**：`ParamType::String` + `ParamContext` + `cross_validate(ctx)` 声明；`static_formats()` 追加 JXL 目录行、`introspect_backends()` 追加 x265/libaom 目录行；`declared_keys` 并入目录键；`param_rules.h` 冻结规则引擎接口；`settings.h` 加性 `quality_score`（GUI 默认 true）。
+
+**B1（引擎）**：
+- `params.cpp`：heif/avif runtime 后端用 live introspection 做类型/范围/枚举校验；`cross_validate(ctx)` = 旧通道 + rules::preflight。
+- `param_rules.cpp`（新，45KB）：数据驱动规则表 + evaluate/preflight；覆盖 G1/G3/G4、X1–X15、A1–A16、S1–S4/S6、J2–J18；A9 按源码降级 W。
+- `enc_heif.cpp`：透传后端作用域（x265 只对 heif、aom 只对 libaom、SVT 无）+ 目录白名单兜底 + bool 值格式 `"1"/"0"`（修复 libaom 只认数字的真实缺陷）。
+- `enc_jxl.cpp`：16 个新键三态接线 + codestream_level 顺序修正 + effort 11（format_tables 仅 hi 10→11）。
+- `dev_cli.cpp`：`--param` String/运行时内省/清单外键报错；`pp_linkprobe` 加目录计数/SVT 10 键/无 `svt:` 三条 PROBE。
+- 测试：`test_params` 语义适配（跳过 has_default=false 行）；新增 `test_param_rules`（规则表不变量 + 锚点闭合 + 60 用例）。
+
+**B2（UI）**：
+- String 编辑器修复 ui-smoke 崩溃；目录行三态（N/D/T 启用勾选、新 Bool 三态下拉、13 只读行、禁设行不出现）。
+- RC 模式显式下拉（HEIF 质量/CRF/QP；libaom 质量/CQ Level；SVT 质量/QP），默认质量、非激活路径不下发、无损整组隐藏、预设按存在键推断+冲突报错。
+- 联动实时态统一走 `pp::rules::evaluate()`；每格式 tab 错误清单/徽标、`ready_to_start()` 拒绝、`focus_first_rule_error()` 聚焦首错。
+- 9 组词表 + 搜索（标签/键/引擎名）+ 只看已启用/可设置；预设新键序列化；settings `pp-quality-score` 完整读写。
+- 加性探针 `probe_m8_params()` 49 断言；test_smoke 组词表语义适配。
+
+**B 阶段门禁（`build/release-dev`，`build/m8/b-gate-*`）**
+
+| 门禁 | 命令 | 结果 |
+|---|---|---|
+| 构建 | `cmake --build build/release-dev` | exit 0（141 目标，`b-gate-build.log`） |
+| 单测 | `ctest --test-dir build/release-dev` | **38/38 passed**（69.76 s，`b-gate-ctest.log`） |
+| 金样 | `python tests/golden/smoke.py build/release-dev` | **`SMOKE total=20 pass=20 fail=0`** |
+| UI | `python tests/ui_smoke.py build/release-dev` | **`UI-SMOKE OK shots=12 pages=3`**；`m8-params checked=49 bad=0`；layout-audit bad=0 |
+| 回归 | `python tools/regression.py` | 本机 DIFF，与 K3 **逐字同形**（thread_budget 16 vs 4 + buildtree 路径截断）；无 M8 键/新行进入日志（`b-gate-regression.log`） |
+| 格式 | `bash tools/ci-format.sh` | `violations=0`（200 files） |
 
 ## 2. 验收结论（命令 + 结果逐条取证）
 

@@ -93,6 +93,10 @@
 #include "ui/paramform.h"
 #include "ui/theme.h"
 
+// M8-B2：预检拒绝时切回输出页（`开始运行` 拒绝 → 聚焦第一错行 = 先让页可见再聚焦）。
+// 方向说明：页面 → 主窗的唯一反向引用只用于"切页"，不读写主窗状态（加性，登记 A20）。
+#include "ui/mainwindow.h"
+
 #include "ui/page_output_impl.h" // R-189/B.3：Impl 共享私有头（TU 拆分）
 
 namespace pp::ui {
@@ -341,6 +345,27 @@ void OutputPageImpl::build_tab(const std::string &id) {
     st.form->set_tokens(tokens);
     v->addWidget(st.form);
 
+    // M8-B2：运行前预检错误清单（每个格式 tab 底部；规则引擎同源，错误非空才显示）。
+    // 布局：与卡内行同轴，逐行中文说明 + 定位提示；`开始运行` 拒绝时聚焦第一错行。
+    {
+        st.rule_error_box = new QWidget(st.page);
+        st.rule_error_box->setObjectName(QStringLiteral("pp-rule-error-box-") +
+                                         QString::fromStdString(id));
+        auto *ev = new QVBoxLayout(st.rule_error_box);
+        ev->setContentsMargins(theme::Metrics::card_pad_x, 0, theme::Metrics::card_pad_x, 0);
+        ev->setSpacing(0);
+        st.rule_error_list = new QLabel(st.rule_error_box);
+        st.rule_error_list->setObjectName(QStringLiteral("pp-rule-error-list-") +
+                                          QString::fromStdString(id));
+        st.rule_error_list->setWordWrap(true);
+        st.rule_error_list->setTextFormat(Qt::PlainText);
+        st.rule_error_list->setProperty("ppInvalid", true); // theme::field_qss 的红字轨（err）
+        st.rule_error_list->setFont(theme::font(theme::Typography::hint_px));
+        ev->addWidget(st.rule_error_list);
+        st.rule_error_box->setVisible(false);
+        v->addWidget(st.rule_error_box);
+    }
+
     // avif 10bit+alpha 预选提示（原 pp-alpha-hint 语义，位置随格式页签）
     st.alpha_hint = new ElidedLabel(st.page);
     st.alpha_hint->setObjectName(QStringLiteral("pp-alpha-hint"));
@@ -356,6 +381,7 @@ void OutputPageImpl::build_tab(const std::string &id) {
     QObject::connect(st.form, &ParamForm::selection_changed, q,
                      [this, id](const FormSelection &) { on_param_selection_changed(id); });
     QObject::connect(st.form, &ParamForm::changed, q, [this, id] {
+        update_rule_errors(id);  // M8-B2：联动规则实时态 → 预检错误清单/tab 徽标同步
         update_profile_note(id); // UX-10.1 反向联动：改色度 → 档位行推导/校验重算
         refresh_changed_pill();
         refresh_tab_labels();
@@ -366,6 +392,9 @@ void OutputPageImpl::build_tab(const std::string &id) {
 
     // 初值：优先快照（取消勾选后重选），否则表内默认
     apply_state_to_form(id, st.spec);
+    // M8-B2：预检上下文（位深）+ 首轮错误清单
+    sync_rule_context(id);
+    update_rule_errors(id);
     // M7-R2.4：**按规范序插入**（不是 addTab 追加）。sel 的顺序 = 磁贴序，页签必须同序，
     // 否则先选 JPEG XL 再勾 JPEG 时页签是 [JXL, JPEG] 而 sel 是 [JPEG, JXL] —— 标题
     // 按 sel 写、内容按插入序摆，立刻出现"JPEG 标题下是 JXL 参数"。
@@ -404,6 +433,10 @@ void OutputPageImpl::remove_tab(const std::string &id) {
     st->meta_hint = nullptr;
     st->profile = nullptr; // UX-10.1
     st->profile_note = nullptr;
+    // M8-B2：预检错误清单随页签一起销毁（错误状态由下次建页签重算）
+    st->rule_error_box = nullptr;
+    st->rule_error_list = nullptr;
+    st->rule_errors.clear();
     apply_tab_width(); // UX-9：等宽
 }
 
@@ -504,6 +537,7 @@ int OutputPageImpl::changed_param_count(const std::string &id) const {
 void OutputPageImpl::refresh_tab_labels() {
     // M7-R2.4：标题由**页面自身 id** 决定（不再 `sel.at(i)` 按下标取）—— 即使页序因
     // 增删/预设重建短暂不同步，标题也永远不会串到别的格式上。
+    // M8-B2：有预检错误的格式在标题追加「· N 错误」（无错时逐字不变 = 既有探针零影响）。
     for (int i = 0; i < tabs->count(); ++i) {
         const QWidget *page = tabs->widget(i);
         if (page == nullptr)
@@ -511,7 +545,13 @@ void OutputPageImpl::refresh_tab_labels() {
         const QString page_id = page->property(kPageFormatIdProperty).toString();
         if (page_id.isEmpty())
             continue;
-        tabs->setTabText(i, format_tab_label(page_id.toStdString()));
+        const std::string pid = page_id.toStdString();
+        QString label = format_tab_label(pid);
+        const auto it = states.find(pid);
+        if (it != states.end() && !it->second.rule_errors.empty())
+            label +=
+                PageOutput::tr(" · %1 错误").arg(static_cast<int>(it->second.rule_errors.size()));
+        tabs->setTabText(i, label);
     }
     apply_tab_width(); // UX-9：等宽随格式集合重算（文案已不含位深 → 宽度不随位深漂移）
 }
@@ -561,6 +601,8 @@ void OutputPageImpl::on_param_selection_changed(const std::string &id) {
     set_bitdepth_options(id, -1, /*keep_if_valid=*/true);
     evaluate_avif_alpha_preselect(id); // 后端/位深变化可能使预选条件成立
     update_alpha_hint(id);
+    sync_rule_context(id); // M8-B2：后端/技术/无损入规则上下文
+    update_rule_errors(id);
     refresh_tab_labels();
     refresh_changed_pill();
 }
@@ -568,9 +610,78 @@ void OutputPageImpl::on_param_selection_changed(const std::string &id) {
 void OutputPageImpl::on_bitdepth_changed(const std::string &id) {
     evaluate_avif_alpha_preselect(id);
     update_alpha_hint(id);
+    sync_rule_context(id); // M8-B2：位深进规则上下文（J18 等尺寸/位深相关规则）
+    update_rule_errors(id);
     refresh_tab_labels();    // 位深入页签文案（UX-9 起只重写格式名，保留入口）
     update_profile_note(id); // UX-10.1：反向联动 —— 位深变了，「自动」档的推导结果跟着变
     emit q->config_changed();
+}
+
+// ---------------------------------------------------------------- M8-B2：运行前预检
+// 规则上下文（位深；format/backend/tech/lossless 由 ParamForm 自身覆盖 —— 单一真相）。
+void OutputPageImpl::sync_rule_context(const std::string &id) {
+    FormatState *st = state_of(id);
+    if (st == nullptr || st->form == nullptr)
+        return;
+    pp::ParamContext ctx;
+    ctx.format_id = id;
+    ctx.bitdepth = bitdepth_of(id);
+    st->form->set_param_context(ctx);
+}
+
+// 求值该格式的规则错误 → 底部错误清单 + 页签计数徽标（"每格式 tab 错误数"）。
+void OutputPageImpl::update_rule_errors(const std::string &id) {
+    FormatState *st = state_of(id);
+    if (st == nullptr || st->form == nullptr)
+        return;
+    st->rule_errors = st->form->rule_errors();
+    const int n = static_cast<int>(st->rule_errors.size());
+    if (st->rule_error_box != nullptr) {
+        QStringList lines;
+        for (const std::string &msg : st->rule_errors)
+            lines << QStringLiteral("· ") + QString::fromStdString(msg);
+        st->rule_error_list->setText(
+            lines.isEmpty() ? QString()
+                            : PageOutput::tr("参数预检未通过（%1 项）——修正后才能开始运行：\n%2")
+                                  .arg(n)
+                                  .arg(lines.join(QLatin1Char('\n'))));
+        st->rule_error_box->setVisible(n > 0);
+    }
+    // 页签徽标：文案 = 格式名（无错时逐字不变 → 既有探针断言不受影响）；有错追加计数。
+    if (st->page != nullptr) {
+        const int index = tabs != nullptr ? tabs->indexOf(st->page) : -1;
+        if (tabs != nullptr && index >= 0) {
+            tabs->setTabText(index, format_tab_label(id));
+            tabs->setTabToolTip(index,
+                                n > 0 ? PageOutput::tr("%1 个参数预检错误\n%2")
+                                            .arg(n)
+                                            .arg(QString::fromStdString(st->rule_errors.front()))
+                                      : QString());
+        }
+    }
+}
+
+void OutputPageImpl::update_all_rule_errors() {
+    for (const std::string &id : sel.items())
+        update_rule_errors(id);
+}
+
+// `开始运行` 被拒时：聚焦第一个有错误的格式页签 + 该格式第一个错误行（批量只报一次）。
+void OutputPageImpl::focus_first_error() {
+    if (auto *window = qobject_cast<MainWindow *>(q->window()))
+        window->set_current_page(2); // 输出页（1=meta 2=output 3=run）
+    for (const std::string &id : sel.items()) {
+        FormatState *st = state_of(id);
+        if (st == nullptr || st->form == nullptr || st->rule_errors.empty())
+            continue;
+        if (st->page != nullptr && tabs != nullptr) {
+            const int index = tabs->indexOf(st->page);
+            if (index >= 0)
+                tabs->setCurrentIndex(index);
+        }
+        st->form->focus_first_rule_error();
+        return;
+    }
 }
 
 pp::HeifProfile OutputPageImpl::current_profile(const std::string &id) const {
@@ -1308,7 +1419,37 @@ QString PageOutput::ready_to_start() const {
         if (impl_->template_text().trimmed().isEmpty())
             return tr("路径模板不能为空");
     }
+    // M8-B2（C6）：运行前参数预检 —— 规则引擎错误逐格式汇总（**批量只报一次**：单条中文
+    // 消息含所有格式的错误；拒绝后由 MainWindow 调 focus_first_rule_error() 定位第一错行）。
+    if (!impl_->metadata_only) {
+        QStringList lines;
+        for (const std::string &id : impl_->sel.items()) {
+            impl_->update_rule_errors(id); // 现算，保证与 UI 实时态同一份求值
+            const FormatState *st = impl_->state_of(id);
+            if (st == nullptr || st->rule_errors.empty())
+                continue;
+            const pp::FormatDef *fdef = pp::find_format(id);
+            const QString label =
+                fdef != nullptr ? QString::fromStdString(fdef->label) : QString::fromStdString(id);
+            for (const std::string &msg : st->rule_errors)
+                lines << tr("【%1】%2").arg(label, QString::fromStdString(msg));
+        }
+        if (!lines.isEmpty()) {
+            impl_->refresh_tab_labels(); // 页签徽标与拒绝同一帧可见
+            return tr("参数预检未通过（%1 项）——修正后才能开始运行：\n%2")
+                .arg(lines.size())
+                .arg(lines.join(QLatin1Char('\n')));
+        }
+    }
     return QString();
+}
+
+// M8-B2：预检拒绝后定位（MainWindow::on_start 在 warn_cannot_start 之后调用一次）：
+// 切到输出页 → 第一个有错格式的页签 → 该格式第一个错误行。
+void PageOutput::focus_first_rule_error() {
+    OutputPageImpl *impl_ = impl_of(this);
+    impl_->update_all_rule_errors();
+    impl_->focus_first_error();
 }
 
 QString PageOutput::current_format() const {

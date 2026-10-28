@@ -10,7 +10,7 @@
 
 namespace pp {
 
-enum class ParamType { Int, Float, Bool, Enum };
+enum class ParamType { Int, Float, Bool, Enum, String };
 
 struct ParamDef {
     std::string key;
@@ -145,6 +145,19 @@ std::string snapshot_params(const ParamSet &s);
 // Empty result = OK. Messages are user-facing (frozen texts).
 std::vector<std::string> cross_validate(const ParamSet &values, const std::string &format_id,
                                         const std::string &tech_id);
+
+// —— M8 加性（B0，追认 M8-A2）：参数上下文 + 加性重载 ——
+// 旧签名的行为/文案零改动（B1 转发到本重载）；新校验需要 backend/位深/尺寸/无损上下文。
+struct ParamContext {
+    std::string format_id;
+    std::string backend_id;
+    std::string tech_id;
+    int bitdepth = 0;
+    bool lossless = false;
+    int width = 0;
+    int height = 0;
+};
+std::vector<std::string> cross_validate(const ParamContext &ctx, const ParamSet &values);
 
 // —— M7-WP2 加性追认（R-208 技术/无损判定收敛、R-207 跨字段规则绑键常量；裁定登记
 //    build/m7-wp2/handoff.md）：以下声明**追加在既有声明之后**，既有签名零改动。——

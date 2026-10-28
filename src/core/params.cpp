@@ -10,6 +10,8 @@
 //     参数注入内部副本，不污染调用方集合；
 //   * 预设 JSON 不序列化 "__" 前缀的保留键（顶层 "lossless" 字段已表达该语义）。
 #include "core/params.h"
+#include "codecs/param_catalog/catalog.h"
+#include "core/param_rules.h"
 
 #include <algorithm>
 #include <charconv>
@@ -116,6 +118,11 @@ std::string validate_one(const ParamDef &p, const ParamValue &v) {
             return "value " + checked_value(v) + " is not a valid choice";
         break;
     }
+    case ParamType::String: {
+        if (!std::holds_alternative<std::string>(v))
+            return "expected string, got " + type_name(v);
+        break;
+    }
     }
     return {};
 }
@@ -155,6 +162,12 @@ DeclaredKeys compute_declared_keys(std::string_view format_id) {
                     out.keys.insert(p.key);
     }
     out.determinable = true;
+    // M8：目录行（x265:/aom:/JXL 新键/只读）也是该 format 的声明面；静态 backend id 足够
+    // 覆盖 libheif 系（x265 / libaom / svt-av1）与 JXL（libjxl）。
+    for (const BackendDef &b : f->backends) {
+        for (const catalog::CatalogRow &r : catalog::catalog(format_id, b.id))
+            out.keys.insert(r.def.key);
+    }
     return out;
 }
 
@@ -174,7 +187,7 @@ const DeclaredKeys &declared_keys(std::string_view format_id) {
 bool is_plugin_passthrough_key(std::string_view format_id, const std::string &key) {
     if (format_id != "heif" && format_id != "avif")
         return false;
-    return key.rfind("x265:", 0) == 0 || key.rfind("svt:", 0) == 0 || key.rfind("aom:", 0) == 0;
+    return key.rfind("x265:", 0) == 0 || key.rfind("aom:", 0) == 0;
 }
 
 // tech_id 空 = 首选技术（find_backend/find_tech 的既有约定：空 → 第一个）。
@@ -538,10 +551,36 @@ std::string validate_params(const FormatDef &f, const std::string &backend_id,
         return "unknown backend '" + backend_id + "' for format '" + f.id + "'";
     const TechDef *t = select_tech(*b, tech_id, lossless);
     if (!t) {
-        // libheif 系（heif/avif）：技术/参数由 introspect_backends 运行时生成（T7），
-        // 静态表无法判定 → 跳过（不报错）。
-        if (b->runtime_introspected && b->techs.empty())
-            return {};
+        // libheif 系（heif/avif）：技术/参数由 introspect_backends 运行时生成（T7），静态表
+        // techs 为空 —— 旧实现直接放行，于是范围/枚举越界只在编码期由插件报错（x265 的
+        // param_parse 甚至不查范围）；批量场景会变成「N 个文件 × 同一条编码错误」。
+        // M8-B1：改用 **live tech**（B0 起目录行已并入 live tech 参数面）做与静态表完全相同的
+        // validate_one 校验（类型/范围/枚举）。内省不可用（无编码插件）时保持旧行为：无法判定
+        // ⇒ 放行（不误报）。
+        if (b->runtime_introspected && b->techs.empty()) {
+            const std::vector<BackendDef> live = introspect_backends(f.id);
+            if (live.empty())
+                return {};
+            // 空 backend_id = 静态首选后端（encoders.cpp resolve_entry 同口径：backends.front()）。
+            const std::string want = backend_id.empty() ? b->id : backend_id;
+            for (const BackendDef &lb : live) {
+                if (lb.id != want)
+                    continue;
+                const TechDef *lt = find_tech(lb, "");
+                if (!lt)
+                    return {}; // 内省技术缺失 → 无法判定，保持旧行为
+                for (const ParamDef &p : lt->params) {
+                    const auto it = s.find(p.key);
+                    if (it == s.end())
+                        continue; // 缺失=用插件默认（fill_defaults 不补 has_default=false 行）
+                    const std::string err = validate_one(p, it->second);
+                    if (!err.empty())
+                        return "param '" + p.key + "': " + err;
+                }
+                return {};
+            }
+            return {}; // live 表里没有该后端（插件缺失）→ 无法判定，保持旧行为
+        }
         return "unknown tech '" + tech_id + "' for backend '" + b->id + "'";
     }
     for (const ParamDef &p : t->params) {
@@ -621,6 +660,20 @@ std::vector<std::string> cross_validate(const ParamSet &values, const std::strin
                 out.push_back("未知参数：" + key);
         }
     }
+    return out;
+}
+
+// —— M8 加性（B0 声明 / B1 实现，追认 M8-A2）：带上下文的 cross_validate ——
+// 口径（docs/m8-encoder-params-and-ssimulacra2-design.md C5）：
+//   * 旧签名通道（values, format, tech）的行为/文案**逐字保留**（上方实现未动）；
+//   * 本重载 = 旧通道全部消息（冻结规则 + 未知参数）+ 新规则引擎 errors（param_rules
+//     preflight，X/A/S/J/G 规则），顺序稳定：先旧后新；
+//   * 旧通道不认识的 backend/位深/尺寸/无损上下文由 ctx 提供；不含 UI 呈现态
+//     （hidden/disabled/locked/warnings 只在 rules::evaluate 里，供 B2 实时态消费）。
+std::vector<std::string> cross_validate(const ParamContext &ctx, const ParamSet &values) {
+    std::vector<std::string> out = cross_validate(values, ctx.format_id, ctx.tech_id);
+    for (std::string &msg : rules::preflight(ctx, values))
+        out.push_back(std::move(msg));
     return out;
 }
 

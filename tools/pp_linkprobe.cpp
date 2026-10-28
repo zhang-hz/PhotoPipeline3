@@ -25,6 +25,10 @@
 #include <string>
 #include <vector>
 
+// M8-B1：参数目录 / SVT 参数面事实探针（目录行数、SVT 10 原生键、无 svt: 透传）。
+#include "codecs/param_catalog/catalog.h"
+#include "core/params.h"
+
 // jpegli: the task book assumes <jpegli.h>; google/jpegli installs its public encoder
 // API as jpegli/encode.h, built on libjpeg's jpeg_compress_struct.
 #if __has_include(<jpegli/encode.h>)
@@ -384,6 +388,108 @@ void check_libwebp() {
     report("libwebp", v > 0, "WebPGetEncoderVersion=" + std::to_string(v));
 }
 
+// --- M8 参数目录 / SVT 参数面（B1，docs/m8-encoder-params-and-ssimulacra2-design.md C1/F6）---
+// 目录行数 = Stage A 冻结数据（x265 40 / aom 57 / svt 3 / jxl 16；键展开 170 的唯一真源）。
+// SVT-AV1 **原生参数面 = 10 键**（用户裁定不打 overlay 补丁）：无 `svt:` 透传通道，
+// 目录里也不存在 settable 的 svt: 行。「无 svt: 透传」在可观测边界断言两件事：
+//   ① live 内省面（含目录行合并后）没有任何 `svt:` 前缀键；
+//   ② cross_validate 把 `svt:speed` 判为未知参数（不会被静默接受）。
+void check_m8_catalog_counts() {
+    struct Expected {
+        const char *format;
+        const char *backend;
+        std::size_t total;
+        std::size_t settable;
+        std::size_t readonly;
+    };
+    const Expected expected[] = {
+        {"heif", "x265", 40, 36, 4},
+        {"avif", "libaom", 57, 51, 6},
+        {"avif", "svt-av1", 3, 0, 3},
+        {"jxl", "libjxl", 16, 16, 0},
+    };
+    bool ok = true;
+    std::string detail;
+    for (const Expected &e : expected) {
+        const pp::catalog::CatalogCounts c = pp::catalog::counts(e.format, e.backend);
+        const bool row_ok =
+            c.total == e.total && c.settable == e.settable && c.readonly == e.readonly;
+        ok = ok && row_ok;
+        if (!detail.empty()) {
+            detail += " ";
+        }
+        detail += std::string(e.format) + "/" + e.backend + "=" + std::to_string(c.total) + "(" +
+                  std::to_string(c.settable) + "+" + std::to_string(c.readonly) + ")";
+        if (!row_ok) {
+            detail += "!=" + std::to_string(e.total);
+        }
+    }
+    report("m8-catalog-counts", ok, detail);
+}
+
+void check_m8_svt_surface() {
+    static const std::vector<std::string> kExpected = {
+        "speed",    "threads", "tile-rows", "tile-cols", "quality",
+        "lossless", "qp",      "min-q",     "max-q",     "tune"};
+    std::vector<std::string> native;
+    bool has_prefix = false;
+    for (const pp::BackendDef &b : pp::introspect_backends("avif")) {
+        if (b.id != "svt-av1") {
+            continue;
+        }
+        for (const pp::TechDef &t : b.techs) {
+            for (const pp::ParamDef &p : t.params) {
+                if (p.key.rfind("__", 0) == 0) {
+                    continue; // 目录只读行（__svt:profile/level/tier）
+                }
+                if (p.key.rfind("svt:", 0) == 0) {
+                    has_prefix = true;
+                    continue;
+                }
+                native.push_back(p.key);
+            }
+        }
+    }
+    std::string missing;
+    for (const std::string &want : kExpected) {
+        if (std::find(native.begin(), native.end(), want) == native.end()) {
+            if (!missing.empty()) {
+                missing += ",";
+            }
+            missing += want;
+        }
+    }
+    const bool ok = native.size() == kExpected.size() && missing.empty() && !has_prefix;
+    report("m8-svt-surface", ok,
+           "native=" + std::to_string(native.size()) +
+               " expected=" + std::to_string(kExpected.size()) +
+               (missing.empty() ? std::string() : " missing=" + missing) +
+               " names=" + join_names(native, 12) + " svt-prefix=" + (has_prefix ? "1" : "0"));
+}
+
+void check_m8_svt_passthrough_absent() {
+    // ① 目录面：avif/svt-av1 不存在任何 svt: 前缀行（无论 scope）。
+    bool catalog_clean = true;
+    for (const pp::catalog::CatalogRow &r : pp::catalog::catalog("avif", "svt-av1")) {
+        if (r.def.key.rfind("svt:", 0) == 0) {
+            catalog_clean = false;
+        }
+    }
+    // ② 校验面：`svt:speed` 必须被 cross_validate 判为未知参数（不是静默接受）。
+    pp::ParamSet values;
+    values["svt:speed"] = int64_t{8};
+    bool rejected = false;
+    for (const std::string &msg : pp::cross_validate(values, "avif", "svt-av1")) {
+        if (msg == "未知参数：svt:speed") {
+            rejected = true;
+        }
+    }
+    report("m8-svt-passthrough-absent", catalog_clean && rejected,
+           std::string("catalog_rows=") +
+               std::to_string(pp::catalog::catalog("avif", "svt-av1").size()) + " catalog_clean=" +
+               (catalog_clean ? "1" : "0") + " cross_validate_rejected=" + (rejected ? "1" : "0"));
+}
+
 } // namespace
 
 int main() {
@@ -400,6 +506,10 @@ int main() {
                       {"quality", "lossless", "preset"});
     check_heif_params("libheif-params-av1", heif_compression_AV1, "svt", {"threads", "quality"});
     check_libwebp();
+    // M8-B1：目录计数 / SVT 原生 10 键 / 无 svt: 透传（用户裁定「不打 overlay 补丁」）。
+    check_m8_catalog_counts();
+    check_m8_svt_surface();
+    check_m8_svt_passthrough_absent();
 
     std::printf("PLUGINS: %s\n", g_format_list.empty() ? "(none)" : g_format_list.c_str());
     std::printf("HEIF_ENCODERS: %s\n", join(g_heif_encoders).c_str());

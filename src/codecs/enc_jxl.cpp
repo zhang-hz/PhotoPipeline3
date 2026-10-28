@@ -59,6 +59,31 @@ const char *status_name(JxlEncoderStatus st) {
     return st == JXL_ENC_SUCCESS ? "SUCCESS" : (st == JXL_ENC_ERROR ? "ERROR" : "NEED_MORE_OUTPUT");
 }
 
+// M8-B1（J14）：intrinsic_size 文本 "宽x高" → JxlBasicInfo.intrinsic_xsize/ysize。
+// 预检（param_rules J14）已拦非法输入；编码器侧兜底解析失败必须显式失败，不静默丢弃。
+// 0/0 = 不写；单边 0 或无分隔符 = 非法；单边上限 2^30（libjxl encode.cc:1334-1341）。
+bool parse_intrinsic_size_text(const std::string &text, uint32_t &xs, uint32_t &ys) {
+    std::size_t sep = text.find('x');
+    if (sep == std::string::npos)
+        sep = text.find('X');
+    if (sep == std::string::npos || sep == 0 || sep + 1 >= text.size())
+        return false;
+    try {
+        const long long x = std::stoll(text.substr(0, sep));
+        const long long y = std::stoll(text.substr(sep + 1));
+        constexpr long long kMax = 1LL << 30;
+        if (x < 0 || y < 0 || x > kMax || y > kMax)
+            return false;
+        if ((x == 0) != (y == 0))
+            return false; // 必须成对（0/0 = 不写）
+        xs = static_cast<uint32_t>(x);
+        ys = static_cast<uint32_t>(y);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 // ------------------------------------------------------------- params table --
 enum class ParamKind { Int, Float, Bool };
 enum class Tech { Both, VarDct, Modular };
@@ -103,6 +128,17 @@ constexpr JxlParamMap kFrameSettings[] = {
      ParamKind::Float, Tech::Modular},
     {"modular_nb_prev_channels", JXL_ENC_FRAME_SETTING_MODULAR_NB_PREV_CHANNELS, ParamKind::Int,
      Tech::Modular},
+    // —— M8-B1：目录行接线（libjxl 0.12 encode.h；三态语义：键不在 ParamSet = 不下发）——
+    // 每行 = 目录键 → JxlEncoderFrameSettingId（docs/m8-param-control-map.md §6.2）。
+    {"noise", JXL_ENC_FRAME_SETTING_NOISE, ParamKind::Bool, Tech::Both},
+    {"group_order_center_x", JXL_ENC_FRAME_SETTING_GROUP_ORDER_CENTER_X, ParamKind::Int,
+     Tech::Both},
+    {"group_order_center_y", JXL_ENC_FRAME_SETTING_GROUP_ORDER_CENTER_Y, ParamKind::Int,
+     Tech::Both},
+    {"buffering", JXL_ENC_FRAME_SETTING_BUFFERING, ParamKind::Int, Tech::Both},
+    {"output_mode", JXL_ENC_FRAME_SETTING_OUTPUT_MODE, ParamKind::Int, Tech::Both},
+    {"disable_perceptual_heuristics", JXL_ENC_FRAME_SETTING_DISABLE_PERCEPTUAL_HEURISTICS,
+     ParamKind::Bool, Tech::Both},
 };
 
 // Keys handled outside the frame-settings loop (still recognised for E9).
@@ -110,8 +146,28 @@ constexpr JxlParamMap kFrameSettings[] = {
 // 的 lossless 取值消费（见 lossless 读取行），列在此处以免被误报为未知参数。
 // PP-FROZEN(0.3.0)：本行与下方 lossless 读取行按 T13 定稿冻结（内部管道键 __lossless 保留，
 // 显式键优先读取；0.2 的取值路径逐字不变）。
-constexpr std::string_view kSpecialKeys[] = {"distance", "codestream_level", "color_transform",
-                                             "lossless"};
+// M8-B1：新增目录键中不走 frame settings 的 API 全部列在这里（各自有专门的接线点）：
+//   * uses_original_profile → JxlBasicInfo 字段（SetBasicInfo 前）；
+//   * box_compress          → JxlEncoderAddBox 的 compress_box 参数；
+//   * expert_options        → JxlEncoderAllowExpertOptions（仅放开 effort=11）；
+//   * upsampling_mode       → JxlEncoderSetUpsamplingMode（factor=resampling，非 frame setting）；
+//   * intensity_target/min_nits/relative_to_max_display/linear_below → JxlBasicInfo HDR 字段；
+//   * intrinsic_size        → JxlBasicInfo.intrinsic_xsize/ysize（文本 "宽x高"）；
+//   * frame_name            → JxlEncoderSetFrameName（frame header 字段）。
+constexpr std::string_view kSpecialKeys[] = {"distance",
+                                             "codestream_level",
+                                             "color_transform",
+                                             "lossless",
+                                             "uses_original_profile",
+                                             "box_compress",
+                                             "expert_options",
+                                             "upsampling_mode",
+                                             "intensity_target",
+                                             "min_nits",
+                                             "relative_to_max_display",
+                                             "linear_below",
+                                             "intrinsic_size",
+                                             "frame_name"};
 
 bool known_key(std::string_view key) {
     for (const JxlParamMap &m : kFrameSettings) {
@@ -268,6 +324,11 @@ private:
         if (!enc) {
             return enc::encode_error("jxl: JxlEncoderCreate failed");
         }
+        // M8-B1：expert_options → JxlEncoderAllowExpertOptions（唯一产品作用 = 放开
+        // effort=11；必须在 JxlEncoderFrameSettingsSetOption(EFFORT, 11) 之前调用，
+        // encode.cc:1667-1686 的 allow_expert_options 分支）。缺键 = 不调用（三态）。
+        if (param_bool(params, "expert_options", false))
+            JxlEncoderAllowExpertOptions(enc.get());
         // W1-T6：progress 已接线（见下方逐行喂入的 progress 上报）；libjxl 0.12 无编码器
         // 进度回调接口，故实际信号 = 本 TU 的逐行喂入（详见该处注释与 T6 偏差账）。
         JxlEncoderStatus st = JxlEncoderSetParallelRunner(enc.get(), runner_fn, runner_opaque);
@@ -294,6 +355,20 @@ private:
             }
         }
 
+        // M8-B1（设计 §4.5 / F7）：codestream_level 是编码器级选项，**必须在
+        // JxlEncoderSetBasicInfo 之前**设置 —— JxlEncoderSetBasicInfo 内部会调
+        // VerifyLevelSettings（encode.cc:1412-1430），把「显式 level=5 + 需要 level 10 的
+        // 16 位 uses_original_profile 路径」在写头之前打成明确的
+        // "Codestream level verification for level 5 failed: ..." 错误；旧顺序（先 BasicInfo
+        // 后 SetLevel）把同一失败推迟到 JxlEncoderAddImageFrame/ProcessOutput，文案更差。
+        // 默认 -1（auto）= 0.3.x 既有行为，产物零变化。
+        const int64_t level = param_int(params, "codestream_level", 10);
+        st = JxlEncoderSetCodestreamLevel(enc.get(), static_cast<int>(level));
+        if (st != JXL_ENC_SUCCESS) {
+            return enc::encode_error("jxl: JxlEncoderSetCodestreamLevel(" + std::to_string(level) +
+                                     ") failed: " + status_name(st));
+        }
+
         JxlBasicInfo info;
         JxlEncoderInitBasicInfo(&info);
         info.xsize = static_cast<uint32_t>(r.width);
@@ -307,6 +382,35 @@ private:
         info.alpha_premultiplied = JXL_FALSE;
         // Lossless/modular keep the original profile; lossy VarDCT may use XYB.
         info.uses_original_profile = (lossless || modular || has_icc) ? JXL_TRUE : JXL_FALSE;
+        // M8-B1：uses_original_profile 三态 —— 键在 = 用户显式覆盖（J7/J8 预检保证一致性）；
+        // 键缺失 = 沿用既有推导（零回归）。
+        if (params.find("uses_original_profile") != params.end())
+            info.uses_original_profile =
+                param_bool(params, "uses_original_profile", true) ? JXL_TRUE : JXL_FALSE;
+        // M8-B1：HDR 色调映射组（J17）——BasicInfo 字段，0 = 库自动（与 InitBasicInfo 默认同值）。
+        if (params.find("intensity_target") != params.end())
+            info.intensity_target =
+                static_cast<float>(param_float(params, "intensity_target", 0.0));
+        if (params.find("min_nits") != params.end())
+            info.min_nits = static_cast<float>(param_float(params, "min_nits", 0.0));
+        if (params.find("relative_to_max_display") != params.end())
+            info.relative_to_max_display =
+                param_bool(params, "relative_to_max_display", false) ? JXL_TRUE : JXL_FALSE;
+        if (params.find("linear_below") != params.end())
+            info.linear_below = static_cast<float>(param_float(params, "linear_below", 0.0));
+        // M8-B1：intrinsic_size（容器级推荐显示尺寸；J14）。与画面尺寸相同/空 = 不写。
+        if (params.find("intrinsic_size") != params.end()) {
+            uint32_t ix = 0, iy = 0;
+            const std::string text = param_str(params, "intrinsic_size", "");
+            if (!parse_intrinsic_size_text(text, ix, iy))
+                return enc::encode_error(
+                    "jxl: intrinsic_size must be 'WxH' with both sides given (0x0 = unset): '" +
+                    text + "'");
+            if (ix > 0 && (ix != info.xsize || iy != info.ysize)) {
+                info.intrinsic_xsize = ix;
+                info.intrinsic_ysize = iy;
+            }
+        }
         st = JxlEncoderSetBasicInfo(enc.get(), &info);
         if (st != JXL_ENC_SUCCESS) {
             return enc::encode_error(std::string("jxl: JxlEncoderSetBasicInfo failed: ") +
@@ -346,12 +450,25 @@ private:
             }
         }
 
-        // codestream_level is an encoder-level option (must precede encoding).
-        const int64_t level = param_int(params, "codestream_level", 10);
-        st = JxlEncoderSetCodestreamLevel(enc.get(), static_cast<int>(level));
-        if (st != JXL_ENC_SUCCESS) {
-            return enc::encode_error("jxl: JxlEncoderSetCodestreamLevel(" + std::to_string(level) +
-                                     ") failed: " + status_name(st));
+        // M8-B1（J3）：upsampling_mode 不是 frame setting —— JxlEncoderSetUpsamplingMode(enc,
+        // factor, mode)，factor 取 resampling（仅 2/4/8 有效；=1/auto 时库 no-op、非法 factor
+        // 会返回 API error，故这里先拒绝）。mode=-1 = 库默认 fancy upsampling → 不调用。
+        if (params.find("upsampling_mode") != params.end()) {
+            const int64_t mode = param_int(params, "upsampling_mode", -1);
+            const int64_t factor = param_int(params, "resampling", -1);
+            if (mode >= 0) {
+                if (factor != 2 && factor != 4 && factor != 8) {
+                    return enc::encode_error(
+                        "jxl: upsampling_mode requires resampling=2/4/8 (J3); got resampling=" +
+                        std::to_string(factor));
+                }
+                st = JxlEncoderSetUpsamplingMode(enc.get(), factor, mode);
+                if (st != JXL_ENC_SUCCESS) {
+                    return enc::encode_error(
+                        "jxl: JxlEncoderSetUpsamplingMode(factor=" + std::to_string(factor) +
+                        ", mode=" + std::to_string(mode) + ") failed: " + status_name(st));
+                }
+            }
         }
 
         JxlEncoderFrameSettings *fs = JxlEncoderFrameSettingsCreate(enc.get(), nullptr);
@@ -470,6 +587,20 @@ private:
             }
         }
 
+        // M8-B1（J13）：frame_name → JxlEncoderSetFrameName（属于 frame header；空串 = 不写）。
+        // 必须在 JxlEncoderAddImageFrame 之前调用（frame settings 已创建）；预检 J13 已拦
+        // >1071 字节（库上限，encode.cc:2759-2769）。
+        if (params.find("frame_name") != params.end()) {
+            const std::string frame_name = param_str(params, "frame_name", "");
+            if (!frame_name.empty()) {
+                st = JxlEncoderSetFrameName(fs, frame_name.c_str());
+                if (st != JXL_ENC_SUCCESS) {
+                    return enc::encode_error(std::string("jxl: JxlEncoderSetFrameName rejected: ") +
+                                             status_name(st));
+                }
+            }
+        }
+
         // Interleaved pixel buffer in the requested output depth (E6 rounding).
         // W1-T6 接线（design §3.1 / §7.2）：jxl = **真实行级进度**。libjxl 0.12 的编码器
         // C API **没有进度回调**（jxl/encode.h 内无 SetProgressCallback 一类接口，只有
@@ -537,11 +668,15 @@ private:
         }
 
         // E7: Exif box payload = 4-byte TIFF offset prefix + TIFF blob (M0 order).
+        // M8-B1（J5）：box_compress → JxlEncoderAddBox 的 compress_box 参数（brob/Brotli 压缩）。
+        // 缺键 = false（产品既有行为，零回归）；box_compress=1 时 Exif/XMP box 均压缩。
+        const JXL_BOOL compress_boxes =
+            param_bool(params, "box_compress", false) ? JXL_TRUE : JXL_FALSE;
         if (have_exif) {
             std::string box(4, '\0');
             box += req.meta.exif_blob;
             st = JxlEncoderAddBox(enc.get(), "Exif", reinterpret_cast<const uint8_t *>(box.data()),
-                                  box.size(), JXL_FALSE);
+                                  box.size(), compress_boxes);
             if (st != JXL_ENC_SUCCESS) {
                 return enc::encode_error(std::string("jxl: JxlEncoderAddBox(Exif) failed: ") +
                                          status_name(st));
@@ -550,7 +685,7 @@ private:
         if (have_xmp) {
             st = JxlEncoderAddBox(enc.get(), "xml ",
                                   reinterpret_cast<const uint8_t *>(req.meta.xmp_rdf.data()),
-                                  req.meta.xmp_rdf.size(), JXL_FALSE);
+                                  req.meta.xmp_rdf.size(), compress_boxes);
             if (st != JXL_ENC_SUCCESS) {
                 return enc::encode_error(std::string("jxl: JxlEncoderAddBox(xml) failed: ") +
                                          status_name(st));

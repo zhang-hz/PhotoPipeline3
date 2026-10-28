@@ -102,6 +102,9 @@ struct RunConfig {
     bool color_dither8 = false;
     int gamut_mapping = 0;
     bool linear_resample = false;
+    // —— M8 加性（M8-A1）：逐输出 SSIMULACRA 2 评分开关。GUI 从 settings 置 true；
+    //    --dev 默认 false（`--score` 开启），保证回归日志/预算零 diff。
+    bool quality_score = false;
 };
 
 // 0.3.0 追加（主对话裁定：§3 表头通则「加性字段一律追加在结构体末尾」）：
@@ -131,6 +134,14 @@ enum class ErrorKind {
     Unknown
 };
 
+// —— M8 加性（M8-A1）：SSIMULACRA 2 逐输出评分状态（不影响产物成败）——
+enum class MetricState : unsigned char {
+    Off = 0,         // 评分关闭 / 仅元数据
+    Ok = 1,          // 分数有效
+    Unavailable = 2, // 回读/尺寸/取消等无法评分
+    Failed = 3,      // 指标内部错误
+};
+
 struct OutputResult {
     std::string format_id, backend_id, tech_id;
     std::filesystem::path out; // 冲突解析后的最终输出路径
@@ -145,6 +156,11 @@ struct OutputResult {
     // —— M7-WP8 / B.8 加性追加（**末尾**；R-172/R-166 判定，行为零变化）——
     OutputState state = OutputState::Pending; // 显式终态（set_output_state 唯一迁移点）
     ErrorKind error_kind = ErrorKind::None;   // 错误分类（error_kind_of 单源判据）
+    // —— M8 加性（M8-A1；C2 消费）：评分结果（不进 Timing/WarningKind/FileState）——
+    MetricState metric_state = MetricState::Off;
+    double metric_ssimulacra2 = -1.0; // state==Ok 时有效；(-inf,100]
+    double metric_ms = 0.0;
+    std::string metric_note; // Unavailable/Failed 的中文短原因
 };
 
 struct FileResult {

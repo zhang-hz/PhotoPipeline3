@@ -156,6 +156,7 @@ struct RunSpec {
     bool metadata_only = false;
     pp::PixelBudget *budget = nullptr;
     bool cancelled = false;
+    bool quality_score = false; // M8-C2：SSIMULACRA 2 评分开关（RunConfig::quality_score）
     std::vector<std::filesystem::path> reserved; // 批内已分配输出路径（§4.4）
     // M2-T4: per-stage hook; the metadata-write-failure case sabotages the container at Writing.
     std::function<void(pp::FileState)> on_stage;
@@ -190,6 +191,7 @@ pp::FileOutcome run_spec_outcome(const fs::path &src, const fs::path &base,
     cfg.rules = s.rules;
     cfg.metadata_only = s.metadata_only;
     cfg.output_template = s.output_template;
+    cfg.quality_score = s.quality_score; // M8-C2（C11）：默认 false = 零回归
 
     pp::PixelBudget local_budget(pp::PixelBudget::default_capacity_bytes());
     pp::RunScope scope;
@@ -231,6 +233,21 @@ bool write_oriented_tiff(const fs::path &p, int w, int h, int orientation) {
             px[i + 2] = static_cast<unsigned char>(((x + y) * 255) / (w + h - 2));
         }
     }
+    const bool ok = out->write_image(OIIO::TypeDesc::UINT8, px.data());
+    out->close();
+    return ok;
+}
+
+// M8-C2：4×4 PNG（<8×8 的评分边界用例；编码本身必须成功，评分必须 Unavailable）
+bool write_small_png(const fs::path &p, int w, int h) {
+    auto out = OIIO::ImageOutput::create(p.string());
+    if (!out)
+        return false;
+    OIIO::ImageSpec spec(w, h, 3, OIIO::TypeDesc::UINT8);
+    if (!out->open(p.string(), spec))
+        return false;
+    std::vector<unsigned char> px(static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * 3,
+                                  128);
     const bool ok = out->write_image(OIIO::TypeDesc::UINT8, px.data());
     out->close();
     return ok;
@@ -1463,6 +1480,111 @@ int main() {
                   (r.outputs.empty() ? std::string("<none>") : r.outputs[0].out.string()));
         check(fs::exists(expected, ec), "same-folder/exists", expected.string());
         check(fs::file_size(src, ec) == src_bytes, "same-folder/source-intact", "源文件被改动");
+    }
+
+    // ---- M8-C2：SSIMULACRA 2 评分接线（docs/m8-encoder-params-and-ssimulacra2-design.md
+    //      C9–C13 的加性契约面；算法本体的单测在 test_quality_metric）----
+    {
+        const fs::path out_root = tmp / "score";
+        // ① 默认（quality_score=false）：MetricState::Off + 分数哨兵 -1（零回归/未发生的量不显示）
+        RunSpec off;
+        off.format = "png";
+        const pp::FileResult roff = run_spec(base / "rgb8.png", corpus, out_root / "off", off);
+        check(roff.ok && roff.outputs.size() == 1, "score/off-ok", roff.error);
+        check(!roff.outputs.empty() && roff.outputs[0].metric_state == pp::MetricState::Off,
+              "score/off-state", "default must keep MetricState::Off");
+        check(!roff.outputs.empty() && roff.outputs[0].metric_ssimulacra2 == -1.0,
+              "score/off-score", "Off must keep the -1 sentinel");
+        check(!roff.outputs.empty() && roff.outputs[0].metric_ms == 0.0, "score/off-ms",
+              "Off must not record metric time");
+
+        // ② 真无损（8bit PNG）：参考=编码器量化输入，回读同一归一化网格 ⇒ 恰好 100.0
+        RunSpec lossless;
+        lossless.format = "png";
+        lossless.quality_score = true;
+        const pp::FileResult rl =
+            run_spec(base / "rgb8.png", corpus, out_root / "lossless", lossless);
+        check(rl.ok && !rl.outputs.empty(), "score/lossless-ok", rl.error);
+        check(!rl.outputs.empty() && rl.outputs[0].metric_state == pp::MetricState::Ok,
+              "score/lossless-state",
+              rl.outputs.empty()
+                  ? "no row"
+                  : "state=" + std::to_string(static_cast<int>(rl.outputs[0].metric_state)) +
+                        " note=" + rl.outputs[0].metric_note);
+        check(!rl.outputs.empty() && std::abs(rl.outputs[0].metric_ssimulacra2 - 100.0) < 1e-6,
+              "score/lossless-100",
+              rl.outputs.empty() ? "no row"
+                                 : "score=" + std::to_string(rl.outputs[0].metric_ssimulacra2));
+        check(!rl.outputs.empty() && rl.outputs[0].metric_ms > 0.0, "score/lossless-ms",
+              "Ok must record metric time");
+
+        // ③ 16bit PNG 无损：同一量化网格 ⇒ 100.0
+        RunSpec lossless16;
+        lossless16.format = "png";
+        lossless16.bitdepth = 16;
+        lossless16.quality_score = true;
+        const pp::FileResult rl16 =
+            run_spec(base / "rgb16.png", corpus, out_root / "lossless16", lossless16);
+        check(rl16.ok && !rl16.outputs.empty() &&
+                  rl16.outputs[0].metric_state == pp::MetricState::Ok,
+              "score/lossless16-state", rl16.error);
+        check(!rl16.outputs.empty() && std::abs(rl16.outputs[0].metric_ssimulacra2 - 100.0) < 1e-6,
+              "score/lossless16-100",
+              rl16.outputs.empty() ? "no row"
+                                   : "score=" + std::to_string(rl16.outputs[0].metric_ssimulacra2));
+
+        // ④ 灰度无损：灰度复制为 RGB 后两侧一致 ⇒ 100.0
+        RunSpec gray;
+        gray.format = "png";
+        gray.quality_score = true;
+        const pp::FileResult rg = run_spec(base / "gray8.png", corpus, out_root / "gray", gray);
+        check(rg.ok && !rg.outputs.empty() && rg.outputs[0].metric_state == pp::MetricState::Ok,
+              "score/gray-state", rg.error);
+        check(!rg.outputs.empty() && std::abs(rg.outputs[0].metric_ssimulacra2 - 100.0) < 1e-6,
+              "score/gray-100",
+              rg.outputs.empty() ? "no row"
+                                 : "score=" + std::to_string(rg.outputs[0].metric_ssimulacra2));
+
+        // ⑤ 有损（JPEG，非块对齐的渐变内容）：Ok 且分数严格小于 100
+        //  注：base/rgb8.png 是 8px checker（与 JPEG 8×8 DCT 块对齐），有损编码可逐位还原，
+        //  不能用作“有损必然 <100”的判据；这里现造一张渐变 TIFF 当源。
+        const fs::path lossy_dir = tmp / "score-lossy";
+        std::error_code lec;
+        fs::create_directories(lossy_dir, lec);
+        const fs::path gradient = lossy_dir / "gradient.tif";
+        check(write_oriented_tiff(gradient, 64, 64, 1), "score/lossy-setup",
+              "cannot synthesize the gradient fixture");
+        RunSpec lossy;
+        lossy.format = "jpeg";
+        lossy.quality_score = true;
+        const pp::FileResult rj = run_spec(gradient, lossy_dir, out_root / "lossy", lossy);
+        check(rj.ok && !rj.outputs.empty() && rj.outputs[0].metric_state == pp::MetricState::Ok,
+              "score/lossy-state", rj.error);
+        check(!rj.outputs.empty() && rj.outputs[0].metric_ssimulacra2 < 100.0 &&
+                  rj.outputs[0].metric_ssimulacra2 > 50.0,
+              "score/lossy-range",
+              rj.outputs.empty() ? "no row"
+                                 : "score=" + std::to_string(rj.outputs[0].metric_ssimulacra2));
+
+        // ⑥ <8×8：不得交给库（库会静默返回 100）⇒ Unavailable；产物本身仍必须 ok
+        const fs::path tiny_dir = tmp / "score-tiny";
+        std::error_code tec;
+        fs::create_directories(tiny_dir, tec);
+        const fs::path tiny = tiny_dir / "tiny.png";
+        check(write_small_png(tiny, 4, 4), "score/tiny-setup", "cannot synthesize the 4x4 fixture");
+        RunSpec tiny_spec;
+        tiny_spec.format = "png";
+        tiny_spec.quality_score = true;
+        const pp::FileResult rt = run_spec(tiny, tiny_dir, out_root / "tiny", tiny_spec);
+        check(rt.ok && !rt.outputs.empty(), "score/tiny-product-ok", rt.error);
+        check(!rt.outputs.empty() && rt.outputs[0].metric_state == pp::MetricState::Unavailable,
+              "score/tiny-unavailable",
+              rt.outputs.empty()
+                  ? "no row"
+                  : "state=" + std::to_string(static_cast<int>(rt.outputs[0].metric_state)));
+        check(!rt.outputs.empty() && rt.outputs[0].metric_note.find("8×8") != std::string::npos,
+              "score/tiny-note",
+              rt.outputs.empty() ? "no row" : "note=" + rt.outputs[0].metric_note);
     }
 
     if (g_failed == 0) {

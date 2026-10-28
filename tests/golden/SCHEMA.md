@@ -1,4 +1,5 @@
-# expected.json 断言 schema（M0 冻结 v1；M2-T8 追加值规范化与 pixel 省略口径；M4-T5 追加 outputs[] v2）
+# expected.json 断言 schema（M0 冻结 v1；M2-T8 追加值规范化与 pixel 省略口径；M4-T5 追加 outputs[] v2；
+# M8-C13 追加 sidecar `metric` 与 `assert.score` 区间断言）
 
 - case: string（用例名）
 - input: string（相对 tests/golden 的输入路径；多产物对的默认像素参照）
@@ -88,6 +89,48 @@ expected.json 的 `progress_trace` 段：
 调用：`pp_verify tests/golden/smoke/progress-trace.json <用例输出根目录>`（携带 `progress_trace`
 时第二参数**必须**是目录，否则 FAIL）。`--selftest` 覆盖三条探针（通过 / 单调性违例 / synthetic
 口径违例）。
+
+## sidecar `metric`（M8-C13 追加；仅 `--dev` 评分开启时写出）
+
+`photopipeline --dev --score` 在 `<产物>.pp.json` sidecar **顶层追加** `metric` 对象（字段单源 =
+`src/core/metric/metric.h` 的 `pp::metric`；契约 = docs/m8-encoder-params-and-ssimulacra2-design.md
+C9–C13）。评分关闭（`Off`）/仅元数据运行：**不写**该键，sidecar 与既有口径逐字不变。
+
+| 字段 | 类型 | 取值 / 语义 |
+|---|---|---|
+| `name` | string | `"ssimulacra2"`（`pp::metric::metric_name()` 单源） |
+| `version` | number | 算法版本整数，当前 `1`（= SSIMULACRA 2 算法 2.1） |
+| `state` | string | `"ok"`（分数有效）/ `"unavailable"`（回读失败、尺寸不符、取消等；不算产物失败）/ `"failed"`（指标内部错误；不算产物失败）—— `MetricState` 小写名；`Off` 不写 `metric` |
+| `score` | number | 仅 `state == "ok"` 时有效：∈ (−inf, 100]，逐样本相同 = 100.0；负分合法、不 clamp |
+| `ms` | number | 评分耗时毫秒（记录用，**不参与断言**） |
+| `reference` | string | `"encoder-input"`：参考 = 编码器实际收到的量化后样本（不是源文件；C9） |
+| `colorspace` | string | `"sRGB"`：参考/失真两侧统一归一到 sRGB 线性后评价（C9） |
+| `note` | string | `unavailable`/`failed` 的中文短原因；`ok` 时为空串 |
+
+分数语义 = **编码/量化保真度**（失真 = 解码回读的产物像素；参考 = 编码器输入），不是
+“与源文件相似度”。真无损（逐位一致）应得 100.0；HEIF/AVIF 的“码流无损”因 RGB↔YCbCr 舍入
+如实 <100。
+
+## `assert.score`（M8-C13 追加；**区间断言，绝不逐值**）
+
+`assert.score` 是对象，读取**该产物自己的** `<产物>.pp.json` sidecar 的 `metric` 对象
+（`outputs[i].assert.score` 逐产物独立；顶层 `assert.score` 用于单产物对，语义相同）：
+
+- 键存在即要求 sidecar 存在且含 `metric` 对象；sidecar 缺失 / JSON 无效 / 无 `metric` = FAIL。
+- 支持且仅支持以下键（**未知键 = FAIL**，不允许静默忽略）：
+  - `"state": string`：`metric.state` 必须**逐字相等**（如 `"ok"`；`"unavailable"` 可作状态反例锁定）。
+    当要求的状态是 `"ok"` 时，额外要求 `metric.score` 是 number（`ok` 的 sidecar 契约）。
+  - `"min": number`：要求 `metric.state == "ok"` 且 `metric.score >= min`。
+  - `"max": number`：要求 `metric.state == "ok"` 且 `metric.score <= max`。
+- `min` 与 `max` 同时给出 = **闭区间** `[min, max]`（端点含）；`state` 可与区间叠加（先判状态再判区间）。
+- 空对象 `{}` = 只要求 `metric` 对象存在（不判值）。
+- **区间断言，绝不逐值**：分数受编码器/线程/库版本影响，只锁语义区间（无损 min 99.0；有损
+  min 50 / max 100；金样 4 个既有 case 覆盖，见 `tests/golden/smoke/*.json`）。
+- 失败文案点名：sidecar 缺失 / JSON 无效 / `metric` 缺失 / `state` 不符 / `score` 非 number /
+  越界（含实测值）。
+- 调用/`--selftest`：`pp_verify` 的 `--selftest` 覆盖 `state` 正反例、`min`/`max`/闭区间
+  正反例、sidecar/metric 缺失、`score` 非 number、未知键；回归（`tools/regression.py`）不带
+  `--score` ⇒ 无 `metric` 键、既有断言零变化（C13）。
 
 ## 元数据值文本规范化（M2-T8 冻结，docs/m2-tasks.md §4 T8 ①）
 

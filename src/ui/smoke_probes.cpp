@@ -4690,6 +4690,101 @@ void MainWindow::Impl::smoke_probe_run_geometry() {
                QStringLiteral("before=%1 after=%2").arg(before).arg(after));
     }
 
+    // ---- (m) M8-C13：评分隐藏子行（C12；加性探针，只增）----
+    //  · 评分关闭（Off）/仅元数据 → 不显示子行（"未发生的量不显示"）；
+    //  · metric_state==Ok → 子行文本 `质量 SSIMULACRA 2 · <数>`（两位小数，" · "）+ 刻度 tooltip；
+    //  · Unavailable/Failed → `—（原因）`（原因 = metric_note）。
+    //  用独立 PageRun 实例取证，避免改动既有 (a)–(l) 的 fixture/断言。
+    {
+        int score_checked = 0;
+        QStringList score_bad;
+        const auto score_expect = [&score_checked, &score_bad](const char *name, bool ok,
+                                                               const QString &detail) {
+            ++score_checked;
+            if (!ok)
+                score_bad << QStringLiteral("%1(%2)").arg(QString::fromLatin1(name), detail);
+        };
+        PageRun score_page;
+        score_page.set_tokens(tokens);
+        score_page.resize(theme::Metrics::right_width, theme::Metrics::calibrated_h);
+        score_page.show();
+        PageRun::RunPlan splan;
+        splan.format_ids =
+            QStringList{QStringLiteral("jpeg"), QStringLiteral("webp"), QStringLiteral("png")};
+        splan.widths = QVector<int>{64, 64, 64};
+        splan.heights = QVector<int>{64, 64, 64};
+        splan.bytes = QVector<qint64>{4096, 4096, 4096};
+        score_page.set_plan(splan);
+        score_page.begin_run(1, QStringList{QStringLiteral("score-probe.png")});
+        pp::FileResult one;
+        one.info.width = 64;
+        one.info.height = 64;
+        one.out_bytes = 3000;
+        one.outputs.resize(3);
+        for (int j = 0; j < 3; ++j) {
+            one.outputs[static_cast<std::size_t>(j)].out_bytes = 1000;
+            one.outputs[static_cast<std::size_t>(j)].t.encode_ms = 12;
+            one.outputs[static_cast<std::size_t>(j)].ok = true;
+        }
+        one.outputs[0].format_id = "jpeg";
+        one.outputs[0].metric_state = pp::MetricState::Ok;
+        one.outputs[0].metric_ssimulacra2 = 92.31;
+        one.outputs[0].metric_ms = 4.2;
+        one.outputs[1].format_id = "webp"; // 默认 Off（评分关闭/仅元数据）→ 无子行
+        one.outputs[2].format_id = "png";
+        one.outputs[2].metric_state = pp::MetricState::Unavailable;
+        one.outputs[2].metric_note = QStringLiteral("回读失败").toStdString();
+        score_page.on_event(probe_progress({0, -1}, pp::Stage::Decode, 1.0f, false));
+        score_page.on_event(probe_terminal(0, pp::FileState::Done, one));
+        pump(200);
+
+        const auto score_row_of = [&score_page](const char *name) {
+            return score_page.findChild<QWidget *>(QString::fromLatin1(name));
+        };
+        const auto score_text_of = [&score_page](const char *name) {
+            return probe_full_text(&score_page, QString::fromLatin1(name));
+        };
+        const auto shown = [](const QWidget *w) { return w != nullptr && w->isVisible(); };
+        QWidget *ok_row = score_row_of("pp-run-score-0-0");
+        QWidget *off_row = score_row_of("pp-run-score-0-1");
+        QWidget *unavail_row = score_row_of("pp-run-score-0-2");
+        QLabel *ok_label = score_page.findChild<QLabel *>(QStringLiteral("pp-run-score-text-0-0"));
+        const QString ok_text = score_text_of("pp-run-score-text-0-0");
+        const QString unavail_text = score_text_of("pp-run-score-text-0-2");
+        const QString ok_tip = ok_label != nullptr ? ok_label->toolTip() : QString();
+        const bool off_hidden = !shown(off_row); // Off = 无子行（不可见即不显示）
+        const bool ok_shown = shown(ok_row) && ok_row->height() == formkit::kRowPitch &&
+                              ok_text == QStringLiteral("质量 SSIMULACRA 2 · 92.31") &&
+                              ok_tip.contains(QStringLiteral("SSIMULACRA 2"));
+        const bool unavail_shown = shown(unavail_row) &&
+                                   unavail_text.startsWith(QStringLiteral("—（")) &&
+                                   unavail_text.contains(QStringLiteral("回读失败"));
+        score_expect("off-no-row", off_hidden,
+                     QStringLiteral("visible=%1").arg(shown(off_row) ? 1 : 0));
+        score_expect("ok-row", ok_shown,
+                     QStringLiteral("visible=%1 h=%2 text=\"%3\" tip-has-name=%4")
+                         .arg(shown(ok_row) ? 1 : 0)
+                         .arg(ok_row != nullptr ? ok_row->height() : -1)
+                         .arg(ok_text)
+                         .arg(ok_tip.contains(QStringLiteral("SSIMULACRA 2")) ? 1 : 0));
+        score_expect("unavailable-row", unavail_shown,
+                     QStringLiteral("visible=%1 text=\"%2\"")
+                         .arg(shown(unavail_row) ? 1 : 0)
+                         .arg(unavail_text));
+        std::printf("UI-SMOKE run-score: checked=%d bad=%d off_hidden=%d ok_row=%d ok_text=\"%s\" "
+                    "unavail_text=\"%s\" %s\n",
+                    score_checked, int(score_bad.size()), off_hidden ? 1 : 0, ok_shown ? 1 : 0,
+                    qUtf8Printable(ok_text), qUtf8Printable(unavail_text),
+                    qUtf8Printable(score_bad.join(QLatin1Char(' '))));
+        std::fflush(stdout);
+        if (!score_bad.isEmpty()) {
+            smoke_fail(MainWindow::tr("运行页评分隐藏子行（C12/C13）不符：%1")
+                           .arg(score_bad.join(QLatin1Char(' '))));
+        }
+        score_page.hide();
+        pump(80);
+    }
+
     std::printf("UI-SMOKE run-geom: checked=%d bad=%d pane=%dx%d rows=%d %s\n", checked,
                 int(bad.size()), page.width(), page.height(),
                 int(page.findChildren<QWidget *>(

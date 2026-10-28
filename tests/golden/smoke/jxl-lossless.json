@@ -6,6 +6,10 @@
     "pixel": {
       "mode": "exact"
     },
+    "score": {
+      "state": "ok",
+      "min": 99.0
+    },
     "metadata": [
       {
         "key": "Exif.Image.Artist",

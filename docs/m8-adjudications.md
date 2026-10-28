@@ -29,6 +29,13 @@
 | M8-A22 | `page_output.h` 加性公开方法 `focus_first_rule_error()`（B2 实际交付）；`mainwindow_run.cpp` 仅加一行调用 | 运行前错误定位需要跨文件；纯加性、既有签名零改动 | B2（已交付） |
 | M8-A23 | J5（`box_compress` 未开 ⇒ 隐藏 `brotli_effort`）**接受**：既有 `brotli_effort` 本就 `visible=never_visible`（JXL-09），规则只在 box_compress=1 时显示，零回归 | B2 报告张力核查；不改变既有键默认可见性 | B1 规则保持 |
 | M8-A24 | 规则引擎**不**改 `pipeline.cpp::validate_run_config`；预检走 `PageOutput::ready_to_start()`（GUI 批量开始运行）+ `validate_params`（dev/编码器兜底）。`--dev` 批量/跨字段预检为已知缺口，登记 D 阶段复核 | 避免改冻结 pipeline 主链路；B2 已在 start 分支拒绝并聚焦；C6 的“运行前”在 GUI 面成立 | B2/Lead |
+| M8-A25 | 评分数据面契约（C0/C3 冻结）：sidecar 仅 `--dev && --score && state!=Off` 写顶层 `"metric"`；字段 name/version/state/score/ms/reference/colorspace/note；`state` 小写；`reference="encoder-input"`，`colorspace="sRGB"`；Off 不写键 | C11/C13；旧 sidecar 逐字不变 | C2/C3 |
+| M8-A26 | `assert.score` 只认 `state`/`min`/`max`；min/max 隐含 state=ok；区间断言不逐值；金样 4 既有 case 加断言、不新增 case | C13；证据面只增不减 | C3 |
+| M8-A27 | B2 后 C3 获授权对 `src/ui/smoke_probes.cpp` 做**纯加性**评分探针（新打印行/新断言段），C2 不改该文件；截图 12 张与冻结行不变 | M8-A19 先例；UI 硬断言在 C++ 探针 | C3 |
+| M8-A28 | 评分运行**额外像素预算** `160 B/px × w × h`（C1 实测内部物化 ≈142 B/px，取整）；仅 `quality_score=true` 运行时 acquire，`--dev` 默认不评分 ⇒ 预算行零 diff | C10 允许“评分开启额外 acquire 并登记”；实测 3MP 峰值 325.6MB < 预留 552MB | C2/C1 |
+| M8-A29 | `--dev --score`、运行页 `pp-run-score-*`、sidecar `metric` 对象为 C11/C13 加性冻结面；state 小写、Off 不写键、reference="encoder-input"、colorspace="sRGB" | C11/C13；旧 sidecar/日志逐字不变 | C2 |
+| M8-A30 | 数值 oracle 采用 **libjxl v0.12 官方源码 + vcpkg 预编译官方内部件**（PyPI 离线不可得）；6/6 对 |Δ|=0（8 位小数）；oracle 工程/数据入库 build/m8/c1/oracle | 用户裁定方案 A 的验证方式；不伪造 | C1 |
+| M8-A31 | 指标内部物化整帧（≈142 B/px），未达 C10 流式目标；以 A28 预算预留兜底，P2 流式优化留 D/后续 | C1 如实报告；24MP 峰值风险登记 R6 | C1/D |
 
 ## 登记回填
 

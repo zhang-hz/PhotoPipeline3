@@ -214,9 +214,20 @@ file(GLOB_RECURSE PP_CORE_SOURCES CONFIGURE_DEPENDS
      ${CMAKE_SOURCE_DIR}/src/mapwidget/dms.cpp  # M6-T10：坐标显示格式化（度分输出/逆解析/粗盒边界带；纯函数，UI 侧 REMOVE_ITEM 剔除，test_dms 随 pp_core 链接）
      ${CMAKE_SOURCE_DIR}/src/mapwidget/map_view.cpp  # B.5 ①（M7-R2.1-F2）：地图投影/基准纯核（UI 侧 REMOVE_ITEM 剔除，test_gcj02 随 pp_core 链接）
      ${CMAKE_SOURCE_DIR}/src/ui/preset_io.cpp)   # 唯一 Qt 适配层（JSON），UI/harness/测试三处复用
+# M8-C0：SSIMULACRA 2 官方源码 + 兼容层（third_party 不在 src glob 内，显式收编）
+# 只编译 compat/：vendored 官方 .cc 由 compat 包装 TU 按需 include（C1 负责适配 include 面），
+# 避免官方源码的 lib/jxl 内部头在 compat 就绪前直接进主构建。
+file(GLOB_RECURSE PP_SSIM2_SOURCES CONFIGURE_DEPENDS
+     ${CMAKE_SOURCE_DIR}/third_party/ssimulacra2/compat/*.cc)
+list(APPEND PP_CORE_SOURCES ${PP_SSIM2_SOURCES})
 add_library(pp_core STATIC ${PP_CORE_SOURCES})
 # M2-T11 §2.2：生成的 core/version.h（构建目录）随 src 一并 PUBLIC 传播
 target_include_directories(pp_core PUBLIC ${CMAKE_SOURCE_DIR}/src ${CMAKE_BINARY_DIR}/gen)
+# M8-C0：vendored SSIMULACRA 2 的本地 include 面（官方源码 + compat 层）
+target_include_directories(pp_core PRIVATE
+    ${CMAKE_SOURCE_DIR}/third_party/ssimulacra2
+    ${CMAKE_SOURCE_DIR}/third_party/ssimulacra2/src
+    ${CMAKE_SOURCE_DIR}/third_party/ssimulacra2/compat)
 # M4-T3：PUBLIC 挂 AVX2 基线 flags（§11.1）。pp_core 是全部自研 target 的公共下游，
 # 挂在这里等于"自研 targets 全覆盖"，且保证 pp_core 的 /GL 对象与消费者的 /LTCG 成对。
 target_link_libraries(pp_core PUBLIC pp_avx2_baseline OpenImageIO::OpenImageIO JPEG::JPEG

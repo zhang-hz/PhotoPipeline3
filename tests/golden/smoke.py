@@ -47,6 +47,14 @@ M7-WP3（R-018，deep-review-0.3.2）金样语料 sha256 锁:
   * 维护口径（语料有意重生成后）: `python tests/golden/smoke.py --relock` —— 先打印
     改了哪些行/新增/删除（归因），再落盘；归因须进提交正文。与 regression.py --update
     的归因护栏同口径。
+
+M8-C13（评分证据面）:
+  * smoke 通道固定给 `--dev` 追加 `--score`（仅本脚本；tools/regression.py 不评分 ⇒ 零 diff）；
+    `--dev` 默认不评分，所以不带此开关的既有一切行为不变。
+  * 金样 4 个既有 case 的 expected.json 加 `assert.score` 区间断言（jxl-lossless /
+    png16-lossless min 99；heif-lossy / avif-lossy [50,100]），由 pp_verify 读 sidecar
+    metric 对象校验（SCHEMA.md「assert.score」）；**不新增 case**（total=20 冻结）。
+  * 冻结行 `SMOKE total=20 pass=20 fail=0` 逐字不变；控制台输出格式零改动。
 """
 
 import os
@@ -344,8 +352,11 @@ def main():
         # 0.3.0 多格式：输入可多源（';' 分隔）、产物可多件（',' 分隔）
         input_paths = [GOLDEN + '/' + p.strip() for p in input_rel.split(';') if p.strip()]
         # 等价 bash 的不分词引用展开：`$args` 按空白切分。
+        # M8-C13（C13 证据面）：smoke 通道内部固定带 `--score`（--dev 评分开启）——金样里
+        # 带 assert.score 的既有 case 断言 sidecar metric；**回归通道不带**（默认零 diff）。
         command = ([binary, '--dev'] + input_paths +
-                   ['--out', outdir, '--base', GOLDEN, '--conflict', 'overwrite', '--workers', '1']
+                   ['--out', outdir, '--base', GOLDEN, '--conflict', 'overwrite', '--workers', '1',
+                    '--score']
                    + args.split())
         with open(log, 'wb') as log_fp:
             rc = subprocess.run(command, stdout=log_fp, stderr=subprocess.STDOUT).returncode

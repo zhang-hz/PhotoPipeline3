@@ -33,6 +33,7 @@
 #include "codecs/encoders.h" // probe_bitdepth_support（HEIF/AVIF 运行时位深交集）
 #include "core/fsops.h"
 #include "core/logger.h"
+#include "core/metric/metric.h" // M8-C2：sidecar metric 的 name/version/state 单源
 #include "core/params.h"
 #include "core/pipeline.h"
 #include "core/presets.h"
@@ -77,6 +78,8 @@ const char *kDevUsage =
     "  --param KEY=VALUE       override one parameter (repeatable; applies to every output)\n"
     "  --meta KEY=VALUE        set/overwrite one metadata tag (repeatable)\n"
     "  --workers N             worker count (0 = thread_budget or logical cores; dev default 1)\n"
+    "  --score                 compute SSIMULACRA 2 for every output (dev-only; default off;\n"
+    "                          adds the sidecar `metric` object and a `quality metric` log line)\n"
     "  --base DIR              mirror-path base directory (repeatable)\n"
     "  --log-level LVL         trace|debug|info|warn|error\n"
     "  -h, --help              this text\n"
@@ -84,9 +87,9 @@ const char *kDevUsage =
     "      --conflict default = overwrite (GUI default = rename; pass --conflict rename for\n"
     "      GUI semantics), and the single-output template derives to $dir/$file (GUI default\n"
     "      = $format/$dir/$file; pass --template '$format/$dir/$file' for GUI semantics).\n"
-    "sidecars (--dev only): <out>/<每个产物>.pp.json（逐输出断言面）、\n"
-    "                       <out>/progress-trace.jsonl（进度事件流，W1-T6；schema 见 "
-    "tests/golden/SCHEMA.md）\n"
+    "sidecars (--dev only): <out>/<每个产物>.pp.json（逐输出断言面；--score 时每份附\n"
+    "                       `metric` 嵌套对象）、<out>/progress-trace.jsonl（进度事件流，W1-T6；"
+    "schema 见 tests/golden/SCHEMA.md）\n"
     "exit code = number of failed files\n";
 
 // 多输出 spec：format[:backend[:tech]]（--outputs 的单项）
@@ -106,6 +109,7 @@ struct DevOptions {
     bool has_output_template = false;
     std::vector<OutputSpecText> outputs; // --outputs 追加项
     bool lossless = false, metadata_only = false;
+    bool score = false; // M8-C2：--dev --score（dev 默认关；GUI 默认开，settings.quality_score）
     int bitdepth = -1, workers = 1;
     bool has_format = false, has_backend = false, has_tech = false, has_lossless = false;
     bool has_bitdepth = false, has_color = false, has_conflict = false, has_preset = false;
@@ -348,6 +352,9 @@ bool parse_dev_options(int argc, char **argv, DevOptions &o, std::string &err) {
             if (!v)
                 return false;
             o.log_level = v;
+        } else if (a == "--score") {
+            // M8-C2（C13）：SSIMULACRA 2 评分开关（dev-only；默认关 = 回归日志/预算零 diff）。
+            o.score = true;
         } else if (!a.empty() && a.front() == '-' && a != "-") {
             err = "unknown option '" + std::string(a) + "'";
             return false;
@@ -517,8 +524,25 @@ std::string tail_truncate(const std::string &s, std::size_t n) {
     return "..." + s.substr(s.size() - (n - 3));
 }
 
+// M8-C2（C13）：MetricState → sidecar 词表（小写；单源 = pp::metric::state_name）。
+const char *metric_state_text(pp::MetricState s) {
+    switch (s) {
+    case pp::MetricState::Off:
+        return pp::metric::state_name(pp::metric::State::Off);
+    case pp::MetricState::Ok:
+        return pp::metric::state_name(pp::metric::State::Ok);
+    case pp::MetricState::Unavailable:
+        return pp::metric::state_name(pp::metric::State::Unavailable);
+    case pp::MetricState::Failed:
+        return pp::metric::state_name(pp::metric::State::Failed);
+    }
+    return "off";
+}
+
 // <out>.pp.json sidecar（0.3.0：逐输出一份）：携带 pp_verify 需要的 warnings 与调试用的
 // timing/info。单输出时字段值与 0.2 逐字等价（row.* 即文件级聚合值）。
+// M8-C2 / C13：评分开启时加**嵌套对象** "metric": {name,version,state,score,ms,reference,
+// colorspace,note}；MetricState::Off（默认/仅元数据）不写该键 ⇒ 旧 sidecar 逐字不变。
 QJsonObject sidecar_json(const pp::FileResult &r, const pp::OutputResult &row,
                          const std::string &params_snapshot) {
     QJsonArray warnings;
@@ -563,6 +587,20 @@ QJsonObject sidecar_json(const pp::FileResult &r, const pp::OutputResult &row,
     o["timing"] = timing;
     o["info"] = info;
     o["params"] = QString::fromStdString(params_snapshot);
+    // M8-C2 / C13：评分对象（仅评分开启且产生了状态时；Off 缺键 = 旧侧车逐字不变）。
+    if (row.metric_state != pp::MetricState::Off) {
+        QJsonObject metric;
+        metric["name"] = QString::fromLatin1(pp::metric::metric_name());
+        metric["version"] = pp::metric::metric_version();
+        metric["state"] = QString::fromLatin1(metric_state_text(row.metric_state));
+        if (row.metric_state == pp::MetricState::Ok)
+            metric["score"] = row.metric_ssimulacra2; // 仅 ok 写数值（区间断言面）
+        metric["ms"] = row.metric_ms;
+        metric["reference"] = QStringLiteral("encoder-input");
+        metric["colorspace"] = QStringLiteral("sRGB");
+        metric["note"] = QString::fromStdString(row.metric_note);
+        o["metric"] = metric;
+    }
     o["progress_reported"] = row.progress_reported; // W1-T6 §7.4 快照（真实行级 vs 合成）
     o["progress_max_row"] = row.progress_max_row;
     // 源文件级聚合（多输出时逐输出行共用；单输出时与上述逐输出字段相同）
@@ -969,6 +1007,8 @@ int run_dev(int argc, char **argv) {
     cfg.output_template = output_template;
     cfg.stagger_ms = 150;  // §3.2 默认；W1-T7 接设置项
     cfg.thread_budget = 0; // §3.2 默认；W1-T7 接设置项
+    // M8-C2（C11/C13）：--dev 默认不评分（回归日志/预算零 diff）；--score 显式开启。
+    cfg.quality_score = o.score;
 
     // R-236：conflict 打印**生效值**（预设覆盖后），不再透传 CLI 原文。
     const char *conflict_out = conflict_text(conflict);

@@ -11,7 +11,7 @@
 | K 启动 | 完成 | 并入 M8-A 提交 | `build/m8/k3-baseline/cmd.log` |
 | A 参数事实层 | 完成 | 待提交 | `build/m8/a4-{build2,ctest,smoke,regression,format}.log`、`build/m8/a4/reconcile.txt` |
 | B 引擎 + UI | 完成 | 待提交 | `build/m8/b-gate-*.log`、`build/m8/b1/`、`build/m8/b2/` |
-| C SSIMULACRA 2 | 未开始 | 待定 | — |
+| C SSIMULACRA 2 | 完成 | 待提交 | `build/m8/c-gate-*.log`、`build/m8/c1/`、`build/m8/c2/`、`build/m8/c3/` |
 | D 收口 | 未开始 | 待定 | — |
 
 ## 1. 交付内容（逐阶段追加）
@@ -82,6 +82,50 @@
 | UI | `python tests/ui_smoke.py build/release-dev` | **`UI-SMOKE OK shots=12 pages=3`**；`m8-params checked=49 bad=0`；layout-audit bad=0 |
 | 回归 | `python tools/regression.py` | 本机 DIFF，与 K3 **逐字同形**（thread_budget 16 vs 4 + buildtree 路径截断）；无 M8 键/新行进入日志（`b-gate-regression.log`） |
 | 格式 | `bash tools/ci-format.sh` | `violations=0`（200 files） |
+
+### C SSIMULACRA 2（完成）
+
+**C0（Lead）**：libjxl v0.12 `tools/ssimulacra2.{h,cc}` + `gauss_blur.{h,cc}` 逐字 vendor 到 `third_party/ssimulacra2/`（SHA-256/License/PATENTS 见其 README）；新增 `src/core/metric/metric.h`（RowFn/FrameSource/compute）；`pipeline.h` 加性 `MetricState` + `OutputResult` 评分字段 + `RunConfig::quality_score`；CMake 收编 compat；adjudication A25–A31。
+
+**C1（指标核心）**：
+- `third_party/ssimulacra2/compat/` 20 文件兼容层：Status/StatusOr、ImageF/Image3F、ImageBundle、ColorEncoding、ThreadPool/AlignedMemory、ToXYB（公式/常量逐字，`std::fma` 复现 AVX2 舍入）、官方 `matrix_ops.h`/`no_memory_manager` 逐字复制、官方 `gauss_blur.cc` Highway 实现保留；vendored 仅 5 行 include 适配（双哈希+逐行记录）。
+- `src/core/metric/metric.cpp`：compute 实现（<8×8/尺寸不等/异常/NaN → Unavailable；自比=100；负分放行；线程安全；ms）。
+- `tests/unit/test_quality_metric.cpp`：恒等/单调性/8-16bit/灰度/边界/异常/确定性/并发。
+- **数值 oracle**：libjxl v0.12 官方源码 + vcpkg 预编译官方内部件（PyPI 离线不可得）；**6/6 对 |Δ|=0**（8 位小数逐位相同；8-bit/16-bit/灰度/JPEG/JXL 覆盖）。
+- 性能：1/4/12MP = 134–136 / 152–158 / 161–163 ms/MP（设计区间 120–245）；峰值内存 ≈142 B/px（约 5.9× C10 的 2×frame 预算，已如实登记 A28/A31）。
+
+**C2（管线/结果面）**：
+- `pipeline.cpp`：参考=编码器收到的量化样本（`simd::quantize8/16` + dither8 口径）/失真=OIIO 回读/两侧同一 ColorManager→sRGB；评分点=encode 后 metawrite 前；失败只落 MetricState（不失败产物、无 Warning）；评分运行额外预算 160 B/px。
+- `dev_cli.cpp`：`--score`（dev-only）+ sidecar 嵌套 `metric{...}` + 每输出 `log_info("quality metric")`。
+- `page_run.cpp`：隐藏子行 `pp-run-score-<i>-<j>`/`-text-`，Ok 分数+色阶+tooltip，Unavailable/Failed `—（原因）`，Off 不显示；`mainwindow_run.cpp` GUI 默认开。
+- 8 格式实测：png/tiff/webp-lossless/bmp/jxl-lossless=100；heif/avif 码流无损=98.34（如实<100）；有损分下降/负分合法；P3/keep 非 sRGB 真无损=100；4×4→Unavailable 且产物 ok。
+- 默认不评分：与 A/B 树跨树 normalized 回归 diff **0 行**；预算行逐字不变。
+
+**C3（证据面）**：
+- `SCHEMA.md` 加性 sidecar metric + `assert.score`（state/min/max，区间不逐值）；`pp_verify` check_score + 17 条 selftest；4 既有金样加 score 断言（不新增 case）；smoke.py 内部 `--score`；`smoke_probes.cpp` 纯加性 run-score 探针；`ui_smoke.py` 新断言。
+- `pp_verify --selftest` → `VERIFY selftest OK (56 probes, 0 unexpected)`；smoke 真分 jxl/png16=100、heif=98.92、avif=94.85；ui `run-score checked=3 bad=0`。
+
+**C 阶段门禁（`build/m8/c-gate-*`）**
+
+| 门禁 | 命令 | 结果 |
+|---|---|---|
+| 构建 | `cmake --build build/release-dev` | exit 0 |
+| 单测 | `ctest --test-dir build/release-dev` | **39/39 passed**（70.32 s，含 `test_quality_metric`） |
+| 金样 | `python tests/golden/smoke.py build/release-dev`（内部 --score） | **`SMOKE total=20 pass=20 fail=0`** |
+| UI | `python tests/ui_smoke.py build/release-dev` | **`UI-SMOKE OK shots=12 pages=3`**；`run-score checked=3 bad=0`；layout-audit 1109/0 |
+| pp_verify | `pp_verify.exe --selftest` | `VERIFY selftest OK (56 probes, 0 unexpected)` |
+| 回归 | `python tools/regression.py` | 本机 DIFF，与 K3 **逐字同形**（thread_budget 16 vs 4 + buildtree 路径）；无评分/新参数行进入日志（默认不评分） |
+| 格式 | `bash tools/ci-format.sh` | `violations=0`（203 files） |
+| 静态 | `python tools/ci-tidy.py build/release-dev` | 棘轮通过（total=262=baseline，0 violation） |
+
+**C 阶段偏差/风险（如实）**
+
+1. **内存**：C1 compute 内部物化整帧 ≈142 B/px，超 C10 的 2×frame（24 B/px）约 5.9×；C2 以 A28 额外预算 160 B/px 兜底（3MP 峰值 325.6MB < 预留 552MB）；12MP 评分峰值 ≈1.8GB/输出，并行 workers 叠加为已知风险（P2 流式优化留后续）。
+2. 24MP 评分墙钟预估 ≈28–33 s/图（8 输出，C1 实测 161–163 ms/MP + C2 采样 210 ms/MP）；批处理墙钟代价登记 R1/R6，GUI 可关。
+3. `dither8` 灰度 1ch 组合的抖动序列与参考 3ch 交织口径可能逐位不同 ⇒ 该组合为近似（默认 dither 关，未实测）。
+4. oracle 采用官方内部件而非 PyPI（离线不可得）；只验证评分算法，解码/管线由 C2 证据覆盖。
+5. `ui_smoke` 首跑偶发既有 `zero-byte-redo` 探针失败（同构建复跑通过、并发对照未复现；根因未证，判据未改）；固定 `.cache/tmp/ui-smoke-out` 共享目录为门禁卫生理论风险。
+6. C12 颜色分档未做像素断言（探针只锁文本/显隐/tooltip）；`assert.score` outputs[] 逐产物路径未入金样（selftest 覆盖单产物）。
 
 ## 2. 验收结论（命令 + 结果逐条取证）
 

@@ -22,11 +22,11 @@
 namespace pp::rules {
 
 struct RuleState {
-    std::set<std::string> hidden;                 // 行隐藏（键不出现）
-    std::set<std::string> disabled;               // 行置灰（可见但不可改）
-    std::map<std::string, ParamValue> locked;     // 强制值（UI 只读显示）
-    std::vector<std::string> warnings;            // 中文提醒（不阻断）
-    std::vector<std::string> errors;              // 中文错误（阻断运行）
+    std::set<std::string> hidden;             // 行隐藏（键不出现）
+    std::set<std::string> disabled;           // 行置灰（可见但不可改）
+    std::map<std::string, ParamValue> locked; // 强制值（UI 只读显示）
+    std::vector<std::string> warnings;        // 中文提醒（不阻断）
+    std::vector<std::string> errors;          // 中文错误（阻断运行）
 };
 
 // 求值：模式锚点（后端/技术/无损/RC/位深/色度）→ 档位锚点 → 依赖行。

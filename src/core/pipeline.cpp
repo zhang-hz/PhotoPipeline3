@@ -84,6 +84,7 @@
 #include "core/fsops.h"
 #include "core/logger.h"
 #include "core/metadata.h"
+#include "core/metric/metric.h" // M8-C2：SSIMULACRA 2 评分（C0 冻结接口）
 #include "core/params.h"
 #include "core/pixelbudget.h"
 #include "core/progress.h"
@@ -115,6 +116,13 @@ inline int encode_threads_of(const RunScope *scope) {
 
 // W1-T6（§7.3）：合成进度的采样周期（编码器无回调 → 只能时间驱动）。
 constexpr int kSynthPumpMs = 20;
+
+// M8-C2（C10）：评分指标模块的内存口径。C1 实现（src/core/metric/metric.cpp）在 compute()
+// 内部物化参考/失真整帧 + 官方算法 scale0 的多幅全分辨率临时图 —— C1 实测增量约 142 B/px
+// （build/m8/c1/perf-raw.log：1/4/12MP 峰值 RSS 186.5/633.9/1820 MB，扣 36MB 基线）；
+// 本处按 160 B/px 向上取整追加到像素预算。**仅评分开启的运行**才追加（--dev 默认不评分 ⇒
+// 回归 need_bytes/peak_bytes 逐字不变；预算口径变化登记见 docs/m8-adjudications.md / m8-report）。
+constexpr std::uint64_t kMetricBytesPerPixel = 160;
 
 using Clock = std::chrono::steady_clock;
 
@@ -579,6 +587,12 @@ struct RunFileContext {
     WorkImage work;
     BudgetGuard budget; // ④ 的命名 RAII（acquire_budget 置位，ctx 析构释放）
 
+    // ---- M8-C2：评分的色彩归一事实（stage_color 落位，单源）----
+    //   metric_srgb=true → 工作缓冲像素 = sRGB 编码值（评分只需精确 sRGB EOTF）；
+    //   false → 像素在 metric_icc 描述的空间（参考/失真走同一条 ColorManager 变换）。
+    bool metric_srgb = true;
+    std::string metric_icc;
+
     // ---- 收尾（旧 finalize/fail 两个内联 lambda 的单源化，R-168）----
     FileOutcome finalize(FileOutcome::Verdict v) {
         finalize_aggregate(outcome, t_start, v);
@@ -779,11 +793,17 @@ bool stage_plan(RunFileContext &ctx) {
     return true;
 }
 
-// ---- ④ acquire_budget（2× float32 frame；BudgetGuard 命名 RAII）----
+// ---- ④ acquire_budget（2× float32 frame；评分开启再加指标模块预留；BudgetGuard 命名 RAII）----
 bool stage_budget(RunFileContext &ctx) {
-    // 工作缓冲与 decode 缓冲同尺寸（通道数取自 probe），故 2×frame 仍是本文件的峰值上界。
-    const uint64_t need_bytes =
+    // 工作缓冲与 decode 缓冲同尺寸（通道数取自 probe），故 2×frame 是不评分运行的峰值上界。
+    uint64_t need_bytes =
         2 * PixelBudget::frame_bytes(ctx.info.width, ctx.info.height, ctx.info.channels);
+    // M8-C2（C10）：评分开启时追加指标模块的内存预留（kMetricBytesPerPixel 口径；仅评分
+    // 开启的运行出现，回归不评分 ⇒ need_bytes/peak_bytes 零 diff）。
+    if (ctx.cfg.quality_score) {
+        need_bytes += kMetricBytesPerPixel * static_cast<uint64_t>(ctx.info.width) *
+                      static_cast<uint64_t>(ctx.info.height);
+    }
     ctx.budget.bytes = need_bytes;
     ctx.budget.b = ctx.ev.scope != nullptr ? ctx.ev.scope->budget : nullptr;
     if (ctx.ev.scope != nullptr && ctx.ev.scope->budget != nullptr) {
@@ -1012,6 +1032,18 @@ bool stage_color(RunFileContext &ctx) {
          {"dst", ctx.res.color_dst},
          {"embed_icc",
           ctx.icc_to_embed.empty() ? "none" : std::to_string(ctx.icc_to_embed.size()) + "B"}});
+    // M8-C2（C9）：评分色彩归一的单源事实 —— 与上面像素的真实所在空间严格同源：
+    //   * keep：像素未动 → sRGB 编码值仅当“无 ICC 的假定 sRGB”（含 assumed gray sRGB）；
+    //     有源 ICC 时按该 ICC 描述（参考与失真用同一份）；
+    //   * 非 keep：变换后像素在 eff_target 空间 → sRGB 目标只需精确 EOTF；P3/AdobeRGB 用
+    //     实际嵌入的 ICC（icc_to_embed）。
+    if (eff_target == ColorTarget::KeepOriginal) {
+        ctx.metric_srgb = ctx.src_icc.empty();
+        ctx.metric_icc = ctx.src_icc;
+    } else {
+        ctx.metric_srgb = (eff_target == ColorTarget::SRGB);
+        ctx.metric_icc = ctx.metric_srgb ? std::string() : ctx.icc_to_embed;
+    }
     return true;
 }
 
@@ -1028,6 +1060,345 @@ bool stage_meta(RunFileContext &ctx) {
     ctx.meta.xmp_rdf = ctx.payloads.xmp_rdf;
     ctx.meta.icc_profile = ctx.icc_to_embed;
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// ⑧a M8-C2：SSIMULACRA 2 评分（docs/m8-encoder-params-and-ssimulacra2-design.md C9–C13）
+// ---------------------------------------------------------------------------
+// 口径（C9）：
+//   * 参考 = **编码器实际收到的量化后样本**：工作缓冲（目标色彩空间的编码值）逐行按目标
+//     位深走与编码器相同的量化核（8bit = simd::quantize8，可选 quantize8_dithered；>8bit =
+//     simd::quantize16(maxv=(1<<bps)-1)），再反归一化回 [0,1] float（scale 常量与 OIIO 解码
+//     回读逐字一致：8bit × 1.0f/255、16bit × 1.0f/65535；10/12bit 按 OIIO heif 读取器的
+//     bit_range_convert<bd,16> 扩张口径 —— 参考与回读在同一条归一化上）。
+//   * 失真 = probe_file(row.out) + decode_float()（OIIO）回读的产物像素。
+//   * 两侧经同一条色彩归一（sRGB 目标 = 精确 sRGB EOTF，无 lcms 开销；P3/AdobeRGB/keep+源
+//     ICC = 同一份 ICC + ColorManager::transform(target=SRGB)）→ 送 pp::metric::compute()
+//     （输入 = sRGB 线性 RGB）。逐样本相同时分数恒为 100.0。
+//   * 回读失败/尺寸不符/<8×8/取消 ⇒ Unavailable（**不**失败产物、**不**产生 Warning）。
+// 位置/线程（C10）：worker 线程内、单输出 encode 成功后、metawrite 前；参考逐行即时生成
+// （不物化整帧），失真回读 1 帧落在既有 2×frame 预留内；取消检查在前后各一次。
+// ---------------------------------------------------------------------------
+
+// sRGB EOTF（IEC 61966-2-1 解扩展）：编码值 → 线性光。超界样本按 [0,1] clamp
+// （量化样本恒在 [0,1]；有损解码的 float 误差不改变语义）。
+inline float srgb_eotf(float v) {
+    const float c = std::clamp(v, 0.0f, 1.0f);
+    return (c <= 0.04045f) ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
+}
+
+// 一行交错 RGB（目标色彩空间的**编码值**）→ sRGB 线性（原地）。参考/失真走同一函数。
+bool rgb_row_to_srgb_linear(float *rgb, int width, bool srgb, const std::string &icc,
+                            std::string &err) {
+    if (!srgb) {
+        // 与 color stage 同一条 ColorManager 变换（同一份 ICC → sRGB）；1 行包装不物化整帧。
+        OIIO::ImageSpec spec(width, 1, 3, OIIO::TypeDesc::FLOAT);
+        OIIO::ImageBuf buf(spec, OIIO::image_span<float>(rgb, 3, static_cast<uint32_t>(width), 1));
+        std::vector<Warning> ignored; // 评分不得把色彩降级告警塞进产物行
+        std::string xerr;
+        const ColorOutcome co = ColorManager::instance().transform(
+            buf, icc, /*src_is_gray=*/false, ColorTarget::SRGB, ColorOptions{}, &ignored, &xerr);
+        if (!co.error.empty()) {
+            err = "colour normalization failed: " + co.error;
+            return false;
+        }
+        if (buf.localpixels() != rgb && !buf.get_pixels(buf.roi(), OIIO::TypeDesc::FLOAT, rgb)) {
+            err = "colour normalization readback failed";
+            return false;
+        }
+    }
+    const std::size_t n = static_cast<std::size_t>(width) * 3;
+    for (std::size_t i = 0; i < n; ++i)
+        rgb[i] = srgb_eotf(rgb[i]);
+    return true;
+}
+
+// float 编码值 → 目标位深整数网格 → 反归一化（in-place；与编码器/解码器同一口径）。
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)：参数语义由调用点注释/命名固定
+void quantize_dequantize(float *rgb, int n, int bps, int maxv, bool dither8, std::uint32_t y,
+                         std::vector<std::uint8_t> &u8, std::vector<std::uint16_t> &u16) {
+    const std::size_t count = static_cast<std::size_t>(n);
+    if (bps == 8) {
+        u8.resize(count);
+        if (dither8) {
+            // 编码器口径：交织行 (x0=0, y, nch=3)；TPDF 哈希只依赖 (x,y,c) ⇒ 确定性。
+            pp::simd::quantize8_dithered(rgb, u8.data(), count, 0, y, 3);
+        } else {
+            pp::simd::quantize8(rgb, u8.data(), count);
+        }
+        constexpr float kScale8 = 1.0f / 255.0f;
+        for (std::size_t i = 0; i < count; ++i)
+            rgb[i] = static_cast<float>(u8[i]) * kScale8;
+        return;
+    }
+    u16.resize(count);
+    pp::simd::quantize16(rgb, u16.data(), count, maxv);
+    if (bps == 10 || bps == 12) {
+        // OIIO heif 读取器把 10/12bit 样本 bit_range_convert<bd,16> 扩张到 u16 再 /65535
+        // （heifinput.cpp read_native_scanline）—— 参考侧用同一扩张口径，避免系统性偏移。
+        const int shift = 16 - bps;
+        const int back = 2 * bps - 16;
+        constexpr float kScale16 = 1.0f / 65535.0f;
+        for (std::size_t i = 0; i < count; ++i) {
+            const std::uint32_t v = u16[i];
+            rgb[i] = static_cast<float>((v << shift) | (v >> back)) * kScale16;
+        }
+        return;
+    }
+    constexpr float kScale16 = 1.0f / 65535.0f;
+    for (std::size_t i = 0; i < count; ++i)
+        rgb[i] = static_cast<float>(u16[i]) * kScale16;
+}
+
+// 参考行源：工作缓冲逐行 → 3 通道（灰度复制）→ 量化/反归一化（目标空间编码值）。
+struct MetricReferenceRows {
+    const WorkImage *work = nullptr;
+    int width = 0, bps = 8, maxv = 255;
+    bool dither8 = false;
+    std::vector<std::uint8_t> u8;
+    std::vector<std::uint16_t> u16;
+
+    void fill_encoded(int y, float *rgb) {
+        const int nch = work->spec.nchannels;
+        const float *src = work->px.data() + static_cast<std::size_t>(y) *
+                                                 static_cast<std::size_t>(width) *
+                                                 static_cast<std::size_t>(nch);
+        pp::simd::interleave(src, nch, rgb, 3, static_cast<std::size_t>(width));
+        quantize_dequantize(rgb, width * 3, bps, maxv, dither8, static_cast<std::uint32_t>(y), u8,
+                            u16);
+    }
+};
+
+// 失真行源：回读帧逐行 → 3 通道（灰度复制；OIIO 已按 8/16bit 反归一化为 float）。
+struct MetricDistortedRows {
+    const OIIO::ImageBuf *buf = nullptr;
+    int width = 0, nch = 1;
+    std::string error;
+    std::vector<float> scratch;
+
+    bool fill_encoded(int y, float *rgb) {
+        scratch.resize(static_cast<std::size_t>(width) * static_cast<std::size_t>(nch));
+        const OIIO::ROI roi(0, width, y, y + 1, 0, 1, 0, nch);
+        if (!buf->get_pixels(roi, OIIO::TypeDesc::FLOAT, scratch.data())) {
+            error = "product pixel readback failed";
+            return false;
+        }
+        pp::simd::interleave(scratch.data(), nch, rgb, 3, static_cast<std::size_t>(width));
+        return true;
+    }
+};
+
+// 行源 → sRGB 线性行（metric::compute 的 RowFn 面）。sRGB 路径逐行即时 EOTF；
+// 非 sRGB 路径按 64 行带缓存（同一带只做一次 lcms 变换，避免逐行重复开销；纯函数可重放）。
+struct MetricLinearRows {
+    static constexpr int kBandRows = 64;
+    int width = 0, height = 0;
+    bool srgb = true;
+    std::string icc;
+    std::function<bool(int y, float *rgb)> encoded;
+    std::vector<float> band;
+    int band_y0 = -1, band_h = 0;
+    std::string error;
+
+    void row(int y, float *out) {
+        const std::size_t n = static_cast<std::size_t>(width) * 3;
+        if (!error.empty() || y < 0 || y >= height) { // 防御：契约要求 y ∈ [0,height)
+            std::fill_n(out, n, 0.0f);
+            return;
+        }
+        if (srgb) {
+            if (!encoded(y, out)) {
+                error = "row source failed";
+                std::fill_n(out, n, 0.0f);
+                return;
+            }
+            for (std::size_t i = 0; i < n; ++i)
+                out[i] = srgb_eotf(out[i]);
+            return;
+        }
+        if (band_y0 < 0 || y < band_y0 || y >= band_y0 + band_h) {
+            band_y0 = (y / kBandRows) * kBandRows;
+            band_h = std::min(kBandRows, height - band_y0);
+            band.resize(n * static_cast<std::size_t>(band_h));
+            for (int r = 0; r < band_h; ++r) {
+                float *br = band.data() + n * static_cast<std::size_t>(r);
+                if (!encoded(band_y0 + r, br) ||
+                    !rgb_row_to_srgb_linear(br, width, /*srgb=*/false, icc, error)) {
+                    if (error.empty())
+                        error = "row source failed";
+                    std::fill_n(out, n, 0.0f);
+                    return;
+                }
+            }
+        }
+        std::copy_n(band.data() + n * static_cast<std::size_t>(y - band_y0), n, out);
+    }
+};
+
+// 单输出评分：失败只落 MetricState（不失败产物、不产生 Warning）。前提 = 该行已编码成功。
+void score_output_row(RunFileContext &ctx, const PlannedTarget &pt, OutputResult &row) {
+    if (!ctx.cfg.quality_score || pt.skip)
+        return; // MetricState::Off = 默认（--dev 不带 --score；仅元数据模式无本入口）
+    const Clock::time_point t0 = Clock::now();
+    const auto unavailable = [&row, t0](std::string note) {
+        row.metric_state = MetricState::Unavailable;
+        row.metric_ssimulacra2 = -1.0;
+        row.metric_note = std::move(note);
+        row.metric_ms = ms_since(t0);
+    };
+    const auto failed = [&row, t0](std::string note) {
+        row.metric_state = MetricState::Failed;
+        row.metric_ssimulacra2 = -1.0;
+        row.metric_note = std::move(note);
+        row.metric_ms = ms_since(t0);
+    };
+    const auto finish = [&]() {
+        const char *state = row.metric_state == MetricState::Ok            ? "ok"
+                            : row.metric_state == MetricState::Unavailable ? "unavailable"
+                            : row.metric_state == MetricState::Failed      ? "failed"
+                                                                           : "off";
+        const std::string score = row.metric_state == MetricState::Ok
+                                      ? fmt_double(row.metric_ssimulacra2)
+                                      : std::string();
+        log_info(kStage, kFile, "quality metric",
+                 {{"src", ctx.fe.src.string()},
+                  {"out", row.out.string()},
+                  {"format", row.format_id},
+                  {"state", state},
+                  {"score", score},
+                  {"ms", fmt_double(row.metric_ms)},
+                  {"note", row.metric_note}});
+    };
+
+    const int width = ctx.work.spec.width;
+    const int height = ctx.work.spec.height;
+    if (is_cancelled(ctx.cancelled)) {
+        unavailable("已取消");
+        finish();
+        return;
+    }
+    if (width < 8 || height < 8) {
+        unavailable("图像尺寸小于 8×8");
+        finish();
+        return;
+    }
+    // ---- 失真回读（C10：probe_file + decode_float；失败/尺寸不符 → Unavailable）----
+    const ProbeOutcome po = probe_file(row.out);
+    if (!po.error.empty() || !po.first_spec) {
+        unavailable("产物回读失败");
+        finish();
+        return;
+    }
+    if (po.info.width != width || po.info.height != height || po.info.channels < 1 ||
+        po.info.channels > 4) {
+        unavailable("产物尺寸或通道不符");
+        finish();
+        return;
+    }
+    DecodeOutcome dec = decode_float(row.out, po.info);
+    if (!dec.error.empty()) {
+        unavailable("产物解码失败");
+        finish();
+        return;
+    }
+    const OIIO::ImageSpec &dspec = dec.buf.spec();
+    if (dspec.width != width || dspec.height != height || dspec.nchannels < 1 ||
+        dspec.nchannels > 4) {
+        unavailable("产物尺寸或通道不符");
+        finish();
+        return;
+    }
+    // ---- 参考量化口径（C9；bmp 的 bpp 口径由 bitdepth_bps 单源换算）----
+    const int bps = bitdepth_bps(row.format_id, pt.target.out_bitdepth);
+    if (bps < 8 || bps > 16) {
+        unavailable("输出位深不支持评分");
+        finish();
+        return;
+    }
+    const int maxv = (bps >= 16) ? 65535 : ((1 << bps) - 1);
+    // dither8：编码器只在 8bit 量化段抖动（heif/avif 的 8bit 走 quantize16 不抖动）。
+    const bool dither8 =
+        ctx.cfg.color_dither8 && bps == 8 && row.format_id != "heif" && row.format_id != "avif";
+    MetricReferenceRows ref_rows;
+    ref_rows.work = &ctx.work;
+    ref_rows.width = width;
+    ref_rows.bps = bps;
+    ref_rows.maxv = maxv;
+    ref_rows.dither8 = dither8;
+    MetricDistortedRows dist_rows;
+    dist_rows.buf = &dec.buf;
+    dist_rows.width = width;
+    dist_rows.nch = dspec.nchannels;
+    MetricLinearRows ref_lin;
+    ref_lin.width = width;
+    ref_lin.height = height;
+    ref_lin.srgb = ctx.metric_srgb;
+    ref_lin.icc = ctx.metric_icc;
+    ref_lin.encoded = [&ref_rows](int y, float *rgb) {
+        ref_rows.fill_encoded(y, rgb);
+        return true;
+    };
+    MetricLinearRows dist_lin;
+    dist_lin.width = width;
+    dist_lin.height = height;
+    dist_lin.srgb = ctx.metric_srgb;
+    dist_lin.icc = ctx.metric_icc;
+    dist_lin.encoded = [&dist_rows](int y, float *rgb) { return dist_rows.fill_encoded(y, rgb); };
+    if (is_cancelled(ctx.cancelled)) {
+        unavailable("已取消");
+        finish();
+        return;
+    }
+    const pp::metric::FrameSource ref_src{width, height,
+                                          [&ref_lin](int y, float *rgb) { ref_lin.row(y, rgb); }};
+    const pp::metric::FrameSource dist_src{
+        width, height, [&dist_lin](int y, float *rgb) { dist_lin.row(y, rgb); }};
+    pp::metric::Result mr;
+    try {
+        mr = pp::metric::compute(ref_src, dist_src);
+    } catch (const std::exception &e) {
+        failed(std::string("指标内部错误: ") + e.what());
+        finish();
+        return;
+    } catch (...) {
+        failed("指标内部错误");
+        finish();
+        return;
+    }
+    row.metric_ms = ms_since(t0); // 端到端评分耗时（回读 + 归一 + 指标核心）
+    if (!ref_lin.error.empty() || !dist_lin.error.empty()) {
+        unavailable("色彩归一失败");
+        finish();
+        return;
+    }
+    if (is_cancelled(ctx.cancelled)) {
+        unavailable("已取消");
+        finish();
+        return;
+    }
+    switch (mr.state) {
+    case pp::metric::State::Ok:
+        if (!std::isfinite(mr.score)) {
+            failed("指标返回非法分数");
+            break;
+        }
+        row.metric_state = MetricState::Ok;
+        row.metric_ssimulacra2 = mr.score;
+        row.metric_note.clear();
+        break;
+    case pp::metric::State::Unavailable:
+        row.metric_state = MetricState::Unavailable;
+        row.metric_note = mr.note.empty() ? std::string("产物回读不可用") : mr.note;
+        break;
+    case pp::metric::State::Failed:
+        row.metric_state = MetricState::Failed;
+        row.metric_note = mr.note.empty() ? std::string("指标内部错误") : mr.note;
+        break;
+    case pp::metric::State::Off:
+        row.metric_state = MetricState::Off;
+        break;
+    }
+    finish();
 }
 
 // ---- ⑨ encode_loop（多输出循环整体下沉：排序/flatten 边界/逐行失败隔离/break 扫尾）----
@@ -1139,6 +1510,10 @@ bool stage_encode_loop(RunFileContext &ctx) {
             continue; // 该输出失败：其余输出继续（§4.1 任一失败=DoneWithErrors）
         }
         row.out_bytes = er.bytes;
+
+        // ---- M8-C2：SSIMULACRA 2 评分（C10：encode 成功后、metawrite 前；worker 线程内）----
+        // 评分失败/不可用**不**影响产物成败（MetricState 独立于 OutputState/Warning）。
+        score_output_row(ctx, pt, row);
 
         // ---- metadata write (§5.8, §4.8) ----
         ctx.stage(FileState::Writing, Stage::MetaWrite, static_cast<int>(pt.cfg_index));

@@ -12,6 +12,9 @@
 //                         逐项相等（含重复次数；顺序无关）—— 防"只判包含、多出的意外告警永不判红"。
 //     warnings_empty      (M7-WP3 / R-040) true = 该产物必须零告警。
 //                         warnings_contain 语义逐字不变；三种模式可并存，各自独立判。
+//     score               (M8-C13) {state:"ok"|…, min:number, max:number} —— 区间断言，读取
+//                         <actual_output>.pp.json sidecar 的 metric 对象（--dev --score 写出）；
+//                         缺失/状态不符/越界 = FAIL；绝不逐值断言（tests/golden/SCHEMA.md）。
 //   output:  `VERIFY <case> OK|FAIL <detail>`; exit code = number of FAILs
 //   --selftest: synthesises its own samples (PNG/JPEG/metadata/sidecar) in .cache/tmp and
 //               checks that each assertion mode both passes and fails as expected.
@@ -51,6 +54,7 @@ const char *kUsage =
     "usage: pp_verify <expected.json> <actual_output|case_dir> [--selftest]\n"
     "  asserts per tests/golden/SCHEMA.md: pixel (exact | psnr+threshold_db),\n"
     "  metadata [{key, op: eq|exists|absent, value}], warnings_contain [WarningKind]\n"
+    "  score {state|min|max}: 区间断言 --dev sidecar 的 metric 对象（M8-C13，绝不逐值）\n"
     "  v2 (0.3.0): expected.json 携带 outputs[] 时，第二参数是**用例输出根目录**，\n"
     "  逐输出按 outputs[i].rel 定位文件并各自断言（路径断言 = 文件必须存在）\n"
     "  M4-T6: 携带 progress_trace 段时同样要求第二参数是用例输出根目录，\n"
@@ -522,6 +526,96 @@ std::string check_warnings(const fs::path &actual, const QJsonObject &asserts) {
 }
 
 // ---------------------------------------------------------------------------
+// M8-C13: assert.score —— --dev sidecar 的 metric 对象（区间断言，绝不逐值）
+//   { "score": { "state": "ok" } }                     // 状态逐字相等
+//   { "score": { "min": 99.0 } }                       // state 必须 ok 且 score >= 99
+//   { "score": { "min": 50.0, "max": 100.0 } }         // 闭区间（端点含）
+// 只认 state/min/max（未知键 = FAIL）；sidecar 缺失 / JSON 无效 / 无 metric / 状态不符 /
+// score 非数 / 越界 → 拼进 detail（tests/golden/SCHEMA.md「assert.score」段）。
+// ---------------------------------------------------------------------------
+std::string score_number_text(double v) {
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%.10g", v);
+    return buf;
+}
+
+std::string check_score(const fs::path &actual, const QJsonObject &asserts) {
+    if (!asserts.contains("score"))
+        return {};
+    const QJsonValue score_value = asserts.value("score");
+    if (!score_value.isObject())
+        return "assert.score must be an object {state|min|max}";
+    const QJsonObject sa = score_value.toObject();
+    for (auto it = sa.begin(); it != sa.end(); ++it) {
+        const QString key = it.key();
+        if (key != QLatin1String("state") && key != QLatin1String("min") &&
+            key != QLatin1String("max"))
+            return "assert.score unknown key '" + key.toStdString() +
+                   "' (only state|min|max are supported)";
+    }
+    const bool have_state = sa.contains("state");
+    const bool have_min = sa.contains("min");
+    const bool have_max = sa.contains("max");
+    std::string want_state;
+    if (have_state) {
+        if (!sa.value("state").isString())
+            return "assert.score.state must be a string";
+        want_state = sa.value("state").toString().toStdString();
+    }
+    double want_min = 0.0;
+    double want_max = 0.0;
+    if (have_min) {
+        if (!sa.value("min").isDouble())
+            return "assert.score.min must be a number";
+        want_min = sa.value("min").toDouble();
+    }
+    if (have_max) {
+        if (!sa.value("max").isDouble())
+            return "assert.score.max must be a number";
+        want_max = sa.value("max").toDouble();
+    }
+    if (have_min && have_max && want_min > want_max)
+        return "assert.score range is empty (min > max)";
+
+    const fs::path sidecar = actual.string() + ".pp.json";
+    std::ifstream f(sidecar, std::ios::binary);
+    if (!f)
+        return "score assertion requires the sidecar " + sidecar.string() + " (missing)";
+    const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    const QJsonDocument doc = QJsonDocument::fromJson(QByteArray::fromStdString(text));
+    if (!doc.isObject())
+        return "sidecar " + sidecar.string() + " is not valid JSON";
+    const QJsonObject doc_obj = doc.object();
+    if (!doc_obj.contains("metric") || !doc_obj.value("metric").isObject())
+        return "sidecar " + sidecar.string() + " has no 'metric' object (assert.score)";
+    const QJsonObject metric = doc_obj.value("metric").toObject();
+    const std::string metric_state = metric.value("state").toString().toStdString();
+    if (metric_state.empty())
+        return "sidecar " + sidecar.string() + " metric.state is missing/not a string";
+    if (metric_state != "ok" && metric_state != "unavailable" && metric_state != "failed")
+        return "sidecar " + sidecar.string() + " metric.state='" + metric_state +
+               "' is not ok|unavailable|failed";
+    if (have_state && metric_state != want_state)
+        return "metric.state='" + metric_state + "' != '" + want_state + "'";
+    // state == "ok" 的 sidecar 契约：score 必须是 number（能发现半写/类型漂移）。
+    const bool checks_value = (have_state && want_state == "ok") || have_min || have_max;
+    if (checks_value && !metric.value("score").isDouble())
+        return "metric.state='" + metric_state + "' but metric.score is not a number";
+    if (have_min || have_max) {
+        if (metric_state != "ok")
+            return "score range assertion requires metric.state 'ok' (have '" + metric_state + "')";
+        const double got = metric.value("score").toDouble();
+        if (have_min && got < want_min)
+            return "metric.score " + score_number_text(got) + " < min " +
+                   score_number_text(want_min);
+        if (have_max && got > want_max)
+            return "metric.score " + score_number_text(got) + " > max " +
+                   score_number_text(want_max);
+    }
+    return {};
+}
+
+// ---------------------------------------------------------------------------
 // one case
 // ---------------------------------------------------------------------------
 fs::path golden_root_for(const fs::path &expected_json) {
@@ -578,6 +672,10 @@ bool check_case(const QJsonObject &exp, const fs::path &actual, const fs::path &
     const std::string warn_err = check_warnings(actual, asserts);
     if (!warn_err.empty())
         failures.push_back(warn_err);
+
+    const std::string score_err = check_score(actual, asserts); // M8-C13（区间断言）
+    if (!score_err.empty())
+        failures.push_back(score_err);
 
     if (failures.empty()) {
         detail.clear();
@@ -993,6 +1091,54 @@ int selftest() {
         std::ofstream f((c_png.string() + ".pp.json"), std::ios::binary | std::ios::trunc);
         f << json;
     }
+    // M8-C13：assert.score 探针样本 —— 每个 actual 一张图 + 自己的 sidecar（state ok/100/负分/
+    // unavailable/无 metric/畸形 score type）。区间断言只判语义区间，不逐值。
+    const fs::path score_ok_png = dir / "score-ok.png";
+    const fs::path score_hundred_png = dir / "score-100.png";
+    const fs::path score_neg_png = dir / "score-neg.png";
+    const fs::path score_unavail_png = dir / "score-unavail.png";
+    const fs::path score_nometric_png = dir / "score-nometric.png";
+    const fs::path score_str_png = dir / "score-str.png";
+    for (const fs::path &p : {score_ok_png, score_hundred_png, score_neg_png, score_unavail_png,
+                              score_nometric_png, score_str_png}) {
+        std::error_code copy_ec;
+        fs::copy_file(a_png, p, fs::copy_options::overwrite_existing, copy_ec);
+        if (copy_ec) {
+            std::printf("VERIFY selftest FAIL copying score sample %s: %s\n", p.string().c_str(),
+                        copy_ec.message().c_str());
+            return 1;
+        }
+    }
+    const auto write_score_sidecar = [](const fs::path &p, const std::string &json) {
+        std::ofstream f(p.string() + ".pp.json", std::ios::binary | std::ios::trunc);
+        f << json;
+    };
+    write_score_sidecar(
+        score_ok_png,
+        "{\"warnings\":[],\"metric\":{\"name\":\"ssimulacra2\",\"version\":1,\"state\":\"ok\","
+        "\"score\":92.31,\"ms\":4.2,\"reference\":\"encoder-input\",\"colorspace\":\"sRGB\","
+        "\"note\":\"\"}}");
+    write_score_sidecar(
+        score_hundred_png,
+        "{\"warnings\":[],\"metric\":{\"name\":\"ssimulacra2\",\"version\":1,\"state\":\"ok\","
+        "\"score\":100.0,\"ms\":4.2,\"reference\":\"encoder-input\",\"colorspace\":\"sRGB\","
+        "\"note\":\"\"}}");
+    write_score_sidecar(
+        score_neg_png,
+        "{\"warnings\":[],\"metric\":{\"name\":\"ssimulacra2\",\"version\":1,\"state\":\"ok\","
+        "\"score\":-3.5,\"ms\":4.2,\"reference\":\"encoder-input\",\"colorspace\":\"sRGB\","
+        "\"note\":\"\"}}");
+    write_score_sidecar(
+        score_unavail_png,
+        "{\"warnings\":[],\"metric\":{\"name\":\"ssimulacra2\",\"version\":1,"
+        "\"state\":\"unavailable\",\"score\":-1,\"ms\":0,\"reference\":\"encoder-input\","
+        "\"colorspace\":\"sRGB\",\"note\":\"回读失败\"}}");
+    write_score_sidecar(score_nometric_png, "{\"warnings\":[]}");
+    write_score_sidecar(
+        score_str_png,
+        "{\"warnings\":[],\"metric\":{\"name\":\"ssimulacra2\",\"version\":1,\"state\":\"ok\","
+        "\"score\":\"92.31\",\"ms\":4.2,\"reference\":\"encoder-input\",\"colorspace\":\"sRGB\","
+        "\"note\":\"\"}}");
 
     auto make_exp = [](const char *input, const char *mode, double threshold,
                        const QJsonArray &metadata, const QJsonArray &warnings) {
@@ -1049,6 +1195,34 @@ int selftest() {
         asrt["warnings_empty"] = true;
         e["assert"] = asrt;
         return e;
+    };
+    // M8-C13：assert.score 装配（键存在即生效；空对象 = 只要求 metric 对象存在）。
+    auto with_score = [](QJsonObject e, const QJsonObject &score) {
+        QJsonObject asrt = e.value("assert").toObject();
+        asrt["score"] = score;
+        e["assert"] = asrt;
+        return e;
+    };
+    auto score_state = [](const char *state) {
+        QJsonObject o;
+        o["state"] = state;
+        return o;
+    };
+    auto score_min = [](double min) {
+        QJsonObject o;
+        o["min"] = min;
+        return o;
+    };
+    auto score_max = [](double max) {
+        QJsonObject o;
+        o["max"] = max;
+        return o;
+    };
+    auto score_range = [](double min, double max) {
+        QJsonObject o;
+        o["min"] = min;
+        o["max"] = max;
+        return o;
     };
 
     struct Probe {
@@ -1117,6 +1291,50 @@ int selftest() {
          m_png, true},
         {"normalize-xmp-bag-join",
          make_exp("a.png", nullptr, 0, meta_eq("Xmp.dc.subject", "alpha, beta"), {}), m_png, true},
+        // M8-C13：assert.score（--dev sidecar metric）正/反例 —— 区间断言，绝不逐值。
+        {"score-state-ok-pass",
+         with_score(make_exp("a.png", nullptr, 0, {}, {}), score_state("ok")), score_ok_png, true},
+        {"score-state-mismatch-fail",
+         with_score(make_exp("a.png", nullptr, 0, {}, {}), score_state("ok")), score_unavail_png,
+         false},
+        {"score-state-unavailable-pass",
+         with_score(make_exp("a.png", nullptr, 0, {}, {}), score_state("unavailable")),
+         score_unavail_png, true},
+        {"score-min-pass", with_score(make_exp("a.png", nullptr, 0, {}, {}), score_min(90.0)),
+         score_ok_png, true},
+        {"score-min-fail", with_score(make_exp("a.png", nullptr, 0, {}, {}), score_min(95.0)),
+         score_ok_png, false},
+        {"score-max-pass", with_score(make_exp("a.png", nullptr, 0, {}, {}), score_max(95.0)),
+         score_ok_png, true},
+        {"score-max-fail", with_score(make_exp("a.png", nullptr, 0, {}, {}), score_max(90.0)),
+         score_ok_png, false},
+        {"score-range-pass",
+         with_score(make_exp("a.png", nullptr, 0, {}, {}), score_range(50.0, 100.0)), score_ok_png,
+         true},
+        {"score-range-endpoint-pass",
+         with_score(make_exp("a.png", nullptr, 0, {}, {}), score_range(100.0, 100.0)),
+         score_hundred_png, true},
+        {"score-range-fail",
+         with_score(make_exp("a.png", nullptr, 0, {}, {}), score_range(50.0, 90.0)), score_ok_png,
+         false},
+        {"score-negative-pass", // 分数可为负（(−inf,100]，不 clamp）
+         with_score(make_exp("a.png", nullptr, 0, {}, {}), score_min(-10.0)), score_neg_png, true},
+        {"score-state-ok-not-number-fail",
+         with_score(make_exp("a.png", nullptr, 0, {}, {}), score_state("ok")), score_str_png,
+         false},
+        {"score-no-metric-fail",
+         with_score(make_exp("a.png", nullptr, 0, {}, {}), score_state("ok")), score_nometric_png,
+         false},
+        {"score-missing-sidecar-fail",
+         with_score(make_exp("a.png", nullptr, 0, {}, {}), score_min(99.0)), inv_png, false},
+        {"score-unknown-key-fail",
+         with_score(make_exp("a.png", nullptr, 0, {}, {}), QJsonObject{{"value", 90}}),
+         score_ok_png, false},
+        {"score-min-non-number-fail",
+         with_score(make_exp("a.png", nullptr, 0, {}, {}), QJsonObject{{"min", "99"}}),
+         score_ok_png, false},
+        {"score-empty-object-pass",
+         with_score(make_exp("a.png", nullptr, 0, {}, {}), QJsonObject{}), score_ok_png, true},
     };
 
     int failures = 0;

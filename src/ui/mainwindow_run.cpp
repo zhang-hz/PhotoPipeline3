@@ -429,6 +429,8 @@ void MainWindow::on_start() {
     // 读数与引擎同源，不是 UI 自算的另一套数。
     cfg.stagger_ms = d.settings.stagger_ms;
     cfg.thread_budget = d.settings.thread_budget;
+    // M8-C2（C11/C12）：GUI 默认开（AppSettings.quality_score，设置页可关）；--dev 默认关。
+    cfg.quality_score = d.settings.quality_score;
 
     // X-METADATA-ONLY-02：仅元数据模式不再静默把冲突策略改成 Skip；下拉显示什么就执行什么。
     // （旧行为会造成“界面选覆盖/改名，实际全部跳过”的两张皮。）

@@ -255,9 +255,19 @@ M7-R2.4-G2（布局审计 · R-识图1 —— 识图步骤的机械化落点）:
   * 追加 `LAYOUT_AUDIT_LINE_PREFIXES` 一行齐备断言（只增；冻结末行 `UI-SMOKE OK shots=12
     pages=3` 与既有清单零改动）。12 张截图仍按原口径人工留档（不改"截图不比对"的既定取证
     口径），但从此渲染面有机器看守。
+
+M8-C13（评分证据面 · SSIMULACRA 2 隐藏子行）:
+  * 追加 `RUN_SCORE_LINE_PREFIX` 一行齐备断言（只增；冻结末行与既有清单零改动）：
+    `UI-SMOKE run-score:` 由 `smoke_probes.cpp` 的 `smoke_probe_run_geometry()` 末尾 (m) 段给出
+    —— C12 契约：评分关闭（Off）不显示子行；`metric_state==Ok` 显示
+    `质量 SSIMULACRA 2 · 92.31`（" · " 分隔、两位小数）；Unavailable/Failed 显示 `—（原因）`。
+  * 本脚本除行齐备外，另做**文本/取值断言**（防 C++ 断言被静默跳过）：`checked` 存在、
+    `bad=0`、`off_hidden=1`、`ok_row=1`、`ok_text="质量 SSIMULACRA 2 · <两位小数>"`（正则）。
+  * 截图仍 12 张；`--dev` 评分与金样 assert.score 见 tests/golden/smoke.py / SCHEMA.md。
 """
 
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -450,6 +460,15 @@ LAYOUT_AUDIT_LINE_PREFIXES = (
     'UI-SMOKE layout-audit:',
 )
 
+# M8-C13（评分证据面 · 只增）：运行页评分隐藏子行探针（C12/C13）。探针本体 = smoke_probes.cpp
+# 的 smoke_probe_run_geometry() 末尾 (m) 段；行内 checked/bad 由 C++ 侧给出。本脚本除「行
+# 齐备」外还做**文本/取值断言**（防断言被静默跳过/裁剪）：
+#   checked=N bad=0 · off_hidden=1（评分关闭 = 无子行）· ok_row=1
+#   ok_text="质量 SSIMULACRA 2 · 92.31"（" · " 分隔、两位小数；高/负分也按实数格式）
+RUN_SCORE_LINE_PREFIX = 'UI-SMOKE run-score:'
+RUN_SCORE_BAD_RE = re.compile(r'\bbad=0\b')
+RUN_SCORE_TEXT_RE = re.compile(r'ok_text="质量 SSIMULACRA 2 · -?\d+\.\d{2}"')
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 build_dir = sys.argv[1] if len(sys.argv) > 1 else 'build/release-dev'
@@ -505,6 +524,7 @@ def main():
         m6t13_seen = set()
         g1_seen = set()
         layout_audit_seen = set()
+        run_score_line = None
         with open(log_path, 'w', encoding='utf-8', newline='') as log_fp:
             for line in proc.stdout:
                 sys.stdout.write(line)
@@ -563,6 +583,8 @@ def main():
                 for prefix in LAYOUT_AUDIT_LINE_PREFIXES:
                     if line.startswith(prefix):
                         layout_audit_seen.add(prefix)
+                if line.startswith(RUN_SCORE_LINE_PREFIX):
+                    run_score_line = line.rstrip('\r\n')
         status = proc.wait()
 
         if status != 0:
@@ -657,6 +679,22 @@ def main():
         if missing:
             print('ui_smoke: FAIL (missing layout-audit visual-check lines: {})'.format(
                 ', '.join(missing)), file=sys.stderr)
+            return 1
+        # M8-C13（只增）：评分隐藏子行 —— 行齐备 + 文本/取值断言（C12/C13）。
+        if run_score_line is None:
+            print('ui_smoke: FAIL (missing M8-C13 run-score self-check line: {})'.format(
+                RUN_SCORE_LINE_PREFIX), file=sys.stderr)
+            return 1
+        if (RUN_SCORE_BAD_RE.search(run_score_line) is None
+                or 'off_hidden=1' not in run_score_line
+                or 'ok_row=1' not in run_score_line):
+            print('ui_smoke: FAIL (M8-C13 run-score self-check failed: {})'.format(
+                run_score_line), file=sys.stderr)
+            return 1
+        if RUN_SCORE_TEXT_RE.search(run_score_line) is None:
+            print('ui_smoke: FAIL (M8-C13 run-score 子行文本格式不符（期望 '
+                  '"质量 SSIMULACRA 2 · <两位小数>"）: {})'.format(run_score_line),
+                  file=sys.stderr)
             return 1
         print('UI-SMOKE pass')
         return 0

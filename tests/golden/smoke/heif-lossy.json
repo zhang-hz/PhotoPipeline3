@@ -7,6 +7,10 @@
       "mode": "psnr",
       "threshold_db": 30
     },
+    "score": {
+      "min": 50.0,
+      "max": 100.0
+    },
     "metadata": [
       {
         "key": "Exif.Image.Artist",

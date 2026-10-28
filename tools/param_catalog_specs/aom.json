@@ -1,0 +1,1160 @@
+{
+  "format": "avif",
+  "backend": "libaom",
+  "rows": [
+    {
+      "key": "aom:cq-level",
+      "label": "CQ 质量层级",
+      "type": "int",
+      "form": "number",
+      "role": "anchor",
+      "scope": "settable",
+      "group": "质量/码率",
+      "reason": "quality 之外的精确 CQ 入口；透传最后应用会覆盖 libheif 由 quality 推导的 cq-level（A1/A15）。",
+      "tooltip": "Constant/Constrained Quality level（AOME_SET_CQ_LEVEL，valid 0..63）。libheif 默认按 quality 推导 cq_level=(100-quality)*63/100（quality=50→32）并在初始化后设置；本行开启后 aom_codec_set_option 透传在最后应用，会覆盖该映射与内置 quality（A1/A15）。",
+      "engine": "cq-level",
+      "lo": 0,
+      "hi": 63,
+      "step": 1,
+      "rules": "A1,A5,A15"
+    },
+    {
+      "key": "aom:aq-mode",
+      "label": "自适应量化模式",
+      "type": "enum",
+      "form": "dropdown",
+      "role": "dependent",
+      "scope": "settable",
+      "group": "质量/码率",
+      "reason": "静止图空间 AQ 影响暗部/纹理画质；无损时必须为 0（A2）。",
+      "tooltip": "AV1E_SET_AQ_MODE（AQ_MODE：NO_AQ=0/VARIANCE_AQ=1/COMPLEXITY_AQ=2/CYCLIC_REFRESH_AQ=3，valid 0..3）；libaom 默认 0。lossless=1 时 validate_config 要求 aq_mode=0（A2）。",
+      "engine": "aq-mode",
+      "choices": [
+        [
+          "关闭（默认）",
+          0
+        ],
+        [
+          "方差 AQ",
+          1
+        ],
+        [
+          "复杂度 AQ",
+          2
+        ],
+        [
+          "循环刷新 AQ",
+          3
+        ]
+      ],
+      "def": "关闭（默认）",
+      "rules": "A2"
+    },
+    {
+      "key": "aom:deltaq-mode",
+      "label": "Delta-Q 模式",
+      "type": "enum",
+      "form": "dropdown",
+      "role": "dependent",
+      "scope": "settable",
+      "group": "质量/码率",
+      "reason": "分区 QP 调制；mode 1 依赖 TPL，只有 mode 4/6 受 deltaq-strength 影响（A7）。",
+      "tooltip": "AV1E_SET_DELTAQ_MODE（DELTAQ_MODE，valid 0..6）；libaom 默认 1（DELTA_Q_OBJECTIVE）；mode1 需要 enable-tpl-model=1（默认开）；cpu-used>=8 的非 RD 模式会静默忽略 mode 1–5；tune=iq 时 handle_tuning 自动置 6（Variance Boost）。",
+      "engine": "deltaq-mode",
+      "choices": [
+        [
+          "关闭",
+          0
+        ],
+        [
+          "客观质量（默认）",
+          1
+        ],
+        [
+          "视频感知",
+          2
+        ],
+        [
+          "关键帧感知",
+          3
+        ],
+        [
+          "用户评分感知",
+          4
+        ],
+        [
+          "HDR",
+          5
+        ],
+        [
+          "Variance Boost",
+          6
+        ]
+      ],
+      "def": "客观质量（默认）",
+      "rules": "A7"
+    },
+    {
+      "key": "aom:deltaq-strength",
+      "label": "Delta-Q 强度",
+      "type": "int",
+      "form": "number",
+      "role": "dependent",
+      "scope": "settable",
+      "group": "质量/码率",
+      "reason": "Delta-Q 调制强度（0–1000%）；只有 mode 4/6 有意义（A7）。",
+      "tooltip": "AV1E_SET_DELTAQ_STRENGTH（百分比，valid [0,1000]）；libaom 默认 100；仅 deltaq-mode=4/6 生效。",
+      "engine": "deltaq-strength",
+      "lo": 0,
+      "hi": 1000,
+      "step": 1,
+      "def": "100",
+      "rules": "A7"
+    },
+    {
+      "key": "aom:enable-chroma-deltaq",
+      "label": "色度 Delta-Q",
+      "type": "bool",
+      "form": "switch",
+      "role": "dependent",
+      "scope": "settable",
+      "group": "质量/码率",
+      "reason": "色度单独量化；无损时库强制 0（A2），tune=iq 时库自动开（A3）。",
+      "tooltip": "AV1E_SET_ENABLE_CHROMA_DELTAQ（0 关（默认）/1 开）；lossless=1 时库拒绝该值为 1（A2）；tune=iq 时 handle_tuning 自动置 1。",
+      "engine": "enable-chroma-deltaq",
+      "def": "0",
+      "rules": "A2,A3"
+    },
+    {
+      "key": "aom:enable-qm",
+      "label": "量化矩阵",
+      "type": "bool",
+      "form": "switch",
+      "role": "anchor",
+      "scope": "settable",
+      "group": "质量/码率",
+      "reason": "静止图 QM 收益明显；tune=iq 时库自动开；不开启时 qm-min/max 无意义（A3/A8）。",
+      "tooltip": "AV1E_SET_ENABLE_QM（0 关（默认）/1 开）；tune=iq 时 handle_tuning 自动置 1 并把 qm-min/max 设为 2/10；仅开启时 qm-min/max 生效（A8）。",
+      "engine": "enable-qm",
+      "def": "0",
+      "rules": "A3,A8"
+    },
+    {
+      "key": "aom:qm-min",
+      "label": "QM 平坦度下限",
+      "type": "int",
+      "form": "number",
+      "role": "dependent",
+      "scope": "settable",
+      "group": "质量/码率",
+      "reason": "QM 平坦度下限（all-intra 默认 4）；需 enable-qm，且 min<=max（A3/A5/A8）。",
+      "tooltip": "AV1E_SET_QM_MIN（0..15 平坦度）；all-intra 默认 4（encoder_init 覆写 DEFAULT_QM_FIRST_ALLINTRA）；tune=iq 时为 2（QM_FIRST_IQ_SSIMULACRA2）；需 enable-qm=1 且 min<=max（A5/A8）。",
+      "engine": "qm-min",
+      "lo": 0,
+      "hi": 15,
+      "step": 1,
+      "def": "4",
+      "rules": "A3,A5,A8"
+    },
+    {
+      "key": "aom:qm-max",
+      "label": "QM 平坦度上限",
+      "type": "int",
+      "form": "number",
+      "role": "dependent",
+      "scope": "settable",
+      "group": "质量/码率",
+      "reason": "QM 平坦度上限（all-intra 默认 10）；需 enable-qm，且 min<=max（A3/A5/A8）。",
+      "tooltip": "AV1E_SET_QM_MAX（0..15 平坦度）；all-intra 默认 10（encoder_init 覆写 DEFAULT_QM_LAST_ALLINTRA）；tune=iq 时为 10（QM_LAST_IQ_SSIMULACRA2）；需 enable-qm=1 且 min<=max（A5/A8）。",
+      "engine": "qm-max",
+      "lo": 0,
+      "hi": 15,
+      "step": 1,
+      "def": "10",
+      "rules": "A3,A5,A8"
+    },
+    {
+      "key": "aom:sharpness",
+      "label": "锐度偏好",
+      "type": "int",
+      "form": "number",
+      "role": "dependent",
+      "scope": "settable",
+      "group": "质量/码率",
+      "reason": "观感向的块边缘锐度（0–7）；tune=iq 时库自动置 7（A3）。",
+      "tooltip": "AV1E_SET_SHARPNESS（valid 0..7，默认 0）；all-intra 下减少块边缘滤波；tune=iq 时 handle_tuning 自动置 7。",
+      "engine": "sharpness",
+      "lo": 0,
+      "hi": 7,
+      "step": 1,
+      "def": "0",
+      "rules": "A3"
+    },
+    {
+      "key": "aom:enable-adaptive-sharpness",
+      "label": "自适应锐度",
+      "type": "bool",
+      "form": "switch",
+      "role": "independent",
+      "scope": "settable",
+      "group": "质量/码率",
+      "reason": "按 QP 自适应调整环路滤波锐度（tune=iq 时库自动开）。",
+      "tooltip": "AV1E_SET_ENABLE_ADAPTIVE_SHARPNESS（0 关（默认）/1 开）；tune=iq 时 handle_tuning 自动置 1。",
+      "engine": "enable-adaptive-sharpness",
+      "def": "0"
+    },
+    {
+      "key": "aom:dist-metric",
+      "label": "RD 失真度量",
+      "type": "enum",
+      "form": "dropdown",
+      "role": "independent",
+      "scope": "settable",
+      "group": "质量/码率",
+      "reason": "块内 RD 优化用的失真度量；tune=iq 时库自动改用 QM-PSNR。",
+      "tooltip": "aom 选项 dist-metric（AOM_DIST_METRIC_PSNR=0/AOM_DIST_METRIC_QM_PSNR=1；enum 直通取值字符串 psnr/qm-psnr）；libaom 默认 psnr；tune=iq 时 handle_tuning 自动置 QM-PSNR。",
+      "engine": "dist-metric",
+      "choices": [
+        [
+          "PSNR（默认）",
+          "psnr"
+        ],
+        [
+          "QM-PSNR",
+          "qm-psnr"
+        ]
+      ],
+      "def": "PSNR（默认）"
+    },
+    {
+      "key": "aom:disable-trellis-quant",
+      "label": "Trellis 量化",
+      "type": "enum",
+      "form": "dropdown",
+      "role": "independent",
+      "scope": "settable",
+      "group": "质量/码率",
+      "reason": "Trellis 量化优化开关（0–3）；源码默认 3（estimate-yrd 关闭），越小越慢但质量/码率更好。",
+      "tooltip": "AV1E_SET_DISABLE_TRELLIS_QUANT（0 应用 Trellis/1 全关/2 RD 搜索关闭/3 estimate-yrd 关闭）；libaom extra_cfg 默认 3；valid 0..3（validate_config 上限检查）。",
+      "engine": "disable-trellis-quant",
+      "choices": [
+        [
+          "应用 Trellis 优化",
+          0
+        ],
+        [
+          "全部关闭 Trellis",
+          1
+        ],
+        [
+          "RD 搜索关闭",
+          2
+        ],
+        [
+          "estimate-yrd 关闭（默认）",
+          3
+        ]
+      ],
+      "def": "estimate-yrd 关闭（默认）"
+    },
+    {
+      "key": "aom:quant-b-adapt",
+      "label": "自适应 quant_b",
+      "type": "bool",
+      "form": "switch",
+      "role": "independent",
+      "scope": "settable",
+      "group": "质量/码率",
+      "reason": "自适应 quantize_b（默认关）；小收益进阶开关。",
+      "tooltip": "AV1E_SET_QUANT_B_ADAPT（0 关（默认）/1 开）。",
+      "engine": "quant-b-adapt",
+      "def": "0"
+    },
+    {
+      "key": "aom:min-cr",
+      "label": "最小压缩比",
+      "type": "int",
+      "form": "number",
+      "role": "independent",
+      "scope": "settable",
+      "group": "质量/码率",
+      "reason": "min_cr/100 = 目标最小压缩比（0=不限制）；库源码未设上界校验，实用域 [0,1000] 待 B1 源码核对。",
+      "tooltip": "AV1E_SET_MIN_CR（unsigned int；值/100 = 目标最小压缩比，850=8.5 倍；0=不限制（默认））。validate_config 未对该值设上界，GUI 取实用域 [0,1000]，待 B1 源码核对。",
+      "engine": "min-cr",
+      "lo": 0,
+      "hi": 1000,
+      "step": 10,
+      "def": "0"
+    },
+    {
+      "key": "aom:sb-qp-sweep",
+      "label": "超块 QP 扫描",
+      "type": "bool",
+      "form": "switch",
+      "role": "independent",
+      "scope": "settable",
+      "group": "质量/码率",
+      "reason": "超块级 QP 搜索（默认关）；慢速细节优化，收益小。",
+      "tooltip": "AV1E_SET_SB_QP_SWEEP（0 关（默认）/1 开）。",
+      "engine": "sb-qp-sweep",
+      "def": "0"
+    },
+    {
+      "key": "aom:auto-intra-tools-off",
+      "label": "自动关帧内工具",
+      "type": "bool",
+      "form": "switch",
+      "role": "independent",
+      "scope": "settable",
+      "group": "质量/码率",
+      "reason": "deltaq-mode=3 时按重建质量自动关闭部分帧内工具（默认关）。",
+      "tooltip": "AV1E_SET_AUTO_INTRA_TOOLS_OFF（0 关（默认）/1 开）；deltaq-mode=3 时按重建质量自动关闭 smooth/paeth/cfl/diagonal 帧内工具。",
+      "engine": "auto-intra-tools-off",
+      "def": "0"
+    },
+    {
+      "key": "aom:enable-cdef",
+      "label": "CDEF 滤波",
+      "type": "enum",
+      "form": "dropdown",
+      "role": "dependent",
+      "scope": "settable",
+      "group": "环路滤波",
+      "reason": "AV1 核心环路滤波；all-intra 默认关以防模糊，tune=iq 时库改自适应，影响体积/观感。",
+      "tooltip": "AV1E_SET_ENABLE_CDEF（0 关/1 全帧开/2 非参考帧关/3 按 qindex 自适应，valid 0..3）；all-intra 默认 0（encoder_init 覆写；普通模式默认 1）；tune=iq 时 handle_tuning 自动置 3（CDEF_ADAPTIVE）。",
+      "engine": "enable-cdef",
+      "choices": [
+        [
+          "关闭（全帧内默认）",
+          0
+        ],
+        [
+          "全帧开启",
+          1
+        ],
+        [
+          "非参考帧关闭",
+          2
+        ],
+        [
+          "按 qindex 自适应",
+          3
+        ]
+      ],
+      "def": "关闭（全帧内默认）"
+    },
+    {
+      "key": "aom:enable-restoration",
+      "label": "恢复滤波",
+      "type": "bool",
+      "form": "switch",
+      "role": "independent",
+      "scope": "settable",
+      "group": "环路滤波",
+      "reason": "帧级恢复滤波（Wiener/SGR），静止图画质关键，all-intra 默认开。",
+      "tooltip": "AV1E_SET_ENABLE_RESTORATION（0 关/1 开（默认，非 realtime 构建））；realtime 模式（usage=REALTIME）下 set_encoder_config 强制关闭（A10）。",
+      "engine": "enable-restoration",
+      "def": "1"
+    },
+    {
+      "key": "aom:loopfilter-control",
+      "label": "环路滤波策略",
+      "type": "enum",
+      "form": "dropdown",
+      "role": "independent",
+      "scope": "settable",
+      "group": "环路滤波",
+      "reason": "帧级去块滤波策略（0–3）；默认全帧开启。",
+      "tooltip": "AV1E_SET_LOOPFILTER_CONTROL（0 全帧关/1 全帧开（默认）/2 非参考帧关/3 低运动帧关）；libaom 默认 LOOPFILTER_ALL=1，valid 0..3。",
+      "engine": "loopfilter-control",
+      "choices": [
+        [
+          "全帧关闭",
+          0
+        ],
+        [
+          "全帧开启（默认）",
+          1
+        ],
+        [
+          "非参考帧关闭",
+          2
+        ],
+        [
+          "低运动帧关闭",
+          3
+        ]
+      ],
+      "def": "全帧开启（默认）"
+    },
+    {
+      "key": "aom:enable-dual-filter",
+      "label": "双滤波",
+      "type": "bool",
+      "form": "switch",
+      "role": "independent",
+      "scope": "settable",
+      "group": "环路滤波",
+      "reason": "帧内双滤波，默认开；关闭后部分帧内预测模式不可用。",
+      "tooltip": "AV1E_SET_ENABLE_DUAL_FILTER（0 关/1 开（默认））。",
+      "engine": "enable-dual-filter",
+      "def": "1"
+    },
+    {
+      "key": "aom:enable-rect-partitions",
+      "label": "矩形分区",
+      "type": "bool",
+      "form": "switch",
+      "role": "independent",
+      "scope": "settable",
+      "group": "量化/变换",
+      "reason": "矩形分区影响压缩效率；关闭可降复杂度但损压缩率。",
+      "tooltip": "AV1E_SET_ENABLE_RECT_PARTITIONS（0 关/1 开（默认））。",
+      "engine": "enable-rect-partitions",
+      "def": "1"
+    },
+    {
+      "key": "aom:enable-ab-partitions",
+      "label": "AB 分区",
+      "type": "bool",
+      "form": "switch",
+      "role": "independent",
+      "scope": "settable",
+      "group": "量化/变换",
+      "reason": "AB 形分区（1:2/2:1 等）影响压缩效率；默认开。",
+      "tooltip": "AV1E_SET_ENABLE_AB_PARTITIONS（0 关/1 开（默认））。",
+      "engine": "enable-ab-partitions",
+      "def": "1"
+    },
+    {
+      "key": "aom:enable-1to4-partitions",
+      "label": "1:4 分区",
+      "type": "bool",
+      "form": "switch",
+      "role": "independent",
+      "scope": "settable",
+      "group": "量化/变换",
+      "reason": "1:4/4:1 细长分区；默认开。",
+      "tooltip": "AV1E_SET_ENABLE_1TO4_PARTITIONS（0 关/1 开（默认））。",
+      "engine": "enable-1to4-partitions",
+      "def": "1"
+    },
+    {
+      "key": "aom:min-partition-size",
+      "label": "最小分区尺寸",
+      "type": "enum",
+      "form": "dropdown",
+      "role": "dependent",
+      "scope": "settable",
+      "group": "量化/变换",
+      "reason": "分区尺寸下限（默认 4）；4K+ 或高速档会被库夹到 8；必须 min<=max（A5）。",
+      "tooltip": "AV1E_SET_MIN_PARTITION_SIZE（4/8/16/32/64/128，默认 4）；4K+ 分辨率或高速档下库把最小值夹到 8；validate_config 要求 min<=max（A5）。",
+      "engine": "min-partition-size",
+      "choices": [
+        [
+          "4×4（默认）",
+          4
+        ],
+        [
+          "8×8",
+          8
+        ],
+        [
+          "16×16",
+          16
+        ],
+        [
+          "32×32",
+          32
+        ],
+        [
+          "64×64",
+          64
+        ],
+        [
+          "128×128",
+          128
+        ]
+      ],
+      "def": "4×4（默认）",
+      "rules": "A5"
+    },
+    {
+      "key": "aom:max-partition-size",
+      "label": "最大分区尺寸",
+      "type": "enum",
+      "form": "dropdown",
+      "role": "dependent",
+      "scope": "settable",
+      "group": "量化/变换",
+      "reason": "分区尺寸上限（默认 128）；必须 min<=max（A5）。",
+      "tooltip": "AV1E_SET_MAX_PARTITION_SIZE（4/8/16/32/64/128，默认 128）；validate_config 要求 min<=max（A5）。",
+      "engine": "max-partition-size",
+      "choices": [
+        [
+          "4×4",
+          4
+        ],
+        [
+          "8×8",
+          8
+        ],
+        [
+          "16×16",
+          16
+        ],
+        [
+          "32×32",
+          32
+        ],
+        [
+          "64×64",
+          64
+        ],
+        [
+          "128×128（默认）",
+          128
+        ]
+      ],
+      "def": "128×128（默认）",
+      "rules": "A5"
+    },
+    {
+      "key": "aom:sb-size",
+      "label": "超级块尺寸",
+      "type": "enum",
+      "form": "dropdown",
+      "role": "dependent",
+      "scope": "settable",
+      "group": "量化/变换",
+      "reason": "超级块尺寸决定分区搜索上限；dynamic 由库逐帧决定，64/128 固定尺寸。",
+      "tooltip": "AV1E_SET_SUPERBLOCK_SIZE（enum 直通字符串 dynamic/64/128；AOM_SUPERBLOCK_SIZE_DYNAMIC（默认）/64X64/128X128，validate_config 范围 64X64..DYNAMIC）。",
+      "engine": "sb-size",
+      "choices": [
+        [
+          "动态（默认）",
+          "dynamic"
+        ],
+        [
+          "64×64",
+          "64"
+        ],
+        [
+          "128×128",
+          "128"
+        ]
+      ],
+      "def": "动态（默认）"
+    },
+    {
+      "key": "aom:enable-intra-edge-filter",
+      "label": "帧内边缘滤波",
+      "type": "bool",
+      "form": "switch",
+      "role": "independent",
+      "scope": "settable",
+      "group": "量化/变换",
+      "reason": "帧内预测边缘滤波；默认开。",
+      "tooltip": "AV1E_SET_ENABLE_INTRA_EDGE_FILTER（0 关/1 开（默认））。",
+      "engine": "enable-intra-edge-filter",
+      "def": "1"
+    },
+    {
+      "key": "aom:enable-tx64",
+      "label": "64 点变换",
+      "type": "bool",
+      "form": "switch",
+      "role": "independent",
+      "scope": "settable",
+      "group": "量化/变换",
+      "reason": "64 点变换；默认开，关闭可提速。",
+      "tooltip": "AV1E_SET_ENABLE_TX64（0 关/1 开（默认））。",
+      "engine": "enable-tx64",
+      "def": "1"
+    },
+    {
+      "key": "aom:enable-flip-idtx",
+      "label": "翻转/IDTX 变换",
+      "type": "bool",
+      "form": "switch",
+      "role": "independent",
+      "scope": "settable",
+      "group": "量化/变换",
+      "reason": "扩展变换类型（FLIPADST/IDTX 等）；默认开。",
+      "tooltip": "AV1E_SET_ENABLE_FLIP_IDTX（0 关/1 开（默认））；含 FLIPADST_DCT/DCT_FLIPADST/IDTX 等扩展变换类型。",
+      "engine": "enable-flip-idtx",
+      "def": "1"
+    },
+    {
+      "key": "aom:enable-rect-tx",
+      "label": "矩形变换",
+      "type": "bool",
+      "form": "switch",
+      "role": "independent",
+      "scope": "settable",
+      "group": "量化/变换",
+      "reason": "矩形变换（非正方形 TU）；默认开。",
+      "tooltip": "AV1E_SET_ENABLE_RECT_TX（0 关/1 开（默认））。",
+      "engine": "enable-rect-tx",
+      "def": "1"
+    },
+    {
+      "key": "aom:reduced-tx-type-set",
+      "label": "精简变换集",
+      "type": "bool",
+      "form": "switch",
+      "role": "independent",
+      "scope": "settable",
+      "group": "量化/变换",
+      "reason": "使用精简变换类型集（默认关）；开启可提速。",
+      "tooltip": "AV1E_SET_REDUCED_TX_TYPE_SET（0 全变换类型集（默认）/1 精简集）。",
+      "engine": "reduced-tx-type-set",
+      "def": "0"
+    },
+    {
+      "key": "aom:use-intra-dct-only",
+      "label": "帧内仅 DCT",
+      "type": "bool",
+      "form": "switch",
+      "role": "dependent",
+      "scope": "settable",
+      "group": "量化/变换",
+      "reason": "帧内仅用 DCT 变换（默认关），提速；与 use-intra-default-tx-only 的组合限制 A9（待源码核实）。",
+      "tooltip": "AV1E_SET_INTRA_DCT_ONLY（0 关（默认）/1 开）；帧内仅 DCT，提速。与 use-intra-default-tx-only 的互斥/组合限制（A9）待 B1 源码核对。",
+      "engine": "use-intra-dct-only",
+      "def": "0",
+      "rules": "A9"
+    },
+    {
+      "key": "aom:use-intra-default-tx-only",
+      "label": "帧内仅默认变换",
+      "type": "bool",
+      "form": "switch",
+      "role": "dependent",
+      "scope": "settable",
+      "group": "量化/变换",
+      "reason": "帧内仅用默认变换（默认关），提速；与 use-intra-dct-only 的组合限制 A9（待源码核实）。",
+      "tooltip": "AV1E_SET_INTRA_DEFAULT_TX_ONLY（0 关（默认）/1 开）；帧内仅默认变换。与 use-intra-dct-only 的互斥/组合限制（A9）待 B1 源码核对。",
+      "engine": "use-intra-default-tx-only",
+      "def": "0",
+      "rules": "A9"
+    },
+    {
+      "key": "aom:enable-palette",
+      "label": "调色板预测",
+      "type": "bool",
+      "form": "switch",
+      "role": "independent",
+      "scope": "settable",
+      "group": "量化/变换",
+      "reason": "调色板预测模式；图形/截图类内容收益大，默认开。",
+      "tooltip": "AV1E_SET_ENABLE_PALETTE（0 关/1 开（默认））。",
+      "engine": "enable-palette",
+      "def": "1"
+    },
+    {
+      "key": "aom:enable-cfl-intra",
+      "label": "CfL 帧内预测",
+      "type": "bool",
+      "form": "switch",
+      "role": "independent",
+      "scope": "settable",
+      "group": "量化/变换",
+      "reason": "色度由亮度预测（CfL）；默认开。",
+      "tooltip": "AV1E_SET_ENABLE_CFL_INTRA（0 关/1 开（默认））。",
+      "engine": "enable-cfl-intra",
+      "def": "1"
+    },
+    {
+      "key": "aom:enable-angle-delta",
+      "label": "帧内角度增量",
+      "type": "bool",
+      "form": "switch",
+      "role": "independent",
+      "scope": "settable",
+      "group": "量化/变换",
+      "reason": "帧内角度增量；默认开。",
+      "tooltip": "AV1E_SET_ENABLE_ANGLE_DELTA（0 关/1 开（默认））。",
+      "engine": "enable-angle-delta",
+      "def": "1"
+    },
+    {
+      "key": "aom:enable-filter-intra",
+      "label": "滤波帧内预测",
+      "type": "bool",
+      "form": "switch",
+      "role": "independent",
+      "scope": "settable",
+      "group": "量化/变换",
+      "reason": "滤波帧内预测模式；默认开。",
+      "tooltip": "AV1E_SET_ENABLE_FILTER_INTRA（0 关/1 开（默认））。",
+      "engine": "enable-filter-intra",
+      "def": "1"
+    },
+    {
+      "key": "aom:enable-smooth-intra",
+      "label": "平滑帧内预测",
+      "type": "bool",
+      "form": "switch",
+      "role": "independent",
+      "scope": "settable",
+      "group": "量化/变换",
+      "reason": "平滑帧内预测模式；默认开。",
+      "tooltip": "AV1E_SET_ENABLE_SMOOTH_INTRA（0 关/1 开（默认））。",
+      "engine": "enable-smooth-intra",
+      "def": "1"
+    },
+    {
+      "key": "aom:enable-paeth-intra",
+      "label": "Paeth 帧内预测",
+      "type": "bool",
+      "form": "switch",
+      "role": "independent",
+      "scope": "settable",
+      "group": "量化/变换",
+      "reason": "Paeth 帧内预测模式；默认开。",
+      "tooltip": "AV1E_SET_ENABLE_PAETH_INTRA（0 关/1 开（默认））。",
+      "engine": "enable-paeth-intra",
+      "def": "1"
+    },
+    {
+      "key": "aom:enable-directional-intra",
+      "label": "方向帧内预测",
+      "type": "bool",
+      "form": "switch",
+      "role": "independent",
+      "scope": "settable",
+      "group": "量化/变换",
+      "reason": "方向帧内预测模式；默认开。",
+      "tooltip": "AV1E_SET_ENABLE_DIRECTIONAL_INTRA（0 关/1 开（默认））。",
+      "engine": "enable-directional-intra",
+      "def": "1"
+    },
+    {
+      "key": "aom:enable-diagonal-intra",
+      "label": "对角帧内预测",
+      "type": "bool",
+      "form": "switch",
+      "role": "independent",
+      "scope": "settable",
+      "group": "量化/变换",
+      "reason": "D45–D203 对角帧内模式；默认开，方向帧内关闭时无意义。",
+      "tooltip": "AV1E_SET_ENABLE_DIAGONAL_INTRA（0 关/1 开（默认））；D45 到 D203 是方向模式子集，enable-directional-intra=0 时本项无效果。",
+      "engine": "enable-diagonal-intra",
+      "def": "1"
+    },
+    {
+      "key": "aom:tile-columns",
+      "label": "分块列数",
+      "type": "enum",
+      "form": "dropdown",
+      "role": "dependent",
+      "scope": "settable",
+      "group": "分块/线程",
+      "reason": "分块列数（log2，0–6）；与 auto-tiles=1 互斥（A4），影响解码并行与压缩效率。",
+      "tooltip": "AV1E_SET_TILE_COLUMNS（log2，valid 0..6；0=1 列（默认），n=2^n 列）；与现有 auto-tiles=1 互斥（A4）。",
+      "engine": "tile-columns",
+      "choices": [
+        [
+          "1 列（默认）",
+          0
+        ],
+        [
+          "2 列",
+          1
+        ],
+        [
+          "4 列",
+          2
+        ],
+        [
+          "8 列",
+          3
+        ],
+        [
+          "16 列",
+          4
+        ],
+        [
+          "32 列",
+          5
+        ],
+        [
+          "64 列",
+          6
+        ]
+      ],
+      "def": "1 列（默认）",
+      "rules": "A4"
+    },
+    {
+      "key": "aom:tile-rows",
+      "label": "分块行数",
+      "type": "enum",
+      "form": "dropdown",
+      "role": "dependent",
+      "scope": "settable",
+      "group": "分块/线程",
+      "reason": "分块行数（log2，0–6）；与 auto-tiles=1 互斥（A4），影响解码并行与压缩效率。",
+      "tooltip": "AV1E_SET_TILE_ROWS（log2，valid 0..6；0=1 行（默认），n=2^n 行）；与现有 auto-tiles=1 互斥（A4）。",
+      "engine": "tile-rows",
+      "choices": [
+        [
+          "1 行（默认）",
+          0
+        ],
+        [
+          "2 行",
+          1
+        ],
+        [
+          "4 行",
+          2
+        ],
+        [
+          "8 行",
+          3
+        ],
+        [
+          "16 行",
+          4
+        ],
+        [
+          "32 行",
+          5
+        ],
+        [
+          "64 行",
+          6
+        ]
+      ],
+      "def": "1 行（默认）",
+      "rules": "A4"
+    },
+    {
+      "key": "aom:row-mt",
+      "label": "行级多线程",
+      "type": "bool",
+      "form": "switch",
+      "role": "dependent",
+      "scope": "settable",
+      "group": "分块/线程",
+      "reason": "行级多线程；libheif 在 threads>1 时先置 1，本行透传最后应用可覆盖；与调度器线程预算交互（A13）。",
+      "tooltip": "AV1E_SET_ROW_MT（0 关/1 开（默认））；libheif encoder_aom.cc 在 threads>1 时无条件置 1，aom: 透传在最后应用可覆盖；与调度器线程预算的交互待 Stage B 定（A13）。",
+      "engine": "row-mt",
+      "def": "1",
+      "rules": "A13"
+    },
+    {
+      "key": "aom:target-seq-level-idx",
+      "label": "目标 Level",
+      "type": "enum",
+      "form": "dropdown",
+      "role": "anchor",
+      "scope": "settable",
+      "group": "码流/兼容性",
+      "reason": "解码器/硬件兼容门槛；31=不约束（默认）；与 tier/严格一致性联动（A16）。",
+      "tooltip": "aom 选项 target-seq-level-idx（AV1E_SET_TARGET_SEQ_LEVEL_IDX；值=OP 索引*100+level 索引，本产品只有 OP0）。合法 level 索引 0..27 对应 2.0..8.3，其中 2.2/2.3/3.2/3.3/4.2/4.3 未定义会被库拒绝；31=不约束（默认，SEQ_LEVEL_MAX）；7.x/8.x 需 CONFIG_CWG_C013（本构建未启用）。",
+      "engine": "target-seq-level-idx",
+      "choices": [
+        [
+          "不约束（默认 31）",
+          31
+        ],
+        [
+          "2.0",
+          0
+        ],
+        [
+          "2.1",
+          1
+        ],
+        [
+          "3.0",
+          4
+        ],
+        [
+          "3.1",
+          5
+        ],
+        [
+          "4.0",
+          8
+        ],
+        [
+          "4.1",
+          9
+        ],
+        [
+          "5.0",
+          12
+        ],
+        [
+          "5.1",
+          13
+        ],
+        [
+          "5.2",
+          14
+        ],
+        [
+          "5.3",
+          15
+        ],
+        [
+          "6.0",
+          16
+        ],
+        [
+          "6.1",
+          17
+        ],
+        [
+          "6.2",
+          18
+        ],
+        [
+          "6.3",
+          19
+        ]
+      ],
+      "def": "不约束（默认 31）",
+      "rules": "A16"
+    },
+    {
+      "key": "aom:strict-level-conformance",
+      "label": "严格 Level",
+      "type": "bool",
+      "form": "switch",
+      "role": "dependent",
+      "scope": "settable",
+      "group": "码流/兼容性",
+      "reason": "开启后码流声明必须严格满足目标 level/tier（A16）。",
+      "tooltip": "aom 选项 strict-level-conformance（0 关（默认）/1 开）；开启后码流严格满足 target level/tier（A16）。",
+      "engine": "strict-level-conformance",
+      "def": "0",
+      "rules": "A16"
+    },
+    {
+      "key": "aom:set-tier-mask",
+      "label": "目标 Tier",
+      "type": "enum",
+      "form": "dropdown",
+      "role": "dependent",
+      "scope": "settable",
+      "group": "码流/兼容性",
+      "reason": "tier 位掩码：0=Main（默认），bit0=1 表示 OP0 用 High；与 target level 一致性联动（A16）。",
+      "tooltip": "AV1E_SET_TIER_MASK（unsigned int 位掩码，32 个 OP 各 1 bit：0=Main tier（默认），bit i=1 表示 OP i 用 High tier）；本产品只有 1 个 OP，GUI 只给 Main/High 两档；与 target-seq-level-idx 一致性联动（A16）。",
+      "engine": "set-tier-mask",
+      "choices": [
+        [
+          "Main tier（默认 0）",
+          0
+        ],
+        [
+          "High tier（bit0=1）",
+          1
+        ]
+      ],
+      "def": "Main tier（默认 0）",
+      "rules": "A16"
+    },
+    {
+      "key": "aom:force-video-mode",
+      "label": "强制视频模式",
+      "type": "bool",
+      "form": "switch",
+      "role": "independent",
+      "scope": "settable",
+      "group": "码流/兼容性",
+      "reason": "放弃 reduced still picture header（A14 警告）；默认关。",
+      "tooltip": "AV1E_SET_FORCE_VIDEO_MODE（0 关（默认）/1 开）；开启后放弃 reduced still picture header，码流变大且仍图语义变化（A14 警告）。",
+      "engine": "force-video-mode",
+      "def": "0",
+      "rules": "A14"
+    },
+    {
+      "key": "aom:timing-info",
+      "label": "Timing 信息",
+      "type": "enum",
+      "form": "dropdown",
+      "role": "independent",
+      "scope": "settable",
+      "group": "码流/兼容性",
+      "reason": "向码流写 picture timing 信息；默认不指定。",
+      "tooltip": "AV1E_SET_TIMING_INFO_TYPE（aom_timing_info_type_t：AOM_TIMING_UNSPECIFIED（默认）/EQUAL/DEC_MODEL；enum 直通取值字符串 unspecified/constant/model）。",
+      "engine": "timing-info",
+      "choices": [
+        [
+          "不指定（默认）",
+          "unspecified"
+        ],
+        [
+          "常量帧率",
+          "constant"
+        ],
+        [
+          "解码模型",
+          "model"
+        ]
+      ],
+      "def": "不指定（默认）"
+    },
+    {
+      "key": "aom:cdf-update-mode",
+      "label": "CDF 更新模式",
+      "type": "enum",
+      "form": "dropdown",
+      "role": "independent",
+      "scope": "settable",
+      "group": "码流/兼容性",
+      "reason": "CDF 更新频率（0–2）；默认每帧更新，影响解码并行与压缩效率。",
+      "tooltip": "AV1E_SET_CDF_UPDATE_MODE（0 不更新/1 每帧更新（默认）/2 选择性更新，valid 0..2）。",
+      "engine": "cdf-update-mode",
+      "choices": [
+        [
+          "不更新",
+          0
+        ],
+        [
+          "每帧更新（默认）",
+          1
+        ],
+        [
+          "选择性更新",
+          2
+        ]
+      ],
+      "def": "每帧更新（默认）"
+    },
+    {
+      "key": "aom:tune-content",
+      "label": "内容取向",
+      "type": "enum",
+      "form": "dropdown",
+      "role": "independent",
+      "scope": "settable",
+      "group": "码流/兼容性",
+      "reason": "内容类型提示（default/screen/film）；屏幕/图形内容可换编码工具偏好。",
+      "tooltip": "AV1E_SET_TUNE_CONTENT（AOM_CONTENT_DEFAULT（默认）/SCREEN/FILM；enum 直通取值字符串 default/screen/film）；源码 3.15.1 的 enum 含 film（评审稿只列 default/screen）。",
+      "engine": "tune-content",
+      "choices": [
+        [
+          "常规内容（默认）",
+          "default"
+        ],
+        [
+          "屏幕内容",
+          "screen"
+        ],
+        [
+          "胶片内容",
+          "film"
+        ]
+      ],
+      "def": "常规内容（默认）"
+    },
+    {
+      "key": "__aom:g-usage",
+      "label": "上游 usage",
+      "type": "enum",
+      "form": "readonly",
+      "role": "independent",
+      "scope": "readonly",
+      "group": "只读（上游固定）",
+      "reason": "libheif 固定仍图 usage=AOM_USAGE_ALL_INTRA；开 realtime=1 时切 AOM_USAGE_REALTIME（A10）。",
+      "tooltip": "encoder_aom.cc:982-998 选择 aomUsage；cfg 级字段不能经 aom_codec_set_option 透传，故只读。",
+      "choices": [
+        [
+          "ALL_INTRA（静止图；realtime 时 REALTIME）",
+          "ALL_INTRA"
+        ]
+      ]
+    },
+    {
+      "key": "__aom:rc-end-usage",
+      "label": "码率控制模式",
+      "type": "enum",
+      "form": "readonly",
+      "role": "independent",
+      "scope": "readonly",
+      "group": "只读（上游固定）",
+      "reason": "libheif 固定 rc_end_usage=AOM_Q（encoder_aom.cc:1052），quality 由插件映射到 cq_level。",
+      "tooltip": "encoder_aom.cc:1052 cfg.rc_end_usage=AOM_Q；该 cfg 字段不是 option 名，不可设置。",
+      "choices": [
+        [
+          "AOM_Q（恒定质量）",
+          "AOM_Q"
+        ]
+      ]
+    },
+    {
+      "key": "__aom:g-limit",
+      "label": "帧数上限",
+      "type": "enum",
+      "form": "readonly",
+      "role": "independent",
+      "scope": "readonly",
+      "group": "只读（上游固定）",
+      "reason": "libheif 静止图设 cfg.g_limit=1，触发 still_picture/reduced_still_picture_header。",
+      "tooltip": "encoder_aom.cc:1014-1019 cfg.g_limit=1；cfg 级字段非 option 名，不可设置。",
+      "choices": [
+        [
+          "1（单帧）",
+          "1"
+        ]
+      ]
+    },
+    {
+      "key": "__aom:lag-in-frames",
+      "label": "前瞻帧数",
+      "type": "enum",
+      "form": "readonly",
+      "role": "independent",
+      "scope": "readonly",
+      "group": "只读（上游固定）",
+      "reason": "libheif 设 cfg.g_lag_in_frames=0，减少仍图前瞻缓冲内存。",
+      "tooltip": "encoder_aom.cc:1021-1027 cfg.g_lag_in_frames=0；lag-in-frames 同时属于禁设名，不可透传。",
+      "choices": [
+        [
+          "0",
+          "0"
+        ]
+      ]
+    },
+    {
+      "key": "__aom:kf-disabled",
+      "label": "关键帧禁用",
+      "type": "enum",
+      "form": "readonly",
+      "role": "independent",
+      "scope": "readonly",
+      "group": "只读（上游固定）",
+      "reason": "libheif 设 kf_mode=AOM_KF_DISABLED 且 kf_max_dist=0（encoder_aom.cc:1029-1034），单帧全关键帧。",
+      "tooltip": "encoder_aom.cc:1028-1034；kf-* 属 cfg 级禁设字段，不可透传。",
+      "choices": [
+        [
+          "AOM_KF_DISABLED（kf_max_dist=0）",
+          "AOM_KF_DISABLED"
+        ]
+      ]
+    },
+    {
+      "key": "__aom:profile",
+      "label": "编码 Profile",
+      "type": "enum",
+      "form": "readonly",
+      "role": "independent",
+      "scope": "readonly",
+      "group": "只读（上游固定）",
+      "reason": "libheif 用 compute_avif_profile(位深,色度) 写 cfg.g_profile（encoder_aom.cc:1009/1048），不可直接设置。",
+      "tooltip": "encoder_aom.cc:1009/1048；g_profile 由 8/10/12bit 与 420/422/444 推导（AV1 profile 0/1/2），非 option 名。",
+      "choices": [
+        [
+          "由位深/色度推导（compute_avif_profile）",
+          "derived"
+        ]
+      ]
+    }
+  ]
+}

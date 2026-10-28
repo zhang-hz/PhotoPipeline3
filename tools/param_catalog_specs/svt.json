@@ -1,0 +1,60 @@
+{
+  "format": "avif",
+  "backend": "svt-av1",
+  "rows": [
+    {
+      "key": "__svt:profile",
+      "label": "编码 Profile",
+      "type": "enum",
+      "form": "readonly",
+      "role": "independent",
+      "scope": "readonly",
+      "group": "只读（上游固定）",
+      "reason": "encoder_svt.cc:946-951 按色彩格式/位深强制 profile：422 或位深>10→PROFESSIONAL(2)，444→HIGH(1)，其余 MAIN(0)。",
+      "tooltip": "EbSvtAv1EncConfiguration.profile（EbAv1SeqProfile：0 main/1 high/2 professional，默认 main）；插件强制，GUI 只读（S5）。",
+      "choices": [
+        [
+          "由位深/色度强制（MAIN/HIGH/PROFESSIONAL）",
+          "derived"
+        ]
+      ],
+      "rules": "S5"
+    },
+    {
+      "key": "__svt:level",
+      "label": "编码 Level",
+      "type": "enum",
+      "form": "readonly",
+      "role": "independent",
+      "scope": "readonly",
+      "group": "只读（上游固定）",
+      "reason": "EbSvtAv1Enc.h 的 level 默认 0=autodetect from bitstream；libheif 插件不设置，故只读。",
+      "tooltip": "EbSvtAv1Enc.h:339-349 level：0=autodetect，20=level 2.0…63=level 6.3（仅 2.0–6.3 正式定义）；插件不设置（默认 0）（S5）。",
+      "choices": [
+        [
+          "由 SVT 自动推导（level=0 autodetect）",
+          "0"
+        ]
+      ],
+      "rules": "S5"
+    },
+    {
+      "key": "__svt:tier",
+      "label": "编码 Tier",
+      "type": "enum",
+      "form": "readonly",
+      "role": "independent",
+      "scope": "readonly",
+      "group": "只读（上游固定）",
+      "reason": "EbSvtAv1Enc.h 的 tier 默认 0=Main；libheif 插件不设置，不可改。",
+      "tooltip": "EbSvtAv1Enc.h:331-338 tier：0=Main（默认）/1=High；插件不设置（S5）。",
+      "choices": [
+        [
+          "Main tier（默认 0）",
+          "0"
+        ]
+      ],
+      "rules": "S5"
+    }
+  ]
+}

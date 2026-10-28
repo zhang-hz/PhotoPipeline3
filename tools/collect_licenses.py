@@ -260,6 +260,15 @@ def main(argv):
     os.makedirs(dest + '/PhotoPipeline', exist_ok=True)
     shutil.copyfile(root_license, dest + '/PhotoPipeline/LICENSE')
 
+    # ---- M8：vendored 第三方源码（third_party，非 vcpkg port；随包分发许可全文） ----
+    vendored = os.path.join(ROOT, 'third_party', 'ssimulacra2')
+    if os.path.isdir(vendored):
+        os.makedirs(dest + '/ssimulacra2', exist_ok=True)
+        for name in ('LICENSE', 'PATENTS'):
+            src = os.path.join(vendored, name)
+            if os.path.isfile(src):
+                shutil.copyfile(src, dest + '/ssimulacra2/' + name)
+
     # 列表排序：输出与 locale 无关，保证重复运行可逐字比对
     print('collect_licenses: 第三方条目 {} 个 + PhotoPipeline/LICENSE -> {}'.format(
         collected, dest))

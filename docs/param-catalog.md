@@ -252,3 +252,12 @@ alpha 不支持（全局底色合成）；无元数据容器（EXIF 丢弃 + 日
 "反向未列"的键已补、假接线/禁用项已标注 —— 与 deep-review §G2 抽核口径一致。）
 
 灰度规则（复审 S1）：原生灰度保留仅限 JPEG/PNG/TIFF/JXL 且"保持原样"模式；WebP/HEIF/AVIF 以 RGB 编码 + 日志；任何色彩转换统一走"源→RGB(A)"单一路径。
+
+## M8 更新（2026-10-28，开发中）
+
+本清单为 0.3.x 草案，M8 起以**评审稿 + 目录**为准：
+
+- 参数范围：`docs/m8-param-exposure-review.md`（x265 ≈40 / libaom ≈50 / SVT 10 / JXL ≈42 组行；键展开 116 行）
+- 控件形态/联动：`docs/m8-param-control-map.md`（M/N/D/S/T/R × 锚点/依赖/独立；X/A/S/J 规则）
+- 机器可读目录：`src/codecs/param_catalog/*_catalog.inc`（由 `tools/param_catalog_specs/*.json` + `tools/gen_param_catalog.py` 生成）
+- 实现与验收：`docs/m8-report.md`；新增参数默认 **不设置**（跟随编码器默认），确定性行为与既有 7/10/28 键不变。

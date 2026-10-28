@@ -12,7 +12,7 @@
 | A 参数事实层 | 完成 | 待提交 | `build/m8/a4-{build2,ctest,smoke,regression,format}.log`、`build/m8/a4/reconcile.txt` |
 | B 引擎 + UI | 完成 | 待提交 | `build/m8/b-gate-*.log`、`build/m8/b1/`、`build/m8/b2/` |
 | C SSIMULACRA 2 | 完成 | 待提交 | `build/m8/c-gate-*.log`、`build/m8/c1/`、`build/m8/c2/`、`build/m8/c3/` |
-| D 收口 | 未开始 | 待定 | — |
+| D 收口 | 完成 | 待提交 | `docs/m8-report.md`、`CHANGELOG.md`、`README.md`、`docs/param-catalog.md` |
 
 ## 1. 交付内容（逐阶段追加）
 
@@ -126,6 +126,22 @@
 4. oracle 采用官方内部件而非 PyPI（离线不可得）；只验证评分算法，解码/管线由 C2 证据覆盖。
 5. `ui_smoke` 首跑偶发既有 `zero-byte-redo` 探针失败（同构建复跑通过、并发对照未复现；根因未证，判据未改）；固定 `.cache/tmp/ui-smoke-out` 共享目录为门禁卫生理论风险。
 6. C12 颜色分档未做像素断言（探针只锁文本/显隐/tooltip）；`assert.score` outputs[] 逐产物路径未入金样（selftest 覆盖单产物）。
+
+### D 收口（完成）
+
+- D1 报告：本文件（K/A/B/C/D 逐阶段交付、验收、偏差、未覆盖、复现命令）。
+- D2 文档：`CHANGELOG.md` 新增 `[未发布] M8`；`README.md` 增加 M8 功能段；`docs/param-catalog.md` 追加 M8 更新指针；`tools/collect_licenses.py` 增加 vendored `ssimulacra2` 的 `LICENSE`/`PATENTS` 随包分发（third_party 非 vcpkg port）。关于页无独立 UI（版本徽标由 `core/version.h` 单源），许可文本随安装包 licenses 目录分发。
+- D3 门禁：沿用 C 阶段同树最终结果（D 仅改文档/许可脚本，未改产品代码）；补充 `python -m py_compile tools/collect_licenses.py` 通过。
+- 提交：A `d7490e1`、B `30391b1`、C `e9cce58`、D 收口提交见 `git log`（收口提交不入发行 tag）。
+
+**D 阶段未覆盖（如实）**
+
+1. **Linux 构建/CI 未在本机验证**（Windows 本机完成全部门禁；Highway 多目标 TU + GCC LTO 需 CI 首跑确认）。
+2. **AppImage/winzip 打包未跑**（本地未执行 `make_appimage.sh` / `make_winzip.py`；`collect_licenses.py` 改动已语法检查，打包许可断言需 CI/发行前复跑）。
+3. `--ui-traverse` 深走查未覆盖新增 UI 面（目录三态/RC/预检清单/评分子行）；`--ui-smoke` 冻结行与 12 截图已通过。
+4. 24MP 评分墙钟/峰值 RSS 未实测（C1 12MP 实测 ≈1.8GB；C2 3MP 实测 325.6MB/≈210ms/MP，按比例外推）。
+5. `--dev` 批量跨字段预检未接 `pipeline::validate_run_config`（A24）；GUI `ready_to_start()` 已覆盖运行前拦截。
+6. 版本号未提升（仍 0.3.5；M8 目标 0.4.0 由发行流程按 `CMakeLists.txt:19` 单源更新）。
 
 ## 2. 验收结论（命令 + 结果逐条取证）
 

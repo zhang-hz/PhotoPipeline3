@@ -1,5 +1,27 @@
 # 变更日志
 
+## [未发布] — M8（0.4.0 开发中）— 2026-10-28
+
+**主题**：HEIF/AVIF/JXL 底层编码器参数面扩展 + SSIMULACRA 2 逐输出评分。
+
+### 新增
+
+- **参数目录（116 行）**：HEIF/x265 40（36 可设置 + 4 只读）、AVIF/libaom 57（51+6）、AVIF/SVT-AV1 3 只读、JXL 16；由 `tools/param_catalog_specs/*.json` + `tools/gen_param_catalog.py` 生成，`src/codecs/param_catalog/` 单源；UI/预设/`--param`/校验/编码器读同一目录。
+- **三态与联动**：新增参数默认 Unset；N/D 行“启用/跟随默认”，新增布尔行三态下拉；RC 模式显式下拉（HEIF 质量/CRF/QP；libaom 质量/CQ Level；SVT 质量/QP）；`src/core/param_rules.*` 数据驱动联动（无损/位深/色度/依赖/互斥），运行页/输出页实时态 + 运行前预检（错误清单、开始运行拒绝、聚焦首错）。
+- **透传面**：`x265:<opt>` / `aom:<opt>` 目录白名单（清单外 = 预检错误；`svt:` 无透传通道，出现即错）；libaom bool 值按数字下发修复。
+- **JXL 新键**：noise / group_order_center_x/y / upsampling_mode / uses_original_profile / box_compress / expert_options+effort 11 / buffering / output_mode / disable_perceptual_heuristics / HDR 四值 / intrinsic_size / frame_name；codestream_level 顺序修正。
+- **SSIMULACRA 2 评分**：`third_party/ssimulacra2/`（libjxl 0.12 官方源码 + 兼容层，BSD-3 + PATENTS）、`src/core/metric/`；GUI 默认开、8 种输出全评，参考=编码器实际量化输入（真无损=100；HEIF/AVIF 码流无损如实 <100）；运行页输出行下隐藏子行显示分数；`--dev --score` + sidecar `metric`；`assert.score` 区间断言（金样 4 既有 case）。
+- **设置**：`quality_score`（GUI 默认开；`--dev` 默认关）。
+
+### 变更
+
+- `ParamType` 加性 `String`；`ParamContext` + `cross_validate(ctx)` 加性重载；`OutputResult`/`RunConfig` 末尾加性评分字段；`settings.h` 末尾加性 `quality_score`；`--dev` 加性 `--score`。均登记 `docs/m8-adjudications.md`。
+
+### 证据与未决（如实）
+
+- 门禁：ctest 39/39、金样 `SMOKE total=20 pass=20 fail=0`、`UI-SMOKE OK shots=12 pages=3`、格式 0、tidy 棘轮通过；本机回归 diff 为已知 runner/路径形态（无 M8 行进入日志）。
+- 未决/风险：评分内部物化 ≈142 B/px（超 C10 流式目标，以额外预算 160 B/px 兜底，12MP≈1.8GB）；24MP 墙钟预估 ≈28–33s/图；Linux 构建未本机验证；PyPI oracle 离线不可得，改用 libjxl 官方内部件 oracle（6/6 |Δ|=0）。详见 [docs/m8-report.md](docs/m8-report.md)。
+
 ## [0.3.5] — 2026-10-28
 
 **正式版**：0.3.5 系列的收口发行（`0.3.5.alpha3` 之后工作树的实测缺陷与体验修复批）。三块交付：

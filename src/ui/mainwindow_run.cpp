@@ -220,6 +220,19 @@ const char *elevation_outcome_name(ElevationOutcome outcome) {
 
 namespace {
 
+// UTF-8 → QString / path → QString（**跨平台**：Linux 无 UAC 通道，但输出根错误文案两平台共用；
+// core 侧路径/错误文案一律 UTF-8，见 fsops::path_to_utf8 注释）。定义必须留在 _WIN32 块外，
+// 否则 POSIX 构建下 output_root_error_text() 引用不到（Linux CI 实测 C2039 → 已修）。
+QString qstring_from_utf8(const std::string &s) {
+    return QString::fromUtf8(s.data(), static_cast<int>(s.size()));
+}
+
+QString qstring_from_path(const std::filesystem::path &p) {
+    const std::u8string u8 = p.u8string();
+    return QString::fromUtf8(reinterpret_cast<const char *>(u8.data()),
+                             static_cast<int>(u8.size()));
+}
+
 #ifdef _WIN32
 // 等待上限（含 UAC 确认 + icacls 执行）。超时 = **停止等待并如实报告**，不 terminate
 // 已提权进程（ACL 操作不可安全中断）。
@@ -234,17 +247,6 @@ std::set<std::string> g_elevation_attempted_roots;
 std::string elevation_root_key(const std::filesystem::path &root) {
     const std::u8string u8 = root.u8string();
     return std::string(reinterpret_cast<const char *>(u8.data()), u8.size());
-}
-
-// UTF-8 → QString（core 侧的路径/错误文案一律 UTF-8，见 fsops::path_to_utf8 的注释）。
-QString qstring_from_utf8(const std::string &s) {
-    return QString::fromUtf8(s.data(), static_cast<int>(s.size()));
-}
-
-QString qstring_from_path(const std::filesystem::path &p) {
-    const std::u8string u8 = p.u8string();
-    return QString::fromUtf8(reinterpret_cast<const char *>(u8.data()),
-                             static_cast<int>(u8.size()));
 }
 
 ElevationReport elevate_output_dir_permission(QWidget *parent, const std::filesystem::path &root) {

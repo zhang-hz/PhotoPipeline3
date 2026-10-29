@@ -147,9 +147,22 @@
 > `--version` 行 `PhotoPipeline 0.3.6.alpha1` 逐字对应；③ prerelease 标记 = **不带**
 > （`gh release create` 无 `--prerelease`，沿用 0.3.5.alpha3 先例 = prerelease:false）。
 
-- `TODO(Lead)`（tag `v0.3.6.alpha1` annotated → commit、`main-full` / `release.yml` 轮次、Release
-  4 资产指纹：`PhotoPipeline-0.3.6.alpha1-win64.zip` / `-x86_64.AppImage` / `-deps.txt` /
-  `-SHA256SUMS.txt`）——以上由 Lead 在 tag/Release 后填入。
+- tag `v0.3.6.alpha1`（annotated tag 对象 `01d5b32e72b51896be29dd98281329b4e32e3390` → commit
+  `d5a4ad8`，`REL-0.3.6.alpha1-fix2`）；`main-full` **#99**（10/10 全绿）与
+  `release.yml` **#21**（7/7 全绿）全绿；等价代码临时 debug 分支轮 #95 亦 10/10 全绿
+  （Linux AVX3 对齐修复复证）。
+- GitHub Release `v0.3.6.alpha1`（published 2026-10-29T16:41:34Z，prerelease=false，4 资产）；
+  API digest ↔ 下载件 `SHA256SUMS.txt` 三方逐字一致：
+  - `PhotoPipeline-0.3.6.alpha1-win64.zip` **33,936,397 B**
+    sha256 `1f009c8bc7ec64d146744c9bc9c4f635a9a722a8dbb3594f256f3f5e7e59b0de`
+  - `PhotoPipeline-0.3.6.alpha1-x86_64.AppImage` **52,308,472 B**
+    sha256 `9b346e83bc1fd087993372d7be935e34b648b2e4315d482f126160a2ba644e2b`
+  - `PhotoPipeline-0.3.6.alpha1-deps.txt` **2,439 B**
+    sha256 `e8c80b3d61a4e0d41cde50eb3c04577688d7428cc189129b3331cf221407854d`
+  - `PhotoPipeline-0.3.6.alpha1-SHA256SUMS.txt` **314 B**
+    sha256 `1a4854b4466f45b65c3d9b0e264a1c1e09431826835907d7fac1775560a6e07b`
+- 发布件由 CI 重新构建（与本机 `dist/` 指纹不同属已知：zip 不可字节复现，发行口径以
+  tag → Release 附件为锚）；`probe-*` 对下载件 `--version` 断言 = `PhotoPipeline 0.3.6.alpha1`。
 - 收口报告：[docs/0.3.6.alpha1-report.md](docs/0.3.6.alpha1-report.md)（tag 后补记，报告类提交不入 tag）。
 
 

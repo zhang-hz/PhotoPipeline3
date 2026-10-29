@@ -91,6 +91,21 @@
   P3/AdobeRGB、HEIF 10/12-bit、固定 QP 交叉未跑。
 - 报告：[docs/m8-metric-truth.md](docs/m8-metric-truth.md)。
 
+#### Linux 构建 / 运行时修复（CI 首跑实测）
+
+- **Linux 构建修复**：`src/ui/mainwindow_run.cpp` 的两个 UTF-8→QString helper 原定义在
+  `#ifdef _WIN32` 块内、被跨平台的输出根错误文案引用 → Linux/GCC 报未声明（main-full #92
+  appimage `configure+build` 红）。修法：helper 移到 `#ifdef _WIN32` 之前，Windows 行为逐字不变。
+- **Linux/AVX3 评分段错误修复**：`third_party/ssimulacra2` compat `ImageF` 行数据原走 memory
+  manager 的 malloc（仅 16B 对齐），而 `gauss_blur.cc` 的 Highway 满向量 Load/Store 假定行按
+  向量宽度对齐 —— Linux runner 选中 AVX3（512-bit / 64B）时
+  `jxl::N_AVX3_ZEN4::VerticalStrip<1>` SIGSEGV（main-full #93 三个评分单测同点崩；M8 此前
+  从未进 CI）。修法：compat ImageF 在 memory manager 之上**显式 64B 对齐**（原始指针另存
+  free），差异登记 `third_party/ssimulacra2/README.md`；Windows/AVX2 数值与行为不变。
+- 证据：临时 `debug/linux-metric-crash` 分支（gdb 栈定位，不入 main）复跑 Linux **全绿**
+  （release ctest 39/39、release-dev 40/40 含 ui_smoke、金样 20/20、UI-SMOKE 冻结行不变）
+  后才摘回 main；main 的最终 CI 轮见发行报告 §2.5。
+
 ### 测试
 
 - **门禁（冻结树最终读数）**：ctest **40/40**（release-dev，含 `ui_smoke`）/ **39/39**（release）；

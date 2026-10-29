@@ -2,7 +2,7 @@
 
 > **这份文档是什么**:在本仓库工作的 AI 智能体与新协作者的总导航 + 纪律总纲。目标是让你不必读完 docs/ 下 1.1 万行文档,就能回答四个问题:**这个项目要什么、东西放在哪、哪些红线不能碰、干完活要留下什么证据**。
 > **权威链**:本文只是导航与纪律;细节真源永远是它指向的那份文档或代码。两者冲突时**以真源为准**,并顺手回来修订本文。
-> **版本口径**:0.3.5(版本号单源 = `CMakeLists.txt:19-24`:数字段 `project(PhotoPipeline VERSION 0.3.5)` + 预发布标签 `PP_VERSION_LABEL`(正式版为空串);CMake `project(VERSION)` 只收数字段,标签拼在字符串侧。任何其它地方出现的版本号都是引用,不是定义)。
+> **版本口径**:0.3.6.alpha1(版本号单源 = `CMakeLists.txt:19-24`:数字段 `project(PhotoPipeline VERSION 0.3.6)` + 预发布标签 `PP_VERSION_LABEL ".alpha1"`(正式版为空串);CMake `project(VERSION)` 只收数字段,标签拼在字符串侧;`vcpkg.json` version 只写数字段 0.3.6——R-122 单源一致性断言要求与 `project(VERSION)` 同值。任何其它地方出现的版本号都是引用,不是定义)。
 
 ---
 
@@ -45,13 +45,13 @@ RAW/DNG 输入 · GIF 输出 · 图像编辑(缩放/裁剪/水印/锐化/降噪)
 
 ---
 
-## 2. 当前状态(2026-10-28)
+## 2. 当前状态(2026-10-29)
 
 | 项 | 状态 |
 |---|---|
-| 版本 | **0.3.5**(0.3.5 正式版)已发行:`main-full` #89 / `release.yml` #20 全绿,tag `v0.3.5`;收口报告 `docs/0.3.5-report.md`(tag 后 close 提交,不入 tag);0.3.3 Windows zip 为坏件(启动 P0,见 `docs/0.3.4-report.md`) |
-| 里程碑 | M0 环境/六 Spike/冻结面 → M1a 引擎 + M1b UI → M2 Linux 收口 → M3 Windows(=0.2.0) → M4/M5 = 0.3.0(九项需求 + GUI v6 刷新) → 0.3.1 GUI 缺陷根治 → M6 = 0.3.2 → M7 = 0.3.3(工程收口,Windows 启动 P0)→ 0.3.4 热修 → 0.3.5.alpha1/alpha2/alpha3 预发布 → 0.3.5 正式版(收口修复批) |
-| 质量面 | 金样断言级 **20 对** 全绿;全语料回归 **zero diff**(双平台 CI 基线为 runner 4 vCPU 形态;本机 16 核直跑出 thread-shaped diff,见 `docs/0.3.5.alpha3-report.md` §3);ctest **36/36**(release-dev)/**35/35**(release);`--ui-smoke` 冻结行未变 + 识图门禁 `layout-audit checked=1069 bad=0` + 格式卡交互 `format-card checked=81 bad=0`;新增深走查 `--ui-traverse`(115 截图/159 断言);winzip 门禁 6 项(E-3 真机启动探针 `WIN-LAUNCH OK`) |
+| 版本 | **0.3.6.alpha1**(预发布,M8 首个发行件;版本单源已升级 = `project(PhotoPipeline VERSION 0.3.6)` + `PP_VERSION_LABEL ".alpha1"`,`--version` = `PhotoPipeline 0.3.6.alpha1`);上一正式版 **0.3.5** 已发行(`main-full` #89 / `release.yml` #20 全绿,tag `v0.3.5`,报告 `docs/0.3.5-report.md`);0.3.3 Windows zip 为坏件(启动 P0,见 `docs/0.3.4-report.md`) |
+| 里程碑 | M0 环境/六 Spike/冻结面 → M1a 引擎 + M1b UI → M2 Linux 收口 → M3 Windows(=0.2.0) → M4/M5 = 0.3.0(九项需求 + GUI v6 刷新) → 0.3.1 GUI 缺陷根治 → M6 = 0.3.2 → M7 = 0.3.3(工程收口,Windows 启动 P0)→ 0.3.4 热修 → 0.3.5.alpha1/alpha2/alpha3 预发布 → 0.3.5 正式版(收口修复批) → **M8 = 0.3.6.alpha1(参数面全暴露 116 行 + SSIMULACRA 2 逐输出评分)** |
+| 质量面 | 金样断言级 **20 对** 全绿(`SMOKE total=20 pass=20 fail=0`);ctest **40/40**(release-dev,含 ui_smoke)/**39/39**(release,冻结树);`--ui-smoke` 冻结行 `UI-SMOKE OK shots=12 pages=3` + 识图门禁 `layout-audit 1144/0` + `format-card 81/0` + 高级参数勾选框 `param-enable-geom 8/0` + `m8-params 57/0` + 评分列 `run-score 8/0`;格式 violations=0(206 files);`pp_verify --selftest` 56 probes;winzip 门禁 A/B/A′/C/D + E-1/E-2/E-3(真机启动 `WIN-LAUNCH OK`);回归 zero diff 以 CI 双平台为准(本机 diff = 已知 runner/路径形态) |
 | **开放问题** | ① `docs/deep-review-0.3.2.md`:深度评审台账(**P0 ×2 已由 0.3.3 数据安全线 + 0.3.5 同目录输出修订收口**;P1/R3 条目为长期台账);② `docs/ux-review-14.md`:14 项 UI 问题定位与改进方案(只读评审,**改动须经用户确认后另起提交**);③ `docs/m7r25-report.md` §5:识图门禁未覆盖项;④ libde265 对部分 HEVC RExt 码流(如 `super/T2.heic`)仍不可解码;⑤ 高德线上搜索仅账号实测可最终确认(本机 TLS 环境不可用);⑥ 详见 §11 已知债 |
 
 ---

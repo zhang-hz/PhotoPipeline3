@@ -1,8 +1,12 @@
 # 变更日志
 
-## [未发布] — M8（0.4.0 开发中）— 2026-10-28
+## [0.3.6.alpha1] — 2026-10-29
 
-**主题**：HEIF/AVIF/JXL 底层编码器参数面扩展 + SSIMULACRA 2 逐输出评分。
+**预发布（alpha）**：M8 首个发行件 —— HEIF/AVIF/JXL 底层编码器参数面扩展 + SSIMULACRA 2
+逐输出评分，外加本轮 4 项实测缺陷修复。版本单源 = `CMakeLists.txt:19-24` = **0.3.6.alpha1**
+（数字段 0.3.6 + 预发布标签 ".alpha1"）；`vcpkg.json` 同步数字段 0.3.6（R-122 口径）。
+逐条证据与门禁读数见 [docs/m8-report.md](docs/m8-report.md)，本报告见
+[docs/0.3.6.alpha1-report.md](docs/0.3.6.alpha1-report.md)。
 
 ### 新增
 
@@ -10,17 +14,129 @@
 - **三态与联动**：新增参数默认 Unset；N/D 行“启用/跟随默认”，新增布尔行三态下拉；RC 模式显式下拉（HEIF 质量/CRF/QP；libaom 质量/CQ Level；SVT 质量/QP）；`src/core/param_rules.*` 数据驱动联动（无损/位深/色度/依赖/互斥），运行页/输出页实时态 + 运行前预检（错误清单、开始运行拒绝、聚焦首错）。
 - **透传面**：`x265:<opt>` / `aom:<opt>` 目录白名单（清单外 = 预检错误；`svt:` 无透传通道，出现即错）；libaom bool 值按数字下发修复。
 - **JXL 新键**：noise / group_order_center_x/y / upsampling_mode / uses_original_profile / box_compress / expert_options+effort 11 / buffering / output_mode / disable_perceptual_heuristics / HDR 四值 / intrinsic_size / frame_name；codestream_level 顺序修正。
-- **SSIMULACRA 2 评分**：`third_party/ssimulacra2/`（libjxl 0.12 官方源码 + 兼容层，BSD-3 + PATENTS）、`src/core/metric/`；GUI 默认开、8 种输出全评，参考=编码器实际量化输入（真无损=100；HEIF/AVIF 码流无损如实 <100）；运行页输出行下隐藏子行显示分数；`--dev --score` + sidecar `metric`；`assert.score` 区间断言（金样 4 既有 case）。
+- **SSIMULACRA 2 评分**：`third_party/ssimulacra2/`（libjxl 0.12 官方源码 + 兼容层，BSD-3 + PATENTS）、`src/core/metric/`；GUI 默认开、8 种输出全评，参考=编码器实际量化输入（真无损=100；HEIF/AVIF 码流无损如实 <100）；运行页逐输出显示评分（M8 初版为输出行下隐藏子行，本轮改为任务表「评分」列，四档颜色阈值 ≥95/≥90/≥80/<80）；`--dev --score` + sidecar `metric`；`assert.score` 区间断言（金样 4 既有 case）。
 - **设置**：`quality_score`（GUI 默认开；`--dev` 默认关）。
 
 ### 变更
 
 - `ParamType` 加性 `String`；`ParamContext` + `cross_validate(ctx)` 加性重载；`OutputResult`/`RunConfig` 末尾加性评分字段；`settings.h` 末尾加性 `quality_score`；`--dev` 加性 `--score`。均登记 `docs/m8-adjudications.md`。
+- 版本单源升级 **0.3.5 → 0.3.6.alpha1**：`CMakeLists.txt:19` 数字段 0.3.6 + `PP_VERSION_LABEL ".alpha1"`；
+  `vcpkg.json` version 同步数字段 0.3.6（R-122：`ci-versions-check.py` 要求与 `project(VERSION)` 同值，
+  先例 `61eade0`）；README/AGENTS 现役口径同步。`--version` 冻结行锚已兼容预发布标签（M7R25-7 换锚），
+  打包/release 链路无需改动。
 
-### 证据与未决（如实）
+### 修复
 
-- 门禁：ctest 39/39、金样 `SMOKE total=20 pass=20 fail=0`、`UI-SMOKE OK shots=12 pages=3`、格式 0、tidy 棘轮通过；本机回归 diff 为已知 runner/路径形态（无 M8 行进入日志）。
-- 未决/风险：评分内部物化 ≈142 B/px（超 C10 流式目标，以额外预算 160 B/px 兜底，12MP≈1.8GB）；24MP 墙钟预估 ≈28–33s/图；Linux 构建未本机验证；PyPI oracle 离线不可得，改用 libjxl 官方内部件 oracle（6/6 |Δ|=0）。详见 [docs/m8-report.md](docs/m8-report.md)。
+#### 写入提权优化
+
+- **根因（两条）**：① 旧实现用错误**文本**猜「是否权限问题」（`error_looks_like_permission`），而
+  `probe_output_root` 的 `not writable` 分支丢掉 OS 错误码 ⇒ 磁盘满 / 只读介质 / 配额 / 共享冲突
+  也会被误判成权限不足并弹 UAC，授权后仍失败；② 提权经 `cmd /c mkdir … & icacls …`，有 `%VAR%`
+  展开 / 引号截断风险，路径或账户名含 `%` 时功能直接放弃。
+- **修法**：`probe_output_root` 返回**结构化状态 + OS 错误码**（core 纯函数，可单测）；只有 ACL 类
+  拒绝（win32=5/1314、POSIX `EACCES/EPERM`）才申请授权；提权改为**直调 `icacls.exe`、不经 cmd**，
+  按**当前用户 SID**（`*S-1-…:(OI)(CI)M`）授权、`%` 路径原样支持；授权后**重新试写复验**；UAC
+  等待期间用嵌套事件循环 + 进度提示，不再冻结 UI；取消 / 拒绝 / 失败 / 仍不可写四类分别给可操作
+  文案；同一目录每会话最多尝试一次。
+- **测试**：新增单测覆盖状态分类 / OS 码 / SID 合法性 / icacls 参数构造 / 复验；另有 opt-in 真实
+  ACL 集成（`icacls /deny` → 判 `WriteDenied` → 授权 → `/remove:d` 还原）。
+- **未覆盖（如实）**：真实 UAC 弹窗点击流无法 headless 自动化（需人工确认）。
+
+#### 高级参数勾选框与评分列
+
+- **高级参数勾选框换位（需求 2）**：「可选启用」勾选框从行首移到行尾右侧——固定状态槽宽（空注记
+  也占位，QFontMetrics 实测「当前路径」最宽 + 行内距）+ 勾选框固定宽 13px + 状态注记改
+  `ElidedLabel`（超长省略号 + tooltip 全文，不硬裁）；标签/数值列恢复与普通行对齐；三态下拉语义
+  零改动。探针 `param-enable-geom checked=8 bad=0`（right-x 严格相等 / tail / label=80 / editor /
+  order 全绿，status-clip-bad=0、long-elide=1）。
+- **运行页评分列（需求 3）**：「评估结果」从输出行下隐藏子行改为**任务表一列**（「评分」44px，
+  位于耗时与状态之间；行/表头共用常量）；四档语义色 **≥95 `ok` 绿 / ≥90 `accent` 蓝 / ≥80 `warn`
+  琥珀 / <80 `err` 红**（纯 theme token、双主题一致）；Ok 两位小数；Unavailable/Failed 显示「—」+
+  tooltip 原因；Off/仅元数据留空（未发生的量不显示）；组行「—」不平均；tooltip 单源写明
+  SSIMULACRA 2、阈值表、参考=编码器输入 / 失真=解码后产物。旧子行实现与旧探针删除改列探针，
+  `tests/ui_smoke.py` 断言零放宽（`run-score checked=8 bad=0`，含 col_align=1/header=1/tiers=4/
+  group_dash=1）。
+
+#### 参数连线审计
+
+- **新增机械化探针** `tools/param_effect_probe.py`（离线纯 Python：读目录 specs → A/B 双编码比对
+  产物 SHA256 + 解码像素；条件前置键；静态锚点对账；`--with-chroma-evidence`）。
+- **116 行 = 103 可设置 + 13 只读**：103 行全部 A/B 实测，**EFFECT 74 / NO_EFFECT 29 / ERROR 0；
+  真断线 0、需改代码 0**。静态审计 x265 36/36、libaom 51/51 engine 名命中 pinned 上游名表；
+  JXL 16/16 下发面覆盖。
+- 29 NO_EFFECT 逐条归因（合法 no-op / 上游限制：分析加速类、仅 inter 生效类、RC/插件固定项覆盖、
+  流式/时序无意义类等；`rd-refine` 与 `aom:enable-diagonal-intra` 在 512 自然图翻转 EFFECT 佐证
+  连线正常；`expert_options` 用「effort=11 无门被拒 / 有门成功」证明门控连线）。
+- **HEIF 编码侧独立证据**：420/422/444 产物 SHA 全不同；解码像素 420 vs 444 **99.84% 样本不同
+  （MAE 5.526）**、AVIF 99.52%（MAE 7.877）⇒ 编码侧参数真实生效（评分侧见下条）。
+- 报告：[docs/m8-param-wiring-audit.md](docs/m8-param-wiring-audit.md)。
+
+#### 评分真实性核验 + HEIF 444/420
+
+- **444 真生效**：产物 `hvcC.chromaFormat` 实测 444→3 / 422→2 / 420→1；解码像素逐像素不同
+  （dY=2.64 / dCb=4.06 / dCr=3.38）；彩色合成图 444=71.55 vs 420=57.41（差 14.14）。
+- **评分真实、参考不是 420 结果**：新增 dev-only `--score-pair` 独立文件级 oracle（源文件重新解码
+  + 同一 metric 核心/同一色彩归一），**11 个格式/配置与 sidecar 逐位一致（delta 全 ±0.0000）**；
+  oracle 自比 = 100.0000000000。
+- **伪参考反证**：把参考也 420 化后，420 产物 57.41 → **75.18**（假高分，比真 444 还高）；真实
+  管线无此抬高 ⇒「禁止默认造假」机械化反证，固化为单测 `fake-ref/*`。
+- **「接近」原因**：灰度内容分数逐位相同（98.9212497104806，字节不同）；真实照片 T1 q90
+  444=77.2848 / 420=77.4966（420 略高 0.21，经 luma/chroma 分通道归因为 x265 码率分配：420 亮度
+  误差更小 1.888 vs 1.907、色度略差）；q95 420=91.04 逼近视觉无损。**不是 444 未生效、不是评分
+  造假**。
+- **回归**：新增 `tests/unit/test_metric_truth.cpp`（恒等=100、质量阶梯严格单调、色度复合失真
+  33.26<90、假参考 inflation 66.74≥5、方向不对称）→ ctest 自动收编；`metric`/`pipeline` 零改动
+  （核验未发现缺陷）。
+- **未覆盖（如实）**：q95-444 产物本机解码器读不出（评分如实 `unavailable`，不伪造；登记未决）；
+  P3/AdobeRGB、HEIF 10/12-bit、固定 QP 交叉未跑。
+- 报告：[docs/m8-metric-truth.md](docs/m8-metric-truth.md)。
+
+### 测试
+
+- **门禁（冻结树最终读数）**：ctest **40/40**（release-dev，含 `ui_smoke`）/ **39/39**（release）；
+  金样 `SMOKE total=20 pass=20 fail=0`；`UI-SMOKE OK shots=12 pages=3`；`pp_verify --selftest` =
+  `VERIFY selftest OK (56 probes, 0 unexpected)`；格式 `violations=0`（206 files）；
+  `python tools/ci-versions-check.py` → OK；`--version` 实测单行 `PhotoPipeline 0.3.6.alpha1`。
+- **识图/交互探针读数**：`layout-audit checked=1144 bad=0`、`format-card checked=81 bad=0`、
+  `param-enable-geom checked=8 bad=0 rows=17 right-x=503`、`m8-params checked=57 bad=0`、
+  `run-score checked=8 bad=0`（col_align=1/header=1/tiers=4/group_dash=1）。
+- 评分数值 oracle：libjxl v0.12 官方内部件 **6/6 对 |Δ|=0**；另有 W4 文件级独立 oracle
+  **11 个格式/配置与 sidecar 逐位一致（delta 全 ±0.0000）**。
+- 金样/夹具零改动（`tests/golden/{base,edge,meta}` 与 `smoke/*.json` case 数不变）；4 个既有 case
+  加性 `assert.score` 区间断言（不新增 case）；新增单测 `test_param_catalog` / `test_param_rules` /
+  `test_quality_metric` / `test_metric_truth`。
+- 回归：本机 DIFF 为已知 runner/路径形态（thread_budget 16 vs baseline 4 + libjpeg-turbo
+  buildtree 路径截断；机械复核：`version {lib=app}` 差异 0、bytes-changed 0、
+  score/quality metric/params 差异 0，无新差异类别）→ 发行判据仍以 CI 双平台 zero diff 为准。
+- tidy 棘轮（干净重跑）：`TIDY total=262 baseline=262 files=76 violations=0`（169s，通过）。
+
+### 已知
+
+- **评分内存/墙钟代价（如实）**：评分内部物化 ≈142 B/px（超 C10 流式目标，以额外预算 160 B/px 兜底，
+  12MP ≈1.8GB/输出，并行 workers 叠加为已知风险）；24MP 评分墙钟预估 ≈28–33s/图（8 输出）；
+  GUI 可关（设置项 `quality_score`），`--dev` 默认关。
+- **本机回归 diff 为已知 runner/路径形态**（线程预算 16 vs baseline 4 + buildtree 路径截断），
+  无 M8 键/评分行进入日志；发行判据仍以 CI 双平台 zero diff 为准。
+- **Linux 构建/AppImage 未本机验证**（Windows 本机完成全部门禁；Highway 多目标 TU + GCC LTO
+  需 CI 首跑确认）；`dither8` 灰度 1ch 组合为近似（默认 dither 关，未实测）。
+- libde265 对部分 HEVC RExt 码流（如 `super/T2.heic`）仍不可解码；HEIF/AVIF 无损为 YCbCr 平面无损
+  （非 RGB 逐位，tooltip 已披露）；x265 线程池 / TIFF `deflate_level` 等上游限制沿用。
+- **R4 未覆盖（如实）**：q95 4:4:4 HEIF 产物本机 OIIO/libheif 解码失败（`Decoding the input data
+  did not give a decompressed image`；评分如实 `unavailable`，不伪造分数；编码器侧是否缺陷待后续
+  判定）；P3/AdobeRGB 彩色目标、HEIF 10/12-bit、固定 QP/tune 交叉未跑。
+
+### 发行
+
+> **发行前置（Lead）**：① `### 修复` 下所有 `TODO(Lead)` 占位必须清零（发布说明 = 本节标题到
+> `### 发行` 之前的内容，占位会原样进入 Release notes）；② tag 名 `v0.3.6.alpha1` 与
+> `--version` 行 `PhotoPipeline 0.3.6.alpha1` 逐字对应；③ prerelease 标记 = **不带**
+> （`gh release create` 无 `--prerelease`，沿用 0.3.5.alpha3 先例 = prerelease:false）。
+
+- `TODO(Lead)`（tag `v0.3.6.alpha1` annotated → commit、`main-full` / `release.yml` 轮次、Release
+  4 资产指纹：`PhotoPipeline-0.3.6.alpha1-win64.zip` / `-x86_64.AppImage` / `-deps.txt` /
+  `-SHA256SUMS.txt`）——以上由 Lead 在 tag/Release 后填入。
+- 收口报告：[docs/0.3.6.alpha1-report.md](docs/0.3.6.alpha1-report.md)（tag 后补记，报告类提交不入 tag）。
+
 
 ## [0.3.5] — 2026-10-28
 

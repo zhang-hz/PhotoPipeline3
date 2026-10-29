@@ -4,7 +4,9 @@
 
 M0 交付仓库骨架、冻结接口、链接探针与金标语料。**M1a 交付全部编码引擎**：core 基础设施（logger / fsops / 像素预算 / 参数引擎 / 预设）、解码层、色彩层、元数据层、8 个编码器、调度器与 `--dev` 命令行 harness。**M1b 交付完整桌面 UI**：三页主窗口（元数据规则 / 输出配置 / 运行监控）、异步缩略图文件列表、内嵌地图选点、参数表单引擎、单文件 EXIF/XMP 编辑器、设置与预设对话框，以及 `--ui-smoke` 无头走查。**M2 完成 Linux 发行收口**：`--version` 版本单源、AppImage 打包（含离线打包与许可随附）、金样断言级 16 对、回归基线、ASan/UBSan/TSan 清扫，以及持续集成——`build-test.yml` 的**四个 job**（`linux` / `ui-smoke` / `appimage` / `cache-gc`）与缓存播种 workflow `warm-cache.yml`。**M3 完成 Windows 移植与双平台发行**（0.2.0）：UTF-8 全局语义、Mica 深色标题栏、`make_winzip.py` 五项门禁、tag 触发发行自动化。
 
-**M8（开发中，目标 0.4.0）**：① HEIF/AVIF/JXL 参数面扩展——精选目录 **116 行**（x265 40 / libaom 57 / SVT 3 / JXL 16；三态启用、只读/禁用、RC 模式显式下拉、联动规则与运行前预检；清单外透传键 = 预检错误）；② **SSIMULACRA 2 逐输出评分**——GUI 默认开、8 种输出全覆盖，结果显示在运行页输出行下；算法为 libjxl 0.12 官方源码 + 兼容层（BSD-3），参考=编码器实际收到的量化输入（真无损=100）。详见 [docs/m8-report.md](docs/m8-report.md)、[docs/m8-encoder-params-and-ssimulacra2-design.md](docs/m8-encoder-params-and-ssimulacra2-design.md)。
+**M8（0.3.6.alpha1 首个发行件）= 参数面全暴露 + SSIMULACRA 2 逐输出评分**：① HEIF/AVIF/JXL 参数面扩展——精选目录 **116 行**（x265 40 / libaom 57 / SVT 3 / JXL 16；三态启用、只读/禁用、RC 模式显式下拉、联动规则与运行前预检；清单外透传键 = 预检错误）；② **SSIMULACRA 2 逐输出评分**——GUI 默认开、8 种输出全覆盖，运行页任务表新增「评分」列（逐输出行显示两位小数，
+文件组行显示 `—`；M8 初版为输出行下隐藏子行，本轮改为列），颜色阈值见下文「M8 参数面与评分」；算法为 libjxl 0.12 官方源码 + 兼容层（BSD-3），参考=编码器实际收到的量化输入（真无损=100）。详见 [docs/m8-report.md](docs/m8-report.md)、[docs/m8-encoder-params-and-ssimulacra2-design.md](docs/m8-encoder-params-and-ssimulacra2-design.md)。
+
 
 **M4 = 0.3.0**：从"能用的转码器"到**多格式批处理工作台**——九项需求全量落地：① 常驻**输入预览** + 手动**分类**（热键打标/持久化）+ 文件列表**勾选**与 EXIF 自动分组视图；
 ② 元数据卡**生效值显示**（时间/GPS「原 → 生效」+ 关键信息卡，与写路径同源纯函数）；
@@ -33,7 +35,18 @@ caption 单轨 46×32；壳层顶栏 44 + 状态栏 30；**栏宽固定轴 330 /
 逐条探针、偏差与未决项见 [docs/m5-report.md](docs/m5-report.md)，开发期裁定见
 [docs/m5-adjudications.md](docs/m5-adjudications.md)。
 
-**0.3.5（当前版本，正式版）= 0.3.5 系列收口修复批**：0.3.5.alpha3 之后的实测缺陷与体验修复。
+**0.3.6.alpha1（当前版本，预发布）= M8 首个发行件**：① **参数面全暴露**——HEIF/AVIF/JXL 精选
+目录 **116 行**（x265 40 / libaom 57 / SVT-AV1 3 只读 / JXL 16），三态启用/只读/禁用、RC 模式显式
+下拉、数据驱动联动与运行前预检（错误清单 + 聚焦首错；清单外透传键 = 预检错误）；② **SSIMULACRA 2
+逐输出评分**——GUI 默认开（设置 → 运行 →「质量评分」可关），8 种输出全评，运行页任务表
+「评分」列逐输出行显示两位小数（文件组行显示 `—`），颜色阈值：**≥95 极好（ok/绿）/ ≥90 好（accent/蓝）/ ≥80 ok（warn/琥珀）/ <80 不 ok（err/红）**；评分算法为
+libjxl 0.12 官方源码 + 兼容层（BSD-3 + PATENTS，随包许可），参考 = 编码器实际收到的量化输入
+（真无损 = 100；HEIF/AVIF 码流无损如实 <100）。③ 本轮 4 项实测缺陷修复（写入提权优化 / 高级参数
+勾选框与评分列 / 参数连线审计 / 评分真实性核验 + HEIF 444/420）。**预发布（alpha），仅建议尝鲜/
+验证用**；逐条变更见 [CHANGELOG.md](CHANGELOG.md) `[0.3.6.alpha1]`，验收证据见
+[docs/0.3.6.alpha1-report.md](docs/0.3.6.alpha1-report.md)。
+
+**0.3.5（上一正式版）= 0.3.5 系列收口修复批**：0.3.5.alpha3 之后的实测缺陷与体验修复。
 三块交付：① **同目录输出数据安全收口**——输出路径命中源文件不再整文件失败，按普通名字冲突
 改名（`名称 (1).扩展名`），源文件永不写（Overwrite 也降级 Rename）；② **元数据现代化**——
 HEIF/AVIF 元数据回读兜底（修 grid 主图二次转码丢 EXIF/XMP）、HEIF/AVIF 真实位深显示、可选
@@ -93,7 +106,7 @@ R2 轮方案见 [docs/m7r2-plan.md](docs/m7r2-plan.md)。**色彩能力四选项
 渲染意图 / 线性光重采样）已入引擎并在界面提供开关**——**输出页全局卡**四行（默认全关 =
 行为不变；0.3.x 默认路径另有两处已归因字节变化，见 CHANGELOG「变更」节）；8bit 抖动仅作用
 于 JPEG/WebP/JXL 及 OIIO 系四家的 8bit 量化段（HEIF/AVIF 的 8bit 路径不接）。**发行状态：0.3.3 已发布**（2026-10-13；其 Windows zip 有启动 P0，已由 0.3.4 热修，
-请使用 0.3.4 或更新版本；当前最新 = 0.3.5 正式版）。
+请使用 0.3.4 或更新版本；当前最新正式版 = 0.3.5 正式版，最新预发布 = 0.3.6.alpha1）。
 
 **0.3.2 = GPS 地图升级版（M6）**：把「内嵌地图选点」从能用升级到**地图 App 水平**——
 R1 搜索搜得出（改用可达的**高德 Web 服务**事实表：`place/text` + 周边偏置 **`around` 20 条**按距离升序 +
@@ -374,10 +387,10 @@ python tools/env.py run -- cmake --build --preset release
 
 - **文件面板**：拖放或按钮添加（目录递归收集）、异步缩略图、按文件名搜索、十二态状态徽标、不支持文件计数
 - **① 元数据页**：时间偏移（Δ 六字段 / 时区语义，首文件前后预览）、GPS（经纬度 + DMS 实时 + 内嵌地图选点 + 从选中文件读取 + 清除）、标签修改（Exif/Xmp 分流）、隐私剥除、mtime 同步、单文件例外列表
-- **② 输出页**：转码 / 仅元数据、8 格式 ×（后端 × 技术）参数表单（无损锁定、谓词显隐、位深运行时探测）、色彩目标、同名冲突策略、预设按钮
-- **③ 运行页**：进度条 / 吞吐 / 逐文件状态着色、取消（幂等）、结束摘要 + 打开输出目录 / 查看日志
+- **② 输出页**：转码 / 仅元数据、8 格式 ×（后端 × 技术）参数表单（无损锁定、谓词显隐、位深运行时探测；**M8 起 116 行参数目录全暴露 + 联动预检**）、色彩目标、同名冲突策略、预设按钮
+- **③ 运行页**：进度条 / 吞吐 / 逐文件状态着色、取消（幂等）、结束摘要 + 打开输出目录 / 查看日志、**M8 起逐输出 SSIMULACRA 2 评分列**
 - **双击文件** → 单文件编辑器：EXIF 树（IFD0/Exif/GPS/只读 MakerNote）、XMP、时间/GPS/隐私三态覆盖、忽略批量规则（源文件永远只读）
-- **设置**（worker / 内存预算 / 展平底色 / 旋转 / 地图提供方 / 瓦片缓存 / 日志级别 / **主题三档**）与**预设**（JSON，`预设管理` 对话框）持久化于平台配置目录
+- **设置**（worker / 内存预算 / 展平底色 / 旋转 / 地图提供方 / 瓦片缓存 / 日志级别 / **主题三档** / **质量评分开关**）与**预设**（JSON，`预设管理` 对话框）持久化于平台配置目录
 
 ### GUI 刷新 v6（M5）
 
@@ -401,6 +414,42 @@ python tools/env.py run -- cmake --build --preset release
 亮暗两主题**布局等价**（`--ui-smoke` 逐一比对 988 个控件的几何与可见性，仅令牌不同）。
 
 地图支持 OSM（WGS-84）与高德（GCJ-02，坐标自动边界转换）双提供方；高德需在设置中填 Web 服务 Key。
+
+### M8 参数面与评分（0.3.6.alpha1）
+
+**全参数暴露（参数目录 116 行）**
+
+- **HEIF/x265 40 行**（36 可设置 + 4 只读）、**AVIF/libaom 57**（51+6）、**AVIF/SVT-AV1 3 只读**、
+  **JXL 16**；事实层单源 = `tools/param_catalog_specs/*.json` + `tools/gen_param_catalog.py` 生成
+  `src/codecs/param_catalog/`，**UI 表单 / 预设 / `--param` / 校验 / 编码器读取同一目录**。
+- **三态语义**：新增参数默认 Unset；N/D 行「启用 / 跟随默认」；布尔参数三态下拉；只读行只显示不
+  可写。**RC 模式显式下拉**（HEIF 质量/CRF/QP；libaom 质量/CQ Level；SVT 质量/QP）。
+- **高级参数勾选框（本轮 R2）**：「可选启用」勾选框位于**行尾右侧**，固定状态槽宽（空注记也占位）+
+  勾选框固定 13px + 状态注记 `ElidedLabel`（超长省略号 + tooltip 全文）；标签 / 数值列与普通行严格
+  对齐；三态下拉语义零改动（探针 `param-enable-geom checked=8 bad=0`）。
+- **联动与预检**（`src/core/param_rules.*` 数据驱动）：无损 / 位深 / 色度 / 依赖 / 互斥规则在运行页
+  与输出页实时判定；运行前预检给出错误清单、拒绝开始并聚焦首错。**透传面白名单**：`x265:<opt>` /
+  `aom:<opt>` 目录外键 = 预检错误（`svt:` 无透传通道，出现即错）。
+- JXL 新增键：noise / group_order_center_x/y / upsampling_mode / uses_original_profile / box_compress /
+  expert_options + effort 11 / buffering / output_mode / disable_perceptual_heuristics / HDR 四值 /
+  intrinsic_size / frame_name；codestream_level 顺序修正。
+
+**SSIMULACRA 2 逐输出评分**
+
+- 算法 = libjxl 0.12 官方源码 + 兼容层（BSD-3 + PATENTS，`third_party/ssimulacra2/`），实现于
+  `src/core/metric/`；**参考 = 编码器实际收到的量化输入**（真无损 = 100；HEIF/AVIF 码流无损如实 <100）。
+- **8 种输出全覆盖**；运行页任务表**「评分」列**逐输出行显示（两位小数；文件组行显示 `—`；
+  `Off`/仅元数据不显示；不可用显示 `—（原因）` + tooltip）。评分是**附加信息**：评分失败不影响
+  产物成功与否（只落 `MetricState`）。
+- **颜色阈值**：**≥95 极好（ok/绿）· ≥90 好（accent/蓝）· ≥80 ok（warn/琥珀）· <80 不 ok（err/红）**
+  —— 四档全部取现有主题令牌（明暗双主题一致），tooltip 同步给出阈值表与「参考 = 编码器输入 /
+  失真 = 解码产物」口径；「评分」列位于耗时与状态之间（44px，行/表头共用常量）。
+- **开关**：GUI 默认开，可在 设置 → 运行 →「质量评分」关闭（`settings.ini` 键 `quality_score`；
+  `--dev` 默认关，需显式 `--score`）。关闭 = **不执行评分计算**，不产生评分列/预算行差异。
+- 代价（如实）：评分内部物化 ≈142 B/px，单次评分额外预算 160 B/px（12MP ≈1.8GB/输出）；
+  24MP 预估 ≈28–33s/图（8 输出）——大图批量评分会显著拉长墙钟，可关闭。
+- 证据面：`--dev --score` sidecar 加性 `metric` 字段 + `tests/golden/SCHEMA.md` 的 `assert.score`
+  区间断言（金样 4 个既有 case + `pp_verify` selftest 覆盖）。
 
 ### 无头 UI 冒烟（`--ui-smoke`，需 `PP_BUILD_DEV=ON`）
 
@@ -504,7 +553,7 @@ chmod +x PhotoPipeline-<版本>-x86_64.AppImage
 
 ## 发行版（Windows）
 
-**M3 起提供 Windows x64 免安装产物**（0.2.0 为首个 Windows 版本，当前版本 0.3.5）；与 Linux 的 AppImage 同一引擎
+**M3 起提供 Windows x64 免安装产物**（0.2.0 为首个 Windows 版本，当前版本 0.3.6.alpha1）；与 Linux 的 AppImage 同一引擎
 与界面，差异只在打包形态（zip vs AppImage）与平台运行时（MSVC 运行时 / Qt msvc2022_64）。
 
 ### 下载与运行
@@ -544,7 +593,7 @@ chmod +x PhotoPipeline-<版本>-x86_64.AppImage
 ### 命令行
 
 ```powershell
-.\photopipeline.exe --version      # → PhotoPipeline 0.3.5（单行 + 退出码 0；非 dev 门控，发布构建亦可用）
+.\photopipeline.exe --version      # → PhotoPipeline 0.3.6.alpha1（单行 + 退出码 0；非 dev 门控，发布构建亦可用）
 .\photopipeline.exe                # 图形界面
 .\photopipeline.exe --ui-smoke     # 无头 UI 走查（offscreen，产出 12 张截图；仅 PP_BUILD_DEV=ON 的构建）
 .\photopipeline.exe --dev ...      # 开发 harness：全语料矩阵 / 回归基线入口（同上，仅 dev 构建）

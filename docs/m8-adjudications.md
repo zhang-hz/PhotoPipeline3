@@ -37,8 +37,22 @@
 | M8-A30 | 数值 oracle 采用 **libjxl v0.12 官方源码 + vcpkg 预编译官方内部件**（PyPI 离线不可得）；6/6 对 |Δ|=0（8 位小数）；oracle 工程/数据入库 build/m8/c1/oracle | 用户裁定方案 A 的验证方式；不伪造 | C1 |
 | M8-A31 | 指标内部物化整帧（≈142 B/px），未达 C10 流式目标；以 A28 预算预留兜底，P2 流式优化留 D/后续 | C1 如实报告；24MP 峰值风险登记 R6 | C1/D |
 
+### REL-0.3.6.alpha1 轮（2026-10-29，用户 5 项实测需求）
+
+| # | 裁定 | 理由/先例 | 实施归属 |
+|---|---|---|---|
+| M8-A32 | `core/fsops.h` **末尾加性**：`OutputRootProbeStatus` / `OutputRootProbe` / `probe_output_root_ex` / `output_root_probe_status_name` / `should_offer_elevation` / `current_user_sid` / `is_valid_sid` / `icacls_grant_parameters`；既有 `probe_output_root` 签名/布尔契约不变（转发新探针，判负分支 err 文案增强为 OS 文本 + 错误码） | 需求 1：判据从「错误文本猜测」改为 **OS 错误码分类**（磁盘满/只读介质不再误弹 UAC）；icacls 参数构造可单测；SID 授权稳定 | W1（perm-fixer） |
+| M8-A33 | UI 冻结 `pp-*` 加性/换位：`pp-param-enable-<key>` 从行首移到**行尾右侧**（对象名与「启用/跟随默认」三态语义不变）；移除评分隐藏子行，`pp-run-score-<i>-<j>`/`-text-` 钩子改承载任务表「评分」**列**（沿用名），组行新增 `pp-run-gscore-<i>`；`--ui-smoke` 冻结末行与 12 张截图集不变 | 需求 2/3：勾选框换位 + 对齐；评估结果入表格列。冻结口径允许加性；换位不改对象名/语义 | W2（ui-polisher） |
+| M8-A34 | `--dev` CLI 面**加性** `--score-pair REF DIST [--ref-bps N] [--icc FILE]`（`PP_BUILD_DEV` 门控；不新增 CMake target、不加 vcpkg 依赖） | 需求 4b：独立文件级 oracle（源文件 vs 产物重算），证明 sidecar 参考不是降采样结果；`--dev` 冻结面加性先例 M8-A6 | W4（metric-verifier） |
+| M8-A35 | 新增单测 `tests/unit/test_metric_truth.cpp`（ctest glob 自动收编）+ `tests/unit/test_fsops.cpp` opt-in `m8w1-acl/*` 真实 ACL 集成；`tests/golden` 夹具/SCHEMA 零改动 | 证据面只增不减；「假参考必被揭穿 / 评分随产物变化」机械回归 | W4/W1 |
+| M8-A36 | 回归基线**版本行定点换锚** 12 行 × 2 文件（`version=0.3.5` → `0.3.6.alpha1`），无行为行；**未跑** `regression.py --update` | 版本 bump 先例 M7R25-7 / A3-11；逐行归因写进发行报告 | W5（release-prep） |
+| M8-A37 | 版本单源 0.3.5 → **0.3.6 + `PP_VERSION_LABEL ".alpha1"`**；`vcpkg.json` version 数字段 0.3.6（R-122 单源一致性）；README/AGENTS 现役口径同步 | 用户 2026-10-29 指令（发布 0.3.6.alpha1）；先例 `61eade0` | W5 |
+| M8-A38 | **允许的行为变更**：输出根不存在且父目录不可写时，不再经 `cmd /c mkdir` 提权，改为提示用户手动创建/改选目录 | 旧路径依赖 cmd 展开且不可靠（存在授权错目录风险）；需求 1 安全面收口 | W1 |
+| M8-A39 | 新增工具脚本 `tools/param_effect_probe.py`（非产品面/不进发布构建）与 `docs/m8-param-wiring-audit.md`；116 行参数面逐行判定与 NO_EFFECT 归因/修复逐条登记 | 需求 4a：机械审计「参数是否真连线生效」；工具先行 | W3（param-wirer） |
+
 ## 登记回填
 
 | 裁定 | 提交 | 证据 |
 |---|---|---|
-| M8-A1…A13 | 待 Stage 提交回填 | 待回填 |
+| M8-A1…A13 | M8-A…D 提交（`d7490e1` / `30391b1` / `e9cce58` / `7455edc`） | `docs/m8-report.md` |
+| M8-A32…A39 | REL-0.3.6.alpha1 发行提交（回填待 tag 后补记） | `docs/0.3.6.alpha1-report.md` §2、`build/evidence-w1…w5/` |

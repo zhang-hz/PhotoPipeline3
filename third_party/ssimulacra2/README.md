@@ -50,7 +50,7 @@ targets）。vcpkg 的 libjxl 不安装这些内部件，因此本目录提供**
 
 | 文件 | 替换的 libjxl 内部件 | 说明 |
 |---|---|---|
-| `compat/lib/jxl/compat_core.h` | `base/status.h`、`base/common.h`、`base/compiler_specific.h`、`base/data_parallel.h`、`memory_manager_internal.h`、`image.h`、`image_ops.h`、`image_bundle.h`、`color_encoding_internal.h`、`image_metadata.h` | 核心替身：Status/StatusOr/JXL_* 宏、ImageF/Image3F（连续 float 平面，行尾 16 float pad 供 Highway 满向量读）、ImageBundle（RGB/线性 sRGB/无 alpha）、ColorEncoding（仅 sRGB 族）、ThreadPool/RunOnPool（`pool==nullptr` 时串行）、AlignedMemory、RoundUpTo、`kDefaultIntensityTarget=255`。语义对齐官方，实现裁剪。 |
+| `compat/lib/jxl/compat_core.h` | `base/status.h`、`base/common.h`、`base/compiler_specific.h`、`base/data_parallel.h`、`memory_manager_internal.h`、`image.h`、`image_ops.h`、`image_bundle.h`、`color_encoding_internal.h`、`image_metadata.h` | 核心替身：Status/StatusOr/JXL_* 宏、ImageF/Image3F（连续 float 平面，**数据指针 64B 对齐** + 行尾 16 float pad 供 Highway 满向量读/写）、ImageBundle（RGB/线性 sRGB/无 alpha）、ColorEncoding（仅 sRGB 族）、ThreadPool/RunOnPool（`pool==nullptr` 时串行）、AlignedMemory、RoundUpTo、`kDefaultIntensityTarget=255`。语义对齐官方，实现裁剪。 |
 | `compat/lib/jxl/base/matrix_ops.h` | 同名官方文件 | **逐字复制**（BSD-3，保留版权头），供 `gauss_blur.cc` 的 IIR 系数求解。 |
 | `compat/lib/jxl/cms/opsin_params.h` | 同名官方文件的**常量子集** | 逐字保留 XYB opsin 吸光矩阵与偏置；未收录编码器色域脚手架常量（本实现用不到）。 |
 | `compat/lib/jxl/enc_xyb.h` + `compat/enc_xyb_impl.cc` | `enc_xyb.h/.cc` 的 ToXYB | 实现**契约路径**：LinearSRGB→XYB。公式/常量逐字取自 `enc_xyb.cc` 的 `LinearRGBToXYB/LinearSRGBToXYB/ComputePremulAbsorb` 与 `base/fast_math-inl.h` 的 `CubeRootAndAdd`（6 ulp 快速 cbrt）；标量实现用 `std::fma` 复现 AVX2 上 `MulAdd/NegMulAdd` 的单次舍入，与官方 AVX2 路径逐位一致。sRGB gamma/任意 ICC 路径不在此实现（由 `ImageBundle::TransformTo` 精确 sRGB EOTF 先行线性化；其他编码返回错误，绝不静默错算）。 |
@@ -67,6 +67,12 @@ targets）。vcpkg 的 libjxl 不安装这些内部件，因此本目录提供**
 - `TransformTo` 只支持 sRGB gamma → linear sRGB（标准分段 EOTF）；其他编码返回失败。
 - ToXYB 只支持线性 sRGB 输入（契约 `src/core/metric/metric.h` 明确要求输入已是 sRGB 线性）。
 - `RunOnPool` 在 `pool==nullptr` 时串行执行（评分路径不建线程池；与官方默认单线程兜底一致）。
+- **平台差异修复（REL-0.3.6.alpha1-fix2）**：ImageF 数据原用 memory manager 的 malloc（仅 16B
+  对齐），而官方 `Image` 用 `AlignedMemory`（64B），`gauss_blur.cc` 的 Highway 满向量
+  Load/Store 假定行按向量宽度对齐 —— Linux/AVX3（512-bit，64B）CI 实测
+  `N_AVX3_ZEN4::VerticalStrip<1>` SIGSEGV（main-full #93 三个评分单测同点崩）。修法：
+  compat `ImageF` 在 memory manager 之上显式对齐到 64B（原始指针另存 free），行 stride 本就
+  为 16 float 的倍数；Windows/AVX2 下数值与行为不变（本地 ctest 40/40 复证）。
 - 无全局可变状态（除 Highway 自身的运行期 target 选择，其为只读初始化）：`compute()` 线程安全。
 
 ## 构建

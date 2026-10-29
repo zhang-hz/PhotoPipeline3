@@ -12,9 +12,14 @@
 //
 // 与官方实现的差异（逐条记录于 third_party/ssimulacra2/README.md）：
 //   * 容器：ImageF/Image3F 为连续 float 平面（行尾预留 16 float 以允许 Highway 满向量读）。
+//     **数据指针按 64 字节对齐**（与官方 Image 的 `AlignedMemory bytes_` 同口径）：
+//     gauss_blur.cc 的 Highway 满向量 Load/Store 假定行地址按向量宽度对齐；Linux AVX3
+//     （512-bit，64B）下普通 malloc 只保证 16B 对齐 → 段错误（main-full #93 实测
+//     VerticalStrip<1> SIGSEGV）。Windows/AVX2 掩蔽了该差异，故 compat 必须显式对齐。
 //   * 状态：Status/StatusOr 语义同官方（bool 化 + JXL_* 宏），实现裁剪。
 //   * 调度：pool 恒为 nullptr 时 RunOnPool 串行执行（评分路径不建线程池）。
-//   * 内存：全部分配走调用方提供的 JxlMemoryManager（NoMemoryManager 为 malloc/free）。
+//   * 内存：全部分配走调用方提供的 JxlMemoryManager（NoMemoryManager 为 malloc/free）；
+//     ImageF/Image3F 在 memory manager 之上再对齐到 64B（见上）。
 #ifndef PP_SSIMULACRA2_COMPAT_CORE_H_
 #define PP_SSIMULACRA2_COMPAT_CORE_H_
 
@@ -276,6 +281,8 @@ class ImageF {
  public:
   // Highway 满向量（AVX2=8 lane / AVX512=16 lane）读越 xsize 时仍在分配内。
   static constexpr size_t kLanePad = 16;
+  // 行数据对齐（官方 Image 用 AlignedMemory 的 64B；Highway AVX3 满向量 Load/Store 依赖它）。
+  static constexpr size_t kAlign = 64;
 
   ImageF() = default;
   ImageF(const ImageF& other) { CopyFrom(other); }
@@ -328,20 +335,29 @@ class ImageF {
     if (stride > static_cast<size_t>(-1) / sizeof(float) / ysize) {
       return false;
     }
+    // +kAlign-1 用于在 memory manager 返回的（可能仅 16B 对齐）块内手工对齐到 64B；
+    // 原始指针留在 allocation_ 里供 free（与官方 AlignedMemory 的 slack 策略一致）。
     const size_t count = stride * ysize + kLanePad;
-    float* data = static_cast<float*>(CompatAlloc(memory_manager,
-                                                  count * sizeof(float)));
-    if (data == nullptr) return false;
+    if (count > (static_cast<size_t>(-1) - (kAlign - 1)) / sizeof(float)) {
+      return false;
+    }
+    void* allocation =
+        CompatAlloc(memory_manager, count * sizeof(float) + (kAlign - 1));
+    if (allocation == nullptr) return false;
+    const uintptr_t raw = reinterpret_cast<uintptr_t>(allocation);
+    const uintptr_t aligned = (raw + (kAlign - 1)) & ~static_cast<uintptr_t>(kAlign - 1);
     memory_manager_ = memory_manager;
+    allocation_ = allocation;
     xsize_ = xsize;
     ysize_ = ysize;
     stride_ = stride;
-    data_ = data;
+    data_ = reinterpret_cast<float*>(aligned);
     return true;
   }
   void Free() {
-    if (data_ != nullptr) CompatFree(memory_manager_, data_);
+    if (allocation_ != nullptr) CompatFree(memory_manager_, allocation_);
     memory_manager_ = nullptr;
+    allocation_ = nullptr;
     xsize_ = 0;
     ysize_ = 0;
     stride_ = 0;
@@ -349,11 +365,13 @@ class ImageF {
   }
   void MoveFrom(ImageF& other) {
     memory_manager_ = other.memory_manager_;
+    allocation_ = other.allocation_;
     xsize_ = other.xsize_;
     ysize_ = other.ysize_;
     stride_ = other.stride_;
     data_ = other.data_;
     other.memory_manager_ = nullptr;
+    other.allocation_ = nullptr;
     other.xsize_ = 0;
     other.ysize_ = 0;
     other.stride_ = 0;
@@ -368,10 +386,11 @@ class ImageF {
   }
 
   JxlMemoryManager* memory_manager_ = nullptr;
+  void* allocation_ = nullptr; // memory manager 返回的原始块（free 用）
   size_t xsize_ = 0;
   size_t ysize_ = 0;
   size_t stride_ = 0;
-  float* data_ = nullptr;
+  float* data_ = nullptr; // 64B 对齐后的行 0 起点
 };
 
 class Image3F {

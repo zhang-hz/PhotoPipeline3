@@ -19,6 +19,8 @@
 #include <algorithm>
 #include <charconv>
 #include <chrono>
+#include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -30,7 +32,8 @@
 #include <utility>
 #include <vector>
 
-#include "codecs/encoders.h" // probe_bitdepth_support（HEIF/AVIF 运行时位深交集）
+#include "codecs/encoders.h"   // probe_bitdepth_support（HEIF/AVIF 运行时位深交集）
+#include "core/colormanager.h" // M8-W4：--score-pair 与管线同一条 ICC→sRGB 归一
 #include "core/fsops.h"
 #include "core/logger.h"
 #include "core/metric/metric.h" // M8-C2：sidecar metric 的 name/version/state 单源
@@ -39,6 +42,7 @@
 #include "core/presets.h"
 #include "core/scheduler.h"
 #include "core/types.h"
+#include "decode/oiio_reader.h" // M8-W4：--score-pair 的文件级 probe/decode（独立 oracle）
 #include "ui/preset_io.h"
 
 namespace fs = std::filesystem;
@@ -80,6 +84,18 @@ const char *kDevUsage =
     "  --workers N             worker count (0 = thread_budget or logical cores; dev default 1)\n"
     "  --score                 compute SSIMULACRA 2 for every output (dev-only; default off;\n"
     "                          adds the sidecar `metric` object and a `quality metric` log line)\n"
+    "  --score-pair REF DIST   scoring oracle (dev-only): compute SSIMULACRA 2 between two image\n"
+    "                          files using the pipeline's normalization (decode -> ICC/sRGB ->\n"
+    "                          exact sRGB EOTF) and the same metric core. REF is meant to be the\n"
+    "                          encoder input, DIST the decoded product; --out/inputs are not\n"
+    "                          required in this mode. Prints one parseable line:\n"
+    "                          `SCORE_PAIR state=ok|unavailable|failed score=<f> ...`\n"
+    "  --ref-bps N             --score-pair only: quantize the REF side onto an N-bit integer\n"
+    "                          grid before scoring (8|10|12|16; default 0 = use samples as-is;\n"
+    "                          same quantize/dequantize rule as pipeline C9, incl. 10/12-bit\n"
+    "                          bit-replication to the OIIO heif readback grid)\n"
+    "  --icc FILE              --score-pair only: force BOTH sides' colour profile to the ICC\n"
+    "                          embedded in FILE (overrides each side's own profile)\n"
     "  --base DIR              mirror-path base directory (repeatable)\n"
     "  --log-level LVL         trace|debug|info|warn|error\n"
     "  -h, --help              this text\n"
@@ -110,6 +126,10 @@ struct DevOptions {
     std::vector<OutputSpecText> outputs; // --outputs 追加项
     bool lossless = false, metadata_only = false;
     bool score = false; // M8-C2：--dev --score（dev 默认关；GUI 默认开，settings.quality_score）
+    // M8-W4（C9/C13 独立取证）：--score-pair 文件级 oracle（dev-only，见 kDevUsage）。
+    bool score_pair = false;
+    fs::path score_pair_ref, score_pair_dist, score_pair_icc;
+    int score_pair_bps = 0; // 0 = 不做参考侧量化（样本已是编码器输入网格时用）
     int bitdepth = -1, workers = 1;
     bool has_format = false, has_backend = false, has_tech = false, has_lossless = false;
     bool has_bitdepth = false, has_color = false, has_conflict = false, has_preset = false;
@@ -355,6 +375,34 @@ bool parse_dev_options(int argc, char **argv, DevOptions &o, std::string &err) {
         } else if (a == "--score") {
             // M8-C2（C13）：SSIMULACRA 2 评分开关（dev-only；默认关 = 回归日志/预算零 diff）。
             o.score = true;
+        } else if (a == "--score-pair") {
+            // M8-W4（C9/C13）：独立 oracle 模式（两个位置参数 REF/DIST；不需要 --out）。
+            const char *rv = need(i, "--score-pair");
+            if (!rv)
+                return false;
+            const char *dv = need(i, "--score-pair");
+            if (!dv)
+                return false;
+            o.score_pair = true;
+            o.score_pair_ref = rv;
+            o.score_pair_dist = dv;
+        } else if (a == "--ref-bps") {
+            // M8-W4：参考侧位深量化（管线 C9 同一口径；默认 0 = 不改样本）。
+            const char *v = need(i, "--ref-bps");
+            if (!v)
+                return false;
+            int64_t n = 0;
+            if (!parse_int_text(v, n) || n < 0 || n > 16) {
+                err = "invalid --ref-bps value (expected 0|8|10|12|16)";
+                return false;
+            }
+            o.score_pair_bps = static_cast<int>(n);
+        } else if (a == "--icc") {
+            // M8-W4：强制两侧色彩描述（源 ICC；产物未嵌 ICC 时仍能与管线同一归一）。
+            const char *v = need(i, "--icc");
+            if (!v)
+                return false;
+            o.score_pair_icc = v;
         } else if (!a.empty() && a.front() == '-' && a != "-") {
             err = "unknown option '" + std::string(a) + "'";
             return false;
@@ -362,6 +410,9 @@ bool parse_dev_options(int argc, char **argv, DevOptions &o, std::string &err) {
             o.inputs.emplace_back(a);
         }
     }
+    // M8-W4：--score-pair 独立 oracle 不需要 --out / 位置输入（只吃两个显式 REF/DIST）。
+    if (o.score_pair)
+        return true;
     if (!o.out_set) {
         err = "--out DIR is required";
         return false;
@@ -630,6 +681,235 @@ void write_sidecars(const pp::FileResult &r, const std::vector<std::string> &par
 }
 
 // ---------------------------------------------------------------------------
+// M8-W4（C9/C13）：`--score-pair` 文件级独立 oracle
+// ---------------------------------------------------------------------------
+// 目的：sidecar 的 `metric.score` 声明「参考 = 编码器输入、失真 = 解码产物」。本 oracle 用
+// **独立文件级通路**复核该声明：两张图片文件各自 probe_file + decode_float（OIIO，与管线
+// 失真侧同一读入口，但 REF 侧不再从管线工作缓冲派生，而是从磁盘上的参考图片重新解码）
+// → REF 侧可选按目标位深量化（--ref-bps，与管线 C9 同一量化/反归一化口径）→ 嵌入 ICC
+// → sRGB（同一 ColorManager 实例/参数）→ 逐样本精确 sRGB EOTF（C9 同一口径）
+// → pp::metric::compute()（**同一指标核心**）。因此它只验证「归一化 + 参考来源」这条链，
+// 不重复实现指标算法本身（那是 C1 oracle 的职责，见 test_quality_metric 的 PP_METRIC_ORACLE_*）。
+// 不变量：同一文件自比 = 100；无损产物 ≤ 0.1 容差内 = 100；有损产物 = 与 sidecar 同量级且
+// 随编码设置变化 —— 若管线把参考偷偷换成产物/降采样结果，本工具会与 sidecar 明显分歧。
+// 局限（如实登记）：alpha 输入不支持（管线在评分前已拍平）；10/12-bit REF 走 16-bit 参考
+// 图片时存在「先 16bit 量化再 bps 量化」的二次舍入（最大 1 个 bps LSB，报告给容差）。
+
+inline float pair_srgb_eotf(float v) {
+    const float c = std::clamp(v, 0.0f, 1.0f);
+    return (c <= 0.04045f) ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
+}
+
+// float 编码值 → N-bit 整数网格 → 反归一化（与 pipeline.cpp quantize_dequantize 同口径：
+// 8bit = ×(1/255f) 乘常量；10/12bit = 位复制扩张到 u16 再 ×(1/65535f)；16bit = ×(1/65535f)。
+// 必须用**乘常量**而不是除法：OIIO 解码回读也是乘 1/255f，除法会引入 1 ULP 差异，导致
+// 「同一样本自比」不到 100（已在 _grid.png 上实测到 99.03 的假差异）。
+void pair_quantize_dequantize(std::vector<float> *samples, int bps) {
+    if (bps <= 0)
+        return;
+    if (bps == 8) {
+        constexpr float kScale8 = 1.0f / 255.0f;
+        for (float &v : *samples) {
+            // 与管线量化同口径的最近舍入（0..255 非负：lround(x*255) == trunc(x*255+0.5)）。
+            const int q = static_cast<int>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f));
+            v = static_cast<float>(q) * kScale8;
+        }
+        return;
+    }
+    const int maxv = (bps >= 16) ? 65535 : ((1 << bps) - 1);
+    std::vector<std::uint32_t> q(samples->size());
+    for (std::size_t i = 0; i < samples->size(); ++i) {
+        const float x = std::clamp((*samples)[i], 0.0f, 1.0f);
+        q[i] = static_cast<std::uint32_t>(std::lround(x * static_cast<float>(maxv)));
+    }
+    constexpr float kScale16 = 1.0f / 65535.0f;
+    if (bps == 10 || bps == 12) {
+        const int shift = 16 - bps;
+        const int back = 2 * bps - 16;
+        for (std::size_t i = 0; i < samples->size(); ++i) {
+            const std::uint32_t v = (q[i] << shift) | (q[i] >> back);
+            (*samples)[i] = static_cast<float>(v) * kScale16;
+        }
+        return;
+    }
+    for (std::size_t i = 0; i < samples->size(); ++i)
+        (*samples)[i] = static_cast<float>(q[i]) * kScale16;
+}
+
+struct PairImage {
+    int width = 0;
+    int height = 0;
+    std::vector<float> rgb; // sRGB 线性，交错 RGB
+};
+
+bool load_pair_image(const fs::path &path, int ref_bps, const std::string &icc, PairImage *out,
+                     std::string *err) {
+    const pp::ProbeOutcome po = pp::probe_file(path);
+    if (!po.error.empty() || !po.first_spec) {
+        *err = "probe failed: " + (po.error.empty() ? std::string("no image") : po.error);
+        return false;
+    }
+    pp::DecodeOutcome dec = pp::decode_float(path, po.info);
+    if (!dec.error.empty()) {
+        *err = "decode failed: " + dec.error;
+        return false;
+    }
+    OIIO::ImageBuf &buf = dec.buf;
+    const OIIO::ImageSpec &spec = buf.spec();
+    const int w = spec.width;
+    const int h = spec.height;
+    const int nch = spec.nchannels;
+    if (w <= 0 || h <= 0) {
+        *err = "invalid image size";
+        return false;
+    }
+    if (nch < 1 || nch > 3) {
+        *err = "unsupported channel count " + std::to_string(nch) +
+               " (score-pair accepts 1/3 channels; the pipeline flattens alpha before scoring)";
+        return false;
+    }
+    const OIIO::ROI roi(0, w, 0, h, 0, 1, 0, nch);
+    std::vector<float> samples(static_cast<std::size_t>(w) * static_cast<std::size_t>(h) *
+                               static_cast<std::size_t>(nch));
+    if (!buf.get_pixels(roi, OIIO::TypeDesc::FLOAT, samples.data())) {
+        *err = "pixel readback failed";
+        return false;
+    }
+    // 1) 参考侧位深量化（管线 C9：参考必须是编码器实际收到的量化后样本）。
+    pair_quantize_dequantize(&samples, ref_bps);
+    // 2) ICC → sRGB：两侧用**同一份**色彩描述（单源 = REF 文件的 ICC 或 --icc），与管线
+    //    ctx.metric_icc 同源；空 ICC = 假定 sRGB 编码值。**不读 DIST 产物自带的 ICC** ——
+    //    管线失真侧也只按目标空间归一化一次，不对产物 ICC 再变一次（否则同图自比不到 100）。
+    std::vector<float> normalized;
+    int out_nch = nch;
+    if (!icc.empty()) {
+        OIIO::ImageBuf cbuf(OIIO::ImageSpec(w, h, nch, OIIO::TypeDesc::FLOAT));
+        if (!cbuf.set_pixels(roi, OIIO::TypeDesc::FLOAT, samples.data())) {
+            *err = "colour normalization setup failed";
+            return false;
+        }
+        std::vector<pp::Warning> ignored; // 评分不得把色彩降级告警塞进产物行（与管线同口径）
+        std::string xerr;
+        const pp::ColorOutcome co = pp::ColorManager::instance().transform(
+            cbuf, icc, /*src_is_gray=*/nch == 1, pp::ColorTarget::SRGB, pp::ColorOptions{},
+            &ignored, &xerr);
+        if (!co.error.empty()) {
+            *err = "colour normalization failed: " + co.error;
+            return false;
+        }
+        const OIIO::ImageSpec &cs = cbuf.spec();
+        out_nch = cs.nchannels;
+        normalized.assign(static_cast<std::size_t>(w) * static_cast<std::size_t>(h) *
+                              static_cast<std::size_t>(out_nch),
+                          0.0f);
+        if (!cbuf.get_pixels(OIIO::ROI(0, w, 0, h, 0, 1, 0, out_nch), OIIO::TypeDesc::FLOAT,
+                             normalized.data())) {
+            *err = "colour normalization readback failed";
+            return false;
+        }
+    }
+    // 3) 逐样本精确 sRGB EOTF（同一函数两侧共用）。
+    const std::vector<float> &src = normalized.empty() ? samples : normalized;
+    out->width = w;
+    out->height = h;
+    out->rgb.resize(static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * 3);
+    for (std::size_t i = 0; i < out->rgb.size() / 3; ++i) {
+        if (out_nch == 1) {
+            const float lin = pair_srgb_eotf(src[i]);
+            out->rgb[3 * i + 0] = lin;
+            out->rgb[3 * i + 1] = lin;
+            out->rgb[3 * i + 2] = lin;
+        } else {
+            for (int c = 0; c < 3; ++c)
+                out->rgb[3 * i + static_cast<std::size_t>(c)] =
+                    pair_srgb_eotf(src[3 * i + static_cast<std::size_t>(c)]);
+        }
+    }
+    return true;
+}
+
+int run_score_pair(const DevOptions &o) {
+    std::string forced_icc;
+    if (!o.score_pair_icc.empty()) {
+        const pp::ProbeOutcome ipo = pp::probe_file(o.score_pair_icc);
+        if (!ipo.error.empty() || !ipo.first_spec) {
+            std::printf("SCORE_PAIR state=error note=\"--icc probe failed: %s\"\n",
+                        ipo.error.empty() ? "no image" : ipo.error.c_str());
+            return 2;
+        }
+        forced_icc = pp::icc_from_spec(*ipo.first_spec);
+        if (forced_icc.empty()) {
+            std::printf("SCORE_PAIR state=error note=\"--icc file carries no embedded ICC\"\n");
+            return 2;
+        }
+    }
+    PairImage ref;
+    PairImage dist;
+    std::string err;
+    // 两侧统一的色彩描述单源（与管线 ctx.metric_icc 同源）：--icc 优先；否则取 REF 文件
+    // 自带 ICC；都没有 = 假定 sRGB（keep + 无 ICC 源的管线口径）。DIst 产物的自带 ICC
+    // 不参与（产物已在目标空间；管线失真侧也只做目标空间→sRGB 一次归一化）。
+    std::string pair_icc = forced_icc;
+    if (pair_icc.empty()) {
+        const pp::ProbeOutcome rpo = pp::probe_file(o.score_pair_ref);
+        if (!rpo.error.empty() || !rpo.first_spec) {
+            std::printf("SCORE_PAIR state=failed side=ref note=\"ref probe failed\"\n");
+            return 1;
+        }
+        pair_icc = pp::icc_from_spec(*rpo.first_spec);
+    }
+    const auto t0 = std::chrono::steady_clock::now();
+    if (!load_pair_image(o.score_pair_ref, o.score_pair_bps, pair_icc, &ref, &err)) {
+        std::printf("SCORE_PAIR state=failed side=ref note=\"%s\"\n", err.c_str());
+        return 1;
+    }
+    if (!load_pair_image(o.score_pair_dist, 0, pair_icc, &dist, &err)) {
+        std::printf("SCORE_PAIR state=failed side=dist note=\"%s\"\n", err.c_str());
+        return 1;
+    }
+    if (ref.width != dist.width || ref.height != dist.height) {
+        std::printf("SCORE_PAIR state=unavailable note=\"size mismatch %dx%d vs %dx%d\"\n",
+                    ref.width, ref.height, dist.width, dist.height);
+        return 1;
+    }
+    const pp::metric::FrameSource ref_src{
+        ref.width, ref.height, [&ref](int y, float *rgb) {
+            std::memcpy(rgb,
+                        ref.rgb.data() +
+                            static_cast<std::size_t>(y) * static_cast<std::size_t>(ref.width) * 3,
+                        static_cast<std::size_t>(ref.width) * 3 * sizeof(float));
+        }};
+    const pp::metric::FrameSource dist_src{
+        dist.width, dist.height, [&dist](int y, float *rgb) {
+            std::memcpy(rgb,
+                        dist.rgb.data() +
+                            static_cast<std::size_t>(y) * static_cast<std::size_t>(dist.width) * 3,
+                        static_cast<std::size_t>(dist.width) * 3 * sizeof(float));
+        }};
+    const pp::metric::Result mr = pp::metric::compute(ref_src, dist_src);
+    const double wall_ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    switch (mr.state) {
+    case pp::metric::State::Ok:
+        std::printf("SCORE_PAIR state=ok score=%.10f ref_bps=%d width=%d height=%d "
+                    "metric_ms=%.1f wall_ms=%.1f icc=%s\n",
+                    mr.score, o.score_pair_bps, ref.width, ref.height, mr.ms, wall_ms,
+                    forced_icc.empty() ? "ref-file" : "forced");
+        return 0;
+    case pp::metric::State::Unavailable:
+        std::printf("SCORE_PAIR state=unavailable note=\"%s\"\n", mr.note.c_str());
+        return 1;
+    case pp::metric::State::Failed:
+        std::printf("SCORE_PAIR state=failed note=\"%s\"\n", mr.note.c_str());
+        return 1;
+    case pp::metric::State::Off:
+        break;
+    }
+    std::printf("SCORE_PAIR state=failed note=\"metric returned off\"\n");
+    return 1;
+}
+
+// ---------------------------------------------------------------------------
 // W1-T6：--dev 进度事件流侧车（progress-trace.jsonl）
 //   逐行 JSON 对象 = 一个 FileEvent（阶段态/进度态/终态），字段与 SCHEMA.md「progress_trace」
 //   一节逐字对应；pp_verify 据此断言 overall_frac 单调不倒退 + synthetic 标志（金样
@@ -752,6 +1032,10 @@ int run_dev(int argc, char **argv) {
         std::fputs(kDevUsage, stdout);
         return 0;
     }
+    // M8-W4：--score-pair 独立 oracle 在进入任何管线/日志/输出目录初始化之前分流
+    // （不写 --out、不建 logs/、不读预设；只做文件级解码 + 归一 + metric::compute）。
+    if (o.score_pair)
+        return run_score_pair(o);
 
     pp::LogLevel level = pp::LogLevel::Info;
     // R-157（M7-WP8）：文本档解析单源 = pp::log_level_from_text（旧本文件两份逐字重复已删）。

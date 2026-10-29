@@ -30,8 +30,27 @@
 #include <utility>
 
 #ifdef _WIN32
+// clang-format off
+// 本块禁止 clang-format 排序：sddl.h 依赖 windows.h 已定义的类型（WINAPI/LPCWSTR…），
+// 字母序会把 sddl.h 排到 windows.h 之前 → C2039（已实际踩中一次，全树编译阻断）。
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <sddl.h> // ConvertSidToStringSidW（SID 字符串化；advapi32）
 #include <process.h>
+// advapi32 导入库（OpenProcessToken/GetTokenInformation/ConvertSidToStringSidW）：随 .obj 的
+// .drectve 段传播到最终链接，pp_core 的消费者（pp_test_fsops / photopipeline）无需改
+// target_link_libraries（先例：src/core/secret.cpp 的 crypt32 同法）。Linux 零影响。
+#pragma comment(lib, "advapi32.lib")
+// clang-format on
 #else
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
 #include <unistd.h>
 #endif
 
@@ -736,48 +755,408 @@ bool validate_output_filename(const std::filesystem::path &p, std::string *err) 
     return true;
 }
 
-bool probe_output_root(const std::filesystem::path &dir, std::string *err) {
-    const auto fail = [err](const std::string &msg) {
-        if (err != nullptr) {
-            *err = msg;
-        }
-        return false;
-    };
-    if (err != nullptr) {
-        err->clear();
+// ===========================================================================
+// M8-W1 加性追加：输出根结构化探针 + 错误分类 + icacls 参数构造
+//   契约见 fsops.h「M8-W1 加性追加」节；旧 probe_output_root 改为转发（签名/返回值契约不变）。
+//   根因（0.3.5 残余，docs/0.3.5-report.md:123-124）：
+//     ① 旧实现试写失败只报路径、**丢弃 OS 错误码** → 上层只能拿文本猜「是否权限问题」，
+//        磁盘满/只读介质也会被误判成权限不足并弹 UAC；
+//     ② 提权命令经 `cmd /c`（`%VAR%` 展开/引号截断风险），路径含 `%` 时直接放弃提权。
+//   修法：探针返回**结构化状态 + OS 错误码**（错误码分类在 core，可单测）；icacls 参数
+//   构造成纯函数（不经 cmd、SID 授权），UI 只留 ShellExecuteExW 外壳。
+// ===========================================================================
+
+namespace {
+
+// OS 错误文本（Win32：系统本地化文本；POSIX：strerror）。0/未知 → 空串。
+std::string os_error_text(unsigned long code) {
+#ifdef _WIN32
+    if (code == 0) {
+        return {};
     }
+    wchar_t *buf = nullptr;
+    const DWORD n = ::FormatMessageW(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+        nullptr, static_cast<DWORD>(code), MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        reinterpret_cast<LPWSTR>(&buf), 0, nullptr);
+    std::wstring text;
+    if (n > 0 && buf != nullptr) {
+        text.assign(buf, n);
+        while (!text.empty() &&
+               (text.back() == L'\r' || text.back() == L'\n' || text.back() == L' ')) {
+            text.pop_back();
+        }
+    }
+    if (buf != nullptr) {
+        ::LocalFree(buf);
+    }
+    if (text.empty()) {
+        return {};
+    }
+    const int bytes = ::WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()),
+                                            nullptr, 0, nullptr, nullptr);
+    if (bytes <= 0) {
+        return {};
+    }
+    std::string out(static_cast<std::size_t>(bytes), '\0');
+    ::WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), out.data(),
+                          bytes, nullptr, nullptr);
+    return out;
+#else
+    if (code == 0) {
+        return {};
+    }
+    const char *s = std::strerror(static_cast<int>(code));
+    return s != nullptr ? std::string(s) : std::string();
+#endif
+}
+
+// 路径 → UTF-8（Windows：宽字符正确转 UTF-8，避免 ANSI 代码页在中文路径上乱码；
+// POSIX：字节原样）。路径只用于**诊断文案**，不参与任何判定。
+std::string path_to_utf8(const std::filesystem::path &p) {
+    const std::u8string u8 = p.u8string();
+    return std::string(reinterpret_cast<const char *>(u8.data()), u8.size());
+}
+
+// 错误分类：是否「ACL/权限类」写入拒绝 —— 只有这类失败才值得申请管理员授权。
+//   磁盘满(ERROR_DISK_FULL 112 / ENOSPC 28)、只读介质(ERROR_WRITE_PROTECT 19 / EROFS 30)、
+//   共享冲突(32)、路径不存在(3) 一律 **不是** ACL 类（旧文本匹配会把它们误判成权限）。
+bool is_acl_denial_code(unsigned long code) {
+#ifdef _WIN32
+    return code == 5u /* ERROR_ACCESS_DENIED */ || code == 1314u /* ERROR_PRIVILEGE_NOT_HELD */;
+#else
+    return code == static_cast<unsigned long>(EACCES) || code == static_cast<unsigned long>(EPERM);
+#endif
+}
+
+// 最近的已存在目录（诊断用：根不存在/不可建时告诉用户「断在哪一层」）。
+std::filesystem::path nearest_existing_dir(const std::filesystem::path &dir) {
     if (dir.empty()) {
-        return fail("output root is empty");
+        return {};
+    }
+    std::error_code ec;
+    std::filesystem::path p = dir;
+    while (!p.empty()) {
+        const std::filesystem::file_status st = std::filesystem::status(p, ec);
+        if (!ec && std::filesystem::is_directory(st)) {
+            return p;
+        }
+        const std::filesystem::path parent = p.parent_path();
+        if (parent.empty() || parent == p) {
+            break;
+        }
+        p = parent;
+    }
+    return {};
+}
+
+// 诊断文案：<head>: <path>: <OS 文本> (win32=N / errno=N)。前缀沿用既有 "output root is …"
+// （src/core/error_text.h 的前缀族继续命中「输出根目录不可用」）。
+std::string probe_detail(const char *head, const std::filesystem::path &dir,
+                         unsigned long os_error) {
+    std::string msg = std::string(head) + ": " + path_to_utf8(dir);
+    if (os_error != 0) {
+        const std::string text = os_error_text(os_error);
+        if (!text.empty()) {
+            msg += ": " + text;
+        }
+#ifdef _WIN32
+        msg += " (win32=" + std::to_string(os_error) + ")";
+#else
+        msg += " (errno=" + std::to_string(os_error) + ")";
+#endif
+    }
+    return msg;
+}
+
+// 试写探针（唯一名，写后即删）：返回 OS 错误码（0 = 成功）。用底层 open/write 而非
+// ofstream，唯一目的是**拿到精确错误码**（ofstream 只给 failbit，拿不到 5/112/19）。
+unsigned long write_probe_once(const std::filesystem::path &dir) {
+    const std::filesystem::path probe = dir / ("pp-write-probe." + unique_suffix() + ".tmp");
+    static constexpr char kPayload[] = "pp write probe\n";
+    constexpr std::size_t kPayloadLen = sizeof(kPayload) - 1;
+#ifdef _WIN32
+    const std::wstring wprobe = normalize_extended_path(probe).wstring();
+    HANDLE h = ::CreateFileW(wprobe.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_DELETE,
+                             nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, nullptr);
+    if (h == INVALID_HANDLE_VALUE) {
+        return static_cast<unsigned long>(::GetLastError());
+    }
+    DWORD written = 0;
+    const BOOL ok = ::WriteFile(h, kPayload, static_cast<DWORD>(kPayloadLen), &written, nullptr);
+    unsigned long code = ok ? 0u : static_cast<unsigned long>(::GetLastError());
+    if (ok && written != kPayloadLen) {
+        code = ERROR_WRITE_FAULT; // 短写 = 落盘失败，不能当成功
+    }
+    ::CloseHandle(h);
+    if (code == 0u && !::DeleteFileW(wprobe.c_str())) {
+        code = static_cast<unsigned long>(::GetLastError());
+    }
+    return code;
+#else
+    const std::string nprobe = normalize_extended_path(probe).string();
+    const int fd = ::open(nprobe.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (fd < 0) {
+        return static_cast<unsigned long>(errno);
+    }
+    const ssize_t written = ::write(fd, kPayload, kPayloadLen);
+    unsigned long code =
+        written == static_cast<ssize_t>(kPayloadLen) ? 0u : static_cast<unsigned long>(errno);
+    ::close(fd);
+    if (code == 0u && ::unlink(nprobe.c_str()) != 0) {
+        code = static_cast<unsigned long>(errno);
+    }
+    return code;
+#endif
+}
+
+// Windows 命令行引号（CommandLineToArgvW/CreateProcess 兼容）：整体加引号；结尾反斜杠
+// 在引号前必须翻倍，避免把闭引号转义掉。
+std::string quote_windows_argument(std::string_view arg) {
+    std::string out;
+    out.reserve(arg.size() + 8);
+    out.push_back('"');
+    std::size_t trailing_backslashes = 0;
+    for (const char c : arg) {
+        if (c == '\\') {
+            ++trailing_backslashes;
+        } else {
+            trailing_backslashes = 0;
+        }
+        out.push_back(c);
+    }
+    out.append(trailing_backslashes, '\\');
+    out.push_back('"');
+    return out;
+}
+
+bool has_unsafe_windows_path_char(std::string_view s) {
+    for (const char c : s) {
+        if (c == '"' || static_cast<unsigned char>(c) < 0x20) {
+            return true;
+        }
+    }
+    return false;
+}
+
+#ifdef _WIN32
+std::string wide_to_utf8(std::wstring_view w) {
+    if (w.empty()) {
+        return {};
+    }
+    const int bytes = ::WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()),
+                                            nullptr, 0, nullptr, nullptr);
+    if (bytes <= 0) {
+        return {};
+    }
+    std::string out(static_cast<std::size_t>(bytes), '\0');
+    ::WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), out.data(), bytes,
+                          nullptr, nullptr);
+    return out;
+}
+#endif
+
+} // namespace
+
+const char *output_root_probe_status_name(OutputRootProbeStatus status) {
+    switch (status) {
+    case OutputRootProbeStatus::Ok:
+        return "Ok";
+    case OutputRootProbeStatus::EmptyPath:
+        return "EmptyPath";
+    case OutputRootProbeStatus::NotCreatable:
+        return "NotCreatable";
+    case OutputRootProbeStatus::NotDirectory:
+        return "NotDirectory";
+    case OutputRootProbeStatus::WriteDenied:
+        return "WriteDenied";
+    case OutputRootProbeStatus::WriteFailed:
+        return "WriteFailed";
+    }
+    return "Unknown";
+}
+
+OutputRootProbe probe_output_root_ex(const std::filesystem::path &dir) {
+    OutputRootProbe result;
+    if (dir.empty()) {
+        result.status = OutputRootProbeStatus::EmptyPath;
+        result.detail = "output root is empty";
+        return result;
     }
     std::error_code ec;
     // R-007：fs 入口归一（超长输出根同样可建可探）。
     const std::filesystem::path dir_x = normalize_extended_path(dir);
+    // 先判「已存在但不是目录」（普通文件/设备）：create_directories 在这种路径上只会报
+    // file exists，会被误诊成「不可创建」——分开成 NotDirectory 才能给对文案。
+    {
+        const std::filesystem::file_status pre = std::filesystem::status(dir_x, ec);
+        if (!ec && std::filesystem::exists(pre) && !std::filesystem::is_directory(pre)) {
+            result.status = OutputRootProbeStatus::NotDirectory;
+            result.detail = "output root is not a directory: " + path_to_utf8(dir);
+            return result;
+        }
+    }
     std::filesystem::create_directories(dir_x, ec);
     if (ec) {
-        return fail("output root is not creatable: " + dir.string() + ": " + ec.message());
+        result.status = OutputRootProbeStatus::NotCreatable;
+        result.os_error = static_cast<unsigned long>(ec.value());
+        result.nearest_existing = nearest_existing_dir(dir);
+        result.detail = probe_detail("output root is not creatable", dir, result.os_error);
+        if (!result.nearest_existing.empty()) {
+            result.detail +=
+                "; nearest existing directory: " + path_to_utf8(result.nearest_existing);
+        }
+        return result;
     }
     const std::filesystem::file_status st = std::filesystem::status(dir_x, ec);
-    if (ec || !std::filesystem::is_directory(st)) {
-        return fail("output root is not a directory: " + dir.string());
+    if (ec) {
+        result.status = OutputRootProbeStatus::NotDirectory;
+        result.os_error = static_cast<unsigned long>(ec.value());
+        result.detail = probe_detail("output root is not a directory", dir, result.os_error);
+        return result;
     }
+    if (!std::filesystem::is_directory(st)) {
+        result.status = OutputRootProbeStatus::NotDirectory;
+        result.detail = "output root is not a directory: " + path_to_utf8(dir);
+        return result;
+    }
+    result.nearest_existing = dir;
     // 试写探针（唯一名，写后即删）：只读介质/配额/共享限制在这里就暴露。
-    const std::filesystem::path probe = dir / ("pp-write-probe." + unique_suffix() + ".tmp");
-    {
-        // R-007：写入口经 normalize_extended_path 归一（超长输出根同样可探）。
-        std::ofstream out(normalize_extended_path(probe), std::ios::binary | std::ios::trunc);
-        if (!out) {
-            return fail("output root is not writable: " + dir.string());
+    const unsigned long code = write_probe_once(dir);
+    if (code != 0) {
+        result.os_error = code;
+        result.status = is_acl_denial_code(code) ? OutputRootProbeStatus::WriteDenied
+                                                 : OutputRootProbeStatus::WriteFailed;
+        result.detail = probe_detail("output root is not writable", dir, code);
+        return result;
+    }
+    return result; // Ok
+}
+
+bool probe_output_root(const std::filesystem::path &dir, std::string *err) {
+    const OutputRootProbe probe = probe_output_root_ex(dir);
+    if (probe.status == OutputRootProbeStatus::Ok) {
+        if (err != nullptr) {
+            err->clear();
         }
-        out << "pp write probe\n";
-        out.flush();
-        if (!out) {
-            out.close();
-            discard_temp_file(probe);
-            return fail("output root is not writable: " + dir.string());
+        return true;
+    }
+    if (err != nullptr) {
+        *err = probe.detail.empty() ? std::string("output root is not writable") : probe.detail;
+    }
+    return false;
+}
+
+bool should_offer_elevation(const OutputRootProbe &probe) {
+#ifdef _WIN32
+    return probe.status == OutputRootProbeStatus::WriteDenied;
+#else
+    (void)probe;
+    return false; // POSIX 无 UAC：权限不足由 UI 直接给可操作提示（不弹提权）
+#endif
+}
+
+bool is_valid_sid(std::string_view sid) {
+    // 形如 "S-1-5-21-<sub>-<sub>-<sub>-<rid>"：S-<revision>-<authority>-<sub>...
+    if (sid.size() < 7 || sid[0] != 'S' || sid[1] != '-') {
+        return false;
+    }
+    std::size_t pos = 2;
+    const auto parse_decimal = [&sid, &pos](unsigned long long max_value,
+                                            unsigned long long &out) -> bool {
+        const std::size_t start = pos;
+        unsigned long long value = 0;
+        while (pos < sid.size() && sid[pos] >= '0' && sid[pos] <= '9') {
+            const unsigned long long digit = static_cast<unsigned long long>(sid[pos] - '0');
+            if (digit > max_value || value > (max_value - digit) / 10ull) {
+                return false; // 溢出 max_value
+            }
+            value = value * 10ull + digit;
+            ++pos;
+        }
+        if (pos == start) {
+            return false; // 空段
+        }
+        if (pos - start > 1 && sid[start] == '0') {
+            return false; // 前导零（规范 SID 串无前导零）
+        }
+        out = value;
+        return true;
+    };
+    unsigned long long revision = 0;
+    if (!parse_decimal(1ull, revision) || revision != 1ull) {
+        return false;
+    }
+    if (pos >= sid.size() || sid[pos] != '-') {
+        return false;
+    }
+    ++pos;
+    unsigned long long authority = 0;
+    if (!parse_decimal((1ull << 48) - 1ull, authority)) {
+        return false;
+    }
+    std::size_t subs = 0;
+    while (pos < sid.size()) {
+        if (sid[pos] != '-' || subs >= 15) {
+            return false;
+        }
+        ++pos;
+        unsigned long long sub = 0;
+        if (!parse_decimal(0xFFFFFFFFull, sub)) {
+            return false;
+        }
+        ++subs;
+    }
+    return subs >= 1;
+}
+
+std::string current_user_sid() {
+#ifdef _WIN32
+    HANDLE token = nullptr;
+    if (::OpenProcessToken(::GetCurrentProcess(), TOKEN_QUERY, &token) == FALSE) {
+        return {};
+    }
+    DWORD size = 0;
+    ::GetTokenInformation(token, TokenUser, nullptr, 0, &size);
+    std::string out;
+    if (size > 0) {
+        std::vector<unsigned char> buffer(size, 0);
+        if (::GetTokenInformation(token, TokenUser, buffer.data(), size, &size) != FALSE) {
+            const auto *user = reinterpret_cast<const TOKEN_USER *>(buffer.data());
+            if (user->User.Sid != nullptr) {
+                LPWSTR text = nullptr;
+                if (::ConvertSidToStringSidW(user->User.Sid, &text) != FALSE && text != nullptr) {
+                    out = wide_to_utf8(text);
+                    ::LocalFree(text);
+                }
+            }
         }
     }
-    discard_temp_file(probe);
-    return true;
+    ::CloseHandle(token);
+    return out;
+#else
+    return {};
+#endif
+}
+
+std::string icacls_grant_parameters(const std::filesystem::path &root, std::string_view sid) {
+    if (!is_valid_sid(sid) || root.empty() || !root.is_absolute()) {
+        return {};
+    }
+    // 只用于命令行 → 词法归一（去尾随分隔符；不解析符号链接，不做任何磁盘访问）。
+    std::string path_text = path_to_utf8(root.lexically_normal());
+    while (path_text.size() > 1 && (path_text.back() == '\\' || path_text.back() == '/') &&
+           !(path_text.size() == 3 && path_text[1] == ':')) {
+        path_text.pop_back(); // 保留盘符根 "C:\"，其余去尾随分隔符
+    }
+    if (path_text.empty() || has_unsafe_windows_path_char(path_text)) {
+        return {};
+    }
+    std::string params = quote_windows_argument(path_text);
+    params += " /grant *";
+    params.append(sid);
+    params += ":(OI)(CI)M"; // 仅「修改」权限、仅该目录子树（安全面：不请求更宽权限）
+    return params;
 }
 
 } // namespace pp

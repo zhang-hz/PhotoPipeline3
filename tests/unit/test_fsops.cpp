@@ -6,11 +6,27 @@
 // Every failure prints "FAIL <case>: <detail>"; main() returns the number of failures.
 
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
 #include <system_error>
 #include <vector>
+
+#ifdef _WIN32
+// clang-format off
+// 本块禁止 clang-format 排序：sddl.h 依赖 windows.h 的类型（WINAPI/LPWSTR…），字母序会
+// 把 sddl.h 排到 windows.h 之前 → C2039。处理与 src/core/fsops.cpp 相同。
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <sddl.h> // ConvertSidToStringSidW（当前用户 SID 的独立对账路径）
+// clang-format on
+#endif
 
 #include "core/fsops.h"
 
@@ -697,6 +713,344 @@ int main() {
               "超长输出根探针失败: " + perr);
         fs::remove_all(root, ec);
     }
+
+    // =======================================================================
+    // M8-W1：输出目录写入权限 / UAC 流程（需求 1）—— 结构化探针 + 纯函数分类/构造
+    //   契约：src/core/fsops.h「M8-W1 加性追加」节；根因见 docs/0.3.5-report.md:123-124。
+    //   这里只测**可判定逻辑**（不弹 UAC、不改 ACL）：
+    //     ① 探针状态分类与 OS 错误码/文案；② should_offer_elevation 的「非 ACL 类不弹」；
+    //     ③ SID 校验；④ icacls 参数构造（不经 cmd / SID 授权 / 引号 / 相对路径拒绝）。
+    //   ACL 集成实验（icacls /deny 构造不可写目录 → 探针 WriteDenied → /remove:d 还原）
+    //   走人工证据脚本 build/evidence-w1/（不在 ctest 里改机器 ACL）。
+    // =======================================================================
+    {
+        // ① 探针：正常目录 → Ok / 无 OS 错误 / detail 为空 / 无残留探针文件
+        const fs::path ok_dir = make_temp_dir("m8w1_probe_ok");
+        const pp::OutputRootProbe ok = pp::probe_output_root_ex(ok_dir);
+        check(ok.status == pp::OutputRootProbeStatus::Ok, "m8w1/probe-ok", "status!=Ok");
+        check(ok.os_error == 0, "m8w1/probe-ok-oserror", std::to_string(ok.os_error));
+        check(ok.detail.empty(), "m8w1/probe-ok-detail", ok.detail);
+        check(std::string(pp::output_root_probe_status_name(ok.status)) == "Ok",
+              "m8w1/probe-status-name", pp::output_root_probe_status_name(ok.status));
+        std::error_code ec;
+        std::size_t leftovers = 0;
+        for (const fs::directory_entry &e : fs::directory_iterator(ok_dir, ec)) {
+            if (e.path().filename().string().find("pp-write-probe") != std::string::npos)
+                ++leftovers;
+        }
+        check(leftovers == 0, "m8w1/probe-no-leftovers", std::to_string(leftovers));
+
+        // ② 空路径 → EmptyPath（既有 probe_output_root 契约不变：false + 非空 err）
+        const pp::OutputRootProbe empty = pp::probe_output_root_ex(fs::path());
+        check(empty.status == pp::OutputRootProbeStatus::EmptyPath, "m8w1/probe-empty",
+              "status!=EmptyPath");
+        std::string empty_err;
+        check(!pp::probe_output_root(fs::path(), &empty_err), "m8w1/probe-empty-legacy",
+              "expected failure");
+        check(empty_err == "output root is empty", "m8w1/probe-empty-legacy-text", empty_err);
+
+        // ③ 输出根是已存在的普通文件 → NotDirectory（不再误报为「不可创建」）
+        const fs::path file_root = ok_dir / "plain.txt";
+        write_file(file_root, "x");
+        const pp::OutputRootProbe not_dir = pp::probe_output_root_ex(file_root);
+        check(not_dir.status == pp::OutputRootProbeStatus::NotDirectory, "m8w1/probe-file-root",
+              "status!=NotDirectory");
+        check(not_dir.detail.find("not a directory") != std::string::npos,
+              "m8w1/probe-file-root-detail", not_dir.detail);
+
+        // ④ 父级是普通文件 → NotCreatable，携带 OS 错误码 + 最近已存在目录（诊断）
+        const pp::OutputRootProbe not_creatable = pp::probe_output_root_ex(file_root / "nested");
+        check(not_creatable.status == pp::OutputRootProbeStatus::NotCreatable,
+              "m8w1/probe-not-creatable", "status!=NotCreatable");
+        check(not_creatable.os_error != 0, "m8w1/probe-not-creatable-code",
+              "expected a non-zero OS error code");
+        check(not_creatable.detail.find("not creatable") != std::string::npos,
+              "m8w1/probe-not-creatable-detail", not_creatable.detail);
+#ifdef _WIN32
+        check(not_creatable.detail.find("(win32=") != std::string::npos,
+              "m8w1/probe-not-creatable-win32-text", not_creatable.detail);
+#else
+        check(not_creatable.detail.find("(errno=") != std::string::npos,
+              "m8w1/probe-not-creatable-errno-text", not_creatable.detail);
+#endif
+        check(!not_creatable.nearest_existing.empty(), "m8w1/probe-nearest-existing",
+              "expected the nearest existing directory");
+        check(not_creatable.detail.find("nearest existing directory") != std::string::npos,
+              "m8w1/probe-nearest-existing-detail", not_creatable.detail);
+
+        // ⑤ 错误分类：只有 ACL 类拒绝才值得申请管理员授权（磁盘满/只读介质等一律不弹）
+        pp::OutputRootProbe fabricate;
+        fabricate.status = pp::OutputRootProbeStatus::Ok;
+        check(!pp::should_offer_elevation(fabricate), "m8w1/elev/ok", "Ok 不应提权");
+        fabricate.status = pp::OutputRootProbeStatus::EmptyPath;
+        check(!pp::should_offer_elevation(fabricate), "m8w1/elev/empty", "空路径不应提权");
+        fabricate.status = pp::OutputRootProbeStatus::NotCreatable;
+        fabricate.os_error = 5;
+        check(!pp::should_offer_elevation(fabricate), "m8w1/elev/not-creatable",
+              "不可创建不应提权（先给可操作文案）");
+        fabricate.status = pp::OutputRootProbeStatus::NotDirectory;
+        check(!pp::should_offer_elevation(fabricate), "m8w1/elev/not-dir", "非目录不应提权");
+#ifdef _WIN32
+        // 磁盘满(112)/只读介质(19)/共享冲突(32)/路径不存在(3) 都是 WriteFailed → 不弹 UAC
+        fabricate.status = pp::OutputRootProbeStatus::WriteFailed;
+        for (const unsigned long code : {112ul, 19ul, 32ul, 3ul}) {
+            fabricate.os_error = code;
+            check(!pp::should_offer_elevation(fabricate), "m8w1/elev/write-failed",
+                  "WriteFailed 不应提权, code=" + std::to_string(code));
+        }
+        fabricate.status = pp::OutputRootProbeStatus::WriteDenied;
+        fabricate.os_error = 5; // ERROR_ACCESS_DENIED
+        check(pp::should_offer_elevation(fabricate), "m8w1/elev/write-denied",
+              "ACL 类拒绝应进入提权流程");
+#else
+        fabricate.status = pp::OutputRootProbeStatus::WriteFailed;
+        fabricate.os_error = 28; // ENOSPC
+        check(!pp::should_offer_elevation(fabricate), "m8w1/elev/write-failed", "磁盘满不应提权");
+        fabricate.status = pp::OutputRootProbeStatus::WriteDenied;
+        fabricate.os_error = 13; // EACCES
+        check(!pp::should_offer_elevation(fabricate), "m8w1/elev/no-uac-on-posix",
+              "POSIX 无 UAC 通道");
+#endif
+
+        // ⑥ SID 校验（icacls 的 *S-1-… 形式；只接受规范串）
+        check(pp::is_valid_sid("S-1-5-18"), "m8w1/sid/system", "S-1-5-18 应合法");
+        check(pp::is_valid_sid("S-1-5-21-1004336348-1177238915-682003330-512"), "m8w1/sid/user",
+              "典型用户 SID 应合法");
+        check(pp::is_valid_sid("S-1-0-0"), "m8w1/sid/null", "S-1-0-0 应合法");
+        check(pp::is_valid_sid("S-1-5-32-544"), "m8w1/sid/builtin", "内置组 SID 应合法");
+        check(!pp::is_valid_sid(""), "m8w1/sid/empty", "空串应判负");
+        check(!pp::is_valid_sid("S-1-5"), "m8w1/sid/no-sub", "无子权威应判负");
+        check(!pp::is_valid_sid("S-2-5-18"), "m8w1/sid/revision", "revision!=1 应判负");
+        check(!pp::is_valid_sid("S-1-5-"), "m8w1/sid/trailing-dash", "尾随 - 应判负");
+        check(!pp::is_valid_sid("S-1-5-abc"), "m8w1/sid/non-digit", "非数字子权威应判负");
+        check(!pp::is_valid_sid("s-1-5-18"), "m8w1/sid/lowercase", "小写 S 应判负");
+        check(!pp::is_valid_sid("S-1-5-01-18"), "m8w1/sid/leading-zero",
+              "前导零应判负（非规范串）");
+        check(!pp::is_valid_sid("S-1-5-21-4294967296"), "m8w1/sid/sub-overflow",
+              "子权威 > 2^32-1 应判负");
+        check(!pp::is_valid_sid("S-1-281474976710656-5"), "m8w1/sid/authority-overflow",
+              "authority > 2^48-1 应判负");
+        check(!pp::is_valid_sid("S-1-5-18 "), "m8w1/sid/trailing-space", "尾随空格应判负");
+        check(!pp::is_valid_sid("S-1-5-21-1-2-3-4-5-6-7-8-9-10-11-12-13-14-15"),
+              "m8w1/sid/too-many-subs", "子权威 > 15 个应判负");
+
+        // ⑦ icacls 参数构造：不经 cmd、SID 授权、引号正确、非法输入拒绝
+        const std::string good_sid = "S-1-5-21-1004336348-1177238915-682003330-512";
+        std::string params;
+#ifdef _WIN32
+        params = pp::icacls_grant_parameters(fs::path("C:/out dir"), good_sid);
+        check(params == "\"C:\\out dir\" /grant *S-1-5-21-1004336348-1177238915-682003330-512:"
+                        "(OI)(CI)M",
+              "m8w1/icacls/params", params);
+        check(pp::icacls_grant_parameters(fs::path("C:/out dir/"), good_sid) == params,
+              "m8w1/icacls/trailing-slash",
+              pp::icacls_grant_parameters(fs::path("C:/out dir/"), good_sid));
+        // `%VAR%` 原样保留（ShellExecuteExW→CreateProcess 不做 cmd 展开：旧实现的功能空洞）
+        const std::string pct = pp::icacls_grant_parameters(fs::path("C:/a%TMP%b"), good_sid);
+        check(pct.find("%TMP%") != std::string::npos, "m8w1/icacls/percent-literal", pct);
+        check(pct.find("/c ") == std::string::npos, "m8w1/icacls/no-cmd-c", pct);
+        check(pct.find("cmd") == std::string::npos, "m8w1/icacls/no-cmd", pct);
+        check(pp::icacls_grant_parameters(fs::path("C:/a\"b"), good_sid).empty(),
+              "m8w1/icacls/quote-rejected", "含双引号路径必须拒绝（拒绝比猜安全）");
+#else
+        params = pp::icacls_grant_parameters(fs::path("/out dir"), good_sid);
+        check(params == "\"/out dir\" /grant *S-1-5-21-1004336348-1177238915-682003330-512:"
+                        "(OI)(CI)M",
+              "m8w1/icacls/params", params);
+        check(pp::icacls_grant_parameters(fs::path("/out dir/"), good_sid) == params,
+              "m8w1/icacls/trailing-slash",
+              pp::icacls_grant_parameters(fs::path("/out dir/"), good_sid));
+        const std::string pct = pp::icacls_grant_parameters(fs::path("/a%TMP%b"), good_sid);
+        check(pct.find("%TMP%") != std::string::npos, "m8w1/icacls/percent-literal", pct);
+        check(pct.find("/c ") == std::string::npos, "m8w1/icacls/no-cmd-c", pct);
+        check(pp::icacls_grant_parameters(fs::path("/a\"b"), good_sid).empty(),
+              "m8w1/icacls/quote-rejected", "含双引号路径必须拒绝");
+#endif
+        check(pp::icacls_grant_parameters(fs::path("relative/dir"), good_sid).empty(),
+              "m8w1/icacls/relative-rejected",
+              "相对路径必须拒绝（提权进程工作目录不是本进程目录）");
+        check(pp::icacls_grant_parameters(fs::path(), good_sid).empty(),
+              "m8w1/icacls/empty-rejected", "空路径必须拒绝");
+        check(pp::icacls_grant_parameters(fs::path("/tmp/x"), "not-a-sid").empty(),
+              "m8w1/icacls/bad-sid-rejected", "非法 SID 必须拒绝");
+        check(pp::icacls_grant_parameters(fs::path("/tmp/x"), "").empty(),
+              "m8w1/icacls/empty-sid-rejected", "空 SID 必须拒绝");
+
+#ifdef _WIN32
+        // ⑧ 当前用户 SID：格式合法 + 稳定（同一进程两次调用一致）。
+        //    与 WinAPI 独立路径对账：GetUserNameW → LookupAccountNameW → ConvertSidToStringSidW
+        //    必须得到同一个 SID（域环境查询失败时只校验格式，不误红）。
+        const std::string sid = pp::current_user_sid();
+        check(pp::is_valid_sid(sid), "m8w1/current-sid/format", sid);
+        check(pp::current_user_sid() == sid, "m8w1/current-sid/stable", "两次调用不一致");
+        wchar_t user[256] = {};
+        DWORD user_len = static_cast<DWORD>(sizeof(user) / sizeof(user[0]));
+        bool matched = false;
+        bool lookup_ok = false;
+        if (::GetUserNameW(user, &user_len) != FALSE && user_len > 1) {
+            wchar_t domain[256] = {};
+            DWORD domain_len = static_cast<DWORD>(sizeof(domain) / sizeof(domain[0]));
+            BYTE sid_buf[SECURITY_MAX_SID_SIZE] = {};
+            DWORD sid_len = static_cast<DWORD>(sizeof(sid_buf));
+            SID_NAME_USE use = SidTypeUnknown;
+            if (::LookupAccountNameW(nullptr, user, sid_buf, &sid_len, domain, &domain_len, &use) !=
+                FALSE) {
+                lookup_ok = true;
+                LPWSTR text = nullptr;
+                if (::ConvertSidToStringSidW(sid_buf, &text) != FALSE && text != nullptr) {
+                    char utf8[512] = {};
+                    const int n =
+                        ::WideCharToMultiByte(CP_UTF8, 0, text, -1, utf8,
+                                              static_cast<int>(sizeof(utf8)) - 1, nullptr, nullptr);
+                    if (n > 0) {
+                        matched = std::string(utf8) == sid;
+                    }
+                    ::LocalFree(text);
+                }
+            }
+        }
+        check(!lookup_ok || matched, "m8w1/current-sid/lookup-match",
+              "token SID 与账户名解析的 SID 不一致");
+#endif
+    }
+
+#ifdef _WIN32
+    // ---- M8-W1 ACL 集成实验（opt-in：PP_FSOPS_ACL_INTEGRATION=1，默认 ctest 不跑）----
+    //   真实 ACL 闭环（不经 cmd，产品同源 icacls.exe 直调）：
+    //   A) icacls /deny 构造不可写目录 → probe_output_root_ex 必须判 WriteDenied + os_error=5
+    //      + should_offer_elevation=true → /remove:d 还原后必须回到 Ok；
+    //   B) 把产品 icacls_grant_parameters() 的输出原样交给真 icacls 执行 → 退出码 0 且复探 Ok
+    //      （验证参数构造/SID 的 `*S-1-…` 语法真被系统接受）。
+    //   注意：显式 deny ACE 的优先级高于 grant，所以 A 用 /remove:d 还原而不是用 grant「修」；
+    //   真实用户场景是「目录 ACL 没给当前用户写权」（无 deny），B 覆盖该授权的执行面。
+    //   无论中间成败都还原并删除临时目录。
+    bool acl_integration = false;
+#ifdef _WIN32
+    {
+        char *acl_env = nullptr;
+        std::size_t acl_env_size = 0;
+        if (::_dupenv_s(&acl_env, &acl_env_size, "PP_FSOPS_ACL_INTEGRATION") == 0 &&
+            acl_env != nullptr) {
+            acl_integration = std::string(acl_env) == "1";
+            std::free(acl_env);
+        }
+    }
+#else
+    if (const char *acl_env = std::getenv("PP_FSOPS_ACL_INTEGRATION"); acl_env != nullptr) {
+        acl_integration = std::string(acl_env) == "1";
+    }
+#endif
+    if (acl_integration) {
+        std::wstring icacls_exe;
+        {
+            wchar_t sys[MAX_PATH] = {};
+            if (::GetSystemDirectoryW(sys, MAX_PATH) != 0) {
+                icacls_exe = std::wstring(sys) + L"\\icacls.exe";
+            }
+        }
+        const std::string acl_sid = pp::current_user_sid();
+        auto utf8_to_wide = [](const std::string &s) {
+            if (s.empty()) {
+                return std::wstring();
+            }
+            const int n =
+                ::MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
+            std::wstring w(static_cast<std::size_t>(n), L'\0');
+            ::MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), w.data(), n);
+            return w;
+        };
+        // 直接 CreateProcessW 跑 icacls（测试 harness；产品路径同样是 icacls.exe 直调、不经 cmd）
+        auto run_icacls = [&icacls_exe](const std::wstring &args, unsigned long *exit_code) {
+            if (icacls_exe.empty()) {
+                return false;
+            }
+            std::wstring cmd = L"\"" + icacls_exe + L"\" " + args;
+            std::vector<wchar_t> mutable_cmd(cmd.begin(), cmd.end());
+            mutable_cmd.push_back(L'\0');
+            STARTUPINFOW si{};
+            si.cb = sizeof(si);
+            PROCESS_INFORMATION pi{};
+            if (::CreateProcessW(icacls_exe.c_str(), mutable_cmd.data(), nullptr, nullptr, FALSE,
+                                 CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi) == FALSE) {
+                return false;
+            }
+            const DWORD wait = ::WaitForSingleObject(pi.hProcess, 30000);
+            bool ok = false;
+            if (wait == WAIT_OBJECT_0) {
+                DWORD code = 1;
+                ::GetExitCodeProcess(pi.hProcess, &code);
+                if (exit_code != nullptr) {
+                    *exit_code = code;
+                }
+                ok = true;
+            }
+            ::CloseHandle(pi.hThread);
+            ::CloseHandle(pi.hProcess);
+            return ok;
+        };
+        auto quote_path = [](const fs::path &p) { return L"\"" + p.wstring() + L"\""; };
+        if (icacls_exe.empty() || !pp::is_valid_sid(acl_sid)) {
+            std::printf("SKIP m8w1-acl: icacls.exe/SID unavailable\n");
+        } else {
+            const std::wstring sid_w = utf8_to_wide(acl_sid);
+            const fs::path deny_dir = make_temp_dir("m8w1_acl_deny");
+            unsigned long deny_code = 1;
+            const bool deny_ran =
+                run_icacls(quote_path(deny_dir) + L" /deny *" + sid_w + L":(W)", &deny_code);
+            if (!deny_ran || deny_code != 0) {
+                std::printf("SKIP m8w1-acl: cannot apply deny ACE (exit=%lu)\n", deny_code);
+            } else {
+                const pp::OutputRootProbe denied = pp::probe_output_root_ex(deny_dir);
+                check(denied.status == pp::OutputRootProbeStatus::WriteDenied,
+                      "m8w1-acl/probe-denied",
+                      std::string("status=") + pp::output_root_probe_status_name(denied.status) +
+                          " detail=" + denied.detail);
+                check(denied.os_error == 5ul, "m8w1-acl/probe-denied-code",
+                      std::to_string(denied.os_error));
+                check(denied.detail.find("win32=5") != std::string::npos,
+                      "m8w1-acl/probe-denied-text", denied.detail);
+                check(pp::should_offer_elevation(denied), "m8w1-acl/should-elevate",
+                      "ACL 类拒绝应进入提权流程");
+                std::printf(
+                    "M8W1-ACL deny-ace: probe_status=%s os_error=%lu should_offer_elevation=%d"
+                    " detail=%s\n",
+                    pp::output_root_probe_status_name(denied.status), denied.os_error,
+                    pp::should_offer_elevation(denied) ? 1 : 0, denied.detail.c_str());
+                // 还原 deny ACE（无论后续断言结果都必须执行）
+                unsigned long remove_code = 1;
+                const bool remove_ran =
+                    run_icacls(quote_path(deny_dir) + L" /remove:d *" + sid_w, &remove_code);
+                check(remove_ran && remove_code == 0, "m8w1-acl/remove-deny",
+                      "icacls /remove:d 还原失败, exit=" + std::to_string(remove_code));
+                const pp::OutputRootProbe restored = pp::probe_output_root_ex(deny_dir);
+                check(restored.status == pp::OutputRootProbeStatus::Ok, "m8w1-acl/probe-restored",
+                      std::string("status=") + pp::output_root_probe_status_name(restored.status) +
+                          " detail=" + restored.detail);
+                std::printf("M8W1-ACL restore: probe_status=%s\n",
+                            pp::output_root_probe_status_name(restored.status));
+            }
+            std::error_code rm_ec;
+            fs::remove_all(deny_dir, rm_ec);
+
+            // B) 产品参数构造 → 真 icacls 执行 → 复探 Ok
+            const fs::path grant_dir = make_temp_dir("m8w1_acl_grant");
+            const std::string grant_params = pp::icacls_grant_parameters(grant_dir, acl_sid);
+            check(!grant_params.empty(), "m8w1-acl/grant-params", "参数构造为空");
+            unsigned long grant_code = 1;
+            const bool grant_ran = run_icacls(utf8_to_wide(grant_params), &grant_code);
+            check(grant_ran && grant_code == 0, "m8w1-acl/grant-cmd",
+                  "icacls 拒绝产品构造的参数, exit=" + std::to_string(grant_code) +
+                      " params=" + grant_params);
+            const pp::OutputRootProbe granted = pp::probe_output_root_ex(grant_dir);
+            check(granted.status == pp::OutputRootProbeStatus::Ok, "m8w1-acl/probe-after-grant",
+                  std::string("status=") + pp::output_root_probe_status_name(granted.status) +
+                      " detail=" + granted.detail);
+            std::printf("M8W1-ACL grant: icacls_exit=%lu params=%s verify_status=%s\n", grant_code,
+                        grant_params.c_str(), pp::output_root_probe_status_name(granted.status));
+            fs::remove_all(grant_dir, rm_ec);
+        }
+    }
+#endif
 
     if (g_failed == 0) {
         std::printf("test_fsops: OK\n");

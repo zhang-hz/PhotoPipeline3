@@ -60,7 +60,8 @@
 #include <QPalette>
 #include <QPixmap>
 #include <QProgressBar>
-#include <QProxyStyle> // M5-T14：文件列表系统焦点框抑制（QTreeView::drawRow 的焦点框调用不带
+#include <QProgressDialog> // M8-W1：UAC 等待期间的非阻塞进度框（嵌套事件循环内重绘）
+#include <QProxyStyle>     // M5-T14：文件列表系统焦点框抑制（QTreeView::drawRow 的焦点框调用不带
 #include <QtConcurrent/QtConcurrentRun> // R-081：日志尾 IO 下后台
 // widget → QSS outline:none 无效；见 FileViewFocusFrameStyle 说明）
 #include <QPushButton>
@@ -88,6 +89,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -97,6 +99,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <utility>
@@ -160,99 +163,315 @@ void warn_cannot_start(QWidget *parent, const QString &reason) {
     QMessageBox::warning(parent, T("无法开始"), reason);
 }
 
-#ifdef _WIN32
-// 2026-10：输出目录权限不足时先**申请权限**（UAC + 只给该目录授予当前用户修改权），
-// 用户拒绝/申请失败后才回落到原错误。避免"直接报错、用户不知道还能授权"。
-bool error_looks_like_permission(const std::string &error) {
-    const QString e = QString::fromStdString(error).toLower();
-    // "not writable" 来自 probe_output_root 的试写分支（只有路径、不带 OS 错误文本）——
-    // 该分支恰好是「目录已存在但当前用户无写权」的主场景，必须触发申请流程，
-    // 否则兜底错误里「再次运行并授权」的提示是死路。
-    return e.contains(QStringLiteral("access is denied")) ||
-           e.contains(QStringLiteral("permission denied")) ||
-           e.contains(QStringLiteral("not writable")) || e.contains(QStringLiteral("不可写")) ||
-           e.contains(QStringLiteral("read-only")) || e.contains(QStringLiteral("只读")) ||
-           e.contains(QStringLiteral("拒绝访问")) || e.contains(QStringLiteral("权限不足")) ||
-           e.contains(QStringLiteral("权限"));
+// ---------------------------------------------------------------------------
+// M8-W1（需求 1）：输出目录写入权限 / UAC 流程
+//   根因（旧实现，0.3.5 残余 docs/0.3.5-report.md:123-124）：
+//     ① 判据过宽且靠**错误文本**猜权限（`error_looks_like_permission` 命中「权限」任意子串、
+//        `not writable`、`read-only`…）：磁盘满/只读介质/路径不存在也会弹 UAC；中文系统上
+//        Win32 错误文本本地化，文本匹配本质不可靠；
+//     ② 提权命令经 `cmd /c if not exist … mkdir … & icacls "<root>" /grant "<DOMAIN\\user>"`：
+//        `%VAR%` 展开风险、引号截断风险（路径含 `"` 被静默删除 → 可能授权错目录），路径/账户
+//        含 `%` 时直接放弃提权（功能空洞）；账户名 vs SID 在域账户/重命名账户下可能授错主体；
+//     ③ `WaitForSingleObject(hProcess, 120s)` 在 GUI 线程裸等 → UAC 确认期间窗口「未响应」；
+//     ④ 只认 icacls 退出码，**授权后不复验**（只读介质/组策略下「授权成功但依旧不可写」）；
+//     ⑤ UAC 取消与执行失败同一条兜底文案，用户不知道下一步；⑥ 每次「开始运行」重复弹窗。
+//   修法（分类/构造进 core 纯函数 + 单测；本文件只留 ShellExecuteExW 外壳）：
+//     * 判据 = fsops 结构化探针（OS 错误码），只有 ACL 类拒绝才提权；
+//     * 直接 `ShellExecuteExW(icacls.exe, runas)` + 当前用户 **SID** 授权（不经 cmd）；
+//     * 非阻塞等待（嵌套事件循环 + 进度框，UI 持续重绘）；
+//     * 授权后**重新试写复验**；取消/失败/仍不可写/拒绝分别给可操作文案；
+//     * 每目录每会话最多自动尝试一次（防重复弹窗）。
+// ---------------------------------------------------------------------------
+
+// 提权结果（跨平台声明；非 Windows 恒 NotAttempted）。
+// 基类型 uint8_t：5 档值，int 基类型会被 clang-tidy performance-enum-size 判为浪费
+// （tidy 棘轮：新代码 0 告警）。
+enum class ElevationOutcome : std::uint8_t {
+    NotAttempted, // 未进入提权（非 ACL 类失败 / 参数不可安全构造）
+    Declined,     // 用户选「否」，或本会话该目录已尝试过（防重复弹窗）
+    Cancelled,    // UAC 被取消（ERROR_CANCELLED）
+    Failed,       // 提权执行失败 / 退出码非 0 / 授权后复验仍不可写
+    Granted,      // icacls 退出码 0 **且复写验证通过**
+};
+
+struct ElevationReport {
+    ElevationOutcome outcome = ElevationOutcome::NotAttempted;
+    unsigned long win_error = 0;
+    unsigned long exit_code = 0;
+    unsigned long wait_ms = 0;
+    std::string detail;
+};
+
+const char *elevation_outcome_name(ElevationOutcome outcome) {
+    switch (outcome) {
+    case ElevationOutcome::NotAttempted:
+        return "not-attempted";
+    case ElevationOutcome::Declined:
+        return "declined";
+    case ElevationOutcome::Cancelled:
+        return "cancelled";
+    case ElevationOutcome::Failed:
+        return "failed";
+    case ElevationOutcome::Granted:
+        return "granted";
+    }
+    return "unknown";
 }
 
-bool grant_output_dir_permission(QWidget *parent, const std::filesystem::path &root) {
-    if (root.empty())
-        return false;
-    const QString root_text = QString::fromStdWString(root.wstring());
+namespace {
+
+#ifdef _WIN32
+// 等待上限（含 UAC 确认 + icacls 执行）。超时 = **停止等待并如实报告**，不 terminate
+// 已提权进程（ACL 操作不可安全中断）。
+constexpr int kElevationWaitMs = 120000;
+constexpr int kElevationPollMs = 100;
+
+// 本会话已尝试过提权的输出根（UTF-8 路径）。只在「用户拒绝 / 执行失败 / 授权后仍不可写」
+// 后登记 —— 防止每次「开始运行」对同一个注定失败的目录重复弹窗；UAC 取消不登记
+// （取消是一次性决定，用户下次点运行仍应可重试）。
+std::set<std::string> g_elevation_attempted_roots;
+
+std::string elevation_root_key(const std::filesystem::path &root) {
+    const std::u8string u8 = root.u8string();
+    return std::string(reinterpret_cast<const char *>(u8.data()), u8.size());
+}
+
+// UTF-8 → QString（core 侧的路径/错误文案一律 UTF-8，见 fsops::path_to_utf8 的注释）。
+QString qstring_from_utf8(const std::string &s) {
+    return QString::fromUtf8(s.data(), static_cast<int>(s.size()));
+}
+
+QString qstring_from_path(const std::filesystem::path &p) {
+    const std::u8string u8 = p.u8string();
+    return QString::fromUtf8(reinterpret_cast<const char *>(u8.data()),
+                             static_cast<int>(u8.size()));
+}
+
+ElevationReport elevate_output_dir_permission(QWidget *parent, const std::filesystem::path &root) {
+    ElevationReport report;
+    const pp::OutputRootProbe probe = pp::probe_output_root_ex(root);
+    if (!pp::should_offer_elevation(probe)) {
+        // 非 ACL 类失败（磁盘满/只读介质/路径不存在…）：绝不弹 UAC，由调用方按 status 给文案。
+        return report;
+    }
+    const std::string sid = pp::current_user_sid();
+    if (!pp::is_valid_sid(sid)) {
+        report.outcome = ElevationOutcome::Failed;
+        report.detail = "cannot resolve current user SID";
+        pp::log_warn("run", "mainwindow_run.cpp", "permission elevation skipped: no user SID",
+                     {{"out_root", root.string()},
+                      {"status", pp::output_root_probe_status_name(probe.status)},
+                      {"os_error", std::to_string(probe.os_error)}});
+        return report;
+    }
+    const std::string params = pp::icacls_grant_parameters(root, sid);
+    if (params.empty()) {
+        report.outcome = ElevationOutcome::Failed;
+        report.detail = "cannot build a safe icacls command line for this path";
+        pp::log_warn("run", "mainwindow_run.cpp", "permission elevation skipped: unsafe params",
+                     {{"out_root", root.string()}, {"user_sid", sid}});
+        return report;
+    }
+    const std::string root_key = elevation_root_key(root);
+    if (g_elevation_attempted_roots.count(root_key) != 0) {
+        report.outcome = ElevationOutcome::Declined;
+        report.detail = "elevation already attempted for this root in this session";
+        pp::log_info("run", "mainwindow_run.cpp",
+                     "permission elevation skipped: already attempted this session",
+                     {{"out_root", root.string()}});
+        return report;
+    }
+
     const QMessageBox::StandardButton answer = QMessageBox::question(
         parent, T("需要写入权限"),
-        T("输出目录当前不可写：\n%1\n\n是否申请管理员权限，仅为该目录授予当前用户"
-          "“修改”权限？\n\nUAC 被取消或授权失败时，仍会显示原始错误。")
-            .arg(root_text),
+        T("输出目录当前不可写：\n%1\n\n是否申请管理员权限，仅为该目录授予当前用户「修改」权限？\n\n"
+          "· 使用当前用户 SID 直接调用系统 icacls（不经过 cmd，路径中的特殊字符不会被展开）；\n"
+          "· 只影响该目录子树，不需要重启应用；\n"
+          "· UAC 被取消或授权失败时会显示原始错误。")
+            .arg(qstring_from_utf8(root_key)),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
-    if (answer != QMessageBox::Yes)
-        return false;
-
-    wchar_t user[256] = {};
-    DWORD user_len = static_cast<DWORD>(std::size(user));
-    if (!::GetUserNameW(user, &user_len) || user_len == 0)
-        return false;
-    QString account = QString::fromWCharArray(user);
-    wchar_t domain[256] = {};
-    if (const DWORD n =
-            ::GetEnvironmentVariableW(L"USERDOMAIN", domain, static_cast<DWORD>(std::size(domain)));
-        n > 0 && n < std::size(domain)) {
-        account = QString::fromWCharArray(domain) + QLatin1Char('\\') + account;
+    if (answer != QMessageBox::Yes) {
+        g_elevation_attempted_roots.insert(root_key);
+        report.outcome = ElevationOutcome::Declined;
+        report.detail = "user declined the elevation prompt";
+        pp::log_info("run", "mainwindow_run.cpp", "permission elevation declined by user",
+                     {{"out_root", root.string()}, {"user_sid", sid}});
+        return report;
     }
 
-    // 目标目录可能尚不存在：cmd 内先按需创建，再授权；路径整体加引号。
-    // 安全边界（审计 R3）：cmd /c 会对 `%VAR%` 做环境变量展开、双引号是唯一分隔符。
-    // 路径/账户名含 `%` 时「授权错目录」是理论可达的，故直接放弃提权（回落到原始错误，
-    // 用户可改用不含 % 的目录）；双引号从路径剔除，避免参数截断。
-    if (root_text.contains(QLatin1Char('%')) || account.contains(QLatin1Char('%'))) {
-        pp::log_warn("run", "mainwindow_run.cpp",
-                     "permission elevation skipped: '%' in path/account (cmd expansion risk)",
-                     {{"out_root", root.string()}});
-        return false;
+    // icacls 用**系统目录绝对路径**（不依赖 PATH，避免被同名程序劫持）。
+    wchar_t system_dir[MAX_PATH] = {};
+    if (::GetSystemDirectoryW(system_dir, MAX_PATH) == 0) {
+        report.outcome = ElevationOutcome::Failed;
+        report.detail = "cannot resolve the system directory";
+        return report;
     }
-    QString safe_root = root_text;
-    safe_root.replace(QLatin1Char('"'), QString());
-    const QString params =
-        QStringLiteral(
-            "/c if not exist \"%1\" mkdir \"%1\" & icacls \"%1\" /grant \"%2:(OI)(CI)M\"")
-            .arg(safe_root, account);
+    const std::wstring icacls_exe = std::wstring(system_dir) + L"\\icacls.exe";
+    const QString params_q = QString::fromStdString(params);
 
     SHELLEXECUTEINFOW sei{};
     sei.cbSize = sizeof(sei);
-    sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+    sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
     sei.lpVerb = L"runas";
-    sei.lpFile = L"cmd.exe";
-    sei.lpParameters = reinterpret_cast<LPCWSTR>(params.utf16());
+    sei.lpFile = icacls_exe.c_str();
+    sei.lpParameters = reinterpret_cast<LPCWSTR>(params_q.utf16());
     sei.nShow = SW_HIDE;
     if (!::ShellExecuteExW(&sei) || sei.hProcess == nullptr) {
-        pp::log_warn(
-            "run", "mainwindow_run.cpp", "permission elevation cancelled/failed",
-            {{"out_root", root.string()}, {"win_error", std::to_string(::GetLastError())}});
-        return false;
+        report.win_error = static_cast<unsigned long>(::GetLastError());
+        report.outcome = report.win_error == ERROR_CANCELLED ? ElevationOutcome::Cancelled
+                                                             : ElevationOutcome::Failed;
+        report.detail = report.outcome == ElevationOutcome::Cancelled
+                            ? "UAC was cancelled"
+                            : "ShellExecuteExW(runas, icacls) failed";
+        pp::log_warn("run", "mainwindow_run.cpp",
+                     report.outcome == ElevationOutcome::Cancelled
+                         ? "permission elevation cancelled at UAC"
+                         : "permission elevation failed to start",
+                     {{"out_root", root.string()},
+                      {"user_sid", sid},
+                      {"win_error", std::to_string(report.win_error)}});
+        if (report.outcome != ElevationOutcome::Cancelled) {
+            g_elevation_attempted_roots.insert(root_key);
+        }
+        return report;
     }
-    const DWORD wait = ::WaitForSingleObject(sei.hProcess, 120000);
-    DWORD code = 1;
-    ::GetExitCodeProcess(sei.hProcess, &code);
+
+    // 非阻塞等待：嵌套事件循环 + 进度框（UAC 确认期间窗口持续重绘，不再「未响应」）。
+    QProgressDialog progress(T("正在申请管理员权限…"), QString(), 0, 0, parent);
+    progress.setWindowTitle(T("需要写入权限"));
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setCancelButton(nullptr);
+    progress.setAutoClose(false);
+    progress.setMinimumDuration(0);
+    QTimer show_timer;
+    QObject::connect(&show_timer, &QTimer::timeout, &progress, &QWidget::show);
+    show_timer.setSingleShot(true);
+    show_timer.start(400); // 快路径不闪框
+    QEventLoop loop;
+    QTimer poll_timer;
+    QObject::connect(&poll_timer, &QTimer::timeout, [&sei, &loop] {
+        if (::WaitForSingleObject(sei.hProcess, 0) == WAIT_OBJECT_0) {
+            loop.quit();
+        }
+    });
+    poll_timer.start(kElevationPollMs);
+    QTimer::singleShot(kElevationWaitMs, &loop, &QEventLoop::quit);
+    const auto started = std::chrono::steady_clock::now();
+    loop.exec();
+    poll_timer.stop();
+    show_timer.stop();
+    progress.close();
+    const DWORD wait_state = ::WaitForSingleObject(sei.hProcess, 0);
+    report.wait_ms =
+        static_cast<unsigned long>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                       std::chrono::steady_clock::now() - started)
+                                       .count());
+    DWORD exit_code = 1;
+    ::GetExitCodeProcess(sei.hProcess, &exit_code);
+    report.exit_code = static_cast<unsigned long>(exit_code);
     ::CloseHandle(sei.hProcess);
+    if (wait_state != WAIT_OBJECT_0) {
+        report.outcome = ElevationOutcome::Failed;
+        report.detail = "elevated icacls did not finish in time (still running in background)";
+        g_elevation_attempted_roots.insert(root_key);
+        pp::log_warn("run", "mainwindow_run.cpp", "permission elevation wait timeout",
+                     {{"out_root", root.string()},
+                      {"user_sid", sid},
+                      {"wait_ms", std::to_string(report.wait_ms)},
+                      {"params", params}});
+        return report;
+    }
+    // 授权命令必须真的成功（icacls 失败/部分失败都给非 0 退出码）。
+    if (exit_code != 0) {
+        report.outcome = ElevationOutcome::Failed;
+        report.detail = "icacls exited with a non-zero code";
+        g_elevation_attempted_roots.insert(root_key);
+        pp::log_warn("run", "mainwindow_run.cpp", "permission elevation command failed",
+                     {{"out_root", root.string()},
+                      {"user_sid", sid},
+                      {"exit_code", std::to_string(exit_code)},
+                      {"params", params}});
+        return report;
+    }
+    // 授权后**重新试写复验**：退出码 0 不等于目录真的可写（只读介质/上层组策略/配额）。
+    const pp::OutputRootProbe verify = pp::probe_output_root_ex(root);
     pp::log_warn("run", "mainwindow_run.cpp", "permission elevation finished",
                  {{"out_root", root.string()},
-                  {"wait", std::to_string(wait)},
-                  {"exit", std::to_string(code)}});
-    return wait == WAIT_OBJECT_0 && code == 0;
+                  {"user_sid", sid},
+                  {"exit_code", std::to_string(exit_code)},
+                  {"wait_ms", std::to_string(report.wait_ms)},
+                  {"verify_status", pp::output_root_probe_status_name(verify.status)},
+                  {"verify_os_error", std::to_string(verify.os_error)},
+                  {"params", params}});
+    if (verify.status == pp::OutputRootProbeStatus::Ok) {
+        report.outcome = ElevationOutcome::Granted;
+        return report;
+    }
+    report.outcome = ElevationOutcome::Failed;
+    report.detail = "icacls succeeded but the output root is still not writable: " + verify.detail;
+    g_elevation_attempted_roots.insert(root_key);
+    return report;
+}
+#else
+ElevationReport elevate_output_dir_permission(QWidget *, const std::filesystem::path &) {
+    return {}; // POSIX：无 UAC 通道（should_offer_elevation 恒 false，不会走到这里）
 }
 #endif
 
-QString permission_error_text(const std::string &detail) {
-#ifdef _WIN32
-    return T("输出目录不可用：%1\n\n请更换输出根目录后重试；若该目录需要管理员权限，"
-             "可再次点击「开始运行」并在权限提示中选择“是”，然后在 UAC 窗口中允许。")
-        .arg(QString::fromStdString(detail));
-#else
-    return T("输出目录不可用：%1\n\n请更换有写入权限的输出根目录后重试。")
-        .arg(QString::fromStdString(detail));
-#endif
+// 按**结构化状态**给可操作文案（不再按错误文本猜原因）。
+QString output_root_error_text(const pp::OutputRootProbe &probe, const ElevationReport &elev) {
+    const QString detail = qstring_from_utf8(probe.detail);
+    switch (probe.status) {
+    case pp::OutputRootProbeStatus::Ok:
+        return QString();
+    case pp::OutputRootProbeStatus::EmptyPath:
+        return T("输出根目录为空：请先在「输出」页选择输出根目录。");
+    case pp::OutputRootProbeStatus::NotCreatable: {
+        QString text = T("输出根目录不存在且无法创建：\n%1\n\n").arg(detail);
+        if (!probe.nearest_existing.empty()) {
+            text += T("最近的可写检查点：%1\n\n").arg(qstring_from_path(probe.nearest_existing));
+        }
+        text += T("请先在文件资源管理器中创建该目录，或改选其他输出目录后重试。");
+        return text;
+    }
+    case pp::OutputRootProbeStatus::NotDirectory:
+        return T("输出根路径不是目录：\n%1\n\n请改选一个文件夹作为输出根。").arg(detail);
+    case pp::OutputRootProbeStatus::WriteFailed:
+        return T("输出目录不可写（非权限原因）：\n%1\n\n"
+                 "常见原因：磁盘已满、介质只读/写保护、磁盘配额不足。"
+                 "请清理空间、解除写保护或改选其他输出目录后重试。")
+            .arg(detail);
+    case pp::OutputRootProbeStatus::WriteDenied:
+        break; // 下面按提权结果细分
+    }
+    switch (elev.outcome) {
+    case ElevationOutcome::Cancelled:
+        return T("已取消管理员授权，输出目录仍不可写：\n%1\n\n"
+                 "可再次点击「开始运行」并在 UAC 窗口中选择「是」，或改选有写权限的目录。")
+            .arg(detail);
+    case ElevationOutcome::Declined:
+        return T("已跳过权限申请，输出目录仍不可写：\n%1\n\n"
+                 "可改选其他输出目录，或以管理员身份手动执行：\n"
+                 "  icacls \"<目录>\" /grant *<当前用户SID>:(OI)(CI)M")
+            .arg(detail);
+    case ElevationOutcome::Failed: {
+        QString text = T("已尝试申请管理员权限，但输出目录仍不可写：\n%1\n\n").arg(detail);
+        if (!elev.detail.empty()) {
+            text += qstring_from_utf8(elev.detail) + QStringLiteral("\n\n");
+        }
+        text += T("请改选其他输出目录，或以管理员身份手动执行：\n"
+                  "  icacls \"<目录>\" /grant *<当前用户SID>:(OI)(CI)M\n\n"
+                  "（若目录位于只读介质、受组策略保护或由其他账户拥有，提权也无法解决。）");
+        return text;
+    }
+    case ElevationOutcome::NotAttempted:
+    case ElevationOutcome::Granted: // Granted 后复验通过，不应走到这里
+    default:
+        return T("输出目录不可写：\n%1\n\n请改选有写入权限的输出目录后重试。").arg(detail);
+    }
 }
+
+} // namespace
 
 // ---------------------------------------------------------------------------
 // M7-WP6 / R-006：「再次运行」补齐语义的**只读预检**
@@ -435,30 +654,42 @@ void MainWindow::on_start() {
     // X-METADATA-ONLY-02：仅元数据模式不再静默把冲突策略改成 Skip；下拉显示什么就执行什么。
     // （旧行为会造成“界面选覆盖/改名，实际全部跳过”的两张皮。）
 
-    // R-073：输出根预检（试建 + 试写探针，fsops::probe_output_root）—— 不可建/不可写时
-    // 在**开跑之前**拦下，不再"逐文件失败跑到底、结束语还说可打开输出目录"。
+    // R-073 / M8-W1：输出根预检（试建 + 试写探针，fsops::probe_output_root_ex）——
+    // 不可建/不可写时在**开跑之前**拦下，不再"逐文件失败跑到底、结束语还说可打开输出目录"。
+    // 判据 = 结构化状态 + OS 错误码（不按错误文本猜）；只有 ACL 类拒绝才进 UAC 申请流程。
     {
-        std::string root_err;
         const std::filesystem::path out_root(cfg.out_root);
-        bool root_ok = !out_root.empty() && pp::probe_output_root(out_root, &root_err);
+        pp::OutputRootProbe root_probe;
+        if (out_root.empty()) {
+            root_probe.status = pp::OutputRootProbeStatus::EmptyPath;
+            root_probe.detail = "output root is empty";
+        } else {
+            root_probe = pp::probe_output_root_ex(out_root);
+        }
+        bool root_ok = root_probe.status == pp::OutputRootProbeStatus::Ok;
+        ElevationReport elev;
         if (!root_ok) {
-            // 先申请权限（仅 Windows；用户拒绝/授权失败才报错）。
-#ifdef _WIN32
-            if (!root_err.empty() && error_looks_like_permission(root_err)) {
-                if (grant_output_dir_permission(this, out_root)) {
-                    root_err.clear();
-                    root_ok = pp::probe_output_root(out_root, &root_err);
-                }
+            elev = elevate_output_dir_permission(this, out_root); // 非 ACL 类失败内部直接不弹
+            if (elev.outcome == ElevationOutcome::Granted) {
+                root_ok = true;
+            } else if (!elev.detail.empty() && root_probe.detail.empty()) {
+                root_probe.detail = elev.detail;
             }
-#endif
         }
         if (!root_ok) {
             // 0.3.6-alpha1：预检失败原先**只在弹窗里出现、日志零记录**（事后无法定位用户
-            // 选了哪个目录、OS 报什么错）。这里先落一条 warn，再给可操作的提示。
-            const std::string detail = root_err.empty() ? "output root is empty" : root_err;
+            // 选了哪个目录、OS 报什么错）。这里先落一条 warn（字段齐全），再给可操作的提示。
+            const std::string detail =
+                root_probe.detail.empty() ? std::string("output root is empty") : root_probe.detail;
             pp::log_warn("run", "mainwindow_run.cpp", "output root unavailable",
-                         {{"out_root", out_root.string()}, {"error", detail}});
-            warn_cannot_start(this, permission_error_text(detail));
+                         {{"out_root", out_root.string()},
+                          {"status", pp::output_root_probe_status_name(root_probe.status)},
+                          {"os_error", std::to_string(root_probe.os_error)},
+                          {"elevation", elevation_outcome_name(elev.outcome)},
+                          {"win_error", std::to_string(elev.win_error)},
+                          {"icacls_exit", std::to_string(elev.exit_code)},
+                          {"error", detail}});
+            warn_cannot_start(this, output_root_error_text(root_probe, elev));
             return;
         }
     }

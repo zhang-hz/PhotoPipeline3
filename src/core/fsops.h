@@ -161,4 +161,68 @@ std::filesystem::path normalize_extended_path(const std::filesystem::path &p);
 const char *conflict_policy_name(ConflictPolicy p);
 bool parse_conflict_policy(std::string_view s, ConflictPolicy &out);
 
+// ===========================================================================
+// M8-W1 加性追加（输出目录写入权限 / UAC 流程，需求 1）
+//   口径：**加性 + 追认** —— 既有 probe_output_root 签名逐字保留（实现改为转发到新探针，
+//   判负时 *err 文案增强为携带 OS 错误文本与错误码；冻结行为 = true/false 与「*err 非空」
+//   的契约零改动）；新能力全部由新类型/新函数承载，既有函数零改动。
+//   裁定登记：docs/m8-adjudications.md（由 Lead 登记；本卡不改文档面）。
+//
+//   动机（0.3.5 已知残余，docs/0.3.5-report.md:123-124）：
+//   * 旧 UI 用**错误文本**猜「是否权限问题」（`error_looks_like_permission`），probe 的
+//     `not writable` 分支又**不带 OS 错误** → 磁盘满/只读介质也会弹 UAC；同时中文系统上
+//     Win32 错误文本本地化，文本匹配本质不可靠。→ 改为**结构化错误分类**（OS 错误码）。
+//   * 旧提权经 `cmd /c ... mkdir ... & icacls ...`：`%VAR%` 展开风险、引号截断风险，且
+//     路径/账户含 `%` 时直接放弃提权（功能空洞）。→ 新参数构造函数**不经 cmd**、用 SID
+//     授权，纯函数可单测。
+// ===========================================================================
+
+// 输出根探针的结构化结果：把「为什么不可写」从文本猜测变成可判定的错误码。
+enum class OutputRootProbeStatus {
+    Ok = 0,       // 可建、是目录、可写
+    EmptyPath,    // 输出根为空
+    NotCreatable, // create_directories 失败（父目录无写权 / 盘符不存在 / 路径非法…）
+    NotDirectory, // 路径存在但不是目录（普通文件 / 设备）
+    WriteDenied,  // 试写被拒且**属 ACL/权限类**（should_offer_elevation 的唯一可提权状态）
+    WriteFailed,  // 试写失败但**非**权限类（磁盘满 / 只读介质 / 配额 / I/O 错误…）
+};
+
+struct OutputRootProbe {
+    OutputRootProbeStatus status = OutputRootProbeStatus::Ok;
+    unsigned long os_error = 0;             // Win32 GetLastError / POSIX errno；0 = 无 OS 错误
+    std::string detail;                     // 可读描述（含路径 + OS 文本 + 码）；status==Ok 时为空
+    std::filesystem::path nearest_existing; // 根不存在/不可建时最近的已存在目录（诊断用）
+};
+
+// 结构化输出根探针（语义 = probe_output_root 的超集）：目录不存在 → 试建；随后试写一个
+// 唯一探针文件并删除（失败也清场）。错误分类按 **OS 错误码**（不按文本）：
+//   磁盘满(112/28) / 只读介质(19/30) / 共享冲突(32) / 路径不存在(3) → WriteFailed/NotCreatable，
+//   只有 ERROR_ACCESS_DENIED(5)、ERROR_PRIVILEGE_NOT_HELD(1314)（POSIX: EACCES/EPERM）
+//   → WriteDenied。detail 保留既有前缀 "output root is ..."（error_text.h 前缀族继续命中）。
+OutputRootProbe probe_output_root_ex(const std::filesystem::path &dir);
+
+// 状态名（日志字段用；也是测试断言的稳定文本）。
+const char *output_root_probe_status_name(OutputRootProbeStatus status);
+
+// 是否值得「申请管理员授权」（UAC）。纯函数（不落盘/不访问 OS）+ 可单测：
+//   仅 WriteDenied（ACL 类拒绝）为 true；磁盘满/只读介质/路径不存在等一律 false。
+//   非 Windows 恒 false（POSIX 无 UAC；权限不足由 UI 直接给可操作提示）。
+bool should_offer_elevation(const OutputRootProbe &probe);
+
+// 当前进程用户 SID（形如 "S-1-5-21-…"）；非 Windows / 取不到 → 空串。
+//   用 SID 而非账户名：域账户/本地账户/重命名账户/超长账户名下，账户名授权会授错主体，
+//   SID 是唯一稳定身份（icacls 的 `*S-1-…` 形式）。
+std::string current_user_sid();
+
+// SID 字符串合法性（"S-1-<authority>-<sub1>-…"：revision 必须 1；authority ≤ 2^48-1；
+//   子权威 1..15 个、各 ≤ 2^32-1；无前导零/多余字符）。
+bool is_valid_sid(std::string_view sid);
+
+// icacls.exe 的参数串（**不经 cmd**；SID 授权；Windows 命令行引号规则）：
+//   "<绝对根路径>" /grant *<sid>:(OI)(CI)M
+//   返回空 = 不可安全构造（root 为空/非绝对/含 '"' 或控制字符 / SID 非法）。
+//   路径中的 `%VAR%` 原样保留 —— ShellExecuteExW→CreateProcess 不做 cmd 环境变量展开，
+//   这正是旧 cmd /c 实现的功能空洞（含 % 的路径以前直接放弃提权）。
+std::string icacls_grant_parameters(const std::filesystem::path &root, std::string_view sid);
+
 } // namespace pp

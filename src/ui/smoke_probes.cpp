@@ -4690,10 +4690,13 @@ void MainWindow::Impl::smoke_probe_run_geometry() {
                QStringLiteral("before=%1 after=%2").arg(before).arg(after));
     }
 
-    // ---- (m) M8-C13：评分隐藏子行（C12；加性探针，只增）----
-    //  · 评分关闭（Off）/仅元数据 → 不显示子行（"未发生的量不显示"）；
-    //  · metric_state==Ok → 子行文本 `质量 SSIMULACRA 2 · <数>`（两位小数，" · "）+ 刻度 tooltip；
-    //  · Unavailable/Failed → `—（原因）`（原因 = metric_note）。
+    // ---- (m) M8-W2（需求3）：评分列（任务表加性列；取代 M8-C13 的隐藏子行）----
+    //  · Off/仅元数据 → 单元格留空（"未发生的量不显示"）；
+    //  · Ok → 两位小数 + 四档语义色（≥95 极好 ok / ≥90 好 text / ≥80 ok warn / <80 不ok err）；
+    //    tooltip 写明 SSIMULACRA 2、阈值表、参考=编码器输入、失真=解码后产物；
+    //  · Unavailable/Failed → 「—」+ tooltip 原因（列宽固定 → 长原因不塞进单元格）；
+    //  · 列契约：组行 + 全部输出行单元格同 x/同宽，表头「评分」同 x/同宽（所有行/表头对齐），
+    //    且列序严格为 …耗时 < 评分 < 状态。
     //  用独立 PageRun 实例取证，避免改动既有 (a)–(l) 的 fixture/断言。
     {
         int score_checked = 0;
@@ -4710,75 +4713,172 @@ void MainWindow::Impl::smoke_probe_run_geometry() {
         score_page.show();
         PageRun::RunPlan splan;
         splan.format_ids =
-            QStringList{QStringLiteral("jpeg"), QStringLiteral("webp"), QStringLiteral("png")};
-        splan.widths = QVector<int>{64, 64, 64};
-        splan.heights = QVector<int>{64, 64, 64};
-        splan.bytes = QVector<qint64>{4096, 4096, 4096};
+            QStringList{QStringLiteral("jpeg"), QStringLiteral("webp"), QStringLiteral("png"),
+                        QStringLiteral("bmp"),  QStringLiteral("tiff"), QStringLiteral("jxl")};
+        splan.widths = QVector<int>{64};
+        splan.heights = QVector<int>{64};
+        splan.bytes = QVector<qint64>{4096};
         score_page.set_plan(splan);
         score_page.begin_run(1, QStringList{QStringLiteral("score-probe.png")});
         pp::FileResult one;
         one.info.width = 64;
         one.info.height = 64;
-        one.out_bytes = 3000;
-        one.outputs.resize(3);
-        for (int j = 0; j < 3; ++j) {
-            one.outputs[static_cast<std::size_t>(j)].out_bytes = 1000;
-            one.outputs[static_cast<std::size_t>(j)].t.encode_ms = 12;
-            one.outputs[static_cast<std::size_t>(j)].ok = true;
+        one.out_bytes = 6000;
+        one.outputs.resize(6);
+        for (int j = 0; j < 6; ++j) {
+            auto &row = one.outputs[static_cast<std::size_t>(j)];
+            row.out_bytes = 1000;
+            row.t.encode_ms = 12;
+            row.ok = true;
+            row.format_id = splan.format_ids.at(j).toStdString();
         }
-        one.outputs[0].format_id = "jpeg";
-        one.outputs[0].metric_state = pp::MetricState::Ok;
-        one.outputs[0].metric_ssimulacra2 = 92.31;
-        one.outputs[0].metric_ms = 4.2;
-        one.outputs[1].format_id = "webp"; // 默认 Off（评分关闭/仅元数据）→ 无子行
-        one.outputs[2].format_id = "png";
-        one.outputs[2].metric_state = pp::MetricState::Unavailable;
-        one.outputs[2].metric_note = QStringLiteral("回读失败").toStdString();
+        struct ScoreCase {
+            std::size_t j;
+            pp::MetricState state;
+            double score;
+            const char *note;
+        };
+        const ScoreCase cases[6] = {
+            {0, pp::MetricState::Ok, 96.20, nullptr}, // 档1：≥95 极好
+            {1, pp::MetricState::Ok, 92.31, nullptr}, // 档2：≥90 好
+            {2, pp::MetricState::Ok, 85.00, nullptr}, // 档3：≥80 ok
+            {3, pp::MetricState::Ok, 72.50, nullptr}, // 档4：<80 不ok
+            {4, pp::MetricState::Unavailable, -1.0, "回读失败"},
+            {5, pp::MetricState::Off, -1.0, nullptr},
+        };
+        for (const ScoreCase &c : cases) {
+            auto &row = one.outputs[c.j];
+            row.metric_state = c.state;
+            row.metric_ssimulacra2 = c.score;
+            if (c.note != nullptr)
+                row.metric_note = c.note;
+        }
         score_page.on_event(probe_progress({0, -1}, pp::Stage::Decode, 1.0f, false));
         score_page.on_event(probe_terminal(0, pp::FileState::Done, one));
         pump(200);
 
-        const auto score_row_of = [&score_page](const char *name) {
-            return score_page.findChild<QWidget *>(QString::fromLatin1(name));
+        const auto cell_of = [&score_page](const QString &name) {
+            return score_page.findChild<QWidget *>(name);
         };
-        const auto score_text_of = [&score_page](const char *name) {
-            return probe_full_text(&score_page, QString::fromLatin1(name));
+        const auto label_of = [&score_page](const QString &name) {
+            return score_page.findChild<QLabel *>(name);
         };
-        const auto shown = [](const QWidget *w) { return w != nullptr && w->isVisible(); };
-        QWidget *ok_row = score_row_of("pp-run-score-0-0");
-        QWidget *off_row = score_row_of("pp-run-score-0-1");
-        QWidget *unavail_row = score_row_of("pp-run-score-0-2");
-        QLabel *ok_label = score_page.findChild<QLabel *>(QStringLiteral("pp-run-score-text-0-0"));
-        const QString ok_text = score_text_of("pp-run-score-text-0-0");
-        const QString unavail_text = score_text_of("pp-run-score-text-0-2");
+        const auto full_text_of = [&score_page](const QString &name) {
+            return probe_full_text(&score_page, name);
+        };
+        const auto x_of = [&score_page](const QWidget *w) {
+            return w != nullptr ? w->mapTo(&score_page, QPoint(0, 0)).x() : -1;
+        };
+        const auto tint_is = [](QLabel *label, const QColor &want) {
+            return label != nullptr && label->styleSheet().contains(theme::css_color(want));
+        };
+        // 四档：文本（两位小数）+ 语义色（tokens 单源）
+        const QStringList want_text{QStringLiteral("96.20"), QStringLiteral("92.31"),
+                                    QStringLiteral("85.00"), QStringLiteral("72.50")};
+        const QColor want_color[4] = {tokens.ok, tokens.accent, tokens.warn, tokens.err};
+        int tiers_ok = 0;
+        QStringList tier_detail;
+        for (int j = 0; j < 4; ++j) {
+            const QString text_name = QStringLiteral("pp-run-score-text-0-%1").arg(j);
+            QLabel *label = label_of(text_name);
+            const QString got = full_text_of(text_name);
+            const bool ok =
+                label != nullptr && got == want_text.at(j) && tint_is(label, want_color[j]);
+            if (ok) {
+                ++tiers_ok;
+            } else {
+                tier_detail << QStringLiteral("%1=\"%2\"").arg(j).arg(got);
+            }
+        }
+        // Unavailable → 「—」+ tooltip 原因；Off → 空（未发生的量不显示）
+        QLabel *unavail_label = label_of(QStringLiteral("pp-run-score-text-0-4"));
+        const bool unavail_ok =
+            unavail_label != nullptr &&
+            full_text_of(QStringLiteral("pp-run-score-text-0-4")) == QStringLiteral("—") &&
+            unavail_label->toolTip().contains(QStringLiteral("回读失败"));
+        const bool off_blank = full_text_of(QStringLiteral("pp-run-score-text-0-5")).isEmpty();
+        // 组行不平均 → 「—」
+        const bool group_dash =
+            full_text_of(QStringLiteral("pp-run-gscore-text-0")) == QStringLiteral("—");
+        // 列对齐：组行 + 全部输出行单元格同 x/同宽；表头「评分」同 x/同宽
+        QList<QWidget *> score_cells;
+        score_cells << cell_of(QStringLiteral("pp-run-gscore-0"));
+        for (int j = 0; j < 6; ++j)
+            score_cells << cell_of(QStringLiteral("pp-run-score-0-%1").arg(j));
+        QWidget *first_cell = score_cells.isEmpty() ? nullptr : score_cells.first();
+        const int col_x = x_of(first_cell);
+        const int col_w = first_cell != nullptr ? first_cell->width() : -1;
+        int aligned = 0;
+        for (QWidget *cell : score_cells)
+            if (cell != nullptr && x_of(cell) == col_x && cell->width() == col_w)
+                ++aligned;
+        QLabel *head = label_of(QStringLiteral("pp-run-thead-score"));
+        const bool header_ok = head != nullptr && head->text() == QStringLiteral("评分") &&
+                               head->width() == col_w &&
+                               head->mapTo(&score_page, QPoint(0, 0)).x() == col_x;
+        // 列序：耗时 < 评分 < 状态（评分在耗时之后、状态列之前）
+        QWidget *time_label = cell_of(QStringLiteral("pp-run-time-0-0"));
+        QWidget *status_pill = cell_of(QStringLiteral("pp-run-status-0-0"));
+        const bool ordered = time_label != nullptr && status_pill != nullptr &&
+                             x_of(time_label) + time_label->width() < col_x &&
+                             col_x + col_w < x_of(status_pill);
+        // tooltip 口径：名称 + 四档阈值表 + 参考/失真口径
+        QLabel *ok_label = label_of(QStringLiteral("pp-run-score-text-0-1"));
         const QString ok_tip = ok_label != nullptr ? ok_label->toolTip() : QString();
-        const bool off_hidden = !shown(off_row); // Off = 无子行（不可见即不显示）
-        const bool ok_shown = shown(ok_row) && ok_row->height() == formkit::kRowPitch &&
-                              ok_text == QStringLiteral("质量 SSIMULACRA 2 · 92.31") &&
-                              ok_tip.contains(QStringLiteral("SSIMULACRA 2"));
-        const bool unavail_shown = shown(unavail_row) &&
-                                   unavail_text.startsWith(QStringLiteral("—（")) &&
-                                   unavail_text.contains(QStringLiteral("回读失败"));
-        score_expect("off-no-row", off_hidden,
-                     QStringLiteral("visible=%1").arg(shown(off_row) ? 1 : 0));
-        score_expect("ok-row", ok_shown,
-                     QStringLiteral("visible=%1 h=%2 text=\"%3\" tip-has-name=%4")
-                         .arg(shown(ok_row) ? 1 : 0)
-                         .arg(ok_row != nullptr ? ok_row->height() : -1)
-                         .arg(ok_text)
-                         .arg(ok_tip.contains(QStringLiteral("SSIMULACRA 2")) ? 1 : 0));
-        score_expect("unavailable-row", unavail_shown,
-                     QStringLiteral("visible=%1 text=\"%2\"")
-                         .arg(shown(unavail_row) ? 1 : 0)
-                         .arg(unavail_text));
-        std::printf("UI-SMOKE run-score: checked=%d bad=%d off_hidden=%d ok_row=%d ok_text=\"%s\" "
-                    "unavail_text=\"%s\" %s\n",
-                    score_checked, int(score_bad.size()), off_hidden ? 1 : 0, ok_shown ? 1 : 0,
-                    qUtf8Printable(ok_text), qUtf8Printable(unavail_text),
-                    qUtf8Printable(score_bad.join(QLatin1Char(' '))));
+        const bool tip_ok =
+            ok_tip.contains(QStringLiteral("SSIMULACRA 2")) &&
+            ok_tip.contains(QStringLiteral("≥95")) && ok_tip.contains(QStringLiteral("≥90")) &&
+            ok_tip.contains(QStringLiteral("≥80")) && ok_tip.contains(QStringLiteral("<80")) &&
+            ok_tip.contains(QStringLiteral("编码器输入")) &&
+            ok_tip.contains(QStringLiteral("解码后产物"));
+        const QString ok_text = full_text_of(QStringLiteral("pp-run-score-text-0-1"));
+        score_expect("tiers", tiers_ok == 4, tier_detail.join(QLatin1Char(' ')));
+        score_expect("unavailable-dash", unavail_ok,
+                     QStringLiteral("text=\"%1\" tip-has-reason=%2")
+                         .arg(full_text_of(QStringLiteral("pp-run-score-text-0-4")))
+                         .arg(unavail_label != nullptr &&
+                                      unavail_label->toolTip().contains(QStringLiteral("回读失败"))
+                                  ? 1
+                                  : 0));
+        score_expect("off-blank", off_blank,
+                     QStringLiteral("text=\"%1\"")
+                         .arg(full_text_of(QStringLiteral("pp-run-score-text-0-5"))));
+        score_expect("group-dash", group_dash,
+                     QStringLiteral("text=\"%1\"")
+                         .arg(full_text_of(QStringLiteral("pp-run-gscore-text-0"))));
+        score_expect("column-align",
+                     score_cells.size() == 7 && col_w > 0 && aligned == score_cells.size(),
+                     QStringLiteral("cells=%1 aligned=%2 x=%3 w=%4")
+                         .arg(score_cells.size())
+                         .arg(aligned)
+                         .arg(col_x)
+                         .arg(col_w));
+        score_expect("header-align", header_ok,
+                     QStringLiteral("head-x=%1 head-w=%2 col-x=%3 col-w=%4")
+                         .arg(head != nullptr ? head->mapTo(&score_page, QPoint(0, 0)).x() : -1)
+                         .arg(head != nullptr ? head->width() : -1)
+                         .arg(col_x)
+                         .arg(col_w));
+        score_expect("column-order", ordered,
+                     QStringLiteral("time-x=%1 score-x=%2 status-x=%3")
+                         .arg(x_of(time_label))
+                         .arg(col_x)
+                         .arg(x_of(status_pill)));
+        score_expect("tooltip-spec", tip_ok, QStringLiteral("tip=\"%1\"").arg(ok_tip.left(60)));
+        const int ok_row = ok_text == QStringLiteral("92.31") ? 1 : 0;
+        QWidget *name_cell = cell_of(QStringLiteral("pp-run-oname-0-0"));
+        std::printf("UI-SMOKE run-score: checked=%d bad=%d off_blank=%d ok_row=%d ok_text=\"%s\" "
+                    "unavail_text=\"%s\" col_align=%d header=%d tiers=%d group_dash=%d "
+                    "name_w=%d col_x=%d col_w=%d %s\n",
+                    score_checked, int(score_bad.size()), off_blank ? 1 : 0, ok_row,
+                    qUtf8Printable(ok_text),
+                    qUtf8Printable(full_text_of(QStringLiteral("pp-run-score-text-0-4"))),
+                    aligned == score_cells.size() ? 1 : 0, header_ok ? 1 : 0, tiers_ok,
+                    group_dash ? 1 : 0, name_cell != nullptr ? name_cell->width() : -1, col_x,
+                    col_w, qUtf8Printable(score_bad.join(QLatin1Char(' '))));
         std::fflush(stdout);
         if (!score_bad.isEmpty()) {
-            smoke_fail(MainWindow::tr("运行页评分隐藏子行（C12/C13）不符：%1")
+            smoke_fail(MainWindow::tr("运行页评分列（M8-W2 需求3）不符：%1")
                            .arg(score_bad.join(QLatin1Char(' '))));
         }
         score_page.hide();
@@ -6386,6 +6486,142 @@ void probe_m8_params(MainWindow *w, PageOutput *page_output, const pp::AppSettin
                        .arg(before ? 1 : 0)
                        .arg(dlg.settings().quality_score ? 1 : 0));
         }
+    }
+
+    // ---- ⑨ M8-W2（需求2）：目录行「可选启用」勾选框 = **行尾右侧** + 右端 x 严格对齐 ----
+    //  旧实现把勾选框 `insertWidget(0, …)` 插在行首 ⇒ 目录行标签轨被右移、与普通行错位。
+    //  本段钉住（几何判定，不靠截图）：
+    //   · 勾选框在**行尾**：勾选右端 + 行内距 + 状态注记固定槽宽 == 行宽；
+    //   · 所有带勾选行勾选框右端 x 严格相等（固定右偏移，与状态注记空/非空无关）；
+    //   · 标签轨归位（x==0、宽==80）、数值控件行内起点 == 80+12（对齐不被破坏）；
+    //   · 行内顺序 = [数值控件][勾选框][状态注记]；
+    //   · 状态注记固定槽宽：真实状态文本不硬裁；**兜底验证** = 塞入超长状态文本时出省略号
+    //     且 tooltip = 全文（Lead 要求的「禁用：<原因>」类长文案兜底）。
+    {
+        const int checked_before = checked;
+        const int bad_before = bad;
+        page_output->select_format(QStringLiteral("heif"));
+        smoke_pump(400);
+        auto *adv_toggle =
+            page_output->findChild<QToolButton *>(QStringLiteral("pp-advanced-toggle"));
+        if (adv_toggle != nullptr && !adv_toggle->isChecked())
+            adv_toggle->click();
+        smoke_pump(150);
+        expand_groups();
+        smoke_pump(250);
+        QList<QAbstractButton *> boxes;
+        for (QWidget *widget : page_output->findChildren<QWidget *>()) {
+            if (!widget->objectName().startsWith(QStringLiteral("pp-param-enable-")))
+                continue;
+            auto *button = qobject_cast<QAbstractButton *>(widget);
+            if (button == nullptr || !button->isVisible())
+                continue; // 三态下拉（QComboBox）= 编辑器本身，不是行尾勾选框
+            boxes << button;
+        }
+        const QString prefix = QStringLiteral("pp-param-enable-");
+        int right_x = -1;
+        int align_bad = 0;
+        int tail_ok = 0;
+        int label_ok = 0;
+        int editor_ok = 0;
+        int order_ok = 0;
+        int clip_bad = 0;
+        int status_seen = 0;
+        int status_text_seen = 0;
+        for (QAbstractButton *button : boxes) {
+            QWidget *row = button->parentWidget();
+            if (row == nullptr) {
+                ++align_bad;
+                continue;
+            }
+            const int right_edge = button->x() + button->width();
+            if (right_x < 0)
+                right_x = right_edge;
+            if (right_edge != right_x)
+                ++align_bad;
+            const QString key = button->objectName().mid(prefix.size());
+            auto *status = row->findChild<QLabel *>(QStringLiteral("pp-param-status-") + key);
+            if (status != nullptr) {
+                ++status_seen;
+                // 行尾判据：勾选右端 + 行内距 + 固定状态槽宽 == 行宽
+                if (right_edge + formkit::kInlineGap + status->width() == row->width())
+                    ++tail_ok;
+                const QVariant full = status->property("ppFullText");
+                const QString full_text = full.isValid() ? full.toString() : status->text();
+                if (!full_text.isEmpty())
+                    ++status_text_seen;
+                // 不硬裁：全文实宽 <= 槽宽；放不下时必须是省略号 + tooltip 全文（ElidedLabel 兜底）
+                const int need = status->fontMetrics().horizontalAdvance(full_text);
+                const bool fits = need <= status->width();
+                const bool elided = !fits && status->text().endsWith(QStringLiteral("…")) &&
+                                    status->text().length() < full_text.length() &&
+                                    status->toolTip() == full_text;
+                if (!fits && !elided)
+                    ++clip_bad;
+            }
+            auto *label = row->findChild<QLabel *>(QStringLiteral("pp-label-") + key);
+            if (label != nullptr && label->x() == 0 && label->width() == formkit::kLabelW)
+                ++label_ok;
+            auto *editor = row->findChild<QWidget *>(QStringLiteral("pp-param-") + key);
+            if (editor != nullptr &&
+                editor->mapTo(row, QPoint(0, 0)).x() == formkit::field_track_x())
+                ++editor_ok;
+            if (editor != nullptr && status != nullptr) {
+                const int editor_x = editor->mapTo(row, QPoint(0, 0)).x();
+                if (button->x() > editor_x + editor->width() && button->x() < status->x())
+                    ++order_ok;
+            }
+        }
+        // 兜底验证：固定槽塞入「禁用：<原因>」类超长状态文本 → 省略号 + tooltip 全文；随后还原
+        bool long_elide_ok = false;
+        if (!boxes.isEmpty()) {
+            QWidget *row = boxes.first()->parentWidget();
+            const QString key = boxes.first()->objectName().mid(prefix.size());
+            auto *status = row != nullptr
+                               ? row->findChild<QLabel *>(QStringLiteral("pp-param-status-") + key)
+                               : nullptr;
+            auto *elided = dynamic_cast<formkit::ElidedLabel *>(status);
+            if (elided != nullptr) {
+                const QVariant orig_prop = elided->property("ppFullText");
+                const QString orig = orig_prop.isValid() ? orig_prop.toString() : QString();
+                const QString long_text =
+                    QStringLiteral("禁用：当前其它参数组合下该项无效（见联动规则）");
+                elided->set_full_text(long_text);
+                smoke_pump(60);
+                long_elide_ok =
+                    long_text.length() > 0 && elided->text().endsWith(QStringLiteral("…")) &&
+                    elided->text().length() < long_text.length() && elided->toolTip() == long_text;
+                elided->set_full_text(orig); // 还原真实状态（后续断言/截图零残态）
+                smoke_pump(60);
+            }
+        }
+        expect(boxes.size() >= 8, QStringLiteral("行尾勾选行样本 ≥ 8（got %1）").arg(boxes.size()));
+        expect(boxes.size() > 0 && align_bad == 0,
+               QStringLiteral("勾选框右端 x 严格对齐（x=%1 bad=%2）").arg(right_x).arg(align_bad));
+        expect(boxes.size() > 0 && status_seen == boxes.size() && tail_ok == boxes.size(),
+               QStringLiteral("勾选框在行尾（右端+行内距+状态槽宽==行宽；ok=%1/%2）")
+                   .arg(tail_ok)
+                   .arg(boxes.size()));
+        expect(boxes.size() > 0 && label_ok == boxes.size(),
+               QStringLiteral("标签轨归位（x=0 宽=80；ok=%1/%2）").arg(label_ok).arg(boxes.size()));
+        expect(boxes.size() > 0 && editor_ok == boxes.size(),
+               QStringLiteral("数值列对齐（行内起点=80+12；ok=%1/%2）")
+                   .arg(editor_ok)
+                   .arg(boxes.size()));
+        expect(
+            boxes.size() > 0 && order_ok == boxes.size(),
+            QStringLiteral("顺序=数值→勾选→状态注记（ok=%1/%2）").arg(order_ok).arg(boxes.size()));
+        expect(status_text_seen > 0 && clip_bad == 0,
+               QStringLiteral("状态注记不硬裁（非空文本行=%1 clip-bad=%2）")
+                   .arg(status_text_seen)
+                   .arg(clip_bad));
+        expect(long_elide_ok, QStringLiteral("超长状态文案兜底 = 省略号 + tooltip 全文"));
+        std::printf("UI-SMOKE param-enable-geom: checked=%d bad=%d rows=%d right-x=%d tail=%d "
+                    "label=%d editor=%d order=%d status-text=%d status-clip-bad=%d long-elide=%d\n",
+                    checked - checked_before, bad - bad_before, int(boxes.size()), right_x, tail_ok,
+                    label_ok, editor_ok, order_ok, status_text_seen, clip_bad,
+                    long_elide_ok ? 1 : 0);
+        std::fflush(stdout);
     }
 
     // ---- 归位：单选 jxl + 输出根还原（后续依赖项零残态）----

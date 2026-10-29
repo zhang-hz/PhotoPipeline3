@@ -256,13 +256,19 @@ M7-R2.4-G2（布局审计 · R-识图1 —— 识图步骤的机械化落点）:
     pages=3` 与既有清单零改动）。12 张截图仍按原口径人工留档（不改"截图不比对"的既定取证
     口径），但从此渲染面有机器看守。
 
-M8-C13（评分证据面 · SSIMULACRA 2 隐藏子行）:
-  * 追加 `RUN_SCORE_LINE_PREFIX` 一行齐备断言（只增；冻结末行与既有清单零改动）：
+M8-C13（评分证据面 · SSIMULACRA 2）→ M8-W2（需求3 改列 + 需求2 勾选框换位）:
+  * `RUN_SCORE_LINE_PREFIX` 一行齐备断言保留（只增；冻结末行与既有清单零改动）：
     `UI-SMOKE run-score:` 由 `smoke_probes.cpp` 的 `smoke_probe_run_geometry()` 末尾 (m) 段给出
-    —— C12 契约：评分关闭（Off）不显示子行；`metric_state==Ok` 显示
-    `质量 SSIMULACRA 2 · 92.31`（" · " 分隔、两位小数）；Unavailable/Failed 显示 `—（原因）`。
-  * 本脚本除行齐备外，另做**文本/取值断言**（防 C++ 断言被静默跳过）：`checked` 存在、
-    `bad=0`、`off_hidden=1`、`ok_row=1`、`ok_text="质量 SSIMULACRA 2 · <两位小数>"`（正则）。
+    —— 需求3 起「评分」= 任务表**一列**（C12 隐藏子行退役）：Off/仅元数据留空；Ok 显示两位
+    小数 + 四档语义色（≥95/≥90/≥80/<80）；Unavailable/Failed 显示 `—` + tooltip 原因；
+    列对齐（组行/输出行/表头同 x 同宽）由 C++ 探针断言。
+  * 本脚本除行齐备外，另做**文本/取值断言**（防 C++ 断言被静默跳过；只增不放宽）：
+    `bad=0`、`off_blank=1`、`ok_row=1`、`col_align=1`、`header=1`、`tiers=4`、
+    `group_dash=1`、`ok_text="<两位小数>"`（正则）、`unavail_text="—"`。
+  * 需求2：追加 `PARAM_ENABLE_GEOM_LINE_PREFIX` 行齐备 + 取值断言（`smoke_probes.cpp` 的
+    `probe_m8_params()` ⑨ 段）：`bad=0`、`rows>=8`、`tail/label/editor/order == rows`
+    （勾选框在行尾 + 右端 x 严格对齐 + 标签轨/数值列归位 + 行内顺序）、
+    `status-clip-bad=0`、`long-elide=1`（超长状态文案兜底 = 省略号 + tooltip 全文）。
   * 截图仍 12 张；`--dev` 评分与金样 assert.score 见 tests/golden/smoke.py / SCHEMA.md。
 """
 
@@ -449,6 +455,8 @@ G1_LINE_PREFIXES = (
     # 2026-10（0.3.5）：格式参数卡交互矩阵（页签序/空态/模板联动/跨后端不串参数；
     # 普通 --ui-smoke 也跑，行由 smoke_probes.cpp 的 probe_format_card_interactions 给出）
     'UI-SMOKE format-card:',
+    # M8-W2（需求2）：目录行「可选启用」勾选框行尾几何（probe_m8_params() ⑨ 段；只增）
+    'UI-SMOKE param-enable-geom:',
 )
 
 # M7-R2.4-G2（布局审计 · R-识图1）自检行：**识图步骤的机械化落点**。起因 = debug/debug1.png +
@@ -460,14 +468,28 @@ LAYOUT_AUDIT_LINE_PREFIXES = (
     'UI-SMOKE layout-audit:',
 )
 
-# M8-C13（评分证据面 · 只增）：运行页评分隐藏子行探针（C12/C13）。探针本体 = smoke_probes.cpp
-# 的 smoke_probe_run_geometry() 末尾 (m) 段；行内 checked/bad 由 C++ 侧给出。本脚本除「行
-# 齐备」外还做**文本/取值断言**（防断言被静默跳过/裁剪）：
-#   checked=N bad=0 · off_hidden=1（评分关闭 = 无子行）· ok_row=1
-#   ok_text="质量 SSIMULACRA 2 · 92.31"（" · " 分隔、两位小数；高/负分也按实数格式）
+# M8-C13 → M8-W2（需求3 评分列·只增）：`smoke_probe_run_geometry()` 末尾 (m) 段。探针本体在
+# C++ 侧用独立 PageRun 实例取证（四档 96.20/92.31/85.00/72.50 + Unavailable + Off），本脚本除
+# 「行齐备」外还做**文本/取值断言**（防断言被静默跳过/裁剪）。旧子行口径换成列口径，强度不降：
+#   bad=0 · off_blank=1（Off 留空）· ok_row=1 · col_align=1（组行/输出行同 x 同宽）
+#   header=1（表头「评分」同 x 同宽）· tiers=4（四档语义色）· group_dash=1（组行「—」不平均）
+#   ok_text="<两位小数>"（正则）· unavail_text="—"（Unavailable 简洁形态，原因进 tooltip）
 RUN_SCORE_LINE_PREFIX = 'UI-SMOKE run-score:'
 RUN_SCORE_BAD_RE = re.compile(r'\bbad=0\b')
-RUN_SCORE_TEXT_RE = re.compile(r'ok_text="质量 SSIMULACRA 2 · -?\d+\.\d{2}"')
+RUN_SCORE_TEXT_RE = re.compile(r'ok_text="-?\d+\.\d{2}"')
+RUN_SCORE_DASH_RE = re.compile(r'unavail_text="—"')
+
+# M8-W2（需求2 勾选框换位·只增）：`probe_m8_params()` ⑨ 段几何断言 —— 「可选启用」勾选框在
+# 行尾右侧、右端 x 严格对齐、标签轨/数值列归位、状态注记固定槽宽不硬裁（超长走省略号+tooltip）。
+PARAM_ENABLE_GEOM_LINE_PREFIX = 'UI-SMOKE param-enable-geom:'
+PARAM_ENABLE_GEOM_BAD_RE = re.compile(r'\bbad=0\b')
+PARAM_ENABLE_GEOM_ROWS_RE = re.compile(r'\brows=(\d+)\b')
+PARAM_ENABLE_GEOM_TAIL_RE = re.compile(r'\btail=(\d+)\b')
+PARAM_ENABLE_GEOM_LABEL_RE = re.compile(r'\blabel=(\d+)\b')
+PARAM_ENABLE_GEOM_EDITOR_RE = re.compile(r'\beditor=(\d+)\b')
+PARAM_ENABLE_GEOM_ORDER_RE = re.compile(r'\border=(\d+)\b')
+PARAM_ENABLE_GEOM_CLIP_RE = re.compile(r'\bstatus-clip-bad=0\b')
+PARAM_ENABLE_GEOM_LONG_RE = re.compile(r'\blong-elide=1\b')
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -525,6 +547,7 @@ def main():
         g1_seen = set()
         layout_audit_seen = set()
         run_score_line = None
+        param_enable_geom_line = None
         with open(log_path, 'w', encoding='utf-8', newline='') as log_fp:
             for line in proc.stdout:
                 sys.stdout.write(line)
@@ -585,6 +608,8 @@ def main():
                         layout_audit_seen.add(prefix)
                 if line.startswith(RUN_SCORE_LINE_PREFIX):
                     run_score_line = line.rstrip('\r\n')
+                if line.startswith(PARAM_ENABLE_GEOM_LINE_PREFIX):
+                    param_enable_geom_line = line.rstrip('\r\n')
         status = proc.wait()
 
         if status != 0:
@@ -680,21 +705,50 @@ def main():
             print('ui_smoke: FAIL (missing layout-audit visual-check lines: {})'.format(
                 ', '.join(missing)), file=sys.stderr)
             return 1
-        # M8-C13（只增）：评分隐藏子行 —— 行齐备 + 文本/取值断言（C12/C13）。
+        # M8-W2（需求3，只增/不放宽）：评分列 —— 行齐备 + 文本/取值断言（C12′）。
         if run_score_line is None:
-            print('ui_smoke: FAIL (missing M8-C13 run-score self-check line: {})'.format(
+            print('ui_smoke: FAIL (missing M8-W2 run-score self-check line: {})'.format(
                 RUN_SCORE_LINE_PREFIX), file=sys.stderr)
             return 1
         if (RUN_SCORE_BAD_RE.search(run_score_line) is None
-                or 'off_hidden=1' not in run_score_line
-                or 'ok_row=1' not in run_score_line):
-            print('ui_smoke: FAIL (M8-C13 run-score self-check failed: {})'.format(
+                or 'off_blank=1' not in run_score_line
+                or 'ok_row=1' not in run_score_line
+                or 'col_align=1' not in run_score_line
+                or 'header=1' not in run_score_line
+                or 'tiers=4' not in run_score_line
+                or 'group_dash=1' not in run_score_line):
+            print('ui_smoke: FAIL (M8-W2 run-score self-check failed: {})'.format(
                 run_score_line), file=sys.stderr)
             return 1
         if RUN_SCORE_TEXT_RE.search(run_score_line) is None:
-            print('ui_smoke: FAIL (M8-C13 run-score 子行文本格式不符（期望 '
-                  '"质量 SSIMULACRA 2 · <两位小数>"）: {})'.format(run_score_line),
+            print('ui_smoke: FAIL (M8-W2 run-score 分数文本格式不符（期望 '
+                  '"<两位小数>"）: {})'.format(run_score_line),
                   file=sys.stderr)
+            return 1
+        if RUN_SCORE_DASH_RE.search(run_score_line) is None:
+            print('ui_smoke: FAIL (M8-W2 run-score Unavailable 形态不符（期望 "—"）: {})'.format(
+                run_score_line), file=sys.stderr)
+            return 1
+        # M8-W2（需求2，只增）：行尾勾选框几何 —— 行齐备 + 取值断言（防 C++ 断言被静默跳过）。
+        if param_enable_geom_line is None:
+            print('ui_smoke: FAIL (missing M8-W2 param-enable-geom self-check line: {})'.format(
+                PARAM_ENABLE_GEOM_LINE_PREFIX), file=sys.stderr)
+            return 1
+        pe_rows = PARAM_ENABLE_GEOM_ROWS_RE.search(param_enable_geom_line)
+        pe_tail = PARAM_ENABLE_GEOM_TAIL_RE.search(param_enable_geom_line)
+        pe_label = PARAM_ENABLE_GEOM_LABEL_RE.search(param_enable_geom_line)
+        pe_editor = PARAM_ENABLE_GEOM_EDITOR_RE.search(param_enable_geom_line)
+        pe_order = PARAM_ENABLE_GEOM_ORDER_RE.search(param_enable_geom_line)
+        if (PARAM_ENABLE_GEOM_BAD_RE.search(param_enable_geom_line) is None
+                or pe_rows is None or int(pe_rows.group(1)) < 8
+                or pe_tail is None or pe_tail.group(1) != pe_rows.group(1)
+                or pe_label is None or pe_label.group(1) != pe_rows.group(1)
+                or pe_editor is None or pe_editor.group(1) != pe_rows.group(1)
+                or pe_order is None or pe_order.group(1) != pe_rows.group(1)
+                or PARAM_ENABLE_GEOM_CLIP_RE.search(param_enable_geom_line) is None
+                or PARAM_ENABLE_GEOM_LONG_RE.search(param_enable_geom_line) is None):
+            print('ui_smoke: FAIL (M8-W2 param-enable-geom self-check failed: {})'.format(
+                param_enable_geom_line), file=sys.stderr)
             return 1
         print('UI-SMOKE pass')
         return 0

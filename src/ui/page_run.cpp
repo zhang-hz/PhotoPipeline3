@@ -25,7 +25,10 @@
 //     「0 B」（不做 KB 四舍五入 —— 3-10 的"若为四舍五入应显示真实字节"）。
 //
 // 任务表（§7.3「表格：源文件分组行 + 逐输出缩进行 × 进度条(实心/斜纹) × 大小/速度/耗时(右对齐)
-//   × 状态胶囊」）：列 = [状态标记 16][名称][进度 88][大小 60][速度 48][耗时 48][状态 132]，
+//   × 状态胶囊」）：列 = [状态标记 16][名称][进度 88][大小 60][速度 48][耗时 48][评分 44][状态 132]
+//   （**评分列** = M8-W2 需求3 加性列：把「评估结果」从输出行下的隐藏子行改成表格一列，逐输出行
+//   显示 SSIMULACRA 2 两位小数 + 四档语义色，组行「—」不平均；Off/仅元数据留空，Unavailable/
+//   Failed 显示「—」+ tooltip 原因），
 //   行高 = R1 的 28（表头 24）；缩进（逐输出行）只作用于名称列（mockup padding-left:18px）。
 //   速度列 = 压缩比（源 ÷ 输出），**基线**（相对源文件）进 tooltip（修 3-11）；完成态**唯一形态**
 //   = formkit::PillBadge 绿胶囊「已完成」（修 3-12：文件行文字"完成"/面板头蓝胶囊/任务行"✓"
@@ -129,6 +132,7 @@ constexpr int kBarColW = 88;                         // 进度列
 constexpr int kSizeColW = 60;                        // 大小列
 constexpr int kSpeedColW = 48;                       // 速度列（压缩比）
 constexpr int kTimeColW = 48;                        // 耗时列
+constexpr int kScoreColW = 44;               // 评分列（M8-W2 需求3：SSIMULACRA 2，右对齐数值）
 constexpr int kStatusColW = 132;             // 状态列（胶囊右对齐；容下「编码 16000/16000 行」）
 constexpr int kTableHeadH = fk::kTableHeadH; // 表头行高（UX-6①：§5 R1 唯一例外，表头不是信息行）
 
@@ -441,9 +445,14 @@ struct RowBundle {
     ElidedLabel *size = nullptr;
     ElidedLabel *speed = nullptr;
     ElidedLabel *time = nullptr;
+    // M8-W2（需求3）：评分列（任务表第 6 列「评分」）—— 定宽单元格 + 右对齐数值文本。
+    // 旧「输出行下隐藏子行」形态退役（C12 由本需求改列为 C12′）；单元格/文本沿用旧探针钩子
+    // `pp-run-score-<i>-<j>` / `pp-run-score-text-<i>-<j>`（组行 = `pp-run-gscore-<i>` 系）。
+    QWidget *score_cell = nullptr;
+    ElidedLabel *score = nullptr;
     fk::PillBadge *status = nullptr;
     // 数值列缓存（文本 + 色；§4.2 数值档 = 右对齐 + tabular）
-    CellCache size_cache, speed_cache, time_cache;
+    CellCache size_cache, speed_cache, time_cache, score_cache;
     // 已应用缓存（避免同值重写触发 style/repaint）
     QString applied_status;
     fk::PillBadge::Tone applied_tone = fk::PillBadge::Tone::Neutral;
@@ -459,15 +468,8 @@ struct OutRow : RowBundle {
     ElidedLabel *warn = nullptr;
     QString applied_warning;
     bool warn_shown = false;
-    // —— M8-C2（C12）：输出行下的评分隐藏子行（Ok 显示分数；Unavailable/Failed 显示 —（原因）；
-    // Off/仅元数据不显示）——加性对象名 pp-run-score-<i>-<j> / pp-run-score-text-<i>-<j>。
-    QWidget *score_row = nullptr;
-    ElidedLabel *score = nullptr;
-    QString applied_score;
-    QColor applied_score_color;
-    bool applied_score_color_set = false;
-    bool score_shown = false;
-    // 评分终态事实（从 OutputResult 的加性字段复制；文件组行不做平均）
+    // —— M8-W2（需求3）：评分终态事实（从 OutputResult 的加性字段复制；文件组行不做平均）——
+    // 评分呈现 = 任务表「评分」列（RowBundle::score_cell/score），不再有隐藏子行。
     pp::MetricState metric_state = pp::MetricState::Off;
     double metric_score = -1.0;
     QString metric_note;
@@ -1040,11 +1042,25 @@ fk::PillBadge *swap_pill(fk::PillBadge *old_pill, const theme::Tokens &tokens) {
     return fresh;
 }
 
-// M8-C2（C12）：评分刻度 tooltip 单源（90≈视觉无损 / 80≈极高 / 70≈高 / 50≈中等 + 参考口径）。
+// M8-W2（需求3）：评分刻度 tooltip 单源（四档阈值 + 参考口径；取代 C12 子行的旧刻度文案，
+// 阈值口径 = 本需求「≥95 极好 / ≥90 好 / ≥80 ok / <80 不ok」）。
 QString score_scale_tip() {
-    return PageRun::tr("SSIMULACRA 2（0–100，越高越接近编码输入）：90≈视觉无损、80≈极高、"
-                       "70≈高、50≈中等；本分数评价编码/量化损失（对比编码器输入），"
-                       "无损目标应为 100。");
+    return PageRun::tr("SSIMULACRA 2（0–100，越高越接近编码输入）：≥95 极好、≥90 好、≥80 ok、"
+                       "<80 不ok。参考 = 编码器输入（量化后样本），失真 = 解码后产物；"
+                       "本分数评价编码/量化损失，无损目标应为 100。");
+}
+
+// M8-W2（需求3）：四档语义色（theme token 单源；无新增令牌）——
+// ≥95 极好 = ok（绿）/ ≥90 好 = accent（蓝，与「极好」绿明确区分）/ ≥80 ok = warn（琥珀）/
+// <80 不ok = err（红）。双主题均取各自令牌值（暗 #4cc2ff / 亮 #0067c0），布局零差异。
+QColor score_tint(const theme::Tokens &t, double score) {
+    if (score >= 95.0)
+        return t.ok;
+    if (score >= 90.0)
+        return t.accent;
+    if (score >= 80.0)
+        return t.warn;
+    return t.err;
 }
 
 void render_out_row(RunState &s, FileRow &file, int index) {
@@ -1128,44 +1144,33 @@ void render_out_row(RunState &s, FileRow &file, int index) {
         out.warn_shown = has_warning;
         out.warn_row->setVisible(has_warning);
     }
-    // M8-C2（C12）：评分隐藏子行 —— Ok 显示「质量 SSIMULACRA 2 · 92.31」（色阶 ≥90 绿 /
-    // 80–90 中性 / 70–80 琥珀 / <70 强调）；Unavailable/Failed 显示「—（原因）」；
-    // Off/仅元数据不显示。文件组行不做平均（未发生的量不显示）。
-    const bool score_visible = out.metric_state == pp::MetricState::Ok ||
-                               out.metric_state == pp::MetricState::Unavailable ||
-                               out.metric_state == pp::MetricState::Failed;
-    if (score_visible) {
-        QString text;
-        QColor tint = s.tokens.text3;
-        if (out.metric_state == pp::MetricState::Ok) {
-            text = PageRun::tr("质量 SSIMULACRA 2 · %1")
-                       .arg(QString::number(out.metric_score, 'f', 2));
-            tint = out.metric_score >= 90.0   ? s.tokens.ok
-                   : out.metric_score >= 80.0 ? s.tokens.text
-                   : out.metric_score >= 70.0 ? s.tokens.warn
-                                              : s.tokens.accent;
-        } else {
-            text = PageRun::tr("—（%1）").arg(out.metric_note.isEmpty() ? PageRun::tr("不可用")
-                                                                        : out.metric_note);
-        }
-        if (out.applied_score != text) {
-            out.applied_score = text;
-            out.score->set_full_text(text);
-        }
-        if (!out.applied_score_color_set || out.applied_score_color != tint) {
-            out.applied_score_color = tint;
-            out.applied_score_color_set = true;
-            out.score->setStyleSheet(QStringLiteral("color:%1").arg(theme::css_color(tint)));
-        }
-        QString tip = score_scale_tip();
+    // M8-W2（需求3）：评分列 —— Ok = 「92.31」（两位小数 + 四档语义色）；Unavailable/Failed =
+    // 「—」+ tooltip 原因；Off/仅元数据 = 空（未发生的量不显示）。文件组行不做平均（「—」）。
+    QString score_text;
+    QColor score_col = s.tokens.text3;
+    QString score_tip;
+    switch (out.metric_state) {
+    case pp::MetricState::Ok:
+        score_text = QString::number(out.metric_score, 'f', 2); // 2 位小数（实数，不 clamp）
+        score_col = score_tint(s.tokens, out.metric_score);
+        score_tip = score_scale_tip();
         if (!out.metric_note.isEmpty())
-            tip += PageRun::tr("\n备注：%1").arg(out.metric_note);
-        out.score->setToolTip(tip);
+            score_tip += PageRun::tr("\n备注：%1").arg(out.metric_note);
+        break;
+    case pp::MetricState::Unavailable:
+    case pp::MetricState::Failed:
+        // 「—」为简洁形态；完整原因进 tooltip（列宽固定 → 不在单元格内塞长文案导致裁切）
+        score_text = QStringLiteral("—");
+        score_tip =
+            PageRun::tr("SSIMULACRA 2 不可用：%1")
+                .arg(out.metric_note.isEmpty() ? PageRun::tr("未报告原因") : out.metric_note);
+        break;
+    case pp::MetricState::Off:
+    default:
+        break; // 空 = 未发生的量不显示（评分关闭/仅元数据）
     }
-    if (out.score_shown != score_visible) {
-        out.score_shown = score_visible;
-        out.score_row->setVisible(score_visible);
-    }
+    out.score_cache.apply(out.score, score_text, score_col);
+    out.score->setToolTip(score_tip);
 }
 
 void render_file_row(RunState &s, FileRow &file) {
@@ -1185,6 +1190,9 @@ void render_file_row(RunState &s, FileRow &file) {
     file.speed->setToolTip(speed_tip(file.src_bytes, facts.bytes, facts.ratio));
     file.time_cache.apply(file.time, facts.ms > 0.0 ? fmt_secs(facts.ms) : QStringLiteral("—"),
                           facts.ms > 0.0 ? s.tokens.text : s.tokens.text3);
+    // M8-W2（需求3）：文件组行不显示评分（不做平均）——「—」+ tooltip 说明（未发生的量不显示）。
+    file.score_cache.apply(file.score, QStringLiteral("—"), s.tokens.text3);
+    file.score->setToolTip(PageRun::tr("评分按输出计算（SSIMULACRA 2）；文件组行不做平均"));
 
     // 分组条：失败 > 0 字节异常 > 终态 > 进行中/排队（C8 档位）
     bool any_failed = false;
@@ -1476,6 +1484,31 @@ ElidedLabel *make_num_cell(QWidget *parent, const QString &object_name, int widt
     return label;
 }
 
+// M8-W2（需求3）：评分列单元格 —— 定宽容器（保证各行/表头同列对齐）+ 右对齐数值文本。
+// 单元格 = `pp-run-score-<i>-<j>`（组行 `pp-run-gscore-<i>`）、文本 = 同名 `-text-` 变体
+// （沿用旧隐藏子行的探针钩子；探针按单元格 x 断言列对齐、按文本读分数/色阶）。
+struct ScoreCell {
+    QWidget *cell = nullptr;
+    ElidedLabel *label = nullptr;
+};
+
+ScoreCell make_score_cell(QWidget *parent, const QString &cell_name, const QString &text_name) {
+    ScoreCell out;
+    out.cell = new QWidget(parent);
+    out.cell->setObjectName(cell_name);
+    out.cell->setFixedWidth(kScoreColW);
+    auto *line = new QHBoxLayout(out.cell);
+    line->setContentsMargins(0, 0, 0, 0);
+    line->setSpacing(0);
+    line->addStretch(1);
+    out.label = new ElidedLabel(out.cell);
+    out.label->setObjectName(text_name);
+    out.label->setFont(theme::font(theme::Typography::small_px, QFont::Normal, /*tabular=*/true));
+    out.label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    line->addWidget(out.label);
+    return out;
+}
+
 // 状态列（胶囊右对齐；列宽固定 → 各列不错位）
 struct StatusCell {
     QWidget *cell = nullptr;
@@ -1511,21 +1544,24 @@ QWidget *make_table_row(QWidget *parent, const QString &object_name, int height)
 
 // 行命名（探针钩子；test/ui_smoke.py 的 run-geom 与 mainwindow 的 T14 探针按这些名字取证）
 struct RowNames {
-    QString row, mark, name, bar, size, speed, time, status;
+    QString row, mark, name, bar, size, speed, time, score, score_text, status;
 };
 
 RowNames out_names(int i, int j) {
     const QString tag = QStringLiteral("%1-%2").arg(i).arg(j);
     const auto n = [&tag](const char *prefix) { return QString::fromLatin1(prefix) + tag; };
-    return {n("pp-run-row-"),  n("pp-run-mark-"),  n("pp-run-oname-"), n("pp-run-bar-"),
-            n("pp-run-size-"), n("pp-run-speed-"), n("pp-run-time-"),  n("pp-run-status-")};
+    // M8-W2（需求3）：评分列单元格/文本沿用旧隐藏子行的探针钩子名（pp-run-score-* / -text-）。
+    return {n("pp-run-row-"),        n("pp-run-mark-"),  n("pp-run-oname-"), n("pp-run-bar-"),
+            n("pp-run-size-"),       n("pp-run-speed-"), n("pp-run-time-"),  n("pp-run-score-"),
+            n("pp-run-score-text-"), n("pp-run-status-")};
 }
 
 RowNames group_names(int i) {
     const QString tag = QString::number(i);
     const auto n = [&tag](const char *prefix) { return QString::fromLatin1(prefix) + tag; };
-    return {n("pp-run-group-"), n("pp-run-gmark-"),  n("pp-run-gname-"), n("pp-run-gbar-"),
-            n("pp-run-gsize-"), n("pp-run-gspeed-"), n("pp-run-gtime-"), n("pp-run-gstatus-")};
+    return {n("pp-run-group-"),       n("pp-run-gmark-"),  n("pp-run-gname-"), n("pp-run-gbar-"),
+            n("pp-run-gsize-"),       n("pp-run-gspeed-"), n("pp-run-gtime-"), n("pp-run-gscore-"),
+            n("pp-run-gscore-text-"), n("pp-run-gstatus-")};
 }
 
 // 行骨架（名称列 = 弹性列，其余定宽；缩进只作用于名称列）
@@ -1537,6 +1573,8 @@ struct RowSkeleton {
     ElidedLabel *size = nullptr;
     ElidedLabel *speed = nullptr;
     ElidedLabel *time = nullptr;
+    QWidget *score_cell = nullptr;
+    ElidedLabel *score = nullptr;
     fk::PillBadge *status = nullptr;
 };
 
@@ -1567,13 +1605,18 @@ RowSkeleton make_row_skeleton(QWidget *parent, const RowNames &names, const them
     line->addWidget(out.speed);
     out.time = make_num_cell(out.row, names.time, kTimeColW);
     line->addWidget(out.time);
+    // M8-W2（需求3）：评分列（定宽；组行与输出行同列 → 所有行对齐）
+    const ScoreCell score_cell = make_score_cell(out.row, names.score, names.score_text);
+    out.score_cell = score_cell.cell;
+    out.score = score_cell.label;
+    line->addWidget(out.score_cell);
     const StatusCell status = make_status_cell(out.row, names.status, tokens);
     out.status = status.pill;
     line->addWidget(status.cell);
     return out;
 }
 
-// 表头行（§7.3 表格列题；mockup 逐字：文件 / 输出 · 进度 · 大小 · 速度 · 耗时 · 状态）
+// 表头行（§7.3 表格列题；mockup 逐字：文件 / 输出 · 进度 · 大小 · 速度 · 耗时 · 评分 · 状态）
 QWidget *make_table_head(QWidget *parent) {
     auto *head = new QFrame(parent);
     head->setObjectName(QStringLiteral("pp-run-thead"));
@@ -1597,6 +1640,10 @@ QWidget *make_table_head(QWidget *parent) {
     line->addWidget(label(PageRun::tr("大小"), Qt::AlignRight, kSizeColW));
     line->addWidget(label(PageRun::tr("速度"), Qt::AlignRight, kSpeedColW));
     line->addWidget(label(PageRun::tr("耗时"), Qt::AlignRight, kTimeColW));
+    // M8-W2（需求3）：表头「评分」列（探针钩子 pp-run-thead-score，按与行内单元格同 x 断言对齐）
+    QLabel *score_head = label(PageRun::tr("评分"), Qt::AlignRight, kScoreColW);
+    score_head->setObjectName(QStringLiteral("pp-run-thead-score"));
+    line->addWidget(score_head);
     line->addWidget(label(PageRun::tr("状态"), Qt::AlignRight, kStatusColW));
     return head;
 }
@@ -1844,6 +1891,8 @@ void build_rows(RunState *s, const QStringList &names) {
         file.size = skel.size;
         file.speed = skel.speed;
         file.time = skel.time;
+        file.score_cell = skel.score_cell;
+        file.score = skel.score;
         file.status = skel.status;
         file.name->set_full_text(row_name(names.at(i))); // 修 3-13：不再重复「N 个输出」
         s->list_layout->addWidget(file.group);
@@ -1867,6 +1916,8 @@ void build_rows(RunState *s, const QStringList &names) {
             out.size = orow.size;
             out.speed = orow.speed;
             out.time = orow.time;
+            out.score_cell = orow.score_cell;
+            out.score = orow.score;
             out.status = orow.status;
             const QString fmt_id =
                 j < s->plan.format_ids.size() ? s->plan.format_ids.at(j) : QString();
@@ -1898,20 +1949,6 @@ void build_rows(RunState *s, const QStringList &names) {
             warn_line->addWidget(out.warn, 1);
             out.warn_row->setVisible(false);
             s->list_layout->addWidget(out.warn_row);
-
-            // M8-C2（C12）：评分隐藏子行（加性对象名 pp-run-score-<i>-<j>；默认隐藏，
-            // 渲染期按 metric_state 显示 —— Ok 分数 / Unavailable·Failed —（原因）/ Off 不显示）
-            out.score_row = make_table_row(
-                s->list, QStringLiteral("pp-run-score-%1-%2").arg(i).arg(j), fk::kRowPitch);
-            out.score = new ElidedLabel(out.score_row);
-            out.score->setObjectName(QStringLiteral("pp-run-score-text-%1-%2").arg(i).arg(j));
-            out.score->setFont(theme::font(theme::Typography::small_px));
-            out.score->setProperty(kRunLabelProperty, QString::fromLatin1(kRunReason));
-            set_leading_indent(out.score, kReasonIndent);
-            auto *score_line = qobject_cast<QHBoxLayout *>(out.score_row->layout());
-            score_line->addWidget(out.score, 1);
-            out.score_row->setVisible(false);
-            s->list_layout->addWidget(out.score_row);
 
             file.outs.append(out);
         }
@@ -2270,7 +2307,6 @@ void PageRun::reset() {
             delete out.row;
             delete out.reason_row;
             delete out.warn_row;
-            delete out.score_row; // M8-C2（C12）：评分隐藏子行
         }
     }
     s->files.clear();

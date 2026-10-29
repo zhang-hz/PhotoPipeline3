@@ -139,6 +139,15 @@ bool same_param_keys(const pp::TechDef &a, const pp::TechDef &b) {
 
 QString tr_c(const char *text) { return QCoreApplication::translate("pp::ui::ParamForm", text); }
 
+// M8-W2（需求2）：目录行「行尾状态注记」固定槽宽（单源）—— 「当前路径」是目录行最长的状态
+// 注记（4 个 CJK 字），槽宽 = 它的实宽 + 行内距：**空注记也占位**，于是「可选启用」勾选框的
+// 右端 x 只由行宽与槽宽决定，与状态注记空/非空无关 ⇒ 所有带勾选行严格对齐（探针
+// `param-enable-geom` 按行内坐标取证）。
+int catalog_status_slot_w() {
+    const QFontMetrics fm(theme::font(theme::Typography::hint_px));
+    return fm.horizontalAdvance(ParamForm::tr("当前路径")) + formkit::kInlineGap;
+}
+
 // 高级区子分组（M5-T8 · 修 2-39「组内 13 项平铺无内部结构 → 按语义分子组」）。
 // UX-8（M7-R2D2）：分组判据改读 **ParamDef.group 单源**（WP6 数据面；词表 = pp::kGroup*），
 // R-269 点名的 key 词根启发式（progressive*/noise*/speed|budget）**删除** —— 同一参数的归组
@@ -562,10 +571,12 @@ struct ParamForm::Impl {
         bool rc_managed = false;   // 由 RC 模式下拉统一启用/下发（无独立启用勾选）
         bool unset = false;        // 目录行未启用（跟随编码器默认 → 不进 values()）
         QWidget *enable = nullptr; // 启用勾选（N/D/T 目录行）或三态下拉（S 目录行）
-        QLabel *status = nullptr;  // 行内状态注记（「未启用」/「只读」/「锁定」/「禁用」）
-        QLabel *note = nullptr;    // R3 范围注释（M8-B2 动态域改写；既有行恒为静态文案）
-        std::string engine;        // 目录引擎名（搜索「引擎名」用）
-        QString reason;            // 目录/规则原因（tooltip 尾注）
+        formkit::ElidedLabel *status =
+            nullptr; // 行内状态注记（「未启用」/「只读」/「锁定」/「禁用」/「当前路径」；
+                     // M8-W2 需求2：固定槽宽 + 省略号兜底，全文自动进 tooltip）
+        QLabel *note = nullptr; // R3 范围注释（M8-B2 动态域改写；既有行恒为静态文案）
+        std::string engine;     // 目录引擎名（搜索「引擎名」用）
+        QString reason;         // 目录/规则原因（tooltip 尾注）
     };
     std::vector<Row> rows;
 
@@ -1425,13 +1436,13 @@ struct ParamForm::Impl {
             r.label->setToolTip(tip);
             r.label->setObjectName(QStringLiteral("pp-label-") + QString::fromStdString(r.key));
         }
-        // 行内状态注记「只读」
-        auto *status = new QLabel(r.row);
+        // 行内状态注记「只读」（ElidedLabel：省略号兜底，全文进 tooltip）
+        auto *status = new formkit::ElidedLabel(r.row);
         status->setObjectName(QStringLiteral("pp-param-status-") + QString::fromStdString(r.key));
         status->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkNote));
         status->setFont(theme::font(theme::Typography::hint_px));
-        status->setText(ParamForm::tr("只读（上游固定）"));
-        status->setToolTip(tip);
+        status->set_full_text(ParamForm::tr("只读（上游固定）")); // 同时把全文写进 tooltip
+        status->setToolTip(tip);                                  // 覆盖为目录原因（不静默灰口径）
         r.status = status;
         if (auto *line = qobject_cast<QHBoxLayout *>(r.row->layout()))
             line->addWidget(status, 0, Qt::AlignVCenter);
@@ -1512,7 +1523,10 @@ struct ParamForm::Impl {
                     combo->setCurrentIndex(0);
                 }
             } else {
-                // N/D/T 目录行：行首「启用」勾选（未勾 = 不下发，值控件置灰并显示默认值）
+                // N/D/T 目录行：「启用」勾选 = **行尾右侧**（数值控件之后、状态注记之前；M8-W2
+                // 需求2）。装配点在下方「行内状态注记」段（尾随 stretch 之后追加），此处只建控件：
+                // 旧实现 `insertWidget(0, …)` 插在行首，把标签轨挤到勾选框之后 → 目录行的标签/
+                // 数值列与普通行错位（本包根治）。
                 auto *box_widget = new formkit::CheckBox(r.row);
                 box_widget->setObjectName(QStringLiteral("pp-param-enable-") +
                                           QString::fromStdString(p.key));
@@ -1521,10 +1535,9 @@ struct ParamForm::Impl {
                     ParamForm::tr("启用该项（未勾选 = 跟随编码器默认，不下发该参数）"));
                 box_widget->set_tokens(tokens);
                 box_widget->setChecked(false);
-                if (auto *line = qobject_cast<QHBoxLayout *>(r.row->layout())) {
-                    line->insertWidget(0, box_widget, 0, Qt::AlignVCenter);
-                    line->insertSpacing(1, formkit::kInlineGap);
-                }
+                // 几何单源：宽 = 13×13 勾选框本体（不含 CheckBox 自带「勾选框→文字」的 8px 间距；
+                // 文字恒为空）→ 行尾右端 x = 行宽 − 状态槽宽 − 行内距，探针按此断言对齐。
+                box_widget->setFixedWidth(formkit::kCheckPx);
                 r.enable = box_widget;
                 // 未启用时值控件显示目录默认值（可读但不可改）。初始回写必须屏蔽信号 ——
                 // apply 闭包走 setValue/setText，会触发 valueChanged → on_change 把"显示用
@@ -1538,15 +1551,27 @@ struct ParamForm::Impl {
         }
         // 行内状态注记（「未启用」/「只读」/「锁定」/「禁用」；状态文本在 update_row_states 刷）
         if (r.from_catalog) {
-            auto *status = new QLabel(r.row);
+            // M8-W2（需求2）：ElidedLabel —— 槽宽固定（对齐不变），若未来出现更长的状态文案
+            // 则出省略号而不是硬裁，全文自动进 tooltip（兜底 = 不静默截断）。
+            auto *status = new formkit::ElidedLabel(r.row);
             status->setObjectName(QStringLiteral("pp-param-status-") +
                                   QString::fromStdString(p.key));
             status->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkNote));
             status->setFont(theme::font(theme::Typography::hint_px));
-            status->setWordWrap(false);
+            // 槽宽 = 已知最长状态「当前路径」实宽 + 行内距（单源 catalog_status_slot_w）且
+            // **空文本也占位** ——「启用」勾选框的右端 x 因此与状态是否显示无关，同列严格对齐。
+            status->setFixedWidth(catalog_status_slot_w());
+            status->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
             r.status = status;
-            if (auto *line = qobject_cast<QHBoxLayout *>(r.row->layout()))
+            if (auto *line = qobject_cast<QHBoxLayout *>(r.row->layout())) {
+                // 行尾顺序（需求2）：[数值控件 … 尾随 stretch][启用勾选框][行内距][状态注记]。
+                // 尾随 stretch 之后追加 ⇒ 勾选/注记贴行右端；右端由行宽 − 槽宽 − 行内距唯一决定。
+                if (auto *enable_box = qobject_cast<QAbstractButton *>(r.enable)) {
+                    line->addWidget(enable_box, 0, Qt::AlignVCenter);
+                    line->addSpacing(formkit::kInlineGap);
+                }
                 line->addWidget(status, 0, Qt::AlignVCenter);
+            }
         }
         if (r.reason.isEmpty() && cr == nullptr)
             r.reason = QString::fromStdString(p.tooltip);
@@ -1852,8 +1877,11 @@ struct ParamForm::Impl {
                     status_text = ParamForm::tr("未启用");
                 else if (r.rc_managed)
                     status_text = ParamForm::tr("当前路径");
-                r.status->setText(status_text);
-                r.status->setVisible(!status_text.isEmpty() && shown);
+                r.status->set_full_text(status_text); // 全文（显示面按槽宽省略；tooltip = 全文）
+                // M8-W2（需求2）：目录行状态注记占**固定槽宽**——空文本也保持可见占位（槽宽
+                // 已在 add_row 固定），保证「启用」勾选框右端 x 不随状态空/非空漂移；行被谓词/
+                // 搜索隐藏时注记随之隐藏。
+                r.status->setVisible(shown);
             }
             // M8-B2 / J6：JXL effort 动态域 —— 仅启用「允许专家选项」才允许 11。
             // 默认（expert_options 未启用）= 1–10 ⇒ 冻结断言 range-note 的 "1–10" 逐字不变。

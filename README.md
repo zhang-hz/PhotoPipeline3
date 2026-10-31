@@ -46,7 +46,8 @@ idc4）+ 自动；HEVC Level 合法性按 x265 4.3「8 像素补齐后 MaxLumaPs
 有损 HEIF grid（Apple 1024×576 基准 / 自动适配 Level；默认仅在显式 Level 装不下整图时自动分块），
 大图 + L3.1 从「失败」变为合法可解码 grid；编码后 hvcC 回读校验档位/Level/位深/色度。③ **穷举矩阵
 验证器** `tools/heif_matrix_check.py`：1013 例 = **pass 697 / fail 0 / expected-fail 316 /
-unexpected 0**。**预发布（alpha），仅建议尝鲜/验证用**；逐条变更见 [CHANGELOG.md](CHANGELOG.md)
+unexpected 0**。**已发行**（tag `v0.3.6.alpha2`，GitHub Release 4 资产 + 源码归档，2026-10-31；
+预发布 alpha，仅建议尝鲜/验证用）；逐条变更见 [CHANGELOG.md](CHANGELOG.md)
 `[0.3.6.alpha2]`，验收证据见 [docs/0.3.6.alpha2-report.md](docs/0.3.6.alpha2-report.md)。
 
 **0.3.6.alpha1（历史预发布）= M8 首个发行件**：① **参数面全暴露**——HEIF/AVIF/JXL 精选

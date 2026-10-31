@@ -85,7 +85,15 @@
 
 ### 发行
 
-- 待 tag / CI / Release 后补记（tag、`release.yml` 轮次与资产指纹）。
+- tag `v0.3.6.alpha2`（annotated tag 对象 `01e2e9f0` → 发行树 commit `c7bcabc`）已推送；
+  `main-full` **#102**（10/10 全绿）与 `release.yml` **#22**（7/7 全绿）全绿。
+- GitHub Release `v0.3.6.alpha2` **已发布**（2026-10-31T02:46:05Z，prerelease=false / Latest，
+  发布说明 = 本节正文（82 行 / 7,076 B，`### 发行` 被 release.yml 正确排除），4 资产 + 源码归档：
+  `win64.zip` 33,951,087 B / sha256 `ca5c4977…ab157`；AppImage 52,345,336 B /
+  sha256 `687cb5e6…af748`；deps.txt 2,439 B / `e8c80b3d…854d`；SHA256SUMS.txt 314 B /
+  `9fdb590f…29967`（内容与上述三件逐字一致）。
+- 报告 `docs/0.3.6.alpha2-report.md` §2.5 已填 CI 轮次与资产指纹；报告类提交不入 tag
+  （发行纪律：tag 指向发行树，报告类提交 tag 后补记）。
 
 ## [0.3.6.alpha1] — 2026-10-29
 

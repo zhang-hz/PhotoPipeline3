@@ -196,12 +196,13 @@ inline QString page_qss(const theme::Tokens &t) {
 
 // ---------------------------------------------------------------------------
 // UX-10.1：HEIF/AVIF「编码档位 (Profile)」核心行（docs/ux-review-14.md §10.1 口径）
-//   profile = **编码档位**（HEVC 的 Main/Main10/Main12/Main Still Picture、AV1 的
-//   Main/High/Professional），决定解码兼容性；**不是**色彩 ICC profile。
-//   libheif 的两个插件都不暴露 profile 参数 —— 档位由插件按位深/色度/静止图自动推导
-//   （见 codecs/heif_profile.h 的规则复刻，同一份真相）。本行把该推导**显式呈现**。
-//   选定点落盘键 = pp::kHeifProfileParamKey（"__heif_profile"；保留键：不落预设、不进
-//   未知参数校验、不进日志快照 —— params.h §3.4 约定）。
+//   profile = **编码信号档位**：HEVC 的真实 hvcC general_profile_idc + 色度 + 位深
+//   （Main Still idc3 / Main idc1 / Main10 idc2 / Rext 4:2:0·4:2:2·4:4:4 idc4），
+//   AV1 的 Main/High/Professional；决定解码兼容性，**不是**色彩 ICC profile。
+//   libheif 插件不暴露 profile 参数 —— 档位由插件按位深/色度推导，非原生信号由
+//   enc_heif 注入内部 x265 参数（见 codecs/heif_profile.h，同一份真相）。
+//   选定点 = pp::kHeifProfileParamKey（"__heif_profile"；`__` 保留键：不进未知参数
+//   校验/日志快照；预设由 preset_io 的输出级 heif_profile 字段持久化 —— 编号不可重排）。
 // ---------------------------------------------------------------------------
 inline bool is_heif_family(const std::string &id) { return id == "heif" || id == "avif"; }
 
@@ -215,17 +216,27 @@ struct ProfileOption {
     const char *label; // 中文标签（含兼容性说明，§10.1 逐字口径）
 };
 
-// 选项表（docs/ux-review-14.md §10.1）：HEIF 五档 / AVIF 四档，首项恒为「自动」
+// 选项表（docs/ux-review-14.md §10.1 + M8 HEIF 档位收口）：HEIF 12 个真实信号 + 自动；
+// AVIF 4 档。首项恒为「自动」（默认值；下拉闭合时只显示“自动”，冻结截图逐字不变）。
+// 标签必须能区分 general_profile_idc：旧版把 idc=4 的 10 位静图显示成 “Main10”，
+// 用户无法判断产物到底是 Main10(idc=2) 还是 Main10 Intra(idc=4)。
 inline const ProfileOption *heif_profile_options(bool avif, int &count) {
     static const ProfileOption kHeif[] = {
         {pp::HeifProfile::Auto, "自动"},
-        // HEIF-01：8 位静止图在 x265 里恒为 Main Still Picture；此选项值仍叫 Main，
-        // 但 enc_heif/heif_profile_compatible 把 Main 与 MainStill 视为同一可用族，
-        // 不再出现“选了必失败”。（标签的中文修正在后续 UI 文案批处理中统一。）
-        {pp::HeifProfile::Main, "Main（8 位 · 兼容性最好）"},
-        {pp::HeifProfile::Main10, "Main10（10 位 · Intra）"},
-        {pp::HeifProfile::Main12, "Main12（12 位）"},
-        {pp::HeifProfile::MainStill, "Main Still Picture（8 位 · 静止图）"},
+        {pp::HeifProfile::Main, "Main（8 位 · 4:2:0 · idc 1）"},
+        {pp::HeifProfile::Main10, "Main10（10 位 · 4:2:0 · idc 2）"},
+        {pp::HeifProfile::Rext420_8, "Main 4:2:0 8（idc 4）"},
+        {pp::HeifProfile::Rext420_10, "Main 4:2:0 10 Intra（idc 4）"},
+        {pp::HeifProfile::Rext420_12, "Main 4:2:0 12 Intra（idc 4）"},
+        {pp::HeifProfile::Rext422_8, "Main 4:2:2 8（idc 4）"},
+        {pp::HeifProfile::Rext422_10, "Main 4:2:2 10（idc 4）"},
+        {pp::HeifProfile::Rext422_12, "Main 4:2:2 12（idc 4）"},
+        {pp::HeifProfile::Rext444_8, "Main 4:4:4 8（idc 4）"},
+        {pp::HeifProfile::Rext444_10, "Main 4:4:4 10（idc 4）"},
+        {pp::HeifProfile::Rext444_12, "Main 4:4:4 12（idc 4）"},
+        // MainStill 保持在末尾：既有 --ui-smoke 的“逐档位”探针会把最后一项留在下拉里，
+        // 旧表末项也是 MainStill（8 位）；这样探针结束后的位深/色度状态与旧版逐位一致。
+        {pp::HeifProfile::MainStill, "Main Still Picture（8 位 · 4:2:0 · idc 3）"},
     };
     static const ProfileOption kAvif[] = {
         {pp::HeifProfile::Auto, "自动"},
@@ -241,15 +252,15 @@ inline const ProfileOption *heif_profile_options(bool avif, int &count) {
     return kHeif;
 }
 
-// 档位 → 允许位深（联动限幅；空 = 不限）。口径与 heif_profile.h 的 derive 规则一致：
-// HEVC 只看位深（Main/MainStill→8、Main10→10、Main12→12）；AV1 的 Professional 还可以由
-// 4:2:2 命中（不限位深），故放宽到 {8,10,12}，最终判定交给 heif_profile_compatible。
+// 档位 → 允许位深（联动限幅；空 = 不限）。口径与 heif_profile.h 的真实信号一致：
+// HEVC 每档锁定一个位深（Main/MainStill/Rext*_8→8、Main10/Rext*_10→10、
+// Main12/Rext*_12→12）；AV1 Main/High 覆盖 8/10 位，Professional 还可由 4:2:2 命中。
 inline std::vector<int> profile_allowed_bitdepths(pp::HeifProfile p, bool avif = false) {
     switch (p) {
     case pp::HeifProfile::Auto:
         return {};
     case pp::HeifProfile::Main:
-        // AV1 Main 本含 8/10 位；HEVC Main 只对应 8 位（Main Still 也是 8 位）。
+        // AV1 Main 本含 8/10 位；HEVC Main 只对应 8 位（idc=1）。
         return avif ? std::vector<int>{8, 10} : std::vector<int>{8};
     case pp::HeifProfile::MainStill:
         return {8};
@@ -261,23 +272,52 @@ inline std::vector<int> profile_allowed_bitdepths(pp::HeifProfile p, bool avif =
         return {8, 10};
     case pp::HeifProfile::Professional:
         return {8, 10, 12};
+    case pp::HeifProfile::Rext420_8:
+    case pp::HeifProfile::Rext422_8:
+    case pp::HeifProfile::Rext444_8:
+        return {8};
+    case pp::HeifProfile::Rext420_10:
+    case pp::HeifProfile::Rext422_10:
+    case pp::HeifProfile::Rext444_10:
+        return {10};
+    case pp::HeifProfile::Rext420_12:
+    case pp::HeifProfile::Rext422_12:
+    case pp::HeifProfile::Rext444_12:
+        return {12};
     }
     return {};
 }
 
-// 兼容性提示（§8「禁用不静默灰」/ §10.1-4）：非 Main 档位给 warn 色说明
+// 兼容性提示（§8「禁用不静默灰」/ §10.1-4）：非 Main 档位给 warn 色说明。
+// 文案必须与真实信号（idc/色度/位深）一致，不能再把 idc=4 说成 Main10。
 inline QString profile_compat_hint(pp::HeifProfile p) {
     switch (p) {
     case pp::HeifProfile::Main:
     case pp::HeifProfile::Auto:
         return QString();
     case pp::HeifProfile::MainStill:
-        return PageOutput::tr("Main Still Picture：8 位静止图档，需较新解码器");
+        return PageOutput::tr("Main Still Picture：8 位 4:2:0 静止图（idc 3），兼容性最好");
     case pp::HeifProfile::Main10:
         return PageOutput::tr(
-            "Main10：10 位，x265 静止图写 Main10 Intra 档（部分工具显示为 Main）");
+            "Main10：10 位 4:2:0（idc 2，Apple HEIC 常用档）；编码器内部会写出该信号");
     case pp::HeifProfile::Main12:
-        return PageOutput::tr("Main12 需较新解码器（12 位）");
+        return PageOutput::tr("Main12 是 12 位 RExt 的兼容别名（idc 4）；新预设请改用显式 "
+                              "Rext420/422/444_12 档");
+    case pp::HeifProfile::Rext420_8:
+        return PageOutput::tr("Main 4:2:0 8（idc 4）：8 位 RExt，兼容性弱于 Main / Main Still");
+    case pp::HeifProfile::Rext420_10:
+        return PageOutput::tr("Main 4:2:0 10 Intra（idc 4）：x265 静图原生默认；部分工具把"
+                              "它显示成 Main10，但码流 idc 是 4");
+    case pp::HeifProfile::Rext420_12:
+        return PageOutput::tr("Main 4:2:0 12 Intra（idc 4）需较新解码器（12 位）");
+    case pp::HeifProfile::Rext422_8:
+    case pp::HeifProfile::Rext422_10:
+    case pp::HeifProfile::Rext422_12:
+        return PageOutput::tr("Main 4:2:2（idc 4）兼容性有限，需较新解码器");
+    case pp::HeifProfile::Rext444_8:
+    case pp::HeifProfile::Rext444_10:
+    case pp::HeifProfile::Rext444_12:
+        return PageOutput::tr("Main 4:4:4（idc 4）兼容性有限，需较新解码器");
     case pp::HeifProfile::High:
         return PageOutput::tr("High 档（4:4:4）兼容性有限，需较新解码器");
     case pp::HeifProfile::Professional:
@@ -554,7 +594,7 @@ struct OutputPageImpl {
     void on_profile_changed(const std::string &id);
 
     // UX-10.1 残余：档位 → 色度限幅联动（选定 Main 不给 4:4:4 等）。允许集 = 存在某个允许位深
-    // 使 heif_profile_compatible(want, d, c, still=true) 通过 —— 与校验同一份规则源
+    // 使 heif_profile_compatible_for(avif, want, d, c, still=true) 通过 —— 与校验同一份规则源
     // （codecs/heif_profile.h）；「自动」不限幅（空集 = 全可选）。
     void apply_chroma_limits(const std::string &id);
 

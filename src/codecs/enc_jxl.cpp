@@ -380,13 +380,49 @@ private:
         info.alpha_bits = alpha ? static_cast<uint32_t>(req.target.out_bitdepth) : 0;
         info.alpha_exponent_bits = 0;
         info.alpha_premultiplied = JXL_FALSE;
-        // Lossless/modular keep the original profile; lossy VarDCT may use XYB.
-        info.uses_original_profile = (lossless || modular || has_icc) ? JXL_TRUE : JXL_FALSE;
-        // M8-B1：uses_original_profile 三态 —— 键在 = 用户显式覆盖（J7/J8 预检保证一致性）；
-        // 键缺失 = 沿用既有推导（零回归）。
-        if (params.find("uses_original_profile") != params.end())
-            info.uses_original_profile =
-                param_bool(params, "uses_original_profile", true) ? JXL_TRUE : JXL_FALSE;
+        // —— J8（M8-B1 修订）：有损 VarDCT 强制 XYB；「带 ICC」不再推导为保留原配置 ——
+        // 旧推导 (lossless || modular || has_icc) 把「嵌了 ICC」也当成 uses_original_profile=true，
+        // 而本仓输出**恒嵌 ICC**（AGENTS.md §4.5 / ColorManager）⇒ 所有有损 VarDCT 都走了 libjxl
+        // 的非 XYB「原始配置」路径。该路径命中上游 libjxl issue #4552（有损 +
+        // uses_original_profile=true 的 VarDCT 出现块状/色噪 + 体积暴涨，distance 越低越差）：
+        // 实测 super/T1.tif（16-bit keep/AdobeRGB、effort=7）d2.0→10.85MB/78.75、
+        // d1.0→14.83MB/78.80、d0.5→19.87MB/75.82（score 随 distance 减小而下降，违背 distance
+        // 语义）；同参数改 XYB 后 d2.0→2.04MB/80.82、d1.0→4.01MB/86.50、d0.5→7.24MB/90.21
+        // （单调，且体积小 3.7–5×）。libjxl 头文件对该字段的口径也是「lossy compression 大多数
+        // 场景应设 false」（jxl/codestream_header.h:157-176）。
+        // XYB **不是色彩降级**：原色彩配置仍随码流携带（可精确表示为标准色彩空间时存
+        // 结构化枚举，否则存 ICC；解码端 JxlDecoderGetColorAsICCProfile(…, TARGET_ORIGINAL)
+        // 总能取回等价 ICC 并还原）；实测 idiff(super/T1.tif, XYB d0.5 keep) mean 0.00438 /
+        // PSNR 44.34 dB = 纯压缩误差。
+        // 新推导：
+        //   * lossless / modular → JXL_TRUE（既有语义不变：真无损 / Modular 保留原配置）；
+        //   * lossy VarDCT → JXL_FALSE（XYB），**带 ICC 也一样** —— 本修复点；
+        //   * 用户显式键（M8-B1 三态：键在 = 显式覆写）：
+        //       - lossy VarDCT + true → 显式拒绝（该组合只产坏件，不静默改用户参数）；
+        //       - false → 保持（与默认推导一致，产物逐字节相同）；
+        //       - lossless / modular 上的 true/false → 沿用既有覆写语义（J2/J7 预检管无损侧）。
+        const bool lossy_vardct = !lossless && !modular;
+        const bool has_orp_override = params.find("uses_original_profile") != params.end();
+        const bool orp_override = param_bool(params, "uses_original_profile", true);
+        if (lossy_vardct && has_orp_override && orp_override) {
+            return enc::encode_error(
+                "jxl: uses_original_profile=true is not supported for lossy VarDCT: the "
+                "non-XYB path produces blocking/chroma artifacts and much larger files "
+                "(upstream libjxl issue #4552); remove the parameter to use the XYB default, "
+                "or switch tech to modular/lossless");
+        }
+        // J7 联动兜底：libjxl 的 non-perceptual 编码要求 uses_original_profile=true
+        // （encode.cc:1909-1915 / 2418-2423），有损 VarDCT 已强制 XYB ⇒ 该组合必被库拒绝，
+        // 且 JxlEncoderFrameSettingsSetOption 只回笼统 "ERROR"；这里提前给出可读错误。
+        if (lossy_vardct && param_bool(params, "disable_perceptual_heuristics", false)) {
+            return enc::encode_error(
+                "jxl: disable_perceptual_heuristics=1 requires uses_original_profile=true, "
+                "which is unavailable on the lossy VarDCT (XYB) path; use tech=modular or "
+                "the lossless checkbox for non-perceptual encoding");
+        }
+        info.uses_original_profile = (lossless || modular) ? JXL_TRUE : JXL_FALSE;
+        if (has_orp_override)
+            info.uses_original_profile = orp_override ? JXL_TRUE : JXL_FALSE;
         // M8-B1：HDR 色调映射组（J17）——BasicInfo 字段，0 = 库自动（与 InitBasicInfo 默认同值）。
         if (params.find("intensity_target") != params.end())
             info.intensity_target =

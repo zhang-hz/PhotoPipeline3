@@ -449,6 +449,26 @@ const char *conflict_text(pp::ConflictPolicy p) { return pp::conflict_policy_nam
 bool set_param(pp::ParamSet &s, const pp::FormatDef &f, const std::string &backend,
                const std::string &tech, const std::string &key, const std::string &raw,
                std::string &err) {
+    // M9-reserved-keys（docs/m9-adjudications.md A1）：保留键（"__" 前缀，core/params.h §3.4）
+    // 按契约**不参与未知参数校验**；dev harness 自本任务起同样透传它们（此前一律报
+    // "未收录参数"，导致 __heif_profile / __heif_grid 等运行期保留键无法从 --dev 面注入，
+    // 矩阵验证被迫绕路）。ParamValue 类型按字面推断：整数优先、其次布尔、其余字符串——
+    // 与 GUI/预设把它们写进 ParamSet 时的三种实际承载类型一致。该分支只影响此前必然失败
+    // 的输入（加性行为，既有参数路径零改动）。
+    if (key.rfind("__", 0) == 0) {
+        int64_t iv = 0;
+        if (parse_int_text(raw, iv)) {
+            s[key] = iv;
+            return true;
+        }
+        bool bv = false;
+        if (parse_bool_text(raw, bv)) {
+            s[key] = bv;
+            return true;
+        }
+        s[key] = raw;
+        return true;
+    }
     bool runtime_format = false;
     for (const pp::BackendDef &b : f.backends) {
         if (b.runtime_introspected) {

@@ -119,14 +119,29 @@ R-316 勘误：旧表的 `use_dct4/8/16` 与 `responsive` **实现不存在 / �
 | tune | 画质取向 | enum |（插件值集） | 插件当前值 | 核心（UX-10.2 提核心） |
 | (其余内省项：tu-intra-depth / complexity …) | | | | | 高级 |
 
-**编码档位（Profile，UX-10.1 / I4，M7-WP2 新增核心行）**：profile = 编码档位
-（HEVC `Main / Main10 / Main12 / Main Still Picture`），决定解码兼容性，**不是** ICC profile。
-libheif 插件不暴露 `profile` 参数 —— 档位由插件按位深自动推导（x265：8→Main（静止图→
-Main Still Picture）、10→Main10、12→Main12；encoder_x265.cc:793-802）。UI 档位行
-（`pp-profile-row`）呈现推导结果/接受显式选定，编码前经 `heif_profile_compatible` 反查，
-不一致拒绝并报中文错误（`src/codecs/heif_profile.h` 单源规则）。
+**编码档位（Profile，UX-10.1 / I4，M7-WP2 新增核心行；M9 校正为真实信号）**：profile =
+**HEVC 真实信号档位**（hvcC `general_profile_idc` + 色度 + 位深），决定解码兼容性，**不是**
+ICC profile。libheif 插件不暴露 profile 参数 —— 原生信号由插件按位深/色度/静止图推导
+（x265 `determineLevel`：8 位 4:2:0 单帧→Main Still Picture idc3；8 位 4:2:0 intra→RExt
+idc4；8 位 4:2:0 非 intra→Main idc1；10 位 4:2:0 intra→RExt idc4；10 位 4:2:0 非 intra→
+Main10 idc2；4:2:2/4:4:4/12 位→RExt idc4），非原生信号由 `enc_heif` 注入内部 x265 参数
+（`total-frames=2` / `keyint=2` / `repeat-headers=1`，见 `docs/m9-adjudications.md` A3）。
+UI 档位行（`pp-profile-row`）的可选项 = 12 个真实信号 + 自动；编码前经新规则反查，编码后
+再用 hvcC 回读校验 idc/level/chroma/bit-depth，名不副实即失败。单源规则与映射见
+`src/codecs/heif_profile.h`。旧预设编号 0–6 不重排（`__heif_profile` 由 preset_io 持久化）。
 
-格式级：位深 `{8, 10, 12}`（R-316 勘误：旧表漏 12）；alpha 支持。
+**Level（`x265:level-idc`，高级）**：按 x265 4.3 表做「8 像素补齐后的 MaxLumaPs +
+宽高 ≤ sqrt(8*MaxLumaPs)」预校验；显式 Level 装不下整图时给出中文可操作错误（点样本数/
+上限/最小可行 Level），或按 `__heif_grid` 分块（见下）。合法 Level：10/20/21/30/31/40/41/
+50/51/52/60/61/62/63/70/71/72（85=无损专用）；6.3/7.x 是 x265 4.3 真实支持的 Level。
+
+**运行期保留键（`__` 前缀，不落预设；`docs/m9-adjudications.md` A2/A10）**：
+| key | 含义 |
+|---|---|
+| `__heif_profile` | 编码信号档位（int；0=Auto 原生；1=Main idc1；2=Main10 idc2；3=Main12 legacy；4=MainStill idc3；7–9=RExt420_8/10/12；10–12=RExt422_8/10/12；13–15=RExt444_8/10/12） |
+| `__heif_grid` | HEIF 有损 grid 模式（0=关闭；1=总是 Apple 式分块（1024×576 基准，按 Level 收缩）；2=自动，缺省——仅当显式 Level 装不下整图时分块）；alpha+grid 明确拒绝 |
+
+格式级：位深 `{8, 10, 12}`（R-316 勘误：旧表漏 12）；alpha 支持（grid 除外）。
 ⚠️ 内省若显示 x265 暴露面过窄 → 记录为 R4，接受"库面"口径。
 
 ## 4. AVIF — libheif + SVT-AV1 / libaom（双后端；参数运行时内省）

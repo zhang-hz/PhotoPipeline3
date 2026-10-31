@@ -748,7 +748,8 @@ void OutputPageImpl::apply_chroma_limits(const std::string &id) {
             depths = {8, 10, 12};
         for (int c = 0; c <= 3; ++c) {
             for (const int d : depths) {
-                if (pp::heif_profile_compatible(want, d, c, /*still=*/true, nullptr)) {
+                if (pp::heif_profile_compatible_for(id == "avif", want, d, c, /*still=*/true,
+                                                    nullptr)) {
                     allowed.push_back(c);
                     break;
                 }
@@ -780,38 +781,29 @@ void OutputPageImpl::update_profile_note(const std::string &id) {
     // 下面的档位推导/色度限幅按真实值求值。set_values 是程序化接口（不发 changed 信号），
     // 因此不会形成刷新环；改写后的值随 spec_of() 下发/落预设。
     const bool lossless = st->form != nullptr && st->form->selection().lossless;
+    const int depth = st->bitdepth != nullptr ? st->bitdepth->currentData().toInt() : 8;
     if (lossless && st->form != nullptr) {
         pp::ParamSet patch;
         patch[std::string("chroma")] = std::string("444");
         st->form->set_values(patch);
-        // 4:4:4 需要 HEVC Main 4:4:4 / AV1 High·Professional，本档位下拉没有这些项；
-        // 用户先前手选的 Main/Main10/... 与无损联动后必然不一致 → 回到「自动」（唯一能
-        // 正确表达 4:4:4 的选择），避免开跑时才被编码器拒绝。用 signal blocker：这是联动
-        // 归一，不是用户改档；随后本函数按 Auto 重新推导说明。
-        if (st->profile != nullptr && st->profile->currentIndex() != 0) {
+        // 无损强制 4:4:4。新档位表已包含 4:4:4 的真实 HEVC 信号（Rext444_*）与 AV1
+        // High/Professional，因此只把“与 4:4:4 不兼容”的手选档位退回「自动」，
+        // 不再无条件清掉用户的合法选择。
+        if (st->profile != nullptr && st->profile->currentIndex() != 0 &&
+            !pp::heif_profile_compatible_for(id == "avif", current_profile(id), depth, 3,
+                                             /*still=*/true, nullptr)) {
             const QSignalBlocker blocker(st->profile);
             st->profile->setCurrentIndex(0);
             st->profile_user_set = false;
         }
     }
     const pp::HeifProfile want = current_profile(id);
-    const int depth = st->bitdepth != nullptr ? st->bitdepth->currentData().toInt() : 8;
     const int chroma = current_chroma(id);
     // 本输出恒为静止图（与 enc_heif.cpp 的反查同口径：still = true）
-    const pp::HeifProfile derived = pp::derive_heif_profile(id == "avif", depth, chroma, true);
-    QString derived_label = QString::fromStdString(pp::heif_profile_label(derived));
-    const QString depth_tag = depth == 8 ? QString() : QString::number(depth);
-    if (id == "heif") {
-        // HEVC 的 4:4:4 / 4:2:2 / 4:0:0 分别是 Main 4:4:4 / Main 4:2:2 / Main 4:0:0 族；
-        // derive_heif_profile 只按位深分档（x265 源码规则），这里按真实色度补正显示。
-        // 10/12 位时档位名本身带位深（Main10 / Main12），不能一律写成 "Main 4:4:4"。
-        if (chroma == 3)
-            derived_label = PageOutput::tr("Main%1 4:4:4（HEVC 4:4:4）").arg(depth_tag);
-        else if (chroma == 2)
-            derived_label = PageOutput::tr("Main%1 4:2:2（HEVC 4:2:2）").arg(depth_tag);
-        else if (chroma == 0)
-            derived_label = PageOutput::tr("Main%1 4:0:0（HEVC 4:0:0）").arg(depth_tag);
-    }
+    const pp::HeifProfile derived =
+        pp::heif_derive_signal_profile(id == "avif", depth, chroma, true);
+    const QString derived_label =
+        QString::fromStdString(pp::heif_profile_label_for(id == "avif", derived));
     const QString chroma_text = chroma == 3   ? QStringLiteral("4:4:4")
                                 : chroma == 2 ? QStringLiteral("4:2:2")
                                 : chroma == 0 ? QStringLiteral("4:0:0")
@@ -831,7 +823,7 @@ void OutputPageImpl::update_profile_note(const std::string &id) {
             tone = NoteTone::Warn;
     } else {
         std::string err_zh;
-        if (!pp::heif_profile_compatible(want, depth, chroma, true, &err_zh)) {
+        if (!pp::heif_profile_compatible_for(id == "avif", want, depth, chroma, true, &err_zh)) {
             note = QString::fromStdString(err_zh);
             tone = NoteTone::Error;
         } else {
@@ -970,17 +962,23 @@ void OutputPageImpl::apply_state_to_form(const std::string &id, const pp::Output
                     st->extra[k] = v;
             }
         }
-        // UX-10.1：还原编码档位（保留键 __heif_profile；缺省 = Auto）
+        // UX-10.1：还原编码档位（保留键 __heif_profile；缺省 = Auto）。
+        // 旧预设可能带已被新表淘汰的兼容值（如 Main12=3）→ 找不到时显式回落到「自动」，
+        // 不能沿用上一个页签/上一次落值留下的档位（旧实现只 break，索引保持不变）。
         if (st->profile != nullptr) {
             const int want =
                 int(pp::param_int(spec.params, std::string(pp::kHeifProfileParamKey), 0));
             const QSignalBlocker blocker(st->profile);
+            bool found = false;
             for (int i = 0; i < st->profile->count(); ++i) {
                 if (st->profile->itemData(i).toInt() == want) {
                     st->profile->setCurrentIndex(i);
+                    found = true;
                     break;
                 }
             }
+            if (!found)
+                st->profile->setCurrentIndex(0);
             st->profile_user_set = st->profile->currentIndex() != 0;
         }
     }

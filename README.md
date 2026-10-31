@@ -4,6 +4,8 @@
 
 M0 交付仓库骨架、冻结接口、链接探针与金标语料。**M1a 交付全部编码引擎**：core 基础设施（logger / fsops / 像素预算 / 参数引擎 / 预设）、解码层、色彩层、元数据层、8 个编码器、调度器与 `--dev` 命令行 harness。**M1b 交付完整桌面 UI**：三页主窗口（元数据规则 / 输出配置 / 运行监控）、异步缩略图文件列表、内嵌地图选点、参数表单引擎、单文件 EXIF/XMP 编辑器、设置与预设对话框，以及 `--ui-smoke` 无头走查。**M2 完成 Linux 发行收口**：`--version` 版本单源、AppImage 打包（含离线打包与许可随附）、金样断言级 16 对、回归基线、ASan/UBSan/TSan 清扫，以及持续集成——`build-test.yml` 的**四个 job**（`linux` / `ui-smoke` / `appimage` / `cache-gc`）与缓存播种 workflow `warm-cache.yml`。**M3 完成 Windows 移植与双平台发行**（0.2.0）：UTF-8 全局语义、Mica 深色标题栏、`make_winzip.py` 五项门禁、tag 触发发行自动化。
 
+**M9（0.3.6.alpha2 预发布）= JXL 有损修复 + HEIF/iPhone 兼容配置矩阵**：① **JXL 有损 VarDCT 修复**——有损 VarDCT 不再走 libjxl 非 XYB 缺陷路径（`uses_original_profile` 恒 false、XYB 编码；显式 true 明确报错），修复「distance 越小评分越差、体积暴涨」；实测 T1 16-bit keep `d2.0 2.04MB/80.81 → d0.2 12.66MB/92.38`（体积与分数双单调）。② **HEIF 真实档位/Level/grid 配置矩阵**——档位下拉扩为 12 个真实 HEVC 信号（Main Still idc3 / Main idc1 / Main10 idc2 / RExt 4:2:0·4:2:2·4:4:4 × 8/10/12 idc4）+ 自动；HEVC Level 合法性按 x265 4.3「8 像素补齐后 MaxLumaPs」预校验并给中文可操作错误；新增有损 HEIF grid（Apple 1024×576 基准 / 自动适配 Level；默认仅在显式 Level 装不下整图时自动分块），大图 + L3.1 从「失败」变为合法可解码 grid；编码后 hvcC 回读校验档位/Level/位深/色度。③ **穷举矩阵验证器** `tools/heif_matrix_check.py`：1013 例 = **pass 697 / fail 0 / expected-fail 316 / unexpected 0**，697 个合法组合全部结构断言 + 解码通过。详见 [docs/m9-report.md](docs/m9-report.md)、[docs/m9-adjudications.md](docs/m9-adjudications.md)。
+
 **M8（0.3.6.alpha1 首个发行件）= 参数面全暴露 + SSIMULACRA 2 逐输出评分**：① HEIF/AVIF/JXL 参数面扩展——精选目录 **116 行**（x265 40 / libaom 57 / SVT 3 / JXL 16；三态启用、只读/禁用、RC 模式显式下拉、联动规则与运行前预检；清单外透传键 = 预检错误）；② **SSIMULACRA 2 逐输出评分**——GUI 默认开、8 种输出全覆盖，运行页任务表新增「评分」列（逐输出行显示两位小数，
 文件组行显示 `—`；M8 初版为输出行下隐藏子行，本轮改为列），颜色阈值见下文「M8 参数面与评分」；算法为 libjxl 0.12 官方源码 + 兼容层（BSD-3），参考=编码器实际收到的量化输入（真无损=100）。详见 [docs/m8-report.md](docs/m8-report.md)、[docs/m8-encoder-params-and-ssimulacra2-design.md](docs/m8-encoder-params-and-ssimulacra2-design.md)。
 
@@ -35,15 +37,27 @@ caption 单轨 46×32；壳层顶栏 44 + 状态栏 30；**栏宽固定轴 330 /
 逐条探针、偏差与未决项见 [docs/m5-report.md](docs/m5-report.md)，开发期裁定见
 [docs/m5-adjudications.md](docs/m5-adjudications.md)。
 
-**0.3.6.alpha1（当前版本，预发布）= M8 首个发行件**：① **参数面全暴露**——HEIF/AVIF/JXL 精选
+**0.3.6.alpha2（当前版本，预发布）= M9：JXL 有损修复 + HEIF/iPhone 兼容配置矩阵**：① **JXL 有损
+VarDCT 修复**——有损 VarDCT 不再走 libjxl 非 XYB 缺陷路径（`uses_original_profile` 恒 false、XYB 编码；
+显式 true 明确报错），修复「distance 越小评分越差、体积暴涨」；T1 16-bit keep 实测 `d2.0 2.04MB/80.81
+→ d0.2 12.66MB/92.38`（体积与分数双单调）。② **HEIF 真实档位/Level/grid 配置矩阵**——档位下拉扩为
+12 个真实 HEVC 信号（Main Still idc3 / Main idc1 / Main10 idc2 / RExt 4:2:0·4:2:2·4:4:4 × 8/10/12
+idc4）+ 自动；HEVC Level 合法性按 x265 4.3「8 像素补齐后 MaxLumaPs」预校验并给中文可操作错误；新增
+有损 HEIF grid（Apple 1024×576 基准 / 自动适配 Level；默认仅在显式 Level 装不下整图时自动分块），
+大图 + L3.1 从「失败」变为合法可解码 grid；编码后 hvcC 回读校验档位/Level/位深/色度。③ **穷举矩阵
+验证器** `tools/heif_matrix_check.py`：1013 例 = **pass 697 / fail 0 / expected-fail 316 /
+unexpected 0**。**预发布（alpha），仅建议尝鲜/验证用**；逐条变更见 [CHANGELOG.md](CHANGELOG.md)
+`[0.3.6.alpha2]`，验收证据见 [docs/0.3.6.alpha2-report.md](docs/0.3.6.alpha2-report.md)。
+
+**0.3.6.alpha1（历史预发布）= M8 首个发行件**：① **参数面全暴露**——HEIF/AVIF/JXL 精选
 目录 **116 行**（x265 40 / libaom 57 / SVT-AV1 3 只读 / JXL 16），三态启用/只读/禁用、RC 模式显式
 下拉、数据驱动联动与运行前预检（错误清单 + 聚焦首错；清单外透传键 = 预检错误）；② **SSIMULACRA 2
 逐输出评分**——GUI 默认开（设置 → 运行 →「质量评分」可关），8 种输出全评，运行页任务表
 「评分」列逐输出行显示两位小数（文件组行显示 `—`），颜色阈值：**≥95 极好（ok/绿）/ ≥90 好（accent/蓝）/ ≥80 ok（warn/琥珀）/ <80 不 ok（err/红）**；评分算法为
 libjxl 0.12 官方源码 + 兼容层（BSD-3 + PATENTS，随包许可），参考 = 编码器实际收到的量化输入
-（真无损 = 100；HEIF/AVIF 码流无损如实 <100）。③ 本轮 4 项实测缺陷修复（写入提权优化 / 高级参数
-勾选框与评分列 / 参数连线审计 / 评分真实性核验 + HEIF 444/420）。**预发布（alpha），仅建议尝鲜/
-验证用**；逐条变更见 [CHANGELOG.md](CHANGELOG.md) `[0.3.6.alpha1]`，验收证据见
+（真无损 = 100；HEIF/AVIF 码流无损如实 <100）。③ 4 项实测缺陷修复（写入提权优化 / 高级参数
+勾选框与评分列 / 参数连线审计 / 评分真实性核验 + HEIF 444/420）。**已发行**（tag `v0.3.6.alpha1`）；
+逐条变更见 [CHANGELOG.md](CHANGELOG.md) `[0.3.6.alpha1]`，验收证据见
 [docs/0.3.6.alpha1-report.md](docs/0.3.6.alpha1-report.md)。
 
 **0.3.5（上一正式版）= 0.3.5 系列收口修复批**：0.3.5.alpha3 之后的实测缺陷与体验修复。
@@ -106,7 +120,7 @@ R2 轮方案见 [docs/m7r2-plan.md](docs/m7r2-plan.md)。**色彩能力四选项
 渲染意图 / 线性光重采样）已入引擎并在界面提供开关**——**输出页全局卡**四行（默认全关 =
 行为不变；0.3.x 默认路径另有两处已归因字节变化，见 CHANGELOG「变更」节）；8bit 抖动仅作用
 于 JPEG/WebP/JXL 及 OIIO 系四家的 8bit 量化段（HEIF/AVIF 的 8bit 路径不接）。**发行状态：0.3.3 已发布**（2026-10-13；其 Windows zip 有启动 P0，已由 0.3.4 热修，
-请使用 0.3.4 或更新版本；当前最新正式版 = 0.3.5 正式版，最新预发布 = 0.3.6.alpha1）。
+请使用 0.3.4 或更新版本；当前最新正式版 = 0.3.5 正式版，最新预发布 = 0.3.6.alpha2）。
 
 **0.3.2 = GPS 地图升级版（M6）**：把「内嵌地图选点」从能用升级到**地图 App 水平**——
 R1 搜索搜得出（改用可达的**高德 Web 服务**事实表：`place/text` + 周边偏置 **`around` 20 条**按距离升序 +
@@ -451,6 +465,33 @@ python tools/env.py run -- cmake --build --preset release
 - 证据面：`--dev --score` sidecar 加性 `metric` 字段 + `tests/golden/SCHEMA.md` 的 `assert.score`
   区间断言（金样 4 个既有 case + `pp_verify` selftest 覆盖）。
 
+### M9 HEIF/iPhone 兼容配置矩阵与 JXL 修复（0.3.6.alpha2）
+
+**HEIF 真实档位（profile）**
+
+- 编码档位下拉 = **12 个真实 HEVC 信号 + 自动**：Main Still Picture（idc 3 · 8b 4:2:0）、
+  Main（idc 1 · 8b 4:2:0）、Main10（idc 2 · 10b 4:2:0，Apple HEIC 常用档）、
+  RExt Main 4:2:0/4:2:2/4:4:4 × 8/10/12（idc 4）；旧预设编号 0–6 不重排。
+- 编码器按选定信号注入内部 x265 参数；编码后用 **hvcC 回读校验** `profile_idc / level_idc /
+  chroma / bit-depth`，名不副实即失败。
+- **Level**：x265 4.3 全档（1.0–7.2）按「8 像素补齐后 MaxLumaPs + 宽高上限」预校验；非法 Level 给
+  中文可操作错误（样本数/上限/最小可行 Level/建议提高 Level 或启用 grid），不再出现误导性
+  「encoder does not support N-bit input」。
+- **有损 grid**：保留键 `__heif_grid`（0 关 / 1 总是 Apple 式分块（1024×576 基准，按 Level 收缩）/
+  2 自动，缺省）；自动模式仅当显式 Level 装不下整图时分块；每 tile 独立合法 Level、逐 tile
+  nclx+ICC、alpha+grid 明确拒绝；**默认（无显式 Level）编码产物与旧版逐字节相同**。
+- 验证：`tools/heif_matrix_check.py` 穷举矩阵 **1013 例 = pass 697 / fail 0 / expected-fail 316 /
+  unexpected 0**（697 个合法组合全部 hvcC 结构断言 + OIIO 解码通过）；证据 `build/matrix/final.md`。
+
+**JXL 有损修复**
+
+- 有损 VarDCT 恒 **XYB**（`uses_original_profile=false`），修复 libjxl #4552 非 XYB 路径的
+  「distance 越小评分越差、体积暴涨」；显式 `uses_original_profile=true` 明确报错；无损/Modular
+  语义不变、金样不受影响。
+- 实测 T1 16-bit keep/AdobeRGB：d2.0 2.04MB/80.81 → d1.0 4.01MB/86.44 → d0.5 7.24MB/90.21 →
+  d0.3 10.06MB/91.67 → d0.2 12.66MB/92.38（体积与分数双单调）；P3 XYB 回读 P3 参考 idiff
+  PSNR 41.03 dB（仅压缩误差）。
+
 ### 无头 UI 冒烟（`--ui-smoke`，需 `PP_BUILD_DEV=ON`）
 
 ```bash
@@ -553,7 +594,7 @@ chmod +x PhotoPipeline-<版本>-x86_64.AppImage
 
 ## 发行版（Windows）
 
-**M3 起提供 Windows x64 免安装产物**（0.2.0 为首个 Windows 版本，当前版本 0.3.6.alpha1）；与 Linux 的 AppImage 同一引擎
+**M3 起提供 Windows x64 免安装产物**（0.2.0 为首个 Windows 版本，当前版本 0.3.6.alpha2）；与 Linux 的 AppImage 同一引擎
 与界面，差异只在打包形态（zip vs AppImage）与平台运行时（MSVC 运行时 / Qt msvc2022_64）。
 
 ### 下载与运行
@@ -593,7 +634,7 @@ chmod +x PhotoPipeline-<版本>-x86_64.AppImage
 ### 命令行
 
 ```powershell
-.\photopipeline.exe --version      # → PhotoPipeline 0.3.6.alpha1（单行 + 退出码 0；非 dev 门控，发布构建亦可用）
+.\photopipeline.exe --version      # → PhotoPipeline 0.3.6.alpha2（单行 + 退出码 0；非 dev 门控，发布构建亦可用）
 .\photopipeline.exe                # 图形界面
 .\photopipeline.exe --ui-smoke     # 无头 UI 走查（offscreen，产出 12 张截图；仅 PP_BUILD_DEV=ON 的构建）
 .\photopipeline.exe --dev ...      # 开发 harness：全语料矩阵 / 回归基线入口（同上，仅 dev 构建）

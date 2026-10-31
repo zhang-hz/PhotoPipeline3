@@ -1,5 +1,92 @@
 # 变更日志
 
+## [0.3.6.alpha2] — 2026-10-31
+
+**预发布（alpha）**：M9 = **JXL 有损 VarDCT 修复** + **HEIF 真实档位/Level/grid 配置矩阵**
+（iPhone 可能硬解的 HEVC 仍图组合全覆盖 + 穷举矩阵验证器）。版本单源 = `CMakeLists.txt:19-24` =
+**0.3.6.alpha2**（数字段 0.3.6 + 预发布标签 ".alpha2"）；`vcpkg.json` 同步数字段 0.3.6（R-122 口径）。
+逐条证据与门禁读数见 [docs/m9-report.md](docs/m9-report.md)，本报告见
+[docs/0.3.6.alpha2-report.md](docs/0.3.6.alpha2-report.md)，裁定见
+[docs/m9-adjudications.md](docs/m9-adjudications.md)。
+
+### 修复
+
+- **JXL 有损 VarDCT 配置缺陷（质量-距离倒挂 + 体积暴涨）**：根因 = `uses_original_profile` 推导把
+  「有 ICC」等同于「保留原色彩配置」，使所有有损 VarDCT 落入 libjxl 非 XYB 有损路径（上游 #4552）。
+  修复 = 有损 VarDCT 恒 **XYB**（`uses_original_profile=false`，ICC 照常嵌入、解码端可换回原 profile）；
+  显式 `uses_original_profile=true` + 有损 VarDCT 明确失败（不产坏件）；无损/Modular 语义不变。
+  实测 T1 16-bit keep/AdobeRGB：`d2.0 2.04MB/80.81 → d1.0 4.01MB/86.44 → d0.5 7.24MB/90.21 →
+  d0.3 10.06MB/91.67 → d0.2 12.66MB/92.38`（修复前 d1.0=14.83MB/78.80、d2.0=10.85MB/78.75，倒挂）；
+  P3 目标 XYB 回读 P3 参考 idiff PSNR 41.03 dB（仅压缩误差）。
+- **HEIF 10/12-bit 失败误导文案**：旧实现把所有 10/12-bit HEIF 编码失败都附加
+  「encoder does not support 10-bit input」，把「显式 Level 装不下整图」误报成位深不支持。现按真实原因
+  区分：Level 非法 → 中文可操作错误（图像样本数 / Level 上限 / 最小可行 Level / 建议提高 Level 或启用 grid）。
+- **大图 + 显式低 Level（如 3902×5854 + L3.1）输出异常**：单图 22,842,308 luma 超过 L3.1 的 983,040，
+  x265 必然拒绝；现在默认自动分块为合法 grid（见下「新增」），关闭 grid 时给准确中文错误，不再出现
+  「文件异常/0 字节」式体验。
+
+### 新增
+
+- **HEIF 真实信号档位（12 档 + 自动）**：编码档位下拉扩为 Main Still Picture（idc 3 · 8b 4:2:0）、
+  Main（idc 1 · 8b 4:2:0）、Main10（idc 2 · 10b 4:2:0，Apple HEIC 常用档）、
+  RExt Main 4:2:0/4:2:2/4:4:4 × 8/10/12（idc 4）；非原生信号由编码器内部注入 x265 参数
+  （`total-frames=2` / `keyint=2` / `repeat-headers=1` 等），**编码后用 hvcC 回读校验**
+  `profile_idc / level_idc / chroma / bit-depth`，名不副实即失败。旧预设编号 0–6 不重排。
+- **HEIF 有损 grid（Apple 兼容）**：保留键 `__heif_grid`（0=关；1=总是 Apple 式分块，tile 以 1024×576
+  为基准按 Level 收缩；2=自动，缺省——仅当显式 Level 装不下整图时分块）；每个 tile 独立满足 Level，
+  逐 tile nclx+ICC，通道感知 clamp 切片（整图 YCbCr 平面切 tile，不重复色彩转换），alpha+grid 明确拒绝；
+  无损大图现有 2048-tile grid 路径不变；**默认（无显式 Level）HEIF 编码产物与旧二进制 SHA256 完全相同**。
+- **HEVC Level 合法性纯核**（`src/codecs/heif_capability.*`）：x265 4.3 全 Level 表（1.0–7.2，含
+  6.3/7.0/7.1/7.2）、**8 像素补齐后的 MaxLumaPs + 宽高上限**拟合、grid 规划、hvcC 回读解析；
+  6.3/7.0/7.1/7.2 经实测确认为 x265 4.3 支持（level_idc 189/210/213/216），修正任务书假设。
+- **HEIF 配置矩阵验证器** `tools/heif_matrix_check.py`：枚举 Auto/信号 × 位深 8/10/12 × 色度
+  4:2:0/4:2:2/4:4:4 × Level 全档 × tier × grid 模式，独立合法性模型 + 编码 + hvcC/BMFF 结构断言
+  + `iinfo` 解码 + JSONL/MD 证据。final **1013 例 = pass 697 / fail 0 / expected-fail 316 /
+  unexpected 0**（697 个合法组合全部通过；grid 子集在后续构建逐例复核 verdict 相同）。
+- **`--dev` 保留键透传（加性）**：`--param` 键以 `__` 开头（保留键，按 `core/params.h` §3.4 不参与
+  未知参数校验）时按「整数→布尔→字符串」透传，便于矩阵/回归注入 `__heif_profile` / `__heif_grid`；
+  既有参数路径零改动。
+
+### 变更
+
+- **版本单源 0.3.6.alpha1 → 0.3.6.alpha2**：`CMakeLists.txt` 数字段保持 0.3.6 + `PP_VERSION_LABEL
+  ".alpha2"`；`vcpkg.json` 数字段不变（R-122）；README/AGENTS 现役口径同步；回归基线仅版本行定点换锚
+  （golden.log / golden.windows.log 各 12 行，未重播种）。
+- **HEIF 档位 UI 文案真实化**：旧标签把 idc=4 的 10 位静图显示成「Main10（10 位 · Intra）」，现按
+  `general_profile_idc + 色度 + 位深` 显示真实信号；`Main10` 现真正写 idc=2（Apple 兼容），
+  `Main12` 保留为 12 位 RExt 兼容别名；旧预设值 1（Main）/2（Main10）语义按新标签生效（行为变化登记
+  `docs/m9-adjudications.md` A12）。
+- **Level 预校验口径**：显式 `x265:level-idc` 不再等到 x265 `encoder_open` 失败才报泛化错误；
+  编码前按 x265 规则拟合（含 8 像素补齐），非法即中文可操作错误；合法组合正常编码并回读 level_idc 校验。
+
+### 测试
+
+- 新增单测：`test_jxl_original_profile`（42 断言，直接解 JXL 码流头字段）、
+  `test_heif_profile`（379 checks，全档位合法/非法组合）、`test_heif_capability`（156 checks，
+  Level 边界/8 像素补齐/grid 规划/hvcC 解析）。
+- 门禁（最终二进制 2026-10-31 10:10:02）：build exit 0、ctest **43/43**、金样
+  `SMOKE total=20 pass=20 fail=0`、`UI-SMOKE OK shots=12 pages=3`、`pp_verify --selftest`
+  56 probes、格式 0 diff、tidy `262=262 violations=0`；HEIF 矩阵 1013 例全绿；JXL 评分-距离单调。
+- 本地回归 diff 已归因（JXL 预期产物变化 + 已知 runner 形状差异：基线 `thread_budget=4` vs 本机 16、
+  vcpkg buildtrees 路径），发行判据仍以 CI 双平台 zero diff 为准。
+
+### 已知
+
+- GUI 尚无显式「总是 Apple grid」行：当前通过「显式低 Level → 自动 grid」或保留键 `__heif_grid=1` 使用；
+  加行会触碰 `--ui-smoke` 冻结截图，需用户确认后另起。
+- **Windows Photos 16-bit JXL 颜色问题与本次修复无关且仍存在**：task-4 已证明 Microsoft WIC JXL
+  1.2.50.0 对 16-bit JXL 只暴露 `64bppRGBHalf`、0 个颜色上下文且 `ColorManageToSRgb` 为 no-op
+  （8-bit 路径正常）；这是 viewer/WIC 缺陷，不是本仓文件缺陷。
+- iPhone 真机是否硬解/接受 12-bit、4:2:2、4:4:4 与低 Level grid 仍未知（本段只证明「软件能产出合法、
+  本地可解码的文件」）；真机裁决工具见 `super/iphone-test/vt-probe/`。
+- AVIF 未纳入矩阵；T1 单图 Level 仅抽样 9 例；显式 Level + CRF 的 x265 自动 VBV（输出非确定）未加
+  product warning、显式 Level + `x265:qp`（CQP）由 x265 拒绝但未翻译文案（登记后续小项）。
+- 单次大 grid 编码在空闲后首跑可能有一次 ~150s 级抖动（与 profile 无关，verdict 不受影响）。
+
+### 发行
+
+- 待 tag / CI / Release 后补记（tag、`release.yml` 轮次与资产指纹）。
+
 ## [0.3.6.alpha1] — 2026-10-29
 
 **预发布（alpha）**：M8 首个发行件 —— HEIF/AVIF/JXL 底层编码器参数面扩展 + SSIMULACRA 2

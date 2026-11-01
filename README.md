@@ -49,7 +49,12 @@ caption 单轨 46×32；壳层顶栏 44 + 状态栏 30；**栏宽固定轴 330 /
 自动取海拔回填（默认开、可关、400ms 去抖、失败静默降级、标注近似值）。版本单源 = `CMakeLists.txt:19-28`，
 `--version` = **`PhotoPipeline 0.4.1`**；契约 / 裁定 / 报告见 [docs/m13-tasks.md](docs/m13-tasks.md) /
 [docs/m13-adjudications.md](docs/m13-adjudications.md) / [docs/0.4.1-report.md](docs/0.4.1-report.md)。
-**发行状态：0.4.1 正式版（本树；tag / Release 指纹见发行后补记）**。**如实**：0.4.0 登记的 asan/tsan 两项真实
+**发行状态：0.4.1 正式版已发行**（tag **annotated `v0.4.1`** → commit **`d43b9db`**；GitHub Release
+**`PhotoPipeline 0.4.1`** published **2026-11-01T17:32:19Z**（prerelease=**False** / Latest），URL
+<https://github.com/zhang-hz/PhotoPipeline3/releases/tag/v0.4.1>；**4 资产**：`win64.zip` 34,272,466 B /
+`5efbe8fa…20b452`、`x86_64.AppImage` 52,697,592 B / `8100712f…0aaefe`、`deps.txt` 2,439 B / `e8c80b3d…07854d`、
+`SHA256SUMS.txt` 293 B / `980fff8b…348182`；`release.yml` run **41330906366 = success**，7 job 全 success）。
+**如实**：0.4.0 登记的 asan/tsan 两项真实
 产品债（hwy ODR 链接期风险、ProgressMux/FileEvent 数据竞争）顺延 0.4.2；不宣称 nightly 通过、不造绿。
 
 **0.4.0（历史正式版）= M10 + M11 迭代修复 + M12 用户 5 条反馈**：① **M10（性能/参数面/预设与自适应）**——

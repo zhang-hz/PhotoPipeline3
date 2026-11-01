@@ -45,13 +45,13 @@ RAW/DNG 输入 · GIF 输出 · 图像编辑(缩放/裁剪/水印/锐化/降噪)
 
 ---
 
-## 2. 当前状态(2026-11-01)
+## 2. 当前状态(2026-11-02)
 
 | 项 | 状态 |
 |---|---|
-| 版本 | **0.4.1 正式版**（stable，**本轮发行**：tag **annotated `v0.4.1`** / GitHub Release 资产指纹**发行后补记**（见 CHANGELOG `[0.4.1]` 的「发行」小节与 `docs/0.4.1-report.md` §2.5）；`--version` = `PhotoPipeline 0.4.1`；版本单源 = `project(PhotoPipeline VERSION 0.4.1)` + `PP_VERSION_LABEL ""`，`vcpkg.json` = 0.4.1（R-122）；契约 = `docs/m13-tasks.md`（C1–C9）、裁定 = `docs/m13-adjudications.md`（A1–A17）、报告 = `docs/0.4.1-report.md`。上一正式版 **0.4.0**（tag annotated `v0.4.0` → commit `1b6fdbc`；GitHub Release `PhotoPipeline 0.4.0` published 2026-11-01T10:24:21Z，4 资产；`docs/0.4.0-report.md` §2.5）；更早 **0.4.0.alpha1**（`release.yml` run 41271187323 全绿）与 **0.3.5**；0.3.3 Windows zip 为坏件（启动 P0，见 `docs/0.3.4-report.md`）） |
+| 版本 | **0.4.1 正式版**（stable，**已发行**：tag **annotated `v0.4.1`**（tag object `750b8112…`）→ commit **`d43b9db`**；GitHub Release **`PhotoPipeline 0.4.1`**（prerelease=**False**/Latest），createdAt **2026-11-01T17:19:40Z** / publishedAt **2026-11-01T17:32:19Z**，URL <https://github.com/zhang-hz/PhotoPipeline3/releases/tag/v0.4.1>；`release.yml` run **41330906366 = success**（7 job 全 success）；**4 资产**：`win64.zip` 34,272,466 B / `5efbe8fa…20b452`、`x86_64.AppImage` 52,697,592 B / `8100712f…0aaefe`、`deps.txt` 2,439 B / `e8c80b3d…07854d`、`SHA256SUMS.txt` 293 B / `980fff8b…348182`；下载件 `--version` = `PhotoPipeline 0.4.1`（probe 两平台 + 本机 win64 解包复核）；`--version` = `PhotoPipeline 0.4.1`；版本单源 = `project(PhotoPipeline VERSION 0.4.1)` + `PP_VERSION_LABEL ""`，`vcpkg.json` = 0.4.1（R-122）；契约 = `docs/m13-tasks.md`（C1–C9）、裁定 = `docs/m13-adjudications.md`（A1–A18）、报告 = `docs/0.4.1-report.md`。上一正式版 **0.4.0**（tag annotated `v0.4.0` → commit `1b6fdbc`；GitHub Release `PhotoPipeline 0.4.0` published 2026-11-01T10:24:21Z，4 资产；`docs/0.4.0-report.md` §2.5）；更早 **0.4.0.alpha1**（`release.yml` run 41271187323 全绿）与 **0.3.5**；0.3.3 Windows zip 为坏件（启动 P0，见 `docs/0.3.4-report.md`）） |
 | 里程碑 | M0 环境/六 Spike/冻结面 → M1a 引擎 + M1b UI → M2 Linux 收口 → M3 Windows(=0.2.0) → M4/M5 = 0.3.0(九项需求 + GUI v6 刷新) → 0.3.1 GUI 缺陷根治 → M6 = 0.3.2 → M7 = 0.3.3(工程收口,Windows 启动 P0)→ 0.3.4 热修 → 0.3.5.alpha1/alpha2/alpha3 预发布 → 0.3.5 正式版(收口修复批) → M8 = 0.3.6.alpha1(参数面全暴露 116 行 + SSIMULACRA 2 逐输出评分) → M9 = 0.3.6.alpha2(JXL 有损 VarDCT 修复 + HEIF 真实档位/Level/grid 配置矩阵 + 穷举矩阵验证器) → M10 = 0.4.0.alpha1(评分池/预算拆分/多格式并行/逐输出事件 + HEIF grid·still 档·tune·RC + JXL 治理 43→31 键 + 格式预设与自适应策略) → M11 = 迭代修复批(HEIF tile 按 Level/still 推导 C17' + 自适应 DSL v1.1 断点 + 5 条预置 + 运行状态机修复) → M12 = 0.4.0 正式版(M11 批 + 用户 5 条反馈:工厂预设外部化 `presets/formats/**` / 每格式 default / 无「未选择」态 / HEIF Apple CRF=20 / JPEG default 自适应距离策略 + CI 优化) → **M13 = 0.4.1 正式版(用户 4 条需求:选择项级元数据编辑 + 多选混合值 / 去除 XMP CreatorTool / photoshop:DateCreated 同步偏移 / GPS 选点自动海拔 + 门禁·文档收口)** |
-| 质量面 | 金样断言级 **20 对** 全绿(`SMOKE total=20 pass=20 fail=0`);ctest **50/50**(**83.56 s**,release-dev,含 ui_smoke;48 条历史 + `test_meta_selection`/`test_elevation`);`--ui-smoke` 冻结行 `UI-SMOKE OK shots=12 pages=3` 逐字不变 + 历史 probe 全 bad=0 + **`meta-selection: checked=13 bad=0`**(选择项级/混合值/CreatorTool/自动海拔 13 项);格式 `check 233 files → violations=0`;tidy `TIDY total=262 baseline=262 files=76 violations=0 seed=0`(未 `--update`);回归 **zero diff**(normalized 2567 = baseline 2567;两平台基线 version 行重播种 = 各 12/0/24:Windows canonical `--update`、Linux 字节级机械换锚 A13;sha256 win `fa00a041…335f6`/2567、linux `15b7aee3…d4b18`/2567);`ci-versions-check` `OK (10 keys, expect=0)`;候选二进制 `build/m13-integration/photopipeline.exe` 5,388,288 B / SHA256 `F0C4BF21…C158D`;`--version` = `PhotoPipeline 0.4.1`;HEIF 矩阵本轮未复跑(同 0.4.0 登记)。逐条见 `docs/0.4.1-report.md` §2 |
+| 质量面 | 金样断言级 **20 对** 全绿(`SMOKE total=20 pass=20 fail=0`);ctest **50/50**(**83.29 s**,release-dev,含 ui_smoke;48 条历史 + `test_meta_selection`/`test_elevation`);`--ui-smoke` 冻结行 `UI-SMOKE OK shots=12 pages=3` 逐字不变 + 历史 probe 全 bad=0 + **`meta-selection: checked=13 bad=0`**(选择项级/混合值/CreatorTool/自动海拔 13 项);格式 `check 239 files → violations=0`;tidy `TIDY total=262 baseline=262 files=76 violations=0 seed=0`(未 `--update`);回归 **zero diff**(normalized 2567 = baseline 2567;两平台基线 version 行重播种 = 各 12/0/24:Windows canonical `--update`、Linux 字节级机械换锚 A13;sha256 win `fa00a041…335f6`/2567、linux `15b7aee3…d4b18`/2567);`ci-versions-check` `OK (10 keys, expect=0)`;候选二进制 `build/m13-integration/photopipeline.exe` 5,388,288 B / SHA256 `cbecf271…76e1`;`--version` = `PhotoPipeline 0.4.1`;HEIF 矩阵本轮未复跑(同 0.4.0 登记)。逐条见 `docs/0.4.1-report.md` §2 |
 | **开放问题** | ① `docs/deep-review-0.3.2.md`:深度评审台账(**P0 ×2 已由 0.3.3 数据安全线 + 0.3.5 同目录输出修订收口**;P1/R3 条目为长期台账);② `docs/ux-review-14.md`:14 项 UI 问题定位与改进方案(只读评审,**改动须经用户确认后另起提交**);③ `docs/m7r25-report.md` §5:识图门禁未覆盖项;④ libde265 对部分 HEVC RExt 码流(如 `super/T2.heic`)仍不可解码;⑤ 高德线上搜索仅账号实测可最终确认(本机 TLS 环境不可用);⑥ M9 未决:GUI 无显式 grid 行(**M10 已由 `heif_grid` 配置行收口**)、iPhone 真机接受度未验、WIC 16-bit JXL viewer 缺陷与本次修复无关、AVIF 未纳入矩阵;⑦ **M10 未决**:P4-1 `metric≤encode` 未达(1.072×)、10-bit HEIC probe 与 HEIC 深 probe 首事件超阈、TSan 暴露 9 条真实数据竞争(0.4.2)、A12/A7/A19 待追认、`output best`/`tech` 策略目标校验期拒绝;⑧ **M11/M12 未决**:S-6…S-12 按 P3 登记未修(`docs/state-machine-analysis.md`)、H.265 still 官方命名遗留、main-full 全绿 10/10、nightly ubsan/双平台回归/audit 绿而 asan/tsan 两项真实产品债**顺延 0.4.2**(A7;不宣称 nightly 通过)、iPhone 接受度未验;⑨ **M13 未决**:asan/tsan 两项债顺延 0.4.2、Linux 回归基线机械换锚待 CI Linux 侧事后背书(A13)、金样语料本机不可重生成(A16)、选点自动海拔依赖第三方 DEM 服务可用性;⑩ 详见 §11 已知债 |
 
 ---
@@ -266,7 +266,7 @@ python tools/env.py run -- ctest --preset release
 | 工厂格式预设(出厂数据 / seed / default 语义) | `presets/formats/**`(11 个 JSON,单一真源)+ `docs/format-presets.md`(§2 目录/§7 出厂文件) |
 | 自适应策略 DSL / 出厂策略全文 | `docs/adaptive-policy.md`(§6.1 断点/§10 工厂文件策略全文) |
 | M12 裁定(工厂预设外部化 / `_builtin` 迁移 / default / 无「未选择」/ JPEG 策略 / CI 预算·基线·scoping / hwy 尝试回退 / 版本) | `docs/m12-adjudications.md`(A1–A13 + 附 1/附 2) |
-| M13 裁定(选择项级元数据编辑 / 卡级 active 判据 / apply_rules emit / 回归基线重播种·机械换锚 / ui-smoke 探针换锚 / tidy 豁免 / 构建卫生事件 / 语料不重生成) | `docs/m13-adjudications.md`(A1–A17) |
+| M13 裁定(选择项级元数据编辑 / 卡级 active 判据 / apply_rules emit / 回归基线重播种·机械换锚 / ui-smoke 探针换锚 / tidy 豁免 / 构建卫生事件 / 语料不重生成 / 发行记录) | `docs/m13-adjudications.md`(A1–A18) |
 | 0.4.1 契约(选择项级编辑 C1–C9 / CreatorTool / photoshop:DateCreated / 选点海拔) | `docs/m13-tasks.md` |
 | 0.4.1 发行报告(读数 / 偏差 / 未决 / 复现命令) | `docs/0.4.1-report.md` |
 | 0.4.0 发行报告(已发布版；读数已回填；tag/Release/资产指纹) | `docs/0.4.0-report.md` |
@@ -334,6 +334,11 @@ python tools/env.py run -- ctest --preset release
   **release.yml** presets 产物断言。`warm-cache.yml` 播种 114.75/120min 预算边界风险登记（独立豁免）。
 - 手动 dispatch nightly 轮 41294189132 被 schedule 轮 concurrency 取消（nightly schedule 与手动 dispatch 互踩，
   属调度配置债，非门禁问题；已登记）。
+- **0.4.1 发行轮（2026-11-02）**：tag `v0.4.1` → `release.yml` run **41330906366 = success（7/7 job）**，
+  资产指纹见 §2 版本行 / CHANGELOG「[0.4.1] 发行」；`main-full`（branch main）最新轮 **passing**（shields.io
+  徽标取证；含 linux 全 ctest+金样 / tidy / format）；**nightly 的 Linux regression job 尚无 tag 后 schedule
+  轮读数**（A13 残留风险：Linux 基线机械换锚待其事后背书）。本机 gh 未登录 + 未认证 API 限流时，发行道
+  状态可用 shields.io 徽标与 Release 下载件自校验（sha256 / `--version`）取证，run id 以公开 API 恢复后补。
 
 **出厂预设数据维护点(M12 新增)**:`presets/formats/**` 是**出厂数据单一真源**——改预设内容必须同步(① `tests/unit/test_format_presets.cpp` 的工厂库/seed/迁移断言;② 打包门禁 `tools/make_winzip.py`/`make_appimage.sh` 的「8 格式 default 齐备 + 总数 11」;③ `docs/format-presets.md` §7 与 `docs/adaptive-policy.md` §10 策略全文;④ `--ui-smoke` 相关探针)。旧 `_builtin-*` 只读模板/migration 逻辑不得回退(破坏性迁移已登记 `docs/m12-adjudications.md` A2)。
 

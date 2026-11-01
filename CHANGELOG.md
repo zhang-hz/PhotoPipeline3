@@ -57,6 +57,28 @@
   sync_mtime / modernize_exif / strip_creator_tool）、`BatchRules.strip_creator_tool`、`MetadataPlan.sync_mtime`、
   `EffectivePreview.xmp_date_created`；缺省值 = 0.4.0 逐字行为（金样 20/20 + 回归 zero diff 双重背书）。
 
+### 发行
+
+- tag：annotated **`v0.4.1`**（tag object `750b8112f10f4c42cc9d50c54114cc7685df2c26`）→ commit **`d43b9db`**
+  （发行树；报告/CLOSE 类提交不入 tag，tag 后补记见本小节）。
+- GitHub Release：[PhotoPipeline 0.4.1](https://github.com/zhang-hz/PhotoPipeline3/releases/tag/v0.4.1)
+  （**prerelease=False / Latest**），createdAt **2026-11-01T17:19:40Z** / publishedAt **2026-11-01T17:32:19Z**；
+  发布说明由本 CHANGELOG `[0.4.1]` 节生成（正文 3,242 字符，publish job 内含查重 + tag↔版本断言）。
+- `release.yml` run **41330906366 = success**（**7 job 全 success**：appimage 11.2min / winzip-build 6.5min /
+  winzip-build-dev 6.7min / winzip-pack 2.1min / probe-winzip 0.3min / probe-appimage 0.6min / publish 0.7min）。
+- **4 资产**（GitHub 侧 digest 与 `SHA256SUMS.txt` 逐字一致；本机下载 `win64.zip` 解包后
+  `photopipeline.exe --version` = `PhotoPipeline 0.4.1`，exe 4,208,640 B / SHA256
+  `ec87b1ec0578abf8c298dd883bcae9d48472bb5d907e0246811a62c6721ec257`）：
+  - `PhotoPipeline-0.4.1-win64.zip` **34,272,466 B** / SHA256 `5efbe8fa5ed0c86e32d395a30ac4464e051228242efa079f5efa0143be20b452`
+  - `PhotoPipeline-0.4.1-x86_64.AppImage` **52,697,592 B** / SHA256 `8100712f744b41a7e90065d004280639ef60d8091620ef218941ed088b0aaefe`
+  - `PhotoPipeline-0.4.1-deps.txt` **2,439 B** / SHA256 `e8c80b3d61a4e0d41cde50eb3c04577688d7428cc189129b3331cf221407854d`
+  - `PhotoPipeline-0.4.1-SHA256SUMS.txt` **293 B** / SHA256 `980fff8b1fb7b2f10714f6d18f57bb8645e7518aaf1e74877acd0164eb348182`
+- 发行门禁（本地 release-dev 集成树 + 发行树独立复核）：`SMOKE total=20 pass=20 fail=0`、
+  `UI-SMOKE OK shots=12 pages=3` + `meta-selection: checked=13 bad=0`、ctest **50/50**（83.03 s）、
+  format `check 239 files → violations=0`、tidy `262/262 violations=0`、regression **zero diff**（双平台基线
+  version 行重播种归因 12/0/24、non-version-lines=0）、`ci-versions-check OK (10 keys)`；
+  详见 [docs/0.4.1-report.md](docs/0.4.1-report.md)。
+
 ## [0.4.0] — 2026-11-01
 
 **正式版（stable）**：0.4.0 = **M10**（性能与运行页 / 参数面 / 格式预设与自适应，逐条细节见下方

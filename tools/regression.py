@@ -9,8 +9,9 @@
 #                              [--platform linux|windows] [--baseline FILE]
 #                              [--attrib-lines N] [--self-check]
 #
-#   --self-check  行型归类自检（不跑语料、不碰基线）：对合成样例行断言 line_kind/line_key
-#                 分类（含 E8 的 dev_cli*.cpp 新 TU 锚点）；全过 exit 0，有失败 exit 1。
+#   --self-check  行型归类 + 归一规则自检（不跑语料、不碰基线）：对合成样例行断言
+#                 line_kind/line_key 分类（含 E8 的 dev_cli*.cpp 新 TU 锚点）与 N11/N12 的
+#                 4-vCPU / 16 核同形性；全过 exit 0，有失败 exit 1。
 #
 #   BUILD_DIR   default $BUILD_DIR or <repo>/build/release-dev; must contain the
 #               dev harness binary `photopipeline` (built with -DPP_BUILD_DEV=ON).
@@ -60,7 +61,9 @@
 #   N5  `/tmp/<random segment>` -> `<tmp>` (guard)
 #   N6  every `<field>_ms=<number>` -> `<field>_ms=<ms>` (decode/orient/color/
 #       flatten/encode/metawrite/total/avg_file) and `throughput_mb_s=<number>`
-#       -> `throughput_mb_s=<val>`
+#       -> `throughput_mb_s=<val>`；`<number>` 含科学计数形态（`5.2e+04`）——
+#       A15 实测：机器负载高时单文件 encode_ms=5.2e+04 会把旧的 `[0-9.]+` 规则
+#       截成 `<ms>e+04`（假 diff），故 N6 同时吃 `[eE][+-]?[0-9]+`。
 #   N7  `capacity_bytes=`/`budget_bytes=` -> `<bytes>`: the budget capacity is
 #       derived from *currently available* RAM (min(available/2, 8 GiB)), so it
 #       changes with machine load and must never enter the baseline
@@ -78,6 +81,24 @@
 #       （实测: run 38015489525 播种 = avx512icl，run 38018644510 落 avx2 主机
 #       ⇒ 38 行 vendor-stdout 差异 ⇒ 非零 diff）。与 N7 同口径: 机器相关量
 #       不得进入基线。
+#   N11 (M10-A15 / D-9) 宿主逻辑核数派生的**线程形状**：基线在 4 vCPU runner 上播种，
+#       本机 16 核 ⇒ thread_budget/alloc_files/encode_threads 等 272+ 行不同 ⇒ 无法
+#       本地重播种（D-9）。本规则把“线程预算形状”从基线里剔除：
+#       * `thread_budget|alloc_files|encode_threads|sum_encode_threads|
+#         peak_sum_encode_threads=<n>` -> `<threads>`（含 scheduler start / thread alloc /
+#         e3 report；值的相对关系不再是回归信号 —— 它们由硬件核数决定）。
+#       * `Svt[info]: Level of Parallelism: <n>` -> `<lp>`（SVT-AV1 按核数/预算自适应；
+#         Number of PPCS 实测恒为 4，不归一）。
+#       * 丢弃**核数条件行**（只在分配线程 >1 时出现 ⇒ 行数随核数变，无法只改值）：
+#         `Svt[warn]: Level of parallelism ...`（LP 被 clamp 时的宿主警告）、
+#         enc_jpegli/enc_oiio `encoder has no internal threading; encode_threads ignored`、
+#         enc_jxl `parallel runner created {encoder=jxl threads=...}`。
+#       与 N7/N8/N10 同口径：机器相关量不得进入基线。代价：这三类“线程分配副产品”
+#       不再是回归信号；线程分配本身仍由 thread alloc 行的存在/数量与 index 覆盖。
+#   N12 (M10-A15 / D-9) vcpkg buildtrees 的源码目录名
+#       （`buildtrees/<port>/src/<hash>[-<suffix>]`）-> `<src>`：目录名随 vcpkg/port
+#       版本或缓存形态变化（基线 `56c1f52a2` vs 本机 `56c1f52a20-f26ed` 实测 8 行
+#       row-detail diff），属环境路径噪音，与 N3/N5 同口径。
 #   Kept verbatim: level/stage/source, file names, parameter snapshot, warnings,
 #   failure reasons and all summary counts (files/ok/failed/skipped/cancelled/
 #   bytes) — i.e. exactly the "what changed" signal the baseline exists for.
@@ -185,20 +206,33 @@ def usage(dest=None):
     (dest or sys.stdout).write('\n'.join(out) + '\n')
 
 
-# N1..N10 — see the header. Applied to the run log and to the stdout table.
+# N1..N12 — see the header. Applied to the run log and to the stdout table.
 _N1 = re.compile(r'^[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} ')
 _N2 = re.compile(r'^(\[[a-z]+\] )\[[0-9]+\] ')
 _N4 = re.compile(r'0x[0-9a-fA-F]{9,}')
 _N5 = re.compile(r'/tmp/[A-Za-z0-9._+-]+')
-_N6 = re.compile(r'([a-z_]+_ms)=[0-9]+(\.[0-9]+)?')
-_N6B = re.compile(r'throughput_mb_s=[0-9.]+')
+_N6 = re.compile(r'([a-z_]+_ms)=[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?')
+_N6B = re.compile(r'throughput_mb_s=[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?')
 _N7 = re.compile(r'(capacity_bytes|budget_bytes)=[0-9]+')
 # N10: svt-av1 的宿主 CPU 特性横幅（avx512icl / avx2 / …）—— 见文件头 N10。
 _N10 = re.compile(r'(Svt\[info\]: \[asm level (?:on system|selected) : up to )[^\]]+(\])')
+# N11: 宿主核数派生的线程形状（M10-A15 / D-9）—— 值归一 + 核数条件行丢弃，见文件头。
+_N11 = re.compile(r'\b(thread_budget|alloc_files|encode_threads|sum_encode_threads|'
+                  r'peak_sum_encode_threads)=\d+')
+_N11_LP = re.compile(r'(Svt\[info\]: Level of Parallelism: )\d+')
+_N11_DROP = re.compile(
+    r'^(?:'
+    r'Svt\[warn\]: Level of parallelism (?:does not correspond|supports levels)'
+    r'|\[info\] \[tid\] \[(?:Encode|encode)\] \[enc_(?:jpegli|oiio)\.cpp\] '
+    r'encoder has no internal threading; encode_threads ignored'
+    r'|\[info\] \[tid\] \[Encode\] \[enc_jxl\.cpp\] parallel runner created'
+    r')')
+# N12: vcpkg buildtrees 的源码目录名（环境/版本相关）—— 见文件头。
+_N12 = re.compile(r'(buildtrees[\\/][^\\/\s]+[\\/]src[\\/])[^\s\\/"]+')
 
 
 def normalize(text):
-    """sed/grep/awk 管线（N1–N10）→ 规范化后的行列表。"""
+    """sed/grep/awk 管线（N1–N12）→ 规范化后的行列表。"""
     normalized = []
     for line in text.splitlines():
         line = _N1.sub('', line)
@@ -210,6 +244,11 @@ def normalize(text):
         line = _N6B.sub('throughput_mb_s=<val>', line)
         line = _N7.sub(r'\1=<bytes>', line)
         line = _N10.sub(r'\1<asm>\2', line)
+        line = _N11.sub(r'\1=<threads>', line)
+        line = _N11_LP.sub(r'\1<lp>', line)
+        if _N11_DROP.search(line):
+            continue
+        line = _N12.sub(r'\1<src>', line)
         if 'budget report {' in line:
             continue
         fields = line.split()
@@ -657,7 +696,75 @@ def self_check():
             print('regression self-check FAIL: line={!r} kind={} (want {}) key={!r} (want {!r})'
                   .format(line, got_kind, want_kind, got_key, want_key))
     print('regression self-check: cases=%d fail=%d' % (len(cases), failed))
-    return 1 if failed else 0
+
+    # N11/N12（M10-A15 / D-9）机械探针：同一语义的 4 vCPU / 16 核两种形态必须归一到同一行；
+    # 核数条件行必须被丢弃；vcpkg buildtrees 源目录名归一。判据 = normalize() 输出逐字相等。
+    normalize_cases = [
+        ('thread alloc 4 vs 16',
+         '[info] [tid] [sched] [scheduler.cpp] thread alloc {index=0 alloc_files=4 '
+         'encode_threads=1 active_files=1 sum_encode_threads=1 thread_budget=4}',
+         '[info] [tid] [sched] [scheduler.cpp] thread alloc {index=0 alloc_files=16 '
+         'encode_threads=8 active_files=1 sum_encode_threads=8 thread_budget=16}'),
+        ('scheduler start 4 vs 16',
+         '[info] [tid] [scheduler] [scheduler.cpp] start {files=27 workers=1 '
+         'thread_budget=4 budget_bytes=1024}',
+         '[info] [tid] [scheduler] [scheduler.cpp] start {files=27 workers=1 '
+         'thread_budget=16 budget_bytes=1024}'),
+        ('e3 report 4 vs 16',
+         '[info] [tid] [scheduler] [scheduler.cpp] e3 report {thread_budget=4 '
+         'peak_sum_encode_threads=4 files_done=27}',
+         '[info] [tid] [scheduler] [scheduler.cpp] e3 report {thread_budget=16 '
+         'peak_sum_encode_threads=16 files_done=27}'),
+        ('heif default pool threads 4 vs 16',
+         "[info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; "
+         'default pool kept {format=heif backend=x265 encode_threads=1}',
+         "[info] [tid] [encode] [enc_heif.cpp] backend exposes no 'threads' parameter; "
+         'default pool kept {format=heif backend=x265 encode_threads=16}'),
+        ('svt level of parallelism 4 vs 16',
+         'Svt[info]: Level of Parallelism: 1', 'Svt[info]: Level of Parallelism: 6'),
+        ('vcpkg buildtrees src hash',
+         '    error: probe failed: JPEG error: <repo>\\vcpkg\\buildtrees\\libjpeg-turbo'
+         '\\src\\56c1f52a2 ("tests/golden/edge/corrupt_trunc.jpg")',
+         '    error: probe failed: JPEG error: <repo>\\vcpkg\\buildtrees\\libjpeg-turbo'
+         '\\src\\56c1f52a20-f26ed ("tests/golden/edge/corrupt_trunc.jpg")'),
+        # A15 实测：慢 run 的 ms 值是 fmt 的科学计数（5.2e+04），须与普通形态同形。
+        ('scientific-notation ms (slow-run)',
+         '[info] [tid] [pipeline] [pipeline.cpp] output done {encode_ms=5.2e+04 '
+         'metawrite_ms=1.5e+03 throughput_mb_s=1e-05}',
+         '[info] [tid] [pipeline] [pipeline.cpp] output done {encode_ms=52.00 '
+         'metawrite_ms=1500 throughput_mb_s=0.00001}'),
+    ]
+    normalize_failed = 0
+    for name, core4, core16 in normalize_cases:
+        n4, n16 = normalize(core4), normalize(core16)
+        if n4 != n16:
+            normalize_failed += 1
+            print('regression self-check FAIL: normalize {}: {!r} != {!r}'
+                  .format(name, n4, n16))
+    drop_cases = [
+        ('svt lp warning',
+         'Svt[warn]: Level of parallelism supports levels [0-6]. '
+         'Setting maximum parallelism level.'),
+        ('svt lp mismatch',
+         'Svt[warn]: Level of parallelism does not correspond to a target number of processors '
+         'to use. See Docs/Parameters.md for info.'),
+        ('jpegli threads ignored',
+         '[info] [tid] [Encode] [enc_jpegli.cpp] encoder has no internal threading; '
+         'encode_threads ignored {encoder=jpegli encode_threads=2}'),
+        ('oiio threads ignored',
+         '[info] [tid] [encode] [enc_oiio.cpp] encoder has no internal threading; '
+         'encode_threads ignored {encoder=oiio encode_threads=16}'),
+        ('jxl parallel runner',
+         '[info] [tid] [Encode] [enc_jxl.cpp] parallel runner created {encoder=jxl threads=16}'),
+    ]
+    for name, line in drop_cases:
+        if normalize(line):
+            normalize_failed += 1
+            print('regression self-check FAIL: normalize {} should be dropped, got {!r}'
+                  .format(name, normalize(line)))
+    print('regression self-check: normalize cases=%d fail=%d' % (
+        len(normalize_cases) + len(drop_cases), normalize_failed))
+    return 1 if (failed or normalize_failed) else 0
 
 
 def main(argv):

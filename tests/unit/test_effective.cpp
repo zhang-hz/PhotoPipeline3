@@ -15,6 +15,7 @@
 #include <exiv2/exiv2.hpp>
 
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <optional>
@@ -65,6 +66,16 @@ fs::path corpus() { return repo_root() / "tests" / "golden"; }
 
 std::string exif_str(const Exiv2::ExifData &d, const char *key) {
     auto it = d.findKey(Exiv2::ExifKey(key));
+    if (it == d.end())
+        return {};
+    std::string v = it->toString();
+    while (!v.empty() && v.back() == '\0')
+        v.pop_back();
+    return v;
+}
+
+std::string xmp_str(const Exiv2::XmpData &d, const char *key) {
+    auto it = d.findKey(Exiv2::XmpKey(key));
     if (it == d.end())
         return {};
     std::string v = it->toString();
@@ -217,7 +228,24 @@ void check_same_source(const pp::SourceMeta &src, const pp::BatchRules &rules,
         check(plan.exif.empty() && plan.xmp.empty(), cs + "/same-source-privacy-strip",
               "plan still carries metadata");
     }
-    check(prev.sync_mtime == rules.sync_mtime, cs + "/sync-mtime-echo", "echo mismatch");
+    // M13-C1：sync_mtime 回显 = 生效值（override 三态覆盖；无 override 字段时 = 规则 →
+    // 既有断言语义不变，只把公式覆盖面扩展）。
+    bool want_sync = rules.sync_mtime;
+    if (ex.has_value()) {
+        if (ex->privacy_enabled == false)
+            want_sync = false;
+        if (ex->sync_mtime.has_value())
+            want_sync = *ex->sync_mtime;
+    }
+    check(prev.sync_mtime == want_sync, cs + "/sync-mtime-echo", "echo mismatch");
+
+    // M13-C4：photoshop:DateCreated 显示 = 写入（同源；两路都空时同样相等）
+    const std::string plan_dc = xmp_str(plan.xmp, "Xmp.photoshop.DateCreated");
+    const std::string want_dc = prev.xmp_date_created.effective.has_value()
+                                    ? prev.xmp_date_created.effective->value
+                                    : std::string();
+    check(plan_dc == want_dc, cs + "/same-source-xmp-date-created",
+          "preview=" + show(want_dc) + " plan=" + show(plan_dc));
 }
 
 // ------------------------------------------------------------------ preview 比较（零副作用）
@@ -244,10 +272,21 @@ bool same_gps_field(const pp::EffectiveField<std::optional<pp::GpsData>> &a,
 }
 
 bool same_preview(const pp::EffectivePreview &a, const pp::EffectivePreview &b) {
+    const auto same_opt_str = [](const pp::EffectiveField<std::optional<std::string>> &x,
+                                 const pp::EffectiveField<std::optional<std::string>> &y) {
+        return x.changed == y.changed && x.original == y.original && x.effective == y.effective;
+    };
     return same_time_field(a.datetime_original, b.datetime_original) &&
            same_time_field(a.datetime_digitized, b.datetime_digitized) &&
            same_time_field(a.datetime_modify, b.datetime_modify) && same_gps_field(a.gps, b.gps) &&
-           a.strip_privacy == b.strip_privacy && a.sync_mtime == b.sync_mtime;
+           a.strip_privacy == b.strip_privacy && a.sync_mtime == b.sync_mtime &&
+           // M13/R-085 加性显示面同样纳入确定性口径
+           same_time_field(a.xmp_create_date, b.xmp_create_date) &&
+           same_time_field(a.xmp_modify_date, b.xmp_modify_date) &&
+           same_time_field(a.xmp_date_created, b.xmp_date_created) &&
+           same_opt_str(a.offset_time, b.offset_time) &&
+           same_opt_str(a.offset_time_original, b.offset_time_original) &&
+           same_opt_str(a.offset_time_digitized, b.offset_time_digitized);
 }
 
 std::string dump(const pp::EffectivePreview &p) {
@@ -298,6 +337,10 @@ void test_fixture_original() {
     // 规则未配置 = 三字段全"未改变"
     check(!p.datetime_digitized.changed && !p.datetime_modify.changed && !p.gps.changed,
           "fixture/no-rules-all-unchanged", dump(p));
+    // M13 默认路径零变化：fixture 无 photoshop:DateCreated → 新字段保持空/未改变
+    check(!p.xmp_date_created.original.has_value() && !p.xmp_date_created.effective.has_value() &&
+              !p.xmp_date_created.changed,
+          "fixture/xmp-date-created-absent", "new field must stay empty for a rule-free source");
     check_same_source(src, rules, std::nullopt, "fixture/no-rules");
 
     // 零副作用 + 确定性：两次调用结果逐字段相同，源容器与源值不动
@@ -727,6 +770,241 @@ void test_m7wp1_effective_surface() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// M13-C1/C3/C4：选择项级三态覆盖（六个 optional<bool>）+ photoshop:DateCreated 生效值
+// 全部与 build_plan 同源对拍（"显示/写入两张皮"检测覆盖新字段）。
+// ---------------------------------------------------------------------------
+pp::SourceMeta m13_source() {
+    pp::SourceMeta src;
+    src.exif["Exif.Photo.DateTimeOriginal"] = std::string("2024:03:01 10:00:00");
+    src.exif["Exif.Image.ImageWidth"] = std::uint32_t(4000); // modernize_exif 的推导事实
+    src.exif["Exif.Image.ImageLength"] = std::uint32_t(3000);
+    pp::GpsData g;
+    g.lat = 31.2304;
+    g.lon = 121.4737;
+    pp::write_gps(src.exif, g);
+    src.xmp["Xmp.photoshop.DateCreated"] = std::string("2024-03-01T10:00:00+08:00");
+    src.xmp["Xmp.xmp.CreatorTool"] = std::string("Adobe Photoshop 25.0");
+    src.xmp["Xmp.dc.title"] = std::string("keep");
+    src.has_time = true;
+    src.has_gps = true;
+    return src;
+}
+
+void test_m13_effective_surface() {
+    const pp::SourceMeta src = m13_source();
+    const pp::BatchRules no_rules;
+
+    // ---- 默认路径逐字不变：nullopt 与空 override 完全等价（= 0.4.0 行为）----
+    {
+        const pp::EffectivePreview d = pp::preview_effective(src, no_rules, std::nullopt);
+        const pp::EffectivePreview z = pp::preview_effective(src, no_rules, pp::MetadataOverride{});
+        check(same_preview(d, z), "m13/nullopt-equals-empty-override", dump(d) + " vs " + dump(z));
+        check(d.xmp_date_created.original.has_value() &&
+                  d.xmp_date_created.original->value == "2024-03-01T10:00:00+08:00",
+              "m13/date-created-original", show(d.xmp_date_created.original));
+        check(d.xmp_date_created.effective == d.xmp_date_created.original &&
+                  !d.xmp_date_created.changed,
+              "m13/date-created-default-unchanged", dump(d));
+        check_same_source(src, no_rules, std::nullopt, "m13/default");
+    }
+
+    // ---- photoshop:DateCreated：Δ / 时区语义 / 不可解析 / 隐私剥除 ----
+    {
+        pp::BatchRules delta_rules;
+        delta_rules.time_shift = delta(0, 0, 0, 1, 0);
+        const pp::EffectivePreview p = pp::preview_effective(src, delta_rules, std::nullopt);
+        check(p.xmp_date_created.effective.has_value() &&
+                  p.xmp_date_created.effective->value == "2024-03-01T11:00:00+08:00",
+              "m13/date-created-delta", show(p.xmp_date_created.effective));
+        check(p.xmp_date_created.changed, "m13/date-created-delta-changed", dump(p));
+        check_same_source(src, delta_rules, std::nullopt, "m13/date-created-delta");
+
+        pp::BatchRules tz_rules;
+        tz_rules.time_shift = tz(480, 540);
+        const pp::EffectivePreview t = pp::preview_effective(src, tz_rules, std::nullopt);
+        check(t.xmp_date_created.effective.has_value() &&
+                  t.xmp_date_created.effective->value == "2024-03-01T11:00:00+09:00",
+              "m13/date-created-tz", show(t.xmp_date_created.effective));
+        check_same_source(src, tz_rules, std::nullopt, "m13/date-created-tz");
+
+        // 不可解析 → effective=original、changed=false（写路径同样跳过写入）
+        pp::SourceMeta bad = src;
+        bad.xmp["Xmp.photoshop.DateCreated"] = std::string("2024-03-01");
+        const pp::EffectivePreview b = pp::preview_effective(bad, delta_rules, std::nullopt);
+        check(b.xmp_date_created.original.has_value() &&
+                  b.xmp_date_created.original->value == "2024-03-01" &&
+                  b.xmp_date_created.effective == b.xmp_date_created.original &&
+                  !b.xmp_date_created.changed,
+              "m13/date-created-unparsable", show(b.xmp_date_created.effective));
+        check_same_source(bad, delta_rules, std::nullopt, "m13/date-created-unparsable");
+
+        pp::BatchRules strip;
+        strip.strip_privacy = true;
+        const pp::EffectivePreview s = pp::preview_effective(src, strip, std::nullopt);
+        check(!s.xmp_date_created.effective.has_value() && s.xmp_date_created.changed,
+              "m13/date-created-stripped", dump(s));
+        check_same_source(src, strip, std::nullopt, "m13/date-created-stripped");
+    }
+
+    // ---- time_enabled：false 丢弃生效时间偏移（含例外自身的时间值）----
+    {
+        pp::BatchRules rules;
+        rules.time_shift = delta(0, 0, 0, 2, 0);
+        pp::MetadataOverride ex;
+        ex.time_shift = delta(0, 0, 0, 1, 0);
+        ex.time_enabled = false;
+        const pp::EffectivePreview p = pp::preview_effective(src, rules, ex);
+        check(!p.datetime_original.changed && !p.xmp_date_created.changed,
+              "m13/time-disabled-unchanged", dump(p));
+        check(p.datetime_original.effective.has_value() &&
+                  p.datetime_original.effective->value == "2024:03:01 10:00:00",
+              "m13/time-disabled-keeps-source", show(p.datetime_original.effective));
+        check_same_source(src, rules, ex, "m13/time-disabled");
+
+        // 显式 true = 不改变语义（时间照常按生效规则走）
+        pp::MetadataOverride on = ex;
+        on.time_enabled = true;
+        const pp::EffectivePreview q = pp::preview_effective(src, rules, on);
+        check(q.datetime_original.effective.has_value() &&
+                  q.datetime_original.effective->value == "2024:03:01 11:00:00",
+              "m13/time-enabled-explicit", show(q.datetime_original.effective));
+        check_same_source(src, rules, on, "m13/time-enabled-explicit");
+    }
+
+    // ---- gps_enabled：false 丢弃生效 GPS（含清理标记），源 GPS 原样保留 ----
+    {
+        pp::BatchRules rules;
+        rules.gps = pp::GpsData{22.5, 114.0, std::nullopt, std::nullopt, std::nullopt};
+        rules.gps_clear = true;
+        pp::MetadataOverride ex;
+        ex.gps = pp::GpsData{39.9, 116.4, std::nullopt, std::nullopt, std::nullopt};
+        ex.gps_enabled = false;
+        const pp::EffectivePreview p = pp::preview_effective(src, rules, ex);
+        check(p.gps.original.has_value() && p.gps.effective.has_value() &&
+                  p.gps.effective->lat == p.gps.original->lat && !p.gps.changed,
+              "m13/gps-disabled-keeps-source", dump(p));
+        check_same_source(src, rules, ex, "m13/gps-disabled");
+    }
+
+    // ---- privacy_enabled：false 关闭四项（剥除/补全/同步 mtime/CreatorTool），时间卡不受影响 ----
+    {
+        pp::BatchRules rules;
+        rules.strip_privacy = true;
+        rules.modernize_exif = true;
+        rules.sync_mtime = true;
+        rules.strip_creator_tool = true;
+        rules.time_shift = delta(0, 0, 0, 1, 0);
+        pp::MetadataOverride ex;
+        ex.privacy_enabled = false;
+        const pp::EffectivePreview p = pp::preview_effective(src, rules, ex);
+        check(!p.strip_privacy && !p.sync_mtime, "m13/privacy-disabled-flags", dump(p));
+        check(p.datetime_original.effective.has_value() &&
+                  p.datetime_original.effective->value == "2024:03:01 11:00:00",
+              "m13/privacy-disabled-keeps-time", show(p.datetime_original.effective));
+        check(p.xmp_date_created.effective.has_value() &&
+                  p.xmp_date_created.effective->value == "2024-03-01T11:00:00+08:00",
+              "m13/privacy-disabled-keeps-xmp", show(p.xmp_date_created.effective));
+        check_same_source(src, rules, ex, "m13/privacy-disabled");
+
+        // 隐私关闭不门控 tag 编辑（引擎不猜来源；UI 关闭卡时自行清理该文件的编辑）
+        pp::MetadataOverride edits;
+        edits.privacy_enabled = false;
+        edits.exif_edits.push_back(pp::TagEdit{"Exif.Image.Artist", std::string("M13"), false});
+        const pp::MetadataPlan plan = pp::build_plan(src, rules, edits);
+        check(exif_str(plan.exif, "Exif.Image.Artist") == "M13", "m13/tag-edits-not-gated",
+              show(exif_str(plan.exif, "Exif.Image.Artist")));
+    }
+
+    // ---- sync_mtime 三态（显示回显 + 同源）----
+    {
+        pp::BatchRules rules; // 批量默认 false
+        pp::MetadataOverride on;
+        on.sync_mtime = true;
+        check(pp::preview_effective(src, rules, on).sync_mtime, "m13/sync-mtime-override-true",
+              "expected true");
+        check_same_source(src, rules, on, "m13/sync-mtime-on");
+        pp::BatchRules batch_on;
+        batch_on.sync_mtime = true;
+        pp::MetadataOverride off;
+        off.sync_mtime = false;
+        check(!pp::preview_effective(src, batch_on, off).sync_mtime,
+              "m13/sync-mtime-override-false", "expected false");
+        check_same_source(src, batch_on, off, "m13/sync-mtime-off");
+        check(pp::preview_effective(src, batch_on, pp::MetadataOverride{}).sync_mtime,
+              "m13/sync-mtime-inherit", "expected the batch value");
+        // ignore_batch 先清空批量规则：批量值消失，例外自身显式值仍生效
+        pp::MetadataOverride ig;
+        ig.ignore_batch = true;
+        check(!pp::preview_effective(src, batch_on, ig).sync_mtime, "m13/sync-mtime-ignore-batch",
+              "ignore_batch must drop the batch rule");
+        pp::MetadataOverride ig_on;
+        ig_on.ignore_batch = true;
+        ig_on.sync_mtime = true;
+        check(pp::preview_effective(src, batch_on, ig_on).sync_mtime, "m13/sync-mtime-own-field",
+              "own field must survive ignore_batch");
+    }
+
+    // ---- modernize_exif 三态（显示面无此项，经 build_plan 产物验证）----
+    {
+        pp::BatchRules rules;
+        pp::MetadataOverride on;
+        on.modernize_exif = true;
+        const pp::MetadataPlan p = pp::build_plan(src, rules, on);
+        check(exif_str(p.exif, "Exif.Photo.PixelXDimension") == "4000",
+              "m13/modernize-override-true", show(exif_str(p.exif, "Exif.Photo.PixelXDimension")));
+        pp::BatchRules batch_on;
+        batch_on.modernize_exif = true;
+        pp::MetadataOverride off;
+        off.modernize_exif = false;
+        const pp::MetadataPlan q = pp::build_plan(src, batch_on, off);
+        check(exif_str(q.exif, "Exif.Photo.PixelXDimension").empty(),
+              "m13/modernize-override-false", "the exception must switch batch modernize off");
+        // privacy_enabled=false 一并关闭 modernize（C1：四项全 false）
+        pp::MetadataOverride priv_off;
+        priv_off.privacy_enabled = false;
+        const pp::MetadataPlan r = pp::build_plan(src, batch_on, priv_off);
+        check(exif_str(r.exif, "Exif.Photo.PixelXDimension").empty(),
+              "m13/modernize-gated-by-privacy", "privacy card off must drop modernize");
+        // 默认（nullopt）为零变化：不补全
+        check(exif_str(pp::build_plan(src, rules, pp::MetadataOverride{}).exif,
+                       "Exif.Photo.PixelXDimension")
+                  .empty(),
+              "m13/modernize-default-off", "default must stay zero-change");
+    }
+
+    // ---- strip_creator_tool 三态（只删 Xmp.xmp.CreatorTool；其余 XMP/EXIF 不动）----
+    {
+        pp::BatchRules rules;
+        pp::MetadataOverride on;
+        on.strip_creator_tool = true;
+        const pp::MetadataPlan p = pp::build_plan(src, rules, on);
+        check(xmp_str(p.xmp, "Xmp.xmp.CreatorTool").empty(), "m13/creator-tool-stripped",
+              "CreatorTool must be removed");
+        check(xmp_str(p.xmp, "Xmp.dc.title").find("keep") != std::string::npos,
+              "m13/creator-tool-other-xmp-kept", show(xmp_str(p.xmp, "Xmp.dc.title")));
+        check(xmp_str(p.xmp, "Xmp.photoshop.DateCreated") == "2024-03-01T10:00:00+08:00",
+              "m13/creator-tool-photoshop-kept", show(xmp_str(p.xmp, "Xmp.photoshop.DateCreated")));
+        // 批量 true + 例外 false → 保留（三态覆盖）
+        pp::BatchRules batch_on;
+        batch_on.strip_creator_tool = true;
+        pp::MetadataOverride off;
+        off.strip_creator_tool = false;
+        check(xmp_str(pp::build_plan(src, batch_on, off).xmp, "Xmp.xmp.CreatorTool") ==
+                  "Adobe Photoshop 25.0",
+              "m13/creator-tool-override-false", "the exception must keep CreatorTool");
+        // privacy_enabled=false 一并关闭 CreatorTool 剥离
+        pp::MetadataOverride priv_off;
+        priv_off.privacy_enabled = false;
+        check(!xmp_str(pp::build_plan(src, batch_on, priv_off).xmp, "Xmp.xmp.CreatorTool").empty(),
+              "m13/creator-tool-gated-by-privacy", "privacy card off must drop the strip");
+        // 默认（nullopt）为零变化：保留
+        check(xmp_str(pp::build_plan(src, rules, pp::MetadataOverride{}).xmp,
+                      "Xmp.xmp.CreatorTool") == "Adobe Photoshop 25.0",
+              "m13/creator-tool-default-kept", "default must stay zero-change");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -738,6 +1016,7 @@ int main() {
     test_exception_overrides();
     test_synthetic_matrix();
     test_m7wp1_effective_surface();
+    test_m13_effective_surface();
 
     if (g_failed == 0) {
         std::printf("test_effective: OK\n");

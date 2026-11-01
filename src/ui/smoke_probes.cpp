@@ -13200,10 +13200,13 @@ void MainWindow::Impl::probe_meta_sec_i(const MetaProbeCtx &c, const QString &sh
                             .arg(gps_badge_visible() ? 1 : 0)
                             .arg(gps_badge()));
             // 隐私与文件时间（§7.1）：开关 30×16 + 说明 + 文字链（高 26）；关键字行带「编辑…」
+            // M13（0.4.1）：新增「去除 CreatorTool」开关行 → 开关数 3→4（机械换锚；
+            // 归因登记 docs/0.4.1-report.md 偏差节）。
             {
                 int switch_rows = 0;
-                for (const QString &name : {meta::objname::kPrivacyStrip, meta::objname::kMtimeSync,
-                                            QStringLiteral("modernize_exif")}) {
+                for (const QString &name :
+                     {meta::objname::kPrivacyStrip, meta::objname::kMtimeSync,
+                      meta::objname::kModernizeExif, meta::objname::kCreatorToolStrip}) {
                     const auto *button = page.findChild<QAbstractButton *>(name);
                     if (button != nullptr && button->width() == formkit::kSwitchW &&
                         button->height() == formkit::kSwitchH && button->isCheckable()) {
@@ -13222,14 +13225,15 @@ void MainWindow::Impl::probe_meta_sec_i(const MetaProbeCtx &c, const QString &sh
                     keywords_link->text() == QStringLiteral("编辑…") &&
                     keywords_link->height() == theme::Metrics::btn_h;
                 meta_expect(
-                    "switch-rows", switch_rows == 3 && links_ok,
+                    "switch-rows", switch_rows == 4 && links_ok,
                     QStringLiteral("switches=%1 links=%2").arg(switch_rows).arg(links_ok ? 1 : 0));
 
                 // (i-5b) W-R-T13（A39 ⑥ 缺陷根治回执）：隐私卡**卡体在卡内布局里**。
                 //   病灶（缺陷复现时的取值）：卡体是"有父无布局"的孤儿 —— 几何停在默认 100×30、
                 //   三行被压成 6px pitch 贴在卡左上角并盖住卡题（截图里的"圆形伪影"）。
-                //   判据（姿态可判、不依赖缺陷形态）：卡高容得下 [卡头 28 + 3 行 × 28] + 三行
+                //   判据（姿态可判、不依赖缺陷形态）：卡高容得下 [卡头 28 + 卡体行 × 28] + 行
                 //   pitch = 28 + 首行不压卡头（y ≥ 卡头高）。
+                //   M13（0.4.1）：卡体 4→5 行（新增 CreatorTool 行），机械换锚。
                 {
                     QWidget *card = nullptr;
                     const auto *strip_now =
@@ -13259,8 +13263,9 @@ void MainWindow::Impl::probe_meta_sec_i(const MetaProbeCtx &c, const QString &sh
                             ++pitch_bad;
                     }
                     const int first_y = rows.isEmpty() ? -1 : row_y(rows.first());
-                    const int want_h = formkit::kRowPitch * 5; // 卡头 1 行 + 卡体 4 行
-                    const bool body_ok = card != nullptr && rows.size() == 4 && pitch_bad == 0 &&
+                    // M13（0.4.1）：卡体 5 行（新增 CreatorTool 行）→ 卡头 1 + 卡体 5。
+                    const int want_h = formkit::kRowPitch * 6;
+                    const bool body_ok = card != nullptr && rows.size() == 5 && pitch_bad == 0 &&
                                          first_y >= formkit::kRowPitch && card->height() >= want_h;
                     meta_expect("privacy-card-body", body_ok,
                                 QStringLiteral("card-h=%1 rows=%2 pitch-bad=%3 first-y=%4 want>=%5")
@@ -14232,6 +14237,255 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
     probe_meta_sec_i(c, shots_dir);
     probe_meta_sec_j(c, shots_dir);
     probe_meta_sec_k(c, shots_dir);
+
+    // ---- (l) M13（0.4.1）/ C2/C3/C5：选择项级编辑 / 多选混合值 / CreatorTool / 自动海拔 ----
+    //   需求 1 的机械化探针（**只增行**；值表驱动 checked/bad）：
+    //     * 单选改时间 → 只写该文件 exception（不产生全局规则）；换选另一文件 → 控件回默认；
+    //     * 多选 A(有修改) + B(无修改) → 混合字段显示「多个值」（spin/信息卡/GPS 输入/生效坐标）；
+    //     * 卡头开关三态（部分文件开启 = partial）；
+    //     * 多选批量：两个文件各自落到同字段（字段级合并不串扰其它分量）；
+    //     * CreatorTool 开关 → override.strip_creator_tool；
+    //     * 选点自动海拔开关默认开（离线门控；本探针不发网络）；
+    //     * apply_rules（预设载入）→ 替换式写入选中文件的 override。
+    //   独立 PageMeta 探针不发网络：pp_meta_offline = true（与主窗 set_offline_maps 同口径）。
+    {
+        int sel_checked = 0;
+        QStringList sel_bad;
+        const auto sel_expect = [&sel_checked, &sel_bad](const char *name, bool ok,
+                                                         const QString &detail) {
+            ++sel_checked;
+            if (!ok)
+                sel_bad << QStringLiteral("%1(%2)").arg(QString::fromLatin1(name), detail);
+        };
+        page.setProperty("pp_meta_offline", true);
+        meta::MetaState *st = meta::state_of(&page);
+        const QString fixture_b = repo + QStringLiteral("/tests/golden/meta/webp_lossless.webp");
+        // 选择集喂入（exception 显式携带：独立页的编辑只活在 follow.items 快照里）
+        const auto select_paths = [this, &page, &wait_probe](
+                                      const QStringList &paths,
+                                      const QList<std::optional<pp::MetadataOverride>> &overrides) {
+            page.set_batch_files(paths);
+            QList<MetaSelectionItem> items;
+            for (int i = 0; i < paths.size(); ++i) {
+                MetaSelectionItem item = meta_probe_item(paths.at(i));
+                item.exception =
+                    i < overrides.size() ? overrides.at(i) : std::optional<pp::MetadataOverride>();
+                items.append(item);
+            }
+            page.set_selection(items, /*from_selection=*/true);
+            pump(140);
+            return wait_probe();
+        };
+        const auto current_overrides = [st]() {
+            QList<std::optional<pp::MetadataOverride>> out;
+            for (const auto &item : st->follow.items) {
+                out.append(item.exception);
+            }
+            return out;
+        };
+        auto *hours =
+            dynamic_cast<meta::DeltaSpin *>(page.findChild<QSpinBox *>(meta::objname::kDeltaHours));
+        auto *days =
+            dynamic_cast<meta::DeltaSpin *>(page.findChild<QSpinBox *>(meta::objname::kDeltaDays));
+        auto *time_enable = dynamic_cast<formkit::SwitchControl *>(
+            page.findChild<QAbstractButton *>(meta::objname::kTimeEnable));
+        auto *creator_sw = dynamic_cast<formkit::SwitchControl *>(
+            page.findChild<QAbstractButton *>(meta::objname::kCreatorToolStrip));
+        auto *auto_elev = dynamic_cast<formkit::SwitchControl *>(
+            page.findChild<QAbstractButton *>(meta::objname::kAutoElevation));
+        const auto mixed_text = PageMeta::tr(meta::kMixedValueText);
+        const auto pp_mixed = [](const QWidget *widget) {
+            return widget != nullptr && widget->property(meta::hook::kMixedProperty).toBool();
+        };
+
+        if (hours == nullptr || days == nullptr || time_enable == nullptr ||
+            creator_sw == nullptr || auto_elev == nullptr) {
+            sel_expect("widgets", false,
+                       QStringLiteral("hours=%1 days=%2 enable=%3 creator=%4 elev=%5")
+                           .arg(hours != nullptr ? 1 : 0)
+                           .arg(days != nullptr ? 1 : 0)
+                           .arg(time_enable != nullptr ? 1 : 0)
+                           .arg(creator_sw != nullptr ? 1 : 0)
+                           .arg(auto_elev != nullptr ? 1 : 0));
+        } else {
+            // (l1) 单选 A：Δ+2h → 只写 A 的 override（不产生全局规则）
+            select_paths(QStringList{fixture}, {std::nullopt});
+            hours->setValue(2);
+            pump(140);
+            const auto ex_a = current_overrides();
+            const bool a_ok = st->follow.items.size() == 1 && !ex_a.isEmpty() &&
+                              ex_a.front().has_value() && ex_a.front()->time_shift.has_value() &&
+                              ex_a.front()->time_shift->hours == 2;
+            sel_expect("single-scope", a_ok,
+                       QStringLiteral("items=%1 has-shift=%2 hours=%3")
+                           .arg(st->follow.items.size())
+                           .arg(ex_a.isEmpty() || !ex_a.front().has_value() ||
+                                        !ex_a.front()->time_shift.has_value()
+                                    ? -1
+                                    : ex_a.front()->time_shift->hours));
+            // (l2) 换选 B：无修改 → 控件回默认（0），且 B 无 override
+            select_paths(QStringList{fixture_b}, {std::nullopt});
+            const auto ex_b0 = current_overrides();
+            sel_expect("per-file-isolated",
+                       hours->value() == 0 && !hours->is_mixed() && !ex_b0.isEmpty() &&
+                           !ex_b0.front().has_value(),
+                       QStringLiteral("hours=%1 mixed=%2 has-ex=%3")
+                           .arg(hours->value())
+                           .arg(hours->is_mixed() ? 1 : 0)
+                           .arg(ex_b0.isEmpty() || ex_b0.front().has_value() ? 1 : 0));
+            // (l3) 多选 A(有修改)+B(无修改) → 混合值「多个值」+ 卡头三态 partial
+            select_paths(QStringList{fixture, fixture_b}, {ex_a.front(), std::nullopt});
+            const bool mixed_hours = hours->is_mixed() && hours->text() == mixed_text;
+            sel_expect("mixed-spin", mixed_hours,
+                       QStringLiteral("mixed=%1 text=\"%2\"")
+                           .arg(hours->is_mixed() ? 1 : 0)
+                           .arg(hours->text()));
+            sel_expect("partial-card", time_enable->is_partial(),
+                       QStringLiteral("partial=%1 checked=%2")
+                           .arg(time_enable->is_partial() ? 1 : 0)
+                           .arg(time_enable->isChecked() ? 1 : 0));
+            sel_expect("mixed-info", full(meta::objname::kInfoTime) == mixed_text,
+                       QStringLiteral("info-time=\"%1\"").arg(full(meta::objname::kInfoTime)));
+            const auto *gps_lat_edit = page.findChild<QLineEdit *>(meta::objname::kGpsLat);
+            sel_expect(
+                "mixed-gps-input",
+                gps_lat_edit != nullptr && pp_mixed(gps_lat_edit) &&
+                    gps_lat_edit->text().isEmpty() && gps_lat_edit->placeholderText() == mixed_text,
+                QStringLiteral("ph=\"%1\" mixed=%2")
+                    .arg(gps_lat_edit != nullptr ? gps_lat_edit->placeholderText() : QString())
+                    .arg(pp_mixed(gps_lat_edit) ? 1 : 0));
+            const auto *gps_lat_view = page.findChild<QLineEdit *>(meta::objname::kPpMetaGpsLat);
+            sel_expect("mixed-gps-view",
+                       gps_lat_view != nullptr && gps_lat_view->text() == mixed_text,
+                       QStringLiteral("view=\"%1\"")
+                           .arg(gps_lat_view != nullptr ? gps_lat_view->text() : QString()));
+            // (l4)/(l5) 多选批量：两个文件各自写同字段（字段级合并不串扰各文件其它分量）
+            select_paths(QStringList{fixture}, {ex_a.front()});
+            days->setValue(1);
+            pump(140);
+            const auto ex_a2 = current_overrides();
+            select_paths(QStringList{fixture_b}, {std::nullopt});
+            hours->setValue(3);
+            pump(140);
+            days->setValue(1);
+            pump(140);
+            const auto ex_b2 = current_overrides();
+            const bool batch_a = !ex_a2.isEmpty() && ex_a2.front().has_value() &&
+                                 ex_a2.front()->time_shift.has_value() &&
+                                 ex_a2.front()->time_shift->days == 1 &&
+                                 ex_a2.front()->time_shift->hours == 2;
+            const bool batch_b = !ex_b2.isEmpty() && ex_b2.front().has_value() &&
+                                 ex_b2.front()->time_shift.has_value() &&
+                                 ex_b2.front()->time_shift->days == 1 &&
+                                 ex_b2.front()->time_shift->hours == 3;
+            sel_expect("batch-merge", batch_a && batch_b,
+                       QStringLiteral("a-days=%1 a-hours=%2 b-days=%3 b-hours=%4")
+                           .arg(ex_a2.isEmpty() || !ex_a2.front().has_value() ||
+                                        !ex_a2.front()->time_shift.has_value()
+                                    ? -99
+                                    : ex_a2.front()->time_shift->days)
+                           .arg(ex_a2.isEmpty() || !ex_a2.front().has_value() ||
+                                        !ex_a2.front()->time_shift.has_value()
+                                    ? -99
+                                    : ex_a2.front()->time_shift->hours)
+                           .arg(ex_b2.isEmpty() || !ex_b2.front().has_value() ||
+                                        !ex_b2.front()->time_shift.has_value()
+                                    ? -99
+                                    : ex_b2.front()->time_shift->days)
+                           .arg(ex_b2.isEmpty() || !ex_b2.front().has_value() ||
+                                        !ex_b2.front()->time_shift.has_value()
+                                    ? -99
+                                    : ex_b2.front()->time_shift->hours));
+            // (l6) 多选异值：hours mixed（2 vs 3）、days uniform（1 且非 mixed）
+            select_paths(QStringList{fixture, fixture_b}, {ex_a2.front(), ex_b2.front()});
+            sel_expect("mixed-vs-uniform",
+                       hours->is_mixed() && hours->text() == mixed_text && !days->is_mixed() &&
+                           days->value() == 1,
+                       QStringLiteral("hours-mixed=%1 hours-text=\"%2\" days-mixed=%3 days=%4")
+                           .arg(hours->is_mixed() ? 1 : 0)
+                           .arg(hours->text())
+                           .arg(days->is_mixed() ? 1 : 0)
+                           .arg(days->value()));
+            // (l7) 卡头开关关 = 清除选中文件该卡全部字段（允许"部分文件不开启"）
+            time_enable->click();
+            pump(160);
+            const auto ex_off = current_overrides();
+            const auto time_cleared = [](const std::optional<pp::MetadataOverride> &ov) {
+                return !ov.has_value() || !ov->time_shift.has_value();
+            };
+            sel_expect("card-off-clears",
+                       ex_off.size() == 2 && time_cleared(ex_off.at(0)) &&
+                           time_cleared(ex_off.at(1)),
+                       QStringLiteral("a-shift=%1 b-shift=%2")
+                           .arg(!time_cleared(ex_off.value(0)) ? 1 : 0)
+                           .arg(ex_off.size() < 2 || !time_cleared(ex_off.at(1)) ? 1 : 0));
+            // (l8) CreatorTool 开关 → override.strip_creator_tool（需求 2）
+            //   既有 UX-5 语义：隐私卡「启用」关闭时卡内开关禁用 → 先开卡再点 CreatorTool。
+            select_paths(QStringList{fixture}, {std::nullopt});
+            auto *privacy_enable = dynamic_cast<formkit::SwitchControl *>(
+                page.findChild<QAbstractButton *>(meta::objname::kPrivacyEnable));
+            if (privacy_enable != nullptr && !privacy_enable->isChecked()) {
+                privacy_enable->click();
+                pump(140);
+            }
+            creator_sw->click();
+            pump(160);
+            const auto ex_ct = current_overrides();
+            const bool ct_on = !ex_ct.isEmpty() && ex_ct.front().has_value() &&
+                               ex_ct.front()->strip_creator_tool.value_or(false) &&
+                               meta::ProbeContext(&page).prop(meta::hook::kCreatorTool).toBool();
+            creator_sw->click();
+            pump(160);
+            const auto ex_ct_off = current_overrides();
+            const bool ct_off = ex_ct_off.isEmpty() || !ex_ct_off.front().has_value() ||
+                                !ex_ct_off.front()->strip_creator_tool.value_or(false);
+            sel_expect("creator-tool", ct_on && ct_off,
+                       QStringLiteral("on=%1 off=%2").arg(ct_on ? 1 : 0).arg(ct_off ? 1 : 0));
+            // (l9) 选点自动海拔开关：默认开 + 钩子；离线门控（本探针不发请求）
+            const bool ae_default = auto_elev->isChecked();
+            auto_elev->click();
+            pump(120);
+            const bool ae_off =
+                !auto_elev->isChecked() &&
+                !meta::ProbeContext(&page).prop(meta::hook::kAutoElevation).toBool();
+            auto_elev->click();
+            pump(120);
+            sel_expect("auto-elevation", ae_default && ae_off && auto_elev->isChecked(),
+                       QStringLiteral("default=%1 off=%2 back=%3")
+                           .arg(ae_default ? 1 : 0)
+                           .arg(ae_off ? 1 : 0)
+                           .arg(auto_elev->isChecked() ? 1 : 0));
+            // (l10) 预设载入 = 替换式写入选中文件 override（多选批量生效）
+            select_paths(QStringList{fixture, fixture_b}, {std::nullopt, std::nullopt});
+            pp::BatchRules preset;
+            pp::TimeShift preset_shift;
+            preset_shift.mode = pp::TimeShift::Mode::Delta;
+            preset_shift.hours = 2;
+            preset.time_shift = preset_shift;
+            page.apply_rules(preset);
+            pump(160);
+            const auto ex_preset = current_overrides();
+            const auto preset_ok = [](const std::optional<pp::MetadataOverride> &ov) {
+                return ov.has_value() && ov->time_shift.has_value() && ov->time_shift->hours == 2;
+            };
+            sel_expect("preset-apply",
+                       ex_preset.size() == 2 && preset_ok(ex_preset.at(0)) &&
+                           preset_ok(ex_preset.at(1)) && hours->value() == 2 && !hours->is_mixed(),
+                       QStringLiteral("a=%1 b=%2 hours=%3 mixed=%4")
+                           .arg(ex_preset.size() > 0 && preset_ok(ex_preset.at(0)) ? 1 : 0)
+                           .arg(ex_preset.size() > 1 && preset_ok(ex_preset.at(1)) ? 1 : 0)
+                           .arg(hours->value())
+                           .arg(hours->is_mixed() ? 1 : 0));
+        }
+        std::printf("UI-SMOKE meta-selection: checked=%d bad=%d %s\n", sel_checked,
+                    int(sel_bad.size()), qUtf8Printable(sel_bad.join(QLatin1Char(' '))));
+        std::fflush(stdout);
+        if (!sel_bad.isEmpty()) {
+            smoke_fail(
+                MainWindow::tr("选择项级编辑/混合值/CreatorTool/自动海拔不符（M13 C2/C3/C5）：%1")
+                    .arg(sel_bad.join(QLatin1Char(' '))));
+        }
+    }
 
     page.hide();
     pump(80);

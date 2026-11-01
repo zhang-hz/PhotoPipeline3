@@ -16,15 +16,18 @@
 #include "ui/icons.h"            // RatingStars 形 = icons 库 star 路径（单源）
 #include "ui/meta_map_overlay.h" // MapOverlayController（B6：覆盖层状态聚合）
 #include "ui/meta_probe.h"       // ProbeSnapshot（FollowModel::probes 元素类型）
-#include "ui/meta_rules.h"       // RuleInputs + 规则装配声明面（B3）
+#include "ui/meta_rules.h"       // RuleInputs + 规则装配声明面（B3）+ M13 选择项编辑声明面
+#include "ui/meta_selection.h"   // M13 C2：EditField / 聚合纯函数面
 #include "ui/page_meta.h"        // MetaSelectionItem（FollowModel::items 元素类型）
 #include "ui/theme.h"            // theme::Tokens（MetaState 值成员）
 #include <QApplication>          // theme.h 要求包含者先引入
 #include <QHash>
+#include <QLineEdit> // M13：DeltaSpin::set_mixed 的 inline 实现需要完整类型
 #include <QList>
 #include <QObject>
 #include <QPainter>
 #include <QPainterPath>
+#include <QSet>
 #include <QSize>
 #include <QSpinBox>
 #include <QString>
@@ -53,6 +56,9 @@ class QVBoxLayout;
 
 namespace pp::map {
 class MapWidget;
+// M13（0.4.1）/ C5：选点自动海拔客户端（实现 = mapwidget/elevation.{h,cpp}，ui-gps 所有）。
+// 只在 page_meta.cpp 的 build_ui 构造（parent = 页面）并交给 GPS 卡 request()；本头只持指针。
+class ElevationClient;
 } // namespace pp::map
 
 namespace pp::ui {
@@ -163,6 +169,12 @@ constexpr const char *kPrecisionSuspectText = QT_TR_NOOP("该区域坐标精度�
 constexpr const char *kNoSelectionText = QT_TR_NOOP("未选择文件，请在左侧列表选择照片");
 constexpr const char *kNoKeywordsText = QT_TR_NOOP("无关键字");
 
+// M13（0.4.1）/ C2.3：「多个值」文本**单源**（mixed 聚合的统一显示文本）。
+// 卡片一律 PageMeta::tr(kMixedValueText)；QSS/探针只认控件动态属性 hook::kMixedProperty。
+// 原提示需求点名「明确显示多个值」—— 所有 mixed 视觉（线输入框 placeholder / spin /
+// 只读标签 / 开关三态 tooltip）都用这一条，避免各卡自造文案。
+constexpr const char *kMixedValueText = QT_TR_NOOP("多个值");
+
 // 单行省略标签（§12-14「全界面禁止文案折行（超长省略号）」；与 mainwindow.cpp 的 ElidedLabel
 // 同口径）
 // ---------------------------------------------------------------------------
@@ -222,11 +234,49 @@ public:
         setValue(0);
     }
 
+    // M13 C2.3：多选 mixed 态 —— 显示文本「多个值」，内部值保持不变；用户 stepBy/键入时
+    // 先清 mixed 再按普通 spin 走（不改既有 checked/数值语义，常态 paint/文本逐字不变）。
+    void set_mixed(bool mixed) {
+        if (mixed_ == mixed) {
+            return;
+        }
+        mixed_ = mixed;
+        // QSpinBox 的行编辑文本只在 setValue/解释文本时重排 —— mixed 切换必须显式重写，
+        // 否则 text() 仍是旧值（--ui-smoke 的 mixed-spin 断言按 text() 读「多个值」）。
+        if (lineEdit() != nullptr) {
+            lineEdit()->setText(textFromValue(value()));
+        }
+        update();
+    }
+    bool is_mixed() const { return mixed_; }
+    // mixed 时文本恒为「多个值」（PageMeta::tr 上下文；textFromValue 是 const → 用
+    // QCoreApplication）
+    QString mixed_text() const;
+
 protected:
     QString textFromValue(int value) const override {
+        if (mixed_) {
+            return mixed_text();
+        }
         return (value < 0 ? QStringLiteral("−") : QStringLiteral("+")) +
                QString::number(std::abs(value));
     }
+    // 用户交互（箭头/滚轮/键入）= 明确意图 → 先退出 mixed 显示
+    void stepBy(int steps) override {
+        if (mixed_) {
+            set_mixed(false);
+        }
+        QSpinBox::stepBy(steps);
+    }
+    void keyPressEvent(QKeyEvent *event) override {
+        if (mixed_) {
+            set_mixed(false);
+        }
+        QSpinBox::keyPressEvent(event);
+    }
+
+private:
+    bool mixed_ = false;
 };
 
 // 评级（§7.1「评级(★)」；A8 零字形 → **矢量星**）：形 = icons 库的 star 路径（单源），
@@ -410,6 +460,14 @@ struct GpsCardState {
     QLineEdit *alt = nullptr;
     QLineEdit *dir = nullptr;
     QLineEdit *ts = nullptr;
+    // —— M13（0.4.1）/ C5 加性：选点自动海拔（ui-gps 卡片实现消费；构造归 page_meta.cpp）——
+    formkit::SwitchControl *auto_elev = nullptr; // 「自动获取海拔」开关（默认开、不持久化）
+    bool elev_auto_filled = false;               // 上次 alt 回填来自本功能（手动改 alt 后不再覆盖）
+    pp::map::ElevationClient *elev = nullptr;    // 异步海拔客户端（单在途 + 序号丢弃陈旧响应）
+    int elev_seq = 0;                            // 请求序号（响应回填前校验坐标/序号）
+    QTimer *elev_debounce = nullptr;             // 选点海拔 400ms 去抖（ui-gps 的 gps_wiring 构建）
+    double elev_auto_alt = 0.0;                  // 上次自动回填的海拔值（用于"仅覆盖自动回填"判据）
+    QStringList elev_captured; // 发海拔请求时的选中路径快照（响应回来校验同一批选择）
 };
 
 // —— 卡片 ④ 隐私与文件时间 ——
@@ -436,6 +494,19 @@ struct PrivacyCardState {
     QPushButton *add_tag = nullptr;
     QLabel *exc_label = nullptr;
     QListWidget *exc_list = nullptr;
+    // —— M13（0.4.1）/ C3 加性：去除 XMP CreatorTool 开关（ui-gps 构建；
+    //    objectName = objname::kCreatorToolStrip / 钩子 = hook::kCreatorTool）——
+    formkit::SwitchControl *creator_tool = nullptr;
+};
+
+// —— M13（0.4.1）/ C2：选择项级编辑的 UI 装载状态 ——
+// 注意：**唯一可写真源仍是 follow.items[i].exception**（MetadataOverride）；本结构只承载
+// 「这次装载的展示面/交互基线」，不可作为第二份可写入状态（C2.0 纪律）。
+struct SelectionState {
+    bool has_selection = false;   // set_selection(items, from_selection) 的 from_selection
+    int mixed_fields = 0;         // 最近一次装载的 mixed 字段数（钩子 hook::kMixedFields 读数）
+    QStringList tags_baseline;    // 装载时存在的 tag 行键（删除行 = 逐文件移除该键）
+    QSet<QLineEdit *> tags_mixed; // mixed 值行（值未编辑前不参与 Tags 整表提交）
 };
 
 // R-177（B1）：上帝结构拆为 Core + FollowModel + 四卡子聚合（上方六个具名聚合；
@@ -449,6 +520,8 @@ public:
     TimeCardState time;
     GpsCardState gps;
     PrivacyCardState privacy;
+    // M13（0.4.1）/ C2：选择项级编辑装载状态
+    SelectionState selection;
     // ---- M6-T12/13 加性：地图覆盖层 + 大地图（B6：状态归 MapOverlayController）----
     MapOverlayController overlay;
 
@@ -559,7 +632,10 @@ void refresh_info_card(MetaState *st, const std::vector<pp::EffectivePreview> &p
 void refresh_time_section(MetaState *st, const std::vector<pp::EffectivePreview> &previews);
 void refresh_time_inputs(MetaState *st);
 void refresh_privacy_inputs(MetaState *st);
-void refresh_gps_section(MetaState *st, const pp::EffectivePreview *preview);
+// M13（0.4.1）加性：多选聚合（uniform 才落钉/显示单值；mixed → 「多个值」且不落钉）。
+// 签名自 0.4.0 的 `const pp::EffectivePreview *` 变更（契约 = docs/m13-tasks.md C2.5；
+// 实现归 ui-gps 的 meta_card_gps.cpp，调用点 = meta_state.cpp 的 refresh_effective）。
+void refresh_gps_section(MetaState *st, const std::vector<pp::EffectivePreview> &previews);
 void refresh_gps_inputs(MetaState *st);
 void refresh_gps_warning(MetaState *st);
 void refresh_keywords(MetaState *st);

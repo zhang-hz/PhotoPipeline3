@@ -102,9 +102,10 @@
 #include "ui/meta_probe_context.h" // R-182/R-258：钩子/词表单源
 #include "ui/meta_state.h"         // B.1（M7-R2.1-F2）：拆分共享内核（MetaState/常量/构造器）
 
-#include "ui/formkit.h"    // M5-T7：全部表单行走 formkit 行构造器（R1–R4 构造层强制）
-#include "ui/icons.h"      // 折叠插入符/删除钮一律矢量图标（C3）
-#include "ui/map_dialog.h" // M6-T13：大地图对话框（同一 map 控件的重挂载宿主）
+#include "mapwidget/elevation.h" // M13/C5：选点自动海拔客户端（ui-gps 提供实现）
+#include "ui/formkit.h"          // M5-T7：全部表单行走 formkit 行构造器（R1–R4 构造层强制）
+#include "ui/icons.h"            // 折叠插入符/删除钮一律矢量图标（C3）
+#include "ui/map_dialog.h"       // M6-T13：大地图对话框（同一 map 控件的重挂载宿主）
 
 #include <QAbstractSpinBox>
 #include <QActionGroup>
@@ -169,9 +170,17 @@ void build_ui(PageMeta *page) {
     page->setProperty(kStateProperty, QVariant::fromValue(static_cast<QObject *>(st)));
     st->follow.probe = new ProbeScanner(st);
     // B4（R-181）：扫描发起/回填的**唯一** connect（同线程 direct = 既有 refresh_effective
-    // 调用序逐位不变）。
-    QObject::connect(st->follow.probe, &ProbeScanner::changed, st, [st] { refresh_effective(st); });
+    // 调用序逐位不变）。M13/C2.3 加性：probe 到位后按「override 优先 / 源文件读回兜底」
+    // 重装 GPS 输入面（选择变化瞬间源 GPS 未知；装载函数内部 LoadingGuard 抑制提交）。
+    QObject::connect(st->follow.probe, &ProbeScanner::changed, st, [st] {
+        refresh_effective(st);
+        load_gps_inputs_from_selection(st);
+        refresh_gps_inputs(st);
+    });
     st->core.tokens = theme::tokens(theme::preferred_theme_mode());
+    // M13/C5 加性：选点自动海拔客户端（ui-gps 的 gps_wiring 在其 build 期 set_callbacks；
+    // 必须在 build_gps_card **之前**构造 —— 契约 docs/m13-tasks.md C5）。
+    st->gps.elev = new pp::map::ElevationClient(st->core.page);
 
     auto *outer = new QVBoxLayout(page);
     outer->setContentsMargins(0, 0, 0, 0);
@@ -237,9 +246,13 @@ using namespace meta;
 
 PageMeta::PageMeta(QWidget *parent) : QWidget(parent) { build_ui(this); }
 
-pp::BatchRules PageMeta::rules() const { return build_rules(state_of(this)); }
+// M13（0.4.1）/ C2.6 语义变更（签名不变）：
+//   rules() = 当前选择项编辑状态的聚合快照（uniform 字段入规则；预设保存用）；
+//   apply_rules(r) = 把预设 r 替换式转成**选中文件**的 MetadataOverride（就地更新快照、
+//   refresh_all、并同步发 selection_edits_committed 供宿主写模型）。
+pp::BatchRules PageMeta::rules() const { return rules_from_selection_state(state_of(this)); }
 
-void PageMeta::apply_rules(const pp::BatchRules &r) { apply_state(state_of(this), r); }
+void PageMeta::apply_rules(const pp::BatchRules &r) { apply_preset_rules(state_of(this), r); }
 
 void PageMeta::set_batch_files(const QStringList &paths) {
     MetaState *st = state_of(this);
@@ -251,8 +264,9 @@ void PageMeta::set_selection(const QList<MetaSelectionItem> &items, bool from_se
     MetaState *st = state_of(this);
     st->follow.items = items;
     st->follow.from_selection = from_selection;
-    request_probe_scan(st); // 只对跟随项取 probe（异步 + 序号守卫）
-    refresh_all(st);
+    request_probe_scan(st);         // 只对跟随项取 probe（异步 + 序号守卫）
+    load_inputs_from_selection(st); // M13/C2.3：按选择项聚合装载输入面（mixed 视觉/三态）
+    refresh_all(st);                // 生效值与卡片可见性（probe 在途 → 到位后再刷）
 }
 
 void PageMeta::set_selected_files(const QStringList &paths) {
@@ -267,6 +281,9 @@ void PageMeta::set_selected_files(const QStringList &paths) {
 
 void PageMeta::set_exception_summary(const QStringList &paths) {
     MetaState *st = state_of(this);
+    // M13（0.4.1）/ C2.5 语义注释（UI 文案保持不变）：本列表/计数自本轮起 = **带元数据修改的
+    // 文件**（= FileEntry.exception 非空；旧口径「例外」相对全局批量规则，现无全局规则），
+    // 即"N 个文件带元数据修改"。清除入口 = 清空该文件全部元数据修改（既有行为不变）。
     st->privacy.exc_list->clear();
     for (const QString &path : paths) {
         st->privacy.exc_list->addItem(path);

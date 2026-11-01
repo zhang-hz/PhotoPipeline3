@@ -297,11 +297,18 @@ public:
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override { return sizeHint(); }
 
+    // M13（0.4.1）/ C2.3 加性：多选部分开启的三态视觉。partial 只影响**画法**（中位钮 +
+    // 强调描边），不改既有 checked 语义（isChecked/toggled/键盘/无障碍行为逐字不变；
+    // partial 时由调用方决定 checked 的初始值）。partial=false → 恢复既有双态绘制。
+    void set_partial(bool partial);
+    bool is_partial() const { return partial_; }
+
 protected:
     void paintEvent(QPaintEvent *event) override;
 
 private:
     theme::Tokens tokens_ = default_tokens();
+    bool partial_ = false;
 };
 
 // 分段控件（互斥模式唯一形态；R4 高 24 r3 段宽 88 等宽）：选中段填充 acc，选中/悬停

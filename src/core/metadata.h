@@ -9,6 +9,13 @@
 //   单测纯函数族）签名与语义均不变 → 维持 PP-FROZEN 只读。
 //   注：`build_plan()` 的函数体在 T8 内**内部重构**（抽共用纯函数 effective_rules/
 //   shifted_exif_time，供 preview_effective 复用），签名、语义、警告与写路径矩阵零改动。
+// PP-FROZEN(0.3.0) 加性（M13）—— 仅结构体**末尾追加**字段（§5.1「加性 + 追认」）：
+//   契约 = docs/m13-tasks.md C1/C3/C4；追认 = docs/m13-adjudications.md A1（metadata.h）/
+//   A2（page_meta.h）。 追加面：MetadataOverride
+//   选择项级三态字段（time_enabled/gps_enabled/privacy_enabled/
+//   sync_mtime/modernize_exif/strip_creator_tool）、BatchRules.strip_creator_tool、
+//   MetadataPlan.sync_mtime、EffectivePreview.xmp_date_created。
+//   既有字段/签名/默认行为零改动（缺省值 = 旧行为逐字不变）。
 #pragma once
 #include "core/types.h"
 #include <cstdint>
@@ -70,6 +77,13 @@ struct BatchRules {
     // 2026-10 追加：可选「补全现代 EXIF」——只补可从已有事实推导的字段（ExifVersion /
     // 像素尺寸 / GPS 基准与高度方向基准），不编造拍摄时间、镜头、位置等未知信息。
     bool modernize_exif = false;
+    // —— M13 加性追加（**数据成员末位**；Contract: docs/m13-tasks.md C1 +
+    //    docs/m13-adjudications.md A1（metadata.h）/ A2（page_meta.h））——
+    // 「剥离 CreatorTool」（xmp:CreatorTool / 软件署名）：build_plan 从 XMP 删除
+    // Xmp.xmp.CreatorTool（找不到静默跳过、不产生 warning）。缺省 false = 既有调用点/
+    // 旧会话零迁移零变化（不设即旧行为逐字不变）；M13 起 UI 不再产生 BatchRules，
+    // 本字段作为预设/兼容面保留。
+    bool strip_creator_tool = false;
     bool is_noop() const;
 };
 
@@ -80,6 +94,23 @@ struct MetadataOverride {      // 单文件例外（三态：继承/覆盖/清�
     bool gps_clear = false;
     std::vector<TagEdit> exif_edits, xmp_edits;
     std::optional<bool> strip_privacy;
+    // —— M13 加性追加（**数据成员末位**；Contract: docs/m13-tasks.md C1 +
+    //    docs/m13-adjudications.md A1（metadata.h）/ A2（page_meta.h））——
+    // 选择项级编辑三态（nullopt = 继承批量规则；true/false = 该文件显式覆盖）。
+    // M13 起元数据页改为「选择项级编辑」：UI 只写本结构，RunConfig.rules 传默认空
+    // BatchRules；缺省 nullopt 时逐字保持旧行为。合成语义（metadata.cpp effective_rules()）：
+    //   * time_enabled == false  → 丢弃生效时间偏移（eff.time_shift.reset()）
+    //   * gps_enabled == false   → 丢弃生效 GPS（eff.gps.reset() + gps_clear=false）
+    //   * privacy_enabled == false → strip_privacy / modernize_exif / sync_mtime /
+    //     strip_creator_tool 全部关闭
+    //   * sync_mtime / modernize_exif / strip_creator_tool 的显式值覆盖生效同名项
+    // 标签编辑列表（exif_edits/xmp_edits，既有字段）不在卡片开关门控内。
+    std::optional<bool> time_enabled;
+    std::optional<bool> gps_enabled;
+    std::optional<bool> privacy_enabled;
+    std::optional<bool> sync_mtime;
+    std::optional<bool> modernize_exif;
+    std::optional<bool> strip_creator_tool;
 };
 
 struct MetadataPlan {
@@ -91,6 +122,11 @@ struct MetadataPlan {
     // 第二轮 X-METADATA-ONLY-03：隐私剥除除了清 EXIF/XMP，还要清 IPTC(APP13)/COM。
     // 默认 false；build_plan 在 strip_privacy 时置 true，写路径据此 clearIptcData/clearComment。
     bool strip_privacy = false;
+    // —— M13 加性追加（**数据成员末位**；Contract: docs/m13-tasks.md C1/C3 +
+    //    docs/m13-adjudications.md A1（metadata.h）/ A2（page_meta.h））——
+    // 生效的「同步文件 mtime」开关（= effective_rules().sync_mtime，per-file 例外可覆盖）。
+    // pipeline 用它替代 cfg.rules.sync_mtime：无例外时与规则同值 → 行为零变化。
+    bool sync_mtime = false;
 };
 
 // effective = 源 ⊕ BatchRules ⊕ 例外（例外逐项覆盖；ignore_batch 先清空批量规则）
@@ -162,6 +198,12 @@ struct EffectivePreview {
     EffectiveField<std::optional<DateTimeVal>> xmp_create_date, xmp_modify_date;
     EffectiveField<std::optional<std::string>> offset_time, offset_time_original,
         offset_time_digitized;
+    // —— M13 加性追加（**末尾**；Contract: docs/m13-tasks.md C4 +
+    //    docs/m13-adjudications.md A1（metadata.h）/ A2（page_meta.h））——
+    // photoshop:DateCreated（Xmp.photoshop.DateCreated）显示面：与 xmp:CreateDate/ModifyDate
+    // 走同一纯函数（shifted_xmp_time）参与 Δ/时区语义改写；不可解析 → effective = original
+    // （写路径同样跳过写入，两条路径同结论）。
+    EffectiveField<std::optional<DateTimeVal>> xmp_date_created;
 };
 EffectivePreview preview_effective(const SourceProbe &probe, const BatchRules &rules,
                                    const std::optional<MetadataOverride> &ex);

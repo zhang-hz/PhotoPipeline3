@@ -1024,6 +1024,9 @@ struct Session {
     // M6-T11（§5.2 R5）：图层档记忆的写回接线只接一次（R-256：门槛归 bind_map_layer_writeback()，
     // apply_map_style 幂等、可反复调用）
     bool map_layer_bound = false;
+    // M13（0.4.1）/ C2.4：元数据页选择项编辑 → 模型增量写入期间置位（抑制 exception_changed
+    // 触发的 sync_selection 全量重装 —— 那会重置输入控件/光标，C2.1 明确禁止）。
+    bool applying_selection_edits = false;
 };
 
 // 探针（PP_BUILD_DEV）：--ui-smoke 自检面
@@ -1067,6 +1070,9 @@ struct MainWindow::Impl : mw_cabin::Chrome,
     MetaSelectionItem meta_selection_item(const FileRow &row); // M4-T12：跟随项快照（零 IO 探测）
     void sync_exceptions();
     void clear_exception(const QString &path);
+    // M13（0.4.1）/ C2.4：PageMeta::selection_edits_committed → 按路径找模型行写
+    // set_exception（path→row 循环查找，口径同 clear_exception）。
+    void on_meta_selection_edits(const QList<MetaSelectionEdit> &edits);
     void remove_selected();
     // R-254（M7-R2.1-F3）：选中索引 → 源行号（两级代理映射 + 去重，首次出现序）——
     // 原 sync_selection 与 remove_selected 各写一份的「判据」收敛为本单点；

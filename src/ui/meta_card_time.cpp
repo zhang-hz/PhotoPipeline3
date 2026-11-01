@@ -182,8 +182,10 @@ void refresh_time_section(MetaState *st, const std::vector<pp::EffectivePreview>
 // ---------------------------------------------------------------------------
 
 void refresh_time_inputs(MetaState *st) {
-    // UX-5：卡开关关 = 整卡不参与规则 → 卡内规则控件置灰（参数保留，恢复开关即回来）
-    const bool card_on = st->time.time_enable == nullptr || st->time.time_enable->isChecked();
+    // UX-5：卡开关关 = 整卡不参与规则 → 卡内规则控件置灰（参数保留，恢复开关即回来）。
+    // M13/C2.3：partial（选择集部分文件开启）按"可用"处理（可批量编辑部分开启的文件）。
+    const bool card_on = st->time.time_enable == nullptr || st->time.time_enable->isChecked() ||
+                         st->time.time_enable->is_partial();
     // seg 选中的那一组恒可见，另一组隐藏
     const bool delta_mode = st->time.seg->current_index() == 0;
     st->time.delta_row->setVisible(delta_mode);
@@ -192,14 +194,22 @@ void refresh_time_inputs(MetaState *st) {
     st->time.seg->setEnabled(card_on);
     for (QSpinBox *spin : st->time.delta) {
         spin->setEnabled(card_on);
-        theme::set_mod(spin, spin->value() != 0);
+        // M13：mixed 用 DeltaSpin「多个值」+ ppMixed 虚线视觉，不再叠 .mod 常态强调框
+        const auto *delta = static_cast<const DeltaSpin *>(spin);
+        if (!delta->is_mixed()) {
+            theme::set_mod(spin, spin->value() != 0);
+        }
     }
     const bool tz_changed =
         st->time.tz_from->currentData().toInt() != st->time.tz_to->currentData().toInt();
     st->time.tz_from->setEnabled(card_on);
     st->time.tz_to->setEnabled(card_on);
-    theme::set_mod(st->time.tz_from, tz_changed);
-    theme::set_mod(st->time.tz_to, tz_changed);
+    const bool mixed_tz = st->time.tz_from->property(hook::kMixedProperty).toBool() ||
+                          st->time.tz_to->property(hook::kMixedProperty).toBool();
+    if (!mixed_tz) {
+        theme::set_mod(st->time.tz_from, tz_changed);
+        theme::set_mod(st->time.tz_to, tz_changed);
+    }
 }
 
 QWidget *build_time_card(MetaState *st, QWidget *parent) {
@@ -364,28 +374,29 @@ QWidget *build_time_card(MetaState *st, QWidget *parent) {
         bv->addWidget(st->time.multi_host);
     }
 
-    // ---- 连接（任一控件变化 → 通知 + 生效值刷新）----
-    const auto on_time_changed = [st] {
+    // ---- 连接（M13/C2.4：每个控件变化 → 对应 EditField 字段级提交）----
+    // commit_field 内部：读控件 → 逐选中文件字段级合并 → 就地更新 follow.items → 发
+    // selection_edits_committed（MainWindow 写模型）→ 只刷新生效值/聚合（不 reload 控件）。
+    const auto commit = [st](EditField field) {
         if (st->core.loading) {
             return;
         }
-        refresh_time_inputs(st);
-        refresh_effective(st);
-        notify_rules_changed(st);
+        commit_field(st, field);
     };
     QObject::connect(st->time.seg, &formkit::SegmentedControl::current_changed, st,
-                     [on_time_changed](int) { on_time_changed(); });
-    // UX-5：卡头「启用」开关 —— 关 = 整卡不参与规则（置灰 + build_rules 跳过）
+                     [commit](int) { commit(EditField::TimeMode); });
+    // 卡头开关三态（on/off/partial）：点击 → 该卡参与/退出（false = 清除该卡全部字段）
     QObject::connect(st->time.time_enable, &formkit::SwitchControl::toggled, st,
-                     [on_time_changed](bool) { on_time_changed(); });
-    for (QSpinBox *spin : st->time.delta) {
-        QObject::connect(spin, QOverload<int>::of(&QSpinBox::valueChanged), st,
-                         [on_time_changed](int) { on_time_changed(); });
+                     [commit](bool) { commit(EditField::TimeEnable); });
+    for (int i = 0; i < kTimeComponentCount; ++i) {
+        QObject::connect(st->time.delta[std::size_t(i)],
+                         QOverload<int>::of(&QSpinBox::valueChanged), st,
+                         [commit, i](int) { commit(time_component_field(i)); });
     }
-    for (QComboBox *combo : {st->time.tz_from, st->time.tz_to}) {
-        QObject::connect(combo, QOverload<int>::of(&QComboBox::currentIndexChanged), st,
-                         [on_time_changed](int) { on_time_changed(); });
-    }
+    QObject::connect(st->time.tz_from, QOverload<int>::of(&QComboBox::currentIndexChanged), st,
+                     [commit](int) { commit(EditField::TimeTzFrom); });
+    QObject::connect(st->time.tz_to, QOverload<int>::of(&QComboBox::currentIndexChanged), st,
+                     [commit](int) { commit(EditField::TimeTzTo); });
     v->addWidget(body);
     return card;
 }
@@ -398,31 +409,28 @@ contextmenu::TimeCardIntents time_card_intents(MetaState *st) {
         if (st->time.time_enable != nullptr)
             st->time.time_enable->toggle();
     };
-    const auto reset_defaults = [st] {
-        {
-            LoadingGuard guard(st); // R-180：程序化复位不逐控件发 rules_changed（末尾统一发一次）
-            if (st->time.seg != nullptr)
-                st->time.seg->set_current_index(0); // 模式 = Δ 偏移
-            for (QSpinBox *spin : st->time.delta) {
-                if (spin != nullptr)
-                    spin->setValue(0);
-            }
-            if (st->time.tz_from != nullptr)
-                select_timezone(st->time.tz_from, 480);
-            if (st->time.tz_to != nullptr)
-                select_timezone(st->time.tz_to, 480);
+    // M13/C2.6：右键「复位默认值 / 清除规则」= **清除选中文件该卡字段**（commit 卡开关
+    // false：清 time_shift + time_enabled=false），随后重铺输入面（0 / UTC+8 / 三态）。
+    const auto clear_selected = [st] {
+        if (st->core.loading) {
+            return;
         }
-        refresh_time_inputs(st);
-        refresh_effective(st);
-        notify_rules_changed(st);
+        {
+            LoadingGuard guard(st); // 程序化置开关不逐控件发 rules_changed
+            if (st->time.time_enable != nullptr) {
+                st->time.time_enable->setChecked(false);
+            }
+        }
+        commit_field(st, EditField::TimeEnable);
+        load_inputs_from_selection(st);
     };
-    in.reset_defaults = reset_defaults;
-    in.read_from_file = [st] { request_probe_scan(st); };
-    in.clear_rules = [st, reset_defaults] {
-        reset_defaults();
-        if (st->time.time_enable != nullptr && st->time.time_enable->isChecked())
-            st->time.time_enable->toggle(); // 清除规则 = 复位 + 整卡退出规则（build_rules 跳过）
+    in.reset_defaults = clear_selected;
+    in.read_from_file = [st] {
+        // 「从文件读取时间」= 重新取跟随项 probe + 按选择项聚合装载（不产生编辑）
+        request_probe_scan(st);
+        load_inputs_from_selection(st);
     };
+    in.clear_rules = clear_selected;
     return in;
 }
 

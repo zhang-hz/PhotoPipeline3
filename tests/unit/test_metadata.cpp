@@ -1492,6 +1492,133 @@ void test_m7wp1_regressions(const fs::path &tmp) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// M13-C1/C3/C4：选择项级三态（CreatorTool 剥离 / plan.sync_mtime / photoshop:DateCreated 偏移落盘）
+// ---------------------------------------------------------------------------
+void test_m13_c1(const fs::path &tmp) {
+    // ---- CreatorTool 剥离（有/无两态、只删该键、其余 XMP/EXIF 不动、不产生 warning）----
+    pp::SourceMeta src;
+    src.xmp["Xmp.xmp.CreatorTool"] = std::string("Adobe Photoshop 25.0");
+    src.xmp["Xmp.dc.title"] = std::string("keep-title");
+    src.xmp["Xmp.photoshop.City"] = std::string("Shanghai");
+    src.exif["Exif.Image.Software"] = std::string("SomeSoftware 1.0");
+
+    pp::BatchRules rules;
+    rules.strip_creator_tool = true;
+    const pp::MetadataPlan p = pp::build_plan(src, rules, std::nullopt);
+    check(!has_xmp(p.xmp, "Xmp.xmp.CreatorTool"), "m13/creator-tool/removed",
+          "CreatorTool survived the strip");
+    check(xmp_str(p.xmp, "Xmp.dc.title").find("keep-title") != std::string::npos,
+          "m13/creator-tool/other-xmp-kept", show(xmp_str(p.xmp, "Xmp.dc.title")));
+    check(xmp_str(p.xmp, "Xmp.photoshop.City") == "Shanghai",
+          "m13/creator-tool/photoshop-other-kept", show(xmp_str(p.xmp, "Xmp.photoshop.City")));
+    check(exif_str(p.exif, "Exif.Image.Software") == "SomeSoftware 1.0",
+          "m13/creator-tool/exif-software-untouched",
+          "the strip only names XMP CreatorTool; EXIF Software must stay");
+    check(p.warnings.empty(), "m13/creator-tool/no-warning",
+          "the strip is silent on the plan warnings channel");
+
+    // 不存在该键 → 静默跳过（无 warning、其余内容逐字不动）
+    pp::SourceMeta no_tool = src;
+    auto tool_it = no_tool.xmp.findKey(Exiv2::XmpKey("Xmp.xmp.CreatorTool"));
+    if (tool_it != no_tool.xmp.end())
+        no_tool.xmp.erase(tool_it);
+    const pp::MetadataPlan q = pp::build_plan(no_tool, rules, std::nullopt);
+    check(!has_xmp(q.xmp, "Xmp.xmp.CreatorTool") && q.warnings.empty(),
+          "m13/creator-tool/absent-silent", "an absent key must be a silent no-op");
+    check(xmp_str(q.xmp, "Xmp.dc.title").find("keep-title") != std::string::npos,
+          "m13/creator-tool/absent-other-kept", show(xmp_str(q.xmp, "Xmp.dc.title")));
+
+    // 默认 false = 零变化；例外三态覆盖批量；privacy_enabled=false 关闭剥离
+    check(has_xmp(pp::build_plan(src, pp::BatchRules{}, std::nullopt).xmp, "Xmp.xmp.CreatorTool"),
+          "m13/creator-tool/default-kept", "default false must keep CreatorTool");
+    pp::MetadataOverride off;
+    off.strip_creator_tool = false;
+    check(has_xmp(pp::build_plan(src, rules, off).xmp, "Xmp.xmp.CreatorTool"),
+          "m13/creator-tool/exception-false", "the exception must switch the batch strip off");
+    pp::MetadataOverride on;
+    on.strip_creator_tool = true;
+    check(!has_xmp(pp::build_plan(src, pp::BatchRules{}, on).xmp, "Xmp.xmp.CreatorTool"),
+          "m13/creator-tool/exception-true", "the exception must switch the strip on");
+    pp::MetadataOverride priv_off;
+    priv_off.privacy_enabled = false;
+    check(has_xmp(pp::build_plan(src, rules, priv_off).xmp, "Xmp.xmp.CreatorTool"),
+          "m13/creator-tool/privacy-gated", "privacy card off must drop the strip");
+    pp::BatchRules only_tool;
+    only_tool.strip_creator_tool = true;
+    check(!only_tool.is_noop(), "m13/creator-tool/is-noop",
+          "strip_creator_tool must count as a rule (C1.2)");
+
+    // ---- plan.sync_mtime 随例外三态变化（C1.3）----
+    {
+        const pp::SourceMeta meta = pp::read_metadata(corpus() / "meta" / "exif_full.jpg");
+        pp::BatchRules r;
+        check(!pp::build_plan(meta, r, std::nullopt).sync_mtime,
+              "m13/plan-sync-mtime/default-false", "plan.sync_mtime must default false");
+        r.sync_mtime = true;
+        check(pp::build_plan(meta, r, std::nullopt).sync_mtime, "m13/plan-sync-mtime/batch-true",
+              "batch sync_mtime must flow into the plan");
+        pp::MetadataOverride e_off;
+        e_off.sync_mtime = false;
+        check(!pp::build_plan(meta, r, e_off).sync_mtime, "m13/plan-sync-mtime/override-false",
+              "the exception must clear the batch value");
+        pp::MetadataOverride e_on;
+        e_on.sync_mtime = true;
+        check(pp::build_plan(meta, pp::BatchRules{}, e_on).sync_mtime,
+              "m13/plan-sync-mtime/override-true", "the exception must set the value");
+        pp::MetadataOverride ig;
+        ig.ignore_batch = true;
+        check(!pp::build_plan(meta, r, ig).sync_mtime, "m13/plan-sync-mtime/ignore-batch",
+              "ignore_batch must drop the batch value");
+        pp::MetadataOverride priv;
+        priv.privacy_enabled = false;
+        check(!pp::build_plan(meta, r, priv).sync_mtime, "m13/plan-sync-mtime/privacy-gated",
+              "privacy card off must drop sync_mtime");
+    }
+
+    // ---- photoshop:DateCreated 随 Δ 偏移并真落盘（C1.5/C4）----
+    {
+        pp::SourceMeta photo = pp::read_metadata(corpus() / "meta" / "exif_full.jpg");
+        photo.xmp["Xmp.photoshop.DateCreated"] = std::string("2024-03-01T10:00:00+08:00");
+        pp::BatchRules r;
+        r.time_shift = delta(0, 0, 0, 1, 0, 0); // +1h
+        const pp::MetadataPlan plan = pp::build_plan(photo, r, std::nullopt);
+        check(xmp_str(plan.xmp, "Xmp.photoshop.DateCreated") == "2024-03-01T11:00:00+08:00",
+              "m13/date-created/plan-shifted",
+              show(xmp_str(plan.xmp, "Xmp.photoshop.DateCreated")));
+        // 偏移后的原值仍在 plan 的其它时间键上照常生效（同一函数路径）
+        check(exif_str(plan.exif, "Exif.Photo.DateTimeOriginal") == "2024:03:01 11:00:00",
+              "m13/date-created/exif-also-shifted",
+              show(exif_str(plan.exif, "Exif.Photo.DateTimeOriginal")));
+
+        // 真落盘：写回真实 JPEG 容器再读回（Exiv2 对 photoshop:DateCreated 的写支持取证）
+        const fs::path out = tmp / "m13-date-created.jpg";
+        check(copy_fixture(corpus() / "meta" / "exif_full.jpg", out), "m13/date-created/copy",
+              out.string());
+        const std::string err = pp::write_metadata_exiv2(out, plan, pp::make_payloads(plan));
+        check(err.empty(), "m13/date-created/write", err);
+        const pp::SourceMeta back = pp::read_metadata(out);
+        check(back.error.empty(), "m13/date-created/readback", back.error);
+        check(xmp_str(back.xmp, "Xmp.photoshop.DateCreated") == "2024-03-01T11:00:00+08:00",
+              "m13/date-created/landed", show(xmp_str(back.xmp, "Xmp.photoshop.DateCreated")));
+
+        // 无规则 = 零变化（原值原样保留）
+        const pp::MetadataPlan plain = pp::build_plan(photo, pp::BatchRules{}, std::nullopt);
+        check(xmp_str(plain.xmp, "Xmp.photoshop.DateCreated") == "2024-03-01T10:00:00+08:00",
+              "m13/date-created/default-kept",
+              show(xmp_str(plain.xmp, "Xmp.photoshop.DateCreated")));
+
+        // 不可解析：跳过写入（原串保留），不产生 warning（键存在即"有时字段"）
+        photo.xmp["Xmp.photoshop.DateCreated"] = std::string("2024-03-01");
+        const pp::MetadataPlan bad = pp::build_plan(photo, r, std::nullopt);
+        check(xmp_str(bad.xmp, "Xmp.photoshop.DateCreated") == "2024-03-01",
+              "m13/date-created/unparsable-kept",
+              show(xmp_str(bad.xmp, "Xmp.photoshop.DateCreated")));
+        check(bad.warnings.empty(), "m13/date-created/unparsable-silent",
+              "an unparsable DateCreated must not add a plan warning");
+    }
+}
+
 void test_makernote(const fs::path &tmp) {
     const fs::path src = corpus() / "meta" / "exif_full.jpg";
     const fs::path out = tmp / "makernote.jpg";
@@ -1673,6 +1800,7 @@ int main() {
     test_makernote(tmp);
     test_mtime(tmp);
     test_m7wp1_regressions(tmp);
+    test_m13_c1(tmp);               // M13 C1/C3/C4（CreatorTool / plan.sync_mtime / DateCreated）
     test_no_surgery_fast_path(tmp); // M10 / W1-T2b（C9 无手术快路径）
 
     if (g_failed == 0) {

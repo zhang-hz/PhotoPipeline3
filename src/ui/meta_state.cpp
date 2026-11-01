@@ -19,6 +19,12 @@
 
 namespace pp::ui::meta {
 
+// M13（0.4.1）/ C2.3：DeltaSpin 的 mixed 文本（tr 上下文 = PageMeta；textFromValue 为 const，
+// 故取 QCoreApplication::translate 直接查表，文案单源 = meta_state.h 的 kMixedValueText）。
+QString DeltaSpin::mixed_text() const {
+    return QCoreApplication::translate("PageMeta", kMixedValueText);
+}
+
 MetaState *state_of(const PageMeta *page) {
     // R-177（B1）：动态属性锚的**类型显式化** —— qobject_cast（MetaState 带 Q_OBJECT）替代
     // 裸 static_cast；属性未挂 = nullptr（与既有空态一致），类型不符 = 编程错误（Q_ASSERT 硬线）。
@@ -262,17 +268,19 @@ QString follow_hint(const MetaState *st) {
 
 void refresh_effective(MetaState *st) {
     st->info.info_hint->set_full_text(follow_hint(st));
-    // 时间卡范围胶囊（mockup「影响 12 / 24」的语义位）：页面知道的只有批内文件数，除数/被除数
-    // 同源 → 不编造"N / M"。
-    st->time.time_pill->setText(PageMeta::tr("影响 %1 个文件").arg(st->follow.batch_files.size()));
+    // M13（0.4.1）/ C2.6：「影响 N 个文件」→「已选 N 个文件」（编辑作用域 = 选中项；
+    // 胶囊读数 = 本次编辑会落到的文件数，不再是批内文件数）。
+    st->time.time_pill->setText(PageMeta::tr("已选 %1 个文件").arg(st->follow.items.size()));
     if (st->follow.probe->pending()) {
         refresh_info_card(st, {});
         refresh_time_section(st, {});
-        refresh_gps_section(st, nullptr);
+        refresh_gps_section(st, {});
         refresh_keywords(st);
         return;
     }
-    const pp::BatchRules rules = build_rules(st);
+    // M13（0.4.1）/ C2.1：UI 不再编辑全局 BatchRules —— 生效值唯一合成源 =
+    // preview_effective(probe, BatchRules{}, per_file_override)（显示 = 即将写入）。
+    const pp::BatchRules rules{};
     std::vector<pp::EffectivePreview> previews;
     previews.reserve(st->follow.probes.size());
     for (std::size_t i = 0; i < st->follow.probes.size(); ++i) {
@@ -285,7 +293,7 @@ void refresh_effective(MetaState *st) {
     }
     refresh_info_card(st, previews);
     refresh_time_section(st, previews);
-    refresh_gps_section(st, previews.empty() ? nullptr : &previews.front());
+    refresh_gps_section(st, previews);
     refresh_keywords(st);
 }
 

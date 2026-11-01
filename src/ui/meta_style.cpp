@@ -9,6 +9,7 @@
 #include "mapwidget/mapwidget.h" // MapWidget 完整类型（banner findChildren）
 #include "ui/formkit.h"
 #include "ui/icons.h"
+#include "ui/meta_probe_context.h" // M13：hook::kMixedProperty（mixed 视觉 QSS 锚）
 #include "ui/meta_state.h"
 #include "ui/page_meta.h"
 #include "ui/theme.h"
@@ -36,6 +37,27 @@ QString qss_for(const theme::Tokens &t) {
     qss += theme::card_qss(t);
     qss += theme::field_qss(t);
     qss += theme::page_meta_qss(t);
+    qss += mixed_qss(t); // M13：mixed 视觉（同特异性下覆盖常态盒边/字色）
+    return qss;
+}
+
+// ---------------------------------------------------------------------------
+// M13（0.4.1）/ C2.3：mixed（「多个值」）视觉的单源 QSS
+//   * 锚 = 控件动态属性 hook::kMixedProperty（= "ppMixed"，true = 该字段多选不一致）；
+//   * 线输入框/下拉/数值框 = 强调色**虚线**边框 + 强调字；只读标签 = 强调字；
+//   * 色值一律取 theme.h 令牌（禁硬编码；强调档 = --acc / --acc-bd，与 .mod 同源）。
+//   * 排在 formkit/field/page_meta 规则之后 → 同特异性下覆盖常态盒边/字色。
+// ---------------------------------------------------------------------------
+QString mixed_qss(const theme::Tokens &t) {
+    const QString property = QString::fromLatin1(hook::kMixedProperty);
+    const QString mixed = QStringLiteral("[%1=\"true\"]").arg(property);
+    QString qss;
+    qss += QStringLiteral("QLineEdit%1, QComboBox%1, QSpinBox%1, QDoubleSpinBox%1 "
+                          "{ border: 1px dashed %2; color: %3; }\n")
+               .arg(mixed)
+               .arg(theme::css_color(t.accent_bd))
+               .arg(theme::css_color(t.accent));
+    qss += QStringLiteral("QLabel%1 { color: %2; }\n").arg(mixed).arg(theme::css_color(t.accent));
     return qss;
 }
 

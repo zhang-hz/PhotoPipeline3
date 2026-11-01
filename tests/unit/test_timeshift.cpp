@@ -25,6 +25,52 @@ void check(bool ok, const std::string &case_name, const std::string &detail) {
 
 std::string show(const std::string &s) { return "'" + s + "'"; }
 
+// M13-C4：photoshop:DateCreated 的偏移走 build_plan()（公开纯函数入口；metadata.cpp 内的
+// ISO-8601 纯函数 shifted_xmp_time 是文件内静态件，由同源对拍间接钉住）。
+std::string plan_date_created(const pp::MetadataPlan &plan) {
+    auto it = plan.xmp.findKey(Exiv2::XmpKey("Xmp.photoshop.DateCreated"));
+    if (it == plan.xmp.end())
+        return {};
+    std::string v = it->toString();
+    while (!v.empty() && v.back() == '\0')
+        v.pop_back();
+    return v;
+}
+
+void expect_xmp_shift(const std::string &in, const pp::TimeShift &s, const std::string &want,
+                      const std::string &case_name) {
+    pp::SourceMeta src;
+    src.xmp["Xmp.photoshop.DateCreated"] = in;
+    pp::BatchRules rules;
+    rules.time_shift = s;
+    const pp::MetadataPlan plan = pp::build_plan(src, rules, std::nullopt);
+    const std::string got = plan_date_created(plan);
+    check(got == want, case_name, "in=" + show(in) + " want=" + show(want) + " got=" + show(got));
+
+    // 显示与写入同源：preview_effective 的 xmp_date_created.effective 必须与 plan 落盘值逐字一致
+    const pp::EffectivePreview pv = pp::preview_effective(src, rules, std::nullopt);
+    const std::string pe = pv.xmp_date_created.effective.has_value()
+                               ? pv.xmp_date_created.effective->value
+                               : std::string();
+    check(pe == got, case_name + "/preview-same-source",
+          "preview=" + show(pe) + " plan=" + show(got));
+}
+
+// 不可解析：写路径跳过写入（值保持原串）、预览 effective=original / changed=false。
+void expect_xmp_skip(const std::string &in, const pp::TimeShift &s, const std::string &case_name) {
+    pp::SourceMeta src;
+    src.xmp["Xmp.photoshop.DateCreated"] = in;
+    pp::BatchRules rules;
+    rules.time_shift = s;
+    const pp::MetadataPlan plan = pp::build_plan(src, rules, std::nullopt);
+    check(plan_date_created(plan) == in, case_name + "/kept",
+          "want=" + show(in) + " got=" + show(plan_date_created(plan)));
+    const pp::EffectivePreview pv = pp::preview_effective(src, rules, std::nullopt);
+    check(pv.xmp_date_created.original.has_value() && pv.xmp_date_created.original->value == in &&
+              pv.xmp_date_created.effective == pv.xmp_date_created.original &&
+              !pv.xmp_date_created.changed,
+          case_name + "/effective-original", "preview effective drifted for an unparsable value");
+}
 pp::TimeShift delta(int years = 0, int months = 0, int days = 0, int hours = 0, int minutes = 0,
                     int seconds = 0) {
     pp::TimeShift s;
@@ -129,6 +175,29 @@ int main() {
         check(ok && got == "2024:03:01 11:00:00", "tz/direct-call",
               "got=" + show(got) + " ok=" + (ok ? "true" : "false"));
     }
+
+    // ------------------------------------------------- M13-C4: photoshop:DateCreated (6+ cases)
+    // ISO-8601 带时区/小数秒形态：Δ 保留原 offset 与小数秒；时区语义改写墙钟与 offset。
+    expect_xmp_shift("2024-03-01T10:00:00+08:00", delta(0, 0, 0, 1, 0), "2024-03-01T11:00:00+08:00",
+                     "date-created/delta-plus-hour");
+    expect_xmp_shift("2024-02-29T23:30:00+08:00", delta(0, 0, 0, 1, 0), "2024-03-01T00:30:00+08:00",
+                     "date-created/delta-cross-day-leap");
+    expect_xmp_shift("2025-01-01T00:30:00Z", delta(0, 0, 0, -1, 0), "2024-12-31T23:30:00Z",
+                     "date-created/delta-cross-year-backward");
+    expect_xmp_shift("2024-03-01T10:00:00.250+08:00", delta(0, 0, 0, 1, 0),
+                     "2024-03-01T11:00:00.250+08:00", "date-created/fraction-preserved");
+    expect_xmp_shift("2024-03-01T10:00:00+08:00", zone(480, 540), "2024-03-01T11:00:00+09:00",
+                     "date-created/tz-rewrites-offset");
+    expect_xmp_shift("2024-03-01T00:30:00+09:00", zone(540, 480), "2024-02-29T23:30:00+08:00",
+                     "date-created/tz-backward-cross-day");
+    // 无 offset 的墙钟：按调用方 from 时区解释，改写后不凭空补 offset
+    expect_xmp_shift("2024-03-01T10:00:00", zone(480, 540), "2024-03-01T11:00:00",
+                     "date-created/tz-no-offset");
+    expect_xmp_shift("2024-03-01T10:00:00+08:00", delta(), "2024-03-01T10:00:00+08:00",
+                     "date-created/noop-kept");
+    // 不可解析：跳过写入 + 预览 effective=original（不猜值、不改串）
+    expect_xmp_skip("2024-03-01", delta(0, 0, 0, 1, 0), "date-created/unparsable-date-only");
+    expect_xmp_skip("not a date", zone(480, 540), "date-created/unparsable-garbage");
 
     // ------------------------------------------------------------- offset_time_string()
     expect_offset(480, "+08:00", "offset/+480");

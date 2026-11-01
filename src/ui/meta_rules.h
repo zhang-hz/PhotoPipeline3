@@ -13,8 +13,10 @@
 #pragma once
 
 #include "core/metadata.h"
+#include "ui/meta_selection.h" // M13（0.4.1）/ C2：EditField / 聚合纯函数面
 
 #include <QString>
+#include <QStringList>
 #include <array>
 #include <optional>
 #include <utility>
@@ -22,6 +24,7 @@
 
 class QComboBox;
 class QLineEdit;
+class QWidget;
 
 namespace pp::ui {
 namespace meta {
@@ -85,5 +88,47 @@ void add_tag_row(MetaState *st, const QString &key, const QString &value);
 
 // —— 预设载入（不发信号）——
 void apply_state(MetaState *st, const pp::BatchRules &r);
+
+// ===========================================================================
+// M13（0.4.1）/ C2：选择项级编辑 —— UI 薄层（实现 = meta_rules.cpp）
+//
+// 纯内核（聚合/字段级合并/预设聚合/文本聚合）在 ui/meta_selection.{h,cpp}（可无 GUI 单测）；
+// 本段只承担「读控件 → 纯函数 → 写回 follow.items + 发信号 + 局部刷新」的薄层职责
+// （C2.1：控件值只是选择项聚合的视图；唯一可写状态 = MetadataOverride）。
+// ===========================================================================
+
+// 选择项快照（follow.items → 纯值投影；commit/load/预设/rules() 共用）
+SelectionSnapshotList selection_snapshots(const MetaState *st);
+
+// 单字段提交（C2.4）：读对应控件现值 → 对每个选中文件字段级合并 → 就地更新
+// st->follow.items[i].exception → 发 PageMeta::selection_edits_committed（MainWindow 写模型）
+// → 只刷新生效值与聚合（不 reload 控件，避免打字光标被重置）。
+// 卡开关 false = 清除该卡全部字段；GpsLat/GpsLon 两值都解析成功才提交。
+void commit_field(MetaState *st, EditField field);
+
+// 选择变化后按聚合装载全部输入控件（C2.3）：uniform 直接填 / mixed 统一 mixed 视觉 /
+// absent 用既有默认或空态；卡头开关三态；mixed 字段数写 hook::kMixedFields。
+void load_inputs_from_selection(MetaState *st);
+// GPS 输入面装载（C2.3：override.gps 优先、否则 probe 原始 GPS 读回 → 多选「生效坐标聚合」）。
+// probe 异步到位后（page_meta.cpp 的 ProbeScanner::changed 连接）与「从文件读取」入口复载。
+void load_gps_inputs_from_selection(MetaState *st);
+
+// mixed 视觉 helper（C2.3；QSS 锚 = theme::kFkProperty 无关的 hook::kMixedProperty）：
+// apply_mixed = 置 ppMixed=true + placeholder「多个值」+ tooltip 列逐文件值；
+// clear_mixed = 复原（ppMixed=false + placeholder 还原）；两者都 repolish 触发 QSS。
+void apply_mixed(QLineEdit *edit, bool mixed, const QStringList &values);
+void clear_mixed(QLineEdit *edit);
+void apply_mixed_combo(QComboBox *combo, bool mixed, const QStringList &values);
+// 只读标签 / 通用控件（QLabel、ElidedLabel、SegmentedControl 等）：mixed 时置属性 + tooltip。
+void apply_mixed_widget(QWidget *widget, bool mixed, const QStringList &values);
+
+// 预设载入（C2.6）：BatchRules 替换式转换为 st->follow.items 每项的 MetadataOverride
+// （含 time_shift/gps/gps_clear/exif+xmp_edits/strip_privacy/sync_mtime/modernize_exif/
+// strip_creator_tool；存在数据的卡 *_enabled 置 true）→ 就地更新快照 → refresh_all。
+// 同时发 selection_edits_committed（运行需把 override 落到模型；独立 PageMeta 探针不依赖信号）。
+void apply_preset_rules(MetaState *st, const pp::BatchRules &r);
+
+// rules() 语义 = 选择项编辑状态聚合快照（预设保存用；C2.6）
+pp::BatchRules rules_from_selection_state(const MetaState *st);
 
 } // namespace pp::ui::meta

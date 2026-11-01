@@ -16,15 +16,15 @@ if(NOT DEFINED VCPKG_TARGET_TRIPLET)
     endif()
 endif()
 
-project(PhotoPipeline VERSION 0.4.0 LANGUAGES C CXX)
+project(PhotoPipeline VERSION 0.4.1 LANGUAGES C CXX)
 # 预发布标签（**版本号单源 = 本节**，`CMakeLists.txt:19-26`；`--version` 输出 = PROJECT_VERSION
 # + 本标签）。CMake 的 project(VERSION) 只收数字段，"0.4.0.alpha1" 这类标签只能拼在字符串侧
 # （PP_VERSION_STRING）—— 定义点仍在此处，别处（CHANGELOG/README/AGENTS/打包脚本）一律引用。
 # 数字段（MAJOR.MINOR.PATCH）继续给 manifest / 语义比较用。
-# 0.4.0 正式版（M12）：标签 = 空串 ⇒ 版本串 = "0.4.0"（`--version` = `PhotoPipeline 0.4.0`）。
-# 内容 = M10（0.4.0.alpha1）+ M11 迭代修复批 + M12 用户 5 条反馈（工厂预设外部化/每格式 default/
-# 无「未选择」/HEIF Apple CRF=20/JPEG default 自适应距离策略 + CI 优化）。
-# 此前预发布轮：`.alpha1` ⇒ "0.4.0.alpha1"。
+# 0.4.1 正式版（M13）：标签 = 空串 ⇒ 版本串 = "0.4.1"（`--version` = `PhotoPipeline 0.4.1`）。
+# 内容 = 用户 4 条需求（元数据页选择项级编辑 + 多选混合值、去除 XMP CreatorTool、
+# photoshop:DateCreated 同步偏移、GPS 选点自动海拔）+ 门禁/文档收口（docs/m13-tasks.md）。
+# 此前正式版：0.4.0（M12）。
 set(PP_VERSION_LABEL "")
 
 set(CMAKE_CXX_STANDARD 23)
@@ -313,6 +313,22 @@ foreach(src ${PP_TEST_SOURCES})
   # 曾因 test_presets 挂起 66 min 而触顶取消）。
   set_tests_properties(${tname} PROPERTIES TIMEOUT 120)
 endforeach()
+
+# ── M13（0.4.1）：UI 侧纯逻辑/网络单测的额外源 ──────────────────────────────────
+# 单测 target 只链 pp_core_registered（core），而下列被测单元住在 UI 侧（不进 core，
+# 避免把 UI 依赖拖进引擎）。M13 两个新测试目标由 glob 自动创建，这里按名补源与依赖：
+#   * test_meta_selection：选择项聚合/字段级合并纯函数（src/ui/meta_selection.cpp，
+#     仅 QtCore 级依赖）—— docs/m13-tasks.md C2；
+#   * test_elevation：海拔 URL/JSON 纯函数 + 异步客户端（src/mapwidget/elevation.cpp，
+#     需 Qt6::Network）—— docs/m13-tasks.md C5。
+if(TARGET pp_test_meta_selection)
+  target_sources(pp_test_meta_selection PRIVATE ${CMAKE_SOURCE_DIR}/src/ui/meta_selection.cpp)
+  target_link_libraries(pp_test_meta_selection PRIVATE Qt6::Core)
+endif()
+if(TARGET pp_test_elevation)
+  target_sources(pp_test_elevation PRIVATE ${CMAKE_SOURCE_DIR}/src/mapwidget/elevation.cpp)
+  target_link_libraries(pp_test_elevation PRIVATE Qt6::Network)
+endif()
 
 # 4) UI 可执行：glob ui/mapwidget/platform（M1 §2.3）
 file(GLOB_RECURSE PP_UI_SOURCES CONFIGURE_DEPENDS

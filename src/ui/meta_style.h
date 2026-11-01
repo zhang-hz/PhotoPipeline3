@@ -19,6 +19,9 @@ QString qss_for(const theme::Tokens &t);
 // 地图离线 banner 的宿主侧收口样式（R-179 遗留收口：命名纯函数）
 QString map_banner_qss(const theme::Tokens &t);
 
+// M13（0.4.1）/ C2.3：mixed（「多个值」）视觉 QSS —— 锚 = hook::kMixedProperty；色取令牌
+QString mixed_qss(const theme::Tokens &t);
+
 // 矢量图标随 tokens 重放（主题切换唯一落点）
 void apply_icons(MetaState *st);
 

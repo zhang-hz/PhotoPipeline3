@@ -241,6 +241,9 @@ void MainWindow::Impl::refresh_status_summary(std::size_t count, std::size_t che
         tone = theme::kToneOk;
     }
     if (exceptions > 0) {
+        // M13（0.4.1）/ C2.5 语义变更（UI 文案保持不变，只语义注释）：例外计数自本轮起 =
+        // **带元数据修改的文件数**（FileEntry.exception 非空；旧「相对全局批量规则」口径随
+        // C2.1「UI 不再编辑全局 BatchRules」退役）。
         text += T(" · %1 个例外").arg(exceptions);
         if (tone != theme::kToneErr)
             tone = theme::kToneWarn; // 例外 = 警告档（琥珀），仍不升到红

@@ -36,6 +36,16 @@ inline constexpr const char *kGpsResults = "pp_meta_gps_results";
 inline constexpr const char *kGpsSuggest = "pp_meta_gps_suggest";
 inline constexpr const char *kGpsAddress = "pp_meta_gps_address";
 inline constexpr const char *kGpsDms = "pp_meta_gps_dms";
+// —— M13（0.4.1）加性：选择项级编辑 / CreatorTool / 选点自动海拔 ——
+//   * kCreatorTool：隐私卡「去除 CreatorTool」三态聚合读数（false=全部未开 / true=全部开；
+//     部分开由控件 set_partial 体现，探针另读控件）；
+//   * kAutoElevation：GPS 卡「自动获取海拔」开关读数（bool）；
+//   * kMixedFields：当前选择项聚合里处于「多个值」态的字段数（int，0=无混合）；
+//   * kMixedProperty：控件**动态属性**名（true = 该控件显示「多个值」；QSS 选择器同锚）。
+inline constexpr const char *kCreatorTool = "pp_meta_creator_tool";
+inline constexpr const char *kAutoElevation = "pp_meta_auto_elevation";
+inline constexpr const char *kMixedFields = "pp_meta_mixed_fields";
+inline constexpr const char *kMixedProperty = "ppMixed";
 } // namespace hook
 
 // —— objectName 词表（pp-meta-* 一族 + tag/gps/exception 规则面；值串逐字不变）——
@@ -152,6 +162,12 @@ inline const QString kPrivacyPill = QStringLiteral("pp-meta-privacy-pill");
 inline const QString kPrivacyStrip = QStringLiteral("privacy_strip");
 // 隐私剥除行文字链（privacy_strip_link；同批补缺，写侧见 kMtimeSyncLink 注）
 inline const QString kPrivacyStripLink = QStringLiteral("privacy_strip_link");
+// —— M13（0.4.1）加性词条（Lead 预置；构建器写侧与探针读侧同源）——
+//   去除 XMP CreatorTool 开关（meta_card_privacy）/ 选点自动海拔开关（meta_card_gps）/
+//   隐私卡「补全现代 EXIF」开关（原为 meta_card_privacy 内的字面量，本轮收口入表）。
+inline const QString kCreatorToolStrip = QStringLiteral("creator_tool_strip");
+inline const QString kAutoElevation = QStringLiteral("auto_elevation");
+inline const QString kModernizeExif = QStringLiteral("modernize_exif");
 inline const QString kSeg = QStringLiteral("pp-meta-seg");
 inline const QString kSegDelta = QStringLiteral("pp-meta-seg-delta");
 inline const QString kSegTz = QStringLiteral("pp-meta-seg-tz");

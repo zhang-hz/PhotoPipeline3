@@ -131,6 +131,7 @@
 #include "ui/settings_dialog.h"
 #include "ui/theme.h"
 
+#include "core/metadata.h"      // M13/C2：逐文件 exception（MetadataOverride/GpsData）预检
 #include "ui/mainwindow_impl.h" // Impl/壳层件共享层
 
 #ifdef _WIN32
@@ -652,7 +653,9 @@ void MainWindow::on_start() {
     }
 
     pp::RunConfig cfg = d.page_output->config_base();
-    cfg.rules = d.page_meta->rules();
+    // M13（0.4.1）/ C2.1：UI 不再编辑全局 BatchRules —— 每个文件的修改由
+    // FileEntry.exception 带给 build_plan(src, {}, exception)；规则面恒空。
+    cfg.rules = pp::BatchRules{};
     cfg.workers = d.settings.workers;
     cfg.budget_bytes = static_cast<uint64_t>(d.settings.budget_gb) << 30; // 0 = 自动
     cfg.flatten_gray = d.settings.flatten_gray;
@@ -763,36 +766,71 @@ void MainWindow::on_start() {
         }
     }
 
-    // R-075：GPS 批量规则 on_start 预检（形态同"仅元数据预检"）—— 规则坐标非法/时间戳格式
-    // 不符时，运行期不会再有任何提示（只在元数据页黄字），用户会在"输出无 GPS"后才发现。
-    // 这里在开跑前确认一次；ts 格式校验复用 WP1 的纯函数 pp::is_valid_gps_timestamp。
-    if (const pp::BatchRules rules = cfg.rules; rules.gps.has_value()) {
-        const pp::GpsData &gps = *rules.gps;
-        const bool lat_ok = gps.lat >= -90.0 && gps.lat <= 90.0;
-        const bool lon_ok = gps.lon >= -180.0 && gps.lon <= 180.0;
-        const bool ts_ok = !gps.timestamp.has_value() || pp::is_valid_gps_timestamp(*gps.timestamp);
-        if (!lat_ok || !lon_ok || !ts_ok) {
-            QStringList bad;
-            if (!lat_ok)
-                bad << T("纬度 %1 超出 [-90, 90]").arg(gps.lat);
-            if (!lon_ok)
-                bad << T("经度 %1 超出 [-180, 180]").arg(gps.lon);
-            if (!ts_ok)
-                bad << T("时间戳「%1」不是 YYYY:MM:DD HH:MM:SS 形态")
-                           .arg(QString::fromStdString(*gps.timestamp));
-            const QMessageBox::StandardButton answer = QMessageBox::warning(
-                this, T("GPS 规则预检"),
-                T("批量 GPS 规则存在无效字段：\n%1\n\n继续运行将不写入 GPS。仍要继续吗？")
-                    .arg(bad.join(QLatin1Char('\n'))),
-                QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-            if (answer != QMessageBox::Yes)
-                return;
-        }
-    }
-
     // 参与运行集合（M4-T11：勾选口径；顺序 = 列表行序）
     std::vector<std::size_t> run_rows = d.model->checked_rows();
     std::vector<pp::FileEntry> entries = d.model->checked_entries(); // 含单文件例外（引擎侧生效）
+
+    // R-075 / M13-C2.5：GPS 预检改为扫描**逐文件 override**（0.4.0 的批量规则已退役）。
+    // 判据：只提示"会生效"的无效 GPS（无 override / gps_enabled==false 不提示）；语义与
+    // 0.4.0「批量规则坐标非法」提示对齐 —— 运行期不会再有第二处提示。
+    {
+        QStringList bad;
+        std::size_t invalid_files = 0;
+        constexpr std::size_t kBadListCap = 8;
+        for (const pp::FileEntry &entry : entries) {
+            if (!entry.exception.has_value()) {
+                continue;
+            }
+            const pp::MetadataOverride &ov = *entry.exception;
+            if (ov.gps_enabled.has_value() && !*ov.gps_enabled) {
+                continue; // 引擎会丢弃该文件的 GPS（C1.1），不预检
+            }
+            if (!ov.gps.has_value()) {
+                continue;
+            }
+            const pp::GpsData &gps = *ov.gps;
+            const bool lat_ok = gps.lat >= -90.0 && gps.lat <= 90.0;
+            const bool lon_ok = gps.lon >= -180.0 && gps.lon <= 180.0;
+            const bool ts_ok =
+                !gps.timestamp.has_value() || pp::is_valid_gps_timestamp(*gps.timestamp);
+            if (lat_ok && lon_ok && ts_ok) {
+                continue;
+            }
+            ++invalid_files;
+            if (bad.size() >= static_cast<int>(kBadListCap)) {
+                continue;
+            }
+            QStringList fields;
+            if (!lat_ok) {
+                fields << T("纬度 %1 超出 [-90, 90]").arg(gps.lat);
+            }
+            if (!lon_ok) {
+                fields << T("经度 %1 超出 [-180, 180]").arg(gps.lon);
+            }
+            if (!ts_ok) {
+                fields << T("时间戳「%1」不是 YYYY:MM:DD HH:MM:SS 形态")
+                              .arg(QString::fromStdString(*gps.timestamp));
+            }
+            bad << T("%1：%2").arg(QString::fromStdString(entry.src.filename().string()),
+                                   fields.join(QStringLiteral("，")));
+        }
+        if (!bad.isEmpty()) {
+            if (invalid_files > static_cast<std::size_t>(bad.size())) {
+                bad << T("…还有 %1 个文件")
+                           .arg(static_cast<qulonglong>(invalid_files -
+                                                        static_cast<std::size_t>(bad.size())));
+            }
+            const QMessageBox::StandardButton answer = QMessageBox::warning(
+                this, T("GPS 修改预检"),
+                T("以下文件的单文件 GPS 修改存在无效字段：\n%1\n\n继续运行将不写入这些 GPS。"
+                  "仍要继续吗？")
+                    .arg(bad.join(QLatin1Char('\n'))),
+                QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+            if (answer != QMessageBox::Yes) {
+                return;
+            }
+        }
+    }
 
     // X-METADATA-ONLY-01（0.3.6-alpha1 修订）：输出根子树里的输入**不再静默丢弃**。
     // 旧实现把“位于 out_root 下”一律过滤 —— out_root = 输入目录（或它的父目录）时整批

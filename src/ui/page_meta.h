@@ -45,13 +45,28 @@ struct MetaSelectionItem {
     qint64 file_size = 0; // 字节
 };
 
+// M13（0.4.1）/ C2 加性面（**结构体区末追加**；冻结面只走「加性 + 追认」）：
+//   Contract: docs/m13-tasks.md C2（C2.1 数据模型 / C2.4 提交路径）；
+//   追认登记 = docs/m13-adjudications.md（Lead 收口）。
+// 一次字段提交回给宿主的增量：path → 该文件合并后的 override（nullopt = 该文件已无元数据
+// 修改，模型存 nullopt）。MainWindow 收到后按路径找 FileListModel 行写 set_exception。
+struct MetaSelectionEdit {
+    QString path;
+    std::optional<pp::MetadataOverride> edit;
+};
+
 class PageMeta : public QWidget {
     Q_OBJECT
 public:
     explicit PageMeta(QWidget *parent = nullptr);
 
-    pp::BatchRules rules() const;              // built from current UI state
-    void apply_rules(const pp::BatchRules &r); // preset load (no signal)
+    // M13（0.4.1）/ C2：语义变更（签名不变）——
+    //   * rules() = 当前选择项编辑状态的聚合快照（uniform 字段入规则；预设保存用，C2.6）；
+    //   * apply_rules(r) = 把预设 r 逐字段转成**选中文件**的 MetadataOverride（替换式；
+    //     存在数据的卡 *_enabled 置 true），就地更新 follow.items 后 refresh_all，并发
+    //     selection_edits_committed 让宿主写模型（独立 PageMeta 探针不依赖信号）。
+    pp::BatchRules rules() const;              // aggregated from selected files' overrides
+    void apply_rules(const pp::BatchRules &r); // preset load → per-file overrides
 
     void set_batch_files(const QStringList &paths);       // 批内文件（「影响 N / N」与 (i/N) 提示）
     void set_selected_files(const QStringList &paths);    // 仅路径的选中面（无 probe 摘要/例外）
@@ -66,6 +81,10 @@ signals:
     void rules_changed();
     void open_editor_requested(const QString &path);
     void clear_exception_requested(const QString &path);
+    // M13（0.4.1）/ C2.4 加性（signals 末追加；Contract: docs/m13-tasks.md C2 +
+    // docs/m13-adjudications.md A1（metadata.h）/ A2（page_meta.h））：选择项字段提交 → 宿主写
+    // FileListModel。
+    void selection_edits_committed(const QList<MetaSelectionEdit> &edits);
 };
 
 } // namespace pp::ui

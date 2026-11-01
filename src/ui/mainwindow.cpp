@@ -135,6 +135,7 @@
 #include "ui/filelistmodel.h"
 #include "ui/leading_indent.h"  // R-218（M7-R2E2）：逻辑边距（标题栏）单源
 #include "ui/mainwindow_impl.h" // M7-WP9：Impl/壳层件共享层（探针 TU 同视图）
+#include "ui/meta_selection.h"  // M13/C2：空 override 归一（ExifEditor 结果）
 #include "ui/page_meta.h"
 #include "ui/page_output.h"
 #include "ui/page_run.h"
@@ -1104,6 +1105,11 @@ void MainWindow::Impl::wire_view_and_model() {
     QObject::connect(d.model, &FileListModel::content_changed, w, [this] { on_content_changed(); });
     QObject::connect(d.model, &FileListModel::exception_changed, w, [this](std::size_t) {
         sync_exceptions();
+        // M13（0.4.1）/ C2.4：元数据页字段提交已就地更新 follow.items 并只刷新生效值 ——
+        // 模型增量写入期间**不** sync_selection（全量重装会把正在输入的控件/光标重置）。
+        if (applying_selection_edits) {
+            return;
+        }
         // M4-T12：例外是 preview_effective 的第三个入参（§5.1 源 ⊕ 批量 ⊕ 例外）→ 例外一变，
         // 生效值显示必须随之刷新（跟随项快照里带的就是这一份例外）
         sync_selection();
@@ -1240,6 +1246,11 @@ void MainWindow::Impl::wire_preview_and_timers() {
 void MainWindow::Impl::wire_pages() {
     Impl &d = *this;
     QObject::connect(d.page_meta, &PageMeta::rules_changed, w, [this] { w->refresh_status(); });
+    // M13（0.4.1）/ C2.4 加性：选择项字段提交 → 写 FileListModel（唯一可写真源 =
+    // FileEntry.exception）
+    QObject::connect(
+        d.page_meta, &PageMeta::selection_edits_committed, w,
+        [this](const QList<MetaSelectionEdit> &edits) { on_meta_selection_edits(edits); });
     QObject::connect(d.page_meta, &PageMeta::open_editor_requested, w,
                      &MainWindow::open_exif_editor_path);
     QObject::connect(d.page_meta, &PageMeta::clear_exception_requested, w,
@@ -1452,6 +1463,11 @@ void MainWindow::set_offline_maps(bool off) {
     const QList<pp::map::MapWidget *> maps = findChildren<pp::map::MapWidget *>();
     for (pp::map::MapWidget *map : maps)
         map->set_offline(off);
+    // M13（0.4.1）/ C5 加性：离线态同时下发元数据页 —— 选点自动海拔据此门控（--ui-smoke 全程
+    // 离线，CI 硬要求"不联网"）。属性名单源 = 字面量 "pp_meta_offline"（Lead 契约）。
+    if (impl_ != nullptr && impl_->page_meta != nullptr) {
+        impl_->page_meta->setProperty("pp_meta_offline", off);
+    }
 }
 
 void MainWindow::save_session() {
@@ -1858,13 +1874,29 @@ void MainWindow::open_exif_editor_row(int row) {
     if (row < 0 || static_cast<std::size_t>(row) >= d.model->size())
         return;
     const FileRow &file_row = d.model->row(static_cast<std::size_t>(row));
-    ExifEditor dlg(QString::fromStdString(file_row.entry.src.string()), d.page_meta->rules(),
-                   file_row.entry.exception, this);
+    const std::optional<pp::MetadataOverride> old_override = file_row.entry.exception;
+    // M13（0.4.1）/ C2.5：UI 不再有全局批量规则（RunConfig.rules 恒空）→ 对话框传空
+    // BatchRules + 既有 exception（「批」标记随之恒 false）；保留既有个例编辑面。
+    ExifEditor dlg(QString::fromStdString(file_row.entry.src.string()), pp::BatchRules{},
+                   old_override, this);
     dlg.exec();
     // ExifEditor::result() 遮蔽 QDialog::result()（U8 口径）→ 必须显式限定基类
     if (dlg.QDialog::result() == QDialog::Accepted) {
-        d.model->set_exception(static_cast<std::size_t>(row), dlg.result());
+        pp::MetadataOverride result = dlg.result();
+        // 对话框不表达 M13 的六个选择项级字段 → 从旧 override 原样保留（不得丢失，C2.5）
+        if (old_override.has_value()) {
+            result.time_enabled = old_override->time_enabled;
+            result.gps_enabled = old_override->gps_enabled;
+            result.privacy_enabled = old_override->privacy_enabled;
+            result.sync_mtime = old_override->sync_mtime;
+            result.modernize_exif = old_override->modernize_exif;
+            result.strip_creator_tool = old_override->strip_creator_tool;
+        }
+        d.model->set_exception(static_cast<std::size_t>(row),
+                               pp::ui::meta::normalize_override(result));
         refresh_status();
+        // 页面显示跟随（生效值/输入面按新 override 聚合重装）
+        d.sync_selection();
     }
 }
 
@@ -2132,6 +2164,26 @@ void MainWindow::Impl::clear_exception(const QString &path) {
             return;
         }
     }
+}
+
+// M13（0.4.1）/ C2.4：元数据页选择项字段提交的**唯一**模型写入点（path→row 循环查找，
+// 口径同 clear_exception）。空 override 已在页面侧归一为 nullopt（清除该文件的元数据修改）。
+void MainWindow::Impl::on_meta_selection_edits(const QList<MetaSelectionEdit> &edits) {
+    if (model == nullptr || edits.isEmpty()) {
+        return;
+    }
+    applying_selection_edits = true;
+    for (const MetaSelectionEdit &edit : edits) {
+        for (std::size_t i = 0; i < model->size(); ++i) {
+            if (QString::fromStdString(model->row(i).entry.src.string()) == edit.path) {
+                model->set_exception(i, edit.edit);
+                break;
+            }
+        }
+    }
+    applying_selection_edits = false;
+    sync_exceptions();   // 例外列表/胶囊（语义 = 带元数据修改的文件，C2.5）
+    w->refresh_status(); // 状态栏「N 个例外」/底栏读数
 }
 
 void MainWindow::Impl::remove_selected() {

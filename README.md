@@ -39,7 +39,20 @@ caption 单轨 46×32；壳层顶栏 44 + 状态栏 30；**栏宽固定轴 330 /
 逐条探针、偏差与未决项见 [docs/m5-report.md](docs/m5-report.md)，开发期裁定见
 [docs/m5-adjudications.md](docs/m5-adjudications.md)。
 
-**0.4.0（当前版本，正式版）= M10 + M11 迭代修复 + M12 用户 5 条反馈**：① **M10（性能/参数面/预设与自适应）**——
+**0.4.1（当前版本，正式版）= M13 用户 4 条需求**：① **元数据页选择项级编辑** —— 右侧每项修改默认只作用于
+**当前选中文件**（每文件独立 `MetadataOverride`）；多选 = 批量生效（字段级合并互不串扰）；多选值不一致时各面
+明确显示 **「多个值」**（Δ spin / 时间与 GPS 输入 / 关键信息卡 / GPS 生效坐标 / 开关三态）；允许部分文件不开启
+某类修改（三态开关 + 逐文件 override）；预设载入 = 应用到选中文件；「例外」语义 = 带元数据修改的文件。
+② **隐私与文件时间卡新增「去除 XMP CreatorTool」**（删除 `xmp:CreatorTool`，清除 Photoshop 等生成工具签名）。
+③ **修复 `Xmp.photoshop.DateCreated` 未随 UTC 偏移 / 时区语义刷新**（与 xmp:CreateDate/ModifyDate 同一条偏移
+纯函数，显示 / 写入同源）。④ **GPS 选点自动海拔** —— 地图点选 / 搜索结果 / 联想 / 取地图中心后经 Open-Meteo DEM
+自动取海拔回填（默认开、可关、400ms 去抖、失败静默降级、标注近似值）。版本单源 = `CMakeLists.txt:19-28`，
+`--version` = **`PhotoPipeline 0.4.1`**；契约 / 裁定 / 报告见 [docs/m13-tasks.md](docs/m13-tasks.md) /
+[docs/m13-adjudications.md](docs/m13-adjudications.md) / [docs/0.4.1-report.md](docs/0.4.1-report.md)。
+**发行状态：0.4.1 正式版（本树；tag / Release 指纹见发行后补记）**。**如实**：0.4.0 登记的 asan/tsan 两项真实
+产品债（hwy ODR 链接期风险、ProgressMux/FileEvent 数据竞争）顺延 0.4.2；不宣称 nightly 通过、不造绿。
+
+**0.4.0（历史正式版）= M10 + M11 迭代修复 + M12 用户 5 条反馈**：① **M10（性能/参数面/预设与自适应）**——
 评分预算拆分（48 MP PNG + `--score` 由 `EXIT=1` 变 `EXIT=0`，`need_bytes` 8.832 GB → **1.152 GB**）、
 评分色彩归一快速内核（**8.49 s → 0.42 s，20×**）、SSIMULACRA 2 流式化（23 MP 峰值额外内存 **7.6 B/px**）、
 双重 probe 消除（22.8 MP HEIC 首个 `Probing → Decoding` **2,902.9 → 1,447.8 ms**）、**独立评分池 + 异步评分**、
@@ -145,7 +158,7 @@ R2 轮方案见 [docs/m7r2-plan.md](docs/m7r2-plan.md)。**色彩能力四选项
 渲染意图 / 线性光重采样）已入引擎并在界面提供开关**——**输出页全局卡**四行（默认全关 =
 行为不变；0.3.x 默认路径另有两处已归因字节变化，见 CHANGELOG「变更」节）；8bit 抖动仅作用
 于 JPEG/WebP/JXL 及 OIIO 系四家的 8bit 量化段（HEIF/AVIF 的 8bit 路径不接）。**发行状态：0.3.3 已发布**（2026-10-13；其 Windows zip 有启动 P0，已由 0.3.4 热修，
-请使用 0.3.4 或更新版本；当前最新正式版 = 0.4.0 正式版（本树））。
+请使用 0.3.4 或更新版本；当前最新正式版 = 0.4.1 正式版（本树））。
 
 **0.3.2 = GPS 地图升级版（M6）**：把「内嵌地图选点」从能用升级到**地图 App 水平**——
 R1 搜索搜得出（改用可达的**高德 Web 服务**事实表：`place/text` + 周边偏置 **`around` 20 条**按距离升序 +
@@ -593,12 +606,28 @@ python tools/env.py run -- cmake --build --preset release
 - **CI 流程优化**：脚本判据/缓存/预算修复，目标 main-full + nightly + release 全绿（逐 job 读数见
   [docs/0.4.0-report.md](docs/0.4.0-report.md) §2.5）。
 
+### M13 元数据选择项级编辑 / 去 CreatorTool / DateCreated / 选点海拔（0.4.1 正式版）
+
+- **元数据页改为「选择项作用域编辑器」**：右侧每项修改默认只作用于**当前选中文件**（每文件独立
+  `MetadataOverride`，文件列表徽标/「例外」入口 = 带元数据修改的文件）；**多选 = 批量生效**（字段级合并，
+  不串扰各文件其它分量）。多选值不一致时明确显示 **「多个值」**（Δ spin 文本、时间/GPS 规则输入、关键信息卡、
+  GPS 生效坐标、隐私开关；三卡「启用」开关为**三态**，部分文件开启 = partial）。生效值仍全出自
+  `preview_effective()`（显示 = 写入同源）。新纯内核 `src/ui/meta_selection.{h,cpp}`（聚合 / 字段级合并 /
+  预设聚合，可无 GUI 单测）。
+- **隐私与文件时间卡新增「去除 CreatorTool」**：删除输出 XMP 的 `xmp:CreatorTool`（清除 Photoshop 等生成工具
+  签名）；引擎 `build_plan` 静默删除该键、不动其它 XMP/EXIF 字段。
+- **修复 `Xmp.photoshop.DateCreated` 未随偏移刷新**：纳入 XMP 时间键表，与 `xmp:CreateDate`/`xmp:ModifyDate`
+  走同一条 `shifted_xmp_time` 纯函数（Δ 偏移与时区语义均改写；ISO-8601 带时区/小数秒支持；不可解析则跳过写入）。
+- **GPS 选点自动海拔**：地图点选/搜索结果/联想/取地图中心后经 Open-Meteo DEM 自动取海拔回填 GPS 海拔输入
+  （默认开、可关、400ms 去抖、单在途、5s 超时、失败静默降级、标注「近似值」；离线模式不发请求）。
+- **预设语义变更**：元数据预设载入 = 替换式应用到选中文件的逐文件修改；保存预设 = 当前选择项编辑状态聚合。
+
 ### 无头 UI 冒烟（`--ui-smoke`，需 `PP_BUILD_DEV=ON`）
 
 ```bash
 python tools/env.py run -- cmake --preset release-dev -B build/release-dev -DVCPKG_MANIFEST_INSTALL=OFF
 python tools/env.py run -- cmake --build build/release-dev
-python tools/env.py run -- ctest --test-dir build/release-dev --output-on-failure    # 条目以 ctest -N 实测为准（2026-11-01 实测 48 条 = 47 引擎/工具 + ui_smoke）
+python tools/env.py run -- ctest --test-dir build/release-dev --output-on-failure    # 条目以 ctest -N 实测为准（2026-11-02 实测 50 条 = 49 引擎/工具 + ui_smoke）
 # 或手动跑（offscreen，产出 12 张走查截图）：
 QT_QPA_PLATFORM=offscreen ./build/release-dev/photopipeline \
     --ui-smoke --inputs tests/golden/base --shots .cache/ui-review
@@ -695,7 +724,7 @@ chmod +x PhotoPipeline-<版本>-x86_64.AppImage
 
 ## 发行版（Windows）
 
-**M3 起提供 Windows x64 免安装产物**（0.2.0 为首个 Windows 版本，当前版本 0.4.0）；与 Linux 的 AppImage 同一引擎
+**M3 起提供 Windows x64 免安装产物**（0.2.0 为首个 Windows 版本，当前版本 0.4.1）；与 Linux 的 AppImage 同一引擎
 与界面，差异只在打包形态（zip vs AppImage）与平台运行时（MSVC 运行时 / Qt msvc2022_64）。
 
 ### 下载与运行
@@ -735,7 +764,7 @@ chmod +x PhotoPipeline-<版本>-x86_64.AppImage
 ### 命令行
 
 ```powershell
-.\photopipeline.exe --version      # → PhotoPipeline 0.4.0（单行 + 退出码 0；非 dev 门控，发布构建亦可用）
+.\photopipeline.exe --version      # → PhotoPipeline 0.4.1（单行 + 退出码 0；非 dev 门控，发布构建亦可用）
 .\photopipeline.exe                # 图形界面
 .\photopipeline.exe --ui-smoke     # 无头 UI 走查（offscreen，产出 12 张截图；仅 PP_BUILD_DEV=ON 的构建）
 .\photopipeline.exe --dev ...      # 开发 harness：全语料矩阵 / 回归基线入口（同上，仅 dev 构建）

@@ -45,16 +45,65 @@
 
 namespace pp::ui::meta {
 
-// 关键字胶囊组（§7.1「关键字 胶囊组」）：跟随项的 XMP dc:subject；超过 3 枚 → 「+N」
-void refresh_keywords(MetaState *st) {
-    if (st->privacy.keyword_row == nullptr) {
+// ---------------------------------------------------------------------------
+// M13（0.4.1）/ C2.2 + C2.3：选择项级编辑的三态视觉与数据装载
+//   * 唯一可写真源 = follow.items[i].exception（MetadataOverride）；
+//   * 本卡装载：4 个布尔开关 ← flag_aggregate 三态；卡头启用 ← card_active_aggregate；
+//     关键字胶囊多选不一致 → ElidedLabel「多个值」+ 逐文件 tooltip（C2.3/C2.5）；
+//   * 提交：open 开关变化 → commit_field(EditField::*)（ui-core 薄层写 override + 发信号）。
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// 三态开关的**唯一**视觉落点：全开 = checked；全关 = unchecked；部分 = partial（半选中画法，
+// checked 初值 false —— 用户点击一次 = 全部开启，再点一次 = 全部关闭）。程序化同步不触发
+// toggled（不回头 commit）。
+void set_switch_tri_state(formkit::SwitchControl *sw, const BoolAggregate &agg,
+                          const QString &clean_tooltip) {
+    if (sw == nullptr) {
         return;
     }
-    // 胶囊是**重建件**：本函数每次刷新都换一批 —— 令牌重放清单先清空（否则 apply_style 会对
-    // 已 deleteLater 的旧胶囊取 tokens → 悬垂指针）
+    const QSignalBlocker blocker(sw);
+    switch (agg.state) {
+    case Aggregate::Uniform:
+        sw->setChecked(agg.value);
+        sw->set_partial(false);
+        break;
+    case Aggregate::Mixed:
+        sw->setChecked(false);
+        sw->set_partial(true);
+        break;
+    case Aggregate::Absent:
+        sw->setChecked(false);
+        sw->set_partial(false);
+        break;
+    }
+    // ppMixed 动态属性与 partial 同步（探针/QSS 同一锚；SwitchControl 的 partial 才是画法）
+    apply_mixed_widget(sw, agg.state == Aggregate::Mixed, agg.labels);
+    if (agg.state == Aggregate::Mixed) {
+        QString tip = PageMeta::tr(kMixedValueText);
+        if (!agg.labels.isEmpty()) {
+            tip += QLatin1Char('\n') + agg.labels.join(QLatin1Char('\n'));
+        }
+        if (agg.omitted > 0) {
+            tip += QLatin1Char('\n') + PageMeta::tr("…还有 %1 个").arg(agg.omitted);
+        }
+        sw->setToolTip(tip);
+    } else {
+        sw->setToolTip(clean_tooltip);
+    }
+}
+
+// 多选关键字聚合的逐文件文本（无关键字 = 「无关键字」；同值 `uniform`、异值 `mixed`）。
+QString keywords_text_of(const pp::SourceMeta &meta) {
+    const QStringList keywords = keywords_of(meta);
+    return keywords.isEmpty() ? PageMeta::tr(kNoKeywordsText)
+                              : keywords.join(QStringLiteral(" / "));
+}
+
+// 关键字胶囊区清空（保留首位常驻说明位；R-180 常驻约定显式标记）。
+void clear_keyword_pills(MetaState *st) {
     st->core.keyword_pills.clear();
-    // 说明位是常驻子控件（与 multi_more 同口径：重复入列/误删会造成悬垂引用）→ 只清胶囊。
-    // R-180：常驻约定显式化 —— 首位即标记件（清理循环按位豁免，断言钉住不变量）。
     Q_ASSERT(st->privacy.keyword_row->count() == 0 ||
              is_resident(st->privacy.keyword_row->itemAt(0)->widget()));
     while (st->privacy.keyword_row->count() > 1) {
@@ -66,6 +115,39 @@ void refresh_keywords(MetaState *st) {
         }
         delete item;
     }
+}
+
+} // namespace
+
+// 关键字胶囊组（§7.1「关键字 胶囊组」）：跟随项的 XMP dc:subject；超过 3 枚 → 「+N」。
+// M13/C2.3：多选时先按逐文件文本聚合 —— 全部相同才画单值胶囊；不一致 → 常驻说明位改显
+// 「多个值」+ tooltip 逐文件值（≤8 条 + 「…还有 N 个」），不拿首个文件的关键字冒充选择集。
+void refresh_keywords(MetaState *st) {
+    if (st->privacy.keyword_row == nullptr) {
+        return;
+    }
+    // 胶囊是**重建件**：本函数每次刷新都换一批 —— 令牌重放清单先清空（否则 apply_style 会对
+    // 已 deleteLater 的旧胶囊取 tokens → 悬垂指针）
+    clear_keyword_pills(st);
+    // 说明位是常驻子控件（与 multi_more 同口径：重复入列/误删会造成悬垂引用）→ 只清胶囊。
+    const SelectionSnapshotList sel = selection_snapshots(st);
+    QStringList texts;
+    const std::size_t probe_count = st->follow.probes.size();
+    texts.reserve(int(probe_count));
+    for (std::size_t i = 0; i < probe_count; ++i) {
+        texts << keywords_text_of(st->follow.probes[i].meta);
+    }
+    const TextAggregate agg = aggregate_texts(sel, texts);
+    if (!agg.empty && !agg.uniform) {
+        // 多选不一致：明确显示「多个值」（ElidedLabel + 逐文件 tooltip），不画胶囊
+        st->privacy.keyword_none->setVisible(true);
+        st->privacy.keyword_none->set_full_text(PageMeta::tr(kMixedValueText));
+        apply_mixed_widget(st->privacy.keyword_none, true, agg.labels);
+        st->privacy.keyword_none->setToolTip(aggregate_tooltip(agg));
+        return;
+    }
+    apply_mixed_widget(st->privacy.keyword_none, false, QStringList());
+    st->privacy.keyword_none->set_full_text(PageMeta::tr(kNoKeywordsText));
     QStringList keywords;
     if (!st->follow.probes.empty() && !st->follow.items.isEmpty()) {
         keywords = keywords_of(st->follow.probes.front().meta);
@@ -91,17 +173,48 @@ void refresh_keywords(MetaState *st) {
     }
 }
 
-// UX-5：隐私与文件时间卡的置灰（开关/标签编辑入口；例外列表是只读面不动）
+// M13/C2.2 + C2.3：隐私与文件时间卡的**装载**（三态开关 + 置灰）。
+//   * 4 个布尔开关 + 卡头启用 = 选择项聚合三态（部分 → set_partial；部分也视为可编辑）；
+//   * 例外列表是只读面不动（既有语义保持）；
+//   * 自验钩子 kCreatorTool：true = 全部文件已开（部分/全关 = false；partial 由控件取证）。
 void refresh_privacy_inputs(MetaState *st) {
-    const bool card_on =
-        st->privacy.privacy_enable == nullptr || st->privacy.privacy_enable->isChecked();
-    st->privacy.strip->setEnabled(card_on);
-    st->privacy.mtime->setEnabled(card_on);
-    if (st->privacy.modernize != nullptr)
-        st->privacy.modernize->setEnabled(card_on);
-    st->privacy.link_tags->setEnabled(card_on);
-    st->privacy.link_keywords->setEnabled(card_on);
-    st->privacy.add_tag->setEnabled(card_on);
+    if (st->privacy.strip == nullptr) {
+        return;
+    }
+    const SelectionSnapshotList sel = selection_snapshots(st);
+    const BoolAggregate card = card_active_aggregate(sel, EditField::PrivacyEnable);
+    const BoolAggregate creator = flag_aggregate(sel, EditField::PrivacyCreatorTool);
+    {
+        LoadingGuard guard(st); // 程序化同步不算用户编辑（既有 loading 协议）
+        set_switch_tri_state(st->privacy.privacy_enable, card, PageMeta::tr(kCardEnableTooltip));
+        set_switch_tri_state(st->privacy.strip, flag_aggregate(sel, EditField::PrivacyStrip),
+                             QString());
+        set_switch_tri_state(st->privacy.mtime, flag_aggregate(sel, EditField::PrivacyMtime),
+                             QString());
+        if (st->privacy.modernize != nullptr) {
+            set_switch_tri_state(st->privacy.modernize,
+                                 flag_aggregate(sel, EditField::PrivacyModernize), QString());
+        }
+        if (st->privacy.creator_tool != nullptr) {
+            set_switch_tri_state(st->privacy.creator_tool, creator, QString());
+        }
+    }
+    // 卡头三态：部分开启也视为可编辑（C2.3；全关才置灰）
+    const bool editable =
+        card.state == Aggregate::Mixed || (card.state == Aggregate::Uniform && card.value);
+    st->privacy.strip->setEnabled(editable);
+    st->privacy.mtime->setEnabled(editable);
+    if (st->privacy.modernize != nullptr) {
+        st->privacy.modernize->setEnabled(editable);
+    }
+    if (st->privacy.creator_tool != nullptr) {
+        st->privacy.creator_tool->setEnabled(editable);
+    }
+    st->privacy.link_tags->setEnabled(editable);
+    st->privacy.link_keywords->setEnabled(editable);
+    st->privacy.add_tag->setEnabled(editable);
+    // 自验钩子（Lead 口径）：true = 全部选中文件已开启；部分/全关 = false
+    set_hook(st, hook::kCreatorTool, creator.state == Aggregate::Uniform && creator.value);
 }
 
 QWidget *build_switches_card(MetaState *st, QWidget *parent) {
@@ -182,12 +295,32 @@ QWidget *build_switches_card(MetaState *st, QWidget *parent) {
             formkit::frow(body, PageMeta::tr("EXIF 补全"), group.widget(), FieldWidth::Flex);
         bv->addWidget(row.row);
         st->privacy.modernize = sw;
-        QObject::connect(sw, &formkit::SwitchControl::toggled, st, [st](bool) {
-            if (!st->core.loading) {
-                refresh_effective(st);
-                notify_rules_changed(st);
-            }
-        });
+    }
+    // M13（0.4.1）/ C3（需求 2）：去除 XMP 的 CreatorTool（xmp:CreatorTool）。
+    // 行位置 = 「EXIF 补全」之后、「关键字」之前（C3 + Lead 定稿）；开关 = 选择项三态 +
+    // commit_field(PrivacyCreatorTool) → 引擎侧 strip_creator_tool（C1.4 删 Xmp.xmp.CreatorTool）。
+    {
+        TrackGroup group = make_group(body);
+        auto *sw = new formkit::SwitchControl(group.widget());
+        sw->setObjectName(objname::kCreatorToolStrip);
+        sw->set_tokens(st->core.tokens);
+        st->core.switches.append(sw);
+        group.add(sw);
+        group.gap(theme::Metrics::group_gap);
+        auto *note = new formkit::ElidedLabel(group.widget());
+        note->setObjectName(QStringLiteral("pp-creator-tool-note"));
+        note->setProperty(kFieldProperty, fieldprop::kSub);
+        note->setFont(theme::font(theme::Typography::hint_px, QFont::Normal));
+        note->set_full_text(PageMeta::tr(
+            "移除 XMP 的 CreatorTool（xmp:CreatorTool），用于清除 Photoshop 等写入的生成工具签名"));
+        note->setToolTip(PageMeta::tr(
+            "移除 XMP 的 CreatorTool（xmp:CreatorTool），用于清除 Photoshop 等写入的生成工具签名"));
+        group.add(note);
+        group.stretch();
+        const formkit::Row row =
+            formkit::frow(body, PageMeta::tr("去除 CreatorTool"), group.widget(), FieldWidth::Flex);
+        bv->addWidget(row.row);
+        st->privacy.creator_tool = sw;
     }
     // 关键字（§7.1：胶囊组 + 「编辑…」链）
     {
@@ -249,26 +382,33 @@ QWidget *build_switches_card(MetaState *st, QWidget *parent) {
     st->privacy.exc_host->setVisible(false);
     v->addWidget(st->privacy.exc_host);
 
-    QObject::connect(st->privacy.strip, &formkit::SwitchControl::toggled, st, [st](bool) {
-        if (!st->core.loading) {
-            refresh_effective(st);
-            notify_rules_changed(st);
+    // M13（0.4.1）/ C2.4：四个布尔开关 + 卡头启用 = 选择项级字段提交（唯一写路径）。
+    // 用户点击 → commit_field（写选中文件 override + 发信号）→ 重铺三态视觉（commit 不
+    // reload 控件，但开关的 partial/checked 必须按新聚合落位，否则会停在点击态）。
+    const auto on_privacy_field = [st](EditField field) {
+        if (st->core.loading) {
+            return;
         }
-    });
-    // UX-5：卡头「启用」开关 —— 关 = 整卡不参与规则（置灰 + build_rules 跳过）
-    QObject::connect(st->privacy.privacy_enable, &formkit::SwitchControl::toggled, st, [st](bool) {
-        if (!st->core.loading) {
-            refresh_privacy_inputs(st);
-            refresh_effective(st);
-            notify_rules_changed(st);
-        }
-    });
-    QObject::connect(st->privacy.mtime, &formkit::SwitchControl::toggled, st, [st](bool) {
-        if (!st->core.loading) {
-            refresh_effective(st);
-            notify_rules_changed(st);
-        }
-    });
+        commit_field(st, field);
+        refresh_privacy_inputs(st);
+    };
+    QObject::connect(st->privacy.strip, &formkit::SwitchControl::toggled, st,
+                     [on_privacy_field](bool) { on_privacy_field(EditField::PrivacyStrip); });
+    QObject::connect(st->privacy.mtime, &formkit::SwitchControl::toggled, st,
+                     [on_privacy_field](bool) { on_privacy_field(EditField::PrivacyMtime); });
+    if (st->privacy.modernize != nullptr) {
+        QObject::connect(
+            st->privacy.modernize, &formkit::SwitchControl::toggled, st,
+            [on_privacy_field](bool) { on_privacy_field(EditField::PrivacyModernize); });
+    }
+    if (st->privacy.creator_tool != nullptr) {
+        QObject::connect(
+            st->privacy.creator_tool, &formkit::SwitchControl::toggled, st,
+            [on_privacy_field](bool) { on_privacy_field(EditField::PrivacyCreatorTool); });
+    }
+    // 卡头「启用」三态：开 = 整卡参与（编辑入口可点）；关 = 清除该卡全部字段并置 *_enabled=false
+    QObject::connect(st->privacy.privacy_enable, &formkit::SwitchControl::toggled, st,
+                     [on_privacy_field](bool) { on_privacy_field(EditField::PrivacyEnable); });
     const auto toggle_tags = [st] {
         const bool on = !st->privacy.tag_host->isVisible();
         st->privacy.tag_host->setVisible(on);

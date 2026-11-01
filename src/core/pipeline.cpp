@@ -2575,7 +2575,9 @@ void stage_finish(RunFileContext &ctx) {
         ctx.ticker.reset();
     }
     // mtime sync (§5.9)：生效 DateTimeOriginal 只算一次，逐输出落盘一次
-    if (ctx.cfg.rules.sync_mtime && !ctx.meta_plan.datetime_original.empty()) {
+    // M13-C3：开关取生效 plan（= effective_rules()，per-file 例外可覆盖）；
+    // 无例外时与 cfg.rules.sync_mtime 同值 → 行为零变化。
+    if (ctx.meta_plan.sync_mtime && !ctx.meta_plan.datetime_original.empty()) {
         for (const OutputResult &row : ctx.res.outputs) {
             if (!row.ok)
                 continue;
@@ -2881,7 +2883,8 @@ FileOutcome run_metadata_only(const FileEntry &fe, const RunConfig &cfg, EventFn
         }
         mux->on_output_metawrite_done(0); // §7.2 末行：metawrite + mtime + 落盘 = 10%
 
-        if (cfg.rules.sync_mtime && !meta_plan.datetime_original.empty()) {
+        // M13-C3：mtime 同步开关取生效 plan（仅元数据模式同样覆盖；无例外时与旧口径同值）。
+        if (meta_plan.sync_mtime && !meta_plan.datetime_original.empty()) {
             const std::string merr = sync_file_mtime(row.out, meta_plan.datetime_original);
             if (!merr.empty()) {
                 log_warn(kStage, kFile, "mtime sync failed",

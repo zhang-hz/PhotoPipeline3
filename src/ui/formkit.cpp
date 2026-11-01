@@ -437,6 +437,15 @@ void SwitchControl::set_tokens(const theme::Tokens &t) {
     update();
 }
 
+// M13（0.4.1）/ C2.3：多选部分开启的三态视觉（不改 checked 语义；partial 只改画法）
+void SwitchControl::set_partial(bool partial) {
+    if (partial_ == partial) {
+        return;
+    }
+    partial_ = partial;
+    update();
+}
+
 QSize SwitchControl::sizeHint() const { return QSize(kSwitchW, kSwitchH); }
 
 void SwitchControl::paintEvent(QPaintEvent *) {
@@ -450,6 +459,11 @@ void SwitchControl::paintEvent(QPaintEvent *) {
     // 的 mockup 值，M5-T2 已登记入令牌层）
     QColor rail = on ? t.accent : t.switch_rail_off;
     QColor knob = on ? t.on_accent : t.switch_knob_off;
+    if (partial_) {
+        // 三态中位：关态轨 + 居中强调钮 + 强调描边（色全部取 theme.h 令牌；不硬编码）
+        rail = t.switch_rail_off;
+        knob = t.accent;
+    }
     if (dim) {
         rail = theme::at_opacity(rail, t.window, theme::Metrics::icon_dim_opacity);
         knob = theme::at_opacity(knob, t.window, theme::Metrics::icon_dim_opacity);
@@ -457,9 +471,21 @@ void SwitchControl::paintEvent(QPaintEvent *) {
     p.setPen(Qt::NoPen);
     p.setBrush(rail);
     p.drawRoundedRect(track, kSwitchH / 2.0, kSwitchH / 2.0);
+    if (partial_) {
+        // 强调描边（1px 内缩，保留既有 30×16 几何 → 三态零尺寸变化）
+        QColor border =
+            dim ? theme::at_opacity(t.accent, t.window, theme::Metrics::icon_dim_opacity)
+                : t.accent;
+        p.setPen(QPen(border, 1.0));
+        p.setBrush(Qt::NoBrush);
+        p.drawRoundedRect(track.adjusted(0.5, 0.5, -0.5, -0.5), kSwitchH / 2.0, kSwitchH / 2.0);
+    }
     const double side = kSwitchKnob;
     const double y = (kSwitchH - side) / 2.0;
-    const double x = on ? kSwitchW - side - 2.0 : 2.0;
+    double x = on ? kSwitchW - side - 2.0 : 2.0;
+    if (partial_) {
+        x = (kSwitchW - side) / 2.0; // 中位（uncertain）
+    }
     p.setBrush(knob);
     p.drawEllipse(QRectF(x, y, side, side));
 }

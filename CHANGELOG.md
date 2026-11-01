@@ -1,5 +1,62 @@
 # 变更日志
 
+## [0.4.1] — 2026-11-02
+
+**正式版（stable）**：0.4.1 = **M13**（用户 4 条需求 + 门禁/文档收口）。四条需求逐条交付：
+① 元数据页**选择项级编辑**（默认只作用于选中文件；多选 = 批量；多值不一致明确显示「多个值」；
+允许部分文件不开启某类修改）；② 隐私与文件时间卡新增**「去除 XMP CreatorTool」**；
+③ 修复 **`Xmp.photoshop.DateCreated`** 未随 UTC 偏移 / 时区语义刷新；④ **GPS 选点自动获取海拔**
+（Open-Meteo DEM，默认开、可关、失败静默降级）。
+版本单源 = `CMakeLists.txt:19-28`：数字段 `project(PhotoPipeline VERSION 0.4.1)` + **`PP_VERSION_LABEL ""`（正式版）**
+⇒ `--version` = **`PhotoPipeline 0.4.1`**；`vcpkg.json` 同步数字段 0.4.1（R-122 口径）。
+契约 = [docs/m13-tasks.md](docs/m13-tasks.md)（C1–C9），裁定 = [docs/m13-adjudications.md](docs/m13-adjudications.md)
+（A1–A12），门禁读数与逐条取证 = [docs/0.4.1-report.md](docs/0.4.1-report.md)。
+**如实**：0.4.0 登记的 asan/tsan 两项真实产品债（hwy ODR 链接期风险、ProgressMux/FileEvent 数据竞争）
+本轮**不修**，顺延 0.4.2（[docs/m13-adjudications.md](docs/m13-adjudications.md) A7）；**不宣称 nightly 通过、不造绿**。
+
+### 新增
+
+- **元数据页选择项级编辑（需求 1；C2）**：右侧每项修改默认只作用于**当前选中文件** —— 每文件独立持有
+  `MetadataOverride`（`FileEntry.exception`，唯一可写真源）；单选改一个字段只落该文件，换选其它文件不受
+  影响；**批量生效 = 多选文件后再改**（字段级合并，不串扰文件间其它分量）。多选值不一致时各面明确显示
+  **「多个值」**：Δ spin 文本、时间/GPS 规则输入（`ppMixed` 虚线强调边 + 逐文件 tooltip）、关键信息卡
+  只读字段、GPS 生效坐标、隐私开关与三卡「启用」开关**三态（部分开启）**。"允许部分文件不开启某些修改"
+  = 三态开关 / 逐文件 override；文件列表徽标与「例外」入口语义更新为「带元数据修改」。生效值仍全出自
+  `preview_effective()`（显示 = 写入同源）。新纯内核 `src/ui/meta_selection.{h,cpp}`（聚合 / 字段级合并 /
+  预设聚合，可无 GUI 单测）。
+- **去除 XMP CreatorTool（需求 2；C3）**：隐私与文件时间卡新增「去除 CreatorTool」开关（说明：移除 XMP 的
+  `xmp:CreatorTool`，用于清除 Photoshop 等写入的生成工具签名）；引擎 `build_plan` 在 `strip_creator_tool`
+  生效时删除 `Xmp.xmp.CreatorTool`（不存在静默跳过；不动 EXIF Software / 其余 `Xmp.photoshop.*`）；
+  预设面 `BatchRules.strip_creator_tool` 兼容。
+- **GPS 选点自动海拔（需求 4；C5）**：新模块 `src/mapwidget/elevation.{h,cpp}`（Open-Meteo DEM 海拔，无 key、
+  异步单在途、序号丢弃陈旧响应、5s 超时、400ms 去抖、失败静默）；GPS 卡新增「自动获取海拔」开关
+  （默认开、不持久化）：地图点选 / 搜索结果 / 联想 / 取地图中心后自动取海拔并回填 —— 仅当海拔为空或上次为
+  自动值（手动编辑不覆盖）；选中集变化时丢弃陈旧响应；离线 / 断网降级不填、不阻塞选点与写盘；提示标注
+  「近似值」。provider 事实表另留 OpenTopoData 备选。
+
+### 修复
+
+- **photoshop:DateCreated 未随偏移刷新（需求 3；C4）**：`Xmp.photoshop.DateCreated` 纳入 XMP 时间键表，与
+  `xmp:CreateDate` / `xmp:ModifyDate` 走同一条 `shifted_xmp_time` 纯函数（Δ 偏移与时区语义均改写；ISO-8601
+  带时区 / 小数秒原生支持）；`EffectivePreview` 加性补 `xmp_date_created`（显示 / 写入同源）；不可解析 → 跳过
+  写入且 effective = original（两路径同判据）。
+- **`sync_mtime` 在逐文件覆盖与仅元数据模式下的判据**：`MetadataPlan.sync_mtime` 由生效规则填，`pipeline`
+  两处改用 `meta_plan.sync_mtime`（无 override 时与旧口径同值，行为零变化）。
+
+### 变更（用户可见语义）
+
+- **预设载入 = 应用到选中文件**：元数据预设的载入不再把规则套到全部文件，而是**替换式**写入当前选中文件的
+  逐文件修改（无选中时 = 跟随回退的首个文件；不再无条件产生"全局规则"）；「保存预设」= 当前选择项编辑状态的
+  聚合快照（mixed / absent 字段留空）。
+- **「例外」= 带元数据修改**：文件列表徽标 / 状态栏「N 个例外」/ 隐私卡例外列表统一指"带逐文件元数据修改"
+  的文件；「清除例外」= 清除该文件全部元数据修改（UI 外观 / 入口不变）。
+- 元数据页「影响 N 个文件」胶囊改为「已选 N 个文件」（作用域 = 选择集，不再是批内全部）。
+- **单文件元数据编辑器**保留：以空批量规则 + 既有逐文件修改打开；确定时保留本轮新增的六个逐文件三态字段
+  （对话框不表达它们，不丢失）。
+- 引擎侧均为**加性**：`MetadataOverride` 末尾六个 `optional<bool>`（time_enabled / gps_enabled / privacy_enabled /
+  sync_mtime / modernize_exif / strip_creator_tool）、`BatchRules.strip_creator_tool`、`MetadataPlan.sync_mtime`、
+  `EffectivePreview.xmp_date_created`；缺省值 = 0.4.0 逐字行为（金样 20/20 + 回归 zero diff 双重背书）。
+
 ## [0.4.0] — 2026-11-01
 
 **正式版（stable）**：0.4.0 = **M10**（性能与运行页 / 参数面 / 格式预设与自适应，逐条细节见下方

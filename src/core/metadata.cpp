@@ -314,7 +314,10 @@ int offset_minutes_of(std::string_view offset) {
 
 const char *const kExifTimeKeys[3] = {"Exif.Photo.DateTimeOriginal", "Exif.Photo.DateTimeDigitized",
                                       "Exif.Image.DateTime"};
-const char *const kXmpTimeKeys[2] = {"Xmp.xmp.CreateDate", "Xmp.xmp.ModifyDate"};
+// M13-C4 加性：photoshop:DateCreated 与 xmp:CreateDate/ModifyDate 同一偏移/预览路径
+// （ISO-8601 带时区/小数秒形态由 parse_xmp_date/shifted_xmp_time 处理）。
+const char *const kXmpTimeKeys[3] = {"Xmp.xmp.CreateDate", "Xmp.xmp.ModifyDate",
+                                     "Xmp.photoshop.DateCreated"};
 // R1: fields mirrored into XMP when a container cannot carry EXIF.
 const char *const kMirrorKeys[3] = {"Exif.Photo.DateTimeOriginal", "Exif.Image.Artist",
                                     "Exif.GPSInfo.GPSLatitude"};
@@ -992,6 +995,28 @@ BatchRules effective_rules(const BatchRules &rules, const std::optional<Metadata
         eff.xmp_edits.insert(eff.xmp_edits.end(), ex->xmp_edits.begin(), ex->xmp_edits.end());
         if (ex->strip_privacy.has_value())
             eff.strip_privacy = *ex->strip_privacy; // 三态覆盖
+        // —— M13-C1：选择项级三态覆盖（UI 只写 MetadataOverride；BatchRules 传默认空）——
+        // 卡片开关的 false 是**该文件显式意志**：先于 optional 值覆盖落位（disabled 卡片的
+        // 自身值一并作废），但 optional 值覆盖在其后 → 显式 true/false 仍可精修。
+        // nullopt = 继承 = 逐字旧行为（默认路径零变化）。
+        if (ex->time_enabled == false)
+            eff.time_shift.reset(); // 时间卡未选 → 丢弃生效时间偏移（含本例外自身的）
+        if (ex->gps_enabled == false) {
+            eff.gps.reset();
+            eff.gps_clear = false;
+        }
+        if (ex->privacy_enabled == false) {
+            eff.strip_privacy = false;
+            eff.modernize_exif = false;
+            eff.sync_mtime = false;
+            eff.strip_creator_tool = false;
+        }
+        if (ex->sync_mtime.has_value())
+            eff.sync_mtime = *ex->sync_mtime;
+        if (ex->modernize_exif.has_value())
+            eff.modernize_exif = *ex->modernize_exif;
+        if (ex->strip_creator_tool.has_value())
+            eff.strip_creator_tool = *ex->strip_creator_tool;
     }
     return eff;
 }
@@ -1217,6 +1242,8 @@ bool BatchRules::is_noop() const {
     if (strip_privacy || sync_mtime)
         return false;
     if (modernize_exif)
+        return false;
+    if (strip_creator_tool) // M13-C1 加性（缺省 false：旧行为逐字不变）
         return false;
     return true;
 }
@@ -1469,6 +1496,9 @@ MetadataPlan build_plan(const SourceMeta &src, const BatchRules &rules,
     // effective = 源 ⊕ BatchRules ⊕ 例外（例外逐项覆盖；ignore_batch 先清空批量规则）
     // 合成规则单源 = effective_rules()（与 preview_effective() 共用，§3.5/§5.1）
     const BatchRules eff = effective_rules(rules, ex);
+    // M13-C3 加性：生效 sync_mtime 进 plan（pipeline 用它替代 cfg.rules.sync_mtime；
+    // 无例外时与规则同值 → 行为零变化）。
+    plan.sync_mtime = eff.sync_mtime;
 
     // 隐私剥除优先级最高：剥除后不得再写任何 EXIF/XMP 字段（§4.5）
     if (eff.strip_privacy) {
@@ -1518,6 +1548,14 @@ MetadataPlan build_plan(const SourceMeta &src, const BatchRules &rules,
         plan.warnings.push_back(Warning{WarningKind::MetadataDropped, "tag edit rejected: " + e});
     }
 
+    // M13-C1：CreatorTool 剥离（在编辑之后 ⇒ 显式剥离优先于同一 plan 的 tag edit）。
+    // 找不到静默跳过、不产生 warning（隐私剥除路径已在上方整份清空 XMP 并提前返回）。
+    if (eff.strip_creator_tool) {
+        auto it = plan.xmp.findKey(Exiv2::XmpKey(normalize_xmp_key("Xmp.xmp.CreatorTool")));
+        if (it != plan.xmp.end())
+            plan.xmp.erase(it);
+    }
+
     plan.datetime_original = effective_datetime(plan.exif, plan.xmp);
     plan.has_time = !plan.datetime_original.empty();
     if (eff.modernize_exif)
@@ -1534,7 +1572,7 @@ EffectivePreview preview_effective(const SourceProbe &probe, const BatchRules &r
     EffectivePreview out{};
     const BatchRules eff = effective_rules(rules, ex); // 与 build_plan 同一套合成逻辑
     out.strip_privacy = eff.strip_privacy;
-    out.sync_mtime = eff.sync_mtime; // MetadataOverride 无该三态 → 恒 = rules.sync_mtime
+    out.sync_mtime = eff.sync_mtime; // M13-C1：override.sync_mtime 可逐文件覆盖（nullopt=继承）
 
     // —— 三个 EXIF 时间字段（§5.1：DateTimeOriginal / DateTimeDigitized / DateTime(ModifyDate)）——
     const std::optional<TimeShift> shift =
@@ -1560,9 +1598,10 @@ EffectivePreview preview_effective(const SourceProbe &probe, const BatchRules &r
     }
 
     // —— R-085：XMP 日期（build_plan 一并改写 → 显示面补全，同源 shifted_xmp_time）——
-    EffectiveField<std::optional<DateTimeVal>> *const xmp_fields[2] = {&out.xmp_create_date,
-                                                                       &out.xmp_modify_date};
-    for (std::size_t i = 0; i < 2; ++i) {
+    // M13-C4：photoshop:DateCreated 与 xmp:CreateDate/ModifyDate 同表同路径（kXmpTimeKeys 三键）。
+    EffectiveField<std::optional<DateTimeVal>> *const xmp_fields[3] = {
+        &out.xmp_create_date, &out.xmp_modify_date, &out.xmp_date_created};
+    for (std::size_t i = 0; i < 3; ++i) {
         EffectiveField<std::optional<DateTimeVal>> &f = *xmp_fields[i];
         const std::string cur = xmp_string_value(probe.xmp, kXmpTimeKeys[i]);
         f.original = cur.empty() ? std::nullopt : std::optional<DateTimeVal>{DateTimeVal{cur}};

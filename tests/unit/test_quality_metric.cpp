@@ -1153,7 +1153,16 @@ void TestFastColorThroughput() {
     const double mpx_s = ms > 0.0 ? mpx / (ms / 1000.0) : 0.0;
     Info("fastcolor/throughput " + num_i(w) + "x" + num_i(rows) + " ms=" + num(ms) +
          " mpx_per_s=" + num(mpx_s) + " engine=" + lut->engine());
+#if defined(PP_SANITIZER_BUILD)
+    // M12-CI 裁定 A12（sanitizer 判据 scoping，不改释放/开发构建判据）：本断言是**性能退化守卫**，
+    // 前提 = 优化构建（O2/Release）。sanitizer 构建 = Debug + ASan/UBSan/TSan 插桩（实测量级
+    // 2–4.7 MPx/s），该阈值恒假红且不承载任何正确性语义 ⇒ 只在非 sanitizer 构建执行；此处
+    // 显式打印跳过原因（不静默）。release / release-dev 的 `mpx_s > 10.0` 逐字保留（见 #else）。
+    Info("fastcolor/throughput: 跳过性能阈值（sanitizer 构建无意义；判据 scoping 见 "
+         "docs/m12-adjudications.md A12）");
+#else
     check(ms > 0.0 && mpx_s > 10.0, "fastcolor/throughput", "吞吐异常：" + num(mpx_s) + " MPx/s");
+#endif
 }
 
 } // namespace

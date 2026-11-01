@@ -106,6 +106,17 @@ else()
     set_source_files_properties(${PP_SIMD_FP_TUS} PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
 endif()
 
+# M12-CI（sanitizer 判据 scoping；docs/m12-adjudications.md A12）：sanitizer 构建（CI nightly
+# 的 dev/tsan/asan-linux/ubsan 预设，或任何显式 -fsanitize= 的 Debug 旗标）**不是性能构建**——
+# 个别性能退化守卫（如 test_quality_metric 的 fastcolor 吞吐 >10 MPx/s）在插桩下必然假红。
+# 这里只提供一个**检测宏**（不改变任何构建 flags/判据）：release / release-dev 无该宏 ⇒
+# 全部既有判据逐字不变；只有 sanitizer 构建才允许测试侧把「仅对优化构建有意义」的性能断言
+# scoping 掉（每个 scoping 点在测试文件内单独注释 + 登记裁定，不静默全局关闭）。
+if(CMAKE_CXX_FLAGS MATCHES "-fsanitize=" OR CMAKE_CXX_FLAGS_DEBUG MATCHES "-fsanitize=")
+    add_compile_definitions(PP_SANITIZER_BUILD=1)
+    message(STATUS "PP-SANITIZER: sanitizer build detected（PP_SANITIZER_BUILD=1；性能类测试断言按裁定 scoping）")
+endif()
+
 # M4-T13b（D-W3-1 取证）：ASAN 开关的 flags 注入点。必须放在 avx2.cmake 之后
 # （要在 INTERFACE 目标上追加 /GL-、/LTCG:OFF —— 同一列表内后者生效，/arch:AVX2 保持不变）
 # 且在任何 target 定义之前（add_compile_options 只作用于其后定义的 target）。
@@ -232,11 +243,16 @@ file(GLOB_RECURSE PP_SSIM2_SOURCES CONFIGURE_DEPENDS
 # 修法：把这批 TU 的 `jxl` 命名空间 token 私有化（编译期宏，仅改标识符，不改 vendored
 # 源码字节、不改 include 路径）；compat+metric 两 TU 必须同一宏 ⇒ 内部实现自洽，与真实
 # libjxl 零共享符号。`jpegxl::tools`（compat 自有）不受影响；`JXL_*` 宏/字符串/includes 不受影响。
+# M12-D26（同上机 tsan 实测第二处 ODR）：同一批 TU 还经 vendored gauss_blur 引入 **Highway
+# (`hwy`) 头文件**；vcpkg 预编译的 jpegli/libjxl 与我们两个 TU 都 include 同一份 hwy 头，但
+# 编译 flags 不同（我们是 AVX2 基线、vcpkg 依赖不带 ISA flags）⇒ `hwy::` 内联/COMDAT 同名
+# 合并、dispatch table 错位（tsan 下 jpegli VectorSize() 调空函数指针 SEGV）。同法把该批 TU
+# 的 `hwy` 命名空间 token 也私有化 ⇒ 与 jpegli/libjxl 的 hwy:: 零重叠（符号级 dumpbin 已验证）。
 set(PP_SSIM2_PRIVATE_TUS ${PP_SSIM2_SOURCES}
     ${CMAKE_SOURCE_DIR}/src/core/metric/metric.cpp
     ${CMAKE_SOURCE_DIR}/src/core/metric/metric_oracle.cpp)
 set_source_files_properties(${PP_SSIM2_PRIVATE_TUS}
-    PROPERTIES COMPILE_DEFINITIONS "jxl=pp_ssim2_jxl")
+    PROPERTIES COMPILE_DEFINITIONS "jxl=pp_ssim2_jxl;hwy=pp_ssim2_hwy")
 list(APPEND PP_CORE_SOURCES ${PP_SSIM2_SOURCES})
 add_library(pp_core STATIC ${PP_CORE_SOURCES})
 # M2-T11 §2.2：生成的 core/version.h（构建目录）随 src 一并 PUBLIC 传播

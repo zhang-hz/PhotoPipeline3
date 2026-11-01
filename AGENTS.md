@@ -2,7 +2,7 @@
 
 > **这份文档是什么**:在本仓库工作的 AI 智能体与新协作者的总导航 + 纪律总纲。目标是让你不必读完 docs/ 下 1.1 万行文档,就能回答四个问题:**这个项目要什么、东西放在哪、哪些红线不能碰、干完活要留下什么证据**。
 > **权威链**:本文只是导航与纪律;细节真源永远是它指向的那份文档或代码。两者冲突时**以真源为准**,并顺手回来修订本文。
-> **版本口径**:0.3.6.alpha2(版本号单源 = `CMakeLists.txt:19-24`:数字段 `project(PhotoPipeline VERSION 0.3.6)` + 预发布标签 `PP_VERSION_LABEL ".alpha2"`(正式版为空串);CMake `project(VERSION)` 只收数字段,标签拼在字符串侧;`vcpkg.json` version 只写数字段 0.3.6——R-122 单源一致性断言要求与 `project(VERSION)` 同值。任何其它地方出现的版本号都是引用,不是定义)。
+> **版本口径**:0.4.0.alpha1(版本号单源 = `CMakeLists.txt:19-26`:数字段 `project(PhotoPipeline VERSION 0.4.0)` + 预发布标签 `PP_VERSION_LABEL ".alpha1"`(正式版为空串);CMake `project(VERSION)` 只收数字段,标签拼在字符串侧;`vcpkg.json` version 只写数字段 0.4.0——R-122 单源一致性断言要求与 `project(VERSION)` 同值。任何其它地方出现的版本号都是引用,不是定义)。
 
 ---
 
@@ -45,14 +45,14 @@ RAW/DNG 输入 · GIF 输出 · 图像编辑(缩放/裁剪/水印/锐化/降噪)
 
 ---
 
-## 2. 当前状态(2026-10-31)
+## 2. 当前状态(2026-11-01)
 
 | 项 | 状态 |
 |---|---|
-| 版本 | **0.3.6.alpha2**(预发布,**已发行**:tag `v0.3.6.alpha2` annotated `01e2e9f0` → commit `c7bcabc`;`main-full` #102(10/10)/`release.yml` #22(7/7)全绿;GitHub Release published 2026-10-31T02:46:05Z(prerelease=false/Latest),4 资产;报告 `docs/0.3.6.alpha2-report.md`。版本单源 = `project(PhotoPipeline VERSION 0.3.6)` + `PP_VERSION_LABEL ".alpha2"`,`--version` = `PhotoPipeline 0.3.6.alpha2`);上一预发布 **0.3.6.alpha1** 已发行(tag `v0.3.6.alpha1`;`main-full` #99 / `release.yml` #21 全绿,报告 `docs/0.3.6.alpha1-report.md`);上一正式版 **0.3.5** 已发行(tag `v0.3.5`,报告 `docs/0.3.5-report.md`);0.3.3 Windows zip 为坏件(启动 P0,见 `docs/0.3.4-report.md`) |
-| 里程碑 | M0 环境/六 Spike/冻结面 → M1a 引擎 + M1b UI → M2 Linux 收口 → M3 Windows(=0.2.0) → M4/M5 = 0.3.0(九项需求 + GUI v6 刷新) → 0.3.1 GUI 缺陷根治 → M6 = 0.3.2 → M7 = 0.3.3(工程收口,Windows 启动 P0)→ 0.3.4 热修 → 0.3.5.alpha1/alpha2/alpha3 预发布 → 0.3.5 正式版(收口修复批) → M8 = 0.3.6.alpha1(参数面全暴露 116 行 + SSIMULACRA 2 逐输出评分) → **M9 = 0.3.6.alpha2(JXL 有损 VarDCT 修复 + HEIF 真实档位/Level/grid 配置矩阵 + 穷举矩阵验证器)** |
-| 质量面 | 金样断言级 **20 对** 全绿(`SMOKE total=20 pass=20 fail=0`);ctest **43/43**(release-dev,含 ui_smoke;新增 3 个 M9 单测);`--ui-smoke` 冻结行 `UI-SMOKE OK shots=12 pages=3` + 识图/参数/评分门禁全过;格式 violations=0;tidy `262=262 violations=0`;`pp_verify --selftest` 56 probes;HEIF 配置矩阵 **1013 例 = pass 697 / fail 0 / expected-fail 316 / unexpected 0**(`build/matrix/final.md`);JXL 有损评分-距离单调(d2.0 80.81 → d0.2 92.38);winzip 门禁 A/B/A′/C/D + E-1/E-2/E-3 由 CI 复核;回归 zero diff 以 CI 双平台为准(本机 diff = 已知 runner/路径形态 + JXL 预期产物变化) |
-| **开放问题** | ① `docs/deep-review-0.3.2.md`:深度评审台账(**P0 ×2 已由 0.3.3 数据安全线 + 0.3.5 同目录输出修订收口**;P1/R3 条目为长期台账);② `docs/ux-review-14.md`:14 项 UI 问题定位与改进方案(只读评审,**改动须经用户确认后另起提交**);③ `docs/m7r25-report.md` §5:识图门禁未覆盖项;④ libde265 对部分 HEVC RExt 码流(如 `super/T2.heic`)仍不可解码;⑤ 高德线上搜索仅账号实测可最终确认(本机 TLS 环境不可用);⑥ M9 未决:GUI 无显式 grid 行、iPhone 真机接受度未验、WIC 16-bit JXL viewer 缺陷与本次修复无关、AVIF 未纳入矩阵;⑦ 详见 §11 已知债 |
+| 版本 | **0.4.0.alpha1**(预发布,**发行准备中:未打 tag**。版本单源 = `project(PhotoPipeline VERSION 0.4.0)` + `PP_VERSION_LABEL ".alpha1"`,`vcpkg.json` = `0.4.0`(R-122),`--version` = `PhotoPipeline 0.4.0.alpha1`;CHANGELOG / README / 本文 / 报告草稿 `docs/0.4.0.alpha1-report.md` 已同步,CI 轮次与 Release 资产**待填**);上一预发布 **0.3.6.alpha2** 已发行(tag `v0.3.6.alpha2` annotated `01e2e9f0` → commit `c7bcabc`;`main-full` #102(10/10)/`release.yml` #22(7/7)全绿;Release published 2026-10-31T02:46:05Z,4 资产;报告 `docs/0.3.6.alpha2-report.md`);上一正式版 **0.3.5** 已发行(tag `v0.3.5`,报告 `docs/0.3.5-report.md`);0.3.3 Windows zip 为坏件(启动 P0,见 `docs/0.3.4-report.md`) |
+| 里程碑 | M0 环境/六 Spike/冻结面 → M1a 引擎 + M1b UI → M2 Linux 收口 → M3 Windows(=0.2.0) → M4/M5 = 0.3.0(九项需求 + GUI v6 刷新) → 0.3.1 GUI 缺陷根治 → M6 = 0.3.2 → M7 = 0.3.3(工程收口,Windows 启动 P0)→ 0.3.4 热修 → 0.3.5.alpha1/alpha2/alpha3 预发布 → 0.3.5 正式版(收口修复批) → M8 = 0.3.6.alpha1(参数面全暴露 116 行 + SSIMULACRA 2 逐输出评分) → **M9 = 0.3.6.alpha2(JXL 有损 VarDCT 修复 + HEIF 真实档位/Level/grid 配置矩阵 + 穷举矩阵验证器)** → **M10 = 0.4.0.alpha1(评分池/预算拆分/多格式并行/逐输出事件 + HEIF grid·still 档·tune·RC + JXL 治理 43→31 键 + 格式预设与自适应策略)** |
+| 质量面 | 金样断言级 **20 对** 全绿(`SMOKE total=20 pass=20 fail=0`);ctest **48/48**(release-dev,含 ui_smoke;M10 新增 5 个单测);`--ui-smoke` 冻结行 `UI-SMOKE OK shots=12 pages=3` 逐字不变 + 识图/参数/评分/格式预设门禁全过(`checked=23 bad=0`);格式 `FILES=233 violations=0`;tidy `262=262 violations=0`(未 `--update`);`pp_verify --selftest` 56 probes;HEIF 矩阵全量 **1102 例 = pass 732 / fail 0 / expected-fail 370 / unexpected 0**(0.4.0.alpha1 候选 `F3A0448A…`;与 M9 1013 例对比 verdict/hvcC 事实差异 0);默认产物 jpeg/webp/jxl 3/3 + HEIF 6/6 与基线逐字节相同;JXL 有损评分-距离单调(d2.0 80.81 → d0.2 92.38);回归:产物层仅 JXL 有损 **23/23 有意变化**、非 JXL 0 diff;A15 已由 N11/N12 归一 + 本地重播种收口(**zero diff×2**,基线 336,399B/SHA `4FC72B33…6A49`),CI windows-2025/Linux 基线待 nightly `workflow_dispatch` 复核 |
+| **开放问题** | ① `docs/deep-review-0.3.2.md`:深度评审台账(**P0 ×2 已由 0.3.3 数据安全线 + 0.3.5 同目录输出修订收口**;P1/R3 条目为长期台账);② `docs/ux-review-14.md`:14 项 UI 问题定位与改进方案(只读评审,**改动须经用户确认后另起提交**);③ `docs/m7r25-report.md` §5:识图门禁未覆盖项;④ libde265 对部分 HEVC RExt 码流(如 `super/T2.heic`)仍不可解码;⑤ 高德线上搜索仅账号实测可最终确认(本机 TLS 环境不可用);⑥ M9 未决:GUI 无显式 grid 行(**M10 已由 `heif_grid` 配置行收口**)、iPhone 真机接受度未验、WIC 16-bit JXL viewer 缺陷与本次修复无关、AVIF 未纳入矩阵;⑦ **M10 未决**:P4-1 `metric≤encode` 未达(1.072×)、10-bit HEIC probe 与 HEIC 深 probe 首事件超阈、**TSan 未测**(本机无 TSan 运行面;CI nightly tsan job 自 #28 起 build 红、待修,P0 见 `build/m10/tsan/report.md` §2.2)、HEIF 全量矩阵复跑见 `build/m10/heif-full/`、**A15 已本地重播种并 zero diff×2**、A12/A7/A19 待追认、`output best`/`tech` 策略目标校验期拒绝;⑧ 详见 §11 已知债 |
 
 ---
 

@@ -1,5 +1,117 @@
 # 变更日志
 
+## [0.4.0.alpha1] — 2026-11-01
+
+**预发布（alpha）**：M10 = **性能与运行页**（评分池 / 预算拆分 / 同文件多格式并行 / 逐输出事件）+
+**参数面**（HEIF grid·tile·still 档位 16–21 / tune / RC + JXL 治理 43→31 键）+ **格式预设与自适应策略**
+（两个新文件类型 + 执行器，自适应**默认关闭**）。版本单源 = `CMakeLists.txt:19-26` = **0.4.0.alpha1**
+（数字段 0.4.0 + 预发布标签 ".alpha1"）；`vcpkg.json` 同步数字段 0.4.0（R-122 口径）。
+逐条证据与门禁读数见 [docs/m10-report.md](docs/m10-report.md)，发行报告见
+[docs/0.4.0.alpha1-report.md](docs/0.4.0.alpha1-report.md)，裁定见
+[docs/m10-adjudications.md](docs/m10-adjudications.md)，新增手册见
+[docs/format-presets.md](docs/format-presets.md) 与 [docs/adaptive-policy.md](docs/adaptive-policy.md)。
+
+### 新增
+
+- **格式预设（新文件类型，C23）**：每个格式卡的可运行快照（`kind: format-preset`，schema
+  `docs/schemas/format-preset.v1.schema.json`），存 `<data_dir>/presets/formats/<format>/<name>.json`；
+  输出页每页签顶部「格式预设」行（下拉 + 保存 / 另存… / 删除 / 导入… / 导出…，选中即载入）；
+  保存→载入→保存**字节稳定**，坏文件仍列出并标错；内置 5 条（HEIF/AVIF/JXL/WebP/JPEG）由**运行时幂等 seed**
+  落到 `_builtin-<fmt>.json`（只读，可另存）。
+- **自适应策略（默认关闭，C24）**：行式 DSL（解析 / 渲染幂等 / 校验，**42 条错误码**）→ 执行器
+  （linear / bisect / exp / greedy、达标即停、`max_rounds` / plateau / 阶段耗尽、每轮参数校验）；
+  每轮编码到同目录候选（**不写元数据**）→ 同步评分 → 选定提交 → 走既有 metawrite/mtime；进度与日志
+  （`adaptive round` / `adaptive summary(policy_sha)`）+ 侧车加性 `adaptive` 对象；出厂 5 条策略，
+  GUI 只读摘要 + 「启用自适应」开关（**无文本编辑器**）。
+- **独立评分池 + 异步评分**：进程级 `ScorePool`（K = min(4, max(1, hw/4))、独立配额、看门狗心跳、
+  `wait_idle` / `cancel_pending`；per-run 取消/复位、提交原因三分类、可测 `drain`）。
+- **同文件多格式并行**：飞行预算 token + `max_parallel_targets`；1 文件 4 格式 22.8 MP 最终树
+  **12,719 ms vs 串行 16,690 ms = 1.31×**，四格式产物 SHA256 并行==串行。
+- **逐输出事件**：`OutputDone` / `FileEvent::output` / 心跳；侧车与 `progress-trace.jsonl` 含 `output` 对象
+  （成功 / 跳过 / 失败 / 取消四路，11/11 早于文件终态、0 违规）。
+- **HEIF grid / tile 配置行**：`heif_grid`（0 关 / 1 自动 / 2 总是，默认自动）、`heif_tile_w/h`
+  （0=自动、64–8192、8 向下对齐）；`x265:level-idc` 上移核心区；**默认（无显式 Level）产物零变化**。
+- **HEVC still 档位 16–21**（编号不重排）：编码后从 hvcC 内嵌 SPS 解析 constraint + DPB 做 still 语义断言；
+  **16（Main10Still）实测不可用**（DPB 4/2）⇒ 置灰并给原因；修正 3 个误导标签（7/10/13）。
+- **tune / RC 面**：HEIF tune 7 项（4 原生 + `animation` 仿真 + 2 置灰）、AVIF-libaom 扩 `ssimulacra2` /
+  `vmaf_saliency_map`、AVIF-SVT 5 值中文标签；RC 数值行（quality/crf/qp、`aom:cq-level`、SVT `qp`）
+  重建到核心区紧随模式行，动态域 8bit `0..51` / 10bit `−12..51` / 12bit `−24..51`，
+  QP+显式 Level 中文错误、CRF+Level 告警（规则 H5）。
+- **运行页列单源** `RunTableColumns`：删「速度」列、名称列中间省略（`ElideMiddle`）+ 全路径 tooltip、
+  压缩比迁入大小列 tooltip、评分列 44px。
+- **探针工具（dev-only，不进 ctest）**：`tools/perf_smoke.py`（11 探针 + `--selftest` 16 例）、
+  `tools/pp_progress_audit.py`（9 项检查 + `--selftest` 10 例）。
+- **`--dev` 加性**：`--adaptive-policy FILE`、`--preset` 也接受格式预设、全局预设 `outputs[].adaptive`。
+
+### 修复
+
+- **大图 + 评分被预算打穿**：评分 `+160 B/px` 曾并入文件 need（48 MP PNG + `--score` 报
+  `need 8,832,000,000 B > capacity 8,589,934,592 B` 且 `EXIT=1`）；改为文件 need 恢复 `2×frame`、
+  评分走独立 `ScoreQuota`（容量 = min(文件预算/2, 4 GiB)）⇒ `need_bytes` 8.832 GB → **1.152 GB**，
+  48 MP 用例 `EXIT=0`、产物 282,405 B、评分 100。
+- **评分色彩归一慢**：lcms 改按带 + 日志限流（数值等价 `max_err=0`，1485 checks；按带本身无可测提速，
+  如实登记 D-1）；真正提速来自 matrix-shaper 快速内核：**8.49 s → 0.42 s（20×）**，`|Δscore| ≤ 0.01`，
+  并加「快速内核分数 ≥90 且 <100 ⇒ 精确 lcms 重算」兜底。
+- **双重 probe**：probe 结果一次产出、`FileEntry::probe` 复用 → 22.8 MP HEIC 输入首个
+  `Probing → Decoding` **2,902.9 ms → 1,447.8 ms（−50.1%）**，`decode_ms` 不变。
+- **SSIMULACRA 2 内存**：流式/分块化，23 MP 峰值额外内存 **165.1 MB ≈ 7.6 B/px**（旧实现 148.7 B/px 的
+  5.1%），与旧实现 oracle 逐组 `|Δ| = 0.000000000`；单次评分 1.572 s。
+- **HEIF 档位/标签**：档位 16（Main10Still）实测不可用 ⇒ UI 置灰 + 原因（不再让用户选中即失败）。
+- **元数据「无手术」快路径**：无 EXIF/XMP 变更 / 无隐私剥除 / 无 mtime 同步 ⇒ 跳过整文件拷贝重写
+  （`metadata: no surgery, skipped rewrite`）；有手术时 R-002 原子写逐字不变（C9 收窄到安全子集，D-2）。
+
+### 变更
+
+- **JXL 参数治理（C22）**：43 → **31 键**（删 12 个结构性 no-op）；`epf` 默认 2 → **−1（跟随库）**；
+  `gaborish` / `dots` / `patches` 改三态（未设置 = 不下发）；`codestream_level` 只读；`brotli_effort`
+  修作用域；`color_transform` 收窄；`channel_colors_*` Int→Float；`effort=11` 自动 `AllowExpertOptions`。
+  **行为变化（有意）**：JXL 有损产物 **23/23 变化**（回归已逐条归因，未重播种，见「测试」）。
+- **参数目录 116 → 117 行**（HEIF +3 grid/tile、JXL −2）；`m8-params checked=104 bad=0`。
+- **评分与调度默认值**：`AppSettings::stagger_ms` 150 → **0**（交错启动改由显式设置/调度决定）。
+- **运行页**：删「速度」列（信息并入大小列 tooltip）、名称列中间省略 + 全路径 tooltip。
+- **质量行标签**：改为「质量（0–100；CRF=(100−q)/2)」⇒ `02-output` 截图文本**有意变化**
+  （截图集与冻结末行不变；`tests/ui_smoke.py` 明写不做像素比对）。
+- **版本单源 0.3.6.alpha2 → 0.4.0.alpha1**：`CMakeLists.txt` 数字段 `0.3.6 → 0.4.0`、
+  `PP_VERSION_LABEL ".alpha2" → ".alpha1"`；`vcpkg.json` 同步 0.4.0（R-122）；README/AGENTS 现役口径同步；
+  `--version` = `PhotoPipeline 0.4.0.alpha1`。
+
+### 测试
+
+- 单测 **48/48**（新增 5 个：`test_score_queue` / `test_format_presets` / `test_adaptive_policy` /
+  `test_adaptive_exec`（22 例）/ `test_heif_tune`（142 checks）；并扩展 heif_capability / heif_profile /
+  pipeline_contract / progress / pixelbudget / scheduler_contract / metadata / params / param_rules /
+  presets / quality_metric / settings / color / param_catalog）。
+- 金样 `SMOKE total=20 pass=20 fail=0`；UI 冻结末行 `UI-SMOKE OK shots=12 pages=3` 逐字不变，
+  `ui_smoke.py` pass（format-preset 组 `checked=23 bad=0`）；格式 **FILES=233 RC=0 VIOLATIONS=0**；
+  tidy `TIDY total=262 baseline=262 files=76 violations=0`（**未 `--update`**）。
+- HEIF 矩阵（4 子集）：**233 例 = pass 59 / fail 0 / expected-fail 174 / unexpected 0**。
+- 默认产物稳定性：jpeg / webp / jxl **3/3**、HEIF **6/6** 与基线**逐字节相同**。
+- 版本升级后本机复跑（新树 `build/rel-0.4.0.alpha1`）：`--version` = `PhotoPipeline 0.4.0.alpha1`、
+  ctest **48/48**（首跑有 1 次 `ui_smoke` 重入守卫探针时序抖动，复跑通过）、金样
+  `SMOKE total=20 pass=20 fail=0`；`tools/ci-versions-check.py` OK。
+- 回归：产物层**仅 JXL 有损 23/23**（有意），非 JXL 段 **0 diff**；日志面 diff = M10 加性日志 +
+  **runner 形状**（基线 `thread_budget=4` vs 本机 16）+ vcpkg 路径 ⇒ 本地**未重播种**
+  （D-9：待 CI `windows-2025` 侧重播，或先加 N11 归一后重播）。
+
+### 已知
+
+- **性能目标部分未达（如实）**：P4-1 `metric_ms ≤ encode_ms` 未达（2,178.6 / 2,032.1 = **1.072×**，D-5）；
+  P4-6 10-bit HEIC 输入 1,635–1,670 ms（8-bit 1,443–1,470 ms 达标，D-6）；P4-2 HEIC 深 probe 首事件 gap
+  1.44–1.67 s（其余 ≤406 ms，D-7）；P9-1 CPU ≈4.01 核（诊断项）。
+- **TSan 未跑**：多格式并行 / 评分池**无线程竞态证据**，不宣称已验。
+- **HEIF 全量矩阵未跑**：本次 4 子集 233 例（`unexpected=0`）；1013 例全量口径待补跑。
+- **内置预设不随包出厂**：走运行时幂等 seed（D-8），无 `share/presets` 安装规则（行为由单测/`--ui-smoke` 钉住）。
+- **自适应未覆盖**：`output best` 校验期显式拒绝（需候选集保留/磁盘成本评估）；`tech` 切换默认禁止。
+- **iPhone 真机接受度未验**（grid 1024×576 基准仅对齐 Apple 参考）；**AVIF 未纳入矩阵**。
+- **`format_preset_io.cpp` 未进 `pp_core`**（CMake GLOB 归 UI 目标）；两份新 schema 只做 JSON 语法解析，
+  未做 2020-12 meta-schema 校验。
+
+### 发行
+
+- **发行准备阶段（未打 tag）**：tag `v0.4.0.alpha1`、`main-full` / `release.yml` 轮次与 Release 4 资产
+  （win64.zip / AppImage / deps.txt / SHA256SUMS）指纹 **待填**；本节**不声称**任何尚未发生的 CI 或打包数字。
+  发行树 `--version` 产物读数见 [docs/0.4.0.alpha1-report.md](docs/0.4.0.alpha1-report.md) §2.1。
+
 ## [0.3.6.alpha2] — 2026-10-31
 
 **预发布（alpha）**：M9 = **JXL 有损 VarDCT 修复** + **HEIF 真实档位/Level/grid 配置矩阵**

@@ -4,6 +4,8 @@
 
 M0 交付仓库骨架、冻结接口、链接探针与金标语料。**M1a 交付全部编码引擎**：core 基础设施（logger / fsops / 像素预算 / 参数引擎 / 预设）、解码层、色彩层、元数据层、8 个编码器、调度器与 `--dev` 命令行 harness。**M1b 交付完整桌面 UI**：三页主窗口（元数据规则 / 输出配置 / 运行监控）、异步缩略图文件列表、内嵌地图选点、参数表单引擎、单文件 EXIF/XMP 编辑器、设置与预设对话框，以及 `--ui-smoke` 无头走查。**M2 完成 Linux 发行收口**：`--version` 版本单源、AppImage 打包（含离线打包与许可随附）、金样断言级 16 对、回归基线、ASan/UBSan/TSan 清扫，以及持续集成——`build-test.yml` 的**四个 job**（`linux` / `ui-smoke` / `appimage` / `cache-gc`）与缓存播种 workflow `warm-cache.yml`。**M3 完成 Windows 移植与双平台发行**（0.2.0）：UTF-8 全局语义、Mica 深色标题栏、`make_winzip.py` 五项门禁、tag 触发发行自动化。
 
+**M10（0.4.0.alpha1 预发布）= 性能与运行页 + 参数面 + 格式预设与自适应**：① **性能**——评分预算拆分（大图 + 评分不再被预算打穿，`need_bytes` 8.832 GB → **1.152 GB**）、评分色彩归一快速内核（**8.49 s → 0.42 s，20×**）、SSIMULACRA 2 流式化（**7.6 B/px**，约旧实现 5%）、双重 probe 消除（22.8 MP HEIC 首个 `Probing → Decoding` **2,902.9 → 1,447.8 ms**）、**独立评分池 + 异步评分**、**同文件多格式并行**（1 文件 4 格式 **1.31×**，四格式 SHA256 并行==串行）、**逐输出事件**。② **参数面**——HEIF **grid/tile** 配置行、**still 档位 16–21**（hvcC 回读断言；16 实测不可用 ⇒ 置灰）、**tune 7 项**、RC 数值行上移核心区、**JXL 治理 43→31 键**。③ **格式预设与自适应（新）**——格式卡可变快照存/导入导出；**自适应策略默认关闭**，出厂 5 条。详见 [docs/m10-report.md](docs/m10-report.md)、[docs/m10-adjudications.md](docs/m10-adjudications.md)。
+
 **M9（0.3.6.alpha2 预发布）= JXL 有损修复 + HEIF/iPhone 兼容配置矩阵**：① **JXL 有损 VarDCT 修复**——有损 VarDCT 不再走 libjxl 非 XYB 缺陷路径（`uses_original_profile` 恒 false、XYB 编码；显式 true 明确报错），修复「distance 越小评分越差、体积暴涨」；实测 T1 16-bit keep `d2.0 2.04MB/80.81 → d0.2 12.66MB/92.38`（体积与分数双单调）。② **HEIF 真实档位/Level/grid 配置矩阵**——档位下拉扩为 12 个真实 HEVC 信号（Main Still idc3 / Main idc1 / Main10 idc2 / RExt 4:2:0·4:2:2·4:4:4 × 8/10/12 idc4）+ 自动；HEVC Level 合法性按 x265 4.3「8 像素补齐后 MaxLumaPs」预校验并给中文可操作错误；新增有损 HEIF grid（Apple 1024×576 基准 / 自动适配 Level；默认仅在显式 Level 装不下整图时自动分块），大图 + L3.1 从「失败」变为合法可解码 grid；编码后 hvcC 回读校验档位/Level/位深/色度。③ **穷举矩阵验证器** `tools/heif_matrix_check.py`：1013 例 = **pass 697 / fail 0 / expected-fail 316 / unexpected 0**，697 个合法组合全部结构断言 + 解码通过。详见 [docs/m9-report.md](docs/m9-report.md)、[docs/m9-adjudications.md](docs/m9-adjudications.md)。
 
 **M8（0.3.6.alpha1 首个发行件）= 参数面全暴露 + SSIMULACRA 2 逐输出评分**：① HEIF/AVIF/JXL 参数面扩展——精选目录 **116 行**（x265 40 / libaom 57 / SVT 3 / JXL 16；三态启用、只读/禁用、RC 模式显式下拉、联动规则与运行前预检；清单外透传键 = 预检错误）；② **SSIMULACRA 2 逐输出评分**——GUI 默认开、8 种输出全覆盖，运行页任务表新增「评分」列（逐输出行显示两位小数，
@@ -37,7 +39,24 @@ caption 单轨 46×32；壳层顶栏 44 + 状态栏 30；**栏宽固定轴 330 /
 逐条探针、偏差与未决项见 [docs/m5-report.md](docs/m5-report.md)，开发期裁定见
 [docs/m5-adjudications.md](docs/m5-adjudications.md)。
 
-**0.3.6.alpha2（当前版本，预发布）= M9：JXL 有损修复 + HEIF/iPhone 兼容配置矩阵**：① **JXL 有损
+**0.4.0.alpha1（当前版本，预发布）= M10：性能与运行页 + 参数面 + 格式预设与自适应**：① **性能**——
+评分预算拆分（大图 + 评分不再被预算打穿：48 MP PNG + `--score` 由 `EXIT=1` 变 `EXIT=0`，
+`need_bytes` 8.832 GB → **1.152 GB**）、评分色彩归一快速内核（**8.49 s → 0.42 s，20×**）、
+SSIMULACRA 2 流式化（23 MP 峰值额外内存 **7.6 B/px**，约旧实现的 5%）、双重 probe 消除（22.8 MP HEIC
+首个 `Probing → Decoding` **2,902.9 → 1,447.8 ms**）、**独立评分池 + 异步评分**、**同文件多格式并行**
+（1 文件 4 格式 22.8 MP **1.31×**，四格式产物 SHA256 并行==串行）、**逐输出事件**（`OutputDone`）。
+② **参数面**——HEIF **grid/tile 配置行**（0 关 / 1 自动 / 2 总是 + tile 宽高）、**still 档位 16–21**
+（编码后 hvcC 回读断言；16 Main10Still 实测不可用 ⇒ 置灰）、**tune 7 项**（AVIF 另扩
+`ssimulacra2` / `vmaf_saliency_map`）、RC 数值行上移核心区 + 8/10/12-bit 动态域、**JXL 治理 43→31 键**
+（删 12 个结构性 no-op、`epf` 默认跟随库、三态语义）。③ **格式预设与自适应（新）**——每个格式卡可
+保存 / 另存 / 删除 / 导入 / 导出为预设文件（内置 5 条运行时 seed）；**自适应策略默认关闭**（目标质量 /
+最多轮数 / linear·bisect·exp·greedy），GUI 只有只读摘要 + 启用开关。**性能目标部分未达**（P4-1
+metric 2,178.6 / encode 2,032.1 ms = 1.072×、10-bit HEIC probe 1,635–1,670 ms、HEIC 深 probe 首事件
+1.44–1.67 s，见 CHANGELOG「已知」）。**发行准备中**（tag `v0.4.0.alpha1` 与 CI/打包读数待填）；
+逐条变更见 [CHANGELOG.md](CHANGELOG.md) `[0.4.0.alpha1]`，验收证据见
+[docs/0.4.0.alpha1-report.md](docs/0.4.0.alpha1-report.md)。
+
+**0.3.6.alpha2（历史预发布）= M9：JXL 有损修复 + HEIF/iPhone 兼容配置矩阵**：① **JXL 有损
 VarDCT 修复**——有损 VarDCT 不再走 libjxl 非 XYB 缺陷路径（`uses_original_profile` 恒 false、XYB 编码；
 显式 true 明确报错），修复「distance 越小评分越差、体积暴涨」；T1 16-bit keep 实测 `d2.0 2.04MB/80.81
 → d0.2 12.66MB/92.38`（体积与分数双单调）。② **HEIF 真实档位/Level/grid 配置矩阵**——档位下拉扩为
@@ -121,7 +140,7 @@ R2 轮方案见 [docs/m7r2-plan.md](docs/m7r2-plan.md)。**色彩能力四选项
 渲染意图 / 线性光重采样）已入引擎并在界面提供开关**——**输出页全局卡**四行（默认全关 =
 行为不变；0.3.x 默认路径另有两处已归因字节变化，见 CHANGELOG「变更」节）；8bit 抖动仅作用
 于 JPEG/WebP/JXL 及 OIIO 系四家的 8bit 量化段（HEIF/AVIF 的 8bit 路径不接）。**发行状态：0.3.3 已发布**（2026-10-13；其 Windows zip 有启动 P0，已由 0.3.4 热修，
-请使用 0.3.4 或更新版本；当前最新正式版 = 0.3.5 正式版，最新预发布 = 0.3.6.alpha2）。
+请使用 0.3.4 或更新版本；当前最新正式版 = 0.3.5 正式版，最新预发布 = 0.4.0.alpha1（本树，发行准备中））。
 
 **0.3.2 = GPS 地图升级版（M6）**：把「内嵌地图选点」从能用升级到**地图 App 水平**——
 R1 搜索搜得出（改用可达的**高德 Web 服务**事实表：`place/text` + 周边偏置 **`around` 20 条**按距离升序 +
@@ -493,12 +512,60 @@ python tools/env.py run -- cmake --build --preset release
   d0.3 10.06MB/91.67 → d0.2 12.66MB/92.38（体积与分数双单调）；P3 XYB 回读 P3 参考 idiff
   PSNR 41.03 dB（仅压缩误差）。
 
+### M10 性能/运行页 + 参数面 + 格式预设与自适应（0.4.0.alpha1）
+
+**性能与运行页**
+
+- **评分预算拆分**：文件 `need` 恢复 `2×frame`，评分走独立配额（容量 = min(文件预算/2, 4 GiB)）⇒
+  48 MP PNG + `--score` 由 `EXIT=1` 变 `EXIT=0`；`need_bytes` 8.832 GB → **1.152 GB**；评分批并发
+  由 1 升到 14（24 MP 推算）。
+- **评分加速**：色彩归一 matrix-shaper 快速内核 **8.49 s → 0.42 s（20×）**（`|Δscore| ≤ 0.01`；
+  分数 ≥90 且 <100 时用精确 lcms 重算兜底）；SSIMULACRA 2 流式/分块，23 MP 峰值额外内存
+  **165.1 MB ≈ 7.6 B/px**（旧实现 148.7 B/px 的 5.1%），单次评分 1.572 s。
+- **probe 去重**：probe 结果一次产出并复用 ⇒ 22.8 MP HEIC 首个 `Probing → Decoding`
+  **2,902.9 → 1,447.8 ms（−50.1%）**，`decode_ms` 不变。
+- **独立评分池 / 多格式并行 / 逐输出事件**：`ScorePool`（K = min(4, max(1, hw/4))、独立配额、心跳、
+  per-run 取消复位）；同文件多格式并行（1 文件 4 格式 22.8 MP **12,719 ms vs 串行 16,690 ms = 1.31×**，
+  四格式产物 SHA256 并行==串行）；`OutputDone` / `FileEvent::output` 逐输出事件（成功/跳过/失败/取消）。
+- **运行页**：列单源 `RunTableColumns`，删「速度」列（信息并入大小列 tooltip）、名称列中间省略
+  （`ElideMiddle`）+ 全路径 tooltip、评分列 44px。
+- **仍未达（如实）**：P4-1 `metric_ms ≤ encode_ms` 未达（2,178.6 vs 2,032.1 ms = 1.072×）；
+  10-bit HEIC 输入 probe 1,635–1,670 ms（8-bit 达标）；HEIC 深 probe 首事件 gap 1.44–1.67 s。
+
+**参数面（HEIF / JXL）**
+
+- **HEIF grid/tile 配置行**：`heif_grid`（0 关 / 1 自动 / 2 总是，默认自动）+ `heif_tile_w/h`
+  （0=自动、64–8192、8 向下对齐）；`x265:level-idc` 上移核心区；**默认（无显式 Level）产物零变化**；
+  保留键 `__heif_grid` 仍可读（兼容别名）。
+- **still 档位 16–21**（编号不重排）：编码后从 hvcC 内嵌 SPS 解析 constraint + DPB 断言 still 语义；
+  **16（Main10Still）实测不可用（DPB 4/2）⇒ 置灰并给原因**；修正 3 个误导标签（7/10/13）。
+- **tune / RC**：HEIF tune 7 项（4 原生 + `animation` 仿真 + 2 置灰）、AVIF-libaom 扩 `ssimulacra2` /
+  `vmaf_saliency_map`、AVIF-SVT 5 值中文标签；RC 数值行上移核心区，动态域 8-bit `0..51` /
+  10-bit `−12..51` / 12-bit `−24..51`；QP + 显式 Level 给中文错误、CRF + Level 告警（规则 H5）。
+- **JXL 治理**：43 → **31 键**（删 12 个结构性 no-op）、`epf` 默认 **−1（跟随库）**、
+  `gaborish` / `dots` / `patches` 改**三态**（未设置 = 不下发）、`codestream_level` 只读、
+  `channel_colors_*` Int→Float、`effort=11` 自动放开 expert options。**行为变化（有意）**：
+  JXL 有损产物 23/23 变化（回归已归因，未重播种）。
+- 参数目录 **116 → 117 行**（HEIF +3 grid/tile、JXL −2）。
+
+**格式预设与自适应（新功能；自适应默认关闭）**
+
+- **格式预设**：每个格式页签顶部「格式预设」行（下拉 + 保存 / 另存… / 删除 / 导入… / 导出…），
+  存 `<data_dir>/presets/formats/<format>/<name>.json`；保存→载入→保存字节稳定；内置 5 条
+  （HEIF/AVIF/JXL/WebP/JPEG）由**运行时幂等 seed** 落地为 `_builtin-<fmt>.json`（只读、可另存）；
+  存储/字段/损坏与版本规则见 [docs/format-presets.md](docs/format-presets.md)。
+- **自适应策略**：目标质量 + 最多轮数 + 阶段（`linear` / `bisect` / `exp` / `greedy`）；每轮编码到
+  同目录候选（**不写元数据**）→ 评分 → 选定提交 → 走既有元数据/时间路径；终止 = 达标 / plateau /
+  轮数耗尽 / 阶段耗尽；GUI 只有**只读摘要 + 启用开关**（无文本编辑器）；出厂 5 条策略，DSL 语法、
+  允许/禁止键、42 条错误码与成本模型见 [docs/adaptive-policy.md](docs/adaptive-policy.md)。
+- **默认关闭**：`adaptive.enabled=false` 时执行路径与旧版一致（回归产物层非 JXL 段 **0 diff**）。
+
 ### 无头 UI 冒烟（`--ui-smoke`，需 `PP_BUILD_DEV=ON`）
 
 ```bash
 python tools/env.py run -- cmake --preset release-dev -B build/release-dev -DVCPKG_MANIFEST_INSTALL=OFF
 python tools/env.py run -- cmake --build build/release-dev
-python tools/env.py run -- ctest --test-dir build/release-dev --output-on-failure    # 条目以 ctest -N 实测为准（35 条 = 34 引擎 + ui_smoke，2026-10-12）
+python tools/env.py run -- ctest --test-dir build/release-dev --output-on-failure    # 条目以 ctest -N 实测为准（2026-11-01 实测 48 条 = 47 引擎/工具 + ui_smoke）
 # 或手动跑（offscreen，产出 12 张走查截图）：
 QT_QPA_PLATFORM=offscreen ./build/release-dev/photopipeline \
     --ui-smoke --inputs tests/golden/base --shots .cache/ui-review
@@ -595,7 +662,7 @@ chmod +x PhotoPipeline-<版本>-x86_64.AppImage
 
 ## 发行版（Windows）
 
-**M3 起提供 Windows x64 免安装产物**（0.2.0 为首个 Windows 版本，当前版本 0.3.6.alpha2）；与 Linux 的 AppImage 同一引擎
+**M3 起提供 Windows x64 免安装产物**（0.2.0 为首个 Windows 版本，当前版本 0.4.0.alpha1）；与 Linux 的 AppImage 同一引擎
 与界面，差异只在打包形态（zip vs AppImage）与平台运行时（MSVC 运行时 / Qt msvc2022_64）。
 
 ### 下载与运行
@@ -635,7 +702,7 @@ chmod +x PhotoPipeline-<版本>-x86_64.AppImage
 ### 命令行
 
 ```powershell
-.\photopipeline.exe --version      # → PhotoPipeline 0.3.6.alpha2（单行 + 退出码 0；非 dev 门控，发布构建亦可用）
+.\photopipeline.exe --version      # → PhotoPipeline 0.4.0.alpha1（单行 + 退出码 0；非 dev 门控，发布构建亦可用）
 .\photopipeline.exe                # 图形界面
 .\photopipeline.exe --ui-smoke     # 无头 UI 走查（offscreen，产出 12 张截图；仅 PP_BUILD_DEV=ON 的构建）
 .\photopipeline.exe --dev ...      # 开发 harness：全语料矩阵 / 回归基线入口（同上，仅 dev 构建）

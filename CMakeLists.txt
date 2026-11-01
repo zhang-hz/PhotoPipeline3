@@ -16,14 +16,14 @@ if(NOT DEFINED VCPKG_TARGET_TRIPLET)
     endif()
 endif()
 
-project(PhotoPipeline VERSION 0.3.6 LANGUAGES C CXX)
-# 预发布标签（**版本号单源 = 本节**，`CMakeLists.txt:19-24`；`--version` 输出 = PROJECT_VERSION
-# + 本标签）。CMake 的 project(VERSION) 只收数字段，"0.3.6.alpha2" 这类标签只能拼在字符串侧
+project(PhotoPipeline VERSION 0.4.0 LANGUAGES C CXX)
+# 预发布标签（**版本号单源 = 本节**，`CMakeLists.txt:19-26`；`--version` 输出 = PROJECT_VERSION
+# + 本标签）。CMake 的 project(VERSION) 只收数字段，"0.4.0.alpha1" 这类标签只能拼在字符串侧
 # （PP_VERSION_STRING）—— 定义点仍在此处，别处（CHANGELOG/README/AGENTS/打包脚本）一律引用。
 # 数字段（MAJOR.MINOR.PATCH）继续给 manifest / 语义比较用。
-# 0.3.6.alpha2 预发布轮：标签 ".alpha2" ⇒ 版本串 = "0.3.6.alpha2"（M9：JXL 有损修复 +
-# HEIF 真实档位/Level/grid 配置矩阵）。
-set(PP_VERSION_LABEL ".alpha2")
+# 0.4.0.alpha1 预发布轮：标签 ".alpha1" ⇒ 版本串 = "0.4.0.alpha1"（M10：评分池/预算/多格式并行 +
+# HEIF grid/profile/tune/RC + JXL 治理 + 格式预设与自适应策略）。
+set(PP_VERSION_LABEL ".alpha1")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

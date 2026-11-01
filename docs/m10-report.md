@@ -244,6 +244,13 @@
 - 二进制固定：`build/m10/final/photopipeline.exe` = 0.4.0.alpha1 / SHA256 `F3A0448AA2C3EACBE40EB7A4EE27788ACBA986BA9EDBB4E24345C5C8FDFD0FE9`（09:57:32；前后未变；HEIF 全量矩阵同 SHA）。
 - 全部 PASS：ctest **48/48**（76.33s）、金样 **20/20**、`--ui-smoke` 末行逐字（format-card 81/0、m8-params 104/0）、`ui_smoke.py` pass、`--version` = `PhotoPipeline 0.4.0.alpha1`、`ci-versions-check: OK (10 keys)`、tidy **262=262/violations=0**（161s）、regression **zero diff（2567=2567 行）**、format **233 文件 RC=0**（ci-format.sh 集，钉版 23.1.1）。
 - 证据 `build/m10/final-verify/`；`third_party/ssimulacra2/**` 不在 ci-format 判据集（宽口径误报已更正）。
+### 2.7 CI 发行轮与 Release（tag `v0.4.0.alpha1`，2026-11-01）
+
+- **release.yml run 41271187323（`530896c`）：success（7/7 job）** — appimage / winzip-build-dev / winzip-build / winzip-pack / probe-appimage / probe-winzip / publish；winzip-build 子集化（`--target photopipeline`）后 4m15s（首发冷构建全量超 20min 硬顶的修复，见 `530896c`）。
+- **GitHub Release**：<https://github.com/zhang-hz/PhotoPipeline3/releases/tag/v0.4.0.alpha1>，published **2026-11-01T04:07:55Z**，prerelease=False（Latest），tag `v0.4.0.alpha1`（annotated）→ `530896c`。
+- **4 资产**：`win64.zip` 34,173,446 B / sha256 `0876df59…9217a`；`x86_64.AppImage` 52,595,192 B / sha256 `26b786ea…cc983`；`deps.txt` 2,439 B；`SHA256SUMS.txt` 314 B（逐项指纹见 `docs/0.4.0.alpha1-report.md` §2.5）。
+- **首发失败与修复（如实）**：run 41267509907（tag @ `fa8a7be`）→ linux `test_quality_metric` 跨平台浮点判据（D-10，commit `ce5de10`）+ winzip-build 冷构建 20min 硬顶（commit `530896c` release 子集构建）；修后重打 tag 并发布。
+- **`main-full` 仍未绿（CI 预算债，非产品失败）**：run 41267508093 / 41269784449 / 41271182789 的 Windows job 均在 `configure+build+ctest release（全量）` 到 20min 被 cancel、tidy job 在 clang-tidy 步骤到 20min 被 cancel（linux job 已 success）；M10 新增 20+ 源文件后 Windows 4 vCPU 冷构建全量 475 目标 >20min。待办：windows job 拆 build→artifact→ctest、tidy 分片、修复 vcpkg/ccache 缓存命中（P2 CI 债）。
 ## 3. 偏差与追认
 
 ### 3.1 实现期偏差登记 D-1…D-9（真源 = 设计 §16.1；此处只补最终数字与状态）
@@ -366,6 +373,7 @@
 
 ---
 
+13. **`main-full` windows/tidy 20min 硬顶（CI 预算债）**：三次 run 证据见 §2.7；根因为 Windows 4 vCPU 冷构建全量 475 目标 >20min（M10 新增 20+ 源文件），vcpkg 缓存 `VCPKG_HIT=false`。release 独立 workflow 已成功并发布；本报告不宣称 `main-full` 绿。待办：windows 拆分 build/test 两 job、tidy 分片、修缓存命中。
 ## 5. 复现命令与证据路径
 
 ### 5.1 命令（最终集成树；全部经 `python tools/env.py run --`）

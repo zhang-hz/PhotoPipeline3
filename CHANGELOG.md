@@ -109,9 +109,12 @@
 
 ### 发行
 
-- **发行准备阶段（未打 tag）**：tag `v0.4.0.alpha1`、`main-full` / `release.yml` 轮次与 Release 4 资产
-  （win64.zip / AppImage / deps.txt / SHA256SUMS）指纹 **待填**；本节**不声称**任何尚未发生的 CI 或打包数字。
-  发行树 `--version` 产物读数见 [docs/0.4.0.alpha1-report.md](docs/0.4.0.alpha1-report.md) §2.1。
+- **已发行**：tag **`v0.4.0.alpha1`**（annotated，指向 `530896c`）；GitHub Release **published 2026-11-01T04:07:55Z**（prerelease=False/Latest），4 资产：
+  `win64.zip` 34,173,446 B / `0876df59…9217a`、`x86_64.AppImage` 52,595,192 B / `26b786ea…cc983`、
+  `deps.txt` 2,439 B、`SHA256SUMS.txt` 314 B；`release.yml` run **41271187323** 全绿（7/7 job）。
+  发行树 `--version` = `PhotoPipeline 0.4.0.alpha1`；逐项证据与 CI/资产指纹见
+  [docs/0.4.0.alpha1-report.md](docs/0.4.0.alpha1-report.md) §2.5。`main-full`（run 41271182789）的
+  windows/tidy 在 4 vCPU 冷构建下触 20min job 硬顶，**如实登记为 CI 预算债**（非产品失败，release 独立成功）。
 
 ## [0.3.6.alpha2] — 2026-10-31
 

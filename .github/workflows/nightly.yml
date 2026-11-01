@@ -192,35 +192,7 @@ jobs:
             [ -n "${!v}" ] || { echo "::error::sanitizer 选项 $v 未注入（R-042）"; exit 1; }
             echo "$v=${!v}"
           done
-          mapfile -t all < <(ls tests/unit/test_*.cpp | sed 's#.*/##; s#\cpp$##' | LC_ALL=C sort)
-          day=$(date -u +%d); day=$((10#$day))
-          rot=()
-          for ((i = 0; i < ${#all[@]}; i++)); do
-            if (( i % 8 == day % 8 )); then rot+=("${all[$i]}"); fi
-          done
-          targets="pp_test_scheduler_contract pp_test_pipeline_contract pp_test_enc_smoke"
-          re='^(test_scheduler_contract|test_pipeline_contract|test_enc_smoke'
-          for t in "${rot[@]}"; do
-            case " $targets " in *" pp_$t "*) continue ;; esac
-            targets="$targets pp_$t"
-            re="$re|$t"
-          done
-          re="$re)$"
-          echo "PP_SAN_TARGETS=$targets" >> "$GITHUB_ENV"
-          echo "PP_SAN_RE=$re" >> "$GITHUB_ENV"
-          echo "轮转子集（UTC 日 $day / 8）: ${rot[*]:-<无>}；ctest -R $re"
-
-      - name: sanitizer env 就绪断言 + 夜间轮转子集（R-041/R-042）
-        # R-042: job 级 sanitizer 选项必须在位（ctest 与金样 smoke 共用**同一份**）。
-        # R-041: 除三个契约测试（每晚必跑）外，按 UTC 日期轮转 -R 子集 —— 其余测试二进制
-        # 分批进 asan/ubsan/tsan（27 个 → 8 晚全覆盖）。取舍：不放宽 nightly 20min 硬顶
-        # （每晚 +3 个测试二进制的构建/运行成本 ≈ 1min），选择面覆盖优先于每晚全量。
-        run: |
-          for v in UBSAN_OPTIONS; do
-            [ -n "${!v}" ] || { echo "::error::sanitizer 选项 $v 未注入（R-042）"; exit 1; }
-            echo "$v=${!v}"
-          done
-          mapfile -t all < <(ls tests/unit/test_*.cpp | sed 's#.*/##; s#\cpp$##' | LC_ALL=C sort)
+          mapfile -t all < <(ls tests/unit/test_*.cpp | sed 's#.*/##; s#\.cpp$##' | LC_ALL=C sort)
           day=$(date -u +%d); day=$((10#$day))
           rot=()
           for ((i = 0; i < ${#all[@]}; i++)); do
@@ -260,6 +232,23 @@ jobs:
             --output-on-failure 2>&1 | tee "$RUNNER_TEMP/ctest-$PP_PRESET.log"
           echo -e "ctest $PP_PRESET（契约测试）\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
 
+      - name: ctest 防空跑断言（R-041：必须真的找到 ≥3 个契约测试）
+        # M12-C：ubsan job 曾因缺 env 步骤使 PP_SAN_RE 为空 ⇒ `ctest -R ""` 打印
+        #   `No tests were found!!!` 但退出码 0 ⇒ 覆盖空窗假绿（绿轮 #47 日志原文见
+        #   build/m12-ci/ubsan-green-47.log）。判据只增：空跑 / 用例数 <3 / 非 100% 通过一律红；
+        #   不触碰任何既有测试判据（测试本身仍是 ctest --preset 的判据）。
+        run: |
+          line=$(grep -E '^[0-9]+% tests passed' "$RUNNER_TEMP/ctest-$PP_PRESET.log" | tail -1)
+          echo "ctest 结论行: $line"
+          total=$(printf '%s' "$line" | sed -n 's/.*out of \([0-9][0-9]*\).*/\1/p')
+          if [ -z "$total" ] || [ "$total" -lt 3 ]; then
+            echo "::error::ctest 空跑或契约测试数不足（结论行: '${line:-<无>}'；R-041 目标集应含 ≥3 个契约测试）"
+            exit 1
+          fi
+          printf '%s' "$line" | grep -qE '^100% tests passed, 0 tests failed' || {
+            echo "::error::ctest 未 100% 通过（$line）"; exit 1; }
+          echo "防空跑断言 OK: $total 个用例"
+
       - name: 全语料 20 对（sanitizer 下跑 golden smoke）
         run: |
           set -o pipefail
@@ -275,9 +264,32 @@ jobs:
           printf '%s' "$line" | grep -qE '^SMOKE total=20 pass=20 fail=0 ' || {
             echo "::error::金样口径不符（期望 total=20 pass=20 fail=0）: $line"; exit 1; }
 
+      - name: 金样失败诊断（--dev 日志 + sanitizer 报告原文）
+        # M12-C：`--dev` 的 stdout/stderr 由 smoke.py 重定向到 $RUNNER_TEMP/out-smoke/<case>.dev.log
+        #   （smoke.py:350,362），**不落 job 日志**；金样失败时若不留证，UBSan/ASan 报告行就丢了
+        #   （ubsan 19/20 红一度无法直读 `runtime error:` 文件:行）。本步骤只取证、不改判据：
+        #   失败红/绿仍由上面的金样冻结行断言决定。
+        if: failure()
+        run: |
+          set +e
+          shopt -s nullglob
+          n=0
+          for f in "$RUNNER_TEMP"/out-smoke/*.dev.log; do
+            n=$((n + 1))
+            echo "===== $f ====="
+            grep -nE "$SAN_REPORT_RE" -A 8 "$f" | head -60
+            echo "----- tail -20 -----"
+            tail -20 "$f"
+          done
+          echo "诊断完成: 已扫描 $n 份 --dev 日志（报告行见上；无输出 = 无 sanitizer 报告命中）"
+
       - name: sanitizer 报告扫描（判据：全语料 0 报告）
         # 语料每个用例的 stdout/stderr 落在 <OUT_ROOT>/<case>.dev.log（smoke.py 的合并重定向），
         # sanitizer 的报告行就写在那里；连同 ctest 日志一起扫。命中即逐条打印并判红。
+        # M12-C：`if: always()` —— 前置金样/ctest 失败时也要扫描（R-017 假绿通道的反面：失败时
+        #   报告行落在 out-smoke/*.dev.log 与 Testing/Temporary，默认 success() 会跳过本步骤 ⇒ 丢证）。
+        #   判据不变：命中 sanitizer 报告行即红；本改动只让它在失败时也留下原文。
+        if: always()
         run: |
           set +e
           LOGS=$(ls "$RUNNER_TEMP/out-smoke"/*.dev.log 2>/dev/null)
@@ -396,6 +408,37 @@ jobs:
           [ "$m" -ge 20 ] || { echo "::error::金样断言缺失: tests/golden/smoke/*.json = $m 个（期望 ≥20）"; exit 1; }
           echo "语料 OK: base=$n 文件、smoke 断言=$m 个（均已入库，未重新生成）"
 
+      - name: sanitizer env 就绪断言 + 夜间轮转子集（R-041/R-042）
+        # M12-C 补建：ubsan job 自 M7-WP3（18fb355）起缺失本步骤（当时 R-042 检查被误复制进 asan
+        #   job 两次）⇒ PP_SAN_TARGETS/PP_SAN_RE 为空 ⇒ ctest 走 `-R ""` 空跑（绿轮 #47 job 日志
+        #   原文 `No tests were found!!!`），ubsan 契约单测从未真正执行。本步骤与 asan/tsan 逐字同源，
+        #   只把 env 期望集换成 UBSAN_OPTIONS（R-042：按 job 的期望集检查，不是三路共用一份）。
+        # R-041: 除三个契约测试（每晚必跑）外，按 UTC 日期轮转 -R 子集 —— 其余测试二进制
+        # 分批进 asan/ubsan/tsan（27 个 → 8 晚全覆盖）。
+        run: |
+          for v in UBSAN_OPTIONS; do
+            [ -n "${!v}" ] || { echo "::error::sanitizer 选项 $v 未注入（R-042）"; exit 1; }
+            echo "$v=${!v}"
+          done
+          mapfile -t all < <(ls tests/unit/test_*.cpp | sed 's#.*/##; s#\.cpp$##' | LC_ALL=C sort)
+          day=$(date -u +%d); day=$((10#$day))
+          rot=()
+          for ((i = 0; i < ${#all[@]}; i++)); do
+            if (( i % 8 == day % 8 )); then rot+=("${all[$i]}"); fi
+          done
+          targets="pp_test_scheduler_contract pp_test_pipeline_contract pp_test_enc_smoke"
+          re='^(test_scheduler_contract|test_pipeline_contract|test_enc_smoke'
+          for t in "${rot[@]}"; do
+            case " $targets " in *" pp_$t "*) continue ;; esac
+            targets="$targets pp_$t"
+            re="$re|$t"
+          done
+          re="$re)$"
+          echo "PP_SAN_TARGETS=$targets" >> "$GITHUB_ENV"
+          echo "PP_SAN_RE=$re" >> "$GITHUB_ENV"
+          echo "PP_SAN_TARGETS=$targets（轮转 UTC 日 $day / 8）"
+          echo "PP_SAN_RE=$re"
+
       - name: configure + build ${{ env.PP_PRESET }}（photopipeline/pp_verify + 三个契约测试）
         run: |
           set -o pipefail
@@ -418,6 +461,23 @@ jobs:
             --output-on-failure 2>&1 | tee "$RUNNER_TEMP/ctest-$PP_PRESET.log"
           echo -e "ctest $PP_PRESET（契约测试）\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
 
+      - name: ctest 防空跑断言（R-041：必须真的找到 ≥3 个契约测试）
+        # M12-C：ubsan job 曾因缺 env 步骤使 PP_SAN_RE 为空 ⇒ `ctest -R ""` 打印
+        #   `No tests were found!!!` 但退出码 0 ⇒ 覆盖空窗假绿（绿轮 #47 日志原文见
+        #   build/m12-ci/ubsan-green-47.log）。判据只增：空跑 / 用例数 <3 / 非 100% 通过一律红；
+        #   不触碰任何既有测试判据（测试本身仍是 ctest --preset 的判据）。
+        run: |
+          line=$(grep -E '^[0-9]+% tests passed' "$RUNNER_TEMP/ctest-$PP_PRESET.log" | tail -1)
+          echo "ctest 结论行: $line"
+          total=$(printf '%s' "$line" | sed -n 's/.*out of \([0-9][0-9]*\).*/\1/p')
+          if [ -z "$total" ] || [ "$total" -lt 3 ]; then
+            echo "::error::ctest 空跑或契约测试数不足（结论行: '${line:-<无>}'；R-041 目标集应含 ≥3 个契约测试）"
+            exit 1
+          fi
+          printf '%s' "$line" | grep -qE '^100% tests passed, 0 tests failed' || {
+            echo "::error::ctest 未 100% 通过（$line）"; exit 1; }
+          echo "防空跑断言 OK: $total 个用例"
+
       - name: 全语料 20 对（sanitizer 下跑 golden smoke）
         run: |
           set -o pipefail
@@ -433,7 +493,30 @@ jobs:
           printf '%s' "$line" | grep -qE '^SMOKE total=20 pass=20 fail=0 ' || {
             echo "::error::金样口径不符（期望 total=20 pass=20 fail=0）: $line"; exit 1; }
 
+      - name: 金样失败诊断（--dev 日志 + sanitizer 报告原文）
+        # M12-C：`--dev` 的 stdout/stderr 由 smoke.py 重定向到 $RUNNER_TEMP/out-smoke/<case>.dev.log
+        #   （smoke.py:350,362），**不落 job 日志**；金样失败时若不留证，UBSan/ASan 报告行就丢了
+        #   （ubsan 19/20 红一度无法直读 `runtime error:` 文件:行）。本步骤只取证、不改判据：
+        #   失败红/绿仍由上面的金样冻结行断言决定。
+        if: failure()
+        run: |
+          set +e
+          shopt -s nullglob
+          n=0
+          for f in "$RUNNER_TEMP"/out-smoke/*.dev.log; do
+            n=$((n + 1))
+            echo "===== $f ====="
+            grep -nE "$SAN_REPORT_RE" -A 8 "$f" | head -60
+            echo "----- tail -20 -----"
+            tail -20 "$f"
+          done
+          echo "诊断完成: 已扫描 $n 份 --dev 日志（报告行见上；无输出 = 无 sanitizer 报告命中）"
+
       - name: sanitizer 报告扫描（判据：全语料 0 报告）
+        # M12-C：`if: always()` —— 前置金样/ctest 失败时也要扫描（R-017 假绿通道的反面：失败时
+        #   报告行落在 out-smoke/*.dev.log 与 Testing/Temporary，默认 success() 会跳过本步骤 ⇒ 丢证）。
+        #   判据不变：命中 sanitizer 报告行即红；本改动只让它在失败时也留下原文。
+        if: always()
         run: |
           set +e
           LOGS=$(ls "$RUNNER_TEMP/out-smoke"/*.dev.log 2>/dev/null)
@@ -560,7 +643,7 @@ jobs:
             [ -n "${!v}" ] || { echo "::error::sanitizer 选项 $v 未注入（R-042）"; exit 1; }
             echo "$v=${!v}"
           done
-          mapfile -t all < <(ls tests/unit/test_*.cpp | sed 's#.*/##; s#\cpp$##' | LC_ALL=C sort)
+          mapfile -t all < <(ls tests/unit/test_*.cpp | sed 's#.*/##; s#\.cpp$##' | LC_ALL=C sort)
           day=$(date -u +%d); day=$((10#$day))
           rot=()
           for ((i = 0; i < ${#all[@]}; i++)); do
@@ -602,6 +685,21 @@ jobs:
             --output-on-failure 2>&1 | tee "$RUNNER_TEMP/ctest-tsan.log"
           echo -e "ctest tsan（契约测试）\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
 
+      - name: ctest 防空跑断言（R-041：必须真的找到 ≥3 个契约测试）
+        # M12-C：与 asan/ubsan 同款防空跑判据（空 `PP_SAN_RE` ⇒ ctest 空跑但退出码 0 的假绿通道）。
+        #   判据只增：空跑 / 用例数 <3 / 非 100% 通过一律红。
+        run: |
+          line=$(grep -E '^[0-9]+% tests passed' "$RUNNER_TEMP/ctest-tsan.log" | tail -1)
+          echo "ctest 结论行: $line"
+          total=$(printf '%s' "$line" | sed -n 's/.*out of \([0-9][0-9]*\).*/\1/p')
+          if [ -z "$total" ] || [ "$total" -lt 3 ]; then
+            echo "::error::ctest 空跑或契约测试数不足（结论行: '${line:-<无>}'；R-041 目标集应含 ≥3 个契约测试）"
+            exit 1
+          fi
+          printf '%s' "$line" | grep -qE '^100% tests passed, 0 tests failed' || {
+            echo "::error::ctest 未 100% 通过（$line）"; exit 1; }
+          echo "防空跑断言 OK: $total 个用例"
+
       - name: 全语料 20 对（TSan 下跑 golden smoke）
         run: |
           set -o pipefail
@@ -617,7 +715,30 @@ jobs:
           printf '%s' "$line" | grep -qE '^SMOKE total=20 pass=20 fail=0 ' || {
             echo "::error::金样口径不符（期望 total=20 pass=20 fail=0）: $line"; exit 1; }
 
+      - name: 金样失败诊断（--dev 日志 + sanitizer 报告原文）
+        # M12-C：`--dev` 的 stdout/stderr 由 smoke.py 重定向到 $RUNNER_TEMP/out-smoke/<case>.dev.log
+        #   （smoke.py:350,362），**不落 job 日志**；金样失败时若不留证，UBSan/ASan 报告行就丢了
+        #   （ubsan 19/20 红一度无法直读 `runtime error:` 文件:行）。本步骤只取证、不改判据：
+        #   失败红/绿仍由上面的金样冻结行断言决定。
+        if: failure()
+        run: |
+          set +e
+          shopt -s nullglob
+          n=0
+          for f in "$RUNNER_TEMP"/out-smoke/*.dev.log; do
+            n=$((n + 1))
+            echo "===== $f ====="
+            grep -nE "$SAN_REPORT_RE" -A 8 "$f" | head -60
+            echo "----- tail -20 -----"
+            tail -20 "$f"
+          done
+          echo "诊断完成: 已扫描 $n 份 --dev 日志（报告行见上；无输出 = 无 sanitizer 报告命中）"
+
       - name: sanitizer 报告扫描（判据：全语料 0 报告）
+        # M12-C：`if: always()` —— 前置金样/ctest 失败时也要扫描（R-017 假绿通道的反面：失败时
+        #   报告行落在 out-smoke/*.dev.log 与 Testing/Temporary，默认 success() 会跳过本步骤 ⇒ 丢证）。
+        #   判据不变：命中 sanitizer 报告行即红；本改动只让它在失败时也留下原文。
+        if: always()
         run: |
           set +e
           LOGS=$(ls "$RUNNER_TEMP/out-smoke"/*.dev.log 2>/dev/null)
@@ -974,6 +1095,18 @@ jobs:
             exit 1
           }
           Write-Output "Qt OK @ $env:QT_DIR"
+
+      - name: Qt bin 注入 PATH（harness 直接启动 photopipeline.exe 必需）
+        # M12-C：regression.py 以子进程直接启动 `build/release-dev/photopipeline.exe --dev`；
+        #   该 exe 依赖 Qt6Core.dll 等，而 env.py 只把 `<repo>/.toolchain/Qt/<ver>/msvc2022_64/bin`
+        #   前置 PATH —— CI 的 Qt 从 actions/cache 还原到 `<workspace>/Qt/<ver>/msvc2022_64`，
+        #   `.toolchain` 树不存在 ⇒ 即使整条命令包了 `python tools/env.py run --` 也仍是
+        #   rc=3221225781 (0xC0000135 STATUS_DLL_NOT_FOUND)（本轮 nightly 原文，12 次调用全挂）。
+        #   本步骤与同文件/其它 workflow 的 windows job 逐字同款（PATH 注入是 harness 启动的
+        #   必要条件，不是判据变更）。
+        run: |
+          "$env:QT_DIR\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          Write-Output "added: $env:QT_DIR\bin"
 
       - name: vcpkg ${{ env.VCPKG_TAG }}（pinned）
         run: |

@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://photopipeline.local/schemas/format-preset.v1.schema.json",
+  "title": "PhotoPipeline 格式预设 v1",
+  "description": "单个格式卡的可运行快照（docs/v0.4.0-design.md §8.2 / C23）。存储位置：<data_dir>/presets/formats/<format>/<name>.json。与全局预设（kind 省略、含 outputs 数组）互不兼容：kind 必须为 format-preset。",
+  "type": "object",
+  "required": ["kind", "name", "format"],
+  "properties": {
+    "kind": {
+      "const": "format-preset",
+      "description": "缺失 ⇒ 按全局预设拒绝并提示（防止下拉选错文件）。"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1,
+      "default": 1,
+      "description": "缺省按 1 读；>1 显式报错，不静默丢字段。"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "description": "显示名 = 文件 stem（不含 .json）。禁止路径分隔符/Windows 保留设备名/尾随点空格；保存时校验。"
+    },
+    "format": {
+      "enum": ["jpeg", "jxl", "png", "tiff", "webp", "bmp", "heif", "avif"],
+      "description": "格式级预设的作用域键：只作用于该格式卡。"
+    },
+    "backend": {
+      "type": "string",
+      "description": "空 = 载入时解析为当前首选后端；非空必须存在于该格式。"
+    },
+    "tech": {
+      "type": "string",
+      "description": "空 = 载入时解析为当前首选技术；libheif 系（heif/avif）只接受空或 \"runtime\"（运行时内省技术）。"
+    },
+    "bitdepth": {
+      "enum": [0, 8, 10, 12, 16, 24],
+      "default": 0,
+      "description": "0 = 不覆盖当前卡值（载入后按格式默认补齐）；其余必须在该格式能力列表内（bmp 为每像素位数 8/24）。"
+    },
+    "params": {
+      "type": "object",
+      "description": "该格式参数目录的键/值快照（含三态：无键 = 未设置）。`__` 前缀保留键会被忽略并由 reserved 重建，不落盘。",
+      "additionalProperties": {
+        "type": ["number", "boolean", "string"]
+      }
+    },
+    "reserved": {
+      "type": "object",
+      "description": "保留键的结构化落点（目前只有 heif_profile）。未知保留字段忽略并记日志。",
+      "properties": {
+        "heif_profile": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 21,
+          "description": "HEIF/AVIF 编码档位序号（0=Auto/1=Main/2=Main10/…/20=Main444_10Still/21=Main444_12Still）。编号 0–15 语义零变化，16–21 仅新预设。"
+        }
+      },
+      "additionalProperties": true
+    },
+    "adaptive": {
+      "type": "object",
+      "description": "自适应策略（§9）。enabled=false 且 policy 为空时**不写该字段**（旧文件零变化）。",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "启用自适应；true 要求 policy 非空（校验链阻断空策略）。"
+        },
+        "policy": {
+          "type": "string",
+          "maxLength": 16384,
+          "description": "行式 DSL v1 文本（docs/schemas/adaptive-policy.v1.schema.json 是其 JSON AST 导入面）。保存/载入时 parse+validate，失败阻断。"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": true
+}

@@ -109,6 +109,47 @@ signals:
     void preset_delete_requested(const QString &path);
     void output_template_changed(const QString &tmpl); // 模板变化（设置持久化/走查）
     void mirror_base_changed(const QString &base);     // R-319：镜像基准目录变化（空 = 清除）
+
+    // ---- PP-FROZEN 加性追加（M10 / W3-T2；契约 docs/v0.4.0-design.md §8.5「C23」/§9「C24」；
+    //      追认登记 docs/m10-adjudications.md A9）----
+    // 格式预设行（每格式页签顶部一行）的意图信号：**文件 I/O、完整性校验、归一、二次确认、
+    // 绝对路径守卫一律归 MainWindow（单一持有者，mainwindow_presets.cpp）** —— 与全局预设卡
+    // （preset_load_requested/…）同一分工。页面只发意图 + 落卡 + 只读自适应面。
+    // 未选中预设时「保存」走 save_as（另存…）；「删除」只在有选中项时发；「导出」带当前
+    // 会话态路径（可能为空 = 未选中，MainWindow 据此决定默认文件名）。
+    void format_preset_list_requested(const QString &format_id); // 页签建立/激活：请喂列表
+    void format_preset_load_requested(const QString &path);      // 下拉选中即载入
+    void format_preset_save_requested(const QString &path);      // 覆盖当前预设文件
+    void format_preset_save_as_requested();                      // 另存…（MainWindow 命名）
+    void format_preset_delete_requested(const QString &path);    // 删除（二次确认在 MainWindow）
+    void format_preset_import_requested();                       // 导入…（文件对话框）
+    void format_preset_export_requested(const QString &path);    // 导出…（文件对话框）
+
+public:
+    // ---- PP-FROZEN 加性追加（M10 / W3-T2）：格式预设行的**视图面**（末尾追加，既有方法/
+    //      信号签名与语义一字不动）----
+    // 分工（设计 §8.5「与全局预设无隐式叠加」）：卡值真源仍是 spec/form->values()，预设只是
+    // "写入器"；本组方法只做「列表喂入 / 会话态高亮 / 落卡 / 只读自适应面 / 注释位」。
+    //   * set_format_preset_list：列表项 = (绝对路径, 显示名)；显示名已含「（损坏）」标记
+    //     （由 MainWindow 组装）。首项恒为「未选择」（itemData 为空）。同值幂等，保留当前选中。
+    //   * set_current_format_preset：程序化高亮（不发信号、不载入）；空路径 = 回到「未选择」。
+    //   * apply_format_preset：把已 normalize/validate 的输出快照落到**该格式卡**（后端/技术/
+    //     位深/核心+高级参数/保留键 __heif_profile），并重算卡头「已改 N」（无信号）。
+    //   * set_format_preset_adaptive：只读自适应面（C24：GUI **不提供文本编辑**）。策略非空 →
+    //     摘要「目标 X / 最多 N 轮 / K 个阶段」+「启用自适应」开关（初值 = 预设 enabled；关闭 =
+    //     本次不启用）；解析/校验失败 → 行内中文错误 + 开关禁用；空策略 → 整行不显示。
+    //   * set_format_preset_note：注释位（「来自格式预设：X」/「已载入（已补齐 N 个默认项）」）；
+    //     空串 = 清空并隐藏注释位（不占行高；同一行控件始终在位）。
+    //   * format_preset_adaptive_enabled / format_preset_adaptive_policy：探针/采集读回。
+    void set_format_preset_list(const QString &format_id,
+                                const std::vector<std::pair<QString, QString>> &presets);
+    void set_current_format_preset(const QString &format_id, const QString &path);
+    QString current_format_preset(const QString &format_id) const;
+    void apply_format_preset(const pp::OutputFormatSpec &spec);
+    void set_format_preset_adaptive(const QString &format_id, const QString &policy, bool enabled);
+    void set_format_preset_note(const QString &format_id, const QString &note);
+    bool format_preset_adaptive_enabled(const QString &format_id) const;
+    QString format_preset_adaptive_policy(const QString &format_id) const;
 };
 
 } // namespace pp::ui

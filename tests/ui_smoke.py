@@ -270,6 +270,74 @@ M8-C13（评分证据面 · SSIMULACRA 2）→ M8-W2（需求3 改列 + 需求2 
     （勾选框在行尾 + 右端 x 严格对齐 + 标签轨/数值列归位 + 行内顺序）、
     `status-clip-bad=0`、`long-elide=1`（超长状态文案兜底 = 省略号 + tooltip 全文）。
   * 截图仍 12 张；`--dev` 评分与金样 assert.score 见 tests/golden/smoke.py / SCHEMA.md。
+
+M10-W1 / W1-A3（运行页列布局 C10/C11；A11 收缩 + A12 换锚/只增）:
+  * `run-geom` 行（既有前缀，行名零改动）新增列布局字段与取值断言：`fit=1`（pp-run-content
+    宽 == pp-run-scroll 视口宽，587/520 两档；横向滚动关闭）· `name-w`/`name-w520`（名称列
+    实际宽，587 ≥150、520 ≥80）· `no-speed=1`（`pp-run-speed-*`/`pp-run-gspeed-*` 钩子与
+    「速度」列题均不存在 —— A11 objectName **收缩**的否定断言）· `ratio-tip=1`（压缩比从已删
+    速度列迁入大小列 tooltip：含「压缩比」与「×」）· `cols-ok=1`（表头各列 x/宽 == 组行/输出行
+    对应列）· `long-elide=1`（68 字符中文/ASCII 混合名：ElideMiddle 显示含「…」且扩展名可见、
+    ppFullText = 全名、tooltip 含完整路径、名称列宽不变）。断言只增/机械换锚，不放宽；冻结末行
+    `UI-SMOKE OK shots=12 pages=3` 与 12 张截图集逐字不变（截图按新列布局重新生成、不比对像素）。
+
+M10-W1 / W1-A5（运行页状态/刷新 T9a；C12/C15，仅现有事件面）:
+  * 追加 `run-status-map` 行（`smoke_probe_run_geometry()` 的 (o) 段）：组行/格式行状态映射 ——
+    共享 Color 完成 + 首输出 Encode 0.4 → 组行「编码中 0/2」/格式行「编码 40%」（行数入 tooltip）；
+    Encode 1.0 无 MetaWrite → 「评分中」（Accent + 斜纹）；MetaWrite 0 → 「写入」/「写入中 0/2」；
+    MetaWrite 1.0 → 「已完成」（评分列留空到文件终态）；仅 MetaWrite 1.0（无 Encode 段）→「跳过」。
+    本脚本除行齐备外做取值断言：`ok=1`、`g-enc="编码中 0/2"`、`o-score="评分中"`、
+    `score-tone=<Accent>`、`striped=1`、`o-write="写入"`、`o-done="已完成"`、`done-score=""`、
+    `o-skip="跳过"`。
+  * 追加 `flush-state` 行：状态翻转后**≤2 个事件循环**内文本变化（双通道 flush 的立即通道），
+    且 dirty-row 只渲染脏文件（2 文件页面只翻 1 行 → `rows=1`）；取值断言 `state=1`、`rows=1`。
+  * `run-probe-rows` 换锚（A12）：编码行主文案 = `^编码 \\d+%$`（行数移入 tooltip：真实行级
+    R/H 行；合成保留斜纹 + 「合成进度（编码器无回调）」tooltip）；**不新增** score-immediate /
+    facts-immediate（依赖 W1-T7 的 OutputDone/评分事件，属 W1-T9b）。截图仍 12 张、冻结末行不变。
+
+M10-UI-ADAPT（W2-T5 JXL 治理后的 UI 面适配；断言只改语义锚点，不放宽）:
+  * 前缀清单**只增**：新增 `UI-SMOKE m8-params:` 行齐备断言（`probe_m8_params()` 的出口行）——
+    本批改写的三态布尔探针 / 只读行 / RC / 规则 / 预设断言全落在该行内，此前不在清单 ⇒
+    探针被静默跳过时脚本不可见。既有前缀与行名零改动。
+  * 语义适配（C++ 侧，逐条清单见 build/m10/ui-adapt/report.md）：
+    ① 三态布尔探针锚点 `pp-param-enable-noise`（`noise` 行随 12 个结构性 no-op 键删除）→
+       保留键 `dots`（gaborish/dots/patches 同构），断言条数/语义逐条不变；加性覆盖三条新行在位。
+    ② `output-geom` 的 `magic-auto`：`epf` 默认值 2 → -1（= 范围下端 = 魔法值「自动」）⇒ 旧
+       前提「默认 ≠ 自动」作废，改为三态取样（默认=自动 / 显式 2 = "2" / 回 -1 = 自动）；
+       `changed-pill` 改值基准取显式 2，并加性断言改回默认后计数归零（`changed-pill-reset`）。
+    ③ `range-note`：effort 域 1–10 → 1–11（expert_options 门控随该行退场；编码器在 effort=11
+       时自动 JxlEncoderAllowExpertOptions），并加性断言 spin 上界 = 11（`effort-max`）。
+  * 冻结末行 `UI-SMOKE OK shots=12 pages=3` 与 12 张截图集（不增不减、不比对像素）逐字不变。
+
+M10-W2-T3/T4（tune 全量 + RC 数值行上移；本脚本**不新增前缀、不放宽断言**）:
+  * 两批新断言全部落在既有 `UI-SMOKE m8-params:` 行内（`probe_m8_params()` / 输出页逐档探针），
+    前缀清单零改动；C++ 侧 expect 失败仍经 `--ui-smoke` 退出码 1 判红。
+  * 语义适配（断言只增/换锚，不放宽）：
+    ① 档位遍历改**按 value 定位**（`pp-profile-combo.findData(档位编号)`）：W2-T2 追加 16–21 后
+       旧「末项 = MainStill」约定作废；逐档断言「可用性 = 单源 disabled 原因」+ 置灰项 item
+       tooltip 含「不可用」，并显式钉住 16（Main10Still）置灰；C19 弹出层最小宽 ≥ 控件宽 +
+       每项 tooltip 全文。
+    ② RC 数值行：`pp-param-row-x265:crf` 父链含 `pp-core-area` 且在 `pp-param-rcmode-row-heif`
+       之后；切 CRF/QP 后可见/下发集；位深 8/10/12 的 CRF/QP 域与行内注记（−12..51 等）。
+    ③ tune：7 项 = 事实表、4 原生 + animation（tooltip 含「近似仿真」）+ zerolatency/vmaf 置灰
+       （tooltip 含「不可用」）；行 tooltip 说明插件强制 aq-mode/psy-rd 与仿真机制。
+    ④ QP + 显式 Level → 中文预检错误且 `ready_to_start` 拒绝；Level 改自动后错误实时消失。
+  * 截图集仍 12 张（额外 `-11-profile-<value>` / `-12-chroma-*` 走既有存档路径，不计入冻结集）。
+
+M10-W3-T2（格式预设行 + 只读自适应面；C23 §8.5 / C24 §9；断言**只增**）:
+  * 前缀清单只增：新增 `UI-SMOKE format-preset:` 行齐备断言（`smoke_probe_format_preset()` 出口行）。
+  * 本脚本除行齐备外做**取值断言**（防 C++ 断言被静默跳过/裁剪；任一组红 ⇒ 该组字段 0）：
+    `bad=0` · `row=1`（行存在 + 选中即载入的六件套齐备）· `first=1`（行在「位深」行之上 = 页签
+    顶部）· `empty=1`（列表空态 = 只有「未选择」）· `prod=1`（生产页同行在位：行由页面自建）·
+    `idle=1`（未选中时「删除」禁用 + 原因 tooltip）
+    · `collect=1`（卡快照可采集）· `roundtrip=1`（临时目录 保存→列举→载入；载入后卡值/「已改 N」）
+    · `note=1`（注释位「来自格式预设：X」）· `normalize=1`（稀疏预设 → 「已补齐 N 个默认项」）
+    · `invalid-save=1`（保存前校验：非法名字 → 中文错误且不写盘）· `bytes=1`（save→load→save
+    逐字节相同）· `broken=1`（损坏 JSON：列举标「（损坏）」+ 中文错误 + 卡值零改动）· `kind=1`（kind
+    不符显式拒绝）· `adaptive=1`（真实含策略预设 → 摘要含目标/轮数/阶段）· `switch=1`（开关按预设
+    初值 + 关闭 = 本次不启用）· `nopolicy=1`（无策略 → 整行不显示）· `policy-err=1`（坏策略 →
+    行内中文错误 + 开关禁用）。
+  * 冻结末行 `UI-SMOKE OK shots=12 pages=3` 与 12 张截图集逐字不变（本批不新增截图）。
 """
 
 import os
@@ -340,6 +408,8 @@ T8_LINE_PREFIXES = (
 )
 
 # M5-T9 自检行（前缀匹配；缺任一 → FAIL）：运行页三卡组几何/语义（§7.3/R1–R4/K4 + 修 3-03…3-16）
+# M10-W1 / W1-A3 起：run-geom 行内另带列布局新字段（fit/name-w/name-w520/no-speed/ratio-tip/
+# cols-ok/long-elide；取值断言见 RUN_GEOM_* 常量段），行名与既有前缀零改动。
 T9_LINE_PREFIXES = (
     'UI-SMOKE run-geom:',       # kv 行 pitch 28 / 标签轨 80 / 表行高 28 / 进度条 6 / 日志尾等宽 4 行 +
                                 # 查看完整日志… / 状态胶囊单形态（完成绿·0 字节琥珀·失败红 + 原因行）/
@@ -457,6 +527,12 @@ G1_LINE_PREFIXES = (
     'UI-SMOKE format-card:',
     # M8-W2（需求2）：目录行「可选启用」勾选框行尾几何（probe_m8_params() ⑨ 段；只增）
     'UI-SMOKE param-enable-geom:',
+    # M10-UI-ADAPT：`probe_m8_params()` 出口行（三态布尔 / 只读行 / RC / 规则预检 / 预设往返的
+    # 硬判都在该行内）。此前不在清单 ⇒ 探针被静默跳过时脚本不可见；本批语义适配的探针也在此行。
+    'UI-SMOKE m8-params:',
+    # M10-W3-T2（C23 §8.5 / C24 §9；只增）：格式预设行 + 只读自适应面探针出口行
+    # （`smoke_probe_format_preset()`；行内取值断言见 FORMAT_PRESET_* 常量段）。
+    'UI-SMOKE format-preset:',
 )
 
 # M7-R2.4-G2（布局审计 · R-识图1）自检行：**识图步骤的机械化落点**。起因 = debug/debug1.png +
@@ -490,6 +566,82 @@ PARAM_ENABLE_GEOM_EDITOR_RE = re.compile(r'\beditor=(\d+)\b')
 PARAM_ENABLE_GEOM_ORDER_RE = re.compile(r'\border=(\d+)\b')
 PARAM_ENABLE_GEOM_CLIP_RE = re.compile(r'\bstatus-clip-bad=0\b')
 PARAM_ENABLE_GEOM_LONG_RE = re.compile(r'\blong-elide=1\b')
+
+# M10-W1 / W1-A3（C10/C11；A12 只增）：运行页**列布局**探针 —— `smoke_probe_run_geometry()`
+# 的 (n) 段，行 = 既有 `UI-SMOKE run-geom:`（前缀已在 T9_LINE_PREFIXES 内）。本脚本除「行齐备」
+# 外，另对新字段做**取值断言**（防 C++ 断言被静默跳过/裁剪）：
+#   fit=1（内容宽 == 视口宽，587/520 两档）· name-w>=150（587 栏宽）· name-w520>=80（520 档）
+#   no-speed=1（pp-run-speed-*/pp-run-gspeed-* 钩子与「速度」列题均不存在 = A11 收缩否定断言）
+#   ratio-tip=1（压缩比迁入大小列 tooltip，含「压缩比」与「×」= C11）
+#   cols-ok=1（表头各列 x/宽 == 组行/输出行对应列）· long-elide=1（68 字符名 ElideMiddle +
+#   ppFullText=全名 + tooltip 含全路径 + 名称列宽不变 = C10/§5.2）
+RUN_GEOM_LINE_PREFIX = 'UI-SMOKE run-geom:'
+RUN_GEOM_BAD_RE = re.compile(r'\bbad=0\b')
+RUN_GEOM_FIT_RE = re.compile(r'\bfit=1\b')
+RUN_GEOM_NAME_W_RE = re.compile(r'\bname-w=(\d+)\b')
+RUN_GEOM_NAME_W520_RE = re.compile(r'\bname-w520=(\d+)\b')
+RUN_GEOM_NO_SPEED_RE = re.compile(r'\bno-speed=1\b')
+RUN_GEOM_RATIO_TIP_RE = re.compile(r'\bratio-tip=1\b')
+RUN_GEOM_COLS_RE = re.compile(r'\bcols-ok=1\b')
+RUN_GEOM_LONG_ELIDE_RE = re.compile(r'\blong-elide=1\b')
+
+# M10-W1 / W1-A5（T9a；C12/C15，A12 只增）：运行页**状态/刷新**探针 —— `smoke_probe_run_geometry()`
+# 的 (o) 段，两行均**新增**（行齐备 + 取值断言；既有前缀/冻结末行零改动）：
+#   `UI-SMOKE run-status-map:`  组行/格式行状态映射（仅现有事件面）——
+#       ok=1 · g-enc="编码中 0/2"（Color 完成 + 首输出 Encode 0.4）· o-enc="编码 40%"（行数入 tooltip）
+#       g-score="评分中 0/2" / o-score="评分中"（Encode 1.0 无 MetaWrite）· score-tone=3（Accent）
+#       striped=1（评分中斜纹）· g-write="写入中 0/2" / o-write="写入" · g-done="编码中 1/2" /
+#       o-done="已完成"（MetaWrite 1.0 中间态；done-score 空 = 评分列留空到文件终态）·
+#       o-skip="跳过" / skip-tone=2（Warn；首事件即 MetaWrite 1.0、无 Encode 段）。
+#   `UI-SMOKE flush-state:`      双通道 flush + dirty-row：状态翻转后 ≤2 个事件循环内文本变化；
+#       2 文件页面只翻 1 行 → rows=1（只渲染脏文件，不是全量）。
+RUN_STATUS_MAP_LINE_PREFIX = 'UI-SMOKE run-status-map:'
+RUN_STATUS_MAP_OK_RE = re.compile(r'\bok=1\b')
+RUN_STATUS_MAP_G_ENC_RE = re.compile(r'\bg-enc="编码中 0/2"')
+RUN_STATUS_MAP_O_SCORE_RE = re.compile(r'\bo-score="评分中"')
+RUN_STATUS_MAP_STRIPED_RE = re.compile(r'\bstriped=1\b')
+RUN_STATUS_MAP_O_WRITE_RE = re.compile(r'\bo-write="写入"')
+RUN_STATUS_MAP_O_DONE_RE = re.compile(r'\bo-done="已完成"')
+RUN_STATUS_MAP_DONE_SCORE_RE = re.compile(r'\bdone-score=""')
+RUN_STATUS_MAP_O_SKIP_RE = re.compile(r'\bo-skip="跳过"')
+FLUSH_STATE_LINE_PREFIX = 'UI-SMOKE flush-state:'
+FLUSH_STATE_OK_RE = re.compile(r'\bstate=1\b')
+FLUSH_STATE_ROWS_RE = re.compile(r'\brows=(\d+)\b')
+
+# M10-W3-T2（C23 §8.5 / C24 §9，只增）：格式预设行 + 只读自适应面 —— `smoke_probe_format_preset()`
+# 的出口行。行齐备 + **取值断言**：C++ 侧每组断言的结论直接进字段（组红 ⇒ 字段 0），因此这里
+# 逐字段钉死，任何一组被静默跳过/裁剪都会被抓到（不放宽既有断言；冻结末行与截图集不变）。
+FORMAT_PRESET_LINE_PREFIX = 'UI-SMOKE format-preset:'
+FORMAT_PRESET_BAD_RE = re.compile(r'\bbad=0\b')
+FORMAT_PRESET_CHECKED_RE = re.compile(r'\bchecked=(\d+)\b')
+# 组字段 → 语义（逐条对应 C++ 侧 expect 组名）
+FORMAT_PRESET_GROUP_FIELDS = (
+    'row',        # row-exists：行 + 六件套（下拉/保存/另存…/删除/导入…/导出…）齐备且可见
+    'first',      # row-first：行在「位深」行之上（页签顶部）
+    'empty',      # empty：列表空态 = 只有「未选择」
+    'prod',       # prod-row：生产页（MainWindow 的 page_output）同行在位（行由页面自建）
+    'idle',       # idle-buttons：未选中时「删除」禁用 + 原因 tooltip（不静默灰）
+    'collect',    # collect：卡快照可采集（format/backend/quality）
+    'roundtrip',  # roundtrip：临时目录 保存→列举→载入；卡值一致 + 已改 N 重算
+    'note',       # note-loaded：注释位「来自格式预设：X」
+    'normalize',  # normalize-note：稀疏预设载入 → 注释位「已载入（已补齐 N 个默认项）」
+    'invalid-save',  # save-invalid：保存前校验（非法名字 → 中文错误且不写盘）
+    'bytes',      # bytes：save→load→save 逐字节相同
+    'broken',     # broken：损坏 JSON → 列举「（损坏）」+ 中文错误 + 卡值零改动
+    'kind',       # kind：kind 不符显式拒绝
+    'adaptive',   # adaptive：真实含策略预设 → 摘要（目标/轮数/阶段）
+    'switch',     # switch：开关按预设初值 + 关闭 = 本次不启用
+    'nopolicy',   # nopolicy：无策略 → 整行不显示
+    'policy-err', # policy-err：坏策略 → 行内中文错误 + 开关禁用
+    # M10-W3-T5（C23/C24 + A20，只增）：内置（出厂）预设 + 全局预设 adaptive 往返
+    'builtin',          # builtin：seed 5 条 + 内置 jpeg 出现在格式列表 + 载入成功 + 只读面同步
+    'builtin-idem',     # builtin-idem：第二次 seed 零写入 + 文件字节不变（幂等）
+    'builtin-readonly', # builtin-readonly：删除按钮置灰 + I/O 拒绝删/覆盖（文件零改动）
+    'builtin-saveas',   # builtin-saveas：「另存…」可用（普通名字写入成功、不带只读前缀）
+    'global-adaptive',  # global-adaptive：全局预设含 adaptive 的 save→load→再保存字节稳定
+                        #                 + 载入后格式卡只读摘要/开关同步
+    'adaptive-gate',    # adaptive-gate：开 → 下发策略；关 → 不下发但采集面保留策略文本
+)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -548,6 +700,10 @@ def main():
         layout_audit_seen = set()
         run_score_line = None
         param_enable_geom_line = None
+        run_geom_line = None
+        run_status_map_line = None
+        flush_state_line = None
+        format_preset_line = None
         with open(log_path, 'w', encoding='utf-8', newline='') as log_fp:
             for line in proc.stdout:
                 sys.stdout.write(line)
@@ -610,6 +766,14 @@ def main():
                     run_score_line = line.rstrip('\r\n')
                 if line.startswith(PARAM_ENABLE_GEOM_LINE_PREFIX):
                     param_enable_geom_line = line.rstrip('\r\n')
+                if line.startswith(RUN_GEOM_LINE_PREFIX):
+                    run_geom_line = line.rstrip('\r\n')
+                if line.startswith(RUN_STATUS_MAP_LINE_PREFIX):
+                    run_status_map_line = line.rstrip('\r\n')
+                if line.startswith(FLUSH_STATE_LINE_PREFIX):
+                    flush_state_line = line.rstrip('\r\n')
+                if line.startswith(FORMAT_PRESET_LINE_PREFIX):
+                    format_preset_line = line.rstrip('\r\n')
         status = proc.wait()
 
         if status != 0:
@@ -749,6 +913,70 @@ def main():
                 or PARAM_ENABLE_GEOM_LONG_RE.search(param_enable_geom_line) is None):
             print('ui_smoke: FAIL (M8-W2 param-enable-geom self-check failed: {})'.format(
                 param_enable_geom_line), file=sys.stderr)
+            return 1
+        # M10-W1 / W1-A3（C10/C11，只增）：运行页列布局探针 —— 行齐备 + 取值断言
+        # （fit / name-w≥150 / name-w520≥80 / no-speed / ratio-tip / cols-ok / long-elide）。
+        if run_geom_line is None:
+            print('ui_smoke: FAIL (missing M10-W1 run-geom self-check line: {})'.format(
+                RUN_GEOM_LINE_PREFIX), file=sys.stderr)
+            return 1
+        rg_name_w = RUN_GEOM_NAME_W_RE.search(run_geom_line)
+        rg_name_w520 = RUN_GEOM_NAME_W520_RE.search(run_geom_line)
+        if (RUN_GEOM_BAD_RE.search(run_geom_line) is None
+                or RUN_GEOM_FIT_RE.search(run_geom_line) is None
+                or rg_name_w is None or int(rg_name_w.group(1)) < 150
+                or rg_name_w520 is None or int(rg_name_w520.group(1)) < 80
+                or RUN_GEOM_NO_SPEED_RE.search(run_geom_line) is None
+                or RUN_GEOM_RATIO_TIP_RE.search(run_geom_line) is None
+                or RUN_GEOM_COLS_RE.search(run_geom_line) is None
+                or RUN_GEOM_LONG_ELIDE_RE.search(run_geom_line) is None):
+            print('ui_smoke: FAIL (M10-W1 run-geom 列布局自检失败（期望 bad=0 fit=1 '
+                  'name-w>=150 name-w520>=80 no-speed=1 ratio-tip=1 cols-ok=1 '
+                  'long-elide=1）: {})'.format(run_geom_line), file=sys.stderr)
+            return 1
+        # M10-W1 / W1-A5（T9a；C12/C15，只增）：运行页状态映射 + 双通道 flush 取值断言
+        if run_status_map_line is None:
+            print('ui_smoke: FAIL (missing M10-W1 run-status-map self-check line: {})'.format(
+                RUN_STATUS_MAP_LINE_PREFIX), file=sys.stderr)
+            return 1
+        if (RUN_STATUS_MAP_OK_RE.search(run_status_map_line) is None
+                or RUN_STATUS_MAP_G_ENC_RE.search(run_status_map_line) is None
+                or RUN_STATUS_MAP_O_SCORE_RE.search(run_status_map_line) is None
+                or RUN_STATUS_MAP_STRIPED_RE.search(run_status_map_line) is None
+                or RUN_STATUS_MAP_O_WRITE_RE.search(run_status_map_line) is None
+                or RUN_STATUS_MAP_O_DONE_RE.search(run_status_map_line) is None
+                or RUN_STATUS_MAP_DONE_SCORE_RE.search(run_status_map_line) is None
+                or RUN_STATUS_MAP_O_SKIP_RE.search(run_status_map_line) is None):
+            print('ui_smoke: FAIL (M10-W1 run-status-map 状态映射自检失败（期望 ok=1 '
+                  'g-enc="编码中 0/2" o-score="评分中" striped=1 o-write="写入" '
+                  'o-done="已完成" done-score="" o-skip="跳过"）: {})'.format(
+                      run_status_map_line), file=sys.stderr)
+            return 1
+        if flush_state_line is None:
+            print('ui_smoke: FAIL (missing M10-W1 flush-state self-check line: {})'.format(
+                FLUSH_STATE_LINE_PREFIX), file=sys.stderr)
+            return 1
+        fs_rows = FLUSH_STATE_ROWS_RE.search(flush_state_line)
+        if (FLUSH_STATE_OK_RE.search(flush_state_line) is None
+                or fs_rows is None or int(fs_rows.group(1)) != 1):
+            print('ui_smoke: FAIL (M10-W1 flush-state 双通道/dirty-row 自检失败（期望 '
+                  'state=1 rows=1）: {})'.format(flush_state_line), file=sys.stderr)
+            return 1
+        # M10-W3-T2（C23 §8.5 / C24 §9，只增）：格式预设行 + 只读自适应面 —— 行齐备 + 取值断言。
+        if format_preset_line is None:
+            print('ui_smoke: FAIL (missing M10-W3-T2 format-preset self-check line: {})'.format(
+                FORMAT_PRESET_LINE_PREFIX), file=sys.stderr)
+            return 1
+        fp_checked = FORMAT_PRESET_CHECKED_RE.search(format_preset_line)
+        fp_missing = [field for field in FORMAT_PRESET_GROUP_FIELDS
+                      if re.search(r'\b' + re.escape(field) + r'=1\b', format_preset_line) is None]
+        if (FORMAT_PRESET_BAD_RE.search(format_preset_line) is None
+                or fp_checked is None or int(fp_checked.group(1)) < 10
+                or fp_missing):
+            print('ui_smoke: FAIL (M10-W3-T2 format-preset 自检失败（期望 bad=0 checked>=10 '
+                  '且各字段 =1；缺/红: {}）: {})'.format(
+                      ', '.join(fp_missing) if fp_missing else '-', format_preset_line),
+                  file=sys.stderr)
             return 1
         print('UI-SMOKE pass')
         return 0

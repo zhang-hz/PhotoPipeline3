@@ -134,6 +134,14 @@ std::string diff_spec(std::size_t i, const pp::OutputFormatSpec &a, const pp::Ou
     for (const std::string &k : ak)
         if (!(a.params.at(k) == b.params.at(k)))
             return tag + "params['" + k + "'] differs";
+    // M10-W3-T5（A20）：输出级自适应开关/策略原文（全局预设 v2 `outputs[].adaptive`）——
+    // 往返必须逐字节等价；默认（false / 空）在两侧都成立 ⇒ 既有用例语义不变。
+    if (a.adaptive_enabled != b.adaptive_enabled)
+        return tag + "adaptive_enabled " + (a.adaptive_enabled ? "true" : "false") +
+               " != " + (b.adaptive_enabled ? "true" : "false");
+    if (a.adaptive_policy != b.adaptive_policy)
+        return tag + "adaptive_policy differs (" + std::to_string(a.adaptive_policy.size()) +
+               " vs " + std::to_string(b.adaptive_policy.size()) + " bytes)";
     return {};
 }
 
@@ -231,7 +239,7 @@ pp::OutputFormatSpec make_jxl_spec() {
     spec.params["distance"] = 0.0;
     spec.params["effort"] = int64_t(9);
     spec.params["color_transform"] = std::string("YCoCg");
-    spec.params["keep_invisible"] = true;
+    spec.params["box_compress"] = true;      // W2-T5：keep_invisible 已删除；改用保留的元数据工具键
     spec.params["resampling"] = int64_t(-1); // Enum（整型 choice）
     return spec;
 }
@@ -382,7 +390,7 @@ int main() {
         check(params.value("distance").toDouble(-1) == 0.0 &&
                   params.value("effort").toInteger(-1) == 9 &&
                   params.value("color_transform").toString() == "YCoCg" &&
-                  params.value("keep_invisible").toBool(false) &&
+                  params.value("box_compress").toBool(false) &&
                   params.value("resampling").toInteger(99) == -1,
               c, "params JSON values");
         check(params.value("lossless").toBool(false), c,
@@ -1176,6 +1184,118 @@ int main() {
             check(cross_validate(spec.params, "jxl", "modular").empty(), c,
                   "per-key 越界不在 cross 通道契约域（显式钉住域边界）");
         }
+    }
+
+    case_begin("8d) 全局预设 v2 输出级 adaptive 往返（M10-W3-T5 / A20）");
+    {
+        const std::string c = "adaptive";
+        const std::string policy = std::string("version 1\n") + "target 90\n" + "max_rounds 3\n" +
+                                   "output last\n" + "stage q-up\n" +
+                                   "  search quality from current to 95 step 2\n";
+        // 1) 写入 → JSON 形状（enabled + policy 逐字节）→ 读回两字段
+        PresetData p = make_delta_preset();
+        p.outputs[0].adaptive_enabled = true;
+        p.outputs[0].adaptive_policy = policy;
+        check(validate_preset(p).empty(), c, "带 adaptive 的预设应通过 validate_preset");
+        const fs::path file = fresh_dir(root, "adaptive-global") / "adaptive.json";
+        check(ui::save_preset(file, p).empty(), c, "save adaptive preset");
+        {
+            const QJsonObject o = parse_object(file, c);
+            const QJsonArray outputs = o.value("outputs").toArray();
+            check(outputs.size() == 1, c, "outputs size");
+            const QJsonObject spec = outputs.isEmpty() ? QJsonObject{} : outputs.at(0).toObject();
+            check(spec.contains("adaptive"), c, "输出级应写出 adaptive 对象");
+            const QJsonObject adaptive = spec.value("adaptive").toObject();
+            check(adaptive.value("enabled").toBool(false), c, "adaptive.enabled = true");
+            check(adaptive.value("policy").toString().toStdString() == policy, c,
+                  "adaptive.policy 逐字节落盘");
+            // 策略文本不进 params（不污染参数快照面）
+            const QJsonObject params = spec.value("params").toObject();
+            for (auto it = params.constBegin(); it != params.constEnd(); ++it)
+                check(it.value().toString().toStdString() != policy, c,
+                      "policy 不得混入 params：" + it.key().toStdString());
+        }
+        PresetData q;
+        check(ui::load_preset(file, q).empty(), c, "load adaptive preset");
+        check(q.outputs.size() == 1, c, "loaded outputs size");
+        if (!q.outputs.empty()) {
+            check(q.outputs[0].adaptive_enabled, c, "loaded adaptive_enabled");
+            check(q.outputs[0].adaptive_policy == policy, c, "loaded adaptive_policy");
+        }
+        check(diff_preset(p, q).empty(), c, "adaptive round-trip diff: " + diff_preset(p, q));
+        // 再保存：字节稳定（规范 JSON + 键序固定）
+        const fs::path file2 = fresh_dir(root, "adaptive-global2") / "adaptive.json";
+        check(ui::save_preset(file2, q).empty(), c, "resave adaptive preset");
+        check(read_file(file) == read_file(file2), c, "adaptive save→load→save 应字节稳定");
+
+        // 2) 默认（false/空）⇒ **不写** adaptive 字段（旧文件零变化，C25）
+        PresetData plain = make_delta_preset();
+        check(!plain.outputs[0].adaptive_enabled && plain.outputs[0].adaptive_policy.empty(), c,
+              "默认值应为 false/空");
+        const fs::path plain_file = fresh_dir(root, "adaptive-none") / "plain.json";
+        check(ui::save_preset(plain_file, plain).empty(), c, "save plain preset");
+        {
+            const QJsonObject o = parse_object(plain_file, c);
+            const QJsonArray outputs = o.value("outputs").toArray();
+            const QJsonObject spec = outputs.isEmpty() ? QJsonObject{} : outputs.at(0).toObject();
+            check(!spec.contains("adaptive"), c, "空 adaptive 不得写字段（旧文件零变化）");
+        }
+        // 3) 旧文件（0.3.x 形态：无 adaptive 键）→ 读回默认 + 再保存逐字节不变
+        const std::string legacy = read_file(plain_file);
+        PresetData old_preset;
+        check(ui::load_preset(plain_file, old_preset).empty(), c, "load legacy preset");
+        check(!old_preset.outputs.empty() && !old_preset.outputs[0].adaptive_enabled &&
+                  old_preset.outputs[0].adaptive_policy.empty(),
+              c, "旧文件读回默认 disabled/空");
+        const fs::path legacy_out = fresh_dir(root, "adaptive-legacy") / "plain.json";
+        check(ui::save_preset(legacy_out, old_preset).empty(), c, "resave legacy preset");
+        check(read_file(legacy_out) == legacy, c, "旧文件 load→save 应逐字节零变化");
+        // 4) 单边字段：enabled 缺省（只有 policy）→ enabled=false 保留 policy 文本；
+        //    enabled=true + policy 缺省 → 读回 true/空（结构忠实，不臆造策略）。
+        const fs::path policy_only = fresh_dir(root, "adaptive-policy-only") / "p.json";
+        write_file(policy_only, std::string(R"({
+  "version": 2,
+  "name": "policy-only",
+  "output_template": "$dir/$file",
+  "outputs": [ { "format": "jxl", "backend": "libjxl", "tech": "modular", "bitdepth": 16,
+                 "params": {}, "adaptive": { "policy": "target 80\nstage a\n  set effort 3\n" } } ]
+})"));
+        PresetData po;
+        check(ui::load_preset(policy_only, po).empty(), c, "load policy-only");
+        check(!po.outputs.empty() && !po.outputs[0].adaptive_enabled &&
+                  !po.outputs[0].adaptive_policy.empty(),
+              c, "只有 policy：enabled 缺省 false，policy 保留");
+        const fs::path enabled_only = fresh_dir(root, "adaptive-enabled-only") / "e.json";
+        write_file(enabled_only, std::string(R"({
+  "version": 2,
+  "name": "enabled-only",
+  "output_template": "$dir/$file",
+  "outputs": [ { "format": "jxl", "backend": "libjxl", "tech": "modular", "bitdepth": 16,
+                 "params": {}, "adaptive": { "enabled": true } } ]
+})"));
+        PresetData eo;
+        check(ui::load_preset(enabled_only, eo).empty(), c, "load enabled-only");
+        check(!eo.outputs.empty() && eo.outputs[0].adaptive_enabled &&
+                  eo.outputs[0].adaptive_policy.empty(),
+              c, "只有 enabled：policy 缺省空（结构忠实）");
+        // 5) 结构错误显式报错（不静默当关闭）
+        const fs::path bad_type = fresh_dir(root, "adaptive-bad-type") / "b.json";
+        write_file(bad_type, std::string(R"({
+  "version": 2, "name": "bad", "output_template": "$dir/$file",
+  "outputs": [ { "format": "jxl", "params": {}, "adaptive": { "enabled": "yes" } } ]
+})"));
+        PresetData bad;
+        const std::string bad_err = ui::load_preset(bad_type, bad);
+        check(bad_err.find("adaptive.enabled") != std::string::npos, c,
+              "adaptive.enabled 类型错误应点名报错：" + bad_err);
+        const fs::path bad_policy = fresh_dir(root, "adaptive-bad-policy") / "b.json";
+        write_file(bad_policy, std::string(R"({
+  "version": 2, "name": "bad", "output_template": "$dir/$file",
+  "outputs": [ { "format": "jxl", "params": {}, "adaptive": { "policy": 5 } } ]
+})"));
+        const std::string policy_err = ui::load_preset(bad_policy, bad);
+        check(policy_err.find("adaptive.policy") != std::string::npos, c,
+              "adaptive.policy 类型错误应点名报错：" + policy_err);
     }
 
     case_begin("9) 收尾（清理 + 汇总）");

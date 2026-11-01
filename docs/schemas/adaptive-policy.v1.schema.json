@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://photopipeline.local/schemas/adaptive-policy.v1.schema.json",
+  "title": "PhotoPipeline 自适应策略 AST v1",
+  "description": "自适应策略的**导入**面（docs/v0.4.0-design.md §9.3）：脚本可生成 JSON AST，导入后转成 AdaptivePolicy；落盘/导出仍为行式 DSL 文本（避免双真源）。DSL 语法见设计 §9.2。",
+  "type": "object",
+  "required": ["stages"],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1,
+      "default": 1
+    },
+    "target": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 100,
+      "default": 90,
+      "description": "目标分（SSIMULACRA 2，0–100 开区间左端）；默认 90 = 视觉透明档。"
+    },
+    "max_rounds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 32,
+      "default": 8,
+      "description": "全局轮数上界（三层终止保证之一）。"
+    },
+    "output": {
+      "enum": ["last", "best"],
+      "default": "last",
+      "description": "last = 未达标输出最后一轮（本版唯一支持）；best 属 P1，校验期显式拒绝。"
+    },
+    "on_metric_unavailable": {
+      "enum": ["stop", "fail"],
+      "default": "stop",
+      "description": "评分不可用（回读失败/尺寸不符/取消）时的处置：stop = 输出最后成功轮，fail = 该输出失败。"
+    },
+    "plateau": {
+      "type": "number",
+      "minimum": 0,
+      "default": 0,
+      "description": "0 = 关闭；>0 = 连续 2 轮改善 < 阈值即止。"
+    },
+    "stages": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "actions"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+          },
+          "actions": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "oneOf": [
+                {
+                  "title": "search",
+                  "type": "object",
+                  "required": ["kind", "key", "from", "to", "step"],
+                  "properties": {
+                    "kind": { "const": "search" },
+                    "key": {
+                      "type": "string",
+                      "description": "只允许数值质量键：quality / distance / x265:crf / x265:qp / aom:cq-level / qp（按格式作用域）。"
+                    },
+                    "from": {
+                      "oneOf": [
+                        { "type": "number" },
+                        { "const": "current" }
+                      ],
+                      "description": "搜索起点：运行配置当前值（current）或显式数值。"
+                    },
+                    "to": { "type": "number", "description": "搜索终点（含端点）；方向由 from→to 决定。" },
+                    "step": { "type": "number", "exclusiveMinimum": 0 },
+                    "method": {
+                      "enum": ["linear", "bisect", "exp", "greedy"],
+                      "default": "linear"
+                    },
+                    "max_rounds": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 32,
+                      "description": "省略/0 = 继承全局 max_rounds。"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "title": "set",
+                  "type": "object",
+                  "required": ["kind", "key", "value"],
+                  "properties": {
+                    "kind": { "const": "set" },
+                    "key": {
+                      "type": "string",
+                      "description": "目录参数键（该格式可设项、减去禁止表）或伪参数 profile / chroma。"
+                    },
+                    "value": {
+                      "type": ["number", "boolean", "string"],
+                      "description": "按目标参数目录类型归一（Int/Float/Bool/Enum/String）；枚举值接受引擎值或中文显示名。"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              ]
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

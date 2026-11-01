@@ -4,6 +4,7 @@
 #include "ui/page_output_impl.h"
 
 #include <QEvent>
+#include <QFileInfo>
 
 namespace pp::ui {
 
@@ -646,6 +647,9 @@ void OutputPageImpl::wire() {
             return;
         reproject_format_selection();
         update_template_example();
+        // M10-W3-T2：切到该页签即请列表（每格式各有自己的预设列表；全局预设重建/多格式场景
+        // 下建页签时的请求可能落在别的现役格式上 → 这里按页面自身 id 再求一次，列表永不串档）。
+        emit q->format_preset_list_requested(QString::fromStdString(id));
         // R-133：format_changed 已随孤儿信号删除（现役切换通知走 config_changed，消费方
         // = mainwindow refresh_status，行为逐字不变）。
         emit q->config_changed();
@@ -761,6 +765,156 @@ void OutputPageImpl::wire() {
         in.running = !q->isEnabled();
         return contextmenu::preset_card_actions(in);
     });
+}
+
+// ---------------------------------------------------------------------------
+// M10-W3-T2（C23 / 设计 §8.5）：每格式页签顶部的「格式预设」行 + 只读自适应面（C24）
+//   行布局 = [格式预设][下拉 flex][保存][另存…][删除][导入…][导出…]（设计逐字；共享卡头是
+//   跨格式的，不能承载格式级下拉 → 本行必须挂在**每个格式页**上，且置于位深/档位行之上）。
+//   交互：下拉选中即载入（activated → 只有用户动作触发；programmatic setCurrentIndex 不发信号）；
+//   未选中时「保存」走另存…；「删除」只在有选中项时发意图。
+//   证据：--ui-smoke 的 format-preset 行（行存在/空态/往返/损坏/自适应摘要+开关）。
+// ---------------------------------------------------------------------------
+void OutputPageImpl::build_format_preset_row(const std::string &id, QVBoxLayout *into) {
+    FormatState &st = states[id];
+    const QString page_id = QString::fromStdString(id);
+
+    formkit::ComboSpec spec;
+    spec.object_name = QStringLiteral("pp-format-preset-combo");
+    spec.accessible = PageOutput::tr("格式预设");
+    spec.tooltip =
+        PageOutput::tr(
+            "该格式的预设列表（独立文件 %1）：选中即载入 —— 只写当前格式卡（后端/技术/位深/参数/"
+            "编码档位/自适应策略），不改全局项（色彩/冲突/模板/规则/仅元数据）")
+            .arg(QStringLiteral("presets/formats/<格式>/<名>.json"));
+    st.preset_combo = formkit::combo_box(st.page, spec, FieldWidth::Flex);
+    // 首项恒为「未选择」（itemData 空）—— 未喂列表时是空态而不是"空下拉"；字段轨 flex
+    // （6 件套同排：下拉可压到 0 宽，按钮不被挤出去 → 无重叠）。
+    st.preset_combo->addItem(PageOutput::tr("未选择"), QString());
+    st.preset_combo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    st.preset_combo->setFixedHeight(theme::Metrics::combo_h);
+
+    st.preset_save =
+        make_button(st.page, PageOutput::tr("保存"), QStringLiteral("pp-format-preset-save"), true);
+    st.preset_saveas = make_button(st.page, PageOutput::tr("另存…"),
+                                   QStringLiteral("pp-format-preset-saveas"), false);
+    st.preset_delete = make_button(st.page, PageOutput::tr("删除"),
+                                   QStringLiteral("pp-format-preset-delete"), false);
+    st.preset_import = make_button(st.page, PageOutput::tr("导入…"),
+                                   QStringLiteral("pp-format-preset-import"), false);
+    st.preset_export = make_button(st.page, PageOutput::tr("导出…"),
+                                   QStringLiteral("pp-format-preset-export"), false);
+    st.preset_save->setToolTip(PageOutput::tr(
+        "把当前格式卡快照写入预设文件（未选中预设时走「另存…」；保存前先校验，不过不写盘）"));
+    st.preset_saveas->setToolTip(
+        PageOutput::tr("把当前格式卡快照另存为新的格式预设（命名后写入预设目录）"));
+    st.preset_delete->setToolTip(PageOutput::tr("删除当前格式预设文件（会二次确认）"));
+    st.preset_import->setToolTip(
+        PageOutput::tr("从任意 JSON 文件导入格式预设（校验后复制进预设目录）"));
+    st.preset_export->setToolTip(PageOutput::tr("把当前格式卡快照导出到任意路径（同名二次确认）"));
+    {
+        QWidget *field =
+            make_flex_field(st.page, {st.preset_combo, st.preset_save, st.preset_saveas,
+                                      st.preset_delete, st.preset_import, st.preset_export});
+        const formkit::Row row =
+            formkit::frow(st.page, PageOutput::tr("格式预设"), field, FieldWidth::Flex, QString(),
+                          formkit::kNotePlaceholder);
+        row.row->setObjectName(QStringLiteral("pp-format-preset-row"));
+        into->addWidget(row.row);
+    }
+    // 注释位（「来自格式预设：X」/「已载入（已补齐 N 个默认项）」）：10px 提示轨，与卡内行同轴
+    st.preset_note = new ElidedLabel(st.page);
+    st.preset_note->setObjectName(QStringLiteral("pp-format-preset-note-") + page_id);
+    st.preset_note->setProperty(kFieldProperty, QString::fromLatin1(theme::kFkHint));
+    st.preset_note->setFont(theme::font(theme::Typography::hint_px));
+    st.preset_note->setMinimumHeight(formkit::kRowPitch);
+    set_leading_indent(st.preset_note, formkit::kLabelW + formkit::kColGap);
+    st.preset_note->set_full_text(QString());
+    st.preset_note->setVisible(false);
+    into->addWidget(st.preset_note);
+
+    // 只读自适应面（C24：GUI 无编辑器）：[自适应][开关][摘要/错误]；无策略 → 整行隐藏
+    st.adaptive_switch = new formkit::SwitchControl(st.page);
+    st.adaptive_switch->setObjectName(QStringLiteral("pp-format-preset-adaptive-switch"));
+    st.adaptive_switch->set_tokens(tokens);
+    st.adaptive_summary = new ElidedLabel(st.page, /*squeeze=*/true);
+    st.adaptive_summary->setObjectName(QStringLiteral("pp-format-preset-adaptive-") + page_id);
+    st.adaptive_summary->setProperty(kFieldProperty, QString::fromLatin1(theme::kFkHint));
+    st.adaptive_summary->setFont(theme::font(theme::Typography::hint_px));
+    {
+        QWidget *field = make_flex_field(st.page, {st.adaptive_switch, st.adaptive_summary});
+        const formkit::Row row =
+            formkit::frow(st.page, PageOutput::tr("自适应"), field, FieldWidth::Flex, QString(),
+                          formkit::kNotePlaceholder);
+        row.row->setObjectName(QStringLiteral("pp-format-preset-adaptive-row"));
+        st.adaptive_row = row.row;
+        st.adaptive_row->setVisible(false);
+        into->addWidget(st.adaptive_row);
+    }
+
+    // 接线（每行一套；id 按值捕获 → 多格式共存时互不串档）
+    // 注：clang-tidy 21 对 std::string 按值捕获的信号槽 functor 报 bugprone-exception-escape
+    // （其隐式 move ctor 被视为 noexcept，且 MSVC STL 的 _Throw_bad_array_new_length 未被
+    // ignoreBadAlloc 过滤）⇒ 误报，逐条以 NOLINTNEXTLINE 标注（证据见 tidy-fix 报告）。
+    // NOLINTNEXTLINE(bugprone-exception-escape)：MSVC STL 误报
+    QObject::connect(st.preset_combo, &QComboBox::activated, q, [this, id](int index) {
+        FormatState *s = state_of(id);
+        if (s == nullptr || s->preset_combo == nullptr || index < 0)
+            return;
+        const QString path = s->preset_combo->itemData(index, Qt::UserRole).toString();
+        // 「未选择」= 只清会话态（卡值保持，不静默改动用户当前配置）
+        if (path.isEmpty()) {
+            s->format_preset_path.clear();
+            sync_format_preset_buttons(id);
+            update_format_preset_note(id, QString());
+            return;
+        }
+        emit q->format_preset_load_requested(path);
+    });
+    // NOLINTNEXTLINE(bugprone-exception-escape)：MSVC STL 误报
+    QObject::connect(st.preset_save, &QPushButton::clicked, q, [this, id] {
+        const FormatState *s = state_of(id);
+        if (s == nullptr)
+            return;
+        if (s->format_preset_path.isEmpty()) {
+            emit q->format_preset_save_as_requested(); // 未选中 → 走命名保存（设计 §8.5）
+            return;
+        }
+        emit q->format_preset_save_requested(s->format_preset_path);
+    });
+    QObject::connect(st.preset_saveas, &QPushButton::clicked, q,
+                     [this] { emit q->format_preset_save_as_requested(); });
+    // NOLINTNEXTLINE(bugprone-exception-escape)：MSVC STL 误报
+    QObject::connect(st.preset_delete, &QPushButton::clicked, q, [this, id] {
+        const FormatState *s = state_of(id);
+        if (s != nullptr && !s->format_preset_path.isEmpty())
+            emit q->format_preset_delete_requested(s->format_preset_path);
+    });
+    QObject::connect(st.preset_import, &QPushButton::clicked, q,
+                     [this] { emit q->format_preset_import_requested(); });
+    // NOLINTNEXTLINE(bugprone-exception-escape)：MSVC STL 误报
+    QObject::connect(st.preset_export, &QPushButton::clicked, q, [this, id] {
+        const FormatState *s = state_of(id);
+        emit q->format_preset_export_requested(s != nullptr ? s->format_preset_path : QString());
+    });
+    // NOLINTNEXTLINE(bugprone-exception-escape)：MSVC STL 误报
+    QObject::connect(st.adaptive_switch, &formkit::SwitchControl::toggled, q, [this, id](bool on) {
+        FormatState *s = state_of(id);
+        if (s == nullptr || !s->adaptive_parse_ok)
+            return;
+        s->adaptive_enabled = on; // 关闭 = 本次不启用（预设文件里的 enabled 不动）
+        emit q->config_changed();
+    });
+
+    sync_format_preset_buttons(id);
+    // 会话态重建（勾掉格式再勾回 / 切换页签）：自适应面按既有策略原文重放；注释位按既有会话
+    // 预设恢复来源（「已补齐 N 个默认项」这类一次性提示随页签重建归位 → 只留来源）。
+    update_adaptive_row(id);
+    const QString stem = st.format_preset_path.isEmpty()
+                             ? QString()
+                             : QFileInfo(st.format_preset_path).completeBaseName();
+    update_format_preset_note(id, stem.isEmpty() ? QString()
+                                                 : PageOutput::tr("来自格式预设：%1").arg(stem));
 }
 
 void OutputPageImpl::attach_card_menu(

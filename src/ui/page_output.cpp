@@ -70,7 +70,10 @@
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSizePolicy>
+#include <QStandardItem>
+#include <QStandardItemModel>
 #include <QStorageInfo>
+#include <QStyle>
 #include <QTabBar>
 #include <QTabWidget>
 #include <QTimer>
@@ -80,7 +83,9 @@
 
 #include "codecs/encoders.h"
 #include "codecs/heif_profile.h" // UX-10.1：编码档位纯函数单源（WP2 I4）
+#include "core/adaptive.h"       // M10-W3-T2：自适应策略解析/校验单源（只读摘要；C24 无编辑器）
 #include "core/error_text.h"     // R-070/273：错误中文映射单源（M7-R2B；本包接线）
+#include "core/format_preset.h"  // M10-W3-T5：kFormatPresetBuiltinPrefix（内置预设只读前缀单源）
 #include "core/fsops.h"
 #include "core/params.h"
 #include "ui/byte_text.h"              // R-254（M7-R2.1-F3）：字节自然语读数单源（原 human_bytes）
@@ -265,6 +270,13 @@ void OutputPageImpl::build_tab(const std::string &id) {
                           theme::Metrics::card_pad_bottom);
     v->setSpacing(0);
 
+    // 行 −1（M10-W3-T2 / C23 §8.5）：**格式预设行**（每格式页签顶部一行；在「编码档位/位深」
+    // 行之上 —— 共享卡头是跨格式的，不能承载格式级下拉）。行内含只读自适应面（C24）。
+    build_format_preset_row(id, v);
+    // 列表由 MainWindow 单一持有者喂入（设计 §8.5 与全局预设同一分工）：页签建立即发一次意图
+    // 信号，之后由页面在页签激活时再发一次（多格式/预设重建后列表不串档）。
+    emit q->format_preset_list_requested(QString::fromStdString(id));
+
     // 行 0（仅 HEIF/AVIF）：编码档位（Profile）—— UX-10.1 核心行，置于位深行**之上**
     // （档位是因、位深是果）。标签带兼容性说明见 heif_profile_options 的选项文案。
     if (is_heif_family(id)) {
@@ -273,11 +285,27 @@ void OutputPageImpl::build_tab(const std::string &id) {
         prof_spec.accessible = PageOutput::tr("编码档位");
         st.profile = formkit::combo_box(st.page, prof_spec);
         const bool avif = (id == "avif");
-        int option_count = 0;
-        const ProfileOption *options = heif_profile_options(avif, option_count);
-        for (int i = 0; i < option_count; ++i)
-            st.profile->addItem(PageOutput::tr(options[i].label),
-                                static_cast<int>(options[i].profile));
+        // 选项表 / 文案 / 可用性 = 单源（page_output_impl.h 定顺序，codecs/heif_profile.h 定
+        // 标签与 tooltip）。W2-T2（C18）：追加 16..21 六个 still 变体；Main10Still 实测不可用
+        // → **置灰 + 原因**（不静默隐藏，用户要能看到为什么选不了）。
+        for (const ProfileOption &opt : heif_profile_options(avif)) {
+            st.profile->addItem(profile_option_label(avif, opt.profile),
+                                static_cast<int>(opt.profile));
+            const int index = st.profile->count() - 1;
+            const QString disabled_reason = profile_option_disabled_reason(avif, opt.profile);
+            QString tip = profile_option_tooltip(avif, opt.profile);
+            if (!disabled_reason.isEmpty()) {
+                tip = PageOutput::tr("【不可用】%1\n%2").arg(disabled_reason, tip);
+                if (auto *model = qobject_cast<QStandardItemModel *>(st.profile->model())) {
+                    if (QStandardItem *item = model->item(index))
+                        item->setEnabled(false);
+                }
+            }
+            st.profile->setItemData(index, tip, Qt::ToolTipRole);
+        }
+        // C19（§6.2.3）：档位下拉的弹出层按最长项自适应宽度（受屏宽 80% 约束）+ item 尾省略
+        // + tooltip 全文。实现单源 = src/ui/paramform.cpp 的 pp::ui::combo_popup_autosize。
+        combo_popup_autosize(st.profile);
         const formkit::Row row =
             formkit::frow(st.page, PageOutput::tr("编码档位"), st.profile, FieldWidth::Standard,
                           QString(), formkit::kNotePlaceholder);
@@ -437,6 +465,18 @@ void OutputPageImpl::remove_tab(const std::string &id) {
     st->rule_error_box = nullptr;
     st->rule_error_list = nullptr;
     st->rule_errors.clear();
+    // M10-W3-T2：格式预设行的控件随页签销毁（**会话态字段保留**：format_preset_path /
+    // adaptive_policy / adaptive_enabled / adaptive_parse_ok —— 勾掉再勾回仍记得来源与策略）
+    st->preset_combo = nullptr;
+    st->preset_save = nullptr;
+    st->preset_saveas = nullptr;
+    st->preset_delete = nullptr;
+    st->preset_import = nullptr;
+    st->preset_export = nullptr;
+    st->preset_note = nullptr;
+    st->adaptive_row = nullptr;
+    st->adaptive_switch = nullptr;
+    st->adaptive_summary = nullptr;
     apply_tab_width(); // UX-9：等宽
 }
 
@@ -811,6 +851,9 @@ void OutputPageImpl::update_profile_note(const std::string &id) {
     QString note;
     QString tooltip;
     NoteTone tone = NoteTone::Hint;
+    const bool avif = (id == "avif");
+    // C19（§6.2.3）：下拉闭合时也要能看到完整信号说明 → 档位控件自身 tooltip = 全文。
+    st->profile->setToolTip(profile_option_tooltip(avif, want));
     if (want == pp::HeifProfile::Auto) {
         // 固定短句：档位推导结果放进 tooltip。若把 derived 拼进正文，8 位默认（Main Still）
         // 会比 10 位默认多一段，足以触发页面滚动条出现，冻结的磁贴零形变探针会因布局横移失败。
@@ -821,13 +864,21 @@ void OutputPageImpl::update_profile_note(const std::string &id) {
         if (chroma == 3 || chroma == 2 ||
             (derived != pp::HeifProfile::Main && derived != pp::HeifProfile::MainStill))
             tone = NoteTone::Warn;
+    } else if (const QString disabled = profile_option_disabled_reason(avif, want);
+               !disabled.isEmpty()) {
+        // C18：实测不可用的 still 变体（Main10Still）——预设/CLI 带进来时也要显式说明，
+        // 不静默当成可用档位（编码后 SPS 断言会给同一份原因）。
+        note = disabled;
+        tooltip = profile_option_tooltip(avif, want);
+        tone = NoteTone::Error;
     } else {
         std::string err_zh;
-        if (!pp::heif_profile_compatible_for(id == "avif", want, depth, chroma, true, &err_zh)) {
+        if (!pp::heif_profile_compatible_for(avif, want, depth, chroma, true, &err_zh)) {
             note = QString::fromStdString(err_zh);
             tone = NoteTone::Error;
         } else {
             note = profile_compat_hint(want);
+            tooltip = profile_option_tooltip(avif, want);
             if (!note.isEmpty() || chroma == 3)
                 tone = NoteTone::Warn;
         }
@@ -965,6 +1016,9 @@ void OutputPageImpl::apply_state_to_form(const std::string &id, const pp::Output
         // UX-10.1：还原编码档位（保留键 __heif_profile；缺省 = Auto）。
         // 旧预设可能带已被新表淘汰的兼容值（如 Main12=3）→ 找不到时显式回落到「自动」，
         // 不能沿用上一个页签/上一次落值留下的档位（旧实现只 break，索引保持不变）。
+        // W2-T2（C18）备注：不可用档位（Main10Still=16）在模型里是 disabled；若预设带 16，
+        // Qt 对 disabled item 的 setCurrentIndex 行为未在本任务实测（可能保留上一档位）——
+        // 属已知边界，见 build/m10/w2-profile/report.md §9。
         if (st->profile != nullptr) {
             const int want =
                 int(pp::param_int(spec.params, std::string(pp::kHeifProfileParamKey), 0));
@@ -981,6 +1035,12 @@ void OutputPageImpl::apply_state_to_form(const std::string &id, const pp::Output
                 st->profile->setCurrentIndex(0);
             st->profile_user_set = st->profile->currentIndex() != 0;
         }
+        // M10 / W3-T5（A20）：自适应会话态随 OutputFormatSpec 恢复 —— 全局预设载入（apply_preset）
+        // 与格式预设载入（apply_format_preset_to）共用本落卡函数；空策略 = 关闭 → 整行隐藏，
+        // 不残留上一个预设的策略（与「全局预设值覆盖全卡」口径一致；无隐式叠加）。
+        st->adaptive_policy = spec.adaptive_policy;
+        st->adaptive_enabled = !spec.adaptive_policy.empty() && spec.adaptive_enabled;
+        update_adaptive_row(id);
     }
     set_bitdepth_options(id, have_spec ? spec.out_bitdepth : -1, /*keep_if_valid=*/false);
     evaluate_avif_alpha_preselect(id);
@@ -1019,6 +1079,12 @@ pp::OutputFormatSpec OutputPageImpl::spec_of(const std::string &id) const {
     if (st->profile != nullptr)
         spec.params[std::string(pp::kHeifProfileParamKey)] =
             static_cast<int64_t>(st->profile->currentData().toInt());
+    // M10 / W3-T5（A20）：自适应开关 + 策略原文随卡快照采集（全局预设输出级 `adaptive` 的
+    // 写盘面；格式预设 collect 另有同名两字段）。**采集面忠实**：开关关掉也保留策略文本
+    // （用户重新打开不丢策略）；执行面门控在 `config_base()`（未启用 ⇒ 不下发 → 旧路径）。
+    spec.adaptive_enabled =
+        !st->adaptive_policy.empty() && st->adaptive_parse_ok && st->adaptive_enabled;
+    spec.adaptive_policy = st->adaptive_policy;
     return spec;
 }
 
@@ -1201,6 +1267,13 @@ pp::RunConfig PageOutput::config_base() const {
     } else {
         for (const std::string &id : impl_->sel.items())
             cfg.outputs.push_back(impl_->spec_of(id));
+    }
+    // M10 / W3-T5（A20）：自适应**执行面门控** —— 未启用（开关关 / 策略解析失败 / 策略为空）
+    // ⇒ 不下发策略，引擎走既有单次编码路径（逐字节不变，C25）。采集面（spec_of/collect_preset）
+    // 仍保留策略原文，保证「关掉开关再保存预设」不丢文本。
+    for (pp::OutputFormatSpec &spec : cfg.outputs) {
+        if (!spec.adaptive_enabled)
+            spec.adaptive_policy.clear();
     }
     cfg.color = impl_->color_target();
     // M7-R2.1-F4：色彩四选项（UX-14 C1–C4）——默认值 = 现行为（0/false），能力类 opt-in
@@ -1627,6 +1700,279 @@ void PageOutput::set_split_by_format(bool on) {
     const QSignalBlocker blocker(impl_->split_switch);
     impl_->split_switch->setChecked(on);
     impl_->apply_split_to_template(on);
+}
+
+// ===========================================================================
+// M10-W3-T2：格式预设行 + 只读自适应面（契约 docs/v0.4.0-design.md §8.5「C23」/ §9「C24」；
+// 追认 docs/m10-adjudications.md A9）。本段全部为**加性**实现（既有方法体零改动）。
+//   * 文件 I/O / 校验 / 归一 / 二次确认归 MainWindow（单一持有者）—— 页面只收列表、发意图、
+//     落卡、显示只读摘要；
+//   * 卡值真源仍是 spec/form->values()（预设只是"写入器"，不引入第二份真源）；
+//   * 会话态 = FormatState::format_preset_path / adaptive_*（不落 settings；设计 §8.5）。
+// ===========================================================================
+void OutputPageImpl::sync_format_preset_buttons(const std::string &id) {
+    FormatState *st = state_of(id);
+    if (st == nullptr)
+        return;
+    const bool has = !st->format_preset_path.isEmpty();
+    // M10-W3-T5：内置（出厂）预设 = 只读模板（文件名 `_builtin-` 前缀，单源 =
+    // core/format_preset.h）。 「删除」置灰 + 原因进
+    // tooltip（不静默灰）；「保存」仍可点，处理器会显式拒绝覆盖并提示 「另存…」（见
+    // mainwindow_presets.cpp 的 save/delete 守卫；I/O 层同前缀双保险）。
+    const QString builtin_prefix =
+        QString::fromUtf8(pp::kFormatPresetBuiltinPrefix.data(),
+                          static_cast<int>(pp::kFormatPresetBuiltinPrefix.size()));
+    const QString path = st->format_preset_path;
+    const qsizetype sep =
+        std::max(path.lastIndexOf(QLatin1Char('/')), path.lastIndexOf(QLatin1Char('\\')));
+    const bool builtin = has && path.mid(sep + 1).startsWith(builtin_prefix);
+    if (st->preset_save != nullptr) {
+        // 保存**恒可用**：未选中预设时它退化为「另存…」（设计 §8.5「未选中→另存」）
+        st->preset_save->setEnabled(true);
+        st->preset_save->setToolTip(
+            has ? (builtin ? PageOutput::tr("内置预设只读（_builtin- 前缀）：点「保存」会提示用"
+                                            "「另存…」保存副本，不覆盖内置文件")
+                           : PageOutput::tr(
+                                 "保存到当前格式预设（覆盖同名文件；保存前先校验，不过不写盘）"))
+                : PageOutput::tr("未选中格式预设：「保存」= 另存为新的格式预设"));
+    }
+    if (st->preset_delete != nullptr) {
+        st->preset_delete->setEnabled(has && !builtin);
+        st->preset_delete->setToolTip(
+            !has ? PageOutput::tr("未选中格式预设：无可删除项")
+                 : (builtin ? PageOutput::tr("内置预设只读（_builtin- 前缀）：不可删除；请用"
+                                             "「另存…」保存副本后再改")
+                            : PageOutput::tr("删除当前格式预设（会二次确认）")));
+    }
+    if (st->preset_export != nullptr) {
+        st->preset_export->setEnabled(true); // 导出 = 当前格式卡快照（未选中预设也可导出）
+        st->preset_export->setToolTip(
+            PageOutput::tr("把当前格式卡快照导出到任意路径（同名二次确认；导出前先校验）"));
+    }
+    if (st->preset_saveas != nullptr) {
+        st->preset_saveas->setToolTip(
+            PageOutput::tr("把当前格式卡快照另存为新的格式预设（命名后写入预设目录）"));
+    }
+}
+
+void OutputPageImpl::apply_format_preset_to(const std::string &id,
+                                            const pp::OutputFormatSpec &spec) {
+    FormatState *st = state_of(id);
+    if (st == nullptr || st->form == nullptr)
+        return;
+    st->spec = spec;
+    st->spec.format_id = id;
+    // 落卡走与全局预设同一条链（apply_state_to_form：后端/技术/位深/参数/保留键 __heif_profile）。
+    // UX-10.1 的档位还原、位深限幅、avif+alpha 预选（R-066 口径：预设后端为权威值）一并复用。
+    apply_state_to_form(id, st->spec);
+    // M8-B2 规则上下文（位深）随预设位深重算 → 预检错误清单/页签徽标同步（不静默留旧错误）
+    sync_rule_context(id);
+    update_rule_errors(id);
+    update_profile_note(id);
+    refresh_tab_labels();
+    // C23 §8.6：载入后卡头「已改 N」按**新值**重算（预设值 ≠ 表内默认 ⇒ 计数非零是如实的）
+    refresh_changed_pill();
+    emit q->config_changed();
+}
+
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)：参数语义由名字固定
+void OutputPageImpl::set_adaptive_policy_for(const std::string &id, const std::string &policy,
+                                             bool enabled) {
+    FormatState *st = state_of(id);
+    if (st == nullptr)
+        return;
+    st->adaptive_policy = policy;
+    // 无策略 ⇒ 不可能启用（避免「enabled=true + policy 空」的无效态落进预设/运行配置）。
+    st->adaptive_enabled = enabled && !policy.empty();
+    update_adaptive_row(id);
+}
+
+// 只读自适应面（C24：GUI **无编辑器**）。摘要三要素 = 目标分 / 最多轮数 / 阶段数，解析单源 =
+// core/adaptive（与执行器/校验同一份 AST）。解析或校验失败 → 行内中文错误 + 开关禁用
+// （不静默套默认、不静默关闭）；策略为空 → 整行不显示（默认 = 关闭，不占版面）。
+void OutputPageImpl::update_adaptive_row(const std::string &id) {
+    FormatState *st = state_of(id);
+    if (st == nullptr || st->adaptive_row == nullptr)
+        return;
+    if (st->adaptive_policy.empty()) {
+        st->adaptive_parse_ok = true;
+        st->adaptive_error.clear();
+        if (st->adaptive_summary != nullptr) {
+            st->adaptive_summary->set_full_text(QString());
+            st->adaptive_summary->setToolTip(QString());
+        }
+        if (st->adaptive_switch != nullptr) {
+            const QSignalBlocker blocker(st->adaptive_switch);
+            st->adaptive_switch->setChecked(false);
+        }
+        st->adaptive_row->setVisible(false);
+        return;
+    }
+    pp::AdaptivePolicy ast;
+    pp::AdaptiveError err;
+    const bool ok = pp::parse_and_validate_adaptive_policy(st->adaptive_policy, id, ast, &err);
+    st->adaptive_parse_ok = ok;
+    QString text;
+    QString tip;
+    if (ok) {
+        QStringList stages;
+        stages.reserve(static_cast<qsizetype>(ast.stages.size()));
+        for (const pp::AdaptiveStage &stage : ast.stages)
+            stages << QString::fromStdString(stage.id);
+        const QString target = QString::number(ast.target, 'g', 6);
+        text = PageOutput::tr("目标 %1 分 / 最多 %2 轮 / %3 个阶段")
+                   .arg(target)
+                   .arg(ast.max_rounds)
+                   .arg(static_cast<int>(ast.stages.size()));
+        tip = PageOutput::tr(
+                  "只读摘要（策略只存在格式预设文件里，GUI 不提供编辑器）：目标分 %1 / 最多 %2 轮 "
+                  "/ %3 个阶段（%4）；未达标的输出按策略输出最后一轮。自适应需要评分 —— 即使设置里"
+                  "关闭评分，携带策略的输出仍会计算评分。关闭开关 = 本次不启用（预设文件不改）")
+                  .arg(target)
+                  .arg(ast.max_rounds)
+                  .arg(static_cast<int>(ast.stages.size()))
+                  .arg(stages.isEmpty() ? PageOutput::tr("—") : stages.join(PageOutput::tr("、")));
+        st->adaptive_error.clear();
+    } else {
+        text = PageOutput::tr("自适应策略无法解析（第 %1 行第 %2 列）：%3")
+                   .arg(err.line)
+                   .arg(err.col)
+                   .arg(QString::fromStdString(err.message));
+        tip = text;
+        if (!err.hint.empty())
+            tip += QLatin1Char('\n') + QString::fromStdString(err.hint);
+        if (!err.code.empty())
+            tip += QLatin1Char('\n') +
+                   PageOutput::tr("错误码：%1").arg(QString::fromStdString(err.code));
+        tip += QLatin1Char('\n') +
+               PageOutput::tr("修正后重新载入预设；「启用自适应」已禁用（不会静默按默认策略运行）");
+        st->adaptive_error = text;
+    }
+    if (st->adaptive_summary != nullptr) {
+        // 错误态走 ppInvalid 红字轨（theme::field_qss）；动态属性变更需重新 polish 才生效
+        st->adaptive_summary->setProperty("ppInvalid", !ok);
+        if (QStyle *style = st->adaptive_summary->style()) {
+            style->unpolish(st->adaptive_summary);
+            style->polish(st->adaptive_summary);
+        }
+        st->adaptive_summary->set_full_text(text);
+        st->adaptive_summary->setToolTip(tip);
+    }
+    if (st->adaptive_switch != nullptr) {
+        const QSignalBlocker blocker(st->adaptive_switch);
+        st->adaptive_switch->setChecked(ok && st->adaptive_enabled);
+    }
+    if (st->adaptive_switch != nullptr) {
+        st->adaptive_switch->setEnabled(ok);
+        st->adaptive_switch->setToolTip(
+            ok ? PageOutput::tr("开 = 本次运行按该策略迭代参数；关 = 本次不启用（预设文件里的 "
+                                "enabled 不改；下次载入仍按预设值）")
+               : PageOutput::tr("策略无法解析：已禁用「启用自适应」（修正策略后重新载入预设）"));
+    }
+    st->adaptive_row->setVisible(true);
+}
+
+void OutputPageImpl::update_format_preset_note(const std::string &id, const QString &text) {
+    FormatState *st = state_of(id);
+    if (st == nullptr || st->preset_note == nullptr)
+        return;
+    st->preset_note->set_full_text(text);
+    st->preset_note->setVisible(!text.isEmpty());
+}
+
+void PageOutput::set_format_preset_list(const QString &format_id,
+                                        const std::vector<std::pair<QString, QString>> &presets) {
+    OutputPageImpl *impl_ = impl_of(this);
+    const std::string id = format_id.toStdString();
+    FormatState *st = impl_->state_of(id);
+    if (st == nullptr || st->preset_combo == nullptr)
+        return;
+    const QString session = st->format_preset_path;
+    {
+        const QSignalBlocker blocker(st->preset_combo);
+        st->preset_combo->clear();
+        // 首项恒为「未选择」（设计 §8.5：下拉 = 当前格式的预设列表，含「未选择」）
+        st->preset_combo->addItem(tr("未选择"), QString());
+        for (const auto &[path, name] : presets)
+            st->preset_combo->addItem(name, path);
+        int index = 0;
+        if (!session.isEmpty()) {
+            for (int i = 1; i < st->preset_combo->count(); ++i) {
+                if (st->preset_combo->itemData(i, Qt::UserRole).toString() == session) {
+                    index = i;
+                    break;
+                }
+            }
+        }
+        st->preset_combo->setCurrentIndex(index);
+        // 会话态指向的文件已不在列表里（被删/改名）→ 回「未选择」并清会话态（不静默指向别项）
+        if (index == 0)
+            st->format_preset_path.clear();
+    }
+    impl_->sync_format_preset_buttons(id);
+    if (st->format_preset_path.isEmpty())
+        impl_->update_format_preset_note(id, QString());
+}
+
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)：参数语义由名字固定
+void PageOutput::set_current_format_preset(const QString &format_id, const QString &path) {
+    OutputPageImpl *impl_ = impl_of(this);
+    const std::string id = format_id.toStdString();
+    FormatState *st = impl_->state_of(id);
+    if (st == nullptr)
+        return;
+    st->format_preset_path = path;
+    if (st->preset_combo != nullptr) {
+        const QSignalBlocker blocker(st->preset_combo);
+        int index = 0;
+        for (int i = 1; i < st->preset_combo->count(); ++i) {
+            if (st->preset_combo->itemData(i, Qt::UserRole).toString() == path) {
+                index = i;
+                break;
+            }
+        }
+        st->preset_combo->setCurrentIndex(index);
+    }
+    impl_->sync_format_preset_buttons(id);
+}
+
+QString PageOutput::current_format_preset(const QString &format_id) const {
+    OutputPageImpl *impl_ = impl_of(this);
+    const FormatState *st = impl_->state_of(format_id.toStdString());
+    return st != nullptr ? st->format_preset_path : QString();
+}
+
+void PageOutput::apply_format_preset(const pp::OutputFormatSpec &spec) {
+    OutputPageImpl *impl_ = impl_of(this);
+    // 目标格式 = spec 自带的 format_id（MainWindow 载入后已按当前页签校验）；空则取现役
+    const std::string id = !spec.format_id.empty() ? spec.format_id : impl_->sel.active();
+    if (id.empty())
+        return;
+    impl_->apply_format_preset_to(id, spec);
+}
+
+void PageOutput::set_format_preset_adaptive(const QString &format_id, const QString &policy,
+                                            bool enabled) {
+    OutputPageImpl *impl_ = impl_of(this);
+    impl_->set_adaptive_policy_for(format_id.toStdString(), policy.toStdString(), enabled);
+}
+
+void PageOutput::set_format_preset_note(const QString &format_id, const QString &note) {
+    OutputPageImpl *impl_ = impl_of(this);
+    impl_->update_format_preset_note(format_id.toStdString(), note);
+}
+
+bool PageOutput::format_preset_adaptive_enabled(const QString &format_id) const {
+    OutputPageImpl *impl_ = impl_of(this);
+    const FormatState *st = impl_->state_of(format_id.toStdString());
+    // 生效态：解析失败一律「不启用」（开关已禁用，不让坏策略静默参与运行）
+    return st != nullptr && st->adaptive_parse_ok && st->adaptive_enabled;
+}
+
+QString PageOutput::format_preset_adaptive_policy(const QString &format_id) const {
+    OutputPageImpl *impl_ = impl_of(this);
+    const FormatState *st = impl_->state_of(format_id.toStdString());
+    return st != nullptr ? QString::fromStdString(st->adaptive_policy) : QString();
 }
 
 } // namespace pp::ui

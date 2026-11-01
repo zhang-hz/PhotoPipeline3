@@ -1,0 +1,16 @@
+{
+  "kind": "format-preset",
+  "version": 1,
+  "name": "smoke-adaptive",
+  "format": "webp",
+  "backend": "libwebp",
+  "tech": "lossy",
+  "bitdepth": 8,
+  "params": {
+    "quality": 80
+  },
+  "adaptive": {
+    "enabled": true,
+    "policy": "version 1\n# E2E（dev-only）：目标 90 / 最多 3 轮；小图 64x64 的 webp 质量阶梯\n# 从运行配置（quality=80）出发，每轮 +5，达标即停。\ntarget 90\nmax_rounds 3\noutput last\non_metric_unavailable stop\n\nstage quality-up\n  search quality from current to 100 step 5\n"
+  }
+}

@@ -9,7 +9,8 @@
 // 迁移前逐字节等价。
 #include "ui/mainwindow_impl.h"
 
-#include "codecs/encoders.h" // PP_DEEP_DEBUG：运行时内省参数默认值对拍
+#include "codecs/enc_tune_facts.h" // M10 W2-T3（C20）：tune 置灰/仿真项探针（事实表单源）
+#include "codecs/encoders.h"       // PP_DEEP_DEBUG：运行时内省参数默认值对拍
 
 #include "ui/contextmenu.h"    // UX-1：卡片右键菜单面（词表单源）
 #include "ui/formkit.h"        // R-识图1：CheckableCard/ElidedLabel 回读（layout-audit ①③）
@@ -17,6 +18,7 @@
 #include "ui/leading_indent.h" // R-218：逻辑边距单源
 #include "ui/meta_probe_context.h" // R-182/R-258 + M7-R2.3-G8：钩子/词表单源 + ProbeContext（读侧全面迁移）
 #include "ui/meta_state.h" // M7R22G1-3：meta::RatingStars/DeltaSpin/unit_slot/note_label（rtl-mirror 四查）
+#include "ui/page_output_impl.h" // W2-T2 移交：档位选项表/可用性/短标签单源（findData 探针）
 #include <QAbstractButton>
 #include <QAbstractItemView>
 #include <QAbstractScrollArea>
@@ -27,8 +29,14 @@
 #include <QComboBox>
 #include <QContextMenuEvent>
 #include <QDirIterator>
+#include <QDoubleSpinBox>
+#include <QFile>
 #include <QFrame>
 #include <QHBoxLayout>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
@@ -3988,7 +3996,9 @@ void MainWindow::Impl::smoke_probe_run(const QString &shots_dir) {
     }
     pump(250); // 60ms flush + 布局
 
-    // ---- (a) 行数与行文案（M5-T9：状态列 = 胶囊；大小/速度/耗时 = 三列；失败原因 = 独立行）----
+    // ---- (a) 行数与行文案（M5-T9：状态列 = 胶囊；大小/耗时 = 数值列；失败原因 = 独立行）
+    //      M10-W1（A12 换锚，布局类）：删速度列 —— 压缩比从「速度列文本」换到「大小列 tooltip」
+    //      （断言本体 = 完成行显示产物事实：字节 + 压缩比 + 耗时；语义不变、取证面不变）。
     {
         const int bars = int(page->findChildren<QWidget *>(
                                      QRegularExpression(QStringLiteral("^pp-run-bar-\\d+-\\d+$")))
@@ -4003,6 +4013,13 @@ void MainWindow::Impl::smoke_probe_run(const QString &shots_dir) {
         };
         const QString f0_real = pill(QStringLiteral("pp-run-status-0-0"));
         const QString f0_synth = pill(QStringLiteral("pp-run-status-0-1"));
+        const auto pill_tip0 = [page](const QString &name) {
+            auto *label = page->findChild<QLabel *>(name);
+            return label != nullptr ? label->toolTip() : QString();
+        };
+        // M10-W1（T9a，§5.3 / A12 换锚）：编码主文案 = 「编码 NN%」；行数/合成口径进 tooltip
+        const QString f0_real_tip = pill_tip0(QStringLiteral("pp-run-status-0-0"));
+        const QString f0_synth_tip = pill_tip0(QStringLiteral("pp-run-status-0-1"));
         const QString f1_status = pill(QStringLiteral("pp-run-status-1-0"));
         const QString f1_reason = probe_full_text(page, QStringLiteral("pp-run-reason-text-1-0"));
         const QString f1_zero = pill(QStringLiteral("pp-run-status-1-1"));
@@ -4017,29 +4034,41 @@ void MainWindow::Impl::smoke_probe_run(const QString &shots_dir) {
         const QString f2_group = pill(QStringLiteral("pp-run-gstatus-2"));
         const QString f2_group_tip = pill_tip(QStringLiteral("pp-run-gstatus-2"));
         const QString f3_size = probe_full_text(page, QStringLiteral("pp-run-size-3-0"));
-        const QString f3_speed = probe_full_text(page, QStringLiteral("pp-run-speed-3-0"));
+        // M10-W1：速度列已删 → 压缩比读「大小列 tooltip」（C11 压缩比迁入处）
+        auto *f3_size_label = page->findChild<QLabel *>(QStringLiteral("pp-run-size-3-0"));
+        const QString f3_size_tip = f3_size_label != nullptr ? f3_size_label->toolTip() : QString();
         const QString f3_time = probe_full_text(page, QStringLiteral("pp-run-time-3-0"));
         const QString f3_status = pill(QStringLiteral("pp-run-status-3-0"));
         const QString f4_zero = pill(QStringLiteral("pp-run-status-4-1"));
         const QString f4_zero_kind = bar_kind(QStringLiteral("pp-run-bar-4-1"));
         const QString f4_group = pill(QStringLiteral("pp-run-gstatus-4"));
-        std::printf("UI-SMOKE run-probe-rows: bars=%d f0=[%s|%s] f1=[%s|%s|%s] f2=[%s|%s] "
-                    "f2tip=\"%s\" f2group=%s/%s f3=[%s|%s|%s|%s] f4=[%s|%s|%s]\n",
+        std::printf("UI-SMOKE run-probe-rows: bars=%d f0=[%s|%s] f0tip=\"%s|%s\" "
+                    "f1=[%s|%s|%s] f2=[%s|%s] "
+                    "f2tip=\"%s\" f2group=%s/%s f3=[%s|%s|%s] f3tip=\"%s\" f4=[%s|%s|%s]\n",
                     bars, qUtf8Printable(f0_real), qUtf8Printable(f0_synth),
+                    qUtf8Printable(f0_real_tip), qUtf8Printable(f0_synth_tip),
                     qUtf8Printable(f1_status), qUtf8Printable(f1_zero), qUtf8Printable(f1_reason),
                     qUtf8Printable(f2_row0), qUtf8Printable(f2_row1), qUtf8Printable(f2_row0_tip),
                     qUtf8Printable(f2_group), qUtf8Printable(f2_group_tip), qUtf8Printable(f3_size),
-                    qUtf8Printable(f3_speed), qUtf8Printable(f3_time), qUtf8Printable(f3_status),
+                    qUtf8Printable(f3_time), qUtf8Printable(f3_status), qUtf8Printable(f3_size_tip),
                     qUtf8Printable(f4_zero), qUtf8Printable(f4_zero_kind),
                     qUtf8Printable(f4_group));
         std::fflush(stdout);
         if (bars != 10)
             smoke_fail(
                 MainWindow::tr("逐输出行数不符：bar=%1（期望 10 = 5 文件 × 2 格式）").arg(bars));
-        if (!f0_real.contains(QStringLiteral("行")) || !f0_real.contains(QStringLiteral("/3024")))
-            smoke_fail(MainWindow::tr("真实行级进度未按「编码 N/M 行」显示：%1").arg(f0_real));
-        if (f0_synth != QStringLiteral("编码（合成进度）"))
-            smoke_fail(MainWindow::tr("合成进度行文案不符：%1").arg(f0_synth));
+        // M10-W1（T9a，§5.3 / A12 换锚）：编码行主文案 = 「编码 NN%」（行数不再是主文案）；
+        // 真实行级 R/H 行进 tooltip；合成进度保留斜纹 + 「合成进度（编码器无回调）」tooltip。
+        const QRegularExpression encode_pct(QStringLiteral("^编码 \\d+%$"));
+        const bool f0_real_pct = encode_pct.match(f0_real).hasMatch();
+        const bool f0_synth_pct = encode_pct.match(f0_synth).hasMatch();
+        if (!f0_real_pct || !f0_real_tip.contains(QStringLiteral("行")) ||
+            !f0_real_tip.contains(QStringLiteral("/3024")))
+            smoke_fail(MainWindow::tr("真实编码行未按「编码 NN%%」显示（文本=%1 tooltip=%2）")
+                           .arg(f0_real, f0_real_tip));
+        if (!f0_synth_pct || !f0_synth_tip.contains(QStringLiteral("合成进度")))
+            smoke_fail(MainWindow::tr("合成进度行文案/tooltip 不符（文本=%1 tooltip=%2）")
+                           .arg(f0_synth, f0_synth_tip));
         if (f1_status != QStringLiteral("失败") ||
             !f1_reason.contains(QStringLiteral("16→8 位降档被禁止")) ||
             !f1_reason.startsWith(QStringLiteral("└ 原因：")))
@@ -4058,10 +4087,16 @@ void MainWindow::Impl::smoke_probe_run(const QString &shots_dir) {
             smoke_fail(
                 MainWindow::tr("排队 pill 的 tooltip 未承载交错启动语义（行0=%1 行1=%2 组=%3）")
                     .arg(f2_row0_tip, f2_row1_tip, f2_group_tip));
-        if (f3_size != QStringLiteral("412 KB") || f3_speed != QStringLiteral("3.1×") ||
-            f3_time != QStringLiteral("2.4s") || f3_status != QStringLiteral("已完成"))
-            smoke_fail(MainWindow::tr("完成行未显示产物事实（大小=%1 速度=%2 耗时=%3 状态=%4）")
-                           .arg(f3_size, f3_speed, f3_time, f3_status));
+        // M10-W1（A12 换锚，布局类）：完成行产物事实 = 大小列字节 + 大小列 tooltip 的压缩比
+        // （「×」+ 基线口径）+ 耗时；速度列文本/钩子退役（断言本体不变，取证面从列文本换到
+        // tooltip）。
+        if (f3_size != QStringLiteral("412 KB") ||
+            !f3_size_tip.contains(QStringLiteral("压缩比")) ||
+            !f3_size_tip.contains(QStringLiteral("×")) || f3_time != QStringLiteral("2.4s") ||
+            f3_status != QStringLiteral("已完成"))
+            smoke_fail(
+                MainWindow::tr("完成行未显示产物事实（大小=%1 压缩比tip=%2 耗时=%3 状态=%4）")
+                    .arg(f3_size, f3_size_tip, f3_time, f3_status));
         // 修 3-10：0 字节 = 琥珀异常（条 warn ≠ done；胶囊「0 字节」；组行「异常」）
         if (f1_zero != QStringLiteral("0 字节") || f4_zero != QStringLiteral("0 字节") ||
             f4_zero_kind != QStringLiteral("warn") || f4_group != QStringLiteral("异常"))
@@ -4267,6 +4302,15 @@ void MainWindow::Impl::smoke_probe_run(const QString &shots_dir) {
 void MainWindow::Impl::smoke_probe_run_geometry() {
     PageRun page;
     page.set_tokens(tokens);
+    // M10-W1（C10/C11）探针保真：真实 app 里运行页挂在窗口 QSS（`theme::style_sheet`）之下 ——
+    // 竖滚动条 **6px** 的规则来自该窗口 QSS（`theme::scrollbar_qss`，SPA 式细浮层）；探针页单独
+    // show 时没有祖先 QSS → 平台默认滚动条宽（≈14px），名称列会被少算 8px（与设计 §5.1 的
+    // 「587 → 153px」口径不符）。给探针页补挂**同一份**滚动条规则，几何才与真实 app 同口径
+    // （纯探针 fixture 修正，不改产品代码；页面自身的 tokens QSS 已由 set_tokens 落地）。
+    const auto apply_window_scroll_qss = [this](QWidget *host) {
+        host->setStyleSheet(host->styleSheet() + theme::scrollbar_qss(tokens));
+    };
+    apply_window_scroll_qss(&page);
     page.resize(theme::Metrics::right_width, theme::Metrics::calibrated_h);
     page.show();
     PageRun::RunPlan plan;
@@ -4885,11 +4929,380 @@ void MainWindow::Impl::smoke_probe_run_geometry() {
         pump(80);
     }
 
-    std::printf("UI-SMOKE run-geom: checked=%d bad=%d pane=%dx%d rows=%d %s\n", checked,
-                int(bad.size()), page.width(), page.height(),
+    // ---- (n) M10-W1 运行页列布局（C10/C11；A11 收缩 + A12 只增探针）
+    //   来源 docs/v0.4.0-design.md §5.1/§5.2/§12.2：
+    //    · fit=1        —— `pp-run-content` 宽 == `pp-run-scroll` 视口宽（587 / 520 两档；
+    //                      横向滚动关闭 ScrollBarAlwaysOff ⇒ 内容恒等于视口、不出横向裁切）
+    //    · name-w       —— 名称列实际宽（587 ≥150 / 520 ≥80；删速度列后 55 → 153）
+    //    · no-speed=1   —— `pp-run-speed-*`/`pp-run-gspeed-*` 钩子与「速度」列题均**不存在**
+    //                      （A11 收缩的否定断言：旧形态不得回潮）
+    //    · ratio-tip=1  —— 大小列 tooltip 含「压缩比」与「×」（C11：压缩比从速度列迁入 tooltip）
+    //    · cols-ok=1    —— 表头各列 x/宽 == 组行/输出行对应列（run-score column-align 口径扩全列）
+    //    · long-elide=1 —— 68 字符中文/ASCII 混合名：ElideMiddle（显示含「…」且扩展名可见）+
+    //                      ppFullText = 全名 + tooltip 含全路径 + 名称列宽不变（C10/§5.2）
+    int fit_ok = 0;
+    int name_w = -1;
+    int name_w520 = -1;
+    int no_speed = 0;
+    int ratio_tip_ok = 0;
+    int cols_ok = 0;
+    int long_elide = 0;
+    {
+        const auto viewport_of = [](const QWidget *host) -> QWidget * {
+            auto *area =
+                host != nullptr
+                    ? host->findChild<QAbstractScrollArea *>(QStringLiteral("pp-run-scroll"))
+                    : nullptr;
+            return area != nullptr ? area->viewport() : nullptr;
+        };
+        const auto content_of = [](const QWidget *host) -> QWidget * {
+            return host != nullptr ? host->findChild<QWidget *>(QStringLiteral("pp-run-content"))
+                                   : nullptr;
+        };
+        const auto x_in = [](const QWidget *host, const QWidget *child) {
+            return child != nullptr ? child->mapTo(host, QPoint(0, 0)).x() : -1;
+        };
+
+        // fit（档 1 = 587）：内容宽 == 视口宽
+        QWidget *main_viewport = viewport_of(&page);
+        QWidget *main_content = content_of(&page);
+        const bool fit_main = main_viewport != nullptr && main_content != nullptr &&
+                              main_viewport->width() == main_content->width() &&
+                              main_viewport->width() > 0;
+
+        // name_w（档 1 = 587）：名称列实际宽（组行；行骨架里名称列 = 唯一 stretch 项）
+        auto *main_gname = page.findChild<QLabel *>(QStringLiteral("pp-run-gname-0"));
+        name_w = main_gname != nullptr ? main_gname->width() : -1;
+
+        // 档 2 = 520（右侧栏最小宽，§3.1/right_width_min）：fit + name_w ≥80
+        bool fit_narrow = false;
+        {
+            PageRun narrow;
+            narrow.set_tokens(tokens);
+            apply_window_scroll_qss(&narrow);
+            narrow.resize(theme::Metrics::right_width_min, theme::Metrics::calibrated_h);
+            narrow.show();
+            narrow.set_plan(plan);
+            narrow.begin_run(1, QStringList{QStringLiteral("IMG_2731.jpg")});
+            pump(200);
+            QWidget *narrow_viewport = viewport_of(&narrow);
+            QWidget *narrow_content = content_of(&narrow);
+            fit_narrow = narrow_viewport != nullptr && narrow_content != nullptr &&
+                         narrow_viewport->width() == narrow_content->width() &&
+                         narrow_viewport->width() > 0;
+            auto *narrow_gname = narrow.findChild<QLabel *>(QStringLiteral("pp-run-gname-0"));
+            name_w520 = narrow_gname != nullptr ? narrow_gname->width() : -1;
+            narrow.hide();
+            pump(60);
+        }
+        fit_ok = (fit_main && fit_narrow) ? 1 : 0;
+
+        // no-speed：钩子族 + 列题都不得存在（A11 收缩 + mockup/spec 列题同步）
+        const QList<QWidget *> speed_hooks = page.findChildren<QWidget *>(
+            QRegularExpression(QStringLiteral("^pp-run-(speed|gspeed)-")));
+        bool speed_head = false;
+        for (QLabel *label : page.findChildren<QLabel *>()) {
+            if (label->text() == QStringLiteral("速度"))
+                speed_head = true;
+        }
+        no_speed = (speed_hooks.isEmpty() && !speed_head) ? 1 : 0;
+
+        // ratio-tip：完成行大小列 tooltip（C11 压缩比的唯一出口）
+        auto *ratio_label = page.findChild<QLabel *>(QStringLiteral("pp-run-size-0-0"));
+        const QString ratio_text = ratio_label != nullptr ? ratio_label->toolTip() : QString();
+        ratio_tip_ok = (ratio_text.contains(QStringLiteral("压缩比")) &&
+                        ratio_text.contains(QStringLiteral("×")))
+                           ? 1
+                           : 0;
+
+        // cols-ok：表头各列 x/宽 == 行内对应列（组行 + 输出行；列序严格递增且不重叠）
+        QLabel *head_name = page.findChild<QLabel *>(QStringLiteral("pp-run-thead-name"));
+        QLabel *head_bar = page.findChild<QLabel *>(QStringLiteral("pp-run-thead-bar"));
+        QLabel *head_size = page.findChild<QLabel *>(QStringLiteral("pp-run-thead-size"));
+        QLabel *head_time = page.findChild<QLabel *>(QStringLiteral("pp-run-thead-time"));
+        QLabel *head_score = page.findChild<QLabel *>(QStringLiteral("pp-run-thead-score"));
+        QLabel *head_status = page.findChild<QLabel *>(QStringLiteral("pp-run-thead-status"));
+        auto *row_status_pill = page.findChild<QWidget *>(QStringLiteral("pp-run-status-0-0"));
+        auto *group_status_pill = page.findChild<QWidget *>(QStringLiteral("pp-run-gstatus-0"));
+        QWidget *row_status_cell =
+            row_status_pill != nullptr ? row_status_pill->parentWidget() : nullptr;
+        QWidget *group_status_cell =
+            group_status_pill != nullptr ? group_status_pill->parentWidget() : nullptr;
+        struct ColPair {
+            QWidget *head;
+            QWidget *row;
+        };
+        const ColPair pairs[] = {
+            {head_name, page.findChild<QWidget *>(QStringLiteral("pp-run-gname-0"))},
+            {head_name, page.findChild<QWidget *>(QStringLiteral("pp-run-oname-0-0"))},
+            {head_bar, page.findChild<QWidget *>(QStringLiteral("pp-run-gbar-0"))},
+            {head_bar, page.findChild<QWidget *>(QStringLiteral("pp-run-bar-0-0"))},
+            {head_size, page.findChild<QWidget *>(QStringLiteral("pp-run-gsize-0"))},
+            {head_size, page.findChild<QWidget *>(QStringLiteral("pp-run-size-0-0"))},
+            {head_time, page.findChild<QWidget *>(QStringLiteral("pp-run-gtime-0"))},
+            {head_time, page.findChild<QWidget *>(QStringLiteral("pp-run-time-0-0"))},
+            {head_score, page.findChild<QWidget *>(QStringLiteral("pp-run-gscore-0"))},
+            {head_score, page.findChild<QWidget *>(QStringLiteral("pp-run-score-0-0"))},
+            {head_status, group_status_cell},
+            {head_status, row_status_cell},
+        };
+        int col_aligned = 0;
+        QStringList col_bad;
+        for (const ColPair &pair : pairs) {
+            if (pair.head != nullptr && pair.row != nullptr &&
+                x_in(&page, pair.head) == x_in(&page, pair.row) &&
+                pair.head->width() == pair.row->width()) {
+                ++col_aligned;
+            } else {
+                col_bad << QStringLiteral("head=%1/%2 row=%3/%4")
+                               .arg(x_in(&page, pair.head))
+                               .arg(pair.head != nullptr ? pair.head->width() : -1)
+                               .arg(x_in(&page, pair.row))
+                               .arg(pair.row != nullptr ? pair.row->width() : -1);
+            }
+        }
+        const QWidget *head_order[] = {head_name, head_bar,   head_size,
+                                       head_time, head_score, head_status};
+        bool ordered = true;
+        for (int k = 1; k < 6; ++k) {
+            const QWidget *prev = head_order[k - 1];
+            const QWidget *cur = head_order[k];
+            if (prev == nullptr || cur == nullptr ||
+                x_in(&page, prev) + prev->width() > x_in(&page, cur)) {
+                ordered = false;
+            }
+        }
+        cols_ok = (col_aligned == 12 && ordered) ? 1 : 0;
+
+        // long-elide：68 字符中文/ASCII 混合名 fixture（临时输入目录不需要真实文件 ——
+        // PageRun::begin_run 的契约输入就是「完整源路径」，页面不做 IO）
+        const QString long_stem = QStringLiteral("2026年10月31日_樱花外拍_第二批次_超长文件名样本");
+        QString long_base = long_stem;
+        while (long_base.size() < 64)
+            long_base += QLatin1Char('a');
+        long_base += QStringLiteral(".jpg"); // 64 + 4 = 68 字符
+        const QString long_path = QStringLiteral("C:/Photos/long-name-fixture/") + long_base;
+        PageRun longpage;
+        longpage.set_tokens(tokens);
+        apply_window_scroll_qss(&longpage);
+        longpage.resize(theme::Metrics::right_width, theme::Metrics::calibrated_h);
+        longpage.show();
+        longpage.set_plan(plan);
+        longpage.begin_run(1, QStringList{long_path});
+        pump(200);
+        auto *long_name = longpage.findChild<QLabel *>(QStringLiteral("pp-run-gname-0"));
+        const QString long_full =
+            long_name != nullptr ? long_name->property("ppFullText").toString() : QString();
+        const QString long_shown = long_name != nullptr ? long_name->text() : QString();
+        const QString long_tip = long_name != nullptr ? long_name->toolTip() : QString();
+        const int long_width = long_name != nullptr ? long_name->width() : -1;
+        long_elide = (long_base.size() == 68 && !long_full.isEmpty() &&
+                      long_full == long_base &&                        // ppFullText = 全名
+                      long_shown.contains(QStringLiteral("\u2026")) && // 显示含「…」
+                      long_shown.endsWith(QStringLiteral(".jpg")) &&   // ElideMiddle 保留扩展名
+                      long_tip.contains(long_path) &&                  // tooltip 含全路径
+                      long_width == name_w)                            // 名称列宽不变
+                         ? 1
+                         : 0;
+        std::printf("UI-SMOKE run-geom-cols: name-w=%d name-w520=%d fit=%d name=\"%s\" "
+                    "shown=\"%s\" tip-has-path=%d long-w=%d speed-hooks=%d head-速度=%d "
+                    "col-pairs=%d/12 head-order=%d\n",
+                    name_w, name_w520, fit_ok, qUtf8Printable(long_full),
+                    qUtf8Printable(long_shown), long_tip.contains(long_path) ? 1 : 0, long_width,
+                    int(speed_hooks.size()), speed_head ? 1 : 0, col_aligned, ordered ? 1 : 0);
+        std::fflush(stdout);
+        longpage.hide();
+        pump(60);
+
+        expect("fit", fit_ok == 1,
+               QStringLiteral("main-viewport=%1 main-content=%2 narrow-fit=%3")
+                   .arg(main_viewport != nullptr ? main_viewport->width() : -1)
+                   .arg(main_content != nullptr ? main_content->width() : -1)
+                   .arg(fit_narrow ? 1 : 0));
+        expect("name_w", name_w >= 150 && name_w520 >= 80,
+               QStringLiteral("587=%1 520=%2").arg(name_w).arg(name_w520));
+        expect("no-speed", no_speed == 1,
+               QStringLiteral("hooks=%1 head-速度=%2")
+                   .arg(int(speed_hooks.size()))
+                   .arg(speed_head ? 1 : 0));
+        expect("ratio-tip", ratio_tip_ok == 1, QStringLiteral("tip=\"%1\"").arg(ratio_text));
+        expect("cols-ok", cols_ok == 1,
+               QStringLiteral("aligned=%1/12 ordered=%2 bad=[%3]")
+                   .arg(col_aligned)
+                   .arg(ordered ? 1 : 0)
+                   .arg(col_bad.join(QLatin1Char(' '))));
+        expect("long-elide", long_elide == 1,
+               QStringLiteral("full=\"%1\" shown=\"%2\" tip-has-path=%3 width=%4 want=%5")
+                   .arg(long_full, long_shown)
+                   .arg(long_tip.contains(long_path) ? 1 : 0)
+                   .arg(long_width)
+                   .arg(name_w));
+    }
+
+    // ---- (o) M10-W1（T9a；C12/C15；docs/v0.4.0-design.md §5.3/§5.4/§12.2）
+    //   运行页状态映射 + 双通道 flush —— **仅现有事件面**（OutputDone/评分事件消费属 W1-T9b）：
+    //   · run-status-map：事件序列仿 core/progress.cpp ProgressMux —— 共享 Color 1.0 →
+    //     Encode 0.4（组行「编码中 0/2」/格式行「编码 40%」）→ Encode 1.0（「评分中」Accent+斜纹）
+    //     → MetaWrite 0（「写入」/「写入中 0/2」）→ MetaWrite 1.0（「已完成」，评分列仍留空）；
+    //     冲突跳过 = 首事件即 MetaWrite 1.0（「跳过」）。
+    //   · flush-state：状态翻转后**≤2 个事件循环**内文本变化（不靠 60ms 节拍），且 dirty-row
+    //     只渲染脏文件（2 文件页面里只翻 1 行 → ppRenderedRows=1）。
+    int status_map_ok = 0;
+    int flush_state_ok = 0;
+    int flush_rows = -1;
+    {
+        const auto status_text = [](const QWidget *host, const char *name) {
+            auto *label = host->findChild<QLabel *>(QString::fromLatin1(name));
+            return label != nullptr ? label->text() : QString();
+        };
+        const auto status_tip = [](const QWidget *host, const char *name) {
+            auto *label = host->findChild<QLabel *>(QString::fromLatin1(name));
+            return label != nullptr ? label->toolTip() : QString();
+        };
+        const auto status_tone = [](const QWidget *host, const char *name) {
+            auto *label = host->findChild<QLabel *>(QString::fromLatin1(name));
+            auto *pill = label != nullptr ? static_cast<formkit::PillBadge *>(label) : nullptr;
+            return pill != nullptr ? pill->tone() : formkit::PillBadge::Tone::Neutral;
+        };
+        const auto bar_striped = [](const QWidget *host, const char *name) {
+            auto *bar = host->findChild<QWidget *>(QString::fromLatin1(name));
+            return bar != nullptr && bar->property("ppBarSynthetic").toBool();
+        };
+        // --- 状态映射页：1 文件 × 2 格式 ---
+        PageRun::RunPlan st_plan;
+        st_plan.format_ids = QStringList{QStringLiteral("jpeg"), QStringLiteral("webp")};
+        st_plan.widths = QVector<int>{4032};
+        st_plan.heights = QVector<int>{3024};
+        st_plan.bytes = QVector<qint64>{1'310'720};
+        PageRun st;
+        st.set_tokens(tokens);
+        apply_window_scroll_qss(&st);
+        st.resize(theme::Metrics::right_width, theme::Metrics::calibrated_h);
+        st.show();
+        st.set_plan(st_plan);
+        st.begin_run(1, QStringList{QStringLiteral("status-map.jpg")});
+        pump(120);
+        // ① 共享段真正进行中：组行 = 共享阶段词（现状语义保留，不是「编码中」）
+        st.on_event(probe_progress({0, -1}, pp::Stage::Color, 1.0f, false));
+        pump(30);
+        const QString g_color = status_text(&st, "pp-run-gstatus-0");
+        // ② 首输出 Encode 0.4：组行聚合 = 编码中 0/2；格式行 = 编码 40% + 行数 tooltip
+        st.on_event(probe_progress({0, 0}, pp::Stage::Encode, 0.4f, false));
+        pump(30);
+        const QString g_encode = status_text(&st, "pp-run-gstatus-0");
+        const QString o_encode = status_text(&st, "pp-run-status-0-0");
+        const QString o_encode_tip = status_tip(&st, "pp-run-status-0-0");
+        // ③ Encode 1.0（编码完成强制点）：格式行 = 评分中（Accent + 斜纹）；组行 = 评分中 0/2
+        st.on_event(probe_progress({0, 0}, pp::Stage::Encode, 1.0f, false));
+        pump(30);
+        const QString g_score = status_text(&st, "pp-run-gstatus-0");
+        const QString o_score = status_text(&st, "pp-run-status-0-0");
+        const formkit::PillBadge::Tone score_tone = status_tone(&st, "pp-run-status-0-0");
+        const bool score_striped = bar_striped(&st, "pp-run-bar-0-0");
+        // ④ MetaWrite 0：格式行 = 写入；组行 = 写入中 0/2
+        st.on_event(probe_progress({0, 0}, pp::Stage::MetaWrite, 0.0f, false));
+        pump(30);
+        const QString g_write = status_text(&st, "pp-run-gstatus-0");
+        const QString o_write = status_text(&st, "pp-run-status-0-0");
+        // ⑤ MetaWrite 1.0：格式行 = 已完成（中间态）；组行 = 编码中 1/2；评分列仍留空
+        st.on_event(probe_progress({0, 0}, pp::Stage::MetaWrite, 1.0f, false));
+        pump(30);
+        const QString g_done = status_text(&st, "pp-run-gstatus-0");
+        const QString o_done = status_text(&st, "pp-run-status-0-0");
+        const QString o_done_score = probe_full_text(&st, QStringLiteral("pp-run-score-text-0-0"));
+        // ⑥ 跳过：全新页，首事件即 MetaWrite 1.0（无 Encode 段）→ 「跳过」
+        PageRun sk;
+        sk.set_tokens(tokens);
+        apply_window_scroll_qss(&sk);
+        sk.resize(theme::Metrics::right_width, theme::Metrics::calibrated_h);
+        sk.show();
+        sk.set_plan(st_plan);
+        sk.begin_run(1, QStringList{QStringLiteral("skip-conflict.jpg")});
+        pump(120);
+        sk.on_event(probe_progress({0, 0}, pp::Stage::MetaWrite, 1.0f, false));
+        pump(30);
+        const QString o_skip = status_text(&sk, "pp-run-status-0-0");
+        const formkit::PillBadge::Tone skip_tone = status_tone(&sk, "pp-run-status-0-0");
+        const QString g_skip = status_text(&sk, "pp-run-gstatus-0");
+
+        status_map_ok =
+            (g_color == QStringLiteral("色彩") && g_encode == QStringLiteral("编码中 0/2") &&
+             o_encode == QStringLiteral("编码 40%") &&
+             o_encode_tip.contains(QStringLiteral("行")) &&
+             o_encode_tip.contains(QStringLiteral("/3024")) &&
+             g_score == QStringLiteral("评分中 0/2") && o_score == QStringLiteral("评分中") &&
+             score_tone == formkit::PillBadge::Tone::Accent && score_striped &&
+             g_write == QStringLiteral("写入中 0/2") && o_write == QStringLiteral("写入") &&
+             g_done == QStringLiteral("编码中 1/2") && o_done == QStringLiteral("已完成") &&
+             o_done_score.isEmpty() && o_skip == QStringLiteral("跳过") &&
+             skip_tone == formkit::PillBadge::Tone::Warn &&
+             g_skip == QStringLiteral("编码中 1/2")) // 跳过已结算 1，另一格式仍排队
+                ? 1
+                : 0;
+        std::printf("UI-SMOKE run-status-map: ok=%d color=\"%s\" g-enc=\"%s\" o-enc=\"%s\" "
+                    "enc-tip=\"%s\" g-score=\"%s\" o-score=\"%s\" score-tone=%d striped=%d "
+                    "g-write=\"%s\" o-write=\"%s\" g-done=\"%s\" o-done=\"%s\" done-score=\"%s\" "
+                    "o-skip=\"%s\" skip-tone=%d g-skip=\"%s\"\n",
+                    status_map_ok, qUtf8Printable(g_color), qUtf8Printable(g_encode),
+                    qUtf8Printable(o_encode), qUtf8Printable(o_encode_tip), qUtf8Printable(g_score),
+                    qUtf8Printable(o_score), int(score_tone), score_striped ? 1 : 0,
+                    qUtf8Printable(g_write), qUtf8Printable(o_write), qUtf8Printable(g_done),
+                    qUtf8Printable(o_done), qUtf8Printable(o_done_score), qUtf8Printable(o_skip),
+                    int(skip_tone), qUtf8Printable(g_skip));
+        std::fflush(stdout);
+        expect("run-status-map", status_map_ok == 1,
+               QStringLiteral("color=\"%1\" enc=\"%2\"/\"%3\" score=\"%4\"/\"%5\" tone=%6 "
+                              "write=\"%7\"/\"%8\" done=\"%9\"/\"%10\" skip=\"%11\"/tone=%12")
+                   .arg(g_color, g_encode, o_encode, g_score, o_score)
+                   .arg(int(score_tone))
+                   .arg(g_write, o_write, g_done, o_done, o_skip)
+                   .arg(int(skip_tone)));
+
+        // --- flush-state：状态翻转 ≤2 事件循环内可见 + dirty-row 只渲染脏文件 ---
+        PageRun::RunPlan fs_plan;
+        fs_plan.format_ids = QStringList{QStringLiteral("jpeg")};
+        fs_plan.widths = QVector<int>{640, 640};
+        fs_plan.heights = QVector<int>{480, 480};
+        fs_plan.bytes = QVector<qint64>{4096, 4096};
+        PageRun fs;
+        fs.set_tokens(tokens);
+        apply_window_scroll_qss(&fs);
+        fs.resize(theme::Metrics::right_width, theme::Metrics::calibrated_h);
+        fs.show();
+        fs.set_plan(fs_plan);
+        fs.begin_run(2, QStringList{QStringLiteral("flush-a.jpg"), QStringLiteral("flush-b.jpg")});
+        pump(120);
+        const QString flush_before = status_text(&fs, "pp-run-gstatus-0");
+        fs.on_event(probe_progress({0, -1}, pp::Stage::Color, 1.0f, false)); // 状态翻转（阶段切换）
+        QCoreApplication::processEvents(); // 事件循环 #1（≤2 内必须可见，不等 60ms）
+        QCoreApplication::processEvents(); // 事件循环 #2
+        const QString flush_after = status_text(&fs, "pp-run-gstatus-0");
+        flush_rows = fs.property("ppRenderedRows").toInt();
+        flush_state_ok = (flush_before != flush_after && flush_after == QStringLiteral("色彩") &&
+                          flush_rows == 1)
+                             ? 1
+                             : 0;
+        std::printf("UI-SMOKE flush-state: state=%d before=\"%s\" after=\"%s\" rows=%d\n",
+                    flush_state_ok, qUtf8Printable(flush_before), qUtf8Printable(flush_after),
+                    flush_rows);
+        std::fflush(stdout);
+        expect("flush-state", flush_state_ok == 1,
+               QStringLiteral("before=\"%1\" after=\"%2\" rendered-rows=%3（期望 1 = dirty-row）")
+                   .arg(flush_before, flush_after)
+                   .arg(flush_rows));
+        st.hide();
+        sk.hide();
+        fs.hide();
+        pump(60);
+    }
+
+    std::printf("UI-SMOKE run-geom: checked=%d bad=%d pane=%dx%d rows=%d fit=%d name-w=%d "
+                "name-w520=%d no-speed=%d ratio-tip=%d cols-ok=%d long-elide=%d %s\n",
+                checked, int(bad.size()), page.width(), page.height(),
                 int(page.findChildren<QWidget *>(
                             QRegularExpression(QStringLiteral("^pp-run-(group|row|reason)-\\d+")))
                         .size()),
+                fit_ok, name_w, name_w520, no_speed, ratio_tip_ok, cols_ok, long_elide,
                 qUtf8Printable(bad.join(QLatin1Char(' '))));
     std::fflush(stdout);
     if (!bad.isEmpty()) {
@@ -5032,7 +5445,7 @@ void MainWindow::Impl::smoke_probe_verification() {
     // ---- (c) §12-8 数值右对齐 + tabular（此前无独立探针）----
     //  判据按规范分层（§4.2「数值」行 + mockup tokens.css .kv-v）：
     //   * 右对齐 + tnum：全部 spinbox（R4「值区 flex 右对齐」，formkit 单源落地）与运行页
-    //     数值列（§7.3「大小/速度/耗时（右对齐）」）；
+    //     数值列（§7.3「大小/耗时（右对齐）」；M10-W1 删速度列 → 族里不再有 speed 前缀）；
     //   * 仅 tnum：全部 kv 值标签（ppFk=value）—— mockup .kv-v 只声明 tabular-nums、不设
     //     text-align（kv 值档不要求右对齐；formkit::value_label 的右对齐是数值 kv 的选择）。
     {
@@ -5063,8 +5476,9 @@ void MainWindow::Impl::smoke_probe_verification() {
         }
         for (QLabel *label : w->findChildren<QLabel *>()) {
             const QString name = label->objectName();
+            // M10-W1（A12 换锚，布局类）：速度列退役 → 数值列族 = 大小 / 耗时（评分列是定宽
+            // 单元格内的 ElidedLabel，探针另见 run-score；此处只锚 §7.3 的右对齐数值列）
             if (name.startsWith(QStringLiteral("pp-run-size-")) ||
-                name.startsWith(QStringLiteral("pp-run-speed-")) ||
                 name.startsWith(QStringLiteral("pp-run-time-")))
                 check_numeric(label->alignment(), label->font(), name, QStringLiteral("numcol"),
                               /*require_right=*/true);
@@ -5976,7 +6390,8 @@ void probe_format_card_interactions(MainWindow *w, PageOutput *page_output,
 //   渲染走 QStyle::visualAlignment ⇒ 左/右对齐**自动随向镜像**，无需显式 visualAlignment。
 //   判据 = 同一对齐的 LTR/RTL 字形墨迹盒互为水平镜像（±2px，R-044 字体敏感几何容差）：
 //   三档（QLabel AlignRight / QLabel AlignLeft / ElidedLabel AlignRight）逐档钉住 +
-//   应用数值列（pp-run-size-*/speed-*/time-*）旗标读回（右对齐 + QLabel 血统 ⇒ 随定论镜像）。
+//   应用数值列（pp-run-size-*/pp-run-time-*；M10-W1 删速度列后只剩两族）旗标读回（右对齐 +
+//   QLabel 血统 ⇒ 随定论镜像）。
 void probe_rtl_deep(MainWindow *w, const std::function<void(const QString &)> &fail) {
     int checked = 0;
     int bad = 0;
@@ -6024,13 +6439,14 @@ void probe_rtl_deep(MainWindow *w, const std::function<void(const QString &)> &f
         mirror_case(QStringLiteral("EAlignRight"), label, Qt::AlignRight);
     }
     // 应用面读回：运行页数值列（右对齐）—— 结论（自动镜像）挂在同名控件族上
+    // M10-W1（A12 换锚，布局类）：速度列退役 → 数值列族 = 大小 / 耗时（评分为定宽单元格
+    // ElidedLabel 右对齐，见 run-score；本族只锚 §7.3 的「大小/耗时」两列）。
     int cols = 0;
     int cols_bad = 0;
     if (w != nullptr) {
         for (QLabel *label : w->findChildren<QLabel *>()) {
             const QString name = label->objectName();
             if (!(name.startsWith(QStringLiteral("pp-run-size-")) ||
-                  name.startsWith(QStringLiteral("pp-run-speed-")) ||
                   name.startsWith(QStringLiteral("pp-run-time-"))))
                 continue;
             ++cols;
@@ -6226,27 +6642,38 @@ void probe_m8_params(MainWindow *w, PageOutput *page_output, const pp::AppSettin
         }
     }
 
-    // ---- ② 新增布尔行 = 三态下拉 {跟随默认/开/关}（JXL noise）----
+    // ---- ② 新增布尔行 = 三态下拉 {跟随默认/开/关} ----
+    // M10-UI-ADAPT（W2-T5 C22）：旧锚点 `noise` 已随 12 个结构性 no-op 键退场（编码器侧
+    // kRemovedKeys / 目录 16→14 行）。语义适配 = 同一族「目录新增三态布尔行」的保留键 `dots`
+    // （gaborish / dots / patches 三条同构，W2-T5 新增行）；断言条数与语义逐条不变
+    // （在位 → 3 档且默认跟随 → 默认不下发 → 开 → 关 → 回默认不下发）。
+    // 加性（只增）：三条保留键都在位 —— 旧探针只抽一个键，删键后新行无人看守。
     page_output->select_format(QStringLiteral("jxl"));
     smoke_pump(400);
     {
-        auto *tri = page_output->findChild<QComboBox *>(QStringLiteral("pp-param-enable-noise"));
-        expect(tri != nullptr, QStringLiteral("JXL 新布尔行有三态下拉（pp-param-enable-noise）"));
+        for (const char *key : {"gaborish", "dots", "patches"}) {
+            auto *combo = page_output->findChild<QComboBox *>(QStringLiteral("pp-param-enable-") +
+                                                              QString::fromLatin1(key));
+            expect(combo != nullptr, QStringLiteral("JXL 三态布尔行在位（pp-param-enable-%1）")
+                                         .arg(QString::fromLatin1(key)));
+        }
+        auto *tri = page_output->findChild<QComboBox *>(QStringLiteral("pp-param-enable-dots"));
+        expect(tri != nullptr, QStringLiteral("JXL 新布尔行有三态下拉（pp-param-enable-dots）"));
         if (tri != nullptr) {
             expect(tri->count() == 3 && tri->currentIndex() == 0,
                    QStringLiteral("三态 = 3 档且默认「跟随默认」（count=%1 idx=%2）")
                        .arg(tri->count())
                        .arg(tri->currentIndex()));
-            expect(!has_key("noise"), QStringLiteral("跟随默认 ⇒ noise 不下发"));
+            expect(!has_key("dots"), QStringLiteral("跟随默认 ⇒ dots 不下发"));
             tri->setCurrentIndex(1); // 开
             smoke_pump(200);
-            expect(has_bool("noise", true), QStringLiteral("三态「开」⇒ noise=true"));
+            expect(has_bool("dots", true), QStringLiteral("三态「开」⇒ dots=true"));
             tri->setCurrentIndex(2); // 关
             smoke_pump(200);
-            expect(has_bool("noise", false), QStringLiteral("三态「关」⇒ noise=false"));
+            expect(has_bool("dots", false), QStringLiteral("三态「关」⇒ dots=false"));
             tri->setCurrentIndex(0); // 跟随默认
             smoke_pump(200);
-            expect(!has_key("noise"), QStringLiteral("三态回「跟随默认」⇒ noise 不下发"));
+            expect(!has_key("dots"), QStringLiteral("三态回「跟随默认」⇒ dots 不下发"));
         }
     }
 
@@ -6357,6 +6784,93 @@ void probe_m8_params(MainWindow *w, PageOutput *page_output, const pp::AppSettin
             expect(!has_key("x265:crf") && has_key("quality"),
                    QStringLiteral("切回质量路径恢复零行为"));
         }
+        // W2-T4（C21）：数值行位置（核心区、紧随模式行）+ 动态域（位深 8/10/12）。
+        {
+            auto *crf_row =
+                page_output->findChild<QWidget *>(QStringLiteral("pp-param-row-x265:crf"));
+            auto *qp_row =
+                page_output->findChild<QWidget *>(QStringLiteral("pp-param-row-x265:qp"));
+            auto *rc_row =
+                page_output->findChild<QWidget *>(QStringLiteral("pp-param-rcmode-row-heif"));
+            const auto ancestor_core = [](QWidget *start) -> QWidget * {
+                for (QWidget *p = start; p != nullptr; p = p->parentWidget())
+                    if (p->objectName() == QStringLiteral("pp-core-area"))
+                        return p;
+                return nullptr;
+            };
+            expect(crf_row != nullptr && ancestor_core(crf_row) != nullptr,
+                   QStringLiteral("CRF 数值行父链含 pp-core-area"));
+            expect(qp_row != nullptr && ancestor_core(qp_row) != nullptr,
+                   QStringLiteral("QP 数值行父链含 pp-core-area"));
+            auto *core = crf_row != nullptr ? ancestor_core(crf_row) : nullptr;
+            auto *lay = core != nullptr ? qobject_cast<QVBoxLayout *>(core->layout()) : nullptr;
+            expect(lay != nullptr && rc_row != nullptr && crf_row != nullptr && qp_row != nullptr,
+                   QStringLiteral("RC 核心区布局可读（core/lay/rc/crf/qp 在位）"));
+            if (lay != nullptr && rc_row != nullptr && crf_row != nullptr && qp_row != nullptr) {
+                const int i_rc = lay->indexOf(rc_row);
+                const int i_crf = lay->indexOf(crf_row);
+                const int i_qp = lay->indexOf(qp_row);
+                expect(i_rc >= 0 && i_crf > i_rc && i_qp > i_crf,
+                       QStringLiteral("RC 数值行紧随模式行（rc=%1 crf=%2 qp=%3）")
+                           .arg(i_rc)
+                           .arg(i_crf)
+                           .arg(i_qp));
+            }
+            auto *bit = page_output->findChild<QComboBox *>(QStringLiteral("pp-bitdepth-combo"));
+            auto *crf_spin =
+                page_output->findChild<QDoubleSpinBox *>(QStringLiteral("pp-param-x265:crf"));
+            auto *qp_spin = page_output->findChild<QSpinBox *>(QStringLiteral("pp-param-x265:qp"));
+            expect(bit != nullptr && crf_spin != nullptr && qp_spin != nullptr,
+                   QStringLiteral("位深/CRF/QP 控件在位（动态域用例）"));
+            if (bit != nullptr && crf_spin != nullptr && qp_spin != nullptr) {
+                const int b8 = bit->findData(8);
+                const int b10 = bit->findData(10);
+                const int b12 = bit->findData(12);
+                expect(b8 >= 0 && b10 >= 0 && b12 >= 0,
+                       QStringLiteral("HEIF 位深 8/10/12 可按 value 定位"));
+                const auto domain_ok = [&](int combo_idx, double lo) {
+                    if (combo_idx < 0)
+                        return false;
+                    bit->setCurrentIndex(combo_idx);
+                    smoke_pump(220);
+                    return qFuzzyCompare(crf_spin->minimum(), lo) &&
+                           qFuzzyCompare(crf_spin->maximum(), 51.0) &&
+                           qp_spin->minimum() == static_cast<int>(lo) && qp_spin->maximum() == 51;
+                };
+                expect(domain_ok(b8, 0.0), QStringLiteral("8 位域 CRF/QP = 0..51"));
+                expect(domain_ok(b10, -12.0), QStringLiteral("10 位域 CRF/QP = -12..51"));
+                expect(domain_ok(b12, -24.0), QStringLiteral("12 位域 CRF/QP = -24..51"));
+                // 行内注记（label 轨之外的范围注释）随位深改写：10 位 → "-12..51"
+                if (b10 >= 0 && crf_row != nullptr) {
+                    bit->setCurrentIndex(b10);
+                    smoke_pump(200);
+                    bool note_ok = false;
+                    for (QLabel *lab : crf_row->findChildren<QLabel *>())
+                        if (lab->text().contains(QStringLiteral("-12..51")))
+                            note_ok = true;
+                    expect(note_ok, QStringLiteral("CRF 行内注记 = 10 位域 -12..51"));
+                }
+                if (b8 >= 0) { // 复位默认 8 位（后续探针/默认态截图）
+                    bit->setCurrentIndex(b8);
+                    smoke_pump(200);
+                }
+            }
+            // QP 路径：QP 数值行可见、CRF 行隐藏；下发集只含 qp。
+            if (rc != nullptr) {
+                rc->setCurrentIndex(2);
+                smoke_pump(260);
+                expect(has_key("x265:qp") && !has_key("x265:crf") && !has_key("quality"),
+                       QStringLiteral("QP 路径下发集 = {qp}（got qp=%1 crf=%2 quality=%3）")
+                           .arg(has_key("x265:qp") ? 1 : 0)
+                           .arg(has_key("x265:crf") ? 1 : 0)
+                           .arg(has_key("quality") ? 1 : 0));
+                expect(widget_visible(QStringLiteral("pp-param-row-x265:qp")) &&
+                           !widget_visible(QStringLiteral("pp-param-row-x265:crf")),
+                       QStringLiteral("QP 路径可见性 = 只显示 QP 数值行"));
+                rc->setCurrentIndex(0);
+                smoke_pump(260);
+            }
+        }
         // 无损：RC 组整组隐藏（模式下拉 + 两条路径数值行均不可见）
         auto *lossless =
             page_output->findChild<QAbstractButton *>(QStringLiteral("pp-lossless-check"));
@@ -6373,6 +6887,81 @@ void probe_m8_params(MainWindow *w, PageOutput *page_output, const pp::AppSettin
             smoke_pump(350);
             expect(widget_visible(QStringLiteral("pp-param-rcmode-row-heif")),
                    QStringLiteral("关无损 ⇒ RC 模式组恢复"));
+        }
+    }
+    // ---- ⑤b W2-T3（C20）：tune 全量 —— 4 原生 + animation 仿真 + 2 置灰（HEIF/x265） ----
+    page_output->select_format(QStringLiteral("heif"));
+    smoke_pump(400);
+    {
+        auto *tune = page_output->findChild<QComboBox *>(QStringLiteral("pp-param-tune"));
+        const pp::tune::BackendFacts *facts = pp::tune::facts_for("x265");
+        expect(tune != nullptr && facts != nullptr,
+               QStringLiteral("HEIF tune 下拉 + x265 事实表在位"));
+        if (tune != nullptr && facts != nullptr) {
+            expect(tune->count() == static_cast<int>(facts->values.size()),
+                   QStringLiteral("tune 项数 = 事实表（count=%1 want=%2）")
+                       .arg(tune->count())
+                       .arg(facts->values.size()));
+            auto *model = qobject_cast<QStandardItemModel *>(tune->model());
+            constexpr int kFullTextRole = Qt::UserRole + 0x1f; // combo_popup_autosize 的全文字段
+            const auto item_for = [&](std::string_view label) -> int {
+                const QString want = QString::fromStdString(std::string(label));
+                for (int i = 0; i < tune->count(); ++i) {
+                    QString full = tune->itemData(i, kFullTextRole).toString();
+                    if (full.isEmpty())
+                        full = tune->itemText(i);
+                    if (full == want)
+                        return i;
+                }
+                return -1;
+            };
+            int animation_idx = -1;
+            int ssim_idx = -1;
+            for (const pp::tune::ValueFact &fact : facts->values) {
+                const int idx = item_for(fact.label);
+                const QString value = QString::fromStdString(std::string(fact.value));
+                expect(idx >= 0, QStringLiteral("tune 值 %1 在下拉中（按标签定位）").arg(value));
+                if (idx < 0)
+                    continue;
+                if (fact.value == "animation")
+                    animation_idx = idx;
+                if (fact.value == "ssim")
+                    ssim_idx = idx;
+                const bool want_disabled = fact.kind == pp::tune::Kind::Disabled;
+                QStandardItem *item = model != nullptr ? model->item(idx) : nullptr;
+                expect(item != nullptr && item->isEnabled() != want_disabled,
+                       QStringLiteral("tune=%1 可用性 = 事实表类别（disabled=%2）")
+                           .arg(value)
+                           .arg(want_disabled ? 1 : 0));
+                const QString tip = tune->itemData(idx, Qt::ToolTipRole).toString();
+                expect(!tip.isEmpty(), QStringLiteral("tune=%1 有 item tooltip").arg(value));
+                if (want_disabled)
+                    expect(tip.contains(QStringLiteral("不可用")),
+                           QStringLiteral("tune=%1 置灰项 tooltip 含「不可用」").arg(value));
+                if (fact.kind == pp::tune::Kind::Simulated)
+                    expect(tip.contains(QStringLiteral("近似仿真")),
+                           QStringLiteral("tune=%1 仿真项 tooltip 含「近似仿真」").arg(value));
+            }
+            expect(animation_idx >= 0, QStringLiteral("tune animation（仿真）项在位"));
+            expect(tune->toolTip().contains(QStringLiteral("aq-mode")) &&
+                       tune->toolTip().contains(QStringLiteral("近似仿真")),
+                   QStringLiteral("tune 行 tooltip 说明插件强制项 + 近似仿真（got \"%1\"）")
+                       .arg(tune->toolTip().left(80)));
+            if (animation_idx >= 0) {
+                tune->setCurrentIndex(animation_idx);
+                smoke_pump(260);
+                const pp::ParamSet v = values_of();
+                const auto it = v.find("tune");
+                const std::string *tune_value =
+                    it != v.end() ? std::get_if<std::string>(&it->second) : nullptr;
+                expect(tune_value != nullptr && *tune_value == "animation",
+                       QStringLiteral("选 animation ⇒ 下发值仍是 animation（got %1）")
+                           .arg(tune_value != nullptr ? QString::fromStdString(*tune_value)
+                                                      : QStringLiteral("<missing>")));
+                const int reset_idx = ssim_idx >= 0 ? ssim_idx : 0;
+                tune->setCurrentIndex(reset_idx);
+                smoke_pump(220);
+            }
         }
     }
     // AVIF：libaom {质量/CQ Level}、SVT {质量/QP}；只读展示行存在
@@ -6436,6 +7025,26 @@ void probe_m8_params(MainWindow *w, PageOutput *page_output, const pp::AppSettin
             smoke_pump(250);
             expect(active_form() != nullptr && active_form()->rule_errors().empty(),
                    QStringLiteral("修正参数后预检错误实时消失"));
+            // W2-T4（C21）：QP + 显式 Level = 中文预检错误（不兼容 + 两条出路）；
+            // Level 改自动后错误实时消失（RC 模式/预检同源）。
+            pp::ParamSet qp_level;
+            qp_level["x265:qp"] = static_cast<int64_t>(30);
+            qp_level["x265:level-idc"] = static_cast<int64_t>(31);
+            active_form()->set_values(qp_level);
+            smoke_pump(250);
+            bool incompatible = false;
+            for (const std::string &err : active_form()->rule_errors())
+                if (err.find("不兼容") != std::string::npos)
+                    incompatible = true;
+            expect(incompatible, QStringLiteral("QP + 显式 Level → 中文预检错误（含「不兼容」）"));
+            expect(page_output->ready_to_start().contains(QStringLiteral("预检")),
+                   QStringLiteral("QP + 显式 Level ⇒ 开始运行被预检拒绝"));
+            pp::ParamSet level_auto;
+            level_auto["x265:level-idc"] = static_cast<int64_t>(0);
+            active_form()->set_values(level_auto);
+            smoke_pump(220);
+            expect(active_form()->rule_errors().empty(),
+                   QStringLiteral("Level 改自动后 QP 预检错误实时消失"));
         }
     }
 
@@ -7463,6 +8072,7 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
     smoke_probe_preview();           // M4-T10：预览面板（翻图/缩放/徽标/热键接线位）
     smoke_probe_preview_geometry();  // M5-T6（C7）：画布底/空态/角标/缩放条/衬垫/最近邻（§8）
     smoke_probe_output_geometry();   // M5-T8（C7）：输出页四卡组几何（§7.2 逐行 / R1–R4）
+    smoke_probe_format_preset();     // M10-W3-T2（C23/C24）：格式预设行 + 只读自适应面（只增）
     smoke_probe_filelist();          // M4-T11：勾选/正交搜索/分组节（§3.6 roles + §6.2）
     smoke_probe_filelist_geometry(); // M5-T5（C7）：行/工具行几何 + 空态 + 选中面（§7.5/修 3-17）
     smoke_probe_meta(shots_dir);     // M4-T12：生效值显示/写入一致性 + 多选小表 + 地图跟随（§5.2）
@@ -7791,9 +8401,10 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
     }
     {
         // 终态逐输出行：每行 bar 已结算（done/warn/failed，均满格）；完成行给出产物事实
-        // （大小列 = 字节 / 速度列 = 压缩比 × 并带基线 tooltip），失败行给出原因行
-        // —— 数据源 = 引擎的 OutputResult（§3.4）。M5-T9 机械换锚：旧「pct 列 + stage 列」
-        // 拆成 大小/速度/耗时 三列 + 状态胶囊 + 失败原因行（语义不变，取证更细）。
+        // （大小列 = 字节；压缩比 = 大小列 tooltip 的「压缩比 · …×」，C11 迁入后唯一出口），
+        // 失败行给出原因行 —— 数据源 = 引擎的 OutputResult（§3.4）。M5-T9 机械换锚：旧
+        // 「pct 列 + stage 列」拆成 大小/耗时 数值列 + 评分列 + 状态胶囊 + 失败原因行；
+        // M10-W1（A12 换锚，布局类）：速度列删除 → 压缩比取证从 speed 列文本换到 size 列 tooltip。
         const QList<QWidget *> bars = w->findChildren<QWidget *>(
             QRegularExpression(QStringLiteral("^pp-run-bar-\\d+-\\d+$")));
         int settled = 0, done_rows = 0, failed_rows = 0, with_bytes = 0, with_ratio = 0;
@@ -7815,14 +8426,13 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
             const QString name = bar->objectName();
             const QString suffix = name.mid(int(QStringLiteral("pp-run-bar-").size()));
             // 大小列（完成 = 字节；0 字节 = 异常档，仍给真实「0 B」而非四舍五入的 KB）
-            const QString size_text =
-                label_text(w->findChild<QLabel *>(QStringLiteral("pp-run-size-") + suffix));
+            auto *size = w->findChild<QLabel *>(QStringLiteral("pp-run-size-") + suffix);
+            const QString size_text = label_text(size);
             if (size_text.endsWith(QLatin1String("B")) && size_text != QLatin1String("—"))
                 ++with_bytes;
-            // 速度列（压缩比倍数 + 基线 tooltip）
-            auto *speed = w->findChild<QLabel *>(QStringLiteral("pp-run-speed-") + suffix);
-            if (speed != nullptr && label_text(speed).contains(QStringLiteral("×")) &&
-                speed->toolTip().contains(QStringLiteral("相对源文件")))
+            // 压缩比（C11）：大小列 tooltip = 「压缩比 · 相对源文件：… = N×」
+            if (size != nullptr && size->toolTip().contains(QStringLiteral("压缩比")) &&
+                size->toolTip().contains(QStringLiteral("×")))
                 ++with_ratio;
             if (kind == QLatin1String("failed") && first_failure.isEmpty())
                 first_failure = label_text(
@@ -8747,13 +9357,70 @@ void MainWindow::Impl::deep_run(const QString &shots_dir) {
         if (id == QStringLiteral("heif") || id == QStringLiteral("avif")) {
             auto *profile = form->findChild<QComboBox *>(QStringLiteral("pp-profile-combo"));
             if (profile != nullptr) {
-                for (int i = 0; i < profile->count(); ++i) {
-                    profile->setCurrentIndex(i);
-                    pump(180);
-                    grab(tag + QStringLiteral("-11-profile-%1").arg(i));
+                // W2-T2 移交（C19）：档位遍历**按 value 定位**（findData），不得依赖下标/末项 ——
+                // 追加 16–21 后末项已从 MainStill 改为 Main444_12Still。逐项同时断言
+                // 「可用性 = 单源 disabled 原因」与「置灰项 tooltip 含不可用原因」。
+                const bool avif = (id == QStringLiteral("avif"));
+                const std::vector<ProfileOption> &options = heif_profile_options(avif);
+                expect(profile->count() == static_cast<int>(options.size()),
+                       QStringLiteral("%1：档位项数 = 单源选项表（count=%2 want=%3）")
+                           .arg(id)
+                           .arg(profile->count())
+                           .arg(options.size()));
+                auto *model = qobject_cast<QStandardItemModel *>(profile->model());
+                for (const ProfileOption &opt : options) {
+                    const int value = static_cast<int>(opt.profile);
+                    const int idx = profile->findData(value);
+                    expect(idx >= 0,
+                           QStringLiteral("%1：档位 %2 可按 value 定位").arg(id).arg(value));
+                    if (idx < 0)
+                        continue;
+                    const bool want_disabled =
+                        !profile_option_disabled_reason(avif, opt.profile).isEmpty();
+                    QStandardItem *item = model != nullptr ? model->item(idx) : nullptr;
+                    expect(item != nullptr && item->isEnabled() != want_disabled,
+                           QStringLiteral("%1：档位 %2 可用性 = 单源判定（disabled=%3）")
+                               .arg(id)
+                               .arg(value)
+                               .arg(want_disabled ? 1 : 0));
+                    if (item != nullptr && want_disabled)
+                        expect(item->toolTip().contains(QStringLiteral("不可用")),
+                               QStringLiteral("%1：档位 %2 置灰项 tooltip 含「不可用」（got %3）")
+                                   .arg(id)
+                                   .arg(value)
+                                   .arg(item->toolTip().left(60)));
+                    profile->setCurrentIndex(idx);
+                    pump(140);
+                    grab(tag + QStringLiteral("-11-profile-%1").arg(value));
                 }
-                profile->setCurrentIndex(0);
-                pump(140);
+                // W2-T2 实测唯一不可用档 = 16（Main10Still）：PTL 无 still 位 + SPS DPB 4/2。
+                if (!avif) {
+                    const int value16 = static_cast<int>(pp::HeifProfile::Main10Still);
+                    const int idx16 = profile->findData(value16);
+                    QStandardItem *item16 =
+                        model != nullptr && idx16 >= 0 ? model->item(idx16) : nullptr;
+                    expect(idx16 >= 0 && item16 != nullptr && !item16->isEnabled(),
+                           QStringLiteral("HEIF：16 = Main10Still 置灰（idx=%1）").arg(idx16));
+                    expect(item16 != nullptr &&
+                               item16->toolTip().contains(QStringLiteral("不可用")),
+                           QStringLiteral("HEIF：16 Main10Still tooltip 含不可用原因"));
+                }
+                // C19：弹出层最小宽 ≥ 控件宽（受屏宽 80% 夹住后仍不窄于控件）；逐项 tooltip 全文。
+                expect(profile->view() != nullptr &&
+                           profile->view()->minimumWidth() >= profile->width() - 2,
+                       QStringLiteral("%1：档位弹出层最小宽 ≥ 控件宽（min=%2 w=%3）")
+                           .arg(id)
+                           .arg(profile->view() != nullptr ? profile->view()->minimumWidth() : -1)
+                           .arg(profile->width()));
+                bool all_item_tips = profile->count() > 0;
+                for (int i = 0; i < profile->count(); ++i)
+                    all_item_tips = all_item_tips &&
+                                    !profile->itemData(i, Qt::ToolTipRole).toString().isEmpty();
+                expect(all_item_tips, QStringLiteral("%1：档位每项都有 tooltip 全文").arg(id));
+                const int auto_idx = profile->findData(0);
+                if (auto_idx >= 0)
+                    profile->setCurrentIndex(auto_idx);
+                pump(160);
             }
             auto *chroma = form->findChild<QComboBox *>(QStringLiteral("pp-param-chroma"));
             if (chroma != nullptr) {
@@ -9728,9 +10395,15 @@ void MainWindow::Impl::smoke_probe_output_geometry() {
                    .arg(effort != nullptr ? effort->width() : -1)
                    .arg(distance != nullptr ? distance->width() : -1)
                    .arg(formkit::kFieldStd));
+        // M10-UI-ADAPT（W2-T5 C22）：expert_options 行退场 ⇒ effort 域不再被该门控收窄到
+        // 1–10，与 ParamDef.hi=11 一致（11 = 像素无损极限档；编码器在 effort=11 时自动
+        // JxlEncoderAllowExpertOptions，enc_jxl.cpp）。断言本体不变（逐字比范围注释），
+        // 只把期望值换成新设计域 "1–11"；加性断言 spin 上界 == 11（旧实现被门控压到 10）。
         expect("range-note",
-               effort_note == QStringLiteral("1–10") && distance_note == QStringLiteral("0.0–25.0"),
+               effort_note == QStringLiteral("1–11") && distance_note == QStringLiteral("0.0–25.0"),
                QStringLiteral("effort=\"%1\" distance=\"%2\"").arg(effort_note, distance_note));
+        expect("effort-max", effort != nullptr && effort->maximum() == 11,
+               QStringLiteral("max=%1 want=11").arg(effort != nullptr ? effort->maximum() : -1));
     }
 
     int groups_jxl = 0; // 打印用：jxl 页签的高级区子分组数（jpeg 页签只有 1 组）
@@ -9808,18 +10481,31 @@ void MainWindow::Impl::smoke_probe_output_geometry() {
                    .arg(row_label_x(QStringLiteral("pp-param-row-effort")))
                    .arg(row_label_x(QStringLiteral("pp-param-row-epf"))));
         // 魔法值「自动」（2-37）：epf（范围下端 = -1 = 编码器自选）
+        // M10-UI-ADAPT（W2-T5 C22）：epf 默认值 2 → -1（跟随库启发式）⇒ 旧断言「默认 ≠ 自动」
+        // 的前提（旧默认是显式数值）随该行默认值变更作废。新断言**更强**：三态取样逐字比对
+        // 「默认 -1 = 自动 / 显式 2 = "2" / 回到 -1 = 自动」，不再依赖默认不是魔法值。
         auto *epf = page.findChild<QSpinBox *>(QStringLiteral("pp-param-epf"));
         const QString epf_default = epf != nullptr ? epf->text() : QString();
+        if (epf != nullptr)
+            epf->setValue(2);
+        pump(60);
+        const QString epf_explicit = epf != nullptr ? epf->text() : QString();
         if (epf != nullptr)
             epf->setValue(-1);
         pump(60);
         expect("magic-auto",
-               epf != nullptr && epf->text() == QStringLiteral("自动") &&
-                   epf_default != QStringLiteral("自动"),
-               QStringLiteral("default=\"%1\" magic=\"%2\"")
+               epf != nullptr && epf_default == QStringLiteral("自动") &&
+                   epf_explicit == QStringLiteral("2") && epf->text() == QStringLiteral("自动"),
+               QStringLiteral("default=\"%1\" explicit=\"%2\" magic=\"%3\"")
                    .arg(epf_default)
+                   .arg(epf_explicit)
                    .arg(epf != nullptr ? epf->text() : QString()));
         // 改值 → 卡头中性 pill 计数（A8：无 ● 字形；计数由 pill 承担）
+        // M10-UI-ADAPT：epf 默认 = -1，改值基准改取显式 2（非默认档）；再改回默认 ⇒ 计数归零
+        // （加性断言 changed-pill-reset，原有「只测出现」扩到「出现 + 归零」）。
+        if (epf != nullptr)
+            epf->setValue(2);
+        pump(60);
         const auto *changed_label =
             page.findChild<QLabel *>(QStringLiteral("pp-format-changed-pill"));
         const auto *changed_pill = changed_label != nullptr
@@ -9828,6 +10514,15 @@ void MainWindow::Impl::smoke_probe_output_geometry() {
         expect("changed-pill",
                changed_pill != nullptr && changed_pill->isVisible() &&
                    changed_pill->text() == QStringLiteral("已改 1"),
+               QStringLiteral("text=\"%1\" visible=%2")
+                   .arg(changed_pill != nullptr ? changed_pill->text() : QString())
+                   .arg(changed_pill != nullptr && changed_pill->isVisible() ? 1 : 0));
+        if (epf != nullptr)
+            epf->setValue(-1); // 归位 = 默认档（后续断言/截图零残态）
+        pump(60);
+        expect("changed-pill-reset",
+               changed_pill != nullptr && !changed_pill->isVisible() &&
+                   changed_pill->text() == QStringLiteral("已改 0"),
                QStringLiteral("text=\"%1\" visible=%2")
                    .arg(changed_pill != nullptr ? changed_pill->text() : QString())
                    .arg(changed_pill != nullptr && changed_pill->isVisible() ? 1 : 0));
@@ -10070,7 +10765,643 @@ void MainWindow::Impl::smoke_probe_output_geometry() {
     pump(80);
 }
 
-// R-255（M7-R2.1-F3）：smoke_probe_meta 分节共享前置（fixture / 页面 / 取值 lambdas）。
+// ---------------------------------------------------------------------------
+// M10-W3-T2（C23 §8.5 / C24 §9）：格式预设行 + 只读自适应面自检（断言只增）
+//   (a) 行存在 + 位于页签顶部（在「位深」行之上）+ 六件套齐备 + 未选中时「删除」禁用（原因进
+//       tooltip，不静默灰）；
+//   (b) 空态：下拉只有「未选择」一项（未喂列表 = 空态，不臆造预设）；
+//   (c) 保存 → 列举 → 载入 往返（**临时目录** <repo>/.cache/tmp/ui-smoke-format-preset；
+//       走真实 handler = format_preset_save_card/format_preset_load_into + 真实 I/O 层）：
+//       载入后卡值 = 保存时快照、卡头「已改 N」按新值重算、注释位显示来源；
+//   (d) 字节稳定：save → load → save（两个独立根）逐字节相同（设计 §8.6）；
+//   (e) 损坏 JSON / kind 不符：列举标「（损坏）」、载入返回中文错误、卡值零改动（不静默套默认）；
+//   (f) 自适应只读面：真实含策略预设 → 摘要「目标/轮数/阶段」+ 开关按预设初值；关闭 = 本次不
+//       启用；无策略 → 整行不显示；坏策略 → 行内中文错误 + 开关禁用（GUI 无编辑器 = C24）。
+// ---------------------------------------------------------------------------
+void MainWindow::Impl::smoke_probe_format_preset() {
+    const QString base = repo_root() + QStringLiteral("/.cache/tmp/ui-smoke-format-preset");
+    QDir(base).removeRecursively();
+    if (!QDir().mkpath(base)) {
+        smoke_fail(MainWindow::tr("格式预设探针：无法创建临时目录 %1").arg(base));
+        return;
+    }
+    const std::filesystem::path root_a = std::filesystem::path((base + "/a").toStdString());
+    const std::filesystem::path root_b = std::filesystem::path((base + "/b").toStdString());
+
+    PageOutput page;
+    page.set_tokens(tokens);
+    page.resize(theme::Metrics::right_width, theme::Metrics::calibrated_h);
+    page.show();
+    page.select_format(QStringLiteral("jpeg"));
+    pump(150);
+
+    int checked = 0;
+    QStringList bad;
+    const auto expect = [&checked, &bad](const char *name, bool ok, const QString &detail) {
+        ++checked;
+        if (!ok)
+            bad << QStringLiteral("%1(%2)").arg(QString::fromLatin1(name), detail);
+    };
+    const QString fmt = page.current_format();
+    const std::string fmt_id = fmt.toStdString();
+    const auto full_text = [&page](const QString &name) {
+        const auto *widget = page.findChild<QLabel *>(name);
+        if (widget == nullptr)
+            return QString();
+        const QVariant value = widget->property("ppFullText");
+        return value.isValid() ? value.toString() : widget->text();
+    };
+    // 卡片当前 jpeg quality（载入/失败后卡值是否被改动的判据）
+    const auto card_quality = [&page]() -> qint64 {
+        const pp::RunConfig cfg = page.config_base();
+        if (cfg.outputs.empty())
+            return -1;
+        const pp::ParamSet &params = cfg.outputs.front().params;
+        const auto it = params.find(std::string("quality"));
+        if (it == params.end())
+            return -1;
+        if (const int64_t *value = std::get_if<int64_t>(&it->second))
+            return *value;
+        if (const double *value = std::get_if<double>(&it->second))
+            return static_cast<qint64>(*value);
+        return -1;
+    };
+
+    QWidget *row = page.findChild<QWidget *>(QStringLiteral("pp-format-preset-row"));
+    QComboBox *combo = page.findChild<QComboBox *>(QStringLiteral("pp-format-preset-combo"));
+    auto *save = page.findChild<QPushButton *>(QStringLiteral("pp-format-preset-save"));
+    auto *saveas = page.findChild<QPushButton *>(QStringLiteral("pp-format-preset-saveas"));
+    auto *del = page.findChild<QPushButton *>(QStringLiteral("pp-format-preset-delete"));
+    auto *import_btn = page.findChild<QPushButton *>(QStringLiteral("pp-format-preset-import"));
+    auto *export_btn = page.findChild<QPushButton *>(QStringLiteral("pp-format-preset-export"));
+    QWidget *bit_row = page.findChild<QWidget *>(QStringLiteral("pp-bitdepth-row"));
+
+    // ---- (a) 行存在 / 位置 / 六件套 / 未选中禁用态 ----
+    const bool row_present = row != nullptr && combo != nullptr && save != nullptr &&
+                             saveas != nullptr && del != nullptr && import_btn != nullptr &&
+                             export_btn != nullptr && row->isVisible();
+    expect("row-exists", row_present,
+           QStringLiteral("row=%1 combo=%2 save=%3 saveas=%4 del=%5 imp=%6 exp=%7 visible=%8")
+               .arg(row != nullptr ? 1 : 0)
+               .arg(combo != nullptr ? 1 : 0)
+               .arg(save != nullptr ? 1 : 0)
+               .arg(saveas != nullptr ? 1 : 0)
+               .arg(del != nullptr ? 1 : 0)
+               .arg(import_btn != nullptr ? 1 : 0)
+               .arg(export_btn != nullptr ? 1 : 0)
+               .arg(row != nullptr && row->isVisible() ? 1 : 0));
+    expect("row-first",
+           row != nullptr && bit_row != nullptr &&
+               row->mapTo(&page, QPoint(0, 0)).y() < bit_row->mapTo(&page, QPoint(0, 0)).y(),
+           QStringLiteral("row-y=%1 bitdepth-y=%2")
+               .arg(row != nullptr ? row->mapTo(&page, QPoint(0, 0)).y() : -1)
+               .arg(bit_row != nullptr ? bit_row->mapTo(&page, QPoint(0, 0)).y() : -1));
+    expect("idle-buttons",
+           save != nullptr && save->isEnabled() && del != nullptr && !del->isEnabled() &&
+               !del->toolTip().isEmpty(),
+           QStringLiteral("save=%1 del=%2 tip=\"%3\"")
+               .arg(save != nullptr && save->isEnabled() ? 1 : 0)
+               .arg(del != nullptr && del->isEnabled() ? 1 : 0)
+               .arg(del != nullptr ? del->toolTip() : QString()));
+
+    // ---- (b) 空态：只有「未选择」 ----
+    expect("empty",
+           combo != nullptr && combo->count() == 1 && combo->currentIndex() == 0 &&
+               combo->itemText(0) == QStringLiteral("未选择") &&
+               combo->itemData(0, Qt::UserRole).toString().isEmpty(),
+           QStringLiteral("count=%1 index=%2 text0=\"%3\"")
+               .arg(combo != nullptr ? combo->count() : -1)
+               .arg(combo != nullptr ? combo->currentIndex() : -1)
+               .arg(combo != nullptr && combo->count() > 0 ? combo->itemText(0) : QString()));
+
+    // ---- (b2) 生产页同行在位：行是**页面自己**建的（不是探针页特供）；首项恒为「未选择」
+    //      （真实 data_dir 里有没有预设都不影响这条断言 → 与开发机状态无关）。----
+    {
+        auto *prod_combo =
+            page_output != nullptr
+                ? page_output->findChild<QComboBox *>(QStringLiteral("pp-format-preset-combo"))
+                : nullptr;
+        const bool prod_ok = prod_combo != nullptr && prod_combo->count() >= 1 &&
+                             prod_combo->itemText(0) == QStringLiteral("未选择");
+        expect("prod-row", prod_ok,
+               QStringLiteral("combo=%1 count=%2 text0=\"%3\"")
+                   .arg(prod_combo != nullptr ? 1 : 0)
+                   .arg(prod_combo != nullptr ? prod_combo->count() : -1)
+                   .arg(prod_combo != nullptr && prod_combo->count() > 0 ? prod_combo->itemText(0)
+                                                                         : QString()));
+    }
+
+    // ---- 接线（与 wire_format_preset_card 的处理器同一批实现；探针页不是主窗的 page_output）----
+    QString last_load_error;
+    QObject::connect(&page, &PageOutput::format_preset_load_requested, w,
+                     [this, &page, &last_load_error](const QString &path) {
+                         last_load_error =
+                             QString::fromStdString(format_preset_load_into(path, &page));
+                     });
+    QObject::connect(&page, &PageOutput::format_preset_save_requested, w,
+                     // NOLINTNEXTLINE(bugprone-exception-escape)：MSVC STL 误报
+                     [this, &page, root_a](const QString &path) {
+                         std::filesystem::path saved;
+                         (void)format_preset_save_card(&page, QFileInfo(path).completeBaseName(),
+                                                       root_a, &saved);
+                     });
+
+    // ---- 造卡值（核心参数 quality=77）+ 采集快照 ----
+    auto *form = page.findChild<ParamForm *>(QStringLiteral("pp-param-form"));
+    if (form != nullptr) {
+        form->set_values(pp::ParamSet{{"quality_mode", std::string("quality")},
+                                      {"quality", static_cast<int64_t>(77)}});
+        pump(80);
+    }
+    const qint64 quality_before = card_quality();
+    pp::FormatPresetData preset = format_preset_collect(&page, QStringLiteral("smoke-jpeg"));
+    expect("collect",
+           !preset.format_id.empty() && !preset.backend_id.empty() && quality_before == 77 &&
+               !preset.params.empty(),
+           QStringLiteral("format=\"%1\" backend=\"%2\" quality=%3 params=%4")
+               .arg(QString::fromStdString(preset.format_id),
+                    QString::fromStdString(preset.backend_id))
+               .arg(quality_before)
+               .arg(static_cast<int>(preset.params.size())));
+
+    // ---- (c) 保存 → 列举 → 载入 往返（临时目录）----
+    std::filesystem::path saved_a;
+    const std::string save_err =
+        format_preset_save_card(&page, QStringLiteral("smoke-jpeg"), root_a, &saved_a);
+    bool saved_ok = save_err.empty();
+    std::error_code ec;
+    if (saved_ok)
+        saved_ok = std::filesystem::exists(saved_a, ec);
+    refresh_format_preset_row(fmt, &page, root_a); // 真实映射（列举 +「（损坏）」标注）
+    pump(60);
+    const bool listed = combo != nullptr && combo->count() == 2 &&
+                        combo->itemText(1) == QStringLiteral("smoke-jpeg");
+    // 下拉选中即载入（activated = 用户动作；程序化 setCurrentIndex 不发信号 → 这里显式触发）
+    if (listed) {
+        combo->setCurrentIndex(1);
+        QMetaObject::invokeMethod(combo, "activated", Qt::DirectConnection, Q_ARG(int, 1));
+        pump(100);
+    }
+    const QString note_after_load = full_text(QStringLiteral("pp-format-preset-note-jpeg"));
+    const auto *changed_pill = page.findChild<QLabel *>(QStringLiteral("pp-format-changed-pill"));
+    const QString changed_text = changed_pill != nullptr ? changed_pill->text() : QString();
+    expect("roundtrip",
+           saved_ok && listed && last_load_error.isEmpty() &&
+               page.current_format_preset(fmt) == QString::fromStdString(saved_a.string()) &&
+               card_quality() == quality_before && changed_text != QStringLiteral("已改 0") &&
+               changed_pill != nullptr && changed_pill->isVisible(),
+           QStringLiteral("saved=%1 listed=%2 err=\"%3\" path=%4 quality=%5 pill=\"%6\"")
+               .arg(saved_ok ? 1 : 0)
+               .arg(listed ? 1 : 0)
+               .arg(last_load_error)
+               .arg(page.current_format_preset(fmt))
+               .arg(card_quality())
+               .arg(changed_text));
+    expect("note-loaded", note_after_load.contains(QStringLiteral("来自格式预设")),
+           QStringLiteral("note=\"%1\"").arg(note_after_load));
+
+    // ---- (c2) normalize 补默认 → 注释位「已载入（已补齐 N 个默认项）」（设计 §8.5）----
+    {
+        // 稀疏预设（只带一个核心参数、backend/tech 留空、bitdepth 0）→ 载入时 normalize 必须
+        // 补齐可见默认项（N ≥ 1），注释位如实报数（`__` 内部键不计入 —— 见 MainWindow 实现）。
+        pp::FormatPresetData sparse;
+        sparse.name = "smoke-sparse";
+        sparse.format_id = fmt_id;
+        sparse.params["quality"] = static_cast<int64_t>(66);
+        const std::filesystem::path sparse_path = root_a / fmt_id / "smoke-sparse.json";
+        const std::string eerr = pp::ui::export_format_preset(sparse, sparse_path);
+        const QString sload = eerr.empty()
+                                  ? QString::fromStdString(format_preset_load_into(
+                                        QString::fromStdString(sparse_path.string()), &page))
+                                  : QString::fromStdString(eerr);
+        pump(80);
+        const QString note = full_text(QStringLiteral("pp-format-preset-note-jpeg"));
+        expect("normalize-note",
+               eerr.empty() && sload.isEmpty() && note.contains(QStringLiteral("已补齐")) &&
+                   note.contains(QStringLiteral("默认项")) && card_quality() == 66,
+               QStringLiteral("export=\"%1\" load=\"%2\" note=\"%3\" quality=%4")
+                   .arg(QString::fromStdString(eerr), sload)
+                   .arg(note)
+                   .arg(card_quality()));
+    }
+
+    // ---- (c3) 保存前校验：非法名字 → 中文错误且**不写盘**（设计 §8.4「不过=提示且不写」）----
+    {
+        std::filesystem::path bad_saved;
+        const std::string bad_err =
+            format_preset_save_card(&page, QStringLiteral("bad/name"), root_b, &bad_saved);
+        const bool rejected = !bad_err.empty() && bad_saved.empty() &&
+                              bad_err.find("非法") != std::string::npos &&
+                              !std::filesystem::exists(root_b / fmt_id / "bad");
+        expect(
+            "save-invalid", rejected,
+            QStringLiteral("err=\"%1\" saved=\"%2\"")
+                .arg(QString::fromStdString(bad_err), QString::fromStdString(bad_saved.string())));
+    }
+
+    // ---- (d) 字节稳定：save → load → save（两个独立根）----
+    {
+        pp::FormatPresetData reloaded;
+        const std::string lerr = pp::ui::load_format_preset(saved_a, reloaded);
+        std::filesystem::path saved_b;
+        const std::string serr = lerr.empty()
+                                     ? pp::ui::save_format_preset_to(root_b, reloaded, &saved_b)
+                                     : std::string("load failed");
+        const auto read_all = [](const std::filesystem::path &file) {
+            QFile f(QString::fromStdString(file.string()));
+            if (!f.open(QIODevice::ReadOnly))
+                return QByteArray();
+            return f.readAll();
+        };
+        const QByteArray bytes_a = read_all(saved_a);
+        const QByteArray bytes_b = read_all(saved_b);
+        expect("bytes", lerr.empty() && serr.empty() && !bytes_a.isEmpty() && bytes_a == bytes_b,
+               QStringLiteral("lerr=\"%1\" serr=\"%2\" a=%3 b=%4 same=%5")
+                   .arg(QString::fromStdString(lerr), QString::fromStdString(serr))
+                   .arg(bytes_a.size())
+                   .arg(bytes_b.size())
+                   .arg(bytes_a == bytes_b ? 1 : 0));
+    }
+
+    // ---- (e) 损坏 JSON / kind 不符：列举标注 + 载入中文错误 + 卡值零改动 ----
+    {
+        const std::filesystem::path dir = root_a / std::string(fmt_id);
+        const std::filesystem::path broken = dir / "broken.json";
+        const std::filesystem::path wrong_kind = dir / "wrong-kind.json";
+        {
+            QFile f(QString::fromStdString(broken.string()));
+            if (f.open(QIODevice::WriteOnly))
+                f.write("{ not json");
+        }
+        {
+            QFile f(QString::fromStdString(wrong_kind.string()));
+            if (f.open(QIODevice::WriteOnly))
+                f.write("{\"kind\":\"preset\",\"version\":1,\"name\":\"wrong-kind\","
+                        "\"format\":\"jpeg\"}");
+        }
+        refresh_format_preset_row(fmt, &page, root_a);
+        pump(60);
+        bool marked = false;
+        bool kind_marked = false;
+        for (int i = 1; combo != nullptr && i < combo->count(); ++i) {
+            const QString path = combo->itemData(i, Qt::UserRole).toString();
+            if (path == QString::fromStdString(broken.string()) &&
+                combo->itemText(i).contains(QStringLiteral("（损坏）")))
+                marked = true;
+            if (path == QString::fromStdString(wrong_kind.string()) &&
+                combo->itemText(i).contains(QStringLiteral("（损坏）")))
+                kind_marked = true;
+        }
+        const qint64 quality_pre = card_quality();
+        const std::string broken_err =
+            format_preset_load_into(QString::fromStdString(broken.string()), &page);
+        const std::string kind_err =
+            format_preset_load_into(QString::fromStdString(wrong_kind.string()), &page);
+        const bool zh_broken = broken_err.find("JSON") != std::string::npos ||
+                               broken_err.find("无效") != std::string::npos;
+        const bool zh_kind = kind_err.find("格式预设") != std::string::npos;
+        expect("broken",
+               marked && !broken_err.empty() && zh_broken && card_quality() == quality_pre,
+               QStringLiteral("marked=%1 err=\"%2\" quality=%3")
+                   .arg(marked ? 1 : 0)
+                   .arg(QString::fromStdString(broken_err))
+                   .arg(card_quality()));
+        expect("kind", kind_marked && !kind_err.empty() && zh_kind,
+               QStringLiteral("marked=%1 err=\"%2\"")
+                   .arg(kind_marked ? 1 : 0)
+                   .arg(QString::fromStdString(kind_err)));
+    }
+
+    // ---- (f) 自适应只读面 ----
+    {
+        // 真实含策略预设：先保存一份带策略的预设，再经 load handler 落卡（与生产路径同一条链）
+        const QString policy = QStringLiteral("version 1\n"
+                                              "target 88\n"
+                                              "max_rounds 5\n"
+                                              "\n"
+                                              "stage quality-up\n"
+                                              "  search quality from current to 95 step 2\n");
+        pp::FormatPresetData with_policy =
+            format_preset_collect(&page, QStringLiteral("smoke-adaptive"));
+        with_policy.adaptive_policy = policy.toStdString();
+        with_policy.adaptive_enabled = true;
+        std::filesystem::path policy_path;
+        const std::string perr = pp::ui::save_format_preset_to(root_a, with_policy, &policy_path);
+        QString load_err;
+        if (perr.empty())
+            load_err = QString::fromStdString(
+                format_preset_load_into(QString::fromStdString(policy_path.string()), &page));
+        pump(120);
+        auto *adaptive_row =
+            page.findChild<QWidget *>(QStringLiteral("pp-format-preset-adaptive-row"));
+        auto *adaptive_switch =
+            page.findChild<QAbstractButton *>(QStringLiteral("pp-format-preset-adaptive-switch"));
+        const QString summary = full_text(QStringLiteral("pp-format-preset-adaptive-jpeg"));
+        const bool summary_ok = summary.contains(QStringLiteral("88")) &&
+                                summary.contains(QStringLiteral("5")) &&
+                                summary.contains(QStringLiteral("1 个阶段"));
+        expect("adaptive",
+               perr.empty() && load_err.isEmpty() && adaptive_row != nullptr &&
+                   adaptive_row->isVisible() && summary_ok,
+               QStringLiteral("save=\"%1\" load=\"%2\" row=%3 summary=\"%4\"")
+                   .arg(QString::fromStdString(perr))
+                   .arg(load_err)
+                   .arg(adaptive_row != nullptr && adaptive_row->isVisible() ? 1 : 0)
+                   .arg(summary));
+        // 开关初值 = 预设 adaptive.enabled；关闭 = 本次不启用（会话态；预设文件不动）
+        const bool switch_on = adaptive_switch != nullptr && adaptive_switch->isEnabled() &&
+                               adaptive_switch->isChecked() &&
+                               page.format_preset_adaptive_enabled(fmt);
+        if (adaptive_switch != nullptr)
+            adaptive_switch->setChecked(false);
+        pump(60);
+        const bool switch_off = !page.format_preset_adaptive_enabled(fmt) &&
+                                (adaptive_switch == nullptr || !adaptive_switch->isChecked());
+        expect("switch", switch_on && switch_off,
+               QStringLiteral("on=%1 enabled=%2 after-off=%3")
+                   .arg(switch_on ? 1 : 0)
+                   .arg(adaptive_switch != nullptr && adaptive_switch->isEnabled() ? 1 : 0)
+                   .arg(switch_off ? 1 : 0));
+        // 无策略 → 整行不显示（默认关闭；不占版面、不臆造摘要）。快照先清掉自适应字段：
+        // 采集面读的是页面会话态（上一步刚载入过策略预设），不清就"保存了带策略的 plain"。
+        pp::FormatPresetData plain = format_preset_collect(&page, QStringLiteral("smoke-plain"));
+        plain.adaptive_policy.clear();
+        plain.adaptive_enabled = false;
+        std::filesystem::path plain_path;
+        const std::string plain_err = pp::ui::save_format_preset_to(root_b, plain, &plain_path);
+        const QString plain_load = plain_err.empty()
+                                       ? QString::fromStdString(format_preset_load_into(
+                                             QString::fromStdString(plain_path.string()), &page))
+                                       : QString::fromStdString(plain_err);
+        pump(80);
+        const bool hidden = adaptive_row != nullptr && !adaptive_row->isVisible() &&
+                            page.format_preset_adaptive_policy(fmt).isEmpty();
+        expect("nopolicy", plain_err.empty() && plain_load.isEmpty() && hidden,
+               QStringLiteral("err=\"%1\" load=\"%2\" visible=%3 policy=\"%4\"")
+                   .arg(QString::fromStdString(plain_err), plain_load)
+                   .arg(adaptive_row != nullptr && adaptive_row->isVisible() ? 1 : 0)
+                   .arg(page.format_preset_adaptive_policy(fmt)));
+        // 坏策略（页面侧防御面：正常载入链在 I/O 校验处就拦下了）→ 行内中文错误 + 开关禁用
+        page.set_format_preset_adaptive(fmt, QStringLiteral("target 200\n"), true);
+        pump(60);
+        const QString err_summary = full_text(QStringLiteral("pp-format-preset-adaptive-jpeg"));
+        const bool policy_err_ok = err_summary.contains(QStringLiteral("无法解析")) &&
+                                   adaptive_row != nullptr && adaptive_row->isVisible() &&
+                                   adaptive_switch != nullptr && !adaptive_switch->isEnabled() &&
+                                   !page.format_preset_adaptive_enabled(fmt);
+        expect("policy-err", policy_err_ok,
+               QStringLiteral("visible=%1 enabled=%2 text=\"%3\" effective=%4")
+                   .arg(adaptive_row != nullptr && adaptive_row->isVisible() ? 1 : 0)
+                   .arg(adaptive_switch != nullptr && adaptive_switch->isEnabled() ? 1 : 0)
+                   .arg(err_summary)
+                   .arg(page.format_preset_adaptive_enabled(fmt) ? 1 : 0));
+    }
+
+    // ---- (g) 内置（出厂）预设：seed 幂等 + 出现在对应格式列表 + 只读拒绝删/覆盖（W3-T5）----
+    {
+        const std::filesystem::path builtin_root =
+            std::filesystem::path((base + "/builtin").toStdString());
+        const pp::ui::FormatPresetSeedReport seed1 =
+            pp::ui::seed_builtin_format_presets_to(builtin_root);
+        bool five_files = seed1.written == 5 && seed1.failed == 0 && seed1.errors.empty();
+        for (const pp::FormatPresetData &bp : pp::builtin_format_presets()) {
+            const std::filesystem::path f =
+                builtin_root / bp.format_id / ("_builtin-" + bp.format_id + ".json");
+            five_files = five_files && std::filesystem::exists(f);
+        }
+        // 内置 jpeg 预设应出现在「格式预设」下拉里（显示名 = 内置示例 · JPEG）
+        refresh_format_preset_row(fmt, &page, builtin_root);
+        pump(60);
+        int builtin_index = -1;
+        for (int i = 1; combo != nullptr && i < combo->count(); ++i) {
+            if (combo->itemText(i).contains(QStringLiteral("内置示例 · JPEG")))
+                builtin_index = i;
+        }
+        const bool listed_builtin = builtin_index > 0;
+        if (listed_builtin) {
+            combo->setCurrentIndex(builtin_index);
+            QMetaObject::invokeMethod(combo, "activated", Qt::DirectConnection,
+                                      Q_ARG(int, builtin_index));
+            pump(120);
+        }
+        auto *builtin_row =
+            page.findChild<QWidget *>(QStringLiteral("pp-format-preset-adaptive-row"));
+        const QString builtin_summary = full_text(QStringLiteral("pp-format-preset-adaptive-jpeg"));
+        const bool loaded_builtin =
+            listed_builtin && last_load_error.isEmpty() &&
+            page.current_format_preset(fmt).endsWith(QStringLiteral("_builtin-jpeg.json")) &&
+            builtin_row != nullptr && builtin_row->isVisible() &&
+            builtin_summary.contains(QStringLiteral("90")) &&
+            page.format_preset_adaptive_enabled(fmt);
+        expect("builtin", five_files && loaded_builtin,
+               QStringLiteral("written=%1 files=%2 listed=%3 err=\"%4\" path=%5 row=%6 "
+                              "summary=\"%7\"")
+                   .arg(seed1.written)
+                   .arg(five_files ? 1 : 0)
+                   .arg(listed_builtin ? 1 : 0)
+                   .arg(last_load_error)
+                   .arg(page.current_format_preset(fmt))
+                   .arg(builtin_row != nullptr && builtin_row->isVisible() ? 1 : 0)
+                   .arg(builtin_summary));
+
+        const auto read_bytes = [](const std::filesystem::path &file) {
+            QFile f(QString::fromStdString(file.string()));
+            if (!f.open(QIODevice::ReadOnly))
+                return QByteArray();
+            return f.readAll();
+        };
+        const std::filesystem::path jpeg_builtin =
+            builtin_root / std::string(fmt_id) / "_builtin-jpeg.json";
+        const QByteArray builtin_bytes = read_bytes(jpeg_builtin);
+        // 幂等：第二次 seed 零写入、文件零字节改动
+        const pp::ui::FormatPresetSeedReport seed2 =
+            pp::ui::seed_builtin_format_presets_to(builtin_root);
+        const bool idem = seed2.written == 0 && seed2.skipped == 5 && seed2.failed == 0 &&
+                          !builtin_bytes.isEmpty() && read_bytes(jpeg_builtin) == builtin_bytes;
+        expect("builtin-idem", idem,
+               QStringLiteral("written=%1 skipped=%2 failed=%3 bytes=%4 same=%5")
+                   .arg(seed2.written)
+                   .arg(seed2.skipped)
+                   .arg(seed2.failed)
+                   .arg(builtin_bytes.size())
+                   .arg(read_bytes(jpeg_builtin) == builtin_bytes ? 1 : 0));
+
+        // 只读：UI「删除」置灰 + 原因 tooltip；I/O 拒绝删除/覆盖（文件零改动）；另存可用
+        const bool ui_readonly =
+            del != nullptr && !del->isEnabled() && del->toolTip().contains(QStringLiteral("内置"));
+        const std::string del_err = pp::ui::delete_format_preset(jpeg_builtin);
+        pp::FormatPresetData overwrite =
+            format_preset_collect(&page, QStringLiteral("_builtin-jpeg"));
+        std::filesystem::path overwrite_saved;
+        const std::string overwrite_err =
+            pp::ui::save_format_preset_to(builtin_root, overwrite, &overwrite_saved);
+        const bool io_readonly = del_err.find("内置") != std::string::npos &&
+                                 overwrite_err.find("内置") != std::string::npos &&
+                                 overwrite_saved.empty() && std::filesystem::exists(jpeg_builtin) &&
+                                 read_bytes(jpeg_builtin) == builtin_bytes;
+        expect("builtin-readonly", ui_readonly && io_readonly,
+               QStringLiteral("ui=%1 del=\"%2\" save=\"%3\" saved=%4 same=%5")
+                   .arg(ui_readonly ? 1 : 0)
+                   .arg(QString::fromStdString(del_err), QString::fromStdString(overwrite_err))
+                   .arg(overwrite_saved.empty() ? 1 : 0)
+                   .arg(read_bytes(jpeg_builtin) == builtin_bytes ? 1 : 0));
+
+        // 另存可用（普通名字写入成功且不带只读前缀）
+        pp::FormatPresetData copy = format_preset_collect(&page, QStringLiteral("我的 JPEG 副本"));
+        std::filesystem::path copy_saved;
+        const std::string copy_err = pp::ui::save_format_preset_to(builtin_root, copy, &copy_saved);
+        expect("builtin-saveas",
+               copy_err.empty() && !copy_saved.empty() &&
+                   !pp::ui::is_builtin_format_preset_path(copy_saved),
+               QStringLiteral("err=\"%1\" saved=\"%2\"")
+                   .arg(QString::fromStdString(copy_err),
+                        QString::fromStdString(copy_saved.string())));
+    }
+
+    // ---- (h) 全局预设含 adaptive：save→load→再保存往返 + 格式卡开关同步（W3-T5 / A20）----
+    {
+        const QString g_policy = QStringLiteral("version 1\n"
+                                                "target 90\n"
+                                                "max_rounds 4\n"
+                                                "output last\n"
+                                                "stage q-up\n"
+                                                "  search quality from current to 95 step 2\n");
+        page.set_format_preset_adaptive(fmt, g_policy, true);
+        pump(80);
+        const pp::PresetData collected =
+            page.collect_preset(QStringLiteral("smoke-global-adaptive"));
+        const bool collected_ok = !collected.outputs.empty() &&
+                                  collected.outputs[0].adaptive_enabled &&
+                                  collected.outputs[0].adaptive_policy == g_policy.toStdString();
+        const std::filesystem::path gdir = std::filesystem::path((base + "/global").toStdString());
+        std::error_code gec;
+        std::filesystem::create_directories(gdir, gec);
+        const std::filesystem::path gfile = gdir / "smoke-global-adaptive.json";
+        const std::string gsave = pp::ui::save_preset(gfile, collected);
+        pp::PresetData greload;
+        const std::string gload = pp::ui::load_preset(gfile, greload);
+        // JSON 形状：outputs[0].adaptive = {enabled:true, policy:原文}
+        QJsonObject gspec;
+        {
+            QFile f(QString::fromStdString(gfile.string()));
+            if (f.open(QIODevice::ReadOnly)) {
+                QJsonParseError perr{};
+                const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &perr);
+                if (perr.error == QJsonParseError::NoError && doc.isObject()) {
+                    const QJsonArray outs = doc.object().value(QStringLiteral("outputs")).toArray();
+                    if (!outs.isEmpty())
+                        gspec = outs.at(0).toObject();
+                }
+            }
+        }
+        const QJsonObject gadaptive = gspec.value(QStringLiteral("adaptive")).toObject();
+        const bool json_ok = gspec.contains(QStringLiteral("adaptive")) &&
+                             gadaptive.value(QStringLiteral("enabled")).toBool(false) &&
+                             gadaptive.value(QStringLiteral("policy")).toString().toStdString() ==
+                                 g_policy.toStdString();
+        // 再保存：字节稳定（临时目录往返）
+        const std::filesystem::path gfile2 = gdir / "smoke-global-adaptive-2.json";
+        const std::string gsave2 =
+            gload.empty() ? pp::ui::save_preset(gfile2, greload) : std::string("load failed");
+        const auto read_bytes2 = [](const std::filesystem::path &file) {
+            QFile f(QString::fromStdString(file.string()));
+            if (!f.open(QIODevice::ReadOnly))
+                return QByteArray();
+            return f.readAll();
+        };
+        const QByteArray gbytes = read_bytes2(gfile);
+        const bool bytes_ok = gsave.empty() && gload.empty() && gsave2.empty() &&
+                              !gbytes.isEmpty() && read_bytes2(gfile2) == gbytes;
+        // 载入全局预设 → 格式卡自适应只读摘要/开关同步
+        if (gload.empty())
+            page.apply_preset(greload);
+        pump(150);
+        auto *g_switch =
+            page.findChild<QAbstractButton *>(QStringLiteral("pp-format-preset-adaptive-switch"));
+        auto *g_row = page.findChild<QWidget *>(QStringLiteral("pp-format-preset-adaptive-row"));
+        const QString g_summary = full_text(QStringLiteral("pp-format-preset-adaptive-jpeg"));
+        const bool applied = g_switch != nullptr && g_switch->isChecked() && g_row != nullptr &&
+                             g_row->isVisible() && page.format_preset_adaptive_enabled(fmt) &&
+                             g_summary.contains(QStringLiteral("90")) &&
+                             g_summary.contains(QStringLiteral("4"));
+        expect("global-adaptive", collected_ok && json_ok && bytes_ok && applied,
+               QStringLiteral("collect=%1 json=%2 bytes=%3 applied=%4 save=\"%5\" load=\"%6\" "
+                              "save2=\"%7\" summary=\"%8\"")
+                   .arg(collected_ok ? 1 : 0)
+                   .arg(json_ok ? 1 : 0)
+                   .arg(bytes_ok ? 1 : 0)
+                   .arg(applied ? 1 : 0)
+                   .arg(QString::fromStdString(gsave), QString::fromStdString(gload),
+                        QString::fromStdString(gsave2))
+                   .arg(g_summary));
+
+        // 执行面门控（A20）：开 → config_base 下发策略；关 → 不下发（引擎旧路径），
+        // 但采集面（collect_preset）仍保留策略文本（关掉开关再保存不丢文本）。
+        const pp::RunConfig cfg_on = page.config_base();
+        const bool exec_on = cfg_on.outputs.size() == 1 && cfg_on.outputs[0].adaptive_enabled &&
+                             cfg_on.outputs[0].adaptive_policy == g_policy.toStdString();
+        if (g_switch != nullptr)
+            g_switch->setChecked(false);
+        pump(80);
+        const pp::RunConfig cfg_off = page.config_base();
+        const bool exec_off = cfg_off.outputs.size() == 1 && !cfg_off.outputs[0].adaptive_enabled &&
+                              cfg_off.outputs[0].adaptive_policy.empty();
+        const pp::PresetData off_preset =
+            page.collect_preset(QStringLiteral("smoke-global-adaptive"));
+        const bool keeps_policy = !off_preset.outputs.empty() &&
+                                  !off_preset.outputs[0].adaptive_enabled &&
+                                  off_preset.outputs[0].adaptive_policy == g_policy.toStdString();
+        const std::filesystem::path goff = gdir / "smoke-global-adaptive-off.json";
+        const std::string goff_err = pp::ui::save_preset(goff, off_preset);
+        pp::PresetData goff_loaded;
+        const std::string goff_load = pp::ui::load_preset(goff, goff_loaded);
+        const bool off_json = goff_err.empty() && goff_load.empty() &&
+                              !goff_loaded.outputs.empty() &&
+                              !goff_loaded.outputs[0].adaptive_enabled &&
+                              goff_loaded.outputs[0].adaptive_policy == g_policy.toStdString();
+        expect("adaptive-gate", exec_on && exec_off && keeps_policy && off_json,
+               QStringLiteral("on=%1 off=%2 keep=%3 json=%4 off-save=\"%5\" off-load=\"%6\"")
+                   .arg(exec_on ? 1 : 0)
+                   .arg(exec_off ? 1 : 0)
+                   .arg(keeps_policy ? 1 : 0)
+                   .arg(off_json ? 1 : 0)
+                   .arg(QString::fromStdString(goff_err), QString::fromStdString(goff_load)));
+    }
+
+    const int bad_count = static_cast<int>(bad.size());
+    // 行内字段 = **各断言组的真实结论**（组名进了 bad ⇒ 0）：不打印任何未经断言证明的 1，
+    // 也不因为别的组失败而把本组「看起来过了」（§诚实显示）。
+    const auto group_ok = [&bad](const char *name) {
+        const QString prefix = QString::fromLatin1(name) + QStringLiteral("(");
+        for (const QString &item : bad) {
+            if (item.startsWith(prefix))
+                return 0;
+        }
+        return 1;
+    };
+    std::printf("UI-SMOKE format-preset: checked=%d bad=%d row=%d first=%d empty=%d prod=%d "
+                "idle=%d collect=%d roundtrip=%d note=%d normalize=%d invalid-save=%d bytes=%d "
+                "broken=%d kind=%d adaptive=%d switch=%d nopolicy=%d policy-err=%d "
+                "builtin=%d builtin-idem=%d builtin-readonly=%d builtin-saveas=%d "
+                "global-adaptive=%d adaptive-gate=%d %s\n",
+                checked, bad_count, group_ok("row-exists"), group_ok("row-first"),
+                group_ok("empty"), group_ok("prod-row"), group_ok("idle-buttons"),
+                group_ok("collect"), group_ok("roundtrip"), group_ok("note-loaded"),
+                group_ok("normalize-note"), group_ok("save-invalid"), group_ok("bytes"),
+                group_ok("broken"), group_ok("kind"), group_ok("adaptive"), group_ok("switch"),
+                group_ok("nopolicy"), group_ok("policy-err"), group_ok("builtin"),
+                group_ok("builtin-idem"), group_ok("builtin-readonly"), group_ok("builtin-saveas"),
+                group_ok("global-adaptive"), group_ok("adaptive-gate"),
+                qUtf8Printable(bad.join(QLatin1Char(' '))));
+    std::fflush(stdout);
+    if (bad_count > 0) {
+        smoke_fail(MainWindow::tr("格式预设行/自适应只读面（C23 §8.5 / C24 §9）不符：%1")
+                       .arg(bad.join(QLatin1Char(' '))));
+    }
+    page.hide();
+    pump(80);
+}
+
 // 原 1675 行单函数/深 10（deep-review R-255/E1-13）→ 12 个分节方法**逐字搬移**
 // （断言/输出行与顺序不变；节体零文本改动，共享件以局部别名承接）。
 struct MetaProbeCtx {

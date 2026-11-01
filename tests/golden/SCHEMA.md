@@ -189,3 +189,77 @@ C9–C13）。评分关闭（`Off`）/仅元数据运行：**不写**该键，si
 ```
 调用：`pp_verify tests/golden/smoke/multiformat-conflict.json <用例输出根目录>`。
 
+
+## progress_trace 加性字段（M10 / W3-T4 追加；既有行与既有断言**零改动**）
+
+`progress-trace.jsonl` 的每个事件行在既有字段之外**加性**带以下键（缺省值 = 不适用；值域与
+`src/core/progress.h` 的 `ProgressInfo` 末尾加性字段同名同义，裁定 A5）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `heartbeat` | boolean | `true` = 心跳事件（无状态变化、不推进任何 frac；C15「无长静默」） |
+| `scoring` | boolean | `true` = 该输出正在评分（异步评分池看门狗，或自适应轮次的**同步**评分期心跳） |
+| `adaptive_round` | number | 自适应第几轮（1-based；`0` = 未启用/未开始） |
+| `adaptive_max` | number | 自适应最大轮次（`0` = 未启用） |
+
+旧断言不受影响：既有 `progress_trace` 断言只读上表之外的字段；`pp_verify` 对未知键不敏感
+（schema 是**加性**面，M8-C13 先例）。
+
+## sidecar `adaptive`（M10 / W3-T4 追加；仅**启用自适应**时写出）
+
+`photopipeline --dev` 在 `<产物>.pp.json` sidecar **顶层追加** `adaptive` 对象：**仅当该输出显式
+携带自适应策略**（格式预设 `adaptive.enabled=true` 且 `policy` 非空，或 `--dev --adaptive-policy
+FILE`）时写出；默认关闭 ⇒ 无该键，旧 sidecar 逐字不变（与 `metric` 的 M8-C13 口径同构）。
+字段单源 = `src/core/adaptive_exec.h` 的 `pp::AdaptiveRunResult` / `AdaptiveRoundRecord`
+（契约 = docs/v0.4.0-design.md §9.6；直白对象由 `src/dev_cli.cpp` 渲染）。
+
+| 字段 | 类型 | 取值 / 语义 |
+|---|---|---|
+| `policy_version` | number | 策略 DSL 版本（当前 `1`） |
+| `target` | number | 目标分数（`(0,100]`；`score >= target` 即达标终止，浮点按 ≥） |
+| `max_rounds` | number | 全局轮数上限（`1..32`） |
+| `output` | string | 本版恒 `"last"`（`best` 属 P1，校验期已拒绝） |
+| `rounds[]` | array | 逐轮记录（见下；顺序 = 执行顺序；含失败/未评分轮） |
+| `selected_round` | number | 选定轮（1-based；`0` = 无选定 —— 仅失败/取消路径） |
+| `final_score` | number | 仅 `final_metric == "ok"` 时写出：选定轮分数；未达标但仍产出时 = 最后一轮成功编码的分数 |
+| `final_metric` | string | 选定轮的评分状态（`ok`/`unavailable`/`failed`；`off` = 无选定） |
+| `reason` | string | 终止原因（词表见下） |
+| `policy_sha` | string | 规范化策略文本（`render_adaptive_policy`）的 SHA-256（64 hex；日志取前 16） |
+| `error` | string | 仅失败/取消路径：失败原因（成功时不写） |
+
+`rounds[]` 元素：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `round` | number | 全局轮次（1-based，跨 stage 累计） |
+| `stage` | string | 策略的 stage id（空区间兜底轮 = `init`） |
+| `key` | string | search = 参数键；set 阶段 = 逗号连接的键列表 |
+| `value` | string | search = 该轮取值（数值文本）；set 阶段 = `k=v; k=v` |
+| `state` | string | 该轮评分状态（`ok`/`unavailable`/`failed`；`off` = 未评分） |
+| `score` | number | 仅 `state == "ok"` 时写出（∈ (−inf, 100]） |
+| `bytes` | number | 该轮**编码器输出**字节数（不含随后 metawrite 追加的元数据字节） |
+| `encode_ms` / `metric_ms` | number | 该轮编码 / 评分耗时（记录用，**不参与断言**） |
+| `decision` | string | `met`（达标）/ `improve` / `no-improve` / `unscored`（评分不可用）/ `encode-failed` |
+| `note` | string | 评分不可用或编码失败的中文短原因；正常轮为空串 |
+
+`reason` 词表（`kAdaptiveReason*` 单源）：`met` / `max_rounds` / `stage_exhausted` / `plateau` /
+`metric_unavailable` / `encode_failed` / `cancelled` / `invalid_policy` / `invalid_params` /
+`no_candidate` / `commit_failed`。
+
+语义（docs/v0.4.0-design.md §9.1/§9.6，可机械断言）：
+
+1. **达标即停**：`reason == "met"` ⇒ `selected_round <= max_rounds` 且 `rounds[selected_round-1]
+   .decision == "met"`、`final_score >= target`。
+2. **未达标仍产出**（`max_rounds`/`stage_exhausted`/`plateau`/`encode_failed`/`metric_unavailable`
+   的 `stop` 语义）= **输出最后一轮成功编码**：`selected_round` 指向该轮，产物存在且
+   `final_metric`/`final_score` 与该轮一致。
+3. **取消**（`reason == "cancelled"`）：候选全部丢弃、**不落盘**；该行 `state == "failed"`，
+   `error == "adaptive cancelled"`，`selected_round == 0`。
+4. **非法参数/策略**（`invalid_params`/`invalid_policy`）：硬失败、**无产物**（产物路径不存在）。
+5. 侧车顶层 `metric` 对象 = **选定轮**的评分（同步评分，不重复计分）：`metric.state ==
+   rounds[selected_round-1].state`、`metric.score == final_score`（`ok` 时）。
+6. 侧车 `params` 键仍是**运行配置基线**（`--param`/预设装配后的 ParamSet 快照）；实际生效的逐轮
+   取值见 `rounds[]`（`selected_round` 那一行）。
+
+端到端夹具（**不进 20 对金样**，dev-only）：`tests/golden/smoke-adaptive/`（格式预设 + 策略
+DSL + 复现命令），见该目录 `README.md`。

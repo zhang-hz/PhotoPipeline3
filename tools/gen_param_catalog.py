@@ -10,6 +10,7 @@
   python tools/gen_param_catalog.py              # 校验 + 写 .inc/anchors.inc
   python tools/gen_param_catalog.py --check      # 只校验 + 比较生成物是否最新
   python tools/gen_param_catalog.py --strict-counts  # 额外断言最终行数（Stage A4 门禁）
+  python tools/gen_param_catalog.py --no-anchors # 跳过上游锚点抽取（保留既有 anchors.inc，不写空锚点）
 
 契约：docs/m8-encoder-params-and-ssimulacra2-design.md C1/C2；
       docs/m8-param-control-map.md（形态/角色/计数）；specs README 见同目录。
@@ -51,11 +52,15 @@ TECHS = {"both": "TechScope::Both", "vardct": "TechScope::Vardct",
 
 # (format, backend, filename, final row count)
 BACKENDS = [
-    ("heif", "x265", "x265.json", 40),
+    ("heif", "x265", "x265.json", 43),
     ("avif", "libaom", "aom.json", 57),
     ("avif", "svt-av1", "svt.json", 3),
-    ("jxl", "libjxl", "jxl.json", 16),
+    ("jxl", "libjxl", "jxl.json", 14),
 ]
+
+# W2-T1（C16）：HEIF 用户面普通键。它们不是 x265 透传键（engine 为空，由 enc_heif 消费），
+# 因此不走 `x265:` 前缀与上游 anchors 校验；其余 x265 目录行仍必须逐字命中上游参数名。
+HEIF_UI_KEYS = {"heif_grid", "heif_tile_w", "heif_tile_h"}
 
 X265_FORBIDDEN = {
     "annexb", "input-csp", "total-frames", "ctu", "log-level", "log", "input-res",
@@ -238,16 +243,22 @@ def validate_spec(spec: dict, filename: str, expected_format: str, expected_back
 
         # key / engine 作用域
         if expected_backend == "x265":
-            prefix = "x265:" if scope == "settable" else "__x265:"
-            check(key.startswith(prefix), f"{ctx}: key must start with {prefix}")
-            check(tech == "both", f"{ctx}: x265 tech must be both")
-            if scope == "settable":
-                check(ENGINE_RE.match(engine) is not None, f"{ctx}: bad engine {engine!r}")
-                check(engine not in X265_FORBIDDEN, f"{ctx}: forbidden engine {engine!r}")
-                check(x265_engine_ok(engine, x265_anchors),
-                      f"{ctx}: engine {engine!r} not in x265 anchors")
+            if key in HEIF_UI_KEYS:
+                # HEIF 用户面键：enc_heif 直接消费，engine 必须为空（不冒充 x265 透传）。
+                check(engine == "", f"{ctx}: HEIF UI key must not have engine")
+                check(scope == "settable", f"{ctx}: HEIF UI key must be settable")
+                check(tech == "both", f"{ctx}: x265 tech must be both")
             else:
-                check(engine == "", f"{ctx}: readonly row must not have engine")
+                prefix = "x265:" if scope == "settable" else "__x265:"
+                check(key.startswith(prefix), f"{ctx}: key must start with {prefix}")
+                check(tech == "both", f"{ctx}: x265 tech must be both")
+                if scope == "settable":
+                    check(ENGINE_RE.match(engine) is not None, f"{ctx}: bad engine {engine!r}")
+                    check(engine not in X265_FORBIDDEN, f"{ctx}: forbidden engine {engine!r}")
+                    check(x265_engine_ok(engine, x265_anchors),
+                          f"{ctx}: engine {engine!r} not in x265 anchors")
+                else:
+                    check(engine == "", f"{ctx}: readonly row must not have engine")
         elif expected_backend == "libaom":
             prefix = "aom:" if scope == "settable" else "__aom:"
             check(key.startswith(prefix), f"{ctx}: key must start with {prefix}")
@@ -267,7 +278,8 @@ def validate_spec(spec: dict, filename: str, expected_format: str, expected_back
         else:  # jxl
             check(JXL_KEYS_NO_PREFIX and ":" not in key, f"{ctx}: jxl key must not have prefix")
             check(engine == "", f"{ctx}: jxl row must not have engine")
-            check(scope == "settable", f"{ctx}: jxl catalog only settable rows")
+            # W2-T5（C22）：JXL 也允许只读行（codestream_level 显示实际推导 level）。
+            check(scope in ("settable", "readonly"), f"{ctx}: jxl scope must be settable/readonly")
 
         # 形态 ↔ 类型 / scope 一致性
         if form == "readonly":
@@ -378,7 +390,10 @@ def main() -> int:
     parser.add_argument("--validate-only", action="store_true",
                         help="validate specs only (teammates use this; does not read/write .inc)")
     parser.add_argument("--strict-counts", action="store_true", help="assert final row counts")
-    parser.add_argument("--no-anchors", action="store_true", help="skip upstream anchor extraction")
+    parser.add_argument("--no-anchors", action="store_true",
+                        help="skip upstream anchor extraction; existing anchors.inc is preserved")
+    parser.add_argument("--allow-empty-anchors", action="store_true",
+                        help="with --no-anchors: explicitly allow writing an empty anchors.inc")
     args = parser.parse_args()
 
     try:
@@ -408,11 +423,39 @@ def main() -> int:
         outputs = dict(renders)
         outputs["anchors.inc"] = (anchors_inc, "anchors")
 
+        # --no-anchors / 上游源码缺失 的安全默认：锚点为空时，绝不拿空锚点覆盖既有
+        # anchors.inc。只有显式 --allow-empty-anchors 才允许写空锚点（无既有文件可保护时
+        # 同样要求显式）。
+        anchors_path = OUT_DIR / "anchors.inc"
+        missing_anchors = [name for name, anchors in
+                           (("x265", x265_anchors), ("libaom", aom_anchors)) if not anchors]
+        anchors_preserved = False
+        preserve_reason = ""
+        if args.allow_empty_anchors and not missing_anchors:
+            print("warning: --allow-empty-anchors 仅在锚点为空（--no-anchors 或上游源码缺失）"
+                  "时有作用；本次已抽取上游锚点", file=sys.stderr)
+        if missing_anchors and not args.allow_empty_anchors:
+            preserve_reason = ("--no-anchors 跳过上游锚点抽取" if args.no_anchors
+                               else f"未找到 {'/'.join(missing_anchors)} 上游锚点源码"
+                                    "（vcpkg/buildtrees）")
+            if anchors_path.is_file():
+                outputs.pop("anchors.inc", None)
+                anchors_preserved = True
+            elif not args.validate_only:
+                print(f"catalog spec error: {preserve_reason}，且 anchors.inc 不存在；"
+                      "拒绝生成空锚点（如确需空锚点，请显式加 --allow-empty-anchors）",
+                      file=sys.stderr)
+                return 2
+
         if args.validate_only:
             total = sum(len(json.loads((SPEC_DIR / b[2]).read_text("utf-8"))["rows"]) for b in BACKENDS)
             print(f"catalog specs OK: rows={total} x265_anchors={len(x265_anchors)} "
                   f"aom_anchors={len(aom_anchors)}")
             return 0
+
+        if anchors_preserved:
+            print(f"note: {preserve_reason}；保留现有 anchors.inc（未重写/未比对）；"
+                  "如需写入空锚点请显式加 --allow-empty-anchors", file=sys.stderr)
 
         if args.check:
             stale = []

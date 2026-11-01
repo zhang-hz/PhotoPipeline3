@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // PhotoPipeline — M8 联动规则引擎实现（B1；接口冻结见 core/param_rules.h，B0 冻结）。
 //
-// 单一规则源：docs/m8-param-control-map.md §2–§6 的 G3/G4/X1–X17/A1–A16/S1–S6/J1–J18
+// 单一规则源：docs/m8-param-control-map.md §2–§6 的 G3/G4/X1–X17/A1–A16/S1–S6/J1–J19
 // 逐条落成**数据驱动规则表**（Rule{id, format, backend, action, drivers, targets, when,
 // lock, message}）。求值分两档：
 //   * evaluate()  —— UI 实时态：hidden / disabled / locked / warnings / errors；
@@ -22,12 +22,19 @@
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <functional>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
+
+// W2-T1（C16/C17）：HEIF grid/tile 的几何预检与 enc_heif 共用同一份纯函数单源
+// （Level 表 / tile 推导 / 手动校验 / 中文错误）。core → codecs 的依赖在 params.cpp
+// （catalog）已有先例；pp_core 是单一静态库，不存在运行期耦合。
+#include "codecs/enc_tune_facts.h" // W2-T3（C20）：tune 置灰值中文预检（与编码器同文案）
+#include "codecs/heif_capability.h"
 
 namespace pp::rules {
 namespace {
@@ -98,6 +105,9 @@ struct Rule {
     std::function<bool(const EvalCtx &)> when;       // 空 = 恒成立
     std::function<ParamValue(const EvalCtx &)> lock; // Lock 动作的强制值
     std::string message;                             // 中文：Warn/Error 用户文案；其余 = 原因注记
+    // W2-T1：需要点名实际数值的规则（tile 上限 / 对齐 / 规划错误）用动态文案；
+    // 为空时回退到 message（既有规则零改动）。
+    std::function<std::string(const EvalCtx &)> message_fn;
 };
 
 // ---------------------------------------------------------------------------
@@ -109,45 +119,63 @@ bool lossless_on(const EvalCtx &c) { return c.lossless; }
 // x265 透传 RC 路径（crf/qp）任一启用 ⇒ 覆盖 quality 默认路径（G4/X1）。
 bool x265_rc_override(const EvalCtx &c) { return c.has("x265:crf") || c.has("x265:qp"); }
 
-// JXL「是否 Modular 路径」：lossless 恒走 Modular；否则看技术选择 / Modular-only 键在场。
-bool jxl_modular_only_key(std::string_view key) {
-    static constexpr std::string_view keys[] = {"modular_group_size",
-                                                "modular_predictor",
-                                                "modular_palette_colors",
-                                                "modular_lossy_palette",
-                                                "brotli_effort",
-                                                "responsive",
-                                                "channel_colors_global_percent",
-                                                "channel_colors_group_percent",
-                                                "modular_ma_tree_learning_percent",
-                                                "modular_nb_prev_channels",
-                                                "color_transform"};
-    for (const std::string_view candidate : keys)
-        if (candidate == key)
-            return true;
-    return false;
+// JXL 技术作用域（W2-T5，C22）：只用显式 tech/lossless 判定，禁止「存在 Modular 键就静默
+// 切技术」。两张表 = 编码器 enc_jxl.cpp 同名表的镜像（规则层用于预检中文错误）。
+constexpr std::string_view kJxlVardctOnlyKeys[] = {"photon_noise", "epf", "dots", "patches",
+                                                   "gaborish"};
+constexpr std::string_view kJxlModularOnlyKeys[] = {"color_transform",
+                                                    "modular_group_size",
+                                                    "modular_predictor",
+                                                    "modular_palette_colors",
+                                                    "modular_lossy_palette",
+                                                    "channel_colors_global_percent",
+                                                    "channel_colors_group_percent",
+                                                    "modular_ma_tree_learning_percent",
+                                                    "modular_nb_prev_channels"};
+
+// W2-T5：已从产品面删除的 JXL 键（与 enc_jxl.cpp kRemovedKeys 同源；此处 = 预检中文报错）。
+// drivers 故意留空 —— 这些键已不在任何声明面（catalog/静态表），锚点闭合测试不应要求它们存在。
+struct RemovedJxlKey {
+    std::string_view key;
+    std::string_view reason;
+};
+constexpr RemovedJxlKey kJxlRemovedKeys[] = {
+    {"keep_invisible", "产品不输出 alpha，逐字节 no-op（侦察 b11）"},
+    {"noise", "libjxl 旧式自适应噪声，库阈值 99 使其恒不启用（b15 逐字节）"},
+    {"expert_options", "纯门；effort=11 现自动 JxlEncoderAllowExpertOptions"},
+    {"uses_original_profile", "只剩「无效果/报错」两态，有损 VarDCT 下会被 M9 显式拒绝（b32）"},
+    {"group_order", "渐进渲染组顺序，批量转码无价值"},
+    {"group_order_center_x", "依赖已删除的 group_order"},
+    {"group_order_center_y", "依赖已删除的 group_order"},
+    {"progressive_ac", "只影响渐进解码分层，不改最终画质"},
+    {"qprogressive_ac", "只影响渐进解码分层，不改最终画质"},
+    {"progressive_dc", "只影响渐进解码分层，不改最终画质"},
+    {"responsive", "渐进/流式专用，批量转码无价值"},
+    {"buffering", "产品整图输入路径 no-op（b25/b51 逐字节）"},
+};
+
+template <std::size_t N>
+std::string present_cross_keys(const EvalCtx &c, const std::string_view (&keys)[N]) {
+    std::string out;
+    for (const std::string_view key : keys) {
+        if (!c.has(key))
+            continue;
+        if (!out.empty())
+            out += ",";
+        out += key;
+    }
+    return out;
 }
 
-bool params_indicate_modular(const ParamSet &values) {
-    for (const auto &[key, value] : values) {
-        (void)value;
-        if (jxl_modular_only_key(key))
-            return true;
+std::string present_removed_jxl_key(const EvalCtx &c) {
+    for (const RemovedJxlKey &r : kJxlRemovedKeys) {
+        if (c.has(r.key))
+            return std::string(r.key);
     }
-    return false;
+    return {};
 }
 
 bool jxl_lossy_modular(const EvalCtx &c) { return c.modular && !c.lossless; }
-
-// J4 边界（逐文件检查；width/height 未知 = 0 → 跳过，避免误报）。
-bool center_x_out_of_bounds(const EvalCtx &c) {
-    return c.width > 0 && c.has("group_order_center_x") &&
-           c.i("group_order_center_x", 0) >= c.width;
-}
-bool center_y_out_of_bounds(const EvalCtx &c) {
-    return c.height > 0 && c.has("group_order_center_y") &&
-           c.i("group_order_center_y", 0) >= c.height;
-}
 
 // J14：intrinsic_size 文本 = "宽x高"（两分量同时给出；0/空 = 不写）。
 bool parse_intrinsic_size(const std::string &text, int64_t &x, int64_t &y) {
@@ -198,18 +226,103 @@ int hdr_group_present(const EvalCtx &c) {
     return n;
 }
 
-// J18：level 5 容不下 16 位「uses_original_profile」路径（modular_16_bit_buffer_sufficient
-// 由 uses_original_profile=true && bits>12 决定需要 level 10；encode.cc:1331-1360/786-800）。
-bool jxl_level5_16bit_conflict(const EvalCtx &c) {
-    if (c.bitdepth != 16 || !c.has("codestream_level") || c.i("codestream_level", -1) != 5)
-        return false;
-    return c.lossless || c.modular || c.b("uses_original_profile", false);
-}
-
 // 锁值构造器（ParamValue 变体顺序：monostate/bool/int64/double/string）。
 ParamValue lock_str(const char *s) { return ParamValue{std::string(s)}; }
 ParamValue lock_int(int64_t v) { return ParamValue{v}; }
 ParamValue lock_bool(bool v) { return ParamValue{v}; }
+
+// ---------------------------------------------------------------------------
+// W2-T1（C16/C17）：HEIF grid/tile 规则的共享判定（几何真源 = heif_capability.h）
+// ---------------------------------------------------------------------------
+int heif_grid_effective_mode(const EvalCtx &c) {
+    if (c.has("heif_grid")) {
+        const int mode = heif_grid_mode_from_param_value(static_cast<int>(c.i("heif_grid", 1)));
+        return mode < 0 ? 2 : mode; // 非法值由 UI 域兜底；规则层按自动处理不误报
+    }
+    if (c.has("__heif_grid")) {
+        const int mode = heif_grid_mode_from_legacy(static_cast<int>(c.i("__heif_grid", 2)));
+        return mode < 0 ? 2 : mode;
+    }
+    return 2; // 缺省 = 自动
+}
+
+bool heif_tile_key_set(const EvalCtx &c) {
+    return (c.has("heif_tile_w") && c.i("heif_tile_w", 0) != 0) ||
+           (c.has("heif_tile_h") && c.i("heif_tile_h", 0) != 0);
+}
+
+int heif_ctx_chroma(const EvalCtx &c) {
+    const std::string chroma = c.s("chroma", "420");
+    if (chroma == "444")
+        return 3;
+    if (chroma == "422")
+        return 2;
+    if (chroma == "400")
+        return 0;
+    return 1;
+}
+
+HeifGridPlan heif_plan_from_ctx(const EvalCtx &c) {
+    HeifGridRequest req;
+    req.grid_mode = heif_grid_effective_mode(c);
+    req.level_idc = static_cast<int>(c.i("x265:level-idc", 0));
+    req.width = c.width;
+    req.height = c.height;
+    req.chroma = heif_ctx_chroma(c);
+    req.tile_width = static_cast<int>(c.i("heif_tile_w", 0));
+    req.tile_height = static_cast<int>(c.i("heif_tile_h", 0));
+    return heif_plan_grid(req);
+}
+
+bool heif_tile_range_bad(const EvalCtx &c) {
+    for (const char *key : {"heif_tile_w", "heif_tile_h"}) {
+        if (!c.has(key))
+            continue;
+        const int64_t v = c.i(key, 0);
+        if (v < 0 || v > 8192)
+            return true;
+    }
+    return false;
+}
+
+bool heif_tile_too_small(const EvalCtx &c) {
+    for (const char *key : {"heif_tile_w", "heif_tile_h"}) {
+        if (!c.has(key))
+            continue;
+        const int64_t v = c.i(key, 0);
+        if (v != 0 && (v / 8) * 8 < 64)
+            return true;
+    }
+    return false;
+}
+
+std::string heif_tile_small_message(const EvalCtx &c) {
+    for (const char *key : {"heif_tile_w", "heif_tile_h"}) {
+        if (!c.has(key))
+            continue;
+        const int64_t v = c.i(key, 0);
+        if (v != 0 && (v / 8) * 8 < 64) {
+            return "手动 tile " + std::string(key == std::string("heif_tile_w") ? "宽" : "高") +
+                   " " + std::to_string(v) + " 按 8 向下对齐到 " + std::to_string((v / 8) * 8) +
+                   " 后小于最小值 64；请改为 0（自动）或 ≥64。";
+        }
+    }
+    return "手动 tile 尺寸小于最小值 64。";
+}
+
+std::string heif_tile_aligned_message(const EvalCtx &c) {
+    for (const char *key : {"heif_tile_w", "heif_tile_h"}) {
+        if (!c.has(key))
+            continue;
+        const int64_t v = c.i(key, 0);
+        if (v != 0 && v % 8 != 0 && (v / 8) * 8 >= 64) {
+            return "手动 tile " + std::string(key == std::string("heif_tile_w") ? "宽" : "高") +
+                   " " + std::to_string(v) + " 已按 8 向下对齐到 " + std::to_string((v / 8) * 8) +
+                   "。";
+        }
+    }
+    return "手动 tile 已按 8 向下对齐。";
+}
 
 // ---------------------------------------------------------------------------
 // 规则表（唯一真源；顺序 = 求值顺序，影响 warnings/errors 的稳定顺序）
@@ -217,6 +330,10 @@ ParamValue lock_bool(bool v) { return ParamValue{v}; }
 std::vector<Rule> build_rules() {
     std::vector<Rule> r;
     auto add = [&r](Rule rule) { r.push_back(std::move(rule)); };
+    auto add_dyn = [&r](Rule rule, std::function<std::string(const EvalCtx &)> message_fn) {
+        rule.message_fn = std::move(message_fn);
+        r.push_back(std::move(rule));
+    };
 
     // ======================= 跨后端 / 透传前缀（C3/S6/G1） =======================
     add({"G1",
@@ -444,19 +561,6 @@ std::vector<Rule> build_rules() {
          lossless_on,
          [](const EvalCtx &) { return lock_bool(false); },
          "无损承诺：modular_lossy_palette 锁定关闭"});
-    add({"J2",
-         "jxl",
-         "libjxl",
-         Action::Error,
-         {"uses_original_profile"},
-         {},
-         [](const EvalCtx &c) {
-             return c.lossless && c.has("uses_original_profile") &&
-                    !c.b("uses_original_profile", true);
-         },
-         {},
-         "J2：无损编码要求 uses_original_profile=true（libjxl 拒绝 xyb_encoded 下的"
-         " JxlEncoderSetFrameLossless）"});
     add({"G3",
          "jxl",
          "libjxl",
@@ -667,6 +771,59 @@ std::vector<Rule> build_rules() {
          },
          {},
          "X12：level-idc 与 CRF 同用会强制 VBV（码率/结果非确定）"});
+    // W2-T4（C21）：QP + 显式 Level = x265 硬拒绝（level.cpp:443-445）。旧实现只回泛化
+    // "subcode 5001"；预检给中文可操作错误（与编码器侧兜底文案同源）。
+    add({"X12",
+         "heif",
+         "x265",
+         Action::Error,
+         {"x265:qp", "x265:level-idc"},
+         {},
+         [](const EvalCtx &c) { return c.has("x265:qp") && c.i("x265:level-idc", 0) > 0; },
+         {},
+         "X12：恒定 QP 与显式 Level 不兼容（x265 拒绝 \"Constant QP is inconsistent with "
+         "specifying a decoder level\"）：请改用 CRF/质量模式，或把 Level 设为自动（0）"});
+    // W2-T4（C21）：CRF/QP 合法域随位深（x265 param.cpp:1740,1875-1879）：
+    // 8bit 0..51、10bit −12..51、12bit −24..51。UI 域由 paramform 同步，预检兜住
+    // 预设/CLI 越界值（不静默钳值、不静默改用户输入）。
+    add_dyn({"X1C",
+             "heif",
+             "x265",
+             Action::Error,
+             {"x265:crf", "x265:qp"},
+             {},
+             [](const EvalCtx &c) {
+                 if (c.bitdepth != 8 && c.bitdepth != 10 && c.bitdepth != 12)
+                     return false;
+                 const double lo = c.bitdepth > 8 ? -6.0 * (c.bitdepth - 8) : 0.0;
+                 for (const char *key : {"x265:crf", "x265:qp"}) {
+                     if (!c.has(key))
+                         continue;
+                     const double v = c.d(key, 0.0);
+                     if (v < lo || v > 51.0)
+                         return true;
+                 }
+                 return false;
+             },
+             {},
+             "X1C：CRF/QP 合法域随位深（8 位 0..51、10 位 −12..51、12 位 −24..51）"},
+            [](const EvalCtx &c) {
+                const int lo = c.bitdepth > 8 ? -6 * (c.bitdepth - 8) : 0;
+                for (const char *key : {"x265:crf", "x265:qp"}) {
+                    if (!c.has(key))
+                        continue;
+                    const double v = c.d(key, 0.0);
+                    if (v < lo || v > 51.0) {
+                        char buf[64] = {};
+                        std::snprintf(buf, sizeof(buf), "%g", v);
+                        return "X1C：" + std::string(key) + "=" + buf + " 越界：位深 " +
+                               std::to_string(c.bitdepth) + " 位合法域 " + std::to_string(lo) +
+                               "..51（x265 会把超出域的值钳掉/拒绝）；"
+                               "请改值或调整位深";
+                    }
+                }
+                return std::string("X1C：CRF/QP 越界");
+            });
     add({"X13",
          "heif",
          "x265",
@@ -720,6 +877,123 @@ std::vector<Rule> build_rules() {
          "X15：psy-rd/psy-rdoq/aq-strength 的部分效果会被 tune 与插件固定项"
          "（aq-mode/psy 基线）覆盖"});
 
+    // ======================= H：HEIF grid/tile（W2-T1，C16/C17） =======================
+    // 几何真源 = heif_capability.h（enc_heif 同一份纯函数，预检不另写一套公式）。
+    add({"H1",
+         "heif",
+         "x265",
+         Action::Hide,
+         {"heif_grid", "__heif_grid"},
+         {"heif_tile_w", "heif_tile_h"},
+         [](const EvalCtx &c) { return heif_grid_effective_mode(c) == 0; },
+         {},
+         "H1：分块模式=关闭 时单图输出，tile 尺寸行隐藏（不承载任何 grid 语义）"});
+    add_dyn({"H2",
+             "heif",
+             "x265",
+             Action::Error,
+             {"heif_tile_w", "heif_tile_h"},
+             {},
+             [](const EvalCtx &c) {
+                 return heif_grid_effective_mode(c) != 0 && heif_tile_too_small(c);
+             },
+             {},
+             "H2：手动 tile 最小 64×64（非 0 值按 8 向下对齐后判定）"},
+            heif_tile_small_message);
+    add_dyn({"H3",
+             "heif",
+             "x265",
+             Action::Error,
+             {"heif_tile_w", "heif_tile_h"},
+             {},
+             [](const EvalCtx &c) {
+                 return heif_grid_effective_mode(c) != 0 && heif_tile_range_bad(c);
+             },
+             {},
+             "H3：heif_tile_w/heif_tile_h 合法范围 0–8192（0=自动）"},
+            [](const EvalCtx &c) {
+                for (const char *key : {"heif_tile_w", "heif_tile_h"}) {
+                    if (!c.has(key))
+                        continue;
+                    const int64_t v = c.i(key, 0);
+                    if (v < 0 || v > 8192) {
+                        return "参数 " + std::string(key) + "=" + std::to_string(v) +
+                               " 越界：合法范围 0–8192（0=自动；非 0 时最小 64，按 8 向下对齐）。";
+                    }
+                }
+                return std::string("手动 tile 参数越界（0–8192）。");
+            });
+    add_dyn({"H4",
+             "heif",
+             "x265",
+             Action::Error,
+             {"heif_grid", "x265:level-idc", "heif_tile_w", "heif_tile_h", "chroma"},
+             {},
+             [](const EvalCtx &c) {
+                 if (heif_grid_effective_mode(c) == 0 || !heif_tile_key_set(c) || c.width <= 0 ||
+                     c.height <= 0)
+                     return false;
+                 if (heif_tile_range_bad(c) || heif_tile_too_small(c))
+                     return false; // H2/H3 已报错，避免重复
+                 return !heif_plan_from_ctx(c).ok;
+             },
+             {},
+             "H4：手动 tile 在显式 Level 下必须满足 MaxLumaPs 与单边 sqrt(8×MaxLumaPs)；"
+             "非法值中文预检报错（点名上限/最大可行 tile/三条出路），不静默降级"},
+            [](const EvalCtx &c) { return heif_plan_from_ctx(c).error_zh; });
+    add({"H5",
+         "heif",
+         "x265",
+         Action::Warn,
+         {"heif_grid", "heif_tile_w", "heif_tile_h", "x265:level-idc"},
+         {},
+         [](const EvalCtx &c) {
+             return heif_grid_effective_mode(c) != 0 && heif_tile_key_set(c) &&
+                    c.i("x265:level-idc", 0) == 0;
+         },
+         {},
+         "H5：Level=自动 + 手动 tile 允许，但该配置与 Apple 参考（1024×576）不同，"
+         "iPhone 接受度未验证（每 tile 的 Level 由 x265 自动选择）"});
+    add_dyn({"H6",
+             "heif",
+             "x265",
+             Action::Warn,
+             {"heif_tile_w", "heif_tile_h"},
+             {},
+             [](const EvalCtx &c) {
+                 if (heif_grid_effective_mode(c) == 0)
+                     return false;
+                 for (const char *key : {"heif_tile_w", "heif_tile_h"}) {
+                     if (!c.has(key))
+                         continue;
+                     const int64_t v = c.i(key, 0);
+                     if (v != 0 && v % 8 != 0 && (v / 8) * 8 >= 64)
+                         return true;
+                 }
+                 return false;
+             },
+             {},
+             "H6：手动 tile 非 8 的倍数 → 按 8 向下对齐（行内提示对齐结果，不静默）"},
+            heif_tile_aligned_message);
+    add_dyn({"H7",
+             "heif",
+             "x265",
+             Action::Warn,
+             {"heif_grid", "heif_tile_w", "heif_tile_h", "chroma"},
+             {},
+             [](const EvalCtx &c) {
+                 if (heif_grid_effective_mode(c) == 0 || c.width <= 0 || c.height <= 0)
+                     return false;
+                 if (heif_tile_range_bad(c) || heif_tile_too_small(c))
+                     return false;
+                 const HeifGridPlan plan = heif_plan_from_ctx(c);
+                 return plan.ok && plan.miaf_parity_warn;
+             },
+             {},
+             "H7：grid + 奇数尺寸（MIAF 7.3.11.4.2：4:2:0 需宽高偶数、4:2:2 需宽偶数）"
+             "只 warn 不阻断；输出仍按原尺寸"},
+            [](const EvalCtx &c) { return heif_plan_from_ctx(c).warning_zh; });
+
     // ============================== A：libaom 联动规则 ==============================
     add({"A3",
          "avif",
@@ -730,6 +1004,63 @@ std::vector<Rule> build_rules() {
          [](const EvalCtx &c) { return c.s("tune", "") == "iq"; },
          {},
          "A3：tune=iq 时库自动启用 QM/锐化/色度 delta-q（与手工设置可能重叠）"});
+    // W2-T3（C20）：tune 的仿真值/置灰值 —— 仿真通道提示 + 不可用值中文预检。
+    // 事实表 = codecs/enc_tune_facts.h（与 enc_heif / paramform / 单测同一份事实）。
+    add({"G8",
+         "avif",
+         "libaom",
+         Action::Warn,
+         {"tune"},
+         {},
+         [](const EvalCtx &c) { return c.s("tune", "") == "ssimulacra2"; },
+         {},
+         "G8：tune=ssimulacra2 由引擎内部走 aom:tune；库会启用 QM/锐化自动项，"
+         "可能与手工 aom:enable-qm/qm-min/qm-max/sharpness 重叠（见 A3）"});
+    add({"G8",
+         "avif",
+         "svt-av1",
+         Action::Warn,
+         {"tune"},
+         {},
+         [](const EvalCtx &c) {
+             const std::string tune = c.s("tune", "");
+             return tune == "iq" || tune == "ms-ssim";
+         },
+         {},
+         "G8：SVT tune=iq/ms-ssim 会把 BRC 从 CQP 切到 CRF（encoder_svt.cc:873）——"
+         "QP 路径的码率不再由 qp 决定；需要恒定码率请改用质量路径或改回 vq/psnr/ssim"});
+    {
+        struct TuneBackend {
+            const char *format;
+            const char *backend;
+        };
+        constexpr TuneBackend kTuneBackends[] = {
+            {"heif", "x265"}, {"avif", "libaom"}, {"avif", "svt-av1"}};
+        for (const TuneBackend &tb : kTuneBackends) {
+            const pp::tune::BackendFacts *facts = pp::tune::facts_for(tb.backend);
+            if (facts == nullptr)
+                continue;
+            for (const pp::tune::ValueFact &fact : facts->values) {
+                if (fact.kind != pp::tune::Kind::Disabled)
+                    continue;
+                const std::string value(fact.value);
+                const std::string message = pp::tune::unavailable_message(tb.backend, fact);
+                add({"G8",
+                     tb.format,
+                     tb.backend,
+                     Action::Error,
+                     {"tune"},
+                     {},
+                     // clang-tidy 21 把 std::function 目标 lambda 的隐式 move ctor 当作 noexcept，
+                     // 并把 MSVC STL 内部 _Throw_bad_array_new_length（bad_alloc 派生，未被
+                     // ignoreBadAlloc 过滤）算作逃逸 ⇒ 误报（详见 tidy-fix 报告）。
+                     // NOLINTNEXTLINE(bugprone-exception-escape)：MSVC STL 误报
+                     [value](const EvalCtx &c) { return c.s("tune", "") == value; },
+                     {},
+                     message});
+            }
+        }
+    }
     add({"A4",
          "avif",
          "libaom",
@@ -944,36 +1275,32 @@ std::vector<Rule> build_rules() {
          },
          {},
          "J3：upsampling_mode 仅在 resampling=2/4/8 时有效（=1 时库无效果）"});
-    add({"J4",
+    // W2-T5（C22）：技术作用域 = 显式 tech/lossless（禁止「存在 Modular 键就静默切技术」）。
+    // 跨技术残留键在此显式报中文错误；预设载入与运行前预检共用同一规则源。
+    add({"J1",
          "jxl",
          "libjxl",
-         Action::Disable,
-         {"group_order", "group_order_center_x", "group_order_center_y"},
-         {"group_order_center_x", "group_order_center_y"},
+         Action::Error,
+         {},
+         {},
          [](const EvalCtx &c) {
-             return (c.has("group_order_center_x") || c.has("group_order_center_y")) &&
-                    c.i("group_order", -1) != 1;
+             return c.modular && !present_cross_keys(c, kJxlVardctOnlyKeys).empty();
          },
          {},
-         "J4：group_order_center_x/y 仅在 group_order=center(1) 时使用"});
-    add({"J4",
+         "J1：检测到 VarDCT 专用参数（photon_noise/epf/dots/patches/gaborish）出现在 Modular 路径；"
+         "请把技术切换为 VarDCT 或删除这些键（不再静默跳过/自动切换技术）"});
+    add({"J1",
          "jxl",
          "libjxl",
          Action::Error,
-         {"group_order_center_x"},
          {},
-         center_x_out_of_bounds,
          {},
-         "J4：group_order_center_x 必须小于图像宽度（逐文件检查）"});
-    add({"J4",
-         "jxl",
-         "libjxl",
-         Action::Error,
-         {"group_order_center_y"},
+         [](const EvalCtx &c) {
+             return !c.modular && !present_cross_keys(c, kJxlModularOnlyKeys).empty();
+         },
          {},
-         center_y_out_of_bounds,
-         {},
-         "J4：group_order_center_y 必须小于图像高度（逐文件检查）"});
+         "J1：检测到 Modular 专用参数（color_transform/modular_*/channel_colors_*）出现在 VarDCT "
+         "路径；请把技术切换为 Modular 或删除这些键（不再静默跳过/自动切换技术）"});
     add({"J5",
          "jxl",
          "libjxl",
@@ -983,54 +1310,18 @@ std::vector<Rule> build_rules() {
          [](const EvalCtx &c) { return !c.b("box_compress", false); },
          {},
          "J5：box_compress 未开启（box 不压缩）时 brotli_effort 无效果"});
-    add({"J6",
-         "jxl",
-         "libjxl",
-         Action::Error,
-         {"effort", "expert_options"},
-         {},
-         [](const EvalCtx &c) {
-             return c.has("effort") && c.i("effort", 7) == 11 && !c.b("expert_options", false);
-         },
-         {},
-         "J6：effort=11 需要先启用 expert_options（JxlEncoderAllowExpertOptions，否则库拒绝）"});
     add({"J7",
          "jxl",
          "libjxl",
          Action::Error,
-         {"disable_perceptual_heuristics", "uses_original_profile"},
+         {"disable_perceptual_heuristics"},
          {},
          [](const EvalCtx &c) {
-             return c.b("disable_perceptual_heuristics", false) && c.has("uses_original_profile") &&
-                    !c.b("uses_original_profile", true);
+             return c.b("disable_perceptual_heuristics", false) && !c.lossless && !c.modular;
          },
          {},
-         "J7：disable_perceptual_heuristics=1 要求 uses_original_profile=true"
-         "（libjxl 拒绝 non-perceptual XYB）"});
-    add({"J7",
-         "jxl",
-         "libjxl",
-         Action::Warn,
-         {"disable_perceptual_heuristics", "uses_original_profile"},
-         {},
-         [](const EvalCtx &c) {
-             return c.b("disable_perceptual_heuristics", false) && !c.has("uses_original_profile");
-         },
-         {},
-         "J7：disable_perceptual_heuristics=1 需要 uses_original_profile=true；未显式设置时"
-         "按无损/Modular/带 ICC 推导，否则编码期会失败"});
-    add({"J8",
-         "jxl",
-         "libjxl",
-         Action::Warn,
-         {"uses_original_profile"},
-         {},
-         [](const EvalCtx &c) {
-             return c.has("uses_original_profile") && c.b("uses_original_profile", false) &&
-                    !c.lossless;
-         },
-         {},
-         "J8：有损编码下 uses_original_profile=true 可能显著变差（放弃 XYB 感知优化）"});
+         "J7：disable_perceptual_heuristics=1 仅适用于 non-XYB 路径（无损/Modular）；"
+         "有损 VarDCT 下 libjxl 必拒绝（encode.cc:1909-1915/2418-2423），请改用 Modular/无损"});
     add({"J9",
          "jxl",
          "libjxl",
@@ -1113,24 +1404,6 @@ std::vector<Rule> build_rules() {
          intrinsic_size_invalid,
          {},
          "J14：intrinsic_size 需为「宽x高」文本（两分量同时给出；0/空=不写；单边上限 2^30）"});
-    add({"J15",
-         "jxl",
-         "libjxl",
-         Action::Error,
-         {"buffering"},
-         {},
-         [](const EvalCtx &c) { return c.has("buffering") && c.i("buffering", -1) == 3; },
-         {},
-         "J15：buffering=3 已弃用（0.12 起可选 0/1/2）"});
-    add({"J16",
-         "jxl",
-         "libjxl",
-         Action::Warn,
-         {"noise"},
-         {},
-         [](const EvalCtx &c) { return c.b("noise", false); },
-         {},
-         "J16：noise 是旧式自适应噪声开关，已被 photon_noise 取代；建议优先用 photon_noise"});
     add({"J17",
          "jxl",
          "libjxl",
@@ -1144,16 +1417,23 @@ std::vector<Rule> build_rules() {
          {},
          "J17：HDR 色调映射组（intensity_target/min_nits/relative_to_max_display/"
          "linear_below）建议一起设置；非 HDR 工作流保持未设置/0"});
-    add({"J18",
-         "jxl",
-         "libjxl",
-         Action::Error,
-         {"codestream_level", "uses_original_profile"},
-         {},
-         jxl_level5_16bit_conflict,
-         {},
-         "J18：codestream_level=5 与 16 位 uses_original_profile（无损/Modular）不兼容；"
-         "需改为 level 10 或自动（-1）"});
+    // W2-T5（C22）：删除行对历史预设的显式报错（不静默接受、不静默套默认）。
+    // 每个键一条规则（文案点名键与原因）；drivers 留空 —— 这些键已不在声明面。
+    for (const RemovedJxlKey &removed : kJxlRemovedKeys) {
+        const std::string key(removed.key);
+        add({"J19",
+             "jxl",
+             "libjxl",
+             Action::Error,
+             {},
+             {},
+             // 同上：lambda 隐式 move ctor 的 noexcept 判定 + MSVC STL bad_array_new_length 误报。
+             // NOLINTNEXTLINE(bugprone-exception-escape)：MSVC STL 误报
+             [key](const EvalCtx &c) { return c.has(key); },
+             {},
+             "J19：已移除参数：" + key + "（" + std::string(removed.reason) +
+                 "），请从预设/参数集中删除该键"});
+    }
     return r;
 }
 
@@ -1190,10 +1470,10 @@ void apply_rule(const Rule &rule, const EvalCtx &c, RuleState &st) {
         }
         break;
     case Action::Warn:
-        st.warnings.push_back(rule.message);
+        st.warnings.push_back(rule.message_fn ? rule.message_fn(c) : rule.message);
         break;
     case Action::Error:
-        st.errors.push_back(rule.message);
+        st.errors.push_back(rule.message_fn ? rule.message_fn(c) : rule.message);
         break;
     }
 }
@@ -1230,14 +1510,12 @@ RuleState evaluate(const ParamContext &ctx, const ParamSet &values) {
     c.bitdepth = ctx.bitdepth;
     c.width = ctx.width;
     c.height = ctx.height;
-    // JXL 技术：显式 tech_id 优先；空 = lossless / Modular-only 键推断（与 enc_jxl 口径一致）。
+    // JXL 技术：显式 tech_id 优先；空 = lossless → Modular，否则 VarDCT。
+    // W2-T5（C22）：不再按「ParamSet 里有 Modular 键」推断技术（旧行为会把整条输出静默
+    // 切成 Modular）；跨技术残留键由 J1 报中文错误。
     c.tech = ctx.tech_id;
     if (c.format == "jxl") {
-        c.modular = c.lossless || params_indicate_modular(values);
-        if (ctx.tech_id == "modular")
-            c.modular = true;
-        else if (ctx.tech_id == "vardct" && !c.lossless)
-            c.modular = params_indicate_modular(values);
+        c.modular = c.lossless || ctx.tech_id == "modular";
     }
     for (const Rule &rule : rules())
         apply_rule(rule, c, st);

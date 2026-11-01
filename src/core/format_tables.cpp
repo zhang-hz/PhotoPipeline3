@@ -67,6 +67,19 @@ std::optional<ParamValue> lock_false_when_lossless(const ParamSet &s) {
     return std::nullopt;
 }
 
+// —— W2-T5（C22，docs/v0.4.0-design.md §7）：JXL 参数治理用谓词 ——
+// 危险/实验组的红字前缀（tooltip 富文本；Qt QToolTip 支持 HTML，见 paramform 的
+// setToolTip 路径）。红线口径 = 「不得作为自适应目标」（§9.4 禁止表 / W3-T3 注册表）。
+constexpr char kDangerPrefix[] =
+    "<span style=\"color:#c0392b\">【实验/危险 · 禁止作为自适应目标】</span><br>";
+// brotli_effort 只在 box_compress=1（Exif/XMP box 压缩）时才有意义（J5）。
+bool box_compress_is_on(const ParamSet &s) { return param_bool(s, "box_compress", false); }
+// codestream_level 改只读：恒锁 auto(-1)，实际 5/10 由 libjxl 按图像推导（J18 已随
+// 可编辑行退场而删除）。保留键本身以兼容旧预设（值恒 -1，产物零变化）。
+std::optional<ParamValue> lock_auto_codestream_level(const ParamSet &) {
+    return ParamValue{int64_t(-1)};
+}
+
 // —— R-244/245/246（M7-WP2）：JPEG 三个"假控件"的锁定谓词（数据驱动禁用态，不改 UI 代码）——
 // 语义：locked 谓词恒返回强制值 ⇒ 参数引擎 apply_locks 钉值、表单呈禁用态；禁用原因写进
 // tooltip（"不静默灰"口径）。三者对默认参数集均零改写（强制值 == 表默认值）⇒ 回归零漂移。
@@ -120,17 +133,19 @@ ParamDef jxl_effort_param(bool lossy_only) {
     p.lo = 1;
     // M8-A17（裁定登记 docs/m8-adjudications.md）：上限 10 → 11。libjxl 0.12 的
     // JXL_ENC_FRAME_SETTING_EFFORT 在 JxlEncoderAllowExpertOptions() 后接受 [1..11]
-    // （encode.cc:1667-1686；目录行 expert_options 驱动）；11 = 像素无损最省但极慢。
-    // 默认值 7 不动 ⇒ 既有产物零变化；effort=11 需要 expert_options=1，由 B1 预检
-    // （param_rules J6）拦截、编码器兜底（JxlEncoderFrameSettingsSetOption 报错）。
+    // （encode.cc:1667-1686）；11 = 像素无损极限压缩档，极慢。
+    // W2-T5（C22）现行事实：expert_options 目录行已退场 —— 编码器在 effort=11 时**自动**
+    // 调用 JxlEncoderAllowExpertOptions（enc_jxl.cpp），旧预检 J6 / 手开门控一并删除，故
+    // 11 直接可选、无需额外键；默认值 7 不动 ⇒ 既有产物零变化。
     p.hi = 11;
     p.step = 1;
     p.advanced = false;
     p.group = pp::kGroupCore;
     p.tooltip = "编码努力 effort（JXL_ENC_FRAME_SETTING_EFFORT，"
                 "jxl/encode.h:126-132）：1 lightning … 7 squirrel"
-                "（库默认）… 10 glacier；11 需先启用「允许专家选项」"
-                "（JxlEncoderAllowExpertOptions，M8-A17），不影响解码速度。";
+                "（库默认）… 10 glacier；11 = 像素无损极限压缩档（M8-A17），"
+                "编码器在 effort=11 时自动调用 JxlEncoderAllowExpertOptions"
+                "（W2-T5 起 expert_options 行退场，不再需要手动开启），不影响解码速度。";
     p.visible = lossy_only ? not_lossless : std::function<bool(const ParamSet &)>{};
     return p;
 }
@@ -156,18 +171,24 @@ ParamDef jxl_decoding_speed_param(bool lossy_only) {
 ParamDef jxl_codestream_level_param(bool lossy_only) {
     ParamDef p;
     p.key = "codestream_level";
-    p.label = "码流级别";
+    p.label = "码流级别（自动，只读）";
     p.type = ParamType::Enum;
-    // 第二轮审计 JXL-04：库默认 -1(auto)，显式 10 会给每个产物加 jxll box、无谓收窄兼容性。
+    // W2-T5（C22）：从可编辑面退场 —— 恒锁 auto(-1)。实际 level 由 libjxl 的
+    // VerifyLevelSettings 按图像推导（普通 8/16bit VarDCT→5；16 位 uses_original_profile
+    // 无损→10，encode.cc:1330-1333/556-625）；显式 10 只多一个 jxll box、显式 5 在 16 位
+    // 无损下会直接失败（J18 因此随可编辑行删除）。键保留在 schema 内只为旧预设兼容：
+    // 值恒 -1 ⇒ 产物逐字节不变；GUI 显示见 catalog 的只读行。
     p.def = int64_t(-1);
-    p.choices = {{"auto", int64_t(-1)}, {"5", int64_t(5)}, {"10", int64_t(10)}};
+    p.choices = {{"自动（库按图像推导：8 位 VarDCT→5；16 位无损→10）", int64_t(-1)}};
     p.advanced = true;
     p.group = pp::kGroupEncodeTools;
-    p.tooltip = "JPEG XL 码流级别（JxlEncoderSetCodestreamLevel，"
-                "jxl/encode.h:1348-1383）：-1=自动（库默认，按 basic "
-                "info 选择）、5=兼容性最广、10=解除限制（CMYK/32bit）；"
-                "默认 auto。";
-    p.visible = lossy_only ? not_lossless : std::function<bool(const ParamSet &)>{};
+    p.tooltip = "JPEG XL 码流级别（JxlEncoderSetCodestreamLevel，jxl/encode.h:1348-1383）："
+                "**只读/恒自动（-1）**。实际 level 由库按图像推导：普通 8 位/16 位 VarDCT→5；"
+                "16 位 uses_original_profile（无损/Modular）→10。显式 10 只额外写 jxll box；"
+                "显式 5 + 16 位无损会被库拒绝（encode.cc:556-625）。W2-T5 起本行不可编辑。";
+    p.visible = never_visible; // 可编辑控件隐藏；catalog 只读行负责呈现（见 jxl_catalog.inc）
+    p.locked = lock_auto_codestream_level;
+    (void)lossy_only;
     return p;
 }
 
@@ -215,30 +236,39 @@ ParamDef jxl_resampling_param(bool lossy_only) {
                  {"4", int64_t(4)},
                  {"8", int64_t(8)}};
     p.advanced = true;
-    p.group = pp::kGroupEncodeTools;
-    p.tooltip = "编码前降采样（JXL_ENC_FRAME_SETTING_RESAMPLING，"
-                "jxl/encode.h:140-146）：-1=编码器自选（库默认，低质量时才"
-                "降采样）、1=不降采样、2/4/8=按倍数降采样并在解码端升采样；"
-                "会降低有效分辨率。VarDCT/Modular 通用；无损时强制 1（JXL-01）。";
+    // W2-T5（C22）：移入「实验/危险」组（GUI 现有组名「调试/实验」），红字 tooltip；
+    // 注册表禁止作为自适应搜索目标（§9.4 禁止表；本组即机器可读标记）。
+    p.group = pp::catalog::kGroupDebug;
+    p.tooltip = std::string(kDangerPrefix) +
+                "编码前降采样（JXL_ENC_FRAME_SETTING_RESAMPLING，jxl/encode.h:140-146）："
+                "-1=编码器自选（库默认，低质量时才降采样）、1=不降采样、2/4/8=按倍数降采样并在"
+                "解码端升采样；**会永久丢失分辨率**（实测 d0.5 + resampling=2/4 评分 -28/-34），"
+                "降采样后的像素无法恢复。VarDCT/Modular 通用；无损时强制 1（JXL-01）。";
     p.visible = not_lossless;
     p.locked = lock_one_when_lossless;
     return p;
 }
 
-ParamDef jxl_group_order_param(bool lossy_only) {
+// W2-T5（C22）：brotli_effort 修正 Tech 作用域 —— 它作用于 JxlEncoderAddBox 的 brob
+// 压缩（encode.cc:1142-1155），与 VarDCT/Modular 路径无关，故 Both；仅 box_compress=1
+// 时可见/有意义（J5）。保留而非删除的证据：box_compress=1 + 显式 brotli_effort 0/11 在
+// Modular 下实测产物相差 14B（侦察报告 b19/b20：5,539,838 vs 5,539,824），是真实编码旋钮。
+ParamDef jxl_brotli_effort_param() {
     ParamDef p;
-    p.key = "group_order";
-    p.label = "256×256 组顺序";
-    p.type = ParamType::Enum;
+    p.key = "brotli_effort";
+    p.label = "Brotli 努力";
+    p.type = ParamType::Int;
     p.def = int64_t(-1);
-    p.choices = {{"auto", int64_t(-1)}, {"scanline", int64_t(0)}, {"center", int64_t(1)}};
+    p.lo = -1;
+    p.hi = 11;
+    p.step = 1;
     p.advanced = true;
-    p.group = pp::kGroupEncodeTools;
-    p.tooltip = "256×256 区域在码流中的存放顺序"
-                "（JXL_ENC_FRAME_SETTING_GROUP_ORDER，jxl/encode.h:210-214）："
-                "-1=编码器默认、0=扫描线顺序、1=中心优先（影响渐进渲染），"
-                "不改变画质。VarDCT/Modular 通用。";
-    p.visible = lossy_only ? not_lossless : std::function<bool(const ParamSet &)>{};
+    p.group = pp::catalog::kGroupStream;
+    p.tooltip = "Brotli 努力（JXL_ENC_FRAME_SETTING_BROTLI_EFFORT，jxl/encode.h:329-334）："
+                "-1=默认（brob box 取 4）、0 最快 … 11 最慢。只影响 Exif/XMP 元数据 box 的"
+                "Brotli 压缩（box_compress=1 时生效；VarDCT/Modular 通用，W2-T5 修作用域），"
+                "与像素编码无关。";
+    p.visible = box_compress_is_on;
     return p;
 }
 
@@ -443,77 +473,33 @@ const std::vector<FormatDef> &static_formats() {
                              .params = {
                                  jxl_effort_param(true),        // R-209：工厂单点声明
                                  jxl_decoding_speed_param(true), // R-209
-                                 jxl_codestream_level_param(true), // R-209
+                                 jxl_codestream_level_param(true), // R-209（只读/恒 auto）
                                  jxl_distance_param(true),      // R-209
+                                 // W2-T5（C22）：实验/危险组（GUI 现有组名「调试/实验」）。
                                  ParamDef{.key = "photon_noise", .label = "感光噪声",
                                           .type = ParamType::Float, .def = 0.0, .lo = 0.0,
                                           .hi = 6400.0, .step = 100.0, .choices = {}, .advanced = true,
-                                          .tooltip = "Photon noise 胶片颗粒模拟"
+                                          .tooltip = std::string(kDangerPrefix) +
+                                                     "Photon noise 胶片颗粒模拟"
                                                      "（JXL_ENC_FRAME_SETTING_PHOTON_NOISE，"
                                                      "jxl/encode.h:166-171）：100=轻微、3200=明显，库默认 "
-                                                     "0；头文件未规定上限，6400 为 UI 上限。",
-                                          .visible = not_lossless, .locked = {}, .group = pp::kGroupNoise},
+                                                     "0；头文件未规定上限，6400 为 UI 上限。**会系统性降低"
+                                                     "评分**（实测 d0.5 + 3200 分数 88.29→84.95，−3.34），"
+                                                     "属创意效果而非压缩参数。",
+                                          .visible = not_lossless, .locked = {}, .group = pp::catalog::kGroupDebug},
+                                 // W2-T5（C22）：epf 默认 2 → -1（跟随库启发式）。库按 distance 选
+                                 // 0..3（阈值 0.7/1.5/4.0，enc_frame.cc:312-357）；-1 由编码器
+                                 // 跳过下发（Int < 0 = 库默认）。旧预设里的显式 0..3 仍逐字有效。
                                  ParamDef{.key = "epf", .label = "边缘保持滤波",
-                                          .type = ParamType::Int, .def = int64_t(2), .lo = -1,
+                                          .type = ParamType::Int, .def = int64_t(-1), .lo = -1,
                                           .hi = 3, .step = 1, .choices = {}, .advanced = true,
                                           .tooltip = "边缘保持滤波（JXL_ENC_FRAME_SETTING_EPF，"
-                                                     "jxl/encode.h:189-192）：-1=编码器自选（库默认）、"
-                                                     "0–3=强度；catalog 默认 2。",
+                                                     "jxl/encode.h:189-192）：-1=跟随库启发式"
+                                                     "（按 distance 自动选 0…3，默认）、0–3=强制强度。"
+                                                     "W2-T5 起默认 -1；旧预设的显式值仍有效。",
                                           .visible = not_lossless, .locked = {}, .group = pp::kGroupEncodeTools},
-                                 ParamDef{.key = "keep_invisible", .label = "保留不可见像素",
-                                          .type = ParamType::Bool, .def = false, .choices = {}, .advanced = true,
-                                          .tooltip = "保留不可见像素 RGB（JXL_ENC_FRAME_SETTING_KEEP_INVISIBLE，"
-                                                     "jxl/encode.h:205-208）：库以 -1 表示默认（无损=1、"
-                                                     "有损=0）；Bool 无法表达 -1。有损默认 false（避免 3.1× "
-                                                     "体积）；无损下该行隐藏。",
-                                          .visible = not_lossless, .locked = {}, .group = pp::kGroupEncodeTools},
-                                 ParamDef{.key = "dots", .label = "点阵生成",
-                                          .type = ParamType::Bool, .def = true, .choices = {},
-                                          .advanced = true,
-                                          .tooltip = "点阵生成（JXL_ENC_FRAME_SETTING_DOTS，"
-                                                     "jxl/encode.h:179-182）：库以 -1 表示默认（编码器自选）；"
-                                                     "Bool 无法表达 -1，本表取 true（不主动关闭编码工具）。",
-                                          .visible = not_lossless, .locked = {}, .group = pp::kGroupEncodeTools},
-                                 ParamDef{.key = "patches", .label = "图块复用",
-                                          .type = ParamType::Bool, .def = true, .choices = {},
-                                          .advanced = true,
-                                          .tooltip = "图块/贴片复用（JXL_ENC_FRAME_SETTING_PATCHES，"
-                                                     "jxl/encode.h:184-187）：库以 -1 表示默认（编码器自选）；"
-                                                     "Bool 无法表达 -1，本表取 true。",
-                                          .visible = not_lossless, .locked = {}, .group = pp::kGroupEncodeTools},
-                                 ParamDef{.key = "gaborish", .label = "Gaborish 滤波",
-                                          .type = ParamType::Bool, .def = true, .choices = {},
-                                          .advanced = true,
-                                          .tooltip = "Gaborish 滤波器（JXL_ENC_FRAME_SETTING_GABORISH，"
-                                                     "jxl/encode.h:194-197）：库以 -1 表示默认（编码器自选，"
-                                                     "通常启用）；Bool 无法表达 -1，本表取 true。",
-                                          .visible = not_lossless, .locked = {}, .group = pp::kGroupEncodeTools},
-                                 ParamDef{.key = "progressive_ac", .label = "AC 渐进（谱进）",
-                                          .type = ParamType::Bool, .def = false, .choices = {},
-                                          .advanced = true,
-                                          .tooltip = "VarDCT AC 系数谱渐进"
-                                                     "（JXL_ENC_FRAME_SETTING_PROGRESSIVE_AC，jxl/encode.h:232-236）："
-                                                     "-1=编码器自选（库默认）、0=关闭、1=开启；只影响解码渐进性，"
-                                                     "不改变最终画质。",
-                                          .visible = not_lossless, .locked = {}, .group = pp::kGroupProgressive},
-                                 ParamDef{.key = "qprogressive_ac", .label = "AC 渐进（量化位）",
-                                          .type = ParamType::Bool, .def = false, .choices = {},
-                                          .advanced = true,
-                                          .tooltip = "VarDCT AC 最低有效位量化渐进"
-                                                     "（JXL_ENC_FRAME_SETTING_QPROGRESSIVE_AC，"
-                                                     "jxl/encode.h:238-242）：-1=编码器自选（库默认）、0=关闭、"
-                                                     "1=开启。",
-                                          .visible = not_lossless, .locked = {}, .group = pp::kGroupProgressive},
-                                 ParamDef{.key = "progressive_dc", .label = "DC 渐进级数",
-                                          .type = ParamType::Int, .def = int64_t(-1), .lo = -1,
-                                          .hi = 2, .step = 1, .choices = {}, .advanced = true,
-                                          .tooltip = "VarDCT DC 低分辨率渐进层"
-                                                     "（JXL_ENC_FRAME_SETTING_PROGRESSIVE_DC，"
-                                                     "jxl/encode.h:244-248）：-1=编码器自选（库默认）、0=关闭、"
-                                                     "1=额外 64×64 层、2=512×512 与 64×64 层。",
-                                          .visible = not_lossless, .locked = {}, .group = pp::kGroupProgressive},
                                  jxl_resampling_param(true),   // R-209：工厂单点声明
-                                 jxl_group_order_param(true),  // R-209
+                                 jxl_brotli_effort_param(),    // W2-T5：作用域 Both + 仅 box_compress=1
                                  lossless_param("JxlEncoderSetFrameLossless(true)（jxl/encode.h:1411-"
                                                 "1424，库会强制走 Modular 路径）"),
                               } },
@@ -525,16 +511,17 @@ const std::vector<FormatDef> &static_formats() {
                                  jxl_distance_param(false),       // R-209
                                  ParamDef{.key = "color_transform", .label = "色彩变换",
                                           .type = ParamType::Enum, .def = std::string("auto"),
+                                          // W2-T5（C22）：枚举收窄为 auto/YCoCg。C API 会把
+                                          // None/XYB/YCbCr 依 xyb_encoded 覆写（encode.cc:923-930，
+                                          // 实测 b37 XYB == 默认逐字节）⇒ 三档结构性 no-op，删除。
                                           .choices = {{"auto", std::string("auto")},
-                                                      {"None", std::string("None")},
-                                                      {"YCoCg", std::string("YCoCg")},
-                                                      {"XYB", std::string("XYB")},
-                                                      {"YCbCr", std::string("YCbCr")}},
+                                                      {"YCoCg", std::string("YCoCg")}},
                                           .advanced = true,
-                                          .tooltip = "色彩变换：auto（-1，库默认）不设置，交给 libjxl 按 "
-                                                     "uses_original_profile 选择；None/XYB/YCbCr 在当前 C API "
-                                                     "下会被库覆写（等于不设置），只有 YCoCg 强制全局 RCT、"
-                                                     "通常更大。无损建议 auto。",
+                                          .tooltip = "色彩变换：auto=不设置、交给 libjxl 按 "
+                                                     "uses_original_profile 自动选择（库默认）；"
+                                                     "YCoCg=强制全局 RCT（通常体积更大，实测无损 "
+                                                     "9.80MB→11.15MB）。None/XYB/YCbCr 三档在 C API 下"
+                                                     "会被库覆写、等于不设置（W2-T5 已从枚举删除）。",
                                           .visible = {}, .locked = {}, .group = pp::kGroupEncodeTools},
                                  ParamDef{.key = "modular_group_size", .label = "组尺寸",
                                           .type = ParamType::Int, .def = int64_t(-1), .lo = -1,
@@ -566,35 +553,24 @@ const std::vector<FormatDef> &static_formats() {
                                                      "jxl/encode.h:267-270）：-1=默认、0=关闭、1=开启；"
                                                      "有损，无损档保持关闭。",
                                           .visible = {}, .locked = lock_false_when_lossless, .group = pp::kGroupEncodeTools},
-                                 ParamDef{.key = "brotli_effort", .label = "Brotli 努力",
-                                          .type = ParamType::Int, .def = int64_t(-1), .lo = -1,
-                                          .hi = 11, .step = 1, .choices = {}, .advanced = true,
-                                          .tooltip = "Brotli 努力（JXL_ENC_FRAME_SETTING_BROTLI_EFFORT，"
-                                                     "jxl/encode.h:329-334）：-1=默认（brob box 取 4）、"
-                                                     "0 最快 … 11 最慢；本工具不产 brob/JPEG 重压缩 box，"
-                                                     "该参数无效果（JXL-09）→ 隐藏。",
-                                          .visible = never_visible, .locked = {}, .group = pp::kGroupEncodeTools},
-                                 ParamDef{.key = "responsive", .label = "响应式渐进",
-                                          .type = ParamType::Bool, .def = false, .choices = {},
-                                          .advanced = true,
-                                          .tooltip = "Modular 模式的响应式/渐进编码"
-                                                     "（JXL_ENC_FRAME_SETTING_RESPONSIVE，jxl/encode.h:227-230，"
-                                                     "头文件语义为 modular）；库默认 -1（编码器自选），"
-                                                     "Bool 无法表达 -1。",
-                                          .visible = {}, .locked = {}, .group = pp::kGroupEncodeTools},
+                                 jxl_brotli_effort_param(), // W2-T5：作用域 Both + 仅 box_compress=1
                                  ParamDef{.key = "channel_colors_global_percent", .label = "全局调色板阈值 %",
-                                          .type = ParamType::Int, .def = int64_t(-1), .lo = -1,
-                                          .hi = 100, .step = 1, .choices = {}, .advanced = true,
+                                          // W2-T5（C22）：Int→Float —— libjxl 只提供 Float setter
+                                          // （encode.cc:1960-1972），旧实现靠隐式加宽。
+                                          .type = ParamType::Float, .def = -1.0, .lo = -1.0,
+                                          .hi = 100.0, .step = 1.0, .choices = {}, .advanced = true,
                                           .tooltip = "全图通道调色板阈值（JXL_ENC_FRAME_SETTING_"
                                                      "CHANNEL_COLORS_GLOBAL_PERCENT，jxl/encode.h:250-254）："
-                                                     "-1=编码器默认、0–100=颜色数低于该百分比时启用全局调色板。",
+                                                     "-1=编码器默认、0–100=颜色数低于该百分比时启用全局调色板"
+                                                     "（Float 类型，W2-T5 修正）。",
                                           .visible = {}, .locked = {}, .group = pp::kGroupEncodeTools},
                                  ParamDef{.key = "channel_colors_group_percent", .label = "局部调色板阈值 %",
-                                          .type = ParamType::Int, .def = int64_t(-1), .lo = -1,
-                                          .hi = 100, .step = 1, .choices = {}, .advanced = true,
+                                          .type = ParamType::Float, .def = -1.0, .lo = -1.0,
+                                          .hi = 100.0, .step = 1.0, .choices = {}, .advanced = true,
                                           .tooltip = "每组通道调色板阈值（JXL_ENC_FRAME_SETTING_"
                                                      "CHANNEL_COLORS_GROUP_PERCENT，jxl/encode.h:256-260）："
-                                                     "-1=编码器默认、0–100=颜色数低于该百分比时启用局部调色板。",
+                                                     "-1=编码器默认、0–100=颜色数低于该百分比时启用局部调色板"
+                                                     "（Float 类型，W2-T5 修正）。",
                                           .visible = {}, .locked = {}, .group = pp::kGroupEncodeTools},
                                  ParamDef{.key = "modular_ma_tree_learning_percent", .label = "MA 树学习比例 %",
                                           .type = ParamType::Float, .def = -1.0, .lo = -1.0,
@@ -612,7 +588,6 @@ const std::vector<FormatDef> &static_formats() {
                                                      "-1=默认、0–11 合法；推荐 0–3。",
                                           .visible = {}, .locked = {}, .group = pp::kGroupEncodeTools},
                                  jxl_resampling_param(false),  // R-209：工厂单点声明
-                                 jxl_group_order_param(false), // R-209
                                  lossless_param("JxlEncoderSetFrameLossless(true)（jxl/encode.h:1411-"
                                                 "1424；Modular+lossless 即真无损）"),
                               } } } } },

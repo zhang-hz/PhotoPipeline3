@@ -15,8 +15,9 @@
 // 校验），但 `src/ui/preset_io.cpp` 用输出级 JSON 字段 `heif_profile` **持久化该整数**
 // （test_presets.cpp 亦锁定）。因此**既有编号 0..6 不得重排**，新信号只能追加在末尾：
 //   Auto=0 / Main=1 / Main10=2 / Main12=3 / MainStill=4 / High=5 / Professional=6，
-//   新增 RExt 信号 7..15。Main12 保留为“12 位 RExt（色度随输入）”的兼容别名；UI 不再
-//   展示它，新预设请使用 Rext420_12 / Rext422_12 / Rext444_12。
+//   新增 RExt 信号 7..15，W2-T2 的 still 变体 16..21。Main12 保留为“12 位 RExt（色度随
+//   输入）”的兼容别名；UI 不再展示它，新预设请使用 Rext420_12 / Rext422_12 / Rext444_12。
+//   旧版本读新预设里的 int 16..21 会走 heif_profile_from_int 的越界失败（显式错误，不静默）。
 //
 // 本头的 API：
 //   1. heif_derive_signal_profile / heif_profile_compatible_for：**真实信号**的推导与反查
@@ -54,9 +55,22 @@ enum class HeifProfile : std::uint8_t {
     Rext444_8 = 13,
     Rext444_10 = 14,
     Rext444_12 = 15,
+    // —— 追加区 2（W2-T2 / C18：still 变体；编号 16–21 追加，不重排）——
+    // 语义（docs/v0.4.0-design.md §6.2.1，标准事实如实标注）：
+    //   * RExt still 变体 = idc=4 + intra=1 + one_picture_only=1 + 对应 max_12/10/8/422/420
+    //     上界位（x265 entropy.cpp:747-755 写出）→ 17..21 全部是**插件原生**（不注入参数）；
+    //   * Main10Still（16）在 PTL 里**没有** still 位（非 RExt 的 44 位是保留位，恒 0；
+    //     x265 level.cpp:100 注释 "note there is no 10bit still picture profile"）→ 只能靠
+    //     SPS 的 DPB 约束证明单图语义，实测不满足（见 heif_profile_still_available）。
+    Main10Still = 16,     // idc 2 / 420 / 10；走 Main10 注入路径；实测不可用（UI 置灰）
+    Main422_10Still = 17, // idc 4 / 422 / 10
+    Main422_12Still = 18, // idc 4 / 422 / 12
+    Main444_Still = 19,   // idc 4 / 444 / 8（标准名无 "8" 后缀）
+    Main444_10Still = 20, // idc 4 / 444 / 10（= 既有 Rext444_10 的同一真实信号）
+    Main444_12Still = 21, // idc 4 / 444 / 12
 };
 
-inline constexpr int kHeifProfileCount = 16;
+inline constexpr int kHeifProfileCount = 22;
 
 // ParamSet 承载键（**保留键**："__" 前缀 ⇒ 不参与未知参数校验、不落预设 params、不进日志
 // 快照；预设的输出级 `heif_profile` 字段另行持久化）。值 = HeifProfile 的 int64_t 序号。
@@ -87,6 +101,12 @@ inline bool heif_profile_is_hevc_signal(HeifProfile p) {
     case HeifProfile::Rext444_8:
     case HeifProfile::Rext444_10:
     case HeifProfile::Rext444_12:
+    case HeifProfile::Main10Still:
+    case HeifProfile::Main422_10Still:
+    case HeifProfile::Main422_12Still:
+    case HeifProfile::Main444_Still:
+    case HeifProfile::Main444_10Still:
+    case HeifProfile::Main444_12Still:
         return true;
     case HeifProfile::Auto:
     case HeifProfile::High:
@@ -98,6 +118,49 @@ inline bool heif_profile_is_hevc_signal(HeifProfile p) {
 
 inline bool heif_profile_is_avif_signal(HeifProfile p) {
     return p == HeifProfile::Main || p == HeifProfile::High || p == HeifProfile::Professional;
+}
+
+// W2-T2（C18）：still 变体档位（编号 16..21）。语义 = "单图专用"：
+//   * 17..21（RExt）：码流必须有 intra=1 + one_picture_only=1（SPS PTL 的 48 位 constraint）；
+//   * 16（Main10Still）：PTL 无 still 位，靠 SPS 的 DPB 约束（见 heif_profile_still_available）。
+// 这些档位只在 still=true（本管线恒为静止图）时可用；still=false 的兼容门控直接拒绝。
+inline bool heif_profile_is_still_variant(HeifProfile p) {
+    switch (p) {
+    case HeifProfile::Main10Still:
+    case HeifProfile::Main422_10Still:
+    case HeifProfile::Main422_12Still:
+    case HeifProfile::Main444_Still:
+    case HeifProfile::Main444_10Still:
+    case HeifProfile::Main444_12Still:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// still 变体的**实测可用性**（与「信号兼容」分开：兼容 = 位深/色度/idc 能对上，可用性 =
+// 本编码后端当前能不能真的写出 still 语义）。纯函数，UI 置灰与报告同源。
+//
+// Main10Still（16）不可用，理由全部是可复核事实（docs/v0.4.0-design.md §6.2.2 + W2-T2 实测）：
+//   * x265 4.3 的 10 位 4:2:0 **没有 still profile**（level.cpp:100 注释原文
+//     "note there is no 10bit still picture profile"），idc=2 的 44 位是保留位，不承载
+//     intra/one_picture；
+//   * 要拿到 idc=2 必须让 x265 走非 intra 分支（注入 total-frames=2/keyint=2），于是 SPS 的
+//     DPB 变成 max_dec_pic_buffering_minus1=4 / num_reorder_pics=2（W2-T2 实测，要求 0/0），
+//     单图约束无法成立 → 只能置灰，不能伪造。
+inline bool heif_profile_still_available(HeifProfile p, std::string *reason_zh) {
+    if (p == HeifProfile::Main10Still) {
+        if (reason_zh != nullptr)
+            *reason_zh = "「Main 10 Still Picture」（idc 2 / 10 位 / 4:2:0）不可用：HEVC 的 "
+                         "Main10 PTL 没有 still 约束位（非 RExt 的 44 位是保留位，x265 4.3 "
+                         "level.cpp:100 亦注明 10 位没有 still profile），而写出 idc=2 必须走非 "
+                         "intra 参数，SPS 实测 DPB 为 max_dec_pic_buffering_minus1=4 / "
+                         "num_reorder_pics=2（要求 0/0），单图语义无法成立。请改选 Main10"
+                         "（同 idc 2，普通单图信号）或 Main 4:4:4 10 Still Picture 等 RExt "
+                         "still 档位。";
+        return false;
+    }
+    return true;
 }
 
 // 档位 → 期望信号。HEVC 时 profile_idc = general_profile_idc（1 Main / 2 Main10 /
@@ -160,6 +223,26 @@ inline bool heif_profile_signal(HeifProfile p, HeifSignalSpec *out) {
         s = {true, 4, 3, 10};
         break;
     case HeifProfile::Rext444_12:
+        s = {true, 4, 3, 12};
+        break;
+    // —— W2-T2 still 变体（C18）：idc/chroma/bitdepth 与对应 RExt 档位同信号；still 语义在
+    //    编码后由 SPS PTL/DPB 断言（见 heif_capability.h 的 heif_parse_sps_ptl）。——
+    case HeifProfile::Main10Still:
+        s = {true, 2, 1, 10};
+        break;
+    case HeifProfile::Main422_10Still:
+        s = {true, 4, 2, 10};
+        break;
+    case HeifProfile::Main422_12Still:
+        s = {true, 4, 2, 12};
+        break;
+    case HeifProfile::Main444_Still:
+        s = {true, 4, 3, 8};
+        break;
+    case HeifProfile::Main444_10Still:
+        s = {true, 4, 3, 10};
+        break;
+    case HeifProfile::Main444_12Still:
         s = {true, 4, 3, 12};
         break;
     }
@@ -269,23 +352,39 @@ inline std::string heif_profile_label(HeifProfile p) {
     case HeifProfile::Professional:
         return "Professional（AV1 · 12 位 / 4:2:2）";
     case HeifProfile::Rext420_8:
-        return "Main 4:2:0 8（idc 4）";
+        return "Main Intra（4:2:0 8；idc 4；非 still）";
     case HeifProfile::Rext420_10:
         return "Main 4:2:0 10 Intra（idc 4）";
     case HeifProfile::Rext420_12:
         return "Main 4:2:0 12 Intra（idc 4）";
     case HeifProfile::Rext422_8:
-        return "Main 4:2:2 8（idc 4）";
+        // 标准没有 "4:2:2 8" profile：8 位是 Main 4:2:2 10 的子集（idc 4 + max_8bit=1）。
+        return "Main 4:2:2 10（8 位信号；idc 4）";
     case HeifProfile::Rext422_10:
         return "Main 4:2:2 10（idc 4）";
     case HeifProfile::Rext422_12:
         return "Main 4:2:2 12（idc 4）";
     case HeifProfile::Rext444_8:
-        return "Main 4:4:4 8（idc 4）";
+        // 标准名是 Main 4:4:4（无 "8" 后缀）；8 位是该 profile 的子集。
+        return "Main 4:4:4（8 位；idc 4）";
     case HeifProfile::Rext444_10:
         return "Main 4:4:4 10（idc 4）";
     case HeifProfile::Rext444_12:
         return "Main 4:4:4 12（idc 4）";
+    // —— W2-T2 still 变体（C18 / §6.2.2）：短标签 + idc；完整信号说明见
+    //    heif_profile_tooltip（UI 下拉 item 的 tooltip 全文，C19）——
+    case HeifProfile::Main10Still:
+        return "Main 10 Still Picture（idc 2 · 10 位 · 4:2:0）";
+    case HeifProfile::Main422_10Still:
+        return "Main 4:2:2 10 Still Picture（idc 4）";
+    case HeifProfile::Main422_12Still:
+        return "Main 4:2:2 12 Still Picture（idc 4）";
+    case HeifProfile::Main444_Still:
+        return "Main 4:4:4 Still Picture（idc 4）";
+    case HeifProfile::Main444_10Still:
+        return "Main 4:4:4 10 Still Picture（idc 4）";
+    case HeifProfile::Main444_12Still:
+        return "Main 4:4:4 12 Still Picture（idc 4）";
     }
     return "自动";
 }
@@ -310,6 +409,113 @@ inline std::string heif_profile_label_for(bool avif, HeifProfile p) {
     return avif ? heif_profile_label_avif(p) : heif_profile_label(p);
 }
 
+// W2-T2（C18/C19）：档位下拉的**完整信号说明**（UI item tooltip 全文；短标签见
+// heif_profile_label_for）。口径 = docs/v0.4.0-design.md §6.2.1 / §6.2.4：
+//   * 标准事实（idc / 色度 / 位深 / still 语义 / 编码路径）如实写，不承诺未验证的东西；
+//   * RExt 档位一律带 Apple 风险句（RExt 不在 Apple 文档集 → iPhone 接受度未验证）；
+//   * 规范 PDF 复核是本环境的开放项 R-2，still 档的官方名用「（待复核）」标注。
+inline std::string heif_profile_tooltip(bool avif, HeifProfile p) {
+    if (avif) {
+        switch (p) {
+        case HeifProfile::Main:
+            return "AV1 Main：8/10 位 · 4:2:0/4:0:0（AV1 seq_profile 0）；由插件按色度/位深自选。";
+        case HeifProfile::High:
+            return "AV1 High：8/10 位 · 4:4:4（seq_profile 1）；由插件按色度自选。";
+        case HeifProfile::Professional:
+            return "AV1 Professional：12 位或 4:2:2（seq_profile 2）；兼容性最差。";
+        case HeifProfile::Auto:
+            return "自动：插件按位深/色度自选 AV1 档位（4:2:2 或 >10 位→Professional、"
+                   "4:4:4→High、其余→Main）。";
+        default:
+            return "该档位是 HEIF/HEVC 的静图信号，不能用于 AVIF。";
+        }
+    }
+    const std::string apple_rext =
+        "Apple：RExt 档不在 Apple 文档集内，iPhone 接受度未验证（不做承诺）。";
+    switch (p) {
+    case HeifProfile::Auto:
+        return "自动：插件按位深/色度自选真实信号（HEVC 8 位 4:2:0 静图→Main Still Picture "
+               "idc 3；10/12 位 4:2:0→RExt idc 4；4:2:2/4:4:4→RExt idc 4）；编码后用 hvcC "
+               "+ SPS 回读校验。";
+    case HeifProfile::Main:
+        return "Main：idc 1 · 4:2:0 · 8 位；插件原生会写 Main Still Picture（idc 3），本档由 "
+               "enc_heif 注入 x265 total-frames=2 / keyint=2 / repeat-headers=1 得到。"
+               "Apple 文档化。";
+    case HeifProfile::Main10:
+        return "Main10：idc 2 · 4:2:0 · 10 位；由注入 total-frames=2 / keyint=2 / "
+               "repeat-headers=1 得到（插件原生 10 位静图是 RExt idc 4）。Apple HEIC 参考信号。";
+    case HeifProfile::Main12:
+        return "Main12：12 位 RExt（idc 4）的兼容别名，色度随输入；新预设请改用显式 "
+               "Rext420_12 / Rext422_12 / Rext444_12。";
+    case HeifProfile::MainStill:
+        return "Main Still Picture：idc 3 · 4:2:0 · 8 位；插件原生默认（mainstillpicture），"
+               "Apple 文档化，兼容性最好。";
+    case HeifProfile::Rext420_8:
+        return "Main Intra：idc 4 · 4:2:0 · 8 位；注入 total-frames=2 关掉 "
+               "one_picture_only_minus1（否则 x265 写 idc 3），因此信号是「Main Intra」，"
+               "标准没有 Main 4:2:0 8、也没有 4:2:0 8 的 still profile。" +
+               apple_rext;
+    case HeifProfile::Rext420_10:
+        return "Main 4:2:0 10 Intra：idc 4 · 4:2:0 · 10 位；x265 静图原生默认（10 位 4:2:0 "
+               "没有 still profile）。部分工具把它显示成 Main10，但码流 idc 是 4。" +
+               apple_rext;
+    case HeifProfile::Rext420_12:
+        return "Main 4:2:0 12 Intra：idc 4 · 4:2:0 · 12 位；需较新解码器。" + apple_rext;
+    case HeifProfile::Rext422_8:
+        return "Main 4:2:2 10（8 位信号）：idc 4 · 4:2:2 · 8 位；标准没有 4:2:2 8 档，8 位是 "
+               "Main 4:2:2 10 的子集（max_8bit=1）。" +
+               apple_rext;
+    case HeifProfile::Rext422_10:
+        return "Main 4:2:2 10：idc 4 · 4:2:2 · 10 位；插件原生。" + apple_rext;
+    case HeifProfile::Rext422_12:
+        return "Main 4:2:2 12：idc 4 · 4:2:2 · 12 位；插件原生。" + apple_rext;
+    case HeifProfile::Rext444_8:
+        return "Main 4:4:4（8 位）：idc 4 · 4:4:4 · 8 位；标准名是 Main 4:4:4（无 “8” 后缀），"
+               "8 位是该 profile 的子集。" +
+               apple_rext;
+    case HeifProfile::Rext444_10:
+        return "Main 4:4:4 10：idc 4 · 4:4:4 · 10 位；插件原生。" + apple_rext;
+    case HeifProfile::Rext444_12:
+        return "Main 4:4:4 12：idc 4 · 4:4:4 · 12 位；插件原生。" + apple_rext;
+    // —— W2-T2 still 变体 ——
+    case HeifProfile::Main10Still: {
+        std::string why;
+        (void)heif_profile_still_available(p, &why);
+        return "Main 10 Still Picture（官方名待规范复核 R-2）：idc 2 · 4:2:0 · 10 位。"
+               "HEVC 的 Main10 PTL 没有 still 约束位（非 RExt 的 44 位是保留位），只能靠 SPS "
+               "的 DPB 约束证明单图语义 —— 实测不满足，本档不可用（UI 置灰）。" +
+               why;
+    }
+    case HeifProfile::Main422_10Still:
+        return "Main 4:2:2 10 Still Picture（官方名待规范复核 R-2）：idc 4 · 4:2:2 · 10 位；"
+               "码流约束 = intra=1 + one_picture_only=1 + max_10bit/max_422chroma 上界位。"
+               "插件原生（不注入参数）。" +
+               apple_rext;
+    case HeifProfile::Main422_12Still:
+        return "Main 4:2:2 12 Still Picture（官方名待规范复核 R-2）：idc 4 · 4:2:2 · 12 位；"
+               "码流约束 = intra=1 + one_picture_only=1；插件原生。" +
+               apple_rext;
+    case HeifProfile::Main444_Still:
+        return "Main 4:4:4 Still Picture（官方名待规范复核 R-2）：idc 4 · 4:4:4 · 8 位；"
+               "码流约束 = intra=1 + one_picture_only=1 + max_8bit 上界位；插件原生。" +
+               apple_rext;
+    case HeifProfile::Main444_10Still:
+        return "Main 4:4:4 10 Still Picture（官方名待规范复核 R-2）：idc 4 · 4:4:4 · 10 位；"
+               "码流约束 = intra=1 + one_picture_only=1；插件原生 —— 与既有 Rext444_10 是**同一"
+               "真实信号**（x265 日志把 4:4:4 10 位 still 叫 “Main 4:4:4 10 Intra”，是日志命名"
+               "遗留）。" +
+               apple_rext;
+    case HeifProfile::Main444_12Still:
+        return "Main 4:4:4 12 Still Picture（官方名待规范复核 R-2）：idc 4 · 4:4:4 · 12 位；"
+               "码流约束 = intra=1 + one_picture_only=1；插件原生。" +
+               apple_rext;
+    case HeifProfile::High:
+    case HeifProfile::Professional:
+        return "AV1 专用档位，不能用于 HEIF。";
+    }
+    return std::string();
+}
+
 // 严格（格式感知）反查：want 能否由该格式的（位深, 色度, 静止图）真实产出。
 // - Auto 恒 true；AVIF 只接受 Main/High/Professional；HEIF 只接受 HEVC 信号档位。
 // - 不一致 → false，err_zh 给出可操作的中文原因（档位/位深/色度三项逐条点名）。
@@ -320,7 +526,8 @@ inline bool heif_profile_compatible_for(bool avif, HeifProfile want, int bit_dep
     HeifProfile checked = HeifProfile::Auto;
     if (!heif_profile_from_int(static_cast<int64_t>(want), &checked)) {
         if (err_zh != nullptr)
-            *err_zh = "编码档位枚举值越界（合法 0..15）。";
+            *err_zh =
+                "编码档位枚举值越界（合法 0.." + std::to_string(kHeifProfileCount - 1) + "）。";
         return false;
     }
     if (avif) {
@@ -345,6 +552,14 @@ inline bool heif_profile_compatible_for(bool avif, HeifProfile want, int bit_dep
         if (err_zh != nullptr)
             *err_zh = "所选编码档位「" + heif_profile_label(want) +
                       "」是 AVIF 专用档位，不能用于 HEIF。请改选 HEIF 的真实信号档位或「自动」。";
+        return false;
+    }
+    // W2-T2（C18）：still 变体（16..21）与 Main Still Picture 一样只适用于静止图输出。
+    // 本管线恒为静止图（still=true），这条门控是给 AVIF/序列帧/未来路径的显式拒绝面。
+    if (heif_profile_is_still_variant(want) && !still) {
+        if (err_zh != nullptr)
+            *err_zh = "编码档位「" + heif_profile_label(want) +
+                      "」是 still（单图）变体，只适用于静止图输出，当前编码不是静止图。";
         return false;
     }
     if (want == HeifProfile::MainStill && !still) {
@@ -394,8 +609,10 @@ inline bool heif_profile_compatible_for(bool avif, HeifProfile want, int bit_dep
 // （keyframeMax=1）；因此：
 //   * Main（idc1）  = total-frames=2 + keyint=2 + repeat-headers=1；
 //   * Main10（idc2）= 同上；
+//   * Main10Still（idc2，W2-T2）= 同 Main10（它只能靠这条路径拿 idc2；still 语义由编码后
+//     SPS DPB 断言判定，实测不满足 → 不可用）；
 //   * Rext420_8（idc4）= 只需 total-frames=2（keyframeMax 仍为 1，x265 自动 repeat-headers）。
-// 其余档位 = 插件原生默认，不注入任何参数。
+// 其余档位（含 W2-T2 的 17..21 RExt still 变体）= 插件原生默认，不注入任何参数。
 struct HeifX265SignalParam {
     const char *key = nullptr;   // 带 "x265:" 前缀（heif_encoder_set_parameter_string 的键）
     const char *value = nullptr; // 十进制/布尔字符串
@@ -408,8 +625,12 @@ struct HeifX265SignalParams {
 inline HeifX265SignalParams heif_x265_signal_params(HeifProfile p) {
     HeifX265SignalParams out;
     switch (p) {
+    // W2-T2（C18/§6.2.2）：16 = Main 10 Still Picture 与 Main10 走**同一条注入路径**
+    // （x265 要写 idc=2 就必须走非 intra 分支；这也正是它拿不到 still 语义的原因，见
+    // heif_profile_still_available）。17..21 是 RExt 原生 still 信号 → 不注入（default 分支）。
     case HeifProfile::Main:
     case HeifProfile::Main10:
+    case HeifProfile::Main10Still:
         out.items[0] = {"x265:total-frames", "2"};
         out.items[1] = {"x265:keyint", "2"};
         out.items[2] = {"x265:repeat-headers", "1"};

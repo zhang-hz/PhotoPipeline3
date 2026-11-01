@@ -387,11 +387,12 @@ void test_rule_table_invariants() {
     check(warn_or_error >= 20, c, "Warn/Error 规则数偏少：" + std::to_string(warn_or_error));
     check(locks >= 4, c, "Lock 规则数偏少：" + std::to_string(locks));
 
-    // 任务卡点名的规则族必须存在（B1 必做项 3 的覆盖清单）。
+    // 任务卡点名的规则族必须存在（B1 必做项 3 的覆盖清单；W2-T5 后 J2/J4/J6/J8/J15/J16/J18
+    // 随删除行退场，新增 J1（技术作用域）与 J19（已移除参数））。
     static const char *const kRequired[] = {
-        "G3", "G4", "X1", "X1B", "X2", "X3",  "X4",  "X6",  "X10", "X11", "X12", "X13", "A2",
-        "A4", "A5", "A6", "A7",  "A9", "A10", "A12", "S1",  "S2",  "S4",  "S6",  "J3",  "J4",
-        "J5", "J6", "J7", "J8",  "J9", "J10", "J11", "J12", "J13", "J17", "J18"};
+        "G3", "G4", "X1", "X1B", "X2", "X3",  "X4",  "X6",  "X10", "X11", "X12", "X13",
+        "A2", "A4", "A5", "A6",  "A7", "A9",  "A10", "A12", "S1",  "S2",  "S4",  "S6",
+        "J1", "J3", "J5", "J7",  "J9", "J10", "J11", "J12", "J13", "J17", "J19"};
     for (const char *required : kRequired)
         check(ids.count(required) != 0, c, std::string("规则族缺失：") + required);
 
@@ -486,17 +487,7 @@ std::vector<Case> behavior_cases() {
                      {},
                      {no_errors(), hidden_has("distance"), locked_int("resampling", 1),
                       locked_bool("modular_lossy_palette", false), warn_has("G3")}});
-    // J2：无损 + uses_original_profile=false 必须被拦（库会拒绝）。
-    cases.push_back({"g3/jxl-lossless-profile",
-                     "jxl",
-                     "libjxl",
-                     "modular",
-                     8,
-                     0,
-                     0,
-                     true,
-                     [](pp::ParamSet &s) { s["uses_original_profile"] = false; },
-                     {err_has("J2")}});
+    // J2/uses_original_profile 已随 W2-T5 删除行退场（无损推导恒 uses_original_profile=true）。
 
     // —— G4/X1：x265 RC 三路径互斥 ——
     cases.push_back({"g4/x265-crf-qp",
@@ -542,6 +533,170 @@ std::vector<Case> behavior_cases() {
                      false,
                      [](pp::ParamSet &s) { s["qp"] = 30; },
                      {no_errors(), disabled_has("quality"), warn_has("S1")}});
+
+    // —— W2-T4（C21）：QP+显式 Level = 错误；CRF+显式 Level = 警告 ——
+    cases.push_back({"w2t4/qp-level-error",
+                     "heif",
+                     "x265",
+                     "runtime",
+                     10,
+                     0,
+                     0,
+                     false,
+                     [](pp::ParamSet &s) {
+                         s["x265:qp"] = 30;
+                         s["x265:level-idc"] = 31;
+                     },
+                     {err_has("X12"), err_has("不兼容")}});
+    cases.push_back({"w2t4/qp-level-auto-ok",
+                     "heif",
+                     "x265",
+                     "runtime",
+                     10,
+                     0,
+                     0,
+                     false,
+                     [](pp::ParamSet &s) {
+                         s["x265:qp"] = 30;
+                         s["x265:level-idc"] = 0; // 自动 = 不触发
+                     },
+                     {no_errors()}});
+    cases.push_back({"w2t4/crf-level-warn",
+                     "heif",
+                     "x265",
+                     "runtime",
+                     8,
+                     0,
+                     0,
+                     false,
+                     [](pp::ParamSet &s) {
+                         s["x265:crf"] = 20.0;
+                         s["x265:level-idc"] = 40;
+                     },
+                     {no_errors(), warn_has("X12"), warn_has("VBV")}});
+    // —— W2-T4（C21）：CRF/QP 动态域（8bit 0..51 / 10bit −12..51 / 12bit −24..51） ——
+    cases.push_back({"w2t4/x1c-10bit-negative-ok",
+                     "heif",
+                     "x265",
+                     "runtime",
+                     10,
+                     0,
+                     0,
+                     false,
+                     [](pp::ParamSet &s) { s["x265:crf"] = -10.0; },
+                     {no_errors()}});
+    cases.push_back({"w2t4/x1c-10bit-out-of-range",
+                     "heif",
+                     "x265",
+                     "runtime",
+                     10,
+                     0,
+                     0,
+                     false,
+                     [](pp::ParamSet &s) { s["x265:crf"] = -13.0; },
+                     {err_has("X1C")}});
+    cases.push_back({"w2t4/x1c-12bit-boundary-ok",
+                     "heif",
+                     "x265",
+                     "runtime",
+                     12,
+                     0,
+                     0,
+                     false,
+                     [](pp::ParamSet &s) { s["x265:qp"] = -24; },
+                     {no_errors()}});
+    cases.push_back({"w2t4/x1c-12bit-out-of-range",
+                     "heif",
+                     "x265",
+                     "runtime",
+                     12,
+                     0,
+                     0,
+                     false,
+                     [](pp::ParamSet &s) { s["x265:qp"] = -25; },
+                     {err_has("X1C")}});
+    cases.push_back({"w2t4/x1c-8bit-negative",
+                     "heif",
+                     "x265",
+                     "runtime",
+                     8,
+                     0,
+                     0,
+                     false,
+                     [](pp::ParamSet &s) { s["x265:qp"] = -1; },
+                     {err_has("X1C")}});
+
+    // —— W2-T3（C20）：tune 仿真/置灰值 + AVIF 联动提示 ——
+    cases.push_back({"w2t3/heif-tune-animation-simulated",
+                     "heif",
+                     "x265",
+                     "runtime",
+                     8,
+                     0,
+                     0,
+                     false,
+                     [](pp::ParamSet &s) { s["tune"] = std::string("animation"); },
+                     {no_errors()}});
+    cases.push_back({"w2t3/heif-tune-zerolatency-disabled",
+                     "heif",
+                     "x265",
+                     "runtime",
+                     8,
+                     0,
+                     0,
+                     false,
+                     [](pp::ParamSet &s) { s["tune"] = std::string("zerolatency"); },
+                     {err_has("不可用"), err_has("zerolatency")}});
+    cases.push_back({"w2t3/heif-tune-vmaf-disabled",
+                     "heif",
+                     "x265",
+                     "runtime",
+                     8,
+                     0,
+                     0,
+                     false,
+                     [](pp::ParamSet &s) { s["tune"] = std::string("vmaf"); },
+                     {err_has("不可用")}});
+    cases.push_back({"w2t3/libaom-tune-ssimulacra2",
+                     "avif",
+                     "libaom",
+                     "runtime",
+                     10,
+                     0,
+                     0,
+                     false,
+                     [](pp::ParamSet &s) { s["tune"] = std::string("ssimulacra2"); },
+                     {no_errors(), warn_has("aom:tune")}});
+    cases.push_back({"w2t3/libaom-tune-vmaf-disabled",
+                     "avif",
+                     "libaom",
+                     "runtime",
+                     10,
+                     0,
+                     0,
+                     false,
+                     [](pp::ParamSet &s) { s["tune"] = std::string("vmaf"); },
+                     {err_has("不可用")}});
+    cases.push_back({"w2t3/svt-tune-iq-crf-hint",
+                     "avif",
+                     "svt-av1",
+                     "runtime",
+                     10,
+                     0,
+                     0,
+                     false,
+                     [](pp::ParamSet &s) { s["tune"] = std::string("iq"); },
+                     {no_errors(), warn_has("CRF")}});
+    cases.push_back({"w2t3/svt-tune-ms-ssim-crf-hint",
+                     "avif",
+                     "svt-av1",
+                     "runtime",
+                     10,
+                     0,
+                     0,
+                     false,
+                     [](pp::ParamSet &s) { s["tune"] = std::string("ms-ssim"); },
+                     {no_errors(), warn_has("CRF")}});
 
     // —— X 规则：x265 依赖/警告 ——
     cases.push_back({"x/x1b-qpmin-qpmax",
@@ -894,7 +1049,18 @@ std::vector<Case> behavior_cases() {
                      false,
                      [](pp::ParamSet &s) { s["upsampling_mode"] = int64_t(0); },
                      {no_errors(), disabled_has("upsampling_mode")}});
-    cases.push_back({"j/j4-center",
+    // W2-T5（C22）：J1 技术作用域 —— 禁止静默切技术；跨技术残留键 = 中文错误。
+    cases.push_back({"j/j1-vardct-key-on-modular",
+                     "jxl",
+                     "libjxl",
+                     "modular",
+                     8,
+                     0,
+                     0,
+                     false,
+                     [](pp::ParamSet &s) { s["epf"] = 2; },
+                     {err_has("J1"), err_has("VarDCT 专用")}});
+    cases.push_back({"j/j1-modular-key-on-vardct",
                      "jxl",
                      "libjxl",
                      "vardct",
@@ -902,22 +1068,10 @@ std::vector<Case> behavior_cases() {
                      0,
                      0,
                      false,
-                     [](pp::ParamSet &s) { s["group_order_center_x"] = 10; },
-                     {no_errors(), disabled_has("group_order_center_x")}});
-    cases.push_back({"j/j4-center-bounds",
-                     "jxl",
-                     "libjxl",
-                     "vardct",
-                     8,
-                     100,
-                     100,
-                     false,
-                     [](pp::ParamSet &s) {
-                         s["group_order"] = 1;
-                         s["group_order_center_x"] = 100;
-                     },
-                     {err_has("J4")}});
-    cases.push_back({"j/j6-effort11",
+                     [](pp::ParamSet &s) { s["modular_predictor"] = 4; },
+                     {err_has("J1"), err_has("Modular 专用")}});
+    // effort=11 不再需要 expert_options（编码器自动 AllowExpertOptions；J6 退场）。
+    cases.push_back({"j/j6-effort11-auto",
                      "jxl",
                      "libjxl",
                      "vardct",
@@ -926,21 +1080,9 @@ std::vector<Case> behavior_cases() {
                      0,
                      false,
                      [](pp::ParamSet &s) { s["effort"] = 11; },
-                     {err_has("J6")}});
-    cases.push_back({"j/j6-effort11-expert",
-                     "jxl",
-                     "libjxl",
-                     "vardct",
-                     8,
-                     0,
-                     0,
-                     false,
-                     [](pp::ParamSet &s) {
-                         s["effort"] = 11;
-                         s["expert_options"] = true;
-                     },
                      {no_errors()}});
-    cases.push_back({"j/j7-perceptual",
+    // J7：non-perceptual 只适用于 non-XYB 路径；有损 VarDCT 下错误，Modular 下允许。
+    cases.push_back({"j/j7-perceptual-vardct",
                      "jxl",
                      "libjxl",
                      "vardct",
@@ -948,21 +1090,18 @@ std::vector<Case> behavior_cases() {
                      0,
                      0,
                      false,
-                     [](pp::ParamSet &s) {
-                         s["disable_perceptual_heuristics"] = true;
-                         s["uses_original_profile"] = false;
-                     },
+                     [](pp::ParamSet &s) { s["disable_perceptual_heuristics"] = true; },
                      {err_has("J7")}});
-    cases.push_back({"j/j8-original-profile",
+    cases.push_back({"j/j7-perceptual-modular",
                      "jxl",
                      "libjxl",
-                     "vardct",
+                     "modular",
                      8,
                      0,
                      0,
                      false,
-                     [](pp::ParamSet &s) { s["uses_original_profile"] = true; },
-                     {no_errors(), warn_has("J8")}});
+                     [](pp::ParamSet &s) { s["disable_perceptual_heuristics"] = true; },
+                     {no_errors()}});
     cases.push_back({"j/j9-lossy-modular",
                      "jxl",
                      "libjxl",
@@ -1054,16 +1193,6 @@ std::vector<Case> behavior_cases() {
                      false,
                      [](pp::ParamSet &s) { s["intrinsic_size"] = std::string("100x0"); },
                      {err_has("J14")}});
-    cases.push_back({"j/j15-buffering",
-                     "jxl",
-                     "libjxl",
-                     "vardct",
-                     8,
-                     0,
-                     0,
-                     false,
-                     [](pp::ParamSet &s) { s["buffering"] = int64_t(3); },
-                     {err_has("J15")}});
     cases.push_back({"j/j17-hdr-partial",
                      "jxl",
                      "libjxl",
@@ -1089,27 +1218,8 @@ std::vector<Case> behavior_cases() {
                          s["linear_below"] = 0.5;
                      },
                      {no_errors()}});
-    cases.push_back({"j/j18-level5-16bit-lossless",
-                     "jxl",
-                     "libjxl",
-                     "modular",
-                     16,
-                     0,
-                     0,
-                     true,
-                     [](pp::ParamSet &s) { s["codestream_level"] = 5; },
-                     {err_has("J18")}});
-    cases.push_back({"j/j18-level10-16bit-lossless",
-                     "jxl",
-                     "libjxl",
-                     "modular",
-                     16,
-                     0,
-                     0,
-                     true,
-                     [](pp::ParamSet &s) { s["codestream_level"] = 10; },
-                     {no_errors()}});
-    cases.push_back({"j/j16-noise",
+    // J19：已删除行对历史预设/参数集的显式报错（中文，点名键 + 原因）。
+    cases.push_back({"j/j19-removed-keep-invisible",
                      "jxl",
                      "libjxl",
                      "vardct",
@@ -1117,9 +1227,20 @@ std::vector<Case> behavior_cases() {
                      0,
                      0,
                      false,
-                     [](pp::ParamSet &s) { s["noise"] = true; },
-                     {no_errors(), warn_has("J16")}});
-    cases.push_back({"j/j5-box-compress",
+                     [](pp::ParamSet &s) { s["keep_invisible"] = true; },
+                     {err_has("J19"), err_has("已移除参数：keep_invisible")}});
+    cases.push_back({"j/j19-removed-progressive-ac",
+                     "jxl",
+                     "libjxl",
+                     "vardct",
+                     8,
+                     0,
+                     0,
+                     false,
+                     [](pp::ParamSet &s) { s["progressive_ac"] = true; },
+                     {err_has("J19"), err_has("已移除参数：progressive_ac")}});
+    // J5：brotli_effort 仅 box_compress=1 时可见（默认隐藏）。
+    cases.push_back({"j/j5-box-on",
                      "jxl",
                      "libjxl",
                      "vardct",
@@ -1152,17 +1273,18 @@ void test_cross_validate_channels() {
     check(pp::cross_validate(webp_ctx, w) == old_msgs, c,
           "webp 加性重载应与旧通道一致：[" + join(pp::cross_validate(webp_ctx, w)) + "]");
 
-    // ③ JXL：加性重载把新引擎 J6 错误并入（旧签名不认识 backend/位深/无损上下文）。
+    // ③ JXL：加性重载把新引擎 J19（已移除参数）错误并入；旧签名只有「未知参数」。
     pp::ParamContext jxl_ctx;
     jxl_ctx.format_id = "jxl";
     jxl_ctx.backend_id = "libjxl";
     jxl_ctx.tech_id = "vardct";
     pp::ParamSet jxl;
-    jxl["effort"] = 11;
-    check(pp::cross_validate(jxl, "jxl", "vardct").empty(), c,
-          "旧签名不应含 J6（新规则只经 ParamContext 重载）");
-    check(contains(pp::cross_validate(jxl_ctx, jxl), "J6"), c,
-          "加性重载应包含 J6：[" + join(pp::cross_validate(jxl_ctx, jxl)) + "]");
+    jxl["keep_invisible"] = true;
+    const std::vector<std::string> old_jxl = pp::cross_validate(jxl, "jxl", "vardct");
+    check(contains(old_jxl, "未知参数：keep_invisible") && !contains(old_jxl, "J19"), c,
+          "旧签名应只报未知参数、不含 J19：[" + join(old_jxl) + "]");
+    check(contains(pp::cross_validate(jxl_ctx, jxl), "J19"), c,
+          "加性重载应包含 J19：[" + join(pp::cross_validate(jxl_ctx, jxl)) + "]");
 
     // ④ 未知键通道保持旧语义（加性重载仍保留 "未知参数：" 消息）。
     pp::ParamSet u;

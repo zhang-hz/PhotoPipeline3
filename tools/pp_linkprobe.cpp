@@ -389,7 +389,8 @@ void check_libwebp() {
 }
 
 // --- M8 参数目录 / SVT 参数面（B1，docs/m8-encoder-params-and-ssimulacra2-design.md C1/F6）---
-// 目录行数 = Stage A 冻结数据（x265 40 / aom 57 / svt 3 / jxl 16；键展开 170 的唯一真源）。
+// 目录行数 = Stage A 冻结数据 + 后续波次增量（W2-T1 HEIF grid +3；W2-T5 JXL 16→14：
+// 删 6 个结构性 no-op、增 3 个三态布尔与 1 个只读行）。
 // SVT-AV1 **原生参数面 = 10 键**（用户裁定不打 overlay 补丁）：无 `svt:` 透传通道，
 // 目录里也不存在 settable 的 svt: 行。「无 svt: 透传」在可观测边界断言两件事：
 //   ① live 内省面（含目录行合并后）没有任何 `svt:` 前缀键；
@@ -403,10 +404,10 @@ void check_m8_catalog_counts() {
         std::size_t readonly;
     };
     const Expected expected[] = {
-        {"heif", "x265", 40, 36, 4},
+        {"heif", "x265", 43, 39, 4},
         {"avif", "libaom", 57, 51, 6},
         {"avif", "svt-av1", 3, 0, 3},
-        {"jxl", "libjxl", 16, 16, 0},
+        {"jxl", "libjxl", 14, 13, 1},
     };
     bool ok = true;
     std::string detail;

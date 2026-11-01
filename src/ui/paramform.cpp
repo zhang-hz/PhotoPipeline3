@@ -33,6 +33,7 @@
 //     同义显示为「自动」）—— 修 2-37。
 #include "ui/paramform.h"
 
+#include <QAbstractItemView>
 #include <QAction>
 #include <QCheckBox>
 #include <QClipboard>
@@ -44,6 +45,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QScreen>
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSpinBox>
@@ -59,6 +61,8 @@
 #include <limits>
 #include <map>
 #include <optional>
+#include <set>
+#include <string_view>
 #include <utility>
 
 #include "ui/contextmenu.h"    // UX-1 ⑧：格式参数卡右键菜单（actions 单源）
@@ -67,10 +71,65 @@
 #include "ui/leading_indent.h" // R-218：逻辑边距（空态提示与表单同轴）
 #include "ui/theme.h"
 
+#include "codecs/enc_tune_facts.h"        // M10 W2-T3（C20）：tune 置灰项 + item tooltip 单源
 #include "codecs/param_catalog/catalog.h" // M8-B2：目录行形态/角色/作用域/分组单源
 #include "core/param_rules.h"             // M8-B0 规则引擎接口（B1 实现；B2 先本地最小集）
 
 namespace pp::ui {
+
+// ---------------------------------------------------------------------------
+// C19（docs/v0.4.0-design.md §6.2.3）：下拉框「看不全」的统一修法
+//   ① 弹出层宽度 = max(控件宽, 最长项文本宽 + 内距)，并受屏幕可用宽 80% 约束；
+//   ② 被屏幕宽夹住时，item 文本按弹出层文本区宽做**尾部省略**（Qt::ElideRight），
+//      完整文本进 item tooltip（保留置灰项原有的原因 tooltip，接在全文前）；
+//   ③ 一次覆盖全部长选项 —— 调用点 = 通用 combo 构造处（参数枚举行 / 三态行）+
+//      page_output 的档位下拉（同一实现的第二个调用点，不重写同构代码）。
+// 重要：必须在 item **加完之后**调用；item 文本/数量变化后需重新调用（当前所有 combo 都是
+// 静态选项，构造期一次即可）。全文另存自定义 role，重复调用不会二次省略。
+// ---------------------------------------------------------------------------
+void combo_popup_autosize(QComboBox *combo) {
+    if (combo == nullptr || combo->count() <= 0)
+        return;
+    constexpr int kFullTextRole = Qt::UserRole + 0x1f; // 全文（避免与 item 值 UserRole 冲突）
+    constexpr int kPopupPad = 30;                      // item 左右内距 + 滚动条/箭头余量
+    constexpr int kScreenSharePercent = 80;
+    const QFontMetrics fm(combo->font());
+    int longest = 0;
+    for (int i = 0; i < combo->count(); ++i) {
+        QString full = combo->itemData(i, kFullTextRole).toString();
+        if (full.isEmpty()) {
+            full = combo->itemText(i);
+            combo->setItemData(i, full, kFullTextRole);
+        }
+        longest = std::max(longest, fm.horizontalAdvance(full));
+    }
+    int popup_w = std::max(combo->width(), longest + kPopupPad);
+    const QScreen *screen = combo->screen();
+    if (screen != nullptr) {
+        const int cap = screen->availableGeometry().width() * kScreenSharePercent / 100;
+        if (cap > 0 && popup_w > cap)
+            popup_w = std::max(combo->width(), cap);
+    }
+    const int text_w = std::max(1, popup_w - kPopupPad);
+    for (int i = 0; i < combo->count(); ++i) {
+        const QString full = combo->itemData(i, kFullTextRole).toString();
+        const QString shown = fm.elidedText(full, Qt::ElideRight, text_w);
+        if (combo->itemText(i) != shown) {
+            const QSignalBlocker blocker(combo); // 只改显示文本：不发信号、不动当前项
+            combo->setItemText(i, shown);
+        }
+        const QString old_tip = combo->itemData(i, Qt::ToolTipRole).toString();
+        if (old_tip.isEmpty())
+            combo->setItemData(i, full, Qt::ToolTipRole);
+        else if (!old_tip.contains(full))
+            combo->setItemData(i, old_tip + QStringLiteral("\n") + full, Qt::ToolTipRole);
+    }
+    if (QAbstractItemView *view = combo->view()) {
+        view->setMinimumWidth(std::max(0, popup_w - 2)); // 2px = 弹出层边框
+        view->setTextElideMode(Qt::ElideRight);
+    }
+}
+
 namespace {
 
 // 无损的两个承载面（T13 复核项 5：单源化 —— 取值改由 src/core/params.h
@@ -292,7 +351,7 @@ struct Editor {
 //   * 其余类型仍走常规控件，由 add_row 在行首补「启用」勾选。
 Editor
 make_editor(const pp::ParamDef &p, QWidget *area, QObject *context, formkit::FieldWidth width,
-            const pp::catalog::CatalogRow *cr,
+            const pp::catalog::CatalogRow *cr, std::string_view backend,
             const std::function<void(const std::string &, const pp::ParamValue &)> &on_change) {
     Editor ed;
     const QString tip = QString::fromStdString(p.tooltip);
@@ -383,6 +442,7 @@ make_editor(const pp::ParamDef &p, QWidget *area, QObject *context, formkit::Fie
             ed.row = row.row;
             ed.label = row.label;
             ed.note = row.note;
+            combo_popup_autosize(tri); // C19：三态行也可能有长标签（统一入口）
             break;
         }
         // 2-34/2-35：布尔行 = 「勾选框→标签」紧凑同行（标签轨留空，网格不错位）
@@ -413,6 +473,33 @@ make_editor(const pp::ParamDef &p, QWidget *area, QObject *context, formkit::Fie
                 choice.first == "auto" ? tr_c("自动") : QString::fromStdString(choice.first);
             combo->addItem(name);
         }
+        // C20（W2-T3）：tune 的置灰项 + item tooltip = 静态事实表单源（标签已由 choices
+        // 提供）。Disabled 项保留位置但不可选（"不撒谎且可解释"），原因进 item tooltip；
+        // 原生/仿真项也带机制说明（仿真项注明"近似仿真"与用户覆盖优先）。
+        if (p.key == "tune") {
+            auto *model = qobject_cast<QStandardItemModel *>(combo->model());
+            for (int i = 0; i < combo->count() && i < static_cast<int>(p.choices.size()); ++i) {
+                const std::string *value =
+                    std::get_if<std::string>(&p.choices[static_cast<std::size_t>(i)].second);
+                if (value == nullptr)
+                    continue;
+                const pp::tune::ValueFact *fact = pp::tune::value_fact(backend, *value);
+                if (fact == nullptr)
+                    continue;
+                QString item_tip = QString::fromStdString(std::string(fact->detail));
+                if (fact->kind == pp::tune::Kind::Disabled) {
+                    item_tip = tr_c("【不可用】") + item_tip;
+                    if (model != nullptr) {
+                        if (QStandardItem *item = model->item(i))
+                            item->setEnabled(false);
+                    }
+                }
+                combo->setItemData(i, item_tip, Qt::ToolTipRole);
+            }
+        }
+        // C19（§6.2.3）：通用枚举下拉 = 长选项的唯一构造点 —— 弹出层按最长项自适应宽度 +
+        // item 尾省略 + tooltip 全文（一次覆盖全部长选项，不逐项打补丁）。
+        combo_popup_autosize(combo);
         ed.widget = combo;
         ed.apply = [combo, def = &p](const pp::ParamValue &v) {
             int idx = -1;
@@ -1190,6 +1277,19 @@ struct ParamForm::Impl {
         if (const pp::TechDef *t = tech()) {
             // M8-B2/G4：RC 模式行 = 核心参数区首行（质量行之上；模式选择路径，而非独立参数行）。
             build_rc_row();
+            // W2-T4（C21）：RC 路径数值行（quality / x265:crf / x265:qp / aom:cq-level / qp）
+            // 全部重构建到核心区、紧随模式行（顺序 = 模式下拉顺序）。非当前路径行由
+            // m8_row_visible 隐藏；行对象常驻 ⇒ 切模式不重建、objectName/探针锚不变。
+            std::set<std::string> rc_core_keys;
+            if (rc_supported()) {
+                for (const RcChoice &c : rc_choices()) {
+                    const pp::ParamDef *p = pp::find_param(*t, c.key);
+                    if (p == nullptr)
+                        continue;
+                    add_row(*p, /*force_core=*/true);
+                    rc_core_keys.insert(p->key);
+                }
+            }
             // UX-8：子分组**二级折叠**，分组判据 = ParamDef.group 单源；默认只展开第一组
             // （重建 = 新参数集，展开态随之复位）。只读组单独走目录（Scope != Settable）。
             bool first_group = true;
@@ -1198,7 +1298,8 @@ struct ParamForm::Impl {
                     continue; // 只读行不来自 TechDef.params（目录 Scope != Settable，见下）
                 std::vector<const pp::ParamDef *> in_group;
                 for (const pp::ParamDef &p : t->params) {
-                    if (p.advanced && p.key != kLosslessParamKey && subgroup_of(p) == g)
+                    if (p.advanced && p.key != kLosslessParamKey && subgroup_of(p) == g &&
+                        rc_core_keys.count(p.key) == 0)
                         in_group.push_back(&p);
                 }
                 if (in_group.empty())
@@ -1213,9 +1314,9 @@ struct ParamForm::Impl {
             // 只读行（13 = x265 4 + libaom 6 + SVT 3；显示生效值/上游固定原因，不可编辑、
             // 不进 values()/预设 —— docs/m8-param-control-map.md §3.3/§4.3/§5）
             add_readonly_rows();
-            // 核心参数（表内顺序）
+            // 核心参数（表内顺序；RC 路径数值行已在模式行之后显式构建 → 此处跳过）
             for (const pp::ParamDef &p : t->params) {
-                if (p.advanced || p.key == kLosslessParamKey)
+                if (p.advanced || p.key == kLosslessParamKey || rc_core_keys.count(p.key) != 0)
                     continue; // §9.1：lossless 由"无损"复选框独占
                 add_row(p);
             }
@@ -1450,11 +1551,14 @@ struct ParamForm::Impl {
         rows.push_back(r);
     }
 
-    void add_row(const pp::ParamDef &p) {
+    // force_core（W2-T4 / C21）：RC 路径数值行不再进高级折叠区 —— 由 build_rows 在 RC 模式
+    // 行之后**按同一工厂**重建到核心区（不搬控件/不重父化；行对象与 objectName 不变）。
+    void add_row(const pp::ParamDef &p, bool force_core = false) {
         const QString tip = QString::fromStdString(p.tooltip);
+        const bool advanced = p.advanced && !force_core;
         QWidget *area =
-            p.advanced ? static_cast<QWidget *>(adv_body) : static_cast<QWidget *>(core_host);
-        QVBoxLayout *box = p.advanced ? adv_box : core_box;
+            advanced ? static_cast<QWidget *>(adv_body) : static_cast<QWidget *>(core_host);
+        QVBoxLayout *box = advanced ? adv_box : core_box;
         // UX-8（§8-3）：折叠区数值行宽与核心区一致（160）——「折叠 = 88」第二档废除
         // （ui_smoke `spin-group` 断言随 M7-R2-A 换锚 kFieldShort→kFieldStd，见 handoff
         // 裁定登记）。
@@ -1463,7 +1567,7 @@ struct ParamForm::Impl {
         Row r;
         r.def = &p;
         r.key = p.key;
-        r.advanced = p.advanced;
+        r.advanced = advanced;
         r.subgroup = subgroup_of(p);
         const pp::catalog::CatalogRow *cr =
             is_new_catalog_key(p.key) ? catalog_row(p.key) : nullptr;
@@ -1479,7 +1583,8 @@ struct ParamForm::Impl {
         r.unset = r.from_catalog && !r.rc_managed && values.find(p.key) == values.end();
 
         // R-217：类型分发唯一落点 = make_editor（构造 + 行 + 接线 + 回写闭包）
-        Editor ed = make_editor(p, area, q, width, cr,
+        const std::string backend_id = backend() != nullptr ? backend()->id : std::string();
+        Editor ed = make_editor(p, area, q, width, cr, backend_id,
                                 [this](const std::string &key, const pp::ParamValue &v) {
                                     if (syncing)
                                         return;
@@ -1688,6 +1793,8 @@ struct ParamForm::Impl {
             if (r.from_catalog && !r.readonly_row && !r.rc_managed)
                 r.unset = values.find(r.key) == values.end();
         }
+        // W2-T4（C21）：域必须先于值回写（否则 10/12 位的负 CRF/QP 会被 8 位域钳成 0）。
+        update_rc_domain();
         sync_widgets();
         update_row_states();
         update_selectors();
@@ -1795,6 +1902,35 @@ struct ParamForm::Impl {
         return rc_key_active(r.key);
     }
 
+    // W2-T4（C21）：CRF/QP 合法域随位深（x265 param.cpp:1740,1875-1879）：
+    //   8bit 0..51、10bit −12..51、12bit −24..51。UI 域 + 行内注记同源；越界值不静默改，
+    //   由 param_rules X1C 预检报中文错误（显示值/下发值不一致只可能出现在已报错态）。
+    void update_rc_domain() {
+        if (!rc_supported())
+            return;
+        const int bd = rule_ctx.bitdepth;
+        const int lo = bd > 8 ? -6 * (bd - 8) : 0;
+        constexpr int kHi = 51;
+        QString note;
+        if (bd == 8 || bd == 10 || bd == 12)
+            note = ParamForm::tr("位深 %1 位域 %2..%3").arg(bd).arg(lo).arg(kHi);
+        else
+            note = ParamForm::tr("8 位域 0..51（位深未定）");
+        for (Row &r : rows) {
+            if (r.key != "x265:crf" && r.key != "x265:qp")
+                continue;
+            if (auto *dspin = qobject_cast<QDoubleSpinBox *>(r.editor)) {
+                const QSignalBlocker blocker(dspin); // 只改域，不触发值变化回调
+                dspin->setRange(static_cast<double>(lo), static_cast<double>(kHi));
+            } else if (auto *ispin = qobject_cast<QSpinBox *>(r.editor)) {
+                const QSignalBlocker blocker(ispin);
+                ispin->setRange(lo, kHi);
+            }
+            if (r.note != nullptr)
+                r.note->setText(note);
+        }
+    }
+
     void update_row_states() {
         const QString filter = adv_search ? adv_search->text().trimmed() : QString();
         const bool filter_active = !filter.isEmpty();
@@ -1883,24 +2019,11 @@ struct ParamForm::Impl {
                 // 搜索隐藏时注记随之隐藏。
                 r.status->setVisible(shown);
             }
-            // M8-B2 / J6：JXL effort 动态域 —— 仅启用「允许专家选项」才允许 11。
-            // 默认（expert_options 未启用）= 1–10 ⇒ 冻结断言 range-note 的 "1–10" 逐字不变。
-            if (fmt->id == "jxl" && r.key == "effort") {
-                const auto ex = values.find("expert_options");
-                const bool expert_on = ex != values.end() &&
-                                       std::get_if<bool>(&ex->second) != nullptr &&
-                                       *std::get_if<bool>(&ex->second);
-                if (auto *spin = qobject_cast<QSpinBox *>(r.editor)) {
-                    const int want_max = expert_on ? 11 : 10;
-                    if (spin->maximum() != want_max)
-                        spin->setMaximum(want_max);
-                }
-                if (r.note != nullptr) {
-                    const QString want = expert_on ? ParamForm::tr("1–11") : ParamForm::tr("1–10");
-                    if (r.note->text() != want)
-                        r.note->setText(want);
-                }
-            }
+            // M10-UI-ADAPT（W2-T5 C22）：JXL effort 的「允许专家选项」门控已退场 ——
+            // expert_options 目录行随 12 个结构性 no-op 键删除，编码器在 effort=11 时自动调用
+            // JxlEncoderAllowExpertOptions（enc_jxl.cpp）。故 effort 域恒 = ParamDef.hi = 11：
+            // 数值控件上界与 10px 范围注释都由 make_editor 的 range_note_text() 单源给出
+            // （"1–11"），不再按已不存在的键动态收窄（GUI 10 / CLI 11 的旧不一致即此处）。
 
             const auto it = values.find(r.key);
             const bool deviates = it != values.end() && it->second.index() == r.def->def.index() &&

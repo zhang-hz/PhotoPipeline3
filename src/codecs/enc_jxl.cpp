@@ -31,6 +31,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -102,22 +103,19 @@ constexpr JxlParamMap kFrameSettings[] = {
     {"effort", JXL_ENC_FRAME_SETTING_EFFORT, ParamKind::Int, Tech::Both},
     {"decoding_speed", JXL_ENC_FRAME_SETTING_DECODING_SPEED, ParamKind::Int, Tech::Both},
     {"resampling", JXL_ENC_FRAME_SETTING_RESAMPLING, ParamKind::Int, Tech::Both},
-    {"group_order", JXL_ENC_FRAME_SETTING_GROUP_ORDER, ParamKind::Int, Tech::Both},
     {"photon_noise", JXL_ENC_FRAME_SETTING_PHOTON_NOISE, ParamKind::Float, Tech::VarDct},
     {"epf", JXL_ENC_FRAME_SETTING_EPF, ParamKind::Int, Tech::VarDct},
-    {"keep_invisible", JXL_ENC_FRAME_SETTING_KEEP_INVISIBLE, ParamKind::Bool, Tech::VarDct},
     {"dots", JXL_ENC_FRAME_SETTING_DOTS, ParamKind::Bool, Tech::VarDct},
     {"patches", JXL_ENC_FRAME_SETTING_PATCHES, ParamKind::Bool, Tech::VarDct},
     {"gaborish", JXL_ENC_FRAME_SETTING_GABORISH, ParamKind::Bool, Tech::VarDct},
-    {"progressive_ac", JXL_ENC_FRAME_SETTING_PROGRESSIVE_AC, ParamKind::Bool, Tech::VarDct},
-    {"qprogressive_ac", JXL_ENC_FRAME_SETTING_QPROGRESSIVE_AC, ParamKind::Bool, Tech::VarDct},
-    {"progressive_dc", JXL_ENC_FRAME_SETTING_PROGRESSIVE_DC, ParamKind::Int, Tech::VarDct},
     {"modular_group_size", JXL_ENC_FRAME_SETTING_MODULAR_GROUP_SIZE, ParamKind::Int, Tech::Modular},
     {"modular_predictor", JXL_ENC_FRAME_SETTING_MODULAR_PREDICTOR, ParamKind::Int, Tech::Modular},
     {"modular_palette_colors", JXL_ENC_FRAME_SETTING_PALETTE_COLORS, ParamKind::Int, Tech::Modular},
     {"modular_lossy_palette", JXL_ENC_FRAME_SETTING_LOSSY_PALETTE, ParamKind::Bool, Tech::Modular},
-    {"brotli_effort", JXL_ENC_FRAME_SETTING_BROTLI_EFFORT, ParamKind::Int, Tech::Modular},
-    {"responsive", JXL_ENC_FRAME_SETTING_RESPONSIVE, ParamKind::Bool, Tech::Modular},
+    // W2-T5（C22）：brotli_effort 作用于 JxlEncoderAddBox 的 brob 压缩（encode.cc:1142-1155），
+    // 与 VarDCT/Modular 无关 —— 旧表错标 Modular 导致 VarDCT 下被跳过（b45–b47 逐字节同 SHA）；
+    // 修正为 Both（仅 box_compress=1 时 UI 可见，J5）。
+    {"brotli_effort", JXL_ENC_FRAME_SETTING_BROTLI_EFFORT, ParamKind::Int, Tech::Both},
     // 这三个 id 只在 JxlEncoderFrameSettingsSetFloatOption 实现；旧 Int setter 会命中
     // default → JXL_ENC_ERROR（第二轮审计 JXL-03）。默认 -1 跳过，非默认值走 float setter。
     {"channel_colors_global_percent", JXL_ENC_FRAME_SETTING_CHANNEL_COLORS_GLOBAL_PERCENT,
@@ -130,16 +128,104 @@ constexpr JxlParamMap kFrameSettings[] = {
      Tech::Modular},
     // —— M8-B1：目录行接线（libjxl 0.12 encode.h；三态语义：键不在 ParamSet = 不下发）——
     // 每行 = 目录键 → JxlEncoderFrameSettingId（docs/m8-param-control-map.md §6.2）。
-    {"noise", JXL_ENC_FRAME_SETTING_NOISE, ParamKind::Bool, Tech::Both},
-    {"group_order_center_x", JXL_ENC_FRAME_SETTING_GROUP_ORDER_CENTER_X, ParamKind::Int,
-     Tech::Both},
-    {"group_order_center_y", JXL_ENC_FRAME_SETTING_GROUP_ORDER_CENTER_Y, ParamKind::Int,
-     Tech::Both},
-    {"buffering", JXL_ENC_FRAME_SETTING_BUFFERING, ParamKind::Int, Tech::Both},
     {"output_mode", JXL_ENC_FRAME_SETTING_OUTPUT_MODE, ParamKind::Int, Tech::Both},
     {"disable_perceptual_heuristics", JXL_ENC_FRAME_SETTING_DISABLE_PERCEPTUAL_HEURISTICS,
      ParamKind::Bool, Tech::Both},
 };
+
+// W2-T5（C22）：从产品面删除的结构性 no-op 键。旧预设/CLI 携带这些键时**显式失败**并报
+// "已移除参数"（不静默接受、不静默套默认；中文文案由 param_rules J19 在预检层给出，本处
+// 是编码器最后防线，英文）。删除依据 = docs/v0.4.0-design.md §7.1/侦察报告 §1.6：
+//   keep_invisible（产品无 alpha，逐字节 no-op，b11）、noise（库阈值 99，b15 逐字节）、
+//   expert_options（纯门；effort=11 现自动 AllowExpertOptions）、uses_original_profile
+//   （只剩"无效果/报错"两态，b32）、group_order/center_x/center_y 与 progressive_ac/
+//   qprogressive_ac/progressive_dc/responsive（只影响渐进渲染/容器，批量转码无价值）、
+//   buffering（整图输入路径 no-op，b25/b51 逐字节）。
+struct RemovedKey {
+    std::string_view key;
+    std::string_view reason;
+};
+constexpr RemovedKey kRemovedKeys[] = {
+    {"keep_invisible", "no alpha in this product; byte-identical no-op"},
+    {"noise", "legacy adaptive noise; libjxl threshold 99 makes it a no-op"},
+    {"expert_options", "effort=11 now enables JxlEncoderAllowExpertOptions automatically"},
+    {"uses_original_profile", "derived from lossless/Modular; the row only no-oped or errored"},
+    {"group_order", "progressive-render group order; irrelevant for batch transcode"},
+    {"group_order_center_x", "depends on the removed group_order row"},
+    {"group_order_center_y", "depends on the removed group_order row"},
+    {"progressive_ac", "progressive decoding layering only; final pixels unchanged"},
+    {"qprogressive_ac", "progressive decoding layering only; final pixels unchanged"},
+    {"progressive_dc", "progressive decoding layering only; final pixels unchanged"},
+    {"responsive", "progressive/streaming only; irrelevant for batch transcode"},
+    {"buffering", "whole-image input path makes it a no-op (b25/b51 byte-identical)"},
+};
+
+bool removed_key(std::string_view key) {
+    for (const RemovedKey &r : kRemovedKeys) {
+        if (r.key == key)
+            return true;
+    }
+    return false;
+}
+
+std::string removed_keys_error(const ParamSet &params) {
+    std::string keys;
+    for (const auto &[key, value] : params) {
+        (void)value;
+        if (!removed_key(key))
+            continue;
+        if (!keys.empty())
+            keys += ", ";
+        keys += key;
+    }
+    if (keys.empty())
+        return {};
+    return "jxl: removed parameter(s): " + keys +
+           " (see docs/v0.4.0-design.md §7.1; delete these keys from the preset/parameters)";
+}
+
+// 技术作用域（W2-T5）：只有这两组键受技术路径约束；其余键（resampling/brotli_effort/
+// output_mode/disable_perceptual_heuristics/目录 Both 行）两种技术通用。
+constexpr std::string_view kVardctOnlyKeys[] = {"photon_noise", "epf", "dots", "patches",
+                                                "gaborish"};
+constexpr std::string_view kModularOnlyKeys[] = {"color_transform",
+                                                 "modular_group_size",
+                                                 "modular_predictor",
+                                                 "modular_palette_colors",
+                                                 "modular_lossy_palette",
+                                                 "channel_colors_global_percent",
+                                                 "channel_colors_group_percent",
+                                                 "modular_ma_tree_learning_percent",
+                                                 "modular_nb_prev_channels"};
+
+std::string present_keys(const ParamSet &params, const std::string_view *keys, std::size_t n) {
+    std::string out;
+    for (std::size_t i = 0; i < n; ++i) {
+        if (params.find(std::string(keys[i])) == params.end())
+            continue;
+        if (!out.empty())
+            out += ", ";
+        out += keys[i];
+    }
+    return out;
+}
+
+std::string cross_tech_error(const ParamSet &params, bool modular) {
+    // 禁止"存在 Modular 键就静默切技术"（W2-T5）：技术由显式 tech_id / lossless 决定；
+    // 残留的跨技术键必须显式失败，不再静默跳过（旧 enc_jxl:271-288/528-537）。
+    if (modular) {
+        const std::string bad = present_keys(params, kVardctOnlyKeys, std::size(kVardctOnlyKeys));
+        if (!bad.empty())
+            return "jxl: VarDCT-only parameter(s) on the Modular path: " + bad +
+                   " (switch tech to vardct or remove these keys; no silent tech switch)";
+    } else {
+        const std::string bad = present_keys(params, kModularOnlyKeys, std::size(kModularOnlyKeys));
+        if (!bad.empty())
+            return "jxl: Modular-only parameter(s) on the VarDCT path: " + bad +
+                   " (switch tech to modular or remove these keys; no silent tech switch)";
+    }
+    return {};
+}
 
 // Keys handled outside the frame-settings loop (still recognised for E9).
 // M4-T13: "lossless" = 显式 schema 参数（src/core/params.h 的 kLosslessParamKey）——它由下方
@@ -147,27 +233,17 @@ constexpr JxlParamMap kFrameSettings[] = {
 // PP-FROZEN(0.3.0)：本行与下方 lossless 读取行按 T13 定稿冻结（内部管道键 __lossless 保留，
 // 显式键优先读取；0.2 的取值路径逐字不变）。
 // M8-B1：新增目录键中不走 frame settings 的 API 全部列在这里（各自有专门的接线点）：
-//   * uses_original_profile → JxlBasicInfo 字段（SetBasicInfo 前）；
 //   * box_compress          → JxlEncoderAddBox 的 compress_box 参数；
-//   * expert_options        → JxlEncoderAllowExpertOptions（仅放开 effort=11）；
 //   * upsampling_mode       → JxlEncoderSetUpsamplingMode（factor=resampling，非 frame setting）；
 //   * intensity_target/min_nits/relative_to_max_display/linear_below → JxlBasicInfo HDR 字段；
 //   * intrinsic_size        → JxlBasicInfo.intrinsic_xsize/ysize（文本 "宽x高"）；
 //   * frame_name            → JxlEncoderSetFrameName（frame header 字段）。
-constexpr std::string_view kSpecialKeys[] = {"distance",
-                                             "codestream_level",
-                                             "color_transform",
-                                             "lossless",
-                                             "uses_original_profile",
-                                             "box_compress",
-                                             "expert_options",
-                                             "upsampling_mode",
-                                             "intensity_target",
-                                             "min_nits",
-                                             "relative_to_max_display",
-                                             "linear_below",
-                                             "intrinsic_size",
-                                             "frame_name"};
+// W2-T5（C22）：uses_original_profile / expert_options 行退场（见 kRemovedKeys）。
+constexpr std::string_view kSpecialKeys[] = {
+    "distance",         "codestream_level", "color_transform",
+    "lossless",         "box_compress",     "upsampling_mode",
+    "intensity_target", "min_nits",         "relative_to_max_display",
+    "linear_below",     "intrinsic_size",   "frame_name"};
 
 bool known_key(std::string_view key) {
     for (const JxlParamMap &m : kFrameSettings) {
@@ -259,38 +335,35 @@ private:
         if (!enc::fetch_raster(req.img, r, err)) {
             return enc::encode_error("jxl: " + err);
         }
+        // W2-T5（C22）：已删除行 = 显式失败，不静默接受（旧预设迁移的编码器兜底；
+        // 中文文案在 param_rules J19 的预检层）。
+        {
+            const std::string removed = removed_keys_error(params);
+            if (!removed.empty())
+                return enc::encode_error(removed);
+        }
         enc::warn_unknown_params_if(params, "libjxl", known_key);
 
         // Lossless comes from the explicit schema parameter (§3.6/M4-T13, kLosslessParamKey)
         // with the reserved key (§3.4) as the fallback; the parameter engine keeps the two in
-        // sync (src/core/params.cpp apply_locks). A modular parameter set (built from the
-        // modular tech) also selects the Modular path.
+        // sync (src/core/params.cpp apply_locks).
         // R-295：读取统一走 pp::lossless_flag()（kLosslessKey/kLosslessParamKey 单源），
         // 不再本地复刻两键优先级。
         const bool lossless = lossless_flag(params);
-        bool modular_params = false;
-        for (const JxlParamMap &m : kFrameSettings) {
-            if (m.tech == Tech::Modular && params.find(std::string(m.key)) != params.end()) {
-                modular_params = true;
-                break;
-            }
-        }
-        // Tech selection (T6b): an explicit EncodeRequest::tech_id wins; empty or
-        // unknown falls back to the previous inference (lossless, or the presence
-        // of modular-only keys). This is what makes lossy Modular expressible.
-        bool modular = false;
-        if (req.target.tech_id == "modular") {
-            modular = true;
-        } else if (req.target.tech_id == "vardct") {
-            modular = false;
-        } else {
-            modular = lossless || modular_params;
-        }
-        // libjxl's lossless mode always encodes the Modular path
-        // (JxlEncoderSetFrameLossless overrides the mode), so modular-only
-        // options stay applicable there.
+        // Tech selection (T6b) + W2-T5（C22）修复「存在 Modular 键就静默切技术」：
+        //   * 显式 EncodeRequest::tech_id 优先（"modular"/"vardct"）；
+        //   * 空 tech_id = 引擎自选：lossless → Modular，否则 VarDCT；
+        //   * 不再从 ParamSet 里"发现 Modular 键"推断技术（旧 enc_jxl:271-288 陷阱：
+        //     预设里残留一个 modular_* 键会把整条输出静默切成 Modular，产物/耗时差 40%+）。
+        //   * 判定后做跨技术键校验：错误技术下的残留键 = 显式失败（见 cross_tech_error）。
+        bool modular = req.target.tech_id == "modular" || (req.target.tech_id.empty() && lossless);
         if (lossless) {
-            modular = true;
+            modular = true; // libjxl 的无损恒走 Modular（SetFrameLossless 覆盖 mode）
+        }
+        {
+            const std::string cross = cross_tech_error(params, modular);
+            if (!cross.empty())
+                return enc::encode_error(cross);
         }
         const bool has_icc = !req.meta.icc_profile.empty();
         const bool gray = r.channels <= 2;
@@ -324,10 +397,10 @@ private:
         if (!enc) {
             return enc::encode_error("jxl: JxlEncoderCreate failed");
         }
-        // M8-B1：expert_options → JxlEncoderAllowExpertOptions（唯一产品作用 = 放开
-        // effort=11；必须在 JxlEncoderFrameSettingsSetOption(EFFORT, 11) 之前调用，
-        // encode.cc:1667-1686 的 allow_expert_options 分支）。缺键 = 不调用（三态）。
-        if (param_bool(params, "expert_options", false))
+        // W2-T5（C22）：expert_options 行退场 —— effort=11 时自动调用
+        // JxlEncoderAllowExpertOptions（必须在 SetOption(EFFORT, 11) 之前，encode.cc:1667-1686
+        // 的 allow_expert_options 分支）。其余 effort 不调用，保持旧行为零漂移。
+        if (param_int(params, "effort", 7) == 11)
             JxlEncoderAllowExpertOptions(enc.get());
         // W1-T6：progress 已接线（见下方逐行喂入的 progress 上报）；libjxl 0.12 无编码器
         // 进度回调接口，故实际信号 = 本 TU 的逐行喂入（详见该处注释与 T6 偏差账）。
@@ -361,8 +434,9 @@ private:
         // 16 位 uses_original_profile 路径」在写头之前打成明确的
         // "Codestream level verification for level 5 failed: ..." 错误；旧顺序（先 BasicInfo
         // 后 SetLevel）把同一失败推迟到 JxlEncoderAddImageFrame/ProcessOutput，文案更差。
-        // 默认 -1（auto）= 0.3.x 既有行为，产物零变化。
-        const int64_t level = param_int(params, "codestream_level", 10);
+        // 默认 -1（auto）= 0.3.x 既有行为，产物零变化（W2-T5 起该行只读/恒 -1；fallback
+        // 必须是 -1 —— 旧代码写 10 会在键缺失时无谓加 jxll box）。
+        const int64_t level = param_int(params, "codestream_level", -1);
         st = JxlEncoderSetCodestreamLevel(enc.get(), static_cast<int>(level));
         if (st != JXL_ENC_SUCCESS) {
             return enc::encode_error("jxl: JxlEncoderSetCodestreamLevel(" + std::to_string(level) +
@@ -396,33 +470,21 @@ private:
         // PSNR 44.34 dB = 纯压缩误差。
         // 新推导：
         //   * lossless / modular → JXL_TRUE（既有语义不变：真无损 / Modular 保留原配置）；
-        //   * lossy VarDCT → JXL_FALSE（XYB），**带 ICC 也一样** —— 本修复点；
-        //   * 用户显式键（M8-B1 三态：键在 = 显式覆写）：
-        //       - lossy VarDCT + true → 显式拒绝（该组合只产坏件，不静默改用户参数）；
-        //       - false → 保持（与默认推导一致，产物逐字节相同）；
-        //       - lossless / modular 上的 true/false → 沿用既有覆写语义（J2/J7 预检管无损侧）。
+        //   * lossy VarDCT → JXL_FALSE（XYB），**带 ICC 也一样** —— 本修复点。
+        // W2-T5（C22）：uses_original_profile 行已删除 —— 只剩"无效果"（false）与"报错"
+        // （有损 VarDCT + true）两态的开关不配留在产品面；上述推导即唯一来源。
+        // 旧预设携带该键 ⇒ 编码器按"已移除参数"显式失败（kRemovedKeys），不再有人工覆写。
         const bool lossy_vardct = !lossless && !modular;
-        const bool has_orp_override = params.find("uses_original_profile") != params.end();
-        const bool orp_override = param_bool(params, "uses_original_profile", true);
-        if (lossy_vardct && has_orp_override && orp_override) {
-            return enc::encode_error(
-                "jxl: uses_original_profile=true is not supported for lossy VarDCT: the "
-                "non-XYB path produces blocking/chroma artifacts and much larger files "
-                "(upstream libjxl issue #4552); remove the parameter to use the XYB default, "
-                "or switch tech to modular/lossless");
-        }
         // J7 联动兜底：libjxl 的 non-perceptual 编码要求 uses_original_profile=true
         // （encode.cc:1909-1915 / 2418-2423），有损 VarDCT 已强制 XYB ⇒ 该组合必被库拒绝，
         // 且 JxlEncoderFrameSettingsSetOption 只回笼统 "ERROR"；这里提前给出可读错误。
         if (lossy_vardct && param_bool(params, "disable_perceptual_heuristics", false)) {
             return enc::encode_error(
-                "jxl: disable_perceptual_heuristics=1 requires uses_original_profile=true, "
-                "which is unavailable on the lossy VarDCT (XYB) path; use tech=modular or "
-                "the lossless checkbox for non-perceptual encoding");
+                "jxl: disable_perceptual_heuristics=1 requires the non-XYB (uses_original_profile) "
+                "path, which is unavailable on lossy VarDCT; use tech=modular or the lossless "
+                "checkbox for non-perceptual encoding");
         }
         info.uses_original_profile = (lossless || modular) ? JXL_TRUE : JXL_FALSE;
-        if (has_orp_override)
-            info.uses_original_profile = orp_override ? JXL_TRUE : JXL_FALSE;
         // M8-B1：HDR 色调映射组（J17）——BasicInfo 字段，0 = 库自动（与 InitBasicInfo 默认同值）。
         if (params.find("intensity_target") != params.end())
             info.intensity_target =
@@ -564,26 +626,20 @@ private:
             }
         }
 
-        // Modular colour transform: auto(-1) leaves libjxl's own choice (the only path that
-        // lets the encoder try all RCTs); 6 = YCoCg forces the global RCT; 0/1/2 are the
-        // generic option (libjxl overwrites them, so they are effectively explicit no-ops).
+        // Modular colour transform（W2-T5 收窄枚举）：auto = 不设置（让 libjxl 按
+        // uses_original_profile 自选，唯一能尝试全部 RCT 的路径）；YCoCg = 强制
+        // modular_color_space=6（全局 RCT）。None/XYB/YCbCr 会被 C API 依 xyb_encoded 覆写
+        // （encode.cc:923-930，实测逐字节 no-op），已从表枚举删除；旧预设残留 = 显式失败。
         if (modular) {
             const std::string ct = param_str(params, "color_transform", "auto");
             if (ct != "auto") {
-                int64_t id = JXL_ENC_FRAME_SETTING_COLOR_TRANSFORM;
-                int64_t value = 1;
-                if (ct == "XYB") {
-                    value = 0;
-                } else if (ct == "None") {
-                    value = 1;
-                } else if (ct == "YCbCr") {
-                    value = 2;
-                } else { // YCoCg
-                    id = JXL_ENC_FRAME_SETTING_MODULAR_COLOR_SPACE;
-                    value = 6;
+                if (ct != "YCoCg") {
+                    return enc::encode_error("jxl: unsupported color_transform value '" + ct +
+                                             "' (W2-T5: only auto/YCoCg remain; the other "
+                                             "values were C-API no-ops)");
                 }
-                st = JxlEncoderFrameSettingsSetOption(fs, static_cast<JxlEncoderFrameSettingId>(id),
-                                                      value);
+                st = JxlEncoderFrameSettingsSetOption(fs, JXL_ENC_FRAME_SETTING_MODULAR_COLOR_SPACE,
+                                                      6);
                 if (st != JXL_ENC_SUCCESS) {
                     return enc::encode_error("jxl: color_transform=" + ct +
                                              " rejected: " + status_name(st));

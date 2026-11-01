@@ -211,50 +211,84 @@ inline bool is_heif_family(const std::string &id) { return id == "heif" || id ==
 // 立即破裂：sel 按磁贴序排序，QTabWidget 按插入序追加 → JPEG 标题下显示 JXL 内容）。
 constexpr const char *kPageFormatIdProperty = "ppFormatId";
 
+// ---------------------------------------------------------------------------
+// C19（docs/v0.4.0-design.md §6.2.3）：下拉弹出层「看不全」的统一修法
+//   实现**单源** = src/ui/paramform.cpp 的 pp::ui::combo_popup_autosize（通用下拉构造点：
+//   参数枚举 / 三态行）。本头只放声明，供 page_output.cpp 的档位下拉复用**同一份实现**
+//   （不在页面里重写同构代码）；依赖方向仍是「页面 → 组件」，paramform 不反向包含页面头。
+//   语义：弹出层宽 = max(控件宽, 最长项文本宽 + 内距)，受屏幕可用宽 80% 约束；被夹住时
+//   item 文本尾部省略、完整文本进 item tooltip（置灰项的原因 tooltip 保留在前）。
+// ---------------------------------------------------------------------------
+void combo_popup_autosize(QComboBox *combo);
+
 struct ProfileOption {
     pp::HeifProfile profile;
-    const char *label; // 中文标签（含兼容性说明，§10.1 逐字口径）
 };
 
-// 选项表（docs/ux-review-14.md §10.1 + M8 HEIF 档位收口）：HEIF 12 个真实信号 + 自动；
-// AVIF 4 档。首项恒为「自动」（默认值；下拉闭合时只显示“自动”，冻结截图逐字不变）。
-// 标签必须能区分 general_profile_idc：旧版把 idc=4 的 10 位静图显示成 “Main10”，
-// 用户无法判断产物到底是 Main10(idc=2) 还是 Main10 Intra(idc=4)。
-inline const ProfileOption *heif_profile_options(bool avif, int &count) {
-    static const ProfileOption kHeif[] = {
-        {pp::HeifProfile::Auto, "自动"},
-        {pp::HeifProfile::Main, "Main（8 位 · 4:2:0 · idc 1）"},
-        {pp::HeifProfile::Main10, "Main10（10 位 · 4:2:0 · idc 2）"},
-        {pp::HeifProfile::Rext420_8, "Main 4:2:0 8（idc 4）"},
-        {pp::HeifProfile::Rext420_10, "Main 4:2:0 10 Intra（idc 4）"},
-        {pp::HeifProfile::Rext420_12, "Main 4:2:0 12 Intra（idc 4）"},
-        {pp::HeifProfile::Rext422_8, "Main 4:2:2 8（idc 4）"},
-        {pp::HeifProfile::Rext422_10, "Main 4:2:2 10（idc 4）"},
-        {pp::HeifProfile::Rext422_12, "Main 4:2:2 12（idc 4）"},
-        {pp::HeifProfile::Rext444_8, "Main 4:4:4 8（idc 4）"},
-        {pp::HeifProfile::Rext444_10, "Main 4:4:4 10（idc 4）"},
-        {pp::HeifProfile::Rext444_12, "Main 4:4:4 12（idc 4）"},
-        // MainStill 保持在末尾：既有 --ui-smoke 的“逐档位”探针会把最后一项留在下拉里，
-        // 旧表末项也是 MainStill（8 位）；这样探针结束后的位深/色度状态与旧版逐位一致。
-        {pp::HeifProfile::MainStill, "Main Still Picture（8 位 · 4:2:0 · idc 3）"},
+// 选项表 = 「哪些档位出现在本格式 / 什么顺序」的**唯一表**；**文案不在本表复制**：
+//   * 短标签（含 idc 区分）= pp::heif_profile_label_for（codecs/heif_profile.h 单源）；
+//   * 完整信号说明 = pp::heif_profile_tooltip（C19：下拉 item tooltip 全文；含 Apple 风险）。
+// 顺序（W2-T2 / §6.2.2）：自动首项 → 12 个既有真实信号 → MainStill（8 位）→ 6 个 still
+// 变体（16..21，枚举顺序追加）。**注意**：新增档位改写了「末项 = MainStill」的既有
+// `--ui-smoke` 探针约定（§6.2.3 的裁定）—— 档位遍历探针必须改为**按 value 定位**
+// （setCurrentIndex(findData(静态转 int))），不得依赖末项/下标。
+inline const std::vector<ProfileOption> &heif_profile_options(bool avif) {
+    static const std::vector<ProfileOption> kHeif = {
+        {pp::HeifProfile::Auto},
+        {pp::HeifProfile::Main},
+        {pp::HeifProfile::Main10},
+        {pp::HeifProfile::Rext420_8},
+        {pp::HeifProfile::Rext420_10},
+        {pp::HeifProfile::Rext420_12},
+        {pp::HeifProfile::Rext422_8},
+        {pp::HeifProfile::Rext422_10},
+        {pp::HeifProfile::Rext422_12},
+        {pp::HeifProfile::Rext444_8},
+        {pp::HeifProfile::Rext444_10},
+        {pp::HeifProfile::Rext444_12},
+        {pp::HeifProfile::MainStill},
+        {pp::HeifProfile::Main10Still},
+        {pp::HeifProfile::Main422_10Still},
+        {pp::HeifProfile::Main422_12Still},
+        {pp::HeifProfile::Main444_Still},
+        {pp::HeifProfile::Main444_10Still},
+        {pp::HeifProfile::Main444_12Still},
     };
-    static const ProfileOption kAvif[] = {
-        {pp::HeifProfile::Auto, "自动"},
-        {pp::HeifProfile::Main, "Main（8/10 位 · 4:2:0/4:0:0）"},
-        {pp::HeifProfile::High, "High（8/10 位 · 4:4:4）"},
-        {pp::HeifProfile::Professional, "Professional（12 位 / 4:2:2）"},
+    static const std::vector<ProfileOption> kAvif = {
+        {pp::HeifProfile::Auto},
+        {pp::HeifProfile::Main},
+        {pp::HeifProfile::High},
+        {pp::HeifProfile::Professional},
     };
-    if (avif) {
-        count = int(std::size(kAvif));
-        return kAvif;
-    }
-    count = int(std::size(kHeif));
-    return kHeif;
+    return avif ? kAvif : kHeif;
+}
+
+// 短标签（单源 = codecs/heif_profile.h）。
+inline QString profile_option_label(bool avif, pp::HeifProfile p) {
+    return QString::fromStdString(pp::heif_profile_label_for(avif, p));
+}
+
+// item tooltip 全文（单源 = codecs/heif_profile.h；C19 的「完整信号说明进 tooltip」）。
+inline QString profile_option_tooltip(bool avif, pp::HeifProfile p) {
+    return QString::fromStdString(pp::heif_profile_tooltip(avif, p));
+}
+
+// 不可用档位（C18：**置灰 + 原因**，不静默隐藏）：空串 = 可用。
+// 目前的唯一一例是 Main10Still（16）—— Main10 的 PTL 没有 still 位、SPS DPB 实测不满足
+// 0/0（理由与编码后断言 heif_sps_still_error_zh 同源）。
+inline QString profile_option_disabled_reason(bool avif, pp::HeifProfile p) {
+    if (avif)
+        return QString();
+    std::string reason;
+    if (!pp::heif_profile_still_available(p, &reason))
+        return QString::fromStdString(reason);
+    return QString();
 }
 
 // 档位 → 允许位深（联动限幅；空 = 不限）。口径与 heif_profile.h 的真实信号一致：
-// HEVC 每档锁定一个位深（Main/MainStill/Rext*_8→8、Main10/Rext*_10→10、
-// Main12/Rext*_12→12）；AV1 Main/High 覆盖 8/10 位，Professional 还可由 4:2:2 命中。
+// HEVC 每档锁定一个位深（Main/MainStill/Rext*_8/Main444_Still→8、Main10/Rext*_10/
+// Main10Still/Main422_10Still/Main444_10Still→10、Main12/Rext*_12/Main422_12Still/
+// Main444_12Still→12）；AV1 Main/High 覆盖 8/10 位，Professional 还可由 4:2:2 命中。
 inline std::vector<int> profile_allowed_bitdepths(pp::HeifProfile p, bool avif = false) {
     switch (p) {
     case pp::HeifProfile::Auto:
@@ -263,10 +297,16 @@ inline std::vector<int> profile_allowed_bitdepths(pp::HeifProfile p, bool avif =
         // AV1 Main 本含 8/10 位；HEVC Main 只对应 8 位（idc=1）。
         return avif ? std::vector<int>{8, 10} : std::vector<int>{8};
     case pp::HeifProfile::MainStill:
+    case pp::HeifProfile::Main444_Still:
         return {8};
     case pp::HeifProfile::Main10:
+    case pp::HeifProfile::Main10Still:
+    case pp::HeifProfile::Main422_10Still:
+    case pp::HeifProfile::Main444_10Still:
         return {10};
     case pp::HeifProfile::Main12:
+    case pp::HeifProfile::Main422_12Still:
+    case pp::HeifProfile::Main444_12Still:
         return {12};
     case pp::HeifProfile::High:
         return {8, 10};
@@ -290,7 +330,10 @@ inline std::vector<int> profile_allowed_bitdepths(pp::HeifProfile p, bool avif =
 
 // 兼容性提示（§8「禁用不静默灰」/ §10.1-4）：非 Main 档位给 warn 色说明。
 // 文案必须与真实信号（idc/色度/位深）一致，不能再把 idc=4 说成 Main10。
+// W2-T2（§6.2.4）：RExt 档统一带 Apple 风险（「RExt 档，iPhone 接受度未验证」），
+// 不做承诺；Main 10 Still 给不可用原因（与置灰同源）。
 inline QString profile_compat_hint(pp::HeifProfile p) {
+    const QString apple_rext = PageOutput::tr("RExt 档，iPhone 接受度未验证");
     switch (p) {
     case pp::HeifProfile::Main:
     case pp::HeifProfile::Auto:
@@ -304,20 +347,37 @@ inline QString profile_compat_hint(pp::HeifProfile p) {
         return PageOutput::tr("Main12 是 12 位 RExt 的兼容别名（idc 4）；新预设请改用显式 "
                               "Rext420/422/444_12 档");
     case pp::HeifProfile::Rext420_8:
-        return PageOutput::tr("Main 4:2:0 8（idc 4）：8 位 RExt，兼容性弱于 Main / Main Still");
+        return PageOutput::tr("Main Intra（4:2:0 8；idc 4）：8 位 RExt 的 intra 信号（非 "
+                              "still）；%1")
+            .arg(apple_rext);
     case pp::HeifProfile::Rext420_10:
         return PageOutput::tr("Main 4:2:0 10 Intra（idc 4）：x265 静图原生默认；部分工具把"
-                              "它显示成 Main10，但码流 idc 是 4");
+                              "它显示成 Main10，但码流 idc 是 4；%1")
+            .arg(apple_rext);
     case pp::HeifProfile::Rext420_12:
-        return PageOutput::tr("Main 4:2:0 12 Intra（idc 4）需较新解码器（12 位）");
+        return PageOutput::tr("Main 4:2:0 12 Intra（idc 4）需较新解码器（12 位）；%1")
+            .arg(apple_rext);
     case pp::HeifProfile::Rext422_8:
     case pp::HeifProfile::Rext422_10:
     case pp::HeifProfile::Rext422_12:
-        return PageOutput::tr("Main 4:2:2（idc 4）兼容性有限，需较新解码器");
+        return PageOutput::tr("Main 4:2:2（idc 4）兼容性有限，需较新解码器；%1").arg(apple_rext);
     case pp::HeifProfile::Rext444_8:
     case pp::HeifProfile::Rext444_10:
     case pp::HeifProfile::Rext444_12:
-        return PageOutput::tr("Main 4:4:4（idc 4）兼容性有限，需较新解码器");
+        return PageOutput::tr("Main 4:4:4（idc 4）兼容性有限，需较新解码器；%1").arg(apple_rext);
+    case pp::HeifProfile::Main10Still: {
+        // 实测不可用：原因与置灰 / 编码后 SPS 断言同源（C18）。
+        std::string reason;
+        (void)pp::heif_profile_still_available(p, &reason);
+        return QString::fromStdString(reason);
+    }
+    case pp::HeifProfile::Main422_10Still:
+    case pp::HeifProfile::Main422_12Still:
+    case pp::HeifProfile::Main444_Still:
+    case pp::HeifProfile::Main444_10Still:
+    case pp::HeifProfile::Main444_12Still:
+        return PageOutput::tr("单图（still）约束：idc 4 + intra=1 + one_picture_only=1；%1")
+            .arg(apple_rext);
     case pp::HeifProfile::High:
         return PageOutput::tr("High 档（4:4:4）兼容性有限，需较新解码器");
     case pp::HeifProfile::Professional:
@@ -350,6 +410,24 @@ struct FormatState {
     QWidget *rule_error_box = nullptr;    // pp-rule-error-box-<id>
     QLabel *rule_error_list = nullptr;    // pp-rule-error-list-<id>
     std::vector<std::string> rule_errors; // 当前错误（中文）
+    // ---- M10-W3-T2（C23 / 设计 §8.5）：格式预设行 + 只读自适应面（每格式页签顶部）----
+    // 控件指针随页签销毁清空（remove_tab）；**会话态字段不随页签销毁**（勾掉再勾回仍保留，
+    // 与 spec 快照同口径）。文件 I/O / 校验 / 二次确认归 MainWindow（单一持有者）。
+    QComboBox *preset_combo = nullptr;                 // pp-format-preset-combo（首项「未选择」）
+    QPushButton *preset_save = nullptr;                // pp-format-preset-save
+    QPushButton *preset_saveas = nullptr;              // pp-format-preset-saveas
+    QPushButton *preset_delete = nullptr;              // pp-format-preset-delete
+    QPushButton *preset_import = nullptr;              // pp-format-preset-import
+    QPushButton *preset_export = nullptr;              // pp-format-preset-export
+    ElidedLabel *preset_note = nullptr;                // pp-format-preset-note-<id>（注释位）
+    QWidget *adaptive_row = nullptr;                   // pp-format-preset-adaptive-row（整行显隐）
+    formkit::SwitchControl *adaptive_switch = nullptr; // pp-format-preset-adaptive-switch
+    ElidedLabel *adaptive_summary = nullptr;           // pp-format-preset-adaptive-<id>
+    QString format_preset_path;    // 当前选中预设（绝对路径；空 = 未选择）——会话态
+    std::string adaptive_policy;   // 预设携带的策略原文（空 = 无策略 → 整行不显示）
+    bool adaptive_enabled = false; // 开关态（初值 = 预设 adaptive.enabled；关闭 = 本次不启用）
+    bool adaptive_parse_ok = true; // 策略解析/校验通过（false → 开关禁用 + 行内中文错误）
+    QString adaptive_error;        // 解析失败的中文错误（行内显示/探针读回）
 };
 
 // R-189：FormatSelection 的规范顺序 = 磁贴顺序（kFormats 表序；与原 tile_index 排序同键）
@@ -667,6 +745,21 @@ struct OutputPageImpl {
 
     // 修 2-25：保存/删除的可用态随"是否有当前预设"走，禁用原因写进 tooltip（不静默灰）
     void sync_preset_buttons();
+
+    // ------------------------------------------------------------ M10-W3-T2 格式预设行
+    // 设计 §8.5 / C23：每格式页签顶部一行「格式预设 [未选择 ▼][保存][另存…][删除][导入…][导出…]」
+    //   * 下拉选中即载入（写当前格式卡；载入/校验/归一归 MainWindow，页面只落卡）；
+    //   * 载入后卡头「已改 N」按新值重算（refresh_changed_pill）；
+    //   * 只读自适应面（C24：GUI 无编辑器）：策略非空 → 摘要 + 「启用自适应」开关；
+    //     解析失败 → 行内中文错误 + 开关禁用（不静默套默认）；空策略 → 整行不显示。
+    void build_format_preset_row(const std::string &id, QVBoxLayout *into); // 页签顶部一行
+    void sync_format_preset_buttons(const std::string &id);
+    // 落卡（无信号）：后端/技术/位深/核心+高级参数/保留键 __heif_profile；st->spec 同步为快照。
+    void apply_format_preset_to(const std::string &id, const pp::OutputFormatSpec &spec);
+    // 只读自适应面（policy 空 = 隐藏整行；解析/校验用 core/adaptive 单源）。
+    void set_adaptive_policy_for(const std::string &id, const std::string &policy, bool enabled);
+    void update_adaptive_row(const std::string &id);
+    void update_format_preset_note(const std::string &id, const QString &text);
 };
 
 } // namespace pp::ui

@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "codecs/encoders.h"
+#include "codecs/param_catalog/catalog.h" // W2-T5：危险/HDR 分组常量（测试断言）
 #include "core/error_text.h"
 #include "core/params.h"
 
@@ -29,6 +30,14 @@ bool has(const pp::ParamSet &s, const char *key) { return s.count(key) != 0; }
 bool contains(const std::vector<std::string> &v, const std::string &s) {
     for (const std::string &x : v)
         if (x == s)
+            return true;
+    return false;
+}
+
+// W2-T5：规则文案带前缀与原因（J19/J1），断言按子串匹配（不弱化：仍要求关键词在场）。
+bool contains_text(const std::vector<std::string> &v, const std::string &needle) {
+    for (const std::string &x : v)
+        if (x.find(needle) != std::string::npos)
             return true;
     return false;
 }
@@ -767,8 +776,7 @@ int main() {
         {
             const Slot vd = slot("jxl", "libjxl", "vardct");
             const Slot md = slot("jxl", "libjxl", "modular");
-            for (const char *key :
-                 {"effort", "decoding_speed", "codestream_level", "resampling", "group_order"}) {
+            for (const char *key : {"effort", "decoding_speed", "codestream_level", "resampling"}) {
                 const pp::ParamDef *a = param_of(*vd.t, key);
                 const pp::ParamDef *b = param_of(*md.t, key);
                 check(a != nullptr && b != nullptr, c, std::string("jxl 镜像参数缺失: ") + key);
@@ -1048,6 +1056,156 @@ int main() {
         // 未命中 → 空串（调用方回退原文，不编造）。
         check(pp::error_text_zh("something entirely new").empty(), c, "未命中应回退空串");
         check(pp::error_text_zh("").empty(), c, "空串输入应回退空串");
+    }
+
+    // ================= M10 / W2-T5（C22）：JXL 参数治理 =================
+    // 断言只增：既有段逐字不动；本段钉住「默认值/三态/删除键/技术作用域/只读/类型」。
+    {
+        const std::string c = "m10w2-jxl-governance";
+        const Slot vd = slot("jxl", "libjxl", "vardct");
+        const Slot md = slot("jxl", "libjxl", "modular");
+        check(vd.t != nullptr && md.t != nullptr, c, "前提失败：jxl 两技术");
+
+        // ① epf 默认 2→-1（跟随库启发式；-1 由编码器跳过下发）。
+        const ParamDef *epf = param_of(*vd.t, "epf");
+        check(epf != nullptr && epf->has_default, c, "epf 应保留 has_default=true");
+        if (epf != nullptr) {
+            check(std::holds_alternative<int64_t>(epf->def) && std::get<int64_t>(epf->def) == -1, c,
+                  "epf 默认值应为 -1，got " + repr(epf->def));
+        }
+        const ParamSet vdef = default_params(*vd.f, "libjxl", "vardct", false);
+        check(param_int(vdef, "epf", 99) == -1, c, "default_params(vardct) 的 epf 应为 -1");
+
+        // ② gaborish/dots/patches 三态：has_default=false ⇒ 默认集不含该键（未设置=不下发）。
+        for (const char *key : {"gaborish", "dots", "patches"}) {
+            const ParamDef *p = param_of(*vd.t, key);
+            check(p != nullptr, c, std::string("三态键缺失: ") + key);
+            if (p != nullptr) {
+                check(!p->has_default, c, std::string(key) + " 应为 has_default=false");
+                check(p->type == ParamType::Bool, c, std::string(key) + " 应为 Bool");
+            }
+            check(!has(vdef, key), c, std::string(key) + " 未设置时不得进入默认集");
+        }
+        const std::string snap = snapshot_params(vdef);
+        check(snap.find("gaborish=") == std::string::npos &&
+                  snap.find("dots=") == std::string::npos &&
+                  snap.find("patches=") == std::string::npos,
+              c, "默认参数快照不得含三态键，got [" + snap + "]");
+        check(snap.find("epf=-1") != std::string::npos, c,
+              "默认参数快照应含 epf=-1，got [" + snap + "]");
+        // 旧预设显式值仍有效（键存在 = 下发）。
+        ParamSet legacy = vdef;
+        legacy["gaborish"] = false;
+        legacy["dots"] = true;
+        legacy["patches"] = false;
+        check(param_bool(legacy, "gaborish", true) == false &&
+                  param_bool(legacy, "dots", false) == true &&
+                  param_bool(legacy, "patches", true) == false,
+              c, "旧预设显式三态值应逐字保留");
+
+        // ③ codestream_level 只读：可见性关闭、恒锁 auto(-1)，但键仍在默认集（旧预设兼容）。
+        const ParamDef *lvl = param_of(*vd.t, "codestream_level");
+        check(lvl != nullptr, c, "codestream_level 缺失");
+        if (lvl != nullptr) {
+            check(lvl->has_default, c, "codestream_level 应保留键（旧预设兼容）");
+            check(!eval_visible(*lvl, vdef), c, "codestream_level 可编辑行应隐藏（只读行呈现）");
+            const std::optional<ParamValue> lock = eval_lock(*lvl, vdef);
+            check(lock.has_value() && std::holds_alternative<int64_t>(*lock) &&
+                      std::get<int64_t>(*lock) == -1,
+                  c, "codestream_level 应恒锁 -1(auto)");
+        }
+        check(param_int(vdef, "codestream_level", 99) == -1, c,
+              "default_params 的 codestream_level 应为 -1");
+
+        // ④ brotli_effort：作用域 Both（两技术都声明）+ 仅 box_compress=1 可见。
+        for (const TechDef *t : {vd.t, md.t}) {
+            const ParamDef *br = param_of(*t, "brotli_effort");
+            check(br != nullptr, c, "brotli_effort 应在两技术都声明（Tech Both）");
+            if (br != nullptr) {
+                ParamSet s;
+                check(!eval_visible(*br, s), c, "box_compress 未开启时 brotli_effort 应不可见");
+                s["box_compress"] = true;
+                check(eval_visible(*br, s), c, "box_compress=1 时 brotli_effort 应可见");
+            }
+        }
+
+        // ⑤ channel_colors_* 类型 Int→Float；color_transform 枚举收窄为 auto/YCoCg。
+        for (const char *key : {"channel_colors_global_percent", "channel_colors_group_percent"}) {
+            const ParamDef *p = param_of(*md.t, key);
+            check(p != nullptr && p->type == ParamType::Float, c,
+                  std::string(key) + " 应为 Float（libjxl 只有 Float setter）");
+        }
+        const ParamDef *ct = param_of(*md.t, "color_transform");
+        check(ct != nullptr && ct->choices.size() == 2, c, "color_transform 枚举应收窄为 2 项");
+        if (ct != nullptr && ct->choices.size() == 2) {
+            check(ct->choices[0].first == "auto" && ct->choices[1].first == "YCoCg", c,
+                  "color_transform 枚举应只剩 auto/YCoCg");
+        }
+
+        // ⑥ 删除行不得再声明（两技术都查）。
+        for (const char *key :
+             {"keep_invisible", "noise", "expert_options", "uses_original_profile", "group_order",
+              "group_order_center_x", "group_order_center_y", "progressive_ac", "qprogressive_ac",
+              "progressive_dc", "responsive", "buffering"}) {
+            check(param_of(*vd.t, key) == nullptr && param_of(*md.t, key) == nullptr, c,
+                  std::string("删除行仍被声明: ") + key);
+        }
+
+        // ⑦ 实验/危险组与 HDR 组（分组字段 = 机器可读标记；W3-T3 注册表据此拒绝）。
+        for (const char *key : {"resampling", "photon_noise"}) {
+            const ParamDef *p = param_of(*vd.t, key);
+            check(p != nullptr && p->group == pp::catalog::kGroupDebug, c,
+                  std::string(key) + " 应归入实验/危险组");
+            if (p != nullptr)
+                check(p->tooltip.find("禁止作为自适应目标") != std::string::npos, c,
+                      std::string(key) + " tooltip 应含自适应禁用标记");
+        }
+        for (const char *key :
+             {"intensity_target", "min_nits", "relative_to_max_display", "linear_below"}) {
+            const ParamDef *p = param_of(*vd.t, key);
+            check(p != nullptr && p->group == pp::catalog::kGroupPsy, c,
+                  std::string(key) + " 应归入 HDR/心理视觉折叠组");
+        }
+
+        // ⑧ 规则引擎：删除键 = 中文「已移除参数」；跨技术键 = J1 中文错误（禁止静默切技术）。
+        {
+            ParamContext ctx;
+            ctx.format_id = "jxl";
+            ctx.backend_id = "libjxl";
+            ctx.tech_id = "vardct";
+            ParamSet s = vdef;
+            s["keep_invisible"] = true;
+            const std::vector<std::string> errs = cross_validate(ctx, s);
+            check(contains_text(errs, "已移除参数：keep_invisible"), c,
+                  "删除键应报「已移除参数」：[" + join(errs) + "]");
+            s.clear();
+            s["expert_options"] = true;
+            check(contains_text(cross_validate(ctx, s), "已移除参数：expert_options"), c,
+                  "expert_options 应报已移除");
+            s.clear();
+            s["modular_predictor"] = int64_t(4);
+            const std::vector<std::string> cross = cross_validate(ctx, s);
+            check(contains_text(cross, "J1") && contains_text(cross, "Modular 专用"), c,
+                  "VarDCT + Modular 键应报 J1：[" + join(cross) + "]");
+            // effort=11 不再需要 expert_options（J6 退场）。
+            s.clear();
+            s["effort"] = int64_t(11);
+            check(cross_validate(ctx, s).empty(), c,
+                  "effort=11 不应再要求 expert_options：[" + join(cross_validate(ctx, s)) + "]");
+            // 干净默认集不得误报（J1/J7/J17/J19 均不应触发）。
+            check(cross_validate(ctx, vdef).empty(), c,
+                  "JXL 有损默认集不得报错：[" + join(cross_validate(ctx, vdef)) + "]");
+            ParamContext mctx = ctx;
+            mctx.tech_id = "modular";
+            const ParamSet mdef = default_params(*md.f, "libjxl", "modular", false);
+            check(cross_validate(mctx, mdef).empty(), c,
+                  "JXL Modular 默认集不得报错：[" + join(cross_validate(mctx, mdef)) + "]");
+            ParamSet bad_mod = mdef;
+            bad_mod["epf"] = int64_t(2);
+            const std::vector<std::string> e2 = cross_validate(mctx, bad_mod);
+            check(contains_text(e2, "J1") && contains_text(e2, "VarDCT 专用"), c,
+                  "Modular + VarDCT 键应报 J1：[" + join(e2) + "]");
+        }
     }
 
     if (g_fail == 0)

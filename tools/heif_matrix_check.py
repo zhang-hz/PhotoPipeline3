@@ -46,6 +46,8 @@ HVCC_PY = REPO / "build" / "analysis" / "hvcc.py"
 IINFO = REPO / "vcpkg_installed" / "x64-windows-avx2" / "tools" / "openimageio" / "iinfo.exe"
 DEFAULT_EXE = REPO / "build" / "release-dev" / "photopipeline.exe"
 MATRIX_DIR = REPO / "build" / "matrix"
+# W2-T1：并行任务隔离用（--tmp-dir 覆盖；默认沿用 M9 的 build/matrix/tmp）。
+TMP_DIR = MATRIX_DIR / "tmp"
 SMALL_TIF = REPO / "build" / "tmp-heif" / "small.tif"
 T1_TIF = REPO / "super" / "T1.tif"
 
@@ -96,9 +98,17 @@ LEVEL_SR = {  # maxLumaSamplesPerSecond（仅用于文档/自动 level 说明；
 CHROMAS = ["420", "422", "444"]
 CHROMA_IDX = {"420": 1, "422": 2, "444": 3}
 BITDEPTHS = [8, 10, 12]
+# W2-T3（C20）：HEIF/x265 的 tune 事实表（与 src/codecs/enc_tune_facts.cpp 逐值对齐）：
+#   * 合法 = 4 原生 + animation（引擎注入近似仿真）；
+#   * 置灰 = zerolatency（单帧无效果）/ vmaf（x265 空实现）→ 必须干净失败且点名「不可用」。
+HEIF_TUNE_LEGAL = ["psnr", "ssim", "grain", "fastdecode", "animation"]
+HEIF_TUNE_DISABLED = ["zerolatency", "vmaf"]
 
-# 档位编号单源 = src/codecs/heif_profile.h（0..6 既有编号，7..15 RExt 追加）。
+# 档位编号单源 = src/codecs/heif_profile.h（0..6 既有编号，7..15 RExt 追加，
+# 16..21 = W2-T2 的 still 变体）。
 # key: int 编号；value: (显示名, 期望 signal dict) ；signal 为 None = Auto（不校验信号）。
+# still=True → 编码后除 hvcC 外还断言 SPS PTL 的 intra/one_picture（C18）；
+# unavailable=True → 该档位实测不可用（编码必须**干净失败**且错误点名 still/DPB）。
 PROFILES = {
     0: ("Auto", None),
     1: ("Main", {"idc": 1, "chroma": "420", "bd": 8}),
@@ -116,9 +126,21 @@ PROFILES = {
     13: ("Rext444_8", {"idc": 4, "chroma": "444", "bd": 8}),
     14: ("Rext444_10", {"idc": 4, "chroma": "444", "bd": 10}),
     15: ("Rext444_12", {"idc": 4, "chroma": "444", "bd": 12}),
+    # —— W2-T2（C18）：still 变体 16..21 ——
+    # 16 = Main 10 Still Picture：走 Main10 注入路径，PTL 无 still 位；SPS DPB 实测 4/2
+    #（要求 0/0）→ 实测不可用（UI 置灰），编码必须干净失败（错误点名 DPB/still）。
+    16: ("Main10Still", {"idc": 2, "chroma": "420", "bd": 10, "still": True,
+                         "unavailable": True}),
+    17: ("Main422_10Still", {"idc": 4, "chroma": "422", "bd": 10, "still": True}),
+    18: ("Main422_12Still", {"idc": 4, "chroma": "422", "bd": 12, "still": True}),
+    19: ("Main444_Still", {"idc": 4, "chroma": "444", "bd": 8, "still": True}),
+    20: ("Main444_10Still", {"idc": 4, "chroma": "444", "bd": 10, "still": True}),
+    21: ("Main444_12Still", {"idc": 4, "chroma": "444", "bd": 12, "still": True}),
 }
-# HEVC 合法档位编号（用于 final 的 signal×level 深矩阵）
+# HEVC 合法档位编号（用于 final 的 signal×level 深矩阵；still 变体单列 final-still 集）
 HEVC_SIGNAL_PROFILES = [1, 2, 3, 4, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+# W2-T2 still 变体（17..21 可编码；16 预期干净失败）
+STILL_PROFILES = [16, 17, 18, 19, 20, 21]
 
 
 def level_idc(level: int) -> int:
@@ -160,67 +182,153 @@ def align_down(value: int, a: int) -> int:
     return (value // a) * a
 
 
-def plan_grid(grid_mode: int, level: int, width: int, height: int, chroma: str) -> dict:
-    """逐字复刻 heif_plan_grid（src/codecs/heif_capability.cpp，2026-10-31 08:56 版）。
+def plan_grid(grid_mode: int, level: int, width: int, height: int, chroma: str,
+              tile_w: int = 0, tile_h: int = 0) -> dict:
+    """复刻 W2-T1 的 heif_plan_grid（src/codecs/heif_capability.cpp）。
 
-    2026-10-31 后口径：tile 宽高统一 8 对齐（覆盖 x265 minCUSize 补齐与 420/422 色度对齐）；
-    显式 Level 容不下基准 1024×576 时，按“面积最大、等面积取最接近 16:9”搜索 tile。
+    语义：
+      * grid_mode 内部编号 0=关闭 / 1=总是 / 2=自动；手动 tile > 0 时强制分块；
+      * Level=自动 时只有整图超出最高 Level 7.2 容量才分块，否则单图（默认零变化）；
+      * 显式 Level 装不下整图 → 按“面积最大、等面积取最接近 16:9”搜索 tile（8 对齐、≥64）；
+      * 手动 tile 8 向下对齐；<64 / >8192 / 显式 Level 装不下 → ok=False + 中文错误；
+      * rows×cols==1 → 降级单图；单边 >256 或 rows×cols>65535 → 错误。
     """
-    plan = {"use_grid": False, "level_idc": level, "tile_width": 0, "tile_height": 0,
-            "cols": 0, "rows": 0, "tile_luma_samples": 0,
-            "level_fits_image": level_fits(level, width, height)}
+    plan = {"ok": True, "error": "", "use_grid": False, "level_idc": level,
+            "tile_width": 0, "tile_height": 0, "cols": 0, "rows": 0,
+            "tile_luma_samples": 0, "level_fits_image": level_fits(level, width, height),
+            "downgraded": False, "manual": bool(tile_w or tile_h),
+            "tile_level_idc": 0, "note": ""}
     if width <= 0 or height <= 0:
+        plan.update(ok=False, error="图像尺寸无效")
         return plan
     if level != 0 and level not in LEVEL_PS:
-        return plan  # 未知 Level：不规划，由调用方给“Level 不存在”错误
-    if grid_mode not in (1, 2):
+        plan.update(ok=False, level_fits_image=False, error="Level 不存在")
         return plan
-    if grid_mode == 2 and plan["level_fits_image"]:
+    if grid_mode not in (0, 1, 2):
+        return plan
+    explicit = level != 0
+    manual = bool(tile_w or tile_h)
+    if grid_mode == 0:
+        if explicit and not plan["level_fits_image"]:
+            plan.update(ok=False, error=f"图像超过 Level {level} 上限且分块模式=关闭")
+        return plan
+
+    auto_capacity_fits = level_fits(72, width, height)
+    if manual:
+        want_grid = True
+    elif grid_mode == 1:
+        want_grid = True
+    elif explicit:
+        want_grid = not plan["level_fits_image"]
+    else:
+        want_grid = not auto_capacity_fits
+    if not want_grid:
         return plan
     plan["use_grid"] = True
+    plan["tile_level_idc"] = level if explicit else 0
 
-    k_align = 8
-    k_base_w, k_base_h = 1024, 576
-    k_min_tile = 64
+    k_base_w, k_base_h, k_min_tile, k_align = 1024, 576, 64, 8
 
     def align8(v: int) -> int:
         return 0 if v <= 0 else (v // k_align) * k_align
 
-    def clamp_tile(v: int, base: int) -> int:
-        return max(k_align, align8(min(v, base)))
-
-    tile_w = clamp_tile(width, k_base_w)
-    tile_h = clamp_tile(height, k_base_h)
-    max_luma = LEVEL_PS.get(level, 0) if level else 0
-    if max_luma > 0:
+    def best_tile() -> tuple[int, int, bool]:
+        max_luma = LEVEL_PS[level]
         dim_cap = int((8.0 * max_luma) ** 0.5)
-        base_fits = (tile_w * tile_h <= max_luma and tile_w <= dim_cap and tile_h <= dim_cap)
-        if not base_fits:
-            w_max = min(width, k_base_w, dim_cap)
-            h_max = min(height, k_base_h, dim_cap)
-            best_w = best_h = 0
-            best_area = -1
-            best_diff = 1e9
-            target = k_base_w / k_base_h
-            w = align8(w_max)
-            while w >= k_min_tile:
-                h = align8(min(h_max, max_luma // w))
-                if h >= k_min_tile:
-                    area = w * h
-                    if area <= max_luma:
-                        diff = abs(w / h - target)
-                        if area > best_area or (area == best_area and diff < best_diff):
-                            best_area, best_diff, best_w, best_h = area, diff, w, h
-                w -= k_align
-            if best_w < k_min_tile or best_h < k_min_tile:
-                plan["use_grid"] = False
+        w_max = min(width, k_base_w, dim_cap)
+        h_max = min(height, k_base_h, dim_cap)
+        best_w = best_h = 0
+        best_area = -1
+        best_diff = 1e9
+        target = k_base_w / k_base_h
+        w = align8(w_max)
+        while w >= k_min_tile:
+            h = align8(min(h_max, max_luma // w))
+            if h >= k_min_tile:
+                area = w * h
+                if area <= max_luma:
+                    diff = abs(w / h - target)
+                    if area > best_area or (area == best_area and diff < best_diff):
+                        best_area, best_diff, best_w, best_h = area, diff, w, h
+            w -= k_align
+        return best_w, best_h, best_w >= k_min_tile and best_h >= k_min_tile
+
+    auto_w = max(k_align, align8(min(width, k_base_w)))
+    auto_h = max(k_align, align8(min(height, k_base_h)))
+    if explicit:
+        max_luma = LEVEL_PS[level]
+        dim_cap = int((8.0 * max_luma) ** 0.5)
+        if not (auto_w * auto_h <= max_luma and auto_w <= dim_cap and auto_h <= dim_cap):
+            auto_w, auto_h, ok = best_tile()
+            if not ok:
+                plan.update(ok=False, use_grid=False, error=f"Level {level} 下没有可用 tile")
                 return plan
-            tile_w, tile_h = best_w, best_h
-    plan["tile_width"] = tile_w
-    plan["tile_height"] = tile_h
-    plan["tile_luma_samples"] = tile_w * tile_h
-    plan["cols"] = (width + tile_w - 1) // tile_w
-    plan["rows"] = (height + tile_h - 1) // tile_h
+
+    tw, th = auto_w, auto_h
+    if manual:
+        if tile_w < 0 or tile_w > 8192 or tile_h < 0 or tile_h > 8192:
+            plan.update(ok=False, use_grid=False, error="手动 tile 参数越界（0–8192）")
+            return plan
+        if tile_w:
+            tw = align8(tile_w)
+            if tw < k_min_tile:
+                plan.update(ok=False, use_grid=False,
+                            error=f"手动 tile 宽 {tile_w} 对齐后小于 64")
+                return plan
+        if tile_h:
+            th = align8(tile_h)
+            if th < k_min_tile:
+                plan.update(ok=False, use_grid=False,
+                            error=f"手动 tile 高 {tile_h} 对齐后小于 64")
+                return plan
+        tentative_cols = (width + tw - 1) // tw
+        tentative_rows = (height + th - 1) // th
+        if tentative_cols == 1 and tentative_rows == 1:
+            plan.update(use_grid=False, downgraded=True, tile_width=tw, tile_height=th,
+                        cols=1, rows=1, tile_luma_samples=tw * th,
+                        note="手动 tile 覆盖整图，降级单图")
+            return plan
+        if explicit:
+            max_luma = LEVEL_PS[level]
+            dim_cap = int((8.0 * max_luma) ** 0.5)
+            if tile_h == 0:
+                cap = max_luma // tw
+                lim = align8(min(auto_h, dim_cap, cap))
+                if lim < k_min_tile:
+                    plan.update(ok=False, use_grid=False,
+                                error=f"手动 tile {tw}×{auto_h} 超过 Level {level} 上限")
+                    return plan
+                th = lim
+            if tile_w == 0:
+                cap = max_luma // th
+                lim = align8(min(auto_w, dim_cap, cap))
+                if lim < k_min_tile:
+                    plan.update(ok=False, use_grid=False,
+                                error=f"手动 tile {auto_w}×{th} 超过 Level {level} 上限")
+                    return plan
+                tw = lim
+            if not (tw * th <= max_luma and tw <= dim_cap and th <= dim_cap):
+                best_w, best_h, best_ok = best_tile()
+                detail = (f"最大可行 tile 为 {best_w}×{best_h}" if best_ok
+                          else "连 64×64 都容不下")
+                plan.update(ok=False, use_grid=False,
+                            error=(f"手动 tile {tw}×{th} 超过 Level {level} 的 MaxLumaPs "
+                                   f"{max_luma}/单边 {dim_cap}；{detail}；三条出路：自动/提高 "
+                                   f"Level/关闭 grid"))
+                return plan
+        else:
+            plan["note"] = "Level=自动 + 手动 tile（iPhone 接受度未验证）"
+
+    cols = (width + tw - 1) // tw
+    rows_ = (height + th - 1) // th
+    if cols > 256 or rows_ > 256 or cols * rows_ > 65535:
+        plan.update(ok=False, use_grid=False,
+                    error=f"网格 {rows_}×{cols} 超过 grid 上限 65535/单边 256")
+        return plan
+    plan.update(tile_width=tw, tile_height=th, tile_luma_samples=tw * th,
+                cols=cols, rows=rows_)
+    if cols == 1 and rows_ == 1:
+        plan.update(use_grid=False, downgraded=True, note="tile 覆盖整图，降级单图")
     return plan
 
 
@@ -267,6 +375,124 @@ def parse_hvcc_payload(b: bytes) -> dict:
         "bd_luma": (b[17] & 7) + 8,
         "bd_chroma": (b[18] & 7) + 8,
     }
+
+
+# ---------------------------------------------------------------------------
+# W2-T2（C18）：hvcC 内嵌 SPS 的 PTL / DPB 解析（复刻 src/codecs/heif_capability.cpp）
+#   * libheif 生成 hvcC 时会丢 48 位 constraint（实测 constraint 字节恒 0）→ still 语义
+#     （intra/one_picture_only）只能从 SPS 读；
+#   * NAL 先跳 2 字节头，再**去 00 00 03 防竞争字节**（不做会让位偏移错）。
+# ---------------------------------------------------------------------------
+class _Bits:
+    def __init__(self, data: bytes):
+        self.data = data
+        self.pos = 0
+
+    def u(self, n: int) -> int:
+        v = 0
+        for _ in range(n):
+            if self.pos >= len(self.data) * 8:
+                raise ValueError("bitstream exhausted")
+            byte = self.data[self.pos >> 3]
+            v = (v << 1) | ((byte >> (7 - (self.pos & 7))) & 1)
+            self.pos += 1
+        return v
+
+    def ue(self) -> int:
+        zeros = 0
+        while self.u(1) == 0:
+            zeros += 1
+            if zeros > 31:
+                raise ValueError("bad ue")
+        return (1 << zeros) - 1 + (self.u(zeros) if zeros else 0)
+
+
+def _rbsp_from_nal(nal: bytes) -> bytes:
+    out = bytearray()
+    zeros = 0
+    for i in range(2, len(nal)):
+        b = nal[i]
+        if zeros >= 2 and b == 3:
+            zeros = 0
+            continue
+        out.append(b)
+        zeros = zeros + 1 if b == 0 else 0
+    return bytes(out)
+
+
+def _parse_sps_nal(nal: bytes) -> dict | None:
+    try:
+        b = _Bits(_rbsp_from_nal(nal))
+        b.u(4)  # sps_video_parameter_set_id
+        max_sub = b.u(3)
+        b.u(1)  # sps_temporal_id_nesting_flag
+        out = {}
+        b.u(2)  # profile_space
+        out["tier"] = b.u(1)
+        out["idc"] = b.u(5)
+        out["compat"] = b.u(32)
+        flags = [b.u(1) for _ in range(4)]
+        c44 = [b.u(1) for _ in range(44)]
+        out["constraint48"] = "".join(map(str, flags + c44))
+        out["progressive"] = flags[0]
+        out["interlaced"] = flags[1]
+        out["non_packed"] = flags[2]
+        out["frame_only"] = flags[3]
+        if out["idc"] in (4, 5, 9, 10, 11):
+            names = ["max_12bit", "max_10bit", "max_8bit", "max_422chroma", "max_420chroma",
+                     "max_monochrome", "intra", "one_picture_only", "lower_bit_rate"]
+            for i, nm in enumerate(names):
+                out[nm] = c44[i]
+        else:
+            for nm in ("intra", "one_picture_only"):
+                out[nm] = -1  # 非 RExt：保留位，不适用（不是 0）
+        out["level_idc"] = b.u(8)
+        # —— SPS 体：到 DPB 为止 ——
+        b.ue()  # sps_seq_parameter_set_id
+        out["chroma"] = b.ue()
+        if out["chroma"] == 3:
+            b.u(1)  # separate_colour_plane_flag
+        b.ue()  # width
+        b.ue()  # height
+        if b.u(1):  # conformance_window_flag
+            for _ in range(4):
+                b.ue()
+        out["bd_luma"] = b.ue() + 8
+        out["bd_chroma"] = b.ue() + 8
+        b.ue()  # log2_max_pic_order_cnt_lsb_minus4
+        present = b.u(1)
+        start = 0 if present else max_sub
+        for _ in range(start, max_sub + 1):
+            out["dpb_minus1"] = b.ue()
+            out["num_reorder_pics"] = b.ue()
+            out["latency_plus1"] = b.ue()
+        return out
+    except (ValueError, IndexError):
+        return None
+
+
+def parse_sps_ptl(hvcc: bytes) -> dict | None:
+    """从 hvcC payload 取首个 SPS（nal_unit_type=33）的 PTL/DPB；失败返回 None。"""
+    if len(hvcc) < 23 or hvcc[0] != 1:
+        return None
+    pos = 23
+    for _ in range(hvcc[22]):
+        if pos + 3 > len(hvcc):
+            return None
+        nal_type = hvcc[pos] & 0x3F
+        pos += 1
+        count = struct.unpack(">H", hvcc[pos:pos + 2])[0]
+        pos += 2
+        for _ in range(count):
+            if pos + 2 > len(hvcc):
+                return None
+            length = struct.unpack(">H", hvcc[pos:pos + 2])[0]
+            pos += 2
+            nal = hvcc[pos:pos + length]
+            pos += length
+            if nal_type == 33:
+                return _parse_sps_nal(nal)
+    return None
 
 
 def parse_infe(payload: bytes) -> dict | None:
@@ -405,6 +631,7 @@ class HeifStructure:
     grids: list = field(default_factory=list)  # [{id, rows, cols, w, h}]
     tiles: list = field(default_factory=list)  # [{id, ispe, hvcc}]
     hvcc_all: list = field(default_factory=list)
+    sps_all: list = field(default_factory=list)  # W2-T2：每 hvcC 的 SPS PTL/DPB
     ispe_all: list = field(default_factory=list)
     iref: list = field(default_factory=list)
     ftyp: dict = field(default_factory=dict)
@@ -415,7 +642,13 @@ class HeifStructure:
             "grids": self.grids,
             "tile_count": len(self.tiles),
             "tile_ispe": sorted({tuple(t["ispe"]) for t in self.tiles if t.get("ispe")}),
+            # W2-T1：每 tile hvcC 的 level/profile（结构断言的落盘证据）。
+            "tile_levels": sorted({(t.get("hvcc") or {}).get("level_idc")
+                                   for t in self.tiles if t.get("hvcc")}),
+            "tile_profiles": sorted({(t.get("hvcc") or {}).get("profile_idc")
+                                     for t in self.tiles if t.get("hvcc")}),
             "hvcc": self.hvcc_all,
+            "sps": self.sps_all,
             "ispe_all": self.ispe_all,
             "iref_count": len(self.iref),
             "ftyp": self.ftyp,
@@ -457,6 +690,7 @@ def parse_heif(path: Path) -> HeifStructure:
                     prop["w"], prop["h"] = struct.unpack(">II", buf[ps + 4:ps + 12])
                 elif ptyp == b"hvcC":
                     prop["hvcc"] = parse_hvcc_payload(buf[ps:pe])
+                    prop["sps"] = parse_sps_ptl(buf[ps:pe])  # W2-T2：SPS PTL/DPB
                 ipco_children.append(prop)
 
     st.items = items
@@ -478,6 +712,7 @@ def parse_heif(path: Path) -> HeifStructure:
         if p["type"] == "hvcC":
             hvcc_index_to_idx[i] = len(st.hvcc_all)
             st.hvcc_all.append(p["hvcc"])
+            st.sps_all.append(p.get("sps"))  # W2-T2：同一 hvcC 的 SPS PTL/DPB
 
     for it in items:
         assoc = ipma.get(it["id"], [])
@@ -531,14 +766,18 @@ class Case:
     level: int
     tier: int
     profile: int | None  # None = 不注入 __heif_profile（baseline）
-    grid: int | None     # None = 不注入 __heif_grid（baseline）
+    grid: int | None     # None = 不注入 grid 键（baseline）
+    tile_w: int | None = None   # None = 不注入 heif_tile_w
+    tile_h: int | None = None
+    grid_key: str = "__heif_grid"  # W2-T1 新键 heif_grid；旧 M9 用例保留别名兼容验证
+    tune: str | None = None      # W2-T3（C20）：tune 值（None = 不注入，走插件默认）
     expected_legal: bool = True
     expected_reason: str = ""
     expected_profile_idc: int | None = None
     expected_level_idc: int | None = None
     expected_tier: int = 0
     expected_grid: dict | None = None
-    expected_error_kind: str = ""  # level | profile | param | any
+    expected_error_kind: str = ""  # level | profile | param | tile | grid | still | any
 
     @property
     def luma(self) -> int:
@@ -557,7 +796,13 @@ class Case:
         if self.profile is not None:
             parts += ["--param", f"__heif_profile={self.profile}"]
         if self.grid is not None:
-            parts += ["--param", f"__heif_grid={self.grid}"]
+            parts += ["--param", f"{self.grid_key}={self.grid}"]
+        if self.tile_w is not None:
+            parts += ["--param", f"heif_tile_w={self.tile_w}"]
+        if self.tile_h is not None:
+            parts += ["--param", f"heif_tile_h={self.tile_h}"]
+        if self.tune is not None:
+            parts += ["--param", f"tune={self.tune}"]
         parts += ["--workers", str(WORKERS)]
         # Windows PowerShell 友好：路径含空格时加引号由调用者负责，这里保留原样。
         return " ".join(parts)
@@ -590,18 +835,32 @@ def expected_tier_flag(level: int, tier: int, luma: int) -> int:
 
 
 def make_case(set_name, src_kind, src, width, height, bd, chroma, level, tier,
-              profile=None, grid=None) -> Case:
+              profile=None, grid=None, tile_w=None, tile_h=None,
+              grid_key="__heif_grid", tune=None) -> Case:
     cid_bits = [src_kind, f"b{bd}", chroma, f"l{level}", f"t{tier}"]
     if profile is not None:
         cid_bits.append(f"p{profile}")
     if grid is not None:
-        cid_bits.append(f"g{grid}")
+        cid_bits.append(f"g{grid}" + ("n" if grid_key == "heif_grid" else ""))
+    if tile_w is not None or tile_h is not None:
+        cid_bits.append(f"m{tile_w or 0}x{tile_h or 0}")
+    if tune is not None:
+        cid_bits.append(f"tn{tune}")
     cid = "-".join(cid_bits)
 
     legal = True
     reasons = []
     profile_bad = False
     level_bad = False
+    tile_bad = False
+    grid_bad = False
+    still_bad = False
+    tune_bad = False
+    # W2-T3（C20）：置灰 tune 值在编码器参数循环里**先于**档位/Level 失败（同一事实表文案）。
+    if tune is not None and tune in HEIF_TUNE_DISABLED:
+        legal = False
+        tune_bad = True
+        reasons.append(f"tune={tune} 为置灰值（不可用）：编码必须干净失败并点名原因")
     # profile 兼容
     if profile is not None:
         pok, preason = profile_signal_legal(profile, bd, chroma)
@@ -609,17 +868,40 @@ def make_case(set_name, src_kind, src, width, height, bd, chroma, level, tier,
             legal = False
             profile_bad = True
             reasons.append(preason)
-    # grid / level
-    grid_plan = None
-    if grid is not None:
-        grid_plan = plan_grid(grid, level, width, height, chroma)
-    if level == 0:
-        pass
-    elif grid_plan is not None and grid_plan["use_grid"]:
-        if grid_plan["tile_luma_samples"] > LEVEL_PS.get(level, 0):
+        # W2-T2（C18）：16 = Main10Still 实测不可用（PTL 无 still 位 + SPS DPB 4/2）→
+        # 兼容门控放行（信号对得上），但编码必须在**编码后 SPS 断言**里干净失败。
+        if PROFILES[profile][1] and PROFILES[profile][1].get("unavailable"):
             legal = False
-            level_bad = True
-            reasons.append("grid tile 仍超过 Level 上限")
+            still_bad = True
+            reasons.append("Main10Still 实测不可用：非 RExt 的 PTL 无 still 位 + SPS DPB 4/2"
+                           "（要求 0/0）→ 编码后断言必须失败")
+    # grid / tile / level（W2-T1：手动 tile + 新键 heif_grid）
+    grid_plan = None
+    if grid is not None or tile_w is not None or tile_h is not None:
+        grid_mode = 2 if grid is None else grid
+        if grid_key == "heif_grid":
+            # 新键用户面编号 0=关闭 / 1=自动 / 2=总是 → 内部模式 0/2/1。
+            grid_mode = {0: 0, 1: 2, 2: 1}.get(grid_mode, grid_mode)
+        grid_plan = plan_grid(grid_mode, level, width, height, chroma,
+                              tile_w or 0, tile_h or 0)
+        if not grid_plan["ok"]:
+            legal = False
+            err = grid_plan["error"]
+            if "手动 tile" in err or "tile" in err.lower() or "MaxLumaPs" in err \
+                    or "65535" in err or "网格" in err:
+                tile_bad = True
+            elif "关闭" in err:
+                grid_bad = True
+            else:
+                level_bad = True
+            reasons.append(err)
+        elif grid_plan["use_grid"] and level != 0:
+            if grid_plan["tile_luma_samples"] > LEVEL_PS.get(level, 0):
+                legal = False
+                level_bad = True
+                reasons.append("grid tile 仍超过 Level 上限")
+    elif level == 0:
+        pass
     elif not level_fits(level, width, height):
         legal = False
         level_bad = True
@@ -634,26 +916,42 @@ def make_case(set_name, src_kind, src, width, height, bd, chroma, level, tier,
         # 10/12 位 4:2:0 与 4:2:2/4:4:4 → idc4（RExt）。
         exp_profile_idc = 3 if (bd == 8 and chroma == "420") else 4
 
-    effective_luma = grid_plan["tile_luma_samples"] if (grid_plan and grid_plan["use_grid"]) else width * height
+    use_grid = bool(grid_plan and grid_plan["use_grid"])
+    effective_luma = grid_plan["tile_luma_samples"] if use_grid else width * height
     exp_level_idc = level_idc(level) if level else level_idc(auto_level(effective_luma))
 
-    ed = (grid or 0)
+    expected_grid = None
+    if use_grid:
+        tile_level = level_idc(level) if level else level_idc(auto_level(effective_luma))
+        expected_grid = {
+            "cols": grid_plan["cols"],
+            "rows": grid_plan["rows"],
+            "tile_width": grid_plan["tile_width"],
+            "tile_height": grid_plan["tile_height"],
+            "tile_level_idc": tile_level,
+        }
+
     if not legal:
-        # enc_heif 先做档位反查、再做 Level 预校验；两者都非法时错误文案是档位。
-        err_kind = "profile" if profile_bad else ("level" if level_bad else "")
+        # enc_heif 先做档位反查、再做 Level/grid 预检；多者非法时错误文案按此顺序。
+        # W2-T2：16 号（Main10Still）是「档位信号兼容但实测不可用」→ 失败点在编码后 SPS 断言。
+        # W2-T3：置灰 tune 值在参数循环最先失败（tune 文案优先）。
+        err_kind = ("tune" if tune_bad else "profile" if profile_bad else "still" if still_bad
+                    else "grid" if grid_bad else "tile" if tile_bad else "level" if level_bad
+                    else "")
     else:
         err_kind = ""
-    if profile is None and grid is None:
+    if profile is None and grid is None and tile_w is None and tile_h is None and tune is None:
         # baseline 旧二进制没有中文预校验（只有 libheif/x265 泛化错误），不强制点名原因。
         err_kind = ""
 
     return Case(
         case_id=cid, set_name=set_name, src_kind=src_kind, src=src, width=width, height=height,
         bitdepth=bd, chroma=chroma, level=level, tier=tier, profile=profile, grid=grid,
+        tile_w=tile_w, tile_h=tile_h, grid_key=grid_key, tune=tune,
         expected_legal=legal, expected_reason="; ".join(reasons) if reasons else "legal",
         expected_profile_idc=exp_profile_idc, expected_level_idc=exp_level_idc,
         expected_tier=expected_tier_flag(level, tier, effective_luma),
-        expected_grid=grid_plan if (grid_plan and grid_plan["use_grid"]) else None,
+        expected_grid=expected_grid,
         expected_error_kind=err_kind,
     )
 
@@ -720,6 +1018,25 @@ def build_case_sets(phase: str, want_shrink: bool, t1_extra: bool) -> dict[str, 
                     compat.append(make_case("final-profile-compat", "small", SMALL_TIF,
                                             1024, 576, bd, ch, 0, 0, prof, 0))
         sets["final-profile-compat"] = compat
+        # 3b) W2-T2（C18）：still 变体 16..21 —— 档位×色度/位深 + SPS still 断言。
+        #     * 16（Main10Still）实测不可用（PTL 无 still 位 + SPS DPB 4/2）→ 期望干净失败；
+        #     * 17..21 原生 RExt still → 必须成功且 SPS 写出 intra=1/one_picture_only=1；
+        #     * 14（Rext444_10）与 20（Main444_10Still）是**同一真实信号** → 对照用例。
+        still_cases = [
+            (16, 10, "420", 0),
+            (17, 10, "422", 0),
+            (18, 12, "422", 0),
+            (19, 8, "444", 0),
+            (20, 10, "444", 0),
+            (21, 12, "444", 0),
+            (19, 8, "444", 31),   # 显式 Level 3.1
+            (20, 10, "444", 40),  # 显式 Level 4.0
+            (14, 10, "444", 0),   # 对照：既有 Rext444_10（同一信号）
+        ]
+        sets["final-still"] = [
+            make_case("final-still", "small", SMALL_TIF, 1024, 576, bd, ch, lv, 0, prof, 0)
+            for prof, bd, ch, lv in still_cases
+        ]
         # 4) grid / Apple 模式 / T1 真实大图
         grid_cases = [
             # 任务要求的主证据：T1 + L3.1 + grid=2 → 4×11 tile，每 tile L3.1
@@ -753,6 +1070,40 @@ def build_case_sets(phase: str, want_shrink: bool, t1_extra: bool) -> dict[str, 
         if want_shrink:
             gc.append(make_case("final-grid", "t1", T1_TIF, 3902, 5854, 10, "420", 20, 0, None, 2))
         sets["final-grid"] = gc
+        # 4b) W2-T1 用户面新键 heif_grid / heif_tile_w / heif_tile_h（C16/C17）：
+        #     自动语义 / 总是 Apple / 手动合法/非法 / grid 关闭 / Level 收缩 / 8 对齐。
+        gt_cases = [
+            ("small", 8, "420", 0, 1, None, None, None, "new-auto + level auto → 单图"),
+            ("t1", 10, "420", 31, 1, None, None, 2, "new-auto + L3.1 → 4×11 / 每 tile L3.1"),
+            ("t1", 10, "420", 0, 2, None, None, None, "new-always + level auto → Apple 基准"),
+            ("small", 8, "420", 0, 2, None, None, None, "new-always 1×1 → 降级单图"),
+            ("small", 8, "420", 31, 2, 512, 288, None, "manual 512×288 合法 → 2×2"),
+            ("small", 8, "420", 0, 1, 512, 288, None, "manual + level auto → note"),
+            ("t1", 10, "420", 31, 2, 1024, 1024, None, "manual 超 Level（4×6）→ 中文预检失败"),
+            ("small", 8, "420", 31, 2, 32, 256, None, "manual <64 → 中文预检失败"),
+            ("small", 8, "420", 30, 0, None, None, None, "grid 关闭 + 超 Level → 中文预检失败"),
+            ("small", 8, "420", 30, 1, None, None, None, "new-auto + L3.0 → 960×576 2×1"),
+            ("small", 8, "420", 31, 2, 1004, 300, None, "manual 1004→1000 / 300→296 → 2×2"),
+        ]
+        gt = []
+        for kind, bd, ch, lv, gm, tw, th, prof, _label in gt_cases:
+            src = T1_TIF if kind == "t1" else SMALL_TIF
+            sw, sh = (3902, 5854) if kind == "t1" else (1024, 576)
+            gt.append(make_case("final-gridtile", kind, src, sw, sh, bd, ch, lv, 0, prof, gm,
+                                tw, th, grid_key="heif_grid"))
+        sets["final-gridtile"] = gt
+        # 4c) W2-T3（C20）：tune 全量 —— 4 原生 + animation（引擎注入近似仿真）+ 2 置灰。
+        #     合法值：编码成功且产物结构可解（hvcC/SPS 断言沿用通用判据）；
+        #     置灰值：必须干净失败且错误点名「不可用」（同一事实表文案）。
+        tune_cases: list[Case] = []
+        for bd, ch, prof in ((8, "420", 0), (10, "420", 2), (10, "444", 20), (12, "422", 18)):
+            for tune in HEIF_TUNE_LEGAL:
+                tune_cases.append(make_case("final-tune", "small", SMALL_TIF, 1024, 576,
+                                            bd, ch, 0, 0, prof, 0, tune=tune))
+        for tune in HEIF_TUNE_DISABLED:
+            tune_cases.append(make_case("final-tune", "small", SMALL_TIF, 1024, 576,
+                                        8, "420", 0, 0, 0, 0, tune=tune))
+        sets["final-tune"] = tune_cases
         # 5) T1 单图（无 grid）大图基线：level 0 auto（6.0）与高 Level；含 Main10 单图
         t1s = []
         for bd in BITDEPTHS:
@@ -827,7 +1178,13 @@ def run_encode(case: Case, exe: Path, timeout: int, outdir: Path) -> dict:
     if case.profile is not None:
         cmd += ["--param", f"__heif_profile={case.profile}"]
     if case.grid is not None:
-        cmd += ["--param", f"__heif_grid={case.grid}"]
+        cmd += ["--param", f"{case.grid_key}={case.grid}"]
+    if case.tile_w is not None:
+        cmd += ["--param", f"heif_tile_w={case.tile_w}"]
+    if case.tile_h is not None:
+        cmd += ["--param", f"heif_tile_h={case.tile_h}"]
+    if case.tune is not None:
+        cmd += ["--param", f"tune={case.tune}"]
     cmd += ["--workers", str(WORKERS)]
 
     t0 = time.time()
@@ -914,6 +1271,19 @@ def evaluate(case: Case, run: dict, outdir: Path, out_file: Path | None,
         if kind == "profile" and "档位" not in err and "profile" not in err.lower():
             mism.append(f"失败信息未点名档位：{err[:300]}")
             return "fail", mism, facts
+        if kind == "tile" and not any(k in err for k in ("tile", "Tile", "MaxLumaPs", "最大可行")):
+            mism.append(f"失败信息未点名手动 tile：{err[:300]}")
+            return "fail", mism, facts
+        if kind == "grid" and "关闭" not in err and "grid" not in err.lower():
+            mism.append(f"失败信息未点名 grid 关闭：{err[:300]}")
+            return "fail", mism, facts
+        if kind == "still" and not any(k in err for k in ("DPB", "still", "不可用",
+                                                          "max_dec_pic_buffering")):
+            mism.append(f"失败信息未点名 still/DPB 约束：{err[:300]}")
+            return "fail", mism, facts
+        if kind == "tune" and "不可用" not in err and "调优" not in err:
+            mism.append(f"失败信息未点明 tune 不可用原因：{err[:300]}")
+            return "fail", mism, facts
         return "expected-fail", [], facts
 
     # 预期合法：必须成功 + 产物结构 + 解码
@@ -945,6 +1315,44 @@ def evaluate(case: Case, run: dict, outdir: Path, out_file: Path | None,
     else:
         mism.append("产物中没有可解析的 hvcC")
 
+    # W2-T2（C18）：SPS PTL/DPB 断言 —— still 语义只在 SPS 里（libheif 的 hvcC constraint
+    # 实测恒 0），所以 17..21 必须 intra=1 && one_picture_only=1；16 走失败面（不可用）。
+    sps = (st.sps_all or [None])[0] if st.sps_all else None
+    facts["sps"] = sps
+    if sps is None:
+        mism.append("产物中没有可解析的 SPS（无法断言 still 语义）")
+    else:
+        # hvcC 与 SPS 的 idc/chroma/位深必须一致（同一个码流的两个视图）。
+        if facts.get("hvcC"):
+            h = facts["hvcC"]
+            if sps.get("idc") != h.get("profile_idc"):
+                mism.append(f"SPS idc {sps.get('idc')} != hvcC {h.get('profile_idc')}")
+            if sps.get("chroma") != h.get("chroma"):
+                mism.append(f"SPS chroma {sps.get('chroma')} != hvcC {h.get('chroma')}")
+            if sps.get("bd_luma") != h.get("bd_luma"):
+                mism.append(f"SPS bd {sps.get('bd_luma')} != hvcC {h.get('bd_luma')}")
+            if sps.get("level_idc") != h.get("level_idc"):
+                mism.append(f"SPS level {sps.get('level_idc')} != hvcC {h.get('level_idc')}")
+            # libheif 不写 48 位 constraint → still 位只能来自 SPS（断言的必要性证据）。
+            facts["hvcc_constraint_zero"] = h.get("constraint") == "000000000000"
+        sig = PROFILES[case.profile][1] if case.profile is not None else None
+        if sig and sig.get("still"):
+            if sps.get("intra") != 1 or sps.get("one_picture_only") != 1:
+                mism.append(f"still 变体 P{case.profile} 的 SPS 未写出 "
+                            f"intra=1/one_picture_only=1：intra={sps.get('intra')} "
+                            f"one_picture_only={sps.get('one_picture_only')} "
+                            f"constraint48={sps.get('constraint48')}")
+
+    # W2-T1：品牌结构断言（libheif 按 hvcC profile 选 major brand：Main/MainStill → heic；
+    # Main10/RExt → heix。两种都带 mif1+miaf；grid 本身不改 brand）。
+    ftyp = st.ftyp or {}
+    expected_major = "heic" if case.expected_profile_idc in (1, 3) else "heix"
+    if ftyp.get("major") != expected_major:
+        mism.append(f"brand major={ftyp.get('major')!r} != {expected_major!r}")
+    for brand in ("mif1", expected_major, "miaf"):
+        if brand not in (ftyp.get("compatible") or []):
+            mism.append(f"brand 兼容列表缺少 {brand}: {ftyp.get('compatible')}")
+
     if case.expected_grid:
         gs = st.grids
         if not gs:
@@ -965,6 +1373,15 @@ def evaluate(case: Case, run: dict, outdir: Path, out_file: Path | None,
                     sizes = {tuple(t["ispe"]) for t in st.tiles if t.get("ispe")}
                     if sizes != {(exp["tile_width"], exp["tile_height"])}:
                         mism.append(f"tile ispe {sorted(sizes)} != {(exp['tile_width'], exp['tile_height'])}")
+                    # W2-T1：每 tile hvcC 的 level_idc 必须等于规划值（显式 Level / 每 tile 自动）。
+                    exp_tile_level = exp.get("tile_level_idc")
+                    if exp_tile_level:
+                        bad_levels = sorted({
+                            (t.get("hvcc") or {}).get("level_idc") for t in st.tiles
+                            if (t.get("hvcc") or {}).get("level_idc") != exp_tile_level
+                        })
+                        if bad_levels:
+                            mism.append(f"tile hvcC level {bad_levels} != 期望 {exp_tile_level}")
                 dimg = [r for r in st.iref if r["type"] == "dimg"]
                 if not dimg or len(dimg[0]["to"]) != len(st.tiles):
                     mism.append(f"dimg 引用数 {len(dimg[0]['to']) if dimg else 0} != tile 数 {len(st.tiles)}")
@@ -1009,7 +1426,7 @@ def cleanup_outdir(outdir: Path, keep: bool) -> str | None:
 
 
 def run_case(case: Case, exe: Path, timeout: int, keep_artifacts: bool) -> dict:
-    outdir = MATRIX_DIR / "tmp" / case.case_id
+    outdir = TMP_DIR / case.case_id
     if outdir.exists():
         shutil.rmtree(outdir, ignore_errors=True)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -1036,6 +1453,9 @@ def run_case(case: Case, exe: Path, timeout: int, keep_artifacts: bool) -> dict:
         "profile": case.profile,
         "profile_name": PROFILES[case.profile][0] if case.profile is not None else "(not injected)",
         "grid": case.grid,
+        "grid_key": case.grid_key,
+        "tile_w": case.tile_w,
+        "tile_h": case.tile_h,
         "expected_legal": case.expected_legal,
         "expected_reason": case.expected_reason,
         "expected_profile_idc": case.expected_profile_idc,
@@ -1160,8 +1580,8 @@ def write_report(jsonl: Path, md: Path, phase: str, exe: Path, elapsed_total: fl
     if grid_recs:
         lines.append("## Grid 结构核验")
         lines.append("")
-        lines.append("| case | 图像 | grid(rows×cols) | tile | tiles | 期望 grid | hvcC idc/lvl/ch/bd | 解码 | verdict |")
-        lines.append("|---|---|---|---|---|---|---|---|---|")
+        lines.append("| case | 图像 | grid(rows×cols) | tile | tiles | 每 tile hvcC lvl | 期望 grid | hvcC idc/lvl/ch/bd | 解码 | verdict |")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|")
         for r in sorted(grid_recs, key=lambda x: x["case_id"]):
             st = r.get("structure") or {}
             g = (st.get("grids") or [{}])[0]
@@ -1172,10 +1592,35 @@ def write_report(jsonl: Path, md: Path, phase: str, exe: Path, elapsed_total: fl
                      if exp else "—")
             gs = f"{g.get('rows')}×{g.get('cols')}" if "rows" in g else ("ERR" if g else "—")
             tile = "×".join(map(str, ispe[0])) if len(ispe) == 1 else (str(ispe) if ispe else "—")
+            levels = st.get("tile_levels") or []
             lines.append(f"| {r['case_id']} | {r['width']}×{r['height']} | {gs} | {tile} | "
-                         f"{st.get('tile_count', 0)} | {exp_s} | "
+                         f"{st.get('tile_count', 0)} | {levels} | {exp_s} | "
                          f"{h.get('profile_idc')}/{h.get('level_idc')}/{h.get('chroma')}/{h.get('bd_luma')} | "
                          f"{r.get('decode_status')} | {r['verdict']} |")
+        lines.append("")
+
+    stills = [r for r in recs if r["set"] == "final-still"]
+    if stills:
+        lines.append("## W2-T2 still 变体（C18）：SPS PTL/DPB 断言")
+        lines.append("")
+        lines.append("| case | 档位 | bd/chroma | hvcC idc/lvl | SPS intra | SPS one_picture | DPB(minus1/reorder) | 48 位 constraint | hvcC constraint | verdict |")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|")
+        for r in sorted(stills, key=lambda x: x["case_id"]):
+            h = r.get("hvcC") or {}
+            st = r.get("structure") or {}
+            sps = (st.get("sps") or [{}])[0] if st.get("sps") else {}
+            prof = PROFILES.get(r.get("profile") or -1, ("?", None))[0]
+            c48 = sps.get("constraint48") or "—"
+            lines.append(
+                f"| {r['case_id']} | {prof} | {r['bitdepth']}/{r['chroma']} | "
+                f"{h.get('profile_idc')}/{h.get('level_idc')} | {sps.get('intra')} | "
+                f"{sps.get('one_picture_only')} | "
+                f"{sps.get('dpb_minus1')}/{sps.get('num_reorder_pics')} | `{c48}` | "
+                f"`{h.get('constraint', '—')}` | {r['verdict']} |")
+        lines.append("")
+        lines.append("- 口径：still 语义只在 **SPS**（libheif 生成 hvcC 时丢 48 位 constraint，"
+                     "实测 `hvcC.constraint` 恒 0）→ 17..21 断言 `intra=1 && one_picture_only=1`；"
+                     "16（Main10Still）的 PTL 无 still 位，只能靠 DPB 0/0，实测 4/2 → 期望干净失败。")
         lines.append("")
 
     t1s = [r for r in recs if r["set"] == "final-t1-single"]
@@ -1329,7 +1774,9 @@ def write_report(jsonl: Path, md: Path, phase: str, exe: Path, elapsed_total: fl
     else:
         lines.append("- final 实际覆盖：Auto 324（9 组 bd/chroma × 18 Level × 2 tier）+ 13 个真实信号 × 全 Level × 2 tier"
                      "（540）+ 档位兼容矩阵（计划 144，24 个合法组合与前述重复去重后 120 个拒绝面）+ "
-                     "T1 grid 20（4×11 / Apple 模式 / Main10 / 422 / 444 / 12-bit / tile 收缩）+ T1 单图 9"
+                     "T1 grid 20（4×11 / Apple 模式 / Main10 / 422 / 444 / 12-bit / tile 收缩）+ "
+                     "**W2-T1 grid×tile×Level 11**（heif_grid 新键自动/总是/关闭、手动 tile 合法/非法、"
+                     "Level 收缩、8 向下对齐、1×1 降级单图）+ T1 单图 9"
                      "（auto 6 + Main10 + 显式 L6.0 / L6.3）。")
         lines.append("- 未跑（如实）：AVIF 矩阵；T1 单图全 Level × 全色度；T1 L2.0 grid 收缩（207 tiles，需 `--grid-shrink`）；"
                      "**真机 iPhone 硬解**——本工具只证明码流结构与本地解码，硬解能力仍需真机 VT 强锁探针"
@@ -1358,10 +1805,12 @@ def main(argv=None) -> int:
     ap.add_argument("--phase", choices=["baseline", "final"], default="baseline")
     ap.add_argument("--set", action="append", default=[],
                     help="只跑指定 case 集（可重复）：baseline-small/baseline-t1/final-auto/"
-                         "final-signals/final-profile-compat/final-grid/selftest")
+                         "final-signals/final-profile-compat/final-still/final-grid/selftest")
     ap.add_argument("--binary", default=str(DEFAULT_EXE))
     ap.add_argument("--jsonl", default="", help="默认 build/matrix/<phase>.jsonl")
     ap.add_argument("--md", default="", help="默认 build/matrix/<phase>.md")
+    ap.add_argument("--tmp-dir", default="",
+                    help="产物临时目录（默认 build/matrix/tmp；并行任务用独立目录避免互删）")
     ap.add_argument("--timeout", type=int, default=240, help="单例编码超时秒（默认 240）")
     ap.add_argument("--max-cases", type=int, default=0, help="本轮最多跑 N 例（冒烟）")
     ap.add_argument("--force", action="store_true", help="重跑 JSONL 中已存在的 case")
@@ -1380,7 +1829,12 @@ def main(argv=None) -> int:
         print(f"[matrix] binary not found: {exe}", file=sys.stderr)
         return 2
     MATRIX_DIR.mkdir(parents=True, exist_ok=True)
-    (MATRIX_DIR / "tmp").mkdir(parents=True, exist_ok=True)
+    global TMP_DIR
+    if args.tmp_dir:
+        TMP_DIR = Path(args.tmp_dir)
+        if not TMP_DIR.is_absolute():
+            TMP_DIR = REPO / TMP_DIR
+    TMP_DIR.mkdir(parents=True, exist_ok=True)
 
     if args.set == ["selftest"]:
         return run_selftest(exe)

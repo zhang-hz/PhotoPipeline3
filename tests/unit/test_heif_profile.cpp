@@ -44,7 +44,14 @@ void test_enum_numbering() {
     check(static_cast<int>(HeifProfile::Professional) == 6, "enum/professional");
     check(static_cast<int>(HeifProfile::Rext420_8) == 7, "enum/rext420_8");
     check(static_cast<int>(HeifProfile::Rext444_12) == 15, "enum/rext444_12");
-    check(pp::kHeifProfileCount == 16, "enum/count");
+    // W2-T2（C18）：still 变体 16..21 追加在末尾，编号不重排。
+    check(static_cast<int>(HeifProfile::Main10Still) == 16, "enum/main10still");
+    check(static_cast<int>(HeifProfile::Main422_10Still) == 17, "enum/main422_10still");
+    check(static_cast<int>(HeifProfile::Main422_12Still) == 18, "enum/main422_12still");
+    check(static_cast<int>(HeifProfile::Main444_Still) == 19, "enum/main444_still");
+    check(static_cast<int>(HeifProfile::Main444_10Still) == 20, "enum/main444_10still");
+    check(static_cast<int>(HeifProfile::Main444_12Still) == 21, "enum/main444_12still");
+    check(pp::kHeifProfileCount == 22, "enum/count");
     for (int64_t i = 0; i < pp::kHeifProfileCount; ++i) {
         HeifProfile p = HeifProfile::Auto;
         check(pp::heif_profile_from_int(i, &p), "from_int/valid/" + std::to_string(i));
@@ -52,7 +59,13 @@ void test_enum_numbering() {
     }
     HeifProfile tmp = HeifProfile::Auto;
     check(!pp::heif_profile_from_int(-1, &tmp), "from_int/negative");
-    check(!pp::heif_profile_from_int(16, &tmp), "from_int/too_large");
+    check(!pp::heif_profile_from_int(22, &tmp), "from_int/too_large");
+    // 旧版本（0.3.6）读新预设里的 16..21 必须显式失败，不静默当 Auto。
+    for (int64_t i = 16; i <= 21; ++i) {
+        HeifProfile p = HeifProfile::Auto;
+        check(pp::heif_profile_from_int(i, &p) && static_cast<int>(p) == i,
+              "enum/still_range/" + std::to_string(i));
+    }
 }
 
 void test_signal_specs() {
@@ -64,14 +77,28 @@ void test_signal_specs() {
         int depth;
     };
     const Case cases[] = {
-        {HeifProfile::Main, true, 1, 1, 8},           {HeifProfile::Main10, true, 2, 1, 10},
-        {HeifProfile::MainStill, true, 3, 1, 8},      {HeifProfile::Main12, true, 4, -1, 12},
-        {HeifProfile::Rext420_8, true, 4, 1, 8},      {HeifProfile::Rext420_10, true, 4, 1, 10},
-        {HeifProfile::Rext420_12, true, 4, 1, 12},    {HeifProfile::Rext422_8, true, 4, 2, 8},
-        {HeifProfile::Rext422_10, true, 4, 2, 10},    {HeifProfile::Rext422_12, true, 4, 2, 12},
-        {HeifProfile::Rext444_8, true, 4, 3, 8},      {HeifProfile::Rext444_10, true, 4, 3, 10},
-        {HeifProfile::Rext444_12, true, 4, 3, 12},    {HeifProfile::High, false, 1, 3, 0},
+        {HeifProfile::Main, true, 1, 1, 8},
+        {HeifProfile::Main10, true, 2, 1, 10},
+        {HeifProfile::MainStill, true, 3, 1, 8},
+        {HeifProfile::Main12, true, 4, -1, 12},
+        {HeifProfile::Rext420_8, true, 4, 1, 8},
+        {HeifProfile::Rext420_10, true, 4, 1, 10},
+        {HeifProfile::Rext420_12, true, 4, 1, 12},
+        {HeifProfile::Rext422_8, true, 4, 2, 8},
+        {HeifProfile::Rext422_10, true, 4, 2, 10},
+        {HeifProfile::Rext422_12, true, 4, 2, 12},
+        {HeifProfile::Rext444_8, true, 4, 3, 8},
+        {HeifProfile::Rext444_10, true, 4, 3, 10},
+        {HeifProfile::Rext444_12, true, 4, 3, 12},
+        {HeifProfile::High, false, 1, 3, 0},
         {HeifProfile::Professional, false, 2, -1, 0},
+        // W2-T2（C18）：still 变体 16..21 —— 16 与 Main10 同信号，17..21 与对应 RExt 同信号。
+        {HeifProfile::Main10Still, true, 2, 1, 10},
+        {HeifProfile::Main422_10Still, true, 4, 2, 10},
+        {HeifProfile::Main422_12Still, true, 4, 2, 12},
+        {HeifProfile::Main444_Still, true, 4, 3, 8},
+        {HeifProfile::Main444_10Still, true, 4, 3, 10},
+        {HeifProfile::Main444_12Still, true, 4, 3, 12},
     };
     for (const Case &c : cases) {
         pp::HeifSignalSpec s;
@@ -202,6 +229,25 @@ void test_compat_matrix() {
         {true, HeifProfile::Professional, 12, 1, true, true},
         {true, HeifProfile::Professional, 12, 3, true, true},
         {true, HeifProfile::Professional, 8, 1, true, false},
+        // —— W2-T2（C18）：still 变体 16..21 ——
+        // signal 与对应 Main10/RExt 档同（idc/chroma/bd 由 heif_profile_signal 校验）；
+        // still=false（序列帧）→ 一律拒绝（still 变体只用于静止图输出）。
+        {false, HeifProfile::Main10Still, 10, 1, true, true},
+        {false, HeifProfile::Main10Still, 10, 1, false, false},
+        {false, HeifProfile::Main10Still, 8, 1, true, false},
+        {false, HeifProfile::Main10Still, 10, 3, true, false},
+        {false, HeifProfile::Main422_10Still, 10, 2, true, true},
+        {false, HeifProfile::Main422_10Still, 10, 1, true, false},
+        {false, HeifProfile::Main422_12Still, 12, 2, true, true},
+        {false, HeifProfile::Main422_12Still, 12, 2, false, false},
+        {false, HeifProfile::Main444_Still, 8, 3, true, true},
+        {false, HeifProfile::Main444_Still, 10, 3, true, false},
+        {false, HeifProfile::Main444_10Still, 10, 3, true, true},
+        {false, HeifProfile::Main444_10Still, 12, 3, true, false},
+        {false, HeifProfile::Main444_12Still, 12, 3, true, true},
+        // AVIF 不能选 HEVC 的 still 变体。
+        {true, HeifProfile::Main10Still, 10, 1, true, false},
+        {true, HeifProfile::Main444_10Still, 10, 3, true, false},
     };
     for (const Case &c : cases) {
         std::string err;
@@ -286,11 +332,130 @@ void test_x265_signal_params() {
                   std::string(p.items[0].value) == "2",
               "params/rext420_8/total-frames");
     }
-    const HeifProfile native[] = {HeifProfile::Auto,       HeifProfile::MainStill,
-                                  HeifProfile::Rext420_10, HeifProfile::Rext420_12,
-                                  HeifProfile::Rext422_8,  HeifProfile::Rext444_12};
+    const HeifProfile native[] = {HeifProfile::Auto,
+                                  HeifProfile::MainStill,
+                                  HeifProfile::Rext420_10,
+                                  HeifProfile::Rext420_12,
+                                  HeifProfile::Rext422_8,
+                                  HeifProfile::Rext444_12,
+                                  HeifProfile::Main422_10Still,
+                                  HeifProfile::Main422_12Still,
+                                  HeifProfile::Main444_Still,
+                                  HeifProfile::Main444_10Still,
+                                  HeifProfile::Main444_12Still};
     for (const HeifProfile p : native)
         check(pp::heif_x265_signal_params(p).count == 0, "params/native/" + pc(p));
+}
+
+void test_still_variants() {
+    // —— 分类：16..21 是 still 变体；0..15 不是 ——
+    const HeifProfile stills[] = {
+        HeifProfile::Main10Still,   HeifProfile::Main422_10Still, HeifProfile::Main422_12Still,
+        HeifProfile::Main444_Still, HeifProfile::Main444_10Still, HeifProfile::Main444_12Still,
+    };
+    for (int i = 0; i < pp::kHeifProfileCount; ++i) {
+        HeifProfile p = HeifProfile::Auto;
+        check(pp::heif_profile_from_int(i, &p), "still/from_int/" + std::to_string(i));
+        bool want = false;
+        for (const HeifProfile s : stills)
+            want = want || (p == s);
+        check(pp::heif_profile_is_still_variant(p) == want, "still/classify/" + std::to_string(i));
+    }
+    // —— 可用性：Main10Still（16）实测不可用（PTL 无 still 位 + SPS DPB 4/2）——
+    {
+        std::string reason;
+        check(!pp::heif_profile_still_available(HeifProfile::Main10Still, &reason),
+              "still/available/16");
+        check(reason.find("DPB") != std::string::npos, "still/available/16_dpb", reason);
+        check(reason.find("max_dec_pic_buffering_minus1=4") != std::string::npos,
+              "still/available/16_dpb_value", reason);
+        check(reason.find("num_reorder_pics=2") != std::string::npos,
+              "still/available/16_reorder_value", reason);
+        check(reason.find("不可用") != std::string::npos, "still/available/16_unavailable", reason);
+        // 理由必须点名替代出路（不静默灰）。
+        check(reason.find("Main10") != std::string::npos, "still/available/16_alternative", reason);
+    }
+    for (const HeifProfile p : stills) {
+        std::string reason;
+        const bool ok = pp::heif_profile_still_available(p, &reason);
+        if (p == HeifProfile::Main10Still) {
+            check(!ok, "still/available/only_16_unavailable");
+            continue;
+        }
+        check(ok, "still/available/" + pc(p));
+        check(reason.empty(), "still/available/no_reason/" + pc(p), reason);
+    }
+    // 非 still 档位恒可用（本函数只判 still 变体）。
+    check(pp::heif_profile_still_available(HeifProfile::Main10, nullptr), "still/available/main10");
+    check(pp::heif_profile_still_available(HeifProfile::Rext444_10, nullptr),
+          "still/available/rext444_10");
+
+    // —— 标签：still 变体统一带 "Still Picture"；3 个既有误导标签已修正 ——
+    for (const HeifProfile p : stills)
+        check(pc(p).find("Still Picture") != std::string::npos, "label/still_picture/" + pc(p));
+    check(pc(HeifProfile::Main444_10Still).find("idc 4") != std::string::npos, "label/still/idc4");
+    check(pc(HeifProfile::Main10Still).find("idc 2") != std::string::npos, "label/still/idc2");
+    // Rext420_8：标准没有 "Main 4:2:0 8" profile（旧标签会让人以为有）→ 改叫 Main Intra + 非
+    // still。
+    check(pc(HeifProfile::Rext420_8).find("Main Intra") != std::string::npos,
+          "label/rext420_8/main_intra", pc(HeifProfile::Rext420_8));
+    check(pc(HeifProfile::Rext420_8).find("非 still") != std::string::npos,
+          "label/rext420_8/not_still", pc(HeifProfile::Rext420_8));
+    // Rext422_8：标准无 422-8 profile，8 位是 Main 4:2:2 10 的子集。
+    check(pc(HeifProfile::Rext422_8).find("4:2:2 10") != std::string::npos,
+          "label/rext422_8/is_422_10", pc(HeifProfile::Rext422_8));
+    check(pc(HeifProfile::Rext422_8).find("8 位信号") != std::string::npos,
+          "label/rext422_8/8bit_subset", pc(HeifProfile::Rext422_8));
+    // Rext444_8：标准名是 Main 4:4:4（无 "8" 后缀）。
+    check(pc(HeifProfile::Rext444_8).find("Main 4:4:4（8 位") != std::string::npos,
+          "label/rext444_8/no_suffix", pc(HeifProfile::Rext444_8));
+
+    // —— tooltip（C19：短标签 + 完整信号说明；RExt 一律带 Apple 风险）——
+    for (int i = 1; i < pp::kHeifProfileCount; ++i) {
+        HeifProfile p = HeifProfile::Auto;
+        (void)pp::heif_profile_from_int(i, &p);
+        if (p == HeifProfile::High || p == HeifProfile::Professional)
+            continue; // AVIF 专用：HEIF tooltip 会说明「不能用于 HEIF」
+        const std::string tip = pp::heif_profile_tooltip(false, p);
+        check(!tip.empty(), "tooltip/nonempty/" + pc(p));
+        if (p == HeifProfile::Main || p == HeifProfile::Main10 || p == HeifProfile::MainStill ||
+            p == HeifProfile::Main12 || p == HeifProfile::Auto || p == HeifProfile::Main10Still)
+            continue; // 非 RExt（16 的不可用理由另测；Apple 风险句只对 RExt 家族要求）
+        // 17..21 + 7..15：RExt 家族 → Apple 风险句必须在。
+        check(tip.find("iPhone") != std::string::npos, "tooltip/apple_risk/" + pc(p), tip);
+    }
+    check(pp::heif_profile_tooltip(false, HeifProfile::Main444_10Still).find("Rext444_10") !=
+              std::string::npos,
+          "tooltip/444_10still/same_signal");
+    check(pp::heif_profile_tooltip(false, HeifProfile::Main444_10Still).find("R-2") !=
+              std::string::npos,
+          "tooltip/444_10still/spec_review");
+    check(pp::heif_profile_tooltip(false, HeifProfile::Main10Still).find("不可用") !=
+              std::string::npos,
+          "tooltip/main10still/unavailable");
+    check(pp::heif_profile_tooltip(false, HeifProfile::Main10Still).find("DPB") !=
+              std::string::npos,
+          "tooltip/main10still/dpb");
+    check(pp::heif_profile_tooltip(true, HeifProfile::Main).find("AV1") != std::string::npos,
+          "tooltip/avif/main");
+    check(pp::heif_profile_tooltip(true, HeifProfile::High).find("4:4:4") != std::string::npos,
+          "tooltip/avif/high");
+
+    // —— x265 内部信号参数：16 走 Main10 三项注入；17..21 原生（不注入）——
+    {
+        const pp::HeifX265SignalParams p = pp::heif_x265_signal_params(HeifProfile::Main10Still);
+        check(p.count == 3, "params/main10still/count");
+        const pp::HeifX265SignalParams m10 = pp::heif_x265_signal_params(HeifProfile::Main10);
+        for (int i = 0; i < 3; ++i)
+            check(std::string(p.items[i].key) == std::string(m10.items[i].key) &&
+                      std::string(p.items[i].value) == std::string(m10.items[i].value),
+                  "params/main10still/same_as_main10/" + std::to_string(i));
+    }
+    for (const HeifProfile p : stills) {
+        if (p == HeifProfile::Main10Still)
+            continue;
+        check(pp::heif_x265_signal_params(p).count == 0, "params/still_native/" + pc(p));
+    }
 }
 
 void test_legacy_shims() {
@@ -319,6 +484,7 @@ int main() { // NOLINT(bugprone-exception-escape) — 测试入口允许异常�
     test_compat_matrix();
     test_labels();
     test_x265_signal_params();
+    test_still_variants();
     test_legacy_shims();
     std::printf("heif_profile: %d checks, %d failed\n", g_checks, g_failed);
     return g_failed == 0 ? 0 : 1;

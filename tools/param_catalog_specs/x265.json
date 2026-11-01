@@ -531,7 +531,7 @@
       "role": "anchor",
       "scope": "settable",
       "group": "码流/兼容性",
-      "rules": "X12",
+      "rules": "X12,H4,H7",
       "def": "自动（0）",
       "choices": [
         ["自动（0）", 0],
@@ -553,8 +553,61 @@
         ["7.1", 71],
         ["7.2", 72]
       ],
-      "reason": "解码器/硬件兼容门槛（levelIdc，默认 0=自动；取值来自 x265 4.3 level.cpp 的 10–72 档）；与 CRF 同用会强制 VBV（X12）。",
-      "tooltip": "目标 Level（levelIdc，x265 默认 0=自动；可设 10=1.0 … 72=7.2，取自 x265 level.cpp 表；8.5 为无损专用档不列出）。约束分辨率/帧率/码率上限；与 CRF 同用会强制 VBV 并告警（X12）；high-tier 仅在此项>0 时有效。"
+      "reason": "解码器/硬件兼容门槛（levelIdc，默认 0=自动；取值来自 x265 4.3 level.cpp 的 10–72 档）；与 CRF 同用会强制 VBV（X12）。W2-T1 起本行上移核心区：显式 Level 装不下整图时 heif_grid=自动 会按 Level 分块（每 tile 单独满足 Level），grid=关闭 则中文预检报错。",
+      "tooltip": "目标 Level（levelIdc，x265 默认 0=自动；可设 10=1.0 … 72=7.2，取自 x265 level.cpp 表；8.5 为无损专用档不列出）。约束分辨率/帧率/码率上限；与 CRF 同用会强制 VBV 并告警（X12）；high-tier 仅在此项>0 时有效。注意：grid 输出时 Level 约束的是**每个 tile**，不是整图（详见「分块模式」行内的规划摘要）。"
+    },
+    {
+      "key": "heif_grid",
+      "engine": "",
+      "label": "分块模式",
+      "type": "enum",
+      "form": "dropdown",
+      "role": "anchor",
+      "scope": "settable",
+      "group": "分块/线程",
+      "rules": "H5,H7",
+      "def": "自动",
+      "choices": [
+        ["关闭", 0],
+        ["自动", 1],
+        ["总是", 2]
+      ],
+      "reason": "HEIF 有损 grid 的用户面开关（C16）。自动=显式 Level 装不下整图时自动分块；Level=自动时仅当整图超过 x265 最高 Level 7.2 容量（MaxLumaPs=142,606,336 且宽高 ≤ sqrt(8×M)）才按 Apple 基准分块；总是=按 Apple 1024×576 基准强制分块；关闭=单图，超 Level 直接中文预检报错。默认自动 ⇒ Level=自动 + 常规尺寸与 HEAD 产物逐字节一致。旧保留键 __heif_grid 仅作兼容读别名（0→关闭/1→总是/2→自动）。",
+      "tooltip": "HEIF 有损 grid 分块模式（默认「自动」）。自动：显式 x265:level-idc 装不下整图时自动分块（每 tile 满足 Level）；Level=自动 时常规尺寸仍是单图，只有整图超过 HEVC 最高 Level 7.2 容量才按 1024×576 分块。总是：无显式 Level 时按 Apple 参考 1024×576 强制分块（每 tile 由 x265 自动选 Level）。关闭：单图输出，整图超过 Level 时给出中文错误（不静默降级）。运行日志会输出每 tile 尺寸 / 网格 / 每 tile Level / 总 tile 数。"
+    },
+    {
+      "key": "heif_tile_w",
+      "engine": "",
+      "label": "Tile 宽",
+      "type": "int",
+      "lo": 0,
+      "hi": 8192,
+      "step": 1,
+      "def": "0",
+      "form": "number",
+      "role": "dependent",
+      "scope": "settable",
+      "group": "分块/线程",
+      "rules": "H1,H2,H3,H4,H5,H6",
+      "reason": "手动覆盖 grid tile 宽（C17；0=自动，非 0 时 8 向下对齐、≥64、≤8192）。仅 heif_grid≠关闭 时可见；显式 Level 下 tw8*th8 超过 MaxLumaPs 或 tw/th 超过 sqrt(8*MaxLumaPs) 时中文预检报错（点名上限/最大可行 tile/三条出路），不静默降级。单轴 0 表示该轴继续自动求解。",
+      "tooltip": "grid 单 tile 宽度（0=自动；手动值 64–8192，按 8 像素向下对齐并提示对齐结果）。仅「分块模式」≠关闭时可用；手动 tile 只覆盖尺寸，Level 约束仍按每 tile 检查：显式 Level 装不下时预检报错（不静默缩小）。单轴填 0 表示该轴继续自动推导。Level=自动 + 手动 tile 允许，但该配置与 Apple 参考不同，iPhone 接受度未验证。"
+    },
+    {
+      "key": "heif_tile_h",
+      "engine": "",
+      "label": "Tile 高",
+      "type": "int",
+      "lo": 0,
+      "hi": 8192,
+      "step": 1,
+      "def": "0",
+      "form": "number",
+      "role": "dependent",
+      "scope": "settable",
+      "group": "分块/线程",
+      "rules": "H1,H2,H3,H4,H5,H6",
+      "reason": "手动覆盖 grid tile 高（C17；0=自动，非 0 时 8 向下对齐、≥64、≤8192）。仅 heif_grid≠关闭 时可见；显式 Level 下 tw8*th8 超过 MaxLumaPs 或 tw/th 超过 sqrt(8*MaxLumaPs) 时中文预检报错（点名上限/最大可行 tile/三条出路），不静默降级。单轴 0 表示该轴继续自动求解。",
+      "tooltip": "grid 单 tile 高度（0=自动；手动值 64–8192，按 8 像素向下对齐并提示对齐结果）。仅「分块模式」≠关闭时可用；手动 tile 只覆盖尺寸，Level 约束仍按每 tile 检查：显式 Level 装不下时预检报错（不静默缩小）。单轴填 0 表示该轴继续自动推导。Level=自动 + 手动 tile 允许，但该配置与 Apple 参考不同，iPhone 接受度未验证。"
     },
     {
       "key": "x265:high-tier",

@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -33,7 +34,8 @@
 #include <string_view>
 #include <vector>
 
-#include "codecs/enc_common.h" // M7-WP8/B.7(R-156/162/165/166): shared helpers
+#include "codecs/enc_common.h"     // M7-WP8/B.7(R-156/162/165/166): shared helpers
+#include "codecs/enc_tune_facts.h" // M10 W2-T3（C20）：tune 静态事实表（原生/仿真/置灰）
 #include "codecs/encoder.h"
 #include "codecs/encoder_registry.h"
 #include "codecs/encoders.h"
@@ -115,13 +117,19 @@ std::string_view backend_match(std::string_view backend_id) {
     return backend_id;
 }
 
-// runtime id_name -> frozen backend_id (unknown encoders keep their runtime name)
+// runtime id_name / descriptive name -> frozen backend_id (unknown encoders keep their name)。
+// W2-T3（C20）：输入既可能是 id_name（"x265"/"svt"/"aom"），也可能是
+// heif_encoder_get_name() 的描述串（"AOMedia Project AV1 Encoder …"/"SVT-AV1 encoder …"，
+// 大写前缀）—— 必须大小写不敏感，否则 tune 事实表查不到 avif 两个后端。
 std::string canonical_backend_id(std::string_view id_name) {
-    if (id_name.find("x265") != std::string_view::npos)
+    std::string lowered(id_name);
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (lowered.find("x265") != std::string::npos)
         return "x265";
-    if (id_name.find("svt") != std::string_view::npos)
+    if (lowered.find("svt") != std::string::npos)
         return "svt-av1";
-    if (id_name.find("aom") != std::string_view::npos)
+    if (lowered.find("aom") != std::string::npos)
         return "libaom";
     return std::string(id_name);
 }
@@ -177,6 +185,10 @@ ParamDef param_def_from(heif_encoder *enc, const heif_encoder_parameter *p) {
     const char *name = heif_encoder_parameter_get_name(p);
     d.key = name ? name : "";
     d.label = d.key;
+    // W2-T3（C20）：插件身份在 tune 分支之前就要用（事实表按 backend id 查值/标签/原因）。
+    const char *plugin_name = heif_encoder_get_name(enc);
+    const std::string plugin = plugin_name ? plugin_name : "";
+    const std::string backend = canonical_backend_id(plugin);
     // M7-R2.5：内省参数以 libheif/插件键名作标签，中文界面里出现 speed/quality/chroma/
     // tune/preset 等英文行。只翻**常用键**（其余键名保留，tooltip 有来源说明）。
     if (d.key == "quality")
@@ -262,6 +274,21 @@ ParamDef param_def_from(heif_encoder *enc, const heif_encoder_parameter *p) {
         d.def = current;
         type_desc = d.choices.empty() ? "string (unconstrained)" : "string set";
     }
+    // W2-T3（C20）：tune 值集/标签/原因 = 静态事实表（原生 + 仿真 + 置灰）。运行时内省仍是
+    // 原生集合的第一来源；事实表补齐"插件不支持但库支持/可仿真"与"不可用（置灰）"两组，
+    // 二者的一致性与漂移由 tests/unit/test_heif_tune.cpp 机械断言。
+    const bool is_x265 = backend == "x265";
+    if (d.key == "tune") {
+        if (const pp::tune::BackendFacts *facts = pp::tune::facts_for(backend)) {
+            d.choices.clear();
+            for (const pp::tune::ValueFact &v : facts->values)
+                d.choices.emplace_back(std::string(v.label), std::string(v.value));
+        }
+    }
+    // W2-T4（C21）：quality 行的等效映射（x265 限定：CRF=(100−q)/2；AVIF 两个后端映射不同，
+    // 不改标签以免给出错误公式）。标签轨 80px 会省略，全文见 tooltip。
+    if (d.key == "quality" && is_x265)
+        d.label = "质量（0–100；CRF=(100−q)/2）";
     // 核心/高级白名单（UX-10.2/10.3，M7-R2A 对表收口）：核心集**按插件真实参数面逐插件**
     // 声明（旧口径是跨插件并集 + 内省过滤：SVT 无 preset 却共享 x265 的 preset 核心位、
     // x265 无 speed 却共享 SVT 的 speed 核心位 —— 两向错位都靠"插件恰好不暴露"掩盖，
@@ -270,9 +297,6 @@ ParamDef param_def_from(heif_encoder *enc, const heif_encoder_parameter *p) {
     //   SVT-AV1 / libaom（AVIF）：quality / lossless / chroma / **speed** / tune
     //   （speed 是 SVT 的速度主档；**SVT 无 preset**）；libaom 同集合与其实际键的交集。
     // 其余插件旋钮（tu-intra-depth / complexity / threads / qp / min-q / max-q …）留高级。
-    const char *plugin_name = heif_encoder_get_name(enc);
-    const std::string plugin = plugin_name ? plugin_name : "";
-    const bool is_x265 = plugin.find("x265") != std::string::npos;
     d.advanced =
         !(d.key == "quality" || d.key == "lossless" || d.key == "chroma" || d.key == "tune" ||
           (is_x265 && d.key == "preset") || (!is_x265 && d.key == "speed"));
@@ -283,6 +307,18 @@ ParamDef param_def_from(heif_encoder *enc, const heif_encoder_parameter *p) {
     d.group = d.advanced ? pp::kGroupEncodeTools : pp::kGroupCore;
     d.tooltip = "libheif 运行时内省参数（heif_encoder_list_parameters，类型 " + type_desc + "）：" +
                 d.key + "。名称/范围/默认值均来自当前编码插件，M1 不硬编码。";
+    // W2-T3（C20）：tune 的机制解释（事实表单源）接在基础内省说明之前；必须放在上面
+    // 基础 tooltip 赋值**之后**（旧位置被逐字覆盖 → UI 探针实测抓到，勿再前移）。
+    if (d.key == "tune") {
+        if (const pp::tune::BackendFacts *facts = pp::tune::facts_for(backend))
+            d.tooltip = std::string(facts->tooltip) + "\n" + d.tooltip;
+    }
+    // W2-T4（C21）：quality 映射说明同样追加在基础 tooltip 之后（不能提前）。
+    if (d.key == "quality" && is_x265) {
+        d.tooltip += "\n质量 0–100 在 x265 后端映射为 CRF=(100−quality)/2"
+                     "（quality=50 ⇔ CRF 25，encoder_x265.cc:992-998）；"
+                     "CRF/QP 的合法域随位深下移（8 位 0..51、10 位 −12..51、12 位 −24..51）。";
+    }
     return d;
 }
 
@@ -497,6 +533,13 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
         auto is_known = [&known](const std::string &k) {
             return std::find(known.begin(), known.end(), k) != known.end();
         };
+        // W2-T3（C20）：tune 的仿真/置灰处理需要后端身份；backend_id_ 为空（= 首个插件）
+        // 时按插件 id_name 归一（与 param_def_from 同一 canonical_backend_id）。
+        const char *enc_name = heif_encoder_get_name(enc);
+        const std::string tune_backend =
+            backend_id_.empty() ? canonical_backend_id(enc_name ? enc_name : "") : backend_id_;
+        bool tune_animation_sim = false; // animation：插件 tune 保持 ssim，注入三键
+        std::string tune_aom_sim;        // libaom 扩展值：走内部 aom:tune 通道
 
         for (const ParamDef &p : live) {
             const auto it = req.target.params.find(p.key);
@@ -539,6 +582,25 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
                     se = heif_encoder_set_parameter_integer(enc, p.key.c_str(),
                                                             static_cast<int>(*iv));
                 } else if (const std::string *sv = std::get_if<std::string>(&it->second)) {
+                    // W2-T3（C20）：tune 的三类值分开处理 —— 原生走插件；仿真值不下发插件
+                    // （插件白名单会拒绝），由本文件在用户透传之前注入/走内部 aom:tune；
+                    // 置灰值给中文可操作错误（不把 plugin 的 "invalid value" 直接抛给用户）。
+                    const pp::tune::ValueFact *tune_fact =
+                        p.key == "tune" ? pp::tune::value_fact(tune_backend, *sv) : nullptr;
+                    if (tune_fact != nullptr && tune_fact->kind == pp::tune::Kind::Disabled) {
+                        return fail(pp::tune::unavailable_message(tune_backend, *tune_fact));
+                    }
+                    if (tune_fact != nullptr && tune_fact->kind == pp::tune::Kind::Simulated) {
+                        if (tune_backend == "x265" && *sv == "animation") {
+                            tune_animation_sim = true;
+                            break; // 不调 set_parameter_string("tune", "animation")
+                        }
+                        if (tune_backend == "libaom") {
+                            tune_aom_sim = *sv;
+                            break; // 不调 set_parameter_string("tune", <v>)
+                        }
+                        return fail(pp::tune::unavailable_message(tune_backend, *tune_fact));
+                    }
                     se = heif_encoder_set_parameter_string(enc, p.key.c_str(), sv->c_str());
                 } else {
                     rejected = "expected integer or string";
@@ -583,6 +645,54 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
                 // 产物与 UI/预设不一致（"选 4:4:4 实际 4:2:0" 一类静默降级）。这里如实失败；
                 // 未知键（E9）仍只记日志、不失败（见下方 unrecognised 段）。
                 return fail("parameter '" + p.key + "' rejected by backend: " + rejected);
+        }
+
+        // W2-T3（C20）tune=animation 近似仿真：插件 tune 保持默认 ssim，在**用户透传之前**
+        // 注入 x265 tune=animation 的 still 相关三键（psy-rd/aq-strength/deblock）。用户若在
+        // 高级区显式给同键，下面的透传循环后写覆盖（以用户为准）。
+        if (tune_animation_sim) {
+            struct Injection {
+                const char *key;
+                const char *value;
+            };
+            const Injection injections[] = {
+                {"x265:psy-rd", "0.4"},
+                {"x265:aq-strength", "0.4"},
+                {"x265:deblock", "1:1"},
+            };
+            for (const Injection &injection : injections) {
+                const heif_error ie =
+                    heif_encoder_set_parameter_string(enc, injection.key, injection.value);
+                if (ie.code != heif_error_Ok)
+                    return fail(std::string("tune=animation 近似仿真需要内部参数 ") +
+                                injection.key + "=" + injection.value + "，插件拒绝：" +
+                                heif_error_text(ie));
+            }
+            note_param("tune=animation is simulated (plugin tune stays ssim; injected "
+                       "x265:psy-rd/aq-strength/deblock before user passthrough)",
+                       "tune", "animation");
+        }
+        // W2-T3（C20）libaom 扩展值（ssimulacra2 / vmaf_saliency_map）：插件原生 tune 白名单
+        // 不认，改走 aom:tune custom option（libheif aom 插件在全部内置控制之后应用，最后生效）。
+        if (!tune_aom_sim.empty()) {
+            const heif_error ae =
+                heif_encoder_set_parameter_string(enc, "aom:tune", tune_aom_sim.c_str());
+            if (ae.code != heif_error_Ok)
+                return fail("调优值「" + tune_aom_sim + "」需要内部 aom:tune 通道，插件拒绝：" +
+                            heif_error_text(ae));
+            note_param("tune value dispatched through internal aom:tune option", "tune",
+                       tune_aom_sim);
+        }
+        // W2-T4（C21）：恒定 QP + 显式 Level = x265 硬拒绝（level.cpp:443-445），旧实现只回
+        // 泛化 "subcode 5001"。预检（param_rules X12）已给中文错误；编码器侧仍兜底同一文案，
+        // 保证 --dev/矩阵/预设任何入口都不会把这条不可行组合静默带进 x265 open。
+        if (format_id_ == "heif" && tune_backend == "x265") {
+            const bool has_qp = req.target.params.find("x265:qp") != req.target.params.end();
+            if (has_qp && param_int(req.target.params, "x265:level-idc", 0) > 0) {
+                return fail("恒定 QP 与显式 Level 不兼容：x265 拒绝 \"Constant QP is "
+                            "inconsistent with specifying a decoder level\"。请改用 CRF/质量"
+                            "模式，或把 Level（x265:level-idc）设为自动（0）。");
+            }
         }
 
         // R-3xx / M8-B1（docs/m8-encoder-params-and-ssimulacra2-design.md §4.5 C3/C7）：
@@ -711,6 +821,10 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
         for (const auto &[key, value] : req.target.params) {
             if (key.rfind("__", 0) == 0)
                 continue; // reserved keys (§3.4)
+            // W2-T1（C16）：HEIF grid/tile 是目录普通键，但不是插件透传参数；由上方
+            // grid 规划段消费，不能落 "unrecognised" 日志（否则每次编码都误报）。
+            if (key == "heif_grid" || key == "heif_tile_w" || key == "heif_tile_h")
+                continue;
             if (is_passthrough_key(key))
                 continue; // handled above (scope + catalog enforced)
             if (!is_known(key))
@@ -813,9 +927,12 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
                       {"chroma", heif_chroma_text(chroma_idx)}});
         }
 
-        // ---- x265 Level 预校验 + 有损 HEIF grid 规划（M9 grid-heif）----
-        // 保留键 __heif_grid：0 = 关闭；1 = 总是 Apple 风格 grid（1024×576 tile 基准）；
-        // 2 = 自动（缺省；仅当显式 x265:level-idc 装不下整图时才分块）。
+        // ---- x265 Level 预校验 + 有损 HEIF grid 规划（M9 grid-heif / W2-T1 用户面）----
+        // 用户面普通键（C16）：
+        //   heif_grid    0 = 关闭；1 = 自动（缺省）；2 = 总是 grid
+        //   heif_tile_w / heif_tile_h  0 = 自动；手动值 8 向下对齐（64–8192）
+        // 兼容读别名 __heif_grid（M9 保留键）保持内部编号 0=关闭 / 1=总是 / 2=自动；
+        // 新键存在时优先于旧键（旧预设/--dev 仍生效，两个都给时记一条日志）。
         // x265 的 enforceLevel 会拒绝 luma 样本数超过 Level MaxLumaPs 的图，但旧实现只在
         // “heif_context_encode_image failed” 里带出 x265 日志。这里先用 heif_plan_grid(...) 做
         // Level 拟合：grid 时每 tile 单独满足 Level（tile 尺寸由 plan 给出），只有最终仍是
@@ -831,29 +948,116 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
             // grid 也救不了，保留准确的中文错误（与旧行为一致）。
             if (requested_level_idc != 0 && heif_level_max_luma_ps(requested_level_idc) < 0)
                 return fail(heif_level_fit_error_zh(requested_level_idc, w, h));
-            const int heif_grid_mode =
-                static_cast<int>(param_int(req.target.params, "__heif_grid", 2));
-            grid_plan = heif_plan_grid(heif_grid_mode, requested_level_idc, w, h, chroma_idx);
+
+            auto read_int_key = [&](const char *key, int64_t &out) -> std::string {
+                const auto it = req.target.params.find(key);
+                if (it == req.target.params.end())
+                    return {};
+                const int64_t *iv = std::get_if<int64_t>(&it->second);
+                if (iv == nullptr)
+                    return "参数 " + std::string(key) + " 类型错误：应为整数。";
+                out = *iv;
+                return {};
+            };
+
+            const bool has_new_grid =
+                req.target.params.find("heif_grid") != req.target.params.end();
+            const bool has_legacy_grid =
+                req.target.params.find("__heif_grid") != req.target.params.end();
+            int internal_grid_mode = 2; // 缺省 = 自动
+            int64_t grid_value = 2;
+            if (has_new_grid) {
+                if (const std::string err = read_int_key("heif_grid", grid_value); !err.empty())
+                    return fail(err);
+                internal_grid_mode = heif_grid_mode_from_param_value(static_cast<int>(grid_value));
+                if (internal_grid_mode < 0)
+                    return fail("参数 heif_grid 取值非法：合法值 0=关闭 / 1=自动 / 2=总是。");
+                if (has_legacy_grid)
+                    note_param("heif_grid wins over legacy __heif_grid", "heif_grid",
+                               std::to_string(grid_value));
+            } else if (has_legacy_grid) {
+                if (const std::string err = read_int_key("__heif_grid", grid_value); !err.empty())
+                    return fail(err);
+                internal_grid_mode = heif_grid_mode_from_legacy(static_cast<int>(grid_value));
+                if (internal_grid_mode < 0)
+                    return fail("保留键 __heif_grid 取值非法：合法值 0=关闭 / 1=总是 / 2=自动。");
+                log_info(kStage, kFile, "legacy __heif_grid used; prefer heif_grid",
+                         {{"value", std::to_string(grid_value)},
+                          {"mode", heif_grid_mode_name(internal_grid_mode)}});
+            }
+
+            int64_t tile_w_raw = 0;
+            int64_t tile_h_raw = 0;
+            if (const std::string err = read_int_key("heif_tile_w", tile_w_raw); !err.empty())
+                return fail(err);
+            if (const std::string err = read_int_key("heif_tile_h", tile_h_raw); !err.empty())
+                return fail(err);
+            if (tile_w_raw < 0 || tile_w_raw > 8192 || tile_h_raw < 0 || tile_h_raw > 8192)
+                return fail("手动 tile 参数越界：heif_tile_w/heif_tile_h 合法范围 0–8192"
+                            "（0=自动；非 0 时最小 64，按 8 向下对齐）。");
+
+            HeifGridRequest grid_request;
+            grid_request.grid_mode = internal_grid_mode;
+            grid_request.level_idc = requested_level_idc;
+            grid_request.width = w;
+            grid_request.height = h;
+            grid_request.chroma = chroma_idx;
+            grid_request.tile_width = static_cast<int>(tile_w_raw);
+            grid_request.tile_height = static_cast<int>(tile_h_raw);
+            grid_plan = heif_plan_grid(grid_request);
+            if (!grid_plan.ok)
+                return fail(grid_plan.error_zh);
             lossy_grid = grid_plan.use_grid && !want_lossless;
             if (!grid_plan.level_fits_image && !lossy_grid)
                 return fail(heif_level_fit_error_zh(requested_level_idc, w, h));
             if (lossy_grid && has_alpha)
-                return fail("HEIF grid 不承载 alpha 通道：请拍平 alpha 或关闭 grid"
-                            "（__heif_grid=0）。");
+                return fail("HEIF grid 不承载 alpha 通道：请拍平 alpha 或把 heif_grid 设为关闭"
+                            "（单图输出）。");
             if (lossy_grid && (grid_plan.tile_width <= 0 || grid_plan.tile_height <= 0 ||
                                grid_plan.cols <= 0 || grid_plan.rows <= 0))
                 return fail("HEIF grid 规划失败：目标 Level 下没有可用的 tile 尺寸"
                             "（请提高 x265:level-idc 或关闭 grid）。");
+            if (grid_plan.downgraded_single) {
+                log_info(kStage, kFile, "heif grid downgraded to single image",
+                         {{"reason", grid_plan.note_zh},
+                          {"tile", std::to_string(grid_plan.tile_width) + "x" +
+                                       std::to_string(grid_plan.tile_height)}});
+            }
+            if (grid_plan.aligned_width_from > 0 || grid_plan.aligned_height_from > 0) {
+                log_info(kStage, kFile, "heif manual tile aligned down to 8",
+                         {{"tile_w_in", std::to_string(grid_plan.aligned_width_from)},
+                          {"tile_w", std::to_string(grid_plan.tile_width)},
+                          {"tile_h_in", std::to_string(grid_plan.aligned_height_from)},
+                          {"tile_h", std::to_string(grid_plan.tile_height)}});
+            }
+            if (lossy_grid && grid_plan.manual_with_auto_level)
+                log_info(kStage, kFile, "heif manual tile with automatic level",
+                         {{"note", grid_plan.note_zh}});
+            if (lossy_grid && grid_plan.miaf_parity_warn)
+                log_warn(kStage, kFile, "heif grid MIAF parity warning",
+                         {{"image", std::to_string(w) + "x" + std::to_string(h)},
+                          {"chroma", heif_chroma_text(chroma_idx)},
+                          {"note", grid_plan.warning_zh}});
             if (lossy_grid) {
-                if (heif_grid_mode == 2) {
+                // 规划摘要（需求：每 tile 尺寸/网格/每 tile Level/总 tile 数如实输出）。
+                const std::string tile_level =
+                    grid_plan.tile_level_idc == 0
+                        ? std::string("自动（x265 逐 tile 选择）")
+                        : std::string(heif_level_name(grid_plan.tile_level_idc));
+                const std::string mode_name = heif_grid_mode_name(internal_grid_mode);
+                const std::string tile_text = std::to_string(grid_plan.tile_width) + "x" +
+                                              std::to_string(grid_plan.tile_height);
+                const std::string grid_text =
+                    std::to_string(grid_plan.cols) + "x" + std::to_string(grid_plan.rows);
+                const std::string tiles_text = std::to_string(grid_plan.total_tiles());
+                if (internal_grid_mode == 2 && grid_plan.level_idc != 0 &&
+                    !grid_plan.level_fits_image && !grid_plan.manual_tile) {
                     std::string warn_msg =
                         "Level " + std::string(heif_level_name(requested_level_idc)) +
                         " 无法容纳 " + std::to_string(w) + "x" + std::to_string(h) + "（" +
                         std::to_string(static_cast<int64_t>(w) * static_cast<int64_t>(h)) +
-                        " 亮度样本），已自动分块为 " + std::to_string(grid_plan.cols) + "x" +
-                        std::to_string(grid_plan.rows) + " 个 " +
-                        std::to_string(grid_plan.tile_width) + "x" +
-                        std::to_string(grid_plan.tile_height) + " tile";
+                        " 亮度样本），已自动分块为 " + grid_text + " 个 " + tile_text +
+                        " tile（每 tile Level " + tile_level + "，共 " + tiles_text + " 次编码）";
                     log_warn(kStage, kFile, warn_msg,
                              {{"level", heif_level_name(requested_level_idc)},
                               {"image", std::to_string(w) + "x" + std::to_string(h)},
@@ -861,20 +1065,22 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
                                std::to_string(static_cast<int64_t>(w) * static_cast<int64_t>(h))},
                               {"max_luma_ps",
                                std::to_string(heif_level_max_luma_ps(requested_level_idc))},
-                              {"tile", std::to_string(grid_plan.tile_width) + "x" +
-                                           std::to_string(grid_plan.tile_height)},
-                              {"grid", std::to_string(grid_plan.cols) + "x" +
-                                           std::to_string(grid_plan.rows)}});
+                              {"tile", tile_text},
+                              {"tile_level", tile_level},
+                              {"grid", grid_text},
+                              {"tiles", tiles_text}});
                 } else {
-                    log_info(kStage, kFile, "heif grid",
-                             {{"mode", "always"},
+                    log_info(kStage, kFile, "heif grid plan",
+                             {{"mode", mode_name},
                               {"image", std::to_string(w) + "x" + std::to_string(h)},
-                              {"tile", std::to_string(grid_plan.tile_width) + "x" +
-                                           std::to_string(grid_plan.tile_height)},
-                              {"grid", std::to_string(grid_plan.cols) + "x" +
-                                           std::to_string(grid_plan.rows)},
+                              {"tile", tile_text},
+                              {"tile_level", tile_level},
+                              {"grid", grid_text},
+                              {"tiles", tiles_text},
                               {"level", heif_level_name(requested_level_idc)}});
                 }
+            } else if (!grid_plan.note_zh.empty()) {
+                log_info(kStage, kFile, "heif grid note", {{"note", grid_plan.note_zh}});
             }
         }
 
@@ -1461,6 +1667,38 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
                 //   * 无损 grid / 无损单图：x265 在 determineLevel 里强制 Level 8.5
                 //     （general_level_idc=255），与用户 level-idc 无关，故跳过 level 比较；
                 //     profile/chroma/bitdepth 仍逐项校验（tile 共享同一 hvcC）。
+                //
+                // W2-T2（C18）：hvcC **丢 48 位 constraint**（libheif hevc_boxes.cc:628-630
+                // 只写 profile_space/tier/idc/compat/level，constraint 字节实测恒 0），所以
+                // still 语义只能从 hvcC 内嵌的 SPS NAL 解析（去 00 00 03 防竞争字节）。这里
+                // 解析 SPS 的 PTL/DPB 并落日志；对 still 变体档位（16..21）断言码流真的写出了
+                // intra=1 && one_picture_only=1，16 号（Main10Still）额外断言 DPB 约束 —— 名不
+                // 副实名即失败（不伪造、不静默）。
+                HeifSpsPtlInfo sps;
+                const bool sps_ok = heif_parse_sps_ptl(tmp_path, sps);
+                if (sps_ok) {
+                    const auto flag_text = [](int flag) {
+                        if (flag < 0)
+                            return std::string("n/a");
+                        return std::string(flag != 0 ? "1" : "0");
+                    };
+                    log_info(kStage, kFile, "heif sps ptl",
+                             {{"profile", heif_profile_label(effective_profile)},
+                              {"idc", std::to_string(sps.profile_idc)},
+                              {"level_idc", std::to_string(sps.level_idc)},
+                              {"chroma", std::to_string(sps.chroma_format_idc)},
+                              {"bitdepth", std::to_string(sps.bit_depth_luma)},
+                              {"constraint48", sps.constraint_bits},
+                              {"intra", flag_text(sps.intra)},
+                              {"one_picture_only", flag_text(sps.one_picture_only)},
+                              {"dpb_minus1", std::to_string(sps.sps_max_dec_pic_buffering_minus1)},
+                              {"num_reorder_pics", std::to_string(sps.sps_max_num_reorder_pics)}});
+                }
+                if (const std::string still_err = heif_sps_still_error_zh(effective_profile, sps);
+                    !still_err.empty())
+                    return fail_tmp(still_err);
+                if (!sps_ok)
+                    log_warn(kStage, kFile, "heif sps ptl unparsable", {{"error", sps.error}});
             }
             std::string cerr;
             if (!commit_temp_file(tmp_path, req.target.out_path, &cerr))
@@ -1687,6 +1925,12 @@ std::vector<BackendDef> introspect_backends(std::string_view format_id) {
             t.params = introspect_live(enc);
             // M8-B0：目录行并入运行时参数面（UI/预设/--param/校验共用同一份表）。
             std::vector<ParamDef> extra = catalog::param_defs(format_id, b.id);
+            // W2-T1（C16）：Level 行上移核心区（目录生成物统一 advanced=true；核心定位在
+            // 运行时合并点按 heif_param_in_core 单源改写，catalog.h 的加性字段由 W2-T6 收口）。
+            for (ParamDef &p : extra) {
+                if (heif_param_in_core(p.key))
+                    p.advanced = false;
+            }
             t.params.insert(t.params.end(), extra.begin(), extra.end());
             b.techs.push_back(std::move(t));
             heif_encoder_release(enc);

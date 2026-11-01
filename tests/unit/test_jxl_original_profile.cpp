@@ -10,10 +10,12 @@
 // 本测试把修复后的行为钉死（断言物 = 写出的 JXL 码流头，不是 OIIO 的转述）：
 //   1) 有损 VarDCT（带 ICC / 不带 ICC）→ uses_original_profile == 0（XYB 路径）；
 //   2) lossless / modular → == 1（保留原色彩配置，既有语义不变）；
-//   3) 显式 uses_original_profile=true + 有损 VarDCT → EncodeResult{bytes==0, error≠空}
-//      且不落盘（不产坏件），错误文案点名参数并给出 tech=modular/lossless 出路；
-//   4) 显式 false 与「键缺失」的默认路径产物逐字节一致（三态覆写语义未被破坏）；
-//   5) XYB 仍随码流携带原色彩配置（标准空间存结构化枚举，否则存 ICC）：解码端
+//   3) W2-T5（C22）删除行：uses_original_profile/keep_invisible 等旧键显式出现时
+//      → EncodeResult{bytes==0, error≠空}，错误点名 "removed parameter" 且不落盘；
+//   4) W2-T5 技术作用域：显式 vardct（或空 tech）下出现 Modular-only 键
+//      → 显式失败（禁止「存在 Modular 键就静默切技术」），不产坏件；
+//   5) effort=11 不再需要 expert_options（编码器自动 AllowExpertOptions）→ 编码成功；
+//   6) XYB 仍随码流携带原色彩配置（标准空间存结构化枚举，否则存 ICC）：解码端
 //      JXL_COLOR_PROFILE_TARGET_ORIGINAL 能取回合法 ICC ⇒ 强制 XYB 不是色彩降级
 //      （宽色域目标仍可还原）。
 //
@@ -290,12 +292,12 @@ int run_tests() {
         return finish();
     }
 
-    // 目录行是 has_default=false（三态），所以产品默认工作集里**没有**该键；
-    // 显式覆写才写键 —— 下面的「缺键 = 推导」断言依赖这个前提。
+    // W2-T5（C22）：uses_original_profile 行已删除（只剩无效果/报错两态）⇒ 默认工作集
+    // 不含该键，且任何显式值都在编码器入口被「已移除参数」拒绝（见下）。
     pp::ParamSet vardct = pp::default_params(*fmt, "libjxl", "vardct", false);
     check(vardct.find("uses_original_profile") == vardct.end(),
-          "jxl/orp/params/vardct/no-implicit-key",
-          "default vardct param set must not carry uses_original_profile (three-state premise)");
+          "jxl/orp/params/vardct/removed-key-absent",
+          "default vardct param set must not carry the removed uses_original_profile key");
 
     // ---- 1) 有损 VarDCT + ICC → XYB（本修复的核心断言；旧实现此处为 1） ----
     const fs::path out_default = dir / "lossy_vardct_icc_default.jxl";
@@ -322,47 +324,70 @@ int run_tests() {
              num(static_cast<long long>(hdr.original_icc.size())));
     }
 
-    // ---- 2) 显式 false 覆写 = 默认路径（逐字节相同） ----
-    {
-        pp::ParamSet explicit_false = vardct;
-        explicit_false["uses_original_profile"] = false;
+    // ---- 2) 删除行 uses_original_profile（true / false 均）→ 明确失败、不落盘 ----
+    for (const bool value : {true, false}) {
+        pp::ParamSet removed = vardct;
+        removed["uses_original_profile"] = value;
         OIIO::ImageBuf buf = make_rgb_buf();
-        const fs::path out = dir / "lossy_vardct_icc_explicit_false.jxl";
-        const pp::EncodeResult r =
-            run_encode(*enc, buf, explicit_false, meta_icc, out, 8, "vardct");
-        check(r.error.empty() && r.bytes > 0, "jxl/orp/lossy_vardct_icc/explicit_false/encode",
-              r.error);
-        check_uses_original_profile(probe_jxl_header(out), 0,
-                                    "jxl/orp/lossy_vardct_icc/explicit_false");
-        const FileBytes bytes_default = read_file_bytes(out_default);
-        const FileBytes bytes_explicit = read_file_bytes(out);
-        check(bytes_default.ok && bytes_explicit.ok,
-              "jxl/orp/lossy_vardct_icc/explicit_false/readback",
-              bytes_default.error + bytes_explicit.error);
-        check(bytes_default.ok && bytes_explicit.ok && bytes_default.bytes == bytes_explicit.bytes,
-              "jxl/orp/lossy_vardct_icc/explicit_false/identical",
-              "explicit false output differs from the key-absent default path");
-    }
-
-    // ---- 3) 显式 true + 有损 VarDCT → 明确失败、不落盘 ----
-    {
-        pp::ParamSet explicit_true = vardct;
-        explicit_true["uses_original_profile"] = true;
-        OIIO::ImageBuf buf = make_rgb_buf();
-        const fs::path out = dir / "lossy_vardct_icc_explicit_true.jxl";
-        const pp::EncodeResult r = run_encode(*enc, buf, explicit_true, meta_icc, out, 8, "vardct");
-        check(r.bytes == 0 && !r.error.empty(), "jxl/orp/lossy_vardct_icc/explicit_true/rejected",
+        const fs::path out = dir / "removed_uses_original_profile.jxl";
+        const pp::EncodeResult r = run_encode(*enc, buf, removed, meta_icc, out, 8, "vardct");
+        const std::string name = "jxl/orp/removed/uses_original_profile";
+        check(r.bytes == 0 && !r.error.empty(), name + "/rejected",
               "expected bytes=0 + error, got bytes=" + num(static_cast<long long>(r.bytes)) +
                   " error='" + r.error + "'");
-        check(r.error.find("uses_original_profile") != std::string::npos,
-              "jxl/orp/lossy_vardct_icc/explicit_true/names-param",
-              "error must name uses_original_profile: '" + r.error + "'");
-        check(r.error.find("modular") != std::string::npos,
-              "jxl/orp/lossy_vardct_icc/explicit_true/hint",
-              "error must offer tech=modular/lossless: '" + r.error + "'");
-        check(!fs::exists(out, ec), "jxl/orp/lossy_vardct_icc/explicit_true/no-artifact",
+        check(r.error.find("removed parameter") != std::string::npos, name + "/says-removed",
+              "error must say 'removed parameter': '" + r.error + "'");
+        check(r.error.find("uses_original_profile") != std::string::npos, name + "/names-param",
+              "error must name the key: '" + r.error + "'");
+        check(!fs::exists(out, ec), name + "/no-artifact",
               "rejected encode must not leave an output file: " + out.string());
-        info("rejected explicit true: '" + r.error + "'");
+    }
+
+    // ---- 3) 删除行 keep_invisible → 明确失败（无 alpha 的结构性 no-op；不静默接受） ----
+    {
+        pp::ParamSet removed = vardct;
+        removed["keep_invisible"] = true;
+        OIIO::ImageBuf buf = make_rgb_buf();
+        const fs::path out = dir / "removed_keep_invisible.jxl";
+        const pp::EncodeResult r = run_encode(*enc, buf, removed, meta_icc, out, 8, "vardct");
+        check(r.bytes == 0 && !r.error.empty(), "jxl/orp/removed/keep_invisible/rejected",
+              "expected bytes=0 + error, got bytes=" + num(static_cast<long long>(r.bytes)) +
+                  " error='" + r.error + "'");
+        check(r.error.find("removed parameter") != std::string::npos &&
+                  r.error.find("keep_invisible") != std::string::npos,
+              "jxl/orp/removed/keep_invisible/names",
+              "error must name the removed key: '" + r.error + "'");
+        check(!fs::exists(out, ec), "jxl/orp/removed/keep_invisible/no-artifact",
+              "rejected encode must not leave an output file: " + out.string());
+    }
+
+    // ---- 3b) W2-T5：effort=11 自动 AllowExpertOptions（expert_options 行已删除） ----
+    {
+        pp::ParamSet e11 = vardct;
+        e11["effort"] = int64_t(11);
+        OIIO::ImageBuf buf = make_rgb_buf();
+        const fs::path out = dir / "effort11_auto_expert.jxl";
+        const pp::EncodeResult r = run_encode(*enc, buf, e11, meta_icc, out, 8, "vardct");
+        check(r.error.empty() && r.bytes > 0, "jxl/orp/effort11/auto-expert", r.error);
+        check_uses_original_profile(probe_jxl_header(out), 0, "jxl/orp/effort11");
+    }
+
+    // ---- 3c) W2-T5 技术作用域：空 tech + Modular-only 键 → 显式失败（禁止静默切技术） ----
+    {
+        pp::ParamSet cross = vardct;
+        cross["modular_predictor"] = int64_t(3);
+        OIIO::ImageBuf buf = make_rgb_buf();
+        const fs::path out = dir / "cross_tech_no_silent_switch.jxl";
+        const pp::EncodeResult r = run_encode(*enc, buf, cross, meta_icc, out, 8, "");
+        check(r.bytes == 0 && !r.error.empty(), "jxl/orp/cross-tech/not-silent",
+              "Modular key on VarDCT path must fail, got bytes=" +
+                  num(static_cast<long long>(r.bytes)));
+        check(r.error.find("Modular-only") != std::string::npos &&
+                  r.error.find("modular_predictor") != std::string::npos,
+              "jxl/orp/cross-tech/names",
+              "error must name the Modular-only key: '" + r.error + "'");
+        check(!fs::exists(out, ec), "jxl/orp/cross-tech/no-artifact",
+              "rejected encode must not leave an output file: " + out.string());
     }
 
     // ---- 4) lossless（Modular + SetFrameLossless）→ 保留原配置（既有语义） ----
@@ -378,26 +403,26 @@ int run_tests() {
     // ---- 5) 有损 Modular → 同样保留原配置（Modular 不受本修复影响） ----
     {
         pp::ParamSet mod_lossy = pp::default_params(*fmt, "libjxl", "modular", false);
-        pp::ParamSet explicit_true = mod_lossy;
-        explicit_true["uses_original_profile"] = true;
         check(mod_lossy.find("distance") != mod_lossy.end(), "jxl/orp/modular_lossy/params",
               "modular default set has no distance key");
         mod_lossy["distance"] = 1.0;
-        explicit_true["distance"] = 1.0;
         OIIO::ImageBuf buf = make_rgb_buf();
         const fs::path out = dir / "modular_lossy_icc.jxl";
         const pp::EncodeResult r = run_encode(*enc, buf, mod_lossy, meta_icc, out, 8, "modular");
         check(r.error.empty() && r.bytes > 0, "jxl/orp/modular_lossy/encode", r.error);
         check_uses_original_profile(probe_jxl_header(out), 1, "jxl/orp/modular_lossy");
-        // 显式 true 在 Modular 上是合法覆写（J7 的 non-perceptual 场景依赖它），不得被拒。
+        // W2-T5：uses_original_profile 行删除后，non-perceptual（J7）在 Modular 上仍可用 ——
+        // 编码器由 lossless/modular 推导 uses_original_profile=true，不再需要用户覆写该键。
+        pp::ParamSet non_perceptual = mod_lossy;
+        non_perceptual["disable_perceptual_heuristics"] = true;
         OIIO::ImageBuf buf2 = make_rgb_buf();
-        const fs::path out2 = dir / "modular_lossy_icc_explicit_true.jxl";
+        const fs::path out2 = dir / "modular_lossy_non_perceptual.jxl";
         const pp::EncodeResult r2 =
-            run_encode(*enc, buf2, explicit_true, meta_icc, out2, 8, "modular");
-        check(r2.error.empty() && r2.bytes > 0, "jxl/orp/modular_lossy/explicit_true/allowed",
+            run_encode(*enc, buf2, non_perceptual, meta_icc, out2, 8, "modular");
+        check(r2.error.empty() && r2.bytes > 0, "jxl/orp/modular_lossy/non_perceptual/allowed",
               r2.error);
         check_uses_original_profile(probe_jxl_header(out2), 1,
-                                    "jxl/orp/modular_lossy/explicit_true");
+                                    "jxl/orp/modular_lossy/non_perceptual");
     }
 
     // ---- 6) 无 ICC 的有损 VarDCT → 仍是 XYB（旧行为保留，防回归） ----

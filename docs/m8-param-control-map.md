@@ -8,11 +8,11 @@
 
 ## 0. 结论摘要
 
-1. **真正的路线锚点只有 6 类可编辑**：输出后端（AVIF libaom/SVT）、JXL 技术（VarDCT/Modular）、无损（lossless）、速率控制模式（RC 模式）、libaom realtime、JXL 码流输出模式（buffering/output_mode）；另有 5 类**档位/属性锚点**（preset、tune、位深、色度、profile/level/tier）。
-2. 其余参数只有三种形态：**数值（N）**、**下拉（D）**、**开关（S）**；另有文本 1 项（`frame_name`）、只读 13 项（x265 4 + libaom 6 + SVT 3）。
+1. **真正的路线锚点只有 6 类可编辑**：输出后端（AVIF libaom/SVT）、JXL 技术（VarDCT/Modular）、无损（lossless）、速率控制模式（RC 模式）、libaom realtime、JXL 码流输出模式（`output_mode`；W2-T5 起 `buffering` 退场）；另有 5 类**档位/属性锚点**（preset、tune、位深、色度、profile/level/tier）。
+2. 其余参数只有三种形态：**数值（N）**、**下拉（D）**、**开关（S）**；另有文本 2 项、只读 14 项（x265 4 + libaom 6 + SVT 3 + JXL 1；W2 后口径）。
 3. **RC 模式采用显式模式下拉（已定，用户 2026-10-28 裁定）**：HEIF 质量/CRF/QP、libaom 质量/CQ Level、SVT 质量/QP；只显示当前路径数值行，其余隐藏并禁止下发；默认“质量”= 既有 `quality`（零行为变化），无损时整组隐藏。
 4. **新增布尔行用三态下拉（已定）** `{跟随默认 / 开 / 关}`，避免“启用勾选 + 开关”双复选框；既有布尔行保持复选框不变。
-5. **计数双口径（已定）**：评审稿 ≈40 / ≈50 / 10 / ≈42 是**组行**口径（用于范围评审与报告）；**键展开 170 行是实现/目录/测试/门禁的唯一真源**。范围不变，精确数以 Stage A4 的“评审清单 ↔ 目录行”对账表为准。
+5. **计数双口径（已定）**：评审稿 ≈40 / ≈50 / 10 / ≈30 是**组行**口径（用于范围评审与报告）；**键展开 158 行是实现/目录/测试/门禁的唯一真源**（W2-T5 前 170；JXL 43→31）。范围不变，精确数以 Stage A4 的“评审清单 ↔ 目录行”对账表为准。
 
 ---
 
@@ -50,7 +50,7 @@
 
 - **既有 7（HEIF）/ 10（AVIF）/ 28（JXL）键的控件形态不变**：
   - HEIF/AVIF 由运行时内省决定：区间整数 → N、整数集合/字符串集合 → D、布尔 → S；
-  - JXL 由 `format_tables.cpp` 静态表决定：现有 `resampling`/`group_order`/`color_transform` 是 D，其余 Int/Float 是 N、Bool 是 S。
+  - JXL 由 `format_tables.cpp` + `jxl_catalog.inc` 决定：`resampling`/`color_transform` 是 D，其余 Int/Float 是 N、Bool 是 S；W2-T5 起 `gaborish/dots/patches` 为三态 S、`codestream_level` 为只读 R。
 - M8 只对**新增目录行**引入“启用/跟随默认”三态与控件形态元数据；既有行的默认值、可见性谓词、锁定谓词**逐字不动**。
 - 新增形态元数据放在 `CatalogRow`（`Control`/`Role` 字段），**不放 `ParamDef`**，避免冻结面扩大；UI 对新增行接收可选目录描述，既有行继续按 `ParamDef.type` 推导。
 
@@ -65,17 +65,17 @@
 | **G1** | 输出格式 / 后端 | M（已有控件） | HEIF=x265；AVIF=libaom/SVT；JXL=libjxl | 页面级 | 切换整个参数面；跨后端键（`svt:` 等）= 预检错误 |
 | **G2** | JXL 技术 | M（已有控件） | VarDCT / Modular | JXL | 切换参数集：VarDCT-only 与 Modular-only 互斥（现有 `tech` 过滤） |
 | **G3** | 无损 | M（开关） | `lossless` on/off | 每格式 | 见 G3.1–G3.4 |
-| **G4** | RC 模式（已定显式下拉） | M（新增下拉） | 质量 / CRF / QP（libaom 为 质量 / CQ Level；SVT 为 质量 / QP） | HEIF / AVIF | 只显示当前路径的数值行；其余隐藏并禁止下发；无损时整组隐藏 |
+| **G4** | RC 模式（已定显式下拉） | M（新增下拉） | 质量 / CRF / QP（libaom 为 质量 / CQ Level；SVT 为 质量 / QP） | HEIF / AVIF | 只显示当前路径的数值行；其余隐藏并禁止下发；无损时整组隐藏。W2-T4：数值行（含 quality）重建到**核心区、紧随模式行**（非激活行隐藏、行对象/objectName 不变）；CRF/QP 域随位深（8bit 0..51 / 10bit −12..51 / 12bit −24..51） |
 | **G5** | realtime | M（开关） | on/off | libaom | 切换 usage → `speed`（cpu-used）域与并行行为变化 |
-| **G6** | JXL 码流输出模式 | M | `buffering`（0/1/2）、`output_mode`（0/1/2） | JXL | 改变码流结构/缓冲；`output_mode=2` 加兼容性警告 |
+| **G6** | JXL 码流输出模式 | M | `output_mode`（0/1/2） | JXL | 改变码流写出顺序/容器结构；`output_mode=2` 加兼容性警告。W2-T5 起 `buffering` 行已删除（整图输入路径逐字节 no-op），本锚点只剩 `output_mode` |
 
 ### 2.2 档位/属性锚点
 
 | # | 锚点 | 形态 | 取值 | 主导联动 |
 |---|---|---|---|---|
 | **G7** | preset | D（锚点） | x265 10 档 | 改变未显式覆盖参数的默认基线；显式参数仍覆盖 |
-| **G8** | tune | D（锚点） | 各库枚举 | x265 psy/AQ 部分被插件覆盖；libaom `iq` 提示库自动改 QM/sharpness/chroma-deltaq；SVT `iq/ms-ssim` 提示 |
-| **G9** | 位深 | M/D（页面级） | 8/10/12/16 | profile 推导、QP/CRF 域、JXL 16bit+level5 错误 |
+| **G8** | tune | D（锚点） | 各库枚举 | x265：4 原生 + animation（引擎注入近似仿真）+ zerolatency/vmaf 置灰；libaom：4 原生 + ssimulacra2/vmaf_saliency_map（内部 `aom:tune` 通道）+ vmaf/butteraugli/cdef-dist 置灰；SVT：5 原生。x265 psy/AQ 部分被插件固定项覆盖；libaom `iq`/`ssimulacra2` 提示库自动改 QM/sharpness/chroma-deltaq；SVT `iq/ms-ssim` 提示 BRC 切 CRF（W2-T3/C20，事实表 `src/codecs/enc_tune_facts.*`） |
+| **G9** | 位深 | M/D（页面级） | 8/10/12/16 | profile 推导、QP/CRF 域（8bit 0..51 / 10bit −12..51 / 12bit −24..51）、JXL 16bit+level5 错误 |
 | **G10** | 色度 | D（锚点） | 420/422/444 | profile 推导、x265 RExt、libaom identity 约束、SVT 固定 420 |
 | **G11** | profile / level / tier | R / D / D | profile 只读；level/tier 可选 | 兼容性门槛；level 与 CRF/VBV 的警告 |
 
@@ -87,7 +87,6 @@
 | **AVIF/libaom** | `quality` 隐藏；`chroma` 锁定 444；`aom:aq-mode=0`、`aom:enable-chroma-deltaq=0` 锁定；`tune=iq` 禁用；警告“码流无损可能 <100”（UI/PRE） |
 | **AVIF/SVT** | `lossless` 控件禁用 + tooltip 指路 libaom（产品当前硬失败，UI） |
 | **JXL** | 强制技术 = Modular（UI）；`distance` 隐藏；`resampling` 锁定 1；`modular_lossy_palette` 锁定 false；VarDCT-only 参数隐藏；警告“真无损分数应为 100”（UI/ENC） |
-
 ---
 
 ## 3. HEIF / x265 参数形态表
@@ -98,10 +97,10 @@
 
 | 键 | 形态 | 角色 | 类型/域 | 默认 | 联动 |
 |---|---|---|---|---|---|
-| `quality` | N | A（RC 默认路径） | int 0–100 | 50 | G4/X1；无损→隐藏（G3） |
+| `quality` | N | A（RC 默认路径） | int 0–100 | 50 | G4/X1；无损→隐藏（G3）；W2-T4：标签「质量（0–100；CRF=(100−q)/2）」 |
 | `lossless` | M | A | bool | false | G3 |
 | `preset` | D | A | enum 10 档 | slow | G7/X14 |
-| `tune` | D | A | enum psnr/ssim/grain/fastdecode | ssim | G8/X3（psy/AQ 被覆盖，警告） |
+| `tune` | D | A | enum psnr/ssim/grain/fastdecode/animation（仿真）/zerolatency·vmaf（置灰） | ssim | G8/X3（psy/AQ 被覆盖；animation 为近似仿真，用户显式覆盖优先） |
 | `chroma` | D | A | enum 420/422/444 | 420 | G10/X13（444+psy 警告；profile 只读） |
 | `tu-intra-depth` | N | P | int 1–4 | 2 | X7/X8（与 CTU 耦合，逐文件） |
 | `complexity` | N | P | int 0–100 | 0（无默认） | X14（≥90 关 wpp） |
@@ -112,8 +111,8 @@
 
 | 键 | 形态 | 角色 | 类型/域 | 联动 |
 |---|---|---|---|---|
-| `x265:crf` | N | A（RC 路径） | float，8bit 0–51（随位深上抬） | G4/X1；与 quality/qp 互斥 |
-| `x265:qp` | N | A（RC 路径） | int 0–51 | G4/X1 |
+| `x265:crf` | N | A（RC 路径） | float，域随位深：8bit 0..51 / 10bit −12..51 / 12bit −24..51 | G4/X1；与 quality/qp 互斥；X1C（越界错误） |
+| `x265:qp` | N | A（RC 路径） | int，域随位深：8bit 0..51 / 10bit −12..51 / 12bit −24..51 | G4/X1；X1C（越界错误）；X12（+显式 Level ⇒ 错误） |
 | `x265:qpmin` | N | P | int 0–69 | X1b（≤qpmax） |
 | `x265:qpmax` | N | P | int 0–69 | X1b（≥qpmin） |
 | `x265:aq-mode` | D | P | int 0–4（库值） | X2（插件强制 1，tooltip）；驱动 aq-strength/rd-refine |
@@ -173,6 +172,7 @@
 |---|---|---|---|
 | X1 | RC 三选一：quality / crf / qp 只能有一个路径 | 其余 H/D；模式由 G4 控制 | UI + PRE（预设冲突报错） |
 | X1b | `qpmin ≤ qpmax` | 违反即 E | PRE |
+| X1C | `x265:crf` / `x265:qp` 合法域随位深（8bit 0..51、10bit −12..51、12bit −24..51）；越界 = E（点名键/值/位深域，不静默钳值） | E | PRE + UI（域/注记） |
 | X2 | `aq-strength` 仅 `aq-mode≠0`；`rd-refine` 需 `aq-mode≠0` | 依赖行 D | UI |
 | X3 | `psy-rdoq` 仅 `rdoq-level>0` | D + 原因 | UI |
 | X4 | `rd<3` ⇒ `cu-lossless`/`tskip`/`tskip-fast` D；`rd-refine` 需 `rd≥5`；`tskip-fast` 依赖 `tskip` | D/H | UI |
@@ -183,7 +183,7 @@
 | X9 | `min-cu-size>8` 且宽高不整除 ⇒ padding/conformance window | W | FILE |
 | X10 | `sao=0` ⇒ `sao-non-deblock`/`limit-sao`/`selective-sao` D | D | UI |
 | X11 | `sao-non-deblock` 仅 `sao=1` | D | UI |
-| X12 | `high-tier` 仅 `level-idc>0` 有效；`level-idc` + CRF ⇒ 强制 VBV | D；W | UI |
+| X12 | `high-tier` 仅 `level-idc>0` 有效；`level-idc` + CRF ⇒ 强制 VBV（W）；**W2-T4：`x265:qp` + 显式 `level-idc`(>0) ⇒ 不兼容 E**（x265 拒绝 Constant QP + decoder level；出路 = CRF/质量模式或 Level 自动） | D；W；E | UI + PRE（编码器兜底同一文案） |
 | X13 | `cbqpoffs/crqpoffs` 在 444+psy 下库可能自动改 | W（tooltip） | UI |
 | X14 | `complexity≥90` 会关 wpp；`wpp` 与 `slices>1` 组合需一致 | W；预设/`--param` 中出现 `slices>1` 且不满足 ⇒ E | UI + PRE |
 | X15 | `psy-rd` 等 psy 参数的部分效果被 `tune`/插件固定项覆盖 | W | UI |
@@ -201,7 +201,7 @@
 | `quality` | N | A（RC 默认） | int 0–100 | G4/A1；无损→隐藏 |
 | `lossless` | M | A | bool | G3/A2 |
 | `chroma` | D | A | enum 420/422/444 | G10/A6（identity 需 444） |
-| `tune` | D | A | enum psnr/ssim/iq（vmaf 未构建） | G8/A3 |
+| `tune` | D | A | enum auto/psnr/ssim/iq（原生）+ ssimulacra2/vmaf_saliency_map（内部 `aom:tune` 通道）+ vmaf/butteraugli/cdef-dist（置灰） | G8/A3（iq 自动 QM/sharpness）；ssimulacra2 同类提示 |
 | `speed` | N | P | int 0–8（realtime 下域变化） | G5/A10 |
 | `min-q` | N | P | int 0–63 | A5（≤max-q） |
 | `max-q` | N | P | int 0–63 | A5 |
@@ -289,7 +289,7 @@ libheif 固定 `g_usage=ALL_INTRA`、`rc_end_usage=AOM_Q`、`g_limit=1`、`lag=0
 |---|---|---|---|
 | A1 | `quality` 与 `aom:cq-level` 二选一 | 其余 H/D | UI + PRE |
 | A2 | `lossless` ⇒ 444 + `aq-mode=0` + `enable-chroma-deltaq=0` | Lock/Force | UI + ENC |
-| A3 | `tune=iq` ⇒ 库自动改 QM/sharpness/chroma-deltaq | W（不静默覆盖用户值） | UI |
+| A3 | `tune=iq` ⇒ 库自动改 QM/sharpness/chroma-deltaq；`tune=ssimulacra2` 同样自动启用 QM/锐化（W2-T3 扩写；经内部 `aom:tune` 通道） | W（不静默覆盖用户值） | UI |
 | A4 | `auto-tiles` 与 `tile-columns/rows` 互斥 | H/D | UI + PRE |
 | A5 | `min-q≤max-q`；`qm-min≤qm-max`；`min-partition-size≤max-partition-size`；`cq-level≤63` | E | PRE |
 | A6 | `aom:matrix-coefficients=identity` 需 4:4:4 | E/W | PRE |
@@ -314,7 +314,7 @@ libheif 固定 `g_usage=ALL_INTRA`、`rc_end_usage=AOM_Q`、`g_limit=1`、`lag=0
 | `quality` | N | A（RC 默认） | int 0–100 | 50 | G4/S1（qp 优先） |
 | `qp` | N | A（RC 路径） | int 0–63，**无默认** | 未设置 | G4/S1（三态：启用才下发） |
 | `min-q` / `max-q` | N | P | int 0–63 ×2 | 0/63 | S1b（min≤max） |
-| `tune` | D | A | enum vq/psnr/ssim/iq/ms-ssim | psnr | G8 |
+| `tune` | D | A | enum vq/psnr/ssim/iq/ms-ssim（5/5 原生，W2-T3 补中文标签） | psnr | G8（iq/ms-ssim ⇒ BRC 从 CQP 切 CRF，W） |
 | `threads` | R（隐藏） | — | int 1–16 | 4 | S5（调度器覆盖，不暴露） |
 | `tile-rows` / `tile-cols` | D | P | enum 1/2/4/…/64 ×2 | 4/4 | S4（真实条数；Annex-A） |
 | `lossless` | M | A | bool | false | S2（产品硬失败，禁用 + 指路 libaom） |
@@ -330,68 +330,78 @@ libheif 固定 `g_usage=ALL_INTRA`、`rc_end_usage=AOM_Q`、`g_limit=1`、`lag=0
 | S4 | `tile-rows/cols` 为真实条数；tiles≤128、cols≤16 | E | PRE |
 | S5 | `threads` 不暴露；profile/level/tier 只读 | R | UI |
 | S6 | 任何 `svt:` 前缀键 | E | PRE |
+| S7 | `tune=iq` / `tune=ms-ssim` ⇒ BRC 从 CQP 切到 CRF（`encoder_svt.cc:873`），QP 路径码率不再由 qp 决定 | W | UI + PRE（W2-T3/C20） |
 
 ---
 
 ## 6. JPEG XL 参数形态表
 
-### 6.1 现有 27 键（设计口径 28；形态不变）
+> **W2-T5（0.4.0 C22）更新**：JXL 键集合 43→31，删除 12 行；`epf` 默认改跟随库；
+> `gaborish/dots/patches` 改三态；`brotli_effort` 修作用域；`codestream_level` 只读；
+> `color_transform` 枚举收窄；`channel_colors_*` 类型修正；技术与危险/ HDR 分组重整。
+> 真源 = `src/core/format_tables.cpp`（jxl FormatDef）+ `src/codecs/param_catalog/jxl_catalog.inc`
+> + `src/core/param_rules.cpp`。设计 = `docs/v0.4.0-design.md` §7。
+
+### 6.1 W2-T5 后 31 键（形态）
 
 | 形态 | 键 | 说明 |
 |---|---|---|
-| **N（15）** | `effort`、`decoding_speed`、`codestream_level`、`distance`、`photon_noise`、`epf`、`progressive_dc`、`modular_group_size`、`modular_predictor`、`modular_palette_colors`、`brotli_effort`、`channel_colors_global_percent`、`channel_colors_group_percent`、`modular_ma_tree_learning_percent`、`modular_nb_prev_channels` | 既有 -1=自动哨兵不变；`effort` 上限扩到 11（见 J6） |
-| **D（3）** | `resampling`、`group_order`、`color_transform` | `resampling`/`group_order` 已是下拉 |
-| **S（8）** | `keep_invisible`、`dots`、`patches`、`gaborish`、`progressive_ac`、`qprogressive_ac`、`modular_lossy_palette`、`responsive` | 现有复选框 |
+| **N（16）** | `effort`、`decoding_speed`、`distance`、`epf`、`photon_noise`、`modular_group_size`、`modular_predictor`、`modular_palette_colors`、`channel_colors_global_percent`、`channel_colors_group_percent`、`modular_ma_tree_learning_percent`、`modular_nb_prev_channels`、`brotli_effort`、`intensity_target`、`min_nits`、`linear_below` | `channel_colors_*` 改 **Float**；`epf` 默认 -1；`brotli_effort` 仅 `box_compress=1` 可见 |
+| **D（4）** | `resampling`、`color_transform`、`upsampling_mode`、`output_mode` | `color_transform` 收窄为 auto/YCoCg |
+| **S（7）** | `box_compress`、`disable_perceptual_heuristics`、`relative_to_max_display`、`modular_lossy_palette`、`gaborish`、`dots`、`patches` | 后三者 **三态**（跟随默认/开/关，`has_default=false`；未设置=不下发） |
+| **T（2）** | `intrinsic_size`、`frame_name` | 文本元数据工具 |
 | **M（1）** | `lossless` | 模式锚点 |
+| **R（1）** | `codestream_level` | 只读：实际 level 由库按图像推导（8/16 位 VarDCT→5；16 位无损→10） |
 
-> 计数核对：15+3+8+1 = 27；设计/评审口径 28（含档位/位深行或一个历史计数差），Stage A4 以 `format_tables.cpp` 实际键为准对账，不改变“既有键语义不动”的约束。
+> 计数核对：16+4+7+2+1+1 = **31 键**（W2-T5 前 43）。目录行 14（含 3 个三态布尔与
+> 1 个只读行），全局目录行 116→**117**（HEIF +3、JXL −2；W2 后口径）。
 
-### 6.2 新增 16 项与 effort 扩档
+### 6.2 W2-T5 处置与证据
 
-| 键 | 形态 | 角色 | 类型/域 | 联动 |
-|---|---|---|---|---|
-| `noise` | S | I | 三态（跟随默认/开/关） | J16（旧式噪声，已被 photon_noise 取代，tooltip） |
-| `group_order_center_x` | N | P | int（0..width-1） | J4（仅 group_order=center；<width 逐文件） |
-| `group_order_center_y` | N | P | int（0..height-1） | J4（仅 group_order=center；<height 逐文件） |
-| `upsampling_mode` | D | P | enum auto/nearest/… | J3（仅 resampling>1） |
-| `uses_original_profile` | S | P | 三态 | J7（disable_perceptual 依赖）；J8（有损 + true 质量变差警告） |
-| `box_compress` | S | A | 三态 | J5（驱动 brotli_effort） |
-| `expert_options` | S | A | 三态 | J6（驱动 effort=11） |
-| `effort`（扩到 11） | N | P | 现有 1–10 → 1–11 | J6（11 需 expert_options） |
-| `buffering` | D | M | 三态 0/1/2（3 已弃用） | G6（码流缓冲模式） |
-| `output_mode` | D | M | 三态 0/1/2 | G6/J12（2=乱序 jxlp，兼容警告） |
-| `disable_perceptual_heuristics` | S | P | 三态 | J7（需 uses_original_profile=true） |
-| `intensity_target` | N | P | float nits，0=自动 | J17（HDR 组） |
-| `min_nits` | N | P | float，0=自动 | J17 |
-| `relative_to_max_display` | S | P | 三态 | J17 |
-| `linear_below` | N | P | float，0=自动 | J17 |
-| `intrinsic_size` | N | I | int x/y，0=不写 | J14（容器元数据） |
-| `frame_name` | T | I | string | J13（禁用 fast-lossless，tooltip） |
+| 键/组 | 处置 | 证据 |
+|---|---|---|
+| `epf` | 默认 **2→-1**（跟随库启发式；-1 由编码器跳过下发） | d0.5 库启发式选 0；b02 vs b04 字节/分数微差 |
+| `gaborish`/`dots`/`patches` | 强制 true → **三态**（未设置=不下发，旧预设显式值仍有效） | b43/b44 强制项在 effort=1 下 2.70→3.67MB、68.78→78.19；b07 patches 真实生效 |
+| `keep_invisible`/`noise` | **删除**（结构性 no-op） | b11/b15 与基线逐字节同 SHA |
+| `expert_options` | **删除**；effort=11 自动 `AllowExpertOptions` | b29/b30（旧门只为放开 11） |
+| `uses_original_profile` | **删除**（只剩无效果/报错两态） | b32 有损 true 被 M9 拒绝；false 与缺键逐字节同 |
+| `group_order`/`center_x`/`center_y`、`progressive_ac`/`qprogressive_ac`/`progressive_dc`、`responsive` | **删除**（只影响渐进渲染/容器） | b09–b14、b41（+87% 体积、分数不变） |
+| `buffering` | **删除**（整图输入路径 no-op） | b25/b51 与基线逐字节同 |
+| `brotli_effort` | **保留并修作用域**：Tech Both + 仅 `box_compress=1` 可见 | b19/b20 真生效（14B 差）；b45–b47 VarDCT 旧错标下逐字节同 |
+| `codestream_level` | **只读**（恒 auto；键保留兼容旧预设） | b26/b27/b33–b35：auto 已=10；显式 10 仅加 jxll box；显式 5+16bit 无损失败 |
+| `color_transform` | 枚举 **auto/YCoCg**（其余 C-API 覆写 no-op） | b36 YCoCg 生效（9.80→11.15MB）；b37 XYB 逐字节同 |
+| `channel_colors_global/group_percent` | 类型 **Int→Float**（库只有 Float setter） | encode.cc:1960-1983；旧实现隐式加宽 |
+| 实验/危险 5 键 | `resampling`/`upsampling_mode`/`output_mode`/`disable_perceptual_heuristics`/`photon_noise` 归组「调试/实验」，红字 tooltip、默认折叠、**禁止作为自适应目标** | b21/b48/b49（-28/-34/-66）、b16（-3.34）、b28 |
+| HDR 4 键 | `intensity_target`/`min_nits`/`relative_to_max_display`/`linear_below` 归「心理视觉」折叠组；标签带 `HDR ·`；`intensity_target` 红字 | b17（体积 +16%、评分 +2.80，改像素） |
 
-> 新增=16 个键（`effort` 是既有键扩域，不另计行）；评审稿“+14”按组行/合并计数。
+> 分组实现注记：GUI 现有分组词表（`src/ui/paramform.cpp`）不在本任务写作用域，
+> 「实验/危险」复用既有组 `kGroupDebug`（组标题「调试/实验」），HDR 组复用
+> `kGroupPsy`（「心理视觉」）；机器可读标记 = `ParamDef.group` + `docs/v0.4.0-design.md`
+> §9.4 禁止表。组名文案差异登记为未决项（见 `build/m10/w2-jxl/report.md`）。
 
-### 6.3 JXL 联动规则
+### 6.3 联动规则（J1–J19，W2-T5 后）
 
 | # | 规则 | 动作 | 时机 |
 |---|---|---|---|
-| J1 | 技术（VarDCT/Modular）切换参数集；VarDCT-only 与 Modular-only 互斥 | H | UI（现有 tech 过滤） |
-| J2 | `lossless` ⇒ 强制 Modular、隐藏 distance、锁 resampling=1、锁 modular_lossy_palette=false | H/L/Force | UI + ENC |
-| J3 | `resampling>1` 才显示 `upsampling_mode` | H/D | UI |
-| J4 | `group_order=center` 才显示 center_x/y；center 坐标 < width/height | H；E | UI + FILE |
-| J5 | `box_compress=0` ⇒ `brotli_effort` 隐藏 | H/D | UI |
-| J6 | `expert_options=0` ⇒ `effort` 上限 10；=1 才允许 11 | 动态域 + E | UI + PRE |
-| J7 | `disable_perceptual_heuristics` 需 `uses_original_profile=true` | D；E | UI + PRE |
-| J8 | 有损 + `uses_original_profile=true` ⇒ 质量可能显著变差 | W | UI |
-| J9 | 有损 Modular ⇒ 隐藏 `palette_colors`/`lossy_palette`/`channel_colors_*`；`modular_ma_tree_learning_percent=0` + 有损 Modular ⇒ 硬错误 | H；E | UI + PRE |
-| J10 | `modular_color_space>0` 需 `color_transform≠XYB` | D/E | UI + PRE |
+| J1 | 技术作用域：显式 tech/lossless 决定路径；VarDCT-only 键出现在 Modular（或反向）⇒ 中文错误；**禁止静默切技术** | E | PRE + ENC |
+| J2 | ~~无损 + uses_original_profile=false~~（键已删除） | — | — |
+| J3 | `resampling=2/4/8` 才启用 `upsampling_mode` | D | UI |
+| J4 | ~~group_order center 坐标~~（键已删除） | — | — |
+| J5 | `box_compress=0` ⇒ `brotli_effort` 隐藏（编码器仍不主动下发默认 -1） | H | UI |
+| J6 | ~~effort=11 需 expert_options~~（改为编码器自动 AllowExpertOptions） | — | ENC |
+| J7 | `disable_perceptual_heuristics=1` 仅 non-XYB（无损/Modular）；有损 VarDCT ⇒ 错误 | E | PRE + ENC |
+| J8 | ~~有损 + uses_original_profile=true 质量警告~~（键已删除；有损 VarDCT 恒 XYB） | — | — |
+| J9 | 有损 Modular ⇒ 隐藏 `palette/lossy_palette/channel_colors_*`；`modular_ma_tree_learning_percent=0` ⇒ 硬错误 | H；E | UI + PRE |
+| J10 | YCoCg 强制 modular_color_space=6（枚举收窄后结构性安全） | W | UI |
 | J11 | 有损 Modular 下 `modular_predictor=3..6` 会被库替换 | W | UI |
 | J12 | `output_mode=2` ⇒ 老解码器兼容性警告 | W | UI |
-| J13 | `frame_name` 非空会禁用 fast-lossless | W | UI |
-| J14 | `intrinsic_size=0` = 不写；x/y 需同时给 | E | PRE |
-| J15 | `buffering=3` 已弃用，候选只给 0/1/2 | 域 | 目录 |
-| J16 | `noise` 旧式、已被 `photon_noise` 取代 | ○ + tooltip | 目录 |
-| J17 | HDR 组（`intensity_target`/`min_nits`/`relative_to_max_display`/`linear_below`）一起出现；非 HDR 可忽略 | W | UI |
-| J18 | `codestream_level=5` + 16bit 无损 ⇒ 需 level 10 | E | PRE |
+| J13 | `frame_name` 非空禁用 fast-lossless；>1071B 错误 | W；E | UI + PRE |
+| J14 | `intrinsic_size` 需成对「宽x高」，0/空=不写 | E | PRE |
+| J15 | ~~buffering=3 已弃用~~（键已删除） | — | — |
+| J16 | ~~noise 旧式噪声~~（键已删除） | — | — |
+| J17 | HDR 组建议一起设置；非 HDR 保持未设置/0 | W | UI |
+| J18 | ~~level 5 + 16bit 无损~~（`codestream_level` 已只读/恒 auto） | — | — |
+| J19 | **已移除参数**（12 键）⇒ 预检中文错误「已移除参数：<key>（原因），请删除该键」 | E | PRE + ENC 兜底 |
 
 ---
 
@@ -415,7 +425,7 @@ libheif 固定 `g_usage=ALL_INTRA`、`rc_end_usage=AOM_Q`、`g_limit=1`、`lag=0
    - S 行：三态下拉 `{跟随默认, 开, 关}`（避免双复选框）；
    - 既有行：保持今日控件与默认值，无“启用”勾选。
 2. **RC 模式控件**（G4）：每个格式一个模式下拉/单选；默认“质量”= 既有 `quality` 行；切到 CRF/QP 时只显示对应数值行，其余隐藏并禁止下发；预设载入时按“存在的键”推断模式，出现冲突（如同时有 crf 与 qp）⇒ 预检错误。
-3. **动态域**：SVT `speed` 显示 0–13，>9 警告；JXL `effort` 上限随 `expert_options` 10/11；libaom `speed` 域随 `realtime`；`codestream_level` 保持现有数值控件。
+3. **动态域**：SVT `speed` 显示 0–13，>9 警告；JXL `effort` 域 1–11（W2-T5：`expert_options` 行退场，编码器在 effort=11 时自动 `AllowExpertOptions`；GUI 的动态上限逻辑仍引用旧键，属 W2 UI 收口项）；libaom `speed` 域随 `realtime`；`codestream_level` 改**只读行**（实际 level 由库按图像推导，见 §6.1）。
 4. **只读行**：`profile`/`keyint`/`input-csp`/`total-frames`/SVT profile/level/tier/libaom 固定项，显示“只读（上游固定/推导）”，不可编辑、不参与预设。
 5. **错误定位**：`开始运行` 拒绝时聚焦第一个错误行；每个格式 tab 显示错误数徽标；文案含“键 + 当前值 + 原因 + 建议”。
 6. **搜索/过滤**：现有搜索扩到“键/中文标签/引擎名”；保留“只看已启用/只看可设置”过滤；控件形态参与过滤（如“只看模式切换”可作为后续增强，不列入本轮验收）。
@@ -430,10 +440,10 @@ libheif 固定 `g_usage=ALL_INTRA`、`rc_end_usage=AOM_Q`、`g_limit=1`、`lag=0
 | HEIF/x265 | 7 | 36 | 0 | 4 | 47 | ≈40 |
 | AVIF/libaom | 10 | 51 | 0 | 6 | 67 | ≈50 |
 | AVIF/SVT | 8 | 0 | 2（`lossless` 禁用、`threads` 隐藏） | 3 | 13 | 10 |
-| JPEG XL | 27 | 16（+`effort` 扩域） | 0 | 0 | 43 | ≈42 |
-| **合计** | **52** | **103** | **2** | **13** | **170** | **≈142** |
+| JPEG XL | 17 | 13（含 3 个三态布尔、5 个危险/实验、4 个 HDR） | 0 | 1（`codestream_level` 只读） | **31** | ≈30 |
+| **合计** | **42** | **100** | **2** | **14** | **158** | **≈130** |
 
-> **双口径（已定）**：≈142 组行用于范围评审/报告叙述；**170 键展开行是目录、测试、门禁、UI 验收的唯一真源**（`test_param_control_map` 按此断言）。差异全部来自**组行合并**（8 个帧内开关、`tskip`/`tskip-fast`、`qm-min/max`、partition 上下限、tile 对、HDR 组、只读行等），**不是范围扩大**。Stage A4 输出“评审清单条目 ↔ 目录行”逐条对账表，任何多/少必须书面说明。
+> **双口径（已定）**：≈130 组行用于范围评审/报告叙述；**158 键展开行是目录、测试、门禁、UI 验收的唯一真源**（W2-T5 前为 116 目录行 + 43 JXL 键 = 170；JXL 治理后 43→31，故 158）。差异全部来自**组行合并**（8 个帧内开关、`tskip`/`tskip-fast`、`qm-min/max`、partition 上下限、tile 对、HDR 组、只读行等），**不是范围扩大**。Stage A4 输出“评审清单条目 ↔ 目录行”逐条对账表，任何多/少必须书面说明。
 
 ---
 
@@ -463,8 +473,8 @@ libheif 固定 `g_usage=ALL_INTRA`、`rc_end_usage=AOM_Q`、`g_limit=1`、`lag=0
 | C2 | `aom:row-mt` 与调度器线程预算的交互 | 建议默认不设/只读；不改变“线程池不暴露”的裁定 | 待 Stage B 定 |
 | C3 | `aom:set-tier-mask`、`min-cr`、`enable-cdef` 等少数域/语义以源码抽取为准 | 生成脚本 A4 定稿；本表只给语义档位 | 待 A4 |
 | C4 | `use-intra-dct-only` 与 `use-intra-default-tx-only` 是否真互斥 | A4/B1 前用本地 libaom 源码核实；不互斥则降为 W | 待 A4 |
-| C5 | 既有 JXL 键数 27 vs 设计口径 28 | A4 对账修正口径（不改“既有键语义不动”） | 待 A4 |
-| C6 | 组行 vs 键数计数差（≈142 vs 170 行） | **已定双口径**：报告 ≈142；测试/门禁 170；A4 对账表逐条登记 | 已关闭 |
+| C5 | 既有 JXL 键数 27 vs 设计口径 28 | **W2-T5 收口**：43 键治理为 31（删除 12 no-op）；计数真源 = `format_tables.cpp` + `jxl_catalog.inc`，见 `build/m10/w2-jxl/report.md` | 已关闭（W2-T5） |
+| C6 | 组行 vs 键数计数差（≈142 vs 170 行） | **已定双口径**：报告 ≈130；测试/门禁 158（W2-T5 后 170−12）；对账表逐条登记 | 已关闭（计数随 W2-T5 更新） |
 
 ---
 

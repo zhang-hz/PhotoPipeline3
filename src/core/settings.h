@@ -75,6 +75,8 @@ inline std::string default_class_file() {
 // clang-format on
 //   §3.6 未逐字给出类型/默认值 → 类型与默认值取 §3.2 RunConfig 同名裁决面（逐字一致）：
 //     `stagger_ms = 150`（§8.1/§9.3 设置域 0–2000 ms）、`thread_budget = 0`（0 = 逻辑核）。
+//     **M10 / A17 变更**：默认 `stagger_ms` 150 → 0（关；用户裁决"并行默认高效"）；字段
+//     类型/INI 键/设置域不变，仅默认值变（无产物影响，见 docs/m10-adjudications.md A17）。
 //   INI 键名 = 字段名（settings.cpp 的 settings_pairs/apply_pair，既有约定）。
 // PP-FROZEN(0.3.0) §3.6 · AppSettings（`split_by_format`/`output_template` 两项，**追加在
 //   结构体末尾**，既有键不动）—— W3-T15 落地；0.3.0 冻结形态（设计 §3.6 逐字抄录）：
@@ -98,7 +100,11 @@ struct AppSettings {
     std::string last_preset;   // 预设文件路径（可空）
     std::string last_out_root; // 上次输出根目录（可空）
     // —— 0.3.0 / W1-T7 追加（**末尾**，§3.6 行前两项）——
-    int stagger_ms = 150;  // §8.1 交错启动步距（设置域 0–2000 ms；0 = 关闭）
+    // M10 / A17（docs/v0.4.0-design.md §10 A17，W1-T1 落地）：默认值 150 → **0**（关）。
+    // 依据用户裁决"并行默认高效"（§15 决策）与 §4.3 默认值表：无产品影响；回归 workers=1
+    // 不触发交错；GUI 装配链 mainwindow_run 从这里取默认值。RunConfig::stagger_ms 的冻结
+    // 默认值（150）不在本裁定面内 —— 生产调用点（GUI/--dev）都显式赋值，不受影响。
+    int stagger_ms = 0;    // §8.1 交错启动步距（设置域 0–2000 ms；0 = 关闭，M10 默认）
     int thread_budget = 0; // §8.2 线程预算 T（0 = 逻辑核）
     // —— 0.3.0 / W1-T8 追加（**末尾**，§3.6 行最后一项）——
     // 分类注册表路径（§6.2 持久化单源）。

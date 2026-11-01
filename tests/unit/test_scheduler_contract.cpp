@@ -13,10 +13,13 @@
 // Every failure prints "FAIL <case>: <detail>"; main() returns the number of failures.
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <system_error>
@@ -26,6 +29,7 @@
 #include "core/fsops.h"
 #include "core/logger.h"
 #include "core/scheduler.h"
+#include "core/score_queue.h" // M10 / W1-B1（T5）：进程级评分池
 #include "core/settings.h"
 
 namespace fs = std::filesystem;
@@ -218,6 +222,38 @@ int main() {
         check(terminal == inputs.size(), "basic/terminal-events",
               std::to_string(terminal) + " != " + std::to_string(inputs.size()));
         check(done == inputs.size(), "basic/done-events", std::to_string(done));
+
+        // —— M10 / W1-B1（A2；C13）：调度器原样转发逐输出终态事件 ——
+        // 转发面口径：OutputDone 携带 output（shared_ptr，共享所有权）；文件终态仍以 result
+        // 携带 FileResult；每个文件的 OutputDone 必须**早于**该文件的终态事件。
+        std::vector<std::size_t> done_pos(inputs.size(), events.size());
+        std::vector<std::size_t> term_pos(inputs.size(), events.size());
+        std::size_t output_done_events = 0;
+        std::size_t payload_elsewhere = 0;
+        for (std::size_t i = 0; i < events.size(); ++i) {
+            const pp::FileEvent &ev = events[i];
+            if (ev.state == pp::FileState::OutputDone) {
+                ++output_done_events;
+                check(ev.output != nullptr, "a2/output-payload",
+                      "scheduler 必须转发 FileEvent::output");
+                check(ev.result == nullptr, "a2/output-not-terminal",
+                      "OutputDone 不得携带 FileResult（终态才带）");
+                if (ev.index < done_pos.size())
+                    done_pos[ev.index] = std::min(done_pos[ev.index], i);
+            } else if (ev.output != nullptr) {
+                ++payload_elsewhere;
+            }
+            if (ev.result != nullptr && ev.index < term_pos.size())
+                term_pos[ev.index] = std::min(term_pos[ev.index], i);
+        }
+        check(payload_elsewhere == 0, "a2/payload-only-on-outputdone",
+              std::to_string(payload_elsewhere) + " 个非 OutputDone 事件携带了 output 载荷");
+        check(output_done_events == inputs.size(), "a2/output-done-count",
+              std::to_string(output_done_events) + " != " + std::to_string(inputs.size()));
+        for (std::size_t i = 0; i < inputs.size(); ++i) {
+            check(done_pos[i] < term_pos[i], "a2/output-before-terminal",
+                  "file " + std::to_string(i) + ": OutputDone 必须早于文件终态事件");
+        }
     }
 
     // ---- B. cancel() before start(): every file is Cancelled and nothing is written ----
@@ -839,7 +875,8 @@ int main() {
         const fs::path file = dir / "settings.ini";
 
         const pp::AppSettings def;
-        check(def.stagger_ms == 150 && def.thread_budget == 0, "settings/defaults",
+        // M10 / A17：默认 stagger_ms 150 → 0（关；行为变化无产物影响；W1-T1 落地）。
+        check(def.stagger_ms == 0 && def.thread_budget == 0, "settings/defaults",
               "默认值不符：stagger_ms=" + std::to_string(def.stagger_ms) +
                   " thread_budget=" + std::to_string(def.thread_budget));
 
@@ -869,9 +906,9 @@ int main() {
               "stagger_ms=" + std::to_string(c.stagger_ms) +
                   " thread_budget=" + std::to_string(c.thread_budget));
 
-        // 缺失文件 → 默认值（既有契约，顺带覆盖新键）
+        // 缺失文件 → 默认值（既有契约，顺带覆盖新键；M10/A17 默认 0 = 关交错）
         const pp::AppSettings missing = pp::load_settings(dir / "nope.ini");
-        check(missing.stagger_ms == 150 && missing.thread_budget == 0, "settings/missing-defaults",
+        check(missing.stagger_ms == 0 && missing.thread_budget == 0, "settings/missing-defaults",
               "缺失文件未回落默认值");
     }
 
@@ -1113,6 +1150,83 @@ int main() {
               "峰值并发文件数应落 [1, workers]，got " + std::to_string(sum.peak_active_files));
         check(sum.threads_total_est >= 1, "m7r2b/r078-threads-est-positive",
               "实跑批的线程估算读数应为正");
+    }
+
+    // ==========================================================================
+    // M10 / W1-B1（T5；docs/v0.4.0-design.md §4.2.2(2)）：进程级评分池
+    //   口径：K = min(4, max(1, hw/4))；独立配额（容量 > 0）；提交不阻塞；wait_idle 必收敛；
+    //   结果按产物路径发布；单任务需求 > 整池容量 → 提交被拒（调用方标 Unavailable，文件仍成功）；
+    //   取消 → 拒收新任务 + 丢弃队列（不产生半评分）。
+    //   本段刻意放在 main 末尾：cancel_pending() 对进程级池是终态操作（后续无评分用例）。
+    // ==========================================================================
+    {
+        pp::ScorePool &pool = pp::ScorePool::instance();
+        check(pool.workers() >= 1 && pool.workers() <= 4, "scorepool/workers",
+              "K 必须落在 [1,4]，got " + std::to_string(pool.workers()));
+        check(pool.capacity() > 0, "scorepool/capacity",
+              "评分配额容量必须为正，got " + std::to_string(pool.capacity()));
+        check(pool.used() == 0 || pool.used() <= pool.capacity(), "scorepool/used-bound",
+              "used 不得超过容量");
+
+        // ① 正常提交：run 被执行，结果按 out 键发布（dev_cli 的 sidecar 证据链依赖它）
+        std::atomic<int> ran{0};
+        std::atomic<int> beats{0};
+        auto result = std::make_shared<pp::OutputResult>();
+        result->format_id = "jpeg";
+        result->metric_state = pp::MetricState::Off;
+        pp::ScoreTask task;
+        task.out = "scorepool/ok.out";
+        task.need_bytes = 1 << 20; // 1 MiB（远小于容量）
+        task.result = result;
+        task.heartbeat = [&beats] { ++beats; };
+        task.run = [result, &ran] {
+            result->metric_state = pp::MetricState::Ok;
+            result->metric_ssimulacra2 = 93.5;
+            result->metric_ms = 12.0;
+            ++ran;
+            // 让看门狗有机会至少发一次心跳（周期 150ms）
+            std::this_thread::sleep_for(std::chrono::milliseconds(400));
+        };
+        check(pool.submit(std::move(task)), "scorepool/submit", "submit 应被接受");
+        check(pool.wait_idle(std::chrono::milliseconds(30 * 1000)), "scorepool/converge",
+              "wait_idle 必须在超时前收敛");
+        check(ran.load() == 1, "scorepool/ran", "任务必须被执行一次，got " + std::to_string(ran));
+        const std::shared_ptr<const pp::OutputResult> pub = pool.published("scorepool/ok.out");
+        check(pub != nullptr, "scorepool/published", "任务完成后必须发布最终行");
+        if (pub) {
+            check(pub->metric_state == pp::MetricState::Ok, "scorepool/published-state",
+                  "发布行必须带最终 metric 状态");
+            check(std::abs(pub->metric_ssimulacra2 - 93.5) < 1e-9, "scorepool/published-score",
+                  "发布行必须带最终分数");
+        }
+        check(beats.load() >= 1, "scorepool/heartbeat",
+              "看门狗必须在长任务期间发心跳，got " + std::to_string(beats.load()));
+        check(pool.pending() == 0, "scorepool/pending-zero",
+              "收敛后 pending 必须为 0，got " + std::to_string(pool.pending()));
+        check(pool.used() == 0, "scorepool/quota-released",
+              "任务结束后配额必须归还，used=" + std::to_string(pool.used()));
+
+        // ② 单任务需求 > 整池容量 → 提交被拒（P0 兜底：调用方标 Unavailable，不阻塞）
+        pp::ScoreTask huge;
+        huge.out = "scorepool/too-big.out";
+        huge.need_bytes = pool.capacity() + 1;
+        huge.run = [] {};
+        check(!pool.submit(std::move(huge)), "scorepool/reject-too-big",
+              "超容量任务必须被拒（等也等不到）");
+
+        // ③ 取消：拒收新任务；队列被丢弃（不产生半评分）
+        pool.cancel_pending();
+        check(pool.cancelled(), "scorepool/cancelled-flag",
+              "cancel_pending 后 cancelled() 必须为真");
+        pp::ScoreTask after;
+        after.out = "scorepool/after-cancel.out";
+        after.run = [&ran] { ++ran; };
+        check(!pool.submit(std::move(after)), "scorepool/cancel-rejects",
+              "取消后 submit 必须返回 false");
+        check(pool.wait_idle(std::chrono::milliseconds(10 * 1000)), "scorepool/cancel-converges",
+              "取消后池必须立即收敛（队列已丢弃）");
+        check(ran.load() == 1, "scorepool/cancel-no-partial",
+              "取消不得执行新任务，ran=" + std::to_string(ran.load()));
     }
 
     if (g_failed == 0) {

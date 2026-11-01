@@ -207,6 +207,59 @@ int main() {
         check(b.used() == 0, "cancel/pre-set-no-quota", "used=" + num(b.used()));
     }
 
+    // ---- M10 / W1-T1：评分独立配额 ScoreQuota（非阻塞令牌池；P0 热修）----
+    {
+        pp::ScoreQuota q(1000);
+        check(q.capacity() == 1000, "scorequota/capacity", "got " + num(q.capacity()));
+        check(q.used() == 0 && q.peak() == 0, "scorequota/initial",
+              "used=" + num(q.used()) + " peak=" + num(q.peak()));
+        check(q.try_acquire(400), "scorequota/acquire-first", "expected true");
+        check(q.used() == 400 && q.peak() == 400, "scorequota/accounting",
+              "used=" + num(q.used()) + " peak=" + num(q.peak()));
+        // 非阻塞：剩余 600，再要 601 → 立刻 false（不等待、不超扣）
+        const auto t0 = std::chrono::steady_clock::now();
+        const bool got = q.try_acquire(601);
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - t0)
+                            .count();
+        check(!got, "scorequota/full-returns-false", "expected false");
+        check(ms < 200, "scorequota/non-blocking", "took " + std::to_string(ms) + " ms");
+        check(q.used() == 400, "scorequota/no-overcommit", "used=" + num(q.used()));
+        // 单任务 > 整池 → false（>45MP 评分的 Unavailable 兜底判据）
+        check(!q.try_acquire(1001), "scorequota/over-limit-false", "expected false");
+        q.release(400);
+        check(q.used() == 0, "scorequota/release-zero", "used=" + num(q.used()));
+        // 释放后可再次拿到满池
+        check(q.try_acquire(1000), "scorequota/refill-full", "expected true");
+        q.release(1000);
+        check(q.peak() == 1000, "scorequota/peak-tracks-max", "peak=" + num(q.peak()));
+        // release 超过已占（防御）→ 归零、不得下溢
+        q.release(12345);
+        check(q.used() == 0, "scorequota/release-underflow-clamped", "used=" + num(q.used()));
+    }
+    {
+        // 容量单源：min(文件容量/2, 4GiB)；未知（0）→ 4GiB ceiling
+        constexpr unsigned long long kFourGiB = 4ull * kGiB;
+        check(pp::ScoreQuota::default_capacity_bytes(2 * kFourGiB) == kFourGiB,
+              "scorequota/default-cap-half",
+              "expect 4GiB, got " + num(pp::ScoreQuota::default_capacity_bytes(2 * kFourGiB)));
+        check(pp::ScoreQuota::default_capacity_bytes(1000) == 500, "scorequota/default-cap-small",
+              "got " + num(pp::ScoreQuota::default_capacity_bytes(1000)));
+        check(pp::ScoreQuota::default_capacity_bytes(0) == kFourGiB,
+              "scorequota/default-cap-unknown",
+              "got " + num(pp::ScoreQuota::default_capacity_bytes(0)));
+    }
+    {
+        // 进程级默认实例：容量 >0 且可记账/归还（pipeline 评分段的单源入口）
+        pp::ScoreQuota &q = pp::default_score_quota();
+        check(q.capacity() > 0, "scorequota/global-capacity", "got " + num(q.capacity()));
+        const unsigned long long before = q.used();
+        check(q.try_acquire(4096), "scorequota/global-acquire", "expected true");
+        check(q.used() == before + 4096, "scorequota/global-used", "got " + num(q.used()));
+        q.release(4096);
+        check(q.used() == before, "scorequota/global-balanced", "got " + num(q.used()));
+    }
+
     if (g_failed == 0) {
         std::printf("test_pixelbudget: OK\n");
         return 0;

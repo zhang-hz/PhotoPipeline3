@@ -64,10 +64,16 @@ constexpr StateStyle kStateStyle[] = {
     // （万一落表也不再误报"排队"）。
     {term_words::kRunning, theme::kPillAccent}, // Progress
     {term_words::kPartial, theme::kPillWarn},   // DoneWithErrors（R-076：多输出部分成功档）
+    // —— M10 / W1-B1 加性一行（A1：`FileState::OutputDone`；docs/v0.4.0-design.md §4.6 C13）——
+    // OutputDone 是**输出级**事实（逐输出结算行），不落文件列表模型（列表只用文件级终态）；
+    // 本行仅为"逐枚举恰好一项"的兜底映射（万一落表也不误报"排队"），语义 = 该行已完成。
+    {term_words::kDone, theme::kPillOk}, // OutputDone
 };
 // 映射表必须覆盖 FileState **全部**枚举值（原 12 行断言扩到 14 行 = 断言面只增不减：
 // 语义仍是"逐枚举恰好一项"，换锚说明见 build/m7-wp6/handoff.md 裁定登记）。
-static_assert(std::size(kStateStyle) == 14, "§3.1 状态映射必须覆盖 FileState 全部枚举");
+// M10 / W1-B1：A1 追加 `FileState::OutputDone`（末尾）→ 行数 14 → 15（加性换锚，证据
+// build/m10/w1-engine-b/report.md；本行由引擎任务代改，待 UI 属主 W1-T8/T9 复核措辞/色调）。
+static_assert(std::size(kStateStyle) == 15, "§3.1 状态映射必须覆盖 FileState 全部枚举");
 
 inline const StateStyle &state_style(pp::FileState st) {
     const std::size_t i = static_cast<std::size_t>(st);

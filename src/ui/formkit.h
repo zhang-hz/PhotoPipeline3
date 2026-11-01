@@ -59,10 +59,14 @@ namespace pp::ui::formkit {
 //   * sizeHint 按全文申请宽（有空间就出全文），挤不下才出省略号（§9.3 禁折行）；
 //   * squeeze=true 时 minimumSizeHint 宽压到 0（preview_panel 口径：超长文件名把中栏撑宽前
 //     先省略）；默认 false（其余 6 份的默认压缩语义）。
+//   * M10-W1（C10/C11，加性第 3 参）：elide = 省略模式（默认 Qt::ElideRight → 既有 7 处调用
+//     行为逐位不变）；运行页名称列用 Qt::ElideMiddle（保留扩展名，见 docs/v0.4.0-design.md
+//     §5.1/§5.2）。
 // ---------------------------------------------------------------------------
 class ElidedLabel : public QLabel {
 public:
-    explicit ElidedLabel(QWidget *parent = nullptr, bool squeeze = false);
+    explicit ElidedLabel(QWidget *parent = nullptr, bool squeeze = false,
+                         Qt::TextElideMode elide = Qt::ElideRight);
     void set_full_text(const QString &text);
     QString full_text() const { return full_text_; }
     QSize sizeHint() const override;
@@ -75,6 +79,7 @@ private:
     void apply_elide();
     QString full_text_;
     bool squeeze_ = false;
+    Qt::TextElideMode elide_ = Qt::ElideRight;
 };
 
 // ---------------------------------------------------------------------------

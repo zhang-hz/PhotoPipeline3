@@ -18,6 +18,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -1809,6 +1810,86 @@ void test_bmp_icc_warning() {
     }
 }
 
+// M10 / W1-T2（§4.2.2(3)）：评分色彩归一改为"按 64 行带一次 lcms" —— 本用例钉住
+// "整带一次 transform == 逐行各调用一次 transform" 的逐样本等价性（lcms2 float transform
+// 无跨像素状态），保证 metric 的数值语义不因按带化而改变。
+void test_band_vs_row_equivalence() {
+    constexpr int kW = 37, kRows = 64;
+    const std::string icc = srgb_icc_bytes(); // 源 ICC（非平凡变换）；目标 = 评分归一方向 sRGB
+    std::vector<float> px(std::size_t(kW) * std::size_t(kRows) * 3);
+    for (int y = 0; y < kRows; ++y) {
+        for (int x = 0; x < kW; ++x) {
+            const std::size_t i = (std::size_t(y) * std::size_t(kW) + std::size_t(x)) * 3;
+            px[i + 0] = float(x) / float(kW - 1);
+            px[i + 1] = float(y) / float(kRows - 1);
+            px[i + 2] = float((x * 7 + y * 13) % 101) / 100.0f;
+        }
+    }
+    cm().clear_cache();
+    OIIO::ImageBuf band_buf = make_buf(kW, kRows, 3, px);
+    const pp::ColorOutcome band_oc = cm().transform(band_buf, icc, false, pp::ColorTarget::SRGB);
+    check(band_oc.error.empty(), "band-lcms/band-error", band_oc.error);
+    const std::vector<float> band = get_all(band_buf);
+
+    std::vector<float> rows;
+    rows.reserve(px.size());
+    for (int y = 0; y < kRows; ++y) {
+        const auto begin =
+            px.begin() + static_cast<std::ptrdiff_t>(std::size_t(y) * std::size_t(kW) * 3);
+        const std::vector<float> row(begin, begin + std::size_t(kW) * 3);
+        OIIO::ImageBuf row_buf = make_buf(kW, 1, 3, row);
+        const pp::ColorOutcome oc = cm().transform(row_buf, icc, false, pp::ColorTarget::SRGB);
+        check(oc.error.empty(), "band-lcms/row-error", oc.error);
+        const std::vector<float> got = get_all(row_buf);
+        rows.insert(rows.end(), got.begin(), got.end());
+    }
+    const double d = max_abs_diff(band, rows);
+    info("band-lcms(64 rows/1 call vs 64 rows/64 calls) max_err=" + fnum(d));
+    check(d <= 1e-7, "band-lcms/equivalent", "max_err=" + fnum(d));
+    check(!band_oc.src_desc.empty() && band_oc.dst_desc == "sRGB", "band-lcms/dst-desc",
+          "src=" + band_oc.src_desc + " dst=" + band_oc.dst_desc);
+
+    // 性能证据（info-only，非断言）：每调用一次的固定开销（ImageBuf 构造 + ICC SHA1 缓存键 +
+    // ColorManager 入口 + read_planes/write_planes 缓冲）在 HEAD 的逐行路径上被摊 N 次/侧；
+    // 按带（64 行）只摊 N/64 次/侧。用接近真实行宽（3902 px）的 320 行数据对比两种取数粒度，
+    // 度量"逐行 vs 按带"的固定开销比（lcms 像素工作量相同，二者之差即逐行多付的调用开销）。
+    {
+        constexpr int kBigW = 3902, kBigRows = 320; // 2 带（64 行/带）vs 128 行调用
+        std::vector<float> big(std::size_t(kBigW) * kBigRows * 3, 0.4f);
+        // 填充确定性渐变，避免编译器/库对常量数据做病态优化
+        for (int y = 0; y < kBigRows; ++y)
+            for (int x = 0; x < kBigW; ++x) {
+                const std::size_t i = (std::size_t(y) * kBigW + std::size_t(x)) * 3;
+                big[i + 0] = float(x % 251) / 250.0f;
+                big[i + 1] = float(y % 241) / 240.0f;
+                big[i + 2] = float((x + y) % 239) / 238.0f;
+            }
+        cm().clear_cache();
+        const auto t0 = std::chrono::steady_clock::now();
+        for (int y0 = 0; y0 < kBigRows; y0 += 64) {
+            const std::vector<float> band_px(
+                big.begin() + static_cast<std::ptrdiff_t>(std::size_t(y0) * kBigW * 3),
+                big.begin() + static_cast<std::ptrdiff_t>(std::size_t(y0 + 64) * kBigW * 3));
+            OIIO::ImageBuf b = make_buf(kBigW, 64, 3, band_px);
+            (void)cm().transform(b, icc, false, pp::ColorTarget::SRGB);
+        }
+        const auto t1 = std::chrono::steady_clock::now();
+        for (int y = 0; y < kBigRows; ++y) {
+            const std::vector<float> row(
+                big.begin() + static_cast<std::ptrdiff_t>(std::size_t(y) * kBigW * 3),
+                big.begin() + static_cast<std::ptrdiff_t>(std::size_t(y + 1) * kBigW * 3));
+            OIIO::ImageBuf b = make_buf(kBigW, 1, 3, row);
+            (void)cm().transform(b, icc, false, pp::ColorTarget::SRGB);
+        }
+        const auto t2 = std::chrono::steady_clock::now();
+        const double band_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        const double row_ms = std::chrono::duration<double, std::milli>(t2 - t1).count();
+        info("band-lcms/granularity: " + std::to_string(kBigRows) +
+             " rows in 5 band calls=" + fnum(band_ms) + "ms, in " + std::to_string(kBigRows) +
+             " row calls=" + fnum(row_ms) + "ms (row/band=" + fnum(row_ms / band_ms) + "x)");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -1836,6 +1917,9 @@ int main() {
     test_crosslib_colorconvert(); // 跨库对拍（lcms2 vs OIIO）
     test_heif_vui_nclx();         // UX-14 A1 精确码
     test_bmp_icc_warning();       // B3 BMP 不承载 ICC 警示
+
+    // —— M10 / W1-T2（F 断言只增）——
+    test_band_vs_row_equivalence(); // 评分归一按带 lcms 的逐样本等价性
 
     std::printf("test_color: %d checks, %d failed\n", g_checks, g_failed);
     return g_failed == 0 ? 0 : 1;

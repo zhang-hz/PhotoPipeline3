@@ -123,4 +123,75 @@ uint64_t PixelBudget::default_capacity_bytes() {
     return half == 0 ? kCeiling : std::min(half, kCeiling);
 }
 
+// ---------------------------------------------------------------------------
+// M10 / W1-T1：评分独立内存配额（非阻塞；声明与口径见 pixelbudget.h 末尾块）
+// ---------------------------------------------------------------------------
+ScoreQuota::ScoreQuota(uint64_t capacity_bytes) : capacity_(capacity_bytes) {}
+
+bool ScoreQuota::try_acquire(uint64_t bytes) {
+    // 非阻塞：容量不足（含单任务 > 整池）→ 立即 false，不等待、不扣额。
+    std::lock_guard<std::mutex> lk(mu_);
+    if (bytes > capacity_ - used_) {
+        return false;
+    }
+    used_ += bytes;
+    peak_ = std::max(peak_, used_);
+    return true;
+}
+
+bool ScoreQuota::acquire(uint64_t bytes, std::chrono::milliseconds timeout) {
+    // M10 / W1-B1：评分池 worker 的阻塞记账。单任务需求超过整池容量 → 等也等不到（设计
+    // §4.2.2(2)：该输出评分 Unavailable、文件仍成功），立即 false 让调用方快速降级。
+    if (bytes > capacity_) {
+        return false;
+    }
+    std::unique_lock<std::mutex> lk(mu_);
+    const bool ok = cv_.wait_for(lk, timeout, [this, bytes] { return bytes <= capacity_ - used_; });
+    if (!ok) {
+        return false; // 超时：不扣额
+    }
+    used_ += bytes;
+    peak_ = std::max(peak_, used_);
+    return true;
+}
+
+void ScoreQuota::release(uint64_t bytes) {
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        used_ = bytes > used_ ? 0 : used_ - bytes;
+    }
+    cv_.notify_all(); // M10 / W1-B1：唤醒阻塞 acquire 的评分 worker
+}
+
+uint64_t ScoreQuota::capacity() const {
+    std::lock_guard<std::mutex> lk(mu_);
+    return capacity_;
+}
+
+uint64_t ScoreQuota::used() const {
+    std::lock_guard<std::mutex> lk(mu_);
+    return used_;
+}
+
+uint64_t ScoreQuota::peak() const {
+    std::lock_guard<std::mutex> lk(mu_);
+    return peak_;
+}
+
+uint64_t ScoreQuota::default_capacity_bytes(uint64_t file_capacity_bytes) {
+    constexpr uint64_t kCeiling = 4ull * 1024 * 1024 * 1024; // 评分峰值上限 4 GiB
+    if (file_capacity_bytes == 0) {
+        return kCeiling; // 未知文件容量 → 按评分 ceiling
+    }
+    const uint64_t half = file_capacity_bytes / 2;
+    return half == 0 ? kCeiling : std::min(half, kCeiling);
+}
+
+ScoreQuota &default_score_quota() {
+    // 进程级单例：容量由 PixelBudget 的默认容量推导（可用 RAM 的 1/4，上限 4 GiB）。
+    static ScoreQuota quota(
+        ScoreQuota::default_capacity_bytes(PixelBudget::default_capacity_bytes()));
+    return quota;
+}
+
 } // namespace pp

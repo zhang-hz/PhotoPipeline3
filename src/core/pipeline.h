@@ -42,6 +42,11 @@
 //   `encode_threads`（E3 分配值，≥1，默认 1 = 0.2 行为）→ pipeline 逐 target 填进
 //   `EncodeRequest::encode_threads`（§3.1 线程映射义务的输入）。既有成员语义不变；
 //   §3.2 的 RunConfig / run_one_file / run_metadata_only 签名零改动。
+//   M10 / W1-T3 追加（**A4 加性**，docs/v0.4.0-design.md §10 A4 / §4.5-①）：`FileEntry` 末尾
+//   追加 `ProbeOutcome probe;`（完整 probe 缓存；调度器回填、pipeline 复用）→ 消除每文件第二次
+//   probe（HEIC 输入 pre-decode 3.27s 的主因）。既有字段/语义零改动；新增 include
+//   `decode/oiio_reader.h` 只为该字段类型（ProbeOutcome）。同一次 run 内缓存不变；
+//   文件被外部改写属用户竞态，如实记录、不处理（设计原文）。
 #pragma once
 // M7-WP8 / R-286（B.8）：include 链清理 —— 旧  在本头未被任何
 // 声明使用（R-106），却把 OIIO ImageBuf 面传染给全部消费者；删除后由需要它的 .cpp 自 include。
@@ -52,9 +57,11 @@
 #include "core/pixelbudget.h"
 #include "core/progress.h" // §3.3 ProgressInfo（FileEvent::progress 的字段类型）
 #include "core/types.h"
+#include "decode/oiio_reader.h" // A4：FileEntry::probe（完整 probe 缓存）的字段类型
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory> // M10 / W1-B1（A2）：FileEvent::output 的 shared_ptr
 #include <optional>
 #include <string>
 #include <vector>
@@ -67,6 +74,11 @@ struct FileEntry {
     std::optional<MetadataOverride> exception;
     ImageInfo info; // probe 后回填
     bool probe_done = false;
+    // —— M10 / W1-T3（A4）加性追加（**末尾**；裁定登记 docs/m10-adjudications.md A4）——
+    // 调度器 worker 的完整 probe 结果缓存（含 OIIO spec；pipeline::stage_probe 直接复用，
+    // 消除每文件第二次 probe）。`probe_done=false` 时内容未定义（直接调用 run_one_file 的
+    // 旧路径不看本字段 → 行为逐字不变）。
+    ProbeOutcome probe;
 };
 
 // —— 0.3.0 冻结形态（设计 §3.2 逐字）——
@@ -74,6 +86,20 @@ struct OutputFormatSpec { // 用户配置面（≠ OutputTarget：无 out_path�
     std::string format_id, backend_id, tech_id;
     ParamSet params;
     int out_bitdepth = 8;
+    // —— M10 / W3-T4（A3 加性，**末尾**；docs/v0.4.0-design.md §9.6 / §10 A3）——
+    // 自适应策略的行式 DSL v1 原文（§9.2；空串 = 关闭 = 默认）。**不进 ParamSet**（策略不是
+    // 参数值，不污染参数快照/预设序列化面；承载在格式预设的 `adaptive.policy` 字段）。
+    // 非空 ⇒ 该输出在 stage_encode_loop 内走 core/adaptive_exec 的轮循环（逐轮编码到同目录
+    // 候选临时文件 + 同步评分 → 选定者 commit → 既有 metawrite/mtime）；空 ⇒ 既有单次编码
+    // 路径逐字节不变（回归 zero diff 的结构性保证）。
+    std::string adaptive_policy;
+    // —— M10 / W3-T5（A20 加性，**末尾**；docs/m10-adjudications.md A20 建议 / 设计 §8.5 §9）——
+    // 自适应开关的**持久化面**（全局预设 v2 输出级 `adaptive.enabled`；格式预设同名字段已在
+    // `FormatPresetData` 承载）。默认 false = 旧行为：既有 `adaptive_policy` 为空 ⇒ 不启用；
+    // 引擎侧执行判据仍是 `adaptive_policy` 非空（W3-T4 语义零改动），GUI/预设写盘面用本字段
+    // 记录"用户是否启用"（关掉开关不丢策略文本），由 `PageOutput::config_base()` 在生成
+    // RunConfig 时按本字段门控 `adaptive_policy`（未启用 → 空串 → 旧路径逐字节不变）。
+    bool adaptive_enabled = false;
 };
 
 struct RunConfig {
@@ -105,6 +131,11 @@ struct RunConfig {
     // —— M8 加性（M8-A1）：逐输出 SSIMULACRA 2 评分开关。GUI 从 settings 置 true；
     //    --dev 默认 false（`--score` 开启），保证回归日志/预算零 diff。
     bool quality_score = false;
+    // —— M10 / W1-B1（A3 加性，**末尾**；docs/v0.4.0-design.md §4.3/§4.4 C5）——
+    // 同文件多格式并行编码的内部并行度（不暴露 UI）：0 = 自动 → min(2, outputs.size())；
+    // 1 = 强制串行（= 0.3.6 行为，回归/兼容路径）；>1 = 上限（实际取 min(值, outputs.size())）。
+    // 既有字段语义零改动；默认 0 → 与"-dev 未改任何设置"的解耦面一致（GUI/回归只走自动）。
+    int max_parallel_targets = 0;
 };
 
 // 0.3.0 追加（主对话裁定：§3 表头通则「加性字段一律追加在结构体末尾」）：
@@ -198,7 +229,14 @@ enum class FileState {
     // —— M7-WP1 / I7 加性追加（**末尾**；裁定登记 build/m7-wp1/handoff.md）——
     // 多输出部分成功（§4.1 的 FileOutcome::Verdict::DoneWithErrors 的状态面配对值；
     // R-076 的消费接线归后续任务，本波只落枚举值 —— 既有值的数值与语义零变化）。
-    DoneWithErrors
+    DoneWithErrors,
+    // —— M10 / W1-B1（A1 加性，**末尾**；docs/v0.4.0-design.md §4.6 / C13）——
+    // 逐输出终态事件：每个输出在"编码+metawrite 完成"后立刻发出（`FileEvent::output`
+    // 携带该行的 OutputResult，metric 未算）；评分池完成后再发一次（含 metric）。
+    // 它是**输出级**事实，不是文件级终态 —— 既有值的数值/语义零变化，UI 只按本值结算该行。
+    // 裁定表 A1 的文件列写作 `core/types.h`，现树 FileState 实际声明在本文件（同名语义），
+    // 落地位置按真实声明处，偏差登记见 build/m10/w1-engine-b/report.md。
+    OutputDone
 };
 
 // PP-FROZEN(0.3.0) §3.3 · FileEvent（**W1-T6 已落地**；原标注 PP-THAWED(0.3.0-M4-D20) 随落地
@@ -229,6 +267,14 @@ struct FileEvent {
     FileState state = FileState::Queued;
     const FileResult *result = nullptr; // 仅在终态（Done/Skipped/Failed/Cancelled）非空
     ProgressInfo progress;              // 追加（Progress 状态携带；§3.3）
+    // —— M10 / W1-B1（A2 加性，**末尾**；docs/v0.4.0-design.md §4.6 / C13/C14）——
+    // 逐输出终态事件（state == FileState::OutputDone）携带的行快照。
+    //   * `shared_ptr<const OutputResult>`：值语义安全 —— GUI 的排队连接（queued connection）
+    //     可能在事件投递后任意时刻才消费，共享所有权保证这一行不会悬垂；
+    //   * 首次（编码+metawrite 完成）不含 metric（metric_state 仍为 Off/Pending 口径）；
+    //     评分池完成后补发一次**新对象**（含 metric 字段），消费端"后到覆盖先到"；
+    //   * 其余状态（阶段/进度/文件终态）恒为空；终态事件仍以 `result` 携带完整 FileResult。
+    std::shared_ptr<const OutputResult> output;
 };
 
 // —— T5 定稿（§3.2 注）：运行期共享态 + 事件回调载体 + 聚合终态 ——

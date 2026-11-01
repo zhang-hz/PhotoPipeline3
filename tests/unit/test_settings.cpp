@@ -112,7 +112,9 @@ int main() {
                   want.tile_cache_mb == 64 && want.rotate_orientation && want.last_format == "jxl",
               "defaults/frozen-values", "unexpected §3.14 default set");
         // 0.3.0 追加字段的默认值（§3.6 行；默认值取自 §3.2 RunConfig 同名面 —— 逐字核对）
-        check(want.stagger_ms == 150 && want.thread_budget == 0 &&
+        // M10 / A17：stagger_ms 默认 150 → 0（关；行为变化，无产物影响；见
+        // docs/v0.4.0-design.md §4.3 默认值表与 docs/m10-adjudications.md A17）。
+        check(want.stagger_ms == 0 && want.thread_budget == 0 &&
                   want.output_template == "$format/$dir/$file" && !want.split_by_format,
               "defaults/0-3-0-fields", "got " + dump(want));
         // M5-T11/A28：主题档默认 = system（= 现行为：跟随系统，§9.2）；键缺省即现行为

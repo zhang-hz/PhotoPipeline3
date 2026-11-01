@@ -19,12 +19,14 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <iterator>
 #include <list>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -69,6 +71,42 @@ IntentFlags intent_flags_of(int mode) {
 constexpr int kTransformBits = 32;
 
 constexpr std::size_t kCacheCapacity = 16;
+
+// ---------------------------------------------------------------------------
+// M10 / W1-T2（§4.2.2(3)）：`colour transform applied` 日志限流
+// ---------------------------------------------------------------------------
+// 评分色彩归一现在**按 64 行带**调 transform（23MP 输出约 2×92 次；HEAD 逐行 ≈2×5854 次），
+// 但仍不得逐调用落盘（debug 日志量 ≤ 每文件 100 行量级）。限流口径：
+//   * 同一 (src_desc → dst_desc, in_channels, out_channels, cache hit/miss) 键**首见一条**；
+//   * 其后每 1024 次一条（带累计调用数 calls），进程级计数；
+//   * 采样只减少日志行，不触碰任何像素/色彩语义（纯日志面）。
+void log_transform_applied(std::string_view src_desc, std::string_view dst_desc, int in_nch,
+                           int out_ch, bool cache_hit) {
+    struct Counter {
+        std::mutex mu;
+        std::unordered_map<std::string, std::uint64_t> seen;
+    };
+    static Counter counter;
+    std::string key;
+    key.reserve(src_desc.size() + dst_desc.size() + 32);
+    key.append(src_desc).append("\x1f").append(dst_desc);
+    key.append("|").append(std::to_string(in_nch)).append("->").append(std::to_string(out_ch));
+    key.append(cache_hit ? "|hit" : "|miss");
+    std::uint64_t calls = 0;
+    {
+        std::lock_guard<std::mutex> lk(counter.mu);
+        calls = ++counter.seen[key];
+    }
+    if (calls == 1 || calls % 1024 == 0) {
+        log_debug("color", kLogFile, "colour transform applied",
+                  {{"src", src_desc},
+                   {"dst", dst_desc},
+                   {"channels", std::to_string(in_nch)},
+                   {"out_channels", std::to_string(out_ch)},
+                   {"cache", cache_hit ? "hit" : "miss"},
+                   {"calls", std::to_string(calls)}});
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Target profile generation (lcms2 in-memory, no binary ICC in the repo)
@@ -961,12 +999,8 @@ ColorOutcome ColorManager::transform(OIIO::ImageBuf &buf, const std::string &src
         return oc;
     }
 
-    log_debug("color", kLogFile, "colour transform applied",
-              {{"src", oc.src_desc},
-               {"dst", oc.dst_desc},
-               {"channels", std::to_string(nch)},
-               {"out_channels", std::to_string(out_ch)},
-               {"cache", hit ? "hit" : "miss"}});
+    // M10 / W1-T2：限流后的 debug 证据行（同 (src,dst,通道,cache) 首见 + 每 1024 次汇总）。
+    log_transform_applied(oc.src_desc, oc.dst_desc, nch, out_ch, hit);
 
     // R-035：灰度源被升维成 RGB(A)（彩色目标的既定设计：单次 GRAY_FLT→RGB_FLT，无独立灰度
     // 管线）——体积 ~3×，与 supports_gray 的"保持灰度"承诺不同，升维必须有告警（原实现静默）。

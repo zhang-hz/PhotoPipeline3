@@ -136,4 +136,32 @@ bool write_file(const std::filesystem::path &target, std::string_view data, std:
     return write_atomic_file(target, data, err);
 }
 
+// ---------------------------------------------------------------------------
+// M10 / W1-B1（T6；docs/v0.4.0-design.md §4.4.3）：编码器飞行缓冲估算表
+//   表值 = "每像素字节"上界（实现期按 RSS 实测校准；宁大勿小 —— 过大只会让并行退化串行，
+//   过小则可能撑爆内存）。按 format_id 取行、按位深取档：
+//     * heif（libx265）：8bit 32 / 10–12bit 48（设计 §4.4.3 的经验区间 24–48 的上界）
+//     * avif（SVT-AV1 / libaom）：32（10bit 参考帧 + tile 缓冲）
+//     * jxl（libjxl VarDCT/Modular）：16（16bit 浮点 XYB + 线程本地缓冲）
+//     * webp（libwebp）：12（多个整帧平面 + 滤波 scratch）
+//     * jpeg（jpegli）/ png / tiff / bmp（OIIO）：8（整帧工作拷贝 + 输出流）
+//   未列格式 → 8（保守下界；并行仍受 2×frame 与配额约束）。
+// ---------------------------------------------------------------------------
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)：参数语义由名字固定
+std::uint64_t encoder_flight_bytes(std::string_view format_id, int bitdepth_bps,
+                                   std::uint64_t pixels) {
+    const std::uint64_t bpp = [&]() -> std::uint64_t {
+        if (format_id == "heif")
+            return bitdepth_bps > 8 ? 48u : 32u;
+        if (format_id == "avif")
+            return 32u;
+        if (format_id == "jxl")
+            return 16u;
+        if (format_id == "webp")
+            return 12u;
+        return 8u; // jpeg / png / tiff / bmp / 其它
+    }();
+    return bpp * pixels;
+}
+
 } // namespace pp::enc

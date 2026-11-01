@@ -95,6 +95,12 @@ struct ProgressInfo {
     float stage_frac = 0.f;     // 阶段内 0..1
     float overall_frac = 0.f;   // 文件整体 0..1（权重表 §7.2）
     bool synthetic = false;     // true = 合成进度（UI 斜纹）
+    // —— M10 / W1-B1（A5 加性，**末尾**；docs/v0.4.0-design.md §4.6 C15）——
+    // 心跳/评分中/自适应轮次：**只增显示信息，不推进任何 frac**（诚实可见；不虚增进度）。
+    bool heartbeat = false; // true = 心跳事件（无状态变化，仅"仍在跑"；C15 无长静默）
+    bool scoring = false;   // true = 该输出正在评分池中（UI 显示"评分中"，斜纹/强调色）
+    int adaptive_round = 0; // 自适应第几轮（0 = 未启用/未开始；W3-T4 消费）
+    int adaptive_max = 0;   // 自适应最大轮次（0 = 未启用；W3-T4 消费）
 };
 
 // ============================================================================================
@@ -213,6 +219,20 @@ public:
     int tick();
     // 收尾：未决输出不虚增；仅补发一条当前快照（成功路径此前已按 §7.2 达 1.0）
     void finish();
+
+    // —— M10 / W1-B1（A5 配套加性；docs/v0.4.0-design.md §4.6 C15）——
+    // 心跳事件：`FileState::Progress` + `progress.heartbeat=true`，**不推进任何 frac**
+    // （`overall_frac` 仍走单层高水位，故不会倒退）。用途 = 无长静默（探针 P4-2）：
+    //   ① 编码长尾（编码器回调停更 >300ms，如实测 libjxl 收尾 4.28s 静默）；
+    //   ② 评分期（`scoring=true`，由评分池的看门狗线程调用；
+    //      `overall_frac` 停在评分前的值，UI 显示"评分中"）；
+    //   ③ probe 长段（HEIC 首次 1.4s）—— 由 pipeline 的独立心跳 ticker 走 `emit_heartbeat()`。
+    void heartbeat(int output_index = -1, bool scoring = false);
+    // 直发心跳（不依赖 mux 已建：probe 段在 mux 建立前就要有心跳）。`proto` 提供
+    // output_index/stage 与（可选）已算好的 frac；heartbeat 字段由本函数置真。
+    void emit_heartbeat(ProgressInfo proto, bool scoring = false);
+    // 距上次事件（任一状态）的毫秒数；-1 = 尚未发过任何事件。心跳判决的输入（C15）。
+    double ms_since_last_emit() const;
 
     // ---- 三级模型的读数 ----
     float file_frac() const;         // 源文件级（§7.2：共享段 + mean(各输出 50%+10%)）∈[0,1]

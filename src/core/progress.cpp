@@ -248,8 +248,12 @@ struct ProgressMux::Impl {
     std::map<int, EmitMark> marks;
     std::function<void(const FileEvent &)> cb;
     Clock::time_point t_start{Clock::now()};
-    mutable std::mutex mu;        // 数据面（短临界区；**不在锁内调用回调**）
-    std::recursive_mutex emit_mu; // 事件序列面（R-170：emit 全程序列化 + 回调可重入）
+    // —— M10 / W1-B1（A5 配套）：心跳判决的输入（C15）——
+    // 上次**已发事件**（任一状态）的毫秒时刻（相对 t_start；<0 = 尚未发过）；guard = mu。
+    double last_emit_ms = -1.0;
+    Stage last_stage = Stage::Probe; // 上次事件的阶段（心跳沿用 = 不伪造阶段切换）；guard = mu
+    mutable std::mutex mu;           // 数据面（短临界区；**不在锁内调用回调**）
+    std::recursive_mutex emit_mu;    // 事件序列面（R-170：emit 全程序列化 + 回调可重入）
 
     explicit Impl(int width, int height, std::size_t outputs)
         : w(width), h(height), outs(outputs == 0 ? 1 : outputs) {}
@@ -326,10 +330,12 @@ struct ProgressMux::Impl {
             if (!should_emit_locked(output_index, pi.stage_frac, pi.overall_frac, force))
                 return;
             mark_locked(output_index, pi.stage_frac);
+            last_emit_ms = ms_between(t_start, Clock::now()); // C15：心跳判决的时点
+            last_stage = s;
             c = cb;
         }
         if (c)
-            c(FileEvent{0, FileState::Progress, nullptr, pi});
+            c(FileEvent{0, FileState::Progress, nullptr, pi, nullptr});
     }
 };
 
@@ -582,6 +588,53 @@ void ProgressMux::finish() {
     }
     // 收尾样本：成功路径此处 file_frac 已按 §7.2 达 1.0（§7.1 的逐输出段已全部记满）
     d.emit_seq(-1, Stage::Done, frac, /*force=*/true);
+}
+
+// ---------------------------------------------------------------------------
+// M10 / W1-B1（A5 配套）：心跳面（C15「无长静默」）
+//   * 心跳**不推进任何 frac**：overall_frac 仍由 info_locked 的单层高水位给出（不会倒退）；
+//   * stage 沿用"上次事件的阶段"（心跳不伪造阶段切换），output_index 由调用方给；
+//   * 评分期心跳由评分池的看门狗线程调用（scoring=true，overall 停在评分前的位置）。
+// ---------------------------------------------------------------------------
+void ProgressMux::emit_heartbeat(ProgressInfo proto, bool scoring) {
+    Impl &d = *impl_;
+    std::lock_guard<std::recursive_mutex> el(d.emit_mu);
+    ProgressInfo pi;
+    std::function<void(const FileEvent &)> c;
+    {
+        std::lock_guard<std::mutex> lk(d.mu);
+        pi = d.info_locked(proto.stage, proto.output_index, proto.stage_frac);
+        pi.heartbeat = true;
+        pi.scoring = scoring || proto.scoring;
+        pi.adaptive_round = proto.adaptive_round;
+        pi.adaptive_max = proto.adaptive_max;
+        d.last_emit_ms = ms_between(d.t_start, Clock::now());
+        d.last_stage = pi.stage;
+        c = d.cb;
+    }
+    if (c)
+        c(FileEvent{0, FileState::Progress, nullptr, pi, nullptr});
+}
+
+void ProgressMux::heartbeat(int output_index, bool scoring) {
+    Impl &d = *impl_;
+    ProgressInfo proto;
+    {
+        std::lock_guard<std::mutex> lk(d.mu);
+        proto.stage = d.last_stage;
+        proto.output_index = output_index;
+        if (output_index >= 0 && output_index < static_cast<int>(d.outs.size()))
+            proto.stage_frac = d.outs[static_cast<std::size_t>(output_index)].enc_frac;
+    }
+    emit_heartbeat(proto, scoring);
+}
+
+double ProgressMux::ms_since_last_emit() const {
+    const Impl &d = *impl_;
+    std::lock_guard<std::mutex> lk(d.mu);
+    if (d.last_emit_ms < 0.0)
+        return -1.0;
+    return ms_between(d.t_start, Clock::now()) - d.last_emit_ms;
 }
 
 float ProgressMux::file_frac() const {

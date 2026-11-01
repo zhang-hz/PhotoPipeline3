@@ -1569,6 +1569,78 @@ void test_mtime(const fs::path &tmp) {
     check(!pp::sync_file_mtime(f, "2023:02:29 10:00:00").empty(), "mtime/invalid-date", "");
 }
 
+// M10 / W1-T2b（C9）：exiv2 写路径"无手术快路径"。
+// 判定 = plan.exif/xmp 空 ∧ payloads 空 ∧ 无隐私剥除 → 跳过整文件拷贝 + 重写：
+//   * 命中时输出文件**逐字节不变**（连 mtime 都不动）、不产生临时副本，且 info 一行
+//     `metadata: no surgery, skipped rewrite`（P4-5 探针的 grep 口径）；
+//   * 有手术时仍走 R-002 原子写（临时副本 + exiv2_apply + commit），元数据正常落盘 ——
+//     与 HEAD 逐字节一致（本用例用编辑落盘做阳性对照）。
+void test_no_surgery_fast_path(const fs::path &tmp) {
+    const fs::path dir = tmp / "no-surgery";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+    const fs::path out = dir / "out.png";
+    if (!copy_fixture(corpus() / "base" / "rgb8.png", out)) {
+        fail("no-surgery/copy", out.string());
+        return;
+    }
+    const std::vector<uint8_t> before = read_bytes(out);
+    const auto mtime_before = fs::last_write_time(out);
+
+    const pp::MetadataPlan empty_plan{}; // 无 EXIF/XMP 内容（无手术）
+    const pp::Payloads empty_payloads;   // 编码器注入面同为空
+    const fs::path logs = tmp / "logs-no-surgery";
+    pptest::unsetenv("PP_LOG_LEVEL");
+    pp::log_init(logs, pp::LogLevel::Info);
+    const std::string err = pp::write_metadata_exiv2(out, empty_plan, empty_payloads);
+    pp::log_shutdown();
+    check(err.empty(), "no-surgery/no-error", err);
+    check(read_bytes(out) == before, "no-surgery/bytes-unchanged",
+          "输出字节被改动（无手术必须保持编码器产物原样）");
+    check(fs::last_write_time(out) == mtime_before, "no-surgery/mtime-unchanged",
+          "无手术不应改写文件时间戳");
+    std::size_t files_in_dir = 0;
+    for (const fs::directory_iterator::value_type &e : fs::directory_iterator(dir, ec)) {
+        (void)e;
+        ++files_in_dir;
+    }
+    check(files_in_dir == 1, "no-surgery/no-temp-left",
+          "目录内文件数=" + std::to_string(files_in_dir) + "（应只有输出本身，无临时副本）");
+
+    bool logged = false; // 命中日志（info 级）—— "metadata: no surgery, skipped rewrite"
+    for (const fs::directory_iterator::value_type &e : fs::directory_iterator(logs, ec)) {
+        if (!e.is_regular_file())
+            continue;
+        std::ifstream in(e.path(), std::ios::binary);
+        const std::string text{std::istreambuf_iterator<char>(in),
+                               std::istreambuf_iterator<char>()};
+        if (text.find("metadata: no surgery, skipped rewrite") != std::string::npos)
+            logged = true;
+    }
+    check(logged, "no-surgery/logged",
+          "未找到 'metadata: no surgery, skipped rewrite' 命中日志（" + logs.string() + "）");
+
+    // 阳性对照：plan 非空（有编辑）→ 必须真写（R-002 原子写路径），编辑落盘。
+    const pp::SourceMeta meta = pp::read_metadata(corpus() / "base" / "photo.jpg");
+    pp::BatchRules rules;
+    rules.exif_edits.push_back(pp::TagEdit{"Exif.Image.Artist", std::string("M10-T2B"), false});
+    const pp::MetadataPlan plan = pp::build_plan(meta, rules, std::nullopt);
+    const pp::Payloads payloads = pp::make_payloads(plan);
+    check(!payloads.exif_blob.empty(), "no-surgery/surgery-payload", "编辑后的 EXIF payload 为空");
+    const fs::path surgery_out = dir / "surgery.jpg";
+    if (!copy_fixture(corpus() / "base" / "photo.jpg", surgery_out)) {
+        fail("no-surgery/surgery-copy", surgery_out.string());
+        return;
+    }
+    const std::string surgery_err = pp::write_metadata_exiv2(surgery_out, plan, payloads);
+    check(surgery_err.empty(), "no-surgery/surgery-write", surgery_err);
+    const pp::SourceMeta back = pp::read_metadata(surgery_out);
+    check(exif_str(back.exif, "Exif.Image.Artist") == "M10-T2B", "no-surgery/surgery-landed",
+          "有手术时元数据必须真写回，got Artist='" + exif_str(back.exif, "Exif.Image.Artist") +
+              "'");
+}
+
 } // namespace
 
 int main() {
@@ -1601,6 +1673,7 @@ int main() {
     test_makernote(tmp);
     test_mtime(tmp);
     test_m7wp1_regressions(tmp);
+    test_no_surgery_fast_path(tmp); // M10 / W1-T2b（C9 无手术快路径）
 
     if (g_failed == 0) {
         std::printf("OK test_metadata: all cases passed\n");

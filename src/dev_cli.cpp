@@ -11,6 +11,7 @@
 //   * B.6 ③：参数装配链上提 pp::build_output_specs（与 bench 同源）。
 // --dev CLI 面（§3.15）逐字保留：usage 文本仅 --workers 一行按 R-237/283 修正措辞
 // （"0 = physical cores" 与实现不符，实为 thread_budget 或逻辑核）。
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -22,9 +23,12 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -32,8 +36,10 @@
 #include <utility>
 #include <vector>
 
-#include "codecs/encoders.h"   // probe_bitdepth_support（HEIF/AVIF 运行时位深交集）
-#include "core/colormanager.h" // M8-W4：--score-pair 与管线同一条 ICC→sRGB 归一
+#include "codecs/encoders.h"    // probe_bitdepth_support（HEIF/AVIF 运行时位深交集）
+#include "core/adaptive_exec.h" // M10 / W3-T4：自适应摘要（sidecar `adaptive` 证据通道）
+#include "core/colormanager.h"  // M8-W4：--score-pair 与管线同一条 ICC→sRGB 归一
+#include "core/format_preset.h" // M10 / W3-T4（A14）：--preset 也接受格式预设文件
 #include "core/fsops.h"
 #include "core/logger.h"
 #include "core/metric/metric.h" // M8-C2：sidecar metric 的 name/version/state 单源
@@ -41,8 +47,10 @@
 #include "core/pipeline.h"
 #include "core/presets.h"
 #include "core/scheduler.h"
+#include "core/score_queue.h" // M10 / W1-B1（T5）：评分池收敛（异步评分证据面）
 #include "core/types.h"
-#include "decode/oiio_reader.h" // M8-W4：--score-pair 的文件级 probe/decode（独立 oracle）
+#include "decode/oiio_reader.h"  // M8-W4：--score-pair 的文件级 probe/decode（独立 oracle）
+#include "ui/format_preset_io.h" // M10 / W3-T4：格式预设读取（Qt JSON 适配层；app 目标已含）
 #include "ui/preset_io.h"
 
 namespace fs = std::filesystem;
@@ -78,7 +86,14 @@ const char *kDevUsage =
     "  --conflict POLICY       skip|overwrite|rename (dev default overwrite)\n"
     "  --metadata-only         metadata-only mode (zero re-encode; output container follows\n"
     "                          each source file's own format/extension; --format is ignored)\n"
-    "  --preset FILE           load a preset JSON (command line options win)\n"
+    "  --preset FILE           load a preset JSON (command line options win). A **format preset**\n"
+    "                          (kind=\"format-preset\") applies to output #0 "
+    "(format/backend/tech/\n"
+    "                          bitdepth/params + adaptive policy); a global preset v2 works as\n"
+    "                          before (M10 / W3-T4, additive)\n"
+    "  --adaptive-policy FILE  adaptive policy DSL (docs/v0.4.0-design.md §9.2) applied to the\n"
+    "                          single output (dev-only additive; implies synchronous scoring;\n"
+    "                          sidecar gains an `adaptive` object)\n"
     "  --param KEY=VALUE       override one parameter (repeatable; applies to every output)\n"
     "  --meta KEY=VALUE        set/overwrite one metadata tag (repeatable)\n"
     "  --workers N             worker count (0 = thread_budget or logical cores; dev default 1)\n"
@@ -121,6 +136,9 @@ struct DevOptions {
     bool help = false;
     std::string format = "jxl", backend, tech, color = "keep", conflict = "overwrite";
     std::string preset, log_level = "info";
+    // M10 / W3-T4（A14 加性）：独立的自适应策略文件（dev-only）。空 = 不启用。
+    fs::path adaptive_policy_file;
+    bool has_adaptive_policy = false;
     std::string output_template;
     bool has_output_template = false;
     std::vector<OutputSpecText> outputs; // --outputs 追加项
@@ -230,6 +248,20 @@ bool split_kv(std::string_view arg, std::string &key, std::string &value) {
     return true;
 }
 
+// M10 / W3-T4（A14）：`--preset` 的文件类型判定 —— 只读根 `kind`（格式预设 = "format-preset"；
+// 全局预设 v2 无该字段）。解析失败/不可读返回空串 → 交由全局预设 loader 报原有错误（旧口径）。
+std::string preset_file_kind(const fs::path &file) {
+    QFile f(QString::fromStdString(file.string()));
+    if (!f.open(QIODevice::ReadOnly))
+        return {};
+    const QByteArray bytes = f.readAll();
+    QJsonParseError perr{};
+    const QJsonDocument doc = QJsonDocument::fromJson(bytes, &perr);
+    if (perr.error != QJsonParseError::NoError || !doc.isObject())
+        return {};
+    return doc.object().value(QStringLiteral("kind")).toString().toStdString();
+}
+
 bool parse_dev_options(int argc, char **argv, DevOptions &o, std::string &err) {
     auto need = [&](int &i, const char *opt) -> const char * {
         if (i + 1 >= argc) {
@@ -331,6 +363,13 @@ bool parse_dev_options(int argc, char **argv, DevOptions &o, std::string &err) {
                 return false;
             o.preset = v;
             o.has_preset = true;
+        } else if (a == "--adaptive-policy") {
+            // M10 / W3-T4（A14）：自适应策略 DSL 文件（dev-only 加性面）。
+            const char *v = need(i, "--adaptive-policy");
+            if (!v)
+                return false;
+            o.adaptive_policy_file = v;
+            o.has_adaptive_policy = true;
         } else if (a == "--param") {
             const char *v = need(i, "--param");
             if (!v)
@@ -610,6 +649,46 @@ const char *metric_state_text(pp::MetricState s) {
     return "off";
 }
 
+// —— M10 / W3-T4（A13 加性；docs/v0.4.0-design.md §9.6）：启用自适应时侧车追加 `adaptive` ——
+// 字段面（tests/golden/SCHEMA.md「sidecar `adaptive`」）：policy_version/target/max_rounds/output/
+// rounds[]/selected_round/final_score/reason。逐轮记录 = round/stage/key/value/score/state/
+// bytes/encode_ms/metric_ms/decision/note（与 info 日志 `adaptive round` 同源）。
+// 未启用自适应（默认）= 不写该键 ⇒ 旧 sidecar 逐字不变。
+QJsonObject adaptive_sidecar_json(const pp::AdaptiveRunResult &run) {
+    QJsonObject o;
+    o["policy_version"] = run.policy_version;
+    o["target"] = run.target;
+    o["max_rounds"] = run.max_rounds;
+    o["output"] = QString::fromStdString(run.output);
+    QJsonArray rounds;
+    for (const pp::AdaptiveRoundRecord &rec : run.records) {
+        QJsonObject r;
+        r["round"] = rec.round;
+        r["stage"] = QString::fromStdString(rec.stage);
+        r["key"] = QString::fromStdString(rec.key);
+        r["value"] = QString::fromStdString(rec.value);
+        r["state"] = QString::fromLatin1(metric_state_text(rec.metric));
+        if (rec.metric == pp::MetricState::Ok)
+            r["score"] = rec.score;
+        r["bytes"] = static_cast<double>(rec.bytes);
+        r["encode_ms"] = rec.encode_ms;
+        r["metric_ms"] = rec.metric_ms;
+        r["decision"] = QString::fromStdString(rec.decision);
+        r["note"] = QString::fromStdString(rec.note);
+        rounds.append(r);
+    }
+    o["rounds"] = rounds;
+    o["selected_round"] = run.selected_round;
+    if (run.final_metric == pp::MetricState::Ok)
+        o["final_score"] = run.final_score;
+    o["final_metric"] = QString::fromLatin1(metric_state_text(run.final_metric));
+    o["reason"] = QString::fromStdString(run.reason);
+    o["policy_sha"] = QString::fromStdString(run.policy_sha); // 可复算（§9.1-9）
+    if (!run.error.empty())
+        o["error"] = QString::fromStdString(run.error);
+    return o;
+}
+
 // <out>.pp.json sidecar（0.3.0：逐输出一份）：携带 pp_verify 需要的 warnings 与调试用的
 // timing/info。单输出时字段值与 0.2 逐字等价（row.* 即文件级聚合值）。
 // M8-C2 / C13：评分开启时加**嵌套对象** "metric": {name,version,state,score,ms,reference,
@@ -674,6 +753,9 @@ QJsonObject sidecar_json(const pp::FileResult &r, const pp::OutputResult &row,
     }
     o["progress_reported"] = row.progress_reported; // W1-T6 §7.4 快照（真实行级 vs 合成）
     o["progress_max_row"] = row.progress_max_row;
+    // M10 / W3-T4（A13）：自适应摘要（仅启用自适应的输出；进程级发布表按产物路径键）。
+    if (const auto arun = pp::published_adaptive_summary(row.out.string()))
+        o["adaptive"] = adaptive_sidecar_json(*arun);
     // 源文件级聚合（多输出时逐输出行共用；单输出时与上述逐输出字段相同）
     o["file_state"] = QString::fromStdString(state_name(r));
     o["file_ok"] = r.ok;
@@ -682,6 +764,24 @@ QJsonObject sidecar_json(const pp::FileResult &r, const pp::OutputResult &row,
     o["outputs_total"] = static_cast<int>(r.outputs.size());
     o["out_bytes_total"] = static_cast<double>(r.out_bytes);
     return o;
+}
+
+// M10 / W1-B1（T5；docs/v4.0 §4.2.2(2)）：评分异步化后，`Scheduler::results()` 的行在文件
+// 终态时 metric 仍是 Off（评分还在池里跑）。**权威**是池内已发布的最终行（按产物路径键）。
+// 写 sidecar 前按 out 路径把 metric 字段并回（无发布 = 原样，未评分运行零变化）。
+pp::OutputResult row_with_scored_metric(const pp::OutputResult &row) {
+    if (row.out.empty())
+        return row;
+    const std::shared_ptr<const pp::OutputResult> done =
+        pp::ScorePool::instance().published(row.out.string());
+    if (!done)
+        return row;
+    pp::OutputResult merged = row;
+    merged.metric_state = done->metric_state;
+    merged.metric_ssimulacra2 = done->metric_ssimulacra2;
+    merged.metric_ms = done->metric_ms;
+    merged.metric_note = done->metric_note;
+    return merged;
 }
 
 void write_sidecars(const pp::FileResult &r, const std::vector<std::string> &params_snapshots) {
@@ -694,7 +794,7 @@ void write_sidecars(const pp::FileResult &r, const std::vector<std::string> &par
         std::ofstream f(path, std::ios::binary | std::ios::trunc);
         if (!f)
             continue;
-        const QJsonDocument doc(sidecar_json(r, row, snap));
+        const QJsonDocument doc(sidecar_json(r, row_with_scored_metric(row), snap));
         const QByteArray bytes = doc.toJson(QJsonDocument::Indented);
         f.write(bytes.constData(), bytes.size());
     }
@@ -963,6 +1063,29 @@ public:
         o["overall_frac"] = static_cast<double>(pi.overall_frac);
         o["synthetic"] = pi.synthetic;
         o["t_ms"] = elapsed_ms();
+        // —— M10 / W1-B1（A5 加性；docs/v0.4.0-design.md §4.6 C13/C14/C15）——
+        // 新字段 = 加性：heartbeat/scoring/adaptive_round/adaptive_max；逐输出终态事件
+        // （state=output_done）另附 `output` 摘要对象（大小/状态/耗时/评分），其余事件不写该键
+        // ⇒ 未评分/未自适应运行的旧行**逐字不变**（SCHEMA.md 加性追加，不改既有字段）。
+        o["heartbeat"] = pi.heartbeat;
+        o["scoring"] = pi.scoring;
+        o["adaptive_round"] = pi.adaptive_round;
+        o["adaptive_max"] = pi.adaptive_max;
+        if (ev.output) {
+            const pp::OutputResult &row = *ev.output;
+            QJsonObject out;
+            out["format"] = QString::fromStdString(row.format_id);
+            out["state"] = QString::fromLatin1(pp::output_state_name(row.state));
+            out["ok"] = row.ok;
+            out["skipped"] = row.skipped;
+            out["bytes"] = static_cast<double>(row.out_bytes);
+            out["encode_ms"] = row.t.encode_ms;
+            out["metawrite_ms"] = row.t.metawrite_ms;
+            out["metric_state"] = QString::fromLatin1(metric_state_text(row.metric_state));
+            if (row.metric_state == pp::MetricState::Ok)
+                out["metric_score"] = row.metric_ssimulacra2;
+            o["output"] = out;
+        }
         // R-160：seq 分配在锁内（与 write 同一临界区）。
         std::lock_guard<std::mutex> lk(mu_);
         o["seq"] = static_cast<double>(seq_++);
@@ -1010,6 +1133,11 @@ private:
             // 取名 "done_with_errors" = SCHEMA.md state 词表「FileState 的小写名」口径；
             // SCHEMA 值表未列本值属登记余量（tests/golden 冻结面不动），见 handoff。
             return "done_with_errors";
+        case pp::FileState::OutputDone:
+            // M10 / W1-B1（A1；docs/v0.4.0-design.md §4.6 C13）：逐输出终态。
+            // 命名 = SCHEMA.md「FileState 的小写名」口径（output_done）；tools/pp_progress_audit.py
+            // 的归一化判据（小写 + 去下划线/连字符 → outputdone）以本值为准。
+            return "output_done";
         }
         return "unknown";
     }
@@ -1083,15 +1211,48 @@ int run_dev(int argc, char **argv) {
     pp::log_init(o.out_root / "logs", level);
 
     // ---- base configuration: preset first, command line wins ----
+    // M10 / W3-T4（A14 加性）：`--preset` 也接受**格式预设**（kind="format-preset"）——
+    // 它是自适应策略的唯一落盘载体（§9.1-1：GUI 无策略编辑器，策略只在预设文件里）。
+    // 判定 = 只读 JSON 根 `kind`（坏文件仍由对应 loader 给出中文错误，不静默降级为另一类）。
     pp::PresetData preset;
-    const bool have_preset = o.has_preset;
-    if (have_preset) {
-        const std::string perr = pp::ui::load_preset(o.preset, preset);
-        if (!perr.empty()) {
-            std::fprintf(stderr, "photopipeline --dev: preset '%s': %s\n", o.preset.c_str(),
-                         perr.c_str());
-            pp::log_shutdown();
-            return 2;
+    pp::FormatPresetData fmt_preset;
+    bool have_preset = false;     // 全局预设 v2 命中
+    bool have_fmt_preset = false; // 格式预设命中
+    if (o.has_preset) {
+        if (preset_file_kind(o.preset) == std::string(pp::kFormatPresetKind)) {
+            const std::string ferr = pp::ui::load_format_preset(o.preset, fmt_preset);
+            if (!ferr.empty()) {
+                std::fprintf(stderr, "photopipeline --dev: format preset '%s': %s\n",
+                             o.preset.c_str(), ferr.c_str());
+                pp::log_shutdown();
+                return 2;
+            }
+            std::string nerr;
+            pp::normalize_format_preset(fmt_preset, &nerr);
+            if (!nerr.empty()) {
+                std::fprintf(stderr, "photopipeline --dev: format preset '%s': %s\n",
+                             o.preset.c_str(), nerr.c_str());
+                pp::log_shutdown();
+                return 2;
+            }
+            have_fmt_preset = true;
+            pp::log_info("harness", "dev_cli.cpp", "format preset loaded",
+                         {{"path", o.preset},
+                          {"format", fmt_preset.format_id},
+                          {"backend", fmt_preset.backend_id},
+                          {"tech", fmt_preset.tech_id},
+                          {"bitdepth", std::to_string(fmt_preset.out_bitdepth)},
+                          {"params", std::to_string(fmt_preset.params.size())},
+                          {"adaptive", fmt_preset.adaptive_enabled ? "true" : "false"}});
+        } else {
+            const std::string perr = pp::ui::load_preset(o.preset, preset);
+            if (!perr.empty()) {
+                std::fprintf(stderr, "photopipeline --dev: preset '%s': %s\n", o.preset.c_str(),
+                             perr.c_str());
+                pp::log_shutdown();
+                return 2;
+            }
+            have_preset = true;
         }
     }
     const bool multi_output = !o.outputs.empty();
@@ -1101,25 +1262,48 @@ int run_dev(int argc, char **argv) {
         pp::log_shutdown();
         return 2;
     }
+    if (multi_output && have_fmt_preset) {
+        std::fprintf(stderr, "photopipeline --dev: a format preset applies to the single output "
+                             "only (--outputs is not supported together with it)\n");
+        pp::log_shutdown();
+        return 2;
+    }
     // 输出清单：--outputs（0.3.0 多输出）优先；否则 0.2 的单格式形态（预设参与）
     // 预设 v2（M4-T13 §3.6：[重排] 为 outputs[] 数组 + output_template/split_by_format）：
     // --dev 的 0.2 单格式语义 = 读 `outputs[0]`（v1 预设由 load_preset 迁移成单元素数组）。
+    // M10 / W3-T4（A14）：格式预设同样只作用于输出 #0（= 单输出形态）；命令行显式项优先。
     const bool preset_has_output = have_preset && !preset.outputs.empty();
     std::vector<OutputSpecText> outputs;
     if (multi_output) {
         outputs = o.outputs;
     } else {
         OutputSpecText s;
-        s.format =
-            o.has_format ? o.format : (preset_has_output ? preset.outputs[0].format_id : "jxl");
-        s.backend =
-            o.has_backend ? o.backend : (preset_has_output ? preset.outputs[0].backend_id : "");
-        s.tech = o.has_tech ? o.tech : (preset_has_output ? preset.outputs[0].tech_id : "");
+        s.format = o.has_format      ? o.format
+                   : have_fmt_preset ? fmt_preset.format_id
+                                     : (preset_has_output ? preset.outputs[0].format_id : "jxl");
+        s.backend = o.has_backend     ? o.backend
+                    : have_fmt_preset ? fmt_preset.backend_id
+                                      : (preset_has_output ? preset.outputs[0].backend_id : "");
+        s.tech = o.has_tech        ? o.tech
+                 : have_fmt_preset ? fmt_preset.tech_id
+                                   : (preset_has_output ? preset.outputs[0].tech_id : "");
         outputs.push_back(s);
+    }
+    if (have_fmt_preset) {
+        const std::string applies =
+            pp::check_format_preset_applies_to(fmt_preset, outputs[0].format);
+        if (!applies.empty()) {
+            std::fprintf(stderr, "photopipeline --dev: format preset '%s': %s\n", o.preset.c_str(),
+                         applies.c_str());
+            pp::log_shutdown();
+            return 2;
+        }
     }
     const bool lossless =
         o.has_lossless ? o.lossless
-                       : (preset_has_output ? pp::lossless_flag(preset.outputs[0].params) : false);
+        : have_fmt_preset
+            ? pp::lossless_flag(fmt_preset.params)
+            : (preset_has_output ? pp::lossless_flag(preset.outputs[0].params) : false);
     pp::ColorTarget color = pp::ColorTarget::KeepOriginal;
     if (o.has_color) {
         if (!pp::parse_color_target(o.color, color)) {
@@ -1183,6 +1367,14 @@ int run_dev(int argc, char **argv) {
             for (const auto &[k, v] : preset.outputs[0].params)
                 q.base_params[k] = v;
         }
+        // M10 / W3-T4（A14）：格式预设 = 输出 #0 的**整卡模板**（backend/tech/位深/参数 +
+        // 保留键 heif_profile）；--param 仍然后写覆盖（命令行 > 预设，与全局预设同口径）。
+        if (have_fmt_preset && oi == 0) {
+            for (const auto &[k, v] : fmt_preset.params)
+                q.base_params[k] = v;
+            if (fmt_preset.heif_profile)
+                q.base_params[std::string("__heif_profile")] = *fmt_preset.heif_profile;
+        }
         for (const auto &[k, v] : o.params) {
             if (!set_param(q.base_params, *fmt, s.backend, s.tech, k, v, err)) {
                 std::fprintf(stderr, "photopipeline --dev: %s\n", err.c_str());
@@ -1190,11 +1382,14 @@ int run_dev(int argc, char **argv) {
                 return 2;
             }
         }
-        const bool explicit_bd = o.has_bitdepth || (preset_has_output && oi == 0);
+        const bool explicit_bd =
+            o.has_bitdepth || (preset_has_output && oi == 0) || (have_fmt_preset && oi == 0);
         bitdepth_explicit.push_back(explicit_bd);
         q.out_bitdepth =
             o.has_bitdepth ? o.bitdepth
-                           : ((preset_has_output && oi == 0) ? preset.outputs[0].out_bitdepth : -1);
+            : (have_fmt_preset && oi == 0)
+                ? fmt_preset.out_bitdepth
+                : ((preset_has_output && oi == 0) ? preset.outputs[0].out_bitdepth : -1);
         reqs.push_back(std::move(q));
     }
     std::vector<pp::OutputFormatSpec> specs;
@@ -1261,6 +1456,84 @@ int run_dev(int argc, char **argv) {
         // jxl 直接 exit 2，或让用户以为产物会被转成 jxl。不支持的源格式按文件失败并给消息。
     }
 
+    // ---- M10 / W3-T4（A14）：自适应策略（格式预设的 adaptive 或 --adaptive-policy 文件）----
+    // 语义（§9.1）：只有显式携带策略的输出才启用；默认关闭 → 下面一行都不生效（零变化）。
+    // 校验在此处**早失败**（与运行期同一条链：parse + 格式作用域 validate），错误带行列号。
+    std::string adaptive_text;
+    if (have_fmt_preset && fmt_preset.adaptive_enabled && !fmt_preset.adaptive_policy.empty())
+        adaptive_text = fmt_preset.adaptive_policy;
+    // M10 最终门禁（A14 收口）：全局预设 v2 的输出级 `adaptive`（W3-T5 加性）同样生效；与上面的
+    // 格式预设分支互斥（--preset 只解析成其中一类）。旧预设无该对象 ⇒ enabled=false/策略空 ⇒
+    // 本分支不触发，行为逐字节不变。
+    if (preset_has_output && preset.outputs[0].adaptive_enabled &&
+        !preset.outputs[0].adaptive_policy.empty())
+        adaptive_text = preset.outputs[0].adaptive_policy;
+    if (o.has_adaptive_policy) {
+        if (!adaptive_text.empty()) {
+            std::fprintf(stderr, "photopipeline --dev: --adaptive-policy conflicts with the format "
+                                 "preset's adaptive policy\n");
+            pp::log_shutdown();
+            return 2;
+        }
+        std::ifstream af(o.adaptive_policy_file, std::ios::binary);
+        if (!af) {
+            std::fprintf(stderr, "photopipeline --dev: cannot read --adaptive-policy '%s'\n",
+                         o.adaptive_policy_file.string().c_str());
+            pp::log_shutdown();
+            return 2;
+        }
+        std::string tmp((std::istreambuf_iterator<char>(af)), std::istreambuf_iterator<char>());
+        // Windows 编辑器常写 UTF-8 BOM（记事本另存为 UTF-8）：DSL 解析器不剔除 BOM，
+        // 否则首条语句会以 "\ufeffoutput" 报 unknown_statement（实测）→ 读取面先削掉。
+        if (tmp.size() >= 3 && static_cast<unsigned char>(tmp[0]) == 0xEF &&
+            static_cast<unsigned char>(tmp[1]) == 0xBB &&
+            static_cast<unsigned char>(tmp[2]) == 0xBF) {
+            tmp.erase(0, 3);
+        }
+        adaptive_text = std::move(tmp);
+    }
+    if (!adaptive_text.empty()) {
+        if (specs.size() != 1) {
+            std::fprintf(stderr,
+                         "photopipeline --dev: an adaptive policy requires exactly one output "
+                         "(got %zu)\n",
+                         specs.size());
+            pp::log_shutdown();
+            return 2;
+        }
+        if (o.metadata_only) {
+            std::fprintf(stderr, "photopipeline --dev: an adaptive policy cannot be combined with "
+                                 "--metadata-only (no re-encode happens there)\n");
+            pp::log_shutdown();
+            return 2;
+        }
+        pp::AdaptivePolicy apol;
+        pp::AdaptiveError aerr;
+        if (!pp::parse_and_validate_adaptive_policy(adaptive_text, specs[0].format_id, apol,
+                                                    &aerr)) {
+            std::string why = "第 " + std::to_string(aerr.line) + " 行第 " +
+                              std::to_string(aerr.col) + " 列：" + aerr.message + "（" + aerr.code +
+                              "）";
+            if (!aerr.hint.empty())
+                why += "；建议：" + aerr.hint;
+            std::fprintf(stderr, "photopipeline --dev: adaptive policy: %s\n", why.c_str());
+            pp::log_shutdown();
+            return 2;
+        }
+        specs[0].adaptive_policy = adaptive_text;
+        pp::log_info("harness", "dev_cli.cpp", "adaptive policy enabled",
+                     {{"format", specs[0].format_id},
+                      {"target", std::to_string(apol.target)},
+                      {"max_rounds", std::to_string(apol.max_rounds)},
+                      {"stages", std::to_string(apol.stages.size())},
+                      {"output", std::string(pp::adaptive_output_name(apol.output))},
+                      {"policy_sha", pp::adaptive_policy_sha256(pp::render_adaptive_policy(apol))
+                                         .substr(0, pp::kAdaptivePolicyShaLogChars)}});
+        std::printf("  adaptive: target=%.10g max_rounds=%d output=%s stages=%zu\n", apol.target,
+                    apol.max_rounds, std::string(pp::adaptive_output_name(apol.output)).c_str(),
+                    apol.stages.size());
+    }
+
     // ---- inputs ----
     std::vector<std::string> collect_errors;
     std::vector<fs::path> files;
@@ -1313,6 +1586,15 @@ int run_dev(int argc, char **argv) {
     cfg.thread_budget = 0; // §3.2 默认；W1-T7 接设置项
     // M8-C2（C11/C13）：--dev 默认不评分（回归日志/预算零 diff）；--score 显式开启。
     cfg.quality_score = o.score;
+    // —— M10 / W1-B1（T6；docs/v4.0 §4.4 / C5）：同文件多格式并行度（**内部参数**）——
+    // 冻结的 --dev CLI 面不新增开关（§3.15）；证据/对照用环境变量：
+    //   PP_MAX_PARALLEL_TARGETS=N → RunConfig::max_parallel_targets（N=1 强制串行 = 0.3.6 的
+    //   逐 target 串行路径，用于"并行 vs 串行产物逐字节相同"的 A/B 取证）；未设置 = 0（自动
+    //   → min(2, outputs.size()) = C5 的默认并行度）。
+    if (const char *mp = std::getenv("PP_MAX_PARALLEL_TARGETS")) {
+        const int parsed = std::atoi(mp);
+        cfg.max_parallel_targets = parsed < 0 ? 0 : parsed;
+    }
 
     // R-236：conflict 打印**生效值**（预设覆盖后），不再透传 CLI 原文。
     const char *conflict_out = conflict_text(conflict);
@@ -1368,9 +1650,23 @@ int run_dev(int argc, char **argv) {
                   {"files", std::to_string(entries.size())},
                   {"metadata_only", o.metadata_only ? "true" : "false"},
                   {"out", o.out_root.string()},
+                  {"adaptive", specs.front().adaptive_policy.empty() ? "false" : "true"},
                   {"params", params_snapshots.front()}});
     for (const auto &[key, value] : pp::library_versions()) {
         pp::log_info("run", "dev_cli.cpp", "version", {{"lib", key}, {"version", value}});
+    }
+
+    // —— M10 / W3-T4：dev-only 侧车证据通道复位（自适应摘要按产物路径发布）——
+    // 每次运行前清空，避免同进程多次运行（GUI/连续 dev 调用）时旧运行的摘要混进本次侧车。
+    pp::clear_adaptive_summaries();
+
+    // —— M10-SCOREFIX（task-20）：dev 入口显式复位评分池代次 ——
+    // 旧 `cancel_pending()` 一次性语义（取消一次 → 同进程后续运行评分全 Unavailable）由 per-run
+    // 代次消除；这里在运行前显式 reset（Scheduler::start 也会 begin_run 一次，双保险；多一个
+    // 空代次无副作用）。dev 进程通常只跑一次，但保持与 GUI 同一接线口径、可连续复用。
+    if (o.score && !o.metadata_only) {
+        pp::ScorePool::instance().reset_for_run();
+        pp::log_info("run", "dev_cli.cpp", "score pool reset for run");
     }
 
     pp::Scheduler sched(cfg, std::move(entries));
@@ -1384,6 +1680,32 @@ int run_dev(int argc, char **argv) {
     sched.set_event_callback([&trace](const pp::FileEvent &ev) { trace.on_event(ev); });
     sched.start();
     sched.wait();
+
+    // —— M10 / W1-B1（T5；docs/v0.4.0-design.md §4.2.2(2) / §4.7）：等评分池收敛 ——
+    // 评分已异步化（文件终态事件不再等待评分）→ `--dev` 的**证据面**必须在全部评分任务
+    // 收敛后收尾：sidecar 的 metric 对象、退出码、trace 里的第二次 OutputDone 才完整。
+    //   * 默认无评分运行 → 池为空，立即返回（零行为变化）；
+    //   * 超时 = 错误（如实登记，不伪造完整证据）：计入失败文件数并打 error 日志。
+    int score_converge_failures = 0;
+    if (o.score) {
+        const auto budget = std::chrono::milliseconds(900 * 1000); // 15 min（超大图兜底）
+        const auto t_conv0 = std::chrono::steady_clock::now();
+        if (!pp::ScorePool::instance().wait_idle(budget)) {
+            ++score_converge_failures;
+            pp::log_error("run", "dev_cli.cpp", "score pool did not converge before timeout",
+                          {{"pending", std::to_string(pp::ScorePool::instance().pending())},
+                           {"timeout_ms", std::to_string(budget.count())}});
+        } else {
+            const double conv_ms = std::chrono::duration<double, std::milli>(
+                                       std::chrono::steady_clock::now() - t_conv0)
+                                       .count();
+            pp::log_info("run", "dev_cli.cpp", "score pool converged",
+                         {{"wait_ms", std::to_string(conv_ms)},
+                          {"quota_bytes", std::to_string(pp::ScorePool::instance().capacity())},
+                          {"peak_bytes", std::to_string(pp::ScorePool::instance().peak())},
+                          {"workers", std::to_string(pp::ScorePool::instance().workers())}});
+        }
+    }
 
     const std::vector<pp::FileResult> &results = sched.results();
     std::printf("\n%-46s %-9s %10s %9s  %s\n", "file", "state", "bytes", "ms", "warnings");
@@ -1408,7 +1730,8 @@ int run_dev(int argc, char **argv) {
     }
 
     const pp::RunSummary sum = sched.summary();
-    int failed = 0;
+    // M10 / W1-B1（T5）：评分池未收敛（超时）= 错误，计入失败数（如实登记，不伪造完成）。
+    int failed = score_converge_failures;
     for (const pp::FileResult &r : results) {
         if (!r.ok && !r.skipped && !r.cancelled)
             ++failed;

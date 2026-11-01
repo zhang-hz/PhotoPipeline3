@@ -16,6 +16,9 @@
 //       不读文件系统 —— 与预设卡 I/O 同口径）。
 //     * 运行读数（底栏/走查消费）：`progress_percent()`（§7.1 运行级总进度）、`eta_seconds()`、
 //       `outputs_done()/outputs_total()`。
+//     * `RunPlan::quality_score` + `scoring_enabled()`（M10-W1/T9b 追加；docs/m10-adjudications.md
+//       A10）：本批是否启用异步评分 —— 首次 OutputDone（metric Off）后的评分列「评分中」、收尾时
+//       未回分的成功行收「—」，以及外壳评分池接线（cancel_pending / wait_idle）的判空。
 //   既有方法（begin_run/on_event/end_run/reset/is_running 与三枚信号）签名不变；语义随
 //   0.3.0 的逐输出进度收敛（详见 .cpp 头注释）。页内状态仍在 .cpp 的注册表里（§2.13：冻结头
 //   不含私有成员）。
@@ -57,6 +60,11 @@ public:
         int workers = 0;        // 0 = 逻辑核（§8.2 的并行上界）
         int thread_budget = 0;  // 0 = 自动（§9.3 设置项「线程预算」）
         bool metadata_only = false;
+        // —— M10 / W1-T9b（A10 加性，**末尾**；docs/m10-adjudications.md A10）——
+        // 本批是否启用 SSIMULACRA 2 评分（= RunConfig::quality_score）。false → 首次 OutputDone
+        // 后评分列保持空白（§2.5「未发生的量不显示」）；true → 该行显示「评分中」并等含 metric
+        // 的第二次 OutputDone（C14）。默认 false = 既有调用点（探针/旧路径）行为零变化。
+        bool quality_score = false;
     };
 
     void set_tokens(const theme::Tokens &tokens);
@@ -80,6 +88,12 @@ public:
     void reset(); // idle state
 
     bool is_running() const;
+
+    // ---- M10 / W1-T9b（A10 追加面；末尾加性，既有方法签名/语义一字不动）----
+    // 本批是否真的会走异步评分（= RunPlan::quality_score 且非仅元数据）。外壳的评分池接线
+    // （取消时的 ScorePool::cancel_pending / 收尾前的 wait_idle）用它判空：无评分的运行不去
+    // 创建评分池线程，也不等一个永远为空的池（A6 口径：池配置内部常量，不进设置）。
+    bool scoring_enabled() const;
 
 signals:
     void cancel_requested();

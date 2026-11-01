@@ -7,7 +7,11 @@
 //     ColorManager 目标→sRGB 变换（C9）；
 //   * 参考必须是“编码器实际收到的量化后样本”（C9），否则真无损不会得到 100；
 //   * 分数 ∈ (−inf, 100]，负分合法；逐样本相同 = 100.0；<8×8 不允许调用（库会静默 100）。
-//   * 实现应流式/分块，峰值内存落在现有 2×frame 预算内（C10）；无法满足时必须报告实测。
+//   * 实现流式/分块（M10-W1-A2 / docs/v0.4.0-design.md C2）：逐行推进、内部只保留
+//     15 个模糊平面的递归高斯状态与 2N+1 行 lookahead，不物化整幅 XYB 金字塔；
+//     尺度间只物化 1/4^s 的线性 sRGB 帧。峰值额外内存 = 相邻两尺度线性帧 + O(width)
+//     scratch（23MP 实测 ~7.6 B/px），不再按 130–160 B/px 计入像素预算。
+//     数值与 HEAD 旧实现 oracle 对拍 |Δ|≤0.01（旧实现见 metric_oracle.h，测试专用）。
 #pragma once
 #include <functional>
 #include <string>

@@ -24,15 +24,18 @@
 //     状态标记 = 琥珀 Warn 矢量图标（不再是绿勾）、状态胶囊 = 琥珀「0 字节」、大小列显真实
 //     「0 B」（不做 KB 四舍五入 —— 3-10 的"若为四舍五入应显示真实字节"）。
 //
-// 任务表（§7.3「表格：源文件分组行 + 逐输出缩进行 × 进度条(实心/斜纹) × 大小/速度/耗时(右对齐)
-//   × 状态胶囊」）：列 = [状态标记 16][名称][进度 88][大小 60][速度 48][耗时 48][评分 44][状态 132]
+// 任务表（§7.3「表格：源文件分组行 + 逐输出缩进行 × 进度条(实心/斜纹) × 大小/耗时(右对齐)
+//   × 评分 × 状态胶囊」）：列 = [状态标记 16][名称(剩余宽)][进度 88][大小 56][耗时 44][评分 44]
+//   [状态 96] —— **C10/C11（M10-W1）**：删速度列（压缩比迁入大小列 tooltip）、列宽**单源**
+//   = `RunTableColumns`（docs/v0.4.0-design.md §5.1；行骨架/表头/探针共引一张表），名称列 =
+//   页面宽 − 固定预算（587 → 153px、520 → 86px）、squeeze=true + **ElideMiddle**（中间省略
+//   保留扩展名）+ tooltip 完整路径（组行附 宽×高 · 大小；输出行附格式名）。
 //   （**评分列** = M8-W2 需求3 加性列：把「评估结果」从输出行下的隐藏子行改成表格一列，逐输出行
 //   显示 SSIMULACRA 2 两位小数 + 四档语义色，组行「—」不平均；Off/仅元数据留空，Unavailable/
 //   Failed 显示「—」+ tooltip 原因），
 //   行高 = R1 的 28（表头 24）；缩进（逐输出行）只作用于名称列（mockup padding-left:18px）。
-//   速度列 = 压缩比（源 ÷ 输出），**基线**（相对源文件）进 tooltip（修 3-11）；完成态**唯一形态**
-//   = formkit::PillBadge 绿胶囊「已完成」（修 3-12：文件行文字"完成"/面板头蓝胶囊/任务行"✓"
-//   三套词汇收敛为 formkit 一处实现）；失败行带「└ 原因：…」行（§7.3 逐字）。
+//   完成态**唯一形态** = formkit::PillBadge 绿胶囊「已完成」（修 3-12：文件行文字"完成"/面板头
+//   蓝胶囊/任务行"✓" 三套词汇收敛为 formkit 一处实现）；失败行带「└ 原因：…」行（§7.3 逐字）。
 //   **计数单源**（修 3-13）：输出总数只出现在总览卡头 hint「N / M 个输出」，逐文件「N 个输出」
 //   作废（逐输出行就在其下）；状态计数只在「汇总」kv。
 //
@@ -51,10 +54,31 @@
 //   （完成=绿 / 0 字节=琥珀 / 失败=红 / 其余终态=中性 / 进行中=强调）——与 mockup
 //   `.pbar i.done/i.warn/i.fail` 同语义。
 //
-// 节流（§7.4）：事件回调只写内存行状态并置脏位，控件写入由 60ms 定时器统一 flush（行控件对
-//   同值早退）。运行期锁定（G5）：本页运行中只有「取消剩余」可交互（**唯一取消入口**不变）；
-//   跳转入口（查看日志…/打开输出目录）保持可用；结束态取消钮消失。左栏/步骤钮/设置/预设/预览/
-//   分类的置灰在 `MainWindow::lock_for_run()`（T9 零改动）。
+// 节流（§7.4 / M10-W1-C15，T9a 起）＝**双通道 flush**：事件回调只写内存行状态并置脏位；
+//   状态翻转（阶段切换/评分开始/完成/跳过/终态）→ `dirty_state` 由 QTimer::singleShot(0)
+//   立即刷一帧；数值/百分比 → `dirty_progress` 由 60ms 定时器合并（行控件对同值早退）。
+//   **dirty-row**：`RunState::row_dirty` 逐文件标脏，flush 只渲染脏文件 + 总览（O(脏行) 而非
+//   O(总行数)）；begin_run/reset/end_run/set_tokens 全量。运行期锁定（G5）：本页运行中只有
+//   「取消剩余」可交互（**唯一取消入口**不变）；跳转入口（查看日志…/打开输出目录）保持可用；
+//   结束态取消钮消失。左栏/步骤钮/设置/预设/预览/分类的置灰在 `MainWindow::lock_for_run()`
+//   （T9 零改动）。
+//
+// 状态机（M10-W1-C12；T9a = 现有事件面，T9b = OutputDone 消费；§5.3）：事件面 = ProgressMux
+//   的 Progress 事件 + 引擎逐输出终态事件 `FileState::OutputDone`（`FileEvent::output`，
+//   C13/C14）：
+//   * 格式行=「编码 NN%」（行数进 tooltip「真实行级 · R/H 行」；合成=斜纹
+//   +「合成进度（编码器无回调）」）；
+//     Encode 1.0（on_output_encode_done 强制点）且无 MetaWrite →「评分中」（Accent + 斜纹）；
+//     MetaWrite 0 →「写入」；MetaWrite 1.0（强制点）→「已完成」；首事件即 MetaWrite 1.0（无 Encode
+//     段，on_output_skipped）→「跳过」。
+//   * **OutputDone（T9b）**：到达即结算该输出行（状态 Done/Failed/Skipped/Cancelled + 大小/耗时/
+//     压缩比 tooltip/失败原因/warnings，不等文件终态）。首次事件 metric=Off：行「已完成」 +
+//     评分列「评分中」（仅本批启用评分时；否则留空）；第二次事件（含 metric）→ 同帧填两位小数
+//     + 既有四档色阶。文件终态事件只做**幂等校准**且不得用其 metric Off 覆盖已显示分数
+//     （引擎异步评分 → 终态 FileResult 的 metric 恒 Off；引擎移交事项①）。
+//   * 组行 Running 聚合 = 「编码中 k/n」/「评分中 k/n」/「写入中 k/n」（k=已结算输出数；
+//     已完成/跳过中间态计入 k）—— 共享段（探测/解码→色彩/旋转/合成）只在**真正进行中**显示
+//     （无输出已启动时），不再回显过期「色彩」。
 //
 // 页内状态保存在本翻译单元的注册表（键 = PageRun*，随 QObject::destroyed 释放）—— page_run.h
 // 是 PP-FROZEN 头文件（0.3.0 追加面：T14 的 RunPlan/读数 + T9 的 `run_again_requested()`），
@@ -100,6 +124,7 @@
 #include <QVariant>
 #include <QtGlobal>
 #include <cstdint>
+#include <vector>
 
 #include "core/pipeline.h"      // M8-C2：OutputResult 的加性评分字段（MetricState）
 #include "core/progress.h"      // StageWeights（§7.2 单源）
@@ -121,19 +146,41 @@ namespace fk = formkit;
 
 constexpr int kFlushMs = 60;     // §7.4：GUI 节流 60ms 刷新
 constexpr int kLogTailLines = 4; // §7.3：日志尾 4 行（warn/err 着色）
-constexpr int kMarkW = 16;       // 状态标记盒宽（矢量图标 12 居中）
-constexpr int kMarkPx = 12;      // 标记图标边长
-constexpr int kCellGap =
-    fk::kInlineGap; // 表内列距（UX-6④：= formkit kInlineGap；探针 run-geom 按同一张表取证）
-constexpr int kRowPadX = theme::Metrics::card_pad_x; // 表左右内距（UX-6④：= 卡内边距 12）
-constexpr int kOutIndent = 18;                       // 逐输出行名称缩进（mockup padding-left:18px）
-constexpr int kReasonIndent = 36;                    // 失败原因行缩进（缩进行之下再一级）
-constexpr int kBarColW = 88;                         // 进度列
-constexpr int kSizeColW = 60;                        // 大小列
-constexpr int kSpeedColW = 48;                       // 速度列（压缩比）
-constexpr int kTimeColW = 48;                        // 耗时列
-constexpr int kScoreColW = 44;               // 评分列（M8-W2 需求3：SSIMULACRA 2，右对齐数值）
-constexpr int kStatusColW = 132;             // 状态列（胶囊右对齐；容下「编码 16000/16000 行」）
+
+// ---------------------------------------------------------------------------
+// 任务表列宽模型（C10/C11；**单源**，docs/v0.4.0-design.md §5.1）—— 行骨架 / 表头 / 探针
+// 共引一份。名称列 = 页面宽 − 固定预算：扣竖滚动条（常驻）+ 卡体内距 ×2 + 行内距 ×2 +
+// 固定列之和 + 6 个列距。587 → 153px（探针阈值 ≥150）；520 → 86px（≥80）。
+// 本包回收：删速度列 54px + 状态 132→96 回收 36px + 大小/耗时各 −4px → 名称列 55 → 153px。
+// ---------------------------------------------------------------------------
+struct RunTableColumns {
+    static constexpr int mark = 16;            // 状态标记盒宽（矢量图标 12 居中）
+    static constexpr int bar = 88;             // 进度列
+    static constexpr int size = 56;            // 大小列（原 60；压缩比迁入本列 tooltip，C11）
+    static constexpr int time = 44;            // 耗时列（原 48）
+    static constexpr int score = 44;           // 评分列（M8-W2 需求3：SSIMULACRA 2）
+    static constexpr int status = 96;          // 状态列（原 132；§5.1 收缩）
+    static constexpr int gap = fk::kInlineGap; // 列距 6（= formkit 行内距）
+    static constexpr int pad_x = theme::Metrics::card_pad_x; // 卡体内距/行内距 12（同值）
+    static constexpr int scroll = theme::Metrics::scroll_w;  // 竖滚动条宽 6（常驻）
+    static constexpr int fixed() { return mark + bar + size + time + score + status; }
+    // 名称列宽（页面宽口径）：行骨架里名称列是**唯一 stretch 项** → 实际宽 = 余量 = 此式。
+    static constexpr int name_width(int page_w) {
+        return std::max(0, page_w - scroll - 2 * pad_x - 2 * pad_x - fixed() - gap * 6);
+    }
+};
+// 验收阈值进编译期（§12.2 name_w：587 ≥150 / 520 ≥80）—— 列宽模型改动不得跌破验收线。
+static_assert(RunTableColumns::name_width(theme::Metrics::right_width) >= 150,
+              "docs/v0.4.0-design.md §5.1：587 宽页面名称列 ≥150px");
+static_assert(RunTableColumns::name_width(theme::Metrics::right_width_min) >= 80,
+              "docs/v0.4.0-design.md §5.1：520 宽页面名称列 ≥80px");
+static_assert(RunTableColumns::gap == 6 && RunTableColumns::scroll == 6, "列距/滚动条宽 6");
+
+constexpr int kMarkPx = 12;                      // 标记图标边长
+constexpr int kCellGap = RunTableColumns::gap;   // 表内列距（探针 run-geom 按同一张表取证）
+constexpr int kRowPadX = RunTableColumns::pad_x; // 表左右内距（UX-6④：= 卡内边距 12）
+constexpr int kOutIndent = 18;                   // 逐输出行名称缩进（mockup padding-left:18px）
+constexpr int kReasonIndent = 36;                // 失败原因行缩进（缩进行之下再一级）
 constexpr int kTableHeadH = fk::kTableHeadH; // 表头行高（UX-6①：§5 R1 唯一例外，表头不是信息行）
 
 // 页内动态属性（页面 QSS 的锚；只锚本页控件，不误伤它页）
@@ -228,7 +275,7 @@ private:
 class RunMarkLabel : public QLabel {
 public:
     explicit RunMarkLabel(QWidget *parent = nullptr) : QLabel(parent) {
-        setFixedWidth(kMarkW);
+        setFixedWidth(RunTableColumns::mark);
         setAlignment(Qt::AlignCenter);
     }
     void set_mark(icons::Name name, const QColor &color) {
@@ -443,7 +490,6 @@ struct RowBundle {
     ElidedLabel *name = nullptr;
     fk::ProgressStrip *bar = nullptr;
     ElidedLabel *size = nullptr;
-    ElidedLabel *speed = nullptr;
     ElidedLabel *time = nullptr;
     // M8-W2（需求3）：评分列（任务表第 6 列「评分」）—— 定宽单元格 + 右对齐数值文本。
     // 旧「输出行下隐藏子行」形态退役（C12 由本需求改列为 C12′）；单元格/文本沿用旧探针钩子
@@ -451,8 +497,8 @@ struct RowBundle {
     QWidget *score_cell = nullptr;
     ElidedLabel *score = nullptr;
     fk::PillBadge *status = nullptr;
-    // 数值列缓存（文本 + 色；§4.2 数值档 = 右对齐 + tabular）
-    CellCache size_cache, speed_cache, time_cache, score_cache;
+    // 数值列缓存（文本 + 色；§4.2 数值档 = 右对齐 + tabular）；M10-W1 删速度列 → 无 speed_cache
+    CellCache size_cache, time_cache, score_cache;
     // 已应用缓存（避免同值重写触发 style/repaint）
     QString applied_status;
     fk::PillBadge::Tone applied_tone = fk::PillBadge::Tone::Neutral;
@@ -479,6 +525,20 @@ struct OutRow : RowBundle {
     Stage last_stage = Stage::Probe;
     bool has_stage = false;
     int rows_now = 0; // 行级回调折算的当前行（progress_max_row 同口径）
+    // ---- M10-W1（T9a；C12 §5.3）现有事件面的状态机中间态（不依赖 W1-T7 新事件）----
+    // 事件序列真源 = core/progress.cpp ProgressMux：正常 = Encode 0/…/Encode 1.0（强制）→
+    // MetaWrite 0（写入）→ MetaWrite 1.0（强制）；冲突跳过 = **首个输出事件即 MetaWrite 1.0**
+    // （on_output_skipped，encode 段不单独发射）；仅元数据 = MetaWrite 0
+    // 起（on_output_no_encode）。
+    bool got_output_event = false; // 是否收到过本输出的 phase 事件（「首事件」判定）
+    bool seen_encode = false;      // 是否进入过 Encode 段（跳过判定：无 Encode 段）
+    bool score_pending = false;    // Encode frac>=1.0 且尚无 MetaWrite → 「评分中」
+    bool meta_done_seen = false;   // MetaWrite frac=1.0 → 「已完成」（终端事件前的中间态）
+    bool skip_seen = false;        // 首事件即 MetaWrite 1.0（无 Encode 段）→ 「跳过」
+    // M10-W1（T9b；C14/§5.3）：首次 OutputDone（metric Off）后评分列显示「评分中」，等评分池
+    // 补发的第二次 OutputDone（含 metric）填分。仅「本批启用评分 + 该行成功」时置位；
+    // 收到任何非 Off 的 metric（OutputDone 或终态兜底）即清零。
+    bool score_wait = false;
     // 终态事实（字节 · 压缩比 · 耗时；失败原因）
     OutKind kind = OutKind::Queued;
     qint64 bytes = 0;
@@ -492,6 +552,7 @@ struct OutRow : RowBundle {
 struct FileRow : RowBundle {
     QWidget *group = nullptr;
     QVector<OutRow> outs;
+    int index = -1; // 注册表下标（C15：dirty-row 行脏标记的键）
     // 共享段（§7.2 前三行；一次）
     float shared_probe = 0.f, shared_decode = 0.f, shared_orient = 0.f, shared_color = 0.f;
     Stage shared_stage = Stage::Probe;
@@ -570,19 +631,31 @@ struct RunState {
 
     // 运行态
     bool running = false, finished = false, cancel_requested = false;
-    bool dirty = false;
     int formats = 1;
     std::size_t terminal_files = 0, started_files = 0;
     std::uint64_t out_bytes = 0;
     QString out_root;
     QElapsedTimer clock;
     QTimer *flush = nullptr;
+    // ---- C15（T9a，§5.4）：双通道 flush + dirty-row 渲染 ----
+    // dirty_state  = 状态翻转（阶段切换/评分开始/输出完成/评分到达/终态）→ singleShot(0) 立即刷；
+    // dirty_progress = 数值/百分比 → 60ms 合并（flush 定时器）；两者的行级落点 = row_dirty。
+    bool dirty_progress = false;
+    bool dirty_state = false;
+    bool state_flush_pending = false; // 已排程一次 singleShot(0)（避免同拍重复排程）
+    bool overview_dirty = false;      // 总览卡读数（两通道共用）
+    std::vector<bool> row_dirty;      // 逐文件行脏位（与 files 同长；flush 只渲染脏文件）
     // 终态读数（end_run 的引擎汇总；未结束 → 显示走实时折算）
     bool has_summary = false;
     double summary_total_ms = 0.0, summary_mb_s = 0.0, summary_avg_ms = 0.0;
     quint64 summary_peak_bytes = 0; // A29：RunSummary::peak_bytes（像素预算峰值，单源）
     int summary_threads_est = 0;    // R-078：RunSummary::threads_total_est（峰值活跃线程估算）
 };
+
+// C15（T9a）：双通道 flush / dirty-row 的标记入口（定义在渲染段之后；apply_progress /
+// apply_terminal 与 PageRun 成员函数使用）。contract：file_index = FileRow::index；-1 = 只刷总览。
+void mark_progress(RunState &s, int file_index);
+void mark_state(RunState &s, int file_index);
 
 // R-185（M7-R2.1-F3）：注册表 pimpl 两套解法统一为 RAII —— 原 page_run 走 QHash<裸指针> +
 // 裸 new + destroyed 信号手动 delete/take，page_output 走 unique_ptr（deep-review R-185/E3-06
@@ -699,7 +772,14 @@ QString queue_tip(const RunState &s) {
                : PageRun::tr("等待启动：前序输出完成后开始");
 }
 
-// 输出行阶段文字（未启动/进行中：排队、共享段承载、编码行数、合成、写入）
+// C12（T9a，§5.3）：格式行主文案 = 「编码 NN%」（阶段内百分比；合成/真实同文案）。
+// 行数不再是主文案 —— 真实行级的 R/H 行进 tooltip（out_stage_tip）；合成进度另有斜纹 + tooltip。
+QString out_encode_percent_text(const OutRow &out) {
+    const int pct = static_cast<int>(std::lround(std::clamp(out.enc, 0.f, 1.f) * 100.f));
+    return PageRun::tr("编码 %1%").arg(pct);
+}
+
+// 输出行阶段文字（未启动/进行中：排队、共享段承载、编码百分比、合成、写入）
 QString out_stage_text(const FileRow &file, const RunState &s, int index) {
     const OutRow &out = file.outs.at(index);
     if (!out.started) {
@@ -716,17 +796,23 @@ QString out_stage_text(const FileRow &file, const RunState &s, int index) {
     if (out.has_stage && out.last_stage == Stage::Flatten)
         return write_stage_text(Stage::Flatten);
     if (s.plan.metadata_only)
-        return PageRun::tr("写入"); // 仅元数据模式：同容器零重编码（§3.2/D7）→ 无编码段
+        return PageRun::tr("写入");      // 仅元数据模式：同容器零重编码（§3.2/D7）→ 无编码段
+    return out_encode_percent_text(out); // §5.3：合成/真实同文案（差异只进 tooltip + 斜纹）
+}
+
+// 格式行阶段 tooltip（§5.3）：真实行级 → 「真实行级 · R/H 行」；合成 →
+// 「合成进度（编码器无回调）」。
+QString out_stage_tip(const FileRow &file, const OutRow &out) {
     if (out.synthetic)
-        return PageRun::tr("编码（合成进度）"); // §7.3
+        return PageRun::tr("合成进度（编码器无回调）"); // §7.3 斜纹条口径
     if (file.height > 0)
-        return PageRun::tr("编码 %1/%2 行").arg(out.rows_now).arg(file.height);
-    return PageRun::tr("编码 %1%").arg(std::lround(out_row_frac(file, out) * 100.0));
+        return PageRun::tr("真实行级 · %1/%2 行").arg(out.rows_now).arg(file.height);
+    return PageRun::tr("真实行级进度（本文件无行数读数）");
 }
 
 StatusText out_status(const FileRow &file, const RunState &s, int index) {
     const OutRow &out = file.outs.at(index);
-    switch (out.kind) {
+    switch (out.kind) { // 终态（终端事件定稿）：形态/文案零改动
     case OutKind::Done:
         if (out_zero_bytes(out))
             return {PageRun::tr(pp::ui::term_words::kZeroBytes), fk::PillBadge::Tone::Warn,
@@ -743,20 +829,51 @@ StatusText out_status(const FileRow &file, const RunState &s, int index) {
         return {PageRun::tr(pp::ui::term_words::kCancelled), fk::PillBadge::Tone::Neutral,
                 icons::Name::Stop, false};
     case OutKind::Active:
-        return {out_stage_text(file, s, index), fk::PillBadge::Tone::Accent, icons::Name::Active,
-                false};
     case OutKind::Queued:
         break;
+    }
+    // ---- M10-W1（T9a，§5.3）现有事件面的中间态（终端事件之前）----
+    if (out.skip_seen) { // 首事件即 MetaWrite 1.0（无 Encode 段）→ 跳过
+        return {PageRun::tr(pp::ui::term_words::kSkipped), fk::PillBadge::Tone::Warn,
+                icons::Name::Pending, false,
+                PageRun::tr("跳过：无编码段（冲突跳过 / 元数据已就绪），等待文件终态")};
+    }
+    if (out.meta_done_seen) { // MetaWrite frac=1.0 → 已完成（评分列仍留空到文件终态）
+        return {PageRun::tr(pp::ui::term_words::kDone), fk::PillBadge::Tone::Ok, icons::Name::Check,
+                true, PageRun::tr("已完成：输出已写盘（等待文件终态确认）")};
+    }
+    if (out.score_pending) { // Encode 1.0 且尚无 MetaWrite → 评分中（Accent 档 + 斜纹条）
+        return {PageRun::tr("评分中"), fk::PillBadge::Tone::Accent, icons::Name::Active, false,
+                PageRun::tr("评分中 · 等待 SSIMULACRA 2 评分完成")};
     }
     // A39 ③：未启动的 pill 文案统一收「排队」（交错语义进 tooltip）；「首个未完成行承载共享段」
     // 的行不是排队态（文本 = 共享段阶段词）→ 不带排队 tooltip。
     const QString text = out_stage_text(file, s, index);
-    const bool queued = !out.started && text == PageRun::tr("排队");
-    return {text, fk::PillBadge::Tone::Neutral, icons::Name::Pending, false,
-            queued ? queue_tip(s) : QString()};
+    if (!out.started) {
+        const bool queued = text == PageRun::tr("排队");
+        return {text, fk::PillBadge::Tone::Neutral, icons::Name::Pending, false,
+                queued ? queue_tip(s) : QString()};
+    }
+    QString tip = out_stage_tip(file, out);
+    if (out.has_stage && out.last_stage == Stage::MetaWrite)
+        tip = PageRun::tr("写入元数据与文件时间");
+    else if (out.has_stage && out.last_stage == Stage::Flatten)
+        tip = PageRun::tr("合成带 alpha 的输入（共享段）");
+    return {text, fk::PillBadge::Tone::Accent, icons::Name::Active, false, tip};
 }
 
-// 分组行状态（文件级）
+// 组行聚合用的「已结算」= 终态 + 中间态已完成/跳过（§5.3：k = 已结算输出数）。
+// 与全局 tally/settled_outputs 分开：后者只认终态事件事实（进度/汇总口径零改动）。
+int display_settled_outputs(const FileRow &file) {
+    int n = 0;
+    for (const OutRow &out : file.outs) {
+        if (settled_kind(out.kind) || out.skip_seen || out.meta_done_seen)
+            ++n;
+    }
+    return n;
+}
+
+// 分组行状态（文件级；M10-W1/T9a：§5.3 聚合态 —— Running 时不再回显过期 shared_stage「色彩」）
 StatusText file_status(const FileRow &file, const RunState &s) {
     bool zero = false;
     bool any_ok = false, any_bad = false;
@@ -798,8 +915,38 @@ StatusText file_status(const FileRow &file, const RunState &s) {
     default:
         break;
     }
-    return {shared_stage_text(file.shared_stage), fk::PillBadge::Tone::Accent, icons::Name::Active,
-            false};
+    if (file.terminal) { // 未列终态值兜底（保持现状文案）
+        return {shared_stage_text(file.shared_stage), fk::PillBadge::Tone::Accent,
+                icons::Name::Active, false};
+    }
+    // Running（非终态）：共享段**真正进行中**（无输出已启动）→ 保留共享段语义（§5.3 第二行）；
+    // 否则按输出阶段聚合：写入中 > 评分中 > 编码中 k/n（k = 已结算输出数，§5.3）。
+    if (file.started && !any_output_started(file)) {
+        return {shared_stage_text(file.shared_stage), fk::PillBadge::Tone::Accent,
+                icons::Name::Active, false};
+    }
+    bool any_scoring = false;
+    bool any_writing = false;
+    for (const OutRow &out : file.outs) {
+        if (settled_kind(out.kind) || out.skip_seen || out.meta_done_seen)
+            continue;
+        if (out.score_pending) {
+            any_scoring = true;
+        } else if (out.has_stage &&
+                   (out.last_stage == Stage::MetaWrite || out.last_stage == Stage::Flatten)) {
+            any_writing = true;
+        }
+    }
+    const int n = static_cast<int>(file.outs.size());
+    const int k = display_settled_outputs(file);
+    if (any_writing)
+        return {PageRun::tr("写入中 %1/%2").arg(k).arg(n), fk::PillBadge::Tone::Accent,
+                icons::Name::Active, false};
+    if (any_scoring)
+        return {PageRun::tr("评分中 %1/%2").arg(k).arg(n), fk::PillBadge::Tone::Accent,
+                icons::Name::Active, false};
+    return {PageRun::tr("编码中 %1/%2").arg(k).arg(n), fk::PillBadge::Tone::Accent,
+            icons::Name::Active, false};
 }
 
 // ---- 数值列（§4.2 数值档 = 右对齐 + tabular）----
@@ -810,18 +957,35 @@ QString out_size_text(const OutRow &out) {
     return QStringLiteral("—");
 }
 
-QString ratio_text(double ratio) {
-    return ratio > 0.0 ? QStringLiteral("%1×").arg(ratio, 0, 'f', 1) : QStringLiteral("—");
-}
+// C10/C11（M10-W1）：原「速度列」的压缩比文本 `ratio_text` 随列一并退役（压缩比只进大小列
+// tooltip = ratio_tip；见下）。
 
-// 速度列 tooltip：**标基线**（修 3-11：「0.6×」是相对源文件的压缩倍数，不是一个"速度"）
-QString speed_tip(qint64 src_bytes, qint64 out_bytes, double ratio) {
+// 大小列 tooltip（C11，M10-W1：压缩比从已删的速度列迁入本列 tooltip）—— **标基线**
+// （修 3-11：「0.6×」是相对源文件的压缩倍数，不是一个"速度"）。ratio-tip
+// 探针断言含「压缩比」与「×」。
+QString ratio_tip(qint64 src_bytes, qint64 out_bytes, double ratio) {
     if (ratio <= 0.0 || out_bytes <= 0)
         return PageRun::tr("压缩比 · 相对源文件（源文件字节 ÷ 输出字节）");
     return PageRun::tr("压缩比 · 相对源文件：%1 ÷ %2 = %3×")
         .arg(fmt_bytes(static_cast<quint64>(std::max<qint64>(0, src_bytes))),
              fmt_bytes(static_cast<quint64>(std::max<qint64>(0, out_bytes))))
         .arg(ratio, 0, 'f', 2);
+}
+
+// 名称列 tooltip（C10，M10-W1）：**完整路径**（组行附 宽×高 · 大小；输出行附格式名）。
+// 显示文本 = 文件名（组行）/ 格式名（输出行），中间省略；语义全文仍在 ppFullText（探针钩子）。
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)：参数语义由名字固定
+QString group_name_tip(const QString &path, int width, int height, qint64 src_bytes) {
+    QStringList parts;
+    if (width > 0 && height > 0)
+        parts << QStringLiteral("%1×%2").arg(width).arg(height);
+    if (src_bytes > 0)
+        parts << fmt_bytes(static_cast<quint64>(std::max<qint64>(0, src_bytes)));
+    return parts.isEmpty() ? path : path + QLatin1Char('\n') + parts.join(QStringLiteral(" · "));
+}
+
+QString out_name_tip(const QString &path, const QString &format_id) {
+    return path + QLatin1Char('\n') + PageRun::tr("输出格式：%1").arg(format_name(format_id));
 }
 
 // 分组读数（Σ 字节 / Σ 耗时 / 源 ÷ Σ 输出）
@@ -893,12 +1057,26 @@ QString tally_text(const Tally &t) {
 }
 
 // ===========================================================================
-// 事件 → 行状态（§7.2/§7.3；M4-T14 语义零改动）
+// 事件 → 行状态（§7.2/§7.3；M4-T14 语义零改动；M10-W1/T9a：C12 中间态 + C15 双通道标记）
 // ===========================================================================
 
+// C12（T9a）：现有事件面的阶段状态推进。事件序列真源 = core/progress.cpp 的 ProgressMux：
+//   * 正常输出：Encode 0/…/Encode 1.0（on_output_encode_done 强制点）→ MetaWrite 0（写入）→
+//     MetaWrite 1.0（on_output_metawrite_done 强制点）；
+//   * 冲突跳过：**首个输出事件即 MetaWrite 1.0**（on_output_skipped，无 Encode 段）；
+//   * 仅元数据：MetaWrite 0 起（on_output_no_encode）→ MetaWrite 1.0。
+// 状态翻转（阶段切换/评分开始/完成/跳过/合成标识变化）走 dirty_state（singleShot(0) 立即刷），
+// 其余（百分比/行数等数值）走 dirty_progress（60ms 合并）—— §5.4 双通道。
 void apply_progress(RunState &s, FileRow &file, const ProgressInfo &pi) {
     if (pi.output_index >= 0 && pi.output_index < file.outs.size()) {
         OutRow &out = file.outs[pi.output_index];
+        bool flip = false;
+        const bool first_output_event = !out.got_output_event;
+        if (first_output_event)
+            flip = true;
+        out.got_output_event = true;
+        if (!out.has_stage || out.last_stage != pi.stage || out.synthetic != pi.synthetic)
+            flip = true;
         out.started = true;
         if (!settled_kind(out.kind))
             out.kind = OutKind::Active; // 进行中（终态由 apply_terminal 定稿，不被进度回退）
@@ -906,24 +1084,49 @@ void apply_progress(RunState &s, FileRow &file, const ProgressInfo &pi) {
         out.last_stage = pi.stage;
         out.has_stage = true;
         if (pi.stage == Stage::Encode) {
+            out.seen_encode = true;
             out.enc = std::max(out.enc, pi.stage_frac);
             if (file.height > 0) {
                 out.rows_now = std::max(out.rows_now,
                                         static_cast<int>(std::lround(pi.stage_frac * file.height)));
             }
+            // Encode frac=1.0（编码完成强制点）且尚无 MetaWrite 事件 → 「评分中」（§5.3）
+            if (pi.stage_frac >= 1.0f && !out.score_pending && !out.meta_done_seen &&
+                !out.skip_seen) {
+                out.score_pending = true;
+                flip = true;
+            }
         } else if (pi.stage == Stage::MetaWrite) {
+            if (out.score_pending) { // 评分结束 → 进入写入
+                out.score_pending = false;
+                flip = true;
+            }
+            // 「跳过」：首个输出事件即 MetaWrite 1.0（无 Encode 段）—— on_output_skipped 的形状
+            if (first_output_event && !out.seen_encode && pi.stage_frac >= 1.0f) {
+                out.skip_seen = true;
+                flip = true;
+            }
             out.meta = std::max(out.meta, pi.stage_frac);
+            // 「已完成」中间态：MetaWrite frac=1.0（终端事件前；评分列仍留空到文件终态）
+            if (!out.skip_seen && out.seen_encode && pi.stage_frac >= 1.0f && !out.meta_done_seen) {
+                out.meta_done_seen = true;
+                flip = true;
+            }
         }
         if (!file.started) {
             file.started = true;
             ++s.started_files;
+            flip = true;
         }
+        if (flip)
+            mark_state(s, file.index);
+        else
+            mark_progress(s, file.index);
         return;
     }
     if (pi.output_index < 0) {
         const float weight = shared_weight(pi.stage);
-        if (weight <= 0.f)
-            return;
+        const bool stage_changed = !file.started || file.shared_stage != pi.stage;
         const float contribution = weight * pi.stage_frac;
         switch (pi.stage) {
         case Stage::Probe:
@@ -939,10 +1142,83 @@ void apply_progress(RunState &s, FileRow &file, const ProgressInfo &pi) {
             file.shared_color = std::max(file.shared_color, contribution);
             break;
         default:
+            // Flatten（合成）/其余共享段：只承载阶段文案（权重 0，不进进度算术；§5.3 共享段语义）
             break;
         }
         file.shared_stage = pi.stage;
+        // 共享段事件也可能承担「首个事件」：阶段切换/首次共享事件 → 状态翻转（排队 → 探测/色彩…）
+        if (stage_changed || weight <= 0.f)
+            mark_state(s, file.index);
+        else
+            mark_progress(s, file.index);
     }
+}
+
+// M10-W1（T9b；C12/C13/C14）：逐输出终态事件 → 该输出行**立即**结算（不等文件终态）。
+// 事实来源 = `FileEvent::output`（引擎在"编码 + metawrite 完成/跳过/失败/取消"时发出的行快照；
+// 评分池完成后再发一次**含 metric** 的新对象）。幂等口径 = 后到覆盖先到、同值早退。
+void apply_output_done(RunState &s, FileRow &file, int index, const pp::OutputResult &row) {
+    if (index < 0 || index >= file.outs.size())
+        return;
+    OutRow &out = file.outs[index];
+    if (!file.started) {
+        file.started = true;
+        ++s.started_files;
+    }
+    // ---- 行事实（大小 / 耗时 / 压缩比 / 失败原因 / warnings）----
+    out.bytes = static_cast<qint64>(row.out_bytes);
+    out.ratio = (out.bytes > 0 && file.src_bytes > 0)
+                    ? static_cast<double>(file.src_bytes) / static_cast<double>(out.bytes)
+                    : 0.0;
+    out.ms = row.t.encode_ms + row.t.metawrite_ms;
+    out.error = QString::fromStdString(row.error);
+    QStringList wl;
+    for (const pp::Warning &w : row.warnings)
+        wl << QString::fromStdString(w.detail);
+    out.warnings = wl.join(QStringLiteral("；"));
+    // ---- 行终态（R-172 显式 OutputState；Pending = 旧行尚未迁移 → 按 ok/skipped/error 兜底）----
+    OutKind kind = OutKind::Active;
+    switch (row.state) {
+    case pp::OutputState::Ok:
+        kind = OutKind::Done;
+        break;
+    case pp::OutputState::Skipped:
+        kind = OutKind::Skipped;
+        break;
+    case pp::OutputState::Failed:
+        kind = OutKind::Failed;
+        break;
+    case pp::OutputState::Cancelled:
+        kind = OutKind::Cancelled;
+        break;
+    case pp::OutputState::Pending:
+        if (!row.error.empty())
+            kind = OutKind::Failed;
+        else if (row.skipped)
+            kind = OutKind::Skipped;
+        else if (row.ok)
+            kind = OutKind::Done;
+        break;
+    }
+    if (kind != OutKind::Active)
+        out.kind = kind;
+    // 输出级终态事实已到 → 「评分中」/「已完成」/「跳过」中间态标记退役
+    out.score_pending = false;
+    out.meta_done_seen = false;
+    out.skip_seen = false;
+    // ---- 评分列（C14）----
+    if (row.metric_state != pp::MetricState::Off) {
+        // 第二次 OutputDone（评分池补发，含 metric）：立即填分；Unavailable/Failed → 「—」+ 原因
+        out.metric_state = row.metric_state;
+        out.metric_score = row.metric_ssimulacra2;
+        out.metric_note = QString::fromStdString(row.metric_note);
+        out.score_wait = false;
+    } else if (out.metric_state == pp::MetricState::Off) {
+        // 首次 OutputDone（异步评分尚未回）：成功行 + 本批启用评分 → 评分列「评分中」；
+        // 否则留空（§2.5：未发生的量不显示）。已有分数不被 metric Off 的迟到事件覆盖。
+        out.score_wait = s.plan.quality_score && !s.plan.metadata_only && kind == OutKind::Done;
+    }
+    mark_state(s, file.index);
 }
 
 void apply_terminal(RunState &s, FileRow &file, const pp::FileEvent &ev) {
@@ -965,6 +1241,9 @@ void apply_terminal(RunState &s, FileRow &file, const pp::FileEvent &ev) {
     }
     for (int j = 0; j < file.outs.size(); ++j) {
         OutRow &out = file.outs[j];
+        // §5.3：文件终态 = 幂等校准 —— 已由 OutputDone 定稿的行**不再改状态**（只校事实），
+        // 否则终态行的 error 文本会把「已取消」重判成「失败」等（同值早退口径）。
+        const bool settled_by_output = settled_kind(out.kind);
         const pp::OutputResult *row =
             (result != nullptr && j < static_cast<int>(result->outputs.size()))
                 ? &result->outputs[static_cast<std::size_t>(j)]
@@ -980,16 +1259,25 @@ void apply_terminal(RunState &s, FileRow &file, const pp::FileEvent &ev) {
             for (const pp::Warning &w : row->warnings)
                 wl << QString::fromStdString(w.detail);
             out.warnings = wl.join(QStringLiteral("；"));
-            // M8-C2（C11/C12）：评分终态事实（加性字段；Off = 不显示，未发生的量不显示）
-            out.metric_state = row->metric_state;
-            out.metric_score = row->metric_ssimulacra2;
-            out.metric_note = QString::fromStdString(row->metric_note);
-            if (out.error.isEmpty() && row->skipped)
-                out.kind = OutKind::Skipped;
-            else if (out.error.isEmpty() && row->ok)
-                out.kind = OutKind::Done;
-            else if (!out.error.isEmpty())
-                out.kind = OutKind::Failed;
+            // M8-C2（C11/C12）+ M10-W1（T9b）：评分终态事实（加性字段；Off = 不显示）。
+            // 引擎的评分是异步的 → 文件终态 FileResult 的行 metric 恒 Off（引擎移交事项①），
+            // 故**只在尚无任何 metric 时**用终态值兜底；已由 OutputDone 填好的分数/「评分中」
+            // 绝不被终态的 metric Off 清空（§5.3「文件终态 = 幂等校准，不覆盖已定稿行」）。
+            if (out.metric_state == pp::MetricState::Off) {
+                out.metric_state = row->metric_state;
+                out.metric_score = row->metric_ssimulacra2;
+                out.metric_note = QString::fromStdString(row->metric_note);
+                if (out.metric_state != pp::MetricState::Off)
+                    out.score_wait = false;
+            }
+            if (!settled_by_output) {
+                if (out.error.isEmpty() && row->skipped)
+                    out.kind = OutKind::Skipped;
+                else if (out.error.isEmpty() && row->ok)
+                    out.kind = OutKind::Done;
+                else if (!out.error.isEmpty())
+                    out.kind = OutKind::Failed;
+            }
         }
         if (!settled_kind(out.kind)) {
             // R-187：平行状态机互译单点（原内联 switch 抽为 out_kind_of_file_state）
@@ -997,7 +1285,12 @@ void apply_terminal(RunState &s, FileRow &file, const pp::FileEvent &ev) {
         }
         if (out.kind == OutKind::Failed && out.error.isEmpty())
             out.error = file_error; // 文件级失败（plan/decode）→ 逐输出行回落到聚合原因
+        // 中间态标记退役（终端事实定稿；幂等校准由 settled 分支接管）
+        out.score_pending = false;
+        out.meta_done_seen = false;
+        out.skip_seen = false;
     }
+    mark_state(s, file.index);
 }
 
 // ===========================================================================
@@ -1067,10 +1360,14 @@ void render_out_row(RunState &s, FileRow &file, int index) {
     OutRow &out = file.outs[index];
     // 条色：终态按终态色；进行中（含"首个未完成行承载共享段进度"那一行）= accent 实心；
     // 未启动 = 轨道（无填充）。0 字节 = 琥珀（修 3-10：禁绿色成功条）。
+    // M10-W1（T9a，§5.3）：中间态 —— 「评分中」= Accent 斜纹（进度不可知）；「已完成」中间态 =
+    // 绿满格；「跳过」中间态 = 琥珀（C8 无跳过档）。
     const bool carries_shared = !out.started && file.started && !file.terminal &&
                                 !any_output_started(file) && index == first_unstarted(file);
+    const bool settled = settled_kind(out.kind);
+    bool synth = out.synthetic;
     fk::ProgressStrip::Kind kind = fk::ProgressStrip::Kind::Pending;
-    if (settled_kind(out.kind)) {
+    if (settled) {
         switch (out.kind) {
         case OutKind::Done:
             kind =
@@ -1087,10 +1384,16 @@ void render_out_row(RunState &s, FileRow &file, int index) {
         case OutKind::Queued:
             break;
         }
+    } else if (out.skip_seen) {
+        kind = fk::ProgressStrip::Kind::Warn;
+    } else if (out.meta_done_seen) {
+        kind = fk::ProgressStrip::Kind::Done; // MetaWrite 1.0 → 已完成（终端确认前）
     } else if (out.started || carries_shared) {
         kind = fk::ProgressStrip::Kind::Active;
+        if (out.score_pending)
+            synth = true; // 评分中：阶段进度不可知 → 斜纹（§5.3 / §8 语义兼容）
     }
-    out.bar->set_state(kind, out_row_frac(file, out), out.synthetic);
+    out.bar->set_state(kind, out_row_frac(file, out), synth);
 
     const StatusText st = out_status(file, s, index);
     out.mark->set_mark(st.icon, tone_color(s, st.tone));
@@ -1103,9 +1406,8 @@ void render_out_row(RunState &s, FileRow &file, int index) {
                          out_zero_bytes(out)
                              ? s.tokens.warn
                              : (out.kind == OutKind::Done ? s.tokens.text : s.tokens.text3));
-    out.speed_cache.apply(out.speed, ratio_text(out.ratio),
-                          out.ratio > 0 ? s.tokens.text : s.tokens.text3);
-    out.speed->setToolTip(speed_tip(file.src_bytes, out.bytes, out.ratio));
+    // C11（M10-W1）：压缩比不再是独立列 —— 作为大小列的 tooltip（基线口径不变，修 3-11）
+    out.size->setToolTip(ratio_tip(file.src_bytes, out.bytes, out.ratio));
     out.time_cache.apply(out.time, out.ms > 0.0 ? fmt_secs(out.ms) : QStringLiteral("—"),
                          out.ms > 0.0 ? s.tokens.text : s.tokens.text3);
 
@@ -1149,25 +1451,34 @@ void render_out_row(RunState &s, FileRow &file, int index) {
     QString score_text;
     QColor score_col = s.tokens.text3;
     QString score_tip;
-    switch (out.metric_state) {
-    case pp::MetricState::Ok:
-        score_text = QString::number(out.metric_score, 'f', 2); // 2 位小数（实数，不 clamp）
-        score_col = score_tint(s.tokens, out.metric_score);
-        score_tip = score_scale_tip();
-        if (!out.metric_note.isEmpty())
-            score_tip += PageRun::tr("\n备注：%1").arg(out.metric_note);
-        break;
-    case pp::MetricState::Unavailable:
-    case pp::MetricState::Failed:
-        // 「—」为简洁形态；完整原因进 tooltip（列宽固定 → 不在单元格内塞长文案导致裁切）
-        score_text = QStringLiteral("—");
-        score_tip =
-            PageRun::tr("SSIMULACRA 2 不可用：%1")
-                .arg(out.metric_note.isEmpty() ? PageRun::tr("未报告原因") : out.metric_note);
-        break;
-    case pp::MetricState::Off:
-    default:
-        break; // 空 = 未发生的量不显示（评分关闭/仅元数据）
+    if (out.score_wait && out.metric_state == pp::MetricState::Off) {
+        // M10-W1（T9b；C14/§5.3）：首次 OutputDone 已结算、评分池结果未到 →「评分中」（Accent
+        // 档）。
+        // 这是**诚实中间态**：行已写盘（状态列「已完成」），分数在评（不虚增、不显示占位分数）。
+        score_text = PageRun::tr("评分中");
+        score_col = s.tokens.accent;
+        score_tip = PageRun::tr("SSIMULACRA 2 评分中 · 评分池结果到达后立即填入本列");
+    } else {
+        switch (out.metric_state) {
+        case pp::MetricState::Ok:
+            score_text = QString::number(out.metric_score, 'f', 2); // 2 位小数（实数，不 clamp）
+            score_col = score_tint(s.tokens, out.metric_score);
+            score_tip = score_scale_tip();
+            if (!out.metric_note.isEmpty())
+                score_tip += PageRun::tr("\n备注：%1").arg(out.metric_note);
+            break;
+        case pp::MetricState::Unavailable:
+        case pp::MetricState::Failed:
+            // 「—」为简洁形态；完整原因进 tooltip（列宽固定 → 不在单元格内塞长文案导致裁切）
+            score_text = QStringLiteral("—");
+            score_tip =
+                PageRun::tr("SSIMULACRA 2 不可用：%1")
+                    .arg(out.metric_note.isEmpty() ? PageRun::tr("未报告原因") : out.metric_note);
+            break;
+        case pp::MetricState::Off:
+        default:
+            break; // 空 = 未发生的量不显示（评分关闭/仅元数据）
+        }
     }
     out.score_cache.apply(out.score, score_text, score_col);
     out.score->setToolTip(score_tip);
@@ -1185,9 +1496,8 @@ void render_file_row(RunState &s, FileRow &file) {
                           facts.bytes > 0 ? fmt_bytes(static_cast<quint64>(facts.bytes))
                                           : QStringLiteral("—"),
                           facts.bytes > 0 ? s.tokens.text : s.tokens.text3);
-    file.speed_cache.apply(file.speed, ratio_text(facts.ratio),
-                           facts.ratio > 0 ? s.tokens.text : s.tokens.text3);
-    file.speed->setToolTip(speed_tip(file.src_bytes, facts.bytes, facts.ratio));
+    // C11（M10-W1）：组行压缩比（源 ÷ Σ 输出）同样并入大小列 tooltip
+    file.size->setToolTip(ratio_tip(file.src_bytes, facts.bytes, facts.ratio));
     file.time_cache.apply(file.time, facts.ms > 0.0 ? fmt_secs(facts.ms) : QStringLiteral("—"),
                           facts.ms > 0.0 ? s.tokens.text : s.tokens.text3);
     // M8-W2（需求3）：文件组行不显示评分（不做平均）——「—」+ tooltip 说明（未发生的量不显示）。
@@ -1403,13 +1713,8 @@ void refresh_action_row(RunState &s) {
                                       : PageRun::tr("按当前设置再运行一批"));
 }
 
-// 段⑦（R-188）：任务表（组行 + 逐输出行）与日志尾卡
-void refresh_task_table(RunState &s) {
-    for (FileRow &file : s.files) {
-        render_file_row(s, file);
-        for (int j = 0; j < file.outs.size(); ++j)
-            render_out_row(s, file, j);
-    }
+// 段⑦-a（R-188 / M10-W1-C15）：任务卡表头/空态 + 日志尾（只在全量刷新/日志变化时走）
+void refresh_task_chrome(RunState &s) {
     const bool has_rows = !s.files.isEmpty();
     s.table_head->setVisible(has_rows);
     s.task_empty->setVisible(!has_rows);
@@ -1420,8 +1725,30 @@ void refresh_task_table(RunState &s) {
     s.open_full_log->setEnabled(!s.log_tail.isEmpty() || !s.log_name_text.isEmpty());
 }
 
-// R-188：60ms flush 的统一入口 —— 共享读数一次计算 + 段①…⑦ 按原序调用（行为零变化）。
-void refresh_widgets(RunState &s) {
+// 段⑦-b（R-188 / C15）：逐行渲染。dirty-row：只渲染 row_dirty 标脏的文件；full=true 时全量。
+// 返回本次渲染的文件数（页面动态属性 ppRenderedRows 供 flush-state/dirty-row 探针取证）。
+int refresh_rows(RunState &s, bool full) {
+    int rendered = 0;
+    const int count = static_cast<int>(s.files.size());
+    for (int i = 0; i < count; ++i) {
+        const bool dirty = full || (i < static_cast<int>(s.row_dirty.size()) && s.row_dirty[i]);
+        if (!dirty)
+            continue;
+        FileRow &file = s.files[i];
+        render_file_row(s, file);
+        for (int j = 0; j < file.outs.size(); ++j)
+            render_out_row(s, file, j);
+        if (i < static_cast<int>(s.row_dirty.size()))
+            s.row_dirty[i] = false;
+        ++rendered;
+    }
+    if (s.page != nullptr)
+        s.page->setProperty("ppRenderedRows", rendered); // 探针钩子（只读取值，不改行为）
+    return rendered;
+}
+
+// C15 / §5.4：总览卡读数（段①…⑥）—— 共享读数一次计算（行为与 R-188 版逐字一致）。
+void refresh_overview(RunState &s) {
     const int total_outputs = static_cast<int>(s.files.size()) * s.formats;
     const double frac = s.finished ? 1.0 : run_frac(s);
     const Tally tally = run_tally(s);
@@ -1432,7 +1759,57 @@ void refresh_widgets(RunState &s) {
     refresh_overview_counts(s, tally);                                 // 段④
     refresh_state_pill(s, tally);                                      // 段⑤
     refresh_action_row(s);                                             // 段⑥
-    refresh_task_table(s);                                             // 段⑦
+}
+
+// R-188：全量刷新入口（begin_run/reset/end_run/set_tokens/set_log_tail 用）—— 段①…⑦ 全走。
+void refresh_widgets(RunState &s) {
+    refresh_overview(s);
+    refresh_task_chrome(s);
+    refresh_rows(s, /*full=*/true);
+}
+
+// ---- C15（§5.4）双通道 flush ----
+// dirty_state：singleShot(0) 立即刷一帧（状态翻转不让用户等到 60ms 节拍）；
+// dirty_progress：60ms 定时器合并（数值/百分比高频，避免每事件重绘）。
+void flush_rows_now(RunState &s) {
+    if (s.overview_dirty)
+        refresh_overview(s);
+    s.overview_dirty = false;
+    refresh_rows(s, /*full=*/false);
+}
+
+void flush_state(RunState &s) {
+    s.state_flush_pending = false;
+    if (!s.dirty_state)
+        return;
+    s.dirty_state = false;
+    flush_rows_now(s);
+    s.dirty_progress = false; // 本次状态帧已含最新行状态（进度通道无需再补一帧）
+}
+
+void flush_progress(RunState &s) {
+    if (!s.dirty_progress)
+        return;
+    s.dirty_progress = false;
+    flush_rows_now(s);
+}
+
+void mark_progress(RunState &s, int file_index) {
+    s.dirty_progress = true;
+    s.overview_dirty = true;
+    if (file_index >= 0 && file_index < static_cast<int>(s.row_dirty.size()))
+        s.row_dirty[static_cast<std::size_t>(file_index)] = true;
+}
+
+void mark_state(RunState &s, int file_index) {
+    s.dirty_state = true;
+    s.overview_dirty = true;
+    if (file_index >= 0 && file_index < static_cast<int>(s.row_dirty.size()))
+        s.row_dirty[static_cast<std::size_t>(file_index)] = true;
+    if (s.state_flush_pending || s.page == nullptr)
+        return; // 同拍合并：一帧状态刷即可（dirty_state 仍累积）
+    s.state_flush_pending = true;
+    QTimer::singleShot(0, s.page, [&s]() { flush_state(s); });
 }
 
 // ===========================================================================
@@ -1496,7 +1873,7 @@ ScoreCell make_score_cell(QWidget *parent, const QString &cell_name, const QStri
     ScoreCell out;
     out.cell = new QWidget(parent);
     out.cell->setObjectName(cell_name);
-    out.cell->setFixedWidth(kScoreColW);
+    out.cell->setFixedWidth(RunTableColumns::score);
     auto *line = new QHBoxLayout(out.cell);
     line->setContentsMargins(0, 0, 0, 0);
     line->setSpacing(0);
@@ -1519,7 +1896,7 @@ StatusCell make_status_cell(QWidget *parent, const QString &object_name,
                             const theme::Tokens &tokens) {
     StatusCell out;
     out.cell = new QWidget(parent);
-    out.cell->setFixedWidth(kStatusColW);
+    out.cell->setFixedWidth(RunTableColumns::status);
     auto *line = new QHBoxLayout(out.cell);
     line->setContentsMargins(0, 0, 0, 0);
     line->setSpacing(0);
@@ -1543,25 +1920,27 @@ QWidget *make_table_row(QWidget *parent, const QString &object_name, int height)
 }
 
 // 行命名（探针钩子；test/ui_smoke.py 的 run-geom 与 mainwindow 的 T14 探针按这些名字取证）
+// M10-W1（A11 收缩）：删除速度列 → `pp-run-speed-*` / `pp-run-gspeed-*` 钩子族**一并删除**
+// （见 docs/m10-adjudications.md A11；no-speed 探针对其做否定断言）。
 struct RowNames {
-    QString row, mark, name, bar, size, speed, time, score, score_text, status;
+    QString row, mark, name, bar, size, time, score, score_text, status;
 };
 
 RowNames out_names(int i, int j) {
     const QString tag = QStringLiteral("%1-%2").arg(i).arg(j);
     const auto n = [&tag](const char *prefix) { return QString::fromLatin1(prefix) + tag; };
     // M8-W2（需求3）：评分列单元格/文本沿用旧隐藏子行的探针钩子名（pp-run-score-* / -text-）。
-    return {n("pp-run-row-"),        n("pp-run-mark-"),  n("pp-run-oname-"), n("pp-run-bar-"),
-            n("pp-run-size-"),       n("pp-run-speed-"), n("pp-run-time-"),  n("pp-run-score-"),
-            n("pp-run-score-text-"), n("pp-run-status-")};
+    return {n("pp-run-row-"),   n("pp-run-mark-"),       n("pp-run-oname-"),
+            n("pp-run-bar-"),   n("pp-run-size-"),       n("pp-run-time-"),
+            n("pp-run-score-"), n("pp-run-score-text-"), n("pp-run-status-")};
 }
 
 RowNames group_names(int i) {
     const QString tag = QString::number(i);
     const auto n = [&tag](const char *prefix) { return QString::fromLatin1(prefix) + tag; };
-    return {n("pp-run-group-"),       n("pp-run-gmark-"),  n("pp-run-gname-"), n("pp-run-gbar-"),
-            n("pp-run-gsize-"),       n("pp-run-gspeed-"), n("pp-run-gtime-"), n("pp-run-gscore-"),
-            n("pp-run-gscore-text-"), n("pp-run-gstatus-")};
+    return {n("pp-run-group-"),  n("pp-run-gmark-"),       n("pp-run-gname-"),
+            n("pp-run-gbar-"),   n("pp-run-gsize-"),       n("pp-run-gtime-"),
+            n("pp-run-gscore-"), n("pp-run-gscore-text-"), n("pp-run-gstatus-")};
 }
 
 // 行骨架（名称列 = 弹性列，其余定宽；缩进只作用于名称列）
@@ -1571,7 +1950,6 @@ struct RowSkeleton {
     ElidedLabel *name = nullptr;
     fk::ProgressStrip *bar = nullptr;
     ElidedLabel *size = nullptr;
-    ElidedLabel *speed = nullptr;
     ElidedLabel *time = nullptr;
     QWidget *score_cell = nullptr;
     ElidedLabel *score = nullptr;
@@ -1586,7 +1964,9 @@ RowSkeleton make_row_skeleton(QWidget *parent, const RowNames &names, const them
     out.mark = new RunMarkLabel(out.row);
     out.mark->setObjectName(names.mark);
     line->addWidget(out.mark);
-    out.name = new ElidedLabel(out.row);
+    // C10（M10-W1）：名称列 squeeze=true + ElideMiddle —— 长文件名**中间省略**（保留扩展名）
+    // 而不是把列撑宽；剩余宽度 = RunTableColumns::name_width（唯一 stretch 项）。
+    out.name = new ElidedLabel(out.row, /*squeeze=*/true, Qt::ElideMiddle);
     out.name->setObjectName(names.name);
     out.name->setFont(theme::font(theme::Typography::small_px, output_row ? QFont::Normal : 600));
     out.name->setProperty(kRunLabelProperty,
@@ -1596,14 +1976,12 @@ RowSkeleton make_row_skeleton(QWidget *parent, const RowNames &names, const them
     line->addWidget(out.name, 1);
     out.bar = new fk::ProgressStrip(out.row);
     out.bar->setObjectName(names.bar);
-    out.bar->setFixedWidth(kBarColW);
+    out.bar->setFixedWidth(RunTableColumns::bar);
     out.bar->set_tokens(tokens);
     line->addWidget(out.bar);
-    out.size = make_num_cell(out.row, names.size, kSizeColW);
+    out.size = make_num_cell(out.row, names.size, RunTableColumns::size);
     line->addWidget(out.size);
-    out.speed = make_num_cell(out.row, names.speed, kSpeedColW);
-    line->addWidget(out.speed);
-    out.time = make_num_cell(out.row, names.time, kTimeColW);
+    out.time = make_num_cell(out.row, names.time, RunTableColumns::time);
     line->addWidget(out.time);
     // M8-W2（需求3）：评分列（定宽；组行与输出行同列 → 所有行对齐）
     const ScoreCell score_cell = make_score_cell(out.row, names.score, names.score_text);
@@ -1616,7 +1994,9 @@ RowSkeleton make_row_skeleton(QWidget *parent, const RowNames &names, const them
     return out;
 }
 
-// 表头行（§7.3 表格列题；mockup 逐字：文件 / 输出 · 进度 · 大小 · 速度 · 耗时 · 评分 · 状态）
+// 表头行（§7.3 表格列题，docs/v0.4.0-design.md §5.5/spec §7.3：文件 / 输出 · 进度 · 大小 ·
+// 耗时 · 评分 · 状态 —— **删速度列**）；列宽与行**同一张表**（RunTableColumns）。
+// 探针钩子：pp-run-thead-{name,bar,size,time,score,status}（cols-ok 按与行内列同 x/同宽断言）。
 QWidget *make_table_head(QWidget *parent) {
     auto *head = new QFrame(parent);
     head->setObjectName(QStringLiteral("pp-run-thead"));
@@ -1624,8 +2004,10 @@ QWidget *make_table_head(QWidget *parent) {
     auto *line = new QHBoxLayout(head);
     line->setContentsMargins(kRowPadX, 0, kRowPadX, 0);
     line->setSpacing(kCellGap);
-    const auto label = [head](const QString &text, Qt::Alignment align, int width) {
+    const auto label = [head](const QString &text, Qt::Alignment align, int width,
+                              const char *object_name) {
         auto *l = new QLabel(text, head);
+        l->setObjectName(QString::fromLatin1(object_name));
         l->setProperty(kRunLabelProperty, QString::fromLatin1(kRunHead));
         l->setFont(theme::font(theme::Typography::badge_px, 600));
         l->setAlignment(align | Qt::AlignVCenter);
@@ -1634,17 +2016,28 @@ QWidget *make_table_head(QWidget *parent) {
             l->setFixedWidth(width);
         return l;
     };
-    line->addSpacing(kMarkW);
-    line->addWidget(label(PageRun::tr("文件 / 输出"), Qt::AlignLeft, 0), 1);
-    line->addWidget(label(PageRun::tr("进度"), Qt::AlignLeft, kBarColW));
-    line->addWidget(label(PageRun::tr("大小"), Qt::AlignRight, kSizeColW));
-    line->addWidget(label(PageRun::tr("速度"), Qt::AlignRight, kSpeedColW));
-    line->addWidget(label(PageRun::tr("耗时"), Qt::AlignRight, kTimeColW));
-    // M8-W2（需求3）：表头「评分」列（探针钩子 pp-run-thead-score，按与行内单元格同 x 断言对齐）
-    QLabel *score_head = label(PageRun::tr("评分"), Qt::AlignRight, kScoreColW);
-    score_head->setObjectName(QStringLiteral("pp-run-thead-score"));
-    line->addWidget(score_head);
-    line->addWidget(label(PageRun::tr("状态"), Qt::AlignRight, kStatusColW));
+    // 列题前的状态标记列占位（无列题；固定 16px）—— **必须是控件而非 addSpacing**：
+    // QBoxLayout 对空 spacer 不追加列距（实测 name 列左移 6px），表头就会与行内列错位；
+    // 固定宽控件则与行内 RunMarkLabel 同宽且照常参与列距 → cols-ok（表头 == 行）成立。
+    auto *mark_spacer = new QWidget(head);
+    mark_spacer->setObjectName(QStringLiteral("pp-run-thead-mark"));
+    mark_spacer->setFixedWidth(RunTableColumns::mark);
+    mark_spacer->setAttribute(Qt::WA_TransparentForMouseEvents);
+    line->addWidget(mark_spacer);
+    QLabel *name_head = label(PageRun::tr("文件 / 输出"), Qt::AlignLeft, 0, "pp-run-thead-name");
+    name_head->setMinimumWidth(0); // C10/§5.1：窄窗下名称列可压（不靠文字撑宽）
+    line->addWidget(name_head, 1);
+    line->addWidget(
+        label(PageRun::tr("进度"), Qt::AlignLeft, RunTableColumns::bar, "pp-run-thead-bar"));
+    line->addWidget(
+        label(PageRun::tr("大小"), Qt::AlignRight, RunTableColumns::size, "pp-run-thead-size"));
+    line->addWidget(
+        label(PageRun::tr("耗时"), Qt::AlignRight, RunTableColumns::time, "pp-run-thead-time"));
+    // M8-W2（需求3）：表头「评分」列（按与行内单元格同 x 断言对齐）
+    line->addWidget(
+        label(PageRun::tr("评分"), Qt::AlignRight, RunTableColumns::score, "pp-run-thead-score"));
+    line->addWidget(
+        label(PageRun::tr("状态"), Qt::AlignRight, RunTableColumns::status, "pp-run-thead-status"));
     return head;
 }
 
@@ -1804,8 +2197,9 @@ void build_overview_card(QWidget *parent, RunState *s) {
 
     QObject::connect(s->cancel, &QPushButton::clicked, s->page, [s]() {
         s->cancel_requested = true;
-        s->dirty = true;
-        refresh_widgets(*s); // 立即反馈（不等 60ms flush）
+        // C15：取消是状态翻转（操作行 + 状态胶囊）→ 立即刷一帧 + 60ms 通道兜底
+        mark_state(*s, -1);
+        refresh_widgets(*s); // 立即反馈（不等 singleShot(0) 事件循环）
         emit s->page->cancel_requested();
     });
     QObject::connect(s->open_logs, &QPushButton::clicked, s->page,
@@ -1880,16 +2274,17 @@ void build_logs_card(QWidget *parent, RunState *s) {
 // 行控件（分组行 + 逐输出子行 + 失败原因行）：先建后填（N 格式 N 行；§7.3）
 void build_rows(RunState *s, const QStringList &names) {
     const int formats = s->formats;
+    s->row_dirty.assign(static_cast<std::size_t>(names.size()), true); // C15：新行全脏（首帧全量）
     for (int i = 0; i < names.size(); ++i) {
         const RowSkeleton skel =
             make_row_skeleton(s->list, group_names(i), s->tokens, /*output_row=*/false);
         FileRow file;
+        file.index = i; // C15：dirty-row 行键（apply_progress/apply_terminal 标记用）
         file.group = skel.row;
         file.mark = skel.mark;
         file.name = skel.name;
         file.bar = skel.bar;
         file.size = skel.size;
-        file.speed = skel.speed;
         file.time = skel.time;
         file.score_cell = skel.score_cell;
         file.score = skel.score;
@@ -1903,6 +2298,9 @@ void build_rows(RunState *s, const QStringList &names) {
             file.width = s->plan.widths.at(i);
         if (i < s->plan.bytes.size())
             file.src_bytes = s->plan.bytes.at(i);
+        // C10（M10-W1）：名称列 tooltip = **完整路径**（组行附 宽×高 · 大小）；显示文本仍是
+        // 文件名（中间省略），语义全文挂 ppFullText（ElidedLabel::set_full_text 已写）。
+        file.name->setToolTip(group_name_tip(names.at(i), file.width, file.height, file.src_bytes));
 
         file.outs.reserve(formats);
         for (int j = 0; j < formats; ++j) {
@@ -1914,7 +2312,6 @@ void build_rows(RunState *s, const QStringList &names) {
             out.name = orow.name;
             out.bar = orow.bar;
             out.size = orow.size;
-            out.speed = orow.speed;
             out.time = orow.time;
             out.score_cell = orow.score_cell;
             out.score = orow.score;
@@ -1922,6 +2319,9 @@ void build_rows(RunState *s, const QStringList &names) {
             const QString fmt_id =
                 j < s->plan.format_ids.size() ? s->plan.format_ids.at(j) : QString();
             out.name->set_full_text(QStringLiteral("└ %1").arg(format_name(fmt_id)));
+            // C10（M10-W1）：输出行名称列 tooltip = 源文件完整路径 + 输出格式（格式名本身不会长，
+            // 但仍统一走 ElidedLabel/tooltip 口径）
+            out.name->setToolTip(out_name_tip(names.at(i), fmt_id));
             s->list_layout->addWidget(out.row);
 
             // 失败行原因行（默认隐藏；§7.3「失败行含 └ 原因：… 行」）
@@ -2067,12 +2467,9 @@ PageRun::PageRun(QWidget *parent) : QWidget(parent) {
 
     s->flush = new QTimer(this);
     s->flush->setInterval(kFlushMs); // §7.4：GUI 节流 60ms
-    connect(s->flush, &QTimer::timeout, this, [s]() {
-        if (!s->dirty)
-            return;
-        refresh_widgets(*s);
-        s->dirty = false;
-    });
+    // C15（T9a）：60ms 定时器 = **进度通道**（数值/百分比合并）；状态翻转走 mark_state 的
+    // singleShot(0) 立即刷（见 flush_state/flush_progress）。
+    connect(s->flush, &QTimer::timeout, this, [s]() { flush_progress(*s); });
     reset(); // 空闲态（就绪 + 空任务表 + 引导文案）
 }
 
@@ -2196,7 +2593,9 @@ void PageRun::begin_run(std::size_t total, const QStringList &names) {
     s->clock.start();
     s->flush->start();
     refresh_widgets(*s);
-    s->dirty = false;
+    s->dirty_progress = false;
+    s->dirty_state = false;
+    s->overview_dirty = false;
 }
 
 void PageRun::on_event(const pp::FileEvent &ev) {
@@ -2207,20 +2606,40 @@ void PageRun::on_event(const pp::FileEvent &ev) {
     if (index < 0 || index >= s->files.size())
         return;
     FileRow &file = s->files[index];
-    apply_progress(*s, file, ev.progress);
+    // ---- M10-W1（T9b；C13/C14）：逐输出终态事件 ----
+    // OutputDone 是**输出级**事实（payload = 该行快照，见 pipeline.h 的 A2 注释），不是文件级
+    // 阶段：直接结算该行并返回，不喂 apply_progress（否则快照的 stage=Done 会覆写行内阶段）。
+    if (ev.state == pp::FileState::OutputDone) {
+        if (ev.output) {
+            int out_index = ev.progress.output_index;
+            if (out_index < 0 || out_index >= file.outs.size()) {
+                // 兜底：按格式 id 匹配配置顺序（正常路径 progress.output_index 恒 = cfg_index）
+                out_index = -1;
+                const QString fmt = QString::fromStdString(ev.output->format_id);
+                for (int j = 0; j < s->plan.format_ids.size() && j < file.outs.size(); ++j) {
+                    if (s->plan.format_ids.at(j) == fmt) {
+                        out_index = j;
+                        break;
+                    }
+                }
+            }
+            apply_output_done(*s, file, out_index, *ev.output);
+        }
+        return;
+    }
+    apply_progress(*s, file, ev.progress); // C15：内部按「状态翻转/数值」入双通道并标行脏
     if (ev.state == pp::FileState::Queued)
         return;
     if (!is_terminal_state(ev.state)) {
         if (!file.started) {
             file.started = true;
             ++s->started_files;
+            mark_state(*s, index);
         }
         file.state = ev.state;
-        s->dirty = true;
         return;
     }
-    apply_terminal(*s, file, ev);
-    s->dirty = true;
+    apply_terminal(*s, file, ev); // 终态：内部 mark_state（行 + 总览）
 }
 
 void PageRun::end_run(const pp::RunSummary &sum, const QString &out_root) {
@@ -2263,6 +2682,20 @@ void PageRun::end_run(const pp::RunSummary &sum, const QString &out_root) {
                      : any_failed                            ? pp::FileState::Failed
                                                              : pp::FileState::Done;
     }
+    // M10-W1（T9b；C14）：评分列收尾 —— 外壳已在 end_run 前等评分池收敛并排干在途事件
+    // （ScorePool::wait_idle + processEvents；见 mainwindow_run.cpp）。仍未回分数的成功行
+    // 如实显示「—」+ 原因（超时/取消：不留永远转不完的「评分中」）。
+    for (FileRow &file : s->files) {
+        for (OutRow &out : file.outs) {
+            if (!out.score_wait)
+                continue;
+            out.score_wait = false;
+            if (out.metric_state == pp::MetricState::Off) {
+                out.metric_state = pp::MetricState::Unavailable;
+                out.metric_note = tr("运行结束前未收到评分结果");
+            }
+        }
+    }
     s->progress->setRange(0, 100);
     s->open_output->setEnabled(!out_root.isEmpty());
     s->open_logs->setEnabled(true);
@@ -2277,8 +2710,10 @@ void PageRun::end_run(const pp::RunSummary &sum, const QString &out_root) {
             tr("运行结束 · 全部 %1 个失败，无可查看的输出（可再次运行补齐缺件）").arg(sum.failed));
     else
         s->summary->set_full_text(tr("运行结束 · 可打开输出目录查看结果"));
-    refresh_widgets(*s); // 终态恒满（含失败；口径 = 全部输出已结算）
-    s->dirty = false;
+    refresh_widgets(*s); // 终态恒满（含失败；口径 = 全部输出已结算）—— 全量刷新（C15）
+    s->dirty_progress = false;
+    s->dirty_state = false;
+    s->overview_dirty = false;
 }
 
 void PageRun::reset() {
@@ -2290,7 +2725,11 @@ void PageRun::reset() {
     s->running = false;
     s->finished = false;
     s->cancel_requested = false;
-    s->dirty = false;
+    s->dirty_progress = false;
+    s->dirty_state = false;
+    s->state_flush_pending = false;
+    s->overview_dirty = false;
+    s->row_dirty.clear(); // 行随 files.clear() 一并销毁（C15：脏位表与 files 同长）
     s->started_files = 0;
     s->terminal_files = 0;
     s->out_bytes = 0;
@@ -2324,6 +2763,13 @@ void PageRun::reset() {
 bool PageRun::is_running() const {
     const RunState *s = state_of(this);
     return s != nullptr && s->running;
+}
+
+// M10-W1（T9b；A10 追加面）：本批是否真的会走异步评分（RunPlan::quality_score 且非仅元数据）。
+// 外壳据此决定取消/收尾是否接评分池（cancel_pending / wait_idle）—— 无评分的运行不建池线程。
+bool PageRun::scoring_enabled() const {
+    const RunState *s = state_of(this);
+    return s != nullptr && s->plan.quality_score && !s->plan.metadata_only;
 }
 
 } // namespace pp::ui

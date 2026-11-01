@@ -70,6 +70,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -79,8 +80,12 @@
 #include <utility>
 #include <vector>
 
+#include "codecs/enc_common.h" // M10 / W1-B1（T6）：编码器飞行缓冲估算（enc::encoder_flight_bytes）
 #include "codecs/encoders.h"
+#include "core/adaptive.h"      // M10 / W3-T4：策略 DSL 解析/校验（自适应输出）
+#include "core/adaptive_exec.h" // M10 / W3-T4：执行器（轮循环/候选文件/同步评分）
 #include "core/colormanager.h"
+#include "core/fastcolor.h" // M10-W1-T2c：评分色彩归一快速内核（3D CLUT）
 #include "core/fsops.h"
 #include "core/logger.h"
 #include "core/metadata.h"
@@ -88,7 +93,8 @@
 #include "core/params.h"
 #include "core/pixelbudget.h"
 #include "core/progress.h"
-#include "core/simd/simd.h" // M4-W5-T19：flatten 热路径（§11.2）
+#include "core/score_queue.h" // M10 / W1-B1（T5）：进程级评分池（异步评分）
+#include "core/simd/simd.h"   // M4-W5-T19：flatten 热路径（§11.2）
 #include "decode/oiio_reader.h"
 
 namespace pp {
@@ -117,12 +123,27 @@ inline int encode_threads_of(const RunScope *scope) {
 // W1-T6（§7.3）：合成进度的采样周期（编码器无回调 → 只能时间驱动）。
 constexpr int kSynthPumpMs = 20;
 
-// M8-C2（C10）：评分指标模块的内存口径。C1 实现（src/core/metric/metric.cpp）在 compute()
-// 内部物化参考/失真整帧 + 官方算法 scale0 的多幅全分辨率临时图 —— C1 实测增量约 142 B/px
-// （build/m8/c1/perf-raw.log：1/4/12MP 峰值 RSS 186.5/633.9/1820 MB，扣 36MB 基线）；
-// 本处按 160 B/px 向上取整追加到像素预算。**仅评分开启的运行**才追加（--dev 默认不评分 ⇒
-// 回归 need_bytes/peak_bytes 逐字不变；预算口径变化登记见 docs/m8-adjudications.md / m8-report）。
-constexpr std::uint64_t kMetricBytesPerPixel = 160;
+// —— M10 / W1-B1（A5 配套；docs/v0.4.0-design.md §4.6 C15「无长静默」）——
+// 心跳判决：静默 ≥300ms 就补一条 heartbeat=true 的 Progress 事件（不推进任何 frac）；
+// 采样周期 120ms（≤500ms 判据的一半，留调度抖动余量）。覆盖三处长静默：编码长尾（libjxl
+// 收尾回调停更）、probe 长段（HEIC 首次 ~1.4s）、评分期（由评分池看门狗发 scoring=true 心跳）。
+constexpr int kHeartbeatTickMs = 120;
+constexpr double kHeartbeatSilenceMs = 300.0;
+
+// M8-C2（C10）/ M10-W1-T1（P0 热修）/ M10-W1-B1（T5）：评分内存口径（**评分配额**记账）。
+// C1 之后指标实现已流式化（src/core/metric/metric.cpp：逐行推进 + 相邻两尺度线性帧 +
+// O(width) scratch；23MP 实测 ~7.6 B/px），故这里按 16 B/px 向上取整记"指标内部缓冲"；
+// 参考帧（工作缓冲共享所有权）另按 4 B/px·通道单列。二者相加 = 单个评分任务的 need_bytes。
+// **不进文件像素预算**（`need = 2×frame` 保持，见 stage_budget）：配额不足 → 该输出评分
+// Unavailable、产物必须成功（设计 §4.2.2(2)/§4.3 的 P0 兜底）。
+constexpr std::uint64_t kMetricBytesPerPixel = 16;
+
+// M10-W1-T2c：快速色彩归一的"高敏感区间精确重算"阈值。SSIMULACRA2 ≥ 该值且 < 100 的输出
+// （质量极高/近无损，参考与失真只差 1–2 个量化级）对归一残差的放大极强（实测 1 ULP 输入扰动
+// 即可让分数变化 0.003–0.08，超过 |Δ|≤0.01 判据）→ 该区间用精确 lcms 重算一次色彩归一，
+// 保证与精确路径 |Δ|≤0.01；常规有损输出（<90 分，质量调优常用区间）走快速内核。
+// 100.0（真无损/同输入）不触发（确定性变换必然同值）。代价：≥90 分的输出评分近似精确路径成本。
+constexpr double kFastColorExactRecheckScore = 90.0;
 
 using Clock = std::chrono::steady_clock;
 
@@ -172,6 +193,65 @@ public:
 
 private:
     ProgressMux *mux_ = nullptr;
+    std::mutex mu_;
+    std::condition_variable cv_;
+    bool stop_ = false;
+    std::thread th_;
+};
+
+// ============================================================================================
+// M10 / W1-B1（A5 配套；docs/v0.4.0-design.md §4.6 C15）：无长静默心跳定时器
+//   每 kHeartbeatTickMs 采样一次；回调里自行判决"是否真的静默"（mux->ms_since_last_emit）。
+//   * RAII：构造即起线程，析构置停止位 + notify + join；
+//   * 线程纪律（§8.2 E3）：监控线程，不参与编码、不占 encode_threads（ε 类）；
+//   * 回调抛出的异常一律吞掉：心跳不得影响管线成败（与 SynthPump 同口径）。
+// ============================================================================================
+class HeartbeatTicker {
+public:
+    explicit HeartbeatTicker(std::function<void()> tick) : tick_(std::move(tick)), stop_(false) {
+        th_ = std::thread([this] {
+            for (;;) {
+                {
+                    std::unique_lock<std::mutex> lk(mu_);
+                    if (cv_.wait_for(lk, std::chrono::milliseconds(kHeartbeatTickMs),
+                                     [this] { return stop_; })) {
+                        return; // stop_ == true
+                    }
+                }
+                try {
+                    if (tick_)
+                        tick_();
+                } catch (...) {
+                    // 心跳失败不影响管线（下一次采样继续）
+                    (void)0; // 显式空操作：注释不计入语句
+                }
+            }
+        });
+    }
+    ~HeartbeatTicker() {
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            stop_ = true;
+        }
+        cv_.notify_all();
+        if (th_.joinable())
+            th_.join();
+    }
+    // C15：显式提前停止（收尾段；析构幂等）。
+    void stop() {
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            stop_ = true;
+        }
+        cv_.notify_all();
+        if (th_.joinable())
+            th_.join();
+    }
+    HeartbeatTicker(const HeartbeatTicker &) = delete;
+    HeartbeatTicker &operator=(const HeartbeatTicker &) = delete;
+
+private:
+    std::function<void()> tick_;
     std::mutex mu_;
     std::condition_variable cv_;
     bool stop_ = false;
@@ -413,6 +493,9 @@ struct PlannedTarget {
     std::size_t cfg_index = 0; // 配置顺序（= FileResult.outputs 下标）
     bool skip = false;         // Skip 策略命中
     std::unique_ptr<IEncoder> enc;
+    // —— M10 / W3-T4：自适应策略原文（OutputFormatSpec.adaptive_policy 的只读投影；空 = 关闭）——
+    // 逐输出独立（每 (文件×输出) 一套轮循环）；不改全局项，也不参与 OutputTarget 的参数快照。
+    std::string adaptive_policy;
 };
 
 // 目标构建：格式/位深校验、编码器构造、路径模板渲染、逐输出冲突解析。
@@ -501,6 +584,7 @@ bool plan_targets(const FileEntry &fe, const RunConfig &cfg,
         pt.cfg_index = i;
         pt.skip = plan.skip;
         pt.enc = std::move(enc);
+        pt.adaptive_policy = spec.adaptive_policy; // M10 / W3-T4（A3）：策略随计划传递
         pt.target.format_id = spec.format_id;
         pt.target.backend_id = spec.backend_id;
         pt.target.tech_id = spec.tech_id;
@@ -570,7 +654,15 @@ struct RunFileContext {
 
     // W1-T6（§3.3/§7.1–§7.4）：进度枢纽。probe 之后建立（合成估算需要像素尺寸）；
     // 在此之前的事件（Queued/Probing 的首次）progress 取默认值（overall=0）。
-    std::unique_ptr<ProgressMux> mux;
+    std::shared_ptr<ProgressMux> mux;
+    // —— M10 / W1-B1（A5 配套）：无长静默心跳（C15）——
+    // 声明在 mux **之后** → 析构先于 mux（线程 join 后才释放 mux；回调指向的 ctx 亦有效）。
+    std::unique_ptr<HeartbeatTicker> ticker;
+    // —— M10 / W3-T4（§9.6「评分期心跳」）：同步评分在飞时的心跳口径 ——
+    // 自适应轮次的评分是**同步**的（本线程被 run_metric_job 占用 → 编码器/进度回调都停更），
+    // 由 ctx 的心跳 ticker 补发 heartbeat=true 且 **scoring=true** 的 Progress；
+    // -1 = 无评分在飞（心跳仍按源文件级发，scoring=false）。只在自适应分支置位。
+    std::atomic<int> scoring_output{-1};
 
     // ---- 阶段间传递的事实 ----
     ImageInfo info;
@@ -584,7 +676,11 @@ struct RunFileContext {
     MetadataPlan meta_plan;
     Payloads payloads;
     MetadataPayloads meta; // EncodeRequest 的载荷面（build_meta 从 payloads + icc 组装）
-    WorkImage work;
+    // —— M10 / W1-B1（T5 异步评分）：工作缓冲改由 shared_ptr 持有 ——
+    // 评分任务在**文件线程结束之后**仍需要参考帧（编码器输入 = 本缓冲）；共享所有权让
+    // 评分任务把帧的生命周期延长到评分完成（内存独立记账，见 score_queue 的 need_bytes）。
+    // 帧内容是只读的（评分侧只读），pipeline 侧的写回/包装在编码前已完成。
+    std::shared_ptr<WorkImage> work;
     BudgetGuard budget; // ④ 的命名 RAII（acquire_budget 置位，ctx 析构释放）
 
     // ---- M8-C2：评分的色彩归一事实（stage_color 落位，单源）----
@@ -602,6 +698,17 @@ struct RunFileContext {
         fail_fill(outcome, t_start, std::move(msg));
         return outcome;
     }
+    // M10 / W1-B1（T5）：异步评分任务可能在 run_one_file 返回后仍持有 mux（snapshot 只读）。
+    // 析构先停心跳线程（回调捕获本 ctx），并清空 mux 的事件回调（此后 snapshot 仍安全，
+    // 但绝不会有事件经已销毁的 ctx 发出去）。
+    ~RunFileContext() {
+        if (ticker) {
+            ticker->stop();
+            ticker.reset();
+        }
+        if (mux)
+            mux->set_event_callback({});
+    }
 
     // ---- 事件面（旧 stage/make_mux 两个内联 lambda 的单源化）----
     // 阶段事件携带当前进度快照（§3.3：progress 为追加字段，Progress 状态为其主用途；
@@ -618,11 +725,35 @@ struct RunFileContext {
         ev.on_event(e);
     }
     void make_mux(const ImageInfo &inf, std::size_t outputs) {
-        mux = std::make_unique<ProgressMux>(inf.width, inf.height, outputs);
+        mux = std::make_shared<ProgressMux>(inf.width, inf.height, outputs);
         mux->set_event_callback([this](const FileEvent &e) {
             if (ev.on_event)
                 ev.on_event(e);
         });
+        // C15：mux 就位后开心跳（静默 ≥300ms 补一条 heartbeat=true 的 Progress 事件；
+        // 不推进任何 frac）。覆盖 decode/orient/color/encode 长尾/评分前的所有静默段。
+        // M10 / W3-T4：自适应轮次的同步评分期（scoring_output ≥ 0）心跳带 scoring=true。
+        ticker = std::make_unique<HeartbeatTicker>([this] {
+            if (!mux || mux->ms_since_last_emit() < kHeartbeatSilenceMs)
+                return;
+            const int idx = scoring_output.load(std::memory_order_relaxed);
+            mux->heartbeat(idx, /*scoring=*/idx >= 0);
+        });
+    }
+
+    // —— M10 / W1-B1（A1/A2；C13）：逐输出终态事件 ——
+    // 每个输出在"编码+metawrite 完成/跳过/失败/取消"时立即发一次（含该行快照，metric 未算）；
+    // 评分池完成后再补发一次（含 metric，见 score_queue 的提交点）。文件终态事件仍携带完整
+    // FileResult（幂等校准口径），消费端"后到覆盖先到、同值早退"。
+    void emit_output_done(const OutputResult &row, int cfg_index) {
+        if (!ev.on_event)
+            return;
+        FileEvent e{};
+        e.state = FileState::OutputDone;
+        if (mux)
+            e.progress = mux->snapshot(Stage::Done, cfg_index);
+        e.output = std::make_shared<const OutputResult>(row);
+        ev.on_event(e);
     }
 
     // 工作缓冲里不属于单一 target 的告警（decode/color）按出现时刻推入每个未跳过行：
@@ -669,7 +800,35 @@ bool stage_validate(RunFileContext &ctx) {
 // ---- ② probe_source（CICP 段整体下沉）----
 bool stage_probe(RunFileContext &ctx) {
     ctx.stage(FileState::Probing, Stage::Probe, -1);
-    const ProbeOutcome po = probe_file(ctx.fe.src);
+    // ---- M10 / W1-T3（A4）：复用调度器的 probe 结果，消除双重 probe ----
+    // 调度器（scheduler.cpp 的 worker）已为每个文件做过一次 spec-only probe 并回填
+    // `FileEntry::probe`（A4 加性字段）；同一次 run 内文件不被外部改写属既定前提（用户竞态
+    // 如实记录、不处理）。只有直接调用 run_one_file 的路径（单测/bench）保留自 probe。
+    // 失效/降级条件：`probe_done` 为假、或缓存带错误 → 走原路径重新 probe（行为逐字不变）。
+    ProbeOutcome own_probe;
+    const bool cache_hit = ctx.fe.probe_done && ctx.fe.probe.error.empty();
+    const ProbeOutcome &po = cache_hit ? ctx.fe.probe : own_probe;
+    if (!cache_hit) {
+        // —— M10 / W1-B1（C15）：probe 长段心跳 ——
+        // HEIC 首次 probe 实测 ~1.45s（OIIO/libheif 固有），而 mux 尚未建立（需要 probe 的
+        // 尺寸）→ 此处直接用 ev.on_event 发心跳（progress 取默认：output_index=-1/Probe/
+        // overall=0，不推进任何 frac；文件级单调性不受影响）。
+        HeartbeatTicker beat([&ctx] {
+            if (!ctx.ev.on_event)
+                return;
+            FileEvent e{};
+            e.state = FileState::Progress;
+            e.progress.stage = Stage::Probe;
+            e.progress.heartbeat = true;
+            ctx.ev.on_event(e);
+        });
+        own_probe = probe_file(ctx.fe.src);
+    } else {
+        log_debug(kStage, kFile, "probe cache hit (scheduler probe reused)",
+                  {{"src", ctx.fe.src.string()},
+                   {"size", std::to_string(po.info.width) + "x" + std::to_string(po.info.height)},
+                   {"format", po.info.format}});
+    }
     if (!po.error.empty())
         return ctx.fail("probe failed: " + po.error), false;
     ctx.info = po.info;
@@ -769,6 +928,7 @@ bool stage_plan(RunFileContext &ctx) {
         for (std::size_t i = 0; i < ctx.res.outputs.size(); ++i) {
             set_output_state(ctx.res.outputs[i], OutputState::Skipped); // R-172 单点迁移
             ctx.mux->on_output_skipped(i); // R-235：全跳过早退同样发输出级进度事件（§7.2 全段记满）
+            ctx.emit_output_done(ctx.res.outputs[i], static_cast<int>(i)); // A1/A2
         }
         ctx.mux->finish();
         log_info(kStage, kFile, "skipped: output exists",
@@ -793,17 +953,15 @@ bool stage_plan(RunFileContext &ctx) {
     return true;
 }
 
-// ---- ④ acquire_budget（2× float32 frame；评分开启再加指标模块预留；BudgetGuard 命名 RAII）----
+// ---- ④ acquire_budget（2× float32 frame；BudgetGuard 命名 RAII）----
 bool stage_budget(RunFileContext &ctx) {
-    // 工作缓冲与 decode 缓冲同尺寸（通道数取自 probe），故 2×frame 是不评分运行的峰值上界。
+    // 工作缓冲与 decode 缓冲同尺寸（通道数取自 probe），故 2×frame 是**文件级**峰值上界。
+    // M10-W1-T1（P0 热修，docs/v0.4.0-design.md §4.3 预算表行）：评分模块的 ~160B/px 内存
+    // 不再追加到文件预算 —— HEAD 的 `need = 2×frame + 160B/px×score` 让 24MP 评分批并发掉到 1
+    // 且 >45MP 评分直接预算失败（P0）。评分改由进程级 ScoreQuota 独立记账（见
+    // score_output_row / kMetricBytesPerPixel），配额不足只把评分降级 Unavailable，产物必须成功。
     uint64_t need_bytes =
         2 * PixelBudget::frame_bytes(ctx.info.width, ctx.info.height, ctx.info.channels);
-    // M8-C2（C10）：评分开启时追加指标模块的内存预留（kMetricBytesPerPixel 口径；仅评分
-    // 开启的运行出现，回归不评分 ⇒ need_bytes/peak_bytes 零 diff）。
-    if (ctx.cfg.quality_score) {
-        need_bytes += kMetricBytesPerPixel * static_cast<uint64_t>(ctx.info.width) *
-                      static_cast<uint64_t>(ctx.info.height);
-    }
     ctx.budget.bytes = need_bytes;
     ctx.budget.b = ctx.ev.scope != nullptr ? ctx.ev.scope->budget : nullptr;
     if (ctx.ev.scope != nullptr && ctx.ev.scope->budget != nullptr) {
@@ -846,7 +1004,9 @@ bool stage_decode(RunFileContext &ctx) {
         return false;
     }
     std::string werr;
-    if (!work_from_buf(ctx.work, dec.buf, werr)) {
+    // M10 / W1-B1（T5）：工作缓冲由 shared_ptr 持有（评分任务在文件线程结束后仍要读参考帧）。
+    ctx.work = std::make_shared<WorkImage>();
+    if (!work_from_buf(*ctx.work, dec.buf, werr)) {
         ctx.fail("decode failed: " + werr);
         return false;
     }
@@ -872,7 +1032,7 @@ bool stage_orient(RunFileContext &ctx) {
         ctx.mux->shared_stage(Stage::Orient, 0.f);
         const Clock::time_point t0 = Clock::now();
         std::string oerr;
-        if (!orient_work(ctx.work, ctx.orientation, oerr)) {
+        if (!orient_work(*ctx.work, ctx.orientation, oerr)) {
             ctx.fail("orient failed: " + oerr);
             return false;
         }
@@ -894,13 +1054,13 @@ bool stage_color(RunFileContext &ctx) {
     // 第二轮裁定：alpha 明确不支持。所有带 alpha 的输入在**色彩变换之前**拍平到背景，
     // 产物永远不含 alpha；这样 lcms2 只处理不透明 RGB，避免对预乘值做非线性 TRC 变换。
     // OIIO 解码默认返回 associated（预乘）alpha；JXL 直通源由 decode 层补乘（见 oiio_reader）。
-    const int in_ch = ctx.work.spec.nchannels;
+    const int in_ch = ctx.work->spec.nchannels;
     if (in_ch == 2 || in_ch == 4) {
         ctx.stage(FileState::Flattening, Stage::Flatten, -1);
         ctx.mux->shared_stage(Stage::Flatten, 0.f);
         const Clock::time_point ft0 = Clock::now();
         std::string ferr;
-        if (!flatten_alpha_in_place(ctx.work, static_cast<float>(ctx.cfg.flatten_gray), ferr)) {
+        if (!flatten_alpha_in_place(*ctx.work, static_cast<float>(ctx.cfg.flatten_gray), ferr)) {
             ctx.fail("flatten failed: " + ferr);
             return false;
         }
@@ -914,11 +1074,11 @@ bool stage_color(RunFileContext &ctx) {
                     Warning{WarningKind::AlphaFlattened, detail});
         }
         ctx.mux->shared_stage(Stage::Flatten, 1.f);
-        log_debug(
-            kStage, kFile, "alpha flattened before color",
-            {{"src", ctx.fe.src.string()},
-             {"channels", std::to_string(in_ch) + " -> " + std::to_string(ctx.work.spec.nchannels)},
-             {"background", fmt_double(ctx.cfg.flatten_gray)}});
+        log_debug(kStage, kFile, "alpha flattened before color",
+                  {{"src", ctx.fe.src.string()},
+                   {"channels",
+                    std::to_string(in_ch) + " -> " + std::to_string(ctx.work->spec.nchannels)},
+                   {"background", fmt_double(ctx.cfg.flatten_gray)}});
     } else {
         ctx.mux->shared_skip(Stage::Flatten);
     }
@@ -970,8 +1130,8 @@ bool stage_color(RunFileContext &ctx) {
         //   * 灰度升维分支 `buf = make_like(...)` 换成独立新缓冲 → 地址不同 → 必须回拷。
         // 判据用"当前缓冲的本地像素地址是否仍是工作缓冲的存储"（两条路径都是本地缓冲：
         // APPBUFFER 包装 / make_like 的 LOCALBUFFER，故 localpixels() 恒非空）。
-        OIIO::ImageBuf cbuf = ctx.work.buf;
-        const void *const work_px = ctx.work.px.data();
+        OIIO::ImageBuf cbuf = ctx.work->buf;
+        const void *const work_px = ctx.work->px.data();
         // I3 加性重载：R-032（ICC 通道不匹配降级）/R-035（灰度升维）的告警经 out_warnings
         // 输出并进逐输出行。
         // M7-WP8 跨包接口（WP1 数据面 / WP10 行为实现）：RunConfig 的 color_intent /
@@ -1011,7 +1171,7 @@ bool stage_color(RunFileContext &ctx) {
         ctx.res.color_dst = co.dst_desc;
         if (cbuf.localpixels() != work_px) {
             std::string cerr;
-            if (!work_from_buf(ctx.work, cbuf, cerr)) {
+            if (!work_from_buf(*ctx.work, cbuf, cerr)) {
                 ctx.fail("color transform failed: " + cerr);
                 return false;
             }
@@ -1075,25 +1235,35 @@ bool stage_meta(RunFileContext &ctx) {
 //   * 两侧经同一条色彩归一（sRGB 目标 = 精确 sRGB EOTF，无 lcms 开销；P3/AdobeRGB/keep+源
 //     ICC = 同一份 ICC + ColorManager::transform(target=SRGB)）→ 送 pp::metric::compute()
 //     （输入 = sRGB 线性 RGB）。逐样本相同时分数恒为 100.0。
+//   * M10-W1-T2c（D-1 修正）：非 sRGB 目标的归一走 **3D CLUT 快速内核**
+//     （core/fastcolor.h：lcms 预计算 33³ CLUT + 三线性插值，含 EOTF）；构建失败/非法 ICC/
+//     PP_FASTCOLOR=0 → 回退下方精确 lcms 路径（分数口径不变，|Δscore|≤0.01 由单测与端到端
+//     对拍钉住）。参考/失真定义、量化口径、metric 数值语义均不变。
 //   * 回读失败/尺寸不符/<8×8/取消 ⇒ Unavailable（**不**失败产物、**不**产生 Warning）。
 // 位置/线程（C10）：worker 线程内、单输出 encode 成功后、metawrite 前；参考逐行即时生成
 // （不物化整帧），失真回读 1 帧落在既有 2×frame 预留内；取消检查在前后各一次。
 // ---------------------------------------------------------------------------
 
-// sRGB EOTF（IEC 61966-2-1 解扩展）：编码值 → 线性光。超界样本按 [0,1] clamp
-// （量化样本恒在 [0,1]；有损解码的 float 误差不改变语义）。
-inline float srgb_eotf(float v) {
-    const float c = std::clamp(v, 0.0f, 1.0f);
-    return (c <= 0.04045f) ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
-}
+// sRGB EOTF：**单源 = core/fastcolor.h 的 pp::srgb_eotf**（M10-W1-T2c）。精确路径与快速
+// CLUT 路径、以及下方 srgb 快路径共用同一公式；此处不再定义本地副本（删本地定义是
+// W1-T2c 的一部分，公式逐字不变）。
 
-// 一行交错 RGB（目标色彩空间的**编码值**）→ sRGB 线性（原地）。参考/失真走同一函数。
-bool rgb_row_to_srgb_linear(float *rgb, int width, bool srgb, const std::string &icc,
-                            std::string &err) {
+// 精确归一（回退路径）：一整带（rows 行）交错 RGB（目标色彩空间的**编码值**）→ sRGB 线性。
+// M10 / W1-T2（§4.2.2(3)）：由"逐行调 lcms"改为"按 64 行带一次变换"（消 ImageBuf/SHA1/
+// 入口等固定开销）。**像素工作量不变**：cmsDoTransform 仍是 O(像素数)，按带化不减少整帧
+// 归一成本（实测 22.8MP 单次整帧 AdobeRGB→sRGB lcms ≈3.3–4.0s，与调用粒度无关；见
+// build/m10/w1-engine-a/report.md §3.3）。
+// M10-W1-T2c：本函数降为**回退路径**（快速 CLUT 不可用时）；快速路径见 core/fastcolor.h。
+// 数值语义：lcms2 float transform 无跨像素状态，逐带一次 cmsDoTransform 与逐行调用逐样本
+// 一致（单测 test_color 的 band-vs-row 对照钉住 max_err=0）。
+bool rgb_rows_to_srgb_linear(float *rgb, int width, int rows, bool srgb, const std::string &icc,
+                             std::string &err) {
+    const std::size_t npix = static_cast<std::size_t>(width) * static_cast<std::size_t>(rows);
     if (!srgb) {
-        // 与 color stage 同一条 ColorManager 变换（同一份 ICC → sRGB）；1 行包装不物化整帧。
-        OIIO::ImageSpec spec(width, 1, 3, OIIO::TypeDesc::FLOAT);
-        OIIO::ImageBuf buf(spec, OIIO::image_span<float>(rgb, 3, static_cast<uint32_t>(width), 1));
+        // 与 color stage 同一条 ColorManager 变换（同一份 ICC → sRGB）；整带一次调用。
+        OIIO::ImageSpec spec(width, rows, 3, OIIO::TypeDesc::FLOAT);
+        OIIO::ImageBuf buf(spec, OIIO::image_span<float>(rgb, 3, static_cast<uint32_t>(width),
+                                                         static_cast<uint32_t>(rows)));
         std::vector<Warning> ignored; // 评分不得把色彩降级告警塞进产物行
         std::string xerr;
         const ColorOutcome co = ColorManager::instance().transform(
@@ -1107,7 +1277,7 @@ bool rgb_row_to_srgb_linear(float *rgb, int width, bool srgb, const std::string 
             return false;
         }
     }
-    const std::size_t n = static_cast<std::size_t>(width) * 3;
+    const std::size_t n = npix * 3;
     for (std::size_t i = 0; i < n; ++i)
         rgb[i] = srgb_eotf(rgb[i]);
     return true;
@@ -1189,7 +1359,11 @@ struct MetricDistortedRows {
 };
 
 // 行源 → sRGB 线性行（metric::compute 的 RowFn 面）。sRGB 路径逐行即时 EOTF；
-// 非 sRGB 路径按 64 行带缓存（同一带只做一次 lcms 变换，避免逐行重复开销；纯函数可重放）。
+// 非 sRGB 路径按 64 行带缓存 + 整带一次归一：
+//   * M10-W1-T2c：`fast` 非空 → 3D CLUT 三线性插值（core/fastcolor.h，快路径，输出已含 EOTF）；
+//   * 否则 → 精确 lcms 回退（rgb_rows_to_srgb_linear，M10/W1-T2 的按带化，数值语义逐样本
+//     等同 HEAD 逐行路径）。
+// color_ms 累计"色彩归一"净耗时（fast/exact 都计），供 score_output_row 打点分解与验收。
 struct MetricLinearRows {
     static constexpr int kBandRows = 64;
     int width = 0, height = 0;
@@ -1199,6 +1373,11 @@ struct MetricLinearRows {
     std::vector<float> band;
     int band_y0 = -1, band_h = 0;
     std::string error;
+    // —— M10-W1-T2c：快速归一内核（由 score_output_row 注入；两侧共享同一实例）——
+    std::shared_ptr<const FastSrgbLinear> fast;
+    double color_ms = 0.0; // 色彩归一净耗时（证据/日志用；不影响评分语义）
+    int color_bands = 0;   // 已归一化带数
+    bool used_fast = false;
 
     void row(int y, float *out) {
         const std::size_t n = static_cast<std::size_t>(width) * 3;
@@ -1222,23 +1401,52 @@ struct MetricLinearRows {
             band.resize(n * static_cast<std::size_t>(band_h));
             for (int r = 0; r < band_h; ++r) {
                 float *br = band.data() + n * static_cast<std::size_t>(r);
-                if (!encoded(band_y0 + r, br) ||
-                    !rgb_row_to_srgb_linear(br, width, /*srgb=*/false, icc, error)) {
-                    if (error.empty())
-                        error = "row source failed";
+                if (!encoded(band_y0 + r, br)) {
+                    error = "row source failed";
                     std::fill_n(out, n, 0.0f);
                     return;
                 }
             }
+            const Clock::time_point c0 = Clock::now();
+            if (fast && fast->ready()) {
+                // M10-W1-T2c 快路径：CLUT + 三线性插值（一次调用处理整带；含 EOTF）。
+                fast->transform_rows(band.data(), width, band_h);
+                used_fast = true;
+            } else if (!rgb_rows_to_srgb_linear(band.data(), width, band_h, /*srgb=*/false, icc,
+                                                error)) {
+                if (error.empty())
+                    error = "row source failed";
+                std::fill_n(out, n, 0.0f);
+                return;
+            }
+            color_ms += ms_since(c0);
+            ++color_bands;
         }
         std::copy_n(band.data() + n * static_cast<std::size_t>(y - band_y0), n, out);
     }
 };
 
-// 单输出评分：失败只落 MetricState（不失败产物、不产生 Warning）。前提 = 该行已编码成功。
-void score_output_row(RunFileContext &ctx, const PlannedTarget &pt, OutputResult &row) {
-    if (!ctx.cfg.quality_score || pt.skip)
-        return; // MetricState::Off = 默认（--dev 不带 --score；仅元数据模式无本入口）
+// ============================================================================================
+// M10 / W1-B1（T5；docs/v0.4.0-design.md §4.2.2(2) / C3 / C14）：评分任务面
+//   把"单输出评分"从文件线程里剥离成**值语义任务**：参考帧用 shared_ptr 共享（文件线程结束
+//   后仍有效；评分侧只读），产物路径/位深/归一事实全部拷贝进来 —— 任务不再触碰 RunFileContext。
+// ============================================================================================
+struct MetricJob {
+    std::filesystem::path src; // 参考源（日志/证据）
+    std::filesystem::path out; // 产物路径（失真侧回读）
+    std::string format_id;
+    std::shared_ptr<const WorkImage> work; // 参考帧（float32 工作缓冲 = 编码器输入）
+    int width = 0, height = 0;
+    int bps = 8;          // 输出位深（bitdepth_bps 单源的结果）
+    bool dither8 = false; // 参考侧 8bit 抖动（与编码器同口径）
+    bool metric_srgb = true;
+    std::string metric_icc;
+    std::function<bool()> cancelled;
+};
+
+// 单输出评分体（T5 重构：从 RunFileContext 脱离，可在评分池线程执行）：
+// 失败只落 MetricState（不失败产物、不产生 Warning）。前提 = 该行已编码+metawrite 成功。
+void run_metric_job(const MetricJob &job, OutputResult &row) {
     const Clock::time_point t0 = Clock::now();
     const auto unavailable = [&row, t0](std::string note) {
         row.metric_state = MetricState::Unavailable;
@@ -1261,7 +1469,7 @@ void score_output_row(RunFileContext &ctx, const PlannedTarget &pt, OutputResult
                                       ? fmt_double(row.metric_ssimulacra2)
                                       : std::string();
         log_info(kStage, kFile, "quality metric",
-                 {{"src", ctx.fe.src.string()},
+                 {{"src", job.src.string()},
                   {"out", row.out.string()},
                   {"format", row.format_id},
                   {"state", state},
@@ -1270,10 +1478,10 @@ void score_output_row(RunFileContext &ctx, const PlannedTarget &pt, OutputResult
                   {"note", row.metric_note}});
     };
 
-    const int width = ctx.work.spec.width;
-    const int height = ctx.work.spec.height;
-    if (is_cancelled(ctx.cancelled)) {
-        unavailable("已取消");
+    const int width = job.width;
+    const int height = job.height;
+    if (is_cancelled(job.cancelled)) {
+        unavailable("运行取消，评分未完成");
         finish();
         return;
     }
@@ -1283,6 +1491,7 @@ void score_output_row(RunFileContext &ctx, const PlannedTarget &pt, OutputResult
         return;
     }
     // ---- 失真回读（C10：probe_file + decode_float；失败/尺寸不符 → Unavailable）----
+    const Clock::time_point t_prod0 = Clock::now();
     const ProbeOutcome po = probe_file(row.out);
     if (!po.error.empty() || !po.first_spec) {
         unavailable("产物回读失败");
@@ -1308,19 +1517,26 @@ void score_output_row(RunFileContext &ctx, const PlannedTarget &pt, OutputResult
         finish();
         return;
     }
+    // M10-W1-T2c：评分耗时的**分解打点**（产物回读 / 指标核心 / 色彩归一；验收判据用）。
+    const double product_ms = ms_since(t_prod0);
     // ---- 参考量化口径（C9；bmp 的 bpp 口径由 bitdepth_bps 单源换算）----
-    const int bps = bitdepth_bps(row.format_id, pt.target.out_bitdepth);
+    const int bps = job.bps; // 由提交点单源算好（bitdepth_bps × target）
     if (bps < 8 || bps > 16) {
         unavailable("输出位深不支持评分");
         finish();
         return;
     }
     const int maxv = (bps >= 16) ? 65535 : ((1 << bps) - 1);
-    // dither8：编码器只在 8bit 量化段抖动（heif/avif 的 8bit 走 quantize16 不抖动）。
-    const bool dither8 =
-        ctx.cfg.color_dither8 && bps == 8 && row.format_id != "heif" && row.format_id != "avif";
+    const bool dither8 = job.dither8; // 提交点单源判定（含 heif/avif 不抖动口径）
+    // ---- M10-W1-T2c（D-1 修正）：快速色彩归一刀 ----
+    // 非 sRGB 目标（keep+源 ICC / 宽色域目标）才需要颜色空间归一；sRGB 目标走精确 EOTF。
+    // 每输出取一次进程级缓存（同批同 ICC 命中复用）；构建失败/非法 ICC/PP_FASTCOLOR=0 →
+    // nullptr → MetricLinearRows 回退精确 lcms（评分参考/失真定义与分数语义不变）。
+    std::shared_ptr<const FastSrgbLinear> fast_lut;
+    if (!job.metric_srgb)
+        fast_lut = FastSrgbLinear::get_shared(job.metric_icc);
     MetricReferenceRows ref_rows;
-    ref_rows.work = &ctx.work;
+    ref_rows.work = job.work.get();
     ref_rows.width = width;
     ref_rows.bps = bps;
     ref_rows.maxv = maxv;
@@ -1332,8 +1548,9 @@ void score_output_row(RunFileContext &ctx, const PlannedTarget &pt, OutputResult
     MetricLinearRows ref_lin;
     ref_lin.width = width;
     ref_lin.height = height;
-    ref_lin.srgb = ctx.metric_srgb;
-    ref_lin.icc = ctx.metric_icc;
+    ref_lin.srgb = job.metric_srgb;
+    ref_lin.icc = job.metric_icc;
+    ref_lin.fast = fast_lut; // M10-W1-T2c：快路径（nullptr = 精确 lcms 回退）
     ref_lin.encoded = [&ref_rows](int y, float *rgb) {
         ref_rows.fill_encoded(y, rgb);
         return true;
@@ -1341,11 +1558,12 @@ void score_output_row(RunFileContext &ctx, const PlannedTarget &pt, OutputResult
     MetricLinearRows dist_lin;
     dist_lin.width = width;
     dist_lin.height = height;
-    dist_lin.srgb = ctx.metric_srgb;
-    dist_lin.icc = ctx.metric_icc;
+    dist_lin.srgb = job.metric_srgb;
+    dist_lin.icc = job.metric_icc;
+    dist_lin.fast = fast_lut; // 与参考侧共享同一不可变 CLUT（构建一次/两侧复用）
     dist_lin.encoded = [&dist_rows](int y, float *rgb) { return dist_rows.fill_encoded(y, rgb); };
-    if (is_cancelled(ctx.cancelled)) {
-        unavailable("已取消");
+    if (is_cancelled(job.cancelled)) {
+        unavailable("运行取消，评分未完成");
         finish();
         return;
     }
@@ -1354,6 +1572,7 @@ void score_output_row(RunFileContext &ctx, const PlannedTarget &pt, OutputResult
     const pp::metric::FrameSource dist_src{
         width, height, [&dist_lin](int y, float *rgb) { dist_lin.row(y, rgb); }};
     pp::metric::Result mr;
+    const Clock::time_point t_comp0 = Clock::now();
     try {
         mr = pp::metric::compute(ref_src, dist_src);
     } catch (const std::exception &e) {
@@ -1365,14 +1584,76 @@ void score_output_row(RunFileContext &ctx, const PlannedTarget &pt, OutputResult
         finish();
         return;
     }
+    const double compute_ms = ms_since(t_comp0);
+    // ---- M10-W1-T2c：高敏感区间精确重算兜底 ----
+    // 快速内核的归一残差 ≈2 ULP；SSIMULACRA2 对 1 ULP 输入扰动的响应可达 0.003–0.08（随内容
+    // 敏感度；实测噪声地板），故"高分输出（≥kFastColorExactRecheckScore）"用精确 lcms 重算
+    // 一次色彩归一以保证 |Δ|≤0.01（成本只出现在高分输出；真无损 = 100.0 不触发 —— 同输入经
+    // 同一确定性变换必然同值）。
+    bool fast_used = ref_lin.used_fast || dist_lin.used_fast;
+    bool exact_recheck = false;
+    double recheck_ms = 0.0;
+    double total_color_ms = ref_lin.color_ms + dist_lin.color_ms;
+    if (fast_used && mr.state == pp::metric::State::Ok && mr.score >= kFastColorExactRecheckScore &&
+        mr.score < 100.0) {
+        MetricLinearRows ref_exact;
+        ref_exact.width = width;
+        ref_exact.height = height;
+        ref_exact.srgb = job.metric_srgb;
+        ref_exact.icc = job.metric_icc;
+        ref_exact.fast = nullptr; // 精确 lcms 回退路径
+        ref_exact.encoded = ref_lin.encoded;
+        MetricLinearRows dist_exact;
+        dist_exact.width = width;
+        dist_exact.height = height;
+        dist_exact.srgb = job.metric_srgb;
+        dist_exact.icc = job.metric_icc;
+        dist_exact.fast = nullptr;
+        dist_exact.encoded = dist_lin.encoded;
+        const Clock::time_point t_rc0 = Clock::now();
+        try {
+            const pp::metric::FrameSource ref_src2{
+                width, height, [&ref_exact](int y, float *rgb) { ref_exact.row(y, rgb); }};
+            const pp::metric::FrameSource dist_src2{
+                width, height, [&dist_exact](int y, float *rgb) { dist_exact.row(y, rgb); }};
+            const pp::metric::Result mr_exact = pp::metric::compute(ref_src2, dist_src2);
+            if (mr_exact.state == pp::metric::State::Ok) {
+                mr = mr_exact;
+                exact_recheck = true;
+                total_color_ms += ref_exact.color_ms + dist_exact.color_ms;
+            }
+        } catch (...) {
+            // 重算失败不覆盖已得到的快速结果（评分尽力而为；不失败产物）。
+            (void)0; // 显式空操作：注释不计入语句
+        }
+        recheck_ms = ms_since(t_rc0);
+    }
     row.metric_ms = ms_since(t0); // 端到端评分耗时（回读 + 归一 + 指标核心）
+    // M10-W1-T2c 验收打点：评分耗时分解 + 路径证据（仅评分运行出现，不进产物/侧车）。
+    // metric_ms = product_ms（产物 probe+decode）+ compute_ms（快速指标计算，含 color_ms）
+    //             + recheck_ms（高分输出的精确重算；无则 0）+ 少量杂项。
+    const double color_fast_ms = ref_lin.color_ms + dist_lin.color_ms;
+    log_debug(kStage, kFile, "quality metric colour normalization",
+              {{"src", job.src.string()},
+               {"out", row.out.string()},
+               {"mode", !fast_used ? (job.metric_srgb ? "srgb-eotf" : "exact-lcms")
+                                   : (exact_recheck ? "fast-clut+exact-recheck" : "fast-clut")},
+               {"color_ms", fmt_double(total_color_ms)},
+               {"product_ms", fmt_double(product_ms)},
+               {"compute_ms", fmt_double(compute_ms)},
+               {"core_ms", fmt_double(compute_ms - color_fast_ms)},
+               {"recheck_ms", fmt_double(recheck_ms)},
+               {"metric_ms", fmt_double(row.metric_ms)},
+               {"bands", std::to_string(ref_lin.color_bands + dist_lin.color_bands)},
+               {"recheck", exact_recheck ? "true" : "false"},
+               {"engine", fast_lut ? std::string(fast_lut->engine()) : std::string("exact")}});
     if (!ref_lin.error.empty() || !dist_lin.error.empty()) {
         unavailable("色彩归一失败");
         finish();
         return;
     }
-    if (is_cancelled(ctx.cancelled)) {
-        unavailable("已取消");
+    if (is_cancelled(job.cancelled)) {
+        unavailable("运行取消，评分未完成");
         finish();
         return;
     }
@@ -1401,171 +1682,758 @@ void score_output_row(RunFileContext &ctx, const PlannedTarget &pt, OutputResult
     finish();
 }
 
-// ---- ⑨ encode_loop（多输出循环整体下沉：排序/flatten 边界/逐行失败隔离/break 扫尾）----
-bool stage_encode_loop(RunFileContext &ctx) {
-    std::vector<std::size_t> order(ctx.targets.size());
-    for (std::size_t i = 0; i < order.size(); ++i)
-        order[i] = i;
+// ---- T5：评分任务提交（异步；不阻塞文件线程）----
+// 顺序契约（C3）：encode → metawrite（落盘）→ OutputDone（不含 metric）→ **提交评分任务**；
+// 评分完成的第二次 OutputDone 由池内线程发出（含 metric，scoring=false）。
+// 内存：need_bytes = 指标内部缓冲（kMetricBytesPerPixel）+ 参考帧（4 B/px·通道，共享所有权）。
+// 配额：池容量装不下 → submit_ex 返回 QuotaExceeded → 该输出 Unavailable（文件仍成功）。
+void submit_score_task(RunFileContext &ctx, const PlannedTarget &pt, OutputResult &row) {
+    if (!ctx.cfg.quality_score || pt.skip || !ctx.work)
+        return; // MetricState::Off = 默认（--dev 不带 --score；仅元数据模式无本入口）
+    MetricJob job;
+    job.src = ctx.fe.src;
+    job.out = row.out;
+    job.format_id = row.format_id;
+    job.work = ctx.work; // shared_ptr<WorkImage> → shared_ptr<const WorkImage>（只读共享）
+    job.width = ctx.work->spec.width;
+    job.height = ctx.work->spec.height;
+    // 位深/抖动口径单源：bps 由 bitdepth_bps(fmt, target 位深) 换算（bmp 的 bpp 口径同源）；
+    // dither8 只在 8bit 量化段生效，heif/avif 的 8bit 走 quantize16 不抖动（既有口径）。
+    job.bps = bitdepth_bps(row.format_id, pt.target.out_bitdepth);
+    job.dither8 =
+        ctx.cfg.color_dither8 && job.bps == 8 && row.format_id != "heif" && row.format_id != "avif";
+    job.metric_srgb = ctx.metric_srgb;
+    job.metric_icc = ctx.metric_icc;
+    // M10-SCOREFIX（所有权）：取消谓词只绑定**本次运行的评分代次令牌**（shared_ptr，原子
+    // 只读），不再拷贝 ctx.cancelled —— 后者是 Scheduler 的 `[Impl*]{...}` 值拷贝，评分任务
+    // 跨文件线程存活时会随调度器析构而悬垂。用户取消与运行结束都由 pool 翻转该令牌。
+    ScorePool &pool = ScorePool::instance();
+    const ScoreRunPtr run_state = pool.current_run();
+    job.cancelled = [run_state] { return run_state->cancelled(); };
 
-    for (std::size_t pos = 0; pos < order.size(); ++pos) {
-        const std::size_t idx = order[pos];
-        const PlannedTarget &pt = ctx.targets[idx];
-        OutputResult &row = ctx.res.outputs[pt.cfg_index];
-        if (pt.skip) {
-            set_output_state(row, OutputState::Skipped); // R-172 单点迁移
-            ctx.mux->on_output_skipped(pt.cfg_index);    // §7.2：该输出全段记满（文件整体可达 1.0）
-            continue; // 跳过行不参与 encode/告警（0.2 的 Skip 语义）
+    const std::uint64_t px =
+        static_cast<std::uint64_t>(job.width) * static_cast<std::uint64_t>(job.height);
+    const std::uint64_t frame_bytes =
+        px * static_cast<std::uint64_t>(ctx.work->spec.nchannels) * 4ull;
+    const std::uint64_t need_bytes = kMetricBytesPerPixel * px + frame_bytes;
+
+    // 事件面（池内线程用）：emit 为 scheduler 的转发器**值拷贝**（不持有 RunScope）；
+    // mux 共享所有权保活（snapshot 只读；ctx 析构时已清空其回调）。
+    const std::shared_ptr<ProgressMux> mux = ctx.mux;
+    const auto emit = ctx.ev.on_event;
+    const int cfg_index = static_cast<int>(pt.cfg_index);
+    auto row_ptr = std::make_shared<OutputResult>(row);
+
+    ScoreTask task;
+    task.out = row.out.string();
+    task.need_bytes = need_bytes;
+    task.result = row_ptr;
+    task.run_state = run_state; // M10-SCOREFIX：任务绑定本次运行的代次（取消/丢弃按代次判定）
+    task.run = [job, row_ptr, mux, emit, cfg_index]() {
+        try {
+            run_metric_job(job, *row_ptr);
+        } catch (const std::exception &e) {
+            row_ptr->metric_state = MetricState::Failed;
+            row_ptr->metric_ssimulacra2 = -1.0;
+            row_ptr->metric_note = std::string("指标内部错误: ") + e.what();
+        } catch (...) {
+            row_ptr->metric_state = MetricState::Failed;
+            row_ptr->metric_ssimulacra2 = -1.0;
+            row_ptr->metric_note = "指标内部错误";
         }
-        // W1-T6：该输出进入编码段（§7.2 的 50%+10% 块）。绑定必须早于本输出的任何阶段
-        // 事件 —— 合成标识（§7.3）以"格式是否在 k 表内"预置，编码返回后再按
-        // `progress_reported` 校正；先绑定可保证该输出的**所有**事件 synthetic 口径一致。
-        const ProgressFn out_progress = ctx.mux->bind_output(pt.cfg_index, pt.target.format_id);
-        const bool synth_pump = ctx.mux->synth_active(pt.cfg_index);
+        if (!emit)
+            return;
+        FileEvent e{};
+        e.state = FileState::OutputDone;
+        if (mux)
+            e.progress = mux->snapshot(Stage::Done, cfg_index);
+        e.progress.scoring = false;
+        e.output = std::make_shared<const OutputResult>(*row_ptr);
+        emit(e);
+    };
+    task.heartbeat = [mux, emit, cfg_index]() {
+        if (!emit)
+            return;
+        FileEvent e{};
+        e.state = FileState::Progress;
+        if (mux)
+            e.progress = mux->snapshot(Stage::MetaWrite, cfg_index);
+        e.progress.heartbeat = true;
+        e.progress.scoring = true;
+        emit(e);
+    };
 
-        if (is_cancelled(ctx.cancelled)) {
-            ctx.finalize(FileOutcome::Verdict::Cancelled);
-            return false;
+    // M10-SCOREFIX：提交结果三分类（配额不足 / 运行取消 / 池关闭）→ 各自准确的中文 note。
+    // 旧实现只有 bool，任何拒绝都写"内存不足"（用户取消后误导）。
+    const ScorePool::SubmitStatus status = pool.submit_ex(std::move(task));
+    if (status != ScorePool::SubmitStatus::Accepted) {
+        // P0 兜底（设计 §4.2.2(2)）：评分不可用 → 该输出 Unavailable，**文件仍成功**。
+        // 行留在文件结果里（终态事件可见该 Unavailable 口径）。
+        row.metric_state = MetricState::Unavailable;
+        row.metric_ssimulacra2 = -1.0;
+        row.metric_ms = 0.0;
+        switch (status) {
+        case ScorePool::SubmitStatus::QuotaExceeded:
+            // 只有"配额不足"这一类才写内存不足（P0 兜底的真实原因）。
+            row.metric_note = "内存不足，已跳过评分（需要 " + std::to_string(need_bytes) +
+                              " B，评分配额 " + std::to_string(pool.capacity()) + " B）";
+            break;
+        case ScorePool::SubmitStatus::RunCancelled:
+            // 运行取消：绝不再写"内存不足"（取消发生在配额充足时同样成立）。
+            row.metric_note = "运行取消，评分未完成";
+            break;
+        case ScorePool::SubmitStatus::PoolStopping:
+            row.metric_note = "评分池已关闭，评分未完成";
+            break;
+        case ScorePool::SubmitStatus::InvalidTask:
+        case ScorePool::SubmitStatus::Accepted:
+            row.metric_note = "评分任务无效，评分未完成";
+            break;
         }
+        log_info(kStage, kFile, "quality metric",
+                 {{"src", ctx.fe.src.string()},
+                  {"out", row.out.string()},
+                  {"format", row.format_id},
+                  {"state", "unavailable"},
+                  {"score", ""},
+                  {"ms", "0"},
+                  {"note", row.metric_note},
+                  {"submit_status", ScorePool::submit_status_name(status)}});
+        return;
+    }
+    log_debug(kStage, kFile, "score task submitted",
+              {{"src", ctx.fe.src.string()},
+               {"out", row.out.string()},
+               {"need_bytes", std::to_string(need_bytes)},
+               {"quota_bytes", std::to_string(pool.capacity())},
+               {"workers", std::to_string(pool.workers())},
+               {"generation", std::to_string(run_state->generation())}});
+}
 
-        // ---- bit depth note (§5.7) ----
-        // BMP-02：BMP 的 out_bitdepth 是 bpp（24），其余格式是 bps；必须换算到同单位再比较，
-        // 否则 16-bit 源 → BMP 24bpp（实际 8bps）不会告警。
-        const int out_bps = bitdepth_bps(pt.fmt->id, pt.target.out_bitdepth);
-        if (ctx.info.src_bitdepth > out_bps) {
+// ============================================================================================
+// M10 / W1-B1（T6；docs/v0.4.0-design.md §4.4 / C5）：同文件多格式并行编码
+//   模型：共享段（probe/decode/orient/flatten/color/meta）一次 → 逐 target 的
+//   encode+metawrite 可在**独立线程**执行（每 task 独立 encoder 实例 + 独立 EncodeRequest，
+//   共享只读工作缓冲）→ 完成后提交异步评分。
+//   * 并行度 = RunConfig::max_parallel_targets（0 = 自动 → min(2, outputs.size())；A3）；
+//   * 飞行缓冲：每并行任务在**文件预算之外**再占一份按格式/位深估算的 token（§4.4.3）；
+//     预算装不下 → 整个文件退回串行（不失败，只慢）；
+//   * 失败隔离/聚合终态沿用 verdict_of_rows；输出行序恒为配置顺序（res.outputs 按 cfg_index
+//     写入，与执行顺序无关）；reserved 仍在文件终态后登记（scheduler 侧，不变）；
+//   * 取消：任一 task 见取消 → 置 cancel_hit，后续 task 不再启动（不再处理剩余 target）。
+// ============================================================================================
+enum class TargetOutcome : std::uint8_t { Ok, Failed, Cancelled, Skipped };
+
+// ============================================================================================
+// M10 / W3-T4（docs/v0.4.0-design.md §9.6）：自适应输出（策略非空）的轮循环
+//   与 §9.4/§9.5/§9.8 逐条对应；执行器本体的算法/停止条件/候选三件套在 core/adaptive_exec，
+//   本段只负责**接线**：真编码器、同步评分（复用 run_metric_job 单源）、进度/日志/侧车与
+//   既有 metawrite/mtime 段。
+//   非自适应路径（policy 空）不进入本段 → 逐字节零变化（回归 zero diff 的结构性保证）。
+// ============================================================================================
+
+// MetricState → 词表（日志/进度用；与 dev_cli 的 sidecar 映射同源 = pp::metric::state_name）。
+const char *metric_state_text(MetricState s) {
+    switch (s) {
+    case MetricState::Off:
+        return pp::metric::state_name(pp::metric::State::Off);
+    case MetricState::Ok:
+        return pp::metric::state_name(pp::metric::State::Ok);
+    case MetricState::Unavailable:
+        return pp::metric::state_name(pp::metric::State::Unavailable);
+    case MetricState::Failed:
+        return pp::metric::state_name(pp::metric::State::Failed);
+    }
+    return "off";
+}
+
+// 策略校验错误 → 用户可见文本（带行号/列号/错误码/建议；§9.2 的定位口径）。
+std::string adaptive_error_text(const AdaptiveError &e) {
+    std::string out;
+    if (e.line > 0) {
+        out = "第 " + std::to_string(e.line) + " 行第 " + std::to_string(e.col) + " 列：";
+    }
+    out += e.message;
+    if (!e.code.empty())
+        out += "（" + e.code + "）";
+    if (!e.hint.empty())
+        out += "；建议：" + e.hint;
+    return out;
+}
+
+// ---- 逐输出 metawrite 段（encode 成功后；单次编码与自适应轮循环共用同一条写路径）----
+// 语义逐字搬移自 W1 的 run_target（顺序/日志/告警/终态单点不变）。返回 false = 该输出失败
+// （行已置 Failed、OutputDone 已发）。
+bool run_target_metawrite(RunFileContext &ctx, const PlannedTarget &pt, OutputResult &row) {
+    // ---- metadata write (§5.8, §4.8) ----
+    ctx.stage(FileState::Writing, Stage::MetaWrite, static_cast<int>(pt.cfg_index));
+    ctx.mux->output_stage(pt.cfg_index, Stage::MetaWrite);
+    Clock::time_point t0 = Clock::now();
+    std::string meta_err;
+    // M2-T4 (#6/#8): the writer's explicit failure/degradation channel. R-171 起写路径
+    // 告警**只**走本通道（plan.warnings 归 build_plan，写路径不再回写 const plan）。
+    std::vector<std::string> writer_warnings;
+    if (pt.fmt->meta_path == "exiv2") {
+        meta_err = write_metadata_exiv2(row.out, ctx.meta_plan, ctx.payloads, &writer_warnings);
+    }
+    merge_warnings(row.warnings, ctx.meta_plan.warnings); // build_plan 通道（frozen content）
+    merge_writer_warnings(row.warnings, writer_warnings);
+    row.t.metawrite_ms = ms_since(t0);
+    if (!meta_err.empty()) {
+        // R-002（P0）：写回失败 = 该输出真失败（不再吞成 warning + ok=true）。
+        // 写回已是临时文件 + rename（metadata.cpp），失败时磁盘上是编码产物原样
+        // （无截断半成品；编码产物不删除 —— 删除用户数据比保留像素更危险，裁定见
+        // handoff），此处如实记失败行让上层可见。
+        row.error = "metadata write failed: " + meta_err;
+        row.error_kind = ErrorKind::MetaWrite;
+        set_output_state(row, OutputState::Failed);
+        log_error(kStage, kFile, row.error,
+                  {{"src", ctx.fe.src.string()}, {"out", row.out.string()}});
+        ctx.mux->on_output_failed(pt.cfg_index);
+        ctx.emit_output_done(row, static_cast<int>(pt.cfg_index)); // A1/A2（失败行终态）
+        return false;
+    }
+    if (pt.fmt->meta_path == "none") {
+        // BMP has no metadata container; T5 skips silently, the pipeline reports it (§4.8).
+        row.warnings.push_back(
+            Warning{WarningKind::MetadataDropped, "bmp output carries no metadata container"});
+        // B3（UX-14 B3 余量 / E2，M7-R2A）：OIIO BMP writer 不落 ICC（V5 头 profile 槽
+        // 未写，测试钉住事实见 test_enc_oiio 的 ICC 回读）—— 只要本次有 ICC 要嵌
+        // （keep 的源 ICC 或非 keep 的目标 ICC），BMP 都无法承载，必须显式警示。
+        if (!ctx.icc_to_embed.empty()) {
             row.warnings.push_back(
-                Warning{WarningKind::DepthDowngrade,
-                        "source bit depth " + std::to_string(ctx.info.src_bitdepth) +
-                            " -> output bit depth " + std::to_string(out_bps) + " bps"});
+                Warning{WarningKind::EmbedIccUnsupported,
+                        "bmp output cannot embed the ICC profile (color target " +
+                            to_string(ctx.cfg.color) + ")"});
         }
+    }
+    set_output_state(row, OutputState::Ok);          // R-172 单点迁移
+    ctx.mux->on_output_metawrite_done(pt.cfg_index); // §7.2 末行：metawrite + mtime + 落盘 = 10%
+    return true;
+}
 
-        // ---- encode (§5.7)：单输出一次调用（§3.1）----
-        ctx.stage(FileState::Encoding, Stage::Encode, static_cast<int>(pt.cfg_index));
-        Clock::time_point t0 = Clock::now();
-        // EncodeRequest 字段序（encoder.h §3.1）：img, target, meta, cancelled, progress,
-        // encode_threads, dither8。W1-T6：progress = ProgressMux 的输出级回调（真实行级 →
-        // 直接汇流；无回调格式 → 走合成估算，编码期间由 SynthPump 按 20ms 采样，§7.3）；
-        // encode_threads = W1-T7 起由调度器 E3 分配（`RunScope::encode_threads`，§8.2），
-        // 无 scope（单测直调）恒 1 = 0.2 行为。dither8 = UX-14 C2（M7-R2A）：RunConfig 的
-        // color_dither8 进编码器 8bit 量化段（默认 false = 逐字不变）。
-        const int enc_threads = encode_threads_of(ctx.ev.scope);
-        EncodeRequest req{ctx.work.buf,         pt.target,    ctx.meta,
-                          ctx.cancelled,        out_progress, enc_threads,
+// 自适应输出（§9.6）：逐轮编码到候选临时文件 → 同步评分 → 选定者 commit → metawrite。
+TargetOutcome run_target_adaptive(RunFileContext &ctx, const PlannedTarget &pt) {
+    OutputResult &row = ctx.res.outputs[pt.cfg_index];
+    const int cfg_index = static_cast<int>(pt.cfg_index);
+    const std::string src = ctx.fe.src.string();
+
+    // 输出级进度绑定（合成标识与单次编码路径同口径；每轮复用同一个 ProgressFn 语义）。
+    const ProgressFn out_progress = ctx.mux->bind_output(pt.cfg_index, pt.target.format_id);
+    const bool synth_pump = ctx.mux->synth_active(pt.cfg_index);
+    const int enc_threads = encode_threads_of(ctx.ev.scope);
+
+    // ---- 策略解析 + 格式作用域校验（失败 = 该输出失败；不静默当"关闭"）----
+    AdaptivePolicy policy;
+    AdaptiveError perr;
+    if (!parse_and_validate_adaptive_policy(pt.adaptive_policy, pt.target.format_id, policy,
+                                            &perr)) {
+        row.error = "adaptive: " + adaptive_error_text(perr);
+        row.error_kind = ErrorKind::Config;
+        set_output_state(row, OutputState::Failed);
+        log_error(kStage, kFile, "adaptive policy invalid",
+                  {{"src", src},
+                   {"out", row.out.string()},
+                   {"format", pt.target.format_id},
+                   {"error", row.error},
+                   {"code", perr.code},
+                   {"line", std::to_string(perr.line)},
+                   {"col", std::to_string(perr.col)}});
+        ctx.emit_output_done(row, cfg_index);
+        return TargetOutcome::Failed;
+    }
+
+    // ---- bit depth note (§5.7，与单次编码路径同口径) ----
+    const int out_bps = bitdepth_bps(pt.fmt->id, pt.target.out_bitdepth);
+    if (ctx.info.src_bitdepth > out_bps) {
+        row.warnings.push_back(Warning{WarningKind::DepthDowngrade,
+                                       "source bit depth " + std::to_string(ctx.info.src_bitdepth) +
+                                           " -> output bit depth " + std::to_string(out_bps) +
+                                           " bps"});
+    }
+
+    ctx.stage(FileState::Encoding, Stage::Encode, cfg_index);
+
+    // 每轮编码的行级进度 → (r-1+f)/max_rounds 的单调刻度（overall 不虚增；mux 自身单调高水位）。
+    const float rmax = static_cast<float>(std::max(1, policy.max_rounds));
+    const auto make_round_progress = [out_progress, rmax](int round) -> ProgressFn {
+        return [out_progress, rmax, round](float f) {
+            const float g =
+                (static_cast<float>(std::max(0, round - 1)) + std::clamp(f, 0.0f, 1.0f)) / rmax;
+            out_progress(std::clamp(g, 0.0f, 1.0f));
+        };
+    };
+
+    // ---- 编码回调：本轮参数 → 候选临时文件（**不写元数据**；评分只回读像素）----
+    // 逐轮告警/进度口径按轮记录，最终只采用**选定轮**的（与单次编码路径的告警序列同口径）。
+    std::map<int, std::vector<Warning>> round_warnings;
+    std::map<int, bool> round_reported;
+    AdaptiveEncodeFn encode_round = [&](const AdaptiveEncodeInput &in) -> AdaptiveEncodeOutput {
+        OutputTarget t = pt.target;
+        t.out_path = in.out;
+        t.params = in.params;
+        const ProgressFn prog = make_round_progress(in.round);
+        EncodeRequest req{ctx.work->buf,        t, ctx.meta, ctx.cancelled, prog, enc_threads,
                           ctx.cfg.color_dither8};
+        const Clock::time_point t0 = Clock::now();
         EncodeResult er;
         {
             SynthPump pump(ctx.mux.get(), synth_pump);
             er = pt.enc->encode(req);
         }
-        row.t.encode_ms = ms_since(t0);
-        ctx.res.t.encode_ms += row.t.encode_ms;
-        merge_warnings(row.warnings, er.warnings);
-        const bool enc_ok = er.error.empty() && er.bytes != 0;
-        // 先按 §3.1 口径校正 mux 的合成标识（progress_reported=false → 该输出标合成），
-        // 再取快照 —— 快照里的 synthetic/reported 即该输出的**最终**口径（不写两次）。
-        if (enc_ok)
-            ctx.mux->on_output_encode_done(pt.cfg_index, er.progress_reported);
-        else
-            ctx.mux->on_output_failed(pt.cfg_index); // 失败：停在已完成进度，不虚增
-        // §7.4 进度快照（debug 级，每输出一条；**不逐行落盘**）：progress_max_row /
-        // progress_reported 是全仓进度口径的两个事实键，另附 samples/synthetic/est_ms 便于
-        // 校准 k 表（§7.3 "k 校准表随日志实测回归校正"）。
-        const ProgressMux::Stats pstats = ctx.mux->stats(pt.cfg_index);
-        log_debug(kStage, kFile, "progress snapshot",
-                  {{"src", ctx.fe.src.string()},
-                   {"output_index", std::to_string(pt.cfg_index)},
-                   {"format", pt.target.format_id},
-                   {"progress_reported", pstats.reported ? "true" : "false"},
-                   {"progress_max_row", std::to_string(pstats.max_row)},
-                   {"progress_samples", std::to_string(pstats.samples)},
-                   {"progress_synthetic", pstats.synthetic ? "true" : "false"},
-                   {"encode_est_ms", fmt_double(pstats.est_ms)}});
-        row.progress_reported = pstats.reported;
-        row.progress_max_row = pstats.max_row;
-        if (!enc_ok) {
-            // R-163 残余（E3，M7-R2A）：取消 vs 失败的 verdict 归类**单点**收口 —— 编码器因
-            // cancel 提前退出（cancelled() 为真，或错误串是取消语义）时走与各阶段 is_cancelled
-            // 检查点一致的 Cancelled 终态（set_output_state 唯一迁移 + error_kind_of 唯一判据
-            // 双轨对齐），不再误归 Failed、不再虚报 encode 错误（旧口径：错误串被 "encode
-            // failed: " 前缀重写 ⇒ error_kind_of 判 Encode、verdict 判 Failed/ DoneWithErrors）。
-            const bool cancelled_row = is_cancelled(ctx.cancelled) ||
-                                       er.error.find("encode cancelled") != std::string::npos;
-            if (cancelled_row) {
-                row.error = "encode cancelled"; // 规范化：error_kind_of 的既有判据即命中 Cancelled
-                row.error_kind = error_kind_of(row.error);
-                set_output_state(row, OutputState::Cancelled);
-                ctx.mux->on_output_failed(pt.cfg_index); // 进度停在已完成，不虚增
-                log_info(kStage, kFile, "encode cancelled",
-                         {{"src", ctx.fe.src.string()},
-                          {"out", row.out.string()},
-                          {"detail", er.error}});
-                ctx.finalize(FileOutcome::Verdict::Cancelled);
-                return false; // 取消：不再处理后续 target（与各阶段检查点同语义）
-            }
-            row.error = "encode failed: " +
-                        (er.error.empty() ? std::string("encoder produced no data") : er.error);
+        AdaptiveEncodeOutput o;
+        o.encode_ms = ms_since(t0);
+        o.bytes = er.bytes;
+        o.ok = er.error.empty() && er.bytes != 0;
+        o.error = er.error;
+        o.progress_reported = er.progress_reported;
+        round_warnings[in.round] = er.warnings;
+        round_reported[in.round] = er.progress_reported;
+        return o;
+    };
+
+    // ---- 评分回调：同步评分（复用 run_metric_job 单源；产物 = 候选文件）----
+    // 自适应必须评分（§9.1-8：即使设置里 quality_score=false，启用自适应的输出仍算分）；
+    // 评分期心跳（C15）：scoring_now 置位 → ctx 的心跳 ticker 补发的 heartbeat 带 scoring=true，
+    // 并在进入评分前显式发一条 scoring=true 的 Progress。
+    AdaptiveScoreFn score_round = [&](const std::filesystem::path &cand) -> AdaptiveScoreOutput {
+        AdaptiveScoreOutput so;
+        if (is_cancelled(ctx.cancelled)) {
+            so.state = MetricState::Unavailable;
+            so.note = "运行取消，评分未完成";
+            return so;
+        }
+        MetricJob job;
+        job.src = ctx.fe.src;
+        job.out = cand;
+        job.format_id = row.format_id;
+        job.work = ctx.work; // shared_ptr<const WorkImage>（只读共享）
+        job.width = ctx.work->spec.width;
+        job.height = ctx.work->spec.height;
+        job.bps = bitdepth_bps(row.format_id, pt.target.out_bitdepth);
+        job.dither8 = ctx.cfg.color_dither8 && job.bps == 8 && row.format_id != "heif" &&
+                      row.format_id != "avif";
+        job.metric_srgb = ctx.metric_srgb;
+        job.metric_icc = ctx.metric_icc;
+        // 同步路径在本线程执行（ctx 生命周期覆盖）→ 直接用运行取消谓词，不需要评分池代次令牌。
+        job.cancelled = ctx.cancelled;
+        OutputResult scratch; // 评分落在临时行：选定后才并回 row（不污染未选定的轮）
+        scratch.out = cand;
+        scratch.format_id = row.format_id;
+        ctx.scoring_output.store(cfg_index);
+        if (ctx.ev.on_event) {
+            FileEvent e{};
+            e.state = FileState::Progress;
+            e.progress = ctx.mux->snapshot(Stage::Encode, cfg_index);
+            e.progress.heartbeat = true;
+            e.progress.scoring = true;
+            e.progress.adaptive_max = policy.max_rounds;
+            ctx.ev.on_event(e);
+        }
+        run_metric_job(job, scratch);
+        ctx.scoring_output.store(-1);
+        so.state = scratch.metric_state;
+        so.score = scratch.metric_ssimulacra2;
+        so.metric_ms = scratch.metric_ms;
+        so.note = scratch.metric_note;
+        return so;
+    };
+
+    // ---- hooks：逐轮 info 日志 + ProgressInfo（adaptive_round/adaptive_max 加性字段）----
+    AdaptiveRunHooks hooks;
+    hooks.on_round = [&](const AdaptiveRoundRecord &rec, int max_rounds) {
+        const bool ok_metric = rec.metric == MetricState::Ok;
+        log_info(kStage, kFile, "adaptive round",
+                 {{"src", src},
+                  {"out", row.out.string()},
+                  {"output_index", std::to_string(cfg_index)},
+                  {"round", std::to_string(rec.round)},
+                  {"stage", rec.stage},
+                  {"key", rec.key},
+                  {"value", rec.value},
+                  {"score", ok_metric ? fmt_double(rec.score) : std::string()},
+                  {"state", metric_state_text(rec.metric)},
+                  {"bytes", std::to_string(rec.bytes)},
+                  {"encode_ms", fmt_double(rec.encode_ms)},
+                  {"metric_ms", fmt_double(rec.metric_ms)},
+                  {"decision", rec.decision},
+                  {"note", rec.note}});
+        if (!ctx.ev.on_event)
+            return;
+        FileEvent e{};
+        e.state = FileState::Progress;
+        e.progress = ctx.mux->snapshot(Stage::Encode, cfg_index);
+        e.progress.adaptive_round = rec.round;
+        e.progress.adaptive_max = max_rounds;
+        ctx.ev.on_event(e);
+    };
+    hooks.on_scoring = [&](int round, int max_rounds) {
+        if (!ctx.ev.on_event)
+            return;
+        FileEvent e{};
+        e.state = FileState::Progress;
+        e.progress = ctx.mux->snapshot(Stage::Encode, cfg_index);
+        e.progress.scoring = true;
+        e.progress.adaptive_round = round;
+        e.progress.adaptive_max = max_rounds;
+        ctx.ev.on_event(e);
+    };
+
+    AdaptiveExecTarget atarget;
+    atarget.format_id = pt.target.format_id;
+    atarget.backend_id = pt.target.backend_id;
+    atarget.tech_id = pt.target.tech_id;
+    atarget.out_bitdepth = pt.target.out_bitdepth;
+    atarget.lossless = lossless_flag(pt.target.params);
+    atarget.width = ctx.work->spec.width;
+    atarget.height = ctx.work->spec.height;
+    atarget.final_path = row.out;
+    const AdaptiveRunResult arun = run_policy(policy, pt.target.params, atarget, encode_round,
+                                              score_round, ctx.cancelled, hooks);
+
+    // 编码段总成本 = 各轮 encode_ms 之和（逐轮明细在 records/日志里；如实、不折算单轮）。
+    row.t.encode_ms = 0.0;
+    for (const AdaptiveRoundRecord &rec : arun.records)
+        row.t.encode_ms += rec.encode_ms;
+
+    // ---- 汇总日志（info；仅启用自适应时新增）----
+    log_info(kStage, kFile, "adaptive summary",
+             {{"src", src},
+              {"out", row.out.string()},
+              {"output_index", std::to_string(cfg_index)},
+              {"rounds", std::to_string(arun.rounds)},
+              {"target", fmt_double(arun.target)},
+              {"selected", arun.selected_round > 0 ? "round" + std::to_string(arun.selected_round)
+                                                   : std::string("none")},
+              {"policy_sha", arun.policy_sha.substr(0, kAdaptivePolicyShaLogChars)},
+              {"final_score",
+               arun.final_metric == MetricState::Ok ? fmt_double(arun.final_score) : std::string()},
+              {"final_metric", metric_state_text(arun.final_metric)},
+              {"overhead_ms", fmt_double(arun.overhead_ms)},
+              {"reason", arun.reason},
+              {"state",
+               arun.ok ? "ok" : (arun.reason == kAdaptiveReasonCancelled ? "cancelled" : "failed")},
+              {"error", arun.error}});
+    // dev-only 证据通道（侧车 adaptive 对象；不参与引擎语义）。
+    publish_adaptive_summary(row.out.string(), std::make_shared<const AdaptiveRunResult>(arun));
+
+    if (!arun.ok) {
+        if (arun.reason == kAdaptiveReasonCancelled) {
+            // §9.1-6：取消 = 丢弃全部候选、不落盘。
+            row.error = arun.error.empty() ? std::string("adaptive cancelled") : arun.error;
+            row.error_kind = ErrorKind::Cancelled;
+            set_output_state(row, OutputState::Cancelled);
+            ctx.mux->on_output_failed(pt.cfg_index); // 进度停在已完成，不虚增
+            log_info(kStage, kFile, "encode cancelled",
+                     {{"src", src}, {"out", row.out.string()}, {"detail", row.error}});
+            ctx.emit_output_done(row, cfg_index);
+            return TargetOutcome::Cancelled;
+        }
+        row.error = !arun.error.empty()
+                        ? arun.error
+                        : ("adaptive failed: " + (arun.reason.empty() ? "unknown" : arun.reason));
+        if (arun.reason == kAdaptiveReasonEncodeFailed)
             row.error_kind = ErrorKind::Encode;
-            set_output_state(row, OutputState::Failed);
-            log_error(kStage, kFile, row.error,
-                      {{"src", ctx.fe.src.string()}, {"out", row.out.string()}});
-            continue; // 该输出失败：其余输出继续（§4.1 任一失败=DoneWithErrors）
-        }
-        row.out_bytes = er.bytes;
+        else if (arun.reason == kAdaptiveReasonCommitFailed)
+            row.error_kind = ErrorKind::Io;
+        else
+            row.error_kind = ErrorKind::Config;
+        set_output_state(row, OutputState::Failed);
+        log_error(kStage, kFile, row.error,
+                  {{"src", src},
+                   {"out", row.out.string()},
+                   {"reason", arun.reason},
+                   {"rounds", std::to_string(arun.rounds)}});
+        ctx.emit_output_done(row, cfg_index);
+        return TargetOutcome::Failed;
+    }
 
-        // ---- M8-C2：SSIMULACRA 2 评分（C10：encode 成功后、metawrite 前；worker 线程内）----
-        // 评分失败/不可用**不**影响产物成败（MetricState 独立于 OutputState/Warning）。
-        score_output_row(ctx, pt, row);
+    // ---- 成功：选定候选已 commit 到最终路径 → 该输出的 metric/告警/进度口径落地 ----
+    row.out_bytes = arun.final_bytes;
+    row.metric_state = arun.final_metric;
+    row.metric_ssimulacra2 = arun.final_metric == MetricState::Ok ? arun.final_score : -1.0;
+    row.metric_ms = arun.metric_ms;
+    row.metric_note = arun.final_metric == MetricState::Ok ? std::string() : arun.reason_note;
+    merge_warnings(row.warnings, arun.selected_round > 0 ? round_warnings[arun.selected_round]
+                                                         : std::vector<Warning>{});
+    ctx.mux->on_output_encode_done(
+        pt.cfg_index, arun.selected_round > 0 ? round_reported[arun.selected_round] : false);
+    const ProgressMux::Stats pstats = ctx.mux->stats(pt.cfg_index);
+    log_debug(kStage, kFile, "progress snapshot",
+              {{"src", src},
+               {"output_index", std::to_string(cfg_index)},
+               {"format", pt.target.format_id},
+               {"progress_reported", pstats.reported ? "true" : "false"},
+               {"progress_max_row", std::to_string(pstats.max_row)},
+               {"progress_samples", std::to_string(pstats.samples)},
+               {"progress_synthetic", pstats.synthetic ? "true" : "false"},
+               {"encode_est_ms", fmt_double(pstats.est_ms)},
+               {"adaptive_rounds", std::to_string(arun.rounds)}});
+    row.progress_reported = pstats.reported;
+    row.progress_max_row = pstats.max_row;
 
-        // ---- metadata write (§5.8, §4.8) ----
-        ctx.stage(FileState::Writing, Stage::MetaWrite, static_cast<int>(pt.cfg_index));
-        ctx.mux->output_stage(pt.cfg_index, Stage::MetaWrite);
-        t0 = Clock::now();
-        std::string meta_err;
-        // M2-T4 (#6/#8): the writer's explicit failure/degradation channel. R-171 起写路径
-        // 告警**只**走本通道（plan.warnings 归 build_plan，写路径不再回写 const plan）。
-        std::vector<std::string> writer_warnings;
-        if (pt.fmt->meta_path == "exiv2") {
-            meta_err = write_metadata_exiv2(row.out, ctx.meta_plan, ctx.payloads, &writer_warnings);
+    if (!run_target_metawrite(ctx, pt, row))
+        return TargetOutcome::Failed;
+    // 事件：选定轮已评分（同步）→ 直接发含 metric 的输出完成事件（不再提交异步评分任务，
+    // 避免同一产物重复计分；分数与产物像素逐字节对应 —— 选定候选就是提交的那份）。
+    ctx.emit_output_done(row, cfg_index);
+    return TargetOutcome::Ok;
+}
+
+// 单 target 的编码 + metawrite 段（线程内串行；可在并行线程执行，见上方线程纪律）。
+// 约定：不得调用 ctx.finalize()（聚合终态只由 coordinator 线程做一次）；返回 Cancelled 时
+// coordinator 负责发 Cancelled 终态。
+TargetOutcome run_target(RunFileContext &ctx, const PlannedTarget &pt) {
+    // —— M10 / W3-T4（docs/v0.4.0-design.md §9.6）：启用自适应（策略非空）的输出走轮循环 ——
+    // 空策略（默认）= 下方既有单次编码路径，**逐字不变**（回归 zero diff 的结构性保证）。
+    if (!pt.adaptive_policy.empty())
+        return run_target_adaptive(ctx, pt);
+    OutputResult &row = ctx.res.outputs[pt.cfg_index];
+    // W1-T6：该输出进入编码段（§7.2 的 50%+10% 块）。绑定必须早于本输出的任何阶段
+    // 事件 —— 合成标识（§7.3）以"格式是否在 k 表内"预置，编码返回后再按
+    // `progress_reported` 校正；先绑定可保证该输出的**所有**事件 synthetic 口径一致。
+    const ProgressFn out_progress = ctx.mux->bind_output(pt.cfg_index, pt.target.format_id);
+    const bool synth_pump = ctx.mux->synth_active(pt.cfg_index);
+
+    if (is_cancelled(ctx.cancelled)) {
+        // C13：已绑定（该输出的 Encode 0 事件已发）→ 必须给该输出一个 OutputDone 终态，
+        // 否则消费端/审计（每个出现过的 output_index 都要有完成事实）缺行。
+        set_output_state(row, OutputState::Cancelled);
+        ctx.emit_output_done(row, static_cast<int>(pt.cfg_index));
+        return TargetOutcome::Cancelled;
+    }
+
+    // ---- bit depth note (§5.7) ----
+    // BMP-02：BMP 的 out_bitdepth 是 bpp（24），其余格式是 bps；必须换算到同单位再比较，
+    // 否则 16-bit 源 → BMP 24bpp（实际 8bps）不会告警。
+    const int out_bps = bitdepth_bps(pt.fmt->id, pt.target.out_bitdepth);
+    if (ctx.info.src_bitdepth > out_bps) {
+        row.warnings.push_back(Warning{WarningKind::DepthDowngrade,
+                                       "source bit depth " + std::to_string(ctx.info.src_bitdepth) +
+                                           " -> output bit depth " + std::to_string(out_bps) +
+                                           " bps"});
+    }
+
+    // ---- encode (§5.7)：单输出一次调用（§3.1）----
+    ctx.stage(FileState::Encoding, Stage::Encode, static_cast<int>(pt.cfg_index));
+    Clock::time_point t0 = Clock::now();
+    // EncodeRequest 字段序（encoder.h §3.1）：img, target, meta, cancelled, progress,
+    // encode_threads, dither8。W1-T6：progress = ProgressMux 的输出级回调（真实行级 →
+    // 直接汇流；无回调格式 → 走合成估算，编码期间由 SynthPump 按 20ms 采样，§7.3）；
+    // encode_threads = W1-T7 起由调度器 E3 分配（`RunScope::encode_threads`，§8.2），
+    // 无 scope（单测直调）恒 1 = 0.2 行为。dither8 = UX-14 C2（M7-R2A）：RunConfig 的
+    // color_dither8 进编码器 8bit 量化段（默认 false = 逐字不变）。
+    // T6：并行时每 target 各持一个 EncodeRequest（无共享可变状态）；工作缓冲只读。
+    const int enc_threads = encode_threads_of(ctx.ev.scope);
+    EncodeRequest req{ctx.work->buf,        pt.target,    ctx.meta,
+                      ctx.cancelled,        out_progress, enc_threads,
+                      ctx.cfg.color_dither8};
+    EncodeResult er;
+    {
+        SynthPump pump(ctx.mux.get(), synth_pump);
+        er = pt.enc->encode(req);
+    }
+    row.t.encode_ms = ms_since(t0);
+    merge_warnings(row.warnings, er.warnings);
+    const bool enc_ok = er.error.empty() && er.bytes != 0;
+    // 先按 §3.1 口径校正 mux 的合成标识（progress_reported=false → 该输出标合成），
+    // 再取快照 —— 快照里的 synthetic/reported 即该输出的**最终**口径（不写两次）。
+    if (enc_ok)
+        ctx.mux->on_output_encode_done(pt.cfg_index, er.progress_reported);
+    else
+        ctx.mux->on_output_failed(pt.cfg_index); // 失败：停在已完成进度，不虚增
+    // §7.4 进度快照（debug 级，每输出一条；**不逐行落盘**）：progress_max_row /
+    // progress_reported 是全仓进度口径的两个事实键，另附 samples/synthetic/est_ms 便于
+    // 校准 k 表（§7.3 "k 校准表随日志实测回归校正"）。
+    const ProgressMux::Stats pstats = ctx.mux->stats(pt.cfg_index);
+    log_debug(kStage, kFile, "progress snapshot",
+              {{"src", ctx.fe.src.string()},
+               {"output_index", std::to_string(pt.cfg_index)},
+               {"format", pt.target.format_id},
+               {"progress_reported", pstats.reported ? "true" : "false"},
+               {"progress_max_row", std::to_string(pstats.max_row)},
+               {"progress_samples", std::to_string(pstats.samples)},
+               {"progress_synthetic", pstats.synthetic ? "true" : "false"},
+               {"encode_est_ms", fmt_double(pstats.est_ms)}});
+    row.progress_reported = pstats.reported;
+    row.progress_max_row = pstats.max_row;
+    if (!enc_ok) {
+        // R-163 残余（E3，M7-R2A）：取消 vs 失败的 verdict 归类**单点**收口 —— 编码器因
+        // cancel 提前退出（cancelled() 为真，或错误串是取消语义）时走与各阶段 is_cancelled
+        // 检查点一致的 Cancelled 终态（set_output_state 唯一迁移 + error_kind_of 唯一判据
+        // 双轨对齐），不再误归 Failed、不再虚报 encode 错误（旧口径：错误串被 "encode
+        // failed: " 前缀重写 ⇒ error_kind_of 判 Encode、verdict 判 Failed/ DoneWithErrors）。
+        const bool cancelled_row =
+            is_cancelled(ctx.cancelled) || er.error.find("encode cancelled") != std::string::npos;
+        if (cancelled_row) {
+            row.error = "encode cancelled"; // 规范化：error_kind_of 的既有判据即命中 Cancelled
+            row.error_kind = error_kind_of(row.error);
+            set_output_state(row, OutputState::Cancelled);
+            ctx.mux->on_output_failed(pt.cfg_index); // 进度停在已完成，不虚增
+            log_info(
+                kStage, kFile, "encode cancelled",
+                {{"src", ctx.fe.src.string()}, {"out", row.out.string()}, {"detail", er.error}});
+            ctx.emit_output_done(row, static_cast<int>(pt.cfg_index)); // A1/A2
+            return TargetOutcome::Cancelled; // 取消：不再处理后续 target（同各阶段检查点语义）
         }
-        merge_warnings(row.warnings, ctx.meta_plan.warnings); // build_plan 通道（frozen content）
-        merge_writer_warnings(row.warnings, writer_warnings);
-        row.t.metawrite_ms = ms_since(t0);
-        ctx.res.t.metawrite_ms += row.t.metawrite_ms;
-        if (!meta_err.empty()) {
-            // R-002（P0）：写回失败 = 该输出真失败（不再吞成 warning + ok=true）。
-            // 写回已是临时文件 + rename（metadata.cpp），失败时磁盘上是编码产物原样
-            // （无截断半成品；编码产物不删除 —— 删除用户数据比保留像素更危险，裁定见
-            // handoff），此处如实记失败行让上层可见。
-            row.error = "metadata write failed: " + meta_err;
-            row.error_kind = ErrorKind::MetaWrite;
-            set_output_state(row, OutputState::Failed);
-            log_error(kStage, kFile, row.error,
-                      {{"src", ctx.fe.src.string()}, {"out", row.out.string()}});
-            ctx.mux->on_output_failed(pt.cfg_index);
+        row.error = "encode failed: " +
+                    (er.error.empty() ? std::string("encoder produced no data") : er.error);
+        row.error_kind = ErrorKind::Encode;
+        set_output_state(row, OutputState::Failed);
+        log_error(kStage, kFile, row.error,
+                  {{"src", ctx.fe.src.string()}, {"out", row.out.string()}});
+        ctx.emit_output_done(row, static_cast<int>(pt.cfg_index)); // A1/A2（失败行也要有终态）
+        return TargetOutcome::Failed; // 该输出失败：其余输出继续（§4.1 任一失败=DoneWithErrors）
+    }
+    row.out_bytes = er.bytes;
+
+    // metadata write (§5.8, §4.8)：W3-T4 起与自适应路径共用同一条写路径（语义逐字搬移）。
+    if (!run_target_metawrite(ctx, pt, row))
+        return TargetOutcome::Failed;
+    // —— M10 / W1-B1（A1/A2；C13）：输出完成事件 ——
+    // 时点 = "编码 + metawrite 完成"之后（metric 尚未计算；异步评分完成后由评分池补发
+    // 含 metric 的第二次 OutputDone）。文件终态事件在此之后才发出（幂等校准）。
+    ctx.emit_output_done(row, static_cast<int>(pt.cfg_index));
+    // —— M10 / W1-B1（T5；C3/C14）：提交异步评分任务 ——
+    // 非自适应默认路径**不再同步等评分**：该行已完成（OutputDone 已发），评分在评分池的
+    // 独立线程执行，完成后再发一次含 metric 的 OutputDone。评分失败/不可用不影响产物。
+    submit_score_task(ctx, pt, row);
+    return TargetOutcome::Ok;
+}
+
+// ---- ⑨ encode_loop（T6：跳过行先结算 → 其余 target 按并行度扇出 → 聚合收尾）----
+bool stage_encode_loop(RunFileContext &ctx) {
+    // 跳过行（冲突 Skip 命中）先按配置顺序结算：不占并行度、不发编码事件（0.2 语义不变）。
+    std::vector<std::size_t> order;
+    order.reserve(ctx.targets.size());
+    for (std::size_t i = 0; i < ctx.targets.size(); ++i) {
+        const PlannedTarget &pt = ctx.targets[i];
+        if (pt.skip) {
+            OutputResult &row = ctx.res.outputs[pt.cfg_index];
+            set_output_state(row, OutputState::Skipped); // R-172 单点迁移
+            ctx.mux->on_output_skipped(pt.cfg_index);    // §7.2：该输出全段记满（文件整体可达 1.0）
+            ctx.emit_output_done(row, static_cast<int>(pt.cfg_index)); // A1/A2：该行终态已定
             continue;
         }
-        if (pt.fmt->meta_path == "none") {
-            // BMP has no metadata container; T5 skips silently, the pipeline reports it (§4.8).
-            row.warnings.push_back(
-                Warning{WarningKind::MetadataDropped, "bmp output carries no metadata container"});
-            // B3（UX-14 B3 余量 / E2，M7-R2A）：OIIO BMP writer 不落 ICC（V5 头 profile 槽
-            // 未写，测试钉住事实见 test_enc_oiio 的 ICC 回读）—— 只要本次有 ICC 要嵌
-            // （keep 的源 ICC 或非 keep 的目标 ICC），BMP 都无法承载，必须显式警示。
-            if (!ctx.icc_to_embed.empty()) {
-                row.warnings.push_back(
-                    Warning{WarningKind::EmbedIccUnsupported,
-                            "bmp output cannot embed the ICC profile (color target " +
-                                to_string(ctx.cfg.color) + ")"});
+        order.push_back(i);
+    }
+    if (order.empty()) {
+        ctx.res.t.encode_ms = 0.0;
+        ctx.res.t.metawrite_ms = 0.0;
+        return true; // 全部跳过：无编码任务（与旧循环逐字等价）
+    }
+
+    const int total = static_cast<int>(order.size());
+    int parallel =
+        ctx.cfg.max_parallel_targets > 0 ? ctx.cfg.max_parallel_targets : std::min(2, total);
+    parallel = std::clamp(parallel, 1, total);
+
+    // —— 飞行缓冲（§4.4.3）：并行任务在文件预算之外各占一份 token ——
+    // 估算 = 每任务的编码器内部缓冲上界（enc_common 的表，按格式/位深）；整个文件的并行
+    // 需求装不下 → parallel 退回 1（串行仍可完成，只慢；**不失败**）。
+    struct FlightTokens {
+        PixelBudget *budget = nullptr;
+        std::vector<std::uint64_t> held;
+        ~FlightTokens() {
+            for (std::uint64_t b : held) {
+                if (budget != nullptr && b != 0)
+                    budget->release(b);
             }
         }
-        set_output_state(row, OutputState::Ok); // R-172 单点迁移
-        ctx.mux->on_output_metawrite_done(
-            pt.cfg_index); // §7.2 末行：metawrite + mtime + 落盘 = 10%
+    } flight;
+    if (parallel > 1 && ctx.ev.scope != nullptr && ctx.ev.scope->budget != nullptr) {
+        const std::uint64_t px = static_cast<std::uint64_t>(ctx.work->spec.width) *
+                                 static_cast<std::uint64_t>(ctx.work->spec.height);
+        std::uint64_t per_task = 0;
+        for (const std::size_t idx : order) {
+            const PlannedTarget &pt = ctx.targets[idx];
+            per_task = std::max(
+                per_task,
+                enc::encoder_flight_bytes(pt.target.format_id,
+                                          bitdepth_bps(pt.fmt->id, pt.target.out_bitdepth), px));
+        }
+        PixelBudget *budget = ctx.ev.scope->budget;
+        const std::uint64_t want = per_task * static_cast<std::uint64_t>(parallel);
+        bool ok = per_task > 0 && budget->used() + want <= budget->capacity();
+        if (ok) {
+            flight.budget = budget;
+            for (int i = 0; i < parallel; ++i) {
+                if (!budget->acquire(per_task, ctx.cancelled)) {
+                    ok = false;
+                    break;
+                }
+                flight.held.push_back(per_task);
+            }
+        }
+        if (!ok) {
+            flight.held.clear(); // 全部归还（FlightTokens 析构时 budget 仍有效）
+            parallel = 1;
+        }
+        log_info(kStage, kFile, "encoder flight budget",
+                 {{"src", ctx.fe.src.string()},
+                  {"parallel", std::to_string(parallel)},
+                  {"per_task_bytes", std::to_string(per_task)},
+                  {"held_bytes", std::to_string(want)},
+                  {"budget_used", std::to_string(budget->used())},
+                  {"budget_capacity", std::to_string(budget->capacity())}});
+    }
+
+    // —— 扇出（parallel==1 时零线程：主线程直接跑 = 0.3.6 行为）——
+    std::atomic<std::size_t> next{0};
+    std::atomic<bool> cancel_hit{false};
+    std::vector<TargetOutcome> outcome(order.size(), TargetOutcome::Ok);
+    const auto worker = [&]() {
+        for (;;) {
+            const std::size_t slot = next.fetch_add(1, std::memory_order_relaxed);
+            if (slot >= order.size())
+                return;
+            if (cancel_hit.load(std::memory_order_relaxed))
+                return;
+            const std::size_t idx = order[slot];
+            const TargetOutcome o = run_target(ctx, ctx.targets[idx]);
+            outcome[slot] = o;
+            if (o == TargetOutcome::Cancelled) {
+                cancel_hit.store(true, std::memory_order_relaxed);
+                return;
+            }
+        }
+    };
+    const int spawn = parallel - 1;
+    std::vector<std::thread> threads;
+    threads.reserve(static_cast<std::size_t>(spawn > 0 ? spawn : 0));
+    for (int i = 0; i < spawn; ++i)
+        threads.emplace_back(worker);
+    worker();
+    for (std::thread &t : threads) {
+        if (t.joinable())
+            t.join();
+    }
+
+    // 计时聚合在 join 之后做（并发下不得在任务里 += 共享计数）。
+    ctx.res.t.encode_ms = 0.0;
+    ctx.res.t.metawrite_ms = 0.0;
+    for (const OutputResult &row : ctx.res.outputs) {
+        ctx.res.t.encode_ms += row.t.encode_ms;
+        ctx.res.t.metawrite_ms += row.t.metawrite_ms;
+    }
+
+    const bool any_cancelled = std::any_of(outcome.begin(), outcome.end(), [](TargetOutcome o) {
+        return o == TargetOutcome::Cancelled;
+    });
+    if (any_cancelled) {
+        ctx.finalize(FileOutcome::Verdict::Cancelled);
+        return false;
     }
     return true;
 }
 
 // ---- ⑩ finish_file（mtime + 收尾样本 + 逐输出/整文件日志 + aggregate 单源聚合）----
 void stage_finish(RunFileContext &ctx) {
+    // C15：收尾前先停心跳线程（此后不再有长静默段；避免收尾事件与心跳交错）。
+    if (ctx.ticker) {
+        ctx.ticker->stop();
+        ctx.ticker.reset();
+    }
     // mtime sync (§5.9)：生效 DateTimeOriginal 只算一次，逐输出落盘一次
     if (ctx.cfg.rules.sync_mtime && !ctx.meta_plan.datetime_original.empty()) {
         for (const OutputResult &row : ctx.res.outputs) {
@@ -1696,7 +2564,7 @@ FileOutcome run_metadata_only(const FileEntry &fe, const RunConfig &cfg, EventFn
     // W1-T6：进度枢纽（仅元数据模式同样走 §7.2 权重表：无 encode/decode 段 → 对应阶段记满）。
     // 本路径单文件单输出，阶段事件按**源文件级**（output_index=-1）发；输出级进度由
     // ProgressMux 的逐输出记账驱动（synthetic 恒 false：无编码器参与）。
-    std::unique_ptr<ProgressMux> mux;
+    std::shared_ptr<ProgressMux> mux;
     const auto stage = [&ev, &mux](FileState s, Stage st) {
         if (!ev.on_event)
             return;
@@ -1713,8 +2581,22 @@ FileOutcome run_metadata_only(const FileEntry &fe, const RunConfig &cfg, EventFn
         finalize_aggregate(outcome, t_start, v);
         return outcome;
     };
-    const auto fail = [&t_start, &outcome](std::string msg) -> FileOutcome {
+    // M10 / W1-B1（A1/A2；C13）：仅元数据模式的逐输出终态事件（单输出，index 0）。
+    // 该路径同样会发输出级进度事件（mux 的 index 0）→ 审计要求每个出现过的 output_index
+    // 都有可识别的完成事实；此处按"该行终态已定"时点发（成功/跳过/失败/取消各一次）。
+    const auto emit_output_done = [&ev, &mux, &res]() {
+        if (!ev.on_event || res.outputs.empty())
+            return;
+        FileEvent e{};
+        e.state = FileState::OutputDone;
+        if (mux)
+            e.progress = mux->snapshot(Stage::Done, 0);
+        e.output = std::make_shared<const OutputResult>(res.outputs.front());
+        ev.on_event(e);
+    };
+    const auto fail = [&t_start, &outcome, &emit_output_done](std::string msg) -> FileOutcome {
         fail_fill(outcome, t_start, std::move(msg)); // R-168：与 run_one_file 同源收尾
+        emit_output_done();
         return outcome;
     };
 
@@ -1810,6 +2692,7 @@ FileOutcome run_metadata_only(const FileEntry &fe, const RunConfig &cfg, EventFn
             mux->on_output_skipped(0);                   // §7.2：无工作可做 → 全段记满
             log_info(kStage, kFile, "skipped: output exists",
                      {{"src", fe.src.string()}, {"out", row.out.string()}});
+            emit_output_done(); // A1/A2：该行终态（skipped）
             return finalize(FileOutcome::Verdict::Skipped);
         }
         {
@@ -1820,8 +2703,11 @@ FileOutcome run_metadata_only(const FileEntry &fe, const RunConfig &cfg, EventFn
             if (ec)
                 return fail("cannot create output directory: " + ec.message());
         }
-        if (is_cancelled(cancelled))
+        if (is_cancelled(cancelled)) {
+            set_output_state(row, OutputState::Cancelled);
+            emit_output_done(); // A1/A2：取消行的终态事实
             return finalize(FileOutcome::Verdict::Cancelled);
+        }
 
         SourceMeta srcmeta = read_metadata(fe.src);
         if (!srcmeta.error.empty()) {
@@ -1868,6 +2754,7 @@ FileOutcome run_metadata_only(const FileEntry &fe, const RunConfig &cfg, EventFn
         if (ec)
             row.out_bytes = 0;
         set_output_state(row, OutputState::Ok); // R-172 单点迁移
+        emit_output_done();                     // A1/A2：输出完成事实（早于文件终态）
         mux->finish();                          // W1-T6：收尾样本（此路径 §7.2 全段记满 → 1.0）
         log_info(kStage, kFile, "metadata-only done",
                  {{"src", fe.src.string()},

@@ -1022,8 +1022,11 @@ void CheckBox::paintEvent(QPaintEvent *) {
 
 // ---------------------------------------------------------------------------
 // 单行省略标签（R-020/R-320，M7-WP4）：7 份逐字拷贝的唯一实现（行为与各拷贝逐位等价）
+// M10-W1（C10/C11）：加性第 3 参 elide（默认 ElideRight → 既有调用零变化）；运行页名称列
+// 走 ElideMiddle（中间省略保留扩展名，docs/v0.4.0-design.md §5.1/§5.2）。
 // ---------------------------------------------------------------------------
-ElidedLabel::ElidedLabel(QWidget *parent, bool squeeze) : QLabel(parent), squeeze_(squeeze) {
+ElidedLabel::ElidedLabel(QWidget *parent, bool squeeze, Qt::TextElideMode elide)
+    : QLabel(parent), squeeze_(squeeze), elide_(elide) {
     setWordWrap(false); // §9.3 禁折行（QLabel 默认即 false，此处显式钉住）
 }
 
@@ -1065,7 +1068,7 @@ void ElidedLabel::apply_elide() {
         QLabel::setText(full_text_);
         return;
     }
-    QLabel::setText(fontMetrics().elidedText(full_text_, Qt::ElideRight, std::max(0, width())));
+    QLabel::setText(fontMetrics().elidedText(full_text_, elide_, std::max(0, width())));
 }
 
 // ---------------------------------------------------------------------------

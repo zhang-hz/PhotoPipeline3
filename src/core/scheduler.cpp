@@ -18,12 +18,9 @@
 // run_metadata_only (RAII release on every exit path, cancel checked inside acquire), because
 // the pixel budget must cover the whole decode→encode window of one file; acquiring in the
 // worker *and* in the pipeline would double-charge the pool. The worker performs the probe
-// step itself (early failure + budget/serialisation decisions) and run_one_file re-probes for
-// the OIIO spec it needs.
-// NOTE(design): FileEntry has no spec field in the frozen interface, so the first_spec from the
-// worker's probe cannot be handed to run_one_file → every file is probed twice (spec only, no
-// pixel work). One spec for the whole batch is the established fact of the frozen interface;
-// the double probe is accepted.
+// step itself (early failure + budget/serialisation decisions); M10 / W1-T3（A4，additive
+// `FileEntry::probe`）起该 probe 结果经缓存回填给 run_one_file 复用 —— 每文件只 probe 一次
+// （旧口径"冻结接口无 spec 字段 → 每文件两次 probe"已由 A4 加性字段消除，见 pipeline.h）。
 //
 // —— M4-W1-T7（§8 调度面，逐条）——
 //   §8.1 交错启动：worker **取件后**在全局限速器上预约启动时刻
@@ -64,6 +61,7 @@
 #include "core/logger.h"
 #include "core/params.h"
 #include "core/pixelbudget.h"
+#include "core/score_queue.h"
 #include "decode/oiio_reader.h"
 
 namespace pp {
@@ -143,6 +141,72 @@ Alloc alloc_threads(int T, int remaining, int inflight) {
 }
 
 // ---------------------------------------------------------------------------
+// M10-SCOREFIX：异步评分任务的事件出口（shared_ptr 生命周期令牌）
+//   评分任务只持有 `std::shared_ptr<EventSink>`，**不持有 Scheduler::Impl***。Scheduler 析构
+//   时 retire()：此后迟到的事件是 no-op（不再回调 GUI/调度器）；sink 本身由任务共享持有，
+//   任何时刻释放都不会悬垂（评分任务已与 Impl 生命周期解耦）。
+//   last_progress（终态高水位）随 sink 持有：文件线程的 emit 更新、finish 读取；
+//   评分池线程补发的 OutputDone 也经同一 sink（只更新该槽位高水位，不推进文件终态）。
+// ---------------------------------------------------------------------------
+struct EventSink {
+    using Cb = Scheduler::EventCb; // std::function<void(const FileEvent &)>
+
+    mutable std::mutex mu;
+    Cb cb;                                   // guarded by mu
+    std::vector<ProgressInfo> last_progress; // guarded by mu
+    bool alive = true;                       // guarded by mu
+
+    void set_callback(Cb c) {
+        std::lock_guard<std::mutex> lk(mu);
+        cb = std::move(c);
+    }
+
+    void retire() {
+        std::lock_guard<std::mutex> lk(mu);
+        alive = false;
+        cb = {};
+    }
+
+    // 阶段/进度事件转发：index 由调度器回填、result 恒空（终态由 finish() 给）。
+    void emit(std::size_t i, const FileEvent &e) {
+        Cb c;
+        {
+            std::lock_guard<std::mutex> lk(mu);
+            if (!alive)
+                return;
+            if (i < last_progress.size())
+                last_progress[i] = e.progress;
+            c = cb;
+        }
+        if (c) {
+            FileEvent out{};
+            out.index = i;
+            out.state = e.state;
+            out.result = nullptr;
+            out.progress = e.progress;
+            out.output = e.output;
+            c(out);
+        }
+    }
+
+    // 终态事件：附该槽位最后进度高水位（result 指向 Impl::results 的稳定槽位）。
+    void finish(std::size_t i, FileState state, const FileResult *result) {
+        Cb c;
+        ProgressInfo pi;
+        {
+            std::lock_guard<std::mutex> lk(mu);
+            if (!alive)
+                return;
+            c = cb;
+            if (i < last_progress.size())
+                pi = last_progress[i];
+        }
+        if (c)
+            c(FileEvent{i, state, result, pi});
+    }
+};
+
+// ---------------------------------------------------------------------------
 // Impl
 // ---------------------------------------------------------------------------
 struct Scheduler::Impl {
@@ -157,15 +221,18 @@ struct Scheduler::Impl {
     std::atomic<std::size_t> next{0};
 
     std::vector<std::thread> pool;
-    EventCb cb; // guarded by mu
+    // M10-SCOREFIX：事件出口改为 shared_ptr（评分任务只持有它，不持有 Impl*）。
+    // `cb`/`last_progress` 均已迁入 EventSink（sink 为空 = 未初始化，防御）。
+    std::shared_ptr<EventSink> sink;
+    // 本次运行的评分代次令牌（Scheduler::start 建立；析构时取消 + 有界等待）。
+    ScoreRunPtr score_run;
 
     std::unique_ptr<PixelBudget> budget;
 
     std::vector<std::filesystem::path> reserved; // guarded by mu
     std::multiset<std::string> inflight;         // guarded by mu
-    // W1-T6（§3.3/§7.1）：每槽位的进度高水位快照（guarded by mu）。终态事件携带它 ——
-    // 消费端读终态即得"该文件最后的进度"，且进度流恒单调（progress 事件与阶段事件都更新）。
-    std::vector<ProgressInfo> last_progress;
+    // W1-T6（§3.3/§7.1）：每槽位的进度高水位快照已迁入 EventSink::last_progress
+    // （guarded by sink->mu；终态事件携带它 —— 消费端读终态即得"该文件最后的进度"）。
 
     // —— §8 调度面（W1-T7）——
     ScheduleConfig sc;         // §3.3：由 cfg 的同名字段派生（构造一次，运行期只读）
@@ -184,7 +251,8 @@ struct Scheduler::Impl {
     Impl(RunConfig c, std::vector<FileEntry> f)
         : cfg(std::move(c)), files(std::move(f)), stagger(0) {
         results.resize(files.size());
-        last_progress.resize(files.size());
+        sink = std::make_shared<EventSink>();
+        sink->last_progress.resize(files.size());
         for (std::size_t i = 0; i < files.size(); ++i)
             results[i].src = files[i].src;
         // §3.3：ScheduleConfig 由 RunConfig 的 workers/stagger_ms/thread_budget 同名派生。
@@ -203,31 +271,17 @@ struct Scheduler::Impl {
                              static_cast<int>(inflight_n));
     }
 
-    EventCb callback_copy() {
-        std::lock_guard<std::mutex> lk(mu);
-        return cb;
-    }
-
     // 阶段/进度事件转发（W1-T6）：整事件转发（`progress` 随行），index 由调度器回填，
     // result 恒空（终态由 finish() 携带）。
     // R-288（M7-WP8 收敛）：进度单调化**单层**在 ProgressMux::overall_high（含 snapshot）；
     // 本层只缓存"该槽位最后进度"供终态携带，不再做第二套高水位比较。
+    // W1-B1（A2）：`FileEvent::output`（shared_ptr<const OutputResult>）**原样转发** —— 共享
+    // 所有权让 GUI 的排队连接安全（事件投递后任意时刻消费都不会悬垂）；逐输出终态事件
+    // （state == OutputDone）不更新 last_progress 之外的任何状态（文件终态仍由 finish() 给）。
+    // M10-SCOREFIX：转发体在 EventSink（shared_ptr）里 —— 评分任务的事件出口只持有 sink。
     void emit_event(std::size_t i, const FileEvent &e) {
-        EventCb c;
-        {
-            std::lock_guard<std::mutex> lk(mu);
-            if (i < last_progress.size())
-                last_progress[i] = e.progress;
-            c = cb;
-        }
-        if (c) {
-            FileEvent out{};
-            out.index = i;
-            out.state = e.state;
-            out.result = nullptr;
-            out.progress = e.progress;
-            c(out);
-        }
+        if (sink)
+            sink->emit(i, e);
     }
 
     void emit_stage(std::size_t i, FileState s) { emit_event(i, FileEvent{i, s, nullptr, {}}); }
@@ -244,18 +298,13 @@ struct Scheduler::Impl {
     void finish(std::size_t i, FileOutcome outcome) {
         const FileState state = file_state_of(outcome.verdict);
         FileResult r = std::move(outcome.file);
-        EventCb c;
-        ProgressInfo pi;
         {
             std::lock_guard<std::mutex> lk(mu);
             results[i] = std::move(r);
             ++done;
-            c = cb;
-            if (i < last_progress.size())
-                pi = last_progress[i];
         }
-        if (c)
-            c(FileEvent{i, state, &results[i], pi});
+        if (sink)
+            sink->finish(i, state, &results[i]);
     }
 
     // R-174（M7-WP8/B.8）：取消出口**单点** —— 四段复制的 Cancelled 终态构造合一。
@@ -343,7 +392,11 @@ void Scheduler::Impl::worker() {
                 finish(i, std::move(o));
                 continue;
             }
-            fe.info = po.info;
+            // M10 / W1-T3（A4）：完整 probe 缓存回填（pipeline.cpp 的 stage_probe 直接复用，
+            // 消除每文件第二次 probe —— HEIC 输入 pre-decode 3.27s → 目标 ≤1.0s 的同批修复）。
+            // 缓存语义 = 同一次 run 内不变；文件被外部改写属用户竞态，如实记录、不处理。
+            fe.probe = std::move(po);
+            fe.info = fe.probe.info;
             fe.probe_done = true;
         }
 
@@ -416,7 +469,15 @@ void Scheduler::Impl::worker() {
 
         FileOutcome outcome;
         try {
-            EventFn events{[this, i](const FileEvent &e) { emit_event(i, e); }, &scope};
+            // M10-SCOREFIX：只捕获 shared_ptr<EventSink> + 槽位下标（**不捕获 Impl***）。
+            // 该 std::function 会被评分任务按值拷贝并在池线程调用；sink 的 shared_ptr 保证
+            // 生命周期，Impl 析构时 sink->retire() 让迟到事件变 no-op。
+            const std::shared_ptr<EventSink> ev_sink = sink;
+            EventFn events{[ev_sink, i](const FileEvent &e) {
+                               if (ev_sink)
+                                   ev_sink->emit(i, e);
+                           },
+                           &scope};
             if (cfg.metadata_only) {
                 outcome = run_metadata_only(fe, cfg, events);
             } else {
@@ -465,11 +526,36 @@ Scheduler::Scheduler(RunConfig cfg, std::vector<FileEntry> files)
 Scheduler::~Scheduler() {
     cancel();
     wait();
+    if (!impl_)
+        return;
+    // M10-SCOREFIX（所有权收口）：
+    //   ① 评分任务的事件出口是 shared_ptr<EventSink>（不持有 Impl*）—— 这里 retire() 后，
+    //      仍在跑的评分任务即便补发 OutputDone 也是 no-op（不会回调已销毁的消费端）；
+    //   ② 本运行代次的评分任务取消 + **有界等待**（双保险：配额/参考帧尽快归还，发布表不再
+    //      变动）。等待有界 = 关窗/异常退出不无限阻塞；超时如实 warn。
+    if (impl_->sink)
+        impl_->sink->retire();
+    if (impl_->score_run) {
+        ScorePool &pool = ScorePool::instance();
+        pool.cancel_run(impl_->score_run);
+        constexpr auto kShutdownWait = std::chrono::milliseconds(30 * 1000);
+        const bool quiesced = pool.wait_run_idle(impl_->score_run, kShutdownWait);
+        log_debug(kStage, kFile, "score run teardown",
+                  {{"generation", std::to_string(impl_->score_run->generation())},
+                   {"quiesced", quiesced ? "true" : "false"},
+                   {"pending", std::to_string(pool.pending())}});
+        if (!quiesced) {
+            log_warn(
+                kStage, kFile, "score tasks still running after scheduler shutdown",
+                {{"pending", std::to_string(pool.pending())},
+                 {"timeout_ms", std::to_string(static_cast<long long>(kShutdownWait.count()))}});
+        }
+    }
 }
 
 void Scheduler::set_event_callback(EventCb cb) {
-    std::lock_guard<std::mutex> lk(impl_->mu);
-    impl_->cb = std::move(cb);
+    if (impl_ && impl_->sink)
+        impl_->sink->set_callback(std::move(cb));
 }
 
 void Scheduler::start() {
@@ -518,6 +604,17 @@ void Scheduler::start() {
               {"template", d.cfg.output_template},
               {"mode", d.cfg.metadata_only ? "metadata-only" : "transcode"}});
 
+    // M10-SCOREFIX：一次运行 = 一个评分代次。GUI / dev_cli / 单测都经 Scheduler::start 进入
+    // 运行，故"下一次 run 自动复位评分池"在这里兜底：上一代的取消状态不会延续到本次运行
+    // （消除"取消一次 → 同进程后续运行评分全 Unavailable"的一次性缺陷），上一代队列被丢弃。
+    // 显式接线（reset_for_run）另见 GUI on_start 与 dev_cli；重复 begin_run 只是多一个空代次，
+    // 任务始终绑定 start() 建立的代次（pipeline submit 取 current_run）。
+    if (d.cfg.quality_score && !d.cfg.metadata_only) {
+        d.score_run = ScorePool::instance().begin_run();
+        log_debug(kStage, kFile, "score pool run generation",
+                  {{"generation", std::to_string(d.score_run->generation())}});
+    }
+
     for (int i = 0; i < n; ++i)
         d.pool.emplace_back([this] { impl_->worker(); });
 }
@@ -525,6 +622,10 @@ void Scheduler::start() {
 void Scheduler::cancel() {
     impl_->cancelled.store(true);
     impl_->cv.notify_all(); // wake workers blocked on the output-target serialisation
+    // M10-SCOREFIX：运行取消同步取消本次运行的评分代次（在飞评分在检查点退出、队列丢弃；
+    // 不产生半评分）。GUI 另调 ScorePool::cancel_pending()，两者对同一代次幂等。
+    if (impl_->score_run)
+        (void)ScorePool::instance().cancel_run(impl_->score_run);
 }
 
 void Scheduler::wait() {

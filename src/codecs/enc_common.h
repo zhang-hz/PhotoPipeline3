@@ -70,6 +70,17 @@ bool fetch_row(const OIIO::ImageBuf &img, int y, float *dst, std::string &err);
 // 内存型产物的唯一落盘点（= fsops::write_atomic_file 转发：tmp→字节数校验→rename，失败清场）。
 bool write_file(const std::filesystem::path &target, std::string_view data, std::string *err);
 
+// ------------------------------------------------------- 飞行缓冲（M10-B1/T6） --
+// 编码器"在飞"内存估算表（docs/v0.4.0-design.md §4.4.3）：同文件多格式并行编码时，
+// 每个并行任务在**文件预算（2×frame）之外**还要占一份编码器内部缓冲。本表是
+// **实现期实测校准**的初值（按格式 × 位深，单位 B/px）：
+//   x265/HEIF 10bit 最贵（帧池 + lookahead + 参考帧），libjxl 次之（浮点 XYB 平面），
+//   SVT-AV1 居中，jpegli/webp/OIIO 最便宜（整帧 RGBA8 + 量化表）。
+// 用法（pipeline 的 stage_encode_loop）：并行度>1 时按本函数为每个并发槽位 acquire 一份
+// token；拿不到 → 整个文件退回串行（不失败，只慢）。
+std::uint64_t encoder_flight_bytes(std::string_view format_id, int bitdepth_bps,
+                                   std::uint64_t pixels);
+
 // 作用域清理守卫（R-167：库句柄/缓冲的 RAII 收口，消手动清理多出口）。
 template <class F> class ScopeGuard {
 public:

@@ -120,6 +120,7 @@
 #include "ui/contextmenu.h" // UX-1：公共右键菜单件（单一构造点 + 12 类卡 actions）
 #include "ui/exif_editor.h"
 #include "ui/filelistmodel.h"
+#include "ui/format_preset_io.h" // M10-W3-T2：格式预设 JSON/目录 I/O + core/format_preset + core/adaptive
 #include "ui/page_meta.h"
 #include "ui/page_output.h"
 #include "ui/page_run.h"
@@ -1015,6 +1016,9 @@ struct Session {
     // 变化触发 modelReset 时多选整组恢复，批量打标/移除不再塌缩成 1 行。
     QStringList last_selected_paths;
     QString last_preset_path;
+    // M10-W3-T2（C23 §8.5）：格式预设行的信号接线只接一次（接线点在 refresh_preset_card 首调，
+    // 即 MainWindow 构造期 —— mainwindow.cpp 的 wire 段不在本任务写作用域内）。
+    bool format_preset_wired = false;
     QStringList cached_paths; // 行集合签名（避免每次状态变化都重扫时间预览）
     bool cached_alpha = false;
     // M6-T11（§5.2 R5）：图层档记忆的写回接线只接一次（R-256：门槛归 bind_map_layer_writeback()，
@@ -1183,12 +1187,35 @@ struct MainWindow::Impl : mw_cabin::Chrome,
     // M5-T8（C7）输出页几何值表（§7.2 四卡组 + R1–R4 + 修 2-05/2-07/2-10/2-11/2-13/2-14/2-15/
     // 2-16/2-21/2-24/2-25/2-33 + 裁定 A6/A7/A8）
     void smoke_probe_output_geometry();
+    // M10-W3-T2（C23 §8.5 / C24 §9）：格式预设行 + 只读自适应面（行/空态/往返/字节稳定/
+    // 损坏与 kind 报错/自适应摘要与开关；只增，冻结截图集与末行不变）
+    void smoke_probe_format_preset();
 #endif // PP_BUILD_DEV
     // M4-T13 预设卡（页面信号 → 单一持有者：I/O + rules 合并 + 列表刷新）
     void refresh_preset_card();
     void load_preset_file(const QString &path);
     void save_preset_named(const QString &name);
     void delete_preset_file(const QString &path);
+    // ---- M10-W3-T2（C23 / 设计 §8.5）：格式预设（每格式页签顶部行）的**单一 I/O 持有者** ----
+    // 与全局预设同一分工：页面发意图 / 收列表 / 落卡 / 显示只读自适应面；文件读写、校验链、
+    // 归一、二次确认与绝对路径守卫全在本 TU。冻结面加性见 ui/page_output.h 末尾（追认 A9）。
+    //   * 接线点在 refresh_preset_card() 的首调（MainWindow 构造期；一次性，幂等）。
+    //   * load/save 返回**中文错误串**（空 = 成功）而**不弹对话框** —— 探针（--ui-smoke）直接
+    //     调这两个函数取证真实链路，模态弹窗只出现在信号处理器的薄壳里。
+    void wire_format_preset_card();
+    // 列表喂入（列举 +「（损坏）」标注 + 会话态高亮）。target = 目标页（生产 = page_output；
+    // 探针 = 独立页实例）；root 空 = <data_dir>/presets/formats（探针传临时根）。
+    void refresh_format_preset_row(const QString &format_id, PageOutput *target,
+                                   const std::filesystem::path &root = {});
+    std::string format_preset_load_into(const QString &path, PageOutput *target);
+    std::string format_preset_save_card(PageOutput *target, const QString &name,
+                                        const std::filesystem::path &root,
+                                        std::filesystem::path *saved);
+    pp::FormatPresetData format_preset_collect(PageOutput *target, const QString &name) const;
+    void format_preset_save_as(PageOutput *target);
+    void format_preset_delete_file(const QString &path);
+    void format_preset_import_dialog(PageOutput *target);
+    void format_preset_export_dialog(PageOutput *target, const QString &preset_path);
 #ifdef PP_BUILD_DEV
     // M4-T14 运行页自检（§3.4/§7：逐输出行 · 真实/斜纹像素取证 · 失败原因 · 取消态 · 浅色）
     void smoke_probe_run(const QString &shots_dir);

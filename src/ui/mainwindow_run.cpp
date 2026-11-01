@@ -107,8 +107,9 @@
 
 #include "core/fsops.h" // R-006/R-073：补齐预检的路径渲染 + 输出根试建/试写探针
 #include "core/logger.h"
-#include "core/params.h"   // R-006：find_format（补齐预检取目标扩展名）
-#include "core/pipeline.h" // 仅元数据：源格式解析 / path_ctx_for 单源
+#include "core/params.h"      // R-006：find_format（补齐预检取目标扩展名）
+#include "core/pipeline.h"    // 仅元数据：源格式解析 / path_ctx_for 单源
+#include "core/score_queue.h" // M10-W1（T9b）：评分池取消/收敛（C14；异步评分在文件线程之外）
 #include "core/settings.h"
 #include "core/version.h" // R-150：版本徽标取 PP_VERSION_STRING（单源 = CMakeLists.txt:19 生成链）
 #include "decode/oiio_reader.h" // M4-T12：探针的 probe 摘要（与列表模型同一条 oiio probe 通道）
@@ -614,6 +615,17 @@ std::filesystem::path newest_run_log(const std::filesystem::path &dir) {
 // 运行：开始 / 取消 / 结束 / G5 锁定
 // ---------------------------------------------------------------------------
 
+namespace {
+// M10-SCOREFIX（task-20）：评分池收尾语义（超时/宽限）——
+//   结束运行页：分片 drain 60s；超时 → 强制取消（cancel_pending）+ 30s 宽限。
+//   关窗/退出：取消 + 30s 有界等待（aboutToQuit，窗口销毁/调度器析构之前）。
+// 判据与日志字段见 on_scheduler_done 的 `score pool quiesced before end_run` 行。
+constexpr int kScoreDrainSliceMs = 50;
+constexpr int kScoreDrainTimeoutMs = 60'000;
+constexpr int kScoreCancelGraceMs = 30'000;
+constexpr int kScoreCloseWaitMs = 30'000;
+} // namespace
+
 void MainWindow::on_start() {
     Impl &d = *impl_;
     const bool run_again = d.run_again_pending; // R-006/R-146：「再次运行」的补齐语义分支
@@ -652,6 +664,39 @@ void MainWindow::on_start() {
     cfg.thread_budget = d.settings.thread_budget;
     // M8-C2（C11/C12）：GUI 默认开（AppSettings.quality_score，设置页可关）；--dev 默认关。
     cfg.quality_score = d.settings.quality_score;
+
+    // —— M10-SCOREFIX（task-20；C3/C14 收尾）：per-run 评分池复位 + 关窗收口 ——
+    // ① 复位：取消状态按运行代次隔离（旧 `cancel_pending()` 是一次性的，取消一次会让同进程
+    //    后续运行的评分全部 Unavailable —— 该缺陷由 per-run 代次消除）。Scheduler::start 会再
+    //    begin_run 一次（双保险；多一个空代次无副作用），评分任务始终绑定 start 建立的代次。
+    // ② 关窗：`aboutToQuit` 在窗口销毁/调度器析构**之前**触发 → 取消当前代次 + 有界等待
+    //    （评分任务已不持有 Scheduler::Impl*，这里等待是为了配额/参考帧尽快归还与日志如实）。
+    if (cfg.quality_score && !cfg.metadata_only) {
+        pp::ScorePool::instance().reset_for_run();
+        pp::log_info("run", "mainwindow_run.cpp", "score pool reset for run");
+    }
+    if (!property("pp_score_close_hook").toBool()) {
+        setProperty("pp_score_close_hook", true);
+        QObject::connect(qApp, &QCoreApplication::aboutToQuit, this, [this] {
+            Impl &dd = *impl_;
+            if (!dd.sched)
+                return; // 没有在途运行：不创建评分池（零开销）
+            pp::ScorePool &pool = pp::ScorePool::instance();
+            dd.sched->cancel(); // 幂等；进行中的文件跑完
+            pool.cancel_pending();
+            const auto t0 = std::chrono::steady_clock::now();
+            const bool quiesced = pool.wait_idle(std::chrono::milliseconds(kScoreCloseWaitMs));
+            const double ms =
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0)
+                    .count();
+            pp::log_info("run", "mainwindow_run.cpp",
+                         quiesced ? "score pool quiesced on window close"
+                                  : "score pool still busy on window close",
+                         {{"wait_ms", std::to_string(ms)},
+                          {"pending", std::to_string(pool.pending())},
+                          {"timeout_ms", std::to_string(kScoreCloseWaitMs)}});
+        });
+    }
 
     // X-METADATA-ONLY-02：仅元数据模式不再静默把冲突策略改成 Skip；下拉显示什么就执行什么。
     // （旧行为会造成“界面选覆盖/改名，实际全部跳过”的两张皮。）
@@ -980,6 +1025,9 @@ void MainWindow::on_start() {
         plan.workers = cfg.workers;
         plan.thread_budget = cfg.thread_budget;
         plan.metadata_only = cfg.metadata_only;
+        // A10（M10-W1/T9b）：本批是否启用评分 —— 运行页据此在首次 OutputDone（metric Off）
+        // 后显示「评分中」/收尾时把未回分的行收成「—」；外壳据此接评分池的取消/收敛。
+        plan.quality_score = cfg.quality_score;
         d.page_run->set_plan(plan);
     }
 
@@ -1009,14 +1057,22 @@ void MainWindow::on_start() {
 
     d.sched = std::make_unique<pp::Scheduler>(cfg, std::move(entries));
     d.sched->set_event_callback([this](const pp::FileEvent &ev) {
-        // 回调可能来自任意 worker 线程：立即按值拷贝 FileResult（指针仅发射瞬间有效）
+        // 回调可能来自任意 worker 线程（文件线程 / 评分池线程）：立即按值拷贝载荷 ——
+        // FileResult 指针仅发射瞬间有效；OutputResult（A2 的 shared_ptr）也做**一次深拷贝**再
+        // 交 GUI 线程（指针生命周期安全：排队的 MetaCall 可能在任意时刻才执行，不依赖引擎侧
+        // 对象的存活期，也不与评分池的再次发布共享可变状态）。
         const bool has_result = ev.result != nullptr;
         const pp::FileResult copy = has_result ? *ev.result : pp::FileResult{};
+        std::shared_ptr<const pp::OutputResult> output_copy;
+        if (ev.output) {
+            output_copy = std::make_shared<const pp::OutputResult>(*ev.output);
+        }
         QMetaObject::invokeMethod(
             this,
-            [this, ev, has_result, copy]() {
+            [this, ev, has_result, copy, output_copy]() {
                 pp::FileEvent forwarded = ev;
                 forwarded.result = has_result ? &copy : nullptr;
+                forwarded.output = output_copy; // OutputDone（C13/C14）的输出行快照
                 impl_->handle_file_event(forwarded);
             },
             Qt::QueuedConnection);
@@ -1052,8 +1108,20 @@ void MainWindow::on_run_again() {
 }
 
 void MainWindow::on_cancel() {
-    if (impl_->sched)
-        impl_->sched->cancel(); // 幂等；进行中的文件跑完
+    Impl &d = *impl_;
+    if (d.sched)
+        d.sched->cancel(); // 幂等；进行中的文件跑完
+    // M10-SCOREFIX（task-20）：取消剩余评分 = 只取消**本次运行代次**（per-run 令牌：队列丢弃、
+    // 在飞任务在检查点退出；不产生半评分）。该接口不再是一次性的：下一次运行开始时
+    // （on_start 的 reset_for_run / Scheduler::start 的 begin_run）自动复位，后续运行评分不受
+    // 影响。pending=0 时调用也无副作用（幂等），故不再条件化；pending 字段保留作证据。
+    if (d.page_run != nullptr && d.page_run->scoring_enabled()) {
+        pp::ScorePool &pool = pp::ScorePool::instance();
+        const std::size_t pending = pool.pending();
+        pool.cancel_pending();
+        pp::log_info("run", "mainwindow_run.cpp", "score pool cancel on user cancel",
+                     {{"pending", std::to_string(pending)}, {"cancel_pending", "called"}});
+    }
 }
 
 void MainWindow::on_scheduler_done() {
@@ -1066,6 +1134,39 @@ void MainWindow::on_scheduler_done() {
     // → end_run 定稿；颠倒会让迟到事件改写已定稿计数。
     Q_ASSERT(d.poll != nullptr && !d.poll->isActive());
     d.sched->wait();
+    // M10-SCOREFIX（task-20；C14/§4.6）：评分池收敛（**必须在 d.sched 销毁之前**）。
+    // 异步评分在文件线程之外：第二次 OutputDone（含 metric）可能晚于文件终态；收尾前把池排空 +
+    // 把在途事件结算进运行页，end_run 定稿时评分列才有评分池发布的结果。
+    // 语义下沉到 ScorePool::drain（可单测）：分片 wait_idle + processEvents（不长时间冻住 GUI
+    // 事件循环；等待期间仍重绘）→ 60s 未收敛则强制取消当前评分代次 + 30s 宽限 → 如实返回读数。
+    if (d.page_run != nullptr && d.page_run->scoring_enabled()) {
+        pp::ScorePool &pool = pp::ScorePool::instance();
+        const pp::ScorePool::DrainResult dr = pool.drain(
+            std::chrono::milliseconds(kScoreDrainTimeoutMs),
+            std::chrono::milliseconds(kScoreCancelGraceMs),
+            [] { QCoreApplication::processEvents(QEventLoop::AllEvents, kScoreDrainSliceMs); },
+            std::chrono::milliseconds(kScoreDrainSliceMs));
+        if (dr.forced_cancel) {
+            // 超时兜底（T9b 既有日志行 + 字段；实际取消动作由 drain 完成）：
+            // 评分任务已不持有 Scheduler::Impl*（M10-SCOREFIX 事件 sink 化），仍有界等待是为了
+            // 配额/参考帧归还；调度器取消与评分代次取消同步（幂等）。
+            d.sched->cancel();
+            pp::log_warn("run", "mainwindow_run.cpp",
+                         "score pool drain timed out; forcing cancel + grace wait",
+                         {{"waited_ms", std::to_string(dr.wait_ms)},
+                          {"pending_at_start", std::to_string(dr.pending_at_start)},
+                          {"pending", std::to_string(dr.pending)},
+                          {"grace_ms", std::to_string(dr.grace_ms)}});
+        }
+        pp::log_info("run", "mainwindow_run.cpp",
+                     dr.quiesced ? "score pool quiesced before end_run"
+                                 : "score pool still busy before end_run",
+                     {{"wait_ms", std::to_string(dr.wait_ms)},
+                      {"grace_ms", std::to_string(dr.grace_ms)},
+                      {"pending", std::to_string(dr.pending)},
+                      {"peak_bytes", std::to_string(pool.peak())},
+                      {"forced_cancel", dr.forced_cancel ? "true" : "false"}});
+    }
     // 排空在途 queued 事件后再定稿，避免 end_run 之后又被迟到事件改写计数
     QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
     const pp::RunSummary sum = d.sched->summary();
@@ -1311,7 +1412,10 @@ void MainWindow::Impl::handle_file_event(const pp::FileEvent &ev) {
     }
     // R-008：Progress 是逐输出的**过程**事件（一次文件会发多条），落模型会把左列表状态胶囊
     // 全程覆写成过程态 —— 过程态只喂 page_run，列表只落阶段/终态。
-    if (state != pp::FileState::Progress) {
+    // M10-W1（T9b；A1/A2）：OutputDone 是**输出级**终态事实（不是文件级终态），同样不落列表
+    // 模型 —— 它只喂运行页结算该输出行；列表状态仍由文件终态事件定稿。
+    const bool output_done_event = state == pp::FileState::OutputDone;
+    if (state != pp::FileState::Progress && !output_done_event) {
         model->set_state(row, state);
         if (zero_bytes) // R-069：终态事件带 0 字节事实回传列表
             model->set_zero_byte_output(row, true);
@@ -1332,10 +1436,20 @@ void MainWindow::Impl::handle_file_event(const pp::FileEvent &ev) {
                 reasons.join(QStringLiteral(" / ")));
         }
     }
+    if (output_done_event && ev.output) {
+        // 证据面（debug）：逐输出事件的转发读数（真实运行可查 event→行 的消费映射）
+        pp::log_debug(
+            "ui", "mainwindow_run.cpp", "output done event forwarded to run page",
+            {{"format", ev.output->format_id},
+             {"ok", ev.output->ok ? "true" : "false"},
+             {"skipped", ev.output->skipped ? "true" : "false"},
+             {"bytes", std::to_string(ev.output->out_bytes)},
+             {"metric_state", std::to_string(static_cast<int>(ev.output->metric_state))}});
+    }
     page_run->on_event(ev);
     // R-024：逐文件事件洪峰合并刷新 —— 运行期不再每条事件都跑一次全量 refresh_status
     // （含两个 O(n) 计数 + 磁盘查询），改为 150ms 定时合并；终态事件立即刷（定稿要看得见）。
-    if (state != pp::FileState::Progress && run_terminal >= run_total)
+    if (!output_done_event && state != pp::FileState::Progress && run_terminal >= run_total)
         w->refresh_status();
     else
         schedule_status_refresh();

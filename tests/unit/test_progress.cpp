@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -411,6 +412,71 @@ int main() {
         });
         mux.shared_skip(pp::Stage::Probe);
         check(reentered, "r170/reentrant-callback", "回调内调用 mux 读数/tick 应安全返回");
+    }
+
+    // ---- M10 / W1-B1（A1/A2/A5；docs/v0.4.0-design.md §4.6 C13/C14/C15）----
+    // 1. 加性字段的默认值 + 事件载体（FileEvent::output）的默认空 + 值语义安全
+    {
+        const pp::ProgressInfo pi{};
+        check(!pi.heartbeat && !pi.scoring, "a5/defaults-flags",
+              "heartbeat/scoring 默认必须 false");
+        check(pi.adaptive_round == 0 && pi.adaptive_max == 0, "a5/defaults-adaptive",
+              "adaptive_round/adaptive_max 默认必须 0");
+        pp::FileEvent ev{};
+        check(!ev.output, "a2/default-null-output", "FileEvent::output 默认必须为空");
+        check(ev.state == pp::FileState::Queued, "a2/default-state", "aggregate init 保持兼容");
+        // A2：shared_ptr<const OutputResult> 值拷贝安全（GUI 排队连接面）
+        auto row = std::make_shared<const pp::OutputResult>();
+        ev.output = row;
+        pp::FileEvent copy = ev;
+        check(copy.output != nullptr && copy.output == row, "a2/shared-ownership-copy",
+              "事件值拷贝必须共享同一行对象（不悬垂）");
+    }
+    // 2. FileState::OutputDone 是末尾加性值（既有值数值不变；枚举尾部语义）
+    {
+        check(static_cast<int>(pp::FileState::DoneWithErrors) + 1 ==
+                  static_cast<int>(pp::FileState::OutputDone),
+              "a1/outputdone-tail", "OutputDone 必须是枚举末尾的加性值");
+        check(static_cast<int>(pp::FileState::Queued) == 0, "a1/queued-zero", "既有值数值不得变化");
+    }
+    // 3. 心跳（C15）：state=Progress + heartbeat=true，**不推进** overall；可选 scoring 标记
+    {
+        Collector col;
+        pp::ProgressMux mux(1000, 1000, 1);
+        mux.set_event_callback(std::ref(col));
+        mux.shared_skip(pp::Stage::Probe);
+        mux.shared_skip(pp::Stage::Decode);
+        mux.shared_skip(pp::Stage::Orient);
+        mux.shared_skip(pp::Stage::Color);
+        pp::ProgressFn fn = mux.bind_output(0, "jpeg");
+        fn(0.5f);
+        const float before = mux.file_frac();
+        const std::size_t n_before = col.events.size();
+        check(mux.ms_since_last_emit() >= 0.0, "c15/silence-measurable",
+              "发出事件后 ms_since_last_emit 必须可读");
+        mux.heartbeat(0, /*scoring=*/true);
+        check(col.events.size() == n_before + 1, "c15/heartbeat-emits", "心跳必须发出一条事件");
+        const pp::FileEvent &hb = col.events.back();
+        check(hb.state == pp::FileState::Progress, "c15/heartbeat-state",
+              "心跳事件的 state 必须是 Progress");
+        check(hb.progress.heartbeat, "c15/heartbeat-flag", "progress.heartbeat 必须为 true");
+        check(hb.progress.scoring, "c15/heartbeat-scoring", "scoring=true 必须透传");
+        check(near(hb.progress.overall_frac, before, 1e-6f), "c15/heartbeat-no-advance",
+              "心跳不得推进 overall_frac：got " + f2s(hb.progress.overall_frac) + " want " +
+                  f2s(before));
+        check(!hb.output, "c15/heartbeat-no-payload", "心跳不携带输出行");
+        std::string why;
+        check(col.monotonic(&why), "c15/heartbeat-monotonic", why);
+        // 直发心跳（probe 长段在 mux 之外/之前使用）：自定义阶段透传，仍不推进
+        pp::ProgressInfo proto;
+        proto.stage = pp::Stage::Probe;
+        proto.output_index = -1;
+        mux.emit_heartbeat(proto, /*scoring=*/false);
+        check(col.events.back().progress.heartbeat && !col.events.back().progress.scoring,
+              "c15/emit-heartbeat-fields", "emit_heartbeat 字段口径");
+        check(near(col.events.back().progress.overall_frac, before, 1e-6f),
+              "c15/emit-heartbeat-no-advance", "emit_heartbeat 不得推进 overall");
+        check(col.monotonic(&why), "c15/emit-heartbeat-monotonic", why);
     }
 
     if (g_failed == 0)

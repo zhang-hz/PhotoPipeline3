@@ -25,6 +25,7 @@
 #include "core/fsops.h"
 #include "core/pipeline.h"
 #include "core/pixelbudget.h"
+#include "core/score_queue.h" // M10 / W1-B1（T5）：异步评分的收敛/发布面
 #include "decode/oiio_reader.h"
 
 namespace fs = std::filesystem;
@@ -32,6 +33,9 @@ namespace fs = std::filesystem;
 namespace {
 
 int g_failed = 0;
+// M10 / W1-B1（A1/A2）：事件序列收集钩子（非空时 run_spec_outcome 把每个 FileEvent 追加进来；
+// 默认 nullptr → 既有用例零影响）。
+std::vector<pp::FileEvent> *g_event_sink = nullptr;
 
 void check(bool ok, const std::string &case_name, const std::string &detail) {
     if (!ok) {
@@ -170,10 +174,16 @@ pp::OutputFormatSpec out_spec(std::string format, std::string backend, std::stri
 }
 
 pp::FileOutcome run_spec_outcome(const fs::path &src, const fs::path &base,
-                                 const fs::path &out_root, const RunSpec &s) {
+                                 const fs::path &out_root, const RunSpec &s,
+                                 const pp::FileEntry *entry_override = nullptr) {
+    // M10 / W1-T3：允许传入预填 probe 缓存的 FileEntry（A4 复用路径的单测入口）。
     pp::FileEntry fe;
-    fe.src = src;
-    fe.base_dir = base;
+    if (entry_override != nullptr) {
+        fe = *entry_override;
+    } else {
+        fe.src = src;
+        fe.base_dir = base;
+    }
     pp::RunConfig cfg;
     cfg.out_root = out_root;
     // 每输出参数按冻结引擎契约由调用方给出：无损语义由 default_params 的保留键承载，
@@ -202,6 +212,9 @@ pp::FileOutcome run_spec_outcome(const fs::path &src, const fs::path &base,
     pp::EventFn events{[&s](const pp::FileEvent &e) {
                            if (s.on_stage)
                                s.on_stage(e.state);
+                           // M10 / W1-B1：事件序列取证钩子（nullptr = 不收集，行为零变化）
+                           if (g_event_sink != nullptr)
+                               g_event_sink->push_back(e);
                        },
                        &scope};
     if (s.metadata_only)
@@ -212,6 +225,27 @@ pp::FileOutcome run_spec_outcome(const fs::path &src, const fs::path &base,
 pp::FileResult run_spec(const fs::path &src, const fs::path &base, const fs::path &out_root,
                         const RunSpec &s) {
     return run_spec_outcome(src, base, out_root, s).file;
+}
+
+// —— M10 / W1-B1（T5）：异步评分的测试适配（**断言强度不变**）——
+// 评分已从文件线程剥离：`run_one_file` 返回的行在文件终态时 metric 仍是 Off（评分在池里），
+// 权威结果是池内发布的最终行（按产物路径键）。这里等池收敛后把 metric 字段并回每一行 ——
+// 于是下面所有"分数/状态/耗时"断言仍是**真实评分结果**，不是放宽或跳过。
+pp::FileResult await_scored(pp::FileResult r) {
+    pp::ScorePool::instance().wait_idle(std::chrono::milliseconds(120 * 1000));
+    for (pp::OutputResult &row : r.outputs) {
+        if (row.out.empty())
+            continue;
+        const std::shared_ptr<const pp::OutputResult> done =
+            pp::ScorePool::instance().published(row.out.string());
+        if (!done)
+            continue;
+        row.metric_state = done->metric_state;
+        row.metric_ssimulacra2 = done->metric_ssimulacra2;
+        row.metric_ms = done->metric_ms;
+        row.metric_note = done->metric_note;
+    }
+    return r;
 }
 
 bool write_oriented_tiff(const fs::path &p, int w, int h, int orientation) {
@@ -711,6 +745,78 @@ int main() {
               std::to_string(r.out_bytes) + " != " + std::to_string(sum));
         check(read_info(r.outputs[0].out).ok && read_info(r.outputs[1].out).ok,
               "multi/rows-readable", "an output is unreadable");
+    }
+
+    // ==========================================================================
+    // M10 / W1-B1（A1/A2；docs/v0.4.0-design.md §4.6 C13）：逐输出终态事件
+    //   口径：编码+metawrite 完成后发 `FileState::OutputDone`（携带该行快照，metric 未算），
+    //   每个输出恰好一条（未评分时）；其余状态事件不携带该载荷。
+    // ==========================================================================
+    {
+        std::vector<pp::FileEvent> evs;
+        g_event_sink = &evs;
+        RunSpec s;
+        s.format = "jpeg";
+        s.extra_outputs.push_back(out_spec("webp", "libwebp", "", 8));
+        s.output_template = "$format/$dir/$file";
+        const pp::FileResult r = run_spec(base / "rgb8.png", corpus, tmp / "t7-outputdone", s);
+        g_event_sink = nullptr;
+        check(r.ok, "t7/run-ok", r.error);
+        check(r.outputs.size() == 2, "t7/two-rows", std::to_string(r.outputs.size()));
+        std::vector<int> done_count(2, 0);
+        std::vector<std::size_t> done_pos(2, evs.size());
+        std::vector<std::size_t> meta_done_pos(2, evs.size());
+        std::vector<std::size_t> enc_done_pos(2, evs.size());
+        std::size_t payload_elsewhere = 0;
+        for (std::size_t i = 0; i < evs.size(); ++i) {
+            const pp::FileEvent &e = evs[i];
+            const int idx = e.progress.output_index;
+            const bool row_index_ok = idx >= 0 && idx < 2;
+            if (e.state == pp::FileState::OutputDone) {
+                check(e.output != nullptr, "t7/output-payload",
+                      "OutputDone 必须携带 output 载荷（A2）");
+                check(e.result == nullptr, "t7/output-no-result",
+                      "OutputDone 不是文件终态（result 必须为空）");
+                if (e.output != nullptr && row_index_ok) {
+                    ++done_count[static_cast<std::size_t>(idx)];
+                    done_pos[static_cast<std::size_t>(idx)] =
+                        std::min(done_pos[static_cast<std::size_t>(idx)], i);
+                    const pp::OutputResult &row = r.outputs[static_cast<std::size_t>(idx)];
+                    check(e.output->format_id == row.format_id, "t7/output-format",
+                          "载荷 format 与结果行不符：" + e.output->format_id + " vs " +
+                              row.format_id);
+                    check(e.output->out_bytes == row.out_bytes, "t7/output-bytes",
+                          "载荷 out_bytes 与结果行不符");
+                    check(e.output->out == row.out, "t7/output-path", "载荷路径与结果行不符");
+                    check(e.output->ok == row.ok, "t7/output-ok", "载荷 ok 与结果行不符");
+                    check(e.output->metric_state == pp::MetricState::Off, "t7/output-no-metric",
+                          "首次 OutputDone 必须不含 metric（异步评分前）");
+                }
+            } else if (e.output != nullptr) {
+                ++payload_elsewhere;
+            }
+            if (e.state == pp::FileState::Progress && row_index_ok) {
+                if (e.progress.stage == pp::Stage::MetaWrite &&
+                    e.progress.stage_frac >= 1.0f - 1e-6f)
+                    meta_done_pos[static_cast<std::size_t>(idx)] =
+                        std::min(meta_done_pos[static_cast<std::size_t>(idx)], i);
+                if (e.progress.stage == pp::Stage::Encode && e.progress.stage_frac >= 1.0f - 1e-6f)
+                    enc_done_pos[static_cast<std::size_t>(idx)] =
+                        std::min(enc_done_pos[static_cast<std::size_t>(idx)], i);
+            }
+        }
+        check(payload_elsewhere == 0, "t7/payload-only-on-outputdone",
+              std::to_string(payload_elsewhere) + " 个非 OutputDone 事件携带了 output 载荷");
+        for (int idx = 0; idx < 2; ++idx) {
+            const std::size_t k = static_cast<std::size_t>(idx);
+            check(done_count[k] == 1, "t7/output-done-once/" + std::to_string(idx),
+                  "每个输出必须恰好一条 OutputDone（未评分），got " +
+                      std::to_string(done_count[k]));
+            check(enc_done_pos[k] < done_pos[k], "t7/done-after-encode/" + std::to_string(idx),
+                  "OutputDone 必须在编码完成事件之后");
+            check(meta_done_pos[k] < done_pos[k], "t7/done-after-metawrite/" + std::to_string(idx),
+                  "OutputDone 必须在 metawrite 完成事件之后（编码+metawrite 完成 = C13 时点）");
+        }
     }
 
     // ---- W. 路径模板 $format/$dir/$file（§4.2 分文件夹形态）----
@@ -1503,7 +1609,7 @@ int main() {
         lossless.format = "png";
         lossless.quality_score = true;
         const pp::FileResult rl =
-            run_spec(base / "rgb8.png", corpus, out_root / "lossless", lossless);
+            await_scored(run_spec(base / "rgb8.png", corpus, out_root / "lossless", lossless));
         check(rl.ok && !rl.outputs.empty(), "score/lossless-ok", rl.error);
         check(!rl.outputs.empty() && rl.outputs[0].metric_state == pp::MetricState::Ok,
               "score/lossless-state",
@@ -1524,7 +1630,7 @@ int main() {
         lossless16.bitdepth = 16;
         lossless16.quality_score = true;
         const pp::FileResult rl16 =
-            run_spec(base / "rgb16.png", corpus, out_root / "lossless16", lossless16);
+            await_scored(run_spec(base / "rgb16.png", corpus, out_root / "lossless16", lossless16));
         check(rl16.ok && !rl16.outputs.empty() &&
                   rl16.outputs[0].metric_state == pp::MetricState::Ok,
               "score/lossless16-state", rl16.error);
@@ -1537,7 +1643,8 @@ int main() {
         RunSpec gray;
         gray.format = "png";
         gray.quality_score = true;
-        const pp::FileResult rg = run_spec(base / "gray8.png", corpus, out_root / "gray", gray);
+        const pp::FileResult rg =
+            await_scored(run_spec(base / "gray8.png", corpus, out_root / "gray", gray));
         check(rg.ok && !rg.outputs.empty() && rg.outputs[0].metric_state == pp::MetricState::Ok,
               "score/gray-state", rg.error);
         check(!rg.outputs.empty() && std::abs(rg.outputs[0].metric_ssimulacra2 - 100.0) < 1e-6,
@@ -1557,7 +1664,8 @@ int main() {
         RunSpec lossy;
         lossy.format = "jpeg";
         lossy.quality_score = true;
-        const pp::FileResult rj = run_spec(gradient, lossy_dir, out_root / "lossy", lossy);
+        const pp::FileResult rj =
+            await_scored(run_spec(gradient, lossy_dir, out_root / "lossy", lossy));
         check(rj.ok && !rj.outputs.empty() && rj.outputs[0].metric_state == pp::MetricState::Ok,
               "score/lossy-state", rj.error);
         check(!rj.outputs.empty() && rj.outputs[0].metric_ssimulacra2 < 100.0 &&
@@ -1575,7 +1683,8 @@ int main() {
         RunSpec tiny_spec;
         tiny_spec.format = "png";
         tiny_spec.quality_score = true;
-        const pp::FileResult rt = run_spec(tiny, tiny_dir, out_root / "tiny", tiny_spec);
+        const pp::FileResult rt =
+            await_scored(run_spec(tiny, tiny_dir, out_root / "tiny", tiny_spec));
         check(rt.ok && !rt.outputs.empty(), "score/tiny-product-ok", rt.error);
         check(!rt.outputs.empty() && rt.outputs[0].metric_state == pp::MetricState::Unavailable,
               "score/tiny-unavailable",
@@ -1585,6 +1694,124 @@ int main() {
         check(!rt.outputs.empty() && rt.outputs[0].metric_note.find("8×8") != std::string::npos,
               "score/tiny-note",
               rt.outputs.empty() ? "no row" : "note=" + rt.outputs[0].metric_note);
+    }
+
+    // ---- M10-SCOREFIX（task-20）：取消 note 文案 + run1 取消 → run2 同进程评分恢复正常 ----
+    // 判据：① 运行取消后提交被拒 → 行 Unavailable + note 逐字「运行取消，评分未完成」
+    //        （旧实现一律写"内存不足"，用户取消后误导）；
+    //       ② 下一次运行（reset_for_run）评分重新可用 —— 旧 cancel_pending 是一次性的，
+    //       取消一次会让同进程后续运行评分全部 Unavailable。
+    {
+        const fs::path dir = tmp / "scorefix-cancel";
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+        pp::ScorePool &pool = pp::ScorePool::instance();
+        (void)pool.begin_run();
+
+        RunSpec spec;
+        spec.format = "png";
+        spec.quality_score = true;
+        // 运行取消：cancel 当前代次 → 该文件提交评分时被池拒收（RunCancelled）。
+        pool.cancel_pending();
+        const pp::FileResult r1 = run_spec(base / "rgb8.png", corpus, dir / "run1", spec);
+        check(r1.ok && !r1.outputs.empty(), "scorefix/cancel-product-ok", r1.error);
+        check(!r1.outputs.empty() && r1.outputs[0].metric_state == pp::MetricState::Unavailable,
+              "scorefix/cancel-state",
+              r1.outputs.empty()
+                  ? "no row"
+                  : "state=" + std::to_string(static_cast<int>(r1.outputs[0].metric_state)));
+        check(!r1.outputs.empty() && r1.outputs[0].metric_note == "运行取消，评分未完成",
+              "scorefix/cancel-note",
+              r1.outputs.empty() ? "no row" : "note=" + r1.outputs[0].metric_note);
+        if (!r1.outputs.empty()) {
+            std::printf("SCOREFIX run1(after cancel) state=%d note=\"%s\" product_ok=%d\n",
+                        static_cast<int>(r1.outputs[0].metric_state),
+                        r1.outputs[0].metric_note.c_str(), r1.ok ? 1 : 0);
+        }
+
+        // run2：复位 → 同进程评分正常（await_scored 收敛并并回真实分数）。
+        (void)pool.reset_for_run();
+        const pp::FileResult r2 =
+            await_scored(run_spec(base / "rgb8.png", corpus, dir / "run2", spec));
+        check(r2.ok && !r2.outputs.empty(), "scorefix/run2-product-ok", r2.error);
+        check(!r2.outputs.empty() && r2.outputs[0].metric_state == pp::MetricState::Ok,
+              "scorefix/run2-score-ok",
+              r2.outputs.empty()
+                  ? "no row"
+                  : "state=" + std::to_string(static_cast<int>(r2.outputs[0].metric_state)) +
+                        " note=" + r2.outputs[0].metric_note);
+        if (!r2.outputs.empty()) {
+            std::printf("SCOREFIX run2(after reset_for_run) state=%d score=%.2f product_ok=%d\n",
+                        static_cast<int>(r2.outputs[0].metric_state),
+                        r2.outputs[0].metric_ssimulacra2, r2.ok ? 1 : 0);
+        }
+    }
+
+    // ---- M10 / W1-T1（P0 热修）：文件像素预算 need 恢复 2×frame，评分内存独立记账 ----
+    // 判据（机械）：512×512 RGB 文件的 2×frame = 6,291,456 B；HEAD 的评分运行会再追加
+    // 160 B/px（= 41,943,040 B）到文件预算 → 小容量池直接 `pixel budget exceeded`。热修后
+    // 文件只 acquire 2×frame（peak 读数恰为 2×frame），评分走 ScoreQuota（小图必然拿到）→
+    // 产物成功且评分仍给出 Ok（无损 PNG = 100.0）。
+    {
+        const fs::path dir = tmp / "m10-t1-budget";
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+        constexpr int kEdge = 512;
+        const fs::path src = dir / "budget512.png";
+        check(write_small_png(src, kEdge, kEdge), "m10t1/setup", "cannot synthesize 512x512 png");
+        const std::uint64_t frame = pp::PixelBudget::frame_bytes(kEdge, kEdge, 3);
+        const std::uint64_t file_need = 2 * frame;
+        pp::PixelBudget small(file_need + 1); // 只够 2×frame（+1B 防 off-by-one）
+        RunSpec s;
+        s.format = "png";
+        s.quality_score = true;
+        s.budget = &small;
+        const pp::FileResult r = await_scored(run_spec(src, dir, dir / "out", s));
+        check(r.ok && !r.outputs.empty(), "m10t1/product-ok", r.error);
+        check(small.peak() == file_need, "m10t1/file-need-is-2x-frame",
+              "peak=" + std::to_string(small.peak()) + " want=" + std::to_string(file_need) +
+                  " (HEAD 会再叠加 160B/px=" +
+                  std::to_string(static_cast<std::uint64_t>(160) * kEdge * kEdge) + ")");
+        check(small.used() == 0, "m10t1/budget-released", "used=" + std::to_string(small.used()));
+        check(!r.outputs.empty() && r.outputs[0].metric_state == pp::MetricState::Ok,
+              "m10t1/score-ok",
+              r.outputs.empty()
+                  ? "no row"
+                  : "state=" + std::to_string(static_cast<int>(r.outputs[0].metric_state)) +
+                        " note=" + r.outputs[0].metric_note);
+    }
+
+    // ---- M10 / W1-T3（A4）：FileEntry::probe 缓存复用 ----
+    // 判据（机械）：预 probe 后把缓存里的 format 改成标记串；pipeline 若复用缓存，
+    // result.info.format 必须是标记串（重新 probe 的话会得到真实格式 "png"）。
+    // 另一侧：probe_done=false 的旧入口仍自 probe → 真实格式。
+    {
+        const fs::path dir = tmp / "m10-t3-probe";
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+        const fs::path src = dir / "probe-cache.png";
+        check(write_small_png(src, 64, 48), "m10t3/setup", "cannot synthesize probe fixture");
+        pp::FileEntry cached;
+        cached.src = src;
+        cached.base_dir = dir;
+        cached.probe = pp::probe_file(src);
+        check(cached.probe.error.empty() && cached.probe.first_spec.has_value(), "m10t3/preprobe",
+              cached.probe.error);
+        check(cached.probe.info.format == "png", "m10t3/preprobe-format",
+              "got " + cached.probe.info.format);
+        cached.probe.info.format = "cached-probe-marker";
+        cached.info = cached.probe.info;
+        cached.probe_done = true;
+        RunSpec s;
+        s.format = "png";
+        const pp::FileOutcome reused = run_spec_outcome(src, dir, dir / "out-cached", s, &cached);
+        check(reused.file.ok, "m10t3/cache-product-ok", reused.file.error);
+        check(reused.file.info.format == "cached-probe-marker", "m10t3/cache-reused",
+              "got format='" + reused.file.info.format + "' (probe 被重复调用；A4 缓存未复用)");
+        const pp::FileOutcome fresh = run_spec_outcome(src, dir, dir / "out-fresh", s, nullptr);
+        check(fresh.file.ok, "m10t3/fresh-product-ok", fresh.file.error);
+        check(fresh.file.info.format == "png", "m10t3/fresh-self-probe",
+              "probe_done=false 时必须自 probe，got format='" + fresh.file.info.format + "'");
     }
 
     if (g_failed == 0) {

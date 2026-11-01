@@ -1652,7 +1652,9 @@ Payloads make_payloads(const MetadataPlan &plan) {
 
 std::string write_metadata_exiv2(const std::filesystem::path &out_file, const MetadataPlan &plan,
                                  const Payloads &payloads, std::vector<std::string> *out_warnings) {
-    (void)payloads; // 后写路径把容器直接交给 Exiv2；payloads 服务于 JXL/HEIF 注入路径（§3.8）
+    // payloads 消费面（M10/W1-T2b）：本函数把容器直接交给 Exiv2 改写；payloads（编码器注入
+    // 面 JXL/HEIF/AVIF 的载荷）在这里只作为"无手术"判定的事实源之一 —— 两份都空 + plan 空 +
+    // 无隐私剥除 ⇒ 跳过写回（见下方 C9 快路径）。
     const std::string ext = lower_copy(out_file.extension().string());
     const bool is_png = (ext == ".png");
 
@@ -1665,8 +1667,25 @@ std::string write_metadata_exiv2(const std::filesystem::path &out_file, const Me
         log_info("MetaWrite", "metadata.cpp", "bmp output carries no metadata container");
         return {};
     }
-    if (plan.exif.empty() && plan.xmp.empty() && !plan.strip_privacy) {
-        return {}; // nothing to write: the encoder output carries none
+    // ---- M10 / W1-T2b（C9）：无手术快路径（写路径入口判定）----
+    // 判定"有没有手术要做"（全部成立才跳过**整文件拷贝 + Exiv2 重写 + rename**）：
+    //   * 无 EXIF/XMP 变更：plan.exif / plan.xmp 均为空（build_plan 把源元数据整份带进 plan，
+    //     所以"源有元数据要携带"= 有内容 = 必须写回，不算无手术），且 payloads 两份都为空
+    //     （与编码器内嵌面同一事实源）；
+    //   * 无隐私剥除：strip_privacy 要清 EXIF/XMP/IPTC/COM，属有手术；
+    //   * mtime 同步与写回正交：本函数不消费 sync_mtime（调用方 stage_finish 在写回之后单独
+    //     `sync_file_mtime`），因此无手术时跳过早退不影响 mtime 同步。
+    // 命中 → 产物保持编码器输出原样（不建临时副本、不 rename）；info 一行命中证据（P4-5 探针
+    // 按 `metadata: no surgery, skipped rewrite` grep）。有手术时以下行为与 HEAD **逐字节一致**
+    // （R-002 原子写不变：临时副本 + exiv2_apply + TIFF 结构复核 + commit_temp_file）。
+    const bool no_surgery = plan.exif.empty() && plan.xmp.empty() && payloads.exif_blob.empty() &&
+                            payloads.xmp_rdf.empty() && !plan.strip_privacy;
+    if (no_surgery) {
+        log_info("MetaWrite", "metadata.cpp", "metadata: no surgery, skipped rewrite",
+                 {{"out", out_file.string()},
+                  {"exif_bytes", std::to_string(payloads.exif_blob.size())},
+                  {"xmp_bytes", std::to_string(payloads.xmp_rdf.size())}});
+        return {};
     }
 
     // R-002（P0）：写回改临时文件 + rename（exiv2_apply_atomic）。写失败 = 真失败：

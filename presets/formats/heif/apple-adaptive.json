@@ -1,0 +1,38 @@
+{
+    "adaptive": {
+        "enabled": true,
+        "policy": [
+            "# HEIF Apple 自适应：先降 CRF（步长 2，到 8），仍不达标再切 4:4:4 + Main 4:4:4 10 Still。",
+            "version 1",
+            "target 90",
+            "max_rounds 10",
+            "output last",
+            "on_metric_unavailable stop",
+            "",
+            "stage crf-down",
+            "  search x265:crf from current down to 8 step 2 max_rounds 10",
+            "",
+            "stage chroma-444",
+            "  set chroma 444",
+            "  set profile Main444_10Still"
+        ]
+    },
+    "backend": "x265",
+    "bitdepth": 10,
+    "format": "heif",
+    "kind": "format-preset",
+    "name": "Apple自适应",
+    "params": {
+        "chroma": "420",
+        "preset": "slow",
+        "tune": "ssim",
+        "x265:aq-mode": 3,
+        "x265:crf": 20,
+        "x265:level-idc": 31
+    },
+    "reserved": {
+        "heif_profile": 2
+    },
+    "tech": "runtime",
+    "version": 1
+}

@@ -2627,6 +2627,15 @@ void PageRun::on_event(const pp::FileEvent &ev) {
         }
         return;
     }
+    // ---- 状态机修复 S-1：迟到过程事件不得覆写**文件终态** ----
+    // 评分池的看门狗心跳（FileState::Progress + heartbeat=true）与取消后残余过程事件可能晚于
+    // 文件终态事件到达。旧实现会继续走 apply_progress 与非终态分支的 `file.state = ev.state`，
+    // 把 Done/Failed/Skipped/Cancelled 打回 Progress ⇒ 组行胶囊从「已完成/失败/跳过」退回
+    // 「写入/色彩」进行中、完成态唯一形态丢失（用户可观察的状态回退）。
+    // 终态是文件级定稿事实：终态后的一切**过程**事件直接丢弃；OutputDone（输出级事实）已在
+    // 上方分支放行 —— 它的用途是补评分列，不是文件级过程态。
+    if (file.terminal && !is_terminal_state(ev.state))
+        return;
     apply_progress(*s, file, ev.progress); // C15：内部按「状态翻转/数值」入双通道并标行脏
     if (ev.state == pp::FileState::Queued)
         return;
@@ -2657,8 +2666,10 @@ void PageRun::end_run(const pp::RunSummary &sum, const QString &out_root) {
     s->summary_avg_ms = sum.avg_file_ms;
     s->summary_peak_bytes = sum.peak_bytes;         // A29（加性字段；M4 前恒 0 → 读数「—」）
     s->summary_threads_est = sum.threads_total_est; // R-078（WP8 加性字段；估算口径见 tooltip）
-    if (sum.cancelled > 0)
-        s->cancel_requested = true;
+    // 状态机修复 S-2：结束态的「已取消」= **实际取消效果**（引擎汇总的 cancelled 文件数），
+    // 不是「点过取消按钮」。用户在收尾阶段点了「取消剩余」但全部文件已成功时，旧实现恒显示
+    // 「已取消」（与汇总「成功 N」/摘要「可打开输出目录」同屏矛盾）；现在如实回落「已完成」。
+    s->cancel_requested = sum.cancelled > 0;
     // 防御性收尾：未收到终态事件的行按结果定稿（正常路径调度器对每文件恰好发一次终态）
     // R-141/R-225：**同时回写 file.state** —— 原实现只定稿 out.kind，组行胶囊仍停在"排队/处理中"，
     // 与其下输出行"失败/已取消"同屏矛盾。

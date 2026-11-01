@@ -1,10 +1,13 @@
 # 自适应质量策略（Adaptive Policy）用户手册
 
-> **适用版本**：0.4.0（M10 需求 11 / 契约 **C24**）。**默认关闭**。
-> **真源链**：设计 = [`docs/v0.4.0-design.md`](v0.4.0-design.md) §9（§9.1 语义 / §9.2 DSL / §9.4 键 / §9.5 成本 / §9.7 默认库）；
-> 验收 = `build/m10/w3-core/report.md`（DSL/AST/42 条错误码/5 条默认策略/预置 JSON 承载，W3-T3）；
-> 实现真源 = `src/core/adaptive.cpp`（`default_adaptive_policies()`、`adaptive_error_codes()`、
-> `adaptive_forbidden_keys()`、`render_adaptive_policy()`）。
+> **适用版本**：0.4.0（M10 需求 11 / 契约 **C24**）。**引擎默认关闭；GUI 出厂 `default` 预设可自带策略**（见 §1/§10）。
+> **真源链**：设计 = [`docs/v0.4.0-design.md`](v0.4.0-design.md) §9（§9.1 语义 / §9.2 DSL / §9.4 键 / §9.5 成本 / §9.7 默认库；
+> §9.7 带 **0.4.0（M12）修订**节）；
+> **策略文本的发行真源 = 仓库工厂数据文件 `presets/formats/**`（11 个，单一真源；M12 起不再是 C++ 内置）**；
+> 验收 = `build/m10/w3-core/report.md`（DSL/AST/错误码/默认策略/预置 JSON 承载，W3-T3）+ 0.4.0 迭代
+> 「DSL 可读化 / 断点搜索 / 5 条新增内置预设 / M12 工厂文件外部化与 JPEG 新策略」（本手册 §4/§6.1/§10.1/§16 同步：错误码 42→45）；
+> 实现真源 = `src/core/adaptive.cpp`（`adaptive_error_codes()`、`adaptive_forbidden_keys()`、
+> `render_adaptive_policy()`）+ [`docs/format-presets.md`](format-presets.md) §7（工厂文件清单/seed）。
 > **相关文档**：[格式预设用户手册](format-presets.md) · [参数清单](param-catalog.md) · [M10 收口报告](m10-report.md) ·
 > [策略 AST JSON Schema](schemas/adaptive-policy.v1.schema.json) · [格式预设 JSON Schema](schemas/format-preset.v1.schema.json) ·
 > [工作流任务卡](m10-workflow.md) · [M10 裁定登记](m10-adjudications.md)
@@ -18,7 +21,7 @@ SSIMULACRA 2 给产物打个分，分数达到目标就停；没达到就输出*
 
 | 项 | 口径 |
 |---|---|
-| 默认状态 | **关闭**。未载入带 `adaptive.enabled=true` 的格式预设、或策略文本为空 ⇒ 行为与 0.3.x **逐字节相同** |
+| 默认状态 | **引擎默认关闭**：不带预设的路径（`--dev`、金样、回归）没有策略 ⇒ 行为与 0.3.x **逐字节相同**。**GUI 例外**：每个格式卡自动载入出厂 `default`，其中 JPEG / HEIF / AVIF / WebP / JXL 的 `default` 自带策略 ⇒ 这些格式在 GUI 里**默认启用**（可随时关掉开关或换无策略预设；PNG/TIFF/BMP 的 `default` 无策略）。见 §10 |
 | 作用域 | **每 (文件 × 输出) 独立**；只改该输出的 `ParamSet` 副本，不碰其它输出、不碰全局项 |
 | 策略存放 | **只存在预设文件里**（格式预设的 `adaptive.policy`，或全局预设 v2 `outputs[i].adaptive.policy`；见 §11、§11.1） |
 | GUI | **没有策略编辑器**：只有只读摘要 +「启用」开关；写法 = 编辑预设 JSON（见 §12）。原话裁决见设计 §15 |
@@ -33,9 +36,26 @@ SSIMULACRA 2 给产物打个分，分数达到目标就停；没达到就输出*
 1. 打开（或新建）某个格式的预设文件，例如
    `%APPDATA%\PhotoPipeline\presets\formats\heif\我的 HEIF.json`
    （便携模式下是 `<exe 目录>\presets\formats\heif\我的 HEIF.json`；路径规则见 [格式预设手册](format-presets.md) §2）。
-2. 在根对象里加 `adaptive` 对象，把策略文本写进 `policy`（字符串内的换行写成 `\n`），并把 `enabled` 设为 `true`。
-3. 在 PageOutput 的该格式页签里选中这个预设 ⇒ 载入时**先校验策略**：不合法会给出「第 L 行第 C 列：原因；建议（错误码）」并**拒绝载入**（保留当前卡值，绝不静默套默认）。
-4. 开始运行。启用自适应的输出行会显示「自适应 3/8」这类轮次进度；日志里出现 `adaptive round` / `adaptive summary`（§13）。
+2. 在根对象里加 `adaptive` 对象，把策略文本写进 `policy` —— **推荐写成字符串数组，一行一个元素**
+   （落盘零 `\n` 转义、可读、可 diff；旧版单字符串写法仍兼容读），并把 `enabled` 设为 `true`：
+
+   ```json
+   "adaptive": {
+     "enabled": true,
+     "policy": [
+       "version 1",
+       "target 90",
+       "max_rounds 8",
+       "output last",
+       "",
+       "stage quality-up",
+       "  search quality from current to 98 step 2"
+     ]
+   }
+   ```
+
+3. 在 PageOutput 的该格式页签里选中这个预设 ⇒ 载入时**先校验策略**：不合法会给出「第 L 行第 C 列：原因；建议（错误码）」并**拒绝载入**（保留当前卡值，绝不静默套默认）。数组形态下 L = 数组下标 + 1（空行也占一行）。
+4. 开始运行。启用自适应的输出行会显示「自适应 3/8」这类轮次进度；日志里出现 `adaptive plan` / `adaptive stage` / `adaptive round` / `adaptive summary`（§13）。
 
 > 只想先看效果：把 `max_rounds` 设成 `2`、`target` 设成 `85`，跑一张小图。
 
@@ -46,17 +66,17 @@ SSIMULACRA 2 给产物打个分，分数达到目标就停；没达到就输出*
 | 词 | 含义 |
 |---|---|
 | 轮（round） | 应用一组参数 → 编码到候选临时文件 → 评分 → 决策。一轮只产出一个候选 |
-| stage（阶段） | 一组动作（`search` / `set`）；阶段内动作**按书写顺序**执行，一个阶段跑完（或达标）再进下一个 |
+| stage（阶段） | 一组动作（`search` / `set`）；阶段内动作**按书写顺序**执行，一个阶段跑完（或达标）再进下一个。**全 `set` 阶段 = 所有 `set` 落在同一轮参数上、只编一轮**（不是每个 set 各占一轮；见 §6.2） |
 | `current` | 搜索起点 = **运行配置当前值**（即该格式卡上此刻的值），不是上一轮的值 ⇒ 每次执行都从同一起点出发（幂等） |
+| 方向 | `search` 的移动方向：旧语法由 `from`/`to` 的相对大小推断；DSL v1.1 可显式写 `down`/`up`（只降/只升，反向时该动作 0 轮、不报错） |
+| 步长断点（breakpoint） | DSL v1.1：把搜索区间按「开区间上界」分段的步长排程，如 `breakpoint 1 step 2 breakpoint 10 step 5`（详见 §6.1） |
 | 达标 | `score >= target`（默认 90，浮点按 ≥ 判定，SSIMULACRA 2 分数） |
 | last | 未达标时输出**最后一轮成功编码**的结果（本版唯一支持） |
 | 候选临时文件 | 每轮的编码产物，落在最终输出同目录（同目录唯一名），**不写元数据**（评分只看像素）；选定后才 commit 到最终路径 |
 
 ---
 
-## 4. 语法（DSL v1，EBNF 逐字）
-
-以下 EBNF 与设计 §9.2 **逐字一致**：
+## 4. 语法（DSL v1.1，EBNF 逐字）
 
 ```ebnf
 policy      = { option } , { stage } ;
@@ -67,7 +87,8 @@ option      = "version" INT                 (* 省略=1 *)
             | "on_metric_unavailable" ( "stop" | "fail" )  (* 默认 stop *)
             | "plateau" NUMBER ;            (* 0=关；>0=连续 2 轮改善<阈值即止 *)
 stage       = "stage" IDENT NL { action } ;
-action      = "search" KEY "from" VALUE "to" VALUE "step" NUMBER
+action      = "search" KEY "from" VALUE [ ( "down" | "up" ) ] "to" VALUE "step" NUMBER
+              { "breakpoint" NUMBER "step" NUMBER }
               [ "method" ( "linear" | "bisect" | "exp" | "greedy" ) ] [ "max_rounds" INT ]
             | "set" KEY VALUE ;
 KEY         = 目录内参数键 | "profile" | "chroma" | "tech"  (* 伪参数 *)
@@ -76,16 +97,29 @@ IDENT       = [a-z][a-z0-9_-]{0,31} ;
 comment     = "#" 到行尾 ;
 ```
 
+**v1.1 加性扩展（需求 3/7；旧语法逐字兼容）**：
+
+- 可选**显式方向**：`from current down|up to …`（`down` 位于 from 取值之后、`to` 之前，且必须跟 `to`）；
+  省略 = 旧语义（方向由 `to − from` 的相对大小在运行期推断）。
+- 可选**步长断点**：`breakpoint <数值> step <数值>`，可重复、位于基础 `step` 之后、`method` 之前；
+  断点必须**严格升序**、与 `to` 同侧（down 时 > to、up 时 < to），断点 step > 0，且**必须与显式方向
+  + `method linear` 一起使用**（其余组合在校验期显式报错，不静默忽略）。
+
 **落地口径（与上面摘要的差异，均已在实现与单测钉住）**：
 
 - `search` 的 `from` 实际只接受 **`current` 或数值**（`to` / `step` 必须数值）；EBNF 里写成 `VALUE` 是摘要写法。
-- `search` 子句顺序固定：`from … to … step …` → 可选 `method …` → 可选 `max_rounds N`；顺序颠倒或多写标记 = `stray_token` / `search_syntax`。
+- `search` 子句顺序固定：`from … [down|up] to … step …` → 零或多个 `breakpoint … step …` →
+  可选 `method …` → 可选 `max_rounds N`；顺序颠倒或多写标记 = `stray_token` / `search_syntax` /
+  `breakpoint_syntax`。
 - `KEY` 的 `tech` 伪参数**默认禁止**（`tech_not_supported`，设计 §9.4 归为 P2）；`chroma` 按结构键处理（只能 `set`）。
 - `set` 的 `VALUE`：整数 → `int64`，带小数点 → `double`，`true`/`false` → 布尔，裸词 → 枚举名（也接受中文显示名 / `…（N）` 标签），`"字符串"` → 字符串（转义 `\\` `\"` `\n` `\t` `\r`）。
 - **注释**：`#` 到行尾；字符串里的 `#` 不算注释。**缩进不是语义**（`stage` 行开始新阶段），空行自由。
 - **大小写**：关键字一律小写；枚举值按参数目录的 choices 匹配（引擎值或中文显示名均可）。
 - **错误定位**：1-based `line` / `col`（来自 JSON AST 导入的错误，`line` / `col` 记 0，按字段名定位）。
-- **规范化渲染**：固定写全 6 个选项 + 空行 + `stage` + 两空格缩进的动作；`method` 只在非 `linear` 时写，动作级 `max_rounds` 只在非 0 时写；满足 `render(parse(render(p))) == render(p)`。日志/侧车里的策略 SHA 用规范化文本复算。
+- **规范化渲染**：固定写全 6 个选项 + 空行 + `stage` + 两空格缩进的动作；显式方向按语义写
+  `down` / `up`（旧语法无方向时**不写**方向词，因为 `from current` 无法静态推断方向）；断点按
+  数值升序逐组写 `breakpoint V step S`；`method` 只在非 `linear` 时写，动作级 `max_rounds` 只在
+  非 0 时写；满足 `render(parse(render(p))) == render(p)`。日志/侧车里的策略 SHA 用规范化文本复算。
 
 ---
 
@@ -109,20 +143,61 @@ comment     = "#" 到行尾 ;
 ### 6.1 `search`（数值搜索）
 
 ```
-search <KEY> from (current|<数值>) to <数值> step <数值> [method linear|bisect|exp|greedy] [max_rounds N]
+search <KEY> from (current|<数值>) [down|up] to <数值> step <数值>
+       [breakpoint <数值> step <数值>]... [method linear|bisect|exp|greedy] [max_rounds N]
 ```
 
-- 方向由 `from` / `to` 的相对大小决定（`dir = sign(to - from)`）；端点含 `to`，并按参数域钳位。
-- `from == to`（两者都是显式数值）= `search_noop`；`step <= 0` = `step_range`。
-- `max_rounds`（动作级，`1..32`）= 该动作的轮数上限；省略/0 = 继承全局。
+- **方向**：省略方向词 = 旧语法（`dir = sign(to − from)`，在运行期按 `current` 实值推断）；
+  显式 `down` = 只降不升、`up` = 只升不降。显式方向下**起点已在端点错侧 ⇒ 该动作 0 轮，不是错误**
+  （例如 `from current down to 8` 而当前值已 ≤ 8：不产生候选，阶段直接耗尽/进下一 stage）。
+- 端点含 `to`，并按参数域钳位；`from == to`（两者都是显式数值、且**无**方向词）= `search_noop`；
+  `step <= 0` = `step_range`。
+- **`max_rounds`（动作级，`1..32`）**：覆盖该动作的阶段上界（linear 默认阶段上界 16），仍受全局
+  `max_rounds` 与三层终止约束。需要「一路降到 0.1 / 升到 90」这类长序列时**必须显式写**
+  （例如 `… down to 0.1 step 0.1 max_rounds 30`），否则候选数在 16 处被阶段上界截断。
 - 只有 **6 个数值质量键**可被 `search`（白名单见 §8.1）；其余一律 `not_searchable`。
 
 | method | 候选序列 | 每阶段上界（设计 §9.5） |
 |---|---|---|
-| `linear`（默认） | `start + dir*k*step`，钳到参数域与端点 | ≤16 |
+| `linear`（默认） | `v ← v + dir·step(v)`，钳到参数域/断点值/端点；`step(v)` 见下方断点语义 | 默认 16（动作级 `max_rounds` 可放宽），另受全局 `max_rounds` |
 | `bisect` | 端点"差/好"已知时按分数二分，直到区间 `< step` 或达标 | ≤18 |
 | `exp` | 步长 × factor（默认 1.5，上限 4） | 受 `max_rounds` |
 | `greedy` | 朝目标步进；无改善则步长减半，低于最小步长停止 | 受 `max_rounds` |
+
+**步长断点（DSL v1.1 / 需求 7；仅 `linear`）**：`breakpoint <值> step <步长>` 把搜索区间按
+**开区间上界**分段 ——
+
+- `step(v)` = 基础 `step` 若 `v <= 第一个断点`；否则 = 「**v 严格大于的最大断点**」的 step。
+  例：`… down to 0.1 step 0.1 breakpoint 1 step 2 breakpoint 10 step 5` ⇒ `v <= 1` 用 0.1、
+  `1 < v <= 10` 用 2、`v > 10` 用 5（区间口径与用户需求「1–10 步长 2、10–25 步长 5、
+  1–0.1 步长 0.1」一致，1.0 归 1–0.1 段）。
+- **跨断点不得跳过断点值**：若下一步会越过某个断点 `b`（down: `next < b < v`；up 对称），
+  先把候选钳到 `b` 本身（取沿方向最近的断点），再继续用该断点下方区间的步长；
+  最后若越过 `to` 则钳到 `to`（端点必被尝试）。
+- 断点必须**严格升序**（`breakpoint_order`）、与 `to` 同侧（down: > to；up: < to），
+  给出显式起点时还必须在起点内侧（`breakpoint_value`）；断点 step 必须 > 0；
+  断点**必须配显式方向**且 `method linear`（否则 `breakpoint_syntax`）。
+- 期望候选序列（`JXL Default` 策略，逐点单测钉住）：
+
+  | 当前 distance | 候选序列 | 轮数 |
+  |---|---|---|
+  | `1.0` | `0.9, 0.8, …, 0.1` | 9 |
+  | `4.0` | `2, 1, 0.9, …, 0.1` | 11 |
+  | `12.0` | `10, 8, 6, 4, 2, 1, 0.9, …, 0.1` | 15 |
+
+- **JPEG `default` 策略（0.4.0 / M12 新增）**：`search distance from current down to 0.1 step 0.1
+  breakpoint 1 step 1 max_rounds 20`，起点 = 卡值 `distance=3.0`、参数域 `[0.1, 3.0]`——
+  `v > 1` 时用断点 `1` 的步长 **1**（1–3 段粗扫），`v <= 1` 用基础步长 **0.1**（0.1–1 段精扫）。
+
+  | 当前 distance | 候选序列 | 轮数 |
+  |---|---|---|
+  | `3.0` | `2, 1, 0.9, 0.8, …, 0.1` | **11** |
+  | `2.0` | `1, 0.9, 0.8, …, 0.1` | 10 |
+  | `0.6` | `0.5, 0.4, …, 0.1` | 5 |
+
+  读法：从 3.0 出发先按整数跳（2、1），到断点 1 后每次降 0.1，直到 0.1；达标即停，未达标输出最后一轮
+  （本轮即 0.1 档，体积最大）。这条策略同时是「JPEG distance UI 域 0.3–3.0 → **0.1–3.0**」的原因——
+  0.3 下限会让 0.1–0.3 段不可达（R-294 修订，见 [参数清单](param-catalog.md) §1）。
 
 ### 6.2 `set`（一次性赋值）
 
@@ -131,7 +206,10 @@ set <KEY> <VALUE>
 ```
 
 - 支持两类键：该格式参数目录里**可设的键**（减去 §8.3 禁止表），以及伪参数 `profile`（仅 HEIF/AVIF）。
-- 每个 `set` = **1 轮**；一个 `stage` 里多个 `set` 会各占 1 轮、按顺序串起来（`set` 阶段的参数是累积的：后一轮继承前一轮）。
+- **`set` 阶段语义（勘误）**：一个 `stage` 内的**全部 `set` 落在同一轮参数上、只编一轮**
+  （同轮的多个键一起生效），不是「每个 set 各占一轮」。只有多个 stage 才会各占一轮。
+  （本文早期版本写成「每个 set = 1 轮」、与实现不符，现按实现修正；单测 `pp_test_adaptive_exec`
+  的「set 阶段 = 1 轮 / 多键合一」用例钉住。）
 - `set` 值按目标参数的类型/枚举/范围校验（`set_value_type` / `set_value_range` / `enum_value`）。
 
 ---
@@ -157,7 +235,7 @@ stage chroma-444
 ```
 
 读法：先把 `quality` 从当前值按 +2 往上试，直到达标或到 98；没达标就进 `chroma-444` 阶段，
-把色度切 4:4:4、档位切 `Main444_10Still`（会各花 1 轮）；全部跑完仍未达标 ⇒ 输出最后一轮。
+把色度切 4:4:4、档位切 `Main444_10Still`（**同一轮同时生效、只编一轮**）；全部跑完仍未达标 ⇒ 输出最后一轮。
 （与设计 §9.2「完整示例 1」逐字一致；也是 HEIF 出厂默认策略的主体，见 §10。）
 
 ### 示例 2 · JXL 距离扫描（线性 → 二分）
@@ -179,7 +257,7 @@ stage distance-bisect
 读法：JXL 的 `distance` 越小质量越高、体积越大。第一段用 0.1 的步长粗扫，第二段用 0.02 步长
 带二分逼近 0.05；`plateau 0.05` 表示连续 2 轮改善都小于 0.05 分就提前收手（避免磨时间）。
 
-### 示例 3 · 一次性兜底配置（只有 1 个阶段，最多 3 轮）
+### 示例 3 · 一次性兜底配置（只有 1 个阶段，1 轮）
 
 ```
 target 90
@@ -190,7 +268,8 @@ stage fallback
 ```
 
 读法：不写选项 ⇒ 用默认（`version 1` / `target 90` / `max_rounds 8` / `output last` / `on_metric_unavailable stop` / `plateau 0`）。
-只做一次 4:4:4 + 两个 x265 透传键的兜底尝试；达标即停，最多 3 轮（3 个 `set`）。
+只做**一轮**兜底尝试：`chroma 444` + 两个 x265 透传键**在同一轮同一次编码里一起生效**（1 个 stage 的全部
+`set` 合并为一轮，见 §6.2）；达标即停，否则阶段耗尽、输出这一轮。
 注意 `x265:psy-rd` / `x265:aq-mode` 不在 §9.4 的**示例表**里，但它们在 HEIF 插件的透传面/目录面上是**合法键**，
 因此可用（这条已由单测钉住：示例 3 合法，`effort` 不可 search）。
 
@@ -272,36 +351,102 @@ stage fallback
 
 ---
 
-## 10. 内置默认策略库（5 条全文）
+## 10. 出厂策略库（11 条工厂文件；策略全文）
 
-`default_adaptive_policies()` 编译进程序（`src/core/adaptive.cpp`）+ `src/core/format_preset.cpp` 的
-`builtin_format_presets()` 把策略逐字装进 5 条内置格式预设（设计 §9.7）；**出厂文件不在安装目录**
-（无 `share/presets/**`，见 D-8），由首次运行的**幂等 seed** 落到数据目录（见本节末注）。
-**PNG / TIFF / BMP 不提供**策略（无损，评分≈100，策略无意义；预设里 `adaptive` 永远为空）。
+> **0.4.0 / M12 起，出厂预设与策略文本的单一真源 = 仓库工厂数据文件 `presets/formats/**`**
+> （11 个 JSON：8 格式各一条 `default` + HEIF「Apple自适应」+ JXL「无损归档」+ JXL「自适应压缩」）。
+> 工厂文件随发行包分发（Windows zip 顶层 `PhotoPipeline/presets/formats/**`、AppImage `usr/bin/presets/formats/**`），
+> 首启**按字节复制** seed 到 `<data_dir>/presets/formats/`；人类可直接编辑/复制，见
+> [格式预设手册](format-presets.md) §2/§7。
+>
+> 历史：0.4.0.alpha1/alpha2-dev 的出厂预设是 **C++ 编译内置**（`src/core/format_preset.cpp` 的
+> `builtin_format_presets()` + 首启幂等 seed 成 `_builtin-*.json` 只读模板；HEIF `default` 由 libheif
+> 运行时内省生成快照，以免写死随插件版本漂移的值，D-8）。该机制已删除（M12-A1/A2/A3）：人类不可直接改/复制、
+> 出厂更新不随包走、C++ 数据与 JSON 双源。旧 `_builtin-*.json` 由首启迁移清理（[format-presets.md](format-presets.md) §7.4）。
+> HEIF `default` 的参数快照现在**冻结在工厂 JSON 里**（静态数据，不再依赖用户机器的 libheif 版本）。
 
-**HEIF**
+**策略全文按工厂文件逐条列出**（`default` 名 = 小写；每条策略顶部的 `#` 注释行也逐字在文件里）。
+PNG / TIFF / BMP 的 `default` **不提供策略**（无损，评分≈100，策略无意义；`adaptive` 永远为空）；
+`JXL 无损归档` 同样无自适应。
 
-```
-# HEIF 出厂策略（设计 §9.7 / §9.2 示例 1）：先把质量拉到 98，再切 4:4:4 / still 档位。
-# 目标 90 = SSIMULACRA 2 视觉透明档；未达标输出最后一轮。
+**HEIF · `presets/formats/heif/apple-adaptive.json`（name `Apple自适应`）**
+
+```text
+# HEIF Apple 自适应：先降 CRF（步长 2，到 8），仍不达标再切 4:4:4 + Main 4:4:4 10 Still。
 version 1
 target 90
-max_rounds 8
+max_rounds 10
 output last
 on_metric_unavailable stop
 
-stage quality-up
-  search quality from current to 98 step 2
+stage crf-down
+  search x265:crf from current down to 8 step 2 max_rounds 10
 
 stage chroma-444
   set chroma 444
   set profile Main444_10Still
 ```
 
-**AVIF**
+语义：优先降 CRF（步长 2；CRF 到 8 仍不达标）→ 切 4:4:4 + Main 4:4:4 10 Still（同一轮、只编一轮）→
+仍不达标结束（输出最后一轮）。参数：`x265`/`runtime`/10bit、档位 `reserved.heif_profile=2`（Main10）、
+`chroma=420`/`preset=slow`/`tune=ssim`/`x265:aq-mode=3`/`x265:crf=20`/`x265:level-idc=31`（CRF 路径不写 quality；
+**CRF 默认 20**，不是 28——用户需求 3，`--ui-smoke` 探针 `heif-apple-crf=20` 钉住）。
 
+**HEIF · `presets/formats/heif/default.json`**
+
+```text
+# HEIF default：quality 从当前值向上每 4 分试到 90；到 90 仍不达标则输出最后一轮。
+version 1
+target 90
+max_rounds 30
+output last
+
+stage quality-up
+  search quality from current up to 90 step 4 max_rounds 30
 ```
-# AVIF 出厂策略（设计 §9.7）：quality 搜索 → 4:4:4 → tune psnr 兜底。
+
+参数 = **运行时内省默认值的静态快照**（`chroma=420`/`lossless=false`/`preset=slow`/`quality=50`/
+`tu-intra-depth=2`/`tune=ssim`；`x265`/`runtime`/8bit）。快照冻结在工厂文件里，随包分发。
+
+**JXL · `presets/formats/jxl/adaptive-compress.json`（name `自适应压缩`）**
+
+```text
+# JXL 自适应压缩：distance 从当前值每 0.1 往下降，直到达标或到 0.1（越小越清晰）。
+version 1
+target 90
+max_rounds 20
+output last
+
+stage distance-down
+  search distance from current down to 0.1 step 0.1 max_rounds 20
+```
+
+参数：`libjxl`/`vardct`/16bit、`distance=1.0`、`effort=4`。
+
+**JXL · `presets/formats/jxl/default.json`**
+
+```text
+# JXL default：distance 断点步长降档（1 以下 0.1 精扫 / 1–10 步长 2 / 10 以上步长 5）。
+version 1
+target 90
+max_rounds 30
+output last
+
+stage distance-down
+  search distance from current down to 0.1 step 0.1 breakpoint 1 step 2 breakpoint 10 step 5 max_rounds 30
+```
+
+参数：`libjxl`/`vardct`/16bit、静态表默认全量快照（9 键：`brotli_effort=-1`、`codestream_level=-1`、
+`decoding_speed=0`、`distance=1.0`、`effort=7`、`epf=-1`、`lossless=false`、`photon_noise=0`、`resampling=-1`）。
+断点语义与期望候选序列见 §6.1。
+
+**JXL · `presets/formats/jxl/lossless-archive.json`（name `无损归档`）**：`libjxl`/`modular`/16bit、
+`lossless=true`、`effort=7`；**无自适应**（无损，评分≈100）。
+
+**AVIF · `presets/formats/avif/default.json`**
+
+```text
+# AVIF default（历史内建 §9.7）：quality 搜索 → 4:4:4 → tune psnr 兜底。
 version 1
 target 90
 max_rounds 8
@@ -318,27 +463,13 @@ stage tune-psnr
   set tune psnr
 ```
 
-**JXL**
+参数：`svt-av1`/`runtime`/10bit、`quality=85`、`chroma=420`（沿用旧口径：只写安全初值；运行期内省参数不写，
+避免随插件版本漂移被逐键校验拒绝）。
 
-```
-# JXL 出厂策略（设计 §9.2 示例 2）：distance 线性扫描 → 二分逼近。
-version 1
-target 90
-max_rounds 10
-output last
-plateau 0.05
+**WebP · `presets/formats/webp/default.json`**
 
-stage distance-scan
-  search distance from current to 0.05 step 0.1
-
-stage distance-bisect
-  search distance from current to 0.05 step 0.02 method bisect
-```
-
-**WebP**
-
-```
-# WebP 出厂策略（设计 §9.7）：quality 搜索 → method（压缩努力）提升。
+```text
+# WebP default（历史内建 §9.7）：quality 搜索 → method（压缩努力）提升。
 version 1
 target 90
 max_rounds 8
@@ -352,45 +483,104 @@ stage method-up
   set method 6
 ```
 
-**JPEG**
+参数：`libwebp`/`lossy`/8bit、静态默认全量（`quality=85`、`method=4` …）。
 
-```
-# JPEG 出厂策略（设计 §9.7）：jpegli quality 搜索。
+**JPEG · `presets/formats/jpeg/default.json`（0.4.0 / M12 新策略）**
+
+```text
+# JPEG default：视觉距离从 3.0 起步（1–3 步长 1 粗扫），1 以下按 0.1 精扫到 0.1；取达到目标 90 分的最小体积（= 最大 distance）一轮。
 version 1
 target 90
-max_rounds 8
+max_rounds 20
 output last
 on_metric_unavailable stop
 
-stage quality-up
-  search quality from current to 95 step 2
+stage distance-down
+  search distance from current down to 0.1 step 0.1 breakpoint 1 step 1 max_rounds 20
 ```
 
-> 出厂文件 = **只读模板**（`builtin=true`）：要改就「另存为」到自己的名字再编辑。
-> 首次运行由**运行时幂等 seed** 把 5 条内置预设写到 `<data_dir>/presets/formats/<format>/_builtin-<format>.json`
-> （只补不存在的那条，已存在一个字节都不动；D-8 —— 发行包**不含** `share/presets/` 出厂文件与安装规则）。
-> 详见 [格式预设手册](format-presets.md) §7。
+参数：`jpegli`/`dct`/8bit、静态默认全量快照（`quality_mode=distance`、`distance=3.0`、`quality=90`（quality
+模式下才生效）、`chroma=444`、`progressive=true`、`optimize_coding=true` …）。
+语义：从 3.0 起步，**1–3 段步长 1 粗扫、1 以下步长 0.1 精扫到 0.1**，取「达到目标 90 分的最小体积
+（最大 distance）」的一轮；候选序列与跨断点钳位见 §6.1。
+**JPEG distance 的 UI 范围同步放宽为 0.1–3.0**（R-294 修订；否则 0.1–0.3 段不可达，见 [参数清单](param-catalog.md) §1）。
+
+### 10.1 11 条工厂预设清单（路径 / 参数 / 策略总表）
+
+| 格式 | 工厂文件 | JSON `name` | 后端 · 技术 | 位深 | 参数（快照） | 自适应策略 |
+|---|---|---|---|---|---|---|
+| HEIF | `heif/apple-adaptive.json` | `Apple自适应` | `x265` · `runtime` | 10 | `chroma=420`、`preset=slow`、`tune=ssim`、`x265:aq-mode=3`、`x265:crf=20`、`x265:level-idc=31`；档位 `reserved.heif_profile=2`（Main10） | CRF 20→8 步长 2，再切 444 + Main444_10Still（max 10） |
+| HEIF | `heif/default.json` | `default` | `x265` · `runtime` | 8 | **运行时内省默认值的静态快照**（`chroma=420`/`lossless=false`/`preset=slow`/`quality=50`/`tu-intra-depth=2`/`tune=ssim`） | quality 从当前值 +4 升到 90（max 30） |
+| JXL | `jxl/lossless-archive.json` | `无损归档` | `libjxl` · `modular` | 16 | `lossless=true`、`effort=7` | **无**（无损，评分≈100） |
+| JXL | `jxl/adaptive-compress.json` | `自适应压缩` | `libjxl` · `vardct` | 16 | `distance=1.0`、`effort=4` | distance 每 −0.1 降到 0.1（max 20） |
+| JXL | `jxl/default.json` | `default` | `libjxl` · `vardct` | 16 | 静态表默认全量快照（9 键） | distance 断点降档（1 以下 0.1 / 1–10 步长 2 / >10 步长 5；max 30） |
+| AVIF | `avif/default.json` | `default` | `svt-av1` · `runtime` | 10 | `quality=85`、`chroma=420` | quality→444→tune psnr（max 8） |
+| WebP | `webp/default.json` | `default` | `libwebp` · `lossy` | 8 | 静态默认全量（`quality=85`、`method=4` …） | quality→method 6（max 8） |
+| JPEG | `jpeg/default.json` | `default` | `jpegli` · `dct` | 8 | 静态默认全量；`quality_mode=distance`、`distance=3.0`、`quality=90` | **distance 3.0→0.1，断点 1 步长 1**（max 20；§6.1/§10） |
+| PNG | `png/default.json` | `default` | `oiio` · `deflate` | 16 | `compression="default"`、`compressionLevel=6`、`filter=0` | **无**（无损） |
+| TIFF | `tiff/default.json` | `default` | `oiio` · `codec` | 16 | `compression="lzw"`、`deflate_level=6`、`predictor=2`、`tiff_tile_*=0` | **无**（无损） |
+| BMP | `bmp/default.json` | `default` | `oiio` · `raw` | 24 | 无参数 | **无**（无损） |
+
+> 全部 11 条都必须过 `load_format_preset` + `validate_format_preset`（单测 `pp_test_format_presets` 钉住：
+> 8 格式、11 文件、每格式恰有 `default.json` 且 `name=="default"`、HEIF 恰 2 / JXL 恰 3、无 `_builtin-` 文件、
+> 无「内置示例 ·」名）。HEIF 系键在运行时内省不可用的构建里由既有校验链放行（不误报）。
+>
+> 带 `search` 的策略**都显式写了动作级 `max_rounds`**（Apple自适应 10 / HEIF default 30 / JXL 自适应压缩 20 /
+> JXL default 30 / JPEG default 20）：linear 默认阶段上界 16，不写会被截断（见 §6.1）。
+>
+> seed 幂等（[format-presets.md](format-presets.md) §2.1）：**非便携**模式首启 `written=11 / skipped=0`、
+> 二次 `written=0 / skipped=11`；**便携**模式（工厂目录 == 数据目录）只清理旧文件、不复制（`written=0`）；
+> 逐字节复制、已存在不覆盖。
+
+> **`policy` 的落盘形态（需求 3）**：JSON 字符串数组，一行一个元素（含 `#` 注释行与空行）；示例见
+> [format-presets.md](format-presets.md) §3.1 与 `presets/formats/jpeg/default.json`。
 
 ---
 
-## 11. 在格式预设 JSON 里携带策略
+## 11. 在格式预设 JSON 里携带策略（**数组：一行一条**）
 
-`adaptive` 是预设根对象里的一个可选对象（两个字段，`enabled` 与 `policy`）：
+`adaptive` 是预设根对象里的一个可选对象（两个字段，`enabled` 与 `policy`）。**需求 3 起
+`policy` 一律写成 JSON 字符串数组、一行一个元素**（零 `\n` 转义、人类可读、可 git diff）：
 
 ```json
 "adaptive": {
   "enabled": true,
-  "policy": "version 1\ntarget 90\nmax_rounds 8\noutput last\non_metric_unavailable stop\n\nstage quality-up\n  search quality from current to 98 step 2\n\nstage chroma-444\n  set chroma 444\n  set profile Main444_10Still\n"
+  "policy": [
+    "version 1",
+    "target 90",
+    "max_rounds 8",
+    "output last",
+    "on_metric_unavailable stop",
+    "",
+    "stage quality-up",
+    "  search quality from current to 98 step 2",
+    "",
+    "stage chroma-444",
+    "  set chroma 444",
+    "  set profile Main444_10Still"
+  ]
 }
 ```
 
 | 字段 | 类型 | 缺省 | 规则 |
 |---|---|---|---|
 | `adaptive.enabled` | bool | `false` | `true` 时 **必须**有非空 `policy`（否则保存/载入被阻断） |
-| `adaptive.policy` | string | 空 | 行式 DSL v1 文本；**≤16 KiB**（`policy_too_large`）；保存/载入/开始运行三处同一套 parse+validate |
+| `adaptive.policy` | **string[]**（旧 `string` 兼容读） | 空 | 行式 DSL v1 文本，一行一个元素；每个元素**不得内嵌换行**（否则数组下标 ↔ 行号对不上，显式报错）。总长 **≤16 KiB**（按各行字节和 + 换行计；超限 = `policy_too_large`）。保存/载入/开始运行三处同一套 parse+validate |
 
-- 完整预设示例见 [格式预设手册](format-presets.md) §3（含 `kind`/`version`/`params`/`reserved` 的整份文件）。
+- **内存表示不变**：`FormatPresetData::adaptive_policy` / `OutputFormatSpec::adaptive_policy` 仍是
+  单个 `\n` 连接的 `std::string`（内部/引擎/日志/SHA 读取路径零改动）；只有 JSON I/O 边界在
+  「数组 ⇄ 文本」之间转换（`core/adaptive.h` 的 `adaptive_policy_to_lines` / `adaptive_policy_from_lines`）。
+- **旧字符串兼容读**：读入旧文件（`"policy": "…\n…"`）时按 `\n` / `\r\n` 拆行后走同一条规范化
+  路径；再次保存即升级为数组形态。
+- **字节稳定**：`保存 → 载入 → 保存` 逐字节一致（数组元素顺序 = 文本行序；末尾空行无语义、
+  写出时丢弃）；空白行/注释行都保留。
+- **错误定位**：DSL 解析/校验错误的 `line` = 数组下标 + 1（数组形态下与文件行号同源的语义坐标）。
 - `enabled=false` 且 `policy` 为空 ⇒ **不写** `adaptive` 字段（旧文件零变化，C25）。
+- **测试证据（0.4.0 迭代）**：`pp_test_format_presets` 的「adaptive.policy 数组持久化 + 旧字符串
+  兼容读」用例（写出数组/无 `\n` 转义/逐行内容/`保存→载入→保存` 字节稳定/内嵌换行报错/数组下标+1
+  行号）、`pp_test_presets` 的全局预设 adaptive 组（JSON 数组逐行 + 旧字符串兼容读 + 字节稳定）、
+  `--ui-smoke` 的 format-preset 探针 (g)/(h)（seed 后文件 policy 为数组、全局预设写盘数组逐行）。
+- 完整预设示例见 [格式预设手册](format-presets.md) §3（含 `kind`/`version`/`params`/`reserved` 的整份文件）。
 
 ### 11.1 全局预设也携带同一个块（A20）+ dev CLI 两条路径（A14）
 
@@ -399,8 +589,8 @@ stage quality-up
 
 | 面 | 实际行为 |
 |---|---|
-| 全局预设写盘 | `outputs[i].adaptive = {enabled, policy}`；空块**不写**字段 ⇒ 旧全局预设逐字节不变（C25） |
-| 全局预设读盘 | 缺省 = `enabled=false` / 空策略（自适应关闭，行为与 0.3.x 相同）；`adaptive` 非对象 / `enabled` 非布尔 / `policy` 非字符串 ⇒ **显式报错**（不静默当关闭） |
+| 全局预设写盘 | `outputs[i].adaptive = {enabled, policy:[...]}`（数组一行一条，与格式预设同一编码）；空块**不写**字段 ⇒ 旧全局预设逐字节不变（C25） |
+| 全局预设读盘 | 缺省 = `enabled=false` / 空策略（自适应关闭，行为与 0.3.x 相同）；`adaptive` 非对象 / `enabled` 非布尔 / `policy` 非字符串或字符串数组 ⇒ **显式报错**（不静默当关闭）；旧字符串形态兼容读 |
 | 引擎判据 | 仍是 **`adaptive_policy` 非空**；`adaptive_enabled` 只是启用状态/持久化面（`OutputFormatSpec` 末尾加性，默认 `false`） |
 | GUI 门控 | `PageOutput::config_base()` 按 `adaptive_enabled && 策略非空 && 解析通过` 才把策略交给引擎；关 = 走既有单次编码路径（产物逐字节不变） |
 | `--dev --preset FILE` | 按根 `kind` 分派：`kind="format-preset"` ⇒ 格式预设（施加到输出 #0）；含 `outputs` ⇒ 全局预设 v2。**两条路径都消费 `adaptive`**（全局预设分支由 A14 收口补丁加性 3 行补齐；无 `adaptive` 的旧预设行为逐字节不变） |
@@ -414,7 +604,7 @@ stage quality-up
 | 场景 | 做法 |
 |---|---|
 | 新建策略 | 复制一个已有预设 JSON → 改文件名（= 显示名）→ 改 `name` 与 `adaptive` → 重新载入该预设 |
-| 改策略 | 直接编辑 `adaptive.policy` 字符串（注意 `\n` 是换行、`\"` 是引号）；保存后重新选中预设触发校验 |
+| 改策略 | 直接编辑 `adaptive.policy` 数组（一行一个元素，含 `#` 注释行/空行；旧单字符串形态仍兼容读）；保存后重新选中预设触发校验 |
 | 校验失败 | 载入被拒绝并给出「第 L 行第 C 列：原因；建议（错误码）」；**当前卡值保持不变**（不静默套默认） |
 | 合法性自查 | 对照 §9 错误码表；或先用 JSON AST 导入通道（§14）让脚本生成、再由程序渲染成 DSL |
 | 想比对版本 | 日志里的 `policy_sha` 是**规范化文本**的 SHA256 前 16 位（注释/缩进不同不影响比对） |
@@ -429,12 +619,23 @@ stage quality-up
 启用自适应后，`--dev` / GUI 运行日志新增（info 级，仅启用时）：
 
 ```
+[info] [pipeline] adaptive plan {src=… out=… output_index=0 target=90 max_rounds=30
+        stages=1 stage_ids=quality-up policy_sha=…}
+[info] [pipeline] adaptive stage {… stage=quality-up round_before=0}
 [info] [pipeline] adaptive round {src=… out=… output_index=0 round=2 stage=quality-up
-        key=quality value=96 score=91.2 state=ok bytes=… encode_ms=… metric_ms=… decision=met}
+        key=quality value=96 effective=quality=96 score=91.2 state=ok bytes=…
+        encode_ms=… metric_ms=… decision=met candidate=…}
 [info] [pipeline] adaptive summary {src=… rounds=3 target=90 selected=round2
-        policy_sha=… final_score=91.2 overhead_ms=…}
+        selected_params=quality=96 policy_sha=… final_score=91.2 overhead_ms=… reason=met
+        reason_detail="达标：分数 91.20 ≥ 目标 90（第 2 轮）"}
 ```
 
+- **hooks（需求 1 的迭代日志接口，`core/adaptive_exec.h`）**：`on_plan(AdaptivePlanInfo)`
+  （run_policy 入口一次）、`on_stage_start(stage_id, round_before)`（每个 stage 一次）、
+  `on_round(AdaptiveRoundRecord, max_rounds)`（每轮一次，含新增 `effective_params` /
+  `candidate_path`）、`on_scoring(round, max_rounds)`（评分期心跳）。
+  `AdaptiveRunResult` 末尾新增 `selected_params_text` / `reason_detail`（中文终止原因），
+  `reason` 仍是稳定英文码。
 - **进度**：`ProgressInfo` 加性字段 `adaptive_round` / `adaptive_max`，运行页显示「自适应 3/8」；overall 不虚增。
 - **侧车**：`<产物>.pp.json` 加性对象
   `"adaptive": {policy_version, target, max_rounds, output, rounds:[…], selected_round, final_score, reason}`。
@@ -451,26 +652,29 @@ stage quality-up
 {
   "version": 1,
   "target": 90,
-  "max_rounds": 8,
+  "max_rounds": 30,
   "output": "last",
   "on_metric_unavailable": "stop",
   "plateau": 0,
   "stages": [
-    { "id": "quality-up",
+    { "id": "distance-down",
       "actions": [
-        { "kind": "search", "key": "quality", "from": "current", "to": 98, "step": 2 }
-      ] },
-    { "id": "chroma-444",
-      "actions": [
-        { "kind": "set", "key": "chroma", "value": "444" },
-        { "kind": "set", "key": "profile", "value": "Main444_10Still" }
+        { "kind": "search", "key": "distance", "from": "current",
+          "direction": "down", "to": 0.1, "step": 0.1,
+          "breakpoints": [
+            { "value": 1, "step": 2 },
+            { "value": 10, "step": 5 }
+          ],
+          "max_rounds": 30 }
       ] }
   ]
 }
 ```
 
 - 根：`{version?, target?, max_rounds?, plateau?, output?, on_metric_unavailable?, stages[]}`（`stages` 必填 ≥1）。
-- `search` 动作：`{kind:"search", key, from, to, step, method?, max_rounds?}`；`from` = 数值或 `"current"`。
+- `search` 动作：`{kind:"search", key, from, to, step, direction?, breakpoints?, method?, max_rounds?}`；
+  `from` = 数值或 `"current"`；`direction` = `"down"` / `"up"`（省略 = 旧语法，由端点推断）；
+  `breakpoints` = `[{value, step}...]`（严格升序；仅 direction 存在且 method=linear 时合法）。
 - `set` 动作：`{kind:"set", key, value}`；`value` = 数字 / 布尔 / 字符串。
 - 导入后**仍走同一套 `validate`**（§9、§8），AST 里的非法键不会比 DSL 更宽松；错误码前缀为 `json_syntax` / `json_field`。
 
@@ -484,7 +688,8 @@ stage quality-up
 | 22.8 MP（23 MP） | 3–6 s | 1.5–3 s（流式后） | **5–9 s** |
 
 - **最坏耗时 ≈ `max_rounds × 单轮`**：`max_rounds=8` 时最坏 ≈ 8 轮；`plateau` 与「达标即停」通常远早于触顶。
-- 三层终止保证：全局 `max_rounds`（≤32）+ 每 stage 上界（≤18）+ `set` 每键 1 轮；`plateau` 额外提前终止。
+- 三层终止保证：全局 `max_rounds`（≤32）+ 每 stage 上界（linear 默认 ≤16、bisect ≤18；动作级
+  `max_rounds` 可放宽 linear 阶段上界）+ `set` 阶段恒 1 轮；`plateau` 额外提前终止。
 - 0.4.0 实测参考（见 §16）：23 MP 单次评分 **1.572 s**（W1-T4 流式化），评分色彩归一 8.49 s → **0.42 s**（W1-T2c），
   因此 22.8 MP 的每轮成本比设计估值更低；具体以本机日志 `encode_ms` / `metric_ms` 为准。
 - UI/日志披露原则：**不显示的耗时 = 未发生的量**；无法估算时显示「—」而不是编造。
@@ -493,12 +698,12 @@ stage quality-up
 
 ---
 
-## 16. 错误码清单（42 条，按类别归并）
+## 16. 错误码清单（45 条，按类别归并）
 
 错误对象 = `{line, col, code, message, hint}`；GUI/预设保存显示为
 `第 L 行第 C 列：message；建议 hint（错误码 code）`。
 
-### 16.1 词法 / 语法（20 条，`parse_adaptive_policy`）
+### 16.1 词法 / 语法（21 条，`parse_adaptive_policy`）
 
 | code | 什么时候出现 | 例子 / 修法 |
 |---|---|---|
@@ -522,8 +727,9 @@ stage quality-up
 | `bad_method` | `method` 不是 `linear/bisect/exp/greedy` | `method quadratic` → `method bisect` |
 | `set_syntax` | `set` 的键加了引号 | `set "chroma" 444` → `set chroma 444` |
 | `stray_token` | 一行里有多余标记（含选项/stage/动作后的额外词） | `target 90 95`、`step 2 3` |
+| `breakpoint_syntax` | `breakpoint` 子句结构错：缺数值 / 缺 `step` / `step` 非数值；**无显式方向却写 breakpoint**；**method≠linear 却写 breakpoint** | `breakpoint 1` → `breakpoint 1 step 2`；旧语法请补 `down`/`up`；bisect/exp/greedy 不支持断点 |
 
-### 16.2 语义 / 注册表（20 条，`validate_adaptive_policy`）
+### 16.2 语义 / 注册表（22 条，`validate_adaptive_policy`）
 
 | code | 什么时候出现 | 例子 / 修法 |
 |---|---|---|
@@ -539,6 +745,8 @@ stage quality-up
 | `search_noop` | 显式 `from == to`（区间为空） | 改端点或删该动作 |
 | `step_range` | `step <= 0` | `step 0` → `step 2` |
 | `action_max_rounds` | 动作级 `max_rounds` 不在 `1..32` | 删掉该子句 = 继承全局 |
+| `breakpoint_order` | `breakpoint` 值未**严格升序**（含重复） | `breakpoint 10 step 5 breakpoint 1 step 2` → 升序重排 |
+| `breakpoint_value` | 断点值不在搜索区间内（down 须 > to、up 须 < to；显式起点时还须在起点内侧）/ 超出参数域；或断点 `step <= 0` | `to 0.1` 时 `breakpoint 0.05` → 改到 `(0.1, 起点]` 内 |
 | `set_value_type` | `set` 值类型与目标参数不符（含缺值） | `set chroma true` → `set chroma 444` |
 | `set_value_range` | `set` 数值越界 | `set quality 120` |
 | `enum_value` | `set` 枚举值不在 choices（引擎值/中文名/`…（N）`标签） | `set tune nonsense` |
@@ -555,7 +763,8 @@ stage quality-up
 | `json_syntax` | JSON 解析失败 | 对照 [`adaptive-policy.v1.schema.json`](schemas/adaptive-policy.v1.schema.json) 检查括号/引号 |
 | `json_field` | 字段缺失/类型错/枚举非法（`stages` 非数组、`kind` 非 search/set、`from` 既非数值也非 `"current"` 等） | 按 §14 的字段表补齐 |
 
-> 全表 = `adaptive_error_codes()` 的 42 项（20 + 20 + 2，与 `build/m10/w3-core/report.md` §2.5 逐字一致）；
+> 全表 = `adaptive_error_codes()` 的 45 项（21 + 22 + 2；40 条既有码 + 断点 3 条
+> `breakpoint_syntax` / `breakpoint_order` / `breakpoint_value`，0.4.0 迭代需求 7 新增）；
 > 单测对每条至少一个非法样例钉住 code（含行号/列号）。
 
 ---
@@ -567,19 +776,34 @@ stage quality-up
 3. **`tech` 切换默认禁止**：P2；若将来放开，必须"切换后重跑整套校验"。
 4. **`heif_grid` 的类型**：目录里是 **int 枚举 0/1/2**（关闭/自动/总是），设计 §8.2 早期 JSON 示例写成 `"auto"` 已被修正；
    预设里写字符串会被逐键校验拒绝（不静默当 0）。
-5. **无损格式不配策略**：PNG/TIFF/BMP 的评分≈100，策略无意义（出厂库不提供）。
-6. **执行器与出厂文件的最终形态（已定稿）**：执行器（轮循环/候选 commit/侧车）随 W3-T4 落地、内置库随 W3-T5
-   （运行时幂等 seed，D-8）；端到端读数（格式预设四格式 / 全局预设 adaptive / `--adaptive-policy`）见
-   [M10 收口报告](m10-report.md) §1.3 与 §2-14，证据 `build/m10/w3-preset/e2e/`、`build/m10/final-gate/a14/`。
+5. **无损格式不配策略**：PNG/TIFF/BMP 的评分≈100，策略无意义（工厂 `default` 不提供 `adaptive`；JXL「无损归档」同样无自适应）。
+6. **执行器与出厂文件的最终形态（0.4.0 定稿）**：执行器（轮循环/候选 commit/侧车）随 W3-T4 落地；出厂预设 =
+   **仓库工厂数据文件 `presets/formats/**`（11 条 JSON，随包分发 + 首启字节复制 seed；M12-A1/A3 取代 0.4.0.alpha1
+   的 C++ 内置库 + `_builtin-` 只读模板/D-8）**。端到端读数（格式预设四格式 / 全局预设 adaptive /
+   `--adaptive-policy`）见 [M10 收口报告](m10-report.md) §1.3 与 §2-14、`build/m10/w3-preset/e2e/`、
+   `build/m10/final-gate/a14/`（M12 复跑读数见 [docs/0.4.0-report.md](0.4.0-report.md) §2）。
+7. **断点只支持 `method linear`**（DSL v1.1 的显式边界）：bisect/exp/greedy 没有「按段步长排程」的
+   确定语义，写 breakpoint 会被 `breakpoint_syntax` 拒绝（不静默忽略）。断点还必须配显式 `down`/`up`
+   （`from current` 的旧语法方向是运行期推断的，断点分段无法静态定义）。
+8. **显式方向下的「反向」不报错**：`from current down to 8` 而当前值已 ≤ 8 ⇒ 该动作 0 轮（阶段耗尽/
+   进下一 stage），这是需求 7 明确的口径；只有**旧语法**的显式 `from == to` 仍报 `search_noop`。
+9. **HEIF `default` 快照已静态化（M12）**：参数 = 运行时内省默认值的静态快照，冻结在
+   `presets/formats/heif/default.json`，**不再在用户机器上生成**（0.4.0.alpha1 的运行时 seed 口径已取消）。
+   libheif/x265 升级后如需刷新快照，属"出厂数据更新"（改工厂文件，随下一版分发；见
+   [format-presets.md](format-presets.md) §7）。
+10. **`set` 阶段语义按实现修正**（§6.2）：一个 stage 内全部 `set` 同轮生效、只编一轮；本文早期版本
+    写「每个 set = 1 轮」与实现矛盾，已勘误。
 
 ---
 
 ## 18. 相关文档
 
-- 设计：[`v0.4.0-design.md`](v0.4.0-design.md) §9（语义/DSL/键/成本/默认库）、§8（格式预设承载）、§11（兼容）
+- 设计：[`v0.4.0-design.md`](v0.4.0-design.md) §9（语义/DSL/键/成本/默认库；**§9.7 含 M12 修订**）、§8（格式预设承载）、§11（兼容）
+- 工厂数据文件（**出厂预设与策略文本的单一真源**）：仓库 `presets/formats/**`（11 个，M12 起）
 - 验收：`build/m10/w3-core/report.md`（DSL/AST/错误码/默认库/预设 JSON 承载）、`build/m10/w3-exec/report.md`
   （执行器/pipeline 集成/侧车）、`build/m10/w3-preset/report.md`（全局预设 `adaptive`/内置 seed）、
-  `build/m10/final-gate/report.md`（最终树门禁与 E2E）
+  `build/m10/final-gate/report.md`（最终树门禁与 E2E）· M12 门禁读数见 [docs/0.4.0-report.md](0.4.0-report.md) §2
 - 用户手册：[格式预设](format-presets.md) · [参数清单](param-catalog.md)
-- 登记：[M10 裁定（A3/A9/A13/A14/A20）](m10-adjudications.md) · [M10 工作流（W3 任务卡）](m10-workflow.md) · [M10 收口报告](m10-report.md)
+- 登记：[M10 裁定（A3/A9/A13/A14/A20）](m10-adjudications.md) · [M11 裁定](m11-adjudications.md) ·
+  [M12 裁定（A1–A9）](m12-adjudications.md) · [M10 工作流（W3 任务卡）](m10-workflow.md) · [M10 收口报告](m10-report.md)
 - Schema：[`adaptive-policy.v1.schema.json`](schemas/adaptive-policy.v1.schema.json)（AST 导入）· [`format-preset.v1.schema.json`](schemas/format-preset.v1.schema.json)（预设容器）

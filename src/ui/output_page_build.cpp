@@ -769,8 +769,10 @@ void OutputPageImpl::wire() {
 
 // ---------------------------------------------------------------------------
 // M10-W3-T2（C23 / 设计 §8.5）：每格式页签顶部的「格式预设」行 + 只读自适应面（C24）
-//   行布局 = [格式预设][下拉 flex][保存][另存…][删除][导入…][导出…]（设计逐字；共享卡头是
-//   跨格式的，不能承载格式级下拉 → 本行必须挂在**每个格式页**上，且置于位深/档位行之上）。
+//   行布局 = [格式预设][下拉 160（= 其它参数行字段宽 kFieldStd）][保存][另存…][删除][导入][导出]
+//   （0.4.0.alpha2 用户修订：导入/导出按钮去掉省略号——省略号在窄行里被当成文字截断；
+//   下拉框宽度必须与同页其它参数行一致，不允许被 Flex 压缩成 115px；按钮一律固定到
+//   sizeHint 宽、不截断。设计 §8.5 的「flex」表述按此修订，见 docs/format-presets.md）。
 //   交互：下拉选中即载入（activated → 只有用户动作触发；programmatic setCurrentIndex 不发信号）；
 //   未选中时「保存」走另存…；「删除」只在有选中项时发意图。
 //   证据：--ui-smoke 的 format-preset 行（行存在/空态/往返/损坏/自适应摘要+开关）。
@@ -787,25 +789,31 @@ void OutputPageImpl::build_format_preset_row(const std::string &id, QVBoxLayout 
             "该格式的预设列表（独立文件 %1）：选中即载入 —— 只写当前格式卡（后端/技术/位深/参数/"
             "编码档位/自适应策略），不改全局项（色彩/冲突/模板/规则/仅元数据）")
             .arg(QStringLiteral("presets/formats/<格式>/<名>.json"));
-    st.preset_combo = formkit::combo_box(st.page, spec, FieldWidth::Flex);
-    // 首项恒为「未选择」（itemData 空）—— 未喂列表时是空态而不是"空下拉"；字段轨 flex
-    // （6 件套同排：下拉可压到 0 宽，按钮不被挤出去 → 无重叠）。
-    st.preset_combo->addItem(PageOutput::tr("未选择"), QString());
-    st.preset_combo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    st.preset_combo = formkit::combo_box(st.page, spec, FieldWidth::Standard);
+    // M12 需求 4（用户口径）：**没有「未选择」占位项** —— 下拉只由真实预设文件喂入（列表由
+    // MainWindow 单一持有者提供）；格式卡创建/首启即自动选中并载入该格式的 `default` 预设
+    // （自动载入在 MainWindow::Impl::refresh_format_preset_row，失败静默记日志 + 注释位中文
+    // 错误）。列表为空（数据目录不可用）才是错误态：无选中项，按钮按既有禁用语义呈现。
+    // 0.4.0.alpha2：宽度钉 kFieldStd（160）= 同页其它参数行字段宽（用户要求「下拉框宽度要
+    // 和其他参数一致」）；**不再** Expanding/Flex（旧实现被 HBox 的行尾 stretch 压到 ~115px，
+    // 且会把右侧按钮挤出卡片 → 文字看起来被截断）。行内按钮按 sizeHint 固定宽，靠行尾
+    // stretch 吸收富余宽；预设名过长时由 combo 弹层自适应宽 + tooltip 全文兜底。
     st.preset_combo->setFixedHeight(theme::Metrics::combo_h);
 
     st.preset_save =
         make_button(st.page, PageOutput::tr("保存"), QStringLiteral("pp-format-preset-save"), true);
-    st.preset_saveas = make_button(st.page, PageOutput::tr("另存…"),
+    st.preset_saveas = make_button(st.page, PageOutput::tr("另存"),
                                    QStringLiteral("pp-format-preset-saveas"), false);
     st.preset_delete = make_button(st.page, PageOutput::tr("删除"),
                                    QStringLiteral("pp-format-preset-delete"), false);
-    st.preset_import = make_button(st.page, PageOutput::tr("导入…"),
+    // 用户修订（0.4.0.alpha2）：导入/导出不带省略号 —— 该行按钮多、省略号会把「导入」挤成
+    // 「导入…」再被当成截断；对话框行为写进 tooltip/无障碍名（名称仍是「导入」「导出」）。
+    st.preset_import = make_button(st.page, PageOutput::tr("导入"),
                                    QStringLiteral("pp-format-preset-import"), false);
-    st.preset_export = make_button(st.page, PageOutput::tr("导出…"),
+    st.preset_export = make_button(st.page, PageOutput::tr("导出"),
                                    QStringLiteral("pp-format-preset-export"), false);
     st.preset_save->setToolTip(PageOutput::tr(
-        "把当前格式卡快照写入预设文件（未选中预设时走「另存…」；保存前先校验，不过不写盘）"));
+        "把当前格式卡快照写入预设文件（未选中预设时走「另存」；保存前先校验，不过不写盘）"));
     st.preset_saveas->setToolTip(
         PageOutput::tr("把当前格式卡快照另存为新的格式预设（命名后写入预设目录）"));
     st.preset_delete->setToolTip(PageOutput::tr("删除当前格式预设文件（会二次确认）"));
@@ -816,6 +824,13 @@ void OutputPageImpl::build_format_preset_row(const std::string &id, QVBoxLayout 
         QWidget *field =
             make_flex_field(st.page, {st.preset_combo, st.preset_save, st.preset_saveas,
                                       st.preset_delete, st.preset_import, st.preset_export});
+        // 0.4.0.alpha2 用户修订（需求 5）：该行控件多，在 1440×900 / 587 右栏下实测
+        // combo 160 + 5 按钮 + 5×8 间距 = 462px > host 447px，QBoxLayout 在负空间下把
+        // combo 先按 145px 分位、再被 setFixedWidth(160) 钳回 ⇒ 可见 15px 重叠（就是用户
+        // 说的"文字截断"）。行内间距收 8→6（省 10px）+「另存…」去省略号（省 ~10px）
+        // ⇒ 需求 442px ≤ 447px，留 5px 余量。语义/objectName/可达性不变。
+        if (QLayout *field_layout = field->layout(); field_layout != nullptr)
+            field_layout->setSpacing(6);
         const formkit::Row row =
             formkit::frow(st.page, PageOutput::tr("格式预设"), field, FieldWidth::Flex, QString(),
                           formkit::kNotePlaceholder);
@@ -862,13 +877,11 @@ void OutputPageImpl::build_format_preset_row(const std::string &id, QVBoxLayout 
         if (s == nullptr || s->preset_combo == nullptr || index < 0)
             return;
         const QString path = s->preset_combo->itemData(index, Qt::UserRole).toString();
-        // 「未选择」= 只清会话态（卡值保持，不静默改动用户当前配置）
-        if (path.isEmpty()) {
-            s->format_preset_path.clear();
-            sync_format_preset_buttons(id);
-            update_format_preset_note(id, QString());
+        // M12 需求 4：下拉里没有「未选择」占位项 ⇒ itemData 恒为真实预设路径；空只可能是
+        // 异常列表（错误态），忽略即可。显式选中即载入 —— 载入成功由 MainWindow 解除
+        // 「全局预设接管」态（detached），失败则保持原态并显式报错（I-P1）。
+        if (path.isEmpty())
             return;
-        }
         emit q->format_preset_load_requested(path);
     });
     // NOLINTNEXTLINE(bugprone-exception-escape)：MSVC STL 误报

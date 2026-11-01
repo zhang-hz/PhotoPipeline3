@@ -11,8 +11,10 @@
   * 档位编号：src/codecs/heif_profile.h（0..6 既有，7..15 为 RExt 追加；Main12=3 是
     12 位兼容别名，色度随输入）。
   * 信号期望 idc：heif_profile_signal()（1 Main / 2 Main10 / 3 MSP / 4 RExt）。
-  * grid 规划：heif_plan_grid()（1024×576 基准，色度对齐，显式 Level 装不下整图时按
-    MaxLumaPs 等比收缩；mode 1=总是 grid，2=仅整图装不下时 grid）。
+  * grid 规划：heif_plan_grid()（C17' = tile 由规划 Level 的 MaxLumaPs(M) + 单边上限
+    D=floor(sqrt(8M)) 与图像宽高推导，面积优先、无固定基准；Level=自动时规划上界 = still
+    互操作档 Level 5.1 = 3GPP TS 26.140 §4.5 / TS 26.141 §4.2 的 hvc1.1.2.L153；模式
+    1=总是 grid，2=仅整图装不下时 grid）。
 
 用法（一切命令经 tools/env.py run --）：
   python tools/env.py run -- python tools/heif_matrix_check.py --phase baseline
@@ -76,6 +78,10 @@ LEVEL_PS = {
     72: 142606336,
 }
 LEVELS = [0] + sorted(LEVEL_PS)
+# C17'：still 单图互操作档 Level 上界 = 51 (=5.1)；证据 = 3GPP TS 26.140 §4.5 /
+# TS 26.141 §4.2（HEIF 'heic'+'MiHB' 互操作档：HEVC Main/Main Tier/Level 5.1，
+# itemTypes hvc1.1.2.L153）。H.265 本身不强制此上限（见 docs/heif-tile-sizing.md）。
+STILL_INTEROP_MAX_LEVEL = 51
 LEVEL_SR = {  # maxLumaSamplesPerSecond（仅用于文档/自动 level 说明；静止图 fps≈1/25 不构成约束）
     10: 552960,
     20: 3686400,
@@ -183,13 +189,18 @@ def align_down(value: int, a: int) -> int:
 
 
 def plan_grid(grid_mode: int, level: int, width: int, height: int, chroma: str,
-              tile_w: int = 0, tile_h: int = 0) -> dict:
-    """复刻 W2-T1 的 heif_plan_grid（src/codecs/heif_capability.cpp）。
+              tile_w: int = 0, tile_h: int = 0, profile: int | None = None) -> dict:
+    """复刻 C17'（0.4.0.alpha2）的 heif_plan_grid（src/codecs/heif_capability.cpp）。
 
     语义：
       * grid_mode 内部编号 0=关闭 / 1=总是 / 2=自动；手动 tile > 0 时强制分块；
       * Level=自动 时只有整图超出最高 Level 7.2 容量才分块，否则单图（默认零变化）；
-      * 显式 Level 装不下整图 → 按“面积最大、等面积取最接近 16:9”搜索 tile（8 对齐、≥64）；
+      * 自动 tile 由「规划 Level 的 MaxLumaPs(M) + 单边上限 D=floor(sqrt(8M))」与图像
+        宽高推导（**无固定基准**；面积优先、同面积取 |tw/th − 图宽高比| 最小；8 对齐、
+        ≥64；tile 宽高 clamp 到图像宽高与 8192）；
+      * 规划 Level：显式 Level 直接用；Level=自动 → still 互操作上界 5.1（3GPP
+        TS 26.140/26.141，hvc1.1.2.L153）；still 单图档位（MainStill/16..21）+
+        显式 Level>5.1 → 压到 5.1 并给 warning（编码 Level 仍保留用户值）；
       * 手动 tile 8 向下对齐；<64 / >8192 / 显式 Level 装不下 → ok=False + 中文错误；
       * rows×cols==1 → 降级单图；单边 >256 或 rows×cols>65535 → 错误。
     """
@@ -197,7 +208,8 @@ def plan_grid(grid_mode: int, level: int, width: int, height: int, chroma: str,
             "tile_width": 0, "tile_height": 0, "cols": 0, "rows": 0,
             "tile_luma_samples": 0, "level_fits_image": level_fits(level, width, height),
             "downgraded": False, "manual": bool(tile_w or tile_h),
-            "tile_level_idc": 0, "note": ""}
+            "tile_level_idc": 0, "note": "", "planning_level_idc": 0,
+            "still_capped": False, "warning": ""}
     if width <= 0 or height <= 0:
         plan.update(ok=False, error="图像尺寸无效")
         return plan
@@ -208,6 +220,24 @@ def plan_grid(grid_mode: int, level: int, width: int, height: int, chroma: str,
         return plan
     explicit = level != 0
     manual = bool(tile_w or tile_h)
+    # C17'：still 单图档位集合 = MainStill(4) + W2-T2 still 变体(16..21)。显式这些档位 +
+    # 显式 Level>5.1 时规划压到 5.1（编码 Level 仍保留用户值）；Auto/None 视为非 still
+    # （enc_heif 的 effective_profile 推导对 Auto 8 位 4:2:0 会得到 Main Still Picture，
+    # 但矩阵的 final-grid 用例没有「Auto + 显式 Level>5.1」组合，故不影响期望）。
+    still_profile = profile in (4, 16, 17, 18, 19, 20, 21)
+    planning_level = level
+    still_capped = False
+    if level == 0:
+        planning_level = STILL_INTEROP_MAX_LEVEL  # 51 = Level 5.1
+    elif still_profile and level > STILL_INTEROP_MAX_LEVEL:
+        planning_level = STILL_INTEROP_MAX_LEVEL
+        still_capped = True
+    plan["planning_level_idc"] = planning_level
+    plan["still_capped"] = still_capped
+    if still_capped:
+        plan["warning"] = (f"x265:level-idc={level} 超过 still 单图档位互操作上界 Level 5.1"
+                           f"（3GPP TS 26.140 §4.5 / TS 26.141 §4.2，itemTypes "
+                           f"hvc1.1.2.L153）；tile 规划按 5.1，编码 Level 保留用户值")
     if grid_mode == 0:
         if explicit and not plan["level_fits_image"]:
             plan.update(ok=False, error=f"图像超过 Level {level} 上限且分块模式=关闭")
@@ -227,20 +257,21 @@ def plan_grid(grid_mode: int, level: int, width: int, height: int, chroma: str,
     plan["use_grid"] = True
     plan["tile_level_idc"] = level if explicit else 0
 
-    k_base_w, k_base_h, k_min_tile, k_align = 1024, 576, 64, 8
+    k_min_tile, k_align, k_max_tile = 64, 8, 8192
 
     def align8(v: int) -> int:
         return 0 if v <= 0 else (v // k_align) * k_align
 
-    def best_tile() -> tuple[int, int, bool]:
-        max_luma = LEVEL_PS[level]
+    def best_tile_for(planning: int) -> tuple[int, int, bool]:
+        """C17'：面积优先枚举（同面积取最贴近图像宽高比；8 对齐、≥64、clamp 图像/8192）。"""
+        max_luma = LEVEL_PS[planning]
         dim_cap = int((8.0 * max_luma) ** 0.5)
-        w_max = min(width, k_base_w, dim_cap)
-        h_max = min(height, k_base_h, dim_cap)
+        w_max = min(width, dim_cap)
+        h_max = min(height, dim_cap)
         best_w = best_h = 0
         best_area = -1
         best_diff = 1e9
-        target = k_base_w / k_base_h
+        target = width / height
         w = align8(w_max)
         while w >= k_min_tile:
             h = align8(min(h_max, max_luma // w))
@@ -251,18 +282,20 @@ def plan_grid(grid_mode: int, level: int, width: int, height: int, chroma: str,
                     if area > best_area or (area == best_area and diff < best_diff):
                         best_area, best_diff, best_w, best_h = area, diff, w, h
             w -= k_align
+        best_w, best_h = min(best_w, k_max_tile), min(best_h, k_max_tile)
         return best_w, best_h, best_w >= k_min_tile and best_h >= k_min_tile
 
-    auto_w = max(k_align, align8(min(width, k_base_w)))
-    auto_h = max(k_align, align8(min(height, k_base_h)))
-    if explicit:
-        max_luma = LEVEL_PS[level]
-        dim_cap = int((8.0 * max_luma) ** 0.5)
-        if not (auto_w * auto_h <= max_luma and auto_w <= dim_cap and auto_h <= dim_cap):
-            auto_w, auto_h, ok = best_tile()
-            if not ok:
-                plan.update(ok=False, use_grid=False, error=f"Level {level} 下没有可用 tile")
-                return plan
+    auto_w, auto_h, best_ok = best_tile_for(planning_level)
+    if not best_ok:
+        if not manual and explicit and not plan["level_fits_image"]:
+            plan.update(ok=False, use_grid=False,
+                        error=f"Level {level} 下没有可用 tile（图像宽/高不足 64 像素）")
+            return plan
+        if not manual:
+            plan.update(use_grid=False, downgraded=True,
+                        note="图像尺寸不足以规划 ≥64 像素的 tile，已按单图输出")
+            return plan
+        auto_w, auto_h = align8(width), align8(height)
 
     tw, th = auto_w, auto_h
     if manual:
@@ -289,32 +322,36 @@ def plan_grid(grid_mode: int, level: int, width: int, height: int, chroma: str,
                         note="手动 tile 覆盖整图，降级单图")
             return plan
         if explicit:
-            max_luma = LEVEL_PS[level]
-            dim_cap = int((8.0 * max_luma) ** 0.5)
+            # 自动轴按**规划 Level** 收缩（still 档位压到 5.1 时自动轴也遵守该上界）；
+            # 最终 tile 校验仍按用户 Level（编码用它）。
+            plan_max_luma = LEVEL_PS[planning_level]
+            plan_dim_cap = int((8.0 * plan_max_luma) ** 0.5)
+            user_max_luma = LEVEL_PS[level]
+            user_dim_cap = int((8.0 * user_max_luma) ** 0.5)
             if tile_h == 0:
-                cap = max_luma // tw
-                lim = align8(min(auto_h, dim_cap, cap))
+                cap = plan_max_luma // tw
+                lim = align8(min(auto_h, plan_dim_cap, cap))
                 if lim < k_min_tile:
                     plan.update(ok=False, use_grid=False,
                                 error=f"手动 tile {tw}×{auto_h} 超过 Level {level} 上限")
                     return plan
                 th = lim
             if tile_w == 0:
-                cap = max_luma // th
-                lim = align8(min(auto_w, dim_cap, cap))
+                cap = plan_max_luma // th
+                lim = align8(min(auto_w, plan_dim_cap, cap))
                 if lim < k_min_tile:
                     plan.update(ok=False, use_grid=False,
                                 error=f"手动 tile {auto_w}×{th} 超过 Level {level} 上限")
                     return plan
                 tw = lim
-            if not (tw * th <= max_luma and tw <= dim_cap and th <= dim_cap):
-                best_w, best_h, best_ok = best_tile()
+            if not (tw * th <= user_max_luma and tw <= user_dim_cap and th <= user_dim_cap):
+                best_w, best_h, best_ok = best_tile_for(level)
                 detail = (f"最大可行 tile 为 {best_w}×{best_h}" if best_ok
                           else "连 64×64 都容不下")
                 plan.update(ok=False, use_grid=False,
                             error=(f"手动 tile {tw}×{th} 超过 Level {level} 的 MaxLumaPs "
-                                   f"{max_luma}/单边 {dim_cap}；{detail}；三条出路：自动/提高 "
-                                   f"Level/关闭 grid"))
+                                   f"{user_max_luma}/单边 {user_dim_cap}；{detail}；三条出路："
+                                   f"自动/提高 Level/关闭 grid"))
                 return plan
         else:
             plan["note"] = "Level=自动 + 手动 tile（iPhone 接受度未验证）"
@@ -883,7 +920,7 @@ def make_case(set_name, src_kind, src, width, height, bd, chroma, level, tier,
             # 新键用户面编号 0=关闭 / 1=自动 / 2=总是 → 内部模式 0/2/1。
             grid_mode = {0: 0, 1: 2, 2: 1}.get(grid_mode, grid_mode)
         grid_plan = plan_grid(grid_mode, level, width, height, chroma,
-                              tile_w or 0, tile_h or 0)
+                              tile_w or 0, tile_h or 0, profile)
         if not grid_plan["ok"]:
             legal = False
             err = grid_plan["error"]
@@ -1037,25 +1074,25 @@ def build_case_sets(phase: str, want_shrink: bool, t1_extra: bool) -> dict[str, 
             make_case("final-still", "small", SMALL_TIF, 1024, 576, bd, ch, lv, 0, prof, 0)
             for prof, bd, ch, lv in still_cases
         ]
-        # 4) grid / Apple 模式 / T1 真实大图
+        # 4) grid / 规划上界（still 互操作 L5.1）/ T1 真实大图
         grid_cases = [
-            # 任务要求的主证据：T1 + L3.1 + grid=2 → 4×11 tile，每 tile L3.1
+            # 任务要求的主证据：T1 + L3.1 + grid=2 → 6×5 tile (768×1280 = M31)，每 tile L3.1
             ("t1", 10, "420", 31, 0, 2, None),   # Auto（idc4）
             ("t1", 10, "420", 31, 0, 2, 2),      # Main10（idc2，Apple T7 同配置）
             ("t1", 10, "420", 31, 0, 2, 8),      # Rext420_10（idc4 对照）
             ("t1", 8, "420", 31, 0, 2, None),    # Auto（idc3）
-            ("t1", 10, "420", 31, 0, 1, 2),      # Apple 式（总是 grid）
+            ("t1", 10, "420", 31, 0, 1, 2),      # 总是 grid（显式 L3.1 → 768×1280 6×5）
             ("t1", 10, "420", 0, 0, 2, None),    # 自动 Level + auto grid → 不分块
-            ("t1", 10, "420", 0, 0, 1, None),    # 自动 Level + 总是 grid
+            ("t1", 10, "420", 0, 0, 1, None),    # 自动 Level + 总是 grid（规划上界 L5.1 → 2176×4096 2×2）
             ("t1", 10, "420", 31, 0, 0, None),   # 关 grid + 非法 Level → 必须干净失败
             ("t1", 10, "420", 52, 0, 0, None),   # 旧误导后缀复现点（新码应为中文 Level 错误）
             ("t1", 8, "420", 52, 0, 0, None),    # 8 位对照（旧码无后缀）
             ("t1", 10, "420", 31, 0, 2, 1),      # Profile 不兼容（Main 要求 8 位）→ 干净失败
             ("t1", 12, "444", 31, 0, 2, 15),     # Rext444_12 12 位大图 grid
-            ("small", 8, "420", 30, 0, 2, None), # 小图 tile 收缩（L3.0 → 2×2 tile）
+            ("small", 8, "420", 30, 0, 2, None), # 小图 tile 收缩（L3.0 → 960×576 2×1）
             ("small", 10, "420", 30, 0, 2, 2),   # 小图 Main10 + 收缩 tile
-            ("small", 8, "420", 0, 0, 1, None),  # 小图总是 grid（1×1）
-            ("small", 8, "420", 10, 0, 2, None), # 小图强收缩（L1.0 → 4×4 tile，16 块）
+            ("small", 8, "420", 0, 0, 1, None),  # 小图总是 grid（1×1 降级单图）
+            ("small", 8, "420", 10, 0, 2, None), # 小图强收缩（L1.0 → 256×144 4×4，16 块）
             ("t1", 10, "444", 31, 0, 2, None),   # 444 grid
             ("t1", 8, "422", 31, 0, 2, None),    # 422 grid
             ("t1", 8, "420", 31, 0, 2, 4),       # MainStill grid（idc3）
@@ -1074,12 +1111,12 @@ def build_case_sets(phase: str, want_shrink: bool, t1_extra: bool) -> dict[str, 
         #     自动语义 / 总是 Apple / 手动合法/非法 / grid 关闭 / Level 收缩 / 8 对齐。
         gt_cases = [
             ("small", 8, "420", 0, 1, None, None, None, "new-auto + level auto → 单图"),
-            ("t1", 10, "420", 31, 1, None, None, 2, "new-auto + L3.1 → 4×11 / 每 tile L3.1"),
-            ("t1", 10, "420", 0, 2, None, None, None, "new-always + level auto → Apple 基准"),
+            ("t1", 10, "420", 31, 1, None, None, 2, "new-auto + L3.1 → 6×5（768×1280=M31）/ 每 tile L3.1"),
+            ("t1", 10, "420", 0, 2, None, None, None, "new-always + level auto → 规划上界 L5.1（2×2）"),
             ("small", 8, "420", 0, 2, None, None, None, "new-always 1×1 → 降级单图"),
             ("small", 8, "420", 31, 2, 512, 288, None, "manual 512×288 合法 → 2×2"),
             ("small", 8, "420", 0, 1, 512, 288, None, "manual + level auto → note"),
-            ("t1", 10, "420", 31, 2, 1024, 1024, None, "manual 超 Level（4×6）→ 中文预检失败"),
+            ("t1", 10, "420", 31, 2, 1024, 1024, None, "manual 1024×1024 超 MaxLumaPs → 中文预检失败"),
             ("small", 8, "420", 31, 2, 32, 256, None, "manual <64 → 中文预检失败"),
             ("small", 8, "420", 30, 0, None, None, None, "grid 关闭 + 超 Level → 中文预检失败"),
             ("small", 8, "420", 30, 1, None, None, None, "new-auto + L3.0 → 960×576 2×1"),
@@ -1569,8 +1606,11 @@ def write_report(jsonl: Path, md: Path, phase: str, exe: Path, elapsed_total: fl
                  "那是 maxLumaSamplesPerSecond）。")
     lines.append("- 档位编号来自 `src/codecs/heif_profile.h`：1 Main(idc1)、2 Main10(idc2)、3 Main12(别名,12位任意色度)、"
                  "4 MainStill(idc3)、7..15 Rext(idc4)。5/6 为 AVIF 专用，HEIF 下应拒绝。")
-    lines.append("- grid 规划复刻 `heif_plan_grid`：1024×576 基准 tile、统一 8 像素对齐；显式 Level 容不下基准 tile 时，"
-                 "按“面积最大、等面积取最接近 16:9”搜索（mode 1=总是 grid，2=仅整图装不下时 grid）。")
+    lines.append("- grid 规划复刻 `heif_plan_grid`（C17'）：tile 由规划 Level 的 MaxLumaPs(M) 与单边上限 "
+                 "D=floor(sqrt(8M)) 及图像宽高推导（面积优先、同面积取最贴近图像宽高比，8 像素对齐、"
+                 "≥64、无固定基准）；Level=自动 的规划上界 = still 互操作档 Level 5.1（3GPP "
+                 "TS 26.140 §4.5 / TS 26.141 §4.2，hvc1.1.2.L153）；mode 1=总是 grid，"
+                 "2=仅整图装不下时 grid。")
     lines.append("- 解码检查：`iinfo -v OUT`。局部 libde265/RExt 限制仅在结构检查通过时记为 "
                  "`local-decoder-limitation`（不判 fail），但会单列。")
     lines.append("")
@@ -1774,7 +1814,7 @@ def write_report(jsonl: Path, md: Path, phase: str, exe: Path, elapsed_total: fl
     else:
         lines.append("- final 实际覆盖：Auto 324（9 组 bd/chroma × 18 Level × 2 tier）+ 13 个真实信号 × 全 Level × 2 tier"
                      "（540）+ 档位兼容矩阵（计划 144，24 个合法组合与前述重复去重后 120 个拒绝面）+ "
-                     "T1 grid 20（4×11 / Apple 模式 / Main10 / 422 / 444 / 12-bit / tile 收缩）+ "
+                     "T1 grid 20（L3.1 6×5 / 总是 grid / Main10 / 422 / 444 / 12-bit / tile 收缩）+ "
                      "**W2-T1 grid×tile×Level 11**（heif_grid 新键自动/总是/关闭、手动 tile 合法/非法、"
                      "Level 收缩、8 向下对齐、1×1 降级单图）+ T1 单图 9"
                      "（auto 6 + Main10 + 显式 L6.0 / L6.3）。")

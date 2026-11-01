@@ -294,6 +294,8 @@ jobs:
             echo ""
             echo "**闭包门禁**: $(grep -E '① \[FAIL-A\]|② \[FAIL-B\]' "$RUNNER_TEMP/appimage.log" 2>/dev/null | sed 's/^ *//' | tr '\n' ' ')"
             echo ""
+            echo "**工厂预设门禁（M12）**: $(grep -E '工厂预设门禁' "$RUNNER_TEMP/appimage.log" 2>/dev/null | tail -1 | sed 's/^ *//')"
+            echo ""
             echo "**启动烟测**: \`--version\` + offscreen GUI 6s 存活性 PASS"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -748,6 +750,8 @@ jobs:
           $lines += "**断言 D（许可）**: $(GateLine '许可断言 D')"
           $lines += ""
           $lines += "**烟测 E-1 / E-2**: $(GateLine '烟测 E-1') ｜ $(GateLine '烟测 E-2')"
+          $lines += ""
+          $lines += "**门禁 G（工厂预设）**: $(GateLine '工厂预设门禁')"
           $lines | Add-Content "$env:GITHUB_STEP_SUMMARY"
 
   # ────────────────────────────────────────────────────────────────────────────
@@ -792,6 +796,45 @@ jobs:
           grep -qx "PhotoPipeline $VER" "$RUNNER_TEMP/version.log" || {
             echo "::error::下载件 --version 与 tag 不一致（期望 'PhotoPipeline $VER'）"; exit 1; }
           echo "probe-appimage OK: PhotoPipeline $VER"
+
+      - name: 工厂预设断言（下载件独立复核：usr/bin/presets/formats/**）
+        # M12：发行包新增工厂格式预设（仓库 presets/formats/** 为单一真源，11 个 JSON / 8 格式，
+        # 随包放 exe 旁）。本步骤在**下载件**上独立复核（不依赖 appimage job / make_appimage.sh 的
+        # 结论；判据与 A 的 make_appimage.sh 门禁 G 同源：8 格式 default.json 齐备 + JSON 总数 11
+        # + 无 _builtin- 残留），并额外与仓库 presets 做**逐路径集合比对**（缺件/多件都红）。
+        # 只增断言：不触碰既有 --version / sha256 / 附件清单判据。
+        run: |
+          set -euo pipefail
+          APPIMAGE="$(realpath "$(ls -1 dist-probe/PhotoPipeline-*-x86_64.AppImage | head -1)")"
+          chmod +x "$APPIMAGE"
+          work="$RUNNER_TEMP/presets-probe"; rm -rf "$work"; mkdir -p "$work"
+          ( cd "$work" && APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGE" --appimage-extract 'usr/bin/presets/*' >/dev/null )
+          root="$work/squashfs-root/usr/bin/presets/formats"
+          if [ ! -d "$root" ]; then
+            echo "::error::下载件缺工厂预设目录: $root（AppImage usr/bin/presets/formats 应随包）"; exit 1
+          fi
+          fail=0
+          for fmt in avif bmp heif jpeg jxl png tiff webp; do
+            [ -f "$root/$fmt/default.json" ] || { echo "::error::发布件缺 $fmt/default.json"; fail=1; }
+          done
+          n=$(find "$root" -type f -name '*.json' | wc -l)
+          legacy=$(find "$root" -type f -name '_builtin-*' | wc -l)
+          [ "$n" -eq 11 ] || { echo "::error::发布件预设 JSON 总数 $n != 11"; fail=1; }
+          [ "$legacy" -eq 0 ] || { echo "::error::发布件残留旧版 _builtin-* 文件 $legacy 个"; fail=1; }
+          repo_root="$GITHUB_WORKSPACE/presets/formats"
+          if [ -d "$repo_root" ]; then
+            pkg_list="$work/pkg.list"; repo_list="$work/repo.list"
+            ( cd "$root" && find . -type f -name '*.json' | sed 's#^\./##' | LC_ALL=C sort ) > "$pkg_list"
+            ( cd "$repo_root" && find . -type f -name '*.json' | sed 's#^\./##' | LC_ALL=C sort ) > "$repo_list"
+            missing=$(comm -13 "$pkg_list" "$repo_list" | wc -l)
+            extra=$(comm -23 "$pkg_list" "$repo_list" | wc -l)
+            [ "$missing" -eq 0 ] && [ "$extra" -eq 0 ] || {
+              echo "::error::发布件预设与仓库 presets 集合不一致（缺 $missing / 多 $extra）"; fail=1; }
+          else
+            echo "::warning::仓库 presets/formats 不存在，跳过集合比对（仅结构判据）"
+          fi
+          [ "$fail" -eq 0 ] || exit 1
+          echo "probe-appimage 工厂预设 OK: 8 格式 default.json 齐备 · JSON=$n · 与仓库 presets 集合一致 · 无 _builtin- 残留"
 
   # ────────────────────────────────────────────────────────────────────────────
   # probe-winzip（预算 3 min）: §12.7 ② 下载 zip → 解包 → staging exe --version 断言
@@ -845,6 +888,40 @@ jobs:
             Write-Error "下载件 --version 与 tag 不一致（期望 '$WANT'，实际 '$first'）"; exit 1
           }
           Write-Output "probe-winzip OK: $WANT"
+
+      - name: 工厂预设断言（下载件独立复核：PhotoPipeline/presets/formats/**）
+        # M12：发行包新增工厂格式预设（仓库 presets/formats/** 为单一真源，11 个 JSON / 8 格式，
+        # 随包放 exe 旁 `PhotoPipeline/presets/formats/`）。本步骤在**下载件解包结果**上独立复核
+        # （不依赖 winzip-pack / make_winzip.py 门禁 G 的结论），并额外与仓库 presets 做逐路径集合比对。
+        # 只增断言：不触碰既有 --version / 五门禁 / 条目数（只记录）判据。
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP "zipstage\PhotoPipeline\presets\formats"
+          if (-not (Test-Path $root)) {
+            Write-Error "下载件缺工厂预设目录: $root（zip 顶层应为 PhotoPipeline/presets/formats/）"; exit 1
+          }
+          $formats = 'avif','bmp','heif','jpeg','jxl','png','tiff','webp'
+          $missing = @($formats | Where-Object { -not (Test-Path (Join-Path $root "$_\default.json")) })
+          $jsons = @(Get-ChildItem -Recurse -File $root -Filter *.json)
+          $legacy = @($jsons | Where-Object { $_.Name -like '_builtin-*' })
+          $repoRoot = Join-Path $env:GITHUB_WORKSPACE "presets\formats"
+          $missingInPkg = @(); $extraInPkg = @(); $repoRel = @()
+          if (Test-Path $repoRoot) {
+            $repoRel = @(Get-ChildItem -Recurse -File $repoRoot -Filter *.json |
+                         ForEach-Object { $_.FullName.Substring($repoRoot.Length + 1).Replace('\', '/') })
+            $pkgRel = @($jsons | ForEach-Object { $_.FullName.Substring($root.Length + 1).Replace('\', '/') })
+            $missingInPkg = @($repoRel | Where-Object { $pkgRel -notcontains $_ })
+            $extraInPkg = @($pkgRel | Where-Object { $repoRel -notcontains $_ })
+          } else {
+            Write-Output "::warning::仓库 presets/formats 不存在，跳过集合比对（仅结构判据）"
+          }
+          Write-Output "发布件内预设: JSON=$($jsons.Count)/11 · 仓库集合=$($repoRel.Count) 条"
+          if ($missing.Count -gt 0 -or $jsons.Count -ne 11 -or $legacy.Count -gt 0 -or
+              $missingInPkg.Count -gt 0 -or $extraInPkg.Count -gt 0) {
+            Write-Error ("发布件工厂预设断言失败: 缺 default=[$($missing -join ',')] JSON=$($jsons.Count)/11 " +
+                         "legacy=[$($legacy.Name -join ',')] 缺件=[$($missingInPkg -join ',')] 多件=[$($extraInPkg -join ',')]")
+            exit 1
+          }
+          Write-Output "probe-winzip 工厂预设 OK: 8 格式 default.json 齐备 · JSON=11 · 与仓库 presets 集合一致 · 无 _builtin- 残留"
 
   # ────────────────────────────────────────────────────────────────────────────
   # publish（预算 2 min）: §12.7 ① 查重 → tag↔版本一致性 → ③ gh release create --repo

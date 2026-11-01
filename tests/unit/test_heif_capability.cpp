@@ -2,9 +2,13 @@
 // PhotoPipeline — unit tests: HEIF 编码能力纯核（Level 表 / Level 拟合 / grid 规划 / hvcC）
 //
 // 边界取自任务实测：
-//   * 1024×576 = 589,824 ≤ Level 3.1 (983,040)；
+//   * 1024×960 = 983,040 = Level 3.1 的 MaxLumaPs（精确边界）；1024×961 越界；
 //   * 3902×5854 = 22,842,308：Level 3.1/4.0/4.1/5.0/5.1/5.2 装不下，6.0/6.1/6.2 装得下；
 //   * super/T7.heic（Apple 硬件编码）hvcC: idc=2、general_level_idc=93、chroma=1、10bit。
+// C17'（0.4.0.alpha2）：grid tile 不再用固定基准，由规划 Level 的 MaxLumaPs(M) +
+// 单边上限 D=floor(sqrt(8M)) 与图像宽高推导（面积优先、同面积取最贴近图像比例）——
+// 例如 3902×5854 + L3.1 → 768×1280 = 983,040 = M31 整值，6×5。公式/规范证据：
+// docs/heif-tile-sizing.md；std 上界证据：heif_still_picture_interop_max_level_idc()。
 // 手写断言；失败打印 "FAIL <case>: <detail>"，main 返回失败数。
 #include <cstdint>
 #include <cstdio>
@@ -86,7 +90,7 @@ void test_level_fit() {
     constexpr int kT1Width = 3902;
     constexpr int kT1Height = 5854;
     check(pp::heif_level_fits(0, kT1Width, kT1Height), "fit/auto/t1");
-    check(pp::heif_level_fits(31, 1024, 576), "fit/31/1024x576");
+    check(pp::heif_level_fits(31, 800, 600), "fit/31/800x600");
     check(pp::heif_level_fits(31, 1024, 960), "fit/31/exact_boundary");
     check(!pp::heif_level_fits(31, 1024, 961), "fit/31/over_boundary");
     check(!pp::heif_level_fits(31, kT1Width, kT1Height), "fit/31/t1");
@@ -176,28 +180,49 @@ void test_grid_plan() {
     check(closed_over.error_zh.find("983040") != std::string::npos, "grid/closed_over/limit",
           closed_over.error_zh);
 
-    // Apple 参考：1024×576，cols=ceil(3902/1024)=4，rows=ceil(5854/576)=11。
+    // C17'：T1 3902×5854 + L3.1 → 面积优先枚举出 768×1280（=983,040=M31 整值）；
+    // cols=ceil(3902/768)=6，rows=ceil(5854/1280)=5。
     const pp::HeifGridPlan always = pp::heif_plan_grid(1, 31, w, h, 1);
-    check_plan(always, true, 1024, 576, 4, 11, "always/31");
-    check(always.tile_luma_samples == 589824, "grid/always/tile_luma_exact");
+    check_plan(always, true, 768, 1280, 6, 5, "always/31");
+    check(always.tile_luma_samples == 983040, "grid/always/tile_luma_exact",
+          std::to_string(always.tile_luma_samples));
+    check(always.tile_luma_samples == pp::heif_level_max_luma_ps(31), "grid/always/full_level_m31");
+    check(always.planning_level_idc == 31, "grid/always/planning_level",
+          std::to_string(always.planning_level_idc));
+    check(!always.still_level_capped, "grid/always/not_still_capped");
     check(always.level_fits_image == false, "grid/always/level_fits_image");
-    check_plan(pp::heif_plan_grid(2, 31, w, h, 1), true, 1024, 576, 4, 11, "auto/31");
-    check_plan(pp::heif_plan_grid(1, 62, w, h, 1), true, 1024, 576, 4, 11, "always/62");
+    check_plan(pp::heif_plan_grid(2, 31, w, h, 1), true, 768, 1280, 6, 5, "auto/31");
+    // 显式 Level 6.0 装得下整图：grid=自动 → 单图（默认行为不变）；grid=总是 → 强制分块，
+    // tile clamp 到图像尺寸（3902→3896、5854→5848，8 对齐向下）→ 2×2。
+    check_plan(pp::heif_plan_grid(2, 60, w, h, 1), false, 0, 0, 0, 0, "auto/60_fits");
+    check_plan(pp::heif_plan_grid(1, 60, w, h, 1), true, 3896, 5848, 2, 2, "always/60_clamp_image");
+    check(pp::heif_plan_grid(1, 60, w, h, 1).tile_luma_samples == 22783808,
+          "grid/always/60/tile_luma");
+    check_plan(pp::heif_plan_grid(1, 62, w, h, 1), true, 3896, 5848, 2, 2, "always/62");
 
     // 小图 clamp：tile 不得大于图像；grid 1×1 无收益 → 降级单图（W2-T1 语义，既有
-    // M9 的 "use_grid=true / 1×1" 行为已按 C16/C17 修订并登记）。
+    // M9 的 "use_grid=true / 1×1" 行为已按 C16/C17' 修订并登记）。
     const pp::HeifGridPlan small420 = pp::heif_plan_grid(1, 0, 800, 400, 1);
     check_plan(small420, false, 800, 400, 1, 1, "small/420");
     check(small420.downgraded_single, "small/420/downgraded");
-    check_plan(pp::heif_plan_grid(1, 0, 801, 601, 3), true, 800, 576, 2, 2, "small/444_odd");
+    check_plan(pp::heif_plan_grid(1, 0, 801, 601, 3), true, 800, 600, 2, 2, "small/444_odd");
     // 1024×576 恰好一个 tile → 单图降级（grid=总是 也不再产出 1×1 grid）。
     const pp::HeifGridPlan one_tile = pp::heif_plan_grid(1, 0, 1024, 576, 1);
     check(!one_tile.use_grid && one_tile.downgraded_single, "grid/one_tile/downgraded");
+    // 图像本身小于 64 像素：grid 无收益 → 降级单图（不报错、不产生 <64 的 tile）。
+    const pp::HeifGridPlan tiny = pp::heif_plan_grid(1, 0, 50, 50, 1);
+    check(!tiny.use_grid && tiny.downgraded_single && tiny.ok, "grid/tiny/downgraded");
+    check(tiny.note_zh.find("单图") != std::string::npos, "grid/tiny/note", tiny.note_zh);
+    // 显式低 Level 装不下整图、但图像某一轴 <64 → 无法规划合法 tile → 中文错误。
+    const pp::HeifGridPlan tiny_over = pp::heif_plan_grid(2, 10, 50, 2000, 1);
+    check(!tiny_over.ok && !tiny_over.use_grid, "grid/tiny_over/ok_false");
+    check(!tiny_over.error_zh.empty(), "grid/tiny_over/error", tiny_over.error_zh);
 
-    // 小 Level：tile 面积必须 ≤ MaxLumaPs，且色度对齐保持偶数。
+    // 小 Level：tile 面积必须 = MaxLumaPs（面积优先用满 Level 容量），且色度对齐保持偶数。
     const pp::HeifGridPlan level30 = pp::heif_plan_grid(2, 30, w, h, 1);
     check(level30.use_grid, "grid/level30/use");
-    check(level30.tile_luma_samples <= pp::heif_level_max_luma_ps(30), "grid/level30/area",
+    check_plan(level30, true, 576, 960, 7, 7, "grid/level30/tile");
+    check(level30.tile_luma_samples == pp::heif_level_max_luma_ps(30), "grid/level30/area_exact",
           std::to_string(level30.tile_luma_samples));
     check(level30.tile_width % 2 == 0 && level30.tile_height % 2 == 0,
           "grid/level30/alignment_420");
@@ -208,7 +233,8 @@ void test_grid_plan() {
 
     const pp::HeifGridPlan level10 = pp::heif_plan_grid(2, 10, w, h, 1);
     check(level10.use_grid, "grid/level10/use");
-    check(level10.tile_luma_samples <= pp::heif_level_max_luma_ps(10), "grid/level10/area",
+    check_plan(level10, true, 144, 256, 28, 23, "grid/level10/tile");
+    check(level10.tile_luma_samples == pp::heif_level_max_luma_ps(10), "grid/level10/area_exact",
           std::to_string(level10.tile_luma_samples));
 
     const pp::HeifGridPlan c422 = pp::heif_plan_grid(2, 31, w, h, 2);
@@ -242,29 +268,36 @@ void test_grid_modes_and_manual() {
     check(!pp::heif_param_in_core("heif_tile_w"), "core/heif_tile_w");
 
     constexpr int w = 3902, h = 5854;
-    // 显式低 Level → 自动分块（tile 每边满足 Level）。
+    // 显式低 Level → 自动分块（tile 由规划 Level 的 MaxLumaPs 推导：L3.1 → 768×1280）。
     const pp::HeifGridPlan auto_low = pp::heif_plan_grid(2, 31, w, h, 1);
     check(auto_low.use_grid && auto_low.ok, "auto/low/use", auto_low.error_zh);
-    check(auto_low.tile_width == 1024 && auto_low.tile_height == 576, "auto/low/tile");
-    check(auto_low.cols == 4 && auto_low.rows == 11, "auto/low/grid");
-    check(auto_low.total_tiles() == 44, "auto/low/total");
+    check(auto_low.tile_width == 768 && auto_low.tile_height == 1280, "auto/low/tile");
+    check(auto_low.cols == 6 && auto_low.rows == 5, "auto/low/grid");
+    check(auto_low.total_tiles() == 30, "auto/low/total");
     check(auto_low.tile_level_idc == 31, "auto/low/tile_level");
     check(!auto_low.manual_tile, "auto/low/not_manual");
 
-    // 总是 grid + 自动 Level → Apple 基准 1024×576，每 tile Level 自动。
-    const pp::HeifGridPlan always_apple = pp::heif_plan_grid(1, 0, w, h, 1);
-    check(always_apple.use_grid && always_apple.ok, "always/apple/use");
-    check(always_apple.tile_width == 1024 && always_apple.tile_height == 576, "always/apple/tile");
-    check(always_apple.tile_level_idc == 0, "always/apple/tile_level_auto");
+    // 总是 grid + Level=自动 → 规划上界 = still 互操作档 Level 5.1（M=8,912,896）；
+    // T1 面积优先枚举出 2176×4096（=M51 整值）→ 2×2；每 tile 的 Level 仍由 x265 自动选。
+    const pp::HeifGridPlan always_auto_level = pp::heif_plan_grid(1, 0, w, h, 1);
+    check(always_auto_level.use_grid && always_auto_level.ok, "always/apple/use",
+          always_auto_level.error_zh);
+    check(always_auto_level.tile_width == 2176 && always_auto_level.tile_height == 4096,
+          "always/apple/tile");
+    check(always_auto_level.tile_luma_samples == pp::heif_level_max_luma_ps(51),
+          "always/apple/full_level_m51", std::to_string(always_auto_level.tile_luma_samples));
+    check(always_auto_level.cols == 2 && always_auto_level.rows == 2, "always/apple/grid");
+    check(always_auto_level.planning_level_idc == 51, "always/apple/planning_level");
+    check(always_auto_level.tile_level_idc == 0, "always/apple/tile_level_auto");
 
     // Level=自动 + 常规尺寸 → 单图（默认产物零变化）。
     check(!pp::heif_plan_grid(2, 0, 1024, 576, 1).use_grid, "auto/normal/single");
 
-    // Level=自动 + 超出 x265 最高 Level 7.2 容量 → 按 Apple 基准分块。
+    // Level=自动 + 超出 x265 最高 Level 7.2 容量 → 自动分块（规划上界 5.1）。
     const pp::HeifGridPlan oversize = pp::heif_plan_grid(2, 0, 20000, 20000, 1);
     check(oversize.use_grid && oversize.ok, "auto/oversize/use", oversize.error_zh);
-    check(oversize.tile_width == 1024 && oversize.tile_height == 576, "auto/oversize/tile");
-    check(oversize.cols == 20 && oversize.rows == 35, "auto/oversize/grid");
+    check(oversize.tile_width == 2176 && oversize.tile_height == 4096, "auto/oversize/tile");
+    check(oversize.cols == 10 && oversize.rows == 5, "auto/oversize/grid");
     check(oversize.tile_level_idc == 0, "auto/oversize/tile_level_auto");
 
     // —— 手动 tile：合法 ——
@@ -284,14 +317,14 @@ void test_grid_modes_and_manual() {
     check(manual_plan.tile_level_idc == 31, "manual/ok/level");
     check(manual_plan.tile_luma_samples <= pp::heif_level_max_luma_ps(31), "manual/ok/area");
 
-    // 单轴手动：宽 512、高自动（Level 3.1 下高仍取 576）。
+    // 单轴手动：宽 512、高自动（Level 3.1 下高取自动推导值 1280，再按 Level 容量收缩）。
     manual.tile_width = 512;
     manual.tile_height = 0;
     const pp::HeifGridPlan manual_w_only = pp::heif_plan_grid(manual);
     check(manual_w_only.use_grid && manual_w_only.ok, "manual/w_only/use", manual_w_only.error_zh);
-    check(manual_w_only.tile_width == 512 && manual_w_only.tile_height == 576,
+    check(manual_w_only.tile_width == 512 && manual_w_only.tile_height == 1280,
           "manual/w_only/tile");
-    check(manual_w_only.cols == 8 && manual_w_only.rows == 11, "manual/w_only/grid");
+    check(manual_w_only.cols == 8 && manual_w_only.rows == 5, "manual/w_only/grid");
 
     // 8 向下对齐 + 记录原值（1004→1000、300→296）。
     manual.tile_width = 1004;
@@ -310,6 +343,9 @@ void test_grid_modes_and_manual() {
     check(too_big.error_zh.find("983040") != std::string::npos, "manual/too_big/limit",
           too_big.error_zh);
     check(too_big.error_zh.find("最大可行 tile") != std::string::npos, "manual/too_big/max_tile",
+          too_big.error_zh);
+    // C17'：最大可行 tile 提示也是推导值（L3.1 → 768×1280 = 983,040 亮度样本）。
+    check(too_big.error_zh.find("768×1280") != std::string::npos, "manual/too_big/max_tile_value",
           too_big.error_zh);
     check(too_big.error_zh.find("三条出路") != std::string::npos, "manual/too_big/options",
           too_big.error_zh);
@@ -396,6 +432,82 @@ void test_grid_modes_and_manual() {
     check(!pp::heif_plan_grid(odd).miaf_parity_warn, "miaf/422/width_even_no_warn");
     odd.width = 801;
     check(pp::heif_plan_grid(odd).miaf_parity_warn, "miaf/422/width_odd_warn");
+}
+
+// C17'：still 单图档位 + 显式 Level > 5.1 → 规划压到 still 互操作上界 5.1（3GPP
+// TS 26.140/26.141，itemTypes hvc1.1.2.L153），编码 Level 保留用户值（不静默改参数），
+// warning_zh 如实说明；非 still 档位不受此限；Level=自动的规划上界固定 5.1。
+void test_still_level_cap() {
+    using pp::HeifProfile;
+    constexpr int w = 3902, h = 5854;
+    check(pp::heif_still_picture_interop_max_level_idc() == 51,
+          "still_cap/const_is_5_1"); // 153 = 3 × 51
+    pp::HeifGridRequest req;
+    req.level_idc = 60;
+    req.width = w;
+    req.height = h;
+    req.chroma = 1;
+    req.profile = HeifProfile::Main444_10Still;
+
+    // grid=自动 + 整图在 L6.0 装得下 → 单图；但 still Level 上界偏差仍要 warn。
+    req.grid_mode = 2;
+    const pp::HeifGridPlan auto_fits = pp::heif_plan_grid(req);
+    check(!auto_fits.use_grid, "still_cap/auto_fits/single");
+    check(auto_fits.ok, "still_cap/auto_fits/ok", auto_fits.error_zh);
+    check(auto_fits.still_level_capped, "still_cap/auto_fits/flag");
+    check(auto_fits.planning_level_idc == 51, "still_cap/auto_fits/planning_level",
+          std::to_string(auto_fits.planning_level_idc));
+    check(auto_fits.warning_zh.find("5.1") != std::string::npos, "still_cap/auto_fits/warn_5_1",
+          auto_fits.warning_zh);
+    check(auto_fits.warning_zh.find("3GPP") != std::string::npos, "still_cap/auto_fits/warn_3gpp",
+          auto_fits.warning_zh);
+    check(auto_fits.warning_zh.find("L153") != std::string::npos, "still_cap/auto_fits/warn_l153",
+          auto_fits.warning_zh);
+    check(auto_fits.warning_zh.find("不静默改") != std::string::npos,
+          "still_cap/auto_fits/warn_no_silent_change", auto_fits.warning_zh);
+
+    // grid=总是 → tile 按 5.1 规划（2176×4096 = M51 整值）；编码 Level 仍 = 用户值 60。
+    req.grid_mode = 1;
+    const pp::HeifGridPlan always = pp::heif_plan_grid(req);
+    check_plan(always, true, 2176, 4096, 2, 2, "still_cap/always");
+    check(always.tile_level_idc == 60, "still_cap/always/tile_level_user_value",
+          std::to_string(always.tile_level_idc));
+    check(always.planning_level_idc == 51, "still_cap/always/planning_level");
+    check(always.warning_zh.find("5.1") != std::string::npos, "still_cap/always/warn");
+    check(always.note_zh.find("5.1") != std::string::npos, "still_cap/always/note", always.note_zh);
+
+    // 非 still 档位（Main10，idc=2）+ L6.0：规划仍按用户 Level → clamp 到图像尺寸 2×2。
+    req.profile = HeifProfile::Main10;
+    const pp::HeifGridPlan non_still = pp::heif_plan_grid(req);
+    check(!non_still.still_level_capped, "still_cap/non_still/not_capped");
+    check(non_still.planning_level_idc == 60, "still_cap/non_still/planning_user_level");
+    check(non_still.warning_zh.empty(), "still_cap/non_still/no_warn", non_still.warning_zh);
+    check_plan(non_still, true, 3896, 5848, 2, 2, "still_cap/non_still/tile");
+
+    // Main Still Picture（idc=3）同样是 still 单图档位 → 同样受 5.1 上界约束。
+    req.profile = HeifProfile::MainStill;
+    check(pp::heif_plan_grid(req).still_level_capped, "still_cap/main_still/capped");
+
+    // L5.1 本身（=上界）不触发压缩。
+    req.profile = HeifProfile::Main444_10Still;
+    req.level_idc = 51;
+    const pp::HeifGridPlan at_cap = pp::heif_plan_grid(req);
+    check(!at_cap.still_level_capped, "still_cap/at_5_1/not_capped");
+    check(at_cap.planning_level_idc == 51, "still_cap/at_5_1/planning");
+
+    // Level=自动：规划上界 = 5.1（每 tile Level 仍由 x265 自动选），无 warning。
+    req.level_idc = 0;
+    req.grid_mode = 1;
+    const pp::HeifGridPlan auto_level = pp::heif_plan_grid(req);
+    check(auto_level.planning_level_idc == 51, "still_cap/auto_level/planning_bound");
+    check(!auto_level.still_level_capped, "still_cap/auto_level/flag");
+    check(auto_level.warning_zh.empty(), "still_cap/auto_level/no_warn", auto_level.warning_zh);
+    check_plan(auto_level, true, 2176, 4096, 2, 2, "still_cap/auto_level/tile");
+
+    // 旧 M9 兼容入口（无 profile）：显式 Level>5.1 不压缩（profile=Auto 不是 still 档位）。
+    const pp::HeifGridPlan legacy = pp::heif_plan_grid(1, 60, w, h, 1);
+    check(!legacy.still_level_capped && legacy.planning_level_idc == 60,
+          "still_cap/legacy_entry/no_cap");
 }
 
 fs::path find_t7() {
@@ -829,6 +941,7 @@ int main() { // NOLINT(bugprone-exception-escape) — 测试入口允许异常�
     test_level_min_and_error();
     test_grid_plan();
     test_grid_modes_and_manual();
+    test_still_level_cap();
     test_sps_ptl_parser();
     test_sps_ptl_real_files();
     test_hvcc_parser();

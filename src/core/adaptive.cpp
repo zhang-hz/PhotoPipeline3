@@ -324,8 +324,8 @@ bool method_from_name(std::string_view s, AdaptiveMethod &out) {
 }
 
 constexpr std::string_view kSearchUsage =
-    "用法：search <键> from current|<数值> to <数值> step <数值> "
-    "[method linear|bisect|exp|greedy] [max_rounds N]";
+    "用法：search <键> from current|<数值> [down|up] to <数值> step <数值> "
+    "[breakpoint <数值> step <数值>]... [method linear|bisect|exp|greedy] [max_rounds N]";
 
 // ---------------------------------------------------------------------------
 // §9.4 目标键注册表
@@ -748,15 +748,74 @@ bool validate_search_action(const AdaptiveAction &a, std::string_view format_id,
                         render_number(lo) + ", " + render_number(hi) + "]",
                     "把 to 改到范围内（终点含端点）。");
     }
-    if (!a.from.current && a.from.number == a.to) {
+    if (!a.from.current && a.from.number == a.to && a.direction == AdaptiveDirection::Auto) {
         return fail(err, line, col, "search_noop", "search 的 from 与 to 相同（区间为空）",
-                    "把 from/to 写成不同值；若想从运行配置出发请写 `from current`。");
+                    "把 from/to 写成不同值；若想从运行配置出发请写 `from current`。"
+                    "（显式 down/up 时端点相等 = 该动作 0 轮，不是错误。）");
     }
     if (a.max_rounds != 0 && (a.max_rounds < 1 || a.max_rounds > 32)) {
         return fail(err, line, col, "action_max_rounds",
                     "search 的 max_rounds 必须在 1..32（实际 " + std::to_string(a.max_rounds) +
                         "）",
                     "省略该子句表示继承全局 max_rounds。");
+    }
+    // —— DSL v1.1：步长断点（需求 7）——
+    if (!a.breakpoints.empty()) {
+        if (a.direction == AdaptiveDirection::Auto)
+            return fail(err, line, col, "breakpoint_syntax",
+                        "breakpoint 必须与显式方向一起使用（`from … down|up to …`）",
+                        "断点的分段步长依赖确定方向；请把 search 写成 "
+                        "`search <键> from current down to <终点> step <步长> "
+                        "breakpoint <值> step <步长>`（或 up）。");
+        if (a.method != AdaptiveMethod::Linear)
+            return fail(err, line, col, "breakpoint_syntax",
+                        "breakpoint 只支持 method linear（当前 method = " +
+                            std::string(adaptive_method_name(a.method)) + "）",
+                        "bisect/exp/greedy 没有「按段步长排程」语义；请删除 breakpoint 或改用 "
+                        "method linear。");
+        // 1) 严格升序（渲染/执行都依赖升序分段）。
+        for (std::size_t k = 1; k < a.breakpoints.size(); ++k) {
+            if (!(a.breakpoints[k].value > a.breakpoints[k - 1].value))
+                return fail(err, line, col, "breakpoint_order",
+                            "breakpoint 必须按数值严格升序（第 " + std::to_string(k + 1) +
+                                " 个断点 " + render_number(a.breakpoints[k].value) +
+                                " 不大于前一个 " + render_number(a.breakpoints[k - 1].value) + "）",
+                            "断点按「开区间上界」分段：越靠后的断点对应越高的值区间；"
+                            "请重排/去重。");
+        }
+        const bool down = a.direction == AdaptiveDirection::Down;
+        for (std::size_t k = 0; k < a.breakpoints.size(); ++k) {
+            const AdaptiveBreakpoint &bp = a.breakpoints[k];
+            const std::string at = "第 " + std::to_string(k + 1) + " 个断点";
+            if (!(bp.step > 0.0) || !std::isfinite(bp.step))
+                return fail(err, line, col, "breakpoint_value",
+                            at + "的 step 必须大于 0（实际 " + render_number(bp.step) + "）",
+                            "断点 step 是该段的候选步长；正数，方向由 down/up 决定。");
+            if (!std::isfinite(bp.value) || !in_range(bp.value))
+                return fail(err, line, col, "breakpoint_value",
+                            at + "（值 " + render_number(bp.value) + "）超出参数「" + a.key +
+                                "」范围 [" + render_number(lo) + ", " + render_number(hi) + "]",
+                            "断点是参数值域内的分段上界；请改到范围内。");
+            // 2) 与 to 同侧：down 必须 > to（否则永远到不了，属配置错误）；up 必须 < to。
+            if (down ? !(bp.value > a.to) : !(bp.value < a.to))
+                return fail(
+                    err, line, col, "breakpoint_value",
+                    at + "（值 " + render_number(bp.value) + "）不在搜索区间内：" +
+                        (down ? "down 方向要求断点 > 终点 to=" : "up 方向要求断点 < 终点 to=") +
+                        render_number(a.to),
+                    "断点应落在 (to, 起点] 区间内（down）/ [起点, to) 区间内（up）。");
+            // 3) 显式起点时断点还必须落在起点内侧（否则该断点永不被跨过）。
+            if (!a.from.current) {
+                const bool inside = down ? bp.value < a.from.number : bp.value > a.from.number;
+                if (!inside)
+                    return fail(err, line, col, "breakpoint_value",
+                                at + "（值 " + render_number(bp.value) + "）不在搜索区间内：" +
+                                    (down ? "down 方向要求断点 < 起点 from="
+                                          : "up 方向要求断点 > 起点 from=") +
+                                    render_number(a.from.number),
+                                "断点应严格位于起点与终点之间（起点=current 时不校验这一条）。");
+            }
+        }
     }
     return true;
 }
@@ -1032,6 +1091,13 @@ bool parse_adaptive_policy(std::string_view text, AdaptivePolicy &out, AdaptiveE
                                     std::string(kSearchUsage));
                     }
                     ++i;
+                    // DSL v1.1：可选显式方向 `down` / `up`（位于 from 取值之后、to 之前）。
+                    if (i < toks.size() && !toks[i].quoted &&
+                        (toks[i].text == "down" || toks[i].text == "up")) {
+                        a.direction = toks[i].text == "down" ? AdaptiveDirection::Down
+                                                             : AdaptiveDirection::Up;
+                        ++i;
+                    }
                     if (i >= toks.size() || toks[i].text != "to")
                         return fail(err, line_no, i < toks.size() ? toks[i].col : first.col,
                                     "search_syntax", "search 缺少 to 子句",
@@ -1052,6 +1118,34 @@ bool parse_adaptive_policy(std::string_view text, AdaptivePolicy &out, AdaptiveE
                                     "bad_number", "search 的 step 不是合法数值",
                                     std::string(kSearchUsage));
                     ++i;
+                    // DSL v1.1：步长断点，0..N 组 `breakpoint <数值> step <数值>`（位于基础
+                    // step 之后、method 之前）。数值升序/范围等语义检查在 validate 阶段。
+                    while (i < toks.size() && !toks[i].quoted && toks[i].text == "breakpoint") {
+                        ++i;
+                        AdaptiveBreakpoint bp;
+                        if (i >= toks.size() || toks[i].quoted ||
+                            !parse_double(toks[i].text, bp.value))
+                            return fail(
+                                err, line_no, i < toks.size() ? toks[i].col : first.col,
+                                "breakpoint_syntax",
+                                "breakpoint 缺少合法数值（应为 `breakpoint <数值> step <数值>`）",
+                                std::string(kSearchUsage));
+                        ++i;
+                        if (i >= toks.size() || toks[i].text != "step")
+                            return fail(err, line_no, i < toks.size() ? toks[i].col : first.col,
+                                        "breakpoint_syntax", "breakpoint 后必须跟 `step <数值>`",
+                                        std::string(kSearchUsage));
+                        ++i;
+                        if (i >= toks.size() || toks[i].quoted ||
+                            !parse_double(toks[i].text, bp.step))
+                            return fail(err, line_no, i < toks.size() ? toks[i].col : first.col,
+                                        "breakpoint_syntax",
+                                        "breakpoint 的 step 缺少合法数值（应为 `breakpoint <数值> "
+                                        "step <数值>`）",
+                                        std::string(kSearchUsage));
+                        ++i;
+                        a.breakpoints.push_back(bp);
+                    }
                     if (i < toks.size() && toks[i].text == "method") {
                         ++i;
                         if (i >= toks.size() || toks[i].quoted ||
@@ -1140,7 +1234,14 @@ std::string render_adaptive_policy(const AdaptivePolicy &p) {
             if (a.kind == AdaptiveActionKind::Search) {
                 out += "  search " + a.key + " from ";
                 out += a.from.current ? "current" : render_number(a.from.number);
+                // DSL v1.1：显式方向按语义写方向词；旧语法（Auto）不写（from current 时无法
+                // 静态推断方向，保持旧文本形态）。
+                if (a.direction != AdaptiveDirection::Auto)
+                    out += " " + std::string(adaptive_direction_name(a.direction));
                 out += " to " + render_number(a.to) + " step " + render_number(a.step);
+                for (const AdaptiveBreakpoint &bp : a.breakpoints)
+                    out += " breakpoint " + render_number(bp.value) + " step " +
+                           render_number(bp.step);
                 if (a.method != AdaptiveMethod::Linear)
                     out += " method " + std::string(adaptive_method_name(a.method));
                 if (a.max_rounds != 0)
@@ -1511,6 +1612,68 @@ std::string_view adaptive_metric_unavailable_name(AdaptiveMetricUnavailable m) {
     return m == AdaptiveMetricUnavailable::Fail ? "fail" : "stop";
 }
 
+std::string_view adaptive_direction_name(AdaptiveDirection d) {
+    switch (d) {
+    case AdaptiveDirection::Down:
+        return "down";
+    case AdaptiveDirection::Up:
+        return "up";
+    case AdaptiveDirection::Auto:
+        break;
+    }
+    return {}; // Auto = 旧语法：不写方向词
+}
+
+// ===========================================================================
+// 持久化辅助：JSON 字符串数组 ⇄ 单个 DSL 文本（需求 3/6：可读化，零 \n 转义）
+// ===========================================================================
+std::vector<std::string> adaptive_policy_to_lines(std::string_view text) {
+    std::vector<std::string> lines;
+    std::string cur;
+    for (const char c : text) {
+        if (c == '\n') {
+            if (!cur.empty() && cur.back() == '\r')
+                cur.pop_back();
+            lines.push_back(std::move(cur));
+            cur.clear();
+        } else {
+            cur.push_back(c);
+        }
+    }
+    if (!cur.empty() && cur.back() == '\r')
+        cur.pop_back();
+    if (!cur.empty())
+        lines.push_back(std::move(cur));
+    while (!lines.empty() && lines.back().empty())
+        lines.pop_back(); // 策略末尾空行无语义（渲染也丢弃）；中间空行/注释行保留
+    return lines;
+}
+
+bool adaptive_policy_from_lines(const std::vector<std::string> &lines, std::string &out,
+                                std::string *err_zh) {
+    std::string text;
+    text.reserve(lines.size() * 24);
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+        if (lines[i].find('\n') != std::string::npos || lines[i].find('\r') != std::string::npos) {
+            if (err_zh != nullptr)
+                *err_zh = "adaptive.policy 数组的第 " + std::to_string(i + 1) +
+                          " 个元素内嵌换行；数组形态下一个元素只能是一行（否则错误行号无法定位）";
+            return false;
+        }
+        text += lines[i];
+        text += '\n';
+    }
+    out = std::move(text);
+    return true;
+}
+
+std::string adaptive_policy_from_legacy_string(std::string_view text) {
+    std::string out;
+    std::string ignored;
+    (void)adaptive_policy_from_lines(adaptive_policy_to_lines(text), out, &ignored);
+    return out;
+}
+
 const std::vector<std::string_view> &adaptive_error_codes() {
     static const std::vector<std::string_view> codes = {
         // 语法/词法
@@ -1534,6 +1697,10 @@ const std::vector<std::string_view> &adaptive_error_codes() {
         "bad_method",
         "set_syntax",
         "stray_token",
+        // DSL v1.1：步长断点（需求 7；顺序/取值在 validate 阶段报）
+        "breakpoint_syntax",
+        "breakpoint_order",
+        "breakpoint_value",
         // 语义/注册表
         "target_range",
         "max_rounds_range",

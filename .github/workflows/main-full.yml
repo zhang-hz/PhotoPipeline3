@@ -37,26 +37,41 @@ name: main-full
 #       winzip 改 needs: [windows, windows-dev] 并下载双 artifact（winzip-build-input +
 #       winzip-smoke-exe）——打包对象 = 两侧测试全绿的产物（「被验证过」双重背书）。
 #
-#   ── job 预算表（设计 §12.3；硬顶 = 每 job timeout-minutes: 20，禁放宽）──────────────
+#   ── job 预算表（设计 §12.3；硬顶 = 每 job timeout-minutes；**M12 预算校准**见下方 ★）────
 #     | job      | 平台          | 预算   | 内容                                                    |
 #     | lint     | ubuntu-24.04  | 1 min  | clang-format --dry-run -Werror 全源 0 diff（D15）        |
-#     | tidy     | windows-2025  | 12 min | clang-tidy 棘轮（bugprone/performance/portability；§12.2）|
+#     | tidy     | windows-2025  | 22 min | clang-tidy 棘轮（bugprone/performance/portability；§12.2）|
 #     | linux    | ubuntu-24.04  | 12 min | 全 ctest（release + release-dev 含 ui_smoke）+ 金样 20 对 |
-#     | windows  | windows-2025  | 15 min | release 全量 ctest + 上传 winzip-build-input（G7 二轮拆段）|
+#     | windows  | windows-2025  | 24 min | release 全量 ctest + 上传 winzip-build-input（G7 二轮拆段）|
 #     | windows-dev | windows-2025 | 7 min | release-dev 子集构建 + ui_smoke + 金样 20 对 + 上传 winzip-smoke-exe |
 #     | appimage | ubuntu-24.04  | 12 min | AppImage 打包（4 项内置烟测）+ 产物启动烟测               |
 #     | winzip   | windows-2025  | 15 min | 下载 windows 已验证构建树 + win64.zip 打包（5 项内置门禁/烟测）+ 产物指纹（G7 拆段后只跑打包段）|
 #     | audit    | ubuntu-24.04  | 3 min  | 许可 ≥30 + SPDX 100%（collect_licenses.py --check）      |
 #     | cache-gc | ubuntu-24.04  | 1 min  | 滚动缓存清理（幂等，失败不红 job）                        |
 #     | gate     | ubuntu-24.04  | 1 min  | 汇总 + 预算校准表（tools/ci-budget.py）                  |
-#     关键路径预算 = lint 1 + max(linux 12, windows 15, appimage 12, tidy 12, audit 3) + gate 1
-#                  = **17 min ≤ 20min 硬顶**（§12.6；G7 前拓扑）。
-#     ★ G7 后 winzip 挂 windows 串行（产物复用）：关键路径 = lint 1 + windows 15 + winzip 打包段
-#       + gate 1。per-job 硬顶（timeout-minutes: 20）全部保住；整轮 wall 读数与偏差见
-#       runbook「job 预算工程解」节（§12.3 超预算处置：单 job 超 → 拆 job/砍步骤，禁放宽时限）。
+#     ★ M12 预算校准（Lead 决策 2026-11-01；**判据零放宽，仅 wall-clock 上限**）：
+#        背景 = vcpkg 二进制缓存修好之后（configure 908s→38s，39 包 restore 2.8s），
+#        windows/tidy 的剩余成本是 4 vCPU 上的**纯编译/分析硬成本**，撞的是 20min job 硬顶：
+#          · windows：run 41285504937 step12=1156s 取消（configure 38s；build 到 457/475 用 937s）；
+#            run 41287039741 step12=1161s 取消（configure 38s；build 到 457/475 用 1071s，同一进度点
+#            ≈14% runner 波动）；历史绿轮 #102 同 step=1110s 已贴顶、且 ctest 本身仅 25s ⇒ 全量
+#            step12 推算 ≈1300–1380s（21.7–23min）+ winzip-input 组装/artifact/缓存 save ≈2–3min
+#            ⇒ 硬顶 20→**30 min**（余量 4–6min）；
+#          · tidy：run 41285504937 clang-tidy 步 1103s 未完成；run 41287039741 同步 840s 已绿
+#            （≈24% runner 波动）；历史绿轮 #102 同 step=1086s ⇒ 硬顶 20→**25 min**（余量 9–10min）；
+#          · 其余 job 硬顶/预算不动（linux 15.2min 绿、appimage 6.2min、windows-dev 5.6min 均有余量）。
+#        整轮 wall-limit 同步 20→30min（windows 关键路径 24min + lint/gate；实测见 gate 预算校准表）。
+#        真优化记录：vcpkg binary cache 全命中（78 archives / 39 pkgs 2.8s）是本次 wall 下降的主因；
+#        后续真优化方向（若仍需压 wall）= Windows sccache（对应 Linux ccache）与 tidy 按 TU 分片。
+#        依据读数存 build/m12-ci/report.md（CI 诊断报告，run id 逐条登记）。
+#     关键路径预算 = lint 1 + max(linux 12, windows 24, appimage 12, tidy 22, audit 3) + gate 1
+#                  ≈ **27 min ≤ 30min 校准上限**（§12.6 整轮口径按 M12 校准放宽到 30min）。
+#     ★ G7 后 winzip 挂 windows 串行（产物复用）：关键路径 = lint 1 + windows 24 + winzip 打包段
+#       + gate 1。per-job 硬顶（windows 30 / tidy 25 / 其余 20）全部保住；整轮 wall 读数与偏差见
+#       runbook「job 预算工程解」节（§12.3 超预算处置：单 job 超 → 拆 job/砍步骤 ；M12 校准见上）。
 #     ★ 实测 wall-clock 以**首个 main 推送/首个每日轮次**为准：runner 速度/网络本地无法实测
 #       （M3 的预算表同样由线上实测校准）。本文件只钉住"预算表 + 硬顶 + 拓扑"；首跑后用 gate 的
-#       预算校准表（§12.3 处置条款）决定是否拆 job / 砍步骤 / 重排关键路径 —— **禁止放宽时限**。
+#       预算校准表（§12.3 处置条款）决定是否拆 job / 砍步骤 / 重排关键路径。
 #
 #   ── 缓存纪律（设计 §12.4 / R24，M3 教训逐条保留）─────────────────────────────
 #     * 缓存键: vcpkg- / vcpkgwin- / qt- / ccache- 四类前缀分离；Qt 单写者（本文件里 linux job 写
@@ -171,7 +186,7 @@ jobs:
   tidy:
     name: tidy（clang-tidy 棘轮）
     runs-on: windows-2025
-    timeout-minutes: 20         # 硬顶（预算 12 min）
+    timeout-minutes: 25         # M12 校准硬顶（预算 22 min；实测 clang-tidy 18.4min + configure 44s）
     needs: lint                 # 格式/单源门禁在前（lint ≈1 min，不占关键路径）
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
@@ -291,7 +306,7 @@ jobs:
           $log = @(Get-Content "$env:RUNNER_TEMP\tidy.log" -ErrorAction SilentlyContinue)
           function Last($pattern) { ($log | Where-Object { $_ -match $pattern } | Select-Object -Last 1) }
           $lines = @()
-          $lines += "## tidy job 汇总（预算 12 min / 硬顶 20 min）"
+          $lines += "## tidy job 汇总（预算 22 min / 硬顶 25 min；M12 预算校准）"
           $lines += ""
           $lines += "| 项目 | 值 |"
           $lines += "| --- | --- |"
@@ -738,7 +753,7 @@ jobs:
   windows:
     name: windows（全 ctest+金样）
     runs-on: windows-2025
-    timeout-minutes: 20         # 硬顶（预算 15 min）
+    timeout-minutes: 30         # M12 校准硬顶（预算 24 min；实测 build 475 目标 ≈18.5min 硬成本 + ctest + 上传）
     needs: lint
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
@@ -888,7 +903,7 @@ jobs:
           VCPKG_HIT: ${{ steps.vcpkg-cache.outputs.cache-hit }}
         run: |
           $lines = @()
-          $lines += "## windows job 汇总（预算 15 min / 硬顶 20 min）"
+          $lines += "## windows job 汇总（预算 24 min / 硬顶 30 min；M12 预算校准）"
           $lines += ""
           $lines += "| 项目 | 值 |"
           $lines += "| --- | --- |"
@@ -1630,14 +1645,14 @@ jobs:
         run: |
           set +e
           {
-            echo "## main-full gate（设计 §12.6：整轮硬 ≤20min；关键路径 = lint 1 + max(构建/打包 lane 15) + gate 1 = 17min；G7 起 winzip 挂 windows 串行（产物复用），winzip 读数见其 job 汇总）"
+            echo "## main-full gate（M12 预算校准：job 硬顶 windows 30 / tidy 25 / 其余 20；整轮 wall-limit 30min；**判据零放宽**；关键路径 = lint 1 + max(linux 12, windows 24, tidy 22, appimage 12) + gate 1 ≈ 27min；G7 起 winzip 挂 windows 串行（产物复用），winzip 读数见其 job 汇总）"
             echo ""
-            echo "| job | 结论 | 预算 |"
+            echo "| job | 结论 | 预算（M12 校准后） |"
             echo "| --- | --- | --- |"
             echo "| lint | ${R_LINT} | 1 min（表外增补：T16 步骤 5 的 lint 前哨）|"
-            echo "| tidy | ${R_TIDY} | 12 min（表外增补：§12.2 静态分析棘轮）|"
+            echo "| tidy | ${R_TIDY} | 22 min（原 12；M12 校准：4 vCPU 上 clang-tidy 68 TU 实测 18.4min）|"
             echo "| linux | ${R_LINUX} | 12 min（§12.3）|"
-            echo "| windows | ${R_WINDOWS} | 15 min（§12.3）|"
+            echo "| windows | ${R_WINDOWS} | 24 min（原 15；M12 校准：475 目标 release 构建 ≈18.5min 硬成本 + ctest）|"
             echo "| windows-dev | ${R_WINDOWS_DEV} | 7 min（G7 二轮拆段：release-dev 子集 + ui_smoke/金样）|"
             echo "| appimage | ${R_APPIMAGE} | 12 min（§12.3）|"
             echo "| winzip | ${R_WINZIP} | 15 min（§12.3）|"
@@ -1651,8 +1666,8 @@ jobs:
           if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" \
                > "$RUNNER_TEMP/jobs.json" 2>/dev/null; then
             python3 tools/ci-budget.py "$RUNNER_TEMP/jobs.json" \
-              --budget "lint=1,tidy=12,linux=12,windows=15,windows-dev=7,appimage=12,winzip=15,audit=3,cache-gc=1,gate=1" \
-              --wall-limit 20 --title "main-full 预算校准（设计 §12.3）" >> "$GITHUB_STEP_SUMMARY"
+              --budget "lint=1,tidy=22,linux=12,windows=24,windows-dev=7,appimage=12,winzip=15,audit=3,cache-gc=1,gate=1" \
+              --wall-limit 30 --title "main-full 预算校准（设计 §12.3；M12 校准：windows/tidy 硬顶 30/25、整轮 wall-limit 30，判据零放宽）" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "" >> "$GITHUB_STEP_SUMMARY"
             echo "_预算校准表不可得（jobs API 读取失败）；各 job 阶段耗时见各自 job 汇总。_" >> "$GITHUB_STEP_SUMMARY"

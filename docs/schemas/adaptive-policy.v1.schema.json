@@ -74,8 +74,26 @@
                       ],
                       "description": "搜索起点：运行配置当前值（current）或显式数值。"
                     },
-                    "to": { "type": "number", "description": "搜索终点（含端点）；方向由 from→to 决定。" },
-                    "step": { "type": "number", "exclusiveMinimum": 0 },
+                    "to": { "type": "number", "description": "搜索终点（含端点）；方向由 from→to 决定（显式 direction 时按方向词）。" },
+                    "step": { "type": "number", "exclusiveMinimum": 0, "description": "基础步长；v <= 第一个断点时使用（见 breakpoints）。" },
+                    "direction": {
+                      "enum": ["down", "up"],
+                      "description": "DSL v1.1 显式方向：down 只降不升（起点 <= to ⇒ 0 轮，不是错误）、up 只升不降（起点 >= to ⇒ 0 轮）。省略 = 方向由 from→to 的相对大小推断（旧语法）。"
+                    },
+                    "breakpoints": {
+                      "type": "array",
+                      "minItems": 1,
+                      "description": "步长断点（DSL v1.1；仅 direction 存在且 method=linear 时允许）。按 value **严格升序**；语义 = 开区间上界分段：v <= 第一个断点用基础 step，否则 v 严格大于的最大断点的 step；跨断点不跳过断点值（先钳到断点值），端点 to 必被尝试。",
+                      "items": {
+                        "type": "object",
+                        "required": ["value", "step"],
+                        "properties": {
+                          "value": { "type": "number", "description": "分段上界（参数域内、down 时 > to / up 时 < to）。" },
+                          "step": { "type": "number", "exclusiveMinimum": 0, "description": "该段步长。" }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
                     "method": {
                       "enum": ["linear", "bisect", "exp", "greedy"],
                       "default": "linear"

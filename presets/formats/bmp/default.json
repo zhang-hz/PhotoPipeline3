@@ -1,0 +1,10 @@
+{
+    "backend": "oiio",
+    "bitdepth": 24,
+    "format": "bmp",
+    "kind": "format-preset",
+    "name": "default",
+    "params": {},
+    "tech": "raw",
+    "version": 1
+}

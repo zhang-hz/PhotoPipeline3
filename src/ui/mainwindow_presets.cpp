@@ -146,20 +146,23 @@ void warn_preset_op(QWidget *parent, PresetOp op, const QString &detail) {
 // 保存（<presets_dir>/<name>.json） / 删除（二次确认）。
 namespace {
 
-// M10-W3-T5：内置（出厂）格式预设的幂等 seed —— 进程内只跑一次（构造期 refresh_preset_card
-// 首调即落地）；只写**不存在**的 `<data_dir>/presets/formats/<fmt>/_builtin-<fmt>.json`，
-// 失败只记日志（启动期不弹对话框、不阻塞 UI，也绝不覆盖用户文件）。
+// M12（需求 1/2）：工厂（出厂）格式预设的幂等 seed —— 进程内只跑一次（构造期 refresh_preset_card
+// 首调即落地）。M12 起出厂预设不再是 C++ 硬编码库/只读模板，单一真源 = 随发行包分发的仓库 JSON
+// 数据文件（`<exe 目录>/presets/formats/**`）：seed 把它们按**原字节**复制到
+// `<data_dir>/presets/formats/`，并迁移删除 0.4.0.alpha1 的旧版只读内置模板（`_builtin-*.json`）。
+// 失败只记日志（启动期不弹对话框、不阻塞 UI，也绝不覆盖用户改过的文件）。
 // 自由函数（不改 mainwindow_impl.h 的声明面 = 本任务写作用域外）。
-void seed_builtin_format_presets_once() {
+void seed_factory_format_presets_once() {
     static std::once_flag once;
     std::call_once(once, [] {
-        const pp::ui::FormatPresetSeedReport report = pp::ui::seed_builtin_format_presets();
+        const pp::ui::FormatPresetSeedReport report = pp::ui::seed_factory_format_presets();
         for (const std::string &err : report.errors)
-            pp::log_warn("preset", "mainwindow_presets.cpp", "builtin format preset seed failed",
+            pp::log_warn("preset", "mainwindow_presets.cpp", "factory format preset seed failed",
                          {{"error", err}});
-        pp::log_info("preset", "mainwindow_presets.cpp", "builtin format presets seed",
+        pp::log_info("preset", "mainwindow_presets.cpp", "factory format presets seed",
                      {{"written", std::to_string(report.written)},
                       {"skipped", std::to_string(report.skipped)},
+                      {"removed_legacy", std::to_string(report.removed_legacy)},
                       {"failed", std::to_string(report.failed)}});
     });
 }
@@ -169,8 +172,8 @@ void seed_builtin_format_presets_once() {
 void MainWindow::Impl::refresh_preset_card() {
     if (page_output == nullptr)
         return;
-    // M10-W3-T5：内置格式预设 seed（幂等；本进程首次调用时执行，见上）
-    seed_builtin_format_presets_once();
+    // M12（需求 1/2）：工厂（出厂）格式预设 seed（幂等；本进程首次调用时执行，见上）
+    seed_factory_format_presets_once();
     // M10-W3-T2：格式预设行的接线（一次性；构造期 refresh_preset_card 首调即接上 —— 本任务
     // 的写作用域不含 mainwindow.cpp 的 wire 段，接线点因此落在本 TU 的构造期入口上）。
     wire_format_preset_card();
@@ -344,13 +347,21 @@ bool confirm_delete(QWidget *parent, const QString &name) {
     return answer == QMessageBox::Yes;
 }
 
-// M10-W3-T5：QString 路径 → 内置只读判定（单源 = ui/format_preset_io 的前缀助手）。
+// M12（需求 4）：QString 路径 → 出厂默认预设判定（单源 = core/format_preset.h 的
+// is_default_format_preset_name；用**文件名 stem** 判定 —— 与 UI 高亮/删除保护同源）。
 // 独立小函数而非在信号 lambda 里直接构造临时 filesystem::path：后者在本 TU（MSVC 19.51 /GL）
 // 触发过 C1001 内部编译器错误（实测，2026-11-01；改写形态后编译通过，语义不变）。
-bool is_builtin_preset_qpath(const QString &path) {
-    const qsizetype sep =
-        std::max(path.lastIndexOf(QLatin1Char('/')), path.lastIndexOf(QLatin1Char('\\')));
-    return pp::ui::is_builtin_format_preset_name(path.mid(sep + 1).toStdString());
+QString path_stem(const QString &path) {
+    return path.isEmpty() ? QString() : QFileInfo(path).completeBaseName();
+}
+
+bool is_default_preset_qpath(const QString &path) {
+    return !path.isEmpty() && pp::is_default_format_preset_name(path_stem(path).toStdString());
+}
+
+// M12（需求 4）：出厂默认预设的不可删除说明（UI 守卫与「删除」处理器共用同一句中文）。
+QString default_preset_protected_text() {
+    return T("出厂默认预设不可删除：可直接「保存」修改它，或用「另存」复制一份");
 }
 
 } // namespace
@@ -381,14 +392,8 @@ void MainWindow::Impl::wire_format_preset_card() {
             if (page_output == nullptr)
                 return;
             const QString fmt = page_output->current_format();
-            // M10-W3-T5：内置（出厂）预设只读 —— 显式拒绝覆盖（**不静默改道**另存；用户仍可
-            // 主动点「另存…」）。I/O 层的同前缀守卫是第二道保险。
-            if (is_builtin_preset_qpath(path)) {
-                warn_format_preset(
-                    w, FormatPresetOp::Save,
-                    T("内置预设只读（_builtin- 前缀）：不能覆盖；请用「另存…」保存为新的预设"));
-                return;
-            }
+            // M12（需求 4）：「保存」恒可用 —— 选中 `default` 时 **直接覆盖修改该格式的
+            // default.json**（用户口径：出厂预设可保存修改；不可删除才由 UI/ I/O 守卫）。
             const QString name = QFileInfo(path).completeBaseName();
             std::filesystem::path saved;
             const std::string err =
@@ -412,6 +417,12 @@ void MainWindow::Impl::wire_format_preset_card() {
 
 // 列表喂入：当前格式目录下的 *.json（坏文件仍列出，显示名后缀「（损坏）」——设计 §8.3；
 // 选中后由 format_preset_load_into 给出完整中文原因，绝不静默套默认值）。
+// M12（需求 4 / 简报 §4.4-3，硬要求）：喂列表后，若该格式**还没有已载入的来源**（首启 / 新建
+// 格式卡 / 重新勾选 / 来源文件被删），静默载入该格式的 `default` 预设（无 default 则首项）——
+// 让「无未选择态」在 UI 上成立且自适应摘要始终按 default 策略显示。
+//   * 静默：失败只 log_warn + 注释位中文错误，**不弹 modal**（启动期/自动路径不得阻塞用户）；
+//   * 不递归：format_preset_load_into 不回调 refresh（只有用户下拉/保存等显式路径才刷新）；
+//   * 全局预设接管态（detached）⇒ 抑制（否则会把全局预设值冲掉，M12 Lead 裁定）。
 void MainWindow::Impl::refresh_format_preset_row(const QString &format_id, PageOutput *target,
                                                  const std::filesystem::path &presets_root) {
     if (target == nullptr)
@@ -430,6 +441,29 @@ void MainWindow::Impl::refresh_format_preset_row(const QString &format_id, PageO
         }
     }
     target->set_format_preset_list(fmt, items);
+    // ---- M12：自动选中并载入该格式的 default（无 default 的异常数据目录取首项）----
+    if (fmt.isEmpty() || items.empty() || !target->current_format_preset(fmt).isEmpty() ||
+        target->format_preset_detached(fmt))
+        return;
+    QString auto_path;
+    for (const auto &[path, name] : items) {
+        if (is_default_preset_qpath(path)) {
+            auto_path = path;
+            break;
+        }
+    }
+    if (auto_path.isEmpty())
+        auto_path = items.front().first; // 异常数据目录（无 default）：载入首项
+    const std::string err = format_preset_load_into(auto_path, target);
+    if (err.empty())
+        return;
+    // 失败：静默（不弹框）+ 注释位中文错误 + 记日志；会话态不指向坏文件（下拉由列表规则高亮
+    // default，按钮按既有禁用语义），用户仍可手动选其它预设或修复文件。
+    pp::log_warn(
+        "preset", "mainwindow_presets.cpp", "auto load default format preset failed",
+        {{"format", fmt.toStdString()}, {"path", auto_path.toStdString()}, {"error", err}});
+    target->set_format_preset_note(fmt, T("默认预设载入失败：%1").arg(QString::fromStdString(err)));
+    target->set_current_format_preset(fmt, QString());
 }
 
 // 采集：当前格式卡快照（后端/技术/位深/核心+高级参数/保留键 __heif_profile）+ 自适应面。
@@ -545,6 +579,9 @@ std::string MainWindow::Impl::format_preset_load_into(const QString &path, PageO
     // 下面 set_format_preset_adaptive 再显式同步一次只读面/开关，两条路径同一结果）。
     spec.adaptive_enabled = preset.adaptive_enabled;
     spec.adaptive_policy = preset.adaptive_policy;
+    // M12（需求 4）：成功载入 = 卡值重新有了文件来源 ⇒ 解除「全局预设接管」态（save 恢复可用）。
+    // 必须在 set_current_format_preset 之前清（按钮态刷新读的是新标志）。
+    target->set_format_preset_detached(fmt, false);
     target->apply_format_preset(spec);
     target->set_current_format_preset(fmt, path);
     target->set_format_preset_adaptive(fmt, QString::fromStdString(preset.adaptive_policy),
@@ -576,9 +613,9 @@ void MainWindow::Impl::format_preset_save_as(PageOutput *target) {
     const QString current = target->current_format_preset(fmt);
     QString suggestion =
         current.isEmpty() ? T("%1 预设").arg(fmt) : QFileInfo(current).completeBaseName();
-    // M10-W3-T5：内置预设只读 —— 默认名不能沿用 `_builtin-` 前缀（否则一次保存必被拒，
-    // 用户会以为「另存」不可用）。加「副本」后缀，改完即是一份普通预设。
-    if (pp::ui::is_builtin_format_preset_name(suggestion.toStdString()))
+    // M12（需求 4 / Lead 裁定）：「另存」= 复制。当前预设是 `default` 时建议名用
+    // 「default 副本」—— 不沿用 default 本身（否则命名对话框里一次回车 = 覆盖出厂默认文件）。
+    if (is_default_preset_qpath(current))
         suggestion += T(" 副本");
     bool ok = false;
     const QString name = QInputDialog::getText(w, T("另存格式预设"), T("格式预设名称（= 文件名）"),
@@ -605,16 +642,14 @@ void MainWindow::Impl::format_preset_save_as(PageOutput *target) {
 }
 
 // 删除：绝对路径守卫 + 二次确认（与全局预设 delete_preset_file 同一先例）。
+// M12（需求 4）：出厂默认预设 `default` **不可删除**（按钮已置灰；本守卫是防御面，避免任何
+// 调用方绕过 UI 走到模态对话框）—— 但可「保存」直接修改它、可「另存」复制一份。
 void MainWindow::Impl::format_preset_delete_file(const QString &path) {
     if (path.isEmpty())
         return;
     const QFileInfo info(path);
-    // M10-W3-T5：内置（出厂）预设只读 —— **不进二次确认**，直接给出原因（按钮已置灰；
-    // 本守卫是防御面，避免任何调用方绕过 UI 走到模态对话框）。
-    if (is_builtin_preset_qpath(path)) {
-        warn_format_preset(
-            w, FormatPresetOp::Delete,
-            T("内置预设只读（_builtin- 前缀）：不可删除；请用「另存…」保存副本后再改"));
+    if (is_default_preset_qpath(path)) {
+        warn_format_preset(w, FormatPresetOp::Delete, default_preset_protected_text());
         return;
     }
     if (info.isRelative()) {
@@ -635,10 +670,11 @@ void MainWindow::Impl::format_preset_delete_file(const QString &path) {
     }
     if (page_output != nullptr) {
         const QString fmt = page_output->current_format();
-        if (page_output->current_format_preset(fmt) == path) {
+        if (page_output->current_format_preset(fmt) == path)
             page_output->set_current_format_preset(fmt, QString());
-            page_output->set_format_preset_note(fmt, QString());
-        }
+        // M12（需求 4 / 简报 §4.4-6）：删除当前预设后**自愈回 default 并载入**，不留空态 ——
+        // refresh_format_preset_row 在会话来源为空时自动选中并静默载入 default（其自适应策略
+        // 随载入刷新，不再残留被删来源的旧策略会话态 = 旧 S-4/S-5 分支的职责）。
         refresh_format_preset_row(fmt, page_output);
     }
 }
@@ -651,6 +687,15 @@ void MainWindow::Impl::format_preset_import_dialog(PageOutput *target) {
     if (file.isEmpty())
         return;
     const QString name = QFileInfo(file).completeBaseName();
+    // M12（需求 4）：`default` 是出厂默认预设名 —— 导入不得顶替它（否则等于绕过「保存」语义
+    // 覆盖出厂默认文件；要改 default 请选中它后用「保存」）。显式中文拒绝，不静默改名。
+    if (is_default_preset_qpath(file)) {
+        warn_format_preset(
+            w, FormatPresetOp::Import,
+            T("「default」是出厂默认预设名：请把文件改名后再导入（要修改出厂默认预设，"
+              "请先选中它再用「保存」）"));
+        return;
+    }
     std::filesystem::path saved;
     // 先只读取校验一次（拿到 format_id 才能判断同名目标），失败即报错、不写盘
     pp::FormatPresetData preview;

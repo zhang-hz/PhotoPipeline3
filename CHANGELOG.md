@@ -1,5 +1,158 @@
 # 变更日志
 
+## [0.4.0] — 2026-11-01
+
+**正式版（stable）**：0.4.0 = **M10**（性能与运行页 / 参数面 / 格式预设与自适应，逐条细节见下方
+`[0.4.0.alpha1]` 历史节，内容未删改）+ **M11 迭代修复批**（HEIF tile 按 Level/still 规格推导、自适应 DSL v1.1
+步长断点、5 条预置、运行状态机修复、格式预设行 UI）+ **M12 用户 5 条反馈**（出厂预设外部化为仓库 JSON 数据文件、
+每格式 `default`、删除「未选择」态、HEIF「Apple自适应」CRF=20、JPEG `default` 自适应视觉距离策略）+
+**CI 流程优化**（脚本判据修复 / 缓存暖度 / 预算；nightly 的 **ubsan 产品 UB** 与基线重播种口径动作**如实登记在「已知」**，
+run id / 逐 job 读数由 Lead 回填 `docs/0.4.0-report.md` §2.5）。
+版本单源 = `CMakeLists.txt:19-26`：数字段 `project(PhotoPipeline VERSION 0.4.0)` + **`PP_VERSION_LABEL ""`（正式版，标签清空）**
+⇒ `--version` = **`PhotoPipeline 0.4.0`**；`vcpkg.json` 同步数字段 0.4.0（R-122 口径）。
+逐条证据与门禁读数见 [docs/0.4.0-report.md](docs/0.4.0-report.md)，M11 收口报告见
+[docs/m11-report.md](docs/m11-report.md)，裁定见 [docs/m12-adjudications.md](docs/m12-adjudications.md) /
+[docs/m11-adjudications.md](docs/m11-adjudications.md)，用户手册见
+[docs/format-presets.md](docs/format-presets.md) 与 [docs/adaptive-policy.md](docs/adaptive-policy.md)。
+
+### 新增
+
+- **出厂格式预设外部化（M12-A1，需求 1）**：出厂预设从 C++ 编译内置改为**仓库 JSON 数据文件
+  `presets/formats/**`（11 个，单一真源）**；随发行包分发（Windows zip 顶层 `PhotoPipeline/presets/formats/**`、
+  AppImage `usr/bin/presets/formats/**`），首启**按字节复制**（seed）到 `<data_dir>/presets/formats/`；
+  **人类可直接用文本编辑器改、可整个文件复制**。删除 `builtin_format_presets()` / `_builtin-` 只读前缀机制；
+  seed 报告 `written/skipped/removed_legacy/failed`。详见 [docs/format-presets.md](docs/format-presets.md) §2/§7。
+- **每格式出厂 `default`（M12-A3，需求 2）**：8 格式各一条小写 `default`（文件 stem 与 JSON `name` 均为 `default`）；
+  HEIF 只留「Apple自适应」+ `default`、JXL 只留「无损归档」「自适应压缩」+ `default`（历史内建删除）；
+  AVIF/WebP/JPEG 历史内建内容即新 `default`；PNG/TIFF/BMP 新增 `default`。合计 **11 条**工厂预设。
+- **无「未选择」态 + `default` 自动载入（M12-A4/A5，需求 4）**：格式预设下拉删除「未选择」项与占位符；
+  格式卡创建/首启自动选中并静默载入该格式 `default`；`default` **不可删除但可「保存」覆盖**（=直接修改
+  `default.json`）、可「另存」复制；预设文件消失自动选回 `default`（自愈）；全局预设载入后进入 detached 态
+  （combo 仍显示 default、保存禁用、注记说明，重选预设恢复）。`--ui-smoke` 新增 `default-selected` /
+  `no-unselected` / `default-protected` / `save-default` / `png-no-adaptive` 探针。
+- **JPEG `default` 自适应视觉距离策略（M12-A6，需求 5）**：`presets/formats/jpeg/default.json` =
+  `quality_mode=distance`、`distance=3.0`、自适应开启，策略
+  `search distance from current down to 0.1 step 0.1 breakpoint 1 step 1 max_rounds 20`
+  （**1–3 段步长 1 粗扫、0.1–1 段步长 0.1 精扫**；target 90 / max_rounds 20 / output last /
+  on_metric_unavailable stop）——取「达到 90 分的最小体积（最大 distance）」一轮。候选序列
+  `2, 1, 0.9, …, 0.1`（11 个）由单测逐点钉住。
+- **HEIF「Apple自适应」CRF=20 口径（M12-A7，需求 3）**：工厂文件 `x265:crf=20`（非 28）、
+  `reserved.heif_profile=2`（Main10）、`x265:level-idc=31`；新增 `--ui-smoke` 探针 `heif-apple-crf` 断言
+  「选中 Apple自适应 后 CRF 控件读数 = 20」。
+- **HEIF tile 尺寸按 Level 与 still 规格推导（M11-C17'）**：删除 Apple 1024×576 固定基准；自动 tile = 目标
+  Level 的 MaxLumaPs/单边上限（`M`、`D=floor(sqrt(8M))`）+ still 单图应用格式 Level 上界（3GPP TS 26.140/26.141
+  = L5.1，H.265 文本无此强制、已一手核验）推导；T1(3902×5854)+L3.1 → **768×1280**（=983,040 整容量）6×5、
+  L 自动+总是 grid → **2176×4096**（=M51）2×2；新增 `planning_level_idc`/`still_level_capped`/warning 与
+  逐 tile hvcC Level 回读；手动 tile / 默认（L 自动+grid 自动→单图）行为不变。
+- **自适应 DSL v1.1（M11）**：`down`/`up` 显式方向、`breakpoint <v> step <s>` 步长断点（开区间上界分段、
+  跨断点先钳断点值、端点必试、只降不升 0 轮）、动作级 `max_rounds` 覆盖 linear 阶段上界；新增错误码
+  `breakpoint_syntax`/`breakpoint_order`/`breakpoint_value`（42→45）；旧语法逐字兼容。
+- **M11 5 条预置内容保留为工厂 JSON**：HEIF「Apple自适应」「default」、JXL「无损归档」「自适应压缩」「default」
+  （M12 起不再以 `_builtin-*` 只读模板形式 seed，而是 11 条工厂文件的一部分）。
+- **自适应迭代日志（M11 需求 1）**：pipeline 新增/增强四类 info 行 `adaptive plan` / `adaptive stage` /
+  `adaptive round`（+candidate/params/target/中文 `decision_reason`）/ `adaptive summary`
+  （+selected_params/scores 序列/中文 `reason_detail`）；执行器钩子加性扩展（`on_plan`/`on_stage_start`、
+  `AdaptiveRoundRecord.effective_params/candidate_path`、`AdaptiveRunResult.selected_params_text/reason_detail`）。
+- **M10 累计新增（0.4.0.alpha1 已发行，细节见该节）**：独立评分池 + 异步评分、同文件多格式并行（1 文件 4 格式
+  **1.31×**）、逐输出事件、HEIF grid/tile 配置行与 still 档位 16–21、tune/RC 面、JXL 治理 43→31 键、
+  格式预设 + 自适应执行器（`output last`/达标即停/候选 commit/侧车）。
+
+### 修复
+
+- **运行状态机（M11 S-1…S-5）**：迟到过程事件（评分池心跳/取消残余）不再把文件终态打回进行中
+  （`OutputDone` 仍可补评分）；点取消但 `sum.cancelled==0` 不再显示「已取消」；全局预设载入后清
+  「格式预设来源」（避免「保存」用全局值覆盖旧格式预设文件）；预设来源消失（M12 起 = 文件被删除/自动回
+  default）不再残留旧自适应会话态。详见 [docs/state-machine-analysis.md](docs/state-machine-analysis.md)。
+- **格式预设行 UI（M11-A5）**：导入/导出/另存按钮去省略号；下拉宽度钉 `FieldWidth::Standard`（160px，与同页
+  参数行一致）；按钮固定 sizeHint 不截断；combo 弹层按最长预设名自适应宽 + tooltip 全文。
+- **JPEG `distance` UI 下限 0.3 → 0.1（M12-A6，R-294 修订）**：`src/core/format_tables.cpp` jpegli `distance`
+  `.lo 0.3 → 0.1`、tooltip 同步 `[0.1, 3.0]`；旧下限让出厂 `default` 策略要求的 0.1–0.3 段不可达（库允许
+  仍是 0.0–25.0，UI 收窄口径不变）。[docs/param-catalog.md](docs/param-catalog.md) §1 同步。
+- **HEIF 默认单图行为零变化（M11）**：Level=自动 + grid=自动的常规图仍单图（`--dev` 实测无 grid box、
+  hvcC 事实不变）。
+- **M10 累计修复（0.4.0.alpha1 已发行，细节见该节）**：大图 + 评分被预算打穿、评分色彩归一慢（快速内核
+  20×）、双重 probe、SSIMULACRA 2 内存、HEIF 档位 16 置灰、CI Linux 浮点判据。
+
+### 变更
+
+- **出厂预设/策略数据 = 仓库 `presets/formats/**`（M12-A1/A3）**：11 个 JSON 随包分发、首启字节复制 seed；
+  便携模式（工厂目录 == 数据目录）只做旧文件清理、不复制；已存在的 `default.json` **永不被覆盖**。
+- **`default` 语义从「只读模板」改为「不可删但可保存覆盖」（M12-A4）**：保存恒可用（默认值可改）、删除被
+  UI/I-O 双重拒绝；`_builtin-` 只读机制与相关 API/前缀整体删除。
+- **GUI 默认启用自适应（M12-A3/A6）**：格式卡自动载入 `default` ⇒ JPEG/HEIF/AVIF/WebP/JXL 在 GUI 里默认启用
+  自适应（PNG/TIFF/BMP 的 `default` 无策略）；**`--dev`/金样/回归不带预设 ⇒ 无策略、产物逐字节不变**（C25 不变）。
+- **`adaptive.policy` 持久化改 JSON 字符串数组（M11-A1）**：一行一条，零 `\n` 转义；读入兼容旧字符串；
+  save→load→save 字节稳定；schema 改 `oneOf [array<string>, string]`。
+- **`set` 语义文档勘误（M11-A7）**：一个 stage 内全部 set 同轮生效、编一轮（旧文档「每个 set=1 轮」为错）。
+- **参数目录文案（M11-A9）**：`heif_grid`/`heif_tile_w`/`heif_tile_h`/`x265:level-idc` 四行 reason/tooltip 按 C17'
+  经 `tools/param_catalog_specs/x265.json` 单源生成（`.inc` 不再手改）。
+- **版本单源 0.4.0.alpha1 → 0.4.0 正式版（M12-A9）**：`PP_VERSION_LABEL ".alpha1" → ""`（数字段 0.4.0 不变）；
+  `vcpkg.json` 仍 0.4.0（R-122）；`--version` = `PhotoPipeline 0.4.0`；README/AGENTS 现役口径同步。
+- 本批（M11+M12）**未改任何 PP-FROZEN 冻结接口**；加性/行为修正逐条登记
+  [docs/m11-adjudications.md](docs/m11-adjudications.md)、[docs/m12-adjudications.md](docs/m12-adjudications.md)。
+
+### 破坏性变更
+
+- **旧 `_builtin-*.json` 首次启动被删除（M12-A2，登记为破坏性但可接受）**：数据目录各格式子目录下的旧只读
+  出厂模板由 seed 迁移清理（`removed_legacy` 计数）；历史内建（「内置示例 · X」）**不保留**，由 11 条工厂预设
+  取代。用户「另存」出的普通名字预设不受影响。恢复路径 = 从发行包 `presets/formats/` 复制回数据目录。
+- **「未选择」预设状态删除（M12-A5）**：下拉不再有「未选择」项/占位符，格式卡自动载入 `default`；依赖
+  「未选择 ⇒ 自适应行隐藏」的旧观感改变（无策略的 `default` 才隐藏自适应行）。
+- **`default` 保存语义反转（M12-A4）**：旧版对 `_builtin-*` 的「保存被拒绝」改为「`default` 可保存覆盖、
+  仅不可删除」。
+
+### 测试
+
+- **0.4.0 发行树门禁读数：待填（由 Lead 最终集成后回填）**——ctest / 金样 `SMOKE total=20 pass=20 fail=0` /
+  `--ui-smoke` `UI-SMOKE OK shots=12 pages=3` + 新探针 / 回归 zero diff / 格式 0 diff / tidy 棘轮 / HEIF 矩阵 /
+  版本检查；逐条见 [docs/0.4.0-report.md](docs/0.4.0-report.md) §2。
+- M11 集成树（`build/iter1`，0.4.0 正式版之前）历史读数：ctest **48/48**、金样 **20/20**、
+  `UI-SMOKE OK shots=12 pages=3`、回归 zero diff（normalized 2567=2567 行）、HEIF C17' 子集 31 例
+  pass 24 / fail 0 / expected-fail 7 / unexpected 0、格式 FILES=233 / violations=0、tidy 262=262 / violations=0、
+  seed 数组策略（`\n` 转义 0 次）、save→load→save 9/9 逐字节相同（详见 [docs/m11-report.md](docs/m11-report.md) §2）。
+- **新增/扩展单测**：`test_format_presets`（工厂文件/seed/迁移/字节一致）、`test_adaptive_exec`（JPEG default
+  11 候选取代序列逐点）、`test_adaptive_policy`（JPEG 策略 parse/render/validate）、`test_params`/`test_param_catalog`
+  （jpegli distance `lo==0.1`）。
+- **CI 优化轮读数：待填（C/Lead 提供）**——main-full / nightly / release run id 与逐 job 结论见
+  [docs/0.4.0-report.md](docs/0.4.0-report.md) §2.5。
+
+### 已知
+
+- **性能目标部分未达（M10 遗留，如实）**：P4-1 `metric_ms ≤ encode_ms` 未达（2,178.6 / 2,032.1 = **1.072×**，
+  D-5）；10-bit HEIC 输入 probe 1,635–1,670 ms（D-6）；HEIC 深 probe 首事件 gap 1.44–1.67 s（D-7）；
+  P9-1 CPU ≈4.01 核（诊断项）。
+- **TSan 未测**：本机无 TSan 运行面；CI nightly tsan job 的修复与最终状态见 CI 报告（待填）；无线程竞态证据
+  之前不宣称已验（替代压力证据见 [docs/m10-report.md](docs/m10-report.md) §4-2）。
+- **CI 红点分三类（诊断真源 = `build/m12-ci/report.md`，基线 HEAD `26d3554`，2026-11-01；最终读数待填）**：
+  ① **脚本判据 bug（M12-C 修复）**：nightly asan 的 R-042 env 检查被复制错位（asan job 查了 `UBSAN_OPTIONS`）、
+  `PP_SAN_TARGETS` 的 `sed 's#\cpp$##'` 转义 bug 致目标名保留 `.cpp`（`ninja: error: unknown target 'pp_test_formkit.cpp'`）、
+  regression-windows 缺 Qt bin `PATH`（`0xC0000135`）；② **基线陈旧（口径动作，待 Lead 决策）**：Linux `golden.log`
+  diff 可全部归因（版本行 / M10 加性日志 / M9 JXL 有意变化），需 nightly `update_baseline=true` 重播种后复核入库；
+  ③ **产品 UB（未修，如实）**：ubsan job 金样 **19/20** 红 = 金样恒带 `--score` ⇒ M8-C 评分路径
+  （`src/core/metric/**` + `third_party/ssimulacra2/**` 嫌疑面）在 `-fsanitize=undefined` + `halt_on_error=1` 下命中
+  `runtime error:`（起于 M8 批 nightly #49）——**产品修复不在 CI 写作用域，需 Lead 指派；修复前 nightly 不可能全绿**。
+- **`main-full` windows/tidy 20min 硬顶根因**：vcpkg 二进制缓存暖度不足 ⇒ configure 从源码重编（不是代码量问题）；
+  warm-cache 已播种、读数待回填；`timeout-minutes: 20` 红线**未动**（预算调整须 Lead 决策）。
+- **HEIF 矩阵**：M10 全量读数 1102 例 = pass 732 / fail 0 / expected-fail 370 / unexpected 0（候选
+  `F3A0448A…`）；M12 发行树复跑读数见报告（待填）。iPhone 真机接受度仍未验证；AVIF 未纳入矩阵。
+- **自适应未覆盖**：`output best` 校验期显式拒绝（需候选集保留/磁盘成本评估）；`tech` 切换默认禁止。
+- **JPEG default 自适应的成本**：每个 JPEG 输出最多约 11–20 轮编码+评分（每轮成本见
+  [docs/adaptive-policy.md](docs/adaptive-policy.md) §15）；不需要可在格式卡关掉开关或把 `adaptive.enabled`
+  改成 false。
+- **便携模式升级提示**：新发行包解压覆盖同名文件会覆盖你改过的 `presets/formats/**`——升级前备份 `presets/`。
+- **M11 未决项**：S-6…S-12 按 P3 登记未修（[docs/state-machine-analysis.md](docs/state-machine-analysis.md)）；
+  H.265 still 官方命名遗留（17/18 档）登记后续小任务；64×64 夹具 SSIMULACRA2 退化属度量限制。
+
+### 发行
+
+- **0.4.0 正式版**：tag **`v0.4.0`**（annotated；指向 commit 与发布时间：**待填，由 Lead 回填**）；
+  GitHub Release（prerelease=False / Latest）；4 资产（`win64.zip` / `x86_64.AppImage` / `deps.txt` /
+  `SHA256SUMS.txt`）的大小与 sha256：**待填**；`release.yml` run id 与 7 job 全绿结论：**待填**。
+  逐项核对见 [docs/0.4.0-report.md](docs/0.4.0-report.md) §2.5。
+- 上一预发布 **0.4.0.alpha1**（M10）已发行：tag `v0.4.0.alpha1`（annotated `530896c`），Release published
+  2026-11-01T04:07:55Z，4 资产（win64.zip 34,173,446 B / `0876df59…9217a`；AppImage 52,595,192 B /
+  `26b786ea…cc983`）；`release.yml` run 41271187323 全绿。
+
 ## [0.4.0.alpha1] — 2026-11-01
 
 **预发布（alpha）**：M10 = **性能与运行页**（评分池 / 预算拆分 / 同文件多格式并行 / 逐输出事件）+

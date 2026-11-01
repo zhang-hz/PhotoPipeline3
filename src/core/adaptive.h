@@ -2,8 +2,11 @@
 // PhotoPipeline — 自适应参数调整核心（M10 / W3-T3；契约 docs/v0.4.0-design.md §9「C24」）
 //
 // 职责（core 纯函数，**零 Qt**；执行器在 W3-T4 的 `core/adaptive_exec.*`）：
-//   1. 行式 DSL v1 的解析（parse）与规范化渲染（render）—— 设计 §9.2 的 EBNF；
+//   1. 行式 DSL v1.1 的解析（parse）与规范化渲染（render）—— 设计 §9.2 的 EBNF；
 //      缩进无语义、空行/注释自由、错误带**行号+列号**；`parse ∘ render` 幂等。
+//      v1.1（0.4.0 迭代）加性扩展：search 支持显式方向 `down`/`up` 与步长断点
+//      `breakpoint <值> step <步长>`（语义见 docs/adaptive-policy.md §6.1；断点 = 开区间上界
+//      分段：v > 断点才用该段步长；跨断点不得跳过断点值）。旧语法（无方向/无断点）逐字兼容。
 //   2. AST（`AdaptivePolicy`/`AdaptiveStage`/`AdaptiveAction`）与默认值（target 90 /
 //      max_rounds 8 / output last / on_metric_unavailable stop / plateau 0）。
 //   3. `validate_adaptive_policy`：允许/禁止目标键注册表（§9.4）、target(0,100]/
@@ -44,6 +47,20 @@ enum class AdaptiveOutput : unsigned char { Last, Best };
 enum class AdaptiveMetricUnavailable : unsigned char { Stop, Fail };
 enum class AdaptiveMethod : unsigned char { Linear, Bisect, Exp, Greedy };
 enum class AdaptiveActionKind : unsigned char { Search, Set };
+// 搜索方向（DSL v1.1 加性）：Auto = 旧语法（方向由 from→to 的相对大小在运行期推断）；
+// Down/Up = 显式方向（`from current down to 0.1` / `... up to 90`）：只降/只升，
+// 起点已在端点错侧 ⇒ 该动作 0 轮（不是错误，见 docs/adaptive-policy.md §6.1）。
+enum class AdaptiveDirection : unsigned char { Auto, Down, Up };
+
+// 步长断点（DSL v1.1）：按**数值升序**排列的分段上界 + 该段步长。语义（开区间上界）：
+//   * step(v) = 基础 step 若 v <= 第一个断点；否则 = 「v 严格大于的最大断点」的 step；
+//   * 降序跨断点不得跳过断点值：若下一步会越过尚未尝试的断点 b（next < b < v），先钳到 b；
+//     升序对称；端点 to 必被尝试（钳位）。
+// 仅 method linear 支持（其余 method 无「步长排程」语义，validate 显式拒绝）。
+struct AdaptiveBreakpoint {
+    double value = 0.0;
+    double step = 0.0;
+};
 
 // search 的起点：`current`（运行配置当前值）或显式数值。
 struct AdaptiveValueRef {
@@ -63,6 +80,9 @@ struct AdaptiveAction {
     // —— Set（kind == Set）——
     ParamValue value;      // 解析出的字面量（bool/int64/double/string）；执行前按目录类型归一
     int line = 0, col = 0; // 1-based 源码定位；JSON AST 导入为 0
+    // —— DSL v1.1 加性（search）——
+    AdaptiveDirection direction = AdaptiveDirection::Auto; // Auto = 旧语法（运行期推断）
+    std::vector<AdaptiveBreakpoint> breakpoints;           // 升序；空 = 无断点（旧行为）
 };
 
 struct AdaptiveStage {
@@ -149,7 +169,23 @@ const AdaptiveDefaultPolicy *default_adaptive_policy_for(std::string_view format
 std::string_view adaptive_method_name(AdaptiveMethod m);
 std::string_view adaptive_output_name(AdaptiveOutput o);
 std::string_view adaptive_metric_unavailable_name(AdaptiveMetricUnavailable m);
-// 错误码全表（稳定顺序；测试对表断言，UI 可做错误分类）。
+// 方向词表：Auto 渲染为 ""（旧语法不写方向词）；Down = "down"；Up = "up"。
+std::string_view adaptive_direction_name(AdaptiveDirection d);
+// 错误码全表（稳定顺序；测试对表断言，UI 可做错误分类）。当前 45 条（42 + 断点 3 条）。
 const std::vector<std::string_view> &adaptive_error_codes();
+
+// —— 持久化辅助：adaptive.policy 的「JSON 字符串数组，一行一条」（需求 3/6）——
+// 内部 AST/预设数据仍用**单个 DSL 文本**（std::string，\n 分隔）承载；只有 JSON 边界做数组
+// ⇄ 文本转换（零 \n 转义的落盘形态，人类可读、可 git diff）：
+//   * `adaptive_policy_to_lines`：文本 → 行数组。按 '\n' 拆行、剥行尾 '\r'、**丢弃末尾空行**
+//     （策略末尾空行无语义）；中间空行/注释行原样保留。
+//   * `adaptive_policy_from_lines`：行数组 → 文本。'\n' 连接并补末尾换行（规范文本形态，
+//     `to_lines(from_lines(L)) == L`）。任一行内嵌 '\n' / '\r' ⇒ 失败 + 中文原因
+//     （保住「数组下标 + 1 = DSL 行号」的错误定位口径）。
+std::vector<std::string> adaptive_policy_to_lines(std::string_view text);
+bool adaptive_policy_from_lines(const std::vector<std::string> &lines, std::string &out,
+                                std::string *err_zh);
+// 旧字符串形态 → 规范文本：按 '\n' / '\r\n' 拆行后走 `adaptive_policy_from_lines`。
+std::string adaptive_policy_from_legacy_string(std::string_view text);
 
 } // namespace pp

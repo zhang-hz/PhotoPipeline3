@@ -39,22 +39,23 @@ caption 单轨 46×32；壳层顶栏 44 + 状态栏 30；**栏宽固定轴 330 /
 逐条探针、偏差与未决项见 [docs/m5-report.md](docs/m5-report.md)，开发期裁定见
 [docs/m5-adjudications.md](docs/m5-adjudications.md)。
 
-**0.4.0.alpha1（当前版本，预发布）= M10：性能与运行页 + 参数面 + 格式预设与自适应**：① **性能**——
-评分预算拆分（大图 + 评分不再被预算打穿：48 MP PNG + `--score` 由 `EXIT=1` 变 `EXIT=0`，
-`need_bytes` 8.832 GB → **1.152 GB**）、评分色彩归一快速内核（**8.49 s → 0.42 s，20×**）、
-SSIMULACRA 2 流式化（23 MP 峰值额外内存 **7.6 B/px**，约旧实现的 5%）、双重 probe 消除（22.8 MP HEIC
-首个 `Probing → Decoding` **2,902.9 → 1,447.8 ms**）、**独立评分池 + 异步评分**、**同文件多格式并行**
-（1 文件 4 格式 22.8 MP **1.31×**，四格式产物 SHA256 并行==串行）、**逐输出事件**（`OutputDone`）。
-② **参数面**——HEIF **grid/tile 配置行**（0 关 / 1 自动 / 2 总是 + tile 宽高）、**still 档位 16–21**
-（编码后 hvcC 回读断言；16 Main10Still 实测不可用 ⇒ 置灰）、**tune 7 项**（AVIF 另扩
-`ssimulacra2` / `vmaf_saliency_map`）、RC 数值行上移核心区 + 8/10/12-bit 动态域、**JXL 治理 43→31 键**
-（删 12 个结构性 no-op、`epf` 默认跟随库、三态语义）。③ **格式预设与自适应（新）**——每个格式卡可
-保存 / 另存 / 删除 / 导入 / 导出为预设文件（内置 5 条运行时 seed）；**自适应策略默认关闭**（目标质量 /
-最多轮数 / linear·bisect·exp·greedy），GUI 只有只读摘要 + 启用开关。**性能目标部分未达**（P4-1
-metric 2,178.6 / encode 2,032.1 ms = 1.072×、10-bit HEIC probe 1,635–1,670 ms、HEIC 深 probe 首事件
-1.44–1.67 s，见 CHANGELOG「已知」）。**发行准备中**（tag `v0.4.0.alpha1` 与 CI/打包读数待填）；
-逐条变更见 [CHANGELOG.md](CHANGELOG.md) `[0.4.0.alpha1]`，验收证据见
-[docs/0.4.0.alpha1-report.md](docs/0.4.0.alpha1-report.md)。
+**0.4.0（当前版本，正式版）= M10 + M11 迭代修复 + M12 用户 5 条反馈**：① **M10（性能/参数面/预设与自适应）**——
+评分预算拆分（48 MP PNG + `--score` 由 `EXIT=1` 变 `EXIT=0`，`need_bytes` 8.832 GB → **1.152 GB**）、
+评分色彩归一快速内核（**8.49 s → 0.42 s，20×**）、SSIMULACRA 2 流式化（23 MP 峰值额外内存 **7.6 B/px**）、
+双重 probe 消除（22.8 MP HEIC 首个 `Probing → Decoding` **2,902.9 → 1,447.8 ms**）、**独立评分池 + 异步评分**、
+**同文件多格式并行**（1 文件 4 格式 22.8 MP **1.31×**，四格式产物 SHA256 并行==串行）、**逐输出事件**（`OutputDone`）；
+HEIF **grid/tile 配置行** + **still 档位 16–21**、**tune 7 项/RC 面**、**JXL 治理 43→31 键**；格式预设与自适应策略
+（新文件类型 + 执行器）。② **M11 迭代修复**——HEIF tile 尺寸改由**目标 Level 的 MaxLumaPs + still 单图应用格式
+Level 上界（L5.1）**推导（删除 1024×576 固定基准）、自适应 DSL v1.1（`down`/`up` 显式方向 + `breakpoint` 步长断点、
+错误码 42→45）、自适应迭代日志（`adaptive plan/stage/round/summary`）、运行状态机修复（S-1…S-5）、
+格式预设行 UI 收口。③ **M12 用户 5 条反馈**——**出厂预设外部化为仓库 JSON 数据文件**（`presets/formats/**`，11 条，
+人类可直接改/复制；随发行包分发、首启**字节复制** seed 到数据目录）；**每格式 `default`**（HEIF/JXL 历史内建删除）；
+**删除「未选择」态**（格式卡自动载入 default；default 不可删但可「保存」覆盖）；HEIF「Apple自适应」**CRF=20**；
+**JPEG `default` 开启自适应视觉距离策略**（3.0 起 1–3 段步长 1、1 以下步长 0.1 精扫到 0.1，取达 90 分的最小体积），
+JPEG distance UI 域同步放宽为 **0.1–3.0**（R-294）。**性能目标部分未达（如实）**：P4-1 metric 2,178.6 / encode
+2,032.1 ms = **1.072×**、10-bit HEIC probe 1,635–1,670 ms、HEIC 深 probe 首事件 1.44–1.67 s（见 CHANGELOG「已知」）。
+**发行状态：0.4.0 正式版**（`--version` = `PhotoPipeline 0.4.0`；tag/Release 与资产指纹由 Lead 回填，见
+[docs/0.4.0-report.md](docs/0.4.0-report.md)）；逐条变更见 [CHANGELOG.md](CHANGELOG.md) `[0.4.0]`。
 
 **0.3.6.alpha2（历史预发布）= M9：JXL 有损修复 + HEIF/iPhone 兼容配置矩阵**：① **JXL 有损
 VarDCT 修复**——有损 VarDCT 不再走 libjxl 非 XYB 缺陷路径（`uses_original_profile` 恒 false、XYB 编码；
@@ -140,7 +141,7 @@ R2 轮方案见 [docs/m7r2-plan.md](docs/m7r2-plan.md)。**色彩能力四选项
 渲染意图 / 线性光重采样）已入引擎并在界面提供开关**——**输出页全局卡**四行（默认全关 =
 行为不变；0.3.x 默认路径另有两处已归因字节变化，见 CHANGELOG「变更」节）；8bit 抖动仅作用
 于 JPEG/WebP/JXL 及 OIIO 系四家的 8bit 量化段（HEIF/AVIF 的 8bit 路径不接）。**发行状态：0.3.3 已发布**（2026-10-13；其 Windows zip 有启动 P0，已由 0.3.4 热修，
-请使用 0.3.4 或更新版本；当前最新正式版 = 0.3.5 正式版，最新预发布 = 0.4.0.alpha1（本树，发行准备中））。
+请使用 0.3.4 或更新版本；当前最新正式版 = 0.4.0 正式版（本树））。
 
 **0.3.2 = GPS 地图升级版（M6）**：把「内嵌地图选点」从能用升级到**地图 App 水平**——
 R1 搜索搜得出（改用可达的**高德 Web 服务**事实表：`place/text` + 周边偏置 **`around` 20 条**按距离升序 +
@@ -512,7 +513,7 @@ python tools/env.py run -- cmake --build --preset release
   d0.3 10.06MB/91.67 → d0.2 12.66MB/92.38（体积与分数双单调）；P3 XYB 回读 P3 参考 idiff
   PSNR 41.03 dB（仅压缩误差）。
 
-### M10 性能/运行页 + 参数面 + 格式预设与自适应（0.4.0.alpha1）
+### M10 性能/运行页 + 参数面 + 格式预设与自适应（0.4.0）
 
 **性能与运行页**
 
@@ -548,17 +549,45 @@ python tools/env.py run -- cmake --build --preset release
   JXL 有损产物 23/23 变化（回归已归因，未重播种）。
 - 参数目录 **116 → 117 行**（HEIF +3 grid/tile、JXL −2）。
 
-**格式预设与自适应（新功能；自适应默认关闭）**
+**格式预设与自适应（0.4.0 最终形态；出厂预设 = 仓库 JSON）**
 
-- **格式预设**：每个格式页签顶部「格式预设」行（下拉 + 保存 / 另存… / 删除 / 导入… / 导出…），
-  存 `<data_dir>/presets/formats/<format>/<name>.json`；保存→载入→保存字节稳定；内置 5 条
-  （HEIF/AVIF/JXL/WebP/JPEG）由**运行时幂等 seed** 落地为 `_builtin-<fmt>.json`（只读、可另存）；
-  存储/字段/损坏与版本规则见 [docs/format-presets.md](docs/format-presets.md)。
-- **自适应策略**：目标质量 + 最多轮数 + 阶段（`linear` / `bisect` / `exp` / `greedy`）；每轮编码到
-  同目录候选（**不写元数据**）→ 评分 → 选定提交 → 走既有元数据/时间路径；终止 = 达标 / plateau /
-  轮数耗尽 / 阶段耗尽；GUI 只有**只读摘要 + 启用开关**（无文本编辑器）；出厂 5 条策略，DSL 语法、
-  允许/禁止键、42 条错误码与成本模型见 [docs/adaptive-policy.md](docs/adaptive-policy.md)。
-- **默认关闭**：`adaptive.enabled=false` 时执行路径与旧版一致（回归产物层非 JXL 段 **0 diff**）。
+- **格式预设**：每个格式页签顶部「格式预设」行（下拉 + 保存 / 另存 / 删除 / 导入 / 导出），
+  存 `<data_dir>/presets/formats/<format>/<name>.json`；保存→载入→保存字节稳定。**0.4.0 起出厂预设 =
+  仓库 JSON 数据文件 `presets/formats/**`（11 条，随发行包分发、首启字节复制 seed）**，人类可直接改/复制；
+  **每格式一条 `default`**（HEIF 另有「Apple自适应」、JXL 另有「无损归档」「自适应压缩」）；下拉**无「未选择」**，
+  格式卡自动载入 `default`；`default` 不可删但可「保存」覆盖（= 直接改默认值），可「另存」复制。
+  存储/字段/seed/迁移规则见 [docs/format-presets.md](docs/format-presets.md)。
+- **自适应策略**：目标质量 + 最多轮数 + 阶段（`linear` / `bisect` / `exp` / `greedy`），DSL v1.1 显式方向
+  与步长断点；每轮编码到同目录候选（**不写元数据**）→ 评分 → 选定提交 → 走既有元数据/时间路径；终止 = 达标 /
+  plateau / 轮数耗尽 / 阶段耗尽；GUI 只有**只读摘要 + 启用开关**（无文本编辑器）。**GUI 默认按 default
+  策略启用**（JPEG/HEIF/AVIF/WebP/JXL 的 `default` 自带策略；PNG/TIFF/BMP 无策略）；出厂策略全文见
+  [docs/adaptive-policy.md](docs/adaptive-policy.md) §10。
+- **引擎/CLI 默认仍关闭**：`--dev`/金样/回归不带预设 ⇒ 无策略、产物与 0.3.x 逐字节相同（C25）；
+  GUI 里也可随时关掉「启用自适应」。
+
+### M11 / M12 迭代修复批（0.4.0 正式版）
+
+- **HEIF tile 尺寸按 Level 与 still 规格推导（C17'）**：删除 Apple 1024×576 固定基准，改由「目标 Level 的
+  MaxLumaPs/单边上限 + still 单图应用格式 Level 上界（3GPP TS 26.140/26.141 = L5.1）」推导；
+  T1(3902×5854)+L3.1 → **768×1280**（=983,040 整容量）6×5、L 自动+总是 grid → 2176×4096（=M51）2×2；
+  新增 `planning_level_idc`/`still_level_capped`/warning 与逐 tile hvcC Level 回读；默认单图产物零变化。
+- **自适应 DSL v1.1 + 迭代日志**：`down`/`up` 显式方向、`breakpoint <v> step <s>` 步长断点、动作级
+  `max_rounds`；错误码 42→45；pipeline 四类 info 行 `adaptive plan/stage/round/summary`（含中文决策原因与
+  逐轮参数/分数序列）。
+- **运行状态机修复（S-1…S-5）**：迟到过程事件不覆写终态、取消 no-op 不再显示「已取消」、全局预设载入清
+  「格式预设来源」、「未选择/删除预设」相关残留会话态（M12 后改为 default 自愈）——详见
+  [docs/state-machine-analysis.md](docs/state-machine-analysis.md)。
+- **工厂预设外部化 + `default` 语义（M12）**：11 条 JSON（8 格式 `default` + HEIF「Apple自适应」+
+  JXL「无损归档」「自适应压缩」）随包分发、首启字节复制 seed、旧 `_builtin-*.json` 迁移删除；
+  `default` 不可删但可保存覆盖；无「未选择」态（详见 [docs/format-presets.md](docs/format-presets.md) §7、
+  [docs/m12-adjudications.md](docs/m12-adjudications.md)）。
+- **JPEG 出厂 `default` 开启自适应距离策略**：`quality_mode=distance`、`distance=3.0`，策略
+  `search distance from current down to 0.1 step 0.1 breakpoint 1 step 1 max_rounds 20`（1–3 段步长 1、
+  1 以下步长 0.1）；JPEG distance UI 域 0.3–3.0 → **0.1–3.0**（R-294 修订）。
+- **HEIF「Apple自适应」CRF=20**：`x265:crf=20` + Main10 档位（`reserved.heif_profile=2`）+ L3.1；
+  `--ui-smoke` 探针 `heif-apple-crf=20` 钉住「文件 → 控件」读数。
+- **CI 流程优化**：脚本判据/缓存/预算修复，目标 main-full + nightly + release 全绿（逐 job 读数见
+  [docs/0.4.0-report.md](docs/0.4.0-report.md) §2.5）。
 
 ### 无头 UI 冒烟（`--ui-smoke`，需 `PP_BUILD_DEV=ON`）
 
@@ -662,7 +691,7 @@ chmod +x PhotoPipeline-<版本>-x86_64.AppImage
 
 ## 发行版（Windows）
 
-**M3 起提供 Windows x64 免安装产物**（0.2.0 为首个 Windows 版本，当前版本 0.4.0.alpha1）；与 Linux 的 AppImage 同一引擎
+**M3 起提供 Windows x64 免安装产物**（0.2.0 为首个 Windows 版本，当前版本 0.4.0）；与 Linux 的 AppImage 同一引擎
 与界面，差异只在打包形态（zip vs AppImage）与平台运行时（MSVC 运行时 / Qt msvc2022_64）。
 
 ### 下载与运行
@@ -702,7 +731,7 @@ chmod +x PhotoPipeline-<版本>-x86_64.AppImage
 ### 命令行
 
 ```powershell
-.\photopipeline.exe --version      # → PhotoPipeline 0.4.0.alpha1（单行 + 退出码 0；非 dev 门控，发布构建亦可用）
+.\photopipeline.exe --version      # → PhotoPipeline 0.4.0（单行 + 退出码 0；非 dev 门控，发布构建亦可用）
 .\photopipeline.exe                # 图形界面
 .\photopipeline.exe --ui-smoke     # 无头 UI 走查（offscreen，产出 12 张截图；仅 PP_BUILD_DEV=ON 的构建）
 .\photopipeline.exe --dev ...      # 开发 harness：全语料矩阵 / 回归基线入口（同上，仅 dev 构建）

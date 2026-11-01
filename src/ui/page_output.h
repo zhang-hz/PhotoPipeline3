@@ -131,8 +131,10 @@ public:
     // 分工（设计 §8.5「与全局预设无隐式叠加」）：卡值真源仍是 spec/form->values()，预设只是
     // "写入器"；本组方法只做「列表喂入 / 会话态高亮 / 落卡 / 只读自适应面 / 注释位」。
     //   * set_format_preset_list：列表项 = (绝对路径, 显示名)；显示名已含「（损坏）」标记
-    //     （由 MainWindow 组装）。首项恒为「未选择」（itemData 为空）。同值幂等，保留当前选中。
-    //   * set_current_format_preset：程序化高亮（不发信号、不载入）；空路径 = 回到「未选择」。
+    //     （由 MainWindow 组装）。**M12 需求 4：不再有「未选择」占位项** —— 列表由文件喂入，
+    //     会话路径命中则保留选中，否则高亮 `default`（文件名 stem 判定；无则首项），
+    //     列表为空才无选中项（错误态）。会话路径为空 = 待 MainWindow 自动载入 default。
+    //   * set_current_format_preset：程序化高亮（不发信号、不载入）；空路径 = 高亮 default。
     //   * apply_format_preset：把已 normalize/validate 的输出快照落到**该格式卡**（后端/技术/
     //     位深/核心+高级参数/保留键 __heif_profile），并重算卡头「已改 N」（无信号）。
     //   * set_format_preset_adaptive：只读自适应面（C24：GUI **不提供文本编辑**）。策略非空 →
@@ -141,6 +143,8 @@ public:
     //   * set_format_preset_note：注释位（「来自格式预设：X」/「已载入（已补齐 N 个默认项）」）；
     //     空串 = 清空并隐藏注释位（不占行高；同一行控件始终在位）。
     //   * format_preset_adaptive_enabled / format_preset_adaptive_policy：探针/采集读回。
+    //   * set_format_preset_detached / format_preset_detached（M12）：全局预设接管态 —— 卡值来自
+    //     全局预设时 save 禁用、抑制 default 自动载入；显式载入任一预设成功后解除（MainWindow）。
     void set_format_preset_list(const QString &format_id,
                                 const std::vector<std::pair<QString, QString>> &presets);
     void set_current_format_preset(const QString &format_id, const QString &path);
@@ -150,6 +154,8 @@ public:
     void set_format_preset_note(const QString &format_id, const QString &note);
     bool format_preset_adaptive_enabled(const QString &format_id) const;
     QString format_preset_adaptive_policy(const QString &format_id) const;
+    void set_format_preset_detached(const QString &format_id, bool detached);
+    bool format_preset_detached(const QString &format_id) const;
 };
 
 } // namespace pp::ui

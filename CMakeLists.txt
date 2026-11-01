@@ -21,9 +21,11 @@ project(PhotoPipeline VERSION 0.4.0 LANGUAGES C CXX)
 # + 本标签）。CMake 的 project(VERSION) 只收数字段，"0.4.0.alpha1" 这类标签只能拼在字符串侧
 # （PP_VERSION_STRING）—— 定义点仍在此处，别处（CHANGELOG/README/AGENTS/打包脚本）一律引用。
 # 数字段（MAJOR.MINOR.PATCH）继续给 manifest / 语义比较用。
-# 0.4.0.alpha1 预发布轮：标签 ".alpha1" ⇒ 版本串 = "0.4.0.alpha1"（M10：评分池/预算/多格式并行 +
-# HEIF grid/profile/tune/RC + JXL 治理 + 格式预设与自适应策略）。
-set(PP_VERSION_LABEL ".alpha1")
+# 0.4.0 正式版（M12）：标签 = 空串 ⇒ 版本串 = "0.4.0"（`--version` = `PhotoPipeline 0.4.0`）。
+# 内容 = M10（0.4.0.alpha1）+ M11 迭代修复批 + M12 用户 5 条反馈（工厂预设外部化/每格式 default/
+# 无「未选择」/HEIF Apple CRF=20/JPEG default 自适应距离策略 + CI 优化）。
+# 此前预发布轮：`.alpha1` ⇒ "0.4.0.alpha1"。
+set(PP_VERSION_LABEL "")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -220,6 +222,21 @@ file(GLOB_RECURSE PP_CORE_SOURCES CONFIGURE_DEPENDS
 # 避免官方源码的 lib/jxl 内部头在 compat 就绪前直接进主构建。
 file(GLOB_RECURSE PP_SSIM2_SOURCES CONFIGURE_DEPENDS
      ${CMAKE_SOURCE_DIR}/third_party/ssimulacra2/compat/*.cc)
+# M12-D25（CI nightly asan/ubsan/tsan 实测；ODR 冲突根治）：compat 层在 `namespace jxl` 里
+# 提供了与 libjxl v0.12 同名但**布局不同**的最小替身（ImageF/Image3F/ImageBundle/
+# ColorEncoding/Status…）。Linux vcpkg 默认静态链接 libjxl ⇒ 真实 libjxl 的内联/COMDAT 符号
+# 与 compat 副本在同一可执行里相遇，链接器按 mangled name 只能选一份定义 ⇒ libjxl 代码
+# 调到 compat 的 IsGray()/ImageF::Free()，按错误布局读字段（UBSan: load of value 239 not
+# valid for 'bool'；ASan: CompatFree SEGV；TSan: 同路径 SEGV）。Windows 因 libjxl 走 DLL
+# 而"看起来正常"，但 ODR 违规本身是发布风险（链接顺序/工具链变化即翻车）。
+# 修法：把这批 TU 的 `jxl` 命名空间 token 私有化（编译期宏，仅改标识符，不改 vendored
+# 源码字节、不改 include 路径）；compat+metric 两 TU 必须同一宏 ⇒ 内部实现自洽，与真实
+# libjxl 零共享符号。`jpegxl::tools`（compat 自有）不受影响；`JXL_*` 宏/字符串/includes 不受影响。
+set(PP_SSIM2_PRIVATE_TUS ${PP_SSIM2_SOURCES}
+    ${CMAKE_SOURCE_DIR}/src/core/metric/metric.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/metric/metric_oracle.cpp)
+set_source_files_properties(${PP_SSIM2_PRIVATE_TUS}
+    PROPERTIES COMPILE_DEFINITIONS "jxl=pp_ssim2_jxl")
 list(APPEND PP_CORE_SOURCES ${PP_SSIM2_SOURCES})
 add_library(pp_core STATIC ${PP_CORE_SOURCES})
 # M2-T11 §2.2：生成的 core/version.h（构建目录）随 src 一并 PUBLIC 传播
@@ -250,10 +267,16 @@ target_link_libraries(pp_core_registered INTERFACE $<LINK_LIBRARY:WHOLE_ARCHIVE,
 
 # 3) 单测：glob tests/unit/test_*.cpp，每个文件一个 target + ctest 条目（M1 §2.3）
 #    取代 M0 的 add_executable(pp_unit …) 与 add_test(NAME unit …)（test_smoke.cpp 自动收编）
+# M12：工厂格式预设单一真源目录（仓库 presets/formats/**）→ 单测编译定义（单测直接校验工厂
+# JSON 数据文件；正斜杠形式跨平台可用，file(TO_CMAKE_PATH) 只为显式归一）。
+file(TO_CMAKE_PATH "${CMAKE_SOURCE_DIR}/presets/formats" _PP_FACTORY_PRESETS_DIR)
 file(GLOB PP_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/tests/unit/test_*.cpp)
 foreach(src ${PP_TEST_SOURCES})
   get_filename_component(tname ${src} NAME_WE)          # test_fsops → ctest 名 test_fsops
   add_executable(pp_${tname} ${src})
+  # M12：工厂预设目录（仅 test_format_presets 消费；统一注入避免逐 target 特判）。
+  target_compile_definitions(pp_${tname} PRIVATE
+      "PP_FACTORY_PRESETS_DIR=\"${_PP_FACTORY_PRESETS_DIR}\"")
   if(WIN32)
     # M3 v1.9（D2 单一 UTF-8 世界）：测试二进制同样嵌入应用清单。否则进程 ACP 跟随系统
     # 区域（本机 GBK），tests/golden 的 📸 等字符经宽→窄转换失败 → 未捕获异常 → abort
@@ -295,6 +318,15 @@ endif()
 # 静态库自注册：唯一链接形态（M2-T13）= pp_core_registered
 target_link_libraries(photopipeline PRIVATE pp_core_registered
     Qt6::Widgets Qt6::Network)
+# M12：工厂格式预设（仓库根 `presets/formats/**`，人类可直接阅读/编辑/复制的单一真源）复制到
+# exe 旁 —— 运行时 factory 目录 = `<exe 目录>/presets/formats`（`platform::executable_dir()`）；
+# 便携模式（exe 目录可写）下 data_dir == exe 目录 ⇒ 工厂目录 == 数据目录（seed 只做旧文件清理）；
+# 只读安装（AppImage）下从 exe 旁读工厂文件、seed 到 XDG。release / release-dev 两棵树都生效
+# （本命令在 PP_BUILD_DEV 分支之外）。重复构建幂等（copy_directory 覆盖同名文件）。
+add_custom_command(TARGET photopipeline POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/presets" "$<TARGET_FILE_DIR:photopipeline>/presets"
+    COMMENT "复制工厂格式预设 → $<TARGET_FILE_DIR:photopipeline>/presets")
 # dev harness 接线（M1-T8，§3.15 裁定）：option 已存在但此前无 target 消费 →
 # 发布构建（不带 -DPP_BUILD_DEV=ON）不含 `--dev` 代码路径；鼓点/矩阵/规模用 -DPP_BUILD_DEV=ON。
 if(PP_BUILD_DEV)

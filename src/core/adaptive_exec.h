@@ -79,8 +79,27 @@ struct AdaptiveRoundRecord {
     std::uint64_t bytes = 0;
     double encode_ms = 0.0;
     double metric_ms = 0.0;
-    std::string decision; // met / improve / no-improve / unscored（评分不可用）
+    std::string decision; // met / improve / no-improve / unscored / encode-failed
     std::string note;     // 评分不可用的中文短原因 / 编码失败原因
+    // —— C 段加性（需求 1 迭代日志；pipeline 只读）——
+    // 本轮生效参数文本：search = "x265:crf=18" / set stage = "chroma=444,profile=Main444_10Still"；
+    // 基线 init 轮（策略未产生候选时补编的一轮）= 相对 base 的差量文本（无改动则空串）。
+    std::string effective_params;
+    // 本轮候选临时文件路径文本（candidate_path hook 的返回值；空 = 无候选文件）。
+    std::string candidate_path;
+};
+
+// ---------------------------------------------------------------------------
+// 计划摘要（C 段加性）：run_policy 入口的 on_plan 载荷（日志/侧车「plan」行）。
+// ---------------------------------------------------------------------------
+struct AdaptivePlanInfo {
+    int policy_version = 0;             // 策略版本（1）
+    double target = 0.0;                // 目标分
+    int max_rounds = 0;                 // 全局轮数上界
+    int stage_count = 0;                // stage 数
+    std::string output;                 // "last"
+    std::string policy_sha;             // 规范化策略文本 SHA-256（64 hex；日志取前 16）
+    std::vector<std::string> stage_ids; // 按执行顺序的 stage id
 };
 
 // ---------------------------------------------------------------------------
@@ -134,6 +153,12 @@ struct AdaptiveRunHooks {
     std::function<std::filesystem::path(int round)> candidate_path;
     std::function<bool(const std::filesystem::path &candy, std::string *err)> commit;
     std::function<void(const std::filesystem::path &candy)> discard;
+    // —— C 段加性（需求 1 迭代日志；默认空 = 不回调；异常被执行器吞掉、不影响决策）——
+    // 计划摘要：run_policy 入口、任何轮次/阶段之前**恰好一次**（非法策略也会先收到）。
+    std::function<void(const AdaptivePlanInfo &)> on_plan;
+    // stage 开始：每个 stage 真正开始处理前**恰好一次**（含全 set stage；0 候选的 search
+    // stage 同样回调）；round_before = 该 stage 开始前已执行的轮数（1-based 下一轮 = +1）。
+    std::function<void(const std::string &stage_id, int round_before)> on_stage_start;
 };
 
 // 终止原因词表（结果 reason；日志/侧车/单测共用）。
@@ -184,6 +209,11 @@ struct AdaptiveRunResult {
     double overhead_ms = 0.0;
     ParamSet final_params; // 选定轮参数（日志/诊断；侧车不落）
     std::vector<AdaptiveRoundRecord> records;
+    // —— C 段加性（需求 1 迭代日志）——
+    std::string
+        selected_params_text; // 选定轮有效参数文本（= 选定 record.effective_params；无选定 = ""）
+    std::string
+        reason_detail; // 终止原因中文一句话（success/fail/cancel 都填；稳定英文码仍在 reason）
 
     bool met() const { return ok && reason == kAdaptiveReasonMet; }
 };

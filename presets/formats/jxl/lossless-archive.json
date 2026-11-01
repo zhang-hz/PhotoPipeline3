@@ -1,0 +1,13 @@
+{
+    "backend": "libjxl",
+    "bitdepth": 16,
+    "format": "jxl",
+    "kind": "format-preset",
+    "name": "无损归档",
+    "params": {
+        "effort": 7,
+        "lossless": true
+    },
+    "tech": "modular",
+    "version": 1
+}

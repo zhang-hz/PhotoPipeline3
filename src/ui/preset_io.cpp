@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "codecs/heif_profile.h" // kHeifProfileParamKey（输出级档位字段）
+#include "core/adaptive.h"       // 需求 3：adaptive.policy 的「数组 ⇄ 文本」转换单源
 #include "core/colormanager.h"   // pp::to_string/parse_color_target（color target 唯一映射源）
 #include "core/fsops.h"          // R-194/R-290：原子写单实现（write_atomic_file）
 #include "core/logger.h"         // M10-W3-T5：未知 adaptive 子字段的前向兼容日志
@@ -480,14 +481,19 @@ QJsonObject spec_to_json(const OutputFormatSpec &spec) {
         }
     }
     // —— M10 / W3-T5（A20）：自适应开关 + 策略的行式 DSL 原文（设计 §8.5 / §9）——
-    // 输出级 `"adaptive": {"enabled": bool, "policy": "..."}`；**空 adaptive（enabled=false 且
+    // 输出级 `"adaptive": {"enabled": bool, "policy": [...]}`；**空 adaptive（enabled=false 且
     // policy 空）不写字段** ⇒ 0.4.0 之前的全局预设文件与本次保存逐字节零变化（C25）。
     // 策略文本不进 `params`（ParamSet 只装参数值，不污染参数快照/逐键校验面）。
+    // 需求 3：policy 一律写成 JSON 字符串数组（一行一个元素、零 \n 转义）；读入兼容旧字符串。
     if (spec.adaptive_enabled || !spec.adaptive_policy.empty()) {
         QJsonObject adaptive;
         adaptive.insert(QStringLiteral("enabled"), spec.adaptive_enabled);
-        if (!spec.adaptive_policy.empty())
-            adaptive.insert(QStringLiteral("policy"), qs(spec.adaptive_policy));
+        if (!spec.adaptive_policy.empty()) {
+            QJsonArray lines;
+            for (const std::string &line : pp::adaptive_policy_to_lines(spec.adaptive_policy))
+                lines.append(qs(line));
+            adaptive.insert(QStringLiteral("policy"), lines);
+        }
         o.insert(QStringLiteral("adaptive"), adaptive);
     }
     return o;
@@ -541,11 +547,34 @@ bool spec_from_json(const QJsonValue &v, std::size_t index, OutputFormatSpec &ou
         out.adaptive_enabled = enabled_v.toBool(false);
         const QJsonValue policy_v = a.value(QStringLiteral("policy"));
         if (!policy_v.isUndefined() && !policy_v.isNull()) {
-            if (!policy_v.isString()) {
-                err = "outputs[" + std::to_string(index) + "]: adaptive.policy is not a string";
+            // 需求 3：数组形态 = 一行一个元素（新写法）；旧字符串形态仍兼容读（\n / \r\n 拆行）。
+            if (policy_v.isString()) {
+                out.adaptive_policy =
+                    pp::adaptive_policy_from_legacy_string(utf8(policy_v.toString()));
+            } else if (policy_v.isArray()) {
+                const QJsonArray lines = policy_v.toArray();
+                std::vector<std::string> texts;
+                texts.reserve(static_cast<std::size_t>(lines.size()));
+                for (int i = 0; i < lines.size(); ++i) {
+                    if (!lines.at(i).isString()) {
+                        err = "outputs[" + std::to_string(index) + "]: adaptive.policy[" +
+                              std::to_string(i) +
+                              "] is not a string (array form = one DSL line"
+                              " per element)";
+                        return false;
+                    }
+                    texts.push_back(utf8(lines.at(i).toString()));
+                }
+                std::string join_err;
+                if (!pp::adaptive_policy_from_lines(texts, out.adaptive_policy, &join_err)) {
+                    err = "outputs[" + std::to_string(index) + "]: " + join_err;
+                    return false;
+                }
+            } else {
+                err = "outputs[" + std::to_string(index) +
+                      "]: adaptive.policy is not a string or string array";
                 return false;
             }
-            out.adaptive_policy = utf8(policy_v.toString());
         }
         for (auto it = a.constBegin(); it != a.constEnd(); ++it) {
             if (it.key() != QLatin1String("enabled") && it.key() != QLatin1String("policy")) {

@@ -36,6 +36,9 @@ env 覆盖:
     photopipeline.exe 的导入表里不得出现清单外的 Qt6*.dll（链接面漂移即失败）。
   * 断言 D（许可）: licenses/*/copyright 计数 ≥30 且 licenses/PhotoPipeline/LICENSE 存在；
     **写盘前 + zip 内各校验一次**（阈值 30 与 AppImage 同口径）。
+  * 门禁 G（工厂格式预设，M12）: staging 顶层 `presets/formats/**`（= exe 旁 factory 目录，
+    运行时 seed 的单一真源）必须随包：8 格式各有 `default.json`、JSON 文件总数 = 11、
+    不得残留旧版 `_builtin-*.json`；**写盘前 + zip 内各校验一次**（与 AppImage 同口径）。
   * 烟测 E（启动）: staging 内 exe 跑 --version → 冻结行 `PhotoPipeline <ver>` + rc 0；
     给出 --smoke-exe 时追加 E-2（offscreen --ui-smoke，断言 `UI-SMOKE OK shots=12 pages=3`；
     冻结行 M4-W3-T14 起为 shots=12，来源 tests/ui_smoke.py 的 FROZEN_LINE）。
@@ -113,6 +116,13 @@ LINKED_QT_MODULES = ('Qt6Core.dll', 'Qt6Gui.dll', 'Qt6Widgets.dll', 'Qt6Network.
 #   OpenImageIO.dll（本机 dumpbin 实测）。故 packager 不得假设"staging 了 jxl.dll 就有
 #   jxl_threads.dll"，必须**显式**声明并在缺失时显式补拷（见 ensure_non_transitive_dlls）。
 NON_TRANSITIVE_DLLS = ('jxl_threads.dll',)
+
+# M12：工厂（出厂）格式预设 —— 单一真源 = 仓库 presets/formats/**（人类可直接阅读/编辑/复制），
+# 随包放在 exe 旁（运行时 factory 目录 = <exe 目录>/presets/formats）。结构判据见
+# check_factory_presets：8 格式 default.json 齐备 + 总数 11 + 无 _builtin- 残留。
+FACTORY_PRESETS_SRC = os.path.join(ROOT, 'presets')
+FACTORY_PRESET_FORMATS = ('avif', 'bmp', 'heif', 'jpeg', 'jxl', 'png', 'tiff', 'webp')
+FACTORY_PRESET_TOTAL = 11
 
 
 def note(message):
@@ -405,6 +415,75 @@ def check_licenses(staging, where):
     return count
 
 
+def factory_preset_tree(root):
+    """工厂格式预设树（M12）: {格式 id: [文件名...]}（只收非隐藏、普通 *.json）。
+
+    布局与运行时一致：`<root>/<format>/<stem>.json`（root = presets/formats）。
+    """
+    tree = {}
+    if not os.path.isdir(root):
+        return tree
+    for name in sorted(os.listdir(root)):
+        fmt_dir = os.path.join(root, name)
+        if not os.path.isdir(fmt_dir):
+            continue
+        files = sorted(entry for entry in os.listdir(fmt_dir)
+                       if entry.lower().endswith('.json') and not entry.startswith('.')
+                       and os.path.isfile(os.path.join(fmt_dir, entry)))
+        tree[name] = files
+    return tree
+
+
+def factory_preset_problems(tree):
+    """门禁 G 的纯判据（staging 文件系统 / zip 条目清单共用同一套期望）。"""
+    problems = []
+    for fmt in FACTORY_PRESET_FORMATS:
+        if 'default.json' not in tree.get(fmt, []):
+            problems.append('{}/default.json 缺失'.format(fmt))
+    total = sum(len(files) for files in tree.values())
+    if total != FACTORY_PRESET_TOTAL:
+        problems.append('JSON 文件总数 {} != {}'.format(total, FACTORY_PRESET_TOTAL))
+    legacy = sorted('{}/{}'.format(fmt, name) for fmt, files in tree.items() for name in files
+                    if name.startswith('_builtin-'))
+    if legacy:
+        problems.append('残留旧版 _builtin-* 文件: {}'.format(', '.join(legacy)))
+    unexpected = sorted(fmt for fmt in tree if fmt not in FACTORY_PRESET_FORMATS)
+    if unexpected:
+        problems.append('意外的格式目录: {}'.format(', '.join(unexpected)))
+    return problems, total
+
+
+def check_factory_presets(staging, where):
+    """门禁 G（写盘前）: staging 顶层 presets/formats/** 结构（8 格式 default + 总数 11）。"""
+    root = os.path.join(staging, 'presets', 'formats')
+    if not os.path.isdir(root):
+        die('工厂预设门禁失败（{}）: 缺目录 {}（仓库 presets/ 未随包 → 内置预设无法 seed）'
+            .format(where, os.path.join('presets', 'formats')))
+    problems, total = factory_preset_problems(factory_preset_tree(root))
+    if problems:
+        die('工厂预设门禁失败（{}）: {}'.format(where, '；'.join(problems)))
+    note('工厂预设门禁（{}）: 8 格式 default.json 齐备 · JSON 文件总数 {} · 无 _builtin- 残留'
+         .format(where, total))
+    return total
+
+
+def check_factory_presets_zip(names):
+    """门禁 G（zip 内复核）: 顶层路径必须是 PhotoPipeline/presets/formats/<fmt>/<stem>.json。"""
+    prefix = 'PhotoPipeline/presets/formats/'
+    tree = {}
+    for name in names:
+        if not name.startswith(prefix):
+            continue
+        parts = name[len(prefix):].split('/')
+        if len(parts) == 2 and parts[1].lower().endswith('.json'):
+            tree.setdefault(parts[0], []).append(parts[1])
+    problems, total = factory_preset_problems(tree)
+    if problems:
+        die('工厂预设门禁失败（zip 内复核）: {}'.format('；'.join(problems)))
+    note('工厂预设门禁（zip 内复核）: {} 条（8 格式 default.json 齐备 · 无 _builtin- 残留）'
+         .format(total))
+
+
 def parse_args(argv):
     out_dir = 'dist'
     smoke_exe = ''
@@ -487,6 +566,17 @@ def main(argv):
             shutil.copy2(os.path.join(build_dir, name), os.path.join(staging, name))
             dll_count += 1
     note('staging: photopipeline.exe + {} 个 DLL（applocal 部署产物）'.format(dll_count))
+
+    # ---- 4b) 工厂格式预设（M12）: 仓库 presets/ → staging/presets/（exe 旁 = 运行时 factory 目录）----
+    # 单一真源 = 仓库 presets/formats/**（人类可直接阅读/编辑/复制）；staging 顶层与 exe 同级，
+    # 运行时 factory dir = <exe 目录>/presets/formats。staging 是全新目录（上面 rmtree 过）。
+    if not os.path.isdir(FACTORY_PRESETS_SRC):
+        die('工厂格式预设缺失: {}（仓库 presets/ 是内置预设单一真源，缺它发行包首启即无预设）'
+            .format(FACTORY_PRESETS_SRC), 2)
+    shutil.copytree(FACTORY_PRESETS_SRC, os.path.join(staging, 'presets'))
+    factory_count = check_factory_presets(staging, '写盘前')
+    note('工厂格式预设: {} → {}/presets（{} 个 JSON）'.format(
+        FACTORY_PRESETS_SRC, staging, factory_count))
 
     # ---- 5) windeployqt（Qt 插件树 + app-local VC 运行时） ----
     command = [windeployqt, '--release', '--no-translations', '--no-system-d3d-compiler',
@@ -762,6 +852,10 @@ def main(argv):
     if len(zip_licenses) < 30:
         die('产物内复核失败（许可断言 D）: zip 内 licenses/*/copyright = {} < 30'.format(
             len(zip_licenses)))
+    # M12 门禁 G（zip 内复核）：工厂格式预设必须随包（exe 旁 presets/formats/**）。
+    check_factory_presets_zip(names)
+    if 'PhotoPipeline/presets/formats/heif/default.json' not in names:
+        die('产物内复核失败（工厂预设门禁 G）: 缺 PhotoPipeline/presets/formats/heif/default.json')
     extract_dir = tempfile.mkdtemp(prefix='pp-winzip-verify-')
     try:
         with zipfile.ZipFile(zip_path, 'r') as archive:

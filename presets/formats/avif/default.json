@@ -1,0 +1,33 @@
+{
+    "adaptive": {
+        "enabled": true,
+        "policy": [
+            "# AVIF default（历史内建 §9.7）：quality 搜索 → 4:4:4 → tune psnr 兜底。",
+            "version 1",
+            "target 90",
+            "max_rounds 8",
+            "output last",
+            "on_metric_unavailable stop",
+            "",
+            "stage quality-up",
+            "  search quality from current to 95 step 2",
+            "",
+            "stage chroma-444",
+            "  set chroma 444",
+            "",
+            "stage tune-psnr",
+            "  set tune psnr"
+        ]
+    },
+    "backend": "svt-av1",
+    "bitdepth": 10,
+    "format": "avif",
+    "kind": "format-preset",
+    "name": "default",
+    "params": {
+        "chroma": "420",
+        "quality": 85
+    },
+    "tech": "runtime",
+    "version": 1
+}

@@ -1004,6 +1004,10 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
             grid_request.chroma = chroma_idx;
             grid_request.tile_width = static_cast<int>(tile_w_raw);
             grid_request.tile_height = static_cast<int>(tile_h_raw);
+            // C17'：still 单图档位（MainStill / 16..21）+ 显式 Level>5.1 时规划压到
+            // still 互操作上界 5.1（编码 Level 仍是用户值）；profile 用**真实信号**推导后的
+            // effective_profile（Auto 8 位 4:2:0 会推导成 Main Still Picture）。
+            grid_request.profile = effective_profile;
             grid_plan = heif_plan_grid(grid_request);
             if (!grid_plan.ok)
                 return fail(grid_plan.error_zh);
@@ -1033,6 +1037,18 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
             if (lossy_grid && grid_plan.manual_with_auto_level)
                 log_info(kStage, kFile, "heif manual tile with automatic level",
                          {{"note", grid_plan.note_zh}});
+            // C17'：still 单图档位 + Level>5.1 → 规划被压到 still 互操作上界 5.1（warn 级，
+            // 不阻断、不改用户 Level）。单图路径（未分块）也会走到这里，保证警告可见。
+            if (!grid_plan.warning_zh.empty() && !grid_plan.miaf_parity_warn) {
+                log_warn(kStage, kFile, "heif grid warning",
+                         {{"level", heif_level_name(requested_level_idc)},
+                          {"planning_level", heif_level_name(grid_plan.planning_level_idc)},
+                          {"tile", std::to_string(grid_plan.tile_width) + "x" +
+                                       std::to_string(grid_plan.tile_height)},
+                          {"planned_grid",
+                           std::to_string(grid_plan.cols) + "x" + std::to_string(grid_plan.rows)},
+                          {"warning", grid_plan.warning_zh}});
+            }
             if (lossy_grid && grid_plan.miaf_parity_warn)
                 log_warn(kStage, kFile, "heif grid MIAF parity warning",
                          {{"image", std::to_string(w) + "x" + std::to_string(h)},

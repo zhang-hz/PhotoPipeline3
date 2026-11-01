@@ -22,6 +22,10 @@
 //   `kind` 缺失/不符 ⇒ 按"不是格式预设"拒绝并提示（防止下拉选错文件）；
 //   `version>1` 显式报错；未知根字段忽略并记日志；`params` 的 `__` 前缀键忽略并由 `reserved`
 //   重建（与 `ui/preset_io.cpp` 同口径）；空 adaptive 不写字段（旧文件零变化）。
+//   M12：出厂（内置）预设**不再是 C++ 硬编码库** —— 单一真源 = 仓库 `presets/formats/**` 的
+//   JSON 数据文件（人类可直接阅读/编辑/复制），随发行包分发并在启动时按字节复制到
+//   `<data_dir>/presets/formats/`（seed；见 `ui/format_preset_io.h`）。core 只保留"数据 + 规则"，
+//   不再持有任何出厂预设内容；每个格式的出厂默认预设名 = `default`（见下）。
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -40,6 +44,18 @@ inline constexpr int kFormatPresetVersion = 1;
 // HEIF/AVIF 编码档位的保留键名（JSON 里的 `reserved.heif_profile`；params 内的
 // `__heif_profile` 不落盘，读取时忽略并由该字段重建 —— 与全局预设输出级字段同口径）。
 inline constexpr std::string_view kFormatPresetHeifProfileReserved = "heif_profile";
+
+// ===========================================================================
+// 出厂默认预设名（M12 单一真源；简报 §2.4）
+// ===========================================================================
+// 每个格式恰有一个出厂默认预设：文件名 `default.json`、JSON `name` 也是 `default`；
+// "格式卡创建/首启时自动选中并载入它 / 不可删除（但可直接「保存」修改）"的判定全部引用这里
+// （UI 删除保护 + 自动选中 + I/O 层删除守卫；禁止各写一份字符串）。
+// 判定**大小写不敏感**：Windows 文件系统大小写不敏感（`Default.json` 与 `default.json` 是
+// 同一个文件），默认预设的保护/自愈必须覆盖同一批文件；参数可为 JSON 的 `name` 字段，也可为
+// 文件名 stem。
+inline constexpr std::string_view kFormatPresetDefaultName = "default";
+bool is_default_format_preset_name(std::string_view name);
 
 struct FormatPresetData {
     int version = kFormatPresetVersion;  // 文件版本；>1 显式报错
@@ -76,28 +92,8 @@ std::vector<std::string> normalize_format_preset(FormatPresetData &p, std::strin
 //   * 预设显式位深不在该格式能力内 → 拒绝。
 std::string check_format_preset_applies_to(const FormatPresetData &p, std::string_view format_id);
 
-// ===========================================================================
-// 内置（出厂）格式预设库（M10 / W3-T5；设计 §8.3「内置库（出厂）」/ §9.7）
-// ===========================================================================
-// 文件名前缀：内置预设落在 `<data_dir>/presets/formats/<format>/_builtin-<slug>.json`，
-// `<slug>` = format_id（一格式一条）。前缀是**只读标记**：UI/IO 拒绝覆盖与删除该前缀的
-// 文件（改动请走「另存…」；见 `ui/format_preset_io.*` 与 `ui/mainwindow_presets.cpp`）。
-inline constexpr std::string_view kFormatPresetBuiltinPrefix = "_builtin-";
-
-// 5 条内置示例预设（HEIF / AVIF / JXL / WebP / JPEG；PNG/TIFF/BMP 无 —— 无损、策略无意义）：
-//   * 名称 = 「内置示例 · <格式标签>」（标签取 `FormatDef::label`）；
-//   * 后端/技术/位深 = 该格式的**安全默认**（heif x265+runtime@10、avif svt-av1+runtime@10、
-//     jxl libjxl+vardct@16、webp libwebp+lossy@8、jpeg jpegli+dct@8）；
-//   * `params` = 静态表格式的默认参数全集（`default_params`，`__` 内部键已剥除），再叠加少量
-//     **给 §9.7 策略留出提升空间**的安全初值（heif/avif quality 85 + chroma 420；
-//     jxl distance 1.0；webp quality 85；jpeg quality_mode=quality + quality 90 —— 策略搜的是
-//     quality，默认 distance 模式下改 quality 不改变输出，故显式钉住模式）。
-//     libheif 系（heif/avif）**只写这些安全初值**：运行时内省参数随插件版本漂移，且格式级参数
-//     并集按后端 first-wins 可能与具体后端取值范围冲突（实测 avif 的 `speed`），写进预设会被
-//     逐键校验拒绝 —— 其余参数由运行时默认值承担（不写 = 不覆盖）。
-//   * `adaptive_enabled = true`、`adaptive_policy = default_adaptive_policy_for(format)->text`
-//     （§9.7 逐字，含注释；空格式不在库内）。
-// 返回值稳定（进程内静态构造一次），调用方不得修改；校验恒通过（单测钉住）。
-const std::vector<FormatPresetData> &builtin_format_presets();
+// ★ 出厂预设内容不在本文件：见 M12 修订 —— 工厂数据文件 = 仓库 `presets/formats/**`
+//   （单一真源，随发行包分发；启动 seed 见 `ui/format_preset_io.h` 的
+//   `factory_format_presets_root()` / `seed_factory_format_presets*()`）。
 
 } // namespace pp

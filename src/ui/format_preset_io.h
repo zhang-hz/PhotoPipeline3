@@ -5,9 +5,13 @@
 // （QJsonDocument / 原子写 / 目录扫描 / 导入导出），与 `ui/preset_io.*`（全局预设）同构但
 // **目录与 schema 完全独立**（互不扫描、互不触发写盘）。
 //
-// 存储（设计 §8.3）：`<data_dir()>/presets/formats/<format_id>/<name>.json`
-//   * 路径经 `platform::presets_dir()`（便携优先落盘；data_dir 为空 → 空路径，显式报错，
+// 存储（设计 §8.3；M12 修订）：
+//   * 数据目录 = `<data_dir()>/presets/formats/<format_id>/<name>.json`
+//     （`platform::presets_dir()`，便携优先落盘；data_dir 为空 → 空路径，显式报错，
 //     绝不回落 CWD 相对名）；
+//   * **工厂（出厂）目录 = `<exe 目录>/presets/formats/<format_id>/<stem>.json`** —— 随发行包
+//     分发的仓库数据文件（`presets/formats/**`，人类可直接阅读/编辑/复制），是出厂预设的
+//     单一真源；启动时经 `seed_factory_format_presets*()` 按字节复制到数据目录；
 //   * 子目录 `formats/` 使全局预设 `list_presets()`（只扫 presets/ 根层）看不到格式预设，
 //     反之亦然。
 //
@@ -17,6 +21,8 @@
 //   * `kind` 缺失/不符 ⇒ 拒绝并提示"这不是格式预设"（防止把全局预设选进格式预设下拉）；
 //   * `version` 缺失按 1 读；`>1` 显式报错（不静默丢字段）；未知根字段忽略并记日志；
 //   * `params` 的 `__` 前缀键一律忽略并由 `reserved` 重建（与 preset_io.cpp 同口径）；
+//   * `adaptive.policy` 写出 = **JSON 字符串数组，一行一个元素**（需求 3：可读、零 \n 转义）；
+//     读入兼容旧字符串形态（按 \n / \r\n 拆行）；数组元素内嵌换行 ⇒ 显式报错（保行号映射）；
 //   * 空 adaptive（enabled=false 且 policy 空）不写字段 ⇒ 旧文件零变化；
 //   * 保存前先 `validate_format_preset`，不过 ⇒ 提示且**不写盘**（不先污染后报错）；
 //   * 加载做完整校验（坏文件在 list 里仍列出、标注「（损坏）」+ 中文原因）。
@@ -35,6 +41,12 @@ namespace pp::ui {
 std::filesystem::path format_presets_root(); // <data_dir>/presets/formats
 std::filesystem::path format_preset_dir(std::string_view format_id);
 std::filesystem::path format_preset_path(std::string_view format_id, std::string_view name);
+
+// —— 工厂（出厂）预设目录（M12；exe 旁，随发行包分发）——
+// `factory_format_presets_root() = <exe 目录>/presets/formats`（`platform::executable_dir()`
+// 为空 → 空路径 = 不可用，调用方跳过 seed 复制）；`_dir(format_id)` 再做路径段安全检查。
+std::filesystem::path factory_format_presets_root();
+std::filesystem::path factory_format_preset_dir(std::string_view format_id);
 
 // —— 列举 ——
 struct FormatPresetEntry {
@@ -61,6 +73,8 @@ std::string save_format_preset_to(const std::filesystem::path &presets_root,
 // 读取 + 完整校验（结构/kind/version/字段类型/参数/策略）。失败不污染 out。
 std::string load_format_preset(const std::filesystem::path &file, FormatPresetData &out);
 // 删除（绝对路径守卫：拒绝空路径/相对路径/目录/不存在的文件）。
+// M12：**出厂默认预设（文件名 stem = `default`，单源 `pp::is_default_format_preset_name`）不可
+// 删除**（中文拒绝；但它不是只读模板 —— 可直接「保存」修改它，或用「另存」复制一份）。
 std::string delete_format_preset(const std::filesystem::path &file);
 
 // —— 导入 / 导出（设计 §8.3：「校验 → 复制进目录」/「另存到用户路径」）——
@@ -74,26 +88,31 @@ std::string import_format_preset_to(const std::filesystem::path &presets_root,
 // 导出：校验后把规范 JSON 写到 dest（目录按需创建；dest 为空/是目录 → 中文错误）。
 std::string export_format_preset(const FormatPresetData &p, const std::filesystem::path &dest);
 
-// —— 内置（出厂）预设的 seed 与只读判定（M10 / W3-T5；设计 §8.3「内置库（出厂）」/ §9.7）——
-// 文件名前缀单源 = `core/format_preset.h` 的 `kFormatPresetBuiltinPrefix`（`_builtin-`）。
-// 该前缀是**只读标记**：`save_format_preset*` 拒绝覆盖、`delete_format_preset` 拒绝删除
-// （「另存…」/导出到用户路径不受限）；UI 侧同时把「删除」置灰并给出原因。
-bool is_builtin_format_preset_path(const std::filesystem::path &file);
-bool is_builtin_format_preset_name(std::string_view name);
-
+// —— 工厂（出厂）预设：字节复制 seed + 旧版迁移（M12；简报 §2/§4.1）——
+// 背景：出厂预设不再是 C++ 硬编码库/只读模板，单一真源 = 随发行包分发的仓库 JSON 数据文件。
+// 启动时把 exe 旁的工厂目录按**原字节**复制到数据目录（不重新格式化：人类可读、可 git diff 的
+// 工厂文本逐字节落地）；此后一切读写都只针对数据目录（用户改过的 `default.json` 永不被覆盖）。
 struct FormatPresetSeedReport {
-    int written = 0;                 // 本次新写出的文件数
-    int skipped = 0;                 // 目标已存在 → 跳过（幂等：不覆盖用户/已 seed 文件）
-    int failed = 0;                  // 校验/写盘失败数
+    int written = 0;                 // 本次新复制到数据目录的工厂文件数（原字节、原子写）
+    int skipped = 0;                 // 目标已存在 → 跳过（幂等：一个字节都不动）
+    int removed_legacy = 0;          // 迁移删除的旧版只读内置模板（`_builtin-*.json`）数
+    int failed = 0;                  // 校验/读/写/清理失败数
     std::vector<std::string> errors; // 中文错误（每条含路径 + 原因；空 = 全成功）
 };
-// 幂等 seed：对 `builtin_format_presets()` 的每条，**仅当**目标文件不存在时写
-// `<presets_root>/<format>/_builtin-<format>.json`（= 规范缩进 JSON，与 save 同一写盘函数）。
-// 已存在（用户改过/上次已 seed）→ skipped，一个字节都不动；写盘前先 `validate_format_preset`，
-// 不过即 failed 并记中文原因（不写坏文件、不静默）。
-FormatPresetSeedReport seed_builtin_format_presets_to(const std::filesystem::path &presets_root);
-// 数据目录版本（= `format_presets_root()`；端口不可用 → failed + 中文错误）。
-FormatPresetSeedReport seed_builtin_format_presets();
+// 幂等 seed（启动期一次；失败只记日志、不弹框、不阻塞 UI；绝不写坏文件）：
+//   ① 迁移清理：删除 `presets_root` 各格式子目录下全部旧版 `_builtin-*.json`（0.4.0.alpha1 的
+//      只读出厂模板；数量记 `removed_legacy`，删除失败记 failed + 中文原因）。
+//   ② `presets_root` 为空 → failed + 中文错误（目录不可用；不回落 CWD）。
+//   ③ `factory_root` 为空，或与 `presets_root` 指向同一目录（便携模式 data_dir == exe 目录）
+//      → 跳过复制（只做 ①；`skipped` 不计数）。
+//   ④ 否则逐格式/逐文件名排序处理：目标不存在 → 先 `load_format_preset` 完整校验（含格式与
+//      目录一致性），合法则原字节原子写 → written++；目标已存在 → skipped++（用户改过的文件
+//      一个字节都不动）；工厂文件非法/读写失败 → failed++ + 中文原因。
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)：factory_root/presets_root 由 seed 语义固定
+FormatPresetSeedReport seed_factory_format_presets_to(const std::filesystem::path &factory_root,
+                                                      const std::filesystem::path &presets_root);
+// 数据目录版本（factory_root = factory_format_presets_root() → format_presets_root()）。
+FormatPresetSeedReport seed_factory_format_presets();
 
 // —— 自适应策略 JSON AST 导入（设计 §9.3；导出仍为 DSL 文本）——
 // 解析 JSON AST 并做结构/注册表校验（format_id 空 = 只做与格式无关的校验）。

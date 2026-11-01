@@ -44,10 +44,12 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPushButton>
+#include <QScrollArea> // 0.4.0.alpha2 preset-geom 探针：输出页 QScrollArea(widgetResizable) 布局收敛
 #include <QScrollBar>
 #include <QSet>
 #include <QStandardItemModel>
 #include <QTabBar>
+#include <QTabWidget>
 #include <QTimer>
 #include <QToolButton>
 
@@ -5296,14 +5298,263 @@ void MainWindow::Impl::smoke_probe_run_geometry() {
         pump(60);
     }
 
+    // ---- (p) 状态机修复回归（M10 状态机批 S-1/S-2；只增；详见 docs/state-machine-analysis.md）
+    //   S-1 迟到过程事件不得覆写文件终态：评分池看门狗心跳（Progress/heartbeat=true）与迟到的
+    //       阶段事件可能晚于文件终态到达 —— 组行胶囊必须保持「已完成」，不得退回「写入/色彩」。
+    //   S-2 取消零效果时结束态 = 「已完成」：点了「取消剩余」但引擎汇总 cancelled=0（全部文件
+    //       已成功）时，不得显示「已取消」（与汇总「成功 N」同屏矛盾）。
+    int late_ok = 0;
+    int cancel_noop_ok = 0;
+    {
+        const auto pill_text = [](const QWidget *host, const char *name) {
+            // 状态胶囊可能被 swap_pill() 换过（图标档变化时换一枚同 objectName 的新胶囊）：
+            // 旧胶囊 hide + deleteLater，仍留在对象树里直到 DeferredDelete 被处理 —— 只取
+            // **可见**的那一枚，否则会读到旧胶囊的过期文案（S-2 探针首版踩到）。
+            QString fallback;
+            for (QLabel *label : host->findChildren<QLabel *>(QString::fromLatin1(name))) {
+                if (fallback.isEmpty())
+                    fallback = label->text();
+                if (label->isVisible())
+                    return label->text();
+            }
+            return fallback;
+        };
+        const auto ok_result = [] {
+            pp::FileResult r;
+            r.info.width = 640;
+            r.info.height = 480;
+            r.out_bytes = 1000;
+            r.outputs.resize(1);
+            r.outputs[0].format_id = "jpeg";
+            r.outputs[0].ok = true;
+            r.outputs[0].out_bytes = 1000;
+            r.outputs[0].t.encode_ms = 12;
+            r.outputs[0].t.metawrite_ms = 3;
+            return r;
+        };
+        PageRun::RunPlan one_plan;
+        one_plan.format_ids = QStringList{QStringLiteral("jpeg")};
+        one_plan.widths = QVector<int>{640};
+        one_plan.heights = QVector<int>{480};
+        one_plan.bytes = QVector<qint64>{4096};
+
+        // p1：终态之后到达心跳 Progress + 迟到阶段事件 → 组行/行胶囊保持终态
+        {
+            PageRun lp;
+            lp.set_tokens(tokens);
+            apply_window_scroll_qss(&lp);
+            lp.resize(theme::Metrics::right_width, theme::Metrics::calibrated_h);
+            lp.show();
+            lp.set_plan(one_plan);
+            lp.begin_run(1, QStringList{QStringLiteral("late-heartbeat.jpg")});
+            pump(120);
+            const pp::FileResult done = ok_result();
+            lp.on_event(probe_terminal(0, pp::FileState::Done, done));
+            pump(60);
+            const QString g_after_terminal = pill_text(&lp, "pp-run-gstatus-0");
+            const QString o_after_terminal = pill_text(&lp, "pp-run-status-0-0");
+            // 迟到过程事件 ①：评分池看门狗心跳（scoring=true / heartbeat=true，无 frac 推进）
+            pp::FileEvent beat{};
+            beat.index = 0;
+            beat.state = pp::FileState::Progress;
+            beat.progress.output_index = -1;
+            beat.progress.stage = pp::Stage::MetaWrite;
+            beat.progress.heartbeat = true;
+            beat.progress.scoring = true;
+            lp.on_event(beat);
+            // 迟到过程事件 ②：阶段事件（FileState::Writing）—— 旧实现会把它写成 file.state
+            pp::FileEvent late_stage{};
+            late_stage.index = 0;
+            late_stage.state = pp::FileState::Writing;
+            lp.on_event(late_stage);
+            pump(80);
+            const QString g_late = pill_text(&lp, "pp-run-gstatus-0");
+            const QString o_late = pill_text(&lp, "pp-run-status-0-0");
+            late_ok = (g_after_terminal == QStringLiteral("已完成") &&
+                       o_after_terminal == QStringLiteral("已完成") &&
+                       g_late == QStringLiteral("已完成") && o_late == QStringLiteral("已完成"))
+                          ? 1
+                          : 0;
+            std::printf("UI-SMOKE run-terminal-late: ok=%d g-terminal=\"%s\" g-late=\"%s\" "
+                        "o-terminal=\"%s\" o-late=\"%s\"\n",
+                        late_ok, qUtf8Printable(g_after_terminal), qUtf8Printable(g_late),
+                        qUtf8Printable(o_after_terminal), qUtf8Printable(o_late));
+            std::fflush(stdout);
+            expect("run-terminal-late", late_ok == 1,
+                   QStringLiteral("g=\"%1\"/\"%2\" o=\"%3\"/\"%4\"")
+                       .arg(g_after_terminal, g_late, o_after_terminal, o_late));
+            lp.hide();
+            pump(60);
+        }
+        // p2：取消按钮点击但**零实际取消** → 结束态「已完成」（不是「已取消」）
+        {
+            PageRun cp;
+            cp.set_tokens(tokens);
+            apply_window_scroll_qss(&cp);
+            cp.resize(theme::Metrics::right_width, theme::Metrics::calibrated_h);
+            cp.show();
+            cp.set_plan(one_plan);
+            cp.begin_run(1, QStringList{QStringLiteral("cancel-noop.jpg")});
+            pump(120);
+            const pp::FileResult done = ok_result();
+            cp.on_event(probe_terminal(0, pp::FileState::Done, done));
+            pump(60);
+            auto *cancel = cp.findChild<QPushButton *>(QStringLiteral("pp-run-cancel"));
+            int hits = 0;
+            const QMetaObject::Connection conn =
+                QObject::connect(&cp, &PageRun::cancel_requested, &cp, [&hits]() { ++hits; });
+            if (cancel != nullptr && cancel->isEnabled())
+                cancel->click();
+            pump(60);
+            pp::RunSummary sum;
+            sum.total = 1;
+            sum.ok = 1;
+            sum.out_bytes = 1000;
+            sum.total_ms = 120.0;
+            cp.end_run(sum, QStringLiteral("D:/Photos/export"));
+            pump(120);
+            QObject::disconnect(conn);
+            const QString pill = pill_text(&cp, "pp-run-state-pill");
+            const QString summary = probe_full_text(&cp, QStringLiteral("pp-run-summary"));
+            const bool cancel_hidden = cancel == nullptr || !cancel->isVisible();
+            cancel_noop_ok = (hits == 1 && pill == QStringLiteral("已完成") && cancel_hidden &&
+                              summary == QStringLiteral("运行结束 · 可打开输出目录查看结果"))
+                                 ? 1
+                                 : 0;
+            std::printf("UI-SMOKE run-cancel-noop: ok=%d hits=%d pill=\"%s\" "
+                        "cancel-visible=%d summary=\"%s\"\n",
+                        cancel_noop_ok, hits, qUtf8Printable(pill),
+                        (cancel != nullptr && cancel->isVisible()) ? 1 : 0,
+                        qUtf8Printable(summary));
+            std::fflush(stdout);
+            expect("run-cancel-noop", cancel_noop_ok == 1,
+                   QStringLiteral("hits=%1 pill=\"%2\" cancel-visible=%3 summary=\"%4\"")
+                       .arg(hits)
+                       .arg(pill)
+                       .arg((cancel != nullptr && cancel->isVisible()) ? 1 : 0)
+                       .arg(summary));
+            cp.hide();
+            pump(60);
+        }
+        // p3：重跑不残留上一轮（评分/耗时/大小/状态）—— 用户「再次运行」的最短路径
+        {
+            PageRun rp;
+            rp.set_tokens(tokens);
+            apply_window_scroll_qss(&rp);
+            rp.resize(theme::Metrics::right_width, theme::Metrics::calibrated_h);
+            rp.show();
+            PageRun::RunPlan q_plan = one_plan;
+            q_plan.quality_score = true; // 本批评分开 → 首次 OutputDone 后评分列「评分中」
+            rp.set_plan(q_plan);
+            rp.begin_run(1, QStringList{QStringLiteral("rerun.jpg")});
+            pump(120);
+            pp::FileResult scored = ok_result();
+            scored.outputs[0].metric_state = pp::MetricState::Ok;
+            scored.outputs[0].metric_ssimulacra2 = 92.31;
+            rp.on_event(probe_terminal(0, pp::FileState::Done, scored));
+            pump(120);
+            const QString first_score =
+                probe_full_text(&rp, QStringLiteral("pp-run-score-text-0-0"));
+            const QString first_time = probe_full_text(&rp, QStringLiteral("pp-run-time-0-0"));
+            const QString first_pill = pill_text(&rp, "pp-run-status-0-0");
+            pp::RunSummary sum1;
+            sum1.total = 1;
+            sum1.ok = 1;
+            sum1.total_ms = 300.0;
+            rp.end_run(sum1, QStringLiteral("D:/Photos/export"));
+            pump(120);
+            const QString done_pill = pill_text(&rp, "pp-run-state-pill");
+            // 新一批：同一页重置后必须干净（评分空/耗时/大小「—」/行回「排队」）
+            rp.begin_run(1, QStringList{QStringLiteral("rerun.jpg")});
+            pump(120);
+            const QString rerun_score =
+                probe_full_text(&rp, QStringLiteral("pp-run-score-text-0-0"));
+            const QString rerun_time = probe_full_text(&rp, QStringLiteral("pp-run-time-0-0"));
+            const QString rerun_size = probe_full_text(&rp, QStringLiteral("pp-run-size-0-0"));
+            const QString rerun_pill = pill_text(&rp, "pp-run-status-0-0");
+            const bool ok =
+                first_score == QStringLiteral("92.31") && first_time != QStringLiteral("—") &&
+                first_pill == QStringLiteral("已完成") && done_pill == QStringLiteral("已完成") &&
+                rerun_score.isEmpty() && rerun_time == QStringLiteral("—") &&
+                rerun_size == QStringLiteral("—") && rerun_pill == QStringLiteral("排队");
+            std::printf("UI-SMOKE run-rerun-clean: ok=%d first-score=\"%s\" first-time=\"%s\" "
+                        "first-pill=\"%s\" done-pill=\"%s\" rerun-score=\"%s\" rerun-time=\"%s\" "
+                        "rerun-size=\"%s\" rerun-pill=\"%s\"\n",
+                        ok ? 1 : 0, qUtf8Printable(first_score), qUtf8Printable(first_time),
+                        qUtf8Printable(first_pill), qUtf8Printable(done_pill),
+                        qUtf8Printable(rerun_score), qUtf8Printable(rerun_time),
+                        qUtf8Printable(rerun_size), qUtf8Printable(rerun_pill));
+            std::fflush(stdout);
+            expect("run-rerun-clean", ok,
+                   QStringLiteral("first=%1/%2/%3 done=%4 rerun=%5/%6/%7/%8")
+                       .arg(first_score, first_time, first_pill, done_pill, rerun_score, rerun_time,
+                            rerun_size, rerun_pill));
+            rp.hide();
+            pump(60);
+        }
+        // p4：开始→取消→再开始 —— 取消定稿后新一批必须回到「进行中」且取消入口可用
+        {
+            PageRun sp;
+            sp.set_tokens(tokens);
+            apply_window_scroll_qss(&sp);
+            sp.resize(theme::Metrics::right_width, theme::Metrics::calibrated_h);
+            sp.show();
+            sp.set_plan(one_plan);
+            sp.begin_run(
+                2, QStringList{QStringLiteral("restart-a.jpg"), QStringLiteral("restart-b.jpg")});
+            pump(120);
+            sp.on_event(probe_progress({0, -1}, pp::Stage::Decode, 1.0f, false));
+            sp.on_event(probe_progress({0, 0}, pp::Stage::Encode, 0.4f, false));
+            auto *sp_cancel = sp.findChild<QPushButton *>(QStringLiteral("pp-run-cancel"));
+            if (sp_cancel != nullptr && sp_cancel->isEnabled())
+                sp_cancel->click();
+            pump(60);
+            sp.on_event(probe_terminal(0, pp::FileState::Cancelled, pp::FileResult{}));
+            sp.on_event(probe_terminal(1, pp::FileState::Cancelled, pp::FileResult{}));
+            pp::RunSummary sum2;
+            sum2.total = 2;
+            sum2.cancelled = 2;
+            sum2.total_ms = 500.0;
+            sp.end_run(sum2, QString());
+            pump(120);
+            const QString cancelled_pill = pill_text(&sp, "pp-run-state-pill");
+            // 再开始：新一批进入运行态（「进行中」+ 取消钮可见可用 + 进度归 0）
+            sp.begin_run(1, QStringList{QStringLiteral("restart-c.jpg")});
+            pump(120);
+            auto *sp_cancel2 = sp.findChild<QPushButton *>(QStringLiteral("pp-run-cancel"));
+            const QString restarted_pill = pill_text(&sp, "pp-run-state-pill");
+            const QString percent = probe_full_text(&sp, QStringLiteral("pp-run-percent"));
+            const bool ok = cancelled_pill == QStringLiteral("已取消") &&
+                            restarted_pill == QStringLiteral("进行中") && sp_cancel2 != nullptr &&
+                            sp_cancel2->isVisible() && sp_cancel2->isEnabled() &&
+                            percent == QStringLiteral("0%");
+            std::printf("UI-SMOKE run-restart: ok=%d cancelled-pill=\"%s\" restarted-pill=\"%s\" "
+                        "cancel-visible=%d cancel-enabled=%d percent=\"%s\"\n",
+                        ok ? 1 : 0, qUtf8Printable(cancelled_pill), qUtf8Printable(restarted_pill),
+                        (sp_cancel2 != nullptr && sp_cancel2->isVisible()) ? 1 : 0,
+                        (sp_cancel2 != nullptr && sp_cancel2->isEnabled()) ? 1 : 0,
+                        qUtf8Printable(percent));
+            std::fflush(stdout);
+            expect("run-restart", ok,
+                   QStringLiteral("cancelled=\"%1\" restarted=\"%2\" cancel=%3/%4 percent=\"%5\"")
+                       .arg(cancelled_pill, restarted_pill)
+                       .arg((sp_cancel2 != nullptr && sp_cancel2->isVisible()) ? 1 : 0)
+                       .arg((sp_cancel2 != nullptr && sp_cancel2->isEnabled()) ? 1 : 0)
+                       .arg(percent));
+            sp.hide();
+            pump(60);
+        }
+    }
+
     std::printf("UI-SMOKE run-geom: checked=%d bad=%d pane=%dx%d rows=%d fit=%d name-w=%d "
-                "name-w520=%d no-speed=%d ratio-tip=%d cols-ok=%d long-elide=%d %s\n",
+                "name-w520=%d no-speed=%d ratio-tip=%d cols-ok=%d long-elide=%d "
+                "late-terminal=%d cancel-noop=%d %s\n",
                 checked, int(bad.size()), page.width(), page.height(),
                 int(page.findChildren<QWidget *>(
                             QRegularExpression(QStringLiteral("^pp-run-(group|row|reason)-\\d+")))
                         .size()),
-                fit_ok, name_w, name_w520, no_speed, ratio_tip_ok, cols_ok, long_elide,
-                qUtf8Printable(bad.join(QLatin1Char(' '))));
+                fit_ok, name_w, name_w520, no_speed, ratio_tip_ok, cols_ok, long_elide, late_ok,
+                cancel_noop_ok, qUtf8Printable(bad.join(QLatin1Char(' '))));
     std::fflush(stdout);
     if (!bad.isEmpty()) {
         smoke_fail(MainWindow::tr("运行页几何/语义（§7.3/R1–R4/K4）不符：%1")
@@ -8202,11 +8453,19 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
             smoke_fail(MainWindow::tr("冒烟前置：jpeg 单选应收集到 1 个输出（实为 %1）")
                            .arg(preset.outputs.size()));
         }
-        const pp::OutputFormatSpec jpeg_spec = preset.outputs.front();
+        pp::OutputFormatSpec jpeg_spec = preset.outputs.front();
+        // M12（需求 5）：工厂 default 预设自带自适应策略（JPEG = distance 断点降档）——
+        // ui-smoke 的实跑前置要的是**单次编码**（旧口径，运行页事件流断言与产物稳定都以此
+        // 为前提）；策略本身由 format-preset 探针的 jpeg-adaptive 组机械覆盖。故此处显式清掉
+        // 自适应下发面（采集面 collect_preset 会保留策略文本，属预期），避免实跑进入评分迭代。
+        jpeg_spec.adaptive_policy.clear();
+        jpeg_spec.adaptive_enabled = false;
         page_output->select_format(QStringLiteral("webp"));
         pump(250);
         preset = page_output->collect_preset(QStringLiteral("ui-smoke"));
-        const pp::OutputFormatSpec webp_spec = preset.outputs.front();
+        pp::OutputFormatSpec webp_spec = preset.outputs.front();
+        webp_spec.adaptive_policy.clear(); // 同上（WebP default 也带自适应策略）
+        webp_spec.adaptive_enabled = false;
         preset.outputs = {jpeg_spec, webp_spec};
         preset.conflict = pp::ConflictPolicy::Overwrite;
         preset.split_by_format = true; // 分格式子目录（$format/$dir/$file）
@@ -9214,11 +9473,45 @@ void MainWindow::Impl::deep_run(const QString &shots_dir) {
         if (form == nullptr)
             continue;
         {
+            // M12（需求 4）：「首次打开 = 已改 0」旧口径随「无未选择态 + 自动载入 default」作废 ——
+            // default 预设的值可以 ≠ 表内默认（例如 JPEG default 的 distance=3.0），此时「已改 1」
+            // 是**如实**读数。新断言（更强、换锚）：
+            //   ① 首次打开该格式页签即自动载入了它的 default 预设（来源非空且文件名
+            //   stem=default）； ② 「已改 N」显示态与读数自洽：可见时 N 必须 > 0（不允许「已改
+            //   0」却可见的假阳）。
             auto *pill = w->findChild<QLabel *>(QStringLiteral("pp-format-changed-pill"));
-            expect(pill == nullptr || !pill->isVisible() ||
-                       pill->text() == QStringLiteral("已改 0"),
-                   QStringLiteral("%1：首次打开不应有「已改 N」（got %2）")
-                       .arg(id, pill != nullptr ? pill->text() : QStringLiteral("<null>")));
+            const QString preset_path = page_output->current_format_preset(id);
+            const bool default_loaded = pp::is_default_format_preset_name(
+                QFileInfo(preset_path).completeBaseName().toStdString());
+            const QString pill_text = pill != nullptr ? pill->text() : QStringLiteral("<null>");
+            const bool pill_consistent =
+                pill == nullptr || !pill->isVisible() || !pill_text.endsWith(QStringLiteral(" 0"));
+            expect(default_loaded && pill_consistent,
+                   QStringLiteral("%1：首次打开应自动载入 default 且「已改 N」不得为「已改 0 可见」"
+                                  "（preset=%2 got=%3）")
+                       .arg(id, preset_path.isEmpty() ? QStringLiteral("<空>") : preset_path,
+                            pill_text));
+            // M12（需求 4）：自适应行随该格式 default 策略显示/隐藏 —— 空策略整行隐藏（口径不变）、
+            // 非空策略可见。期望值取自工厂数据文件（jpeg/webp/jxl/heif/avif 有策略；
+            // png/tiff/bmp 无）—— 与工厂 `presets/formats/**` 单一真源对齐。
+            const bool want_adaptive = id == QStringLiteral("jpeg") ||
+                                       id == QStringLiteral("webp") ||
+                                       id == QStringLiteral("jxl") ||
+                                       id == QStringLiteral("heif") || id == QStringLiteral("avif");
+            auto *adaptive_row =
+                w->findChild<QWidget *>(QStringLiteral("pp-format-preset-adaptive-row"));
+            const QString policy = page_output->format_preset_adaptive_policy(id);
+            const bool adaptive_ok =
+                adaptive_row != nullptr && adaptive_row->isVisible() == want_adaptive &&
+                policy.isEmpty() == !want_adaptive &&
+                page_output->format_preset_adaptive_enabled(id) == want_adaptive;
+            expect(
+                adaptive_ok,
+                QStringLiteral("%1：自适应行应随 default 策略%s（visible=%2 policy=%3 enabled=%4）")
+                    .arg(id, want_adaptive ? QStringLiteral("显示") : QStringLiteral("隐藏"))
+                    .arg(adaptive_row != nullptr && adaptive_row->isVisible() ? 1 : 0)
+                    .arg(policy.isEmpty() ? 0 : 1)
+                    .arg(page_output->format_preset_adaptive_enabled(id) ? 1 : 0));
         }
         // 调试开关：列出与内省 ParamDef 默认值不一致的参数（定位「已改 N」假阳性）。
         if (qEnvironmentVariableIsSet("PP_DEEP_DEBUG")) {
@@ -10766,17 +11059,36 @@ void MainWindow::Impl::smoke_probe_output_geometry() {
 }
 
 // ---------------------------------------------------------------------------
-// M10-W3-T2（C23 §8.5 / C24 §9）：格式预设行 + 只读自适应面自检（断言只增）
-//   (a) 行存在 + 位于页签顶部（在「位深」行之上）+ 六件套齐备 + 未选中时「删除」禁用（原因进
-//       tooltip，不静默灰）；
-//   (b) 空态：下拉只有「未选择」一项（未喂列表 = 空态，不臆造预设）；
-//   (c) 保存 → 列举 → 载入 往返（**临时目录** <repo>/.cache/tmp/ui-smoke-format-preset；
-//       走真实 handler = format_preset_save_card/format_preset_load_into + 真实 I/O 层）：
-//       载入后卡值 = 保存时快照、卡头「已改 N」按新值重算、注释位显示来源；
-//   (d) 字节稳定：save → load → save（两个独立根）逐字节相同（设计 §8.6）；
-//   (e) 损坏 JSON / kind 不符：列举标「（损坏）」、载入返回中文错误、卡值零改动（不静默套默认）；
-//   (f) 自适应只读面：真实含策略预设 → 摘要「目标/轮数/阶段」+ 开关按预设初值；关闭 = 本次不
-//       启用；无策略 → 整行不显示；坏策略 → 行内中文错误 + 开关禁用（GUI 无编辑器 = C24）。
+// M10-W3-T2（C23 §8.5 / C24 §9）+ M12（需求 2/3/4/5）格式预设行 + 只读自适应面自检。
+//
+// M12 探针**机械换锚**（Lead 裁定 2026-11-01；登记 docs/m12-adjudications.md）——旧字段名全部
+// 保留（`format-preset:` 行只增），语义按「无未选择态 / 每格式 default / 工厂数据文件」换锚：
+//
+//   字段名            旧语义（≤0.4.0.alpha2）                新语义（M12）
+//   empty             下拉空态 = 只有「未选择」占位项          列表未喂 =
+//   空错误态（count==0，无占位项） prod              生产页下拉首项 =「未选择」 生产页行在位 +
+//   首启已自动选中并载入 default idle              未选中「删除」禁用 + 原因 tooltip
+//   空错误态同左（保存可用 / 删除禁用，不静默灰） builtin           seed 内置库 + 内置 JPEG
+//   出现在格式列表    工厂 seed 就位（11 文件/8 default）且列表含 default builtin-idem      二次
+//   seed 零写入 + 文件字节不变           工厂 seed 二次幂等（written=0/skipped=11）
+//   builtin-readonly  UI/IO 拒绝删改 `_builtin-` 前缀           I/O 拒绝删除
+//   `default`（文件零改动；可保存覆盖） builtin-saveas    内置「另存…」可用
+//   另存为普通名字副本成功（名字非 default） clears-source     全局预设后下拉回「未选择」
+//   全局预设后**来源清空但进入接管(detached)态**：
+//                                                                path 空 / save 禁用 /
+//                                                                注记含「全局预设」/ 点 save
+//                                                                无覆盖意图
+//   unselect-adaptive 「未选择」⇒ 清自适应会话态                预设来源消失 ⇒ **自愈回 default
+//   并载入**
+//                                                                （不残留被删来源的旧策略会话态）
+//
+// 新增字段（M12）：default-selected / no-unselected / default-protected / save-default /
+//   jpeg-adaptive / heif-apple-crf / legacy-migrated / png-no-adaptive /
+//   factory-seed / factory-idem / factory-migrate / global-detached。
+//
+// 证据纪律：一切写操作只落 `.cache/tmp/ui-smoke-format-preset/` 下的临时根；真实数据目录
+// （便携模式下 = exe 目录）只允许启动 seed 迁移，探针不写；工厂目录只读。
+//    临时根：a=往返/损坏/自适应  b=另存/无策略  c=来源消失自愈（含 default）  seed=工厂 seed 目标
 // ---------------------------------------------------------------------------
 void MainWindow::Impl::smoke_probe_format_preset() {
     const QString base = repo_root() + QStringLiteral("/.cache/tmp/ui-smoke-format-preset");
@@ -10785,8 +11097,20 @@ void MainWindow::Impl::smoke_probe_format_preset() {
         smoke_fail(MainWindow::tr("格式预设探针：无法创建临时目录 %1").arg(base));
         return;
     }
-    const std::filesystem::path root_a = std::filesystem::path((base + "/a").toStdString());
-    const std::filesystem::path root_b = std::filesystem::path((base + "/b").toStdString());
+    const auto tmp_path = [&base](const char *leaf) {
+        return std::filesystem::path((base + QLatin1Char('/') + QLatin1String(leaf)).toStdString());
+    };
+    const std::filesystem::path root_a = tmp_path("a");
+    const std::filesystem::path root_b = tmp_path("b");
+    const std::filesystem::path root_c = tmp_path("c");
+    const std::filesystem::path seed_root = tmp_path("seed");
+    // 工厂（出厂）预设目录 = exe 旁 `presets/formats`（生产路径；dev 树由 CMake POST_BUILD 复制）。
+    // 兜底 = 源码树 `presets/formats`（只在非常规开发树下需要；两处都没有 ⇒ 环境坏，探针红）。
+    std::filesystem::path factory_root = pp::ui::factory_format_presets_root();
+    if (factory_root.empty() || !std::filesystem::exists(factory_root / "jpeg" / "default.json"))
+        factory_root =
+            std::filesystem::path((repo_root() + QStringLiteral("/presets/formats")).toStdString());
+    const bool factory_ok = std::filesystem::exists(factory_root / "jpeg" / "default.json");
 
     PageOutput page;
     page.set_tokens(tokens);
@@ -10826,6 +11150,35 @@ void MainWindow::Impl::smoke_probe_format_preset() {
             return static_cast<qint64>(*value);
         return -1;
     };
+    // M12 单源判定：文件名 stem = default（core/format_preset.h 的 is_default_format_preset_name；
+    // 大小写不敏感 = Windows 文件系统口径）。
+    const auto stem_of = [](const QString &path) {
+        return path.isEmpty() ? QString() : QFileInfo(path).completeBaseName();
+    };
+    const auto is_default_path = [&stem_of](const QString &path) {
+        return !path.isEmpty() && pp::is_default_format_preset_name(stem_of(path).toStdString());
+    };
+    // M12 需求 4：下拉里不允许出现「未选择」/空 itemData 的占位项（真实预设才有 item）。
+    const auto no_placeholder = [](const QComboBox *target) {
+        if (target == nullptr)
+            return false;
+        for (int i = 0; i < target->count(); ++i) {
+            if (target->itemText(i) == QStringLiteral("未选择") ||
+                target->itemData(i, Qt::UserRole).toString().isEmpty())
+                return false;
+        }
+        return true;
+    };
+    const auto read_bytes = [](const std::filesystem::path &file) {
+        QFile f(QString::fromStdString(file.string()));
+        if (!f.open(QIODevice::ReadOnly))
+            return QByteArray();
+        return f.readAll();
+    };
+    const auto refresh_page = [&](const std::filesystem::path &root) {
+        refresh_format_preset_row(fmt, &page, root);
+        pump(90);
+    };
 
     QWidget *row = page.findChild<QWidget *>(QStringLiteral("pp-format-preset-row"));
     QComboBox *combo = page.findChild<QComboBox *>(QStringLiteral("pp-format-preset-combo"));
@@ -10835,8 +11188,24 @@ void MainWindow::Impl::smoke_probe_format_preset() {
     auto *import_btn = page.findChild<QPushButton *>(QStringLiteral("pp-format-preset-import"));
     auto *export_btn = page.findChild<QPushButton *>(QStringLiteral("pp-format-preset-export"));
     QWidget *bit_row = page.findChild<QWidget *>(QStringLiteral("pp-bitdepth-row"));
+    // 用户动作模拟（下拉选中即载入；程序化 setCurrentIndex 不发信号 → 显式触发 activated）
+    const auto activate = [&](int index) {
+        if (combo == nullptr || index < 0)
+            return;
+        combo->setCurrentIndex(index);
+        QMetaObject::invokeMethod(combo, "activated", Qt::DirectConnection, Q_ARG(int, index));
+        pump(120);
+    };
+    const auto default_item_index = [&]() {
+        int index = -1;
+        for (int i = 0; combo != nullptr && i < combo->count(); ++i) {
+            if (is_default_path(combo->itemData(i, Qt::UserRole).toString()))
+                index = i;
+        }
+        return index;
+    };
 
-    // ---- (a) 行存在 / 位置 / 六件套 / 未选中禁用态 ----
+    // ---- (a) 行存在 / 位置 / 六件套 / 未喂列表时的按钮态 ----
     const bool row_present = row != nullptr && combo != nullptr && save != nullptr &&
                              saveas != nullptr && del != nullptr && import_btn != nullptr &&
                              export_btn != nullptr && row->isVisible();
@@ -10864,31 +11233,195 @@ void MainWindow::Impl::smoke_probe_format_preset() {
                .arg(del != nullptr && del->isEnabled() ? 1 : 0)
                .arg(del != nullptr ? del->toolTip() : QString()));
 
-    // ---- (b) 空态：只有「未选择」 ----
-    expect("empty",
-           combo != nullptr && combo->count() == 1 && combo->currentIndex() == 0 &&
-               combo->itemText(0) == QStringLiteral("未选择") &&
-               combo->itemData(0, Qt::UserRole).toString().isEmpty(),
-           QStringLiteral("count=%1 index=%2 text0=\"%3\"")
-               .arg(combo != nullptr ? combo->count() : -1)
-               .arg(combo != nullptr ? combo->currentIndex() : -1)
-               .arg(combo != nullptr && combo->count() > 0 ? combo->itemText(0) : QString()));
+    // ---- (a2) 需求 5 几何（0.4.0.alpha2 用户修订；Lead 断言口径）----
+    //   · 下拉宽 == 同页参数行字段宽（FieldWidth::Standard = kFieldStd 160，±1）—— 严禁被
+    //     Flex 压窄成 ~115px（用户原话「下拉框宽度要和其他参数一致」）；
+    //   · 导入/导出按钮文案**不带省略号**（逐字「导入」「导出」；省略号会被误读成文字截断）；
+    //   · 5 个按钮一律 width() ≥ sizeHint().width()（文字放得下、不截断）；
+    //   · 行内无重叠：**同父兄弟**直接比 geometry（combo.right < save.left）；末钮右缘 ≤
+    //   字段容器宽。
+    //
+    // 测量对象 = **生产页 `page_output`**（真实窗口 QSS = 6px 滚动条 + 生产布局，与 Lead 的渲染
+    // 像素判据同源）。0.4.0.alpha2 探针修正（Lead 用像素证伪旧读数）：旧的独立 PageOutput fixture
+    // （587 宽 / 默认 14px 滚动条 / 无窗口 QSS）宿主只有 441，而 160 + 5×按钮(262) + 6×间距(40)
+    // = 462 → QBoxLayout 负空间把 combo 按 139 分位、QWidget 再被 setFixedWidth(160) 钳回
+    // ⇒ 13px **假重叠**（combo y=1 而按钮 y=0 也证明布局错位）。故几何断言改测生产页。
+    {
+        PageOutput *geom_page = page_output;
+        int prev_page = -1;
+        if (geom_page != nullptr) {
+            if (stack != nullptr)
+                prev_page = stack->currentIndex();
+            w->set_current_page(2); // 输出页（1=meta 2=output 3=run）
+            geom_page->select_format(QStringLiteral("jpeg"));
+            pump(200);
+        }
+        auto *out_scroll =
+            geom_page != nullptr
+                ? geom_page->findChild<QScrollArea *>(QStringLiteral("pp-output-scroll"))
+                : nullptr;
+        if (out_scroll != nullptr) {
+            if (QWidget *content = out_scroll->widget()) {
+                if (auto *content_layout = content->layout())
+                    content_layout->activate();
+            }
+            out_scroll->viewport()->updateGeometry();
+        }
+        if (geom_page != nullptr) {
+            if (auto *page_layout = geom_page->layout())
+                page_layout->activate();
+        }
+        QCoreApplication::processEvents();
+        pump(120); // 滚动条出现/窗口布局二次收敛
+        auto *geom_tabs = geom_page != nullptr ? geom_page->findChild<QTabWidget *>() : nullptr;
+        QWidget *scope = (geom_tabs != nullptr && geom_tabs->currentWidget() != nullptr)
+                             ? geom_tabs->currentWidget()
+                             : static_cast<QWidget *>(geom_page);
+        auto *geom_combo =
+            scope != nullptr
+                ? scope->findChild<QComboBox *>(QStringLiteral("pp-format-preset-combo"))
+                : nullptr;
+        auto *geom_save =
+            scope != nullptr
+                ? scope->findChild<QPushButton *>(QStringLiteral("pp-format-preset-save"))
+                : nullptr;
+        auto *geom_saveas =
+            scope != nullptr
+                ? scope->findChild<QPushButton *>(QStringLiteral("pp-format-preset-saveas"))
+                : nullptr;
+        auto *geom_del =
+            scope != nullptr
+                ? scope->findChild<QPushButton *>(QStringLiteral("pp-format-preset-delete"))
+                : nullptr;
+        auto *geom_import =
+            scope != nullptr
+                ? scope->findChild<QPushButton *>(QStringLiteral("pp-format-preset-import"))
+                : nullptr;
+        auto *geom_export =
+            scope != nullptr
+                ? scope->findChild<QPushButton *>(QStringLiteral("pp-format-preset-export"))
+                : nullptr;
+        auto *geom_bit_combo =
+            scope != nullptr ? scope->findChild<QComboBox *>(QStringLiteral("pp-bitdepth-combo"))
+                             : nullptr;
+        QWidget *host = geom_combo != nullptr ? geom_combo->parentWidget() : nullptr;
+        const auto left_of = [](QWidget *widget) {
+            return widget != nullptr ? widget->geometry().left() : -1;
+        };
+        const auto right_of = [](QWidget *widget) {
+            return widget != nullptr ? widget->geometry().right() : -1; // Qt: left + width - 1
+        };
+        const auto fits = [](QWidget *widget) {
+            return widget != nullptr && widget->width() >= widget->sizeHint().width();
+        };
+        // row：从 combo 祖先链上取（字段轨 host → … → pp-format-preset-row）
+        QWidget *row_widget = nullptr;
+        for (QWidget *ancestor = host; ancestor != nullptr; ancestor = ancestor->parentWidget()) {
+            if (ancestor->objectName() == QStringLiteral("pp-format-preset-row")) {
+                row_widget = ancestor;
+                break;
+            }
+        }
+        const int combo_w = geom_combo != nullptr ? geom_combo->width() : -1;
+        const int std_w = geom_bit_combo != nullptr ? geom_bit_combo->width() : -1;
+        const bool width_ok = combo_w > 0 && std_w > 0 &&
+                              std::abs(combo_w - formkit::kFieldStd) <= 1 &&
+                              std::abs(combo_w - std_w) <= 1;
+        const bool no_ellipsis = geom_import != nullptr && geom_export != nullptr &&
+                                 geom_import->text() == QStringLiteral("导入") &&
+                                 geom_export->text() == QStringLiteral("导出");
+        const bool all_fit = fits(geom_save) && fits(geom_saveas) && fits(geom_del) &&
+                             fits(geom_import) && fits(geom_export);
+        const bool same_parent = geom_combo != nullptr && geom_save != nullptr && host != nullptr &&
+                                 geom_combo->parentWidget() == host &&
+                                 geom_save->parentWidget() == host;
+        // 同父兄弟：combo 右缘严格在 save 左缘之前（Qt geometry().right() 已含 -1）
+        const bool no_overlap = same_parent && right_of(geom_combo) >= 0 &&
+                                left_of(geom_save) > 0 && right_of(geom_combo) < left_of(geom_save);
+        const bool inside_host =
+            host != nullptr && geom_export != nullptr && geom_export->parentWidget() == host &&
+            right_of(geom_export) >= 0 && right_of(geom_export) < host->width();
+        // —— 诊断面（红时给 Lead 的布局证据）：host 内 geometry + 布局成员序 + 间距 ——
+        auto *host_layout = host != nullptr ? host->layout() : nullptr;
+        const auto geom_of = [host](QWidget *widget) {
+            if (widget == nullptr || host == nullptr)
+                return QStringLiteral("-");
+            const QRect g = widget->geometry();
+            return QStringLiteral("%1,%2 %3x%4 hint=%5")
+                .arg(g.x())
+                .arg(g.y())
+                .arg(g.width())
+                .arg(g.height())
+                .arg(widget->sizeHint().width());
+        };
+        const auto idx_of = [host_layout](QWidget *widget) {
+            return (host_layout != nullptr && widget != nullptr) ? host_layout->indexOf(widget)
+                                                                 : -1;
+        };
+        const QString geom_detail =
+            QStringLiteral("[combo=%1 idx=%2 | save=%3 idx=%4 | saveas=%5 idx=%6 | del=%7 idx=%8 "
+                           "| imp=%9 idx=%10 | exp=%11 idx=%12] spacing=%13")
+                .arg(geom_of(geom_combo))
+                .arg(idx_of(geom_combo))
+                .arg(geom_of(geom_save))
+                .arg(idx_of(geom_save))
+                .arg(geom_of(geom_saveas))
+                .arg(idx_of(geom_saveas))
+                .arg(geom_of(geom_del))
+                .arg(idx_of(geom_del))
+                .arg(geom_of(geom_import))
+                .arg(idx_of(geom_import))
+                .arg(geom_of(geom_export))
+                .arg(idx_of(geom_export))
+                .arg(host_layout != nullptr ? host_layout->spacing() : -1);
+        expect("preset-geom", width_ok && no_ellipsis && all_fit && no_overlap && inside_host,
+               QStringLiteral("page=prod combo-w=%1 std-w=%2(field=%3) no-ellipsis=%4 fit=%5 "
+                              "combo-right=%6 save-left=%7 same-parent=%8 inside-host=%9 "
+                              "host-w=%10 row-w=%11 scroll-w=%12 window-visible=%13 %14")
+                   .arg(combo_w)
+                   .arg(std_w)
+                   .arg(formkit::kFieldStd)
+                   .arg(no_ellipsis ? 1 : 0)
+                   .arg(all_fit ? 1 : 0)
+                   .arg(right_of(geom_combo))
+                   .arg(left_of(geom_save))
+                   .arg(same_parent ? 1 : 0)
+                   .arg(inside_host ? 1 : 0)
+                   .arg(host != nullptr ? host->width() : -1)
+                   .arg(row_widget != nullptr ? row_widget->width() : -1)
+                   .arg(out_scroll != nullptr ? out_scroll->verticalScrollBar()->width() : -1)
+                   .arg(w->isVisible() ? 1 : 0)
+                   .arg(geom_detail));
+        // 归位：恢复探针进入前的页面（不改变后续探针的页面前提）
+        if (geom_page != nullptr && prev_page >= 0)
+            w->set_current_page(prev_page + 1);
+        pump(60);
+    }
 
-    // ---- (b2) 生产页同行在位：行是**页面自己**建的（不是探针页特供）；首项恒为「未选择」
-    //      （真实 data_dir 里有没有预设都不影响这条断言 → 与开发机状态无关）。----
+    // ---- (b) 空态（换锚）：未喂列表 = **空错误态** —— 无「未选择」占位项（M12 需求 4）----
+    expect("empty", combo != nullptr && combo->count() == 0 && combo->currentIndex() < 0,
+           QStringLiteral("count=%1 index=%2")
+               .arg(combo != nullptr ? combo->count() : -1)
+               .arg(combo != nullptr ? combo->currentIndex() : -1));
+
+    // ---- (b2) 生产页同行在位（换锚）：行由页面自建 + **首启已自动选中并载入 default** ----
     {
         auto *prod_combo =
             page_output != nullptr
                 ? page_output->findChild<QComboBox *>(QStringLiteral("pp-format-preset-combo"))
                 : nullptr;
+        const QString prod_fmt = page_output != nullptr ? page_output->current_format() : QString();
+        const QString prod_path = page_output != nullptr && !prod_fmt.isEmpty()
+                                      ? page_output->current_format_preset(prod_fmt)
+                                      : QString();
         const bool prod_ok = prod_combo != nullptr && prod_combo->count() >= 1 &&
-                             prod_combo->itemText(0) == QStringLiteral("未选择");
+                             no_placeholder(prod_combo) && !prod_path.isEmpty() &&
+                             is_default_path(prod_path);
         expect("prod-row", prod_ok,
-               QStringLiteral("combo=%1 count=%2 text0=\"%3\"")
+               QStringLiteral("combo=%1 count=%2 path=%3")
                    .arg(prod_combo != nullptr ? 1 : 0)
                    .arg(prod_combo != nullptr ? prod_combo->count() : -1)
-                   .arg(prod_combo != nullptr && prod_combo->count() > 0 ? prod_combo->itemText(0)
-                                                                         : QString()));
+                   .arg(prod_path));
     }
 
     // ---- 接线（与 wire_format_preset_card 的处理器同一批实现；探针页不是主窗的 page_output）----
@@ -10924,7 +11457,9 @@ void MainWindow::Impl::smoke_probe_format_preset() {
                .arg(quality_before)
                .arg(static_cast<int>(preset.params.size())));
 
-    // ---- (c) 保存 → 列举 → 载入 往返（临时目录）----
+    // ---- (c) 保存 → 列举 → **自动载入** → 显式选中的往返（临时目录）----
+    // M12 换锚：下拉里没有「未选择」；列表喂入后（本格式还没有已载入来源）MainWindow 会自动
+    // 选中并静默载入 default（这里无 default ⇒ 首项）。旧断言「count==2 且首项=未选择」作废。
     std::filesystem::path saved_a;
     const std::string save_err =
         format_preset_save_card(&page, QStringLiteral("smoke-jpeg"), root_a, &saved_a);
@@ -10932,26 +11467,26 @@ void MainWindow::Impl::smoke_probe_format_preset() {
     std::error_code ec;
     if (saved_ok)
         saved_ok = std::filesystem::exists(saved_a, ec);
-    refresh_format_preset_row(fmt, &page, root_a); // 真实映射（列举 +「（损坏）」标注）
-    pump(60);
-    const bool listed = combo != nullptr && combo->count() == 2 &&
-                        combo->itemText(1) == QStringLiteral("smoke-jpeg");
-    // 下拉选中即载入（activated = 用户动作；程序化 setCurrentIndex 不发信号 → 这里显式触发）
+    refresh_page(root_a); // 真实映射（列举 +「（损坏）」标注）+ 自动载入（无 default ⇒ 首项）
+    const bool listed = combo != nullptr && combo->count() == 1 &&
+                        combo->itemText(0).contains(QStringLiteral("smoke-jpeg"));
+    const bool auto_loaded =
+        listed && page.current_format_preset(fmt) == QString::fromStdString(saved_a.string());
     if (listed) {
-        combo->setCurrentIndex(1);
-        QMetaObject::invokeMethod(combo, "activated", Qt::DirectConnection, Q_ARG(int, 1));
-        pump(100);
+        const int index = 0; // 只有一个真实预设项（smoke-jpeg）
+        activate(index);     // 显式选中 = 用户动作（走 wired load handler）
     }
     const QString note_after_load = full_text(QStringLiteral("pp-format-preset-note-jpeg"));
     const auto *changed_pill = page.findChild<QLabel *>(QStringLiteral("pp-format-changed-pill"));
     const QString changed_text = changed_pill != nullptr ? changed_pill->text() : QString();
     expect("roundtrip",
-           saved_ok && listed && last_load_error.isEmpty() &&
+           saved_ok && auto_loaded && listed && last_load_error.isEmpty() &&
                page.current_format_preset(fmt) == QString::fromStdString(saved_a.string()) &&
                card_quality() == quality_before && changed_text != QStringLiteral("已改 0") &&
                changed_pill != nullptr && changed_pill->isVisible(),
-           QStringLiteral("saved=%1 listed=%2 err=\"%3\" path=%4 quality=%5 pill=\"%6\"")
+           QStringLiteral("saved=%1 auto=%2 listed=%3 err=\"%4\" path=%5 quality=%6 pill=\"%7\"")
                .arg(saved_ok ? 1 : 0)
+               .arg(auto_loaded ? 1 : 0)
                .arg(listed ? 1 : 0)
                .arg(last_load_error)
                .arg(page.current_format_preset(fmt))
@@ -11043,7 +11578,7 @@ void MainWindow::Impl::smoke_probe_format_preset() {
         pump(60);
         bool marked = false;
         bool kind_marked = false;
-        for (int i = 1; combo != nullptr && i < combo->count(); ++i) {
+        for (int i = 0; combo != nullptr && i < combo->count(); ++i) {
             const QString path = combo->itemData(i, Qt::UserRole).toString();
             if (path == QString::fromStdString(broken.string()) &&
                 combo->itemText(i).contains(QStringLiteral("（损坏）")))
@@ -11157,105 +11692,364 @@ void MainWindow::Impl::smoke_probe_format_preset() {
                    .arg(page.format_preset_adaptive_enabled(fmt) ? 1 : 0));
     }
 
-    // ---- (g) 内置（出厂）预设：seed 幂等 + 出现在对应格式列表 + 只读拒绝删/覆盖（W3-T5）----
+    // ---- (f2) 换锚（旧 S-4/S-5「未选择清自适应」→ 来源消失自愈回 default）----
+    // 旧口径：选「未选择」= 清策略会话态（状态已不存在）。新口径：预设**来源文件**被外部删除/
+    // 改名后，列表刷新必须自动回 default 并载入它 —— 卡值/策略随 default 更新，不残留被删来源
+    // 的旧策略（否则引擎会按无承载者的旧策略继续迭代）。
     {
-        const std::filesystem::path builtin_root =
-            std::filesystem::path((base + "/builtin").toStdString());
-        const pp::ui::FormatPresetSeedReport seed1 =
-            pp::ui::seed_builtin_format_presets_to(builtin_root);
-        bool five_files = seed1.written == 5 && seed1.failed == 0 && seed1.errors.empty();
-        for (const pp::FormatPresetData &bp : pp::builtin_format_presets()) {
-            const std::filesystem::path f =
-                builtin_root / bp.format_id / ("_builtin-" + bp.format_id + ".json");
-            five_files = five_files && std::filesystem::exists(f);
-        }
-        // 内置 jpeg 预设应出现在「格式预设」下拉里（显示名 = 内置示例 · JPEG）
-        refresh_format_preset_row(fmt, &page, builtin_root);
-        pump(60);
-        int builtin_index = -1;
-        for (int i = 1; combo != nullptr && i < combo->count(); ++i) {
-            if (combo->itemText(i).contains(QStringLiteral("内置示例 · JPEG")))
-                builtin_index = i;
-        }
-        const bool listed_builtin = builtin_index > 0;
-        if (listed_builtin) {
-            combo->setCurrentIndex(builtin_index);
-            QMetaObject::invokeMethod(combo, "activated", Qt::DirectConnection,
-                                      Q_ARG(int, builtin_index));
-            pump(120);
-        }
-        auto *builtin_row =
+        // root_c：default（无策略）+ keep（带策略）两份预设，都用当前卡快照落盘。
+        page.set_format_preset_adaptive(fmt, QString(), false); // 清掉上一步的坏策略残态
+        pump(40);
+        pp::FormatPresetData c_default = format_preset_collect(&page, QStringLiteral("default"));
+        c_default.adaptive_policy.clear();
+        c_default.adaptive_enabled = false;
+        std::filesystem::path c_default_path;
+        const std::string c_derr =
+            pp::ui::save_format_preset_to(root_c, c_default, &c_default_path);
+        const QString f2_policy = QStringLiteral("version 1\n"
+                                                 "target 90\n"
+                                                 "max_rounds 3\n"
+                                                 "output last\n"
+                                                 "stage q-up\n"
+                                                 "  search quality from current to 95 step 5\n");
+        pp::FormatPresetData keep = format_preset_collect(&page, QStringLiteral("smoke-keep"));
+        keep.adaptive_policy = f2_policy.toStdString();
+        keep.adaptive_enabled = true;
+        std::filesystem::path keep_path;
+        const std::string kerr = pp::ui::save_format_preset_to(root_c, keep, &keep_path);
+        const QString kload = kerr.empty() ? QString::fromStdString(format_preset_load_into(
+                                                 QString::fromStdString(keep_path.string()), &page))
+                                           : QString::fromStdString(kerr);
+        pump(120);
+        auto *f2_row = page.findChild<QWidget *>(QStringLiteral("pp-format-preset-adaptive-row"));
+        const bool before_ok = c_derr.empty() && kerr.empty() && kload.isEmpty() &&
+                               page.format_preset_adaptive_enabled(fmt) &&
+                               !page.format_preset_adaptive_policy(fmt).isEmpty() &&
+                               f2_row != nullptr && f2_row->isVisible();
+        // 来源文件被外部删除 → 刷新列表（会话路径失效 ⇒ 自动回 default 并载入）
+        const std::string del_keep =
+            pp::ui::delete_format_preset(std::filesystem::path(keep_path.string()));
+        refresh_page(root_c);
+        auto *f2_row_after =
             page.findChild<QWidget *>(QStringLiteral("pp-format-preset-adaptive-row"));
-        const QString builtin_summary = full_text(QStringLiteral("pp-format-preset-adaptive-jpeg"));
-        const bool loaded_builtin =
-            listed_builtin && last_load_error.isEmpty() &&
-            page.current_format_preset(fmt).endsWith(QStringLiteral("_builtin-jpeg.json")) &&
-            builtin_row != nullptr && builtin_row->isVisible() &&
-            builtin_summary.contains(QStringLiteral("90")) &&
-            page.format_preset_adaptive_enabled(fmt);
-        expect("builtin", five_files && loaded_builtin,
-               QStringLiteral("written=%1 files=%2 listed=%3 err=\"%4\" path=%5 row=%6 "
-                              "summary=\"%7\"")
-                   .arg(seed1.written)
-                   .arg(five_files ? 1 : 0)
-                   .arg(listed_builtin ? 1 : 0)
-                   .arg(last_load_error)
+        const pp::RunConfig f2_cfg = page.config_base();
+        const bool self_healed =
+            del_keep.empty() && is_default_path(stem_of(page.current_format_preset(fmt))) &&
+            page.format_preset_adaptive_policy(fmt).isEmpty() &&
+            !page.format_preset_adaptive_enabled(fmt) && f2_row_after != nullptr &&
+            !f2_row_after->isVisible() && f2_cfg.outputs.size() == 1 &&
+            f2_cfg.outputs[0].adaptive_policy.empty() && !f2_cfg.outputs[0].adaptive_enabled;
+        expect("selfheal-default", before_ok && self_healed,
+               QStringLiteral("before=%1/\"%2\" del=\"%3\" path=%4 policy=\"%5\" visible=%6")
+                   .arg(before_ok ? 1 : 0)
+                   .arg(page.format_preset_adaptive_policy(fmt))
+                   .arg(QString::fromStdString(del_keep))
                    .arg(page.current_format_preset(fmt))
-                   .arg(builtin_row != nullptr && builtin_row->isVisible() ? 1 : 0)
-                   .arg(builtin_summary));
+                   .arg(page.format_preset_adaptive_policy(fmt))
+                   .arg(f2_row_after != nullptr && f2_row_after->isVisible() ? 1 : 0));
+    }
 
-        const auto read_bytes = [](const std::filesystem::path &file) {
-            QFile f(QString::fromStdString(file.string()));
-            if (!f.open(QIODevice::ReadOnly))
-                return QByteArray();
-            return f.readAll();
-        };
-        const std::filesystem::path jpeg_builtin =
-            builtin_root / std::string(fmt_id) / "_builtin-jpeg.json";
-        const QByteArray builtin_bytes = read_bytes(jpeg_builtin);
-        // 幂等：第二次 seed 零写入、文件零字节改动
+    // ---- (g) 工厂（出厂）预设数据文件：seed 幂等 / 旧 `_builtin-*` 迁移 / default 自动载入 ----
+    {
+        // 预置 0.4.0.alpha1 的旧版只读内置模板 → seed 必须迁移删除（简报 §3.2 / A 的 seed 语义）
+        std::error_code sec;
+        std::filesystem::create_directories(seed_root / "jpeg", sec);
+        std::filesystem::create_directories(seed_root / "heif", sec);
+        for (const char *legacy : {"jpeg/_builtin-jpeg.json", "heif/_builtin-heif.json"}) {
+            QFile f(QString::fromStdString((seed_root / legacy).string()));
+            if (f.open(QIODevice::WriteOnly))
+                f.write("{\"_builtin_legacy\": true}");
+        }
+        const pp::ui::FormatPresetSeedReport seed1 =
+            pp::ui::seed_factory_format_presets_to(factory_root, seed_root);
+        int default_files = 0;
+        bool names_ok = true;
+        for (const char *fid : {"jpeg", "webp", "jxl", "heif", "avif", "png", "tiff", "bmp"}) {
+            const std::filesystem::path file = seed_root / fid / "default.json";
+            if (!std::filesystem::exists(file))
+                continue;
+            ++default_files;
+            pp::FormatPresetData loaded;
+            if (!pp::ui::load_format_preset(file, loaded).empty() ||
+                loaded.name != std::string(pp::kFormatPresetDefaultName))
+                names_ok = false;
+        }
+        int seeded_json = 0;
+        for (std::filesystem::recursive_directory_iterator it(seed_root), end; it != end; ++it) {
+            if (it->is_regular_file() && it->path().extension() == ".json")
+                ++seeded_json;
+        }
+        const std::filesystem::path legacy_jpeg = seed_root / "jpeg" / "_builtin-jpeg.json";
+        const std::filesystem::path legacy_heif = seed_root / "heif" / "_builtin-heif.json";
+        expect("factory-seed",
+               factory_ok && seed1.written == 11 && seed1.skipped == 0 && seed1.failed == 0 &&
+                   seed1.removed_legacy == 2 && seeded_json == 11 && default_files == 8 && names_ok,
+               QStringLiteral("factory=%1 written=%2 skipped=%3 removed=%4 failed=%5 json=%6 "
+                              "defaults=%7 names=%8 errors=\"%9\"")
+                   .arg(factory_ok ? 1 : 0)
+                   .arg(seed1.written)
+                   .arg(seed1.skipped)
+                   .arg(seed1.removed_legacy)
+                   .arg(seed1.failed)
+                   .arg(seeded_json)
+                   .arg(default_files)
+                   .arg(names_ok ? 1 : 0)
+                   .arg(QString::fromStdString(seed1.errors.empty() ? std::string()
+                                                                    : seed1.errors.front())));
+        expect("factory-migrate",
+               seed1.removed_legacy >= 2 && !std::filesystem::exists(legacy_jpeg) &&
+                   !std::filesystem::exists(legacy_heif),
+               QStringLiteral("removed=%1 jpeg=%2 heif=%3")
+                   .arg(seed1.removed_legacy)
+                   .arg(std::filesystem::exists(legacy_jpeg) ? 1 : 0)
+                   .arg(std::filesystem::exists(legacy_heif) ? 1 : 0));
+        expect("legacy-migrated",
+               !std::filesystem::exists(legacy_jpeg) && !std::filesystem::exists(legacy_heif),
+               QStringLiteral("jpeg=%1 heif=%2")
+                   .arg(std::filesystem::exists(legacy_jpeg) ? 1 : 0)
+                   .arg(std::filesystem::exists(legacy_heif) ? 1 : 0));
+        // 幂等：第二次 seed 零写入/零迁移 + 文件逐字节不变（用户文件永不覆盖）
+        const QByteArray seed_default_bytes = read_bytes(seed_root / "jpeg" / "default.json");
         const pp::ui::FormatPresetSeedReport seed2 =
-            pp::ui::seed_builtin_format_presets_to(builtin_root);
-        const bool idem = seed2.written == 0 && seed2.skipped == 5 && seed2.failed == 0 &&
-                          !builtin_bytes.isEmpty() && read_bytes(jpeg_builtin) == builtin_bytes;
-        expect("builtin-idem", idem,
-               QStringLiteral("written=%1 skipped=%2 failed=%3 bytes=%4 same=%5")
+            pp::ui::seed_factory_format_presets_to(factory_root, seed_root);
+        const bool seed_bytes_same =
+            read_bytes(seed_root / "jpeg" / "default.json") == seed_default_bytes &&
+            !seed_default_bytes.isEmpty();
+        expect("factory-idem",
+               seed2.written == 0 && seed2.skipped == 11 && seed2.removed_legacy == 0 &&
+                   seed2.failed == 0 && seed_bytes_same,
+               QStringLiteral("written=%1 skipped=%2 removed=%3 failed=%4 bytes=%5 same=%6")
                    .arg(seed2.written)
                    .arg(seed2.skipped)
+                   .arg(seed2.removed_legacy)
                    .arg(seed2.failed)
-                   .arg(builtin_bytes.size())
-                   .arg(read_bytes(jpeg_builtin) == builtin_bytes ? 1 : 0));
+                   .arg(seed_default_bytes.size())
+                   .arg(seed_bytes_same ? 1 : 0));
+        expect("builtin-idem", seed2.written == 0 && seed2.skipped == 11 && seed2.failed == 0,
+               QStringLiteral("written=%1 skipped=%2 failed=%3")
+                   .arg(seed2.written)
+                   .arg(seed2.skipped)
+                   .arg(seed2.failed));
 
-        // 只读：UI「删除」置灰 + 原因 tooltip；I/O 拒绝删除/覆盖（文件零改动）；另存可用
-        const bool ui_readonly =
-            del != nullptr && !del->isEnabled() && del->toolTip().contains(QStringLiteral("内置"));
-        const std::string del_err = pp::ui::delete_format_preset(jpeg_builtin);
-        pp::FormatPresetData overwrite =
-            format_preset_collect(&page, QStringLiteral("_builtin-jpeg"));
-        std::filesystem::path overwrite_saved;
-        const std::string overwrite_err =
-            pp::ui::save_format_preset_to(builtin_root, overwrite, &overwrite_saved);
-        const bool io_readonly = del_err.find("内置") != std::string::npos &&
-                                 overwrite_err.find("内置") != std::string::npos &&
-                                 overwrite_saved.empty() && std::filesystem::exists(jpeg_builtin) &&
-                                 read_bytes(jpeg_builtin) == builtin_bytes;
-        expect("builtin-readonly", ui_readonly && io_readonly,
-               QStringLiteral("ui=%1 del=\"%2\" save=\"%3\" saved=%4 same=%5")
-                   .arg(ui_readonly ? 1 : 0)
-                   .arg(QString::fromStdString(del_err), QString::fromStdString(overwrite_err))
-                   .arg(overwrite_saved.empty() ? 1 : 0)
-                   .arg(read_bytes(jpeg_builtin) == builtin_bytes ? 1 : 0));
+        // 工厂列表喂入 jpeg 页 → 列表含 default（显示名 = default）+ 无占位项 + 自动载入 default
+        refresh_page(factory_root);
+        bool has_default_item = false;
+        for (int i = 0; combo != nullptr && i < combo->count(); ++i) {
+            if (is_default_path(combo->itemData(i, Qt::UserRole).toString()))
+                has_default_item = true;
+        }
+        expect("builtin",
+               factory_ok && seed1.written == 11 && seeded_json == 11 && has_default_item &&
+                   no_placeholder(combo),
+               QStringLiteral("factory=%1 written=%2 json=%3 default-item=%4")
+                   .arg(factory_ok ? 1 : 0)
+                   .arg(seed1.written)
+                   .arg(seeded_json)
+                   .arg(has_default_item ? 1 : 0));
 
-        // 另存可用（普通名字写入成功且不带只读前缀）
-        pp::FormatPresetData copy = format_preset_collect(&page, QStringLiteral("我的 JPEG 副本"));
+        // default-selected：自动选中并载入工厂 jpeg/default（卡值 = default 快照）
+        const QString def_path = page.current_format_preset(fmt);
+        auto *jpeg_mode = page.findChild<QComboBox *>(QStringLiteral("pp-param-quality_mode"));
+        auto *jpeg_distance = page.findChild<QDoubleSpinBox *>(QStringLiteral("pp-param-distance"));
+        const bool default_selected =
+            factory_ok && is_default_path(stem_of(def_path)) &&
+            QString::fromStdString(def_path.toStdString())
+                .endsWith(QStringLiteral("default.json")) &&
+            jpeg_mode != nullptr && jpeg_mode->currentText() == QStringLiteral("distance") &&
+            jpeg_distance != nullptr && std::abs(jpeg_distance->value() - 3.0) < 1e-9;
+        expect("default-selected", default_selected,
+               QStringLiteral("path=%1 mode=\"%2\" distance=%3")
+                   .arg(def_path)
+                   .arg(jpeg_mode != nullptr ? jpeg_mode->currentText() : QString())
+                   .arg(jpeg_distance != nullptr ? jpeg_distance->value() : -1.0));
+
+        // no-unselected：下拉只含真实预设文件（无「未选择」文案/空 itemData 占位项）
+        expect("no-unselected", combo != nullptr && combo->count() >= 1 && no_placeholder(combo),
+               QStringLiteral("count=%1").arg(combo != nullptr ? combo->count() : -1));
+
+        // preset-tip（换锚）：显式选 default → combo tooltip = 预设全名 default、注记 =
+        // 来自格式预设
+        const int def_index = default_item_index();
+        activate(def_index);
+        const QString tip_text = combo != nullptr ? combo->toolTip() : QString();
+        const QString tip_note = full_text(QStringLiteral("pp-format-preset-note-jpeg"));
+        expect("preset-tip",
+               def_index >= 0 && last_load_error.isEmpty() &&
+                   tip_text == QStringLiteral("default") &&
+                   tip_note.contains(QStringLiteral("来自格式预设")) &&
+                   tip_note.contains(QStringLiteral("default")),
+               QStringLiteral("index=%1 tip=\"%2\" note=\"%3\" err=\"%4\"")
+                   .arg(def_index)
+                   .arg(tip_text)
+                   .arg(tip_note)
+                   .arg(last_load_error));
+
+        // jpeg-adaptive（需求 5 机械验证）：RC=视觉距离 / distance=3.0 / 自适应行可见+开关开 /
+        // 摘要含「目标 90 分」/ 策略含断点 `breakpoint 1 step 1` / 执行面下发同一策略。
+        auto *adaptive_row =
+            page.findChild<QWidget *>(QStringLiteral("pp-format-preset-adaptive-row"));
+        auto *adaptive_switch =
+            page.findChild<QAbstractButton *>(QStringLiteral("pp-format-preset-adaptive-switch"));
+        const QString jpeg_summary = full_text(QStringLiteral("pp-format-preset-adaptive-jpeg"));
+        const QString jpeg_policy = page.format_preset_adaptive_policy(fmt);
+        const pp::RunConfig jpeg_cfg = page.config_base();
+        const bool jpeg_adaptive =
+            jpeg_mode != nullptr && jpeg_mode->currentText() == QStringLiteral("distance") &&
+            jpeg_distance != nullptr && std::abs(jpeg_distance->value() - 3.0) < 1e-9 &&
+            adaptive_row != nullptr && adaptive_row->isVisible() && adaptive_switch != nullptr &&
+            adaptive_switch->isChecked() && page.format_preset_adaptive_enabled(fmt) &&
+            jpeg_summary.contains(QStringLiteral("目标 90 分")) &&
+            jpeg_policy.contains(QStringLiteral("breakpoint 1 step 1")) &&
+            jpeg_cfg.outputs.size() == 1 && jpeg_cfg.outputs[0].adaptive_enabled &&
+            jpeg_cfg.outputs[0].adaptive_policy.find("breakpoint 1 step 1") != std::string::npos;
+        expect("jpeg-adaptive", jpeg_adaptive,
+               QStringLiteral("mode=\"%1\" distance=%2 row=%3 switch=%4 summary=\"%5\" policy=%6")
+                   .arg(jpeg_mode != nullptr ? jpeg_mode->currentText() : QString())
+                   .arg(jpeg_distance != nullptr ? jpeg_distance->value() : -1.0)
+                   .arg(adaptive_row != nullptr && adaptive_row->isVisible() ? 1 : 0)
+                   .arg(adaptive_switch != nullptr && adaptive_switch->isChecked() ? 1 : 0)
+                   .arg(jpeg_summary)
+                   .arg(jpeg_policy.contains(QStringLiteral("breakpoint 1 step 1")) ? 1 : 0));
+
+        // save-default（需求 4 硬要求）：default **可保存覆盖** = 直接修改该格式的 default.json。
+        // 在**临时 seed 根**上做（不写工厂/真实数据目录）：改卡值 distance=2.5 → 保存名 default。
+        if (form != nullptr) {
+            form->set_values(pp::ParamSet{{"distance", 2.5}});
+            pump(60);
+        }
+        std::filesystem::path saved_default;
+        const QString save_default_err = QString::fromStdString(
+            format_preset_save_card(&page, QStringLiteral("default"), seed_root, &saved_default));
+        pp::FormatPresetData reloaded_default;
+        const std::string reload_default_err =
+            pp::ui::load_format_preset(saved_default, reloaded_default);
+        double reloaded_distance = -1.0;
+        {
+            const auto it = reloaded_default.params.find("distance");
+            if (it != reloaded_default.params.end()) {
+                if (const double *d = std::get_if<double>(&it->second))
+                    reloaded_distance = *d;
+            }
+        }
+        const bool saved_default_ok =
+            save_default_err.isEmpty() && reload_default_err.empty() &&
+            saved_default == seed_root / fmt_id / "default.json" &&
+            is_default_path(stem_of(QString::fromStdString(saved_default.string()))) &&
+            std::abs(reloaded_distance - 2.5) < 1e-9 &&
+            read_bytes(saved_default) != seed_default_bytes;
+        expect("save-default", saved_default_ok,
+               QStringLiteral("err=\"%1\" saved=%2 reload=\"%3\" distance=%4 changed=%5")
+                   .arg(save_default_err, QString::fromStdString(saved_default.string()),
+                        QString::fromStdString(reload_default_err))
+                   .arg(reloaded_distance)
+                   .arg(read_bytes(saved_default) != seed_default_bytes ? 1 : 0));
+
+        // default-protected（需求 4 硬要求）：default 不可删除 —— UI「删除」置灰 + 原因 tooltip；
+        // I/O 层同样拒绝（中文原因 + 文件零改动）。注意**不调用** format_preset_delete_file
+        // （它会弹模态框；探针用 I/O 层机械断言）。
+        const QByteArray saved_default_bytes = read_bytes(saved_default);
+        const std::string del_default_err =
+            pp::ui::delete_format_preset(std::filesystem::path(saved_default.string()));
+        const bool protected_ui = del != nullptr && !del->isEnabled() &&
+                                  del->toolTip().contains(QStringLiteral("不可删除"));
+        const bool protected_io = !del_default_err.empty() &&
+                                  del_default_err.find("不可删除") != std::string::npos &&
+                                  std::filesystem::exists(saved_default) &&
+                                  read_bytes(saved_default) == saved_default_bytes;
+        expect("default-protected", protected_ui && protected_io,
+               QStringLiteral("ui=%1 tip=\"%2\" io=\"%3\" same=%4")
+                   .arg(protected_ui ? 1 : 0)
+                   .arg(del != nullptr ? del->toolTip() : QString())
+                   .arg(QString::fromStdString(del_default_err))
+                   .arg(read_bytes(saved_default) == saved_default_bytes ? 1 : 0));
+        expect("builtin-readonly",
+               saved_default_ok && protected_io && save != nullptr && save->isEnabled(),
+               QStringLiteral("saved=%1 io=\"%2\" save-enabled=%3")
+                   .arg(saved_default_ok ? 1 : 0)
+                   .arg(QString::fromStdString(del_default_err))
+                   .arg(save != nullptr && save->isEnabled() ? 1 : 0));
+
+        // builtin-saveas：「另存」= 复制 —— 普通名字成功、且不是 default（不会被保护误伤）
+        pp::FormatPresetData copy = format_preset_collect(&page, QStringLiteral("default 副本"));
         std::filesystem::path copy_saved;
-        const std::string copy_err = pp::ui::save_format_preset_to(builtin_root, copy, &copy_saved);
-        expect("builtin-saveas",
-               copy_err.empty() && !copy_saved.empty() &&
-                   !pp::ui::is_builtin_format_preset_path(copy_saved),
+        const std::string copy_err = pp::ui::save_format_preset_to(seed_root, copy, &copy_saved);
+        const bool copy_ok = copy_err.empty() && !copy_saved.empty() &&
+                             std::filesystem::exists(copy_saved) &&
+                             !pp::is_default_format_preset_name(
+                                 QFileInfo(QString::fromStdString(copy_saved.string()))
+                                     .completeBaseName()
+                                     .toStdString());
+        expect("builtin-saveas", copy_ok,
                QStringLiteral("err=\"%1\" saved=\"%2\"")
                    .arg(QString::fromStdString(copy_err),
                         QString::fromStdString(copy_saved.string())));
+
+        // 复位 page 卡值/来源到 default（后续全局预设块从稳定态出发）
+        page.set_format_preset_adaptive(fmt, QString(), false);
+        activate(default_item_index());
+    }
+
+    // ---- (h) 工厂 HEIF「Apple自适应」：CRF 控件读数 == 20（需求 3 的机械验证）----
+    {
+        PageOutput heif_page;
+        heif_page.set_tokens(tokens);
+        heif_page.resize(theme::Metrics::right_width, theme::Metrics::calibrated_h);
+        heif_page.show();
+        heif_page.select_format(QStringLiteral("heif"));
+        pump(250);
+        refresh_format_preset_row(QStringLiteral("heif"), &heif_page, factory_root);
+        pump(250);
+        const std::filesystem::path apple_path = factory_root / "heif" / "apple-adaptive.json";
+        const std::string apple_err =
+            std::filesystem::exists(apple_path)
+                ? format_preset_load_into(QString::fromStdString(apple_path.string()), &heif_page)
+                : std::string("factory file missing");
+        pump(250);
+        auto *crf = heif_page.findChild<QDoubleSpinBox *>(QStringLiteral("pp-param-x265:crf"));
+        auto *apple_row =
+            heif_page.findChild<QWidget *>(QStringLiteral("pp-format-preset-adaptive-row"));
+        const QString apple_path_now = heif_page.current_format_preset(QStringLiteral("heif"));
+        const bool apple_ok = apple_err.empty() && crf != nullptr &&
+                              std::abs(crf->value() - 20.0) < 1e-9 &&
+                              apple_path_now.endsWith(QStringLiteral("apple-adaptive.json")) &&
+                              heif_page.format_preset_adaptive_enabled(QStringLiteral("heif")) &&
+                              apple_row != nullptr && apple_row->isVisible();
+        expect("heif-apple-crf", apple_ok,
+               QStringLiteral("err=\"%1\" crf=%2 path=%3 row=%4")
+                   .arg(QString::fromStdString(apple_err))
+                   .arg(crf != nullptr ? crf->value() : -1.0)
+                   .arg(apple_path_now)
+                   .arg(apple_row != nullptr && apple_row->isVisible() ? 1 : 0));
+        heif_page.hide();
+    }
+
+    // ---- (i) 工厂 PNG default：无自适应策略 → 自适应整行隐藏（需求 4：空策略隐藏不变）----
+    {
+        PageOutput png_page;
+        png_page.set_tokens(tokens);
+        png_page.resize(theme::Metrics::right_width, theme::Metrics::calibrated_h);
+        png_page.show();
+        png_page.select_format(QStringLiteral("png"));
+        pump(150);
+        refresh_format_preset_row(QStringLiteral("png"), &png_page, factory_root);
+        pump(150);
+        auto *png_row =
+            png_page.findChild<QWidget *>(QStringLiteral("pp-format-preset-adaptive-row"));
+        const pp::RunConfig png_cfg = png_page.config_base();
+        const QString png_path = png_page.current_format_preset(QStringLiteral("png"));
+        const bool png_ok =
+            is_default_path(stem_of(png_path)) &&
+            png_path.endsWith(QStringLiteral("default.json")) &&
+            png_page.format_preset_adaptive_policy(QStringLiteral("png")).isEmpty() &&
+            !png_page.format_preset_adaptive_enabled(QStringLiteral("png")) && png_row != nullptr &&
+            !png_row->isVisible() && png_cfg.outputs.size() == 1 &&
+            png_cfg.outputs[0].adaptive_policy.empty();
+        expect("png-no-adaptive", png_ok,
+               QStringLiteral("path=%1 policy=\"%2\" visible=%3")
+                   .arg(png_path)
+                   .arg(png_page.format_preset_adaptive_policy(QStringLiteral("png")))
+                   .arg(png_row != nullptr && png_row->isVisible() ? 1 : 0));
+        png_page.hide();
     }
 
     // ---- (h) 全局预设含 adaptive：save→load→再保存往返 + 格式卡开关同步（W3-T5 / A20）----
@@ -11295,10 +12089,51 @@ void MainWindow::Impl::smoke_probe_format_preset() {
             }
         }
         const QJsonObject gadaptive = gspec.value(QStringLiteral("adaptive")).toObject();
+        // 需求 3：policy 落盘 = JSON 字符串数组（一行一个元素、零 \n 转义）；内存态仍是
+        // \n 连接的单个字符串（上面 collected_ok 已按字符串断言）。
+        QStringList expect_policy_lines = g_policy.split(QLatin1Char('\n'));
+        while (!expect_policy_lines.isEmpty() && expect_policy_lines.last().isEmpty())
+            expect_policy_lines.removeLast();
+        const QJsonValue gpolicy_v = gadaptive.value(QStringLiteral("policy"));
+        bool policy_lines_ok = gpolicy_v.isArray();
+        const QJsonArray gpolicy_lines = gpolicy_v.toArray();
+        policy_lines_ok = policy_lines_ok && gpolicy_lines.size() == expect_policy_lines.size();
+        for (int i = 0; policy_lines_ok && i < gpolicy_lines.size(); ++i) {
+            policy_lines_ok = gpolicy_lines.at(i).toString() == expect_policy_lines.at(i);
+        }
+        // 旧字符串形态（policy = 单个字符串）仍兼容读：手写一份 0.4.0 之前的形态 → load 成功
+        // 且文本与内存态逐字节一致。
+        bool legacy_policy_ok = false;
+        {
+            QJsonObject spec;
+            spec.insert(QStringLiteral("format"), QString::fromStdString(std::string(fmt_id)));
+            spec.insert(QStringLiteral("params"), QJsonObject{});
+            QJsonObject adaptive;
+            adaptive.insert(QStringLiteral("enabled"), true);
+            adaptive.insert(QStringLiteral("policy"), g_policy); // 旧形态：字符串
+            spec.insert(QStringLiteral("adaptive"), adaptive);
+            QJsonArray outs;
+            outs.append(spec);
+            QJsonObject root;
+            root.insert(QStringLiteral("version"), 2);
+            root.insert(QStringLiteral("name"), QStringLiteral("smoke-adaptive-legacy"));
+            root.insert(QStringLiteral("output_template"), QStringLiteral("$format/$dir/$file"));
+            root.insert(QStringLiteral("outputs"), outs);
+            const std::filesystem::path legacy_file = gdir / "smoke-global-adaptive-legacy.json";
+            QFile lf(QString::fromStdString(legacy_file.string()));
+            if (lf.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                lf.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+                lf.close();
+                pp::PresetData legacy_loaded;
+                legacy_policy_ok =
+                    pp::ui::load_preset(legacy_file, legacy_loaded).empty() &&
+                    !legacy_loaded.outputs.empty() &&
+                    legacy_loaded.outputs[0].adaptive_policy == g_policy.toStdString();
+            }
+        }
         const bool json_ok = gspec.contains(QStringLiteral("adaptive")) &&
                              gadaptive.value(QStringLiteral("enabled")).toBool(false) &&
-                             gadaptive.value(QStringLiteral("policy")).toString().toStdString() ==
-                                 g_policy.toStdString();
+                             policy_lines_ok && legacy_policy_ok;
         // 再保存：字节稳定（临时目录往返）
         const std::filesystem::path gfile2 = gdir / "smoke-global-adaptive-2.json";
         const std::string gsave2 =
@@ -11310,8 +12145,10 @@ void MainWindow::Impl::smoke_probe_format_preset() {
             return f.readAll();
         };
         const QByteArray gbytes = read_bytes2(gfile);
+        // 需求 3：数组形态落盘 ⇒ 文件内不得出现 \n 转义（策略逐行可读）。
         const bool bytes_ok = gsave.empty() && gload.empty() && gsave2.empty() &&
-                              !gbytes.isEmpty() && read_bytes2(gfile2) == gbytes;
+                              !gbytes.isEmpty() && read_bytes2(gfile2) == gbytes &&
+                              !gbytes.contains("\\n");
         // 载入全局预设 → 格式卡自适应只读摘要/开关同步
         if (gload.empty())
             page.apply_preset(greload);
@@ -11334,6 +12171,54 @@ void MainWindow::Impl::smoke_probe_format_preset() {
                    .arg(QString::fromStdString(gsave), QString::fromStdString(gload),
                         QString::fromStdString(gsave2))
                    .arg(g_summary));
+
+        // ---- clears-source（换锚）：「全局预设接管（detached）」——来源清空但仍是可恢复态 ----
+        // 旧 S-3 把下拉打回「未选择」；M12 无该状态 ⇒ 断言：会话来源清空（path 空）+ 下拉仍高亮
+        // default（视觉锚）+「保存」禁用（原因 tooltip 含「全局预设」）+ 注记含「全局预设」；
+        // 点「保存」不得产生覆盖意图（禁用按钮 = 不会用全局预设值覆盖 default.json）。
+        {
+            const QString s3_note = full_text(QStringLiteral("pp-format-preset-note-jpeg"));
+            const bool source_cleared =
+                page.current_format_preset(fmt).isEmpty() && page.format_preset_detached(fmt) &&
+                combo != nullptr && combo->count() >= 1 &&
+                is_default_path(combo->itemData(combo->currentIndex(), Qt::UserRole).toString()) &&
+                save != nullptr && !save->isEnabled() &&
+                save->toolTip().contains(QStringLiteral("全局预设")) &&
+                s3_note.contains(QStringLiteral("全局预设"));
+            // 抑制验证：列表刷新（= 页签重激活的真实路径）**不得**触发 default 自动载入 ——
+            // 否则全局预设值会被 default 冲掉（Lead 裁定口径）。
+            refresh_page(factory_root);
+            const QString after_refresh_note =
+                full_text(QStringLiteral("pp-format-preset-note-jpeg"));
+            const bool auto_load_suppressed =
+                page.current_format_preset(fmt).isEmpty() && page.format_preset_detached(fmt) &&
+                save != nullptr && !save->isEnabled() &&
+                after_refresh_note.contains(QStringLiteral("全局预设"));
+            int save_hits = 0;
+            const QMetaObject::Connection save_conn =
+                QObject::connect(&page, &PageOutput::format_preset_save_requested, &page,
+                                 [&save_hits](const QString &) { ++save_hits; });
+            if (save != nullptr)
+                save->click(); // 禁用 ⇒ 不应发信号（= 不会覆盖 default/旧来源文件）
+            pump(60);
+            QObject::disconnect(save_conn);
+            expect("global-detached-source",
+                   source_cleared && auto_load_suppressed && save_hits == 0,
+                   QStringLiteral("cleared=%1 suppressed=%2 detached=%3 path=\"%4\" "
+                                  "combo-item=\"%5\" save-enabled=%6 tip=\"%7\" note=\"%8\" "
+                                  "save-hits=%9")
+                       .arg(source_cleared ? 1 : 0)
+                       .arg(auto_load_suppressed ? 1 : 0)
+                       .arg(page.format_preset_detached(fmt) ? 1 : 0)
+                       .arg(page.current_format_preset(fmt))
+                       .arg(combo != nullptr
+                                ? combo->itemData(combo->currentIndex(), Qt::UserRole).toString()
+                                : QString())
+                       .arg(save != nullptr && save->isEnabled() ? 1 : 0)
+                       .arg(save != nullptr ? save->toolTip() : QString())
+                       .arg(s3_note)
+                       .arg(save_hits));
+        }
 
         // 执行面门控（A20）：开 → config_base 下发策略；关 → 不下发（引擎旧路径），
         // 但采集面（collect_preset）仍保留策略文本（关掉开关再保存不丢文本）。
@@ -11368,6 +12253,28 @@ void MainWindow::Impl::smoke_probe_format_preset() {
                    .arg(QString::fromStdString(goff_err), QString::fromStdString(goff_load)));
     }
 
+    // ---- global-detached（M12 新）：「被全局预设接管」可恢复 —— 显式选 default 后 save 恢复 ----
+    {
+        const int def_index = default_item_index();
+        activate(def_index);
+        const QString gd_note = full_text(QStringLiteral("pp-format-preset-note-jpeg"));
+        const QString gd_path = page.current_format_preset(fmt);
+        const bool gd_ok = def_index >= 0 && last_load_error.isEmpty() &&
+                           !page.format_preset_detached(fmt) && save != nullptr &&
+                           save->isEnabled() && is_default_path(stem_of(gd_path)) &&
+                           gd_note.contains(QStringLiteral("来自格式预设")) &&
+                           gd_note.contains(QStringLiteral("default"));
+        expect("global-detached", gd_ok,
+               QStringLiteral("index=%1 err=\"%2\" detached=%3 save-enabled=%4 path=%5 "
+                              "note=\"%6\"")
+                   .arg(def_index)
+                   .arg(last_load_error)
+                   .arg(page.format_preset_detached(fmt) ? 1 : 0)
+                   .arg(save != nullptr && save->isEnabled() ? 1 : 0)
+                   .arg(gd_path)
+                   .arg(gd_note));
+    }
+
     const int bad_count = static_cast<int>(bad.size());
     // 行内字段 = **各断言组的真实结论**（组名进了 bad ⇒ 0）：不打印任何未经断言证明的 1，
     // 也不因为别的组失败而把本组「看起来过了」（§诚实显示）。
@@ -11379,20 +12286,30 @@ void MainWindow::Impl::smoke_probe_format_preset() {
         }
         return 1;
     };
-    std::printf("UI-SMOKE format-preset: checked=%d bad=%d row=%d first=%d empty=%d prod=%d "
-                "idle=%d collect=%d roundtrip=%d note=%d normalize=%d invalid-save=%d bytes=%d "
-                "broken=%d kind=%d adaptive=%d switch=%d nopolicy=%d policy-err=%d "
-                "builtin=%d builtin-idem=%d builtin-readonly=%d builtin-saveas=%d "
-                "global-adaptive=%d adaptive-gate=%d %s\n",
-                checked, bad_count, group_ok("row-exists"), group_ok("row-first"),
-                group_ok("empty"), group_ok("prod-row"), group_ok("idle-buttons"),
-                group_ok("collect"), group_ok("roundtrip"), group_ok("note-loaded"),
-                group_ok("normalize-note"), group_ok("save-invalid"), group_ok("bytes"),
-                group_ok("broken"), group_ok("kind"), group_ok("adaptive"), group_ok("switch"),
-                group_ok("nopolicy"), group_ok("policy-err"), group_ok("builtin"),
-                group_ok("builtin-idem"), group_ok("builtin-readonly"), group_ok("builtin-saveas"),
-                group_ok("global-adaptive"), group_ok("adaptive-gate"),
-                qUtf8Printable(bad.join(QLatin1Char(' '))));
+    // M12：字段只增 —— 旧字段名全部保留（语义换锚，见函数头映射表）；新字段追加在行尾。
+    std::printf(
+        "UI-SMOKE format-preset: checked=%d bad=%d row=%d first=%d empty=%d prod=%d "
+        "idle=%d collect=%d roundtrip=%d note=%d normalize=%d invalid-save=%d bytes=%d "
+        "broken=%d kind=%d adaptive=%d switch=%d nopolicy=%d policy-err=%d "
+        "builtin=%d builtin-idem=%d builtin-readonly=%d builtin-saveas=%d "
+        "global-adaptive=%d adaptive-gate=%d preset-geom=%d preset-tip=%d "
+        "clears-source=%d unselect-adaptive=%d "
+        "default-selected=%d no-unselected=%d default-protected=%d save-default=%d "
+        "jpeg-adaptive=%d heif-apple-crf=%d legacy-migrated=%d png-no-adaptive=%d "
+        "factory-seed=%d factory-idem=%d factory-migrate=%d global-detached=%d %s\n",
+        checked, bad_count, group_ok("row-exists"), group_ok("row-first"), group_ok("empty"),
+        group_ok("prod-row"), group_ok("idle-buttons"), group_ok("collect"), group_ok("roundtrip"),
+        group_ok("note-loaded"), group_ok("normalize-note"), group_ok("save-invalid"),
+        group_ok("bytes"), group_ok("broken"), group_ok("kind"), group_ok("adaptive"),
+        group_ok("switch"), group_ok("nopolicy"), group_ok("policy-err"), group_ok("builtin"),
+        group_ok("builtin-idem"), group_ok("builtin-readonly"), group_ok("builtin-saveas"),
+        group_ok("global-adaptive"), group_ok("adaptive-gate"), group_ok("preset-geom"),
+        group_ok("preset-tip"), group_ok("global-detached-source"), group_ok("selfheal-default"),
+        group_ok("default-selected"), group_ok("no-unselected"), group_ok("default-protected"),
+        group_ok("save-default"), group_ok("jpeg-adaptive"), group_ok("heif-apple-crf"),
+        group_ok("legacy-migrated"), group_ok("png-no-adaptive"), group_ok("factory-seed"),
+        group_ok("factory-idem"), group_ok("factory-migrate"), group_ok("global-detached"),
+        qUtf8Printable(bad.join(QLatin1Char(' '))));
     std::fflush(stdout);
     if (bad_count > 0) {
         smoke_fail(MainWindow::tr("格式预设行/自适应只读面（C23 §8.5 / C24 §9）不符：%1")
@@ -12919,19 +13836,13 @@ void MainWindow::Impl::probe_meta_sec_j(const MetaProbeCtx &c, const QString &sh
 // R-255：smoke_probe_meta 分节 sec_k（自原函数逐字搬移；断言/输出行不变）
 void MainWindow::Impl::probe_meta_sec_k(const MetaProbeCtx &c, const QString &shots_dir) {
     // R-255：共享前置局部别名（ctx 承接；节体逐字不变）
+    // C4189 清理（M10 状态机批）：本分节未使用的 ctx 别名一律删除（零行为变化；其余分节
+    // 仍保留同名别名以维持 R-255 的分节同构）。
     PageMeta &page = *c.page;
-    const QString &repo = c.repo;
-    const QString &fixture = c.fixture;
-    const auto &label = c.label;
-    const auto &full = c.full;
-    const auto &edit_text = c.edit_text;
     const auto &placeholder = c.placeholder;
     const auto &wait_probe = c.wait_probe;
     const auto &shown_form = c.shown_form;
-    const auto &write_side_time = c.write_side_time;
     const double pick_lat = c.pick_lat;
-    const double pick_lon = c.pick_lon;
-    const auto &gps_badge = c.gps_badge;
     const auto &gps_badge_visible = c.gps_badge_visible;
     // ---- (k) M6-T13 大地图（§7-T13 R5）：覆盖层「展开」→ 模态对话框内是**同一只** MapWidget
     //   （重挂载：图层/图钉/视口/在途请求随控件走，零同步）→ 底栏「关闭」（真实用户路径）→

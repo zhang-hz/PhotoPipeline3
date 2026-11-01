@@ -413,18 +413,26 @@ struct FormatState {
     // ---- M10-W3-T2（C23 / 设计 §8.5）：格式预设行 + 只读自适应面（每格式页签顶部）----
     // 控件指针随页签销毁清空（remove_tab）；**会话态字段不随页签销毁**（勾掉再勾回仍保留，
     // 与 spec 快照同口径）。文件 I/O / 校验 / 二次确认归 MainWindow（单一持有者）。
-    QComboBox *preset_combo = nullptr;                 // pp-format-preset-combo（首项「未选择」）
-    QPushButton *preset_save = nullptr;                // pp-format-preset-save
-    QPushButton *preset_saveas = nullptr;              // pp-format-preset-saveas
-    QPushButton *preset_delete = nullptr;              // pp-format-preset-delete
-    QPushButton *preset_import = nullptr;              // pp-format-preset-import
-    QPushButton *preset_export = nullptr;              // pp-format-preset-export
-    ElidedLabel *preset_note = nullptr;                // pp-format-preset-note-<id>（注释位）
-    QWidget *adaptive_row = nullptr;                   // pp-format-preset-adaptive-row（整行显隐）
+    QComboBox *preset_combo = nullptr;    // pp-format-preset-combo（列表项；空列表 = 错误态）
+    QPushButton *preset_save = nullptr;   // pp-format-preset-save
+    QPushButton *preset_saveas = nullptr; // pp-format-preset-saveas
+    QPushButton *preset_delete = nullptr; // pp-format-preset-delete
+    QPushButton *preset_import = nullptr; // pp-format-preset-import
+    QPushButton *preset_export = nullptr; // pp-format-preset-export
+    ElidedLabel *preset_note = nullptr;   // pp-format-preset-note-<id>（注释位）
+    QWidget *adaptive_row = nullptr;      // pp-format-preset-adaptive-row（整行显隐）
     formkit::SwitchControl *adaptive_switch = nullptr; // pp-format-preset-adaptive-switch
     ElidedLabel *adaptive_summary = nullptr;           // pp-format-preset-adaptive-<id>
-    QString format_preset_path;    // 当前选中预设（绝对路径；空 = 未选择）——会话态
-    std::string adaptive_policy;   // 预设携带的策略原文（空 = 无策略 → 整行不显示）
+    QString format_preset_path; // 当前选中预设（绝对路径；空 = 未选中/全局预设接管）——会话态
+    // ---- M12（需求 4；Lead 裁定 2026-11-01，只加字段）----
+    // 全局预设接管（detached）态：全局预设是**整卡写入者**，载入后卡值来自全局预设、不再是任何
+    // 格式预设文件 —— 「保存」必须禁用（否则会用全局值覆盖 default.json / 旧来源文件），自动
+    // default 载入被抑制（否则会把全局预设值冲掉）；下拉仍高亮 default（视觉锚 = 该格式的出厂
+    // 默认预设），用户显式选中任一预设并载入成功即解除（见 mainwindow_presets.cpp
+    // format_preset_load_into / page_output.cpp apply_preset）。
+    bool preset_detached = false;
+    std::string adaptive_policy; // 预设携带的策略原文（空 = 无策略 → 整行不显示）
+
     bool adaptive_enabled = false; // 开关态（初值 = 预设 adaptive.enabled；关闭 = 本次不启用）
     bool adaptive_parse_ok = true; // 策略解析/校验通过（false → 开关禁用 + 行内中文错误）
     QString adaptive_error;        // 解析失败的中文错误（行内显示/探针读回）
@@ -760,6 +768,9 @@ struct OutputPageImpl {
     void set_adaptive_policy_for(const std::string &id, const std::string &policy, bool enabled);
     void update_adaptive_row(const std::string &id);
     void update_format_preset_note(const std::string &id, const QString &text);
+    // M12（需求 4）：全局预设接管态的唯一迁移点（进入时清会话来源 + 高亮 default + 写注记 +
+    // 重同步按钮；退出时只复位标志，来源/注记由随后的载入链写入）。
+    void set_format_preset_detached_for(const std::string &id, bool detached);
 };
 
 } // namespace pp::ui

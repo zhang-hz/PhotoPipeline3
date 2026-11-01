@@ -70,9 +70,21 @@
           "description": "启用自适应；true 要求 policy 非空（校验链阻断空策略）。"
         },
         "policy": {
-          "type": "string",
-          "maxLength": 16384,
-          "description": "行式 DSL v1 文本（docs/schemas/adaptive-policy.v1.schema.json 是其 JSON AST 导入面）。保存/载入时 parse+validate，失败阻断。"
+          "description": "行式 DSL v1 文本。**推荐写成 JSON 字符串数组：一行一个元素**（落盘零 \\n 转义、人类可读、可 git diff；数组下标 + 1 = DSL 行号）；读入兼容旧形态（单个字符串，按 \\n / \\r\\n 拆行）。保存/载入时 parse+validate，失败阻断。总长上限 16 KiB（按数组各行字节和 + 换行计）。",
+          "oneOf": [
+            {
+              "type": "array",
+              "description": "一行一个元素（推荐）。每个元素不得内嵌换行；末尾空行无语义、写出时丢弃。",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string",
+              "maxLength": 16384,
+              "description": "旧形态（兼容读）；新写出不再使用。"
+            }
+          ]
         }
       },
       "additionalProperties": false

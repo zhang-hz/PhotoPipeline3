@@ -1,0 +1,14 @@
+{
+    "backend": "oiio",
+    "bitdepth": 16,
+    "format": "png",
+    "kind": "format-preset",
+    "name": "default",
+    "params": {
+        "compression": "default",
+        "compressionLevel": 6,
+        "filter": 0
+    },
+    "tech": "deflate",
+    "version": 1
+}

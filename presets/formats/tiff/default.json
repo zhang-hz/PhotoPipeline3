@@ -1,0 +1,16 @@
+{
+    "backend": "oiio",
+    "bitdepth": 16,
+    "format": "tiff",
+    "kind": "format-preset",
+    "name": "default",
+    "params": {
+        "compression": "lzw",
+        "deflate_level": 6,
+        "predictor": 2,
+        "tiff_tile_height": 0,
+        "tiff_tile_width": 0
+    },
+    "tech": "codec",
+    "version": 1
+}

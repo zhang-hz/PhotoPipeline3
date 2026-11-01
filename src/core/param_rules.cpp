@@ -952,8 +952,30 @@ std::vector<Rule> build_rules() {
                     c.i("x265:level-idc", 0) == 0;
          },
          {},
-         "H5：Level=自动 + 手动 tile 允许，但该配置与 Apple 参考（1024×576）不同，"
-         "iPhone 接受度未验证（每 tile 的 Level 由 x265 自动选择）"});
+         "H5：Level=自动 + 手动 tile 允许：tile 尺寸用用户值，每 tile 的 Level 由 x265 自动"
+         "选择（规划上界为 still 互操作档 Level 5.1）；iPhone 接受度未验证"});
+    // C17'：still 单图档位（Main Still Picture / 16..21）+ 显式 Level>5.1 → warn。
+    // 规划按 still 互操作上界 Level 5.1（3GPP TS 26.140 §4.5 / TS 26.141 §4.2：
+    // HEIF 'heic'+'MiHB' 互操作档，itemTypes hvc1.1.2.L153）；编码 Level 保留用户值
+    // （不静默改参数）。H.265 本身不强制此上限（详见 docs/heif-tile-sizing.md）。
+    add({"H8",
+         "heif",
+         "x265",
+         Action::Warn,
+         {"__heif_profile", "x265:level-idc"},
+         {},
+         [](const EvalCtx &c) {
+             const int level = static_cast<int>(c.i("x265:level-idc", 0));
+             if (level <= heif_still_picture_interop_max_level_idc())
+                 return false;
+             HeifProfile profile = HeifProfile::Auto;
+             if (!heif_profile_from_int(c.i("__heif_profile", 0), &profile))
+                 return false;
+             return profile == HeifProfile::MainStill || heif_profile_is_still_variant(profile);
+         },
+         {},
+         "H8：still 单图档位 + 显式 Level>5.1 → tile 规划按 still 互操作上界 Level 5.1"
+         "（3GPP TS 26.140/26.141）；编码 Level 保留用户值，不静默改参数"});
     add_dyn({"H6",
              "heif",
              "x265",

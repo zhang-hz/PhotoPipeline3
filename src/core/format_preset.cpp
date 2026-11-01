@@ -532,59 +532,21 @@ std::string check_format_preset_applies_to(const FormatPresetData &p, std::strin
 }
 
 // ===========================================================================
-// 内置（出厂）格式预设库（M10 / W3-T5；设计 §8.3「内置库（出厂）」/ §9.7）
+// 出厂默认预设名（M12 单一真源；UI 删除保护/自动选中 + I/O 删除守卫共用）
 // ===========================================================================
-const std::vector<FormatPresetData> &builtin_format_presets() {
-    static const std::vector<FormatPresetData> presets = [] {
-        std::vector<FormatPresetData> out;
-        // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)：参数语义由名字固定
-        const auto add = [&out](std::string_view format_id, std::string_view backend_id,
-                                std::string_view tech_id, int bitdepth, ParamSet overrides) {
-            const FormatDef *f = find_format(format_id);
-            if (f == nullptr)
-                return;
-            FormatPresetData p;
-            p.version = kFormatPresetVersion;
-            p.format_id = std::string(format_id);
-            p.name = "内置示例 · " + f->label;
-            p.backend_id = std::string(backend_id);
-            p.tech_id = std::string(tech_id);
-            p.out_bitdepth = bitdepth;
-            // 静态表技术 → 默认参数全集（含锁）；libheif 系（heif/avif）的静态表没有技术，
-            // default_params 只返回内部键 `__lossless`（下面剥掉）—— 运行时参数不写进内置库：
-            // ① 内省值随环境/插件版本漂移；② 格式级参数并集按后端 first-wins，可能与具体后端
-            // 的取值范围不一致（实测 avif：svt-av1 的 speed=12 vs 并集里 libaom 的 [0,9]，
-            // 写进预设会被逐键校验拒绝）。故 libheif 系只写**与策略配套的安全初值**（见下表）。
-            p.params = default_params(*f, p.backend_id, p.tech_id, /*lossless=*/false);
-            for (auto &[key, value] : overrides)
-                p.params[key] = value;
-            // `__` 前缀是内部管道键（如 __lossless），不落盘也不进校验 —— 内置库只保留参数键。
-            for (auto it = p.params.begin(); it != p.params.end();) {
-                if (it->first.rfind("__", 0) == 0)
-                    it = p.params.erase(it);
-                else
-                    ++it;
-            }
-            if (const AdaptiveDefaultPolicy *d = default_adaptive_policy_for(format_id)) {
-                p.adaptive_enabled = true;
-                p.adaptive_policy = d->text; // §9.7 逐字（含注释；出厂文件可直接给人读/改）
-            }
-            out.push_back(std::move(p));
+bool is_default_format_preset_name(std::string_view name) {
+    if (name.size() != kFormatPresetDefaultName.size())
+        return false;
+    // 大小写不敏感：Windows 文件系统大小写不敏感（`Default.json` 与 `default.json` 是同一文件），
+    // 默认预设的保护/自愈必须覆盖同一批文件（见头文件契约）。
+    for (std::size_t i = 0; i < name.size(); ++i) {
+        const auto lower = [](char c) {
+            return static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
         };
-        // 位深/后端/技术与 GUI 默认一致（heif/avif 的 live tech 恒为 "runtime"）；
-        // 参数覆盖 = 给 §9.7 策略留出提升空间的**安全初值**（quality/chroma 是策略第一/二阶段
-        // 要搜的键；jpeg 的 quality_mode 必须显式钉住，否则策略搜 quality 不改变产物）。
-        add("heif", "x265", "runtime", 10,
-            ParamSet{{"quality", int64_t{85}}, {"chroma", std::string("420")}});
-        add("avif", "svt-av1", "runtime", 10,
-            ParamSet{{"quality", int64_t{85}}, {"chroma", std::string("420")}});
-        add("jxl", "libjxl", "vardct", 16, ParamSet{{"distance", 1.0}});
-        add("webp", "libwebp", "lossy", 8, ParamSet{{"quality", int64_t{85}}});
-        add("jpeg", "jpegli", "dct", 8,
-            ParamSet{{"quality_mode", std::string("quality")}, {"quality", int64_t{90}}});
-        return out;
-    }();
-    return presets;
+        if (lower(name[i]) != lower(kFormatPresetDefaultName[i]))
+            return false;
+    }
+    return true;
 }
 
 } // namespace pp

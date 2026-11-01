@@ -268,6 +268,126 @@ int main() { // NOLINT(bugprone-exception-escape) — 测试入口允许异常�
               "枚举裸词应保持裸词");
     }
 
+    // 3.5) DSL v1.1：显式方向 + 步长断点（需求 7）AST/渲染/兼容
+    case_begin("3.5) 显式方向 + 步长断点 AST/渲染");
+    {
+        const std::string c = "direction-breakpoint";
+        // 旧语法：无方向词 → direction == Auto、无断点（逐字兼容）。
+        const AdaptivePolicy legacy =
+            expect_valid("legacy-no-direction",
+                         "stage a\n  search distance from current to 0.5 step 0.1\n", "jxl");
+        check(legacy.stages[0].actions[0].direction == AdaptiveDirection::Auto &&
+                  legacy.stages[0].actions[0].breakpoints.empty(),
+              c, "旧语法应为 Auto 且无断点");
+        const std::string legacy_render = render_adaptive_policy(legacy);
+        check(legacy_render.find(" down ") == std::string::npos &&
+                  legacy_render.find(" up ") == std::string::npos,
+              c, "旧语法（from current）渲染不得写方向词：" + legacy_render);
+        // 显式 down + 断点：AST 逐字段。
+        const std::string text = "target 90\nmax_rounds 30\n"
+                                 "stage distance-down\n"
+                                 "  search distance from current down to 0.1 step 0.1 "
+                                 "breakpoint 1 step 2 breakpoint 10 step 5 max_rounds 30\n";
+        const AdaptivePolicy p = expect_valid("breakpoint-ast", text, "jxl");
+        const AdaptiveAction &a = p.stages[0].actions[0];
+        check(a.direction == AdaptiveDirection::Down, c, "direction 应为 Down");
+        check(a.breakpoints.size() == 2, c, "断点数 = " + std::to_string(a.breakpoints.size()));
+        if (a.breakpoints.size() == 2) {
+            check(a.breakpoints[0].value == 1.0 && a.breakpoints[0].step == 2.0 &&
+                      a.breakpoints[1].value == 10.0 && a.breakpoints[1].step == 5.0,
+                  c, "断点值与步长");
+        }
+        check(a.max_rounds == 30 && a.to == 0.1 && a.step == 0.1, c, "动作字段");
+        // 渲染规范化：方向词在 from 后、to 前；断点升序逐组。
+        const std::string r = render_adaptive_policy(p);
+        check(r.find("search distance from current down to 0.1 step 0.1 breakpoint 1 step 2 "
+                     "breakpoint 10 step 5 max_rounds 30") != std::string::npos,
+              c, "渲染形态：" + r);
+        // parse(render) 语义等价（再 render 逐字节稳定）。
+        AdaptivePolicy p2;
+        AdaptiveError e2;
+        check(parse_adaptive_policy(r, p2, &e2), c, "render 后应可再解析：" + e2.message);
+        check(render_adaptive_policy(p2) == r, c, "render→parse→render 幂等");
+        check(p2.stages[0].actions[0].direction == AdaptiveDirection::Down &&
+                  p2.stages[0].actions[0].breakpoints.size() == 2,
+              c, "reparse 保留方向/断点");
+        // up 方向 + 断点：合法（断点 < to）。
+        const AdaptivePolicy up =
+            expect_valid("up-breakpoint",
+                         "stage q\n  search quality from current up to 90 step 4 "
+                         "breakpoint 40 step 8 max_rounds 30\n",
+                         "heif");
+        check(up.stages[0].actions[0].direction == AdaptiveDirection::Up &&
+                  up.stages[0].actions[0].breakpoints.size() == 1,
+              c, "up + 断点");
+        check(render_adaptive_policy(up).find("from current up to 90") != std::string::npos, c,
+              "up 渲染方向词");
+        // 显式方向 + 反向端点：不是错误（运行期 0 轮；见执行器单测）。
+        expect_valid("down-reverse", "stage a\n  search distance from 1.0 down to 5 step 0.5\n",
+                     "jxl");
+        // 显式方向 + 显式 from==to：不是错误（旧语法才 search_noop）。
+        expect_valid("down-equal", "stage a\n  search distance from 2.0 down to 2.0 step 0.5\n",
+                     "jxl");
+    }
+
+    // 3.6) DSL v1.1：断点错误码（breakpoint_syntax / breakpoint_order / breakpoint_value）
+    case_begin("3.6) 断点错误码");
+    {
+        expect_invalid("bp-missing-value",
+                       "stage a\n  search distance from current down to 0.1 step 0.1 breakpoint\n",
+                       "jxl", "breakpoint_syntax", 2);
+        expect_invalid("bp-missing-step",
+                       "stage a\n  search distance from current down to 0.1 step 0.1 "
+                       "breakpoint 1\n",
+                       "jxl", "breakpoint_syntax", 2);
+        expect_invalid("bp-bad-step",
+                       "stage a\n  search distance from current down to 0.1 step 0.1 "
+                       "breakpoint 1 step abc\n",
+                       "jxl", "breakpoint_syntax", 2);
+        expect_invalid("bp-no-direction",
+                       "stage a\n  search distance from current to 0.1 step 0.1 "
+                       "breakpoint 1 step 2\n",
+                       "jxl", "breakpoint_syntax", 2);
+        expect_invalid("bp-bisect",
+                       "stage a\n  search distance from current down to 0.1 step 0.1 "
+                       "breakpoint 1 step 2 method bisect\n",
+                       "jxl", "breakpoint_syntax", 2);
+        expect_invalid("bp-order",
+                       "stage a\n  search distance from current down to 0.1 step 0.1 "
+                       "breakpoint 10 step 5 breakpoint 1 step 2\n",
+                       "jxl", "breakpoint_order", 2);
+        expect_invalid("bp-duplicate",
+                       "stage a\n  search distance from current down to 0.1 step 0.1 "
+                       "breakpoint 1 step 2 breakpoint 1 step 5\n",
+                       "jxl", "breakpoint_order", 2);
+        expect_invalid("bp-below-to",
+                       "stage a\n  search distance from 4 down to 0.1 step 0.1 "
+                       "breakpoint 0.05 step 2\n",
+                       "jxl", "breakpoint_value", 2);
+        expect_invalid("bp-above-start",
+                       "stage a\n  search distance from 4 down to 0.1 step 0.1 "
+                       "breakpoint 8 step 2\n",
+                       "jxl", "breakpoint_value", 2);
+        expect_invalid("bp-up-wrong-side",
+                       "stage a\n  search quality from current up to 90 step 4 "
+                       "breakpoint 95 step 8\n",
+                       "heif", "breakpoint_value", 2);
+        expect_invalid("bp-step-zero",
+                       "stage a\n  search distance from current down to 0.1 step 0.1 "
+                       "breakpoint 1 step 0\n",
+                       "jxl", "breakpoint_value", 2);
+        expect_invalid("bp-range",
+                       "stage a\n  search distance from current down to 0.1 step 0.1 "
+                       "breakpoint 30 step 2\n",
+                       "jxl", "breakpoint_value", 2);
+        // 错误码全表 45 条（40 既有 + 断点 3 条）。
+        check(adaptive_error_codes().size() == 45, "error-codes",
+              "错误码条数 = " + std::to_string(adaptive_error_codes().size()));
+        check(code_registered("breakpoint_syntax") && code_registered("breakpoint_order") &&
+                  code_registered("breakpoint_value"),
+              "error-codes", "断点错误码未登记");
+    }
+
     // 4) 非法样例：错误码 + 行号（覆盖 parse 与 validate 两段）
     case_begin("4) 非法样例错误码/行号");
     {
@@ -598,6 +718,102 @@ int main() { // NOLINT(bugprone-exception-escape) — 测试入口允许异常�
                 "heif", bad, &e),
             c, "value 非标量应失败");
         check(e.code == "json_field", c, "value 非标量 code = " + e.code);
+        // DSL v1.1：direction / breakpoints 字段导入（AST → 渲染出显式方向与断点）。
+        const std::string json_v11 = R"({
+  "version": 1, "target": 90, "max_rounds": 30,
+  "stages": [
+    { "id": "distance-down", "actions": [
+      { "kind": "search", "key": "distance", "from": "current", "direction": "down",
+        "to": 0.1, "step": 0.1, "max_rounds": 30,
+        "breakpoints": [ {"value": 1, "step": 2}, {"value": 10, "step": 5} ] }
+    ] }
+  ]
+})";
+        AdaptivePolicy v11;
+        check(pp::ui::parse_adaptive_policy_json(json_v11, "jxl", v11, &e), c,
+              "direction/breakpoints JSON 导入失败：" + e.code + " " + e.message);
+        const std::string v11_render = render_adaptive_policy(v11);
+        check(v11_render.find("from current down to 0.1 step 0.1 breakpoint 1 step 2 "
+                              "breakpoint 10 step 5 max_rounds 30") != std::string::npos,
+              c, "JSON 导入渲染：" + v11_render);
+        // 非法 direction / breakpoints 结构 → json_field。
+        check(
+            !pp::ui::parse_adaptive_policy_json(
+                R"({"stages":[{"id":"a","actions":[{"kind":"search","key":"distance","from":1,"direction":"left","to":0.1,"step":0.1}]}]})",
+                "jxl", bad, &e),
+            c, "非法 direction 应失败");
+        check(e.code == "json_field", c, "非法 direction code = " + e.code);
+        check(
+            !pp::ui::parse_adaptive_policy_json(
+                R"({"stages":[{"id":"a","actions":[{"kind":"search","key":"distance","from":1,"direction":"down","to":0.1,"step":0.1,"breakpoints":[{"value":1}]}]}]})",
+                "jxl", bad, &e),
+            c, "断点缺 step 应失败");
+        check(e.code == "json_field", c, "断点缺 step code = " + e.code);
+    }
+
+    // 10) M12 需求 5：出厂 JPEG default 策略（工厂文件 presets/formats/jpeg/default.json 的
+    //     adaptive.policy 文本）—— parse/render/validate 通过 + 断点渲染稳定 + 数值域依赖。
+    //     本策略依赖 `format_tables.cpp` 的 jpegli distance 域 [0.1, 3.0]（M12 从 [0.3, 3.0]
+    //     收窄改宽）：终点 0.1 必须落在该参数的 UI 域内，否则 validate 报 search_range。
+    case_begin("10) JPEG default 出厂策略（M12 需求 5）");
+    {
+        // 与工厂文件逐字一致（缩进/注释/空行都来自策略文本；渲染会丢注释，语义等价）。
+        const char *kJpegDefaultPolicy =
+            R"(# JPEG default：视觉距离从 3.0 起步（1–3 步长 1 粗扫），1 以下按 0.1 精扫到 0.1；取达到目标 90 分的最小体积（= 最大 distance）一轮。
+version 1
+target 90
+max_rounds 20
+output last
+on_metric_unavailable stop
+
+stage distance-down
+  search distance from current down to 0.1 step 0.1 breakpoint 1 step 1 max_rounds 20
+)";
+        const std::string c = "jpeg-default";
+        const AdaptivePolicy p = expect_valid("jpeg-default", kJpegDefaultPolicy, "jpeg");
+        check(p.version == 1 && p.target == 90.0 && p.max_rounds == 20, c,
+              "target/max_rounds（实际 " + std::to_string(p.target) + "/" +
+                  std::to_string(p.max_rounds) + "）");
+        check(p.output == AdaptiveOutput::Last &&
+                  p.on_metric_unavailable == AdaptiveMetricUnavailable::Stop,
+              c, "output last / on_metric_unavailable stop");
+        check(p.stages.size() == 1 && p.stages[0].id == "distance-down" &&
+                  p.stages[0].actions.size() == 1,
+              c, "单 stage distance-down / 单动作");
+        if (p.stages.size() == 1 && !p.stages[0].actions.empty()) {
+            const AdaptiveAction &a = p.stages[0].actions[0];
+            check(a.kind == AdaptiveActionKind::Search && a.key == "distance" && a.from.current &&
+                      a.direction == AdaptiveDirection::Down && a.to == 0.1 && a.step == 0.1 &&
+                      a.max_rounds == 20,
+                  c, "search distance from current down to 0.1 step 0.1 max_rounds 20");
+            check(a.breakpoints.size() == 1 && a.breakpoints[0].value == 1.0 &&
+                      a.breakpoints[0].step == 1.0,
+                  c, "断点 1 step 1");
+            // 渲染稳定：`breakpoint 1 step 1` 逐字出现；render→parse→render 幂等。
+            const std::string r = render_adaptive_policy(p);
+            check(r.find("search distance from current down to 0.1 step 0.1 breakpoint 1 step 1 "
+                         "max_rounds 20") != std::string::npos,
+                  c, "渲染形态：" + r);
+            AdaptivePolicy p2;
+            AdaptiveError e2;
+            check(parse_adaptive_policy(r, p2, &e2), c, "render 后应可再解析：" + e2.message);
+            check(render_adaptive_policy(p2) == r, c, "render→parse→render 幂等");
+        }
+        // 数值域单源（format_tables）：jpegli distance = [0.1, 3.0]、step 0.1
+        // （M12 需求 5；策略 0.1–1 段可达的前提）。
+        const FormatDef *jpeg = find_format("jpeg");
+        const ParamDef *distance =
+            jpeg != nullptr ? lookup_param_def(*jpeg, "jpegli", "dct", "distance") : nullptr;
+        check(distance != nullptr, c, "jpegli/dct distance 参数缺失");
+        if (distance != nullptr) {
+            check(distance->lo == 0.1 && distance->hi == 3.0 && distance->step == 0.1, c,
+                  "distance 域 [" + std::to_string(distance->lo) + ", " +
+                      std::to_string(distance->hi) + "] step " + std::to_string(distance->step));
+        }
+        // 域外终点仍被拒（证明断言不是"恒真"）：0.05 < 下限 0.1 ⇒ search_range。
+        expect_invalid("jpeg-to-below-domain",
+                       "stage d\n  search distance from current down to 0.05 step 0.1\n", "jpeg",
+                       "search_range", 2);
     }
 
     std::printf("ADAPTIVE-POLICY %s (%d failures)\n", g_fail == 0 ? "OK" : "FAIL", g_fail);

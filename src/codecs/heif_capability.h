@@ -6,9 +6,11 @@
 //     直接拒绝（`encoder/level.cpp` 的 enforceLevel），但旧实现的错误只在 x265 日志里，
 //     用户看到的是 “heif_context_encode_image failed”。本头把 Level 表与拟合做成纯函数，
 //     enc_heif 在编码前给出中文可操作错误。
-//   * Apple HEIC 参考（super/T7.heic）用 1024×576 的 HEIF grid 把整图 Level 从 6.0 降
-//     到 3.1。heif_plan_grid 是 grid 规划的纯函数单源：enc_heif 的有损 grid 路径用它
-//     选 tile 尺寸/行列数，单元测试直接锁边界（T1+Level 3.1 → 4×11×1024×576）。
+//   * tile 尺寸 = 由「规划 Level 的 MaxLumaPs(M) + 单边上限 D=floor(sqrt(8M))」与图像
+//     宽高比推导，**没有任何固定基准**（C17'，0.4.0.alpha2；旧 M9/W2-T1 的 Apple 参考
+//     1024×576 固定基准已删除）。heif_plan_grid 是 grid 规划的纯函数单源：enc_heif 的
+//     有损 grid 路径用它选 tile 尺寸/行列数，单元测试直接锁边界（T1+Level 3.1 →
+//     768×1280 = 983,040 亮度样本，6×5）。公式与规范证据：docs/heif-tile-sizing.md。
 //   * 编码档位是否名副其实，最终以产物 hvcC 为准：heif_parse_hvcc 用最小 ISO-BMFF
 //     box 扫描读取 general_profile_idc / level_idc / chromaFormat / bitDepthLuma。
 //
@@ -74,7 +76,7 @@ bool heif_level_fits(int level_idc, int width, int height);
 std::string heif_level_fit_error_zh(int level_idc, int width, int height);
 
 // ---------------------------------------------------------------------------
-// HEIF grid 规划（Apple 风格 1024×576 tile）
+// HEIF grid 规划（C17'：tile 由 Level 容量 + still 单图规范推导，无固定基准）
 // ---------------------------------------------------------------------------
 
 // 用户面配置键（C16）：
@@ -92,6 +94,17 @@ const char *heif_grid_mode_name(int internal_mode);
 // 该目录键是否上移核心区（C16：只有 x265:level-idc；grid/tile 保持高级）。
 bool heif_param_in_core(std::string_view key);
 
+// still 单图互操作档的 Level 上界（= 51，即 Level 5.1；MaxLumaPs = 8,912,896）。
+// 证据（一手可复核）：3GPP TS 26.140 §4.5 / TS 26.141 §4.2 规定 HEIF still 图（'heic' +
+// 'MiHB' MIAF brand）的互操作档为 HEVC Main / Main Tier / Level 5.1，媒体类型参数
+// itemTypes="hvc1.1.2.L153.B0"（L153 = general_level_idc 153 = 3×51）。
+// 如实标注：ITU-T H.265 (V9, 2023-09) **没有** still picture profile 的 Level 上限
+// （A.3.3/A.3.4/A.3.5 无 level 条款；A.4.2 的 profile-specific level limits 只约束
+// "video profiles"，其 NOTE 1 明确排除 still picture profiles），x265 4.3 / libheif 1.23
+// 也不拦 → 5.1 是**应用格式（互操作）上界**，不是 HEVC profile 强制。证据等级表见
+// docs/heif-tile-sizing.md。
+int heif_still_picture_interop_max_level_idc();
+
 // 规划输入（W2-T1 用户面）。grid_mode 用**内部模式**（0/1/2，见上面的映射函数）。
 struct HeifGridRequest {
     int grid_mode = 2; // 0 = 关闭；1 = 总是 grid；2 = 自动（按 Level）
@@ -101,25 +114,33 @@ struct HeifGridRequest {
     int chroma = 1;      // 0=4:0:0 1=4:2:0 2=4:2:2 3=4:4:4（MIAF 奇偶 warn 用）
     int tile_width = 0;  // 0 = 自动；手动值按 8 向下对齐（非法值由 plan.error_zh 报错）
     int tile_height = 0; // 0 = 自动
+
+    // —— C17' 加性字段（追加在末尾）——
+    // 编码档位（默认 Auto = 保持既有行为）。still 单图档位（MainStill / 16..21）搭配
+    // 显式 Level > 5.1 时：tile 规划按 still 互操作上界 5.1，**编码 Level 不静默改**
+    // （仍按用户值）；plan.warning_zh 说明该偏差。非 still 档位不受此限。
+    HeifProfile profile = HeifProfile::Auto;
 };
 
-// tile 尺寸规则（C17，M9 A9 延续 + W2-T1 手动覆盖）：
-//   * 基准 1024×576（Apple T7 参考），先按图像尺寸 clamp，统一按 8 像素对齐
-//     （覆盖 x265 minCUSize 补齐与 4:2:0/4:2:2 的色度对齐）；
-//   * 显式 Level 下同时满足 tile 面积 <= MaxLumaPs、宽高 <= sqrt(8×MaxLumaPs)
-//     （x265 enforceLevel 的尺寸约束）；基准装不下时按"面积最大、等面积取长宽比最接近
-//     1024:576"搜索（继承 M9 A9）；仍无 ≥64 的可行 tile → error_zh；
+// tile 尺寸规则（C17'，0.4.0.alpha2；**删除**旧 Apple 参考 1024×576 固定基准）：
+//   * 规划 Level Lp：显式 Level 直接用；Level=自动 → still 互操作上界 5.1；
+//     显式 Level + still 单图档位 + Level>5.1 → Lp=5.1 + warning（见上）；
+//   * M = MaxLumaPs(Lp)，D = floor(sqrt(8×M))（x265 enforceLevel 的尺寸约束）；在
+//     8 像素对齐、[64, min(图宽, D)] 内枚举 tw，th = 8 向下对齐 min(图高, D, floor(M/tw))，
+//     取面积最大者（tw×th ≤ M；可恰好等于 M），面积相同取 |tw/th − 图宽高比| 最小者；
+//     **没有任何固定基准/魔法常数**（公式与证据：docs/heif-tile-sizing.md）；
 //   * 手动 tile：8 向下对齐（对齐发生 → note_zh）；<64 / >8192 / 显式 Level 装不下
-//     → error_zh（点名上限、最大可行 tile、三条出路）；单轴 0 表示该轴继续自动求解；
+//     → error_zh（点名上限、最大可行 tile、三条出路）；单轴 0 表示该轴继续自动求解
+//     （另一轴按 Level 容量收缩；仍保留 M9 A9 的 8 对齐口径）；
 //   * rows×cols == 1 → downgraded_single（单图 + info 日志，grid 1×1 无收益）；
 //   * rows/cols 单边 >256 或 rows×cols>65535 → error_zh（HEIF grid rows/cols 是 u8+1）；
 //   * MIAF 7.3.11.4.2 奇偶（420 需宽高偶数、422 需宽偶数）只 warn（warning_zh），
 //     不阻断（保持既有 801×601→grid 单测行为）。
-// 自动语义（C16）：
+// 自动语义（C16，不变）：
 //   * Level=自动 + 常规尺寸 → 单图（默认产物零变化）；只有整图超出 x265 最高
-//     Level 7.2 容量（MaxLumaPs=142,606,336 且宽高 <= sqrt(8×M)）才按 Apple 基准分块；
+//     Level 7.2 容量（MaxLumaPs=142,606,336 且宽高 <= sqrt(8×M)）才自动分块；
 //   * 显式 Level 装不下整图 → 自动分块（每 tile 满足该 Level）；
-//   * 总是 grid：无显式 Level 时按 Apple 基准 1024×576（每 tile x265 自动 Level）。
+//   * 总是 grid：无显式 Level 时按规划上界 Level 5.1 推导 tile（每 tile x265 自动 Level）。
 struct HeifGridPlan {
     bool use_grid = false; // 是否应走 grid 派生图
     int level_idc = 0;     // 参与规划的 Level（0 = 自动）
@@ -141,7 +162,11 @@ struct HeifGridPlan {
     int aligned_height_from = 0;
     std::string error_zh;   // 中文可操作错误（ok=false）
     std::string note_zh;    // info 级说明（对齐/单图降级/手动+自动 Level）
-    std::string warning_zh; // warn 级说明（MIAF 奇偶）
+    std::string warning_zh; // warn 级说明（MIAF 奇偶 / still Level 上界）
+
+    // —— C17' 加性字段（追加在末尾）——
+    int planning_level_idc = 0;      // 推导 tile 用的 Level（0 = 不适用；Level=自动 → 51）
+    bool still_level_capped = false; // 显式 Level>5.1 的 still 档位 → 规划被压到 5.1
 
     int64_t total_tiles() const { return static_cast<int64_t>(cols) * rows; }
 };

@@ -344,12 +344,13 @@ const std::vector<FormatDef> &static_formats() {
                                             "psnr_target>0 时被 PSNR 搜索覆盖 → 隐藏。",
                                  .visible = jpeg_psnr_off, .locked = {}, .group = pp::kGroupCore},
                         ParamDef{.key = "distance", .label = "视觉距离",
-                                 .type = ParamType::Float, .def = 1.0, .lo = 0.3, .hi = 3.0,
+                                 .type = ParamType::Float, .def = 1.0, .lo = 0.1, .hi = 3.0,
                                  .step = 0.1, .choices = {}, .advanced = false,
                                  .tooltip = "Butteraugli 目标距离（jpegli_set_distance，jpegli/encode.h:119）；"
                                             "1.0=视觉透明；jpegli 参考 CLI 推荐 0.5–3.0、允许 0.0–25.0"
-                                            "（tools/cjpegli.cc:53）。本表 [0.3, 3.0] 为 **UI 范围**"
-                                            "（R-294 边界出处：库允许 0.0–25.0，表收窄到常用带）。"
+                                            "（tools/cjpegli.cc:53）。本表 [0.1, 3.0] 为 **UI 范围**"
+                                            "（R-294 边界出处：库允许 0.0–25.0，表收窄到常用带；M12 起下限"
+                                            " 0.1 = 出厂 JPEG 自适应策略的 0.1–1 段可达）。"
                                             "quality_mode=distance 时可见。",
                                  .visible = quality_mode_is_distance, .locked = {}, .group = pp::kGroupCore},
                         ParamDef{.key = "quality", .label = "质量",

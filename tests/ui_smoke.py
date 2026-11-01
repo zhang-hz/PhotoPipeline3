@@ -584,6 +584,9 @@ RUN_GEOM_NO_SPEED_RE = re.compile(r'\bno-speed=1\b')
 RUN_GEOM_RATIO_TIP_RE = re.compile(r'\bratio-tip=1\b')
 RUN_GEOM_COLS_RE = re.compile(r'\bcols-ok=1\b')
 RUN_GEOM_LONG_ELIDE_RE = re.compile(r'\blong-elide=1\b')
+# 状态机修复回归（只增）：迟到心跳不覆写终态 / 取消零效果的结束态 = 已完成
+RUN_GEOM_LATE_TERMINAL_RE = re.compile(r'\blate-terminal=1\b')
+RUN_GEOM_CANCEL_NOOP_RE = re.compile(r'\bcancel-noop=1\b')
 
 # M10-W1 / W1-A5（T9a；C12/C15，A12 只增）：运行页**状态/刷新**探针 —— `smoke_probe_run_geometry()`
 # 的 (o) 段，两行均**新增**（行齐备 + 取值断言；既有前缀/冻结末行零改动）：
@@ -608,21 +611,62 @@ FLUSH_STATE_LINE_PREFIX = 'UI-SMOKE flush-state:'
 FLUSH_STATE_OK_RE = re.compile(r'\bstate=1\b')
 FLUSH_STATE_ROWS_RE = re.compile(r'\brows=(\d+)\b')
 
+# 状态机修复批（需求 4 回归；只增）：四条独立自检行 —— 前缀清单只增、冻结末行不变。
+#   run-terminal-late：文件终态后到达的评分池心跳/迟到阶段事件不得把组行/行胶囊打回进行中
+#                      （ok=1 + g-late="已完成" + o-late="已完成"）。
+#   run-cancel-noop  ：点了「取消剩余」但引擎汇总 cancelled=0（全部文件已成功）→ 结束态必须是
+#                      「已完成」而不是「已取消」（ok=1 + pill="已完成"）。
+#   run-rerun-clean  ：再运行不残留上一轮（评分/耗时/大小/状态）。
+#   run-restart      ：开始→取消→再开始（已取消 → 进行中 + 取消入口可用 + 进度归零）。
+STATE_FIX_LINE_PREFIXES = (
+    'UI-SMOKE run-terminal-late:',
+    'UI-SMOKE run-cancel-noop:',
+    'UI-SMOKE run-rerun-clean:',
+    'UI-SMOKE run-restart:',
+)
+RUN_TERMINAL_LATE_OK_RE = re.compile(r'\bok=1\b')
+RUN_TERMINAL_LATE_G_RE = re.compile(r'\bg-late="已完成"')
+RUN_TERMINAL_LATE_O_RE = re.compile(r'\bo-late="已完成"')
+RUN_CANCEL_NOOP_OK_RE = re.compile(r'\bok=1\b')
+RUN_CANCEL_NOOP_PILL_RE = re.compile(r'\bpill="已完成"')
+RUN_CANCEL_NOOP_VIS_RE = re.compile(r'\bcancel-visible=0\b')
+RUN_RERUN_CLEAN_OK_RE = re.compile(r'\bok=1\b')
+RUN_RERUN_CLEAN_FIRST_RE = re.compile(r'\bfirst-score="92\.31"')
+RUN_RERUN_CLEAN_TIME_RE = re.compile(r'\brerun-time="—"')
+RUN_RERUN_CLEAN_PILL_RE = re.compile(r'\brerun-pill="排队"')
+RUN_RESTART_OK_RE = re.compile(r'\bok=1\b')
+RUN_RESTART_PILL_RE = re.compile(r'\brestarted-pill="进行中"')
+RUN_RESTART_CANCEL_RE = re.compile(r'\bcancel-visible=1\b')
+RUN_RESTART_PERCENT_RE = re.compile(r'\bpercent="0%"')
+
 # M10-W3-T2（C23 §8.5 / C24 §9，只增）：格式预设行 + 只读自适应面 —— `smoke_probe_format_preset()`
 # 的出口行。行齐备 + **取值断言**：C++ 侧每组断言的结论直接进字段（组红 ⇒ 字段 0），因此这里
 # 逐字段钉死，任何一组被静默跳过/裁剪都会被抓到（不放宽既有断言；冻结末行与截图集不变）。
+# M12（需求 2/3/4/5）**机械换锚**（Lead 裁定；登记 docs/m12-adjudications.md）：
+#   旧字段名全部保留、语义换锚 + 新增字段追加（「行字段只增」）：
+#     empty             → 未喂列表 = 空错误态（count==0，无「未选择」占位项）
+#     prod              → 生产页行在位 + 首启自动选中并载入 default
+#     builtin           → 工厂 seed 就位（11 文件/8 default）且列表含 default
+#     builtin-idem      → 工厂 seed 二次幂等（written=0/skipped=11）
+#     builtin-readonly  → I/O 拒绝删除 default（文件零改动；保存覆盖仍可用）
+#     builtin-saveas    → 另存为普通名字副本成功（非 default）
+#     clears-source     → 全局预设后进入「接管（detached）」态：path 空 / save 禁用 / 点保存无意图
+#     unselect-adaptive → 预设来源消失 ⇒ 自愈回 default 并载入（不残留旧策略）
+#   新增：default-selected/no-unselected/default-protected/save-default/jpeg-adaptive/
+#         heif-apple-crf/legacy-migrated/png-no-adaptive/factory-seed/factory-idem/
+#         factory-migrate/global-detached
 FORMAT_PRESET_LINE_PREFIX = 'UI-SMOKE format-preset:'
 FORMAT_PRESET_BAD_RE = re.compile(r'\bbad=0\b')
 FORMAT_PRESET_CHECKED_RE = re.compile(r'\bchecked=(\d+)\b')
-# 组字段 → 语义（逐条对应 C++ 侧 expect 组名）
+# 组字段 → 语义（逐条对应 C++ 侧 expect 组名；M12 换锚说明见上）
 FORMAT_PRESET_GROUP_FIELDS = (
-    'row',        # row-exists：行 + 六件套（下拉/保存/另存…/删除/导入…/导出…）齐备且可见
+    'row',        # row-exists：行 + 六件套（下拉/保存/另存/删除/导入/导出）齐备且可见
     'first',      # row-first：行在「位深」行之上（页签顶部）
-    'empty',      # empty：列表空态 = 只有「未选择」
-    'prod',       # prod-row：生产页（MainWindow 的 page_output）同行在位（行由页面自建）
-    'idle',       # idle-buttons：未选中时「删除」禁用 + 原因 tooltip（不静默灰）
+    'empty',      # empty（换锚）：未喂列表 = 空错误态（count==0，无「未选择」占位项）
+    'prod',       # prod-row（换锚）：生产页行在位 + 首启已自动选中并载入 default
+    'idle',       # idle-buttons：空态「删除」禁用 + 原因 tooltip（不静默灰）
     'collect',    # collect：卡快照可采集（format/backend/quality）
-    'roundtrip',  # roundtrip：临时目录 保存→列举→载入；卡值一致 + 已改 N 重算
+    'roundtrip',  # roundtrip（换锚）：临时目录 保存→列举→**自动载入**→显式选中；卡值一致
     'note',       # note-loaded：注释位「来自格式预设：X」
     'normalize',  # normalize-note：稀疏预设载入 → 注释位「已载入（已补齐 N 个默认项）」
     'invalid-save',  # save-invalid：保存前校验（非法名字 → 中文错误且不写盘）
@@ -633,14 +677,38 @@ FORMAT_PRESET_GROUP_FIELDS = (
     'switch',     # switch：开关按预设初值 + 关闭 = 本次不启用
     'nopolicy',   # nopolicy：无策略 → 整行不显示
     'policy-err', # policy-err：坏策略 → 行内中文错误 + 开关禁用
-    # M10-W3-T5（C23/C24 + A20，只增）：内置（出厂）预设 + 全局预设 adaptive 往返
-    'builtin',          # builtin：seed 5 条 + 内置 jpeg 出现在格式列表 + 载入成功 + 只读面同步
-    'builtin-idem',     # builtin-idem：第二次 seed 零写入 + 文件字节不变（幂等）
-    'builtin-readonly', # builtin-readonly：删除按钮置灰 + I/O 拒绝删/覆盖（文件零改动）
-    'builtin-saveas',   # builtin-saveas：「另存…」可用（普通名字写入成功、不带只读前缀）
-    'global-adaptive',  # global-adaptive：全局预设含 adaptive 的 save→load→再保存字节稳定
-                        #                 + 载入后格式卡只读摘要/开关同步
+    # M12：工厂（出厂）数据文件 + default 语义（旧 builtin 字段 = 换锚映射，名称保留）
+    'builtin',          # 工厂 seed 就位（11 文件/8 default）且 jpeg 列表含 default
+    'builtin-idem',     # 工厂 seed 二次幂等（报告计数 wired=0/skipped=11）
+    'builtin-readonly', # I/O 拒绝删除 default（中文原因 + 文件零改动；保存覆盖可用）
+    'builtin-saveas',   # 另存为普通名字副本成功且名字非 default
+    'global-adaptive',  # 全局预设含 adaptive 的 save→load→再保存字节稳定 + 载入后只读面同步
     'adaptive-gate',    # adaptive-gate：开 → 下发策略；关 → 不下发但采集面保留策略文本
+    # 需求 5（0.4.0.alpha2 用户修订）：格式预设行几何 —
+    # 下拉宽 == 同页参数行字段宽（kFieldStd 160 ±1）/ 导入·导出无省略号 / 按钮不截断 / 行内无重叠
+    'preset-geom',
+    # preset-tip（M12 换锚）：显式选 default → combo tooltip = "default"、注记 = 来自格式预设：default
+    'preset-tip',
+    # clears-source（M12 换锚）：全局预设后进入「接管（detached）」态 —
+    # 来源清空 / save 禁用 + 原因 tooltip / 注记含「全局预设」/ 点 save 无覆盖意图
+    'clears-source',
+    # unselect-adaptive（M12 换锚）：预设来源文件消失 ⇒ 自愈回 default 并载入
+    # （策略会话态随 default 更新，不残留被删来源的旧策略）
+    'unselect-adaptive',
+    # ---- M12 新增字段（只增；需求 2/3/4/5 的机械验收面）----
+    'default-selected',   # 工厂 jpeg/default 自动选中并载入（RC=距离 / distance=3.0）
+    'no-unselected',      # 下拉只含真实预设文件（无「未选择」占位项）
+    'default-protected',  # default 不可删除：UI 删除置灰+tooltip 且 I/O 拒绝（文件零改动）
+    'save-default',       # default 可「保存」直接覆盖（临时根：写入成功 + 值读回）
+    'jpeg-adaptive',      # JPEG default 载入后自适应行可见/开关开/摘要「目标 90 分」/策略断点
+                          # `breakpoint 1 step 1`（需求 5）
+    'heif-apple-crf',     # 工厂 heif/apple-adaptive 载入后 `pp-param-x265:crf` 控件读数 == 20（需求 3）
+    'legacy-migrated',    # 旧 `_builtin-*.json` 迁移后文件真的消失（与 factory-migrate 计数互补）
+    'png-no-adaptive',    # PNG default 无策略 → 自适应整行隐藏（空策略隐藏不变）
+    'factory-seed',       # seed 首轮：written=11 / 8 格式 default.json / removed_legacy=2
+    'factory-idem',       # seed 次轮：written=0/skipped=11 且文件字节不变
+    'factory-migrate',    # 迁移清理计数 removed_legacy（与 legacy-migrated 互补）
+    'global-detached',    # 接管态可恢复：显式选 default 载入后 save 恢复、注记回来源
 )
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -698,12 +766,17 @@ def main():
         m6t13_seen = set()
         g1_seen = set()
         layout_audit_seen = set()
+        state_fix_seen = set()
         run_score_line = None
         param_enable_geom_line = None
         run_geom_line = None
         run_status_map_line = None
         flush_state_line = None
         format_preset_line = None
+        run_terminal_late_line = None
+        run_cancel_noop_line = None
+        run_rerun_clean_line = None
+        run_restart_line = None
         with open(log_path, 'w', encoding='utf-8', newline='') as log_fp:
             for line in proc.stdout:
                 sys.stdout.write(line)
@@ -762,6 +835,9 @@ def main():
                 for prefix in LAYOUT_AUDIT_LINE_PREFIXES:
                     if line.startswith(prefix):
                         layout_audit_seen.add(prefix)
+                for prefix in STATE_FIX_LINE_PREFIXES:
+                    if line.startswith(prefix):
+                        state_fix_seen.add(prefix)
                 if line.startswith(RUN_SCORE_LINE_PREFIX):
                     run_score_line = line.rstrip('\r\n')
                 if line.startswith(PARAM_ENABLE_GEOM_LINE_PREFIX):
@@ -774,6 +850,14 @@ def main():
                     flush_state_line = line.rstrip('\r\n')
                 if line.startswith(FORMAT_PRESET_LINE_PREFIX):
                     format_preset_line = line.rstrip('\r\n')
+                if line.startswith(STATE_FIX_LINE_PREFIXES[0]):
+                    run_terminal_late_line = line.rstrip('\r\n')
+                if line.startswith(STATE_FIX_LINE_PREFIXES[1]):
+                    run_cancel_noop_line = line.rstrip('\r\n')
+                if line.startswith(STATE_FIX_LINE_PREFIXES[2]):
+                    run_rerun_clean_line = line.rstrip('\r\n')
+                if line.startswith(STATE_FIX_LINE_PREFIXES[3]):
+                    run_restart_line = line.rstrip('\r\n')
         status = proc.wait()
 
         if status != 0:
@@ -869,6 +953,39 @@ def main():
             print('ui_smoke: FAIL (missing layout-audit visual-check lines: {})'.format(
                 ', '.join(missing)), file=sys.stderr)
             return 1
+        # 状态机修复批（需求 4；只增）：两条新增自检行齐备 + 取值断言（防断言被静默跳过）。
+        missing = [p for p in STATE_FIX_LINE_PREFIXES if p not in state_fix_seen]
+        if missing:
+            print('ui_smoke: FAIL (missing state-machine fix self-check lines: {})'.format(
+                ', '.join(missing)), file=sys.stderr)
+            return 1
+        if (RUN_TERMINAL_LATE_OK_RE.search(run_terminal_late_line) is None
+                or RUN_TERMINAL_LATE_G_RE.search(run_terminal_late_line) is None
+                or RUN_TERMINAL_LATE_O_RE.search(run_terminal_late_line) is None):
+            print('ui_smoke: FAIL (S-1 迟到事件覆写终态回归（期望 ok=1 g-late="已完成" '
+                  'o-late="已完成"）: {})'.format(run_terminal_late_line), file=sys.stderr)
+            return 1
+        if (RUN_CANCEL_NOOP_OK_RE.search(run_cancel_noop_line) is None
+                or RUN_CANCEL_NOOP_PILL_RE.search(run_cancel_noop_line) is None
+                or RUN_CANCEL_NOOP_VIS_RE.search(run_cancel_noop_line) is None):
+            print('ui_smoke: FAIL (S-2 取消零效果结束态回归（期望 ok=1 pill="已完成" '
+                  'cancel-visible=0）: {})'.format(run_cancel_noop_line), file=sys.stderr)
+            return 1
+        if (RUN_RERUN_CLEAN_OK_RE.search(run_rerun_clean_line) is None
+                or RUN_RERUN_CLEAN_FIRST_RE.search(run_rerun_clean_line) is None
+                or RUN_RERUN_CLEAN_TIME_RE.search(run_rerun_clean_line) is None
+                or RUN_RERUN_CLEAN_PILL_RE.search(run_rerun_clean_line) is None):
+            print('ui_smoke: FAIL (重跑残留回归（期望 ok=1 first-score="92.31" '
+                  'rerun-time="—" rerun-pill="排队"）: {})'.format(run_rerun_clean_line),
+                  file=sys.stderr)
+            return 1
+        if (RUN_RESTART_OK_RE.search(run_restart_line) is None
+                or RUN_RESTART_PILL_RE.search(run_restart_line) is None
+                or RUN_RESTART_CANCEL_RE.search(run_restart_line) is None
+                or RUN_RESTART_PERCENT_RE.search(run_restart_line) is None):
+            print('ui_smoke: FAIL (开始→取消→再开始回归（期望 ok=1 restarted-pill="进行中" '
+                  'cancel-visible=1 percent="0%"）: {})'.format(run_restart_line), file=sys.stderr)
+            return 1
         # M8-W2（需求3，只增/不放宽）：评分列 —— 行齐备 + 文本/取值断言（C12′）。
         if run_score_line is None:
             print('ui_smoke: FAIL (missing M8-W2 run-score self-check line: {})'.format(
@@ -929,10 +1046,13 @@ def main():
                 or RUN_GEOM_NO_SPEED_RE.search(run_geom_line) is None
                 or RUN_GEOM_RATIO_TIP_RE.search(run_geom_line) is None
                 or RUN_GEOM_COLS_RE.search(run_geom_line) is None
-                or RUN_GEOM_LONG_ELIDE_RE.search(run_geom_line) is None):
+                or RUN_GEOM_LONG_ELIDE_RE.search(run_geom_line) is None
+                or RUN_GEOM_LATE_TERMINAL_RE.search(run_geom_line) is None
+                or RUN_GEOM_CANCEL_NOOP_RE.search(run_geom_line) is None):
             print('ui_smoke: FAIL (M10-W1 run-geom 列布局自检失败（期望 bad=0 fit=1 '
                   'name-w>=150 name-w520>=80 no-speed=1 ratio-tip=1 cols-ok=1 '
-                  'long-elide=1）: {})'.format(run_geom_line), file=sys.stderr)
+                  'long-elide=1 late-terminal=1 cancel-noop=1）: {})'.format(run_geom_line),
+                  file=sys.stderr)
             return 1
         # M10-W1 / W1-A5（T9a；C12/C15，只增）：运行页状态映射 + 双通道 flush 取值断言
         if run_status_map_line is None:
@@ -970,10 +1090,12 @@ def main():
         fp_checked = FORMAT_PRESET_CHECKED_RE.search(format_preset_line)
         fp_missing = [field for field in FORMAT_PRESET_GROUP_FIELDS
                       if re.search(r'\b' + re.escape(field) + r'=1\b', format_preset_line) is None]
+        # M12：断言组从 27 → 37（工厂数据文件/default 语义/需求 3/4/5 机械验收）；下限 **只升不降**
+        # （不放宽既有断言：旧下限 10 已由本批提到 35）。
         if (FORMAT_PRESET_BAD_RE.search(format_preset_line) is None
-                or fp_checked is None or int(fp_checked.group(1)) < 10
+                or fp_checked is None or int(fp_checked.group(1)) < 35
                 or fp_missing):
-            print('ui_smoke: FAIL (M10-W3-T2 format-preset 自检失败（期望 bad=0 checked>=10 '
+            print('ui_smoke: FAIL (M10-W3-T2 format-preset 自检失败（期望 bad=0 checked>=35 '
                   '且各字段 =1；缺/红: {}）: {})'.format(
                       ', '.join(fp_missing) if fp_missing else '-', format_preset_line),
                   file=sys.stderr)

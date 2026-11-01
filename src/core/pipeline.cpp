@@ -82,7 +82,8 @@
 
 #include "codecs/enc_common.h" // M10 / W1-B1（T6）：编码器飞行缓冲估算（enc::encoder_flight_bytes）
 #include "codecs/encoders.h"
-#include "core/adaptive.h"      // M10 / W3-T4：策略 DSL 解析/校验（自适应输出）
+#include "codecs/heif_profile.h" // 需求 1 日志：kHeifProfileParamKey（基准参数白名单的 profile 别名）
+#include "core/adaptive.h"       // M10 / W3-T4：策略 DSL 解析/校验（自适应输出）
 #include "core/adaptive_exec.h" // M10 / W3-T4：执行器（轮循环/候选文件/同步评分）
 #include "core/colormanager.h"
 #include "core/fastcolor.h" // M10-W1-T2c：评分色彩归一快速内核（3D CLUT）
@@ -1861,6 +1862,85 @@ std::string adaptive_error_text(const AdaptiveError &e) {
     return out;
 }
 
+// ============================================================================================
+// 需求 1（自适应迭代优化过程写入日志）：pipeline 侧日志**渲染**辅助（数据面在执行器）
+//   * adaptive_params_brief：ParamSet → "k=v,k=v"（白名单键，**只输出实际存在的键**；基准配置
+//     与逐轮有效参数共用同一渲染口径，日志可逐字比较）；丢失基线的空白不会伪造默认值；
+//   * adaptive_decision_reason：执行器的稳定英文 decision 词表 → 中文一句话（decision_reason）；
+//   * join_text：stage 列表/分数序列之类的小拼接（空容器 → 空串）。
+// ============================================================================================
+std::string adaptive_param_value_text(const ParamValue &value) {
+    if (const auto *i = std::get_if<int64_t>(&value))
+        return std::to_string(*i);
+    if (const auto *d = std::get_if<double>(&value))
+        return fmt_double(*d);
+    if (const auto *b = std::get_if<bool>(&value))
+        return *b ? "true" : "false";
+    if (const auto *s = std::get_if<std::string>(&value))
+        return *s;
+    return {};
+}
+
+std::string adaptive_params_brief(const ParamSet &params) {
+    // 白名单 = 质量/搜索目标键 + 结构性键 + 编码档位保留键（实际存在的才出）。
+    // 顺序固定（日志可逐行 diff）；`__heif_profile` 渲染成 `profile`（人类可读别名）。
+    static const char *const kKeys[] = {"quality_mode", "quality", "x265:crf", "x265:qp",
+                                        "aom:cq-level", "qp",      "distance", "effort",
+                                        "chroma",       "preset",  "tune",     "lossless"};
+    std::string out;
+    const auto append = [&out](std::string_view key, const ParamValue &value) {
+        if (!out.empty())
+            out += ",";
+        out += key;
+        out += "=";
+        out += adaptive_param_value_text(value);
+    };
+    for (const char *key : kKeys) {
+        const auto it = params.find(std::string(key));
+        if (it != params.end())
+            append(key, it->second);
+    }
+    // HEIF/AVIF 编码档位（保留键；日志用短名 profile）
+    const auto profile_it = params.find(std::string(kHeifProfileParamKey));
+    if (profile_it != params.end())
+        append("profile", profile_it->second);
+    return out;
+}
+
+std::string join_text(const std::vector<std::string> &items, char sep) {
+    std::string out;
+    for (const std::string &item : items) {
+        if (!out.empty())
+            out += sep;
+        out += item;
+    }
+    return out;
+}
+
+// 逐轮决策原因（中文；执行器 decision 词表见 core/adaptive_exec.h）。
+// 词表之外的取值原样透出（不编造新语义）；评分不可用/编码失败带执行器给的中文 note。
+std::string adaptive_decision_reason(const AdaptiveRoundRecord &rec, double target) {
+    const bool scored = rec.metric == MetricState::Ok;
+    const std::string score = scored ? fmt_double(rec.score) : std::string();
+    if (rec.decision == "met") {
+        return scored ? ("达标：" + score + " ≥ 目标 " + fmt_double(target)) : "达标";
+    }
+    if (rec.decision == "improve") {
+        return scored ? ("改善：" + score) : "改善（评分不可用）";
+    }
+    if (rec.decision == "no-improve") {
+        return scored ? ("未改善：" + score + " 低于目标 " + fmt_double(target))
+                      : "未改善（评分不可用）";
+    }
+    if (rec.decision == "unscored") {
+        return rec.note.empty() ? std::string("评分不可用") : ("评分不可用：" + rec.note);
+    }
+    if (rec.decision == "encode-failed") {
+        return rec.note.empty() ? std::string("编码失败") : ("编码失败：" + rec.note);
+    }
+    return rec.decision;
+}
+
 // ---- 逐输出 metawrite 段（encode 成功后；单次编码与自适应轮循环共用同一条写路径）----
 // 语义逐字搬移自 W1 的 run_target（顺序/日志/告警/终态单点不变）。返回 false = 该输出失败
 // （行已置 Failed、OutputDone 已发）。
@@ -2040,8 +2120,51 @@ TargetOutcome run_target_adaptive(RunFileContext &ctx, const PlannedTarget &pt) 
     };
 
     // ---- hooks：逐轮 info 日志 + ProgressInfo（adaptive_round/adaptive_max 加性字段）----
+    // 需求 1（迭代优化过程写入日志）：执行器是**数据面**（计划/轮次/决策），本段只做日志与进度
+    // 事件的**渲染**。四类 info 行（仅启用自适应时新增 → 默认路径逐字节零影响）：
+    //   adaptive plan    —— 开跑前一条：target/max_rounds/stage 列表/policy_sha/基准关键参数
+    //   adaptive stage   —— 每阶段开始一条：stage、round_before、当前已选轮
+    //   adaptive round   —— 每轮一条：既有字段 + candidate/params/target/decision_reason（中文）
+    //   adaptive summary —— 结束一条：selected 参数/reason_detail/各轮分数序列
+    // 「已选轮」在 pipeline 侧按当前最高分跟踪（执行器按 output last 语义选定，日志与之同源）。
+    int best_round = 0;
+    double best_score = -1.0;
     AdaptiveRunHooks hooks;
+    hooks.on_plan = [&](const AdaptivePlanInfo &info) {
+        log_info(kStage, kFile, "adaptive plan",
+                 {{"src", src},
+                  {"out", row.out.string()},
+                  {"output_index", std::to_string(cfg_index)},
+                  {"format", pt.target.format_id},
+                  {"backend", pt.target.backend_id},
+                  {"tech", pt.target.tech_id},
+                  {"bitdepth", std::to_string(pt.target.out_bitdepth)},
+                  {"pixels", std::to_string(ctx.work->spec.width) + "x" +
+                                 std::to_string(ctx.work->spec.height)},
+                  {"policy_version", std::to_string(info.policy_version)},
+                  {"target", fmt_double(info.target)},
+                  {"max_rounds", std::to_string(info.max_rounds)},
+                  {"output", info.output},
+                  {"stages", join_text(info.stage_ids, ',')},
+                  {"policy_sha", info.policy_sha.substr(0, kAdaptivePolicyShaLogChars)},
+                  {"base_params", adaptive_params_brief(pt.target.params)}});
+    };
+    hooks.on_stage_start = [&](const std::string &stage_id, int round_before) {
+        log_info(kStage, kFile, "adaptive stage",
+                 {{"src", src},
+                  {"out", row.out.string()},
+                  {"output_index", std::to_string(cfg_index)},
+                  {"stage", stage_id},
+                  {"round_before", std::to_string(round_before)},
+                  {"selected",
+                   best_round > 0 ? "round" + std::to_string(best_round) : std::string("none")},
+                  {"best_score", best_score >= 0.0 ? fmt_double(best_score) : std::string()}});
+    };
     hooks.on_round = [&](const AdaptiveRoundRecord &rec, int max_rounds) {
+        if (rec.metric == MetricState::Ok && rec.score > best_score) {
+            best_score = rec.score;
+            best_round = rec.round;
+        }
         const bool ok_metric = rec.metric == MetricState::Ok;
         log_info(kStage, kFile, "adaptive round",
                  {{"src", src},
@@ -2051,12 +2174,18 @@ TargetOutcome run_target_adaptive(RunFileContext &ctx, const PlannedTarget &pt) 
                   {"stage", rec.stage},
                   {"key", rec.key},
                   {"value", rec.value},
+                  {"params", rec.effective_params},
+                  {"candidate", rec.candidate_path},
+                  {"target", fmt_double(policy.target)},
                   {"score", ok_metric ? fmt_double(rec.score) : std::string()},
                   {"state", metric_state_text(rec.metric)},
                   {"bytes", std::to_string(rec.bytes)},
                   {"encode_ms", fmt_double(rec.encode_ms)},
                   {"metric_ms", fmt_double(rec.metric_ms)},
                   {"decision", rec.decision},
+                  // 中文决策原因（需求 1 的「decision_reason」）：达标/改善/未改善/评分不可用/
+                  // 编码失败；词表之外的取值原样透出（执行器新增词表时不编造翻译）。
+                  {"decision_reason", adaptive_decision_reason(rec, policy.target)},
                   {"note", rec.note}});
         if (!ctx.ev.on_event)
             return;
@@ -2097,6 +2226,14 @@ TargetOutcome run_target_adaptive(RunFileContext &ctx, const PlannedTarget &pt) 
         row.t.encode_ms += rec.encode_ms;
 
     // ---- 汇总日志（info；仅启用自适应时新增）----
+    // 需求 1：在既有字段上补 selected 参数文本 / reason_detail（中文原因）/ 各轮分数序列
+    // （scores=88.1,89.4,90.2；评分不可用的轮记 "-"，与 round 行的 state 字段互相印证）。
+    std::vector<std::string> score_seq;
+    score_seq.reserve(arun.records.size());
+    for (const AdaptiveRoundRecord &rec : arun.records) {
+        score_seq.push_back(rec.metric == MetricState::Ok ? fmt_double(rec.score)
+                                                          : std::string("-"));
+    }
     log_info(kStage, kFile, "adaptive summary",
              {{"src", src},
               {"out", row.out.string()},
@@ -2105,12 +2242,15 @@ TargetOutcome run_target_adaptive(RunFileContext &ctx, const PlannedTarget &pt) 
               {"target", fmt_double(arun.target)},
               {"selected", arun.selected_round > 0 ? "round" + std::to_string(arun.selected_round)
                                                    : std::string("none")},
+              {"selected_params", arun.selected_params_text},
               {"policy_sha", arun.policy_sha.substr(0, kAdaptivePolicyShaLogChars)},
               {"final_score",
                arun.final_metric == MetricState::Ok ? fmt_double(arun.final_score) : std::string()},
               {"final_metric", metric_state_text(arun.final_metric)},
+              {"scores", join_text(score_seq, ',')},
               {"overhead_ms", fmt_double(arun.overhead_ms)},
               {"reason", arun.reason},
+              {"reason_detail", arun.reason_detail},
               {"state",
                arun.ok ? "ok" : (arun.reason == kAdaptiveReasonCancelled ? "cancelled" : "failed")},
               {"error", arun.error}});

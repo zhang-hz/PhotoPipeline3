@@ -315,12 +315,20 @@ bool heif_param_in_core(std::string_view key) {
 namespace {
 
 constexpr int kGridAlign = 8;
-constexpr int kBaseTileW = 1024;
-constexpr int kBaseTileH = 576;
 constexpr int kMinTile = 64; // x265 静止图 CTU/色度 sanity 下界
 constexpr int kMaxTile = 8192;
 constexpr int kMaxGridSide = 256; // HEIF grid rows/cols 是 u8+1
 constexpr int64_t kMaxGridTiles = 65535;
+
+// still 单图互操作档的 Level 上界 = 5.1（规划用；证据见 heif_capability.h 的
+// heif_still_picture_interop_max_level_idc 注释与 docs/heif-tile-sizing.md）：
+//   * 一手可复核 = 3GPP TS 26.140 §4.5 / TS 26.141 §4.2（HEIF still 图互操作档：
+//     HEVC Main / Main Tier / Level 5.1，itemTypes="hvc1.1.2.L153.B0"）；
+//   * ITU-T H.265 (V9, 2023-09) A.3.3/A.3.4/A.3.5 的 still picture profile 约束里
+//     **没有** Level 条款，A.4.2 只约束 "video profiles"（NOTE 1 明确排除 still
+//     profiles）→ 5.1 是应用格式上界，不是编码 profile 强制（x265 4.3 / libheif 1.23
+//     均不拦）。代码按契约把它当规划上界，注释/文档如实标注该证据等级。
+constexpr int kStillPictureInteropMaxLevelIdc = 51;
 
 int align_down8(int value) { return value <= 0 ? 0 : (value / kGridAlign) * kGridAlign; }
 
@@ -337,7 +345,16 @@ struct TileChoice {
     bool ok = false;
 };
 
-// 显式 Level 下“面积最大、等面积取长宽比最接近 1024:576”的可行 tile（M9 A9 规则）。
+// C17'（0.4.0.alpha2，删除旧 Apple 参考 1024×576 固定基准）：自动 tile 完全由
+// 「规划 Level 的 MaxLumaPs(M) + 单边上限 D=floor(sqrt(8M))」与图像宽高推导：
+//   * 在 8 像素对齐、[64, min(图宽, D)] 内枚举 tw；
+//   * th = 8 向下对齐 min(图高, D, floor(M/tw))；
+//   * 取面积最大者（要求 tw×th ≤ M；可恰好等于 M = 用满 Level 容量），面积相同取
+//     |tw/th − 图宽高比| 最小者（再相同保留枚举中先出现的大 tw，保证确定性）；
+//   * 结果 clamp 到图像宽高（上面的 min）与 kMaxTile（与手动范围同口径的防御上限）。
+// 例：3902×5854 + Level 3.1 → 768×1280（=983,040=M31 整值）；20000×20000 + Level
+// 自动（规划上界 5.1）→ 2176×4096（=8,912,896=M51 整值）。逐值表见
+// docs/heif-tile-sizing.md。
 TileChoice best_tile_for_level(int level_idc, int width, int height) {
     TileChoice out;
     if (level_idc == 0 || width <= 0 || height <= 0)
@@ -346,15 +363,13 @@ TileChoice best_tile_for_level(int level_idc, int width, int height) {
     if (max_luma <= 0)
         return out;
     const int64_t dim_cap = grid_dim_cap(level_idc);
-    const int w_max =
-        static_cast<int>(std::min<int64_t>(std::min<int64_t>(width, kBaseTileW), dim_cap));
-    const int h_max =
-        static_cast<int>(std::min<int64_t>(std::min<int64_t>(height, kBaseTileH), dim_cap));
+    const int w_max = static_cast<int>(std::min<int64_t>(width, dim_cap));
+    const int h_max = static_cast<int>(std::min<int64_t>(height, dim_cap));
     int best_w = 0;
     int best_h = 0;
     int64_t best_area = -1;
     double best_aspect_diff = 1e9;
-    const double target_aspect = static_cast<double>(kBaseTileW) / kBaseTileH;
+    const double target_aspect = static_cast<double>(width) / static_cast<double>(height);
     for (int w = align_down8(w_max); w >= kMinTile; w -= kGridAlign) {
         int h = static_cast<int>(std::min<int64_t>(h_max, max_luma / w));
         h = align_down8(h);
@@ -371,10 +386,55 @@ TileChoice best_tile_for_level(int level_idc, int width, int height) {
             best_h = h;
         }
     }
-    out.w = best_w;
-    out.h = best_h;
-    out.ok = best_w >= kMinTile && best_h >= kMinTile;
+    out.w = std::min(best_w, kMaxTile);
+    out.h = std::min(best_h, kMaxTile);
+    out.ok = out.w >= kMinTile && out.h >= kMinTile;
     return out;
+}
+
+// 该档位是否 still 单图档位（Main Still Picture idc=3 + W2-T2 的 RExt still 变体 16..21）。
+// Main10Still(16) 也在内：即便后端当前写不出其 still 语义，规划上按 still 上界处理
+// 只会让 tile 更小，是安全方向。
+bool profile_is_still_picture(HeifProfile profile) {
+    return profile == HeifProfile::MainStill || heif_profile_is_still_variant(profile);
+}
+
+// 规划 Level 解析（C17'）：
+//   * Level=自动 → still 单图互操作上界 5.1（规划需要上界；每 tile 仍由 x265 自选 Level）；
+//   * 显式 Level + still 单图档位 + Level>5.1 → 规划压到 5.1（still_capped=true，编码
+//     Level 仍保留用户值，不静默改参数）；
+//   * 其余 → 用户 Level。
+int resolve_planning_level_idc(int requested_level_idc, HeifProfile profile, bool *still_capped) {
+    if (still_capped != nullptr)
+        *still_capped = false;
+    if (requested_level_idc == 0)
+        return kStillPictureInteropMaxLevelIdc;
+    if (profile_is_still_picture(profile) &&
+        requested_level_idc > kStillPictureInteropMaxLevelIdc) {
+        if (still_capped != nullptr)
+            *still_capped = true;
+        return kStillPictureInteropMaxLevelIdc;
+    }
+    return requested_level_idc;
+}
+
+// still 单图档位 + 显式 Level>5.1 的中文预警（warn 级，不阻断、不改用户参数）。
+std::string still_level_cap_warning_zh(int requested_level_idc) {
+    return "x265:level-idc=" + std::to_string(requested_level_idc) + "（Level " +
+           heif_level_name(requested_level_idc) +
+           "）超过 still 单图档位的互操作上界 Level 5.1（3GPP TS 26.140 §4.5 / "
+           "TS 26.141 §4.2：HEIF 'heic'+'MiHB' 互操作档 = HEVC Main / Main Tier / Level 5.1，"
+           "媒体类型参数 itemTypes=\"hvc1.1.2.L153.B0\"；ITU-T H.265 本身不强制此上限）。"
+           "tile 规划按 Level 5.1 执行（tile 更小）；编码 Level 仍按用户值保留，不静默改参数。";
+}
+
+void append_zh(std::string &dst, const std::string &text) {
+    if (text.empty())
+        return;
+    if (dst.empty())
+        dst = text;
+    else
+        dst += "；" + text;
 }
 
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)：参数语义由名字固定
@@ -420,6 +480,8 @@ std::string manual_tile_error_zh(int level_idc, int tile_w, int tile_h, int widt
 
 } // namespace
 
+int heif_still_picture_interop_max_level_idc() { return kStillPictureInteropMaxLevelIdc; }
+
 HeifGridPlan heif_plan_grid(const HeifGridRequest &request) {
     HeifGridPlan plan;
     plan.level_idc = request.level_idc;
@@ -435,6 +497,14 @@ HeifGridPlan heif_plan_grid(const HeifGridRequest &request) {
         return plan;
     }
     plan.level_fits_image = heif_level_fits(request.level_idc, request.width, request.height);
+    // C17'：先解析「规划 Level」——Level=自动 → still 互操作上界 5.1；still 单图档位 +
+    // 显式 Level>5.1 → 规划压到 5.1（编码 Level 保留用户值，warning 说明）。
+    bool still_level_capped = false;
+    plan.planning_level_idc =
+        resolve_planning_level_idc(request.level_idc, request.profile, &still_level_capped);
+    plan.still_level_capped = still_level_capped;
+    if (still_level_capped)
+        plan.warning_zh = still_level_cap_warning_zh(request.level_idc);
     const bool explicit_level = request.level_idc != 0;
     const bool manual = request.tile_width != 0 || request.tile_height != 0;
     if (manual && request.grid_mode == 0)
@@ -470,24 +540,36 @@ HeifGridPlan heif_plan_grid(const HeifGridRequest &request) {
     plan.use_grid = true;
     plan.tile_level_idc = explicit_level ? request.level_idc : 0;
 
-    int auto_w = std::max(kGridAlign, align_down8(std::min(request.width, kBaseTileW)));
-    int auto_h = std::max(kGridAlign, align_down8(std::min(request.height, kBaseTileH)));
-    if (explicit_level && !tile_fits_level(request.level_idc, auto_w, auto_h)) {
-        const TileChoice best =
-            best_tile_for_level(request.level_idc, request.width, request.height);
-        if (!best.ok) {
+    // C17'：自动 tile 完全由「规划 Level 的 MaxLumaPs(M) + 单边上限 D」+ 图像宽高推导
+    // （无固定基准；面积优先、等面积取最贴近图像宽高比）。tile 宽高 clamp 到图像宽高
+    // 与 kMaxTile（再按 8 向下对齐）。
+    const TileChoice best =
+        best_tile_for_level(plan.planning_level_idc, request.width, request.height);
+    if (!best.ok) {
+        if (!manual && explicit_level && !plan.level_fits_image) {
             plan.ok = false;
             plan.use_grid = false;
             plan.error_zh = "目标 HEVC Level " + std::string(heif_level_name(request.level_idc)) +
-                            " 下没有可用的 tile（连 " + std::to_string(kMinTile) + "×" +
+                            " 下没有可用的 tile（图像宽/高不足 " + std::to_string(kMinTile) +
+                            " 像素，或连 " + std::to_string(kMinTile) + "×" +
                             std::to_string(kMinTile) +
-                            " 都容不下）；请提高 x265:level-idc 或关闭 "
-                            "grid。";
+                            " 的最小 tile 都容不下）；请提高 x265:level-idc 或关闭 grid。";
             return plan;
         }
-        auto_w = best.w;
-        auto_h = best.h;
+        if (!manual) {
+            // Level=自动 / grid=总是 且图像本身小于最小 tile：grid 无收益 → 单图。
+            plan.use_grid = false;
+            plan.downgraded_single = true;
+            append_zh(plan.note_zh, "图像尺寸不足以规划 ≥" + std::to_string(kMinTile) +
+                                        " 像素的 tile（Level " +
+                                        std::string(heif_level_name(plan.planning_level_idc)) +
+                                        " 容量），已按单图输出。");
+            return plan;
+        }
     }
+    // 手动单轴语义需要「另一轴的自动求解上界」：best 不可用时回落为图像 clamp（防御）。
+    int auto_w = best.ok ? best.w : std::max(kGridAlign, align_down8(request.width));
+    int auto_h = best.ok ? best.h : std::max(kGridAlign, align_down8(request.height));
 
     int tile_w = auto_w;
     int tile_h = auto_h;
@@ -551,12 +633,14 @@ HeifGridPlan heif_plan_grid(const HeifGridRequest &request) {
             return plan;
         }
         if (explicit_level) {
-            // 单轴手动：另一轴继续自动求解，并在 Level 内收缩（0=自动的语义）。
+            // 单轴手动：另一轴继续自动求解，并在 Level 内收缩（0=自动的语义）。收缩按
+            // **规划 Level**（still 档位被压到 5.1 时自动轴也遵守该上界）；最终 tile 的
+            // Level 校验仍按用户 Level（编码用它，不静默改）。
             if (request.tile_height == 0) {
                 // 宽手动、高自动：按手动宽求最大可行高。
-                const int64_t cap = heif_level_max_luma_ps(request.level_idc) / tile_w;
+                const int64_t cap = heif_level_max_luma_ps(plan.planning_level_idc) / tile_w;
                 const int lim = align_down8(static_cast<int>(std::min<int64_t>(
-                    std::min<int64_t>(auto_h, grid_dim_cap(request.level_idc)), cap)));
+                    std::min<int64_t>(auto_h, grid_dim_cap(plan.planning_level_idc)), cap)));
                 if (lim < kMinTile) {
                     plan.ok = false;
                     plan.use_grid = false;
@@ -568,9 +652,9 @@ HeifGridPlan heif_plan_grid(const HeifGridRequest &request) {
             }
             if (request.tile_width == 0) {
                 // 高手动、宽自动：按手动高求最大可行宽。
-                const int64_t cap = heif_level_max_luma_ps(request.level_idc) / tile_h;
+                const int64_t cap = heif_level_max_luma_ps(plan.planning_level_idc) / tile_h;
                 const int lim = align_down8(static_cast<int>(std::min<int64_t>(
-                    std::min<int64_t>(auto_w, grid_dim_cap(request.level_idc)), cap)));
+                    std::min<int64_t>(auto_w, grid_dim_cap(plan.planning_level_idc)), cap)));
                 if (lim < kMinTile) {
                     plan.ok = false;
                     plan.use_grid = false;
@@ -589,8 +673,9 @@ HeifGridPlan heif_plan_grid(const HeifGridRequest &request) {
             }
         } else {
             plan.manual_with_auto_level = true;
-            plan.note_zh = "Level=自动 + 手动 tile：每 tile 的 Level 由 x265 自动选择；该配置与 "
-                           "Apple 参考（1024×576）不同，iPhone 接受度未验证。";
+            plan.note_zh =
+                "Level=自动 + 手动 tile：每 tile 的 Level 由 x265 自动选择（规划上界为 "
+                "still 互操作档 Level 5.1）；tile 尺寸由用户手动指定，iPhone 接受度未验证。";
         }
     }
 
@@ -631,10 +716,14 @@ HeifGridPlan heif_plan_grid(const HeifGridRequest &request) {
         (request.chroma == 2 && request.width % 2 != 0);
     if (odd_for_chroma) {
         plan.miaf_parity_warn = true;
-        plan.warning_zh =
-            "图像 " + std::to_string(request.width) + "×" + std::to_string(request.height) +
-            " 为奇数尺寸（MIAF 7.3.11.4.2：4:2:0 建议宽高为偶数、4:2:2 建议宽为偶数）；"
-            "grid 仍按原尺寸输出（仅提醒，不阻断）。";
+        append_zh(plan.warning_zh,
+                  "图像 " + std::to_string(request.width) + "×" + std::to_string(request.height) +
+                      " 为奇数尺寸（MIAF 7.3.11.4.2：4:2:0 建议宽高为偶数、4:2:2 建议宽为"
+                      "偶数）；grid 仍按原尺寸输出（仅提醒，不阻断）。");
+    }
+    if (plan.still_level_capped && plan.note_zh.empty()) {
+        plan.note_zh = "tile 按 still 互操作上界 Level 5.1 规划（编码 Level 保留用户值 " +
+                       std::string(heif_level_name(request.level_idc)) + "）。";
     }
     return plan;
 }

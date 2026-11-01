@@ -46,6 +46,49 @@ std::string render_number(double v) {
     return buf;
 }
 
+// 参数值文本（日志/record.effective_params 用；与 adaptive.cpp 的 render_value 无关，只求可读）。
+std::string param_value_text(const ParamValue &v) {
+    if (const auto *b = std::get_if<bool>(&v))
+        return *b ? "true" : "false";
+    if (const auto *i = std::get_if<int64_t>(&v))
+        return std::to_string(*i);
+    if (const auto *d = std::get_if<double>(&v))
+        return render_number(*d);
+    if (const auto *s = std::get_if<std::string>(&v))
+        return *s;
+    return {};
+}
+
+// C 段：两个 ParamSet 的差量文本（基线 init 轮的 effective_params；仅列出被改写/新增的键）。
+// `__` 保留键除 __heif_profile（用 profile 语义键）外不落日志。
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)：参数语义由名字固定（base=基线、cur=本轮）
+std::string diff_params_text(const ParamSet &base, const ParamSet &cur) {
+    std::string out;
+    for (const auto &[key, value] : cur) {
+        const auto it = base.find(key);
+        if (it != base.end() && it->second == value)
+            continue;
+        std::string shown = key;
+        std::string shown_value = param_value_text(value);
+        if (key == "__heif_profile") {
+            shown = "profile";
+            int64_t prof = 0;
+            if (const int64_t *pv = std::get_if<int64_t>(&value))
+                prof = *pv;
+            const std::string name = adaptive_profile_name(prof);
+            shown_value = name.empty() ? std::to_string(prof) : name;
+        } else if (key.rfind("__", 0) == 0) {
+            continue;
+        }
+        if (!out.empty())
+            out += ",";
+        out += shown;
+        out += "=";
+        out += shown_value;
+    }
+    return out;
+}
+
 // ===========================================================================
 // SHA-256（FIPS 180-4；仅用于策略文本指纹 —— §9.1-9 的 policy_sha，不做安全用途）。
 // 不引第三方、不复用 OIIO 的 SHA1（设计指定 SHA256；OIIO 只提供 SHA1）。
@@ -298,31 +341,103 @@ void append_unique(std::vector<double> &out, double v) {
         out.push_back(v);
 }
 
+// 方向解析（DSL v1.1）：显式 Down/Up 只降/只升，起点已在端点错侧 ⇒ 空区间（0 轮，**非错误**）；
+// Auto = 旧语法（方向由 from→to 的相对大小推断）。返回 false = 区间为空（无候选）。
+bool resolve_direction(AdaptiveDirection direction, double start, double target, double &dir) {
+    if (direction == AdaptiveDirection::Down) {
+        if (start <= target)
+            return false; // down 只降不升：起点 <= 终点 ⇒ 0 轮
+        dir = -1.0;
+        return true;
+    }
+    if (direction == AdaptiveDirection::Up) {
+        if (start >= target)
+            return false; // up 只升不降：起点 >= 终点 ⇒ 0 轮
+        dir = 1.0;
+        return true;
+    }
+    if (target == start)
+        return false; // 空区间（from current 恰好等于 to；旧语法 */
+    dir = target > start ? 1.0 : -1.0;
+    return true;
+}
+
+// 断点分段步长（开区间上界口径，与 Lead 裁决/文档 §6.1 逐字一致）：
+//   * v <= 第一个断点 ⇒ 基础 step；
+//   * 否则 = 「v 严格大于的最大断点」的 step（断点按升序，遇第一个不满足即停）。
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)：base_step/v 由名字固定
+double ladder_step_for(const std::vector<AdaptiveBreakpoint> &breakpoints, double base_step,
+                       double v) {
+    double step = base_step;
+    for (const AdaptiveBreakpoint &bp : breakpoints) {
+        if (v > bp.value)
+            step = bp.step;
+        else
+            break;
+    }
+    return step;
+}
+
+// 跨断点钳位：返回从 v 沿 dir 到 next 之间**最近的**断点值（down = 最大的、up = 最小的）；
+// 无断点被跨过返回 NaN。语义：「不得跳过断点值」——先钳到断点，再继续用下方区间步长。
+// from_to = (当前值 v, 候选值 next)；用成对参数表达，避免三个同型 double 相邻（可读性）。
+double crossing_breakpoint(const std::vector<AdaptiveBreakpoint> &breakpoints,
+                           std::pair<double, double> from_to, double dir) {
+    const double v = from_to.first;
+    const double next = from_to.second;
+    double best = std::numeric_limits<double>::quiet_NaN();
+    for (const AdaptiveBreakpoint &bp : breakpoints) {
+        if (dir < 0.0) {
+            if (next < bp.value && bp.value < v && (std::isnan(best) || bp.value > best))
+                best = bp.value;
+        } else {
+            if (v < bp.value && bp.value < next && (std::isnan(best) || bp.value < best))
+                best = bp.value;
+        }
+    }
+    return best;
+}
+
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)：参数语义由名字固定
-bool build_ladder(AdaptiveMethod method, double start, double to, double step, double lo, double hi,
-                  std::vector<double> &out) {
+bool build_ladder(AdaptiveMethod method, AdaptiveDirection direction,
+                  const std::vector<AdaptiveBreakpoint> &breakpoints, double start, double to,
+                  double step, double lo, double hi, // NOLINT(bugprone-easily-swappable-parameters)
+                  int max_candidates, std::vector<double> &out) {
     out.clear();
     if (!(step > 0.0) || !std::isfinite(step) || !std::isfinite(start) || !std::isfinite(to))
         return false;
     start = std::clamp(start, lo, hi);
     const double target = std::clamp(to, lo, hi);
-    if (target == start)
-        return false; // 空区间（from current 恰好等于 to 的运行期情形）
-    const double dir = (target > start) ? 1.0 : -1.0;
+    double dir = 0.0;
+    if (!resolve_direction(direction, start, target, dir))
+        return false; // 空区间（显式方向已在端点错侧 / from current 恰好等于 to）
     const double low = std::min(start, target), high = std::max(start, target);
     switch (method) {
     case AdaptiveMethod::Linear:
-        for (int k = 1; k <= kLinearStageCap; ++k) {
-            double v = start + dir * step * static_cast<double>(k);
-            if ((dir > 0.0 && v >= target) || (dir < 0.0 && v <= target))
-                v = target; // 钳到端点（终点含端点）
-            v = std::clamp(v, low, high);
+        // v1.1：逐候选推进（v ← next），支持断点分段步长 + 跨断点钳位 + 端点钳位。
+        // 无断点时与旧公式 start+dir*k*step 等价（浮点累加差异 < 1e-9，测试按容差断言）。
+        // 阶段上界 = max_candidates（默认 kLinearStageCap；动作级 max_rounds 可显式放宽）。
+        for (int k = 1; k <= max_candidates; ++k) {
+            const double s = ladder_step_for(breakpoints, step, start);
+            double next = start + dir * s;
+            // 浮点累加与端点做容差吸附：否则 0.1 步长序列会在 0.5000000000000004 /
+            // 0.10000000000000009 处多出一档，破坏「端点必被尝试且只试一次」的候选序列。
+            const double snap = 1e-9 * std::max(1.0, std::fabs(target));
+            const double crossed = crossing_breakpoint(breakpoints, {start, next}, dir);
+            if (!std::isnan(crossed)) {
+                next = crossed; // 先钳断点值（不得跳过），再继续用该断点下方区间的步长
+            } else if ((dir > 0.0 && next >= target - snap) ||
+                       (dir < 0.0 && next <= target + snap)) {
+                next = target; // 端点含 to（钳位；含浮点容差吸附）
+            }
+            next = std::clamp(next, low, high);
             const std::size_t before = out.size();
-            append_unique(out, v);
+            append_unique(out, next);
             if (out.size() == before)
-                break; // 步长小于浮点分辨率：不再产生新候选
-            if (v == target)
+                break; // 步长小于浮点分辨率 / 已在端点：不再产生新候选
+            if (next == target)
                 break;
+            start = next;
         }
         break;
     case AdaptiveMethod::Bisect: {
@@ -422,6 +537,26 @@ public:
         res.policy_sha = adaptive_policy_sha256(render_adaptive_policy(policy_));
         const Clock::time_point t0 = Clock::now();
 
+        // C 段（需求 1）：计划摘要一次性回调（在任何轮次/阶段之前；非法策略也先报计划）。
+        if (hooks_.on_plan) {
+            AdaptivePlanInfo plan;
+            plan.policy_version = policy_.version;
+            plan.target = policy_.target;
+            plan.max_rounds = policy_.max_rounds;
+            plan.stage_count = static_cast<int>(policy_.stages.size());
+            plan.output = res.output;
+            plan.policy_sha = res.policy_sha;
+            plan.stage_ids.reserve(policy_.stages.size());
+            for (const AdaptiveStage &st : policy_.stages)
+                plan.stage_ids.push_back(st.id);
+            try {
+                hooks_.on_plan(plan);
+            } catch (...) {
+                // 日志回调异常不得影响决策
+                (void)0; // 显式空操作：异常按契约吞掉（注释不计入语句）
+            }
+        }
+
         // §9.1/§9.6：本版只支持 output last（best = P1；validate 已拒绝，执行器再兜一层）。
         if (policy_.output != AdaptiveOutput::Last) {
             stop_ = Stop::HardFail;
@@ -442,6 +577,14 @@ public:
                 break;
             if (cancelled())
                 return cancel_all(t0);
+            // C 段（需求 1）：stage 开始回调（每个 stage 恰好一次；round_before = 已执行轮数）。
+            if (hooks_.on_stage_start) {
+                try {
+                    hooks_.on_stage_start(stage.id, rounds_);
+                } catch (...) {
+                    (void)0; // 日志回调异常不得影响决策
+                }
+            }
             const bool all_set = std::all_of(
                 stage.actions.begin(), stage.actions.end(),
                 [](const AdaptiveAction &a) { return a.kind == AdaptiveActionKind::Set; });
@@ -457,8 +600,8 @@ public:
         // 边界（§9.8「单值 stage = 1 轮 / 空区间」）：策略未产生任何候选 → 用当前运行配置编一轮，
         // 保证"启用自适应"永不静默丢产物（该轮如实进 records，round=1/stage=init）。
         if (records_.empty() && stop_ != Stop::HardFail) {
-            const RoundStep st =
-                do_round(running_, "init", std::string(), std::string(), false, 0.0);
+            const RoundStep st = do_round(running_, "init", std::string(), std::string(), false,
+                                          0.0, diff_params_text(base_, running_));
             if (st == RoundStep::Cancelled)
                 return cancel_all(t0);
             if (st == RoundStep::HardFail)
@@ -633,8 +776,10 @@ private:
     }
 
     // ---- 单轮 ----
+    // `effective_params` = C 段日志字段（本轮生效参数文本；基线轮 = 与 base 的差量，可为空）。
     RoundStep do_round(const ParamSet &params, const std::string &stage, const std::string &key,
-                       const std::string &value, bool has_number, double number) {
+                       const std::string &value, bool has_number, double number,
+                       const std::string &effective_params) {
         if (cancelled())
             return RoundStep::Cancelled;
         const int round = rounds_ + 1;
@@ -662,6 +807,8 @@ private:
         rec.value = value;
         rec.has_number = has_number;
         rec.number = number;
+        rec.effective_params = effective_params;
+        rec.candidate_path = cand.string();
 
         AdaptiveEncodeInput in;
         in.params = params;
@@ -775,6 +922,7 @@ private:
         selected_.metric_ms = rec.metric_ms;
         selected_.note = rec.note;
         selected_.params = params;
+        selected_.effective_params = rec.effective_params;
     }
 
     void push_record(const AdaptiveRoundRecord &rec) {
@@ -794,6 +942,7 @@ private:
     bool run_set_stage(const AdaptiveStage &stage) {
         ParamSet next = running_;
         std::string keys, values;
+        std::string effective; // C 段：规范生效参数文本（profile 用具名档位而非 __ 保留键）
         for (const AdaptiveAction &a : stage.actions) {
             const std::string err = apply_set(next, a);
             if (!err.empty()) {
@@ -802,18 +951,38 @@ private:
                 hard_error_ = "stage " + stage.id + " 的 set " + a.key + " 失败：" + err;
                 return false;
             }
+            // 取值文本：profile 伪参数映射为保留键 `__heif_profile`，必须用具名档位展示；
+            // 其余键用 map::find（**不能用 operator[]**：那会在参数集里插入不存在的键，
+            // 让后续 unknown-key 校验误报）。
+            std::string value_text;
+            if (a.key == "profile") {
+                int64_t prof = 0;
+                const auto it = next.find("__heif_profile");
+                if (it != next.end()) {
+                    if (const int64_t *pv = std::get_if<int64_t>(&it->second))
+                        prof = *pv;
+                }
+                const std::string name = adaptive_profile_name(prof);
+                value_text = name.empty() ? std::to_string(prof) : name;
+            } else {
+                const auto it = next.find(a.key);
+                if (it != next.end())
+                    value_text = param_value_text(it->second);
+            }
             if (!keys.empty()) {
                 keys += ",";
                 values += "; ";
+                effective += ",";
             }
             keys += a.key;
-            values += a.key + "=" + param_value_text(next[a.key]);
+            values += a.key + "=" + value_text;
+            effective += a.key + "=" + value_text;
         }
         if (rounds_ >= max_rounds()) {
             stop_ = Stop::MaxRounds;
             return true;
         }
-        const RoundStep st = do_round(next, stage.id, keys, values, false, 0.0);
+        const RoundStep st = do_round(next, stage.id, keys, values, false, 0.0, effective);
         if (st == RoundStep::Cancelled || st == RoundStep::HardFail)
             return false;
         if (st == RoundStep::EncodeFailed) {
@@ -882,10 +1051,15 @@ private:
                                              : a.method == AdaptiveMethod::Bisect
                                                  ? kBisectStageCap
                                                  : std::numeric_limits<int>::max());
+        // linear 的候选阶梯上界 = 动作级 max_rounds（可显式放宽阶段上限 16；仍受全局
+        // max_rounds 与三层终止约束）；bisect/exp 走各自内部上界。
+        const int ladder_cap = a.max_rounds > 0 ? a.max_rounds : kLinearStageCap;
         int stage_rounds = 0;
 
         if (a.method == AdaptiveMethod::Greedy) {
-            const double dir = (to >= start) ? 1.0 : -1.0;
+            double dir = 0.0;
+            if (!resolve_direction(a.direction, start, to, dir))
+                return true; // 显式方向已在端点错侧 / 空区间 ⇒ 0 轮（非错误）
             double value = start;
             double step_now = a.step;
             const double min_step = a.step / static_cast<double>(kGreedyMinStepDivisor);
@@ -914,8 +1088,8 @@ private:
                     hard_error_ = serr;
                     return false;
                 }
-                const RoundStep st =
-                    do_round(next, stage.id, a.key, render_number(cand), true, cand);
+                const RoundStep st = do_round(next, stage.id, a.key, render_number(cand), true,
+                                              cand, a.key + "=" + render_number(cand));
                 if (!handle_step(st, next))
                     return false;
                 if (stop_ != Stop::None)
@@ -935,7 +1109,8 @@ private:
         }
 
         std::vector<double> ladder;
-        if (!build_ladder(a.method, start, to, a.step, lo, hi, ladder))
+        if (!build_ladder(a.method, a.direction, a.breakpoints, start, to, a.step, lo, hi,
+                          ladder_cap, ladder))
             return true; // 空区间：该 search 动作无候选（非错误；stage 耗尽语义）
         for (const double v : ladder) {
             if (stop_ != Stop::None)
@@ -958,7 +1133,8 @@ private:
                 hard_error_ = serr;
                 return false;
             }
-            const RoundStep st = do_round(next, stage.id, a.key, render_number(v), true, v);
+            const RoundStep st = do_round(next, stage.id, a.key, render_number(v), true, v,
+                                          a.key + "=" + render_number(v));
             if (!handle_step(st, next))
                 return false;
             if (stop_ != Stop::None)
@@ -1019,6 +1195,44 @@ private:
         return std::string(kAdaptiveReasonStageExhausted);
     }
 
+    // C 段（需求 1）：终止原因的中文一句话（reason 仍是稳定英文码；日志/侧车 note 用本字段）。
+    std::string reason_detail_zh() const {
+        const std::string selected_round_text = std::to_string(selected_.round);
+        switch (stop_) {
+        case Stop::Met:
+            return "达标：分数 " + render_number(selected_.score) + " ≥ 目标 " +
+                   render_number(policy_.target) + "（第 " + selected_round_text + " 轮）";
+        case Stop::MaxRounds:
+            return "轮数触顶：已达全局上限 " + std::to_string(max_rounds()) +
+                   " 轮，未达标，输出最后一轮成功编码（第 " + selected_round_text + " 轮）";
+        case Stop::Plateau:
+            return "改善趋缓：连续 2 轮提升 < plateau 阈值 " + render_number(policy_.plateau) +
+                   "，输出最后一轮成功编码（第 " + selected_round_text + " 轮）";
+        case Stop::MetricStopped:
+            return "评分不可用：停止迭代并输出最后成功轮（第 " + selected_round_text + " 轮）" +
+                   (selected_.note.empty() ? std::string() : "，原因：" + selected_.note);
+        case Stop::EncodeFailed:
+            return "编码失败：输出最后一次成功编码（第 " + selected_round_text + " 轮）" +
+                   (records_.empty() ? std::string() : "；末轮错误：" + records_.back().note);
+        case Stop::Cancelled:
+            return "已取消：全部候选文件已丢弃，未落盘";
+        case Stop::HardFail:
+            if (hard_reason_ == std::string(kAdaptiveReasonInvalidPolicy))
+                return "策略不可执行：" + hard_error_;
+            if (hard_reason_ == std::string(kAdaptiveReasonMetricUnavailable))
+                return "评分不可用（on_metric_unavailable=fail）：该输出失败、不落盘";
+            return "参数非法：该输出硬失败、无产物（" + hard_error_ + "）";
+        case Stop::None:
+        case Stop::StageExhausted:
+            break;
+        }
+        if (rounds_ >= max_rounds())
+            return "轮数触顶：已达全局上限 " + std::to_string(max_rounds()) +
+                   " 轮，未达标，输出最后一轮成功编码（第 " + selected_round_text + " 轮）";
+        return "阶段耗尽：所有 stage 的候选已尝试完仍未达标，输出最后一轮成功编码（第 " +
+               selected_round_text + " 轮）";
+    }
+
     AdaptiveRunResult finish(const Clock::time_point &t0) {
         AdaptiveRunResult &res = res_;
         res.rounds = rounds_;
@@ -1027,6 +1241,7 @@ private:
         if (stop_ == Stop::HardFail) {
             res.ok = false;
             res.reason = reason_of_stop();
+            res.reason_detail = reason_detail_zh();
             res.error = hard_error_;
             discard_all(/*keep_selected=*/false);
             return res;
@@ -1036,11 +1251,14 @@ private:
             if (stop_ == Stop::EncodeFailed) {
                 // 没有任何成功编码的轮（首轮即失败）→ 无产物；错误带编码器原文。
                 res.reason = std::string(kAdaptiveReasonEncodeFailed);
+                res.reason_detail = "编码失败：没有任何成功编码的轮（第 " +
+                                    std::to_string(rounds_) + " 轮）已失败；该输出无产物";
                 res.error =
                     "自适应编码失败（第 " + std::to_string(rounds_) + " 轮）：" +
                     (records_.empty() ? std::string("编码器没有产出数据") : records_.back().note);
             } else {
                 res.reason = std::string(kAdaptiveReasonNoCandidate);
+                res.reason_detail = "无候选：策略未产生任何候选（search 区间为空）；该输出无产物";
                 res.error = "自适应策略未产生任何候选（search 区间为空）";
             }
             discard_all(/*keep_selected=*/false);
@@ -1050,6 +1268,7 @@ private:
             discard_all(/*keep_selected=*/false);
             res.ok = false;
             res.reason = std::string(kAdaptiveReasonCancelled);
+            res.reason_detail = reason_detail_zh();
             res.error = "adaptive cancelled";
             return res;
         }
@@ -1057,6 +1276,7 @@ private:
         if (!commit_candidate(selected_.path, &commit_err)) {
             res.ok = false;
             res.reason = std::string(kAdaptiveReasonCommitFailed);
+            res.reason_detail = "提交失败：选定候选无法落到最终路径（" + commit_err + "）";
             res.error = "自适应选定候选提交失败：" + commit_err;
             discard_all(/*keep_selected=*/false);
             return res;
@@ -1064,6 +1284,7 @@ private:
         discard_all(/*keep_selected=*/true); // 其余候选清场（选定者已 rename 到最终路径）
         res.ok = true;
         res.reason = reason_of_stop();
+        res.reason_detail = reason_detail_zh();
         res.selected_round = selected_.round;
         res.final_score = selected_.score;
         res.final_metric = selected_.metric;
@@ -1073,6 +1294,7 @@ private:
         res.reason_note = selected_.note;
         res.progress_reported = last_reported_;
         res.metric_ms = selected_.metric_ms;
+        res.selected_params_text = selected_.effective_params;
         return res;
     }
 
@@ -1084,23 +1306,13 @@ private:
         res.overhead_ms = ms_since(t0);
         res.ok = false;
         res.reason = std::string(kAdaptiveReasonCancelled);
+        res.reason_detail = "已取消：全部候选文件已丢弃，未落盘";
         res.error = "adaptive cancelled";
         return res;
     }
 
-    // 参数值文本（set stage 的 record.value；与 adaptive.cpp 的 render_value 口径无关，
-    // 只用于日志/侧车可读性）。
-    static std::string param_value_text(const ParamValue &v) {
-        if (const auto *b = std::get_if<bool>(&v))
-            return *b ? "true" : "false";
-        if (const auto *i = std::get_if<int64_t>(&v))
-            return std::to_string(*i);
-        if (const auto *d = std::get_if<double>(&v))
-            return render_number(*d);
-        if (const auto *s = std::get_if<std::string>(&v))
-            return *s;
-        return {};
-    }
+    // 参数值文本 = 匿名命名空间的 param_value_text（单源；set stage 的 record.value 与实际
+    // 生效值文本共用）。
 
     const AdaptivePolicy &policy_;
     ParamSet base_;
@@ -1124,6 +1336,7 @@ private:
         std::uint64_t bytes = 0;
         double metric_ms = 0.0;
         std::string note;
+        std::string effective_params; // C 段：选定轮生效参数文本
     } selected_;
 
     int rounds_ = 0;

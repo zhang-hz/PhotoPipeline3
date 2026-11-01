@@ -37,7 +37,7 @@
 | key | 标签 | 类型 | 范围/选项 | 默认 | 级别 | 备注 |
 |---|---|---|---|---|---|---|
 | quality_mode | 质量控制方式 | enum | distance / quality | distance | 核心 | 二选一联动下方控件 |
-| distance | 视觉距离 | float | 0.3–3.0 | 1.0 | 核心 | `quality_mode=distance` 时可见 |
+| distance | 视觉距离 | float | **0.1–3.0** | 1.0 | 核心 | `quality_mode=distance` 时可见。**0.4.0/M12 修订（R-294）**：UI 下限 0.3 → **0.1**（`src/core/format_tables.cpp` 的 jpegli `distance` `.lo`），与出厂 `default` 的 JPEG 自适应策略「1 以下步长 0.1 精扫到 0.1」对齐——旧下限会让 0.1–0.3 段不可达；tooltip 同步为 [0.1, 3.0] |
 | quality | 质量 | int | 1–100 | 90 | 核心 | `quality_mode=quality` 时可见 |
 | chroma | 色度采样 | enum | 444 / 440 / 422 / 420 | 444 | 核心 | R-316 勘误：旧表漏 440（实现四选一，format_tables 为准） |
 | progressive | 渐进式 | bool | | true | 核心 | |
@@ -53,6 +53,13 @@
 | cicp_transfer_function | CICP 传递函数 | int | 0–18 | 2 | 高级 | R-316 补录；仅 16=PQ、18=HLG 有实际效果 |
 
 格式级：位深 `{8}`（jpeg-li 仅 8 位输出，已查证）；alpha 不支持 → 全局底色合成。jpegli 同时是**全程序唯一 libjpeg**（OIIO 的 JPEG 解码亦由其执行，复审 S2）。
+
+> **M12 更新（0.4.0，R-294 修订，2026-11-01）**：JPEG `distance` 的 UI 范围由 **0.3–3.0** 放宽为 **0.1–3.0**
+> （`src/core/format_tables.cpp` 的 jpegli `distance` `.lo` 0.3 → 0.1，tooltip 同步 `[0.1, 3.0]`）。原因：出厂
+> `default` 预设的 JPEG 自适应策略「distance 从 3.0 降，1 以下步长 0.1 精扫到 **0.1**」需要 0.1 段可达；
+> 旧下限会让 0.1–0.3 段不可达（库允许仍是 0.0–25.0，UI 收窄口径不变）。设计/策略真源 =
+> [`docs/adaptive-policy.md`](adaptive-policy.md) §6.1/§10、[`docs/format-presets.md`](format-presets.md) §7.1；
+> 裁定见 [`docs/m12-adjudications.md`](m12-adjudications.md) A6。
 
 ## 2. JPEG XL — libjxl（单后端，双技术）
 
@@ -221,33 +228,47 @@ MaxLumaPs + 宽高 ≤ sqrt(8*MaxLumaPs)」预校验；显式 Level 装不下整
 上限/最小可行 Level/启用自动分块）。合法 Level：10/20/21/30/31/40/41/
 50/51/52/60/61/62/63/70/71/72（85=无损专用）；6.3/7.x 是 x265 4.3 真实支持的 Level。
 **语义要点：grid 输出时 Level 约束的是每个 tile，不是整图**（grid 是派生图）。
+**still 单图档位 + Level>5.1（C17' / 规则 H8）**：Main Still Picture（idc 3）与 RExt still
+变体（16..21）搭配显式 Level>5.1 时，tile 规划按 still 图互操作上界 **Level 5.1**
+（3GPP TS 26.140 §4.5 / TS 26.141 §4.2：HEIF 'heic'+'MiHB' 互操作档 = HEVC Main /
+Main Tier / Level 5.1，媒体类型参数 `itemTypes="hvc1.1.2.L153.B0"`），**编码 Level 仍按用户值、
+不静默改参数**；行内 H8 + 运行日志 warn 说明该偏差。注意：5.1 是**应用格式/互操作上界**，
+不是 H.265 profile 强制（H.265 V9 的 still picture profile 没有 Level 上限，详见
+`docs/heif-tile-sizing.md` 证据表）。
 
-**分块（grid，W2-T1 新增普通目录行，C16/C17）**：
+**分块（grid，W2-T1 新增普通目录行，C16/C17'）**：
 
 | key | 标签 | 类型 | 范围/选项 | 默认 | 级别 | 说明 |
 |---|---|---|---|---|---|---|
-| `heif_grid` | 分块模式 | enum | 关闭 / **自动** / 总是 | 自动（未设置） | 高级 | 自动=显式 Level 装不下整图时自动分块；Level=自动 时常规尺寸单图，仅整图超出 x265 最高 Level 7.2 容量（MaxLumaPs=142,606,336 且宽高 ≤ sqrt(8×M)）才按 Apple 1024×576 基准分块；总是=按 Apple 基准强制分块（每 tile 由 x265 自动选 Level）；关闭=单图，超 Level 预检报错 |
+| `heif_grid` | 分块模式 | enum | 关闭 / **自动** / 总是 | 自动（未设置） | 高级 | 自动=显式 Level 装不下整图时自动分块；Level=自动 时常规尺寸单图，仅整图超出 x265 最高 Level 7.2 容量（MaxLumaPs=142,606,336 且宽高 ≤ sqrt(8×M)）才自动分块；总是=强制分块（tile 尺寸由 Level 容量推导，每 tile 由 x265 自动选 Level）；关闭=单图，超 Level 预检报错 |
 | `heif_tile_w` | Tile 宽 | int | 0=自动；64–8192（8 向下对齐） | 0 | 高级 | 仅 `heif_grid≠关闭` 可见；单轴 0 表示该轴继续自动求解 |
 | `heif_tile_h` | Tile 高 | int | 同上 | 0 | 高级 | 同上 |
 
 - **默认产物零变化**：`heif_grid` 缺省 = 自动，且 Level=自动 + 常规尺寸 → 单图，与 HEAD
   逐字节一致（W2-T1 的 SHA256 门禁）。
-- **tile 自动推导**：基准 1024×576，按图像 clamp、8 对齐；显式 Level 下同时满足
-  `tw8*th8 ≤ MaxLumaPs` 且 `tw8,th8 ≤ sqrt(8*MaxLumaPs)`；基准装不下时按「面积最大、
-  等面积取长宽比最接近 1024:576」搜索（≥64）。`rows×cols==1` → 降级单图 + info 日志。
+- **tile 自动推导（C17'，0.4.0.alpha2；删除旧 Apple 1024×576 固定基准）**：tile 尺寸由
+  **规划 Level 的 MaxLumaPs(M) + 单边上限 D=floor(sqrt(8M))** 与图像宽高推导——
+  在 8 像素对齐、[64, min(图宽, D)] 内枚举 tw，`th = align8(min(图高, D, floor(M/tw)))`，
+  取面积最大者（`tw*th ≤ M`，可恰好等于 M），面积相同取 `|tw/th − 图宽高比|` 最小者；
+  无任何固定基准/魔法常数。示例：3902×5854 + L3.1 → **768×1280 = 983,040 = L3.1
+  MaxLumaPs 整值**（6×5）；L3.0 → 576×960（7×7）；L1.0 → 144×256（28×23）。
+  `Level=自动` 的规划上界 = still 互操作档 Level 5.1（M=8,912,896）。`rows×cols==1`
+  → 降级单图 + info 日志。公式与规范证据：`docs/heif-tile-sizing.md`。
 - **手动覆盖**：非 8 倍数按 8 向下对齐（行内提示）；<64 或 >8192 → 预检错误；显式 Level 下
-  `tw8*th8 > MaxLumaPs` 或 `tw8/th8 > sqrt(8*MaxLumaPs)` → 中文预检错误（点名上限、
+  `tw*th > MaxLumaPs` 或 `tw/th > sqrt(8*MaxLumaPs)` → 中文预检错误（点名上限、
   最大可行 tile、三条出路：改自动 / 提高 Level / 关闭 grid），不静默降级。
 - **MIAF 奇偶**：4:2:0 需宽高偶数、4:2:2 需宽偶数（7.3.11.4.2）→ 只 warn 不阻断
   （801×601→grid 的既有单测行为保留）。
 - **grid 结构上限（M10 收口补登记）**：HEIF grid 的 `rows`/`cols` 字段是 u8+1 ⇒ **单边 ≤256 且
   `rows×cols ≤65535`**；超限给中文 `error_zh`（点名上限与实际 tile 数），**不写坏件**
   （实现 `kMaxGridSide=256` / `kMaxGridTiles=65535`，`src/codecs/heif_capability.cpp`）。
-- **Level=自动 + 手动 tile ⇒ warn（规则 H5，M10 收口补登记）**：该组合**允许但告警** —— 与 Apple
-  参考（1024×576）不同，「iPhone 接受度未验证（每 tile 的 Level 由 x265 自动选择）」；只提示、不改 tile
-  （实现 `src/core/param_rules.cpp` 的 `H5`，与 UI note 同源）。
+- **Level=自动 + 手动 tile ⇒ warn（规则 H5，M10 收口补登记；C17' 更新文案）**：该组合**允许
+  但告警** —— tile 尺寸用用户值、每 tile 的 Level 由 x265 自动选择（规划上界为 still 互操作档
+  Level 5.1），「iPhone 接受度未验证」；只提示、不改 tile（实现 `src/core/param_rules.cpp`
+  的 `H5`，与 UI note 同源）。
 - **规划摘要**：运行日志输出 `tile`（每 tile 尺寸）/ `grid`（cols×rows）/ `tile_level`
-  （显式 Level 或「自动（x265 逐 tile 选择）」）/ `tiles`（总 tile 数）/ `mode`，UI 行内
+  （显式 Level 或「自动（x265 逐 tile 选择）」）/ `tiles`（总 tile 数）/ `mode`，
+  以及 still 上界压缩的 `planned_grid`/`planning_level`/`warning`；UI 行内
   note 用同一份纯函数结果（不编造未发生的数值）。
 - **兼容别名**：`__heif_grid`（0=关闭/1=总是/2=自动）保留为只读兼容读别名，旧预设 /
   `--dev --param __heif_grid=…` 仍生效；新配置一律写 `heif_grid`（0=关闭/1=自动/2=总是）。
@@ -453,3 +474,13 @@ alpha 不支持（全局底色合成）；无元数据容器（EXIF 丢弃 + 日
 - 发行口径：`0.3.6.alpha1`（版本单源 `CMakeLists.txt:19-24` = 数字段 0.3.6 + 标签 ".alpha1"）；
   逐条变更见 [CHANGELOG.md](../CHANGELOG.md) `[0.3.6.alpha1]`，发布验收见
   [docs/0.3.6.alpha1-report.md](0.3.6.alpha1-report.md)。
+
+## M12 更新（0.4.0 正式版，2026-11-01）
+
+- **JPEG `distance` UI 范围 0.3–3.0 → 0.1–3.0**（R-294 修订）：`src/core/format_tables.cpp` jpegli
+  `distance` 的 `.lo` 0.3 → 0.1、tooltip 同步 `[0.1, 3.0]`；库允许范围仍是 0.0–25.0（UI 收窄口径不变）。
+  动因 = 出厂 `default` 的 JPEG 自适应策略「1 以下步长 0.1 精扫到 0.1」；否则 0.1–0.3 段不可达。
+  真源：[docs/adaptive-policy.md](adaptive-policy.md) §6.1/§10、[docs/format-presets.md](format-presets.md) §7.1；
+  裁定：[docs/m12-adjudications.md](m12-adjudications.md) A6。本清单 §1 行内注记同步（表格上方已加 M12 更新块）。
+- **本批未改其它参数行/默认值**（参数目录仍为 117 行；`jpegli` 其余键与 M10/M11 一致）。逐条变更见
+  [CHANGELOG.md](../CHANGELOG.md) `[0.4.0]`。

@@ -1207,8 +1207,19 @@ int main() {
             check(spec.contains("adaptive"), c, "输出级应写出 adaptive 对象");
             const QJsonObject adaptive = spec.value("adaptive").toObject();
             check(adaptive.value("enabled").toBool(false), c, "adaptive.enabled = true");
-            check(adaptive.value("policy").toString().toStdString() == policy, c,
-                  "adaptive.policy 逐字节落盘");
+            // 需求 3：policy 一律写成 JSON 字符串数组（一行一个元素、零 \n 转义）。
+            const QJsonValue policy_v = adaptive.value("policy");
+            check(policy_v.isArray(), c, "adaptive.policy 必须是数组（一行一个元素）");
+            const QJsonArray policy_lines = policy_v.toArray();
+            const std::string expect_lines[] = {
+                "version 1",   "target 90",  "max_rounds 3",
+                "output last", "stage q-up", "  search quality from current to 95 step 2"};
+            check(policy_lines.size() == 6, c,
+                  "policy 数组行数 = " + std::to_string(policy_lines.size()));
+            for (int i = 0; i < policy_lines.size() && i < 6; ++i)
+                check(policy_lines.at(i).toString().toStdString() == expect_lines[i], c,
+                      "policy[" + std::to_string(i) + "] 行内容");
+            check(read_file(file).find("\\n") == std::string::npos, c, "落盘不得含 \\n 转义");
             // 策略文本不进 params（不污染参数快照面）
             const QJsonObject params = spec.value("params").toObject();
             for (auto it = params.constBegin(); it != params.constEnd(); ++it)
@@ -1296,6 +1307,45 @@ int main() {
         const std::string policy_err = ui::load_preset(bad_policy, bad);
         check(policy_err.find("adaptive.policy") != std::string::npos, c,
               "adaptive.policy 类型错误应点名报错：" + policy_err);
+        // 6) 需求 3：数组元素不是字符串 / 内嵌换行 ⇒ 显式报错；旧字符串形态兼容读。
+        const fs::path arr_bad = fresh_dir(root, "adaptive-arr-bad") / "b.json";
+        write_file(arr_bad, std::string(R"({
+  "version": 2, "name": "bad", "output_template": "$dir/$file",
+  "outputs": [ { "format": "jxl", "params": {},
+                 "adaptive": { "policy": ["version 1", 5] } } ]
+})"));
+        const std::string arr_err = ui::load_preset(arr_bad, bad);
+        check(arr_err.find("adaptive.policy") != std::string::npos, c,
+              "数组元素非字符串应点名报错：" + arr_err);
+        const fs::path arr_embedded = fresh_dir(root, "adaptive-arr-embedded") / "b.json";
+        write_file(arr_embedded, std::string(R"({
+  "version": 2, "name": "bad", "output_template": "$dir/$file",
+  "outputs": [ { "format": "jxl", "params": {},
+                 "adaptive": { "policy": ["version 1\ntarget 90", "stage q"] } } ]
+})"));
+        const std::string embedded_err = ui::load_preset(arr_embedded, bad);
+        check(!embedded_err.empty() && embedded_err.find("内嵌换行") != std::string::npos, c,
+              "数组元素内嵌换行应报错：" + embedded_err);
+        // 旧字符串形态（单字符串，含 \n 转义）仍兼容读 → 规范文本（末尾补 \n）。
+        const fs::path legacy_policy = fresh_dir(root, "adaptive-legacy-str") / "p.json";
+        write_file(legacy_policy, std::string(R"({
+  "version": 2, "name": "legacy-policy", "output_template": "$dir/$file",
+  "outputs": [ { "format": "jxl", "backend": "libjxl", "tech": "modular", "bitdepth": 16,
+                 "params": {},
+                 "adaptive": { "enabled": true,
+                               "policy": "version 1\ntarget 88\n\nstage q\n  set effort 3\n" } } ]
+})"));
+        PresetData lp;
+        check(ui::load_preset(legacy_policy, lp).empty(), c, "旧字符串 policy 应兼容读");
+        check(!lp.outputs.empty() && lp.outputs[0].adaptive_enabled &&
+                  lp.outputs[0].adaptive_policy ==
+                      "version 1\ntarget 88\n\nstage q\n  set effort 3\n",
+              c, "旧字符串 policy 规范化文本");
+        // 再保存即升级为数组形态。
+        const fs::path legacy_policy_out = fresh_dir(root, "adaptive-legacy-str-out") / "p.json";
+        check(ui::save_preset(legacy_policy_out, lp).empty(), c, "旧字符串 policy 再保存");
+        check(read_file(legacy_policy_out).find("\\n") == std::string::npos, c,
+              "旧字符串 policy 再保存应升级为数组");
     }
 
     case_begin("9) 收尾（清理 + 汇总）");

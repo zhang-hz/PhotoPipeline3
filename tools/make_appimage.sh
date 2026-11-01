@@ -96,6 +96,12 @@
 #     vcpkg 已装 port 的许可文本 → usr/share/licenses/<port>/copyright（目录名 = port 名，
 #     便于溯源），本项目许可 → usr/share/licenses/PhotoPipeline/LICENSE；取文件规则、
 #     缺失条目列名规则见该脚本头注释。缺许可的真实 port 只告警不失败（须在报告里列名处置）。
+#   * M12 工厂格式预设（内置预设外部化）: 仓库 `presets/formats/**`（11 个 JSON，人类可直接阅读/
+#     编辑/复制；8 格式各含 default.json）整树拷贝到 AppDir 的 `usr/bin/presets/` = **exe 旁**
+#     （运行时 factory 目录 = `<exe 目录>/presets/formats`）。AppImage 只读 ⇒ 应用首启把工厂文件
+#     按字节 seed 到 XDG 数据目录（用户改过的 default.json 永不被覆盖）。
+#     结构硬门禁「门禁 G」: 8 格式 default.json 齐备 + JSON 总数 = 11 + 无旧版 `_builtin-*` 残留；
+#     AppDir 写盘前 + 产物解包后各断言一次（与 tools/make_winzip.py 的门禁 G 同口径）。
 #   * 打包器: tools/bin/appimagetool-x86_64.AppImage（入库 + 旁置 .sha512），
 #     运行方式 APPIMAGE_EXTRACT_AND_RUN=1（不依赖 FUSE）。
 #   * type2 runtime（M2-T11d）: appimagetool 默认从 GitHub `continuous` 渠道**在线下载**
@@ -126,6 +132,24 @@ die_runtime() {
     exit 2
 }
 note() { echo "make_appimage: $*"; }
+
+# M12 门禁 G（工厂格式预设）：布局 = <root>/<format>/<stem>.json（root = presets/formats）。
+# 判据：8 格式各有 default.json、JSON 文件总数 = 11、不得残留旧版 _builtin-*.json。
+# 写盘前（AppDir）与产物内（解包后）各校验一次（与 make_winzip.py 的门禁 G 同口径）。
+check_factory_presets() {
+    local root="$1" where="$2" total legacy problems=()
+    for fmt in avif bmp heif jpeg jxl png tiff webp; do
+        [ -f "$root/$fmt/default.json" ] || problems+=("$fmt/default.json 缺失")
+    done
+    total="$(find "$root" -mindepth 2 -maxdepth 2 -type f -name '*.json' 2>/dev/null | wc -l)"
+    [ "$total" -eq 11 ] || problems+=("JSON 文件总数 $total != 11")
+    legacy="$(find "$root" -mindepth 2 -maxdepth 2 -type f -name '_builtin-*.json' 2>/dev/null | wc -l)"
+    [ "$legacy" -eq 0 ] || problems+=("残留旧版 _builtin-* 文件 $legacy 个")
+    if [ "${#problems[@]}" -gt 0 ]; then
+        die "工厂预设门禁失败（$where）: $(printf '%s；' "${problems[@]}")"
+    fi
+    note "工厂预设门禁（$where）: 8 格式 default.json 齐备 · JSON 文件总数 $total · 无 _builtin- 残留"
+}
 
 [ -x "$BIN" ] || die "release 产物缺失: $BIN（先 cmake --preset release -B ${BUILD_DIR#"$ROOT"/} && cmake --build ${BUILD_DIR#"$ROOT"/} -j）"
 [ -f "$TOOL" ] || die "打包器缺失: $TOOL（入库资产，见 §2.9）"
@@ -164,6 +188,15 @@ rm -f "$APPIMAGE"
 mkdir -p "$OUT_DIR" "$APPDIR/usr/bin" "$APPDIR/usr/lib"
 
 install -m 755 "$BIN" "$APPDIR/usr/bin/photopipeline"
+
+# ---- M12：工厂格式预设（单一真源 = 仓库 presets/formats/**）→ exe 旁 usr/bin/presets/ ----
+# 运行时 factory 目录 = <exe 目录>/presets/formats；AppImage 只读，seed 从此处读工厂文件并复制到
+# XDG 数据目录（用户可改可复制的人类可读 JSON，不再是 C++ 硬编码内置库）。
+PRESETS_SRC="$ROOT/presets"
+[ -d "$PRESETS_SRC/formats" ] || die "工厂格式预设缺失: $PRESETS_SRC/formats（内置预设单一真源；缺它发行包首启无预设）"
+mkdir -p "$APPDIR/usr/bin/presets"
+cp -aLf "$PRESETS_SRC/." "$APPDIR/usr/bin/presets/"
+check_factory_presets "$APPDIR/usr/bin/presets/formats" "AppDir 写盘前"
 
 # ---- 非系统 .so 递归闭包（白名单规则 + BUNDLE_ALWAYS/NEVER_BUNDLE 见文件头） ----
 shopt -s nullglob
@@ -545,6 +578,11 @@ PKG_COUNT="$(find "$PKG_LIC" -mindepth 2 -maxdepth 2 -type f -name copyright 2>/
 note "烟测 ④: 产物内 usr/share/licenses/ = $PKG_COUNT 个 copyright（≥30 ✓）+ PhotoPipeline/LICENSE ✓ + NOTICE ✓"
 note "  产物内示例: $(find "$PKG_LIC" -mindepth 2 -maxdepth 2 -type f -name copyright | LC_ALL=C sort | sed -n '1p' | sed "s#^$EXTRACT_DIR/##")"
 note "  产物内示例: squashfs-root/usr/share/licenses/PhotoPipeline/LICENSE"
+
+# ---- M12 门禁 G（产物内复核）：从打好的 AppImage 解包确认 exe 旁工厂预设确实在产物里 ----
+( cd "$EXTRACT_DIR" && APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGE" --appimage-extract 'usr/bin/presets/*' >/dev/null ) \
+    || die "从产物解包 usr/bin/presets/ 失败: $APPIMAGE"
+check_factory_presets "$EXTRACT_DIR/squashfs-root/usr/bin/presets/formats" "产物内"
 
 note "结构清单:"
 ( cd "$APPDIR" && find . -maxdepth 3 -mindepth 1 \( -type d -o -type f -o -type l \) | sort | sed 's/^/  /' )

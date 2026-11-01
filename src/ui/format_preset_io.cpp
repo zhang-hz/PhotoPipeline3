@@ -161,12 +161,6 @@ bool safe_component(std::string_view s) {
     return true;
 }
 
-// 内置（出厂）预设的文件名标记（单源 = core/format_preset.h 的 kFormatPresetBuiltinPrefix）。
-bool has_builtin_prefix(std::string_view name) {
-    const std::string_view prefix = kFormatPresetBuiltinPrefix;
-    return name.size() >= prefix.size() && name.compare(0, prefix.size(), prefix) == 0;
-}
-
 // —— ParamValue ⇄ JSON ——
 QJsonValue to_json(const ParamValue &v) {
     if (const bool *b = std::get_if<bool>(&v))
@@ -336,9 +330,27 @@ std::string parse_preset_object(const QJsonObject &root, FormatPresetData &out) 
         p.adaptive_enabled = enabled_v.toBool(false);
         const QJsonValue policy_v = a.value(QStringLiteral("policy"));
         if (!policy_v.isUndefined() && !policy_v.isNull()) {
-            if (!policy_v.isString())
-                return "adaptive.policy 必须是字符串（行式 DSL 文本）";
-            p.adaptive_policy = utf8(policy_v.toString());
+            // 需求 3：policy 落盘为「JSON 字符串数组，一行一个元素」（可读、零 \n 转义）；
+            // 旧文件（单个字符串）仍兼容读（按 \n / \r\n 拆行后规范化）。
+            if (policy_v.isString()) {
+                p.adaptive_policy = adaptive_policy_from_legacy_string(utf8(policy_v.toString()));
+            } else if (policy_v.isArray()) {
+                const QJsonArray lines = policy_v.toArray();
+                std::vector<std::string> texts;
+                texts.reserve(static_cast<std::size_t>(lines.size()));
+                for (int i = 0; i < lines.size(); ++i) {
+                    if (!lines.at(i).isString()) {
+                        return "adaptive.policy 数组的第 " + std::to_string(i + 1) +
+                               " 个元素不是字符串（数组形态下每个元素是一行 DSL 文本）";
+                    }
+                    texts.push_back(utf8(lines.at(i).toString()));
+                }
+                std::string join_err;
+                if (!adaptive_policy_from_lines(texts, p.adaptive_policy, &join_err))
+                    return join_err;
+            } else {
+                return "adaptive.policy 必须是字符串或字符串数组（推荐数组：一行一个元素）";
+            }
         }
         for (auto it = a.constBegin(); it != a.constEnd(); ++it) {
             const std::string key = utf8(it.key());
@@ -381,8 +393,14 @@ QJsonObject preset_to_json(const FormatPresetData &p) {
     if (p.adaptive_enabled || !p.adaptive_policy.empty()) {
         QJsonObject adaptive;
         adaptive.insert(QStringLiteral("enabled"), p.adaptive_enabled);
-        if (!p.adaptive_policy.empty())
-            adaptive.insert(QStringLiteral("policy"), qs(p.adaptive_policy));
+        if (!p.adaptive_policy.empty()) {
+            // 需求 3：写出一律为数组（一行一个元素；QJsonDocument::Indented 下每行独立可读，
+            // 零 \n 转义）。读入兼容旧字符串（见 parse_preset_object）。
+            QJsonArray lines;
+            for (const std::string &line : adaptive_policy_to_lines(p.adaptive_policy))
+                lines.append(qs(line));
+            adaptive.insert(QStringLiteral("policy"), lines);
+        }
         root.insert(QStringLiteral("adaptive"), adaptive);
     }
     return root;
@@ -410,10 +428,8 @@ std::string write_preset_json(const std::filesystem::path &file, const FormatPre
 
 std::string save_validated(const std::filesystem::path &presets_root, const FormatPresetData &p,
                            std::filesystem::path *saved_path) {
-    // M10-W3-T5：`_builtin-` 前缀 = 只读模板（内置/出厂预设）→ 拒绝覆盖（另存…可换新名）。
-    if (is_builtin_format_preset_name(p.name))
-        return "拒绝覆盖内置预设（" + p.name +
-               "）：`_builtin-` 前缀是只读模板；请用「另存…」保存为新的预设";
+    // M12：格式预设一律是普通文件（出厂默认预设 `default` 也**可保存覆盖** = 直接修改它；
+    // 只读模板/`_builtin-` 前缀概念已随出厂预设外部化删除）。
     if (const std::string verr = validate_format_preset(p); !verr.empty())
         return verr;
     if (presets_root.empty())
@@ -566,6 +582,48 @@ bool parse_stages_json(const QJsonValue &v, std::vector<AdaptiveStage> &out, Ada
                     return false;
                 if (!ao.contains(QStringLiteral("step")))
                     return json_fail(err, "json_field", aat + ".step 缺失", "search 必须有 step。");
+                // DSL v1.1：可选 direction（"down"/"up"）与 breakpoints（[{value,step}...]）。
+                const QJsonValue direction = ao.value(QStringLiteral("direction"));
+                if (!direction.isUndefined() && !direction.isNull()) {
+                    if (!direction.isString())
+                        return json_fail(
+                            err, "json_field", aat + ".direction 必须是字符串",
+                            "direction 取 \"down\" 或 \"up\"（省略 = 由端点推断方向）。");
+                    const std::string ds = utf8(direction.toString());
+                    if (ds == "down") {
+                        a.direction = AdaptiveDirection::Down;
+                    } else if (ds == "up") {
+                        a.direction = AdaptiveDirection::Up;
+                    } else {
+                        std::string why = aat + ".direction 非法：";
+                        why += ds;
+                        return json_fail(err, "json_field", why,
+                                         "direction 取 \"down\" 或 \"up\"（省略 = 由端点推断）。");
+                    }
+                }
+                const QJsonValue breakpoints = ao.value(QStringLiteral("breakpoints"));
+                if (!breakpoints.isUndefined() && !breakpoints.isNull()) {
+                    if (!breakpoints.isArray())
+                        return json_fail(err, "json_field", aat + ".breakpoints 必须是数组",
+                                         "每个元素是 {value, step}（按 value 严格升序）。");
+                    const QJsonArray bps = breakpoints.toArray();
+                    for (int bi = 0; bi < bps.size(); ++bi) {
+                        const std::string bat = aat + ".breakpoints[" + std::to_string(bi) + "]";
+                        if (!bps.at(bi).isObject())
+                            return json_fail(err, "json_field", bat + " 不是对象",
+                                             "每个断点 = {value, step}。");
+                        const QJsonObject bo = bps.at(bi).toObject();
+                        AdaptiveBreakpoint bp;
+                        const QJsonValue value_v = bo.value(QStringLiteral("value"));
+                        const QJsonValue step_v = bo.value(QStringLiteral("step"));
+                        if (!value_v.isDouble() || !step_v.isDouble())
+                            return json_fail(err, "json_field", bat + " 缺少数值 value/step",
+                                             "每个断点 = {value, step}（均为数值）。");
+                        bp.value = value_v.toDouble();
+                        bp.step = step_v.toDouble();
+                        a.breakpoints.push_back(bp);
+                    }
+                }
                 if (!parse_method_json(ao.value(QStringLiteral("method")), a.method, err))
                     return false;
                 int64_t action_rounds = 0;
@@ -627,6 +685,24 @@ std::filesystem::path format_preset_path(std::string_view format_id, std::string
     if (dir.empty())
         return {};
     return dir / (std::string(name) + ".json");
+}
+
+// 工厂（出厂）预设目录（M12）：exe 旁 = 随发行包分发的仓库 `presets/formats/**`。
+// executable_dir() 为空（读 exe 路径失败）→ 空路径 = 不可用（调用方跳过 seed 复制）。
+std::filesystem::path factory_format_presets_root() {
+    const std::filesystem::path exe_dir = platform::executable_dir();
+    if (exe_dir.empty())
+        return {};
+    return exe_dir / "presets" / "formats";
+}
+
+std::filesystem::path factory_format_preset_dir(std::string_view format_id) {
+    if (!safe_component(format_id))
+        return {};
+    const std::filesystem::path root = factory_format_presets_root();
+    if (root.empty())
+        return {};
+    return root / std::string(format_id);
 }
 
 // ===========================================================================
@@ -717,10 +793,12 @@ std::string load_format_preset(const std::filesystem::path &file, FormatPresetDa
 std::string delete_format_preset(const std::filesystem::path &file) {
     if (file.empty())
         return "拒绝删除：删除路径为空";
-    // M10-W3-T5：内置（出厂）预设只读 —— 拒绝删除（另存…/导出可保存副本）。
-    if (is_builtin_format_preset_path(file))
-        return "拒绝删除内置预设（" + display_path(file) +
-               "）：`_builtin-` 前缀是只读模板；请用「另存…」保存副本后再改";
+    // M12：出厂默认预设（文件名 stem = `default`，单源 = pp::is_default_format_preset_name）
+    // **不可删除**；但它不是只读模板 —— 可直接「保存」修改它（改的就是 default.json）。
+    if (is_default_format_preset_name(file.stem().string()))
+        return "拒绝删除出厂默认预设（" + display_path(file) +
+               "）：每个格式的 default 是出厂默认预设，不可删除；可直接「保存」修改它，"
+               "或用「另存」复制一份";
     if (!file.is_absolute())
         return "拒绝删除相对路径的格式预设（" + display_path(file) + "）";
     std::error_code ec;
@@ -849,64 +927,268 @@ bool load_adaptive_policy_json(const std::filesystem::path &file, std::string_vi
 }
 
 // ===========================================================================
-// 内置（出厂）预设：只读判定 + 幂等 seed（M10 / W3-T5；设计 §8.3 / §9.7）
+// 工厂（出厂）预设：字节复制 seed + 旧版迁移（M12；简报 §2/§4.1）
 // ===========================================================================
-bool is_builtin_format_preset_path(const std::filesystem::path &file) {
-    return has_builtin_prefix(file.filename().string());
+namespace {
+
+// 历史版本（0.4.0.alpha1）的只读出厂模板前缀：**仅用于迁移删除**。M12 起格式预设一律是普通
+// 文件，不再有任何只读前缀/内置库概念（该字面量只出现在本迁移清理里，不对外暴露）。
+constexpr std::string_view kLegacyBuiltinPrefix = "_builtin-";
+
+// 普通 JSON 文件（非隐藏、.json 后缀；语义与 list_format_presets_in 的过滤一致）。
+bool is_plain_json_name(const std::string &name) {
+    return !name.empty() && name[0] != '.' && has_json_suffix(name);
 }
 
-bool is_builtin_format_preset_name(std::string_view name) { return has_builtin_prefix(name); }
+// 两个目录是否指向同一位置：都存在时用 equivalent（Windows 大小写/短名/尾分隔符归一），
+// 否则退化为 weakly_canonical 绝对路径比较（不存在时用词法归一兜底）。
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)：a/b 由"两目录同址判定"语义固定
+bool same_directory(const std::filesystem::path &a, const std::filesystem::path &b) {
+    if (a.empty() || b.empty())
+        return false;
+    std::error_code ec;
+    if (std::filesystem::exists(a, ec) && std::filesystem::exists(b, ec)) {
+        ec.clear();
+        const bool same = std::filesystem::equivalent(a, b, ec);
+        if (!ec)
+            return same;
+    }
+    const auto normalize = [](const std::filesystem::path &p) {
+        std::error_code nec;
+        std::filesystem::path canonical = std::filesystem::weakly_canonical(p, nec);
+        return nec ? p.lexically_normal() : canonical;
+    };
+    return normalize(a) == normalize(b);
+}
 
-FormatPresetSeedReport seed_builtin_format_presets_to(const std::filesystem::path &presets_root) {
-    FormatPresetSeedReport report;
-    const std::string prefix(kFormatPresetBuiltinPrefix);
-    for (const FormatPresetData &p : builtin_format_presets()) {
-        if (presets_root.empty()) {
-            ++report.failed;
-            report.errors.push_back("内置预设「" + p.name +
-                                    "」未 seed：格式预设目录不可用（数据目录为空）");
-            continue;
+// 按文件名排序收集目录下的普通 JSON 文件（确定性报告顺序；不递归）。
+std::vector<std::filesystem::path> plain_json_files(const std::filesystem::path &dir,
+                                                    std::string &err) {
+    std::vector<std::filesystem::path> out;
+    std::error_code ec;
+    std::filesystem::directory_iterator it(dir, ec);
+    if (ec) {
+        err = "无法读取目录 '" + display_path(dir) + "'：" + ec.message();
+        return out;
+    }
+    const std::filesystem::directory_iterator end;
+    for (; it != end; it.increment(ec)) {
+        if (ec) {
+            err = "遍历目录 '" + display_path(dir) + "' 失败：" + ec.message();
+            return out;
         }
-        if (!safe_component(p.format_id)) {
-            ++report.failed;
-            report.errors.push_back("内置预设「" + p.name + "」未 seed：格式 id 非法（" +
-                                    p.format_id + "）");
+        const std::string fname = it->path().filename().string();
+        if (!is_plain_json_name(fname))
             continue;
-        }
-        const std::filesystem::path dir = presets_root / p.format_id;
-        const std::filesystem::path file = dir / (prefix + p.format_id + ".json");
-        std::error_code ec;
-        if (std::filesystem::exists(file, ec)) {
-            ++report.skipped; // 幂等：已存在（上次已 seed / 用户改过）→ 一个字节都不动
+        std::error_code fec;
+        if (!it->is_regular_file(fec))
             continue;
-        }
-        // seed 前走与保存同一条校验链：不合法就不写（不制造坏文件、不静默）。
-        const std::string verr = validate_format_preset(p);
-        if (!verr.empty()) {
-            ++report.failed;
-            report.errors.push_back("内置预设「" + p.name + "」校验失败：" + verr);
-            continue;
-        }
-        std::filesystem::create_directories(dir, ec);
+        out.push_back(it->path());
+    }
+    std::sort(out.begin(), out.end(),
+              [](const std::filesystem::path &a, const std::filesystem::path &b) {
+                  return a.filename().string() < b.filename().string();
+              });
+    return out;
+}
+
+// ① 迁移清理：删除数据目录各格式子目录下的旧版只读出厂模板（`_builtin-*.json`）。
+void remove_legacy_builtin_files(const std::filesystem::path &presets_root,
+                                 FormatPresetSeedReport &report) {
+    std::error_code ec;
+    if (!std::filesystem::is_directory(presets_root, ec))
+        return; // 目录尚不存在 = 没有可迁移的旧文件
+    std::vector<std::filesystem::path> format_dirs;
+    std::filesystem::directory_iterator it(presets_root, ec);
+    if (ec) {
+        ++report.failed;
+        report.errors.push_back("无法读取格式预设目录 '" + display_path(presets_root) +
+                                "'（旧版内置预设迁移失败）：" + ec.message());
+        return;
+    }
+    const std::filesystem::directory_iterator end;
+    for (; it != end; it.increment(ec)) {
         if (ec) {
             ++report.failed;
-            report.errors.push_back("内置预设「" + p.name + "」未 seed：无法创建目录 '" +
-                                    display_path(dir) + "'：" + ec.message());
-            continue;
+            report.errors.push_back("遍历格式预设目录 '" + display_path(presets_root) +
+                                    "' 失败（旧版内置预设迁移）：" + ec.message());
+            return;
         }
-        const std::string werr = write_preset_json(file, p);
-        if (!werr.empty()) {
-            ++report.failed;
-            report.errors.push_back(werr);
+        std::error_code dir_ec;
+        if (!it->is_directory(dir_ec))
             continue;
-        }
-        ++report.written;
+        format_dirs.push_back(it->path());
     }
+    std::sort(format_dirs.begin(), format_dirs.end(),
+              [](const std::filesystem::path &a, const std::filesystem::path &b) {
+                  return a.filename().string() < b.filename().string();
+              });
+    for (const std::filesystem::path &dir : format_dirs) {
+        std::vector<std::filesystem::path> legacy;
+        std::error_code file_ec;
+        std::filesystem::directory_iterator file_it(dir, file_ec);
+        if (file_ec) {
+            ++report.failed;
+            report.errors.push_back("无法读取格式预设目录 '" + display_path(dir) +
+                                    "'（旧版内置预设迁移）：" + file_ec.message());
+            continue;
+        }
+        const std::filesystem::directory_iterator fend;
+        for (; file_it != fend; file_it.increment(file_ec)) {
+            if (file_ec)
+                break;
+            const std::string fname = file_it->path().filename().string();
+            if (fname.rfind(kLegacyBuiltinPrefix, 0) != 0 || !has_json_suffix(fname))
+                continue;
+            std::error_code fec;
+            if (!file_it->is_regular_file(fec))
+                continue;
+            legacy.push_back(file_it->path());
+        }
+        std::sort(legacy.begin(), legacy.end(),
+                  [](const std::filesystem::path &a, const std::filesystem::path &b) {
+                      return a.filename().string() < b.filename().string();
+                  });
+        for (const std::filesystem::path &file : legacy) {
+            std::error_code rm_ec;
+            std::filesystem::remove(file, rm_ec);
+            if (rm_ec) {
+                ++report.failed;
+                report.errors.push_back("无法删除旧版内置预设 '" + display_path(file) + "'：" +
+                                        rm_ec.message());
+            } else {
+                ++report.removed_legacy;
+                // 迁移是破坏性动作（仅限旧版只读模板）→ 每个被删路径都留痕，便于用户/报告追溯。
+                log_info(kStage, "format_preset_io.cpp", "removed legacy builtin format preset",
+                         {{"path", display_path(file)}});
+            }
+        }
+    }
+}
+
+// ④ 逐格式/逐文件按原字节复制（工厂目录 ≠ 数据目录时）。工厂文件先走与载入同一条完整校验链，
+// 不合法即 failed 且**不写**（绝不制造坏文件/半截 JSON）；目标已存在一律跳过（用户改过的
+// default.json 永不被覆盖）。
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)：factory_root/presets_root 由 seed 语义固定
+void copy_factory_files(const std::filesystem::path &factory_root,
+                        const std::filesystem::path &presets_root, FormatPresetSeedReport &report) {
+    std::vector<std::filesystem::path> format_dirs;
+    std::error_code ec;
+    std::filesystem::directory_iterator it(factory_root, ec);
+    if (ec) {
+        ++report.failed;
+        report.errors.push_back("无法读取工厂预设目录 '" + display_path(factory_root) + "'：" +
+                                ec.message() + "（发行包是否缺 presets/ 目录？）");
+        return;
+    }
+    const std::filesystem::directory_iterator end;
+    for (; it != end; it.increment(ec)) {
+        if (ec) {
+            ++report.failed;
+            report.errors.push_back("遍历工厂预设目录 '" + display_path(factory_root) + "' 失败：" +
+                                    ec.message());
+            return;
+        }
+        std::error_code dir_ec;
+        if (!it->is_directory(dir_ec))
+            continue;
+        format_dirs.push_back(it->path());
+    }
+    std::sort(format_dirs.begin(), format_dirs.end(),
+              [](const std::filesystem::path &a, const std::filesystem::path &b) {
+                  return a.filename().string() < b.filename().string();
+              });
+    for (const std::filesystem::path &format_dir : format_dirs) {
+        const std::string format_id = format_dir.filename().string();
+        if (!safe_component(format_id)) {
+            ++report.failed;
+            report.errors.push_back("工厂预设目录名非法（不能作为格式 id）：'" +
+                                    display_path(format_dir) + "'");
+            continue;
+        }
+        std::string list_err;
+        const std::vector<std::filesystem::path> files = plain_json_files(format_dir, list_err);
+        if (!list_err.empty()) {
+            ++report.failed;
+            report.errors.push_back("工厂预设目录 '" + display_path(format_dir) + "' 读取失败：" +
+                                    list_err);
+            continue;
+        }
+        for (const std::filesystem::path &file : files) {
+            const std::filesystem::path target = presets_root / format_id / file.filename();
+            std::error_code exists_ec;
+            if (std::filesystem::exists(target, exists_ec)) {
+                ++report.skipped; // 幂等：已存在（上次已 seed / 用户改过）→ 一个字节都不动
+                continue;
+            }
+            FormatPresetData p;
+            const std::string verr = load_format_preset(file, p);
+            if (!verr.empty()) {
+                ++report.failed;
+                report.errors.push_back("工厂预设 '" + display_path(file) +
+                                        "' 校验失败（未复制）：" + verr);
+                continue;
+            }
+            if (p.format_id != format_id) {
+                ++report.failed;
+                report.errors.push_back("工厂预设 '" + display_path(file) + "' 的 format 为「" +
+                                        p.format_id + "」，不在对应的格式目录「" + format_id +
+                                        "」下（未复制）");
+                continue;
+            }
+            // 原字节复制（不重新格式化）：工厂 JSON 是人类可读/可 git diff 的单一真源。
+            std::string bytes;
+            if (const std::string rerr = read_file_bytes(file, bytes); !rerr.empty()) {
+                ++report.failed;
+                report.errors.push_back(rerr);
+                continue;
+            }
+            std::error_code mk_ec;
+            std::filesystem::create_directories(target.parent_path(), mk_ec);
+            if (mk_ec) {
+                ++report.failed;
+                report.errors.push_back("无法创建目录 '" + display_path(target.parent_path()) +
+                                        "'：" + mk_ec.message());
+                continue;
+            }
+            std::string io_err;
+            if (!write_atomic_file(target, std::string_view(bytes), &io_err)) {
+                ++report.failed;
+                report.errors.push_back("无法复制工厂预设 '" + display_path(file) + "' → '" +
+                                        display_path(target) + "'：" + io_err);
+                continue;
+            }
+            ++report.written;
+        }
+    }
+}
+
+} // namespace
+
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)：factory_root/presets_root 由 seed 语义固定
+FormatPresetSeedReport seed_factory_format_presets_to(const std::filesystem::path &factory_root,
+                                                      const std::filesystem::path &presets_root) {
+    FormatPresetSeedReport report;
+    // ② 数据目录不可用：显式 failed（不回落 CWD），旧文件迁移/复制都无从谈起。
+    if (presets_root.empty()) {
+        ++report.failed;
+        report.errors.emplace_back(
+            "格式预设目录不可用（数据目录为空）：无法迁移旧版内置预设或复制工厂预设");
+        return report;
+    }
+    // ① 迁移清理总是先做：便携模式（工厂目录 == 数据目录）下这是唯一动作。
+    remove_legacy_builtin_files(presets_root, report);
+    // ③ 工厂目录不可用（exe 目录读不到）或与数据目录同址 → 跳过复制（不视为失败）。
+    if (factory_root.empty())
+        return report;
+    if (same_directory(factory_root, presets_root))
+        return report;
+    copy_factory_files(factory_root, presets_root, report);
     return report;
 }
 
-FormatPresetSeedReport seed_builtin_format_presets() {
-    return seed_builtin_format_presets_to(format_presets_root());
+FormatPresetSeedReport seed_factory_format_presets() {
+    return seed_factory_format_presets_to(factory_format_presets_root(), format_presets_root());
 }
 
 } // namespace pp::ui

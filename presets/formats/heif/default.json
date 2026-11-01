@@ -1,0 +1,30 @@
+{
+    "adaptive": {
+        "enabled": true,
+        "policy": [
+            "# HEIF default：quality 从当前值向上每 4 分试到 90；到 90 仍不达标则输出最后一轮。",
+            "version 1",
+            "target 90",
+            "max_rounds 30",
+            "output last",
+            "",
+            "stage quality-up",
+            "  search quality from current up to 90 step 4 max_rounds 30"
+        ]
+    },
+    "backend": "x265",
+    "bitdepth": 8,
+    "format": "heif",
+    "kind": "format-preset",
+    "name": "default",
+    "params": {
+        "chroma": "420",
+        "lossless": false,
+        "preset": "slow",
+        "quality": 50,
+        "tu-intra-depth": 2,
+        "tune": "ssim"
+    },
+    "tech": "runtime",
+    "version": 1
+}

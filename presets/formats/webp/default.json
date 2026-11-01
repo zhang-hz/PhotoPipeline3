@@ -1,0 +1,46 @@
+{
+    "adaptive": {
+        "enabled": true,
+        "policy": [
+            "# WebP default（历史内建 §9.7）：quality 搜索 → method（压缩努力）提升。",
+            "version 1",
+            "target 90",
+            "max_rounds 8",
+            "output last",
+            "on_metric_unavailable stop",
+            "",
+            "stage quality-up",
+            "  search quality from current to 95 step 2",
+            "",
+            "stage method-up",
+            "  set method 6"
+        ]
+    },
+    "backend": "libwebp",
+    "bitdepth": 8,
+    "format": "webp",
+    "kind": "format-preset",
+    "name": "default",
+    "params": {
+        "autofilter": false,
+        "emulate_jpeg_size": false,
+        "filter_sharpness": 0,
+        "filter_strength": 30,
+        "filter_type": true,
+        "lossless": false,
+        "low_memory": false,
+        "method": 4,
+        "partition_limit": 0,
+        "partitions": 0,
+        "pass": 1,
+        "preprocessing": 0,
+        "qmax": 100,
+        "qmin": 0,
+        "quality": 85,
+        "segments": 4,
+        "sharp_yuv": true,
+        "sns_strength": 50
+    },
+    "tech": "lossy",
+    "version": 1
+}

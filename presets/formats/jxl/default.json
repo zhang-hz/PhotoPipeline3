@@ -1,0 +1,33 @@
+{
+    "adaptive": {
+        "enabled": true,
+        "policy": [
+            "# JXL default：distance 断点步长降档（1 以下 0.1 精扫 / 1–10 步长 2 / 10 以上步长 5）。",
+            "version 1",
+            "target 90",
+            "max_rounds 30",
+            "output last",
+            "",
+            "stage distance-down",
+            "  search distance from current down to 0.1 step 0.1 breakpoint 1 step 2 breakpoint 10 step 5 max_rounds 30"
+        ]
+    },
+    "backend": "libjxl",
+    "bitdepth": 16,
+    "format": "jxl",
+    "kind": "format-preset",
+    "name": "default",
+    "params": {
+        "brotli_effort": -1,
+        "codestream_level": -1,
+        "decoding_speed": 0,
+        "distance": 1.0,
+        "effort": 7,
+        "epf": -1,
+        "lossless": false,
+        "photon_noise": 0,
+        "resampling": -1
+    },
+    "tech": "vardct",
+    "version": 1
+}

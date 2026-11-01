@@ -1,0 +1,40 @@
+{
+    "adaptive": {
+        "enabled": true,
+        "policy": [
+            "# JPEG default：视觉距离从 3.0 起步（1–3 步长 1 粗扫），1 以下按 0.1 精扫到 0.1；取达到目标 90 分的最小体积（= 最大 distance）一轮。",
+            "version 1",
+            "target 90",
+            "max_rounds 20",
+            "output last",
+            "on_metric_unavailable stop",
+            "",
+            "stage distance-down",
+            "  search distance from current down to 0.1 step 0.1 breakpoint 1 step 1 max_rounds 20"
+        ]
+    },
+    "backend": "jpegli",
+    "bitdepth": 8,
+    "format": "jpeg",
+    "kind": "format-preset",
+    "name": "default",
+    "params": {
+        "adaptive_quantization": true,
+        "arith_code": false,
+        "chroma": "444",
+        "cicp_transfer_function": 2,
+        "dct_method": 0,
+        "distance": 3.0,
+        "optimize_coding": true,
+        "progressive": true,
+        "psnr_target": 0,
+        "quality": 90,
+        "quality_mode": "distance",
+        "restart_in_rows": 0,
+        "smoothing_factor": 0,
+        "std_quant_tables": false,
+        "xyb_mode": false
+    },
+    "tech": "dct",
+    "version": 1
+}

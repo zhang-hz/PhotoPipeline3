@@ -20,6 +20,7 @@
 #include <functional>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "core/adaptive.h"
@@ -75,6 +76,41 @@ pp::AdaptiveExecTarget jxl_target() {
     return t;
 }
 
+// M12 需求 5：JPEG 出厂 default 预设（presets/formats/jpeg/default.json）的基准值与策略文本。
+// 基准 = jpegli/dct 静态默认全量 + distance=当前值（策略从 current 出发）；策略逐字取自工厂文件
+// （注释行对语义无影响，这里保留以与文件对照）。
+pp::ParamSet jpeg_base(double distance) {
+    const pp::FormatDef *f = pp::find_format("jpeg");
+    pp::ParamSet s = f != nullptr ? pp::default_params(*f, "jpegli", "dct", false) : pp::ParamSet{};
+    s["distance"] = distance;
+    return s;
+}
+
+pp::AdaptiveExecTarget jpeg_target() {
+    pp::AdaptiveExecTarget t;
+    t.format_id = "jpeg";
+    t.backend_id = "jpegli";
+    t.tech_id = "dct";
+    t.out_bitdepth = 8;
+    t.lossless = false;
+    t.width = 64;
+    t.height = 64;
+    t.final_path = "out/fake.jpg";
+    return t;
+}
+
+const char *kJpegDefaultPolicy =
+    "# JPEG default：视觉距离从 3.0 起步（1–3 步长 1 粗扫），1 以下按 0.1 精扫到 0.1；"
+    "取达到目标 90 分的最小体积（= 最大 distance）一轮。\n"
+    "version 1\n"
+    "target 90\n"
+    "max_rounds 20\n"
+    "output last\n"
+    "on_metric_unavailable stop\n"
+    "\n"
+    "stage distance-down\n"
+    "  search distance from current down to 0.1 step 0.1 breakpoint 1 step 1 max_rounds 20\n";
+
 pp::AdaptivePolicy dsl_policy(const std::string &text, const std::string &format) {
     pp::AdaptivePolicy p;
     pp::AdaptiveError e;
@@ -101,6 +137,8 @@ struct Rig {
     std::vector<std::string> discards;
     std::vector<pp::AdaptiveRoundRecord> seen_records;
     std::vector<int> seen_max_rounds;
+    std::vector<pp::AdaptivePlanInfo> plans;
+    std::vector<std::pair<std::string, int>> stage_starts;
     int score_calls = 0;
 
     // 评分策略：默认恒 80 分；测试可注入 params → 分数（便于构造单调/非单调场景）。
@@ -119,6 +157,11 @@ struct Rig {
         hooks.on_round = [this](const pp::AdaptiveRoundRecord &r, int max_rounds) {
             seen_records.push_back(r);
             seen_max_rounds.push_back(max_rounds);
+        };
+        // C 段（需求 1）：计划/阶段开始回调（逐条断言 hook 数据面）。
+        hooks.on_plan = [this](const pp::AdaptivePlanInfo &p) { plans.push_back(p); };
+        hooks.on_stage_start = [this](const std::string &stage_id, int round_before) {
+            stage_starts.emplace_back(stage_id, round_before);
         };
         hooks.candidate_path = [](int round) {
             return std::filesystem::path("cand-r" + std::to_string(round));
@@ -580,6 +623,310 @@ void case_search_domain_fallback() {
     check(lo == 0.0 && hi == 63.0, "domain/cq", num_text(lo) + ".." + num_text(hi));
 }
 
+// ---------------------------------------------------------------------------
+// 10. DSL v1.1：断点候选序列（需求 7；三条逐点钉死）
+// ---------------------------------------------------------------------------
+void expect_breakpoint_sequence(double current, const std::vector<double> &want,
+                                const std::string &tag) {
+    Rig rig;
+    rig.base = jxl_base(current);
+    rig.policy = dsl_policy("target 90\nmax_rounds 30\n"
+                            "stage distance-down\n"
+                            "  search distance from current down to 0.1 step 0.1 "
+                            "breakpoint 1 step 2 breakpoint 10 step 5 max_rounds 30\n",
+                            "jxl");
+    (void)rig.run();
+    const std::vector<double> v = rig.values();
+    check(
+        v.size() == want.size(), "bp/" + tag,
+        "候选数 = " + std::to_string(v.size()) + "（期望 " + std::to_string(want.size()) + "）：" +
+            [&] {
+                std::string s;
+                for (const double x : v)
+                    s += num_text(x) + " ";
+                return s;
+            }());
+    for (std::size_t i = 0; i < v.size() && i < want.size(); ++i)
+        check(std::fabs(v[i] - want[i]) < 1e-9, "bp/" + tag + "/" + std::to_string(i),
+              num_text(v[i]) + " != " + num_text(want[i]));
+}
+
+void case_breakpoint_sequences() {
+    // current=1.0（JXL Default 的默认 distance）：0.9 … 0.1（9 轮；1.0 归 1–0.1 段，绝不能
+    // 1.0→(-1) 越级后钳到 0.1）。
+    expect_breakpoint_sequence(1.0, {0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1}, "c1");
+    // current=4.0：2, 1, 0.9 … 0.1（11 轮）。
+    expect_breakpoint_sequence(4.0, {2.0, 1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1}, "c4");
+    // current=12.0：10, 8, 6, 4, 2, 1, 0.9 … 0.1（15 轮；跨断点钳到 10/1 本身）。
+    expect_breakpoint_sequence(
+        12.0, {10.0, 8.0, 6.0, 4.0, 2.0, 1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1}, "c12");
+}
+
+// ---------------------------------------------------------------------------
+// 11. DSL v1.1：显式方向「只降不升/只升不降」→ 0 轮（不是错误）
+// ---------------------------------------------------------------------------
+void case_direction_zero_rounds() {
+    {
+        Rig rig; // current=0.5，down to 0.8：起点已在终点下方 ⇒ 0 轮
+        rig.base = jxl_base(0.5);
+        rig.policy = dsl_policy("target 90\nmax_rounds 8\nstage down\n"
+                                "  search distance from current down to 0.8 step 0.1\n",
+                                "jxl");
+        const pp::AdaptiveRunResult r = rig.run();
+        check(rig.inputs.size() == 1, "dir0/down_rounds", std::to_string(rig.inputs.size()));
+        check(!rig.seen_records.empty() && rig.seen_records.front().stage == "init",
+              "dir0/down_init",
+              rig.seen_records.empty() ? "missing" : rig.seen_records.front().stage);
+        check(r.ok && r.reason == pp::kAdaptiveReasonStageExhausted, "dir0/down_reason", r.reason);
+    }
+    {
+        Rig rig; // current=2.0，up to 1.0：起点已在终点上方 ⇒ 0 轮
+        rig.base = jxl_base(2.0);
+        rig.policy = dsl_policy("target 90\nmax_rounds 8\nstage up\n"
+                                "  search distance from current up to 1.0 step 0.1\n",
+                                "jxl");
+        const pp::AdaptiveRunResult r = rig.run();
+        check(rig.inputs.size() == 1, "dir0/up_rounds", std::to_string(rig.inputs.size()));
+        check(r.ok && r.reason == pp::kAdaptiveReasonStageExhausted, "dir0/up_reason", r.reason);
+    }
+    {
+        Rig rig; // 显式起点 == 终点（显式方向）：0 轮，非 search_noop
+        rig.policy = dsl_policy("target 90\nmax_rounds 8\nstage down\n"
+                                "  search distance from 3.0 down to 3.0 step 0.5\n",
+                                "jxl");
+        const pp::AdaptiveRunResult r = rig.run();
+        check(rig.inputs.size() == 1, "dir0/equal_rounds", std::to_string(rig.inputs.size()));
+        check(r.ok, "dir0/equal_ok", "显式方向下 from==to 不得报错");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 12. DSL v1.1：动作级 max_rounds 覆盖 linear 阶段上界（16），仍受全局 max_rounds
+// ---------------------------------------------------------------------------
+void case_action_max_rounds_override() {
+    { // 29 个候选：动作级 max_rounds 32 放行（>linear 默认阶段上界 16）；无动作级则被 16 截断。
+        Rig rig;
+        rig.base = jxl_base(3.0);
+        rig.policy = dsl_policy("target 100\nmax_rounds 32\nstage scan\n"
+                                "  search distance from current down to 0.1 step 0.1 "
+                                "max_rounds 32\n",
+                                "jxl");
+        const pp::AdaptiveRunResult r = rig.run();
+        check(rig.inputs.size() == 29, "cap/override", std::to_string(rig.inputs.size()));
+        check(r.ok && r.reason == pp::kAdaptiveReasonStageExhausted, "cap/override_reason",
+              r.reason);
+    }
+    { // 无动作级 max_rounds → linear 阶段上界 16 截断（旧行为不变）。
+        Rig rig;
+        rig.base = jxl_base(3.0);
+        rig.policy = dsl_policy("target 100\nmax_rounds 32\nstage scan\n"
+                                "  search distance from current down to 0.1 step 0.1\n",
+                                "jxl");
+        const pp::AdaptiveRunResult r = rig.run();
+        check(rig.inputs.size() == 16, "cap/default16", std::to_string(rig.inputs.size()));
+        check(r.ok, "cap/default16_ok", "16 轮后仍应输出最后一轮");
+    }
+    { // 全局 max_rounds 仍是最外层上界（动作级不能突破它）。
+        Rig rig;
+        rig.base = jxl_base(3.0);
+        rig.policy = dsl_policy("target 100\nmax_rounds 10\nstage scan\n"
+                                "  search distance from current down to 0.1 step 0.1 "
+                                "max_rounds 32\n",
+                                "jxl");
+        const pp::AdaptiveRunResult r = rig.run();
+        check(rig.inputs.size() == 10, "cap/global", std::to_string(rig.inputs.size()));
+        check(r.reason == pp::kAdaptiveReasonMaxRounds, "cap/global_reason", r.reason);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 13. C 段（需求 1）：on_plan / on_stage_start / 逐轮 effective_params / selected 文本
+// ---------------------------------------------------------------------------
+void case_plan_stage_effective_fields() {
+    Rig rig;
+    rig.policy = dsl_policy("target 99\nmax_rounds 8\n"
+                            "stage scan\n  search distance from current to 0.9 step 0.05\n"
+                            "stage tweak\n  set epf 1\n",
+                            "jxl");
+    const pp::AdaptiveRunResult r = rig.run();
+    // on_plan：恰好一次、字段齐全。
+    check(rig.plans.size() == 1, "hook/plan_count", std::to_string(rig.plans.size()));
+    if (!rig.plans.empty()) {
+        const pp::AdaptivePlanInfo &p = rig.plans.front();
+        check(p.policy_version == 1 && std::fabs(p.target - 99.0) < 1e-9 && p.max_rounds == 8,
+              "hook/plan_facts", "policy_version/target/max_rounds");
+        check(p.stage_count == 2 && p.stage_ids.size() == 2 && p.stage_ids[0] == "scan" &&
+                  p.stage_ids[1] == "tweak",
+              "hook/plan_stages",
+              p.stage_ids.size() == 2 ? p.stage_ids[0] + "," + p.stage_ids[1] : "missing");
+        check(p.output == "last" && p.policy_sha.size() == 64 && p.policy_sha == r.policy_sha,
+              "hook/plan_sha", p.policy_sha);
+    }
+    // on_stage_start：每个 stage 一次；round_before = 已执行轮数（scan 0 / tweak 2）。
+    check(rig.stage_starts.size() == 2, "hook/stage_count",
+          std::to_string(rig.stage_starts.size()));
+    if (rig.stage_starts.size() == 2) {
+        check(rig.stage_starts[0].first == "scan" && rig.stage_starts[0].second == 0, "hook/stage0",
+              rig.stage_starts[0].first + "/" + std::to_string(rig.stage_starts[0].second));
+        check(rig.stage_starts[1].first == "tweak" && rig.stage_starts[1].second == 2,
+              "hook/stage1",
+              rig.stage_starts[1].first + "/" + std::to_string(rig.stage_starts[1].second));
+    }
+    // 逐轮 effective_params / candidate_path：search 轮 = "distance=<值>"，set 轮 = "epf=1"。
+    bool saw_search_effective = false;
+    for (const pp::AdaptiveRoundRecord &rec : rig.seen_records) {
+        check(!rec.candidate_path.empty(), "hook/round_candidate", "candidate_path 为空");
+        if (rec.stage == "scan") {
+            saw_search_effective = rec.effective_params.rfind("distance=", 0) == 0 &&
+                                   rec.effective_params.find(rec.value) != std::string::npos;
+        } else if (rec.stage == "tweak") {
+            check(rec.effective_params == "epf=1", "hook/round_set_effective",
+                  rec.effective_params);
+        }
+    }
+    check(saw_search_effective, "hook/round_search_effective", "search 轮 effective_params 不符");
+    // selected 文本 + 中文终止原因（selected = 第 3 轮 set stage）。
+    check(r.selected_params_text == "epf=1", "hook/selected_text", r.selected_params_text);
+    check(!r.reason_detail.empty() && r.reason_detail.find("阶段耗尽") != std::string::npos,
+          "hook/reason_detail", r.reason_detail);
+    // init 基线轮：effective_params = 相对 base 的差量（空 = 未改写任何键）。
+    {
+        Rig init_rig;
+        init_rig.base = jxl_base(0.5);
+        init_rig.policy = dsl_policy("target 90\nmax_rounds 8\nstage down\n"
+                                     "  search distance from current down to 0.8 step 0.1\n",
+                                     "jxl");
+        (void)init_rig.run();
+        check(init_rig.seen_records.size() == 1 &&
+                  init_rig.seen_records.front().effective_params.empty(),
+              "hook/init_effective",
+              init_rig.seen_records.empty() ? "missing"
+                                            : init_rig.seen_records.front().effective_params);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 14. C 段：set 阶段有效参数字符串（profile 具名档位，不是 __ 保留键）
+// ---------------------------------------------------------------------------
+void case_set_stage_effective_params() {
+    Rig rig;
+    const pp::FormatDef *f = pp::find_format("heif");
+    if (f == nullptr) {
+        check(false, "set_eff/heif", "heif 格式缺失");
+        return;
+    }
+    rig.base = pp::default_params(*f, "x265", "runtime", false);
+    rig.target.format_id = "heif";
+    rig.target.backend_id = "x265";
+    rig.target.tech_id = "runtime";
+    rig.target.out_bitdepth = 10;
+    rig.target.final_path = "out/fake.heic";
+    rig.policy = dsl_policy("target 99\nmax_rounds 4\n"
+                            "stage chroma-444\n  set chroma 444\n  set profile Main444_10Still\n",
+                            "heif");
+    const pp::AdaptiveRunResult r = rig.run();
+    check(rig.inputs.size() == 1, "set_eff/rounds",
+          std::to_string(rig.inputs.size()) + " reason=" + r.reason + " error=" + r.error);
+    check(!rig.seen_records.empty(), "set_eff/record", "无逐轮记录");
+    if (!rig.seen_records.empty()) {
+        const pp::AdaptiveRoundRecord &rec = rig.seen_records.front();
+        check(rec.effective_params == "chroma=444,profile=Main444_10Still", "set_eff/text",
+              rec.effective_params);
+        check(rec.candidate_path == "cand-r1", "set_eff/candidate", rec.candidate_path);
+    }
+    check(r.selected_params_text == "chroma=444,profile=Main444_10Still", "set_eff/selected",
+          r.selected_params_text);
+}
+
+// ---------------------------------------------------------------------------
+// 28. M12 需求 5：JPEG 出厂 default 策略的候选阶梯（current=3.0，域 [0.1, 3.0]）
+//     策略 = `search distance from current down to 0.1 step 0.1 breakpoint 1 step 1
+//     max_rounds 20`：1–3 段步长 1（粗扫）→ 1 以下 0.1 精扫；共 11 个候选：
+//     2, 1, 0.9, 0.8, …, 0.1（逐个断言，含跨断点钳位与端点钳位）。
+//     该阶梯的**可达性**依赖 format_tables 的 jpegli distance 域 = [0.1, 3.0]（M12 从 0.3
+//     放宽）：候选 0.2/0.1 若越界会在每轮 validate 处被拒（本用例用默认校验链，不注入 hook）。
+// ---------------------------------------------------------------------------
+void case_jpeg_default_ladder() {
+    // —— 主用例：current = 3.0（工厂 JPEG default 的 distance）→ 11 候选 ——
+    {
+        Rig rig;
+        rig.base = jpeg_base(3.0);
+        rig.target = jpeg_target();
+        rig.key = "distance";
+        rig.policy = dsl_policy(kJpegDefaultPolicy, "jpeg");
+        check(rig.policy.target == 90.0 && rig.policy.max_rounds == 20, "jpeg_ladder/policy_facts",
+              "target/max_rounds 不符");
+        const pp::AdaptiveRunResult r = rig.run();
+        const std::vector<double> v = rig.values();
+        const double want[] = {2.0, 1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1};
+        check(
+            v.size() == 11, "jpeg_ladder/count",
+            "候选数 = " + std::to_string(v.size()) + "（期望 11）：" + [&] {
+                std::string s;
+                for (const double x : v)
+                    s += num_text(x) + " ";
+                return s;
+            }());
+        for (std::size_t i = 0; i < v.size() && i < 11; ++i)
+            check(std::fabs(v[i] - want[i]) < 1e-9, "jpeg_ladder/value" + std::to_string(i),
+                  num_text(v[i]) + " != " + num_text(want[i]));
+        check(r.ok && r.reason == pp::kAdaptiveReasonStageExhausted, "jpeg_ladder/reason",
+              "reason=" + r.reason);
+        // 逐轮 hook 的全局 max_rounds = 20（11 个候选不被 20 截断；也不被线性阶段上界 16 截断
+        // ——动作级 max_rounds 20 已显式放宽）。
+        check(!rig.seen_max_rounds.empty() && rig.seen_max_rounds.front() == 20,
+              "jpeg_ladder/max_rounds",
+              rig.seen_max_rounds.empty() ? "hook 未调用"
+                                          : std::to_string(rig.seen_max_rounds.front()));
+        // output last：选定 = 最后一轮成功编码（distance 0.1）。
+        check(r.selected_round == 11 && std::fabs(r.final_score - 80.0) < 1e-9,
+              "jpeg_ladder/selected", "selected=" + std::to_string(r.selected_round));
+        check(rig.commits.size() == 1 && rig.commits.front() == "cand-r11", "jpeg_ladder/commit",
+              rig.commits.empty() ? "no commit" : rig.commits.front());
+        check(rig.discards.size() == 10, "jpeg_ladder/discard",
+              std::to_string(rig.discards.size()));
+        // 断点值 1.0 必须被尝试（不得被步长跨过）：候选序列里恰有一个 1.0。
+        int ones = 0;
+        for (const double x : v)
+            if (std::fabs(x - 1.0) < 1e-9)
+                ++ones;
+        check(ones == 1, "jpeg_ladder/breakpoint_tried", "1.0 出现次数 = " + std::to_string(ones));
+    }
+    // —— 跨断点钳位：current = 2.5 → 下一档 1.5，再下一档 0.5 会跨过断点 1.0 ⇒ 先钳到 1.0 ——
+    {
+        Rig rig;
+        rig.base = jpeg_base(2.5);
+        rig.target = jpeg_target();
+        rig.key = "distance";
+        rig.policy = dsl_policy(kJpegDefaultPolicy, "jpeg");
+        (void)rig.run();
+        const std::vector<double> v = rig.values();
+        const double want[] = {1.5, 1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1};
+        check(v.size() == 11, "jpeg_clamp/count",
+              "候选数 = " + std::to_string(v.size()) + "（期望 11）");
+        for (std::size_t i = 0; i < v.size() && i < 11; ++i)
+            check(std::fabs(v[i] - want[i]) < 1e-9, "jpeg_clamp/value" + std::to_string(i),
+                  num_text(v[i]) + " != " + num_text(want[i]));
+    }
+    // —— 跨断点钳位（起点在断点上方不足一步）：current = 1.05 → 首档钳到断点 1.0 ——
+    //     若直接按断点段步长 1 走会跳到 0.05（跨过 1.0），执行器必须先把 1.0 作为候选。
+    {
+        Rig rig;
+        rig.base = jpeg_base(1.05);
+        rig.target = jpeg_target();
+        rig.key = "distance";
+        rig.policy = dsl_policy(kJpegDefaultPolicy, "jpeg");
+        (void)rig.run();
+        const std::vector<double> v = rig.values();
+        const double want[] = {1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1};
+        check(v.size() == 10, "jpeg_endpoint/count",
+              "候选数 = " + std::to_string(v.size()) + "（期望 10）");
+        for (std::size_t i = 0; i < v.size() && i < 10; ++i)
+            check(std::fabs(v[i] - want[i]) < 1e-9, "jpeg_endpoint/value" + std::to_string(i),
+                  num_text(v[i]) + " != " + num_text(want[i]));
+    }
+}
+
 } // namespace
 
 int main() { // NOLINT(bugprone-exception-escape) — 测试入口允许异常终止（非产品路径）
@@ -628,6 +975,18 @@ int main() { // NOLINT(bugprone-exception-escape) — 测试入口允许异常�
     case_default_validate_rejects();
     std::printf("CASE 22) 兜底数值域\n");
     case_search_domain_fallback();
+    std::printf("CASE 23) 断点候选序列（需求 7）\n");
+    case_breakpoint_sequences();
+    std::printf("CASE 24) 显式方向 0 轮\n");
+    case_direction_zero_rounds();
+    std::printf("CASE 25) 动作级 max_rounds 覆盖阶段上界\n");
+    case_action_max_rounds_override();
+    std::printf("CASE 26) C 段 hooks/effective 字段\n");
+    case_plan_stage_effective_fields();
+    std::printf("CASE 27) set 阶段有效参数字符串\n");
+    case_set_stage_effective_params();
+    std::printf("CASE 28) JPEG 出厂 default 策略候选阶梯（M12 需求 5）\n");
+    case_jpeg_default_ladder();
 
     std::printf("ADAPTIVE-EXEC %s (%d failures)\n", g_failed == 0 ? "OK" : "FAIL", g_failed);
     return g_failed == 0 ? 0 : 1;

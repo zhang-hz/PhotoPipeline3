@@ -57,6 +57,7 @@
 - **SSIMULACRA 2 内存**：流式/分块化，23 MP 峰值额外内存 **165.1 MB ≈ 7.6 B/px**（旧实现 148.7 B/px 的
   5.1%），与旧实现 oracle 逐组 `|Δ| = 0.000000000`；单次评分 1.572 s。
 - **HEIF 档位/标签**：档位 16（Main10Still）实测不可用 ⇒ UI 置灰 + 原因（不再让用户选中即失败）。
+- **CI Linux 判据修复（test-only）**：`test_quality_metric` 的 fastcolor 分数对拍在极小夹具上受跨平台浮点噪声影响（同精确路径 exact 分数 Windows 80.9420 vs Linux 80.9478，Δ≈0.0058；Linux fast/exact |Δ|=0.0189 而 1-ULP 地板仅 0.0088）：判据绝对下限 0.01→**0.02**（`max(0.02, 2×ULP 地板)`；≥90 精确重算前提、极端低质 0.05 护栏、`norm_max_err`/accuracy 断言不变），不改产品行为（D-10）。
 - **元数据「无手术」快路径**：无 EXIF/XMP 变更 / 无隐私剥除 / 无 mtime 同步 ⇒ 跳过整文件拷贝重写
   （`metadata: no surgery, skipped rewrite`）；有手术时 R-002 原子写逐字不变（C9 收窄到安全子集，D-2）。
 
@@ -84,12 +85,12 @@
 - 金样 `SMOKE total=20 pass=20 fail=0`；UI 冻结末行 `UI-SMOKE OK shots=12 pages=3` 逐字不变，
   `ui_smoke.py` pass（format-preset 组 `checked=23 bad=0`）；格式 **FILES=233 RC=0 VIOLATIONS=0**；
   tidy `TIDY total=262 baseline=262 files=76 violations=0`（**未 `--update`**）。
-- HEIF 矩阵（4 子集）：**233 例 = pass 59 / fail 0 / expected-fail 174 / unexpected 0**。
+- HEIF 矩阵（4 子集）：**233 例 = pass 59 / fail 0 / expected-fail 174 / unexpected 0**；全量：**1102 例 = pass 732 / fail 0 / expected-fail 370 / unexpected 0**（默认 HEIF SHA 6/6 同基线）。
 - 默认产物稳定性：jpeg / webp / jxl **3/3**、HEIF **6/6** 与基线**逐字节相同**。
 - 版本升级后本机复跑（新树 `build/rel-0.4.0.alpha1`）：`--version` = `PhotoPipeline 0.4.0.alpha1`、
   ctest **48/48**（首跑有 1 次 `ui_smoke` 重入守卫探针时序抖动，复跑通过）、金样
   `SMOKE total=20 pass=20 fail=0`；`tools/ci-versions-check.py` OK。
-- 回归：产物层**仅 JXL 有损 23/23**（有意），非 JXL 段 **0 diff**；日志面 diff = M10 加性日志 +
+- 回归：产物层**仅 JXL 有损 23/23**（有意），非 JXL 段 **0 diff**；日志面；A15 已本地重播种（N11/N12 归一 + `golden.windows.log` 2567 行/SHA `4FC72B33…6A49`，zero diff×2；CI windows-2025/Linux 基线待 nightly `workflow_dispatch` 复核）。原日志面 diff = M10 加性日志 +
   **runner 形状**（基线 `thread_budget=4` vs 本机 16）+ vcpkg 路径 ⇒ 本地**未重播种**
   （D-9：待 CI `windows-2025` 侧重播，或先加 N11 归一后重播）。
 
@@ -98,8 +99,8 @@
 - **性能目标部分未达（如实）**：P4-1 `metric_ms ≤ encode_ms` 未达（2,178.6 / 2,032.1 = **1.072×**，D-5）；
   P4-6 10-bit HEIC 输入 1,635–1,670 ms（8-bit 1,443–1,470 ms 达标，D-6）；P4-2 HEIC 深 probe 首事件 gap
   1.44–1.67 s（其余 ≤406 ms，D-7）；P9-1 CPU ≈4.01 核（诊断项）。
-- **TSan 未跑**：多格式并行 / 评分池**无线程竞态证据**，不宣称已验。
-- **HEIF 全量矩阵未跑**：本次 4 子集 233 例（`unexpected=0`）；1013 例全量口径待补跑。
+- **TSan 未测**：本机无 TSan 运行面（WSL/clang 缺失、MSVC 仅 ASan、`tsan` preset 为 Linux 条件）；CI nightly tsan job 自 #28 起 build 红、CTest/金样 skipped ⇒ 无线程竞态证据，不宣称已验（替代压力见 `docs/m10-report.md` §4-2）。
+- **HEIF 全量矩阵已跑**：全量 1133 planned、跨集去重 31 ⇒ **1102 例 = pass 732 / fail 0 / expected-fail 370 / unexpected 0**（0.4.0.alpha1 候选 `F3A0448A…`；默认 HEIF SHA 6/6 同基线；与 M9 1013 例 verdict/hvcC 事实差异 0）。
 - **内置预设不随包出厂**：走运行时幂等 seed（D-8），无 `share/presets` 安装规则（行为由单测/`--ui-smoke` 钉住）。
 - **自适应未覆盖**：`output best` 校验期显式拒绝（需候选集保留/磁盘成本评估）；`tech` 切换默认禁止。
 - **iPhone 真机接受度未验**（grid 1024×576 基准仅对齐 Apple 参考）；**AVIF 未纳入矩阵**。

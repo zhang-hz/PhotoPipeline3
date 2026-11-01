@@ -385,7 +385,8 @@ jobs:
           $T0 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
           python tools/env.py run -- cmake --preset release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/env.py run -- cmake --build --preset release
+          # M10-REL：只构建发布所需主目标（photopipeline + app-local DLL）；全量 475 目标冷构建在 20 min 硬顶下不可靠（#41267509907 实测取消）。测试目标由 main-full 负责。
+          python tools/env.py run -- cmake --build --preset release --target photopipeline
           $rc = $LASTEXITCODE
           Add-Content "$env:RUNNER_TEMP\pp-steps.tsv" "configure+build release`t$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $T0)"
           if ($rc -ne 0) { exit $rc }

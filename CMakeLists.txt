@@ -248,11 +248,19 @@ file(GLOB_RECURSE PP_SSIM2_SOURCES CONFIGURE_DEPENDS
 # 编译 flags 不同（我们是 AVX2 基线、vcpkg 依赖不带 ISA flags）⇒ `hwy::` 内联/COMDAT 同名
 # 合并、dispatch table 错位（tsan 下 jpegli VectorSize() 调空函数指针 SEGV）。同法把该批 TU
 # 的 `hwy` 命名空间 token 也私有化 ⇒ 与 jpegli/libjxl 的 hwy:: 零重叠（符号级 dumpbin 已验证）。
+# M12-D26 补丁 2（CI Linux 链接期实测：私有化后引用 libhwy 的非内联 `GetChosenTarget()` /
+# `SupportedTargets()` 未定义）：该批 TU 追加 **自包含宏** `HWY_HEADER_ONLY=1`（Abort/Warn 等
+# 改 header 内联）+ `HWY_COMPILE_ONLY_STATIC=1`（单目标，dispatch 走 highway.h 的 simplified
+# 分支，不再引用动态派发表符号）。代价：评分路径的 gauss_blur 固定 baseline 目标（不再运行时
+# 派发 AVX3/AVX512）——**只影响 SSIMULACRA2 评分，编码热路径不经过 hwy**；换得与 vcpkg 预编译
+# 依赖零符号重叠（tsan/asan/ubsan 的正确性优先）。MSVC 走同一 simplified 分支，故 Windows 构建
+# 不受影响（本机已验证编译+行为）。
 set(PP_SSIM2_PRIVATE_TUS ${PP_SSIM2_SOURCES}
     ${CMAKE_SOURCE_DIR}/src/core/metric/metric.cpp
     ${CMAKE_SOURCE_DIR}/src/core/metric/metric_oracle.cpp)
 set_source_files_properties(${PP_SSIM2_PRIVATE_TUS}
-    PROPERTIES COMPILE_DEFINITIONS "jxl=pp_ssim2_jxl;hwy=pp_ssim2_hwy")
+    PROPERTIES COMPILE_DEFINITIONS
+               "jxl=pp_ssim2_jxl;hwy=pp_ssim2_hwy;HWY_HEADER_ONLY=1;HWY_COMPILE_ONLY_STATIC=1")
 list(APPEND PP_CORE_SOURCES ${PP_SSIM2_SOURCES})
 add_library(pp_core STATIC ${PP_CORE_SOURCES})
 # M2-T11 §2.2：生成的 core/version.h（构建目录）随 src 一并 PUBLIC 传播

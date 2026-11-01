@@ -243,24 +243,21 @@ file(GLOB_RECURSE PP_SSIM2_SOURCES CONFIGURE_DEPENDS
 # 修法：把这批 TU 的 `jxl` 命名空间 token 私有化（编译期宏，仅改标识符，不改 vendored
 # 源码字节、不改 include 路径）；compat+metric 两 TU 必须同一宏 ⇒ 内部实现自洽，与真实
 # libjxl 零共享符号。`jpegxl::tools`（compat 自有）不受影响；`JXL_*` 宏/字符串/includes 不受影响。
-# M12-D26（同上机 tsan 实测第二处 ODR）：同一批 TU 还经 vendored gauss_blur 引入 **Highway
-# (`hwy`) 头文件**；vcpkg 预编译的 jpegli/libjxl 与我们两个 TU 都 include 同一份 hwy 头，但
-# 编译 flags 不同（我们是 AVX2 基线、vcpkg 依赖不带 ISA flags）⇒ `hwy::` 内联/COMDAT 同名
-# 合并、dispatch table 错位（tsan 下 jpegli VectorSize() 调空函数指针 SEGV）。同法把该批 TU
-# 的 `hwy` 命名空间 token 也私有化 ⇒ 与 jpegli/libjxl 的 hwy:: 零重叠（符号级 dumpbin 已验证）。
-# M12-D26 补丁 2（CI Linux 链接期实测：私有化后引用 libhwy 的非内联 `GetChosenTarget()` /
-# `SupportedTargets()` 未定义）：该批 TU 追加 **自包含宏** `HWY_HEADER_ONLY=1`（Abort/Warn 等
-# 改 header 内联）+ `HWY_COMPILE_ONLY_STATIC=1`（单目标，dispatch 走 highway.h 的 simplified
-# 分支，不再引用动态派发表符号）。代价：评分路径的 gauss_blur 固定 baseline 目标（不再运行时
-# 派发 AVX3/AVX512）——**只影响 SSIMULACRA2 评分，编码热路径不经过 hwy**；换得与 vcpkg 预编译
-# 依赖零符号重叠（tsan/asan/ubsan 的正确性优先）。MSVC 走同一 simplified 分支，故 Windows 构建
-# 不受影响（本机已验证编译+行为）。
+# M12-D26（**已尝试、已回退，登记为未决债**）：同一批 TU 还经 vendored gauss_blur 引入
+# Highway (`hwy`) 头；与 vcpkg 预编译 jpegli/libjxl 的 hwy 内联/COMDAT 在 tsan 构建下冲突
+# （jpegli VectorSize() 调空函数指针 SEGV）。私有化 `hwy=pp_ssim2_hwy` + 自包含宏
+# （HWY_HEADER_ONLY / HWY_COMPILE_ONLY_STATIC）能修 Linux 链接与 tsan SEGV，但会把
+# SSIMULACRA2 数值改变 0.05–0.27（oracle 判据 0.01 硬红）——属不可接受的语义变化，故回退。
+# 未决修复方向（0.4.0 不修；登记 docs/m12-adjudications.md A13 + 0.4.0-report §4）：
+#   hwy bridge shim（把 pp_ssim2_hwy::GetChosenTarget/SupportedTargets 转发到真实 libhwy，
+#   保留动态派发 ⇒ 数值不变）或与 vcpkg 依赖对齐 hwy 编译配置；tsan 暴露的
+#   ProgressMux/FileEvent 回调数据竞争（progress.cpp:338 emit_seq vs 测试回调 push_back）
+#   另案修复。⇒ 当前只保留数值安全的 `jxl=pp_ssim2_jxl`（M12-D25）。
 set(PP_SSIM2_PRIVATE_TUS ${PP_SSIM2_SOURCES}
     ${CMAKE_SOURCE_DIR}/src/core/metric/metric.cpp
     ${CMAKE_SOURCE_DIR}/src/core/metric/metric_oracle.cpp)
 set_source_files_properties(${PP_SSIM2_PRIVATE_TUS}
-    PROPERTIES COMPILE_DEFINITIONS
-               "jxl=pp_ssim2_jxl;hwy=pp_ssim2_hwy;HWY_HEADER_ONLY=1;HWY_COMPILE_ONLY_STATIC=1")
+    PROPERTIES COMPILE_DEFINITIONS "jxl=pp_ssim2_jxl")
 list(APPEND PP_CORE_SOURCES ${PP_SSIM2_SOURCES})
 add_library(pp_core STATIC ${PP_CORE_SOURCES})
 # M2-T11 §2.2：生成的 core/version.h（构建目录）随 src 一并 PUBLIC 传播

@@ -49,10 +49,10 @@ RAW/DNG 输入 · GIF 输出 · 图像编辑(缩放/裁剪/水印/锐化/降噪)
 
 | 项 | 状态 |
 |---|---|
-| 版本 | **0.4.0 正式版**（stable，`--version` = `PhotoPipeline 0.4.0`；`PP_VERSION_LABEL ""` 标签清空。**发行执行/指纹如实登记**：tag `v0.4.0` / GitHub Release（prerelease=False）/ 4 资产大小与 sha256 / `release.yml` run id = **待填（Lead 回填）**，详见 `docs/0.4.0-report.md` §2.5。上一预发布 **0.4.0.alpha1** 已发行（tag `v0.4.0.alpha1` annotated `530896c`；`release.yml` run 41271187323 全绿，Release published 2026-11-01T04:07:55Z，4 资产；报告 `docs/0.4.0.alpha1-report.md`）；上一正式版 **0.3.5**；0.3.3 Windows zip 为坏件（启动 P0，见 `docs/0.3.4-report.md`）） |
+| 版本 | **0.4.0 正式版**（stable，**已发行**：tag **annotated `v0.4.0` → commit `1b6fdbc`**；GitHub Release **`PhotoPipeline 0.4.0`**（prerelease=**False**/Latest），createdAt **2026-11-01T10:14:07Z** / publishedAt **2026-11-01T10:24:21Z**，URL <https://github.com/zhang-hz/PhotoPipeline3/releases/tag/v0.4.0>；`release.yml` run **41296584097 = success**（7 job 全 success）；**4 资产**：`win64.zip` 34,205,404 B / `6fe7d1ca…c48ccc`、`x86_64.AppImage` 52,648,440 B / `40e3c082…5ce2e`、`deps.txt` 2,439 B / `e8c80b3d…7854d`、`SHA256SUMS.txt` 293 B / `1b567a03…ac6b9e`；`--version` = `PhotoPipeline 0.4.0`（发布道两平台 probe 与 publish 复核通过）；版本单源 = `project(PhotoPipeline VERSION 0.4.0)` + `PP_VERSION_LABEL ""`，`vcpkg.json` = 0.4.0（R-122）；详见 `docs/0.4.0-report.md` §2.5。上一预发布 **0.4.0.alpha1** 已发行（tag `v0.4.0.alpha1` annotated `530896c`；`release.yml` run 41271187323 全绿，Release published 2026-11-01T04:07:55Z，4 资产；报告 `docs/0.4.0.alpha1-report.md`）；上一正式版 **0.3.5**；0.3.3 Windows zip 为坏件（启动 P0，见 `docs/0.3.4-report.md`）） |
 | 里程碑 | M0 环境/六 Spike/冻结面 → M1a 引擎 + M1b UI → M2 Linux 收口 → M3 Windows(=0.2.0) → M4/M5 = 0.3.0(九项需求 + GUI v6 刷新) → 0.3.1 GUI 缺陷根治 → M6 = 0.3.2 → M7 = 0.3.3(工程收口,Windows 启动 P0)→ 0.3.4 热修 → 0.3.5.alpha1/alpha2/alpha3 预发布 → 0.3.5 正式版(收口修复批) → M8 = 0.3.6.alpha1(参数面全暴露 116 行 + SSIMULACRA 2 逐输出评分) → M9 = 0.3.6.alpha2(JXL 有损 VarDCT 修复 + HEIF 真实档位/Level/grid 配置矩阵 + 穷举矩阵验证器) → M10 = 0.4.0.alpha1(评分池/预算拆分/多格式并行/逐输出事件 + HEIF grid·still 档·tune·RC + JXL 治理 43→31 键 + 格式预设与自适应策略) → **M11 = 迭代修复批(HEIF tile 按 Level/still 推导 C17' + 自适应 DSL v1.1 断点 + 5 条预置 + 运行状态机修复)** → **M12 = 0.4.0 正式版(M11 批 + 用户 5 条反馈:工厂预设外部化 `presets/formats/**` / 每格式 default / 无「未选择」态 / HEIF Apple CRF=20 / JPEG default 自适应距离策略 + CI 优化)** |
-| 质量面 | 金样断言级 **20 对** 全绿(`SMOKE total=20 pass=20 fail=0`);ctest **48/48**(release-dev,含 ui_smoke);`--ui-smoke` 冻结行 `UI-SMOKE OK shots=12 pages=3` 逐字不变 + format-preset 组探针(**M12 新增** `default-selected`/`no-unselected`/`default-protected`/`save-default`/`jpeg-adaptive`/`heif-apple-crf=20`/`legacy-migrated`/`png-no-adaptive`);格式 `FILES=233 violations=0`;tidy `262=262 violations=0`(未 `--update`);HEIF 矩阵全量 1102 例(0.4.0.alpha1 候选 `F3A0448A…`);回归 zero diff(默认路径未变)。**M12 发行树最终门禁读数 = 待填(由 Lead 回填 `docs/0.4.0-report.md` §2)** |
-| **开放问题** | ① `docs/deep-review-0.3.2.md`:深度评审台账(**P0 ×2 已由 0.3.3 数据安全线 + 0.3.5 同目录输出修订收口**;P1/R3 条目为长期台账);② `docs/ux-review-14.md`:14 项 UI 问题定位与改进方案(只读评审,**改动须经用户确认后另起提交**);③ `docs/m7r25-report.md` §5:识图门禁未覆盖项;④ libde265 对部分 HEVC RExt 码流(如 `super/T2.heic`)仍不可解码;⑤ 高德线上搜索仅账号实测可最终确认(本机 TLS 环境不可用);⑥ M9 未决:GUI 无显式 grid 行(**M10 已由 `heif_grid` 配置行收口**)、iPhone 真机接受度未验、WIC 16-bit JXL viewer 缺陷与本次修复无关、AVIF 未纳入矩阵;⑦ **M10 未决**:P4-1 `metric≤encode` 未达(1.072×)、10-bit HEIC probe 与 HEIC 深 probe 首事件超阈、**TSan 未测**(CI nightly tsan job 修复状态见 CI 报告)、A12/A7/A19 待追认、`output best`/`tech` 策略目标校验期拒绝;⑧ **M11/M12 未决**:S-6…S-12 按 P3 登记未修(`docs/state-machine-analysis.md`)、H.265 still 官方命名遗留、**CI 债(main-full windows/tidy 20min 硬顶 + nightly 脚本 bug/基线陈旧/ubsan 产品 UB)由 M12-C 诊断、最终状态待填**、iPhone 接受度未验;⑨ 详见 §11 已知债 |
+| 质量面 | 金样断言级 **20 对** 全绿(`SMOKE total=20 pass=20 fail=0`);ctest **48/48**(**81.73 s**,release-dev,含 ui_smoke);`--ui-smoke` 冻结行 `UI-SMOKE OK shots=12 pages=3` 逐字不变 + **`UI-SMOKE format-preset: checked=39 bad=0`**(39 字段全 1,含 `heif-apple-crf=1`/`jpeg-adaptive=1`/`global-detached=1`/`default-selected=1`);格式 `check 233 files → violations=0`;tidy `TIDY total=262 baseline=262 files=76 violations=0 seed=0`(未 `--update`);回归 **zero diff**(normalized 2567 = baseline 2567;Windows 基线版本行重播种 12/0/24、Linux 基线已入库 sha256 `b86fead0…`/2567);`ci-versions-check` `OK (10 keys, expect=0)`;候选二进制 `build/iter1/photopipeline.exe` 5,236,224 B / SHA256 `481EB781…7F80`;`--version` = `PhotoPipeline 0.4.0`;HEIF 矩阵 0.4.0 **本轮未复跑**(M11 C17' 子集 31 例历史读数 pass 24/fail 0/expected-fail 7/unexpected 0)。逐条见 `docs/0.4.0-report.md` §2 |
+| **开放问题** | ① `docs/deep-review-0.3.2.md`:深度评审台账(**P0 ×2 已由 0.3.3 数据安全线 + 0.3.5 同目录输出修订收口**;P1/R3 条目为长期台账);② `docs/ux-review-14.md`:14 项 UI 问题定位与改进方案(只读评审,**改动须经用户确认后另起提交**);③ `docs/m7r25-report.md` §5:识图门禁未覆盖项;④ libde265 对部分 HEVC RExt 码流(如 `super/T2.heic`)仍不可解码;⑤ 高德线上搜索仅账号实测可最终确认(本机 TLS 环境不可用);⑥ M9 未决:GUI 无显式 grid 行(**M10 已由 `heif_grid` 配置行收口**)、iPhone 真机接受度未验、WIC 16-bit JXL viewer 缺陷与本次修复无关、AVIF 未纳入矩阵;⑦ **M10 未决**:P4-1 `metric≤encode` 未达(1.072×)、10-bit HEIC probe 与 HEIC 深 probe 首事件超阈、**TSan 已由 M12-CI 修复后首次真正执行**(暴露 9 条真实数据竞争,登记 0.4.1)、A12/A7/A19 待追认、`output best`/`tech` 策略目标校验期拒绝;⑧ **M11/M12 未决**:S-6…S-12 按 P3 登记未修(`docs/state-machine-analysis.md`)、H.265 still 官方命名遗留、**CI 已定案:main-full 全绿 10/10(预算校准 A10);nightly ubsan/双平台回归/audit 绿,asan/tsan 两项真实产品债 0.4.1 修(A13;不宣称 nightly 通过);回归基线双平台已入库(A11)**、iPhone 接受度未验;⑨ 详见 §11 已知债 |
 
 ---
 
@@ -212,7 +212,7 @@ GUI / 地图 / 体验类里程碑(M5、M6 先例)以「`src/codecs`/`src/decode`
 | UI | `QT_QPA_PLATFORM=offscreen … --ui-smoke …` 或 `python tests/ui_smoke.py <build>` | 冻结末行 + 截图 12 张;**UI 类不进 ctest 单测,此即 UI 的回归通道** |
 | 密钥 | 按 `docs/m6-report.md` §6 的扫描命令 | 0 命中 |
 
-CI 四道:`pr-fast`(快速) / `main-full` / `nightly` / `release`(tag 触发)+ `warm-cache.yml`(依赖预热);**job 与整轮双 ≤20min 硬约束**。
+CI 四道:`pr-fast`(快速) / `main-full` / `nightly` / `release`(tag 触发)+ `warm-cache.yml`(依赖预热);**job 与整轮有硬上限**（0.3.x D16 = ≤20min；**M12 校准（用户授权、判据零放宽、仅 wall-clock）**：main-full windows 预算 24min/硬顶 30、tidy 预算 22min/硬顶 25、整轮 wall-limit 30min；其余流水线与 job 仍 20min；`release` appimage/winzip/publish 12/15/3 不变；依据 `build/m12-ci/report.md`）。
 
 ### 6.5 构建与环境(踩坑事实)
 
@@ -265,8 +265,8 @@ python tools/env.py run -- ctest --preset release
 | 发行逐条变更 | `CHANGELOG.md` |
 | 工厂格式预设(出厂数据 / seed / default 语义) | `presets/formats/**`(11 个 JSON,单一真源)+ `docs/format-presets.md`(§2 目录/§7 出厂文件) |
 | 自适应策略 DSL / 出厂策略全文 | `docs/adaptive-policy.md`(§6.1 断点/§10 工厂文件策略全文) |
-| M12 裁定(工厂预设外部化 / `_builtin` 迁移 / default / 无「未选择」/ JPEG 策略 / CI / 版本) | `docs/m12-adjudications.md`(A1–A9) |
-| 0.4.0 发行报告(读数由 Lead 回填) | `docs/0.4.0-report.md` |
+| M12 裁定(工厂预设外部化 / `_builtin` 迁移 / default / 无「未选择」/ JPEG 策略 / CI 预算·基线·scoping / hwy 尝试回退 / 版本) | `docs/m12-adjudications.md`(A1–A13 + 附 1/附 2) |
+| 0.4.0 发行报告(已发布版；读数已回填；tag/Release/资产指纹) | `docs/0.4.0-report.md` |
 | 用户视角全量说明 | `README.md` |
 | 开放评审 | `docs/deep-review-0.3.2.md`(P0/P1 清单 + 发行裁决)、`docs/ux-review-14.md` |
 
@@ -313,7 +313,23 @@ python tools/env.py run -- ctest --preset release
 
 **UX 开放 14 项**(`docs/ux-review-14.md`,含定位、根因、改进方案):右键菜单、全选/取消全选、预览分辨率(内嵌预览门槛 64px 误用)、GPS 卡地图 App 化、功能启用勾选消失、样式收口进公共文件、无边框三钮点不动(`WM_NCCALCSIZE` 缺失)、高级参数展开区限高、格式卡等宽、HEIF/AVIF 无 profile 且 nclx 写死 sRGB 与 ICC 矛盾、滚动条两套皮、亮色设置页签色错、窗口圆角缺失、色彩转换质量边界。
 
-**CI 债(M12 处理中;最终状态待填)**:`main-full` 的 windows/tidy 在 4 vCPU 冷构建下触 20min job 硬顶(根因 = vcpkg 二进制缓存暖度不足 ⇒ configure 从源码重编;warm-cache 已播种,读数待回填)。nightly 红点分三类(**诊断真源 = `build/m12-ci/report.md`,基线 HEAD `26d3554`,2026-11-01):① **脚本判据 bug**(M12-C 已修):asan 的 R-042 env 检查被复制错位、`PP_SAN_TARGETS` 的 `sed 's#\cpp$##'` 转义 bug 致目标名保留 `.cpp`、regression-windows 缺 Qt bin PATH;② **基线陈旧**(口径动作):Linux `golden.log` diff 可归因(版本行/M10 加性日志/M9 JXL 有意变化),需 Lead 决策 nightly `update_baseline=true` 后复核入库;③ **产品 UB(未修,如实)**:ubsan job 金样 19/20 红 = 金样恒带 `--score` ⇒ M8-C 评分路径(`src/core/metric/**` + `third_party/ssimulacra2/**` 嫌疑面)在 `-fsanitize=undefined` + `halt_on_error=1` 下命中 `runtime error:`(起于 M8 批 #49;**产品修复不在 C 写作用域,需 Lead 指派**)。**在 UB 修复前 nightly 不可能全绿**——run id / 逐 job 最终读数由 Lead 回填 `docs/0.4.0-report.md` §2.5(待填)。
+**CI 债（M12 已定案；**如实：不宣称 nightly 通过**；诊断真源 = `build/m12-ci/report.md` 835 行/22 节）**：
+- **main-full 全绿（41294175349 = SUCCESS 10/10，`main-full gate OK`）**：A10 预算校准后 windows **27.1min<30** ✓、
+  tidy **21.5min<25** ✓；整轮 wall **32min > wall-limit 30（仅提示，per-job timeout 全过）**；真优化 = vcpkg binary
+  cache 全命中（configure **908s→38s**）+ M12-D25。**建议 0.4.1 预算表 windows 24→27**（实测余量偏小）。
+- **nightly（41294609588 = FAILURE，非全绿）**：✅ **ubsan**（9/9 + 金样 20/20 + 0 sanitizer 报告）、
+  ✅ regression（Linux **0 diff**，基线 sha256 `b86fead0…`/2567 已入库）、✅ regression-windows（**0 diff**）、
+  ✅ audit；❌ **asan**（3/9 SEGV：`jpegli::VectorSize()` pc=0，跨轮非确定）、❌ **tsan**（1/9 + **9 条真实
+  data race**：ProgressMux 事件回调 vs 编码 worker 线程）。两项为**已定案真实产品债（0.4.1）**：① **hwy dispatch
+  ODR 链接期 UB**（M12-D26 尝试→回退，`HWY_COMPILE_ONLY_STATIC` 会改变 SSIMULACRA2 数值 0.05–0.27，红线；
+  release 二进制同样含该碰撞，属潜在风险）；② **ProgressMux/FileEvent 数据竞争**。修复方向 = hwy 私有化 +
+  bridge shim（保数值）/ISA 基线对齐；事件投递单线程 drain 队列（0.4.1）。
+- **M12 已修**：脚本判据 bug（asan R-042 错位 / tsan `sed` 转义 / regression-windows Qt PATH / sanitizer ctest 防空跑）；
+  **A12 sanitizer 性能判据 scoping**（`PP_SANITIZER_BUILD=1`，只对 sanitizer 跳过 fastcolor 吞吐阈值；release/release-dev
+  判据逐字保留，本机 108.8 MPx/s）；**M12-D25**（`namespace jxl` ODR，ubsan 转绿）；**A11** 回归基线双平台入库；
+  **release.yml** presets 产物断言。`warm-cache.yml` 播种 114.75/120min 预算边界风险登记（独立豁免）。
+- 手动 dispatch nightly 轮 41294189132 被 schedule 轮 concurrency 取消（nightly schedule 与手动 dispatch 互踩，
+  属调度配置债，非门禁问题；已登记）。
 
 **出厂预设数据维护点(M12 新增)**:`presets/formats/**` 是**出厂数据单一真源**——改预设内容必须同步(① `tests/unit/test_format_presets.cpp` 的工厂库/seed/迁移断言;② 打包门禁 `tools/make_winzip.py`/`make_appimage.sh` 的「8 格式 default 齐备 + 总数 11」;③ `docs/format-presets.md` §7 与 `docs/adaptive-policy.md` §10 策略全文;④ `--ui-smoke` 相关探针)。旧 `_builtin-*` 只读模板/migration 逻辑不得回退(破坏性迁移已登记 `docs/m12-adjudications.md` A2)。
 

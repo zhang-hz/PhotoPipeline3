@@ -6,12 +6,14 @@
 `[0.4.0.alpha1]` 历史节，内容未删改）+ **M11 迭代修复批**（HEIF tile 按 Level/still 规格推导、自适应 DSL v1.1
 步长断点、5 条预置、运行状态机修复、格式预设行 UI）+ **M12 用户 5 条反馈**（出厂预设外部化为仓库 JSON 数据文件、
 每格式 `default`、删除「未选择」态、HEIF「Apple自适应」CRF=20、JPEG `default` 自适应视觉距离策略）+
-**CI 流程优化**（脚本判据修复 / 缓存暖度 / 预算；nightly 的 **ubsan 产品 UB** 与基线重播种口径动作**如实登记在「已知」**，
-run id / 逐 job 读数由 Lead 回填 `docs/0.4.0-report.md` §2.5）。
+**CI 优化与发布**（脚本判据修复 / sanitizer 性能判据 scoping / 两处产品 ODR / 预算校准 / 回归基线重播种 /
+release presets 断言；**main-full 全绿 10/10**；nightly 如实登记 = ubsan + 双平台回归 + audit 绿、
+**asan/tsan 两项真实产品债 0.4.1 修**——**不宣称 nightly 通过、不造绿**）。
 版本单源 = `CMakeLists.txt:19-26`：数字段 `project(PhotoPipeline VERSION 0.4.0)` + **`PP_VERSION_LABEL ""`（正式版，标签清空）**
 ⇒ `--version` = **`PhotoPipeline 0.4.0`**；`vcpkg.json` 同步数字段 0.4.0（R-122 口径）。
-逐条证据与门禁读数见 [docs/0.4.0-report.md](docs/0.4.0-report.md)，M11 收口报告见
-[docs/m11-report.md](docs/m11-report.md)，裁定见 [docs/m12-adjudications.md](docs/m12-adjudications.md) /
+逐条证据与门禁读数见 [docs/0.4.0-report.md](docs/0.4.0-report.md)（§2 = `1b6fdbc` 最终树读数），CI 诊断真源 =
+`build/m12-ci/report.md`（835 行/22 节）；M11 收口报告见
+[docs/m11-report.md](docs/m11-report.md)，裁定见 [docs/m12-adjudications.md](docs/m12-adjudications.md)（A1–A13）/
 [docs/m11-adjudications.md](docs/m11-adjudications.md)，用户手册见
 [docs/format-presets.md](docs/format-presets.md) 与 [docs/adaptive-policy.md](docs/adaptive-policy.md)。
 
@@ -88,6 +90,30 @@ run id / 逐 job 读数由 Lead 回填 `docs/0.4.0-report.md` §2.5）。
   经 `tools/param_catalog_specs/x265.json` 单源生成（`.inc` 不再手改）。
 - **版本单源 0.4.0.alpha1 → 0.4.0 正式版（M12-A9）**：`PP_VERSION_LABEL ".alpha1" → ""`（数字段 0.4.0 不变）；
   `vcpkg.json` 仍 0.4.0（R-122）；`--version` = `PhotoPipeline 0.4.0`；README/AGENTS 现役口径同步。
+- **CI 判据修复 + sanitizer 性能判据 scoping（M12-A8/A12）**：nightly 脚本 bug 修复（asan 的 R-042 env 检查错位、
+  `PP_SAN_TARGETS` 的 `sed 's#\cpp$##'` 转义致 `.cpp` 目标名、regression-windows 缺 Qt bin `PATH`、
+  sanitizer ctest 防空跑断言）；`test_quality_metric` fastcolor **>10 MPx/s** 的*性能退化守卫*在 sanitizer 构建
+  （Debug+插桩，实测 2–4.7 MPx/s）**恒假红**、不承载正确性语义 ⇒ CMake 检测 `-fsanitize=` 定义
+  `PP_SANITIZER_BUILD=1`，仅 sanitizer 构建打印跳过原因并跳过该阈值；**release/release-dev 判据逐字保留**
+  （本机 108.8 MPx/s 通过）。**scoping 不是放宽**（正确性断言/0 报告扫描不变）。
+- **两处产品 ODR（M12-D25 / M12-D26）**：**D25** = vendored `ssimulacra2` compat 与静态 libjxl 的
+  `namespace jxl` 冲突 → `jxl=pp_ssim2_jxl` 宏私有化（**保留**；ubsan 金样 19/20 红随之转绿）；
+  **D26** = Highway `hwy` 私有化（`hwy=pp_ssim2_hwy`）+ `HWY_HEADER_ONLY/HWY_COMPILE_ONLY_STATIC` 解决了
+  Linux 链接/SEGV，但让 gauss_blur 固定 AVX2 ⇒ **SSIMULACRA2 数值漂移 0.05–0.27**（oracle `|Δ|≤0.01` 红 +
+  release fastcolor parity 红）⇒ **回退**；0.4.1 走「hwy 私有化 + bridge shim（保数值）」或 ISA 基线对齐。
+  **红线：`HWY_COMPILE_ONLY_STATIC` 不得用于 vendored metric。** Windows 本地 jpegli 为 DLL、该 ODR 不可复现。
+- **CI 预算校准（M12-A10；判据零放宽、仅 wall-clock）**：main-full **windows 预算 24min / 硬顶 30**、
+  **tidy 预算 22 / 硬顶 25**、**整轮 wall-limit 20→30min**（release 的 appimage/winzip/publish **12/15/3 不变**，
+  其余流水线/job 仍按 20min）；真优化 = vcpkg binary cache 全命中（configure **908s→38s**）+ D25。
+  实测：windows **27.1min**（<30 ✓；> 软预算 24 ⇒ 建议 0.4.1 预算调 27）、tidy **21.5min**、整轮 wall **32min**
+  （> wall-limit 30 仅提示；per-job timeout 判据全过）。
+- **回归基线版本行重播种（M12-A11）**：Windows `tools/baseline/golden.windows.log` 按版本行重播种，
+  归因 = **version-line changes=12 / behavior changes=0 / changed-lines=24**（仅 `0.4.0.alpha1 → 0.4.0` 版本行换锚）；
+  Linux `tools/baseline/golden.log` 由 nightly `update_baseline=true` artifact 复核**入库**
+  （sha256 `b86fead0…` / 2567 行）；最终双平台回归 **0 diff**。
+- **发布链路**：`release.yml` **只增** presets 产物级断言（probe-winzip / probe-appimage：8 格式 default +
+  JSON 总数 11 + 无 `_builtin-` 残留；与 `make_winzip.py`/`make_appimage.sh` 门禁 G 同源；发布说明仍取
+  CHANGELOG `[0.4.0]` 节、止于 `### 发行`）。
 - 本批（M11+M12）**未改任何 PP-FROZEN 冻结接口**；加性/行为修正逐条登记
   [docs/m11-adjudications.md](docs/m11-adjudications.md)、[docs/m12-adjudications.md](docs/m12-adjudications.md)。
 
@@ -103,9 +129,14 @@ run id / 逐 job 读数由 Lead 回填 `docs/0.4.0-report.md` §2.5）。
 
 ### 测试
 
-- **0.4.0 发行树门禁读数：待填（由 Lead 最终集成后回填）**——ctest / 金样 `SMOKE total=20 pass=20 fail=0` /
-  `--ui-smoke` `UI-SMOKE OK shots=12 pages=3` + 新探针 / 回归 zero diff / 格式 0 diff / tidy 棘轮 / HEIF 矩阵 /
-  版本检查；逐条见 [docs/0.4.0-report.md](docs/0.4.0-report.md) §2。
+- **0.4.0 最终树（`build/iter1`，`1b6fdbc`）门禁**：ctest **48/48**（**81.73 s**，含 `ui_smoke`）；金样
+  **`SMOKE total=20 pass=20 fail=0`**；`--ui-smoke` 末行逐字 **`UI-SMOKE OK shots=12 pages=3`**（exit 0）+
+  **`UI-SMOKE format-preset: checked=39 bad=0`**（39 字段全 1）；`ui_smoke.py` **pass**；格式
+  **`check 233 files → violations=0`**；tidy **`TIDY total=262 baseline=262 files=76 violations=0 seed=0`**
+  （未 `--update`）；回归 **zero diff**（`normalized 2567 lines vs baseline 2567 lines`；Windows 基线按版本行
+  重播种 12/0/24）；`ci-versions-check` **`OK (10 keys, expect=0)`**；`--version` = **`PhotoPipeline 0.4.0`**；
+  候选二进制 `build/iter1/photopipeline.exe` **5,236,224 B / SHA256 `481EB781…7F80`**。逐条见
+  [docs/0.4.0-report.md](docs/0.4.0-report.md) §2。
 - M11 集成树（`build/iter1`，0.4.0 正式版之前）历史读数：ctest **48/48**、金样 **20/20**、
   `UI-SMOKE OK shots=12 pages=3`、回归 zero diff（normalized 2567=2567 行）、HEIF C17' 子集 31 例
   pass 24 / fail 0 / expected-fail 7 / unexpected 0、格式 FILES=233 / violations=0、tidy 262=262 / violations=0、
@@ -113,28 +144,33 @@ run id / 逐 job 读数由 Lead 回填 `docs/0.4.0-report.md` §2.5）。
 - **新增/扩展单测**：`test_format_presets`（工厂文件/seed/迁移/字节一致）、`test_adaptive_exec`（JPEG default
   11 候选取代序列逐点）、`test_adaptive_policy`（JPEG 策略 parse/render/validate）、`test_params`/`test_param_catalog`
   （jpegli distance `lo==0.1`）。
-- **CI 优化轮读数：待填（C/Lead 提供）**——main-full / nightly / release run id 与逐 job 结论见
-  [docs/0.4.0-report.md](docs/0.4.0-report.md) §2.5。
+- **CI 最终（如实）**：main-full run **41294175349**（`1b6fdbc`）= **SUCCESS 10/10**（`main-full gate OK`；
+  wall 32min；tidy 21.5min<25、windows 27.1min<30）；release.yml run **41296584097 = success**（4 资产见「发行」）；
+  nightly run **41294609588** = **FAILURE**（ubsan ✅ 9/9 + 金样 20/20 + 0 报告、regression 双平台 ✅ 0 diff、audit ✅；
+  **asan ❌ 3 SEGV + tsan ❌ 9 data race = 两项真实产品债，0.4.1 修**——**不宣称 nightly 通过**）。
+  逐条见 [docs/0.4.0-report.md](docs/0.4.0-report.md) §2.5 与 `build/m12-ci/report.md`。
 
 ### 已知
 
 - **性能目标部分未达（M10 遗留，如实）**：P4-1 `metric_ms ≤ encode_ms` 未达（2,178.6 / 2,032.1 = **1.072×**，
   D-5）；10-bit HEIC 输入 probe 1,635–1,670 ms（D-6）；HEIC 深 probe 首事件 gap 1.44–1.67 s（D-7）；
   P9-1 CPU ≈4.01 核（诊断项）。
-- **TSan 未测**：本机无 TSan 运行面；CI nightly tsan job 的修复与最终状态见 CI 报告（待填）；无线程竞态证据
-  之前不宣称已验（替代压力证据见 [docs/m10-report.md](docs/m10-report.md) §4-2）。
-- **CI 红点分三类（诊断真源 = `build/m12-ci/report.md`，基线 HEAD `26d3554`，2026-11-01；最终读数待填）**：
-  ① **脚本判据 bug（M12-C 修复）**：nightly asan 的 R-042 env 检查被复制错位（asan job 查了 `UBSAN_OPTIONS`）、
-  `PP_SAN_TARGETS` 的 `sed 's#\cpp$##'` 转义 bug 致目标名保留 `.cpp`（`ninja: error: unknown target 'pp_test_formkit.cpp'`）、
-  regression-windows 缺 Qt bin `PATH`（`0xC0000135`）；② **基线陈旧（口径动作，待 Lead 决策）**：Linux `golden.log`
-  diff 可全部归因（版本行 / M10 加性日志 / M9 JXL 有意变化），需 nightly `update_baseline=true` 重播种后复核入库；
-  ③ **产品 UB（未修，如实）**：ubsan job 金样 **19/20** 红 = 金样恒带 `--score` ⇒ M8-C 评分路径
-  （`src/core/metric/**` + `third_party/ssimulacra2/**` 嫌疑面）在 `-fsanitize=undefined` + `halt_on_error=1` 下命中
-  `runtime error:`（起于 M8 批 nightly #49）——**产品修复不在 CI 写作用域，需 Lead 指派；修复前 nightly 不可能全绿**。
-- **`main-full` windows/tidy 20min 硬顶根因**：vcpkg 二进制缓存暖度不足 ⇒ configure 从源码重编（不是代码量问题）；
-  warm-cache 已播种、读数待回填；`timeout-minutes: 20` 红线**未动**（预算调整须 Lead 决策）。
-- **HEIF 矩阵**：M10 全量读数 1102 例 = pass 732 / fail 0 / expected-fail 370 / unexpected 0（候选
-  `F3A0448A…`）；M12 发行树复跑读数见报告（待填）。iPhone 真机接受度仍未验证；AVIF 未纳入矩阵。
+- **TSan 已在 CI 真正执行（修正历史「未测」口径）**：本批修复 tsan job 的目标名/脚本后**首次真正跑契约单测 + 金样**，
+  暴露 **9 条真实数据竞争**（`ProgressMux` 事件回调 vs 编码 worker 线程）与 asan/tsan 下的 hwy ODR SEGV；
+  本机仍无 TSan 运行面（不能本地复现）。两项均登记为 **0.4.1 产品债**（见
+  [docs/0.4.0-report.md](docs/0.4.0-report.md) §4）。
+- **CI 最终状态（如实；诊断真源 `build/m12-ci/report.md`）**：main-full **全绿 10/10**；nightly **未全绿**：
+  ✅ ubsan（9/9 + 金样 20/20 + 0 sanitizer 报告）、✅ regression（Linux 0 diff）、✅ regression-windows（0 diff）、
+  ✅ audit；❌ **asan**（3/9 SEGV：`jpegli::VectorSize()` pc=0；跨轮非确定）、❌ **tsan**（1/9 + 9 data race）。
+  两项为**已定案真实产品债**（不是 CI 脚本问题）：① **hwy dispatch ODR 链接期 UB**（M12-D26 尝试→回退，
+  数值语义不可动；**release 二进制同样含该碰撞，属潜在风险**，0.4.1 修）；② **ProgressMux/FileEvent 数据竞争**。
+  修复方向 = hwy 私有化 + bridge shim（保数值）或 ISA 基线对齐 / 事件投递单线程 drain 队列（0.4.1）。
+- **CI 预算实测（A10）**：windows **27.1min**（软预算 24 → 建议 0.4.1 调 27；硬顶 30 ✓）、tidy **21.5min**
+  （预算 22 ✓）、整轮 wall **32min**（> wall-limit 30 **仅提示**，per-job timeout 全过）；
+  `warm-cache.yml` 播种 114.75/120min 预算边界风险登记（独立豁免，如实）。
+- **HEIF 矩阵**：0.4.0 发行树**本轮未复跑**（如实）；M11 C17' 子集 31 例历史读数 = pass 24 / fail 0 /
+  expected-fail 7 / unexpected 0（[docs/m11-report.md](docs/m11-report.md) §2.5），M10 全量 1102 例见
+  [docs/0.4.0.alpha1-report.md](docs/0.4.0.alpha1-report.md) §2.2。iPhone 真机接受度仍未验证；AVIF 未纳入矩阵。
 - **自适应未覆盖**：`output best` 校验期显式拒绝（需候选集保留/磁盘成本评估）；`tech` 切换默认禁止。
 - **JPEG default 自适应的成本**：每个 JPEG 输出最多约 11–20 轮编码+评分（每轮成本见
   [docs/adaptive-policy.md](docs/adaptive-policy.md) §15）；不需要可在格式卡关掉开关或把 `adaptive.enabled`
@@ -145,10 +181,18 @@ run id / 逐 job 读数由 Lead 回填 `docs/0.4.0-report.md` §2.5）。
 
 ### 发行
 
-- **0.4.0 正式版**：tag **`v0.4.0`**（annotated；指向 commit 与发布时间：**待填，由 Lead 回填**）；
-  GitHub Release（prerelease=False / Latest）；4 资产（`win64.zip` / `x86_64.AppImage` / `deps.txt` /
-  `SHA256SUMS.txt`）的大小与 sha256：**待填**；`release.yml` run id 与 7 job 全绿结论：**待填**。
-  逐项核对见 [docs/0.4.0-report.md](docs/0.4.0-report.md) §2.5。
+- **0.4.0 正式版（已发行）**：tag **annotated `v0.4.0` → commit `1b6fdbc`**；GitHub Release
+  **`PhotoPipeline 0.4.0`**（prerelease=**False** / Latest），createdAt **2026-11-01T10:14:07Z**、
+  publishedAt **2026-11-01T10:24:21Z**，URL <https://github.com/zhang-hz/PhotoPipeline3/releases/tag/v0.4.0>；
+  `release.yml` run **41296584097 = success**（job：appimage **8.4min** / winzip-build **6.5** / winzip-build-dev **7.0** /
+  winzip-pack **2.0** / probe-appimage **0.6** / probe-winzip **0.2** / publish **0.8**，全 success）。
+  **4 资产**（name | size B | sha256）：
+  `PhotoPipeline-0.4.0-win64.zip` | **34,205,404** | `6fe7d1cabb4b62df4a90f2113994fbca683df9bbe567d5a11560f31ec8c48ccc`；
+  `PhotoPipeline-0.4.0-x86_64.AppImage` | **52,648,440** | `40e3c082eec0774d9f2d1989bc7d99720d8b09ced1ee59ca09a6dc2b8995ce2e`；
+  `PhotoPipeline-0.4.0-deps.txt` | **2,439** | `e8c80b3d61a4e0d41cde50eb3c04577688d7428cc189129b3331cf221407854d`；
+  `PhotoPipeline-0.4.0-SHA256SUMS.txt` | **293** | `1b567a03e703f9716681e8f304fc09d05148330a66b337f28df9682367ac6b9e`。
+  发布道两平台 probe 与 publish 的 `--version` 复核均通过 = **`PhotoPipeline 0.4.0`**。逐项核对见
+  [docs/0.4.0-report.md](docs/0.4.0-report.md) §2.5。
 - 上一预发布 **0.4.0.alpha1**（M10）已发行：tag `v0.4.0.alpha1`（annotated `530896c`），Release published
   2026-11-01T04:07:55Z，4 资产（win64.zip 34,173,446 B / `0876df59…9217a`；AppImage 52,595,192 B /
   `26b786ea…cc983`）；`release.yml` run 41271187323 全绿。

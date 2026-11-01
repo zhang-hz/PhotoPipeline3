@@ -54,8 +54,12 @@ Level 上界（L5.1）**推导（删除 1024×576 固定基准）、自适应 DS
 **JPEG `default` 开启自适应视觉距离策略**（3.0 起 1–3 段步长 1、1 以下步长 0.1 精扫到 0.1，取达 90 分的最小体积），
 JPEG distance UI 域同步放宽为 **0.1–3.0**（R-294）。**性能目标部分未达（如实）**：P4-1 metric 2,178.6 / encode
 2,032.1 ms = **1.072×**、10-bit HEIC probe 1,635–1,670 ms、HEIC 深 probe 首事件 1.44–1.67 s（见 CHANGELOG「已知」）。
-**发行状态：0.4.0 正式版**（`--version` = `PhotoPipeline 0.4.0`；tag/Release 与资产指纹由 Lead 回填，见
-[docs/0.4.0-report.md](docs/0.4.0-report.md)）；逐条变更见 [CHANGELOG.md](CHANGELOG.md) `[0.4.0]`。
+**发行状态：0.4.0 正式版已发行**（`--version` = `PhotoPipeline 0.4.0`；tag **annotated `v0.4.0` → commit `1b6fdbc`**；
+GitHub Release **`PhotoPipeline 0.4.0`** published **2026-11-01T10:24:21Z**（prerelease=**False** / Latest），
+URL <https://github.com/zhang-hz/PhotoPipeline3/releases/tag/v0.4.0>；**4 资产**：`win64.zip` 34,205,404 B /
+`6fe7d1ca…c48ccc`、`x86_64.AppImage` 52,648,440 B / `40e3c082…5ce2e`、`deps.txt` 2,439 B、`SHA256SUMS.txt` 293 B；
+`release.yml` run **41296584097 = success**）。逐条变更见 [CHANGELOG.md](CHANGELOG.md) `[0.4.0]`，发行报告/门禁与
+CI 最终读数见 [docs/0.4.0-report.md](docs/0.4.0-report.md)。
 
 **0.3.6.alpha2（历史预发布）= M9：JXL 有损修复 + HEIF/iPhone 兼容配置矩阵**：① **JXL 有损
 VarDCT 修复**——有损 VarDCT 不再走 libjxl 非 XYB 缺陷路径（`uses_original_profile` 恒 false、XYB 编码；

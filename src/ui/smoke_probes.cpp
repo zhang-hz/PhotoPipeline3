@@ -6212,12 +6212,24 @@ void MainWindow::Impl::smoke_probe_rtl_mirror() {
                     child->layout()->activate();
             }
         };
+        const QString names[] = {meta::objname::kDeltaYears, meta::objname::kDeltaHours};
+        // M14 收口（A31 v2）：Linux Noto CJK 字体下「3×spin88」行内容最小宽会超过默认行宽
+        // （实测 layout minimumSize ≈285–359px，而行控件宽 ≈248px）→ RTL 内容整体右对齐到
+        // 内容坐标而非行宽，几何镜像关系被字体度量破坏。给两边的行容器设**固定宽 600px**
+        // （> 任何平台的内容最小宽），把变量收敛为纯方向镜像：判据仍是 LTR↔RTL 镜像 ≤2px。
+        for (const QString &name : names) {
+            for (QWidget *root : {static_cast<QWidget *>(&ltr), static_cast<QWidget *>(&rtl)}) {
+                QWidget *w = root->findChild<QWidget *>(name);
+                if (w != nullptr && w->parentWidget() != nullptr) {
+                    w->parentWidget()->setFixedWidth(600);
+                }
+            }
+        }
         activate_all(ltr);
         activate_all(rtl);
         pump(60);
         activate_all(ltr);
         activate_all(rtl);
-        const QString names[] = {meta::objname::kDeltaYears, meta::objname::kDeltaHours};
         for (const QString &name : names) {
             const QString qn = name;
             QWidget *wl = ltr.findChild<QWidget *>(qn);

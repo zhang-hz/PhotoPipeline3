@@ -100,6 +100,9 @@ name: main-full
 #         ⑤ **linux job 硬顶 20→25min**（2026-11-03，run 41499971530 实测：0.4.2 新增 8 个源文件/
 #            测试 + 双树全量构建/ctest 使 linux job 越过 20min 硬顶被取消、gate 随之红）。判据/步骤/
 #            断言零改动，只动 wall-clock 硬顶，与 windows 30 / tidy 25 同表口径（M12-A10 先例）。
+#         ⑥ **windows job 硬顶 30→36min、整轮 wall-limit 30→40min**（run 41520038294 实测：linux 已绿，
+#            windows step12 构建+全 ctest 越过 30min 硬顶被取消）。判据/步骤/断言零改动；软预算
+#            24min 仍为效率目标，wall 读数照旧写预算校准表（不粉饰）。
 #
 #   ── 缓存纪律（设计 §12.4 / R24，M3 教训逐条保留）─────────────────────────────
 #     * 缓存键: vcpkg- / vcpkgwin- / qt- / ccache- 四类前缀分离；Qt 单写者（本文件里 linux job 写
@@ -787,7 +790,7 @@ jobs:
   windows:
     name: windows（全 ctest+金样）
     runs-on: windows-2025
-    timeout-minutes: 30         # M12 校准硬顶（预算 24 min；实测 build 475 目标 ≈18.5min 硬成本 + ctest + 上传）
+    timeout-minutes: 36         # M14-CI 校准硬顶（软预算 24 min；0.4.2 +8 源文件/新测试后构建+ctest 实测 >30min）
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - name: Qt 路径（QT_VERSION 单源 = tools/versions.env；R-063 去版本字面量）
@@ -1708,14 +1711,14 @@ jobs:
         run: |
           set +e
           {
-            echo "## main-full gate（M12 预算校准：job 硬顶 windows 30 / tidy 25 / 其余 20；整轮 wall-limit 30min；**判据零放宽**；关键路径 = lint 1 + max(linux 12, windows 24, tidy 22, appimage 12) + gate 1 ≈ 27min；G7 起 winzip 挂 windows 串行（产物复用），winzip 读数见其 job 汇总）"
+            echo "## main-full gate（M14-CI 预算校准：job 硬顶 windows 36 / tidy 25 / linux 25 / 其余 20；整轮 wall-limit 40min；**判据零放宽**；关键路径 = lint 1 + windows 24 + winzip 15 + gate 1 ≈ 41min 上限（软目标 ≈30min，0.4.2 新增构建/测试后 wall 读数如实进预算校准表））"
             echo ""
             echo "| job | 结论 | 预算（M12 校准后） |"
             echo "| --- | --- | --- |"
             echo "| lint | ${R_LINT} | 1 min（表外增补：T16 步骤 5 的 lint 前哨）|"
             echo "| tidy | ${R_TIDY} | 22 min（原 12；M12 校准：4 vCPU 上 clang-tidy 68 TU 实测 18.4min）|"
             echo "| linux | ${R_LINUX} | 12 min（§12.3）|"
-            echo "| windows | ${R_WINDOWS} | 24 min（原 15；M12 校准：475 目标 release 构建 ≈18.5min 硬成本 + ctest）|"
+            echo "| windows | ${R_WINDOWS} | 24 min 软预算（M14-CI 硬顶 36；0.4.2 构建+全 ctest 实测 >30）|"
             echo "| windows-dev | ${R_WINDOWS_DEV} | 7 min（G7 二轮拆段：release-dev 子集 + ui_smoke/金样）|"
             echo "| appimage | ${R_APPIMAGE} | 12 min（§12.3）|"
             echo "| winzip | ${R_WINZIP} | 15 min（§12.3）|"
@@ -1730,7 +1733,7 @@ jobs:
                > "$RUNNER_TEMP/jobs.json" 2>/dev/null; then
             python3 tools/ci-budget.py "$RUNNER_TEMP/jobs.json" \
               --budget "lint=1,tidy=22,linux=12,windows=24,windows-dev=7,appimage=12,winzip=15,audit=3,cache-gc=1,gate=1" \
-              --wall-limit 30 --title "main-full 预算校准（设计 §12.3；M12 校准：windows/tidy 硬顶 30/25、整轮 wall-limit 30，判据零放宽）" >> "$GITHUB_STEP_SUMMARY"
+              --wall-limit 40 --title "main-full 预算校准（设计 §12.3；M14-CI 校准：windows/linux 硬顶 36/25、整轮 wall-limit 40，判据零放宽）" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "" >> "$GITHUB_STEP_SUMMARY"
             echo "_预算校准表不可得（jobs API 读取失败）；各 job 阶段耗时见各自 job 汇总。_" >> "$GITHUB_STEP_SUMMARY"

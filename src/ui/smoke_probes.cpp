@@ -6228,8 +6228,24 @@ void MainWindow::Impl::smoke_probe_rtl_mirror() {
             }
             const QRect gl = wl->geometry();
             const QRect gr = wr->geometry();
-            const int row_w = wl->parentWidget() != nullptr ? wl->parentWidget()->width() : -1;
-            const int row_wr = wr->parentWidget() != nullptr ? wr->parentWidget()->width() : -1;
+            // M14 收口（A31）：行宽取「行控件宽度」与「行布局最小内容宽」的较大者 ——
+            // Linux 字体（Noto CJK）下 3×spin88 的日期偏移行内容宽 > 行宽时，RTL 把内容整体
+            // 右对齐（years/hours 落在 content_w-88），只用 row_w 镜像会把「内容溢出」误判为
+            // 镜像失败。改为在**内容坐标系**里比对（LTR/RTL 两侧内容宽必须一致 + 镜像关系 ≤2px），
+            // 判据语义不变：仍是「固定宽控件在行内 LTR↔RTL 镜像」。
+            const auto content_w = [](QWidget *w) {
+                const QWidget *parent = w->parentWidget();
+                if (parent == nullptr) {
+                    return -1;
+                }
+                int cw = parent->width();
+                if (parent->layout() != nullptr) {
+                    cw = std::max(cw, parent->layout()->minimumSize().width());
+                }
+                return cw;
+            };
+            const int row_w = content_w(wl);
+            const int row_wr = content_w(wr);
             const int mirrored_x = row_w - gl.x() - gl.width();
             sub(row_w == row_wr && std::abs(gr.x() - mirrored_x) <= 2 && gr.width() == gl.width() &&
                     gr.y() == gl.y() && gr.height() == gl.height(),

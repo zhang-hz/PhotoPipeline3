@@ -102,7 +102,7 @@
 - **tag 后补记（不入 tag，主分支后续提交）**：tag 提交的 `main-full` lint 因新建文件未纳入本地格式门禁
   （`ci-format.sh` 只扫 tracked 文件）而红 —— 已修复 `tools/ci-format.sh`（纳入 untracked 新文件，A27）
   并推送后续提交重跑；发行产物与门禁读数的有效性不受影响（发行道 release.yml 为独立冷构建且全绿）。
-  `main-full` / `nightly` 的 tag 后读数以 GitHub Actions 为准（本条目在拿到读数后回填；不宣称未取证的绿）。
+  **tag 后 CI 修复链终判**：`main-full` run **`41525441521`（main @`b29d666`）= success（10/10 job，wall 28m55s < 40min）** —— 修复 A27（格式门禁覆盖 untracked）/ A28+A32（linux/windows 预算校准，判据零改动）/ A29（探针悬垂 lambda → Linux ui_smoke SIGSEGV）/ A30（theme-equiv 去抖）/ A31（rtl-mirror 行宽口径）；`nightly`（asan/tsan/Linux regression）待 nightly 事后背书，不宣称通过。
 
 ## [0.4.1] — 2026-11-02
 

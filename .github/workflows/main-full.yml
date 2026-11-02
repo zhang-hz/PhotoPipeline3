@@ -97,6 +97,9 @@ name: main-full
 #       依据：本机 `python tools/env.py run -- ctest --test-dir build/ci-asan -j 2 ...` 与
 #       local build/release-dev 全量 ctest 50/50 绿（并行无损）为本地等价验证；
 #       GH Actions 侧读数待推送后实测（本机无法跑 Actions，如实登记）。
+#         ⑤ **linux job 硬顶 20→25min**（2026-11-03，run 41499971530 实测：0.4.2 新增 8 个源文件/
+#            测试 + 双树全量构建/ctest 使 linux job 越过 20min 硬顶被取消、gate 随之红）。判据/步骤/
+#            断言零改动，只动 wall-clock 硬顶，与 windows 30 / tidy 25 同表口径（M12-A10 先例）。
 #
 #   ── 缓存纪律（设计 §12.4 / R24，M3 教训逐条保留）─────────────────────────────
 #     * 缓存键: vcpkg- / vcpkgwin- / qt- / ccache- 四类前缀分离；Qt 单写者（本文件里 linux job 写
@@ -368,11 +371,15 @@ jobs:
   # ────────────────────────────────────────────────────────────────────────────
   # linux（预算 12 min）: 全 ctest（release + release-dev 含 ui_smoke）+ 金样 20 对 + soname 自检
   #   本 job 是 ccache 与 Qt(gcc_64) 的**唯一写者**（M2-T10a/T19 单写者口径）。
+  #   M14-CI 预算校准（2026-11-03，判据零改动、仅 wall-clock；M12-A10 同口径）：0.4.2 新增 8 个
+  #   源文件/测试（thread_plan/event_stress/display_profile/hwy_bridge 等）+ 双树全量构建/ctest，
+  #   run 41499971530 的 linux job 实测越过 20min 硬顶被取消（gate 随之红）⇒ 硬顶 **20→25min**
+  #   （与 windows 30 / tidy 25 同表）；预算口径 12min 仍为软目标，不改任何判据/步骤/断言。
   # ────────────────────────────────────────────────────────────────────────────
   linux:
     name: linux（全 ctest+金样）
     runs-on: ubuntu-24.04
-    timeout-minutes: 20         # 硬顶（预算 12 min）
+    timeout-minutes: 25         # M14 校准硬顶（软预算 12 min；0.4.2 双树构建+全 ctest 实测 >20min）
     needs: lint
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0

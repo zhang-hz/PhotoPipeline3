@@ -5648,29 +5648,41 @@ void MainWindow::Impl::smoke_probe_verification() {
         // 两次快照前统一布局收敛：等 follow probe 落地 + 逐页切页激活布局 + 回到原页。
         const auto settle_layout = [this] {
             wait_for([this] { return !meta::ProbeContext(page_meta).follow_pending(); }, 5000);
+            // M14 收口（第三轮去抖）：ASan/高负载下 QSS 重放 + 隐藏页 deferred layout 的
+            // 落地可能跨多轮事件循环 ⇒ 连续 3 轮全页切页 + 逐页 layout()->activate() + 根布局
+            // activate，确保隐藏页几何与当前页一致。判据不变：仍是 Dark→Light 全部 pp-* 逐项等价。
             const int page_before = stack->currentIndex();
-            for (int i = 0; i < stack->count(); ++i) {
-                stack->setCurrentIndex(i);
-                pump(80);
-                if (QWidget *page = stack->widget(i);
-                    page != nullptr && page->layout() != nullptr) {
-                    page->layout()->activate();
+            for (int round = 0; round < 3; ++round) {
+                for (int i = 0; i < stack->count(); ++i) {
+                    stack->setCurrentIndex(i);
+                    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+                    pump(120);
+                    if (QWidget *page = stack->widget(i);
+                        page != nullptr && page->layout() != nullptr) {
+                        page->layout()->activate();
+                    }
                 }
+                stack->setCurrentIndex(page_before);
+                pump(150);
+                if (w->layout() != nullptr) {
+                    w->layout()->activate();
+                }
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+                pump(120);
             }
-            stack->setCurrentIndex(page_before);
-            pump(120);
-            QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
-            w->layout()->activate();
-            pump(80);
         };
         settle_layout();
-        // 0.4.2 收口（第二轮去抖，判据不变）：settle_layout 在极高负载（16 线程 tidy 并发实测）
-        // 下仍可能取到 deferred 布局的中间态（暗/亮快照整页差 30px）⇒ 取「两次连续一致的快照」
-        // 才认为稳定；断言仍是 Dark→Light 全部 pp-* 控件逐项等价，只消除取样时点抖动。
+        // 0.4.2 收口（第二轮去抖，判据不变）：settle_layout 在极高负载（16 线程 tidy / ASan 实测）
+        // 下仍可能取到 deferred 布局的中间态 ⇒ 取「连续 3 次一致」的快照才认为稳定。
         const auto stable_snapshot = [&]() {
             QList<Snap> prev = snapshot();
-            for (int attempt = 0; attempt < 20; ++attempt) {
-                pump(60);
+            int stable_rounds = 0;
+            for (int attempt = 0; attempt < 80; ++attempt) {
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+                pump(80);
+                if (w->layout() != nullptr) {
+                    w->layout()->activate();
+                }
                 const QList<Snap> cur = snapshot();
                 bool same = cur.size() == prev.size();
                 if (same) {
@@ -5683,8 +5695,10 @@ void MainWindow::Impl::smoke_probe_verification() {
                     }
                 }
                 prev = cur;
-                if (same)
+                stable_rounds = same ? stable_rounds + 1 : 0;
+                if (stable_rounds >= 3) {
                     break;
+                }
             }
             return prev;
         };
@@ -13205,8 +13219,12 @@ void MainWindow::Impl::probe_meta_sec_h(const MetaProbeCtx &c, const QString &sh
         page.set_selection(QList<MetaSelectionItem>(), /*from_selection=*/false);
         pump(100);
         int commits = 0;
-        QObject::connect(&page, &PageMeta::selection_edits_committed, &page,
-                         [&commits](const QList<MetaSelectionEdit> &) { ++commits; });
+        // M14 收口（A29）：连接必须**在本 block 结束前断开** —— lambda 捕获栈上局部 `commits` 的
+        // 引用；PageMeta 生命周期远长于本 block，若连接滞留，后续任何 selection_edits_committed
+        // 发射都会写已出作用域的栈变量（Linux 实测 SIGSEGV；MSVC ASan: stack-use-after-scope）。
+        const QMetaObject::Connection commit_conn =
+            QObject::connect(&page, &PageMeta::selection_edits_committed, &page,
+                             [&commits](const QList<MetaSelectionEdit> &) { ++commits; });
         meta::MetaState *st = meta::state_of(&page);
         auto *hours =
             dynamic_cast<meta::DeltaSpin *>(page.findChild<QSpinBox *>(meta::objname::kDeltaHours));
@@ -13227,6 +13245,7 @@ void MainWindow::Impl::probe_meta_sec_h(const MetaProbeCtx &c, const QString &sh
                                   !hours->isEnabled();
         const bool no_items = st != nullptr && st->follow.items.isEmpty();
         const bool no_commit = commits == 0;
+        QObject::disconnect(commit_conn); // A29：先断开再离开作用域（不得留悬垂捕获）
         std::printf("UI-SMOKE meta-no-selection: hint=%s empty-rows=%d controls-off=%d "
                     "items=%d commits=%d\n",
                     qUtf8Printable(hint), empty_rows ? 1 : 0, controls_off ? 1 : 0,

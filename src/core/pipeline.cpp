@@ -70,6 +70,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
+#include <deque>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -258,6 +259,62 @@ private:
     bool stop_ = false;
     std::thread th_;
 };
+
+// ============================================================================================
+// 0.4.2 / C6-②（M14；TSan 9 条 data race 根治）：EventFn 跨线程投递序列化（单线程 drain 队列）
+//   事实（nightly tsan 栈）：run_one_file 内的事件源有 4 类线程 —— ① 文件线程（ctx.stage /
+//   emit_output_done / 评分提交）；② SynthPump 泵线程（20ms → mux.tick → mux 事件回调）；
+//   ③ HeartbeatTicker 心跳线程（mux.heartbeat / probe 段直发）；④ 评分池线程（异步评分完成
+//   事件的 emit 是 scheduler 转发器的值拷贝）。旧 EventFn 契约未声明线程安全面 ⇒ 消费端
+//   （GUI 回调 / 单测 sink）被并发回调 ⇒ `vector<FileEvent>::push_back` 与
+//   `shared_ptr<OutputResult>` 拷贝数据竞争（tsan：progress.cpp emit_seq ↔ 测试回调）。
+//   修法（行为零变化）：run 入口把 on_event 包成本类实例 —— 任意线程 emit 一律先入队，
+//   **同一时刻只有 drainer 一个线程调用回调**（drainer 令牌 + 循环取队首）。调用回调时不持
+//   锁 ⇒ 不会与 ProgressMux 的 emit_mu 形成锁序反转；回调内再次 emit（可重入）走队列尾随，
+//   当前事件序列不受影响。事件不丢、内容不改、同一 run 内严格串行（FIFO）。
+//   跨 run 并发不变（每个 run_one_file 各自一个实例）；跨文件事件仍由 Scheduler EvSink 的
+//   mu 保护（既有设计，不改）。空回调保持为空 = 旧零成本路径逐字不变。
+// ============================================================================================
+class SerialEventSink {
+public:
+    explicit SerialEventSink(std::function<void(const FileEvent &)> fn) : fn_(std::move(fn)) {}
+    SerialEventSink(const SerialEventSink &) = delete;
+    SerialEventSink &operator=(const SerialEventSink &) = delete;
+
+    void emit(const FileEvent &e) {
+        std::unique_lock<std::mutex> lk(mu_);
+        pending_.push_back(e);
+        if (draining_)
+            return; // 已有 drainer 在跑：本事件排在队尾，由它（重新持锁后）消费
+        draining_ = true;
+        for (;;) {
+            if (pending_.empty()) {
+                draining_ = false;
+                return;
+            }
+            FileEvent next = std::move(pending_.front());
+            pending_.pop_front();
+            lk.unlock(); // 调用回调**不持锁**（不与 mux emit_mu 形成锁序反转）
+            fn_(next);
+            lk.lock();
+        }
+    }
+
+private:
+    std::function<void(const FileEvent &)> fn_; // 构造后只读（多线程读安全）
+    std::mutex mu_;
+    std::deque<FileEvent> pending_; // guard = mu_；FIFO 保序
+    bool draining_ = false;         // guard = mu_：同一时刻至多一个 drainer
+};
+
+// run 入口包装：空回调 → 原样返回（零成本路径逐字不变）；非空 → 全部事件经同一个串行 sink。
+std::function<void(const FileEvent &)>
+serialized_event_fn(std::function<void(const FileEvent &)> fn) {
+    if (!fn)
+        return fn;
+    auto sink = std::make_shared<SerialEventSink>(std::move(fn));
+    return [sink](const FileEvent &e) { sink->emit(e); };
+}
 
 double ms_since(const Clock::time_point &t0) {
     return std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
@@ -2466,6 +2523,15 @@ bool stage_encode_loop(RunFileContext &ctx) {
     const int total = static_cast<int>(order.size());
     int parallel =
         ctx.cfg.max_parallel_targets > 0 ? ctx.cfg.max_parallel_targets : std::min(2, total);
+    // —— 0.4.2 需求6（M14；Lead 已批准 RunScope 末尾加性追加）：调度器自适应线程规划 P ——
+    // 规划器给出本文件"同时编码的 target 数"（核心数/编码器能力/CPU 已入规划）；
+    // scope->parallel_outputs == 0 = 旧行为逐字不变（无 scope 的单测路径同样走旧口径）。
+    // 规划值仍受 RunConfig::max_parallel_targets（用户显式上限）与 target 总数夹取。
+    if (ctx.ev.scope != nullptr && ctx.ev.scope->parallel_outputs > 0) {
+        parallel = ctx.ev.scope->parallel_outputs;
+        if (ctx.cfg.max_parallel_targets > 0)
+            parallel = std::min(parallel, ctx.cfg.max_parallel_targets);
+    }
     parallel = std::clamp(parallel, 1, total);
 
     // —— 飞行缓冲（§4.4.3）：并行任务在文件预算之外各占一份 token ——
@@ -2658,6 +2724,9 @@ bool format_supports_metadata_only(std::string_view format_id) {
 // run_one_file（多输出循环，§4）—— B.4 拆解后本体 = 十阶段编排
 // ---------------------------------------------------------------------------
 FileOutcome run_one_file(const FileEntry &fe, const RunConfig &cfg, EventFn ev) {
+    // 0.4.2 / C6-②（M14）：事件投递单线程 drain（跨线程共享可变状态的唯一入口收口；
+    // 空回调路径零成本不变 —— 见上方 SerialEventSink 段注释）。
+    ev.on_event = serialized_event_fn(std::move(ev.on_event));
     RunFileContext ctx(fe, cfg, ev);
     try {
         if (!stage_validate(ctx))
@@ -2693,6 +2762,10 @@ FileOutcome run_one_file(const FileEntry &fe, const RunConfig &cfg, EventFn ev) 
 // ---------------------------------------------------------------------------
 FileOutcome run_metadata_only(const FileEntry &fe, const RunConfig &cfg, EventFn ev) {
     namespace fs = std::filesystem;
+
+    // 0.4.2 / C6-②（M14）：与 run_one_file 同口径的事件串行化（此路径同样有多线程事件源：
+    // mux 事件回调 + 心跳线程 + 消费端直发）。
+    ev.on_event = serialized_event_fn(std::move(ev.on_event));
 
     FileOutcome outcome;
     FileResult &res = outcome.file;

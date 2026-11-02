@@ -7,11 +7,13 @@
 //        + 7 子 builder + gps_wiring + gps_card_intents
 // —— 自 page_meta.cpp 逐字迁出（M7-R2.1-F2；行为零变化）。
 //
-// M13（0.4.1）/ C2 + C5 选择项级改造（ui-gps）：
+// M13（0.4.1）/ C2 + C5 选择项级改造（ui-gps）；M14（0.4.2）/ C2 概念收口：
 //   * 只读生效坐标/卡头胶囊/地图图钉 = 选择项 preview 聚合：uniform 才落钉并显单值，
 //     mixed → 「多个值」+ 逐文件 tooltip（C2.5；不落钉）；
-//   * 规则面（lat/lon/alt/dir/ts）装载归 ui-core 的 load_gps_inputs_from_selection；本 TU 的
-//     refresh_gps_inputs 负责 enable/置灰/清除钮三态/自动海拔旗标（装载后调用）；
+//   * M14/C2：删除「批量 GPS 规则」折叠概念（rule_toggle/rule_host/卡内 gps_enable CheckBox）——
+//     lat/lon/alt/dir/ts 输入 = 当前选中图片的编辑面（多选 = 批量编辑）；装载归 ui-core 的
+//     load_gps_inputs_from_selection（本 TU 的 refresh_gps_inputs 负责 enable/置灰/清除钮三态/
+//     自动海拔旗标）；只读显示 = 一行生效坐标标签（pp-meta-gps-effective，DMS 档/mixed 聚合）；
 //   * 编辑 = commit_field(st, EditField::*)（唯一写路径；不再 build_rules/commit_rule_change）；
 //   * 选点闭环 apply_picked_point = commit_field(GpsLat/GpsEnable) 收口 + C5 自动海拔
 //     （去抖 400ms / 单在途 / 离线门控 / 坐标与选中集合双校验 / 失败只写 alt tooltip）。
@@ -83,16 +85,11 @@ void clear_search_state(MetaState *st) {
 
 // ---------------------------------------------------------------------------
 // M6-T10 坐标基准透明化（§4.5 R4）：显示档（十进制度 ↔ 度分）+ 复制 + 边界精度提示。
-//   显示 ≠ 写入：规则框（gps_lat/gps_lon）恒为十进制度（build_rules 只读规则框）；
-//   本节只重排**只读生效值框**的文本与悬浮提示（DMS 切换不触发 center_on/规则信号）。
+//   显示 ≠ 写入：写入值（gps.lat/gps.lon 输入框）恒为十进制度（M14/C2：输入面即编辑面）；
+//   本节只重排**只读生效坐标标签**的文本与悬浮提示（DMS 切换不触发 center_on/编辑信号）。
 // ---------------------------------------------------------------------------
 
-// 生效坐标框文本（**唯一**排版点）：十进制度（6 位小数 + °）或度分（pp::map::deg_to_dms 单源）
-QString coord_field_text(const MetaState *st, double value, bool is_lat) {
-    return st->gps.dms_mode ? pp::map::deg_to_dms(value, is_lat) : coord_text(value, 6);
-}
-
-// 坐标框悬浮提示：**当前档之外的另一种读数**（十进制 → 度分；度分 → 十进制）+ 边界精度提示
+// 坐标行悬浮提示：**当前档之外的另一种读数**（十进制 → 度分；度分 → 十进制）+ 边界精度提示
 // （粗盒边缘带才提示，§4.5）+ 时间戳（既有信息不丢）
 QString coord_tooltip(const MetaState *st, const pp::GpsData &gps) {
     QString tip = st->gps.dms_mode
@@ -108,35 +105,38 @@ QString coord_tooltip(const MetaState *st, const pp::GpsData &gps) {
     return tip;
 }
 
-// 坐标框重排（**唯一**落笔点）：生效值刷新与 DMS 切换都走这里 → 两种格式同源。
-// 无生效坐标 → 两框清空（与既有空态一致）。
+// 生效坐标单值文本（十进制 ↔ DMS；**纯显示层**，与写入值（输入框十进制）无关）
+QString effective_coord_text(const MetaState *st, const pp::GpsData &gps) {
+    if (st->gps.dms_mode) {
+        return dms_string(gps.lat, gps.lon);
+    }
+    return coord_text(gps.lat, 6) + QStringLiteral(", ") + coord_text(gps.lon, 6);
+}
+
+// 生效坐标标签重排（**唯一**落笔点）：生效值刷新与 DMS 切换都走这里 → 两种格式同源。
+// 无生效坐标 → 清空（与既有空态一致）。
 // M13/C2.5：多选 mixed 时 refresh_gps_section 已落「多个值」文本 + 逐文件 tooltip —— DMS 是
 // 单值显示档，混合态下保持原样（不清空、不重排），等聚合回到 uniform 再由本函数接管。
 void apply_coord_fields(MetaState *st) {
-    const auto set_view = [](QLineEdit *edit, const QString &text) {
-        edit->setText(text);
-        edit->setPlaceholderText(QString()); // 生效值框不承担状态（修 1-33）
-    };
+    ElidedLabel *label = st->gps.effective_label;
+    if (label == nullptr) {
+        return;
+    }
     if (!st->gps.shown_gps.has_value()) {
-        if (st->gps.view_lat->property(hook::kMixedProperty).toBool()) {
+        if (label->property(hook::kMixedProperty).toBool()) {
             return; // mixed：文本/tooltip 由 refresh_gps_section 持有
         }
-        for (QLineEdit *edit : {st->gps.view_lat, st->gps.view_lon}) {
-            set_view(edit, QString());
-            edit->setToolTip(QString());
-        }
+        label->set_full_text(QString());
+        label->setToolTip(QString());
         return;
     }
     const pp::GpsData &gps = *st->gps.shown_gps;
-    set_view(st->gps.view_lat, coord_field_text(st, gps.lat, true));
-    set_view(st->gps.view_lon, coord_field_text(st, gps.lon, false));
-    const QString tip = coord_tooltip(st, gps);
-    st->gps.view_lat->setToolTip(tip);
-    st->gps.view_lon->setToolTip(tip);
+    label->set_full_text(effective_coord_text(st, gps));
+    label->setToolTip(coord_tooltip(st, gps)); // set_full_text 会把 tooltip 设成全文 → 后设覆盖
 }
 
-// 显示档切换（**唯一**入口：坐标行『DMS』切换钮 / 坐标框右键菜单）：只重排坐标框 + 同步
-// 切换钮自身态；不动地图视口 / 胶囊 / 规则（纯显示层，且不改写入值）。
+// 显示档切换（**唯一**入口：坐标行『DMS』切换钮 / 坐标右键菜单）：只重排生效坐标标签 +
+// 同步切换钮自身态；不动地图视口 / 胶囊 / 输入面（纯显示层，且不改写入值）。
 void set_dms_mode(MetaState *st, bool dms) {
     if (st->gps.dms_mode == dms) {
         return;
@@ -150,21 +150,19 @@ void set_dms_mode(MetaState *st, bool dms) {
     apply_coord_fields(st);
 }
 
-// 复制当前格式坐标（**只读显示值**：与坐标框所见逐字一致；不改规则/不写 EXIF）
+// 复制当前格式坐标（**只读显示值**：与生效坐标标签所见同源；不改输入/不写 EXIF）
 void copy_coords(MetaState *st) {
-    // M13/C2.5：多选 mixed 的只读坐标不是单一值 → 明确拒绝复制（不把「多个值」写进剪贴板）
-    if (st->gps.view_lat->property(hook::kMixedProperty).toBool() ||
-        st->gps.view_lon->property(hook::kMixedProperty).toBool()) {
+    // M13/C2.5：多选 mixed 的生效坐标不是单一值 → 明确拒绝复制（不把「多个值」写进剪贴板）
+    if (st->gps.effective_label != nullptr &&
+        st->gps.effective_label->property(hook::kMixedProperty).toBool()) {
         st->gps.gps_status->setText(PageMeta::tr("当前选择包含多个坐标，无法复制"));
         return;
     }
-    const QString lat_text = st->gps.view_lat->text();
-    const QString lon_text = st->gps.view_lon->text();
-    if (lat_text.isEmpty() || lon_text.isEmpty()) {
+    if (!st->gps.shown_gps.has_value()) {
         st->gps.gps_status->setText(PageMeta::tr("当前没有可复制的坐标"));
         return;
     }
-    const QString text = lat_text + QStringLiteral(", ") + lon_text;
+    const QString text = effective_coord_text(st, *st->gps.shown_gps);
     QApplication::clipboard()->setText(text);
     st->gps.gps_status->setText(PageMeta::tr("已复制坐标：%1").arg(text));
 }
@@ -372,23 +370,11 @@ void refresh_gps_section(MetaState *st, const std::vector<pp::EffectivePreview> 
         }
         return aggregate_texts(sel, texts);
     };
-    const TextAggregate lat_agg = aggregate_over([](const std::optional<pp::GpsData> &gps) {
-        return gps.has_value() ? coord_text(gps->lat, 6) : QStringLiteral("—");
-    });
-    const TextAggregate lon_agg = aggregate_over([](const std::optional<pp::GpsData> &gps) {
-        return gps.has_value() ? coord_text(gps->lon, 6) : QStringLiteral("—");
-    });
-    const TextAggregate alt_agg = aggregate_over([](const std::optional<pp::GpsData> &gps) {
-        if (!gps.has_value() || !gps->altitude.has_value()) {
-            return QStringLiteral("—");
-        }
-        return QString::number(*gps->altitude, 'f', 1);
-    });
-    const TextAggregate dir_agg = aggregate_over([](const std::optional<pp::GpsData> &gps) {
-        if (!gps.has_value() || !gps->direction.has_value()) {
-            return QStringLiteral("—");
-        }
-        return coord_text(*gps->direction, 1);
+    // 生效坐标聚合（逐文件「lat, lon」文本；uniform 单值 / mixed「多个值」+ tooltip / 全无值）
+    const TextAggregate coord_agg = aggregate_over([](const std::optional<pp::GpsData> &gps) {
+        return gps.has_value()
+                   ? coord_text(gps->lat, 6) + QStringLiteral(", ") + coord_text(gps->lon, 6)
+                   : QStringLiteral("—");
     });
     // 全选择集同一点 = uniform（pin 判据）；任一文件无坐标 → 非 uniform
     bool uniform_coords = count > 0;
@@ -413,81 +399,47 @@ void refresh_gps_section(MetaState *st, const std::vector<pp::EffectivePreview> 
         uniform_gps = gps_values.front();
     }
     st->gps.shown_gps = uniform_gps; // M6-T10：DMS 切换只重排这一份
-    // 单值/多值渲染（QLineEdit 只读框）：
-    const auto clear_view = [](QLineEdit *edit) {
-        apply_mixed_widget(edit, false, QStringList());
-        edit->setText(QString());
-        edit->setPlaceholderText(QString());
-        edit->setToolTip(QString());
-    };
-    // 行尾 NOLINT：QLineEdit/聚合结果之后的 value_text/value_tip
-    // 顺序由调用点固定（单文本+单提示）。
-    const auto render_view = [&](QLineEdit *edit, const TextAggregate &agg,
-                                 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-                                 const QString &value_text, const QString &value_tip) {
-        if (agg.uniform && agg.value != QStringLiteral("—")) {
-            apply_mixed_widget(edit, false, QStringList());
-            edit->setText(value_text);
-            edit->setPlaceholderText(QString());
-            edit->setToolTip(value_tip);
+    // 生效坐标标签（只读；原 4 个只读 view_* 框合并为一行 —— M14/C2：输入框即写入面）
+    ElidedLabel *label = st->gps.effective_label;
+    const auto clear_label = [label] {
+        if (label == nullptr) {
             return;
         }
-        if (agg.uniform) { // 全部无值（「—」）→ 空态
-            clear_view(edit);
-            return;
-        }
-        edit->setText(mixed_text);
-        edit->setPlaceholderText(QString());
-        apply_mixed_widget(edit, true, agg.labels);
-        edit->setToolTip(aggregate_tooltip(agg));
+        apply_mixed_widget(label, false, QStringList());
+        label->set_full_text(QString());
+        label->setToolTip(QString());
     };
     if (empty) {
-        for (QLineEdit *edit :
-             {st->gps.view_lat, st->gps.view_lon, st->gps.view_alt, st->gps.view_dir}) {
-            clear_view(edit);
+        clear_label();
+        if (label != nullptr) {
+            theme::set_mod(label, false);
         }
-        theme::set_mod(st->gps.view_lat, false);
-        theme::set_mod(st->gps.view_lon, false);
         st->gps.gps_pill->setVisible(false);
         st->gps.map->clear_marker();
         st->gps.last_centered.reset();
         set_hook(st, hook::kGpsEffective, QString());
         return;
     }
-    // 纬度/经度：uniform 单值走 DMS 单源排版；逐字段 mixed 各自显示「多个值」
-    const auto coord_uniform_text = [&](const TextAggregate &agg, bool is_lat) {
-        if (!agg.uniform) {
-            return QString();
+    const bool all_absent = coord_agg.uniform && coord_agg.value == QStringLiteral("—");
+    if (label != nullptr) {
+        if (!coord_agg.uniform) { // 多选异值：明确「多个值」+ 逐文件 tooltip（不拿首个文件冒充）
+            apply_mixed_widget(label, true, coord_agg.labels);
+            label->set_full_text(mixed_text);
+            label->setToolTip(aggregate_tooltip(coord_agg));
+            theme::set_mod(label, false);
+        } else if (all_absent) { // 全部无生效坐标 → 空态
+            clear_label();
+            theme::set_mod(label, false);
+        } else { // uniform 单值：十进制 ↔ DMS 由显示档决定（只显示，不改写入值）
+            apply_mixed_widget(label, false, QStringList());
+            label->set_full_text(uniform_gps.has_value() ? effective_coord_text(st, *uniform_gps)
+                                                         : coord_agg.value);
+            if (uniform_gps.has_value()) {
+                label->setToolTip(coord_tooltip(st, *uniform_gps));
+            }
+            theme::set_mod(label, any_changed);
         }
-        const std::optional<pp::GpsData> &first = gps_values.front();
-        if (!first.has_value()) {
-            return QString();
-        }
-        return coord_field_text(st, is_lat ? first->lat : first->lon, is_lat);
-    };
-    const QString coord_tip = uniform_gps.has_value() ? coord_tooltip(st, *uniform_gps) : QString();
-    render_view(st->gps.view_lat, lat_agg, coord_uniform_text(lat_agg, true), coord_tip);
-    render_view(st->gps.view_lon, lon_agg, coord_uniform_text(lon_agg, false), coord_tip);
-    // 海拔/方位（只读）：uniform → 值；mixed → 「多个值」
-    const auto uniform_component = [&](const TextAggregate &agg, bool altitude) {
-        if (!agg.uniform || agg.value == QStringLiteral("—") || !gps_values.front().has_value()) {
-            return QString();
-        }
-        const pp::GpsData &gps = *gps_values.front();
-        if (altitude) {
-            return gps.altitude.has_value()
-                       ? QStringLiteral("%1 m").arg(QString::number(*gps.altitude, 'f', 1))
-                       : QString();
-        }
-        return gps.direction.has_value() ? coord_text(*gps.direction, 1) : QString();
-    };
-    render_view(st->gps.view_alt, alt_agg, uniform_component(alt_agg, true), QString());
-    render_view(st->gps.view_dir, dir_agg, uniform_component(dir_agg, false), QString());
-    // .mod（A8）：生效坐标与原值不同 → 强调边框+强调色字（mixed 走 ppMixed 视觉）
-    theme::set_mod(st->gps.view_lat,
-                   any_changed && lat_agg.uniform && !st->gps.view_lat->text().isEmpty());
-    theme::set_mod(st->gps.view_lon,
-                   any_changed && lon_agg.uniform && !st->gps.view_lon->text().isEmpty());
+    }
     // D4/C2.5：只显 uniform 生效坐标**单钉**；mixed/无值 → 不画钉、不 center_on
     if (uniform_gps.has_value()) {
         st->gps.map->set_marker(uniform_gps->lat, uniform_gps->lon);
@@ -548,45 +500,47 @@ void refresh_gps_section(MetaState *st, const std::vector<pp::EffectivePreview> 
     st->gps.gps_pill->setVisible(true);
 }
 
-// GPS 规则勾选但坐标非法 → 卡片黄字提示（真警告才用 warn 档令牌；A6：0xcc8800 收口）
+// GPS 卡勾选/编辑但坐标非法 → 卡片黄字提示（真警告才用 warn 档令牌；A6：0xcc8800 收口）
 // M13/C2.4：多选时只改一个坐标框（另一个 mixed/空）→ 不提交纯数据，黄字提示走本通道；
 // 判据 = 卡 active（全开或部分）且非全部清除 且 两框未能同时解析。
 void refresh_gps_warning(MetaState *st) {
     const SelectionSnapshotList sel = selection_snapshots(st);
     const BoolAggregate card = card_active_aggregate(sel, EditField::GpsEnable);
     const BoolAggregate clears = gps_clear_aggregate(sel);
-    const bool rule_on =
+    const bool card_any =
         card.state == Aggregate::Mixed || (card.state == Aggregate::Uniform && card.value);
     const bool all_clear = clears.state == Aggregate::Uniform && clears.value;
     double lat = 0, lon = 0;
     const bool valid =
         parse_coord(st->gps.lat, -90.0, 90.0, lat) && parse_coord(st->gps.lon, -180.0, 180.0, lon);
-    st->gps.gps_warn->setVisible(rule_on && !all_clear && !valid);
+    st->gps.gps_warn->setVisible(card_any && !all_clear && !valid && !st->follow.items.isEmpty());
 }
 
 // M13/C2：选择项级 GPS 编辑面的**装载/置灰唯一落点**（load_inputs_from_selection 最后调用）：
 //   * 卡头开关 = card_active_aggregate 三态（partial 显示；partial 时 checked=false → 点击=全开）；
-//     折叠面 CheckBox 用 Qt 原生三态显示同一状态（两入口同一写路径）；
+//     M14/C2：卡内「启用」CheckBox 已删（卡头开关是唯一入口）；
 //   * 清除 GPS 按钮 = gps_clear_aggregate 三态（全部清除 = checked；部分 = ppMixed 视觉，
 //     点击 = 把选中文件全部置清除；C2.5）；
-//   * 置灰 = 卡全关或全部清除（部分开启也视为可编辑）；placeholder 不覆盖 mixed「多个值」；
+//   * 置灰 = 无选中 / 卡全关 / 全部清除（部分开启也视为可编辑）；placeholder 不覆盖
+//   mixed「多个值」；
 //   * 自动海拔归属校验（C5）：装载后 alt 已不是上次自动值 → elev_auto_filled 失效（不再覆盖）。
 void refresh_gps_inputs(MetaState *st) {
-    if (st->gps.gps_enable_switch == nullptr || st->gps.gps_enable == nullptr) {
+    if (st->gps.gps_enable_switch == nullptr) {
         return;
     }
     const SelectionSnapshotList sel = selection_snapshots(st);
     const BoolAggregate card = card_active_aggregate(sel, EditField::GpsEnable);
     const BoolAggregate clears = gps_clear_aggregate(sel);
+    const bool no_selection = st->follow.items.isEmpty();
     const bool card_on = card.state == Aggregate::Uniform && card.value;
     const bool card_partial = card.state == Aggregate::Mixed;
-    const bool rule_on = card_on || card_partial; // 部分开启也视为可编辑（C2.3）
+    const bool card_any = card_on || card_partial; // 部分开启也视为可编辑（C2.3）
     const bool all_clear = clears.state == Aggregate::Uniform && clears.value;
     const bool some_clear = all_clear || clears.state == Aggregate::Mixed;
     const bool locked = all_clear;
-    const bool editable = rule_on && !locked;
+    const bool editable = card_any && !locked && !no_selection;
     {
-        // 卡头三态开关 + 折叠面 CheckBox = 同一状态的两个入口（UX-5：双向同步，程序化不触发提交）
+        // 卡头三态开关（唯一入口；程序化同步不触发提交）
         LoadingGuard guard(st);
         const QSignalBlocker block_sw(st->gps.gps_enable_switch);
         st->gps.gps_enable_switch->setChecked(card_on);
@@ -595,19 +549,21 @@ void refresh_gps_inputs(MetaState *st) {
         st->gps.gps_enable_switch->setToolTip(card_partial
                                                   ? mixed_tooltip(card.labels, card.omitted)
                                                   : PageMeta::tr(kCardEnableTooltip));
-        const QSignalBlocker block_box(st->gps.gps_enable);
-        st->gps.gps_enable->setTristate(card_partial);
-        st->gps.gps_enable->setCheckState(card_partial ? Qt::PartiallyChecked
-                                                       : (card_on ? Qt::Checked : Qt::Unchecked));
     }
-    st->gps.gps_enable->setEnabled(!locked);
-    st->gps.clear_gps->setEnabled(rule_on || some_clear);
+    st->gps.clear_gps->setEnabled(!no_selection && (card_any || some_clear));
     st->gps.lat->setEnabled(editable);
     st->gps.lon->setEnabled(editable);
     st->gps.alt->setEnabled(editable);
     st->gps.dir->setEnabled(editable);
     st->gps.ts->setEnabled(editable);
     st->gps.more_toggle->setEnabled(editable);
+    // 禁用态收起「更多字段」的可选行（避免灰控件占位；用户展开态在可编辑时保留）
+    if (!editable) {
+        st->gps.more_toggle->setChecked(false);
+        st->gps.altdir_row->setVisible(false);
+        st->gps.ts_row->setVisible(false);
+        set_fold_icon(st, st->gps.more_toggle, false);
+    }
     // placeholder = 输入示例（修 1-33）；禁用时清空；mixed 字段保持「多个值」（C2.3）
     const auto set_placeholder = [editable](QLineEdit *edit, const char *example) {
         edit->setPlaceholderText(edit->property(hook::kMixedProperty).toBool()
@@ -620,23 +576,26 @@ void refresh_gps_inputs(MetaState *st) {
     set_placeholder(st->gps.dir, kDirPlaceholder);
     set_placeholder(st->gps.ts, kTsPlaceholder);
     st->gps.search_edit->setPlaceholderText(locked ? QString() : PageMeta::tr(kSearchPlaceholder));
-    st->gps.search_edit->setEnabled(!locked);
-    st->gps.search_btn->setEnabled(!locked);
-    st->gps.search_results->setEnabled(!locked);
-    st->gps.suggest_list->setEnabled(!locked);
-    st->gps.layer_seg->setEnabled(!locked);
+    st->gps.search_edit->setEnabled(!locked && !no_selection);
+    st->gps.search_btn->setEnabled(!locked && !no_selection);
+    st->gps.search_results->setEnabled(!locked && !no_selection);
+    st->gps.suggest_list->setEnabled(!locked && !no_selection);
+    st->gps.layer_seg->setEnabled(!locked && !no_selection);
     if (st->gps.category_btn != nullptr) {
-        st->gps.category_btn->setEnabled(!locked); // 分类下拉也是搜索入口（与搜索钮同锁）
+        st->gps.category_btn->setEnabled(!locked && !no_selection); // 分类下拉也是搜索入口
     }
     for (QAction *action : st->gps.category_actions) {
-        action->setEnabled(!locked); // 分类下拉也是搜索入口（与搜索钮同锁）
+        action->setEnabled(!locked && !no_selection); // 分类下拉也是搜索入口（与搜索钮同锁）
     }
-    st->gps.provider->setEnabled(!locked);
-    st->gps.read_gps->setEnabled(!locked && st->follow.from_selection && !st->follow.items.empty());
-    st->gps.pick_map->setEnabled(!locked);
-    st->gps.rule_toggle->setText(rule_on ? PageMeta::tr("批量 GPS 规则 · 已启用")
-                                         : PageMeta::tr("批量 GPS 规则"));
-    set_fold_icon(st, st->gps.rule_toggle, st->gps.rule_toggle->isChecked());
+    st->gps.provider->setEnabled(!locked && !no_selection);
+    // 「从文件读取」= 按选中项重新聚合装载（不产生编辑）；无选中无文件可读 → 禁用
+    st->gps.read_gps->setEnabled(!locked && !no_selection);
+    st->gps.pick_map->setEnabled(!locked && !no_selection);
+    if (no_selection) { // M14/C1：无选中 = 空态（不静默回退首个文件）
+        st->gps.gps_status->setText(PageMeta::tr(kNoSelectionText));
+    } else if (st->gps.gps_status->text() == PageMeta::tr(kNoSelectionText)) {
+        st->gps.gps_status->setText(QString());
+    }
     if (locked) {
         st->gps.gps_status->setText(PageMeta::tr("已勾选清除 GPS：输出将不含 GPS"));
     }
@@ -827,7 +786,7 @@ void apply_picked_point(MetaState *st, double lat, double lon, const QString &st
         const QSignalBlocker block_lon(st->gps.lon);
         st->gps.lat->setText(format_6(lat));
         st->gps.lon->setText(format_6(lon));
-        set_gps_rule_enabled(st, true); // UX-5：选点自动勾上（卡头开关与折叠面同一状态）
+        set_gps_rule_enabled(st, true); // 选点即启用本卡（卡头开关唯一入口，见 meta_state.cpp）
         if (st->gps.gps_enable_switch != nullptr) {
             st->gps.gps_enable_switch->set_partial(false);
         }
@@ -865,8 +824,8 @@ void select_result(MetaState *st, int index) {
 
 // ---------------------------------------------------------------------------
 // UX-4（M7-WP7，ux-review-14.md §4 目标版面）：GPS 卡地图 App 化 —— build_gps_card 按
-// 子区拆函数（R-155/E2-B5 的 GPS 段）：coords / ops / search / map / rule 五个子 builder +
-// gps_wiring 统一接线；规则面变更收口 = commit_rule_change。版面要点：
+// 子区拆函数（R-155/E2-B5 的 GPS 段）：edit / elevation / ops / search / map 子 builder +
+// gps_wiring 统一接线；编辑面变更收口 = commit_field（M14/C2：无批量规则概念）。版面要点：
 //   ① 结果框/联想改**地图浮层**（默认隐藏，有结果显示，选中/清空/换源/失焦隐藏）；
 //   ② 分类 chips 行删除 → 搜索框右侧「分类 ▾」下拉（6 类目 action 继承 pp-meta-gps-category-N）；
 //   ③ 图层控件浮到地图左上角（半透明浮层，overlay 令牌）；
@@ -875,30 +834,83 @@ void select_result(MetaState *st, int index) {
 //   ⑤ 地图 136 → 260（stretch 吃满腾出的空间）。
 // ---------------------------------------------------------------------------
 
-// 纬度/经度 + 坐标显示行（WGS-84 标签 / DMS 切换 / 复制）+ 海拔/方位（生效值只读）
-void build_gps_coord_section(MetaState *st, QWidget *body, QVBoxLayout *bv) {
-    // 生效坐标（只读；§5.2「GPS 卡显示生效坐标」）+ 海拔/方位（双列轨，fill）——§7.1 的
-    // 控件集合 = 纬度/经度｜海拔/方位｜地图｜操作（生效时间戳读数进坐标行 tooltip，信息不丢）
-    st->gps.view_lat = make_view_field(body, objname::kPpMetaGpsLat);
-    st->gps.view_lon = make_view_field(body, objname::kPpMetaGpsLon);
-    st->gps.view_alt = make_view_field(body, objname::kPpMetaGpsAlt);
-    st->gps.view_dir = make_view_field(body, objname::kPpMetaGpsDir);
+// 编辑面（纬度/经度 + 「更多字段」折叠：海拔/方位/时间戳）+ 只读生效坐标行
+// （WGS-84 标签 / DMS 显示档 / 复制）。
+// M14（0.4.2）/ C2：原「批量 GPS 规则」折叠面（rule_toggle/rule_host 包着整块编辑面）删除 ——
+// 坐标/海拔/方位/时间戳 = 当前选中图片的编辑面（多选 = 批量编辑），不再是"规则"；
+// 输入框按选中项生效值聚合装载（uniform 值 / mixed「多个值」/ 无选中禁用空态）。
+void build_gps_edit_section(MetaState *st, QWidget *body, QVBoxLayout *bv) {
+    // 纬度/经度（一等公民直显；写入值 = 十进制度，DMS 只作用于下方只读生效标签/复制）
+    st->gps.lat = make_rule_field(body, objname::kGpsLat);
+    st->gps.lat->setPlaceholderText(PageMeta::tr(kLatPlaceholder));
+    st->gps.lat->setValidator(new QDoubleValidator(-90.0, 90.0, 6, st->gps.lat));
+    st->gps.lon = make_rule_field(body, objname::kGpsLon);
+    st->gps.lon->setPlaceholderText(PageMeta::tr(kLonPlaceholder));
+    st->gps.lon->setValidator(new QDoubleValidator(-180.0, 180.0, 6, st->gps.lon));
     {
         formkit::FieldCell l;
         formkit::FieldCell r;
         l.label = PageMeta::tr("纬度");
         r.label = PageMeta::tr("经度");
-        l.field = st->gps.view_lat;
-        r.field = st->gps.view_lon;
+        l.field = st->gps.lat;
+        r.field = st->gps.lon;
         l.width = FieldWidth::Flex;
         r.width = FieldWidth::Flex;
+        l.unit = QStringLiteral("°");
+        r.unit = QStringLiteral("°");
         const formkit::DoubleRow row = formkit::double_row(body, l, r);
         row.row->setObjectName(objname::kGpsCoordRow);
         bv->addWidget(row.row);
     }
-    // 坐标显示行（M6-T10/§4.5 R4，紧贴经纬度行）：[ⓘ WGS-84（标准 GPS）] ……[DMS][复制]
+    // 「更多字段」折叠行（可选分量：海拔/方位/时间戳；默认收起，与旧折叠面同语义）
+    st->gps.more_toggle = new QToolButton(body);
+    st->gps.more_toggle->setObjectName(objname::kGpsMoreToggle);
+    st->gps.more_toggle->setProperty(kFieldProperty, fieldprop::kFold);
+    st->gps.more_toggle->setText(PageMeta::tr("更多字段"));
+    st->gps.more_toggle->setCheckable(true);
+    st->gps.more_toggle->setChecked(false);
+    st->gps.more_toggle->setAutoRaise(true);
+    st->gps.more_toggle->setFixedHeight(theme::Metrics::btn_h);
+    st->gps.more_toggle->setFont(theme::font(theme::Typography::body_px, 600));
+    {
+        auto *more_row = new QHBoxLayout();
+        more_row->setContentsMargins(0, 0, 0, 0);
+        more_row->addWidget(st->gps.more_toggle, 0, Qt::AlignLeading);
+        more_row->addStretch(1);
+        bv->addLayout(more_row);
+    }
+    const auto make_grid_pair = [&](const QString &label_a, QLineEdit *edit_a,
+                                    const QString &unit_a, const QString &label_b,
+                                    QLineEdit *edit_b, const QString &unit_b) {
+        formkit::FieldCell l;
+        formkit::FieldCell r;
+        l.label = label_a;
+        l.field = edit_a;
+        l.width = FieldWidth::Flex;
+        l.unit = unit_a;
+        r.label = label_b;
+        r.field = edit_b;
+        r.width = FieldWidth::Flex;
+        r.unit = unit_b;
+        return formkit::double_row(body, l, r).row;
+    };
+    st->gps.alt = make_rule_field(body, objname::kGpsAlt);
+    st->gps.alt->setPlaceholderText(PageMeta::tr(kAltPlaceholder));
+    st->gps.dir = make_rule_field(body, objname::kGpsDir);
+    st->gps.dir->setPlaceholderText(PageMeta::tr(kDirPlaceholder));
+    st->gps.ts = make_rule_field(body, objname::kGpsTs);
+    st->gps.ts->setPlaceholderText(PageMeta::tr(kTsPlaceholder));
+    st->gps.altdir_row = make_grid_pair(PageMeta::tr("海拔"), st->gps.alt, QStringLiteral("m"),
+                                        PageMeta::tr("方位"), st->gps.dir, QStringLiteral("°"));
+    st->gps.ts_row = formkit::frow(body, PageMeta::tr("时间戳"), st->gps.ts, FieldWidth::Flex).row;
+    bv->addWidget(st->gps.altdir_row);
+    bv->addWidget(st->gps.ts_row);
+    for (QWidget *hidden : {st->gps.altdir_row, st->gps.ts_row}) {
+        hidden->setVisible(false);
+    }
+    // 只读生效坐标行（M6-T10/§4.5 R4）：[ⓘ WGS-84（标准 GPS）] [生效 lat, lon] ……[DMS][复制]
     //   —— 基准面标签（tooltip 说明火星偏移已抵消）+ 显示档切换 + 复制；**只显示/只复制**，
-    //   写入值一律十进制度（规则框在下方折叠面里，与本行无关）。
+    //   写入值一律十进制度（上方输入框）。
     {
         TrackGroup group = make_group(body);
         st->gps.datum_icon = new QLabel(group.widget());
@@ -913,7 +925,14 @@ void build_gps_coord_section(MetaState *st, QWidget *body, QVBoxLayout *bv) {
         st->gps.datum_label->setFont(theme::font(theme::Typography::hint_px, QFont::Normal));
         st->gps.datum_label->setToolTip(PageMeta::tr(kDatumTooltipText));
         group.add(st->gps.datum_label);
-        group.stretch();
+        group.gap(formkit::kInlineGap);
+        st->gps.effective_label = new ElidedLabel(group.widget());
+        st->gps.effective_label->setObjectName(objname::kGpsEffectiveText);
+        st->gps.effective_label->setProperty(kFieldProperty, fieldprop::kSub);
+        st->gps.effective_label->setFont(
+            theme::font(theme::Typography::hint_px, QFont::Normal, /*tabular=*/true));
+        group.add(st->gps.effective_label, 1);
+        group.gap(theme::Metrics::group_gap);
         st->gps.dms_toggle = make_chip(group.widget(), objname::kGpsDms, PageMeta::tr("DMS"));
         st->gps.dms_toggle->setToolTip(PageMeta::tr(kDmsToggleTooltipText));
         group.add(st->gps.dms_toggle);
@@ -925,19 +944,6 @@ void build_gps_coord_section(MetaState *st, QWidget *body, QVBoxLayout *bv) {
             formkit::frow(body, PageMeta::tr("坐标"), group.widget(), FieldWidth::Flex);
         row.row->setObjectName(objname::kGpsDatumRow);
         st->gps.datum_row = row.row; // M6-T12：光标坐标读数的 tooltip 面（见 cursor_moved 接线）
-        bv->addWidget(row.row);
-    }
-    {
-        formkit::FieldCell l;
-        formkit::FieldCell r;
-        l.label = PageMeta::tr("海拔");
-        r.label = PageMeta::tr("方位");
-        l.field = st->gps.view_alt;
-        r.field = st->gps.view_dir;
-        l.width = FieldWidth::Flex;
-        r.width = FieldWidth::Flex;
-        const formkit::DoubleRow row = formkit::double_row(body, l, r);
-        row.row->setObjectName(objname::kGpsAltdirRow);
         bv->addWidget(row.row);
     }
 }
@@ -1188,94 +1194,7 @@ void build_gps_map_section(MetaState *st, QWidget *body, QVBoxLayout *bv) {
     bv->addWidget(group.widget(), 1);
 }
 
-// 批量 GPS 规则折叠面（修 1-37：纯折叠行，默认折叠；内为规则编辑面）
-void build_gps_rule_section(MetaState *st, QWidget *card, QVBoxLayout *v) {
-    st->gps.rule_toggle = new QToolButton(card);
-    st->gps.rule_toggle->setObjectName(objname::kGpsRuleToggle);
-    st->gps.rule_toggle->setProperty(kFieldProperty, fieldprop::kFold);
-    st->gps.rule_toggle->setText(PageMeta::tr("批量 GPS 规则"));
-    st->gps.rule_toggle->setCheckable(true);
-    st->gps.rule_toggle->setChecked(false);
-    st->gps.rule_toggle->setAutoRaise(true);
-    st->gps.rule_toggle->setFixedHeight(theme::Metrics::btn_h);
-    st->gps.rule_toggle->setFont(theme::font(theme::Typography::body_px, 600));
-    {
-        auto *toggle_row = new QHBoxLayout();
-        toggle_row->setContentsMargins(theme::Metrics::card_pad_x, 0, theme::Metrics::card_pad_x,
-                                       6);
-        toggle_row->addWidget(st->gps.rule_toggle, 0, Qt::AlignLeading);
-        toggle_row->addStretch(1);
-        v->addLayout(toggle_row);
-    }
-
-    // 规则编辑面（折叠内容）：启用（表单布尔）+ 纬度/经度 + 可选字段（海拔/方位/时间戳）
-    st->gps.rule_host = new QWidget(card);
-    st->gps.rule_host->setObjectName(objname::kGpsRule);
-    auto *rule_body = st->gps.rule_host;
-    auto *rule_v = new QVBoxLayout(rule_body);
-    rule_v->setContentsMargins(theme::Metrics::card_pad_x, 0, theme::Metrics::card_pad_x, 10);
-    rule_v->setSpacing(0);
-    {
-        const formkit::CheckRow enable =
-            formkit::check_row(rule_body, QString(), PageMeta::tr("启用"), objname::kGpsEnable);
-        st->gps.gps_enable = enable.box;
-        rule_v->addWidget(enable.row);
-    }
-    const auto make_rule_grid_pair = [&](const QString &label_a, QLineEdit *edit_a,
-                                         const QString &unit_a, const QString &label_b,
-                                         QLineEdit *edit_b, const QString &unit_b) {
-        formkit::FieldCell l;
-        formkit::FieldCell r;
-        l.label = label_a;
-        l.field = edit_a;
-        l.width = FieldWidth::Flex;
-        l.unit = unit_a;
-        r.label = label_b;
-        r.field = edit_b;
-        r.width = FieldWidth::Flex;
-        r.unit = unit_b;
-        return formkit::double_row(rule_body, l, r).row;
-    };
-    st->gps.lat = make_rule_field(rule_body, objname::kGpsLat);
-    st->gps.lat->setValidator(new QDoubleValidator(-90.0, 90.0, 6, st->gps.lat));
-    st->gps.lon = make_rule_field(rule_body, objname::kGpsLon);
-    st->gps.lon->setValidator(new QDoubleValidator(-180.0, 180.0, 6, st->gps.lon));
-    rule_v->addWidget(make_rule_grid_pair(PageMeta::tr("纬度"), st->gps.lat, QStringLiteral("°"),
-                                          PageMeta::tr("经度"), st->gps.lon, QStringLiteral("°")));
-    st->gps.more_toggle = new QToolButton(rule_body);
-    st->gps.more_toggle->setObjectName(objname::kGpsMoreToggle);
-    st->gps.more_toggle->setProperty(kFieldProperty, fieldprop::kFold);
-    st->gps.more_toggle->setText(PageMeta::tr("更多字段"));
-    st->gps.more_toggle->setCheckable(true);
-    st->gps.more_toggle->setChecked(false);
-    st->gps.more_toggle->setAutoRaise(true);
-    st->gps.more_toggle->setFixedHeight(theme::Metrics::btn_h);
-    st->gps.more_toggle->setFont(theme::font(theme::Typography::body_px, 600));
-    {
-        auto *more_row = new QHBoxLayout();
-        more_row->setContentsMargins(0, 0, 0, 0);
-        more_row->addWidget(st->gps.more_toggle, 0, Qt::AlignLeading);
-        more_row->addStretch(1);
-        rule_v->addLayout(more_row);
-    }
-    st->gps.alt = make_rule_field(rule_body, objname::kGpsAlt);
-    st->gps.dir = make_rule_field(rule_body, objname::kGpsDir);
-    st->gps.ts = make_rule_field(rule_body, objname::kGpsTs);
-    st->gps.rule_altdir_row =
-        make_rule_grid_pair(PageMeta::tr("海拔"), st->gps.alt, QStringLiteral("m"),
-                            PageMeta::tr("方位"), st->gps.dir, QStringLiteral("°"));
-    st->gps.rule_ts_row =
-        formkit::frow(rule_body, PageMeta::tr("时间戳"), st->gps.ts, FieldWidth::Flex).row;
-    rule_v->addWidget(st->gps.rule_altdir_row);
-    rule_v->addWidget(st->gps.rule_ts_row);
-    for (QWidget *hidden : {st->gps.rule_altdir_row, st->gps.rule_ts_row}) {
-        hidden->setVisible(false);
-    }
-    st->gps.rule_host->setVisible(false);
-    v->addWidget(st->gps.rule_host);
-}
-
-// 统一接线（UX-4⑥ gps_wiring）：全部信号链一处收口；规则面变更走 commit_rule_change。
+// 统一接线（UX-4⑥ gps_wiring）：全部信号链一处收口；编辑面变更走 commit_field。
 void gps_wiring(MetaState *st) {
     // 换源（UX-4①/R-045）：清旧钉/旧结果/联想走 clear_search_state 唯一清理面
     QObject::connect(st->gps.provider, QOverload<int>::of(&QComboBox::currentIndexChanged), st,
@@ -1287,7 +1206,7 @@ void gps_wiring(MetaState *st) {
                          refresh_layer_hint(st); // 换源 → 图层支持性提示随之更新（§5.2）
                          clear_search_state(st); // R-045：换源清理（卡片下拉/设置对话框同一函数）
                      });
-    // M13/C2.4：规则框逐字段提交（只覆盖被编辑字段；经纬度两值都解析成功才落点）。
+    // M13/C2.4：编辑面逐字段提交（只覆盖被编辑字段；经纬度两值都解析成功才落点）。
     // commit_field 内部只刷生效值/聚合、不 reload 控件（避免打字光标重置）→ 这里再显式重铺
     // 本卡三态视觉（enable/partial/placeholder，不改文本）。
     const auto after_gps_commit = [st] {
@@ -1324,24 +1243,20 @@ void gps_wiring(MetaState *st) {
     QObject::connect(
         st->gps.ts, &QLineEdit::textChanged, st,
         [on_gps_text_edited](const QString &) { on_gps_text_edited(EditField::GpsTs); });
-    // UX-5：卡头开关与折叠面 gps_enable = 同一状态的两个入口；M13 = commit_field(GpsEnable)
-    // （true → 只置 enable；false → 清除该卡全部字段 + enabled=false，C2.4）
+    // M14/C2：卡头「启用」开关是唯一入口（原折叠面 CheckBox 已删）：
+    // true → 只置 enable（不凭空写值）；false → 清除该卡全部字段 + enabled=false（C2.4）
     const auto on_gps_enable_toggled = [st, after_gps_commit](bool on) {
         if (st->core.loading) {
             return;
         }
         {
-            const QSignalBlocker block_box(st->gps.gps_enable);
             const QSignalBlocker block_sw(st->gps.gps_enable_switch);
-            st->gps.gps_enable->setTristate(false);
-            st->gps.gps_enable->setChecked(on);
             st->gps.gps_enable_switch->setChecked(on);
             st->gps.gps_enable_switch->set_partial(false);
         }
         commit_field(st, EditField::GpsEnable);
         after_gps_commit();
     };
-    QObject::connect(st->gps.gps_enable, &formkit::CheckBox::toggled, st, on_gps_enable_toggled);
     QObject::connect(st->gps.gps_enable_switch, &formkit::SwitchControl::toggled, st,
                      on_gps_enable_toggled);
     // 清除 GPS（C2.5 三态）：点击 = 把选中文件全部置清除 / 全部恢复（checked 态由装载重铺）
@@ -1354,12 +1269,8 @@ void gps_wiring(MetaState *st) {
     });
     QObject::connect(st->gps.more_toggle, &QToolButton::toggled, st, [st](bool on) {
         set_fold_icon(st, st->gps.more_toggle, on); // 插入符 = 矢量图标（C3）
-        st->gps.rule_altdir_row->setVisible(on);
-        st->gps.rule_ts_row->setVisible(on);
-    });
-    QObject::connect(st->gps.rule_toggle, &QToolButton::toggled, st, [st](bool on) {
-        st->gps.rule_host->setVisible(on);
-        set_fold_icon(st, st->gps.rule_toggle, on);
+        st->gps.altdir_row->setVisible(on);
+        st->gps.ts_row->setVisible(on);
     });
 
     // —— M13/C5：自动海拔（去抖定时器 + 客户端回调注册；客户端构造归 page_meta.cpp）——
@@ -1573,22 +1484,23 @@ void gps_wiring(MetaState *st) {
     // 双接会把状态行刷两遍）—— 登记不接理由于 handoff。
     QObject::connect(st->gps.map, &pp::map::MapWidget::tiles_pending_changed, st,
                      [st](int pending) { st->overlay.map_loading->setVisible(pending > 0); });
-    // M6-T10（§4.5 R4）：显示档切换钮 + 复制链 + 坐标框右键菜单 —— 三条入口同一收口
-    // （set_dms_mode / copy_coords）；右键菜单同时承担"复制"（只读框的默认菜单不可用）
+    // M6-T10（§4.5 R4）：显示档切换钮 + 复制链 + 生效坐标标签右键菜单 —— 三条入口同一收口
+    // （set_dms_mode / copy_coords）
     QObject::connect(st->gps.dms_toggle, &QAbstractButton::toggled, st,
                      [st](bool on) { set_dms_mode(st, on); });
     QObject::connect(st->gps.copy_coords, &QToolButton::clicked, st, [st] { copy_coords(st); });
-    for (QLineEdit *edit : {st->gps.view_lat, st->gps.view_lon}) {
-        edit->setContextMenuPolicy(Qt::CustomContextMenu);
-        QObject::connect(edit, &QLineEdit::customContextMenuRequested, st,
-                         [st, edit](const QPoint &pos) {
-                             QMenu menu(edit);
+    if (st->gps.effective_label != nullptr) {
+        st->gps.effective_label->setContextMenuPolicy(Qt::CustomContextMenu);
+        QObject::connect(st->gps.effective_label, &QWidget::customContextMenuRequested, st,
+                         [st](const QPoint &pos) {
+                             QMenu menu(st->gps.effective_label);
                              contextmenu::style_menu(&menu);
                              QAction *copy = menu.addAction(PageMeta::tr("复制坐标"));
                              QAction *dms = menu.addAction(PageMeta::tr("度分显示（DMS）"));
                              dms->setCheckable(true);
                              dms->setChecked(st->gps.dms_mode);
-                             const QAction *chosen = menu.exec(edit->mapToGlobal(pos));
+                             const QAction *chosen =
+                                 menu.exec(st->gps.effective_label->mapToGlobal(pos));
                              if (chosen == copy) {
                                  copy_coords(st);
                              } else if (chosen == dms) {
@@ -1650,7 +1562,7 @@ QWidget *build_gps_card(MetaState *st, QWidget *parent) {
     st->gps.gps_warn->setVisible(false);
     v->addWidget(st->gps.gps_warn);
 
-    build_gps_coord_section(st, body, bv);
+    build_gps_edit_section(st, body, bv);      // M14/C2：编辑面 = 卡片一等公民（无规则折叠包装）
     build_gps_elevation_section(st, body, bv); // M13/C5：自动获取海拔开关（默认开）
     set_hook(st, hook::kAutoElevation, true);  // 自验钩子读数 = 开关初态（C5）
     // UX-4④：地址行（pp-meta-gps-address-row）删除 —— 但 pp-meta-gps-address 与
@@ -1676,7 +1588,6 @@ QWidget *build_gps_card(MetaState *st, QWidget *parent) {
                                            theme::Metrics::card_pad_x, 4);
     v->addWidget(st->gps.gps_status);
 
-    build_gps_rule_section(st, card, v);
     gps_wiring(st);
     return card;
 }

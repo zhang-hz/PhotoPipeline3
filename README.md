@@ -39,7 +39,25 @@ caption 单轨 46×32；壳层顶栏 44 + 状态栏 30；**栏宽固定轴 330 /
 逐条探针、偏差与未决项见 [docs/m5-report.md](docs/m5-report.md)，开发期裁定见
 [docs/m5-adjudications.md](docs/m5-adjudications.md)。
 
-**0.4.1（当前版本，正式版）= M13 用户 4 条需求**：① **元数据页选择项级编辑** —— 右侧每项修改默认只作用于
+**0.4.2（当前版本，正式版）= M14 用户 8 条需求 + 真实债清零 + 目录清理**：① **元数据页逻辑重梳** ——
+右侧修改严格只作用于**行选中**图片（单选=仅该张、多选=全部选中）；**无选中 = 空态 + 控件禁用 + 零写入**
+（删除 0.4.1「无选中回退首个文件」错误路径）；多选右侧信息逐字段聚合：同值显示值、异值 **「多个值」** +
+逐文件 tooltip（关键信息卡用每张照片实际元数据 probe，>8 张不再假 mixed）；过滤/分组隐藏选中项不再误写；
+② **「批量 GPS 规则」概念退役**（GPS 坐标/海拔/方位/时间戳 = 选中图片编辑面，多选即批量）；③ **大预设重设计** ——
+`outputs[i].source_preset` 加性来源注记、格式行来源显式化（不再假装高亮 default）、保存落点修复（写绑定
+绝对路径）、dirty 指示、中文预设名、导入/导出、rules 覆盖确认；④ **元数据详细编辑器深查**（OK 返回与旧
+override 合并零丢失；删除旧批量规则三态与「〔批〕」概念）；⑤ **预览窗格真实色彩管理** —— 显示 profile 获取
+（Windows `GetICMProfile`）+ lcms2 变换到显示色域，宽色域源不再发灰（P3 编码红 (234,51,35) → 显示
+(255,0,0)，中性灰不变）；⑥ **调度并行自适应** —— 新 `core/thread_plan` 按编码器特性 + CPU 实时利用率 EMA
+动态决定 E（每文件编码线程）与 P（同文件多输出并行），深队列保守、浅队列放大、饱和收敛、迟滞防抖；
+⑦ **真实债清零** —— hwy dispatch ODR 链接期 UB 根治（`pp_ssim2_hwy` 私有化 + bridge 转发，SSIMULACRA2
+**逐位零漂移**）、ProgressMux/FileEvent 数据竞争根治（单线程 drain 队列）、地图 EventFilter UAF 修复、
+MSVC ASan 纳入本机门禁；⑧ **目录清理** —— 清空 50.6GB `build/` 等生成垃圾，产品/脚本零预置构建树依赖。
+版本单源 = `CMakeLists.txt`，`--version` = **`PhotoPipeline 0.4.2`**；契约 / 裁定 / 报告见
+[docs/m14-tasks.md](docs/m14-tasks.md) / [docs/m14-adjudications.md](docs/m14-adjudications.md) /
+[docs/0.4.2-report.md](docs/0.4.2-report.md)。
+
+**0.4.1（历史正式版）= M13 用户 4 条需求**：① **元数据页选择项级编辑** —— 右侧每项修改默认只作用于
 **当前选中文件**（每文件独立 `MetadataOverride`）；多选 = 批量生效（字段级合并互不串扰）；多选值不一致时各面
 明确显示 **「多个值」**（Δ spin / 时间与 GPS 输入 / 关键信息卡 / GPS 生效坐标 / 开关三态）；允许部分文件不开启
 某类修改（三态开关 + 逐文件 override）；预设载入 = 应用到选中文件；「例外」语义 = 带元数据修改的文件。
@@ -163,7 +181,7 @@ R2 轮方案见 [docs/m7r2-plan.md](docs/m7r2-plan.md)。**色彩能力四选项
 渲染意图 / 线性光重采样）已入引擎并在界面提供开关**——**输出页全局卡**四行（默认全关 =
 行为不变；0.3.x 默认路径另有两处已归因字节变化，见 CHANGELOG「变更」节）；8bit 抖动仅作用
 于 JPEG/WebP/JXL 及 OIIO 系四家的 8bit 量化段（HEIF/AVIF 的 8bit 路径不接）。**发行状态：0.3.3 已发布**（2026-10-13；其 Windows zip 有启动 P0，已由 0.3.4 热修，
-请使用 0.3.4 或更新版本；当前最新正式版 = 0.4.1 正式版（本树））。
+请使用 0.3.4 或更新版本；当前最新正式版 = 0.4.2 正式版（本树））。
 
 **0.3.2 = GPS 地图升级版（M6）**：把「内嵌地图选点」从能用升级到**地图 App 水平**——
 R1 搜索搜得出（改用可达的**高德 Web 服务**事实表：`place/text` + 周边偏置 **`around` 20 条**按距离升序 +
@@ -611,6 +629,34 @@ python tools/env.py run -- cmake --build --preset release
 - **CI 流程优化**：脚本判据/缓存/预算修复，目标 main-full + nightly + release 全绿（逐 job 读数见
   [docs/0.4.0-report.md](docs/0.4.0-report.md) §2.5）。
 
+### M14 元数据作用域/大预设/预览色彩/调度自适应/真实债清零（0.4.2 正式版）
+
+- **元数据页作用域与聚合（需求 1/2）**：编辑作用域 = 行选中集合（勾选 = 参与运行，页面显式提示
+  「修改仅作用于选中的 N 个文件」）；无选中 = 空态，控件禁用/隐藏，任何路径**零写入**；文件列表空→非空
+  自动选中首行。多选逐字段聚合（一致=值；不一致=「多个值」+ 逐文件 tooltip）；>8 张不再因 probe 截断
+  假 mixed；过滤/分组隐藏选中项时不再对隐藏文件生效。**「批量 GPS 规则」折叠面删除**（GPS 坐标输入即
+  选中图片编辑面；生效坐标合并为一行只读值）。
+- **大预设重设计（需求 3）**：大预设 `outputs[i]` 加性 `source_preset`（来源格式预设名；空不写 ⇒ 旧文件
+  零字节变化）；载入后格式行显示真实来源（占位「来自大预设：<名>」+ 注记「基于格式预设 X / 自定义参数」，
+  保存/删除禁用、另存可用、重选恢复绑定）；保存写绑定绝对路径；外部删除解绑；dirty「（已修改）」；
+  中文预设名 + 导入/导出 + 坏文件原因；无选中载入含元数据修改预设只应用输出配置并注记。
+- **元数据详细编辑器（需求 4）**：OK 返回与旧 `MetadataOverride` 合并零丢失（六 enable 与不表达字段不丢）；
+  删除「忽略全部批量规则 / 继承批量规则 / 〔批〕」旧概念；三态改「不修改 / 设置为 / 清除」；无选中/文件
+  不在列表显式反馈；行映射沿 R-152 收口链。
+- **预览色彩管理（需求 5）**：新增 `src/core/display_profile.*`（Windows 系统 ICC / 其它回退 sRGB）+
+  lcms2 相对比色+BPC 变换到显示 profile；缩略图同根因修复；离屏/CI 强制 sRGB 保冻结截图集；真实桌面
+  A/B 实测：P3 编码红 (234,51,35) 修复前 (234,51,35) → 修复后 **(255,0,0)**，中灰 128 不变。
+- **调度并行自适应（需求 6）**：`src/core/thread_plan.*` 规划器 = 编码器能力表（jxl/avif 可扩展、webp 上限 2、
+  heif/x265 与 jpegli/OIIO 计 1）× CPU 利用率 EMA（Windows GetSystemTimes / Linux /proc/stat）× 队列深度
+  → E（每文件编码线程）与 P（同文件多输出并行）；冻结 `alloc_threads` W 公式不变；深队列 E=P=1、浅队列按
+  线程预算放大、CPU 饱和收敛、迟滞防抖；`RunScope.parallel_outputs` 末尾加性；规划轨迹走 debug 日志
+  （info 级回归基线零变化）。
+- **真实债清零 + CI（需求 7）**：hwy ODR 根治（私有化 + bridge；oracle 10 条逐位零漂移、我方 TU 的
+  `hwy::` 定义符号 178→0）；ProgressMux/FileEvent 竞争根治（EventFn 单线程 drain，不持锁回调、事件不丢不改序）；
+  地图 EventFilter UAF 修复；ASan 本机门禁 scoping；CI main-full 关键路径压缩（判据零放宽）。
+- **目录清理（需求 8）**：清空 `build/`（50.6GB）+ `dist/`/`.cache/`/`.pp_test_tmp/`/`debug/*/`；构建树现场
+  生成；工具脚本对已清空的一次性证据路径缺失容忍。
+
 ### M13 元数据选择项级编辑 / 去 CreatorTool / DateCreated / 选点海拔（0.4.1 正式版）
 
 - **元数据页改为「选择项作用域编辑器」**：右侧每项修改默认只作用于**当前选中文件**（每文件独立
@@ -729,7 +775,7 @@ chmod +x PhotoPipeline-<版本>-x86_64.AppImage
 
 ## 发行版（Windows）
 
-**M3 起提供 Windows x64 免安装产物**（0.2.0 为首个 Windows 版本，当前版本 0.4.1）；与 Linux 的 AppImage 同一引擎
+**M3 起提供 Windows x64 免安装产物**（0.2.0 为首个 Windows 版本，当前版本 0.4.2）；与 Linux 的 AppImage 同一引擎
 与界面，差异只在打包形态（zip vs AppImage）与平台运行时（MSVC 运行时 / Qt msvc2022_64）。
 
 ### 下载与运行
@@ -769,7 +815,7 @@ chmod +x PhotoPipeline-<版本>-x86_64.AppImage
 ### 命令行
 
 ```powershell
-.\photopipeline.exe --version      # → PhotoPipeline 0.4.1（单行 + 退出码 0；非 dev 门控，发布构建亦可用）
+.\photopipeline.exe --version      # → PhotoPipeline 0.4.2（单行 + 退出码 0；非 dev 门控，发布构建亦可用）
 .\photopipeline.exe                # 图形界面
 .\photopipeline.exe --ui-smoke     # 无头 UI 走查（offscreen，产出 12 张截图；仅 PP_BUILD_DEV=ON 的构建）
 .\photopipeline.exe --dev ...      # 开发 harness：全语料矩阵 / 回归基线入口（同上，仅 dev 构建）

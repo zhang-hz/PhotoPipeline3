@@ -27,6 +27,7 @@
 #include <QFileInfo>
 #include <QFontMetrics>
 #include <QFrame>
+#include <QGuiApplication> // 0.4.2 需求5：显示 profile 获取 + 平台判定（offscreen 回退 sRGB）
 #include <QHBoxLayout>
 #include <QImage>
 #include <QKeyEvent>
@@ -65,10 +66,11 @@
 #include <utility>
 #include <vector>
 
-#include "core/logger.h" // R-278：出图诊断走 logger（原 std::printf 绕过日志面）
-#include "ui/formkit.h"  // A17/T11：打标 chip = formkit::ChipButton（§6.1 批量快捷打标唯一形态）
-#include "ui/icons.h"    // M5-T3：翻图钮/缩放 chip 的图标一律矢量绘制（C3）
-#include "ui/theme.h"    // 只在实现里引（头文件前置声明 theme::Tokens 的原因见 preview_panel.h）
+#include "core/display_profile.h" // 0.4.2 需求5：显示面色彩管理（真实色彩，需求5）
+#include "core/logger.h"          // R-278：出图诊断走 logger（原 std::printf 绕过日志面）
+#include "ui/formkit.h" // A17/T11：打标 chip = formkit::ChipButton（§6.1 批量快捷打标唯一形态）
+#include "ui/icons.h"   // M5-T3：翻图钮/缩放 chip 的图标一律矢量绘制（C3）
+#include "ui/theme.h"   // 只在实现里引（头文件前置声明 theme::Tokens 的原因见 preview_panel.h）
 
 namespace pp::ui {
 namespace {
@@ -764,6 +766,14 @@ struct PreviewPanel::Impl {
     Pool *pool = nullptr;
     Router *router = nullptr;
 
+    // —— 0.4.2 需求 5（Contract: docs/m14-tasks.md C4）：显示面色彩管理 ——
+    // 显示 profile 在面板构造时获取一次（Win = 主显示器 ICC；offscreen/失败 = sRGB 回退），
+    // 注入 PreviewCache：未命中解码后把源像素变换到显示 profile 再入缓存（worker 线程内完成，
+    // 不与转码抢核：预览池 ≤2 线程）。屏幕增删/主屏变更 → invalidate + 重新注入（清缓存）。
+    // 取证开关 PP_PREVIEW_CM=0（诊断用；正常运行不设置）：跳过注入 = 修复前行为（A/B 截图）。
+    pp::DisplayProfile display_profile_;
+    QList<QMetaObject::Connection> screen_connections;
+
     explicit Impl(PreviewPanel *owner);
     ~Impl();
 
@@ -772,6 +782,7 @@ struct PreviewPanel::Impl {
     void rebuild_key_hints();
     void select(int index, bool force);
     void start_load(const QString &path);
+    void refresh_display_profile(); // 0.4.2 需求5：获取/失效显示 profile 并注入缓存
     void update_bar();
     void update_keyhint_enabled(); // 修 1-22：chip 与翻图钮同档禁用（空态/只读）
     void on_loaded(int index, std::chrono::steady_clock::time_point request_time,
@@ -851,6 +862,18 @@ void PreviewPanel::Impl::Pool::worker_loop(std::stop_token st) {
 PreviewPanel::Impl::Impl(PreviewPanel *owner) : q(owner) {
     tokens = theme::tokens(theme::system_theme_mode());
     cache = std::make_unique<pp::PreviewCache>(); // §6.1：LRU 16 张 / 2048px
+    refresh_display_profile();                    // 0.4.2 需求5：先注入显示 profile 再起 worker
+    // 屏幕增删/主屏变更 → 显示 profile 可能换（换显示器/切换主屏）：失效 + 重新注入（清缓存）。
+    if (auto *app = qobject_cast<QGuiApplication *>(QCoreApplication::instance())) {
+        screen_connections.append(QObject::connect(app, &QGuiApplication::primaryScreenChanged, q,
+                                                   [this] { refresh_display_profile(); }));
+        screen_connections.append(
+            QObject::connect(app, &QGuiApplication::screenAdded, q,
+                             [this](QScreen *) { refresh_display_profile(); }));
+        screen_connections.append(
+            QObject::connect(app, &QGuiApplication::screenRemoved, q,
+                             [this](QScreen *) { refresh_display_profile(); }));
+    }
     pool = new Pool();
     pool->impl = this;
     pool->start();
@@ -859,7 +882,35 @@ PreviewPanel::Impl::Impl(PreviewPanel *owner) : q(owner) {
         QApplication::instance()->installEventFilter(router);
 }
 
+// 0.4.2 需求5：显示 profile 的获取口径（Contract: docs/m14-tasks.md C4）：
+//   * 离屏平台（--ui-smoke / CI / 截图口径）无物理显示器 → 强制 sRGB 回退：像素路径与既有
+//     版本逐字节一致（12 张冻结截图/冻结末行零变化由构造保证，不靠断言宽容）；
+//   * 真实平台 → system_display_profile()（Windows 主显示器 ICC；失败/非 Windows 平台 = sRGB
+//     回退并如实记日志）；
+//   * PP_PREVIEW_CM=0/off（取证开关，正常运行不设置）→ 不注入 = 修复前行为，供修复前后 A/B。
+void PreviewPanel::Impl::refresh_display_profile() {
+    pp::invalidate_display_profile_cache();
+    const bool offscreen = QGuiApplication::platformName().compare(QStringLiteral("offscreen"),
+                                                                   Qt::CaseInsensitive) == 0;
+    display_profile_ = pp::ui_display_profile();
+    const QByteArray cm_switch = qgetenv("PP_PREVIEW_CM");
+    const bool disabled = cm_switch == "0" || cm_switch.compare("off", Qt::CaseInsensitive) == 0;
+    pp::log_info("preview", "preview_panel.cpp",
+                 disabled ? "display colour management disabled by PP_PREVIEW_CM (diagnostic)"
+                          : "display colour management enabled",
+                 {{"display_profile", display_profile_.name},
+                  {"from_system", display_profile_.from_system ? "1" : "0"},
+                  {"offscreen", offscreen ? "1" : "0"},
+                  {"fallback_reason", display_profile_.fallback_reason}});
+    if (disabled)
+        return; // 不注入：PreviewCache 走既有原样像素路径（= 修复前行为）
+    cache->set_display_profile(display_profile_);
+}
+
 PreviewPanel::Impl::~Impl() {
+    for (const QMetaObject::Connection &connection : screen_connections)
+        QObject::disconnect(connection);
+    screen_connections.clear();
     pool->stop(); // 先停池（保证没有 worker 再用 cache/impl），再拆其余
     delete pool;
     pool = nullptr;
@@ -1098,11 +1149,13 @@ void PreviewPanel::Impl::on_loaded(int index, std::chrono::steady_clock::time_po
                     .arg(result.info.src_bitdepth)
                     .arg(QString::fromStdString(result.color_space));
     // R-278：出图诊断收 logger（250ms 目标取证口径不变，级别 = debug）
+    // 0.4.2 需求5：追加 display= 显示编码目标（空 = 未做显示变换），取证显示面色彩管理生效面。
     pp::log_debug("preview", loaded_path.toStdString(),
                   "loaded " + std::to_string(result.image.width()) + "x" +
                       std::to_string(result.image.height()) +
                       (result.from_embedded ? " from_embedded=1" : " from_embedded=0") + " (" +
-                      std::to_string(ms) + " ms) info=" + info_text.toStdString());
+                      std::to_string(ms) + " ms) info=" + info_text.toStdString() +
+                      " display=" + result.display_space);
     emit q->display_changed();
 }
 

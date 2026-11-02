@@ -15,6 +15,8 @@
 #include "ui/page_meta.h"
 #include "ui/theme.h"
 
+#include <QAbstractButton>  // 0.4.2：Seg 段按钮 clicked（mixed 态同档点击统一）
+#include <QAbstractSpinBox> // 0.4.2：mixed 态 spin 的 editingFinished 补提交
 #include <QActionGroup>
 #include <QClipboard>
 #include <QComboBox>
@@ -182,28 +184,37 @@ void refresh_time_section(MetaState *st, const std::vector<pp::EffectivePreview>
 // ---------------------------------------------------------------------------
 
 void refresh_time_inputs(MetaState *st) {
-    // UX-5：卡开关关 = 整卡不参与规则 → 卡内规则控件置灰（参数保留，恢复开关即回来）。
-    // M13/C2.3：partial（选择集部分文件开启）按"可用"处理（可批量编辑部分开启的文件）。
-    const bool card_on = st->time.time_enable == nullptr || st->time.time_enable->isChecked() ||
-                         st->time.time_enable->is_partial();
-    // seg 选中的那一组恒可见，另一组隐藏
+    // 0.4.2（需求 1）：无行选中 = 空态 → 时间卡输入面整块隐藏 + 全部可编辑控件禁用
+    // （follow.items 为空 ⇒ commit_field 直接返回，任何路径零写入；这里是可见/可交互面的
+    //  同一判据，避免"看起来能改但改不动"）。
+    const bool has_selection = st->selection.has_selection;
+    if (st->time.time_enable != nullptr) {
+        st->time.time_enable->setEnabled(has_selection);
+    }
     const bool delta_mode = st->time.seg->current_index() == 0;
-    st->time.delta_row->setVisible(delta_mode);
-    st->time.time_row->setVisible(delta_mode);
-    st->time.tz_row->setVisible(!delta_mode);
+    if (st->time.seg_row != nullptr) {
+        st->time.seg_row->setVisible(has_selection);
+    }
+    st->time.delta_row->setVisible(has_selection && delta_mode);
+    st->time.time_row->setVisible(has_selection && delta_mode);
+    st->time.tz_row->setVisible(has_selection && !delta_mode);
+    // 卡开关关 = 本卡不参与（值保留但不写入）；partial（选择集部分文件开启）按"可用"处理。
+    const bool card_on =
+        has_selection && (st->time.time_enable == nullptr || st->time.time_enable->isChecked() ||
+                          st->time.time_enable->is_partial());
     st->time.seg->setEnabled(card_on);
     for (QSpinBox *spin : st->time.delta) {
         spin->setEnabled(card_on);
-        // M13：mixed 用 DeltaSpin「多个值」+ ppMixed 虚线视觉，不再叠 .mod 常态强调框
+        // mixed 用 DeltaSpin「多个值」+ ppMixed 虚线视觉，不再叠 .mod 常态强调框
         const auto *delta = static_cast<const DeltaSpin *>(spin);
         if (!delta->is_mixed()) {
             theme::set_mod(spin, spin->value() != 0);
         }
     }
-    const bool tz_changed =
-        st->time.tz_from->currentData().toInt() != st->time.tz_to->currentData().toInt();
     st->time.tz_from->setEnabled(card_on);
     st->time.tz_to->setEnabled(card_on);
+    const bool tz_changed =
+        st->time.tz_from->currentData().toInt() != st->time.tz_to->currentData().toInt();
     const bool mixed_tz = st->time.tz_from->property(hook::kMixedProperty).toBool() ||
                           st->time.tz_to->property(hook::kMixedProperty).toBool();
     if (!mixed_tz) {
@@ -241,8 +252,9 @@ QWidget *build_time_card(MetaState *st, QWidget *parent) {
         st->time.seg->add_segment(PageMeta::tr("时区语义"), objname::kSegTz);
         group.add(st->time.seg);
         group.stretch();
-        bv->addWidget(
-            formkit::frow(body, PageMeta::tr("模式"), group.widget(), FieldWidth::Flex).row);
+        st->time.seg_row =
+            formkit::frow(body, PageMeta::tr("模式"), group.widget(), FieldWidth::Flex).row;
+        bv->addWidget(st->time.seg_row);
     }
     // 日期偏移 / 时间偏移：3×spin88（短档）+ 单位槽 + 范围注释（§7.1 逐行）
     const auto offset_row = [&](const QString &label, const std::array<QString, 3> &units,
@@ -385,6 +397,20 @@ QWidget *build_time_card(MetaState *st, QWidget *parent) {
     };
     QObject::connect(st->time.seg, &formkit::SegmentedControl::current_changed, st,
                      [commit](int) { commit(EditField::TimeMode); });
+    // 0.4.2：mixed 态下 Seg 显示的是"首值"档；用户点**同一档**时 formkit::SegmentedControl 的
+    // activate 会因 index==current 提前返回（不发 current_changed）→ 无法把"多个值"统一成该档。
+    // 为此补一条段按钮 clicked 通道：仅当该控件处于 mixed（ppMixed=true）时提交。
+    for (int i = 0; i < 2; ++i) {
+        auto *segment = qobject_cast<QAbstractButton *>(st->time.seg->segment(i));
+        if (segment == nullptr) {
+            continue;
+        }
+        QObject::connect(segment, &QAbstractButton::clicked, st, [st, commit](bool) {
+            if (st->time.seg->property(hook::kMixedProperty).toBool()) {
+                commit(EditField::TimeMode);
+            }
+        });
+    }
     // 卡头开关三态（on/off/partial）：点击 → 该卡参与/退出（false = 清除该卡全部字段）
     QObject::connect(st->time.time_enable, &formkit::SwitchControl::toggled, st,
                      [commit](bool) { commit(EditField::TimeEnable); });
@@ -392,11 +418,32 @@ QWidget *build_time_card(MetaState *st, QWidget *parent) {
         QObject::connect(st->time.delta[std::size_t(i)],
                          QOverload<int>::of(&QSpinBox::valueChanged), st,
                          [commit, i](int) { commit(time_component_field(i)); });
+        // 0.4.2：mixed 态下键入/回车"恰好等于首值"不会发 valueChanged → 无法统一该分量。
+        // editingFinished 仅在 mixed（ppMixed=true）时补提交；提交后 mixed 视觉即清除。
+        QObject::connect(st->time.delta[std::size_t(i)], &QAbstractSpinBox::editingFinished, st,
+                         [st, commit, i] {
+                             auto *spin = st->time.delta[std::size_t(i)];
+                             if (spin->property(hook::kMixedProperty).toBool()) {
+                                 commit(time_component_field(i));
+                             }
+                         });
     }
     QObject::connect(st->time.tz_from, QOverload<int>::of(&QComboBox::currentIndexChanged), st,
                      [commit](int) { commit(EditField::TimeTzFrom); });
     QObject::connect(st->time.tz_to, QOverload<int>::of(&QComboBox::currentIndexChanged), st,
                      [commit](int) { commit(EditField::TimeTzTo); });
+    // 0.4.2：mixed 态下两个时区下拉显示首值；用户选**同一项**时 currentIndexChanged 不发 →
+    // 补 activated 通道（仅 mixed 时提交），把"多个值"统一成该偏移。
+    const auto activated_commit = [st, commit](QComboBox *combo, EditField field) {
+        QObject::connect(combo, QOverload<int>::of(&QComboBox::activated), st,
+                         [combo, commit, field](int) {
+                             if (combo->property(hook::kMixedProperty).toBool()) {
+                                 commit(field);
+                             }
+                         });
+    };
+    activated_commit(st->time.tz_from, EditField::TimeTzFrom);
+    activated_commit(st->time.tz_to, EditField::TimeTzTo);
     v->addWidget(body);
     return card;
 }
@@ -409,8 +456,9 @@ contextmenu::TimeCardIntents time_card_intents(MetaState *st) {
         if (st->time.time_enable != nullptr)
             st->time.time_enable->toggle();
     };
-    // M13/C2.6：右键「复位默认值 / 清除规则」= **清除选中文件该卡字段**（commit 卡开关
-    // false：清 time_shift + time_enabled=false），随后重铺输入面（0 / UTC+8 / 三态）。
+    // 0.4.2（需求 1/2）：右键「复位默认值 / 清除本卡修改」= 清除**选中图片**该卡字段
+    // （commit 卡开关 false：清 time_shift + time_enabled=false），随后重铺输入面（0 / UTC+8 /
+    // 三态 / 空态）。不存在全局批量规则可清 —— 菜单文案由 contextmenu 侧随需求 5 收口。
     const auto clear_selected = [st] {
         if (st->core.loading) {
             return;
@@ -426,7 +474,7 @@ contextmenu::TimeCardIntents time_card_intents(MetaState *st) {
     };
     in.reset_defaults = clear_selected;
     in.read_from_file = [st] {
-        // 「从文件读取时间」= 重新取跟随项 probe + 按选择项聚合装载（不产生编辑）
+        // 「从文件读取时间」= 重新取选中项 probe + 按选择项聚合装载（不产生编辑）
         request_probe_scan(st);
         load_inputs_from_selection(st);
     };

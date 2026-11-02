@@ -290,6 +290,16 @@ struct RunScope {
     // `threads` / webp `thread_level`，jpegli·oiio 无内部线程 → 日志注明）。默认 1 =
     // 0.2 行为（单线程编码器），故单测/直接调用 run_one_file 的既有路径逐字不变。
     int encode_threads = 1;
+
+    // —— 0.4.2 需求6（自适应线程规划）**加性追认**：追加在结构体末尾（Lead 已批准；
+    //    登记 docs/m14-adjudications.md，由主对话落笔）——
+    // 调度器线程规划器（src/core/thread_plan.h）给出的"同文件内同时编码的 target 数"P。
+    //   * 默认 0 = **旧行为逐字不变**：pipeline 的 `stage_encode_loop` 沿用既有口径
+    //     （RunConfig::max_parallel_targets > 0 用之，否则 min(2, total)）；
+    //   * P ≥ 1 = 规划值（pipeline 仍以 max_parallel_targets 与 target 总数夹取）。
+    // 语义只影响"同一文件的多个 target 是否并发编码"；产物字节/事件/进度语义零改动
+    // （单输出运行 P 恒 1，与旧行为完全一致）。既有成员名/顺序/默认值全部不变。
+    int parallel_outputs = 0;
 };
 
 // §3.2 冻结形态的第三参 `EventFn`（T5 定稿为「事件回调 + 运行期共享态」载体）：

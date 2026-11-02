@@ -1016,6 +1016,14 @@ struct Session {
     // 变化触发 modelReset 时多选整组恢复，批量打标/移除不再塌缩成 1 行。
     QStringList last_selected_paths;
     QString last_preset_path;
+    // ---- 0.4.2 / 需求 3（A13）：大预设绑定的会话态（与 last_preset_path 同域）----
+    // last_preset_path = 当前绑定的大预设文件（绝对路径；空 = 当前配置未保存为预设）；
+    // preset_display_name = 绑定预设的显示名（JSON name；空 = 用文件名 stem）；
+    // preset_baseline = 「已修改」比对基线（= serialize_preset(载入/保存时刻的整页采集)，
+    // 与落盘字节同源）；preset_dirty = 当前 collect+rules 与基线不等（主窗比对后喂页面）。
+    QString preset_display_name;
+    QByteArray preset_baseline;
+    bool preset_dirty = false;
     // M10-W3-T2（C23 §8.5）：格式预设行的信号接线只接一次（接线点在 refresh_preset_card 首调，
     // 即 MainWindow 构造期 —— mainwindow.cpp 的 wire 段不在本任务写作用域内）。
     bool format_preset_wired = false;
@@ -1103,6 +1111,12 @@ struct MainWindow::Impl : mw_cabin::Chrome,
     void restore_selection_by_path(const QString &path);
     void restore_selection_by_paths(const QStringList &paths); // R-153：整组恢复
     void select_row(int row);                                  // R-151：翻图同步选中
+    // 0.4.2 / 需求 1：页内「带元数据修改的文件」列表点击 → 按路径定位并**单选**该文件
+    // （编辑作用域 = 行选中集合；定位后右侧聚合面即跟随该文件）。过滤隐藏 → 一次性状态提示。
+    void select_path_in_list(const QString &path);
+    // 0.4.2 / 需求 1（verifier after-11 残缺陷）：过滤/分组重建后收口 —— 选中行若全部被可见性
+    // 隐藏则清空 selection 走空态（右侧不得显示/编辑用户看不见的文件）。
+    void reconcile_selection_visibility();
     // R-259（M7-R2.1-F3）：运行中关闭确认后的同步 join 带反馈（状态行 + 等待光标 + 一次
     // 同步重绘）—— 阻塞期从 ~MainWindow（界面已无反馈）挪到关闭路径（窗口仍可见）；
     // wait() 幂等，析构收口序逐字保留作兜底。
@@ -1202,6 +1216,29 @@ struct MainWindow::Impl : mw_cabin::Chrome,
     void load_preset_file(const QString &path);
     void save_preset_named(const QString &name);
     void delete_preset_file(const QString &path);
+    // ---- 0.4.2 / 需求 3（A13）：大预设重设计的**绑定/基线/提示**面 ----
+    // 绑定 = last_preset_path（绝对路径；空 = 当前配置未保存为预设）。以下方法维护
+    // preset_display_name / preset_baseline / preset_dirty 并把「已修改」「来源」喂给页面。
+    //   * record_preset_baseline(display_name)：以**当前整页采集**（collect_preset + page_meta
+    //     的 rules）为 dirty 基线（= 保存后文件字节同源，避免"载入后立刻显示已修改"的假读数）；
+    //   * refresh_preset_dirty()：比对当前采集与基线 → 页面条目「（已修改）」后缀 + 按钮 tooltip；
+    //   * clear_preset_binding()：解除绑定（删除预设后；不动作页面配置）；
+    //   * init_preset_session_from_settings()：启动恢复后初始化显示名/基线（refresh_preset_card
+    //     首调时若 last_preset_path 非空且基线为空 → 补初始化）。
+    void record_preset_baseline(const QString &display_name);
+    void refresh_preset_dirty();
+    void clear_preset_binding();
+    // 载入 preset 的 rules 前确认（D6）：仅 rules 非空 ∧ 有选中 ∧ 选中文件已有元数据修改时
+    // 弹一次「将替换选中 N 个文件的元数据修改」（默认 No = 取消载入）；true = 继续。
+    bool confirm_preset_rules_replace(const pp::PresetData &preset);
+    // 载入后 rules 结果的**非模态**说明（D6）：无选中 ∧ rules 非空 → 预设卡注记
+    // 「含元数据修改但未选中文件，本次只应用输出配置」；有选中 → 说明已应用 N 个文件。
+    void report_preset_rules_outcome(const pp::PresetData &preset, int selected_files,
+                                     bool applied);
+    // 0.4.2 / 需求 3（A13）：大预设「导入…/导出…」（管理对话框文件管理动作；校验 + 原子写 +
+    // 同名二次确认 + 绝对路径守卫都在本 TU = 单一 I/O 持有者）。
+    void import_preset_file_dialog();
+    void export_preset_file_dialog(const QString &preset_path);
     // ---- M10-W3-T2（C23 / 设计 §8.5）：格式预设（每格式页签顶部行）的**单一 I/O 持有者** ----
     // 与全局预设同一分工：页面发意图 / 收列表 / 落卡 / 显示只读自适应面；文件读写、校验链、
     // 归一、二次确认与绝对路径守卫全在本 TU。冻结面加性见 ui/page_output.h 末尾（追认 A9）。
@@ -1273,6 +1310,8 @@ struct MainWindow::Impl : mw_cabin::Chrome,
     void probe_meta_sec_j(const MetaProbeCtx &c, const QString &shots_dir); // (j) 选点闭环（M6-T9）
     void probe_meta_sec_k(const MetaProbeCtx &c,
                           const QString &shots_dir); // (k) 大地图展开/复原（M6-T13）
+    // 0.4.2 / 需求 1/2：真实 MainWindow 选择接线探针（行选中 → 编辑作用域 / 多选聚合 / 空态禁写）
+    void probe_meta_real_selection(int &checked, QStringList &bad);
     static QString repo_root();
 #endif // PP_BUILD_DEV
 };

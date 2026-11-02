@@ -1028,6 +1028,9 @@ void MainWindow::Impl::wire_file_panel() {
         Impl &impl_ref = *this;
         impl_ref.groups->rebuild();
         impl_ref.rebuild_group_view();
+        // 0.4.2 / 需求 1（verifier after-11）：过滤后选中行若全部不可见 → 立即清选走空态，
+        // 不得让右侧继续显示/编辑被隐藏的文件（重建的延迟恢复会再收口一次）。
+        reconcile_selection_visibility();
         impl_ref.apply_empty_state();
         w->refresh_status();
     };
@@ -1060,6 +1063,8 @@ void MainWindow::Impl::wire_file_panel() {
         impl_ref.groups
             ->rebuild(); // 过滤 = 可见性变化 → 分组节重建（勾选状态住在源模型，不受影响）
         impl_ref.rebuild_group_view();
+        // 0.4.2 / 需求 1（verifier after-11）：搜索把当前选中行全部隐藏 → 清选走空态（零写入）。
+        reconcile_selection_visibility();
     });
 }
 
@@ -1255,6 +1260,10 @@ void MainWindow::Impl::wire_pages() {
                      &MainWindow::open_exif_editor_path);
     QObject::connect(d.page_meta, &PageMeta::clear_exception_requested, w,
                      [this](const QString &path) { clear_exception(path); });
+    // 0.4.2 / 需求 1：页内「带元数据修改的文件」列表点击 → 左侧定位并选中该文件
+    // （选中 = 编辑作用域；右侧聚合面随 selectionChanged 跟随）。
+    QObject::connect(d.page_meta, &PageMeta::locate_file_requested, w,
+                     [this](const QString &path) { select_path_in_list(path); });
 
     QObject::connect(d.page_output, &PageOutput::config_changed, w, [this] {
         // UX-14 C4：线性光重采样同时透传预览通道（同值 no-op；切换即清缓存重解）
@@ -1497,8 +1506,8 @@ void MainWindow::Impl::apply_group_view_state() {
         return;
     // R-252 时序锚点③「重入成对」：applying_group_state 置位/复位必须成对；重入 = 程序化
     // 展开/折叠被误记为用户操作（污染折叠记忆）。
-    Q_ASSERT(!applying_group_state);
-    applying_group_state = true; // 程序化展开/折叠不写入折叠记忆（见 collapsed/expanded 接线）
+    Q_ASSERT(!applying_group_state); // 程序化展开/折叠不写入折叠记忆（见 collapsed/expanded 接线）
+    applying_group_state = true;
     // 节头跨两列（mockup .ghead 通栏；节头本身不参与勾选/选择）
     for (int g = 0; g < groups->group_count(); ++g) {
         const QModelIndex idx = groups->group_index(g);
@@ -1521,6 +1530,9 @@ void MainWindow::Impl::apply_group_view_state() {
             view->collapse(idx);
     }
     applying_group_state = false;
+    // 0.4.2 / 需求 1（verifier after-11 残缺陷）：重建后若选中行**全部被过滤隐藏**，右侧不得
+    // 继续显示/编辑用户看不见的文件 → 清空 selection 走空态（延迟恢复已只恢复可见行）。
+    reconcile_selection_visibility();
 }
 
 void MainWindow::Impl::restore_selection_by_path(const QString &path) {
@@ -1579,6 +1591,66 @@ void MainWindow::Impl::select_row(int row) {
     view->setCurrentIndex(group_idx);
     view->selectionModel()->select(group_idx,
                                    QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+}
+
+// 0.4.2 / 需求 1：页内「带元数据修改的文件」列表 → 按路径定位并单选该文件。
+// 口径 = 与 remove_selected/双击同一两级代理映射链（model→proxy→groups）；过滤隐藏时不越权
+// 恢复（不强行清筛选），改为状态栏一次性提示（R-067 同款非阻塞作用域提示）。
+void MainWindow::Impl::select_path_in_list(const QString &path) {
+    if (view == nullptr || view->selectionModel() == nullptr || model == nullptr)
+        return;
+    for (std::size_t i = 0; i < model->size(); ++i) {
+        if (QString::fromStdString(model->row(i).entry.src.string()) != path)
+            continue;
+        const QModelIndex filtered = proxy->mapFromSource(model->index(static_cast<int>(i), 0));
+        if (!filtered.isValid()) {
+            set_status_note(T("该文件被筛选隐藏，无法定位：%1").arg(QFileInfo(path).fileName()));
+            return;
+        }
+        const QModelIndex group_idx = groups->mapFromSource(filtered);
+        if (!group_idx.isValid())
+            return;
+        const QModelIndex group_header = group_idx.parent();
+        if (group_header.isValid() && !view->isExpanded(group_header))
+            view->expand(group_header);
+        view->selectionModel()->select(group_idx, QItemSelectionModel::ClearAndSelect |
+                                                      QItemSelectionModel::Rows);
+        view->selectionModel()->setCurrentIndex(group_idx, QItemSelectionModel::NoUpdate);
+        view->scrollTo(group_idx);
+        return;
+    }
+    set_status_note(T("列表中已不存在该文件：%1").arg(QFileInfo(path).fileName()));
+}
+
+// 0.4.2 / 需求 1（verifier after-11 残缺陷）：过滤/分组重建后的选择可见性收口。
+// 判据 = 选中索引经 groups→proxy 两级映射仍能落到根模型的有效行；**全部不可见** → 清空 selection
+// 并走空态（sync_selection → 右侧「未选择文件」+ 控件禁用 + commit 零写入）；有任一可见选中行 →
+// 保持（重建后的 selectionModel 只含可见行，页面由 selectionChanged 正常跟随）。
+void MainWindow::Impl::reconcile_selection_visibility() {
+    if (view == nullptr || view->selectionModel() == nullptr || model == nullptr) {
+        return;
+    }
+    bool any_visible = false;
+    for (const QModelIndex &idx : view->selectionModel()->selectedIndexes()) {
+        if (!idx.isValid()) {
+            continue;
+        }
+        const QModelIndex filtered = groups->mapToSource(idx);
+        if (!filtered.isValid()) {
+            continue;
+        }
+        if (proxy->mapToSource(filtered).isValid()) {
+            any_visible = true;
+            break;
+        }
+    }
+    if (any_visible) {
+        return;
+    }
+    if (view->selectionModel()->hasSelection()) {
+        view->selectionModel()->clearSelection();
+    }
+    sync_selection(); // 空态：无选中 ⇒ 页面空态 + 控件禁用 + 任何路径零写入
 }
 
 void MainWindow::Impl::set_group_mode(pp::GroupMode mode) {
@@ -2025,10 +2097,10 @@ void MainWindow::Impl::on_content_changed() {
             paths << QString::fromStdString(model->row(i).entry.src.string());
         }
         if (paths != cached_paths) {
+            const bool was_empty = cached_paths.isEmpty();
             cached_paths = paths;
             page_meta->set_batch_files(
-                paths); // 首文件时间预览（PageMeta 跟随项限扫 ≤8 =
-                        // kMultiRowCap；R-262：原注释「限扫 200」与实现相反）
+                paths); // 批内文件集合（跟随提示 (i/N) 的 N；页面按选中项聚合，不再有批量规则）
             // M4-T10：中栏预览面板的文件集合（列表顺序 = 翻图顺序；集合未变则不打扰）
             if (preview_panel != nullptr)
                 preview_panel->set_files(paths);
@@ -2045,12 +2117,35 @@ void MainWindow::Impl::on_content_changed() {
                 cached_alpha = any_alpha;
                 page_output->set_batch_has_alpha(any_alpha); // 无探测信息时保守 false
             }
-            // M4-T12（§5.2）：批内文件集合变化且**无选中** → 跟随项回落到新的首个文件
-            // （有选中时不打扰用户的选中面；跟随项一律经 sync_selection 同一条口径喂入）
+            // 0.4.2 / 需求 1：选择作用域收口 —— 列表**空 → 非空**时自动选中首行（体验：添加照片后
+            // 右侧立即有明确编辑对象，且该对象确实处于行选中态）；其余无选中场景 = 空态
+            // （右侧「未选择文件」+ 控件禁用 + 零写入）。无选中不再回退首个文件。
+            // 边界（verifier T0 建议）：过滤/搜索生效时源行 0 可能不可见 → 选**首个可见行**；
+            // 新文件全被过滤隐藏时保持空态（用户清筛选后再选，不越权恢复被隐藏的行）。
             const bool no_selection = view->selectionModel() == nullptr ||
                                       view->selectionModel()->selectedIndexes().isEmpty();
-            if (no_selection && !running)
-                sync_selection();
+            if (no_selection && !running) {
+                int auto_target = -1;
+                if (was_empty && !paths.isEmpty()) {
+                    for (std::size_t i = 0; i < model->size(); ++i) {
+                        const QModelIndex filtered =
+                            proxy->mapFromSource(model->index(static_cast<int>(i), 0));
+                        if (!filtered.isValid()) {
+                            continue; // 被搜索/筛选隐藏
+                        }
+                        if (!groups->mapFromSource(filtered).isValid()) {
+                            continue; // 分组层尚未重建（防御；下次内容变化再选）
+                        }
+                        auto_target = static_cast<int>(i);
+                        break;
+                    }
+                }
+                if (auto_target >= 0) {
+                    select_row(auto_target); // 触发 selectionChanged → sync_selection（真实行选中）
+                } else {
+                    sync_selection(); // 空态/无选中：页面跟随为空
+                }
+            }
         }
         // 例外编辑只在非运行期发生（编辑器/清除入口在运行中关闭）→ 运行中跳过 O(n) 重扫
         sync_exceptions();
@@ -2121,9 +2216,10 @@ void MainWindow::Impl::sync_selection() {
     // M4-T10：中栏预览（列表行号口径；无选中 → 面板回落到首个文件，与 §5.2 同一条跟随口径）
     if (preview_panel != nullptr)
         preview_panel->set_current(first_row);
-    // M4-T12（§5.2）：元数据页一切显示跟随选中项；**无选中 → 首个文件 + 「(1/N)」提示**
-    if (!has && !model->empty())
-        items.append(meta_selection_item(model->row(0)));
+    // 0.4.2 / 需求 1（用户裁定）：元数据页编辑作用域 = 文件列表**行选中集合**。
+    // **无选中 → 空态**（follow.items 为空 → 页面出「未选择文件」且全部可编辑控件禁用；
+    // 任何提交路径都看不到文件 ⇒ 零写入）。删除 0.4.1 的「无选中 → 回退首个文件」：
+    // 那条路径让右侧显示/编辑落到一个并未被选中的文件上（用户反馈的根因）。
     page_meta->set_selection(items, has);
     apply_remove_sel_state(has); // 1-08：无选择即隐藏（与 refresh_status 同一口径）
     // M4-T11：分类面板高亮跟随选中（§5.2 同一条跟随口径）；分组重建后据此恢复选中

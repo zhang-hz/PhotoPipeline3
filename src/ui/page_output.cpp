@@ -123,11 +123,30 @@ QString current_preset_full_name(const FormatState *st) {
     return index >= 0 ? st->preset_combo->itemText(index) : QString();
 }
 
+// 0.4.2 / 需求 3（A13）：大预设来源的**如实**显示（替换 M12 的「接管（detached）」措辞）。
+//   * 占位文本 = combo 无选中时的真实来源（不再假装高亮 default）；
+//   * 注记 = 「值来自大预设「<名>」（基于格式预设 <stem> / 自定义参数）」。
+QString global_source_placeholder(const QString &global_name) {
+    return global_name.isEmpty() ? PageOutput::tr("来自大预设")
+                                 : PageOutput::tr("来自大预设：%1").arg(global_name);
+}
+
+QString global_source_note(const QString &global_name, const QString &based_on) {
+    QString text = global_name.isEmpty() ? PageOutput::tr("值来自大预设")
+                                         : PageOutput::tr("值来自大预设「%1」").arg(global_name);
+    text += based_on.isEmpty() ? PageOutput::tr("（自定义参数）")
+                               : PageOutput::tr("（基于格式预设 %1）").arg(based_on);
+    return text;
+}
+
 void sync_format_preset_combo_view(FormatState *st) {
     if (st == nullptr || st->preset_combo == nullptr)
         return;
     combo_popup_autosize(st->preset_combo);
-    st->preset_combo->setToolTip(current_preset_full_name(st));
+    // 悬停全文：绑定态 = 预设名；大预设来源 = 来源说明（无选中项可显示）。
+    st->preset_combo->setToolTip(
+        st->preset_detached ? global_source_note(st->preset_global_name, st->preset_based_on)
+                            : current_preset_full_name(st));
 }
 
 // M12 需求 4：下拉项的「default」判定单源 = core/format_preset.h 的
@@ -154,9 +173,12 @@ int default_preset_item_index(const QComboBox *combo) {
     return -1;
 }
 
-// 全局预设接管态（detached）的注释位文案（Lead 锁定口径，M12 需求 4）。
-QString detached_preset_note() {
-    return PageOutput::tr("已载入全局预设：卡值以全局预设为准；重新选择格式预设可恢复");
+// M10-W3-T2 会话态弹层：预设卡下拉条目的「基准显示名」数据角色（0.4.2 / 需求 3 加性）。
+// 条目文本可能带「（已修改）」后缀；基准名单独存 role，避免往返拼接/剥离产生第二份真源。
+constexpr int kPresetBaseNameRole = Qt::UserRole + 1;
+const QString &dirty_suffix() {
+    static const QString kDirtySuffix = PageOutput::tr("（已修改）");
+    return kDirtySuffix;
 }
 
 // M12 需求 3 根因修复（实测：工厂 HEIF「Apple自适应」预设 x265:crf=20 → 控件显示 28）：
@@ -1301,21 +1323,6 @@ void OutputPageImpl::schedule_disk_refresh() {
         disk_timer->start(); // singleShot 400ms：输入停顿后统一查一次
 }
 
-void OutputPageImpl::sync_preset_buttons() {
-    if (preset_combo == nullptr)
-        return;
-    const int index = preset_combo->currentIndex();
-    const QString path =
-        index >= 0 ? preset_combo->itemData(index, Qt::UserRole).toString() : QString();
-    const bool has = !path.isEmpty();
-    preset_save->setEnabled(has);
-    preset_delete->setEnabled(has);
-    preset_save->setToolTip(has ? PageOutput::tr("保存到当前预设（覆盖同名文件）")
-                                : PageOutput::tr("未选择预设：请先「另存…」保存一份新预设"));
-    preset_delete->setToolTip(has ? PageOutput::tr("删除当前预设（会二次确认）")
-                                  : PageOutput::tr("未选择预设：无可删除项"));
-}
-
 // 指针键注册表：析构擦除 → 无悬挂/别名；GUI 线程独占，无需锁。
 // R-185（M7-R2.1-F3）：注册表 pimpl 两套解法统一 —— page_run 已收敛到本同款
 // （std::map + unique_ptr + 析构 erase + *_of() 访问器），不再有裸 new/手动 delete。
@@ -1443,25 +1450,50 @@ void PageOutput::apply_preset(const pp::PresetData &p) {
         return; // 校验失败 → 不应用，保持原状（加载失败显式报错由调用方负责，R31）
     const std::string prev_active = impl_->sel.active(); // R-133：发射按「若变」约定
 
-    // 已选集合 = 预设的 outputs（规范顺序）；逐项落值
-    // R-189：集合重建走 FormatSelection::reset_items（原 clear+push+sort 逐字等价；
-    // 去重判据 = 新集合自身 —— 与原实现同键）
+    // 0.4.2 / 需求 3（A13）：**整页原子替换** —— 先清**所有**格式的来源会话态（含未选中格式的
+    // 旧绑定/旧大预设注记；否则重新勾选格式时会显示上一份配置的来源注记 = 来源撒谎）。
+    for (auto &[sid, sstate] : impl_->states) {
+        (void)sid;
+        sstate.preset_detached = false;
+        sstate.preset_global_name.clear();
+        sstate.preset_based_on.clear();
+        sstate.format_preset_path.clear();
+    }
+    // 已选集合 = 预设的 outputs（规范顺序）；逐输出采集来源（与 outputs 同序；
+    // output_sources 可空/可短 —— 缺项 = 自定义参数；同格式重复项取首个 = 与集合去重同键）。
+    struct SourceInfo {
+        QString name;
+        QString based_on;
+    };
     std::vector<std::string> preset_ids;
-    for (const pp::OutputFormatSpec &spec : preset.outputs) {
+    std::map<std::string, SourceInfo> source_of;
+    for (std::size_t i = 0; i < preset.outputs.size(); ++i) {
+        const pp::OutputFormatSpec &spec = preset.outputs[i];
         if (pp::find_format(spec.format_id) == nullptr)
             continue;
-        if (std::find(preset_ids.begin(), preset_ids.end(), spec.format_id) == preset_ids.end())
+        const bool first =
+            std::find(preset_ids.begin(), preset_ids.end(), spec.format_id) == preset_ids.end();
+        if (first)
             preset_ids.push_back(spec.format_id);
+        if (!first && source_of.find(spec.format_id) != source_of.end())
+            continue;
+        SourceInfo info;
+        info.name = QString::fromStdString(preset.name);
+        if (i < preset.output_sources.size())
+            info.based_on = QString::fromStdString(preset.output_sources[i].format_preset);
+        source_of[spec.format_id] = std::move(info);
     }
     impl_->sel.reset_items(std::move(preset_ids));
-    // M12（需求 4 / Lead 裁定）：全局预设是**整卡写入者** ⇒ 在重建页签之前先给每个被覆盖的
-    // 格式打「全局预设接管（detached）」标记。build_tab 末尾会请 MainWindow 喂列表并尝试
-    // **自动载入 default**（refresh_format_preset_row）；detached 抑制它 —— 否则自动载入会在
-    // 应用全局预设的过程中把卡值/来源改写成 default（随后再被全局预设覆盖），既闪变又产生
-    // 无谓 I/O/日志。标记在下面第二段（S-3/M12 接管态）再走正式迁移点补齐注记/按钮态。
-    for (const pp::OutputFormatSpec &spec : preset.outputs) {
-        if (impl_->is_selected(spec.format_id))
-            impl_->states[spec.format_id].preset_detached = true;
+    // 在重建页签之前写来源态：build_tab 末尾会请 MainWindow 喂列表并尝试**自动载入 default**
+    // （refresh_format_preset_row）；detached 抑制它（否则会把大预设值冲掉）。来源名同批写入，
+    // 使列表回填时占位/注记已是真实来源（不再出现"先闪一下 default"）。
+    for (const std::string &id : impl_->sel.items()) {
+        const auto it = source_of.find(id);
+        if (it == source_of.end())
+            continue;
+        impl_->states[id].preset_detached = true;
+        impl_->states[id].preset_global_name = it->second.name;
+        impl_->states[id].preset_based_on = it->second.based_on;
     }
     // 清掉不再选中的页签，建/复用所选页签
     for (const FormatEntry &e : kFormats) {
@@ -1528,16 +1560,12 @@ void PageOutput::apply_preset(const pp::PresetData &p) {
     impl_->update_estimate();
     impl_->refresh_tab_labels();
     impl_->refresh_changed_pill();
-    // ---- M12 需求 4（Lead 裁定）：全局预设是**整卡写入者** ⇒ 进入「全局预设接管（detached）」态
-    // ---- 与旧 S-3 修法的区别：旧实现把下拉打回「未选择」并清来源；M12 起「未选择」状态不存在，
-    // 且**不能**让自动 default 载入在刷新时把全局预设值冲掉 ⇒ 显式记录接管态：
-    //   * 会话来源清空（卡值来自全局预设，不再对应任何预设文件 —— I-P3 来源标注不得撒谎）；
-    //   * 下拉仍高亮该格式的 default（视觉锚 = 出厂默认预设）；
-    //   * 「保存」禁用（否则会用全局预设值覆盖 default.json / 旧来源文件），原因进 tooltip；
-    //   * 注释位写接管说明；MainWindow 的 refresh_format_preset_row 看到接管态即抑制自动载入；
-    //   * 用户显式选中任一预设并载入成功 → format_preset_load_into 解除（save 恢复可用）。
+    // ---- 0.4.2 / 需求 3（A13）：来源 = 大预设的**如实**显示 ----
+    // 占位「来自大预设：<名>」+ 注记「值来自大预设「<名>」（基于格式预设 <stem> / 自定义参数）」，
+    // combo **无选中项**（不再假装高亮 default）；保存/删除禁用（无绑定文件），另存/导入/导出可用。
+    // 显式载入任一格式预设成功后由 format_preset_load_into 解除并恢复真绑定。
     for (const std::string &id : impl_->sel.items())
-        impl_->set_format_preset_detached_for(id, true);
+        impl_->sync_format_preset_source_display(id);
     // R-133（M7-R2.1-F4）：format_changed 已删除（孤儿信号零 connect；任务明文「接线或
     // 删除」取删除，R2D1-A3 零消费声明删除先例）。现役变更通知走 config_changed（消费方 =
     // mainwindow refresh_status，行为逐字不变）。
@@ -1552,6 +1580,33 @@ pp::PresetData PageOutput::collect_preset(const QString &name) const {
     p.name = name.toStdString();
     for (const std::string &id : impl_->sel.items())
         p.outputs.push_back(impl_->spec_of(id));
+    // 0.4.2 / 需求 3（A13）：逐输出采集来源格式预设（文件名 stem）——
+    //   * 绑定格式预设文件 → 用该文件名 stem；
+    //   * 来源 = 大预设（detached）→ 继承其记录的 based_on（溯源链扁平化：保存出的新大预设
+    //     仍标明"基于哪个格式预设"，不丢来源）；
+    //   * 其余（自定义参数）→ 空串。
+    // 空 vector 规范形态：全部为空时不写（旧文件 load→save 逐字节不变）。
+    {
+        std::vector<pp::PresetOutputSource> sources;
+        bool any = false;
+        sources.reserve(p.outputs.size());
+        for (const std::string &id : impl_->sel.items()) {
+            pp::PresetOutputSource source;
+            const FormatState *st = impl_->state_of(id);
+            if (st != nullptr) {
+                if (!st->format_preset_path.isEmpty()) {
+                    source.format_preset =
+                        QFileInfo(st->format_preset_path).completeBaseName().toStdString();
+                } else if (st->preset_detached) {
+                    source.format_preset = st->preset_based_on.toStdString();
+                }
+            }
+            any = any || !source.format_preset.empty();
+            sources.push_back(std::move(source));
+        }
+        if (any)
+            p.output_sources = std::move(sources);
+    }
     p.output_template = impl_->template_text().toStdString();
     p.split_by_format = OutputPageImpl::template_has_format(impl_->template_text());
     p.color_target = impl_->color_target();
@@ -1726,6 +1781,42 @@ void PageOutput::set_tokens(const theme::Tokens &tokens) {
     }
 }
 
+// 0.4.2 / 需求 3（A13）：预设卡条目文本 = 基准显示名 + （当前绑定且已修改时的「（已修改）」）。
+// 基准名存 kPresetBaseNameRole（不靠往返拼接/剥离字符串），dirty 态由主窗比对后喂入。
+void OutputPageImpl::refresh_preset_combo_texts() {
+    if (preset_combo == nullptr)
+        return;
+    const int current = preset_combo->currentIndex();
+    const QString current_path =
+        current >= 0 ? preset_combo->itemData(current, Qt::UserRole).toString() : QString();
+    for (int i = 0; i < preset_combo->count(); ++i) {
+        QString base = preset_combo->itemData(i, kPresetBaseNameRole).toString();
+        if (base.isEmpty())
+            base = preset_combo->itemText(i);
+        const bool dirty_here = preset_dirty && !current_path.isEmpty() &&
+                                preset_combo->itemData(i, Qt::UserRole).toString() == current_path;
+        preset_combo->setItemText(i, dirty_here ? base + dirty_suffix() : base);
+        preset_combo->setItemData(i, base, Qt::ToolTipRole);
+    }
+}
+
+void OutputPageImpl::sync_preset_buttons() {
+    if (preset_combo == nullptr)
+        return;
+    const int index = preset_combo->currentIndex();
+    const QString path =
+        index >= 0 ? preset_combo->itemData(index, Qt::UserRole).toString() : QString();
+    const bool has = !path.isEmpty();
+    preset_save->setEnabled(has);
+    preset_delete->setEnabled(has);
+    preset_save->setToolTip(
+        has ? (preset_dirty ? PageOutput::tr("保存到当前预设（覆盖同名文件；当前配置已修改）")
+                            : PageOutput::tr("保存到当前预设（覆盖同名文件）"))
+            : PageOutput::tr("未绑定预设：请先「另存…」保存一份新预设"));
+    preset_delete->setToolTip(has ? PageOutput::tr("删除当前预设（会二次确认）")
+                                  : PageOutput::tr("未绑定预设：无可删除项"));
+}
+
 void PageOutput::set_preset_list(const std::vector<std::pair<QString, QString>> &presets) {
     OutputPageImpl *impl_ = impl_of(this);
     const QSignalBlocker blocker(impl_->preset_combo);
@@ -1735,9 +1826,13 @@ void PageOutput::set_preset_list(const std::vector<std::pair<QString, QString>> 
                   .toString()
             : QString();
     impl_->preset_combo->clear();
-    for (const auto &[path, name] : presets)
+    // 0.4.2 / 需求 3（A13）：条目只 = 真实预设文件；**不设「未选择预设」幽灵占位项**。
+    // 无绑定时 combo 无选中项，占位文本 = 「当前配置未保存为预设」（诚实状态说明，不是可选态）。
+    for (const auto &[path, name] : presets) {
         impl_->preset_combo->addItem(name, path);
-    // 修 2-24：无当前预设 → 保持未选中（显示 placeholder「未选择预设」），不再默认指向首项
+        impl_->preset_combo->setItemData(impl_->preset_combo->count() - 1, name,
+                                         kPresetBaseNameRole);
+    }
     int index = -1;
     if (!current.isEmpty()) {
         for (int i = 0; i < impl_->preset_combo->count(); ++i) {
@@ -1748,6 +1843,7 @@ void PageOutput::set_preset_list(const std::vector<std::pair<QString, QString>> 
         }
     }
     impl_->preset_combo->setCurrentIndex(index);
+    impl_->refresh_preset_combo_texts();
     impl_->sync_preset_buttons();
 }
 
@@ -1755,14 +1851,44 @@ void PageOutput::set_current_preset(const QString &path) {
     OutputPageImpl *impl_ = impl_of(this);
     if (impl_->preset_combo == nullptr)
         return;
-    const QSignalBlocker blocker(impl_->preset_combo);
-    for (int i = 0; i < impl_->preset_combo->count(); ++i) {
-        if (impl_->preset_combo->itemData(i, Qt::UserRole).toString() == path) {
-            impl_->preset_combo->setCurrentIndex(i);
-            break;
+    {
+        const QSignalBlocker blocker(impl_->preset_combo);
+        int index = -1;
+        for (int i = 0; i < impl_->preset_combo->count(); ++i) {
+            if (impl_->preset_combo->itemData(i, Qt::UserRole).toString() == path) {
+                index = i;
+                break;
+            }
         }
+        impl_->preset_combo->setCurrentIndex(index);
+        impl_->refresh_preset_combo_texts();
     }
     impl_->sync_preset_buttons();
+}
+
+void PageOutput::set_current_preset_dirty(bool dirty) {
+    OutputPageImpl *impl_ = impl_of(this);
+    if (impl_->preset_dirty == dirty)
+        return;
+    impl_->preset_dirty = dirty;
+    if (impl_->preset_combo != nullptr) {
+        const QSignalBlocker blocker(impl_->preset_combo);
+        impl_->refresh_preset_combo_texts();
+    }
+    impl_->sync_preset_buttons();
+}
+
+bool PageOutput::current_preset_dirty() const {
+    OutputPageImpl *impl_ = impl_of(this);
+    return impl_->preset_dirty;
+}
+
+void PageOutput::set_preset_note(const QString &text) {
+    OutputPageImpl *impl_ = impl_of(this);
+    if (impl_->preset_note == nullptr)
+        return;
+    impl_->preset_note->set_full_text(text);
+    impl_->preset_note->setVisible(!text.isEmpty());
 }
 
 // M7-R2.1-F4：线性光重采样开关读回（预览通道透传用；默认 false = 现行为）
@@ -1833,12 +1959,18 @@ void OutputPageImpl::sync_format_preset_buttons(const std::string &id) {
     // 「未选择」态已不存在：列表为空才会没有选中项（错误态，保留既有禁用语义）。
     const bool is_default = has && is_default_preset_path(st->format_preset_path);
     if (st->preset_save != nullptr) {
-        // 全局预设接管态（M12 Lead 裁定）：卡值来自全局预设、不再对应任何预设文件 ⇒ 保存禁用
-        // （否则会用全局值覆盖 default.json / 旧来源文件），原因进 tooltip（不静默灰）。
+        // 来源 = 大预设（0.4.2 / 需求 3 / A13）：卡值没有绑定的格式预设文件 ⇒ 保存禁用
+        // （否则会用大预设值覆盖 default.json / 旧来源文件），原因进 tooltip（不静默灰），
+        // 指路「另存」= 唯一不会误覆盖别处的落盘路径。
         st->preset_save->setEnabled(!detached);
         if (detached) {
+            const QString name = st->preset_global_name.isEmpty()
+                                     ? PageOutput::tr("（未命名）")
+                                     : PageOutput::tr("「%1」").arg(st->preset_global_name);
             st->preset_save->setToolTip(
-                PageOutput::tr("当前卡值来自全局预设：请先重新选择格式预设再保存"));
+                PageOutput::tr("当前卡值来自大预设%1：没有绑定的格式预设文件可覆盖；"
+                               "要保存为格式预设请用「另存」")
+                    .arg(name));
         } else if (has) {
             st->preset_save->setToolTip(
                 is_default
@@ -1855,7 +1987,7 @@ void OutputPageImpl::sync_format_preset_buttons(const std::string &id) {
         st->preset_delete->setEnabled(has && !is_default);
         if (detached) {
             st->preset_delete->setToolTip(
-                PageOutput::tr("当前卡值来自全局预设：无可删除的格式预设"));
+                PageOutput::tr("当前卡值来自大预设：没有绑定的格式预设文件可删除"));
         } else if (!has) {
             st->preset_delete->setToolTip(
                 PageOutput::tr("未选中格式预设：无可删除项（预设列表为空或数据目录不可用）"));
@@ -1877,6 +2009,45 @@ void OutputPageImpl::sync_format_preset_buttons(const std::string &id) {
     }
     // 任何按钮态刷新都顺带同步下拉的可读面（弹层自适应宽 + tooltip 当前全名）。
     sync_format_preset_combo_view(st);
+}
+
+// 0.4.2 / 需求 3（A13）：来源显示重放（占位文本 / 注记 / 按钮态）——**不改会话态**。
+// 只在「来源 = 大预设」时写占位与注记；绑定态/空态交给 set_format_preset_list /
+// set_current_format_preset / 载入链（它们各自知道该写什么注记）。
+void OutputPageImpl::sync_format_preset_source_display(const std::string &id) {
+    FormatState *st = state_of(id);
+    if (st == nullptr)
+        return;
+    if (st->preset_combo != nullptr) {
+        const QSignalBlocker blocker(st->preset_combo);
+        if (st->preset_detached) {
+            st->preset_combo->setPlaceholderText(global_source_placeholder(st->preset_global_name));
+            st->preset_combo->setCurrentIndex(-1); // 不再假装高亮 default
+        } else {
+            st->preset_combo->setPlaceholderText(QString());
+        }
+    }
+    if (st->preset_detached) {
+        update_format_preset_note(id,
+                                  global_source_note(st->preset_global_name, st->preset_based_on));
+    }
+    sync_format_preset_buttons(id);
+}
+
+// 来源 = 大预设的唯一迁移点（进入）：清绑定 + 写显示字段 + 重放显示/按钮态。
+// 注意：**不写 format_preset_path**（来源不是文件绑定），也不触发自动 default 载入
+// （MainWindow 的 refresh_format_preset_row 看到 detached 即返回）。
+void OutputPageImpl::set_format_preset_global_source_for(const std::string &id,
+                                                         const QString &global_name,
+                                                         const QString &based_on) {
+    FormatState *st = state_of(id);
+    if (st == nullptr)
+        return;
+    st->preset_detached = true;
+    st->format_preset_path.clear();
+    st->preset_global_name = global_name;
+    st->preset_based_on = based_on;
+    sync_format_preset_source_display(id);
 }
 
 void OutputPageImpl::apply_format_preset_to(const std::string &id,
@@ -2020,6 +2191,7 @@ void PageOutput::set_format_preset_list(const QString &format_id,
     if (st == nullptr || st->preset_combo == nullptr)
         return;
     const QString session = st->format_preset_path;
+    const bool detached = st->preset_detached;
     {
         const QSignalBlocker blocker(st->preset_combo);
         st->preset_combo->clear();
@@ -2027,40 +2199,49 @@ void PageOutput::set_format_preset_list(const QString &format_id,
         // 喂入；列表空 = 数据目录不可用/无预设，属错误态，而不是一种可选的"未选择"状态）。
         for (const auto &[path, name] : presets)
             st->preset_combo->addItem(name, path);
-        // 选中规则（Lead 锁定 · 简报 §4.4-2）：
+        // 选中规则：
+        //   ⓪ 来源 = 大预设（0.4.2 / 需求 3）：**无选中项** + 占位「来自大预设：<名>」——
+        //      绝不假装高亮 default（卡值不是 default 的内容，M12 的视觉锚在语义上是撒谎）；
         //   ① 会话路径仍在列表里 → 保留选中（用户上次的选择不丢）；
         //   ② 否则（首启 / 新建格式卡 / 来源文件被外部删除）→ 选 default（文件名 stem 判定）；
         //   ③ 异常数据目录（无 default）→ 选第一项；列表空 → 无选中项。
         // ②③ 的选中项 = **待自动载入**的状态：会话路径必须清空，由
         // MainWindow::Impl::refresh_format_preset_row 静默 load（见 mainwindow_presets.cpp）。
-        int index = -1;
-        bool session_found = false;
-        if (!session.isEmpty()) {
-            for (int i = 0; i < st->preset_combo->count(); ++i) {
-                if (st->preset_combo->itemData(i, Qt::UserRole).toString() == session) {
-                    index = i;
-                    session_found = true;
-                    break;
+        if (detached) {
+            st->preset_combo->setCurrentIndex(-1);
+            st->preset_combo->setPlaceholderText(global_source_placeholder(st->preset_global_name));
+        } else {
+            int index = -1;
+            bool session_found = false;
+            if (!session.isEmpty()) {
+                for (int i = 0; i < st->preset_combo->count(); ++i) {
+                    if (st->preset_combo->itemData(i, Qt::UserRole).toString() == session) {
+                        index = i;
+                        session_found = true;
+                        break;
+                    }
                 }
             }
+            if (!session_found) {
+                index = default_preset_item_index(st->preset_combo);
+                if (index < 0 && st->preset_combo->count() > 0)
+                    index = 0;
+                // 来源失效（被删/改名）或首启：清会话来源 → MainWindow 侧自动载入 default 并自愈。
+                st->format_preset_path.clear();
+            }
+            st->preset_combo->setCurrentIndex(index);
+            st->preset_combo->setPlaceholderText(QString());
         }
-        if (!session_found) {
-            index = default_preset_item_index(st->preset_combo);
-            if (index < 0 && st->preset_combo->count() > 0)
-                index = 0;
-            // 来源失效（被删/改名）或首启：清会话来源 → MainWindow 侧自动载入 default 并自愈。
-            st->format_preset_path.clear();
-        }
-        st->preset_combo->setCurrentIndex(index);
         // 需求 3：弹层自适应宽 + tooltip 全文（长名在 160px 里被 elide 时悬浮可读）
         sync_format_preset_combo_view(st);
     }
     // 注释位：
-    //   * 全局预设接管态（M12）→ 恢复接管注记（刷新可能发生在导出等临时注记之后）；
+    //   * 来源 = 大预设 → 如实来源注记（刷新可能发生在导出等临时注记之后，需重放）；
     //   * 会话来源仍在 → 保留「来自格式预设」（自动载入成功后会写新注记）；
-    //   * 列表空且非接管 → 清空（错误态）。
-    if (st->preset_detached) {
-        impl_->update_format_preset_note(id, detached_preset_note());
+    //   * 列表空且无来源 → 清空（错误态）。
+    if (detached) {
+        impl_->update_format_preset_note(
+            id, global_source_note(st->preset_global_name, st->preset_based_on));
     } else if (st->format_preset_path.isEmpty()) {
         impl_->update_format_preset_note(id, QString());
     }
@@ -2077,8 +2258,8 @@ void PageOutput::set_current_format_preset(const QString &format_id, const QStri
     st->format_preset_path = path;
     if (st->preset_combo != nullptr) {
         const QSignalBlocker blocker(st->preset_combo);
-        // M12：无占位项 ⇒ 下标逻辑一律从 0 起（不再假设第 0 项是「未选择」）。
-        // 空路径/找不到 = 高亮 default（视觉锚），与 set_format_preset_list 的选中规则同源。
+        // 0.4.2：无「未选择」占位项；空路径/找不到 = **无选中项**（不再高亮 default ——
+        // 绑定失效时由 MainWindow 的刷新链自动载入 default 后写回真实路径，短暂无选中是诚实的）。
         int index = -1;
         if (!path.isEmpty()) {
             for (int i = 0; i < st->preset_combo->count(); ++i) {
@@ -2088,11 +2269,9 @@ void PageOutput::set_current_format_preset(const QString &format_id, const QStri
                 }
             }
         }
-        if (index < 0)
-            index = default_preset_item_index(st->preset_combo);
-        if (index < 0 && st->preset_combo->count() > 0)
-            index = 0;
         st->preset_combo->setCurrentIndex(index);
+        st->preset_combo->setPlaceholderText(
+            st->preset_detached ? global_source_placeholder(st->preset_global_name) : QString());
     }
     // 需求 3：弹层自适应宽 + tooltip 全文（程序化高亮同样生效）
     sync_format_preset_combo_view(st);
@@ -2105,16 +2284,19 @@ void OutputPageImpl::set_format_preset_detached_for(const std::string &id, bool 
         return;
     st->preset_detached = detached;
     if (detached) {
-        // 卡值来源 = 全局预设：清会话来源（I-P3：来源标注不得撒谎），下拉高亮 default 作视觉锚。
+        // 兼容入口（M12 调用方）：只给「来源 = 大预设」标志而不给来源名 —— 占位/注记走
+        // 「来自大预设 / 自定义参数」的通用措辞；主窗新路径改用
+        // set_format_preset_global_source_for(id, 名, 基于) 写真实来源。
         st->format_preset_path.clear();
-        if (st->preset_combo != nullptr) {
-            const QSignalBlocker blocker(st->preset_combo);
-            int index = default_preset_item_index(st->preset_combo);
-            if (index < 0 && st->preset_combo->count() > 0)
-                index = 0;
-            st->preset_combo->setCurrentIndex(index);
-        }
-        update_format_preset_note(id, detached_preset_note());
+        sync_format_preset_source_display(id);
+        return;
+    }
+    // 解除：来源名/基于信息随绑定链重建（载入成功由 format_preset_load_into 写注记）。
+    st->preset_global_name.clear();
+    st->preset_based_on.clear();
+    if (st->preset_combo != nullptr) {
+        const QSignalBlocker blocker(st->preset_combo);
+        st->preset_combo->setPlaceholderText(QString());
     }
     sync_format_preset_buttons(id);
 }
@@ -2128,6 +2310,26 @@ bool PageOutput::format_preset_detached(const QString &format_id) const {
     OutputPageImpl *impl_ = impl_of(this);
     const FormatState *st = impl_->state_of(format_id.toStdString());
     return st != nullptr && st->preset_detached;
+}
+
+// 0.4.2 / 需求 3（A13）：来源 = 大预设（真实来源名 + 基于的格式预设 stem）。
+void PageOutput::set_format_preset_global_source(const QString &format_id,
+                                                 const QString &global_name,
+                                                 const QString &based_on) {
+    OutputPageImpl *impl_ = impl_of(this);
+    impl_->set_format_preset_global_source_for(format_id.toStdString(), global_name, based_on);
+}
+
+QString PageOutput::format_preset_global_source(const QString &format_id) const {
+    OutputPageImpl *impl_ = impl_of(this);
+    const FormatState *st = impl_->state_of(format_id.toStdString());
+    return st != nullptr ? st->preset_global_name : QString();
+}
+
+QString PageOutput::format_preset_based_on(const QString &format_id) const {
+    OutputPageImpl *impl_ = impl_of(this);
+    const FormatState *st = impl_->state_of(format_id.toStdString());
+    return st != nullptr ? st->preset_based_on : QString();
 }
 
 QString PageOutput::current_format_preset(const QString &format_id) const {

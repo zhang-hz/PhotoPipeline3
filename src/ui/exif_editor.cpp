@@ -12,19 +12,19 @@
 //     MakerNote（只读）= 其余分组全部归并，子节点按原分组名。MakerNote 归并组禁编辑；
 //     另把 Exif.Photo.MakerNote 这个二进制块本身也置为只读（避免文本编辑破坏 MakerNote，
 //     见报告 next-needed）。
-//   * 〔批〕= 批量规则会命中的标签：时间字段（EXIF 3 + OffsetTime* 3 / XMP CreateDate 族）、
-//     GPS 字段（批量 gps 或 gps_clear 时的 Exif.GPSInfo.*）、strip_privacy（全部）、
-//     edits 命中键。勾选“忽略全部批量规则”后该文件不再受批量规则影响 → 标记消失。
-//     M5-T10（A8）：行首不再有「〔批〕」字形 —— 改为行内**中性 pill「批」**（delegate 画 16px
-//     胶囊，色 = theme::pill_paint(kPillNeutral)）。
-//   * 已改值项：M5-T10（A8）不再用 "● " 前缀 —— 改值 = **强调色字 + 700**（行内 .mod 等价；
-//     树行没有边框可画，故取"强调边框+强调色字"的字色一档）。
+//   * 单文件元数据修改 = 本文件的 pp::MetadataOverride（唯一可写状态；无全局批量规则）。
+//     三组字段三态语义（M14/0.4.2 C2）：**不修改**（不写该组）/**设置为**（写入本页值）/
+//     **清除标签**（时间=remove touched 9 键；GPS= gps_clear；隐私=可选开关三态不可清除）。
+//     OK 返回的 override = 旧 override 合并：对话框不表达的字段（六个卡 enable / 历史
+//     ignore_batch）从旧值原样保留，不丢失（C2.5）。
+//   * 已改值项：行内**强调色字 + 700**（M5-T10/A8 零字形；原「●」前缀退役）。
+//     M14：原「〔批〕」/行首「批」pill（批量规则命中标记）随批量规则概念一并退役。
 //   * 值留空 = 删除该标签（remove 编辑）。
 //   * 时间三态“清除”：MetadataOverride 没有对应字段，语义化为对时间标签的 remove 编辑
-//     （键集 = ui/time_tag_keys.h 的 **touched 全部 9 键**，与〔批〕命中面/shift 触达面同集
+//     （键集 = ui/time_tag_keys.h 的 **touched 全部 9 键**，与时间偏移触达面同集
 //     —— M7R22G2-0 主对话裁定，2026-10-13；原「只清 wall_clock 5 键」换锚，消「清除 3 键
-//     vs 命中 9 键」漂移。R-197 4 份真相单表收口见同表）；GPS“清除”= gps_clear；
-//     隐私剥除 = optional<bool>。
+//     vs 触达 9 键」漂移。R-197 4 份真相单表收口见同表）；GPS“清除”= gps_clear；
+//     隐私剥除 = optional<bool>。M14：原「批量规则命中面」表述随概念退役删除。
 //   * 自验开关（不改冻结头）：动态属性 "pp_exif_editor_suppress_modal" = true 时，所有
 //     QMessageBox 改为把内容写进动态属性（"pp_last_validation_errors" / "pp_last_warning"），
 //     offscreen 自验程序据此断言“校验失败不 accept”，不会阻塞在模态框上。
@@ -40,7 +40,6 @@
 #include "ui/theme.h" // M4-T12：.mod 样式（theme::set_mod / mod_qss）；M5-T10：令牌 + dialogkit
 
 #include <QAbstractItemView>
-#include <QCheckBox>
 #include <QColor>
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -87,7 +86,7 @@
 #include <vector>
 
 #include "platform/frameless.h" // M5-T10：无边框接线（与主窗/设置弹窗同一机制）
-#include "ui/formkit.h"         // M5-T10：勾选框（忽略批量规则）走 formkit 单实现
+#include "ui/formkit.h"         // 行高/ElidedLabel/组合框构造器单源
 #include "ui/settings_dialog.h" // M5-T10：dialogkit（标题栏/页签样式/按钮/焦点环/QSS）
 #include "ui/time_tag_keys.h"   // R-197（M7-R2.1-F3）：时间标签集合单表（清除/命中双角色）
 
@@ -97,8 +96,8 @@ namespace {
 // role 值单源 = exif_editor.h 的 exif_roles（探针按同一对值读回）
 constexpr int kKeyRole = exif_roles::key;   // QString: full Exiv2 key
 constexpr int kNodeRole = exif_roles::node; // int: 0 = tag leaf, 1 = group node
-// M5-T10：行级标记（delegate 用；也是探针读回面 —— A8 零字形两条）。role 值单源 = exif_editor.h
-constexpr int kBatchRole = exif_roles::batch;     // bool: 批量规则会命中（画中性 pill「批」）
+// M14/0.4.2：kBatchRole（批量规则命中）随批量规则概念退役 —— 头文件常量保留（冻结面只增不删），
+// 本 TU 不再设置/读取它（行标记只剩「已改值」强调色字）。
 constexpr int kChangedRole = exif_roles::changed; // bool: 该行已改值（强调色字 + 700）
 constexpr int kLeaf = 0;
 constexpr int kGroupNode = 1;
@@ -120,61 +119,31 @@ const char *const kSuppressModal = "pp_exif_editor_suppress_modal";
 const char *const kLastErrors = "pp_last_validation_errors";
 const char *const kLastWarning = "pp_last_warning";
 
-// 树行 delegate（M5-T10 / A8 零字形两条）：行首画**中性 pill「批」**（批量规则命中），
-// 改值行用**强调色字 + 700**（树行无边框可画 → 取 .mod 的字色/字重一档）。行文本本身不再
-// 含任何标记字形（〔批〕/●）；两个标记同时以 item data 存回（探针读回面）。
+// 树行 delegate（M14/0.4.2 C2）：批量规则概念已退役 → 原行首「批」pill 一并删除；
+// 改值行仍用**强调色字 + 700**（树行无边框可画 → 取 .mod 的字色/字重一档）。
+// 行文本本身不含任何标记字形（〔批〕/● 已清零）；改值标记同时以 item data 存回（探针读回面）。
 class TagItemDelegate : public QStyledItemDelegate {
 public:
     explicit TagItemDelegate(QObject *parent = nullptr) : QStyledItemDelegate(parent) {}
 
     void set_tokens(const theme::Tokens &t) { tokens_ = t; }
     const theme::Tokens &tokens() const { return tokens_; }
-    int pill_width() const {
-        const QFontMetrics fm(theme::font(theme::Typography::badge_px, QFont::Bold));
-        return fm.horizontalAdvance(T("批")) + 2 * theme::Metrics::pill_pad_x + 2;
-    }
-
-    QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override {
-        QSize base = QStyledItemDelegate::sizeHint(option, index);
-        if (index.data(kBatchRole).toBool())
-            base.setWidth(base.width() + pill_width() + kPillGap);
-        return base;
-    }
 
     void paint(QPainter *painter, const QStyleOptionViewItem &option,
                const QModelIndex &index) const override {
         QStyleOptionViewItem opt = option;
         initStyleOption(&opt, index);
         const QString text = opt.text;
-        const bool batch = index.data(kBatchRole).toBool();
         const bool changed = index.data(kChangedRole).toBool();
         opt.text.clear(); // 文本自绘（底/选中/缩进仍走基类）
         QStyledItemDelegate::paint(painter, opt, index);
 
-        // R-218（M7-R2E2）：行内几何走逻辑坐标（pill 贴 leading）+ 单点镜像；LTR 逐字节不变。
+        // R-218（M7-R2E2）：行内几何走逻辑坐标 + 单点镜像；LTR 逐字节不变。
         const bool rtl = opt.direction == Qt::RightToLeft;
         const auto mirror_x = [&opt](int x, int w) {
             return opt.rect.left() + opt.rect.right() - (x + w - 1);
         };
         int left = opt.rect.left() + 2;
-        if (batch) { // 中性 pill「批」（R4 高 16 r3 + 9.5px/700；色 = 中性档）
-            const theme::PillPaint paint = theme::pill_paint(tokens_, theme::kPillNeutral);
-            const int w = pill_width();
-            QRectF box(left, opt.rect.center().y() - theme::Metrics::pill_h / 2.0 + 0.5, w,
-                       theme::Metrics::pill_h);
-            if (rtl)
-                box.moveLeft(mirror_x(left, w));
-            painter->save();
-            painter->setRenderHint(QPainter::Antialiasing, true);
-            painter->setPen(QPen(paint.bd, 1.0));
-            painter->setBrush(paint.bg);
-            painter->drawRoundedRect(box, theme::Metrics::pill_radius, theme::Metrics::pill_radius);
-            painter->setFont(theme::font(theme::Typography::badge_px, QFont::Bold));
-            painter->setPen(paint.fg);
-            painter->drawText(box, Qt::AlignCenter, T("批"));
-            painter->restore();
-            left += w + kPillGap;
-        }
         QFont font = opt.font;
         font.setWeight(changed ? QFont::Bold : QFont::Normal);
         painter->save();
@@ -191,7 +160,6 @@ public:
     }
 
 private:
-    static constexpr int kPillGap = 6; // pill ↔ 文字
     theme::Tokens tokens_ = theme::tokens(theme::preferred_theme_mode());
 };
 
@@ -206,15 +174,21 @@ private:
 // currentIndex()==1/2 魔法索引全部退役（deep-review R-199/E5-09「调序即全对话框错位」）。
 // M7R21F4-0：三枚举基型 int→uint8_t（tidy performance-enum-size，值域 0..2 适配；R-197/199
 // 收敛新增的三个 file-local 枚举，读写面 static_cast<int> 照旧，行为零变化）。
-enum class TriMode : std::uint8_t { Inherit = 0, Override = 1, Clear = 2 };       // 时间 / GPS 三态
-enum class TimeMethod : std::uint8_t { Delta = 0, TimeZone = 1 };                 // 时间方式二态
-enum class PrivacyMode : std::uint8_t { Inherit = 0, ForceOn = 1, ForceOff = 2 }; // 隐私剥除三态
+enum class TriMode : std::uint8_t {
+    None = 0,
+    Set = 1,
+    Clear = 2
+}; // 时间 / GPS 三态（不修改/设置为/清除）
+enum class TimeMethod : std::uint8_t { Delta = 0, TimeZone = 1 };              // 时间方式二态
+enum class PrivacyMode : std::uint8_t { None = 0, ForceOn = 1, ForceOff = 2 }; // 隐私剥除三态
 
-void add_tri_items(QComboBox *cb, const QString &inherit, const QString &over,
-                   const QString &clear) {
-    cb->addItem(inherit, static_cast<int>(TriMode::Inherit));
-    cb->addItem(over, static_cast<int>(TriMode::Override));
-    cb->addItem(clear, static_cast<int>(TriMode::Clear));
+// M14/0.4.2 C2：三态 = 「不修改 / 设置为 / 清除（标签）」。批量规则概念已退役，原
+// 「继承批量规则」选项名改为「不修改」（选择它 = 该文件不再有这组元数据修改）。
+void add_tri_items(QComboBox *cb, const QString &none_text, const QString &set_text,
+                   const QString &clear_text) {
+    cb->addItem(none_text, static_cast<int>(TriMode::None));
+    cb->addItem(set_text, static_cast<int>(TriMode::Set));
+    cb->addItem(clear_text, static_cast<int>(TriMode::Clear));
 }
 
 void set_tri(QComboBox *cb, TriMode mode) {
@@ -225,7 +199,7 @@ void set_tri(QComboBox *cb, TriMode mode) {
 
 TriMode tri_of(const QComboBox *cb) {
     const QVariant v = cb->currentData();
-    return v.isValid() ? static_cast<TriMode>(v.toInt()) : TriMode::Inherit;
+    return v.isValid() ? static_cast<TriMode>(v.toInt()) : TriMode::None;
 }
 
 void set_method(QComboBox *cb, TimeMethod m) {
@@ -247,7 +221,7 @@ void set_privacy(QComboBox *cb, PrivacyMode m) {
 
 PrivacyMode privacy_of(const QComboBox *cb) {
     const QVariant v = cb->currentData();
-    return v.isValid() ? static_cast<PrivacyMode>(v.toInt()) : PrivacyMode::Inherit;
+    return v.isValid() ? static_cast<PrivacyMode>(v.toInt()) : PrivacyMode::None;
 }
 
 // 本文件下拉的唯一构造点（GUI-R2）：走 formkit::combo_box —— 钩子/高/箭头/字体/无障碍
@@ -357,36 +331,11 @@ bool is_long_text_type(Exiv2::TypeId t) {
     }
 }
 
-// —— 〔批〕判定 ——
-// R-197：is_exif_time_key / is_xmp_time_key（命中集 = touched 9 键）收敛为
-// ui/time_tag_keys.h 单表谓词（原两处字面量退役）。
-using timetags::is_exif_time_key;
-using timetags::is_xmp_time_key;
+// M14/0.4.2：原「〔批〕判定」面（批量规则命中 = time_shift/gps/strip_privacy/edits 命中键）
+// 随批量规则概念整体退役：BatchRules 不再参与本对话框（构造参数保留以兼容冻结签名，宿主恒传
+// 空规则；生效值合成一律 preview_effective(meta, {}, 本文件 override)）。
 
-bool edits_hit(const std::vector<pp::TagEdit> &v, const std::string &key) {
-    return std::any_of(v.begin(), v.end(), [&](const pp::TagEdit &e) { return e.key == key; });
-}
-
-const pp::BatchRules kNoRules{};
-
-bool batch_affects(const pp::BatchRules &b, const std::string &key, bool is_xmp) {
-    if (b.strip_privacy)
-        return true; // strip_privacy 全部
-    if (is_xmp) {
-        if (edits_hit(b.xmp_edits, key))
-            return true;
-        return b.time_shift.has_value() && is_xmp_time_key(key);
-    }
-    if (edits_hit(b.exif_edits, key))
-        return true;
-    if (b.time_shift.has_value() && is_exif_time_key(key))
-        return true;
-    if ((b.gps.has_value() || b.gps_clear) && key_second(key) == "GPSInfo")
-        return true;
-    return false;
-}
-
-// —— 时间 / GPS 显示工具（与批量页 §2.11 同口径）——
+// —— 时间 / GPS 显示工具（M4-T12 生效值口径）——
 QString offset_label(int minutes) {
     const QChar sign = minutes < 0 ? u'-' : u'+';
     const int a = std::abs(minutes);
@@ -466,7 +415,6 @@ struct ExifEditor::Impl {
     };
     std::map<std::string, Row> rows;
 
-    QCheckBox *ignore_check = nullptr;
     QTabWidget *tabs = nullptr;
 
     // EXIF 页
@@ -751,11 +699,8 @@ void ExifEditor::Impl::refresh_row(const std::string &key) {
     if (it == rows.end() || !it->second.item)
         return;
     Row &r = it->second;
-    const pp::BatchRules &eff = (ignore_check && ignore_check->isChecked()) ? kNoRules : batch;
-    const bool batch_hit = batch_affects(eff, r.key, r.is_xmp);
     const bool changed = find_edit(r.is_xmp, r.key) != nullptr;
     QTreeWidgetItem *item = r.item;
-    item->setData(0, kBatchRole, batch_hit); // delegate：中性 pill「批」
     item->setData(0, kChangedRole, changed); // delegate：强调色字 + 700
     item->setText(0, row_text(r));
     // 字色/字重同步写回 item（探针读回面 + 非 delegate 路径的兜底），色值 = 令牌（A6）
@@ -930,8 +875,12 @@ void ExifEditor::Impl::apply_tree_filter(QTreeWidget *tree, const QString &needl
         (void)key;
         if (row.is_xmp != is_xmp || !row.item)
             continue;
+        // M14/0.4.2 深查修：搜索框承诺「标签名 / 键 / 值」——原判据只看行文本（标签名 = 值），
+        // 全键（Exif.Photo.DateTimeOriginal）永远搜不到；现同时匹配 item data 里的全键。
+        const QString key_text = row.item->data(0, kKeyRole).toString();
         row.item->setHidden(!needle.isEmpty() &&
-                            !row.item->text(0).contains(needle, Qt::CaseInsensitive));
+                            !row.item->text(0).contains(needle, Qt::CaseInsensitive) &&
+                            !key_text.contains(needle, Qt::CaseInsensitive));
     }
     std::function<bool(QTreeWidgetItem *)> node_visible = [&](QTreeWidgetItem *node) -> bool {
         bool any = false;
@@ -1045,7 +994,7 @@ QWidget *ExifEditor::Impl::make_exif_tab() {
     exif_tree->setSelectionMode(QAbstractItemView::SingleSelection);
     exif_tree->setFont(theme::font(theme::Typography::body_px));
     exif_tree->setAccessibleName(T("EXIF 标签树"));
-    attach_delegate(exif_tree); // M5-T10：行首 pill「批」+ 改值强调色字（A8）
+    attach_delegate(exif_tree); // M14：只画「已改值」强调色字（原行首 pill「批」退役）
     lv->addWidget(exif_tree, 1);
     split->addWidget(left);
 
@@ -1175,7 +1124,7 @@ QWidget *ExifEditor::Impl::make_xmp_tab() {
 
 void ExifEditor::Impl::update_time_mode() {
     // R-199：三态/二态读回走 itemData（原 currentIndex()==1/2 魔法索引）
-    time_params->setEnabled(tri_of(time_mode) == TriMode::Override);
+    time_params->setEnabled(tri_of(time_mode) == TriMode::Set);
     const bool delta = method_of(time_method) == TimeMethod::Delta;
     time_delta_box->setVisible(delta);
     time_tz_box->setVisible(!delta);
@@ -1200,7 +1149,7 @@ pp::TimeShift ExifEditor::Impl::time_shift_from_widgets() const {
 }
 
 void ExifEditor::Impl::update_gps_mode() {
-    gps_params->setEnabled(tri_of(gps_mode) == TriMode::Override); // R-199
+    gps_params->setEnabled(tri_of(gps_mode) == TriMode::Set); // R-199
     refresh_effective_values();
 }
 
@@ -1301,7 +1250,8 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     auto *v = new QVBoxLayout(inner);
 
     auto *hint = new ElidedLabel();
-    hint->set_full_text(T("以下三态只作用于当前文件的例外：继承批量规则 / 覆盖 / 清除。"));
+    hint->set_full_text(T("以下三态只作用于当前打开的这一个文件（本文件的元数据修改）：不修改 / "
+                          "设置为 / 清除标签。"));
     hint->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkNote)); // A6：令牌 txt3
     hint->setFont(theme::font(theme::Typography::hint_px));
     v->addWidget(hint);
@@ -1316,9 +1266,9 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     time_label->setFont(theme::font(theme::Typography::small_px));
     time_row->addWidget(time_label);
     time_mode = make_combo(QStringLiteral("time_mode"), T("时间偏移"),
-                           T("本文件的时间处理：继承批量规则 / 覆盖 / 清除时间标签"));
-    add_tri_items(time_mode, T("继承批量规则"), T("覆盖"),
-                  T("清除")); // R-199：itemData = TriMode（唯一真相）
+                           T("本文件的时间处理：不修改 / 设置为 / 清除时间标签"));
+    add_tri_items(time_mode, T("不修改"), T("设置为"),
+                  T("清除标签")); // R-199：itemData = TriMode（唯一真相）
     time_row->addWidget(time_mode);
     time_row->addStretch(1);
     tv->addWidget(wrap_row28(time_row));
@@ -1431,8 +1381,8 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     gps_label->setFont(theme::font(theme::Typography::small_px));
     gps_row->addWidget(gps_label);
     gps_mode = make_combo(QStringLiteral("gps_mode"), T("GPS"),
-                          T("本文件的 GPS 处理：继承批量规则 / 覆盖 / 清除"));
-    add_tri_items(gps_mode, T("继承批量规则"), T("覆盖"),
+                          T("本文件的 GPS 处理：不修改 / 设置为 / 清除 GPS"));
+    add_tri_items(gps_mode, T("不修改"), T("设置为"),
                   T("清除 GPS")); // R-199：itemData = TriMode（唯一真相）
     gps_row->addWidget(gps_mode);
     gps_row->addStretch(1);
@@ -1524,14 +1474,14 @@ QWidget *ExifEditor::Impl::make_time_gps_tab() {
     privacy_label->setFont(theme::font(theme::Typography::small_px));
     privacy_row->addWidget(privacy_label);
     privacy_mode = make_combo(QStringLiteral("privacy_mode"), T("隐私剥除"),
-                              T("本文件的隐私剥除：继承批量规则 / 强制开 / 强制关"));
-    privacy_mode->addItem(T("继承批量规则"), static_cast<int>(PrivacyMode::Inherit)); // R-199
+                              T("本文件的隐私剥除：不修改 / 强制开 / 强制关"));
+    privacy_mode->addItem(T("不修改"), static_cast<int>(PrivacyMode::None)); // R-199
     privacy_mode->addItem(T("强制开"), static_cast<int>(PrivacyMode::ForceOn));
     privacy_mode->addItem(T("强制关"), static_cast<int>(PrivacyMode::ForceOff));
     privacy_row->addWidget(privacy_mode);
     privacy_row->addStretch(1);
     pv->addWidget(wrap_row28(privacy_row));
-    auto *priority = new QLabel(T("优先级最高的规则"));
+    auto *priority = new QLabel(T("剥除优先级高于上面的 EXIF / XMP 标签编辑"));
     priority->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkNote)); // A6：令牌 txt3
     priority->setFont(theme::font(theme::Typography::hint_px));
     pv->addWidget(priority);
@@ -1613,19 +1563,19 @@ void ExifEditor::Impl::build() {
                                   theme::Metrics::main_pad_x, theme::Metrics::main_pad_bottom);
     body_line->setSpacing(theme::Metrics::group_gap);
 
-    auto *top = new QHBoxLayout();
-    top->addStretch(1);
-    // M5-T10（R4/4-03）：勾选框改 formkit 单实现（13×13 + 矢量勾，与主窗同规格）
-    auto *ignore = new formkit::CheckBox(body);
-    ignore_check = ignore;
-    ignore_check->setObjectName(QStringLiteral("ignore_batch"));
-    ignore_check->setText(T("忽略全部批量规则"));
-    ignore_check->setToolTip(T("勾选后本文件不使用任何批量规则，只应用下面的例外"));
-    ignore_check->setAccessibleName(T("忽略全部批量规则"));
-    ignore_check->setChecked(existing.has_value() && existing->ignore_batch);
-    ignore->set_tokens(tokens); // formkit 自绘勾选框（13×13 + 矢量勾）
-    top->addWidget(ignore_check);
-    body_line->addWidget(wrap_row28(top));
+    // M14/0.4.2 C1.4：作用域说明行（原「忽略全部批量规则」勾选框随批量规则概念删除）。
+    // 本对话框永远只改当前打开的那一个文件；取消 = 不写任何文件（源文件只读）。
+    auto *scope_row = new QHBoxLayout();
+    {
+        auto *scope = new ElidedLabel(body);
+        scope->setObjectName(QStringLiteral("pp-exif-scope-note"));
+        scope->setProperty(theme::kFkProperty,
+                           QString::fromLatin1(theme::kFkNote)); // A6：令牌 txt3
+        scope->setFont(theme::font(theme::Typography::hint_px));
+        scope->set_full_text(T("仅作用于当前打开的文件；取消 = 不修改任何文件（源文件只读）。"));
+        scope_row->addWidget(scope, 1);
+    }
+    body_line->addWidget(wrap_row28(scope_row));
 
     if (!meta.error.empty()) {
         auto *err = new ElidedLabel();
@@ -1666,10 +1616,6 @@ void ExifEditor::Impl::build() {
 
     QObject::connect(buttons, &QDialogButtonBox::accepted, q, [this] { on_accept(); });
     QObject::connect(buttons, &QDialogButtonBox::rejected, q, [this] { q->reject(); });
-    QObject::connect(ignore_check, &QCheckBox::toggled, q, [this](bool) {
-        refresh_all_rows();
-        refresh_effective_values();
-    });
 
     // 无边框接线（拖拽 / 八向缩放；与主窗、设置弹窗同一机制）
     pp::platform::Frameless::attach(q, title_bar.widget, {title_bar.close});
@@ -1681,7 +1627,6 @@ void ExifEditor::Impl::init_from_existing() {
         return;
     const pp::MetadataOverride &ex = *existing;
 
-    ignore_check->setChecked(ex.ignore_batch);
     exif_edits = ex.exif_edits;
     xmp_edits = ex.xmp_edits;
     for (const pp::TagEdit &e : exif_edits)
@@ -1690,7 +1635,7 @@ void ExifEditor::Impl::init_from_existing() {
         ensure_row(e.key, true, Exiv2::xmpText);
 
     if (ex.time_shift.has_value()) {
-        set_tri(time_mode, TriMode::Override); // R-199：落值走 findData（非魔法索引）
+        set_tri(time_mode, TriMode::Set); // R-199：落值走 findData（非魔法索引）
         const pp::TimeShift &ts = *ex.time_shift;
         if (ts.mode == pp::TimeShift::Mode::TimezoneSemantic) {
             set_method(time_method, TimeMethod::TimeZone);
@@ -1714,7 +1659,7 @@ void ExifEditor::Impl::init_from_existing() {
     if (ex.gps_clear) {
         set_tri(gps_mode, TriMode::Clear); // R-199
     } else if (ex.gps.has_value()) {
-        set_tri(gps_mode, TriMode::Override);
+        set_tri(gps_mode, TriMode::Set);
         const pp::GpsData &g = *ex.gps;
         gps_lat->setText(QString::number(g.lat, 'f', 6));
         gps_lon->setText(QString::number(g.lon, 'f', 6));
@@ -1782,19 +1727,33 @@ void upsert_remove_edit(std::vector<pp::TagEdit> &edits, const std::string &key)
 }
 
 pp::MetadataOverride ExifEditor::Impl::build_override(std::vector<std::string> *errors) const {
+    // M14/0.4.2 C2（0.4.1 缺陷面收口）：OK 返回 = 对话框表达的字段覆盖到旧 override 上，
+    // 对话框**不表达**的字段从旧值原样保留 —— 六个选择项级卡开关（time_enabled / gps_enabled /
+    // privacy_enabled / sync_mtime / modernize_exif / strip_creator_tool）与历史 ignore_batch
+    // 不得因一次单文件编辑而丢失（C2.5 明确要求；原实现靠 MainWindow 手抄六字段，脆弱且无
+    // ignore_batch 保护）。表达字段 = exif_edits/xmp_edits（初始即从旧值载入）+ 三组三态。
     pp::MetadataOverride ov;
-    ov.ignore_batch = ignore_check->isChecked();
+    if (existing.has_value()) {
+        ov.ignore_batch = existing->ignore_batch;
+        ov.time_enabled = existing->time_enabled;
+        ov.gps_enabled = existing->gps_enabled;
+        ov.privacy_enabled = existing->privacy_enabled;
+        ov.sync_mtime = existing->sync_mtime;
+        ov.modernize_exif = existing->modernize_exif;
+        ov.strip_creator_tool = existing->strip_creator_tool;
+    }
     ov.exif_edits = exif_edits;
     ov.xmp_edits = xmp_edits;
 
-    // 时间三态：覆盖 = time_shift；清除 = 对时间标签的 remove 编辑（MetadataOverride 无
-    // time_clear）。R-199：读回 itemData；R-196/R-197：EXIF/XMP 双循环收敛为
-    // upsert_remove_edit。M7R22G2-0（主对话裁定，2026-10-13）：清除集 = time_tag_keys.h 的
-    // **touched 全部 9 键**（OffsetTime* 3 + Xmp MetadataDate 一并 remove），与〔批〕命中面 /
-    // shift 触达面同集 —— 消「清除 3 键 vs 命中 9 键」漂移；原「只清 wall_clock 5 键」换锚
-    // （裁定登记 + 断言换锚 + 回归归因见 build/m7r22-g2/handoff.md）。
+    // 时间三态：设置为 = time_shift；清除标签 = 对时间标签的 remove 编辑（MetadataOverride 无
+    // time_clear）；不修改 = 不写该组（旧 time_shift 随新结果消失 = 该文件不再有这组修改）。
+    // R-199：读回 itemData；R-196/R-197：EXIF/XMP 双循环收敛为 upsert_remove_edit。
+    // M7R22G2-0（主对话裁定，2026-10-13）：清除集 = time_tag_keys.h 的 **touched 全部 9 键**
+    // （OffsetTime* 3 + Xmp MetadataDate 一并 remove），与时间偏移触达面同集 —— 消「清除 3 键
+    // vs 触达 9 键」漂移；原「只清 wall_clock 5 键」换锚（裁定登记 + 断言换锚 + 回归归因见
+    // build/m7r22-g2/handoff.md）。
     const TriMode tmode = tri_of(time_mode);
-    if (tmode == TriMode::Override) {
+    if (tmode == TriMode::Set) {
         ov.time_shift = time_shift_from_widgets();
     } else if (tmode == TriMode::Clear) {
         for (std::size_t i = 0; i < timetags::kTimeTagCount; ++i) {
@@ -1809,7 +1768,7 @@ pp::MetadataOverride ExifEditor::Impl::build_override(std::vector<std::string> *
     const TriMode gmode = tri_of(gps_mode);
     if (gmode == TriMode::Clear) {
         ov.gps_clear = true;
-    } else if (gmode == TriMode::Override) {
+    } else if (gmode == TriMode::Set) {
         bool ok_lat = false, ok_lon = false;
         const double lat = gps_lat->text().trimmed().toDouble(&ok_lat);
         const double lon = gps_lon->text().trimmed().toDouble(&ok_lon);
@@ -1862,7 +1821,7 @@ pp::MetadataOverride ExifEditor::Impl::build_override(std::vector<std::string> *
         }
     }
 
-    // R-199：隐私三态读回 itemData（Inherit → 不落值，语义逐字不变）
+    // R-199：隐私三态读回 itemData（不修改 → 不落值 = 该文件不再有这组修改）
     const PrivacyMode pmode = privacy_of(privacy_mode);
     if (pmode == PrivacyMode::ForceOn) {
         ov.strip_privacy = true;
@@ -1877,6 +1836,13 @@ void ExifEditor::Impl::on_accept() {
     // （数据破坏面）；读完自动恢复可提交（模态下用户重按即可）。
     if (meta_loading) {
         report_errors({"元数据读取中，请稍候再提交"}); // 中文界面口径（§1.4）
+        return;
+    }
+    // M14/0.4.2 C2 深查补强：源元数据读取失败（meta.error 非空）时基底为空 —— 任何"确定"
+    // 都会在空基底上校验/落编辑（源文件仍只读，但结果是不可信修改）。显式报错并保持对话框
+    // 打开（原实现只在顶部显示一行错误，仍允许 OK）。
+    if (!meta.error.empty()) {
+        report_errors({std::string("无法读取源文件元数据，不能编辑：") + meta.error});
         return;
     }
     std::vector<std::string> errors;

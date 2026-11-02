@@ -12,13 +12,14 @@ namespace pp::ui {
 class PresetsDialog : public QDialog {
     Q_OBJECT
 public:
-    enum class Action { None, Load, SaveAs, Delete };
+    // 0.4.2 / 需求 3（A13）：导入…/导出… 两条文件管理动作（与格式预设行对齐；枚举末尾加性）。
+    enum class Action { None, Load, SaveAs, Delete, Import, Export };
     // presets: (path, display-name) list from pp::ui::list_presets(presets_dir)
     explicit PresetsDialog(const std::vector<std::pair<QString, QString>> &presets,
                            const QString &suggested_name, QWidget *parent = nullptr);
     Action action() const;
     QString name() const; // load target / save-as name / delete target
-    QString path() const; // Load/Delete = preset file path; SaveAs = empty (dir derived by caller)
+    QString path() const; // Load/Delete/Export = preset file path; SaveAs/Import = empty
 };
 
 } // namespace pp::ui

@@ -131,12 +131,15 @@ namespace pp::ui {
 namespace {
 using theme::preferred_theme_mode;
 
-// 基类型显式 uint8_t（三值枚举；performance-enum-size，值域/语义零变化）。
-enum class PresetOp : std::uint8_t { Load, Save, Delete };
+// 基类型显式 uint8_t（枚举；performance-enum-size，值域/语义零变化）。
+// 0.4.2 / 需求 3（A13）：加性追加 Import/Export（大预设管理对话框的文件管理动作）。
+enum class PresetOp : std::uint8_t { Load, Save, Delete, Import, Export };
 void warn_preset_op(QWidget *parent, PresetOp op, const QString &detail) {
-    const char *title = op == PresetOp::Load   ? "载入预设失败"
-                        : op == PresetOp::Save ? "保存预设失败"
-                                               : "删除预设失败";
+    const char *title = op == PresetOp::Load     ? "载入预设失败"
+                        : op == PresetOp::Save   ? "保存预设失败"
+                        : op == PresetOp::Delete ? "删除预设失败"
+                        : op == PresetOp::Import ? "导入预设失败"
+                                                 : "导出预设失败";
     QMessageBox::warning(parent, T(title), detail);
 }
 
@@ -169,6 +172,40 @@ void seed_factory_format_presets_once() {
 
 } // namespace
 
+// ---- 0.4.2 / 需求 3（A13）：大预设重设计的共享小件 ----
+namespace {
+
+bool batch_rules_empty(const pp::BatchRules &r) {
+    return !r.time_shift.has_value() && !r.gps.has_value() && !r.gps_clear &&
+           r.exif_edits.empty() && r.xmp_edits.empty() && !r.strip_privacy && !r.sync_mtime &&
+           !r.modernize_exif && !r.strip_creator_tool;
+}
+
+// 「另存为」同名覆盖二次确认（P7：写新名字的路径必须有确认，与格式预设行同先例；
+// 保存到**已绑定**文件不确认 —— 那是保存语义本身）。
+bool confirm_preset_overwrite(QWidget *parent, const QString &name) {
+    const QMessageBox::StandardButton answer =
+        QMessageBox::question(parent, T("覆盖预设"), T("预设“%1”已存在，覆盖它？").arg(name),
+                              QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    return answer == QMessageBox::Yes;
+}
+
+QString preset_stem_of(const QString &path) {
+    return path.isEmpty() ? QString() : QFileInfo(path).completeBaseName();
+}
+
+// 大预设文件 → 显示名（JSON name；损坏/无 name → 文件名 stem）。对话框/卡片同一映射。
+QString preset_name_of_file(const QString &path) {
+    pp::PresetData p;
+    if (!path.isEmpty() &&
+        pp::ui::load_preset(std::filesystem::path(path.toStdString()), p).empty() &&
+        !p.name.empty())
+        return QString::fromStdString(p.name);
+    return preset_stem_of(path);
+}
+
+} // namespace
+
 void MainWindow::Impl::refresh_preset_card() {
     if (page_output == nullptr)
         return;
@@ -177,14 +214,134 @@ void MainWindow::Impl::refresh_preset_card() {
     // M10-W3-T2：格式预设行的接线（一次性；构造期 refresh_preset_card 首调即接上 —— 本任务
     // 的写作用域不含 mainwindow.cpp 的 wire 段，接线点因此落在本 TU 的构造期入口上）。
     wire_format_preset_card();
+    // 0.4.2 / 需求 3（A13）：绑定文件被外部删除/改名 → 解除绑定（不静默指向不存在的文件：
+    // 否则「保存」会复活一个"幽灵"预设，卡片高亮也名不副实）。
+    if (!last_preset_path.isEmpty()) {
+        std::error_code ec;
+        if (!std::filesystem::exists(std::filesystem::path(last_preset_path.toStdString()), ec) ||
+            ec) {
+            pp::log_warn("preset", "mainwindow_presets.cpp",
+                         "bound preset file missing, binding cleared",
+                         {{"path", last_preset_path.toStdString()}});
+            clear_preset_binding();
+            if (page_output != nullptr)
+                page_output->set_preset_note(
+                    T("当前预设文件已不存在：绑定已解除，当前配置未保存为预设"));
+        }
+    }
+    // 0.4.2 / 需求 3（A13）：启动恢复（mainwindow.cpp 的 restore_session 只设 last_preset_path）
+    // 之后补初始化显示名与 dirty 基线 —— 否则「刚启动就显示已修改」是假读数。
+    if (!last_preset_path.isEmpty() && preset_baseline.isEmpty()) {
+        if (preset_display_name.isEmpty())
+            preset_display_name = preset_name_of_file(last_preset_path);
+        record_preset_baseline(preset_display_name);
+    }
     std::vector<std::pair<QString, QString>> items;
     for (const auto &[path, name] : pp::ui::list_presets(pp::platform::presets_dir()))
         items.emplace_back(QString::fromStdString(path.string()), QString::fromStdString(name));
     page_output->set_preset_list(items);
     page_output->set_current_preset(last_preset_path);
+    page_output->set_current_preset_dirty(preset_dirty);
     // M10-W3-T5：seed 之后立即刷新现役格式的格式预设行 —— 首启时该行的列表请求可能发生在
     // seed/接线之前（页签构造期），不刷新会"内置预设文件已在盘上、下拉里却看不到"。
     refresh_format_preset_row(page_output->current_format(), page_output);
+}
+
+// 0.4.2 / 需求 3（A13）：绑定会话态的三个维护点（唯一持有者 = 本 TU）。
+// 基线 = **当前整页采集**（collect_preset + page_meta 的 rules）的落盘字节，与 save_preset
+// 写出的文件字节同源 ⇒ 保存/载入后立刻比对不会产生假「已修改」。
+void MainWindow::Impl::record_preset_baseline(const QString &display_name) {
+    if (page_output == nullptr)
+        return;
+    preset_display_name = display_name;
+    pp::PresetData current = page_output->collect_preset(display_name);
+    if (page_meta != nullptr)
+        current.rules = page_meta->rules(); // rules 归 PageMeta（MainWindow 合并）
+    preset_baseline = QByteArray::fromStdString(pp::ui::serialize_preset(current));
+    preset_dirty = false;
+    page_output->set_current_preset_dirty(false);
+}
+
+void MainWindow::Impl::refresh_preset_dirty() {
+    if (page_output == nullptr)
+        return;
+    // 未绑定预设 → 无「已修改」概念（页面占位已说明「当前配置未保存为预设」）。
+    if (last_preset_path.isEmpty() || preset_baseline.isEmpty()) {
+        if (preset_dirty) {
+            preset_dirty = false;
+            page_output->set_current_preset_dirty(false);
+        }
+        return;
+    }
+    pp::PresetData current = page_output->collect_preset(preset_display_name);
+    if (page_meta != nullptr)
+        current.rules = page_meta->rules();
+    const bool dirty =
+        QByteArray::fromStdString(pp::ui::serialize_preset(current)) != preset_baseline;
+    if (dirty != preset_dirty) {
+        preset_dirty = dirty;
+        page_output->set_current_preset_dirty(dirty);
+    }
+}
+
+void MainWindow::Impl::clear_preset_binding() {
+    last_preset_path.clear();
+    preset_display_name.clear();
+    preset_baseline.clear();
+    preset_dirty = false;
+    if (page_output != nullptr)
+        page_output->set_current_preset_dirty(false);
+}
+
+// D6：载入含元数据修改的预设会**替换式**覆盖选中文件的逐文件修改（M13 A5 语义）。
+// 仅当「rules 非空 ∧ 有选中 ∧ 选中文件已有元数据修改」时确认一次（无损失风险不打扰）。
+bool MainWindow::Impl::confirm_preset_rules_replace(const pp::PresetData &preset) {
+    if (batch_rules_empty(preset.rules) || model == nullptr)
+        return true;
+    const QList<int> rows = selected_source_rows();
+    if (rows.isEmpty())
+        return true; // 无选中 → 不写任何文件（另有非模态说明）
+    int with_edits = 0;
+    for (const int row : rows) {
+        if (row >= 0 && static_cast<std::size_t>(row) < model->size() &&
+            model->row(static_cast<std::size_t>(row)).has_exception())
+            ++with_edits;
+    }
+    if (with_edits == 0)
+        return true; // 选中文件没有既有元数据修改 → 无覆盖损失
+    const QMessageBox::StandardButton answer = QMessageBox::question(
+        w, T("载入预设"),
+        T("该预设含元数据修改，载入将替换选中 %1 个文件（其中 %2 个已有元数据修改）的元数据修改。"
+          "继续？")
+            .arg(rows.size())
+            .arg(with_edits),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    return answer == QMessageBox::Yes;
+}
+
+// D6：载入结果说明写进预设卡注记（非模态；空注记 = 隐藏）。无选中时**不得静默**只应用输出
+// 配置 —— 这是用户能看到的唯一提示（启动恢复 last_preset 走静默 + log，见 restore_session）。
+void MainWindow::Impl::report_preset_rules_outcome(const pp::PresetData &preset, int selected_files,
+                                                   bool applied) {
+    if (page_output == nullptr)
+        return;
+    const QString name =
+        preset_display_name.isEmpty() ? preset_stem_of(last_preset_path) : preset_display_name;
+    if (batch_rules_empty(preset.rules)) {
+        page_output->set_preset_note(T("已载入预设「%1」：整套输出配置已应用").arg(name));
+        return;
+    }
+    if (selected_files <= 0 || !applied) {
+        page_output->set_preset_note(
+            T("已载入预设「%1」：输出配置已应用；预设含元数据修改，但当前未选中文件，"
+              "本次未应用（选择文件后重新载入可应用）")
+                .arg(name));
+        return;
+    }
+    page_output->set_preset_note(
+        T("已载入预设「%1」：输出配置已应用；元数据修改已应用到 %2 个选中文件")
+            .arg(name)
+            .arg(selected_files));
 }
 
 void MainWindow::Impl::load_preset_file(const QString &path) {
@@ -206,18 +363,67 @@ void MainWindow::Impl::load_preset_file(const QString &path) {
         warn_preset_op(w, PresetOp::Load, QString::fromStdString(verr));
         return;
     }
+    // D6 前置：rules 会替换选中文件既有元数据修改 → 有损失风险才确认（取消 = 整体不载入）。
+    if (!confirm_preset_rules_replace(preset))
+        return;
+    const int selected_files = static_cast<int>(selected_source_rows().size());
+    // 0.4.2 / 需求 3（A13）：输出页整页原子替换（来源 = 大预设的显示态由 apply_preset 写入）。
     page_output->apply_preset(preset);
-    page_meta->apply_rules(preset.rules);
+    // rules 语义（M13 A5）：替换式应用到**选中文件**；无选中 = 不写任何文件（D6 非模态说明）。
+    bool rules_applied = false;
+    if (!batch_rules_empty(preset.rules) && page_meta != nullptr && selected_files > 0) {
+        page_meta->apply_rules(preset.rules);
+        rules_applied = true;
+    }
     last_preset_path = path;
-    refresh_preset_card();
+    preset_display_name = QString::fromStdString(preset.name);
+    if (preset_display_name.isEmpty())
+        preset_display_name = preset_stem_of(path);
+    refresh_preset_card();                       // 列表/高亮（绑定路径刷新）
+    record_preset_baseline(preset_display_name); // 基线 = 应用后的整页采集字节
+    report_preset_rules_outcome(preset, selected_files, rules_applied);
     w->refresh_status();
 }
 
 void MainWindow::Impl::save_preset_named(const QString &name) {
-    if (name.isEmpty())
+    if (page_output == nullptr)
         return;
-    pp::PresetData preset = page_output->collect_preset(name);
-    preset.rules = page_meta->rules(); // rules 归 PageMeta（MainWindow 合并）
+    // 0.4.2 / 需求 3（A13）：保存 = 落**当前绑定绝对路径**（修 P4：旧实现用 combo 显示名
+    // 拼新文件名，JSON name ≠ 文件名 stem 时会写出第二份文件而不是覆盖当前预设）。
+    // 无绑定（页面「另存…」路径）才按 name 新建；同名覆盖二次确认。
+    const std::filesystem::path dir = pp::platform::presets_dir();
+    if (dir.empty()) {
+        warn_preset_op(w, PresetOp::Save, T("预设目录不可用（数据目录为空）"));
+        return;
+    }
+    const bool new_binding = last_preset_path.isEmpty();
+    if (new_binding && name.trimmed().isEmpty()) {
+        warn_preset_op(w, PresetOp::Save, T("预设名不能为空"));
+        return;
+    }
+    const std::filesystem::path target =
+        new_binding ? dir / (name.toStdString() + ".json")
+                    : std::filesystem::path(last_preset_path.toStdString());
+    // 安全线（与 make_winzip/preset 落盘同源，Lead 复核点 1）：**写盘前**再确认目标为绝对路径
+    // （绑定路径来自会话态 `last_preset_path`，绝不从 JSON `name` 反推目录）+ 原子写
+    // （save_preset → core/fsops::write_atomic_file）+ 另存同名二次确认。
+    if (target.empty() || !target.is_absolute()) {
+        warn_preset_op(
+            w, PresetOp::Save,
+            T("拒绝写入非绝对路径预设（%1）").arg(QString::fromStdString(target.string())));
+        return;
+    }
+    QString display = preset_display_name;
+    if (display.isEmpty())
+        display = new_binding ? name : preset_stem_of(last_preset_path);
+    // 另存为：目标文件已存在 → 二次确认（P7 覆盖确认）。
+    if (new_binding) {
+        std::error_code ec;
+        if (std::filesystem::exists(target, ec) && !confirm_preset_overwrite(w, name))
+            return;
+    }
+    pp::PresetData preset = page_output->collect_preset(display);
+    preset.rules = page_meta != nullptr ? page_meta->rules() : pp::BatchRules{};
     // T13 复核项 2：保存路径同样先校验（模板框允许任意文本，非法模板不得静默落盘 ——
     // 写出的预设下次载入即被拒，属"先污染后报错"）。校验不过 → 提示并**不写文件**。
     const std::string verr = pp::validate_preset(preset);
@@ -225,22 +431,21 @@ void MainWindow::Impl::save_preset_named(const QString &name) {
         warn_preset_op(w, PresetOp::Save, QString::fromStdString(verr));
         return;
     }
-    // WP5 跨界 2（M7-R2D1）：`presets_dir() / name` 在空 data_dir 时退化成 **CWD 相对名**
-    // （operator/ 对空路径只留尾段）→ 预设会被写到进程工作目录、后续删除按相对名误删 CWD 文件。
-    // paths 层已把空目录收成空路径（path_under），这里补**调用方**守卫：目录不可用 = 显式报错。
-    const std::filesystem::path dir = pp::platform::presets_dir();
-    if (dir.empty()) {
-        warn_preset_op(w, PresetOp::Save, T("预设目录不可用（数据目录为空）"));
-        return;
-    }
-    const std::filesystem::path path = dir / (name.toStdString() + ".json");
-    const std::string err = pp::ui::save_preset(path, preset);
+    const std::string err = pp::ui::save_preset(target, preset);
     if (!err.empty()) {
         warn_preset_op(w, PresetOp::Save, QString::fromStdString(err));
         return;
     }
-    last_preset_path = QString::fromStdString(path.string());
+    last_preset_path = QString::fromStdString(target.string());
+    preset_display_name = display;
+    // 基线 = 刚写出的字节（与文件同源）⇒ 保存后「已修改」立即归零。
+    preset_baseline = QByteArray::fromStdString(pp::ui::serialize_preset(preset));
+    preset_dirty = false;
     refresh_preset_card();
+    page_output->set_current_preset_dirty(false);
+    page_output->set_preset_note(T("已保存预设「%1」：整套输出配置已写入 %2")
+                                     .arg(display)
+                                     .arg(QString::fromStdString(target.string())));
 }
 
 void MainWindow::Impl::delete_preset_file(const QString &path) {
@@ -263,9 +468,96 @@ void MainWindow::Impl::delete_preset_file(const QString &path) {
         warn_preset_op(w, PresetOp::Delete, path);
         return;
     }
-    if (last_preset_path == path)
-        last_preset_path.clear();
+    // 删除的是当前绑定预设 → 解除绑定（当前页配置保持原样；不再往一个已不存在的文件保存）。
+    if (last_preset_path == path) {
+        clear_preset_binding();
+        if (page_output != nullptr)
+            page_output->set_preset_note(T("已删除当前预设「%1」：当前配置未保存为预设").arg(name));
+    }
     refresh_preset_card();
+}
+
+// 0.4.2 / 需求 3（A13）：导入大预设 —— 校验后**原字节**复制进预设目录（保留未知字段/前向兼容；
+// 不重写 JSON）。同名覆盖二次确认；写入走 write_atomic_file（绝不半截文件）。
+void MainWindow::Impl::import_preset_file_dialog() {
+    const QString file = QFileDialog::getOpenFileName(w, T("导入大预设"), QString(),
+                                                      T("大预设 (*.json);;所有文件 (*)"));
+    if (file.isEmpty())
+        return;
+    pp::PresetData probe;
+    const std::string lerr = pp::ui::load_preset(std::filesystem::path(file.toStdString()), probe);
+    if (!lerr.empty()) {
+        warn_preset_op(w, PresetOp::Import, QString::fromStdString(lerr));
+        return;
+    }
+    const std::filesystem::path dir = pp::platform::presets_dir();
+    if (dir.empty()) {
+        warn_preset_op(w, PresetOp::Import, T("预设目录不可用（数据目录为空）"));
+        return;
+    }
+    const QString stem = QFileInfo(file).completeBaseName();
+    if (stem.isEmpty()) {
+        warn_preset_op(w, PresetOp::Import, T("无法从文件名推导预设名（%1）").arg(file));
+        return;
+    }
+    const std::filesystem::path dest = dir / (stem.toStdString() + ".json");
+    std::error_code ec;
+    if (std::filesystem::exists(dest, ec) && !confirm_preset_overwrite(w, stem))
+        return;
+    QFile src(file);
+    if (!src.open(QIODevice::ReadOnly)) {
+        warn_preset_op(w, PresetOp::Import, T("无法读取源文件（%1）").arg(file));
+        return;
+    }
+    const QByteArray bytes = src.readAll();
+    src.close();
+    std::string werr;
+    const std::string_view payload(bytes.constData(), static_cast<std::size_t>(bytes.size()));
+    if (!pp::write_atomic_file(dest, payload, &werr)) {
+        warn_preset_op(w, PresetOp::Import, QString::fromStdString(werr));
+        return;
+    }
+    refresh_preset_card();
+    if (page_output != nullptr)
+        page_output->set_preset_note(
+            T("已导入预设「%1」：%2").arg(stem).arg(QString::fromStdString(dest.string())));
+}
+
+// 0.4.2 / 需求 3（A13）：导出选中预设文件 → 用户路径（**原样字节**，与"当前页配置另存"不同）。
+void MainWindow::Impl::export_preset_file_dialog(const QString &preset_path) {
+    if (preset_path.isEmpty()) {
+        warn_preset_op(w, PresetOp::Export, T("未选择预设：无可导出项"));
+        return;
+    }
+    const QFileInfo info(preset_path);
+    if (!info.exists()) {
+        warn_preset_op(w, PresetOp::Export, T("预设文件不存在（%1）").arg(preset_path));
+        return;
+    }
+    const QString suggestion =
+        QDir::home().filePath(info.completeBaseName() + QStringLiteral(".json"));
+    const QString dest =
+        QFileDialog::getSaveFileName(w, T("导出大预设"), suggestion, T("大预设 (*.json)"));
+    if (dest.isEmpty())
+        return;
+    const QFileInfo dest_info(dest);
+    if (dest_info.exists() && !confirm_preset_overwrite(w, dest_info.completeBaseName()))
+        return;
+    QFile src(info.filePath());
+    if (!src.open(QIODevice::ReadOnly)) {
+        warn_preset_op(w, PresetOp::Export, T("无法读取预设文件（%1）").arg(preset_path));
+        return;
+    }
+    const QByteArray bytes = src.readAll();
+    src.close();
+    std::string werr;
+    const std::string_view payload(bytes.constData(), static_cast<std::size_t>(bytes.size()));
+    if (!pp::write_atomic_file(std::filesystem::path(dest.toStdString()), payload, &werr)) {
+        warn_preset_op(w, PresetOp::Export, QString::fromStdString(werr));
+        return;
+    }
+    if (page_output != nullptr)
+        page_output->set_preset_note(T("已导出预设「%1」：%2").arg(info.completeBaseName(), dest));
 }
 
 void MainWindow::manage_presets() {
@@ -277,10 +569,15 @@ void MainWindow::manage_presets() {
     for (const auto &[path, name] : pp::ui::list_presets(dir)) {
         items.emplace_back(QString::fromStdString(path.string()), QString::fromStdString(name));
     }
-    PresetsDialog dlg(
-        items,
-        d.last_preset_path.isEmpty() ? QString() : QFileInfo(d.last_preset_path).completeBaseName(),
-        this);
+    // 0.4.2 / A13：预选 = 当前绑定预设的**显示名**（旧实现用文件 stem —— JSON name ≠ stem 时
+    // 预选不中；显示名与文件名已在保存链分离）。
+    PresetsDialog dlg(items,
+                      d.preset_display_name.isEmpty()
+                          ? (d.last_preset_path.isEmpty()
+                                 ? QString()
+                                 : QFileInfo(d.last_preset_path).completeBaseName())
+                          : d.preset_display_name,
+                      this);
     if (dlg.exec() != QDialog::Accepted)
         return;
 
@@ -293,6 +590,12 @@ void MainWindow::manage_presets() {
         return;
     case PresetsDialog::Action::Delete:
         d.delete_preset_file(dlg.path());
+        return;
+    case PresetsDialog::Action::Import:
+        d.import_preset_file_dialog();
+        return;
+    case PresetsDialog::Action::Export:
+        d.export_preset_file_dialog(dlg.path());
         return;
     case PresetsDialog::Action::None:
     default:
@@ -371,6 +674,14 @@ void MainWindow::Impl::wire_format_preset_card() {
     if (format_preset_wired || page_output == nullptr)
         return;
     format_preset_wired = true;
+    // 0.4.2 / 需求 3（A13）：大预设「已修改」监视 —— 页面配置变化与元数据页选择项提交都会
+    // 改变一条预设的内容（collect = 输出配置 + rules），两条信号都接到同一比对点。
+    QObject::connect(page_output, &PageOutput::config_changed, w,
+                     [this] { refresh_preset_dirty(); });
+    if (page_meta != nullptr) {
+        QObject::connect(page_meta, &PageMeta::selection_edits_committed, w,
+                         [this] { refresh_preset_dirty(); });
+    }
     QObject::connect(
         page_output, &PageOutput::format_preset_list_requested, w,
         [this](const QString &format_id) { refresh_format_preset_row(format_id, page_output); });
@@ -527,6 +838,9 @@ std::string MainWindow::Impl::format_preset_save_card(PageOutput *target, const 
         return err;
     if (saved != nullptr)
         *saved = saved_path;
+    // 0.4.2 / 需求 3（A13）：保存成功 = 卡值重新有了文件绑定 ⇒ 解除「来源 = 大预设」态
+    // （否则从大预设来源「另存」出新预设后，detached 标志会让 combo 仍显示无选中）。
+    target->set_format_preset_detached(fmt, false);
     target->set_current_format_preset(fmt, QString::fromStdString(saved_path.string()));
     target->set_format_preset_note(fmt, T("已保存格式预设：%1").arg(name));
     return {};
@@ -611,10 +925,16 @@ void MainWindow::Impl::format_preset_save_as(PageOutput *target) {
         return;
     }
     const QString current = target->current_format_preset(fmt);
-    QString suggestion =
-        current.isEmpty() ? T("%1 预设").arg(fmt) : QFileInfo(current).completeBaseName();
-    // M12（需求 4 / Lead 裁定）：「另存」= 复制。当前预设是 `default` 时建议名用
-    // 「default 副本」—— 不沿用 default 本身（否则命名对话框里一次回车 = 覆盖出厂默认文件）。
+    // 0.4.2 / A13：来源 = 大预设时建议名 = 其记录的格式预设名（基于 X → 另存为 X 副本），
+    // 否则沿用格式名。当前预设是 `default` 时建议名用「default 副本」——不沿用 default 本身
+    // （否则命名对话框里一次回车 = 覆盖出厂默认文件）。
+    QString suggestion;
+    if (!current.isEmpty()) {
+        suggestion = QFileInfo(current).completeBaseName();
+    } else {
+        const QString based_on = target->format_preset_based_on(fmt);
+        suggestion = based_on.isEmpty() ? T("%1 预设").arg(fmt) : based_on;
+    }
     if (is_default_preset_qpath(current))
         suggestion += T(" 副本");
     bool ok = false;

@@ -1024,7 +1024,7 @@ def t1_cases(set_name: str, profiles: list[int | None], grids: list[int | None],
 def build_case_sets(phase: str, want_shrink: bool, t1_extra: bool) -> dict[str, list[Case]]:
     sets: dict[str, list[Case]] = {}
     if phase == "baseline":
-        # 基线：dev harness 尚不接受 "__" 保留键 ⇒ 不注入 profile/grid。
+        # 基线：dev harness 尚不接受 "__" 保留键 -> 不注入 profile/grid。
         sets["baseline-small"] = small_cases("baseline-small", [None], [None])
         t1_levels = [0, 31, 52, 60, 62, 63]
         if t1_extra:
@@ -1265,7 +1265,16 @@ def decode_check(path: Path) -> dict:
 
 
 def hvcc_probe(path: Path) -> dict:
-    """复用 build/analysis/hvcc.py（任务要求）。返回解析后的首个 hvcC + 全部。"""
+    """复用 build/analysis/hvcc.py（任务要求）。返回解析后的首个 hvcC + 全部。
+
+    0.4.2 / C7（构建零临时依赖）：hvcc.py 位于 build/ 证据目录，可能已按用户要求清空。
+    缺失 -> **显式跳过**（missing=True，由 evaluate 记为 skip 并打印原因），不静默失败、也不
+    把「工具缺失」伪装成「码流 hvcC 违规」。
+    """
+    if not HVCC_PY.exists():
+        return {"ok": False, "missing": True, "hvcc": [], "ispe": [],
+                "raw_error": f"hvcc.py missing: {HVCC_PY}（build/ 已按 C7 清空；"
+                             "可从历史 M9 证据恢复，或跳过 hvcC 断言重跑）"}
     try:
         env = dict(os.environ)
         env["PYTHONIOENCODING"] = "utf-8"  # hvcc.py 的 print 在 GBK 控制台会 UnicodeEncodeError
@@ -1284,6 +1293,11 @@ def evaluate(case: Case, run: dict, outdir: Path, out_file: Path | None,
     mism: list[str] = []
     facts: dict = {"hvcC": hv.get("hvcc", [{}])[0] if hv.get("hvcc") else None,
                    "grid": st.to_json()}
+    # 0.4.2 / C7：hvcC 探针依赖 build/analysis/hvcc.py（build/ 已按 C7 清空）。
+    # 工具缺失 -> 该例显式 skip 并打印原因（不静默，也不把「工具缺失」计成「码流违规」）。
+    if hv.get("missing"):
+        facts["skip_reason"] = hv.get("raw_error", "hvcc.py missing")
+        return "skip", [str(facts["skip_reason"])], facts
     rc = run["exit_code"]
     out_exists = out_file is not None and out_file.exists() and out_file.stat().st_size > 0
     facts["out_exists"] = out_exists
@@ -1799,7 +1813,7 @@ def write_report(jsonl: Path, md: Path, phase: str, exe: Path, elapsed_total: fl
     if small_auto:
         lv = (small_auto[0].get("hvcC") or {}).get("level_idc")
         lines.append(f"- (v) 小图 auto Level 实际 level_idc={lv}（{'3.1' if lv == 93 else '见记录'}；"
-                     "1024×576=589,824 > L3.0 552,960 ⇒ 最小可行 L3.1，与 x265 determineLevel 一致）。")
+                     "1024×576=589,824 > L3.0 552,960 -> 最小可行 L3.1，与 x265 determineLevel 一致）。")
     lines.append("")
 
     lines.append("## 覆盖声明（如实）")
@@ -1875,6 +1889,8 @@ def main(argv=None) -> int:
         if not TMP_DIR.is_absolute():
             TMP_DIR = REPO / TMP_DIR
     TMP_DIR.mkdir(parents=True, exist_ok=True)
+    # 0.4.2 / C7：evidence 依赖存在性显式报告（缺失 -> 逐例显式 skip；不静默）
+    report_evidence_deps()
 
     if args.set == ["selftest"]:
         return run_selftest(exe)
@@ -1909,6 +1925,7 @@ def main(argv=None) -> int:
           f"cases={len(cases)} skip={sum(1 for c in cases if c.case_id in existing)}")
     t0 = time.time()
     run_n = 0
+    dep_skips = 0
     seen = set(existing)
     with open(jsonl, "a", encoding="utf-8") as f:
         for case in cases:
@@ -1918,6 +1935,18 @@ def main(argv=None) -> int:
             if args.max_cases and run_n >= args.max_cases:
                 break
             run_n += 1
+            if not case.src.exists():
+                # 0.4.2 / C7：源夹具缺失 -> 显式 skip（不静默、不伪装成码流 fail）
+                reason = (f"源夹具缺失: {case.src}（C7 已清空 build/；重建：用 M9 流程重新生成"
+                          "或提供自备夹具到该路径）")
+                rec = dependency_skip_record(case, reason)
+                dep_skips += 1
+                print(f"[{run_n:4d}/{len(cases)}] {case.case_id:<44} skip         "
+                      f"（{reason}）", flush=True)
+                rec["phase"] = args.phase
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                f.flush()
+                continue
             try:
                 rec = run_case(case, exe, args.timeout, args.keep_artifacts)
             except Exception as e:
@@ -1948,28 +1977,92 @@ def main(argv=None) -> int:
     recs = list(load_records(jsonl).values())
     unexpected = sum(1 for r in recs if r["verdict"] == "unexpected")
     fails = sum(1 for r in recs if r["verdict"] == "fail")
-    print(f"[matrix] done run={run_n} in {elapsed:.1f}s; jsonl={jsonl}; report={md}")
+    print(f"[matrix] done run={run_n} in {elapsed:.1f}s; jsonl={jsonl}; report={md}; "
+          f"dependency-skip={dep_skips}")
     print(f"[matrix] totals: pass={sum(1 for r in recs if r['verdict']=='pass')} "
           f"fail={fails} expected-fail={sum(1 for r in recs if r['verdict']=='expected-fail')} "
+          f"skip={sum(1 for r in recs if r['verdict']=='skip')} "
           f"unexpected={unexpected}")
+    if run_n > 0 and dep_skips == run_n:
+        # 全部因 evidence 依赖缺失而跳过：显式 SKIP（容忍 C7 清空后不可复跑），不判红。
+        print("[matrix] RESULT: SKIP（本轮全部 case 因 evidence 依赖/源夹具缺失而跳过；"
+              "重建提示见上方 dep/SKIP 行）")
+        return 0
     return 0 if (unexpected == 0 and fails == 0) else 1
 
 
+def report_evidence_deps() -> dict:
+    """0.4.2 / C7（构建零临时依赖）：evidence 依赖存在性**显式报告**（缺失 = 显式 skip，不静默）。
+
+    本工具历史证据输入曾在 build/ 下（analysis/hvcc.py、tmp-heif/small.tif、matrix/probe/…）；
+    用户要求清空 build/ 后这些文件不再保证存在。这里统一打印状态与重建提示，并由调用方把
+    「缺失」降级为带原因的 skip（不是 fail、更不是静默 pass）。
+    """
+    deps = [
+        ("hvcc.py（hvcC 断言探针；缺失 -> 相关判定显式 skip）", HVCC_PY),
+        ("small.tif（small 组 1024x576 源夹具）", SMALL_TIF),
+        ("T1.tif（t1 组源夹具，super/ 用户数据）", T1_TIF),
+        ("iinfo（解码复核，可选）", IINFO),
+    ]
+    states = {}
+    for label, path in deps:
+        present = path.exists()
+        states[str(path)] = present
+        print(f"[matrix] dep {'OK     ' if present else 'MISSING'} {label} @ {path}")
+        if not present:
+            print("[matrix]   → 缺失容忍：相关检查将显式 skip 并逐条打印（C7：build/ 已清空；"
+                  "重建方式 = 用 M9 流程重新生成/从历史证据恢复，或提供自备夹具到该路径）")
+    return states
+
+
+def dependency_skip_record(case: "Case", reason: str) -> dict:
+    """源夹具缺失时的一致性记录（verdict=skip；字段面与 run_case 记录同构，报告可读）。"""
+    return {
+        "case_id": case.case_id, "set": case.set_name, "phase": "?",
+        "src": str(case.src), "src_kind": case.src_kind,
+        "width": case.width, "height": case.height, "luma": case.luma,
+        "bitdepth": case.bitdepth, "chroma": case.chroma, "level": case.level,
+        "tier": case.tier, "profile": case.profile, "grid": case.grid,
+        "expected_legal": case.expected_legal, "expected_reason": case.expected_reason,
+        "verdict": "skip", "mismatches": [reason],
+        "structure": {"tiles": [], "grids": [], "tile_count": 0},
+        "hvcC": None, "out_exists": False, "out_bytes": 0,
+        "exit_code": None, "elapsed_s": 0.0, "timed_out": False,
+        "error_text": "", "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+
+
 def run_selftest(exe: Path) -> int:
-    """解析器自检：不编码，直接解析已知产物（原型 grid / 单图）。"""
+    """解析器自检：不编码，直接解析已知产物（原型 grid / 单图）。
+
+    0.4.2 / C7：三条参考产物里两条在 build/（用户清空后可能缺失）-> 逐条显式 SKIP + 原因 +
+    重建提示；全部缺失时输出 SKIP（不是伪 OK、也不是 FAIL），部分可测时只对**实际执行**的检查
+    下结论，并把 skipped 数量打进结果行。
+    """
     checks = [
         (REPO / "build/analysis-heic/grid_proto/exp2_grid_level31/t1_grid_l31_1024x576_main10.heic",
-         dict(grid=True, cols=4, rows=11, tiles=44, idc=2, level=93, chroma=1, bd=10)),
+         dict(grid=True, cols=4, rows=11, tiles=44, idc=2, level=93, chroma=1, bd=10),
+         "M9 grid 原型产物（build/ 证据目录，C7 后可能缺失；重建 = M9 原型流程）"),
         (REPO / "super/T7.heic", dict(grid=True, cols=6, rows=7, tiles=42, idc=2, level=93,
-                                      chroma=1, bd=10)),
+                                      chroma=1, bd=10),
+         "用户数据 super/T7.heic（不在 build/，正常应存在）"),
         (REPO / "build/matrix/probe/b10_c444/small.heic",
-         dict(grid=False, cols=None, rows=None, tiles=1, idc=4, level=93, chroma=3, bd=10)),
+         dict(grid=False, cols=None, rows=None, tiles=1, idc=4, level=93, chroma=3, bd=10),
+         "M9 probe 产物（build/ 证据目录，C7 后可能缺失；重建 = 先跑 --set baseline-small 生成）"),
     ]
     ok_all = True
-    for path, exp in checks:
+    tested = 0
+    skipped = 0
+    for path, exp, why in checks:
         if not path.exists():
-            print(f"SELFTEST SKIP {path} (missing)")
+            print(f"SELFTEST SKIP {path} (missing; {why})")
+            skipped += 1
             continue
+        if not HVCC_PY.exists():
+            print(f"SELFTEST SKIP {path} (hvcC 探针 hvcc.py 缺失: {HVCC_PY}；C7 后 build/ 已清空)")
+            skipped += 1
+            continue
+        tested += 1
         st = parse_heif(path)
         hv = hvcc_probe(path)
         h = hv["hvcc"][0] if hv.get("hvcc") else {}
@@ -1984,7 +2077,11 @@ def run_selftest(exe: Path) -> int:
             ok = ok and got["cols"] == exp["cols"] and got["rows"] == exp["rows"]
         ok_all = ok_all and ok
         print(f"SELFTEST {'OK  ' if ok else 'FAIL'} {path.name} got={got} exp={exp}")
-    print("SELFTEST RESULT:", "OK" if ok_all else "FAIL")
+    if tested == 0:
+        print(f"SELFTEST RESULT: SKIP（参考夹具/探针全部缺失：tested=0 skipped={skipped}；"
+              "C7 清空 build/ 后属预期，重建提示见上方逐条 SKIP 行）")
+        return 0
+    print(f"SELFTEST RESULT: {'OK' if ok_all else 'FAIL'}（tested={tested} skipped={skipped}）")
     return 0 if ok_all else 1
 
 

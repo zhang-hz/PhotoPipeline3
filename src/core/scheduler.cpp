@@ -48,6 +48,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <mutex>
 #include <set>
@@ -62,6 +63,7 @@
 #include "core/params.h"
 #include "core/pixelbudget.h"
 #include "core/score_queue.h"
+#include "core/thread_plan.h" // 0.4.2 需求6：自适应线程规划（纯函数层）
 #include "decode/oiio_reader.h"
 
 namespace pp {
@@ -155,6 +157,17 @@ struct EventSink {
     Cb cb;                                   // guarded by mu
     std::vector<ProgressInfo> last_progress; // guarded by mu
     bool alive = true;                       // guarded by mu
+    // 0.4.2 / C6-②（M14；TSan 竞态债收口的调度器侧）：EventCb 的**跨线程串行化**。
+    //   emit()/finish() 会被多个 worker 线程（文件线程）与评分池线程并发调用；旧实现只把
+    //   `mu` 用于取 cb/兜高水位，回调本身在数据锁之外调用 ⇒ 消费端（GUI/测试 sink）会被并发
+    //   回调（stress 探针实测 max_active=2；nightly tsan 的 9 条 race 同族）。此处用独立
+    //   `recursive_mutex` 把回调调用收成同一时刻至多一个线程：
+    //     * 不持数据锁 mu 调回调 ⇒ 回调内可安全再调 Scheduler 的读数/取消方法（锁序 mu → cb_mu，
+    //       反向不存在）；
+    //     * recursive ⇒ 回调内同线程再触发事件（幂等重入）不会自锁；
+    //     * 契约：EventCb 不得阻塞等待另一个会 emit 事件的线程（GUI 走 queued 连接，天然满足；
+    //       本条与 M4 起的既有「回调不得阻塞」约定一致）。
+    std::recursive_mutex cb_mu;
 
     void set_callback(Cb c) {
         std::lock_guard<std::mutex> lk(mu);
@@ -185,6 +198,7 @@ struct EventSink {
             out.result = nullptr;
             out.progress = e.progress;
             out.output = e.output;
+            std::lock_guard<std::recursive_mutex> cb_lk(cb_mu); // C6-②：跨线程回调串行
             c(out);
         }
     }
@@ -201,8 +215,10 @@ struct EventSink {
             if (i < last_progress.size())
                 pi = last_progress[i];
         }
-        if (c)
+        if (c) {
+            std::lock_guard<std::recursive_mutex> cb_lk(cb_mu); // C6-②：跨线程回调串行
             c(FileEvent{i, state, result, pi});
+        }
     }
 };
 
@@ -245,6 +261,17 @@ struct Scheduler::Impl {
     int peak_active_files = 0;        // 峰值（wait() 的 e3 report 用）
     long long peak_sum_encode_threads = 0;
 
+    // —— 0.4.2 需求6（M14）：自适应线程规划（CPU 实时负载 × 编码器能力 × 多输出并行）——
+    // 规划逻辑本体 = core/thread_plan.h 的纯函数（单测穷举）；本处只持有运行期状态与采样桥。
+    std::vector<EncoderThreadProfile> plan_profiles; // start() 由 cfg.outputs 派生；运行期只读
+    ThreadPlanState plan_state;                      // guarded by mu（迟滞状态）
+    CpuLoadEma cpu_ema;                              // guarded by mu（CPU 利用率 EMA）
+    CpuTimes cpu_prev;                               // guarded by mu（上次原始计数）
+    bool cpu_prev_valid = false;                     // guarded by mu
+    ThreadPlan last_plan;                            // guarded by mu（调试/读数：最近一次规划）
+    int peak_parallel_outputs = 1;                   // guarded by mu（峰值 P，调试读数）
+    long long plan_converges = 0;                    // guarded by mu（CPU 饱和收敛次数）
+
     Clock::time_point t_start{};
     double elapsed_ms = 0; // guarded by mu (set by wait())
 
@@ -263,12 +290,32 @@ struct Scheduler::Impl {
 
     // §8.2：本次入闸的分配。必须在 mu 下调用（读 done/next/files）。
     //   remaining = 未取件数、inflight = 已取件未完成数（§8.2 公式的两个实参口径）。
-    Alloc alloc_now_locked() const {
+    //   0.4.2 需求6：抽成 unfinished_locked()（并发闸 W 与规划器共用同一"未完成数"口径）。
+    int unfinished_locked() const {
         const std::size_t taken = next.load(std::memory_order_relaxed);
         const std::size_t unprocessed = files.size() > taken ? files.size() - taken : 0;
         const std::size_t inflight_n = taken > done ? taken - done : 0;
-        return alloc_threads(thread_budget, static_cast<int>(unprocessed),
-                             static_cast<int>(inflight_n));
+        const std::size_t unfinished = unprocessed + inflight_n;
+        // 输入数 ≤ INT_MAX 是内存可行批次的既有前提（events/日志同样按 int 打印）。
+        return static_cast<int>(std::min<std::size_t>(unfinished, 0x7fffffff));
+    }
+    Alloc alloc_now_locked() const { return alloc_threads(thread_budget, unfinished_locked(), 0); }
+
+    // —— 0.4.2 需求6：平台 CPU 负载采样（只在"入闸决策点"调用；无常驻采样线程）——
+    // 返回 CPU 利用率 EMA 0..1；<0 = 未知（尚无两次有效读数 / 平台读数失败）。
+    // 必须在 mu 下调用（写 cpu_prev/cpu_ema）。GetSystemTimes 读数开销微秒级，不引入等待。
+    double sample_cpu_locked() {
+        CpuTimes now;
+        if (!read_cpu_times(now))
+            return cpu_ema.value; // 平台失败 → 保持未知/上次值（规划器按保守路径处理）
+        if (cpu_prev_valid) {
+            const double load = cpu_load_between(cpu_prev, now);
+            if (load >= 0.0)
+                cpu_ema.push(load);
+        }
+        cpu_prev = now;
+        cpu_prev_valid = true;
+        return cpu_ema.value;
     }
 
     // 阶段/进度事件转发（W1-T6）：整事件转发（`progress` 随行），index 由调度器回填，
@@ -427,9 +474,15 @@ void Scheduler::Impl::worker() {
         // ---- §8.2 并发闸（信号量限 W = alloc_threads(T, remaining, inflight).files）----
         // 取件 → 算 Alloc → 更新闸 → EncodeRequest.encode_threads=E。闸宽度随队列深度动态收缩
         // （剩余文件少 → W 小、E 大）；不变式 active < W ⇒ 入闸后 active ≤ W ≤ T 且 ΣE ≤ T。
+        // 0.4.2 需求6：入闸决策点上再经自适应规划器（core/thread_plan.h）派生 E/P ——
+        //   * W（alloc.files）仍恒等于冻结公式（并发闸语义零改动）；
+        //   * E/P 由"编码器能力 × CPU 实时负载 × 浅/深队列"决定，且 W×P×E ≤ T 硬约束；
+        //   * CPU 未知/单文件运行 → 规划器回退契约基值（不冒进）。
         Alloc alloc{1, 1};
+        ThreadPlan plan{};
         int active_now = 0; // 入闸后的读数（供日志行；TSan 口径：只在 mu 下读写）
         long long sum_now = 0;
+        double cpu_load = -1.0;
         {
             std::unique_lock<std::mutex> lk(mu);
             cv.wait(lk,
@@ -442,21 +495,56 @@ void Scheduler::Impl::worker() {
                 continue;
             }
             alloc = alloc_now_locked();
+            // 自适应线程规划（入闸决策点；仅此处采样 CPU，无额外常驻线程）
+            ThreadPlanInput pin;
+            pin.thread_budget = thread_budget;
+            pin.unfinished = unfinished_locked();
+            pin.output_count = static_cast<int>(cfg.outputs.size());
+            pin.user_parallel_cap = cfg.max_parallel_targets;
+            pin.cpu_load = sample_cpu_locked();
+            pin.now_ms = steady_now_ms();
+            pin.profiles = plan_profiles.empty() ? nullptr : &plan_profiles;
+            plan = plan_threads(pin, plan_state);
+            cpu_load = pin.cpu_load;
+            // 防御：W 恒等于冻结公式（规划器不改并发闸宽度；若不一致以契约为准）。
+            if (plan.files != alloc.files)
+                plan.files = alloc.files;
             ++active_files;
-            sum_encode_threads += alloc.encode_threads;
+            // E3 ΣE 口径（0.4.2）：计入 P 路真实并发（多输出运行时 P×E），旧键语义不变。
+            sum_encode_threads +=
+                static_cast<long long>(plan.encode_threads) * plan.parallel_outputs;
             peak_active_files = std::max(peak_active_files, active_files);
             peak_sum_encode_threads = std::max(peak_sum_encode_threads, sum_encode_threads);
+            peak_parallel_outputs = std::max(peak_parallel_outputs, plan.parallel_outputs);
+            if (std::string_view(plan.action) == "converge")
+                ++plan_converges;
+            last_plan = plan;
             active_now = active_files;
             sum_now = sum_encode_threads;
         }
         // §8.2 日志点位：线程分配读数（E3 契约在运行日志中可查证）。
+        // 键集**逐字不变**（回归基线 N11 按这些键归一；新增规划轨迹走 debug 行，见下）。
         log_info(kStageSched, kFile, "thread alloc",
                  {{"index", std::to_string(i)},
                   {"alloc_files", std::to_string(alloc.files)},
-                  {"encode_threads", std::to_string(alloc.encode_threads)},
+                  {"encode_threads", std::to_string(plan.encode_threads)},
                   {"active_files", std::to_string(active_now)},
                   {"sum_encode_threads", std::to_string(sum_now)},
                   {"thread_budget", std::to_string(thread_budget)}});
+        // 0.4.2 需求6：规划轨迹（**debug 级** —— 回归基线跑 info 级，机器相关量不进基线；
+        // 单测/实测用 --log-level debug 或 log_init(Debug) 复核）。
+        log_debug(kStageSched, kFile, "thread plan",
+                  {{"index", std::to_string(i)},
+                   {"alloc_files", std::to_string(alloc.files)},
+                   {"encode_threads", std::to_string(plan.encode_threads)},
+                   {"parallel_outputs", std::to_string(plan.parallel_outputs)},
+                   {"outputs", std::to_string(cfg.outputs.size())},
+                   {"cpu_load_pct", cpu_load < 0.0 ? std::string("unknown")
+                                                   : std::to_string(static_cast<int>(
+                                                         std::lround(cpu_load * 100.0)))},
+                   {"est_threads", std::to_string(plan.est_threads)},
+                   {"action", plan.action},
+                   {"reason", plan.reason}});
 
         RunScope scope;
         {
@@ -465,7 +553,8 @@ void Scheduler::Impl::worker() {
         }
         scope.budget = budget.get();
         scope.cancelled = [this] { return cancelled.load(); };
-        scope.encode_threads = alloc.encode_threads; // §3.1 线程映射义务的输入（E ≥ 1）
+        scope.encode_threads = plan.encode_threads;     // §3.1 线程映射义务的输入（E ≥ 1）
+        scope.parallel_outputs = plan.parallel_outputs; // 0.4.2：多输出并行度 P（1 = 串行）
 
         FileOutcome outcome;
         try {
@@ -497,7 +586,8 @@ void Scheduler::Impl::worker() {
             std::lock_guard<std::mutex> lk(mu);
             // §8.2 放闸（与本文件所有退出路径一致：管线调用被 try/catch 全包，其后再无 return）
             --active_files;
-            sum_encode_threads -= alloc.encode_threads;
+            sum_encode_threads -=
+                static_cast<long long>(plan.encode_threads) * plan.parallel_outputs;
             for (const std::string &k : keys) {
                 const auto it = inflight.find(k);
                 if (it != inflight.end())
@@ -592,6 +682,25 @@ void Scheduler::start() {
         if (!spec.backend_id.empty())
             formats += ":" + spec.backend_id;
     }
+    // —— 0.4.2 需求6：规划器运行期状态初始化（编码器能力表 + CPU 基线读数）——
+    // 能力表 = 本次运行各输出的编码器线程事实（thread_plan.h 的单源函数）；运行期只读。
+    // CPU 基线 = start() 时先采一次原始计数，使首个入闸决策有可用区间（区间过短 → 未知，
+    // 规划器按保守路径处理，不冒进）。
+    d.plan_profiles.clear();
+    d.plan_profiles.reserve(d.cfg.outputs.size());
+    for (const OutputFormatSpec &spec : d.cfg.outputs)
+        d.plan_profiles.push_back(encoder_thread_profile(spec.format_id));
+    {
+        std::lock_guard<std::mutex> lk(d.mu);
+        d.plan_state.reset();
+        d.cpu_ema.reset();
+        d.cpu_prev_valid = false;
+        d.peak_parallel_outputs = 1;
+        d.plan_converges = 0;
+        d.last_plan = ThreadPlan{};
+        (void)d.sample_cpu_locked(); // 建立第一次读数（无前值时返回 unknown）
+    }
+
     log_info(kStage, kFile, "start",
              {{"files", std::to_string(d.files.size())},
               {"workers", std::to_string(d.cfg.workers)},
@@ -676,6 +785,22 @@ void Scheduler::wait() {
                   {"peak_sum_encode_threads", std::to_string(peak_threads)},
                   {"active_files_end", std::to_string(active_now)},
                   {"files_done", std::to_string(done_n)}});
+        // 0.4.2 需求6：运行级规划读数（**debug 级**，不进回归基线；单测/实测按需开启）。
+        {
+            std::lock_guard<std::mutex> lk(d.mu);
+            const double cpu = d.cpu_ema.value;
+            log_debug(kStageSched, kFile, "thread plan report",
+                      {{"thread_budget", std::to_string(d.thread_budget)},
+                       {"peak_parallel_outputs", std::to_string(d.peak_parallel_outputs)},
+                       {"converges", std::to_string(d.plan_converges)},
+                       {"last_action", d.last_plan.action},
+                       {"last_reason", d.last_plan.reason},
+                       {"last_encode_threads", std::to_string(d.last_plan.encode_threads)},
+                       {"last_parallel_outputs", std::to_string(d.last_plan.parallel_outputs)},
+                       {"cpu_load_pct",
+                        cpu < 0.0 ? std::string("unknown")
+                                  : std::to_string(static_cast<int>(std::lround(cpu * 100.0)))}});
+        }
     }
 }
 

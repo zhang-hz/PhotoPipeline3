@@ -158,6 +158,17 @@ std::string diff_preset(const pp::PresetData &a, const pp::PresetData &b) {
         if (!d.empty())
             return d;
     }
+    // 0.4.2 / 需求 3：来源注记（与 outputs 同序；空 vector ≡ 同长全空串的规范等价形态）。
+    if (a.output_sources.size() > a.outputs.size() || b.output_sources.size() > b.outputs.size())
+        return "output_sources longer than outputs";
+    for (std::size_t i = 0; i < a.outputs.size(); ++i) {
+        const std::string sa =
+            i < a.output_sources.size() ? a.output_sources[i].format_preset : std::string();
+        const std::string sb =
+            i < b.output_sources.size() ? b.output_sources[i].format_preset : std::string();
+        if (sa != sb)
+            return "output_sources[" + std::to_string(i) + "] '" + sa + "' != '" + sb + "'";
+    }
     if (a.output_template != b.output_template)
         return "output_template '" + a.output_template + "' != '" + b.output_template + "'";
     if (a.split_by_format != b.split_by_format)
@@ -694,7 +705,11 @@ int main() {
                  {"Zeta", "a.json"}, {"Alpha", "b.json"}, {"Mike", "c.json"}}) {
             p.name = name;
             const std::string err = ui::save_preset(dir / file, p);
-            check(err.empty(), c, "save " + file + ": " + err);
+            std::string msg = "save ";
+            msg += file;
+            msg += ": ";
+            msg += err;
+            check(err.empty(), c, msg);
         }
         write_file(dir / "bad.json", "{ this is not json");
         write_file(dir / "notes.txt", "ignore me");
@@ -1346,6 +1361,123 @@ int main() {
         check(ui::save_preset(legacy_policy_out, lp).empty(), c, "旧字符串 policy 再保存");
         check(read_file(legacy_policy_out).find("\\n") == std::string::npos, c,
               "旧字符串 policy 再保存应升级为数组");
+    }
+
+    // 8e) 0.4.2 / 需求 3：大预设**加性**来源注记 `source_preset`
+    //     （Lead 拍板 D1：schema version 仍为 2；空注记不写 ⇒ 旧文件零字节变化、旧版本可读）。
+    case_begin("8e) 大预设来源注记 source_preset：往返/字节稳定/旧文件零变化/错误路径");
+    {
+        const std::string c = "preset-source";
+        // (1) 两输出（一项有来源、一项无）+ unicode 名 → save→load→save 字节稳定
+        PresetData sp;
+        sp.version = 2;
+        sp.name = "批量配置 中文名";
+        sp.outputs.push_back(make_jxl_spec());
+        OutputFormatSpec jpeg;
+        jpeg.format_id = "jpeg";
+        jpeg.backend_id = "jpegli";
+        jpeg.out_bitdepth = 8;
+        jpeg.params["quality"] = int64_t(90);
+        sp.outputs.push_back(jpeg);
+        sp.output_sources.push_back(PresetOutputSource{"jxl 无损归档"});
+        sp.output_sources.push_back(PresetOutputSource{}); // 自定义参数 → 不写字段
+        const fs::path srcdir = fresh_dir(root, "source");
+        const fs::path f1 = srcdir / "batch.json";
+        check(ui::save_preset(f1, sp).empty(), c, "save with sources");
+        check(read_file(f1) == ui::serialize_preset(sp), c,
+              "serialize_preset 必须与落盘字节同源（主窗 dirty 比对基线）");
+        const QJsonObject o = parse_object(f1, c);
+        const QJsonArray outs = o.value("outputs").toArray();
+        check(outs.size() == 2, c, "outputs size " + std::to_string(outs.size()));
+        check(!outs.isEmpty() &&
+                  outs.at(0).toObject().value("source_preset").toString() == "jxl 无损归档",
+              c, "outputs[0].source_preset");
+        check(outs.size() >= 2 && !outs.at(1).toObject().contains("source_preset"), c,
+              "空来源不得写字段（旧文件零字节变化的前提）");
+        check(o.value("version").toInteger(-1) == 2, c, "schema version 仍为 2（D1：不 bump v3）");
+        PresetData loaded;
+        check(ui::load_preset(f1, loaded).empty(), c, "load with sources");
+        check(diff_preset(sp, loaded).empty(), c, "round-trip diff: " + diff_preset(sp, loaded));
+        const fs::path f2 = srcdir / "batch2.json";
+        check(ui::save_preset(f2, loaded).empty(), c, "re-save");
+        check(read_file(f1) == read_file(f2), c, "save→load→save 字节稳定");
+
+        // (2) 旧文件（0.4.1 写出的形态 = 无 source_preset）：载入 sources 空，再保存逐字节不变
+        const PresetData legacy_data = make_delta_preset();
+        const fs::path legacy_dir = fresh_dir(root, "source-legacy");
+        const fs::path legacy = legacy_dir / "old.json";
+        check(ui::save_preset(legacy, legacy_data).empty(), c, "write legacy-shape file");
+        const std::string legacy_before = read_file(legacy);
+        check(legacy_before.find("source_preset") == std::string::npos, c,
+              "旧形态文件本就不含 source_preset");
+        PresetData oldp;
+        check(ui::load_preset(legacy, oldp).empty(), c, "load legacy");
+        check(oldp.output_sources.empty(), c, "旧文件 → output_sources 空");
+        const fs::path legacy_out = fresh_dir(root, "source-legacy-out") / "old.json";
+        check(ui::save_preset(legacy_out, oldp).empty(), c, "re-save legacy");
+        check(read_file(legacy_out) == legacy_before, c,
+              "旧文件 load→save 必须逐字节不变（加性面零变化）");
+
+        // (3) v1 → v2 迁移：零丢失 + sources 空
+        const fs::path v1file = fresh_dir(root, "source-v1") / "v1.json";
+        write_file(v1file, v1_json());
+        PresetData v1p;
+        check(ui::load_preset(v1file, v1p).empty(), c, "v1 load");
+        check(v1p.output_sources.empty(), c, "v1 migration → sources 空");
+
+        // (4) 部分注记（仅 outputs[0] 有）→ 补齐同长、下标对齐；再保存只写非空项
+        const fs::path partial = fresh_dir(root, "source-partial") / "p.json";
+        write_file(partial, std::string(R"({
+  "version": 2, "name": "partial", "output_template": "$dir/$file",
+  "outputs": [ { "format": "jxl", "source_preset": "A" },
+               { "format": "jpeg" } ]
+})"));
+        PresetData part;
+        check(ui::load_preset(partial, part).empty(), c, "partial load");
+        check(part.output_sources.size() == 2 && part.output_sources[0].format_preset == "A" &&
+                  part.output_sources[1].format_preset.empty(),
+              c, "部分注记 → 补齐为与 outputs 同长（逐项可空）");
+        const fs::path partial_out = fresh_dir(root, "source-partial-out") / "p.json";
+        check(ui::save_preset(partial_out, part).empty(), c, "partial save");
+        const QJsonArray pouts = parse_object(partial_out, c).value("outputs").toArray();
+        check(pouts.size() == 2 &&
+                  pouts.at(0).toObject().value("source_preset").toString() == "A" &&
+                  !pouts.at(1).toObject().contains("source_preset"),
+              c, "部分注记再保存：下标对齐且空项不写");
+
+        // (5) 类型错误 → 显式报错（不静默当空）、不污染 out
+        const fs::path bad_src = fresh_dir(root, "source-bad") / "b.json";
+        write_file(bad_src, std::string(R"({
+  "version": 2, "name": "bad", "output_template": "$dir/$file",
+  "outputs": [ { "format": "jxl", "source_preset": 5 } ]
+})"));
+        PresetData untouched;
+        untouched.name = "untouched";
+        const std::string src_err = ui::load_preset(bad_src, untouched);
+        check(src_err.find("source_preset") != std::string::npos, c,
+              "source_preset 类型错误必须点名报错：" + src_err);
+        check(untouched.name == "untouched", c, "载入失败不得污染 out");
+
+        // (6) P9：格式预设文件被当成大预设载入 → 中文指路（不再只报 outputs missing）
+        const fs::path wrong_kind = fresh_dir(root, "source-wrong-kind") / "fp.json";
+        write_file(
+            wrong_kind,
+            std::string(
+                R"({ "kind": "format-preset", "version": 1, "name": "x", "format": "jpeg" })"));
+        const std::string wk_err = ui::load_preset(wrong_kind, untouched);
+        check(wk_err.find("格式预设") != std::string::npos &&
+                  wk_err.find("outputs") != std::string::npos,
+              c, "格式预设文件必须指路到格式预设行：" + wk_err);
+
+        // (7) 未知根/输出字段：忽略 + 不崩（前向兼容）
+        const fs::path unknown = fresh_dir(root, "source-unknown") / "u.json";
+        write_file(unknown, std::string(R"({
+  "version": 2, "name": "u", "output_template": "$dir/$file", "future_root": 1,
+  "outputs": [ { "format": "jxl", "future_output": true } ]
+})"));
+        PresetData up;
+        check(ui::load_preset(unknown, up).empty(), c, "未知字段忽略（前向兼容）");
+        check(up.outputs.size() == 1 && up.output_sources.empty(), c, "未知字段不影响值");
     }
 
     case_begin("9) 收尾（清理 + 汇总）");

@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// PhotoPipeline — 元数据页规则装配（B.1 拆分步 B3：meta_rules）
+// PhotoPipeline — 元数据页 GUI 薄层（B.1 拆分步 B3：meta_rules）
 //
-// Contract: docs/deep-review-0.3.2.md 附录 B.1（步序 B3）；契约注释见 meta_rules.h。
-// 实现 = page_meta.cpp 迁出（parse/时区表/commit_rule_change/tag 行/apply_state 逐字）+
-// 规则装配**值聚合化**改写（RuleInputs 纯函数；输出逐字节不变，R-180 消灭 findChild 隐式约定）。
+// Contract: docs/m13-tasks.md §4 C2 + 0.4.2 用户需求 1/2（选择作用域 = 行选中集合；无选中空态禁写；
+// 多选逐字段聚合）。契约注释见 meta_rules.h。
+// 0.4.2：删除批量规则死面（RuleInputs / rule_inputs / build_rules / apply_state /
+// commit_rule_change）—— 唯一可写真源 = 每文件 MetadataOverride（见 meta_selection.h）。
+// 保留面 = 坐标解析/时区下拉/标签行构造 + 选择项聚合装载 / 字段级提交 / 预设聚合。
 #include "ui/meta_rules.h"
 
 #include "mapwidget/dms.h" // R-100：坐标解析失败回退 dms_to_deg
@@ -34,125 +36,28 @@
 namespace pp::ui::meta {
 
 // ---------------------------------------------------------------------------
-// 值聚合（GUI → RuleInputs；**唯一**读控件点）
+// 时间卡「生效时间」注释行的控件现值（纯显示辅助；写入唯一真源 = override）
 // ---------------------------------------------------------------------------
 
-RuleInputs rule_inputs(const MetaState *st) {
-    RuleInputs in;
-    in.time_enabled = st->time.time_enable != nullptr && st->time.time_enable->isChecked();
-    in.gps_enabled = st->gps.gps_enable->isChecked();
-    in.privacy_enabled =
-        st->privacy.privacy_enable != nullptr && st->privacy.privacy_enable->isChecked();
-    in.seg_index = st->time.seg->current_index();
-    for (std::size_t i = 0; i < in.delta.size(); ++i) {
-        in.delta[i] = st->time.delta[i]->value();
-    }
-    in.tz_from_min = st->time.tz_from->currentData().toInt();
-    in.tz_to_min = st->time.tz_to->currentData().toInt();
-    in.gps_clear = st->gps.clear_gps->isChecked();
-    in.lat = st->gps.lat->text();
-    in.lon = st->gps.lon->text();
-    in.alt = st->gps.alt->text();
-    in.dir = st->gps.dir->text();
-    in.ts = st->gps.ts->text();
-    in.tags.reserve(std::size_t(st->privacy.tag_edits.size()));
-    for (const auto &row : st->privacy.tag_edits) {
-        in.tags.emplace_back(row.first->text(), row.second->text());
-    }
-    in.strip_privacy = st->privacy.strip->isChecked();
-    in.sync_mtime = st->privacy.mtime->isChecked();
-    in.modernize_exif = st->privacy.modernize != nullptr && st->privacy.modernize->isChecked();
-    return in;
-}
-
-// ---------------------------------------------------------------------------
-// 规则装配（**唯一**规则源：rules() 与生效值显示都走这里 → 显示=写入）
-// ---------------------------------------------------------------------------
-
-pp::TimeShift current_time_shift(const RuleInputs &in) {
+// 单选路径与 0.4.1 逐字同口径：Δ 模式取值 = 六个 spin，时区语义模式 = 两个下拉的 userData。
+// 不参与任何写入路径（commit_field 走 meta_selection 的字段级合并）。
+pp::TimeShift current_time_shift(const MetaState *st) {
     pp::TimeShift shift;
-    if (in.seg_index == 0) {
+    if (st->time.seg->current_index() == 0) {
         shift.mode = pp::TimeShift::Mode::Delta;
-        shift.years = in.delta[0];
-        shift.months = in.delta[1];
-        shift.days = in.delta[2];
-        shift.hours = in.delta[3];
-        shift.minutes = in.delta[4];
-        shift.seconds = in.delta[5];
+        shift.years = st->time.delta[0]->value();
+        shift.months = st->time.delta[1]->value();
+        shift.days = st->time.delta[2]->value();
+        shift.hours = st->time.delta[3]->value();
+        shift.minutes = st->time.delta[4]->value();
+        shift.seconds = st->time.delta[5]->value();
     } else {
         shift.mode = pp::TimeShift::Mode::TimezoneSemantic;
-        shift.from_offset_min = in.tz_from_min;
-        shift.to_offset_min = in.tz_to_min;
+        shift.from_offset_min = st->time.tz_from->currentData().toInt();
+        shift.to_offset_min = st->time.tz_to->currentData().toInt();
     }
     return shift;
 }
-
-pp::BatchRules build_rules(const RuleInputs &in) {
-    pp::BatchRules rules;
-    // UX-5（M7-WP7）：三卡「启用」开关 = 该卡是否参与规则。关闭 = build_rules **整卡跳过**
-    // （参数保留但不装配、不写入）；打开 = 按当前参数装配。*_enabled 下传数据层（WP1 加性，
-    // effective_rules 同判据）。
-    rules.time_enabled = in.time_enabled;
-    rules.gps_enabled = in.gps_enabled;
-    rules.privacy_enabled = in.privacy_enabled;
-    // 时间：全零 Δ / from==to 时区 = noop（写路径与显示路径同一判据跳过，§5.1）
-    if (rules.time_enabled) {
-        rules.time_shift = current_time_shift(in);
-    }
-    if (rules.gps_enabled) {
-        // 清除 GPS 与 gps 互斥（gps_clear 优先）
-        if (in.gps_clear) {
-            rules.gps_clear = true;
-        } else {
-            double lat = 0, lon = 0;
-            if (parse_coord(in.lat, -90.0, 90.0, lat) && parse_coord(in.lon, -180.0, 180.0, lon)) {
-                pp::GpsData gps;
-                gps.lat = lat;
-                gps.lon = lon;
-                gps.altitude = parse_optional(in.alt, -100000.0, 100000.0);
-                gps.direction = parse_optional(in.dir, 0.0, 359.99);
-                const QString stamp = in.ts.trimmed();
-                if (!stamp.isEmpty()) {
-                    gps.timestamp = stamp.toStdString();
-                }
-                rules.gps = gps;
-            }
-            // 非法坐标 → 忽略 gps（黄字提示由 refresh_gps_warning 负责）
-        }
-    }
-    if (rules.privacy_enabled) {
-        for (const auto &tag : in.tags) {
-            const std::string key = tag.first.trimmed().toStdString();
-            if (key.empty()) {
-                continue;
-            }
-            const QString value = tag.second;
-            pp::TagEdit edit;
-            edit.key = key;
-            if (value.isEmpty()) {
-                edit.remove = true; // 值留空 = 删除该标签
-            } else {
-                edit.value = value.toStdString();
-            }
-            if (key.rfind("Xmp.", 0) == 0) {
-                rules.xmp_edits.push_back(std::move(edit));
-            } else {
-                rules.exif_edits.push_back(std::move(edit));
-            }
-        }
-        rules.strip_privacy = in.strip_privacy;
-        rules.sync_mtime = in.sync_mtime;
-        rules.modernize_exif = in.modernize_exif;
-    }
-    return rules;
-}
-
-// —— 兼容薄重载（调用点零改动）——
-pp::TimeShift current_time_shift(const MetaState *st) {
-    return current_time_shift(rule_inputs(st));
-}
-
-pp::BatchRules build_rules(const MetaState *st) { return build_rules(rule_inputs(st)); }
 
 // ---------------------------------------------------------------------------
 // 小工具
@@ -250,18 +155,8 @@ std::optional<double> parse_optional(const QLineEdit *edit, double lo, double hi
     return parse_optional(edit->text(), lo, hi);
 }
 
-// UX-4⑥（M7-WP7）：规则面变更的**统一收口**（原散在各接线 lambda 的四连刷）：输入态/黄字
-// 警告/生效值显示/规则变更通知。
-
-void commit_rule_change(MetaState *st) {
-    refresh_gps_inputs(st);
-    refresh_gps_warning(st);
-    refresh_effective(st);
-    notify_rules_changed(st);
-}
-
 // ---------------------------------------------------------------------------
-// apply_rules（预设载入；不发信号）
+// 标签编辑行（隐私卡内容；load_tag_rows 装载 / 用户编辑即 commit_field(Tags)）
 // ---------------------------------------------------------------------------
 
 void clear_tag_rows(MetaState *st) {
@@ -337,80 +232,8 @@ void add_tag_row(MetaState *st, const QString &key, const QString &value) {
     });
 }
 
-void apply_state(MetaState *st, const pp::BatchRules &r) {
-    { // R-180：加载协议 RAII（作用域尾恢复，再进 refresh_all —— 与原顺序逐字一致）
-        LoadingGuard guard(st);
-
-        if (r.time_shift.has_value()) {
-            const pp::TimeShift &s = *r.time_shift;
-            st->time.seg->set_current_index(s.mode == pp::TimeShift::Mode::Delta ? 0 : 1);
-            st->time.delta[0]->setValue(s.years);
-            st->time.delta[1]->setValue(s.months);
-            st->time.delta[2]->setValue(s.days);
-            st->time.delta[3]->setValue(s.hours);
-            st->time.delta[4]->setValue(s.minutes);
-            st->time.delta[5]->setValue(s.seconds);
-            select_timezone(st->time.tz_from, s.from_offset_min);
-            select_timezone(st->time.tz_to, s.to_offset_min);
-        } else {
-            // 无时间规则 = 全零 Δ（noop；与"未配置"在两条路径上等价）
-            st->time.seg->set_current_index(0);
-            for (QSpinBox *spin : st->time.delta) {
-                spin->setValue(0);
-            }
-        }
-
-        st->gps.clear_gps->setChecked(r.gps_clear);
-        if (r.gps.has_value()) {
-            st->gps.lat->setText(format_6(r.gps->lat));
-            st->gps.lon->setText(format_6(r.gps->lon));
-            st->gps.alt->setText(r.gps->altitude.has_value() ? format_6(*r.gps->altitude)
-                                                             : QString());
-            st->gps.dir->setText(r.gps->direction.has_value() ? format_6(*r.gps->direction)
-                                                              : QString());
-            st->gps.ts->setText(r.gps->timestamp.has_value()
-                                    ? QString::fromStdString(*r.gps->timestamp)
-                                    : QString());
-            st->gps.gps_status->setText(PageMeta::tr("已载入批量 GPS 规则"));
-        } else {
-            st->gps.lat->clear();
-            st->gps.lon->clear();
-            st->gps.alt->clear();
-            st->gps.dir->clear();
-            st->gps.ts->clear();
-        }
-
-        clear_tag_rows(st);
-        for (const pp::TagEdit &edit : r.exif_edits) {
-            add_tag_row(st, QString::fromStdString(edit.key),
-                        edit.value.has_value() ? QString::fromStdString(*edit.value) : QString());
-        }
-        for (const pp::TagEdit &edit : r.xmp_edits) {
-            add_tag_row(st, QString::fromStdString(edit.key),
-                        edit.value.has_value() ? QString::fromStdString(*edit.value) : QString());
-        }
-
-        st->privacy.strip->setChecked(r.strip_privacy);
-        st->privacy.mtime->setChecked(r.sync_mtime);
-        if (st->privacy.modernize != nullptr)
-            st->privacy.modernize->setChecked(r.modernize_exif);
-
-        // UX-5：恢复**含值旧状态 = 开**（旧预设缺 *_enabled 键 → 默认 true，带值即开关置开）；
-        // 显式 *_enabled=false 优先（预设里明确关掉的卡不复活）。新会话/空值 = 关（零变化）。
-        const bool time_on = r.time_enabled && r.time_shift.has_value();
-        const bool gps_on = r.gps_enabled && (r.gps.has_value() || r.gps_clear);
-        const bool privacy_on =
-            r.privacy_enabled && (r.strip_privacy || r.sync_mtime || r.modernize_exif ||
-                                  !r.exif_edits.empty() || !r.xmp_edits.empty());
-        st->time.time_enable->setChecked(time_on);
-        st->privacy.privacy_enable->setChecked(privacy_on);
-        set_gps_rule_enabled(st, gps_on);
-    }
-    refresh_all(st);
-}
-
 // ===========================================================================
-// M13（0.4.1）/ C2：选择项级编辑 —— UI 薄层（纯内核 = ui/meta_selection.{h,cpp}）
+// M13（0.4.1）/ C2 + 0.4.2 需求 1/2：选择项级编辑 —— UI 薄层（纯内核 = ui/meta_selection）
 //
 // 职责边界（C2.1）：唯一可写状态 = st->follow.items[i].exception；本段只做
 //   控件读值 → 纯函数合并 → 就地更新 follow.items → 发 selection_edits_committed →
@@ -576,12 +399,31 @@ void apply_mixed_combo(QComboBox *combo, bool mixed, const QStringList &values) 
     apply_mixed_widget(combo, mixed, values);
 }
 
-// —— 单字段提交（C2.4）——
+// 0.4.2（需求 1/2）：卡头「启用」三态开关的**字段提交后即时刷新**（全 active → on /
+// 全 off → off / 否则 partial）。等价于 load_inputs_from_selection 里的 load_switch 判据；
+// 独立成函数供 commit_field 尾部调用 —— 否则用户编辑了某卡字段后该卡开关仍显示 off，
+// 直到下一次选择变化才纠正（三态语义要求开关始终反映当前选择集的 active 聚合）。
+void refresh_card_switch(MetaState *st, EditField card_field, formkit::SwitchControl *sw) {
+    if (sw == nullptr) {
+        return;
+    }
+    const BoolAggregate agg = card_active_aggregate(selection_snapshots(st), card_field);
+    const QSignalBlocker blocker(sw);
+    sw->set_partial(agg.state == Aggregate::Mixed);
+    sw->setChecked(agg.state == Aggregate::Uniform && agg.value);
+    apply_mixed_widget(sw, agg.state == Aggregate::Mixed, agg.labels);
+    if (agg.state != Aggregate::Mixed) {
+        sw->setToolTip(PageMeta::tr(kCardEnableTooltip));
+    }
+}
+
+// —— 单字段提交（C2.4）；0.4.2 需求 1：编辑作用域 = 行选中集合，无选中 ⇒ 零写入 ——
 void commit_field(MetaState *st, EditField field) {
     if (st == nullptr || st->core.page == nullptr || st->core.loading) {
         return;
     }
-    if (st->follow.items.isEmpty()) {
+    // 无行选中 = 空态：任何提交路径一律不写（即使控件事件仍在队列里到达）。
+    if (st->follow.items.isEmpty() || !st->selection.has_selection) {
         return;
     }
     FieldInput input;
@@ -611,9 +453,9 @@ void commit_field(MetaState *st, EditField field) {
         input.value = st->time.tz_to->currentData().toInt();
         break;
     case EditField::GpsEnable:
-        input.flag = st->gps.gps_enable_switch != nullptr
-                         ? st->gps.gps_enable_switch->isChecked()
-                         : (st->gps.gps_enable != nullptr && st->gps.gps_enable->isChecked());
+        // 0.4.2：GPS 卡只有一个「启用」入口（卡头 SwitchControl）；旧的折叠面 gps_enable 复选框
+        // 随「批量 GPS 规则」概念删除（meta-cards / 需求 2）。
+        input.flag = st->gps.gps_enable_switch != nullptr && st->gps.gps_enable_switch->isChecked();
         break;
     case EditField::GpsClear:
         input.flag = st->gps.clear_gps != nullptr && st->gps.clear_gps->isChecked();
@@ -715,17 +557,18 @@ void commit_field(MetaState *st, EditField field) {
         });
     }
     // 3) 提交后只补控件可用性 + 清掉本字段的 mixed 视觉残留（不重铺其它输入文本）
-    if (field == EditField::TimeEnable) {
-        // 本次提交把选择集统一成 on/off → 开关回到二态（partial 只表示"选择集不一致"）
-        const BoolAggregate agg =
-            card_active_aggregate(selection_snapshots(st), EditField::TimeEnable);
-        const QSignalBlocker blocker(st->time.time_enable);
-        if (agg.state == Aggregate::Uniform) {
-            st->time.time_enable->set_partial(false);
-            st->time.time_enable->setChecked(agg.value);
-        } else {
-            st->time.time_enable->set_partial(true);
-        }
+    // 0.4.2：卡头「启用」三态随本次提交立即刷新（任意改变该卡 active 判据的字段都算）。
+    if (field == EditField::TimeMode || time_component_index(field) >= 0 ||
+        field == EditField::TimeTzFrom || field == EditField::TimeTzTo ||
+        field == EditField::TimeEnable) {
+        refresh_card_switch(st, EditField::TimeEnable, st->time.time_enable);
+    } else if (field == EditField::GpsEnable || field == EditField::GpsClear ||
+               is_gps_component_field(field)) {
+        refresh_card_switch(st, EditField::GpsEnable, st->gps.gps_enable_switch);
+    } else if (field == EditField::PrivacyEnable || field == EditField::PrivacyStrip ||
+               field == EditField::PrivacyMtime || field == EditField::PrivacyModernize ||
+               field == EditField::PrivacyCreatorTool || field == EditField::Tags) {
+        refresh_card_switch(st, EditField::PrivacyEnable, st->privacy.privacy_enable);
     }
     if (field == EditField::TimeMode) {
         apply_mixed_widget(st->time.seg, false, {});

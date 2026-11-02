@@ -62,6 +62,7 @@
 #include <utility>
 #include <vector>
 
+#include "core/logger.h"    // 0.4.2 需求5：显示变换失败/降级如实落日志
 #include "core/simd/simd.h" // M4-W5-T19：LANCZOS3 降采样热路径（§11.2）
 #include "decode/oiio_reader.h"
 
@@ -383,8 +384,10 @@ bool scale_to_rgba8(const OIIO::ImageBuf &src, int max_px, QImage &out, bool lin
 // UX-3）经 OIIO 内存读为 float32 后走同一条 LANCZOS3/不放大/白底路径。任何失败（无候选/
 // 容器不支持/预览不可解/候选小于 1600px）静默回退全解码 —— from_embedded 只在真用了
 // 足够大的内嵌图时才置真（由本函数返回值决定）。
+// 0.4.2 需求5 加性：out_preview_icc 非空时输出**内嵌预览自身的 ICC 字节**（预览 JPEG 常是
+// sRGB，可能与宿主容器的宽色域 ICC 不同；像素按谁编码就按谁解释——显示变换的源 ICC 用这个）。
 bool try_embedded_preview_image(const std::filesystem::path &src, int max_px, QImage &out,
-                                bool linear_resample) {
+                                bool linear_resample, std::string *out_preview_icc = nullptr) {
     try {
         Exiv2::Image::UniquePtr image = Exiv2::ImageFactory::open(src.string());
         if (!image)
@@ -405,6 +408,8 @@ bool try_embedded_preview_image(const std::filesystem::path &src, int max_px, QI
         OIIO::ImageBuf buf;
         if (!preview_bytes_to_buf(preview.pData(), preview.size(), hint, buf))
             return false;
+        if (out_preview_icc != nullptr)
+            *out_preview_icc = icc_from_spec(buf.spec()); // 无 ICC → 空 = 假定 sRGB
         return scale_to_rgba8(buf, max_px, out, linear_resample);
     } catch (const Exiv2::Error &) {
         return false;
@@ -526,20 +531,25 @@ PreviewImage decode_preview_detailed(const std::filesystem::path &src, int max_p
     // Adobe RGB / Display P3 源按 sRGB 直出 → 缩略图明显发灰（用户报告的 Adobe RGB 显示
     // 问题）。这里不碰像素字节，只给 QImage 附上源 ICC 色彩空间，由 Qt 绘制时转换到
     // 屏幕 sRGB（与 §6.1「色彩管理渲染」一致；无 ICC 时保持默认 = 现状）。
-    const auto attach_color_space = [&icc](QImage &image) {
-        if (image.isNull() || icc.empty())
+    // 0.4.2 需求5（已查证）：Qt 6.11 的 Windows raster 后端**不做**绘制期色彩变换（见
+    // core/display_profile.h 根因），故真正的变换在显示面消费点（PreviewCache / UI 缩略图）
+    // 用 display_profile.h 完成；这里的 QColorSpace 只保留为「像素编码」的如实标注。
+    const auto attach_color_space = [](QImage &image, const std::string &pixel_icc) {
+        if (image.isNull() || pixel_icc.empty())
             return;
-        const QColorSpace cs = QColorSpace::fromIccProfile(
-            QByteArray(reinterpret_cast<const char *>(icc.data()), static_cast<int>(icc.size())));
+        const QColorSpace cs = QColorSpace::fromIccProfile(QByteArray(
+            reinterpret_cast<const char *>(pixel_icc.data()), static_cast<int>(pixel_icc.size())));
         if (cs.isValid())
             image.setColorSpace(cs);
     };
 
     try {
         // §6.1「优先内嵌预览」
-        if (try_embedded_preview_image(src, max_px, out.image, linear_resample)) {
+        std::string preview_icc; // 内嵌预览自身的 ICC（无 → 空 = 假定 sRGB）
+        if (try_embedded_preview_image(src, max_px, out.image, linear_resample, &preview_icc)) {
             out.from_embedded = true;
-            attach_color_space(out.image);
+            out.icc = preview_icc;
+            attach_color_space(out.image, out.icc);
             return out;
         }
         // §6.1「否则 OIIO 读整图后 LANCZOS3 降采样到 max_px 内」
@@ -547,7 +557,8 @@ PreviewImage decode_preview_detailed(const std::filesystem::path &src, int max_p
             out.image = QImage();
             out.error = "preview decode failed: " + src.filename().string();
         } else {
-            attach_color_space(out.image);
+            out.icc = icc; // 整图解码的像素编码 = 容器/文件 ICC（无 → 假定 sRGB）
+            attach_color_space(out.image, out.icc);
         }
     } catch (const std::exception &e) {
         out.image = QImage();
@@ -574,6 +585,7 @@ struct PreviewCache::Impl {
         bool from_embedded = false;
         ImageInfo info;
         std::string color_space;
+        std::string display_space; // 0.4.2 需求5：非空 = 该 image 已按显示 profile 编码
     };
 
     Impl(std::size_t cap, int px) : capacity(cap > 0 ? cap : 1), max_px(px > 0 ? px : 1) {}
@@ -581,6 +593,10 @@ struct PreviewCache::Impl {
     std::size_t capacity = kPreviewCacheCapacity;
     int max_px = kPreviewCacheMaxPx;
     bool linear_resample = false; // C4 UI 面（M7-R2.1-F4）：未命中解码的线性光重采样开关
+    // —— 0.4.2 需求 5 加性：显示面色彩管理（未 set = 既有行为逐字不变）——
+    bool display_set = false;
+    DisplayProfile display;
+    std::uint64_t display_generation = 0; // 换档计数：拒绝在途解码结果以旧 profile 入缓存
     mutable std::mutex mu;
     std::list<Entry> lru;                                       // front = MRU，back = LRU
     std::map<std::string, std::list<Entry>::iterator> index;    // key → LRU 位置
@@ -595,6 +611,10 @@ PreviewCache::~PreviewCache() = default;
 PreviewImage PreviewCache::get(const std::filesystem::path &src) {
     Impl &im = *impl_;
     const std::string key = cache_key(src);
+    // 显示 profile 快照：miss 路径的变换目标；generation 用于拒绝换档后的在途结果入缓存。
+    bool display_active = false;
+    std::uint64_t display_gen = 0;
+    DisplayProfile display;
     {
         const std::lock_guard<std::mutex> lock(im.mu);
         const auto it = im.index.find(key);
@@ -607,9 +627,13 @@ PreviewImage PreviewCache::get(const std::filesystem::path &src) {
             hit.from_embedded = entry.from_embedded;
             hit.info = entry.info;
             hit.color_space = entry.color_space;
+            hit.display_space = entry.display_space;
             return hit;
         }
         ++im.misses;
+        display_active = im.display_set;
+        display_gen = im.display_generation;
+        display = im.display;
     }
 
     // 解码在锁外（2 个预览 worker 可并发 miss，不互相阻塞）
@@ -617,7 +641,25 @@ PreviewImage PreviewCache::get(const std::filesystem::path &src) {
     if (!result.error.empty() || result.image.isNull())
         return result; // 失败结果不入缓存（文件暂时读不了不该被钉死）
 
+    // 0.4.2 需求5：显示编码化在 worker 线程内完成（源 ICC → 显示 profile，相对比色 + BPC）；
+    // 失败不阻断预览（原像素 + 如实日志），与「失败结果不入缓存」的既有口径一致。
+    // std::move：解码结果在本函数内独占 → 原地变换，避免 4096² 的 COW 深拷贝（性能口径）。
+    if (display_active) {
+        DisplayTransformResult transform;
+        result.image = to_display_encoded(std::move(result.image), result.icc, display, &transform);
+        if (!transform.error.empty()) {
+            log_warn("preview", "thumbs.cpp", "display transform failed; showing source pixels",
+                     {{"src", result.color_space}, {"error", transform.error}});
+        }
+        result.display_space = display.name.empty() ? std::string("sRGB") : display.name;
+    }
+
     const std::lock_guard<std::mutex> lock(im.mu);
+    if (im.display_generation != display_gen) {
+        // 解码期间显示 profile 已换档（屏幕变更/invalidate）：本次结果按旧 profile 编码，
+        // 不写入缓存（否则会与新档条目混用）；直接返回给当前请求。
+        return result;
+    }
     if (const auto it = im.index.find(key); it != im.index.end()) {
         // 并发线程刚刚插入同键：刷新内容并提升（不新增条目）
         Impl::Entry &entry = *it->second;
@@ -626,12 +668,13 @@ PreviewImage PreviewCache::get(const std::filesystem::path &src) {
         entry.from_embedded = result.from_embedded;
         entry.info = result.info;
         entry.color_space = result.color_space;
+        entry.display_space = result.display_space;
         im.bytes += static_cast<std::size_t>(entry.image.sizeInBytes());
         im.lru.splice(im.lru.begin(), im.lru, it->second);
         return result;
     }
-    im.lru.push_front(
-        Impl::Entry{key, result.image, result.from_embedded, result.info, result.color_space});
+    im.lru.push_front(Impl::Entry{key, result.image, result.from_embedded, result.info,
+                                  result.color_space, result.display_space});
     im.index.emplace(key, im.lru.begin());
     im.bytes += static_cast<std::size_t>(result.image.sizeInBytes());
     while (im.lru.size() > im.capacity) { // LRU 逐出最旧
@@ -668,6 +711,31 @@ void PreviewCache::set_linear_resample(bool on) {
 bool PreviewCache::linear_resample() const {
     const std::lock_guard<std::mutex> lock(impl_->mu);
     return impl_->linear_resample;
+}
+
+// —— 0.4.2 需求 5 加性：显示面色彩管理（Contract: docs/m14-tasks.md C4）——
+// 未调用 = 既有行为逐字不变；设置后未命中解码结果在入缓存前变换为显示 profile 编码。
+// 语义变化（ICC 字节 / 系统与回退切换 / 描述名变化）→ 清空缓存 + generation++：
+// 旧条目是旧显示编码，不可与新档混用；在途解码结果由 generation 判据拒绝入缓存。
+void PreviewCache::set_display_profile(const DisplayProfile &profile) {
+    Impl &im = *impl_;
+    const std::lock_guard<std::mutex> lock(im.mu);
+    const bool same = im.display_set && im.display.icc == profile.icc &&
+                      im.display.from_system == profile.from_system &&
+                      im.display.name == profile.name;
+    if (same)
+        return;
+    im.display = profile;
+    im.display_set = true;
+    ++im.display_generation;
+    im.lru.clear();
+    im.index.clear();
+    im.bytes = 0; // 缓存清空 → 内存记账同步归零（命中/逐出计数保留 = 生命周期累计）
+}
+
+DisplayProfile PreviewCache::display_profile() const {
+    const std::lock_guard<std::mutex> lock(impl_->mu);
+    return impl_->display;
 }
 
 std::size_t PreviewCache::hits() const {

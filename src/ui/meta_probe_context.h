@@ -57,7 +57,6 @@ inline const QString kGpsDir = QStringLiteral("gps_dir");
 // EXIF 编辑器「生效」值标签（exif_editor.cpp 同名 objectName；区别于 hook::kGpsEffective
 // 动态属性 —— 一个是编辑器标签 objectName，一个是页面钩子属性名。M7-R2.3-G8 词表补缺）
 inline const QString kGpsEffectiveLabel = QStringLiteral("gps_effective");
-inline const QString kGpsEnable = QStringLiteral("gps_enable");
 inline const QString kGpsLat = QStringLiteral("gps_lat");
 inline const QString kGpsLon = QStringLiteral("gps_lon");
 inline const QString kGpsMoreToggle = QStringLiteral("gps_more_toggle");
@@ -77,8 +76,6 @@ inline const QString kDeltaYears = QStringLiteral("pp-meta-delta-years");
 inline const QString kEffectRow = QStringLiteral("pp-meta-effect-row");
 inline const QString kExceptionHost = QStringLiteral("pp-meta-exception-host");
 inline const QString kGpsAddress = QStringLiteral("pp-meta-gps-address");
-inline const QString kPpMetaGpsAlt = QStringLiteral("pp-meta-gps-alt");
-inline const QString kGpsAltdirRow = QStringLiteral("pp-meta-gps-altdir-row");
 inline const QString kGpsCategory1 = QStringLiteral("pp-meta-gps-category-%1");
 inline const QString kGpsCategoryMenu = QStringLiteral("pp-meta-gps-category-menu");
 inline const QString kGpsClear = QStringLiteral("pp-meta-gps-clear");
@@ -87,16 +84,13 @@ inline const QString kGpsCopy = QStringLiteral("pp-meta-gps-copy");
 inline const QString kGpsDatum = QStringLiteral("pp-meta-gps-datum");
 inline const QString kGpsDatumIcon = QStringLiteral("pp-meta-gps-datum-icon");
 inline const QString kGpsDatumRow = QStringLiteral("pp-meta-gps-datum-row");
-inline const QString kPpMetaGpsDir = QStringLiteral("pp-meta-gps-dir");
 inline const QString kGpsDms = QStringLiteral("pp-meta-gps-dms");
 inline const QString kPpMetaGpsEnable = QStringLiteral("pp-meta-gps-enable");
 inline const QString kGpsHint = QStringLiteral("pp-meta-gps-hint");
-inline const QString kPpMetaGpsLat = QStringLiteral("pp-meta-gps-lat");
 inline const QString kGpsLayer = QStringLiteral("pp-meta-gps-layer");
 inline const QString kGpsLayerHybrid = QStringLiteral("pp-meta-gps-layer-hybrid");
 inline const QString kGpsLayerRoad = QStringLiteral("pp-meta-gps-layer-road");
 inline const QString kGpsLayerSatellite = QStringLiteral("pp-meta-gps-layer-satellite");
-inline const QString kPpMetaGpsLon = QStringLiteral("pp-meta-gps-lon");
 inline const QString kGpsOpsRow = QStringLiteral("pp-meta-gps-ops-row");
 inline const QString kGpsPick = QStringLiteral("pp-meta-gps-pick");
 inline const QString kGpsPill = QStringLiteral("pp-meta-gps-pill");
@@ -168,6 +162,9 @@ inline const QString kPrivacyStripLink = QStringLiteral("privacy_strip_link");
 inline const QString kCreatorToolStrip = QStringLiteral("creator_tool_strip");
 inline const QString kAutoElevation = QStringLiteral("auto_elevation");
 inline const QString kModernizeExif = QStringLiteral("modernize_exif");
+// 0.4.2（M13 后续）/ 需求 1/2：GPS 卡「生效坐标」只读聚合标签（uniform=坐标 / mixed=多个值）。
+// 取代 0.4.1 的只读 view_lat/view_lon/view_alt/view_dir 四枚 QLineEdit（同一事实的单值展示面）。
+inline const QString kGpsEffectiveText = QStringLiteral("pp-meta-gps-effective");
 inline const QString kSeg = QStringLiteral("pp-meta-seg");
 inline const QString kSegDelta = QStringLiteral("pp-meta-seg-delta");
 inline const QString kSegTz = QStringLiteral("pp-meta-seg-tz");

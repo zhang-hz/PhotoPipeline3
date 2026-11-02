@@ -427,10 +427,19 @@ struct FormatState {
     // ---- M12（需求 4；Lead 裁定 2026-11-01，只加字段）----
     // 全局预设接管（detached）态：全局预设是**整卡写入者**，载入后卡值来自全局预设、不再是任何
     // 格式预设文件 —— 「保存」必须禁用（否则会用全局值覆盖 default.json / 旧来源文件），自动
-    // default 载入被抑制（否则会把全局预设值冲掉）；下拉仍高亮 default（视觉锚 = 该格式的出厂
-    // 默认预设），用户显式选中任一预设并载入成功即解除（见 mainwindow_presets.cpp
-    // format_preset_load_into / page_output.cpp apply_preset）。
+    // default 载入被抑制（否则会把全局预设值冲掉）；用户显式选中任一预设并载入成功即解除（见
+    // mainwindow_presets.cpp format_preset_load_into / page_output.cpp apply_preset）。
+    // 0.4.2 / 需求 3（A13）**语义收口**：detached 仍是「来源 = 大预设」的唯一判据，但显示面
+    // **不再假装高亮 default** —— 见下面两个显示字段与 set_format_preset_global_source_for()。
     bool preset_detached = false;
+    // ---- 0.4.2 / 需求 3（大预设重设计；A13）：来源显式化的显示面（会话态；不落 settings）----
+    //   * preset_detached=true：卡值来自大预设。format_preset_path 恒空；combo 无选中 +
+    //     占位「来自大预设：<preset_global_name>」；注记「值来自大预设「<名>」（基于格式预设
+    //     <preset_based_on> / 自定义参数）」；「保存」禁用（无绑定文件，另存/导入/导出可用）。
+    //   * preset_detached=false 且 format_preset_path 非空：真绑定（「保存」写该文件）。
+    // 空白名（旧调用方只设 detached=true）= 占位「来自大预设」+注记「（自定义参数）」。
+    QString preset_global_name;  // 大预设显示名（空 = 无名来源）
+    QString preset_based_on;     // 大预设里记录的来源格式预设文件名 stem（空 = 自定义参数）
     std::string adaptive_policy; // 预设携带的策略原文（空 = 无策略 → 整行不显示）
 
     bool adaptive_enabled = false; // 开关态（初值 = 预设 adaptive.enabled；关闭 = 本次不启用）
@@ -509,6 +518,10 @@ struct OutputPageImpl {
     QPushButton *preset_saveas = nullptr;
     QPushButton *preset_delete = nullptr;
     ElidedLabel *preset_hint = nullptr;
+    // 0.4.2 / 需求 3：预设卡注记轨（pp-preset-note；载入/保存结果与「未应用」说明；
+    // 空 = 隐藏不占高）。与格式预设行的 note 同款 10px 提示轨。
+    ElidedLabel *preset_note = nullptr;
+    bool preset_dirty = false; // 当前页配置 ≠ 绑定预设文件的基线（主窗比对后喂入）
     ElidedLabel *est_output = nullptr;
     ElidedLabel *est_size = nullptr;
     ElidedLabel *est_time = nullptr;
@@ -753,6 +766,8 @@ struct OutputPageImpl {
 
     // 修 2-25：保存/删除的可用态随"是否有当前预设"走，禁用原因写进 tooltip（不静默灰）
     void sync_preset_buttons();
+    // 0.4.2 / 需求 3（A13）：预设卡条目文本重放（基准名 + 当前绑定且 dirty 时「（已修改）」）。
+    void refresh_preset_combo_texts();
 
     // ------------------------------------------------------------ M10-W3-T2 格式预设行
     // 设计 §8.5 / C23：每格式页签顶部一行「格式预设 [未选择 ▼][保存][另存…][删除][导入…][导出…]」
@@ -771,6 +786,15 @@ struct OutputPageImpl {
     // M12（需求 4）：全局预设接管态的唯一迁移点（进入时清会话来源 + 高亮 default + 写注记 +
     // 重同步按钮；退出时只复位标志，来源/注记由随后的载入链写入）。
     void set_format_preset_detached_for(const std::string &id, bool detached);
+    // ---- 0.4.2 / 需求 3（A13）：大预设 ↔ 格式预设来源显式化的唯一迁移点 ----
+    // 进入：preset_detached=true + format_preset_path 清空 + 两个显示字段写入 + 占位/注记/
+    // 按钮态刷新（**不再高亮 default**：combo currentIndex=-1，占位「来自大预设：<名>」）。
+    // 退出 = set_format_preset_detached_for(id,false)（清零两个显示字段，由随后的绑定链写注记）。
+    void set_format_preset_global_source_for(const std::string &id, const QString &global_name,
+                                             const QString &based_on);
+    // 供 set_format_preset_list / set_current_format_preset 复用的显示重放（占位文本、注记、
+    // 按钮态）；不改变会话态。
+    void sync_format_preset_source_display(const std::string &id);
 };
 
 } // namespace pp::ui

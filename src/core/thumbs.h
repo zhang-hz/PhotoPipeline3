@@ -34,6 +34,7 @@
 //       （徽标「输入 · 未修改像素」的字面语义），色彩空间按「缩略图口径 v1：sRGB 假定」
 //       呈现描述名，不做 ICC→sRGB 变换。
 #pragma once
+#include "core/display_profile.h" // 0.4.2 需求5：显示面色彩管理（加性承载面，见本文件追加块）
 #include "core/types.h"
 #include <QImage>
 #include <cstddef>
@@ -103,6 +104,13 @@ struct PreviewImage {
     std::string color_space;    // 源色彩空间描述名（ICC 描述 / "sRGB 假定"）；不做变换
     bool from_embedded = false; // true = 走内嵌预览分支
     std::string error;          // 非空 = 失败（probe/解码/通道数不支持的英文详情）
+    // —— 0.4.2 需求 5 末尾加性追加（显示面色彩管理；既有语义零改动）——
+    // 源 ICC 字节（空 = 无 ICC / 假定 sRGB）。显示变换（core/display_profile.h）的输入；
+    // decode_preview_detailed 只是把已读到的字节**如实带出**，不改变任何像素路径。
+    std::string icc;
+    // 非空 = 该 image 已按显示 profile 编码（值 = 显示描述名，如 "ICC(Display P3)" / "sRGB"）；
+    // 空 = 未做显示变换（默认路径：decode_preview_detailed 与未设置显示 profile 的 PreviewCache）。
+    std::string display_space;
 };
 
 // PP-FROZEN(0.3.0) §3.6 冻结形态：`decode_preview(path, max_px) -> QImage`
@@ -148,6 +156,18 @@ public:
     // 解码的条目与新档不可混用）。
     void set_linear_resample(bool on);
     bool linear_resample() const;
+
+    // —— 0.4.2 需求 5 末尾加性追加（显示面色彩管理；Contract: docs/m14-tasks.md C4）——
+    // 设置显示 profile：set 之后，未命中解码的结果在**入缓存前**经 core/display_profile.h 的
+    // to_display_encoded() 变换为显示 profile 编码（源 ICC → 显示 profile，相对比色 + BPC；
+    // 变换在预览 worker 线程内完成），相应条目的 PreviewImage::display_space 置为显示描述名。
+    //   * **不调用 = 既有行为逐字不变**（默认路径零变化；原始 decode_preview_detailed 语义保留）。
+    //   * profile 语义变化（ICC 字节不同 / 系统↔回退切换）→ 清空缓存（旧条目是旧显示编码，
+    //     与新 profile 不可混用；在途解码的结果以 generation 判据拒绝入缓存）。
+    //   * 线程安全（内部互斥；可在 UI 线程设置、worker 线程读取）。
+    void set_display_profile(const pp::DisplayProfile &profile);
+    // 当前显示 profile（未设置时 = 默认构造：from_system=false / icc 空，仅诊断用）。
+    pp::DisplayProfile display_profile() const;
 
     std::size_t size() const;         // 当前条目数
     std::size_t capacity() const;     // 上限（条目数）

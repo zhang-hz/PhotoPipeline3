@@ -78,8 +78,7 @@ QString map_banner_qss(const theme::Tokens &t) {
 void apply_icons(MetaState *st) {
     const theme::Tokens &t = st->core.tokens;
     // M5-T3：矢量图标随 tokens 重放（QIcon 取色不吃 QSS 的 color）；M6-T8 加：搜索钮放大镜
-    set_fold_icon(st, st->gps.rule_toggle,
-                  st->gps.rule_toggle != nullptr && st->gps.rule_toggle->isChecked());
+    // M14/C2：「批量 GPS 规则」折叠钮已删 —— 现在只有「更多字段」折叠钮需重放。
     set_fold_icon(st, st->gps.more_toggle,
                   st->gps.more_toggle != nullptr && st->gps.more_toggle->isChecked());
     set_fold_icon(st, st->privacy.link_tags,

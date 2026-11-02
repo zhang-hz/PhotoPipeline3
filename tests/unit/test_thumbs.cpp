@@ -36,6 +36,7 @@
 #include <OpenImageIO/imagebufalgo.h>
 #include <OpenImageIO/imageio.h>
 
+#include <QColor>
 #include <QColorSpace>
 #include <QImage>
 
@@ -50,6 +51,8 @@
 #include <system_error>
 #include <vector>
 
+#include "core/colormanager.h"    // 0.4.2 需求5：DisplayP3/AdobeRGB ICC 字节（load_target_icc）
+#include "core/display_profile.h" // 0.4.2 需求5：显示面色彩管理
 #include "core/thumbs.h"
 #include "decode/oiio_reader.h"
 
@@ -144,7 +147,7 @@ bool all_white(const pp::ThumbImage &t) {
 // meta/exif_full.jpg, so make_thumbnail() meets a real embedded preview.
 fs::path build_preview_fixture(const fs::path &corpus, const fs::path &dir) {
     std::error_code ec;
-    const fs::path host = dir / "host_with_preview.jpg";
+    fs::path host = dir / "host_with_preview.jpg";
     fs::copy_file(corpus / "meta" / "exif_full.jpg", host, fs::copy_options::overwrite_existing,
                   ec);
     if (ec)
@@ -215,7 +218,7 @@ bool write_gradient_file(const fs::path &path, int w, int h, const char *format)
 fs::path attach_embedded_preview(const fs::path &host_src, const fs::path &preview_jpeg,
                                  const fs::path &dir, const char *name) {
     std::error_code ec;
-    const fs::path host = dir / name;
+    fs::path host = dir / name;
     fs::copy_file(host_src, host, fs::copy_options::overwrite_existing, ec);
     if (ec)
         return {};
@@ -283,6 +286,67 @@ bool gradient_endpoints_ok(const QImage &img, int tol, std::string *detail) {
 
 constexpr int kBigWidth = 8000; // 48MP（8000×6000）
 constexpr int kBigHeight = 6000;
+
+// ------------------------------------------------------------------------------------------
+// 0.4.2 需求5：显示面色彩管理 fixture / 取证工具（Contract: docs/m14-tasks.md C4）
+// ------------------------------------------------------------------------------------------
+
+// 写 8×8 纯色 TIFF，并用 Exiv2 给**容器**挂 ICC（TIFF tag 34675；probe/OIIO 的 ICCProfile
+// 属性据此可见）。实测口径：PNG 用 Exiv2 补 iCCP 时 OIIO 3.1.14 的 png 读取面看不到该 profile
+// （Exiv2 追加的 iCCP 与既有 sRGB chunk 并存），故测试夹具统一用 TIFF（无损 + ICC 可见）。
+bool write_solid_tiff_with_icc(const fs::path &path, int r, int g, int b, const std::string &icc) {
+    {
+        auto out = OIIO::ImageOutput::create(path.string());
+        if (!out)
+            return false;
+        OIIO::ImageSpec spec(8, 8, 3, OIIO::TypeUInt8);
+        if (!out->open(path.string(), spec))
+            return false;
+        std::vector<std::uint8_t> px(std::size_t(8) * 8u * 3u);
+        for (std::size_t i = 0; i + 2 < px.size(); i += 3) {
+            px[i] = static_cast<std::uint8_t>(r);
+            px[i + 1] = static_cast<std::uint8_t>(g);
+            px[i + 2] = static_cast<std::uint8_t>(b);
+        }
+        const bool ok = out->write_image(OIIO::TypeUInt8, px.data());
+        out->close();
+        if (!ok)
+            return false;
+    }
+    try {
+        Exiv2::Image::UniquePtr image = Exiv2::ImageFactory::open(path.string());
+        if (!image)
+            return false;
+        image->readMetadata();
+        image->setIccProfile(
+            Exiv2::DataBuf(reinterpret_cast<const Exiv2::byte *>(icc.data()), icc.size()));
+        image->writeMetadata();
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+// 用显示侧 ICC 字节构造 DisplayProfile（from_system=true = 模拟「该 ICC 即显示器 profile」）。
+pp::DisplayProfile display_profile_with_icc(const std::string &icc, const std::string &name) {
+    pp::DisplayProfile p;
+    p.icc = icc;
+    p.name = name;
+    p.from_system = true;
+    return p;
+}
+
+bool same_pixels(const QImage &a, const QImage &b) {
+    if (a.isNull() || b.isNull() || a.size() != b.size() || a.format() != b.format())
+        return false;
+    return std::memcmp(a.constBits(), b.constBits(), static_cast<std::size_t>(a.sizeInBytes())) ==
+           0;
+}
+
+std::string px(const QColor &c) {
+    return "(" + std::to_string(c.red()) + "," + std::to_string(c.green()) + "," +
+           std::to_string(c.blue()) + ",a" + std::to_string(c.alpha()) + ")";
+}
 
 } // namespace
 
@@ -818,6 +882,147 @@ int main() {
                       std::memcmp(a.image.bits(), b.image.bits(),
                                   static_cast<std::size_t>(a.image.sizeInBytes())) == 0,
                   "c4/no-scale-identical", "不缩放时两开关输出应逐字一致");
+        }
+    }
+
+    // ---- (8) 0.4.2 需求5：显示面色彩管理（PreviewCache 末尾加性 set_display_profile）----
+    // 合成宽色域源（可复算）：像素字节 = **Display P3 编码**的 sRGB 纯红 (234,51,35)。
+    // 推导：sRGB(1,0,0) → XYZ=(0.4124,0.2126,0.0193) → P3 线性 (0.8225,0.0332,0.0171)
+    //       → P3 的 sRGB-TRC 编码 (0.9176,0.2003,0.1373) = (234,51,35)。
+    // 正确显示（目标 sRGB）≈ (255,0,0)（更鲜艳）；修复前 = 按 sRGB 直出 (234,51,35)（发灰）。
+    // 两条断言即「修复前灰、修复后真」的像素级证据；变换本身的可复算性在 test_color 的
+    // 显示变换对拍用例（独立 lcms2 参考）里证明。
+    {
+        std::string icc_err;
+        const std::string p3_icc = pp::load_target_icc(pp::ColorTarget::DisplayP3, icc_err);
+        check(!p3_icc.empty(), "display/p3-profile", "load_target_icc failed: " + icc_err);
+        const fs::path dir = make_temp_dir("display_cm");
+        const fs::path p3_red = dir / "p3_encoded_srgb_red.tif";
+        if (!p3_icc.empty()) {
+            check(write_solid_tiff_with_icc(p3_red, 234, 51, 35, p3_icc), "display/fixture",
+                  "write_solid_tiff_with_icc failed: " + show(p3_red));
+            check(pp::probe_file(p3_red).info.has_icc, "display/fixture-icc-visible",
+                  "合成样张的 ICC 未被 probe 读到（OIIO/Exiv2 往返失败）");
+            // (8a) 源侧事实：probe 的 ICC 被如实带到预览结果；像素仍是源编码字节（未变换）
+            const pp::PreviewImage raw = pp::decode_preview_detailed(p3_red, 64);
+            check(!raw.image.isNull() && raw.error.empty(), "display/raw-image", raw.error);
+            check(raw.icc == p3_icc, "display/source-icc-carried",
+                  "PreviewImage::icc bytes = " + std::to_string(raw.icc.size()) + " (expect " +
+                      std::to_string(p3_icc.size()) + ")");
+            check(raw.color_space.find("Display P3") != std::string::npos,
+                  "display/source-space-name", "color_space='" + raw.color_space + "'");
+            const QColor raw_px = raw.image.pixelColor(0, 0);
+            check(raw_px.red() == 234 && raw_px.green() == 51 && raw_px.blue() == 35,
+                  "display/before-gray-raw-pixels",
+                  "修复前（按 sRGB 直出）应为 P3 编码字节 " + px(raw_px));
+            check(raw.display_space.empty(), "display/raw-not-display-managed",
+                  "display_space='" + raw.display_space +
+                      "'（decode_preview_detailed 不做显示变换）");
+
+            // (8b) 默认 cache（未设置 display profile）= 既有行为逐字不变
+            {
+                pp::PreviewCache plain;
+                const pp::PreviewImage r = plain.get(p3_red);
+                check(same_pixels(r.image, raw.image) && r.display_space.empty(),
+                      "display/default-path-unchanged",
+                      "未设置显示 profile 时缓存结果必须与 decode_preview_detailed 逐字节一致");
+            }
+
+            // (8c) 显示 profile = sRGB 回退 → 真变换：P3 编码 → sRGB 编码（不再是灰红）
+            {
+                pp::PreviewCache cm;
+                cm.set_display_profile(pp::make_srgb_display_fallback("test: synthetic sRGB"));
+                const pp::PreviewImage r = cm.get(p3_red);
+                check(!r.image.isNull() && r.error.empty(), "display/cm-image", r.error);
+                check(r.display_space == "sRGB", "display/cm-display-space",
+                      "display_space='" + r.display_space + "'");
+                const QColor got = r.image.pixelColor(0, 0);
+                const int in_span = 234 - std::min(51, 35);
+                const int out_span = got.red() - std::min(got.green(), got.blue());
+                std::printf("test_thumbs: display-cm P3(234,51,35) --P3->sRGB--> %s "
+                            "(R-min(G,B): %d -> %d)\n",
+                            px(got).c_str(), in_span, out_span);
+                check(got.red() >= 250 && got.green() <= 8 && got.blue() <= 25,
+                      "display/p3-to-srgb-red",
+                      "P3 编码的 sRGB 红应还原为 sRGB 纯红 (255,0,0) 附近，got " + px(got));
+                check(out_span >= in_span + 30, "display/less-gray-after",
+                      "饱和度跨度应显著变大（不再发灰），got span " + std::to_string(out_span) +
+                          " vs " + std::to_string(in_span));
+                check(got.alpha() == 255, "display/alpha-preserved", px(got));
+                // 命中路径：缓存的是**显示编码**结果（不重复变换）
+                const pp::PreviewImage again = cm.get(p3_red);
+                check(same_pixels(again.image, r.image) && cm.hits() == 1,
+                      "display/cache-hit-encoded",
+                      "hits=" + std::to_string(cm.hits()) +
+                          " same=" + (same_pixels(again.image, r.image) ? "1" : "0"));
+
+                // (8d) 换显示 profile（模拟宽色域 P3 显示器）→ 清缓存；P3 源 → P3 显示 ≈ 恒等
+                const pp::DisplayProfile p3_display =
+                    display_profile_with_icc(p3_icc, "Display P3");
+                cm.set_display_profile(p3_display);
+                check(cm.size() == 0, "display/profile-change-clears-cache",
+                      "size=" + std::to_string(cm.size()));
+                const pp::PreviewImage r2 = cm.get(p3_red);
+                check(r2.display_space == "Display P3", "display/cm-p3-display-space",
+                      "display_space='" + r2.display_space + "'");
+                const QColor same = r2.image.pixelColor(0, 0);
+                check(std::abs(same.red() - 234) <= 2 && std::abs(same.green() - 51) <= 2 &&
+                          std::abs(same.blue() - 35) <= 2,
+                      "display/p3-to-p3-near-identity",
+                      "同 profile 变换应近似恒等，got " + px(same));
+                // 再设同一 profile → 不重复清缓存/不重复解码（幂等）
+                cm.set_display_profile(p3_display);
+                check(cm.size() == 1, "display/set-same-profile-idempotent",
+                      "size=" + std::to_string(cm.size()) + "（同 profile 不应清缓存）");
+            }
+
+            // (8e) 内嵌预览分支的源 ICC 必须是**预览自身**的 ICC：容器 ICC（P3）不能套在
+            //      无 ICC 的 sRGB 预览上（否则会把 sRGB 预览当 P3 解释，颜色反而错）。
+            const fs::path host_icc = tmp / "host_small_big_preview_p3container.tif";
+            bool host_ok = false;
+            {
+                std::error_code ec;
+                fs::copy_file(host_big, host_icc, fs::copy_options::overwrite_existing, ec);
+                if (!ec) {
+                    try {
+                        Exiv2::Image::UniquePtr image =
+                            Exiv2::ImageFactory::open(host_icc.string());
+                        if (image) {
+                            image->readMetadata();
+                            image->setIccProfile(
+                                Exiv2::DataBuf(reinterpret_cast<const Exiv2::byte *>(p3_icc.data()),
+                                               p3_icc.size()));
+                            image->writeMetadata();
+                            host_ok = true;
+                        }
+                    } catch (...) {
+                        host_ok = false;
+                    }
+                }
+            }
+            check(host_ok, "display/embedded-host-fixture",
+                  "给内嵌预览宿主挂 P3 容器 ICC 失败: " + show(host_icc));
+            if (host_ok) {
+                const pp::PreviewImage emb = pp::decode_preview_detailed(host_icc, 2048);
+                check(!emb.image.isNull() && emb.from_embedded, "display/embedded-image",
+                      "from_embedded=" + std::string(emb.from_embedded ? "1" : "0") +
+                          " err=" + emb.error);
+                check(emb.icc.empty(), "display/embedded-preview-own-icc",
+                      "内嵌预览 JPEG 无 ICC → PreviewImage::icc 必须为空（源按假定 sRGB），got " +
+                          std::to_string(emb.icc.size()) + " bytes");
+                check(emb.color_space.find("Display P3") != std::string::npos,
+                      "display/embedded-container-desc",
+                      "信息行的源色彩空间仍如实描述容器 ICC，got '" + emb.color_space + "'");
+                // 显示管理下：假定 sRGB 预览 + sRGB 显示 = 恒等（预览像素逐字节不变）。
+                // 缓存 max_px 与直接解码一致（2048），否则内嵌预览的降采样尺寸不同、像素不可比。
+                pp::PreviewCache cm(8, 2048);
+                cm.set_display_profile(pp::make_srgb_display_fallback("test: synthetic sRGB"));
+                const pp::PreviewImage managed = cm.get(host_icc);
+                check(same_pixels(managed.image, emb.image),
+                      "display/embedded-srgb-preview-identity",
+                      "sRGB 预览 + sRGB 显示应恒等，got " + dims(managed.image) + " vs " +
+                          dims(emb.image) + " display_space=" + managed.display_space);
+            }
         }
     }
 

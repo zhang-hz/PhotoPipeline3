@@ -34,6 +34,18 @@
 
 namespace pp {
 
+// —— 0.4.2 / 需求 3（大预设重设计）加性面；登记裁定 = docs/m0.4.2-adjudications.md（Lead 登记）
+// PresetData::output_sources 的元素：每个 output 的「来源格式预设」注记。
+//   * 只存格式预设的**文件名 stem**（不含 `.json`、不含目录、不含绝对路径）——跨机器可移植；
+//   * 空串 = 该输出为自定义参数（无格式预设来源）；
+//   * **仅显示/溯源用途，不参与产物**：卡值真源仍是 outputs[] 的完整落值快照（自包含，
+//     格式预设文件在本机不存在时载入结果不受影响）。
+// JSON 承载 = outputs[i] 的可选加性字段 `source_preset`（空不写 ⇒ 0.4.1 及更早写出的旧文件
+// load→save 逐字节不变；旧版本读新文件仅忽略该字段 = 只丢注记，不丢值）。
+struct PresetOutputSource {
+    std::string format_preset;
+};
+
 // PP-FROZEN(0.3.0) §3.6 · PresetData（schema v2，[重排]）+ migrate_preset_v1()
 //   0.3.0 冻结形态（设计 §3.6 逐字抄录）：`PresetData` → schema v2：`outputs: [OutputFormatSpec]`
 //   数组 + `output_template`/`split_by_format`；提供 `migrate_preset_v1()`（0.2 单格式 JSON →
@@ -55,6 +67,11 @@ struct PresetData {
     int gamut_mapping = 0;        // 0=硬裁（默认）
     bool linear_resample = false; // 仅预览
     bool metadata_only = false;   // 仅元数据模式
+    // —— 0.4.2 / 需求 3 加性追加（结构体末尾；旧 JSON 缺省 = 空 = 全部「自定义参数」）——
+    // 与 outputs 同序的正规形态：空 vector（无任何来源）或 size == outputs.size()（逐项可空串）。
+    // 采集/应用语义见 src/ui/page_output.cpp 的 collect_preset/apply_preset（来源只显示不参与
+    // 产物；格式预设文件缺失不影响载入）。
+    std::vector<PresetOutputSource> output_sources;
 };
 
 // 0.2 单格式形态（schema v1）：**只用于迁移**。JSON 文本由 ui/preset_io 解析（src/core 零 Qt），

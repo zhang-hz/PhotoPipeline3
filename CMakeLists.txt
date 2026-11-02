@@ -16,15 +16,16 @@ if(NOT DEFINED VCPKG_TARGET_TRIPLET)
     endif()
 endif()
 
-project(PhotoPipeline VERSION 0.4.1 LANGUAGES C CXX)
+project(PhotoPipeline VERSION 0.4.2 LANGUAGES C CXX)
 # 预发布标签（**版本号单源 = 本节**，`CMakeLists.txt:19-26`；`--version` 输出 = PROJECT_VERSION
 # + 本标签）。CMake 的 project(VERSION) 只收数字段，"0.4.0.alpha1" 这类标签只能拼在字符串侧
 # （PP_VERSION_STRING）—— 定义点仍在此处，别处（CHANGELOG/README/AGENTS/打包脚本）一律引用。
 # 数字段（MAJOR.MINOR.PATCH）继续给 manifest / 语义比较用。
-# 0.4.1 正式版（M13）：标签 = 空串 ⇒ 版本串 = "0.4.1"（`--version` = `PhotoPipeline 0.4.1`）。
-# 内容 = 用户 4 条需求（元数据页选择项级编辑 + 多选混合值、去除 XMP CreatorTool、
-# photoshop:DateCreated 同步偏移、GPS 选点自动海拔）+ 门禁/文档收口（docs/m13-tasks.md）。
-# 此前正式版：0.4.0（M12）。
+# 0.4.2 正式版（M14，2026-11-03）：标签 = 空串 ⇒ 版本串 = "0.4.2"（`--version` =
+# `PhotoPipeline 0.4.2`）。内容 = 用户 8 条需求（元数据页选择作用域/多选聚合深梳、批量 GPS 规则
+# 退役、大预设重设计、元数据详细编辑页深查、预览 ICC 色彩管理、调度并行自适应、真实债（hwy ODR /
+# ProgressMux 竞争）清零 + CI 全绿高效、build 等垃圾目录清理）+ 发布收口（docs/m14-tasks.md）。
+# 此前正式版：0.4.1（M13）。
 set(PP_VERSION_LABEL "")
 
 set(CMAKE_CXX_STANDARD 23)
@@ -112,7 +113,12 @@ endif()
 # 这里只提供一个**检测宏**（不改变任何构建 flags/判据）：release / release-dev 无该宏 ⇒
 # 全部既有判据逐字不变；只有 sanitizer 构建才允许测试侧把「仅对优化构建有意义」的性能断言
 # scoping 掉（每个 scoping 点在测试文件内单独注释 + 登记裁定，不静默全局关闭）。
-if(CMAKE_CXX_FLAGS MATCHES "-fsanitize=" OR CMAKE_CXX_FLAGS_DEBUG MATCHES "-fsanitize=")
+# M14（0.4.2）/ C6（A8 配套）：MSVC 的 ASan 走 `PP_ASAN` 选项（/fsanitize=address），不在上述
+# 两个旗标变量里 ⇒ 本地 `--preset asan` 构建此前得不到 PP_SANITIZER_BUILD，性能断言恒假红、
+# 无法作为「Nightly 等效」验收面。此处把 PP_ASAN 纳入**同一 scoping 判据**（不是放宽：
+# release/release-dev 仍无该宏、判据逐字保留）。
+if(CMAKE_CXX_FLAGS MATCHES "-fsanitize=" OR CMAKE_CXX_FLAGS_DEBUG MATCHES "-fsanitize="
+   OR PP_ASAN)
     add_compile_definitions(PP_SANITIZER_BUILD=1)
     message(STATUS "PP-SANITIZER: sanitizer build detected（PP_SANITIZER_BUILD=1；性能类测试断言按裁定 scoping）")
 endif()
@@ -245,19 +251,25 @@ file(GLOB_RECURSE PP_SSIM2_SOURCES CONFIGURE_DEPENDS
 # libjxl 零共享符号。`jpegxl::tools`（compat 自有）不受影响；`JXL_*` 宏/字符串/includes 不受影响。
 # M12-D26（**已尝试、已回退，登记为未决债**）：同一批 TU 还经 vendored gauss_blur 引入
 # Highway (`hwy`) 头；与 vcpkg 预编译 jpegli/libjxl 的 hwy 内联/COMDAT 在 tsan 构建下冲突
-# （jpegli VectorSize() 调空函数指针 SEGV）。私有化 `hwy=pp_ssim2_hwy` + 自包含宏
-# （HWY_HEADER_ONLY / HWY_COMPILE_ONLY_STATIC）能修 Linux 链接与 tsan SEGV，但会把
-# SSIMULACRA2 数值改变 0.05–0.27（oracle 判据 0.01 硬红）——属不可接受的语义变化，故回退。
-# 未决修复方向（0.4.0 不修；登记 docs/m12-adjudications.md A13 + 0.4.0-report §4）：
-#   hwy bridge shim（把 pp_ssim2_hwy::GetChosenTarget/SupportedTargets 转发到真实 libhwy，
-#   保留动态派发 ⇒ 数值不变）或与 vcpkg 依赖对齐 hwy 编译配置；tsan 暴露的
-#   ProgressMux/FileEvent 回调数据竞争（progress.cpp:338 emit_seq vs 测试回调 push_back）
-#   另案修复。⇒ 当前只保留数值安全的 `jxl=pp_ssim2_jxl`（M12-D25）。
+# （jpegli VectorSize() 调空函数指针 SEGV）。
+# M14（0.4.2）/ C6 根治（A8，docs/m14-adjudications.md）：
+#   根因 = 闭源预编译 jpegli/libjxl 的每个 TU 带 `-DHWY_DISABLED_TARGETS=(…AVX3…)`，
+#   其 dispatch 表 AVX3 槽位为 nullptr；而本批 TU 用**未禁用 AVX3 的宏配置**编译出的
+#   `hwy::ChosenTarget::GetIndex()` 是 COMDAT 内联体，链接器只保留一份 ⇒ 在 AVX-512 runner 上
+#   jpegli 按其（AVX3 窗口）索引取到自家 nullptr 槽 ⇒ `jpegli::VectorSize()` pc=0 SEGV；
+#   MSVC 把 AVX3 标 BROKEN ⇒ 本机构造上不可复现（与「Linux-only / 跨轮非确定」现象吻合）。
+# M12-D26 的 `HWY_COMPILE_ONLY_STATIC` 会把 gauss_blur 从 AVX3 动态派发钉到 AVX2 静态路径
+# ⇒ 数值漂移 0.05–0.27（红线，已回退）。
+#   修法（保动态派发 = 保数值）：`hwy=pp_ssim2_hwy` 私有化本批 TU 的 hwy 符号（与 M12-D25 的
+#   `jxl` 私有化同法）+ `HWY_HEADER_ONLY=1` 让 Abort/Warn 等自包含；`GetChosenTarget()` /
+#   `SupportedTargets()` 两个非内联符号由 `src/core/metric/hwy_bridge.cc` 在 pp 命名空间内
+#   转发到真实 libhwy（同一份 ChosenTarget 状态与 CPU 探测 ⇒ 派发目标与修复前逐位相同）。
+#   不得在本批 TU 加 `HWY_COMPILE_ONLY_STATIC`（红线）。
 set(PP_SSIM2_PRIVATE_TUS ${PP_SSIM2_SOURCES}
     ${CMAKE_SOURCE_DIR}/src/core/metric/metric.cpp
     ${CMAKE_SOURCE_DIR}/src/core/metric/metric_oracle.cpp)
 set_source_files_properties(${PP_SSIM2_PRIVATE_TUS}
-    PROPERTIES COMPILE_DEFINITIONS "jxl=pp_ssim2_jxl")
+    PROPERTIES COMPILE_DEFINITIONS "jxl=pp_ssim2_jxl;hwy=pp_ssim2_hwy;HWY_HEADER_ONLY=1")
 list(APPEND PP_CORE_SOURCES ${PP_SSIM2_SOURCES})
 add_library(pp_core STATIC ${PP_CORE_SOURCES})
 # M2-T11 §2.2：生成的 core/version.h（构建目录）随 src 一并 PUBLIC 传播

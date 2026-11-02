@@ -147,6 +147,42 @@ bool parse_alloc_line(const std::string &line, AllocLine &out) {
            field_int(line, "thread_budget", out.thread_budget);
 }
 
+// —— 0.4.2 需求6（自适应线程规划）加性辅助：debug 级 `[sched] thread plan` 行解析 ——
+// 行型：`... [sched] [scheduler.cpp] thread plan {index=0 alloc_files=2 encode_threads=2
+//       parallel_outputs=2 outputs=2 cpu_load_pct=unknown est_threads=4 action=multi reason=…}`
+// （运行级另一条 `thread plan report {…}` 不匹配本函数：判据用 `thread plan {` 前缀）。
+struct PlanLine {
+    long long alloc_files = 0, encode_threads = 0, parallel_outputs = 0, outputs = 0,
+              est_threads = 0;
+    std::string cpu_load_pct, action, reason;
+};
+
+// 取行内 ` key=<非空格值>` 的字符串值（本用例的 action/reason/cpu_load_pct 无引号/空格）。
+bool field_text(const std::string &line, const std::string &key, std::string &out) {
+    const std::string needle = " " + key + "=";
+    const std::size_t at = line.find(needle);
+    if (at == std::string::npos)
+        return false;
+    const std::size_t p = at + needle.size();
+    const std::size_t q = line.find(' ', p);
+    out = line.substr(p, q == std::string::npos ? std::string::npos : q - p);
+    if (!out.empty() && out.back() == '}')
+        out.pop_back();
+    return !out.empty();
+}
+
+bool parse_plan_line(const std::string &line, PlanLine &out) {
+    if (!has_token(line, "[sched]") || !has_token(line, "thread plan {"))
+        return false;
+    return field_int(line, "alloc_files", out.alloc_files) &&
+           field_int(line, "encode_threads", out.encode_threads) &&
+           field_int(line, "parallel_outputs", out.parallel_outputs) &&
+           field_int(line, "outputs", out.outputs) &&
+           field_int(line, "est_threads", out.est_threads) &&
+           field_text(line, "cpu_load_pct", out.cpu_load_pct) &&
+           field_text(line, "action", out.action) && field_text(line, "reason", out.reason);
+}
+
 } // namespace
 
 int main() {
@@ -286,6 +322,7 @@ int main() {
         cfg.outputs.push_back(pp::OutputFormatSpec{"jpeg", "", "", {}, 8});
         cfg.workers = 2;
         std::vector<fs::path> many;
+        many.reserve(40);
         for (int i = 0; i < 40; ++i)
             many.push_back(inputs[static_cast<std::size_t>(i) % inputs.size()]);
         pp::Scheduler sched(cfg, entries_for(many, corpus));
@@ -535,7 +572,7 @@ int main() {
                 arithmetic = false;
             prev = s;
         }
-        check(arithmetic && prev == 99 * 150, "stagger/dense-arithmetic",
+        check(arithmetic && prev == 99LL * 150, "stagger/dense-arithmetic",
               "100 次同刻预约未形成 150ms 等差：末值 " + std::to_string(prev));
 
         // Pseudo-random 时序（确定性 LCG）：不变量 = s_i ≥ now_i 且 s_i ≥ s_{i-1} + stagger
@@ -1150,6 +1187,134 @@ int main() {
               "峰值并发文件数应落 [1, workers]，got " + std::to_string(sum.peak_active_files));
         check(sum.threads_total_est >= 1, "m7r2b/r078-threads-est-positive",
               "实跑批的线程估算读数应为正");
+    }
+
+    // ==========================================================================
+    // 0.4.2 需求6 新增断言（自适应线程规划；断言只增，既有段逐字不动）
+    //   Q1 多输出浅队列：debug 级 `[sched] thread plan` 轨迹逐文件存在；E/P/est 域 +
+    //      W×P×E ≤ T（线程预算硬约束）；plan 行键齐备（cpu_load_pct/action/reason）。
+    //   Q2 深队列（文件多）：E==1 且 P==1（需求原文"文件多→文件级并行、编码器单线程"）。
+    //   Q3 运行级 `thread plan report` 收尾读数存在（e3 读数同族的规划面）。
+    // 判据口径：规划轨迹是 **debug 级**日志（info 级回归基线不含它；机器相关量不进基线）。
+    // ==========================================================================
+    {
+        // ---- Q1：2 文件 × 2 输出（jxl+png），浅队列 ----
+        {
+            const fs::path logdir = make_temp_dir("sched_plan_log");
+            pp::log_init(logdir, pp::LogLevel::Debug);
+            pp::RunConfig cfg;
+            cfg.output_template = "$format/$dir/$file";
+            cfg.out_root = tmp / "plan-multi";
+            pp::OutputFormatSpec jxl;
+            jxl.format_id = "jxl";
+            jxl.out_bitdepth = 8;
+            pp::OutputFormatSpec png;
+            png.format_id = "png";
+            png.out_bitdepth = 8;
+            cfg.outputs.push_back(jxl);
+            cfg.outputs.push_back(png);
+            cfg.conflict = pp::ConflictPolicy::Overwrite;
+            cfg.workers = 2;
+            cfg.thread_budget = 8;
+            cfg.stagger_ms = 0;
+            const std::vector<fs::path> two = {inputs[0], inputs[1]};
+            pp::Scheduler sched(cfg, entries_for(two, corpus));
+            sched.start();
+            sched.wait();
+            pp::log_shutdown();
+
+            check(sched.summary().ok == two.size(), "m14/q1-all-ok",
+                  "ok=" + std::to_string(sched.summary().ok) +
+                      " failed=" + std::to_string(sched.summary().failed));
+
+            std::vector<PlanLine> plans;
+            std::size_t n_report = 0;
+            std::size_t n_bad = 0;
+            std::string ex;
+            for (const std::string &l : read_run_logs(logdir)) {
+                if (has_token(l, "thread plan report {")) {
+                    ++n_report;
+                    continue;
+                }
+                PlanLine pl;
+                if (!parse_plan_line(l, pl))
+                    continue;
+                plans.push_back(pl);
+                const long long nominal = pl.alloc_files * pl.parallel_outputs * pl.encode_threads;
+                const bool ok =
+                    pl.alloc_files >= 1 && pl.alloc_files <= 8 && pl.encode_threads >= 1 &&
+                    pl.encode_threads <= 16 && pl.parallel_outputs >= 1 &&
+                    pl.parallel_outputs <= pl.outputs && pl.parallel_outputs <= 8 && nominal <= 8 &&
+                    pl.est_threads >= pl.alloc_files && pl.est_threads <= 8 &&
+                    !pl.cpu_load_pct.empty() && !pl.action.empty() && !pl.reason.empty();
+                if (!ok) {
+                    ++n_bad;
+                    if (ex.empty())
+                        ex = l;
+                }
+            }
+            check(plans.size() == two.size(), "m14/q1-plan-lines",
+                  "`thread plan` 行数 " + std::to_string(plans.size()) +
+                      " != " + std::to_string(two.size()));
+            check(n_bad == 0, "m14/q1-plan-invariants",
+                  std::to_string(n_bad) + " 行违例（E/P/est 域或 W×P×E>T）: " + ex);
+            check(n_report == 1, "m14/q1-plan-report",
+                  "`thread plan report` 行数 " + std::to_string(n_report) + " != 1");
+            // 多输出浅队列：规划器给出 P≥1 且每 target 的 E 由预算拆分；
+            // 产物结果 = 2 文件 × 2 输出全部成功（并行路径不改变产物语义）。
+            bool outputs_ok = true;
+            for (const pp::FileResult &r : sched.results())
+                outputs_ok = outputs_ok && r.ok && r.outputs.size() == 2;
+            check(outputs_ok, "m14/q1-outputs", "多输出并行路径的产物形态不符");
+            std::fprintf(stderr, "m14/q1 plans=%zu\n", plans.size());
+        }
+
+        // ---- Q2：12 文件 × 1 输出（jxl），深队列 → E=1/P=1 ----
+        {
+            const fs::path logdir = make_temp_dir("sched_plan_deep_log");
+            pp::log_init(logdir, pp::LogLevel::Debug);
+            pp::RunConfig cfg;
+            cfg.output_template = "$dir/$file";
+            cfg.out_root = tmp / "plan-deep";
+            cfg.outputs.push_back(pp::OutputFormatSpec{"jxl", "", "", {}, 8});
+            cfg.conflict = pp::ConflictPolicy::Overwrite;
+            cfg.workers = 4;
+            cfg.thread_budget = 8;
+            cfg.stagger_ms = 0;
+            std::vector<fs::path> many;
+            many.reserve(12);
+            for (int i = 0; i < 12; ++i)
+                many.push_back(inputs[static_cast<std::size_t>(i) % inputs.size()]);
+            pp::Scheduler sched(cfg, entries_for(many, corpus));
+            sched.start();
+            sched.wait();
+            pp::log_shutdown();
+
+            check(sched.summary().ok == many.size(), "m14/q2-all-ok",
+                  "ok=" + std::to_string(sched.summary().ok) +
+                      " failed=" + std::to_string(sched.summary().failed));
+            std::size_t n_plans = 0;
+            std::size_t n_deep_bad = 0;
+            std::string ex;
+            for (const std::string &l : read_run_logs(logdir)) {
+                PlanLine pl;
+                if (!parse_plan_line(l, pl))
+                    continue;
+                ++n_plans;
+                // 深队列判据 = 规划器自己的 W（= alloc_threads.files）；W*2 > T 时 E/P 必须 1。
+                if (pl.alloc_files * 2 > 8) {
+                    if (pl.encode_threads != 1 || pl.parallel_outputs != 1) {
+                        ++n_deep_bad;
+                        if (ex.empty())
+                            ex = l;
+                    }
+                }
+            }
+            check(n_plans == many.size(), "m14/q2-plan-lines",
+                  "`thread plan` 行数 " + std::to_string(n_plans));
+            check(n_deep_bad == 0, "m14/q2-deep-e1-p1",
+                  std::to_string(n_deep_bad) + " 行深队列 E/P 不为 1: " + ex);
+        }
     }
 
     // ==========================================================================

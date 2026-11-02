@@ -133,11 +133,20 @@ constexpr int kCursorThrottleMs = 100;  // M6-T12：光标坐标信号的节流�
 // 图层键 → URL 的唯一出口 → tile_fetcher.cpp（B.5 ③：抓取侧唯一出口）。
 
 struct MapWidget::Impl {
+    // 0.4.2 / C6-②（M14；ASan 实测 heap-use-after-free）：Impl 存活令牌。
+    //   EventFilter 以 q 为 QObject 父对象，其生命周期由 Qt 父子机制决定（晚于 Impl）——
+    //   基类 ~QWidget 删除子对象/投递 ChildRemoved 等事件时仍可能调用本过滤器。仅靠
+    //   `~MapWidget` 里 removeEventFilter + 反指置空不足以保证所有路径（实测仍在
+    //   eventFilter 读到已释放 Impl）。故 EventFilter 持 **weak_ptr** 令牌：Impl 析构时
+    //   （令牌声明为最后一个数据成员 ⇒ 最先析构）weak 立即 expired，eventFilter 先 lock()
+    //   再碰 impl ⇒ 任何残存事件都安全走默认路径，从根上消除 UAF（不需要改冻结头文件）。
+    struct Lifetime {};
     // Receives the QWidget events the frozen header cannot declare overrides for.
     struct EventFilter : QObject {
-        explicit EventFilter(Impl *owner) : QObject(owner->q), impl(owner) {}
+        explicit EventFilter(Impl *owner) : QObject(owner->q), impl(owner), life(owner->life) {}
         bool eventFilter(QObject *watched, QEvent *event) override;
         Impl *impl = nullptr;
+        std::weak_ptr<Lifetime> life; // Impl 存活令牌（lock() 失败 ⇒ Impl 已析构）
     };
 
     MapWidget *q = nullptr;
@@ -179,6 +188,9 @@ struct MapWidget::Impl {
     // M6-T12 加性状态：Hybrid 的「叠标注」开关（默认 true = 现行为）+ 光标信号节流钟。
     bool sat_labels_ = true;
     QElapsedTimer cursor_clock;
+    // 0.4.2 / C6-②：Impl 存活令牌——**声明在数据成员最后** ⇒ 析构时最先销毁 ⇒ EventFilter 的
+    // weak_ptr 在 Impl 的其它成员/自身内存失效之前就 expired（UAF 根治的时序前提）。
+    std::shared_ptr<Lifetime> life = std::make_shared<Lifetime>();
 
     // ---- M6-T5 图层选择 / 本帧图层栈（B.5 ④，M7R22G2：纯件 → map_renderer.{h,cpp}）----
     const TileSource *select_source(TileStyle style) const {
@@ -314,7 +326,12 @@ struct MapWidget::Impl {
 };
 
 bool MapWidget::Impl::EventFilter::eventFilter(QObject *watched, QEvent *event) {
-    if (impl == nullptr || watched != impl->q || event == nullptr) {
+    // 0.4.2 / C6-②：先验存活令牌（Impl 析构即 expired ⇒ 绝不读已释放/半销毁的 impl）。
+    const std::shared_ptr<Lifetime> alive = life.lock();
+    if (!alive || impl == nullptr || event == nullptr) {
+        return QObject::eventFilter(watched, event);
+    }
+    if (watched != impl->q) {
         return QObject::eventFilter(watched, event);
     }
     switch (event->type()) {
@@ -525,6 +542,17 @@ MapWidget::MapWidget(QWidget *parent) : QWidget(parent), impl_(std::make_unique<
 
 MapWidget::~MapWidget() {
     Impl &d = *impl_;
+    // 0.4.2 / C6-「真实债清零」（M14；ASan 实测 heap-use-after-free）：
+    // EventFilter 以 `this` 为 QObject 父对象，生命周期晚于 `impl_`（unique_ptr 成员）——
+    // 基类 ~QWidget 删除子对象/投递 ChildRemoved 等事件时 EventFilter 仍挂着，而 Impl 已释放
+    // ⇒ eventFilter 读到悬垂 impl（mapwidget.cpp:316 判空之前）。先摘除过滤器并把反指置空：
+    // 此后任何残留事件都走 QObject 默认路径，零 UAF；EventFilter 本身仍由 Qt 父子机制安全
+    // 释放（此处不 delete，避免与 ~QWidget 的子对象删除双重释放）。
+    if (d.filter != nullptr) {
+        removeEventFilter(d.filter);
+        d.filter->impl = nullptr;
+        d.filter = nullptr;
+    }
     if (d.fetcher) {
         d.fetcher->teardown(); // never re-enter the handler while tearing down
     }

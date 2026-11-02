@@ -545,7 +545,9 @@ QWidget *OutputPageImpl::build_preset_card(QWidget *parent) {
         preset_spec.accessible = PageOutput::tr("当前预设");
         preset_spec.tooltip = PageOutput::tr("选择预设即载入（不改变左侧文件的勾选）");
         preset_combo = formkit::combo_box(preset_card, preset_spec);
-        preset_combo->setPlaceholderText(PageOutput::tr("未选择预设")); // 修 2-24
+        // 0.4.2 / 需求 3（A13）：删除「未选择预设」幽灵占位 —— 无绑定时占位文本改为
+        // **诚实状态说明**「当前配置未保存为预设」（不是一种可选的"未选择"状态）。
+        preset_combo->setPlaceholderText(PageOutput::tr("当前配置未保存为预设"));
         preset_combo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         preset_saveas = make_button(preset_card, PageOutput::tr("另存…"),
                                     QStringLiteral("pp-preset-saveas"), false);
@@ -560,6 +562,16 @@ QWidget *OutputPageImpl::build_preset_card(QWidget *parent) {
             formkit::frow(preset_card, PageOutput::tr("当前预设"), field, FieldWidth::Flex);
         row.row->setObjectName(QStringLiteral("pp-preset-row"));
         body.box->addWidget(row.row);
+        // 0.4.2 / 需求 3（A13）：预设卡注记轨（载入/保存结果、rules 未应用说明；空 = 隐藏）。
+        preset_note = new ElidedLabel(preset_card);
+        preset_note->setObjectName(QStringLiteral("pp-preset-note"));
+        preset_note->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkHint));
+        preset_note->setFont(theme::font(theme::Typography::hint_px));
+        preset_note->setMinimumHeight(formkit::kRowPitch);
+        set_leading_indent(preset_note, formkit::kLabelW + formkit::kColGap);
+        preset_note->set_full_text(QString());
+        preset_note->setVisible(false);
+        body.box->addWidget(preset_note);
     }
     // 预估 kv 2 行（预计输出/体积 ｜ 预计耗时/剩余磁盘）—— 无实测依据的两项走中性空态
     {

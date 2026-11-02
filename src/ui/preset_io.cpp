@@ -92,7 +92,7 @@ bool is_valid_utf8(const std::string &s) {
 // 错误信息里的路径：合法 UTF-8 原样返回（与旧输出逐字节一致）；否则把非 ASCII 字节转义成
 // \xNN —— 避免 UI 侧 QString::fromStdString 把非法字节静默变成 U+FFFD（丢字节）。
 std::string display_path(const std::filesystem::path &p) {
-    const std::string s = p.string();
+    std::string s = p.string();
     if (is_valid_utf8(s))
         return s;
     std::string out;
@@ -461,12 +461,16 @@ std::string rules_field_from_json(const QJsonObject &o, BatchRules &r) {
 //     不声明该参数，写进 params 会被"未知参数"拒绝）时，标志只有内部管道键 `__lossless`，
 //     而保留键不落盘 → 由本字段承载。R31：0.2 的顶层 `lossless` 在这些格式上经
 //     load→save→load 不再静默回退 false。
-QJsonObject spec_to_json(const OutputFormatSpec &spec) {
+// 0.4.2 / 需求 3 加性：`source_preset`（可选）—— 该输出快照的来源格式预设文件名 stem。
+// 空 = 自定义参数 → **不写字段**（旧文件 load→save 逐字节不变；旧版本读新文件只忽略该字段）。
+QJsonObject spec_to_json(const OutputFormatSpec &spec, const std::string &source_preset) {
     QJsonObject o;
     o.insert(QStringLiteral("format"), qs(spec.format_id));
     o.insert(QStringLiteral("backend"), qs(spec.backend_id));
     o.insert(QStringLiteral("tech"), qs(spec.tech_id));
     o.insert(QStringLiteral("bitdepth"), spec.out_bitdepth);
+    if (!source_preset.empty())
+        o.insert(QStringLiteral("source_preset"), qs(source_preset));
     o.insert(QStringLiteral("params"), params_to_json(spec.params));
     const bool declared = spec.params.find(std::string(pp::kLosslessParamKey)) != spec.params.end();
     if (!declared && pp::lossless_flag(spec.params))
@@ -500,7 +504,7 @@ QJsonObject spec_to_json(const OutputFormatSpec &spec) {
 }
 
 bool spec_from_json(const QJsonValue &v, std::size_t index, OutputFormatSpec &out,
-                    std::string &err) {
+                    std::string &source_preset, std::string &err) {
     if (!v.isObject()) {
         err = "outputs[" + std::to_string(index) + "] is not an object";
         return false;
@@ -510,6 +514,28 @@ bool spec_from_json(const QJsonValue &v, std::size_t index, OutputFormatSpec &ou
     out.backend_id = utf8(o.value(QStringLiteral("backend")).toString());
     out.tech_id = utf8(o.value(QStringLiteral("tech")).toString());
     out.out_bitdepth = static_cast<int>(o.value(QStringLiteral("bitdepth")).toInteger(8));
+    // 0.4.2 / 需求 3：来源格式预设注记（可选；类型错误显式拒绝，不静默当空）。
+    source_preset.clear();
+    const QJsonValue src_v = o.value(QStringLiteral("source_preset"));
+    if (!src_v.isUndefined() && !src_v.isNull()) {
+        if (!src_v.isString()) {
+            err = "outputs[" + std::to_string(index) + "]: source_preset is not a string";
+            return false;
+        }
+        source_preset = utf8(src_v.toString());
+    }
+    // 未知输出级字段：忽略 + 记日志（前向兼容；不静默吞掉可诊断性）。
+    for (auto it = o.constBegin(); it != o.constEnd(); ++it) {
+        const QString &key = it.key();
+        if (key == QLatin1String("format") || key == QLatin1String("backend") ||
+            key == QLatin1String("tech") || key == QLatin1String("bitdepth") ||
+            key == QLatin1String("source_preset") || key == QLatin1String("params") ||
+            key == QLatin1String("lossless") || key == QLatin1String("heif_profile") ||
+            key == QLatin1String("adaptive"))
+            continue;
+        log_warn("preset", "preset_io.cpp", "unknown output field ignored (forward compat)",
+                 {{"output_index", std::to_string(index)}, {"field", utf8(key)}});
+    }
     std::string perr;
     if (!params_from_json(o.value(QStringLiteral("params")), out.format_id, out.backend_id,
                           out.tech_id, out.params, perr)) {
@@ -611,6 +637,9 @@ bool load_v1(const QJsonObject &root, PresetDataV1 &out, std::string &err) {
 }
 
 // —— 0.3.0 schema v2 ——
+// 0.4.2 / 需求 3 加性：outputs[i] 可选 `source_preset`（来源格式预设文件名 stem）。
+// 读取口径：全部为空 → output_sources 留空（= 旧文件/无来源的规范形态）；只要有一项非空 →
+// 补齐为与 outputs 同长（逐项可空串），保下标对齐。保存时空项不写 JSON 字段。
 std::string load_v2(const QJsonObject &root, PresetData &out) {
     std::string err;
     PresetData p;
@@ -622,11 +651,39 @@ std::string load_v2(const QJsonObject &root, PresetData &out) {
     const QJsonArray outputs = outputs_v.toArray();
     if (outputs.isEmpty())
         return "outputs is empty (at least one output format is required)";
+    std::vector<std::string> sources;
+    bool any_source = false;
     for (int i = 0; i < outputs.size(); ++i) {
         OutputFormatSpec spec;
-        if (!spec_from_json(outputs.at(i), static_cast<std::size_t>(i), spec, err))
+        std::string source;
+        if (!spec_from_json(outputs.at(i), static_cast<std::size_t>(i), spec, source, err))
             return err;
+        any_source = any_source || !source.empty();
+        sources.push_back(std::move(source));
         p.outputs.push_back(std::move(spec));
+    }
+    if (any_source) {
+        p.output_sources.reserve(sources.size());
+        for (std::string &source : sources)
+            p.output_sources.push_back(PresetOutputSource{std::move(source)});
+    }
+    // 未知根字段：忽略 + 记日志（前向兼容；旧版读新文件/新版读未来文件都可诊断）。
+    static constexpr const char *kKnownRoot[] = {
+        "version",         "name",          "outputs",       "output_template",
+        "split_by_format", "color_target",  "conflict",      "rules",
+        "color_intent",    "color_dither8", "gamut_mapping", "linear_resample",
+        "metadata_only"};
+    for (auto it = root.constBegin(); it != root.constEnd(); ++it) {
+        bool known = false;
+        for (const char *k : kKnownRoot) {
+            if (it.key() == QLatin1String(k)) {
+                known = true;
+                break;
+            }
+        }
+        if (!known)
+            log_warn("preset", "preset_io.cpp", "unknown top-level preset field ignored",
+                     {{"field", utf8(it.key())}});
     }
     p.output_template = utf8(root.value(QStringLiteral("output_template"))
                                  .toString(QStringLiteral("$format/$dir/$file")));
@@ -648,6 +705,35 @@ std::string load_v2(const QJsonObject &root, PresetData &out) {
 
 } // namespace
 
+// 0.4.2 / 需求 3 加性：落盘字节的单源序列化（save_preset 与主窗「已修改」比对共用）。
+// 输出与旧实现逐字节一致：QJsonDocument::Indented + QJsonObject 键序（既有 golden 无字节期望，
+// 但 load→save 字节稳定由单测钉住）。
+std::string serialize_preset(const PresetData &p) {
+    QJsonObject root;
+    root.insert(QStringLiteral("version"), p.version >= 2 ? p.version : 2); // 本函数写 schema v2
+    root.insert(QStringLiteral("name"), qs(p.name));
+    QJsonArray outputs;
+    for (std::size_t i = 0; i < p.outputs.size(); ++i) {
+        std::string source;
+        if (i < p.output_sources.size())
+            source = p.output_sources[i].format_preset;
+        outputs.append(spec_to_json(p.outputs[i], source));
+    }
+    root.insert(QStringLiteral("outputs"), outputs);
+    root.insert(QStringLiteral("output_template"), qs(p.output_template));
+    root.insert(QStringLiteral("split_by_format"), p.split_by_format);
+    root.insert(QStringLiteral("color_intent"), p.color_intent);
+    root.insert(QStringLiteral("color_dither8"), p.color_dither8);
+    root.insert(QStringLiteral("gamut_mapping"), p.gamut_mapping);
+    root.insert(QStringLiteral("linear_resample"), p.linear_resample);
+    root.insert(QStringLiteral("metadata_only"), p.metadata_only);
+    root.insert(QStringLiteral("color_target"), qs(pp::to_string(p.color_target)));
+    root.insert(QStringLiteral("conflict"), QString::fromLatin1(conflict_name(p.conflict)));
+    root.insert(QStringLiteral("rules"), rules_to_json(p.rules));
+    const QByteArray bytes = QJsonDocument(root).toJson(QJsonDocument::Indented);
+    return std::string(bytes.constData(), static_cast<std::size_t>(bytes.size()));
+}
+
 std::string save_preset(const std::filesystem::path &file, const PresetData &p) {
     if (file.empty())
         return "preset path is empty";
@@ -661,32 +747,14 @@ std::string save_preset(const std::filesystem::path &file, const PresetData &p) 
             return "cannot create directory '" + display_path(parent) + "': " + ec.message();
     }
 
-    QJsonObject root;
-    root.insert(QStringLiteral("version"), p.version >= 2 ? p.version : 2); // 本函数写 schema v2
-    root.insert(QStringLiteral("name"), qs(p.name));
-    QJsonArray outputs;
-    for (const OutputFormatSpec &spec : p.outputs)
-        outputs.append(spec_to_json(spec));
-    root.insert(QStringLiteral("outputs"), outputs);
-    root.insert(QStringLiteral("output_template"), qs(p.output_template));
-    root.insert(QStringLiteral("split_by_format"), p.split_by_format);
-    root.insert(QStringLiteral("color_intent"), p.color_intent);
-    root.insert(QStringLiteral("color_dither8"), p.color_dither8);
-    root.insert(QStringLiteral("gamut_mapping"), p.gamut_mapping);
-    root.insert(QStringLiteral("linear_resample"), p.linear_resample);
-    root.insert(QStringLiteral("metadata_only"), p.metadata_only);
-    root.insert(QStringLiteral("color_target"), qs(pp::to_string(p.color_target)));
-    root.insert(QStringLiteral("conflict"), QString::fromLatin1(conflict_name(p.conflict)));
-    root.insert(QStringLiteral("rules"), rules_to_json(p.rules));
-
-    const QByteArray bytes = QJsonDocument(root).toJson(QJsonDocument::Indented);
+    const std::string bytes = serialize_preset(p);
 
     // 原子写（R-194/R-290，M7-WP1 收敛）：实现单源 = core/fsops 的 write_atomic_file（I1：
     // 同目录 PID/随机后缀 tmp → 字节校验 → rename 覆盖，目标已存在时沿用其权限位；失败清场）。
     // 不用 QSaveFile/QFile：其文件名为 QString，Qt6/Linux 固定按 UTF-8 编码，无法表达非 UTF-8
     // 字节路径（见文件头"路径层"注释）。
     std::string io_err;
-    const std::string_view payload(bytes.constData(), static_cast<std::size_t>(bytes.size()));
+    const std::string_view payload(bytes.data(), bytes.size());
     if (!pp::write_atomic_file(file, payload, &io_err))
         return "cannot save '" + display_path(file) + "': " + io_err;
     return {};
@@ -708,6 +776,12 @@ std::string load_preset(const std::filesystem::path &file, PresetData &out) {
         return "invalid preset '" + display_path(file) + "': root is not an object";
 
     const QJsonObject root = doc.object();
+    // P9（0.4.2 / 需求 3）：把格式预设文件选进大预设载入时**指路**，不再只报
+    // "outputs is missing"（两条预设通道文件格式不同，用户最容易混）。
+    if (root.value(QStringLiteral("kind")).toString() == QLatin1String("format-preset")) {
+        return "这不是大预设文件（kind=format-preset，属于格式预设）：请在输出页对应格式页签顶部"
+               "的「格式预设」行载入；大预设文件需要包含 outputs 数组";
+    }
     // 版本驱动（§3.6）：v2 = 0.3.0 多输出形态；v1 = 0.2 单格式形态 → migrate_preset_v1() 零丢失
     // 迁移；缺省 "version" 字段按 v1 读（0.2 的既有默认）。> 2 显式报错，绝不静默吞掉。
     const int version = static_cast<int>(root.value(QStringLiteral("version")).toInteger(1));

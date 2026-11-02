@@ -147,9 +147,10 @@ constexpr const char *kCategoryButtonTooltip = QT_TR_NOOP("按类目搜索（6 �
 constexpr const char *kCopyAddressText = QT_TR_NOOP("复制地址");
 // R-315：瓦片加载的 UI 反馈（tiles_pending_changed → 地图浮层「加载中…」chip）
 constexpr const char *kMapLoadingText = QT_TR_NOOP("加载中…");
-// UX-5：三卡「启用」开关（卡头右置）的 tooltip
+// UX-5：三卡「启用」开关（卡头右置）的 tooltip。0.4.2（需求 1/2）：语义 = 把本卡修改应用到
+// **选中图片**（点开不凭空造值）；关闭 = 清除选中图片的本卡修改。不再有全局批量规则。
 constexpr const char *kCardEnableTooltip =
-    QT_TR_NOOP("启用该卡：关闭时本卡不参与规则（参数保留但不写入）");
+    QT_TR_NOOP("启用该卡：把本卡修改应用到选中图片；关闭 = 清除选中图片的本卡修改");
 // GPS 卡头状态胶囊文案（修 1-33：状态用独立徽标；§5.2 的两条状态语逐字保留）
 constexpr const char *kHasGpsText = QT_TR_NOOP("已有 GPS");
 constexpr const char *kNoGpsText = QT_TR_NOOP("无 GPS");
@@ -376,15 +377,17 @@ struct InfoCardState {
 
 // —— 卡片 ② 时间偏移 ——
 struct TimeCardState {
-    // ---- UX-5（M7-WP7）：三卡「启用」开关（卡头右置 SwitchControl 30×16）----
-    // 语义：关闭 = 该卡整卡不参与规则（build_rules 跳过）+ 卡内规则控件置灰；打开 = 按当前
-    // 参数装配。新会话初态 = 关（值为空 → 输出零变化）；恢复含值旧状态 = 开（apply_state）。
+    // ---- 三卡「启用」开关（卡头右置 SwitchControl 30×16；0.4.2 语义）----
+    // 三态：全开 = on / 全关 = off / 部分选中文件开启 = partial。
+    // 点开 = 对全部选中图片启用本卡（不凭空造值）；点关 = 清除选中图片本卡全部字段 +
+    // enabled=false。 无选中（空态）→ 开关禁用。唯一可写真源 = 每文件 MetadataOverride。
     formkit::SwitchControl *time_enable = nullptr;
 
     // ---- 卡片 ② 时间偏移 ----
     formkit::PillBadge *time_pill = nullptr;
     ElidedLabel *time_hint = nullptr;
     formkit::SegmentedControl *seg = nullptr;
+    QWidget *seg_row = nullptr; // 0.4.2：模式 Seg 所在行（空态整行隐藏）
     QWidget *delta_row = nullptr;
     std::array<QSpinBox *, 6> delta{};
     QWidget *time_row = nullptr;
@@ -407,16 +410,19 @@ struct TimeCardState {
 
 // —— 卡片 ③ GPS ——
 struct GpsCardState {
+    // M14（0.4.2）/ C2：卡头「启用」开关保留（三态）；语义 = 把本卡修改应用到选中图片。
+    // 原「批量 GPS 规则」折叠面（rule_toggle/rule_host/内部 gps_enable CheckBox）已删除：
+    // 坐标/海拔/方位/时间戳输入 = 当前选中图片的编辑面（多选 = 批量编辑），不再是"规则"。
     formkit::SwitchControl *gps_enable_switch = nullptr; // objectName pp-meta-gps-enable
 
     // ---- 卡片 ③ GPS ----
     formkit::PillBadge *gps_pill = nullptr;
     ElidedLabel *gps_hint = nullptr;
     QLabel *gps_warn = nullptr;
-    QLineEdit *view_lat = nullptr;
-    QLineEdit *view_lon = nullptr;
-    QLineEdit *view_alt = nullptr;
-    QLineEdit *view_dir = nullptr;
+    // 只读「生效坐标」单行（lat, lon；DMS 显示档 / 多选 mixed = 「多个值」）。
+    // M14/C2：原 4 个只读生效值框（view_lat/lon/alt/dir）合并为一行 —— 输入框本身
+    // 即按选中项生效值聚合装载（C2.3），本标签只补「显示档（DMS/十进制）+ 多选聚合」。
+    ElidedLabel *effective_label = nullptr;
     pp::map::MapWidget *map = nullptr;
     QComboBox *provider = nullptr;
     QLineEdit *search_edit = nullptr;
@@ -429,7 +435,6 @@ struct GpsCardState {
     QActionGroup *category_group = nullptr; // UX-4②：6 类目 = 下拉 action（互斥勾选）
     QList<QAction *> category_actions;
     std::vector<pp::map::GeocodeResult> results; // 搜索结果（与 map 内部 results 同序）
-    QWidget *address_row = nullptr;
     ElidedLabel *address_value = nullptr;
     QPushButton *read_gps = nullptr;
     QPushButton *pick_map = nullptr;
@@ -442,19 +447,18 @@ struct GpsCardState {
     std::optional<std::pair<double, double>> last_centered; // R-047：仅生效坐标变化才 center_on
     QHash<QString, int> result_row_by_key;                  // R-223：稳定键 → 结果行（跨层对齐）
     // ---- M6-T10 加性（坐标基准透明化 R4：WGS-84 标签 / DMS 显示档 / 复制 / 边界精度提示）----
-    bool dms_mode = false;                // 坐标显示档（false = 十进制度；纯显示层，不入规则）
+    bool dms_mode = false;                // 坐标显示档（false = 十进制度；纯显示层，不改写入值）
     std::optional<pp::GpsData> shown_gps; // 生效坐标缓存（DMS 切换只重排这一份，不重算 preview）
     QLabel *datum_icon = nullptr;         // 「WGS-84（标准 GPS）」前置 Info 矢量图标
     QLabel *datum_label = nullptr;
     QWidget *datum_row = nullptr;              // 坐标行（M6-T12：光标坐标读数的 tooltip 承载面）
     formkit::ChipButton *dms_toggle = nullptr; // DMS 切换（chip；与右键菜单同一收口）
     QToolButton *copy_coords = nullptr;        // 复制当前格式坐标（文字链）
-    QToolButton *rule_toggle = nullptr;
-    QWidget *rule_host = nullptr;
-    QWidget *rule_altdir_row = nullptr; // 更多字段折叠的两行（gps_wiring 的折叠接线用）
-    QWidget *rule_ts_row = nullptr;
-    formkit::CheckBox *gps_enable = nullptr;
-    QToolButton *more_toggle = nullptr; // 规则的可选字段折叠（海拔/方位/时间戳）
+    // M14（0.4.2）/ C2：编辑面 = 卡片一等公民（原 rule_toggle/rule_host 折叠包装 + 内部
+    // 「启用」CheckBox 已删除）。「更多字段」仍保留折叠行（海拔/方位/时间戳）。
+    QWidget *altdir_row = nullptr; // 更多字段折叠的两行（gps_wiring 的折叠接线用）
+    QWidget *ts_row = nullptr;
+    QToolButton *more_toggle = nullptr; // 可选字段折叠（海拔/方位/时间戳）
     QLineEdit *lat = nullptr;
     QLineEdit *lon = nullptr;
     QLineEdit *alt = nullptr;
@@ -603,7 +607,6 @@ QLabel *unit_slot(QWidget *parent, const QString &text);
 ElidedLabel *note_label(QWidget *parent, const QString &object_name = QString());
 QToolButton *make_link(QWidget *parent, const QString &object_name, const QString &text);
 QPushButton *make_button(QWidget *parent, const QString &object_name, const QString &text);
-QLineEdit *make_view_field(QWidget *parent, const QString &object_name);
 QLineEdit *make_rule_field(QWidget *parent, const QString &object_name);
 formkit::ChipButton *make_chip(QWidget *parent, const QString &object_name, const QString &text);
 QToolButton *make_map_hud_button(QWidget *parent, const QString &object_name, icons::Name icon,

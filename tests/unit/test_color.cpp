@@ -16,10 +16,16 @@
 
 #include <libheif/heif.h>
 
+#include <QColor>
+#include <QColorSpace>
+#include <QImage>
+
 #include <array>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -33,6 +39,7 @@
 #include "codecs/encoder.h"
 #include "codecs/encoders.h"
 #include "core/colormanager.h"
+#include "core/display_profile.h" // 0.4.2 需求5：显示面色彩管理
 #include "core/pipeline.h"
 
 namespace {
@@ -132,7 +139,10 @@ std::string gray_icc_bytes(double gamma) {
     return b;
 }
 
-bool same_bits(float a, float b) { return std::memcmp(&a, &b, sizeof(float)) == 0; }
+bool same_bits(float a, float b) {
+    // float 无唯一对象表示（NaN/±0）⇒ 按位比较须用 bit_cast（clang-tidy 口径），语义不变。
+    return std::bit_cast<std::uint32_t>(a) == std::bit_cast<std::uint32_t>(b);
+}
 
 bool has_warning(const pp::ColorOutcome &oc, pp::WarningKind kind) {
     for (const auto &w : oc.warnings)
@@ -346,11 +356,12 @@ void test_gray_alpha() {
     const std::vector<float> out = get_all(buf);
     check(out.size() == 8, "graya/out-size", std::to_string(out.size()));
     for (int i = 0; i < 2; ++i) {
-        check(same_bits(out[4 * i + 3], px[2 * i + 1]), "graya/alpha-bit-exact",
-              "pixel " + std::to_string(i) + " alpha " + fnum(out[4 * i + 3]) +
-                  " != " + fnum(px[2 * i + 1]));
-        check(std::fabs(double(out[4 * i]) - double(px[2 * i])) <= 2e-3, "graya/gray-value",
-              "pixel " + std::to_string(i) + " gray " + fnum(out[4 * i]));
+        const std::size_t k = static_cast<std::size_t>(i);
+        check(same_bits(out[4 * k + 3], px[2 * k + 1]), "graya/alpha-bit-exact",
+              "pixel " + std::to_string(i) + " alpha " + fnum(out[4 * k + 3]) +
+                  " != " + fnum(px[2 * k + 1]));
+        check(std::fabs(double(out[4 * k]) - double(px[2 * k])) <= 2e-3, "graya/gray-value",
+              "pixel " + std::to_string(i) + " gray " + fnum(out[4 * k]));
     }
 }
 
@@ -1890,6 +1901,365 @@ void test_band_vs_row_equivalence() {
     }
 }
 
+// ============================================================================================
+// 0.4.2 需求5：显示面色彩管理（Contract: docs/m14-tasks.md C4；断言只增）
+// --------------------------------------------------------------------------------------------
+// 证明三件事（用户需求 5「屏幕上显示照片真正的色彩 / 现在色彩很灰」的像素级证据）：
+//   a) 已知宽色域输入 + 已知显示 profile → 输出像素与**独立构造的 lcms2 参考变换**逐字节一致
+//      （可复算，不是"看起来对"）；
+//   b) 方向正确：P3 编码的 sRGB 红 (234,51,35) 在 sRGB 显示上还原为 ≈(255,0,0)（不再灰）；
+//      sRGB 纯红在 P3 显示上编码为 ≈(234,51,35)；同 profile P3→P3 近似恒等；
+//   c) 失败/边界：无 ICC = 假定 sRGB、坏 ICC 降级、null 输入、alpha 保持、4096² 耗时读数、
+//      2 线程并发结果与单线程逐字节一致（cmsFLAGS_NOCACHE 的并发安全实证）。
+// ============================================================================================
+
+// 测试辅助：位置参数按 (w, h, r, g, b, a) 文档化，调用点均为一行字面量自解释。
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) —— 新代码须 0 告警故结构性豁免。
+QImage solid_rgba8(int w, int h, int r, int g, int b, int a = 255) {
+    QImage image(w, h, QImage::Format_RGBA8888);
+    if (!image.isNull())
+        image.fill(QColor(r, g, b, a));
+    return image;
+}
+
+// 独立参考：直接用 lcms2 复算「源 ICC → 显示 ICC」的 8bit RGBA 变换（与实现互不共享代码），
+// 返回逐行紧凑的 RGBA8888 QImage。display_icc 为空 = lcms2 内建 sRGB。
+QImage lcms2_reference(const QImage &source, const std::string &src_icc,
+                       const std::string &display_icc) {
+    const QImage in = source.format() == QImage::Format_RGBA8888
+                          ? source
+                          : source.convertToFormat(QImage::Format_RGBA8888);
+    if (in.isNull())
+        return {};
+    QImage out(in.width(), in.height(), QImage::Format_RGBA8888);
+    if (out.isNull())
+        return {};
+    cmsHPROFILE src =
+        src_icc.empty()
+            ? cmsCreate_sRGBProfile()
+            : cmsOpenProfileFromMem(src_icc.data(), static_cast<cmsUInt32Number>(src_icc.size()));
+    cmsHPROFILE dst = display_icc.empty()
+                          ? cmsCreate_sRGBProfile()
+                          : cmsOpenProfileFromMem(display_icc.data(),
+                                                  static_cast<cmsUInt32Number>(display_icc.size()));
+    if (src == nullptr || dst == nullptr) {
+        if (src != nullptr)
+            cmsCloseProfile(src);
+        if (dst != nullptr)
+            cmsCloseProfile(dst);
+        return {};
+    }
+    cmsHTRANSFORM xf = cmsCreateTransform(
+        src, TYPE_RGBA_8, dst, TYPE_RGBA_8, INTENT_RELATIVE_COLORIMETRIC,
+        cmsFLAGS_BLACKPOINTCOMPENSATION | cmsFLAGS_COPY_ALPHA | cmsFLAGS_NOCACHE);
+    cmsCloseProfile(src);
+    cmsCloseProfile(dst);
+    if (xf == nullptr)
+        return {};
+    const std::size_t row_bytes = std::size_t(in.width()) * 4u;
+    std::vector<std::uint8_t> buffer(row_bytes * std::size_t(in.height()));
+    for (int y = 0; y < in.height(); ++y)
+        std::memcpy(buffer.data() + row_bytes * std::size_t(y), in.constScanLine(y), row_bytes);
+    cmsDoTransform(
+        xf, buffer.data(), buffer.data(),
+        static_cast<cmsUInt32Number>(std::size_t(in.width()) * std::size_t(in.height())));
+    cmsDeleteTransform(xf);
+    for (int y = 0; y < out.height(); ++y)
+        std::memcpy(out.scanLine(y), buffer.data() + row_bytes * std::size_t(y), row_bytes);
+    return out;
+}
+
+bool same_rgba8(const QImage &a, const QImage &b) {
+    if (a.isNull() || b.isNull() || a.size() != b.size() || a.format() != b.format())
+        return false;
+    const std::size_t row_bytes = std::size_t(a.width()) * 4u;
+    for (int y = 0; y < a.height(); ++y) {
+        if (std::memcmp(a.constScanLine(y), b.constScanLine(y), row_bytes) != 0)
+            return false;
+    }
+    return true;
+}
+
+std::string color_text(const QColor &c) {
+    return "(" + std::to_string(c.red()) + "," + std::to_string(c.green()) + "," +
+           std::to_string(c.blue()) + ",a" + std::to_string(c.alpha()) + ")";
+}
+
+void test_display_profile() {
+    // ---- (a) sRGB 回退纯函数 ----
+    const pp::DisplayProfile fallback = pp::make_srgb_display_fallback("unit test");
+    check(fallback.is_fallback() && !fallback.from_system && fallback.icc.empty() &&
+              fallback.name == "sRGB" && fallback.fallback_reason == "unit test",
+          "display/fallback-pure",
+          "name='" + fallback.name + "' reason='" + fallback.fallback_reason + "'");
+
+    // ---- (b) 系统显示 profile 获取：缓存 + 失效（环境相关：有系统 profile 或如实 sRGB 回退）----
+    {
+        const pp::DisplayProfile first = pp::system_display_profile();
+        const pp::DisplayProfile second = pp::system_display_profile();
+        check(!first.name.empty(), "display/system-name", "display profile name is empty");
+        check(first.icc == second.icc && first.name == second.name &&
+                  first.from_system == second.from_system,
+              "display/system-cached", "两次获取不一致（缓存失效逻辑错误）");
+        check(first.from_system || !first.fallback_reason.empty(), "display/system-fallback-reason",
+              "sRGB 回退必须带如实原因");
+        pp::invalidate_display_profile_cache();
+        const pp::DisplayProfile third = pp::system_display_profile();
+        check(third.name == first.name && third.from_system == first.from_system,
+              "display/system-invalidate", "invalidate 后重新获取结果不一致");
+        info("display profile: name='" + first.name + "' from_system=" +
+             (first.from_system ? "1" : "0") + " icc_bytes=" + std::to_string(first.icc.size()) +
+             " fallback_reason='" + first.fallback_reason + "'");
+    }
+
+    // ---- 公共 profile 字节（与引擎同一单源：load_target_icc）----
+    std::string icc_err;
+    const std::string p3_icc = pp::load_target_icc(pp::ColorTarget::DisplayP3, icc_err);
+    check(!p3_icc.empty(), "display/p3-profile", "load_target_icc(DisplayP3) failed: " + icc_err);
+    const std::string adobe_icc = pp::load_target_icc(pp::ColorTarget::AdobeRGB, icc_err);
+    check(!adobe_icc.empty(), "display/adobe-profile",
+          "load_target_icc(AdobeRGB) failed: " + icc_err);
+    const pp::DisplayProfile srgb_display = pp::make_srgb_display_fallback("unit test sRGB");
+    pp::DisplayProfile p3_display;
+    p3_display.icc = p3_icc;
+    p3_display.name = "Display P3";
+    p3_display.from_system = true;
+
+    // ---- (c) 恒等快路径：源 = 假定 sRGB、显示 = sRGB 回退 → 像素逐字节不变 ----
+    {
+        const QImage src = solid_rgba8(4, 4, 10, 20, 30);
+        pp::DisplayTransformResult tr;
+        const QImage out = pp::to_display_encoded(src, "", srgb_display, &tr);
+        check(!out.isNull() && tr.identity && !tr.applied && tr.error.empty(),
+              "display/srgb-identity-flags",
+              "identity=" + std::string(tr.identity ? "1" : "0") +
+                  " applied=" + std::string(tr.applied ? "1" : "0") + " err=" + tr.error);
+        check(same_rgba8(out, src), "display/srgb-identity-pixels",
+              "sRGB→sRGB 假定路径必须逐字节不变");
+        check(out.colorSpace().isValid(), "display/srgb-identity-colorspace",
+              "identity 输出应挂 sRGB QColorSpace");
+        const QColor c = out.pixelColor(0, 0);
+        check(c.alpha() == 255, "display/srgb-identity-alpha", color_text(c));
+    }
+
+    // ---- (d) P3 编码的 sRGB 红 → sRGB 显示：还原为 ≈(255,0,0)，与独立 lcms2 参考逐字节一致 ----
+    if (!p3_icc.empty()) {
+        const QImage src = solid_rgba8(8, 8, 234, 51, 35); // P3 编码的 sRGB 纯红（可复算）
+        pp::DisplayTransformResult tr;
+        const QImage out = pp::to_display_encoded(src, p3_icc, srgb_display, &tr);
+        const QColor got = out.pixelColor(4, 4);
+        info("display-cm P3-encoded(234,51,35) --P3->sRGB--> " + color_text(got) + " (src_name='" +
+             tr.src_name + "' dst='" + tr.dst_name + "')");
+        check(tr.applied && !tr.identity && tr.error.empty(), "display/p3-to-srgb-flags",
+              "applied=" + std::string(tr.applied ? "1" : "0") + " err=" + tr.error);
+        check(tr.src_name.find("Display P3") != std::string::npos, "display/p3-to-srgb-src-name",
+              "src_name='" + tr.src_name + "'");
+        check(got.red() >= 250 && got.green() <= 8 && got.blue() <= 25, "display/p3-to-srgb-red",
+              "应还原为 sRGB 纯红 (255,0,0) 附近，got " + color_text(got));
+        const int in_span = 234 - std::min(51, 35);
+        const int out_span = got.red() - std::min(got.green(), got.blue());
+        check(out_span >= in_span + 30, "display/p3-to-srgb-saturation-up",
+              "饱和度跨度应显著增大（「不再灰」的方向断言），got " + std::to_string(in_span) +
+                  " -> " + std::to_string(out_span));
+        const QImage reference = lcms2_reference(src, p3_icc, "");
+        check(same_rgba8(out, reference), "display/p3-to-srgb-reference",
+              "实现输出与独立 lcms2 参考变换不逐字节一致");
+        check(out.colorSpace().isValid(), "display/p3-to-srgb-colorspace",
+              "显示编码输出应挂显示 profile 的 QColorSpace");
+        const QColor ref_px = reference.pixelColor(4, 4);
+        check(got == ref_px, "display/p3-to-srgb-ref-sample",
+              color_text(got) + " vs " + color_text(ref_px));
+    }
+
+    // ---- (e) sRGB 纯红 → P3 显示：编码为 ≈(234,51,35)（宽色域显示的正确编码；方向相反）----
+    if (!p3_icc.empty()) {
+        const QImage src = solid_rgba8(8, 8, 255, 0, 0);
+        pp::DisplayTransformResult tr;
+        const QImage out = pp::to_display_encoded(src, "", p3_display, &tr);
+        const QColor got = out.pixelColor(4, 4);
+        info("display-cm sRGB(255,0,0) --sRGB->P3--> " + color_text(got) + " (src_name='" +
+             tr.src_name + "' dst='" + tr.dst_name + "')");
+        check(tr.applied && tr.error.empty(), "display/srgb-to-p3-flags",
+              "applied=" + std::string(tr.applied ? "1" : "0") + " err=" + tr.error);
+        check(got.red() >= 226 && got.red() <= 242 && got.green() >= 40 && got.green() <= 62 &&
+                  got.blue() >= 24 && got.blue() <= 46,
+              "display/srgb-to-p3-encoded",
+              "sRGB 纯红在 P3 显示上应编码为 ≈(234,51,35)，got " + color_text(got));
+        const QImage reference = lcms2_reference(src, "", p3_icc);
+        check(same_rgba8(out, reference), "display/srgb-to-p3-reference",
+              "实现输出与独立 lcms2 参考变换不逐字节一致");
+    }
+
+    // ---- (f) 同 profile P3 → P3：近似恒等（宽色域显示上的宽色域源不二次变换）----
+    if (!p3_icc.empty()) {
+        const QImage src = solid_rgba8(8, 8, 234, 51, 35);
+        pp::DisplayTransformResult tr;
+        const QImage out = pp::to_display_encoded(src, p3_icc, p3_display, &tr);
+        const QColor got = out.pixelColor(4, 4);
+        check(tr.applied && tr.error.empty(), "display/p3-to-p3-flags", tr.error);
+        check(std::abs(got.red() - 234) <= 2 && std::abs(got.green() - 51) <= 2 &&
+                  std::abs(got.blue() - 35) <= 2,
+              "display/p3-to-p3-identity", "同 profile 应近似恒等，got " + color_text(got));
+    }
+
+    // ---- (g) AdobeRGB 中性灰 → sRGB 显示：中性轴保持 + 与独立参考一致 ----
+    if (!adobe_icc.empty()) {
+        const QImage src = solid_rgba8(8, 8, 128, 128, 128);
+        pp::DisplayTransformResult tr;
+        const QImage out = pp::to_display_encoded(src, adobe_icc, srgb_display, &tr);
+        const QColor got = out.pixelColor(4, 4);
+        check(tr.applied && tr.error.empty(), "display/adobe-flags", tr.error);
+        check(std::abs(got.red() - got.green()) <= 1 && std::abs(got.green() - got.blue()) <= 1,
+              "display/adobe-neutral-neutral", "中性灰应保持中性，got " + color_text(got));
+        const QImage reference = lcms2_reference(src, adobe_icc, "");
+        check(same_rgba8(out, reference), "display/adobe-reference",
+              "实现输出与独立 lcms2 参考变换不逐字节一致");
+    }
+
+    // ---- (h) 失败/降级边界 ----
+    {
+        pp::DisplayTransformResult tr;
+        const QImage null_out = pp::to_display_encoded(QImage(), "", srgb_display, &tr);
+        check(null_out.isNull() && !tr.error.empty(), "display/null-input", tr.error);
+
+        // 不可解析的源 ICC → 降级为假定 sRGB（不是失败：预览照出图）
+        const std::string garbage = "not an icc profile";
+        const QImage src = solid_rgba8(4, 4, 40, 80, 120);
+        pp::DisplayTransformResult tr2;
+        const QImage degraded = pp::to_display_encoded(src, garbage, srgb_display, &tr2);
+        check(!degraded.isNull() && tr2.error.empty() && tr2.applied,
+              "display/bad-src-icc-degrades",
+              "err=" + tr2.error + " applied=" + (tr2.applied ? "1" : "0"));
+        check(same_rgba8(degraded, lcms2_reference(src, "", "")),
+              "display/bad-src-icc-assumed-srgb", "坏源 ICC 应按假定 sRGB 变换");
+
+        // 不可解析的显示 ICC → 目标退化为内建 sRGB（不失败）
+        pp::DisplayProfile bad_display;
+        bad_display.icc = garbage;
+        bad_display.name = "bad";
+        bad_display.from_system = true;
+        pp::DisplayTransformResult tr3;
+        const QImage out3 = pp::to_display_encoded(src, "", bad_display, &tr3);
+        check(!out3.isNull() && tr3.error.empty(), "display/bad-display-icc-degrades", tr3.error);
+        check(same_rgba8(out3, lcms2_reference(src, "", "")), "display/bad-display-icc-srgb-target",
+              "坏显示 ICC 应退化为内建 sRGB 目标");
+    }
+
+    // ---- (i) alpha 保持（COPY_ALPHA）：RGBA8888 alpha=200 不被色彩变换篡改 ----
+    if (!p3_icc.empty()) {
+        const QImage src = solid_rgba8(4, 4, 234, 51, 35, 200);
+        pp::DisplayTransformResult tr;
+        const QImage out = pp::to_display_encoded(src, p3_icc, srgb_display, &tr);
+        check(tr.applied && out.pixelColor(0, 0).alpha() == 200, "display/alpha-copied",
+              "alpha=" + std::to_string(out.pixelColor(0, 0).alpha()) + " (expect 200)");
+    }
+
+    // ---- (j) 性能读数：4096² P3 → sRGB 显示（目标「<20ms 量级」；硬门 ≤200ms 只防数量级退化）----
+    // 用**渐变图案**（真实照片邻域）而非纯色：lcms2 句柄带 cmsFLAGS_NOCACHE，纯色没有缓存红利。
+    // 计时口径 = 真实预览路径（每轮现造一张独立 QImage → std::move 传入，零 COW 深拷贝；
+    // 造图成本在计时外）；每轮重复，取 best-of-3（本机是共享开发机，其它组并行构建会抬高 wall）。
+    if (!p3_icc.empty()) {
+        const auto make_gradient = [](int w, int h) {
+            QImage image(w, h, QImage::Format_RGBA8888);
+            for (int y = 0; y < image.height(); ++y) {
+                std::uint8_t *row = image.scanLine(y);
+                for (int x = 0; x < image.width(); ++x) {
+                    std::uint8_t *p = row + std::size_t(x) * 4u;
+                    p[0] = static_cast<std::uint8_t>(x & 0xFF);
+                    p[1] = static_cast<std::uint8_t>(y & 0xFF);
+                    p[2] = static_cast<std::uint8_t>((x * 7 + y * 13) & 0xFF);
+                    p[3] = 255;
+                }
+            }
+            return image;
+        };
+        const auto measure = [&](int w, int h, const char *label) {
+            QImage warm = make_gradient(w, h);
+            pp::DisplayTransformResult warm_result;
+            (void)pp::to_display_encoded(std::move(warm), p3_icc, srgb_display,
+                                         &warm_result); // 预热（建句柄池）
+            double best_ms = 1.0e9;
+            bool applied = false;
+            std::string err;
+            for (int rep = 0; rep < 3; ++rep) {
+                QImage fresh = make_gradient(w, h); // 独立数据（计时外）
+                const auto t0 = std::chrono::steady_clock::now();
+                pp::DisplayTransformResult tr;
+                const QImage out =
+                    pp::to_display_encoded(std::move(fresh), p3_icc, srgb_display, &tr);
+                const double ms =
+                    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0)
+                        .count();
+                best_ms = std::min(best_ms, ms);
+                applied = !out.isNull() && tr.applied;
+                err = tr.error;
+            }
+            const double mpx = double(w) * double(h) / 1.0e6;
+            info("display-cm perf: " + std::string(label) + " (" + fnum(mpx) +
+                 " MPx, gradient) P3->sRGB = " + fnum(best_ms) + " ms best-of-3 (" +
+                 fnum(best_ms > 0.0 ? mpx / best_ms * 1000.0 : 0.0) + " MPx/s), verdict=" +
+                 (best_ms <= 20.0 ? "MET(<=20ms)"
+                                  : (best_ms <= 200.0 ? "ORDER-OK(<=200ms)" : "MISS")));
+            check(applied && err.empty(), "display/perf-image", err);
+            check(best_ms <= 200.0, "display/perf-image-4096",
+                  "显示变换耗时 " + fnum(best_ms) + " ms，超过数量级护栏 200ms");
+            return best_ms;
+        };
+        (void)measure(4096, 4096, "4096x4096");
+        (void)measure(2048, 2048, "2048x2048"); // 典型预览解码上限（4096 是 1:1/800% 档）
+    }
+
+    // ---- (k) 行带并行正确性：≥2MP 走并行路径，输出必须与独立单线程 lcms2 参考逐字节一致 ----
+    // 2048×1024 = 2.1 MPx > kParallelMinPixels → 4 行带 × 每线程独立 lcms2 句柄。
+    if (!p3_icc.empty()) {
+        QImage parallel_src(2048, 1024, QImage::Format_RGBA8888);
+        check(!parallel_src.isNull(), "display/parallel-image-create", "allocation failed");
+        if (!parallel_src.isNull()) {
+            for (int y = 0; y < parallel_src.height(); ++y) {
+                std::uint8_t *row = parallel_src.scanLine(y);
+                for (int x = 0; x < parallel_src.width(); ++x) {
+                    std::uint8_t *p = row + std::size_t(x) * 4u;
+                    p[0] = static_cast<std::uint8_t>((x * 3 + 17) & 0xFF);
+                    p[1] = static_cast<std::uint8_t>((y * 5 + 91) & 0xFF);
+                    p[2] = static_cast<std::uint8_t>((x + y) & 0xFF);
+                    p[3] = 255;
+                }
+            }
+            pp::DisplayTransformResult tr;
+            const QImage out = pp::to_display_encoded(parallel_src, p3_icc, srgb_display, &tr);
+            check(!out.isNull() && tr.applied, "display/parallel-image", tr.error);
+            check(same_rgba8(out, lcms2_reference(parallel_src, p3_icc, "")),
+                  "display/parallel-reference",
+                  "行带并行输出与独立单线程 lcms2 参考不一致（每线程句柄/行带切分错误）");
+        }
+    }
+
+    // ---- (l) 2 线程并发：句柄池租借 + transform 缓存 → 结果与单线程逐字节一致 ----
+    if (!p3_icc.empty()) {
+        const QImage src = solid_rgba8(256, 256, 234, 51, 35);
+        const QImage reference = pp::to_display_encoded(src, p3_icc, srgb_display);
+        check(!reference.isNull(), "display/concurrent-reference", "reference transform failed");
+        std::atomic<int> ok{0};
+        std::atomic<int> bad{0};
+        const auto worker = [&]() {
+            for (int i = 0; i < 8; ++i) {
+                pp::DisplayTransformResult tr;
+                const QImage out = pp::to_display_encoded(src, p3_icc, srgb_display, &tr);
+                if (!out.isNull() && tr.applied && same_rgba8(out, reference))
+                    ++ok;
+                else
+                    ++bad;
+            }
+        };
+        std::thread t1(worker);
+        std::thread t2(worker);
+        t1.join();
+        t2.join();
+        check(ok.load() == 16 && bad.load() == 0, "display/concurrent-2workers",
+              "ok=" + std::to_string(ok.load()) + " bad=" + std::to_string(bad.load()));
+    }
+}
+
 } // namespace
 
 int main() {
@@ -1920,6 +2290,9 @@ int main() {
 
     // —— M10 / W1-T2（F 断言只增）——
     test_band_vs_row_equivalence(); // 评分归一按带 lcms 的逐样本等价性
+
+    // —— 0.4.2 需求5（显示面色彩管理；断言只增）——
+    test_display_profile(); // 源 ICC/显示 profile 变换：可复算 + 方向 + 并发/性能
 
     std::printf("test_color: %d checks, %d failed\n", g_checks, g_failed);
     return g_failed == 0 ? 0 : 1;

@@ -401,6 +401,9 @@ T7_LINE_PREFIXES = (
     # M13（0.4.1）/ C2/C3/C5：选择项级编辑 / 多选混合值 / 卡头三态 / CreatorTool / 自动海拔
     # （独立 PageMeta 探针，离线；只增行）
     'UI-SMOKE meta-selection:',
+    # 0.4.2（需求 1/2）：无行选中 = 空态 + 可编辑控件禁用 + 零写入（真实行为契约变更；
+    # 本行由 sec_h 输出：hint=未选择文件 empty-rows=1 controls-off=1 items=0 commits=0）
+    'UI-SMOKE meta-no-selection:',
 )
 
 # M5-T8 自检行（前缀匹配；缺任一 → FAIL）：输出页四卡组几何（§7.2 逐行 + R1–R4 + 修 2-05…2-42）
@@ -692,8 +695,9 @@ FORMAT_PRESET_GROUP_FIELDS = (
     'preset-geom',
     # preset-tip（M12 换锚）：显式选 default → combo tooltip = "default"、注记 = 来自格式预设：default
     'preset-tip',
-    # clears-source（M12 换锚）：全局预设后进入「接管（detached）」态 —
-    # 来源清空 / save 禁用 + 原因 tooltip / 注记含「全局预设」/ 点 save 无覆盖意图
+    # clears-source（0.4.2 机械换锚）：全局预设后进入「来源 = 大预设」态 —
+    # 来源清空（非绑定文件）/ combo **无选中项**（不再假装高亮 default）+ 占位「来自大预设：<名>」/
+    # save 禁用 + 原因 tooltip 指路另存 / 注记含「值来自大预设」/ 点 save 无覆盖意图
     'clears-source',
     # unselect-adaptive（M12 换锚）：预设来源文件消失 ⇒ 自愈回 default 并载入
     # （策略会话态随 default 更新，不残留被删来源的旧策略）
@@ -712,6 +716,13 @@ FORMAT_PRESET_GROUP_FIELDS = (
     'factory-idem',       # seed 次轮：written=0/skipped=11 且文件字节不变
     'factory-migrate',    # 迁移清理计数 removed_legacy（与 legacy-migrated 互补）
     'global-detached',    # 接管态可恢复：显式选 default 载入后 save 恢复、注记回来源
+    # ---- 0.4.2 / M14-A13 新增字段（只增；需求 3 大预设重设计的机械验收面）----
+    'global-source',          # 来源=大预设：outputs[i].source_preset 落盘/回读 + combo 无选中项 +
+                              # 占位「来自大预设：<名>」+ 注记「基于格式预设 <stem>」+ 保存禁用
+    'global-source-custom',   # 无来源注记 ⇒ 注记「（自定义参数）」（不编造来源）
+    'global-source-rebind',   # 显式重选格式预设 ⇒ 解除大预设来源、恢复真绑定（save 恢复可用）
+    'preset-binding',         # 保存落点 = 绑定绝对路径（不再用显示名拼新文件；无幽灵文件）
+    'preset-dirty',           # 页面配置 ≠ 绑定预设基线 ⇒ 条目「（已修改）」；保存后归零
 )
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1094,11 +1105,12 @@ def main():
         fp_missing = [field for field in FORMAT_PRESET_GROUP_FIELDS
                       if re.search(r'\b' + re.escape(field) + r'=1\b', format_preset_line) is None]
         # M12：断言组从 27 → 37（工厂数据文件/default 语义/需求 3/4/5 机械验收）；下限 **只升不降**
-        # （不放宽既有断言：旧下限 10 已由本批提到 35）。
+        # （不放宽既有断言：旧下限 10 已由本批提到 35）。0.4.2 / A13：+8 组（来源显式化/绑定/
+        # 已修改）→ 43；下限只升不降。
         if (FORMAT_PRESET_BAD_RE.search(format_preset_line) is None
-                or fp_checked is None or int(fp_checked.group(1)) < 35
+                or fp_checked is None or int(fp_checked.group(1)) < 43
                 or fp_missing):
-            print('ui_smoke: FAIL (M10-W3-T2 format-preset 自检失败（期望 bad=0 checked>=35 '
+            print('ui_smoke: FAIL (M10-W3-T2 format-preset 自检失败（期望 bad=0 checked>=43 '
                   '且各字段 =1；缺/红: {}）: {})'.format(
                       ', '.join(fp_missing) if fp_missing else '-', format_preset_line),
                   file=sys.stderr)

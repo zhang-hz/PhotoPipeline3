@@ -2,7 +2,7 @@
 
 > **这份文档是什么**:在本仓库工作的 AI 智能体与新协作者的总导航 + 纪律总纲。目标是让你不必读完 docs/ 下 1.1 万行文档,就能回答四个问题:**这个项目要什么、东西放在哪、哪些红线不能碰、干完活要留下什么证据**。
 > **权威链**:本文只是导航与纪律;细节真源永远是它指向的那份文档或代码。两者冲突时**以真源为准**,并顺手回来修订本文。
-> **版本口径**:0.4.1 正式版(版本号单源 = `CMakeLists.txt:19-28`:数字段 `project(PhotoPipeline VERSION 0.4.1)` + `PP_VERSION_LABEL ""`(正式版为空串);CMake `project(VERSION)` 只收数字段,标签拼在字符串侧;`vcpkg.json` version 只写数字段 0.4.1——R-122 单源一致性断言要求与 `project(VERSION)` 同值。**`--version` = `PhotoPipeline 0.4.1`**。任何其它地方出现的版本号都是引用,不是定义)。
+> **版本口径**:0.4.2 正式版(版本号单源 = `CMakeLists.txt:19-28`:数字段 `project(PhotoPipeline VERSION 0.4.2)` + `PP_VERSION_LABEL ""`(正式版为空串);CMake `project(VERSION)` 只收数字段,标签拼在字符串侧;`vcpkg.json` version 只写数字段 0.4.2——R-122 单源一致性断言要求与 `project(VERSION)` 同值。**`--version` = `PhotoPipeline 0.4.2`**。任何其它地方出现的版本号都是引用,不是定义)。
 
 ---
 
@@ -267,6 +267,9 @@ python tools/env.py run -- ctest --preset release
 | 自适应策略 DSL / 出厂策略全文 | `docs/adaptive-policy.md`(§6.1 断点/§10 工厂文件策略全文) |
 | M12 裁定(工厂预设外部化 / `_builtin` 迁移 / default / 无「未选择」/ JPEG 策略 / CI 预算·基线·scoping / hwy 尝试回退 / 版本) | `docs/m12-adjudications.md`(A1–A13 + 附 1/附 2) |
 | M13 裁定(选择项级元数据编辑 / 卡级 active 判据 / apply_rules emit / 回归基线重播种·机械换锚 / ui-smoke 探针换锚 / tidy 豁免 / 构建卫生事件 / 语料不重生成 / 发行记录) | `docs/m13-adjudications.md`(A1–A18) |
+| M14 契约(元数据作用域 C1 / GPS/隐私/编辑器 C2 / 大预设 C3 / 预览色彩 C4 / 调度自适应 C5 / 真实债+CI C6 / 清理 C7 / 版本发布 C8) | `docs/m14-tasks.md` |
+| M14 裁定(冻结面加性 A1–A8 / 用户可见语义 A9–A14·A24 / 探针机械换锚 A15–A18 / 目录纪律 A20–A21 / 债务核销 A22–A23 / 构建卫生 A25) | `docs/m14-adjudications.md` |
+| 0.4.2 发行报告(逐条读数 / 偏差与追认 / 未决 / 复现命令 / 真实 GUI 与 A/B 证据) | `docs/0.4.2-report.md` |
 | 0.4.1 契约(选择项级编辑 C1–C9 / CreatorTool / photoshop:DateCreated / 选点海拔) | `docs/m13-tasks.md` |
 | 0.4.1 发行报告(读数 / 偏差 / 未决 / 复现命令) | `docs/0.4.1-report.md` |
 | 0.4.0 发行报告(已发布版；读数已回填；tag/Release/资产指纹) | `docs/0.4.0-report.md` |
@@ -301,46 +304,67 @@ python tools/env.py run -- ctest --preset release
 
 ## 11. 已知债与开放问题(如实)
 
-**发行前高优(来自 `docs/deep-review-0.3.2.md`,2026-10-11):**
+> **0.4.2 / M14 口径（用户原话：「修复所谓的设计债，不存在这种东西。CI 必须全绿，必须高效」）**：
+> 本节在 M14 收口时**逐条核销**——已修 / 已证伪（原记录已失效）/ 如实未决；不再以「设计债」作为不修
+> 理由，未被核销的条目必须带复现条件与证据面。核销证据见 `docs/0.4.2-report.md` §2.7/§3/§4 与
+> `docs/m14-adjudications.md` A7/A8/A22/A23。
 
-- **P0 ×2(数据破坏,老问题非 M6 引入;均已收口)**:① 输出路径可精确命中源文件 → 0.3.3 起 `plan_targets`/`run_metadata_only` 守卫 + 0.3.5 起命中源文件按普通冲突改名(源文件永不写,Overwrite 降级 Rename;单测 `r001/*`、`same-folder/*`);② Exiv2 就地截断重写/写失败被吞 → 0.3.3 起一律写临时副本再 rename,失败即失败(`ok=false`,`exiv2_apply_atomic`;截断只作用在临时副本上)。
-- **P1 代表项**:联想请求不清算(陈旧建议可点进写坐标闭环)、PageRun 硬编码 Dark 令牌(浅色主题整页深色)、classes.json 损坏被默认值覆写、回归防线机制缺口(重播种无护栏 / Windows 基线从不 diff / UBSan 假绿 / 金样不锁语料 / 棘轮可静默下线)。
-- **R3 裁决**(工程/GUI 综合):代码不是屎山(分层、注释纪律、错误处理属上游水平);真正的系统性问题是**「契约活在注释里」**与**上帝单元/复制粘贴维持的同构**。另有 4 条发行前值得修:版本徽标硬编码 0.3.0、过滤态双击编辑错文件、翻图/打标对象错位、分组重建吞多选。
+**A. M14 已清零的真实债（原 §11 登记项，0.4.2 已修并取证）**
 
-**结构性债:**
+- **hwy dispatch ODR 链接期 UB**（原 asan 3/9 SEGV `jpegli::VectorSize()` pc=0；Linux/AVX-512 触发）：
+  0.4.2 根治 = 本批 SSIMULACRA2 TU 加 `hwy=pp_ssim2_hwy;HWY_HEADER_ONLY=1` 私有化 + 新增
+  `src/core/metric/hwy_bridge.cpp` 把 `GetChosenTarget/SupportedTargets` 转发真实 libhwy（同一份
+  ChosenTarget 状态/CPU 探测 ⇒ 动态派发目标与修复前逐位相同）。**数值零漂移**（10 条 oracle 逐位一致）
+  + 符号审计（我方 TU 的 `hwy::` 定义符号 178→0）。Linux asan/AVX-512 路径由 nightly 事后背书。
+- **ProgressMux/FileEvent 数据竞争**（原 TSan 9 条）：0.4.2 根治 = `run_one_file`/`run_metadata_only`
+  入口把 EventFn 包成**单线程 drain 队列**（不持锁回调、事件不丢/不改序/同 run 内严格串行）；Linux TSan
+  由 nightly 事后背书（本机 Windows 无 TSan，如实登记）。
+- **地图 EventFilter 生命周期 heap-use-after-free**（0.4.2 MSVC ASan 实测发现）：`~MapWidget()` 在 Impl
+  析构前摘滤波器并置空 `impl`；ASan 复测无报告。
+- **MSVC ASan 门禁缺口**：`PP_SANITIZER_BUILD` 检测纳入 `PP_ASAN`（与 M12-A12 同口径 scoping；release/
+  release-dev 判据逐字保留），本机 ASan 可作为 nightly asan 等效验收面。
 
-- `mainwindow.cpp` 上帝对象(1.1 万行,其中约 7600 行是自检探针且编进发布二进制)。
-- UI 建造器复制粘贴(ElidedLabel×6、卡头×4、make_button×3)→ 收口进 formkit/theme。
-- 回归基线 runner-shaped 耦合(`thread_budget=4`,4 vCPU runner;GitHub 改 runner 规格会触发 nightly diff,已登记)。
-- 平台代画存量已按 GUI-R2 收口 10 项,但新增控件仍要自查"设计要求自绘、实现却让平台画"。
+**B. 已证伪/已失效的历史「债」记录（M14 复核，逐条以代码/读数取证）**
 
-**UX 开放 14 项**(`docs/ux-review-14.md`,含定位、根因、改进方案):右键菜单、全选/取消全选、预览分辨率(内嵌预览门槛 64px 误用)、GPS 卡地图 App 化、功能启用勾选消失、样式收口进公共文件、无边框三钮点不动(`WM_NCCALCSIZE` 缺失)、高级参数展开区限高、格式卡等宽、HEIF/AVIF 无 profile 且 nclx 写死 sRGB 与 ICC 矛盾、滚动条两套皮、亮色设置页签色错、窗口圆角缺失、色彩转换质量边界。
+- 「`mainwindow.cpp` 上帝对象 1.1 万行、约 7600 行探针编进发布二进制」→ **已失效**：`mainwindow.cpp`
+  现 1,864 行；探针在独立 TU `src/ui/smoke_probes.cpp` 且 **`PP_BUILD_DEV` 门控**（发布构建不含探针代码）。
+- 「UI 建造器复制粘贴（ElidedLabel×6、卡头×4、make_button×3）」→ **已失效**：建造器已收口
+  `formkit`/`theme`/`dialogkit`（`formkit::make_button`、卡头构造器、`ElidedLabel` 单源；残余仅一行为
+  转发薄包装，不构成复制粘贴）。
+- 「回归基线 runner-shaped 耦合（thread_budget=4）」→ **已失效**：`regression.py` N11 已归一
+  `thread_budget/alloc_files/encode_threads/sum_encode_threads/peak_sum_encode_threads` 并丢弃核数条件行
+  （0.4.2 集成期实测本机 16 核 zero diff）。
+- 「契约活在注释里、无机器校验」→ 已按 §7.4 方向把契约翻译成单测/探针（`test_*_contract`、UI 探针、
+  `pp_verify`）；M14 新增 `meta-follow-live`/无选中空态/规划器/事件压力等机械化断言，继续按此方向推进。
+- 「代码 TODO 债」→ 全仓 `TODO(` 标签 **0 条**（M14 grep 复核）。
+- 「依赖仓库内预置 `build/` 临时文件」→ 用户要求清空 `build/` 后审计：主流程/CI/打包**零功能依赖**
+  （构建树现场生成）；曾被脚本默认值引用的一次性证据路径已做**缺失容忍 + 跳过日志**
+  （`heif_matrix_check.py` / `perf_smoke.py` / `pp_progress_audit.py`）；历史文档中的 `build/**` 证据引用
+  统一登记为「已随用户授权清理失效，权威结论已入 docs/ 契约/裁定/报告」。
+- 「platform 代画存量」→ GUI-R2 已收口 10 项；M14 探针（`layout-audit`/`icons-engine`/`caption-*`）持续值守。
 
-**CI 债（M12 已定案；**如实：不宣称 nightly 通过**；诊断真源 = `build/m12-ci/report.md` 835 行/22 节）**：
-- **main-full 全绿（41294175349 = SUCCESS 10/10，`main-full gate OK`）**：A10 预算校准后 windows **27.1min<30** ✓、
-  tidy **21.5min<25** ✓；整轮 wall **32min > wall-limit 30（仅提示，per-job timeout 全过）**；真优化 = vcpkg binary
-  cache 全命中（configure **908s→38s**）+ M12-D25。**建议 0.4.1 预算表 windows 24→27**（实测余量偏小）。
-- **nightly（41294609588 = FAILURE，非全绿）**：✅ **ubsan**（9/9 + 金样 20/20 + 0 sanitizer 报告）、
-  ✅ regression（Linux **0 diff**，基线 sha256 `b86fead0…`/2567 已入库）、✅ regression-windows（**0 diff**）、
-  ✅ audit；❌ **asan**（3/9 SEGV：`jpegli::VectorSize()` pc=0，跨轮非确定）、❌ **tsan**（1/9 + **9 条真实
-  data race**：ProgressMux 事件回调 vs 编码 worker 线程）。两项为**已定案真实产品债（0.4.1 未修，顺延 0.4.2；
-  见 `docs/m13-adjudications.md` A7）**：① **hwy dispatch ODR 链接期 UB**（M12-D26 尝试→回退，
-  `HWY_COMPILE_ONLY_STATIC` 会改变 SSIMULACRA2 数值 0.05–0.27，红线；release 二进制同样含该碰撞，属潜在风险）；
-  ② **ProgressMux/FileEvent 数据竞争**。修复方向 = hwy 私有化 + bridge shim（保数值）/ISA 基线对齐；
-  事件投递单线程 drain 队列（0.4.2）。
-- **M12 已修**：脚本判据 bug（asan R-042 错位 / tsan `sed` 转义 / regression-windows Qt PATH / sanitizer ctest 防空跑）；
-  **A12 sanitizer 性能判据 scoping**（`PP_SANITIZER_BUILD=1`，只对 sanitizer 跳过 fastcolor 吞吐阈值；release/release-dev
-  判据逐字保留，本机 108.8 MPx/s）；**M12-D25**（`namespace jxl` ODR，ubsan 转绿）；**A11** 回归基线双平台入库；
-  **release.yml** presets 产物断言。`warm-cache.yml` 播种 114.75/120min 预算边界风险登记（独立豁免）。
-- 手动 dispatch nightly 轮 41294189132 被 schedule 轮 concurrency 取消（nightly schedule 与手动 dispatch 互踩，
-  属调度配置债，非门禁问题；已登记）。
-- **0.4.1 发行轮（2026-11-02）**：tag `v0.4.1` → `release.yml` run **41330906366 = success（7/7 job）**，
-  资产指纹见 §2 版本行 / CHANGELOG「[0.4.1] 发行」；`main-full`（branch main）最新轮 **passing**（shields.io
-  徽标取证；含 linux 全 ctest+金样 / tidy / format）；**nightly 的 Linux regression job 尚无 tag 后 schedule
-  轮读数**（A13 残留风险：Linux 基线机械换锚待其事后背书）。本机 gh 未登录 + 未认证 API 限流时，发行道
-  状态可用 shields.io 徽标与 Release 下载件自校验（sha256 / `--version`）取证，run id 以公开 API 恢复后补。
+**C. 如实未决（不宣称已解决；非「债」而是环境/硬件/外部限制）**
 
-**出厂预设数据维护点(M12 新增)**:`presets/formats/**` 是**出厂数据单一真源**——改预设内容必须同步(① `tests/unit/test_format_presets.cpp` 的工厂库/seed/迁移断言;② 打包门禁 `tools/make_winzip.py`/`make_appimage.sh` 的「8 格式 default 齐备 + 总数 11」;③ `docs/format-presets.md` §7 与 `docs/adaptive-policy.md` §10 策略全文;④ `--ui-smoke` 相关探针)。旧 `_builtin-*` 只读模板/migration 逻辑不得回退(破坏性迁移已登记 `docs/m12-adjudications.md` A2)。
+- **CI 读数待推送后回填**：main-full / nightly 本轮代码的 run 读数只能由推送后 GitHub Actions 产生；
+  在拿到读数前**不宣称「CI 已全绿」**（M14 本地等价门禁全绿 = 证据面，不是 CI 读数）。
+- **nightly asan/tsan 的 Linux 真绿**待推送后事后背书（本机 Windows：ASan 可跑、TSan 不可跑；
+  AVX-512 路径数值一致性 = 机制论证 + CI oracle 读数背书）。
+- **Linux 回归基线机械换锚**（本机无法运行 Linux 二进制；0.4.2 版本行字节级换锚 sha256 见报告）
+  待 nightly Linux regression job 事后背书。
+- **金样语料不可重生成**（`gen_corpus.py` 与 M0 定格字节漂移，沿用入库语料；不 `--relock`，M13-A16）。
+- **HEIF/AVIF 穷举矩阵、iPhone 真机接受度**：本轮未复跑/未验（无对应真机/环境），沿用 0.4.0 登记。
+- **libde265 对部分 HEVC RExt 码流**（如 `super/T2.heic`）仍不可解码（第三方解码器能力边界）。
+- **高德线上搜索**仅账号实测可最终确认（本机 TLS 环境不可用）。
+- **选点自动海拔**依赖第三方公开 DEM（Open-Meteo）可达性/配额；失败静默降级（不阻塞核心流程）。
+- **预览色彩管理**：Linux 无系统显示 profile 时回退 sRGB（如实登记）；多显示器/显示器 profile 热变更
+  的覆盖范围见 `docs/0.4.2-report.md` §4。
+- **调度自适应**：单文件长编码期间无法中途改 E（编码器接口限制）；各编码器实际并行上限为实测事实表，
+  未知编码器按保守计 1；规划轨迹走 debug 日志。
+- **UX 评审项**（`docs/ux-review-14.md`）：M14 复核确认 0.3.x–0.4.x 已收口多数（右键菜单/全选/预览
+  分辨率/GPS 卡 App 化/启用勾选/样式收口/无边框三钮/格式卡等宽/高级参数限高等有代码与探针证据）；
+  其余属观感/功能建议（非债务），状态以该文档为准，M14 未扩范围。
+
+**出厂预设数据维护点(M12 新增，0.4.2 仍适用)**:`presets/formats/**` 是**出厂数据单一真源**——改预设内容必须同步(① `tests/unit/test_format_presets.cpp` 的工厂库/seed/迁移断言;② 打包门禁 `tools/make_winzip.py`/`make_appimage.sh` 的「8 格式 default 齐备 + 总数 11」;③ `docs/format-presets.md` §7 与 `docs/adaptive-policy.md` §10 策略全文;④ `--ui-smoke` 相关探针)。旧 `_builtin-*` 只读模板/migration 逻辑不得回退(破坏性迁移已登记 `docs/m12-adjudications.md` A2)。
 
 ---
 

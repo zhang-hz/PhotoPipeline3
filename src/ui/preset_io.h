@@ -18,4 +18,10 @@ std::string load_preset(const std::filesystem::path &file, PresetData &out);
 std::vector<std::pair<std::filesystem::path, std::string>>
 list_presets(const std::filesystem::path &dir);
 
+// —— 0.4.2 / 需求 3 加性（大预设重设计；裁定登记 docs/m0.4.2-adjudications.md）——
+// 把 PresetData 序列化为**落盘字节**（= save_preset 实际写入内容；QJsonDocument::Indented）。
+// 单源：save_preset 内部同样调用本函数写盘，保证「已修改」比对基线与文件字节同源；
+// 单测以它做 save→load→save 字节稳定断言（既有 save_preset/load_preset 签名与语义零变化）。
+std::string serialize_preset(const PresetData &p);
+
 } // namespace pp::ui

@@ -109,11 +109,13 @@ std::vector<Item> info_card_actions(const InfoCardIntents &in) {
 
 std::vector<Item> time_card_actions(const TimeCardIntents &in) {
     const bool lock = in.running;
+    // 0.4.2（M14/C1.4）：不再有全局批量规则 → 原「清除规则」文案退役，语义 = 清除**选中图片**
+    // 的时间修改（TimeCardIntents::clear_rules 为历史字段名，行为由 meta_card_time 收口）。
     return {{tr_c("启用"), in.enable_toggle, !lock, false, true, in.enabled},
             Item::sep(),
             {tr_c("重置为默认"), in.reset_defaults, !lock, false, false, false},
             {tr_c("从文件读取时间"), in.read_from_file, !lock, false, false, false},
-            {tr_c("清除规则"), in.clear_rules, !lock, false, false, false}};
+            {tr_c("清除时间修改"), in.clear_rules, !lock, false, false, false}};
 }
 
 std::vector<Item> gps_card_actions(const GpsCardIntents &in) {

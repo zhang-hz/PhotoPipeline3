@@ -117,6 +117,16 @@ void clear_keyword_pills(MetaState *st) {
     }
 }
 
+// 例外条目 → 文件全路径（单源）：M14 起 page_meta 侧把全路径存 item data（显示名可读）；
+// 旧版把全路径直接当条目文本 → 取值兜底文本，两版兼容。
+QString exception_item_path(const QListWidgetItem *item) {
+    if (item == nullptr) {
+        return QString();
+    }
+    const QString data = item->data(Qt::UserRole).toString();
+    return !data.isEmpty() ? data : item->text();
+}
+
 } // namespace
 
 // 关键字胶囊组（§7.1「关键字 胶囊组」）：跟随项的 XMP dc:subject；超过 3 枚 → 「+N」。
@@ -131,6 +141,13 @@ void refresh_keywords(MetaState *st) {
     clear_keyword_pills(st);
     // 说明位是常驻子控件（与 multi_more 同口径：重复入列/误删会造成悬垂引用）→ 只清胶囊。
     const SelectionSnapshotList sel = selection_snapshots(st);
+    if (sel.empty()) { // M14/C1：无选中 = 空态（不拿任何文件冒充选择集）
+        apply_mixed_widget(st->privacy.keyword_none, false, QStringList());
+        st->privacy.keyword_none->set_full_text(PageMeta::tr(kNoSelectionText));
+        st->privacy.keyword_none->setToolTip(QString());
+        st->privacy.keyword_none->setVisible(true);
+        return;
+    }
     QStringList texts;
     const std::size_t probe_count = st->follow.probes.size();
     texts.reserve(int(probe_count));
@@ -429,10 +446,23 @@ QWidget *build_switches_card(MetaState *st, QWidget *parent) {
         st->privacy.tag_host->setVisible(true);
         notify_rules_changed(st);
     });
+    // 例外列表语义（M13/C2.5 + M14/C1.4）= **带元数据修改的文件**：
+    //   * 单击条目 → 定位/选中该文件（宿主 MainWindow 经 locate_file_requested 处理；
+    //     过滤/分组视图下由宿主映射到源行，找不到时宿主如实提示）；
+    //   * 双击条目 → 打开该文件的元数据详细编辑器（open_editor_requested）；
+    //   * 右键「清除例外」= 清空该文件全部元数据修改（clear_exception_requested）。
+    QObject::connect(st->privacy.exc_list, &QListWidget::itemClicked, st,
+                     [st](QListWidgetItem *item) {
+                         const QString path = exception_item_path(item);
+                         if (!path.isEmpty() && st->core.page != nullptr) {
+                             emit st->core.page->locate_file_requested(path);
+                         }
+                     });
     QObject::connect(st->privacy.exc_list, &QListWidget::itemDoubleClicked, st,
                      [st](QListWidgetItem *item) {
-                         if (item != nullptr) {
-                             emit st->core.page->open_editor_requested(item->text());
+                         const QString path = exception_item_path(item);
+                         if (!path.isEmpty() && st->core.page != nullptr) {
+                             emit st->core.page->open_editor_requested(path);
                          }
                      });
     QObject::connect(st->privacy.exc_list, &QListWidget::customContextMenuRequested, st,
@@ -446,7 +476,10 @@ QWidget *build_switches_card(MetaState *st, QWidget *parent) {
                          QAction *clear = menu.addAction(PageMeta::tr("清除例外"));
                          if (menu.exec(st->privacy.exc_list->viewport()->mapToGlobal(pos)) ==
                              clear) {
-                             emit st->core.page->clear_exception_requested(item->text());
+                             const QString path = exception_item_path(item);
+                             if (!path.isEmpty() && st->core.page != nullptr) {
+                                 emit st->core.page->clear_exception_requested(path);
+                             }
                          }
                      });
     return card;

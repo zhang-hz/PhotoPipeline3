@@ -511,6 +511,86 @@ void test_text_aggregate() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 12) 0.4.2（需求 1/2）：选择项**规模**不影响聚合判定（>8 的选择：同值/异值判定是纯函数
+//     语义，不受多选小表 8 行截断影响；只有 tooltip labels 截断 + 「…还有 N 个」）
+// ---------------------------------------------------------------------------
+void test_selection_scale() {
+    // 12 个文件、同值 → Uniform（不是 mixed、不是 absent）
+    std::vector<std::optional<MetadataOverride>> all_same;
+    for (int i = 0; i < 12; ++i) {
+        TimeShift shift;
+        shift.hours = 2;
+        all_same.push_back(time_override(shift));
+    }
+    const auto sel_same = selection(all_same);
+    const auto same = meta::time_component_aggregate(sel_same, 3);
+    check(same.state == Aggregate::Uniform && same.value == 2, "scale/uniform-12",
+          "12 uniform not detected");
+    check(same.total == 12 && same.present == 12, "scale/uniform-12-counts", "counts wrong");
+    check(same.labels.size() == meta::kAggregateLabelCap && same.omitted == 12 - 8,
+          "scale/label-cap", "labels cap/omitted wrong");
+    // 12 个文件：11 个 +2h、1 个 +3h → mixed（异值不因截断被漏）
+    auto mixed = all_same;
+    TimeShift other;
+    other.hours = 3;
+    mixed[11] = time_override(other);
+    const auto sel_mixed = selection(mixed);
+    check(meta::time_component_aggregate(sel_mixed, 3).state == Aggregate::Mixed, "scale/mixed-12",
+          "12th differing value missed");
+    // 只读文本聚合同判据（关键信息卡多选 >8 的判定面）
+    QStringList texts;
+    for (int i = 0; i < 12; ++i) {
+        texts << QStringLiteral("Canon");
+    }
+    const auto agg_same = meta::aggregate_texts(sel_same, texts);
+    check(agg_same.uniform && meta::aggregate_display(agg_same, QStringLiteral("多个值")) ==
+                                  QStringLiteral("Canon"),
+          "scale/text-uniform-12", "12-item text uniform failed");
+    texts[11] = QStringLiteral("Nikon");
+    const auto agg_mixed = meta::aggregate_texts(sel_mixed, texts);
+    check(!agg_mixed.uniform && meta::aggregate_display(agg_mixed, QStringLiteral("多个值")) ==
+                                    QStringLiteral("多个值"),
+          "scale/text-mixed-12", "12-item text mixed failed");
+    check(meta::aggregate_tooltip(agg_mixed).contains(QStringLiteral("还有 4 个")),
+          "scale/text-mixed-12-omitted", "omitted line wrong");
+    // 空选择 = Absent（所有字段）
+    const auto empty = selection({});
+    check(meta::time_component_aggregate(empty, 0).state == Aggregate::Absent &&
+              meta::gps_clear_aggregate(empty).state == Aggregate::Absent &&
+              meta::tags_aggregate(empty).state == Aggregate::Absent &&
+              meta::card_active_aggregate(empty, EditField::TimeEnable).state == Aggregate::Absent,
+          "scale/empty-absent", "empty selection not absent");
+}
+
+// ---------------------------------------------------------------------------
+// 13) 0.4.2（需求 1/2）：卡头「启用」开关三态（全开 on / 全关 off / 部分 partial）
+// ---------------------------------------------------------------------------
+void test_card_tristate() {
+    TimeShift shift;
+    shift.days = 1;
+    const MetadataOverride on = time_override(shift); // 有编辑 = active
+    MetadataOverride off;                             // 无编辑 = off（nullopt 同）
+    const auto sel_on = selection({on, on});
+    const auto agg_on = meta::card_active_aggregate(sel_on, EditField::TimeEnable);
+    check(agg_on.state == Aggregate::Uniform && agg_on.value, "tristate/all-on",
+          "all-on not uniform true");
+    const auto sel_off = selection({std::nullopt, off});
+    const auto agg_off = meta::card_active_aggregate(sel_off, EditField::TimeEnable);
+    check(agg_off.state == Aggregate::Uniform && !agg_off.value, "tristate/all-off",
+          "all-off not uniform false");
+    const auto sel_part = selection({on, std::nullopt});
+    const auto agg_part = meta::card_active_aggregate(sel_part, EditField::TimeEnable);
+    check(agg_part.state == Aggregate::Mixed, "tristate/partial", "partial not mixed");
+    // 点开 = 对全部选中启用（不凭空造值）：只置 flag，不产生 time_shift
+    meta::FieldInput enable;
+    enable.flag = true;
+    const auto enabled = meta::merge_field_edit(std::nullopt, EditField::TimeEnable, enable);
+    check(enabled.has_value() && enabled->time_enabled.value_or(false) &&
+              !enabled->time_shift.has_value(),
+          "tristate/enable-no-value", "enable must not invent values");
+}
+
 } // namespace
 // NOLINTEND(bugprone-unchecked-optional-access)
 
@@ -527,6 +607,8 @@ int main() { // NOLINT(bugprone-exception-escape) — 测试入口允许异常�
     test_normalize();
     test_preset_aggregation();
     test_text_aggregate();
+    test_selection_scale(); // 0.4.2 需求 1/2：>8 选择聚合规模 / 空选择三态 Absent
+    test_card_tristate();   // 0.4.2 需求 1/2：卡头启用三态 + 点开不造值
     if (g_failed == 0) {
         std::printf("test_meta_selection OK\n");
     }

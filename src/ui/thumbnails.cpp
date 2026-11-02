@@ -33,8 +33,19 @@
 namespace pp::ui {
 namespace {
 
+// 取证开关（与预览面板同一口径；诊断用，正常运行不设置）：PP_PREVIEW_CM=0/off → 关闭显示变换。
+// 让真实桌面 A/B 截图能同时覆盖「预览窗格」与「文件列表缩略图」两处显示面。
+bool display_cm_disabled() {
+    const QByteArray value = qgetenv("PP_PREVIEW_CM");
+    return value == "0" || value.compare("off", Qt::CaseInsensitive) == 0;
+}
+
 // ThumbImage → QImage：Format_RGBA8888（与 core 的 rgba 字节序一致）；copy() 深拷贝解耦源 vector。
 // 尺寸/字节数不符 → null（probe_ok 但缩略图不可用的正常情况）。
+// 0.4.2 需求5（Contract: docs/m14-tasks.md C4）：与预览面板同一根因 —— Qt 6.11 Windows raster
+// 后端不做 QImage::setColorSpace 的绘制期变换（根因见 core/display_profile.h），宽色域源的
+// 46px 列表缩略图同样发灰。这里用同一显示变换把**带 ICC 的**源像素真的变换到显示 profile 编码；
+// 无 ICC 的 sRGB 假定缩略图保持原样（既有 12 张冻结截图零变化），46px 变换成本可忽略。
 QImage image_from_thumb(const pp::ThumbImage &t) {
     if (t.width <= 0 || t.height <= 0)
         return {};
@@ -44,8 +55,16 @@ QImage image_from_thumb(const pp::ThumbImage &t) {
     const QImage view(t.rgba.data(), t.width, t.height, qsizetype(t.width) * 4,
                       QImage::Format_RGBA8888);
     QImage image = view.copy();
-    // R-309：缩略图同样按源 ICC 显示（像素字节不变，仅附色彩空间给 Qt 绘制期转换）。
-    if (!t.icc.empty()) {
+    if (!t.icc.empty() && !display_cm_disabled()) {
+        // R-309（0.3.6-alpha1）的 QColorSpace 标注保留（Qt 若做窗口色彩管理可兜底）；真正的
+        // 显示编码化由 to_display_encoded 完成。失败 → 原样（不阻断列表出图）。
+        const QColorSpace cs = QColorSpace::fromIccProfile(
+            QByteArray(reinterpret_cast<const char *>(t.icc.data()), int(t.icc.size())));
+        if (cs.isValid())
+            image.setColorSpace(cs);
+        image = pp::to_display_encoded(std::move(image), t.icc, pp::ui_display_profile());
+    } else if (!t.icc.empty()) {
+        // 取证开关打开（= 修复前行为）：只保留源 QColorSpace 标注，像素保持源编码。
         const QColorSpace cs = QColorSpace::fromIccProfile(
             QByteArray(reinterpret_cast<const char *>(t.icc.data()), int(t.icc.size())));
         if (cs.isValid())

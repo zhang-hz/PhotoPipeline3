@@ -42,6 +42,23 @@ name: nightly
 #     * 判据 = 语料日志里 **0 条** sanitizer 报告行（ERROR/SUMMARY/runtime error/leak）。报告行
 #       会被逐条打印并判红；supp 命中的行由 supp 文件自身决定（不在判据面）。
 #
+#   ── M14-C6 两项真实债修复后的 expected 状态（0.4.2；判据零放宽）────────────────
+#     ① hwy dispatch ODR（asan 3/9 SEGV `jpegli::VectorSize()` pc=0）：修法 = vendored
+#        ssimulacra2 TU 的 `hwy` 命名空间私有化（`hwy=pp_ssim2_hwy` + HWY_HEADER_ONLY）
+#        + `src/core/metric/hwy_bridge.cpp` 把 GetChosenTarget/SupportedTargets 转发到真实
+#        libhwy（保留动态派发 ⇒ SSIMULACRA2 数值逐位不变，本机 Windows 已实测 10 组 oracle
+#        逐位一致）。改动面 = CMake 宏 + 新 bridge TU；**不使用** HWY_COMPILE_ONLY_STATIC（红线）。
+#     ② ProgressMux/FileEvent 数据竞争（tsan 9 条）：修法 = pipeline 入口 EventFn 串行化
+#        （单线程 drain 队列，同一 run 内回调严格串行、事件不丢不改序；不持锁调回调 ⇒ 无锁序
+#        反转/取消路径不阻塞）。新增 tests/unit/test_event_stress.cpp 为**每晚三路必跑**的
+#        常驻竞态探针（多 worker + SynthPump + 心跳 + 多输出并行编码 + 评分池并发事件；
+#        断言 = 回调不并发/事件不丢/终态单调/取消不阻塞），并计入空跑断言的目标集（≥4）。
+#     ⇒ 期望：asan/tsan 两 job 由红转绿且为**真绿**（原有 0 报告扫描/防空跑/报告原文保留，
+#       未新增任何抑制规则；tsan.supp 仍是既有的第三方（OIIO/Qt 非插桩）证据文件）。
+#       首轮 nightly 读数最重要（main-full/nightly 的 Linux/windows runner 可能带 AVX-512，
+#       正是原 SEGV 的触发环境）；本机 Windows 构造上不复现原 SEGV，故除本机 ASan 多轮外，
+#       Linux 侧以本注释 + 报告「待 nightly 事后背书」登记，不宣称已验证。
+#
 #   ── 回归基线 diff（T17 完善口径）────────────────────────────────────────────
 #     * tools/regression.py 以 workers=1 跑归一化全语料，diff tools/baseline/golden.log（0 diff 才绿）。
 #     * M3 遗留 §8-11 的 Windows 基线 tools/baseline/golden.windows.log：M7-WP3 / R-016 起由
@@ -184,8 +201,9 @@ jobs:
 
       - name: sanitizer env 就绪断言 + 夜间轮转子集（R-041/R-042）
         # R-042: job 级 sanitizer 选项必须在位（ctest 与金样 smoke 共用**同一份**）。
-        # R-041: 除三个契约测试（每晚必跑）外，按 UTC 日期轮转 -R 子集 —— 其余测试二进制
-        # 分批进 asan/ubsan/tsan（27 个 → 8 晚全覆盖）。取舍：不放宽 nightly 20min 硬顶
+        # R-041: 除四个契约测试（每晚必跑；M14-C6 起加入 test_event_stress，作为
+        #   ProgressMux/FileEvent 串行化契约的常驻竞态探针）外，按 UTC 日期轮转 -R 子集 —— 其余测试二进制
+        # 分批进 asan/ubsan/tsan（27→28 个（M14 新增 test_event_stress）→ 8 晚全覆盖）。取舍：不放宽 nightly 20min 硬顶
         # （每晚 +3 个测试二进制的构建/运行成本 ≈ 1min），选择面覆盖优先于每晚全量。
         run: |
           for v in ASAN_OPTIONS LSAN_OPTIONS; do
@@ -198,8 +216,8 @@ jobs:
           for ((i = 0; i < ${#all[@]}; i++)); do
             if (( i % 8 == day % 8 )); then rot+=("${all[$i]}"); fi
           done
-          targets="pp_test_scheduler_contract pp_test_pipeline_contract pp_test_enc_smoke"
-          re='^(test_scheduler_contract|test_pipeline_contract|test_enc_smoke'
+          targets="pp_test_scheduler_contract pp_test_pipeline_contract pp_test_enc_smoke pp_test_event_stress"
+          re='^(test_scheduler_contract|test_pipeline_contract|test_enc_smoke|test_event_stress'
           for t in "${rot[@]}"; do
             case " $targets " in *" pp_$t "*) continue ;; esac
             targets="$targets pp_$t"
@@ -210,13 +228,13 @@ jobs:
           echo "PP_SAN_RE=$re" >> "$GITHUB_ENV"
           echo "轮转子集（UTC 日 $day / 8）: ${rot[*]:-<无>}；ctest -R $re"
 
-      - name: configure + build ${{ env.PP_PRESET }}（photopipeline/pp_verify + 三个契约测试）
+      - name: configure + build ${{ env.PP_PRESET }}（photopipeline/pp_verify + 四个契约测试）
         run: |
           set -o pipefail
           T0=$(date +%s)
           cmake --preset "$PP_PRESET"
           T1=$(date +%s)
-          # R-041：目标集 = 三个契约测试 + 轮转子集（PP_SAN_TARGETS 由上一步写 GITHUB_ENV）
+          # R-041：目标集 = 四个契约测试 + 轮转子集（PP_SAN_TARGETS 由上一步写 GITHUB_ENV）
           cmake --build build/"$PP_PRESET" --target photopipeline pp_verify $PP_SAN_TARGETS
           T2=$(date +%s)
           {
@@ -232,7 +250,7 @@ jobs:
             --output-on-failure 2>&1 | tee "$RUNNER_TEMP/ctest-$PP_PRESET.log"
           echo -e "ctest $PP_PRESET（契约测试）\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
 
-      - name: ctest 防空跑断言（R-041：必须真的找到 ≥3 个契约测试）
+      - name: ctest 防空跑断言（R-041：必须真的找到 ≥4 个契约测试）
         # M12-C：ubsan job 曾因缺 env 步骤使 PP_SAN_RE 为空 ⇒ `ctest -R ""` 打印
         #   `No tests were found!!!` 但退出码 0 ⇒ 覆盖空窗假绿（绿轮 #47 日志原文见
         #   build/m12-ci/ubsan-green-47.log）。判据只增：空跑 / 用例数 <3 / 非 100% 通过一律红；
@@ -241,8 +259,8 @@ jobs:
           line=$(grep -E '^[0-9]+% tests passed' "$RUNNER_TEMP/ctest-$PP_PRESET.log" | tail -1)
           echo "ctest 结论行: $line"
           total=$(printf '%s' "$line" | sed -n 's/.*out of \([0-9][0-9]*\).*/\1/p')
-          if [ -z "$total" ] || [ "$total" -lt 3 ]; then
-            echo "::error::ctest 空跑或契约测试数不足（结论行: '${line:-<无>}'；R-041 目标集应含 ≥3 个契约测试）"
+          if [ -z "$total" ] || [ "$total" -lt 4 ]; then
+            echo "::error::ctest 空跑或契约测试数不足（结论行: '${line:-<无>}'；R-041 目标集应含 ≥4 个契约测试）"
             exit 1
           fi
           printf '%s' "$line" | grep -qE '^100% tests passed, 0 tests failed' || {
@@ -413,8 +431,9 @@ jobs:
         #   job 两次）⇒ PP_SAN_TARGETS/PP_SAN_RE 为空 ⇒ ctest 走 `-R ""` 空跑（绿轮 #47 job 日志
         #   原文 `No tests were found!!!`），ubsan 契约单测从未真正执行。本步骤与 asan/tsan 逐字同源，
         #   只把 env 期望集换成 UBSAN_OPTIONS（R-042：按 job 的期望集检查，不是三路共用一份）。
-        # R-041: 除三个契约测试（每晚必跑）外，按 UTC 日期轮转 -R 子集 —— 其余测试二进制
-        # 分批进 asan/ubsan/tsan（27 个 → 8 晚全覆盖）。
+        # R-041: 除四个契约测试（每晚必跑；M14-C6 起加入 test_event_stress，作为
+        #   ProgressMux/FileEvent 串行化契约的常驻竞态探针）外，按 UTC 日期轮转 -R 子集 —— 其余测试二进制
+        # 分批进 asan/ubsan/tsan（27→28 个（M14 新增 test_event_stress）→ 8 晚全覆盖）。
         run: |
           for v in UBSAN_OPTIONS; do
             [ -n "${!v}" ] || { echo "::error::sanitizer 选项 $v 未注入（R-042）"; exit 1; }
@@ -426,8 +445,8 @@ jobs:
           for ((i = 0; i < ${#all[@]}; i++)); do
             if (( i % 8 == day % 8 )); then rot+=("${all[$i]}"); fi
           done
-          targets="pp_test_scheduler_contract pp_test_pipeline_contract pp_test_enc_smoke"
-          re='^(test_scheduler_contract|test_pipeline_contract|test_enc_smoke'
+          targets="pp_test_scheduler_contract pp_test_pipeline_contract pp_test_enc_smoke pp_test_event_stress"
+          re='^(test_scheduler_contract|test_pipeline_contract|test_enc_smoke|test_event_stress'
           for t in "${rot[@]}"; do
             case " $targets " in *" pp_$t "*) continue ;; esac
             targets="$targets pp_$t"
@@ -439,13 +458,13 @@ jobs:
           echo "PP_SAN_TARGETS=$targets（轮转 UTC 日 $day / 8）"
           echo "PP_SAN_RE=$re"
 
-      - name: configure + build ${{ env.PP_PRESET }}（photopipeline/pp_verify + 三个契约测试）
+      - name: configure + build ${{ env.PP_PRESET }}（photopipeline/pp_verify + 四个契约测试）
         run: |
           set -o pipefail
           T0=$(date +%s)
           cmake --preset "$PP_PRESET"
           T1=$(date +%s)
-          # R-041：目标集 = 三个契约测试 + 轮转子集（PP_SAN_TARGETS 由上一步写 GITHUB_ENV）
+          # R-041：目标集 = 四个契约测试 + 轮转子集（PP_SAN_TARGETS 由上一步写 GITHUB_ENV）
           cmake --build build/"$PP_PRESET" --target photopipeline pp_verify $PP_SAN_TARGETS
           T2=$(date +%s)
           {
@@ -461,7 +480,7 @@ jobs:
             --output-on-failure 2>&1 | tee "$RUNNER_TEMP/ctest-$PP_PRESET.log"
           echo -e "ctest $PP_PRESET（契约测试）\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
 
-      - name: ctest 防空跑断言（R-041：必须真的找到 ≥3 个契约测试）
+      - name: ctest 防空跑断言（R-041：必须真的找到 ≥4 个契约测试）
         # M12-C：ubsan job 曾因缺 env 步骤使 PP_SAN_RE 为空 ⇒ `ctest -R ""` 打印
         #   `No tests were found!!!` 但退出码 0 ⇒ 覆盖空窗假绿（绿轮 #47 日志原文见
         #   build/m12-ci/ubsan-green-47.log）。判据只增：空跑 / 用例数 <3 / 非 100% 通过一律红；
@@ -470,8 +489,8 @@ jobs:
           line=$(grep -E '^[0-9]+% tests passed' "$RUNNER_TEMP/ctest-$PP_PRESET.log" | tail -1)
           echo "ctest 结论行: $line"
           total=$(printf '%s' "$line" | sed -n 's/.*out of \([0-9][0-9]*\).*/\1/p')
-          if [ -z "$total" ] || [ "$total" -lt 3 ]; then
-            echo "::error::ctest 空跑或契约测试数不足（结论行: '${line:-<无>}'；R-041 目标集应含 ≥3 个契约测试）"
+          if [ -z "$total" ] || [ "$total" -lt 4 ]; then
+            echo "::error::ctest 空跑或契约测试数不足（结论行: '${line:-<无>}'；R-041 目标集应含 ≥4 个契约测试）"
             exit 1
           fi
           printf '%s' "$line" | grep -qE '^100% tests passed, 0 tests failed' || {
@@ -635,8 +654,9 @@ jobs:
 
       - name: sanitizer env 就绪断言 + 夜间轮转子集（R-041/R-042）
         # R-042: job 级 sanitizer 选项必须在位（ctest 与金样 smoke 共用**同一份**）。
-        # R-041: 除三个契约测试（每晚必跑）外，按 UTC 日期轮转 -R 子集 —— 其余测试二进制
-        # 分批进 asan/ubsan/tsan（27 个 → 8 晚全覆盖）。取舍：不放宽 nightly 20min 硬顶
+        # R-041: 除四个契约测试（每晚必跑；M14-C6 起加入 test_event_stress，作为
+        #   ProgressMux/FileEvent 串行化契约的常驻竞态探针）外，按 UTC 日期轮转 -R 子集 —— 其余测试二进制
+        # 分批进 asan/ubsan/tsan（27→28 个（M14 新增 test_event_stress）→ 8 晚全覆盖）。取舍：不放宽 nightly 20min 硬顶
         # （每晚 +3 个测试二进制的构建/运行成本 ≈ 1min），选择面覆盖优先于每晚全量。
         run: |
           for v in TSAN_OPTIONS; do
@@ -649,8 +669,8 @@ jobs:
           for ((i = 0; i < ${#all[@]}; i++)); do
             if (( i % 8 == day % 8 )); then rot+=("${all[$i]}"); fi
           done
-          targets="pp_test_scheduler_contract pp_test_pipeline_contract pp_test_enc_smoke"
-          re='^(test_scheduler_contract|test_pipeline_contract|test_enc_smoke'
+          targets="pp_test_scheduler_contract pp_test_pipeline_contract pp_test_enc_smoke pp_test_event_stress"
+          re='^(test_scheduler_contract|test_pipeline_contract|test_enc_smoke|test_event_stress'
           for t in "${rot[@]}"; do
             case " $targets " in *" pp_$t "*) continue ;; esac
             targets="$targets pp_$t"
@@ -661,13 +681,13 @@ jobs:
           echo "PP_SAN_RE=$re" >> "$GITHUB_ENV"
           echo "轮转子集（UTC 日 $day / 8）: ${rot[*]:-<无>}；ctest -R $re"
 
-      - name: configure + build tsan（photopipeline/pp_verify + 三个契约测试）
+      - name: configure + build tsan（photopipeline/pp_verify + 四个契约测试）
         run: |
           set -o pipefail
           T0=$(date +%s)
           cmake --preset tsan
           T1=$(date +%s)
-          # R-041：目标集 = 三个契约测试 + 轮转子集（PP_SAN_TARGETS 由上一步写 GITHUB_ENV）
+          # R-041：目标集 = 四个契约测试 + 轮转子集（PP_SAN_TARGETS 由上一步写 GITHUB_ENV）
           cmake --build build/tsan --target photopipeline pp_verify $PP_SAN_TARGETS
           T2=$(date +%s)
           {
@@ -685,15 +705,15 @@ jobs:
             --output-on-failure 2>&1 | tee "$RUNNER_TEMP/ctest-tsan.log"
           echo -e "ctest tsan（契约测试）\t$(( $(date +%s) - T0 ))" >> "$RUNNER_TEMP/pp-steps.tsv"
 
-      - name: ctest 防空跑断言（R-041：必须真的找到 ≥3 个契约测试）
+      - name: ctest 防空跑断言（R-041：必须真的找到 ≥4 个契约测试）
         # M12-C：与 asan/ubsan 同款防空跑判据（空 `PP_SAN_RE` ⇒ ctest 空跑但退出码 0 的假绿通道）。
         #   判据只增：空跑 / 用例数 <3 / 非 100% 通过一律红。
         run: |
           line=$(grep -E '^[0-9]+% tests passed' "$RUNNER_TEMP/ctest-tsan.log" | tail -1)
           echo "ctest 结论行: $line"
           total=$(printf '%s' "$line" | sed -n 's/.*out of \([0-9][0-9]*\).*/\1/p')
-          if [ -z "$total" ] || [ "$total" -lt 3 ]; then
-            echo "::error::ctest 空跑或契约测试数不足（结论行: '${line:-<无>}'；R-041 目标集应含 ≥3 个契约测试）"
+          if [ -z "$total" ] || [ "$total" -lt 4 ]; then
+            echo "::error::ctest 空跑或契约测试数不足（结论行: '${line:-<无>}'；R-041 目标集应含 ≥4 个契约测试）"
             exit 1
           fi
           printf '%s' "$line" | grep -qE '^100% tests passed, 0 tests failed' || {

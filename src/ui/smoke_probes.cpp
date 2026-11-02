@@ -523,19 +523,22 @@ void MainWindow::Impl::smoke_probe_gui_r2() {
                 ++checked;
                 modals.clear();
                 start->click();
-                pump(120);
+                // M14 去抖（R-042 同类）：原固定 pump(120) 在机器高负载下会早于运行态置位
+                // （docs/m11-report 已登记的 run-guard 高负载偶发）→ 改为谓词等待。判据不变：
+                // 3s 内仍未进入运行态 = 真缺陷（下方 !running 断言照旧红）。
+                wait_for([this] { return running; }, 3000);
                 if (!modals.isEmpty()) {
                     ++bad;
-                    detail << QStringLiteral("r%d/modal-on-start=[%2]")
+                    detail << QStringLiteral("r%1/modal-on-start=[%2]")
                                   .arg(round)
                                   .arg(modals.join(QLatin1Char(',')));
                 }
                 if (!running) {
                     ++bad;
-                    detail << QStringLiteral("r%d/not-running").arg(round);
+                    detail << QStringLiteral("r%1/not-running").arg(round);
                 } else if (start->isEnabled()) {
                     ++bad;
-                    detail << QStringLiteral("r%d/start-enabled-in-run").arg(round);
+                    detail << QStringLiteral("r%1/start-enabled-in-run").arg(round);
                 }
                 if (running)
                     w->on_cancel();
@@ -3052,6 +3055,16 @@ void MainWindow::Impl::smoke_probe_filelist() {
         }
     }
     // 节头跨列（mockup .ghead 通栏）+ 展开态
+    // M14 去抖（R-042 同类）：视图侧状态（跨列节头/展开态）由 rebuild 的 singleShot(0)
+    // （apply_group_view_state）落地；高负载下固定的 pump 段可能早于该定时器触发。先按
+    // 「期望态」谓词等待（判据不变：超时后下方原断言仍会红）。
+    wait_for(
+        [&] {
+            const QModelIndex gi = groups->group_index(0);
+            return gi.isValid() && view->isExpanded(gi) &&
+                   view->visualRect(gi).width() >= view->viewport()->width() * 9 / 10;
+        },
+        5000);
     const QModelIndex g0 = groups->group_index(0);
     const QRect header_rect = view->visualRect(g0);
     std::printf("UI-SMOKE filelist-span: header=%dx%d viewport=%dx%d expanded=%d\n",
@@ -5629,14 +5642,61 @@ void MainWindow::Impl::smoke_probe_verification() {
 
     // ---- (a) 亮暗布局等价（§12-13）----
     {
-        wait_thumbs(kThumbWaitMs);
+        wait_thumbs(kThumbWaitMs); // 缩略图队列收敛（既有）
+        // 0.4.2（收口：去抖，不放宽判据）：隐藏页异步 probe/QSS 重放触发的 deferred layout 会让
+        // 暗/亮两快照取到不同一版几何（preset 定位：8 处失配全在 meta 隐藏页、整页同向 +10px）。
+        // 两次快照前统一布局收敛：等 follow probe 落地 + 逐页切页激活布局 + 回到原页。
+        const auto settle_layout = [this] {
+            wait_for([this] { return !meta::ProbeContext(page_meta).follow_pending(); }, 5000);
+            const int page_before = stack->currentIndex();
+            for (int i = 0; i < stack->count(); ++i) {
+                stack->setCurrentIndex(i);
+                pump(80);
+                if (QWidget *page = stack->widget(i);
+                    page != nullptr && page->layout() != nullptr) {
+                    page->layout()->activate();
+                }
+            }
+            stack->setCurrentIndex(page_before);
+            pump(120);
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+            w->layout()->activate();
+            pump(80);
+        };
+        settle_layout();
+        // 0.4.2 收口（第二轮去抖，判据不变）：settle_layout 在极高负载（16 线程 tidy 并发实测）
+        // 下仍可能取到 deferred 布局的中间态（暗/亮快照整页差 30px）⇒ 取「两次连续一致的快照」
+        // 才认为稳定；断言仍是 Dark→Light 全部 pp-* 控件逐项等价，只消除取样时点抖动。
+        const auto stable_snapshot = [&]() {
+            QList<Snap> prev = snapshot();
+            for (int attempt = 0; attempt < 20; ++attempt) {
+                pump(60);
+                const QList<Snap> cur = snapshot();
+                bool same = cur.size() == prev.size();
+                if (same) {
+                    for (int i = 0; i < cur.size(); ++i) {
+                        if (cur[i].key != prev[i].key || cur[i].geom != prev[i].geom ||
+                            cur[i].visible != prev[i].visible) {
+                            same = false;
+                            break;
+                        }
+                    }
+                }
+                prev = cur;
+                if (same)
+                    break;
+            }
+            return prev;
+        };
         const theme::ThemeMode want = theme_mode;
         set_theme_mode(theme::ThemeMode::Dark);
         pump(250);
-        const QList<Snap> dark = snapshot();
+        settle_layout();
+        const QList<Snap> dark = stable_snapshot();
         set_theme_mode(theme::ThemeMode::Light);
         pump(250);
-        const QList<Snap> light = snapshot();
+        settle_layout();
+        const QList<Snap> light = stable_snapshot();
         set_theme_mode(want); // 归位
         pump(250);
         equiv_n = int(dark.size());
@@ -6115,6 +6175,17 @@ void MainWindow::Impl::smoke_probe_rtl_mirror() {
         PageMeta rtl;
         ltr.set_tokens(tokens);
         rtl.set_tokens(tokens);
+        // 0.4.2（需求 1，用户裁定）：无行选中 = 空态，时间卡输入行会隐藏 → 本几何探针必须先
+        // 喂一个选中项（has_selection=true 即恢复行可见）。机械换锚：只加选中输入，判据/容差不动。
+        const QString mirror_fixture =
+            repo_root() + QStringLiteral("/tests/golden/meta/exif_full.jpg");
+        if (QFileInfo::exists(mirror_fixture)) {
+            ltr.set_selected_files(QStringList{mirror_fixture});
+            rtl.set_selected_files(QStringList{mirror_fixture});
+        } else {
+            sub(false, &sub_geom_bad,
+                QStringLiteral("geom-mirror fixture 缺失（%1）").arg(mirror_fixture));
+        }
         ltr.resize(800, 1200);
         rtl.resize(800, 1200);
         ltr.setLayoutDirection(Qt::LeftToRight);
@@ -9232,30 +9303,54 @@ void MainWindow::Impl::smoke_run(const QString &shots_dir) {
     // ---- M4-T11：分类面板自检（放在截图之后：自检会临时改写注册表并在结束时还原）----
     smoke_probe_classify();
 
-    // ---- M4-T12：主窗口接线面的活体断言 —— 无选中 → 首个文件 + 「(1/N)」（§5.2）----
-    //   （分类自检收尾已清空选中；此处只读页面钩子，不改列表/选中）
+    // ---- 0.4.2（需求 1/2，用户裁定）：主窗口接线面的活体断言 ----
+    //  旧合同「无选中 → 首个文件 + 「(1/N)」」已被用户需求废止（Lead 裁定登记
+    //  docs/m14-adjudications.md）。机械换锚（判据不放宽）：
+    //    ① 无行选中 → follow_count==0 且 hint==「未选择文件」（空态；不再是首文件）；
+    //    ② select_row(0) → follow_count==1 且 hint 以首文件名开头（活体接线仍通）；
+    //    ③ 归位：清空行选中（后续探针/冻结截图基线不依赖选中面）。
     if (!model->empty()) {
+        const auto hint_text_of = [this]() {
+            const auto *hint = page_meta->findChild<QLabel *>(meta::objname::kInfoHint);
+            return hint != nullptr && hint->property("ppFullText").isValid()
+                       ? hint->property("ppFullText").toString()
+                       : (hint != nullptr ? hint->text() : QString());
+        };
+        const QString first_name =
+            QFileInfo(QString::fromStdString(model->row(0).entry.src.string())).fileName();
+        // ① 无行选中 = 空态（禁写由 meta 区段 sec_h / probe_meta_real_selection 覆盖）
+        if (view->selectionModel() != nullptr) {
+            view->selectionModel()->clearSelection();
+        }
         sync_selection();
         pump(150);
-        const meta::ProbeContext probe_meta(page_meta);
-        const int follow_count = probe_meta.follow_count();
-        const QString follow_name = probe_meta.follow_name();
-        const auto *hint = page_meta->findChild<QLabel *>(meta::objname::kInfoHint);
-        const QString hint_text = hint != nullptr && hint->property("ppFullText").isValid()
-                                      ? hint->property("ppFullText").toString()
-                                      : (hint != nullptr ? hint->text() : QString());
-        const QString expected =
-            QStringLiteral("%1 (1/%2)")
-                .arg(QFileInfo(QString::fromStdString(model->row(0).entry.src.string())).fileName())
-                .arg(model->size());
-        std::printf("UI-SMOKE meta-follow-live: count=%d name=%s hint=%s\n", follow_count,
-                    qUtf8Printable(QFileInfo(follow_name).fileName()), qUtf8Printable(hint_text));
+        const int count_empty = meta::ProbeContext(page_meta).follow_count();
+        const QString hint_empty = hint_text_of();
+        // ② 单行选中：页面跟随该行（原「无选中回落首文件」断言的等价接线覆盖）
+        select_row(0);
+        pump(150);
+        const int count_single = meta::ProbeContext(page_meta).follow_count();
+        const QString hint_single = hint_text_of();
+        std::printf("UI-SMOKE meta-follow-live: empty(count=%d hint=%s single(count=%d hint=%s) "
+                    "first=%s\n",
+                    count_empty, qUtf8Printable(hint_empty), count_single,
+                    qUtf8Printable(hint_single), qUtf8Printable(first_name));
         std::fflush(stdout);
-        if (follow_count != 1 || hint_text != expected) {
-            smoke_fail(MainWindow::tr("无选中跟随未回落到首个文件（count=%1 hint=%2 want=%3）")
-                           .arg(follow_count)
-                           .arg(hint_text, expected));
+        if (count_empty != 0 || hint_empty != QStringLiteral("未选择文件") || count_single != 1 ||
+            !hint_single.startsWith(first_name)) {
+            smoke_fail(MainWindow::tr("无选中空态/单行跟随活体断言不符（empty=%1/%2 "
+                                      "single=%3/%4 first=%5）")
+                           .arg(count_empty)
+                           .arg(hint_empty)
+                           .arg(count_single)
+                           .arg(hint_single, first_name));
         }
+        // ③ 归位：清空行选中（元数据页回空态；后续探针/截图不依赖选中面）
+        if (view->selectionModel() != nullptr) {
+            view->selectionModel()->clearSelection();
+        }
+        sync_selection();
+        pump(150);
     }
 
     // ---- GUI-R2 回归探针（docs/gui-review-0.3.0-r2.md）：下拉一致性 / 格式卡对齐 /
@@ -10886,8 +10981,11 @@ void MainWindow::Impl::smoke_probe_output_geometry() {
         const auto *preset = page.findChild<QComboBox *>(QStringLiteral("pp-preset-combo"));
         const auto *save = page.findChild<QPushButton *>(QStringLiteral("pp-preset-save"));
         const auto *remove = page.findChild<QPushButton *>(QStringLiteral("pp-preset-delete"));
+        // 0.4.2 / M14-A13（需求 3）：占位文本**机械换锚** —— 旧「未选择预设」（幽灵态）已删除，
+        // 新 = 诚实状态说明「当前配置未保存为预设」；保存/删除禁用语义不变。
         expect("preset-placeholder",
-               preset != nullptr && preset->placeholderText() == QStringLiteral("未选择预设") &&
+               preset != nullptr &&
+                   preset->placeholderText() == QStringLiteral("当前配置未保存为预设") &&
                    save != nullptr && !save->isEnabled() && !save->toolTip().isEmpty() &&
                    remove != nullptr && !remove->isEnabled(),
                QStringLiteral("ph=\"%1\" save=%2 del=%3")
@@ -11085,6 +11183,17 @@ void MainWindow::Impl::smoke_probe_output_geometry() {
 // 新增字段（M12）：default-selected / no-unselected / default-protected / save-default /
 //   jpeg-adaptive / heif-apple-crf / legacy-migrated / png-no-adaptive /
 //   factory-seed / factory-idem / factory-migrate / global-detached。
+//
+// 0.4.2 / M14-A13（需求 3 大预设重设计；**只增字段，旧字段名全保留、语义机械换锚**）：
+//   clears-source       旧：全局预设后下拉仍高亮 default（视觉锚）+ 注记「全局预设」
+//                       新：下拉**无选中项**（不再假装高亮）+ 占位「来自大预设：<名>」+
+//                       注记「值来自大预设「<名>」（基于格式预设 <stem>）」+ 保存禁用；
+//                       「点保存无覆盖意图」与「列表刷新不触自动载入」判据不变（更强）。
+//   global-source       来源注记随大预设落盘（outputs[i].source_preset）且 apply 后显示真实来源
+//   global-source-custom 无来源注记 ⇒ 注记「（自定义参数）」
+//   global-source-rebind 显式重选格式预设 ⇒ 解除大预设来源、恢复真绑定（save 恢复可用）
+//   preset-binding      保存落点 = 绑定绝对路径（修 P4：不再用显示名拼新文件）
+//   preset-dirty        页面配置 ≠ 绑定预设基线 ⇒ 条目「（已修改）」；保存后归零
 //
 // 证据纪律：一切写操作只落 `.cache/tmp/ui-smoke-format-preset/` 下的临时根；真实数据目录
 // （便携模式下 = exe 目录）只允许启动 seed 迁移，探针不写；工厂目录只读。
@@ -12172,28 +12281,70 @@ void MainWindow::Impl::smoke_probe_format_preset() {
                         QString::fromStdString(gsave2))
                    .arg(g_summary));
 
-        // ---- clears-source（换锚）：「全局预设接管（detached）」——来源清空但仍是可恢复态 ----
-        // 旧 S-3 把下拉打回「未选择」；M12 无该状态 ⇒ 断言：会话来源清空（path 空）+ 下拉仍高亮
-        // default（视觉锚）+「保存」禁用（原因 tooltip 含「全局预设」）+ 注记含「全局预设」；
-        // 点「保存」不得产生覆盖意图（禁用按钮 = 不会用全局预设值覆盖 default.json）。
+        // ---- global-source（0.4.2 / 需求 3 / A13）：来源 = 大预设的**如实**显示 ----
+        // page 当前绑定 jpeg 的 default 格式预设 → collect 应带 source_preset="default"；
+        // 落盘 outputs[0].source_preset 与回读一致；apply 后 combo **无选中项**（不再假装高亮
+        // default）+ 占位「来自大预设：<名>」+ 注记「值来自大预设「<名>」（基于格式预设 default）」
+        // + 保存禁用（tooltip 指路另存）。
+        const bool source_collected =
+            collected.output_sources.size() == 1 &&
+            collected.output_sources[0].format_preset == std::string("default");
+        const bool source_json =
+            gspec.value(QStringLiteral("source_preset")).toString() == QStringLiteral("default");
+        const bool source_roundtrip =
+            greload.output_sources.size() == 1 &&
+            greload.output_sources[0].format_preset == std::string("default");
+        {
+            const QString gs_placeholder = combo != nullptr ? combo->placeholderText() : QString();
+            const QString gs_note = full_text(QStringLiteral("pp-format-preset-note-jpeg"));
+            const bool gs_ok =
+                source_collected && source_json && source_roundtrip &&
+                page.current_format_preset(fmt).isEmpty() && page.format_preset_detached(fmt) &&
+                page.format_preset_global_source(fmt) == QStringLiteral("smoke-global-adaptive") &&
+                page.format_preset_based_on(fmt) == QStringLiteral("default") && combo != nullptr &&
+                combo->currentIndex() == -1 &&
+                gs_placeholder.contains(QStringLiteral("来自大预设")) &&
+                gs_placeholder.contains(QStringLiteral("smoke-global-adaptive")) &&
+                gs_note.contains(QStringLiteral("值来自大预设")) &&
+                gs_note.contains(QStringLiteral("基于格式预设 default")) && save != nullptr &&
+                !save->isEnabled() && save->toolTip().contains(QStringLiteral("另存"));
+            expect("global-source", gs_ok,
+                   QStringLiteral("collected=%1 json=%2 roundtrip=%3 source=\"%4\" "
+                                  "based-on=\"%5\" combo-index=%6 placeholder=\"%7\" "
+                                  "note=\"%8\" save-enabled=%9 tip=\"%10\"")
+                       .arg(source_collected ? 1 : 0)
+                       .arg(source_json ? 1 : 0)
+                       .arg(source_roundtrip ? 1 : 0)
+                       .arg(page.format_preset_global_source(fmt))
+                       .arg(page.format_preset_based_on(fmt))
+                       .arg(combo != nullptr ? combo->currentIndex() : -2)
+                       .arg(gs_placeholder)
+                       .arg(gs_note)
+                       .arg(save != nullptr && save->isEnabled() ? 1 : 0)
+                       .arg(save != nullptr ? save->toolTip() : QString()));
+        }
+
+        // ---- clears-source（**0.4.2 机械换锚**）：来源清空 + 自动载入抑制 + 无覆盖意图 ----
+        // 旧语义（M12）：下拉仍高亮 default + 注记含「全局预设」；0.4.2 起**不再假装高亮**
+        // （卡值不是 default 的内容）⇒ 换锚为：下拉无选中项 + 占位「来自大预设：<名>」+
+        // 注记「值来自大预设「<名>」（基于格式预设 default）」；「保存」禁用（tooltip 指路
+        // 另存）+ 点「保存」不产生覆盖意图。抑制验证：列表刷新（页签重激活真实路径）**不得**
+        // 触发 default 自动载入 —— 否则大预设值会被冲掉。
         {
             const QString s3_note = full_text(QStringLiteral("pp-format-preset-note-jpeg"));
             const bool source_cleared =
                 page.current_format_preset(fmt).isEmpty() && page.format_preset_detached(fmt) &&
-                combo != nullptr && combo->count() >= 1 &&
-                is_default_path(combo->itemData(combo->currentIndex(), Qt::UserRole).toString()) &&
+                combo != nullptr && combo->currentIndex() == -1 &&
+                combo->placeholderText().contains(QStringLiteral("来自大预设")) &&
                 save != nullptr && !save->isEnabled() &&
-                save->toolTip().contains(QStringLiteral("全局预设")) &&
-                s3_note.contains(QStringLiteral("全局预设"));
-            // 抑制验证：列表刷新（= 页签重激活的真实路径）**不得**触发 default 自动载入 ——
-            // 否则全局预设值会被 default 冲掉（Lead 裁定口径）。
+                s3_note.contains(QStringLiteral("值来自大预设"));
             refresh_page(factory_root);
             const QString after_refresh_note =
                 full_text(QStringLiteral("pp-format-preset-note-jpeg"));
             const bool auto_load_suppressed =
                 page.current_format_preset(fmt).isEmpty() && page.format_preset_detached(fmt) &&
-                save != nullptr && !save->isEnabled() &&
-                after_refresh_note.contains(QStringLiteral("全局预设"));
+                combo != nullptr && combo->currentIndex() == -1 && save != nullptr &&
+                !save->isEnabled() && after_refresh_note.contains(QStringLiteral("值来自大预设"));
             int save_hits = 0;
             const QMetaObject::Connection save_conn =
                 QObject::connect(&page, &PageOutput::format_preset_save_requested, &page,
@@ -12205,23 +12356,72 @@ void MainWindow::Impl::smoke_probe_format_preset() {
             expect("global-detached-source",
                    source_cleared && auto_load_suppressed && save_hits == 0,
                    QStringLiteral("cleared=%1 suppressed=%2 detached=%3 path=\"%4\" "
-                                  "combo-item=\"%5\" save-enabled=%6 tip=\"%7\" note=\"%8\" "
+                                  "combo-index=%5 save-enabled=%6 tip=\"%7\" note=\"%8\" "
                                   "save-hits=%9")
                        .arg(source_cleared ? 1 : 0)
                        .arg(auto_load_suppressed ? 1 : 0)
                        .arg(page.format_preset_detached(fmt) ? 1 : 0)
                        .arg(page.current_format_preset(fmt))
-                       .arg(combo != nullptr
-                                ? combo->itemData(combo->currentIndex(), Qt::UserRole).toString()
-                                : QString())
+                       .arg(combo != nullptr ? combo->currentIndex() : -2)
                        .arg(save != nullptr && save->isEnabled() ? 1 : 0)
                        .arg(save != nullptr ? save->toolTip() : QString())
                        .arg(s3_note)
                        .arg(save_hits));
         }
 
+        // ---- global-source-custom：大预设里该输出无来源注记 ⇒ 注记写「（自定义参数）」----
+        {
+            pp::PresetData custom_preset = greload;
+            custom_preset.name = "smoke-global-custom";
+            custom_preset.output_sources.clear();
+            page.apply_preset(custom_preset);
+            pump(150);
+            const QString gc_note = full_text(QStringLiteral("pp-format-preset-note-jpeg"));
+            const bool gc_ok =
+                page.format_preset_detached(fmt) &&
+                page.format_preset_global_source(fmt) == QStringLiteral("smoke-global-custom") &&
+                page.format_preset_based_on(fmt).isEmpty() && combo != nullptr &&
+                combo->currentIndex() == -1 && gc_note.contains(QStringLiteral("自定义参数")) &&
+                combo->placeholderText().contains(QStringLiteral("smoke-global-custom"));
+            expect("global-source-custom", gc_ok,
+                   QStringLiteral("source=\"%1\" based-on=\"%2\" placeholder=\"%3\" note=\"%4\"")
+                       .arg(page.format_preset_global_source(fmt))
+                       .arg(page.format_preset_based_on(fmt))
+                       .arg(combo != nullptr ? combo->placeholderText() : QString())
+                       .arg(gc_note));
+        }
+
+        // ---- global-source-rebind：显式重选格式预设 → 解除大预设来源、恢复真绑定 ----
+        {
+            const int rebind_index = default_item_index();
+            activate(rebind_index);
+            const QString rb_note = full_text(QStringLiteral("pp-format-preset-note-jpeg"));
+            const bool rb_ok = rebind_index >= 0 && last_load_error.isEmpty() &&
+                               !page.format_preset_detached(fmt) &&
+                               page.format_preset_global_source(fmt).isEmpty() &&
+                               page.format_preset_based_on(fmt).isEmpty() && save != nullptr &&
+                               save->isEnabled() &&
+                               is_default_path(stem_of(page.current_format_preset(fmt))) &&
+                               rb_note.contains(QStringLiteral("来自格式预设")) &&
+                               page.format_preset_global_source(fmt).isEmpty();
+            expect("global-source-rebind", rb_ok,
+                   QStringLiteral("index=%1 err=\"%2\" detached=%3 source=\"%4\" "
+                                  "save-enabled=%5 path=%6 note=\"%7\"")
+                       .arg(rebind_index)
+                       .arg(last_load_error)
+                       .arg(page.format_preset_detached(fmt) ? 1 : 0)
+                       .arg(page.format_preset_global_source(fmt))
+                       .arg(save != nullptr && save->isEnabled() ? 1 : 0)
+                       .arg(page.current_format_preset(fmt))
+                       .arg(rb_note));
+        }
+
         // 执行面门控（A20）：开 → config_base 下发策略；关 → 不下发（引擎旧路径），
         // 但采集面（collect_preset）仍保留策略文本（关掉开关再保存不丢文本）。
+        // 0.4.2 / A13：复位到 greload —— 上面的来源显示用例改过页面来源/绑定；本门控仍验证
+        // 同一份大预设的「开启时下发策略」语义（g_policy 来自 greload）。
+        page.apply_preset(greload);
+        pump(150);
         const pp::RunConfig cfg_on = page.config_base();
         const bool exec_on = cfg_on.outputs.size() == 1 && cfg_on.outputs[0].adaptive_enabled &&
                              cfg_on.outputs[0].adaptive_policy == g_policy.toStdString();
@@ -12275,6 +12475,97 @@ void MainWindow::Impl::smoke_probe_format_preset() {
                    .arg(gd_note));
     }
 
+    // ---- preset-binding / preset-dirty（0.4.2 / 需求 3 / A13；生产页 + 主窗真实链路）----
+    //   * preset-binding（修 P4）：保存落点 = **当前绑定绝对路径**（旧实现拿 combo 显示名拼新
+    //     文件名 → JSON name ≠ 文件名 stem 时会写出第二份文件、不覆盖当前预设）；
+    //   * preset-dirty：页面配置 ≠ 绑定预设基线 → combo 条目带「（已修改）」；保存后归零。
+    // 临时预设只落 `.cache/tmp/...`；会话态用完逐项还原（不影响后续探针）。
+    {
+        auto *po = page_output;
+        const QString saved_last = last_preset_path;
+        const QString saved_name = preset_display_name;
+        const QByteArray saved_baseline = preset_baseline;
+        const bool saved_dirty = preset_dirty;
+        const QString saved_template = po != nullptr ? po->output_template() : QString();
+        bool binding_ok = false;
+        bool dirty_ok = false;
+        QString binding_diag;
+        QString dirty_diag;
+        if (po != nullptr) {
+            const std::filesystem::path pdir =
+                std::filesystem::path((base + "/preset-binding").toStdString());
+            std::error_code pec;
+            std::filesystem::remove_all(pdir, pec);
+            std::filesystem::create_directories(pdir, pec);
+            const std::filesystem::path bound = pdir / "bound.json";
+            const std::filesystem::path ghost =
+                pp::platform::presets_dir() / "probe-should-not-create.json";
+            pp::PresetData bound_preset = po->collect_preset(QStringLiteral("smoke-binding"));
+            if (page_meta != nullptr)
+                bound_preset.rules = page_meta->rules();
+            const std::string bsave = pp::ui::save_preset(bound, bound_preset);
+            const QByteArray bound_bytes_before = read_bytes(bound);
+            last_preset_path = QString::fromStdString(bound.string());
+            preset_display_name = QStringLiteral("smoke-binding");
+            po->set_preset_list(
+                {{QString::fromStdString(bound.string()), QStringLiteral("smoke-binding")}});
+            po->set_current_preset(last_preset_path);
+            record_preset_baseline(QStringLiteral("smoke-binding"));
+            const bool initially_clean = !preset_dirty && !po->current_preset_dirty();
+            po->set_output_template(QStringLiteral("$format/probe-$file"));
+            refresh_preset_dirty();
+            auto *pcombo = po->findChild<QComboBox *>(QStringLiteral("pp-preset-combo"));
+            const bool dirty_marked =
+                preset_dirty && po->current_preset_dirty() && pcombo != nullptr &&
+                pcombo->currentText().contains(QStringLiteral("已修改")) &&
+                pcombo->currentText().contains(QStringLiteral("smoke-binding"));
+            // 保存：传入的名字**不得**成为新文件名（旧 bug 会写出
+            // presets_dir/probe-should-not-create.json 且不覆盖绑定文件）。
+            save_preset_named(QStringLiteral("probe-should-not-create"));
+            pp::PresetData reloaded;
+            const std::string rerr = pp::ui::load_preset(bound, reloaded);
+            std::error_code gec2;
+            const bool ghost_absent = !std::filesystem::exists(ghost, gec2);
+            const bool content_written =
+                rerr.empty() && reloaded.output_template == "$format/probe-$file";
+            // Lead 复核点 2：落点仍是**同一文件**（同一绝对路径 + 原文件字节发生变化 = 真被
+            // 覆盖写，而非另建一份）；再次载入值一致（content_written）。
+            const bool bytes_changed =
+                !bound_bytes_before.isEmpty() && read_bytes(bound) != bound_bytes_before;
+            const bool dirty_cleared = !preset_dirty && !po->current_preset_dirty() &&
+                                       last_preset_path == QString::fromStdString(bound.string());
+            binding_ok = bsave.empty() && ghost_absent && content_written && bytes_changed &&
+                         last_preset_path == QString::fromStdString(bound.string());
+            dirty_ok = initially_clean && dirty_marked && dirty_cleared;
+            binding_diag = QStringLiteral("save=\"%1\" ghost-absent=%2 content=%3 bytes-changed=%4 "
+                                          "reload=\"%5\" bound=%6")
+                               .arg(QString::fromStdString(bsave))
+                               .arg(ghost_absent ? 1 : 0)
+                               .arg(content_written ? 1 : 0)
+                               .arg(bytes_changed ? 1 : 0)
+                               .arg(QString::fromStdString(rerr))
+                               .arg(last_preset_path);
+            dirty_diag = QStringLiteral("clean0=%1 dirty-marked=%2 dirty-cleared=%3 text=\"%4\"")
+                             .arg(initially_clean ? 1 : 0)
+                             .arg(dirty_marked ? 1 : 0)
+                             .arg(dirty_cleared ? 1 : 0)
+                             .arg(pcombo != nullptr ? pcombo->currentText() : QString());
+            // 还原会话态 + 页面模板（其余页面配置全程未动）
+            po->set_output_template(saved_template);
+            last_preset_path = saved_last;
+            preset_display_name = saved_name;
+            preset_baseline = saved_baseline;
+            preset_dirty = saved_dirty;
+            po->set_preset_note(QString());
+            refresh_preset_card();
+            if (!saved_last.isEmpty() && saved_baseline.isEmpty())
+                record_preset_baseline(preset_display_name);
+            po->set_current_preset_dirty(preset_dirty);
+        }
+        expect("preset-binding", binding_ok, binding_diag);
+        expect("preset-dirty", dirty_ok, dirty_diag);
+    }
+
     const int bad_count = static_cast<int>(bad.size());
     // 行内字段 = **各断言组的真实结论**（组名进了 bad ⇒ 0）：不打印任何未经断言证明的 1，
     // 也不因为别的组失败而把本组「看起来过了」（§诚实显示）。
@@ -12287,6 +12578,8 @@ void MainWindow::Impl::smoke_probe_format_preset() {
         return 1;
     };
     // M12：字段只增 —— 旧字段名全部保留（语义换锚，见函数头映射表）；新字段追加在行尾。
+    // 0.4.2 / A13：追加 global-source / global-source-custom / global-source-rebind /
+    // preset-binding / preset-dirty（大预设来源显式化 + 保存落点/已修改态）。
     std::printf(
         "UI-SMOKE format-preset: checked=%d bad=%d row=%d first=%d empty=%d prod=%d "
         "idle=%d collect=%d roundtrip=%d note=%d normalize=%d invalid-save=%d bytes=%d "
@@ -12296,7 +12589,9 @@ void MainWindow::Impl::smoke_probe_format_preset() {
         "clears-source=%d unselect-adaptive=%d "
         "default-selected=%d no-unselected=%d default-protected=%d save-default=%d "
         "jpeg-adaptive=%d heif-apple-crf=%d legacy-migrated=%d png-no-adaptive=%d "
-        "factory-seed=%d factory-idem=%d factory-migrate=%d global-detached=%d %s\n",
+        "factory-seed=%d factory-idem=%d factory-migrate=%d global-detached=%d "
+        "global-source=%d global-source-custom=%d global-source-rebind=%d "
+        "preset-binding=%d preset-dirty=%d %s\n",
         checked, bad_count, group_ok("row-exists"), group_ok("row-first"), group_ok("empty"),
         group_ok("prod-row"), group_ok("idle-buttons"), group_ok("collect"), group_ok("roundtrip"),
         group_ok("note-loaded"), group_ok("normalize-note"), group_ok("save-invalid"),
@@ -12309,6 +12604,8 @@ void MainWindow::Impl::smoke_probe_format_preset() {
         group_ok("save-default"), group_ok("jpeg-adaptive"), group_ok("heif-apple-crf"),
         group_ok("legacy-migrated"), group_ok("png-no-adaptive"), group_ok("factory-seed"),
         group_ok("factory-idem"), group_ok("factory-migrate"), group_ok("global-detached"),
+        group_ok("global-source"), group_ok("global-source-custom"),
+        group_ok("global-source-rebind"), group_ok("preset-binding"), group_ok("preset-dirty"),
         qUtf8Printable(bad.join(QLatin1Char(' '))));
     std::fflush(stdout);
     if (bad_count > 0) {
@@ -12522,7 +12819,9 @@ void MainWindow::Impl::probe_meta_sec_d(const MetaProbeCtx &c, const QString &sh
     const double pick_lon = c.pick_lon;
     const auto &gps_badge = c.gps_badge;
     const auto &gps_badge_visible = c.gps_badge_visible;
-    // ---- (d) GPS 规则：生效坐标显示 + 地图 center_on 生效坐标 + 单钉（D4）----
+    // ---- (d) GPS 卡：生效坐标只读标签 uniform 单值 + 地图 center_on 生效坐标 + 单钉（D4）----
+    //  0.4.2（需求 2）：原 4 个只读生效值框（view_lat/lon/alt/dir 四枚 QLineEdit）合并为
+    //  一行只读标签 pp-meta-gps-effective（objname::kGpsEffectiveText）；输入框本身即编辑/写入面。
     {
         pp::BatchRules rules;
         pp::GpsData gps;
@@ -12532,28 +12831,28 @@ void MainWindow::Impl::probe_meta_sec_d(const MetaProbeCtx &c, const QString &sh
         page.apply_rules(rules);
         pump(120);
         auto *map = page.findChild<pp::map::MapWidget *>();
-        const QString lat_text = edit_text(meta::objname::kPpMetaGpsLat);
-        const QString lon_text = edit_text(meta::objname::kPpMetaGpsLon);
+        const QString effective = full(meta::objname::kGpsEffectiveText);
         const bool marker = map != nullptr && map->has_marker();
         const double center_lat = map != nullptr ? map->center_lat() : 0.0;
         const double center_lon = map != nullptr ? map->center_lon() : 0.0;
         const bool centered =
             std::fabs(center_lat - pick_lat) < 1e-3 && std::fabs(center_lon - pick_lon) < 1e-3;
-        const bool mod = page.findChild<QLineEdit *>(meta::objname::kPpMetaGpsLat)
-                             ->property(theme::kModProperty)
-                             .toBool();
-        std::printf("UI-SMOKE meta-gps: lat=%s lon=%s marker=%d center=%.6f,%.6f centered=%d "
+        const auto *effective_label = page.findChild<QLabel *>(meta::objname::kGpsEffectiveText);
+        const bool mod =
+            effective_label != nullptr && effective_label->property(theme::kModProperty).toBool();
+        std::printf("UI-SMOKE meta-gps: effective=%s marker=%d center=%.6f,%.6f centered=%d "
                     "mod=%d\n",
-                    qUtf8Printable(lat_text), qUtf8Printable(lon_text), marker ? 1 : 0, center_lat,
-                    center_lon, centered ? 1 : 0, mod ? 1 : 0);
+                    qUtf8Printable(effective), marker ? 1 : 0, center_lat, center_lon,
+                    centered ? 1 : 0, mod ? 1 : 0);
         std::fflush(stdout);
-        if (lat_text != QStringLiteral("22.543100°") || lon_text != QStringLiteral("114.057900°") ||
-            !marker || !centered || !mod) {
-            smoke_fail(MainWindow::tr("GPS 生效值/地图跟随不符（lat=%1 lon=%2 marker=%3 "
-                                      "centered=%4）")
-                           .arg(lat_text, lon_text)
+        if (effective != QStringLiteral("22.543100°, 114.057900°") || !marker || !centered ||
+            !mod) {
+            smoke_fail(MainWindow::tr("GPS 生效坐标/地图跟随不符（effective=%1 marker=%2 "
+                                      "centered=%3 mod=%4）")
+                           .arg(effective)
                            .arg(marker ? 1 : 0)
-                           .arg(centered ? 1 : 0));
+                           .arg(centered ? 1 : 0)
+                           .arg(mod ? 1 : 0));
         }
     }
 }
@@ -12575,7 +12874,7 @@ void MainWindow::Impl::probe_meta_sec_e(const MetaProbeCtx &c, const QString &sh
     const auto &gps_badge = c.gps_badge;
     const auto &gps_badge_visible = c.gps_badge_visible;
     // ---- (e) 隐私剥除：时间/GPS 生效值 → 「将被移除」（§5.1；M5-T7：状态落卡头胶囊，
-    //   占位符只留输入示例 → 生效值框 placeholder 恒空）----
+    //   占位符只留输入示例 → 生效值不再用状态文案占位）----
     {
         pp::BatchRules rules;
         pp::TimeShift shift;
@@ -12586,17 +12885,16 @@ void MainWindow::Impl::probe_meta_sec_e(const MetaProbeCtx &c, const QString &sh
         page.apply_rules(rules);
         pump(80);
         const QString time_text = full(meta::objname::kTimeNew0);
-        const QString gps_lat = edit_text(meta::objname::kPpMetaGpsLat);
-        const QString gps_hint = placeholder(meta::objname::kPpMetaGpsLat);
+        const QString gps_effective = full(meta::objname::kGpsEffectiveText);
         const QString badge = gps_badge();
-        std::printf("UI-SMOKE meta-strip: time=%s gps-value=%s gps-placeholder=%s badge=%s\n",
-                    qUtf8Printable(time_text), qUtf8Printable(gps_lat), qUtf8Printable(gps_hint),
+        std::printf("UI-SMOKE meta-strip: time=%s gps-effective=%s badge=%s\n",
+                    qUtf8Printable(time_text), qUtf8Printable(gps_effective),
                     qUtf8Printable(badge));
         std::fflush(stdout);
-        if (time_text != QStringLiteral("将被移除") || !gps_lat.isEmpty() || !gps_hint.isEmpty() ||
+        if (time_text != QStringLiteral("将被移除") || !gps_effective.isEmpty() ||
             badge != QStringLiteral("将被移除") || !gps_badge_visible()) {
-            smoke_fail(MainWindow::tr("隐私剥除的生效值显示不符（time=%1 gps=%2/%3 badge=%4）")
-                           .arg(time_text, gps_lat, gps_hint, badge));
+            smoke_fail(MainWindow::tr("隐私剥除的生效值显示不符（time=%1 gps=%2 badge=%3）")
+                           .arg(time_text, gps_effective, badge));
         }
     }
 }
@@ -12626,23 +12924,20 @@ void MainWindow::Impl::probe_meta_sec_f(const MetaProbeCtx &c, const QString &sh
         const double center_before_lon = map != nullptr ? map->center_lon() : 0.0;
         page.apply_rules(rules);
         pump(120);
-        const QString gps_lat = edit_text(meta::objname::kPpMetaGpsLat);
-        const QString gps_hint = placeholder(meta::objname::kPpMetaGpsLat);
+        const QString gps_effective = full(meta::objname::kGpsEffectiveText);
         const QString badge = gps_badge();
         const bool marker = map != nullptr && map->has_marker();
         const bool kept = map != nullptr &&
                           std::fabs(map->center_lat() - center_before_lat) < 1e-9 &&
                           std::fabs(map->center_lon() - center_before_lon) < 1e-9;
-        std::printf(
-            "UI-SMOKE meta-gps-clear: value=%s placeholder=%s badge=%s marker=%d center-kept=%d\n",
-            qUtf8Printable(gps_lat), qUtf8Printable(gps_hint), qUtf8Printable(badge),
-            marker ? 1 : 0, kept ? 1 : 0);
+        std::printf("UI-SMOKE meta-gps-clear: effective=%s badge=%s marker=%d center-kept=%d\n",
+                    qUtf8Printable(gps_effective), qUtf8Printable(badge), marker ? 1 : 0,
+                    kept ? 1 : 0);
         std::fflush(stdout);
-        if (!gps_lat.isEmpty() || !gps_hint.isEmpty() || badge != QStringLiteral("将清除 GPS") ||
-            marker || !kept) {
-            smoke_fail(MainWindow::tr("清除 GPS 的生效值显示/地图语义不符（value=%1 ph=%2 "
-                                      "badge=%3 marker=%4 kept=%5）")
-                           .arg(gps_lat, gps_hint, badge)
+        if (!gps_effective.isEmpty() || badge != QStringLiteral("将清除 GPS") || marker || !kept) {
+            smoke_fail(MainWindow::tr("清除 GPS 的生效值显示/地图语义不符（effective=%1 "
+                                      "badge=%2 marker=%3 kept=%4）")
+                           .arg(gps_effective, badge)
                            .arg(marker ? 1 : 0)
                            .arg(kept ? 1 : 0));
         }
@@ -12748,17 +13043,18 @@ void MainWindow::Impl::probe_meta_sec_g2(const MetaProbeCtx &c, const QString &s
     const auto &gps_badge = c.gps_badge;
     const auto &gps_badge_visible = c.gps_badge_visible;
     // ---- (g2) EXIF 编辑器：例外生效值回显 + .mod（§9.2；T12 step 8）----
+    //  0.4.2（需求 5）：无批量规则 → 编辑器入参 = 单文件例外（旧 override 注入新模型）。
     {
-        pp::BatchRules rules;
         pp::TimeShift shift;
         shift.mode = pp::TimeShift::Mode::Delta;
         shift.hours = 2;
-        rules.time_shift = shift;
         pp::GpsData gps;
         gps.lat = pick_lat;
         gps.lon = pick_lon;
-        rules.gps = gps;
-        ExifEditor editor(fixture, rules, std::nullopt, w);
+        pp::MetadataOverride override_ex;
+        override_ex.time_shift = shift;
+        override_ex.gps = gps;
+        ExifEditor editor(fixture, pp::BatchRules{}, override_ex, w);
         editor.setProperty("pp_exif_editor_suppress_modal", true);
         editor.show();
         pump(300);
@@ -12800,8 +13096,8 @@ void MainWindow::Impl::probe_meta_sec_g2(const MetaProbeCtx &c, const QString &s
             }
         }
         // ---- M5-T10（A8 零字形）：树行标记只存在于 item data ----
-        // 探针：① 全树行文本里不得有 〔 〕 ● 字形；② 批量命中行 ≥ 1（本探针注入了 time_shift +
-        // gps 规则）且该行的 text 里也没有「批」字形（标记由 delegate 画成中性 pill）；
+        // 探针：① 全树行文本里不得有 〔 〕 ● 字形；② **0.4.2（需求 5）：无批量规则 → 「批」标记
+        // 恒 0 行**（role exif_roles::batch 保留但产品恒不写；探针机械换锚：batch==0）；
         // ③ 注入一次改值 → 该行 changed=true 且文字不带 ●、字色 = 令牌 accent、字重 700。
         {
             int leaves = 0;
@@ -12867,7 +13163,7 @@ void MainWindow::Impl::probe_meta_sec_g2(const MetaProbeCtx &c, const QString &s
                         "changed-marked=%d\n",
                         leaves, batch_rows, changed_rows, glyph_rows, changed_marked);
             std::fflush(stdout);
-            if (tree_host == nullptr || leaves == 0 || glyph_rows != 0 || batch_rows == 0 ||
+            if (tree_host == nullptr || leaves == 0 || glyph_rows != 0 || batch_rows != 0 ||
                 !changed_marked) {
                 smoke_fail(MainWindow::tr("EXIF 编辑器树行标记不符（leaves=%1 batch=%2 glyphs=%3 "
                                           "changed-marked=%4）")
@@ -12898,24 +13194,53 @@ void MainWindow::Impl::probe_meta_sec_h(const MetaProbeCtx &c, const QString &sh
     const double pick_lon = c.pick_lon;
     const auto &gps_badge = c.gps_badge;
     const auto &gps_badge_visible = c.gps_badge_visible;
-    // ---- (h) 无选中 → 首个文件 + 「(1/N)」提示（§5.2）----
+    // ---- (h) 0.4.2 需求 1（用户裁定）：无行选中 = 空态 + 控件禁用 + **零写入** ----
+    //  旧契约「无选中 → 首个文件 + (1/N)」已废止（Lead 裁定登记 docs/m14-adjudications.md）；
+    //  探针机械换锚（判据不放宽）：页面显示「未选择文件」、空态行可见、时间卡输入面隐藏/禁用、
+    //  且任何控件事件（含程序化写值 = 迟到事件）都不得产生一次 selection_edits_committed。
     {
         const QStringList batch{fixture, repo + QStringLiteral("/tests/golden/base/rgb8.png"),
                                 repo + QStringLiteral("/tests/golden/base/photo.jpg")};
         page.set_batch_files(batch);
-        page.set_selection(QList<MetaSelectionItem>{meta_probe_item(batch.first())},
-                           /*from_selection=*/false);
-        if (!wait_probe()) {
-            smoke_fail(MainWindow::tr("元数据页自检：无选中回退的 probe 未回填"));
+        page.set_selection(QList<MetaSelectionItem>(), /*from_selection=*/false);
+        pump(100);
+        int commits = 0;
+        QObject::connect(&page, &PageMeta::selection_edits_committed, &page,
+                         [&commits](const QList<MetaSelectionEdit> &) { ++commits; });
+        meta::MetaState *st = meta::state_of(&page);
+        auto *hours =
+            dynamic_cast<meta::DeltaSpin *>(page.findChild<QSpinBox *>(meta::objname::kDeltaHours));
+        auto *time_enable = dynamic_cast<formkit::SwitchControl *>(
+            page.findChild<QAbstractButton *>(meta::objname::kTimeEnable));
+        auto *seg = page.findChild<QWidget *>(meta::objname::kSeg);
+        const auto *info_empty_row = page.findChild<QWidget *>(meta::objname::kInfoEmptyRow);
+        const auto *time_empty_row = page.findChild<QWidget *>(meta::objname::kTimeEmptyRow);
+        if (hours != nullptr) {
+            hours->setValue(3); // 程序化写值（模拟迟到事件/绕过禁用）→ 不得产生提交
         }
-        pump(80);
+        pump(60);
         const QString hint = full(meta::objname::kInfoHint);
-        std::printf("UI-SMOKE meta-follow-fallback: hint=%s\n", qUtf8Printable(hint));
+        const bool empty_rows = info_empty_row != nullptr && info_empty_row->isVisible() &&
+                                time_empty_row != nullptr && time_empty_row->isVisible();
+        const bool controls_off = time_enable != nullptr && !time_enable->isEnabled() &&
+                                  seg != nullptr && !seg->isEnabled() && hours != nullptr &&
+                                  !hours->isEnabled();
+        const bool no_items = st != nullptr && st->follow.items.isEmpty();
+        const bool no_commit = commits == 0;
+        std::printf("UI-SMOKE meta-no-selection: hint=%s empty-rows=%d controls-off=%d "
+                    "items=%d commits=%d\n",
+                    qUtf8Printable(hint), empty_rows ? 1 : 0, controls_off ? 1 : 0,
+                    st != nullptr ? int(st->follow.items.size()) : -1, commits);
         std::fflush(stdout);
-        const QString expected =
-            QStringLiteral("%1 (1/%2)").arg(QFileInfo(fixture).fileName()).arg(batch.size());
-        if (hint != expected) {
-            smoke_fail(MainWindow::tr("无选中跟随提示不符（got=%1 want=%2）").arg(hint, expected));
+        if (hint != QStringLiteral("未选择文件") || !empty_rows || !controls_off || !no_items ||
+            !no_commit) {
+            smoke_fail(MainWindow::tr("无选中空态/禁写不符（hint=%1 empty=%2 controls=%3 "
+                                      "items=%4 commits=%5）")
+                           .arg(hint)
+                           .arg(empty_rows ? 1 : 0)
+                           .arg(controls_off ? 1 : 0)
+                           .arg(st != nullptr ? int(st->follow.items.size()) : -1)
+                           .arg(commits));
         }
     }
 }
@@ -12964,13 +13289,14 @@ void MainWindow::Impl::probe_meta_sec_i(const MetaProbeCtx &c, const QString &sh
             const auto *empty_row = page.findChild<QWidget *>(meta::objname::kInfoEmptyRow);
             const auto *empty_text = page.findChild<QLabel *>(meta::objname::kInfoEmpty);
             const auto *time_empty_row = page.findChild<QWidget *>(meta::objname::kTimeEmptyRow);
-            const auto *view_lat = page.findChild<QLineEdit *>(meta::objname::kPpMetaGpsLat);
+            // 0.4.2（需求 2）：只读生效 GPS 已是单行标签 pp-meta-gps-effective（view_* 四框删除）
+            const QString gps_effective = full(meta::objname::kGpsEffectiveText);
             const bool ok =
                 rows_hidden && empty_row != nullptr && empty_row->isVisible() &&
                 empty_text != nullptr &&
                 empty_text->text() == QStringLiteral("未选择文件，请在左侧列表选择照片") &&
-                time_empty_row != nullptr && time_empty_row->isVisible() && view_lat != nullptr &&
-                view_lat->text().isEmpty() && !gps_badge_visible();
+                time_empty_row != nullptr && time_empty_row->isVisible() &&
+                gps_effective.isEmpty() && !gps_badge_visible();
             meta_expect(
                 "empty", ok,
                 QStringLiteral("rows-hidden=%1 line=\"%2\" time-line=%3 gps-pill=%4")
@@ -13278,12 +13604,11 @@ void MainWindow::Impl::probe_meta_sec_i(const MetaProbeCtx &c, const QString &sh
             }
         }
 
-        // (i-6) 修 1-37：地图操作行固定在地图上方（核心动作不落进内滚盲区）+ 折叠行默认折叠
+        // (i-6) 修 1-37：地图操作行固定在地图上方（核心动作不落进内滚盲区）
+        //        + 0.4.2（需求 2）：原「批量 GPS 规则」折叠行已删除（探针机械换锚，见下）
         {
             const auto *ops_row = page.findChild<QWidget *>(meta::objname::kGpsOpsRow);
             const auto *map = page.findChild<pp::map::MapWidget *>(meta::objname::kMap);
-            const auto *rule_host = page.findChild<QWidget *>(meta::objname::kGpsRule);
-            const auto *rule_toggle = page.findChild<QToolButton *>(meta::objname::kGpsRuleToggle);
             const bool above =
                 ops_row != nullptr && map != nullptr &&
                 ops_row->mapTo(&page, QPoint(0, 0)).y() < map->mapTo(&page, QPoint(0, 0)).y();
@@ -13291,12 +13616,20 @@ void MainWindow::Impl::probe_meta_sec_i(const MetaProbeCtx &c, const QString &sh
                         QStringLiteral("ops-y=%1 map-y=%2")
                             .arg(ops_row != nullptr ? ops_row->mapTo(&page, QPoint(0, 0)).y() : -1)
                             .arg(map != nullptr ? map->mapTo(&page, QPoint(0, 0)).y() : -1));
-            meta_expect("rule-folded",
-                        rule_toggle != nullptr && rule_host != nullptr && !rule_host->isVisible() &&
-                            !rule_toggle->isChecked(),
-                        QStringLiteral("toggle=%1 host-visible=%2")
-                            .arg(rule_toggle != nullptr ? 1 : 0)
-                            .arg(rule_host != nullptr && rule_host->isVisible() ? 1 : 0));
+            // 0.4.2（需求 2）：原「批量 GPS 规则」折叠面（rule_toggle/rule_host 包着整块编辑面）
+            // 已删除 —— 探针机械换锚：断言这两个控件**不存在**，且 GPS 编辑面（经纬度输入）是
+            // 一等公民直接可见（不再是折叠行里的"规则"）。
+            const auto *rule_host = page.findChild<QWidget *>(meta::objname::kGpsRule);
+            const auto *rule_toggle = page.findChild<QToolButton *>(meta::objname::kGpsRuleToggle);
+            const auto *lat_input = page.findChild<QLineEdit *>(meta::objname::kGpsLat);
+            meta_expect("no-batch-gps-rule", rule_host == nullptr && rule_toggle == nullptr,
+                        QStringLiteral("rule-host=%1 rule-toggle=%2")
+                            .arg(rule_host != nullptr ? 1 : 0)
+                            .arg(rule_toggle != nullptr ? 1 : 0));
+            meta_expect("gps-edit-direct", lat_input != nullptr && lat_input->isVisible(),
+                        QStringLiteral("lat=%1 visible=%2")
+                            .arg(lat_input != nullptr ? 1 : 0)
+                            .arg(lat_input != nullptr && lat_input->isVisible() ? 1 : 0));
             // 操作行/搜索钮高 26（A7 按钮换锚）
             int btn_bad = 0;
             for (const QString &name :
@@ -14134,6 +14467,282 @@ void MainWindow::Impl::probe_meta_sec_k(const MetaProbeCtx &c, const QString &sh
     }
 }
 
+// ===========================================================================
+// 0.4.2（需求 1/2）：**真实 MainWindow** 选择接线探针（文件列表行选中 → 元数据页）
+//
+// 独立 PageMeta 探针（(a)…(l)）只能验证页面自身；用户反馈的"右侧修改没落到选中图片"发生在
+// MainWindow ↔ 文件列表 ↔ PageMeta 的接线层。本节走真实控件树端到端取证：
+//   * 无行选中 → 页面空态「未选择文件」+ 可编辑控件禁用 + 任何编辑尝试零写入；
+//   * 单行选中 → 页面跟随该行；编辑只写该行（其余行零写入）；
+//   * 多行选中 → 编辑写**全部选中行**；信息卡逐字段聚合（单行显示 = oracle：同值直显 /
+//     异值「多个值」+ 逐文件 tooltip）；
+//   * 清空行选中 ≠ 清元数据修改（已写 exception 保留）；
+//   * 「勾选（参与运行集）」与「行选中（编辑作用域）」保持正交：本节只动行选中，不动勾选。
+// 本节自测自清（临时 exception 全清 + 恢复首行选中），不污染后续冻结截图/探针基线。
+// ===========================================================================
+void MainWindow::Impl::probe_meta_real_selection(int &checked, QStringList &bad) {
+    if (model == nullptr || view == nullptr || page_meta == nullptr || proxy == nullptr ||
+        groups == nullptr) {
+        ++checked;
+        bad << QStringLiteral("real-selection(widgets-missing)");
+        return;
+    }
+    const auto expect = [&checked, &bad](const char *name, bool ok, const QString &detail) {
+        ++checked;
+        if (!ok) {
+            bad << QStringLiteral("%1(%2)").arg(QString::fromLatin1(name), detail);
+        }
+    };
+    // 语义值读取：ElidedLabel 的全文在 ppFullText（与 smoke_probe_meta 的 full helper 同口径）
+    const auto page_full = [this](const QString &name) {
+        const auto *widget = page_meta->findChild<QLabel *>(name);
+        if (widget == nullptr) {
+            return QString();
+        }
+        const QVariant value = widget->property("ppFullText");
+        return value.isValid() ? value.toString() : widget->text();
+    };
+    const auto page_mixed = [this](const QString &name) {
+        const auto *widget = page_meta->findChild<QWidget *>(name);
+        return widget != nullptr && widget->property(meta::hook::kMixedProperty).toBool();
+    };
+    const auto page_tip = [this](const QString &name) {
+        const auto *widget = page_meta->findChild<QWidget *>(name);
+        return widget != nullptr ? widget->toolTip() : QString();
+    };
+    const int rows_total = int(model->size());
+    // 基线归零：清掉前面探针可能留下的元数据修改（避免污染本节作用域断言）
+    for (int r = 0; r < rows_total; ++r) {
+        model->set_exception(std::size_t(r), std::nullopt);
+    }
+    pump(160);
+    // 行选中：清选后逐行 Select|Rows（与用户 Ctrl+点击走同一条 selectionModel 路径）
+    const auto select_rows = [this](const QList<int> &rows) {
+        QItemSelectionModel *selection = view->selectionModel();
+        selection->clear();
+        QModelIndex current;
+        for (const int row : rows) {
+            if (row < 0 || std::size_t(row) >= model->size()) {
+                continue;
+            }
+            const QModelIndex filtered = proxy->mapFromSource(model->index(row, 0));
+            if (!filtered.isValid()) {
+                continue;
+            }
+            const QModelIndex group_idx = groups->mapFromSource(filtered);
+            if (!group_idx.isValid()) {
+                continue;
+            }
+            selection->select(group_idx, QItemSelectionModel::Select | QItemSelectionModel::Rows);
+            if (!current.isValid()) {
+                current = group_idx;
+            }
+        }
+        if (current.isValid()) {
+            selection->setCurrentIndex(current, QItemSelectionModel::NoUpdate);
+        }
+        pump(120);
+    };
+    const auto follow_count = [this] { return meta::ProbeContext(page_meta).follow_count(); };
+    const auto wait_follow_probe = [this] {
+        return wait_for([this] { return !meta::ProbeContext(page_meta).follow_pending(); }, 5000);
+    };
+    const auto row_has_exception = [this](int row) {
+        return row >= 0 && std::size_t(row) < model->size() &&
+               model->row(std::size_t(row)).entry.exception.has_value();
+    };
+    const auto row_hours = [this](int row) -> int {
+        if (row < 0 || std::size_t(row) >= model->size()) {
+            return -99;
+        }
+        const std::optional<pp::MetadataOverride> &ex =
+            model->row(std::size_t(row)).entry.exception;
+        return ex.has_value() && ex->time_shift.has_value() ? ex->time_shift->hours : -99;
+    };
+    auto *hours = dynamic_cast<meta::DeltaSpin *>(
+        page_meta->findChild<QSpinBox *>(meta::objname::kDeltaHours));
+    auto *time_enable = dynamic_cast<formkit::SwitchControl *>(
+        page_meta->findChild<QAbstractButton *>(meta::objname::kTimeEnable));
+    auto *seg = page_meta->findChild<QWidget *>(meta::objname::kSeg);
+    const auto *info_empty_row = page_meta->findChild<QWidget *>(meta::objname::kInfoEmptyRow);
+    if (hours == nullptr || time_enable == nullptr || seg == nullptr || rows_total < 2) {
+        ++checked;
+        bad << QStringLiteral("real-selection(widgets rows=%1 hours=%2 enable=%3)")
+                   .arg(rows_total)
+                   .arg(hours != nullptr ? 1 : 0)
+                   .arg(time_enable != nullptr ? 1 : 0);
+        return;
+    }
+    // —— (m1) 清空行选中 = 空态：页面「未选择文件」+ 可编辑控件禁用 + 尝试编辑零写入 ——
+    select_rows({});
+    wait_follow_probe();
+    pump(80);
+    const bool empty_hint = page_full(meta::objname::kInfoHint) == QStringLiteral("未选择文件");
+    const bool empty_row = info_empty_row != nullptr && info_empty_row->isVisible();
+    const bool controls_off = !time_enable->isEnabled() && !hours->isEnabled() && !seg->isEnabled();
+    hours->setValue(3); // 程序化写值（迟到事件/绕过禁用）→ 不得产生任何模型写入
+    pump(120);
+    bool any_exception = false;
+    for (int r = 0; r < rows_total; ++r) {
+        any_exception = any_exception || row_has_exception(r);
+    }
+    expect("empty-state",
+           empty_hint && empty_row && controls_off && follow_count() == 0 && !any_exception,
+           QStringLiteral("hint=\"%1\" row=%2 controls=%3 follow=%4 writes=%5")
+               .arg(page_full(meta::objname::kInfoHint))
+               .arg(empty_row ? 1 : 0)
+               .arg(controls_off ? 1 : 0)
+               .arg(follow_count())
+               .arg(any_exception ? 1 : 0));
+    // —— (m2) 单行选中：页面跟随该行；编辑只写该行（未选行零写入） ——
+    select_rows({0});
+    wait_follow_probe();
+    pump(100);
+    const QString row0_name =
+        QFileInfo(QString::fromStdString(model->row(0).entry.src.string())).fileName();
+    const bool single_follow = follow_count() == 1;
+    const bool single_hint = page_full(meta::objname::kInfoHint).startsWith(row0_name);
+    hours->setValue(2);
+    pump(160);
+    bool others_clean = true;
+    for (int r = 1; r < rows_total; ++r) {
+        others_clean = others_clean && !row_has_exception(r);
+    }
+    expect("single-scope", single_follow && single_hint && row_hours(0) == 2 && others_clean,
+           QStringLiteral("follow=%1 hint=\"%2\" row0-hours=%3 others-dirty=%4")
+               .arg(follow_count())
+               .arg(page_full(meta::objname::kInfoHint))
+               .arg(row_hours(0))
+               .arg(others_clean ? 0 : 1));
+    // —— (m3) 多行选中：信息卡逐字段聚合（单选显示 = oracle：同值→值 / 异值→「多个值」+tooltip） ——
+    model->set_exception(0, std::nullopt);
+    pump(140);
+    const std::array<QString, 9> info_slots = {
+        meta::objname::kInfoTime,     meta::objname::kInfoCamera, meta::objname::kInfoLens,
+        meta::objname::kInfoExposure, meta::objname::kInfoSize,   meta::objname::kInfoColor,
+        meta::objname::kInfoFile,     meta::objname::kInfoGps,    meta::objname::kInfoWb};
+    const auto read_slots = [&info_slots, &page_full]() {
+        QStringList out;
+        out.reserve(int(info_slots.size()));
+        for (const QString &name : info_slots) {
+            out << page_full(name);
+        }
+        return out;
+    };
+    select_rows({0});
+    wait_follow_probe();
+    pump(80);
+    const QStringList single0 = read_slots();
+    select_rows({1});
+    wait_follow_probe();
+    pump(80);
+    const QStringList single1 = read_slots();
+    select_rows({0, 1});
+    wait_follow_probe();
+    pump(120);
+    const QStringList multi = read_slots();
+    const QString mixed_text = PageMeta::tr(meta::kMixedValueText);
+    bool aggregate_ok = true;
+    bool saw_mixed = false;
+    QStringList aggregate_detail;
+    for (int i = 0; i < info_slots.size(); ++i) {
+        const bool same = single0.at(i) == single1.at(i);
+        if (same) {
+            if (multi.at(i) != single0.at(i)) {
+                aggregate_ok = false;
+                aggregate_detail << QStringLiteral("%1:uniform-mismatch").arg(info_slots.at(i));
+            }
+            continue;
+        }
+        saw_mixed = true;
+        // 只读标签的 mixed 视觉 = 文本「多个值」（C2.3：ppMixed 动态属性只用于输入控件/开关；
+        // 只读 ElidedLabel 不要求 ppMixed），tooltip = 逐文件值（含两个单值文本）。
+        (void)page_mixed; // helper 保留给输入控件面探针
+        const bool mixed_ok = multi.at(i) == mixed_text;
+        const QString tip = page_tip(info_slots.at(i));
+        const bool tip_ok =
+            !tip.isEmpty() && tip.contains(single0.at(i)) && tip.contains(single1.at(i));
+        if (!mixed_ok || !tip_ok) {
+            aggregate_ok = false;
+            aggregate_detail << QStringLiteral("%1:mixed=%2 tip=%3")
+                                    .arg(info_slots.at(i))
+                                    .arg(mixed_ok ? 1 : 0)
+                                    .arg(tip_ok ? 1 : 0);
+        }
+    }
+    expect("multi-aggregate", follow_count() == 2 && aggregate_ok && saw_mixed,
+           QStringLiteral("follow=%1 agg=%2 mixed-seen=%3 %4")
+               .arg(follow_count())
+               .arg(aggregate_ok ? 1 : 0)
+               .arg(saw_mixed ? 1 : 0)
+               .arg(aggregate_detail.join(QLatin1Char(' '))));
+    // —— (m4) 多行选中编辑：写全部选中行、不碰未选行；卡头三态 = 全开 on ——
+    hours->setValue(4);
+    pump(180);
+    bool rows_above_two_clean = true;
+    for (int r = 2; r < rows_total; ++r) {
+        rows_above_two_clean = rows_above_two_clean && !row_has_exception(r);
+    }
+    expect("multi-scope",
+           row_hours(0) == 4 && row_hours(1) == 4 && rows_above_two_clean &&
+               time_enable->isChecked() && !time_enable->is_partial(),
+           QStringLiteral("h0=%1 h1=%2 others-clean=%3 card=%4 partial=%5")
+               .arg(row_hours(0))
+               .arg(row_hours(1))
+               .arg(rows_above_two_clean ? 1 : 0)
+               .arg(time_enable->isChecked() ? 1 : 0)
+               .arg(time_enable->is_partial() ? 1 : 0));
+    // —— (m5) 清空行选中 ≠ 清元数据修改：空态但已写 override 保留 ——
+    select_rows({});
+    wait_follow_probe();
+    pump(100);
+    expect("empty-keeps-edits", follow_count() == 0 && row_hours(0) == 4 && row_hours(1) == 4,
+           QStringLiteral("follow=%1 h0=%2 h1=%3")
+               .arg(follow_count())
+               .arg(row_hours(0))
+               .arg(row_hours(1)));
+    // —— (m6) 过滤隐藏选中行：右侧不得显示/编辑看不见的文件（verifier after-11 残缺陷） ——
+    //  选中 row0 → 搜索串过滤掉全部行（含选中行）→ 期望：follow.items 清空（空态）、控件禁用、
+    //  程序化改值零写入；清过滤后恢复（后续复原步骤统一清 exception + 选首行）。
+    {
+        auto *search_edit = w->findChild<QLineEdit *>(QStringLiteral("pp-search"));
+        select_rows({0});
+        wait_follow_probe();
+        pump(100);
+        const int follow_visible = follow_count();
+        bool hidden_filtered = false;
+        bool hidden_disabled = false;
+        bool hidden_no_write = false;
+        if (search_edit != nullptr) {
+            search_edit->setText(QStringLiteral("zzz-pp-no-such-file-xyz"));
+            pump(240);
+            hidden_filtered = follow_count() == 0;
+            hidden_disabled = !hours->isEnabled() && !time_enable->isEnabled();
+            hours->setValue(5); // 程序化写值 → 不得落到被隐藏的选中文件
+            pump(160);
+            hidden_no_write = row_hours(0) != 5;
+            search_edit->clear();
+            pump(240);
+        }
+        expect("filter-hidden",
+               search_edit != nullptr && follow_visible == 1 && hidden_filtered &&
+                   hidden_disabled && hidden_no_write,
+               QStringLiteral("search=%1 follow=%2 hidden-follow=%3 disabled=%4 no-write=%5")
+                   .arg(search_edit != nullptr ? 1 : 0)
+                   .arg(follow_visible)
+                   .arg(hidden_filtered ? 1 : 0)
+                   .arg(hidden_disabled ? 1 : 0)
+                   .arg(hidden_no_write ? 1 : 0));
+    }
+    // —— 复原：清本节临时修改 + 恢复首行选中（后续 01-meta 截图/探针基线 = 正常单文件页态） ——
+    for (int r = 0; r < rows_total; ++r) {
+        model->set_exception(std::size_t(r), std::nullopt);
+    }
+    select_rows({0});
+    wait_follow_probe();
+    pump(140);
+}
+
 void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
     const QString repo = repo_root();
     const QString fixture =
@@ -14354,11 +14963,17 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
                 QStringLiteral("ph=\"%1\" mixed=%2")
                     .arg(gps_lat_edit != nullptr ? gps_lat_edit->placeholderText() : QString())
                     .arg(pp_mixed(gps_lat_edit) ? 1 : 0));
-            const auto *gps_lat_view = page.findChild<QLineEdit *>(meta::objname::kPpMetaGpsLat);
+            // 0.4.2（需求 2）：只读生效 GPS 已是单行标签（view_* 四框删除）→ mixed 断言换锚到
+            // pp-meta-gps-effective 的文本「多个值」+ ppMixed 属性（A 有源 GPS / B 无 = 异值）。
+            const auto *gps_effective_label =
+                page.findChild<QLabel *>(meta::objname::kGpsEffectiveText);
             sel_expect("mixed-gps-view",
-                       gps_lat_view != nullptr && gps_lat_view->text() == mixed_text,
-                       QStringLiteral("view=\"%1\"")
-                           .arg(gps_lat_view != nullptr ? gps_lat_view->text() : QString()));
+                       gps_effective_label != nullptr &&
+                           full(meta::objname::kGpsEffectiveText) == mixed_text &&
+                           pp_mixed(gps_effective_label),
+                       QStringLiteral("effective=\"%1\" mixed=%2")
+                           .arg(full(meta::objname::kGpsEffectiveText))
+                           .arg(pp_mixed(gps_effective_label) ? 1 : 0));
             // (l4)/(l5) 多选批量：两个文件各自写同字段（字段级合并不串扰各文件其它分量）
             select_paths(QStringList{fixture}, {ex_a.front()});
             days->setValue(1);
@@ -14477,12 +15092,15 @@ void MainWindow::Impl::smoke_probe_meta(const QString &shots_dir) {
                            .arg(hours->value())
                            .arg(hours->is_mixed() ? 1 : 0));
         }
+        // (m) 0.4.2（需求 1/2）：**真实 MainWindow** 端到端 —— 行选中 → 编辑作用域 / 多选聚合 /
+        // 无选中空态禁写（独立 PageMeta 探针只能验证页面自身；用户反馈发生在接线层）。
+        probe_meta_real_selection(sel_checked, sel_bad);
         std::printf("UI-SMOKE meta-selection: checked=%d bad=%d %s\n", sel_checked,
                     int(sel_bad.size()), qUtf8Printable(sel_bad.join(QLatin1Char(' '))));
         std::fflush(stdout);
         if (!sel_bad.isEmpty()) {
             smoke_fail(
-                MainWindow::tr("选择项级编辑/混合值/CreatorTool/自动海拔不符（M13 C2/C3/C5）：%1")
+                MainWindow::tr("选择项编辑/混合值/真实窗口编辑作用域不符（0.4.2 需求 1/2）：%1")
                     .arg(sel_bad.join(QLatin1Char(' '))));
         }
     }

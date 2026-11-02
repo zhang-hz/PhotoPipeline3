@@ -37,10 +37,12 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <filesystem>
 
 #include "platform/frameless.h" // M5-T10：无边框接线（与主窗/设置弹窗同一机制）
 #include "ui/formkit.h"         // M5-T10：行构造器（名称行 R2/R3）
 #include "ui/icons.h"           // M5-T10：标题栏矢量图标（C3 禁字形）
+#include "ui/preset_io.h"       // 0.4.2 / A13：坏文件「（损坏）」+ 原因 tooltip
 #include "ui/settings_dialog.h" // M5-T10：dialogkit（标题栏/按钮/焦点环/弹窗 QSS）
 #include "ui/theme.h"           // M5-T10：令牌（A6：灰字/按钮色不再硬编码）
 
@@ -54,6 +56,8 @@ constexpr const char *kEmptyHint = "preset_empty_hint"; // §9.1 U6-FIX
 constexpr const char *kLoad = "btn_load";
 constexpr const char *kSaveAs = "btn_saveas";
 constexpr const char *kDelete = "btn_delete";
+constexpr const char *kImport = "btn_import"; // 0.4.2 / A13
+constexpr const char *kExport = "btn_export"; // 0.4.2 / A13
 constexpr const char *kClose = "btn_close";
 
 // dynamic property 名（返回值状态）
@@ -67,12 +71,22 @@ QPushButton *button_of(const QObject *o, const char *name) {
     return o->findChild<QPushButton *>(QLatin1String(name));
 }
 
-// 保存名清洗：剔除 [A-Za-z0-9_\- ] 之外的字符，再折叠空白（simplified 同时去首尾）
+// 保存名清洗（0.4.2 / 需求 3 / A13）：只剔**文件系统非法字符 + 控制字符 + 首尾空白**，
+// 允许中文/空格（原 ASCII-only 清洗让中文界面的预设无法用中文名；与格式预设行的命名对话框
+// 口径对齐）。空 → 仅"另存为"禁用（主对话 2026-09-19 裁定不变）。
 QString sanitize_name(const QString &in) {
-    static const QRegularExpression disallowed(QStringLiteral("[^A-Za-z0-9_\\- ]"));
-    QString s = in;
-    s.remove(disallowed);
-    return s.simplified();
+    static const QString kIllegal = QStringLiteral("<>:\"/\\|?*");
+    QString s;
+    s.reserve(in.size());
+    for (const QChar ch : in) {
+        const ushort u = ch.unicode();
+        if (u < 0x20 || u == 0x7F)
+            continue; // 控制字符（含换行/制表）
+        if (kIllegal.contains(ch))
+            continue; // Windows 文件名非法字符（跨平台保守）
+        s.append(ch);
+    }
+    return s.trimmed();
 }
 
 // 单行省略标签（§9.3「全界面禁止文案折行（超长省略号）」；与 ui/mainwindow.cpp /
@@ -119,6 +133,17 @@ void refresh_buttons(const QDialog *dlg) {
         b->setToolTip(has_selection ? PresetsDialog::tr("删除选中的预设（需确认）")
                                     : PresetsDialog::tr("未选中预设：无可删除项"));
     }
+    // 0.4.2 / A13：导入恒可用（选文件即可）；导出需要选中一项。
+    if (QPushButton *b = button_of(dlg, kImport)) {
+        b->setEnabled(true);
+        b->setToolTip(PresetsDialog::tr("从任意 JSON 文件导入大预设（校验后复制进预设目录）"));
+    }
+    if (QPushButton *b = button_of(dlg, kExport)) {
+        b->setEnabled(has_selection);
+        b->setToolTip(has_selection
+                          ? PresetsDialog::tr("把选中的预设文件导出到任意路径（原样字节）")
+                          : PresetsDialog::tr("未选中预设：无可导出项"));
+    }
 }
 
 // 记录动作结果并关闭对话框（MainWindow 在 exec()==Accepted 后取 action()/name()/path()）
@@ -164,6 +189,20 @@ void do_delete(PresetsDialog *dlg) {
     commit(dlg, PresetsDialog::Action::Delete, name, path);
 }
 
+// 0.4.2 / 需求 3（A13）：导入 = 文件对话框 + 校验 + 复制（真正的 I/O 归 MainWindow，单一持有者）。
+void do_import(PresetsDialog *dlg) {
+    commit(dlg, PresetsDialog::Action::Import, QString(), QString());
+}
+
+// 0.4.2 / 需求 3（A13）：导出 = 把**选中的预设文件**原样导出到用户路径（写盘归 MainWindow）。
+void do_export(PresetsDialog *dlg) {
+    QListWidget *list = list_of(dlg);
+    QListWidgetItem *item = list != nullptr ? list->currentItem() : nullptr;
+    if (item == nullptr)
+        return;
+    commit(dlg, PresetsDialog::Action::Export, item->text(), item->data(Qt::UserRole).toString());
+}
+
 } // namespace
 
 PresetsDialog::PresetsDialog(const std::vector<std::pair<QString, QString>> &presets,
@@ -203,8 +242,21 @@ PresetsDialog::PresetsDialog(const std::vector<std::pair<QString, QString>> &pre
     ring->set_tokens(tokens);
 
     for (const auto &entry : presets) { // (path, display-name)
-        auto *item = new QListWidgetItem(entry.second, list);
+        // 0.4.2 / 需求 3（A13）：坏文件仍列出但标「（损坏）」+ 悬浮原因（不静默：选中载入会
+        // 弹完整中文错误；此标记只是让用户在点之前就知道）。
+        QString display = entry.second;
+        QString tip;
+        const std::filesystem::path file_path(entry.first.toStdString());
+        pp::PresetData probe;
+        const std::string load_err = pp::ui::load_preset(file_path, probe);
+        if (!load_err.empty()) {
+            display += tr("（损坏）");
+            tip = tr("该预设文件无法载入：%1").arg(QString::fromStdString(load_err));
+        }
+        auto *item = new QListWidgetItem(display, list);
         item->setData(Qt::UserRole, entry.first);
+        if (!tip.isEmpty())
+            item->setToolTip(tip);
     }
 
     // §9.1 U6-FIX：空列表灰字提示（列表非空时隐藏）；灰字走 palette（全仓同款做法）
@@ -231,7 +283,7 @@ PresetsDialog::PresetsDialog(const std::vector<std::pair<QString, QString>> &pre
     name_edit->setFont(theme::font(theme::Typography::body_px));
     name_edit->setProperty(dialogkit::kFieldProperty, QString::fromLatin1(dialogkit::kFieldInput));
     name_edit->setAccessibleName(tr("名称"));
-    name_edit->setToolTip(tr("预设名（仅保留字母/数字/下划线/连字符/空格）"));
+    name_edit->setToolTip(tr("预设名（允许中文/空格；仅剔除文件名非法字符）"));
 
     // 名称行：R2/R3 口径（标签轨 80 右对齐 + 长档字段；单位/范围位不占标签位）
     const formkit::Row name_row =
@@ -248,6 +300,14 @@ PresetsDialog::PresetsDialog(const std::vector<std::pair<QString, QString>> &pre
     auto *delete_btn = dialogkit::make_button(body, tr("删除"), /*primary=*/false);
     delete_btn->setObjectName(QLatin1String(kDelete));
     delete_btn->setToolTip(tr("删除选中的预设（需确认）"));
+    // 0.4.2 / 需求 3（A13）：文件管理两钮（与格式预设行的导入/导出对齐）—— 大预设可跨机器
+    // 复用，但预设目录埋在数据目录里，没有导入/导出只能手工拷文件。
+    auto *import_btn = dialogkit::make_button(body, tr("导入…"), /*primary=*/false);
+    import_btn->setObjectName(QLatin1String(kImport));
+    import_btn->setToolTip(tr("从任意 JSON 文件导入大预设（校验后复制进预设目录）"));
+    auto *export_btn = dialogkit::make_button(body, tr("导出…"), /*primary=*/false);
+    export_btn->setObjectName(QLatin1String(kExport));
+    export_btn->setToolTip(tr("把选中的预设文件导出到任意路径（原样字节）"));
     auto *close_btn = dialogkit::make_button(body, tr("关闭"), /*primary=*/false);
     close_btn->setObjectName(QLatin1String(kClose));
 
@@ -255,6 +315,8 @@ PresetsDialog::PresetsDialog(const std::vector<std::pair<QString, QString>> &pre
     button_row->addWidget(load_btn);
     button_row->addWidget(saveas_btn);
     button_row->addWidget(delete_btn);
+    button_row->addWidget(import_btn);
+    button_row->addWidget(export_btn);
     button_row->addStretch(1);
     button_row->addWidget(close_btn);
 
@@ -284,11 +346,24 @@ PresetsDialog::PresetsDialog(const std::vector<std::pair<QString, QString>> &pre
     connect(load_btn, &QPushButton::clicked, this, [this] { do_load(this); });
     connect(saveas_btn, &QPushButton::clicked, this, [this] { do_save_as(this); });
     connect(delete_btn, &QPushButton::clicked, this, [this] { do_delete(this); });
+    connect(import_btn, &QPushButton::clicked, this, [this] { do_import(this); });
+    connect(export_btn, &QPushButton::clicked, this, [this] { do_export(this); });
     connect(close_btn, &QPushButton::clicked, this, &QDialog::reject);
+
+    // 0.4.2 / A13：当前绑定预设（suggested_name）在列表中预选中，用户一进来就看到"现在用哪个"。
+    if (!suggested_name.isEmpty()) {
+        for (int i = 0; i < list->count(); ++i) {
+            if (list->item(i)->text() == suggested_name ||
+                list->item(i)->text() == suggested_name + tr("（损坏）")) {
+                list->setCurrentRow(i);
+                break;
+            }
+        }
+    }
 
     update_empty_hint(this); // §9.1 U6-FIX：空列表才显示灰字提示
     refresh_buttons(this);
-    resize(420, 360);
+    resize(480, 360); // 0.4.2 / A13：按钮从 4 → 6 枚，宽度 420 → 480
 }
 
 PresetsDialog::Action PresetsDialog::action() const {

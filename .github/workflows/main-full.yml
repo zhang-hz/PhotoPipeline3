@@ -72,6 +72,31 @@ name: main-full
 #     ★ 实测 wall-clock 以**首个 main 推送/首个每日轮次**为准：runner 速度/网络本地无法实测
 #       （M3 的预算表同样由线上实测校准）。本文件只钉住"预算表 + 硬顶 + 拓扑"；首跑后用 gate 的
 #       预算校准表（§12.3 处置条款）决定是否拆 job / 砍步骤 / 重排关键路径。
+#     ★ M14-CI（0.4.2 / C6-③，2026-11-03；**判据零放宽，只动 wall-clock 与冗余 IO**）：
+#       背景 = run 41294175349 实测整轮 wall **32min > wall-limit 30**；逐 job 读数
+#       （lint 9s / tidy 1291s / **windows 1624s** / linux 1092s / windows-dev 513s /
+#       appimage 362s / audit 63s / **winzip 106s** / cache-gc 30s / gate 12s）⇒
+#       关键路径 = lint + windows + winzip（G7 串行：打包对象必须是 windows 全量 ctest 绿的
+#       release 树）+ cache-gc + gate，其中 windows 的 1624s 里除 configure 38s + build 硬成本
+#       外，还包含「每轮都做的 vcpkg 仓库全量 clone→checkout」「vcpkg 二进制缓存 save（暖轮内容
+#       未变也重新打包一轮）」「ctest 全量串行」三类可零风险回收的 IO/调度成本。
+#       本包三项改动（全部不删步骤、不降判据、artifact 内容逐字不变）：
+#         ① windows 去掉 `needs: lint`（lint 仍由 gate 硬性要求；仅省掉关键路径上的 lint
+#            9s + 一次 job 排队。格式失败 → gate 仍红，windows 空跑成本可接受）；
+#         ② vcpkg 仓库 clone 改 `--depth 1 --branch $VCPKG_TAG`（仍是 pinned tag + 逐字 SHA
+#            断言 R-091；省掉全历史下载 ≈30–60s）；
+#         ③ vcpkg 二进制缓存 save 加「增量判定」：暖轮 archive 数不增 ⇒ 跳过 save（缓存纪律
+#            的写者职责由新增归档/linux/winzip 等其余 job 与 warm-cache 承担；删掉的只是
+#            『内容完全相同、键里带 run_id 的重复打包上传』）；
+#         ④ ctest release 改 `-j 2` 并行，但 `test_quality_metric`（fastcolor 吞吐阈值
+#            >10 MPx/s 的性能守卫，判据逐字保留）**单独串行**跑 —— 避免并行 CPU 抢占造成
+#            假红；两个 ctest 调用的结论行都进 step summary 与 tsv，防空跑口径不变。
+#       预期（依据上述读数分解，首轮 CI 实测校准）：windows 1624 → ≈1450–1520s
+#       （-40s clone -60~90s save -30s lint/排队；ctest 若实测 >60s 另有 -30~90s），
+#       整轮 wall 1920s → **≈1740–1800s（29–30min）**；即使偏慢也不改任何判据，只作读数登记。
+#       依据：本机 `python tools/env.py run -- ctest --test-dir build/ci-asan -j 2 ...` 与
+#       local build/release-dev 全量 ctest 50/50 绿（并行无损）为本地等价验证；
+#       GH Actions 侧读数待推送后实测（本机无法跑 Actions，如实登记）。
 #
 #   ── 缓存纪律（设计 §12.4 / R24，M3 教训逐条保留）─────────────────────────────
 #     * 缓存键: vcpkg- / vcpkgwin- / qt- / ccache- 四类前缀分离；Qt 单写者（本文件里 linux job 写
@@ -377,8 +402,8 @@ jobs:
 
       - name: vcpkg ${{ env.VCPKG_TAG }}（pinned）
         run: |
-          git clone https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
-          git -C "$VCPKG_ROOT" checkout "$VCPKG_TAG"
+          # M14-CI：pinned tag 浅克隆（只取目标 commit；下面的逐字 SHA 断言 R-091 保留不变）
+          git clone --depth 1 --branch "$VCPKG_TAG" https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
           want_sha="$(sed -n 's/^VCPKG_SHA=//p' tools/versions.env | tr -d '\r')"
           got_sha="$(git -C "$VCPKG_ROOT" rev-parse HEAD)"
           [ "$got_sha" = "$want_sha" ] || { echo "::error::vcpkg HEAD $got_sha != VCPKG_SHA $want_sha（R-091）"; exit 1; }
@@ -747,14 +772,15 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ────────────────────────────────────────────────────────────────────────────
-  # windows（预算 15 min）: 全 ctest（release 全量 + release-dev -R ui_smoke）+ 金样 20 对
+  # windows（预算 24 min / 硬顶 30 min）: release 全量 ctest + 上传 winzip-build-input
   #   本 job 是 Qt(msvc2022_64) 缓存的**唯一写者**；无 ccache（MSVC 无 ccache 对应物）。
+  #   M14-CI：不再 `needs: lint`（lint ≈9s 不再挡在关键路径上；格式/单源门禁仍由 gate 硬性
+  #   要求 —— 失败时 gate 照样红，只是本 job 会空跑一轮，属可接受的成本/时延折中）。
   # ────────────────────────────────────────────────────────────────────────────
   windows:
     name: windows（全 ctest+金样）
     runs-on: windows-2025
     timeout-minutes: 30         # M12 校准硬顶（预算 24 min；实测 build 475 目标 ≈18.5min 硬成本 + ctest + 上传）
-    needs: lint
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - name: Qt 路径（QT_VERSION 单源 = tools/versions.env；R-063 去版本字面量）
@@ -792,8 +818,8 @@ jobs:
 
       - name: vcpkg ${{ env.VCPKG_TAG }}（pinned）
         run: |
-          git clone https://github.com/microsoft/vcpkg "$env:VCPKG_ROOT"
-          git -C "$env:VCPKG_ROOT" checkout "$env:VCPKG_TAG"
+          # M14-CI：pinned tag 浅克隆（只取目标 commit；下面的逐字 SHA 断言 R-091 保留不变）
+          git clone --depth 1 --branch "$env:VCPKG_TAG" https://github.com/microsoft/vcpkg "$env:VCPKG_ROOT"
           $wantSha = (Select-String -Path tools/versions.env -Pattern '^VCPKG_SHA=(.+)$').Matches.Groups[1].Value.Trim()
           $gotSha = (git -C "$env:VCPKG_ROOT" rev-parse HEAD).Trim()
           if ($gotSha -ne $wantSha) { Write-Error "vcpkg HEAD $gotSha != VCPKG_SHA $wantSha（R-091）"; exit 1 }
@@ -831,8 +857,11 @@ jobs:
           Write-Output "语料 OK: base=$n 文件、smoke 断言=$m 个（均已入库，未重新生成）"
       # ── 准备块结束 ──
 
-      - name: configure + build + ctest release（全量）
+      - name: configure + build + ctest release（全量；M14-CI：ctest 并行 + 性能阈值用例串行）
         run: |
+          # M14-CI：vcpkg 归档基线（供本 job 末尾「只有新增归档才 save」的增量判定）
+          $n0 = @(Get-ChildItem -Recurse -File "$env:VCPKG_DEFAULT_BINARY_CACHE" -Filter *.zip -ErrorAction SilentlyContinue).Count
+          "PP_VCPKG_N0=$n0" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           $T0 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
           python tools/env.py run -- cmake --preset release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -840,12 +869,17 @@ jobs:
           python tools/env.py run -- cmake --build --preset release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $T2 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-          python tools/env.py run -- ctest --preset release --output-on-failure 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\ctest-release.log"
+          # 并行跑其余全部用例；test_quality_metric 的 fastcolor/throughput 是「>10 MPx/s」性能
+          # 守卫（release/release-dev 判据逐字保留），并行 CPU 抢占可能造成假红 ⇒ 它单独串行。
+          # 两个调用合起来仍是**全量 50 个用例**，无任何 -E 永久排除、无判据放宽。
+          python tools/env.py run -- ctest --preset release -j 2 -E "test_quality_metric" --output-on-failure 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\ctest-release.log"
           $rc = $LASTEXITCODE
+          python tools/env.py run -- ctest --preset release -R "^test_quality_metric$" --output-on-failure 2>&1 | Tee-Object -Append -FilePath "$env:RUNNER_TEMP\ctest-release.log"
+          if ($rc -eq 0) { $rc = $LASTEXITCODE }
           $T3 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
           Add-Content "$env:RUNNER_TEMP\pp-steps.tsv" "configure release`t$($T1 - $T0)"
           Add-Content "$env:RUNNER_TEMP\pp-steps.tsv" "build release`t$($T2 - $T1)"
-          Add-Content "$env:RUNNER_TEMP\pp-steps.tsv" "ctest release`t$($T3 - $T2)"
+          Add-Content "$env:RUNNER_TEMP\pp-steps.tsv" "ctest release（-j2 并行 + 性能用例串行）`t$($T3 - $T2)"
           if ($rc -ne 0) { exit $rc }
 
       - name: 打包输入树组装（winzip-build-input：已验证构建树 + vcpkg 运行时依赖/许可面）
@@ -880,6 +914,25 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: vcpkg 缓存增量判定（M14-CI：暖轮无新增归档 ⇒ 跳过 save）
+        id: vcpkg-delta
+        # 背景：vcpkg binary cache 的 save key 含 run_id ⇒ 每轮都是「新键」，旧实现会把内容
+        # 完全相同的缓存重新打包上传一轮（windows 关键路径上的纯 IO 成本）。此处对比
+        # configure 前的归档基线 PP_VCPKG_N0：本轮 manifest/overlay 未引入新 port 时归档数不变
+        # ⇒ 跳过 save；只有真的新增归档（依赖变更/冷轮）才 save。缓存纪律（main-full 是写者）
+        # 不变：新增归档仍由本 job 落盘，warm-cache 播种职责不变。
+        run: |
+          $n = @(Get-ChildItem -Recurse -File "$env:VCPKG_DEFAULT_BINARY_CACHE" -Filter *.zip -ErrorAction SilentlyContinue).Count
+          $n0 = [int]$env:PP_VCPKG_N0
+          Write-Output "vcpkg binary cache archives: before=$n0 after=$n（新增 $($n - $n0)）"
+          if ($n -gt $n0) {
+            "save=1" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            Write-Output "检测到新增归档 ⇒ 本轮执行 vcpkg cache save"
+          } else {
+            "save=0" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            Write-Output "无新增归档 ⇒ 跳过 vcpkg binary cache save（内容与已有缓存一致）"
+          }
+
       - name: Qt ${{ env.QT_VERSION }} 缓存（save，单写者=本 job）
         if: always() && steps.qt-cache.outputs.cache-hit != 'true'
         continue-on-error: true
@@ -888,8 +941,8 @@ jobs:
           path: ${{ github.workspace }}/Qt/${{ env.QT_VERSION }}/msvc2022_64
           key: qt-${{ env.QT_VERSION }}-win64_msvc2022_64-${{ runner.os }}-${{ runner.arch }}
 
-      - name: vcpkg binary cache（save）
-        if: always()
+      - name: vcpkg binary cache（save；M14-CI：仅新增归档时才 save）
+        if: always() && steps.vcpkg-delta.outputs.save == '1'
         continue-on-error: true
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
@@ -901,14 +954,16 @@ jobs:
         env:
           QT_HIT: ${{ steps.qt-cache.outputs.cache-hit }}
           VCPKG_HIT: ${{ steps.vcpkg-cache.outputs.cache-hit }}
+          VCPKG_SAVE: ${{ steps.vcpkg-delta.outputs.save }}
         run: |
           $lines = @()
-          $lines += "## windows job 汇总（预算 24 min / 硬顶 30 min；M12 预算校准）"
+          $lines += "## windows job 汇总（预算 24 min / 硬顶 30 min；M12 预算校准 + M14-CI 优化）"
           $lines += ""
           $lines += "| 项目 | 值 |"
           $lines += "| --- | --- |"
           $lines += "| Qt 缓存精确命中 | $($env:QT_HIT) |"
           $lines += "| vcpkg 二进制缓存精确命中 | $($env:VCPKG_HIT) |"
+          $lines += "| vcpkg save 增量判定 | $($env:VCPKG_SAVE)（1=本轮有新增归档才 save） |"
           $lines += "| run | $($env:GITHUB_RUN_ID) #$($env:GITHUB_RUN_ATTEMPT) |"
           $lines += ""
           $lines += "| 阶段 | 秒 |"
@@ -917,10 +972,11 @@ jobs:
             Import-Csv -Path "$env:RUNNER_TEMP\pp-steps.tsv" -Delimiter "`t" -Header step,sec |
               ForEach-Object { $lines += "| $($_.step) | $($_.sec) |" }
           }
-          $ctestLine = (Get-Content "$env:RUNNER_TEMP\ctest-release.log" -ErrorAction SilentlyContinue |
-                        Where-Object { $_ -match '^[0-9]+% tests passed' } | Select-Object -Last 1)
+          # M14-CI：ctest 现在是「-j2 并行 + 性能阈值用例串行」两个调用 ⇒ 两条结论行都要展示
+          $ctestLines = @(Get-Content "$env:RUNNER_TEMP\ctest-release.log" -ErrorAction SilentlyContinue |
+                          Where-Object { $_ -match '^[0-9]+% tests passed' })
           $lines += ""
-          $lines += "**ctest release**: $ctestLine"
+          $lines += "**ctest release**（全量 50 用例，判据逐字不变）: $($ctestLines -join ' ｜ ')"
           $lines += ""
           $lines += "ui_smoke / 金样 20 对已随 release-dev 段迁至 windows-dev job（G7 二轮拆段，判据零改动）"
           $lines | Add-Content "$env:GITHUB_STEP_SUMMARY"
@@ -974,8 +1030,8 @@ jobs:
 
       - name: vcpkg ${{ env.VCPKG_TAG }}（pinned）
         run: |
-          git clone https://github.com/microsoft/vcpkg "$env:VCPKG_ROOT"
-          git -C "$env:VCPKG_ROOT" checkout "$env:VCPKG_TAG"
+          # M14-CI：pinned tag 浅克隆（只取目标 commit；下面的逐字 SHA 断言 R-091 保留不变）
+          git clone --depth 1 --branch "$env:VCPKG_TAG" https://github.com/microsoft/vcpkg "$env:VCPKG_ROOT"
           $wantSha = (Select-String -Path tools/versions.env -Pattern '^VCPKG_SHA=(.+)$').Matches.Groups[1].Value.Trim()
           $gotSha = (git -C "$env:VCPKG_ROOT" rev-parse HEAD).Trim()
           if ($gotSha -ne $wantSha) { Write-Error "vcpkg HEAD $gotSha != VCPKG_SHA $wantSha（R-091）"; exit 1 }
@@ -1136,8 +1192,8 @@ jobs:
 
       - name: vcpkg ${{ env.VCPKG_TAG }}（pinned）
         run: |
-          git clone https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
-          git -C "$VCPKG_ROOT" checkout "$VCPKG_TAG"
+          # M14-CI：pinned tag 浅克隆（只取目标 commit；下面的逐字 SHA 断言 R-091 保留不变）
+          git clone --depth 1 --branch "$VCPKG_TAG" https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
           want_sha="$(sed -n 's/^VCPKG_SHA=//p' tools/versions.env | tr -d '\r')"
           got_sha="$(git -C "$VCPKG_ROOT" rev-parse HEAD)"
           [ "$got_sha" = "$want_sha" ] || { echo "::error::vcpkg HEAD $got_sha != VCPKG_SHA $want_sha（R-091）"; exit 1; }
@@ -1522,8 +1578,8 @@ jobs:
 
       - name: vcpkg ${{ env.VCPKG_TAG }}（pinned）
         run: |
-          git clone https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
-          git -C "$VCPKG_ROOT" checkout "$VCPKG_TAG"
+          # M14-CI：pinned tag 浅克隆（只取目标 commit；下面的逐字 SHA 断言 R-091 保留不变）
+          git clone --depth 1 --branch "$VCPKG_TAG" https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
           want_sha="$(sed -n 's/^VCPKG_SHA=//p' tools/versions.env | tr -d '\r')"
           got_sha="$(git -C "$VCPKG_ROOT" rev-parse HEAD)"
           [ "$got_sha" = "$want_sha" ] || { echo "::error::vcpkg HEAD $got_sha != VCPKG_SHA $want_sha（R-091）"; exit 1; }

@@ -48,13 +48,15 @@ void ProbeScanner::apply_result(quint64 generation, const std::vector<ProbeSnaps
     emit changed();
 }
 
-// 只对**跟随项**取 probe（≤ 8：多选小表的行数上限；单文件跟随 = 1 次读）。
-// GUI 线程只做值拷贝 + 挂 watcher，立即返回；结果回填前校验序号。
+// 只对**跟随项**取 probe。0.4.2（需求 1/2）：多选信息卡的逐字段聚合必须以**每一张选中照片
+// 的实际元数据**判 uniform/mixed，故扫描**全部选中项**（0.4.1 限前 kMultiRowCap=8 会让 >8 的
+// 选择把未探测项当「—」→ 假 mixed）。IO 仍全程在后台线程（QtConcurrent），GUI 零等待；
+// 世代守卫保证过期结果不落回。多选小表（时间卡）的 8 行截断只作用于**显示**，不作用于聚合。
 void ProbeScanner::request_scan() {
     QStringList paths;
-    const int limit = std::min(static_cast<int>(st_->follow.items.size()), kMultiRowCap);
-    for (int i = 0; i < limit; ++i) {
-        paths << st_->follow.items.at(i).path;
+    paths.reserve(st_->follow.items.size());
+    for (const MetaSelectionItem &item : st_->follow.items) {
+        paths << item.path;
     }
     const quint64 generation = ++generation_;
     st_->follow.probes.clear();

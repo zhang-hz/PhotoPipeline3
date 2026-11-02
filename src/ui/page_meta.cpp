@@ -18,21 +18,25 @@
 //      （修 1-37：核心动作不再落进内滚盲区）｜图层（M6-T8：Seg 三态 → set_tile_style）｜
 //      地图源（OSM 下拉，有标签）｜地点搜索（M6-T8：200ms 防抖联想）｜分类 chips（M6-T8）｜
 //      搜索结果（M6-T8：可点列表 = 名称 + 地址 + 距离）｜地图（高 136 · 图钉 · 版权行）｜
-//      地址（M6-T8：逆地理回显）｜批量 GPS 规则（折叠行，默认折叠；内为规则编辑面）。
+//      地址（M6-T8：逆地理回显）。**0.4.2（需求 2）：原「批量 GPS 规则」折叠行已删除** ——
+//      经纬度/海拔/方位/时间戳输入 = 当前选中图片的编辑面（多选 = 逐文件批量编辑）。
 //   ④ 隐私与文件时间：隐私剥除（开关+说明+「标签编辑…」链）｜时间同步（开关+说明+「例外…」链）｜
 //      关键字（中性胶囊组 + 「+N」 + 「编辑…」链）。
 //
-// 生效值显示（M4-T12 语义零改动；§5.1/§5.2 + D4）：
-//   * 生效值一律出自纯函数 `pp::preview_effective(probe, rules, exception)`（**唯一**合成源），
-//     喂进去的 rules 就是 rules()/build_rules() 产出的那一份 → 显示 = 即将写入（两张皮检测）；
+// 生效值显示（0.4.2 需求 1/2 语义；§5.1/§5.2 + D4）：
+//   * 生效值一律出自纯函数 `pp::preview_effective(probe, pp::BatchRules{}, exception)`
+//     （**唯一**合成源）：**不存在全局批量规则**，第三个入参就是该文件的单文件例外
+//     （FileEntry.exception / MetadataOverride）→ 显示 = 即将写入（两张皮检测）；
 //   * .mod（A8）＝ 强调边框 + 强调色字 + 700、**无字形前缀**；
 //   * 生效时间对照：未修改时两值相同也照常显示；改值行 = 强调档；另两个时间字段
 //     （CreateDate/ModifyDate）的对照进标签 tooltip（1-30「细节进 tooltip」，信息不丢）；
-//   * 多选（≥2）→ 逐行小表（文件名 | 原 → 生效，上限 8 行 + 「…还有 N 个」）；
-//   * GPS：只显**生效坐标** + 地图 center_on 生效坐标 + 单钉（D4：不画新旧对比；无生效值 →
-//     不画钉、不动视口）；
+//   * 编辑作用域 = 文件列表**行选中集合**：单选显示该照片信息；多选逐字段聚合
+//     （uniform → 值 / mixed → 「多个值」+ 逐文件 tooltip；时间卡另有多选逐行小表 ≤8 行）；
+//     无选中 → 空态「未选择文件」+ 可编辑控件禁用（任何路径零写入）；
+//   * GPS：只显**生效坐标**（聚合：uniform 才落钉，mixed = 「多个值」不落钉）+ 地图
+//     center_on 生效坐标 + 单钉（D4：不画新旧对比；无生效值 → 不画钉、不动视口）；
 //   * 状态与占位分离（修 1-33）：GPS 状态（已有/无/将被移除/将清除）= 卡头**中性胶囊**；
-//     placeholder 只留输入示例（规则输入框），生效值框不再用状态文案占位。
+//     placeholder 只留输入示例，生效值框不再用状态文案占位。
 //
 // M6-T9 选点闭环（§4.4 / R3）：搜索 → search_results_ready → 多钉（map 的 set_result_pins）+
 //   可点列表 → 点结果行（search_select）或点图钉（pin_clicked）→ 主钉落到该点 + 规则框回填
@@ -256,8 +260,10 @@ void PageMeta::apply_rules(const pp::BatchRules &r) { apply_preset_rules(state_o
 
 void PageMeta::set_batch_files(const QStringList &paths) {
     MetaState *st = state_of(this);
+    // 0.4.2（需求 1/2）：批内文件集合只用于跟随提示的 (i/N) 标识；编辑作用域 = 行选中集合，
+    // 页面不再持有/装配任何批量规则（「影响 N 个文件」文案随之退役）。
     st->follow.batch_files = paths;
-    refresh_effective(st); // 「影响 N 个文件」与 (i/N) 跟随提示
+    refresh_effective(st); // (i/N) 跟随提示
 }
 
 void PageMeta::set_selection(const QList<MetaSelectionItem> &items, bool from_selection) {
@@ -281,18 +287,21 @@ void PageMeta::set_selected_files(const QStringList &paths) {
 
 void PageMeta::set_exception_summary(const QStringList &paths) {
     MetaState *st = state_of(this);
-    // M13（0.4.1）/ C2.5 语义注释（UI 文案保持不变）：本列表/计数自本轮起 = **带元数据修改的
-    // 文件**（= FileEntry.exception 非空；旧口径「例外」相对全局批量规则，现无全局规则），
-    // 即"N 个文件带元数据修改"。清除入口 = 清空该文件全部元数据修改（既有行为不变）。
+    // 0.4.2（需求 1/2）：本列表 = **带元数据修改的文件**（FileEntry.exception
+    // 非空；无全局批量规则）。 条目显示 = 文件名（可读），tooltip + Qt::UserRole =
+    // 全路径（点击定位/清除的稳定键； meta-cards 的 itemClicked 优先取 UserRole，兜底
+    // text）。清除入口语义不变 = 清空该文件修改。
     st->privacy.exc_list->clear();
     for (const QString &path : paths) {
-        st->privacy.exc_list->addItem(path);
+        auto *item = new QListWidgetItem(QFileInfo(path).fileName(), st->privacy.exc_list);
+        item->setData(Qt::UserRole, path);
+        item->setToolTip(path);
     }
-    st->privacy.exc_label->setText(paths.isEmpty() ? tr("无例外文件")
-                                                   : tr("%1 个文件带元数据例外").arg(paths.size()));
-    // 例外计数 = 卡头中性胶囊（1-24/1-25：右置元素统一规格；链接文案保持「例外…」）；
-    // 无例外 → 不显示（§2.5「未发生的量不显示」）
-    st->privacy.privacy_pill->setText(tr("例外 %1").arg(paths.size()));
+    st->privacy.exc_label->setText(paths.isEmpty() ? tr("无元数据修改文件")
+                                                   : tr("%1 个文件带元数据修改").arg(paths.size()));
+    // 修改计数 = 卡头中性胶囊（1-24/1-25：右置元素统一规格）；无修改 → 不显示
+    // （§2.5「未发生的量不显示」）
+    st->privacy.privacy_pill->setText(tr("修改 %1").arg(paths.size()));
     st->privacy.privacy_pill->setVisible(!paths.isEmpty());
 }
 

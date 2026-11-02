@@ -47,9 +47,112 @@ namespace pp::ui::meta {
 
 namespace {
 
-// M13（0.4.1）/ C2.5：多选只读值聚合 —— 每个 kv 值先逐文件生成显示文本，再按
-// uniform（同值 → 直显）/ mixed（→「多个值」+ 逐文件 tooltip）落地。
-// 单选路径保持既有实现逐字不变（下方 refresh_info_card 的 else 分支）。
+// 逐文件 kv 文本（尺寸/色彩/文件；定义在本段末尾，多选聚合与单选路径共用）
+QString info_size_text(const MetaSelectionItem &item);
+QString info_color_text(const MetaSelectionItem &item);
+QString info_file_text(const MetaSelectionItem &item);
+
+// 0.4.2（需求 1/2）：多选只读值聚合 —— 每个 kv 值先按**每张照片实际元数据（probe）**生成
+// 显示文本，再逐字段判 uniform（同值 → 直接显示值）/ mixed（异值 → 「多个值」+ 逐文件 tooltip）。
+// 关键点：probe 覆盖**全部选中项**（meta_probe.cpp 不再限 8）—— >8 的选择不会因未探测项被当成
+// 「—」而假 mixed。单选路径保持既有实现逐字不变（下方 refresh_info_card 的单选分支）。
+void refresh_info_card_multi(MetaState *st, const std::vector<pp::EffectivePreview> &previews) {
+    const int count = static_cast<int>(st->follow.items.size());
+    SelectionSnapshotList sel;
+    sel.reserve(static_cast<std::size_t>(count));
+    for (const MetaSelectionItem &item : st->follow.items) {
+        SelectionSnapshot snapshot;
+        snapshot.path = item.path;
+        sel.push_back(std::move(snapshot));
+    }
+    const auto put = [&](ElidedLabel *label, const QStringList &texts) {
+        if (label == nullptr) {
+            return;
+        }
+        const TextAggregate agg = aggregate_texts(sel, texts);
+        const bool mixed = !agg.empty && !agg.uniform;
+        label->set_full_text(mixed ? PageMeta::tr(kMixedValueText) : agg.value);
+        label->setToolTip(mixed ? aggregate_tooltip(agg) : QString());
+    };
+    // 逐槽生成「每文件文本」：probe 槽（时间/相机/镜头/曝光/GPS/白平衡）用 probe，
+    // FileRow 摘要槽（尺寸/色彩/文件）用列表模型在添加文件时收集的 info（零额外 IO）。
+    std::array<QStringList, kInfoSlotCount> texts;
+    QStringList wb_texts;
+    QStringList rating_texts; // 每文件评级显示文本（供 uniform/mixed 判定与 tooltip）
+    for (int i = 0; i < count; ++i) {
+        const MetaSelectionItem &item = st->follow.items.at(i);
+        const std::size_t index = static_cast<std::size_t>(i);
+        const bool probe_ok =
+            i < static_cast<int>(st->follow.probes.size()) && st->follow.probes[index].ok;
+        const pp::EffectivePreview *preview =
+            i < static_cast<int>(previews.size()) ? &previews[index] : nullptr;
+        const pp::SourceMeta *meta = i < static_cast<int>(st->follow.probes.size())
+                                         ? &st->follow.probes[index].meta
+                                         : nullptr;
+        texts[kInfoTime] << (probe_ok && preview != nullptr
+                                 ? datetime_text(preview->datetime_original.original)
+                                 : QStringLiteral("—"));
+        texts[kInfoCamera] << (probe_ok && meta != nullptr ? camera_text(meta->exif)
+                                                           : QStringLiteral("—"));
+        texts[kInfoLens] << (probe_ok && meta != nullptr ? lens_text(meta->exif)
+                                                         : QStringLiteral("—"));
+        texts[kInfoExposure] << (probe_ok && meta != nullptr ? exposure_text(meta->exif)
+                                                             : QStringLiteral("—"));
+        texts[kInfoSize] << info_size_text(item);
+        texts[kInfoColor] << info_color_text(item);
+        texts[kInfoFile] << info_file_text(item);
+        texts[kInfoGps] << (probe_ok && preview != nullptr && preview->gps.original.has_value()
+                                ? QStringLiteral("%1, %2").arg(
+                                      coord_text(preview->gps.original->lat, 4),
+                                      coord_text(preview->gps.original->lon, 4))
+                                : QStringLiteral("—"));
+        wb_texts << (probe_ok && meta != nullptr ? white_balance_text(meta->exif)
+                                                 : QStringLiteral("—"));
+        if (probe_ok && meta != nullptr) {
+            const std::optional<int> rating = rating_of(*meta);
+            rating_texts << (rating.has_value() ? PageMeta::tr("%1 星").arg(*rating)
+                                                : PageMeta::tr("无评级"));
+        } else {
+            rating_texts << QStringLiteral("—");
+        }
+    }
+    for (int slot = 0; slot < kInfoSlotCount; ++slot) {
+        put(st->info.info_value[std::size_t(slot)], texts[std::size_t(slot)]);
+    }
+    put(st->info.info_wb, wb_texts);
+    // GPS「已有」胶囊：仅全选统一"有 GPS"时显示（mixed 不显示，避免假统一）
+    bool all_gps = count > 0;
+    for (const QString &text : texts[kInfoGps]) {
+        if (text == QStringLiteral("—")) {
+            all_gps = false;
+            break;
+        }
+    }
+    st->info.info_gps_pill->setVisible(all_gps);
+    // 评级：全选**均有评级且同值** → 画星；异值/部分缺失 → 「多个值」+ 逐文件 tooltip；全无 → —。
+    const TextAggregate rating_agg = aggregate_texts(sel, rating_texts);
+    bool any_rated = false;
+    bool all_rated = count > 0;
+    for (const QString &text : rating_texts) {
+        const bool rated = text != QStringLiteral("—") && text != PageMeta::tr("无评级");
+        any_rated = any_rated || rated;
+        all_rated = all_rated && rated;
+    }
+    const bool uniform_rating = all_rated && rating_agg.uniform;
+    st->info.info_rating->setVisible(uniform_rating);
+    st->info.info_rating->set_rating(
+        uniform_rating ? rating_texts.first().section(QLatin1Char(' '), 0, 0).toInt() : 0);
+    st->info.info_rating_none->setVisible(!uniform_rating);
+    if (uniform_rating || !any_rated) {
+        // 全一致 / 全都无评级 → 「—」；仅部分有评级且不一致 → 「多个值」+ 逐文件 tooltip。
+        st->info.info_rating_none->setText(QStringLiteral("—"));
+        st->info.info_rating_none->setToolTip(QString());
+    } else {
+        st->info.info_rating_none->setText(PageMeta::tr(kMixedValueText));
+        st->info.info_rating_none->setToolTip(aggregate_tooltip(rating_agg));
+    }
+}
+
 QString info_size_text(const MetaSelectionItem &item) {
     if (!item.probe_ok) {
         return QStringLiteral("—");
@@ -84,107 +187,6 @@ QString info_file_text(const MetaSelectionItem &item) {
     return format_size(item.file_size);
 }
 
-void refresh_info_card_multi(MetaState *st, const std::vector<pp::EffectivePreview> &previews) {
-    const int count = static_cast<int>(st->follow.items.size());
-    SelectionSnapshotList sel;
-    sel.reserve(static_cast<std::size_t>(count));
-    for (const MetaSelectionItem &item : st->follow.items) {
-        SelectionSnapshot snapshot;
-        snapshot.path = item.path;
-        sel.push_back(std::move(snapshot));
-    }
-    const auto put = [&](ElidedLabel *label, const QStringList &texts) {
-        if (label == nullptr) {
-            return;
-        }
-        const TextAggregate agg = aggregate_texts(sel, texts);
-        const bool mixed = !agg.empty && !agg.uniform;
-        label->set_full_text(mixed ? PageMeta::tr(kMixedValueText)
-                                   : (texts.isEmpty() ? QString() : texts.value(0)));
-        label->setToolTip(mixed ? aggregate_tooltip(agg) : QString());
-    };
-    // 逐槽生成「每文件文本」（previews 只覆盖前 ≤kMultiRowCap 个；其余 → "—"）
-    std::array<QStringList, kInfoSlotCount> texts;
-    QStringList wb_texts;
-    for (int i = 0; i < count; ++i) {
-        const MetaSelectionItem &item = st->follow.items.at(i);
-        const bool has_probe = i < static_cast<int>(previews.size());
-        const bool multi_probe = has_probe && i < static_cast<int>(st->follow.probes.size());
-        const pp::EffectivePreview *preview = has_probe ? &previews[std::size_t(i)] : nullptr;
-        const bool probe_ok = multi_probe && st->follow.probes[std::size_t(i)].ok;
-        const pp::SourceMeta *meta =
-            multi_probe ? &st->follow.probes[std::size_t(i)].meta : nullptr;
-        texts[kInfoTime] << (probe_ok && preview != nullptr
-                                 ? datetime_text(preview->datetime_original.original)
-                                 : QStringLiteral("—"));
-        texts[kInfoCamera] << (probe_ok && meta != nullptr ? camera_text(meta->exif)
-                                                           : QStringLiteral("—"));
-        texts[kInfoLens] << (probe_ok && meta != nullptr ? lens_text(meta->exif)
-                                                         : QStringLiteral("—"));
-        texts[kInfoExposure] << (probe_ok && meta != nullptr ? exposure_text(meta->exif)
-                                                             : QStringLiteral("—"));
-        texts[kInfoSize] << info_size_text(item);
-        texts[kInfoColor] << info_color_text(item);
-        texts[kInfoFile] << info_file_text(item);
-        texts[kInfoGps] << (probe_ok && preview != nullptr && preview->gps.original.has_value()
-                                ? QStringLiteral("%1, %2").arg(
-                                      coord_text(preview->gps.original->lat, 4),
-                                      coord_text(preview->gps.original->lon, 4))
-                                : QStringLiteral("—"));
-        wb_texts << (probe_ok && meta != nullptr ? white_balance_text(meta->exif)
-                                                 : QStringLiteral("—"));
-    }
-    for (int slot = 0; slot < kInfoSlotCount; ++slot) {
-        put(st->info.info_value[std::size_t(slot)], texts[std::size_t(slot)]);
-    }
-    put(st->info.info_wb, wb_texts);
-    // GPS「已有」胶囊：仅全选统一"有 GPS"时显示（mixed 不显示，避免假统一）
-    bool all_gps = count > 0;
-    for (const QString &text : texts[kInfoGps]) {
-        if (text == QStringLiteral("—")) {
-            all_gps = false;
-            break;
-        }
-    }
-    st->info.info_gps_pill->setVisible(all_gps);
-    // 评级：全选同值且都有评级才画星；mixed/部分缺失 → 文本「多个值」/「—」
-    std::optional<int> common_rating;
-    bool uniform_rating = true;
-    for (int i = 0; i < count; ++i) {
-        std::optional<int> rating;
-        if (i < static_cast<int>(st->follow.probes.size()) &&
-            st->follow.probes[std::size_t(i)].ok) {
-            rating = rating_of(st->follow.probes[std::size_t(i)].meta);
-        }
-        if (!rating.has_value()) {
-            uniform_rating = false;
-            break;
-        }
-        if (!common_rating.has_value()) {
-            common_rating = rating;
-        } else if (*common_rating != *rating) {
-            uniform_rating = false;
-            break;
-        }
-    }
-    st->info.info_rating->setVisible(uniform_rating && common_rating.has_value());
-    st->info.info_rating->set_rating(common_rating.value_or(0));
-    st->info.info_rating_none->setVisible(!uniform_rating || !common_rating.has_value());
-    if (!uniform_rating) {
-        bool any_rating = false;
-        for (int i = 0; i < count && !any_rating; ++i) {
-            if (i < static_cast<int>(st->follow.probes.size()) &&
-                st->follow.probes[std::size_t(i)].ok) {
-                any_rating = rating_of(st->follow.probes[std::size_t(i)].meta).has_value();
-            }
-        }
-        st->info.info_rating_none->setText(any_rating ? PageMeta::tr(kMixedValueText)
-                                                      : QStringLiteral("—"));
-    } else {
-        st->info.info_rating_none->setText(QStringLiteral("—"));
-    }
-}
-
 } // namespace
 
 void refresh_info_card(MetaState *st, const std::vector<pp::EffectivePreview> &previews) {
@@ -206,7 +208,8 @@ void refresh_info_card(MetaState *st, const std::vector<pp::EffectivePreview> &p
         st->info.info_gps_pill->setVisible(false);
         return;
     }
-    // M13/C2.5：多选（≥2）→ 逐字段「多个值」聚合；单选 → 既有实现逐字不变
+    // 0.4.2（需求 1/2）：多选（≥2）→ 逐字段聚合（同值=值 / 异值=「多个值」+ 逐文件 tooltip）；
+    // 单选 → 既有实现逐字不变。
     if (st->follow.items.size() >= 2) {
         refresh_info_card_multi(st, previews);
         return;

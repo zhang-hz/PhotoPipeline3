@@ -156,6 +156,23 @@ public:
     QString format_preset_adaptive_policy(const QString &format_id) const;
     void set_format_preset_detached(const QString &format_id, bool detached);
     bool format_preset_detached(const QString &format_id) const;
+
+    // ---- PP-FROZEN 加性追加（M14 / 0.4.2 需求 3；契约 docs/m14-tasks.md §5 C3；追认登记
+    //      docs/m14-adjudications.md A13）—— 大预设 ↔ 格式预设「来源显式化」+ 预设卡绑定/注记面。
+    // 载入大预设后：格式行**不再假装高亮 default** —— combo 无选中 + 占位「来自大预设：<名>」，
+    // 注记「值来自大预设「<名>」（基于格式预设 <stem> / 自定义参数）」，保存/删除禁用（无绑定
+    // 文件；另存/导入/导出可用）。based_on 空 = 该输出为大预设里的自定义参数。
+    // 显式载入任一格式预设成功后解除（set_format_preset_detached(false)）并恢复真绑定。
+    void set_format_preset_global_source(const QString &format_id, const QString &global_name,
+                                         const QString &based_on);
+    QString format_preset_global_source(const QString &format_id) const; // 空 = 非大预设来源
+    QString format_preset_based_on(const QString &format_id) const;      // 空 = 自定义参数
+
+    // 预设卡（大预设）：注记轨（载入/保存结果、rules 未应用说明；空串 = 隐藏不占高）与
+    // 「已修改」（当前页配置 ≠ 绑定预设文件基线；主窗比对后喂入，条目标题带「（已修改）」）。
+    void set_preset_note(const QString &text);
+    void set_current_preset_dirty(bool dirty);
+    bool current_preset_dirty() const;
 };
 
 } // namespace pp::ui

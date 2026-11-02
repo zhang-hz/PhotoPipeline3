@@ -49,15 +49,14 @@ void notify_rules_changed(MetaState *st) {
     }
 }
 
-// UX-5（M7-WP7）：GPS 卡「启用」的**双向同步**唯一落点 —— 卡头开关与折叠面 gps_enable 是
-// 同一状态的两个入口；选点/联想自动勾上沿用既有行为（apply_picked_point/read_gps 调这里）。
+// 0.4.2（需求 1/2）：GPS 卡「启用」的**唯一**写入点 —— 卡头开关（折叠面 gps_enable 复选框随
+// 「批量 GPS 规则」概念删除，见 meta-cards / 需求 2；本函数保留为窄接口供选点闭环等程序化启停）。
 void set_gps_rule_enabled(MetaState *st, bool on) {
-    const QSignalBlocker block_box(st->gps.gps_enable);
-    const QSignalBlocker block_sw(st->gps.gps_enable_switch);
-    st->gps.gps_enable->setChecked(on);
-    if (st->gps.gps_enable_switch != nullptr) {
-        st->gps.gps_enable_switch->setChecked(on);
+    if (st->gps.gps_enable_switch == nullptr) {
+        return;
     }
+    const QSignalBlocker block_sw(st->gps.gps_enable_switch);
+    st->gps.gps_enable_switch->setChecked(on);
 }
 
 // formkit 行构造的页内辅助（R2/R3 的组内规则）
@@ -129,17 +128,6 @@ QPushButton *make_button(QWidget *parent, const QString &object_name, const QStr
     button->setFixedHeight(theme::Metrics::btn_h);
     button->setCursor(Qt::PointingHandCursor);
     return button;
-}
-
-// 只读生效值框（§7.1 GPS 卡的生效坐标；mockup .gps-in 口径：--ctl 底 + r3 + tabular）
-QLineEdit *make_view_field(QWidget *parent, const QString &object_name) {
-    auto *edit = new QLineEdit(parent);
-    edit->setObjectName(object_name);
-    edit->setProperty(kFieldProperty, fieldprop::kView);
-    edit->setReadOnly(true);
-    edit->setFixedHeight(formkit::kControlH);
-    edit->setFont(theme::font(theme::Typography::body_px, QFont::Normal, /*tabular=*/true));
-    return edit;
 }
 
 // 规则输入框（R4 文本输入高 24；placeholder = 输入示例，修 1-33）
@@ -249,12 +237,14 @@ CardHeader make_header(MetaState *st, QWidget *parent, const QString &title,
 
 QString follow_hint(const MetaState *st) {
     if (st->follow.items.isEmpty()) {
-        return PageMeta::tr("无文件");
+        // 0.4.2（需求 1）：无行选中 = 空态（不再回退首个文件）；信息卡空态行另有完整说明。
+        return PageMeta::tr("未选择文件");
     }
-    const QString name = QFileInfo(st->follow.items.first().path).fileName();
-    const int total = st->follow.batch_files.size();
+    QString name = QFileInfo(st->follow.items.first().path).fileName();
+    const int total = static_cast<int>(st->follow.batch_files.size());
     const int index =
-        st->follow.batch_files.indexOf(st->follow.items.first().path) + 1; // 1-based；0 = 未找到
+        static_cast<int>(st->follow.batch_files.indexOf(st->follow.items.first().path)) +
+        1; // 1-based；0 = 未找到
     if (st->follow.items.size() >= 2) {
         return PageMeta::tr("已选 %1 个 · %2").arg(st->follow.items.size()).arg(name);
     }
@@ -268,9 +258,17 @@ QString follow_hint(const MetaState *st) {
 
 void refresh_effective(MetaState *st) {
     st->info.info_hint->set_full_text(follow_hint(st));
-    // M13（0.4.1）/ C2.6：「影响 N 个文件」→「已选 N 个文件」（编辑作用域 = 选中项；
-    // 胶囊读数 = 本次编辑会落到的文件数，不再是批内文件数）。
-    st->time.time_pill->setText(PageMeta::tr("已选 %1 个文件").arg(st->follow.items.size()));
+    // 0.4.2（需求 1/2）：「已选 N 个文件」胶囊 = 本次编辑会落到的文件数（= 行选中集合大小）。
+    // 单选/无选中时不显示（单选对象已由文件列表高亮 + hint 文件名表达；无选中 = 空态）。
+    // 0.4.1 起该文案已改为选择项口径；0.4.2 补上可见性落地（此前 setText 后胶囊始终隐藏）。
+    const int selected = static_cast<int>(st->follow.items.size());
+    if (selected >= 2) {
+        st->time.time_pill->setText(PageMeta::tr("修改仅作用于选中的 %1 个文件").arg(selected));
+        st->time.time_pill->setVisible(true);
+    } else {
+        st->time.time_pill->setText(QString());
+        st->time.time_pill->setVisible(false);
+    }
     if (st->follow.probe->pending()) {
         refresh_info_card(st, {});
         refresh_time_section(st, {});

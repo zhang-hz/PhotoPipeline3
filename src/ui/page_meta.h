@@ -11,8 +11,10 @@
 // PP-FROZEN(0.3.0) —— 元数据页「生效值显示」（设计 §5.2 / §9.3；mockup meta-dark|meta-light）
 //   落地任务 = W3-T12。本文件 0.3.0 的**追加面**（既有方法签名/语义一字不动）：
 //     * `MetaSelectionItem`：跟随选中项的纯数据快照（路径 + 单文件例外 + probe 摘要）；
-//     * `set_selection(items, from_selection)`：§5.2「一切显示跟随文件列表选中项」的喂入口
-//       （无选中 → 调用方填首个文件且 from_selection=false，页面出「(1/N)」提示）；
+//     * `set_selection(items, from_selection)`：§5.2「一切显示跟随文件列表选中项」的喂入口。
+//       **0.4.2 语义变更（用户需求 1/2，Lead 裁定 A 登记）**：无行选中 = 空态 —— 调用方传
+//       **空 items**（from_selection=false），页面显示「未选择文件」且全部可编辑控件禁用；
+//       不再回退首个文件（旧「(1/N)」跟随提示随之退役）。
 //     * `set_tokens(tokens)`：主题 tokens（QSS/配色单源 ui/theme.h；与 PreviewPanel/
 //       ClassifyPanel 同一注入口径）。
 //   既有方法（rules/apply_rules/set_batch_files/set_selected_files/set_exception_summary/
@@ -60,15 +62,17 @@ class PageMeta : public QWidget {
 public:
     explicit PageMeta(QWidget *parent = nullptr);
 
-    // M13（0.4.1）/ C2：语义变更（签名不变）——
-    //   * rules() = 当前选择项编辑状态的聚合快照（uniform 字段入规则；预设保存用，C2.6）；
-    //   * apply_rules(r) = 把预设 r 逐字段转成**选中文件**的 MetadataOverride（替换式；
+    // 0.4.2（需求 1/2）语义（签名不变）——
+    //   * rules() = 当前**选中图片**编辑状态的聚合快照（uniform 字段入规则；预设保存用）；
+    //   * apply_rules(r) = 把预设 r 逐字段转成**选中图片**的 MetadataOverride（替换式；
     //     存在数据的卡 *_enabled 置 true），就地更新 follow.items 后 refresh_all，并发
     //     selection_edits_committed 让宿主写模型（独立 PageMeta 探针不依赖信号）。
+    //   * UI 不编辑任何全局 BatchRules（运行 cfg.rules 恒空；唯一可写真源 = 每文件 override）。
     pp::BatchRules rules() const;              // aggregated from selected files' overrides
     void apply_rules(const pp::BatchRules &r); // preset load → per-file overrides
 
-    void set_batch_files(const QStringList &paths);       // 批内文件（「影响 N / N」与 (i/N) 提示）
+    void
+    set_batch_files(const QStringList &paths); // 批内文件集合（跟随提示 (i/N) 的 N；无批量规则）
     void set_selected_files(const QStringList &paths);    // 仅路径的选中面（无 probe 摘要/例外）
     void set_exception_summary(const QStringList &paths); // exception card list
     void set_map_provider(const QString &provider_id, const QString &amap_key, int cache_mb);
@@ -85,6 +89,10 @@ signals:
     // docs/m13-adjudications.md A1（metadata.h）/ A2（page_meta.h））：选择项字段提交 → 宿主写
     // FileListModel。
     void selection_edits_committed(const QList<MetaSelectionEdit> &edits);
+    // 0.4.2 / 需求 1（选择作用域）加性（signals 末追加）：页内「带元数据修改的文件」列表点击某行
+    // = 意图「在左侧文件列表定位并选中该文件」（编辑作用域 = 行选中集合，定位后右侧即跟随该文件）。
+    // 宿主（MainWindow）按 path → 源行 → 两级代理映射后选中/滚动/展开分组；过滤隐藏时如实提示。
+    void locate_file_requested(const QString &path);
 };
 
 } // namespace pp::ui

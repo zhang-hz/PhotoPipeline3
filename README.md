@@ -57,6 +57,8 @@ MSVC ASan 纳入本机门禁；⑧ **目录清理** —— 清空 50.6GB `build/
 [docs/m14-tasks.md](docs/m14-tasks.md) / [docs/m14-adjudications.md](docs/m14-adjudications.md) /
 [docs/0.4.2-report.md](docs/0.4.2-report.md)。
 
+**发行状态：0.4.2 正式版已发行**（tag **annotated `v0.4.2`** → commit **`658dcc6`**；GitHub Release [PhotoPipeline 0.4.2](https://github.com/zhang-hz/PhotoPipeline3/releases/tag/v0.4.2)，release id `431816449`，prerelease=**False**，publishedAt **2026-11-02T18:17:11Z**；`release.yml` run **41496852580 = success（7/7 job）**；**4 资产**：`win64.zip` 34,312,667 B / `909a0f94…d239f285`、`x86_64.AppImage` 52,799,992 B / `09585e07…b1e41ece`、`deps.txt` 2,439 B / `e8c80b3d…407854d`、`SHA256SUMS.txt` 293 B / `1dc2cabb…4281dde`；下载件 win64 解包 exe 实跑 `--version` = `PhotoPipeline 0.4.2`）。
+
 **0.4.1（历史正式版）= M13 用户 4 条需求**：① **元数据页选择项级编辑** —— 右侧每项修改默认只作用于
 **当前选中文件**（每文件独立 `MetadataOverride`）；多选 = 批量生效（字段级合并互不串扰）；多选值不一致时各面
 明确显示 **「多个值」**（Δ spin / 时间与 GPS 输入 / 关键信息卡 / GPS 生效坐标 / 开关三态）；允许部分文件不开启
@@ -678,7 +680,7 @@ python tools/env.py run -- cmake --build --preset release
 ```bash
 python tools/env.py run -- cmake --preset release-dev -B build/release-dev -DVCPKG_MANIFEST_INSTALL=OFF
 python tools/env.py run -- cmake --build build/release-dev
-python tools/env.py run -- ctest --test-dir build/release-dev --output-on-failure    # 条目以 ctest -N 实测为准（2026-11-02 实测 50 条 = 49 引擎/工具 + ui_smoke）
+python tools/env.py run -- ctest --test-dir build/release-dev --output-on-failure    # 条目以 ctest -N 实测为准（2026-11-03 实测 52 条 = 51 引擎/工具 + ui_smoke；0.4.1 基线 50）
 # 或手动跑（offscreen，产出 12 张走查截图）：
 QT_QPA_PLATFORM=offscreen ./build/release-dev/photopipeline \
     --ui-smoke --inputs tests/golden/base --shots .cache/ui-review

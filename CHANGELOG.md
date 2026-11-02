@@ -6,7 +6,7 @@
 版本单源 = `CMakeLists.txt`：数字段 `project(PhotoPipeline VERSION 0.4.2)` + **`PP_VERSION_LABEL ""`**
 ⇒ `--version` = **`PhotoPipeline 0.4.2`**；`vcpkg.json` 同步 0.4.2（R-122 口径）。
 契约 = [docs/m14-tasks.md](docs/m14-tasks.md)（C0–C8），裁定 = [docs/m14-adjudications.md](docs/m14-adjudications.md)
-（A1–A25），门禁读数与逐条取证 = [docs/0.4.2-report.md](docs/0.4.2-report.md)。
+（A1–A27），门禁读数与逐条取证 = [docs/0.4.2-report.md](docs/0.4.2-report.md)。
 
 ### 新增
 
@@ -84,7 +84,25 @@
 
 ### 发行
 
-- （tag / Release / 4 资产指纹在 tag 后回填；见 docs/0.4.2-report.md §2.9）
+- tag：annotated **`v0.4.2`**（tag object `5bcaf412…`）→ commit **`658dcc6`**（发行树；报告类提交不入 tag）。
+- GitHub Release：[PhotoPipeline 0.4.2](https://github.com/zhang-hz/PhotoPipeline3/releases/tag/v0.4.2)
+  （release id `431816449`，**prerelease=False**，publishedAt **2026-11-02T18:17:11Z**）；发行说明由本
+  CHANGELOG `[0.4.2]` 节生成。**4 资产**（下载件 sha256 实算 = API digest = `SHA256SUMS.txt` 三方一致）：
+  - `PhotoPipeline-0.4.2-win64.zip` **34,312,667 B** / SHA256 `909a0f9438d3674fc0943b75c8fd1b3b3cda8e39c37131052fc6d12cd239f285`
+    （118 条目；解包 exe 4,295,680 B，实跑 `--version` = `PhotoPipeline 0.4.2`）
+  - `PhotoPipeline-0.4.2-x86_64.AppImage` **52,799,992 B** / SHA256 `09585e07d036b7869d853c341b4d6ffaf648fbffd63cd867cf576bacb1e41ece`
+  - `PhotoPipeline-0.4.2-deps.txt` **2,439 B** / SHA256 `e8c80b3d61a4e0d41cde50eb3c04577688d7428cc189129b3331cf221407854d`（依赖集与 0.4.1 相同）
+  - `PhotoPipeline-0.4.2-SHA256SUMS.txt` **293 B** / SHA256 `1dc2cabb8faab94591282561b69526b223dea9814953ca7b8b5a61b7f4281dde`
+- `release.yml` run **41496852580 = success（7/7 job）**：appimage / winzip-build-dev / winzip-build /
+  winzip-pack / probe-winzip / probe-appimage / publish 全 success。
+- 门禁（本机 clean-first 冻结树 + verifier 独立复核，逐条见 [docs/0.4.2-report.md](docs/0.4.2-report.md) §2.0）：
+  ctest **52/52**、`SMOKE total=20 pass=20 fail=0`、`UI-SMOKE OK shots=12 pages=3`、regression **zero diff**
+  （2567=2567；版本行机械换锚归因 12/0/24）、format **239 files violations=0**、tidy
+  `TIDY total=253 baseline=262 files=76 violations=0`（未 `--update`）、`ci-versions-check OK (10 keys)`。
+- **tag 后补记（不入 tag，主分支后续提交）**：tag 提交的 `main-full` lint 因新建文件未纳入本地格式门禁
+  （`ci-format.sh` 只扫 tracked 文件）而红 —— 已修复 `tools/ci-format.sh`（纳入 untracked 新文件，A27）
+  并推送后续提交重跑；发行产物与门禁读数的有效性不受影响（发行道 release.yml 为独立冷构建且全绿）。
+  `main-full` / `nightly` 的 tag 后读数以 GitHub Actions 为准（本条目在拿到读数后回填；不宣称未取证的绿）。
 
 ## [0.4.1] — 2026-11-02
 

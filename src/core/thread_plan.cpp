@@ -70,7 +70,8 @@ int est_concurrent_threads(const std::vector<int> &effective, int parallel) {
 // ---------------------------------------------------------------------------
 EncoderThreadProfile encoder_thread_profile(std::string_view format_id) {
     // 能力由格式决定（heif 只有 x265；avif 两后端都走插件 threads）——backend_id 不入参，
-    // 避免两个同类型 string_view 相邻参数可互换（clang-tidy bugprone-easily-swappable-parameters）。
+    // 避免两个同类型 string_view 相邻参数可互换（clang-tidy
+    // bugprone-easily-swappable-parameters）。
     if (format_id == "jxl")
         return {16, true, "jxl"};
     if (format_id == "avif")

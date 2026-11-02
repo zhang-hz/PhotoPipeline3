@@ -116,9 +116,16 @@ case "$version" in
         ;;
 esac
 
-# 全源清单：git 跟踪 + 固定后缀（分平台/分目录零特例，新文件自动纳入）。
-mapfile -t files < <(git -C "$ROOT" ls-files -- 'src/**' 'tests/**' 'tools/**' |
-    grep -E '\.(c|cc|cpp|cxx|h|hh|hpp|hxx|inl|ipp)$' | sort)
+# 全源清单：git 跟踪 + **未跟踪新文件** + 固定后缀（分平台/分目录零特例，新文件自动纳入）。
+#   M14 收口（A27）：旧实现只扫 `git ls-files`（tracked）⇒ 本地在 `git add` 前跑 `--write`
+#   会静默跳过新建的 .cpp/.h（v0.4.2 tag 的 main-full lint 即因此红：thread_plan.cpp 新建时
+#   未被本地门禁覆盖）。补 untracked（--exclude-standard 尊重 .gitignore）后：本地 = tracked +
+#   untracked，CI 侧 checkout 全为 tracked ⇒ 两边仍是同一条判据（本地绿 ⇒ CI 绿）。
+mapfile -t files < <(
+    {
+        git -C "$ROOT" ls-files -- 'src/**' 'tests/**' 'tools/**'
+        git -C "$ROOT" ls-files --others --exclude-standard -- 'src/**' 'tests/**' 'tools/**'
+    } | grep -E '\.(c|cc|cpp|cxx|h|hh|hpp|hxx|inl|ipp)$' | sort -u)
 if [ "${#files[@]}" -eq 0 ]; then
     echo "ci-format: 源清单为空（在仓库根外运行？$ROOT）" >&2
     exit 2

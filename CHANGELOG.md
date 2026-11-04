@@ -1,10 +1,74 @@
 # 变更日志
 
-## [0.4.2 修复批] — 2026-11-04（未升版本号；本地 dist 重建，未移动 tag / GitHub Release）
+## [0.4.3] — 2026-11-04
 
-**性质**：0.4.2 正式版发行后用户反馈 6 项（5 项首轮 + 收口后追加 1 项实测崩溃）的修复批。
-`--version` 仍 **`PhotoPipeline 0.4.2`**；不移动 `v0.4.2` tag、不重发 Release 资产；
-交付 = 修复源码 + `dist/PhotoPipeline-0.4.2-win64.zip`。
+**正式版（stable）**：0.4.3 = **M15**（0.4.2 正式版用户反馈 **6 项**修复批 + 发布收口）。逐条：
+① **HEIC 无损模式** —— HEIF 速率控制下拉由「质量/CRF/QP」扩为「质量/CRF/QP/**无损**」四档（与既有
+「无损编码」勾选框同源，唯一真值 = 选择项 `lossless`）；**无损下色度采样 / 编码档位 / Level 仍可
+配置**（删除强制 4:4:4）；非 4:4:4 时如实中文警告「YCbCr 码流无损 ≠ 像素级无损」。② **多选「多个值」
+框界面异常** —— 时间卡「时区语义」QComboBox mixed 态此前只换虚线边框、文本仍显示首值，现真正显示
+「多个值」（`meta::MixedComboBox`，paint 级覆盖、零 item 模型/索引改动）。③ **单击「多个值」框闪退** ——
+本机未复现（真实事件链 25+ 交互点 × 3 轮，无 WER 事件）；同批复核修 3 处防御性收口 + 15 条 mixed
+交互机械探针（meta-selection 19→34）。④ **JXL 编码效率严重退化（600s+）** —— 根因 = 0.4.2 多输出
+规划器按「预算/P」名义均分线程，JXL/AVIF 这类真正吃内部线程的编码器被从 16 压到 8/4/2，再乘 JXL
+默认自适应 30 轮重编码放大；修复 = **逐输出公平分配**（heavy 编码器分走余下预算、flat 编码器保底 1，
+`RunScope` 末尾加性 `encode_threads_per_output`，默认空 = 旧口径逐字不变）。单轮 A/B：混合 3 输出
+JXL encode_ms 中位 **12320 → 5096 ms（≈2.4×）**，产物 SHA256 逐对相同。⑤ **部分 Windows 启动卡死
+（打开后转圈无响应）** —— 0.4.1→0.4.2 唯一新增启动期阻塞调用（预览色彩管理在 GUI 线程构造期同步
+`GetICMProfileW` + 读 ICC + lcms2）移出 GUI 线程：构造期立即注入 sRGB 回退，系统 profile 后台线程
+获取 + QTimer 轮询应用（generation 丢弃过期、5s 软超时/30s 硬上限、析构不 join、offscreen 不启线程）；
+模拟 `PP_DISPLAY_ICC_DELAY_MS=5000` 实测 `shown=1399ms`（<2s）且窗口可响应。⑥ **导入含 XMP 的 HEIC
+闪退** —— 根因 = Exiv2 0.28.8 `XmpParser::initialize()` 非线程安全懒初始化；GUI 多池（缩略图/预览/
+元数据探针）并发首读含 XMP 文件时竞态进入 Adobe XMP SDK 初始化 → 内部空指针崩溃（WER：exiv2.dll
++0x7c9cf）。修复 = 新增 `core/metadata_runtime.h`（call_once 初始化 + 进程级递归锁串行化全部 Exiv2
+I/O/解析入口，锁内只取预览字节、OIIO 解码移出锁外）；新增并发 XMP 回归探针。
+版本单源 = `CMakeLists.txt:19`：`project(PhotoPipeline VERSION 0.4.3)` + **`PP_VERSION_LABEL ""`**
+⇒ `--version` = **`PhotoPipeline 0.4.3`**；`vcpkg.json` 同步 0.4.3（R-122 口径）。
+裁定 = [docs/m15-adjudications.md](docs/m15-adjudications.md)（A1–A14 / U1–U7），
+门禁读数与逐条取证 = [docs/m15-report.md](docs/m15-report.md)。
+
+### 新增
+
+- **HEIC 无损模式（用户反馈 1/2）**：HEIF 速度控制下拉第四档「无损」与勾选框同源；无损下 chroma /
+  profile / Level 仍可配置并真正下发（非 444 如实告警；Level 因 x265 CQP+decoder-level 硬约束
+  「可配但不下发」并如实告警，产物 PTL Level 固定 8.5）；「无损」随格式预设 params 持久化往返，
+  工厂 `heif/default.json` 零改动。
+- **JXL 调度公平性（用户反馈 4）**：`core/thread_plan` 新增 `allocate_output_threads()` 逐输出线程
+  分配；单输出 / P==1 / 深队列路径与 0.4.2 逐字一致；线程预算不变式零放宽（任意并发子集
+  Σ真实并发 ≤ 每文件预算、W×P×E ≤ T）。
+- **Exiv2 运行时保护（用户反馈 6）**：新文件 `src/core/metadata_runtime.h`；`test_metadata` 首置
+  8 线程 × 8 次并发读 XMP fixture 回归探针；`--ui-smoke` 新增 `PP_IMPORT_SMOKE` dev 快路径。
+
+### 修复
+
+- 多选「多个值」界面异常（MixedComboBox 真显示「多个值」；mixed 提交统一到全部选中文件）。
+- 单击「多个值」框闪退：本机未复现，防御性收口 + 交互回归探针（未复现条件如实登记）。
+- 部分 Windows 启动卡死：显示 profile 获取异步化 + mica DWM 按 Win11 22H2 门控 + 启动日志记录
+  OS build/Qt/平台；非诊断模式零新增日志行（回归基线零漂移）。
+- 导入含 XMP 的 HEIC 闪退：Exiv2 串行化 + XMP call_once（崩溃偏移反汇编 + Exiv2 源码证据链，
+  本机竞态不可直接复现；真实 GUI 导入同一「下载」目录复跑无崩溃）。
+- 收口期修正：`docs/param-catalog.md` tune 小节标题恢复、format/tidy 门禁 0 违规。
+
+### 变更（用户可见语义）
+
+- HEIF 无损新增「速率控制 → 无损」第四档（勾选框保留并双向同步）；无损 + 非 4:4:4 明确标注
+  「色度有损 / 非像素级无损」；HEIC 无损下显式 Level 不再下发（如实告警，产物固定 Level 8.5）。
+- 预览先以 sRGB 渲染、系统显示 profile 异步到达后切换（可见一次颜色校正；offscreen/CI 恒 sRGB）。
+- 多选混合值：时区下拉等 mixed 控件统一显示「多个值」；点击/键盘/弹层交互不崩溃、不误写。
+
+### 发行
+
+- tag：annotated **`v0.4.3`** → commit（发行树；tag 后 CLOSE 类提交不入 tag，指纹回填见本小节）。
+- GitHub Release 由 `release.yml`（tag 触发）构建并发布：`win64.zip` + `x86_64.AppImage` + `deps.txt`
+  + `SHA256SUMS.txt` 四资产（发布后指纹见 README / AGENTS 的发行状态行）。
+- 本地发行构建 = `dist/PhotoPipeline-0.4.3-win64.zip`（`tools/make_winzip.py` 五门禁 + E-1/E-2/E-3
+  烟测；指纹见 docs/m15-report.md §2）。
+
+## [0.4.2 修复批] — 2026-11-04（未单独发行；内容已并入 0.4.3 正式版）
+
+**性质**：0.4.2 正式版发行后用户反馈 6 项（5 项首轮 + 收口后追加 1 项实测崩溃）的修复批
+**开发期记录**。本批未单独发行：其内容已全部并入上方 **[0.4.3]** 正式版（版本号一次到位）；
+本节保留开发期行为记录与本地 0.4.2-hotfix dist 口径，历史引用不作发布依据。
 裁定 = [docs/m15-adjudications.md](docs/m15-adjudications.md)（A1–A14 / U1–U7），
 读数与证据 = [docs/m15-report.md](docs/m15-report.md)。
 

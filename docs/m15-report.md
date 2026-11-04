@@ -1,9 +1,10 @@
-# 0.4.2 修复批（M15）收口报告 — 2026-11-04
+# 0.4.3 正式版（M15）收口报告 — 2026-11-04
 
-> 性质：0.4.2 正式版发行后用户反馈 5 项缺陷的修复批。**不升版本号**（`--version` 仍
-> `PhotoPipeline 0.4.2`），不移动 `v0.4.2` tag / 不重发 GitHub Release；交付 = 修复后的源码
-> 工作树 + 本地发行构建 `dist/PhotoPipeline-0.4.2-win64.zip`。
-> 契约 = 本批用户反馈（5 条，见 §1 映射）；裁定 = `docs/m15-adjudications.md`（A1–A13、U1–U6）。
+> 性质：0.4.2 正式版发行后用户反馈 **6 项**缺陷的修复批，**升版本为 0.4.3 正式版**发布
+> （`--version` = `PhotoPipeline 0.4.3`；tag `v0.4.3`；GitHub Release 由 `release.yml`（tag 触发）
+> 构建并发布 win64.zip / x86_64.AppImage / deps.txt / SHA256SUMS.txt 四资产）；本地交付 =
+> 修复后的源码工作树 + `dist/PhotoPipeline-0.4.3-win64.zip`。
+> 契约 = 本批用户反馈（6 条，见 §1 映射）；裁定 = `docs/m15-adjudications.md`（A1–A14、U1–U7）。
 > 回归口径：证据只增不减；冻结行/冻结截图集逐字不变；金样与夹具零改动。
 
 ## 1. 用户反馈 → 根因 → 修复（逐条）
@@ -27,16 +28,18 @@ python tools/env.py run -- cmake --build build/m15-integration -j 10
 python tools/env.py run -- ctest --test-dir build/m15-integration --output-on-failure
 ```
 
-- **ctest 52/52 passed**（Exiv2 修复后最终全量轮 Total 111.36s；其中 `ui_smoke` 通过、
+- **ctest 52/52 passed**（0.4.3 clean-first 重建后全量轮 Total 112.00s；其中 `ui_smoke` 通过、
   `test_enc_oiio` 通过、`test_metadata` 含并发 XMP 探针）。
 - **金样 20/20**：`SMOKE total=20 pass=20 fail=0`（`tests/golden/smoke.py build/m15-integration`）。
-- **回归 zero diff**：`regression: normalized 2567 lines vs baseline 2567 lines` / `zero diff (baseline reproduced)`。
+- **回归 zero diff**：版本行机械换锚（两平台基线 `version=0.4.2 → 0.4.3` 各 12 处**字节级**替换，
+  未使用 `--update` 重播种；归因 = attribution `version-bump lib=app` 12 段、语义零变化）后
+  `regression: normalized 2567 lines vs baseline 2567 lines` / `zero diff (baseline reproduced)`。
 - **`--ui-smoke` 冻结行逐字**：`UI-SMOKE OK shots=12 pages=3`；`folds: checked=11 bad=0`、
   `m8-params: checked=107 bad=0`、`meta-selection: checked=34 bad=0`、`layout-audit 1124/0`。
 - **格式门禁**：`bash tools/ci-format.sh` → `check 247 files … violations=0`（钉版 clang-format 23.1.1）。
 - **静态分析棘轮**：`python tools/env.py run -- python tools/ci-tidy.py build/m15-integration`
   → **TIDY total=253 baseline=262 files=76 violations=0 seed=0（未 --update）**。
-- **发行树 ctest（release，非 dev）**：**51/51 passed**（Exiv2 修复后最终重建，Total 24.27s）。
+- **发行树 ctest（release，非 dev）**：**51/51 passed**（0.4.3 clean-first 重建后，Total 25.94s）。
 - **补充修复后复跑**（Exiv2 并发崩溃修复，2026-11-04 22:2x）：ctest **52/52**、金样 **20/20**、
   回归 **zero diff**、`--ui-smoke` 冻结行逐字；`test_metadata` 首置并发 XMP 探针
   `concurrent-metadata: reads_ok=64`（8 线程 × 8 次）。
@@ -48,7 +51,7 @@ python tools/env.py run -- cmake --build build/release -j 6          # release �
 python tools/env.py run -- python tools/make_winzip.py dist --smoke-exe build/m15-integration/photopipeline.exe
 ```
 
-- `build/release/photopipeline.exe` `--version` = **`PhotoPipeline 0.4.2`**。
+- `build/release/photopipeline.exe` `--version` = **`PhotoPipeline 0.4.3`**（clean-first 重建后）。
 - **打包五门禁全绿**：
   - 闭包门禁 A：68 PE / 105 导入名 → staging 51 · apiset 17 · system 37（无 missing）；
   - 来源门禁 B：5 个 `Qt6*.dll` 与 Qt 工具链 sha256 逐一一致；
@@ -58,8 +61,10 @@ python tools/env.py run -- python tools/make_winzip.py dist --smoke-exe build/m1
   - 烟测 E-1 `PhotoPipeline 0.4.2`(exit 0) · E-2 `UI-SMOKE OK shots=12 pages=3`(offscreen) ·
     E-3 `WIN-LAUNCH OK windows=6 visible=1`（真实 qwindows 平台）；
   - 产物内复核：解压即用 `--version` OK、licenses 35。
-- **产物**：`dist/PhotoPipeline-0.4.2-win64.zip`
-  **35,398,946 bytes**，`sha256 = 703e2b3b8531e70979f3e484a7bfb8aead5c22734c96f9fe1c6a000e9b6615f1`，条目 118。
+- **产物**：`dist/PhotoPipeline-0.4.3-win64.zip`
+  **35,398,947 bytes**，`sha256 = d54f98ac606cb09ea22c9a5bc5621fed5e11b3895b738165ab56bf806c137ba2`，条目 118
+  （E-1 `PhotoPipeline 0.4.3` / E-2 `UI-SMOKE OK shots=12 pages=3` / E-3 `WIN-LAUNCH OK windows=6 visible=1` 全绿）。
+  GitHub Release 端四资产由 `release.yml`（tag 触发，Linux AppImage + Windows zip）构建发布，指纹在发布后回填。
 
 ### 2.3 逐问题专项证据
 
@@ -93,8 +98,9 @@ python tools/env.py run -- python tools/make_winzip.py dist --smoke-exe build/m1
 
 逐条见 `docs/m15-adjudications.md`：A1（`RunScope` 末尾加性）、A3/A4（HEIC 无损语义与 Level 诚实降级）、
 A5（MixedComboBox 显示面）、A6（启动异步化语义变化）、A7–A9（探针换锚，只增不减）、A10（日志面零新增）、
-A11（Win 版本门控）、A12（不升版本）、A13（dist 口径）、**A14（Exiv2 运行时串行化 + XMP call_once，
-新文件承载、冻结面零改动、产物字节零变化）**。**无冻结面重排、无断言放宽、无金样/夹具改动。**
+A11（Win 版本门控）、**A12（0.4.3 升版本发布：tag/Release/回归基线 version 行机械换锚）**、A13（dist 口径）、
+**A14（Exiv2 运行时串行化 + XMP call_once，新文件承载、冻结面零改动、产物字节零变化）**。
+**无冻结面重排、无断言放宽、无金样/夹具改动。**
 
 ## 4. 未覆盖 / 未决（如实）
 

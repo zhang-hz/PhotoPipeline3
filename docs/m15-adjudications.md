@@ -1,8 +1,9 @@
-# M15 = 0.4.2 修复批裁定与追认记录（2026-11-04，Lead 收口）
+# M15 = 0.4.3 正式版裁定与追认记录（2026-11-04，Lead 收口）
 
-> 背景：0.4.2 正式版发行后用户反馈 5 项（HEIC 无损模式 / 元数据页多选「多个值」框界面异常 /
-> 单击「多个值」框闪退 / JXL 编码效率严重退化（600s+）/ 部分 Windows 版本打开后卡死无响应），
-> 本轮为**不升版本号的修复批**（`--version` 仍 `PhotoPipeline 0.4.2`；不移动 tag / Release）。
+> 背景：0.4.2 正式版发行后用户反馈 6 项（HEIC 无损模式 / 元数据页多选「多个值」框界面异常 /
+> 单击「多个值」框闪退 / JXL 编码效率严重退化（600s+）/ 部分 Windows 版本打开后卡死无响应 /
+> 导入含 XMP 的 HEIC 闪退），本轮修复批**升版本为 0.4.3 正式版**发布
+> （`--version` = `PhotoPipeline 0.4.3`；tag `v0.4.3`；Release 由 `release.yml` 构建发布）。
 > 体例同 `docs/m14-adjudications.md`：# | 裁定 | 理由 | 实施归属 | 状态。
 > 权威链：AGENTS.md > 本文件（本轮裁定）> 长期设计文档。判据意义变更一律登记；断言不得放宽。
 
@@ -44,8 +45,8 @@
 
 | # | 事项 | 裁定 | 状态 |
 |---|---|---|---|
-| A12 | 版本号 | **不升版本**：`CMakeLists.txt` 仍 0.4.2、`--version` = `PhotoPipeline 0.4.2`；本轮为 0.4.2 修复批的**本地 dist 重建**（不移动 tag / GitHub Release、不重发资产）。回归基线因版本行零变化**无需重播种**（实测 zero diff） | 已落地 |
-| A13 | dist 产物 | `dist/PhotoPipeline-0.4.2-win64.zip`（release 预设构建 + `tools/make_winzip.py` 五门禁：闭包/来源/结构/许可/烟测 E-1/E-2/E-3 + 工厂预设 + zip 内复核） | 已落地（指纹见 `docs/m15-report.md` §2） |
+| A12 | 版本号与发布 | **升版本为 0.4.3 正式版发布**（原「0.4.2 不升版本 hotfix」口径作废，用户 2026-11-04 指示「发布 0.4.3」）：`project(PhotoPipeline VERSION 0.4.3)`、`vcpkg.json` 0.4.3、`--version` = `PhotoPipeline 0.4.3`；annotated tag `v0.4.3` → 发行树 commit；`release.yml`（tag 触发）四资产发布。回归基线 version 行**机械换锚**（`regression.py --update`，归因 = 仅版本行，语义零变化） | 已落地（tag/Release 读数待发布后回填） |
+| A13 | dist 产物 | `dist/PhotoPipeline-0.4.3-win64.zip`（release 预设 clean-first 构建 + `tools/make_winzip.py` 五门禁：闭包/来源/结构/许可/烟测 E-1/E-2/E-3 + 工厂预设 + zip 内复核） | 已落地（指纹见 `docs/m15-report.md` §2） |
 
 ## 5b. 补充裁定：Exiv2 并发崩溃修复（2026-11-04 21:34 用户实测闪退，反馈 #6）
 

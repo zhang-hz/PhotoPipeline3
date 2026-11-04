@@ -16,16 +16,16 @@ if(NOT DEFINED VCPKG_TARGET_TRIPLET)
     endif()
 endif()
 
-project(PhotoPipeline VERSION 0.4.2 LANGUAGES C CXX)
+project(PhotoPipeline VERSION 0.4.3 LANGUAGES C CXX)
 # 预发布标签（**版本号单源 = 本节**，`CMakeLists.txt:19-26`；`--version` 输出 = PROJECT_VERSION
 # + 本标签）。CMake 的 project(VERSION) 只收数字段，"0.4.0.alpha1" 这类标签只能拼在字符串侧
 # （PP_VERSION_STRING）—— 定义点仍在此处，别处（CHANGELOG/README/AGENTS/打包脚本）一律引用。
 # 数字段（MAJOR.MINOR.PATCH）继续给 manifest / 语义比较用。
-# 0.4.2 正式版（M14，2026-11-03）：标签 = 空串 ⇒ 版本串 = "0.4.2"（`--version` =
-# `PhotoPipeline 0.4.2`）。内容 = 用户 8 条需求（元数据页选择作用域/多选聚合深梳、批量 GPS 规则
-# 退役、大预设重设计、元数据详细编辑页深查、预览 ICC 色彩管理、调度并行自适应、真实债（hwy ODR /
-# ProgressMux 竞争）清零 + CI 全绿高效、build 等垃圾目录清理）+ 发布收口（docs/m14-tasks.md）。
-# 此前正式版：0.4.1（M13）。
+# 0.4.3 正式版（M15，2026-11-04）：标签 = 空串 ⇒ 版本串 = "0.4.3"（`--version` =
+# `PhotoPipeline 0.4.3`）。内容 = 0.4.2 用户反馈 6 项修复批（HEIC 无损第四模式 / 多选「多个值」界面
+# 异常与闪退防御 / JXL 多输出线程公平分配 / 部分 Windows 启动卡死去阻塞 / 导入含 XMP 的 HEIC
+# 闪退（Exiv2 并发初始化崩溃根治）+ dist 重建（docs/m15-report.md）。
+# 此前正式版：0.4.2（M14）、0.4.1（M13）。
 set(PP_VERSION_LABEL "")
 
 set(CMAKE_CXX_STANDARD 23)

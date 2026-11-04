@@ -59,9 +59,14 @@ OIIO 解码移出锁外）+ 并发 XMP 回归探针。版本单源 = `CMakeLists
 **`PhotoPipeline 0.4.3`**；裁定 = [docs/m15-adjudications.md](docs/m15-adjudications.md)（A1–A14 / U1–U7），
 读数与证据 = [docs/m15-report.md](docs/m15-report.md)。
 
-**发行状态：0.4.3 正式版发布中**（tag **annotated `v0.4.3`**；GitHub Release **`PhotoPipeline 0.4.3`**
-由 `release.yml`（tag 触发）构建并发布 `win64.zip` / `x86_64.AppImage` / `deps.txt` / `SHA256SUMS.txt`
-四资产；资产指纹与 run 读数在发布完成后回填本行与 AGENTS §2）。
+**发行状态：0.4.3 正式版已发行**（tag **annotated `v0.4.3`**（tag object `64dcdf1a…`）→ commit
+**`0dbf6e5`**；GitHub Release [PhotoPipeline 0.4.3](https://github.com/zhang-hz/PhotoPipeline3/releases/tag/v0.4.3)，
+release id `434190819`，prerelease=**False**，publishedAt **2026-11-04T16:48:39Z**；`release.yml` run
+**41864935620 = success**（attempt 2，7/7 job；attempt 1 因 E-3 WIN-LAUNCH 在 runner 上
+`timeout-no-visible-window` 失败，`rerun-failed-jobs` 重跑通过）；**4 资产**：`win64.zip` 34,319,466 B /
+`91194f8f…4c5385`、`x86_64.AppImage` 52,783,608 B / `de2a9ad1…ffdd43`、`deps.txt` 2,439 B /
+`e8c80b3d…407854d`、`SHA256SUMS.txt` 293 B / `1a0cc74b…f94582`；下载件 win64 解包 exe 实跑
+`--version` = `PhotoPipeline 0.4.3`（zip 条目 118）；`main-full` run **41864930206 = success（10/10 job）**）。
 
 **0.4.2（历史正式版）= M14 用户 8 条需求 + 真实债清零 + 目录清理**：① **元数据页逻辑重梳** ——
 右侧修改严格只作用于**行选中**图片（单选=仅该张、多选=全部选中）；**无选中 = 空态 + 控件禁用 + 零写入**

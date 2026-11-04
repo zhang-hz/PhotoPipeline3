@@ -43,6 +43,13 @@ python tools/env.py run -- ctest --test-dir build/m15-integration --output-on-fa
 - **补充修复后复跑**（Exiv2 并发崩溃修复，2026-11-04 22:2x）：ctest **52/52**、金样 **20/20**、
   回归 **zero diff**、`--ui-smoke` 冻结行逐字；`test_metadata` 首置并发 XMP 探针
   `concurrent-metadata: reads_ok=64`（8 线程 × 8 次）。
+- **CI 发行链（tag `v0.4.3`）**：`release.yml` run **41864935620 = success**（attempt 2，**7/7 job**：
+  appimage / winzip-build / winzip-build-dev / probe-appimage / winzip-pack / probe-winzip / publish）。
+  首次 attempt（1）的 winzip-pack 在步骤 14 `make_winzip` 的 **E-3 WIN-LAUNCH** 上失败：
+  `WIN-LAUNCH FAIL windows=3 visible=0 reason=timeout-no-visible-window`（runner 会话真实 qwindows
+  窗口可见性抖动；同一构建 E-1/E-2/五门禁 A–D 全绿后才到 E-3）；经 `rerun-failed-jobs`（attempt 2）
+  通过并发布 Release。**main-full run 41864930206 = success（10/10 job）**；整轮 wall 16:12:09Z→16:47:25Z
+  = **35m16s**（其中 windows job 31m55s，超 24min 预算但未失败；预算读数如实记录，不宣称卡线内）。
 
 ### 2.2 发行构建与打包
 
@@ -58,13 +65,22 @@ python tools/env.py run -- python tools/make_winzip.py dist --smoke-exe build/m1
   - 结构断言 C：exe / qwindows / qoffscreen / imageformats=4 / tls=2 齐备；
   - 许可断言 D：`licenses/` 35 个 copyright（≥30）+ `PhotoPipeline/LICENSE`；
   - 工厂预设门禁：8 格式 default.json 齐备 · JSON 总数 11 · 无 `_builtin-` 残留（写盘前 + zip 内各一次）；
-  - 烟测 E-1 `PhotoPipeline 0.4.2`(exit 0) · E-2 `UI-SMOKE OK shots=12 pages=3`(offscreen) ·
+  - 烟测 E-1 `PhotoPipeline 0.4.3`(exit 0) · E-2 `UI-SMOKE OK shots=12 pages=3`(offscreen) ·
     E-3 `WIN-LAUNCH OK windows=6 visible=1`（真实 qwindows 平台）；
   - 产物内复核：解压即用 `--version` OK、licenses 35。
 - **产物**：`dist/PhotoPipeline-0.4.3-win64.zip`
   **35,398,947 bytes**，`sha256 = d54f98ac606cb09ea22c9a5bc5621fed5e11b3895b738165ab56bf806c137ba2`，条目 118
   （E-1 `PhotoPipeline 0.4.3` / E-2 `UI-SMOKE OK shots=12 pages=3` / E-3 `WIN-LAUNCH OK windows=6 visible=1` 全绿）。
-  GitHub Release 端四资产由 `release.yml`（tag 触发，Linux AppImage + Windows zip）构建发布，指纹在发布后回填。
+- **GitHub Release（tag 触发）**：[PhotoPipeline 0.4.3](https://github.com/zhang-hz/PhotoPipeline3/releases/tag/v0.4.3)
+  release id `434190819`，prerelease=**False**，publishedAt **2026-11-04T16:48:39Z**；`release.yml` run
+  **41864935620 = success**（attempt 2，7/7 job）。
+  - `PhotoPipeline-0.4.3-win64.zip` **34,319,466 B**，`sha256 = 91194f8fb65950d07b21cae6b8187fe5c753271cde3baa0d29cad52bef4c5385`；
+  - `PhotoPipeline-0.4.3-x86_64.AppImage` **52,783,608 B**，`sha256 = de2a9ad137bd3b1ef1c4018849613d53a1e3adf0d84d9144c0adcd30bbffdd43`；
+  - `PhotoPipeline-0.4.3-deps.txt` **2,439 B**，`sha256 = e8c80b3d61a4e0d41cde50eb3c04577688d7428cc189129b3331cf221407854d`；
+  - `PhotoPipeline-0.4.3-SHA256SUMS.txt` **293 B**，`sha256 = 1a0cc74bb399b3b6b81b4e4eb912e29975e586e2ce443ac8dd5158d582f94582`
+    （内容三行 = AppImage / deps / win64，与 GitHub API digest 逐字一致）。
+  - **下载件复核**：win64 zip 解包 118 条目，`staging/photopipeline.exe --version` = `PhotoPipeline 0.4.3`
+    （exe sha256 `fe38d1c0…e338d3`）；AppImage 侧由 `probe-appimage` job 在下载件上跑 `--version` 断言通过。
 
 ### 2.3 逐问题专项证据
 
@@ -122,22 +138,32 @@ A11（Win 版本门控）、**A12（0.4.3 升版本发布：tag/Release/回归�
   空指针）+ Exiv2 0.28.8 源码非线程安全 initialize 的机械事实链；修复消除竞争条件本身（串行化 +
   call_once），非 try/catch 掩盖。若用户侧仍复现，建议开 WER LocalDumps 取全栈并回传；届时可按
   新证据继续收敛（登记 A14/U7）。
+- **CI E-3 WIN-LAUNCH 抖动（发行链）**：attempt 1 在 winzip-pack 的 E-3 上 `windows=3 visible=0
+  reason=timeout-no-visible-window` 失败、重跑 attempt 2 同一构建通过 ⇒ 判定为 runner 会话/窗口可见性
+  抖动，非本版启动路径回归（本机 make_winzip E-3 `WIN-LAUNCH OK windows=6 visible=1` 稳定通过，0.4.2
+  同命令同环境曾通过）。**不掩盖**：发行链读数如实记录 attempt 1 失败与 attempt 2 通过；若后续复现，
+  应先查 runner 会话/桌面可见性再判产品回归。
+- **main-full 0.4.3 轮 wall 超预算**：run `41864930206` wall 35m16s（windows job 31m55s）超 24min
+  预算但 gate 未红；本轮未调 CI 预算判据（只记录读数），如持续超预算按既有 §12.3 处置另起。
 
 ## 5. 复现命令与证据路径
 
 ```bash
-# 集成门禁（本机 Windows）
+# 集成门禁（本机 Windows；0.4.3 clean-first 重建）
 python tools/env.py run -- cmake --preset release-dev -B build/m15-integration -DVCPKG_MANIFEST_INSTALL=OFF
-python tools/env.py run -- cmake --build build/m15-integration -j 10
+python tools/env.py run -- cmake --build build/m15-integration --clean-first -j 8
 python tools/env.py run -- ctest --test-dir build/m15-integration --output-on-failure      # 52/52
 python tools/env.py run -- python tests/golden/smoke.py build/m15-integration              # 20/20
-python tools/env.py run -- python tools/regression.py build/m15-integration               # zero diff
+python tools/env.py run -- python tools/regression.py build/m15-integration               # zero diff（版本行机械换锚后）
 python tools/env.py run -- python tools/ci-tidy.py build/m15-integration                  # ratchet
 & "C:\Program Files\Git\bin\bash.exe" tools/ci-format.sh                                  # 0 diff
-# 发行构建 + 打包（Windows）
-python tools/env.py run -- cmake --build build/release -j 6
+# 发行构建 + 打包（Windows，0.4.3）
+python tools/env.py run -- cmake --build build/release --clean-first -j 8
 python tools/env.py run -- python tools/make_winzip.py dist --smoke-exe build/m15-integration/photopipeline.exe
+# 发布（tag 触发 release.yml 构建/发布四资产）
+git tag -a v0.4.3 -m "PhotoPipeline 0.4.3（M15）" && git push origin main && git push origin v0.4.3
 ```
 
-证据路径（gitignored）：`build/m15-{ui-smoke,ctest,golden,regression,tidy,release-ctest,winzip}.log`、
+证据路径（gitignored）：`build/rel043-{ctest-int,ctest-release,golden,regression,regression2,tidy,uismoke,winzip}.log`、
+`build/rel043-build*.log`、`.cache/regression/attribution.log`、`build/exiv2-crash-repro/**`、
 `build/heic-lossless/evidence/**`、`build/meta-ui/**`、`build/jxl-perf/**`、`build/win-startup/**`。

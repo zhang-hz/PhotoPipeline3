@@ -58,11 +58,19 @@ I/O/解析入口，锁内只取预览字节、OIIO 解码移出锁外）；新�
 
 ### 发行
 
-- tag：annotated **`v0.4.3`** → commit（发行树；tag 后 CLOSE 类提交不入 tag，指纹回填见本小节）。
-- GitHub Release 由 `release.yml`（tag 触发）构建并发布：`win64.zip` + `x86_64.AppImage` + `deps.txt`
-  + `SHA256SUMS.txt` 四资产（发布后指纹见 README / AGENTS 的发行状态行）。
-- 本地发行构建 = `dist/PhotoPipeline-0.4.3-win64.zip`（`tools/make_winzip.py` 五门禁 + E-1/E-2/E-3
-  烟测；指纹见 docs/m15-report.md §2）。
+- tag：annotated **`v0.4.3`**（tag object `64dcdf1a028d76875a60fee1a8720d5f24665a5c`）→ commit
+  **`0dbf6e5`**（发行树；tag 后 CLOSE 类提交不入 tag）。
+- GitHub Release [PhotoPipeline 0.4.3](https://github.com/zhang-hz/PhotoPipeline3/releases/tag/v0.4.3)
+  （release id `434190819`，prerelease=**False**，publishedAt **2026-11-04T16:48:39Z**）由
+  `release.yml`（tag 触发）构建并发布：run **41864935620 = success**（attempt 2，7/7 job；首次 attempt
+  的 winzip-pack 因 E-3 WIN-LAUNCH 在 runner 上 `timeout-no-visible-window` 失败，`rerun-failed-jobs`
+  重跑通过）。**4 资产**：`win64.zip` 34,319,466 B / `91194f8f…4c5385`、`x86_64.AppImage`
+  52,783,608 B / `de2a9ad1…ffdd43`、`deps.txt` 2,439 B / `e8c80b3d…407854d`、`SHA256SUMS.txt`
+  293 B / `1a0cc74b…f94582`；下载件 win64 解包 exe 实跑 `--version` = `PhotoPipeline 0.4.3`
+  （zip 条目 118）。
+- 本地发行构建 = `dist/PhotoPipeline-0.4.3-win64.zip`（35,398,947 B / `d54f98ac…c137ba2`；`tools/make_winzip.py`
+  五门禁 + E-1/E-2/E-3 烟测全绿；本机 zip 与 CI zip 字节不同属已知（zip 内时间戳），sha256 各以本行
+  与 Release 行为准）。
 
 ## [0.4.2 修复批] — 2026-11-04（未单独发行；内容已并入 0.4.3 正式版）
 

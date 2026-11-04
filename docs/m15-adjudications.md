@@ -45,7 +45,7 @@
 
 | # | 事项 | 裁定 | 状态 |
 |---|---|---|---|
-| A12 | 版本号与发布 | **升版本为 0.4.3 正式版发布**（原「0.4.2 不升版本 hotfix」口径作废，用户 2026-11-04 指示「发布 0.4.3」）：`project(PhotoPipeline VERSION 0.4.3)`、`vcpkg.json` 0.4.3、`--version` = `PhotoPipeline 0.4.3`；annotated tag `v0.4.3` → 发行树 commit；`release.yml`（tag 触发）四资产发布。回归基线 version 行**机械换锚**（`regression.py --update`，归因 = 仅版本行，语义零变化） | 已落地（tag/Release 读数待发布后回填） |
+| A12 | 版本号与发布 | **升版本为 0.4.3 正式版发布**（原「0.4.2 不升版本 hotfix」口径作废，用户 2026-11-04 指示「发布 0.4.3」）：`project(PhotoPipeline VERSION 0.4.3)`、`vcpkg.json` 0.4.3、`--version` = `PhotoPipeline 0.4.3`；annotated tag `v0.4.3`（tag object `64dcdf1a…`）→ 发行树 commit `0dbf6e5`；GitHub Release release id `434190819`（publishedAt 2026-11-04T16:48:39Z，4 资产）由 `release.yml` run `41864935620` 发布（attempt 2 success；attempt 1 E-3 runner 抖动，重跑通过）。回归基线 version 行**机械换锚**（两平台基线各 12 处 `version=0.4.2→0.4.3` 字节级替换，未 `--update` 重播种；归因 = attribution 仅 version-bump 12 段、语义零变化） | 已落地（tag/Release/资产指纹见 README/AGENTS 发行状态行） |
 | A13 | dist 产物 | `dist/PhotoPipeline-0.4.3-win64.zip`（release 预设 clean-first 构建 + `tools/make_winzip.py` 五门禁：闭包/来源/结构/许可/烟测 E-1/E-2/E-3 + 工厂预设 + zip 内复核） | 已落地（指纹见 `docs/m15-report.md` §2） |
 
 ## 5b. 补充裁定：Exiv2 并发崩溃修复（2026-11-04 21:34 用户实测闪退，反馈 #6）

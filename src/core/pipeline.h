@@ -300,6 +300,18 @@ struct RunScope {
     // 语义只影响"同一文件的多个 target 是否并发编码"；产物字节/事件/进度语义零改动
     // （单输出运行 P 恒 1，与旧行为完全一致）。既有成员名/顺序/默认值全部不变。
     int parallel_outputs = 0;
+
+    // —— M15 **加性追认**（末尾追加；Lead 登记 docs/m15-adjudications.md）——
+    // 逐输出编码器内部线程数 E（与 RunConfig::outputs 同序；下标 = OutputFormatSpec 配置
+    // 下标 = pipeline 的 cfg_index）。M15 公平性修复：同文件多输出并行时，0.4.2 把每文件预算
+    // 均分给 P 路 target（jxl 的 E 从 16 → 8/4/2），而 jpegli/OIIO 无内部线程、heif/x265 用
+    // 不受控固定池 —— 预算被名义均分浪费，JXL/AVIF 数量级变慢。规划器现改为按编码器能力
+    // 逐输出分配（heavy 拿余下预算，flat 保底 1）。
+    //   * 空（默认）= 全部 target 用上面的 `encode_threads`（0.4.2 旧口径逐字不变；
+    //     单输出 / P==1 / 深队列 / 单测直调 run_one_file 的路径恒为空）；
+    //   * 非空 = 规划器的 ThreadPlan::encode_threads_per_output（P>1 时）。
+    // 语义只影响编码器内部线程数；产物字节/事件/进度语义零改动。既有成员名/顺序/默认值不变。
+    std::vector<int> encode_threads_per_output;
 };
 
 // §3.2 冻结形态的第三参 `EventFn`（T5 定稿为「事件回调 + 运行期共享态」载体）：

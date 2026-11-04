@@ -172,7 +172,7 @@ format_tables 的 supports_alpha=false 不符。 -->
 | key | 标签 | 类型 | 范围 | 预期默认 | 级别 |
 |---|---|---|---|---|---|
 | quality | 质量 | int | 0–100 | 视觉透明档校准值（实现期实测） | 核心 |
-| lossless | 无损 | bool | | false | 核心 |
+| lossless | 无损 | bool | | false | 核心 | M15 起「速率控制」下拉的**第四档「无损」**与顶部「无损」勾选框**同源**（唯一真值 = 表单 `selection().lossless`）：选中无损档 ⇒ `lossless`/`__lossless` = true 且 quality/CRF/QP 数值键不下发；切回任一有损档 ⇒ false |
 | chroma | 色度采样 | enum | 420 / 422 / 444 | **420**（R-316 勘误：旧表写 444，实现缺省 420） | 核心 |
 | preset | 画质预设 | enum |（插件值集） | 插件当前值 | 核心 |
 | tune | 画质取向 | enum | psnr / ssim / grain / fastdecode / animation（仿真）/ zerolatency·vmaf（置灰） | ssim | 核心（UX-10.2 提核心；W2-T3/C20） |
@@ -273,6 +273,24 @@ Main Tier / Level 5.1，媒体类型参数 `itemTypes="hvc1.1.2.L153.B0"`），*
 - **兼容别名**：`__heif_grid`（0=关闭/1=总是/2=自动）保留为只读兼容读别名，旧预设 /
   `--dev --param __heif_grid=…` 仍生效；新配置一律写 `heif_grid`（0=关闭/1=自动/2=总是）。
   两键同时出现时 `heif_grid` 优先并记日志。
+
+**无损模式（M15 / 0.4.2 用户反馈 #1；`lossless` 键 + RC 下拉第四档）**：
+
+- **入口同源**：HEIF 的「速率控制」下拉 = 质量 / CRF / QP / **无损**（第 4 档）；顶部「无损编码」
+  勾选框保留并与下拉**双向同步**（唯一真值 = 表单 `sel.lossless`，不存在两套真值）。选中无损档：
+  `lossless`/`__lossless` = true、RC 数值键（quality/x265:crf/x265:qp/qpmin/qpmax）被规则隐藏且
+  **不进 `values()`**；切回任一有损档 ⇒ `lossless=false`，原路径值不丢。
+- **chroma 可配置（不再强制 4:4:4）**：无损下 chroma 420/422/444 仍可设、真正下发（编码器参数 +
+  平面布局同源）；**非 444 时给如实中文警告**「YCbCr 码流无损但不等于像素级无损」（编码器运行日志
+  warn + UI 档位行 tooltip + 规则 G3 warn），不静默假装像素无损。像素级无损请选 444。
+- **profile/level 仍可配置**：输出级 `__heif_profile` 照既有 `heif_profile_compatible_for` 校验并
+  下发（不因无损强制「自动」）；`x265:level-idc` 仍可设，但**无损下不下发**——无损 = 恒定 QP，
+  x265 `enforceLevel` 对「CQP + decoder level」硬失败（`source/encoder/level.cpp:443-445`），
+  该值被引擎跳过并给中文 warning，码流 PTL Level 由 `determineLevel` 的 bLossless 分支
+  **固定写 8.5**（`level.cpp:160-166`）；hvcC 回读校验对无损跳过 level 比较（profile/chroma/
+  bitdepth 仍逐项校验）。需要指定 Level 请关闭无损。
+- **码流事实**：HEVC 无损 = **YCbCr 平面无损**，RGB↔YCbCr 往返有舍入（不是 RGB 逐位）；>16 MP
+  自动走标准 HEIF grid 分块（tile 色度面按所选 chroma 推导），保证 libde265/OIIO 可打开。
 
 **tune（W2-T3 / C20；不 patch 依赖）**：键仍是 `tune`（预设兼容关键），下拉扩为 7 项 ——
 4 原生 + 1 仿真 + 2 置灰（"不撒谎且可解释"：置灰项保留位置，原因进 item tooltip）：

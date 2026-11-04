@@ -630,8 +630,10 @@ struct ParamForm::Impl {
     // 由表单自身每次求值前覆盖，保证 UI 实时态与预检同源）。
     pp::ParamContext rule_ctx;
     bool rule_ctx_set = false;
-    // RC 模式（G4 已定：显式模式下拉）——HEIF{质量/CRF/QP}、libaom{质量/CQ Level}、SVT{质量/QP}
-    enum class RcMode : std::uint8_t { Quality = 0, Crf, Qp, CqLevel };
+    // RC 模式（G4 已定：显式模式下拉）——HEIF{质量/CRF/QP/无损}、libaom{质量/CQ Level}、
+    // SVT{质量/QP}。M15：HEIF 的「无损」是第四档（与「无损编码」勾选框**同源**：唯一真值 =
+    // sel.lossless；选中无损档 ⇒ lossless=true 且 RC 数值键不下发；切回任一有损档 ⇒ false）。
+    enum class RcMode : std::uint8_t { Quality = 0, Crf, Qp, CqLevel, Lossless };
     RcMode rc_mode = RcMode::Quality;
     bool rc_conflict = false;                   // 预设载入时同一后端出现多个 RC 路径键（预检错误）
     std::string rc_conflict_detail;             // 冲突说明（中文）
@@ -750,6 +752,12 @@ struct ParamForm::Impl {
         std::string key; // 该路径的数值行键（quality = 既有键）
     };
 
+    // HEIF/x265 的 RC 下拉是否含「无损」第四档（M15 用户面要求 #1）。
+    bool rc_has_lossless() const {
+        const pp::BackendDef *b = backend();
+        return fmt->id == "heif" && b != nullptr && b->id == "x265";
+    }
+
     std::vector<RcChoice> rc_choices() const {
         std::vector<RcChoice> out;
         const pp::BackendDef *b = backend();
@@ -759,6 +767,8 @@ struct ParamForm::Impl {
         if (fmt->id == "heif") {
             out.push_back({RcMode::Crf, ParamForm::tr("CRF"), "x265:crf"});
             out.push_back({RcMode::Qp, ParamForm::tr("QP"), "x265:qp"});
+            // 无损档：无数值行（key 空）——无损由 sel.lossless 单独承载（与勾选框同源）。
+            out.push_back({RcMode::Lossless, ParamForm::tr("无损"), std::string()});
         } else if (b->id == "libaom") {
             out.push_back({RcMode::CqLevel, ParamForm::tr("CQ Level"), "aom:cq-level"});
         } else if (b->id == "svt-av1") {
@@ -769,6 +779,8 @@ struct ParamForm::Impl {
 
     // 当前 RC 路径的数值键（quality 模式 = 既有 quality 行）。
     std::string rc_active_key() const {
+        if (rc_mode == RcMode::Lossless)
+            return std::string(); // 无损档无 RC 数值键（quality/crf/qp 全部不下发）
         for (const RcChoice &c : rc_choices())
             if (c.mode == rc_mode)
                 return c.key;
@@ -791,6 +803,15 @@ struct ParamForm::Impl {
     void infer_rc_mode(const pp::ParamSet &incoming) {
         if (!rc_supported())
             return;
+        // M15：HEIF 无损档在参数面上 = 显式 `lossless`/`__lossless` 参数（预设/采集链已持久化
+        // 该参数）——载入含 lossless=true 的参数集 ⇒ RC 模式 = 无损，且不退化为"质量"路径。
+        // （无损档无数值键，故下列"存在的 RC 路径键"推断对它无意义。）
+        if (rc_has_lossless() && pp::lossless_flag(incoming)) {
+            rc_mode = RcMode::Lossless;
+            rc_conflict = false;
+            rc_conflict_detail.clear();
+            return;
+        }
         const std::vector<RcChoice> choices = rc_choices();
         std::vector<RcMode> found;
         QStringList keys;
@@ -925,10 +946,12 @@ struct ParamForm::Impl {
                     "__lossless 供参数谓词与编码器读取）；开启后视觉距离按 0 "
                     "处理（忽略视觉距离）") +
                 ((fmt->id == "heif" || fmt->id == "avif")
-                     ? ParamForm::tr("。本格式无损强制 4:4:4（4:2:0/4:2:2 会抽样色度，不是"
-                                     "无损）；HEVC/AV1 的无损是 YCbCr 平面无损，RGB↔YCbCr 往返"
-                                     "有舍入（不是逐位）；HEIF 超过 16 MP 会自动用标准 grid 分块"
-                                     "以避开 libde265 的单图解码上限")
+                     ? ParamForm::tr(
+                           "。本格式无损 = 编码器无损模式（HEIF 也可用「速率控制」下拉"
+                           "的「无损」档，二者同源）；HEVC/AV1 的无损是 YCbCr 平面无损，"
+                           "RGB↔YCbCr 往返有舍入（不是逐位）；色度采样 4:2:0/4:2:2 会"
+                           "下采样色度，不算像素级无损（界面上如实警告）；HEIF 超过 16 MP "
+                           "会自动用标准 grid 分块以避开 libde265 的单图解码上限")
                      : QString()));
             root->addWidget(row.row);
         }
@@ -1405,17 +1428,21 @@ struct ParamForm::Impl {
         emit q->changed();
     }
 
-    // M8-B2/G4：RC 模式行（显式模式下拉；HEIF {质量/CRF/QP}、libaom {质量/CQ Level}、
+    // M8-B2/G4：RC 模式行（显式模式下拉；HEIF {质量/CRF/QP/无损}、libaom {质量/CQ Level}、
     // SVT {质量/QP}）。默认「质量」= 既有 quality 行 ⇒ 零行为变化。
+    // M15：HEIF 的「无损」档与「无损编码」勾选框同源（唯一真值 sel.lossless）：选中即
+    // lossless=true、RC 数值键不进 values()；切回任一有损档即 lossless=false。
     void build_rc_row() {
         if (!rc_supported())
             return;
         formkit::ComboSpec spec;
         spec.object_name = QStringLiteral("pp-param-rcmode-") + QString::fromStdString(fmt->id);
         spec.accessible = ParamForm::tr("速率控制模式");
-        spec.tooltip = ParamForm::tr(
-            "速率控制路径：质量（0–100，越大越好）/ CRF / QP 三选一；只显示当前路径的数值行，"
-            "其余路径不下发");
+        spec.tooltip =
+            ParamForm::tr(
+                "速率控制路径：质量（0–100，越大越好）/ CRF / QP%1；只显示当前路径的数值行，"
+                "其余路径不下发")
+                .arg(rc_has_lossless() ? ParamForm::tr(" / 无损（编码器无损模式）") : QString());
         rc_combo = formkit::combo_box(core_host, spec);
         rc_combo->setObjectName(QStringLiteral("pp-param-rcmode-") +
                                 QString::fromStdString(fmt->id));
@@ -1438,10 +1465,16 @@ struct ParamForm::Impl {
             const RcMode mode = choices[static_cast<std::size_t>(idx)].mode;
             if (mode == rc_mode)
                 return;
+            // 目标档先落到 rc_mode：refresh() 的无损同步只处理"未显式选择"的情形。
             rc_mode = mode;
             rc_conflict = false;
             rc_conflict_detail.clear();
-            if (mode != RcMode::Quality) {
+            const bool want_lossless = mode == RcMode::Lossless;
+            const bool lossless_changed = want_lossless != sel.lossless;
+            if (lossless_changed)
+                apply_lossless_state(want_lossless); // 同源：唯一真值 = sel.lossless
+            rc_mode = mode;                          // 恢复显式目标档（set_values 可能重推断）
+            if (mode != RcMode::Quality && mode != RcMode::Lossless) {
                 // 切到 CRF/QP 路径：该路径键若尚未有值 → 用目录默认写入（**不覆盖**用户已有值）
                 const std::string key = rc_active_key();
                 if (values.find(key) == values.end()) {
@@ -1452,6 +1485,8 @@ struct ParamForm::Impl {
                 }
             }
             refresh();
+            if (lossless_changed)
+                emit q->selection_changed(sel); // 条 7：无损状态属于选择面
             emit q->changed();
         });
     }
@@ -1459,7 +1494,9 @@ struct ParamForm::Impl {
     void update_rc_row_state() {
         if (rc_row == nullptr)
             return;
-        const bool show = rc_supported() && !sel.lossless;
+        // M15：HEIF 的「无损」档就在本下拉里 ⇒ 无损期间本行仍可见（当前项 = 无损）；
+        // 其余格式（AVIF）无损仍由独立勾选框承载 ⇒ 沿用"无损 ⇒ RC 组整组隐藏"。
+        const bool show = rc_supported() && (!sel.lossless || rc_has_lossless());
         rc_row->setVisible(show);
         if (rc_combo != nullptr) {
             for (int i = 0; i < rc_combo->count(); ++i) {
@@ -1469,8 +1506,12 @@ struct ParamForm::Impl {
                     break;
                 }
             }
-            QString tip = ParamForm::tr("速率控制路径（质量 / CRF / QP 三选一）；"
-                                        "只显示当前路径的数值行，其余路径不下发");
+            QString tip = rc_has_lossless()
+                              ? ParamForm::tr("速率控制路径（质量 / CRF / QP / 无损 四选一）；"
+                                              "只显示当前路径的数值行，其余路径不下发；无损 = "
+                                              "编码器无损模式（与「无损编码」勾选框同源）")
+                              : ParamForm::tr("速率控制路径（质量 / CRF / QP 三选一）；"
+                                              "只显示当前路径的数值行，其余路径不下发");
             if (rc_conflict)
                 tip += QLatin1Char('\n') + QString::fromStdString(rc_conflict_detail);
             for (const std::string &w : rule_warnings_now)
@@ -1758,6 +1799,15 @@ struct ParamForm::Impl {
 
     // 条 4：谓词重算 —— apply_locks → 强制值写回 → 控件同步 → 可见性/改值标记
     void refresh() {
+        // M15：HEIF 的 RC 模式与无损开关**同源**（唯一真值 = sel.lossless）：
+        //   * sel.lossless=true ⇒ RC 模式恒为「无损」（勾选框/预设/selection 任一入口）；
+        //   * 关无损 ⇒ 退出「无损」档（显式切换的目标档已在调用前写入 rc_mode，不被覆盖）。
+        if (rc_has_lossless()) {
+            if (sel.lossless)
+                rc_mode = RcMode::Lossless;
+            else if (rc_mode == RcMode::Lossless)
+                rc_mode = RcMode::Quality;
+        }
         values[kLosslessKey] = sel.lossless;
         // §9.1：名为 "lossless" 的参数没有行，其值由"无损"复选框独占（heif/avif 内省参数）
         if (const pp::TechDef *t = tech(); t && find_param(*t, kLosslessParamKey))
@@ -2365,22 +2415,25 @@ struct ParamForm::Impl {
         emit q->changed();
     }
 
-    void user_set_lossless(bool on) {
+    // 无损状态切换核心（不发信号）：唯一真值 sel.lossless；返回是否发生了状态变化。
+    // 无损 ⇒ 技术可无损（不变式）；关无损 ⇒ 撤销本表单自动切走的技术并恢复开无损前的用户值
+    // （AVIF 的锁定 chroma=444 等不应残留；HEIF M15 起不再强制色度，恢复仅为保住用户原选择）。
+    bool apply_lossless_state(bool on) {
         if (on == sel.lossless)
-            return;
+            return false;
         std::string tech_id = sel.tech;
         std::string memo = pre_lossless_tech;
         bool restore_values = false;
         if (on) {
-            // 先记开无损前的用户值：HEIF/AVIF 的运行时技术自带 lossless_capable，
-            // 不触发换技术，但 chroma 仍会被强制 444；关无损时必须恢复。
+            // 先记开无损前的用户值：关无损时恢复（避免锁定值残留）。
             pre_lossless_values = values;
             const pp::TechDef *ct = tech();
             if (!ct || !ct->lossless_capable) {
                 const pp::TechDef *lt = first_lossless_tech_in(backend());
                 if (!lt) { // 无 lossless_capable 技术（复选框此时本应隐藏）
                     update_selectors();
-                    return;
+                    pre_lossless_values.clear();
+                    return false;
                 }
                 memo = sel.tech;
                 tech_id = lt->id; // jxl→modular、webp→lossless
@@ -2398,9 +2451,15 @@ struct ParamForm::Impl {
         pre_lossless_tech = memo;
         apply_state(sel.backend, tech_id, on);
         if (restore_values) {
-            set_values(pre_lossless_values); // HEIF 的强制 chroma=444 等不应残留
+            set_values(pre_lossless_values); // 锁定/强制值不应残留（如 AVIF 的 chroma=444）
             pre_lossless_values.clear();
         }
+        return true;
+    }
+
+    void user_set_lossless(bool on) {
+        if (!apply_lossless_state(on))
+            return;
         emit q->selection_changed(sel);
         emit q->changed();
     }

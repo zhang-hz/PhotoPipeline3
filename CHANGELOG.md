@@ -1,5 +1,48 @@
 # 变更日志
 
+## [0.4.2 修复批] — 2026-11-04（未升版本号；本地 dist 重建，未移动 tag / GitHub Release）
+
+**性质**：0.4.2 正式版发行后用户反馈 5 项的修复批。`--version` 仍 **`PhotoPipeline 0.4.2`**；
+不移动 `v0.4.2` tag、不重发 Release 资产；交付 = 修复源码 + `dist/PhotoPipeline-0.4.2-win64.zip`。
+裁定 = [docs/m15-adjudications.md](docs/m15-adjudications.md)（A1–A13 / U1–U6），
+读数与证据 = [docs/m15-report.md](docs/m15-report.md)。
+
+### 新增
+
+- **HEIC 无损模式（用户反馈 1）**：HEIF 速率控制下拉由「质量/CRF/QP」扩为「质量/CRF/QP/无损」
+  四档（与既有「无损编码」勾选框**同源**，唯一真值 = 选择项 `lossless`；无损档下 quality/crf/qp
+  不下发，切回有损档自动退出）。**无损下色度采样 / 编码档位 / Level 仍可配置**（删除 G3 的
+  chroma Lock=444、编码器无条件强制 444、输出页强制改写/仅 444 可选）；无损 + 非 444 时如实
+  中文警告「YCbCr 码流无损 ≠ 像素级无损」（规则 warn + 编码器日志 + 档位注记 tooltip）。
+  「无损」档随格式预设 params 持久化往返；工厂 `heif/default.json` 零改动。
+- **JXL 多输出线程公平分配（用户反馈 4）**：规划器新增逐输出编码线程分配
+  `allocate_output_threads()`（heavy 编码器 jxl/avif 分走余下预算、flat 编码器保底 1；
+  `RunScope` 末尾加性 `encode_threads_per_output`，默认空 = 0.4.2 旧口径逐字不变）。
+  单轮 A/B：混合 3 输出 JXL encode_ms 中位 12320ms → 5096ms（约 2.4x），产物 SHA256 逐对相同。
+
+### 修复
+
+- **多选「多个值」框界面异常（用户反馈 2）**：时间卡「时区语义」QComboBox 在 mixed 态真正显示
+  「多个值」（新增 `meta::MixedComboBox`，仅 paint 覆盖显示文本、零 item 模型/索引改动；常态
+  逐像素不变）。mixed 提交统一到全部选中文件；新增 15 条 mixed 交互机械探针（meta-selection
+  19→34）。
+- **单击「多个值」框闪退（用户反馈 3）**：本机**未复现**（真实事件链 25+ 交互点 × 3 轮、无 WER
+  事件）；同批复核修 3 处防御性收口（GPS 警告空指针守卫 / 时间多选小表越界夹取 / 信息卡单文件
+  probes 空表守卫）并新增交互回归探针。未复现条件与建议取证方式如实登记。
+- **0.4.2 部分 Windows 启动卡死（用户反馈 5）**：预览显示色彩管理的系统 profile 获取
+  （GetDC/GetICMProfileW + ICC 读取 + lcms2 解析）从 **GUI 线程构造期移出**：构造期立即注入
+  sRGB 回退，后台线程获取 + GUI QTimer 轮询应用（generation 丢弃过期、5s 软超时 / 30s 硬上限、
+  析构不 join、offscreen 不启线程）；ICC 读取加 8MB 上限。`PP_DISPLAY_ICC_DELAY_MS=5000` 模拟
+  实测 `shown=1399ms`（<2s）且窗口可响应。mica DWM 背景按 Win11 22H2 门控（Win11 视觉不变），
+  启动日志记录 OS build/Qt/平台。
+
+### 门禁读数
+
+- ctest（release-dev 集成树）**52/52**；发行树（release）**51/51**；金样 **SMOKE 20/20**；
+  回归 **zero diff**（normalized 2567 = baseline 2567）；`--ui-smoke` 冻结末行逐字
+  `UI-SMOKE OK shots=12 pages=3`；格式门禁 **0 diff**；tidy 棘轮 **violations=0（未 --update）**；
+  `make_winzip.py` 五门禁 + 工厂预设 + zip 内复核全绿（E-1/E-2/E-3 烟测通过）。
+
 ## [0.4.2] — 2026-11-03
 
 **正式版（stable）**：0.4.2 = **M14**（用户 8 条需求 + 真实债清零 + 目录清理 + 发布收口）。

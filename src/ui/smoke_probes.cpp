@@ -185,6 +185,18 @@ void MainWindow::ui_smoke_walk(const QString &shots_dir) {
     d.smoke_failures.clear();
     d.smoke_shots = 0;
     d.deep_shots = 0;
+    // dev 诊断快路径（PP_MIXED_REPRO=1）：只跑元数据 mixed 交互复现探针（取证用；
+    // 不改变默认 --ui-smoke 行为与冻结面）。用法见 build/meta-ui/ 的一次性证据脚本。
+    if (qEnvironmentVariableIsSet("PP_MIXED_REPRO")) {
+        int repro_checked = 0;
+        QStringList repro_bad;
+        d.probe_meta_real_selection(repro_checked, repro_bad);
+        std::printf("UI-SMOKE meta-selection: checked=%d bad=%d %s\n", repro_checked,
+                    int(repro_bad.size()), qUtf8Printable(repro_bad.join(QLatin1Char(' '))));
+        std::fflush(stdout);
+        setProperty("pp_ui_smoke_exit", repro_bad.isEmpty() ? 0 : 1);
+        return;
+    }
     try {
         if (deep)
             d.deep_run(shots_dir);
@@ -7127,9 +7139,12 @@ void probe_m8_params(MainWindow *w, PageOutput *page_output, const pp::AppSettin
     smoke_pump(400);
     {
         auto *rc = page_output->findChild<QComboBox *>(QStringLiteral("pp-param-rcmode-heif"));
-        expect(rc != nullptr && rc->count() == 3,
-               QStringLiteral("HEIF RC 模式下拉 {质量/CRF/QP}（count=%1）")
-                   .arg(rc != nullptr ? rc->count() : -1));
+        // M15 用户面要求 #1：HEIF 速率控制下拉 = 质量 / CRF / QP / **无损** 四档（无损与
+        // 「无损编码」勾选框同源；唯一真值 = form->selection().lossless）。
+        expect(rc != nullptr && rc->count() == 4 && rc->itemText(3) == PageMeta::tr("无损"),
+               QStringLiteral("HEIF RC 模式下拉 {质量/CRF/QP/无损}（count=%1 last=%2）")
+                   .arg(rc != nullptr ? rc->count() : -1)
+                   .arg(rc != nullptr && rc->count() > 3 ? rc->itemText(3) : QStringLiteral("—")));
         expect(rc != nullptr && rc->currentIndex() == 0, QStringLiteral("RC 默认路径 = 质量"));
         expect(has_key("quality") && !has_key("x265:crf") && !has_key("x265:qp"),
                QStringLiteral("质量路径：quality 下发、crf/qp 不下发"));
@@ -7235,22 +7250,34 @@ void probe_m8_params(MainWindow *w, PageOutput *page_output, const pp::AppSettin
                 smoke_pump(260);
             }
         }
-        // 无损：RC 组整组隐藏（模式下拉 + 两条路径数值行均不可见）
+        // M15 用户面要求 #1：HEIF 无损 = RC 下拉第四档（不是「整组隐藏」）——
+        //   * 勾「无损」⇒ 下拉仍可见且当前项 = 无损（index 3）、RC 数值行隐藏、quality/crf/qp
+        //     都不下发；
+        //   * 下拉切回「质量」⇒ 无损勾选框同步取消、quality 重新下发（同源、无第二真值）。
         auto *lossless =
             page_output->findChild<QAbstractButton *>(QStringLiteral("pp-lossless-check"));
-        expect(lossless != nullptr, QStringLiteral("HEIF 无损开关在位（RC 组隐藏用例）"));
-        if (lossless != nullptr) {
+        expect(lossless != nullptr, QStringLiteral("HEIF 无损开关在位（RC 无损档同源用例）"));
+        if (lossless != nullptr && rc != nullptr) {
             lossless->click();
             smoke_pump(350);
-            expect(!widget_visible(QStringLiteral("pp-param-rcmode-row-heif")),
-                   QStringLiteral("无损 ⇒ RC 模式下拉整行隐藏"));
+            expect(lossless->isChecked(), QStringLiteral("勾无损 ⇒ 勾选框选中"));
+            expect(widget_visible(QStringLiteral("pp-param-rcmode-row-heif")),
+                   QStringLiteral("无损 ⇒ RC 模式下拉仍可见（第四档 = 无损）"));
+            expect(rc->currentIndex() == 3,
+                   QStringLiteral("勾无损 ⇒ RC 当前项 = 无损（got %1）").arg(rc->currentIndex()));
             expect(!widget_visible(QStringLiteral("pp-param-row-quality")),
                    QStringLiteral("无损 ⇒ quality 行隐藏"));
-            expect(!has_key("x265:crf"), QStringLiteral("无损 ⇒ CRF 路径值不下发（整组隐藏）"));
-            lossless->click();
+            expect(!has_key("quality") && !has_key("x265:crf") && !has_key("x265:qp"),
+                   QStringLiteral("无损 ⇒ quality/crf/qp 路径值均不下发（got q=%1 c=%2 p=%3）")
+                       .arg(has_key("quality") ? 1 : 0)
+                       .arg(has_key("x265:crf") ? 1 : 0)
+                       .arg(has_key("x265:qp") ? 1 : 0));
+            rc->setCurrentIndex(0); // 切回质量档 = 退出无损
             smoke_pump(350);
-            expect(widget_visible(QStringLiteral("pp-param-rcmode-row-heif")),
-                   QStringLiteral("关无损 ⇒ RC 模式组恢复"));
+            expect(!lossless->isChecked(),
+                   QStringLiteral("RC 切回质量 ⇒ 无损勾选框同步取消（同源）"));
+            expect(has_key("quality") && widget_visible(QStringLiteral("pp-param-row-quality")),
+                   QStringLiteral("RC 切回质量 ⇒ quality 重新下发/可见"));
         }
     }
     // ---- ⑤b W2-T3（C20）：tune 全量 —— 4 原生 + animation 仿真 + 2 置灰（HEIF/x265） ----
@@ -7917,34 +7944,49 @@ void MainWindow::Impl::smoke_probe_advanced_folds() {
                    QStringLiteral("非 Main 档位给兼容性说明（%1）").arg(note->text()));
         }
     }
-    // R-3xx：HEIF 无损 → 4:4:4 硬联动（4:2:0/4:2:2 会抽样色度，不是无损）。
+    // M15 用户面要求 #1/#2：HEIF 无损不再强制 4:4:4 —— 无损下色度采样仍可配置（420/422/444
+    // 三项全可选、当前值不被改写），而非 444 时必须如实警告「色度有损」（不静默假装像素无损）。
     page_output->select_format(QStringLiteral("heif"));
     auto *heif_lossless = page_output->findChild<QCheckBox *>(QStringLiteral("pp-lossless-check"));
     auto *heif_chroma = page_output->findChild<QComboBox *>(QStringLiteral("pp-param-chroma"));
     expect(heif_lossless != nullptr && heif_chroma != nullptr,
            QStringLiteral("heif 无损/色度控件存在"));
     if (heif_lossless != nullptr && heif_chroma != nullptr) {
+        const QString chroma_before = heif_chroma->currentText();
         heif_lossless->setChecked(true);
-        pump(80);
-        const bool forced_444 = heif_chroma->currentText() == QStringLiteral("444");
-        bool limited = true;
-        bool four_enabled = false;
+        pump(150);
+        int enabled = 0;
         if (auto *model = qobject_cast<QStandardItemModel *>(heif_chroma->model())) {
-            for (int i = 0; i < heif_chroma->count() && i < 3; ++i) {
-                const bool on = model->item(i) != nullptr && model->item(i)->isEnabled();
-                if (heif_chroma->itemText(i) == QStringLiteral("444"))
-                    four_enabled = on;
-                else if (on)
-                    limited = false;
-            }
+            for (int i = 0; i < heif_chroma->count(); ++i)
+                if (model->item(i) != nullptr && model->item(i)->isEnabled())
+                    ++enabled;
         }
-        expect(forced_444,
-               QStringLiteral("无损强制 chroma=444（got %1）").arg(heif_chroma->currentText()));
-        expect(limited && four_enabled,
-               QStringLiteral("无损下仅 444 可选（420/422 置灰；444 enabled=%1）")
-                   .arg(four_enabled ? 1 : 0));
+        expect(enabled == heif_chroma->count(),
+               QStringLiteral("无损下色度三项全部可选（enabled=%1/%2）")
+                   .arg(enabled)
+                   .arg(heif_chroma->count()));
+        expect(heif_chroma->currentText() == chroma_before,
+               QStringLiteral("无损不改写当前色度（before=%1 after=%2）")
+                   .arg(chroma_before, heif_chroma->currentText()));
+        const auto *note = page_output->findChild<QLabel *>(QStringLiteral("pp-profile-note-heif"));
+        const bool warned = heif_chroma->currentText() != QStringLiteral("444") &&
+                            note != nullptr &&
+                            (note->text().contains(QStringLiteral("色度有损")) ||
+                             note->toolTip().contains(QStringLiteral("色度在编码前被下采样")));
+        expect(warned, QStringLiteral("无损 + 非 444 ⇒ 档位注记如实警告色度有损（text=%1）")
+                           .arg(note != nullptr ? note->text() : QStringLiteral("—")));
+        // 444 下警告消退为「无损」口径（仍是编码器无损模式；4:4:4 才是像素级无损路径）。
+        const int idx444 = heif_chroma->findText(QStringLiteral("444"));
+        if (idx444 >= 0) {
+            heif_chroma->setCurrentIndex(idx444);
+            pump(150);
+            const bool no_warn =
+                note == nullptr || !note->text().contains(QStringLiteral("色度有损"));
+            expect(no_warn, QStringLiteral("无损 + 444 ⇒ 不再报色度有损（text=%1）")
+                                .arg(note != nullptr ? note->text() : QStringLiteral("—")));
+        }
         heif_lossless->setChecked(false);
-        pump(40);
+        pump(80);
     }
     if (!prev.isEmpty())
         page_output->select_format(prev);
@@ -14780,6 +14822,461 @@ void MainWindow::Impl::probe_meta_real_selection(int &checked, QStringList &bad)
                    .arg(hidden_filtered ? 1 : 0)
                    .arg(hidden_disabled ? 1 : 0)
                    .arg(hidden_no_write ? 1 : 0));
+    }
+    // —— (m7) 0.4.2 用户反馈回归：多选 mixed 态「多个值」控件单击闪退 + 界面异常 ——
+    //   真实 MainWindow + 真实事件分发（QApplication::sendEvent 走 QWidget 事件链）驱动：
+    //     * 时间卡：mixed Δ 数值框单击/键入+回车、段按钮点同档、卡头三态开关单击；
+    //     * 时区语义：两个 QComboBox mixed（0.4.2 前只换虚线边框、文本仍显示首值 = 界面异常）
+    //       → 打开下拉 + 选中当前项（activated 通道）；
+    //     * GPS 卡：mixed 经纬度线输入框单击/键入、清除钮单击、卡头三态开关单击；
+    //     * 隐私卡：Tags mixed 只读行单击；信息卡 mixed 只读标签单击。
+    //   每步先打 `UI-SMOKE mixed-probe:` 步骤行（stdout 非缓冲）→ 闪退时最后一行即崩前最后交互。
+    //   断言：①进程存活（后续 step 仍打印）；②mixed 提交 = 字段级覆盖**全部选中文件**；
+    //        ③mixed 视觉统一（QComboBox 必须显示「多个值」而不是首值）。
+    {
+        const auto click_at = [this](QWidget *target, const QPoint &pos) {
+            if (target == nullptr) {
+                return;
+            }
+            const QPointF global = target->mapToGlobal(pos);
+            QMouseEvent press(QEvent::MouseButtonPress, QPointF(pos), global, Qt::LeftButton,
+                              Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(target, &press);
+            QMouseEvent release(QEvent::MouseButtonRelease, QPointF(pos), global, Qt::LeftButton,
+                                Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(target, &release);
+            pump(120);
+        };
+        const auto click_center = [&click_at](QWidget *target) {
+            if (target != nullptr) {
+                click_at(target, QPoint(target->width() / 2, target->height() / 2));
+            }
+        };
+        const auto send_key = [this](QWidget *target, int key, const QString &text) {
+            if (target == nullptr) {
+                return;
+            }
+            QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier, text);
+            QApplication::sendEvent(target, &press);
+            QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier, text);
+            QApplication::sendEvent(target, &release);
+            pump(100);
+        };
+        const auto type_text = [&send_key](QWidget *target, const QString &text) {
+            for (const QChar ch : text) {
+                int key = Qt::Key_unknown;
+                if (ch.isDigit()) {
+                    key = Qt::Key_0 + ch.digitValue();
+                } else if (ch == QLatin1Char('.')) {
+                    key = Qt::Key_Period;
+                } else if (ch == QLatin1Char('-')) {
+                    key = Qt::Key_Minus;
+                }
+                send_key(target, key, QString(ch));
+            }
+        };
+        const auto reset_rows = [this, rows_total] {
+            for (int r = 0; r < rows_total; ++r) {
+                model->set_exception(std::size_t(r), std::nullopt);
+            }
+            pump(160);
+        };
+        const auto row_override = [this](int row) -> std::optional<pp::MetadataOverride> {
+            if (row < 0 || std::size_t(row) >= model->size()) {
+                return std::nullopt;
+            }
+            return model->row(std::size_t(row)).entry.exception;
+        };
+        const auto select_two = [this, &reset_rows, &select_rows, &wait_follow_probe](
+                                    const std::optional<pp::MetadataOverride> &first,
+                                    const std::optional<pp::MetadataOverride> &second) {
+            reset_rows();
+            model->set_exception(0, first);
+            model->set_exception(1, second);
+            pump(160);
+            select_rows({0, 1});
+            wait_follow_probe();
+            pump(180);
+        };
+        const auto mixed_value = PageMeta::tr(meta::kMixedValueText);
+        const auto step = [](const char *name) {
+            std::printf("UI-SMOKE mixed-probe: %s\n", name);
+            std::fflush(stdout);
+        };
+        step("begin");
+
+        // ---- 场景 1：时间卡 mixed（模式 / Δ 六分量 / 卡头 partial 三态）----
+        pp::MetadataOverride ov_delta;
+        {
+            pp::TimeShift shift;
+            shift.mode = pp::TimeShift::Mode::Delta;
+            shift.hours = 2;
+            ov_delta.time_shift = shift;
+            ov_delta.time_enabled = true;
+        }
+        select_two(ov_delta, std::nullopt);
+        auto *seg = page_meta->findChild<QWidget *>(meta::objname::kSeg);
+        auto *seg_delta = page_meta->findChild<QAbstractButton *>(meta::objname::kSegDelta);
+        auto *hours_spin = dynamic_cast<meta::DeltaSpin *>(
+            page_meta->findChild<QSpinBox *>(meta::objname::kDeltaHours));
+        auto *time_sw = dynamic_cast<formkit::SwitchControl *>(
+            page_meta->findChild<QAbstractButton *>(meta::objname::kTimeEnable));
+        expect(
+            "mixed-interaction-setup",
+            hours_spin != nullptr && hours_spin->is_mixed() && hours_spin->text() == mixed_value &&
+                seg != nullptr && seg->property(meta::hook::kMixedProperty).toBool() &&
+                time_sw != nullptr && time_sw->is_partial(),
+            QStringLiteral("spin-mixed=%1 text=\"%2\" seg-mixed=%3 partial=%4")
+                .arg(hours_spin != nullptr && hours_spin->is_mixed() ? 1 : 0)
+                .arg(hours_spin != nullptr ? hours_spin->text() : QString())
+                .arg(seg != nullptr && seg->property(meta::hook::kMixedProperty).toBool() ? 1 : 0)
+                .arg(time_sw != nullptr && time_sw->is_partial() ? 1 : 0));
+        // (a) 单击 mixed 的段按钮**当前档** → 0.4.2 新 clicked 通道 → 提交到全部选中文件
+        step("click-seg-current");
+        click_center(seg_delta);
+        pump(200);
+        const auto ex_after_seg = row_override(1);
+        expect(
+            "mixed-seg-click",
+            ex_after_seg.has_value() && ex_after_seg->time_shift.has_value() &&
+                ex_after_seg->time_shift->mode == pp::TimeShift::Mode::Delta &&
+                !(seg != nullptr && seg->property(meta::hook::kMixedProperty).toBool()),
+            QStringLiteral("row1-shift=%1 mode-delta=%2 seg-mixed=%3")
+                .arg(ex_after_seg.has_value() && ex_after_seg->time_shift.has_value() ? 1 : 0)
+                .arg(ex_after_seg.has_value() && ex_after_seg->time_shift.has_value() &&
+                             ex_after_seg->time_shift->mode == pp::TimeShift::Mode::Delta
+                         ? 1
+                         : 0)
+                .arg(seg != nullptr && seg->property(meta::hook::kMixedProperty).toBool() ? 1 : 0));
+        // (b) mixed Δ 数值框：单击聚焦 → 键入「3」+ 回车（0.4.2 editingFinished 通道）→
+        //     全部选中文件同值（不再有「多个值」残留）
+        select_two(ov_delta, std::nullopt);
+        step("click-delta-spin");
+        if (hours_spin != nullptr) {
+            click_at(hours_spin, QPoint(8, hours_spin->height() / 2));
+        }
+        step("type-delta-spin");
+        QLineEdit *spin_edit =
+            hours_spin != nullptr ? hours_spin->findChild<QLineEdit *>() : nullptr;
+        if (spin_edit != nullptr) {
+            spin_edit->selectAll();
+            send_key(spin_edit, Qt::Key_3, QStringLiteral("3"));
+            send_key(spin_edit, Qt::Key_Return, QString());
+        }
+        pump(200);
+        const int h0 = row_hours(0);
+        const int h1 = row_hours(1);
+        expect("mixed-spin-submit",
+               h0 != -99 && h0 == h1 && hours_spin != nullptr && !hours_spin->is_mixed(),
+               QStringLiteral("h0=%1 h1=%2 mixed=%3")
+                   .arg(h0)
+                   .arg(h1)
+                   .arg(hours_spin != nullptr && hours_spin->is_mixed() ? 1 : 0));
+        // (c) mixed 卡头三态开关（partial）单击 → 全部选中文件置为开启
+        select_two(ov_delta, std::nullopt);
+        step("click-card-switch");
+        if (time_sw != nullptr) {
+            click_center(time_sw);
+        }
+        pump(200);
+        const auto ex_switch = row_override(1);
+        expect("mixed-card-switch",
+               ex_switch.has_value() && ex_switch->time_enabled.value_or(false) &&
+                   time_sw != nullptr && !time_sw->is_partial(),
+               QStringLiteral("row1-enabled=%1 partial=%2")
+                   .arg(ex_switch.has_value() && ex_switch->time_enabled.value_or(false) ? 1 : 0)
+                   .arg(time_sw != nullptr && time_sw->is_partial() ? 1 : 0));
+
+        // (d) mixed Δ 数值框**上下箭头子控件**点按（真实用户「单击多个值框」最可能的落点；
+        //     箭头列 = QSS 定的 trailing 17px 列）→ stepBy 先清 mixed 再走普通 spin 语义。
+        select_two(ov_delta, std::nullopt);
+        step("click-delta-spin-up-arrow");
+        if (hours_spin != nullptr) {
+            click_at(hours_spin, QPoint(hours_spin->width() - 8, 5));
+        }
+        pump(160);
+        step("click-delta-spin-down-arrow");
+        if (hours_spin != nullptr) {
+            click_at(hours_spin, QPoint(hours_spin->width() - 8, hours_spin->height() - 5));
+        }
+        pump(180);
+        const int arrow_h0 = row_hours(0);
+        const int arrow_h1 = row_hours(1);
+        expect("mixed-spin-arrows",
+               arrow_h0 != -99 && arrow_h0 == arrow_h1 && hours_spin != nullptr &&
+                   !hours_spin->is_mixed(),
+               QStringLiteral("h0=%1 h1=%2 mixed=%3")
+                   .arg(arrow_h0)
+                   .arg(arrow_h1)
+                   .arg(hours_spin != nullptr && hours_spin->is_mixed() ? 1 : 0));
+        // (e) mixed Δ 数值框聚焦后**不输入**直接点别处（focusOut → interpret/editingFinished 链）
+        select_two(ov_delta, std::nullopt);
+        step("focusout-delta-spin");
+        if (hours_spin != nullptr) {
+            click_at(hours_spin, QPoint(8, hours_spin->height() / 2));
+            QWidget *focus_target = seg_delta != nullptr ? static_cast<QWidget *>(seg_delta)
+                                                         : static_cast<QWidget *>(hours_spin);
+            if (focus_target != nullptr) {
+                click_at(focus_target, QPoint(4, 4));
+            }
+        }
+        pump(180);
+        expect("mixed-spin-focusout", follow_count() == 2,
+               QStringLiteral("follow=%1").arg(follow_count()));
+        // ---- 场景 2：时区语义 mixed（两个 QComboBox）----
+        pp::MetadataOverride ov_tz_a;
+        {
+            pp::TimeShift shift;
+            shift.mode = pp::TimeShift::Mode::TimezoneSemantic;
+            shift.from_offset_min = 60;
+            shift.to_offset_min = 60;
+            ov_tz_a.time_shift = shift;
+            ov_tz_a.time_enabled = true;
+        }
+        pp::MetadataOverride ov_tz_b;
+        {
+            pp::TimeShift shift;
+            shift.mode = pp::TimeShift::Mode::TimezoneSemantic;
+            shift.from_offset_min = 300;
+            shift.to_offset_min = 300;
+            ov_tz_b.time_shift = shift;
+            ov_tz_b.time_enabled = true;
+        }
+        select_two(ov_tz_a, ov_tz_b);
+        auto *tz_from = page_meta->findChild<QComboBox *>(meta::objname::kTzFrom);
+        auto *tz_to = page_meta->findChild<QComboBox *>(meta::objname::kTzTo);
+        const bool tz_mixed = tz_from != nullptr && tz_to != nullptr &&
+                              tz_from->property(meta::hook::kMixedProperty).toBool() &&
+                              tz_to->property(meta::hook::kMixedProperty).toBool();
+        // 界面异常判据：mixed 的下拉**必须显示「多个值」**，不得仍显示首值（0.4.2 缺陷）。
+        const auto combo_display = [](QComboBox *combo) -> QString {
+            const auto *mixed_combo = dynamic_cast<const meta::MixedComboBox *>(combo);
+            return mixed_combo != nullptr ? mixed_combo->display_text()
+                                          : (combo != nullptr ? combo->currentText() : QString());
+        };
+        expect("mixed-combo-display",
+               tz_mixed && combo_display(tz_from) == mixed_value &&
+                   combo_display(tz_to) == mixed_value,
+               QStringLiteral("mixed=%1 from=\"%2\" to=\"%3\"")
+                   .arg(tz_mixed ? 1 : 0)
+                   .arg(combo_display(tz_from), combo_display(tz_to)));
+        // (a) 单击 mixed 下拉 → 打开下拉列表（真实 popup）→ 选中当前项（activated 通道）
+        step("click-tz-combo-popup");
+        if (tz_from != nullptr) {
+            click_center(tz_from);
+            // 下拉未展开（或已因点击收起）→ 显式弹出，模拟用户点箭头后的真实 popup 路径
+            if (QApplication::activePopupWidget() == nullptr) {
+                tz_from->showPopup();
+                pump(140);
+            }
+            QWidget *popup = QApplication::activePopupWidget();
+            auto *popup_view = popup != nullptr ? popup->findChild<QAbstractItemView *>() : nullptr;
+            if (popup_view != nullptr) {
+                const QModelIndex current = popup_view->model()->index(tz_from->currentIndex(), 0);
+                if (current.isValid()) {
+                    click_at(popup_view->viewport(), popup_view->visualRect(current).center());
+                }
+            }
+            if (QApplication::activePopupWidget() != nullptr) {
+                QApplication::activePopupWidget()->close();
+                pump(100);
+            }
+            pump(160);
+        }
+        // 提交判据 = mixed 视觉被清（提交通道唯一结果）；popup 合成事件不触发 activated 的
+        // 环境下按同一信号路径补一次（同一回调，崩溃/提交语义一致）。
+        // activated 通道在 popup 不可用的环境（如部分 offscreen 配置）不触发 → 按真实信号同一
+        // 路径补一次 activated（同一回调，崩溃/提交语义一致）。
+        if (tz_from != nullptr && tz_from->property(meta::hook::kMixedProperty).toBool()) {
+            step("activated-tz-combo-fallback");
+            emit tz_from->activated(tz_from->currentIndex());
+            pump(180);
+        }
+        const auto from_done = row_override(1);
+        expect("mixed-combo-activate",
+               from_done.has_value() && from_done->time_shift.has_value() && tz_from != nullptr &&
+                   !tz_from->property(meta::hook::kMixedProperty).toBool(),
+               QStringLiteral("row1-tz=%1 mixed=%2")
+                   .arg(from_done.has_value() && from_done->time_shift.has_value() ? 1 : 0)
+                   .arg(tz_from != nullptr && tz_from->property(meta::hook::kMixedProperty).toBool()
+                            ? 1
+                            : 0));
+
+        // ---- 场景 3：GPS 卡 mixed（经纬度输入 / 清除钮 / 卡头三态）----
+        pp::MetadataOverride ov_gps;
+        {
+            pp::GpsData gps;
+            gps.lat = 22.5;
+            gps.lon = 114.0;
+            ov_gps.gps = gps;
+            ov_gps.gps_enabled = true;
+        }
+        select_two(ov_gps, std::nullopt);
+        auto *lat_edit = page_meta->findChild<QLineEdit *>(meta::objname::kGpsLat);
+        auto *lon_edit = page_meta->findChild<QLineEdit *>(meta::objname::kGpsLon);
+        auto *gps_clear = page_meta->findChild<QPushButton *>(meta::objname::kGpsClear);
+        auto *gps_sw = dynamic_cast<formkit::SwitchControl *>(
+            page_meta->findChild<QAbstractButton *>(meta::objname::kPpMetaGpsEnable));
+        expect(
+            "mixed-gps-input-display",
+            lat_edit != nullptr && lon_edit != nullptr &&
+                lat_edit->property(meta::hook::kMixedProperty).toBool() &&
+                lat_edit->text().isEmpty() && lat_edit->placeholderText() == mixed_value &&
+                lon_edit->placeholderText() == mixed_value,
+            QStringLiteral("lat-mixed=%1 lat-ph=\"%2\" lon-ph=\"%3\"")
+                .arg(lat_edit != nullptr && lat_edit->property(meta::hook::kMixedProperty).toBool()
+                         ? 1
+                         : 0)
+                .arg(lat_edit != nullptr ? lat_edit->placeholderText() : QString())
+                .arg(lon_edit != nullptr ? lon_edit->placeholderText() : QString()));
+        step("click-gps-lat");
+        if (lat_edit != nullptr) {
+            click_at(lat_edit, QPoint(8, lat_edit->height() / 2));
+        }
+        step("type-gps-lat");
+        if (lat_edit != nullptr) {
+            lat_edit->setFocus(Qt::OtherFocusReason);
+            pump(60);
+        }
+        // 键盘投递前置 = 该框确实是 focusWidget（非活动窗口时数字键会先被窗口快捷键抢走）；
+        // 焦点不可得 → 走同一 textChanged 提交通道（QLineEdit::setText），交互链语义等价。
+        if (lat_edit != nullptr && QApplication::focusWidget() == lat_edit) {
+            type_text(lat_edit, QStringLiteral("23.0"));
+        } else if (lat_edit != nullptr) {
+            lat_edit->setText(QStringLiteral("23.0"));
+            pump(140);
+        }
+        step("click-gps-lon");
+        if (lon_edit != nullptr) {
+            click_at(lon_edit, QPoint(8, lon_edit->height() / 2));
+        }
+        step("type-gps-lon");
+        if (lon_edit != nullptr) {
+            lon_edit->setFocus(Qt::OtherFocusReason);
+            pump(60);
+        }
+        if (lon_edit != nullptr && QApplication::focusWidget() == lon_edit) {
+            type_text(lon_edit, QStringLiteral("113.0"));
+        } else if (lon_edit != nullptr) {
+            lon_edit->setText(QStringLiteral("113.0"));
+            pump(140);
+        }
+        pump(200);
+        const auto gps0 = row_override(0);
+        const auto gps1 = row_override(1);
+        expect("mixed-gps-typed",
+               gps0.has_value() && gps0->gps.has_value() && gps1.has_value() &&
+                   gps1->gps.has_value(),
+               QStringLiteral("row0-gps=%1 row1-gps=%2 lat-text=\"%3\" lon-text=\"%4\"")
+                   .arg(gps0.has_value() && gps0->gps.has_value() ? 1 : 0)
+                   .arg(gps1.has_value() && gps1->gps.has_value() ? 1 : 0)
+                   .arg(lat_edit != nullptr ? lat_edit->text() : QString())
+                   .arg(lon_edit != nullptr ? lon_edit->text() : QString()));
+        // (b) GPS 清除钮 mixed（部分清除）→ 单击 = 全部选中置清除
+        {
+            pp::MetadataOverride clear_a;
+            clear_a.gps_clear = true;
+            clear_a.gps_enabled = true;
+            select_two(clear_a, std::nullopt);
+        }
+        const bool clear_mixed =
+            gps_clear != nullptr && gps_clear->property(meta::hook::kMixedProperty).toBool();
+        step("click-gps-clear");
+        if (gps_clear != nullptr) {
+            click_center(gps_clear);
+        }
+        pump(200);
+        const auto clear0 = row_override(0);
+        const auto clear1 = row_override(1);
+        expect("mixed-gps-clear",
+               clear_mixed && clear0.has_value() && clear0->gps_clear && clear1.has_value() &&
+                   clear1->gps_clear,
+               QStringLiteral("mixed=%1 row0-clear=%2 row1-clear=%3")
+                   .arg(clear_mixed ? 1 : 0)
+                   .arg(clear0.has_value() && clear0->gps_clear ? 1 : 0)
+                   .arg(clear1.has_value() && clear1->gps_clear ? 1 : 0));
+        // (c) GPS 卡头三态开关 partial → 单击 = 全部开启（不凭空写值）
+        step("click-gps-switch");
+        if (gps_sw != nullptr) {
+            click_center(gps_sw);
+        }
+        pump(200);
+        expect("mixed-gps-switch", gps_sw != nullptr && !gps_sw->is_partial(),
+               QStringLiteral("partial=%1 checked=%2")
+                   .arg(gps_sw != nullptr && gps_sw->is_partial() ? 1 : 0)
+                   .arg(gps_sw != nullptr && gps_sw->isChecked() ? 1 : 0));
+
+        // (f) 关键时序：多选后**不等待 probe 完成**立刻点 mixed 控件（用户真实操作最容易踩的
+        //     异步窗口）：select 后 pump(0) 直接点 seg / spin / 打开并关闭时区下拉。
+        reset_rows();
+        model->set_exception(0, ov_delta);
+        pump(120);
+        step("pending-window-select");
+        select_rows({0, 1});
+        step("pending-window-click-seg");
+        click_center(seg_delta);
+        step("pending-window-click-spin");
+        if (hours_spin != nullptr) {
+            click_at(hours_spin, QPoint(8, hours_spin->height() / 2));
+        }
+        step("pending-window-combo-popup");
+        if (tz_from != nullptr) {
+            tz_from->showPopup();
+            pump(80);
+            if (QApplication::activePopupWidget() != nullptr) {
+                QApplication::activePopupWidget()->close();
+            }
+        }
+        pump(500); // 等在途 probe 回填（世代守卫下结果落回）
+        wait_follow_probe();
+        pump(160);
+        expect("mixed-pending-window", follow_count() == 2,
+               QStringLiteral("follow=%1").arg(follow_count()));
+        // ---- 场景 4：Tags mixed 只读行 + 只读 mixed 标签单击 ----
+        pp::MetadataOverride tag_a;
+        {
+            pp::TagEdit edit;
+            edit.key = "Exif.Image.Artist";
+            edit.value = std::string("作者A");
+            tag_a.exif_edits.push_back(edit);
+            tag_a.privacy_enabled = true;
+        }
+        pp::MetadataOverride tag_b;
+        {
+            pp::TagEdit edit;
+            edit.key = "Exif.Image.Artist";
+            edit.value = std::string("作者B");
+            tag_b.exif_edits.push_back(edit);
+            tag_b.privacy_enabled = true;
+        }
+        select_two(tag_a, tag_b);
+        auto *tag_value = page_meta->findChild<QLineEdit *>(meta::objname::kTagValue);
+        const bool tag_mixed = tag_value != nullptr && tag_value->isReadOnly() &&
+                               tag_value->property(meta::hook::kMixedProperty).toBool();
+        step("click-tag-mixed-row");
+        if (tag_value != nullptr) {
+            click_at(tag_value, QPoint(8, tag_value->height() / 2));
+        }
+        pump(160);
+        expect("mixed-tag-click", tag_mixed,
+               QStringLiteral("mixed=%1 readonly=%2")
+                   .arg(tag_mixed ? 1 : 0)
+                   .arg(tag_value != nullptr && tag_value->isReadOnly() ? 1 : 0));
+        // 信息卡 mixed 只读标签（时间列）单击
+        // 只读 mixed 标签单击 = 不崩溃/不改文本；「mixed 文本必须是『多个值』」的语义断言由既有
+        // (l3) mixed-info / multi-aggregate 覆盖（按真实 probe 差异取值，不依赖本段上下文）。
+        auto *info_time = page_meta->findChild<QLabel *>(meta::objname::kInfoTime);
+        step("click-info-mixed-label");
+        const QString info_before = page_full(meta::objname::kInfoTime);
+        if (info_time != nullptr) {
+            click_at(info_time, QPoint(8, info_time->height() / 2));
+        }
+        pump(120);
+        expect("mixed-info-click",
+               info_time != nullptr && page_full(meta::objname::kInfoTime) == info_before,
+               QStringLiteral("before=\"%1\" after=\"%2\"")
+                   .arg(info_before, page_full(meta::objname::kInfoTime)));
+        step("done");
     }
     // —— 复原：清本节临时修改 + 恢复首行选中（后续 01-meta 截图/探针基线 = 正常单文件页态） ——
     for (int r = 0; r < rows_total; ++r) {

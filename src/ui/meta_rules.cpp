@@ -397,6 +397,11 @@ void apply_mixed(QLineEdit *edit, bool mixed, const QStringList &values) {
 
 void apply_mixed_combo(QComboBox *combo, bool mixed, const QStringList &values) {
     apply_mixed_widget(combo, mixed, values);
+    // M15：mixed 必须**真正显示「多个值」**（0.4.2 只换虚线边框、文本仍显示首值 = 用户反馈的
+    // 界面异常）。MixedComboBox 只改显示面（paint 的 currentText），模型/当前索引零改动。
+    if (auto *mixed_combo = dynamic_cast<MixedComboBox *>(combo)) {
+        mixed_combo->set_mixed(mixed);
+    }
 }
 
 // 0.4.2（需求 1/2）：卡头「启用」三态开关的**字段提交后即时刷新**（全 active → on /

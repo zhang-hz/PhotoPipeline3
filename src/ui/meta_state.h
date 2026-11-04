@@ -280,6 +280,32 @@ private:
     bool mixed_ = false;
 };
 
+// M15 / 0.4.2 用户反馈（「多个值」框界面异常）：时间卡「时区语义」下拉的多选 mixed 显示面。
+// 0.4.2 只给 QComboBox 加 ppMixed 虚线边框，文本仍是首值（第一档）—— 用户看到"显示多个值
+// 的框却仍是单个时区" = 界面异常。本类 = 该字段的**唯一构造面**：mixed 时**真正显示「多个值」**，
+// 且**不改 item 模型/当前索引**（无增删项、无 setCurrentIndex）——打开下拉/选中项/activated
+// 提交等既有交互路径零改动，不引入 item 索引重排/弹层悬垂风险。
+// 形 = 继承 formkit::Combo（页面下拉唯一构造点的自绘箭头/令牌面）：常态直接委托基类绘制
+// （逐像素不变）；mixed 只把 initStyleOption 的 currentText 换成「多个值」再走同一套
+// 盒+字渲染 + 同一枚 trailing 矢量箭头。display_text() = 单源显示文本（探针据此做机械断言，
+// 与 paintEvent 同一取值，避免"只测属性不测显示"）。
+class MixedComboBox : public formkit::Combo {
+public:
+    explicit MixedComboBox(QWidget *parent = nullptr);
+    void set_mixed(bool mixed);
+    bool is_mixed() const { return mixed_; }
+    QString display_text() const;
+    void set_tokens(const theme::Tokens &t) override;
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+
+private:
+    QString mixed_text() const;
+    bool mixed_ = false;
+    theme::Tokens tokens_ = formkit::default_tokens();
+};
+
 // 评级（§7.1「评级(★)」；A8 零字形 → **矢量星**）：形 = icons 库的 star 路径（单源），
 // 实心 = acc 填充、空心 = text3 描边；无任何字形字符。
 class RatingStars : public QWidget {

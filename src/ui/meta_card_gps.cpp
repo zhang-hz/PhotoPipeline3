@@ -504,6 +504,9 @@ void refresh_gps_section(MetaState *st, const std::vector<pp::EffectivePreview> 
 // M13/C2.4：多选时只改一个坐标框（另一个 mixed/空）→ 不提交纯数据，黄字提示走本通道；
 // 判据 = 卡 active（全开或部分）且非全部清除 且 两框未能同时解析。
 void refresh_gps_warning(MetaState *st) {
+    if (st->gps.gps_warn == nullptr) {
+        return; // 防御：卡体未建成/已拆（提交路径在卡片生命周期外也不得空指针解引用）
+    }
     const SelectionSnapshotList sel = selection_snapshots(st);
     const BoolAggregate card = card_active_aggregate(sel, EditField::GpsEnable);
     const BoolAggregate clears = gps_clear_aggregate(sel);

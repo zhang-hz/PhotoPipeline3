@@ -1151,31 +1151,156 @@ int hevc_hvcc_chroma_format(const fs::path &p) {
     return static_cast<unsigned char>(bytes[pos + 4 + 16]) & 0x03;
 }
 
+// M15：hvcC 的 general_profile_idc（5 位）——用于断言"无损下用户选的档位真的下发"。
+int hevc_hvcc_profile_idc(const fs::path &p) {
+    std::FILE *f = std::fopen(p.string().c_str(), "rb");
+    if (f == nullptr)
+        return -1;
+    std::string bytes;
+    char buf[65536];
+    for (;;) {
+        const size_t n = std::fread(buf, 1, sizeof(buf), f);
+        if (n == 0)
+            break;
+        bytes.append(buf, n);
+    }
+    std::fclose(f);
+    const size_t pos = bytes.find("hvcC");
+    if (pos == std::string::npos || pos + 4 + 17 > bytes.size())
+        return -1;
+    return static_cast<unsigned char>(bytes[pos + 4 + 1]) & 0x1F;
+}
+
+// M15：hvcC 的 general_level_idc（8 位，offset 12）——用于断言无损下 Level 固定 8.5。
+int hevc_hvcc_level_idc(const fs::path &p) {
+    std::FILE *f = std::fopen(p.string().c_str(), "rb");
+    if (f == nullptr)
+        return -1;
+    std::string bytes;
+    char buf[65536];
+    for (;;) {
+        const size_t n = std::fread(buf, 1, sizeof(buf), f);
+        if (n == 0)
+            break;
+        bytes.append(buf, n);
+    }
+    std::fclose(f);
+    const size_t pos = bytes.find("hvcC");
+    if (pos == std::string::npos || pos + 4 + 17 > bytes.size())
+        return -1;
+    return static_cast<unsigned char>(bytes[pos + 4 + 12]);
+}
+
+// M15（0.4.2 用户反馈 #1/#2）：HEIF 无损 = RC 下拉第四档；chroma/profile/level 仍可配置。
+//   * 444 + 无损 → 产物 hvcC chroma=3 且可解码（像素级无损路径，既有断言保留）；
+//   * 420 + 无损 → **不再强制 444**：编码成功、hvcC chroma=1、可解码（色度抽样有损的事实
+//     由编码器中文 warning + UI 警告承担；本用例断言"不静默失败、不偷偷改写用户选择"）；
+//   * 无损 + 显式不兼容档位 → 仍按既有 heif_profile_compatible_for 失败（档位不被无损忽略）；
+//   * 无损 + 显式兼容档位（10 位 420 选 Main10）→ 产物 hvcC profile_idc=2，证明用户档位
+//     真正下发（Auto 推导在 10 位 420 是 Rext420_10 → idc 4，二者可区分）；
+//   * 无损 + 显式 level：参数可下发且不阻断（x265 无损 PTL 固定 Level 8.5，编码器已如实告警）；
+//   * >16 Mi 像素 444：走标准 HEIF grid 分块，产物必须能被普通解码器完整打开。
 void test_heif_lossless_chroma_and_grid() {
     if (pp::introspect_backends("heif").empty()) {
         info("heif lossless/grid skipped (no encoder)");
         return;
     }
     const fs::path dir = out_dir();
-    // ① 显式请求 4:2:0 + lossless → 编码器必须强制 4:4:4（否则是假无损）。
+    // ① 显式请求 4:4:4 + lossless → 产物 4:4:4 且可解码。
+    {
+        pp::ParamSet params;
+        params["lossless"] = true;
+        params["chroma"] = std::string("444");
+        auto enc = pp::make_encoder("heif", "x265");
+        check(enc != nullptr, "heif/lossless/chroma-encoder", "make_encoder null");
+        if (enc != nullptr) {
+            OIIO::ImageBuf src = make_buf(64, 64, 3, 0.0f);
+            const fs::path out = dir / "lossless_444.heic";
+            const pp::EncodeResult r = run_encode(*enc, src, 8, params, {}, out);
+            check(r.error.empty(), "heif/lossless/444/encode", r.error);
+            check(hevc_hvcc_chroma_format(out) == 3, "heif/lossless/444/chroma",
+                  "hvcC chroma_format=" + num(hevc_hvcc_chroma_format(out)) + " (want 3)");
+            OIIO::ImageBuf rb(out.string());
+            check(rb.read(0, 0, true, OIIO::TypeFloat), "heif/lossless/444/decode",
+                  OIIO::geterror());
+        }
+    }
+    // ② 显式请求 4:2:0 + lossless → **不再强制 444**：成功、产物 4:2:0、可解码。
     {
         pp::ParamSet params;
         params["lossless"] = true;
         params["chroma"] = std::string("420");
         auto enc = pp::make_encoder("heif", "x265");
-        check(enc != nullptr, "heif/lossless/chroma-encoder", "make_encoder null");
         if (enc != nullptr) {
             OIIO::ImageBuf src = make_buf(64, 64, 3, 0.0f);
-            const fs::path out = dir / "lossless_force444.heic";
+            const fs::path out = dir / "lossless_420.heic";
             const pp::EncodeResult r = run_encode(*enc, src, 8, params, {}, out);
-            check(r.error.empty(), "heif/lossless/encode", r.error);
-            check(hevc_hvcc_chroma_format(out) == 3, "heif/lossless/forced-444",
-                  "hvcC chroma_format=" + num(hevc_hvcc_chroma_format(out)) + " (want 3)");
+            check(r.error.empty(), "heif/lossless/420/encode", r.error);
+            check(hevc_hvcc_chroma_format(out) == 1, "heif/lossless/420/chroma",
+                  "hvcC chroma_format=" + num(hevc_hvcc_chroma_format(out)) +
+                      " (want 1: 无损不再强制 444)");
             OIIO::ImageBuf rb(out.string());
-            check(rb.read(0, 0, true, OIIO::TypeFloat), "heif/lossless/decode", OIIO::geterror());
+            check(rb.read(0, 0, true, OIIO::TypeFloat), "heif/lossless/420/decode",
+                  OIIO::geterror());
         }
     }
-    // ② >16 Mi 像素：走标准 HEIF grid 分块（libde265 单图 4:4:4 无损解码上限），
+    // ③ 无损 + 显式不兼容档位（8 位 4:2:0 选 Main10）→ 仍失败（档位校验不因无损而忽略）。
+    {
+        pp::ParamSet params;
+        params["lossless"] = true;
+        params["chroma"] = std::string("420");
+        params["__heif_profile"] = int64_t(2); // Main10：要求 10 位
+        auto enc = pp::make_encoder("heif", "x265");
+        if (enc != nullptr) {
+            OIIO::ImageBuf src = make_buf(64, 64, 3, 0.0f);
+            const fs::path out = dir / "lossless_bad_profile.heic";
+            const pp::EncodeResult r = run_encode(*enc, src, 8, params, {}, out);
+            check(!r.error.empty() && r.error.find("档位") != std::string::npos,
+                  "heif/lossless/profile-incompatible",
+                  "无损下不兼容档位必须被拒绝，got: [" + r.error + "]");
+        }
+    }
+    // ④ 无损 + 显式兼容档位（10 位 4:2:0 选 Main10）→ 产物 hvcC profile_idc=2（用户档位
+    //    真正下发；Auto 在 10 位 4:2:0 推导 Rext420_10 → idc 4）。
+    {
+        pp::ParamSet params;
+        params["lossless"] = true;
+        params["chroma"] = std::string("420");
+        params["__heif_profile"] = int64_t(2); // Main10
+        auto enc = pp::make_encoder("heif", "x265");
+        if (enc != nullptr) {
+            OIIO::ImageBuf src = make_buf(64, 64, 3, 0.0f);
+            const fs::path out = dir / "lossless_profile_main10.heic";
+            const pp::EncodeResult r = run_encode(*enc, src, 10, params, {}, out);
+            check(r.error.empty(), "heif/lossless/profile/encode", r.error);
+            check(hevc_hvcc_profile_idc(out) == 2, "heif/lossless/profile/delivered",
+                  "hvcC profile_idc=" + num(hevc_hvcc_profile_idc(out)) +
+                      " (want 2 = 用户所选 Main10，不是 Auto 推导 idc 4)");
+        }
+    }
+    // ⑤ 无损 + 显式 level-idc：x265 硬拒绝 CQP+decoder level（level.cpp:443-445）⇒ 引擎
+    //    **不下发** level（如实告警），编码仍成功；产物 PTL Level 固定 8.5（general_level_idc
+    //    = 255）。这断言"不把可配置项变成必失败项"，同时如实记录 Level 在无损下不生效。
+    {
+        pp::ParamSet params;
+        params["lossless"] = true;
+        params["chroma"] = std::string("444");
+        params["x265:level-idc"] = int64_t(31); // Level 3.1
+        auto enc = pp::make_encoder("heif", "x265");
+        if (enc != nullptr) {
+            OIIO::ImageBuf src = make_buf(64, 64, 3, 0.0f);
+            const fs::path out = dir / "lossless_level.heic";
+            const pp::EncodeResult r = run_encode(*enc, src, 8, params, {}, out);
+            check(r.error.empty(), "heif/lossless/level/encode", r.error);
+            OIIO::ImageBuf rb(out.string());
+            check(rb.read(0, 0, true, OIIO::TypeFloat), "heif/lossless/level/decode",
+                  OIIO::geterror());
+            check(hevc_hvcc_level_idc(out) == 255, "heif/lossless/level/fixed-8.5",
+                  "hvcC level_idc=" + num(hevc_hvcc_level_idc(out)) +
+                      "（无损 = CQP ⇒ x265 固定 Level 8.5=255，用户 level-idc 不下发）");
+        }
+    }
+    // ⑥ >16 Mi 像素：走标准 HEIF grid 分块（libde265 单图无损解码上限），
     //    产物必须能被普通解码器（OIIO/libheif）完整打开。
     {
         const int W = 4097, H = 4096; // 16.78 MP，刚好越过 2^24 阈值

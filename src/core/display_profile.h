@@ -20,6 +20,8 @@
 // 线程安全：system_display_profile() 与 to_display_encoded() 均可从预览池（≤2 线程）并发调用。
 #pragma once
 #include <QImage>
+#include <cstdint>
+#include <filesystem>
 #include <string>
 
 namespace pp {
@@ -50,8 +52,50 @@ DisplayProfile make_srgb_display_fallback(std::string reason);
 //   * 诊断/取证开关（仅用于修复前后 A/B 截图；正常运行不设置）：
 //       PP_DISPLAY_ICC=<path>    → 强制以该 ICC 文件作为显示 profile（from_system=true）
 //       PP_DISPLAY_SRGB_FALLBACK=1 → 强制 sRGB 回退
+//       PP_DISPLAY_ICC_DELAY_MS=<ms> → 仅诊断：在获取路径上做等长 sleep，模拟「部分 Windows
+//         版本/环境下 GetICMProfileW / 读 ICC 文件长时间阻塞」的用户环境（上限 60s）。
+//         用于机械化验证「GUI 线程绝不同步等待系统显示 profile」：设置 5000 时窗口必须照常
+//         显示/响应，后台完成后才出现 display profile 切换日志。**不设置 = 行为不变**。
+//   * 本函数是**阻塞调用**（系统调用 + 文件 I/O + lcms2 解析）：GUI 线程不得在启动期同步调用
+//     （0.4.2 用户反馈「部分 Windows 打开后转圈无响应」的防御性根治，见 preview_panel.cpp 的
+//     异步获取）；只能在后台上/已运行后的低频诊断路径调用。
 DisplayProfile system_display_profile();
 void invalidate_display_profile_cache();
+
+// 系统显示 ICC 文件的读取上限（防御：损坏/异常系统配置可能指向超大文件；ICC 正常为
+// 0.3–4 MB 量级，8 MB 已覆盖 DisplayP3/HDR 类 profile。超限 = 读取失败 → sRGB 回退 + 日志，
+// 绝不把异常大文件整读进内存）。
+constexpr std::uintmax_t kDisplayIccMaxBytes = 8ull * 1024 * 1024;
+
+// ICC 文件读取（带 8 MB 上限；公开以便单测覆盖「正常/超限/缺失」三态与上限判据）：
+//   * ok=true  → bytes = 文件字节；
+//   * ok=false → error = 如实原因（stat 失败/非普通文件/超限/读取错误），进日志用。
+// 只读常规文件且先 stat 后读（TOCTOU 二次校验）；不会整读超过 kDisplayIccMaxBytes 的文件。
+struct DisplayIccFile {
+    bool ok = false;
+    std::string bytes;
+    std::string error;
+};
+DisplayIccFile read_display_icc_file(const std::filesystem::path &path);
+
+// —— 异步获取状态机（纯函数；GUI 侧 QTimer 轮询与单测共用同一判据，无时钟/无副作用）——
+//   输入：done = 后台结果已写入共享状态；result_generation = 该结果所属请求代次；
+//         current_generation = 面板当前代次；waited_ms = 自发起起的已等待毫秒；
+//         timeout_ms = 超时门限（<=0 = 不设超时）。
+//   返回值语义：
+//     Ready   → done 且代次匹配 → 应用到显示面（**迟到结果也是 Ready**：GUI 线程从不等待，
+//               迟到只意味着晚一点从 sRGB 切到正确编码，不会回退/二次跳变）；
+//     Timeout → 未 done 且 waited_ms >= timeout_ms → 调用方记日志并**保持当前 profile**
+//               （启动期即 sRGB）。纯函数不规定调用方后续策略：GUI 侧实现为「软超时」——
+//               继续在硬上限内观察迟到结果（超时日志只报一次），期间显示面一直是 sRGB；
+//     Stale   → done 但代次过期（屏幕变更/新一轮请求已接管）→ 丢弃，不应用；
+//     Pending → 后台仍在获取且未超时 → 继续轮询。
+//   优先级：done 优先于超时（结果已到就应用）；代次失配只在 done 后判定。
+enum class DisplayProfileAsyncState : std::uint8_t { Pending, Ready, Stale, Timeout };
+
+DisplayProfileAsyncState classify_display_profile_async(bool done, std::uint64_t result_generation,
+                                                        std::uint64_t current_generation,
+                                                        long long waited_ms, long long timeout_ms);
 
 // UI 显示 profile 口径（预览面板与文件列表缩略图共用，保证两处同源）：
 //   * 离屏平台（QGuiApplication::platformName() == "offscreen"；--ui-smoke / CI / 截图口径）

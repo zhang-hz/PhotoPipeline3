@@ -117,7 +117,16 @@ constexpr std::string_view kFile = "pipeline.cpp";
 // 无 scope / 非法值（<1）→ 回落 1 = 0.2 单线程行为（单测直调 run_one_file 的路径逐字不变）。
 constexpr int kEncodeThreadsDefault = 1;
 
-inline int encode_threads_of(const RunScope *scope) {
+// M15（RunScope 末尾加性字段）：多输出并行时 E 按"编码器能力"逐输出分配 —— heavy 编码器
+// （jxl/avif）拿余下预算、flat 编码器（jpegli/OIIO/x265 固定池）保底 1。取值优先级：
+//   scope->encode_threads_per_output[cfg_index]（若存在且合法）> scope->encode_threads > 1。
+// 空向量（默认：单输出 / P==1 / 深队列 / 单测直调）= 全部 target 用统一 E，旧口径逐字不变。
+inline int encode_threads_of(const RunScope *scope, std::size_t cfg_index = 0) {
+    if (scope != nullptr && cfg_index < scope->encode_threads_per_output.size()) {
+        const int per_output = scope->encode_threads_per_output[cfg_index];
+        if (per_output >= 1)
+            return per_output;
+    }
     return (scope != nullptr && scope->encode_threads >= 1) ? scope->encode_threads
                                                             : kEncodeThreadsDefault;
 }
@@ -2058,7 +2067,8 @@ TargetOutcome run_target_adaptive(RunFileContext &ctx, const PlannedTarget &pt) 
     // 输出级进度绑定（合成标识与单次编码路径同口径；每轮复用同一个 ProgressFn 语义）。
     const ProgressFn out_progress = ctx.mux->bind_output(pt.cfg_index, pt.target.format_id);
     const bool synth_pump = ctx.mux->synth_active(pt.cfg_index);
-    const int enc_threads = encode_threads_of(ctx.ev.scope);
+    // M15：自适应输出同样按逐输出分配取 E（P>1 时 heavy 编码器拿余下预算）。
+    const int enc_threads = encode_threads_of(ctx.ev.scope, pt.cfg_index);
 
     // ---- 策略解析 + 格式作用域校验（失败 = 该输出失败；不静默当"关闭"）----
     AdaptivePolicy policy;
@@ -2421,7 +2431,8 @@ TargetOutcome run_target(RunFileContext &ctx, const PlannedTarget &pt) {
     // 无 scope（单测直调）恒 1 = 0.2 行为。dither8 = UX-14 C2（M7-R2A）：RunConfig 的
     // color_dither8 进编码器 8bit 量化段（默认 false = 逐字不变）。
     // T6：并行时每 target 各持一个 EncodeRequest（无共享可变状态）；工作缓冲只读。
-    const int enc_threads = encode_threads_of(ctx.ev.scope);
+    // M15：逐输出 E（RunScope 末尾加性字段；空 = 统一 encode_threads，旧口径逐字不变）。
+    const int enc_threads = encode_threads_of(ctx.ev.scope, pt.cfg_index);
     EncodeRequest req{ctx.work->buf,        pt.target,    ctx.meta,
                       ctx.cancelled,        out_progress, enc_threads,
                       ctx.cfg.color_dither8};

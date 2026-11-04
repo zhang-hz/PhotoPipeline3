@@ -13,6 +13,8 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QStyleOptionComboBox>
+#include <QStylePainter>
 #include <QToolButton>
 #include <QVariant>
 #include <QWidget>
@@ -23,6 +25,57 @@ namespace pp::ui::meta {
 // 故取 QCoreApplication::translate 直接查表，文案单源 = meta_state.h 的 kMixedValueText）。
 QString DeltaSpin::mixed_text() const {
     return QCoreApplication::translate("PageMeta", kMixedValueText);
+}
+
+// ---------------------------------------------------------------------------
+// M15 / 0.4.2 用户反馈：时区下拉的 mixed 显示面（真正显示「多个值」，不是只换边框色）
+//   * 常态：委托 formkit::Combo::paintEvent（逐像素不变）；
+//   * mixed：盒/字同一条 QStylePainter(qss) 路径，只把 currentText 换成「多个值」，
+//     再补画 trailing 矢量箭头（与 formkit::Combo 同形/同色口径，C3 单源 icons）。
+//   * **零模型改动**：不增删 item、不改 currentIndex → 下拉弹层/选中/activated 全走既有路径。
+// ---------------------------------------------------------------------------
+MixedComboBox::MixedComboBox(QWidget *parent) : formkit::Combo(parent) {}
+
+QString MixedComboBox::mixed_text() const {
+    return QCoreApplication::translate("PageMeta", kMixedValueText);
+}
+
+QString MixedComboBox::display_text() const { return mixed_ ? mixed_text() : currentText(); }
+
+void MixedComboBox::set_mixed(bool mixed) {
+    if (mixed_ == mixed) {
+        return;
+    }
+    mixed_ = mixed;
+    update();
+}
+
+void MixedComboBox::set_tokens(const theme::Tokens &t) {
+    tokens_ = t;
+    formkit::Combo::set_tokens(t);
+}
+
+void MixedComboBox::paintEvent(QPaintEvent *event) {
+    if (!mixed_) {
+        formkit::Combo::paintEvent(event);
+        return;
+    }
+    QStylePainter painter(this);
+    painter.setPen(palette().color(QPalette::Text));
+    QStyleOptionComboBox opt;
+    initStyleOption(&opt);
+    opt.currentText = mixed_text();
+    painter.drawComplexControl(QStyle::CC_ComboBox, opt);
+    painter.drawControl(QStyle::CE_ComboBoxLabel, opt);
+    // trailing 矢量箭头：与 formkit::Combo::paintEvent 逐位同口径（同一 token/同一形/同一槽位）
+    QPainter arrow(this);
+    const int box = theme::Metrics::combo_arrow_px * 2 + 8;
+    const QRectF slot(layoutDirection() == Qt::RightToLeft ? 0 : width() - box, 0, box, height());
+    const QColor color = isEnabled() ? tokens_.text2 : tokens_.text3;
+    icons::paint(arrow, icons::Name::ChevronDown,
+                 slot.adjusted((box - theme::Metrics::combo_arrow_px) / 2.0, 0,
+                               -(box - theme::Metrics::combo_arrow_px) / 2.0, 0),
+                 color, icons::kStrokePx);
 }
 
 MetaState *state_of(const PageMeta *page) {

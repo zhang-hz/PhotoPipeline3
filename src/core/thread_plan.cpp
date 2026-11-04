@@ -16,7 +16,15 @@
 //   F4 CPU 负载 = GetSystemTimes / /proc/stat 的区间利用率 EMA；只用于多输出并行度的
 //      "饱和收敛/平静恢复"，不改 E 基值（饱和也可能是"正确地用满"，盲目降 E 会掉吞吐）。
 //   F5 线程预算硬约束（与既有 E3 契约同族）：W×P×E ≤ T，且 W×est_threads ≤ T。基值 E
-//      来自冻结公式，故 P=1 时与旧行为逐字一致；P>1 时 E 按预算拆分，总线程不增加。
+//      来自冻结公式，故 P=1 时与旧行为逐字一致；P>1 时总线程不增加。
+//   F6 **M15 公平性修复（0.4.2 JXL 严重退化根因）**：0.4.2 的 P>1 分配是"每路 E=预算/P"的
+//      名义均分 —— 但 jpegli/OIIO 无内部线程、heif/x265 用不受控固定池，**只有** jxl/avif 真正
+//      吃 E（thread_plan.h 能力表）。多输出同文件时 jxl 的 E 从 16 被压到 8/4/2，JXL 单轮编码
+//      慢 ~1.5-3x；配合格式预设默认自适应（target=90，最多 30 轮重编码）放大成数量级退化
+//      （用户报 600s+）。修复 = 逐输出分配：每路保底 1、heavy 分走余下预算（P=4 的
+//      jxl+heif+jpeg+png → E=[13,1,1,1]，恢复 0.4.1 的 JXL 线程预算量级）；线程预算硬约束
+//      由"任意 P 路并发子集的有效线程之和 ≤ 每文件预算"保证，W×P×E≤T 的旧不变式零放宽。
+//      P==1 / 单输出路径逐输出向量为空 ⇒ 0.4.2 旧口径逐字不变（产物字节不变的结构性保证）。
 //
 // 不变式（tests/unit/test_thread_plan.cpp 穷举）：
 //   W == alloc_threads(T, unfinished, 0).files；1 ≤ E ≤ 16；
@@ -26,6 +34,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <functional>
 
 #include "core/scheduler.h" // pp::Alloc / pp::alloc_threads（冻结契约的唯一实现）
@@ -61,6 +70,61 @@ int est_concurrent_threads(const std::vector<int> &effective, int parallel) {
     for (int i = 0; i < parallel && i < static_cast<int>(sorted.size()); ++i)
         sum += sorted[i];
     return sum;
+}
+
+// 编码器是否"真正吃 E"（scales_with_encode_threads；见 thread_plan.h 能力表）。
+bool is_heavy(const EncoderThreadProfile &profile) {
+    return profile.scales_with_encode_threads && profile.max_effective_threads > 1;
+}
+
+// —— 诊断开关（**默认关闭**；仅同机 A/B 取证用，生产/GUI/CI 从不设置）——
+// PP_THREAD_PLAN_LEGACY=1 / 非 "0" ⇒ 逐输出分配退化为 0.4.2 旧口径"每路 E=预算/P"的名义
+// 均分（JXL 被压到 8/4/2 的旧行为）。用于"同一二进制、同一输入、清空输出目录"的修改前后
+// A/B；关闭时行为 = M15 修复后的公平分配。单次读环境（static），不影响单测确定性（默认未设）。
+bool legacy_planner_requested() {
+    static const bool legacy = [] {
+        const char *value = std::getenv("PP_THREAD_PLAN_LEGACY");
+        return value != nullptr && *value != '\0' && std::string_view(value) != "0";
+    }();
+    return legacy;
+}
+
+// —— M15 公平性修复：逐输出线程分配 ——
+// 背景（根因）：0.4.2 的 `e = floor(每文件预算 / P)` 对**所有** target 一视同仁 ⇒ 同文件多输出
+// 时 jxl/avif 的内部线程从 16 被压到 8/4/2，而 flat 编码器（jpegli/OIIO 无内部线程、heif/x265
+// 用固定池）根本吃不到这份预算 —— 预算被"名义均分"浪费，heavy 编码器数量级变慢。
+//
+// 分配规则（保守、与任意并发子集无关）：
+//   * 每路保底 1（= 调用线程编码 / 单线程编码器）；
+//   * 余下预算（budget - P）优先给 heavy 编码器；
+//   * 同时在跑的最多 k = min(P, heavy 数) 路 heavy，其余 (P-k) 路占 1 ⇒ 均分后任何 P 路并发
+//     子集的实际并发之和 ≤ budget（floor 缩水只会更小）；
+//   * heavy 缺席 ⇒ 全部 1 线程（P 路并行本身就是线程并行，flat 编码器不需要更多）。
+// 例（T/W=16，输出 jxl+heif+jpeg+png，P=4）：[13,1,1,1]（0.4.2 = [4,4,4,4]）。
+std::vector<int> allocate_output_threads(int budget, int parallel,
+                                         const std::vector<EncoderThreadProfile> &profiles) {
+    std::vector<int> per(profiles.size(), 1);
+    if (parallel <= 1 || profiles.empty())
+        return per;
+    // 诊断 A/B：旧口径 = 名义均分（所有 target 同一个 E；jxl 被压到 8/4/2 的 0.4.2 行为）。
+    if (legacy_planner_requested())
+        return std::vector<int>(profiles.size(),
+                                std::clamp(budget / parallel, 1, kMaxEncodeThreads));
+    int heavy_count = 0;
+    for (const EncoderThreadProfile &profile : profiles)
+        heavy_count += is_heavy(profile) ? 1 : 0;
+    const int heavy_concurrent = std::min(parallel, heavy_count);
+    if (heavy_concurrent <= 0)
+        return per; // 全是 flat 编码器
+    const int flat_slots = parallel - heavy_concurrent;
+    const int per_heavy =
+        std::clamp((budget - flat_slots) / heavy_concurrent, 1, kMaxEncodeThreads);
+    for (std::size_t i = 0; i < profiles.size(); ++i) {
+        const EncoderThreadProfile &profile = profiles[i];
+        if (is_heavy(profile))
+            per[i] = std::min(per_heavy, std::max(1, profile.max_effective_threads));
+    }
+    return per;
 }
 
 } // namespace
@@ -190,17 +254,17 @@ ThreadPlan plan_threads(const ThreadPlanInput &in, ThreadPlanState &state) {
         return plan;
     }
 
-    // —— ④ 浅队列：多输出并行度 P 规划（编码器能力 + 线程预算）——
+    // —— ④ 浅队列：多输出并行度 P 规划（编码器能力 + 线程预算 + 逐输出公平分配）——
     const int budget_per_file = std::max(1, T / plan.files); // 本文件可用的编码线程预算
-    // 能力表：空 → 保守 {1,false}（未知编码器按"平编码器"处理，只会更小不会超订）。
-    const std::vector<EncoderThreadProfile> *profiles = in.profiles;
+    // 能力表：空/缺项 → 保守 {1,false}（未知编码器按"平编码器"处理，只会更小不会超订）。
     const EncoderThreadProfile kConservativeProfile{1, false, "unknown"};
-    const auto profile_at = [profiles,
-                             &kConservativeProfile](int i) -> const EncoderThreadProfile & {
-        if (profiles != nullptr && i >= 0 && i < static_cast<int>(profiles->size()))
-            return (*profiles)[static_cast<std::size_t>(i)];
-        return kConservativeProfile;
-    };
+    std::vector<EncoderThreadProfile> profiles(static_cast<std::size_t>(outputs),
+                                               kConservativeProfile);
+    if (in.profiles != nullptr) {
+        const std::size_t n = std::min(in.profiles->size(), profiles.size());
+        for (std::size_t i = 0; i < n; ++i)
+            profiles[i] = (*in.profiles)[i];
+    }
 
     int p_cap = std::min(outputs, kMaxParallelOutputs);
     p_cap = std::min(p_cap, budget_per_file); // P 路至少各 1 线程
@@ -213,22 +277,27 @@ ThreadPlan plan_threads(const ThreadPlanInput &in, ThreadPlanState &state) {
 
     int planned_p = 1;
     int planned_e = plan.encode_threads;
+    std::vector<int> planned_per_output;
     for (int p = p_cap; p >= 2; --p) {
-        const int e = std::clamp(budget_per_file / p, 1, kMaxEncodeThreads);
-        if (e * p > budget_per_file)
-            continue; // 防御（floor 除法下不可达）
+        // M15：逐输出分配（heavy 拿余下预算），est 用"最重 P 路实际并发之和"判预算。
+        std::vector<int> per_output = allocate_output_threads(budget_per_file, p, profiles);
         std::vector<int> eff(static_cast<std::size_t>(outputs));
-        for (int i = 0; i < outputs; ++i)
-            eff[static_cast<std::size_t>(i)] = effective_threads(profile_at(i), e);
+        for (int i = 0; i < outputs; ++i) {
+            const std::size_t idx = static_cast<std::size_t>(i);
+            eff[idx] = effective_threads(profiles[idx], per_output[idx]);
+        }
         if (est_concurrent_threads(eff, p) <= budget_per_file) {
             planned_p = p;
-            planned_e = e;
+            // 均分参考值（旧口径的 E；单输出/串行路径仍由冻结公式给出）。
+            planned_e = std::clamp(budget_per_file / p, 1, kMaxEncodeThreads);
+            planned_per_output = std::move(per_output);
             break;
         }
     }
     if (planned_p > 1) {
         plan.parallel_outputs = planned_p;
         plan.encode_threads = planned_e;
+        plan.encode_threads_per_output = planned_per_output;
         plan.action = "multi";
         plan.reason = "shallow-queue-budget";
     }
@@ -249,7 +318,7 @@ ThreadPlan plan_threads(const ThreadPlanInput &in, ThreadPlanState &state) {
     const bool can_change = !state.has_last || since_change >= kPlanMinChangeMs;
     bool uncontrolled_pool = false;
     for (int i = 0; i < outputs; ++i) {
-        const EncoderThreadProfile &pf = profile_at(i);
+        const EncoderThreadProfile &pf = profiles[static_cast<std::size_t>(i)];
         if (std::string_view(pf.family) == "x265" || std::string_view(pf.family) == "unknown") {
             uncontrolled_pool = true;
             break;
@@ -262,11 +331,13 @@ ThreadPlan plan_threads(const ThreadPlanInput &in, ThreadPlanState &state) {
                     // 防抖：未到最小变更间隔 → 沿用上一版 P（不再新增），记为 hold。
                     plan.parallel_outputs = state.last.parallel_outputs;
                     plan.encode_threads = state.last.encode_threads;
+                    plan.encode_threads_per_output = state.last.encode_threads_per_output;
                     plan.action = "hold";
                     plan.reason = "cpu-saturated-debounce";
                 } else {
                     plan.parallel_outputs = 1;
                     plan.encode_threads = base.encode_threads;
+                    plan.encode_threads_per_output.clear();
                     plan.action = "converge";
                     plan.reason = "cpu-saturated";
                 }
@@ -279,16 +350,20 @@ ThreadPlan plan_threads(const ThreadPlanInput &in, ThreadPlanState &state) {
                     if (keep_p < 2) {
                         plan.parallel_outputs = 1;
                         plan.encode_threads = base.encode_threads;
+                        plan.encode_threads_per_output.clear();
                     } else {
                         plan.parallel_outputs = keep_p;
                         plan.encode_threads =
                             std::clamp(budget_per_file / keep_p, 1, kMaxEncodeThreads);
+                        plan.encode_threads_per_output =
+                            allocate_output_threads(budget_per_file, keep_p, profiles);
                     }
                     plan.action = "hold";
                     plan.reason = "cpu-saturated-bounded";
                 } else {
                     plan.parallel_outputs = planned_p;
                     plan.encode_threads = planned_e;
+                    plan.encode_threads_per_output = planned_per_output;
                     plan.action = "multi";
                     plan.reason = "cpu-saturated-budget-bounded";
                 }
@@ -304,15 +379,25 @@ ThreadPlan plan_threads(const ThreadPlanInput &in, ThreadPlanState &state) {
             // 恢复防抖：CPU 尚未平静足够久 → 保持串行（不再加），并记录为 hold。
             plan.parallel_outputs = 1;
             plan.encode_threads = base.encode_threads;
+            plan.encode_threads_per_output.clear();
             plan.action = "hold";
             plan.reason = "cpu-saturated-recovering";
         }
     }
 
     // —— ⑥ 占用估算（est 口径：P 路编码器实际并发之和 × W；见 thread_plan.h 不变式）——
+    // M15：P>1 用逐输出分配值（encode_threads_per_output），否则用均分参考值 encode_threads
+    // （P==1 时二者等价于旧口径 → 单输出/串行路径的 est 与 0.4.2 逐字一致）。
+    const bool per_output_ok = plan.parallel_outputs > 1 && plan.encode_threads_per_output.size() ==
+                                                                static_cast<std::size_t>(outputs);
+    if (plan.parallel_outputs > 1 && !per_output_ok)
+        plan.encode_threads_per_output.clear(); // 防御：不自洽 → 回退均分参考值
     std::vector<int> eff(static_cast<std::size_t>(outputs));
-    for (int i = 0; i < outputs; ++i)
-        eff[static_cast<std::size_t>(i)] = effective_threads(profile_at(i), plan.encode_threads);
+    for (int i = 0; i < outputs; ++i) {
+        const std::size_t idx = static_cast<std::size_t>(i);
+        const int e = per_output_ok ? plan.encode_threads_per_output[idx] : plan.encode_threads;
+        eff[idx] = effective_threads(profiles[idx], e);
+    }
     plan.est_threads = plan.files * est_concurrent_threads(eff, plan.parallel_outputs);
     // est 下界防御：至少每个活跃文件 1 条线程；上界防御：不超过线程预算。
     plan.est_threads = std::clamp(plan.est_threads, plan.files, T);

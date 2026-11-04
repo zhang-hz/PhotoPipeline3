@@ -85,9 +85,11 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -141,6 +143,31 @@ void warn_preset_op(QWidget *parent, PresetOp op, const QString &detail) {
                         : op == PresetOp::Import ? "导入预设失败"
                                                  : "导出预设失败";
     QMessageBox::warning(parent, T(title), detail);
+}
+
+// task-4 §3（启动卡死防御面）：0.4.2 新增启动期同步 I/O 的一次性取证计时。
+// 本文件的启动期工作 = 出厂格式预设 seed（首次启动 11 个小 JSON 的字节复制）+ 预设列表目录
+// 枚举 + 绑定预设的正文读取/基线序列化；都是本地小 I/O（data_dir = 可执行目录旁或
+// %APPDATA%，不是网络路径）。这里只加**取证**：PP_STARTUP_TIMING 下打印分项耗时、>50ms 记
+// warn（用户环境把 data_dir 指到慢盘/漫游目录时可据此定位）；**不改变任何预设语义/时序**。
+// 显示 profile 获取已移出 GUI 线程（preview_panel.cpp 异步化），不在本计时内。
+constexpr long long kStartupSlowIoWarnMs = 50;
+
+void log_startup_io_timing(const char *item, std::chrono::steady_clock::time_point t0) {
+    // 只在 PP_STARTUP_TIMING 诊断模式下有任何输出：正常运行**零日志**（不新增 info/warn 行，
+    // 不改变既有日志面与回归基线；regression zero-diff / 日志行数断言不受影响）。
+    if (std::getenv("PP_STARTUP_TIMING") == nullptr)
+        return;
+    const long long ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0)
+            .count();
+    std::fprintf(stderr, "startup presets: %s=%lldms\n", item, ms);
+    if (ms > kStartupSlowIoWarnMs)
+        pp::log_warn("preset", "mainwindow_presets.cpp", "slow startup preset I/O (>50ms)",
+                     {{"item", item}, {"elapsed_ms", std::to_string(ms)}});
+    else
+        pp::log_debug("preset", "mainwindow_presets.cpp", "startup preset I/O timing",
+                      {{"item", item}, {"elapsed_ms", std::to_string(ms)}});
 }
 
 } // namespace
@@ -209,13 +236,20 @@ QString preset_name_of_file(const QString &path) {
 void MainWindow::Impl::refresh_preset_card() {
     if (page_output == nullptr)
         return;
+    // —— task-4 §3：0.4.2 新增启动期同步 I/O 分项计时（PP_STARTUP_TIMING 诊断；默认零输出）——
+    const auto card_t0 = std::chrono::steady_clock::now();
+    auto segment_t0 = card_t0;
     // M12（需求 1/2）：工厂（出厂）格式预设 seed（幂等；本进程首次调用时执行，见上）
     seed_factory_format_presets_once();
+    log_startup_io_timing("seed_factory_format_presets", segment_t0);
+    segment_t0 = std::chrono::steady_clock::now();
     // M10-W3-T2：格式预设行的接线（一次性；构造期 refresh_preset_card 首调即接上 —— 本任务
     // 的写作用域不含 mainwindow.cpp 的 wire 段，接线点因此落在本 TU 的构造期入口上）。
     wire_format_preset_card();
+    log_startup_io_timing("wire_format_preset_card", segment_t0);
     // 0.4.2 / 需求 3（A13）：绑定文件被外部删除/改名 → 解除绑定（不静默指向不存在的文件：
     // 否则「保存」会复活一个"幽灵"预设，卡片高亮也名不副实）。
+    segment_t0 = std::chrono::steady_clock::now();
     if (!last_preset_path.isEmpty()) {
         std::error_code ec;
         if (!std::filesystem::exists(std::filesystem::path(last_preset_path.toStdString()), ec) ||
@@ -229,22 +263,30 @@ void MainWindow::Impl::refresh_preset_card() {
                     T("当前预设文件已不存在：绑定已解除，当前配置未保存为预设"));
         }
     }
+    log_startup_io_timing("binding_check", segment_t0);
     // 0.4.2 / 需求 3（A13）：启动恢复（mainwindow.cpp 的 restore_session 只设 last_preset_path）
     // 之后补初始化显示名与 dirty 基线 —— 否则「刚启动就显示已修改」是假读数。
+    segment_t0 = std::chrono::steady_clock::now();
     if (!last_preset_path.isEmpty() && preset_baseline.isEmpty()) {
         if (preset_display_name.isEmpty())
             preset_display_name = preset_name_of_file(last_preset_path);
         record_preset_baseline(preset_display_name);
     }
+    log_startup_io_timing("bound_preset_baseline", segment_t0);
+    segment_t0 = std::chrono::steady_clock::now();
     std::vector<std::pair<QString, QString>> items;
     for (const auto &[path, name] : pp::ui::list_presets(pp::platform::presets_dir()))
         items.emplace_back(QString::fromStdString(path.string()), QString::fromStdString(name));
     page_output->set_preset_list(items);
     page_output->set_current_preset(last_preset_path);
     page_output->set_current_preset_dirty(preset_dirty);
+    log_startup_io_timing("preset_list", segment_t0);
     // M10-W3-T5：seed 之后立即刷新现役格式的格式预设行 —— 首启时该行的列表请求可能发生在
     // seed/接线之前（页签构造期），不刷新会"内置预设文件已在盘上、下拉里却看不到"。
+    segment_t0 = std::chrono::steady_clock::now();
     refresh_format_preset_row(page_output->current_format(), page_output);
+    log_startup_io_timing("format_preset_row", segment_t0);
+    log_startup_io_timing("refresh_preset_card(total)", card_t0);
 }
 
 // 0.4.2 / 需求 3（A13）：绑定会话态的三个维护点（唯一持有者 = 本 TU）。

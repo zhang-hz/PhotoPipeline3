@@ -155,6 +155,8 @@ struct PlanLine {
     long long alloc_files = 0, encode_threads = 0, parallel_outputs = 0, outputs = 0,
               est_threads = 0;
     std::string cpu_load_pct, action, reason;
+    // M15：逐输出编码线程数文本（"uniform" = 全部用 encode_threads；否则 "3/1" 形态）。
+    std::string encode_threads_of;
 };
 
 // 取行内 ` key=<非空格值>` 的字符串值（本用例的 action/reason/cpu_load_pct 无引号/空格）。
@@ -180,7 +182,8 @@ bool parse_plan_line(const std::string &line, PlanLine &out) {
            field_int(line, "outputs", out.outputs) &&
            field_int(line, "est_threads", out.est_threads) &&
            field_text(line, "cpu_load_pct", out.cpu_load_pct) &&
-           field_text(line, "action", out.action) && field_text(line, "reason", out.reason);
+           field_text(line, "action", out.action) && field_text(line, "reason", out.reason) &&
+           field_text(line, "encode_threads_of", out.encode_threads_of);
 }
 
 } // namespace
@@ -1260,6 +1263,20 @@ int main() {
                   std::to_string(n_bad) + " 行违例（E/P/est 域或 W×P×E>T）: " + ex);
             check(n_report == 1, "m14/q1-plan-report",
                   "`thread plan report` 行数 " + std::to_string(n_report) + " != 1");
+            // —— M15 公平性（机械钉）——
+            // 2 文件 jxl+png、T=8 → W=2、每文件预算 4 → 逐输出 [jxl=3, png=1]
+            // （jxl 拿余下预算；0.4.2 旧口径为均分 2/2，JXL 每轮编码慢 ~1.5-2x）。
+            std::size_t n_fair_bad = 0;
+            std::string ex_fair;
+            for (const PlanLine &pl : plans) {
+                if (pl.parallel_outputs > 1 && pl.encode_threads_of != "3/1") {
+                    ++n_fair_bad;
+                    if (ex_fair.empty())
+                        ex_fair = "encode_threads_of=" + pl.encode_threads_of + "（期望 3/1）";
+                }
+            }
+            check(n_fair_bad == 0, "m15/q1-per-output-fair",
+                  std::to_string(n_fair_bad) + " 行逐输出分配不是 heavy 优先: " + ex_fair);
             // 多输出浅队列：规划器给出 P≥1 且每 target 的 E 由预算拆分；
             // 产物结果 = 2 文件 × 2 输出全部成功（并行路径不改变产物语义）。
             bool outputs_ok = true;
@@ -1314,6 +1331,21 @@ int main() {
                   "`thread plan` 行数 " + std::to_string(n_plans));
             check(n_deep_bad == 0, "m14/q2-deep-e1-p1",
                   std::to_string(n_deep_bad) + " 行深队列 E/P 不为 1: " + ex);
+            // M15：深队列/串行路径逐输出向量必须为空（旧口径逐字不变）。
+            std::size_t n_vec_bad = 0;
+            std::string ex_vec;
+            for (const std::string &l : read_run_logs(logdir)) {
+                PlanLine pl;
+                if (!parse_plan_line(l, pl))
+                    continue;
+                if (pl.encode_threads_of != "uniform") {
+                    ++n_vec_bad;
+                    if (ex_vec.empty())
+                        ex_vec = "encode_threads_of=" + pl.encode_threads_of;
+                }
+            }
+            check(n_vec_bad == 0, "m15/q2-serial-uniform",
+                  std::to_string(n_vec_bad) + " 行深队列仍下发逐输出分配: " + ex_vec);
         }
     }
 

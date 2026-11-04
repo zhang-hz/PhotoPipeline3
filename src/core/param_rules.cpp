@@ -399,7 +399,8 @@ std::vector<Rule> build_rules() {
          "jxl 不接受插件透传前缀（x265:/aom:/svt: 均非法）；参数必须是目录内键"});
 
     // ============================== G3：无损（分后端） ==============================
-    // —— HEIF/x265：quality/RC 组隐藏、chroma 锁 444 ——
+    // —— HEIF/x265：quality/RC 组隐藏；chroma/profile/level **仍可配置**（M15 用户面要求：
+    //    无损 = RC 下拉第四档，chroma/档位/Level 不由无损接管）——
     add({"G3",
          "heif",
          "x265",
@@ -421,22 +422,34 @@ std::vector<Rule> build_rules() {
     add({"G3",
          "heif",
          "x265",
-         Action::Lock,
-         {},
-         {"chroma"},
-         lossless_on,
-         [](const EvalCtx &) { return lock_str("444"); },
-         "无损承诺：chroma 锁定 444（4:2:0/4:2:2 的抽样有损，编码器侧同样强制）"});
-    add({"G3",
-         "heif",
-         "x265",
          Action::Warn,
          {},
          {},
          lossless_on,
          {},
-         "G3：无损模式已锁定 chroma=444 并隐藏 RC 组；profile/level 由位深与色度推导（只读行），"
-         "HEVC 码流无损经 RGB→YCbCr 舍入仍可能有损"});
+         "G3：无损模式隐藏 RC 数值组（quality/CRF/QP 由插件 bLossless 接管）；chroma/档位/"
+         "Level 仍可配置。HEVC 的无损是 YCbCr 平面无损（RGB↔YCbCr 往返有舍入，不是逐位）；"
+         "x265 在无损下把码流 Level 固定写为 8.5（bLossless 的 determineLevel 行为）"});
+    add({"G3",
+         "heif",
+         "x265",
+         Action::Warn,
+         {"chroma"},
+         {},
+         [](const EvalCtx &c) { return c.lossless && c.s("chroma", "420") != "444"; },
+         {},
+         "G3：无损 + 4:2:0/4:2:2 —— 色度在编码前被下采样，YCbCr 码流无损但不等于像素级无损；"
+         "需要像素级无损请把色度采样设为 4:4:4"});
+    add({"G3",
+         "heif",
+         "x265",
+         Action::Warn,
+         {"x265:level-idc"},
+         {},
+         [](const EvalCtx &c) { return c.lossless && c.i("x265:level-idc", 0) > 0; },
+         {},
+         "G3：无损模式下显式 Level 不会下发（x265 拒绝恒定 QP + decoder level："
+         "level.cpp:443-445），产物 Level 固定 8.5；需要指定 Level 请关闭无损"});
 
     // —— AVIF/libaom：quality/cq-level 隐藏、chroma 444 + aq-mode/chroma-deltaq 锁定 ——
     add({"G3",

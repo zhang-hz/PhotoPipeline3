@@ -487,9 +487,10 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
             return fail("unsupported bitdepth " + std::to_string(req.target.out_bitdepth) +
                         " for " + format_id_ + " (expected 8, 10 or 12)");
         // 无损口径（R-307 的单源读取；在参数循环之前就要用）：
-        //   * 像素面只有 4:4:4 才能保住 RGB→YCbCr 的色度（4:2:0/4:2:2 是抽样，必然有损）；
-        //   * 因此下面会强制 chroma=444（含编码器参数与平面布局两处），并在编码前校验
-        //     后端确实暴露 chroma 参数（否则无法保证 4:4:4，直接失败而不是假装无损）。
+        //   * 无损模式下 chroma **由用户/参数决定**（M15 用户面要求：无损 = RC 第四档，
+        //     色度采样仍可配置）；不再强制 4:4:4，也不再因后端不暴露 chroma 而失败；
+        //   * 4:2:0/4:2:2 在编码前下采样色度 —— x265 的 bLossless 只保证输入 YCbCr 平面
+        //     无损，对 RGB 源不是像素级无损 ⇒ 下方给**如实中文警告**，不静默假装像素无损。
         const bool want_lossless = lossless_flag(req.target.params);
 
         heif_compression_format fmt = heif_compression_HEVC;
@@ -738,6 +739,18 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
                 return fail(msg);
             }
             const std::string text = passthrough_value_text(value);
+            // M15：x265 无损（bLossless ⇒ RC 强制 CQP=4）与显式 decoder level **硬冲突**：
+            // enforceLevel 在 determineLevel 之前直接失败（x265 level.cpp:443-445
+            // "Constant QP is inconsistent with specifying a decoder level"）。因此无损下
+            // level-idc 无法真正下发 —— 跳过下发并**如实告警**（UI/规则层同样给 warn），
+            // 不静默假装 Level 生效，也不让"可配置的一项"变成必失败项。
+            if (want_lossless && key == "x265:level-idc") {
+                note_param("无损模式下 x265 拒绝显式 Level（无损 = 恒定 QP，与 decoder level "
+                           "冲突；x265 level.cpp:443-445），该值不下发，码流 Level 固定写 8.5"
+                           "（如需指定 Level 请关闭无损）",
+                           key, text);
+                continue;
+            }
             const heif_error pe = heif_encoder_set_parameter_string(enc, key.c_str(), text.c_str());
             if (pe.code != heif_error_Ok) {
                 std::string msg = "plugin option '";
@@ -763,26 +776,18 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
             if (le.code != heif_error_Ok && want_lossless)
                 return fail("lossless requested but backend rejected it: " + heif_error_text(le));
         }
-        // 无损 ⇒ 4:4:4（强制联动，单一事实源）：
-        //   * 4:2:0/4:2:2 的色度抽样发生在编码之前，x265 的 bLossless 只保证 YCbCr 平面无损，
-        //     对 RGB 源仍是有损 —— 旧实现默认 chroma=420，所以"无损"产物 PSNR 只有 ~48dB；
-        //   * 强制值必须同时落在 **编码器参数**（query_input_colorspace2 用它决定 libheif
-        //     是否把输入转成 4:2:0）和 **本文件的平面布局** 两处，否则 libheif 会把 4:4:4
-        //     平面再降回 4:2:0。
-        //   * 后端不暴露 chroma（无法保证 4:4:4）→ 拒绝，不静默产出假无损。
-        if (want_lossless) {
-            if (!is_known("chroma"))
-                return fail("lossless requested but backend exposes no 'chroma' parameter; "
-                            "cannot guarantee 4:4:4 (true lossless)");
-            const heif_error ce = heif_encoder_set_parameter_string(enc, "chroma", "444");
-            if (ce.code != heif_error_Ok)
-                return fail("lossless requires chroma=444 but backend rejected it: " +
-                            heif_error_text(ce));
-            const std::string requested = param_str(req.target.params, "chroma", "420");
-            if (requested != "444")
-                note_param("lossless forces chroma 444 (requested " + requested +
-                               "; 4:2:0/4:2:2 would discard chroma and is not pixel-lossless)",
-                           "chroma", requested);
+        // 无损 + 非 4:4:4：如实警告（不静默假装像素无损）。
+        //   * 4:2:0/4:2:2 的色度抽样发生在编码之前，x265 的 bLossless 只保证**输入 YCbCr
+        //     平面**无损，对 RGB 源仍有色度损失；
+        //   * 4:4:4 = 当前产品口径下的像素级无损路径（RGB↔YCbCr 往返仍有舍入，见规则 G3）。
+        //   * chroma 值由上面的参数循环/平面布局取用，本段不再改写（M15：用户可配置）。
+        {
+            const std::string requested_chroma = param_str(req.target.params, "chroma", "420");
+            if (want_lossless && requested_chroma != "444")
+                note_param("无损模式 + 色度 " + requested_chroma +
+                               "：色度在编码前被下采样，YCbCr 码流无损但不等于像素级无损"
+                               "（需要像素级无损请把色度采样设为 4:4:4）",
+                           "chroma", requested_chroma);
         }
 
         // —— E3 线程映射（§3.1 正文，W1-T7 落地）——
@@ -832,12 +837,11 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
         }
 
         // ---- chroma layout ----
-        // 无损强制 4:4:4（与上面的编码器参数强制同源；见该段注释）。有损沿用内省参数：
-        // 缺省 420 是 HEVC 的主流兼容面，显式选 444/422 时按真实平面布局编码。
+        // M15：无损不再特判 4:4:4 —— 平面布局与编码器参数都取用户值（与有损同一路径）。
+        // 缺省 420 是 HEVC 的主流兼容面，显式选 444/422 时按真实平面布局编码；无损 + 非 444
+        // 的"色度抽样有损"已在上方如实警告。
         ChromaLayout layout = layout_for(heif_chroma_420);
-        if (want_lossless) {
-            layout = layout_for(heif_chroma_444);
-        } else if (is_known("chroma")) {
+        if (is_known("chroma")) {
             const std::string c = param_str(req.target.params, "chroma", "420");
             if (c == "444")
                 layout = layout_for(heif_chroma_444);
@@ -946,8 +950,17 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
                 static_cast<int>(param_int(req.target.params, "x265:level-idc", 0));
             // 未知 Level（x265 只会在 encoder_open 里报 “specified level N does not exist”）：
             // grid 也救不了，保留准确的中文错误（与旧行为一致）。
-            if (requested_level_idc != 0 && heif_level_max_luma_ps(requested_level_idc) < 0)
+            // M15：无损下 level-idc 不下发（见上方透传段的硬冲突说明）⇒ 无效值也不阻断。
+            if (!want_lossless && requested_level_idc != 0 &&
+                heif_level_max_luma_ps(requested_level_idc) < 0)
                 return fail(heif_level_fit_error_zh(requested_level_idc, w, h));
+            // M15：无损下 x265 的 determineLevel() 在 bLossless 分支**固定**写 Level 8.5
+            // （source/encoder/level.cpp:160-166）；显式 level-idc 因 CQP/level 硬冲突不下发
+            // （透传段已 warn）—— 这里再补一条产物口径说明（PTL 恒 8.5）。
+            if (want_lossless && requested_level_idc != 0)
+                note_param("无损模式：码流 PTL Level 固定写 8.5（x265 determineLevel 的 bLossless "
+                           "分支），用户 level-idc 不参与产物 Level",
+                           "x265:level-idc", std::to_string(requested_level_idc));
 
             auto read_int_key = [&](const char *key, int64_t &out) -> std::string {
                 const auto it = req.target.params.find(key);
@@ -1012,8 +1025,14 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
             if (!grid_plan.ok)
                 return fail(grid_plan.error_zh);
             lossy_grid = grid_plan.use_grid && !want_lossless;
-            if (!grid_plan.level_fits_image && !lossy_grid)
+            // M15：无损下 x265 无视 level-idc（PTL 固定 8.5），Level 拟合失败不阻断单图编码
+            // —— 只在有损路径上保留"Level 装不下 → 中文错误"的硬校验。
+            if (!grid_plan.level_fits_image && !lossy_grid && !want_lossless)
                 return fail(heif_level_fit_error_zh(requested_level_idc, w, h));
+            if (!grid_plan.level_fits_image && want_lossless)
+                log_info(kStage, kFile, "lossless ignores level fit check (x265 writes Level 8.5)",
+                         {{"level", heif_level_name(requested_level_idc)},
+                          {"image", std::to_string(w) + "x" + std::to_string(h)}});
             if (lossy_grid && has_alpha)
                 return fail("HEIF grid 不承载 alpha 通道：请拍平 alpha 或把 heif_grid 设为关闭"
                             "（单图输出）。");
@@ -1039,7 +1058,8 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
                          {{"note", grid_plan.note_zh}});
             // C17'：still 单图档位 + Level>5.1 → 规划被压到 still 互操作上界 5.1（warn 级，
             // 不阻断、不改用户 Level）。单图路径（未分块）也会走到这里，保证警告可见。
-            if (!grid_plan.warning_zh.empty() && !grid_plan.miaf_parity_warn) {
+            // M15：无损下 x265 的 PTL Level 固定 8.5、规划 Level 不生效 → 不报这条误导性告警。
+            if (!want_lossless && !grid_plan.warning_zh.empty() && !grid_plan.miaf_parity_warn) {
                 log_warn(kStage, kFile, "heif grid warning",
                          {{"level", heif_level_name(requested_level_idc)},
                           {"planning_level", heif_level_name(grid_plan.planning_level_idc)},
@@ -1095,7 +1115,7 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
                               {"tiles", tiles_text},
                               {"level", heif_level_name(requested_level_idc)}});
                 }
-            } else if (!grid_plan.note_zh.empty()) {
+            } else if (!want_lossless && !grid_plan.note_zh.empty()) {
                 log_info(kStage, kFile, "heif grid note", {{"note", grid_plan.note_zh}});
             }
         }
@@ -1300,7 +1320,8 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
         // "Decoding the input data did not give a decompressed image"；10 位下阈值按同一
         // luma 样本数收敛）。这不是 OIIO 的私有行为，而是 libheif→libde265 的解码上限。
         // 标准 HEIF 的 grid 派生图把大图拆成多个独立 HEVC item（每块 <= 2048x2048），
-        // 解码器逐块解、libheif 再拼回整图 —— 既保住 4:4:4 真无损，也保住可打开性。
+        // 解码器逐块解、libheif 再拼回整图 —— 既保住无损（色度按用户设置，M15 起不再
+        // 强制 4:4:4），也保住可打开性。
         // 约束：grid 的每个 tile 必须同尺寸；边缘块用边缘像素填充，grid 的输出尺寸仍写
         // 原图 w×h（libheif 解码时裁掉填充）。alpha 的 grid 承载未在本版验证 → 明确拒绝，
         // 不静默产出打不开的文件。
@@ -1332,20 +1353,23 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
                         heif_image_handle_release(h);
                 }
             } grid_guard{grid};
-            // 4:4:4 下 Y/Cb/Cr 三平面同尺寸；从已生成的整图平面按块拷入（边缘 clamp 复制）。
-            struct TileRect {
-                int w = 0, h = 0, x0 = 0, y0 = 0;
-            };
-            const auto copy_tile_plane = [&](heif_image *tile, heif_channel ch,
-                                             const TileRect &rect, const PlaneRef &src) {
+            // M15：tile 的色度面尺寸按 layout（420/422/444）推导，平面布局与无损/有损无关；
+            // 每通道从已生成的整图平面按块拷入（边缘 clamp 复制）。
+            const int tile_cw = (kGridTileSize + layout.cw_off) / layout.cw_div;
+            const int tile_ch = (kGridTileSize + layout.ch_off) / layout.ch_div;
+            // 参数顺序与有损 grid 同构（dst_w/dst_h/src_x0/src_y0），交换在编译期无法发现、
+            // 运行时会立刻产生接缝，故保留直白签名并附调用点注释（同有损段的 NOLINT 口径）。
+            // NOLINTBEGIN(bugprone-easily-swappable-parameters)
+            const auto copy_tile_plane = [&](heif_image *tile, heif_channel ch, const PlaneRef &src,
+                                             int dst_w, int dst_h, int src_x0, int src_y0) {
                 size_t dstride = 0;
                 uint8_t *dst = heif_image_get_plane2(tile, ch, &dstride);
                 if (dst == nullptr)
                     return false;
-                for (int y = 0; y < rect.h; ++y) {
-                    const int sy = std::min(rect.y0 + y, h - 1);
-                    for (int x = 0; x < rect.w; ++x) {
-                        const int sx = std::min(rect.x0 + x, w - 1);
+                for (int y = 0; y < dst_h; ++y) {
+                    const int sy = std::min(src_y0 + y, src.h - 1);
+                    for (int x = 0; x < dst_w; ++x) {
+                        const int sx = std::min(src_x0 + x, src.w - 1);
                         if (bitdepth > 8) {
                             reinterpret_cast<uint16_t *>(dst +
                                                          static_cast<size_t>(y) * dstride)[x] =
@@ -1359,6 +1383,10 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
                 }
                 return true;
             };
+            // NOLINTEND(bugprone-easily-swappable-parameters)
+            const heif_channel chans[3] = {heif_channel_Y, heif_channel_Cb, heif_channel_Cr};
+            const int plane_w[3] = {kGridTileSize, tile_cw, tile_cw};
+            const int plane_h[3] = {kGridTileSize, tile_ch, tile_ch};
             for (uint32_t ty = 0; ty < rows; ++ty) {
                 for (uint32_t tx = 0; tx < cols; ++tx) {
                     if (req.cancelled && req.cancelled()) {
@@ -1370,7 +1398,7 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
                     }
                     heif_image *tile = nullptr;
                     e = heif_image_create(kGridTileSize, kGridTileSize, heif_colorspace_YCbCr,
-                                          heif_chroma_444, &tile);
+                                          layout.chroma, &tile);
                     if (e.code != heif_error_Ok || tile == nullptr)
                         return fail("heif_image_create(grid tile) failed: " + heif_error_text(e));
                     struct TileGuard {
@@ -1380,20 +1408,19 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
                                 heif_image_release(i);
                         }
                     } tile_guard{tile};
-                    const heif_channel chans[3] = {heif_channel_Y, heif_channel_Cb,
-                                                   heif_channel_Cr};
                     bool tile_ok = true;
                     for (int ci = 0; ci < 3 && tile_ok; ++ci) {
-                        e = heif_image_add_plane(tile, chans[ci], kGridTileSize, kGridTileSize,
+                        e = heif_image_add_plane(tile, chans[ci], plane_w[ci], plane_h[ci],
                                                  bitdepth);
                         if (e.code != heif_error_Ok) {
                             tile_ok = false;
                             break;
                         }
-                        const TileRect rect{kGridTileSize, kGridTileSize,
-                                            static_cast<int>(tx) * kGridTileSize,
-                                            static_cast<int>(ty) * kGridTileSize};
-                        tile_ok = copy_tile_plane(tile, chans[ci], rect, planes[ci]);
+                        // 平面坐标（Y 与色度面同尺/半尺由 layout 决定）→ 每 tile 起点按该
+                        // 平面自身 tile 尺寸平移。
+                        tile_ok = copy_tile_plane(tile, chans[ci], planes[ci], plane_w[ci],
+                                                  plane_h[ci], static_cast<int>(tx) * plane_w[ci],
+                                                  static_cast<int>(ty) * plane_h[ci]);
                     }
                     if (!tile_ok)
                         return fail("cannot build HEIF lossless grid tile at (" +
@@ -1666,7 +1693,8 @@ EncodeResult HeifEncoder::encode(const EncodeRequest &req) {
                         "编码档位校验失败：请求 " + std::to_string(bitdepth) +
                         " 位，产物 hvcC bitDepthLuma=" + std::to_string(hvcc.bit_depth_luma));
                 // 无损路径 x265 在 determineLevel 里强制 Level 8.5（general_level_idc=255），
-                // 与用户 level-idc 无关，故跳过 level 比较；profile/chroma/bitdepth 仍校验。
+                // 且显式 level-idc 在无损下不下发（CQP/level 硬冲突，见透传段 warn）——与用户
+                // level-idc 无关，故跳过 level 比较；profile/chroma/bitdepth 仍校验。
                 if (requested_level_idc > 0 && !lossless_grid && !want_lossless &&
                     hvcc.level_idc != heif_level_general_idc(requested_level_idc))
                     return fail_tmp("Level 校验失败：请求 x265:level-idc=" +

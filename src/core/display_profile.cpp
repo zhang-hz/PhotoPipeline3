@@ -17,6 +17,10 @@
 //   3) 输出 QImage 挂显示 profile 的 QColorSpace（语义如实：字节 = 显示编码值）。Qt 6.11 Windows
 //      raster 后端不使用该信息（见头文件根因），所以**像素已经是正确的显示编码**——这正是修复。
 //      若将来 Qt/平台支持窗口色彩管理，该 tag 使二次转换退化为 identity，不会二次变换。
+//   4) 启动卡死根治的防御面（task-4）：system_display_profile() 是阻塞调用（系统调用 + 文件
+//      I/O + lcms2 解析），GUI 线程启动期**禁止**同步调用（异步获取在 preview_panel.cpp）；
+//      本文件加 ICC 读取大小上限（kDisplayIccMaxBytes）、失败如实日志、PP_DISPLAY_ICC_DELAY_MS
+//      诊断模拟开关，以及 GUI 侧异步轮询共用的纯函数状态机 classify_display_profile_async()。
 //
 // 线程安全：system_display_profile()（进程缓存 + 互斥）与 to_display_encoded()（transform 缓存
 // 互斥 + 句柄 NOCACHE）均可被预览池并发调用。
@@ -32,6 +36,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -75,12 +80,25 @@ constexpr cmsUInt32Number kTransformFlags =
 // 4 条足够（预览池 2 worker 通常只用 1-2 条）。
 constexpr std::size_t kTransformCacheCapacity = 4;
 
-bool read_file_bytes(const std::filesystem::path &path, std::string &out) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in)
-        return false;
-    out.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-    return in.good() || in.eof();
+// 诊断开关 PP_DISPLAY_ICC_DELAY_MS（默认不设置；A/B 取证用，见 display_profile.h）：
+// 在获取路径上 sleep 等长毫秒，模拟「某些 Windows 版本/环境下系统 profile 获取很慢」。
+// 这是**诊断模拟**，不引入任何真实系统调用；非法值只记日志、不影响正常获取。
+void maybe_apply_diagnostic_delay() {
+    const char *raw = std::getenv("PP_DISPLAY_ICC_DELAY_MS");
+    if (raw == nullptr || raw[0] == '\0')
+        return;
+    char *end = nullptr;
+    const long long requested = std::strtoll(raw, &end, 10);
+    if (end == raw || requested <= 0) {
+        log_warn("display", kLogFile, "PP_DISPLAY_ICC_DELAY_MS is not a positive integer; ignored",
+                 {{"value", std::string(raw)}});
+        return;
+    }
+    const long long capped = std::min<long long>(requested, 60'000);
+    log_info("display", kLogFile,
+             "diagnostic PP_DISPLAY_ICC_DELAY_MS active (simulated slow system)",
+             {{"delay_ms", std::to_string(capped)}});
+    std::this_thread::sleep_for(std::chrono::milliseconds(capped));
 }
 
 std::string profile_description(cmsHPROFILE profile) {
@@ -140,11 +158,14 @@ DisplayProfile acquire_uncached() {
         force_fb != nullptr && force_fb[0] != '\0' && std::strcmp(force_fb, "0") != 0) {
         return make_srgb_display_fallback("forced by PP_DISPLAY_SRGB_FALLBACK (diagnostic)");
     }
+    // 诊断模拟：在真正获取系统 profile 之前插入可控延迟（PP_DISPLAY_ICC_DELAY_MS；默认不设置）。
+    // 用于验证 GUI 线程异步化：延迟只在后台获取路径上，GUI 线程不等待（见 preview_panel.cpp）。
+    maybe_apply_diagnostic_delay();
     if (const char *force_icc = std::getenv("PP_DISPLAY_ICC");
         force_icc != nullptr && force_icc[0] != '\0') {
-        std::string bytes;
-        if (read_file_bytes(std::filesystem::path(force_icc), bytes)) {
-            DisplayProfile p = profile_from_icc_bytes(bytes, /*from_system=*/true);
+        const DisplayIccFile file = read_display_icc_file(std::filesystem::path(force_icc));
+        if (file.ok) {
+            DisplayProfile p = profile_from_icc_bytes(file.bytes, /*from_system=*/true);
             if (p.from_system) {
                 log_info("display", kLogFile, "display profile forced by PP_DISPLAY_ICC",
                          {{"path", std::string(force_icc)}, {"name", p.name}});
@@ -152,7 +173,7 @@ DisplayProfile acquire_uncached() {
             }
         } else {
             log_warn("display", kLogFile, "PP_DISPLAY_ICC is not readable; ignored",
-                     {{"path", std::string(force_icc)}});
+                     {{"path", std::string(force_icc)}, {"error", file.error}});
         }
     }
 
@@ -167,10 +188,10 @@ DisplayProfile acquire_uncached() {
     ReleaseDC(nullptr, dc);
     if (ok == FALSE || length == 0)
         return fallback_or_log("GetICMProfileW(primary display) failed");
-    std::string bytes;
-    if (!read_file_bytes(std::filesystem::path(path.data()), bytes))
-        return fallback_or_log("cannot read the system display ICC file");
-    DisplayProfile p = profile_from_icc_bytes(bytes, /*from_system=*/true);
+    const DisplayIccFile file = read_display_icc_file(std::filesystem::path(path.data()));
+    if (!file.ok)
+        return fallback_or_log("cannot read the system display ICC file: " + file.error);
+    DisplayProfile p = profile_from_icc_bytes(file.bytes, /*from_system=*/true);
     if (p.from_system) {
         log_info("display", kLogFile, "system display profile acquired (primary monitor)",
                  {{"name", p.name},
@@ -510,6 +531,45 @@ bool transform_image_in_place(XfEntry &entry, QImage &image) {
 
 } // namespace
 
+// 启动卡死根治的防御面（task-4）：ICC 文件读取**先 stat 再读**，超过 kDisplayIccMaxBytes →
+// 拒绝并如实记原因（异常/损坏的系统配置不应把超大文件整读进内存，更不该在启动期拖住调用
+// 线程）；非普通文件（设备/管道/网络虚拟文件等 stat 失败）同样拒绝：ICC 必须是可 stat 的
+// 常规文件。公开是为了让单测机械覆盖「正常/超限/缺失」三态（见 tests/unit/test_color.cpp）。
+DisplayIccFile read_display_icc_file(const std::filesystem::path &path) {
+    DisplayIccFile result;
+    std::error_code ec;
+    const std::uintmax_t size = std::filesystem::file_size(path, ec);
+    if (ec) {
+        result.error = "cannot stat the ICC file (not a regular readable file)";
+        return result;
+    }
+    if (size > kDisplayIccMaxBytes) {
+        result.error =
+            "ICC file exceeds the " + std::to_string(kDisplayIccMaxBytes) + " byte safety limit";
+        return result;
+    }
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        result.error = "cannot open the ICC file";
+        return result;
+    }
+    result.bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    if (result.bytes.size() >
+        kDisplayIccMaxBytes) { // stat 与读取之间文件被替换/增长（TOCTOU 防御）
+        result.bytes.clear();
+        result.error = "ICC file grew past the " + std::to_string(kDisplayIccMaxBytes) +
+                       " byte safety limit while reading";
+        return result;
+    }
+    if (in.bad()) {
+        result.bytes.clear();
+        result.error = "ICC file read error";
+        return result;
+    }
+    result.ok = true;
+    return result;
+}
+
 DisplayProfile make_srgb_display_fallback(std::string reason) {
     DisplayProfile p;
     p.icc.clear();
@@ -527,7 +587,23 @@ DisplayProfile system_display_profile() {
             return cache.profile;
     }
     // 获取在锁外（IO + lcms2 解析；并发首调可能重复获取一次，结果一致且无害）。
+    const auto t0 = std::chrono::steady_clock::now();
     DisplayProfile acquired = acquire_uncached();
+    const long long elapsed_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0)
+            .count();
+    // 启动期阻塞审计（PP_STARTUP_TIMING 诊断；默认不输出）：系统 display profile 获取是启动
+    // 路径上唯一的阻塞系统调用之一（0.4.2 卡死反馈的根因面）。>50ms 记 warn，便于在用户
+    // 环境取证；GUI 线程已改为异步获取（preview_panel.cpp），此日志只用于诊断。
+    if (std::getenv("PP_STARTUP_TIMING") != nullptr && elapsed_ms > 50) {
+        log_warn("display", kLogFile, "slow system display profile acquisition (>50ms)",
+                 {{"elapsed_ms", std::to_string(elapsed_ms)},
+                  {"from_system", acquired.from_system ? "1" : "0"}});
+    } else {
+        log_debug("display", kLogFile, "system display profile acquisition timing",
+                  {{"elapsed_ms", std::to_string(elapsed_ms)},
+                   {"from_system", acquired.from_system ? "1" : "0"}});
+    }
     {
         const std::lock_guard<std::mutex> lock(cache.mu);
         cache.has = true;
@@ -535,6 +611,27 @@ DisplayProfile system_display_profile() {
     }
     return acquired;
 }
+
+// 纯状态机：5 个形参都是标量（done / 两个代次 / 已等毫秒 / 超时门限），头文件契约注释已逐项
+// 说明顺序；`bugprone-easily-swappable-parameters` 对相邻可互转标量必然触发 —— 这是**有意的
+// 位置式纯函数接口**（单测逐项钉住），不是可互换参数的误用。NOLINT 收敛理由，判据不计入棘轮。
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
+DisplayProfileAsyncState classify_display_profile_async(bool done, std::uint64_t result_generation,
+                                                        std::uint64_t current_generation,
+                                                        long long waited_ms, long long timeout_ms) {
+    // 口径（见 display_profile.h）：结果已到就应用（GUI 线程从不等待，迟到只晚一点切到正确
+    // 编码）；只有「还没结果且已过超时门限」才返回 Timeout —— 调用方记日志并保持当前
+    // profile（软超时：仍可在硬上限内观察迟到结果）。
+    if (done) {
+        if (result_generation != current_generation)
+            return DisplayProfileAsyncState::Stale;
+        return DisplayProfileAsyncState::Ready;
+    }
+    if (timeout_ms > 0 && waited_ms >= timeout_ms)
+        return DisplayProfileAsyncState::Timeout;
+    return DisplayProfileAsyncState::Pending;
+}
+// NOLINTEND(bugprone-easily-swappable-parameters)
 
 void invalidate_display_profile_cache() {
     ProfileCache &cache = profile_cache();

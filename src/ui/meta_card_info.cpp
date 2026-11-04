@@ -214,6 +214,11 @@ void refresh_info_card(MetaState *st, const std::vector<pp::EffectivePreview> &p
         refresh_info_card_multi(st, previews);
         return;
     }
+    // 防御：单文件但 probe 未到位（异步窗口/世代竞态）→ 不取空表 front（既有路径在
+    // previews 为空时已提前返回；此处只护 probes 短表，保证越界/悬垂零可能）。
+    if (st->follow.probes.empty()) {
+        return;
+    }
     const MetaSelectionItem &item = st->follow.items.first();
     const ProbeSnapshot &probe = st->follow.probes.front();
     const pp::EffectivePreview &preview = previews.front();

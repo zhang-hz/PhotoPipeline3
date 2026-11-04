@@ -131,7 +131,10 @@ void refresh_time_section(MetaState *st, const std::vector<pp::EffectivePreview>
     // 小表行数上限 = kMultiRowCap；"…还有 N 个" 的 N 按**选中项总数**算（probe 只覆盖前 8 个）
     const int total =
         std::max(static_cast<int>(st->follow.items.size()), static_cast<int>(previews.size()));
-    const int rows = std::min(static_cast<int>(previews.size()), kMultiRowCap);
+    // 防御：逐行小表的 fileName 取自 follow.items —— 行数同时夹在 items 长度内（异步 probe
+    // 结果与 items 短表竞态时也不越界；多选聚合语义不受影响，只影响截断显示行数）。
+    const int rows = std::min({static_cast<int>(previews.size()),
+                               static_cast<int>(st->follow.items.size()), kMultiRowCap});
     for (int i = 0; i < rows; ++i) {
         const pp::EffectivePreview &preview = previews[std::size_t(i)];
         const QString name = QFileInfo(st->follow.items.at(i).path).fileName();
@@ -182,6 +185,26 @@ void refresh_time_section(MetaState *st, const std::vector<pp::EffectivePreview>
 // ---------------------------------------------------------------------------
 // 控件可用性 / 提示
 // ---------------------------------------------------------------------------
+
+// M15 / 0.4.2 用户反馈（「多个值」框界面异常）：「时区语义」两个下拉 = MixedComboBox
+// （mixed 多选不一致时必须**真正显示「多个值」**；0.4.2 只换虚线边框、文本仍显示首值）。
+// 构造口径与 formkit::combo_box 逐条对齐（下拉唯一构造点的样式钩子/字体/无障碍/tooltip；
+// 宽度由 formkit::double_row 的 FieldCell 落）—— 调用点不 new QComboBox、不自设样式钩子。
+MixedComboBox *make_tz_combo(QWidget *parent, const formkit::ComboSpec &spec) {
+    auto *combo = new MixedComboBox(parent);
+    combo->setProperty(theme::kFkProperty, QString::fromLatin1(theme::kFkCombo)); // 唯一样式钩子
+    combo->setFont(theme::font(theme::Typography::body_px));
+    if (!spec.object_name.isEmpty()) {
+        combo->setObjectName(spec.object_name);
+    }
+    if (!spec.tooltip.isEmpty()) {
+        combo->setToolTip(spec.tooltip);
+    }
+    if (!spec.accessible.isEmpty()) {
+        combo->setAccessibleName(spec.accessible);
+    }
+    return combo;
+}
 
 void refresh_time_inputs(MetaState *st) {
     // 0.4.2（需求 1）：无行选中 = 空态 → 时间卡输入面整块隐藏 + 全部可编辑控件禁用
@@ -299,7 +322,7 @@ QWidget *build_time_card(MetaState *st, QWidget *parent) {
             spec.accessible = is_from ? PageMeta::tr("源时区") : PageMeta::tr("目标时区");
             spec.tooltip = is_from ? PageMeta::tr("源时区（EXIF 记录所用的时区）")
                                    : PageMeta::tr("目标时区（改写后的墙钟时区）");
-            auto *combo = formkit::combo_box(body, spec);
+            auto *combo = make_tz_combo(body, spec);
             fill_timezone_combo(combo);
             select_timezone(combo, 480);
             (is_from ? left : right).field = combo;

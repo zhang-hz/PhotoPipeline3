@@ -39,6 +39,11 @@
 //   * M7-R2D1 / R-314：焦点在 **QAbstractItemView（文件列表树等）** 时 ←/→ **不拦**（原应用级路由
 //     把方向键全吞 → 分组节的键盘折叠/展开不可达）—— 翻图热键在非列表焦点下不变；数字打标
 //     两路都认（冒烟 `preview-hotkey` 以文件树为发送目标）。
+//   * **0.4.2 需求5（显示面色彩管理 C4）+ 启动卡死根治（task-4）**：显示 profile 获取
+//     （Windows GetDC/GetICMProfileW + ICC 文件读取 + lcms2 解析）是**阻塞系统调用/I-O** ——
+//     本面板构造期只注入 sRGB 回退（像素路径确定、offscreen 冻结截图零变化），系统 profile 在
+//     后台线程获取、GUI 线程 QTimer 轮询应用（generation 判据丢弃过期、5s 软超时保持 sRGB +
+//     日志、析构不 join）。**GUI 线程任何路径都不得同步调用 pp::system_display_profile()**。
 #pragma once
 
 #include "core/classify.h"

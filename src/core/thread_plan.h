@@ -18,8 +18,9 @@
 // 规则（保守、防抖、可单测；完整说明见 thread_plan.cpp 头部与 0.4.2 报告）：
 //   ① 文件多（深队列 W*2 > T）→ E=1、P=1（文件级并行优先，= 0.2/冻结行为）；
 //   ② 队列浅（W*2 ≤ T）→ E 基值照冻结公式；多输出时 P 从"输出数/用户上限"向下试，
-//      每路 E=floor((T/W)/P)，要求 Σ(最重 P 个编码器的实际并发) ≤ T/W（线程预算硬约束，
-//      故 W×P×E ≤ T 与 W×est_threads ≤ T 同时成立）；
+//      **逐输出**分配线程（M15 公平性修复）：每路保底 1；重编码器（jxl/avif）分走余下
+//      预算（任何 P 路并发子集的实际并发之和 ≤ T/W）；encode_threads 保留均分参考值
+//      floor((T/W)/P)，故 W×P×E ≤ T 与 W×est_threads ≤ T 同时成立；
 //   ③ 编码器能力表：jxl/libjxl、avif(svt-av1/libaom) 会真正吃 E 个线程；webp 只有
 //      thread_level 0/1（实际上限 2）；heif/x265 的插件参数表无 `threads`（E 被忽略，
 //      x265 保留自己的默认池）；jpegli / OIIO(png/tiff/bmp) 无内部线程（实际 1）。
@@ -129,9 +130,18 @@ struct ThreadPlanInput {
 
 struct ThreadPlan {
     int files = 1;            // W（并发闸宽度；恒 = alloc_threads 的 files）
-    int encode_threads = 1;   // E（每个编码任务分到的编码器内部线程数，1..16）
+    int encode_threads = 1;   // E（均分参考值：= floor(预算/P)；P==1 时 = 契约基值；
+                              //    P>1 时实际逐输出值见 encode_threads_per_output）
     int parallel_outputs = 1; // P（同文件同时编码的 target 数；1 = 串行）
     int est_threads = 1;      // 线程占用估算上界 = W × (P 路编码器实际并发上界之和)
+    // —— M15 加性字段（**末尾**；冻结面外的本模块结构体，允许加性扩展）——
+    // 逐输出编码线程数，与 ThreadPlanInput::profiles / RunConfig::outputs 同序：
+    //   * 空 = 全部 target 使用 encode_threads（0.4.2 旧口径；单输出 / P==1 路径恒为空）；
+    //   * 非空（P > 1）= 按编码器能力公平分配：flat 编码器 1 线程（jpegli/OIIO/x265 固定池），
+    //     heavy 编码器（jxl/avif，scales_with_encode_threads）分走余下预算。
+    // 公平性（M15 修复）：0.4.2 的 `e = 预算/P` 把 jxl 从 16 压到 8/4/2 —— 对"只吃 E"的
+    // 编码器不公平；逐输出分配让 heavy 在混合输出时接近满 E（见 plan_threads 不变式）。
+    std::vector<int> encode_threads_per_output;
     // 决策词表（稳定英文短词，日志/单测用；新增词只能追加）：
     //   "base"   契约基值（无多输出并行，或无需调整）
     //   "multi"  多输出并行（浅队列、预算内）
@@ -156,10 +166,15 @@ struct ThreadPlanState {
 // 不变式（单测穷举，写入报告）：
 //   * files == alloc_threads(T, unfinished, 0).files（契约零改动）；
 //   * 1 ≤ encode_threads ≤ 16；1 ≤ parallel_outputs ≤ min(output_count, 8)；
-//   * files × parallel_outputs × encode_threads ≤ T；
-//   * est_threads ≥ files 且 est_threads ≤ T；
+//   * files × parallel_outputs × encode_threads ≤ T（均分参考值的旧不变式，零放宽）；
+//   * est_threads ≥ files 且 est_threads ≤ T（est = W × P 路实际并发上界之和）；
 //   * 深队列（files*2 > T）⇒ encode_threads == 1 且 parallel_outputs == 1；
 //   * parallel_outputs > 1 ⇒ encode_threads * parallel_outputs ≤ max(1, T / files)；
+//   * parallel_outputs > 1 ⇒ encode_threads_per_output.size() == output_count，
+//     每项 ∈ [1,16]，且任意 P 路并发的 effective_threads 之和 ≤ max(1, T / files)
+//     （heavy 存在的下界：heavy 的 E ≥ floor((每文件预算 - (P - 最小并发 heavy 数)) / 并发 heavy
+//     数)）；
+//   * parallel_outputs == 1 ⇒ encode_threads_per_output 为空（旧口径逐字不变）；
 //   * CPU 未知 ⇒ parallel_outputs ≤ min(2, output_count)（旧行为上界）；
 //   * CPU 饱和（EMA ≥0.90）且输出含不受控线程池（heif/x265/未知）⇒ P == 1；
 ThreadPlan plan_threads(const ThreadPlanInput &in, ThreadPlanState &state);

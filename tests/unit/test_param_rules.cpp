@@ -157,6 +157,37 @@ Check locked_str(const std::string &key, const std::string &value) {
         return true;
     };
 }
+
+// M15：无损下 chroma/档位/Level 仍可配置 —— 「未被锁定/隐藏/禁用」的机械判据。
+Check unlocked(const std::string &key) {
+    return [key](const pp::rules::RuleState &st, std::string &why) {
+        if (st.locked.count(key) == 0)
+            return true;
+        why = "locked 不应含 " + key;
+        return false;
+    };
+}
+Check visible(const std::string &key) {
+    return [key](const pp::rules::RuleState &st, std::string &why) {
+        if (st.hidden.count(key) != 0) {
+            why = "hidden 不应含 " + key;
+            return false;
+        }
+        if (st.disabled.count(key) != 0) {
+            why = "disabled 不应含 " + key;
+            return false;
+        }
+        return true;
+    };
+}
+Check warn_lacks(const std::string &needle) {
+    return [needle](const pp::rules::RuleState &st, std::string &why) {
+        if (!contains(st.warnings, needle))
+            return true;
+        why = "warnings=[" + join(st.warnings) + "] 不应含 '" + needle + "'";
+        return false;
+    };
+}
 // NOLINTEND(bugprone-exception-escape)
 
 // —— 用例模型 ——
@@ -439,7 +470,8 @@ std::vector<Case> behavior_cases() {
                      {},
                      {no_errors(), hidden_has("brotli_effort")}});
 
-    // —— G3 无损：HEIF/x265 ——
+    // —— G3 无损：HEIF/x265（M15 用户面要求：无损 = RC 第 4 档；chroma/档位/Level 仍可配置，
+    //    不再锁 444；非 444 给"色度抽样有损"的如实警告） ——
     cases.push_back({"g3/heif-lossless",
                      "heif",
                      "x265",
@@ -450,7 +482,43 @@ std::vector<Case> behavior_cases() {
                      true,
                      {},
                      {no_errors(), hidden_has("quality"), hidden_has("x265:crf"),
-                      locked_str("chroma", "444"), warn_has("G3")}});
+                      unlocked("chroma"), visible("chroma"), warn_has("G3"),
+                      warn_has("4:2:0")}}); // 缺省色度 420 → 非像素级无损警告
+    cases.push_back({"g3/heif-lossless-configurable",
+                     "heif",
+                     "x265",
+                     "runtime",
+                     8,
+                     0,
+                     0,
+                     true,
+                     [](pp::ParamSet &s) {
+                         s["chroma"] = std::string("444");
+                         s["x265:level-idc"] = 31;
+                         s["preset"] = std::string("slow");
+                     },
+                     {no_errors(), unlocked("chroma"), visible("chroma"), visible("x265:level-idc"),
+                      visible("preset"), warn_lacks("4:2:0")}});
+    cases.push_back({"g3/heif-lossless-422-warns",
+                     "heif",
+                     "x265",
+                     "runtime",
+                     8,
+                     0,
+                     0,
+                     true,
+                     [](pp::ParamSet &s) { s["chroma"] = std::string("422"); },
+                     {no_errors(), unlocked("chroma"), warn_has("4:2:2")}});
+    cases.push_back({"g3/heif-lossless-level-warns",
+                     "heif",
+                     "x265",
+                     "runtime",
+                     8,
+                     0,
+                     0,
+                     true,
+                     [](pp::ParamSet &s) { s["x265:level-idc"] = 31; },
+                     {no_errors(), visible("x265:level-idc"), warn_has("Level")}});
     // —— G3 无损：AVIF/libaom ——
     cases.push_back({"g3/libaom-lossless",
                      "avif",

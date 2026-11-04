@@ -35,15 +35,18 @@
 #include <QLineEdit>
 #include <QMetaObject>
 #include <QMouseEvent>
+#include <QOperatingSystemVersion> // task-4 §3：启动日志记录 OS build（Qt 缓存值，无新系统调用）
 #include <QPaintEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPen>
 #include <QResizeEvent>
+#include <QScreen> // 屏幕变更诊断日志（主屏名）
 #include <QSize>
 #include <QSizePolicy>
 #include <QString>
 #include <QTextEdit>
+#include <QTimer> // task-4：GUI 线程轮询后台显示 profile 获取结果
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QWheelEvent>
@@ -62,6 +65,7 @@
 #include <mutex>
 #include <stop_token>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -149,6 +153,29 @@ constexpr int kZoomLadder[] = {10, 25, 50, 75, 100, 150, 200, 400, 800};
 constexpr int kZoomLadderCount = int(sizeof(kZoomLadder) / sizeof(kZoomLadder[0]));
 
 QString T(const char *s) { return QCoreApplication::translate("PreviewPanel", s); }
+
+// —— 0.4.2 启动卡死根治（task-4）：显示 profile 异步获取的 GUI 侧参数 ——
+// 轮询间隔：后台完成后 GUI 线程 ≤50ms 内应用（QTimer 驱动，一次轮询只做 mutex + 纯函数判据，
+// 微秒级；不忙等）。超时门限 = 5s：到点仍无结果 → 记 warn 并保持 sRGB；之后为「软超时」观察
+// 窗（GUI 从不等待；迟到的系统 profile 在 30s 硬上限内仍会异步应用，避免用户永远停在 sRGB）。
+constexpr int kDisplayProbePollMs = 50;
+constexpr long long kDisplayProbeTimeoutMs = 5000;
+constexpr long long kDisplayProbeHardCapMs = 30000;
+
+// 显示 profile 语义比较（与 PreviewCache::set_display_profile 同一判据：ICC 字节 + 来源 +
+// 描述名）。相同 = 无需清缓存/重取当前图。
+bool same_display_profile(const pp::DisplayProfile &a, const pp::DisplayProfile &b) {
+    return a.icc == b.icc && a.from_system == b.from_system && a.name == b.name;
+}
+
+// 启动日志口径（task-4 §3）：Windows 版本差异是本次卡死反馈的关键变量，故启动日志如实记录
+// OS build / Qt 版本 / 平台。QOperatingSystemVersion 是 Qt 启动时缓存的值（Qt 自己调用过
+// RtlGetVersion），这里**不引入新的系统调用**、不阻塞。
+std::string os_version_build_text() {
+    const QOperatingSystemVersion v = QOperatingSystemVersion::current();
+    return std::to_string(v.majorVersion()) + "." + std::to_string(v.minorVersion()) + "." +
+           std::to_string(v.microVersion());
+}
 
 // 单行省略标签（§9.3「全界面禁止文案折行（超长省略号）」）。
 // minimumSizeHint 宽压到 0：超长文件名/提示**省略**而不是把中栏撑宽（三栏 1440 校准尺寸
@@ -767,12 +794,31 @@ struct PreviewPanel::Impl {
     Router *router = nullptr;
 
     // —— 0.4.2 需求 5（Contract: docs/m14-tasks.md C4）：显示面色彩管理 ——
-    // 显示 profile 在面板构造时获取一次（Win = 主显示器 ICC；offscreen/失败 = sRGB 回退），
-    // 注入 PreviewCache：未命中解码后把源像素变换到显示 profile 再入缓存（worker 线程内完成，
-    // 不与转码抢核：预览池 ≤2 线程）。屏幕增删/主屏变更 → invalidate + 重新注入（清缓存）。
+    // **启动卡死根治（task-4，用户反馈「部分 Windows 版本打开后鼠标转圈、无响应」）**：
+    // 显示 profile 的获取（Windows GetDC+GetICMProfileW + 读 ICC 文件 + lcms2 解析）是阻塞
+    // 系统调用/文件 I/O，构造期**禁止在 GUI 线程同步执行**。构造期立即注入 sRGB 回退
+    // （像素路径 = sRGB，offscreen 冻结截图/末行逐字不变），系统 profile 获取放到后台线程；
+    // GUI 线程用 QTimer 轮询 shared state 应用（generation 计数丢弃过期；5s 软超时保持 sRGB
+    // + 日志）。后台线程只写 shared state，**绝不触碰 QWidget/PreviewCache**；析构不 join
+    // （detach + shared_ptr 状态）—— 对象销毁后线程安全退出，绝不回调已销毁对象。
     // 取证开关 PP_PREVIEW_CM=0（诊断用；正常运行不设置）：跳过注入 = 修复前行为（A/B 截图）。
+    struct DisplayProfileProbe {
+        std::mutex mu;
+        bool done = false;
+        std::uint64_t generation = 0; // 发起请求时的面板代次（generation 判据）
+        pp::DisplayProfile profile;   // done=true 后有效
+        long long elapsed_ms = 0;     // 后台获取耗时（诊断）
+    };
+
     pp::DisplayProfile display_profile_;
     QList<QMetaObject::Connection> screen_connections;
+    std::shared_ptr<DisplayProfileProbe> display_probe_; // 在途请求（新请求即替换；旧结果自然丢弃）
+    std::uint64_t display_generation_ = 0;               // 每次请求 +1（generation 判据）
+    std::chrono::steady_clock::time_point display_probe_start_{};
+    bool display_probe_in_flight_ = false;
+    bool display_timeout_logged_ = false;
+    bool display_profile_initialized_ = false;
+    QTimer display_poll_timer_; // GUI 线程轮询（Impl 成员：随 Impl 析构，先于 QWidget 基类销毁）
 
     explicit Impl(PreviewPanel *owner);
     ~Impl();
@@ -782,7 +828,11 @@ struct PreviewPanel::Impl {
     void rebuild_key_hints();
     void select(int index, bool force);
     void start_load(const QString &path);
-    void refresh_display_profile(); // 0.4.2 需求5：获取/失效显示 profile 并注入缓存
+    // —— 0.4.2 需求5 + 启动卡死根治：显示 profile 异步获取/应用（全部在 GUI 线程调用）——
+    void refresh_display_profile();     // 入口 = 启动 + 屏幕变更（GUI 线程；绝不阻塞）
+    void start_display_profile_probe(); // 启动后台获取线程（GUI 线程）
+    void poll_display_profile_probe();  // QTimer 回调（GUI 线程）
+    void apply_display_profile(const pp::DisplayProfile &profile, const char *source);
     void update_bar();
     void update_keyhint_enabled(); // 修 1-22：chip 与翻图钮同档禁用（空态/只读）
     void on_loaded(int index, std::chrono::steady_clock::time_point request_time,
@@ -862,8 +912,13 @@ void PreviewPanel::Impl::Pool::worker_loop(std::stop_token st) {
 PreviewPanel::Impl::Impl(PreviewPanel *owner) : q(owner) {
     tokens = theme::tokens(theme::system_theme_mode());
     cache = std::make_unique<pp::PreviewCache>(); // §6.1：LRU 16 张 / 2048px
-    refresh_display_profile();                    // 0.4.2 需求5：先注入显示 profile 再起 worker
-    // 屏幕增删/主屏变更 → 显示 profile 可能换（换显示器/切换主屏）：失效 + 重新注入（清缓存）。
+    // task-4：后台获取结果由 GUI 线程定时轮询（QTimer 属 GUI 线程；connect 上下文 = q，q 析构
+    // 即断开；timer 是 Impl 成员，Impl 析构先于 QWidget 基类，故无悬垂回调）。
+    QObject::connect(&display_poll_timer_, &QTimer::timeout, q,
+                     [this] { poll_display_profile_probe(); });
+    refresh_display_profile(); // 0.4.2 需求5：立即注入 sRGB 回退 + 后台获取系统 profile（不阻塞）
+    // 屏幕增删/主屏变更 → 显示 profile 可能换（换显示器/切换主屏）：失效 + 重新**异步**获取
+    // （信号本身在 GUI 线程；回调里只失效缓存 + 起后台线程，不等待）。
     if (auto *app = qobject_cast<QGuiApplication *>(QCoreApplication::instance())) {
         screen_connections.append(QObject::connect(app, &QGuiApplication::primaryScreenChanged, q,
                                                    [this] { refresh_display_profile(); }));
@@ -882,32 +937,221 @@ PreviewPanel::Impl::Impl(PreviewPanel *owner) : q(owner) {
         QApplication::instance()->installEventFilter(router);
 }
 
-// 0.4.2 需求5：显示 profile 的获取口径（Contract: docs/m14-tasks.md C4）：
+// 0.4.2 需求5 + 启动卡死根治（task-4）：显示 profile 的获取口径（Contract: docs/m14-tasks.md C4）。
+// **铁律：本面板任何构造期/信号路径都不允许同步调用 pp::system_display_profile()** ——
+// GUI 线程只做「注入当前口径 + 起后台线程 + 轮询」，系统调用/ICC 读取/lcms2 解析全在后台线程。
 //   * 离屏平台（--ui-smoke / CI / 截图口径）无物理显示器 → 强制 sRGB 回退：像素路径与既有
-//     版本逐字节一致（12 张冻结截图/冻结末行零变化由构造保证，不靠断言宽容）；
-//   * 真实平台 → system_display_profile()（Windows 主显示器 ICC；失败/非 Windows 平台 = sRGB
-//     回退并如实记日志）；
+//     版本逐字节一致（12 张冻结截图/冻结末行零变化由构造保证，不靠断言宽容）；且**不启动
+//     后台线程**（无系统 profile 可取 → --ui-smoke 完全确定，不依赖系统状态/时序）；
+//   * 真实平台 → 启动期立即注入 sRGB 回退（make_srgb_display_fallback("startup")），后台线程
+//     获取系统 profile（Windows 主显示器 ICC；失败/非 Windows = sRGB 回退并如实记日志），
+//     GUI 线程轮询完成后应用；屏幕变更信号走同一异步路径；
 //   * PP_PREVIEW_CM=0/off（取证开关，正常运行不设置）→ 不注入 = 修复前行为，供修复前后 A/B。
 void PreviewPanel::Impl::refresh_display_profile() {
-    pp::invalidate_display_profile_cache();
+    // 诊断开关 PP_PREVIEW_CM=0/off：跳过注入（修复前行为），不启动任何后台获取。
+    const QByteArray cm_switch = qgetenv("PP_PREVIEW_CM");
+    if (cm_switch == "0" || cm_switch.compare("off", Qt::CaseInsensitive) == 0) {
+        if (display_probe_in_flight_ || display_probe_ != nullptr) {
+            display_probe_in_flight_ = false;
+            display_probe_.reset();
+        }
+        display_poll_timer_.stop();
+        pp::log_info(
+            "preview", "preview_panel.cpp",
+            "display colour management disabled by PP_PREVIEW_CM (diagnostic)",
+            {{"offscreen",
+              QGuiApplication::platformName() == QStringLiteral("offscreen") ? "1" : "0"}});
+        return;
+    }
     const bool offscreen = QGuiApplication::platformName().compare(QStringLiteral("offscreen"),
                                                                    Qt::CaseInsensitive) == 0;
-    display_profile_ = pp::ui_display_profile();
-    const QByteArray cm_switch = qgetenv("PP_PREVIEW_CM");
-    const bool disabled = cm_switch == "0" || cm_switch.compare("off", Qt::CaseInsensitive) == 0;
-    pp::log_info("preview", "preview_panel.cpp",
-                 disabled ? "display colour management disabled by PP_PREVIEW_CM (diagnostic)"
-                          : "display colour management enabled",
-                 {{"display_profile", display_profile_.name},
-                  {"from_system", display_profile_.from_system ? "1" : "0"},
-                  {"offscreen", offscreen ? "1" : "0"},
-                  {"fallback_reason", display_profile_.fallback_reason}});
-    if (disabled)
-        return; // 不注入：PreviewCache 走既有原样像素路径（= 修复前行为）
-    cache->set_display_profile(display_profile_);
+    if (offscreen) {
+        // 离屏：强制 sRGB 且不启动后台线程（确定性优先；无物理显示器可管理）。
+        display_probe_in_flight_ = false;
+        display_probe_.reset();
+        display_poll_timer_.stop();
+        const pp::DisplayProfile fallback = pp::make_srgb_display_fallback(
+            "offscreen platform has no physical display (CI/screenshot path)");
+        apply_display_profile(fallback, "offscreen");
+        pp::log_info("preview", "preview_panel.cpp",
+                     "display colour management enabled (offscreen: sRGB forced)",
+                     {{"display_profile", display_profile_.name},
+                      {"from_system", display_profile_.from_system ? "1" : "0"},
+                      {"offscreen", "1"},
+                      {"fallback_reason", display_profile_.fallback_reason}});
+        return;
+    }
+    if (!display_profile_initialized_) {
+        // 启动期第一步：立即注入 sRGB 回退 —— 像素路径确定、不等系统调用；任何在后台获取
+        // 完成前解码的图都按「假定 sRGB → sRGB 显示」恒等路径渲染（= 0.4.1 的显示像素口径）。
+        apply_display_profile(
+            pp::make_srgb_display_fallback(
+                "startup: system display profile acquisition runs in the background"),
+            "startup");
+        pp::log_info("preview", "preview_panel.cpp",
+                     "display colour management enabled (startup sRGB; system profile acquisition "
+                     "in background)",
+                     {{"display_profile", display_profile_.name},
+                      {"from_system", "0"},
+                      {"offscreen", "0"},
+                      {"startup_srgb", "1"},
+                      {"qt", qVersion()},
+                      {"platform", QGuiApplication::platformName().toStdString()},
+                      {"os_build", os_version_build_text()}});
+    } else {
+        // 屏幕变更（运行期）：保持当前显示口径直到新结果到达（避免闪回 sRGB），仅记诊断。
+        const QScreen *primary = QGuiApplication::primaryScreen();
+        pp::log_info("display", "preview_panel.cpp",
+                     "display profile refresh requested (screen change; background acquisition)",
+                     {{"primary_screen", primary != nullptr ? primary->name().toStdString()
+                                                            : std::string("<none>")}});
+    }
+    start_display_profile_probe();
+}
+
+// 启动后台获取线程（GUI 线程调用；线程本身不阻塞 GUI）。shared_ptr<DisplayProfileProbe> 由
+// 线程持有：面板析构后线程仍可安全写 shared state（无人读、无回调），完成后自行释放退出。
+void PreviewPanel::Impl::start_display_profile_probe() {
+    pp::invalidate_display_profile_cache(); // 进程缓存失效（互斥；不阻塞）
+    ++display_generation_;
+    auto probe = std::make_shared<DisplayProfileProbe>();
+    probe->generation = display_generation_;
+    display_probe_ = probe;
+    display_probe_start_ = std::chrono::steady_clock::now();
+    display_probe_in_flight_ = true;
+    display_timeout_logged_ = false;
+    const auto request_time = display_probe_start_;
+    try {
+        std::thread([probe, request_time] {
+            // 后台线程：只调用 core 的阻塞获取（含 ICC 文件读取上限/诊断延迟），把结果写入
+            // shared state。**绝不触碰任何 QWidget / PreviewCache / Impl**。
+            pp::DisplayProfile profile = pp::system_display_profile();
+            const long long elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                             std::chrono::steady_clock::now() - request_time)
+                                             .count();
+            const std::lock_guard<std::mutex> lock(probe->mu);
+            probe->profile = std::move(profile);
+            probe->elapsed_ms = elapsed_ms;
+            probe->done = true;
+        }).detach();
+    } catch (const std::system_error &error) {
+        // 线程创建失败（极端资源耗尽）：保持 sRGB 并如实记日志，绝不回退到 GUI 线程同步获取。
+        display_probe_in_flight_ = false;
+        display_probe_.reset();
+        pp::log_warn("display", "preview_panel.cpp",
+                     "cannot spawn the display profile background thread; keeping sRGB",
+                     {{"error", error.what()}});
+        return;
+    }
+    display_poll_timer_.start(kDisplayProbePollMs);
+}
+
+// GUI 线程轮询（QTimer 回调）：读 shared state → 纯函数判据 → 应用/超时/丢弃。
+// 超时是**软超时**：到 5s 记一次 warn 并保持 sRGB（显示面从不等待）；之后在 30s 硬上限内继续
+// 观察迟到结果（迟到只意味着晚一点切到正确显示编码，不回退、不二次跳变）。
+void PreviewPanel::Impl::poll_display_profile_probe() {
+    if (!display_probe_in_flight_ || display_probe_ == nullptr) {
+        display_poll_timer_.stop();
+        return;
+    }
+    bool done = false;
+    pp::DisplayProfile profile;
+    long long elapsed_ms = 0;
+    std::uint64_t generation = 0;
+    {
+        const std::lock_guard<std::mutex> lock(display_probe_->mu);
+        done = display_probe_->done;
+        generation = display_probe_->generation;
+        if (done) {
+            profile = display_probe_->profile;
+            elapsed_ms = display_probe_->elapsed_ms;
+        }
+    }
+    const long long waited_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now() - display_probe_start_)
+                                    .count();
+    switch (pp::classify_display_profile_async(done, generation, display_generation_, waited_ms,
+                                               kDisplayProbeTimeoutMs)) {
+    case pp::DisplayProfileAsyncState::Pending:
+        return; // 继续轮询
+    case pp::DisplayProfileAsyncState::Ready: {
+        display_probe_in_flight_ = false;
+        display_probe_.reset();
+        display_poll_timer_.stop();
+        const bool changed = !same_display_profile(display_profile_, profile);
+        apply_display_profile(profile, "background");
+        pp::log_info("display", "preview_panel.cpp",
+                     "display profile switched (display colour management enabled)",
+                     {{"display_profile", display_profile_.name},
+                      {"from_system", display_profile_.from_system ? "1" : "0"},
+                      {"elapsed_ms", std::to_string(elapsed_ms)},
+                      {"waited_ms", std::to_string(waited_ms)},
+                      {"late_after_timeout", display_timeout_logged_ ? "1" : "0"},
+                      {"changed", changed ? "1" : "0"},
+                      {"fallback_reason", display_profile_.fallback_reason}});
+        return;
+    }
+    case pp::DisplayProfileAsyncState::Stale:
+        display_probe_in_flight_ = false;
+        display_probe_.reset();
+        display_poll_timer_.stop();
+        pp::log_debug("display", "preview_panel.cpp",
+                      "display profile result discarded (stale generation)",
+                      {{"generation", std::to_string(generation)},
+                       {"current_generation", std::to_string(display_generation_)}});
+        return;
+    case pp::DisplayProfileAsyncState::Timeout:
+        // 到点仍无结果：如实记一次 warn，保持当前（启动期 = sRGB）显示口径；继续观察迟到结果。
+        if (waited_ms >= kDisplayProbeHardCapMs) {
+            // 硬上限：放弃观察（后台线程继续跑完自退，结果无人消费）。
+            display_probe_in_flight_ = false;
+            display_probe_.reset();
+            display_poll_timer_.stop();
+            pp::log_warn("display", "preview_panel.cpp",
+                         "display profile acquisition abandoned after the hard cap; keeping sRGB",
+                         {{"hard_cap_ms", std::to_string(kDisplayProbeHardCapMs)},
+                          {"waited_ms", std::to_string(waited_ms)}});
+            return;
+        }
+        if (!display_timeout_logged_) {
+            display_timeout_logged_ = true;
+            pp::log_warn("display", "preview_panel.cpp",
+                         "display profile acquisition exceeded 5s; keeping sRGB fallback",
+                         {{"timeout_ms", std::to_string(kDisplayProbeTimeoutMs)},
+                          {"waited_ms", std::to_string(waited_ms)}});
+        }
+        return; // 软超时：继续轮询（GUI 从未等待；迟到结果到达后按 Ready 应用）
+    }
+}
+
+// GUI 线程应用显示 profile：注入 PreviewCache（线程安全；语义变化会清空旧显示编码条目）。
+// 若语义真的变化且当前有图：强制重取当前项（旧条目已按旧 profile 编码）→ 显示面立即按新
+// profile 重解码。profile 未变（如同一显示器重复信号）→ 清缓存/重取皆 no-op（不抖动）。
+void PreviewPanel::Impl::apply_display_profile(const pp::DisplayProfile &profile,
+                                               const char *source) {
+    const bool changed = !same_display_profile(display_profile_, profile);
+    display_profile_ = profile;
+    display_profile_initialized_ = true;
+    if (cache != nullptr)
+        cache->set_display_profile(display_profile_);
+    if (!changed)
+        return;
+    pp::log_debug("display", "preview_panel.cpp", "display profile applied",
+                  {{"source", source},
+                   {"display_profile", display_profile_.name},
+                   {"from_system", display_profile_.from_system ? "1" : "0"},
+                   {"fallback_reason", display_profile_.fallback_reason}});
+    if (current >= 0 && current < files.size())
+        select(current, /*force=*/true); // 重取当前图（缓存已被清空 → 按新 profile 解码）
 }
 
 PreviewPanel::Impl::~Impl() {
+    // task-4（启动卡死根治）：先停显示 profile 轮询并释放在途 probe —— 析构**不 join** 后台
+    // 线程（detach + shared_ptr：线程完成时只写 shared state 后自退，绝不回调已销毁对象，
+    // 也不会让退出/析构被慢系统调用拖住）。QTimer 是成员：析构即停，先于 QWidget 基类。
+    display_poll_timer_.stop();
+    display_probe_in_flight_ = false;
+    display_probe_.reset();
     for (const QMetaObject::Connection &connection : screen_connections)
         QObject::disconnect(connection);
     screen_connections.clear();

@@ -126,6 +126,20 @@ std::vector<std::string> desired_keys(const FileEntry &fe, const RunConfig &cfg)
     return keys;
 }
 
+// M15 公平性修复：逐输出编码线程数的日志文本（debug 级；"uniform" = 全部用均分参考值 E）。
+// 例：jxl+heif+jpeg+png 在 T=16 单文件时 = "13/1/1/1"（0.4.2 旧口径 = "uniform" E=4）。
+std::string per_output_threads_text(const ThreadPlan &plan) {
+    if (plan.encode_threads_per_output.empty())
+        return "uniform";
+    std::string text;
+    for (std::size_t i = 0; i < plan.encode_threads_per_output.size(); ++i) {
+        if (i != 0)
+            text += "/";
+        text += std::to_string(plan.encode_threads_per_output[i]);
+    }
+    return text;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -510,9 +524,15 @@ void Scheduler::Impl::worker() {
             if (plan.files != alloc.files)
                 plan.files = alloc.files;
             ++active_files;
-            // E3 ΣE 口径（0.4.2）：计入 P 路真实并发（多输出运行时 P×E），旧键语义不变。
-            sum_encode_threads +=
-                static_cast<long long>(plan.encode_threads) * plan.parallel_outputs;
+            // E3 ΣE 口径（0.4.2）：计入 P 路真实并发（多输出运行时 Σ真实并发）；M15 起 =
+            // 规划器的实际占用上界（est）/ W：逐输出公平分配后 heavy 拿余下预算，均分参考值
+            // encode_threads×P 不再等于真实并发（例如 jxl+3 flat：4×4=16 名义 vs 实际 13+3=16，
+            // flat-only：16 名义 vs 实际 4）。
+            const long long per_file_threads =
+                plan.files > 0
+                    ? static_cast<long long>(plan.est_threads) / plan.files
+                    : static_cast<long long>(plan.encode_threads) * plan.parallel_outputs;
+            sum_encode_threads += std::max(1LL, per_file_threads);
             peak_active_files = std::max(peak_active_files, active_files);
             peak_sum_encode_threads = std::max(peak_sum_encode_threads, sum_encode_threads);
             peak_parallel_outputs = std::max(peak_parallel_outputs, plan.parallel_outputs);
@@ -543,6 +563,8 @@ void Scheduler::Impl::worker() {
                                                    : std::to_string(static_cast<int>(
                                                          std::lround(cpu_load * 100.0)))},
                    {"est_threads", std::to_string(plan.est_threads)},
+                   // M15：逐输出线程分配（uniform = 全部用均分参考值 encode_threads）。
+                   {"encode_threads_of", per_output_threads_text(plan)},
                    {"action", plan.action},
                    {"reason", plan.reason}});
 
@@ -555,6 +577,9 @@ void Scheduler::Impl::worker() {
         scope.cancelled = [this] { return cancelled.load(); };
         scope.encode_threads = plan.encode_threads;     // §3.1 线程映射义务的输入（E ≥ 1）
         scope.parallel_outputs = plan.parallel_outputs; // 0.4.2：多输出并行度 P（1 = 串行）
+        // M15（RunScope 末尾加性字段）：逐输出编码线程数 —— P>1 时按编码器能力分配
+        // （heavy 拿余下预算）；空 = 全部 target 用 encode_threads（单输出/串行逐字不变）。
+        scope.encode_threads_per_output = plan.encode_threads_per_output;
 
         FileOutcome outcome;
         try {
@@ -586,8 +611,12 @@ void Scheduler::Impl::worker() {
             std::lock_guard<std::mutex> lk(mu);
             // §8.2 放闸（与本文件所有退出路径一致：管线调用被 try/catch 全包，其后再无 return）
             --active_files;
-            sum_encode_threads -=
-                static_cast<long long>(plan.encode_threads) * plan.parallel_outputs;
+            // M15：与入闸时的 per_file_threads 同式（Σ真实并发）。
+            const long long per_file_threads =
+                plan.files > 0
+                    ? static_cast<long long>(plan.est_threads) / plan.files
+                    : static_cast<long long>(plan.encode_threads) * plan.parallel_outputs;
+            sum_encode_threads -= std::max(1LL, per_file_threads);
             for (const std::string &k : keys) {
                 const auto it = inflight.find(k);
                 if (it != inflight.end())
@@ -797,6 +826,7 @@ void Scheduler::wait() {
                        {"last_reason", d.last_plan.reason},
                        {"last_encode_threads", std::to_string(d.last_plan.encode_threads)},
                        {"last_parallel_outputs", std::to_string(d.last_plan.parallel_outputs)},
+                       {"last_encode_threads_of", per_output_threads_text(d.last_plan)},
                        {"cpu_load_pct",
                         cpu < 0.0 ? std::string("unknown")
                                   : std::to_string(static_cast<int>(std::lround(cpu * 100.0)))}});

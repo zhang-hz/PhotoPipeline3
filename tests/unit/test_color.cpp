@@ -27,6 +27,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -2260,6 +2261,127 @@ void test_display_profile() {
     }
 }
 
+// 环境变量设置/清除（Windows _putenv_s / POSIX setenv）：仅 display_profile 诊断开关单测用。
+bool set_env_var(const char *name, const char *value) {
+#ifdef _WIN32
+    return _putenv_s(name, value) == 0;
+#else
+    return setenv(name, value, 1) == 0;
+#endif
+}
+
+void unset_env_var(const char *name) {
+#ifdef _WIN32
+    _putenv_s(name, "");
+#else
+    unsetenv(name);
+#endif
+}
+
+// ============================================================================================
+// 0.4.2 启动卡死根治（task-4）：异步获取状态机 + 诊断延迟开关 + ICC 读取上限（断言只增）
+// --------------------------------------------------------------------------------------------
+// 用户反馈「部分 Windows 版本打开后鼠标转圈、无响应」：0.4.2 唯一新增的启动期阻塞系统调用 =
+// system_display_profile()（GetDC+GetICMProfileW+读 ICC+lcms2）。修复 = GUI 线程构造期只注入
+// sRGB 回退，系统 profile 在后台线程获取，GUI 线程按纯函数状态机轮询（5s 软超时保持 sRGB）。
+// 本节机械覆盖该防御面的可单测部分（GUI 侧轮询/线程生命周期由 --ui-smoke/启动脚本验证）。
+// ============================================================================================
+void test_display_profile_async() {
+    using pp::DisplayProfileAsyncState;
+    // ---- (a) 状态机纯函数（无时钟/无副作用；GUI 侧 QTimer 轮询与实现共用同一判据）----
+    check(pp::classify_display_profile_async(false, 1, 1, 10, 5000) ==
+              DisplayProfileAsyncState::Pending,
+          "display-async/pending", "未完成且未超时 → Pending");
+    check(pp::classify_display_profile_async(true, 1, 1, 10, 5000) ==
+              DisplayProfileAsyncState::Ready,
+          "display-async/ready", "完成且代次匹配 → Ready");
+    check(pp::classify_display_profile_async(true, 1, 1, 5001, 5000) ==
+              DisplayProfileAsyncState::Ready,
+          "display-async/ready-late", "迟到结果仍应用（GUI 线程从不等待；只晚一点切到正确编码）");
+    check(pp::classify_display_profile_async(true, 2, 1, 10, 5000) ==
+              DisplayProfileAsyncState::Stale,
+          "display-async/stale", "完成但代次过期 → Stale（丢弃）");
+    check(pp::classify_display_profile_async(false, 1, 1, 5000, 5000) ==
+              DisplayProfileAsyncState::Timeout,
+          "display-async/timeout", "未完成且到门限 → Timeout（保持 sRGB + 日志）");
+    check(pp::classify_display_profile_async(false, 1, 1, 999999, 0) ==
+              DisplayProfileAsyncState::Pending,
+          "display-async/no-timeout", "timeout<=0 = 不设超时 → Pending");
+    check(pp::classify_display_profile_async(false, 1, 1, 0, 5000) ==
+              DisplayProfileAsyncState::Pending,
+          "display-async/zero-waited", "刚发起 → Pending");
+    info("display-async: state machine transitions OK "
+         "(Pending/Ready/Ready-late/Stale/Timeout/no-timeout)");
+
+    // ---- (b) PP_DISPLAY_ICC_DELAY_MS 诊断开关：延迟真的落在获取路径上（可观测）----
+    // 这是「不依赖用户环境复现」的核心取证手段：模拟慢系统调用，证明 GUI 侧不会等它。
+    {
+        pp::invalidate_display_profile_cache();
+        check(set_env_var("PP_DISPLAY_ICC_DELAY_MS", "60"), "display-async/delay-env-set",
+              "cannot set PP_DISPLAY_ICC_DELAY_MS");
+        const auto t0 = std::chrono::steady_clock::now();
+        const pp::DisplayProfile profile = pp::system_display_profile();
+        const long long elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                         std::chrono::steady_clock::now() - t0)
+                                         .count();
+        unset_env_var("PP_DISPLAY_ICC_DELAY_MS");
+        pp::invalidate_display_profile_cache();
+        info("display-async: PP_DISPLAY_ICC_DELAY_MS=60 -> acquisition elapsed=" +
+             std::to_string(elapsed_ms) + "ms name='" + profile.name +
+             "' from_system=" + (profile.from_system ? "1" : "0"));
+        check(elapsed_ms >= 55, "display-async/delay-env-applies",
+              "elapsed=" + std::to_string(elapsed_ms) + "ms（应 >= 55ms：延迟未被获取路径消费）");
+        check(!profile.name.empty(), "display-async/delay-env-profile",
+              "延迟后仍应返回可用 profile（sRGB 回退或系统 profile）");
+    }
+
+    // ---- (c) ICC 文件读取上限：正常 / 超限（8MB+1，不整读进内存）/ 缺失 三态 ----
+    {
+        const std::string icc = srgb_icc_bytes();
+        const std::filesystem::path dir = std::filesystem::temp_directory_path();
+        const std::filesystem::path valid = dir / "pp_test_display_valid.icc";
+        {
+            std::ofstream out(valid, std::ios::binary | std::ios::trunc);
+            out.write(icc.data(), static_cast<std::streamsize>(icc.size()));
+        }
+        const pp::DisplayIccFile good = pp::read_display_icc_file(valid);
+        std::error_code ec;
+        std::filesystem::remove(valid, ec);
+        check(good.ok && good.bytes == icc, "display-icc/read-valid",
+              "ok=" + std::string(good.ok ? "1" : "0") + " err='" + good.error + "' bytes=" +
+                  std::to_string(good.bytes.size()) + "/" + std::to_string(icc.size()));
+
+        const std::filesystem::path big = dir / "pp_test_display_oversize.icc";
+        {
+            std::ofstream out(big, std::ios::binary | std::ios::trunc);
+            const std::string chunk(1u << 20, '\0'); // 1 MiB
+            for (int i = 0; i < 9; ++i)
+                out.write(chunk.data(), static_cast<std::streamsize>(chunk.size()));
+        }
+        std::error_code size_ec;
+        const std::uintmax_t big_size = std::filesystem::file_size(big, size_ec);
+        check(!size_ec && big_size > pp::kDisplayIccMaxBytes, "display-icc/oversize-fixture",
+              "fixture size=" + std::to_string(static_cast<long long>(big_size)) + " (需 > " +
+                  std::to_string(static_cast<long long>(pp::kDisplayIccMaxBytes)) + ")");
+        const pp::DisplayIccFile oversize = pp::read_display_icc_file(big);
+        std::filesystem::remove(big, ec);
+        check(!oversize.ok && oversize.bytes.empty() &&
+                  oversize.error.find("safety limit") != std::string::npos,
+              "display-icc/oversize-rejected",
+              "ok=" + std::string(oversize.ok ? "1" : "0") + " bytes=" +
+                  std::to_string(oversize.bytes.size()) + " err='" + oversize.error + "'");
+        info("display-icc: valid/oversize(8MB+1)/missing read states OK "
+             "(oversize bytes=" +
+             std::to_string(oversize.bytes.size()) + " error='" + oversize.error + "')");
+
+        const pp::DisplayIccFile missing =
+            pp::read_display_icc_file(dir / "pp_test_display_missing.icc");
+        check(!missing.ok && !missing.error.empty(), "display-icc/missing-rejected",
+              "ok=" + std::string(missing.ok ? "1" : "0") + " err='" + missing.error + "'");
+        pp::invalidate_display_profile_cache();
+    }
+}
+
 } // namespace
 
 int main() {
@@ -2293,6 +2415,9 @@ int main() {
 
     // —— 0.4.2 需求5（显示面色彩管理；断言只增）——
     test_display_profile(); // 源 ICC/显示 profile 变换：可复算 + 方向 + 并发/性能
+
+    // —— 0.4.2 启动卡死根治（task-4；断言只增）——
+    test_display_profile_async(); // 异步状态机/PP_DISPLAY_ICC_DELAY_MS/ICC 读取上限
 
     std::printf("test_color: %d checks, %d failed\n", g_checks, g_failed);
     return g_failed == 0 ? 0 : 1;

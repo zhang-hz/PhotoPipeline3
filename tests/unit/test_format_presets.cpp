@@ -301,6 +301,57 @@ int main() { // NOLINT(bugprone-exception-escape) — 测试入口允许异常�
         check(read_text(saved2) == bytes1, c, "save→load→save 字节不稳定");
     }
 
+    // 1b) M15：无损模式（HEIF RC 下拉第四档）经「参数集 → 格式预设 JSON → 回读」持久化。
+    //     无损状态 = 显式 schema 参数 `lossless`（非保留键，随 params 落盘）；同时 chroma /
+    //     x265:level-idc 等配置在无损下仍可保存回读（用户面要求 #2/#3）。
+    case_begin("1b) 无损模式参数持久化（lossless/chroma/level 随格式预设往返）");
+    {
+        const std::string c = "lossless-persist";
+        const fs::path dir = fresh_dir(root, "lossless");
+        pp::FormatPresetData p = make_heif_preset();
+        p.params["lossless"] = true;
+        p.params["chroma"] = std::string("420");
+        p.params["x265:level-idc"] = int64_t(31);
+        fs::path saved;
+        const std::string err = pp::ui::save_format_preset_to(dir, p, &saved);
+        check(err.empty(), c, "save lossless preset: " + err);
+        const std::string bytes = read_text(saved);
+        check(bytes.find("\"lossless\": true") != std::string::npos, c,
+              "无损状态必须以显式 lossless 参数落盘");
+        pp::FormatPresetData q;
+        const std::string lerr = pp::ui::load_format_preset(saved, q);
+        check(lerr.empty(), c, "load lossless preset: " + lerr);
+        const auto lit = q.params.find("lossless");
+        check(lit != q.params.end() && std::holds_alternative<bool>(lit->second) &&
+                  std::get<bool>(lit->second),
+              c, "回读 lossless == true");
+        const auto cit = q.params.find("chroma");
+        check(cit != q.params.end() && std::holds_alternative<std::string>(cit->second) &&
+                  std::get<std::string>(cit->second) == "420",
+              c, "无损下 chroma 配置随预设往返（可配置，不被改写）");
+        const auto lev = q.params.find("x265:level-idc");
+        check(lev != q.params.end() && std::holds_alternative<int64_t>(lev->second) &&
+                  std::get<int64_t>(lev->second) == 31,
+              c, "无损下 x265:level-idc 配置随预设往返");
+        const fs::path dir2 = fresh_dir(root, "lossless2");
+        fs::path saved2;
+        check(pp::ui::save_format_preset_to(dir2, q, &saved2).empty(), c, "resave lossless preset");
+        check(read_text(saved2) == bytes, c, "无损预设 save→load→save 字节稳定");
+        // 默认（有损）语义零变化：lossless=false 也是显式参数，回读仍为 false。
+        pp::FormatPresetData d = make_heif_preset();
+        d.name = "lossless-off";
+        d.params["lossless"] = false;
+        const fs::path dir3 = fresh_dir(root, "lossless-off");
+        fs::path saved3;
+        check(pp::ui::save_format_preset_to(dir3, d, &saved3).empty(), c, "save lossless=false");
+        pp::FormatPresetData dq;
+        check(pp::ui::load_format_preset(saved3, dq).empty(), c, "load lossless=false");
+        const auto offit = dq.params.find("lossless");
+        check(offit != dq.params.end() && std::holds_alternative<bool>(offit->second) &&
+                  !std::get<bool>(offit->second),
+              c, "默认有损语义零变化（lossless=false 往返）");
+    }
+
     // 2) version/kind/format/未知键/损坏 JSON
     case_begin("2) 版本/kind/format/未知键/损坏 JSON");
     {
@@ -848,6 +899,27 @@ int main() { // NOLINT(bugprone-exception-escape) — 测试入口允许异常�
         check(find_loaded("heif/default") != nullptr && find_loaded("jxl/default") != nullptr &&
                   find_loaded("jxl/adaptive-compress") != nullptr,
               c, "HEIF/JXL 工厂文件齐备（default/adaptive-compress）");
+        {
+            // M15：默认 HEIF 预设**语义零变化** —— lossless=false + chroma=420 + quality 路径
+            // （无损第四档是用户可选项，不改变出厂默认）。
+            const pp::FormatPresetData *heif_def = find_loaded("heif/default");
+            check(heif_def != nullptr, c, "缺少 heif/default.json");
+            if (heif_def != nullptr) {
+                const auto l = heif_def->params.find("lossless");
+                check(l != heif_def->params.end() && std::holds_alternative<bool>(l->second) &&
+                          !std::get<bool>(l->second),
+                      c, "HEIF default lossless == false（默认不发生语义变化）");
+                const auto ch = heif_def->params.find("chroma");
+                check(ch != heif_def->params.end() &&
+                          std::holds_alternative<std::string>(ch->second) &&
+                          std::get<std::string>(ch->second) == "420",
+                      c, "HEIF default chroma == 420（无损不再改写色度）");
+                check(heif_def->params.count("quality") != 0, c, "HEIF default 走质量路径");
+                check(heif_def->params.count("x265:crf") == 0 &&
+                          heif_def->params.count("x265:qp") == 0,
+                      c, "HEIF default 不得混入 CRF/QP 路径键");
+            }
+        }
         // 默认识别单源（大小写不敏感；非 default 一律 false）。
         check(pp::is_default_format_preset_name("default") &&
                   pp::is_default_format_preset_name("Default") &&

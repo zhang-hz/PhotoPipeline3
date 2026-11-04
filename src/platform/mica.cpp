@@ -23,6 +23,47 @@
 #ifndef DWMWCP_ROUND
 #define DWMWCP_ROUND 2 // DWMWCP_DONOTROUND=1 / ROUNDSMALL=3
 #endif
+
+namespace {
+
+// task-4 §3（Windows 版本兼容加固）：DWMWA_SYSTEMBACKDROP_TYPE 是 Win11 22H2（build 22621+）
+// 才支持的属性，更早版本调用只会返回 E_INVALIDARG / 无效果。**按版本门控**：旧系统/异常环境
+// 不调用（保持系统默认，失败静默）；Win11 22H2+ 调用路径与视觉逐字不变。
+// 版本来源 = ntdll!RtlGetVersion（GetVersionEx 受 manifest/兼容层影响不可信；只用其返回值判断
+// 一次，无额外系统调用/阻塞；模块已由加载器映射，GetModuleHandle 为内存查找）。
+struct RtlOsVersionInfoW {
+    ULONG dwOSVersionInfoSize;
+    ULONG dwMajorVersion;
+    ULONG dwMinorVersion;
+    ULONG dwBuildNumber;
+    ULONG dwPlatformId;
+    WCHAR szCSDVersion[128];
+};
+using RtlGetVersionFn = LONG(WINAPI *)(RtlOsVersionInfoW *);
+
+bool windows_build_at_least(ULONG min_build) {
+    static const RtlGetVersionFn fn = []() -> RtlGetVersionFn {
+        const HMODULE ntdll = ::GetModuleHandleW(L"ntdll.dll");
+        if (ntdll == nullptr)
+            return nullptr;
+        // 直接 FARPROC → 函数指针（不经 void*：tidy bugprone-casting-through-void）。
+        return reinterpret_cast<RtlGetVersionFn>(::GetProcAddress(ntdll, "RtlGetVersion"));
+    }();
+    if (fn == nullptr)
+        return false; // 取不到版本 → 保守按旧系统处理（不调用 22H2+ 专属属性）
+    RtlOsVersionInfoW info{};
+    info.dwOSVersionInfoSize = sizeof(info);
+    if (fn(&info) != 0) // STATUS_SUCCESS == 0
+        return false;
+    if (info.dwMajorVersion != 10)
+        return info.dwMajorVersion > 10; // 未来大版本按支持处理（属性向后兼容）
+    return info.dwBuildNumber >= min_build;
+}
+
+constexpr ULONG kWin11_22H2Build =
+    22621; // Win11 22H2 = build 22621（DWMWA_SYSTEMBACKDROP_TYPE 起始版本）
+
+} // namespace
 #endif
 
 namespace pp::platform {
@@ -37,7 +78,9 @@ bool apply_window_backdrop(void *hwnd, bool dark_titlebar) {
     const BOOL dark = dark_titlebar ? TRUE : FALSE;
     ::DwmSetWindowAttribute(h, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
 
-    // Mica 背景（Win11 22H2+；更早系统返回错误码，静默保持默认）。
+    // Mica 背景（Win11 22H2+）：先按版本门控（旧系统静默保持默认；Win11 视觉不变）。
+    if (!windows_build_at_least(kWin11_22H2Build))
+        return false;
     const int backdrop = DWMSBT_MAINWINDOW;
     const HRESULT hr =
         ::DwmSetWindowAttribute(h, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop, sizeof(backdrop));

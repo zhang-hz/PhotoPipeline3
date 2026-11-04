@@ -879,17 +879,13 @@ void OutputPageImpl::apply_chroma_limits(const std::string &id) {
     FormatState *st = state_of(id);
     if (st == nullptr || st->form == nullptr)
         return;
-    const bool lossless = st->form->selection().lossless;
+    // M15：无损**不再**把色度限幅成仅 4:4:4（用户面要求 #2：无损下色度采样仍可配置）。
+    // 限幅只来自「编码档位 → 色度兼容性」这一既有联动；无损 + 非 444 的"色度抽样有损"
+    // 由 update_profile_note 的如实警告 + 编码器日志承担，不静默假装像素无损。
     const pp::HeifProfile want = current_profile(id);
     std::vector<int64_t> allowed;
     QString reason = PageOutput::tr("【已禁用：当前编码档位不支持该色度】");
-    if (lossless) {
-        // 无损只有 4:4:4 成立：4:2:0/4:2:2 在编码前就丢掉色度，x265 的 bLossless 只保
-        // YCbCr 平面，对 RGB 源仍是有损。限幅是**硬联动**（enc_heif 同样强制 444，预设/CLI
-        // 也绕不过去）；强制改写当前值在 update_profile_note 里做（本函数只动可选性）。
-        allowed.push_back(3);
-        reason = PageOutput::tr("【已禁用：无损输出要求 4:4:4（色度不抽样）】");
-    } else if (want != pp::HeifProfile::Auto) {
+    if (want != pp::HeifProfile::Auto) {
         std::vector<int> depths = profile_allowed_bitdepths(want, id == "avif");
         if (depths.empty())
             depths = {8, 10, 12};
@@ -924,26 +920,10 @@ void OutputPageImpl::update_profile_note(const std::string &id) {
     FormatState *st = state_of(id);
     if (st == nullptr || st->profile == nullptr || st->profile_note == nullptr)
         return;
-    // 无损 ⇒ 4:4:4（硬联动，与 enc_heif 同口径）：先把工作集里的 chroma 改写为 444，再让
-    // 下面的档位推导/色度限幅按真实值求值。set_values 是程序化接口（不发 changed 信号），
-    // 因此不会形成刷新环；改写后的值随 spec_of() 下发/落预设。
+    // M15：无损**不再改写 chroma=444**（用户面要求 #2：无损下 chroma/档位/level 仍可配置）。
+    // 无损 + 非 444 的"色度抽样有损"在本函数末尾给如实警告（不静默假装像素无损）。
     const bool lossless = st->form != nullptr && st->form->selection().lossless;
     const int depth = st->bitdepth != nullptr ? st->bitdepth->currentData().toInt() : 8;
-    if (lossless && st->form != nullptr) {
-        pp::ParamSet patch;
-        patch[std::string("chroma")] = std::string("444");
-        st->form->set_values(patch);
-        // 无损强制 4:4:4。新档位表已包含 4:4:4 的真实 HEVC 信号（Rext444_*）与 AV1
-        // High/Professional，因此只把“与 4:4:4 不兼容”的手选档位退回「自动」，
-        // 不再无条件清掉用户的合法选择。
-        if (st->profile != nullptr && st->profile->currentIndex() != 0 &&
-            !pp::heif_profile_compatible_for(id == "avif", current_profile(id), depth, 3,
-                                             /*still=*/true, nullptr)) {
-            const QSignalBlocker blocker(st->profile);
-            st->profile->setCurrentIndex(0);
-            st->profile_user_set = false;
-        }
-    }
     const pp::HeifProfile want = current_profile(id);
     const int chroma = current_chroma(id);
     // 本输出恒为静止图（与 enc_heif.cpp 的反查同口径：still = true）
@@ -991,14 +971,28 @@ void OutputPageImpl::update_profile_note(const std::string &id) {
         }
     }
     if (lossless) {
-        // 折叠行内只放短句；完整口径（YCbCr 域无损、大图 grid 分块、4:4:4 兼容性）进 tooltip。
-        if (note.isEmpty())
-            note = PageOutput::tr("无损 → 4:4:4");
-        tooltip =
-            PageOutput::tr("HEIF/AVIF 无损：强制 4:4:4（4:2:0/4:2:2 会抽样色度，不是无损）。"
-                           "HEVC 的无损是 YCbCr 平面无损，RGB↔YCbCr 往返有舍入（不是逐位）；"
-                           "超过 16 MP 时自动改用标准 HEIF grid 分块，保证 libde265/OIIO 能打开。"
-                           "4:4:4 的查看器兼容性弱于 4:2:0。");
+        // M15：无损不再强制 4:4:4 —— 短句按真实色度如实呈现；HEIF 只对非 444 给"色度抽样
+        // 有损"警告（不静默假装像素无损）。AVIF 的色度在规则层仍锁 444（G3/A2）。
+        const bool chroma_is_444 = (chroma == 3);
+        if (id != "avif" && !chroma_is_444) {
+            if (note.isEmpty())
+                note = PageOutput::tr("无损 + %1：色度有损").arg(chroma_text);
+            tooltip = PageOutput::tr("无损模式下选择 4:2:0/4:2:2：色度在编码前被下采样，YCbCr 码流"
+                                     "无损，但不等于像素级无损（需要像素级无损请把色度采样设为 "
+                                     "4:4:4）。HEVC 的无损是 YCbCr 平面无损，RGB↔YCbCr 往返有舍入"
+                                     "（不是逐位）；超过 16 MP 时自动改用标准 HEIF grid 分块，"
+                                     "保证 libde265/OIIO 能打开。");
+            if (tone == NoteTone::Hint)
+                tone = NoteTone::Warn;
+        } else {
+            if (note.isEmpty())
+                note = PageOutput::tr("无损（YCbCr 平面无损）");
+            tooltip = PageOutput::tr(
+                "无损 = 编码器无损模式（HEIF 也可用「速率控制」下拉的「无损」档，二者同源）。"
+                "HEVC/AV1 的无损是 YCbCr 平面无损，RGB↔YCbCr 往返有舍入（不是逐位）；"
+                "超过 16 MP 时自动改用标准 HEIF grid 分块，保证 libde265/OIIO 能打开。"
+                "4:4:4 的查看器兼容性弱于 4:2:0。");
+        }
     }
     // M7-R2.4：tooltip 单点落盘 —— 旧实现先在「自动」分支写推导 tooltip、末尾非无损分支
     // 又无条件 `setToolTip(QString())` 把它清掉，用户悬浮只看到空提示（推导结果永远不可见）。

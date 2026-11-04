@@ -2,9 +2,10 @@
 
 ## [0.4.2 修复批] — 2026-11-04（未升版本号；本地 dist 重建，未移动 tag / GitHub Release）
 
-**性质**：0.4.2 正式版发行后用户反馈 5 项的修复批。`--version` 仍 **`PhotoPipeline 0.4.2`**；
-不移动 `v0.4.2` tag、不重发 Release 资产；交付 = 修复源码 + `dist/PhotoPipeline-0.4.2-win64.zip`。
-裁定 = [docs/m15-adjudications.md](docs/m15-adjudications.md)（A1–A13 / U1–U6），
+**性质**：0.4.2 正式版发行后用户反馈 6 项（5 项首轮 + 收口后追加 1 项实测崩溃）的修复批。
+`--version` 仍 **`PhotoPipeline 0.4.2`**；不移动 `v0.4.2` tag、不重发 Release 资产；
+交付 = 修复源码 + `dist/PhotoPipeline-0.4.2-win64.zip`。
+裁定 = [docs/m15-adjudications.md](docs/m15-adjudications.md)（A1–A14 / U1–U7），
 读数与证据 = [docs/m15-report.md](docs/m15-report.md)。
 
 ### 新增
@@ -35,6 +36,15 @@
   析构不 join、offscreen 不启线程）；ICC 读取加 8MB 上限。`PP_DISPLAY_ICC_DELAY_MS=5000` 模拟
   实测 `shown=1399ms`（<2s）且窗口可响应。mica DWM 背景按 Win11 22H2 门控（Win11 视觉不变），
   启动日志记录 OS build/Qt/平台。
+- **导入含 XMP 的 HEIC 闪退（用户反馈 6；收口后实测追加）**：新增 `core/metadata_runtime.h`
+  （新文件，冻结面零改动）：`std::call_once` 完成 `Exiv2::XmpParser::initialize()`（静态析构
+  terminate 成对）+ 进程级递归锁**串行化全部 Exiv2 I/O / XMP·Exif 解析入口**（metadata.cpp 读/写
+  路径、thumbs.cpp 内嵌预览；锁内只取预览字节，OIIO 解码/缩放移出锁外 ⇒ 像素热路径不被串行化）。
+  根因 = Exiv2 0.28.8 的 `XmpParser::initialize()` 是裸 static bool 无锁懒初始化（`src/xmp.cpp:512`），
+  GUI 多池并发首读含 XMP 文件时可同时进入 Adobe XMP 初始化 → 内部 XML 解析器状态空指针
+  （WER：exiv2.dll+0x7c9cf；反汇编 = XML_Node/std::map 内部 `mov r14,[rcx]` null deref）。
+  产物字节/读写语义零变化；`test_metadata` 首置 8 线程×8 次并发读 XMP fixture 回归探针
+  （reads_ok=64）。
 
 ### 门禁读数
 

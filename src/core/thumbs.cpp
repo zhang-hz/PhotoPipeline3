@@ -62,8 +62,9 @@
 #include <utility>
 #include <vector>
 
-#include "core/logger.h"    // 0.4.2 需求5：显示变换失败/降级如实落日志
-#include "core/simd/simd.h" // M4-W5-T19：LANCZOS3 降采样热路径（§11.2）
+#include "core/logger.h"           // 0.4.2 需求5：显示变换失败/降级如实落日志
+#include "core/metadata_runtime.h" // 0.4.2 修复批：Exiv2 调用串行化 + XMP 运行时初始化
+#include "core/simd/simd.h"        // M4-W5-T19：LANCZOS3 降采样热路径（§11.2）
 #include "decode/oiio_reader.h"
 
 namespace pp {
@@ -285,7 +286,13 @@ bool find_preview(const Exiv2::Image &image, Exiv2::PreviewProperties &out,
 // through silently to the full decode (step 3). 门槛 = kThumbEmbeddedMinLongEdge（UX-3：
 // 缩略图通道 64px，M1b 冻结行为零变化）。
 bool try_embedded_preview(const std::filesystem::path &src, int target, ThumbImage &out) {
+    // 0.4.2 修复批：Exiv2 段串行化 + XMP 运行时初始化（core/metadata_runtime.h）。
+    // 锁内只做 Exiv2 读取 + 预览字节拷贝；OIIO 解码/缩放移到锁外（避免把像素解码串行化）。
+    std::string bytes;
+    std::string hint;
     try {
+        ensure_exif_metadata_runtime();
+        const std::lock_guard<std::recursive_mutex> exif_lock(exif_metadata_mutex());
         Exiv2::Image::UniquePtr image = Exiv2::ImageFactory::open(src.string());
         if (!image)
             return false;
@@ -299,10 +306,9 @@ bool try_embedded_preview(const std::filesystem::path &src, int target, ThumbIma
         const Exiv2::PreviewImage preview = manager.getPreviewImage(props);
         if (preview.pData() == nullptr || preview.size() == 0)
             return false;
-
-        std::string hint = "embedded-preview";
+        bytes.assign(reinterpret_cast<const char *>(preview.pData()), preview.size());
+        hint = "embedded-preview";
         hint += preview.extension().empty() ? std::string(".jpg") : preview.extension();
-        return preview_bytes_to_thumb(preview.pData(), preview.size(), hint, target, out);
     } catch (const Exiv2::Error &) {
         return false;
     } catch (const std::exception &) {
@@ -310,6 +316,10 @@ bool try_embedded_preview(const std::filesystem::path &src, int target, ThumbIma
     } catch (...) {
         return false;
     }
+    if (bytes.empty())
+        return false;
+    // 锁外：OIIO 内存解码 + 缩放（像素工作不被 Exiv2 串行化拖慢）。
+    return preview_bytes_to_thumb(bytes.data(), bytes.size(), hint, target, out);
 }
 
 // ------------------------------------------------------------------------------------------
@@ -388,7 +398,13 @@ bool scale_to_rgba8(const OIIO::ImageBuf &src, int max_px, QImage &out, bool lin
 // sRGB，可能与宿主容器的宽色域 ICC 不同；像素按谁编码就按谁解释——显示变换的源 ICC 用这个）。
 bool try_embedded_preview_image(const std::filesystem::path &src, int max_px, QImage &out,
                                 bool linear_resample, std::string *out_preview_icc = nullptr) {
+    // 0.4.2 修复批：Exiv2 段串行化 + XMP 运行时初始化；锁内只取预览字节，OIIO 解码/缩放
+    // 在锁外（与 try_embedded_preview 同口径）。
+    std::string bytes;
+    std::string hint;
     try {
+        ensure_exif_metadata_runtime();
+        const std::lock_guard<std::recursive_mutex> exif_lock(exif_metadata_mutex());
         Exiv2::Image::UniquePtr image = Exiv2::ImageFactory::open(src.string());
         if (!image)
             return false;
@@ -402,15 +418,9 @@ bool try_embedded_preview_image(const std::filesystem::path &src, int max_px, QI
         const Exiv2::PreviewImage preview = manager.getPreviewImage(props);
         if (preview.pData() == nullptr || preview.size() == 0)
             return false;
-
-        std::string hint = "embedded-preview";
+        bytes.assign(reinterpret_cast<const char *>(preview.pData()), preview.size());
+        hint = "embedded-preview";
         hint += preview.extension().empty() ? std::string(".jpg") : preview.extension();
-        OIIO::ImageBuf buf;
-        if (!preview_bytes_to_buf(preview.pData(), preview.size(), hint, buf))
-            return false;
-        if (out_preview_icc != nullptr)
-            *out_preview_icc = icc_from_spec(buf.spec()); // 无 ICC → 空 = 假定 sRGB
-        return scale_to_rgba8(buf, max_px, out, linear_resample);
     } catch (const Exiv2::Error &) {
         return false;
     } catch (const std::exception &) {
@@ -418,6 +428,14 @@ bool try_embedded_preview_image(const std::filesystem::path &src, int max_px, QI
     } catch (...) {
         return false;
     }
+    if (bytes.empty())
+        return false;
+    OIIO::ImageBuf buf;
+    if (!preview_bytes_to_buf(bytes.data(), bytes.size(), hint, buf))
+        return false;
+    if (out_preview_icc != nullptr)
+        *out_preview_icc = icc_from_spec(buf.spec()); // 无 ICC → 空 = 假定 sRGB
+    return scale_to_rgba8(buf, max_px, out, linear_resample);
 }
 
 // §6.1「否则 OIIO 读整图后 LANCZOS3 降采样」：复用**既有冻结的全解码入口** decode_float

@@ -197,6 +197,40 @@ void MainWindow::ui_smoke_walk(const QString &shots_dir) {
         setProperty("pp_ui_smoke_exit", repro_bad.isEmpty() ? 0 : 1);
         return;
     }
+    // dev 诊断快路径（PP_IMPORT_SMOKE=<dir|file>）：只做「真实导入 + 逐行选中 + 元数据跟随」，
+    // 不跑冻结走查。用于复核导入期的并发路径（缩略图池/预览池/元数据探针池）—— 0.4.2 修复批的
+    // Exiv2 并发崩溃（用户实测：导入含 XMP 的 HEIC 后 exiv2.dll AV）回归取证入口。
+    if (qEnvironmentVariableIsSet("PP_IMPORT_SMOKE")) {
+        const QString target = qEnvironmentVariable("PP_IMPORT_SMOKE");
+        d.model->add_paths(QStringList{target});
+        d.pump(1500);
+        const int rows = int(d.model->size());
+        std::printf("UI-SMOKE import-smoke: files=%d\n", rows);
+        std::fflush(stdout);
+        for (int i = 0; i < rows; ++i) {
+            if (d.view == nullptr || d.view->selectionModel() == nullptr)
+                break;
+            QItemSelectionModel *sel = d.view->selectionModel();
+            sel->clear();
+            const QModelIndex filtered = d.proxy->mapFromSource(d.model->index(i, 0));
+            if (filtered.isValid()) {
+                const QModelIndex gi = d.groups->mapFromSource(filtered);
+                if (gi.isValid()) {
+                    sel->select(gi,
+                                QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+                    sel->setCurrentIndex(gi, QItemSelectionModel::NoUpdate);
+                }
+            }
+            d.pump(400);
+            set_current_page(1); // 元数据页：选中项聚合/probe
+            d.pump(400);
+        }
+        d.pump(1500);
+        std::printf("UI-SMOKE import-smoke: OK files=%d\n", rows);
+        std::fflush(stdout);
+        setProperty("pp_ui_smoke_exit", 0);
+        return;
+    }
     try {
         if (deep)
             d.deep_run(shots_dir);

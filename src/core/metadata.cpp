@@ -18,6 +18,7 @@
 
 #include "core/metadata.h"
 #include "core/filetime.h"
+#include "core/metadata_runtime.h"
 
 #include <libheif/heif.h>
 
@@ -49,19 +50,30 @@ namespace pp {
 namespace {
 
 // ---------------------------------------------------------------------------
-// XMP runtime (§4.5: initialize once + terminate in a static destructor)
+// Exiv2/XMP 运行时（0.4.2 修复批；详见 core/metadata_runtime.h）
 // ---------------------------------------------------------------------------
 
 struct XmpTeardown {
     ~XmpTeardown() { Exiv2::XmpParser::terminate(); }
 };
 
-void ensure_xmp() {
+} // namespace
+
+void ensure_exif_metadata_runtime() {
+    // XmpParser::initialize() 是**非线程安全**的裸 static bool 懒初始化（Exiv2 0.28.8
+    // src/xmp.cpp:512，无锁）；call_once 保证进程内只初始化一次、且其他线程在此等待完成。
     static std::once_flag once;
     std::call_once(once, [] { Exiv2::XmpParser::initialize(); });
     static const XmpTeardown teardown; // runs after main(); constructed once
     (void)teardown;
 }
+
+std::recursive_mutex &exif_metadata_mutex() {
+    static std::recursive_mutex mutex;
+    return mutex;
+}
+
+namespace {
 
 // ---------------------------------------------------------------------------
 // small string helpers
@@ -810,6 +822,10 @@ void sanitize_transcode_metadata_impl(MetadataPlan &plan) {
 // （R-002：写回一律 临时文件 + rename，见 exiv2_apply_atomic / rewrite_metadata_only）。
 std::string exiv2_apply(const std::filesystem::path &file, const Exiv2::ExifData *exif,
                         const Exiv2::XmpData *xmp, bool clear_extra = false) {
+    // Exiv2 调用串行化 + XMP 运行时初始化（core/metadata_runtime.h：Exiv2 0.28.8 的
+    // XmpParser::initialize 非线程安全；readMetadata 内部会触发 XMP 解码）。
+    ensure_exif_metadata_runtime();
+    const std::lock_guard<std::recursive_mutex> exif_lock(exif_metadata_mutex());
     if (exif != nullptr)
         log_makernote(*exif, "MetaWrite");
     try {
@@ -927,6 +943,8 @@ bool key_exif_landed(const std::filesystem::path &file, const Exiv2::ExifData &w
     }
     if (expect.empty())
         return true;
+    ensure_exif_metadata_runtime();
+    const std::lock_guard<std::recursive_mutex> exif_lock(exif_metadata_mutex());
     try {
         // R-007（M7-R2B）：Exiv2 open 入口经 normalize_extended_path 归一 `\\?\`（长路径可写；
         // 单源在 core/fsops，codecs 侧 fopen 调用点另行登记）。
@@ -1299,6 +1317,10 @@ namespace {
 // 后果不是"写没写"，而是**下一次转码读不回来** → 元数据在二次转码时静默丢失。
 // 这里在 Exiv2 结果为空时按容器 API 直读同一份 Exif/XMP（不改写、不复制语义）。
 void read_heif_metadata_fallback(SourceMeta &m, const std::string &file) {
+    // 本函数直接调用 Exiv2::XmpParser::decode / ExifParser::decode（不经 ImageFactory）；
+    // 同一外层 read_metadata 通常已持锁，但保持入口自洽（递归锁允许重入）。
+    ensure_exif_metadata_runtime();
+    const std::lock_guard<std::recursive_mutex> exif_lock(exif_metadata_mutex());
     heif_context *ctx = heif_context_alloc();
     if (ctx == nullptr)
         return;
@@ -1354,6 +1376,10 @@ bool is_heif_family_ext(const std::string &ext) {
 
 SourceMeta read_metadata(const std::filesystem::path &p) {
     SourceMeta m;
+    // 0.4.2 修复批（用户实测 exiv2.dll 崩溃）：Exiv2 调用串行化 + XMP 运行时先初始化。
+    // 单文件读取 = 毫秒级；像素解码/编码不在此锁内（缩略图/预览仅在 Exiv2 内嵌预览段持锁）。
+    ensure_exif_metadata_runtime();
+    const std::lock_guard<std::recursive_mutex> exif_lock(exif_metadata_mutex());
     try {
         // R-007（M7-R2B）：读入口同口径归一 `\\?\`（长路径源文件可读；与写入口同一单源）。
         Exiv2::Image::UniquePtr img =
@@ -1663,7 +1689,10 @@ EffectivePreview preview_effective(const SourceProbe &probe, const BatchRules &r
 // ===========================================================================
 
 Payloads make_payloads(const MetadataPlan &plan) {
-    ensure_xmp();
+    // XMP 运行时初始化 + Exiv2 串行化（ExifParser::encode 内部会写 Exif blob；XmpParser::encode
+    // 需要完成 initialize，且 Adobe XMP toolkit 的初始化/收尾不可并发）。
+    ensure_exif_metadata_runtime();
+    const std::lock_guard<std::recursive_mutex> exif_lock(exif_metadata_mutex());
     Payloads out;
     if (!plan.exif.empty()) {
         // ExifParser::encode() takes a mutable ExifData (non-intrusive writing may patch it);

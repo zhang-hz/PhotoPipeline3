@@ -47,6 +47,12 @@
 | A12 | 版本号 | **不升版本**：`CMakeLists.txt` 仍 0.4.2、`--version` = `PhotoPipeline 0.4.2`；本轮为 0.4.2 修复批的**本地 dist 重建**（不移动 tag / GitHub Release、不重发资产）。回归基线因版本行零变化**无需重播种**（实测 zero diff） | 已落地 |
 | A13 | dist 产物 | `dist/PhotoPipeline-0.4.2-win64.zip`（release 预设构建 + `tools/make_winzip.py` 五门禁：闭包/来源/结构/许可/烟测 E-1/E-2/E-3 + 工厂预设 + zip 内复核） | 已落地（指纹见 `docs/m15-report.md` §2） |
 
+## 5b. 补充裁定：Exiv2 并发崩溃修复（2026-11-04 21:34 用户实测闪退，反馈 #6）
+
+| # | 事项 | 裁定 | 理由（证据链） | 状态 |
+|---|---|---|---|---|
+| A14 | 第三方 Exiv2 运行时保护 | 新增 `src/core/metadata_runtime.h`（**新文件，冻结面零改动**）：`ensure_exif_metadata_runtime()`（`std::call_once` 完成 `Exiv2::XmpParser::initialize()`，静态析构 terminate 成对）+ `exif_metadata_mutex()`（进程级递归锁）。在**所有 Exiv2 I/O / XMP·Exif 解析入口**持锁：`metadata.cpp` 的 `read_metadata`/`read_heif_metadata_fallback`/`exiv2_apply`/`key_exif_landed`/`make_payloads`；`thumbs.cpp` 的 `try_embedded_preview`/`try_embedded_preview_image`（锁内只取预览字节，OIIO 解码/缩放移出锁外，像素热路径不被串行化）。**不改变任何读写语义/产物字节**（纯串行化 + 初始化顺序） | 用户实测：导入含 XMP 的 HEIC 后 WER `photopipeline.exe` 崩溃于 **exiv2.dll +0x7c9cf**（c0000005）；反汇编该偏移 = Adobe XMP `XML_Node`/`std::map<int,std::string>` 内部函数首指令 `mov r14,[rcx]`（null deref）。Exiv2 v0.28.8 源码（vcpkg buildtrees）`src/xmp.cpp:512` 的 `XmpParser::initialize()` 是**裸 static bool 无锁懒初始化**，`decode()` 在未初始化时自动调用它；GUI 导入时缩略图池(2)/预览池(2)/元数据探针池并发首次读取含 XMP 文件 ⇒ 多个线程同时进入 initialize → Adobe XMP 内部状态未完成初始化 → 崩溃。本机无法直接复现（竞态），故以「崩溃模块+偏移反汇编 + 依赖源码行为 + 新增并发回归探针」作为根因证据链 | 已落地（`test_metadata` 首置 8 线程×8 次并发 XMP 读取探针 reads_ok=64；全量 ctest 52/52 通过） |
+
 ## 6. 如实未决（不宣称已解决）
 
 | # | 事项 | 现状 |
@@ -57,3 +63,4 @@
 | U4 | AVIF 无损 chroma Lock=444 | 本轮只按用户需求改 HEIF；AVIF 维持 0.4.2 语义（未动 G3 lock），AVIF 矩阵未复跑 |
 | U5 | JXL A/B 的 wall 读数 | 修复期 4 agent 并发构建导致 wall 噪声大；**JXL 单轮 encode_ms 交错中位 2.4x** 为可引用读数（混合 3 输出 12320ms → 5096ms），静机 wall 复测建议见报告 §4 |
 | U6 | `theme-equiv` offscreen 单次卡宽（651 vs 661） | meta-ui 轮次出现一次（真实平台不复现），集成树全量 ctest/ui-smoke 未复现；按既有 A30 去抖口径登记为环境时序抖动观察项，未改判据 |
+| U7 | Exiv2 并发崩溃（A14）本机无法直接复现 | 崩溃发生在用户机器（race）；本机用 8 线程并发读 XMP fixture 的新探针 + 原 GUI 导入流程均未复现（竞态窗口小）。**根因归属 = 崩溃偏移反汇编（Adobe XMP XML_Node 内部空指针）+ Exiv2 0.28.8 源码非线程安全 initialize 的机械事实**，修复 = 串行化 + call_once（消除竞争条件本身，非 try/catch 掩盖）。未做用户机器 WER dump 复核（dump 未落盘）；若仍复现建议用户侧开 WER LocalDumps 取全栈 |

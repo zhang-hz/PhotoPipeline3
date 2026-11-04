@@ -15,6 +15,7 @@
 | 3 | 单击「多个值」框后软件闪退 | **本机未复现**（25+ 交互点 × 3 轮真实事件链全程存活、无 WER 事件）。同批复核发现并修复：mixed 提交统一到全部选中文件（修复探针焦点投递后验证）；3 处防御性收口（`refresh_gps_warning` 空指针守卫 / 时间多选小表行数夹在 items 长度内 / info 单文件 probes 空表守卫） | 15 条机械交互探针（spin 文本区/上下箭头、seg 同档、时区 popup+activated、focusOut、partial 开关、pending 窗口、连续点击、GPS/Tags/信息卡） | `meta-selection: checked=34 bad=0`；未复现条件如实登记 A6/U1 |
 | 4 | JXL 编码效率严重退化（600s+），检查编译与运行时调度 | 0.4.2 规划器在多输出 P>1 时按 `e=floor(每文件预算/P)` **对所有 target 名义均分**；jpegli/OIIO 无内部线程、heif/x265 用固定池，只有 jxl/avif 真吃 E ⇒ JXL 从 16 被压到 8/4/2；再乘 JXL default 预设自适应（最多 30 轮重编码）放大成数量级退化。enc_jxl/vcpkg/编译链零 diff | 规划器按编码器能力**逐输出分配**（heavy 编码器分走余下预算，flat 保底 1；`RunScope` 末尾加性 `encode_threads_per_output`）；W×P×E≤T 旧不变式零放宽；单输出/P==1/深队列路径与 0.4.2 逐字一致 | 单轮 A/B（1 文件 T1.tif，jxl+png+jpeg，T=16）：旧口径 plan `5/5/5`（JXL E=5）→ 修复后 `14/1/1`；JXL 单轮 encode_ms 交错中位 **12320ms → 5096ms ≈ 2.4x**；多输出+自适应 Σ轮耗时 23.1s→17.7s（1.31x）；产物 SHA256 修复前后逐对相同（jxl `3EB4780D…` / `6751E358…`、png `5FF0ABEC…`、jpeg `8BC76472…`）；`test_thread_plan` matrix 26400 / contract 6560 fail=0 |
 | 5 | 0.4.2 在部分 Windows 版本上，打开后鼠标转圈、无响应；提高 GUI 版本兼容性 | 0.4.2 唯一新增启动期阻塞系统调用 = `PreviewPanel` 构造（MainWindow 构造期、show 前、GUI 线程）同步调用 `system_display_profile()`（GetDC+GetICMProfileW → 读 ICC → lcms2）；部分 Windows 环境该调用长时间阻塞 → GUI 卡死。0.4.1 无此路径 | 构造期立即注入 sRGB 回退、系统 profile 后台线程获取 + QTimer 轮询（generation 丢弃过期、5s 软超时/30s 硬上限、析构不 join、off 平台不启线程）；ICC 读取 stat + 8MB 上限；屏幕变更同走异步；mica DWM 背景按 Win11 22H2 门控 + 启动日志记录 OS build/Qt/平台；启动期 preset 分项计时仅诊断模式输出 | `PP_DISPLAY_ICC_DELAY_MS=5000` 模拟：`shown=1399ms < 2s`、延迟期间 `WM_NULL` 响应 0ms、后台 5011ms 完成换档日志；`delay=8000` 走 5s 软超时且窗口可响应；`test_color` 1542 checks/0 failed；真实/offscreen ui-smoke 均通过冻结行 |
+| 6 | （收口后追加实测）加载图片，选中「下载」文件夹；导入图片后软件闪退 | GUI 导入时缩略图池(2 线程)/预览池(2 线程)/元数据探针池并发首次读取含 XMP 文件；**Exiv2 0.28.8 `XmpParser::initialize()` 是裸 static bool 无锁懒初始化**（源码 src/xmp.cpp:512），并发进入 Adobe XMP SDK 初始化 → 内部 XML 解析器状态空指针（WER：exiv2.dll+0x7c9cf；反汇编 = XML_Node/std::map 内部函数 `mov r14,[rcx]` null deref） | 新增 `core/metadata_runtime.h`：call_once 完成 XMP 初始化 + 进程级递归锁串行化全部 Exiv2 I/O/解析入口（metadata.cpp 读/写路径、thumbs.cpp 内嵌预览；锁内只取预览字节，OIIO 解码移出锁外）；冻结面零改动、产物字节零变化 | 崩溃模块/偏移反汇编 + Exiv2 v0.28.8 源码事实链；`test_metadata` 首置 8 线程×8 次并发读 XMP fixture → `reads_ok=64`；全量 ctest 52/52；GUI 导入流程复跑无崩溃 |
 
 ## 2. 验收读数（命令 + 结果）
 
@@ -26,15 +27,19 @@ python tools/env.py run -- cmake --build build/m15-integration -j 10
 python tools/env.py run -- ctest --test-dir build/m15-integration --output-on-failure
 ```
 
-- **ctest 52/52 passed**（最终全量轮 Total 222.37s；其中 `ui_smoke` 通过、`test_enc_oiio` 通过）。
+- **ctest 52/52 passed**（Exiv2 修复后最终全量轮 Total 111.36s；其中 `ui_smoke` 通过、
+  `test_enc_oiio` 通过、`test_metadata` 含并发 XMP 探针）。
 - **金样 20/20**：`SMOKE total=20 pass=20 fail=0`（`tests/golden/smoke.py build/m15-integration`）。
 - **回归 zero diff**：`regression: normalized 2567 lines vs baseline 2567 lines` / `zero diff (baseline reproduced)`。
 - **`--ui-smoke` 冻结行逐字**：`UI-SMOKE OK shots=12 pages=3`；`folds: checked=11 bad=0`、
   `m8-params: checked=107 bad=0`、`meta-selection: checked=34 bad=0`、`layout-audit 1124/0`。
-- **格式门禁**：`bash tools/ci-format.sh` → `check 246 files … violations=0`（钉版 clang-format 23.1.1）。
+- **格式门禁**：`bash tools/ci-format.sh` → `check 247 files … violations=0`（钉版 clang-format 23.1.1）。
 - **静态分析棘轮**：`python tools/env.py run -- python tools/ci-tidy.py build/m15-integration`
   → **TIDY total=253 baseline=262 files=76 violations=0 seed=0（未 --update）**。
-- **发行树 ctest（release，非 dev）**：**51/51 passed**（最终重建后 Total 25.73s）。
+- **发行树 ctest（release，非 dev）**：**51/51 passed**（Exiv2 修复后最终重建，Total 24.27s）。
+- **补充修复后复跑**（Exiv2 并发崩溃修复，2026-11-04 22:2x）：ctest **52/52**、金样 **20/20**、
+  回归 **zero diff**、`--ui-smoke` 冻结行逐字；`test_metadata` 首置并发 XMP 探针
+  `concurrent-metadata: reads_ok=64`（8 线程 × 8 次）。
 
 ### 2.2 发行构建与打包
 
@@ -54,7 +59,7 @@ python tools/env.py run -- python tools/make_winzip.py dist --smoke-exe build/m1
     E-3 `WIN-LAUNCH OK windows=6 visible=1`（真实 qwindows 平台）；
   - 产物内复核：解压即用 `--version` OK、licenses 35。
 - **产物**：`dist/PhotoPipeline-0.4.2-win64.zip`
-  **35,397,625 bytes**，`sha256 = 585cabde64e2aa2aaa7000a65a052c77c94ef0fe650d7773827fe8147fa234b0`，条目 118。
+  **35,398,946 bytes**，`sha256 = 703e2b3b8531e70979f3e484a7bfb8aead5c22734c96f9fe1c6a000e9b6615f1`，条目 118。
 
 ### 2.3 逐问题专项证据
 
@@ -70,12 +75,26 @@ python tools/env.py run -- python tools/make_winzip.py dist --smoke-exe build/m1
   `PP_THREAD_PLAN_LEGACY=1` 默认关闭（同二进制 A/B 诊断）；dev_cli 的临时 A/B 放宽已回退（`git diff` 无该文件）。
 - **启动去阻塞（task-4）**：`build/win-startup/verify-startup-async.ps1`
   （`-SkipUiSmoke` 秒级跑启动段）；读数见 §1 #5；非诊断模式无新增日志行（回归零漂移实测）。
+- **导入含 XMP 的 HEIC 闪退（反馈 #6；收口后追加）**：用户运行实为 `dist/PhotoPipeline` release 构建
+  （PE 时间戳 `0x6aeb3116` 与我方 release 一致）；WER：`photopipeline.exe` / 模块 **exiv2.dll** /
+  偏移 **0x7c9cf** / c0000005；`dist/PhotoPipeline/logs/run-20261104-213256.log` 末行 = HEIC 预览
+  解码失败 warning，随后崩溃。反汇编 exiv2.dll@0x7c9cf = Adobe XMP `XML_Node`/`std::map` 内部
+  函数首指令 `mov r14,[rcx]`（rcx null）。Exiv2 v0.28.8 源码 `src/xmp.cpp:512` 的
+  `XmpParser::initialize()` = 裸 static bool 无锁懒初始化 ⇒ GUI 多池并发首读含 XMP 文件时可并发
+  进入初始化 → Adobe XMP 内部状态空指针。修复 = `core/metadata_runtime.h`（call_once initialize
+  + 进程级递归锁串行化 Exiv2 I/O/解析；锁内只取内嵌预览字节，OIIO 解码移出锁外）；冻结面零改动、
+  产物字节零变化。回归探针：`test_metadata` 首置 8 线程×8 次并发读 XMP fixture → `reads_ok=64`；
+  **真实 GUI 导入复跑**（`PP_IMPORT_SMOKE=<Downloads>` 对修复后二进制：递归导入 27 文件 + 逐行选中 +
+  元数据页跟随）→ `UI-SMOKE import-smoke: OK files=27`，进程存活、无新 WER 事件；全量 ctest 52/52。
+  证据（gitignored）：`build/exiv2-crash-repro/`（WER Report.wer 副本与日志摘录）、
+  `build/import-smoke.log`、`build/fixed-import-smoke.log`。
 
 ## 3. 偏差与追认
 
 逐条见 `docs/m15-adjudications.md`：A1（`RunScope` 末尾加性）、A3/A4（HEIC 无损语义与 Level 诚实降级）、
 A5（MixedComboBox 显示面）、A6（启动异步化语义变化）、A7–A9（探针换锚，只增不减）、A10（日志面零新增）、
-A11（Win 版本门控）、A12（不升版本）、A13（dist 口径）。**无冻结面重排、无断言放宽、无金样/夹具改动。**
+A11（Win 版本门控）、A12（不升版本）、A13（dist 口径）、**A14（Exiv2 运行时串行化 + XMP call_once，
+新文件承载、冻结面零改动、产物字节零变化）**。**无冻结面重排、无断言放宽、无金样/夹具改动。**
 
 ## 4. 未覆盖 / 未决（如实）
 
@@ -93,6 +112,10 @@ A11（Win 版本门控）、A12（不升版本）、A13（dist 口径）。**无
 - **M14 既有未决项不变**（nightly asan/tsan/Linux regression 待事后背书、HEIF/AVIF 矩阵、iPhone 真机等）。
 - **一次性 `theme-equiv` offscreen 卡宽（651 vs 661）**：meta-ui 轮次出现一次、真实平台不复现；集成树
   全量 ctest/ui-smoke 未复现；按既有 A30 去抖口径登记为环境时序观察项，未改判据。
+- **Exiv2 并发崩溃（反馈 #6）本机未直接复现**：根因归属 = 崩溃偏移反汇编（Adobe XMP XML_Node 内部
+  空指针）+ Exiv2 0.28.8 源码非线程安全 initialize 的机械事实链；修复消除竞争条件本身（串行化 +
+  call_once），非 try/catch 掩盖。若用户侧仍复现，建议开 WER LocalDumps 取全栈并回传；届时可按
+  新证据继续收敛（登记 A14/U7）。
 
 ## 5. 复现命令与证据路径
 

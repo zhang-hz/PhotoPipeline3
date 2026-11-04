@@ -23,6 +23,9 @@
 #include <string>
 #include <vector>
 
+#include <atomic>
+#include <thread>
+
 #include "core/filetime.h"
 #include "core/logger.h"
 #include "core/metadata.h"
@@ -300,6 +303,39 @@ std::string warning_detail(const pp::MetadataPlan &p, pp::WarningKind k) {
 // ===========================================================================
 // cases
 // ===========================================================================
+
+// 0.4.2 修复批（2026-11-04 用户实测 exiv2.dll 崩溃）：并发首次读取含 XMP 的文件。
+// 根因 = Exiv2 0.28.8 的 `XmpParser::initialize()`（vcpkg buildtrees exiv2 v0.28.8
+// src/xmp.cpp:512）用**裸 static bool + 无锁**懒初始化；GUI 导入时缩略图池（2 线程）/
+// 预览池（2 线程）/ 元数据探针池并发首读含 XMP 文件时可能同时进入 initialize() ⇒ Adobe XMP
+// 内部 XML 解析器状态未完成初始化 → 空指针崩溃（崩溃位移落在 XML_Node/std::map 内部）。
+// 修复 = core/metadata_runtime.h：call_once 初始化 + 进程级 Exiv2 串行化锁。
+// 本用例置于 main() 最前（先于任何其它 Exiv2 读取），8 线程并发读 XMP fixture；
+// 修复前为概率性崩溃，修复后必须稳定通过。
+void test_concurrent_metadata_read(const fs::path &xmp_fixture) {
+    if (!fs::exists(xmp_fixture)) {
+        std::printf("info concurrent-metadata skipped: fixture missing (%s)\n",
+                    xmp_fixture.string().c_str());
+        return;
+    }
+    std::atomic<int> reads_ok{0};
+    std::vector<std::thread> threads;
+    threads.reserve(8);
+    for (int t = 0; t < 8; ++t) {
+        threads.emplace_back([&] {
+            for (int i = 0; i < 8; ++i) {
+                const pp::SourceMeta m = pp::read_metadata(xmp_fixture);
+                if (m.error.empty())
+                    reads_ok.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
+    for (std::thread &th : threads)
+        th.join();
+    check(reads_ok.load() > 0, "concurrent-metadata/xmp",
+          "no successful concurrent read (crashed or all failed)");
+    std::printf("info concurrent-metadata: reads_ok=%d\n", reads_ok.load());
+}
 
 void test_read_metadata(const fs::path &tmp) {
     const fs::path jpg = corpus() / "meta" / "exif_full.jpg";
@@ -1781,6 +1817,8 @@ int main() {
     const fs::path tmp = tmp_dir("scratch");
     std::printf("info scratch dir: %s\n", tmp.string().c_str());
 
+    // 0.4.2 修复批：并发首读含 XMP 文件（必须最先跑，先于其它 Exiv2 读取）。
+    test_concurrent_metadata_read(corpus() / "meta" / "jxl_exif.jxl");
     test_read_metadata(tmp);
     test_gps();
     test_modernize_exif();
